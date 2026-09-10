@@ -1,0 +1,16 @@
+packages:
+  - 'packages/*'
+  - 'apps/*'
+
+# Supply-chain policy: third-party install scripts stay denied unless a work
+# package explicitly approves them. These three arrive transitively (toolchain +
+# Pi SDK). esbuild's platform binary already ships through its optional
+# dependency — verified: `esbuild --version` reports 0.28.1 with every build
+# script denied — and protobufjs / @google/genai are unused by delivered code.
+allowBuilds:
+  '@google/genai': false
+  esbuild: false
+  protobufjs: false
+
+minimumReleaseAgeExclude:
+  - '@types/node@22.20.2'

@@ -1,0 +1,16 @@
+{
+  "name": "@agentdev/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/cli.js",
+  "bin": {
+    "agentdev": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json --pretty false"
+  },
+  "dependencies": {
+    "@agentdev/contracts": "workspace:*"
+  }
+}

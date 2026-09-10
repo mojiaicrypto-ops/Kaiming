@@ -23,7 +23,9 @@
 
 ## 实现起点
 
-当前仓库仅有webui/index.html本地Mock原型。Core、Runner、真实Pi运行、协议与存储、交付门禁、权限隔离、知识投影和恢复均尚未实现，运行测试尚未建立。原型不证明服务端行为，也不覆盖本目录的正式产品要求。
+WP-00（工具链与执行底座）已按 L2 实现并完成独立 Review/Test：根工程与十个工程命令、`packages/contracts` 契约 Schema、`packages/pi-runtime`（Pi 会话工厂、显式资源加载、事件映射、内置扩展注册）、`apps/runner` 单 Attempt 进程、`apps/cli doctor` 与固定执行镜像。`doctor` 真实探测依赖、镜像 digest 与镜像运行能力、目录与端口；容器隔离负例覆盖只读 rootfs、只读挂载、非 root、cap-drop、无网络与 pid/内存上限；证据链见 `.agentdev/work/WP-00/`。
+
+Core、真实 Provider 纵向运行、协议与存储、交付门禁、权限隔离、知识投影和恢复仍未实现：`pnpm test:e2e`、`pnpm test:acceptance`、`pnpm test:live` 按契约返回 NOT_IMPLEMENTED，后续按[实施工作包](delivery/implementation.md)的依赖顺序继续。
 
 开发从[实施工作包](delivery/implementation.md)开始，按依赖实现共享Schema与底座，再完成各项能力和[验收](delivery/acceptance.md)。规范中的包路径和工程命令是待交付接口，不能假定已经存在。
 

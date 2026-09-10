@@ -1,0 +1,8 @@
+node_modules
+dist
+coverage
+*.tsbuildinfo
+webui/index.html
+docs
+.agentdev
+pnpm-lock.yaml
