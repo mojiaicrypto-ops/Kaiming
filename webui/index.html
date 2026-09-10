@@ -1,0 +1,2978 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="AgentDev Workspace 纯 HTML WebUI 原型">
+  <meta name="theme-color" content="#0b0e11">
+  <title>AgentDev Workspace</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0e11;
+      --surface: #101419;
+      --surface-raised: #14191f;
+      --surface-soft: #181e25;
+      --console: #090c0f;
+      --line: #242b33;
+      --line-strong: #35404b;
+      --text: #e8ebee;
+      --muted: #929ca7;
+      --dim: #89939d;
+      --accent: #a3e635;
+      --accent-soft: rgba(163, 230, 53, 0.11);
+      --blue: #7aa2f7;
+      --blue-soft: rgba(122, 162, 247, 0.12);
+      --cyan: #63d2df;
+      --amber: #e9b96e;
+      --red: #ff7b86;
+      --purple: #bb9af7;
+      --sidebar: 224px;
+      --header: 54px;
+      --status: 26px;
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { height: 100%; }
+
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, textarea, input, select { font: inherit; }
+
+    button { color: inherit; }
+
+    button:focus-visible,
+    textarea:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    [tabindex]:focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 2px;
+    }
+
+    .app {
+      display: grid;
+      grid-template-rows: var(--header) minmax(0, 1fr) var(--status);
+      height: 100dvh;
+      min-width: 320px;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: var(--sidebar) minmax(260px, 1fr) auto;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      background: #0d1115;
+      min-width: 0;
+      z-index: 20;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 100%;
+      padding: 0 16px;
+      border-right: 1px solid var(--line);
+      font-weight: 680;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-mark {
+      display: grid;
+      grid-template-columns: repeat(2, 5px);
+      grid-template-rows: repeat(2, 5px);
+      gap: 3px;
+      width: 13px;
+      height: 13px;
+    }
+
+    .brand-mark i { background: var(--accent); border-radius: 1px; }
+    .brand-mark i:nth-child(2), .brand-mark i:nth-child(3) { opacity: 0.35; }
+
+    .project-area {
+      position: relative;
+      min-width: 0;
+      padding-left: 10px;
+    }
+
+    .project-switcher {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      max-width: min(440px, 100%);
+      height: 36px;
+      padding: 0 10px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .project-switcher:hover,
+    .project-switcher[aria-expanded="true"] { background: var(--surface-raised); border-color: var(--line); }
+
+    .repo-chip {
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      flex: 0 0 auto;
+      border: 1px solid #435129;
+      border-radius: 5px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .project-copy { min-width: 0; text-align: left; }
+    .project-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 620; }
+    .project-branch { display: block; color: var(--dim); font-family: var(--mono); font-size: 10px; line-height: 1.25; }
+    .chevron { color: var(--dim); font-size: 10px; }
+
+    .project-menu {
+      position: absolute;
+      top: 43px;
+      left: 10px;
+      width: 310px;
+      padding: 6px;
+      border: 1px solid var(--line-strong);
+      border-radius: 9px;
+      background: #151a20;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.42);
+      z-index: 50;
+    }
+
+    .project-menu[hidden] { display: none; }
+
+    .project-menu-label {
+      padding: 8px 9px 6px;
+      color: var(--dim);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .project-option {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 9px;
+      width: 100%;
+      padding: 9px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .project-option:hover { background: var(--surface-soft); }
+    .project-option strong { display: block; font-size: 12px; }
+    .project-option small { display: block; margin-top: 2px; color: var(--dim); font-family: var(--mono); font-size: 9px; }
+
+    .run-count { color: var(--accent); font-family: var(--mono); font-size: 10px; }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding-right: 12px;
+    }
+
+    .top-button,
+    .language-select,
+    .new-task,
+    .icon-button,
+    .quiet-button,
+    .console-button,
+    .send-button,
+    .mobile-switch button {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      cursor: pointer;
+    }
+
+    .top-button {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 32px;
+      padding: 0 10px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .top-live-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      height: 32px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 9px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .top-live-button:hover { background: var(--surface-soft); color: var(--text); }
+    .top-live-button .status-led { flex: 0 0 auto; background: var(--accent); }
+    .top-live-button[data-state="collapsed"] .status-led { background: var(--amber); }
+    .top-live-button[data-state="closed"] { border-color: #4a592f; color: #c7e595; }
+    .top-live-button[data-state="closed"] .status-led { box-shadow: 0 0 0 3px rgba(163,230,53,.08); }
+
+    .language-select {
+      width: 84px;
+      height: 32px;
+      padding: 0 25px 0 9px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 10px;
+      cursor: pointer;
+    }
+
+    .top-button:hover, .language-select:hover, .icon-button:hover, .quiet-button:hover, .console-button:hover { background: var(--surface-soft); color: var(--text); }
+
+    kbd {
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 9px;
+    }
+
+    .new-task {
+      height: 32px;
+      padding: 0 12px;
+      border-color: #52672a;
+      background: var(--accent);
+      color: #12170a;
+      font-size: 11px;
+      font-weight: 760;
+    }
+
+    .new-task:hover { background: #b5f252; }
+
+    .content-shell {
+      display: grid;
+      grid-template-columns: var(--sidebar) minmax(0, 1fr);
+      min-height: 0;
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      padding: 11px 9px;
+      border-right: 1px solid var(--line);
+      background: #0e1216;
+    }
+
+    .nav-section { margin-bottom: 15px; }
+    .nav-label { padding: 6px 9px; color: #7c8792; font-size: 9px; font-weight: 760; letter-spacing: 0.12em; text-transform: uppercase; }
+
+    .nav-item {
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      min-height: 34px;
+      margin: 1px 0;
+      padding: 0 9px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .nav-item:hover { background: var(--surface-raised); color: var(--text); }
+    .nav-item.active { background: #1a2118; color: #eaf8d1; }
+    .nav-item.active .nav-icon { color: var(--accent); }
+    .nav-icon { color: #818c97; font-family: var(--mono); font-size: 10px; font-weight: 800; text-align: center; }
+    .nav-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 570; }
+    .nav-badge { min-width: 18px; padding: 2px 5px; border-radius: 9px; background: #20262d; color: var(--dim); font-family: var(--mono); font-size: 9px; text-align: center; }
+    .nav-badge.attention { background: rgba(233, 185, 110, 0.13); color: var(--amber); }
+
+    .focus-card {
+      margin-top: auto;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    .focus-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 9px; }
+    .focus-top code { color: var(--accent); font-family: var(--mono); }
+    .focus-title { margin: 8px 0 10px; font-size: 12px; font-weight: 620; line-height: 1.4; }
+    .progress { height: 3px; overflow: hidden; border-radius: 2px; background: #242b32; }
+    .progress span { display: block; width: 62%; height: 100%; background: var(--accent); }
+    .focus-meta { display: flex; justify-content: space-between; margin-top: 7px; color: var(--dim); font-family: var(--mono); font-size: 8px; }
+
+    .workspace {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) clamp(360px, 38%, 560px);
+      min-width: 0;
+      min-height: 0;
+      background: var(--bg);
+    }
+
+    .workspace[data-runtime="closed"] { grid-template-columns: minmax(0, 1fr); }
+    .workspace[data-runtime="closed"] .runtime { display: none; }
+
+    .workspace.requirements-view .generic-heading { display: none; }
+    .workspace.requirements-view .generic-content { width: 100%; max-width: none; }
+
+    @media (min-width: 841px) {
+      .workspace[data-runtime="collapsed"] { grid-template-columns: minmax(0, 1fr) 44px; }
+      .workspace[data-runtime="collapsed"] .runtime { display: block; }
+      .workspace[data-runtime="collapsed"] .runtime > :not(.runtime-rail) { display: none; }
+      .workspace[data-runtime="collapsed"] .runtime-rail { display: flex; }
+    }
+
+    .conversation,
+    .runtime {
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .conversation {
+      display: grid;
+      grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+      border-right: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .conversation-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 69px;
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .eyebrow { margin-bottom: 5px; color: var(--dim); font-family: var(--mono); font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; }
+    .conversation-header h1 { margin: 0; font-size: 17px; font-weight: 660; letter-spacing: -0.025em; }
+    .header-sub { margin-top: 3px; color: var(--muted); font-size: 10px; }
+    .header-controls { display: flex; align-items: center; gap: 7px; }
+
+    .conversation-switcher {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 42px;
+      padding: 6px 18px;
+      border-bottom: 1px solid var(--line);
+      background: #11161b;
+    }
+
+    .conversation-select {
+      min-width: 0;
+      max-width: 330px;
+      height: 29px;
+      padding: 0 28px 0 9px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      outline: 0;
+      background: var(--surface-raised);
+      color: var(--text);
+      font-size: 10px;
+    }
+
+    .conversation-scope {
+      padding: 3px 7px;
+      border: 1px solid var(--line);
+      border-radius: 99px;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 8px;
+      white-space: nowrap;
+    }
+
+    .conversation-new {
+      margin-left: auto;
+      min-height: 27px;
+      padding: 0 9px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 9px;
+      cursor: pointer;
+    }
+
+    .conversation-new:hover { background: var(--surface-soft); color: var(--text); }
+
+    .live-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 25px;
+      padding: 0 8px;
+      border: 1px solid #314028;
+      border-radius: 99px;
+      background: var(--accent-soft);
+      color: #c8ee8c;
+      font-family: var(--mono);
+      font-size: 9px;
+      text-transform: uppercase;
+    }
+
+    .live-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px rgba(163,230,53,.09); }
+
+    .icon-button { width: 27px; height: 27px; color: var(--muted); }
+
+    .stage-strip {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(64px, 1fr));
+      min-height: 49px;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--line);
+      background: #0f1317;
+    }
+    .stage-strip[hidden] { display: none; }
+
+    .stage {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 9px;
+      white-space: nowrap;
+    }
+
+    .stage:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      right: 10px;
+      width: 28%;
+      height: 1px;
+      background: var(--line-strong);
+    }
+
+    .stage-mark { display: grid; place-items: center; width: 14px; height: 14px; border: 1px solid var(--line-strong); border-radius: 50%; font-size: 7px; }
+    .stage.done { color: var(--muted); }
+    .stage.done .stage-mark { border-color: #58712f; background: var(--accent-soft); color: var(--accent); }
+    .stage.current { color: var(--text); }
+    .stage.current .stage-mark { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); }
+
+    .view-stack { min-height: 0; overflow: hidden; }
+    .view { height: 100%; min-height: 0; }
+    .view[hidden] { display: none; }
+
+    .messages {
+      height: 100%;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: #303943 transparent;
+      padding: 22px clamp(18px, 4vw, 42px) 28px;
+    }
+
+    .message {
+      display: grid;
+      grid-template-columns: 25px minmax(0, 1fr);
+      gap: 11px;
+      max-width: 760px;
+      margin: 0 auto 24px;
+    }
+
+    .avatar {
+      display: grid;
+      place-items: center;
+      width: 25px;
+      height: 25px;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      background: var(--surface-soft);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 800;
+    }
+
+    .message.chief .avatar { border-color: #485d29; background: var(--accent-soft); color: var(--accent); }
+    .message-meta { display: flex; align-items: baseline; gap: 8px; margin: 3px 0 7px; }
+    .message-meta strong { font-size: 11px; }
+    .message-meta time { color: var(--dim); font-family: var(--mono); font-size: 8px; }
+    .message-body { color: #c9ced4; font-size: 12px; line-height: 1.68; }
+    .message-body p { margin: 0 0 9px; }
+
+    .conversation-intro,
+    .memory-card,
+    .context-action {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: #11161b;
+    }
+
+    .conversation-intro { border-left: 2px solid var(--blue); }
+    .conversation-intro strong,
+    .context-action strong,
+    .memory-card strong { display: block; color: var(--text); font-size: 11px; }
+    .conversation-intro p,
+    .context-action p,
+    .memory-card p { margin: 6px 0 0; color: var(--muted); font-size: 9px; line-height: 1.55; }
+    .context-action { border-color: #485d29; background: rgba(163,230,53,.035); }
+    .context-action-label { color: var(--accent); font-family: var(--mono); font-size: 8px; letter-spacing: .05em; text-transform: uppercase; }
+    .context-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+    .context-facts > div { min-width: 0; padding: 7px; border: 1px solid var(--line); border-radius: 5px; color: var(--dim); font-size: 8px; line-height: 1.45; }
+    .context-facts b { display: block; margin-bottom: 3px; color: #bfc7ce; font-family: var(--mono); font-size: 7px; text-transform: uppercase; }
+    .context-facts > div > span { display: block; }
+    .context-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
+    .context-button { min-height: 28px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface-raised); color: var(--muted); font-size: 8px; cursor: pointer; }
+    .context-button.primary { border-color: #607a34; background: var(--accent-soft); color: #cef296; }
+    .context-button:hover { background: var(--surface-soft); color: var(--text); }
+    .context-button:disabled { opacity: .55; cursor: default; }
+    .context-result { margin-top: 10px; padding: 8px 9px; border: 1px solid #50622e; border-radius: 6px; background: rgba(163,230,53,.055); }
+    .context-result[hidden] { display: none; }
+    .context-result code { color: var(--accent); font-family: var(--mono); font-size: 8px; }
+    .context-result p { margin-top: 4px; }
+    .memory-card { border-style: dashed; }
+    .memory-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 10px; }
+    .memory-item { min-width: 0; padding: 7px; border-radius: 5px; background: #0d1115; }
+    .memory-item span { display: block; color: var(--dim); font-family: var(--mono); font-size: 7px; text-transform: uppercase; }
+    .memory-item code { display: block; overflow: hidden; margin-top: 4px; color: #c1c9d0; font-family: var(--mono); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+    .memory-note { margin-top: 9px; color: var(--dim); font-family: var(--mono); font-size: 8px; line-height: 1.5; }
+    .steering-note { margin: 0 auto 18px; max-width: 760px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; background: #10151a; color: var(--muted); font-size: 9px; line-height: 1.5; }
+    .steering-note b { color: var(--cyan); font-weight: 600; }
+
+    .command-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 7px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #0e1216;
+      color: var(--cyan);
+      font-family: var(--mono);
+      font-size: 9px;
+    }
+
+    .run-card {
+      margin-top: 12px;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: #11161b;
+    }
+
+    .run-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .conversation-switcher[hidden] { display: none; }
+
+    .run-card-title { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 650; }
+    .run-card-title code { color: var(--blue); font-family: var(--mono); font-size: 9px; }
+    .status-text { color: var(--accent); font-family: var(--mono); font-size: 9px; }
+
+    .run-task {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      border-bottom: 1px solid rgba(36, 43, 51, 0.75);
+    }
+
+    .run-task:last-child { border-bottom: 0; }
+    .task-state { font-family: var(--mono); font-size: 10px; color: var(--dim); }
+    .task-state.done { color: var(--accent); }
+    .task-state.running { color: var(--blue); }
+    .run-task strong { display: block; color: #d8dde2; font-size: 10px; font-weight: 570; }
+    .run-task small { display: block; margin-top: 2px; color: var(--dim); font-family: var(--mono); font-size: 8px; }
+    .agent-tag { padding: 2px 5px; border-radius: 3px; background: #20262d; color: var(--muted); font-family: var(--mono); font-size: 8px; text-transform: uppercase; }
+
+    .requirement-summary {
+      margin-top: 12px;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: #11161b;
+    }
+    .requirement-summary-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 12px; border-bottom: 1px solid var(--line); }
+    .requirement-identity { min-width: 0; }
+    .requirement-identity code { color: var(--blue); font-family: var(--mono); font-size: 9px; }
+    .requirement-identity strong { display: block; margin-top: 5px; color: var(--text); font-size: 12px; }
+    .requirement-phase { flex: 0 0 auto; padding: 4px 7px; border: 1px solid #586f31; border-radius: 99px; background: var(--accent-soft); color: #c8ee8c; font-family: var(--mono); font-size: 8px; text-transform: uppercase; }
+    .requirement-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .requirement-metric { min-width: 0; padding: 10px 12px; border-right: 1px solid var(--line); }
+    .requirement-metric:last-child { border-right: 0; }
+    .requirement-metric span { display: block; color: var(--dim); font-family: var(--mono); font-size: 7px; letter-spacing: .05em; text-transform: uppercase; }
+    .requirement-metric strong { display: block; overflow: hidden; margin-top: 5px; color: #d9dee3; font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+    .requirement-metric strong.attention { color: var(--amber); }
+    .activity-disclosure { border-top: 1px solid var(--line); }
+    .activity-disclosure summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; color: var(--muted); font-size: 9px; cursor: pointer; list-style: none; }
+    .activity-disclosure summary::-webkit-details-marker { display: none; }
+    .activity-disclosure summary::after { content: "+"; color: var(--dim); font-family: var(--mono); }
+    .activity-disclosure[open] summary::after { content: "−"; }
+    .activity-disclosure-body { display: grid; gap: 7px; padding: 0 12px 11px; color: var(--dim); font-family: var(--mono); font-size: 8px; line-height: 1.5; }
+    .activity-disclosure-body b { color: #b9c2ca; font-weight: 500; }
+
+    .composer {
+      padding: 10px 18px 14px;
+      border-top: 1px solid var(--line);
+      background: #0e1216;
+    }
+
+    .composer-box {
+      max-width: 820px;
+      margin: 0 auto;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 9px;
+      background: var(--surface-raised);
+    }
+
+    .composer textarea {
+      display: block;
+      width: 100%;
+      min-height: 56px;
+      max-height: 130px;
+      resize: none;
+      padding: 12px 13px 4px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .composer textarea::placeholder { color: #8e98a2; }
+
+    .composer-tools {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 7px 8px 8px 10px;
+    }
+
+    .composer-left { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .mode-select { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-family: var(--mono); font-size: 8px; white-space: nowrap; }
+    .mode-select::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--amber); }
+    .tool-link { border: 0; background: transparent; color: var(--dim); font-family: var(--mono); font-size: 9px; cursor: pointer; }
+    .tool-link:hover { color: var(--text); }
+    .send-button { width: 28px; height: 27px; border-color: #53672f; background: var(--accent); color: #11160a; font-weight: 800; }
+    .send-button:hover { background: #b6f159; }
+
+    .generic-view {
+      height: 100%;
+      overflow-y: auto;
+      padding: 24px;
+    }
+
+    .generic-heading { max-width: 760px; margin: 0 auto 20px; }
+    .generic-heading h2 { margin: 0; font-size: 20px; letter-spacing: -0.03em; }
+    .generic-heading p { margin: 6px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+    .generic-content { max-width: 760px; margin: 0 auto; }
+
+    .files-view {
+      height: 100%;
+      min-height: 0;
+      background: #0f1317;
+    }
+
+    .file-browser {
+      display: grid;
+      grid-template-columns: 218px minmax(0, 1fr);
+      height: 100%;
+      min-height: 0;
+    }
+
+    .file-tree-panel {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
+      min-width: 0;
+      min-height: 0;
+      border-right: 1px solid var(--line);
+      background: #0d1115;
+    }
+
+    .file-panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 38px;
+      padding: 0 10px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    .readonly-badge {
+      padding: 2px 5px;
+      border: 1px solid #3d4930;
+      border-radius: 3px;
+      color: var(--accent);
+      font-size: 7px;
+      letter-spacing: .03em;
+    }
+
+    .file-search-wrap { padding: 8px; border-bottom: 1px solid var(--line); }
+    .file-search {
+      width: 100%;
+      height: 28px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      outline: 0;
+      background: #11161b;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 9px;
+    }
+    .file-search::placeholder { color: var(--dim); }
+
+    .file-tree {
+      min-height: 0;
+      overflow: auto;
+      padding: 7px 5px 16px;
+      scrollbar-width: thin;
+      scrollbar-color: #303943 transparent;
+      font-family: var(--mono);
+      font-size: 9px;
+    }
+
+    .file-tree details { margin: 1px 0; }
+    .file-tree summary {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 25px;
+      padding: 0 6px;
+      border-radius: 4px;
+      color: #aab3bc;
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+    }
+    .file-tree summary::-webkit-details-marker { display: none; }
+    .file-tree summary::before { content: "›"; width: 9px; color: var(--dim); font-size: 11px; transform-origin: center; }
+    .file-tree details[open] > summary::before { transform: rotate(90deg); }
+    .file-tree summary:hover { background: #171d23; color: var(--text); }
+    .tree-children { margin-left: 13px; padding-left: 4px; border-left: 1px solid #242b33; }
+
+    .file-item {
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr);
+      align-items: center;
+      gap: 4px;
+      width: 100%;
+      min-height: 25px;
+      padding: 0 6px;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--muted);
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .file-item:hover { background: #171d23; color: var(--text); }
+    .file-item[hidden] { display: none; }
+    .file-item.active { background: var(--blue-soft); color: #dce6fa; }
+    .file-kind { color: var(--dim); font-size: 7px; font-weight: 800; text-align: center; text-transform: uppercase; }
+    .file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file-tree-empty { padding: 10px; color: var(--dim); font-size: 8px; line-height: 1.5; }
+    .file-tree-empty[hidden] { display: none; }
+    .file-count { padding: 7px 10px; border-top: 1px solid var(--line); color: var(--dim); font-family: var(--mono); font-size: 8px; }
+
+    .file-preview {
+      display: grid;
+      grid-template-rows: 39px minmax(0, 1fr) 27px;
+      min-width: 0;
+      min-height: 0;
+      background: #0a0e11;
+    }
+
+    .file-preview-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-width: 0;
+      padding: 0 11px;
+      border-bottom: 1px solid var(--line);
+      background: #10151a;
+      font-family: var(--mono);
+    }
+
+    .file-path { overflow: hidden; color: #c7cdd3; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+    .file-meta { flex: 0 0 auto; color: var(--dim); font-size: 8px; text-transform: uppercase; }
+    .code-scroll { min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: #303943 transparent; }
+    .code-pre {
+      min-width: max-content;
+      margin: 0;
+      padding: 13px 22px 28px;
+      color: #c7cdd3;
+      font-family: var(--mono);
+      font-size: 10px;
+      line-height: 1.65;
+      tab-size: 2;
+      white-space: pre;
+    }
+    .code-pre code { font: inherit; }
+    .file-preview-foot { display: flex; align-items: center; gap: 13px; padding: 0 10px; border-top: 1px solid var(--line); color: var(--dim); font-family: var(--mono); font-size: 8px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+    .data-list { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; }
+    .data-row { display: grid; grid-template-columns: 76px minmax(0, 1fr) 86px; align-items: center; gap: 12px; min-height: 58px; padding: 9px 12px; border-bottom: 1px solid var(--line); background: #11161b; }
+    .data-row:last-child { border-bottom: 0; }
+    .data-id { color: var(--dim); font-family: var(--mono); font-size: 9px; }
+    .data-main strong { display: block; font-size: 11px; }
+    .data-main small { display: block; margin-top: 4px; color: var(--muted); font-size: 9px; }
+    .data-status { justify-self: end; color: var(--blue); font-family: var(--mono); font-size: 8px; text-transform: uppercase; }
+
+    .config-intro { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 13px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: #10151a; }
+    .config-intro strong { display: block; font-size: 10px; }
+    .config-intro p { margin: 5px 0 0; color: var(--dim); font-size: 8px; line-height: 1.5; }
+    .config-chip { flex: 0 0 auto; padding: 4px 7px; border: 1px solid #46562e; border-radius: 99px; color: var(--accent); font-family: var(--mono); font-size: 7px; text-transform: uppercase; }
+    .profile-grid, .provider-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(245px, 1fr)); gap: 9px; }
+    .profile-card, .provider-card { min-width: 0; padding: 11px; border: 1px solid var(--line); border-radius: 8px; background: #11161b; }
+    .profile-head, .provider-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .profile-role, .provider-name { min-width: 0; }
+    .profile-role code, .provider-name code { color: var(--blue); font-family: var(--mono); font-size: 8px; }
+    .profile-role strong, .provider-name strong { display: block; margin-top: 4px; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .source-badge { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--line); border-radius: 99px; color: var(--dim); font-family: var(--mono); font-size: 7px; }
+    .source-badge.override { border-color: #6e6037; color: var(--amber); }
+    .profile-model { margin-top: 10px; padding: 8px; border-radius: 6px; background: #0d1115; }
+    .profile-model strong { display: block; color: #d6dce1; font-family: var(--mono); font-size: 9px; }
+    .profile-model small { display: block; margin-top: 4px; color: var(--dim); font-size: 8px; }
+    .profile-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+    .profile-meta span { padding: 3px 5px; border-radius: 3px; background: #20262d; color: var(--muted); font-family: var(--mono); font-size: 7px; }
+    .profile-actions, .provider-actions { display: flex; gap: 6px; margin-top: 10px; }
+    .config-button { min-height: 27px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface-raised); color: var(--muted); font-size: 8px; cursor: pointer; }
+    .config-button:hover { color: var(--text); background: var(--surface-soft); }
+    .config-button.primary { border-color: #5c7134; color: #c8ee8c; }
+    .config-button:disabled { opacity: .45; cursor: default; }
+    .provider-detail { margin-top: 10px; color: var(--dim); font-family: var(--mono); font-size: 8px; line-height: 1.7; }
+    .provider-detail b { color: #bfc7ce; font-weight: 500; }
+    .provider-health { color: var(--accent); }
+    .provider-health.untested { color: var(--dim); }
+    .provider-health.disabled { color: var(--amber); }
+    .config-section + .config-section { margin-top: 18px; }
+    .config-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+    .config-section-title strong { font-size: 11px; }
+    .config-section-title span { color: var(--dim); font-family: var(--mono); font-size: 8px; }
+
+    .requirement-board { display: grid; grid-template-columns: repeat(4, minmax(220px, 1fr)); gap: 9px; width: 100%; min-width: 0; overflow-x: auto; padding-bottom: 7px; scrollbar-width: thin; scrollbar-color: #303943 transparent; }
+    .board-column { min-height: 330px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: #0f1317; }
+    .board-title { display: flex; justify-content: space-between; margin-bottom: 10px; color: var(--muted); font-family: var(--mono); font-size: 9px; text-transform: uppercase; }
+    .board-card { display: block; width: 100%; margin-bottom: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-raised); color: inherit; text-align: left; }
+    button.board-card { cursor: pointer; }
+    button.board-card:hover { border-color: var(--line-strong); background: #1a2027; }
+    .board-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; color: var(--dim); font-family: var(--mono); font-size: 7px; }
+    .priority { color: var(--amber); }
+    .board-card strong { display: block; font-size: 10px; line-height: 1.4; }
+    .board-card p { margin: 6px 0 0; color: var(--muted); font-size: 8px; line-height: 1.45; }
+    .board-card small { display: block; margin-top: 8px; color: var(--dim); font-family: var(--mono); font-size: 7px; line-height: 1.5; }
+    .card-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 7px; margin: 9px 0 0; padding-top: 8px; border-top: 1px solid var(--line); }
+    .card-facts div { min-width: 0; }
+    .card-facts dt { overflow: hidden; color: var(--dim); font-family: var(--mono); font-size: 6px; letter-spacing: .03em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+    .card-facts dd { overflow: hidden; margin: 2px 0 0; color: #b8c0c8; font-family: var(--mono); font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+    .card-progress { height: 2px; margin-top: 9px; overflow: hidden; border-radius: 2px; background: #293039; }
+    .card-progress i { display: block; height: 100%; background: var(--blue); }
+    .card-footer { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 8px; color: var(--dim); font-family: var(--mono); font-size: 7px; }
+    .card-footer .decision { color: var(--amber); }
+    .board-help { margin: 12px 0 0; color: var(--dim); font-size: 9px; line-height: 1.5; }
+    .start-requirement { margin-top: 9px; width: 100%; height: 26px; border: 1px solid #52672a; border-radius: 5px; background: var(--accent-soft); color: #c8ee8c; font-family: var(--mono); font-size: 8px; cursor: pointer; }
+    .start-requirement:hover { background: rgba(163,230,53,.18); }
+
+    .decision-card { margin-top: 12px; padding: 12px; border: 1px solid rgba(233,185,110,.45); border-radius: 8px; background: rgba(233,185,110,.06); }
+    .decision-card-head { display: flex; justify-content: space-between; gap: 10px; }
+    .decision-card-head code { color: var(--amber); font-family: var(--mono); font-size: 8px; }
+    .decision-card h3 { margin: 7px 0 5px; font-size: 11px; }
+    .decision-card p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.55; }
+    .decision-facts { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 7px 12px; margin: 10px 0 0; }
+    .decision-facts div { min-width: 0; }
+    .decision-facts dt { color: var(--dim); font-family: var(--mono); font-size: 7px; text-transform: uppercase; }
+    .decision-facts dd { margin: 3px 0 0; color: #c3c9cf; font-size: 8px; line-height: 1.45; }
+    .decision-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .decision-button { min-height: 27px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 5px; background: #11161b; color: var(--muted); font-size: 8px; cursor: pointer; }
+    .decision-button.primary { border-color: #647c39; color: #c8ee8c; }
+    .decision-button:hover { background: var(--surface-soft); color: var(--text); }
+    .decision-button:disabled { opacity: .45; cursor: default; }
+    .decision-outcome { margin-top: 10px; padding: 9px 10px; border: 1px solid #50622e; border-radius: 6px; background: rgba(163,230,53,.06); }
+    .decision-outcome[hidden] { display: none; }
+    .decision-outcome strong { display: block; color: #c8ee8c; font-size: 9px; }
+    .decision-outcome p { margin-top: 5px; font-family: var(--mono); font-size: 8px; }
+
+    .workflow-audit { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; background: #0f1317; }
+    .workflow-audit summary { display: flex; justify-content: space-between; gap: 10px; padding: 11px 12px; color: var(--muted); font-size: 9px; cursor: pointer; list-style: none; }
+    .workflow-audit summary::-webkit-details-marker { display: none; }
+    .workflow-audit summary span:last-child { color: var(--dim); font-family: var(--mono); font-size: 8px; }
+    .workflow-audit-body { padding: 0 12px 12px; }
+    .audit-row { display: grid; grid-template-columns: 86px minmax(0, 1fr) auto; gap: 8px; padding: 7px 0; border-top: 1px solid var(--line); color: var(--dim); font-family: var(--mono); font-size: 8px; }
+    .audit-row b { color: #bcc5cd; font-weight: 500; }
+    .audit-correct { margin-top: 9px; min-height: 27px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface-raised); color: var(--muted); font-size: 8px; cursor: pointer; }
+    .audit-correct:hover { color: var(--text); }
+    .audit-correct:disabled { opacity: .5; cursor: default; }
+
+    .runtime {
+      display: grid;
+      grid-template-rows: 40px 42px 142px minmax(0, 1fr) 31px;
+      background: var(--console);
+      font-family: var(--mono);
+    }
+
+    .runtime-rail {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      height: 100%;
+      padding: 8px 0;
+      border-left: 1px solid var(--line);
+      background: #0d1115;
+    }
+
+    .rail-expand {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #14191f;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .rail-expand:hover { color: var(--text); border-color: var(--line-strong); }
+    .rail-status { width: 6px; height: 6px; margin-top: 15px; border-radius: 50%; background: var(--accent); }
+    .rail-label { margin-top: 12px; color: var(--dim); font-size: 8px; letter-spacing: .15em; text-transform: uppercase; writing-mode: vertical-rl; }
+    .rail-meta { margin-top: 12px; color: var(--amber); font-size: 7px; writing-mode: vertical-rl; }
+    .rail-id { margin-top: auto; color: var(--blue); font-size: 8px; writing-mode: vertical-rl; }
+
+    .terminal-chrome {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-width: 0;
+      padding: 0 11px;
+      border-bottom: 1px solid #222930;
+      background: #10151a;
+    }
+
+    .window-dots { display: flex; gap: 5px; }
+    .window-dots i { width: 7px; height: 7px; border-radius: 50%; background: #39424b; }
+    .window-dots i:first-child { background: #8a4f57; }
+    .window-dots i:nth-child(2) { background: #8d744a; }
+    .window-dots i:last-child { background: #4d744d; }
+
+    .console-tabs { display: flex; flex: 0 0 auto; align-self: stretch; min-width: 0; }
+    .console-tab { position: relative; flex: 0 0 auto; padding: 0 9px; border: 0; background: transparent; color: var(--dim); font-family: var(--mono); font-size: 9px; white-space: nowrap; cursor: pointer; }
+    .console-tab:hover { color: var(--muted); }
+    .console-tab.active { color: var(--text); }
+    .console-tab.active::after { content: ""; position: absolute; right: 8px; bottom: 0; left: 8px; height: 1px; background: var(--accent); }
+    .console-spacer { flex: 1; }
+    .console-title { overflow: hidden; color: var(--dim); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+    .console-window-actions { display: flex; gap: 4px; }
+    .console-icon-button { display: grid; place-items: center; width: 23px; height: 23px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--dim); font-family: var(--mono); font-size: 11px; cursor: pointer; }
+    .console-icon-button:hover { background: #1a2026; color: var(--text); }
+
+    .run-summary {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+      padding: 0 12px;
+      border-bottom: 1px solid #20272e;
+      background: #0c1014;
+    }
+
+    .run-identity { min-width: 0; }
+    .run-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .run-line strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #dbe0e4; font-size: 10px; }
+    .run-id { color: var(--blue); font-size: 8px; }
+    .run-path { display: block; overflow: hidden; margin-top: 4px; color: #828d97; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+    .run-actions { display: flex; gap: 5px; }
+    .console-button { height: 24px; padding: 0 8px; border-color: #2b333b; background: #11161b; color: var(--muted); font-family: var(--mono); font-size: 8px; }
+    .console-button.danger:hover { color: var(--red); }
+
+    .agent-tree {
+      overflow: hidden;
+      padding: 12px 13px;
+      border-bottom: 1px solid #20272e;
+      background: #0a0e11;
+      color: #78838e;
+      font-size: 9px;
+      line-height: 1.9;
+    }
+
+    .tree-line { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; gap: 6px; }
+    .tree-branch { color: #75808a; white-space: pre; }
+    .tree-role { overflow: hidden; color: #aab2ba; text-overflow: ellipsis; white-space: nowrap; }
+    .tree-role b { color: var(--text); font-weight: 620; }
+    .tree-state { font-size: 8px; text-transform: uppercase; }
+    .tree-state.running { color: var(--accent); }
+    .tree-state.waiting { color: var(--amber); }
+    .tree-state.queued { color: #7f8994; }
+    .tree-state.passed { color: var(--cyan); }
+
+    .terminal-log {
+      min-height: 0;
+      overflow: auto;
+      padding: 11px 13px 18px;
+      scrollbar-width: thin;
+      scrollbar-color: #29323a transparent;
+      font-size: 9px;
+      line-height: 1.65;
+    }
+
+    .log-line {
+      display: grid;
+      grid-template-columns: 58px 49px minmax(0, 1fr);
+      gap: 8px;
+      min-width: 580px;
+      padding: 1px 0;
+      color: #89939d;
+    }
+
+    .log-time { color: #77828c; }
+    .log-tag { font-weight: 700; }
+    .log-tag.info { color: var(--blue); }
+    .log-tag.agent { color: var(--purple); }
+    .log-tag.tool { color: var(--cyan); }
+    .log-tag.pass { color: var(--accent); }
+    .log-tag.warn { color: var(--amber); }
+    .log-tag.error { color: var(--red); }
+    .log-message { color: #929ca6; white-space: pre-wrap; }
+    .log-message strong { color: #d1d7dc; font-weight: 500; }
+    .log-message code { color: #b9c2ca; }
+    .log-line.is-error .log-message { color: #cf8990; }
+    .terminal-log.errors-only .log-line:not(.is-error) { display: none; }
+
+    .terminal-prompt {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 12px;
+      border-top: 1px solid #20272e;
+      background: #0c1014;
+      color: #7d8892;
+      font-size: 8px;
+    }
+
+    .terminal-prompt b { color: var(--accent); font-weight: 600; }
+    .terminal-prompt span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cursor { width: 5px; height: 11px; margin-left: 1px; background: #66727d; opacity: .8; }
+
+    .statusbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      overflow: hidden;
+      padding: 0 9px;
+      border-top: 1px solid #29322e;
+      background: #141b12;
+      color: #9bb07d;
+      font-family: var(--mono);
+      font-size: 8px;
+    }
+
+    .status-left, .status-right { display: flex; align-items: center; gap: 13px; white-space: nowrap; }
+    .status-item { display: inline-flex; align-items: center; gap: 5px; }
+    .status-led { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+    .status-item.muted { color: #97aa83; }
+
+    .mobile-switch { display: none; }
+
+    .toast {
+      position: fixed;
+      right: 16px;
+      bottom: 41px;
+      max-width: 320px;
+      padding: 10px 12px;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      background: #171d23;
+      color: #d7dce1;
+      box-shadow: 0 16px 40px rgba(0,0,0,.4);
+      font-size: 10px;
+      opacity: 0;
+      transform: translateY(6px);
+      pointer-events: none;
+      transition: opacity .16s ease, transform .16s ease;
+      z-index: 80;
+    }
+
+    .toast.show { opacity: 1; transform: translateY(0); }
+
+    dialog {
+      width: min(480px, calc(100vw - 32px));
+      padding: 0;
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      background: #151a20;
+      color: var(--text);
+      box-shadow: 0 24px 90px rgba(0,0,0,.68);
+    }
+
+    dialog::backdrop { background: rgba(2, 5, 7, .72); }
+    .dialog-head { display: flex; align-items: center; justify-content: space-between; padding: 13px 15px; border-bottom: 1px solid var(--line); }
+    .dialog-head strong { font-size: 12px; }
+    .dialog-body { padding: 15px; }
+    .dialog-body label { display: block; margin-bottom: 7px; color: var(--muted); font-size: 10px; }
+    .dialog-body input, .dialog-body select { width: 100%; height: 37px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: #0f1317; color: var(--text); outline: 0; }
+    .dialog-body select { margin-bottom: 11px; }
+    .dialog-body .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .dialog-body .dialog-check { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--muted); font-size: 9px; }
+    .dialog-check input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
+    .dialog-note { margin: 10px 0 0; color: var(--dim); font-size: 9px; line-height: 1.5; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 7px; padding: 11px 15px; border-top: 1px solid var(--line); }
+    .quiet-button { height: 29px; padding: 0 10px; color: var(--muted); font-size: 10px; }
+
+    @media (max-width: 1120px) {
+      :root { --sidebar: 68px; }
+      .brand { justify-content: center; padding: 0; }
+      .brand-name, .nav-text, .nav-badge, .nav-label, .focus-card { display: none; }
+      .nav-item { grid-template-columns: 1fr; justify-items: center; padding: 0; }
+      .nav-icon { font-size: 11px; }
+      .sidebar { padding-inline: 8px; }
+      .messages { padding-inline: 22px; }
+    }
+
+    @media (max-width: 840px) {
+      :root { --sidebar: 0px; --header: 50px; --status: 24px; }
+      .topbar { grid-template-columns: 42px minmax(0, 1fr) auto; }
+      .brand { border-right: 0; }
+      .brand-name { display: none; }
+      .project-area { padding-left: 0; }
+      .top-button { display: grid; place-items: center; width: 30px; padding: 0; font-size: 0; }
+      .top-button::before { content: "⌕"; font-size: 14px; }
+      .top-button kbd { display: none; }
+      .language-select { width: 62px; padding-inline: 6px; }
+      .top-live-button { width: 30px; padding: 0; justify-content: center; font-size: 0; }
+      .top-live-button::after { content: "LV"; font-size: 8px; }
+      .top-live-button .status-led { display: none; }
+      .new-task { width: 30px; padding: 0; font-size: 0; }
+      .new-task::before { content: "+"; font-size: 16px; }
+      .sidebar {
+        position: fixed;
+        right: 0;
+        bottom: var(--status);
+        left: 0;
+        z-index: 30;
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        height: 48px;
+        padding: 4px 7px;
+        border-top: 1px solid var(--line);
+        border-right: 0;
+        background: #0e1216;
+        overflow-x: auto;
+      }
+      .nav-section,
+      .nav-section:first-child,
+      .nav-section:not(:first-child) { display: contents; }
+      .nav-item { flex: 0 0 58px; min-height: 38px; }
+      .content-shell { grid-template-columns: 1fr; padding-bottom: 48px; }
+      .workspace { display: block; position: relative; }
+      .conversation, .runtime { height: 100%; border-right: 0; }
+      .workspace[data-mobile-view="chief"] .runtime { display: none; }
+      .workspace[data-mobile-view="run"] .conversation { display: none; }
+      .workspace[data-runtime="closed"] .runtime { display: none !important; }
+      .workspace[data-runtime="closed"] .conversation { display: grid !important; }
+      .workspace[data-runtime="closed"] .mobile-switch { display: none; }
+      .mobile-switch {
+        position: fixed;
+        right: 10px;
+        bottom: 82px;
+        z-index: 35;
+        display: flex;
+        gap: 2px;
+        padding: 3px;
+        border: 1px solid var(--line-strong);
+        border-radius: 8px;
+        background: #11161b;
+        box-shadow: 0 8px 24px rgba(0,0,0,.35);
+      }
+      .mobile-switch button { height: 28px; padding: 0 9px; border: 0; background: transparent; color: var(--dim); font-family: var(--mono); font-size: 8px; }
+      .mobile-switch button.active { background: var(--surface-soft); color: var(--text); }
+      .status-right { display: none; }
+      .stage-strip { overflow-x: auto; }
+      .stage { min-width: 92px; }
+      .runtime { grid-template-rows: 40px 42px 132px minmax(0, 1fr) 31px; }
+    }
+
+    @media (max-width: 700px) {
+      .file-browser { grid-template-columns: 1fr; grid-template-rows: 190px minmax(0, 1fr); }
+      .file-tree-panel { border-right: 0; border-bottom: 1px solid var(--line); }
+      .file-tree-panel { grid-template-rows: auto auto minmax(0, 1fr); }
+      .file-count { display: none; }
+    }
+
+    @media (max-width: 520px) {
+      .project-branch, .header-sub, .live-pill, .console-title { display: none; }
+      .project-switcher { max-width: 210px; }
+      .conversation-header { min-height: 60px; padding-inline: 13px; }
+      .conversation-switcher { flex-wrap: wrap; padding-inline: 13px; }
+      .conversation-select { flex: 1 1 210px; max-width: none; }
+      .conversation-new { margin-left: 0; }
+      .context-facts, .memory-grid { grid-template-columns: 1fr; }
+      .stage-strip { padding-inline: 13px; }
+      .messages { padding: 17px 13px 22px; }
+      .composer { padding-inline: 10px; }
+      .run-card-head { align-items: flex-start; }
+      .data-row { grid-template-columns: 58px minmax(0, 1fr); }
+      .data-status { display: none; }
+      .requirement-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .requirement-metric:nth-child(2) { border-right: 0; }
+      .requirement-metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+      .generic-view { padding: 18px 13px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand" aria-label="AgentDev Workspace">
+        <span class="brand-mark" aria-hidden="true"><i>&#8203;</i><i>&#8203;</i><i>&#8203;</i><i>&#8203;</i></span>
+        <span class="brand-name">AgentDev</span>
+      </div>
+
+      <div class="project-area">
+        <button class="project-switcher" id="projectSwitcher" type="button" aria-haspopup="menu" aria-expanded="false">
+          <span class="repo-chip" aria-hidden="true">AD</span>
+          <span class="project-copy">
+            <span class="project-name" id="projectName">agentdev-workspace</span>
+            <span class="project-branch" id="projectBranch">main · /workspace/agentdev</span>
+          </span>
+          <span class="chevron" aria-hidden="true">⌄</span>
+        </button>
+        <div class="project-menu" id="projectMenu" role="menu" hidden>
+          <div class="project-menu-label" data-i18n="projects.open">Open projects</div>
+          <button class="project-option" type="button" role="menuitem" data-project="agentdev-workspace" data-branch="main · /workspace/agentdev" data-code="AD" data-available="true">
+            <span class="repo-chip">AD</span><span><strong>agentdev-workspace</strong><small data-i18n="projects.activeRuns">main · 2 runs active</small></span><span class="run-count">02</span>
+          </button>
+          <button class="project-option" type="button" role="menuitem" aria-disabled="true" data-project="payments-api" data-branch="feat/idempotency · /workspace/payments" data-code="PA" data-available="false">
+            <span class="repo-chip">PA</span><span><strong>payments-api</strong><small data-i18n="projects.notLoaded">static preview · dataset not loaded</small></span><span class="run-count">—</span>
+          </button>
+          <button class="project-option" type="button" role="menuitem" aria-disabled="true" data-project="design-system" data-branch="main · /workspace/design-system" data-code="DS" data-available="false">
+            <span class="repo-chip">DS</span><span><strong>design-system</strong><small data-i18n="projects.notLoaded">static preview · dataset not loaded</small></span><span class="run-count">—</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="top-actions">
+        <button class="top-button" id="paletteButton" type="button"><span data-i18n="actions.goTo">Go to</span><kbd>⌘ K</kbd></button>
+        <button class="top-live-button" id="liveDockButton" type="button" data-state="open" aria-expanded="true" data-i18n-aria="aria.liveDockOpen" aria-label="Live Dock, 1 running. Compact"><span class="status-led" aria-hidden="true">&#8203;</span><span data-i18n="run.topLive">Live · 1</span></button>
+        <label class="sr-only" for="languageSelect" data-i18n="language.label">Interface language</label>
+        <select class="language-select" id="languageSelect" data-i18n-aria="language.label" aria-label="Interface language">
+          <option value="en">EN</option>
+          <option value="zh-CN">简中</option>
+        </select>
+      </div>
+    </header>
+
+    <div class="content-shell">
+      <aside class="sidebar" data-i18n-aria="aria.projectNavigation" aria-label="Project navigation">
+        <div class="nav-section">
+          <div class="nav-label" data-i18n="nav.workspace">Workspace</div>
+          <button class="nav-item active" type="button" data-i18n-aria="aria.navChief" aria-label="Chief, 1 attention item" aria-current="page" data-view="chief"><span class="nav-icon">CH</span><span class="nav-text" data-i18n="nav.chief">Chief</span><span class="nav-badge attention">1</span></button>
+          <button class="nav-item" type="button" data-i18n-aria="aria.navRequirements" aria-label="Requirements, 2 active and 1 awaiting decision" data-view="requirements"><span class="nav-icon">RQ</span><span class="nav-text" data-i18n="nav.requirements">Requirements</span><span class="nav-badge attention">1</span></button>
+        </div>
+        <div class="nav-section">
+          <div class="nav-label" data-i18n="nav.project">Project</div>
+          <button class="nav-item" type="button" data-i18n-aria="aria.navFiles" aria-label="Project Files" data-view="files"><span class="nav-icon">FL</span><span class="nav-text" data-i18n="nav.files">Project Files</span><span class="nav-badge">24</span></button>
+          <button class="nav-item" type="button" data-i18n-aria="aria.navDocs" aria-label="Docs and Context" data-view="docs"><span class="nav-icon">DC</span><span class="nav-text" data-i18n="nav.docs">Docs &amp; Context</span></button>
+          <button class="nav-item" type="button" data-i18n-aria="aria.navAgents" aria-label="Agents, 8 profiles" data-view="agents"><span class="nav-icon">AG</span><span class="nav-text" data-i18n="nav.agents">Agents</span><span class="nav-badge">8</span></button>
+          <button class="nav-item" type="button" data-i18n-aria="aria.navRuns" aria-label="Runs, 2 active runs" data-view="runs"><span class="nav-icon">RN</span><span class="nav-text" data-i18n="nav.runs">Runs</span><span class="nav-badge">2</span></button>
+        </div>
+        <div class="nav-section">
+          <div class="nav-label" data-i18n="nav.system">System</div>
+          <button class="nav-item" type="button" data-i18n-aria="aria.navInbox" aria-label="Inbox, 3 attention items" data-view="inbox"><span class="nav-icon">IN</span><span class="nav-text" data-i18n="nav.inbox">Inbox</span><span class="nav-badge attention">3</span></button>
+          <button class="nav-item" type="button" data-i18n-aria="aria.navSettings" aria-label="Settings" data-view="settings"><span class="nav-icon">ST</span><span class="nav-text" data-i18n="nav.settings">Settings</span></button>
+        </div>
+
+        <div class="focus-card">
+          <div class="focus-top"><span data-i18n="focus.active">ACTIVE REQUIREMENT</span><code>62%</code></div>
+          <div class="focus-title" data-i18n="focus.title">Pi Runtime foundation</div>
+          <div class="progress" data-i18n-aria="aria.requirementProgress" aria-label="Requirement progress 62%"><span>&#8203;</span></div>
+          <div class="focus-meta"><span data-i18n="focus.phase">Execution · 5 / 8 tasks</span><span id="focusDecision" data-i18n="focus.decision">1 decision</span></div>
+        </div>
+      </aside>
+
+      <main class="workspace" id="workspace" data-mobile-view="chief" data-runtime="open">
+        <section class="conversation" data-i18n-aria="aria.projectWorkspace" aria-label="Project workspace">
+          <header class="conversation-header">
+            <div>
+              <div class="eyebrow" id="sectionEyebrow">Project conversation</div>
+              <h1 id="sectionTitle">Chief</h1>
+              <div class="header-sub" id="sectionSubtitle">Orchestrates work; it does not write production code.</div>
+            </div>
+            <div class="header-controls">
+              <span class="live-pill"><span class="live-dot">&#8203;</span><span data-i18n="common.localDemo">Local demo</span></span>
+            </div>
+          </header>
+
+          <div class="conversation-switcher" id="conversationSwitcher">
+            <label class="sr-only" for="conversationSelect" data-i18n="conversation.selectLabel">Choose a conversation</label>
+            <select class="conversation-select" id="conversationSelect">
+              <option value="project" data-i18n="conversation.project">Project discussion</option>
+              <option value="requirement" data-i18n="conversation.requirement">REQ-018 · Pi Runtime foundation</option>
+            </select>
+            <span class="conversation-scope" id="conversationScope" data-i18n="conversation.projectScope">PROJECT SCOPE</span>
+            <button class="conversation-new" id="newConversationButton" type="button" data-i18n="conversation.new">+ New conversation</button>
+          </div>
+
+          <div class="stage-strip" role="list" data-i18n-aria="aria.deliveryStages" aria-label="Current requirement AI workflow" hidden>
+            <div class="stage done" role="listitem"><span class="stage-mark">✓</span><span data-i18n="stage.productize">Product</span></div>
+            <div class="stage done" role="listitem"><span class="stage-mark">✓</span><span data-i18n="stage.plan">Plan</span></div>
+            <div class="stage current" role="listitem" aria-current="step"><span class="stage-mark">●</span><span data-i18n="stage.execute">Execute</span></div>
+            <div class="stage" role="listitem"><span class="stage-mark">4</span><span data-i18n="stage.accept">Accept</span></div>
+            <div class="stage" role="listitem"><span class="stage-mark">5</span><span data-i18n="stage.settle">Settle</span></div>
+          </div>
+
+          <div class="view-stack">
+            <section class="view" id="chiefView" data-i18n-aria="aria.chiefConversation" aria-label="Chief conversation">
+              <div class="messages" id="projectMessages" aria-live="polite">
+                <article class="message user">
+                  <div class="avatar" aria-hidden="true">YOU</div>
+                  <div>
+                    <div class="message-meta"><strong data-i18n="message.you">You</strong><time datetime="2026-08-30T10:12:00+07:00">10:12</time></div>
+                    <div class="message-body"><p data-i18n="conversation.request">我希望长任务在切换页面或重新打开浏览器后，仍然可以继续讨论和执行，不依赖同一个聊天 Session。</p></div>
+                  </div>
+                </article>
+                <article class="message chief">
+                  <div class="avatar" aria-hidden="true">CH</div>
+                  <div>
+                    <div class="message-meta"><strong>Chief</strong><time datetime="2026-08-30T10:14:00+07:00">10:14</time></div>
+                    <div class="message-body">
+                      <div class="conversation-intro"><strong data-i18n="conversation.freeTitle">This is still a discussion</strong><p data-i18n="conversation.freeDetail">I can explore the idea, inspect relevant context, and summarize a product outcome. Nothing enters the Requirement queue until you explicitly choose it.</p></div>
+                      <div class="context-action">
+                        <span class="context-action-label" data-i18n="conversation.outcomeReady">DISCUSSION OUTCOME · READY TO SAVE</span>
+                        <strong data-i18n="conversation.outcomeTitle">Keep Chief conversations continuous across execution sessions</strong>
+                        <p data-i18n="conversation.outcomeDetail">Logical Conversation is user-facing; runtime sessions may rotate and compact in the background. Formal documents and checkpoints rebuild the minimum context.</p>
+                        <div class="context-facts">
+                          <div><b data-i18n="conversation.inScope">In scope</b><span data-i18n="conversation.scopeValue">Conversation continuity, context rebuild, visible recovery state</span></div>
+                          <div><b data-i18n="conversation.openQuestion">Open question</b><span data-i18n="conversation.questionValue">Retention duration remains to be productized</span></div>
+                        </div>
+                        <div class="context-actions">
+                          <button class="context-button primary" id="addRequirementAction" type="button" data-i18n="conversation.addQueue">Add to requirement queue</button>
+                          <button class="context-button" id="continueDiscussionAction" type="button" data-i18n="conversation.continue">Continue discussing</button>
+                        </div>
+                        <div class="context-result" id="requirementCreatedResult" role="status" hidden>
+                          <code>REQ-026 · QUEUED</code>
+                          <p data-i18n="conversation.createdDetail">The discussion snapshot is linked. No Product plan, Task, or code execution has started.</p>
+                          <div class="context-actions">
+                            <button class="context-button" id="viewCreatedRequirement" type="button" data-i18n="conversation.viewRequirement">View requirement</button>
+                            <button class="context-button primary" id="startCreatedRequirement" type="button" data-i18n="conversation.startExecution">Start execution</button>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="memory-card" id="initializationCard">
+                        <strong data-i18n="initialization.title">Existing project · memory setup preview</strong>
+                        <p data-i18n="initialization.detail">Chief first reads only top-level identity and dependency files, proposes the project map, then waits for initialization authorization.</p>
+                        <div class="memory-grid">
+                          <div class="memory-item"><span data-i18n="initialization.documentRoot">Document root</span><code>docs/agentdev/</code></div>
+                          <div class="memory-item"><span data-i18n="initialization.codeRoot">Code root</span><code>./</code></div>
+                          <div class="memory-item"><span>Git</span><code data-i18n="initialization.oneGit">one repository</code></div>
+                          <div class="memory-item"><span data-i18n="initialization.runtimeData">Runtime data</span><code>~/.agentdev/state/…</code></div>
+                        </div>
+                        <div class="memory-note" id="initializationNote" data-i18n="initialization.note">Preview only · no recursive code read · runtime data stays outside Git</div>
+                        <div class="context-actions">
+                          <button class="context-button" id="previewInitialization" type="button" data-i18n="initialization.preview">Preview initialization</button>
+                          <button class="context-button primary" id="initializeProject" type="button" data-i18n="initialization.initialize" hidden>Initialize project memory</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              </div>
+
+              <div class="messages" id="messages" aria-live="polite" hidden>
+                <div class="steering-note"><b data-i18n="conversation.executionOpen">Conversation stays open during execution.</b> <span data-i18n="conversation.executionDetail">Chief classifies each message as an in-scope fix, a current product change, or a new queued Requirement before changing workflow state.</span></div>
+                <article class="message user">
+                  <div class="avatar" aria-hidden="true">YOU</div>
+                  <div>
+                    <div class="message-meta"><strong data-i18n="message.you">You</strong><time datetime="2026-08-29T09:41:00+07:00">09:41</time></div>
+                    <div class="message-body"><p data-i18n="message.requirementRequest">完成 Pi Runtime 基础能力，让长任务可以安全地异步执行、恢复并留下证据。</p></div>
+                  </div>
+                </article>
+
+                <article class="message chief">
+                  <div class="avatar" aria-hidden="true">CH</div>
+                  <div>
+                    <div class="message-meta"><strong>Chief</strong><time datetime="2026-08-29T09:42:00+07:00">09:42</time></div>
+                    <div class="message-body">
+                      <p><span data-i18n="message.chiefProductized">需求已完成产品化并通过自动门禁；目标、范围和验收已写入 Product Definition。Plan v3 已生成 8 个执行 Task，目前不需要你审批。</span> <span class="command-chip">REQ-018 · Pi Runtime foundation</span></p>
+                      <div class="requirement-summary">
+                        <div class="requirement-summary-head">
+                          <div class="requirement-identity"><code>REQ-018</code><strong data-i18n="focus.title">Pi Runtime foundation</strong></div>
+                          <span class="requirement-phase" data-i18n="requirement.phaseExecution">Execution</span>
+                        </div>
+                        <div class="requirement-metrics">
+                          <div class="requirement-metric"><span data-i18n="requirement.progress">Progress</span><strong>62% · 5/8</strong></div>
+                          <div class="requirement-metric"><span data-i18n="requirement.activeAgent">Active agent</span><strong>Backend · RUN-104</strong></div>
+                          <div class="requirement-metric"><span data-i18n="requirement.blocked">Blocked</span><strong data-i18n="requirement.none">None</strong></div>
+                          <div class="requirement-metric"><span data-i18n="requirement.decision">Your decision</span><strong class="attention" id="decisionMetric">1</strong></div>
+                        </div>
+                        <details class="activity-disclosure">
+                          <summary><span data-i18n="requirement.internalSummary">AI activity · 2 auto fixes · 1 Review loop · no failed recovery</span></summary>
+                          <div class="activity-disclosure-body">
+                            <span><b>Task 05 → RUN-104 → attempt_01</b> · Session Factory · Backend</span>
+                            <span><b>Automatic</b> · cancellation cleanup bug fixed · tests 12/12</span>
+                            <span><b>Notify</b> · retry policy extraction recorded as follow-up candidate</span>
+                          </div>
+                        </details>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="message chief">
+                  <div class="avatar" aria-hidden="true">CH</div>
+                  <div>
+                    <div class="message-meta"><strong>Chief</strong><time datetime="2026-08-29T09:48:00+07:00">09:48</time></div>
+                    <div class="message-body">
+                      <p data-i18n="message.changeIntro">执行中发现一项会改变用户可见行为的建议，超出已确认验收，需要你决定。普通 Bug 和技术修正已由 AI 在原 Plan 内自动处理。</p>
+                      <div class="decision-card">
+                        <div class="decision-card-head"><code>CHANGE-007 · DECISION REQUIRED</code><span class="agent-tag">Review</span></div>
+                        <h3 data-i18n="decision.title">断线后是否自动恢复未完成 Run？</h3>
+                        <p data-i18n="decision.detail">建议从“提示用户恢复”改为“安全条件满足时自动恢复”。影响恢复策略、Product Acceptance 与 Plan v3 的 2 个 Task。</p>
+                        <dl class="decision-facts">
+                          <div><dt data-i18n="decision.reasonLabel">Why ask</dt><dd data-i18n="decision.reason">Acceptance changes and the safe policy has a real product choice.</dd></div>
+                          <div><dt data-i18n="decision.riskLabel">Risk</dt><dd data-i18n="decision.risk">Automatic retry may duplicate an uncertain external write.</dd></div>
+                          <div><dt data-i18n="decision.impactLabel">Impact</dt><dd>Product Definition v1 · Acceptance A-07 · Plan v3 · TASK-05/07</dd></div>
+                          <div><dt data-i18n="decision.docsLabel">Documents</dt><dd>docs/product/07-protocol-storage-reliability.md · 09-webui.md</dd></div>
+                        </dl>
+                        <div class="decision-actions">
+                          <button class="decision-button primary" type="button" data-decision="current" data-i18n="decision.current">Handle now</button>
+                          <button class="decision-button" type="button" data-decision="queue" data-i18n="decision.queue">Add to queue</button>
+                          <button class="decision-button" type="button" data-decision="reject" data-i18n="decision.reject">Reject</button>
+                        </div>
+                        <div class="decision-outcome" id="decisionOutcome" aria-live="polite" hidden><strong id="decisionOutcomeTitle"></strong><p id="decisionOutcomeDetail"></p></div>
+                      </div>
+                      <details class="workflow-audit">
+                        <summary><span data-i18n="audit.title">Audit AI routing and evidence</span><span id="auditSummary" data-i18n="audit.summary">1 discovery · 0 failed · 1 pending</span></summary>
+                        <div class="workflow-audit-body">
+                          <div class="audit-row"><span data-i18n="audit.identity">Identity</span><b>REQ-018 → TASK-05 → RUN-104 → attempt_01</b><span>active</span></div>
+                          <div class="audit-row"><span data-i18n="audit.classification">Classification</span><b>Product Change · user-visible behavior</b><span>Review</span></div>
+                          <div class="audit-row"><span data-i18n="audit.route">Route</span><b>recommended: Decision Required · enforced: Decision Required</b><span>policy@v2</span></div>
+                          <div class="audit-row"><span data-i18n="audit.snapshots">Snapshots</span><b>product@v1 · plan@v3 · context@ctx_4f2a</b><span>frozen</span></div>
+                          <div class="audit-row"><span data-i18n="audit.evidence">Evidence</span><b>working.patch · pnpm test · exit 0 · 12/12 passed</b><span>4 artifacts</span></div>
+                          <button class="audit-correct" id="correctClassification" type="button" data-i18n="audit.correct">Correct classification and rerun routing</button>
+                          <div class="decision-outcome" id="auditCorrection" role="status" hidden><strong data-i18n="audit.correctedTitle">Correction recorded</strong><p data-i18n="audit.correctedDetail">Affected work is paused and will re-enter Product/Plan gates under the corrected route.</p></div>
+                        </div>
+                      </details>
+                    </div>
+                  </div>
+                </article>
+              </div>
+
+              <div class="messages" id="createdRequirementMessages" aria-live="polite" hidden>
+                <article class="message user">
+                  <div class="avatar" aria-hidden="true">YOU</div>
+                  <div><div class="message-meta"><strong data-i18n="message.you">You</strong><time datetime="2026-08-30T10:20:00+07:00">10:20</time></div><div class="message-body"><p data-i18n="conversation.startCommand">开始执行这个需求。</p></div></div>
+                </article>
+                <article class="message chief">
+                  <div class="avatar" aria-hidden="true">CH</div>
+                  <div>
+                    <div class="message-meta"><strong>Chief</strong><time datetime="2026-08-30T10:20:00+07:00">10:20</time></div>
+                    <div class="message-body">
+                      <p data-i18n="conversation.startDetail">已收到执行授权。REQ-026 进入进行中需求，当前只启动产品规划；Product Definition 通过前不会生成 Plan，Plan 通过前不会创建执行 Task。</p>
+                      <div class="requirement-summary">
+                        <div class="requirement-summary-head"><div class="requirement-identity"><code>REQ-026</code><strong data-i18n="conversation.outcomeTitle">Keep Chief conversations continuous across execution sessions</strong></div><span class="requirement-phase" data-i18n="stage.productize">Product</span></div>
+                        <div class="requirement-metrics"><div class="requirement-metric"><span data-i18n="card.phase">Phase</span><strong data-i18n="stage.productize">Product</strong></div><div class="requirement-metric"><span>Plan</span><strong>—</strong></div><div class="requirement-metric"><span>Tasks</span><strong>—</strong></div><div class="requirement-metric"><span data-i18n="requirement.blocked">Blocked</span><strong data-i18n="requirement.none">None</strong></div></div>
+                      </div>
+                      <div class="conversation-intro"><strong data-i18n="conversation.executionOpen">Conversation stays open during execution.</strong><p data-i18n="conversation.executionDetail">Chief classifies each message as an in-scope fix, a current product change, or a new queued Requirement before changing workflow state.</p></div>
+                    </div>
+                  </div>
+                </article>
+              </div>
+
+              <div class="messages" id="newConversationTemplate" aria-live="polite" hidden>
+                <article class="message chief">
+                  <div class="avatar" aria-hidden="true">CH</div>
+                  <div>
+                    <div class="message-meta"><strong>Chief</strong><time datetime="2026-08-30T10:18:00+07:00">10:18</time></div>
+                    <div class="message-body"><div class="conversation-intro"><strong data-i18n="conversation.newTitle">New project conversation</strong><p data-i18n="conversation.newDetail">Start anywhere. I will discuss and inspect narrowly; no Requirement or Plan exists until you explicitly create one. The active Run continues in the Live Dock.</p></div></div>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="view generic-view" id="genericView" hidden aria-live="polite">
+              <div class="generic-heading">
+                <div class="eyebrow" id="genericEyebrow"></div>
+                <h2 id="genericTitle"></h2>
+                <p id="genericSubtitle"></p>
+              </div>
+              <div class="generic-content" id="genericContent"></div>
+            </section>
+
+            <section class="view files-view" id="filesView" hidden data-i18n-aria="nav.files" aria-label="Project Files">
+              <div class="file-browser">
+                <aside class="file-tree-panel" data-i18n-aria="aria.fileTree" aria-label="Project file tree">
+                  <div class="file-panel-head"><span data-i18n="nav.files">Project Files</span><span class="readonly-badge" data-i18n="files.mockReadOnly">Mock · Read only</span></div>
+                  <div class="file-search-wrap">
+                    <label class="sr-only" for="fileSearch" data-i18n="files.filterLabel">Filter project files</label>
+                    <input class="file-search" id="fileSearch" type="search" data-i18n-placeholder="files.filterPlaceholder" placeholder="Filter files…" autocomplete="off">
+                  </div>
+                  <div class="file-tree" id="fileTree" role="tree" data-i18n-aria="aria.filesInProject" data-i18n-project="agentdev-workspace" aria-label="Files in agentdev-workspace">
+                    <button class="file-item active" type="button" role="treeitem" aria-current="page" data-file="project"><span class="file-kind">MD</span><span class="file-name">PROJECT.md</span></button>
+                    <button class="file-item" type="button" role="treeitem" data-file="code-map"><span class="file-kind">MD</span><span class="file-name">CODE_MAP.md</span></button>
+                    <details open>
+                      <summary>docs</summary>
+                      <div class="tree-children">
+                        <button class="file-item" type="button" data-file="docs-index"><span class="file-kind">MD</span><span class="file-name">INDEX.md</span></button>
+                        <details open>
+                          <summary>product</summary>
+                          <div class="tree-children">
+                            <button class="file-item" type="button" data-file="product-design"><span class="file-kind">MD</span><span class="file-name">本地软件研发Agent工作台_产品设计.md</span></button>
+                          </div>
+                        </details>
+                      </div>
+                    </details>
+                    <details open>
+                      <summary>packages</summary>
+                      <div class="tree-children">
+                        <details open>
+                          <summary>pi-runtime</summary>
+                          <div class="tree-children">
+                            <details open>
+                              <summary>src</summary>
+                              <div class="tree-children">
+                                <button class="file-item" type="button" data-file="adapter"><span class="file-kind">TS</span><span class="file-name">adapter.ts</span></button>
+                                <button class="file-item" type="button" data-file="session-factory"><span class="file-kind">TS</span><span class="file-name">session-factory.ts</span></button>
+                              </div>
+                            </details>
+                          </div>
+                        </details>
+                      </div>
+                    </details>
+                    <details>
+                      <summary>tasks</summary>
+                      <div class="tree-children">
+                        <button class="file-item" type="button" data-file="task-plan"><span class="file-kind">MD</span><span class="file-name">WEBUI-002/plan.md</span></button>
+                      </div>
+                    </details>
+                    <p class="file-tree-empty" id="fileTreeEmpty" hidden data-i18n="files.noMatch">No matching files in this local dataset.</p>
+                  </div>
+                  <div class="file-count"><span id="visibleFileCount">7</span> <span data-i18n="files.countSuffix">sample files · 24 indexed in current Project</span></div>
+                </aside>
+
+                <section class="file-preview" data-i18n-aria="aria.filePreview" aria-label="Read-only file preview">
+                  <header class="file-preview-head">
+                    <span class="file-path" id="filePath">PROJECT.md</span>
+                    <span class="file-meta" id="fileMeta">Markdown · 1.8 KB · Mock</span>
+                  </header>
+                  <div class="code-scroll" tabindex="0" data-i18n-aria="aria.fileContent" aria-label="File content">
+                    <pre class="code-pre"><code id="fileCode"></code></pre>
+                  </div>
+                  <footer class="file-preview-foot"><span data-i18n="files.readOnly">READ ONLY</span><span>UTF-8</span><span id="fileLineCount">12 lines</span><span data-i18n="files.localDataset">Local dataset</span></footer>
+                </section>
+              </div>
+            </section>
+          </div>
+
+          <form class="composer" id="composer">
+            <div class="composer-box">
+              <label for="messageInput" class="visually-hidden" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0" data-i18n="composer.label">Message Chief</label>
+              <textarea id="messageInput" rows="2" data-i18n-placeholder="composer.placeholder" placeholder="Message Chief…  Use @task or /command"></textarea>
+              <div class="composer-tools">
+                <div class="composer-left">
+                  <span class="mode-select" data-i18n="composer.mode">Workspace mode</span>
+                  <button class="tool-link" type="button" id="attachButton" data-i18n="composer.context">+ context</button>
+                </div>
+                <button class="send-button" type="submit" data-i18n-aria="composer.send" aria-label="Send message">↑</button>
+              </div>
+            </div>
+          </form>
+        </section>
+
+        <aside class="runtime" data-i18n-aria="aria.runConsole" aria-label="Run console">
+          <div class="runtime-rail" data-i18n-aria="aria.collapsedRun" aria-label="Collapsed Run console">
+            <button class="rail-expand" id="expandRuntime" type="button" data-i18n-aria="aria.expandRun" aria-label="Expand Run console">‹</button>
+            <span class="rail-status" aria-hidden="true">&#8203;</span>
+            <span class="rail-label" data-i18n="run.active">Run active</span>
+            <span class="rail-meta" id="railMeta" data-i18n="run.railMeta">1 run · 1 decision</span>
+            <span class="rail-id">REQ-018 · RUN-104</span>
+          </div>
+          <div class="terminal-chrome">
+            <span class="window-dots" aria-hidden="true"><i>&#8203;</i><i>&#8203;</i><i>&#8203;</i></span>
+            <div class="console-tabs" role="tablist" data-i18n-aria="aria.consoleViews" aria-label="Console views">
+              <button class="console-tab active" id="consoleTabLive" type="button" role="tab" aria-selected="true" aria-controls="terminalLog" tabindex="0" data-console="live" data-i18n="run.live">LIVE</button>
+              <button class="console-tab" id="consoleTabEvents" type="button" role="tab" aria-selected="false" aria-controls="terminalLog" tabindex="-1" data-console="events" data-i18n="run.events">EVENTS</button>
+              <button class="console-tab" id="consoleTabArtifacts" type="button" role="tab" aria-selected="false" aria-controls="terminalLog" tabindex="-1" data-console="artifacts" data-i18n="run.artifacts">ARTIFACTS</button>
+            </div>
+            <span class="console-spacer">&#8203;</span>
+            <span class="console-title">agentdev-projectd / agentdev-workspace</span>
+            <span class="console-window-actions">
+              <button class="console-icon-button" id="collapseRuntime" type="button" data-i18n-aria="aria.collapseRun" aria-label="Collapse Run console" aria-expanded="true">›</button>
+              <button class="console-icon-button" id="closeRuntime" type="button" data-i18n-aria="aria.closeRun" aria-label="Close Run console">×</button>
+            </span>
+          </div>
+
+          <div class="run-summary">
+            <div class="run-identity">
+              <div class="run-line"><span class="run-id">MOCK RUN-104</span><strong>Backend · Session Factory</strong></div>
+              <span class="run-path">REQ-018 / TASK-05 / RUN-104 / attempt_01 · worktree/runtime-adapter</span>
+            </div>
+            <div class="run-actions">
+              <button class="console-button" id="errorFilter" type="button" aria-pressed="false" data-i18n="run.errors">ERRORS</button>
+              <button class="console-button" id="pauseRun" type="button" aria-pressed="false" data-i18n="run.pause">PAUSE</button>
+              <button class="console-button danger" id="stopRun" type="button" data-i18n="run.stop">STOP</button>
+            </div>
+          </div>
+
+          <div class="agent-tree" data-i18n-aria="aria.agentRunTree" aria-label="Agent run tree">
+            <div class="tree-line"><span class="tree-branch">◆ REQ-018</span><span class="tree-role"><b>CHIEF</b> Pi Runtime foundation</span><span class="tree-state waiting" data-i18n="run.stateActive">active</span></div>
+            <div class="tree-line"><span class="tree-branch">├─ TASK-05</span><span class="tree-role"><b>BACKEND</b> Session Factory</span><span class="tree-state running" id="treeRunState">running</span></div>
+            <div class="tree-line"><span class="tree-branch">│  └─ ● RUN-104</span><span class="tree-role"><b>ATTEMPT 01</b> implementation</span><span class="tree-state running" data-i18n="run.stateStreaming">streaming</span></div>
+            <div class="tree-line"><span class="tree-branch">├─ TASK-06</span><span class="tree-role"><b>REVIEW</b> Frozen diff</span><span class="tree-state queued" data-i18n="run.stateQueued">queued</span></div>
+            <div class="tree-line"><span class="tree-branch">└─ TASK-07</span><span class="tree-role"><b>TEST</b> Contracts + recovery</span><span class="tree-state queued" data-i18n="run.stateWaiting">waiting</span></div>
+          </div>
+
+          <div class="terminal-log" id="terminalLog" role="tabpanel" aria-labelledby="consoleTabLive" aria-live="polite">&#8203;</div>
+
+          <div class="terminal-prompt">
+            <b>agentdev</b><span id="promptProject">agentdev-workspace</span><span>› stream --run RUN-104</span><i class="cursor" aria-hidden="true">&#8203;</i>
+          </div>
+        </aside>
+
+        <div class="mobile-switch" data-i18n-aria="aria.mobileSwitcher" aria-label="Mobile panel switcher">
+          <button class="active" type="button" aria-pressed="true" data-mobile="chief" data-i18n="nav.workspace">WORKSPACE</button>
+          <button type="button" aria-pressed="false" data-mobile="run" data-i18n="nav.runs">RUN</button>
+        </div>
+      </main>
+    </div>
+
+    <footer class="statusbar">
+      <div class="status-left">
+        <span class="status-item"><span class="status-led">&#8203;</span><span data-i18n="status.localDemo">local UI demo</span></span>
+        <span class="status-item muted" data-i18n="status.noCore">no Core connection</span>
+        <span class="status-item muted">main*</span>
+      </div>
+      <div class="status-right">
+        <span data-i18n="status.sampleRun">sample run</span><span>18.4k tok</span><span data-i18n="status.mockMetrics">mock metrics</span><span data-i18n="nav.workspace">Workspace</span>
+      </div>
+    </footer>
+  </div>
+
+  <dialog id="paletteDialog" aria-labelledby="paletteTitle">
+    <div class="dialog-head"><strong id="paletteTitle" data-i18n="actions.goTo">Go to</strong><button class="icon-button" type="button" data-close-dialog data-i18n-aria="common.close" aria-label="Close">×</button></div>
+    <div class="dialog-body">
+      <label for="paletteInput" data-i18n="palette.label">Project, requirement, run, or document</label>
+      <input id="paletteInput" autocomplete="off" data-i18n-placeholder="palette.placeholder" placeholder="Type to search…">
+      <p class="dialog-note" data-i18n="palette.note">Try “REQ-018”, “RUN-104”, or “Context Preview”.</p>
+    </div>
+  </dialog>
+
+  <dialog id="profileDialog" aria-labelledby="profileDialogTitle">
+    <div class="dialog-head"><strong id="profileDialogTitle" data-i18n="profile.editTitle">Edit role profile</strong><button class="icon-button" type="button" data-close-dialog data-i18n-aria="common.close" aria-label="Close">×</button></div>
+    <form id="profileForm">
+      <div class="dialog-body">
+        <label for="profileRole" data-i18n="profile.role">Fixed role</label>
+        <input id="profileRole" readonly>
+        <div class="field-row">
+          <div><label for="profileProvider" data-i18n="profile.provider">Provider</label><select id="profileProvider"></select></div>
+          <div><label for="profileModel" data-i18n="profile.model">Model</label><select id="profileModel"></select></div>
+        </div>
+        <label for="profileReasoning" data-i18n="profile.reasoning">Reasoning</label>
+        <select id="profileReasoning"><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select>
+        <p class="dialog-note" data-i18n="profile.note">This Project override affects future Runs only. Role duties, gates, permission ceiling, and the active Runtime Snapshot do not change.</p>
+      </div>
+      <div class="dialog-actions"><button class="quiet-button" id="resetProfileButton" type="button" data-i18n="profile.reset">Use global default</button><button class="new-task" type="submit" data-i18n="common.save">Save override</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="providerDialog" aria-labelledby="providerDialogTitle">
+    <div class="dialog-head"><strong id="providerDialogTitle" data-i18n="provider.editTitle">Configure provider</strong><button class="icon-button" type="button" data-close-dialog data-i18n-aria="common.close" aria-label="Close">×</button></div>
+    <form id="providerForm">
+      <div class="dialog-body">
+        <label for="providerName" data-i18n="provider.name">Provider connection</label>
+        <input id="providerName" readonly>
+        <label for="providerType" data-i18n="provider.type">Provider type</label>
+        <select id="providerType"><option value="OpenAI">OpenAI</option><option value="OpenAI compatible">OpenAI compatible</option><option value="Anthropic">Anthropic</option><option value="Google AI">Google AI</option><option value="Custom HTTP">Custom HTTP</option></select>
+        <label for="providerBaseUrl" data-i18n="provider.baseUrl">API Base URL</label>
+        <input id="providerBaseUrl" autocomplete="off">
+        <label for="providerSecretRef" data-i18n="provider.secretRef">Secret Reference</label>
+        <input id="providerSecretRef" autocomplete="off">
+        <label class="dialog-check" for="providerEnabled"><input id="providerEnabled" type="checkbox"><span data-i18n="provider.enabled">Enabled for new Runs</span></label>
+        <p class="dialog-note" data-i18n="provider.note">Only the reference is stored. Secret values remain in AgentDev Secret Store and are never echoed here.</p>
+      </div>
+      <div class="dialog-actions"><button class="quiet-button" type="button" data-close-dialog data-i18n="common.cancel">Cancel</button><button class="new-task" type="submit" data-i18n="common.saveProvider">Save provider</button></div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const $ = (selector, root = document) => root.querySelector(selector);
+      const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+
+      const projectSwitcher = $("#projectSwitcher");
+      const projectMenu = $("#projectMenu");
+      const chiefView = $("#chiefView");
+      const genericView = $("#genericView");
+      const filesView = $("#filesView");
+      const workspace = $("#workspace");
+      const terminalLog = $("#terminalLog");
+      const toast = $("#toast");
+      let toastTimer;
+      let runPaused = false;
+      let consoleMode = "live";
+      let activeView = "chief";
+      let activeConversation = "project";
+      let conversationSequence = 0;
+      let queuedRequirementCreated = false;
+      let queuedRequirementStarted = false;
+      let initializationState = "idle";
+      let decisionState = null;
+      let editingRole = null;
+      let editingProvider = null;
+
+      const providerConnections = {
+        openai: { name: "OpenAI", type: "OpenAI", baseUrl: "https://api.openai.com/v1", secretRef: "secret://providers/openai", enabled: true, health: "connected", models: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] },
+        moonshot: { name: "Moonshot", type: "OpenAI compatible", baseUrl: "https://api.moonshot.ai/v1", secretRef: "secret://providers/moonshot", enabled: true, health: "untested", models: ["kimi-k3", "kimi-k2.5"] },
+        anthropic: { name: "Anthropic", type: "Anthropic", baseUrl: "https://api.anthropic.com", secretRef: "secret://providers/anthropic", enabled: true, health: "connected", models: ["claude-sonnet-4.5", "claude-opus-4.1"] },
+        google: { name: "Google", type: "Google AI", baseUrl: "https://generativelanguage.googleapis.com", secretRef: "secret://providers/google", enabled: true, health: "untested", models: ["gemini-2.5-pro", "gemini-2.5-flash"] }
+      };
+
+      const roleDefinitions = [
+        { id: "chief", label: "Chief", ceiling: "orchestration tools" },
+        { id: "product", label: "Product", ceiling: "product docs" },
+        { id: "planning", label: "Planning", ceiling: "plan artifacts" },
+        { id: "backend", label: "Backend", ceiling: "task worktree" },
+        { id: "frontend", label: "Frontend", ceiling: "task worktree" },
+        { id: "review", label: "Review", ceiling: "production read only" },
+        { id: "test", label: "Test", ceiling: "test evidence" },
+        { id: "settlement", label: "Settlement", ceiling: "project memory" }
+      ];
+
+      const globalRoleProfiles = {
+        chief: { provider: "openai", model: "gpt-5.6-terra", reasoning: "high" },
+        product: { provider: "openai", model: "gpt-5.6-terra", reasoning: "high" },
+        planning: { provider: "openai", model: "gpt-5.6-terra", reasoning: "high" },
+        backend: { provider: "anthropic", model: "claude-sonnet-4.5", reasoning: "high" },
+        frontend: { provider: "openai", model: "gpt-5.6-terra", reasoning: "medium" },
+        review: { provider: "openai", model: "gpt-5.6-sol", reasoning: "high" },
+        test: { provider: "google", model: "gemini-2.5-flash", reasoning: "medium" },
+        settlement: { provider: "openai", model: "gpt-5.6-luna", reasoning: "medium" }
+      };
+
+      const roleOverrides = {
+        chief: { provider: "openai", model: "gpt-5.6-sol", reasoning: "high" },
+        frontend: { provider: "moonshot", model: "kimi-k3", reasoning: "high" }
+      };
+
+      const baseMessages = {
+        en: {
+          "actions.goTo": "Go to",
+          "aria.agentRunTree": "Agent run tree", "aria.chiefConversation": "Chief conversation", "aria.closeRun": "Close Run console", "aria.collapseRun": "Collapse Run console", "aria.collapsedRun": "Collapsed Run console", "aria.consoleViews": "Console views", "aria.expandRun": "Expand Run console", "aria.fileContent": "File content", "aria.filePreview": "Read-only file preview", "aria.filesInProject": "Files in {project}", "aria.fileTree": "Project file tree", "aria.liveDockToggle": "Live Dock, 1 running", "aria.liveDockOpen": "Live Dock, 1 running. Compact", "aria.liveDockCompact": "Live Dock, 1 running, compact. Open", "aria.liveDockHidden": "Live Dock, 1 running, hidden. Open", "aria.mobileSwitcher": "Mobile panel switcher", "aria.navAgents": "Agents, 8 profiles", "aria.navChief": "Chief, 1 attention item", "aria.navDocs": "Docs and Context", "aria.navFiles": "Project Files", "aria.navInbox": "Inbox, 3 attention items", "aria.navRuns": "Runs, 2 active runs", "aria.navSettings": "Settings", "aria.projectNavigation": "Project navigation", "aria.projectWorkspace": "Project workspace", "aria.reopenRun": "Reopen Run console", "aria.runConsole": "Run console", "aria.runConsoleCollapsed": "Run console, collapsed",
+          "common.cancel": "Cancel", "common.close": "Close", "common.localDemo": "Local demo", "common.save": "Save override", "common.saveProvider": "Save provider",
+          "composer.context": "+ context", "composer.label": "Message Chief", "composer.mode": "Workspace mode", "composer.placeholder": "Message Chief…  Use @task or /command", "composer.send": "Send message",
+          "files.countSuffix": "sample files · 24 indexed in current Project", "files.filterLabel": "Filter project files", "files.filterPlaceholder": "Filter files…", "files.localDataset": "Local dataset", "files.mockReadOnly": "Mock · Read only", "files.noMatch": "No matching files in this local dataset.", "files.noMatchPath": "No matching file", "files.noMatchMeta": "Filter returned 0 files", "files.readOnly": "READ ONLY", "files.lines": "{count} lines",
+          "language.label": "Interface language", "language.changed": "Interface language changed to English.",
+          "nav.agents": "Agents", "nav.chief": "Chief", "nav.docs": "Docs & Context", "nav.files": "Project Files", "nav.inbox": "Inbox", "nav.project": "Project", "nav.runs": "Runs", "nav.settings": "Settings", "nav.system": "System", "nav.workspace": "Workspace",
+          "palette.placeholder": "Type to search…",
+          "projects.activeRuns": "main · 2 runs active", "projects.notLoaded": "static preview · dataset not loaded", "projects.open": "Open projects",
+          "run.active": "Run active", "run.allLogs": "ALL LOGS", "run.artifacts": "ARTIFACTS", "run.errors": "ERRORS", "run.events": "EVENTS", "run.live": "LIVE", "run.open": "OPEN RUN", "run.pause": "PAUSE", "run.resume": "RESUME", "run.stop": "STOP", "run.statePaused": "paused", "run.stateRunning": "running", "run.topLive": "Live · 1",
+          "run.railMeta": "1 run · 1 decision", "run.railMetaResolved": "1 run · 0 decisions", "run.stateActive": "active", "run.stateQueued": "queued", "run.stateStreaming": "streaming", "run.stateWaiting": "waiting",
+          "section.chiefEyebrow": "Project conversation", "section.chiefSubtitle": "Orchestrates work; it does not write production code.", "section.filesEyebrow": "Current Project · Read only", "section.filesSubtitle": "Browse one Project boundary without loading files into Agent Context.", "section.workspace": "Project workspace",
+          "stage.plan": "Plan", "stage.settle": "Settle",
+          "status.localDemo": "local UI demo", "status.mockMetrics": "mock metrics", "status.noCore": "no Core connection", "status.sampleRun": "sample run",
+          "toast.context": "Context Preview would open here.", "toast.consoleCollapsed": "Run Console collapsed. Run state is unchanged.", "toast.consoleClosed": "Run Console closed. Closing the panel does not stop the Run.", "toast.consoleExpanded": "Run Console expanded.", "toast.consoleMobileHidden": "Run panel hidden on this narrow screen. The mock Run state is unchanged.", "toast.consoleReopened": "Run Console reopened.", "toast.noErrors": "No errors in the current console view.", "toast.projectActive": "{project} is the active local demo dataset.", "toast.projectUnavailable": "{project} is a static menu preview; its Project dataset is not loaded.", "toast.stop": "Stop requires confirmation in the real product.", "toast.opened": "Opened {view}.", "toast.noResult": "No local demo result for “{query}”.",
+          "message.you": "You", "toast.requirement023Started": "REQ-023 entered the active Requirement collection. Chief will productize it before planning.",
+          "view.docs.eyebrow": "Project memory", "view.docs.title": "Docs & Context", "view.docs.subtitle": "Navigate broadly, load narrowly. Context sources remain explainable and stage-specific.",
+          "view.agents.eyebrow": "Fixed roles · configurable profiles", "view.agents.title": "Agents", "view.agents.subtitle": "Models and skills can vary by role; responsibilities, stage gates, and permission ceilings cannot.",
+          "view.runs.eyebrow": "Persistent asynchronous jobs", "view.runs.title": "Runs", "view.runs.subtitle": "Logical Runs survive browser disconnects; every Attempt keeps its own immutable evidence.",
+          "view.inbox.eyebrow": "Cross-project summaries only", "view.inbox.title": "Inbox", "view.inbox.subtitle": "Attention items are aggregated without loading another Project's conversation or document Context.",
+          "view.settings.eyebrow": "Core-owned configuration", "view.settings.title": "Settings", "view.settings.subtitle": "The WebUI edits configuration through AgentDev Protocol; it never owns model credentials or merges project settings.",
+          "agents.introTitle": "Fixed roles · editable runtime profiles", "agents.introDetail": "Provider and model can vary by role. Duties, gates, output contracts, and permission ceilings remain fixed.", "agents.futureOnly": "Changes affect future Runs only. RUN-104 keeps cfg_c91d.", "agents.edit": "Edit profile", "agents.reset": "Reset", "agents.global": "Global default", "agents.override": "Project override", "agents.permission": "fixed ceiling",
+          "profile.editTitle": "Edit role profile", "profile.role": "Fixed role", "profile.provider": "Provider", "profile.model": "Model", "profile.reasoning": "Reasoning", "profile.note": "This Project override affects future Runs only. Role duties, gates, permission ceiling, and the active Runtime Snapshot do not change.", "profile.reset": "Use global default",
+          "provider.editTitle": "Configure provider", "provider.name": "Provider connection", "provider.type": "Provider type", "provider.baseUrl": "API Base URL", "provider.secretRef": "Secret Reference", "provider.enabled": "Enabled for new Runs", "provider.note": "Only the reference is stored. Secret values remain in AgentDev Secret Store and are never echoed here.", "provider.configure": "Configure", "provider.test": "Test connection", "provider.connected": "connected", "provider.untested": "not tested", "provider.disabled": "disabled", "provider.models": "models", "provider.secretConfigured": "secret configured", "provider.globalTitle": "Provider Connections", "provider.globalDetail": "AgentDev global · secrets stay outside Project Git", "settings.layersTitle": "Configuration resolution", "settings.layersDetail": "Run parameters → Project Role Override → Global Role Profile → built-in default",
+          "toast.profileSaved": "Project override saved. Active RUN-104 keeps its frozen snapshot.", "toast.profileReset": "Role profile now inherits the global default.", "toast.providerSaved": "Provider connection saved in the local mock.", "toast.providerConnected": "Connection test passed with a redacted credential reference.", "toast.providerInUse": "This provider is used by an effective role profile. Reassign those roles before disabling it.", "toast.liveOpened": "Live Dock opened. Run state is unchanged.", "toast.liveCompact": "Live Dock compacted. Run state is unchanged."
+        },
+        "zh-CN": {
+          "actions.goTo": "跳转",
+          "aria.agentRunTree": "Agent 运行树", "aria.chiefConversation": "Chief 对话", "aria.closeRun": "关闭运行控制台", "aria.collapseRun": "收起运行控制台", "aria.collapsedRun": "已收起的运行控制台", "aria.consoleViews": "控制台视图", "aria.expandRun": "展开运行控制台", "aria.fileContent": "文件内容", "aria.filePreview": "只读文件预览", "aria.filesInProject": "{project} 中的文件", "aria.fileTree": "项目文件树", "aria.liveDockToggle": "Live Dock，1 个运行中", "aria.liveDockOpen": "Live Dock，1 个运行中；收起", "aria.liveDockCompact": "Live Dock，1 个运行中，已收起；打开", "aria.liveDockHidden": "Live Dock，1 个运行中，已隐藏；打开", "aria.mobileSwitcher": "移动端面板切换", "aria.navAgents": "Agent，8 个配置", "aria.navChief": "Chief，1 个待处理项", "aria.navDocs": "文档与上下文", "aria.navFiles": "项目文件", "aria.navInbox": "收件箱，3 个待处理项", "aria.navRuns": "运行，2 个活跃运行", "aria.navSettings": "设置", "aria.projectNavigation": "项目导航", "aria.projectWorkspace": "项目工作区", "aria.reopenRun": "重新打开运行控制台", "aria.runConsole": "运行控制台", "aria.runConsoleCollapsed": "运行控制台，已收起",
+          "common.cancel": "取消", "common.close": "关闭", "common.localDemo": "本地演示", "common.save": "保存覆盖", "common.saveProvider": "保存 Provider",
+          "composer.context": "+ 上下文", "composer.label": "给 Chief 发消息", "composer.mode": "工作区模式", "composer.placeholder": "给 Chief 发消息…  可使用 @task 或 /command", "composer.send": "发送消息",
+          "files.countSuffix": "个示例文件 · 当前 Project 已索引 24 个", "files.filterLabel": "筛选项目文件", "files.filterPlaceholder": "筛选文件…", "files.localDataset": "本地数据集", "files.mockReadOnly": "模拟 · 只读", "files.noMatch": "本地数据集中没有匹配文件。", "files.noMatchPath": "没有匹配文件", "files.noMatchMeta": "筛选结果为 0 个文件", "files.readOnly": "只读", "files.lines": "{count} 行",
+          "language.label": "界面语言", "language.changed": "界面语言已切换为简体中文。",
+          "nav.agents": "Agent", "nav.chief": "Chief", "nav.docs": "文档与上下文", "nav.files": "项目文件", "nav.inbox": "收件箱", "nav.project": "项目", "nav.runs": "运行", "nav.settings": "设置", "nav.system": "系统", "nav.workspace": "工作区",
+          "palette.placeholder": "输入内容进行搜索…",
+          "projects.activeRuns": "main · 2 个运行中任务", "projects.notLoaded": "静态预览 · 数据集未加载", "projects.open": "打开的项目",
+          "run.active": "运行中", "run.allLogs": "全部日志", "run.artifacts": "产物", "run.errors": "错误", "run.events": "事件", "run.live": "实时", "run.open": "打开运行", "run.pause": "暂停", "run.resume": "继续", "run.stop": "停止", "run.statePaused": "已暂停", "run.stateRunning": "运行中", "run.topLive": "Live · 1",
+          "run.railMeta": "1 个 Run · 1 个决定", "run.railMetaResolved": "1 个 Run · 0 个决定", "run.stateActive": "进行中", "run.stateQueued": "已排队", "run.stateStreaming": "输出中", "run.stateWaiting": "等待中",
+          "section.chiefEyebrow": "项目对话", "section.chiefSubtitle": "负责组织和调度工作，不直接编写生产代码。", "section.filesEyebrow": "当前 Project · 只读", "section.filesSubtitle": "在单一 Project 边界内浏览，不会把文件加载进 Agent Context。", "section.workspace": "项目工作区",
+          "stage.plan": "开发计划", "stage.settle": "结算",
+          "status.localDemo": "本地界面演示", "status.mockMetrics": "模拟指标", "status.noCore": "未连接 Core", "status.sampleRun": "示例运行",
+          "toast.context": "这里将打开 Context Preview。", "toast.consoleCollapsed": "运行控制台已收起，Run 状态未改变。", "toast.consoleClosed": "运行控制台已关闭；关闭面板不会停止 Run。", "toast.consoleExpanded": "运行控制台已展开。", "toast.consoleMobileHidden": "窄屏下已隐藏运行面板，模拟 Run 状态未改变。", "toast.consoleReopened": "运行控制台已重新打开。", "toast.noErrors": "当前控制台视图没有错误。", "toast.projectActive": "{project} 是当前本地演示数据集。", "toast.projectUnavailable": "{project} 只是静态菜单预览，其 Project 数据集尚未加载。", "toast.stop": "正式产品中，停止 Run 需要确认。", "toast.opened": "已打开{view}。", "toast.noResult": "本地演示中没有“{query}”的结果。",
+          "message.you": "你", "toast.requirement023Started": "REQ-023 已进入进行中；Chief 会先完成产品规划，再制定 Plan。",
+          "view.docs.eyebrow": "项目记忆", "view.docs.title": "文档与上下文", "view.docs.subtitle": "导航要广，加载要窄；Context 来源保持可解释并按阶段隔离。",
+          "view.agents.eyebrow": "固定角色 · 可配置 Profile", "view.agents.title": "Agent", "view.agents.subtitle": "角色可使用不同模型和 Skill，但职责、阶段门和权限上限不可改变。",
+          "view.runs.eyebrow": "持久化异步作业", "view.runs.title": "运行", "view.runs.subtitle": "Logical Run 不受浏览器断开影响；每个 Attempt 保存独立且不可变的证据。",
+          "view.inbox.eyebrow": "仅汇总跨项目摘要", "view.inbox.title": "收件箱", "view.inbox.subtitle": "待处理事项可以聚合，但不会加载其他 Project 的对话或文档 Context。",
+          "view.settings.eyebrow": "Core 管理的配置", "view.settings.title": "设置", "view.settings.subtitle": "WebUI 通过 AgentDev Protocol 修改配置，不持有模型凭证，也不负责合并项目配置。",
+          "agents.introTitle": "固定角色 · 可编辑运行 Profile", "agents.introDetail": "每个角色可以使用不同 Provider 和模型；职责、门禁、输出契约和权限上限保持固定。", "agents.futureOnly": "变更只影响后续 Run；RUN-104 继续使用 cfg_c91d。", "agents.edit": "编辑 Profile", "agents.reset": "恢复默认", "agents.global": "全局默认", "agents.override": "项目覆盖", "agents.permission": "固定上限",
+          "profile.editTitle": "编辑角色 Profile", "profile.role": "固定角色", "profile.provider": "Provider", "profile.model": "模型", "profile.reasoning": "推理强度", "profile.note": "Project 覆盖只影响后续 Run；角色职责、门禁、权限上限和当前 Runtime Snapshot 不改变。", "profile.reset": "使用全局默认",
+          "provider.editTitle": "配置 Provider", "provider.name": "Provider Connection", "provider.type": "Provider 类型", "provider.baseUrl": "API Base URL", "provider.secretRef": "Secret Reference", "provider.enabled": "允许新 Run 使用", "provider.note": "这里只保存引用；Secret 本体保留在 AgentDev Secret Store 中，不会在此回显。", "provider.configure": "配置", "provider.test": "测试连接", "provider.connected": "连接正常", "provider.untested": "尚未测试", "provider.disabled": "已禁用", "provider.models": "个模型", "provider.secretConfigured": "Secret 已配置", "provider.globalTitle": "Provider Connections", "provider.globalDetail": "AgentDev 全局配置 · Secret 不进入 Project Git", "settings.layersTitle": "配置解析顺序", "settings.layersDetail": "Run 参数 → Project Role Override → Global Role Profile → 内置默认",
+          "toast.profileSaved": "Project 覆盖已保存；当前 RUN-104 继续使用冻结 Snapshot。", "toast.profileReset": "角色 Profile 已恢复继承全局默认。", "toast.providerSaved": "Provider Connection 已保存到本地 Mock。", "toast.providerConnected": "连接测试通过，凭证引用已脱敏。", "toast.providerInUse": "该 Provider 正被生效中的角色 Profile 使用；请先调整这些角色，再禁用连接。", "toast.liveOpened": "Live Dock 已打开，Run 状态未改变。", "toast.liveCompact": "Live Dock 已收起，Run 状态未改变。"
+        }
+      };
+
+      const messages = {
+        en: {
+          ...baseMessages.en,
+          "actions.newRequirement": "New requirement", "actions.newConversation": "New conversation",
+          "aria.deliveryStages": "Current requirement AI workflow",
+          "aria.navRequirements": "Requirements, 2 active and 1 awaiting decision",
+          "aria.navChiefResolved": "Chief, no attention items", "aria.navRequirementsResolved": "Requirements, 2 active and no awaiting decisions",
+          "aria.requirementBoard": "Requirement Board with queue, active, completed, and archived columns",
+          "aria.requirementProgress": "Requirement progress 62%",
+          "board.active": "Active requirements", "board.activeMeta": "Execution · Backend active · no blocker", "board.archived": "Archived", "board.archivedMeta": "Archived · read only", "board.completed": "Completed", "board.completedMeta": "Completed · evidence accepted", "board.help": "Plan, Task DAG, Review/Test loops, retries, Context expansion, and Attempts stay inside each Requirement and load only when needed.", "board.noDecision": "no decision", "board.oneDecision": "1 decision", "board.queue": "Requirement queue", "board.queueMeta": "Queued · not productized", "board.reviewMeta": "Acceptance · Test active · no blocker", "board.start": "Start requirement",
+          "audit.classification": "Classification", "audit.correct": "Correct classification and rerun routing", "audit.correctedDetail": "Affected work is paused and will re-enter Product/Plan gates under the corrected route.", "audit.correctedTitle": "Correction recorded", "audit.evidence": "Evidence", "audit.identity": "Identity", "audit.route": "Route", "audit.snapshots": "Snapshots", "audit.summary": "1 discovery · 0 failed · 1 pending", "audit.summaryResolved": "1 discovery · 0 failed · 0 pending", "audit.title": "Audit AI routing and evidence",
+          "card.acceptance": "Acceptance", "card.archived": "Archived", "card.blockedDecision": "Blocked · D/P", "card.completed": "Completed", "card.days2": "2d ago", "card.days21": "21d ago", "card.hours2": "2h ago", "card.minutes14": "14m ago", "card.minutes3": "3m ago", "card.now": "now", "card.phase": "Phase", "card.queued": "Queued", "card.updated": "Updated",
+          "composer.placeholder": "Message Chief…  discuss freely or use an explicit action",
+          "conversation.selectLabel": "Choose a conversation", "conversation.project": "Project discussion", "conversation.requirement": "REQ-018 · Pi Runtime foundation", "conversation.projectScope": "PROJECT SCOPE", "conversation.requirementScope": "REQUIREMENT SCOPE", "conversation.new": "+ New conversation", "conversation.newOption": "Untitled conversation", "conversation.request": "I want long-running work to keep its conversation and execution continuity after switching pages or reopening the browser, without depending on one chat session.", "conversation.freeTitle": "This is still a discussion", "conversation.freeDetail": "I can explore the idea, inspect relevant context, and summarize a product outcome. Nothing enters the Requirement queue until you explicitly choose it.", "conversation.outcomeReady": "DISCUSSION OUTCOME · READY TO SAVE", "conversation.outcomeTitle": "Keep Chief conversations continuous across execution sessions", "conversation.outcomeDetail": "Logical Conversation is user-facing; runtime sessions may rotate and compact in the background. Formal documents and checkpoints rebuild the minimum context.", "conversation.inScope": "In scope", "conversation.scopeValue": "Conversation continuity, context rebuild, visible recovery state", "conversation.openQuestion": "Open question", "conversation.questionValue": "Retention duration remains to be productized", "conversation.addQueue": "Add to requirement queue", "conversation.continue": "Continue discussing", "conversation.createdDetail": "The discussion snapshot is linked. No Product plan, Task, or code execution has started.", "conversation.viewRequirement": "View requirement", "conversation.startExecution": "Start execution", "conversation.executionOpen": "Conversation stays open during execution.", "conversation.executionDetail": "Chief classifies each message as an in-scope fix, a current product change, or a new queued Requirement before changing workflow state.", "conversation.newTitle": "New project conversation", "conversation.newDetail": "Start anywhere. I will discuss and inspect narrowly; no Requirement or Plan exists until you explicitly create one. The active Run continues in the Live Dock.",
+          "conversation.createdRequirement": "REQ-026 · Conversation continuity", "conversation.startCommand": "Start executing this requirement.", "conversation.startDetail": "Execution authorized. REQ-026 is now active, but only Product has started; no Plan exists before Product Definition passes, and no execution Task exists before Plan passes.",
+          "initialization.title": "Existing project · memory setup preview", "initialization.detail": "Chief first reads only top-level identity and dependency files, proposes the project map, then waits for initialization authorization.", "initialization.documentRoot": "Document root", "initialization.codeRoot": "Code root", "initialization.oneGit": "one repository", "initialization.runtimeData": "Runtime data", "initialization.note": "Preview only · no recursive code read · runtime data stays outside Git", "initialization.preview": "Preview initialization", "initialization.initialize": "Initialize project memory", "initialization.previewReady": "Preview ready · README, manifests and top-level structure only · 6 files", "initialization.completed": "Project memory initialized · document and code roots share one Git · runtime state excluded",
+          "decision.current": "Handle now", "decision.detail": "Change from ‘ask the user to recover’ to ‘recover automatically when safety checks pass’. This affects recovery policy, Product Acceptance, and 2 Tasks in Plan v3.", "decision.docsLabel": "Documents", "decision.impactLabel": "Impact", "decision.queue": "Add to queue", "decision.reason": "Acceptance changes and the safe policy has a real product choice.", "decision.reasonLabel": "Why ask", "decision.reject": "Reject", "decision.risk": "Automatic retry may duplicate an uncertain external write.", "decision.riskLabel": "Risk", "decision.title": "Automatically resume unfinished Runs after disconnect?",
+          "decision.outcomeCurrentTitle": "Product update in progress", "decision.outcomeCurrentDetail": "Product Definition v1 → v2 · Acceptance A-07 changed · Plan v3 → v4 · TASK-05 and TASK-07 require re-planning. Code execution remains paused until both gates pass.", "decision.outcomeQueueTitle": "Linked requirement created", "decision.outcomeQueueDetail": "REQ-025 was added to the queue with source CHANGE-007. REQ-018 remains on Product Definition v1 and Plan v3.", "decision.outcomeRejectTitle": "Proposal rejected", "decision.outcomeRejectDetail": "CHANGE-007 is closed. Product Definition v1, Acceptance A-07, and Plan v3 remain authoritative.",
+          "decision.resolved": "resolved",
+          "focus.active": "ACTIVE REQUIREMENT", "focus.decision": "1 decision", "focus.noDecision": "no decision", "focus.phase": "Execution · 5 / 8 tasks", "focus.title": "Pi Runtime foundation",
+          "message.changeIntro": "Execution found a user-visible behavior change outside the approved acceptance criteria, so it needs your decision. Ordinary bugs and technical corrections were handled automatically inside the Plan.",
+          "message.chiefProductized": "The requirement is productized and passed its automatic gate. Goal, scope, and acceptance are in the Product Definition. Plan v3 contains 8 execution Tasks and needs no approval from you.",
+          "message.localReply": "This local prototype would let Chief classify your message against the active Requirement, then route it automatically or ask only when it crosses a decision boundary.",
+          "message.requirementRequest": "Complete the Pi Runtime foundation so long-running work can execute asynchronously, recover safely, and retain evidence.",
+          "nav.requirements": "Requirements",
+          "palette.label": "Project, requirement, run, or document", "palette.note": "Try “REQ-018”, “RUN-104”, or “Context Preview”.",
+          "requirement.activeAgent": "Active agent", "requirement.blocked": "Blocked", "requirement.create": "Create requirement", "requirement.decision": "Your decision", "requirement.internalSummary": "AI activity · 2 auto fixes · 1 Review loop · no failed recovery", "requirement.none": "None", "requirement.note": "Chief will clarify and productize this request before creating a Plan. Only you can start it from the requirement queue.", "requirement.phaseExecution": "Execution", "requirement.placeholder": "e.g. Runs recover safely after disconnects", "requirement.preview": "Add to queue", "requirement.progress": "Progress", "requirement.question": "What outcome do you want?",
+          "section.chiefEyebrow": "Project · Active requirement", "section.chiefSubtitle": "Chief routes the Requirement AI workflow and asks only at a real decision boundary.", "section.projectEyebrow": "Project · Conversation", "section.projectSubtitle": "Discuss freely. Work starts only from an explicit Requirement or execution action.",
+          "stage.accept": "Accept", "stage.execute": "Execute", "stage.productize": "Product",
+          "toast.decisionCurrent": "Product Update and Plan Revision started. No code changes begin before the revised gates pass.", "toast.decisionQueue": "A linked Requirement was added to the queue; the current scope is unchanged.", "toast.decisionReject": "The proposal was rejected; the current Product Definition remains authoritative.", "toast.requirementCreated": "REQ-026 added to the local requirement queue. Execution has not started.", "toast.requirementAlreadyCreated": "REQ-026 already exists. The action is idempotent.", "toast.requirementStarted": "REQ-026 is active. Chief enters Product before creating a Plan.", "toast.discussionContinues": "Keep discussing—no work object was created.", "toast.initializationPreview": "Initialization preview is ready; no project files were changed.", "toast.initializationComplete": "Project memory initialized in this local mock.", "toast.conversationCreated": "New conversation opened. Active Runs are unchanged.",
+          "view.requirements.eyebrow": "One Requirement identity · four lifecycle views", "view.requirements.title": "Requirements", "view.requirements.subtitle": "The active column is a collection of work in progress, not a time-boxed Sprint. Only you can start a queued Requirement."
+        },
+        "zh-CN": {
+          ...baseMessages["zh-CN"],
+          "actions.newRequirement": "新建需求", "actions.newConversation": "新建对话",
+          "aria.deliveryStages": "当前需求 AI 工作流",
+          "aria.navRequirements": "需求，2 个进行中，1 个等待决定",
+          "aria.navChiefResolved": "Chief，无待处理项", "aria.navRequirementsResolved": "需求，2 个进行中，无等待决定",
+          "aria.requirementBoard": "需求看板，包含需求队列、迭代中需求、已完成和已归档四列",
+          "aria.requirementProgress": "需求进度 62%",
+          "board.active": "迭代中需求", "board.activeMeta": "执行 · Backend 进行中 · 无阻塞", "board.archived": "已归档", "board.archivedMeta": "已归档 · 只读", "board.completed": "已完成", "board.completedMeta": "已完成 · 证据已验收", "board.help": "Plan、Task DAG、Review/Test 循环、重试、Context 扩展和 Attempt 都收敛在 Requirement 内，仅在需要时加载。", "board.noDecision": "无待决定", "board.oneDecision": "1 个决定", "board.queue": "需求队列", "board.queueMeta": "队列中 · 尚未产品化", "board.reviewMeta": "验收 · Test 进行中 · 无阻塞", "board.start": "启动需求",
+          "audit.classification": "AI 分类", "audit.correct": "纠正分类并重新执行路由", "audit.correctedDetail": "受影响工作已暂停，将按纠正后的路线重新经过 Product/Plan 门禁。", "audit.correctedTitle": "已记录纠正", "audit.evidence": "验证证据", "audit.identity": "身份链", "audit.route": "建议/实际路线", "audit.snapshots": "事实快照", "audit.summary": "1 个发现 · 0 个失败 · 1 个待决定", "audit.summaryResolved": "1 个发现 · 0 个失败 · 0 个待决定", "audit.title": "审计 AI 路由与证据",
+          "card.acceptance": "验收", "card.archived": "已归档", "card.blockedDecision": "阻塞 · 决定/权限", "card.completed": "已完成", "card.days2": "2 天前", "card.days21": "21 天前", "card.hours2": "2 小时前", "card.minutes14": "14 分钟前", "card.minutes3": "3 分钟前", "card.now": "刚刚", "card.phase": "阶段", "card.queued": "队列中", "card.updated": "更新时间",
+          "composer.placeholder": "给 Chief 发消息…  可自由讨论或使用明确动作",
+          "conversation.selectLabel": "选择对话", "conversation.project": "项目讨论", "conversation.requirement": "REQ-018 · Pi Runtime 基础能力", "conversation.projectScope": "项目范围", "conversation.requirementScope": "需求范围", "conversation.new": "+ 新建对话", "conversation.newOption": "未命名对话", "conversation.request": "我希望长任务在切换页面或重新打开浏览器后，仍然可以继续讨论和执行，不依赖同一个聊天 Session。", "conversation.freeTitle": "当前仍是自由讨论", "conversation.freeDetail": "我可以继续探索想法、按需检查相关上下文并收敛产品结论；只有你明确提交后，内容才会进入需求队列。", "conversation.outcomeReady": "讨论结论 · 可以沉淀", "conversation.outcomeTitle": "让 Chief 对话在不同执行 Session 间保持连续", "conversation.outcomeDetail": "用户面对 Logical Conversation；运行 Session 可在后台轮换和压缩，正式文档与 Checkpoint 用来重建最小 Context。", "conversation.inScope": "包含范围", "conversation.scopeValue": "对话连续性、Context 重建、可见恢复状态", "conversation.openQuestion": "待产品化问题", "conversation.questionValue": "保留时长仍需在产品规划阶段确定", "conversation.addQueue": "加入需求池", "conversation.continue": "继续讨论", "conversation.createdDetail": "已关联本次讨论快照；尚未开始产品规划、Task 或代码执行。", "conversation.viewRequirement": "查看需求", "conversation.startExecution": "开始执行", "conversation.executionOpen": "执行期间对话始终开放。", "conversation.executionDetail": "Chief 会先把每条消息判断为本次范围内修正、当前产品变更或新需求，再改变工作流状态。", "conversation.newTitle": "新的项目对话", "conversation.newDetail": "从任何想法开始都可以。我会先讨论并按需检查；只有你明确创建后才存在 Requirement 或 Plan，Live Dock 中的 Run 会继续执行。",
+          "conversation.createdRequirement": "REQ-026 · 对话连续性", "conversation.startCommand": "开始执行这个需求。", "conversation.startDetail": "已收到执行授权。REQ-026 进入进行中需求，当前只启动产品规划；Product Definition 通过前不会生成 Plan，Plan 通过前不会创建执行 Task。",
+          "initialization.title": "旧项目 · 项目记忆初始化预览", "initialization.detail": "Chief 只先读取项目身份、依赖清单和顶层结构，提出项目地图，再等待初始化授权。", "initialization.documentRoot": "文档根", "initialization.codeRoot": "代码根", "initialization.oneGit": "同一个仓库", "initialization.runtimeData": "运行数据", "initialization.note": "仅预览 · 不递归读取代码 · 运行数据不进入 Git", "initialization.preview": "预览初始化", "initialization.initialize": "初始化项目记忆", "initialization.previewReady": "预览已就绪 · 仅 README、清单和顶层结构 · 共 6 个文件", "initialization.completed": "项目记忆已初始化 · 文档根和代码根共享一个 Git · 运行状态已排除",
+          "decision.current": "本次处理", "decision.detail": "建议从“提示用户恢复”改为“安全条件满足时自动恢复”。影响恢复策略、Product Acceptance 与 Plan v3 的 2 个 Task。", "decision.docsLabel": "受影响文档", "decision.impactLabel": "影响范围", "decision.queue": "加入需求队列", "decision.reason": "Product Acceptance 将发生变化，且安全策略存在真实产品选择。", "decision.reasonLabel": "为何必须询问", "decision.reject": "不采纳", "decision.risk": "自动重试可能重复执行状态不确定的外部写入。", "decision.riskLabel": "风险", "decision.title": "断线后是否自动恢复未完成 Run？",
+          "decision.outcomeCurrentTitle": "正在更新产品事实", "decision.outcomeCurrentDetail": "Product Definition v1 → v2 · Acceptance A-07 已变更 · Plan v3 → v4 · TASK-05 与 TASK-07 需要重新规划；两道门禁通过前代码执行保持暂停。", "decision.outcomeQueueTitle": "已创建关联需求", "decision.outcomeQueueDetail": "REQ-025 已加入需求队列，来源为 CHANGE-007；REQ-018 继续使用 Product Definition v1 与 Plan v3。", "decision.outcomeRejectTitle": "建议已关闭", "decision.outcomeRejectDetail": "CHANGE-007 已关闭；Product Definition v1、Acceptance A-07 与 Plan v3 继续作为权威基线。",
+          "decision.resolved": "已处理",
+          "focus.active": "迭代中需求", "focus.decision": "1 个决定", "focus.noDecision": "无待决定", "focus.phase": "执行 · 5 / 8 个 Task", "focus.title": "Pi Runtime 基础能力",
+          "message.changeIntro": "执行中发现一项会改变用户可见行为的建议，超出已确认验收，需要你决定。普通 Bug 和技术修正已由 AI 在原 Plan 内自动处理。",
+          "message.chiefProductized": "需求已完成产品化并通过自动门禁；目标、范围和验收已写入 Product Definition。Plan v3 已生成 8 个执行 Task，目前不需要你审批。",
+          "message.localReply": "在正式产品中，Chief 会先判断你的消息是否改变当前需求，再自动路由；只有跨越真实决策边界时才会询问。",
+          "message.requirementRequest": "完成 Pi Runtime 基础能力，让长任务可以安全地异步执行、恢复并留下证据。",
+          "nav.requirements": "需求",
+          "palette.label": "项目、需求、运行或文档", "palette.note": "可尝试“REQ-018”“RUN-104”或“Context Preview”。",
+          "requirement.activeAgent": "执行 Agent", "requirement.blocked": "阻塞", "requirement.create": "创建需求", "requirement.decision": "需要你决定", "requirement.internalSummary": "AI 内部活动 · 2 个自动修复 · 1 次 Review 循环 · 无恢复失败", "requirement.none": "无", "requirement.note": "Chief 会先澄清并产品化需求，再生成 Plan；只有你可以从需求队列启动它。", "requirement.phaseExecution": "执行中", "requirement.placeholder": "例如：断线后安全恢复未完成的 Run", "requirement.preview": "加入需求队列", "requirement.progress": "总体进度", "requirement.question": "你希望最终得到什么结果？",
+          "section.chiefEyebrow": "项目 · 迭代中需求", "section.chiefSubtitle": "Chief 调度需求 AI 工作流，只在真实决策边界请求你处理。", "section.projectEyebrow": "项目 · 自由对话", "section.projectSubtitle": "先自由讨论；只有明确创建需求或开始执行时，工作流才会启动。",
+          "stage.accept": "验收", "stage.execute": "执行", "stage.productize": "产品规划",
+          "toast.decisionCurrent": "已进入 Product Update 与 Plan Revision；新门禁通过前不会直接修改代码。", "toast.decisionQueue": "已创建有关联来源的新需求，当前需求范围保持不变。", "toast.decisionReject": "已不采纳该建议，当前 Product Definition 继续作为基线。", "toast.requirementCreated": "REQ-026 已加入本地需求队列，尚未开始执行。", "toast.requirementAlreadyCreated": "REQ-026 已存在；重复操作不会再创建。", "toast.requirementStarted": "REQ-026 已进入进行中；Chief 会先完成产品规划，再创建 Plan。", "toast.discussionContinues": "继续讨论，不会创建工作对象。", "toast.initializationPreview": "初始化预览已就绪，尚未修改项目文件。", "toast.initializationComplete": "本地模拟中的项目记忆已初始化。", "toast.conversationCreated": "已打开新对话，现有 Run 不受影响。",
+          "view.requirements.eyebrow": "一个 Requirement 身份 · 四种生命周期视图", "view.requirements.title": "需求", "view.requirements.subtitle": "“迭代中需求”是正在进行的需求集合，不是固定周期 Sprint；只有你能启动队列中的需求。"
+        }
+      };
+
+      function initialLanguage() {
+        try {
+          const stored = localStorage.getItem("agentdev.ui.language");
+          if (stored && Object.hasOwn(messages, stored)) return stored;
+        } catch (error) {
+          // Local UI preferences remain optional when storage is unavailable.
+        }
+        return navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
+      }
+
+      let currentLanguage = initialLanguage();
+
+      function t(key, values = {}) {
+        let value = messages[currentLanguage][key] ?? messages.en[key] ?? key;
+        Object.entries(values).forEach(([name, replacement]) => {
+          value = value.replaceAll(`{${name}}`, String(replacement));
+        });
+        return value;
+      }
+
+      const filePreviews = {
+        project: {
+          path: "PROJECT.md",
+          meta: "Markdown · 1.8 KB · Mock",
+          lines: [
+            "# AgentDev Workspace",
+            "",
+            "AgentDev is a single-user, self-hosted Coding Agent workbench.",
+            "",
+            "## Current focus",
+            "",
+            "- Project-scoped Chief and professional Agent roles",
+            "- Progressive Context and durable project memory",
+            "- Requirement → Productize → Plan → Execute → Accept → Settlement",
+            "- Pi Runtime with asynchronous, isolated Runs",
+            "",
+            "> Local demo content — no file system connection"
+          ]
+        },
+        "code-map": {
+          path: "CODE_MAP.md",
+          meta: "Markdown · 1.2 KB · Mock",
+          lines: [
+            "# Code Map",
+            "",
+            "## WebUI Prototype",
+            "",
+            "| Capability | Entry |",
+            "|---|---|",
+            "| Chief workspace | webui/index.html · .conversation |",
+            "| Project Files | webui/index.html · .files-view |",
+            "| Run Console | webui/index.html · .runtime |",
+            "",
+            "All entries are read-only sample data in this prototype."
+          ]
+        },
+        "docs-index": {
+          path: "docs/INDEX.md",
+          meta: "Markdown · 684 B · Mock",
+          lines: [
+            "# Documentation Index",
+            "",
+            "## Product",
+            "",
+            "- AgentDev Workspace Product Design",
+            "",
+            "## Prototype",
+            "",
+            "- AgentDev WebUI pure HTML prototype",
+            "- WEBUI-004 Requirement-centered WebUI"
+          ]
+        },
+        "product-design": {
+          path: "docs/product/本地软件研发Agent工作台_产品设计.md",
+          meta: "Markdown · 48.6 KB · Mock excerpt",
+          lines: [
+            "# AgentDev Workspace 产品设计",
+            "",
+            "## WebUI",
+            "",
+            "WebUI is a client of AgentDev Core.",
+            "It does not own Project state, Agent lifecycle, or credentials.",
+            "",
+            "Project Files are always scoped to the active Project.",
+            "Closing a Run panel never cancels or pauses its Run."
+          ]
+        },
+        adapter: {
+          path: "packages/pi-runtime/src/adapter.ts",
+          meta: "TypeScript · 6.8 KB · Mock",
+          lines: [
+            "export interface PiRuntimeAdapter {",
+            "  createSession(spec: SessionSpec): Promise<SessionRef>;",
+            "  resumeSession(sessionId: string): Promise<SessionRef>;",
+            "  prompt(sessionId: string, message: string): Promise<void>;",
+            "  cancel(sessionId: string): Promise<void>;",
+            "  dispose(sessionId: string): Promise<void>;",
+            "}",
+            "",
+            "// Pi SDK types do not cross this package boundary."
+          ]
+        },
+        "session-factory": {
+          path: "packages/pi-runtime/src/session-factory.ts",
+          meta: "TypeScript · 4.2 KB · Mock",
+          lines: [
+            "export async function createRunSession(input: RunInput) {",
+            "  const config = freezeRuntimeConfig(input.config);",
+            "  const context = await loadContextSnapshot(input.contextId);",
+            "  const tools = createGuardedTools(input.policy);",
+            "",
+            "  return adapter.createSession({",
+            "    projectRoot: input.projectRoot,",
+            "    role: input.roleContract,",
+            "    config, context, tools,",
+            "  });",
+            "}"
+          ]
+        },
+        "task-plan": {
+          path: "tasks/WEBUI-002/plan.md",
+          meta: "Markdown · 1.6 KB · Local task",
+          lines: [
+            "# WEBUI-002 Plan",
+            "",
+            "1. Add Open, Collapsed, and Closed Run Console states.",
+            "2. Add a native disclosure-based Project file tree.",
+            "3. Add read-only preview and local file filtering.",
+            "4. Preserve Local Demo and Project isolation semantics.",
+            "5. Complete independent Review, Test, and Settlement."
+          ]
+        }
+      };
+
+      const logs = {
+        live: [
+          ["09:42:18", "INFO", "info", "Run accepted · attempt_01 · context ctx_4f2a"],
+          ["09:42:18", "AGENT", "agent", "Starting BACKEND with profile backend.default"],
+          ["09:42:19", "TOOL", "tool", "context.load  docs/product/runtime.md  12.4 KB"],
+          ["09:42:19", "TOOL", "tool", "context.load  packages/pi-runtime/src/adapter.ts  6.8 KB"],
+          ["09:42:22", "AGENT", "agent", "I’ll define the SessionFactory boundary before wiring Pi."],
+          ["09:43:06", "TOOL", "tool", "edit  packages/pi-runtime/src/session-factory.ts  +118 -0"],
+          ["09:43:41", "TOOL", "tool", "edit  packages/pi-runtime/src/index.ts  +9 -1"],
+          ["09:44:02", "INFO", "info", "Runtime config snapshot validated · cfg_c91d"],
+          ["09:44:08", "TOOL", "tool", "bash  pnpm --filter @agentdev/pi-runtime test"],
+          ["09:44:12", "PASS", "pass", "12 tests passed · 1.42s"],
+          ["09:44:17", "WARN", "warn", "Provider retry policy remains inline · follow-up suggested"],
+          ["09:44:29", "TOOL", "tool", "edit  packages/pi-runtime/src/session-factory.test.ts  +64 -3"],
+          ["09:45:11", "AGENT", "agent", "Checking cancellation and StartupFailed cleanup paths…"]
+        ],
+        events: [
+          ["09:42:18", "EVENT", "info", "run.queued              cursor=8841"],
+          ["09:42:18", "EVENT", "info", "run.attempt.started     cursor=8842"],
+          ["09:42:19", "EVENT", "pass", "run.started             cursor=8843"],
+          ["09:43:06", "EVENT", "tool", "tool.started            edit/session-factory.ts"],
+          ["09:43:07", "EVENT", "pass", "tool.completed          exit=0"],
+          ["09:44:08", "EVENT", "tool", "tool.started            bash/test"],
+          ["09:44:12", "EVENT", "pass", "test.result             passed=12"],
+          ["09:44:17", "EVENT", "warn", "task.updated            followup=TASK-051"]
+        ],
+        artifacts: [
+          ["09:42:18", "FILE", "info", "artifact://run-104/context-manifest.json"],
+          ["09:42:18", "FILE", "info", "artifact://run-104/runtime-config.json"],
+          ["09:43:07", "DIFF", "tool", "artifact://run-104/working.patch       8.2 KB"],
+          ["09:44:12", "TEST", "pass", "artifact://run-104/test-output.txt     3.1 KB"],
+          ["09:44:17", "TASK", "warn", "artifact://task-051/followup.json       618 B"]
+        ]
+      };
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>'"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
+      }
+
+      function effectiveRoleProfile(roleId) {
+        return roleOverrides[roleId] || globalRoleProfiles[roleId];
+      }
+
+      function agentProfilesMarkup() {
+        const cards = roleDefinitions.map(role => {
+          const profile = effectiveRoleProfile(role.id);
+          const provider = providerConnections[profile.provider];
+          const overridden = Object.hasOwn(roleOverrides, role.id);
+          return `<article class="profile-card" data-role-card="${role.id}">
+            <div class="profile-head"><div class="profile-role"><code>${escapeHtml(role.id.toUpperCase())}</code><strong>${escapeHtml(role.label)}</strong></div><span class="source-badge${overridden ? " override" : ""}">${t(overridden ? "agents.override" : "agents.global")}</span></div>
+            <div class="profile-model"><strong>${escapeHtml(provider.name)} · ${escapeHtml(profile.model)}</strong><small>${t("profile.reasoning")} ${escapeHtml(profile.reasoning)} · ${escapeHtml(role.ceiling)}</small></div>
+            <div class="profile-meta"><span>${t("agents.permission")}</span><span>context · bounded</span><span>snapshot · future</span></div>
+            <div class="profile-actions"><button class="config-button primary edit-profile" type="button" data-role="${role.id}">${t("agents.edit")}</button><button class="config-button reset-profile" type="button" data-role="${role.id}"${overridden ? "" : " disabled"}>${t("agents.reset")}</button></div>
+          </article>`;
+        }).join("");
+        return `<div class="config-intro"><div><strong>${t("agents.introTitle")}</strong><p>${t("agents.introDetail")} ${t("agents.futureOnly")}</p></div><span class="config-chip">cfg_c91d · frozen</span></div><div class="profile-grid">${cards}</div>`;
+      }
+
+      function providerSettingsMarkup() {
+        const cards = Object.entries(providerConnections).map(([id, provider]) => {
+          const healthKey = provider.enabled ? `provider.${provider.health}` : "provider.disabled";
+          const healthClass = provider.enabled ? provider.health : "disabled";
+          return `<article class="provider-card" data-provider-card="${escapeHtml(id)}">
+            <div class="provider-head"><div class="provider-name"><code>${escapeHtml(provider.type)}</code><strong>${escapeHtml(provider.name)}</strong></div><span class="provider-health ${healthClass}">${t(healthKey)}</span></div>
+            <div class="provider-detail"><div><b>Base URL</b> · ${escapeHtml(provider.baseUrl)}</div><div><b>Secret</b> · ${t("provider.secretConfigured")}</div><div><b>Catalog</b> · ${provider.models.length} ${t("provider.models")}</div></div>
+            <div class="provider-actions"><button class="config-button primary edit-provider" type="button" data-provider="${escapeHtml(id)}">${t("provider.configure")}</button><button class="config-button test-provider" type="button" data-provider="${escapeHtml(id)}"${provider.enabled ? "" : " disabled"}>${t("provider.test")}</button></div>
+          </article>`;
+        }).join("");
+        return `<section class="config-section"><div class="config-intro"><div><strong>${t("settings.layersTitle")}</strong><p>${t("settings.layersDetail")}</p></div><span class="config-chip">Core resolved</span></div></section><section class="config-section"><div class="config-section-title"><strong>${t("provider.globalTitle")}</strong><span>${t("provider.globalDetail")}</span></div><div class="provider-grid">${cards}</div></section>`;
+      }
+
+      function populateProfileModels(selectedModel) {
+        const provider = providerConnections[$("#profileProvider").value];
+        $("#profileModel").innerHTML = provider.models.map(model => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join("");
+        $("#profileModel").value = provider.models.includes(selectedModel) ? selectedModel : provider.models[0];
+      }
+
+      function openProfileDialog(roleId) {
+        const role = roleDefinitions.find(item => item.id === roleId);
+        const profile = effectiveRoleProfile(roleId);
+        editingRole = roleId;
+        $("#profileRole").value = role.label;
+        $("#profileProvider").innerHTML = Object.entries(providerConnections).map(([id, provider]) => `<option value="${id}"${provider.enabled ? "" : " disabled"}>${escapeHtml(provider.name)}</option>`).join("");
+        $("#profileProvider").value = profile.provider;
+        populateProfileModels(profile.model);
+        $("#profileReasoning").value = profile.reasoning;
+        $("#resetProfileButton").disabled = !Object.hasOwn(roleOverrides, roleId);
+        openDialog($("#profileDialog"), "#profileProvider");
+      }
+
+      function openProviderDialog(providerId) {
+        const provider = providerConnections[providerId];
+        editingProvider = providerId;
+        $("#providerName").value = `${provider.name} · ${provider.type}`;
+        $("#providerType").value = provider.type;
+        $("#providerBaseUrl").value = provider.baseUrl;
+        $("#providerSecretRef").value = provider.secretRef;
+        $("#providerEnabled").checked = provider.enabled;
+        openDialog($("#providerDialog"), "#providerBaseUrl");
+      }
+
+      const views = {
+        requirements: {
+          content: `<div class="requirement-board" role="list" data-i18n-aria="aria.requirementBoard" aria-label="Requirement Board">
+            <section class="board-column" role="listitem">
+              <div class="board-title"><span data-i18n="board.queue">Requirement queue</span><span id="queueCount">2</span></div>
+              <div id="dynamicRequirementCard"></div>
+              <article class="board-card"><div class="board-card-top"><span>REQ-023</span><span class="priority">P1</span></div><strong>Provider retry policy</strong><p>Make retry behavior configurable and observable.</p><dl class="card-facts"><div><dt data-i18n="card.phase">Phase</dt><dd data-i18n="card.queued">Queued</dd></div><div><dt>Plan / Tasks</dt><dd>— / —</dd></div><div><dt>Agent / Run</dt><dd>Chief / —</dd></div><div><dt data-i18n="card.blockedDecision">Blocked · D/P</dt><dd>0 · 0/0</dd></div><div><dt data-i18n="card.updated">Updated</dt><dd data-i18n="card.minutes14">14m ago</dd></div></dl><button class="start-requirement" type="button" data-i18n="board.start">Start requirement</button></article>
+              <article class="board-card"><div class="board-card-top"><span>REQ-024</span><span>P2</span></div><strong>Project switcher keyboard flow</strong><p>Improve multi-project navigation without changing active Runs.</p><dl class="card-facts"><div><dt data-i18n="card.phase">Phase</dt><dd data-i18n="card.queued">Queued</dd></div><div><dt>Plan / Tasks</dt><dd>— / —</dd></div><div><dt>Agent / Run</dt><dd>Chief / —</dd></div><div><dt data-i18n="card.blockedDecision">Blocked · D/P</dt><dd>0 · 0/0</dd></div><div><dt data-i18n="card.updated">Updated</dt><dd data-i18n="card.hours2">2h ago</dd></div></dl></article>
+            </section>
+            <section class="board-column" role="listitem">
+              <div class="board-title"><span data-i18n="board.active">Active requirements</span><span id="activeCount">2</span></div>
+              <div id="dynamicActiveRequirementCard"></div>
+              <button class="board-card" type="button" data-open-requirement="REQ-018"><div class="board-card-top"><span>REQ-018</span><span class="priority">P0</span></div><strong>Pi Runtime foundation</strong><p>Safe asynchronous execution, recovery, and durable evidence.</p><dl class="card-facts"><div><dt data-i18n="card.phase">Phase</dt><dd data-i18n="requirement.phaseExecution">Execution</dd></div><div><dt>Plan / Tasks</dt><dd>v3 · 5/8</dd></div><div><dt>Agent / Run</dt><dd>Backend / RUN-104</dd></div><div><dt data-i18n="card.blockedDecision">Blocked · D/P</dt><dd data-requirement-dp>0 · 1/0</dd></div><div><dt data-i18n="card.updated">Updated</dt><dd data-i18n="card.now">now</dd></div></dl><div class="card-progress"><i style="width:62%"></i></div><div class="card-footer"><span>62%</span><span class="decision" data-requirement-decision data-i18n="board.oneDecision">1 decision</span></div></button>
+              <button class="board-card" type="button" data-open-requirement="REQ-019"><div class="board-card-top"><span>REQ-019</span><span>P1</span></div><strong>Protocol event stream</strong><p>Reconnectable project events for WebUI and future TUI clients.</p><dl class="card-facts"><div><dt data-i18n="card.phase">Phase</dt><dd data-i18n="card.acceptance">Acceptance</dd></div><div><dt>Plan / Tasks</dt><dd>v2 · 7/8</dd></div><div><dt>Agent / Run</dt><dd>Test / RUN-117</dd></div><div><dt data-i18n="card.blockedDecision">Blocked · D/P</dt><dd>0 · 0/0</dd></div><div><dt data-i18n="card.updated">Updated</dt><dd data-i18n="card.minutes3">3m ago</dd></div></dl><div class="card-progress"><i style="width:84%"></i></div><div class="card-footer"><span>84%</span><span>0</span></div></button>
+            </section>
+            <section class="board-column" role="listitem">
+              <div class="board-title"><span data-i18n="board.completed">Completed</span><span>1</span></div>
+              <button class="board-card" type="button" data-open-requirement="REQ-014"><div class="board-card-top"><span>REQ-014</span><span>P0</span></div><strong>Project process isolation</strong><p>Each Project owns its process, runtime, context, and permission boundary.</p><dl class="card-facts"><div><dt data-i18n="card.phase">Phase</dt><dd data-i18n="card.completed">Completed</dd></div><div><dt>Plan / Tasks</dt><dd>v2 · 8/8</dd></div><div><dt>Agent / Run</dt><dd>Chief / RUN-089</dd></div><div><dt data-i18n="card.blockedDecision">Blocked · D/P</dt><dd>0 · 0/0</dd></div><div><dt data-i18n="card.updated">Updated</dt><dd data-i18n="card.days2">2d ago</dd></div></dl><div class="card-footer"><span>evidence://REQ-014</span><span>✓</span></div></button>
+            </section>
+            <section class="board-column" role="listitem">
+              <div class="board-title"><span data-i18n="board.archived">Archived</span><span>1</span></div>
+              <button class="board-card" type="button" data-open-requirement="REQ-006"><div class="board-card-top"><span>REQ-006</span><span>P1</span></div><strong>Project memory baseline</strong><p>Progressive document loading and durable Settlement.</p><dl class="card-facts"><div><dt data-i18n="card.phase">Phase</dt><dd data-i18n="card.archived">Archived</dd></div><div><dt>Plan / Tasks</dt><dd>v1 · 6/6</dd></div><div><dt>Agent / Run</dt><dd>Chief / RUN-041</dd></div><div><dt data-i18n="card.blockedDecision">Blocked · D/P</dt><dd>0 · 0/0</dd></div><div><dt data-i18n="card.updated">Updated</dt><dd data-i18n="card.days21">21d ago</dd></div></dl><div class="card-footer"><span>settlement://REQ-006</span><span>✓</span></div></button>
+            </section>
+          </div><p class="board-help" data-i18n="board.help">Plan, Task DAG, Review/Test loops, retries, Context expansion, and Attempts stay inside each Requirement and load only when needed.</p>`
+        },
+        docs: {
+          eyebrow: "Project memory",
+          title: "Docs & Context",
+          subtitle: "Navigate broadly, load narrowly. Context sources remain explainable and stage-specific.",
+          content: `<div class="data-list"><div class="data-row"><span class="data-id">ROOTS</span><span class="data-main"><strong>docs/agentdev/ · ./</strong><small>Document root + code root · one Git repository</small></span><span class="data-status">project</span></div><div class="data-row"><span class="data-id">L0</span><span class="data-main"><strong>PROJECT.md</strong><small>Bootstrap · always loaded</small></span><span class="data-status">1.8 KB</span></div><div class="data-row"><span class="data-id">L1</span><span class="data-main"><strong>docs/INDEX.md</strong><small>Navigation · 14 linked entries</small></span><span class="data-status">selected</span></div><div class="data-row"><span class="data-id">CTX</span><span class="data-main"><strong>Context rebuilt</strong><small>Formal docs → Snapshot → Checkpoint · recent messages only</small></span><span class="data-status">current</span></div><div class="data-row"><span class="data-id">STATE</span><span class="data-main"><strong>~/.agentdev/state/…</strong><small>Sessions, SQLite, logs and artifacts · outside project Git</small></span><span class="data-status">external</span></div></div>`
+        },
+        agents: {
+          eyebrow: "Fixed roles · configurable profiles",
+          title: "Agents",
+          subtitle: "Models and skills can vary by role; responsibilities, stage gates, and permission ceilings cannot.",
+          content: () => agentProfilesMarkup()
+        },
+        runs: {
+          eyebrow: "Persistent asynchronous jobs",
+          title: "Runs",
+          subtitle: "Logical Runs survive browser disconnects; every Attempt keeps its own immutable evidence.",
+          content: `<div class="data-list"><div class="data-row"><span class="data-id">RUN-104</span><span class="data-main"><strong>Backend · Session Factory</strong><small>REQ-018 · TASK-05 · attempt_01 · heartbeat now</small></span><span class="data-status">running</span></div><div class="data-row"><span class="data-id">RUN-102</span><span class="data-main"><strong>Planning · SDK boundary</strong><small>REQ-018 · stage_yield accepted · 1 artifact</small></span><span class="data-status">completed</span></div><div class="data-row"><span class="data-id">RUN-099</span><span class="data-main"><strong>Chief · Requirement productization</strong><small>REQ-018 · Product Definition checkpoint saved</small></span><span class="data-status">completed</span></div></div>`
+        },
+        inbox: {
+          eyebrow: "Cross-project summaries only",
+          title: "Inbox",
+          subtitle: "Attention items are aggregated without loading another Project's conversation or document Context.",
+          content: `<div class="data-list"><div class="data-row"><span class="data-id">PRODUCT</span><span class="data-main"><strong>Choose compatibility boundary for REQ-021</strong><small>agentdev-workspace · outside confirmed scope · 8 minutes ago</small></span><span class="data-status">decision</span></div><div class="data-row"><span class="data-id">PERM</span><span class="data-main"><strong>Allow registry.npmjs.org for dependency metadata</strong><small>payments-api · RUN-882 · network read · once · may expose package names</small></span><span class="data-status">approval</span></div><div class="data-row"><span class="data-id">TEST</span><span class="data-main"><strong>Regression suite failed</strong><small>design-system · 2 failures</small></span><span class="data-status">blocked</span></div></div>`
+        },
+        settings: {
+          eyebrow: "Core-owned configuration",
+          title: "Settings",
+          subtitle: "The WebUI edits configuration through AgentDev Protocol; it never owns model credentials or merges project settings.",
+          content: () => providerSettingsMarkup()
+        }
+      };
+
+      function currentMessageList() {
+        if (activeConversation === "requirement") return $("#messages");
+        if (activeConversation === "created-requirement") return $("#createdRequirementMessages");
+        if (activeConversation.startsWith("new-")) return $(`.new-conversation-messages[data-conversation-id="${activeConversation}"]`);
+        return $("#projectMessages");
+      }
+
+      function renderConversation() {
+        const isRequirement = activeConversation === "requirement" || activeConversation === "created-requirement";
+        const isCreatedRequirement = activeConversation === "created-requirement";
+        $("#projectMessages").hidden = activeConversation !== "project";
+        $("#messages").hidden = activeConversation !== "requirement";
+        $("#createdRequirementMessages").hidden = !isCreatedRequirement;
+        $$(".new-conversation-messages").forEach(list => { list.hidden = list.dataset.conversationId !== activeConversation; });
+        $(".stage-strip").hidden = activeView !== "chief" || !isRequirement;
+        $$(".stage-strip .stage").forEach((stage, index) => {
+          const currentIndex = isCreatedRequirement ? 0 : 2;
+          stage.classList.toggle("done", index < currentIndex);
+          stage.classList.toggle("current", index === currentIndex);
+          if (index === currentIndex) stage.setAttribute("aria-current", "step");
+          else stage.removeAttribute("aria-current");
+          $(".stage-mark", stage).textContent = index < currentIndex ? "✓" : index === currentIndex ? "●" : String(index + 1);
+        });
+        $("#conversationScope").textContent = t(isRequirement ? "conversation.requirementScope" : "conversation.projectScope");
+        $("#sectionEyebrow").textContent = t(isRequirement ? "section.chiefEyebrow" : "section.projectEyebrow");
+        $("#sectionSubtitle").textContent = t(isRequirement ? "section.chiefSubtitle" : "section.projectSubtitle");
+        $("#conversationSelect").value = activeConversation;
+        $("#messageInput").setAttribute("placeholder", t("composer.placeholder"));
+      }
+
+      function renderRequirementQueueProjection() {
+        const host = $("#dynamicRequirementCard");
+        if (!host) return;
+        $("#queueCount").textContent = String(queuedRequirementCreated && !queuedRequirementStarted ? 3 : 2);
+        $("#activeCount").textContent = String(queuedRequirementStarted ? 3 : 2);
+        const activeHost = $("#dynamicActiveRequirementCard");
+        activeHost.innerHTML = queuedRequirementStarted ? `<button class="board-card" type="button" data-open-created><div class="board-card-top"><span>REQ-026</span><span class="priority">P1</span></div><strong>${t("conversation.outcomeTitle")}</strong><p>${t("conversation.executionDetail")}</p><dl class="card-facts"><div><dt>${t("card.phase")}</dt><dd>${t("stage.productize")}</dd></div><div><dt>Plan / Tasks</dt><dd>— / —</dd></div><div><dt>Agent / Run</dt><dd>Chief / pending</dd></div><div><dt>${t("card.updated")}</dt><dd>${t("card.now")}</dd></div></dl><div class="card-progress"><i style="width:8%"></i></div><div class="card-footer"><span>8%</span><span>Product gate</span></div></button>` : "";
+        if (!queuedRequirementCreated || queuedRequirementStarted) {
+          host.innerHTML = "";
+          return;
+        }
+        host.innerHTML = `<article class="board-card"><div class="board-card-top"><span>REQ-026</span><span class="priority">P1</span></div><strong>${t("conversation.outcomeTitle")}</strong><p>${t("conversation.createdDetail")}</p><dl class="card-facts"><div><dt>${t("card.phase")}</dt><dd>${t("card.queued")}</dd></div><div><dt>Plan / Tasks</dt><dd>— / —</dd></div><div><dt>Agent / Run</dt><dd>Chief / —</dd></div><div><dt>${t("card.updated")}</dt><dd>${t("card.now")}</dd></div></dl><button class="start-requirement" type="button" data-start-created>${t("conversation.startExecution")}</button></article>`;
+      }
+
+      function addRequirementToQueue() {
+        if (queuedRequirementCreated) {
+          showToast(t("toast.requirementAlreadyCreated"));
+          return;
+        }
+        queuedRequirementCreated = true;
+        $("#requirementCreatedResult").hidden = false;
+        $("#addRequirementAction").disabled = true;
+        showToast(t("toast.requirementCreated"));
+        appendLog("MOCK", "info", "REQ-026 created as Queued from conversation snapshot");
+      }
+
+      function startCreatedRequirement() {
+        if (!queuedRequirementCreated) addRequirementToQueue();
+        if (queuedRequirementStarted) return;
+        queuedRequirementStarted = true;
+        if (!$("#conversationSelect option[value='created-requirement']")) {
+          const option = document.createElement("option");
+          option.value = "created-requirement";
+          option.textContent = t("conversation.createdRequirement");
+          $("#conversationSelect").append(option);
+        }
+        activeConversation = "created-requirement";
+        $("#conversationSelect").value = "created-requirement";
+        renderConversation();
+        showToast(t("toast.requirementStarted"));
+        appendLog("MOCK", "info", "REQ-026 execution authorized; Product gate entered");
+      }
+
+      function createConversation() {
+        conversationSequence += 1;
+        const id = `new-${conversationSequence}`;
+        const list = $("#newConversationTemplate").cloneNode(true);
+        list.removeAttribute("id");
+        list.classList.add("new-conversation-messages");
+        list.dataset.conversationId = id;
+        $("#chiefView").append(list);
+        const option = document.createElement("option");
+        option.value = id;
+        option.dataset.newConversation = String(conversationSequence);
+        option.textContent = `${t("conversation.newOption")} ${conversationSequence}`;
+        $("#conversationSelect").append(option);
+        activeConversation = id;
+        renderConversation();
+        $("#messageInput").focus();
+        showToast(t("toast.conversationCreated"));
+      }
+
+      function renderActiveView() {
+        workspace.classList.toggle("requirements-view", activeView === "requirements");
+        $("#conversationSwitcher").hidden = activeView !== "chief";
+        $(".stage-strip").hidden = true;
+        if (activeView === "chief") {
+          chiefView.hidden = false;
+          genericView.hidden = true;
+          filesView.hidden = true;
+          $("#sectionTitle").textContent = t("nav.chief");
+          $(".composer").hidden = false;
+          renderConversation();
+          return;
+        }
+        if (activeView === "files") {
+          chiefView.hidden = true;
+          genericView.hidden = true;
+          filesView.hidden = false;
+          $("#sectionEyebrow").textContent = t("section.filesEyebrow");
+          $("#sectionTitle").textContent = t("nav.files");
+          $("#sectionSubtitle").textContent = t("section.filesSubtitle");
+          $(".composer").hidden = true;
+          return;
+        }
+        const config = views[activeView];
+        if (!config) return;
+        chiefView.hidden = true;
+        genericView.hidden = false;
+        filesView.hidden = true;
+        $("#genericEyebrow").textContent = t(`view.${activeView}.eyebrow`);
+        $("#genericTitle").textContent = t(`view.${activeView}.title`);
+        $("#genericSubtitle").textContent = t(`view.${activeView}.subtitle`);
+        $("#genericContent").innerHTML = typeof config.content === "function" ? config.content() : config.content;
+        translateElements($("#genericContent"));
+        if (activeView === "requirements") renderRequirementQueueProjection();
+        syncDecisionProjections();
+        $("#sectionEyebrow").textContent = activeView === "requirements" ? t("view.requirements.eyebrow") : t("section.workspace");
+        $("#sectionTitle").textContent = t(`view.${activeView}.title`);
+        $("#sectionSubtitle").textContent = t(`view.${activeView}.subtitle`);
+        $(".composer").hidden = true;
+      }
+
+      function syncDynamicTranslations() {
+        const errorFilterActive = $("#errorFilter").getAttribute("aria-pressed") === "true";
+        $("#errorFilter").textContent = t(errorFilterActive ? "run.allLogs" : "run.errors");
+        $("#pauseRun").textContent = t(runPaused ? "run.resume" : "run.pause");
+        $("#treeRunState").textContent = t(runPaused ? "run.statePaused" : "run.stateRunning");
+        $(".runtime").setAttribute("aria-label", t(workspace.dataset.runtime === "collapsed" ? "aria.runConsoleCollapsed" : "aria.runConsole"));
+        $$("#conversationSelect option[data-new-conversation]").forEach(option => {
+          option.textContent = `${t("conversation.newOption")} ${option.dataset.newConversation}`;
+        });
+        const createdOption = $("#conversationSelect option[value='created-requirement']");
+        if (createdOption) createdOption.textContent = t("conversation.createdRequirement");
+        $("#initializationNote").textContent = t(initializationState === "complete" ? "initialization.completed" : initializationState === "preview" ? "initialization.previewReady" : "initialization.note");
+        $("#requirementCreatedResult").hidden = !queuedRequirementCreated;
+        $("#addRequirementAction").disabled = queuedRequirementCreated;
+        if (decisionState) renderDecisionOutcome(decisionState);
+        else syncDecisionProjections();
+        const selectedFile = $(".file-item.active");
+        if (selectedFile) selectFile(selectedFile.dataset.file);
+        else if (!$("#fileTreeEmpty").hidden) {
+          $("#filePath").textContent = t("files.noMatchPath");
+          $("#fileMeta").textContent = t("files.noMatchMeta");
+          $("#fileLineCount").textContent = t("files.lines", { count: 0 });
+        }
+      }
+
+      function translateElements(root = document) {
+        $$('[data-i18n]', root).forEach(element => {
+          element.textContent = t(element.dataset.i18n);
+        });
+        $$('[data-i18n-aria]', root).forEach(element => {
+          element.setAttribute("aria-label", t(element.dataset.i18nAria, { project: element.dataset.i18nProject ?? "" }));
+        });
+        $$('[data-i18n-placeholder]', root).forEach(element => {
+          element.setAttribute("placeholder", t(element.dataset.i18nPlaceholder));
+        });
+      }
+
+      function applyLanguage(language, announce = false) {
+        if (!Object.hasOwn(messages, language)) return;
+        currentLanguage = language;
+        document.documentElement.lang = language;
+        $("#languageSelect").value = language;
+        translateElements();
+        renderActiveView();
+        syncDynamicTranslations();
+        try {
+          localStorage.setItem("agentdev.ui.language", language);
+        } catch (error) {
+          // The current page remains translated even if persistence is unavailable.
+        }
+        if (announce) showToast(t("language.changed"));
+      }
+
+      function showToast(message) {
+        clearTimeout(toastTimer);
+        toast.textContent = message;
+        toast.classList.add("show");
+        toastTimer = setTimeout(() => toast.classList.remove("show"), 2400);
+      }
+
+      function renderDecisionOutcome(state) {
+        const suffix = state === "current" ? "Current" : state === "queue" ? "Queue" : "Reject";
+        $("#decisionOutcomeTitle").textContent = t(`decision.outcome${suffix}Title`);
+        $("#decisionOutcomeDetail").textContent = t(`decision.outcome${suffix}Detail`);
+        $("#decisionOutcome").hidden = false;
+        $$(".decision-button").forEach(button => {
+          button.disabled = true;
+          button.setAttribute("aria-pressed", String(button.dataset.decision === state));
+        });
+        syncDecisionProjections();
+      }
+
+      function syncDecisionProjections() {
+        const resolved = Boolean(decisionState);
+        $("#decisionMetric").textContent = resolved ? t("decision.resolved") : "1";
+        $("#focusDecision").textContent = t(resolved ? "focus.noDecision" : "focus.decision");
+        $("#railMeta").textContent = t(resolved ? "run.railMetaResolved" : "run.railMeta");
+        $("#auditSummary").textContent = t(resolved ? "audit.summaryResolved" : "audit.summary");
+        const chiefNav = $('.nav-item[data-view="chief"]');
+        const requirementNav = $('.nav-item[data-view="requirements"]');
+        [chiefNav, requirementNav].forEach(item => {
+          const badge = $(".nav-badge", item);
+          badge.textContent = resolved ? "0" : "1";
+          badge.classList.toggle("attention", !resolved);
+        });
+        chiefNav.setAttribute("aria-label", t(resolved ? "aria.navChiefResolved" : "aria.navChief"));
+        requirementNav.setAttribute("aria-label", t(resolved ? "aria.navRequirementsResolved" : "aria.navRequirements"));
+        const boardDecision = $("[data-requirement-decision]");
+        const boardDp = $("[data-requirement-dp]");
+        if (boardDecision) boardDecision.textContent = t(resolved ? "board.noDecision" : "board.oneDecision");
+        if (boardDp) boardDp.textContent = resolved ? "0 · 0/0" : "0 · 1/0";
+      }
+
+      function selectFile(fileId, focus = false) {
+        const file = filePreviews[fileId];
+        const button = $(`.file-item[data-file="${fileId}"]`);
+        if (!file || !button) return;
+        $$(".file-item").forEach(item => {
+          const active = item === button;
+          item.classList.toggle("active", active);
+          if (active) item.setAttribute("aria-current", "page");
+          else item.removeAttribute("aria-current");
+        });
+        $("#filePath").textContent = file.path;
+        $("#fileMeta").textContent = file.meta;
+        $("#fileLineCount").textContent = t("files.lines", { count: file.lines.length });
+        $("#fileCode").textContent = file.lines.join("\n");
+        if (focus) $(".code-scroll")?.focus();
+      }
+
+      function setMobileView(view) {
+        workspace.dataset.mobileView = view;
+        $$("[data-mobile]").forEach(item => {
+          const active = item.dataset.mobile === view;
+          item.classList.toggle("active", active);
+          item.setAttribute("aria-pressed", String(active));
+        });
+      }
+
+      function setRuntimeState(state, focusTarget) {
+        workspace.dataset.runtime = state;
+        $("#collapseRuntime").setAttribute("aria-expanded", String(state === "open"));
+        $(".runtime").setAttribute("aria-label", t(state === "collapsed" ? "aria.runConsoleCollapsed" : "aria.runConsole"));
+        $("#liveDockButton").dataset.state = state;
+        $("#liveDockButton").setAttribute("aria-expanded", String(state === "open"));
+        const liveLabelKey = state === "open" ? "aria.liveDockOpen" : state === "collapsed" ? "aria.liveDockCompact" : "aria.liveDockHidden";
+        $("#liveDockButton").dataset.i18nAria = liveLabelKey;
+        $("#liveDockButton").setAttribute("aria-label", t(liveLabelKey));
+        if (state === "closed") setMobileView("chief");
+        if (focusTarget) requestAnimationFrame(() => $(focusTarget)?.focus());
+      }
+
+      function renderLogs(mode) {
+        terminalLog.innerHTML = "";
+        logs[mode].forEach(([time, tag, kind, message]) => {
+          const line = document.createElement("div");
+          line.className = `log-line${kind === "error" ? " is-error" : ""}`;
+          const timeNode = document.createElement("span");
+          const tagNode = document.createElement("span");
+          const messageNode = document.createElement("span");
+          timeNode.className = "log-time";
+          tagNode.className = `log-tag ${kind}`;
+          messageNode.className = "log-message";
+          timeNode.textContent = time;
+          tagNode.textContent = tag;
+          messageNode.textContent = message;
+          line.append(timeNode, tagNode, messageNode);
+          terminalLog.append(line);
+        });
+        terminalLog.setAttribute("aria-labelledby", `consoleTab${mode[0].toUpperCase()}${mode.slice(1)}`);
+        terminalLog.scrollTop = terminalLog.scrollHeight;
+      }
+
+      function appendLog(tag, kind, message) {
+        if (consoleMode !== "live") return;
+        const now = new Date().toLocaleTimeString("en-GB", { hour12: false });
+        const line = document.createElement("div");
+        line.className = `log-line${kind === "error" ? " is-error" : ""}`;
+        const timeNode = document.createElement("span");
+        const tagNode = document.createElement("span");
+        const messageNode = document.createElement("span");
+        timeNode.className = "log-time";
+        tagNode.className = `log-tag ${kind}`;
+        messageNode.className = "log-message";
+        timeNode.textContent = now;
+        tagNode.textContent = tag;
+        messageNode.textContent = message;
+        line.append(timeNode, tagNode, messageNode);
+        terminalLog.append(line);
+        terminalLog.scrollTop = terminalLog.scrollHeight;
+      }
+
+      function selectProject(option) {
+        if (option.dataset.available !== "true") {
+          projectMenu.hidden = true;
+          projectSwitcher.setAttribute("aria-expanded", "false");
+          showToast(t("toast.projectUnavailable", { project: option.dataset.project }));
+          return;
+        }
+        $("#projectName").textContent = option.dataset.project;
+        $("#projectBranch").textContent = option.dataset.branch;
+        $(".repo-chip", projectSwitcher).textContent = option.dataset.code;
+        $("#promptProject").textContent = option.dataset.project;
+        $("#fileTree").dataset.i18nProject = option.dataset.project;
+        $("#fileTree").setAttribute("aria-label", t("aria.filesInProject", { project: option.dataset.project }));
+        $(".console-title").textContent = `agentdev-projectd / ${option.dataset.project}`;
+        projectMenu.hidden = true;
+        projectSwitcher.setAttribute("aria-expanded", "false");
+        showToast(t("toast.projectActive", { project: option.dataset.project }));
+      }
+
+      projectSwitcher.addEventListener("click", () => {
+        const open = projectMenu.hidden;
+        projectMenu.hidden = !open;
+        projectSwitcher.setAttribute("aria-expanded", String(open));
+        if (open) $(".project-option", projectMenu)?.focus();
+      });
+
+      $$(".project-option").forEach(option => option.addEventListener("click", () => selectProject(option)));
+
+      projectMenu.addEventListener("keydown", event => {
+        const options = $$(".project-option", projectMenu);
+        const index = options.indexOf(document.activeElement);
+        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        let next = index;
+        if (event.key === "ArrowDown") next = (index + 1) % options.length;
+        if (event.key === "ArrowUp") next = (index - 1 + options.length) % options.length;
+        if (event.key === "Home") next = 0;
+        if (event.key === "End") next = options.length - 1;
+        options[next].focus();
+      });
+
+      document.addEventListener("click", event => {
+        if (!projectMenu.hidden && !event.target.closest(".project-area")) {
+          projectMenu.hidden = true;
+          projectSwitcher.setAttribute("aria-expanded", "false");
+        }
+      });
+
+      $$(".nav-item").forEach(button => {
+        button.addEventListener("click", () => {
+          $$(".nav-item").forEach(item => {
+            const active = item === button;
+            item.classList.toggle("active", active);
+            if (active) item.setAttribute("aria-current", "page");
+            else item.removeAttribute("aria-current");
+          });
+          activeView = button.dataset.view;
+          renderActiveView();
+        });
+      });
+
+      $("#genericContent").addEventListener("click", event => {
+        const editProfile = event.target.closest(".edit-profile");
+        if (editProfile) {
+          openProfileDialog(editProfile.dataset.role);
+          return;
+        }
+        const resetProfile = event.target.closest(".reset-profile");
+        if (resetProfile) {
+          delete roleOverrides[resetProfile.dataset.role];
+          renderActiveView();
+          showToast(t("toast.profileReset"));
+          return;
+        }
+        const editProvider = event.target.closest(".edit-provider");
+        if (editProvider) {
+          openProviderDialog(editProvider.dataset.provider);
+          return;
+        }
+        const testProvider = event.target.closest(".test-provider");
+        if (testProvider) {
+          providerConnections[testProvider.dataset.provider].health = "connected";
+          renderActiveView();
+          showToast(t("toast.providerConnected"));
+          return;
+        }
+        const createdCard = event.target.closest("[data-open-created]");
+        if (createdCard) {
+          activeConversation = "created-requirement";
+          $('.nav-item[data-view="chief"]').click();
+          showToast(t("toast.opened", { view: "REQ-026" }));
+          return;
+        }
+        const createdStart = event.target.closest("[data-start-created]");
+        if (createdStart) {
+          event.stopPropagation();
+          startCreatedRequirement();
+          $('.nav-item[data-view="chief"]').click();
+          return;
+        }
+        const start = event.target.closest(".start-requirement");
+        if (start) {
+          event.stopPropagation();
+          showToast(t("toast.requirement023Started"));
+          return;
+        }
+        const card = event.target.closest("[data-open-requirement]");
+        if (!card) return;
+        if (card.dataset.openRequirement === "REQ-018") {
+          activeConversation = "requirement";
+          $('.nav-item[data-view="chief"]').click();
+          $("#messages").scrollTop = 0;
+          showToast(t("toast.opened", { view: "REQ-018" }));
+          return;
+        }
+        showToast(t("toast.opened", { view: card.dataset.openRequirement }));
+      });
+
+      $$(".decision-button").forEach(button => {
+        button.addEventListener("click", () => {
+          decisionState = button.dataset.decision;
+          renderDecisionOutcome(decisionState);
+          const key = decisionState === "current" ? "toast.decisionCurrent" : decisionState === "queue" ? "toast.decisionQueue" : "toast.decisionReject";
+          showToast(t(key));
+        });
+      });
+
+      $("#correctClassification").addEventListener("click", event => {
+        event.currentTarget.disabled = true;
+        event.currentTarget.setAttribute("aria-pressed", "true");
+        $("#auditCorrection").hidden = false;
+        showToast(t("audit.correctedTitle"));
+      });
+
+      $$(".file-item").forEach(button => {
+        button.setAttribute("role", "treeitem");
+        button.addEventListener("click", () => selectFile(button.dataset.file));
+      });
+
+      $$(".file-tree summary").forEach(summary => {
+        summary.setAttribute("role", "treeitem");
+        summary.setAttribute("aria-expanded", String(summary.parentElement.open));
+        summary.parentElement.addEventListener("toggle", () => summary.setAttribute("aria-expanded", String(summary.parentElement.open)));
+      });
+      $$(".tree-children").forEach(group => group.setAttribute("role", "group"));
+
+      $("#fileSearch").addEventListener("input", event => {
+        const query = event.currentTarget.value.trim().toLowerCase();
+        $$(".file-item").forEach(button => {
+          const match = !query || button.textContent.toLowerCase().includes(query);
+          button.hidden = !match;
+          if (match) {
+            let parent = button.parentElement?.closest("details");
+            while (parent) {
+              if (query) parent.open = true;
+              parent = parent.parentElement?.closest("details");
+            }
+          }
+        });
+        const visibleButtons = $$(".file-item").filter(button => !button.hidden);
+        const current = $(".file-item.active");
+        if (visibleButtons.length && (!current || current.hidden)) {
+          selectFile(visibleButtons[0].dataset.file);
+        } else if (!visibleButtons.length) {
+          $$(".file-item").forEach(button => {
+            button.classList.remove("active");
+            button.removeAttribute("aria-current");
+          });
+          $("#filePath").textContent = t("files.noMatchPath");
+          $("#fileMeta").textContent = t("files.noMatchMeta");
+          $("#fileCode").textContent = "";
+          $("#fileLineCount").textContent = t("files.lines", { count: 0 });
+        }
+        const visible = visibleButtons.length;
+        $("#visibleFileCount").textContent = String(visible);
+        $("#fileTreeEmpty").hidden = visible !== 0;
+      });
+
+      $("#fileTree").addEventListener("keydown", event => {
+        if (!["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        const visible = $$(".file-item, .file-tree summary").filter(item => !item.hidden && item.offsetParent !== null);
+        const index = visible.indexOf(document.activeElement);
+        if (!visible.length || index < 0) return;
+        const details = document.activeElement.closest("details");
+        if (event.key === "ArrowRight" && document.activeElement.matches("summary") && details && !details.open) {
+          event.preventDefault();
+          details.open = true;
+          return;
+        }
+        if (event.key === "ArrowLeft" && document.activeElement.matches("summary") && details && details.open) {
+          event.preventDefault();
+          details.open = false;
+          return;
+        }
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") return;
+        let next = index;
+        if (event.key === "ArrowDown") next = Math.min(index + 1, visible.length - 1);
+        if (event.key === "ArrowUp") next = Math.max(index - 1, 0);
+        if (event.key === "Home") next = 0;
+        if (event.key === "End") next = visible.length - 1;
+        event.preventDefault();
+        visible[next].focus();
+      });
+
+      $("#collapseRuntime").addEventListener("click", () => {
+        if (window.matchMedia("(max-width: 840px)").matches) {
+          setMobileView("chief");
+          requestAnimationFrame(() => $('[data-mobile="run"]')?.focus());
+          showToast(t("toast.consoleMobileHidden"));
+          return;
+        }
+        setRuntimeState("collapsed", "#expandRuntime");
+        showToast(t("toast.consoleCollapsed"));
+      });
+
+      $("#expandRuntime").addEventListener("click", () => {
+        setRuntimeState("open", "#collapseRuntime");
+        showToast(t("toast.consoleExpanded"));
+      });
+
+      $("#closeRuntime").addEventListener("click", () => {
+        setRuntimeState("closed", "#liveDockButton");
+        showToast(t("toast.consoleClosed"));
+      });
+
+      $("#liveDockButton").addEventListener("click", () => {
+        if (window.matchMedia("(max-width: 840px)").matches) {
+          if (workspace.dataset.runtime === "closed") setRuntimeState("open");
+          setMobileView("run");
+          showToast(t("toast.liveOpened"));
+          return;
+        }
+        if (workspace.dataset.runtime === "open") {
+          setRuntimeState("collapsed", "#liveDockButton");
+          showToast(t("toast.liveCompact"));
+        } else {
+          setRuntimeState("open", "#collapseRuntime");
+          showToast(t("toast.liveOpened"));
+        }
+      });
+
+      $$(".console-tab").forEach(tab => {
+        tab.addEventListener("click", () => {
+          consoleMode = tab.dataset.console;
+          $$(".console-tab").forEach(item => {
+            const active = item === tab;
+            item.classList.toggle("active", active);
+            item.setAttribute("aria-selected", String(active));
+            item.tabIndex = active ? 0 : -1;
+          });
+          renderLogs(consoleMode);
+        });
+      });
+
+      $(".console-tabs").addEventListener("keydown", event => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        const tabs = $$(".console-tab");
+        const current = tabs.findIndex(tab => tab.getAttribute("aria-selected") === "true");
+        let next = current;
+        if (event.key === "ArrowRight") next = (current + 1) % tabs.length;
+        if (event.key === "ArrowLeft") next = (current - 1 + tabs.length) % tabs.length;
+        if (event.key === "Home") next = 0;
+        if (event.key === "End") next = tabs.length - 1;
+        event.preventDefault();
+        tabs[next].focus();
+        tabs[next].click();
+      });
+
+      $("#errorFilter").addEventListener("click", event => {
+        const button = event.currentTarget;
+        const active = button.getAttribute("aria-pressed") !== "true";
+        button.setAttribute("aria-pressed", String(active));
+        button.textContent = t(active ? "run.allLogs" : "run.errors");
+        terminalLog.classList.toggle("errors-only", active);
+        if (active && !$(".is-error", terminalLog)) showToast(t("toast.noErrors"));
+      });
+
+      $("#pauseRun").addEventListener("click", event => {
+        runPaused = !runPaused;
+        event.currentTarget.setAttribute("aria-pressed", String(runPaused));
+        event.currentTarget.textContent = t(runPaused ? "run.resume" : "run.pause");
+        const state = $("#treeRunState");
+        state.textContent = t(runPaused ? "run.statePaused" : "run.stateRunning");
+        state.className = `tree-state ${runPaused ? "waiting" : "running"}`;
+        appendLog("MOCK", "info", runPaused ? "Local pause preview enabled" : "Local run preview resumed");
+      });
+
+      $("#stopRun").addEventListener("click", () => showToast(t("toast.stop")));
+      $("#attachButton").addEventListener("click", () => showToast(t("toast.context")));
+
+      $("#composer").addEventListener("submit", event => {
+        event.preventDefault();
+        const input = $("#messageInput");
+        const value = input.value.trim();
+        if (!value) return;
+        const now = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
+        const message = document.createElement("article");
+        message.className = "message user";
+        message.innerHTML = `<div class="avatar" aria-hidden="true">YOU</div><div><div class="message-meta"><strong data-i18n="message.you"></strong><time>${now}</time></div><div class="message-body"><p></p></div></div>`;
+        $("strong", message).textContent = t("message.you");
+        $("p", message).textContent = value;
+        const messageList = currentMessageList();
+        messageList.append(message);
+        input.value = "";
+        messageList.scrollTop = messageList.scrollHeight;
+        appendLog("MOCK", "info", "Chief message accepted in local DOM only");
+        const asksToQueue = /(加入|放入|添加到).{0,8}(需求池|需求队列)|add.{0,24}(requirement )?queue/i.test(value);
+        const asksToStart = /(开始|直接).{0,8}(执行|开发|实现)|实现这个需求|start.{0,20}(execution|development|implementation|this requirement)|implement this requirement/i.test(value);
+        const hasProjectOutcomeContext = activeConversation === "project";
+        if (hasProjectOutcomeContext && asksToQueue) addRequirementToQueue();
+        if (hasProjectOutcomeContext && asksToStart) startCreatedRequirement();
+        const replyList = messageList;
+        setTimeout(() => {
+          const reply = document.createElement("article");
+          reply.className = "message chief";
+          reply.innerHTML = `<div class="avatar" aria-hidden="true">CH</div><div><div class="message-meta"><strong>Chief</strong><time>${now}</time></div><div class="message-body"><p data-i18n="message.localReply"></p></div></div>`;
+          $("p", reply).textContent = t("message.localReply");
+          replyList.append(reply);
+          replyList.scrollTop = replyList.scrollHeight;
+        }, 500);
+      });
+
+      function openDialog(dialog, focusSelector) {
+        if (typeof dialog.showModal === "function") dialog.showModal();
+        else dialog.setAttribute("open", "");
+        setTimeout(() => $(focusSelector, dialog)?.focus(), 0);
+      }
+
+      $("#newConversationButton").addEventListener("click", createConversation);
+      $("#conversationSelect").addEventListener("change", event => {
+        activeConversation = event.currentTarget.value;
+        renderConversation();
+      });
+      $("#addRequirementAction").addEventListener("click", addRequirementToQueue);
+      $("#continueDiscussionAction").addEventListener("click", () => {
+        $("#messageInput").focus();
+        showToast(t("toast.discussionContinues"));
+      });
+      $("#viewCreatedRequirement").addEventListener("click", () => {
+        $('.nav-item[data-view="requirements"]').click();
+        showToast(t("toast.opened", { view: "REQ-026" }));
+      });
+      $("#startCreatedRequirement").addEventListener("click", startCreatedRequirement);
+      $("#previewInitialization").addEventListener("click", event => {
+        initializationState = "preview";
+        event.currentTarget.disabled = true;
+        $("#initializeProject").hidden = false;
+        $("#initializationNote").textContent = t("initialization.previewReady");
+        showToast(t("toast.initializationPreview"));
+      });
+      $("#initializeProject").addEventListener("click", event => {
+        initializationState = "complete";
+        event.currentTarget.disabled = true;
+        $("#initializationNote").textContent = t("initialization.completed");
+        showToast(t("toast.initializationComplete"));
+      });
+      $("#paletteButton").addEventListener("click", () => openDialog($("#paletteDialog"), "input"));
+      $("#languageSelect").addEventListener("change", event => applyLanguage(event.currentTarget.value, true));
+      $("#profileProvider").addEventListener("change", () => populateProfileModels(""));
+
+      $("#profileForm").addEventListener("submit", event => {
+        event.preventDefault();
+        if (!editingRole) return;
+        roleOverrides[editingRole] = {
+          provider: $("#profileProvider").value,
+          model: $("#profileModel").value,
+          reasoning: $("#profileReasoning").value
+        };
+        $("#profileDialog").close();
+        if (activeView === "agents") renderActiveView();
+        appendLog("MOCK", "info", `Profile override saved for ${editingRole}; cfg_c91d unchanged`);
+        showToast(t("toast.profileSaved"));
+      });
+
+      $("#resetProfileButton").addEventListener("click", () => {
+        if (!editingRole) return;
+        delete roleOverrides[editingRole];
+        $("#profileDialog").close();
+        if (activeView === "agents") renderActiveView();
+        showToast(t("toast.profileReset"));
+      });
+
+      $("#providerForm").addEventListener("submit", event => {
+        event.preventDefault();
+        if (!editingProvider) return;
+        const requestedEnabled = $("#providerEnabled").checked;
+        const providerInUse = roleDefinitions.some(role => effectiveRoleProfile(role.id).provider === editingProvider);
+        if (!requestedEnabled && providerInUse) {
+          showToast(t("toast.providerInUse"));
+          return;
+        }
+        const provider = providerConnections[editingProvider];
+        provider.type = $("#providerType").value;
+        provider.baseUrl = $("#providerBaseUrl").value.trim();
+        provider.secretRef = $("#providerSecretRef").value.trim();
+        provider.enabled = requestedEnabled;
+        provider.health = provider.enabled ? "untested" : "disabled";
+        $("#providerDialog").close();
+        if (activeView === "settings") renderActiveView();
+        appendLog("MOCK", "info", `Provider ${editingProvider} updated with redacted secret reference`);
+        showToast(t("toast.providerSaved"));
+      });
+
+      $$('[data-close-dialog]').forEach(button => button.addEventListener("click", () => button.closest("dialog").close()));
+
+      $("#paletteInput").addEventListener("keydown", event => {
+        if (event.key !== "Enter") return;
+        const query = event.currentTarget.value.trim().toLowerCase();
+        if (!query) return;
+        const match = $$(".nav-item").find(item => item.textContent.toLowerCase().includes(query))
+          || (query.includes("run-104") ? $('.nav-item[data-view="runs"]') : null)
+          || (query.includes("req-") ? $('.nav-item[data-view="requirements"]') : null)
+          || (query.includes("context") ? $('.nav-item[data-view="docs"]') : null);
+        if (match) {
+          match.click();
+          $("#paletteDialog").close();
+          event.currentTarget.value = "";
+          showToast(t("toast.opened", { view: $(".nav-text", match)?.textContent || t("section.workspace") }));
+        } else {
+          showToast(t("toast.noResult", { query }));
+        }
+      });
+
+      document.addEventListener("keydown", event => {
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+          event.preventDefault();
+          openDialog($("#paletteDialog"), "input");
+        }
+        if (event.key === "Escape" && !projectMenu.hidden) {
+          projectMenu.hidden = true;
+          projectSwitcher.setAttribute("aria-expanded", "false");
+          projectSwitcher.focus();
+        }
+        if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && document.activeElement === $("#messageInput")) {
+          event.preventDefault();
+          $("#composer").requestSubmit();
+        }
+      });
+
+      $$("[data-mobile]").forEach(button => {
+        button.addEventListener("click", () => {
+          setMobileView(button.dataset.mobile);
+        });
+      });
+
+      applyLanguage(currentLanguage);
+      renderLogs("live");
+    })();
+  </script>
+</body>
+</html>
