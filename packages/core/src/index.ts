@@ -12,3 +12,7 @@ export * from './events-hub.js';
 export * from './auth.js';
 export * from './identity.js';
 export * from './requirements.js';
+export * from './snapshots.js';
+export * from './toml.js';
+export * from './config.js';
+export * from './model-gateway.js';

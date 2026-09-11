@@ -28,6 +28,15 @@ import {
 } from './common.js';
 import { checkResultSchema } from './structures.js';
 
+/**
+ * A reference to an immutable snapshot.
+ *
+ * `data.md` §2 gives `snapshot` no id column — its primary key is `(type, hash)` —
+ * so a snapshot is referenced by its content hash, never by a UUID.
+ */
+export const snapshotRefSchema = hashSchema;
+export type SnapshotRef = z.infer<typeof snapshotRefSchema>;
+
 /** `run` — one execution of a task or Chief step. */
 export const runSchema = z.strictObject({
   ...entityBaseShape,
@@ -41,9 +50,9 @@ export const runSchema = z.strictObject({
   requiredChild: z.boolean(),
   join: z.enum(['none', 'all']),
   childIds: idRefListSchema,
-  configSnapshotId: idRefSchema,
-  contextSnapshotId: idRefSchema,
-  dispatchSnapshotId: idRefSchema,
+  configSnapshotId: snapshotRefSchema,
+  contextSnapshotId: snapshotRefSchema,
+  dispatchSnapshotId: snapshotRefSchema,
   budgetAllocation: nonNegativeIntSchema,
 });
 export type Run = z.infer<typeof runSchema>;

@@ -6,7 +6,7 @@
  * sets `taskId`/`runId`/`attemptId`, which the Core derives from the capability
  * ("taskId/runId/attemptId由Capability与请求封装取得，客户端不能伪造归属").
  */
-import { z } from 'zod';
+import { partialRecord, z } from 'zod';
 import { LIMITS } from '../limits.js';
 import {
   gitRevisionSchema,
@@ -120,7 +120,9 @@ export type ConfigLimits = z.infer<typeof configLimitsSchema>;
 
 /** `ConfigPatch` — the only configurable surface (`data.md` §3, protocol §5). */
 export const configPatchSchema = z.strictObject({
-  roleOverrides: z.record(roleSchema, profileSchema.partial()).optional(),
+  // `Role` keys are a table, not an exhaustive record: a patch overrides only the
+  // roles it names, and the rest keep inheriting (data.md §3 config.update).
+  roleOverrides: partialRecord(roleSchema, profileSchema.partial()).optional(),
   limits: configLimitsSchema.optional(),
   permissionMode: permissionModeSchema.optional(),
   l3Paths: list(repoPathSchema).optional(),
@@ -151,6 +153,38 @@ export const providerInputSchema = z.strictObject({
   models: list(modelDescriptorSchema),
 });
 export type ProviderInput = z.infer<typeof providerInputSchema>;
+
+/** A configured provider, as persisted in `config.toml` (`rules/agents.md` §5). */
+export const providerConfigSchema = providerInputSchema.safeExtend({
+  providerId: idSchema,
+});
+export type ProviderConfig = z.infer<typeof providerConfigSchema>;
+
+/** Deployment policy that `config.update` may patch (`protocol.md` §5). */
+export const policyConfigSchema = z.strictObject({
+  permissionMode: permissionModeSchema,
+  l3Paths: list(repoPathSchema),
+  l3Keywords: list(z.string().min(1)),
+  testCommands: list(z.string().min(1)),
+});
+export type PolicyConfig = z.infer<typeof policyConfigSchema>;
+
+/**
+ * One configuration scope's document (`ARCHITECTURE.md` §5).
+ *
+ * `config.get` returns this shape, and `config.update` writes it: role overrides
+ * are partial because inheritance fills the rest, the default profile is complete
+ * because it is the last layer, and providers exist only in the global scope.
+ */
+export const configDocumentSchema = z.strictObject({
+  version: nonNegativeIntSchema,
+  defaultProfile: profileSchema.optional(),
+  roleProfiles: partialRecord(roleSchema, profileSchema.partial()),
+  providers: list(providerConfigSchema),
+  limits: configLimitsSchema,
+  policy: policyConfigSchema,
+});
+export type ConfigDocument = z.infer<typeof configDocumentSchema>;
 
 /** `ProfessionalDispatchSpec` — a professional Run request (`data.md` §3). */
 export const professionalDispatchSpecSchema = z.strictObject({
@@ -204,7 +238,7 @@ export const dispatchSnapshotSchema = z.strictObject({
     z.strictObject({ kind: z.string().min(1), schemaVersion: z.literal(1) }),
   ),
   profileRevision: nonNegativeIntSchema,
-  contextSnapshotId: idSchema,
+  contextSnapshotId: hashSchema,
   hash: hashSchema,
 });
 export type DispatchSnapshot = z.infer<typeof dispatchSnapshotSchema>;

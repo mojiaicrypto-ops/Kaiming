@@ -218,9 +218,10 @@ const rows = {
     requiredChild: false,
     join: 'none',
     childIds: [],
-    configSnapshotId: ID2,
-    contextSnapshotId: ID2,
-    dispatchSnapshotId: ID2,
+    // Snapshots are content-addressed, so Runs reference hashes (`data.md` §2).
+    configSnapshotId: HASH,
+    contextSnapshotId: HASH,
+    dispatchSnapshotId: HASH,
     budgetAllocation: 1000,
   },
   attempt: {

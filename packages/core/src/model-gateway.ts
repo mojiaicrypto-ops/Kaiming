@@ -1,0 +1,193 @@
+/**
+ * The Model Gateway: everything a Run may ask a model, always through the frozen
+ * configuration of that Run.
+ *
+ * `rules/agents.md` §5 forbids two things that are easy to get wrong, so both are
+ * structural here rather than conventional: a running call never silently switches
+ * provider or lowers the model, and a Work whose role has no usable model is
+ * blocked instead of silently falling back. `complete()` therefore takes a Run (not
+ * a role or a model id) and reads the provider/model from the Run's frozen `config`
+ * snapshot; there is no parameter through which a caller could choose another one.
+ *
+ * The transport is injected: WP-02 exercises the whole path with a stub, and the
+ * real HTTP clients land in WP-10 with the Provider vertical run.
+ */
+import type { Profile, Role, Run } from '@agentdev/contracts';
+import { ProtocolError } from './errors.js';
+import type { ConfigError, ConfigStore, ProfileResolution } from './config.js';
+import type { SnapshotWriter } from './snapshots.js';
+
+/** One completion request, already resolved against a frozen profile. */
+export interface GatewayRequest {
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly reasoning: string;
+  readonly baseUrl: string;
+  readonly apiKey?: string;
+  readonly messages: readonly {
+    readonly role: 'system' | 'user' | 'assistant';
+    readonly content: string;
+  }[];
+  readonly maxOutputTokens: number;
+  /** Effective context limit for this Run (`min(profile, window − output − reserved)`). */
+  readonly contextLimit: number;
+}
+
+export type GatewayResponse =
+  | {
+      readonly ok: true;
+      readonly text: string;
+      readonly inputTokens: number;
+      readonly outputTokens: number;
+    }
+  | {
+      readonly ok: false;
+      readonly code: 'PROVIDER_UNAVAILABLE' | 'CONFIG_INVALID' | 'INTERNAL_ERROR';
+      readonly retryable: boolean;
+      readonly message: string;
+    };
+
+export interface GatewayTransport {
+  complete(request: GatewayRequest): Promise<GatewayResponse>;
+}
+
+/** Resolves a `secretRef` to the secret value; the Secret store lands in WP-07. */
+export interface SecretResolver {
+  resolve(secretRef: string): string | undefined;
+}
+
+export interface ModelGatewayOptions {
+  readonly config: ConfigStore;
+  readonly snapshots: SnapshotWriter;
+  readonly transport: GatewayTransport;
+  readonly secrets?: SecretResolver;
+}
+
+/** The outcome of asking whether a role can run at all (admission decision). */
+export type GatewayAvailability =
+  | { readonly ok: true; readonly resolution: ProfileResolution }
+  | { readonly ok: false; readonly code: ConfigError['code']; readonly reason: string };
+
+export class ModelGateway {
+  private readonly config: ConfigStore;
+  private readonly snapshots: SnapshotWriter;
+  private readonly transport: GatewayTransport;
+  private readonly secrets: SecretResolver | undefined;
+
+  constructor(options: ModelGatewayOptions) {
+    this.config = options.config;
+    this.snapshots = options.snapshots;
+    this.transport = options.transport;
+    this.secrets = options.secrets;
+  }
+
+  /**
+   * Admission check for one role.
+   *
+   * A failure here is what makes a Work `blocked(provider)` (`agents.md` §5) — the
+   * caller must not queue a Run that cannot be served.
+   */
+  availability(role: Role, runParams: Partial<Profile> = {}): GatewayAvailability {
+    const resolution = this.config.resolve(role, runParams);
+    if (!resolution.ok) return resolution;
+    return { ok: true, resolution: resolution.resolution };
+  }
+
+  /** Reads the frozen profile of a Run; missing means the snapshot is gone. */
+  frozenProfileOf(run: Pick<Run, 'configSnapshotId' | 'role'>): ProfileResolution {
+    const frozen = this.config.readFrozen(run.configSnapshotId);
+    if (frozen === undefined) {
+      throw new ProtocolError(
+        'STALE_ARTIFACT',
+        `config snapshot ${run.configSnapshotId} is missing`,
+        {
+          details: { runRole: run.role },
+        },
+      );
+    }
+    return frozen;
+  }
+
+  /**
+   * Sends one completion for a Run.
+   *
+   * The model, reasoning level and context limit come from the Run's frozen
+   * snapshot, so a later `config.update` cannot change an active Run (AC-044).
+   */
+  async complete(
+    run: Pick<Run, 'configSnapshotId' | 'role'>,
+    messages: GatewayRequest['messages'],
+  ): Promise<GatewayResponse> {
+    const frozen = this.frozenProfileOf(run);
+    const apiKey =
+      frozen.provider.secretRef === undefined
+        ? undefined
+        : this.secrets?.resolve(frozen.provider.secretRef);
+    if (frozen.provider.secretRef !== undefined && apiKey === undefined) {
+      return {
+        ok: false,
+        code: 'CONFIG_INVALID',
+        retryable: false,
+        message: `secret ${frozen.provider.secretRef} is not available`,
+      };
+    }
+    return this.transport.complete({
+      providerId: frozen.provider.providerId,
+      modelId: frozen.model.id,
+      reasoning: frozen.profile.reasoning,
+      baseUrl: frozen.provider.baseUrl,
+      ...(apiKey === undefined ? {} : { apiKey }),
+      messages,
+      maxOutputTokens: Math.min(4096, frozen.model.maxOutputTokens),
+      contextLimit: frozen.effectiveContextLimit,
+    });
+  }
+
+  /**
+   * Minimal request used by `provider.test` (`protocol.md` §5).
+   *
+   * It runs against the live configuration because no Run exists yet, and reports
+   * the latency so "connected" is demonstrated rather than assumed.
+   */
+  async testConnection(
+    providerId: string,
+    modelId: string,
+    now: () => number = () => Date.now(),
+  ): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
+    const provider = this.config.provider(providerId);
+    const started = now();
+    if (provider === undefined) {
+      return { ok: false, latencyMs: 0, error: `provider ${providerId} is not configured` };
+    }
+    const model = provider.models.find((item) => item.id === modelId);
+    if (model === undefined) {
+      return { ok: false, latencyMs: 0, error: `model ${modelId} is not configured` };
+    }
+    const apiKey =
+      provider.secretRef === undefined ? undefined : this.secrets?.resolve(provider.secretRef);
+    if (provider.secretRef !== undefined && apiKey === undefined) {
+      return { ok: false, latencyMs: 0, error: `secret ${provider.secretRef} is not available` };
+    }
+    const response = await this.transport.complete({
+      providerId,
+      modelId,
+      reasoning: model.reasoningLevels[0] ?? 'off',
+      baseUrl: provider.baseUrl,
+      ...(apiKey === undefined ? {} : { apiKey }),
+      messages: [{ role: 'user', content: 'ping' }],
+      maxOutputTokens: 1,
+      contextLimit: Math.min(4096, model.contextWindow),
+    });
+    const latencyMs = now() - started;
+    return response.ok
+      ? { ok: true, latencyMs }
+      : { ok: false, latencyMs, error: `${response.code}: ${response.message}` };
+  }
+
+  /** Usage accounting hint for the budget layer (`reliability.md` §3). */
+  static tokensOf(response: GatewayResponse): { input: number; output: number } {
+    return response.ok
+      ? { input: response.inputTokens, output: response.outputTokens }
+      : { input: 0, output: 0 };
+  }
+}
