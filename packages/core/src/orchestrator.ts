@@ -15,6 +15,7 @@
  */
 import {
   dispatchSnapshotSchema,
+  dispatchSpecSchema,
   professionalDispatchSpecSchema,
   type Assessment,
   type AssessmentPayload,
@@ -284,7 +285,10 @@ export class Orchestrator {
    * three snapshots by hash.
    */
   dispatch(input: DispatchInput): DispatchResult {
-    const spec = input.spec;
+    // The contract Schema runs first: `validateDispatchSpec` reads fields such as
+    // `contextSelection.readPaths`, and a malformed spec must fail as
+    // `VALIDATION_ERROR` rather than as an uncaught `TypeError` (R7-01).
+    const spec = parseOrFail(dispatchSpecSchema, input.spec, 'dispatch spec');
     enforce(validateDispatchSpec(spec), 'dispatch spec');
     const work = this.requireWork(spec.workId);
 
@@ -346,6 +350,8 @@ export class Orchestrator {
       );
     }
 
+    // Everything above is admission control; only a Run that will really be
+    // created may leave snapshots behind (R7-07).
     const configSnapshotId = this.config.freeze(role, input.runParams ?? {}).snapshotId;
     // The context payload is plain JSON by construction (`data.md` §3); the cast
     // only bridges `exactOptionalPropertyTypes` on the parsed Schema type.

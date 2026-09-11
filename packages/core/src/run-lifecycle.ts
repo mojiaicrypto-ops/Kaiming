@@ -232,19 +232,27 @@ export class RunLifecycle {
     // same Run must not both pass the "already settled" check (DC-52).
     return withTransaction(this.store.db, () => {
       const recorded = this.settlementOf(run.id);
-      if (recorded !== undefined && recorded.data['tokensUsed'] === usage.tokensUsed) {
-        // Replaying the recorded usage is a no-op; anything else must not become a
-        // silent second charge that would release another Run's hold (R6-01/R6-04).
-        return run;
-      }
       if (recorded !== undefined) {
+        // Replaying the same settlement is a no-op; anything else — a different
+        // token count *or* a different cost — must not become a silent second
+        // charge that would release another Run's hold (R6-01/R6-04/R7-02).
+        const recordedTokens = recorded.data['tokensUsed'];
+        const recordedCost = recorded.data['cost'];
+        if (
+          recordedTokens === usage.tokensUsed &&
+          (recordedCost ?? null) === (usage.cost ?? null)
+        ) {
+          return run;
+        }
         fail(
           'IDEMPOTENCY_CONFLICT',
-          `Run ${run.id} already booked ${JSON.stringify(recorded.data['tokensUsed'])} tokens`,
+          `Run ${run.id} already booked ${JSON.stringify(recordedTokens)} tokens`,
           {
             runId: run.id,
-            recordedTokens: recorded.data['tokensUsed'] ?? 0,
+            recordedTokens: recordedTokens ?? 0,
+            recordedCost: recordedCost ?? null,
             requested: usage.tokensUsed,
+            requestedCost: usage.cost ?? null,
           },
         );
       }
@@ -256,21 +264,21 @@ export class RunLifecycle {
       this.store.events.append({
         name: 'run.ended',
         entityId: run.id,
-        // The Run row does not change on reconciliation, so the version repeats;
-        // `reconciliation` gives consumers an orderable key (DC-48).
+        // The Run row does not change on reconciliation, so `entityVersion` repeats;
+        // the event's own `cursor` is the order ("data.md" §5), which is why no
+        // synthetic revision is invented (DC-48).
         entityVersion: run.version,
         data: {
           outcome: run.status,
           workId: run.workId,
           reconciled: true,
-          reconciliation: this.reconciliationCount(run.id) + 1,
           tokensUsed: usage.tokensUsed,
           chargedTokens: charged,
           uncoveredTokens: uncovered,
           usageMeasured: true,
           runCostKnown: true,
           releasedTokens: Math.max(0, run.budgetAllocation - charged),
-          ...(usage.cost === undefined ? {} : { cost: usage.cost }),
+          cost: usage.cost ?? null,
         },
       });
       this.refreshCostKnown(run.workId);
@@ -289,12 +297,6 @@ export class RunLifecycle {
       names: ['run.ended'],
       stopAt: (event) => event.entityId === runId && event.data['usageMeasured'] === true,
     });
-  }
-
-  private reconciliationCount(runId: string): number {
-    return scanEvents(this.store, { names: ['run.ended'] }).filter(
-      (event) => event.entityId === runId && event.data['reconciled'] === true,
-    ).length;
   }
 
   /** Every recorded settlement of one Run — diagnostics and tests. */
@@ -364,6 +366,9 @@ export class RunLifecycle {
         // Per-Run fact; the Work-level `costKnown` is recomputed separately (R6-06).
         runCostKnown: usage.measured,
         releasedTokens: usage.measured ? Math.max(0, run.budgetAllocation - charged) : 0,
+        // Explicit null keeps the "no cost reported" case distinguishable from an
+        // omitted field when a settlement is replayed (R7-02).
+        cost: usage.cost ?? null,
       },
     });
     this.refreshCostKnown(updated.workId);
@@ -427,11 +432,16 @@ export class RunLifecycle {
     for (const child of children) {
       if (!canTransitionRun(child.status, 'cancelled')) continue;
       this.cancelDescendants(child);
+      // A child that never started an Attempt cannot have consumed anything, so its
+      // usage is known to be zero and its reservation must be released. Only a child
+      // that really ran keeps the hold as unknown (R7-09).
+      const started =
+        this.store.attempts.list({ where: 'run_id = ?', params: [child.id] }).length > 0;
       this.applyEnd(
         child,
         'cancelled',
         () => ({ outcome: 'cancelled', workId: child.workId, cancelledWithParent: run.id }),
-        { tokensUsed: 0, measured: false },
+        started ? { tokensUsed: 0, measured: false } : { tokensUsed: 0, measured: true },
       );
     }
   }
@@ -502,6 +512,11 @@ function validateUsage(usage: RunUsage): void {
       'tokensUsed must be 0 when measured is false; unknown usage keeps the reservation',
       { tokensUsed: usage.tokensUsed },
     );
+  }
+  if (!usage.measured && usage.cost !== undefined) {
+    fail('VALIDATION_ERROR', 'cost cannot be reported without a measured usage', {
+      cost: usage.cost,
+    });
   }
   validateCost(usage.cost);
 }

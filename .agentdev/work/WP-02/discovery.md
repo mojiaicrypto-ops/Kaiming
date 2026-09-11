@@ -51,7 +51,7 @@
 ## DC-35 「Gate 阻断」以 Join 结果与 chief_action_required 表达
 
 - 事实：文档要求 required 子 Run 失败时「Gate 阻断」，但当前 Schema 没有 Work 级 Gate 实体/enum。
-- 处理：`JoinCoordinator.onChildSettled` 返回 `{kind:'blocked', failedRequired, children, chiefTodo}`，并写 `chief_action_required`（含全部子结果）。父 Run 的状态按子 Run 集合决定：仍有 `join=all` 子 Run 在场时是 `waiting_children`（新 Chief 消息仍可处理，AC-046），子 Run 全部终态后才回到 `running`（第六轮 R6-08 更正：原文笼统写「父停留在 waiting_children」，与单个子 Run 失败时父仍 `running` 的实现不符）。不改 Work.status，避免发明未定义的状态语义。
+- 处理：`JoinCoordinator.onChildSettled` 返回 `{kind:'blocked', failedRequired, children, chiefTodo}`，并写 `chief_action_required`（含全部子结果）。父 Run 的状态按子 Run 集合决定：**非 required 子 Run 失败**时父仍可为 `running`（`joinPolicy=none` 不阻挡父），**required 子 Run 失败**时父进入 `waiting_children` 并等 Chief 处理，子 Run 全部终态后才回到 `running`（第六轮 R6-08、第七轮 R7-06 更正：原文笼统写「父停留在 waiting_children」，与实现不符）。不改 Work.status，避免发明未定义的状态语义。
 - 影响：后续若引入 Gate 状态（WP-06/流程 Gate），应消费该返回值并新增 Discovery。
 
 ## DC-36 stage.submit 的归属字段与内容校验
@@ -115,7 +115,7 @@ WP-02 第一轮独立 Review（`.agentdev/work/WP-02/review.md`）判 FAIL：1×
 
 ## DC-46 dispatch 不校验 Work 状态（Review 第四轮 D5/Q-10；承接：WP-05）
 
-`Orchestrator.dispatch` 只校验 Work 存在与预算、父 Run 状态、role×purpose 等，**不校验 `work.status`**：第六轮实测 `blocked`/`paused`/`completed`/`cancelled`/`archived`/`draft` 六种 Work 状态下都能建立 Chief Run。Work 状态机与 `work.control_changed`/blocker 投影属 WP-05（Work 控制与监督）；本包只登记该缺口，未实现。
+`Orchestrator.dispatch` 只校验 Work 存在与预算、父 Run 状态、role×purpose 等，**不校验 `work.status`**：第六轮实测 `blocked`/`paused`/`completed`/`cancelled`/`queued`/`running` 六种（`workStatusSchema` 的全部取值：queued/running/completed/blocked/paused/cancelling/cancelled/failed，其中 `cancelling`/`failed` 未逐一实测）Work 状态下都能建立 Chief Run。Work 状态机与 `work.control_changed`/blocker 投影属 WP-05（Work 控制与监督）；本包只登记该缺口，未实现。
 
 ## DC-47 父 Run 级额度语义（Review 第四轮 Q-06）
 
@@ -123,7 +123,7 @@ WP-02 第一轮独立 Review（`.agentdev/work/WP-02/review.md`）判 FAIL：1×
 
 ## DC-48 `run.ended` data 形状统一（Review 第四轮 H-02）
 
-`run.ended` 由 `RunLifecycle.end` 统一发出，所有终态路径的 data 都包含 `outcome`、`usageMeasured`、`costKnown`、`tokensUsed`、`releasedTokens`；`contract_violation` 额外带 `attemptId`/`rejections`/`reason`，核销补发额外带 `reconciled:true`。`protocol.md` §7 只要求「终态事件携带真实 outcome 与变更后实体摘要」，本条为消费方一致性的实现约定。
+`run.ended` 由 `RunLifecycle.end` 统一发出，所有终态路径的 data 都包含 `outcome`、`usageMeasured`、`runCostKnown`、`tokensUsed`、`releasedTokens`；`contract_violation` 额外带 `attemptId`/`rejections`/`reason`，核销补发额外带 `reconciled:true`。`protocol.md` §7 只要求「终态事件携带真实 outcome 与变更后实体摘要」，本条为消费方一致性的实现约定。
 
 ## DC-49 父 Run 非正常终止时子 Run 一并取消（Review 第四/五轮 Q-04、M-1、M-3）
 
@@ -147,12 +147,12 @@ Provider 报告的 usage 可能超过该 Run 的预留（估算偏差）。原�
 `RunLifecycle.reconcile` 的幂等判定改为「该 Run 是否已有**实测**（结算时 `usageMeasured:true`）或**核销**（`reconciled:true`）的 `run.ended`」，且判定与写入在**同一个事务内**（第六轮 R6-01：只查 `reconciled:true` 会漏掉已按实测结算的 Run，二次核销会重复计费并把 `tokensReserved` 扣到 0、吃掉其他在场 Run 的预留，使真实承诺超出 `tokenLimit`）：
 - 同 Run 同 amount 的重放 → 无操作返回；
 - 同 Run 不同 amount → `IDEMPOTENCY_CONFLICT`（R6-04：原来静默无操作）；
-- 核销事件带 `reconciliation: n` 便于排序（R6-05：Run 行不变，`entityVersion` 会重复）；
+- 核销事件不再发明 `reconciliation` 序号（第七轮 R7-04：一个 Run 至多核销一次，该字段恒为 1）；事件顺序由事件自身的 `cursor` 表达（`data.md` §5），Run 行不变因此 `entityVersion` 会重复，这一点在 DC-48 记录；
 - 事件字段改名为 `runCostKnown`（每个 Run 的事实），Work 级 `costKnown` 仍按「该 Work 的全部终态 Run 是否都已实测/核销」重算（R6-06：原来事件里的 `costKnown` 与 Work 级标志同名但含义不同）。
 
 ## DC-53 第五轮 Finding 的严重度口径（记录更正）
 
-第五轮报告把 4 条影响验收的行为缺陷标为 P2 并称「本轮无 P1」；按 `workflow.md` §65 的定义（P1 = 错误行为/需求缺失），这些条目属 P1 级。本包按其阻断性处理（全部已修），并在记录中更正口径，避免后续 Settlement 按「仅 P2」低估本包返工范围。另：第四轮报告中的 H-03 是**报告质量问题**（对 D1..D5 的追溯口径），不是代码缺陷定义，仓库内无对应实体；D1..D5 的来源更正见 DC-47/T12。
+第五轮报告把 4 条影响验收的行为缺陷标为 P2 并称「本轮无 P1」；按 `workflow.md` §6「发现与返工」中的严重性定义（第 65 行：P0 数据/安全或关键不可用，P1 错误行为/需求缺失，P2 局部质量/维护问题，P3 建议），这些条目属 P1 级。本包按其阻断性处理（全部已修），并在记录中更正口径，避免后续 Settlement 按「仅 P2」低估本包返工范围。另：第四轮报告中的 H-03 是**报告质量问题**（对 D1..D5 的追溯口径），不是代码缺陷定义，仓库内无对应实体；D1..D5 的来源更正见 DC-47/T12。
 
 ## DC-54 未带 operationId 的重复请求（Review 第六轮 R6-09）
 
@@ -164,4 +164,12 @@ Provider 报告的 usage 可能超过该 Run 的预留（估算偏差）。原�
 
 ## DC-56 记录级严重度口径（Review 第六轮）
 
-第六轮 Review 按 `workflow.md` §65 把 R6-01 定为 P1，同时指出第五轮报告把同类的行为缺陷标为 P2 属口径不一致。本包的处理原则：**凡影响 AC-043/044/045/046/047/082 或 `reliability.md` §3、`protocol.md` §1/§6 明文要求的条目，一律按阻断项对待并修复**，记录中不再以 P2/P3 低估。R6-07 指出的「M-2 无定义」也已补齐：M-2 是第五轮对抗性核验提出的「`run-lifecycle.ts`/`stage.ts` 注释声称预留已释放、与实现（未测量时保持预留）不符」，已在 T13 修正（DC-53 口径更正同时适用）。
+第六轮 Review 按 `workflow.md` §65 把 R6-01 定为 P1，同时指出第五轮报告把同类的行为缺陷标为 P2 属口径不一致。本包的处理原则：**凡影响 AC-043/044/045/046/047/082 或 `reliability.md` §3、`protocol.md` §1/§6 明文要求的条目，一律按阻断项对待并修复**（本节引用的严重性定义在 `workflow.md` §6 内、位于该文件第 65 行），记录中不再以 P2/P3 低估。R6-07 指出的「M-2 无定义」也已补齐：M-2 是第五轮对抗性核验提出的「`run-lifecycle.ts`/`stage.ts` 注释声称预留已释放、与实现（未测量时保持预留）不符」，已在 T13 修正（DC-53 口径更正同时适用）。
+
+## DC-57 级联取消时「从未启动」子 Run 的用量是已知零（Review 第七轮 R7-09）
+
+`cancelDescendants` 原来对所有子 Run 一律按「未测量」处理（保持预留 + `costKnown=false`），但**没有 Attempt 的 `queued` 子 Run 从未调用模型**，其用量是已知的零，不是未知。修复：按「该 Run 是否有 Attempt」区分——无 Attempt ⇒ `measured:true, tokensUsed:0`（立即释放预留）；有 Attempt ⇒ 保持 `measured:false`（等 WP-10 的 Provider 用量核销，DC-45）。否则父 Run 取消后死预留会占住 Work 额度，后续派发被 `BUDGET_EXCEEDED` 拒绝（实际消费为零）。
+
+## DC-58 被拒绝的 dispatch 不留任何副作用（Review 第七轮 R7-07）
+
+`Orchestrator.dispatch` 原来的顺序是「校验 → 冻结 config/context/dispatch 快照 → 建 Run」。第七轮探针发现被拒请求仍会留下 dispatch/context 快照行（内容寻址，同载荷幂等，不同载荷逐次增长）。修复：把三类快照的冻结移到**全部准入判定之后**（spec 校验、Work/预算、父 Run、role×purpose、direct-chief-child、provider 可用性、profileRevision）。契约 Schema 校验提到最前，任何畸形 spec 以 `VALIDATION_ERROR` 结束，不再抛裸 `TypeError`（R7-01）。测试断言被拒后 Run 与快照行数均不变。

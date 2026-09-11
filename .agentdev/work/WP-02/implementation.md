@@ -128,6 +128,21 @@
   - 记录：DC-35 父状态描述更正（R6-08）、DC-46 补齐六种 Work 状态（R5-11 残留）、新增 DC-54..DC-56（含 M-2 定义与严重度口径）。
 - 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **225 passed**；`pnpm test:integration` 124 passed。
 
+## T15 独立 Review 第七轮与修复（第七轮 FAIL → 修复）
+
+- 第七轮独立 Review 判 FAIL（0×P1、2×P2、6×P3，编号 R7-01..R7-08），对抗性核验确认结论成立并补出 R7-09（P2）。
+- 修复：
+  - R7-01：`dispatch` 先用契约 Schema 校验 spec，畸形输入统一 `VALIDATION_ERROR`（DC-58）。
+  - R7-02：`reconcile` 幂等判定同时比对 `tokensUsed` 与 `cost`（含 `null` 归一），只改 cost 不再被静默丢弃。
+  - R7-03：`measured:false` 时不允许携带 `cost`。
+  - R7-04：去掉恒为 1 的 `reconciliation` 字段，事件顺序由 `cursor` 表达（DC-48 更新）。
+  - R7-05：DC-48 字段名更正为 `runCostKnown`。
+  - R7-06：DC-35 更正 required/非 required 子 Run 失败时父状态的差异。
+  - R7-07：快照冻结移到全部准入判定之后，被拒 dispatch 无副作用（DC-58）。
+  - R7-08：记录中 Work 状态改为 `workStatusSchema` 的真实取值；严重性引用改为 `workflow.md` §6（第 65 行）。
+  - R7-09：级联取消按「有无 Attempt」区分已知零用量与未知用量（DC-57）。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **228 passed**；`pnpm test:integration` 124 passed。
+
 ## T9 待办
 
 - 独立 Review 与 Test（独立上下文）、结算与 `docs/INDEX.md` 状态更新、以及 `docs/delivery/acceptance.md` 中本包 AC 的证据登记。

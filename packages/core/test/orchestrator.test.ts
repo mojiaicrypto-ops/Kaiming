@@ -686,6 +686,77 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     expect(store.runs.find(held.id)?.status).toBe('queued');
   });
 
+  it('reports a malformed spec as VALIDATION_ERROR and writes no snapshot (R7-01/R7-07)', () => {
+    const chief = chiefRun();
+    const snapshotsBefore = store.snapshots.list().length;
+    const runsBefore = store.runs.list().length;
+    const malformed = [
+      { ...backendSpec(chief.id), contextSelection: { goal: 'no read paths' } },
+      { ...backendSpec(chief.id), requiredOutputs: 'stage.submit' },
+      { ...backendSpec(chief.id), scope: null },
+      null,
+      42,
+    ];
+    for (const spec of malformed) {
+      try {
+        orchestrator.dispatch({ spec: spec as never });
+        throw new Error('expected a validation error');
+      } catch (error) {
+        expect(error).toMatchObject({ code: 'VALIDATION_ERROR' });
+      }
+    }
+    // A rejected dispatch must not leave snapshots or Runs behind.
+    expect(store.runs.list().length).toBe(runsBefore);
+    expect(store.snapshots.list().length).toBe(snapshotsBefore);
+
+    // The same for a purely admission-level rejection.
+    const stale = { ...backendSpec(chief.id), profileRevision: 999_999 };
+    expect(() => orchestrator.dispatch({ spec: stale })).toThrowError(/is stale/);
+    expect(store.snapshots.list().length).toBe(snapshotsBefore);
+  });
+
+  it('treats a different cost for the same Run as a conflict (R7-02/R7-03)', () => {
+    const budgetRow = store.budgets.list({ where: 'work_id = ?', params: [WORK_ID] })[0];
+    if (budgetRow === undefined) throw new Error('budget fixture missing');
+    const chief = chiefRun();
+    const run = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+    orchestrator.beginAttempt(run.id);
+    orchestrator.settleRun(run.id, 'completed', { tokensUsed: 1_000, measured: true });
+    // Same tokens, different cost is not a replay: it must not be silently dropped.
+    expect(() =>
+      orchestrator.lifecycle.reconcile(run.id, { tokensUsed: 1_000, cost: 5 }),
+    ).toThrowError(/already booked/);
+    expect(store.budgets.find(budgetRow.id)?.cost).toBeUndefined();
+    // Cost without a measurement is contradictory input.
+    const other = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+    orchestrator.beginAttempt(other.id);
+    expect(() =>
+      orchestrator.settleRun(other.id, 'completed', {
+        tokensUsed: 0,
+        measured: false,
+        cost: 5,
+      }),
+    ).toThrowError(/without a measured usage/);
+  });
+
+  it('releases the reservation of a never-started child when a parent is cancelled (R7-09)', () => {
+    const budgetRow = store.budgets.list({ where: 'work_id = ?', params: [WORK_ID] })[0];
+    if (budgetRow === undefined) throw new Error('budget fixture missing');
+    const chief = chiefRun();
+    const neverStarted = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+    const reservedBefore = store.budgets.find(budgetRow.id)?.tokensReserved ?? 0;
+    expect(reservedBefore).toBeGreaterThanOrEqual(neverStarted.budgetAllocation);
+
+    orchestrator.settleRun(chief.id, 'cancelled');
+    expect(store.runs.find(neverStarted.id)?.status).toBe('cancelled');
+    // The child never ran, so nothing is owed and its hold comes back immediately.
+    // The cancelled parent did run, so its own hold stays unknown for reconciliation
+    // (`reliability.md` §3) — the two cases must not share one rule.
+    const after = store.budgets.find(budgetRow.id)?.tokensReserved ?? 0;
+    expect(after).toBe(reservedBefore - neverStarted.budgetAllocation);
+    expect(after).toBe(chief.budgetAllocation);
+  });
+
   it('never re-books an already measured Run (R6-01/R6-04/R6-05)', () => {
     const budgetRow = store.budgets.list({ where: 'work_id = ?', params: [WORK_ID] })[0];
     if (budgetRow === undefined) throw new Error('budget fixture missing');
@@ -722,9 +793,9 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     expect(events).toHaveLength(2);
     expect(events[1]?.data).toMatchObject({
       reconciled: true,
-      reconciliation: 1,
       chargedTokens: 2_000,
       runCostKnown: true,
+      cost: 0.0025,
     });
     expect(events[1]?.data['costKnown']).toBeUndefined();
     // Cost is charged to the Work budget and may be fractional (R6-02).
