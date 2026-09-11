@@ -1,6 +1,6 @@
 # WP-03 实现 Plan（直接协作与说明产物）
 
-- planVersion: 6
+- planVersion: 7
 - workId: WP-03
 - level: L2（新增 Core 产物/附件/预览模块与 `apps/daemon` HTTP 面；按 `docs/product/experience.md` §3、`docs/architecture/{data,protocol,execution}.md` 既有定义实现，不改产品语义）
 - authorization_ref: 用户目标轮次「继续」（2026-09-11）；上级授权为「我要完全实现这个产品，让你来实现」
@@ -16,6 +16,13 @@
 - 新增 `packages/domain/src/requests.ts`（确定性 Chief 路由：message → work items + 授权判定）与 `packages/core/src/messages.ts`（conversation.message.send 的事务实现）、`packages/core/src/identity.ts` 的 `userIdFromSubject`。
 - **判定边界（必须与 Review/Test 对齐的口径）**：`routeMessage` 是模型 Assessment（WP-04/WP-06）之前的确定性基线，按 `docs/rules/workflow.md` §1/§2 的**结构事实**判定（指令子句 = 修改动词 + 命名路径，且不含疑问/拒绝/假设/引用/陈述/完成体标记）。它**不承诺覆盖自然语言的全部表达**：本包采用的语法是**默认拒绝**的——只有当子句本身是「动词 + 单一命名路径」（或 `把/将/对 + 目标 + 动词`）时才授权；未登记的措辞（同义变更词如 `重写/润色/polish`、名词短语祈使如 `修改 X 中的错别字`、轻动词处置式 `对 X 进行修改`、多目标列表 `修改 X、Y`、排除式 `修改 Y 而不是 X`、范围声明 `修改 Y，X 保持不动`）一律落到只读路线并要求澄清。真正语义分类由 WP-04/06 的模型 Assessment 接管；本包的责任是：正向覆盖文档化场景（明确修复/混合意图/拒绝纠正）、负向覆盖已登记的越权语料、并对任何不确定 fail-closed。
 - 残余风险的登记见 `implementation.md` T12/T13/T26 与结算材料；Review/Test 应针对「已登记语料 + 边界声明」判定，而不是要求启发式覆盖任意新句式。
+
+### planVersion 7 变更（授权来源：第二十一轮 Review 的 P2/P3 登记；2026-09-11）
+
+- **登记路径形状判据的残余边界（W3R21-01，P2，无写范围扩张）**：`PATH_SHAPE_PATTERN` 的扩展名表是有限枚举，与 `pathsIn` 的 `FILE_EXTENSIONS` 不完全一致，因此「单 token 且使用未列扩展名或全角分隔」的伪目标形态（如 `notes.rst`、`docs／INDEX.md`）仍留在良性解释分支，与同形登记否定版本的结果相反。该形态**不产生任何写范围扩张**（授权集合恒等于消息中显式命令点名的路径），不违反 AC-004/AC-005；真正语义判定属 WP-04/06 模型 Assessment。已落成长期断言并在此登记。
+- **记录订正（W3R21-02）**：`implementation.md` T28 的「每族 ≥3 条长期断言已补入主流」为夸大表述，T29 改为逐族实测计数；`打磨` 等未入库的措辞移出记录。
+- **承接（W3R21-03）**：`protocol.md` 未对账项（未知字段 202 静默忽略、响应 `workIds`/`authorizationId` 未列）继续承接，不属本包验收面。
+- 计数口径：**205 例 0 偏差**（必须授权 14 / 拒绝纠正接续 10 / 多命令 4 / 必须只读 177），另有第二十一轮 206 例复算 0 偏差。
 
 ### planVersion 6 变更（授权来源：第二十轮 Review 的 P2 闭环；2026-09-11）
 
