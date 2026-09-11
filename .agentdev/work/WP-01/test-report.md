@@ -1,431 +1,302 @@
 # WP-01 测试报告（数据、状态与协议核心）
 
-- 角色：Test（独立上下文；不读取开发聊天，不把 `.agentdev/work/WP-00/*` 的历史结论当作本包证据；不读取本文之前的历史 test-report 作为通过依据）
-- 状态：`Testing` → 结论 `PASS`（就 WP-01「本包必验范围」与退出条件；AC-078/AC-092 的子句未覆盖见 §8）
-- 声明：本文所有计数、退出码与断言均为本机在**当前 HEAD 树**上实际执行所得；未执行者显式标 `not_covered`，不以「应该通过」代替。本报告为对 `/Users/huyaohua/huyh/work/aigrouptool/.agentdev/work/WP-01/test-report.md` 的完整替换（旧报告绑定 tree `196f56ff…`，已不再代表 HEAD）。
+- 角色：Test（独立上下文；不读取开发聊天，不把历史 test-report 当作通过依据）
+- 状态：`Testing` → 结论 `PASS`（就 WP-01「本包必验范围」与退出条件；AC 子句与 P3 残留见 §8）
+- 声明：本文所有退出码、计数与断言均为本机在**当前 HEAD 树**上实际执行所得；未执行者显式标 `not_covered`，不以「应该通过」代替。本报告为对 `.agentdev/work/WP-01/test-report.md` 的**完整替换**（旧报告绑定 tree `981746c…`，已不代表 HEAD；其内容保留在 git 历史）。
+- 依据：`AGENTS.md`、`docs/INDEX.md`、`docs/rules/workflow.md` §6/§7、`docs/delivery/implementation.md` §2 WP-01/§3/§4、`docs/delivery/acceptance.md` AC-023/024/055/056/059/060/065/078/092、`docs/architecture/{data.md,protocol.md,reliability.md}`、`.agentdev/work/WP-01/{plan.md,implementation.md,discovery.md,review.md}`。
 
 ## 1. 复核对象
 
 | 项 | 值（实测） |
 |---|---|
-| commit | `9c634f0ed6232902c5aa46820ccc64c839873849` |
-| tree | `981746cbd665339a1ecdf09bbb627b1bfb0ab38a` |
-| 命令 | `git rev-parse HEAD && git rev-parse HEAD^{tree} && git status --short` → 前两行如上，第三行无输出 |
-| parent | `8e96ee2df29db589653e9fbfedd0569ea3217a96`（`fix(wp-01): 独立 Review 发现的两项 P1 与相关 P2/P3`） |
-| HEAD 主题 | `fix(wp-01): 复评 NF-01/NF-03 与记录计数、Discovery 归档` |
-| 工作树 | 复跑开始时干净（仅本报告写入后出现 ` M .agentdev/work/WP-01/test-report.md`）；未改动 `packages/`、`apps/`、`docs/` 与根配置 |
-| 被复核证据 | `.agentdev/work/WP-01/{plan.md,implementation.md,discovery.md,review.md}` |
-| 正式依据 | `AGENTS.md`、`docs/INDEX.md`、`docs/rules/workflow.md` §6/§7、`docs/architecture/{data.md,protocol.md,reliability.md}`、`docs/delivery/implementation.md` §2 WP-01/§3/§4、`docs/delivery/acceptance.md` AC-023/024/055/056/059/060/065/078/092 |
+| commit | `e02fb8e6c4972e41f5aba9695d765a9f25723eec` |
+| tree | `c201f4276c1507fd41f0dd860df91d915c86ac6c` |
+| 记录命令 | `git rev-parse HEAD && git rev-parse HEAD^{tree} && git status --short` → 前两行为上述值，第三行**无输出**（工作区干净） |
+| parent | `9c634f0ed6232902c5aa46820ccc64c839873849`（`fix(wp-01): 复评 NF-01/NF-03 与记录计数、Discovery 归档`） |
+| HEAD 主题 | `fix(wp-01): 二次复评 NF2-01/02/03 与计数修正` |
+| 上游对象 | `8e96ee2`（tree `f1589696…`）第一轮修复；`c3a581f`（tree `196f56ff…`）首次 Review 对象 |
+| 工作树 | 开始与命令执行期间干净；测试期间**另一 Review 角色**并发向 `.agentdev/work/WP-01/review.md` 追加 §4（mtime `09:27:21`），`packages/`、`apps/`、`docs/`、根配置均无改动（`git diff --name-only -- packages apps docs package.json pnpm-lock.yaml pnpm-workspace.yaml vitest.config.ts tsconfig.json` 为空） |
+| 最终工作区 | ` M .agentdev/work/WP-01/review.md`（Review 角色写入，非本角色）、` M .agentdev/work/WP-01/test-report.md`（本报告） |
 
-被复核的「新增修复」四项目标（复评 NF-01/NF-02 与 T8 的 T8 两项 P1）在本次全部实测：需求记录路径为文档目录、事件 append 失败不留投影行、连续迁移不因备份文件冲突、冻结 0001 checksum 一致（§5.3、§6、§7）。
+并发 Review §4 已实测同一 HEAD/tree 并给出 **PASS**（5 项 P3 非阻断：NF3-01…NF3-05），本 Test 报告独立复跑全量命令、五项必需失败测试、三轮修复与三个自建探针，结论与其一致。
 
 ## 2. 环境
 
 | 项 | 值（实测） |
 |---|---|
-| OS | Darwin 25.5.0（macOS，arm64，`root:xnu-12377.121.6~2/RELEASE_ARM64_T8103`；主机名 `huyaohuadeMacBook-Pro.local`） |
+| OS | Darwin 25.5.0（macOS，arm64；主机 `huyaohuadeMacBook-Pro.local`） |
 | node | `v24.8.0`（`/opt/homebrew/bin/node`） |
-| pnpm | `12.3.4`（`/Users/huyaohua/.local/bin/pnpm`；执行前均 `export PATH="$HOME/.local/bin:$PATH"`；`packageManager: pnpm@12.3.4`） |
-| Docker | `Docker version 28.4.0, build d8eb465f86`；`docker info` ServerVersion `28.4.0`，驱动 `overlayfs`（真实容器集成测试已实际运行） |
+| pnpm | `12.3.4`（`/Users/huyaohua/.local/bin/pnpm`；每次执行前 `export PATH="$HOME/.local/bin:$PATH"`） |
+| Docker | `Docker version 28.4.0, build d8eb465f86`；ServerVersion `28.4.0`；driver `overlayfs`（容器集成测试**真实运行**） |
 | git | `git version 2.39.3 (Apple Git-146)` |
-| better-sqlite3 | `13.0.3`（pin 于 `packages/storage`） |
-| SQLite | `3.53.4`（`select sqlite_version()` 实测） |
-| vitest | `5.0.0`（`--project unit` / `--project integration`；测试跑源码，不跑 dist） |
-| 构建产物 | `pnpm build` 已执行；仓库外探针以 `packages/*/dist` 为被测对象（§7） |
+| better-sqlite3 | `13.0.3`；SQLite `3.53.4`（`select sqlite_version()` 实测） |
+| vitest | `5.0.0`（`--project unit` / `--project integration`；跑源码，不跑 dist） |
+| 仓库外探针 | `/tmp/wp01-t9/probes/`（`pnpm build` 产物 `packages/*/dist` 为被测对象，见 §7） |
 
 ## 3. 命令结果表（命令 / 退出码 / 计数）
 
 | # | 命令 | 退出码 | 计数（实测） |
 |---|---|---|---|
-| 1 | `pnpm install --frozen-lockfile` | **0** | 8 个 workspace project；lockfile up to date，resolution skipped，132ms |
-| 2 | `pnpm typecheck` | **0** | `tsc -p tsconfig.json --pretty false`，无错误输出 |
-| 3 | `pnpm lint` | **0** | Prettier 全匹配（`All matched files use Prettier code style!`） |
-| 4 | `pnpm test:unit` | **0** | **13 文件 / 173 用例全通过** |
-| 5 | `pnpm test:integration` | **0** | **10 文件 / 122 用例全通过**（含真实 Docker：container 9 例 41.9s、doctor 8 例 17.3s） |
-| 6 | `pnpm docs:check` | **0** | 15 documents / 55 internal links / 94 acceptance cases / 9 requirements / 11 work packages |
-| 7 | `pnpm build` | **0** | contracts、domain、storage、core、pi-runtime、cli、runner 全部 `Done` |
-| 8a | `pnpm test:e2e` | **1** | `NOT_IMPLEMENTED: command test:e2e is not implemented yet; it lands with WP-09` |
-| 8b | `pnpm test:acceptance` | **1** | `NOT_IMPLEMENTED: command test:acceptance is not implemented yet; it lands with WP-10` |
-| 8c | `pnpm test:live` | **1** | `NOT_IMPLEMENTED: command test:live is not implemented yet; it lands with WP-10` |
+| 1 | `pnpm install --frozen-lockfile` | **0** | 8 个 workspace project；`Lockfile is up to date, resolution step is skipped`；`Done in 109ms` |
+| 2 | `pnpm typecheck` | **0** | `tsc -p tsconfig.json --pretty false` 无输出（strict 无错误） |
+| 3 | `pnpm lint` | **0** | `All matched files use Prettier code style!` |
+| 4 | `pnpm test:unit` | **0** | **13 文件 / 173 用例**通过（Duration 7.80s） |
+| 5 | `pnpm test:integration`（全量，含真实 Docker） | **0** | **10 文件 / 124 用例**通过（Duration 92.47s；doctor 8、container 9 为真实 Docker 路径，45.9s/90.6s） |
+| 6 | `pnpm docs:check` | **0** | `15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages` |
+| 7 | `pnpm build` | **0** | 7 个包构建完成：contracts、cli、pi-runtime、domain、storage、core、runner |
+| 8 | `pnpm test:e2e` | **1** | `NOT_IMPLEMENTED: command test:e2e is not implemented yet; it lands with WP-09`（字面核对通过） |
+| 9 | `pnpm test:acceptance` | **1** | `NOT_IMPLEMENTED: … test:acceptance … lands with WP-10`（字面核对通过） |
+| 10 | `pnpm test:live` | **1** | `NOT_IMPLEMENTED: … test:live … lands with WP-10`（字面核对通过） |
+| 11 | 五个失败场景按名过滤（9 条 `vitest -t`） | **0** | 每条 `1 passed`（其余 skip），见 §5 |
+| 12 | 三轮修复按名过滤（7 条 `vitest -t`） | **0** | 每条 `1 passed`（其余 skip），见 §6 |
+| 13 | 自建探针 A/B/C + 冻结 checksum 复核 | **0** | 探针 A 7/7、B 6/6、C 7/7 通过；checksum `match:true`，见 §7 |
 
-逐文件计数（实测）：
+integration 逐文件计数（与运行一致）：migrations **17**、ledger **22**、dispatcher **10**、events-hub **18**、requirements **10**、identity **9**（WP-01 六文件合计 86）；session **11**、attempt **10**、doctor **8**、container **9**（WP-00 四文件 38）；86+38=**124**。与 `implementation.md` §T3/T4/T6/projection 计数一致。
 
-- unit（13/173）：contracts `protocol`(10)、`errors`(9)、`primitives`(13)、`entities`(12)、`limits`(9)、`enums`(35)、`toolchain`(5)；core `auth`(18)、`mailbox`(8)；domain `domain`(28)；pi-runtime `events`(7)、`resources`(8)、`extensions`(11)。
-- integration（10/122）：migrations(16)、ledger(22)、dispatcher(10)、events-hub(17)、requirements(10)、identity(9)、pi-runtime `session`(11)、runner `attempt`(10)、cli `doctor`(8)、cli `container`(9)。
+## 4. 验收对照（AC-023/024/055/056/059/060/065/078/092）
 
-结论：命令 1–7 全部退出 0；命令 8 三条按契约必须失败，实测**逐字**输出 `NOT_IMPLEMENTED` 并指向 WP-09（e2e）/WP-10（acceptance、live），与 `scripts/not-implemented.mjs` 的 `process.exit(1)` 一致。
+| AC | 判定 | 证明用例 / 命令（实测） |
+|---|---|---|
+| **AC-023 无注册多项目** | passed | `packages/core/test/identity.integration.test.ts:98`「gives two real roots distinct ids and independent databases」：两个真实 `git init` 根 id 不同、各自 SQLite 只有自己的 project 行、`find(alpha.projectId)` 在 beta 库为 `undefined`、trust 互异。独立探针 A 复现两个真实 Git 根 id 不同（`5e424e01…` vs `287942ea…`）。**子句「切换不影响运行」属 daemon/UI，未覆盖（WP-09/WP-10）**。 |
+| **AC-024 路径识别** | passed | 同文件「normalizes a subdirectory to the repository root」「normalizes a trailing separator and a symlinked path」「finds the git root from a deep directory…」「derives the project id from the canonical root hash」，以及「finds nested repositories and excludes their paths from the parent」「bounds the nested scan by depth」「can skip the nested scan entirely」。独立探针 A：子目录/符号链接/尾分隔符均归一到同一 id。**文件工具层的父访问排除归 WP-07**。 |
+| **AC-055 幂等接受** | passed | dispatcher 写路径 5 用例：`applies one write, then replays the same result for the same key`（重放同一响应、domain 行只写一次、`events.latestCursor()===1`、outbox `{pending:1}`）、`refuses the same key with a different payload`（`IDEMPOTENCY_CONFLICT`，行未变）、`reports a version conflict…`、`rolls back the ledger, events and outbox when the handler fails`、`answers BUSY…`；ledger 3 用例：`replays the original result for the same key and payload`（`kind:'replay'`、`effects===1`）、`refuses the same key with a different payload or another caller`、`scopes lookup to the calling subject…`。独立探针 B：同键同载荷重发后 `event=1 / outbox=1 / command=1`、`tokensUsed=5`、响应逐字节相同。**真实 WS 断线重连属 WP-09/WP-10**。 |
+| **AC-056 Mailbox非阻塞** | passed | `packages/core/test/mailbox.test.ts:55`「answers a new command while a long effect is still running (AC-056)」：effect 在飞时命令被准入并返回、`elapsed < 1000`、`activeEffects()` 仍含长调用；`:20`「runs commands one at a time in submission order」`peak===1`；`dispatcher.integration.test.ts:317`「answers a command within a second while a model call is in flight」`elapsed < 1000`。**真实模型/工具长调用归 WP-02/WP-10（本包用受控桩）**。 |
+| **AC-059 背压** | passed | `events-hub.integration.test.ts:321` 三用例：`coalesces transient frames once the soft limit is crossed`（软限后合并临时帧，`merged/coalesced` 与最终 frames 断言）、`closes the connection at the hard limit without dropping durable events`（`HARD_LIMIT`、`closed===['slow']`、`subscriptionCount()===0`，但持久事件仍在库并被新订阅 `fast` 读回 1 条 —— 其他 Run 继续）、`keeps default limits at the documented 2 MiB / 8 MiB`。**真实慢连接大 Token 量端到端投递归 WP-09/WP-10**。 |
+| **AC-060 范围订阅** | passed | 同文件 `scope change (AC-060)`：「answers a fresh snapshot at a new watermark and covers later events」（过滤后 ACK → 扩大范围为 `summary` → 返回 `snapshot`+新水位 C，C 之后事件覆盖新增范围，`widened.cursor===outside`）；`requires a resync when the cursor was truncated`（截断游标 → `RESYNC_REQUIRED`）；`refuses a backward ack and clamps to the watermark`；`tests` 中 `reports an empty batch with its scan watermark`。**浏览器重订阅/UI 重同步归 WP-09**。 |
+| **AC-065 Migration** | passed | `migrations.integration.test.ts`：`applies the core schema and records a checksum`、`is idempotent on the second start`、`applies the documented pragmas`、`backs up before pending work and writes a usable copy`、`stops on a checksum mismatch instead of starting`（`MIGRATION_CHECKSUM_MISMATCH`）、`refuses a database written by a newer build`（`SCHEMA_VERSION_AHEAD`）、`rolls a failed migration back and reports its version`（`MIGRATION_FAILED`、ledger 仍 `[1]`、无遗留表）、`successive upgrades` 2 用例、`freezes migration 0001…`。独立探针 C：第二次升级生成 `pre-migration-v1.sqlite`（可用、ledger=[1]），0 字节残留被替换为可用副本（ledger=[1,2]、无 `.partial`）。**「错误停止、不运行 Agent」的 daemon 行为与真实 restore 演练归 WP-09/WP-10**。 |
+| **AC-078 认证生命周期** | passed | `packages/core/test/auth.test.ts` **18 用例**：`is created 0600 and shown exactly once`、`re-tightens a credential file whose mode was loosened`、`verifies the Bearer header and rejects malformed ones`、`exchanges the installation token for a strict session cookie`（HttpOnly/SameSite）、`marks the cookie Secure on a remote deployment`、`rejects a wrong token with 401`、`limits failures to five per IP per minute`(429)、`refuses a non-loopback http origin but accepts https`、`requires a matching CSRF token for writes`、`refuses an unknown cookie and an expired session`、`rejects a mismatched Origin…`、`honours an explicit origin allowlist`、`clears the session on logout and expires the cookie`、`drops only expired sessions when sweeping`。**真实 HTTP/WS Origin 关闭与「后台 Work 保留」归 WP-09**（本包为无真实服务的单元/组件级）。 |
+| **AC-092 需求导入冲突与幂等** | passed | `requirements.integration.test.ts` 10 用例：`imports the same record twice without a second write`（幂等，无第二次写）、`refuses the same recordVersion with different content`（`REQUIREMENT_CONFLICT`，行未变，仅 `requirement.save_failed` 事件）、`treats an older recordVersion as a conflict, not a downgrade`、`rejects a malformed record before touching the database`、`hashes the exact requirement.json bytes when the caller supplies them`、`hashes metadata separately from the body`，以及修复后路径用例（§6）。**Git 往返/跨服务器 recordHash 与显式导入解除冲突归 WP-04/WP-08（DC-23）；调用方必须传目录便携路径与原始字节**。 |
 
-## 4. 命令原始输出摘录（截断，非摘要代替）
+## 5. 五项必需失败测试（按名过滤 + 读断言）
 
-### 4.1 `pnpm install --frozen-lockfile` → 退出 0
+| 失败场景 | 用例（文件:行） | 名过滤结果 | 断言要点（读代码） | 判定 |
+|---|---|---|---|---|
+| **丢应答重试**（AC-055） | `dispatcher.integration.test.ts:224`、`ledger.integration.test.ts:57` | 各 `1 passed`（9/21 skipped） | dispatcher：首写返回 `applied`；模拟「响应丢失后同请求重发」→ `retry` 与 `first` **完全相等**（`toEqual`）、`tokensUsed` 仍 5、`latestCursor()` 仍 1、outbox 仍 `{pending:1}`。ledger：二次 `begin` 返回 `{kind:'replay', state:'completed', response:{…}}` 且 `effects===1` | passed |
+| **冲突键**（dispatcher、ledger） | `dispatcher.integration.test.ts:248`、`ledger.integration.test.ts:88` | 各 `1 passed`（9/21 skipped） | dispatcher：同键不同 payload → `ok:false`、`IDEMPOTENCY_CONFLICT`、`retryable:false`，行仍 5；并断言 `payloadHashOf` 键序无关。ledger：不同 payloadHash → `{kind:'conflict'}`；**另一 caller 同键** → `conflict: belongs to another caller` | passed |
+| **慢连接/背压**（AC-059） | `events-hub.integration.test.ts:322`（软限）、`:340`（硬限）、`:362`（默认限值） | 各 `1 passed`（17 skipped） | 软限：跨限后 `coalesced:true`，`take()` 只剩 2 帧且 `merged` 计数正确。硬限：`{accepted:false, closed:true, reason:'HARD_LIMIT'}`、`closed===['slow']`、`subscriptionCount()===0`，但持久事件在库、新订阅仍能 `poll` 到 1 条 —— 证明断开不丢持久事件且其他 Run 继续 | passed |
+| **迁移失败**（AC-065） | `migrations.integration.test.ts:203` | `1 passed`（16 skipped） | `MIGRATION_FAILED`（含 `details.version===2`）且 ledger 仍 `[1]`、失败迁移中已建的 `good_table` **不存在**（真实 SQL 失败，非空泛） | passed |
+| **长操作不阻塞**（AC-056） | `mailbox.test.ts:55`、`dispatcher.integration.test.ts:317` | 各 `1 passed`（7/9 skipped） | mailbox：`runEffect` promise 未决时提交命令 → `accepted===true`、结果正常、`elapsed<1000`、`activeEffects()` 仍含 `model.call`（命令未排在长任务之后）。dispatcher：`mailbox.runEffect` 在飞时 `dispatch` → `applied`、`elapsed<1000`、`activeEffects()===['model.call:chief']` | passed |
+
+## 6. 三轮 WP-01 修复核对
+
+| 修复轮 | 目标 | 实测证据 | 判定 |
+|---|---|---|---|
+| 第 1 轮 `8e96ee2` | ①需求记录路径为**目录** `.agentdev/requirements/<id>`；②事件 append 失败**不留投影行** | ①`requirements.integration.test.ts:100` 断言 `portableRef.path === '.agentdev/requirements/<id>'`、`:104` 断言 `sourceRef.path` 同值（名过滤 `1 passed`）；②`:210`「writes the row and its event in one transaction」注入 `events.append` 抛错 → 导入抛 `event log unavailable`，`store.requirements.find(id)` 为 `undefined`，事后重导 verdict `new`（名过滤 `1 passed`） | verified |
+| 第 2 轮 `9c634f0` | ①连续迁移不冲突（按来源版本命名）②部分残留被替换、**有效副本被复用** ③冻结 0001 checksum 一致 | ①`:347`「keeps one backup per source version instead of colliding」：v0、v1 副本并存，同版本重跑 `applied:[]`；②`:294`「replaces a partial leftover and reuses a verified copy」：预置 0 字节目标 → 被替换为含 `schema_migrations` 的可用库；再预置带 `sentinel` 表的 v1 副本 → 复用后 `sentinel` 仍在、`step_1` 不存在；③`:375`「freezes migration 0001…」`migrationChecksum(MIGRATIONS[0])` 等于冻结常量（名过滤各 `1 passed`）。另以 node 直接复算：actual===frozen===`8de04150…`（§7） | verified |
+| 第 3 轮 `e02fb8e` | events-hub 错误分类负例（`subscribe(afterCursor)` 与 `poll` 均不得把存储错误伪装成 resync） | `events-hub.integration.test.ts:238`「does not disguise a storage failure as a resync request」：以 Proxy 只让 `readAfter` 抛 `disk failure`（`watermark()` 先成功）→ `poll` 抛 `disk failure` 且**不**是 `RESYNC_REQUIRED`；用 `ResyncRequiredError(99,1)` 时仍翻译为 resync。`:270`「classifies errors of a cursor-based subscribe the same way」对 `subscribe({afterCursor})` 做同样两分支断言（名过滤各 `1 passed`）。源码 `events-hub.ts:270/:339` 均 `if (!(error instanceof ResyncRequiredError)) throw error;` | verified |
+
+修复后 `pnpm typecheck`/`lint`/`test:unit`/`docs:check`/`build`/全量 `test:integration` 全部退出 0，无回归。
+
+## 7. 独立探针（仓库外 `/tmp/wp01-t9/probes/`）
+
+被测对象为 `pnpm build` 的 `packages/*/dist`（与源码同一 HEAD 树），脚本以绝对路径导入，不使用仓库内测试装置。
+
+**探针 A — AC-023/024（`probe-a.mjs`，exit 0，7/7）**：真实 `git init` 两个根 → id 不同；同一根的子目录、尾分隔符、符号链接 → 同一 id。
 
 ```
+"two git roots give different project ids"        passed  {alpha:"5e424e01c876bdefdb996ca5481c44cd", beta:"287942ea3b6ffb0b0b4e6803b1d5bc3b"}
+"a subdirectory normalises to the same id"        passed  {sub:"5e424e01…", alpha:"5e424e01…", normalizedFromSubdirectory:true}
+"a symlink of the root normalises to the same id" passed  {viaLink:"5e424e01…", alpha:"5e424e01…"}
+"a trailing separator normalises to the same id"  passed  {viaSlash:"5e424e01…"}
+"canonicalPath(symlink) equals the real root"     passed  {canonicalPath:"/private/tmp/.../alpha"}
+"git root is found from a deep subdirectory"      passed  {found:"/private/tmp/.../alpha"}
+"project id is derived from the canonical root hash" passed
+failed: 0
+```
+
+**探针 B — AC-055（`probe-b.mjs`，exit 0，6/6）**：真实 `ProjectStore` + `CommandDispatcher`，注册写命令（含 events/outbox），同键同载荷 dispatch 两次。
+
+```
+"first dispatch applied the write"                 passed  {status:"applied", entityId:"01a08e4a-…", version:2}
+"the retry replays the identical response"         passed  (first 与 retry 逐字节相同)
+"exactly one event row exists"                     passed  {events:1, outbox:1, commands:1}
+"exactly one outbox row exists"                    passed  {events:1, outbox:1, commands:1}
+"exactly one command row exists"                   passed  {events:1, outbox:1, commands:1}
+"the domain row was written once (tokensUsed=5)"   passed  {tokensUsed:5}
+failed: 0
+```
+
+**探针 C — AC-065（`probe-c.mjs`，exit 0，7/7）**：`ProjectStore.open` 首次安装 → 合成 0002 第二次升级 → 预置 0 字节 `pre-migration-v2.sqlite` 后第三次升级。
+
+```
+"first install takes the v0 pre-migration backup"          passed  {size:8192, integrity:"ok"}
+"second upgrade applies migration 2"                       passed  {applied:[2], backupPath:"…/pre-migration-v1.sqlite"}
+"second upgrade points at the v1 backup path"              passed
+"the v1 backup is a usable copy of the pre-upgrade schema" passed  {size:344064, integrity:"ok", applied:[1]}
+"third upgrade applies migration 3"                        passed  {applied:[3], backupPath:"…/pre-migration-v2.sqlite"}
+"the 0-byte leftover is replaced by a usable pre-upgrade copy" passed {zeroBefore:0, after:{size:348160, integrity:"ok", applied:[1,2]}}
+"no .partial file is left behind"                         passed  {partialExists:false}
+failed: 0
+```
+
+**冻结 checksum 独立复算**（node 直接调用 dist 的 `migrationChecksum`）：
+
+```
+{"version":1,"name":"0001-core-schema",
+ "actual":"8de041504378a4caf4292a38f6d542100c7b97fe90a4e560d43a623fc98e2dff",
+ "frozen":"8de041504378a4caf4292a38f6d542100c7b97fe90a4e560d43a623fc98e2dff","match":true}
+```
+
+探针未覆盖的**合法边界**（非缺陷，见 §8）：探针 C 走生产默认 `backupDir` 版本化命名路径；显式 `backupPath` 且无 hook 的跨来源版本复用（Review §4 NF3-01）未被本探针覆盖。
+
+## 8. 未覆盖项与归属
+
+| # | 未覆盖项 | 归属工作包 |
+|---|---|---|
+| 1 | AC-023「切换不影响运行」：需真实 daemon/UI 多项目切换；本包只验证两 Git 根 id 与数据独立 | WP-09 / WP-10 |
+| 2 | AC-024 嵌套仓库「排除父访问」在文件工具层的**强制**（本包只验证扫描与排除集合） | WP-07 |
+| 3 | AC-055 真实断线/重连（WS/浏览器）路径；本包为协议级幂等重放 | WP-09 / WP-10 |
+| 4 | AC-056 真实长模型/工具调用；本包用受控 effect 桩 | WP-02 / WP-10 |
+| 5 | AC-059 真实慢连接大 Token 量端到端投递；本包验证 ConnectionQueue/EventHub 负载语义 | WP-09 / WP-10 |
+| 6 | AC-060 浏览器重订阅与 cursor 过期后的 UI 重同步 | WP-09 |
+| 7 | AC-065 daemon「显示版本、不启动 Runner」行为与真实 backup/restore 演练；本包为库级异常与回滚 | WP-09 / WP-10 |
+| 8 | AC-078 真实 HTTP/WS Origin 关闭、cookie 生命周期与「后台 Work 保留」；本包为无真实服务的认证单元/组件 | WP-09 |
+| 9 | AC-092 Git 往返、跨服务器 `recordHash` 与显式导入解除冲突；本包为本地投影/幂等/冲突（调用方义务 DC-23） | WP-04 / WP-08 |
+| 10 | 真实 Provider 纵向演练（`test:e2e`/`test:acceptance`/`test:live` 仍 NOT_IMPLEMENTED） | WP-09 / WP-10 |
+| 11 | NF3-01（P3，Review §4）：显式 `backupPath` 且无 hook 时复用判定不校验来源版本；生产默认路径不受影响，仓库无该用法 | WP-01 后续小修 / WP-09 接线 |
+| 12 | NF3-02（P3）：1 字节残留被 SQLite 视为空库而判为「可用」；生产路径已改用 `.partial`+rename，不再产生 | WP-01 后续小修 |
+| 13 | NF3-03（P3）：复用分支不清理陈旧 `.partial`（垃圾文件，无正确性影响） | WP-01 后续小修 |
+| 14 | NF3-04（P3）：`:memory:` + `backupPath` 抛裸 `ENOENT`（仓库无该用法） | WP-01 后续小修 |
+| 15 | NF3-05（流程）：旧 Test 报告绑定 `9c634f0`；本报告即其重跑与重绑定 | 已由本报告关闭 |
+
+## 9. 结论
+
+**PASS**（WP-01 本包必验范围与退出条件成立）。
+
+- 十个工程命令按契约执行：1–7 退出 0 且计数如上；8–10 均退出 **1** 且**字面**返回 `NOT_IMPLEMENTED` 并分别点名 WP-09（e2e）/WP-10（acceptance、live），与 `docs/INDEX.md`、`implementation.md` 现状一致。
+- 五项必需失败测试（丢应答重试、冲突键、慢连接/背压、迁移失败、长操作不阻塞）经名过滤与断言逐条核对，全部通过且非空泛（断言直接约束被测行为）。
+- 三轮修复（`8e96ee2`/`9c634f0`/`e02fb8e`）逐项 verified：需求记录目录路径、事件失败不留投影行、连续迁移不冲突、部分残留替换与有效副本复用、冻结 0001 checksum 一致、events-hub 两条错误分类负例。
+- 三个自建探针（仓库外）全部通过：两 Git 根独立/路径归一；同键重发仅 1 event+1 outbox+1 command；第二次升级备份可用且 0 字节残留被替换。
+- 全量 `test:integration` 含真实 Docker 容器用例（9 条）通过；未出现残留工具进程导致失败。
+- 未覆盖项均为真实端到端/上层工作包范围并已标明归属；Review §4 的 5 项 P3 不阻断 WP-01 验收。**本报告绑定 tree `c201f4276c1507fd41f0dd860df91d915c86ac6c`，关闭 NF3-05 的 Test 重绑定要求**；进入 Settlement 前如代码树再变，须重新独立 Test。
+
+## 10. 原始命令摘录（逐条，已裁剪）
+
+```
+$ git rev-parse HEAD && git rev-parse HEAD^{tree} && git status --short
+e02fb8e6c4972e41f5aba9695d765a9f25723eec
+c201f4276c1507fd41f0dd860df91d915c86ac6c
+                                        # 第三行无输出
+
+$ pnpm install --frozen-lockfile          # INSTALL_EXIT=0
 Scope: all 8 workspace projects
 ✓ Lockfile passes supply-chain policies (verified 1h ago)
 Lockfile is up to date, resolution step is skipped
-Done in 132ms using pnpm v12.3.4
-```
+Done in 109ms using pnpm v12.3.4
 
-### 4.2 `pnpm typecheck` → 退出 0
-
-```
+$ pnpm typecheck                          # TYPECHECK_EXIT=0
 $ tsc -p tsconfig.json --pretty false
-```
 
-### 4.3 `pnpm lint` → 退出 0
-
-```
+$ pnpm lint                               # LINT_EXIT=0
 $ node scripts/lint.mjs
 Checking formatting...
 All matched files use Prettier code style!
-```
 
-### 4.4 `pnpm test:unit` → 退出 0
-
-```
- RUN  v5.0.0 /Users/huyaohua/huyh/work/aigrouptool
-
- ✓ |unit| packages/pi-runtime/test/events.test.ts (7 tests) 4ms
- ✓ |unit| packages/contracts/test/protocol.test.ts (10 tests) 11ms
- ✓ |unit| packages/contracts/test/errors.test.ts (9 tests) 12ms
- ✓ |unit| packages/contracts/test/primitives.test.ts (13 tests) 11ms
- ✓ |unit| packages/contracts/test/entities.test.ts (12 tests) 214ms
- ✓ |unit| packages/core/test/auth.test.ts (18 tests) 48ms
- ✓ |unit| packages/contracts/test/limits.test.ts (9 tests) 6ms
- ✓ |unit| packages/core/test/mailbox.test.ts (8 tests) 20ms
- ✓ |unit| packages/contracts/test/enums.test.ts (35 tests) 7ms
- ✓ |unit| packages/domain/test/domain.test.ts (28 tests) 11ms
- ✓ |unit| packages/contracts/test/toolchain.test.ts (5 tests) 3ms
- ✓ |unit| packages/pi-runtime/test/resources.test.ts (8 tests) 23ms
- ✓ |unit| packages/pi-runtime/test/extensions.test.ts (11 tests) 5ms
-
+$ pnpm test:unit                          # UNIT_EXIT=0
+ ✓ |unit| packages/contracts/test/entities.test.ts (12 tests)
+ ✓ |unit| packages/core/test/auth.test.ts (18 tests)
+ ✓ |unit| packages/core/test/mailbox.test.ts (8 tests)
+ ✓ |unit| packages/domain/test/domain.test.ts (28 tests)
+ ... (13 files)
  Test Files  13 passed (13)
       Tests  173 passed (173)
-   Duration  2.40s
-```
+   Duration  7.80s
 
-### 4.5 `pnpm test:integration` → 退出 0（真实 Docker）
-
-```
- ✓ |integration| packages/storage/test/migrations.integration.test.ts (16 tests) 600ms
- ✓ |integration| packages/storage/test/ledger.integration.test.ts (22 tests) 814ms
- ✓ |integration| packages/core/test/dispatcher.integration.test.ts (10 tests) 191ms
- ✓ |integration| packages/core/test/events-hub.integration.test.ts (17 tests) 349ms
- ✓ |integration| packages/core/test/requirements.integration.test.ts (10 tests) 325ms
- ✓ |integration| packages/core/test/identity.integration.test.ts (9 tests) 3247ms
- ✓ |integration| packages/pi-runtime/test/session.integration.test.ts (11 tests) 218ms
- ✓ |integration| apps/runner/test/attempt.integration.test.ts (10 tests) 292ms
- ✓ |integration| apps/cli/test/doctor.integration.test.ts (8 tests) 17342ms
- ✓ |integration| apps/cli/test/container.integration.test.ts (9 tests) 41897ms
-
+$ pnpm test:integration                   # INTEGRATION_EXIT=0
+ ✓ |integration| packages/storage/test/migrations.integration.test.ts (17 tests)
+ ✓ |integration| packages/storage/test/ledger.integration.test.ts (22 tests)
+ ✓ |integration| packages/core/test/dispatcher.integration.test.ts (10 tests)
+ ✓ |integration| packages/core/test/events-hub.integration.test.ts (18 tests)
+ ✓ |integration| packages/core/test/requirements.integration.test.ts (10 tests)
+ ✓ |integration| packages/core/test/identity.integration.test.ts (9 tests)
+ ✓ |integration| packages/pi-runtime/test/session.integration.test.ts (11 tests)
+ ✓ |integration| apps/runner/test/attempt.integration.test.ts (10 tests)
+ ✓ |integration| apps/cli/test/doctor.integration.test.ts (8 tests)
+ ✓ |integration| apps/cli/test/container.integration.test.ts (9 tests)
  Test Files  10 passed (10)
-      Tests  122 passed (122)
-   Duration  42.63s
-```
+      Tests  124 passed (124)
+   Duration  92.47s (tests 88%, transform 6%, import 6%)
 
-真实容器断言条目（证明「真实 Docker 容器测试」非桩）：
-
-```
- ✓ |integration| apps/cli/test/container.integration.test.ts (9 tests) 41897ms
-   ✓ runs as the non-root execution account 3800ms
-   ✓ carries the pinned runtime and build tools 4205ms
-   ✓ keeps the root filesystem read-only 2099ms
-   ✓ allows writes only inside the tmpfs 4400ms
-   ✓ refuses writes on a read-only source mount 2946ms
-   ✓ permits writes on a writable mount, proving the check above is not vacuous 4248ms
-   ✓ drops every Linux capability 3586ms
-   ✓ has no network access but a working name resolver 7438ms
-   ✓ applies the pid and memory limits 8647ms
-```
-
-### 4.6 `pnpm docs:check` → 退出 0
-
-```
+$ pnpm docs:check                         # DOCSCHECK_EXIT=0
 $ node scripts/docs-check.mjs
 docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages
-```
 
-### 4.7 `pnpm build` → 退出 0
-
-```
+$ pnpm build                              # BUILD_EXIT=0
 $ pnpm -r build
-packages/contracts build: Done
-packages/domain build: Done
-packages/storage build: Done
-packages/core build: Done
-packages/pi-runtime build: Done
-apps/cli build: Done
+packages/contracts build: Done / apps/cli build: Done / packages/pi-runtime build: Done
+packages/domain build: Done / packages/storage build: Done / packages/core build: Done
 apps/runner build: Done
-```
 
-### 4.8 `pnpm test:e2e` / `pnpm test:acceptance` / `pnpm test:live` → 均退出 1
-
-```
-===== pnpm test:e2e =====
+$ pnpm test:e2e                           # EXIT=1
 $ node scripts/not-implemented.mjs test:e2e WP-09
 NOT_IMPLEMENTED: command test:e2e is not implemented yet; it lands with WP-09
 [ELIFECYCLE] Command failed with exit code 1.
-EXIT=1
-===== pnpm test:acceptance =====
+
+$ pnpm test:acceptance                    # EXIT=1
 $ node scripts/not-implemented.mjs test:acceptance WP-10
 NOT_IMPLEMENTED: command test:acceptance is not implemented yet; it lands with WP-10
 [ELIFECYCLE] Command failed with exit code 1.
-EXIT=1
-===== pnpm test:live =====
+
+$ pnpm test:live                          # EXIT=1
 $ node scripts/not-implemented.mjs test:live WP-10
 NOT_IMPLEMENTED: command test:live is not implemented yet; it lands with WP-10
 [ELIFECYCLE] Command failed with exit code 1.
-EXIT=1
 ```
 
-## 5. 五项必需失败测试 evidence
+五项必需失败测试（按名过滤，退出码均为 0；`1 passed` + 其余 skipped）：
 
-方法与判定：每个场景都**单独跑 owning 文件 + `-t` 名称过滤**，确认用例真实存在且被选中执行（`1 passed | n skipped`、退出 0），而不是被整套通过掩盖；随后逐条读断言，写出「移除该行为会破坏什么」。
-
-### 5.1 丢应答重试（AC-055 幂等接受）
-
-| 项 | 内容 |
-|---|---|
-| 文件/用例 | `packages/core/test/dispatcher.integration.test.ts` › `write path (AC-055)` › **`applies one write, then replays the same result for the same key`** |
-| 过滤执行 | `pnpm exec vitest run --project integration packages/core/test/dispatcher.integration.test.ts -t "replays the same result"` → `Tests 1 passed | 9 skipped (10)`，退出 **0** |
-| 关键断言 | 首次：响应精确等于 `{v:1,type:'response',id:'req-1',ok:true,result:{status:'applied',entityId:budgetId,version:2}}`；`budgets.get(budgetId).tokensUsed===5`；`commands.lookup(SUBJECT,'test.budget.bump','key-1').state==='completed'`；`events.latestCursor()===1`；`outbox.countByState()` 等于 `{pending:1}`。同键同载荷重发后：`retry` 深等于 `first`；`tokensUsed` 仍 5；`latestCursor` 仍 1；outbox 仍 `{pending:1}` |
-| 移除会破坏 | 若 `CommandDispatcher` 的 replay 短路（复用 `CommandLedger.begin` 返回的 `kind:'replay'` 与原 response）被删，第二次派发会重跑 handler：`tokensUsed` 变 10、`latestCursor` 变 2、outbox 变 `{pending:2}`、响应 `version` 变 3 → 上述四条断言全部失败 |
-| 存储层同证 | `packages/storage/test/ledger.integration.test.ts` › `command ledger (AC-055)` › **`replays the original result for the same key and payload`**：过滤执行 `-t "replays the original result for the same key and payload"` → `Tests 1 passed | 21 skipped (22)`，退出 **0**；断言第二次 `begin` 精确返回 `{kind:'replay',state:'completed',response:{status:'accepted',operationId:'op-1'}}` 且 `effects===1`。若 replay 不存在，第二次返回 `new`、`effects` 变 2 → 失败 |
-
-### 5.2 冲突键（同键异载荷）
-
-| 项 | 内容 |
-|---|---|
-| 文件/用例（core） | `packages/core/test/dispatcher.integration.test.ts` › `write path (AC-055)` › **`refuses the same key with a different payload`** |
-| 过滤执行 | `... -t "refuses the same key with a different payload"` → `Tests 1 passed | 9 skipped (10)`，退出 **0** |
-| 关键断言 | 第二次以 `params:{budgetId,amount:9}` 同键同 method：错误码 `IDEMPOTENCY_CONFLICT` 且 `retryable:false`；`tokensUsed` 仍 5（无第二次副作用）；并断言 `payloadHashOf('test.budget.bump',{budgetId,amount:5})` 与键序颠倒的 `{amount:5,budgetId}` 相等（规范化 Hash） |
-| 移除会破坏 | 若无 payloadHash 比较，amount=9 的请求不会被判冲突而会进入 CAS：要么 `tokensUsed` 变 9/14，要么抛 `VERSION_CONFLICT` → `IDEMPOTENCY_CONFLICT` 断言失败；若 Hash 未规范化（键序相关），末条相等断言失败 |
-| 文件/用例（storage） | `packages/storage/test/ledger.integration.test.ts` › `command ledger (AC-055)` › **`refuses the same key with a different payload or another caller`** |
-| 过滤执行 | `... -t "refuses the same key with a different payload or another caller"` → `Tests 1 passed | 21 skipped (22)`，退出 **0** |
-| 关键断言 | 同键异 `payloadHash` 返回 `{kind:'conflict', reason:'idempotency key key-2 was used with a different payload'}`；同键异 `subject` 返回 `{kind:'conflict', reason:'idempotency key key-2 belongs to another caller'}` |
-| 移除会破坏 | 无异载荷/异主体判定时两次调用都会返回 `new`，`toEqual({kind:'conflict',...})` 断言失败；跨调用者可冒领已记账命令 |
-
-### 5.3 慢连接 / 背压（AC-059）
-
-| 项 | 内容 |
-|---|---|
-| 文件 | `packages/core/test/events-hub.integration.test.ts` › `connection back-pressure (AC-059)` |
-| 过滤执行 | `pnpm exec vitest run --project integration packages/core/test/events-hub.integration.test.ts -t "back-pressure"` → `Tests 3 passed | 14 skipped (17)`，退出 **0** |
-| 用例 a | **`coalesces transient frames once the soft limit is crossed`** — `ConnectionQueue({softBytes:100,hardBytes:400})`：第一次 push `{accepted:true,merged:false,coalesced:false}`；同 key 第二次 `{merged:true}`；第二个 stream key 使队列越软限 → `{coalesced:true}`；`take()` 只返回 2 帧，`merged` 分别为 2 与 1，`queue.bytes===0` |
-| 用例 b | **`closes the connection at the hard limit without dropping durable events`** — `EventHub({queueLimits:{softBytes:10,hardBytes:20}})`；先 `append` 持久事件；`openConnection('slow')`；push 15B 成功；再 push 15B → `{accepted:false,closed:true,reason:'HARD_LIMIT'}`；`onConnectionClosed` 收到 `['slow']`；`subscriptionCount()===0`；随后新建 `fast` 订阅 `poll` 仍能读到 **1 条**持久事件 |
-| 用例 c | **`keeps default limits at the documented 2 MiB / 8 MiB`** — `CONNECTION_QUEUE_LIMITS` 等于 `{softBytes:2097152,hardBytes:8388608}` |
-| 移除会破坏 | 删软限合并 → `take()` 返回 3 帧、`merged:false` → 用例 a 失败；删硬限断开 → 第二次 push 变 `accepted:true`、连接不被关闭 → 用例 b 前四条断言失败；改默认值 → 用例 c 失败。用例 b 先 `append` 再触发断开，证明断开的是连接输出队列而非事件日志（「关键事件持久、其他订阅继续」） |
-| 残留 | 真实 WebSocket 帧发送与真实慢客户端 TCP 属 **WP-09**（§8）。 |
-
-### 5.4 迁移失败（AC-065）
-
-| 项 | 内容 |
-|---|---|
-| 文件 | `packages/storage/test/migrations.integration.test.ts` |
-| 用例 a | **`stops on a checksum mismatch instead of starting`** — `-t "stops on a checksum mismatch"` → `1 passed | 15 skipped (16)`，退出 **0**。迁移后把 `schema_migrations.checksum` 改为 `'0'×64`，再次 `migrate()` 抛 `code:'MIGRATION_CHECKSUM_MISMATCH'` |
-| 用例 b | **`refuses a database written by a newer build`** — `-t "refuses a database written by a newer build"` → `1 passed | 15 skipped (16)`，退出 **0**。插入 `version=99` 后 `verifyMigrations(db)` 抛 `code:'SCHEMA_VERSION_AHEAD'` |
-| 用例 c | **`rolls a failed migration back and reports its version`** — `-t "rolls a failed migration back"` → `1 passed | 15 skipped (16)`，退出 **0**。迁移 0002 SQL 为 `CREATE TABLE good_table (...); THIS IS NOT SQL;`；抛 `StorageError` 且 `code==='MIGRATION_FAILED'`、`details.version===2`；`readAppliedMigrations` 仍为 `[1]`；`good_table` 在 `sqlite_master` 中不存在（无部分建表残留） |
-| 移除会破坏 | 删 checksum 校验 → 用例 a 的 `toThrowError` 落空；删版本超前校验 → 用例 b 落空；迁移不逐条事务化 → 用例 c 的 `good_table` 存在且 version 被记录 → 失败。另两条补充 AC-065：`applies the core schema and records a checksum`、`backs up before pending work and writes a usable copy` |
-
-### 5.5 长操作不阻塞（AC-056）
-
-| 项 | 内容 |
-|---|---|
-| 文件/用例（unit） | `packages/core/test/mailbox.test.ts` › `ProjectMailbox` › **`answers a new command while a long effect is still running (AC-056)`** |
-| 过滤执行 | `pnpm exec vitest run --project unit packages/core/test/mailbox.test.ts -t "answers a new command while a long effect is still running"` → `Tests 1 passed | 7 skipped (8)`，退出 **0** |
-| 关键断言 | `runEffect({label:'model.call'})` 保持未完成；此时 `submitCommand({operation:'work.cancel'})` 被准入并完成，返回 `'cancelled'`，`elapsed < 1000ms`；长效果仍在飞 `activeEffects()` 等于 `['model.call']`；第二条命令也直接通过；释放后 `activeEffects()` 为 `[]` |
-| 移除会破坏 | 若 `runEffect` 与短命令共用同一串行队列，短命令的 completion 只能等长效果释放才 resolve → `elapsed` 不再 `< 1000`（测试失败），`activeEffects` 断言时序改变 |
-| dispatcher 侧同证 | `packages/core/test/dispatcher.integration.test.ts` › `long operations do not block commands (AC-056)` › **`answers a command within a second while a model call is in flight`**；过滤执行 `-t "answers a command within a second while a model call is in flight"` → `Tests 1 passed | 9 skipped (10)`，退出 **0**。断言：`mailbox.runEffect({label:'model.call:chief'})` 在飞时，dispatcher 写请求 1 秒内返回 `{ok:true,result:{status:'applied'}}`，`elapsed<1000`，`activeEffects()` 等于 `['model.call:chief']` |
-
-## 6. 新增 WP-01 修复复核（复评 NF-01/NF-02 与 T8 两项 P1）
-
-### 6.1 需求记录路径为文档目录（`data.md` §6 / `requirements.md` §1）
-
-- 源码：`packages/core/src/requirements.ts:31` `REQUIREMENT_RECORD_DIR = (id) => \`.agentdev/requirements/${id}\``，`:241` 以它为 `portableRef.path` 默认值，`:234` 使 `sourceRef.path` 指向同一目录。
-- 过滤执行：`pnpm exec vitest run --project integration packages/core/test/requirements.integration.test.ts -t "creates a local row and reports a needs_replan record"` → `Tests 1 passed | 9 skipped (10)`，退出 **0**。
-- 断言（`requirements.integration.test.ts:100-106`）：`outcome.row?.portableRef.path === \`.agentdev/requirements/${REQUIREMENT_ID}\``（目录、含 `.agentdev/` 前缀），`sourceRef` 同路径且 `hash===recordHash`。**若退回单文件 `requirements/<id>/requirement.json`（旧缺陷），该断言即刻失败。**
-
-### 6.2 事件 append 失败不留投影行（原子性）
-
-- 源码：`packages/core/src/requirements.ts:113` `return withTransaction(this.store.db, () => this.apply(input))`，行写入与 `events.append` 同事务。
-- 过滤执行：`... -t "writes the row and its event in one transaction"` → `Tests 1 passed | 9 skipped (10)`，退出 **0**。
-- 断言（`:210-226`）：注入 `events.append` 抛 `'event log unavailable'` → `failing.import` 抛出该错；`store.requirements.find(REQUIREMENT_ID)` 为 `undefined`（无「有行无事件」半写）；再以正常 projection 重试 `verdict==='new'`。**若去掉 `withTransaction` 包裹，行会残留 → 第一条断言失败。**
-
-### 6.3 连续迁移不因备份文件冲突（复评 NF-01）
-
-- 源码：`packages/storage/src/migrations.ts:153-159`（无回调但有 `backupPath`/`backupDir` 时调用 `backupDatabase`，文件名为 `pre-migration-v<来源版本>.sqlite`，已存在则复用）；`packages/storage/src/store.ts:173` 默认 `backupDir = <dataDir>/backups`。
-- 过滤执行：`pnpm exec vitest run --project integration packages/storage/test/migrations.integration.test.ts -t "keeps one backup per source version"` → `Tests 1 passed | 15 skipped (16)`，退出 **0**。
-- 断言（`:294-318`）：`runMigrations([m1],{backupDir})` → `[1]`；再 `runMigrations([m1,m2],{backupDir})` → `[2]`；`backups/pre-migration-v0.sqlite` 与 `backups/pre-migration-v1.sqlite` 同时存在；同版本重跑 `applied===[]`（复用副本、不冲突）。**若备份名固定为 `pre-migration.sqlite`，第二次升级会在 `VACUUM INTO` 处抛 `SqliteError: output file already exists` → 用例失败。** 独立复现见 §7 探针 C。
-
-### 6.4 冻结的 0001 checksum 一致（复评 NF-02）
-
-- 源码：`packages/storage/test/migrations.integration.test.ts:321-333` 把 `migrationChecksum(MIGRATIONS[0])` 钉为常量 `8de041504378a4caf4292a38f6d542100c7b97fe90a4e560d43a623fc98e2dff`。
-- 过滤执行：`... -t "freezes migration 0001"` → `Tests 1 passed | 15 skipped (16)`，退出 **0**。
-- 独立复核：§7 探针 C 用 `node:crypto` 直接重算 `SHA256(\`${version}\\0${name}\\0${sql}\`)`，结果与测试常量、`migrationChecksum()` 三者一致。仓库 `MIGRATIONS.length===1`，即当前仅 0001。
-
-## 7. 独立探针（开发者未编写，在仓库外 `/tmp/wp01-probes/` 针对 `pnpm build` 产物运行）
-
-三个探针均导入 `/Users/huyaohua/huyh/work/aigrouptool/packages/*/dist`（非 vitest 源码路径），脚本不落入仓库。全部退出 0。
-
-### 探针 A — AC-023/024：两个真实 Git 根 → 不同 projectId；子目录与符号链接归一 → 同一 id
-
-- 命令：`cd /tmp/wp01-probes && node probe-a.mjs`（真实 `git init` + commit 两个根；用 `resolveProjectIdentity`/`isSameProject`，另以 `node:crypto` 独立重算 `SHA256(realpath)[0:32]` 对照）
-- 退出码：**0**；末行 `PROBE_A_PASS`
-- 实测输出（节选）：
-
-```json
-{
-  "alphaProjectId": "d13643a97c3fcbc0e2ff3d20ba55bbeb",
-  "betaProjectId":  "3c026a8d5794d17703f7c344d7b4e06a",
-  "subdirProjectId": "d13643a97c3fcbc0e2ff3d20ba55bbeb",
-  "symlinkProjectId": "d13643a97c3fcbc0e2ff3d20ba55bbeb",
-  "checks": {
-    "two_roots_distinct_ids": true,
-    "subdir_same_id": true,
-    "subdir_canonical_root_equals_alpha": true,
-    "subdir_flag_true": true,
-    "symlink_same_id": true,
-    "trailing_separator_same_id": true,
-    "alpha_id_matches_independent_sha256": true,
-    "beta_id_matches_independent_sha256": true,
-    "ids_are_32_hex": true,
-    "git_root_reported": true
-  }
-}
-PROBE_A_PASS
+```
+### 1 丢应答重试 dispatcher
+ ✓ |integration| …dispatcher.integration.test.ts > write path (AC-055) > applies one write, then replays the same result for the same key 60ms
+      Tests  1 passed | 9 skipped (10)
+### 1 丢应答重试 ledger
+ ✓ |integration| …ledger.integration.test.ts > command ledger (AC-055) > replays the original result for the same key and payload 19ms
+      Tests  1 passed | 21 skipped (22)
+### 2 冲突键 dispatcher
+ ✓ |integration| …dispatcher.integration.test.ts > write path (AC-055) > refuses the same key with a different payload 45ms
+      Tests  1 passed | 9 skipped (10)
+### 2 冲突键 ledger
+ ✓ |integration| …ledger.integration.test.ts > command ledger (AC-055) > refuses the same key with a different payload or another caller 16ms
+      Tests  1 passed | 21 skipped (22)
+### 3 背压 soft / hard
+ ✓ |integration| …events-hub.integration.test.ts > connection back-pressure (AC-059) > coalesces transient frames once the soft limit is crossed 30ms
+ ✓ |integration| …events-hub.integration.test.ts > connection back-pressure (AC-059) > closes the connection at the hard limit without dropping durable events 43ms
+      Tests  1 passed | 17 skipped (18)   (各)
+### 4 迁移失败
+ ✓ |integration| …migrations.integration.test.ts > migrations > rolls a failed migration back and reports its version 32ms
+      Tests  1 passed | 16 skipped (17)
+### 5 长操作不阻塞 mailbox / dispatcher
+ ✓ |unit| …mailbox.test.ts > ProjectMailbox > answers a new command while a long effect is still running (AC-056) 4ms
+      Tests  1 passed | 7 skipped (8)
+ ✓ |integration| …dispatcher.integration.test.ts > long operations do not block commands (AC-056) > answers a command within a second while a model call is in flight 44ms
+      Tests  1 passed | 9 skipped (10)
 ```
 
-- 判读：两真实根 id 不同（`d136…` vs `3c02…`）；`alpha/src/deep` 与指向 `alpha` 的符号链接均归一为同一 `projectId` 与同一 `canonicalRoot`；尾斜杠同样归一；id 与独立 SHA256 前 32 位一致。**passed**。
+三轮修复（按名过滤，退出码均为 0）：
 
-### 探针 B — AC-055：同键同载荷重放 → 恰好 1 event / 1 outbox
-
-- 命令：`cd /tmp/wp01-probes && node probe-b.mjs`（真实 `CommandDispatcher` + `ProjectStore` + 真实 SQLite 文件；行数用裸 SQL `SELECT COUNT(*)` 读取，不经过应用自身 helper）
-- 退出码：**0**；末行 `PROBE_B_PASS`
-- 实测输出（节选）：
-
-```json
-{
-  "retry": { "v":1,"type":"response","id":"probe-req","ok":true,
-    "result": { "status":"applied","entityId":"01a08e42-19dc-7591-9f96-321cd73b5e15","version":2 } },
-  "conflict": { "v":1,"type":"response","id":"probe-req-2","ok":false,
-    "error": { "code":"IDEMPOTENCY_CONFLICT",
-      "message":"idempotency key probe-key-1 was used with a different payload","retryable":false } },
-  "handlerRuns": 1,
-  "tokensUsed": 7,
-  "rawCounts": {
-    "afterFirst":    { "event":1, "outbox":1, "budget":1 },
-    "afterRetry":    { "event":1, "outbox":1, "budget":1 },
-    "afterConflict": { "event":1, "outbox":1, "budget":1 }
-  },
-  "checks": {
-    "first_is_applied": true, "retry_response_identical": true,
-    "after_first_exactly_one_event": true, "after_first_exactly_one_outbox": true,
-    "after_retry_still_one_event": true, "after_retry_still_one_outbox": true,
-    "handler_ran_exactly_once": true, "delta_applied_once": true,
-    "conflict_is_idempotency_conflict": true,
-    "conflict_added_no_event": true, "conflict_added_no_outbox": true,
-    "conflict_added_no_domain_row": true
-  }
-}
-PROBE_B_PASS
+```
+### F1a 需求记录路径
+ ✓ |integration| …requirements.integration.test.ts > requirement projection > creates a local row and reports a needs_replan record without a Work 22ms
+### F1b 事件append失败不留投影行
+ ✓ |integration| …requirements.integration.test.ts > requirement projection > writes the row and its event in one transaction 20ms
+### F2a 部分残留替换+有效副本复用
+ ✓ |integration| …migrations.integration.test.ts > successive upgrades > replaces a partial leftover and reuses a verified copy 12ms
+### F2b 连续迁移不冲突
+ ✓ |integration| …migrations.integration.test.ts > successive upgrades > keeps one backup per source version instead of colliding 10ms
+### F2c 冻结0001 checksum
+ ✓ |integration| …migrations.integration.test.ts > frozen migrations > freezes migration 0001 and requires later changes to append a migration 6ms
+### F3a events-hub poll 分类
+ ✓ |integration| …events-hub.integration.test.ts > scope change (AC-060) > does not disguise a storage failure as a resync request 24ms
+### F3b events-hub subscribe 分类
+ ✓ |integration| …events-hub.integration.test.ts > scope change (AC-060) > classifies errors of a cursor-based subscribe the same way 34ms
+      Tests  1 passed | N skipped   (每条)
 ```
 
-- 判读：首次写入 1 event / 1 outbox；同键同载荷重放返回逐字段相同响应，三张表各仍 1 行，handler 只执行 1 次，`tokensUsed` 只加一次（7）；同键异载荷返回 `IDEMPOTENCY_CONFLICT` 且不新增任何行。**passed**。
+自建探针与 checksum（仓库外 `/tmp/wp01-t9/probes/`，退出码均为 0；原始 JSON 见 §7）：
 
-### 探针 C — AC-065：第二次升级的迁移前备份不冲突 + 0001 checksum 独立重算
-
-- 命令：`cd /tmp/wp01-probes && node probe-c.mjs`（合成 m1/m2/m3 走真实 `runMigrations`；另测真实 `ProjectStore.open` 的默认备份接线；用 `node:crypto` 独立重算 0001 校验和）
-- 退出码：**0**；末行 `PROBE_C_PASS`
-- 实测输出（节选）：
-
-```json
-{
-  "applied": [[1],[2],[3],[]],
-  "backupExists": [true, true, true],
-  "backups": [
-    { "ok": true, "tables": [] },
-    { "ok": true, "tables": ["step_1"] },
-    { "ok": true, "tables": ["step_1","step_2"] }
-  ],
-  "defaultBackupExists": true,
-  "defaultBackupUsable": true,
-  "reportedChecksum":    "8de041504378a4caf4292a38f6d542100c7b97fe90a4e560d43a623fc98e2dff",
-  "independentChecksum": "8de041504378a4caf4292a38f6d542100c7b97fe90a4e560d43a623fc98e2dff",
-  "checks": {
-    "first_upgrade_applied": true, "second_upgrade_applied": true, "third_upgrade_applied": true,
-    "resumed_attempt_applied_nothing": true,
-    "v0_backup_exists": true, "v1_backup_exists": true, "v2_backup_exists": true,
-    "v0_backup_is_pre_migration_empty": true,
-    "v1_backup_has_step_1_only": true,
-    "v2_backup_has_step_1_and_2": true,
-    "store_open_default_backup_written": true, "store_open_default_backup_usable": true,
-    "frozen_checksum_matches_reported_constant": true,
-    "independent_sha256_matches_frozen_constant": true,
-    "migrations_length_is_one": true
-  }
-}
-PROBE_C_PASS
 ```
-
-- 判读：连续三次升级各自留下 `pre-migration-v0/v1/v2.sqlite`，均为可读 SQLite，且内容确为**升级前**状态（v0 无业务表、v1 仅 `step_1`、v2 含 `step_1+step_2`）；同版本重跑不再备份、不冲突（`applied=[]`）；真实 `ProjectStore.open` 默认写出并可用 `backups/pre-migration-v0.sqlite`；0001 校验和独立重算一致。**passed**。
-- 说明：`not_covered` 项——「迁移失败后守护进程显示版本且不启动 Runner」的进程级行为属 WP-09/WP-10，本探针只到库级。
-
-## 8. 验收对照（AC-023/024/055/056/059/060/065/078/092）
-
-判定规则：`passed` = 该 AC 在 **WP-01 本包必验范围**内各行为均有已执行证据；`not_covered` = 至少一条 Then 子句在本仓库当前不存在可执行证据（附后续归属 WP）。所有 `passed` 项在 §4–§7 均有对应命令输出。
-
-| AC | 结果 | 证明文件 / 用例 | 说明 |
-|---|---|---|---|
-| AC-023 无注册多项目 | **passed** | `packages/core/test/identity.integration.test.ts` › `independent projects (AC-023)` › `gives two real roots distinct ids and independent databases`（整文件 9/9 通过）；探针 A | 两个真实 `git init` 根 → 不同 32 位 projectId；两独立 `ProjectStore` 各自只含本项目行，交叉 `find` 返回 undefined。“切换不影响运行”的运行时子句无入口，归 **WP-09/WP-10**（§9.1） |
-| AC-024 路径识别 | **passed** | `identity.integration.test.ts` › `canonical roots (AC-024)`（`normalizes a subdirectory to the repository root`、`normalizes a trailing separator and a symlinked path`、`derives the project id from the canonical root hash`）与 `nested repositories (AC-024)` 4 例；过滤 `-t "AC-023|AC-024"` → `9 passed (9)`；探针 A | 子目录/符号链接/尾斜杠归一同 projectId；嵌套仓库被识别并从父路径排除（`nestedRepoExclusions`/`isInsideNestedRepo`/`requireOwnIdentity`），嵌套 id 不同 |
-| AC-055 幂等接受 | **passed** | `dispatcher.integration.test.ts` › `applies one write, then replays the same result for the same key`、`refuses the same key with a different payload`；`ledger.integration.test.ts` › `replays the original result for the same key and payload`、`refuses the same key with a different payload or another caller`；探针 B | 同键同载荷返回同实体/同结果且副作用只发生一次（event/outbox 不重复，裸 SQL 计数确认）；同键异载荷冲突且不产生副作用 |
-| AC-056 Mailbox 非阻塞 | **passed** | `packages/core/test/mailbox.test.ts` › `answers a new command while a long effect is still running (AC-056)`（`elapsed<1000`）；`dispatcher.integration.test.ts` › `long operations do not block commands (AC-056)` › `answers a command within a second while a model call is in flight` | 长模型/效果在飞时，同 Project 短命令 1 秒内被准入并完成，不排在长任务之后 |
-| AC-059 背压 | **passed** | `packages/core/test/events-hub.integration.test.ts` › `connection back-pressure (AC-059)`：`coalesces transient frames once the soft limit is crossed`、`closes the connection at the hard limit without dropping durable events`、`keeps default limits at the documented 2 MiB / 8 MiB`（过滤 `-t "back-pressure"` → `3 passed | 14 skipped`） | 软限合并/去重临时帧；硬限关闭慢连接；先落库的持久事件在断开后仍被新订阅读到（关键事件持久、其他订阅不受影响）。真实 WS 帧发送归 **WP-09** |
-| AC-060 范围订阅 | **passed** | `events-hub.integration.test.ts` › `scope change (AC-060)` › `answers a fresh snapshot at a new watermark and covers later events`；`scope snapshots and watermarks` › `requires a resync when the cursor was truncated`（`RESYNC_REQUIRED`、订阅数归 0）、`replays only the events after the client cursor and only for its scope`、`returns a consistent snapshot with the watermark as its cursor`；`reports an empty batch with its scan watermark`、`refuses a backward ack and clamps to the watermark`（过滤 `-t "AC-060"` → `6 passed | 11 skipped`） | 过滤 ACK 后扩大范围始终返回「新快照 + 新水位 C」，C 之后事件完整覆盖新增范围；游标被保留期截断时明确 `RESYNC_REQUIRED` |
-| AC-065 Migration | **passed** | `packages/storage/test/migrations.integration.test.ts`：`applies the core schema and records a checksum`、`backs up before pending work and writes a usable copy`、`stops on a checksum mismatch instead of starting`、`refuses a database written by a newer build`、`rolls a failed migration back and reports its version`、`keeps one backup per source version instead of colliding`、`freezes migration 0001 and requires later changes to append a migration`、`is idempotent on the second start`、`applies the documented pragmas`、`schema matches the entity contracts` 3 例、`database-level invariants` 4 例（整文件 16/16）；探针 C | 迁移前备份（按来源版本命名，连续升级不冲突）并逐条事务迁移；checksum 不一致 / 文件版本超前 → 停止启动；迁移中途失败回滚且报告版本；0001 checksum 冻结且独立重算一致 |
-| AC-078 认证生命周期 | **not_covered**（部分通过） | 已通过部分：`packages/core/test/auth.test.ts`（18/18，unit）— 过滤 `-t "request authentication"` → `7 passed | 11 skipped`；代表用例 `refuses an unknown cookie and an expired session`（`UNAUTHENTICATED`/`AUTH_EXPIRED`）、`requires a matching CSRF token for writes`（403 `NOT_AUTHORIZED`）、`rejects a mismatched Origin against the configured allowlist`、`limits failures to five per IP per minute`、`is created 0600 and shown exactly once` | 未覆盖子句：AC 的 When 是「HTTP/WS 写请求」，但仓库当前只有 `apps/cli`、`apps/runner`，无 HTTP/WS 服务端；上述测试直接调用 `AuthService`，未经真实 HTTP/WS 传输；「后台 Work 保留」亦无执行证据。归属 **WP-09**（协议/BFF 接线）与 WP-02/03（Work 执行），**WP-10** 整体复验 |
-| AC-092 需求导入冲突与幂等 | **not_covered**（部分通过） | 已通过部分：`packages/core/test/requirements.integration.test.ts`（10/10）— `imports the same record twice without a second write`、`refuses the same recordVersion with different content`（`requirement.save_failed` + `reason:'REQUIREMENT_CONFLICT'`，行未改）、`treats an older recordVersion as a conflict, not a downgrade`、`rejects a malformed record before touching the database`、`hashes the exact requirement.json bytes when the caller supplies them`、`writes the row and its event in one transaction`、`creates a local row and reports a needs_replan record without a Work` | 未覆盖子句：Git 往返——「拉取已更新 Git 但投影未刷新时保存必须拒绝覆盖」「用户修复 Git 后显式导入可解除冲突，再基于新投影保存」，以及 `REQUIREMENT_PATH_IGNORED`/`LEGACY_REQUIREMENT_FORMAT`。Plan T8 明确「Git 往返留给 WP-04/WP-08」。归属 **WP-04/WP-08**，**WP-10** 复验 |
-
-## 9. 未覆盖项（附归属工作包）
-
-1. **AC-078 的传输层子句**：真实 HTTP/WS 写请求的拒绝与「后台 Work 保留」。`apps/` 仅 `cli`、`runner`，无 daemon/BFF/WS 服务端；`AuthService` 只做请求判定。归属 **WP-09**（协议与 BFF 接线）；「后台 Work 保留」另需 WP-02/03，最终 **WP-10** 复验。
-2. **AC-092 的 Git 往返子句**：投影未刷新时保存拒绝覆盖、修复 Git 后显式导入解除冲突、`REQUIREMENT_PATH_IGNORED`/`LEGACY_REQUIREMENT_FORMAT`。`packages/core/src/requirements.ts` 只处理本机投影判定。归属 **WP-04/WP-08**，**WP-10** 复验。
-3. **AC-023「切换不影响运行」**：现有证据是两个独立 store 并存互不串染；真实运行中切换打开项目（运行时路由/生命周期）尚无入口。归属 **WP-09/WP-10**。
-4. **EventHub/ConnectionQueue 的真实 WS 传输绑定**：`packages/core/src/events-hub.ts` 为内存订阅 + SQLite 事件日志，`ConnectionQueue` 为进程内输出队列，无真实 WebSocket 连接/帧发送。归属 **WP-09**。
-5. **迁移失败的进程级守护**：「显示版本、不启动 Runner」库级已具备（`SCHEMA_VERSION_AHEAD`/`MIGRATION_CHECKSUM_MISMATCH`/`MIGRATION_FAILED`），但 daemon 启动路径行为属 **WP-09/WP-10**。
-6. **真实 Provider 纵向任务与三条命令**：`pnpm test:e2e`（WP-09）、`pnpm test:acceptance`（WP-10）、`pnpm test:live`（WP-10）按契约 `NOT_IMPLEMENTED` 退出 1（§4.8）。
-7. **`docs/INDEX.md`「实现起点」状态**：该节仍称「Core、…协议与存储…仍未实现」，与 WP-01 已落地的 `packages/{domain,storage,core}` 不一致；`pnpm docs:check` 只校验链接/引用完整性，不校验该叙述。属 **Settlement** 待办，非本包命令或 AC 失败；本次复核不改 `docs/**`。
-8. **跨服务器 `metadataHash` 取文件字节的调用方**：`metadataHashOf(...,rawMetadata)` 能力已具备并有测试，但 Git 读取方不存在（WP-04/WP-08）。
-
-## 10. 复核过程中的观察（不影响判定）
-
-- `implementation.md` §3 的集成计数「10 文件 / 115 用例（14 迁移 + 21 仓储/账本 + 9 分发 + 16 事件订阅 + 9 身份 + 8 需求投影）」既与括注（相加 77）自相矛盾，也与本次实测 **122**（16/22/10/17/10/9/11/10/8/9）不符；`:65`「dispatcher 10」、`:109`「需求投影 10」已更新，但 §3 汇总行仍过期。属结算（Settlement）待办，不是命令或 AC 失败。
-- `packages/storage/test/migrations.integration.test.ts` 的 `backups` 命名（`pre-migration-v<来源版本>.sqlite`）与 `discovery.md` DC-21 描述一致；探针 C 使用合成 0002/0003 复现，仓库当前确只有 0001（`MIGRATIONS.length===1`），故「第二次升级」在当前测试集内不会被自然触发，只能由该专用用例与仓库外探针覆盖。
-- 本次复核仅新建/替换 `.agentdev/work/WP-01/test-report.md` 一个 tracked 文件；命令执行前后 `git status --short` 除该文件外为空，未触碰 `packages/`、`apps/`、`docs/` 与根配置。
-
-## 11. 结论
-
-**PASS**（就 WP-01「本包必验范围全部通过」与 `implementation.md` §3 的退出条件而言）。
-
-- 8 类必需命令全部按契约表现：1–7 退出 0（unit 13/173、integration 10/122，含真实 Docker 容器 9 例）；`test:e2e`/`test:acceptance`/`test:live` 逐字 `NOT_IMPLEMENTED` 退出 1 并分别指向 WP-09/WP-10（§3、§4）。
-- 五项必需失败测试（丢应答重试、冲突键、慢连接、迁移失败、长操作不阻塞）均真实存在，单独名称过滤复跑各 `1 passed`（慢连接为 `3 passed`），断言与「移除即失败」路径已逐条核对（§5）。
-- 四项新增修复均独立复跑通过：需求记录路径为 `.agentdev/requirements/<id>` 目录、事件 append 失败不留投影行、连续迁移备份按来源版本命名不冲突、0001 checksum 冻结且独立重算一致（§6）。
-- 三个仓库外独立探针全部通过：真实 Git 根身份归一（AC-023/024）、同键重放仅 1 event/1 outbox（AC-055）、第二次升级备份与冻结校验和（AC-065）（§7）。
-- 9 项关联 AC 中 7 项 `passed`；AC-078、AC-092 因「传输层 / Git 往返」子句在当前仓库无可执行证据判为 `not_covered`（部分行为已通过），其剩余子句归属 **WP-09**（AC-078）与 **WP-04/WP-08**（AC-092），并按 `implementation.md`「发布回归统一在 WP-10」在 WP-10 复验。
-- 按 `docs/rules/workflow.md` §6，`not_covered` 项放行需用户明确风险处置；本判定仅指 WP-01 本包必验范围与退出条件，不等价于 WP-10 整体发布验收。
-
-## 附：证据文件索引（本次实测）
-
-| 文件 | 实测规模/命令 | 关联 |
-|---|---|---|
-| `packages/core/test/dispatcher.integration.test.ts` | 10 例通过；过滤 4 次各 1 passed | AC-055、AC-056 |
-| `packages/storage/test/ledger.integration.test.ts` | 22 例通过；过滤 2 次各 1 passed | AC-055、AC-065 |
-| `packages/core/test/events-hub.integration.test.ts` | 17 例通过；`-t back-pressure` 3 passed，`-t AC-060` 6 passed | AC-059、AC-060 |
-| `packages/storage/test/migrations.integration.test.ts` | 16 例通过；过滤 4 次各 1 passed | AC-065、NF-01/NF-02 |
-| `packages/core/test/mailbox.test.ts` | 8 例通过；过滤 1 次 1 passed | AC-056 |
-| `packages/core/test/identity.integration.test.ts` | 9 例通过；`-t "AC-023|AC-024"` 9 passed | AC-023、AC-024 |
-| `packages/core/test/requirements.integration.test.ts` | 10 例通过；过滤 2 次各 1 passed | AC-092（投影部分） |
-| `packages/core/test/auth.test.ts` | 18 例通过；`-t "request authentication"` 7 passed | AC-078（判定核心） |
-| `/tmp/wp01-probes/probe-a.mjs` | 退出 0，`PROBE_A_PASS` | AC-023/024 |
-| `/tmp/wp01-probes/probe-b.mjs` | 退出 0，`PROBE_B_PASS` | AC-055 |
-| `/tmp/wp01-probes/probe-c.mjs` | 退出 0，`PROBE_C_PASS` | AC-065、NF-01/NF-02 |
+$ node probe-a.mjs    # PROBE_a_EXIT=0   A 7/7 passed, failed: 0
+$ node probe-b.mjs    # PROBE_b_EXIT=0   B 6/6 passed, failed: 0
+$ node probe-c.mjs    # PROBE_c_EXIT=0   C 7/7 passed, failed: 0
+$ node -e "…migrationChecksum(MIGRATIONS[0])…"   # match:true  8de04150…
+```

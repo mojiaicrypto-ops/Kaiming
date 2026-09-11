@@ -382,3 +382,137 @@ $ git diff --name-only 79d5895..c3a581f -- docs apps webui docker package.json
 - 复评开始时 `git status --short` 无输出（工作区干净），满足任务前置；HEAD/tree 实测为 `9c634f0…` / `981746c…`。
 - 复评期间（09:19:32）**另一 Test 角色 Run 并发完整替换** `.agentdev/work/WP-01/test-report.md`，新内容绑定 HEAD `9c634f0`/`981746c`。该文件非代码或契约文档；`packages/**`、`apps/**`、`docs/**`、`package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`vitest.config.ts`、`tsconfig.json` 在复评前后均无改动（`git diff --name-only -- <上述路径>` 为空），因此本复评的代码对象仍是 HEAD tree `981746c…`。
 - 本人未修改 `test-report.md`，也不回退它（属另一角色的写入边界）。复评结束时工作区仅 ` M .agentdev/work/WP-01/review.md`（本文）与 ` M .agentdev/work/WP-01/test-report.md`（Test 角色写入）。
+
+## 4. 复评三（re-review 3）
+
+- 复评对象：commit `e02fb8e6c4972e41f5aba9695d765a9f25723eec`，tree `c201f4276c1507fd41f0dd860df91d915c86ac6c`（`git rev-parse HEAD` / `git rev-parse HEAD^{tree}` 实测）。
+- 工作区：`git status --short` 无输出（复评开始与结束时均干净）；仓库 tracked 文件仅本文追加。
+- 上游对象：`9c634f0`/`981746c`（§3 复评对象）、`8e96ee2`/`f1589696…`（§2）、`c3a581f`/`196f56ff…`（§1）。
+- 方法：独立上下文，不读开发聊天。读 §1–§3、`implementation.md` 处置表（§2 的 RE/NF2 表）、`git show e02fb8e` 全量 diff（6 文件、+505/−197）、HEAD 源码/测试与 `data.md` §5、`reliability.md` §8、AC-065；在 `/tmp/wp01-r3/head` 的 HEAD `git archive` 副本（`node_modules` 符号链接）中运行 **12 项自建探针** 与 **4 组「回退修复」变异实验**，仓库代码未改动（每次变异后用 `git show HEAD:<file>` 比对还原，逐字节一致）。
+- 本轮 commit 的改动面：`packages/storage/src/migrations.ts`（备份护栏与原子发布）、两个测试文件、`implementation.md`；`schema.ts`、`requirements.ts`、`events-hub.ts`（除测试注入目标外）等 RE 相关源码未动。
+
+### 4.1 重点项 NF2-01：备份校验与原子发布（任务书 a–e，自建探针）
+
+探针文件：`/tmp/wp01-r3/head/packages/storage/test/r3-probe.integration.test.ts`（12 用例全绿，退出 0；仅在 scratch，不入库）。命令：`node_modules/.bin/vitest run --project integration packages/storage/test/r3-probe.integration.test.ts`。
+
+| 探针 | 场景 | 实测结果 | 判定 |
+|---|---|---|---|
+| a | 预置 **0 字节** `pre-migration-v0.sqlite` | `applied=[1]`；目标被替换为 8192 字节真库；目录内仅该文件 | ✅ 修复成立 |
+| b | 预置 **4096 字节 'A' 垃圾**（非空、非库） | 被替换；重开副本 `integrity_check=ok`、ledger=[]；大小 8192 | ✅ |
+| b2 | 预置**真实多页库截断一半**（331776→截到 4096 边界） | 被拒绝并替换为 8192 字节新副本；副本 `integrity_check=ok`、ledger=[] | ✅ 说明护栏不只看「文件存在」 |
+| c | 源版本（v1）上预置**带哨兵表的有效副本** | v1→v2 升级后副本**字节完全不变**（`after.equals(before)`）、哨兵表仍在、`step_1` 不存在、`backupPath` 指向该副本 | ✅ 复用而非重写 |
+| c2 | 另一个已存在的有效副本（v0 命名） | 第二次升级（不同目标名）后仍存在且字节不变 | ✅ 有效副本不被 `rmSync` |
+| d | 预置陈旧 `pre-migration-v0.sqlite.partial` | 成功运行后备份目录 = `["pre-migration-v0.sqlite"]`，无 `.partial` 残留 | ✅（替换分支；复用分支见 NF3-03） |
+| e | 成功迁移后的副本可读性与状态 | 只读打开 `integrity_check=ok`、有 `schema_migrations`、**无** `step_1`、ledger=[]；同刻 live 库 ledger=[1] | ✅ 副本确为迁移前状态 |
+| g | **无待迁移**时备份目标是否被触碰 | 待迁移时 0 字节/垃圾目标被修复；随后把同一目标写成 `garbage-2` 再跑（`applied=[]`、无 `backupPath`）→ 文件仍为 `garbage-2` | ✅ 整个备份块（含 `integrity_check`）只在待迁移路径执行，**不在每次启动执行** |
+
+结论：NF2-01 的核心缺陷（中断的 `VACUUM INTO` 残留使升级前备份被静默跳过）已真正修复；副本先写 `.partial` 再 `rename` 发布，成功路径不残留 `.partial`，复用前先验证可读性与完整性。`integrity_check` 开销仅在待迁移路径、且仅在目标已存在时发生；实测 52.8 MiB 副本约 **110 ms**（`sqlite-cost-probe.mjs`），可接受。
+
+### 4.2 NF2-02 / NF2-03：新用例的非空泛性（回退修复实验）
+
+变异均在 scratch 副本进行，`packages/storage/src/migrations.ts` 与 `packages/core/src/events-hub.ts` 变异后用 `git show HEAD:<file>` 逐字节还原。
+
+| 实验 | 变异 | 结果 | 说明 |
+|---|---|---|---|
+| A（回退 NF2-01） | `if (isUsableBackup(target))` → `if (existsSync(target))` | `migrations.integration.test.ts` **1 failed / 16 passed**，失败在 `:316`（0 字节副本上 `schema_migrations` 期望 defined 实得 undefined） | 证明「0 字节残留被替换」断言受被测代码支配 |
+| C（反向变异） | `if (isUsableBackup(target))` → `if (false)`（永远重取备份） | 同文件 **1 failed / 16 passed**，失败在 `:334`（哨兵表期望 defined 实得 undefined） | 证明哨兵断言确实约束「复用而非重写」 |
+| B（回退 NF2-03） | 删除 `subscribe` 分支的 `if (!(error instanceof ResyncRequiredError)) throw error;` | `events-hub.integration.test.ts` **1 failed / 17 passed**：`expected [Function] to throw error including 'disk failure' but got 'cursor 1 is no longer retained'` | 新负例非空泛 |
+| P（NF-03 复查） | 删除 `poll` 分支同一过滤 | **1 failed / 17 passed**：`... but got 'subscription cursor was truncated'` | RE-14/NF-03 结论未回归 |
+
+诚实说明：哨兵断言（实验 C）只能区分「复用 vs 重写」，不能区分 `isUsableBackup` 与 `existsSync`（两者都会复用），因此 NF2-02 的证明力来自「0 字节替换（A）+ 哨兵（C）」的组合；§3 所指「第三次调用因无待迁移提前返回」的问题已消除——本用例第二次调用确有 pending 迁移（v1→v2），变异 A 下会真实走到备份分支并失败。
+
+### 4.3 e02fb8e 新缺陷审查（任务书第 4 项）
+
+| 审查点 | 实测/结论 |
+|---|---|
+| 备份跨**不同来源版本**被复用 | **存在，但仅在显式 `backupPath` 且无 hook 时**。探针 F（走 `runMigrations(db,[m1,m2],{backupPath: 固定路径})`）：v0→v1 生成副本后，v1→v2 报 `backupPath` 仍为该文件且与 v0 副本**逐字节相同**（副本内部 ledger=[]，即 v0 而非 v1）。默认路径不受影响：文件名内嵌 `currentVersion`，来源版本必然匹配。见 NF3-01。 |
+| 原子 rename 是否被遗留 `.partial` 击败 | **不会**：替换分支先 `rmSync(partial,{force:true})` 再写、再 rename；预置旧 `.partial` 的实验 d 成功且无残留。复用分支不清理 `.partial`（仅垃圾文件，见 NF3-03）。 |
+| `rmSync` 是否删掉有效副本 | **不会**（探针 c/c2）：有效副本一律走复用分支；被删除的只有 `isUsableBackup=false` 的对象。唯一反向偏差是 1 字节文件被误判为「有效」（NF3-02）。 |
+| `integrity_check` 是否每次启动都跑 | **否**，只在有 pending 迁移时（探针 g + `migrations.ts:170` 的提前返回）；单次成本约 110 ms/52.8 MiB。 |
+| 其他 `runMigrations` 调用方 | 全仓非测试调用方只有 `ProjectStore.open`（`store.ts:170`，传默认 `backupDir`，版本化命名 → 安全）；`packages/core/test/*`、`packages/storage/test/ledger` 传 `backup: () => undefined` 的 hook，走 hook 分支、完全不经过新护栏。故该信任问题仅限「显式 `backupPath` 且不传 hook」这一未使用的组合（NF3-01）。 |
+| 其他回归 | `:memory:` + `backupPath` 现在会抛裸 `ENOENT`（NF3-04）；仓库无该用法（`sqlite.ts:16` 仅注明测试可用 `:memory:`，`backupDatabase` 对 `:memory:` 主动 no-op）。 |
+
+### 4.4 NF-04：用例计数复核（按文件内容与实跑）
+
+- **unit**：13 文件 / **173** 用例（`pnpm test:unit` 实跑 13 passed / 173 passed），与 `implementation.md:155` 一致。
+- **integration**：10 文件 / **124** 用例。逐文件计数（`grep -cE "^\s*(it|test)(\.(each|skip|only|todo))?\s*\("`，与实跑一致）：migrations **17**、ledger **22**、dispatcher **10**、events-hub **18**、identity **9**、requirements **10**（WP-01 六文件合计 86）、session **11**、attempt **10**、doctor **8**、container **9**（WP-00 四文件合计 38）；86+38=**124**。
+- `implementation.md:156` 的「10 文件 / 124 用例（17+22+10+18+9+10；另含 11/10/8/9）」逐项吻合；`§T3:41`（17）、`§T4:55`（22）、`§T6:78`（18）、`:65`（dispatcher 10）、`:109`（需求投影 10）、`:18`（entities 12）、`:30`（domain 28）、`:95`（auth 18 / identity 9）均一致。
+- 结论：**NF-04 已完全修复**（§3 遗留的 `:147` 已按实测更新为 `:156`）。注：unit 的「文件内 `it(` 计数」与运行数不同（`it.each` 展开），故 unit 用例数只以实跑 173 为准；integration 各文件两者一致。
+
+### 4.5 首次与二次复评发现逐项判定（RE-01…RE-14、NF-01…NF-05、NF2-01…NF2-03）
+
+e02fb8e 未触碰下列源码，除注明外均为「HEAD 复核 + 本次 6 个集成文件/unit 实跑」确认未回归。
+
+| id | 原级别 | 判定 | HEAD 证据（本轮实测/复核） |
+|---|---|---|---|
+| RE-01 | P1 | **verified** | `requirements.ts:31/35/234/238` 仍为目录 `.agentdev/requirements/<id>`；相关用例在本次 6 文件实跑中通过 |
+| RE-02 | P1 | **verified** | `requirements.ts:113` `withTransaction(this.store.db, () => this.apply(input))`；「事件失败不留行」用例通过 |
+| RE-03 | P2 | **verified** | `schema.ts:58-64` `UPDATE_BLOCKED_TABLES` 含 `assessment`；不可变负例通过（`DELETE_BLOCKED_TABLES` 仍不含 assessment，属既有观察项，非本次范围） |
+| RE-04 | P2 | **verified** | `store.ts:173` 默认传 `backupDir: defaultBackupDir(dataDir)`；ledger 22 用例（含默认接线用例）实跑通过 |
+| RE-05 | P2 | **verified** | `requirements.ts:79-88` 支持 `rawMetadata` 原始字节；字节 Hash 用例通过（调用方义务仍归 WP-04/WP-08，DC-23） |
+| RE-06 | P2 | **verified** | `transitions.ts:47-48` 含 `review: ['test','done','develop']`、`test: ['done','develop']` |
+| RE-07 | P2 | **verified** | `auth.ts:152` 重载返回 `new InstallationCredential(path, undefined)`；auth 18 用例通过 |
+| RE-08 | P2 | **verified** | `dispatcher.ts:52/172` `scope` 区分 + 缺 `projectId` 返回 VALIDATION_ERROR；dispatcher 10 用例通过 |
+| RE-09 | P2 | **verified（已完全修复）** | 范围矛盾已消除，计数按实测更新；本轮 NF-04 复核全部吻合（§4.4） |
+| RE-10 | P3 | **verified** | `dispatcher.ts:254` `return outcome.response;`（死三元已删） |
+| RE-11 | P3 | **accepted_risk_deferred（归 WP-09）** | 文档不一致仍在，`discovery.md` DC-18 有记录与路由 |
+| RE-12 | P3 | **accepted_risk_deferred（归 WP-02/WP-06）** | `structures.ts` `productRef?`/`rollback` 可空仍在，`discovery.md` DC-19 有记录与路由 |
+| RE-13 | P3 | **verified（残留注释笔误）** | `system.ts:136` 用 `operationKindSchema`；`:135` 注释仍写 “eight operation kinds”（实为 7），属既有 P3 文案瑕疵，非回归 |
+| RE-14 | P3 | **verified（两条分支均非空泛）** | `events-hub.ts:270`（subscribe）、`:339`（poll）仅转换 `ResyncRequiredError`；变异 B/P 分别使对应用例失败（§4.2） |
+| NF-01 | P1 | **verified** | 版本化命名 + 默认接线；探针 a/b2/c/e/g 全绿（§4.1） |
+| NF-02 | P2 | **verified** | `frozen migrations` 用例实跑通过；e02fb8e 未改 `schema.ts`，冻结校验和 `8de04150…` 未变 |
+| NF-03 | P3 | **verified** | poll 分支非空泛（变异 P，1 failed/17），未回归 |
+| NF-04 | P3 | **verified（本轮完全修复）** | 见 §4.4，unit 173、integration 124 与逐项计数全部吻合 |
+| NF-05 | P3 | **① verified ② 回归（见 NF3-05）** | ① `discovery.md` 含 DC-18…DC-25 且路由完整；② `test-report.md:1` 仍绑定 `9c634f0`/`981746c`，不覆盖 e02fb8e 树 |
+| NF2-01 | P2 | **verified（已修复）** | 探针 a/b/b2/c/c2/d/e/g + 变异 A/C（§4.1/§4.2） |
+| NF2-02 | P3 | **verified（已修复）** | 真实待迁移 + 哨兵表；变异 A/C 使该用例失败 |
+| NF2-03 | P3 | **verified（已修复）** | 新负例在变异 B 下失败（1 failed/17） |
+
+### 4.6 复评三新发现（NF3-xx）
+
+| id | severity | target | 描述 | 证据 | blocking |
+|---|---|---|---|---|---|
+| **NF3-01** | **P3** | `migrations.ts:178-195`；`RunMigrationsOptions.backupPath` | 显式 `backupPath` 且无 `backup` hook 时，复用判定只校验「可读且 `integrity_check=ok`」，不校验副本的**来源版本**。固定路径在第二次升级时会把 v0 副本当作 v1→v2 的「升级前副本」返回。默认路径（`ProjectStore.open` 的 `backupDir`，文件名含版本）不受影响，仓库内也无该用法（唯一生产调用方走默认路径，测试调用方传 hook），故不阻断 WP-01 验收；但 `backupPath` 的注释承诺「caller 不会因忘记 hook 而跳过备份」，此处会返回过期副本。建议：复用前比对副本的 `schema_migrations` 最高版本 == `currentVersion`（或对显式 `backupPath` 强制 `.partial` + rename 重取）。 | 探针 F：v0→v1 后 v1→v2 的 `backupPath` 与 v0 副本逐字节相同，副本 ledger=[] | no |
+| **NF3-02** | **P3** | `migrations.ts:24-37` | 1 字节残留文件被 `isUsableBackup` 判为可用：better-sqlite3/SQLite 把 1 字节文件当作**空数据库**，`integrity_check` 返回 `ok`、`sqlite_master` 为空，于是被复用为「备份」（`size===0` 只挡了 0 字节）。2…4095 字节垃圾与真实截断均被正确拒绝（截断到 4096 边界会 `database disk image is malformed`）。由于新代码只在 `.partial` 上写入、目标只经 rename 出现，生产中已不会再产生此类文件，故仅剩「旧版本遗留」这一窄场景，不阻断验收。建议校验副本含 `schema_migrations`（或页数 ≥1）。 | 探针 I：1 字节目标迁移后仍为 1 字节且 `backupPath===target`；`sqlite-size-probe.mjs` 显示 0/1 字节 `integrity=ok`、≥2 字节抛 `file is not a database` | no |
+| **NF3-03** | **P3** | `migrations.ts:181-184` | 复用分支不清理陈旧 `<target>.partial`；成功运行后该文件残留（不会被读取，替换分支下次会删）。与「成功路径不留 `.partial`」的意图不符，属垃圾文件堆积，无正确性影响。建议在复用分支同样 `rmSync(partial,{force:true})`，并补一条 `.partial` 不残留断言。 | 探针 J：成功运行后目录 = `["pre-migration-v0.sqlite","pre-migration-v1.sqlite","pre-migration-v1.sqlite.partial"]` | no |
+| **NF3-04** | **P3** | `migrations.ts:176-195` vs `backupDatabase:234` | `backupDatabase` 对 `db.name === ':memory:'` 主动 no-op，但新代码随后无条件 `renameSync(partial,target)`，使「`:memory:` + `backupPath`」抛出**裸 `Error: ENOENT`**（不是 `StorageError`）。旧代码在该组合下静默返回无文件的 `backupPath`。仓库无该调用组合（生产恒为文件库），属潜在 API 回归。建议 `:memory:` 时整块跳过或在 `backupDatabase` 返回是否写出。 | 探针 H：`Error: ENOENT: no such file or directory, rename '…/mem.sqlite.partial' -> '…/mem.sqlite'` | no |
+| **NF3-05** | **P3** | `.agentdev/work/WP-01/test-report.md`；workflow §7 | Test 报告 §1 绑定 `9c634f0`/`981746c`，但 e02fb8e 再次改了代码（`migrations.ts` + 两个测试文件），该报告不覆盖本轮复核树 → **NF-05② 回归**。按 workflow §7「Test 后代码变更 → 重新独立 Test」，结算前需 Test 角色重跑并重新绑定 e02fb8e（全量 `test:integration` 归 Test，本 Review 未执行）。 | `test-report.md:11-16`；`git show --stat e02fb8e`（含该文件但内容仍为 9c634f0 的并发写入结果） | no（流程项，非代码缺陷） |
+
+### 4.7 命令证据（复评三实测）
+
+| 命令 | 退出码 | 结果 |
+|---|---|---|
+| `git rev-parse HEAD` / `HEAD^{tree}` / `git status --short` | 0 | HEAD=`e02fb8e6c497…`；tree=`c201f4276c15…`；工作区干净（复评前后均干净） |
+| `pnpm typecheck` | 0 | `tsc -p tsconfig.json --pretty false` 无错误 |
+| `pnpm lint` | 0 | `All matched files use Prettier code style!` |
+| `pnpm test:unit` | 0 | 13 文件 / 173 用例通过 |
+| `pnpm docs:check` | 0 | 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages |
+| `pnpm vitest run --project integration <migrations,ledger,dispatcher,events-hub,requirements,identity>` | 0 | 6 文件 / **86** 用例通过（17+22+10+18+9+10） |
+| scratch：`r3-probe.integration.test.ts`（12 探针） | 0 | 12 passed（§4.1/§4.3 的 A/B/B2/C/C2/D/E/F/G/H/I/J） |
+| scratch：变异 A（`existsSync` 回退 NF2-01）→ migrations 测试 | 1 | 1 failed / 16 passed（`:316`） |
+| scratch：变异 C（永远重取备份）→ migrations 测试 | 1 | 1 failed / 16 passed（`:334` 哨兵） |
+| scratch：变异 B（回退 subscribe 过滤）→ events-hub 测试 | 1 | 1 failed / 17 passed |
+| scratch：变异 P（回退 poll 过滤）→ events-hub 测试 | 1 | 1 failed / 17 passed |
+| scratch：`sqlite-size-probe.mjs`（0…8000 字节） | 0 | 0/1 字节 `integrity=ok`；2…8000 字节 `file is not a database` |
+| scratch：`sqlite-trunc-probe.mjs`（页边界截断） | 0 | 截断到 4096 边界的真库一律 `database disk image is malformed` |
+| scratch：`sqlite-cost-probe.mjs` | 0 | 52.8 MiB 副本 `integrity_check` ≈ 110 ms |
+| scratch：变异后用 `git show HEAD:<file>` 比对还原 | 0 | `migrations.ts`、`events-hub.ts` 与 HEAD 逐字节一致 |
+
+### 4.8 未覆盖与遗留
+
+- 未执行全量 `pnpm test:integration`（按约定归 Test）；WP-00 四文件（session/attempt/doctor/container）的 11/10/8/9 计数由文件内容 `grep` 取得，未复跑。
+- 未复跑 `pnpm build`、`pnpm install --frozen-lockfile`。
+- NF3-05：Test 证据需重新绑定 e02fb8e 树后 WP-01 才能进入结算（Settlement 前必须完成）。
+- 真实端到端（daemon/BFF/WebSocket/UI）、Git 往返与真实 Provider 仍属 WP-04/WP-08/WP-09/WP-10（DC-23/24/25），与 §1–§3 一致。
+- 遗留文案：`packages/contracts/src/entities/system.ts:135` 注释 “eight operation kinds” 应为 7（§2 已记，非回归）。
+
+### 4.9 复评三结论
+
+**PASS**
+
+理由：本轮重点 NF2-01 的核心缺陷已真正修复——0 字节与截断/垃圾残留都会被校验拒绝并以 `.partial` + 原子 rename 重取，有效副本被原样复用，成功路径不残留 `.partial`，副本可读且确为迁移前状态；`integrity_check` 只在待迁移路径发生。NF2-02/NF2-03 的新用例经回退实验证明**非空泛**（变异 A/C/B/P 均令对应用例失败），NF-04 计数与实测完全吻合，RE-01…RE-14、NF-01…NF-03 逐项复核无回归，`typecheck`/`lint`/`test:unit`/`docs:check` 与 6 个 WP-01 集成文件（86 用例）全部退出 0。本轮新发现 5 项均为 **P3**：NF3-01（显式 `backupPath` 跨版本复用，生产默认路径不受影响）、NF3-02（1 字节文件被 SQLite 视为空库；生产路径已不会再产生）、NF3-03（复用分支残留 `.partial`）、NF3-04（`:memory:` + `backupPath` 抛裸 ENOENT，仓库无此用法）、NF3-05（Test 报告未绑定本轮树，流程项）。按 `workflow.md` §6，无 P0/P1、无影响 WP-01 验收的 P2，故不阻断。
+
+建议处置（不阻断本次 PASS）：
+1. 备份复用判定增加「来源版本匹配」校验（比对副本 `schema_migrations` 最高版本；至少覆盖显式 `backupPath`），并在 `:memory:` 时跳过整块或让 `backupDatabase` 返回写出结果（NF3-01/NF3-02/NF3-04）；
+2. 复用分支同样清理 `.partial` 并补断言（NF3-03）；
+3. **结算前**由 Test 角色重跑并重新绑定 e02fb8e 树（NF3-05），全量 `test:integration` 与 `pnpm build` 一并补齐。
