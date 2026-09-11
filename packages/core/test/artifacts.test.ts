@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -352,6 +352,56 @@ describe('attachments, artifacts and previews (WP-03)', () => {
       ),
     ).toThrowError(/too long/);
     expect(store.messages.list()).toHaveLength(2);
+  });
+
+  it('leaves no reference behind when artifact generation fails (required failure test)', () => {
+    // A blob store whose root cannot be created: the write fails, so nothing may be
+    // referenced by an Artifact row.
+    const brokenRoot = join(dataDir, 'not-a-directory');
+    writeFileSync(brokenRoot, 'file, not a directory');
+    const broken = new ArtifactService({
+      store,
+      blobs: new BlobStore({ root: join(brokenRoot, 'nested') }),
+      now: () => clock,
+    });
+    try {
+      broken.createAgent({
+        run: run(),
+        kind: 'explanation',
+        mime: 'text/html',
+        bytes: Buffer.from('<p>boom</p>', 'utf8'),
+      });
+      throw new Error('expected a generation failure');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProtocolError);
+      expect(error).toMatchObject({ code: 'INTERNAL_ERROR' });
+    }
+    expect(store.artifacts.list()).toHaveLength(0);
+    expect(
+      store.events.readAfter(0, { limit: 50 }).filter((event) => event.name === 'artifact.created'),
+    ).toHaveLength(0);
+  });
+
+  it('produces an agent explanation artifact for a delegated analysis Run (AC-003)', () => {
+    const artifact = artifacts.createAgent({
+      run: { id: RUN_ID, workId: WORK_ID, role: 'backend' },
+      kind: 'explanation',
+      mime: 'text/html',
+      bytes: Buffer.from('<h1>routing</h1>', 'utf8'),
+      acl: ['chief'],
+      sourceRevision: 'abc123',
+    });
+    expect(artifact).toMatchObject({
+      origin: 'agent',
+      runId: RUN_ID,
+      kind: 'explanation',
+      mime: 'text/html',
+      validity: 'valid',
+      sourceRevision: 'abc123',
+    });
+    // The producing Run stays on the assist route: no Requirement is created.
+    expect(store.requirements.list()).toHaveLength(0);
+    expect(artifacts.isReadable(artifact, 'chief')).toBe(true);
   });
 
   it('carries the isolation policy on every preview (AC-052)', () => {

@@ -287,12 +287,12 @@ export class AttachmentService {
     } catch (error) {
       // A blob-layer failure must not surface as an untyped crash: `protocol.md` §7
       // gives every failure a code the client can act on.
-      if (error instanceof StorageError) {
-        throw new ProtocolError('INTERNAL_ERROR', 'attachment could not be stored', {
-          details: { storageCode: error.code },
-        });
-      }
-      throw error;
+      throw new ProtocolError('INTERNAL_ERROR', 'attachment could not be stored', {
+        details:
+          error instanceof StorageError
+            ? { storageCode: error.code }
+            : { reason: error instanceof Error ? error.name : 'unknown' },
+      });
     }
   }
 }

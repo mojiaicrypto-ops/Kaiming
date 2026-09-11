@@ -267,12 +267,14 @@ export class ArtifactService {
     try {
       return this.blobs.write(bytes);
     } catch (error) {
-      if (error instanceof StorageError) {
-        throw new ProtocolError('INTERNAL_ERROR', 'artifact could not be stored', {
-          details: { storageCode: error.code },
-        });
-      }
-      throw error;
+      // Every storage failure — including a raw filesystem error — must surface as a
+      // coded protocol failure (`protocol.md` §7), never as an untyped crash.
+      throw new ProtocolError('INTERNAL_ERROR', 'artifact could not be stored', {
+        details:
+          error instanceof StorageError
+            ? { storageCode: error.code }
+            : { reason: error instanceof Error ? error.name : 'unknown' },
+      });
     }
   }
 }
