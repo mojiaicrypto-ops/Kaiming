@@ -25,6 +25,7 @@ import {
   providerInputSchema,
   type ConfigDocument,
   type ConfigPatch,
+  type JsonObject,
   type ModelDescriptor,
   type OverridableLimitName,
   type PolicyConfig,
@@ -441,12 +442,7 @@ export class ConfigStore {
         reason: `effective context ${effectiveContextLimit} is below the ${CONTEXT_LIMITS.minTokens} token floor`,
       };
     }
-    const frozenProvider: FrozenProvider = {
-      providerId: provider.providerId,
-      type: provider.type,
-      baseUrl: provider.baseUrl,
-      ...(provider.secretRef === undefined ? {} : { secretRef: provider.secretRef }),
-    };
+    const frozenProvider = frozenProviderOf(provider);
     return {
       ok: true,
       resolution: {
@@ -489,22 +485,8 @@ export class ConfigStore {
         ...(profile.temperature === undefined ? {} : { temperature: profile.temperature }),
       },
       sources,
-      provider: {
-        providerId: provider.providerId,
-        type: provider.type,
-        baseUrl: provider.baseUrl,
-        // A Provider without a `secretRef` is a legitimate endpoint (local or
-        // unauthenticated); freezing `null` would make the gateway read it as an
-        // unavailable secret and fail every call (T-01).
-        ...(provider.secretRef === undefined ? {} : { secretRef: provider.secretRef }),
-      },
-      model: {
-        id: model.id,
-        contextWindow: model.contextWindow,
-        maxOutputTokens: model.maxOutputTokens,
-        reasoningLevels: [...model.reasoningLevels],
-        vision: model.vision,
-      },
+      provider: { ...provider },
+      model: frozenModelPayload(model),
       effectiveContextLimit,
       revision,
     });
@@ -524,20 +506,64 @@ export class ConfigStore {
     const payload = snapshot.payload as unknown as {
       profile: Profile;
       sources: Partial<Record<keyof Profile, ProfileSource>>;
-      provider: FrozenProvider;
+      provider: FrozenProvider & { readonly secretRef?: string | null };
       model: ModelDescriptor;
       effectiveContextLimit: number;
       revision: number;
     };
+    // Earlier versions froze a missing secretRef as `null`; normalize instead of
+    // handing the gateway a value it cannot interpret (R18-02).
+    const { secretRef, ...provider } = payload.provider;
     return {
       profile: payload.profile,
       sources: payload.sources ?? {},
-      provider: payload.provider,
+      provider:
+        secretRef === null || secretRef === undefined ? provider : { ...provider, secretRef },
       model: payload.model,
       effectiveContextLimit: payload.effectiveContextLimit,
       revision: payload.revision,
     };
   }
+}
+
+/**
+ * The single frozen projection of a Provider (`data.md` §3 `FrozenProvider`).
+ *
+ * A Provider without a `secretRef` is a legitimate endpoint (local or
+ * unauthenticated) and must not be frozen as `null`: the gateway reads only
+ * `undefined` as "no secret", so a stored `null` failed every call (T-01/R18-01).
+ */
+function frozenProviderOf(provider: ProviderConfig): FrozenProvider {
+  return {
+    providerId: provider.providerId,
+    type: provider.type,
+    baseUrl: provider.baseUrl,
+    ...(provider.secretRef === undefined ? {} : { secretRef: provider.secretRef }),
+  };
+}
+
+/**
+ * The frozen model descriptor, including the optional price fields.
+ *
+ * The prices are part of `ModelDescriptor` (`data.md` §3), so dropping them from the
+ * frozen payload would make `resolve()` and `readFrozen()` disagree and lose the
+ * basis for later cost accounting (R18 latent).
+ */
+function frozenModelPayload(model: ModelDescriptor): JsonObject {
+  const payload: JsonObject = {
+    id: model.id,
+    contextWindow: model.contextWindow,
+    maxOutputTokens: model.maxOutputTokens,
+    reasoningLevels: [...model.reasoningLevels],
+    vision: model.vision,
+  };
+  if (model.inputPricePerMTokens !== undefined) {
+    payload['inputPricePerMTokens'] = model.inputPricePerMTokens;
+  }
+  if (model.outputPricePerMTokens !== undefined) {
+    payload['outputPricePerMTokens'] = model.outputPricePerMTokens;
+  }
+  return payload;
 }
 
 /** Deprecated-file cleanup used by tests and the daemon's first start. */

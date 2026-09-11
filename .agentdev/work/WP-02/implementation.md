@@ -267,6 +267,17 @@
 - 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **252 passed**；`pnpm test:integration` 124 passed。
 - 后续：按失败路由进入独立 Review（第十八轮），通过后重新独立 Test（`test.md` 将记录第二轮）。
 
+## T27 独立 Review 第十八轮（PASS）与对抗性核验补项修复
+
+- 第十八轮独立 Review 判 **PASS**（0×P1、2×P2、2×P3），对抗性核验也裁 PASS（有条件），并补出三条：`availability()` 不解析 `secretRef` → 悬空凭证的 Run 仍被准入（R18-05，P2）、`freeze` 的 `model` 投影丢掉可选价格字段、`readFrozen` 无形状校验（畸形载荷会抛原生 `TypeError`）。
+- 修复：
+  - R18-01：`FrozenProvider` 投影收敛为 `frozenProviderOf` 单一实现（`resolve`/`freeze` 共用）。
+  - R18-02：`readFrozen` 把历史 `secretRef: null` 归一为缺省，`complete()` 同样按 `?? undefined` 处理。
+  - R18-05（DC-73）：`availability` 在注入了 `SecretResolver` 时解析 `secretRef`，取不到即不可用（不注入时保持放行，真实 Secret 存储属 WP-07）。
+  - 对抗性 3.2：`model` 冻结投影保留可选价格字段，`resolve()` 与 `readFrozen()` 形状一致。
+  - R18-03/R18-04：补匿名 `testConnection` 与冻结 provider 形状断言；新增 DC-73 登记。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **255 passed**；`pnpm test:integration` 124 passed。
+
 ## T9 待办
 
 - 独立 Review 与 Test（独立上下文）、结算与 `docs/INDEX.md` 状态更新、以及 `docs/delivery/acceptance.md` 中本包 AC 的证据登记。

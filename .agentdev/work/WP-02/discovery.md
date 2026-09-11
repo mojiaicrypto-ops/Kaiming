@@ -277,3 +277,10 @@ zod 的解析结果会保留调用方显式传入的 `undefined` 可选字段（
 ## DC-72 `none` 级 Work 的等级只能由 Work 控制面变更（Review 第十七轮 R17-01）
 
 `assess` 现在对「`none` 级 Work + 声明写/环境 scope」报 `VALIDATION_ERROR`（与 `dispatch` 一致，DC-71）。副作用：由于 `assess` 从不回写 `work.level`（`works.update` 全仓无生产调用点），一个已经落成 `none` 的 Work **无法**通过后续 Assessment 升级到 L2/L3——升级必须走 Work 控制面（重路由或新建 Work，属 WP-05）。这是有意的 fail-closed 边界（错误地放行写范围比要求重新建 Work 更危险），登记于此；WP-05 落线 Work 等级回写时应一并考虑「重新评估→升级等级」的合法路径。
+
+## DC-73 Provider 无 Secret 的合法端点与凭证可用性（Test T-01、Review R18-01/R18-02/R18-05）
+
+- 冻结投影的单一定义：`frozenProviderOf(provider)` 是 `FrozenProvider` 的唯一来源（`resolve` 与 `freeze` 共用），`secretRef` 缺省时**省略键**而不是写 `null`；`readFrozen` 把历史/外来快照里的 `null` 归一为「无 Secret」，`complete()` 也按 `?? undefined` 归一（Test T-01：写 `null` 而读取端只认 `undefined`，会使无鉴权端点每次都 `CONFIG_INVALID`）。
+- 可用性包含凭证：`ModelGateway.availability` 在注入了 `SecretResolver` 时解析 `secretRef`，取不到即视为不可用（`agents.md` §5：不存在可用模型时不排队）。未注入 resolver 时 Secret 存储未知（WP-07/DC-31），保持放行。
+- 冻结的 `model` 投影保留 `inputPricePerMTokens`/`outputPricePerMTokens`（可选字段，存在才写），使 `resolve()` 与 `readFrozen()` 形状一致，并为成本核算保留依据。
+- 承接：真实 Secret 存储与解析（`SecretResolver` 的实现、`once` 授权消费）属 WP-07；`readFrozen` 对任意畸形载荷的完整 Schema 校验在 WP-08/WP-09 的读取面统一处理（当前已归一 `secretRef` 并保证不因此崩溃）。

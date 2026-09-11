@@ -92,6 +92,19 @@ export class ModelGateway {
   availability(role: Role, runParams: ProfileLayer = {}): GatewayAvailability {
     const resolution = this.config.resolve(role, runParams);
     if (!resolution.ok) return resolution;
+    // A Provider whose `secretRef` cannot be resolved can never serve a call, so the
+    // Run must not be queued in the first place (`agents.md` §5). Without an injected
+    // resolver the secret store is unknown (WP-07, DC-31), so the check is skipped.
+    const secretRef = resolution.resolution.provider.secretRef;
+    if (secretRef !== undefined && this.secrets !== undefined) {
+      if (this.secrets.resolve(secretRef) === undefined) {
+        return {
+          ok: false,
+          code: 'CONFIG_INVALID',
+          reason: `secret ${secretRef} is not available`,
+        };
+      }
+    }
     return { ok: true, resolution: resolution.resolution };
   }
 
@@ -121,16 +134,16 @@ export class ModelGateway {
     messages: GatewayRequest['messages'],
   ): Promise<GatewayResponse> {
     const frozen = this.frozenProfileOf(run);
-    const apiKey =
-      frozen.provider.secretRef === undefined
-        ? undefined
-        : this.secrets?.resolve(frozen.provider.secretRef);
-    if (frozen.provider.secretRef !== undefined && apiKey === undefined) {
+    // `readFrozen` normalizes legacy `null` values, but a hand-written snapshot must
+    // not be able to crash the gateway either (R18-02).
+    const secretRef = frozen.provider.secretRef ?? undefined;
+    const apiKey = secretRef === undefined ? undefined : this.secrets?.resolve(secretRef);
+    if (secretRef !== undefined && apiKey === undefined) {
       return {
         ok: false,
         code: 'CONFIG_INVALID',
         retryable: false,
-        message: `secret ${frozen.provider.secretRef} is not available`,
+        message: `secret ${secretRef} is not available`,
       };
     }
     return this.transport.complete({

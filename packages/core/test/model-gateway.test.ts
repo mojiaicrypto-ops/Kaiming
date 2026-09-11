@@ -76,6 +76,7 @@ describe('model gateway (AC-043, AC-044, AC-045)', () => {
   let config: ConfigStore;
   let transport: StubTransport;
   let gateway: ModelGateway;
+  let writer: SnapshotWriter;
 
   const roleProfile: Profile = {
     providerId: PROVIDER_ID,
@@ -95,7 +96,7 @@ describe('model gateway (AC-043, AC-044, AC-045)', () => {
       canonicalRoot: ROOT,
       migrations: { backup: () => undefined, backupPath: join(dataDir, 'pre.sqlite') },
     });
-    const writer = new SnapshotWriter({ store });
+    writer = new SnapshotWriter({ store });
     config = ConfigStore.open({ globalDir, projectRoot, snapshots: writer });
     transport = new StubTransport();
     gateway = new ModelGateway({
@@ -153,6 +154,67 @@ describe('model gateway (AC-043, AC-044, AC-045)', () => {
     );
     expect(response).toMatchObject({ ok: true, text: 'pong' });
     expect(transport.requests[0]?.apiKey).toBeUndefined();
+  });
+
+  it('refuses to admit a Run whose secret cannot be resolved (R18-05)', () => {
+    // The Provider exists and is enabled, but its secretRef cannot be produced: the
+    // Run must stay unqueued instead of failing on every call.
+    config.upsertProvider(provider({ secretRef: 'MISSING_KEY' }));
+    config.update('global', { roleOverrides: { backend: roleProfile } });
+    const availability = gateway.availability('backend');
+    expect(availability.ok).toBe(false);
+    if (availability.ok) throw new Error('expected unavailable');
+    expect(availability.reason).toContain('MISSING_KEY');
+    // Without an injected resolver the secret store is unknown, so admission stays
+    // permissive (WP-07 wires the real store).
+    const noResolver = new ModelGateway({ config, snapshots: writer, transport });
+    expect(noResolver.availability('backend').ok).toBe(true);
+  });
+
+  it('normalizes a legacy frozen provider that stored a null secretRef (R18-02)', async () => {
+    const legacy = writer.freeze('config', {
+      profile: {
+        providerId: roleProfile.providerId,
+        modelId: roleProfile.modelId,
+        reasoning: roleProfile.reasoning,
+        skills: [...roleProfile.skills],
+        toolSubset: [...roleProfile.toolSubset],
+        contextLimit: roleProfile.contextLimit,
+      },
+      sources: {},
+      provider: {
+        providerId: PROVIDER_ID,
+        type: 'openai-compatible',
+        baseUrl: 'http://127.0.0.1:1234',
+        secretRef: null,
+      },
+      model: {
+        id: MODEL_ID,
+        contextWindow: 200_000,
+        maxOutputTokens: 8_000,
+        reasoningLevels: ['off', 'low', 'medium'],
+        vision: false,
+      },
+      effectiveContextLimit: 64_000,
+      revision: 1,
+    });
+    const frozen = config.readFrozen(legacy.hash);
+    expect(frozen?.provider).not.toHaveProperty('secretRef');
+    const response = await gateway.complete(
+      { role: 'backend', configSnapshotId: legacy.hash } as unknown as Run,
+      [{ role: 'user', content: 'hi' }],
+    );
+    expect(response).toMatchObject({ ok: true, text: 'pong' });
+  });
+
+  it('tests an anonymous Provider connection without a secret (R18-03)', async () => {
+    const anonymous = provider({ secretRef: undefined });
+    delete (anonymous as { secretRef?: string }).secretRef;
+    config.upsertProvider(anonymous);
+    config.update('global', { roleOverrides: { backend: roleProfile } });
+    const result = await gateway.testConnection(PROVIDER_ID, MODEL_ID);
+    expect(result.ok).toBe(true);
+    expect(transport.requests.at(-1)?.apiKey).toBeUndefined();
   });
 
   it('never switches model for an active Run when configuration changes', async () => {
