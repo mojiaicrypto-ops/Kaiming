@@ -135,6 +135,17 @@ export function purposeAllowedForRole(role: string, purpose: string): boolean {
   return allowed !== undefined && allowed.includes(purpose);
 }
 
+/** The purpose a role carries when `protocol.md` §6 sends no explicit one. */
+export const PRIMARY_PURPOSE_BY_ROLE = {
+  product: 'artifact',
+  planning: 'artifact',
+  backend: 'implementation',
+  frontend: 'implementation',
+  review: 'review',
+  test: 'test',
+  settlement: 'settlement',
+} as const satisfies Record<ProfessionalRole, string>;
+
 /** The rejection for an unlisted role/purpose pair, or `undefined`. */
 export function validateRolePurpose(role: string, purpose: string): DispatchDecision | undefined {
   if (role === 'chief') {

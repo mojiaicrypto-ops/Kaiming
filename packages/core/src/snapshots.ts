@@ -12,7 +12,14 @@ import {
   type Snapshot,
   type SnapshotType,
 } from '@agentdev/contracts';
-import { nowIso, parseJson, sha256, text, type ProjectStore } from '@agentdev/storage';
+import {
+  nowIso,
+  parseJson,
+  sha256,
+  StorageError,
+  text,
+  type ProjectStore,
+} from '@agentdev/storage';
 import { canonicalJson } from './dispatcher.js';
 
 export interface FrozenSnapshot {
@@ -63,9 +70,20 @@ export class SnapshotWriter {
   ): FrozenSnapshot {
     const serialized = canonicalJson(payload);
     const hash = sha256(canonicalJson(options.identityPayload ?? payload));
-    const existing = this.read(hash);
+    // Identity is `(type, hash)` (`data.md` §2), so re-freezing is idempotent per
+    // type. The same hash under a *different* type would make a bare-hash
+    // reference ambiguous, so it is refused instead of silently shared (R-10).
+    const existing = this.find(type, hash);
     if (existing !== undefined) {
       return { hash, type: existing.type, payload, created: false };
+    }
+    const elsewhere = this.read(hash);
+    if (elsewhere !== undefined && elsewhere.type !== type) {
+      throw new StorageError(
+        'CONSTRAINT_VIOLATION',
+        `snapshot hash ${hash} already exists as ${elsewhere.type}; a bare-hash reference would be ambiguous`,
+        { code: 'SNAPSHOT_TYPE_CONFLICT', existingType: elsewhere.type, requestedType: type },
+      );
     }
     this.store.db
       .prepare(
@@ -75,7 +93,17 @@ export class SnapshotWriter {
     return { hash, type, payload, created: true };
   }
 
-  /** Reads a frozen payload back; the hash is the whole identity. */
+  /** Looks up one exact `(type, hash)` snapshot. */
+  find(type: SnapshotType, hash: string): Snapshot | undefined {
+    const row = this.store.db
+      .prepare(
+        'SELECT type, hash, payload, blob_path, created_at FROM snapshot WHERE type = ? AND hash = ? LIMIT 1',
+      )
+      .get(type, hash) as Row | undefined;
+    return row === undefined ? undefined : rowToSnapshot(row);
+  }
+
+  /** Reads a frozen payload back by hash (`snapshot` is content-addressed). */
   read(hash: string): Snapshot | undefined {
     const row = this.store.db
       .prepare(

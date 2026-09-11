@@ -59,3 +59,21 @@
 - 归属字段（`id/projectId/version/createdAt/updatedAt/runId/attemptId/taskId`）由客户端提交时抛 `NOT_AUTHORIZED`（伪造归属是协议失败，不走「修正一次」路径）；未知字段走可修正的 Schema 拒绝。
 - 行 Schema 含服务端列，直接校验客户端载荷会因缺列全部失败，故 `contracts` 新增 `stageResultContentSchema = stageResultRowSchema.omit(服务端列)`，Core 用它校验后再由仓储注入归属列。
 - 修正计数由事件日志推导（`stage.rejected` 按 attemptId 计数），因此重启后仍然成立；第二次失败写 `run.contract_violation` 要求 `canTransitionRun` 允许，否则 fail-closed 报错而不是降级。
+
+## DC-37 独立 Review 第一轮的偏离与修复（RE-01..RE-13）
+
+WP-02 第一轮独立 Review（`.agentdev/work/WP-02/review.md`）判 FAIL：1×P1、5×P2、7×P3。以下是逐条处理与留下的显式偏离。
+
+- RE-01（R-01，P1）`stage.submit` 无终态/epoch 守卫：已修。`StageGate.submit` 现在要求 Run 非终态（终态抛 `INVALID_STATE`）、`epoch === attempt.ownerEpoch`（不符抛 `STALE_ARTIFACT`）、Attempt 为该 Run 现行（number 最大）且状态为 starting/running、可选 `expectedVersion` 不符抛 `VERSION_CONFLICT`；首次拒绝的 `correctionsRemaining` 由 0 改为 1（原值语义错误）。`join.test.ts` 新增终态/epoch/越权三类断言，并证明终态 Run 不再产生 `stage_result` 行。
+- RE-02（R-02，P2）必需失败测试③「父等待可接消息」空洞：已修。`join.test.ts` 现在在父 `waiting_children` 期间通过 mailbox 真实分派第三个子 Run（若实现把等待当锁则该分派会失败），并在分派后再查 join 状态确认父仍在等待且新增的子进入 pending。
+- RE-03（R-03，P2）`joinPolicy=none` 未消费：已修。`JoinCoordinator` 只把 `join==='all'` 的子计入挂起与 Gate 阻断集合；`none` 子失败不阻断但写 `chief_action_required(reason='fire_and_forget_child_failed')`。`ChildOutcome` 增加 `join` 字段，`chief_action_required` 的 data 现在携带每个子 Run 的 `summary/artifactRefs/unknowns/requestedActions`，使「父获全部结果」在仅凭事件重建时也完整。
+- RE-04（R-04，P2）持久事件名偏离 `protocol.md` §7：已修。改为 `run.started`、`run.ended`（data.outcome）、`stage.completed`/`stage.failed`（Schema 拒绝记为 `outcome='schema_invalid'`）。`run.waiting_children`/`run.children_joined` 两个自造事件名已删除：§7 的持久事件清单中没有对应的 Join 事件，故 Join 状态只通过 Run 行与返回值观测；若后续需要 WS 推送该状态，由承接包（WP-08 读模型）显式扩展协议。
+- RE-05（R-05，P2）越界写入 Plan：已修。`plan.md` 升到 planVersion 2，明确写入 `snapshots.ts`、`contracts/src/entities/run.ts`、`contracts/test/entities.test.ts` 并给出授权来源。
+- RE-06（R-06，P2）`run.ts` 快照引用改哈希与 `data.md` 冲突：**保留哈希实现，作为需产品方确认的显式偏离**。理由：`snapshot` 无 id 列、主键为 `(type,hash)`，按 `ID` 引用必然产生永不匹配的引用；改为内容哈希是唯一自洽解。`data.md` 属权威文档，本包不改写它，已在 `plan.md` 与结算材料中上报，等待确认（若产品方要求回退为 UUID，需为 `snapshot` 增列并提供迁移）。
+- RE-07（R-07，P3）Work 预算预留未落库：已修。派发事务内按 Run 的 `budgetAllocation` 增加 Work 预算行的 `tokensReserved`（经 `work.budgetId`，不按 `work_id` 猜测），`settleRun` 释放；`used+reserved<=limit` 由 Schema 保证，超限在更新时失败。新增测试证明 100k 预算下第二次 60k 派发被拒、结算后归零。
+- RE-08（R-08，P3）Run 参数层不可达：部分修复。`DispatchInput.runParams` 打通「已授权Run参数」层并在冻结快照中留下 `sources='run'` 证据；**但这些参数尚未与 Authorization 记录绑定**（授权来源与用户确认路径属 WP-04/WP-07），当前只有 Core 调用方可以提供，属显式缺口。
+- RE-09（R-09，P3）`readFrozen` 返回非法 `ProviderConfig`：已修。新增 `FrozenProvider` 投影类型，冻结只写 Run 需要的 provider 事实（providerId/type/baseUrl/secretRef），`readFrozen` 返回该投影并保留 `sources` 溯源。
+- RE-10（R-10，P3）快照幂等对 type 不敏感：已修。`SnapshotWriter.find(type,hash)` 以 `(type,hash)` 判幂等；同 hash 已存在于其他 type 时抛 `CONSTRAINT_VIOLATION`（`SNAPSHOT_TYPE_CONFLICT`），避免裸哈希引用歧义。
+- RE-11（R-11，P3）`decideLevel` 声称复用却未调用：已修。`assess` 现在调用 `decideLevel` 做 L3 底线校验（lockdown risk/环境操作必须 L3），并把 `decidedLevel`/`decidedReason` 写入 `assessment.saved`；L1 vs L2 仍由 Chief 承担，因为评估载荷不含 L1 判定所需标准，测试覆盖「securityBoundary 风险 + L2 → 拒绝」。
+- RE-12（R-12，P3）`request_dispatch` 入参偏离 `protocol.md` §6：已修。入参改为 `runId（capability 绑定）+ workId/reason/requestedRole/goal/sourceRefs`（其余可选）；`purpose` 缺省取 `PRIMARY_PURPOSE_BY_ROLE`（domain 新增），事件 data 记录 `requestReason`/`sourceRefs`。
+- RE-13（R-13，P3）Discovery 遗漏：本条即为补齐，DC-37 覆盖上述全部偏离。

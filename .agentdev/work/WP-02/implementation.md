@@ -53,8 +53,13 @@
 ### 本阶段验证命令
 
 - `pnpm typecheck`：通过；`pnpm lint`：通过。
-- `pnpm test:unit`：202 passed（新增 6 条 gateway 之外：orchestrator 10 条、join/stage 5 条、config 8 条、gateway 6 条中累计 +29）。
-- `pnpm test:integration`：124 passed（未回退）。
+- `pnpm test:unit`：202 passed；`pnpm test:integration`：124 passed（未回退）。（Review 修复后为 207 passed，见下节。）
+
+## T9 独立 Review 与修复（第一轮 FAIL → 修复）
+
+- 独立 Review（fresh context，见 `review.md`）判 FAIL：1×P1（`stage.submit` 无终态/epoch 守卫）、5×P2（可接消息证据空洞、`joinPolicy=none` 未实现、持久事件名偏离 `protocol.md` §7、越界写入 Plan、`run.ts` 快照引用改哈希与 `data.md` 冲突）、7×P3。
+- 修复逐条记录在 `discovery.md` DC-37（RE-01..RE-13）。其中 RE-06（快照引用哈希 vs `data.md` 的 `ID` 记法）保留实现作为**需产品方确认的显式偏离**，不改写 `data.md`。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` 207 passed；`pnpm test:integration` 124 passed；`pnpm docs:check` ok。
 
 ## T9 待办
 

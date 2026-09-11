@@ -57,13 +57,27 @@ export class ConfigError extends Error {
 /** A partial profile layer; `exactOptionalPropertyTypes` allows explicit undefined. */
 export type ProfileLayer = { [K in keyof Profile]?: Profile[K] | undefined };
 
+/**
+ * The provider facts a frozen profile carries.
+ *
+ * A Run only needs where to call and which secret to use, so the snapshot stores
+ * this projection rather than the whole `ProviderConfig` (R-09): `enabled` and the
+ * model catalogue can change later without altering what the Run was frozen with.
+ */
+export interface FrozenProvider {
+  readonly providerId: string;
+  readonly type: ProviderConfig['type'];
+  readonly baseUrl: string;
+  readonly secretRef?: string;
+}
+
 /** Where one resolved profile field came from. */
 export type ProfileSource = 'run' | 'project' | 'globalRole' | 'globalDefault';
 
 export interface ProfileResolution {
   readonly profile: Profile;
   readonly sources: Readonly<Partial<Record<keyof Profile, ProfileSource>>>;
-  readonly provider: ProviderConfig;
+  readonly provider: FrozenProvider;
   readonly model: ModelDescriptor;
   /** `min(profile.contextLimit, window − maxOutput − reserved)` (`agents.md` §6). */
   readonly effectiveContextLimit: number;
@@ -425,12 +439,18 @@ export class ConfigStore {
         reason: `effective context ${effectiveContextLimit} is below the ${CONTEXT_LIMITS.minTokens} token floor`,
       };
     }
+    const frozenProvider: FrozenProvider = {
+      providerId: provider.providerId,
+      type: provider.type,
+      baseUrl: provider.baseUrl,
+      ...(provider.secretRef === undefined ? {} : { secretRef: provider.secretRef }),
+    };
     return {
       ok: true,
       resolution: {
         profile,
         sources,
-        provider,
+        provider: frozenProvider,
         model,
         effectiveContextLimit,
         revision: layerRevision(this.globalDocument, this.projectDocument),
@@ -486,20 +506,27 @@ export class ConfigStore {
     return { snapshotId: frozen.hash, resolution: resolution.resolution };
   }
 
-  /** Reads a frozen profile back; used when a Run resumes after a restart. */
+  /**
+   * Reads a frozen profile back; used when a Run resumes after a restart.
+   *
+   * The frozen payload is self-contained (profile, provider projection, model,
+   * effective limit, revision and per-field provenance), so a restart never has to
+   * re-resolve against a configuration that may have moved on (AC-044/AC-082).
+   */
   readFrozen(snapshotId: string): ProfileResolution | undefined {
     const snapshot = this.snapshots?.read(snapshotId);
     if (snapshot === undefined || snapshot.type !== 'config') return undefined;
     const payload = snapshot.payload as unknown as {
       profile: Profile;
-      provider: ProviderConfig;
+      sources: Partial<Record<keyof Profile, ProfileSource>>;
+      provider: FrozenProvider;
       model: ModelDescriptor;
       effectiveContextLimit: number;
       revision: number;
     };
     return {
       profile: payload.profile,
-      sources: {},
+      sources: payload.sources ?? {},
       provider: payload.provider,
       model: payload.model,
       effectiveContextLimit: payload.effectiveContextLimit,

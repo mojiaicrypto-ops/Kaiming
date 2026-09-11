@@ -18,6 +18,7 @@ import {
   professionalDispatchSpecSchema,
   type Assessment,
   type AssessmentPayload,
+  type Budget,
   type Attempt,
   type DispatchSnapshot,
   type DispatchSpec,
@@ -29,14 +30,17 @@ import {
 import {
   canAllocateBudget,
   canTransitionRun,
+  decideLevel,
   isDirectChiefChild,
+  PRIMARY_PURPOSE_BY_ROLE,
+  type LockdownRisk,
   requiresExplicitAuthorization,
   validateDispatchSpec,
   validateRolePurpose,
   type DispatchDecision,
 } from '@agentdev/domain';
 import { withTransaction, type ProjectStore } from '@agentdev/storage';
-import type { ConfigStore, ProfileResolution } from './config.js';
+import type { ConfigStore, ProfileLayer, ProfileResolution } from './config.js';
 import { ProtocolError, type ProtocolErrorCode } from './errors.js';
 import type { ModelGateway } from './model-gateway.js';
 import { canonicalJson } from './dispatcher.js';
@@ -68,6 +72,14 @@ export interface DispatchInput {
   /** Output Schema names the Runner must satisfy (`contracts` kinds). */
   readonly requiredOutputSchemas?: readonly { readonly kind: string; readonly schemaVersion: 1 }[];
   readonly authorizationRef?: string;
+  /**
+   * Authorized Run parameters — the strongest configuration layer (`agents.md` §5).
+   *
+   * They must come from an authorization the user granted; a later package binds
+   * them to the Authorization record (DC-38), and until then Core is their only
+   * source.
+   */
+  readonly runParams?: ProfileLayer;
 }
 
 /** What a Run must honour after a restart, all of it from frozen snapshots. */
@@ -88,14 +100,28 @@ export interface DispatchResult {
   readonly contextSnapshotId: string;
 }
 
-/** A professional Agent's request; it never creates a Run. */
+/**
+ * A professional Agent's request; it never creates a Run.
+ *
+ * The shape follows `protocol.md` §6 `agent.request_dispatch`
+ * (`workId,reason,requestedRole,goal,sourceRefs`); `runId` is the capability's
+ * Attempt→Run binding, and the optional fields let a caller be more specific
+ * without ever gaining the right to create the Run itself.
+ */
 export interface DispatchRequestInput {
   readonly runId: string;
-  readonly role: string;
-  readonly purpose: string;
+  readonly workId?: string;
+  readonly reason?: string;
+  readonly requestedRole: string;
   readonly goal: string;
-  readonly stage: string;
+  readonly sourceRefs?: readonly {
+    readonly kind: string;
+    readonly id: string;
+    readonly version?: string;
+  }[];
   readonly parentRunId?: string;
+  readonly purpose?: string;
+  readonly stage?: string;
   readonly requiredOutputs?: readonly string[];
   readonly requiredChild?: boolean;
   readonly budgetAllocation?: number;
@@ -106,6 +132,24 @@ export interface DispatchRequestResult {
   readonly runId: string;
   readonly workId: string;
   readonly chiefTodo: string;
+}
+
+/** Maps an assessment's risk flags onto the documented lockdown risk shape. */
+function riskFromFlags(flags: readonly string[]): LockdownRisk {
+  const risk: Record<string, boolean> = {
+    identityOrPermission: false,
+    secrets: false,
+    securityBoundary: false,
+    dataDeletionOrMigration: false,
+    payment: false,
+    publicProtocolBreak: false,
+    deployOrRelease: false,
+    gateRuleChange: false,
+  };
+  for (const flag of flags) {
+    if (flag in risk) risk[flag] = true;
+  }
+  return risk as unknown as LockdownRisk;
 }
 
 function fail(code: ProtocolErrorCode, message: string, details?: JsonObject): never {
@@ -157,6 +201,25 @@ export class Orchestrator {
   assess(input: AssessInput): Assessment {
     const work = this.requireWork(input.workId);
     const payload = input.payload;
+    // The documented routing order is re-applied here (`workflow.md` §2) so a Chief
+    // cannot record a lower level than the lockdown/operation rules demand. Only
+    // the L3 floor is enforced as a hard error: L1 vs L2 depends on criteria the
+    // assessment payload does not carry, so a stricter submitted level is allowed.
+    const decided = decideLevel({
+      intent: payload.intent,
+      operationTouchesEnvironment:
+        payload.intent === 'operation' && work.level === 'L3'
+          ? true
+          : payload.riskFlags.includes('operation_touches_environment'),
+      risk: riskFromFlags(payload.riskFlags),
+    });
+    if (decided.level === 'L3' && payload.level !== 'L3') {
+      fail(
+        'VALIDATION_ERROR',
+        `routing rules require L3 (${decided.reason}) but the assessment says ${payload.level}`,
+        { workId: work.id, decidedLevel: decided.level, submittedLevel: payload.level },
+      );
+    }
     if (requiresExplicitAuthorization(payload.level) && payload.authorizationRef === undefined) {
       fail('NOT_AUTHORIZED', `${payload.level} requires an explicit authorizationRef`, {
         workId: work.id,
@@ -186,6 +249,8 @@ export class Orchestrator {
           intent: row.intent,
           level: row.level,
           semanticImpact: row.semanticImpact,
+          decidedLevel: decided.level,
+          decidedReason: decided.reason,
         },
       });
       return row;
@@ -228,7 +293,7 @@ export class Orchestrator {
     // and re-checked by `validateDispatchSpec`, so no extra branch is needed.
 
     const role = spec.role;
-    const availability = this.gateway.availability(role);
+    const availability = this.gateway.availability(role, input.runParams ?? {});
     if (!availability.ok) {
       // A Work whose role has no usable model is blocked, never queued on a guess.
       fail('PROVIDER_UNAVAILABLE', `role ${role} has no usable model: ${availability.reason}`, {
@@ -245,7 +310,7 @@ export class Orchestrator {
       );
     }
 
-    const configSnapshotId = this.config.freeze(role).snapshotId;
+    const configSnapshotId = this.config.freeze(role, input.runParams ?? {}).snapshotId;
     // The context payload is plain JSON by construction (`data.md` §3); the cast
     // only bridges `exactOptionalPropertyTypes` on the parsed Schema type.
     const fallbackContext = {
@@ -278,6 +343,9 @@ export class Orchestrator {
     });
 
     return withTransaction(this.store.db, () => {
+      // The reservation happens in the same transaction as the Run row, so a
+      // concurrent dispatch cannot double-spend the Work budget.
+      this.reserveBudget(work.id, spec.budgetAllocation);
       const run = this.store.runs.insert({
         workId: work.id,
         ...(spec.kind === 'professional' && spec.taskId !== undefined
@@ -340,7 +408,19 @@ export class Orchestrator {
         actual: chiefRunId,
       });
     }
-    enforce(validateRolePurpose(input.role, input.purpose), 'dispatch request');
+    if (input.workId !== undefined && input.workId !== run.workId) {
+      fail('NOT_AUTHORIZED', `Run ${run.id} belongs to Work ${run.workId}, not ${input.workId}`, {
+        runId: run.id,
+        workId: run.workId,
+      });
+    }
+    // `protocol.md` §6 does not carry a purpose; the role's primary purpose is the
+    // honest default, and a caller may name another one it is allowed to carry.
+    const purpose =
+      input.purpose ??
+      (PRIMARY_PURPOSE_BY_ROLE as Record<string, string | undefined>)[input.requestedRole] ??
+      '';
+    enforce(validateRolePurpose(input.requestedRole, purpose), 'dispatch request');
     return withTransaction(this.store.db, () => {
       const event = this.store.events.append({
         name: 'chief_action_required',
@@ -350,10 +430,16 @@ export class Orchestrator {
           reason: 'agent_dispatch',
           requestedBy: run.id,
           workId: run.workId,
-          role: input.role,
-          purpose: input.purpose,
+          role: input.requestedRole,
+          purpose,
           goal: input.goal,
-          stage: input.stage,
+          stage: input.stage ?? 'assist',
+          requestReason: input.reason ?? null,
+          sourceRefs: (input.sourceRefs ?? []).map((ref) => ({
+            kind: ref.kind,
+            id: ref.id,
+            version: ref.version ?? '1',
+          })),
           requiredOutputs: [...(input.requiredOutputs ?? [])],
           requiredChild: input.requiredChild ?? false,
           budgetAllocation: input.budgetAllocation ?? 0,
@@ -441,27 +527,28 @@ export class Orchestrator {
         ownerEpoch: previous.length,
         ...(options.runnerId === undefined ? {} : { runnerId: options.runnerId }),
       });
-      this.store.events.append({
-        name: 'run.starting',
-        entityId: run.id,
-        entityVersion: run.version,
-        data: { attemptId: attempt.id, number: attempt.number },
-      });
       const starting = alreadyStarting
         ? run
         : this.store.runs.update(run.id, { status: 'starting' }, run.version);
       const running = this.store.runs.update(starting.id, { status: 'running' }, starting.version);
+      // `protocol.md` §7 has one persistent name for a Run that is now executing.
       this.store.events.append({
-        name: 'run.running',
+        name: 'run.started',
         entityId: running.id,
         entityVersion: running.version,
-        data: { attemptId: attempt.id },
+        data: { attemptId: attempt.id, number: attempt.number, runnerId: options.runnerId ?? null },
       });
       return attempt;
     });
   }
 
-  /** Marks an Attempt's Run terminal; the transitions stay authoritative. */
+  /**
+   * Marks a Run terminal.
+   *
+   * The transition table stays authoritative, the Run's budget reservation is
+   * released (`reliability.md` §3), and the terminal event carries the real
+   * outcome — clients must not render every `run.ended` as a success.
+   */
   settleRun(
     runId: string,
     status: Extract<Run['status'], 'completed' | 'failed' | 'cancelled'>,
@@ -476,14 +563,54 @@ export class Orchestrator {
     }
     return withTransaction(this.store.db, () => {
       const updated = this.store.runs.update(run.id, { status }, run.version);
+      this.releaseReservation(updated.workId, run.budgetAllocation);
       this.store.events.append({
-        name: 'run.settled',
+        name: 'run.ended',
         entityId: updated.id,
         entityVersion: updated.version,
-        data: { status, workId: updated.workId },
+        data: { outcome: status, workId: updated.workId, releasedTokens: run.budgetAllocation },
       });
       return updated;
     });
+  }
+
+  /**
+   * Reserves tokens for a dispatched Run (`reliability.md` §3).
+   *
+   * `used + reserved <= limit` is enforced by the Schema, so an over-commit fails
+   * at the update rather than at the model call.
+   */
+  private reserveBudget(workId: string, allocation: number): void {
+    if (allocation === 0) return;
+    const budget = this.budgetOf(workId);
+    this.store.budgets.update(
+      budget.id,
+      { tokensReserved: budget.tokensReserved + allocation },
+      budget.version,
+    );
+  }
+
+  private releaseReservation(workId: string, allocation: number): void {
+    if (allocation === 0) return;
+    const budget = this.budgetOf(workId);
+    this.store.budgets.update(
+      budget.id,
+      { tokensReserved: Math.max(0, budget.tokensReserved - allocation) },
+      budget.version,
+    );
+  }
+
+  /** The Work's own budget row (`work.budgetId`), never another Work's. */
+  private budgetOf(workId: string): Budget {
+    const work = this.requireWork(workId);
+    const budget = this.store.budgets.find(work.budgetId);
+    if (budget === undefined) {
+      fail('INTERNAL_ERROR', `Work ${workId} references missing budget ${work.budgetId}`, {
+        workId,
+        budgetId: work.budgetId,
+      });
+    }
+    return budget;
   }
 
   /** Rejects a professional spec whose parent cannot fund it. */
@@ -503,10 +630,12 @@ export class Orchestrator {
         { parentRunId: parent.id, allocated, requested: spec.budgetAllocation },
       );
     }
-    const budget = this.store.budgets.list({ where: 'work_id = ?', params: [parent.workId] })[0];
-    if (budget !== undefined) {
-      enforce(canAllocateBudget(budget, spec.budgetAllocation), 'dispatch budget');
-    }
+    // The Work budget is the authority (`reliability.md` §3); the parent Run's
+    // allocation is a second, run-level ceiling.
+    enforce(
+      canAllocateBudget(this.budgetOf(parent.workId), spec.budgetAllocation),
+      'dispatch budget',
+    );
   }
 
   /** Appends the child to its Chief Run's `childIds`. */

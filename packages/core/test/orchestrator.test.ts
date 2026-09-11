@@ -27,6 +27,7 @@ const MESSAGE_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e62';
 const TASK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e70';
 const OTHER_TASK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e72';
 const PROVIDER_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e71';
+const AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e81';
 const MODEL_ID = 'test-model';
 const emptyScope = { readPaths: [], writePaths: [], operations: [], networkTargets: [] };
 
@@ -450,12 +451,95 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     expect(() => orchestrator.recoveryView(orphan.id)).toThrowError(/is missing/);
   });
 
+  it('reserves the Work budget on dispatch and releases it when the Run ends', () => {
+    const budgetRow = store.budgets.list({ where: 'work_id = ?', params: [WORK_ID] })[0];
+    if (budgetRow === undefined) throw new Error('budget fixture missing');
+    expect(budgetRow.tokensReserved).toBe(0);
+
+    const run = orchestrator.dispatch({ spec: chiefSpec({ budgetAllocation: 60_000 }) }).run;
+    expect(store.budgets.find(budgetRow.id)?.tokensReserved).toBe(60_000);
+    // The second dispatch cannot double-spend the same budget.
+    expect(() =>
+      orchestrator.dispatch({ spec: chiefSpec({ budgetAllocation: 60_000 }) }),
+    ).toThrowError(/exceeds/);
+    expect(store.runs.list().filter((row) => row.budgetAllocation === 60_000)).toHaveLength(1);
+
+    orchestrator.beginAttempt(run.id);
+    orchestrator.settleRun(run.id, 'completed');
+    expect(store.budgets.find(budgetRow.id)?.tokensReserved).toBe(0);
+    const ended = store.events
+      .readAfter(0, { limit: 100 })
+      .filter((event) => event.name === 'run.ended');
+    expect(ended).toHaveLength(1);
+    expect(ended[0]?.data).toMatchObject({ outcome: 'completed', releasedTokens: 60_000 });
+    // `run.started` is the documented name for the executing transition.
+    expect(store.events.readAfter(0, { limit: 100 }).some((e) => e.name === 'run.started')).toBe(
+      true,
+    );
+  });
+
+  it('applies the authorized Run parameter layer when freezing a profile', () => {
+    const run = orchestrator.dispatch({
+      spec: chiefSpec(),
+      runParams: { reasoning: 'low', contextLimit: 10_000 },
+    }).run;
+    const frozen = config.readFrozen(run.configSnapshotId);
+    expect(frozen?.profile.reasoning).toBe('low');
+    expect(frozen?.profile.contextLimit).toBe(10_000);
+    // Provenance survives the restart path.
+    expect(frozen?.sources).toMatchObject({ reasoning: 'run', contextLimit: 'run' });
+    expect(orchestrator.recoveryView(run.id).profile.profile.reasoning).toBe('low');
+  });
+
+  it('refuses an assessment below the level the routing rules require', () => {
+    expect(() =>
+      orchestrator.assess({
+        workId: WORK_ID,
+        payload: {
+          intent: 'delivery',
+          goal: 'ship WP-02',
+          scope: emptyScope,
+          level: 'L2',
+          semanticImpact: false,
+          riskFlags: ['securityBoundary'],
+          uncertainties: [],
+          policyRevision: 1,
+          reason: 'touches the security boundary',
+        },
+      }),
+    ).toThrowError(/routing rules require L3/);
+    expect(store.assessments.list()).toHaveLength(0);
+
+    const row = orchestrator.assess({
+      workId: WORK_ID,
+      payload: {
+        intent: 'delivery',
+        goal: 'ship WP-02',
+        scope: emptyScope,
+        level: 'L3',
+        semanticImpact: true,
+        authorizationRef: AUTHORIZATION_ID,
+        riskFlags: ['securityBoundary'],
+        uncertainties: [],
+        policyRevision: 1,
+        reason: 'user authorized the boundary change',
+      },
+    });
+    expect(row.level).toBe('L3');
+    const saved = store.events
+      .readAfter(0, { limit: 100 })
+      .filter((event) => event.name === 'assessment.saved');
+    expect(saved[0]?.data).toMatchObject({ decidedLevel: 'L3' });
+  });
+
   it('turns an agent dispatch request into a chief todo, never a grandchild Run', () => {
     const chief = chiefRun();
     const child = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
     const result = orchestrator.requestDispatch({
       runId: child.id,
-      role: 'test',
+      workId: WORK_ID,
+      reason: 'the adapter needs behaviour verification',
+      requestedRole: 'test',
       purpose: 'test',
       goal: 'verify the adapter',
       stage: 'test',
@@ -469,14 +553,18 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
       .filter((event) => event.name === 'chief_action_required');
     expect(todo).toHaveLength(1);
     expect(todo[0]?.entityId).toBe(chief.id);
-    expect(todo[0]?.data).toMatchObject({ requestedBy: child.id, role: 'test', purpose: 'test' });
+    expect(todo[0]?.data).toMatchObject({
+      requestedBy: child.id,
+      role: 'test',
+      purpose: 'test',
+      requestReason: 'the adapter needs behaviour verification',
+    });
 
     // Asking another Run for work, or dispatching from the Chief, is refused.
     expect(() =>
       orchestrator.requestDispatch({
         runId: child.id,
-        role: 'test',
-        purpose: 'test',
+        requestedRole: 'test',
         goal: 'verify',
         stage: 'test',
         parentRunId: WORK_ID,
@@ -485,8 +573,7 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     expect(() =>
       orchestrator.requestDispatch({
         runId: chief.id,
-        role: 'backend',
-        purpose: 'implementation',
+        requestedRole: 'backend',
         goal: 'x',
         stage: 'develop',
       }),

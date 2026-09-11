@@ -12,7 +12,7 @@ import {
   type StageResultContent,
   type StageResultRow,
 } from '@agentdev/contracts';
-import { canTransitionRun } from '@agentdev/domain';
+import { canTransitionRun, isTerminalRunStatus } from '@agentdev/domain';
 import { withTransaction, type ProjectStore } from '@agentdev/storage';
 import { ProtocolError } from './errors.js';
 
@@ -47,6 +47,10 @@ export const STAGE_SUBMIT_FIELDS = [
 export interface StageSubmitInput {
   readonly runId: string;
   readonly attemptId: string;
+  /** Attempt epoch from the capability (`protocol.md` §6 mandatory parameter). */
+  readonly epoch: number;
+  /** Optimistic version of the Run, when the caller has one. */
+  readonly expectedVersion?: number;
   readonly payload: unknown;
 }
 
@@ -57,7 +61,7 @@ export type StageSubmitResult =
       readonly code: 'VALIDATION_ERROR';
       readonly message: string;
       /** The Attempt may submit once more; a second failure is a violation. */
-      readonly correctionsRemaining: 0;
+      readonly correctionsRemaining: 1;
     }
   | {
       readonly accepted: false;
@@ -111,6 +115,50 @@ export class StageGate {
         details: { runId: run.id, attemptId: input.attemptId },
       });
     }
+    // A terminal Run never accepts more evidence (`workflow.md` §5.3), and a late
+    // or superseded Attempt may not rewrite it (`reliability.md` §2) — both are
+    // checked before anything is written.
+    if (isTerminalRunStatus(run.status)) {
+      throw new ProtocolError(
+        'INVALID_STATE',
+        `Run ${run.id} is ${run.status} and accepts no further stage results`,
+        { details: { runId: run.id, status: run.status } },
+      );
+    }
+    if (attempt.ownerEpoch !== input.epoch) {
+      throw new ProtocolError(
+        'STALE_ARTIFACT',
+        `attempt epoch ${input.epoch} is not the current epoch ${attempt.ownerEpoch}`,
+        { details: { attemptId: attempt.id, expectedEpoch: attempt.ownerEpoch } },
+      );
+    }
+    if (attempt.status !== 'starting' && attempt.status !== 'running') {
+      throw new ProtocolError(
+        'INVALID_STATE',
+        `Attempt ${attempt.id} is ${attempt.status} and cannot submit`,
+        { details: { attemptId: attempt.id, status: attempt.status } },
+      );
+    }
+    const latest = this.store.attempts.list({
+      where: 'run_id = ?',
+      params: [run.id],
+      orderBy: 'number DESC',
+      limit: 1,
+    })[0];
+    if (latest !== undefined && latest.id !== attempt.id) {
+      throw new ProtocolError(
+        'STALE_ARTIFACT',
+        `Attempt ${attempt.id} was superseded by ${latest.id}`,
+        { details: { attemptId: attempt.id, currentAttemptId: latest.id } },
+      );
+    }
+    if (input.expectedVersion !== undefined && input.expectedVersion !== run.version) {
+      throw new ProtocolError(
+        'VERSION_CONFLICT',
+        `expected Run version ${input.expectedVersion} but found ${run.version}`,
+        { details: { runId: run.id, version: run.version } },
+      );
+    }
 
     const payload = input.payload;
     if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
@@ -149,14 +197,16 @@ export class StageGate {
         attemptId: attempt.id,
         ...(run.taskId === undefined ? {} : { taskId: run.taskId }),
       });
+      // `protocol.md` §7 fixes the persistent names: a successful delivery is
+      // `stage.completed`, anything else is `stage.failed`, each with its outcome.
       this.store.events.append({
-        name: 'stage.submitted',
+        name: row.status === 'success' ? 'stage.completed' : 'stage.failed',
         entityId: run.id,
         entityVersion: run.version,
         data: {
           attemptId: attempt.id,
           stageResultId: row.id,
-          status: row.status,
+          outcome: row.status,
           changedPaths: row.changedPaths.length,
           evidenceRefs: row.evidenceRefs.length,
           readLedgerSeq: row.readLedgerSeq,
@@ -166,11 +216,14 @@ export class StageGate {
     });
   }
 
-  /** Number of Schema rejections already recorded for this Attempt. */
+  /** Schema rejections already recorded for this Attempt, from the event log. */
   rejections(attemptId: string): number {
     return this.store.events
-      .readAfter(0, { limit: 10_000, names: ['stage.rejected'] })
-      .filter((event) => event.data['attemptId'] === attemptId).length;
+      .readAfter(0, { limit: 10_000, names: ['stage.failed'] })
+      .filter(
+        (event) =>
+          event.data['attemptId'] === attemptId && event.data['outcome'] === 'schema_invalid',
+      ).length;
   }
 
   /**
@@ -187,18 +240,25 @@ export class StageGate {
         throw new ProtocolError('NOT_FOUND', `Run ${runId} does not exist`, {});
       }
       const prior = this.rejections(attemptId);
+      const rejection = prior + 1;
       this.store.events.append({
-        name: 'stage.rejected',
+        name: 'stage.failed',
         entityId: run.id,
         entityVersion: run.version,
-        data: { attemptId, reason: message, rejection: prior + 1 },
+        data: {
+          attemptId,
+          outcome: 'schema_invalid',
+          reason: message,
+          rejection,
+          correctionsRemaining: rejection === 1 ? 1 : 0,
+        },
       });
       if (prior === 0) {
         return {
           accepted: false as const,
           code: 'VALIDATION_ERROR' as const,
           message,
-          correctionsRemaining: 0 as const,
+          correctionsRemaining: 1 as const,
         };
       }
       if (!canTransitionRun(run.status, 'contract_violation')) {
@@ -210,17 +270,17 @@ export class StageGate {
       }
       const updated = this.store.runs.update(run.id, { status: 'contract_violation' }, run.version);
       this.store.events.append({
-        name: 'run.contract_violation',
+        name: 'run.ended',
         entityId: updated.id,
         entityVersion: updated.version,
-        data: { attemptId, rejections: prior + 1, reason: message },
+        data: { attemptId, outcome: 'contract_violation', rejections: rejection, reason: message },
       });
       return {
         accepted: false as const,
         code: 'CONTRACT_VIOLATION' as const,
         message,
         runStatus: 'contract_violation' as const,
-        rejections: prior + 1,
+        rejections: rejection,
       };
     });
   }

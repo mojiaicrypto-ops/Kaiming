@@ -161,7 +161,7 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  function child(requiredChild = true): Run {
+  function child(requiredChild = true, joinPolicy: 'none' | 'all' = 'all'): Run {
     return orchestrator.dispatch({
       spec: professionalSpec({
         workId: WORK_ID,
@@ -174,7 +174,7 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
         profileRevision: orchestrator.currentProfileRevision('backend'),
         requiredOutputs: ['stage.submit'],
         requiredChild,
-        joinPolicy: 'all',
+        joinPolicy,
         budgetAllocation: 4_000,
         parentRunId: chief.id,
       }),
@@ -191,29 +191,114 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
     expect(joins.onChildSettled(attemptAndSettle(first, 'completed').id).kind).toBe('waiting');
     expect(store.runs.find(chief.id)?.status).toBe('waiting_children');
 
-    // The parent is waiting, not stuck: its mailbox still answers (AC-046).
+    // The parent is waiting, not blocked: its mailbox answers, and it can still
+    // dispatch more children while a sibling is outstanding (AC-046).
     const mailbox = new ProjectMailbox();
     const admission = mailbox.submitCommand({
+      subject: chief.id,
+      operation: 'agent.dispatch',
+      run: () =>
+        orchestrator.dispatch({
+          spec: professionalSpec({
+            workId: WORK_ID,
+            role: 'backend',
+            purpose: 'implementation',
+            goal: 'a second adapter',
+            scope: { ...emptyScope, writePaths: ['packages/core/src'] },
+            stage: 'develop',
+            contextSelection: selection,
+            profileRevision: orchestrator.currentProfileRevision('backend'),
+            requiredOutputs: ['stage.submit'],
+            requiredChild: true,
+            joinPolicy: 'all',
+            budgetAllocation: 2_000,
+            parentRunId: chief.id,
+          }),
+        }).run,
+    });
+    expect(admission.accepted).toBe(true);
+    if (!admission.accepted) throw new Error('mailbox refused the command');
+    const third = await admission.completion;
+    expect(third.parentRunId).toBe(chief.id);
+    // The waiting parent is unchanged by the mailbox command's own status: still
+    // waiting for the outstanding sibling, now with one more child.
+    const statusAdmission = mailbox.submitCommand({
       subject: chief.id,
       operation: 'join.status',
       run: () => joins.state(chief.id),
     });
-    expect(admission.accepted).toBe(true);
-    if (!admission.accepted) throw new Error('mailbox refused the command');
-    await expect(admission.completion).resolves.toMatchObject({
+    expect(statusAdmission.accepted).toBe(true);
+    if (!statusAdmission.accepted) throw new Error('mailbox refused the status command');
+    await expect(statusAdmission.completion).resolves.toMatchObject({
       kind: 'waiting',
-      pending: [second.id],
+      pending: [second.id, third.id],
     });
 
-    const settled = joins.onChildSettled(attemptAndSettle(second, 'completed').id);
+    joins.onChildSettled(attemptAndSettle(second, 'completed').id);
+    const settled = joins.onChildSettled(attemptAndSettle(third, 'completed').id);
     expect(settled).toMatchObject({ kind: 'ready', parentRunId: chief.id });
     if (settled.kind !== 'ready') throw new Error('expected ready');
-    // Both children's results survive the join.
+    // Every child's result survives the join.
     expect(settled.children.map((entry) => entry.runId).sort()).toEqual(
-      [first.id, second.id].sort(),
+      [first.id, second.id, third.id].sort(),
     );
     expect(settled.children.every((entry) => entry.stageResult !== undefined)).toBe(true);
     expect(store.runs.find(chief.id)?.status).toBe('running');
+  });
+
+  it('does not hold the parent for joinPolicy=none, but still pages the Chief', () => {
+    const fireAndForget = child(true, 'none');
+    attemptAndSettle(fireAndForget, 'failed');
+    const outcome = joins.onChildSettled(fireAndForget.id);
+    expect(outcome).toMatchObject({ kind: 'ready', parentRunId: chief.id });
+    // A `none` child never puts the Chief into waiting_children.
+    expect(store.runs.find(chief.id)?.status).toBe('running');
+    const todos = store.events
+      .readAfter(0, { limit: 100 })
+      .filter((event) => event.name === 'chief_action_required');
+    expect(todos).toHaveLength(1);
+    expect(todos[0]?.data).toMatchObject({
+      reason: 'fire_and_forget_child_failed',
+      failed: [fireAndForget.id],
+    });
+
+    // A mixed set only waits for the `all` child.
+    const waiting = child(true, 'all');
+    joins.onChildSettled(attemptAndSettle(child(true, 'none'), 'completed').id);
+    const mixed = joins.state(chief.id);
+    expect(mixed).toMatchObject({ kind: 'waiting', pending: [waiting.id] });
+  });
+
+  it('refuses delivery for a terminal Run, a stale epoch or a superseded attempt', () => {
+    const run = child();
+    const attemptId = orchestrator.beginAttempt(run.id).id;
+    const valid = {
+      status: 'success',
+      summary: 'adapter implemented',
+      artifactRefs: [],
+      evidenceRefs: [],
+      changedPaths: [],
+      findingIds: [],
+      unknowns: [],
+      requestedActions: [],
+      readLedgerSeq: 1,
+      readLedgerHash: 'c'.repeat(64),
+    };
+    // A wrong epoch is a late/stale Attempt and writes nothing.
+    expect(() =>
+      stages.submit({ runId: run.id, attemptId, epoch: 7, payload: valid }),
+    ).toThrowError(/not the current epoch/);
+    expect(store.stageResults.list({ where: 'run_id = ?', params: [run.id] })).toHaveLength(0);
+
+    // Once the Run is terminal, no further evidence is accepted (AC-047 finality).
+    const rejected = stages.submit({ runId: run.id, attemptId, epoch: 0, payload: {} });
+    expect(rejected).toMatchObject({ accepted: false, code: 'VALIDATION_ERROR' });
+    stages.submit({ runId: run.id, attemptId, epoch: 0, payload: {} });
+    expect(store.runs.find(run.id)?.status).toBe('contract_violation');
+    expect(() =>
+      stages.submit({ runId: run.id, attemptId, epoch: 0, payload: valid }),
+    ).toThrowError(/accepts no further stage results/);
+    expect(store.stageResults.list({ where: 'run_id = ?', params: [run.id] })).toHaveLength(0);
   });
 
   it('blocks the gate and pages the Chief when a required child fails', () => {
@@ -253,9 +338,9 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
     const run = child();
     const attemptId = attemptOf(run);
     const invalid = { status: 'success' }; // missing the required summary
-    const first = stages.submit({ runId: run.id, attemptId, payload: invalid });
+    const first = stages.submit({ runId: run.id, attemptId, epoch: 0, payload: invalid });
     expect(first).toMatchObject({ accepted: false, code: 'VALIDATION_ERROR' });
-    const second = stages.submit({ runId: run.id, attemptId, payload: invalid });
+    const second = stages.submit({ runId: run.id, attemptId, epoch: 0, payload: invalid });
     expect(second).toMatchObject({
       accepted: false,
       code: 'CONTRACT_VIOLATION',
@@ -265,8 +350,12 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
     expect(store.runs.find(run.id)?.status).toBe('contract_violation');
     const rejections = store.events
       .readAfter(0, { limit: 100 })
-      .filter((event) => event.name === 'stage.rejected');
+      .filter((event) => event.data['outcome'] === 'schema_invalid');
     expect(rejections).toHaveLength(2);
+    expect(rejections.every((event) => event.name === 'stage.failed')).toBe(true);
+    expect(store.events.readAfter(0, { limit: 100 }).some((e) => e.name === 'run.ended')).toBe(
+      true,
+    );
     // A spoken success never stands in for the Schema.
     expect(store.stageResults.list({ where: 'run_id = ?', params: [run.id] })).toHaveLength(0);
   });
@@ -277,6 +366,7 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
     const accepted = stages.submit({
       runId: run.id,
       attemptId,
+      epoch: 0,
       payload: {
         status: 'success',
         summary: 'adapter implemented',
@@ -299,6 +389,7 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
       stages.submit({
         runId: run.id,
         attemptId,
+        epoch: 0,
         payload: { status: 'success', summary: 'x', runId: chief.id },
       }),
     ).toThrowError(ProtocolError);
@@ -308,6 +399,7 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
       stages.submit({
         runId: run.id,
         attemptId: otherAttempt,
+        epoch: 0,
         payload: { status: 'success', summary: 'x' },
       }),
     ).toThrowError(/does not belong to this Run/);
@@ -320,6 +412,7 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
     stages.submit({
       runId: run.id,
       attemptId,
+      epoch: 0,
       payload: {
         status: status === 'completed' ? 'success' : 'failed',
         summary: `child ${status}`,

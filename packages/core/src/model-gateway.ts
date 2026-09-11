@@ -12,9 +12,9 @@
  * The transport is injected: WP-02 exercises the whole path with a stub, and the
  * real HTTP clients land in WP-10 with the Provider vertical run.
  */
-import type { Profile, Role, Run } from '@agentdev/contracts';
+import type { Role, Run } from '@agentdev/contracts';
 import { ProtocolError } from './errors.js';
-import type { ConfigError, ConfigStore, ProfileResolution } from './config.js';
+import type { ConfigError, ConfigStore, ProfileLayer, ProfileResolution } from './config.js';
 import type { SnapshotWriter } from './snapshots.js';
 
 /** One completion request, already resolved against a frozen profile. */
@@ -87,7 +87,7 @@ export class ModelGateway {
    * A failure here is what makes a Work `blocked(provider)` (`agents.md` §5) — the
    * caller must not queue a Run that cannot be served.
    */
-  availability(role: Role, runParams: Partial<Profile> = {}): GatewayAvailability {
+  availability(role: Role, runParams: ProfileLayer = {}): GatewayAvailability {
     const resolution = this.config.resolve(role, runParams);
     if (!resolution.ok) return resolution;
     return { ok: true, resolution: resolution.resolution };

@@ -1,6 +1,6 @@
 # WP-02 实现 Plan（主管与独立Agent调度）
 
-- planVersion: 1
+- planVersion: 2
 - workId: WP-02
 - level: L2（新增 Core 调度/配置/网关模块与冻结快照；涉及身份权限与模型配置，但按 `docs/rules/agents.md`、`protocol.md`、`data.md` 既有定义实现，不改产品语义）
 - authorization_ref: 用户目标轮次「继续」（2026-09-11）；上级授权为「我要完全实现这个产品，让你来实现」
@@ -15,18 +15,22 @@
 
 writePaths:
 
-- `packages/core/src/config.ts`（新增：全局/Project 配置读写、revision、继承解析、ConfigSnapshot 冻结）
-- `packages/core/src/toml.ts`（新增：`~/.agentdev/config.toml` 与 Project 覆盖所需的最小 TOML 子集读写）
+- `packages/core/src/config.ts`（新增：全局/Project 配置读写、revision、继承解析、ConfigSnapshot 冻结；含 `FrozenProvider` 投影）
 - `packages/core/src/model-gateway.ts`（新增：按冻结快照解析 Provider/模型、能力校验、连接测试缝）
 - `packages/core/src/orchestrator.ts`（新增：Assessment 记录、DispatchSpec 校验与冻结、Run 建立、`request_dispatch` 与 `chief_action_required`）
 - `packages/core/src/join.ts`（新增：Join/父唤醒/局部失败/等待中接消息）
 - `packages/core/src/stage.ts`（新增：StageResult 契约、修正一次、二次 Schema 错误 `contract_violation`）
-- `packages/core/src/index.ts`、`packages/domain/src/**`（仅补齐缺失判定）、`packages/contracts/src/entities/structures.ts`（仅在发现 Schema 缺口时）
+- `packages/core/src/toml.ts`（新增：`~/.agentdev/config.toml` 与 Project 覆盖所需的最小 TOML 子集读写）
+- `packages/core/src/snapshots.ts`（新增：内容寻址快照写入/读取；planVersion 2 补入，见 RE-05）
+- `packages/core/src/index.ts`、`packages/domain/src/**`（补齐 purpose×role 等缺失判定）
+- `packages/contracts/src/entities/structures.ts`（Schema 缺口：provider/policy/configDocument、`stageResultContentSchema`）
+- `packages/contracts/src/entities/run.ts` 与 `packages/contracts/test/entities.test.ts`（planVersion 2 授权：Run 的三个快照引用改为 `snapshotRefSchema`，见 DC-27/RE-06；`snapshot` 主键为 `(type,hash)`、无 id 列，`data.md` 的 `ID` 记法与之不一致，该偏离在结算时上报产品方确认）
 - `packages/core/test/**`（新增测试）
 - `.agentdev/work/WP-02/**`（过程记录）
 
 readPaths: `docs/**`（主要 `rules/agents.md`、`rules/workflow.md`、`architecture/{ARCHITECTURE,data,protocol,reliability,context}.md`、`delivery/{implementation,acceptance}.md`）
-不可写：`docs/**`（除结算时更新 `docs/INDEX.md` 的实现状态事实）、`packages/storage`、`packages/contracts`（除上述缺口）、`webui/**`、`docker/**`
+- planVersion 2 写入范围变更（授权来源：本包 Review R-05；用户目标轮次「继续」）：新增 `packages/core/src/snapshots.ts`，并把 `packages/contracts/src/entities/{run.ts,structures.ts}` 与 `packages/contracts/test/entities.test.ts` 明确列入授权缺口修复范围。
+不可写：`docs/**`（除结算时更新 `docs/INDEX.md` 的实现状态事实）、`packages/storage`、`webui/**`、`docker/**`
 
 ## 3. tasks（DAG）
 

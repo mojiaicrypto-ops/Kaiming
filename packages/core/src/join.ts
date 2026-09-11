@@ -20,6 +20,8 @@ export interface ChildOutcome {
   readonly role: Run['role'];
   readonly status: RunStatus;
   readonly requiredChild: boolean;
+  /** `all` = the parent waits for it; `none` = fire-and-forget (`agents.md` §3). */
+  readonly join: Run['join'];
   readonly stageResult?: {
     readonly status: StageResultRow['status'];
     readonly summary: string;
@@ -91,6 +93,7 @@ export class JoinCoordinator {
       role: child.role,
       status: child.status,
       requiredChild: child.requiredChild,
+      join: child.join,
       ...(stageResult === undefined
         ? {}
         : {
@@ -117,7 +120,11 @@ export class JoinCoordinator {
   state(parentRunId: string): JoinOutcome {
     const parent = this.requireRun(parentRunId);
     const children = this.childrenOf(parent.id);
-    const pending = children.filter((child) => !isTerminalRunStatus(child.status));
+    // Only `join=all` children hold the parent (`agents.md` §3: a `none` dispatch
+    // lets the Chief continue immediately).
+    const pending = children.filter(
+      (child) => child.join === 'all' && !isTerminalRunStatus(child.status),
+    );
     if (pending.length > 0) {
       return {
         kind: 'waiting',
@@ -127,7 +134,7 @@ export class JoinCoordinator {
       };
     }
     const failedRequired = children.filter(
-      (child) => child.requiredChild && isFailed(child.status),
+      (child) => child.join === 'all' && child.requiredChild && isFailed(child.status),
     );
     if (failedRequired.length > 0) {
       return { kind: 'blocked', parentRunId: parent.id, children, failedRequired, chiefTodo: '' };
@@ -154,7 +161,9 @@ export class JoinCoordinator {
 
     return withTransaction(this.store.db, () => {
       const children = this.childrenOf(parent.id);
-      const pending = children.filter((entry) => !isTerminalRunStatus(entry.status));
+      const pending = children.filter(
+        (entry) => entry.join === 'all' && !isTerminalRunStatus(entry.status),
+      );
       if (pending.length > 0) {
         if (parent.status === 'running') {
           const updated = this.store.runs.update(
@@ -177,8 +186,24 @@ export class JoinCoordinator {
         };
       }
 
+      // A fire-and-forget child that failed does not block the gate, but the Chief
+      // is still told about it (`agents.md` §3 `none`).
+      const lostFireAndForget = children.filter(
+        (entry) => entry.join === 'none' && isFailed(entry.status),
+      );
+      if (lostFireAndForget.length > 0) {
+        this.store.events.append({
+          name: 'chief_action_required',
+          entityId: parent.id,
+          entityVersion: parent.version,
+          data: {
+            reason: 'fire_and_forget_child_failed',
+            failed: lostFireAndForget.map((entry) => entry.runId),
+          },
+        });
+      }
       const failedRequired = children.filter(
-        (entry) => entry.requiredChild && isFailed(entry.status),
+        (entry) => entry.join === 'all' && entry.requiredChild && isFailed(entry.status),
       );
       if (failedRequired.length > 0) {
         // Siblings are untouched and every result travels with the todo, so the
@@ -195,6 +220,13 @@ export class JoinCoordinator {
               role: entry.role,
               status: entry.status,
               requiredChild: entry.requiredChild,
+              join: entry.join,
+              // The Chief must be able to act from the event alone, so the
+              // delivery summary travels with it (AC-046「父获全部结果」).
+              summary: entry.stageResult?.summary ?? null,
+              artifactRefs: (entry.stageResult?.artifactRefs ?? []).map((ref) => ref.id),
+              unknowns: [...(entry.stageResult?.unknowns ?? [])],
+              requestedActions: [...(entry.stageResult?.requestedActions ?? [])],
             })),
           },
         });
