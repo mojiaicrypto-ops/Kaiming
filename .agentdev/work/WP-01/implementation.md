@@ -40,9 +40,22 @@
 
 证据：`packages/storage/test/migrations.integration.test.ts` — 14 用例（真实 SQLite 文件）：迁移幂等、pragma 断言、迁移前备份可用、checksum 不一致停止、文件版本超前停止、失败迁移回滚且不留部分表、每张表列与实体 Schema 一致、基础五列、唯一约束、枚举/JSON/数组/外键 CHECK 负例、event/snapshot/user_action 不可变触发器。
 
+### T4 仓储与账本（完成）
+
+- `repository.ts`：规格驱动的 `EntityRepository`（`fromColumns` 逐行用契约 Schema 复核，写入走 `version` CAS），`VERSION_CONFLICT`/`NOT_FOUND`/`DUPLICATE_KEY`/`CONSTRAINT_VIOLATION`/`BUSY` 映射；`TABLES` 覆盖 `data.md` §2 全部 28 张表的 JSON/布尔列与内部列。
+- `commands.ts`：幂等账本 `begin`（同键同载荷→`replay` 原结果、同键异载荷或异主体→`conflict`、并发插入竞争后重读）、`complete`、按主体取回的 `lookup`、`pruneBefore`。
+- `events.ts`：`append` 返回自增 cursor、`readAfter`（含名称过滤与截断检测）、`latestCursor`/`oldestCursor`、`truncateBefore`；游标早于保留窗口时抛 `RESYNC_REQUIRED`。
+- `outbox.ts`：`enqueue` 按 operationId 去重、`claim`（30 秒 lease，仅 pending 或租约过期可领取，attempts 自增）、`complete`/`release`/`pending`/`countByState`。
+- `leases.ts`：`acquire`（resource 唯一、过期可接管并报告 `replacedExpired`、同 owner 同 epoch 幂等）、`renew`/`release`（校验 owner+epoch）、`expired`/`releaseExpired`/`releaseAll`。
+- `blobs.ts`：内容寻址写入（临时文件 + fsync + 校验 Hash 后原子 rename）、`readVerified`、`BLOB_MISSING`/`BLOB_MISMATCH`、路径逃逸拒绝、`collectGarbage` 离线清理。
+- `store.ts`：`ProjectStore.open` 先迁移再暴露 28 个仓储与账本/事件/outbox/lease/blob 句柄。
+
+契约修正（依据文档复核）：`project.id` 改为 `projectIdSchema`（`SHA256(canonicalRoot)[0:32]`，`ARCHITECTURE.md` §4）并同步 DDL `length(id)=32`；新增 `entityIdSchema`（UUIDv7 或 project id），供 event 目标与 `SourceRef` 引用项目时使用；`event` 的不可变策略细化为"禁 UPDATE、允许保留期截断 DELETE"。
+
+证据：`packages/storage/test/ledger.integration.test.ts` — 21 用例（真实 SQLite + 真实 blob 目录）：**丢应答重试返回原结果且效果只发生一次**、同键异载荷/异主体冲突、事件 cursor 单调与截断后 `RESYNC_REQUIRED`、事件禁改、outbox 租约内不重投与过期重领、lease 抢占与 owner 校验、blob 原子写入/缺失/损坏/GC、CAS 冲突与重复键。
+
 ## 2. 尚未完成（下一轮）
 
-- T4 其余：仓储（版本 CAS 读写）、`command` 幂等（同键同载荷返回原结果、异载荷拒绝）、`event` 追加与 cursor、`outbox` claim/lease、`lease` 续约与过期。
 - T5 `packages/core`：ProjectMailbox（串行、256 项/4MiB、BUSY、>100ms 诊断、长操作在事务外）、命令分发（校验/expectedVersion/幂等/授权）。
 - T6：EventHub 与订阅（快照+C 水位、replay/snapshot、ack、RESYNC_REQUIRED、慢连接软硬限）。
 - T7：连接认证（安装凭证 0600 Bearer、会话 cookie/CSRF/Origin、24h 过期、登录限速）与 Project 身份（canonical realpath、git toplevel、嵌套仓库排除、relocate 别名）。
@@ -58,8 +71,8 @@
 | `pnpm install --frozen-lockfile` | 退出 0；新增 better-sqlite3 13.0.3（`allowBuilds: true`，原生绑定编译成功） |
 | `pnpm typecheck` | 退出 0 |
 | `pnpm lint` | 退出 0 |
-| `pnpm test:unit` | 11 文件 / 146 用例通过 |
-| `pnpm test:integration` | 5 文件 / 52 用例通过（含新增 14 个存储迁移用例） |
+| `pnpm test:unit` | 11 文件 / 147 用例通过 |
+| `pnpm test:integration` | 6 文件 / 73 用例通过（14 个迁移用例 + 21 个仓储/账本用例） |
 | `pnpm docs:check` | 退出 0 |
 | `pnpm build` | 退出 0（contracts/domain/storage/core/pi-runtime/runner/cli） |
 | `pnpm test:e2e\|acceptance\|live` | 仍按契约 `NOT_IMPLEMENTED` 退出 1 |
@@ -70,3 +83,5 @@
 - `project` 表不设 `project_id` 列：该行的 `id` 即项目标识（`ARCHITECTURE.md` §4），读模型仍暴露 `projectId` 的 `projectSummary`。
 - `outbox` 采用实体五列 + `operation_id UNIQUE`，以同时满足 `data.md` §1 的行列规则与 §2 的 operationId 唯一。
 - `requirement.portableRef` 以 JSON 列存储，与文档字段一一对应。
+- `snapshot` 以 (type, hash) 复合主键；仓储层按 hash 读取，写入由 Core 使用显式 SQL。
+- `EntityRepository.update` 在同一事务内先读后写，SQLite 的写锁由 `BEGIN IMMEDIATE` 保证，因此 CAS 不会出现丢失更新。

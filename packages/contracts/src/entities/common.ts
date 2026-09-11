@@ -12,6 +12,7 @@ import {
   MAX_ARRAY_ITEMS,
   hashSchema,
   idSchema,
+  entityIdSchema,
   projectIdSchema,
   timeSchema,
 } from '../primitives.js';
@@ -52,8 +53,8 @@ export const entityBaseShape = {
 } as const;
 
 /** Ids of other rows in the same project (never cross-project, `data.md` §1). */
-export const idRefSchema = idSchema;
-export const idRefListSchema = list(idSchema);
+export const idRefSchema = entityIdSchema;
+export const idRefListSchema = list(entityIdSchema);
 
 /** `Snapshot.type` — the five frozen-payload kinds (`data.md` §2). */
 export const snapshotTypeSchema = z.enum([

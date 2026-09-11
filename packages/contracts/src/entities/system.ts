@@ -7,7 +7,14 @@
  * replayable and rebuildable knowledge explicit.
  */
 import { z } from 'zod';
-import { hashSchema, idSchema, refSchema, sourceRefSchema, timeSchema } from '../primitives.js';
+import {
+  entityIdSchema,
+  hashSchema,
+  idSchema,
+  refSchema,
+  sourceRefSchema,
+  timeSchema,
+} from '../primitives.js';
 import { artifactKindSchema, roleSchema } from '../enums.js';
 import {
   entityBaseShape,
@@ -86,7 +93,7 @@ export const eventSchema = z.strictObject({
   cursor: z.number().int().positive(),
   eventId: idSchema,
   name: z.string().min(1),
-  entityId: idSchema,
+  entityId: entityIdSchema,
   entityVersion: z.number().int().nonnegative(),
   data: jsonObjectSchema,
   occurredAt: timeSchema,
@@ -152,7 +159,7 @@ export type FeatureProjection = z.infer<typeof featureProjectionSchema>;
 /** A published domain event as clients receive it (`protocol.md` §7). */
 export const eventEnvelopePayloadSchema = z.strictObject({
   name: z.string().min(1),
-  entityId: idSchema,
+  entityId: entityIdSchema,
   entityVersion: z.number().int().nonnegative(),
   data: jsonObjectSchema,
   refs: list(refSchema),

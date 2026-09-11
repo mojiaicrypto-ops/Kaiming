@@ -2,9 +2,13 @@ import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+/** `SHA256(canonicalRoot)[0:32]` — the project row's id form. */
+const PROJECT_ID = '0f1e2d3c4b5a69788796a5b4c3d2e1f0';
 import {
   CORE_SCHEMA_SQL,
-  IMMUTABLE_TABLES,
+  DELETE_BLOCKED_TABLES,
+  UPDATE_BLOCKED_TABLES,
   MIGRATIONS,
   MIGRATION_TABLE,
   SCHEMA_TABLES,
@@ -291,12 +295,7 @@ describe('database-level invariants', () => {
     db.prepare(
       `INSERT INTO project (id, version, created_at, updated_at, root, code_root, document_root, delivery_branch, trust, state)
        VALUES (?, 1, ?, ?, ?, 'src', 'docs', 'agentdev/main', 'trusted', 'open')`,
-    ).run(
-      '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e5f',
-      '2026-09-11T00:00:00.000Z',
-      '2026-09-11T00:00:00.000Z',
-      '/tmp/root',
-    );
+    ).run(PROJECT_ID, '2026-09-11T00:00:00.000Z', '2026-09-11T00:00:00.000Z', '/tmp/root');
   });
 
   it('rejects an enum outside the documented set', () => {
@@ -342,28 +341,52 @@ describe('database-level invariants', () => {
       db
         .prepare(
           `INSERT INTO message (id, project_id, version, created_at, updated_at, conversation_id, seq, sender, body_ref, state, result_refs)
-           VALUES ('018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e60', '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e5f', 1, ?, ?, '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e6f', 1, 'user', '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e7f', 'received', '[]')`,
+           VALUES ('018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e60', ?, 1, ?, ?, '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e6f', 1, 'user', '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e7f', 'received', '[]')`,
         )
-        .run('2026-09-11T00:00:00.000Z', '2026-09-11T00:00:00.000Z'),
+        .run(PROJECT_ID, '2026-09-11T00:00:00.000Z', '2026-09-11T00:00:00.000Z'),
     ).toThrow(/FOREIGN KEY constraint failed/);
   });
 
   it('makes events, snapshots and user actions immutable', () => {
     db.prepare(
       `INSERT INTO event (project_id, event_id, name, entity_id, entity_version, data, occurred_at)
-       VALUES ('018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e5f', '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e60', 'work.control_changed', '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e61', 1, '{}', ?)`,
-    ).run('2026-09-11T00:00:00.000Z');
+       VALUES (?, '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e60', 'work.control_changed', '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e61', 1, '{}', ?)`,
+    ).run(PROJECT_ID, '2026-09-11T00:00:00.000Z');
 
-    for (const table of IMMUTABLE_TABLES) {
-      const triggers = db
-        .prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?`)
-        .all(table) as { name: string }[];
-      expect(triggers.map((row) => row.name).sort(), table).toEqual([
-        `${table}_no_delete`,
-        `${table}_no_update`,
-      ]);
+    const triggersFor = (table: string): string[] =>
+      (
+        db
+          .prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ?`)
+          .all(table) as { name: string }[]
+      )
+        .map((row) => row.name)
+        .sort();
+
+    // UPDATE is blocked everywhere; DELETE stays available for events alone,
+    // because `data.md` §5 requires retention truncation.
+    for (const table of UPDATE_BLOCKED_TABLES) {
+      expect(triggersFor(table), table).toContain(`${table}_no_update`);
     }
+    for (const table of DELETE_BLOCKED_TABLES) {
+      expect(triggersFor(table), table).toContain(`${table}_no_delete`);
+    }
+    expect(triggersFor('event')).toEqual(['event_no_update']);
+    // The delete/update triggers are per row, so the probes need real rows.
+    db.prepare(
+      `INSERT INTO snapshot (type, hash, payload, blob_path, created_at)
+       VALUES ('config', ?, '{}', 'blobs/ab/x', ?)`,
+    ).run('a'.repeat(64), '2026-09-11T00:00:00.000Z');
+    db.prepare(
+      `INSERT INTO user_action (id, project_id, version, created_at, updated_at, actor_id, action, payload, payload_hash)
+       VALUES ('018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e70', ?, 1, ?, ?, '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e71', 'work.pause', '{}', ?)`,
+    ).run(PROJECT_ID, '2026-09-11T00:00:00.000Z', '2026-09-11T00:00:00.000Z', 'b'.repeat(64));
+
     expect(() => db.prepare(`UPDATE event SET name = 'x'`).run()).toThrow(/immutable/);
-    expect(() => db.prepare(`DELETE FROM event`).run()).toThrow(/immutable/);
+    expect(() => db.prepare(`UPDATE snapshot SET blob_path = 'x'`).run()).toThrow(/immutable/);
+    expect(() => db.prepare(`UPDATE user_action SET action = 'x'`).run()).toThrow(/immutable/);
+    // Retention truncation is the one documented deletion (`data.md` §5).
+    expect(db.prepare(`DELETE FROM event`).run().changes).toBe(1);
+    expect(() => db.prepare(`DELETE FROM snapshot`).run()).toThrow(/immutable/);
+    expect(() => db.prepare(`DELETE FROM user_action`).run()).toThrow(/immutable/);
   });
 });

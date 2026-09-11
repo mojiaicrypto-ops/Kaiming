@@ -47,8 +47,18 @@ export const SCHEMA_TABLES = [
 ] as const;
 export type SchemaTable = (typeof SCHEMA_TABLES)[number];
 
-/** Tables that reject UPDATE and DELETE; their rows are immutable facts. */
-export const IMMUTABLE_TABLES = ['event', 'snapshot', 'user_action'] as const;
+/**
+ * Immutability policy per table.
+ *
+ * `data.md` §2 marks events, snapshots and user actions immutable. Events differ
+ * in one respect: §5 requires retention truncation after 30 days, so the event
+ * trigger blocks UPDATE only. Snapshots and user actions can never be rewritten
+ * or deleted.
+ */
+export const UPDATE_BLOCKED_TABLES = ['event', 'snapshot', 'user_action'] as const;
+export const DELETE_BLOCKED_TABLES = ['snapshot', 'user_action'] as const;
+/** @deprecated kept for callers that only need the update-blocked set. */
+export const IMMUTABLE_TABLES = UPDATE_BLOCKED_TABLES;
 
 /** Shared column definitions for the five mutable-row columns (`data.md` §2). */
 const ENTITY_COLUMNS = `
@@ -61,8 +71,10 @@ const ENTITY_COLUMNS = `
 const JSON_ARRAY_LIMIT = 'json_array_length({column}) <= 1000';
 
 export const CORE_SCHEMA_SQL = `
+-- The project row's id is SHA256(canonicalRoot)[0:32] (ARCHITECTURE.md §4),
+-- not a UUIDv7, so this table gets its own id check.
 CREATE TABLE project (
-  id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 36),
+  id TEXT PRIMARY KEY NOT NULL CHECK (length(id) = 32),
   version INTEGER NOT NULL CHECK (version > 0),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -446,14 +458,19 @@ CREATE INDEX idx_operation_kind ON operation(kind, state);
  * `data.md` §2 marks events, snapshots and user actions immutable, and
  * `reliability.md` §2 requires that evidence cannot be rewritten later.
  */
-export const IMMUTABILITY_SQL = IMMUTABLE_TABLES.map(
-  (table) => `
+export const IMMUTABILITY_SQL = [
+  ...UPDATE_BLOCKED_TABLES.map(
+    (table) => `
 CREATE TRIGGER ${table}_no_update BEFORE UPDATE ON ${table}
 BEGIN
   SELECT RAISE(ABORT, '${table} rows are immutable');
-END;
+END;`,
+  ),
+  ...DELETE_BLOCKED_TABLES.map(
+    (table) => `
 CREATE TRIGGER ${table}_no_delete BEFORE DELETE ON ${table}
 BEGIN
   SELECT RAISE(ABORT, '${table} rows are immutable');
 END;`,
-).join('\n');
+  ),
+].join('\n');

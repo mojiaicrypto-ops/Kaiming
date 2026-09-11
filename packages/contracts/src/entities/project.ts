@@ -26,11 +26,13 @@ import {
  * `project` — one opened repository root and its three roots.
  *
  * The project row is the only table without its own `project_id` column: its `id`
- * *is* the project id (`ARCHITECTURE.md` §4), so repeating it would be a second
- * source of truth. The client-facing summary still exposes `projectId`.
+ * *is* the project id — `SHA256(canonicalRoot)` truncated to 32 hex
+ * (`ARCHITECTURE.md` §4) — so repeating it would be a second source of truth, and
+ * the id is deliberately not a UUIDv7. The client-facing summary still exposes
+ * `projectId`.
  */
 export const projectSchema = z.strictObject({
-  id: idSchema,
+  id: projectIdSchema,
   version: versionSchema,
   createdAt: timeSchema,
   updatedAt: timeSchema,

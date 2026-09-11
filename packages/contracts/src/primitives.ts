@@ -27,6 +27,13 @@ export const featureIdSchema = z
 export const projectIdSchema = z
   .string()
   .regex(PROJECT_ID, { message: 'expected 32 lowercase hex digits' });
+/**
+ * Any addressable entity: a UUIDv7 row, or a Project, whose id is
+ * `SHA256(canonicalRoot)` truncated to 32 hex (`ARCHITECTURE.md` §4).
+ * References that may point at a Project — event targets, SourceRef ids — use
+ * this wider form; `project_id` columns stay strictly 32 hex.
+ */
+export const entityIdSchema = z.union([z.string().regex(UUID_V7), projectIdSchema]);
 export const hashSchema = z
   .string()
   .regex(SHA256, { message: 'expected a lowercase SHA256 hex digest' });
@@ -41,6 +48,7 @@ export const timeSchema = z
 export type Id = z.infer<typeof idSchema>;
 export type FeatureId = z.infer<typeof featureIdSchema>;
 export type ProjectId = z.infer<typeof projectIdSchema>;
+export type EntityId = z.infer<typeof entityIdSchema>;
 export type Hash = z.infer<typeof hashSchema>;
 export type GitRevision = z.infer<typeof gitRevisionSchema>;
 export type Time = z.infer<typeof timeSchema>;

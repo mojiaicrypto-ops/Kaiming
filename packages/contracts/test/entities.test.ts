@@ -39,6 +39,8 @@ import {
  */
 const ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e5f';
 const ID2 = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e60';
+/** `SHA256(canonicalRoot)` truncated to 32 hex (`ARCHITECTURE.md` §4). */
+const PROJECT_ID = '0f1e2d3c4b5a69788796a5b4c3d2e1f0';
 const PROJECT = 'a'.repeat(32);
 const HASH = 'b'.repeat(64);
 const TIME = '2026-09-11T00:00:00.000Z';
@@ -84,10 +86,10 @@ const DOCUMENTED_TABLES = [
 type TableName = (typeof DOCUMENTED_TABLES)[number];
 
 /** One minimal valid row per documented table. */
-const rows: Record<TableName, unknown> = {
+const rows = {
   project: {
-    // The project row's id *is* the project id, so it carries no projectId field.
-    id: ID,
+    // The project row's id *is* the project id: 32 hex, not a UUIDv7.
+    id: PROJECT_ID,
     version: 1,
     createdAt: TIME,
     updatedAt: TIME,
@@ -407,6 +409,13 @@ describe('documented cross-field constraints', () => {
   const row = (table: TableName, patch: Record<string, unknown>): unknown => ({
     ...(rows[table] as Record<string, unknown>),
     ...patch,
+  });
+
+  it('keys the project row by the canonical-root hash, not a UUIDv7', () => {
+    expect(projectSchema.safeParse(rows.project).success).toBe(true);
+    // A UUIDv7 is the id form of every other table; the project id is not.
+    expect(projectSchema.safeParse({ ...rows.project, id: ID }).success).toBe(false);
+    expect(projectSchema.safeParse({ ...rows.project, id: 'A'.repeat(32) }).success).toBe(false);
   });
 
   it('requires an owner for user/agent message bodies', () => {
