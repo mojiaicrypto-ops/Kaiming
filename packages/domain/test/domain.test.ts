@@ -415,6 +415,18 @@ describe('level routing (workflow.md §2)', () => {
       '修改 ../secret.md',
       '修改 /etc/hosts.md',
       '修改 ~/.ssh/config.md',
+      // Round 16: the marker union applies even inside a refusal/explanation clause, the
+      // adversative 要 only counts as a correction, and additive fragments do not stand
+      // alone as commands.
+      '不用改 docs/PLAN.md 的话，然后修改 docs/INDEX.md',
+      '不要修改 docs/PLAN.md 吗，然后修改 docs/INDEX.md',
+      '不要修改 docs/PLAN.md 是明智的，然后修改 docs/INDEX.md',
+      '但要修改 docs/INDEX.md',
+      '而是要更新 docs/INDEX.md',
+      '不过要删除 docs/PLAN.md',
+      '也修改 docs/INDEX.md',
+      '同时也修改 docs/PLAN.md',
+      '然后修改 docs/INDEX.md',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(false);

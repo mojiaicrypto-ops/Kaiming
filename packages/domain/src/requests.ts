@@ -170,6 +170,16 @@ const COMMENT_PATTERNS: readonly RegExp[] = [
 /** Clauses that are only politeness ("谢谢", "thanks") carry no request. */
 const POLITE_TAIL_PATTERN = /^(?:谢谢|多谢|感谢|thanks|thank you|thx|麻烦了|拜谢)[。！!\s]*$/iu;
 
+/**
+ * Conditions that gate a command (`视具体情况`, `不用改 X 的话`, `depending on the
+ * result`). A conditional clause anywhere makes the message a discussion, even when the
+ * clause happens to contain a negation or an explanation verb (W3R16 review).
+ */
+const CONDITION_PATTERNS: readonly RegExp[] = [
+  /(一旦|的话|之后|以后|确认后|经确认|经批准|批准后|否则|待你|等你|等消息|看情况|看结果|酌情|发现问题|如有问题|视情况|视具体|先讨论|先确认|先跟你确认|收到回复|收到消息|按你|随你|由你|取决于)/u,
+  /\b(once|after|before|depending|pending|upon approval|subject to|as long as|if needed)\b/iu,
+];
+
 /** Hypotheticals and quotations are not instructions. */
 const HYPOTHETICAL_PATTERNS: readonly RegExp[] = [
   /(如果|假如|若是|要是|万一|假设)/u,
@@ -227,7 +237,7 @@ const POLITE_LEAD_PATTERN = /^(?:请|麻烦|帮我|帮忙|劳驾|kindly|please)\
 
 /** Adverbs and conjunctions that may precede the verb of a command. */
 const ADVERB_LEAD_PATTERN =
-  /^(?:(?:但|但是|而是|不过|然后|再|同时|也|另外|并且|而且|就|先|特别|重点|主要|务必|一定|直接|立刻|马上|尽快|顺便|顺手)\s*)+/u;
+  /^(?:(?:但是|而是|不过|但|然后|再|同时|也|另外|并且|而且|就|先|特别|重点|主要|务必|一定|直接|立刻|马上|尽快|顺便|顺手)\s*)+/u;
 
 /** Number of change verbs in a clause, in either language. */
 function countChangeVerbs(clause: string): number {
@@ -250,9 +260,7 @@ function countChangeVerbs(clause: string): number {
  * is a modal that keeps the clause a statement (`另外要更新 X`).
  */
 function normalizeCore(clause: string): string {
-  let core = clause.replace(POLITE_LEAD_PATTERN, '').replace(ADVERB_LEAD_PATTERN, '');
-  if (/^(?:但|但是|而是|不过)/u.test(clause.trim())) core = core.replace(/^要/u, '');
-  return core;
+  return clause.replace(POLITE_LEAD_PATTERN, '').replace(ADVERB_LEAD_PATTERN, '');
 }
 
 /** The single target this clause commands, or `undefined` when it is not a command. */
@@ -379,47 +387,73 @@ export function routeMessage(body: string): MessageRouting {
   // opinion — makes the message a conversation rather than an order, so no clause may
   // authorize (`视具体情况，然后修改 X`, `修改 X，视具体情况`). This is structural: an
   // unregistered wording cannot open a hole, it can only ask for clarification.
-  const readings = clauses.map((clause) => ({
-    clause,
-    reading: readClause(clause.text),
-    refusal: matches(NEGATION_PATTERNS, clause.text),
-    polite: POLITE_TAIL_PATTERN.test(clause.text),
-    explanationLead:
-      EXPLANATION_LEAD_PATTERN.test(clause.text) || EXPLANATION_LEAD_EN_PATTERN.test(clause.text),
-  }));
-  const suppressed = readings.some(
-    ({ reading, refusal, polite, explanationLead }) =>
-      reading.target === undefined && !refusal && !polite && !explanationLead,
+  const additiveLead = /^(?:也|再|就|则|另外|同时|并且|而且|然后|顺便|顺手)/u;
+  const readings = clauses.map((clause, index) => {
+    const reading = readClause(clause.text);
+    const refusal = matches(NEGATION_PATTERNS, clause.text);
+    const polite = POLITE_TAIL_PATTERN.test(clause.text);
+    const explanationLead =
+      EXPLANATION_LEAD_PATTERN.test(clause.text) || EXPLANATION_LEAD_EN_PATTERN.test(clause.text);
+    // "别改 A，但要修复 B": 要 belongs to a correction and only counts after a refusal.
+    let target = reading.target;
+    const previousWasRefusal =
+      index > 0 &&
+      clauses
+        .slice(0, index)
+        .some((earlier, position) =>
+          position === index - 1 ? matches(NEGATION_PATTERNS, earlier.text) : false,
+        );
+    const adversative = /^(?:但是|而是|不过|但)/u.test(clause.text.trim());
+    if (target === undefined && previousWasRefusal && adversative) {
+      const correction = /^(?:但是|而是|不过|但)\s*要\s*(.+)$/u.exec(clause.text.trim());
+      if (correction?.[1] !== undefined) target = commandTarget(correction[1]);
+    }
+    return {
+      clause,
+      reading,
+      refusal,
+      polite,
+      explanationLead,
+      target,
+      previousWasRefusal,
+      adversative,
+    };
+  });
+  const markerSuppressed = clauses.some(
+    (clause) =>
+      matches(QUESTION_PATTERNS, clause.text) ||
+      matches(CHOICE_PATTERNS, clause.text) ||
+      matches(ADVICE_PATTERNS, clause.text) ||
+      matches(COMMENT_PATTERNS, clause.text) ||
+      matches(CONDITION_PATTERNS, clause.text) ||
+      matches(HYPOTHETICAL_PATTERNS, clause.text) ||
+      matches(PRECONDITION_PATTERNS, clause.text),
   );
+  const classSuppressed = readings.some(
+    ({ target, refusal, polite, explanationLead }) =>
+      target === undefined && !refusal && !polite && !explanationLead,
+  );
+  const suppressed = markerSuppressed || classSuppressed;
+
   const targets: string[] = [];
   let explanation = false;
-  let previousWasRefusal = false;
 
-  readings.forEach(({ clause, reading, refusal, polite }, index) => {
-    if (polite) {
-      previousWasRefusal = false;
-      return;
-    }
-    // A command may open the message, follow a coordinating conjunction, or correct a
-    // refusal ("别改 A，改 B"). Any other preamble ("经批准", "视具体情况",
-    // "depending on the result") makes the following clause hypothetical — that rule is
-    // structural, so an unregistered preamble cannot open a hole (W3R13/W3R14 review).
-    // A command may open the message, follow a coordinating conjunction, or correct a
-    // refusal when it is adversative ("...但/而是/不过 修复 X") or bare.
-    const adversative = /^(?:但|但是|而是|不过)/u.test(clause.text.trim());
-    const allowed =
-      index === 0 ||
-      clause.conjunction ||
-      (previousWasRefusal &&
-        (adversative || !/^(?:也|再|就|则|并且|而且|然后|同时)/u.test(clause.text.trim())));
-    if (reading.target !== undefined && !suppressed && allowed) {
-      targets.push(reading.target);
-    } else if (reading.target !== undefined) {
-      explanation = true;
-    }
-    if (reading.explanation) explanation = true;
-    previousWasRefusal = refusal;
-  });
+  readings.forEach(
+    ({ clause, reading, polite, target, previousWasRefusal, adversative }, index) => {
+      if (polite) return;
+      const additive = additiveLead.test(clause.text.trim());
+      const allowed =
+        index === 0
+          ? !additive
+          : clause.conjunction || (previousWasRefusal && (adversative || !additive));
+      if (target !== undefined && !suppressed && allowed) {
+        targets.push(target);
+      } else if (target !== undefined) {
+        explanation = true;
+      }
+      if (reading.explanation) explanation = true;
+    },
+  );
 
   const items: MessageWorkItem[] = [];
   const paths = [...new Set(targets)];
