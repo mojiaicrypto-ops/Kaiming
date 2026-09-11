@@ -340,6 +340,22 @@ describe('level routing (workflow.md §2)', () => {
       '如果要修改 docs/INDEX.md，请告诉我',
       '你说要修复 docs/INDEX.md',
       '你提到 docs/INDEX.md 需要修复',
+      // Round 9: completion particles, passive statements, conditions, choice
+      // questions and unpunctuated verb lists.
+      '补充了 docs/INDEX.md',
+      '更新了接口文档，补充了 docs/INDEX.md 的说明',
+      '修复完了 docs/INDEX.md',
+      '更新完毕 docs/INDEX.md',
+      '修改 docs/INDEX.md 好还是不改好',
+      'fix docs/INDEX.md or leave it alone',
+      'docs/INDEX.md 需要被修改',
+      'docs/INDEX.md 应该被修复',
+      'docs/INDEX.md 必须被删除',
+      'docs/INDEX.md 会被清理',
+      'docs/INDEX.md 值得被优化',
+      '如果要改，就修改 docs/INDEX.md',
+      'docs/INDEX.md 修复 更新 整理',
+      'fix docs/INDEX.md update docs/PLAN.md',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(false);
@@ -369,10 +385,22 @@ describe('level routing (workflow.md §2)', () => {
       '解释 docs/INDEX.md 并修复 docs/PLAN.md',
       '先解释 docs/INDEX.md，再修改 docs/PLAN.md',
       '修改 docs/INDEX.md、docs/PLAN.md',
+      '参考 docs/INDEX.md，修改 docs/PLAN.md',
+      'regarding docs/INDEX.md, fix docs/PLAN.md',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(true);
       expect(routing.items[0]?.scope.writePaths.length, body).toBeGreaterThan(0);
+    }
+
+    // A reference clause authorizes only the target it names, never the reference.
+    for (const [body, wanted, unwanted] of [
+      ['参考 docs/INDEX.md，修改 docs/PLAN.md', 'docs/PLAN.md', 'docs/INDEX.md'],
+      ['based on docs/INDEX.md, update docs/PLAN.md', 'docs/PLAN.md', 'docs/INDEX.md'],
+    ] as const) {
+      const write = routeMessage(body).items.flatMap((item) => item.writePaths);
+      expect(write, body).toContain(wanted);
+      expect(write, body).not.toContain(unwanted);
     }
 
     // Excluded targets never enter the write scope, while the intended one does.

@@ -190,3 +190,16 @@
 - 回归网：`domain.test.ts` 现固定 **57 条不得授权 + 17 条必须授权 + 2 条排除断言**，覆盖第四至第八轮全部登记语料；`apps/daemon/test/server.test.ts` 覆盖 HTTP 层同类（含客户端无法注入 works）。
 - 边界与残余：未经登记的自由句式（`重写/润色/tweak/polish`、带前置条件的指令如「等你确认后修改 X」）会落到只读并请求澄清——这是 planVersion 2 声明的 fail-closed 代价，语义分类由 WP-04/06 接管。
 - 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace。
+
+## T17 独立 Review 第九轮与修复（严格祈使判定）
+
+- 第九轮 Review 判 **FAIL**（3×P1：`V了/V完了` 完成体陈述、选择疑问、逗号后修饰从句；对抗性另补：被动/受事状态句、条件后件、无标点动词罗列、逗号版参照从句）。
+- 修复（继续收敛为**严格祈使判定**）：
+  - `NON_COMMAND_MARKERS`：子句含 `被/需要/应该/应当/必须/会/值得/得到/已经/已/刚才/刚刚/了/过/可能/也许/大概/是否/如果/假如/若是/要是/万一/假设` 任一 ⇒ 不授权。
+  - **动词唯一性**：子句内变更动词（中英合计）必须恰为 1 个；`X 修复 更新 整理`、`fix X update Y` 这类罗列一律澄清。
+  - 选择疑问（`好还是/还是不改/或者不`、`or leave/or not/or keep/yes or no`）与完成体粒子（`了/完了/完毕/好了`）纳入陈述守卫。
+  - **条件继承**：条件子句的下一子句继承条件身份（`如果要改，就修改 X` 不授权）。
+  - 参照/修饰从句只授权其自身命名的目标：`参考 X，修改 Y`、`based on X, update Y` 只授权 Y。
+- 回归网扩充：新增第九轮全部语料（14 条不得授权 + 逗号参照 2 条 + 参照作用域 2 条），累计 **71 条不得授权 + 19 条必须授权 + 4 条作用域断言**。
+- 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。
+- 残余（planVersion 2 已声明）：未登记祈使动词（重写/润色/tweak/polish）与无逗号的参照从句 fail-closed，请求澄清；语义分类由 WP-04/06 的模型 Assessment 接管。

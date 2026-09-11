@@ -80,8 +80,9 @@ const NEGATION_PATTERNS: readonly RegExp[] = [
  */
 const STATEMENT_PATTERNS: readonly RegExp[] = [
   /(?:已经|已|刚才|刚刚)[^，。；！？]{0,24}(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整|处理|补|优化|完善|纠正|替换|整理|清理|修|改好|完成)/u,
-  /(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整|处理)了(?:[，。；！？\s]|$)/u,
-  /(?:需要|应该|应当|必须|得|该|要)\s*(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整|处理|优化|完善|纠正|替换|整理|清理|修|补)/u,
+  /(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整|处理|优化|完善|纠正|替换|整理|清理|修|补)(?:了|完了|完毕|好了)(?:[，。；！？\s]|$)/u,
+  /(?:修复|更新|修改|改|实现|添加|删除|移除|重命名|重构|调整|处理|优化|完善|纠正|替换|整理|清理|修|补)(?:完毕|完了|好了)/u,
+  /(?:需要|应该|应当|必须|得|该|要)\s*(?:被)?\s*(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整|处理|优化|完善|纠正|替换|整理|清理|修|补)/u,
   /(?:有没有|是否)\s*(?:应该|需要|该|要)/u,
   /\b(already|have (?:already )?(?:fixed|changed|updated|added|removed|deleted)|i(?:'ve| have) (?:fixed|changed|updated)|needs? (?:to be )?(?:a )?(?:fix|change|update)|needs? (?:to be )?(?:fixed|changed|updated|removed|deleted)|the fix needed|should (?:we|i|it)|ought to)\b/iu,
 ];
@@ -116,6 +117,15 @@ const PRECONDITION_PATTERNS: readonly RegExp[] = [
   /(?:前|之前)\s*(?:需要|需|必须|要|得|请|先)/u,
   /(?:需要|需|必须|待|等)\s*(?:先)?\s*(?:审批|批准|确认|授权|同意|复核)/u,
   /\b(?:before|prior to|pending approval|needs? approval)\b/iu,
+];
+
+/**
+ * Choice questions ("修改 X 好还是不改好", "fix X or leave it alone"): the user is
+ * weighing options, not issuing a command.
+ */
+const CHOICE_PATTERNS: readonly RegExp[] = [
+  /(?:好还是|还是不改|还是不|或者不|要不要|是否要)/u,
+  /\b(or leave|or not\b|or keep|yes or no|which (?:one|is better))\b/iu,
 ];
 
 /** Hypotheticals and quotations are not instructions. */
@@ -253,12 +263,34 @@ const CHANGE_VERB_LEAD_EN_PATTERN =
 const CHANGE_VERB_TAIL_PATTERN =
   /(?:修复|修正|更正|改掉|改成|改为|修改|改进|更改|改|实现|新增|添加|删除|移除|更新|补充|重命名|重构|调整|优化|完善|纠正|替换|换成|处理|整理|清理|修|补)(?:一下|下|吧|掉|好)?[。！!\s]*$/u;
 
+/**
+ * Markers that make a clause a statement or a passive/conditional description rather
+ * than a command (`X 需要被修改`, `X 被更新了`, `X 可能修复`).
+ */
+const NON_COMMAND_MARKERS =
+  /(被|需要|应该|应当|必须|会|值得|得到|已经|已|刚才|刚刚|了|过|可能|也许|大概|是否|如果|假如|若是|要是|万一|假设)/u;
+
 /** True when the clause reads as an imperative command to change something. */
 function isImperative(clause: string): boolean {
   const stripped = clause.replace(POLITE_LEAD_PATTERN, '').replace(ADVERB_LEAD_PATTERN, '');
+  if (NON_COMMAND_MARKERS.test(stripped)) return false;
+  // A command names one action: a bare list of verbs ("X 修复 更新 整理") is ambiguous
+  // and asks for clarification instead of guessing which verb applies (W3R9 review).
+  if (countChangeVerbs(stripped) !== 1) return false;
   if (CHANGE_VERB_LEAD_PATTERN.test(stripped)) return true;
   if (CHANGE_VERB_LEAD_EN_PATTERN.test(clause)) return true;
-  return CHANGE_VERB_TAIL_PATTERN.test(clause);
+  return CHANGE_VERB_TAIL_PATTERN.test(stripped);
+}
+
+/** Number of change verbs in a clause, in either language. */
+function countChangeVerbs(clause: string): number {
+  const chinese = clause.match(
+    /(修复|修正|更正|改掉|改成|改为|修改|改进|更改|改|实现|新增|添加|删除|移除|更新|补充|重命名|重构|调整|优化|完善|纠正|替换|换成|处理|整理|清理|修|补)/gu,
+  );
+  const english = clause.match(
+    /\b(fix|fixes|implement|update|updates|add|adds|remove|removes|delete|deletes|refactor|rename|change|changes|correct|corrects|edit|edits)\b/giu,
+  );
+  return (chinese?.length ?? 0) + (english?.length ?? 0);
 }
 
 interface ClauseReading {
@@ -283,6 +315,9 @@ function readClause(raw: string): ClauseReading {
     return { paths, instruction: false, explanation: true };
   }
   if (matches(STATEMENT_PATTERNS, clause)) {
+    return { paths, instruction: false, explanation: true };
+  }
+  if (matches(CHOICE_PATTERNS, clause)) {
     return { paths, instruction: false, explanation: true };
   }
   if (matches(PRECONDITION_PATTERNS, clause)) {
@@ -328,13 +363,19 @@ export function routeMessage(body: string): MessageRouting {
   const instructionPaths: string[] = [];
   let explanation = false;
 
+  let conditional = false;
   for (const clause of clauses) {
     const reading = readClause(clause);
-    if (reading.instruction) {
+    // The clause after a conditional inherits it: "如果要改，就修改 X" is a hypothesis,
+    // not a command (W3R9 A2).
+    const isConditional = matches(HYPOTHETICAL_PATTERNS, clause);
+    if (reading.instruction && !conditional) {
       instructionPaths.push(...reading.paths);
-      continue;
+    } else if (reading.instruction) {
+      explanation = true;
     }
     if (reading.explanation) explanation = true;
+    conditional = isConditional;
   }
 
   const items: MessageWorkItem[] = [];
