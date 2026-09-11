@@ -139,6 +139,19 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
       });
     }
 
+    // The L3 route needs a real authorization row: the Core verifies that the
+    // referenced authorization exists (`data.md` §2, DC-63).
+    store.authorizations.insert({
+      id: AUTHORIZATION_ID,
+      projectId,
+      sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      workId: WORK_ID,
+      goal: 'authorized environment operation',
+      scope: emptyScope,
+      operations: ['deploy'],
+      acceptedAt: new Date().toISOString(),
+    });
+
     // One Task per Work, so a professional spec can bind its work item and a
     // cross-Work task can be refused.
     for (const [id, workId] of [
@@ -269,6 +282,56 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     });
     expect(again.id).not.toBe(row.id);
     expect(store.assessments.list({ orderBy: 'created_at ASC' })).toHaveLength(2);
+  });
+
+  it('applies the documented routing floor from the payload alone (R9-01, DC-62)', () => {
+    const lower =
+      (payload: Partial<AssessmentPayload>): (() => unknown) =>
+      () =>
+        orchestrator.assess({
+          workId: WORK_ID,
+          payload: { ...assessmentPayloadFixture(), level: 'L2', ...payload },
+        });
+
+    // The document states the criteria in Chinese prose; those terms must select
+    // the same lockdown risk as the camelCase flag.
+    expect(lower({ riskFlags: ['安全边界'] })).toThrowError(/routing rules require L3/);
+    expect(lower({ riskFlags: ['数据删除'] })).toThrowError(/routing rules require L3/);
+    expect(lower({ riskFlags: ['security-boundary'] })).toThrowError(/routing rules require L3/);
+    expect(lower({ riskFlags: ['securityBoundary'] })).toThrowError(/routing rules require L3/);
+
+    // An operation that touches a running environment is L3 because of its own
+    // scope, not because the Work row happens to be L3.
+    expect(
+      lower({
+        intent: 'operation',
+        scope: { ...emptyScope, operations: ['deploy'] },
+      }),
+    ).toThrowError(/routing rules require L3/);
+    expect(
+      lower({
+        intent: 'operation',
+        scope: { ...emptyScope, networkTargets: ['https://example.test'] },
+      }),
+    ).toThrowError(/routing rules require L3/);
+
+    // A delivery cannot be routed below L2 while it claims a semantic impact.
+    expect(lower({ intent: 'delivery', semanticImpact: true, level: 'L1' })).toThrowError(
+      /routing rules require L2/,
+    );
+
+    // The documented Chinese criterion routes to L3 and is accepted with authority.
+    const accepted = orchestrator.assess({
+      workId: WORK_ID,
+      payload: {
+        ...assessmentPayloadFixture(),
+        level: 'L3',
+        semanticImpact: true,
+        riskFlags: ['安全边界'],
+        authorizationRef: AUTHORIZATION_ID,
+      },
+    });
+    expect(accepted.level).toBe('L3');
   });
 
   it('requires explicit authorization for L3 and refuses an unknown Work', () => {
@@ -541,6 +604,25 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     ).toThrowError(/routing rules require L3/);
     expect(store.assessments.list()).toHaveLength(0);
 
+    // A fabricated authorization reference is not authority (DC-63).
+    expect(() =>
+      orchestrator.assess({
+        workId: WORK_ID,
+        payload: {
+          intent: 'delivery',
+          goal: 'ship WP-02',
+          scope: emptyScope,
+          level: 'L3',
+          semanticImpact: true,
+          authorizationRef: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99',
+          riskFlags: ['securityBoundary'],
+          uncertainties: [],
+          policyRevision: 1,
+          reason: 'forged authorization',
+        },
+      }),
+    ).toThrowError(/does not exist/);
+
     const row = orchestrator.assess({
       workId: WORK_ID,
       payload: {
@@ -796,6 +878,8 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
       { spec: backendSpec(chief.id), authorizationRef: 'not-a-uuid' },
       { spec: backendSpec(chief.id), requiredOutputSchemas: [{ kind: 'x' }] },
       { spec: backendSpec(chief.id), contextPayload: ['not', 'an', 'object'] },
+      { spec: backendSpec(chief.id), runParams: 5 },
+      { spec: backendSpec(chief.id), runParams: [] },
     ];
     for (const input of badInputs) {
       try {

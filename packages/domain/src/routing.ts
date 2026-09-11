@@ -97,6 +97,68 @@ export function lockdownRiskFlags(risk: LockdownRisk): string[] {
     .map(([key]) => key);
 }
 
+/**
+ * The documented risk vocabulary of `workflow.md` §2.3, per canonical flag.
+ *
+ * The document states the criteria in Chinese prose while the code uses camelCase
+ * flags, so both spellings (and the obvious English variants) must select the same
+ * lockdown risk — a documented term that silently routed to L2 would be a
+ * fail-open security gate (DC-62).
+ */
+export const LOCKDOWN_RISK_TERMS: Readonly<Record<keyof LockdownRisk, readonly string[]>> = {
+  identityOrPermission: [
+    'identityOrPermission',
+    'identity',
+    'permission',
+    'authentication',
+    '授权',
+    '权限',
+    '身份认证',
+    '权限判断',
+  ],
+  secrets: ['secrets', 'secret', 'Secret', 'credential', '密钥', '凭证'],
+  securityBoundary: ['securityBoundary', 'security_boundary', '安全边界'],
+  dataDeletionOrMigration: [
+    'dataDeletionOrMigration',
+    'dataDeletion',
+    'migration',
+    '数据删除',
+    '数据迁移',
+  ],
+  payment: ['payment', '支付金额', '支付状态', '支付'],
+  publicProtocolBreak: ['publicProtocolBreak', 'protocolBreak', '公开协议不兼容', '公开协议变更'],
+  deployOrRelease: ['deployOrRelease', 'deploy', 'release', '部署', '发布'],
+  gateRuleChange: ['gateRuleChange', 'gateChange', '项目门禁规则变化', '门禁规则变化'],
+};
+
+/** Case- and separator-insensitive form of a risk term. */
+function normalizeRiskTerm(term: string): string {
+  return term
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/gu, '');
+}
+
+/** True for a risk flag that names a documented lockdown criterion. */
+export function isKnownLockdownRiskTerm(flag: string): boolean {
+  const normalized = normalizeRiskTerm(flag);
+  return Object.values(LOCKDOWN_RISK_TERMS).some((terms) =>
+    terms.some((term) => normalizeRiskTerm(term) === normalized),
+  );
+}
+
+/** Resolves loose risk text onto the canonical lockdown risk shape. */
+export function riskFromFlags(flags: readonly string[]): LockdownRisk {
+  const risk: Record<string, boolean> = { ...NO_LOCKDOWN_RISK };
+  for (const flag of flags) {
+    const normalized = normalizeRiskTerm(flag);
+    for (const [key, terms] of Object.entries(LOCKDOWN_RISK_TERMS)) {
+      if (terms.some((term) => normalizeRiskTerm(term) === normalized)) risk[key] = true;
+    }
+  }
+  return risk as unknown as LockdownRisk;
+}
+
 export interface RoutingInput {
   readonly intent: Intent;
   /** Operation targets a running environment, network write or data operation. */

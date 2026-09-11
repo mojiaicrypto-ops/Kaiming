@@ -100,6 +100,18 @@ describe('login', () => {
     expect(result.cookie).toContain('Secure');
   });
 
+  it('marks the cookie Secure when an allowed origin is https (R9-05)', () => {
+    const local = create({ allowedOrigins: ['https://agentdev.local'] });
+    const result = local.login({
+      token: auth.createdToken as string,
+      ip: '127.0.0.1',
+      origin: 'https://agentdev.local',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('login failed');
+    expect(result.cookie).toContain('Secure');
+  });
+
   it('rejects a wrong token with 401', () => {
     const result = auth.login({ token: 'nope', ip: '10.0.0.1' });
     expect(result).toMatchObject({ ok: false, status: 401 });

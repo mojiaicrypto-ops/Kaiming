@@ -36,8 +36,8 @@ import {
   isDirectChiefChild,
   isTerminalRunStatus,
   PRIMARY_PURPOSE_BY_ROLE,
-  type LockdownRisk,
   requiresExplicitAuthorization,
+  riskFromFlags,
   validateDispatchSpec,
   validateRolePurpose,
   type DispatchDecision,
@@ -143,30 +143,38 @@ export interface DispatchRequestResult {
   readonly chiefTodo: string;
 }
 
-/** Maps an assessment's risk flags onto the documented lockdown risk shape. */
-function riskFromFlags(flags: readonly string[]): LockdownRisk {
-  const risk: Record<string, boolean> = {
-    identityOrPermission: false,
-    secrets: false,
-    securityBoundary: false,
-    dataDeletionOrMigration: false,
-    payment: false,
-    publicProtocolBreak: false,
-    deployOrRelease: false,
-    gateRuleChange: false,
-  };
-  for (const flag of flags) {
-    if (flag in risk) risk[flag] = true;
-  }
-  return risk as unknown as LockdownRisk;
-}
-
 /**
  * Stable fingerprint of one dispatch request, used for `operationId` idempotency.
  *
  * Only the request's own fields: a replay with the same key and same content
  * returns the original todo, anything else is a conflict.
  */
+/**
+ * The lowest level the Core can insist on from the assessment payload alone.
+ *
+ * `workflow.md` §2.4 keeps L1 admission on file/line bounds that only a diff can
+ * prove, so a delivery that *claims* the checkable L1 preconditions (no semantic
+ * impact, no operation, no network write) may still be routed L1 by the Chief;
+ * everything else defaults to L2 and a lockdown risk to L3.
+ */
+function routingFloor(
+  payload: AssessmentPayload,
+  decided: 'none' | 'L1' | 'L2' | 'L3',
+): 'none' | 'L1' | 'L2' | 'L3' {
+  if (decided === 'L3') return 'L3';
+  if (payload.intent !== 'delivery' && payload.intent !== 'document') return 'none';
+  const claimsL1 =
+    !payload.semanticImpact &&
+    payload.scope.operations.length === 0 &&
+    payload.scope.networkTargets.length === 0;
+  return claimsL1 ? 'L1' : 'L2';
+}
+
+/** Order of the routing levels; `none` is below every modification level. */
+function levelRank(level: string): number {
+  return level === 'none' ? 0 : level === 'L1' ? 1 : level === 'L2' ? 2 : 3;
+}
+
 function operationFingerprint(request: JsonObject): string {
   return sha256(canonicalJson(request));
 }
@@ -221,34 +229,60 @@ export class Orchestrator {
    * of how the Work was routed stays observable (`data.md` §2).
    */
   assess(input: AssessInput): Assessment {
-    // `protocol.md` §1: a malformed `assessment.submit` is a `VALIDATION_ERROR`,
-    // never a raw TypeError or a storage-layer violation (R8-02).
-    const { workId, payload } = parseOrFail(assessRequestSchema, input, 'assessment.submit');
+    // `protocol.md` §1/§6: a malformed `assessment.submit` is a `VALIDATION_ERROR`,
+    // never a raw TypeError or a storage-layer violation (R8-02); the protocol names
+    // the payload field `assessment` (D).
+    const { workId, assessment: payload } = parseOrFail(
+      assessRequestSchema,
+      { workId: input.workId, assessment: input.payload },
+      'assessment.submit',
+    );
     const work = this.requireWork(workId);
     // The documented routing order is re-applied here (`workflow.md` §2) so a Chief
     // cannot record a lower level than the lockdown/operation rules demand. Only
     // the L3 floor is enforced as a hard error: L1 vs L2 depends on criteria the
     // assessment payload does not carry, so a stricter submitted level is allowed.
+    // `workflow.md` §2.2: an operation that touches a running environment, writes
+    // over the network or changes data is L3. The evidence is the payload's own
+    // scope — never the Work row's current level, which would make the floor
+    // circular (DC-62).
     const decided = decideLevel({
       intent: payload.intent,
       operationTouchesEnvironment:
-        payload.intent === 'operation' && work.level === 'L3'
-          ? true
-          : payload.riskFlags.includes('operation_touches_environment'),
+        payload.intent === 'operation' &&
+        (payload.scope.operations.length > 0 || payload.scope.networkTargets.length > 0),
       risk: riskFromFlags(payload.riskFlags),
     });
-    if (decided.level === 'L3' && payload.level !== 'L3') {
+    // The Core decision is a floor: a Chief may escalate but never downgrade it
+    // (`workflow.md` §2 「自动降级不支持」). The floor is the *hard* requirement —
+    // L3 for lockdown/operation work, L2 for a delivery whose L1 preconditions are
+    // not even claimed — because L1 vs L2 otherwise depends on diff evidence the
+    // Chief owns (DC-62; the conservative L1 file/line bounds stay a Plan gate).
+    const floor = routingFloor(payload, decided.level);
+    if (levelRank(payload.level) < levelRank(floor)) {
       fail(
         'VALIDATION_ERROR',
-        `routing rules require L3 (${decided.reason}) but the assessment says ${payload.level}`,
-        { workId: work.id, decidedLevel: decided.level, submittedLevel: payload.level },
+        `routing rules require ${floor} (${decided.reason}) but the assessment says ${payload.level}`,
+        { workId: work.id, decidedLevel: decided.level, floor, submittedLevel: payload.level },
       );
     }
-    if (requiresExplicitAuthorization(payload.level) && payload.authorizationRef === undefined) {
-      fail('NOT_AUTHORIZED', `${payload.level} requires an explicit authorizationRef`, {
-        workId: work.id,
-        level: payload.level,
-      });
+    if (requiresExplicitAuthorization(payload.level)) {
+      const authorizationRef = payload.authorizationRef;
+      if (authorizationRef === undefined) {
+        fail('NOT_AUTHORIZED', `${payload.level} requires an explicit authorizationRef`, {
+          workId: work.id,
+          level: payload.level,
+        });
+      }
+      // `data.md` §2/workflow.md §1: the Core verifies the authorization's origin,
+      // so a fabricated reference is not authority (DC-63).
+      if (this.store.authorizations.find(authorizationRef) === undefined) {
+        fail('NOT_AUTHORIZED', `authorizationRef ${authorizationRef} does not exist`, {
+          workId: work.id,
+          level: payload.level,
+          authorizationRef,
+        });
+      }
     }
     return withTransaction(this.store.db, () => {
       const row = this.store.assessments.insert({
@@ -307,6 +341,7 @@ export class Orchestrator {
           ? {}
           : { requiredOutputSchemas: input.requiredOutputSchemas }),
         ...(input.contextPayload === undefined ? {} : { contextPayload: input.contextPayload }),
+        ...(input.runParams === undefined ? {} : { runParams: input.runParams }),
       },
       'dispatch input',
     );
@@ -508,7 +543,7 @@ export class Orchestrator {
       sourceRefs: (request.sourceRefs ?? []).map((ref) => ({
         kind: ref.kind,
         id: ref.id,
-        version: ref.version ?? '1',
+        version: ref.version,
       })),
       requiredOutputs: [...(request.requiredOutputs ?? [])],
       requiredChild: request.requiredChild ?? false,

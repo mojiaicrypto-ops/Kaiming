@@ -14,7 +14,6 @@ import type { ProjectStore } from '@agentdev/storage';
 import { withTransaction } from '@agentdev/storage';
 import { ProtocolError } from './errors.js';
 import { findEvent } from './events.js';
-import { RunLifecycle } from './run-lifecycle.js';
 
 /** One child Run's settled or in-flight outcome, as the parent sees it. */
 export interface ChildOutcome {
@@ -240,9 +239,10 @@ export class JoinCoordinator {
     const failedIds = failed.map((entry) => entry.runId).sort();
     const existing = this.todoOf(parent, reason, failedIds);
     if (existing !== undefined) return existing;
-    // A todo is only actionable while its Chief Run can still dispatch; a Run that
-    // already ended gets none, so no orphaned Chief action is left behind (R5-05).
-    if (!RunLifecycle.canParentDispatch(parent.status)) return undefined;
+    // A Run that already ended can never act, so it gets no todo (R5-05). A Run
+    // that is merely paused/interrupted/recovery_required still can — it would
+    // otherwise lose the failure permanently once it resumes (R9-06).
+    if (isTerminalRunStatus(parent.status)) return undefined;
     return this.store.events.append({
       name: 'chief_action_required',
       entityId: parent.id,

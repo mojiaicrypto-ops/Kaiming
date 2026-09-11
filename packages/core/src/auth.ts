@@ -339,9 +339,16 @@ export class AuthService {
     });
   }
 
-  /** `Secure` is set for remote deployments, and for any explicit https origin. */
+  /**
+   * `Secure` is set for remote deployments, and whenever an allowed origin is
+   * already https — a loopback deployment fronted by TLS must not downgrade the
+   * cookie (`protocol.md` §2 requires HTTPS for remote use).
+   */
   private get secureCookies(): boolean {
-    return this.config.deployment === 'remote';
+    return (
+      this.config.deployment === 'remote' ||
+      this.config.allowedOrigins.some((origin) => origin.startsWith('https://'))
+    );
   }
 
   private isRateLimited(ip: string, now: number): boolean {

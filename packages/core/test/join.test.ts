@@ -522,6 +522,27 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
     ).toHaveLength(before);
   });
 
+  it('files the todo for a paused parent so it survives the resume (R9-06)', () => {
+    const parent = chief;
+    const broken = child();
+    attemptAndSettle(broken, 'failed');
+    const current = store.runs.find(parent.id);
+    if (current === undefined) throw new Error('parent missing');
+    store.runs.update(current.id, { status: 'paused' }, current.version);
+
+    // A paused Run cannot act right now, but it can after resuming: skipping the
+    // todo would lose the failure permanently.
+    const outcome = joins.onChildSettled(broken.id);
+    expect(outcome).toMatchObject({ kind: 'blocked' });
+    if (outcome.kind !== 'blocked') throw new Error('expected blocked');
+    expect(outcome.chiefTodo).not.toBe('');
+    const todos = store.events
+      .readAfter(0, { limit: 100 })
+      .filter((event) => event.entityId === parent.id && event.name === 'chief_action_required');
+    expect(todos).toHaveLength(1);
+    expect(todos[0]?.data).toMatchObject({ reason: 'required_child_failed' });
+  });
+
   it('pages the Chief once for one failure set (N-06) and carries every result', () => {
     const broken = child();
     attemptAndSettle(broken, 'failed');

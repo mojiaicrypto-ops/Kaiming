@@ -156,6 +156,19 @@
   - R8-08：`data.md` §5→§2（事件游标）、`contextSelection.readPaths`→`codePaths`、`charges tokensUsed`→封顶后的 `chargedTokens` 三处注释更正。
 - 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **230 passed**；`pnpm test:integration` 124 passed。
 
+## T17 独立 Review 第九轮与修复（第九轮 FAIL → 修复）
+
+- 第九轮独立 Review 确认 R8-01..R8-09 全部真修好，但新增 R9-01..R9-06，对抗性核验另补三项（`operation` 的 L3 判定源错误、`authorizationRef` 不核对授权实体、`scope` 也被静默丢弃），并指出 R9-01 与漏项属 P1 级。
+- 修复：
+  - R9-01 + 对抗性漏项 A（DC-62）：L3 运行环境判定改用载荷的 `scope.operations`/`scope.networkTargets`；风险旗标词表同时识别 `workflow.md` §2.3 的中文文档用词与 camelCase 旗标（归一化大小写与分隔符）；提交等级不得低于底线。
+  - 对抗性漏项 B（DC-63）：`requiresExplicitAuthorization` 时按 id 查 `authorization` 行，伪造引用 ⇒ `NOT_AUTHORIZED`。
+  - R9-02/漏项 D（DC-61）：`assessRequestSchema` 改用协议字段名 `assessment`；`requestDispatch` 的 `sourceRefs[].version` 死回退删除、`goal`/`reason`/`stage` 去空白、`operationId` 限 1–128。
+  - R9-03：`runParams` 纳入 `dispatchExtrasSchema`（非对象 ⇒ `VALIDATION_ERROR`，不再被静默忽略）。
+  - R9-04/漏项 C（DC-60）：`goal`/`scope` 未落库属文档口径冲突，登记为 Product Decision Pending。
+  - R9-05：`AuthService.secureCookies` 与注释对齐——remote 或任一 allowedOrigin 为 https 时置 `Secure`。
+  - R9-06：`JoinCoordinator.pageChief` 改为只跳过**终态**父 Run；paused/interrupted/recovery_required 仍登记待办，恢复后不会丢失 AC-046 的 Chief 待办。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **233 passed**；`pnpm test:integration` 124 passed。
+
 ## T9 待办
 
 - 独立 Review 与 Test（独立上下文）、结算与 `docs/INDEX.md` 状态更新、以及 `docs/delivery/acceptance.md` 中本包 AC 的证据登记。

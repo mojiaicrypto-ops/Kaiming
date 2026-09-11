@@ -241,6 +241,8 @@ export const dispatchExtrasSchema = z.strictObject({
     z.strictObject({ kind: z.string().min(1), schemaVersion: z.literal(1) }),
   ).optional(),
   contextPayload: jsonObjectSchema.optional(),
+  /** Authorized Run parameters (`agents.md` §5): must at least be an object. */
+  runParams: jsonObjectSchema.optional(),
 });
 export type DispatchExtras = z.infer<typeof dispatchExtrasSchema>;
 
@@ -254,24 +256,31 @@ export type DispatchExtras = z.infer<typeof dispatchExtrasSchema>;
 export const dispatchRequestSchema = z.strictObject({
   runId: idSchema,
   workId: idSchema.optional(),
-  reason: z.string().min(1).optional(),
+  reason: z.string().trim().min(1).optional(),
   requestedRole: roleSchema,
-  goal: z.string().min(1),
+  goal: z.string().trim().min(1),
   sourceRefs: list(sourceRefSchema).optional(),
   parentRunId: idSchema.optional(),
   purpose: purposeSchema.optional(),
-  stage: z.string().min(1).optional(),
+  stage: z.string().trim().min(1).optional(),
   requiredOutputs: list(z.string().min(1)).optional(),
   requiredChild: z.boolean().optional(),
   budgetAllocation: nonNegativeIntSchema.optional(),
-  operationId: z.string().min(1).optional(),
+  // `reliability.md` §1 keys outbox delivery on operationId; an unbounded string
+  // would be stored verbatim in the event log.
+  operationId: z.string().min(1).max(128).optional(),
 });
 export type DispatchRequest = z.infer<typeof dispatchRequestSchema>;
 
-/** `assessment.submit` (`protocol.md` §6). */
+/**
+ * `assessment.submit` (`protocol.md` §6 names the parameter `assessment`).
+ *
+ * The Core API keeps its own `payload` field name; the protocol mapping is applied
+ * at the boundary so both spellings cannot drift apart.
+ */
 export const assessRequestSchema = z.strictObject({
   workId: idSchema,
-  payload: assessmentPayloadSchema,
+  assessment: assessmentPayloadSchema,
 });
 export type AssessRequest = z.infer<typeof assessRequestSchema>;
 
