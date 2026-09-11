@@ -267,6 +267,36 @@ describe('scope change (AC-060)', () => {
     expect(() => truncated.poll(stale.subscriptionId)).toThrowError(/no longer retained|truncated/);
   });
 
+  it('classifies errors of a cursor-based subscribe the same way', () => {
+    const withFailingRead = (error: Error): ProjectStore =>
+      ({
+        ...store,
+        events: new Proxy(store.events, {
+          get: (target, property, receiver) =>
+            property === 'readAfter'
+              ? () => {
+                  throw error;
+                }
+              : (Reflect.get(target, property, receiver) as unknown),
+        }),
+      }) as unknown as ProjectStore;
+    const broken = new EventHub({
+      store: withFailingRead(new Error('disk failure')),
+      batchSize: 10,
+    });
+    expect(() =>
+      broken.subscribe({ connectionId: 'c1', scope: { kind: 'summary' }, afterCursor: 1 }),
+    ).toThrowError('disk failure');
+
+    const truncated = new EventHub({
+      store: withFailingRead(new ResyncRequiredError(99, 1)),
+      batchSize: 10,
+    });
+    expect(() =>
+      truncated.subscribe({ connectionId: 'c2', scope: { kind: 'summary' }, afterCursor: 1 }),
+    ).toThrowError(/no longer retained|truncated/);
+  });
+
   it('validates scope shape and removes subscriptions', () => {
     expect(() => hub.subscribe({ connectionId: 'c1', scope: { kind: 'work' } })).toThrowError(
       expect.objectContaining({ code: 'VALIDATION_ERROR' }),

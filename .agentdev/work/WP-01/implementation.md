@@ -38,7 +38,7 @@
 - `schema.ts`：迁移 0001 全量 DDL（28 张业务表 + 索引 + 不可变触发器），枚举 CHECK、JSON `json_valid`、数组上限、非负/上限 CHECK、唯一约束（message/attempt/command/lease/feature_projection/outbox）与项目内外键。
 - `migrations.ts`：`schema_migrations(version,name,checksum,applied_at)`、逐条 checksum 校验、版本超前拒绝、备份后逐条事务迁移、失败回滚并报版本。
 
-证据：`packages/storage/test/migrations.integration.test.ts` — 14 用例（真实 SQLite 文件）：迁移幂等、pragma 断言、迁移前备份可用、checksum 不一致停止、文件版本超前停止、失败迁移回滚且不留部分表、每张表列与实体 Schema 一致、基础五列、唯一约束、枚举/JSON/数组/外键 CHECK 负例、event/snapshot/user_action 不可变触发器。
+证据：`packages/storage/test/migrations.integration.test.ts` — 17 用例（真实 SQLite 文件）：迁移幂等、pragma 断言、迁移前备份可用、checksum 不一致停止、文件版本超前停止、失败迁移回滚且不留部分表、每张表列与实体 Schema 一致、基础五列、唯一约束、枚举/JSON/数组/外键 CHECK 负例、event/snapshot/user_action 不可变触发器。
 
 ### T4 仓储与账本（完成）
 
@@ -52,7 +52,7 @@
 
 契约修正（依据文档复核）：`project.id` 改为 `projectIdSchema`（`SHA256(canonicalRoot)[0:32]`，`ARCHITECTURE.md` §4）并同步 DDL `length(id)=32`；新增 `entityIdSchema`（UUIDv7 或 project id），供 event 目标与 `SourceRef` 引用项目时使用；`event` 的不可变策略细化为"禁 UPDATE、允许保留期截断 DELETE"。
 
-证据：`packages/storage/test/ledger.integration.test.ts` — 21 用例（真实 SQLite + 真实 blob 目录）：**丢应答重试返回原结果且效果只发生一次**、同键异载荷/异主体冲突、事件 cursor 单调与截断后 `RESYNC_REQUIRED`、事件禁改、outbox 租约内不重投与过期重领、lease 抢占与 owner 校验、blob 原子写入/缺失/损坏/GC、CAS 冲突与重复键。
+证据：`packages/storage/test/ledger.integration.test.ts` — 22 用例（真实 SQLite + 真实 blob 目录）：**丢应答重试返回原结果且效果只发生一次**、同键异载荷/异主体冲突、事件 cursor 单调与截断后 `RESYNC_REQUIRED`、事件禁改、outbox 租约内不重投与过期重领、lease 抢占与 owner 校验、blob 原子写入/缺失/损坏/GC、CAS 冲突与重复键。
 
 ### T5 ProjectMailbox 与命令分发（完成）
 
@@ -75,7 +75,7 @@
 - 快照读取与游标的一致性顺序：**先读快照行，再取水位**，因此快照不会早于其游标（最多重复投递，绝不丢事件）。
 - `scan` 扫描已提交事件并报告 `laggingSubscriptions`。
 
-证据：`packages/core/test/events-hub.integration.test.ts` — 16 用例：快照与水位一致、replay 只补发范围内事件、截断后 `RESYNC_REQUIRED`、作用域扩大后快照+C 无缺口、空批次水位、ack 回退拒绝与钳制、连接关闭级联、软限合并与 merged 计数、**硬限关闭慢连接且事件仍可被其它订阅读到**、批量扫描水位、作用域匹配规则。
+证据：`packages/core/test/events-hub.integration.test.ts` — 18 用例：快照与水位一致、replay 只补发范围内事件、截断后 `RESYNC_REQUIRED`、作用域扩大后快照+C 无缺口、空批次水位、ack 回退拒绝与钳制、连接关闭级联、软限合并与 merged 计数、**硬限关闭慢连接且事件仍可被其它订阅读到**、批量扫描水位、作用域匹配规则。
 
 ### T7 连接认证与 Project 身份（完成）
 
@@ -127,7 +127,16 @@
 | RE-11 | P3 | 文档内部不一致：`project.create` 要求 name 但 project 表无 name 字段 | 记为 Discovery（DC-18），归 WP-09 产品/协议处置 |
 | RE-12 | P3 | `planSchema` 未表达非 L1 需 productRef、L3 rollback 非空 | 记为 Discovery（DC-19），归 WP-02/WP-06 Gate 落地 |
 | RE-13 | P3 | `operation.kind` 用自由字符串，与 DDL 七值枚举不一致 | 改为 `operationKindSchema` |
-| RE-14 | P3 | EventHub 把任意读取异常都当 `RESYNC_REQUIRED` | 仅 `ResyncRequiredError` 转换，其余原样抛出；补负例用例 |
+| RE-14 | P3 | EventHub 把任意读取异常都当 `RESYNC_REQUIRED` | 仅 `ResyncRequiredError` 转换，其余原样抛出；`poll` 与 `subscribe(afterCursor)` 两条分支各补负例用例 |
+
+二次复评（`.agentdev/work/WP-01/review.md` §3，对象 tree `981746c…`）另发现并已修复：
+
+| 编号 | 级别 | 问题 | 处置 |
+|---|---|---|---|
+| NF2-01 | P2 | 备份护栏 `existsSync` 无条件信任既有文件：中断的 `VACUUM INTO` 留下的 0 字节副本会让升级前备份被静默跳过 | 仅当既有副本是**可读完整**数据库（非空 + `PRAGMA integrity_check = ok`）才复用；否则删除残留并以 `.partial` + 原子 rename 重新备份；新增"0 字节残留被替换""已验证副本被复用（哨兵表仍在）"用例，回退修复即失败 |
+| NF2-02 | P3 | "同版本重试复用副本"断言空泛（无待迁移时提前返回） | 用带哨兵表的已验证副本 + 真实待迁移场景断言复用而非重取 |
+| NF2-03 | P3 | `subscribe(afterCursor)` 分支缺非 Resync 负例 | 补注入普通错误与 `ResyncRequiredError` 的两条断言，回退修复即失败 |
+| NF-04 | P3 | 实现记录计数过时 | 按实测更新（integration 10 文件/124 用例，迁移 17、账本 22、订阅 18） |
 
 ## 2.1 尚未完成（后续工作包）
 
@@ -144,7 +153,7 @@
 | `pnpm typecheck` | 退出 0 |
 | `pnpm lint` | 退出 0 |
 | `pnpm test:unit` | 13 文件 / 173 用例通过 |
-| `pnpm test:integration` | 10 文件 / 115 用例通过（14 迁移 + 21 仓储/账本 + 9 分发 + 16 事件订阅 + 9 身份 + 8 需求投影） |
+| `pnpm test:integration` | 10 文件 / 124 用例通过（17 迁移 + 22 仓储/账本 + 10 分发 + 18 事件订阅 + 9 身份 + 10 需求投影；另含 session 11、attempt 10、doctor 8、container 9） |
 | `pnpm docs:check` | 退出 0 |
 | `pnpm build` | 退出 0（contracts/domain/storage/core/pi-runtime/runner/cli） |
 | `pnpm test:e2e\|acceptance\|live` | 仍按契约 `NOT_IMPLEMENTED` 退出 1 |

@@ -8,10 +8,33 @@
  */
 import { CORE_SCHEMA_SQL, IMMUTABILITY_SQL } from './schema.js';
 import { nowIso, sha256 } from './ids.js';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import Database from 'better-sqlite3';
 import { StorageError } from './errors.js';
 import { withTransaction, type SqliteDatabase } from './sqlite.js';
+
+/**
+ * A backup is only reused when it is a complete, readable database of its own.
+ *
+ * An interrupted `VACUUM INTO` leaves a truncated output file behind (SQLite does
+ * not unlink it), so "the file exists" is not evidence that a usable copy exists —
+ * which is exactly why the copy is validated and published atomically.
+ */
+function isUsableBackup(file: string): boolean {
+  if (!existsSync(file)) return false;
+  try {
+    if (statSync(file).size === 0) return false;
+    const copy = new Database(file, { readonly: true, fileMustExist: true });
+    try {
+      return copy.pragma('integrity_check', { simple: true }) === 'ok';
+    } finally {
+      copy.close();
+    }
+  } catch {
+    return false;
+  }
+}
 
 export interface Migration {
   readonly version: number;
@@ -152,10 +175,23 @@ export function runMigrations(
     options.backup(backupPath);
   } else if (options.backupPath !== undefined || options.backupDir !== undefined) {
     // No caller-supplied hook: still take the documented pre-upgrade copy.
-    backupPath =
+    const target =
       options.backupPath ??
       join(options.backupDir as string, `pre-migration-v${String(currentVersion)}.sqlite`);
-    if (!existsSync(backupPath)) backupDatabase(db, backupPath);
+    if (isUsableBackup(target)) {
+      // A complete copy of this source version already exists (for example after a
+      // failed attempt): reuse it instead of overwriting the evidence.
+      backupPath = target;
+    } else {
+      // Discard anything partial, then publish the new copy with one rename so a
+      // crash can never leave a truncated file under the real name.
+      rmSync(target, { force: true });
+      const partial = `${target}.partial`;
+      rmSync(partial, { force: true });
+      backupDatabase(db, partial);
+      renameSync(partial, target);
+      backupPath = target;
+    }
   }
 
   const now = options.now ?? nowIso;

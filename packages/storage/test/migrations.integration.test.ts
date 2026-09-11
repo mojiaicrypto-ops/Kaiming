@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -291,6 +291,59 @@ describe('schema matches the entity contracts', () => {
 });
 
 describe('successive upgrades', () => {
+  it('replaces a partial leftover and reuses a verified copy', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentdev-partial-'));
+    const db = openDatabase({ file: join(dataDir, 'project.sqlite') });
+    const backupDir = join(dataDir, 'backups');
+    const migration = (version: number): Migration => ({
+      version,
+      name: `m${String(version)}`,
+      sql: `CREATE TABLE step_${String(version)} (id INTEGER PRIMARY KEY);`,
+    });
+    try {
+      // An interrupted VACUUM INTO leaves a 0-byte file: it must not be trusted.
+      const target = join(backupDir, 'pre-migration-v0.sqlite');
+      mkdirSync(backupDir, { recursive: true });
+      writeFileSync(target, '');
+      const first = runMigrations(db, [migration(1)], { backupDir });
+      expect(first.applied).toEqual([1]);
+      expect(first.backupPath).toBe(target);
+      const copy = openDatabase({ file: target, readOnly: true });
+      try {
+        expect(readPragmas(copy).journalMode).toBeDefined();
+        expect(
+          copy.prepare('SELECT name FROM sqlite_master WHERE name = ?').get('schema_migrations'),
+        ).toBeDefined();
+      } finally {
+        closeDatabase(copy);
+      }
+
+      // A verified copy of the source version is reused, not overwritten: only a
+      // copy taken before step_1 existed can carry this sentinel.
+      const sentinel = join(backupDir, 'pre-migration-v1.sqlite');
+      const seed = openDatabase({ file: join(dataDir, 'seed.sqlite') });
+      seed.exec('CREATE TABLE sentinel (id INTEGER PRIMARY KEY)');
+      backupDatabase(seed, sentinel);
+      closeDatabase(seed);
+      const second = runMigrations(db, [migration(1), migration(2)], { backupDir });
+      expect(second.applied).toEqual([2]);
+      const reused = openDatabase({ file: sentinel, readOnly: true });
+      try {
+        expect(
+          reused.prepare('SELECT name FROM sqlite_master WHERE name = ?').get('sentinel'),
+        ).toBeDefined();
+        expect(
+          reused.prepare('SELECT name FROM sqlite_master WHERE name = ?').get('step_1'),
+        ).toBeUndefined();
+      } finally {
+        closeDatabase(reused);
+      }
+    } finally {
+      closeDatabase(db);
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('keeps one backup per source version instead of colliding', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'agentdev-upgrade-'));
     const db = openDatabase({ file: join(dataDir, 'project.sqlite') });

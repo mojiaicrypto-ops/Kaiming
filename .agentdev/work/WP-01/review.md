@@ -266,3 +266,119 @@ $ git diff --name-only 79d5895..c3a581f -- docs apps webui docker package.json
 理由：首次两项 P1 确已修复且证据非空泛（RE-01、RE-02，回退实验均可让对应用例失败）；12 项 P2/P3 中 RE-03/04/05/06/07/08/10/13/14 已修复、RE-09 部分修复、RE-11/RE-12 合理移交后续工作包。但本次修复提交引入了一项新的 P1（NF-01：默认迁移备份路径使 AC-065 的「版本升级」路径不可用）及一项直接关联 AC-065 升级路径的新 P2（NF-02：就地编辑 migration 0001 改变 checksum，使首次 Review 树创建的库无法打开）。按 `workflow.md` §6，P1 阻断、影响验收的 P2 亦阻断，故不能 PASS。
 
 建议处置：① 默认备份改为按版本/时间命名，并在无既有 schema 的首次安装跳过备份；② RE-03 的 schema 改动改为追加 0002 迁移；③ 修正实现记录用例计数；④ 修复 RE-14 的空泛用例并补 `subscribe` 分支负例；⑤ 在 WP-01 记录中创建实际 Discovery 记录并明确 T9 Test 需绑定修复后树。完成后重新独立 Review 与 Test。
+
+## 3. 复评二（re-review 2）
+
+- 复评对象：commit `9c634f0ed6232902c5aa46820ccc64c839873849`，tree `981746cbd665339a1ecdf09bbb627b1bfb0ab38a`（`git rev-parse HEAD` / `git rev-parse HEAD^{tree}` 实测）。
+- 工作区：`git status --short` 无输出（复评前后均干净）；仓库 tracked 文件仅本文追加。
+- 上游对象：`8e96ee2`（§2 复评对象，tree `f1589696…`）、`c3a581f`（首次 Review 对象，tree `196f56ff…`）。
+- 方法：独立上下文，不读开发聊天。读 §1/§2、`git show 9c634f0` 全量（397 行、8 文件）、HEAD 源码/测试与正式文档（`data.md` §5、`reliability.md` §8、`acceptance.md` AC-065）；在 `/tmp/wp01-r2/{head,old,mut,noguard}` 的 HEAD / `8e96ee2` / `196f56ff` 归档副本（`git archive` + `node_modules` 符号链接）中执行探针与「回退修复」实验，仓库未改动。
+
+### 3.1 首次 Review 发现逐项判定（RE-01…RE-14，HEAD 复核）
+
+| id | 原级别 | 判定 | HEAD 证据 |
+|---|---|---|---|
+| RE-01 | P1 | **verified** | 默认目录 `.agentdev/requirements/<id>`：`packages/core/src/requirements.ts:31`（`REQUIREMENT_RECORD_DIR`）、`:234`（`sourceRef.path`）、`:241`（`portableRef.path`）。与 `data.md` §6、`requirements.md` §1 一致；§2 回退实验（改回单文件路径即失败）仍成立。 |
+| RE-02 | P1 | **verified** | `RequirementProjection.import` 事务化：`requirements.ts:113` `withTransaction(this.store.db, …)`；`BEGIN IMMEDIATE` 见 `packages/storage/src/sqlite.ts:67`；用例 `packages/core/test/requirements.integration.test.ts:210-226`。 |
+| RE-03 | P2 | **verified** | `assessment` 在 `UPDATE_BLOCKED_TABLES`：`packages/storage/src/schema.ts:58-64`，触发器由 `:468-474` 生成；负例 `packages/storage/test/migrations.integration.test.ts`（重评 UPDATE 抛 immutable）。观察：`DELETE_BLOCKED_TABLES`（`schema.ts:65`）仍不含 assessment（原发现只要求 UPDATE 不可变，非本次范围）。 |
+| RE-04 | P2 | **verified（默认接线成立；但伴生 NF2-01）** | `ProjectStore.open` 传 `backupDir: defaultBackupDir(options.dataDir)`：`packages/storage/src/store.ts:173`（定义 `:56`）；`runMigrations` 无 hook 时用 `backupDir` 落盘：`packages/storage/src/migrations.ts:153-158`。本次 5 项探针实测升级路径可用（见 §3.3）。 |
+| RE-05 | P2 | **verified** | `metadataHashOf/recordHashOf(…, rawMetadata?)`：`requirements.ts:79-88`；输入 `rawMetadata` `:53`；用例 `requirements.integration.test.ts:200-208`。Git 导入方义务仍归 WP-04/WP-08（DC-23）。 |
+| RE-06 | P2 | **verified** | `packages/domain/src/transitions.ts:47-48` 含 `review: ['test','done','develop']`、`test: ['done','develop']`，符合 `workflow.md` §5.2。 |
+| RE-07 | P2 | **verified** | 重载不保留明文：`packages/core/src/auth.ts:152` `new InstallationCredential(path, undefined)`；`revealOnce()` `:162`、`matches()` `:169-173` 每次读文件。 |
+| RE-08 | P2 | **verified** | `OperationDefinition.scope`：`packages/core/src/dispatcher.ts:52`；缺 `projectId` 的项目方法返回 `VALIDATION_ERROR`：`:172`。 |
+| RE-09 | P2 | **partially_fixed** | §1/§2 范围矛盾已消除；但 `implementation.md:147` 命令证据表仍是「115 用例（14+21+9+16+9+8=77）」——本项未修，见 **NF-04 / §3.6**。 |
+| RE-10 | P3 | **verified** | 死三元已删：`dispatcher.ts:253-254` `const outcome = …; return outcome.response;`。 |
+| RE-11 | P3 | **accepted_risk_deferred（归 WP-09）** | 文档不一致仍在（`protocol.md:37` 要 `name`、`data.md:17` 无该列、`entities/project.ts` 读模型暴露 `name`）；已有实际 Discovery 记录 `discovery.md` DC-18（含证据/影响/路由/关联），路由 WP-09。 |
+| RE-12 | P3 | **accepted_risk_deferred（归 WP-02/WP-06）** | `planSchema` 仍 `productRef?`、`rollback` 可空；已由 `discovery.md` DC-19 记录并路由 WP-02/WP-06 的 Gate 层。 |
+| RE-13 | P3 | **verified** | `packages/contracts/src/entities/system.ts:136` 用 `operationKindSchema`（`run.ts:209-217` 共 7 值，与 DDL CHECK 一致）。残留：`system.ts:135` 注释写 “eight operation kinds”，实为 7，属注释笔误（§2 已记录，未新增）。 |
+| RE-14 | P3 | **verified（poll 分支负例已非空泛）** | `packages/core/src/events-hub.ts:270`（subscribe）、`:339`（poll）仅转换 `ResyncRequiredError`；回退 poll 分支后新负例失败（§3.4）。残留：`subscribe(afterCursor)` 分支仍无同类负例，见 **NF2-03**。 |
+
+### 3.2 §2 复评新发现逐项判定（NF-01…NF-05）
+
+| id | 原级别 | 判定 | 证据与说明 |
+|---|---|---|---|
+| NF-01 | P1 | **verified（已修复）** | 备份改为按来源版本命名 `<stateDir>/backups/pre-migration-v<currentVersion>.sqlite`（`migrations.ts:155-158`），`ProjectStore.open` 传 `backupDir`（`store.ts:173`）。本人在 scratch 复刻「首次打开 → 第二次升级」路径：不再抛 `SqliteError`；同版本重试复用已有副本；副本可打开且持有升级前 schema（§3.3）。 |
+| NF-02 | P2 | **verified（以发布前冻结 + 护栏处置）** | 冻结常量 `8de04150…` 与 HEAD 实测一致（§3.5）；旧 tree `196f56ff` 实测为 `6224f5a3…`，与 DC-20 记录相符；`schema.ts` 是 0001 SQL 的唯一来源，改动它会使护栏用例失败（实测）。无 tag/发布（`git tag -l` 空），故「首个发布前就地修正」的理由成立，护栏可阻止无意识复发。 |
+| NF-03 | P3 | **verified（poll 分支已非空泛）** | 回退 `poll` 的 `instanceof` 过滤为「捕获一切」后，`events-hub.integration.test.ts` 由 17/17 变为 1 failed/16 passed；恢复后 17/17（§3.4）。 |
+| NF-04 | P3 | **not_fixed** | `implementation.md:147` 仍为「10 文件 / 115 用例通过（14 迁移 + 21 仓储/账本 + 9 分发 + 16 事件订阅 + 9 身份 + 8 需求投影）」（括注合计 77）；实测 integration 共 **10 文件 / 122 用例**（WP-01 六文件 84 + WP-00 四文件 38），且 `:41` 迁移 14→16、`:55` 账本 21→22、`:78` 事件订阅 16→17。commit message 声称「NF-04 按实测更新」，实际只改了 `:65`（分发 9→10）与 `:109`（需求投影 8→10）。 |
+| NF-05 | P3 | **verified** | `discovery.md` 已建立，含 DC-18…DC-25，每条有证据/影响/实际路由/关联，归属正确：DC-18→WP-09（RE-11）、DC-19→WP-02/WP-06（RE-12）、DC-21/DC-22→本次修复、DC-23→WP-04/WP-08/WP-10、DC-24→WP-09、DC-25→WP-09/WP-10。§2 第②点（Test 报告未绑定修复后 tree）在本复评读取时属实（`test-report.md` 仍绑定 `c3a581f`/`196f56ff`）；复评期间另一 Test 角色 Run 并发将其完整替换为绑定 HEAD `9c634f0`/`981746c` 的报告（见 §3.10），该报告不在本 Review 的验证范围（全量 `test:integration` 归 Test 角色），故不作为 WP-01 阻断项。 |
+
+### 3.3 NF-01 专门取证（自建探针，非空泛）
+
+**使用的确切 API**（HEAD scratch，`tz`：`packages/storage/src/index.ts` 导出）：
+
+1. 首次打开：`ProjectStore.open({ dataDir, canonicalRoot })` → 迁移 0001，生成 `defaultBackupDir(dataDir)/pre-migration-v0.sqlite`。
+2. 第二次升级（同仓库默认 API）：`openDatabase({ file: join(dataDir,'project.sqlite') })` 后 `runMigrations(db, [...MIGRATIONS, synthetic0002], { backupDir: defaultBackupDir(dataDir) })`。
+
+**观测结果**（探针 5 项全过，退出 0）：
+
+- A `applied === [2]`、**无 `SqliteError`**、`backupPath === …/pre-migration-v1.sqlite`；对照：同一目标连续 `backupDatabase` 第二次抛 `SqliteError: output file already exists`，证明按版本命名是必要的。
+- B 同来源版本重试：先跑一条失败迁移 0002（`MIGRATION_FAILED`，ledger 仍为 v1）→ 再重跑成功，`backupPath` 仍为 `pre-migration-v1.sqlite`，**文件字节与首次完全相同**（复用而非重写；去掉 `existsSync` 护栏后同一场景抛 `SqliteError: output file already exists`）。
+- C 备份可用：以只读打开 `pre-migration-v1.sqlite`，`PRAGMA integrity_check = ok`、`readAppliedMigrations = [1]`、含 `project/event` 表、**不含**升级后新增的 `probe_step2`。
+- E 名称不误导：0001→(合成)0002 成功、0003 失败后 ledger=`[1,2]`；重跑时生成 `pre-migration-v2.sqlite`，其内部 `readAppliedMigrations=[1,2]`、含 `probe_step2`、不含 `probe_step3`——即「部分迁移后的库」确实以其真实来源版本命名，未出现误导名。
+- D/F 见 NF2-01。
+
+### 3.4 NF-03 非空泛性（回退实验，scratch，仓库未动）
+
+- scratch 方法：`git archive <commit> | tar -x` 到 `/tmp/wp01-r2/head`，符号链接各 `node_modules`；用 `perl -0777 -pi` 就地改副本再跑 vitest，之后用 `git archive <commit> <file> | tar -x` 还原。
+- 基线：`events-hub.integration.test.ts` 17 passed。
+- 回退 `poll` 过滤（`} catch { throw new ProtocolError('RESYNC_REQUIRED', 'subscription cursor was truncated', …) }`）→ **1 failed / 16 passed**，失败点 `expect(() => broken.poll(...)).toThrowError('disk failure')` 实得 `'subscription cursor was truncated'`。恢复后 17 passed。
+- 回退 `subscribe(afterCursor)` 过滤（同一 scratch）→ **17 pass**，说明该分支无对应负例（NF2-03）。
+
+### 3.5 NF-02 冻结校验和与护栏
+
+- HEAD：`migrationChecksum(MIGRATIONS[0])` = `8de041504378a4caf4292a38f6d542100c7b97fe90a4e560d43a623fc98e2dff`，与 `migrations.integration.test.ts` 冻结常量**逐字节一致**。
+- 旧 tree `196f56ff`（`c3a581f`）：同一函数 = `6224f5a3353a6f6552dfa452d1a52cce7cdfb150b60c86bd552bfbf8fef9127f`，与 DC-20 记载的 `6224f5a3…` 相符；`git diff 196f56ff HEAD -- schema.ts` 唯一变化就是 `UPDATE_BLOCKED_TABLES` 加入 `assessment`（+7/-1）。
+- 护栏有效性：在 scratch 中向 `UPDATE_BLOCKED_TABLES` 加一项模拟「后续就地改 0001」→ 冻结用例失败（实得 `028d5f84…`）；还原后通过。即此后任何 0001 SQL 变化都会被测试拦住，必须追加新迁移。
+- 理由可接受性：`git tag -l` 为空、无发布记录，WP-01 仍在实现/复评阶段，不存在已发布或用户持有的库；将一次性开发库按删除重建处理属合理技术修正，且已写入 `discovery.md` DC-20。护栏是测试级而非机制级，但足以强制「改 0001」成为一次有意识的动作。
+
+### 3.6 复评二新发现（NF2-xx）
+
+| id | severity | target | 描述 | 证据 | blocking |
+|---|---|---|---|---|---|
+| **NF2-01** | **P2（影响 AC-065 验收）** | `packages/storage/src/migrations.ts:158`；AC-065；`data.md` §5；`reliability.md` §8 | `if (!existsSync(backupPath)) backupDatabase(…)` 对**已存在的文件不做任何校验即静默信任**。若上一次备份被中断/失败（SQLite `sqlite3RunVacuum` 的 `end_of_vacuum` 路径**并不删除**输出文件——已读本机 better-sqlite3 13.0.3 amalgamation `sqlite3.c:161602-161885`，无 `sqlite3OsDelete(zOut)`），会留下 0 字节或半写的 `pre-migration-v<version>.sqlite`；下次升级时备份被跳过，`result.backupPath` 仍指向该文件，而它不是升级前副本（0 字节 = 可打开的空库，无 `schema_migrations`/`project` 表）。这是**静默**的安全网失效：调用方被告知有备份，实际没有，与 `reliability.md` §8「中断备份标 incomplete、restore 拒绝」的原则相悖。 | scratch 探针 F（HEAD，退出 0）：预置 0 字节 `pre-migration-v1.sqlite` → `runMigrations(..., {backupDir})` 正常 `applied=[2]`、`backupPath` 指向该文件、`size=0`、`sqlite_master` 为空；同一 0 字节目标直接 `backupDatabase`（无护栏语义）会写出 344064 字节的真实 v1 副本——即护栏使本可自愈的情形变为静默失效。去掉护栏的对照副本上探针 F 失败于 `expected 344064 to be +0`。 | **yes** |
+| **NF2-02** | P3 | `packages/storage/test/migrations.integration.test.ts:311-313` | 新增用例中「A resumed attempt for the same version reuses its copy」这一步**空泛**：第三次 `runMigrations` 因为已无 pending 迁移而在 `migrations.ts:147` 提前返回，从不触碰备份逻辑；删除 `existsSync` 护栏后该文件仍 **16/16 通过**（scratch 实测）。该断言无法证明「复用已有副本」，真正的复用以本复评探针 B 为准（去掉护栏即抛 `SqliteError`）。 | scratch `/tmp/wp01-r2/noguard`（HEAD 去掉护栏）：`migrations.integration.test.ts` 16 passed；自建探针 B 抛 `SqliteError: output file already exists`。 | no |
+| **NF2-03** | P3 | `packages/core/test/events-hub.integration.test.ts`；RE-14 的 `subscribe` 分支 | §2 NF-03 建议「补 `subscribe(afterCursor)` 分支同类负例」未落实。`events-hub.ts:270` 的过滤逻辑本身正确，但没有用例约束：把该分支回退为「捕获一切」后整个文件仍 **17/17 通过**。 | scratch 回退 `subscribe` 过滤 → 17 passed；恢复 → 17 passed。 | no |
+
+### 3.7 命令证据（复评二实测）
+
+| 命令 | 退出码 | 结果 |
+|---|---|---|
+| `git rev-parse HEAD` / `HEAD^{tree}` / `git status --short` | 0 | HEAD=`9c634f0ed6232902c5aa46820ccc64c839873849`；tree=`981746cbd665339a1ecdf09bbb627b1bfb0ab38a`；工作区干净 |
+| `git show 9c634f0` | 0 | 397 行、8 文件、+236/-19；`implementation.md` 仅改 `:65`/`:109` 两处计数，未改 `:147` |
+| `pnpm typecheck` | 0 | `tsc -p tsconfig.json --pretty false` 无错误 |
+| `pnpm lint` | 0 | `All matched files use Prettier code style!` |
+| `pnpm test:unit` | 0 | 13 文件 / 173 用例通过 |
+| `pnpm docs:check` | 0 | 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages |
+| `pnpm vitest run --project integration <6 个目标文件>` | 0 | 6 文件 / **84** 用例通过（16 迁移 + 22 账本 + 17 事件订阅 + 10 需求投影 + 10 分发 + 9 身份） |
+| scratch HEAD：NF-01 探针（A/B/C/D/E） | 0 | 5 passed（A 第二次升级无 `SqliteError`；B 复用；C 备份可用；D/F 见 NF2-01；E 名称准确） |
+| scratch HEAD：NF-01 探针 F（0 字节遗留） | 0 | 复现 NF2-01（备份被跳过、文件仍 0 字节、空库） |
+| scratch noguard：NF-01 探针（去护栏） | 1 | 2 failed：B `SqliteError: output file already exists`、D `SqliteError: file is not a database`；探针 F 失败于 `expected 344064 to be +0` |
+| scratch noguard：`migrations.integration.test.ts`（去护栏） | 0 | **16 passed**（证明 NF2-02 空泛） |
+| scratch：回退 `poll` 过滤 | 1 | 1 failed / 16 passed（RE-14/NF-03 非空泛性成立） |
+| scratch：恢复后 `events-hub` | 0 | 17 passed |
+| scratch：回退 `subscribe` 过滤 | 0 | 17 passed（NF2-03：该分支无负例） |
+| scratch：HEAD `migrationChecksum(MIGRATIONS[0])` | 0 | `8de04150…` == 冻结常量 |
+| scratch：tree `196f56ff` 同函数 | 0 | `6224f5a3…`（与 DC-20 相符） |
+| scratch：改 `UPDATE_BLOCKED_TABLES` 后冻结用例 | 1 | 失败（实得 `028d5f84…`）；还原后通过 |
+
+### 3.8 未覆盖与遗留
+
+- 未执行 `pnpm test:integration` 全量（按约定属 Test 角色）；仅复跑任务指定的 6 个文件 + 自建 scratch 探针。WP-00 四文件计数由 `grep -cE "^\s*(it|test)\("` 取得（9+8+10+11=38），未复跑。
+- `pnpm build`、`pnpm install --frozen-lockfile` 未复跑；`packages/storage/dist/**` 为未跟踪构建产物，本次未使用（探针走源码）。
+- NF2-01 的触发依赖「同版本路径上已存在文件」；仓库当前只有 0001，正常路径不会产生该文件，故现有 16 个迁移用例无法暴露它。探针以中断备份最可能的残留（0 字节文件）复现，并以 SQLite 源码确认失败不清理输出。
+- 真实端到端（daemon/BFF/WebSocket/UI）、Git 往返与真实 Provider 仍属 WP-04/WP-08/WP-09/WP-10（DC-23/24/25），与 §1/§2 一致。
+
+### 3.9 复评二结论
+
+**FAIL**
+
+理由：§2 的一项 P1（NF-01）与一项 P2（NF-02）、一项 P3（NF-03）已真正修复并取得非空泛证据（RFC 探针可让去掉护栏的副本失败），首次 RE-01…RE-14 中 12 项 verified、RE-11/RE-12 合理移交（且已有 DC-18/DC-19），NF-05 的 Discovery 归档到位。但本次修复在默认备份路径上引入了新的 **P2（NF2-01）**：`existsSync` 护栏无条件信任既有文件，一次中断的备份会使其静默跳过，`backupPath` 指向不可用的空/半写副本，直接削弱 AC-065「备份后事务迁移」的可验收性；另 `implementation.md:147` 的用例计数（NF-04）与 commit message 自述不符，`poll` 之外的 `subscribe` 分支负例缺失（NF2-03）。按 `workflow.md` §6，影响验收的 P2 阻断，故不能 PASS。
+
+建议处置：① 备份前校验既有副本（如 `PRAGMA integrity_check` + `schema_migrations` 版本匹配，或对 0 字节/非法文件直接重取），或改用带时间戳的独立文件名，使重试必然产生新副本；② 修正 `implementation.md` 的 `:147`（并同步 `:41/:55/:78`）为实测 122；③ 为 `subscribe(afterCursor)` 补非 Resync 错误负例，并把「复用副本」断言改为「失败迁移后重跑且不抛错」；④ 完成后重新独立 Review 与 Test（Test 报告须重新绑定修复后 tree）。
+
+### 3.10 复评期间的并发写入说明
+
+- 复评开始时 `git status --short` 无输出（工作区干净），满足任务前置；HEAD/tree 实测为 `9c634f0…` / `981746c…`。
+- 复评期间（09:19:32）**另一 Test 角色 Run 并发完整替换** `.agentdev/work/WP-01/test-report.md`，新内容绑定 HEAD `9c634f0`/`981746c`。该文件非代码或契约文档；`packages/**`、`apps/**`、`docs/**`、`package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`vitest.config.ts`、`tsconfig.json` 在复评前后均无改动（`git diff --name-only -- <上述路径>` 为空），因此本复评的代码对象仍是 HEAD tree `981746c…`。
+- 本人未修改 `test-report.md`，也不回退它（属另一角色的写入边界）。复评结束时工作区仅 ` M .agentdev/work/WP-01/review.md`（本文）与 ` M .agentdev/work/WP-01/test-report.md`（Test 角色写入）。
