@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { Budget, Grant } from '@agentdev/contracts';
+import { operationNameSchema, type Budget, type Grant } from '@agentdev/contracts';
 import {
   ATTEMPT_TRANSITIONS,
+  ENVIRONMENT_OPERATIONS,
   L1_BOUNDS,
   NO_LOCKDOWN_RISK,
   REQUIRED_CONTENT_SECTIONS,
@@ -34,6 +35,7 @@ import {
   validateContentSections,
   unknownRiskFlags,
   validateDispatchSpec,
+  WORKSPACE_WRITE_OPERATIONS,
   writeAllowed,
   type L1Criteria,
 } from '../src/index.js';
@@ -239,6 +241,21 @@ describe('level routing (workflow.md §2)', () => {
     // Environment operations are handled by their own predicate.
     expect(touchesRunningEnvironment({ operations: ['deploy'], networkTargets: [] })).toBe(true);
     expect(touchesRunningEnvironment({ operations: ['edit'], networkTargets: [] })).toBe(false);
+  });
+
+  it('classifies every contract operation as read-only, workspace write or environment', () => {
+    // A new operation name must be classified deliberately: the two sets below are
+    // what the L3 gate and the write-authority gate consult (R14-01).
+    const classified = new Set<string>([
+      ...WORKSPACE_WRITE_OPERATIONS,
+      ...ENVIRONMENT_OPERATIONS,
+      'read',
+      'search',
+    ]);
+    for (const operation of operationNameSchema.options) {
+      expect(classified.has(operation)).toBe(true);
+    }
+    expect(classified.size).toBe(operationNameSchema.options.length);
   });
 
   it('routes any lockdown risk to L3 before considering L1', () => {
