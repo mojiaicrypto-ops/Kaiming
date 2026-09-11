@@ -1,12 +1,12 @@
-# WP-03 独立 Review 报告（第七轮）
+# WP-03 独立 Review 报告（第九轮）
 
 - 评审对象：工作包 WP-03「直接协作与说明产物」
-- 评审轮次：**第七轮**（第一～六轮摘要见文末「附一～附六」，全部保留）
-- 冻结点 / HEAD：`git rev-parse HEAD` = `8f8b2dffd13f235297b7f5a1d8ec9f10331637a5`（**与任务下达的 `HEAD=8f8b2df` 一致**，第七轮首次无冻结点漂移）
-- 工作树：全部命令前后、本报告写入前 `git status --porcelain` 均为**空**
-- 评审角色：Review（独立上下文；未读取任何开发/Test 会话；只依据仓库文件、契约文档与 `/tmp/w3r7/` 下我自建的 9 个实验脚本）
+- 评审轮次：**第九轮**（第一～八轮摘要见文末「附一～附八」，全部保留）
+- 冻结点 / HEAD：`git rev-parse HEAD` = `d23ce7b1d3c33df8854420941d1a937af9319a2a`（**与任务下达的 `HEAD=d23ce7b` 一致**）
+- 工作树：全部命令执行前后 `git status --porcelain` 只有本报告本身（` M .agentdev/work/WP-03/review.md`，即写入前的第八轮未提交报告被本轮覆盖）；**被审代码树无任何未提交修改**
+- 评审角色：Review（独立上下文；未读取任何开发/Test 会话；只依据仓库文件、契约文档与 `/tmp/w3r9/` 下我自建的 8 个实验脚本）
 - 工具：`node v24.8.0`、`pnpm 12.3.4`、macOS 宿主
-- 记录哈希（`git hash-object`，前 8 位）：`packages/domain/src/requests.ts` `be52ad9f`、`packages/core/src/messages.ts` `4220aac5`、`packages/core/src/preview.ts` `803b502a`、`packages/core/src/artifacts.ts` `057ff403`、`packages/core/src/attachments.ts` `3ee94838`、`apps/daemon/src/server.ts` `f5aab4f5`、`packages/domain/test/domain.test.ts` `0a81588f`、`packages/core/test/artifacts.test.ts` `c6011971`、`apps/daemon/test/server.test.ts` `6d8a9244`、`.agentdev/work/WP-03/plan.md` `8986875e`、`.agentdev/work/WP-03/implementation.md` `d9c6ab74`、`docs/architecture/protocol.md` `edbba2b8`、`docs/architecture/execution.md` `7ef649f4`、`docs/delivery/acceptance.md` `c0340ef4`
+- 记录哈希（`git hash-object`，前 8 位）：`packages/domain/src/requests.ts` `e1c9e5e1`、`packages/core/src/messages.ts` `283d4c04`、`packages/core/src/artifacts.ts` `057ff403`、`packages/core/src/attachments.ts` `3ee94838`、`packages/core/src/preview.ts` `803b502a`、`apps/daemon/src/server.ts` `3a348304`、`packages/domain/test/domain.test.ts` `7483338`、`packages/core/test/artifacts.test.ts` `c6011971`、`apps/daemon/test/server.test.ts` `3511c2ee`
 - 权威依据：`AGENTS.md`、`docs/INDEX.md`、`docs/rules/{workflow,agents}.md`、`docs/product/experience.md`（§3）、`docs/architecture/{data,protocol,execution,reliability}.md`、`docs/delivery/{implementation,acceptance}.md`（AC-001..006/052/076/084）、`.agentdev/work/WP-03/{plan,implementation,review}.md`、`packages/**`、`apps/daemon/**`、相关测试
 
 ---
@@ -15,340 +15,303 @@
 
 **FAIL（不能进入独立 Test；按 `docs/rules/workflow.md` §6 走 `Blocking Review Finding → Develop → Independent Review`）。**
 
-第六轮对抗性四项中 **1 项真修好、2 项部分、1 项名义修好但记录不自洽**；planVersion 2 声明的判定边界**部分与实现一致、部分与实现和记录相反**；前六轮 P0/P1 **未见回归**（六条契约命令全绿，W3-01/02/04/05/06、W3R3-01 端到端可用性全部复现通过）。
+本轮先给出**结构性判断（对抗性方向）**：第八轮判 FAIL 的根因「黑名单 + 默认放行」**在一般形态上已被结构性关闭**。`requests.ts:310-313` 把「非祈使 ⇒ 只读」变成无条件的前置门，因此**任何不含「变更动词开头 / 变更动词命令式结尾」形态的句子，无论措辞是否登记、是否含路径，都不再授权**。这一点由我本轮实测确认：上一轮 fail-open 的三族主力（认识情态、拒绝/非承诺、只读言说行为、纯陈述如「今天的工作是修复 X」「the goal is to fix X」「Everyone agreed: refactor X」「我倾向于删除 X」）**在这些分组内授权数为 0**（probe-domain 的 A/B/E/F/G/H/I/O 组共 80 句、`probe5` 的拒绝长尾与副词否定 16 句，合计 96 句全部只读），第四至第八轮登记语料 **57 负 + 17 正 100% 与冻结期望一致**（probe7，我独立提取测试源文本后逐句 `routeMessage` 复跑）。我四组语料合计 **182 条非祈使句观测中只有 18 条唯一句子**仍授权，且全部落在我下面列出的四个形态族内。开发方的承诺（T16「祈使形态白名单」）与代码一致。
 
-| 第六轮对抗项 | 要求 | 本轮实测 |
+但**「非祈使句产生写授权」这一越权方向并未完全关闭**：白名单本身仍有可达的**形态漏洞**（四种句式族，归入 3 条 Finding），均由「祈使形态」判定的形状本身（而非词表枚举）造成：
+
+1. **句内完成体续写（F1）**：`V了 + 命名路径` 出现在子句开头时被判为祈使（跨子句上下文丢失）。最小复现 `补充了 docs/INDEX.md`、`优化了 docs/INDEX.md`、`改好了 docs/INDEX.md`（均为**陈述过去发生的事**）。带上下文时 `更新了接口文档，补充了 docs/INDEX.md 的说明` 端到端派发真实 Backend 写 Run。
+2. **动词与宾语之间的完成标记（F2'）**：`V完了/V好了/V完毕/V掉了 + 路径` 同上，`修复完了 docs/INDEX.md`、`更新完毕 docs/INDEX.md` 均可派发写 Run。
+3. **选择疑问句（F2）**：`好还是…好`、`还是…`、英文 `… or …` / `…, yes or no` 类选择题不在疑问守卫内，`修改 docs/INDEX.md 好还是不改好` 端到端派发写 Run。
+4. **修饰性从句前置（F3）**：`based on docs/INDEX.md, update docs/PLAN.md` 被逗号拆成从句后，第二子句以变更动词开头 ⇒ 授权；而**同样形状**的中文登记负例 `参考 docs/INDEX.md 修改 docs/PLAN.md`（无逗号）是只读，英文带逗号版却授权——同一形态两种结论。
+
+本轮以 **HTTP（真实 daemon）+ 真实 `Orchestrator`** 证明：**13/13** 句我自建的非祈使句在 HTTP 层落库 Authorization、`Work.level=L2`、`intent=delivery`，并**成功派发真实 Backend `purpose=implementation` 写 Run**。AC-004（「用户仅询问能否优化 → 未授权不启动交付」）与 `workflow.md` §1 授权边界在本轮仍有可复现反例。
+
+本轮新增 **6 条 Finding：0×P0、3×P1、1×P2、2×P3**。三条 P1 全部落在本包验收面，**阻断 Test**；P2/P3 不单独阻断，但须在修复轮一并订正或显式承接。
+
+| 维度 | 第八轮 | 第九轮 |
 |---|---|---|
-| 陈述/完成体/认识情态只读 | 真修 | **部分**——`domain.test.ts` 登记的 27 句负例 + 11 句正例**双向全对**（27/27、11/11）；但同类变体仍 fail-open：完成体 9/9 越权、`谁/哪些/几点` 疑问越权、英文 `The fix needed in…`/`needs a fix` 越权，HTTP 端到端 3/3 派发写 Run（**W3R7-02，P1**）。根因是 `\b(?:已经|已|刚才|刚刚)` 在中文语境恒不匹配（正则缺陷，`requests.ts:75`） |
-| 日常祈使句授权 | 真修 | **登记 3 句全对**，类探针 5/6；`顺手把 X 的笔误修一下`/`修一下 X`/`在 X 里补一行` 仍误拒（未登记同义变更词，属 boundary 声明的残余代价） |
-| `workItems` 空 scope | 真修 | **已修**（同 intent 多项不再产生空 scope；对照第六轮 probeF3 的第一项 L2/第二项 none+空 scope，本轮两项都带 `writePaths`）——但引出副作用 **W3R7-04（P3）** |
-| 记录措辞 | 订正 | **部分**——T12:130/T13:143 已撤回「永不下发」，但 T11:113 仍保留该绝对句；T13:140 新写「陈述、完成体与认识情态**一律**只读」与实测相反；planVersion 2 的「不确定一律 fail-closed」与实现相反（**W3R7-03，P2**） |
-
-**本轮同时发现一条由 848b5c4 修复引入的 P1 回归**：为支持「日常祈使句」而新增的 `REQUEST_ACTION_PATTERN`（`requests.ts:83-84`）把**只读请求词与礼貌词**（`看一下/检查一下/帮忙/帮我/麻烦/请`）当作「修改动词」参与授权判定，于是「看一眼 `docs/INDEX.md`」「请查看 `docs/INDEX.md`」「帮我总结 `docs/INDEX.md`」「请评估 `docs/INDEX.md`」等**纯查看/评估请求**会落库写授权、建 L2 delivery Work、并可真实派发 Backend 写 Run（**W3R7-01，P1**）。对照实验：同一批句子在 `7c01c9d` 全部**不**授权，在 `848b5c4` 全部授权——这是**回归**，不是「未登记的新句式」。
-
-本轮新增 **6 条 Finding：0×P0、3×P1、1×P2、3×P3**。三条 P1 全部落在本包验收面（AC-004 负例、AC-005 正例），违反不可覆盖的授权/Gate 规则，**阻断 Test**。
+| 判定式结构 | 黑名单 + 默认放行（根因） | **白名单 + 默认只读（结构已反转）** |
+| 未登记自由句式（陈述/情态/拒绝/只读言说） | fail-open | **fail-closed（96 句 0 授权）** |
+| 登记语料 57 负 + 17 正 | 部分不成立 | **100% 成立**（probe7） |
+| 文档化正例（明确修复/日常祈使/混合/排除/否定后纠正） | 成立 | **成立（28/28）** |
+| 非祈使句写授权 | 10 族 fail-open | **4 族仍 fail-open（句内完成体续写 `V了` / 完成标记 `V完了` / 选择疑问 / 修饰从句前置）** |
+| P1 数量 | 3 | 3 |
 
 ---
 
 ## 2. 契约命令原始结果（本轮实跑）
 
-执行目录：仓库根；逐条命令串行执行，原始日志 `/tmp/w3r7/{typecheck,lint,test-unit,test-integration,docs-check,build}.log`、`/tmp/w3r7/run.sh`。
+执行目录：仓库根；逐条串行，原始日志 `/tmp/w3r9/{static,tests}.log`。
 
 | 命令 | 退出码 | 原始结果要点 |
 |---|---|---|
 | `pnpm typecheck` | **0** | `tsc -p tsconfig.json --pretty false`，无输出 |
 | `pnpm lint` | **0** | `Checking formatting... All matched files use Prettier code style!` |
-| `pnpm test:unit` | **0** | `Test Files 19 passed (19)`、`Tests 288 passed (288)`（2.67s） |
-| `pnpm test:integration` | **0** | `Test Files 10 passed (10)`、`Tests 124 passed (124)`（28.87s，含真实容器/镜像用例） |
+| `pnpm test:unit` | **0** | `Test Files 19 passed (19)`、`Tests 289 passed (289)` |
+| `pnpm test:integration` | **0** | `Test Files 10 passed (10)`、`Tests 124 passed (124)` |
 | `pnpm docs:check` | **0** | `docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages` |
 | `pnpm build` | **0** | `pnpm -r build`，**8** 个 workspace `build: Done`：`contracts, cli, domain, storage, core, daemon, pi-runtime, runner` |
 
-`git status --porcelain` 在全部命令前后均为空；`HEAD` 全程 `8f8b2dffd13f235297b7f5a1d8ec9f10331637a5`。
+补充实测（供结算对账）：`packages/domain/test/domain.test.ts` **32** 例、`packages/core/test/artifacts.test.ts` **16** 例、`apps/daemon/test/server.test.ts` **17** 例；unit 19 文件、integration 10 文件。与 `implementation.md:192`（T16）的 `289 / 124 / 8` **一致**；`docs:check` 的 `15/55/94/9/11` 与第八轮逐字一致（无文档漂移）。
 
-补充实测（供结算对账）：`packages/domain/test/domain.test.ts` **32** 例、`packages/core/test/artifacts.test.ts` **16** 例、`apps/daemon/test/server.test.ts` **16** 例；unit 19 文件、integration 10 文件。`implementation.md:145`（T13）的 `unit 288 / integration 124 / build 8` 与实测**一致**。
+`git status --porcelain`（写本报告前）：` M .agentdev/work/WP-03/review.md` —— 即第八轮的未提交报告文件；**HEAD 全程 `d23ce7b1d3c33df8854420941d1a937af9319a2a`**，被审代码树（`packages/**`、`apps/daemon/**`、`docs/**`）无未提交修改。`pnpm build` 产物时间戳（Sep 11 20:33:46）晚于 `requests.ts` 源码（20:33:19），全部 probe 消费的是**修复后的**构建产物。
 
-**命令全绿不等于必验范围成立**：288 个单测中，路由相关的新增断言仍是**枚举句式**（`domain.test.ts:284-344` 的 27 负 + 11 正），没有任何用例覆盖「只读请求词族」「完成体变体」「混合否定+指令」；`packages/core/test/artifacts.test.ts` 与 `apps/daemon/test/server.test.ts` 均**不含** `Orchestrator`（grep 实证），因此仍然没有「消息授权 → `assess`/`dispatch`」的回归用例（W3R4-05 未闭合）。本轮断言全部由我自建 probe 建立。
-
----
-
-## 3. 第六轮对抗性逐条复核（含代码位置）
-
-判定口径：**已修** = 本轮观察到期望行为；**部分** = 主行为成立但有可指认残差；**未修** = 行为仍缺失；**名实不符** = 记录/边界声明与代码或实测相反。
-
-| # | 第六轮对抗项 | 判定 | 证据（文件:行 + 实测） |
-|---|---|---|---|
-| 1 | 陈述/完成体只读 | **部分** | `requests.ts:74-80`（`STATEMENT_PATTERNS`）、`:189-191`（命中即只读）。登记句 27/27 负例全部不授权（含 `我已经修改了 X`、`刚修复了 X`、`I already fixed X`、`X 需要修改`、`是否应该修改 X`、`是否需要更新 X`、`麻烦评估一下 X 是否需要修改`）。但**同类完成体变体 9/9 仍授权**（probe5 P5.2）：`我已经改好了 X`、`已经改好 X`、`已改好 X`、`我刚刚改完 X`、`我已经处理了 X`、`已经优化了 X`、`刚刚补充了 X`、`我已删除 X`、`我已经把 X 的链接补上了`；HTTP+端到端 3/3 可派发写 Run（probe4 P4.2）→ **W3R7-02** |
-| 2 | 认识情态只读 | **部分** | 登记句与中文变体 8/8 通过；英文 `docs/INDEX.md should be updated`、`needs to be fixed` 通过，但 `docs/INDEX.md probably needs a fix` 仍授权（`STATEMENT_PATTERNS` 的英文备选只覆盖 `needs? (to be )?fixed/changed/updated`，不覆盖名词 `a fix`）→ 并入 **W3R7-02** |
-| 3 | 日常祈使句授权 | **已修（登记集）** | `requests.ts:83-84`（`REQUEST_ACTION_PATTERN`）、`:194-197`。登记 3 句（`X 的错别字麻烦处理下`、`麻烦处理一下 X 里的错别字`、`X 的错别字请帮忙处理`）HTTP 均授权且 `operations=['read','edit']`（probe2 C）；类探针 5/6（`把 X 的错字改一下`/`请把 X 更新一下`/`帮我把 X 里的链接补上`/`把 X 中的英文改成中文` 通过；`顺手把 X 的笔误修一下` 不授权） |
-| 4 | `workItems` 第二个同 intent 项 scope 为空 | **已修（引出副作用）** | `messages.ts:177-185`（`scopeFor` 回落 `matching.at(-1)?.scope`）。probe2 E：同 intent 三项→ `writePaths=['docs/INDEX.md']` 三项皆有，**零空 scope**；HTTP 复核 `empty-scope Works=0`。副作用：额外项带 `writePaths` 但 `level=none`、无 `authorizationRef`，`assess` 直接 `VALIDATION_ERROR ... is none and cannot declare a write or environment scope`（probe4 P4.3）→ **W3R7-04** |
-| 5 | 记录中「永不下发写授权」措辞不实 | **部分** | `implementation.md:130`（T12「**但不宣称「永不下发」**」）、`:143`（T13「不再宣称启发式判定「永不」误判」）已撤回；但 `:113`（T11）仍原文保留「解释句、疑问句、否定句…**永不下发写授权**」且未就地标注失效；同时 `:140`（T13）新增更强断言「陈述、完成体与认识情态**一律**只读」，被本轮 9 个完成体反例证伪 → **W3R7-03** |
-
-**第六轮对抗性另补项**（`7c01c9d` 时点名、T13 声称修复的其它项）复核：CSP 单头**已真修**（probe4 P4.1：wire 上恰一个 `content-security-policy`，与 `execution.md:45` 逐字相等；`x-agentdev-preview-sandbox=allow-scripts`、`preview-credentials=omit`）；`readPaths` 越界注入**已修**（probe3 P3.2：`NOT_AUTHORIZED`，且消息一致授权仍接受）；`workItems` 上限**已修**（4→202、5/50→400 且零写入）；daemon 不接受客户端 `authorization` **保持**。
+**命令全绿不等于必验范围成立**：新增回归网仍全部是**枚举句式**（`domain.test.ts:284-344` 的 57 负 + 17 正），**没有任何断言**覆盖「句内完成体续写」「选择疑问句」「修饰从句前置」三种形态；`apps/daemon/test/server.test.ts:530-552` 的 HTTP 只读断言只含 4 句，本轮实测的越权句**没有一句**在回归网内。`packages/core/test/artifacts.test.ts`、`apps/daemon/test/server.test.ts` 仍**不含** `Orchestrator`（grep 实证：0 命中），W3R4-05「消息授权 → `assess`/`dispatch`」的回归用例依旧缺失。本轮全部越权证据由我自建 probe 建立（`/tmp/w3r9/probe-domain.mjs`、`probe2-families.mjs`、`probe3-http.mjs`、`probe4-e2e.mjs`、`probe5.mjs`、`probe6-unknown.mjs`、`probe7-corpus.mjs`、`probe8-minimal.mjs`）。
 
 ---
 
-## 4. 已登记语料双向复核与 planVersion 2 边界一致性
+## 3. 结构性核验：越权方向是否「结构性」关闭
 
-### 4.1 `domain.test.ts` 登记表：双向 27/27 + 11/11 全对
+### 3.1 代码层核验（`packages/domain/src/requests.ts`，哈希 `e1c9e5e1`）
 
-从 `packages/domain/test/domain.test.ts` **按文本**提取两个 `for (const body of [...])` 句式表（未 import 测试模块），逐句跑 `pnpm build` 产物 `packages/domain/dist/index.js`：
-
-| 方向 | 句数 | 结果 |
-|---|---|---|
-| 负例（不得授权：疑问/拒绝/假设/引用/陈述/完成体/认识情态） | 27 | **27/27** `explicitAuthorization=false` 且所有 `writePaths` 为空 |
-| 正例（必须授权：明确指令 + 日常祈使句） | 11 | **11/11** `explicitAuthorization=true` 且首项 `writePaths>0` |
-
-HTTP 端复核同向一致：负例 27/27 无授权行、`level=none`；正例 11/11 建授权行（`operations=['read','edit']`、`readPaths==writePaths==` 命名路径、`level=L2`、Work 与授权 scope 一致）（probe2 B/C）。
-
-**结论：以 `domain.test.ts` 句式表为「已登记语料」，双向判定正确。**
-
-### 4.2 以**报告登记**的越权语料为准：未双向正确（7/17 + 1/11 仍不成立）
-
-planVersion 2 的原文是「负向覆盖**已登记的越权语料**」。项目里最早、最完整登记越权语料的地方是第五轮 Review 报告（即本文件的前身，`.agentdev/work/WP-03/review.md` §6.1/§6.2，仍保留在附五）。按该语料逐句复核（probe7/probe8）：
-
-| 语料来源 | 句数 | 本轮仍不成立 | 逐字残留 |
-|---|---|---|---|
-| 第五轮 §6.1 越权语料（17 句，须不授权） | 17 | **7** | `修改 docs/INDEX.md 了没有`、`Will you fix docs/INDEX.md`、`Any thoughts on the fix for docs/INDEX.md`、`The explanation for the fix in docs/INDEX.md`、`docs/INDEX.md needs a fix`、`The fix needed in docs/INDEX.md`、`我不想修改 docs/INDEX.md` |
-| 第五轮 §6.2 误拒语料（11 句，须授权） | 11 | **1** | `别改 docs/INDEX.md，改 docs/PLAN.md` |
-| 第六轮补充语料 A3（20 句，须不授权） | 20 | **8** | `Will you please fix…`、`Has the typo in … been fixed`、`Were you asked to fix…`、`Shall we update…`、`May I ask you to fix…`、`暂且别改…`、`千万别说要改…`、`我建议对…的修改再等等` |
-
-7 句越权残留中 4 句是第五轮报告**逐字登记**的原句（`修改…了没有`、`Will you fix…`、`The fix needed in…`、`docs/INDEX.md needs a fix`），却在第六轮被从回归网中**剔除**：`domain.test.ts` 登记表只收了第五轮 17 句中的 10 句。因此「负向覆盖已登记越权语料」这一声明**与事实不符**。
-
-### 4.3 边界声明与实现/记录的一致性逐项判定
-
-| planVersion 2 声明（`plan.md:17-18`） | 实现事实 | 判定 |
-|---|---|---|
-| 「指令子句 = **修改动词** + 命名路径」 | `requests.ts:194-197` 把 `REQUEST_ACTION_PATTERN`（含只读词 `看一下/检查一下` 与礼貌词 `帮忙/帮我/麻烦/请`）与 `MODIFICATION_PATTERN` 一起当作「修改动词」 | **不一致**（W3R7-01 根因） |
-| 「且**不含**疑问/拒绝/假设/引用/**陈述/完成体**标记」 | 中文陈述备选 `\b(?:已经\|已\|刚才\|刚刚)` 在 Han 语境恒不匹配（probe5 P5.1）；`谁/哪些/几点` 不在 `QUESTION_PATTERNS`；否定标记命中整子句即整子句只读 | **不一致**（W3R7-02 根因） |
-| 「**正向覆盖文档化场景**（明确修复/混合意图）」 | 明确指令与登记混合意图通过；但 `别改 A，改 B` / `不要修改 A，但要修复 B` / `别动 A，去更新 B` 仍只读（probe9） | **部分不一致**（W3R7-03） |
-| 「**负向覆盖已登记越权语料**」 | 见 §4.2：报告登记的 17 句仍有 7 句越权 | **不一致**（W3R7-03） |
-| 「对任何**不确定一律 fail-closed**」 | 实现是**黑名单 + 默认放行**：未被任一 block pattern 命中且含变更动词+路径即授权；未登记措辞是 fail-open | **与实现相反**（W3R7-03） |
-| 「不承诺覆盖任意新句式」（`plan.md:17`） | 与实现相符，作为**残余风险**成立 | 一致 |
-| 「残余风险登记见 T12/T13 与结算材料」 | `implementation.md:130` 有一般性残余风险表述；但 T13:140 的「一律只读」、T12:129「别 仅在词首否定动作」与实测不符 | **部分不一致**（W3R7-03） |
-
----
-
-## 5. 前六轮 P0/P1 回归复核
-
-**结论：未发现已修项回归**；六条契约命令全绿，`unit` 288（第六轮 T13 亦记录 288）、`integration` 124（与第三～五轮一致）、`build` 8。
-
-| 来源 | 项 | 本轮状态 |
-|---|---|---|
-| 一轮 P0 | W3-01 下载 token 可预测 | 未回归（probe3 P3.1：43 字符 base64url、不含产物 id 前缀、单次消费 200→403） |
-| 一轮 P0 | W3-02 产物读取无主体维度 | 单用户语义保持（预览/下载均先 `assertReadable`，`x-agentdev-preview-credentials: omit`） |
-| 一轮 P1 | W3-04 正文未落 blob | 未回归（probe3 P3.1：`message_body` 行 hash 与 blob 内容 sha256 相等、内容等于消息正文） |
-| 一轮 P1 | W3-05 未知会话 500 | 未回归（404） |
-| 一轮 P1 | W3-06 失效产物仍可预览无标识 | 未回归（`x-agentdev-artifact-validity: invalid`，仍可读） |
-| 一轮 P1 | W3-07/08 AC-006/AC-005 机制 | 机制成立（probe2 C、probe6） |
-| 三轮 P1 | W3R3-01 授权 capability 缺口 → 交付死锁 | **仍然修好**（probe6：`operations=['read','edit']`、`readPaths==writePaths`；`assess('L1')` 被 floor 拒、`assess(L2)` 通过；grant 内写 Run 派发成功；grant 外写路径 `NOT_AUTHORIZED`；environment 操作 `NOT_AUTHORIZED`） |
-| 三轮 P2 | W3R3-06 CSP 漂移 | 已修且**逐字相等**（probe4 P4.1） |
-| 四轮 P2 | W3R4-03 `readPaths` 越界 | **已修**（probe3 P3.2） |
-| 五轮 P1 | W3R5-01 非执行消息越权 | **未修好**（本轮 W3R7-01/02 取代并扩大） |
-| 五轮 P1 | W3R5-02 明确指令误拒 | **部分**（`别改 A，改 B` 仍误拒 → W3R7-03） |
-
----
-
-## 6. 本轮重点实验（授权判定，三个方向）
-
-### 6.1 新 fail-open 家族：只读请求获得写授权（W3R7-01）
-
-**回归因果实验**（probe `/tmp/w3r7/old/cmp.mjs`，用 Node 原生 TS strip 直接执行 `git show 7c01c9d:packages/domain/src/requests.ts` 与 HEAD 副本）：
-
-| 句式 | `7c01c9d` | `848b5c4`=HEAD |
-|---|---|---|
-| 看一下 docs/INDEX.md | 不授权 | **授权** |
-| 检查一下 docs/INDEX.md | 不授权 | **授权** |
-| 帮我检查一下 docs/INDEX.md | 不授权 | **授权** |
-| 麻烦看一下 docs/INDEX.md | 不授权 | **授权** |
-| 请查看 docs/INDEX.md | 不授权 | **授权** |
-| 帮我总结 docs/INDEX.md | 不授权 | **授权** |
-| 请评估 docs/INDEX.md | 不授权 | **授权** |
-| 麻烦评估 docs/INDEX.md | 不授权 | **授权** |
-| 请阅读 docs/INDEX.md | 不授权 | **授权** |
-
-HTTP 端（probe2 A/D，真实 SQLite + 真实 HTTP + 真实 Orchestrator）：
-
-- 11/11 只读请求 → `202`、`authorizationId≠null`、新增 1 条 authorization 行（`readPaths=writePaths=['docs/INDEX.md']`、`operations=['read','edit']`）、Work `intent=delivery, level=L2`。额外两句同样越权：`请参考 docs/INDEX.md 的格式`、`麻烦确认 docs/INDEX.md 的内容`。
-- 端到端 3/3：`帮我检查一下 docs/INDEX.md`、`请评估 docs/INDEX.md`、`请总结 docs/INDEX.md` 均可 `assess(L2)` 并成功派发 Backend `purpose=implementation` 写 Run（`status=queued`）。
-- 对照的只读句因未命中词表而正确 fail-closed：`分析一下 docs/INDEX.md`、`帮我看看 docs/INDEX.md`、`看一下 docs/INDEX.md 有没有问题`、`请说明 docs/INDEX.md`、`麻烦解释 docs/INDEX.md`（说明该家族由**新加的词表**而非语义判定造成）。
-
-根因：`requests.ts:83-84` 的 `REQUEST_ACTION_PATTERN` 把 `处理|调整|优化|完善|纠正|替换|换成|补上|弄好|搞定|过一遍|处理下|处理一下|看一下|检查一下|帮忙|帮我|麻烦|请` 整体当「动作」，并在 `:194-197` 与 `MODIFICATION_PATTERN` 并列为 `modifies`。其中 `看一下/检查一下` 是**只读动词**，`帮忙/帮我/麻烦/请` 是**礼貌前缀**（可出现在任何请求前），二者任一与命名路径同现即授权。
-
-### 6.2 陈述/完成体/疑问仍 fail-open：`\b` 正则缺陷（W3R7-02）
-
-**根因实验**（probe5 P5.1）：
+判定链现在是**两段式**：先跑「非指令」守卫（疑问 `:276`、拒绝 `:279`、假设/引用 `:282`、陈述/完成体 `:285`、前置条件 `:288`、建议 `:291`、主题 `:294`、解释领起 `:297`），再跑**祈使白名单** `isImperative`（`:257-262`）：
 
 ```
-/\b(?:已经|已|刚才|刚刚)\s*(?:修改|修复|更新|改|…)/u
-  '我已经改好了 docs/INDEX.md'  -> no match
-  '已经改好 docs/INDEX.md'      -> no match
-  '已改好 docs/INDEX.md'        -> no match
-  \b between 我 and 已: false ; at string start: false
-  同模式去掉 \b:            -> true
+stripped = 去礼貌前缀 + 去副词/连词前缀
+CHANGE_VERB_LEAD 匹配开头        → 祈使
+CHANGE_VERB_LEAD_EN 匹配开头      → 祈使
+CHANGE_VERB_TAIL 匹配「以变更动词命令式结尾」→ 祈使
+否则 !isImperative ⇒ instruction:false（`:310-313`）
 ```
 
-`\b` 是 ASCII 词边界，Han 字符两侧皆非 `\w`，故该备选**在普通中文里恒不匹配**；`我已经修改了 X` 之所以通过，靠的是另一条备选 `(?:修改|修复|…|调整)了`（且该备选的动词表不含 `处理/优化/补充/删除`，也不含 `改好/改完` 形式）。
+**这就是与第八轮的本质差别**：第八轮的授权条件是「含变更动词 + 命名路径 + 未命中黑名单」，而 `:310-313` 现在是**无条件的只读兜底**——不存在「未命中黑名单即放行」的路径。我在 probe 中验证了这一点的**反事实**：凡是**不含**变更动词开头/结尾形态的句子，即使含路径、含变更话题、含动作名词，一律 `explicitAuthorization=false`（probe-domain 的 A_statement 10/10、B_modal 10/10、E_refusal 10/10、F_advice 8/8、G_topic 6/6、H_quote 10/10、I_readonly 10/10、O_fresh_nonimperative 16/16 均只读，`probe5` 的拒绝长尾 11/11 与副词否定 5/5 亦只读）。**结论：第八轮点名的根因在一般形态上真修好了，这不是措辞修补。**
 
-HTTP + 端到端（probe4 P4.2，全部 `authId≠null`、`level=L2`，并成功派发 Backend 写 Run）：
+### 3.2 但白名单的「形状」本身留下四个漏洞族（归入 3 条 P1）
 
-| 句式 | HTTP | 端到端写 Run |
-|---|---|---|
-| 我已经改好了 docs/INDEX.md | 授权 | **派发成功** |
-| I just fixed docs/INDEX.md | 授权 | **派发成功** |
-| 谁改的 docs/INDEX.md | 授权 | **派发成功** |
+`isImperative` 只看**子句开头/结尾的字符形态**，不看语法角色，因此四类**非祈使**句子仍满足形状：
 
-`何时/何处` 之外的中文疑问词（`谁/哪些/几点`）不在 `QUESTION_PATTERNS`（`requests.ts:46-51`，中文表无 `谁/哪个/哪些/几点`），因此疑问句带变更动词+命名路径即授权：`谁改的 docs/INDEX.md`、`哪些 docs/INDEX.md 的段落要改`、`docs/INDEX.md 几点更新`、`这是谁改的 docs/INDEX.md` 均授权。
+- **F1 句内完成体续写**（`:247-248` LEAD + `:310` 兜底）：`CHANGE_VERB_LEAD_PATTERN` 是**前缀**匹配，`补充|优化|修改|删除|调整|改` 等后面跟 `了` 时（`补充了`、`优化了`、`改好了`）仍然命中「以变更动词开头」。守卫 `STATEMENT_PATTERNS:82-84` 只覆盖了 `已经/已/刚才/刚刚 + V`、`V了 + 结束`、`需要/应该/必须 + V`，**不覆盖句首 `V了 + 宾语`**。这正是第七、八轮「完成体动词表枚举不全」的同一根因换了位置：`更新/优化/整理/清理/完善/纠正/替换/改好/完成` 被 T16 补进了 `已经` 分支，但 `补充/删除/修改/调整` 没有，于是 `补充了 X`、`删除掉了 X` 仍授权。
+- **F2' 完成标记插在动词与宾语之间**（`:247-248`）：`修复完了 X`、`修改好了 X`、`更新完毕 X`、`删除掉了 X` 的 `CHANGE_VERB_LEAD_PATTERN` 只匹配开头的 `修复/修改/更新/删除`，后面的 `完了/好了/完毕/掉了` 不参与判定；`STATEMENT_PATTERNS:83` 的 `…了` 分支要求「动词紧跟 `了`」，因此也不覆盖。
+- **F2 选择疑问**（`:55-60`）：`QUESTION_PATTERNS` 有 `吗/呢/如何/…/好不好/可行吗`，但**没有 `还是`**，英文分支也没有 `or`/`yes or no`。`修改 X 好还是不改好`、`删除 X 好还是保留好`、`fix X or leave it alone`、`refactor X, yes or no` 全部授权；而同一意图的 `改 X 好不好` 因为恰好登记了「好不好」而只读——同一句式的两个变体两种结论。
+- **F3 修饰性/参照性从句前置**（`:180-181` 逗号切分 + `:181` 英文 `and` 切分）：逗号把 `based on docs/INDEX.md, update docs/PLAN.md` 切成两个独立子句，第二子句「update docs/PLAN.md」形态合法 ⇒ 授权。登记负例 `参考 docs/INDEX.md 修改 docs/PLAN.md`（无逗号）落在**同一子句**里、以「参考」开头 ⇒ 只读。即：**同一「仅被参照的路径 + 祈使目标」结构，加不加逗号结论相反**。
 
-### 6.3 反向仍误拒：混合否定+指令与未登记同义变更词（W3R7-03 / 残余风险）
+### 3.3 危害上界
 
-probe9（期望=必须授权，实测不授权）：
-
-| 句式 | 结果 | 归属 |
-|---|---|---|
-| 别改 docs/INDEX.md，改 docs/PLAN.md | **误拒** | W3R7-03（P1，第六轮已点名） |
-| 不要修改 docs/INDEX.md，但要修复 docs/PLAN.md | **误拒** | W3R7-03 |
-| 不要修改 docs/INDEX.md，改 docs/PLAN.md | **误拒** | W3R7-03 |
-| 别动 docs/INDEX.md，去更新 docs/PLAN.md | **误拒** | W3R7-03 |
-| 顺手把 docs/INDEX.md 的笔误修一下 | 误拒 | 残余风险（未登记同义变更词，boundary 已声明代价） |
-| 修一下 docs/INDEX.md 的错别字 | 误拒 | 残余风险 |
-| 在 docs/INDEX.md 里补一行说明 | 误拒 | 残余风险 |
-
-根因：`readClause` 先判否定（`requests.ts:183-185`），而 `CLAUSE_SPLIT_PATTERN`（`:135-136`）只按句末标点与「，+ then/然后/并且/同时/而且/and」切分，`，改`/`，但`/`，去` 不切分，于是「别改 A，改 B」成为**一个**含否定标记的子句 → 整句只读，B 的目标被吞掉。`修改 docs/PLAN.md 而不是 docs/INDEX.md` 与 `先别改 X，等你确认后修改 Y` 反而通过（后者因「，等」未切分但否定后另有 `修改` 命中且路径被收集）。
-
-### 6.4 仍然闭合的方向（本轮复核通过）
-
-- 客户端无法自报授权：daemon 无 `authorization` 字段（probe3 P3.2），Core 侧 `assertGrantWithinMessage` 拒 `readPaths`/`writePaths`/环境/网络越界，消息一致授权仍接受。
-- 写路径/环境越界被拒：probe6 P6.3（`NOT_AUTHORIZED`）。
-- 授权自洽且可用：probe6 P6.1/P6.2（`read+edit`、`readPaths==writePaths`、L1 floor 拒绝）。
-- 登记正例（含顿号列表、`识别/特别/分别/说明`）与登记负例：见 §4.1。
-- `workItems`：上限 4、非法项 400 + 事务回滚零写入、客户端项抑制 delivery（probe2 E）。
+四类漏洞（归入 3 条 P1）产生的授权都**不是** L1/L3 越级、也不是环境操作：实测授权范围恒等于句中**被点名的那一个路径**（`writePaths=['docs/INDEX.md']` 或 `['docs/PLAN.md']`），`operations=['read','edit']`，`networkTargets=[]`；越界/环境授权仍被 `Orchestrator.verifyAuthorization`/`grantsModificationAuthority` 拒（第八轮 probe4 已证闸门本身正常，本轮 e2e 复现同样：只有 grant 内路径可派发）。因此危害是**「用户没有下达指令，却产生了可执行的写授权与真实写 Run」**，属于 `workflow.md` §6「P1 错误行为/需求缺失」与 AC-004 的负例失败，不是数据/安全级 P0。
 
 ---
 
-## 7. AC 复核（AC-001..006/052/076/084）
+## 4. 我自建语料的双向测试
 
-| AC | 本轮判定 | 依据 |
+### 4.1 分类口径（与第八轮一致，先声明再实测）
+
+- **文档化场景**：`docs/rules/workflow.md` §1、AC-004/AC-005/AC-006、`plan.md` planVersion 2 的判定边界、以及**第四至第八轮 Review 逐字登记过的句子**。
+- **未登记自由句式（fail-closed 侧，代价已声明）**：不在任何登记表中的同义祈使（`重写/润色/tweak/polish/rewrite/clean up`）。
+- **未登记自由句式（fail-open 侧，即缺陷）**：不在登记表中、但**仍被判为指令**的非祈使句（本轮 W3R9-01/02/03）。**开发方的免责条款只覆盖 fail-closed 侧；fail-open 侧不属「未登记句式代价」，而是「文档化的授权规则被证伪」**，见 §4.4。
+
+### 4.2 非祈使分组：96 句、0 授权（根因关闭的正面证据）
+
+`/tmp/w3r9/probe-domain.mjs`（136 句；其中非祈使 **108** 句，脚本自身打印 `FAIL-OPEN COUNT: 4 / 108`）+ `probe2-families.mjs`（39 句）+ `probe5.mjs`（36 句）+ `probe7-corpus.mjs`（74 句登记语料）。下表除注明外均为 `probe-domain.mjs` 的分组实测：
+
+| 组 | 句数 | 授权 | 说明 |
+|---|---|---|---|
+| 纯陈述 `今天的工作是修复 X`/`the goal is to fix X`/`Everyone agreed: refactor X`/`Reminder: update X` | 10 | **0** | 我自建，未登记，**白名单兜底使其只读** |
+| 认识情态 `可以/你可以/我们可以/应当/you may/we could` | 10 | **0** | `需要修改 X` 亦只读 |
+| 拒绝/非承诺 `不要/别/不想/请勿/禁止/不许/暂缓/do not/no need` | 10 | **0** | 第八轮 W3R8-02 的变体本轮全部只读 |
+| 建议 `建议修改 X`/`I suggest you fix X`/`you should probably fix X` | 8 | **0** | A3 保持 |
+| 主题/名词化 `关于 X 的修改`/`the fix in X` | 6 | **0** | A3 保持 |
+| 引用/前置条件/报告语 `需求写着：修改 X`/`前需要审批`/`如果要修改 X`/`你提到 X` | 10 | **0** | 见 W3R9-03 的英文逗号对照 |
+| 只读言说行为 `讲述/评价/了解/看看/列出/review for things to fix` | 10 | **0** | 第八轮 W3R8-03 已闭合 |
+| 自建纯非祈使（意向/决定/目标/同意/批准/提醒） | 16 | **0** | 我自建，未登记 |
+| 拒绝长尾（`probe5`）`我不打算/我无意/千万别/我暂时不/我没打算/我拒绝/别动` | 11 | **0** | 我自建，未登记 |
+| 副词否定（`probe5`）`不用急着/不必现在/暂时不用/不需要立刻/先别管` | 5 | **0** | 我自建，未登记 |
+| 完成体/疑问/参照（`probe-domain` 的 C/D/J 组） | 28 | **4** | **本轮缺陷**，见 §4.4 |
+| 完成体/选择疑问/参照从句（`probe2-families`） | 39 | **20** | **本轮缺陷**，见 §4.4 |
+
+### 4.3 文档化正例：28/28 成立
+
+`probe-domain.mjs` 的 K/L/M/N 四组共 28 句（其中 N_positive 14 句即登记语料的正例表），`grep -c OK` = **28/28**；另有 `probe5` 的中文参照句 4 句、连接词正例 3 句、`补全` 1 句共 8 句授权（见 §4.4）。
+
+| 组 | 句数 | 授权 | 证据 |
+|---|---|---|---|
+| 明确修复（中英） `fix the typo in X`/`update X`/`修改 X 中的错别字` | 5 | **5/5** | `writePaths` 只含目标 |
+| 中文日常祈使 `X 的错别字麻烦处理下`/`麻烦处理一下 X`/`X 的错别字请帮忙处理`/`改 X`/`请修复 X`/`处理一下 X` | 6 | **6/6** | 尾式/礼貌前缀均成立 |
+| 混合意图 `解释 X 并修复 Y`/`先解释 X，再修改 Y`/`explain X and fix Y` | 4 | **4/4** | 拆成 `assist + delivery`，写范围只含 Y |
+| 目标排除 `修改 X 而不是 Y`/`rather than`/`而非` | 5 | **5/5** | 只授权 X（`EXCLUSION_MARKER_PATTERN:130`） |
+| 否定后纠正 `别改 A，改 B`/`不要修改 A，但要修复 B`/`do not change A, fix B` | 5 | **5/5** | 前缀归一后只授权 B |
+| 连接词/副词正例（`probe5`） `但要修复 X`/`而是更新 X`/`然后重构 X` | 3 | **3/3** | `ADVERB_LEAD_PATTERN` 归一 |
+
+### 4.4 未登记**祈使**（fail-closed，代价可接受，已声明）
+
+`重写 X`、`润色 X`、`rewrite X`、`polish X`、`tweak X`、`clean up X`、`去掉 X 的过时内容`、`缩短 X`、`把 X 改短`、`X 重写一下` → **10/10 只读**（`writing/polish/rewrite` 不在 `MODIFICATION_*`/`CHANGE_VERB_*` 词表）。这与 `implementation.md:191`、`plan.md:17-18` 的声明一致：**未登记祈使落只读并请求澄清，属 planVersion 2 已披露的残余风险，不计入本轮 Finding**。反向的 `补全 X 的说明` 因「补」是词表内前缀而授权（`probe5` 8 句授权之一，词表前缀的偶然性，P3 记录，不阻断）。
+
+### 4.5 命中 4 个形态漏洞族的非祈使句（本轮缺陷证据）
+
+| 族 | 句子（部分） | 族内句数 / 授权 | HTTP | 端到端写 Run |
+|---|---|---|---|---|
+| **F1 句内完成体续写** | `更新了接口文档，补充了 docs/INDEX.md 的说明`、`修复了登录 bug，优化了 docs/INDEX.md 的说明`、`改完了接口，整理了 docs/INDEX.md 的目录`、`补充了 docs/INDEX.md`、`优化了 docs/INDEX.md`、`改好了 docs/INDEX.md`、`删除掉了 docs/INDEX.md`、`修改好了 docs/INDEX.md` | 8 / **3**（`probe2` F1；另 2 句见 `probe-domain` C 组与 `probe8` 最小复现） | `authorizationId=SET`、`level=L2`、1 条授权行、`writePaths=['docs/INDEX.md']` | **是**（probe4） |
+| **F2 选择疑问** | `修改 docs/INDEX.md 好还是不改好`、`删除 docs/INDEX.md 好还是保留好`、`更新 docs/INDEX.md 还是新建一个文档`、`重命名 packages/core/src/artifacts.ts 还是重建`、`修 docs/INDEX.md 行不行`、`fix docs/INDEX.md or leave it alone`、`refactor …, yes or no`、`改 docs/INDEX.md 好不好`（对照：只读） | 8 / **7**（`probe2` F3） | 同上 | **是**（probe4） |
+| **F3 修饰从句前置** | `based on docs/INDEX.md, update docs/PLAN.md`、`according to docs/INDEX.md, fix docs/PLAN.md`、`follow docs/INDEX.md and fix docs/PLAN.md`、`see docs/INDEX.md and update docs/PLAN.md` | 4 / **4**（`probe2` F4；另 4 句同形中文由 `probe5` 判为只读） | 同上（`writePaths=['docs/PLAN.md']`） | **是**（probe4） |
+| **F2' 陈述中的完成标记** | `修复完了 docs/INDEX.md`、`修改好了 docs/INDEX.md`、`更新完毕 docs/INDEX.md`、`改完了 docs/INDEX.md`、`整理好了 docs/INDEX.md`、`删除掉了 docs/INDEX.md` | 8 / **6**（`probe2` F2） | 同上 | **是**（probe4） |
+
+> 族内合计 `probe2` 观测 39 句、授权 **20** 句（`SUMMARY fail-open 20/39`）；`probe-domain` 的 C/D/J 组另在 28 句中授权 **4** 句；`probe8-minimal` 的 14 句最小复现中授权 **13** 句（与 `补充一下 X`/`优化 X` 两条真祈使混排，用于证明「同一前缀，加不加 `了`」翻转结论）。
+
+最小复现（`probe8-minimal.mjs`，`explicitAuthorization`）：
+
+```
+AUTHORIZED 补充了 docs/INDEX.md     readonly  更新了 docs/INDEX.md（仅因「更新」被登记进「已经+V」分支）
+AUTHORIZED 优化了 docs/INDEX.md     AUTHORIZED 整理了 docs/INDEX.md
+AUTHORIZED 清理了 docs/INDEX.md     AUTHORIZED 完善了 docs/INDEX.md
+AUTHORIZED 替换了 docs/INDEX.md     AUTHORIZED 修正了 docs/INDEX.md
+AUTHORIZED 改好了 docs/INDEX.md
+AUTHORIZED 补充一下 docs/INDEX.md   AUTHORIZED 优化 docs/INDEX.md   ← 对照：这两条才是真祈使
+```
+
+`更新了 X` 只读而 `补充了 X`/`优化了 X`/`整理了 X`/`修正了 X` 授权，**同一语法形态、同一语义（陈述已完成的动作），仅因词表枚举差异而结论相反**（`优化 X` 祈使与 `优化了 X` 陈述同样都能匹配 LEAD 前缀）——这一对照本身就是「修复未落到形态上」的证明（§7 W3R9-01）。
+
+---
+
+## 5. 客户端注入面复核（无回归）
+
+`apps/daemon/src/server.ts:171-180` 只从 payload 提取 `conversationId`、`body`、`attachmentIds`、`targetWorkId` 四字段；`:206-217` 只调用 `sendMessage`，**wire 层不存在 `authorization`/`workItems`/`grants`/`scope`/`level`/`intent` 通路**。本轮 probe3/probe6 实测（`/tmp/w3r9/probe6.log`）：
+
+| 注入 | HTTP 结果 | 库结果 |
 |---|---|---|
-| AC-001 自由问答 | **部分** | 问答建 Work、不建 Requirement 成立；完整「Chief 调查→回答→Work 完成」仍依赖 WP-04/06/07 |
-| AC-002 HTML说明 | **部分** | 上传→绑定→user Artifact→受权预览→一次性下载全链路通过（probe3）；失效产物可读且带 validity；内容生产者仍属 WP-04/06 |
-| AC-003 按需委派 | **部分（无链路证据）** | `assess`/`dispatch` 链路成立（probe6），但「用户消息→Chief 分派 purpose=analysis/artifact 专业 Run→汇总」仍无端到端证据 |
-| AC-004 执行授权边界 | **不通过** | probe2 A/D + probe4 P4.2：只读请求（11 类）与陈述/疑问（3 类）产生真实写授权、L2 delivery Work，并可 `assess` + 派发 Backend 写 Run；「消息与授权记录负例」要求不成立 |
-| AC-005 明确启动 | **不通过** | 登记正例成立，但报告登记语料的正例仍失败：`别改 A，改 B` 等 4 例不授权（probe9）；反例失败同 AC-004 |
-| AC-006 混合意图 | **部分** | 登记混合意图（解释+修改）通过；「否定一个目标 + 指令另一个目标」的混合消息只读（probe9，W3R7-03）；「解释产物先返回」执行者仍属 WP-04/06/07 |
-| AC-052 HTML安全 | **部分（HTTP 契约层）** | probe4 P4.1：唯一 CSP 与 `execution.md:45` 逐字相等、`x-agentdev-preview-sandbox`、`omit`/`no-store`/`nosniff`；真实浏览器攻防仍属 WP-10 |
-| AC-076 附件限制 | **通过（服务端）** | probe3 P3.3：第 6 个附件拒、错误 mime 拒、magic-byte 不符拒；残差为 multipart 多文件静默丢弃（W3R7-06） |
-| AC-084 首条消息附件 | **通过（本包范围）** | probe3 P3.3：暂存→发送→原子绑定→user Artifact→幂等重放→重复绑定拒绝 |
+| `workItems:[…×50]` | 202（忽略） | 零新增 Work（历史 T15 已证 1 个） |
+| `authorization:{scope:{writePaths:[…]},operations:['edit']}` | 202（忽略） | `authorizationId=null`、零授权行、`level=none` |
+| `authorization:{operations:['deploy'],networkTargets:['10.0.0.5']}` | 202（忽略） | 零授权行 |
+| 未知字段 `foo:1`、文档字段 `targetRole:'backend'` | 202（**忽略，不报错**） | —— 见 W3R9-05 |
+
+Core 侧入参 `MessageTransactionInput`（`messages.ts:57-73`）无 `workItems`；`assertGrantWithinMessage:360-384` 对调用方提供的授权仍做「不得超出消息点名范围 + 不得含环境/网络操作」校验（T15 已证 4/4 拒）。**结论：注入面自第七轮取消 `workItems` 后无新增通路，本轮无回归。** 唯一相关的不一致是未知字段应 `VALIDATION_ERROR`（`protocol.md` §1）而实现静默忽略——**fail-closed 方向**，已在第八轮登记为 W3R8-05，本轮承接为 W3R9-05。
 
 ---
 
-## 8. 新 Findings（W3R7-xx）
+## 6. 前八轮 P0/P1 无回归复核
 
-严重性口径：P0 数据/安全或关键不可用；P1 错误行为/需求缺失；P2 局部质量/维护问题；P3 建议。P0/P1 阻断；P2/P3 影响验收才阻断。
+| 项目 | 第八轮状态 | 第九轮实测 |
+|---|---|---|
+| W3-01 下载 token 可预测/先于认证（P0） | 已修 | `apps/daemon/test/server.test.ts:395` 用例通过；`server.ts:93-99` 下载路由仍先于认证但凭一次性 token；**无回归** |
+| W3-02 产物读取无主体维度（P0） | 已修 | `assertReadable` 仍在预览/下载路径（`server.ts:112-121`、`:268+`） |
+| W3R3-01 授权 capability 缺口致交付死锁（P1） | 已修 | 本轮 e2e 中评估/派发链路走通（probe4 13/13 派发成功），**无回归** |
+| W3R5-01 非执行消息产生写授权（P1） | 第八轮部分未修 | **认识情态/拒绝/只读言说/纯陈述四族已闭合（96 句 0 授权）**；剩余四族形态见 W3R9-01/02/03 |
+| W3R7-01 只读请求词授权（P1） | 已修 | `READ_ONLY_VERBS*:41-45` + 白名单；`看一下/检查/评估/总结` 全只读；**无回归** |
+| W3R7-02 完成体/疑问变体（P1） | 第八轮未修 | **登记原句与大批变体已修**（`已经优化了/已经整理了/修好了/改动已完成/了没有/Will you fix` 全只读）；**同一形态的新分支仍未修**（W3R9-01） |
+| W3R7-03 混合否定+指令误拒（P1） | 已修 | 5/5 domain + HTTP 只授权更正后目标；**无回归** |
+| A1 目标级排除 / A2 中文混合 / A3 纯建议（P1） | 已修 | 5/5、4/4、13/13；**无回归** |
+| W3R3-06 CSP 单头、逐字相等 | 已修 | `server.test.ts:119/187` 通过；`preview.ts` 未改动（哈希与第八轮一致） |
+| W3R4-03 `assertGrantWithinMessage` 约束 `readPaths` | 已修 | 代码仍在 `messages.ts:367`；**无回归** |
+| 登记语料 57 负 + 17 正 | 第八轮 27+14 | **57 + 17 全部成立**（probe7 独立复跑） |
 
-### W3R7-01 [P1] 只读请求（查看/检查/总结/评估/参考/确认）获得写授权并可派发写 Run（848b5c4 引入的回归）
-
-- 位置：`packages/domain/src/requests.ts:83-84`（`REQUEST_ACTION_PATTERN` 把 `看一下/检查一下/帮忙/帮我/麻烦/请` 当动作）、`:194-197`（与修改动词并列参与 `modifies`）
-- 实测：probe2 A `11/11` 越权（HTTP 授权行 + L2 delivery Work）；probe2 D `3/3` 端到端派发写 Run；probe1 P1.5 逐条 `ops=["read","edit"]`
-- 回归对照：同一批句在 `7c01c9d` 全部不授权，在 `848b5c4` 全部授权（probe `/tmp/w3r7/old/cmp.mjs`）
-- 影响：违反 AC-004（用户仅查看/询问 → 未授权不启动交付）；这是**修复引入的新缺陷**，不属于 planVersion 2 声明的「未登记新句式」残余风险
-- 最小修复方向：把 `REQUEST_ACTION_PATTERN` 拆成「变更类请求词」（处理/调整/优化/完善/纠正/替换/补充…）与「只读类请求词/礼貌前缀」两组，只让前者参与 `modifies`；`看一下/检查一下/查看/阅读/参考/确认/核对/审阅/总结/评估/列出/读一遍` 与 `请/麻烦/帮我/帮忙` 单独出现不得授权（礼貌前缀只能修饰已识别的变更动词）
-
-### W3R7-02 [P1] 陈述/完成体与中文疑问句仍 fail-open（`\b` 正则缺陷 + 动词表枚举不全）
-
-- 位置：`requests.ts:75`（`\b(?:已经|已|刚才|刚刚)` 在 Han 语境恒不匹配）、`:76`（`…了` 备选动词表缺 `处理/优化/补充/删除/改好/改完`）、`:79`（英文 `needs a fix`/`the fix needed` 未覆盖）、`:46-51`（中文疑问词缺 `谁/哪个/哪些/几点`）
-- 实测：probe5 P5.1 根因（同模式去 `\b` 即匹配）；P5.2 `9/9` 完成体变体授权；P5.3 `4/7` 疑问句授权；probe4 P4.2 `3/3` HTTP + 端到端派发写 Run；probe7 P7.1 第五轮登记语料 `7/17` 仍越权
-- 影响：违反 AC-004；与 planVersion 2 的「不含陈述/完成体标记」「不确定一律 fail-closed」及 `implementation.md:140`「陈述、完成体与认识情态一律只读」直接矛盾
-- 最小修复方向：删除 `\b`（或用 `(?<![\p{Script=Han}])` 之类的显式边界）；把完成体识别改为「变更动词 + 了/好/完/过/上」的形态而非固定列表；补中文疑问词；对「陈述/完成体标记（已经/已/刚刚/…了/…好/…完/需要/应该/是否）」采用**先检测后放行**的顺序，并把这些句式落成负例测试
-
-### W3R7-03 [P1] 混合否定+指令仍误拒：`别改 A，改 B` 等 4 例不授权（AC-005/AC-006 正例失败）
-
-- 位置：`requests.ts:135-136`（`CLAUSE_SPLIT_PATTERN` 不在 `，改/，但/，去` 处切分）、`:183-185`（否定命中即整子句只读）
-- 实测：probe9 —— `别改 docs/INDEX.md，改 docs/PLAN.md`、`不要修改 docs/INDEX.md，但要修复 docs/PLAN.md`、`不要修改 docs/INDEX.md，改 docs/PLAN.md`、`别动 docs/INDEX.md，去更新 docs/PLAN.md` 全部 `authorizationId=null`、Work `level=none`（probe8 HTTP 复现其中第 1 例）；第六轮对抗性 probeA2 已点名第 1 例
-- 影响：AC-005（用户明确指定要改的目标 → 原消息作为范围授权）与 AC-006（混合消息拆分）失败；fail-closed 不放大权限，但交付路线无法启动。**注意**：本轮未主张「永不下发」——此条只要求「指令子句中的目标不应被同句否定语吞掉」
-- 最小修复方向：子句切分补 `，` + 转折/接续（但/但是/不过/而是/改/去/请改）或改为「按动词短语切分」；否定只否定其**支配的动词短语与目标**，不影响同句其它指令子句
-
-### W3R7-04 [P2] 边界声明与实现/记录不一致（「一律只读」「不确定一律 fail-closed」「负向覆盖已登记越权语料」均不成立）
-
-- 位置：`plan.md:17`（判定边界与「不确定一律 fail-closed」）、`plan.md:18`（负向覆盖已登记越权语料）、`implementation.md:113`（残留「永不下发」）、`:140`（「一律只读」）、`:141`（「使日常祈使句在命名目标时正常授权」表述过宽）
-- 实测：§4.2（报告登记 17 句仍 7 句越权、11 句仍 1 句误拒）、§4.3（黑名单+默认放行，非 fail-closed）、§6.2（完成体 9/9 越权）、probe9（`修一下/补一行` 不授权）
-- 影响：planVersion 2 明确要求「Review/Test 应针对『已登记语料 + 边界声明』判定」，因此**边界声明本身是 Test 的契约**；声明与实现相反会让 Test 以文档为权威时误判放行（`docs/rules/workflow.md` §6「报告不能以应该通过代替执行」同理）。不单独阻断（已有 3×P1），但必须与 P1 修复同批订正
-- 最小修复方向：把声明改为实测口径（「负向覆盖 `domain.test.ts` 登记句式；未登记措辞可能 fail-open，属残余风险，由 WP-04/06 模型 Assessment 与 Test 负例网承接」），或先把 §4.2 的 7+1 句补进登记表；删除/标注 `implementation.md:113`；把 T13:140 改为「新增词表覆盖登记句式，非穷尽」
-
-### W3R7-05 [P3] `workItems` 同 intent 回落 scope 产生「有写 scope 但 level=none、无 authorizationRef」的不可执行 Work
-
-- 位置：`packages/core/src/messages.ts:177-185`（`matching[rank]?.scope ?? matching.at(-1)?.scope`）
-- 实测：probe4 P4.3 —— 一个消息 + 2 个 delivery `workItems` → 第 1 项 `level=L2` 且有 `authRef`，第 2 项 `writePaths=['docs/INDEX.md']`、`operations=['read','edit']`、`level=none`、`authRef=null`；对其 `assess(L2)` 直接 `VALIDATION_ERROR ... is none and cannot declare a write or environment scope`。对比第六轮「空 scope」是另一种病态，本次只是换了形态
-- 影响：客户端（该字段在 `protocol.md` 未声明）可创建看似有范围、实则永远无法执行的 Work；不放大权限。建议：额外同 intent 项要么回落**只读** scope（不声明写），要么拒绝超出路由项数的 `workItems`
-
-### W3R7-06 [P3] 前轮未闭合项与记录数字（无进展）
-
-- `W3R5-05`：`targetWorkId` 的 `sourceRef.kind≠'message'` 跨会话 Work 仍 `202`（应 403/404）——probe3 P3.4 实测
-- `W3R5-06`：被 400 拒的发送仍留下孤儿正文 blob（DB 回滚、blob 不回滚；实测文件数 4→5）——probe3 P3.4
-- `W3R4-12`：multipart 两个 file part 静默保留其一（`201`）、未知 `projectId` 上传 `201`——probe3 P3.4
-- `W3R4-13`：错误响应体仍为 `{ok:false,error:{…}}`，缺 `protocol.md` §1 的 `v/type/id`——probe3 P3.4
-- `W3R4-08`：`StorageError` 仍只分「缺引用→404 / 其余→500」；`VERSION_CONFLICT`/`DUPLICATE_KEY` 未按 `protocol.md` §7 细分
-- `W3R4-06`：`protocol.md:46` 仍未声明 `workItems`，返回体未列 `workIds`/`authorizationId`（daemon 实际返回），`targetRole` 有文档无实现
-- `W3R4-05`：仍无「消息授权 → `Orchestrator.assess`/`dispatch`」回归用例（`artifacts.test.ts`、`server.test.ts` 均无 `Orchestrator`，grep 实证）
-- 记录数字：`implementation.md:46`（T6）仍 `278 passed / 7 workspace`、`:104`（T10）仍 `12 daemon 例`；实测 unit 288（19 文件）、integration 124（10 文件）、build 8、daemon 16
+**未闭合项承接**：W3R4-05（无 Orchestrator 授权回归用例）、W3R4-06（`protocol.md` 未对账）、W3R4-08（StorageError 映射粗）、W3R4-10（`targetWorkId` 归属仅覆盖 message 来源）、W3R4-12（multipart 多文件/`projectId`）、W3R4-13（错误响应非 §1 封装）——本轮 grep 与 probe6 抽查仍不可闭合，随 W3R9-05 继续承接，**不单独阻断**（第八轮已按 P3 承接）。
 
 ---
 
-## 9. 计数与阻断判定
+## 7. 新 Findings（W3R9-xx）
 
-| 严重性 | 本轮新增 | 编号 | 是否阻断 |
+### W3R9-01 [P1] 句首 `V了` / `V完了` 的**陈述/完成体**仍被当作祈使并授权（可派发写 Run）
+
+- **位置**：`packages/domain/src/requests.ts:247-248`（`CHANGE_VERB_LEAD_PATTERN` 为前缀匹配）+ `:253-254`（`CHANGE_VERB_TAIL_PATTERN` 允许 `了` 作后缀）+ `:310-313`（非祈使兜底）+ `:82-86`（`STATEMENT_PATTERNS` 不覆盖句首 `V了+宾语`，`V完了/V好了/V完毕` 亦不在其中）。
+- **根因**：第八轮判定的三条 P1 中，「中文完成体/陈述的形态未被识别」一条**只修了登记原句与 `已经/已/刚刚` 分支的动词枚举**；白名单引入后，形态漏洞换成了「子句以变更动词开头」这一形状本身——前缀匹配无法区分祈使 `补充 X` 与完成体陈述 `补充了 X`；同一原因使 `修复完了 X`（`修复` + `完了`）落在 `CHANGE_VERB_LEAD` 上。**这是一次真正的「同根因换位置」，且 T16 的补丁方式（继续往 `已经+V` 分支加 `优化/完善/纠正/替换/整理/清理/改好/完成`）正是第七、八轮失败的词表枚举方式。**
+- **实测（我自建，未登记）**：F1 `补充了 docs/INDEX.md`、`优化了 docs/INDEX.md`、`更新了接口文档，补充了 docs/INDEX.md 的说明`、`修复了登录 bug，优化了 docs/INDEX.md 的说明`、`改完了接口，整理了 docs/INDEX.md 的目录`、`改好了 docs/INDEX.md`；F2' `修复完了 docs/INDEX.md`、`修改好了 docs/INDEX.md`、`更新完毕 docs/INDEX.md`、`删除掉了 docs/INDEX.md` → domain `explicitAuthorization=true`；HTTP `authorizationId=SET`、`level=L2`、`intent=delivery`、1 条授权行、`writePaths=['docs/INDEX.md']`；端到端 **10/10**（`probe4` 抽样 7 句）派发真实 Backend `purpose=implementation` 写 Run。
+- **对照（同一形态语义，结论相反）**：`更新了 docs/INDEX.md` 只读（仅因「更新」在 `STATEMENT_PATTERNS:82` 的 `已经/已` 分支枚举内）；`优化 X`（祈使）与 `优化了 X`（陈述）都能匹配 LEAD。**枚举差异即可翻转结论，说明判定未落到形态规则上。**
+- **修复方向（结构性）**：在 `isImperative` 的 LEAD 之前（或作为 `readClause` 的独立守卫）把**句首 `变更动词 + (了|完了|好了|掉了|完毕|过)`** 视为陈述/完成体；或在 D4 前缀归一后要求 LEAD 之后**不得紧跟完成体标记**。不要用「继续往枚举里加动词」的方式修。
+- **验收面**：AC-004 负例（「仅询问/陈述 → 未授权不启动交付」）失败；`workflow.md` §1「执行消息可直接授权明确目标」被扩大到「陈述已完成的动作」。
+
+### W3R9-02 [P1] **选择疑问句**（`好还是…好` / `还是…` / 英文 `or`、`yes or no`）仍授权并可派发写 Run
+
+- **位置**：`requests.ts:55-60`（`QUESTION_PATTERNS` 无 `还是`；英文分支无 `or`/`yes or no`）。
+- **实测**：`修改 docs/INDEX.md 好还是不改好`、`删除 docs/INDEX.md 好还是保留好`、`更新 docs/INDEX.md 还是新建一个文档`、`重命名 packages/core/src/artifacts.ts 还是重建`、`修 docs/INDEX.md 行不行`、`fix docs/INDEX.md or leave it alone`、`refactor packages/core/src/artifacts.ts, yes or no` → 授权 + L2 + 真实写 Run（probe4 中 7 句均派发成功）。**对照**：`改 docs/INDEX.md 好不好` 只读（「好不好」恰在 `ADVICE_PATTERNS:94` 中）——同一句式的两个变体两种结论。
+- **根因**：疑问仍是**词表枚举**（`吗/呢/么/如何/…/好不好/行不行` 部分命中），而非「疑问形态」。`还是`/`or` 在中文/英文里是选择疑问的唯一形态标记，缺失即 fail-open。
+- **修复方向（结构性）**：把「选择疑问形态」并入疑问守卫：`(?:还|或)是`、`…(?:好|行|对)(?:还是|或)`、`\b(?:or|yes or no|or not|either)\b`；并复查 `行不行/可不可以/要不要` 的覆盖一致性。
+- **验收面**：同 W3R9-01（AC-004 负例）。
+
+### W3R9-03 [P1] **修饰性/参照性从句前置**时，逗号切分使第二子句获得授权；与同形态中文登记负例结论相反
+
+- **位置**：`requests.ts:180-181`（`CLAUSE_SPLIT_PATTERN` 的 `[，,]` 与英文 `\s+and\s+` 切分）+ `:224-229`（排除只对 `而不是/而非/不是/instead of/rather than` 生效）。
+- **实测**：`based on docs/INDEX.md, update docs/PLAN.md`、`according to docs/INDEX.md, fix docs/PLAN.md`、`follow docs/INDEX.md and fix docs/PLAN.md`、`see docs/INDEX.md and update docs/PLAN.md` → 授权并派发写 Run（`writePaths=['docs/PLAN.md']`，probe3/probe4）。**关键对照**：登记负例 `参考 docs/INDEX.md 修改 docs/PLAN.md`、`先看 docs/INDEX.md 再修改 docs/PLAN.md`（同子句、无逗号）→ **只读**（domain.test.ts 57 负之一，probe7 通过）。**「仅被参照的路径 + 祈使目标」这一结构，是否加逗号决定了两种相反结论**——第八轮对抗性 D3 用中文版证伪，本轮证明英文带逗号版仍成立。
+- **判据**：`plan.md:17` 与 `:186` 均把「前置条件/引用」列为**只读**；`for`/`about`/`regarding` 已在 `TOPIC_PATTERNS:105` 中，但 `based on`/`according to`/`follow` 领起的**前置说明从句**没有对应规则，切分后其从句身份被丢弃。
+- **修复方向（结构性）**：识别「领起从句」形态（`based on|according to|per|following|using|see|follow` + 命名路径 + 逗号/and），或在切分时把「以参照动词/介词短语开头且不含变更动词的子句」标记为修饰语并抑制其后续子句的授权，直到出现独立的祈使标记。
+- **验收面**：同 W3R9-01；另与 AC-005 正例的边界需在修复轮明确（`update docs/PLAN.md` 若独立成句，仍应授权）。
+
+### W3R9-04 [P2] 记录仍含被 T15 声明「已订正」的绝对表述，且旧轮次计数未标注失效
+
+- **实测（grep 原文）**：`implementation.md:172`「…与名词化 `的修复/的修改/the fix in` **一律不授权**」；`:140`「陈述、完成体与认识情态**一律只读**」；`:159`「…**一律**不得单独构成修改指令」。而 `:176`（T15）声称「**不再出现**「一律/永不」的绝对表述」。T15 的计数 `:178`「27 条不得授权 + 14 条必须授权」与 T16 的 57 + 17 并列，旧数字未标注失效（新断言的绝对「一律只读」在 `:186` 出现，而本轮证明它不成立）。
+- **性质**：记录名实不符（连续第三轮）。不单独阻断，但修复轮必须一并订正，否则 Test 会以 `:186` 的绝对声明为准。
+- **附带**：`implementation.md:11`（T1「一律 `INTERNAL_ERROR`」）是**代码事实**，非启发式声明，不影响判定。
+
+### W3R9-05 [P3] 协议对账仍未闭合：未知字段静默忽略、响应字段多于协议表（承接 W3R8-05）
+
+- **实测**：`foo:1`、`targetRole:'backend'`、`authorization:{…}` 均返回 **202 且被忽略**；`protocol.md:11` 明写「必填参数缺失、**未知字段**或枚举错误返回 `VALIDATION_ERROR`」。响应含 `workIds`/`authorizationId`（`protocol.md:46` 只列 `{messageId,workId,state,version}`）。为 **fail-closed 方向**（忽略而非采纳），不阻断；但 `protocol.md` §5 与 HTTP 面需在结算前对账或显式登记为加法扩展。
+- **同批承接**：W3R4-05（Orchestrator 授权回归用例，grep 仍 0 命中）、W3R4-06/08/10/12/13。
+
+### W3R9-06 [P3] 未登记祈使的 fail-closed 代价清单（已声明，需在 Test 显式承接）
+
+`重写/润色/rewrite/polish/tweak/clean up/去掉/缩短/把 X 改短/X 重写一下`（10/10 只读）、`参照 docs/INDEX.md 来修改 docs/PLAN.md`（有「来」，只读）。与 `plan.md:17-18`、`implementation.md:191` 的声明一致，**不计为缺陷**；但 Test 必须把「未登记祈使不授权」作为**预期行为**验证，避免误报为回归。反向的 `补全 X 的说明` 因前缀「补」在词表内而授权，属词表偶然性，随本项记录。
+
+---
+
+## 8. 计数与阻断判定
+
+| 严重度 | 数量 | 编号 | 是否阻断 |
 |---|---|---|---|
 | P0 | 0 | — | — |
-| P1 | **3** | W3R7-01（只读请求获得写授权，848b5c4 回归）、W3R7-02（陈述/完成体/疑问 fail-open，`\b` 缺陷）、W3R7-03（`别改 A，改 B` 混合指令误拒） | **阻断** |
-| P2 | 1 | W3R7-04（边界声明与实现/记录不一致） | 影响 Test 契约；随 P1 同批订正 |
-| P3 | 3 | W3R7-05（不可执行的回落 scope Work）、W3R7-06（前轮未闭合 + 记录数字） | 不阻断 |
+| **P1** | **3** | W3R9-01（句内完成体续写）、W3R9-02（选择疑问）、W3R9-03（修饰从句前置） | **阻断** |
+| P2 | 1 | W3R9-04（记录措辞/计数） | 不单独阻断，须随修复轮订正 |
+| P3 | 2 | W3R9-05（协议对账/未闭合项）、W3R9-06（fail-closed 代价清单） | 不阻断，承接 Test |
 
-**仍未修好清单（按优先级）**
-1. **P1** W3R7-01：只读/礼貌请求（`看一下/检查一下/请/麻烦/帮我` + 命名路径）授权并可派发写 Run（新回归）。
-2. **P1** W3R7-02：完成体（`改好了/改完了/已删除/已经处理了`）、中文疑问（`谁/哪些/几点`）、英文（`Will you fix`/`needs a fix`/`The fix needed in`）仍授权；`\b` 使中文陈述备选形同虚设。
-3. **P1** W3R7-03：`别改 A，改 B`、`不要修改 A，但要修复 B` 等 4 例混合指令不授权（AC-005/AC-006 正例失败）。
-4. **P2** W3R7-04：planVersion 2 的「不确定一律 fail-closed」「负向覆盖已登记越权语料」、T13 的「一律只读」与实现相反；报告登记的 7+1 句未纳入回归网。
-5. **P3** W3R7-05（回落 scope 的不可执行 Work）、W3R7-06（`protocol.md` 对账、孤儿 blob、归属、multipart/`projectId`、错误封装、StorageError 映射、记录数字）。
-
-**已修好确认**：第六轮 CSP 单头（逐字相等）、`readPaths` 越界守护、`workItems` 上限、登记陈述/认识情态 27 句负例、登记日常祈使句 3 句正例；一轮 P0/P1、二轮 P1、三轮 P1（W3R3-01）端到端可用性、四轮 P2（W3R4-03）均未回归。
+- 三条 P1 **均落在本包验收面**：AC-004 负例被证伪、`workflow.md` §1 授权边界被证伪；且**均以真实 HTTP + 真实 `Orchestrator` 证明可派发真实 Backend 写 Run**（`/tmp/w3r9/probe4.log`，13/13）。
+- 失败路由：`Blocking Review Finding → Develop → Independent Review`（`docs/rules/workflow.md` §6）。
+- 记录侧建议：`implementation.md` T16 需新增 T17 记录本轮 3 个 P1；`plan.md` planVersion 2 的边界声明（「只有祈使子句…才授权」）需与实现对齐——**当前声明与实现相反的部分只剩这四个形态族（归入 3 条 P1）**，其余已对齐。
 
 ---
 
-## 10. 能否进入独立 Test —— **不能**
+## 9. 能否进入独立 Test —— **不能**
 
-- 依据 `docs/rules/workflow.md` §6：P0/P1 阻断。本轮 **3×P1**，且全部直接对应本包验收面：
-  - AC-004 负例被证伪两处（只读请求、陈述/疑问）；
-  - AC-005/AC-006 正例在混合否定+指令下失败。
-- 失败路由：`Blocking Review Finding → Develop → Independent Review`。修复后必须**重新独立 Review**（授权判定是安全边界，不能用开发自测替代），通过后才可进入 Test。
+**判据**：`docs/rules/workflow.md` §6「P0/P1 阻断」；三条 P1 中任意一条都足以阻断，本轮存在三条且端到端可复现。**必须先走 `Develop → Independent Review`**。修复后重评的最低要求：`补充了 X` / `优化了 X` / `改好了 X` / `修改 X 好还是不改好` / `fix X or leave it alone` / `based on X, update Y` 六句必须只读（另加 `修复完了 X`、`更新完毕 X`），且登记 57 正负语料与 28 条文档化正例**不得回归**。
 
-### 10.1 Test 最小覆盖矩阵（修复轮后必须覆盖）
+### 9.1 Test 最小覆盖矩阵（修复轮后必须覆盖）
 
-| # | 维度 | 最小用例 | 断言 |
+| # | 维度 | 最小用例（≥） | 期望 |
 |---|---|---|---|
-| 1 | 只读请求负例（W3R7-01） | `看一下 X`、`检查一下 X`、`帮我检查一下 X`、`麻烦看一下 X`、`请查看 X`、`请参考 X`、`帮我总结 X`、`请评估 X`、`麻烦评估 X`、`请阅读 X`、`麻烦确认 X`、`帮我核对/审阅 X`、`请列出 X 的章节`、`帮我把 X 读一遍` | `authorizationId=null`、零新增 authorization 行、所有新 Work `level=none`；至少 3 例继续喂回 `assess`/`dispatch`，断言写 Run 被 `NOT_AUTHORIZED`/`VALIDATION_ERROR` 拒 |
-| 2 | 陈述/完成体负例（W3R7-02） | `我已经改好了 X`、`已经改好 X`、`已改好 X`、`我刚刚改完 X`、`我已经处理了 X`、`已经优化了 X`、`刚刚补充了 X`、`我已删除 X`、`我已经把 X 的链接补上了`、`I just fixed X`、`The typo in X was fixed by me`、`docs/INDEX.md has been updated`、`docs/INDEX.md probably needs a fix`、`The fix needed in X`、`X needs a fix` | 同上（含端到端至少 2 例） |
-| 3 | 中文/英文疑问负例（W3R7-02） | `谁改的 X`、`这是谁改的 X`、`哪些 X 的段落要改`、`X 几点更新`、`修改 X 了没有`、`Will/Shall/May/Were/Has … X` | 同上 |
-| 4 | 第五轮登记语料回归（W3R7-04） | 第五轮 §6.1 的 17 句 + §6.2 的 11 句**逐字**入表 | 负例零授权、正例授权 |
-| 5 | 混合否定+指令正例（W3R7-03） | `别改 A，改 B`、`不要修改 A，但要修复 B`、`不要修改 A，改 B`、`别动 A，去更新 B` | 授权仅覆盖 B（`writePaths==[B]`）、`operations=['read','edit']`、A 不在 scope；`assess(L2)` 通过、grant 内写 Run 通过、grant 外拒绝 |
-| 6 | 登记正例端到端（AC-005） | `修改 X 中的错别字`、`识别并修复 X`、`特别修改 X`、`分别修复 X 和 Y`、`X 的错别字麻烦处理下` | 授权行、scope=命名路径、`level=L2`、`assess(L2)` 通过、grant 内写 Run 通过、grant 外 `NOT_AUTHORIZED`（本项建立 W3R4-05 的 Orchestrator 回归） |
-| 7 | 登记负例端到端（AC-004） | `我已经修改了 X`、`X 需要修改`、`是否应该修改 X`、`I already fixed X`、`不要修改 X`、`如果 X 需要修改，请告诉我` | 零授权行、`level=none`、写 Run 与写文件均被拒 |
-| 8 | AC-006 混合意图 | 解释+修改（前置/后置、中英、分号/逗号变体） | 两 Work 独立 scope/budget、解释 Work 零授权、delivery L2 可派发写 Run |
-| 9 | `workItems` | 非法项 400 + 回滚零写入；上限 4/5/50；重复 intent 的独立 scope；抑制 delivery；回落项不得产生「有写 scope 但 level=none 且无 authRef」的 Work | 状态码/写入计数/每 Work `level`+`scope`+`authRef` 断言（W3R7-05） |
-| 10 | `targetWorkId` | `none`/`L1`/`L2`/`L3` 目标 + 跨会话 message 来源 403 + 非 message 来源（修复后应拒） | level 与 `authorizationRef` 不变、零新增授权 |
-| 11 | 预览/CSP（AC-052） | wire 上恰一个标准 `Content-Security-Policy` 且逐字等于 `execution.md:45`；`x-agentdev-preview-sandbox`/`omit`/`no-store`/`nosniff`；validity；1 MiB/2000 行截断头；下载 token 单次 + 60s TTL | 原始响应头逐一断言 |
-| 12 | 附件/首条消息（AC-076/084） | 数量 6/单个 >20 MiB/总 >50 MiB/错误 mime/magic 不符；staged→发送→原子绑定→user Artifact→幂等重放→重复绑定拒绝→过期清理 | 服务端拒绝 + 零残留引用 + DB 行断言 |
-| 13 | 前轮回归 | token 不可预测、正文 blob、未知会话 404、失效预览 validity、非整数 `artifactVersion` 400、孤儿 blob、multipart 多文件、未知 `projectId`、错误封装、StorageError 映射 | 与 `protocol.md` §1/§7 对账 |
+| 1 | 完成体/陈述（形态，非原句） | 句首 `V了 + 路径`（补充/删除/修改/调整/优化/整理 各 1）；`V完了/V好了/V完毕/V掉了 + 路径` 各 1；`……，V了 + 路径` 续写 2 句；英文 `V-ed`/`already V` 2 句 | 全部只读，零授权行 |
+| 2 | 疑问形态 | `好还是…好`、`…还是…`、`行不行/可不可以/要不要/有没有`、英文 `or`/`yes or no`/`or not` | 全部只读 |
+| 3 | 修饰/参照从句 | `based on X, update Y`、`according to X, fix Y`、`follow X and fix Y`、中文 `参考 X 修改 Y`（无逗号） | 全部只读（或明确将「update Y」判定为独立指令并在验收文档写明） |
+| 4 | 文档化正例不回归 | 明确修复（中英）、`X 的错别字麻烦处理下`、`解释 X 并修复 Y`、`别改 A，改 B`、`修改 X 而不是 Y`、`但要修复 X` | 全部授权且 `writePaths` 只含目标 |
+| 5 | 登记语料 | 57 负 + 17 正（`domain.test.ts` 现有表） | 逐句成立 |
+| 6 | HTTP/端到端（新增） | 上述负例 3 组各 ≥2 句经 `POST conversation.message.send`：`authorizationId=null`、`level=none`、零授权行、`/works` 无 `delivery` | 全部只读 |
+| 7 | **Orchestrator 回归（W3R4-05）** | 授权正例 `assess(L2)` → `dispatch` professional `backend/implementation` 成功；grant 外路径 + `deploy`/`network` → `NOT_AUTHORIZED` | 建 Run / 拒绝 |
+| 8 | 注入面不回归 | `workItems`/`authorization`/`grants`/`scope`/`level`/`intent`/`targetRole` 注入 | 全部忽略且零授权（未知字段应在 W3R9-05 决定后断言 `VALIDATION_ERROR` 或「忽略」） |
+| 9 | 前轮 P0/P1 | 下载 token 一次性（W3-01）、预览 ACL（W3-02）、`assertGrantWithinMessage`（W3R4-03）、CSP 逐字（W3R3-06） | 无回归 |
+| 10 | 附件/产物面 | 上传限制/TTL/重复绑定、版本链/失效、预览截断、单次下载 | 无回归（本轮未动，抽验即可） |
 
-### 10.2 必须显式承接的残余风险清单
+### 9.2 必须显式承接的残余风险清单（区分两类）
 
-1. **启发式路由的固有误判（已由 planVersion 2 声明）**：未登记同义变更词（`修一下`、`补一行`、`弄一下`、`tweak`…）落到只读路线（fail-closed，代价是澄清一轮）；未登记的「同义变更词 + 命名路径」组合仍可能授权。Test 不得把「任意新句式」作为放行条件，但**必须**把修复轮登记的负例网作为放行条件。
-2. **模型 Assessment 接管前的窗口**：`routeMessage` 在 WP-04/06 落地前是唯一授权生成者；本轮的三个 P1 说明「关键词黑名单」在双向都会出错，WP-04/06 接管前必须保留确定性负例防线。
-3. **单用户语义**：`assertReadable`/owner 派生按安装级单用户实现；多用户需重做（WP-04/06 范围）。
-4. **`workItems`/`authorization`/`workIds` 协议化缺口**：daemon 接受未文档化字段；`protocol.md:46` 与 `docs/architecture/protocol.md` §5 需在结算前对账。
-5. **真实浏览器攻防与真实 Provider**：AC-052 的浏览器级读 cookie/网络/父页/top-navigation 复验属 WP-10；AC-001/002/003 的内容生产纵向属 WP-04/06/10。
-6. **孤儿 blob GC**、`targetWorkId` 归属统一、`StorageError` 映射与 `protocol.md` §1 错误封装：本包未闭合，承接结算或后续包。
-7. **记录数字与提交说明**：T6/T10/T11 旧数字、T11:113 的绝对表述、提交信息与代码的对账，须在结算前一次性订正，否则 Test 以文档为权威会误判。
+**A. 文档化场景缺陷 —— 必须修（阻断）**（4 个形态族归入 3 条 P1）
+1. W3R9-01 句首 `V了` 完成体续写（含跨子句 `，V了 + 路径`）与 `V完了/V好了/V完毕 + 路径`。
+2. W3R9-02 选择疑问（`还是`/`or`）。
+3. W3R9-03 修饰/参照从句前置（逗号切分后授权）。
+4. W3R9-04 记录绝对表述与旧计数（随修复轮订正）。
+
+**B. 未登记句式 fail-closed 代价 —— 已声明，接受并需 Test 承认**
+5. `重写/润色/rewrite/polish/tweak/clean up` 等未登记祈使 → 只读 + 澄清（`plan.md:17-18`、`implementation.md:191`）。
+6. `参照 X 来修改 Y`（含「来」等插入成分）→ 只读。
+7. 词表前缀的偶然性（`补全 X` 授权、`重写 X` 不授权）；`更新 X 的说明` 与 `说明 X 的更新` 的不对称。
+8. 语义分类的最终责任在 WP-04/06 模型 Assessment（本包只承诺已登记语料与形态规则）。
+
+**C. 与本包无关或已承接**
+9. 真实无头浏览器攻防（WP-10）；真实 Provider 纵向与 `artifact_write` 工具接线（WP-10/WP-07）。
+10. W3R9-05 协议对账与 W3R4-05/06/08/10/12/13 未闭合项（P3，结算前登记或修复）。
 
 ---
 
-## 11. 方法与边界声明
+## 10. 方法与边界声明
 
-- 独立上下文：未读取任何开发/Test 会话对话；结论只来自仓库文件、`docs/**` 契约与我自建的 9 个脚本（`/tmp/w3r7/harness.mjs`、`probe1..9.mjs`、`/tmp/w3r7/old/cmp.mjs`），全部消费 `pnpm build` 产物（**未 import 任何产品测试文件**；`domain.test.ts` 仅以**文本**方式提取句式表）。
-- 实验统计（观测/失败）：
+- **独立上下文**：未读取任何开发/Test 会话对话；结论只来自仓库文件、`docs/**` 契约与我自建的 8 个脚本（`/tmp/w3r9/{probe-domain,probe2-families,probe3-http,probe4-e2e,probe5,probe6-unknown,probe7-corpus,probe8-minimal}.mjs`），全部消费 `pnpm build` 产物；**未 import 任何产品测试文件**（`domain.test.ts` 仅以文本方式提取语料表，且提取后逐句用**构建产物**复跑，不执行产品测试代码）。
+- **实验统计（观测 / 失败）**：
 
-| 脚本 | 观测 | 失败 | 失败对应 |
+| 脚本 | 观测 | 失败（即产品缺陷证据） | 对应 |
 |---|---|---|---|
-| probe1（domain 登记表 + 场景类） | 102（+7 informational） | 20 | W3R7-01（9 只读）、W3R7-02（6 完成体 ZH + 2 EN + 1 疑问 + 1 EN 认识情态）、W3R7-03/残余（1 日常祈使句） |
-| probe2（HTTP 授权 + workItems） | 57 | 14 | W3R7-01（A 11 + D 3） |
-| probe3（P0/P1 回归 + 第六轮修复 + AC-076/084） | 21 | 1（我脚本的 CSP 正则取整行，probe4 已改正） | 无产品缺陷 |
-| probe4（CSP 逐字、陈述变体端到端、scope 回落、事件） | 4 | 3 | W3R7-02（端到端 3） |
-| probe5（根因：`\b`、完成体、疑问词、礼貌+只读词） | 26 | 21 | W3R7-02（9 完成体 + 4 疑问 + 8 只读） |
-| probe6（授权自洽/floor/grant 覆盖） | 6 | 0 | 无 |
-| probe7（第五/六轮语料复跑） | 57 | 17 | W3R7-02（P7.1 的 7）、W3R7-03（P7.2 的 1）、W3R7-02（P7.3 的 8）、T13 点名 1 |
-| probe8（第五轮残留 HTTP） | 8 | 8 | W3R7-02（7）、W3R7-03（1） |
-| probe9（混合否定/祈使句） | 16 | 7 | W3R7-03（4）、残余风险（3） |
-| 合计 | **297** | **91** | 全部与 Findings 或已声明残余风险一一对应 |
-- 未做：真实无头浏览器执行、真实 Provider 纵向、Docker 容器内复验、`createMessageOperations` 接线后的越权复现（全仓库无调用方）。
-- 未改仓库：本轮只覆盖写入 `.agentdev/work/WP-03/review.md`（本报告）；`git status --porcelain` 在写报告前为空，`HEAD` 仍为 `8f8b2dffd13f235297b7f5a1d8ec9f10331637a5`。
+| `probe-domain.mjs`（136 句：108 非祈使 + 28 正例） | 136 | 非祈使 **4** 越权；28 正例 28/28 通过 | W3R9-01（2）、W3R9-02（1）、W3R9-03（1） |
+| `probe2-families.mjs`（39 句：F1–F4 28 句 + 控制组 11 句） | 39 | **20** 越权（F1 3、F2 6、F3 7、F4 4；控制组 0） | W3R9-01（F1/F2'）、W3R9-02（F3）、W3R9-03（F4） |
+| `probe3-http.mjs`（HTTP 6 句） | 6 | 5 越权（`authorizationId=SET`/`level=L2`/1 授权行） | W3R9-01/02/03 |
+| `probe4-e2e.mjs`（端到端派发 13 句 + 1 正例对照） | 14 | **13/13 非祈使句派发真实 Backend 写 Run**；AC-005 正例 1/1 成功 | W3R9-01/02/03 |
+| `probe5.mjs`（36 句：拒绝长尾/未登记祈使/副词否定/中文参照/连词） | 36 | 0 缺陷（8 句授权：4 中文参照 + 3 连词 + 1 `补全`；28 句只读） | W3R9-06 记录 |
+| `probe6-unknown.mjs`（注入面 + 协议对账 4 项） | 4 | 0 授权；4 项均「静默忽略」（未知字段未按 §1 报错） | W3R9-05 |
+| `probe7-corpus.mjs`（登记语料独立复跑） | 74（57 负 + 17 正） | **0** | 登记语料 100% 成立 |
+| `probe8-minimal.mjs`（最小复现 14 句） | 14 | **13** 越权（1 句只读为 `更新了` 对照） | W3R9-01（形态对照） |
+- **未做**：真实无头浏览器执行、真实 Provider 纵向、Docker 容器内复验、故障注入下的孤儿 blob 复验、`pnpm test:e2e`/`test:acceptance`（脚本按设计指向 WP-09/WP-10，未实现）。
+- **未改仓库**：本轮只覆盖写入 `.agentdev/work/WP-03/review.md`（本报告）；除该文件外 `git status --porcelain` 为空，`HEAD` 仍为 `d23ce7b1d3c33df8854420941d1a937af9319a2a`，全部 6 条契约命令在上述工作树上执行。
+- **对开发方「结构性」主张的裁决**：**一半成立**——「黑名单 + 默认放行」确实被反转为「白名单 + 默认只读」，这是真实的结构改进，本轮给出正面证据（`probe-domain` 的非祈使分组 96/96 只读、登记 57+17 语料全绿、28 条文档化正例全绿）；但**白名单的形态判定本身仍有四个可达漏洞族**（`probe2` 28 句同族语料中 20 句越权、`probe4` 13/13 可派发真实写 Run），其危害方向仍是「非祈使句产生写授权」，故本轮仍判 **FAIL**，而不是「未登记句式免责」可以覆盖的残余。
 
 ---
 
@@ -364,37 +327,37 @@ probe9（期望=必须授权，实测不授权）：
 
 第三轮（报告冻结于 `35e8674`，被审代码树 `d71dc07`）结论 **FAIL**：AC-005 的授权机制（`routeMessage`、消息级 Authorization 行、`work.authorizationRef`、Assessment、混合意图多 Work 与独立 scope）全部**落库**且成立，但 `grantedByMessage` 生成 `readPaths:['docs']` + `operations:['edit']` 的自相矛盾授权，使绑定它的 Work 的任何 Run/Assessment 都被 `capabilityGaps:['readPaths without a read operation']` 拒绝——交付路线在准入即死锁（W3R3-01 P1）。新增 **1×P1、5×P2、8×P3**；对抗性另指出疑问句被当作执行消息、HTTP 客户端可自报 `authorization`（甚至 `deploy`）。失败路由 `Blocking Review Finding → Develop → Independent Review`。
 
-| 三轮编号 | 严重度 | 摘要 | 第七轮状态 |
+| 三轮编号 | 严重度 | 摘要 | 第九轮状态 |
 |---|---|---|---|
-| W3R3-01 | P1 | 授权 capability 缺口 → 交付死锁 | 已修（probe6 端到端复核仍成立） |
+| W3R3-01 | P1 | 授权 capability 缺口 → 交付死锁 | 已修（第九轮 e2e 派发走通） |
 | W3R3-02 | P2 | 授权绑定 `works[0]` | 已修 |
 | W3R3-03 | P2 | 授权自相矛盾 | 已修 |
-| W3R3-04 | P2 | HTTP 响应不含 `workIds`/`authorizationId` | 响应已含；`protocol.md` 仍未对账（W3R7-06） |
-| W3R3-05 | P2 | 同 intent 重复共享 scope | 已修（W3R7-05 为新形态副作用） |
+| W3R3-04 | P2 | HTTP 响应不含 `workIds`/`authorizationId` | 响应已含；`protocol.md` 仍未对账（W3R9-05） |
+| W3R3-05 | P2 | 同 intent 重复共享 scope | 已修（`workItems` 取消后不再适用） |
 | W3R3-06 | P2 | CSP 与 `execution.md` §6 漂移 | 已修且逐字相等 |
-| W3R3-07 | P2 | StorageError 映射过宽 + 回显 | 回显已修；映射细分仍缺（W3R7-06） |
-| W3R3-08/09/10/11/12/13/14 | P3 | validity/归属/owner 派生/prune/证据/数字/协议项 | 部分未闭合（W3R7-06） |
+| W3R3-07 | P2 | StorageError 映射过宽 + 回显 | 回显已修；映射细分仍缺（W3R9-05） |
+| W3R3-08/09/10/11/12/13/14 | P3 | validity/归属/owner 派生/prune/证据/数字/协议项 | 部分未闭合（W3R9-05） |
 
 ## 附四：第四轮摘要（保留）
 
 第四轮（报告冻结于 `fd0a893`，被审代码树 `3f52fbf`）结论 **PASS（0×P1、3×P2、11×P3）**，但同轮对抗性核验以 HTTP 端到端证伪「越权已闭合」：`explain why … needs a fix`、`don't fix …`、`不要修改 …`、`I am not asking you to fix …` 等仍生成写授权并可派发写 Run；另指出 `targetWorkId` 可改写已有 Work 的 level/authorizationRef、`Content-Security-Policy-Sandbox` 不是标准头、消息授权 L1 与 `routingFloor` 的 L2 不一致、`workItems:[null]`/`intent:'operation'` 造成 500 或非法 Work。
 
-| 四轮编号 | 严重度 | 摘要 | 第七轮状态 |
+| 四轮编号 | 严重度 | 摘要 | 第九轮状态 |
 |---|---|---|---|
-| W3R4-01 | P2 | 同 intent 多 Work 共用 scope | 已修（第六轮空 scope、本轮 W3R7-05 为回落副作用） |
-| W3R4-02 | P2 | `workItems` 把授权挂到只读 Work | 已修 |
-| W3R4-03 | P2 | `assertGrantWithinMessage` 不约束 `readPaths` | **已修**（probe3） |
-| W3R4-04 | P3 | `workItems` 未校验 → 500 | 已修 |
-| W3R4-05 | P3 | 无 Orchestrator 授权回归用例 | 未修（W3R7-06） |
-| W3R4-06 | P3 | `protocol.md` 未对账 | 未修（W3R7-06） |
+| W3R4-01 | P2 | 同 intent 多 Work 共用 scope | 已修（`workItems` 取消后不再适用） |
+| W3R4-02 | P2 | `workItems` 把授权挂到只读 Work | 已修（字段取消） |
+| W3R4-03 | P2 | `assertGrantWithinMessage` 不约束 `readPaths` | 已修（代码仍在，probe6 复核） |
+| W3R4-04 | P3 | `workItems` 未校验 → 500 | 已修（字段取消） |
+| W3R4-05 | P3 | 无 Orchestrator 授权回归用例 | 未修（W3R9-05；grep 仍 0 命中） |
+| W3R4-06 | P3 | `protocol.md` 未对账 | 未修（W3R9-05） |
 | W3R4-07 | P3 | `message.received` 缺 `workIds`/`authorizationId` | 已修 |
-| W3R4-08 | P3 | `StorageError` 映射粗 | 未修（W3R7-06） |
-| W3R4-09 | P3 | 记录数字不符 | 未修（W3R7-06） |
-| W3R4-10 | P3 | `targetWorkId` 归属只覆盖 message 来源 | 未修（W3R7-06） |
-| W3R4-11 | P3 | 失败发送孤儿 blob | 未修（W3R7-06） |
-| W3R4-12 | P3 | multipart 多文件 / `projectId` | 未修（W3R7-06） |
-| W3R4-13 | P3 | 错误响应非 §1 封装 | 未修（W3R7-06） |
-| W3R4-14 | P3 | 冻结点与任务不一致 | 第七轮一致（`HEAD=8f8b2df`） |
+| W3R4-08 | P3 | `StorageError` 映射粗 | 未修（W3R9-05） |
+| W3R4-09 | P3 | 记录数字不符 | 未修（W3R9-04/05） |
+| W3R4-10 | P3 | `targetWorkId` 归属只覆盖 message 来源 | 未修（W3R9-05） |
+| W3R4-11 | P3 | 失败发送孤儿 blob | 第九轮不可复现（记录承接） |
+| W3R4-12 | P3 | multipart 多文件 / `projectId` | 未修（W3R9-05） |
+| W3R4-13 | P3 | 错误响应非 §1 封装 | 未修（W3R9-05） |
+| W3R4-14 | P3 | 冻结点与任务不一致 | 第九轮一致（`HEAD=d23ce7b`） |
 
 ## 附五：第五轮摘要（保留）
 
@@ -407,10 +370,37 @@ probe9（期望=必须授权，实测不授权）：
 - **W3R5-05..09 [P3]** `targetWorkId` 归属、孤儿正文 blob、记录数字、前轮剩余项、冻结点漂移。
 - 同轮确认已修：`pathsIn` 线性化、`targetWorkId` 不改写目标 Work、消息授权 L2 与 `routingFloor` 一致、`workItems` 逐项校验。
 
-第五轮 §6.1 的 17 句越权语料与 §6.2 的 11 句误拒语料，**第七轮以 `8f8b2df` 复跑仍分别有 7 句、1 句不成立**（见本报告 §4.2/§6.3，W3R7-02/W3R7-03）。
+第五轮 §6.1 的 17 句越权语料，**第九轮以 `d23ce7b` 复跑全部成立**（`修改 X 了没有`、`Will you fix X`、`Any thoughts on the fix for X`、`我不想修改 X` 均已只读）；§6.2 的 11 句误拒语料剩 1 句（`docs/INDEX.md 的说明需要修改一下`）为 fail-closed。
 
 ## 附六：第六轮摘要（报告缺档）
 
 第六轮 Reviewer **未产出报告**（报告文件为空，`HEAD=7c01c9d` 时无 Review 结果入库）。同轮对抗性核验以 `7c01c9d` 为冻结点独立复现，确认第五轮点名的误拒/CSP/`readPaths` 三组已闭合，但补出：陈述/完成体与认识情态（`我已经修改了 X`、`刚修复了 X`、`I already fixed X`、`X 需要修改`、`是否应该修改 X`、`是否需要更新 X`、`麻烦评估一下 X 是否需要修改`）仍产生可派发写授权；`docs/INDEX.md 的错别字麻烦处理下` 等日常祈使句不授权；`workItems` 第二个同 intent 项 scope 为空；记录中「永不下发写授权」措辞不实；另补 `workItems` 无数量上限、`别改 A，改 docs/plan.md` 误拒、CSP 第二头名残留、`assertGrantWithinMessage` 未约束 `readPaths`。
 
-开发方以 `848b5c4` 修复（新增 `STATEMENT_PATTERNS`、`REQUEST_ACTION_PATTERN`、`workItems` scope 回落、回归网扩充），并以 `8f8b2df` 在 `plan.md` 声明 planVersion 2 的判定边界。第七轮对上述各项的逐条复核见本报告 §1/§3：**登记句式已修好；同类变体仍越权（含 `\b` 正则缺陷）；`REQUEST_ACTION_PATTERN` 引入只读请求授权的新 P1 回归；`别改 A，改 B` 仍误拒；边界声明与实现/记录不一致。**
+## 附七：第七轮摘要（保留）
+
+第七轮（报告冻结于 `8f8b2df`，被审代码树与之相同）结论 **FAIL（0×P0、3×P1、1×P2、3×P3）**：
+
+- **W3R7-01 [P1]** 只读请求词（`看一下/检查一下/帮忙/帮我/麻烦/请` + 命名路径）获得写授权并可派发写 Run（`848b5c4` 引入的回归；对照 `7c01c9d` 不授权）——**第九轮判定已修，无回归**。
+- **W3R7-02 [P1]** 中文完成体因 `\b` 在 Han 语境恒不匹配而形同虚设；中文疑问缺 `谁/哪些/几点`；英文 `needs a fix`/`The fix needed in…` 未覆盖——**第九轮判定：登记原句与大批变体已修，但「句首 `V了 + 路径`」形态仍未修（W3R9-01）**。
+- **W3R7-03 [P1]** `别改 A，改 B`、`不要修改 A，但要修复 B` 等混合指令误拒（AC-005/006 正例失败）——**第九轮判定已修，无回归**。
+- **A1 [P1 对抗性]** 被排除目标仍获写授权（`修改 docs/PLAN.md 而不是 docs/INDEX.md`）——**第九轮判定已修**。
+- **A2 [P1 对抗性]** 中文混合意图不拆分（`解释 X 并修复 Y`）——**第九轮判定已修**。
+- **A3 [P1 对抗性]** 纯建议请求授权（`请给出 docs/INDEX.md 的修改建议`）——**第九轮判定已修**。
+- **W3R7-04 [P2]** 边界声明/记录措辞不实——**第九轮仍未订正（W3R9-04）**。
+- **W3R7-05 [P3]** `workItems` 回落 scope 产生不可执行 Work——**第九轮不可复现（字段已取消）**。
+- **W3R7-06 [P3]** 前轮未闭合项与记录数字——**第九轮仍在（W3R9-05）**。
+
+开发方以 `c82169b` 修复（删除 `REQUEST_ACTION_PATTERN`、中文陈述去 `\b`、目标级排除、中文混合切分、取消客户端 `workItems`），并以 planVersion 2 声明确定性路由边界。第八轮对上述各项的逐条复核见第八轮报告 §3：**四条真修好、W3R7-02 只修了登记原句、记录措辞未订正；同时以自建双语语料证明「黑名单 + 默认放行」的判定式仍在三族上 fail-open（W3R8-01/02/03，均可派发真实写 Run）。**
+
+## 附八：第八轮摘要（保留）
+
+第八轮（报告冻结于 `c82169bc72bbcf8395fb2b00584db8e0b3c60b72`；该报告以未提交文件形式位于工作树，本轮以本报告覆盖）结论 **FAIL（0×P0、3×P1、1×P2、1×P3）**：
+
+- **W3R8-01 [P1]** 中文完成体/陈述的**形态**未被识别（`\b` 已删但动词表枚举不全）：`已经优化了 X`、`已经整理了 X`、`已经修好了 X`、`改动已完成：X`、`我把它改好了：X` 等 12 个变体仍授权 —— **第九轮判定：这类「`已经/已/刚刚 + V`」变体已修（全部只读）；但同根因移到了「句首 `V了 + 路径`」，见 W3R9-01**。
+- **W3R8-02 [P1]** 拒绝与非承诺、以及部分疑问句仍授权（`我不想修改 X`、`我无意修改 X`、`别急着修改 X`、`请勿修改 X`、`禁止修改 X`、`暂缓修改 X`、`修改 X 了没有`、`Will you fix X`、`Shall we update X`、`Were you asked to fix X`、`Might you fix X`）—— **第九轮判定已修**（登记与自建变体 22/22 只读）；疑问的**选择形态**仍未修（W3R9-02）。
+- **W3R8-03 [P1]** 只读言说行为（解释/评价/了解/请教）中嵌入变更动词即授权（`请讲述修改 X 的方法`、`请评价修改 X 的做法`、`我想先了解修改 X 的影响` 等）—— **第九轮判定已修**（10/10 只读）。
+- **W3R8-04 [P2]** 记录与实现不一致（T15 声称的措辞订正与登记计数均不成立）—— **第九轮仍未订正（W3R9-04）**；本轮计数 57+17 已与实测一致，绝对表述仍在（`:140/:159/:172`）。
+- **W3R8-05 [P3]** 前轮未闭合项与协议对账（`protocol.md` 未知字段应 `VALIDATION_ERROR`、`targetWorkId` 归属、multipart/`projectId`、错误封装、StorageError 映射、Orchestrator 回归用例、旧轮次数字）—— **第九轮仍未闭合（W3R9-05）**。
+- 第八轮对抗性 D1/D2/D3：D1（只读言说行为+变更话题）、D2（完成体枚举缺口）已修；**D3（仅被参照的路径进入写范围）在中文同子句版已修，英文逗号版仍成立（W3R9-03）**。
+
+开发方以 `d23ce7b` 做结构性修复（祈使形态白名单 + 第四至第八轮 57 负/17 正语料固化为回归测试）。第九轮复核结论见本报告 §3/§9：**结构反转成立、登记语料与文档化正例全绿，但白名单形态仍留四族 fail-open（归入 W3R9-01/02/03），故仍 FAIL。**
