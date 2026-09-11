@@ -169,6 +169,19 @@
   - R9-06：`JoinCoordinator.pageChief` 改为只跳过**终态**父 Run；paused/interrupted/recovery_required 仍登记待办，恢复后不会丢失 AC-046 的 Chief 待办。
 - 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **233 passed**；`pnpm test:integration` 124 passed。
 
+## T18 独立 Review 第十轮与修复（第十轮 FAIL → 修复）
+
+- 第十轮独立 Review 确认 R9-05/R9-06 与对抗性 A 已修好，其余部分修复；新增 R10-01..R10-07，对抗性核验另补三项。
+- 修复：
+  - R10-01（阻断）：未登记风险旗标 fail-closed —— `unknownRiskFlags` 拒绝并返回词表；补上文档原样合并措辞（`数据删除/迁移`、`支付金额/状态`、`部署/发布`）与分隔符归一；`isKnownLockdownRiskTerm` 接入（DC-62/DC-64）。
+  - R10-02（阻断）+ 对抗性 M-1（DC-63）：`verifyAuthorization` 统一核对存在性、同 Work、未撤销；任何提供的 `authorizationRef` 都核对；`dispatch` 的引用同样核对后才允许冻结。
+  - 对抗性 M-2 / R10-07（DC-62）：环境操作判定与 `intent` 标签解耦，改用 `scope.networkTargets` + 环境副作用操作集合（`bash/network/secret/push/deploy/delete_data`），只读操作不再被过度升级。
+  - R10-03：`assessment.saved` 同时记录 `floor`，路由证据自洽。
+  - R10-04 + M-3（DC-61）：`DispatchRequestInput.sourceRefs[].version` 改必填；`operationId` 去空白限长、`stage` 限 64 字符。
+  - R10-05（DC-59）：`runParams` 按 `profileSchema.partial()` 校验，非法字段报 `VALIDATION_ERROR` 而不是 `PROVIDER_UNAVAILABLE`。
+  - R10-06（DC-60）：更正记录——`goal`/`scope` 既不落行也不落事件。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **237 passed**；`pnpm test:integration` 124 passed。
+
 ## T9 待办
 
 - 独立 Review 与 Test（独立上下文）、结算与 `docs/INDEX.md` 状态更新、以及 `docs/delivery/acceptance.md` 中本包 AC 的证据登记。

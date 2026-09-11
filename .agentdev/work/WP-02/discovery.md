@@ -192,27 +192,34 @@ Provider 报告的 usage 可能超过该 Run 的预留（估算偏差）。原�
 第八轮实测：`dispatch` 已 fail-closed，但另外两个协议入口仍会以非协议形态失败。
 - `request_dispatch`（AC-045 点名）：`sourceRefs`/`requiredOutputs` 畸形抛裸 `TypeError`；非字符串 `goal`/`stage`、负 `budgetAllocation`、非字符串 `operationId` 被原样写进 `chief_action_required`。新增 `dispatchRequestSchema`（`contracts`，覆盖 `protocol.md` §6 的 `workId,reason,requestedRole,goal,sourceRefs` 与现有可选扩展字段），入口首行校验。
 - `assessment.submit`：`payload=null`/`riskFlags` 非数组/`uncertainties=null` 抛裸 `TypeError`，非法 `level`/`intent` 抛存储层 `StorageError/CONSTRAINT_VIOLATION`（不在 `protocol.md` §7 错误表内）。新增 `assessRequestSchema`，入口首行校验。
-- `dispatch` 的冻结输入：畸形 `authorizationRef`/`requiredOutputSchemas` 与「非对象 `contextPayload`」原先在快照冻结之后才被 `dispatchSnapshotSchema` 拒绝，留下不可读的 `config`/`context`/`dispatch` 快照行。新增 `dispatchExtrasSchema` 在任何 `freeze` 之前校验；`SnapshotWriter.freeze` 也加了 payload 必须是 JSON 对象的兜底（`CONSTRAINT_VIOLATION` / `SNAPSHOT_PAYLOAD_INVALID`）。
+- `dispatch` 的冻结输入（四个：`authorizationRef`、`requiredOutputSchemas`、`contextPayload`、`runParams`）：畸形值原先在快照冻结之后才被拒绝，留下不可读的 `config`/`context`/`dispatch` 快照行。新增 `dispatchExtrasSchema` 在任何 `freeze` 之前校验（第十轮 R10-05：`runParams` 按 `profileSchema.partial()` 校验内部字段，非法字段不再误报 `PROVIDER_UNAVAILABLE`）；`SnapshotWriter.freeze` 也加了 payload 必须是 JSON 对象的兜底（`CONSTRAINT_VIOLATION` / `SNAPSHOT_PAYLOAD_INVALID`）。
 - 影响：`protocol.md` §1 要求「必填参数缺失、未知字段或枚举错误返回 `VALIDATION_ERROR`」，§7 的错误表是封闭集合；三个入口现在都只在该集合内失败，且失败不留任何持久副作用。
 
 ## DC-60 Assessment 的 `goal`/`scope` 未落库（Review 第九轮 R9-04/漏项 C；Product Decision Pending）
 
-`data.md` §3 的 Assessment 结构含 `goal`/`scope`，`assessRequestSchema` 也校验它们，但 `assessment` 表没有对应列（`data.md` §2 的行定义里只有 `intent/level/semanticImpact/riskFlags/uncertainties/authorizationRef/policyRevision/reason`），因此 Core 校验后静默丢弃。两种文档口径不一致：行定义不含，结构定义含。属产品决定：
-- 方案 A：按 §2 行定义，`goal`/`scope` 只进 `assessment.saved` 事件（当前实现），文档明确它们不是行字段；
+`data.md` §3 的 Assessment 结构含 `goal`/`scope`，`assessRequestSchema` 也校验它们，但 `assessment` 表没有对应列（`data.md` §2 的行定义里只有 `intent/level/semanticImpact/riskFlags/uncertainties/authorizationRef/policyRevision/reason`），因此 Core 校验后静默丢弃。两种文档口径不一致：行定义不含，结构定义含。属产品决定，当前实现是第三种状态——**`goal`/`scope` 既不落行也不落事件**（第十轮 R10-06 更正：原文误称「只进 `assessment.saved` 事件」）。候选方案：
+- 方案 A：按 §2 行定义，把 `goal`/`scope` 加入 `assessment.saved` 事件（未实施），文档明确它们不是行字段；
 - 方案 B：追加迁移 0002 增加列，`data.md` §2 同步更新（迁移 0001 已冻结，只能追加）。
-本包按方案 A 实现并登记，等待产品方确认；`scope` 同时是 DC-62 的路由判据来源（只在事件/判定中使用，不落行）。
+`scope` 目前只用于 DC-62 的路由判定，不持久化。等待产品方确认方案后再改代码。
 
 ## DC-61 协议参数名与 Core 方法入参的映射（Review 第九轮 漏项 D/R9-02）
 
-`protocol.md` §6 的 `assessment.submit` 参数写作 `assessment:Assessment`，`agent.request_dispatch` 写作 `workId,reason,requestedRole,goal,sourceRefs`（无 `?`）。Core 内部 API 使用 `payload`，且 `workId/reason/sourceRefs` 在内部可选（Run 已绑定 Work 与父 Run，reason/sourceRefs 允许省略）。处理：`assessRequestSchema` 用协议名 `assessment`，在 `assess` 入口做一次显式映射；`requestDispatch` 保持内部可选性，但 `goal`/`requestedRole` 必填、`operationId` 限 1–128 字符、`sourceRefs[].version` 必填（`sourceRefSchema` 层已要求）。协议层（WP-04）接线时应按 §6 的必填性做参数校验并在缺失时报 `VALIDATION_ERROR`，本包登记该差异。
+`protocol.md` §6 的 `assessment.submit` 参数写作 `assessment:Assessment`，`agent.request_dispatch` 写作 `workId,reason,requestedRole,goal,sourceRefs`（无 `?`）。Core 内部 API 使用 `payload`，且 `workId/reason/sourceRefs` 在内部可选（Run 已绑定 Work 与父 Run，reason/sourceRefs 允许省略）。处理：`assessRequestSchema` 用协议名 `assessment`，在 `assess` 入口做一次显式映射；`requestDispatch` 保持内部可选性，但 `goal`/`requestedRole` 必填、`operationId` 去空白且限 1–128 字符、`stage` 去空白且限 64 字符、`DispatchRequestInput.sourceRefs[].version` 改为必填以与 `sourceRefSchema` 一致（第十轮 R10-04：原接口标 `?` 而运行期拒绝，TS 调用方会在运行期才失败）。`stage` 目前仍是自由字符串（取值集合由 WP-04 定义），本包只做长度兜底。协议层（WP-04）接线时应按 §6 的必填性做参数校验并在缺失时报 `VALIDATION_ERROR`，本包登记该差异。
 
 ## DC-62 L3 路由底线只依赖载荷本身（Review 第九轮 R9-01、对抗性漏项 A）
 
 原实现 `operationTouchesEnvironment` 取 `payload.intent === 'operation' && work.level === 'L3'`——循环依赖（`assess` 从不写 `work.level`），另加一个未文档化的魔法串。修复：
-- 运行环境判定改用载荷自身证据：`intent === 'operation'` 且（`scope.operations` 非空 或 `scope.networkTargets` 非空）⇒ L3（`workflow.md` §2.2）；
-- 风险旗标改为识别 `workflow.md` §2.3 的**文档用词**（中文，如「安全边界」「数据删除」「部署」「发布」）与 camelCase 旗标（大小写与 `_`/`-` 无关），词表在 `packages/domain/src/routing.ts` 的 `LOCKDOWN_RISK_TERMS`；
-- 底线：L3 判定 ⇒ 提交等级不得低于 L3；delivery/document 若未声明可核查的 L1 前提（`semanticImpact=false`、无 operation、无 networkTargets）⇒ 不低于 L2；assist/artifact ⇒ none。L1 的文件数/行数准入仍属 Plan/Review 门禁（DC-19、WP-04），Core 不从载荷推断。
+- 运行环境判定改用载荷自身证据，且**与 `intent` 标签无关**（第十轮 M-2：同一个 `operations:['deploy']` 写成 `delivery` 就能绕过门禁）：`scope.networkTargets` 非空，或 `scope.operations` 命中环境副作用集合 `['bash','network','secret','push','deploy','delete_data']` ⇒ L3（`workflow.md` §2.2）。只读调查（`read`/`search`）不在此列，仍走 L2（第十轮 R10-07 的过严判定已收窄）；
+- 风险旗标识别 `workflow.md` §2.3 的**文档用词**（含 `/` 合并措辞「数据删除/迁移」「支付金额/状态」「部署/发布」）与 camelCase 旗标（大小写与空白/`_`/`-`/`/` 无关），词表在 `packages/domain/src/routing.ts` 的 `LOCKDOWN_RISK_TERMS`；
+- **未登记旗标 fail-closed**（第十轮 R10-01）：`unknownRiskFlags` 非空 ⇒ `VALIDATION_ERROR` 并在 details 中返回可接受词表，不再把未登记拼写静默读成「无风险」；`isKnownLockdownRiskTerm` 由此有了真实调用方；
+delivery/document 若未声明可核查的 L1 前提（`semanticImpact=false`、无 operation、无 networkTargets）⇒ 不低于 L2；assist/artifact ⇒ none。L1 的文件数/行数准入仍属 Plan/Review 门禁（DC-19、WP-04），Core 不从载荷推断。
+- 接受的评估在 `assessment.saved` 里同时记录 `decidedLevel`、`floor` 与 `decidedReason`（第十轮 R10-03：原来只记 `decidedLevel`，与「L1 被接受」的记录互相矛盾）。
+- 词表当前是实现级的（`routing.ts` + 本记录），是否提为 `data.md`/contracts 的正式枚举属产品决定（第十轮 R10-01 的选项 a）；在确认前，未登记旗标一律拒绝而不是放行。
 
 ## DC-63 L3 的 authorizationRef 必须指向真实授权（Review 第九轮 对抗性漏项 B）
 
-`workflow.md` §1「Core 检查角色、字段、授权、权限和版本」、`data.md` §2「Core 核对来源与权限」。原实现只检查 `authorizationRef` 是否存在字符串，伪造 UUID 即可获得 L3。修复：L3（或其他 `requiresExplicitAuthorization` 等级）时按 id 查 `authorization` 行，不存在即 `NOT_AUTHORIZED`。更细的核对（授权范围是否覆盖本次 `scope`、是否被 `revokedAt` 撤销、是否属于同一 Work）登记为 WP-04/WP-05 的授权落线工作，本包只做存在性核对。
+`workflow.md` §1「Core 检查角色、字段、授权、权限和版本」、`data.md` §2「Core 核对来源与权限」。原实现只检查 `authorizationRef` 是否存在字符串，伪造 UUID 即可获得 L3。修复（第十轮 R10-02 扩展）：`Orchestrator.verifyAuthorization` 统一核对——按 id 查 `authorization` 行（不存在 ⇒ `NOT_AUTHORIZED`）、必须属于同一 Work（跨 Work 授权拒绝）、必须未 `revokedAt`（已撤销拒绝）；只要调用方提供了 `authorizationRef` 就核对（即便该等级不要求，伪造 id 也不能落库）；`dispatch` 的 `authorizationRef` 走同一函数，避免伪造引用被冻结进 DispatchSnapshot。授权**范围是否覆盖本次 `scope`/`operations`** 仍登记为 WP-04/WP-05 的落线工作（`dispatch` 在不知道 Work 等级时不强制要求授权，否则 Chief 无法先做评估形成死锁）。
+
+## DC-64 风险旗标词表的归属与未登记值处理（Review 第十轮 R10-01；Product Decision Pending）
+
+`workflow.md` §2.3 用中文散文列出 L3 风险，`assessmentPayloadSchema.riskFlags` 是自由字符串。第十轮前实现只认一张等价拼写表，未登记值被静默忽略——文档化安全门禁 fail-open。当前处理：词表在 `packages/domain/src/routing.ts`（`LOCKDOWN_RISK_TERMS`），未登记值由 Core 以 `VALIDATION_ERROR` 拒绝并返回可接受词表。待产品决定：是否把该词表提升为 `data.md`/contracts 的正式枚举（则 Chief 与协议的取值集合被固定），以及是否允许 Chief 使用词表外的自定义旗标（当前不允许）。

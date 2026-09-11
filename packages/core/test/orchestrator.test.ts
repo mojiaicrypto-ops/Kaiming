@@ -29,6 +29,8 @@ const TASK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e70';
 const OTHER_TASK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e72';
 const PROVIDER_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e71';
 const AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e81';
+const FOREIGN_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e82';
+const REVOKED_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e83';
 const MODEL_ID = 'test-model';
 const emptyScope = { readPaths: [], writePaths: [], operations: [], networkTargets: [] };
 
@@ -150,6 +152,29 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
       scope: emptyScope,
       operations: ['deploy'],
       acceptedAt: new Date().toISOString(),
+    });
+
+    // Authorities the Core must reject: another Work's grant, and a revoked one.
+    store.authorizations.insert({
+      id: FOREIGN_AUTHORIZATION_ID,
+      projectId,
+      sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      workId: OTHER_WORK_ID,
+      goal: 'authorized for a different work',
+      scope: emptyScope,
+      operations: ['deploy'],
+      acceptedAt: new Date().toISOString(),
+    });
+    store.authorizations.insert({
+      id: REVOKED_AUTHORIZATION_ID,
+      projectId,
+      sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      workId: WORK_ID,
+      goal: 'revoked authority',
+      scope: emptyScope,
+      operations: ['deploy'],
+      acceptedAt: new Date().toISOString(),
+      revokedAt: new Date().toISOString(),
     });
 
     // One Task per Work, so a professional spec can bind its work item and a
@@ -332,6 +357,142 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
       },
     });
     expect(accepted.level).toBe('L3');
+  });
+
+  it('fails closed on unknown risk flags and on authorization provenance (R10-01/R10-02)', () => {
+    const deliver =
+      (overrides: Partial<AssessmentPayload>): unknown =>
+      () =>
+        orchestrator.assess({
+          workId: WORK_ID,
+          payload: { ...assessmentPayloadFixture(), ...overrides },
+        });
+
+    // An unregistered flag must not be read as "no risk".
+    expect(deliver({ riskFlags: ['securityBoundry'] })).toThrowError(/unknown riskFlags/);
+    expect(deliver({ riskFlags: ['安全'] })).toThrowError(/unknown riskFlags/);
+    expect(deliver({ riskFlags: ['operation_touches_environment'] })).toThrowError(
+      /unknown riskFlags/,
+    );
+    // The document's own combined wording is part of the accepted vocabulary.
+    expect(deliver({ riskFlags: ['数据删除/迁移'] })).toThrowError(/routing rules require L3/);
+    expect(deliver({ riskFlags: ['部署/发布'] })).toThrowError(/routing rules require L3/);
+
+    // Authorization provenance: foreign Work, revoked, and fabricated refs.
+    const l3 =
+      (authorizationRef: string): unknown =>
+      () =>
+        orchestrator.assess({
+          workId: WORK_ID,
+          payload: {
+            ...assessmentPayloadFixture(),
+            level: 'L3',
+            semanticImpact: true,
+            riskFlags: ['安全边界'],
+            authorizationRef,
+          },
+        });
+    expect(l3(FOREIGN_AUTHORIZATION_ID)).toThrowError(/belongs to Work/);
+    expect(l3(REVOKED_AUTHORIZATION_ID)).toThrowError(/was revoked/);
+    // A reference on a level that does not need one is still verified.
+    expect(deliver({ authorizationRef: FOREIGN_AUTHORIZATION_ID })).toThrowError(/belongs to Work/);
+    expect(deliver({ authorizationRef: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99' })).toThrowError(
+      /does not exist/,
+    );
+  });
+
+  it('routes environment operations to L3 whatever the intent label says (R10-07)', () => {
+    // A delivery that declares a deployment is still an environment operation.
+    expect(() =>
+      orchestrator.assess({
+        workId: WORK_ID,
+        payload: {
+          ...assessmentPayloadFixture(),
+          intent: 'delivery',
+          scope: { ...emptyScope, operations: ['deploy'] },
+        },
+      }),
+    ).toThrowError(/routing rules require L3/);
+    expect(() =>
+      orchestrator.assess({
+        workId: WORK_ID,
+        payload: {
+          ...assessmentPayloadFixture(),
+          intent: 'document',
+          scope: { ...emptyScope, networkTargets: ['https://example.test'] },
+        },
+      }),
+    ).toThrowError(/routing rules require L3/);
+
+    // A read-only investigation is not an environment operation, so it stays L2.
+    const readOnly = orchestrator.assess({
+      workId: WORK_ID,
+      payload: {
+        ...assessmentPayloadFixture(),
+        intent: 'operation',
+        scope: { ...emptyScope, operations: ['read', 'search'] },
+      },
+    });
+    expect(readOnly.level).toBe('L2');
+
+    // The accepted L1 carries the effective floor, so the audit trail is consistent.
+    const l1 = orchestrator.assess({
+      workId: WORK_ID,
+      payload: { ...assessmentPayloadFixture(), intent: 'delivery', level: 'L1' },
+    });
+    expect(l1.level).toBe('L1');
+    const saved = store.events
+      .readAfter(0, { limit: 100 })
+      .filter((event) => event.name === 'assessment.saved' && event.entityId === l1.id);
+    expect(saved[0]?.data).toMatchObject({ level: 'L1', floor: 'L1' });
+  });
+
+  it('rejects a malformed runParams and dispatch authorization before writing (R10-05)', () => {
+    const chief = chiefRun();
+    const snapshotsBefore = store.snapshots.list().length;
+    const badRunParams: readonly unknown[] = [
+      { contextLimit: -5 },
+      { bogus: 1 },
+      { reasoning: 'hyper' },
+      { providerId: 'not-a-uuid' },
+    ];
+    for (const runParams of badRunParams) {
+      try {
+        orchestrator.dispatch({ spec: backendSpec(chief.id), runParams: runParams as never });
+        throw new Error('expected a validation error');
+      } catch (error) {
+        // A client-side field error must not surface as a provider outage.
+        expect(error).toMatchObject({ code: 'VALIDATION_ERROR' });
+      }
+    }
+    expect(store.snapshots.list().length).toBe(snapshotsBefore);
+
+    // A frozen authorization reference is verified too.
+    expect(() =>
+      orchestrator.dispatch({
+        spec: backendSpec(chief.id),
+        authorizationRef: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99',
+      }),
+    ).toThrowError(/does not exist/);
+    expect(store.snapshots.list().length).toBe(snapshotsBefore);
+
+    // Idempotency keys and stages are bounded, not stored verbatim.
+    expect(() =>
+      orchestrator.requestDispatch({
+        runId: chief.id,
+        requestedRole: 'review',
+        goal: 'ok',
+        operationId: '   ',
+      }),
+    ).toThrowError(/request_dispatch request is invalid/);
+    expect(() =>
+      orchestrator.requestDispatch({
+        runId: chief.id,
+        requestedRole: 'review',
+        goal: 'ok',
+        stage: 'x'.repeat(100),
+      }),
+    ).toThrowError(/request_dispatch request is invalid/);
   });
 
   it('requires explicit authorization for L3 and refuses an unknown Work', () => {

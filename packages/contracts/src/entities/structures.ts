@@ -241,8 +241,13 @@ export const dispatchExtrasSchema = z.strictObject({
     z.strictObject({ kind: z.string().min(1), schemaVersion: z.literal(1) }),
   ).optional(),
   contextPayload: jsonObjectSchema.optional(),
-  /** Authorized Run parameters (`agents.md` §5): must at least be an object. */
-  runParams: jsonObjectSchema.optional(),
+  /**
+   * Authorized Run parameters (`agents.md` §5).
+   *
+   * Validated as a profile patch, so a bad field is a `VALIDATION_ERROR` instead of
+   * a misleading `PROVIDER_UNAVAILABLE` from the availability check (R10-05).
+   */
+  runParams: profileSchema.partial().optional(),
 });
 export type DispatchExtras = z.infer<typeof dispatchExtrasSchema>;
 
@@ -262,13 +267,15 @@ export const dispatchRequestSchema = z.strictObject({
   sourceRefs: list(sourceRefSchema).optional(),
   parentRunId: idSchema.optional(),
   purpose: purposeSchema.optional(),
-  stage: z.string().trim().min(1).optional(),
+  // The value set is the Chief's dispatch vocabulary, documented by WP-04; the
+  // bound keeps an arbitrary string from being persisted unbounded (R10-04/M-3).
+  stage: z.string().trim().min(1).max(64).optional(),
   requiredOutputs: list(z.string().min(1)).optional(),
   requiredChild: z.boolean().optional(),
   budgetAllocation: nonNegativeIntSchema.optional(),
-  // `reliability.md` §1 keys outbox delivery on operationId; an unbounded string
-  // would be stored verbatim in the event log.
-  operationId: z.string().min(1).max(128).optional(),
+  // `reliability.md` §1 keys outbox delivery on operationId; a blank or unbounded
+  // key would either collide or be stored verbatim in the event log.
+  operationId: z.string().trim().min(1).max(128).optional(),
 });
 export type DispatchRequest = z.infer<typeof dispatchRequestSchema>;
 

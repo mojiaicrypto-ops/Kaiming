@@ -17,15 +17,20 @@ import {
   classifyImport,
   decideLevel,
   evaluateGrant,
+  hasLockdownRisk,
+  isKnownLockdownRiskTerm,
   executionAvailabilityFor,
   isDirectChiefChild,
   isL1Eligible,
   isTerminalRunStatus,
+  lockdownRiskVocabulary,
   l1Failures,
   restoreTarget,
+  riskFromFlags,
   runAcceptsNewAttempt,
   scopeBindingsSatisfied,
   validateContentSections,
+  unknownRiskFlags,
   validateDispatchSpec,
   writeAllowed,
   type L1Criteria,
@@ -163,7 +168,7 @@ describe('level routing (workflow.md §2)', () => {
     ).toBe('none');
   });
 
-  it('routes an environment operation to L3', () => {
+  it('routes an environment operation to L3 whatever the intent label says', () => {
     expect(
       decideLevel({
         intent: 'operation',
@@ -171,6 +176,35 @@ describe('level routing (workflow.md §2)', () => {
         risk: NO_LOCKDOWN_RISK,
       }).level,
     ).toBe('L3');
+    // A delivery that deploys touches the same environment; the label must not
+    // change the route (R10-01/M-2).
+    expect(
+      decideLevel({
+        intent: 'delivery',
+        operationTouchesEnvironment: true,
+        risk: NO_LOCKDOWN_RISK,
+      }).level,
+    ).toBe('L3');
+  });
+
+  it('recognizes the documented risk vocabulary and refuses unknown flags', () => {
+    // The document states the criteria in Chinese prose (workflow.md §2.3); both
+    // spellings select the same canonical risk (DC-62).
+    expect(riskFromFlags(['安全边界']).securityBoundary).toBe(true);
+    expect(riskFromFlags(['security-boundary']).securityBoundary).toBe(true);
+    expect(riskFromFlags(['SECURITY_BOUNDARY']).securityBoundary).toBe(true);
+    expect(riskFromFlags(['数据删除/迁移']).dataDeletionOrMigration).toBe(true);
+    expect(riskFromFlags(['部署/发布']).deployOrRelease).toBe(true);
+    expect(riskFromFlags(['支付金额/状态']).payment).toBe(true);
+    expect(hasLockdownRisk(riskFromFlags(['安全边界']))).toBe(true);
+
+    // Anything outside the vocabulary is reported so the Core can fail closed
+    // instead of reading it as "no risk".
+    expect(unknownRiskFlags(['安全边界', '多文件修改'])).toEqual(['多文件修改']);
+    expect(unknownRiskFlags(['securityBoundry', '安全'])).toEqual(['securityBoundry', '安全']);
+    expect(isKnownLockdownRiskTerm('安全边界')).toBe(true);
+    expect(isKnownLockdownRiskTerm('安全')).toBe(false);
+    expect(lockdownRiskVocabulary()).toContain('安全边界');
   });
 
   it('routes any lockdown risk to L3 before considering L1', () => {

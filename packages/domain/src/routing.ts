@@ -124,10 +124,11 @@ export const LOCKDOWN_RISK_TERMS: Readonly<Record<keyof LockdownRisk, readonly s
     'migration',
     '数据删除',
     '数据迁移',
+    '数据删除/迁移',
   ],
-  payment: ['payment', '支付金额', '支付状态', '支付'],
+  payment: ['payment', '支付金额', '支付状态', '支付金额/状态', '支付'],
   publicProtocolBreak: ['publicProtocolBreak', 'protocolBreak', '公开协议不兼容', '公开协议变更'],
-  deployOrRelease: ['deployOrRelease', 'deploy', 'release', '部署', '发布'],
+  deployOrRelease: ['deployOrRelease', 'deploy', 'release', '部署/发布', '部署', '发布'],
   gateRuleChange: ['gateRuleChange', 'gateChange', '项目门禁规则变化', '门禁规则变化'],
 };
 
@@ -145,6 +146,23 @@ export function isKnownLockdownRiskTerm(flag: string): boolean {
   return Object.values(LOCKDOWN_RISK_TERMS).some((terms) =>
     terms.some((term) => normalizeRiskTerm(term) === normalized),
   );
+}
+
+/**
+ * Risk flags the vocabulary does not recognize.
+ *
+ * A Chief must classify with the documented terms or the canonical flags; an
+ * unknown flag would otherwise be silently treated as "no risk", turning the L3
+ * security gate into a fail-open (R10-01). The Core refuses such an assessment and
+ * lists the accepted vocabulary instead.
+ */
+export function unknownRiskFlags(flags: readonly string[]): string[] {
+  return flags.filter((flag) => !isKnownLockdownRiskTerm(flag));
+}
+
+/** Every accepted risk term, for diagnostics and product review. */
+export function lockdownRiskVocabulary(): string[] {
+  return Object.values(LOCKDOWN_RISK_TERMS).flat();
 }
 
 /** Resolves loose risk text onto the canonical lockdown risk shape. */
@@ -183,7 +201,10 @@ export function decideLevel(input: RoutingInput): RoutingDecision {
   if (input.intent === 'assist' || input.intent === 'artifact') {
     return { level: 'none', reason: `${input.intent} routes to level none` };
   }
-  if (input.intent === 'operation' && input.operationTouchesEnvironment) {
+  // The evidence is the declared scope, not the `intent` label: a delivery that
+  // deploys or deletes data touches the same running environment and must not slip
+  // past the gate by being labelled differently (DC-62).
+  if (input.operationTouchesEnvironment) {
     return { level: 'L3', reason: 'operation touches a running environment' };
   }
   if (input.intent === 'delivery' || input.intent === 'document') {

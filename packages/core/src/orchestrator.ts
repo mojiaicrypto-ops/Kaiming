@@ -26,6 +26,7 @@ import {
   type DispatchSnapshot,
   type DispatchSpec,
   type JsonObject,
+  type Level,
   type ProfessionalDispatchSpec,
   type Run,
   type Work,
@@ -37,7 +38,9 @@ import {
   isTerminalRunStatus,
   PRIMARY_PURPOSE_BY_ROLE,
   requiresExplicitAuthorization,
+  lockdownRiskVocabulary,
   riskFromFlags,
+  unknownRiskFlags,
   validateDispatchSpec,
   validateRolePurpose,
   type DispatchDecision,
@@ -124,7 +127,8 @@ export interface DispatchRequestInput {
   readonly sourceRefs?: readonly {
     readonly kind: string;
     readonly id: string;
-    readonly version?: string;
+    /** Required by `sourceRefSchema`; the interface must not be looser (R10-04). */
+    readonly version: string;
   }[];
   readonly parentRunId?: string;
   readonly purpose?: string;
@@ -149,6 +153,28 @@ export interface DispatchRequestResult {
  * Only the request's own fields: a replay with the same key and same content
  * returns the original todo, anything else is a conflict.
  */
+/**
+ * Operations with a side effect on a running environment, the network or data
+ * (`workflow.md` §2.2). A read-only investigation is not one of them, so it must
+ * not be pushed into the L3 route (R10-07).
+ */
+const ENVIRONMENT_OPERATIONS = new Set([
+  'bash',
+  'network',
+  'secret',
+  'push',
+  'deploy',
+  'delete_data',
+]);
+
+/** True when the declared scope reaches beyond the local workspace. */
+function touchesRunningEnvironment(payload: AssessmentPayload): boolean {
+  return (
+    payload.scope.networkTargets.length > 0 ||
+    payload.scope.operations.some((operation) => ENVIRONMENT_OPERATIONS.has(operation))
+  );
+}
+
 /**
  * The lowest level the Core can insist on from the assessment payload alone.
  *
@@ -242,15 +268,25 @@ export class Orchestrator {
     // cannot record a lower level than the lockdown/operation rules demand. Only
     // the L3 floor is enforced as a hard error: L1 vs L2 depends on criteria the
     // assessment payload does not carry, so a stricter submitted level is allowed.
+    // An unrecognized risk flag would be read as "no risk" and silently open the
+    // L3 gate, so the assessment is refused with the accepted vocabulary instead
+    // (R10-01).
+    const unknownRisk = unknownRiskFlags(payload.riskFlags);
+    if (unknownRisk.length > 0) {
+      fail(
+        'VALIDATION_ERROR',
+        `unknown riskFlags: ${unknownRisk.join(', ')}; use the documented terms`,
+        { workId: work.id, unknownRiskFlags: unknownRisk, vocabulary: lockdownRiskVocabulary() },
+      );
+    }
     // `workflow.md` §2.2: an operation that touches a running environment, writes
     // over the network or changes data is L3. The evidence is the payload's own
     // scope — never the Work row's current level, which would make the floor
-    // circular (DC-62).
+    // circular (DC-62) — and it applies whatever the `intent` label says, so a
+    // delivery cannot smuggle a deployment past the gate.
     const decided = decideLevel({
       intent: payload.intent,
-      operationTouchesEnvironment:
-        payload.intent === 'operation' &&
-        (payload.scope.operations.length > 0 || payload.scope.networkTargets.length > 0),
+      operationTouchesEnvironment: touchesRunningEnvironment(payload),
       risk: riskFromFlags(payload.riskFlags),
     });
     // The Core decision is a floor: a Chief may escalate but never downgrade it
@@ -266,24 +302,7 @@ export class Orchestrator {
         { workId: work.id, decidedLevel: decided.level, floor, submittedLevel: payload.level },
       );
     }
-    if (requiresExplicitAuthorization(payload.level)) {
-      const authorizationRef = payload.authorizationRef;
-      if (authorizationRef === undefined) {
-        fail('NOT_AUTHORIZED', `${payload.level} requires an explicit authorizationRef`, {
-          workId: work.id,
-          level: payload.level,
-        });
-      }
-      // `data.md` §2/workflow.md §1: the Core verifies the authorization's origin,
-      // so a fabricated reference is not authority (DC-63).
-      if (this.store.authorizations.find(authorizationRef) === undefined) {
-        fail('NOT_AUTHORIZED', `authorizationRef ${authorizationRef} does not exist`, {
-          workId: work.id,
-          level: payload.level,
-          authorizationRef,
-        });
-      }
-    }
+    this.verifyAuthorization(payload.authorizationRef, work.id, payload.level);
     return withTransaction(this.store.db, () => {
       const row = this.store.assessments.insert({
         workId: work.id,
@@ -308,6 +327,9 @@ export class Orchestrator {
           level: row.level,
           semanticImpact: row.semanticImpact,
           decidedLevel: decided.level,
+          // The floor is what actually admitted the submitted level; without it the
+          // event reads as "Core decided L2" next to a stored L1 (R10-03).
+          floor,
           decidedReason: decided.reason,
         },
       });
@@ -347,6 +369,10 @@ export class Orchestrator {
     );
     enforce(validateDispatchSpec(spec), 'dispatch spec');
     const work = this.requireWork(spec.workId);
+    // A frozen authorization reference must be real authority for this Work; a
+    // fabricated id would otherwise survive restarts in the DispatchSnapshot
+    // (R10-02).
+    this.verifyAuthorization(extras.authorizationRef, work.id, undefined);
 
     if (spec.kind === 'professional') {
       enforce(validateRolePurpose(spec.role, spec.purpose), 'dispatch spec');
@@ -388,7 +414,7 @@ export class Orchestrator {
     );
 
     const role = spec.role;
-    const availability = this.gateway.availability(role, input.runParams ?? {});
+    const availability = this.gateway.availability(role, extras.runParams ?? {});
     if (!availability.ok) {
       // The Run is refused rather than queued on a guess; the Work-level
       // `blocked(provider)` projection is WP-05 (DC-42).
@@ -408,7 +434,7 @@ export class Orchestrator {
 
     // Everything above is admission control; only a Run that will really be
     // created may leave snapshots behind (R7-07).
-    const configSnapshotId = this.config.freeze(role, input.runParams ?? {}).snapshotId;
+    const configSnapshotId = this.config.freeze(role, extras.runParams ?? {}).snapshotId;
     // The context payload is plain JSON by construction (`data.md` §3); the cast
     // only bridges `exactOptionalPropertyTypes` on the parsed Schema type.
     const fallbackContext = {
@@ -699,6 +725,55 @@ export class Orchestrator {
     usage?: RunUsage,
   ): Run {
     return this.lifecycle.settle(runId, status, usage);
+  }
+
+  /**
+   * Verifies that an authorization reference is real authority for this Work.
+   *
+   * `workflow.md` §1 / `data.md` §2: the Core checks the authorization, and
+   * `Authorization` is documented as revocable and never forged, so existence
+   * alone is not enough — it must belong to the same Work and must not have been
+   * revoked (DC-63). A reference provided on a level that does not require one is
+   * still verified, so a fabricated id can never be persisted.
+   */
+  private verifyAuthorization(
+    authorizationRef: string | undefined,
+    workId: string,
+    /** `undefined` when no level is known yet (a dispatch only checks what it has). */
+    level: Level | undefined,
+  ): void {
+    if (authorizationRef === undefined) {
+      if (level !== undefined && requiresExplicitAuthorization(level)) {
+        fail('NOT_AUTHORIZED', `${level} requires an explicit authorizationRef`, {
+          workId,
+          level,
+        });
+      }
+      return;
+    }
+    const authorization = this.store.authorizations.find(authorizationRef);
+    if (authorization === undefined) {
+      fail('NOT_AUTHORIZED', `authorizationRef ${authorizationRef} does not exist`, {
+        workId,
+        level: level ?? null,
+        authorizationRef,
+      });
+    }
+    if (authorization.workId !== workId) {
+      fail(
+        'NOT_AUTHORIZED',
+        `authorizationRef ${authorizationRef} belongs to Work ${authorization.workId}, not ${workId}`,
+        { workId, level: level ?? null, authorizationRef, authorizedWorkId: authorization.workId },
+      );
+    }
+    if (authorization.revokedAt !== undefined) {
+      fail('NOT_AUTHORIZED', `authorizationRef ${authorizationRef} was revoked`, {
+        workId,
+        level: level ?? null,
+        authorizationRef,
+        revokedAt: authorization.revokedAt,
+      });
+    }
   }
 
   /** Rejects a professional spec whose parent cannot fund it. */
