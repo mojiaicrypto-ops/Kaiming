@@ -890,3 +890,37 @@ describe('budget-grant APIs reject bad input without bricking the record (W4R3-0
     ).toThrowError(/document-root/u);
   });
 });
+
+describe('rejections never brick a record (T-01 regression)', () => {
+  it('keeps a Ready record Ready after a repeated confirm', () => {
+    const { dir } = seedRepository();
+    const store = createMemoryInitStateStore();
+    const init = createInitializer({ store, git, now: clock });
+    okOf(init.start({ id: 'init-t01', root: dir }));
+    driveToWriting(init, 'init-t01');
+    const done = okOf(init.step('init-t01'));
+    expect(done.phase).toBe('ready');
+
+    const repeated = refusalOf(init.confirm('init-t01', { authorizationRef: 'user-action:2' }));
+    expect(repeated.errors[0]?.code).toBe('INVALID_STATE');
+    const record = init.get('init-t01');
+    expect(record?.phase).toBe('ready');
+    expect(record?.failure).toBeNull();
+    expect(init.verifyReady('init-t01').ok).toBe(true);
+
+    const lateGit = refusalOf(
+      init.authorizeGitInitialization('init-t01', {
+        authorizationRef: 'user-action:3',
+        request: {
+          kind: 'git-initialization',
+          root: dir,
+          branch: 'agentdev/main',
+          initialCommit: false,
+          reason: 'x',
+        },
+      }),
+    );
+    expect(lateGit.errors[0]?.code).toBe('INVALID_STATE');
+    expect(init.get('init-t01')?.phase).toBe('ready');
+  });
+});

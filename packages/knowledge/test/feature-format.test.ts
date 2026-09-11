@@ -526,3 +526,17 @@ describe('parseFeatureSet', () => {
     expect(result.features.map((feature) => feature.featureId)).toEqual([FEATURE_ID]);
   });
 });
+
+describe('placeholders survive HTML stripping (T-02 regression)', () => {
+  it('rejects an angle-bracket placeholder inside an entry line', () => {
+    const result = parseDocument(
+      buildDocument({
+        sections: {
+          实现入口: ['- src/orders/<path>.ts', '- tests/orders/cancel.test.ts'].join('\n'),
+        },
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(errorsOf(result).some((error) => error.field === '实现入口')).toBe(true);
+  });
+});

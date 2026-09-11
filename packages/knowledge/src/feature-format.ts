@@ -269,8 +269,20 @@ function buildSection(heading: string, bodyLines: readonly string[]): FeatureSec
     if (line === '' || line.startsWith('|') || line.startsWith('<!--')) continue;
     const bullet = /^(?:[-*+]|\d+\.)\s+(.*)$/u.exec(line);
     if (bullet !== null) {
-      const item = stripHtml(bullet[1] ?? '').trim();
+      // Inline HTML is stripped for structure, but an angle-bracket placeholder must survive
+      // the strip so validation can reject it (T-02): otherwise `- src/orders/<path>.ts`
+      // would pass and a fabricated `src/orders/.ts` would enter CODE_MAP.
+      const rawItem = (bullet[1] ?? '').trim();
+      if (findPlaceholder(rawItem) !== undefined) {
+        items.push(rawItem);
+        continue;
+      }
+      const item = stripHtml(rawItem).trim();
       if (item !== '') items.push(item);
+      continue;
+    }
+    if (findPlaceholder(line) !== undefined) {
+      text.push(line);
       continue;
     }
     text.push(stripHtml(line).trim());

@@ -111,3 +111,13 @@
   7. **W4R3-07**：重复 `step` 在阻断态会追加 `blocked` 证据行（同内容 blocker 不重复入 `blockers`，但证据账本仍增长）；长期运行的调用方应轮询 `get` 而非空转 `step`，如需硬上限随 WP-08 状态存储一并处理。
   8. **W4R3-08 / W4R2-05**：T8 残余 3 的措辞已随 T9/T10/T11 更新；W4R1-03..06 与 W4R3-07 的承接状态以本节为准。
 - 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **26 文件 / 426 用例**；`pnpm test:integration` 124；`pnpm build` 10 workspace；`pnpm docs:check` ok。
+
+## T12 独立 Test（第一轮，PASS）与两条 P2 的修复
+
+- 独立 Test 判 **PASS**：15 个 AC 中 14 通过、AC-039 部分通过（Snapshot 选择面属 WP-02 AC-030）、0 不通过；自建 8 组实验 484 断言 0 失败，5 项必需失败测试全部独立复现；6 条契约命令退出 0（unit 426、integration 124、build 10 workspace）。报告：`.agentdev/work/WP-04/test.md`（提交 `96a2f5c`）。
+- **T-01 [P2]（已修）**：`confirm`/`authorizeGitInitialization` 的阶段错误会**持久化** `failed` 状态，Ready 记录被重复 `confirm` 后所有 API 永久拒绝。修复：两处的阶段/输入错误改用**不持久化**的 `rejected()`（`INVALID_STATE`/`VALIDATION_ERROR`），Ready 记录保持 Ready 且 `failure=null`。
+- **T-02 [P2]（已修）**：`buildSection()` 先 `stripHtml()` 再校验占位符，`- src/orders/<path>.ts` 会通过校验并把伪造路径 `src/orders/.ts` 写进 `CODE_MAP.md`。修复：含占位符的行**保留原文**（不做 HTML 剥离）后再交给占位符校验，`实现入口` 含 `<path>` 现被 `KNOWLEDGE_INVALID` 拒绝。
+- **O-01 [观察]（已修）**：`investigate()` 未继承记录的 `budgetOverride`；现与 Mapping 一致地使用 `record.budgetOverride ?? options.budget`。
+- 其余观察与未覆盖面（需求池 SQLite/Core/UI 演练、`requirement.save` 原子提交、Context 双来源装载、正式提交/CAS、真实 Provider）与 T9-W4R1-03 的承接声明一致，登记为承接。
+- 回归网：`feature-format.test.ts` 新增 1 例「实现入口中的尖括号占位符必须被拒」；`initialize.test.ts` 新增 1 例「重复 confirm / 错阶段 Git 授权不破坏 Ready 记录」。
+- 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **26 文件 / 428 用例**；`pnpm build` 10 workspace；`pnpm docs:check` ok。`pnpm test:integration` 本轮在**宿主负载 load≈60** 下 Docker 型用例（`apps/cli/{container,doctor}.integration.test.ts`）超时；同批非 Docker 集成用例单独运行结果见 T13/结算记录，此前同树（`fd26662`/`1654004`）已多次 124/124 通过。

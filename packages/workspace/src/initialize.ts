@@ -1636,28 +1636,11 @@ export function createInitializer(options: InitializerOptions): Initializer {
     const record = store.load(id);
     if (record === null) return notFound(id);
     if (record.phase !== 'confirming') {
-      return failed(
-        record,
-        {
-          kind: 'internal',
-          message: `当前阶段 ${record.phase} 不接受确认`,
-          recoverable: false,
-          details: null,
-        },
-        [{ code: 'INVALID_STATE', message: `当前阶段 ${record.phase} 不接受确认` }],
-      );
+      // A rejected request must not persist a failure: a Ready record stays Ready (T-01).
+      return rejected(record, `当前阶段 ${record.phase} 不接受确认`, 'INVALID_STATE');
     }
     if (input.authorizationRef.trim() === '') {
-      return failed(
-        record,
-        {
-          kind: 'internal',
-          message: '用户确认必须携带 authorizationRef',
-          recoverable: false,
-          details: null,
-        },
-        [{ code: 'VALIDATION_ERROR', message: '用户确认必须携带 authorizationRef' }],
-      );
+      return rejected(record, '用户确认必须携带 authorizationRef');
     }
     const confirmed = persist({
       ...record,
@@ -1677,16 +1660,7 @@ export function createInitializer(options: InitializerOptions): Initializer {
     const record = store.load(id);
     if (record === null) return notFound(id);
     if (record.phase !== 'writing') {
-      return failed(
-        record,
-        {
-          kind: 'internal',
-          message: `当前阶段 ${record.phase} 不接受 Git 初始化授权`,
-          recoverable: false,
-          details: null,
-        },
-        [{ code: 'INVALID_STATE', message: `当前阶段 ${record.phase} 不接受 Git 初始化授权` }],
-      );
+      return rejected(record, `当前阶段 ${record.phase} 不接受 Git 初始化授权`, 'INVALID_STATE');
     }
     const errors: WorkspaceDiagnostic[] = [];
     if (input.authorizationRef.trim() === '') {
@@ -1702,16 +1676,8 @@ export function createInitializer(options: InitializerOptions): Initializer {
       });
     }
     if (errors.length > 0) {
-      return failed(
-        record,
-        {
-          kind: 'internal',
-          message: errors[0]?.message ?? '授权请求非法',
-          recoverable: false,
-          details: null,
-        },
-        errors,
-      );
+      const first = errors[0];
+      return rejected(record, first?.message ?? '授权请求非法', first?.code ?? 'VALIDATION_ERROR');
     }
     const authorized = persist(
       addEvidence(
@@ -2054,11 +2020,12 @@ export function createInitializer(options: InitializerOptions): Initializer {
     if (record === null) {
       return { ok: false, errors: [{ code: 'NOT_FOUND', message: `未找到初始化记录：${id}` }] };
     }
+    const budget = record.budgetOverride ?? options.budget;
     return investigateWorkspace({
       root: record.root,
       git,
       documentRoot: record.documentRoot,
-      ...(options.budget === undefined ? {} : { budget: options.budget }),
+      ...(budget === undefined ? {} : { budget }),
       ...(options.knownIds === undefined ? {} : { knownIds: options.knownIds }),
     });
   };
