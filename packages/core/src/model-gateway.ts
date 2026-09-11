@@ -84,7 +84,8 @@ export class ModelGateway {
   /**
    * Admission check for one role.
    *
-   * A failure here is what makes a Work `blocked(provider)` (`agents.md` §5) — the
+   * A failure here is what keeps a Run queued with `PROVIDER_UNAVAILABLE`
+   * (`agents.md` §5; the Work-level blocker is WP-05, DC-42) — the
    * caller must not queue a Run that cannot be served.
    */
   availability(role: Role, runParams: ProfileLayer = {}): GatewayAvailability {

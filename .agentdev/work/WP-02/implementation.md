@@ -36,11 +36,11 @@
 
 ## T5 Join 与局部失败（AC-046）—— 完成
 
-- `packages/core/src/join.ts`：`JoinCoordinator.state/childrenOf/outcomeOf/onChildSettled`。子未全部终态且父 running → 父转 `waiting_children` + `run.waiting_children`；全部终态且无 required 失败 → 父回 `running` + `run.children_joined`；有 required 失败 → 父保留在 `waiting_children`，写 `chief_action_required`（携带全部子结果与失败清单），兄弟结果不删除不重写。`join=none` 的父不进入等待。父在 `waiting_children` 时 mailbox 仍可处理命令（测试用 `ProjectMailbox` 验证）。
+- `packages/core/src/join.ts`：`JoinCoordinator.state/childrenOf/outcomeOf/onChildSettled`。子未全部终态且父 running → 父转 `waiting_children`（**不发 Join 专用事件**：`protocol.md` §7 没有该事件名，见 DC-39）；全部终态且无 required 失败 → 父回 `running`；有 required 失败 → 父保留在 `waiting_children`，写 `chief_action_required`（携带全部子结果与失败清单），兄弟结果不删除不重写。`join=none` 的父不进入等待。父在 `waiting_children` 时 mailbox 仍可处理命令（测试用 `ProjectMailbox` 验证）。
 
 ## T6 request_dispatch 只产生 Chief 待办（AC-045）—— 完成
 
-- `Orchestrator.requestDispatch`：专业 Run 的请求写成 `chief_action_required` 事件（entityId = 其 Chief Run），返回 `disposition='chief_action_required'`，绝不建立 Run；指定非自身 Chief 的父被 `NOT_AUTHORIZED` 拒绝；Chief Run 调用被拒。
+- `Orchestrator.requestDispatch`：专业 Run 的请求写成 `chief_action_required` 事件（entityId = 其 Chief Run，entityVersion = **Chief Run 版本**），返回 `disposition='chief_action_required'`，绝不建立 Run；指定非自身 Chief 的父被 `NOT_AUTHORIZED` 拒绝；Chief Run 调用被拒；请求者或 Chief Run 已不能行动时 `INVALID_STATE`；同 `operationId` 同载荷幂等返回，同键不同载荷 `IDEMPOTENCY_CONFLICT`。
 
 ## T7 Stage 契约与 contract_violation（AC-047）—— 完成
 
@@ -83,6 +83,21 @@
   - `ChildOutcome` 与阻断事件 data 补齐 `readLedgerSeq`/`readLedgerHash`（M-04、N-07）。
   - 记录更正：M-03 的 Work `blocked(provider)` 声明改为显式缺口（DC-42），T7/DC 中旧事件名更正（DC-44）。
 - 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **213 passed**；`pnpm test:integration` 124 passed。
+
+## T12 独立 Review 第四轮与修复（第四轮 FAIL → 修复）
+
+- 第四轮独立 Review（`review.md` 第四轮章节，含对抗性核验）判 FAIL：第三轮 M-01..M-05、D1..D5 的修复主体成立（无「文档声称已修而代码不符」的新条目），但新增 3×P2、7×P3（Q-01..Q-10），对抗性核验另补 H-01..H-03。
+- 需要说明的记录事实：**D1..D5 不是第三轮 Review 报告里的条目**（第三轮报告只有 M-01..M-05），它们来自第三轮的对抗性核验与开发方修复提交/DC 记录。第四轮报告把它们当作「第三轮条目」逐条复核，属追溯口径不准确；此处更正，避免后续 Settlement 误引。
+- 修复：
+  - Q-01：`operationId` 幂等加入载荷指纹，同键不同请求（含不同请求者/goal/role）返回 `IDEMPOTENCY_CONFLICT`，不再静默丢弃（`protocol.md` §1/§7）。
+  - Q-04：`RunLifecycle.end` 在 Run 仍有 `join=all` 未终态子 Run 时拒绝终态（`INVALID_STATE`）；`lifecycle.cancel` 作为文档化例外向下传播取消（`agents.md` §3），避免子 Run 结算进无人拥有的 Join、Gate 阻断通知已终态父 Run。
+  - Q-03/M-02：未测量 usage 一律**保持预留**并置 `budget.costKnown=false`（`reliability.md` §3「未知usage保持预留…不能按零收费释放额度」），新增 `RunLifecycle.reconcile(runId, {tokensUsed, cost?})` 作为 WP-10 拿到 Provider usage 后的核销路径；`run.ended` 区分 `usageMeasured`/`costKnown`。
+  - H-01：`requestDispatch` 同时校验 Chief Run 可行动性，终态 Chief 不再被塞入无人处理的待办。
+  - H-02：`run.ended` 两条终态路径 data 形状统一（均含 `outcome/usageMeasured/costKnown/tokensUsed/releasedTokens`）。
+  - Q-07：源码注释不再声称 Work 级 `blocked(provider)`（DC-42）。
+  - Q-09：`plan.md` 升到 planVersion 3，补入 `events.ts`、`run-lifecycle.ts`。
+  - Q-10/D4：T5 记录中的两个未定义 Join 事件名已更正；D5（dispatch 不校验 Work 状态）登记 DC-46。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **216 passed**；`pnpm test:integration` 124 passed。
 
 ## T9 待办
 

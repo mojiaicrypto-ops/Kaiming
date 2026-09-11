@@ -1,6 +1,6 @@
 # WP-02 实现 Plan（主管与独立Agent调度）
 
-- planVersion: 2
+- planVersion: 3
 - workId: WP-02
 - level: L2（新增 Core 调度/配置/网关模块与冻结快照；涉及身份权限与模型配置，但按 `docs/rules/agents.md`、`protocol.md`、`data.md` 既有定义实现，不改产品语义）
 - authorization_ref: 用户目标轮次「继续」（2026-09-11）；上级授权为「我要完全实现这个产品，让你来实现」
@@ -22,6 +22,8 @@ writePaths:
 - `packages/core/src/stage.ts`（新增：StageResult 契约、修正一次、二次 Schema 错误 `contract_violation`）
 - `packages/core/src/toml.ts`（新增：`~/.agentdev/config.toml` 与 Project 覆盖所需的最小 TOML 子集读写）
 - `packages/core/src/snapshots.ts`（新增：内容寻址快照写入/读取；planVersion 2 补入，见 RE-05）
+- `packages/core/src/run-lifecycle.ts`（新增：Run 开始/终态/取消的唯一路径与 Work 预算预留-核销；planVersion 3 补入，见 Q-09）
+- `packages/core/src/events.ts`（新增：派生读取的全量分页扫描；planVersion 3 补入，见 Q-09/DC-43）
 - `packages/core/src/index.ts`、`packages/domain/src/**`（补齐 purpose×role 等缺失判定）
 - `packages/contracts/src/entities/structures.ts`（Schema 缺口：provider/policy/configDocument、`stageResultContentSchema`）
 - `packages/contracts/src/entities/run.ts` 与 `packages/contracts/test/entities.test.ts`（planVersion 2 授权：Run 的三个快照引用改为 `snapshotRefSchema`，见 DC-27/RE-06；`snapshot` 主键为 `(type,hash)`、无 id 列，`data.md` 的 `ID` 记法与之不一致，该偏离在结算时上报产品方确认）
@@ -30,6 +32,7 @@ writePaths:
 
 readPaths: `docs/**`（主要 `rules/agents.md`、`rules/workflow.md`、`architecture/{ARCHITECTURE,data,protocol,reliability,context}.md`、`delivery/{implementation,acceptance}.md`）
 - planVersion 2 写入范围变更（授权来源：本包 Review R-05；用户目标轮次「继续」）：新增 `packages/core/src/snapshots.ts`，并把 `packages/contracts/src/entities/{run.ts,structures.ts}` 与 `packages/contracts/test/entities.test.ts` 明确列入授权缺口修复范围。
+- planVersion 3 写入范围变更（授权来源：本包 Review 第四轮 Q-09；用户目标轮次「继续」）：新增 `packages/core/src/run-lifecycle.ts` 与 `packages/core/src/events.ts`。
 不可写：`docs/**`（除结算时更新 `docs/INDEX.md` 的实现状态事实）、`packages/storage`、`webui/**`、`docker/**`
 
 ## 3. tasks（DAG）

@@ -8,7 +8,7 @@
  * heartbeats and recovery build on these rows in WP-05.
  */
 import type { Attempt, Budget, JsonObject, Run, RunStatus } from '@agentdev/contracts';
-import { canTransitionRun } from '@agentdev/domain';
+import { canTransitionRun, isTerminalRunStatus } from '@agentdev/domain';
 import { withTransaction, type ProjectStore } from '@agentdev/storage';
 import { ProtocolError, type ProtocolErrorCode } from './errors.js';
 
@@ -139,17 +139,7 @@ export class RunLifecycle {
     status: TerminalRunStatus,
     usage: RunUsage = { tokensUsed: 0, measured: false },
   ): Run {
-    return this.end(
-      runId,
-      status,
-      (run) => ({
-        outcome: status,
-        workId: run.workId,
-        tokensUsed: usage.tokensUsed,
-        usageMeasured: usage.measured,
-      }),
-      usage.tokensUsed,
-    );
+    return this.end(runId, status, (run) => ({ outcome: status, workId: run.workId }), usage);
   }
 
   /**
@@ -175,7 +165,7 @@ export class RunLifecycle {
     runId: string,
     status: RunStatus,
     data: (run: Run) => Record<string, unknown>,
-    tokensUsed = 0,
+    usage: RunUsage = { tokensUsed: 0, measured: false },
   ): Run {
     const run = this.requireRun(runId);
     if (!canTransitionRun(run.status, status)) {
@@ -184,23 +174,118 @@ export class RunLifecycle {
         status: run.status,
       });
     }
+    this.requireNoLiveChildren(run, status);
     return withTransaction(this.store.db, () => {
       const updated = this.store.runs.update(run.id, { status }, run.version);
-      // Release the whole reservation, then charge what was really used: keeping
-      // the usage inside `reserved` would double-count it against the same limit.
-      this.release(updated.workId, run.budgetAllocation);
-      this.charge(updated.workId, tokensUsed);
+      if (usage.measured) {
+        // Measured: release the whole reservation, then charge what was really
+        // used — keeping the usage inside `reserved` would double-count it.
+        this.release(updated.workId, run.budgetAllocation);
+        this.charge(updated.workId, usage.tokensUsed);
+      } else {
+        // Unknown usage keeps the hold and marks the Work cost-unknown
+        // (`reliability.md` §3); `reconcile` releases it once usage is known.
+        this.markCostUnknown(updated.workId);
+      }
       this.store.events.append({
         name: 'run.ended',
         entityId: updated.id,
         entityVersion: updated.version,
         data: {
           ...data(updated),
-          releasedTokens: run.budgetAllocation,
+          tokensUsed: usage.measured ? usage.tokensUsed : 0,
+          usageMeasured: usage.measured,
+          costKnown: usage.measured,
+          releasedTokens: usage.measured ? run.budgetAllocation : 0,
         },
       });
       return updated;
     });
+  }
+
+  /**
+   * A parent may not end while `join=all` children are still live.
+   *
+   * Otherwise those children settle into a Join nobody owns, and a Gate block
+   * would page a Run that already finished (AC-046). Cancellation is the
+   * documented exception: it propagates to the live children (`agents.md` §3).
+   */
+  private requireNoLiveChildren(run: Run, status: RunStatus): void {
+    const live = this.store.runs
+      .list({ where: 'parent_run_id = ?', params: [run.id] })
+      .filter((child) => child.join === 'all' && !isTerminalRunStatus(child.status));
+    if (live.length === 0 || status === 'cancelled') return;
+    fail('INVALID_STATE', `Run ${run.id} still has ${String(live.length)} live join=all children`, {
+      runId: run.id,
+      pending: live.map((child) => child.id),
+    });
+  }
+
+  /**
+   * Cancels a Run and its non-terminal children (`agents.md` §3).
+   *
+   * Cancellation is the one terminal transition allowed to override the live
+   * children guard, and it takes them with it.
+   */
+  cancel(runId: string): Run {
+    const run = this.requireRun(runId);
+    const live = this.store.runs
+      .list({ where: 'parent_run_id = ?', params: [run.id] })
+      .filter((child) => !isTerminalRunStatus(child.status));
+    for (const child of live) {
+      if (canTransitionRun(child.status, 'cancelled')) {
+        this.end(child.id, 'cancelled', () => ({ outcome: 'cancelled', workId: child.workId }), {
+          tokensUsed: 0,
+          measured: false,
+        });
+      }
+    }
+    return this.end(run.id, 'cancelled', () => ({ outcome: 'cancelled', workId: run.workId }), {
+      tokensUsed: 0,
+      measured: false,
+    });
+  }
+
+  /**
+   * Settles a Run whose real usage only became available after it ended.
+   *
+   * `reliability.md` §3: unknown usage keeps the hold and marks `costKnown=false`;
+   * the result is reconciled once the Provider usage report is readable. The
+   * caller is that reconciliation path (WP-10).
+   */
+  reconcile(runId: string, usage: { readonly tokensUsed: number; readonly cost?: number }): Run {
+    const run = this.requireRun(runId);
+    if (!isTerminalRunStatus(run.status)) {
+      fail('INVALID_STATE', `Run ${run.id} is ${run.status}; usage cannot be reconciled yet`, {
+        runId: run.id,
+        status: run.status,
+      });
+    }
+    return withTransaction(this.store.db, () => {
+      this.release(run.workId, run.budgetAllocation);
+      this.charge(run.workId, usage.tokensUsed, usage.cost);
+      this.store.events.append({
+        name: 'run.ended',
+        entityId: run.id,
+        entityVersion: run.version,
+        data: {
+          outcome: run.status,
+          workId: run.workId,
+          reconciled: true,
+          tokensUsed: usage.tokensUsed,
+          usageMeasured: true,
+          costKnown: true,
+          releasedTokens: run.budgetAllocation,
+        },
+      });
+      return this.requireRun(run.id);
+    });
+  }
+
+  private markCostUnknown(workId: string): void {
+    const budget = this.budgetOf(workId);
+    if (!budget.costKnown) return;
+    this.store.budgets.update(budget.id, { costKnown: false }, budget.version);
   }
 
   /**
@@ -209,12 +294,15 @@ export class RunLifecycle {
    * The Work schema invariant (`used + reserved <= limit`) still holds: the
    * reservation was released first and the measured usage is at most it.
    */
-  private charge(workId: string, tokensUsed: number): void {
-    if (tokensUsed <= 0) return;
+  private charge(workId: string, tokensUsed: number, cost?: number): void {
     const budget = this.budgetOf(workId);
     this.store.budgets.update(
       budget.id,
-      { tokensUsed: budget.tokensUsed + tokensUsed },
+      {
+        tokensUsed: budget.tokensUsed + Math.max(0, tokensUsed),
+        costKnown: true,
+        ...(cost === undefined ? {} : { cost: (budget.cost ?? 0) + cost }),
+      },
       budget.version,
     );
   }

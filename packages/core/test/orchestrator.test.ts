@@ -471,12 +471,23 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
 
     orchestrator.beginAttempt(run.id);
     orchestrator.settleRun(run.id, 'completed');
-    expect(store.budgets.find(budgetRow.id)?.tokensReserved).toBe(0);
+    // Unmeasured usage keeps the reservation and flags the Work cost-unknown.
+    expect(store.budgets.find(budgetRow.id)?.tokensReserved).toBe(60_000);
+    expect(store.budgets.find(budgetRow.id)?.costKnown).toBe(false);
     const ended = store.events
       .readAfter(0, { limit: 100 })
       .filter((event) => event.name === 'run.ended');
     expect(ended).toHaveLength(1);
-    expect(ended[0]?.data).toMatchObject({ outcome: 'completed', releasedTokens: 60_000 });
+    expect(ended[0]?.data).toMatchObject({
+      outcome: 'completed',
+      releasedTokens: 0,
+      usageMeasured: false,
+    });
+    // Reconcile with the real usage (WP-10): hold released, usage charged.
+    orchestrator.lifecycle.reconcile(run.id, { tokensUsed: 1_000 });
+    expect(store.budgets.find(budgetRow.id)?.tokensReserved).toBe(0);
+    expect(store.budgets.find(budgetRow.id)?.tokensUsed).toBe(1_000);
+    expect(store.budgets.find(budgetRow.id)?.costKnown).toBe(true);
     // `run.started` is the documented name for the executing transition.
     expect(store.events.readAfter(0, { limit: 100 }).some((e) => e.name === 'run.started')).toBe(
       true,
@@ -573,11 +584,13 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     const run = orchestrator.dispatch({ spec: chiefSpec({ budgetAllocation: 40_000 }) }).run;
     orchestrator.beginAttempt(run.id);
     orchestrator.settleRun(run.id, 'completed');
-    // Without a provider usage report the release is recorded as unmeasured.
+    // Without a provider usage report the hold is kept, not released as zero.
     const unmeasured = store.events
       .readAfter(0, { limit: 100 })
       .filter((event) => event.name === 'run.ended')[0];
     expect(unmeasured?.data).toMatchObject({ usageMeasured: false, tokensUsed: 0 });
+    expect(store.budgets.find(budgetRow.id)?.tokensReserved).toBe(40_000);
+    orchestrator.lifecycle.reconcile(run.id, { tokensUsed: 0 });
 
     const measured = orchestrator.dispatch({ spec: chiefSpec({ budgetAllocation: 40_000 }) }).run;
     orchestrator.beginAttempt(measured.id);
@@ -590,6 +603,93 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
       .filter((event) => event.name === 'run.ended')
       .at(-1);
     expect(ended?.data).toMatchObject({ usageMeasured: true, tokensUsed: 12_000 });
+  });
+
+  it('refuses to end a parent while join=all children are live, and cancel propagates (Q-04)', () => {
+    const parent = chiefRun();
+    const spec = professionalSpec({
+      workId: WORK_ID,
+      role: 'backend',
+      purpose: 'implementation',
+      goal: 'work that outlives the parent',
+      scope: emptyScope,
+      stage: 'develop',
+      contextSelection: selection,
+      profileRevision: orchestrator.currentProfileRevision('backend'),
+      requiredOutputs: ['stage.submit'],
+      requiredChild: true,
+      joinPolicy: 'all',
+      budgetAllocation: 5_000,
+      parentRunId: parent.id,
+    });
+    const child = orchestrator.dispatch({ spec }).run;
+    orchestrator.beginAttempt(parent.id);
+    expect(() => orchestrator.settleRun(parent.id, 'completed')).toThrowError(
+      /live join=all children/,
+    );
+    expect(store.runs.find(parent.id)?.status).toBe('running');
+    // Cancellation is the documented exception and takes the child with it.
+    const cancelled = orchestrator.lifecycle.cancel(parent.id);
+    expect(cancelled.status).toBe('cancelled');
+    expect(store.runs.find(child.id)?.status).toBe('cancelled');
+    expect(store.runs.find(parent.id)).toBeDefined();
+  });
+
+  it('rejects a reused operationId with a different payload (Q-01)', () => {
+    const chief = chiefRun();
+    const first = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+    const second = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+    orchestrator.requestDispatch({
+      runId: first.id,
+      requestedRole: 'review',
+      goal: 'review the adapter',
+      operationId: 'op-shared',
+    });
+    // Same key + same request is the replay case and returns the original todo.
+    const replay = orchestrator.requestDispatch({
+      runId: first.id,
+      requestedRole: 'review',
+      goal: 'review the adapter',
+      operationId: 'op-shared',
+    });
+    expect(typeof replay.chiefTodo).toBe('string');
+    // Same key + different request must not be silently swallowed.
+    expect(() =>
+      orchestrator.requestDispatch({
+        runId: first.id,
+        requestedRole: 'review',
+        goal: 'a different review',
+        operationId: 'op-shared',
+      }),
+    ).toThrowError(/already used for a different dispatch request/);
+    expect(() =>
+      orchestrator.requestDispatch({
+        runId: second.id,
+        requestedRole: 'review',
+        goal: 'review the adapter',
+        operationId: 'op-shared',
+      }),
+    ).toThrowError(/already used for a different dispatch request/);
+    const todos = store.events
+      .readAfter(0, { limit: 100 })
+      .filter((event) => event.data['operationId'] === 'op-shared');
+    expect(todos).toHaveLength(1);
+  });
+
+  it('refuses a dispatch request when the Chief Run itself cannot act (H-01)', () => {
+    const chief = chiefRun();
+    const requester = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+    const chiefRow = store.runs.find(chief.id);
+    expect(chiefRow).toBeDefined();
+    if (chiefRow === undefined) throw new Error('chief fixture missing');
+    store.runs.update(chiefRow.id, { status: 'completed' }, chiefRow.version);
+    expect(() =>
+      orchestrator.requestDispatch({
+        runId: requester.id,
+        requestedRole: 'test',
+        goal: 'nobody can act on this',
+      }),
+    ).toThrowError(/cannot take a new dispatch request/);
   });
 
   it('turns an agent dispatch request into a chief todo, never a grandchild Run', () => {

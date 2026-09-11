@@ -324,11 +324,15 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
     expect(rejected).toMatchObject({ accepted: false, code: 'VALIDATION_ERROR' });
     stages.submit({ runId: run.id, attemptId, epoch: 0, payload: {} });
     expect(store.runs.find(run.id)?.status).toBe('contract_violation');
-    // The terminal path releases this Run's Work-budget reservation (N-01); the
-    // Chief Run's own reservation stays.
+    // Unknown usage keeps the hold and marks the Work cost-unknown
+    // (`reliability.md` §3); the reconcile path releases it later (N-01/Q-03).
+    expect(store.budgets.find(budgetRow.id)?.tokensReserved).toBe(reservedBefore);
+    expect(store.budgets.find(budgetRow.id)?.costKnown).toBe(false);
+    orchestrator.lifecycle.reconcile(run.id, { tokensUsed: 0 });
     expect(store.budgets.find(budgetRow.id)?.tokensReserved).toBe(
       reservedBefore - run.budgetAllocation,
     );
+    expect(store.budgets.find(budgetRow.id)?.costKnown).toBe(true);
     expect(() =>
       stages.submit({ runId: run.id, attemptId, epoch: 0, payload: valid }),
     ).toThrowError(/only a running Run accepts stage results/);

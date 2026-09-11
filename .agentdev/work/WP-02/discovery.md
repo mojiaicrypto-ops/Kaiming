@@ -108,3 +108,19 @@ WP-02 第一轮独立 Review（`.agentdev/work/WP-02/review.md`）判 FAIL：1×
 - D2：终态专业 Run 仍可 `request_dispatch` 持续给 Chief 塞待办。已改为要求请求者处于 `queued/starting/running/waiting_children`，否则 `INVALID_STATE`。
 - M-05：`request_dispatch` 无幂等键。已支持 `operationId`：同一 `operationId` 重放返回既有待办游标而不新增事件（`reliability.md` §1）。
 - 另：`implementation.md` T7 与 `discovery.md` 中残留的旧事件名（`stage.submitted`/`stage.rejected`/`run.contract_violation`）已按实际代码更正为 `stage.completed`/`stage.failed`/`run.ended`。
+
+## DC-45 usage 核销路径（Review 第四轮 Q-03；承接：WP-10）
+
+`reliability.md` §3：模型调用前预留、扣除实际 usage 并释放剩余；**未知 usage 保持预留并标 `costKnown=false`，不能按零收费释放额度**；结果最终可查 usage 再核销。修复后：`RunLifecycle.settle(..., {measured:false})`（默认）不释放预留，只把 Work 预算置 `costKnown=false` 并在 `run.ended` 记 `usageMeasured=false / releasedTokens=0`；拿到 Provider usage 的一方调用 `RunLifecycle.reconcile(runId, {tokensUsed, cost?})` 完成核销（释放整笔预留、计入 `tokensUsed`/`cost`、置 `costKnown=true`）。**调用方（Provider usage 读取）属 WP-10**；在此之前所有 Run 的预留都会保持为未知成本，这是显式缺口而非泄漏（有明确核销入口与测试覆盖）。
+
+## DC-46 dispatch 不校验 Work 状态（Review 第四轮 D5/Q-10；承接：WP-05）
+
+`Orchestrator.dispatch` 只校验 Work 存在与预算、父 Run 状态、role×purpose 等，**不校验 `work.status`**：Work 处于 `blocked`/`paused` 时仍可建立 Chief Run。Work 状态机与 `work.control_changed`/blocker 投影属 WP-05（Work 控制与监督）；本包只登记该缺口，未实现。
+
+## DC-47 父 Run 级额度语义（Review 第四轮 Q-06）
+
+父 Run 的 `budgetAllocation` 约束「**在场**（非终态）子 Run 额度之和」这一口径在 `data.md`/`agents.md`/`reliability.md` 中均无明文，属本包实现约定（DC-40）。理由：Run 的 `budgetAllocation` 若不设并发上限，Chief Run 可以把整笔 Work 预算重复授予多个子 Run；而若按历史累计统计，长寿命 Chief Run 会在若干顺序子 Run 后被永久卡死（M-01 实测）。文档未定义，故登记为需产品方确认的实现约定，与 DC-40 一致。
+
+## DC-48 `run.ended` data 形状统一（Review 第四轮 H-02）
+
+`run.ended` 由 `RunLifecycle.end` 统一发出，所有终态路径的 data 都包含 `outcome`、`usageMeasured`、`costKnown`、`tokensUsed`、`releasedTokens`；`contract_violation` 额外带 `attemptId`/`rejections`/`reason`，核销补发额外带 `reconciled:true`。`protocol.md` §7 只要求「终态事件携带真实 outcome 与变更后实体摘要」，本条为消费方一致性的实现约定。

@@ -1,249 +1,242 @@
-# WP-02 独立 Review 报告（第三轮）
+# WP-02 独立 Review 报告（第四轮）
 
 - 评审对象：工作包 WP-02「主管与独立Agent调度」
-- 评审轮次：**第三轮**（逐条复核第二轮 N-01..N-10 是否真修，并找修复引入的新问题与第二轮未覆盖的新 Finding）
-- 冻结点：git `a8daa6d`（`fix(core): WP-02 review round 2 findings (N-01..N-10)`），前置 `c4763d5`
-- HEAD 校验：`git rev-parse HEAD` = `a8daa6d08dfe2604442943e32860a97b0eaaccd0`
-- 工作树：`git status --porcelain` 无输出（`pnpm build` 只写被 `.gitignore` 忽略的 `dist/`，复核结束时仍无输出）
+- 评审轮次：**第四轮**（逐条复核第三轮 M-01..M-05、D1..D5 与「1 万条事件窗口是否击穿 AC-047 二次升级与待办幂等」是否真修，并找新问题）
+- 冻结点：git `411d04f`（`fix(core): WP-02 review round 3 findings (M-01..M-05, D1..D5)`），前置 `a8daa6d`
+- HEAD 校验：`git rev-parse HEAD` = `411d04ff1056828d24eb4fa2bd7f19293627b52c`
+- 工作树：复核开始时与写入本报告前 `git status --porcelain` 均无输出（`pnpm build` 只写被 `.gitignore` 忽略的 `dist/`）
 - 评审角色：Review（独立上下文，未读取任何开发对话；只依据仓库文件、git 对象与实跑命令）
 - 权威依据：`docs/rules/{workflow,agents}.md`、`docs/architecture/{data,protocol,reliability,context,ARCHITECTURE}.md`、`docs/delivery/{implementation,acceptance}.md`（WP-02 与 AC-043/044/045/046/047/082）、`.agentdev/work/WP-02/{plan,implementation,discovery}.md`
-- 方法：回到代码逐行核对，另在 `/tmp/wp02-r3/` 自建 8 个脚本（`fixture.mjs` + `exp1..exp8`）用 `pnpm build` 产出的 `packages/*/dist` 独立复现；**不修改产品代码、测试、`docs/**`、plan/implementation/discovery**。
+- 方法：回到代码逐行核对，另在 `/tmp/wp02-r4/` 自建 3 个实验脚本（`fixture.mjs`、`exp-a.mjs`、`exp-b.mjs`、`exp-c.mjs`）用 `pnpm build` 产出的 `packages/*/dist` 独立复现，共 24 组实验（含 12,000 条事件窗口）；**不修改产品代码、测试、`docs/**`、plan/implementation/discovery**。
 
 ---
 
 ## 0. 历史轮次结论摘要（保留）
 
 **第一轮（冻结点 `785bdd6`）判 FAIL：1×P1、5×P2、7×P3（R-01..R-13）。**
-P1＝`stage.submit` 无终态/epoch 守卫（终态 Run 仍接受交付并落 `stage_result` 行）；P2＝「父等待可接消息」证据空洞、`joinPolicy=none` 未实现、持久事件名偏离 `protocol.md` §7、越界写入 Plan、`run.ts` 快照引用改哈希与 `data.md` 冲突；P3＝R-07..R-13。第一轮命令全部通过（unit 202 / integration 124），失败原因是行为与证据，不是构建。
+P1＝`stage.submit` 无终态/epoch 守卫（终态 Run 仍接受交付并落 `stage_result` 行）；P2＝「父等待可接消息」证据空洞、`joinPolicy=none` 未实现、持久事件名偏离 `protocol.md` §7、越界写入 Plan、`run.ts` 快照引用改哈希与 `data.md` 冲突；P3＝R-07..R-13。第一轮命令全部通过（unit 202 / integration 124）。完整报告：`git show c4763d5:.agentdev/work/WP-02/review.md`。
 
 **第二轮（冻结点 `c4763d5`）判 FAIL：0×P1、5×P2、6×P3（N-01..N-11）。**
-确认 R-05/R-09/R-10/R-11/R-12 已修好；R-01/R-03/R-04/R-07/R-08/R-13 部分修复；R-02 证据仍无效。N-01＝`contract_violation` 终态不释放预算（预算永久泄漏并拒绝后续合法派发）；N-02＝`stage.submit` 只排除终态，`paused`/`waiting_permission`/`interrupted`/`recovery_required` 仍接受交付；N-03＝DC-37 RE-04 声称删除的两个自造 Join 事件名仍在发出（文档与代码不符）；N-04/N-05＝「父等待可接消息」必需失败测试无区分力、终态父 Run 仍可接收新子 Run；N-06＝`onChildSettled` 重算重复写 `chief_action_required`；N-07＝被阻断 Gate 事件 data 结果契约不全；N-08＝二次 Schema 失败在 `paused` 抛 `VALIDATION_ERROR`；N-09＝代码引用不存在的 DC-38；N-10＝超预算返回 `CONSTRAINT_VIOLATION` 而非 `BUDGET_EXCEEDED`；N-11＝`data.md` 与代码的快照引用类型冲突（产品确认未完成）。
-> 第二轮完整报告（含 R-01..R-13 逐条表）保存在 git 对象 `git show a8daa6d:.agentdev/work/WP-02/review.md`，本轮只保留上述摘要以免重复。
+确认 R-05/R-09/R-10/R-11/R-12 已修好；R-01/R-03/R-04/R-07/R-08/R-13 部分修复；R-02 证据无效。N-01＝`contract_violation` 终态不释放预算；N-02＝非 running 状态仍接受交付；N-03＝DC-37 RE-04 声称删除的两个自造 Join 事件名仍在发出；N-04/N-05＝「父等待可接消息」测试无区分力、终态父 Run 仍可接收新子 Run；N-06＝`onChildSettled` 重算重复写 `chief_action_required`；N-07＝被阻断 Gate 事件 data 结果契约不全；N-08＝二次 Schema 失败在 `paused` 抛 `VALIDATION_ERROR`；N-09＝代码引用不存在的 DC-38；N-10＝超预算返回 `CONSTRAINT_VIOLATION`；N-11＝`data.md` 与代码的快照引用类型冲突（产品确认未完成）。完整报告：`git show a8daa6d:.agentdev/work/WP-02/review.md`。
+
+**第三轮（冻结点 `a8daa6d`）判 FAIL：1×P1、2×P2、2×P3（M-01..M-05）＋对抗性核验 D1..D5。**
+N-01..N-10 全部经独立实跑确认修好（0 条残留）；M-01（P1）＝父 Run 级预算预留从不释放（顺序子 Run 累计触顶后永久 `BUDGET_EXCEEDED`）；M-02（P2）＝预算只预留/释放不核销、`tokensUsed` 无生产写入；M-03（P2）＝`Work blocked(provider)` 未落地而 T2 声称已实现；M-04（P3）＝阻断事件缺 `readLedgerSeq/Hash`；M-05（P3）＝`request_dispatch` 无幂等键。对抗性核验补出 D1..D5（仓库内可核实：D1 事件 `entityVersion` 用错实体版本、D2 终态请求者仍可塞待办、D3 派生读取只看第一页 1 万条窗口；D4 见下；**D5 无仓库定义**），并证伪「N-06/AC-047 已完全修好」。完整报告：`git show 411d04f:.agentdev/work/WP-02/review.md`。
 
 ---
 
-## 1. 结论
+## 1. 本轮结论
 
-**FAIL（Review Failed）——第二轮 N-01..N-10 全部 10 条经独立实跑确认真实修好（0 条残留）；但修复未覆盖同一类的父 Run 级预算预留，本轮新增 1×P1、2×P2、2×P3（M-01..M-05）。**
+**FAIL（Review Failed）——第三轮 M-01..M-05 与 D1..D5 全部经独立实跑确认已修复或按记录正确降级为显式缺口（0 条残留“文档声称已修而代码不符”）；但本轮发现 3×P2、7×P3 新问题（Q-01..Q-10），其中 Q-01、Q-04 为本包必修。**
 
-- **N-01..N-10 逐条为「已修复（verified）」**（证据见 §3）；第二轮点名的「修复说明与代码不符」（N-03）本轮已消除：代码实际发出的持久事件名是 `protocol.md` §7 的子集（EXP1/EXP7）。
-- **但 T10 的修复范围有缺口**：本轮把「Work 预算预留」收敛到 `run-lifecycle.ts` 后，**父 Run 自身 allocation 形成的子 Run 累计上限仍然从不释放**（M-01，P1，实测）。其效果与第二轮 N-01 同类：一个 Chief Run 派发过的子 Run allocation 累计达到自身 allocation 后，之后所有新子 Run 永久被 `BUDGET_EXCEEDED` 拒绝，且**提高 Work 预算也无法恢复**（AC-022 文档化的恢复路径失效）。
-- 另有 2 个 P2（预算只增不减的 usage 记账缺失 M-02；`agents.md` §5 / `implementation.md` T2 声称的 `Work blocked(provider)` 未落地 M-03）与 2 个 P3（M-04/M-05）。
-- 按 `workflow.md` §6「P0/P1 阻断；P2/P3 由 Review 说明是否影响验收」：M-01 为 P1，直接阻断；M-02/M-03 影响 AC-022/AC-043/AC-044 的验收语义，同样阻断。本包**不具备进入独立 Test 的条件**，须先返工 M-01（M-02/M-03 至少需落 Discovery 承接或修正文档声明）。
-- 第二轮 N-11（`data.md` 的 `ID` 记法 vs 代码哈希）仍是 **Product Decision Pending**，未消解（§3 表末）。
+- **逐条复核结果（§3、§4）**：M-01（P1→P2）实测 5 个 10k 顺序子 Run 在 20k 父 Run 下全部可派发并结算，在场（含 `paused`）子 Run 仍占父额度、终态即释放；M-02 已打通「实测用量→`tokensUsed`」通道与 `usageMeasured` 记录（但默认路径仍按零释放，见 Q-03）；M-03 已改为显式缺口 DC-42（但源码注释仍与记录冲突，见 Q-07）；M-04 阻断事件 `stageResult` 10 个 `agents.md` §4 字段齐全（含 `readLedgerSeq/hash` 实测值 41 / `eeee…`）；M-05 `operationId` 同键同载荷可去重（但同键不同载荷被静默吞掉，见 Q-01）。D1 `entityVersion` = Chief Run 版本（实测 5 == 5，请求者版本 1）；D2 终态/暂停/等待权限/中断/恢复必需 8 种请求者全部 `INVALID_STATE`；D3 在 **12,000 条**事件之后 AC-047 二次升级仍为 `CONTRACT_VIOLATION`、Chief 待办仍幂等为 1 条、`operationId` 去重仍为 1 条，且旧 `readAfter(0,{limit:10_000})` 确实看不到目标事件（证明修复有区分力）；D4 全仓无 `stage.submitted/stage.rejected/run.contract_violation` 旧事件名残留。
+- **新问题**：Q-01（P2）`request_dispatch` 的 `operationId` 幂等只按键去重、不校验载荷，同键不同载荷（甚至不同请求者 Run）会静默返回第一条待办游标，第二次请求**丢失**且不报 `IDEMPOTENCY_CONFLICT`，违背 `protocol.md` §1/§7；Q-04（P2）父 Chief Run 可在 `join=all` 子 Run 未终态时被 `settleRun` 直接置 `completed`，随后子 Run 失败会把 `chief_action_required` 写给已终态 Chief Run，AC-046 的 Gate 阻断无人可处理（与 N-05 的对称不变式缺失）。另有 Q-02/Q-03/Q-05..Q-10（P3）。
+- **判定**：按 `workflow.md` §6「P0/P1 阻断；P2/P3 由 Review 说明是否影响验收」，本轮无 P1，但 **Q-01 影响 AC-045 与 `protocol.md` §1 的写命令幂等语义，Q-04 影响 AC-046 的 Join 收敛语义**，二者都在本包关联验收内且修复成本低，故**本包仍不具备进入独立 Test 的条件**；须先返工 Q-01、Q-04，并同步处理 Q-09/Q-10 两项记录缺陷。Q-03 若按 DC-41 作为承接 WP-10 的显式缺口获得确认，可不单独阻断（但默认「未测量即全额释放」与 `reliability.md` §3 直接冲突，建议本包内一句话决定）。
+- 第三轮 N-11（`data.md` 的 `ID` 记法 vs 代码哈希）仍是 **Product Decision Pending**，未消解。
 
 ---
 
 ## 2. 验证命令与原始结果
 
-环境：`export PATH="$HOME/.local/bin:$PATH"`，工作目录 `/Users/huyaohua/huyh/work/aigrouptool`，全部在 `a8daa6d`、干净工作树上执行。原始日志：`/tmp/wp02-r3-commands-a.log`（typecheck/lint/docs:check/unit）、`/tmp/wp02-r3-commands-b.log`（integration）、`/tmp/wp02-r3-build.log`（build）。
+环境：`export PATH="$HOME/.local/bin:$PATH"`，工作目录 `/Users/huyaohua/huyh/work/aigrouptool`，全部在 `411d04f`、干净工作树上执行。原始日志：`/tmp/wp02-r4-cmds.log`（六条命令顺序执行，含退出码）。`node v24.8.0`、`pnpm 12.3.4`。
 
 | 命令 | 退出码 | 关键原始输出 |
 |---|---|---|
 | `pnpm typecheck` | 0 | `$ tsc -p tsconfig.json --pretty false`（无错误输出） |
 | `pnpm lint` | 0 | `Checking formatting...` / `All matched files use Prettier code style!` |
+| `pnpm test:unit` | 0 | `Test Files  17 passed (17)` / `Tests  213 passed (213)`，5.03s（与 T11 自述的 213 一致） |
+| `pnpm test:integration` | 0 | `Test Files  10 passed (10)` / `Tests  124 passed (124)`（含真实 Docker 容器与 doctor 集成用例，未回退） |
 | `pnpm docs:check` | 0 | `docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages` |
-| `pnpm test:unit` | 0 | `Test Files 17 passed (17)` / `Tests 210 passed (210)`，10.45s（与 T10 自述的 210 一致） |
-| `pnpm test:integration` | 0 | `Test Files 10 passed (10)` / `Tests 124 passed (124)`，80.36s；含真实 Docker `apps/cli/test/container.integration.test.ts` 9 用例与 `doctor.integration.test.ts` 8 用例 |
-| `pnpm build` | 0 | 全部 workspace `Done`（仅用于本轮独立实验读取 `dist/`；`dist/` 被忽略） |
+| `pnpm build` | 0 | `packages/contracts|domain|storage|core|pi-runtime|apps/cli|apps/runner build: Done`（7 个 workspace 全部 Done） |
 
 `git log --oneline -3`：
 
 ```
+411d04f fix(core): WP-02 review round 3 findings (M-01..M-05, D1..D5)
 a8daa6d fix(core): WP-02 review round 2 findings (N-01..N-10)
 c4763d5 fix(core): WP-02 independent review round 1 findings (RE-01..RE-13)
-785bdd6 feat(core): WP-02 T3-T8 orchestration, join, stage contract and restart scope
 ```
 
-`git status --porcelain`：无输出。`test:e2e|acceptance|live` 保持按契约返回 `NOT_IMPLEMENTED`，未执行。
+`git status --porcelain`：无输出（写入本报告前）。`pnpm test:e2e|acceptance|live` 仍按契约 `NOT_IMPLEMENTED`，未执行。
 
-### 2.1 本轮独立实验结果（`/tmp/wp02-r3/*.mjs`，全量日志 `/tmp/wp02-r3/all.log`）
+### 2.1 本轮独立实验日志
 
-```
-===== exp1-events
-EXP1 all event names        : ["run.ended","run.queued","run.started","stage.completed"]
-EXP1 NOT in protocol §7      : []
-EXP1 run.waiting_children    : 0
-EXP1 run.children_joined     : 0
-EXP1 run.ended data keys     : [["outcome","workId","releasedTokens"], ... x3]
-
-===== exp2-budget
-EXP2 reserved after chief(100k)+A(50k)+victim(30k): 180000
-EXP2 second schema failure   : {"accepted":false,"code":"CONTRACT_VIOLATION","runStatus":"contract_violation","rejections":2}
-EXP2 reserved after violation: 150000   (released 30000, 原为 180000)
-EXP2 run.ended data          : [{"outcome":"contract_violation",...,"releasedTokens":30000}]
-EXP2 legal chief(30k) dispatch after violation -> OK
-EXP2 over-budget chief(200k) dispatch -> THROW BUDGET_EXCEEDED: dispatch budget: used 0 + reserved 180000 + 200000 exceeds 200000
-EXP2 settle(a) reserved 180000 -> 130000
-EXP2 settle(a) twice -> THROW VALIDATION_ERROR: Run ... cannot move cancelled → cancelled
-EXP2 used tokens after all   : 0
-
-===== exp3-nonrunning
-EXP3 run=paused              1st=THROW INVALID_STATE: Run ... is paused; only a running Run accepts stage results 2nd=THROW INVALID_STATE rows=0 schema_invalid=0 runNow=paused
-EXP3 run=waiting_permission  ... rows=0 schema_invalid=0 runNow=waiting_permission
-EXP3 run=interrupted         ... rows=0 schema_invalid=0 runNow=interrupted
-EXP3 run=recovery_required   ... rows=0 schema_invalid=0 runNow=recovery_required
-
-===== exp4-parent
-EXP4 parent=completed dispatch -> THROW INVALID_STATE: parent Run ... is completed and cannot accept a new dispatch
-EXP4 children rows after completed-parent dispatch: 0
-EXP4 mailbox admission accepted (completed parent): true
-EXP4 mailbox completion -> REJECTED INVALID_STATE
-EXP4 parent=paused dispatch -> THROW INVALID_STATE
-EXP4 parent status while waiting: waiting_children
-EXP4 mailbox admission accepted (waiting parent): true
-EXP4 waiting-parent child created: YES
-EXP4 join state after dispatch: {"kind":"waiting","pending":[<second>,<third>]}
-EXP4 chief still waiting: waiting_children
-
-===== exp5-join
-EXP5 required-failure onChildSettled x3 -> kinds: blocked blocked blocked
-EXP5 chief_action_required count (required): 1
-EXP5 event data top keys     : ["children","failed","failedRequired","reason"]
-EXP5 rich stageResult keys   : ["artifactRefs","changedPaths","evidenceRefs","findingIds","requestedActions","status","summary","unknowns"]
-EXP5 rich artifactRefs       : [{"id":"...e90","version":3,"hash":"aaaa…"}]
-EXP5 rich evidenceRefs/changedPaths/findingIds: present
-EXP5 chief_action_required count (none)    : 1
-
-===== exp6-lifecycle
-EXP6 beginAttempt queued      : {"n":1,"epoch":0,"run":"running"}
-EXP6 beginAttempt while running -> THROW VALIDATION_ERROR: Run ... cannot start from running
-EXP6 beginAttempt from starting/interrupted/recovery_required -> OK {"n":2,"epoch":1,"run":"running"}
-EXP6 beginAttempt from paused/completed -> THROW VALIDATION_ERROR
-EXP6 settle: reserved 104000 -> 100000 run.version 4
-EXP6 settle twice / terminal other status -> THROW VALIDATION_ERROR; reserved unchanged
-EXP6 lifecycle.release(1e9) clamps -> 0
-EXP6 contractViolation from waiting_children -> THROW VALIDATION_ERROR
-EXP6 chief(20k) sequential child #1 of 10k -> OK {"workReservedAfterSettle":20000}
-EXP6 chief(20k) sequential child #2 of 10k -> OK {"workReservedAfterSettle":20000}
-EXP6 chief(20k) sequential child #3 of 10k -> THROW BUDGET_EXCEEDED: children of Run ... already hold 20000 of 20000 tokens
-EXP6 siblings (all terminal?) : [["completed",10000],["completed",10000]]
-
-===== exp7-event-sweep
-EXP7 all emitted names   : ["chief_action_required","run.ended","run.queued","run.started","stage.completed","stage.failed"]
-EXP7 not in protocol §7  : []
-EXP7 run.waiting_children: 0 / run.children_joined: 0
-EXP7 stage.* outcomes    : [["stage.completed","success"],["stage.failed","failed"],["stage.failed","schema_invalid"],["stage.failed","schema_invalid"],["stage.failed","failed"]]
-
-===== exp8-gaps
-EXP8 dispatch with missing model (role=test) -> THROW PROVIDER_UNAVAILABLE: role test has no usable model…
-EXP8 Work status after PROVIDER_UNAVAILABLE : running
-EXP8 Work blockerIds                        : []
-EXP8 work.control_changed events            : 0
-EXP8 first attempt epoch 0 -> resumed epoch 1 run running
-EXP8 submit with old epoch 0 after resume -> THROW STALE_ARTIFACT
-EXP8 submit with new epoch 1 after resume -> OK true
-EXP8 §4 fields MISSING from todo payload: ["readLedgerSeq","readLedgerHash"]
-EXP8 duplicate requestDispatch todos: 0 -> 2
-```
+- `/tmp/wp02-r4/exp-a.log`（M-01..M-05、D1、D2、事件名回归）
+- `/tmp/wp02-r4/exp-b.log`（12,000 条事件窗口：AC-047 二次升级、Chief 待办幂等、`operationId` 去重、稀疏 names 扫描与截断 fail-closed）
+- `/tmp/wp02-r4/exp-c.log`（对抗性探针：父 Run 提前结算、`operationId` 载荷冲突、usage/costKnown、父额度上限、恢复残差、`releasedTokens` 语义）
 
 ---
 
-## 3. 第二轮 N-01..N-10 逐条复核表
+## 3. M-01..M-05、D1..D5 逐条复核表
 
-| 条目 | 二轮严重度 | 复核判定 | 真实实验与输出摘要（`/tmp/wp02-r3`） |
+| 条目 | 三轮严重度 | 修复声明（411d04f） | 复核判定 | 独立实验证据（`/tmp/wp02-r4/`） |
+|---|---|---|---|---|
+| **M-01** 父 Run 级预留从不释放 | P1→P2 | `requireBudget` 只统计非终态子 Run（`orchestrator.ts:584-586`） | **已修复（verified）** | EXP-A1：20k 父 Run 下 5 个 10k 子 Run 顺序 `beginAttempt→submit→settle(completed)` 全部成功；Work 预留始终 = 40k（两个 Chief Run 自身）+ 在场子 Run。第三个**在场**子 Run 仍 `BUDGET_EXCEEDED: live children … hold 20000 of 20000`；把其中一个置 `paused`（非终态）仍被计；`cancelled` 后立即释放可再派发。第三轮「提高 Work 预算也无用」的场景消失。 |
+| **M-02** 预算不核销 | P2 | `RunLifecycle.settle(runId,status,{tokensUsed,measured})` 释放整笔预留后 `tokensUsed += usage`，`run.ended` 记 `usageMeasured`（DC-41） | **部分修复（plumbing 成立，默认路径仍是按零释放 → Q-03）** | EXP-A2/C3/C6：`settle(...,{tokensUsed:12000,measured:true})` → `tokensUsed=12000`、`run.ended={tokensUsed:12000,usageMeasured:true,releasedTokens:40000}`；默认 `settleRun` → `{tokensUsed:0,usageMeasured:false,releasedTokens:…}` 且 `costKnown` 恒 `true`。`Orchestrator.settleRun` 仍只有 2 个形参、不转发 usage（`orchestrator.ts:564-568`），全仓无生产调用方提供用量。 |
+| **M-03** `Work blocked(provider)` 未落地 | P2 | `implementation.md` T2 改为显式缺口 DC-42（承接 WP-05） | **已按记录处置（附残余 Q-07）** | EXP-A3：无模型角色派发 → `PROVIDER_UNAVAILABLE`；Work `status='running'`、`blockerIds=[]`、`work.control_changed`=0。`implementation.md:16` 已如实声明未实现；但 `config.ts:370`、`model-gateway.ts:87`、`orchestrator.ts:323` 注释仍称 Work 为 `blocked(provider)`（第三轮 M-03 原文即点名这两处注释）。 |
+| **M-04** 阻断事件缺 `readLedgerSeq/Hash` | P3 | `ChildOutcome.stageResult` 与事件投影补齐（`join.ts:36-37,113-114,273-274`） | **已修复（verified）** | EXP-A4：子交付 `readLedgerSeq=41`、`readLedgerHash='e'*64` 后 required 失败 → 事件 `children[0].stageResult` 字段全为 `["artifactRefs","changedPaths","evidenceRefs","findingIds","readLedgerHash","readLedgerSeq","requestedActions","status","summary","unknowns"]`，缺失 §4 字段 `[]`，序列化值命中 41 与 `eeee…`。内存 `outcome.children[0].stageResult` 同步携带。 |
+| **M-05** `request_dispatch` 无幂等键 | P3 | 支持 `operationId`，同键重放返回既有游标（`orchestrator.ts:460-474`） | **部分修复（同键同载荷已幂等；同键不同载荷被静默吞 → Q-01）** | EXP-A5：同 run 同键同载荷两次 → `chiefTodo` 均 `"5"`，`operationId='op-1'` 事件 1 条；换 `op-2` 正常新增（游标 6）。但同键 + 不同 goal、以及另一请求者 Run 复用同键，均返回 `"5"` 且不新增、不报错（`protocol.md` §1 要求同键不同载荷拒绝）。 |
+| **D1** 事件 `entityVersion` 用请求者版本 | 对抗性 | 改用 Chief Run 版本（DC-44） | **已修复（verified）** | EXP-A6：两次派发子 Run 后 Chief `version=5`、请求者 Run `version=1`；`requestDispatch` 写出的 `chief_action_required` `entityId=chiefRunId`、`entityVersion=5`（= Chief 版本，不是 1）。 |
+| **D2** 终态请求者仍可塞待办 | 对抗性 | 请求者须为 `queued/starting/running/waiting_children`（DC-44） | **已修复（verified）** | EXP-A7：`completed/failed/cancelled/timed_out/paused/waiting_permission/interrupted/recovery_required` 8 种请求者全部 `INVALID_STATE … cannot request more work`；`running` 与 `waiting_children` 允许。 |
+| **D3** 派生读取只看第一页（1 万条窗口） | 对抗性 | 新增 `events.ts` 全量分页（DC-43） | **已修复（verified，专项见 §4）** | EXP-B1/B2/B3/B4：12,000 条噪音事件后 AC-047 二次升级、Chief 待办幂等、`operationId` 去重全部成立；旧 `readAfter(0,{limit:10_000})` 对目标事件均返回 `false`（证明修复有区分力）；稀疏 names 过滤跨页命中；事件被截断时抛 `ResyncRequiredError` 而非静默返回 0。 |
+| **D4** 文档残留旧事件名 | 对抗性 | `implementation.md` T7 与 `discovery.md` 更正为 `stage.completed/stage.failed/run.ended` | **已修复（verified）** | 全仓 `grep -rn "stage\.submitted\|stage\.rejected\|run\.contract_violation\|run\.starting\|run\.running" docs packages apps .agentdev` 仅命中 `discovery.md:110` 自身对旧名的引用句；EXP-A8 全流程实际发出 `["chief_action_required","run.ended","run.queued","run.started","stage.completed","stage.failed"]`，全部属于 `protocol.md` §7。 |
+| **D5** （无仓库定义） | 对抗性 | 提交信息未单独列出 | **无法独立核实（证据缺口 Q-10）** | 全库 grep 与 `git cat-file --batch-all-objects` 全 blob 扫描：只有 `implementation.md:77` 一句「对抗性核验又补出 D1/D2/D3/D4/D5」汇总句；`discovery.md` DC-43/DC-44 只定义 D1/D2/D3，提交信息只提 D1/D2/D4。D5 的原文/内容在仓库内不存在，第四轮无法逐条核对。 |
+
+**小结：M-01/M-04 完全修复；D1/D2/D3/D4 完全修复；M-02/M-05 主体修复但各留一个 P2 缺口（Q-03/Q-01）；M-03 按「显式缺口 + DC」处置成立，残留注释不一致（Q-07）；D5 无仓库定义，无法核实（Q-10）。第三轮的「文档声称已修而代码不符」在本轮未复现（T11 的每条声明均与代码一致，唯一措辞需注意处见 Q-05）。**
+
+---
+
+## 4. 专项：「1 万条事件窗口」是否击穿 AC-047 二次升级与待办幂等
+
+**结论：不再击穿。** 修复机制：`EventStore.readAfter` 的 `limit` 取的是**最旧**一页，旧的 `readAfter(0,{limit:10_000})` 在日志超过 1 万条后永远看不到新事件；`packages/core/src/events.ts:29-61` 的 `scanEvents`/`findEvent` 以 1,000 为页长推进到读完（`findEvent` 命中即停），`StageGate.rejections()`（`stage.ts:230-235`）与 `JoinCoordinator.pageChief()`（`join.ts:233-242`）已改用它，`requestDispatch` 的 `operationId` 去重同样走 `findEvent`。
+
+原始输出（`/tmp/wp02-r4/exp-b.log`，节选）：
+
+```
+===== EXP-B1 12000 events before AC-047 second-strike =====
+B1 appended noise: [12000,"events","958ms"]
+B1 first submit: {"accepted":false,"code":"VALIDATION_ERROR",...,"correctionsRemaining":1}
+B1 second submit: {"accepted":false,"code":"CONTRACT_VIOLATION","runStatus":"contract_violation","rejections":2}
+B1 run status: contract_violation
+B1 rejections for this attempt: 2
+B1 target visible in old readAfter(0,{limit:10_000}): false
+B1 log size: 12007
+PASS B1 second non-compliant submission still escalates past 10k window
+
+===== EXP-B2 12000 events before chief-todo idempotency =====
+B2 join kinds: ["blocked","blocked","blocked"]
+B2 required_child_failed todos: 1
+B2 chiefTodo cursors: ["12006","12006","12006"]
+B2 first real todo visible in old window: false
+PASS B2 todo idempotent past 10k window
+
+===== EXP-B3 12000 events before request_dispatch operationId dedup =====
+B3 cursors: ["12005","12005"]
+B3 op-x events: 1
+B3 op-x visible in old window: false
+PASS B3 operationId dedup past 10k window
+
+===== EXP-B4 sparse named scan across pages + truncation fail-closed =====
+B4 second submit: CONTRACT_VIOLATION
+PASS B4 names-filtered scan paginates across non-matching pages
+B4 rejections after truncation: ResyncRequiredError: RESYNC_REQUIRED: the requested cursor was truncated
+```
+
+判定：**AC-047 二次升级与 `chief_action_required` / `operationId` 幂等在 1 万条以上日志下均成立**；旧窗口读法对同一目标返回 `false`，说明被修复的缺陷是真实且该回归有区分力。截断场景 fail-closed（`ResyncRequiredError`），不会把「窗口缺失」误判为「无事件」。残余性能提示：`rejections()` 会把全部 `stage.failed` 事件载入内存后再过滤（`stage.ts:231-234`），`findEvent` 每次请求全量扫描，属 O(n) 但正确，未列为 Finding。
+
+---
+
+## 5. 新 Findings（Q-01..Q-10）
+
+### Q-01 [P2] `request_dispatch` 的 `operationId` 幂等只按「Chief + 键」去重，不校验载荷：同键不同请求被静默丢弃
+
+- 位置：`packages/core/src/orchestrator.ts:460-474`（`findEvent({names:['chief_action_required'], stopAt: entityId===chiefRunId && data.operationId===input.operationId})`，命中即返回既有游标）。
+- **事实（实跑，EXP-A5 / EXP-C2）**：Run A 以 `operationId='dup'`、`goal='goal-A'` 请求成功（游标 7）；随后 Run B（不同请求者、`goal='goal-B-totally-different'`）复用同一键 → 返回 `{disposition:'chief_action_required', runId:B, chiefTodo:"7"}`，**不报错、不新增事件**；全日志 `operationId='dup'` 事件只有 1 条且 `requestedBy=A`、`goal='goal-A'`。调用方收到「已受理」外观，但 B 的请求永久丢失。
+- **依据**：`protocol.md` §1「幂等键同载荷返回原结果；**同键不同载荷拒绝**」、§7 错误表含 `IDEMPOTENCY_CONFLICT`；`reliability.md` §1「Outbox以operationId至少一次投递；Supervisor先检查已存在的同operationId Runner/结果，避免重复创建」。当前实现把「不同载荷」当作重放。
+- **影响**：AC-045 的 `request_dispatch` 在重试/复用键场景静默吞请求；与 M-05 要解决的「重复待办」相反方向的错误（漏待办），且无诊断。
+- **建议**：幂等命中时比较规范化载荷（至少 `requestedBy/requestedRole/goal/purpose/sourceRefs` 摘要）；不同则抛 `IDEMPOTENCY_CONFLICT`（`errors.ts` 若缺该 code 需补）；把去重查询放入与 `append` 同一事务（见 §7 并发残余）。
+
+### Q-02 [P3] 实测用量超过 Work 限额时结算必然失败：Run 永久停在 `running`、预留不释放、无终态事件
+
+- 位置：`packages/core/src/run-lifecycle.ts:187-220`（`end` 先 `release` 再 `charge`；`charge` 直接 `tokensUsed + tokensUsed`）；`packages/contracts/src/entities/run.ts:185` 的 `used + reserved <= limit` 不变式。
+- **事实（实跑，EXP-A2 第 3 段）**：Work `tokenLimit=100_000`、Run `budgetAllocation=40_000`；`lifecycle.settle(run,'completed',{tokensUsed:120_000,measured:true})` → `CONSTRAINT_VIOLATION: budget update failed its contract schema: tokens used + reserved exceeds the limit`；事务回滚后 Run 仍 `running`、`tokensReserved` 仍含该 Run 的 40k、`tokensUsed=0`，且没有任何终态事件——`settle`/`contractViolation` 两条终态路径都会这样卡住。
+- **依据**：`reliability.md` §3「模型调用前预留…扣除实际usage并释放剩余；并行调用共享Work预算事务」；写入前应给出 `BUDGET_EXCEEDED`，终态必须可达。
+- **影响**：当前无生产用量来源（DC-41），故为**潜伏**缺陷；一旦 WP-10 接线真实 usage，任何超预留的调用都会把 Run 永久挂住并占用 Work 预算（与 N-01 同类）。修复成本低：`charge` 前 `canAllocateBudget` 判定并返回 `BUDGET_EXCEEDED`，或把超限部分截断并记 `costKnown=false`。
+
+### Q-03 [P2] M-02 残留：默认（未测量）结算仍按零 usage 全额释放，`costKnown` 从无生产写入且生产入口不转发用量
+
+- 位置：`packages/core/src/run-lifecycle.ts:140`（默认 `{tokensUsed:0,measured:false}`）、`:191-192`（先释放整笔再计零）、`packages/core/src/orchestrator.ts:564-568`（`settleRun` 只有 `(runId,status)`）；`packages/contracts/src/entities/run.ts:181` 的 `costKnown` 全仓无写入方。
+- **事实（实跑，EXP-A2/C3）**：未测量结算 → `tokensUsed=0`、`tokensReserved` 全额回落、`costKnown` 仍 `true`；`run.ended` 仅以 `usageMeasured:false` 区分。`grep -rn "tokensUsed" packages/*/src apps/*/src` 显示唯一生产写入是 `run-lifecycle.charge`；`settleRun` 形参个数实测 2。
+- **依据**：`reliability.md` §3「**未知usage保持预留并标 costKnown=false，不能按零收费释放额度**」；AC-022「无静默加额」。DC-41 已如实登记「当前没有生产调用方提供用量…属显式缺口，承接 WP-10」，但**默认路径的行为本身仍与 reliability.md §3 冲突**——记录承认了缺口，却没有让默认路径 fail-closed。
+- **影响**：预算止损在「顺序多 Run」下不成立（同一笔限额可被无限次全额复用）；`costKnown=false` 语义零实现。DC-41 已把真实用量承接 WP-10，故不单独阻断 Test；但本包应至少决定：未测量时保持预留或置 `costKnown=false`，或把「按零释放」写成显式产品决定，而不是仅在 Discovery 记缺口。
+
+### Q-04 [P2] 父 Chief Run 可在 `join=all` 子 Run 未终态时被结算为终态：AC-046 的 Gate 阻断与「新 Chief 消息可处理」被击穿
+
+- 位置：`packages/core/src/run-lifecycle.ts:137-204`（`settle`/`end` 完全不检查该 Run 是否还有非终态 `join=all` 子 Run）；`packages/core/src/orchestrator.ts:564-568`（公开入口 `settleRun`）。
+- **事实（实跑，EXP-C1）**：Chief Run（allocation 60k）派发一个 `joinPolicy='all'`、`requiredChild=true` 的 10k 子 Run 后，子 Run 仍 `queued` 时 `settleRun(parent,'completed')` **成功**（`settleErr=null`，父 `completed`）；随后子 Run `beginAttempt→settle(failed)` → `joins.onChildSettled(kid)` 返回 `kind='blocked'`，并写出 `chief_action_required`，其 `entityId` = 已终态的父 Run；`joins.state(parent)` 也是 `blocked`。而该终态父 Run 既不能再被派发（N-05 的 `canParentDispatch` 校验），也不能处理新消息。
+- **依据**：AC-046「父可获全部结果，相关 Gate 阻断；新 Chief 消息可处理」；`agents.md` §3「all 挂起该 ChiefRun 直至指定子 Run 终态」；`orchestrator.ts:289-297` 的注释已把「终态父 Run 的子 Run 永远不会被 Join」当作必须防住的情形，却只防了「终态父接收新派发」这一个方向。
+- **影响**：Core 不再是自己不变量的守门人——调用方（WP-05 Supervisor）只要在子 Run 未收敛时结算 Chief Run，就会产生一个永远不会被处理的 Chief 待办（静默丢 Gate 阻断），并提前释放父 Run 的 Work 预留（EXP-C1：父结算后 Work 预留仅剩两个 Chief 自身 + 存活子）。这是本轮唯一的 AC-046 实质缺口。
+- **建议**：`settle` 对含非终态 `join='all'` 子 Run 的父 Run 拒绝（`INVALID_STATE`），或将其转入 `waiting_children` 并延迟终态；补「父在子未终态时不可结算」的必需失败测试。
+
+### Q-05 [P3] `run.ended.data.releasedTokens` 在实测用量下仍是整笔 allocation，与 reliability §3「释放剩余」字面不符
+
+- 位置：`packages/core/src/run-lifecycle.ts:193-201`（`releasedTokens: run.budgetAllocation` 恒定，不含 `tokensUsed` 扣减）。
+- **事实（实跑，EXP-C6）**：`budgetAllocation=30000`、`usage=25000` → `run.ended.data={tokensUsed:25000, usageMeasured:true, releasedTokens:30000}`；`releasedTokens + tokensUsed = 55000 > allocation`。EXP-A2 同类。
+- **依据**：`reliability.md` §3「扣除实际usage并释放剩余」，字面语义下 `releasedTokens` 应为 5000；事件消费方按 `released+used` 记账会高估释放量。`protocol.md` §7 要求 data 是「变更后实体摘要」。
+- **建议**：`releasedTokens` 记 `allocation - tokensUsed`（或改名为 `reservedTokens`/`allocation` 以消歧），并同步文档。
+
+### Q-06 [P3] 父 Run 级 allocation 上限只存在于 Discovery DC-40，未进入任何权威契约，且会拒绝文档允许的派发
+
+- 位置：`packages/core/src/orchestrator.ts:572-596`（`requireBudget`：`live children` 之和 + 新分配 ≤ `parent.budgetAllocation`）；依据仅 `discovery.md:89-91`（DC-40，自称「本包的实现约定」）。
+- **事实（实跑，EXP-C4）**：Work `tokenLimit=1_000_000`、父 Run `budgetAllocation=5_000`，派发一个 `budgetAllocation=50_000` 的子 Run → `BUDGET_EXCEEDED: live children of Run … hold 0 of 5000 tokens`（0 个在场子 Run 却已判定超限）。`agents.md` §3 只定义 `budgetAllocation` 字段与 Work 级预算，`data.md`/`protocol.md` 未定义「父 Run 额度 = 并发子 Run 之和」这一语义。
+- **依据**：`workflow.md`「不重新发明产品字段/授权/行为」；`implementation.md` WP-02 退出条件「代码、Schema、测试和相应文档入口完成结算」。
+- **建议**：把 DC-40 的口径写入 `data.md`（Run 级额度语义）或在 `agents.md` §3 补一句；否则该上限属未定义行为，会误拒合法派发。承接核对见 §6。
+
+### Q-07 [P3] M-03 残留：三处源码注释仍声称 Work `blocked(provider)`，与 DC-42 及实测不符
+
+- 位置：`packages/core/src/config.ts:370`、`packages/core/src/model-gateway.ts:87`、`packages/core/src/orchestrator.ts:323`；对照 `discovery.md:97-99`（DC-42「本包未实现 Work 级 blocked」）。
+- **事实（实跑，EXP-A3）**：无可用模型时 Work 仍 `running`、`blockerIds=[]`、`work.control_changed`=0；三处注释却写「A Work whose role has no usable model is blocked」「what makes a Work `blocked(provider)`」。第三轮 M-03 原文即点名 `config.ts:370` 与 `model-gateway.ts:87`，本轮只改了 `implementation.md` T2，未改这三处注释。
+- **建议**：注释改为「返回 `PROVIDER_UNAVAILABLE`、Run 不创建；Work 级 blocker 承接 WP-05（DC-42）」。
+
+### Q-08 [P3] `JoinCoordinator.state()` 在 `blocked` 时返回空 `chiefTodo`，与 `onChildSettled` 的同一契约不一致
+
+- 位置：`packages/core/src/join.ts:145-147`（`{kind:'blocked', …, chiefTodo: ''}`）。
+- **事实（实跑，EXP-C5）**：`onChildSettled` 对同一父 Run 返回真实游标（EXP-B2：`"12006"`），而只读的 `state()` 返回 `""`；读取方无法从 `state()` 定位 Chief 待办，易被当成「无待办」。
+- **建议**：`state()` 复用 `pageChief` 的查重结果返回既有游标（不发新事件），或把 `chiefTodo` 改为可选字段并在类型/文档中说明 `state()` 不产生待办。
+
+### Q-09 [P3] 过程：411d04f 新增生产文件 `packages/core/src/events.ts` 不在 `plan.md`（planVersion 2）writePaths 内，plan 未升版
+
+- 位置：`packages/core/src/events.ts`（本轮新增）与 `packages/core/src/run-lifecycle.ts`（第二轮新增）；`plan.md:16-29` 的 writePaths 未包含二者，本轮提交也未更新 `plan.md`。
+- **依据**：`workflow.md`「Plan 决定函数与文件内部结构；代码修改先有适用 Plan」；第一轮 RE-05 正是因 `snapshots.ts` 越界而补 planVersion 2。`events.ts` 是本轮修复 D3 的关键新模块，属实质性写入范围变化。
+- **建议**：升 planVersion 3，把 `run-lifecycle.ts`、`events.ts` 补入 writePaths 并注明授权来源；这是记录完整性问题，不影响代码正确性。
+
+### Q-10 [P3] 记录不自洽：T11 声称对抗性核验补出 D1..D5，仓库内只定义 D1/D2/D3，D5 无任何痕迹
+
+- 位置：`implementation.md:77,79,82`（D1/D2/D3/D4/D5 汇总）；`discovery.md:101-110`（DC-43 只含 D3，DC-44 只含 D1/D2）；普通提交信息只列 D1/D2/D4。
+- **事实**：`grep -rn "D5" .agentdev docs` 无定义；`git cat-file --batch-all-objects` 扫描全部 891 个 blob，除实现记录的汇总句外无「对抗性核验」正文；本轮无法独立核实 D5。
+- **影响**：第四轮的「逐条核对 D1..D5」在 D5 上不可完成；Review 报告不能以开发方汇总句替代可核对的 Finding 描述（`workflow.md` §6「报告不能以『应该』代替执行」）。
+- **建议**：在 `discovery.md` 补齐 D4/D5 的完整定义与处置（D4 至少应按本报告 §3 补一条 DC），并修正 T11 的措辞。
+
+---
+
+## 6. 本包必修 vs 其他包显式缺口（承接核对）
+
+| 事项 | 归属判定 | 承接登记核对 | 结论 |
 |---|---|---|---|
-| **N-01** `contract_violation` 终态不释放预算 | P2 | **已修复（verified）** | `run-lifecycle.ts:134-165` 的 `contractViolation`/`end` 与 `settle` 共用终止路径，统一 `release`。EXP2：chief(100k)+A(50k)+victim(30k) 后 `reserved=180000`；victim 连续两次 Schema 失败 → `CONTRACT_VIOLATION`，`reserved=150000`，`run.ended.data.releasedTokens=30000`；随后合法 `chief(30k)` 派发成功（第二轮此处报 `CONSTRAINT_VIOLATION`）。测试 `join.test.ts:326-331` 亦断言 `reservedBefore - run.budgetAllocation`。 |
-| **N-02** 非 running 状态仍接受交付 | P2 | **已修复（verified）** | `stage.ts:125-131` 改为 `run.status !== 'running'` 即抛 `INVALID_STATE`，在任何写入之前。EXP3：`paused`/`waiting_permission`/`interrupted`/`recovery_required` 四种状态各提交两次均 `THROW INVALID_STATE`，`stage_result` 行数 0、`schema_invalid` 事件 0、Run 状态不变。测试 `join.test.ts:397-425` 覆盖 `paused`，并断言无 `schema_invalid`。 |
-| **N-03** 自造 Join 事件名仍在发出（文档与代码不符） | P2 | **已修复（verified）** | `join.ts:167-208` 已删除两个 `events.append`，仅更新 Run 行。EXP1/EXP7 全流程实际事件名 `["chief_action_required","run.ended","run.queued","run.started","stage.completed","stage.failed"]` 全部属于 `protocol.md` §7；`run.waiting_children`=0、`run.children_joined`=0。`discovery.md:70`（RE-04）已改为如实表述并指向 DC-39。 |
-| **N-04** 必需失败测试「父等待可接消息」无区分力 | P2 | **已修复（verified，附残余）** | `dispatch` 现校验父状态（`orchestrator.ts:285-293`），使该测试具备区分力。EXP4：父 `waiting_children` 时经 `ProjectMailbox.submitCommand` 派发第三子 `accepted:true` 且子 Run 建成、`joins.state` 仍 `waiting`（pending=[second,third]）、父仍 `waiting_children`；父改 `completed` 后同一 mailbox 路径 `completion` 被 `INVALID_STATE` 拒绝。即「若把等待当锁」该测试必然失败。残余：`mailbox.ts:129-147` 仍完全不读 `subject`，消息级路由（按 Run 选处理器）在 WP-02 未实现——见 §6 剩余风险 1，不单列 Finding（第二轮的 (b) 方案已落地）。 |
-| **N-05** 终态父 Run 仍可接收新子 Run | P2 | **已修复（verified）** | `RunLifecycle.canParentDispatch`（`run-lifecycle.ts:16-21,167-170`）= `queued/starting/running/waiting_children`；`orchestrator.ts:287-293` 不满足即 `INVALID_STATE`。EXP4：父 `completed` 与 `paused` 派发均抛 `INVALID_STATE ... cannot accept a new dispatch`，`parent_run_id` 子行数 0。测试 `join.test.ts:249-272`。 |
-| **N-06** 重算 `onChildSettled` 重复写 `chief_action_required` | P3 | **已修复（verified）** | `join.ts:219-234` 的 `pageChief` 以 `(entityId=parent, reason, failed 集合)` 查已有事件并复用。EXP5：对同一 required 失败子连续 3 次 `onChildSettled` → `chief_action_required` 1 条；对同一 `none` 失败子连续 2 次 → 1 条。测试 `join.test.ts:427-436`。 |
-| **N-07** 被阻断 Gate 的事件 data 结果不全 | P3 | **已修复（达到 N-07 要求，附残余）** | `join.ts:245-263` 的 `stageResult` 直接携带完整数组：EXP5 实测 `artifactRefs=[{"id","version":3,"hash"}]`（不再降为裸 id），`evidenceRefs`/`changedPaths`/`findingIds`/`unknowns`/`requestedActions`/`status`/`summary` 齐全，共 §4 交付字段 8 个。残余：缺 `readLedgerSeq`/`readLedgerHash`（见 M-04）。 |
-| **N-08** 二次 Schema 失败在 `paused` 等状态抛 `VALIDATION_ERROR` | P3 | **已修复（构造性消除）** | 由于 N-02 的 `running` 白名单，`reject()` 在非 running 状态根本不会执行。EXP3：四种状态两次提交均为 `INVALID_STATE`，`schema_invalid`=0，不存在「第一次拒绝后无法升级」的中间态。残余（不单列）：若 Run 在两次提交之间离开 `running`，第二次为 `INVALID_STATE` 而非 `contract_violation`，属 fail-closed 可接受。 |
-| **N-09** 代码引用不存在的 DC-38 | P3 | **已修复（verified）** | `discovery.md:81-87` 新增 DC-38（Run 参数层无授权来源，承接 WP-04/WP-07）与 DC-39（Join 无协议事件，承接 WP-08）。全仓 `grep DC-38` 只命中 `orchestrator.ts:80` 注释与文档，无悬空引用。 |
-| **N-10** 超预算返回 `CONSTRAINT_VIOLATION` 而非 `BUDGET_EXCEEDED` | P3 | **已修复（verified）** | `orchestrator.ts:308-314` 对所有 spec（含 Core 构造的 chief spec）在写入前统一 `canAllocateBudget`。EXP2：chief(200k) → `THROW BUDGET_EXCEEDED: dispatch budget: used 0 + reserved 180000 + 200000 exceeds 200000`。测试 `orchestrator.test.ts:462-469` 已改为断言 `code: 'BUDGET_EXCEEDED'`。 |
-| **N-11**（第二轮附带）`data.md` 的 `ID` vs 代码哈希 | P3 | **仍未消解（Product Decision Pending）** | `docs/architecture/data.md:30,80` 仍写 `configSnapshotId:ID / contextSnapshotId:ID / dispatchSnapshotId:ID`、`DispatchSnapshot.contextSnapshotId:ID`；代码 `run.ts:37 snapshotRefSchema = hashSchema`。`discovery.md:72`（RE-06）保留哈希实现并声明待产品确认。**本轮不作为阻断 Finding**（技术理由成立、已显式记录），但未确认前不得判 Completed。 |
+| Q-01 `operationId` 载荷冲突 | **本包必修（P2）** | — | `request_dispatch` 与 `protocol.md` §1 幂等规则同属 WP-02 输出 |
+| Q-04 父 Run 提前结算击穿 AC-046 | **本包必修（P2）** | — | AC-046 在 WP-02 关联验收内 |
+| Q-02 超限 usage 卡死结算 | **本包必修（P3，低成本）** | — | `charge` 为本轮新增代码路径，应在包内 fail-closed |
+| Q-03 未测量即全额释放 / `costKnown` | 部分本包、主体承接 **WP-10** | `discovery.md:93-95` DC-41 明确承接 WP-10；但 `docs/delivery/implementation.md:131-141` WP-10 条目未出现「usage/预算核销」，且 `.agentdev/work/WP-10/` 尚不存在 | **显式缺口已登记（DC-41），但承接包条目未确认**；建议结算前在 WP-10/WP-05 条目补一句 |
+| M-03 Work `blocked(provider)` | 承接 **WP-05** | `discovery.md:97-99` DC-42 承接 WP-05；`implementation.md:71-81` WP-05 输出为「ContextBuilder、ACL、Snapshot、read ledger、Checkpoint、预算」，**不含 WorkBlocker/Work 状态投影**，`work.control_changed` 亦无包认领 | **承接归属存疑**：DC 声明了 WP-05，但 WP-05 条目未登记该职责 |
+| DC-38 `runParams` 无授权来源 | 承接 **WP-04/WP-07** | `discovery.md:81-83`；WP-04 条目（`:59-69`）为知识/初始化，WP-07 条目（`:95-105`）为权限/工具/Secret | 归属偏 WP-07，WP-04 条目未提授权；后续包未启动，无法进一步核实 |
+| DC-39 Join 无协议事件（读模型） | 承接 **WP-08** | `discovery.md:85-87`；WP-08 条目（`:107-117`）为集成/结算/恢复，WS/读模型更贴 WP-09 | 归属与条目不一致，属跨包风险 |
+| M-04 剩余同类（其他事件缺 §4 字段） | 本包已按最小要求修复 | — | 无剩余 |
+| N-11 `data.md` `ID` vs 哈希 | **Product Decision Pending** | `discovery.md:72`（RE-06）保留实现并等待产品确认 | 未消解前不得判 Completed |
 
-**小结：N-01..N-10 全部 10 条经独立实验（非只读测试）确认真实修好，0 条残留；第二轮「文档声称已修而代码不符」的问题（N-03 / DC-37 RE-04）已消除。**
+补充事实：除 `.agentdev/work/{WP-00,WP-01,WP-02}` 外，承接包（WP-04/05/06/07/08/10）均尚无独立过程记录目录，故「承接」目前只能由 DC 条目声明，无法在承接包侧交叉验证。
 
 ---
 
-## 4. 文档声明 vs 代码交叉核对（第二轮修复说明专项）
+## 7. 未验证 / 无法验证项与剩余风险
 
-逐条核对 `implementation.md` T10 与 `discovery.md` DC-37/DC-38/DC-39 的每一句声明：
-
-| 声明 | 代码事实 | 判定 |
-|---|---|---|
-| T10：「新增 `run-lifecycle.ts`…任何终态都会释放预留」 | 文件存在；`settle`/`contractViolation` 共用 `end`→`release`；EXP2/EXP6 实测 | ✅ 一致 |
-| T10：「`StageGate.submit` 改为只有 `running` 可交付…零写入」 | `stage.ts:125-131`；EXP3 实测四状态 0 行 0 事件 | ✅ 一致 |
-| T10：「`dispatch` 校验父 Run 状态 `ACTIVE_PARENT_STATUSES = queued/starting/running/waiting_children`」 | `run-lifecycle.ts:16-21` 与之逐字一致；EXP4 实测 | ✅ 一致 |
-| T10：「`JoinCoordinator` 真正删除未定义事件名」 | `join.ts` 无该两处 append；EXP1/EXP7 | ✅ 一致 |
-| T10：「`chief_action_required` 按 `(parent, reason, 失败集合)` 幂等」 | `join.ts:225-234`；EXP5 | ✅ 一致 |
-| T10：「事件 data 携带**完整结果契约**」 | `join.ts:251-263` 携带 §4 的 8 个交付字段，**缺 `readLedgerSeq`/`readLedgerHash`** | ⚠️ 表述略超范围（N-07 自身要求的两项已满足；缺口见 M-04） |
-| T10：「预算准入对所有 spec 在写入前统一判定，超限返回 `BUDGET_EXCEEDED`」 | `orchestrator.ts:308-314`；EXP2 | ✅ 一致 |
-| T10：「DC-37 RE-04 不实表述已更正；补 DC-38、DC-39」 | `discovery.md:70`、`:81-87`；grep 无悬空引用 | ✅ 一致 |
-| **`implementation.md` T2：「`availability(...)`（准入判定，失败即 Work `blocked(provider)`）」** | **`orchestrator.ts:317-324` 只 `fail('PROVIDER_UNAVAILABLE')`；EXP8 实测 Work 仍 `running`、`blockerIds=[]`、0 条 `work.control_changed`** | ❌ **文档声明与代码不符**（T2 原始声明，非本轮修复声明；见 M-03） |
-
-结论：本轮修复说明与代码**未发现新的不实陈述**；仅 `implementation.md` T2 的 `Work blocked(provider)` 声明与代码不符（M-03），且 T10「完整结果契约」措辞略宽于实现（M-04）。按任务要求，"凡文档声称已修而代码不符，判 FAIL 并单列"——本轮该类问题已消除，故不计 FAIL；M-03 作为独立 Finding 单列。
+1. **D5 内容**：仓库无定义（Q-10），本轮无法逐条核对。
+2. **真实并发**：全部实验为单线程；`requireBudget`/`canAllocateBudget` 在事务外判定、`requestDispatch` 的 `operationId` 去重也在事务外（`orchestrator.ts:460-474` 查到即 return，未与 `append` 同事务），并发下可能重复建待办或把预算失败降级为 `CONSTRAINT_VIOLATION`。单 mailbox 串行下不可达，本轮未做真实并发压测。
+3. **D1 版本竞态**：`entityVersion` 取自 `requestDispatch` 事务前读到的 `chief.version`；若同进程并发派发（`attachChild` 会 +1）可能写出略旧的版本。未做并发验证。
+4. **消息级路由**：`ProjectMailbox` 仍不读 `subject`，无法在 mailbox 层验证「消息投递到等待中的父 Run」；该区分力由 `dispatch` 的父状态校验提供（第三轮已证），消息按 Run 选处理器仍属 WP-05/WP-08。
+5. **`beginAttempt` 无法恢复 `paused` Run**（EXP-C5：`VALIDATION_ERROR: cannot start from paused`），而 `domain/transitions.ts:128-130` 的 `runAcceptsNewAttempt` 把 `paused` 视为可新 Attempt——第三轮残余，非本轮回归，Checkpoint 恢复路径归 WP-05。
+6. **`settleRun` 非幂等**：重复结算抛 `VALIDATION_ERROR`；WP-05 的 at-least-once 监督重放需 operationId 保证只调用一次。
+7. **真实 Provider 调用与 Secret**：`GatewayTransport`/`SecretResolver` 仍为注入缝（DC-31），AC-043「不同 Provider」仍只是结构验证。
+8. **ContextBuilder/上下文内容与 token 计量**：`dispatch` 的 `contextPayload` 仅有 fallback（`orchestrator.ts:341-348`），属 WP-06；AC-082 的工具层负例归 WP-07。
+9. **`readLedgerHash` 真实性**：`stage.ts` 只做 64 位十六进制 Schema 校验，未与读账本核对（WP-05/WP-06）。
+10. **事件消费者端到端兼容性**：Q-05/Q-08 的事件字段语义与 WS/BFF/UI（WP-08/WP-09）未实现，本轮只做协议/文档静态判定。
+11. **`test:e2e`/`test:acceptance`/`test:live`**：按契约 `NOT_IMPLEMENTED`，未执行。
+12. **结算未完成（T9 待办）**：`docs/INDEX.md:26-30` 仍只列 WP-00/WP-01 且称 Work/Run 编排「仍未实现」；`docs/delivery/acceptance.md` 无 WP-02 证据登记；`implementation.md` 仍留「## T9 待办」。本次 Review 只判定「实现是否成立」，不判定「结算是否完成」；在 Q-01/Q-04 关闭前也不应结算。
+13. **N-11 产品决定**：`data.md` 的 `ID` 记法与代码哈希仍并存，属 `Product Decision Pending`。
 
 ---
 
-## 5. 新 Findings
+## 8. 方法与边界声明
 
-### M-01 [P1] 父 Run 级预算预留从不释放：Chief 派发过的子 Run allocation 累计达上限后永久拒绝新子 Run
-
-- 位置：`packages/core/src/orchestrator.ts:537-556`（`requireBudget`，尤其 `:542-553` 的 `siblings.reduce(...)` 与 `BUDGET_EXCEEDED`）；对照 `packages/core/src/run-lifecycle.ts:68-77`（`release` 只回落 Work 预算行）。
-- **事实（实跑，EXP6 第三段）**：Work 预算 1,000,000、Chief allocation 20,000。顺序派发 3 个 `budgetAllocation=10,000`、`requiredChild=true` 的子 Run，每个都 `beginAttempt` → `stage.submit`(success) → `settleRun(completed)`：
-  - 子 #1 → OK，结算后 Work `tokensReserved=20000`（仅剩 Chief 自身）
-  - 子 #2 → OK，结算后 Work `tokensReserved=20000`
-  - 子 #3 → `THROW BUDGET_EXCEEDED: children of Run <chief> already hold 20000 of 20000 tokens`
-  - 此时两个既有子 Run 都是 `completed`，Work 预算有 980,000 空闲。
-- **依据**：`requireBudget` 的 `siblings` 查询（`:542-545`）按 `parent_run_id` 取**全部**子 Run（含终态），从不排除已结算者；而 `run-lifecycle.ts` 只在 Work 层释放同一笔 reservation。同一笔 allocation 在 Work 层被释放、在父 Run 层被永久占用，两层口径自相矛盾。文档层面：`reliability.md` §3「预留…**扣除实际usage并释放剩余**」；AC-022「Given 并发调用接近限额…原子拒绝；**用户增加预算后继续**，无静默加额」——本缺陷下**增加 Work 预算也无济于事**（上限来自不可变的 `run.budgetAllocation`），文档化的恢复路径失效；`workflow.md` §5.3/`agents.md` §3 的失败重派（required 子失败后 Chief 补派替换子 Run）会在几次重试后触顶。注意 `orchestrator.test.ts:381-399` 只验证 3 个子 Run「并发」时第 3 个被拒，从未结算其中的子 Run，故未暴露此行为。
-- **影响**：一个 Chief Run 一旦派发过的子 Run allocation 累计达到自身 allocation，后续**所有**派发（包括必需失败的重试/替换）永久被 `BUDGET_EXCEEDED` 拒绝，无 API 可恢复；与第二轮 N-01 同类（预算泄漏 + 阻断合法派发），但 N-01 的修复只覆盖了 Work 层。
-- **建议**：二选一并落文档——(a) `requireBudget` 只统计**未终态**子 Run 的 allocation（终态子 Run 的预留随其结算释放），并补一条「结算后第 N+1 个子 Run 仍可派发」的测试；(b) 若产品意图是「Chief allocation 是子 Run allocation 的终身总额度」，则必须在 `discovery.md` 建 DC 条目、在 `data.md`/`reliability.md` 写明语义（并说明与 Work 层释放的口径差异、以及预算提升为何无效），否则该上限属未定义行为。
-
-### M-02 [P2] 预算只「预留/释放」不「核销」：`tokensUsed` 从无生产写入，结算按零 usage 全额释放
-
-- 位置：`packages/core/src/run-lifecycle.ts:146-165`（`end` 无条件 `release(run.budgetAllocation)`）；`packages/core/src/model-gateway.ts:188`（`tokensOf` 存在但无调用方）。
-- **事实（实跑 + 代码检索）**：EXP2 全程结束后 Work `tokensUsed=0`；`grep -rn tokensUsed packages apps --include=*.ts`（排除 dist/test）只命中 Schema 与 `domain/dispatch.ts` 的读取，**没有任何生产代码写 `tokensUsed`**。即每个 Run 结束都把 100% reservation 归还，实际消耗从不计入 `used`。
-- **依据**：`reliability.md` §3「模型调用前预留…**扣除实际usage并释放剩余**；未知usage保持预留并标 `costKnown=false`，**不能按零收费释放额度**」；AC-022「无静默加额」。当前行为等价于永远按零 usage 释放，使 `canAllocateBudget` 的 `used+reserved<=limit` 约束在跨 Run 顺序执行时失效（同一笔限额可被无限次全额重复使用）。
-- **影响**：预算止损（AC-022）在「顺序多 Run」场景下不成立；`costKnown=false` 语义未实现。真实 usage 需模型调用（DC-31 归 WP-07/WP-10），但把「核销」收敛点放在本轮新增的 `run-lifecycle.end` 内是零成本的（保留 `actualUsage` 入参 + 未提供时 `costKnown=false` 不释放），且注释已引用 `reliability.md` §3。
-- **建议**：给 `RunLifecycle.settle/contractViolation` 增加可选 `usage`；有 usage 时 `tokensUsed += usage`、释放 `allocation - usage`；无 usage 时保持预留并置 `costKnown=false`。若本轮不做，至少把该缺口写成 DC（承接 WP-05/WP-10）并修正 `run-lifecycle.ts` 顶部注释「released exactly when the Run ends」的口径。
-
-### M-03 [P2] `Work blocked(provider)` 未落地，`implementation.md` T2 与代码不符
-
-- 位置：`packages/core/src/orchestrator.ts:317-324`（只 `fail('PROVIDER_UNAVAILABLE')`）；对照 `docs/delivery/implementation.md:16`（T2「失败即 Work `blocked(provider)`」）、`docs/rules/agents.md` §5「不存在可用模型时Work为blocked(provider)」、`packages/core/src/config.ts:370`、`packages/core/src/model-gateway.ts:87` 注释。
-- **事实（实跑，EXP8）**：角色 `test` 无可用模型时 `dispatch` 抛 `PROVIDER_UNAVAILABLE: role test has no usable model: …`；随后 Work `status='running'`、`blockerIds=[]`、`work.control_changed` 事件 0 条。全仓检索无任何生产代码写入 `work.status='blocked'` 或 blocker。
-- **依据**：`agents.md` §5、`implementation.md` WP-02 退出条件「缺配置/上下文明确阻断」；`workflow.md` §6「报告不能以『应该通过』代替执行」。测试 `orchestrator.test.ts:401-411` 名为 "blocks the dispatch…" 但仅断言抛错，未验证 Work 状态。
-- **影响**：Work 的持久状态不反映 provider 阻断，消费方（Chief/UI/恢复）无法从 Work 行判断「为何没有 Run」；文档三处声明与实现不一致，会污染 Settlement 知识。
-- **建议**：二选一——(a) 实现 `Work.status='blocked'` + `work.control_changed`（`blockerIds` 目前无 blocker 实体表，需同步承接 WP-06）；(b) 修正 `implementation.md` T2 与相关注释为「返回 `PROVIDER_UNAVAILABLE`、Run 不创建；Work 级 blocker 承接 WP-06」，并补 DC。二者必居其一。
-
-### M-04 [P3] 被阻断 Gate 事件 data 仍缺 `readLedgerSeq`/`readLedgerHash`（`agents.md` §4 结果契约不全）
-
-- 位置：`packages/core/src/join.ts:25-34`（`ChildOutcome.stageResult` 类型）与 `:251-263`（事件投影）；对照 `docs/rules/agents.md` §4 必需字段（`status/summary/artifactRefs/evidenceRefs/changedPaths/findingIds/unknowns/requestedActions/readLedgerSeq/readLedgerHash`）。
-- **事实（实跑，EXP8）**：todo payload 的 `stageResult` 缺失字段 = `["readLedgerSeq","readLedgerHash"]`（其余 8 个齐全，`artifactRefs` 已带 id/version/hash）。
-- **依据**：AC-046「父可获**全部结果**」；`agents.md` §4。N-07 的最小要求已满足，故本轮只判 P3。
-- **建议**：`ChildOutcome.stageResult` 与事件投影补 `readLedgerSeq`/`readLedgerHash`（`stageResultRow` 已持有），或明确记录「读账本凭据不随事件下发」的理由。
-
-### M-05 [P3] `request_dispatch` 无幂等键，重试重复生成 Chief 待办
-
-- 位置：`packages/core/src/orchestrator.ts:414-476`（每次调用无条件 `events.append({name:'chief_action_required', …})`，无 `operationId`/幂等去重）。
-- **事实（实跑，EXP8）**：对同一专业 Run、同一入参调用两次 `requestDispatch` → `chief_action_required` 从 0 变为 **2** 条。
-- **依据**：`reliability.md` §1「Outbox以operationId至少一次投递；Supervisor先检查已存在的同operationId Runner/结果，**避免重复创建**」；`protocol.md` §7 错误表含 `IDEMPOTENCY_CONFLICT`。与 N-06 同类影响（重复 Chief 待办 → 重复派发/重复计费），但 Join 侧已幂等、请求侧没有。
-- **建议**：给 `DispatchRequestInput` 增加幂等键（`operationId` 或 capability 派生的 `(runId, requestedRole, goal, sourceRefs)` 摘要），写事件前按同键查重；或声明该命令的幂等由上游 mailbox operationId 承担并落 DC。
-
----
-
-## 6. 未验证 / 无法验证项与剩余风险
-
-1. **消息级路由**：`ProjectMailbox` 不读 `subject`，无法在 mailbox 层验证「消息确实投递到等待中的父 Run」。N-04 的区分力现由 `dispatch` 的父状态校验提供（EXP4 已证），但消息按 Run 选处理器属更上层（WP-05/WP-08），本轮未验证。
-2. **并发**：`reserve` 与 Run 行同事务、预算更新走版本 CAS，未见双花；但本轮未做真实并发压测（EXP 为单线程）。`canAllocateBudget` 在事务外判定、`reserve` 在事务内，理论上并发下第二个事务可能以 `CONSTRAINT_VIOLATION` 而非 `BUDGET_EXCEEDED` 失败（单 mailbox 串行下不可达）。
-3. **`settleRun` 非幂等**：重复调用抛 `VALIDATION_ERROR`（EXP6）。若 WP-05 的 at-least-once 监督步骤重放结算，需以 operationId 保证只调用一次；本轮未验证。
-4. **`beginAttempt` 无法恢复 `paused` Run**：EXP6 显示 `paused` 抛 `VALIDATION_ERROR`（`RUN_TRANSITIONS.paused` 只有 →`running`，而 `beginAttempt` 要求可 →`starting`），而 `domain/transitions.ts:128-130` 的 `runAcceptsNewAttempt` 把 `paused` 视为可新 Attempt。该行为在 `c4763d5` 已存在（**非本轮回归**），Checkpoint 恢复路径归 WP-05；本轮未验证。
-5. **真实 Provider 调用与 Secret**：`GatewayTransport`/`SecretResolver` 仍为注入缝（DC-31），AC-043「不同 Provider」仍只是结构验证（测试只用单一 Provider）。
-6. **ContextBuilder/上下文内容与 token 计量**：`dispatch` 的 `contextPayload` 仅有 fallback（`orchestrator.ts:337-341`），属 WP-06；AC-082 的工具层负例归 WP-07。
-7. **`readLedgerHash` 真实性**：`stage.ts` 只做 64 位十六进制 Schema 校验，未与读账本核对（WP-05/WP-06）。
-8. **事件消费者端到端兼容性**：M-04 的字段缺口与 M-03 的 Work 状态缺口在 WS/BFF/UI（WP-08/WP-09）未实现时不会暴露，本轮只做协议/文档静态判定。
-9. **`test:e2e`/`test:acceptance`/`test:live`**：按契约 `NOT_IMPLEMENTED`，未执行。
-10. **结算未完成（T9 待办）**：`docs/INDEX.md:26-30` 仍只列 WP-00/WP-01 且称 Work/Run 编排「仍未实现」；`docs/delivery/acceptance.md` 无 WP-02 证据登记；`implementation.md` 仍留「## T9 待办」。本次 Review 只判定「实现是否成立」，不判定「结算是否完成」；该状态在 M-01..M-03 关闭前也不应结算。
-11. **N-11 产品决定**：`data.md` §2/§3 的 `ID` 记法与代码哈希仍并存，属 `Product Decision Pending`（§3 表末）。
-
----
-
-## 7. 方法与边界声明
-
-- 本报告只依据仓库文件、`a8daa6d` 上的 git 对象/差异与实跑命令；未读取任何开发对话、未引用外部同名技能或历史方案。
-- 唯一写入文件为本文件 `.agentdev/work/WP-02/review.md`；实验脚本独立写在 `/tmp/wp02-r3/`（`fixture.mjs`、`exp1-events.mjs`…`exp8-gaps.mjs`、`all.log`），使用 `pnpm build` 产出的 `packages/*/dist`，等价复现 `join.test.ts`/`orchestrator.test.ts` 的夹具，并通过 `/tmp/wp02-r3/node_modules/@agentdev/*` 软链解析 workspace 包。
-- 未修改产品代码、测试、`docs/**`、`plan.md`、`implementation.md`、`discovery.md`；`pnpm build` 只写 `.gitignore` 中的 `dist/`，复核结束时 `git status --porcelain` 仍无输出。
-- 第二轮完整报告可通过 `git show a8daa6d:.agentdev/work/WP-02/review.md` 取回。
+- 本报告只依据仓库文件、`411d04f` 上的 git 对象/差异与实跑命令；未读取任何开发对话、未引用外部同名技能或历史方案。
+- 唯一写入文件为本文件 `.agentdev/work/WP-02/review.md`；实验脚本独立写在 `/tmp/wp02-r4/`（`fixture.mjs`、`exp-a.mjs`、`exp-b.mjs`、`exp-c.mjs`、`exp-*.log`），使用 `pnpm build` 产出的 `packages/*/dist`，通过 `/tmp/wp02-r4/node_modules/@agentdev/*` 软链解析 workspace 包，等价复现 `join.test.ts`/`orchestrator.test.ts` 的夹具但**不 import 产品测试文件**。
+- 未修改产品代码、测试、`docs/**`、`plan.md`、`implementation.md`、`discovery.md`；`pnpm build` 只写 `.gitignore` 中的 `dist/`，写入本报告结束时 `git status --porcelain` 仅显示本文件本身。
+- 第一/二/三轮完整报告可分别通过 `git show c4763d5:.agentdev/work/WP-02/review.md`、`git show a8daa6d:.agentdev/work/WP-02/review.md`、`git show 411d04f:.agentdev/work/WP-02/review.md` 取回。

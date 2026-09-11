@@ -367,7 +367,9 @@ export class ConfigStore {
    * Resolves one role's profile in the documented order.
    *
    * Returns a typed failure instead of a partial profile: a Work whose role has no
-   * usable model is `blocked(provider)` (`agents.md` §5), never silently downgraded.
+   * usable model fails with `PROVIDER_UNAVAILABLE` (`agents.md` §5) — the Run is
+   * never silently downgraded. The Work-level `blocked(provider)` projection is
+   * WP-05 (DC-42).
    */
   resolve(role: Role, runParams: ProfileLayer = {}): ConfigResolution {
     const layers: readonly (readonly [ProfileSource, ProfileLayer | undefined])[] = [

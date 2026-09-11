@@ -40,7 +40,8 @@ import {
 } from '@agentdev/domain';
 import { withTransaction, type ProjectStore } from '@agentdev/storage';
 import type { ConfigStore, ProfileLayer, ProfileResolution } from './config.js';
-import { RunLifecycle } from './run-lifecycle.js';
+import { RunLifecycle, type RunUsage } from './run-lifecycle.js';
+import { createHash } from 'node:crypto';
 import { ProtocolError, type ProtocolErrorCode } from './errors.js';
 import { findEvent } from './events.js';
 import type { ModelGateway } from './model-gateway.js';
@@ -155,6 +156,34 @@ function riskFromFlags(flags: readonly string[]): LockdownRisk {
     if (flag in risk) risk[flag] = true;
   }
   return risk as unknown as LockdownRisk;
+}
+
+/**
+ * Stable fingerprint of one dispatch request, used for `operationId` idempotency.
+ *
+ * Only the request's own fields: a replay with the same key and same content
+ * returns the original todo, anything else is a conflict.
+ */
+function operationFingerprint(fields: {
+  readonly requestedBy: string;
+  readonly role: string;
+  readonly purpose: string;
+  readonly goal: string;
+  readonly stage: string;
+  readonly workId: string;
+}): string {
+  return createHash('sha256')
+    .update(
+      [
+        fields.requestedBy,
+        fields.role,
+        fields.purpose,
+        fields.goal,
+        fields.stage,
+        fields.workId,
+      ].join('\u0000'),
+    )
+    .digest('hex');
 }
 
 function fail(code: ProtocolErrorCode, message: string, details?: JsonObject): never {
@@ -455,8 +484,25 @@ export class Orchestrator {
     }
     const chief = this.store.runs.find(chiefRunId);
     if (chief === undefined) fail('NOT_FOUND', `Chief Run ${chiefRunId} does not exist`);
+    // A todo is only actionable while its Chief Run can still dispatch; filing one
+    // against a finished Chief Run would leave it with nobody to act (AC-045).
+    if (!RunLifecycle.canParentDispatch(chief.status)) {
+      fail(
+        'INVALID_STATE',
+        `Chief Run ${chief.id} is ${chief.status} and cannot take a new dispatch request`,
+        { chiefRunId: chief.id, status: chief.status },
+      );
+    }
     // The todo is idempotent per `operationId`: a retried request must not become a
     // second Chief action (reliability.md §1 "至少一次投递、避免重复创建").
+    const fingerprint = operationFingerprint({
+      requestedBy: run.id,
+      role: input.requestedRole,
+      purpose,
+      goal: input.goal,
+      stage: input.stage ?? 'assist',
+      workId: run.workId,
+    });
     if (input.operationId !== undefined) {
       const existing = findEvent(this.store, {
         names: ['chief_action_required'],
@@ -464,6 +510,24 @@ export class Orchestrator {
           event.entityId === chiefRunId && event.data['operationId'] === input.operationId,
       });
       if (existing !== undefined) {
+        // The same key must mean the same request: a replayed command returns the
+        // original result, a different request under a used key is a conflict
+        // (`protocol.md` §1/§7 `IDEMPOTENCY_CONFLICT`), never a silent no-op.
+        if (existing.data['fingerprint'] !== fingerprint) {
+          fail(
+            'IDEMPOTENCY_CONFLICT',
+            `operationId ${input.operationId} was already used for a different dispatch request`,
+            {
+              operationId: input.operationId,
+              chiefRunId,
+              existingFingerprint:
+                typeof existing.data['fingerprint'] === 'string'
+                  ? existing.data['fingerprint']
+                  : null,
+              requestedFingerprint: fingerprint,
+            },
+          );
+        }
         return {
           disposition: 'chief_action_required' as const,
           runId: run.id,
@@ -484,6 +548,7 @@ export class Orchestrator {
           reason: 'agent_dispatch',
           requestedBy: run.id,
           operationId: input.operationId ?? null,
+          fingerprint,
           workId: run.workId,
           role: input.requestedRole,
           purpose,
@@ -564,8 +629,9 @@ export class Orchestrator {
   settleRun(
     runId: string,
     status: Extract<Run['status'], 'completed' | 'failed' | 'cancelled'>,
+    usage?: RunUsage,
   ): Run {
-    return this.lifecycle.settle(runId, status);
+    return this.lifecycle.settle(runId, status, usage);
   }
 
   /** Rejects a professional spec whose parent cannot fund it. */
