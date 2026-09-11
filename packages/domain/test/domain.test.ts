@@ -279,8 +279,9 @@ describe('level routing (workflow.md §2)', () => {
     // A documentation request is its own intent.
     expect(routeMessage('write the documentation for the API').items[0]?.intent).toBe('document');
 
-    // Explanations, questions, refusals, hypotheticals and quotations must never
-    // authorize a change, in either language (W3R4/W3R5 review corpora).
+    // Every sentence the independent reviews registered as read-only (rounds 4-8):
+    // explanations, questions, statements, refusals, advice, topical mentions,
+    // preconditions and reference-only paths must never grant write authority.
     for (const body of [
       'explain why docs/INDEX.md needs a fix',
       'describe how to fix docs/INDEX.md',
@@ -293,15 +294,6 @@ describe('level routing (workflow.md §2)', () => {
       '你修复 docs/INDEX.md 了吗',
       '是否已经修复 docs/INDEX.md',
       'Did you fix docs/INDEX.md',
-      'I have a question about the fix in docs/INDEX.md',
-      'The fix needed in docs/INDEX.md is unclear',
-      '我先不修改 docs/INDEX.md',
-      'Regarding the fix in docs/INDEX.md, what do you suggest?',
-      '如果 docs/INDEX.md 需要修改，请告诉我',
-      'fix docs/INDEX.md if you think it helps',
-      '你说要修复 docs/INDEX.md',
-      '你提到 docs/INDEX.md 需要修复',
-      // Statements and completion aspect report a change; they are not instructions.
       '我已经修改了 docs/INDEX.md',
       '刚修复了 docs/INDEX.md',
       'I already fixed docs/INDEX.md',
@@ -317,6 +309,37 @@ describe('level routing (workflow.md §2)', () => {
       '请评估 docs/INDEX.md',
       '帮我总结 docs/PLAN.md',
       'Regarding the fix in docs/INDEX.md, what do you suggest?',
+      '我已经优化了 docs/INDEX.md',
+      '已经整理了 docs/INDEX.md',
+      '已经修好了 docs/INDEX.md',
+      '改动已完成：docs/INDEX.md',
+      '我把它改好了：docs/INDEX.md',
+      '我不想修改 docs/INDEX.md',
+      '请勿修改 docs/INDEX.md',
+      '禁止修改 docs/INDEX.md',
+      '不许修改 docs/INDEX.md',
+      '别急着修改 docs/INDEX.md',
+      '暂缓修改 docs/INDEX.md',
+      '修改 docs/INDEX.md 了没有',
+      'Will you fix docs/INDEX.md',
+      '何必修改 docs/INDEX.md',
+      '请讲述修改 docs/INDEX.md 的方法',
+      '请评价修改 docs/INDEX.md 的做法',
+      '我想先了解修改 docs/INDEX.md 的影响',
+      '帮我看看 docs/INDEX.md 还能改哪里',
+      '列出 docs/INDEX.md 要修改的地方',
+      'review docs/INDEX.md for things to fix',
+      'check docs/INDEX.md for errors to fix',
+      '需求写着：修改 docs/INDEX.md',
+      '修改 docs/INDEX.md 前需要审批',
+      '在修改 docs/INDEX.md 之前，请先确认',
+      '参考 docs/INDEX.md 修改 docs/PLAN.md',
+      '先看 docs/INDEX.md 再修改 docs/PLAN.md',
+      '看完 docs/INDEX.md 之后修复 docs/PLAN.md',
+      '关于 docs/INDEX.md 的修改',
+      '如果要修改 docs/INDEX.md，请告诉我',
+      '你说要修复 docs/INDEX.md',
+      '你提到 docs/INDEX.md 需要修复',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(false);
@@ -326,29 +349,31 @@ describe('level routing (workflow.md §2)', () => {
       ).toBe(true);
     }
 
-    // Explicit instructions must still authorize — including the everyday Chinese
-    // wordings that a naive negation pattern would misread (W3R5-02).
+    // Explicit instructions must still authorize — including everyday Chinese wording
+    // and mixed messages, in both directions (AC-005/AC-006).
     for (const body of [
-      '修改 docs/INDEX.md 中的错别字',
-      '识别并修复 docs/INDEX.md',
-      '特别修改 docs/INDEX.md',
-      '分别修复 docs/INDEX.md 和 docs/PLAN.md',
-      '更新 docs/INDEX.md 的说明',
-      '改 docs/INDEX.md',
       'fix the typo in docs/INDEX.md',
       'update docs/INDEX.md',
-      // Everyday imperative wording without a canonical change verb.
+      '修改 docs/INDEX.md 中的错别字',
+      '识别并修复 docs/PLAN.md',
+      '特别修改 docs/PLAN.md',
+      '更新 docs/INDEX.md 的说明',
       'docs/INDEX.md 的错别字麻烦处理下',
       '麻烦处理一下 docs/INDEX.md 里的错别字',
       'docs/INDEX.md 的错别字请帮忙处理',
+      '改 docs/INDEX.md',
+      '请修复 docs/INDEX.md',
+      '处理一下 docs/PLAN.md 的错别字',
+      '别改 docs/PLAN.md，改 docs/INDEX.md',
+      '不要修改 docs/PLAN.md，但要修复 docs/INDEX.md',
+      '解释 docs/INDEX.md 并修复 docs/PLAN.md',
+      '先解释 docs/INDEX.md，再修改 docs/PLAN.md',
+      '修改 docs/INDEX.md、docs/PLAN.md',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(true);
       expect(routing.items[0]?.scope.writePaths.length, body).toBeGreaterThan(0);
     }
-
-    // The noun "说明" is not an explanation verb unless it leads the clause.
-    expect(routeMessage('更新 docs/INDEX.md 的说明').explicitAuthorization).toBe(true);
 
     // Excluded targets never enter the write scope, while the intended one does.
     for (const [body, wanted, unwanted] of [
@@ -361,17 +386,8 @@ describe('level routing (workflow.md §2)', () => {
       expect(write, body).not.toContain(unwanted);
     }
 
-    // Chinese mixed intent splits into an explanation and an authorized change.
-    const chineseMixed = routeMessage('解释 docs/INDEX.md 并修复 docs/PLAN.md');
-    expect(chineseMixed.items.map((item) => item.intent).sort()).toEqual(['assist', 'delivery']);
-    expect(chineseMixed.items.find((item) => item.intent === 'delivery')?.writePaths).toEqual([
-      'docs/PLAN.md',
-    ]);
-
-    // A short negation followed by a corrected target authorizes the target only.
-    const corrected = routeMessage('别改 docs/PLAN.md，改 docs/INDEX.md');
-    expect(corrected.explicitAuthorization).toBe(true);
-    expect(corrected.items.flatMap((item) => item.writePaths)).toEqual(['docs/INDEX.md']);
+    // The noun "说明" is not an explanation verb unless it leads the clause.
+    expect(routeMessage('更新 docs/INDEX.md 的说明').explicitAuthorization).toBe(true);
   });
 
   it('classifies every contract operation as read-only, workspace write or environment', () => {

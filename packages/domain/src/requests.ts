@@ -54,7 +54,7 @@ const EXPLANATION_LEAD_EN_PATTERN =
 /** Words that make a clause a question wherever they appear. */
 const QUESTION_PATTERNS: readonly RegExp[] = [
   /[?？]/u,
-  /(吗|呢|么|如何|怎么|怎样|为什么|为何|能否|是否可以|可不可以|要不要|是不是|有没有|请问|能不能|可以吗|是否已经|是否应该|是否需要|谁|哪些|几点)/u,
+  /(吗|呢|么|如何|怎么|怎样|为什么|为何|能否|是否可以|可不可以|要不要|是不是|有没有|请问|能不能|可以吗|是否已经|是否应该|是否需要|谁|哪些|几点|了没有|改了没|改过没|何必|何以|何苦)/u,
   /\b(how|why|what|when|where|which|who|can|could|should|would|is|are|am|does|do|did|have you|has it)\b/iu,
   /(question|not sure|wondering|curious)/iu,
 ];
@@ -66,7 +66,7 @@ const QUESTION_PATTERNS: readonly RegExp[] = [
  * 特别 / 分别 stay instructions (W3R5-02).
  */
 const NEGATION_PATTERNS: readonly RegExp[] = [
-  /(不要|不用|不需要|无需|先不|暂不|不必|(?<![\p{Script=Han}\w])别)\s*(?:再|去|来)?\s*(?:改|修改|动|碰|删|移除|更新|添加|新增|实现|修复|重命名|重构|调整|处理|补)/u,
+  /(不要|不用|不需要|无需|先不|暂不|不必|不想|不愿|请勿|切勿|禁止|严禁|不许|不准|暂缓|延后|推迟|(?<![\p{Script=Han}\w])别)\s*(?:再|去|来|急着|着急|忙|先)?\s*(?:改|修改|动|碰|删|移除|更新|添加|新增|实现|修复|重命名|重构|调整|处理|补)/u,
   /(不是要你|没有让你|并没有要求|先说不要|不用管)/u,
   /\b(do not|don't|dont|never|no need to|without changing|not asking|not asking you to)\b/iu,
 ];
@@ -79,9 +79,9 @@ const NEGATION_PATTERNS: readonly RegExp[] = [
  * they are not instructions.
  */
 const STATEMENT_PATTERNS: readonly RegExp[] = [
-  /(?:已经|已|刚才|刚刚)[^，。；！？]{0,24}(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整|处理|补)/u,
+  /(?:已经|已|刚才|刚刚)[^，。；！？]{0,24}(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整|处理|补|优化|完善|纠正|替换|整理|清理|修|改好|完成)/u,
   /(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整|处理)了(?:[，。；！？\s]|$)/u,
-  /(?:需要|应该|应当|必须|得|该)\s*(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整|处理)/u,
+  /(?:需要|应该|应当|必须|得|该|要)\s*(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整|处理|优化|完善|纠正|替换|整理|清理|修|补)/u,
   /(?:有没有|是否)\s*(?:应该|需要|该|要)/u,
   /\b(already|have (?:already )?(?:fixed|changed|updated|added|removed|deleted)|i(?:'ve| have) (?:fixed|changed|updated)|needs? (?:to be )?(?:a )?(?:fix|change|update)|needs? (?:to be )?(?:fixed|changed|updated|removed|deleted)|the fix needed|should (?:we|i|it)|ought to)\b/iu,
 ];
@@ -104,6 +104,18 @@ const TOPIC_PATTERNS: readonly RegExp[] = [
   /^(?:关于|对于|针对|至于|就)/u,
   /^(?:regarding|about|as for|concerning|for)\b/iu,
   /(?:的修复|的修改|的改动|的修正|的更新|的方案|的建议|的问题|the fix (?:in|to)|the change (?:in|to)|the update (?:to|in))/iu,
+];
+
+/**
+ * Preconditions ("修改 X 前需要审批", "先确认再改").
+ *
+ * A clause that gates the change behind an approval or a prior step is not itself the
+ * command (W3R8 review).
+ */
+const PRECONDITION_PATTERNS: readonly RegExp[] = [
+  /(?:前|之前)\s*(?:需要|需|必须|要|得|请|先)/u,
+  /(?:需要|需|必须|待|等)\s*(?:先)?\s*(?:审批|批准|确认|授权|同意|复核)/u,
+  /\b(?:before|prior to|pending approval|needs? approval)\b/iu,
 ];
 
 /** Hypotheticals and quotations are not instructions. */
@@ -217,6 +229,38 @@ function authorizedPaths(clause: string): string[] {
   return pathsIn(before).filter((path) => !excluded.has(path));
 }
 
+/**
+ * Imperative forms.
+ *
+ * A change is authorized only when the clause reads as a command: it opens with a
+ * change verb (after an optional polite lead-in) or it ends with one in command form
+ * ("X 的错别字麻烦处理下"). Everything else — statements, topical mentions, references,
+ * questions — stays read-only, so a phrasing outside this grammar asks for
+ * clarification instead of granting a write (W3R8 review).
+ */
+const POLITE_LEAD_PATTERN = /^(?:请|麻烦|帮我|帮忙|劳驾|please)\s*/iu;
+
+/** Adverbs and conjunctions that may precede the verb of a command. */
+const ADVERB_LEAD_PATTERN =
+  /^(?:(?:但|但是|而是|不过|然后|再|同时|也|另外|并且|而且|就|先|特别|重点|主要|务必|一定|直接|立刻|马上|尽快|顺便|顺手)\s*)+(?:要|需要|请|麻烦|帮我|帮忙)?\s*/u;
+
+const CHANGE_VERB_LEAD_PATTERN =
+  /^(?:修复|修正|更正|改掉|改成|改为|修改|改进|更改|改|实现|新增|添加|删除|移除|更新|补充|重命名|重构|调整|优化|完善|纠正|替换|换成|处理|整理|清理|修|补)/u;
+
+const CHANGE_VERB_LEAD_EN_PATTERN =
+  /^(?:fix|fixes|implement|update|updates|add|adds|remove|removes|delete|deletes|refactor|rename|change|changes|correct|corrects|edit|edits)\b/iu;
+
+const CHANGE_VERB_TAIL_PATTERN =
+  /(?:修复|修正|更正|改掉|改成|改为|修改|改进|更改|改|实现|新增|添加|删除|移除|更新|补充|重命名|重构|调整|优化|完善|纠正|替换|换成|处理|整理|清理|修|补)(?:一下|下|吧|掉|好)?[。！!\s]*$/u;
+
+/** True when the clause reads as an imperative command to change something. */
+function isImperative(clause: string): boolean {
+  const stripped = clause.replace(POLITE_LEAD_PATTERN, '').replace(ADVERB_LEAD_PATTERN, '');
+  if (CHANGE_VERB_LEAD_PATTERN.test(stripped)) return true;
+  if (CHANGE_VERB_LEAD_EN_PATTERN.test(clause)) return true;
+  return CHANGE_VERB_TAIL_PATTERN.test(clause);
+}
+
 interface ClauseReading {
   readonly paths: readonly string[];
   readonly instruction: boolean;
@@ -224,7 +268,10 @@ interface ClauseReading {
 }
 
 /** Classifies one clause: instruction, explanation, or neither. */
-function readClause(clause: string): ClauseReading {
+function readClause(raw: string): ClauseReading {
+  // Leading politeness and adverbs belong to the phrase, not to its meaning: "但要修复
+  // X" is the command "修复 X" with a conjunction in front (W3R8 review).
+  const clause = raw.replace(POLITE_LEAD_PATTERN, '').replace(ADVERB_LEAD_PATTERN, '');
   const paths = pathsIn(clause);
   if (matches(QUESTION_PATTERNS, clause)) {
     return { paths, instruction: false, explanation: true };
@@ -236,6 +283,9 @@ function readClause(clause: string): ClauseReading {
     return { paths, instruction: false, explanation: true };
   }
   if (matches(STATEMENT_PATTERNS, clause)) {
+    return { paths, instruction: false, explanation: true };
+  }
+  if (matches(PRECONDITION_PATTERNS, clause)) {
     return { paths, instruction: false, explanation: true };
   }
   if (matches(ADVICE_PATTERNS, clause)) {
@@ -251,16 +301,21 @@ function readClause(clause: string): ClauseReading {
     return { paths, instruction: false, explanation: true };
   }
   const modifies = MODIFICATION_PATTERN.test(clause) || MODIFICATION_EN_PATTERN.test(clause);
-  const readOnlyOnly =
-    (READ_ONLY_VERBS.test(clause) || READ_ONLY_VERBS_EN.test(clause)) && !modifies;
-  if (readOnlyOnly) {
+  const commandLead = CHANGE_VERB_LEAD_PATTERN.test(clause);
+  if (!commandLead && (READ_ONLY_VERBS.test(clause) || READ_ONLY_VERBS_EN.test(clause))) {
+    // A read/advice verb never authorizes, unless the clause itself opens with the
+    // change verb ("更新 X 的说明"): the read-only word there is a noun.
     return { paths, instruction: false, explanation: true };
   }
+  if (!isImperative(clause)) {
+    // Not a command: a mention, a report or an unclear phrasing asks for words.
+    return { paths, instruction: false, explanation: modifies || paths.length > 0 };
+  }
   const writable = authorizedPaths(clause);
-  if (modifies && writable.length > 0) {
+  if (writable.length > 0) {
     return { paths: writable, instruction: true, explanation: false };
   }
-  // A change without an authorized target: ask before writing.
+  // A command without an authorized target: ask which target before writing.
   return { paths, instruction: false, explanation: modifies || paths.length > 0 };
 }
 
