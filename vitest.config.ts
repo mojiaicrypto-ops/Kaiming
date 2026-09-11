@@ -15,6 +15,8 @@ export default defineConfig({
       '@agentdev/pi-runtime': fromRoot('packages/pi-runtime/src/index.ts'),
       '@agentdev/domain': fromRoot('packages/domain/src/index.ts'),
       '@agentdev/storage': fromRoot('packages/storage/src/index.ts'),
+      '@agentdev/knowledge': fromRoot('packages/knowledge/src/index.ts'),
+      '@agentdev/workspace': fromRoot('packages/workspace/src/index.ts'),
       '@agentdev/core': fromRoot('packages/core/src/index.ts'),
     },
   },

@@ -9,6 +9,8 @@
       "@agentdev/pi-runtime": ["./packages/pi-runtime/src/index.ts"],
       "@agentdev/domain": ["./packages/domain/src/index.ts"],
       "@agentdev/storage": ["./packages/storage/src/index.ts"],
+      "@agentdev/knowledge": ["./packages/knowledge/src/index.ts"],
+      "@agentdev/workspace": ["./packages/workspace/src/index.ts"],
       "@agentdev/core": ["./packages/core/src/index.ts"]
     }
   },
