@@ -373,10 +373,11 @@ export class Orchestrator {
       { ...withoutHash, hash: dispatchHash } as unknown as JsonObject,
       { identityPayload: withoutHash as unknown as JsonObject },
     );
-    const dispatchSnapshot = dispatchSnapshotSchema.parse({
-      ...withoutHash,
-      hash: frozen.hash,
-    });
+    const dispatchSnapshot = parseOrFail(
+      dispatchSnapshotSchema,
+      { ...withoutHash, hash: frozen.hash },
+      'dispatch snapshot',
+    );
 
     return withTransaction(this.store.db, () => {
       // The reservation happens in the same transaction as the Run row, so a
@@ -482,39 +483,41 @@ export class Orchestrator {
       parentRunId: chiefRunId,
     };
     const fingerprint = operationFingerprint(request);
-    if (input.operationId !== undefined) {
-      const existing = findEvent(this.store, {
-        names: ['chief_action_required'],
-        stopAt: (event) =>
-          event.entityId === chiefRunId && event.data['operationId'] === input.operationId,
-      });
-      if (existing !== undefined) {
-        // The same key must mean the same request: a replayed command returns the
-        // original result, a different request under a used key is a conflict
-        // (`protocol.md` §1/§7 `IDEMPOTENCY_CONFLICT`), never a silent no-op.
-        if (existing.data['fingerprint'] !== fingerprint) {
-          fail(
-            'IDEMPOTENCY_CONFLICT',
-            `operationId ${input.operationId} was already used for a different dispatch request`,
-            {
-              operationId: input.operationId,
-              chiefRunId,
-              existingFingerprint:
-                typeof existing.data['fingerprint'] === 'string'
-                  ? existing.data['fingerprint']
-                  : null,
-              requestedFingerprint: fingerprint,
-            },
-          );
-        }
-        return {
-          disposition: 'chief_action_required' as const,
-          runId: run.id,
-          workId: run.workId,
-          chiefTodo: String(existing.cursor),
-        };
+    // Without a caller key an identical request must still not file a second todo,
+    // so the fingerprint itself becomes the idempotency key (R6-09).
+    const operationId = input.operationId ?? `derived:${fingerprint}`;
+
+    const existing = findEvent(this.store, {
+      names: ['chief_action_required'],
+      stopAt: (event) => event.entityId === chiefRunId && event.data['operationId'] === operationId,
+    });
+    if (existing !== undefined) {
+      // The same key must mean the same request: a replayed command returns the
+      // original result, a different request under a used key is a conflict
+      // (`protocol.md` §1/§7 `IDEMPOTENCY_CONFLICT`), never a silent no-op.
+      if (existing.data['fingerprint'] !== fingerprint) {
+        fail(
+          'IDEMPOTENCY_CONFLICT',
+          `operationId ${operationId} was already used for a different dispatch request`,
+          {
+            operationId,
+            chiefRunId,
+            existingFingerprint:
+              typeof existing.data['fingerprint'] === 'string'
+                ? existing.data['fingerprint']
+                : null,
+            requestedFingerprint: fingerprint,
+          },
+        );
       }
+      return {
+        disposition: 'chief_action_required' as const,
+        runId: run.id,
+        workId: run.workId,
+        chiefTodo: String(existing.cursor),
+      };
     }
+
     // A replay is answered from the log above; only a *new* request needs both the
     // requester and the Chief Run to be able to act (`workflow.md` §5.3). A todo is
     // actionable only while its Chief Run can still dispatch (AC-045).
@@ -542,7 +545,8 @@ export class Orchestrator {
         data: {
           reason: 'agent_dispatch',
           requestedBy: run.id,
-          operationId: input.operationId ?? null,
+          operationId,
+          operationIdSource: input.operationId === undefined ? 'derived' : 'client',
           fingerprint,
           workId: run.workId,
           role: request.role,
@@ -587,7 +591,11 @@ export class Orchestrator {
         runId: run.id,
       });
     }
-    const snapshot = dispatchSnapshotSchema.parse(frozen.payload);
+    const snapshot = parseOrFail(
+      dispatchSnapshotSchema,
+      frozen.payload,
+      'frozen dispatch snapshot',
+    );
     if (snapshot.hash !== run.dispatchSnapshotId) {
       fail('STALE_ARTIFACT', `dispatch snapshot hash mismatch for Run ${run.id}`, {
         runId: run.id,
@@ -683,5 +691,36 @@ export class Orchestrator {
 export function professionalSpec(
   input: Omit<ProfessionalDispatchSpec, 'kind'>,
 ): ProfessionalDispatchSpec {
-  return professionalDispatchSpecSchema.parse({ ...input, kind: 'professional' });
+  return parseOrFail(
+    professionalDispatchSpecSchema,
+    { ...input, kind: 'professional' },
+    'professional dispatch spec',
+  );
+}
+
+/**
+ * Parses with a contract Schema, reporting problems in the protocol error space.
+ *
+ * `protocol.md` §1 requires `VALIDATION_ERROR` (with the offending fields) for bad
+ * input; letting a raw `ZodError` escape would hand callers an error shape the
+ * protocol does not define (R6-10).
+ */
+function parseOrFail<T>(
+  schema: {
+    safeParse(value: unknown):
+      | { readonly success: true; readonly data: T }
+      | {
+          readonly success: false;
+          readonly error: { readonly issues: readonly { path: PropertyKey[]; message: string }[] };
+        };
+  },
+  value: unknown,
+  what: string,
+): T {
+  const parsed = schema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  const issues = parsed.error.issues.map(
+    (issue) => `${issue.path.map(String).join('.') || '(root)'}: ${issue.message}`,
+  );
+  fail('VALIDATION_ERROR', `${what} is invalid: ${issues.join('; ')}`, { issues });
 }

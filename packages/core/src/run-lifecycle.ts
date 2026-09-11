@@ -14,7 +14,7 @@
  *
  * Supervision, heartbeats and crash recovery build on these rows in WP-05.
  */
-import type { Attempt, Budget, JsonObject, Run, RunStatus } from '@agentdev/contracts';
+import type { Attempt, Budget, Event, JsonObject, Run, RunStatus } from '@agentdev/contracts';
 import { canTransitionRun, isTerminalRunStatus } from '@agentdev/domain';
 import { withTransaction, type ProjectStore } from '@agentdev/storage';
 import { ProtocolError, type ProtocolErrorCode } from './errors.js';
@@ -38,6 +38,8 @@ export const ACTIVE_PARENT_STATUSES: readonly RunStatus[] = [
 export interface RunUsage {
   readonly tokensUsed: number;
   readonly measured: boolean;
+  /** Provider-reported cost, when available (`data.md` §2 `budget.cost`). */
+  readonly cost?: number;
 }
 
 /** Terminal states a caller may settle a Run into. */
@@ -148,7 +150,10 @@ export class RunLifecycle {
     status: TerminalRunStatus,
     usage: RunUsage = { tokensUsed: 0, measured: false },
   ): Run {
-    if (status === 'cancelled') return this.cancel(runId);
+    validateUsage(usage);
+    // Cancellation goes through the propagating path, but a measured usage report
+    // for the cancelled Run is still booked (R6-03).
+    if (status === 'cancelled') return this.cancel(runId, usage);
     return this.end(runId, status, (run) => ({ outcome: status, workId: run.workId }), usage);
   }
 
@@ -185,7 +190,8 @@ export class RunLifecycle {
    * The parent's own transition is validated *before* any child is touched, and
    * the whole cascade commits or rolls back together.
    */
-  cancel(runId: string): Run {
+  cancel(runId: string, usage: RunUsage = { tokensUsed: 0, measured: false }): Run {
+    validateUsage(usage);
     const run = this.requireRun(runId);
     if (!canTransitionRun(run.status, 'cancelled')) {
       fail('VALIDATION_ERROR', `Run ${run.id} cannot move ${run.status} → cancelled`, {
@@ -195,10 +201,12 @@ export class RunLifecycle {
     }
     return withTransaction(this.store.db, () => {
       this.cancelDescendants(run);
-      return this.applyEnd(run, 'cancelled', () => ({ outcome: 'cancelled', workId: run.workId }), {
-        tokensUsed: 0,
-        measured: false,
-      });
+      return this.applyEnd(
+        run,
+        'cancelled',
+        () => ({ outcome: 'cancelled', workId: run.workId }),
+        usage,
+      );
     });
   }
 
@@ -219,33 +227,48 @@ export class RunLifecycle {
       });
     }
     validateUsage({ tokensUsed: usage.tokensUsed, measured: true });
-    if (usage.cost !== undefined && (!Number.isInteger(usage.cost) || usage.cost < 0)) {
-      fail('VALIDATION_ERROR', `cost must be a non-negative integer, got ${String(usage.cost)}`);
-    }
-    const already =
-      findEvent(this.store, {
-        names: ['run.ended'],
-        stopAt: (event) => event.entityId === run.id && event.data['reconciled'] === true,
-      }) !== undefined;
-    if (already) return run;
+    validateCost(usage.cost);
+    // The whole decision happens inside the transaction: two callers racing on the
+    // same Run must not both pass the "already settled" check (DC-52).
     return withTransaction(this.store.db, () => {
+      const recorded = this.settlementOf(run.id);
+      if (recorded !== undefined && recorded.data['tokensUsed'] === usage.tokensUsed) {
+        // Replaying the recorded usage is a no-op; anything else must not become a
+        // silent second charge that would release another Run's hold (R6-01/R6-04).
+        return run;
+      }
+      if (recorded !== undefined) {
+        fail(
+          'IDEMPOTENCY_CONFLICT',
+          `Run ${run.id} already booked ${JSON.stringify(recorded.data['tokensUsed'])} tokens`,
+          {
+            runId: run.id,
+            recordedTokens: recorded.data['tokensUsed'] ?? 0,
+            requested: usage.tokensUsed,
+          },
+        );
+      }
       const { charged, uncovered } = this.settleBudget(run, {
         tokensUsed: usage.tokensUsed,
         measured: true,
+        ...(usage.cost === undefined ? {} : { cost: usage.cost }),
       });
       this.store.events.append({
         name: 'run.ended',
         entityId: run.id,
+        // The Run row does not change on reconciliation, so the version repeats;
+        // `reconciliation` gives consumers an orderable key (DC-48).
         entityVersion: run.version,
         data: {
           outcome: run.status,
           workId: run.workId,
           reconciled: true,
+          reconciliation: this.reconciliationCount(run.id) + 1,
           tokensUsed: usage.tokensUsed,
           chargedTokens: charged,
           uncoveredTokens: uncovered,
           usageMeasured: true,
-          costKnown: true,
+          runCostKnown: true,
           releasedTokens: Math.max(0, run.budgetAllocation - charged),
           ...(usage.cost === undefined ? {} : { cost: usage.cost }),
         },
@@ -253,6 +276,32 @@ export class RunLifecycle {
       this.refreshCostKnown(run.workId);
       return this.requireRun(run.id);
     });
+  }
+
+  /**
+   * The terminal event that booked a Run's usage, if there is one.
+   *
+   * A measured settle and a reconciliation both count: the Run's cost is settled
+   * either way and must not be booked twice.
+   */
+  private settlementOf(runId: string): Event | undefined {
+    return findEvent(this.store, {
+      names: ['run.ended'],
+      stopAt: (event) => event.entityId === runId && event.data['usageMeasured'] === true,
+    });
+  }
+
+  private reconciliationCount(runId: string): number {
+    return scanEvents(this.store, { names: ['run.ended'] }).filter(
+      (event) => event.entityId === runId && event.data['reconciled'] === true,
+    ).length;
+  }
+
+  /** Every recorded settlement of one Run — diagnostics and tests. */
+  settlements(runId: string): readonly Event[] {
+    return scanEvents(this.store, { names: ['run.ended'] }).filter(
+      (event) => event.entityId === runId,
+    );
   }
 
   private end(
@@ -312,7 +361,8 @@ export class RunLifecycle {
         chargedTokens: charged,
         uncoveredTokens: uncovered,
         usageMeasured: usage.measured,
-        costKnown: usage.measured,
+        // Per-Run fact; the Work-level `costKnown` is recomputed separately (R6-06).
+        runCostKnown: usage.measured,
         releasedTokens: usage.measured ? Math.max(0, run.budgetAllocation - charged) : 0,
       },
     });
@@ -360,7 +410,7 @@ export class RunLifecycle {
     const charged = Math.min(usage.tokensUsed, run.budgetAllocation);
     const uncovered = Math.max(0, usage.tokensUsed - charged);
     this.release(run.workId, run.budgetAllocation);
-    this.charge(run.workId, charged);
+    this.charge(run.workId, charged, usage.cost);
     return { charged, uncovered };
   }
 
@@ -442,5 +492,24 @@ function validateUsage(usage: RunUsage): void {
       'VALIDATION_ERROR',
       `tokensUsed must be a non-negative integer, got ${String(usage.tokensUsed)}`,
     );
+  }
+  // An unmeasured usage of N tokens is contradictory: either the report exists
+  // (measured) or the amount is unknown (zero). Silently writing zero would drop
+  // the caller's number without telling anyone (R6-03 variant).
+  if (!usage.measured && usage.tokensUsed > 0) {
+    fail(
+      'VALIDATION_ERROR',
+      'tokensUsed must be 0 when measured is false; unknown usage keeps the reservation',
+      { tokensUsed: usage.tokensUsed },
+    );
+  }
+  validateCost(usage.cost);
+}
+
+/** `budget.cost` is a non-negative number (`data.md` §2), not necessarily integral. */
+function validateCost(cost: number | undefined): void {
+  if (cost === undefined) return;
+  if (!Number.isFinite(cost) || cost < 0) {
+    fail('VALIDATION_ERROR', `cost must be a non-negative number, got ${String(cost)}`);
   }
 }

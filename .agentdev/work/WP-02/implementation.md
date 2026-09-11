@@ -114,6 +114,20 @@
   - 记录更正：见 DC-53（严重度口径与 H-03 性质）。
 - 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **222 passed**；`pnpm test:integration` 124 passed。
 
+## T14 独立 Review 第六轮与修复（第六轮 FAIL → 修复）
+
+- 第六轮独立 Review 判 FAIL（1×P1、2×P2、7×P3，编号 R6-01..R6-10），对抗性核验确认结论成立（并指出报告严重度口径需修正），另补 3 条观察（`measured:false` 带非零用量被静默丢弃、`reconcile` 判定在事务外、`JoinCoordinator` 目前无生产调用方）。
+- 修复：
+  - R6-01（P1）：`reconcile` 只对「尚无实测/核销记录」的 Run 生效，判定与写入同一事务；同量重放无操作、异量 `IDEMPOTENCY_CONFLICT`（DC-52）。
+  - R6-02：`cost` 真正进入 `budget.cost`（并允许非整数，符合 `data.md` §2 的 `z.number().nonnegative()`）。
+  - R6-03：`settleRun(...,'cancelled',{measured:true})` 的实测用量会记账，不再静默丢弃。
+  - 对抗性观察1：`measured:false` 且 `tokensUsed>0` 属自相矛盾输入，直接 `VALIDATION_ERROR`，不允许静默写零。
+  - R6-04/R6-05/R6-06：核销事件带 `reconciliation: n`；每 Run 事实改名 `runCostKnown`，Work 级 `costKnown` 独立重算。
+  - R6-09：`operationId` 缺省时用请求指纹派生，事件记录 `operationIdSource`（DC-54）。
+  - R6-10：Core 入口的契约校验统一转成 `VALIDATION_ERROR`，不再抛裸 `ZodError`。
+  - 记录：DC-35 父状态描述更正（R6-08）、DC-46 补齐六种 Work 状态（R5-11 残留）、新增 DC-54..DC-56（含 M-2 定义与严重度口径）。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **225 passed**；`pnpm test:integration` 124 passed。
+
 ## T9 待办
 
 - 独立 Review 与 Test（独立上下文）、结算与 `docs/INDEX.md` 状态更新、以及 `docs/delivery/acceptance.md` 中本包 AC 的证据登记。

@@ -686,6 +686,134 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     expect(store.runs.find(held.id)?.status).toBe('queued');
   });
 
+  it('never re-books an already measured Run (R6-01/R6-04/R6-05)', () => {
+    const budgetRow = store.budgets.list({ where: 'work_id = ?', params: [WORK_ID] })[0];
+    if (budgetRow === undefined) throw new Error('budget fixture missing');
+    const chief = chiefRun();
+    const held = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+    const measured = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+    orchestrator.beginAttempt(measured.id);
+    // Settled with a real usage report: the reconciliation path must have nothing
+    // left to book.
+    orchestrator.settleRun(measured.id, 'completed', { tokensUsed: 1_000, measured: true });
+    const afterSettle = store.budgets.find(budgetRow.id);
+    const reservedAfterSettle = afterSettle?.tokensReserved ?? 0;
+
+    expect(orchestrator.lifecycle.reconcile(measured.id, { tokensUsed: 1_000 })).toBeDefined();
+    const afterReplay = store.budgets.find(budgetRow.id);
+    // No second charge, and the other Run's hold is untouched.
+    expect(afterReplay?.tokensUsed).toBe(1_000);
+    expect(afterReplay?.tokensReserved).toBe(reservedAfterSettle);
+    expect(store.runs.find(held.id)?.status).toBe('queued');
+    expect(orchestrator.lifecycle.settlements(measured.id)).toHaveLength(1);
+
+    // A different report for the same Run is a conflict, not a silent no-op.
+    expect(() => orchestrator.lifecycle.reconcile(measured.id, { tokensUsed: 9_000 })).toThrowError(
+      /already booked/,
+    );
+    expect(store.budgets.find(budgetRow.id)?.tokensUsed).toBe(1_000);
+
+    // The unknown-usage path still reconciles exactly once, with an orderable key.
+    const unknown = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+    orchestrator.beginAttempt(unknown.id);
+    orchestrator.settleRun(unknown.id, 'completed');
+    orchestrator.lifecycle.reconcile(unknown.id, { tokensUsed: 2_000, cost: 0.0025 });
+    const events = orchestrator.lifecycle.settlements(unknown.id);
+    expect(events).toHaveLength(2);
+    expect(events[1]?.data).toMatchObject({
+      reconciled: true,
+      reconciliation: 1,
+      chargedTokens: 2_000,
+      runCostKnown: true,
+    });
+    expect(events[1]?.data['costKnown']).toBeUndefined();
+    // Cost is charged to the Work budget and may be fractional (R6-02).
+    expect(store.budgets.find(budgetRow.id)?.cost).toBeCloseTo(0.0025);
+  });
+
+  it('books measured usage on cancellation and refuses a contradictory report (R6-03)', () => {
+    const budgetRow = store.budgets.list({ where: 'work_id = ?', params: [WORK_ID] })[0];
+    if (budgetRow === undefined) throw new Error('budget fixture missing');
+    const chief = chiefRun();
+    const cancelled = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+    orchestrator.beginAttempt(cancelled.id);
+    orchestrator.settleRun(cancelled.id, 'cancelled', { tokensUsed: 3_000, measured: true });
+    const ended = store.events
+      .readAfter(0, { limit: 100 })
+      .filter((event) => event.entityId === cancelled.id && event.name === 'run.ended');
+    expect(ended[0]?.data).toMatchObject({
+      outcome: 'cancelled',
+      tokensUsed: 3_000,
+      chargedTokens: 3_000,
+      usageMeasured: true,
+    });
+    expect(store.budgets.find(budgetRow.id)?.tokensUsed).toBeGreaterThanOrEqual(3_000);
+
+    // Unknown usage with a non-zero amount is contradictory and must be reported.
+    const other = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+    orchestrator.beginAttempt(other.id);
+    expect(() =>
+      orchestrator.settleRun(other.id, 'completed', { tokensUsed: 5, measured: false }),
+    ).toThrowError(/measured is false/);
+    expect(store.runs.find(other.id)?.status).toBe('running');
+  });
+
+  it('derives an idempotency key and reports bad input as VALIDATION_ERROR (R6-09/R6-10)', () => {
+    const chief = chiefRun();
+    const child = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+    const first = orchestrator.requestDispatch({
+      runId: child.id,
+      requestedRole: 'review',
+      goal: 'review without a key',
+    });
+    const second = orchestrator.requestDispatch({
+      runId: child.id,
+      requestedRole: 'review',
+      goal: 'review without a key',
+    });
+    expect(second.chiefTodo).toBe(first.chiefTodo);
+    const todos = store.events
+      .readAfter(0, { limit: 100 })
+      .filter((event) => event.entityId === chief.id && event.name === 'chief_action_required');
+    expect(todos).toHaveLength(1);
+    expect(todos[0]?.data).toMatchObject({ operationIdSource: 'derived' });
+    // A different request without a key is a genuinely different todo.
+    orchestrator.requestDispatch({
+      runId: child.id,
+      requestedRole: 'review',
+      goal: 'another goal',
+    });
+    expect(
+      store.events
+        .readAfter(0, { limit: 100 })
+        .filter((event) => event.entityId === chief.id && event.name === 'chief_action_required'),
+    ).toHaveLength(2);
+
+    // Schema failures surface as the protocol error, not a raw ZodError.
+    try {
+      professionalSpec({
+        workId: WORK_ID,
+        taskId: TASK_ID,
+        role: 'backend',
+        purpose: 'implementation',
+        goal: 'bad input',
+        scope: { ...emptyScope, writePaths: ['packages/storage/src'] },
+        stage: 'develop',
+        contextSelection: selection,
+        profileRevision: orchestrator.currentProfileRevision('backend'),
+        requiredOutputs: ['stage.submit'],
+        requiredChild: true,
+        joinPolicy: 'all',
+        budgetAllocation: 1_000,
+        parentRunId: chief.id,
+        bogusField: true,
+      } as never);
+      throw new Error('expected a validation error');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'VALIDATION_ERROR' });
+    }
+  });
+
   it('answers an operationId replay even after the Chief Run has ended (R5-09)', () => {
     const chief = chiefRun();
     const child = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
