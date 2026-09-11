@@ -143,3 +143,23 @@
   - 订正记录措辞（见 T12 修订），不再宣称启发式判定「永不」误判。
   - 回归网扩充：新增陈述/完成体/认识情态 8 句（不得授权）与日常祈使句 3 句（必须授权）。
 - 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **288 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace。
+
+## T14 独立 Review 第七轮与待办（FAIL）
+
+- 第七轮独立 Review 判 **FAIL**（3×P1、1×P2、3×P3），对抗性核验确认 FAIL 成立并补出三条文档化场景缺陷（未列入报告）：
+  - **W3R7-01（P1，848b5c4 引入的回归）**：`REQUEST_ACTION_PATTERN` 把 `看一下/检查一下/帮忙/帮我/麻烦/请` 当作修改动词，导致「帮我看一下 docs/INDEX.md」「请评估 docs/INDEX.md」这类**只读请求**落库写授权并可派发写 Run（对照实验：`7c01c9d` 不授权）。
+  - **W3R7-02（P1）**：`\b(?:已经|已|刚才|刚刚)` 在中文语境恒不匹配（正则缺陷），完成体与英文 `needs a fix`/`The fix needed in…` 等仍越权；第五轮登记的 17 句仍有 7 句越权。
+  - **W3R7-03（P1）**：`别改 A，改 B`、`不要修改 A，但要修复 B` 等混合指令仍误拒（AC-005/AC-006 正例失败）。
+  - **A1（P1，对抗性补）**：被否定/被排除的目标仍获写授权——`修改 docs/PLAN.md 而不是 docs/INDEX.md` 会把 `docs/INDEX.md` 也写进 `writePaths`（路径级排除缺失，属越权）。
+  - **A2（P1，对抗性补）**：中文混合意图不拆分——`解释 X 并修复 Y`、`解释 X，修改 Y` 只产出 assist、无 delivery/授权（`并`/`，`+动词 不在子句切分，且解释动词领起即整子句只读）；反向 `先解释 X，再修改 Y` 会把 X 也纳入写范围。
+  - **A3（P1，对抗性补）**：纯建议请求授权——`请给出 docs/INDEX.md 的修改建议`、`请列出 docs/INDEX.md 里的错误`（AC-004 规范场景）。
+  - **W3R7-04（P2）**：planVersion 2 的「不确定一律 fail-closed」「负向覆盖已登记越权语料」与 T13「一律只读」措辞仍与实现不符（记录名实不符）。
+  - **W3R7-05/06（P3）**：回落 scope 产生「有写 scope 但 `level=none` 且无 `authorizationRef`」的不可执行 Work；前轮未闭合项（`protocol.md` 对账、孤儿 blob、跨会话 `targetWorkId`、multipart/`projectId`、错误封装、记录数字）仍在。
+- **下一轮修复清单（按优先级）**：
+  1. 移除 `REQUEST_ACTION_PATTERN` 对判定修改意图的作用：`请/麻烦/帮我/看一下/检查/评估/总结/阅读/参考/确认/列出/建议` 一律**不得**单独构成修改指令；仅当子句出现真正的变更动词（修改/修复/改/更新/删除/移除/新增/添加/实现/处理/修/补/整理/清理/调整/优化/完善/纠正/替换）且与命名路径同子句时才授权。
+  2. 中文完成体/陈述检测改为不使用 `\b`：`(?:已经|已|刚才|刚刚)[^，。]{0,20}(?:修改|修复|更新|改|…)|…了(?:[，。]|$)`，并补 `needs a fix`/`The fix needed in` 英文陈述。
+  3. 目标级排除：同子句内 `而不是|而非|不是|instead of|别改|不要改` 之后的路径从 `writePaths` 中剔除；整子句被否定时不收集任何路径。
+  4. 子句切分补 `并`（解释+修改的中文混合）、`然后/再` 保持指令独立性；解释动词领起时若同子句后续出现「并/然后/再 + 变更动词 + 路径」应拆出 delivery 项。
+  5. 修 A1/A2/A3 后补齐正负例句（含被排除目标、中文混合、建议请求）到 `domain.test.ts` 与 HTTP 用例；订正 `implementation.md` T12/T13 与 planVersion 2 的措辞（不得宣称「一律/永不」）。
+  6. 修 W3R7-05（回落 scope 的 Work 必须与授权等级一致，或不为该 Work 建授权）与 P3 遗留项或在结算材料显式承接。
+- 当前状态：unit **288 passed**、integration 124 passed、typecheck/lint/build/docs:check 全绿；代码树 `e6c5c18`（本轮仅提交评审报告）。
