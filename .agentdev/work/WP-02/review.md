@@ -1,18 +1,19 @@
-# WP-02 独立 Review 报告（第十八轮）
+# WP-02 独立 Review 报告（第十九轮）
 
 - 评审对象：工作包 WP-02「主管与独立Agent调度」
-- 评审轮次：**第十八轮**（第十七轮 Review PASS → 独立 Test 判 FAIL：T-01/P1 → 开发修复 `3506630` 并提交 Test 报告 `b9a2d12` → 本轮复核 T-01 是否真修好、是否引入回归、同类模式是否仍在别处）
-- 冻结点：git `b9a2d12`（`docs(test): WP-02 independent test report, round 1 (FAIL: T-01)`），父提交 `3506630`（`fix(core): do not freeze a null secretRef (WP-02 Test T-01)`）
-- HEAD 校验：`git rev-parse HEAD` = `b9a2d1242bb7ea0ca950741b1be14b76cf32468d`；`git log -1` = `b9a2d12 docs(test): WP-02 independent test report, round 1 (FAIL: T-01)`
-- 工作树：复核开始、每组实验前、全部契约命令后、本报告写入前 `git status --porcelain` 均无输出（干净；`pnpm build` 只写被 `.gitignore` 忽略的 `dist/`）
+- 评审轮次：**第十九轮**（第十八轮 Review PASS@`a0b522d`（冻结 `b9a2d12`）→ 开发在 `cbf7471` 补修 R18-01/R18-02/R18-05＋model 价格投影 → 第二轮独立 Test PASS@`267751a` 指出 O1「`cbf7471` 无配套独立 Review」→ 本轮对代码树做独立 Review）
+- 冻结点：git `267751a`（`docs(test): WP-02 independent test report, round 2 (PASS)`）；**代码树等同 `cbf7471`**（`git diff --name-only cbf7471 HEAD` 仅 `.agentdev/work/WP-02/{review,test}.md`；`git diff --quiet cbf7471 HEAD -- packages apps scripts docs package.json` 无差异）
+- HEAD 校验：`git rev-parse HEAD` = `267751a17fbf859324ad81c746a215947e321152`；`git log -1` = `267751a docs(test): WP-02 independent test report, round 2 (PASS)`
+- 工作树：复核开始、每组实验前后、全部契约命令后、本报告写入前 `git status --porcelain` 均无输出（干净；`pnpm build` 只写被 `.gitignore` 忽略的 `dist/`）
 - 评审角色：Review（独立上下文，未读取任何开发或 Test 会话对话；只依据仓库文件、git 对象与我自己的实验）
-- 权威依据：`AGENTS.md`、`docs/rules/{workflow,agents}.md`、`docs/architecture/{ARCHITECTURE,data,protocol,reliability,context,execution}.md`、`docs/delivery/{implementation,acceptance}.md`（WP-02 与 AC-043/044/045/046/047/082）、`.agentdev/work/WP-02/{plan,discovery,implementation,review,test}.md` 全部记录、`packages/core/src` 全部 17 个文件、`packages/core/test` 全部 10 个文件、`packages/contracts/src/entities/structures.ts`、`packages/domain/src/routing.ts`、`packages/storage/src/{repository,snapshots 相关}.ts`
-- 方法：逐行核对「注释/记录/提交信息声称」与代码；在 `/tmp/wp02r18/` 自建夹具与 3 组实验脚本（`lib.mjs`、`exp1..exp3.mjs`），用 `pnpm build` 产出的 `packages/*/dist` 独立复现（软链 `/tmp/wp02r18/node_modules/@agentdev/*`）；**不修改产品代码、测试、`docs/**`、`plan/implementation/discovery/test`**
-- 工具：`node v24.8.0`、`pnpm 12.3.4`、macOS（宿主执行）
+- 权威依据：`AGENTS.md`、`docs/rules/{workflow,agents}.md`、`docs/architecture/{ARCHITECTURE,data,protocol,reliability,context,execution}.md`、`docs/delivery/{implementation,acceptance}.md`（WP-02 与 AC-043/044/045/046/047/082）、`.agentdev/work/WP-02/{plan,discovery,implementation,review,test}.md` 全部记录、`packages/core/src` 全部 17 个文件、`packages/core/test` 全部 10 个文件、`packages/contracts/src/entities/structures.ts`、`packages/storage/src/{repository,store,schema}.ts`
+- 方法：逐行核对「注释/记录/提交信息声称」与代码；在 `/tmp/wp02r19/` 自建夹具与 4 组实验（`lib.mjs`、`exp1..exp4.mjs`），全部通过软链 `/tmp/wp02r19/node_modules/@agentdev/*` 消费 `pnpm build` 产出的 `packages/*/dist`，**不 import 任何产品测试文件**；**不修改产品代码、测试、`docs/**`、`plan/implementation/discovery/test`**
+- 工具：`node v24.8.0`、`pnpm 12.3.4`、macOS（宿主执行）、Docker 28.4.0（integration 用）
+- 关键文件哈希（`git hash-object`）：`config.ts` `7872b64d…`、`model-gateway.ts` `82ac4fa0…`、`model-gateway.test.ts` `3dba7c10…`、`discovery.md` `36b3e372…`、`implementation.md` `853ee963…`
 
 ---
 
-## 0. 历史轮次结论摘要（保留，第一至十七轮）
+## 0. 历史轮次结论摘要（保留，第一至十八轮）
 
 | 轮次 | 冻结点 | 结论 | 计数 |
 |---|---|---|---|
@@ -32,164 +33,208 @@
 | 第十四轮 | `9f62582` | FAIL | 0×P1、1×P2、4×P3（R14-01..R14-05）＋对抗性 D-1..D-4 |
 | 第十五轮 | `088bdd7` | FAIL | 0×P1、1×P2、3×P3（R15-01..R15-04）；阻断项 R15-01 |
 | 第十六轮 | `f2cb657`（修复 `546593d`） | **PASS** | 0×P1、1×P2（非阻断，R16-01）、5×P3（R16-02..R16-06）；同轮对抗性核验异议 M-1/M-2 |
-| 第十七轮 | `3dc12db`（修复 `c695fcc`） | **PASS** | 0×P1、0×P2、5×P3（R17-01..R17-05）；第十六轮三项异议（R16-01 主诉、M-1、M-2）全部真实闭合，R15-01 未回退 |
-| （第七轮之后）独立 Test 第一轮 | `17dfe26` | **FAIL** | AC-043 不通过：T-01（P1）——无 `secretRef` 的 Provider 冻结成 `null`，每次调用 `CONFIG_INVALID`；其余 5 条 AC 通过；自建 51 断言 0 失败 |
+| 第十七轮 | `3dc12db`（修复 `c695fcc`） | **PASS** | 0×P1、0×P2、5×P3（R17-01..R17-05）；第十六轮三项异议全部真实闭合，R15-01 未回退 |
+| （第七轮之后）独立 Test 第一轮 | `17dfe26` | **FAIL** | AC-043 不通过：T-01（P1）——无 `secretRef` 的 Provider 冻结成 `null`，每次调用 `CONFIG_INVALID` |
+| 第十八轮 | `b9a2d12`（父 `3506630`） | **PASS** | 0×P1、2×P2（R18-01、R18-02）、2×P3（R18-03、R18-04）；T-01 真修好；建议重新独立 Test |
+| （第七轮之后）独立 Test 第二轮 | `cbf7471` | **PASS** | 6/6 AC 通过（AC-082 含 1 项 UNVERIFIED→WP-07）；73 断言 0 失败；提出 O1（`cbf7471` 无配套独立 Review） |
 
-**各轮要点**：本轮不重复；第十七轮报告正文见 `git show 17dfe26:.agentdev/work/WP-02/review.md`，第一、二轮原文见第二轮报告 §0，依此回溯。
+**第十八轮结论摘要（本轮评审的直接对象，原文见 `git show a0b522d:.agentdev/work/WP-02/review.md`）**：判 PASS，确认 T-01（P1）在 `3506630` 上真修好且无阻断回归；新增 R18-01（P2：`resolve`/`freeze` 双份 `FrozenProvider` 投影）、R18-02（P2：`complete()` 只认 `undefined`、`readFrozen` 不校验形状）、R18-03（P3：匿名 `testConnection` 无守卫、freeze 用例无 provider 形状断言）、R18-04（P3：T-01 未登记 DC）。**该报告不含 R18-05**（`grep -c R18-05` = 0，本轮实测），R18-05 由同轮对抗性核验补出、只落在 `cbf7471` 的 `discovery.md`/`implementation.md`。
 
-**追溯口径（沿用第五轮 DC-53/DC-56 与第十五至十七轮口径）**：行为/需求缺失＝P1（阻断）；局部质量/维护＝P2；建议＝P3。P2/P3 是否阻断由本轮按 `workflow.md` §6（第 65 行）「影响验收则阻断」判定。**L3/授权门禁类缺陷沿用 R9-01..R15-01 的 P2 标定。**
-
-**R17-01..R17-05 的关闭状态（本轮实读复核）**：`79790e0` 已逐条关闭——R17-01 → `discovery.md:277` DC-72；R17-02 → `discovery.md:247/:255` 现为 `['edit','write','git']`；R17-03 → `discovery.md:227`；R17-04 → `orchestrator.ts:270` 的 `environmentScope`；R17-05 → `routing.ts:151-160` 注释已改并注明 R17-05。**五条全部关闭 ✓**。
+**追溯口径（沿用第五轮 DC-53/DC-56 与第十五至十八轮口径）**：行为/需求缺失＝P1（阻断）；局部质量/维护＝P2；建议＝P3。P2/P3 是否阻断由本轮按 `workflow.md` §6「影响验收则阻断」判定。
 
 ---
 
 ## 1. 本轮结论
 
-**PASS（Review Passed）——Test T-01（P1：无 `secretRef` 的 Provider 冻结成 `null` 导致每次调用 `CONFIG_INVALID`）已在 `3506630` 上真实修好并被我独立复现验证；有 `secretRef` 的路径与 `testConnection` 不受影响、两条路径结论一致；未发现阻断性回归。本轮新增 0×P1、2×P2（R18-01、R18-02，均非阻断）、2×P3（R18-03、R18-04）；建议进入重新独立 Test。**
+**PASS（Review Passed）——`cbf7471` 对 R18-01/R18-02/R18-05 与 model 价格投影四项补修全部真实、可独立复现，未发现行为回归；第二轮 Test 的 O1（缺配套独立 Review）由本报告闭合。本轮新增 0×P1、1×P2（R19-01，非阻断）、2×P3（R19-02、R19-03）；WP-02 具备进入结算（Settlement）的条件。**
 
-三条主判据的独立证据：
+四条主判据的独立证据（全部为我自建脚本的原始观察值）：
 
-1. **无 `secretRef` 的 Provider 能完成调用**：`exp1` A7（`complete()` → `{ok:true,'pong'}`）、`exp2` 3b/3c（**经真实 `Orchestrator.dispatch` 建立的 Chief Run 与专业 Run** 都能完成调用）、3f（重启后仍成功）。
-2. **冻结快照真的不含该键**：`exp1` A3/A4（`readFrozen().provider` 无 own property `secretRef`）、A5（**SQLite 原始 payload 字符串**不含 `secretRef`）、A6/E1（也不含任何 `null` 字面量）、`exp3` P1（冻结 provider 恰为 providerId/type/baseUrl 三键）。
-3. **有 `secretRef` 的路径不受影响、`testConnection` 一致**：`exp1` B1（原始 payload 记录 `secretRef`）、B2/B3（解析出 `sk-test` 并下发）、C1–C4（密钥取不到时仍 `CONFIG_INVALID` 且 0 次 transport 调用，`testConnection` 同结论）、A12/A13（匿名 `testConnection` 成功且不带 apiKey）。
+1. **R18-01 单一投影为真**：`resolve().resolution.provider` 与 `freeze()` → `readFrozen().provider` 在匿名与配密两条路径上**深度相等**（`exp1` A3/B2、`exp4` B 8/8）；匿名投影恰为 `providerId/type/baseUrl` 三键（`exp1` A2/A4、`exp2` A2）；同一状态在全新世界里冻结得到**逐字节相同**的 hash（`exp1` F1：`3352d55a…` = `3352d55a…`）。
+2. **R18-02 归一为真**：历史/外来 `secretRef: null` 快照被 `readFrozen` 归一为「无 Secret」（`exp2` A1/A2、`exp4` A `null` 行），该 Run 可成功 `complete()` 且 transport 请求**无 `apiKey` 键**（`exp2` A3/A4），resolver **从未被以 `null` 查询**（`exp2` A5 `asked=[]`）；写入端复现不了该形状（`exp2` C1：`upsertProvider({secretRef:null})` 被 `providerInputSchema` 拒绝；`exp4` A2：`freeze` 拒绝含 `undefined` 的载荷）。
+3. **R18-05 凭证可用性为真**：注入 resolver 且 `secretRef` 取不到时，`availability` 返回 `{ok:false,code:'CONFIG_INVALID',reason:'secret MISSING_KEY is not available'}`（`exp3` A1–A3），`Orchestrator.dispatch` 以 `PROVIDER_UNAVAILABLE` 拒绝且 **run 行 0→0、snapshot 行 0→0**（`exp3` A5–A8，与 Test 的 1→1/3→3 同结论）；未注入 resolver 时保持放行、调用依旧 fail-closed（`exp3` B1–B4）；匿名 Provider 在注入 resolver 时不被误伤（`exp3` C1–C4，resolver 0 次调用）。
+4. **价格投影为真**：`inputPricePerMTokens:3`/`outputPricePerMTokens:15` 在有价模型上被写入冻结载荷并原样读回，`resolve()` 与 `readFrozen()` 的 `model` 深度相等（`exp1` B3/B4/B6）；无价模型**省略键而非写 `null`**（`exp1` C1），原始 payload 亦不含 `null`（`exp1` A7）。
 
-修复提交 `3506630` 只改 `packages/core/src/config.ts`（冻结投影省略缺省键）、`packages/core/test/model-gateway.test.ts`（+1 条回归用例）与 `implementation.md`（T26 记录），`git show --stat 3506630` 确认无其它运行代码触碰；契约命令 6/6 退出 0（unit **252** = 251+1，integration 124）。
+契约命令 **6/6 退出 0**（typecheck 0、lint 0、unit **255 passed**、integration **124 passed**、docs:check ok、build 7 工程 Done）；自建实验 **71 条断言、0 失败**；`git status` 全程干净、`HEAD=267751a`。**未发现任何 AC-043/044/045/046/047/082 关联回归。**
+
+**结论去向**：按 `workflow.md` §6，R19-01（P2）与 R19-02/R19-03（P3）均不影响 WP-02 的 6 条 AC，**不阻断**；建议在 Settlement 清单的「剩余风险/unresolved」中登记 R19-01，并把「读取面统一 Schema 校验」写入 WP-08/WP-09 承接（DC-73 已声明该承接）。
 
 ---
 
 ## 2. 契约命令原始结果（本轮实跑）
 
-执行方式：`export PATH="$HOME/.local/bin:$PATH"`，在仓库根目录**按序**执行，日志 `/tmp/wp02r18/commands.log`。
+执行方式：仓库根目录按序执行，日志 `/tmp/wp02r19/{typecheck,lint,unit,integration,docscheck,build}.txt`。
 
 | 命令 | 退出码 | 原始结果要点 |
 |---|---|---|
 | `pnpm typecheck` | **0** | `tsc -p tsconfig.json --pretty false`，无输出 |
 | `pnpm lint` | **0** | `node scripts/lint.mjs`：`Checking formatting...` / `All matched files use Prettier code style!` |
-| `pnpm test:unit` | **0** | `Test Files 17 passed (17)` / **`Tests 252 passed (252)`** / `Duration 7.69s`（= Test 冻结点的 251 + 1 条新回归用例） |
-| `pnpm test:integration` | **0** | `Test Files 10 passed (10)` / **`Tests 124 passed (124)`** / `Duration 90.94s`（含真实容器与 doctor 检查） |
+| `pnpm test:unit` | **0** | `Test Files 17 passed (17)` / **`Tests 255 passed (255)`** / `Duration 2.19s` |
+| `pnpm test:integration` | **0** | `Test Files 10 passed (10)` / **`Tests 124 passed (124)`** / `Duration 54.62s`（含真实容器与 doctor 检查） |
 | `pnpm docs:check` | **0** | `docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages` |
 | `pnpm build` | **0** | `packages/{contracts,domain,storage,core,pi-runtime}`、`apps/{cli,runner}` 共 7 个 workspace `build: Done` |
-| `git status --porcelain` | — | 开始、每组实验后、全部契约命令后、本报告写入前均**无输出**（干净） |
-| `git rev-parse HEAD` | — | `b9a2d1242bb7ea0ca950741b1be14b76cf32468d`（= 冻结点） |
+| `git status --porcelain` | — | 命令前后均无输出（干净） |
+| `git rev-parse HEAD` | — | `267751a17fbf859324ad81c746a215947e321152` |
+
+`docs:check` 的三个计数（15 文档 / 94 验收用例 / 11 工作包）与 Test 报告一致；unit 255 = Test 第二轮实测值（= 第十八轮 252 + `cbf7471` 新增 3 条用例：R18-05 准入、历史 `null` 归一、匿名 `testConnection`），**数量对得上**。
 
 **自建实验（观察值记录；标记即 Finding 证据）**：
-`exp1`（T-01 复核：匿名 provider × resolve/freeze/readFrozen/原始 payload/complete/testConnection/重启/显式 undefined/双角色独立）**35 passed / 0 failed / 1 INFO**；`exp2`（旧快照兼容 + `null` 写入拒绝 + Orchestrator 端到端 + dispatch 载荷无 null）**15 / 0（3 INFO）**；`exp3`（回归用例有效性证明：旧 payload 重现 T-01、新冻结形状三键）**6 / 0**。合计 **56 条断言、0 失败**。脚本与日志：`/tmp/wp02r18/{lib,exp1,exp2,exp3}.mjs`、`experiments.log`、`commands.log`；全部消费 `pnpm build` 后的 `packages/*/dist`，通过软链解析 workspace 包，**不 import 任何产品测试文件**。
+`exp1`（单一投影 + 价格字段 + 三键形状 + 同状态 hash 幂等）**18 passed / 0 failed**；`exp2`（历史 `null` 归一 + 畸形载荷两条 TypeError + 严格 Schema 拒绝）**14 / 0**；`exp3`（`availability` 凭证校验 + Orchestrator 端到端准入 + 无 resolver 放行 + 匿名不误伤 + resolver 抛异常）**18 / 0**；`exp4`（`secretRef` 值域真值表 + 三路等价 + 双重解析 + 一次性凭证）**21 / 0**。合计 **71 条断言、0 失败**。脚本与日志：`/tmp/wp02r19/{lib,exp1,exp2,exp3,exp4}.mjs`。
 
----
+`exp4` 值域真值表（`readFrozen` 对 `secretRef` 各取值的归一，原始输出）：
 
-## 3. T-01 复核（逐项：Test 的 D1–D6 是否闭合）
-
-| Test 断言 | 修复后的独立观察值（本轮） | 判定 |
+| 载荷写法 | `readFrozen().provider` 是否带 own key | 判定 |
 |---|---|---|
-| D1 未配 `secretRef` 仍可 `availability`/`dispatch` | `exp1` A1 `availability.ok === true`；`exp2` 3a `configSnapshotId` 为 64 位 hash，Run 正常创建 | 保持 ✓ |
-| D2 冻结投影把缺省写成 `null` | **已反转**：`exp1` A3–A6 / `exp3` P1/P6 —— `readFrozen().provider` 无 `secretRef` own key，SQLite 原始 payload 不含 `secretRef`、不含任何 `null` | **修好 ✓** |
-| D3 `complete()` 被拒 | **已反转**：`exp1` A7/A8/A9/A10 —— `{ok:true}`、transport 恰 1 次、请求**无 `apiKey` 键**（`hasOwnProperty === false`） | **修好 ✓** |
-| D4 对照组（配 `secretRef`） | `exp1` B1–B3：payload 含 `"secretRef":"local-secret"`，`apiKey='sk-test'` 正常下发；`exp2` 3d 逐调用核对键存在性 | 不受影响 ✓ |
-| D5 负例对照（`secretRef` 存在但取不到值） | `exp1` C1–C4：仍 `CONFIG_INVALID: secret MISSING_KEY is not available`，0 次 transport 调用，`testConnection` 同结论、同样 0 调用 | 不受影响 ✓ |
-| D6 重启后复现 | **已反转**：`exp1` D1–D3（重开库后 readFrozen 无键、`complete()` 成功、原始 payload 无 `secretRef`）；`exp2` 3e/3f（真实 restart 后 `recoveryView` 的冻结 provider 无键、调用成功） | **修好 ✓** |
-
-补充复核（Test 未覆盖的角度）：
-
-- **显式 `secretRef: undefined`** 与「键缺省」等价：`exp1` E1–E4（冻结省略、`secretConfigured=false`、磁盘 `config.toml` 省略、调用成功）。
-- **`testConnection` 一致性**：`exp1` A12/A13（匿名 → `{ok:true,latencyMs:0}` 且无 apiKey）、C3/C4（缺 Secret → 同一错误串且 0 调用）。Test 指出的「实时配置与冻结路径结论相反」已消失。
-- **回归用例确实能抓住旧行为**：`exp3` P2–P4 —— 把修复前 `freeze()` 会写出的同形 payload（`secretRef:null`）重新冻结后，`readFrozen().provider` 确实带 own key `secretRef:null`，`complete()` 精确重现 `{ok:false,code:'CONFIG_INVALID',message:'secret null is not available'}`。即 `model-gateway.test.ts:149` 的 `not.toHaveProperty('secretRef')` 在修复前必然失败，这条守卫是真的。
-- **AC-043 独立性未受影响**：`exp1` H1–H6 —— 同一时刻两个角色（一匿名、一带 Secret）冻结出不同快照，各自 baseUrl/apiKey 正确，互不串用。
+| 键缺省 | 否 | 归一 ✓ |
+| `null` | 否 | 归一 ✓（T-01/R18-02 的对象） |
+| `""`（空串） | 是（`secretRef:""`） | 非 `null`，交给 resolver/上层 ✓ |
+| `0` | 是 | 同上 ✓ |
+| 对象 `{nested:true}` | 是 | 同上 ✓（形状由上层校验，R19-01） |
+| 字符串 `"local-secret"` | 是 | 保留 ✓ |
+| 显式 `undefined` | **不可达**：`SnapshotWriter.freeze` 直接 `CONSTRAINT_VIOLATION`（`jsonObjectSchema` 拒绝非 JSON 值） | fail-closed ✓ |
 
 ---
 
-## 4. 回归扫描与「同类模式」扫描
+## 3. cbf7471 四项补修复核（逐条：声称 vs 代码 vs 实测）
 
-### 4.1 回归面
+| 条目 | 声称（commit / T27 / DC-73） | 代码实读 | 我的实测 | 判定 |
+|---|---|---|---|---|
+| R18-01 | 「`FrozenProvider` 投影收敛为 `frozenProviderOf` 单一实现（`resolve`/`freeze` 共用）」 | `config.ts:441` `const frozenProvider = frozenProviderOf(provider)`；`config.ts:491` `provider: { ...provider }`（即 `resolve` 已算好的那份）；`config.ts:536-543` 唯一实现 | `exp1` A3/A4/A5/B2/B3、`exp4` B 8/8：三路深度相等；匿名恰三键 | **真修好 ✓** |
+| R18-02 | 「`readFrozen` 把历史 `secretRef: null` 归一为缺省，`complete()` 同样按 `?? undefined` 处理」 | `config.ts:511-515` 解构 `{ secretRef, ...provider }` 后仅在非 `null`/`undefined` 时回填；`model-gateway.ts:139` `frozen.provider.secretRef ?? undefined` | `exp2` A1–A5：归一、调用成功、无 `apiKey` 键、resolver 未被以 `null` 查询；`exp4` A 全表 | **真修好 ✓**（残留 R19-01） |
+| R18-05 / DC-73 | 「`availability` 在注入 `SecretResolver` 时解析 `secretRef`，取不到即不可用；不注入保持放行」 | `model-gateway.ts:98-107`：`secretRef !== undefined && this.secrets !== undefined` 才解析，取不到返回 `CONFIG_INVALID` | `exp3` A1–A8（dispatch 拒且 0 写入）、B1–B4（无 resolver 放行、调用 fail-closed）、C1–C4（匿名不误伤） | **真修好 ✓**（新增边界见 O-3/R19-03） |
+| 对抗性 3.2 | 「`model` 冻结投影保留可选价格字段，`resolve()` 与 `readFrozen()` 形状一致」 | `config.ts:552-571` `frozenModelPayload` 存在才写两个价格键 | `exp1` B3/B4/B6/C1、A5 | **真修好 ✓** |
+| R18-03 | commit 称「tests: anonymous testConnection, frozen provider shape, legacy snapshot」 | `model-gateway.test.ts:210-218` 匿名 `testConnection` ✓、`:174-208` 历史快照 ✓；**`config.test.ts` 未被本提交触碰**（`git diff b9a2d12 cbf7471 --stat` 仅 `model-gateway.test.ts`） | 匿名 `testConnection` 守卫存在；「冻结 provider 形状断言」只有 `model-gateway.test.ts:150` 的 `not.toHaveProperty('secretRef')`，**没有** `config.test.ts` 三键形状断言 | **部分（记录口径不准，R19-02）** |
+| R18-04 | 「新增 DC-73 登记」 | `discovery.md:281-287` DC-73 三条 | 覆盖 `secretRef` 省略/归一、凭证可用性、价格字段与承接；末句「保证不因此崩溃」过强 | **到位（措辞需收窄，R19-03）** |
 
-修复提交的差异面**仅**为 `packages/core/src/config.ts` 的冻结投影、1 条测试用例与 `implementation.md` 记录。`config.ts` 的其余投影（`:136` `toToml`、`:448` `resolve`）在修复前**已经**使用「缺省即省略」，本次只是把 `freeze`（`:493-500`）对齐；因此：
+**无回归的三条结构性证据**：
 
-- 快照哈希只对「无 Secret 的 Provider」变化，且内容寻址快照不可变：修复前写下的行仍按原 hash 可读（`exp2` 1 证明其可读、只是网关仍拒绝，见 R18-02）；
-- `availability()`/`dispatch()` 走 `resolve()`，修复前就正常，现在与 `freeze()` 同源同形（`exp1` A2/A3 两处投影一致）；
-- `pnpm test:unit` 252、`pnpm test:integration` 124 全绿；本轮未发现任何 AC-043/044/045/046/047/082 关联回归。
+1. **改动面**：`git show --stat cbf7471` 仅 `discovery.md`（+7）、`implementation.md`（+11）、`config.ts`（+74/−31 行内的净增）、`model-gateway.ts`、`model-gateway.test.ts`；未触碰其他运行代码、`docs/**`、其他包。
+2. **向后兼容**：`frozenProviderOf` 与旧 `freeze` 写法对「有 `secretRef`」的 Provider 产出**同一对象**；仅「无 `secretRef`」的快照 hash 变化（`3506630` 已如此），且快照内容寻址不可变，旧 hash 仍可读（`exp2` A 用旧形状 hash 读取成功）。
+3. **三路一致**：`resolve()`、`freeze().resolution`、`readFrozen()` 的 `provider`/`model` 在匿名与有价两条路径全部深度相等（`exp1`/`exp4` B），即 R18-01 的「单一来源」不是注释而是可观测事实。
 
-### 4.2 同类「`?? null` 冻结投影 vs `undefined` 判定」全量扫描
+---
 
-我把全仓 `?? null` / `|| null` 站点逐一与其消费者对照（grep 证据 + `exp2` 4a–4f 实跑）：
+## 4. 「记录 vs 代码」核对（本轮任务项 2）
 
-| 站点 | 性质 | 是否存在 `=== undefined` 判定 | 结论 |
+| 记录 | 声称 | 代码/实测 | 裁定 |
 |---|---|---|---|
-| `config.ts:492-500`（**已修**） | 冻结权威（config snapshot） | `model-gateway.ts:125/128` | **T-01 的唯一现场，已闭合** |
-| `orchestrator.ts:542` `parentRunId: null`（`run.queued` 事件） | 事件 data | 否（仓内无消费者读该字段做 undefined 判定；DB 行由 `repository.ts:112` 把 NULL 解码成 `undefined`，`exp2` 4c 实测 Chief Run 的 `parentRunId === undefined`） | 无缺陷 |
-| `orchestrator.ts:607` `reason: null`（`request_dispatch` 指纹/事件） | 事件 data | 否 | 无缺陷 |
-| `orchestrator.ts:805/813/819/867` `level: level ?? null` | 错误 details | 否 | 无缺陷 |
-| `join.ts:262-264` `stageResult: … ? null : {…}` | 事件 data；`join.ts:308` 用 `??` 归一读取 | 否 | 无缺陷 |
-| `run-lifecycle.ts:137` `runnerId: null` | 事件 data | 否 | 无缺陷 |
-| `run-lifecycle.ts:250` `(recordedCost ?? null) === (usage.cost ?? null)` | **两侧都做 nullish 归一** | — | **正确范式**（与 T-01 相反方向的反例：读取端归一，故 `:390` 的显式 null 是安全的） |
-| `run-lifecycle.ts:260/262/288/390` `cost: null` | 错误 details / 事件 data | `:247` 读取处已 `?? null` 归一 | 无缺陷 |
-| `events-hub.ts:432/445/455/468` `project/work/run/conversation ?? null` | 协议订阅快照（「不存在」标记） | 否 | 无缺陷 |
-| `apps/runner/src/cli.ts:76` `modelsPath ?? null` | CLI 选项 | 否 | 无关 |
-
-**判定依据**：唯一对**冻结载荷**（JSON 文本列，`null` 会原样保留而非像实体列那样解码成 `undefined`）做 `=== undefined` 判定、且不先做 nullish 归一的消费者，是 `model-gateway.ts` 的 `secretRef`（`grep -rn "readFrozen\|frozenProfileOf"` 显示仅 `orchestrator.ts:737`（只取 profile）与 `model-gateway.ts` 两处；`profile.temperature` 全仓无消费者）。**除已修的 `config.ts` 外，没有第二处同类「写入端 null、读取端判 undefined」的活跃缺陷。** 残留的是读取端本身的脆弱性（R18-02）。
+| `implementation.md` T27 | typecheck/lint 通过；unit **255**、integration **124** | 实测 0/0/**255**/**124** | **一致 ✓** |
+| `implementation.md` T27 | R18-01/R18-02/R18-05/价格投影四项修复 | §3 逐条实测 | **一致 ✓** |
+| `implementation.md` T27 | 「补匿名 `testConnection` 与冻结 provider 形状断言」 | 匿名用例存在；**`config.test.ts` 无 provider 形状断言**（唯一形状守卫是 `model-gateway.test.ts:150`） | **不准（R19-02，P3）** |
+| `discovery.md` DC-73 | 单一投影来源、`secretRef` 缺省即省略、`readFrozen`/`complete()` 归一、`availability` 校验凭证、价格字段、WP-07/WP-08/09 承接 | 全部成立 | **一致 ✓** |
+| `discovery.md` DC-73 末句 | 「当前已归一 `secretRef` 并**保证不因此崩溃**」 | 缺 `provider` 字段 → 原生 `TypeError`；缺 `model` → `complete()` 原生 `TypeError`（`exp2` D1/E2） | **过强（R19-03，P3）** |
+| `test.md` O1 | `cbf7471` 无配套独立 Review；`review.md` 无 `R18-05` | `grep -c R18-05` = 0；`cbf7471` 位于 Review 冻结点之后 | **成立 ✓（本报告闭合）** |
+| `test.md` O2/O3/O4 | `readFrozen` 无 Schema 校验（`provider` 缺失抛原生 `TypeError`）；显式 `undefined` 在活行留 own key；无 resolver 时准入放行调用闭合 | O2 → `exp2` D1 复现（升级为 R19-01）；O3 → 我另测：own key 存在于**内存行**，`resolve`/`freeze`/`readFrozen`/TOML/原始 payload 一律省略；O4 → `exp3` B1–B4 复现 | **三条全部成立 ✓** |
+| `docs/INDEX.md` | 实现起点只结算到 WP-01 | 未误称 WP-02 已实现 | **正确 ✓** |
+| `plan.md` | 写入范围含 `packages/core/src`、`packages/core/test`、本包记录 | 本提交落在范围内 | **一致 ✓** |
 
 ---
 
-## 5. 新 Findings（R18-01..R18-04）
+## 5. 新 Findings（R19-01..R19-03）
 
-### R18-01 [P2，非阻断] `FrozenProvider` 投影在 `resolve()` 与 `freeze()` 重复实现——T-01 正是两处漂移的产物
+### R19-01 [P2，非阻断] `readFrozen` 归一只覆盖 `secretRef`；畸形冻结载荷仍以原生 `TypeError` 穿透 `complete()` 的 `GatewayResponse` 契约
 
-- **位置**：`packages/core/src/config.ts:444-449`（`resolve` 内构造 `frozenProvider`）与 `:492-500`（`freeze` 内逐字段重造同一投影）；`:478` 已解构出 `provider`，它**就是** `resolve` 返回的 `FrozenProvider`。
-- **事实（git 对象 + 实读）**：`git show c4763d5:packages/core/src/config.ts` 显示第一轮修复把「缺省即省略」只加进了 `resolve`（当时 `:446`），`freeze`（当时 `:494`）保持 `secretRef: provider.secretRef ?? null`，两份投影并行存在了 17 轮；`3506630` 才把 `freeze` 对齐。`exp1` A2/A3 证明两者现在一致，但一致性靠人工同步维持。
-- **影响**：纯维护性缺陷，当前无行为影响；但 R18-02 表明「投影漂移」的代价是 P1（每次调用失败），而 `resolve`/`freeze` 恰好是最容易被分别修改的两处。
-- **建议**：`freeze` 直接使用已解构的 `provider`（或抽出 `frozenProviderOf(provider: ProviderConfig): FrozenProvider` 供两处调用），并在 `config.test.ts:206-239` 的 freeze 用例补一条「冻结 provider 恰为 providerId/type/baseUrl（+可选 secretRef）」的形状断言。
-- **非阻断理由**：不改变任何观测行为，不影响 AC-043..047/082 的通过与否。
+- **位置**：`packages/core/src/config.ts:503-524`（`readFrozen` 仅对 payload 做类型断言 + 解构 `payload.provider`）；`packages/core/src/model-gateway.ts:136-157`（`complete()` 直接读 `frozen.provider.*`、`frozen.model.*`）。
+- **事实（我实跑，原始观察值）**：
+  - `exp2` D1：`writer.freeze('config', { role, model, effectiveContextLimit, revision })`（无 `provider`）后 `readFrozen` 抛 `TypeError: Cannot destructure property 'secretRef' of 'payload.provider' as it is undefined.`（`readFrozen` 自身崩溃，而非返回 `undefined` 或结构化错误）。
+  - `exp2` E1/E2：无 `model` 的载荷能通过 `readFrozen`（`model === undefined`），随后 `complete()` 抛 `TypeError: Cannot read properties of undefined (reading 'id')`——**违反了 `complete()` 的返回契约**（声明只会返回 `GatewayResponse` 联合，实际可抛原生异常，且不是 `ProtocolError`）。
+  - `exp4` A：`secretRef` 为 `""`/`0`/对象时被原样交给 resolver，读取面不做形状校验（与 DC-73 声明的「读取面校验属 WP-08/09」一致）。
+- **影响**：当前写入路径不可达（`SnapshotWriter.freeze` + `snapshotSchema` 保证 payload 自产自洽），所以**不影响 AC-043..047/082**；但读取面是「写入端不变式 + 读取端断言」的组合——与本包 T-01 的成因同族（一处不变式漂移即演变为 P1）。`reliability.md` §8 `restore` 整体复制 SQLite 快照，WP-05/08 的迁移或人工修复若写入旧形状/部分载荷，会让 Run 的每次调用以原生异常（而非结构化 `STALE_ARTIFACT`/`CONFIG_INVALID`）失败，且异常信息不含 Run/快照上下文。
+- **建议**：给 `FrozenProvider`/`ModelDescriptor` 补运行时 Schema（或在 `readFrozen` 内复用 `providerInputSchema` 的子集），把非法载荷转成结构化错误（`STALE_ARTIFACT`/`CONFIG_INVALID` + `details.snapshotId`）；`complete()` 改为在 `frozenProfileOf` 内完成校验，保持「只返回 `GatewayResponse`」的契约。
+- **非阻断理由**：WP-02 未发布，且所有受支持路径新写入的载荷形状由 `freeze()` 保证；DC-73 已登记该承接（WP-08/WP-09 读取面）。**但需写入 Settlement 的 unresolved/剩余风险**。
 
-### R18-02 [P2，非阻断] `ModelGateway.complete` 仍只把 `undefined` 当「无需 Secret」；含 `secretRef: null` 的冻结载荷被判成「Secret 不可用」，且 `readFrozen` 不校验载荷
+### R19-02 [P3，非阻断] T27 记录称「补冻结 provider 形状断言」，`config.test.ts` 实际未被本提交触碰
 
-- **位置**：`packages/core/src/model-gateway.ts:125-135`（`frozen.provider.secretRef === undefined` / `!== undefined` 判定）；`packages/core/src/config.ts:521-540`（`readFrozen` 仅做类型断言，**不对 payload 做 Schema 校验**）。
-- **事实（`exp2` 1、`exp3` P2–P5 实跑）**：把修复前 `freeze()` 会写出的同一 payload（`secretRef: null`）冻结后，`readFrozen().provider` 原样返回 `null`，`complete()` 返回 `{ok:false,code:'CONFIG_INVALID',retryable:false,message:'secret null is not available'}` 且 **0 次** transport 调用——与 T-01 的观察值逐字相同。即写入端已约定「缺省即省略」，读取端仍不接受语义等价的 JSON `null`。
-- **影响**：对**新写入**的配置快照无影响（T-01 已闭合）；受影响的是 (a) 由修复前版本写下的快照（升级/`reliability.md` §8 的 `restore` 会整体复制 SQLite 快照），(b) 任何绕过 `ConfigStore.freeze` 的载荷（手工修复、未来 WP-05 等级/配置迁移），都会再次以**方向误导**的错误信息失败。`readFrozen` 不校验形状，使这类载荷不会被读侧拒绝。
-- **建议**：(a) `complete()` 改为 nullish 归一（例如 `const ref = frozen.provider.secretRef ?? undefined;`，`testConnection` 同理），或 (b) 在 `readFrozen` 用 `FrozenProvider` 对应的运行时 Schema 解析 payload，把非法形状转成结构化的 `STALE_ARTIFACT`/`CONFIG_INVALID`，而不是让 `null` 冒充一个名为 `null` 的 Secret。
-- **非阻断理由**：WP-02 尚未发布（`docs/INDEX.md:28` 的实现起点只结算到 WP-01），不存在携带旧快照的部署；所有受支持路径新写入的关键字都省略，AC-043 在受支持路径上成立。
+- **位置**：`.agentdev/work/WP-02/implementation.md:278`；`packages/core/test/config.test.ts:207-239`（freeze 用例仍只断言 `role`/`effectiveContextLimit`/`reasoning`，无 provider 形状断言）；对照 `git diff b9a2d12 cbf7471 --stat` 仅 `model-gateway.test.ts`。
+- **事实**：R18-01/R18-03 的原始建议（第十八轮报告 §5）是「在 `config.test.ts` 的 freeze 用例补『冻结 provider 恰为 providerId/type/baseUrl（+可选 secretRef）』的形状断言」；本提交只补了 `model-gateway.test.ts:150` 的 `not.toHaveProperty('secretRef')`（该断言足以抓 T-01，我复现确认），未补 `config.test.ts` 的形状断言，但 T27 的措辞让读者以为两处都补了。
+- **影响**：记录准确性/可追溯性；不影响任何观测行为，也不改变验收（`resolve`/`freeze` 同源已由 `exp1`/`exp4` 证实）。
+- **建议**：把 T27 措辞改为与提交一致（「匿名 `testConnection` 用例 + `model-gateway.test.ts` 的冻结形状守卫」），或补上 `config.test.ts` 的三键形状断言。
 
-### R18-03 [P3，非阻断] 回归用例只覆盖 `complete()`，未覆盖无 `secretRef` 的 `testConnection`；freeze 用例不校验冻结 provider 形状
+### R19-03 [P3，非阻断] DC-73 的「保证不因此崩溃」过强；`availability` 新引入「resolver 必须无副作用且不抛异常」的隐式契约
 
-- **位置**：`packages/core/test/model-gateway.test.ts:140-156`（新增用例，只调 `complete()`）；`:239-247`（`testConnection` 用例仍使用带 `secretRef: 'local-secret'` 的夹具，`:26`）；`packages/core/test/config.test.ts:206-239`（freeze 用例只断言 `role`/`effectiveContextLimit`/`reasoning`，无 provider 形状断言）。
-- **事实**：我实测匿名 `testConnection` 行为正确（`exp1` A12/A13），但产品套件对该组合无守卫——Test 指出的「同配置两条路径结论相反」正是这类守卫缺失的后果。
-- **建议**：补一条匿名 Provider 的 `provider.test` 用例（断言 `ok === true` 且 transport 请求无 `apiKey`），并把 `exp3` P1 的三键形状断言加入 `config.test.ts`。
-- **非阻断理由**：仅测试覆盖度，不影响当前行为与验收。
-
-### R18-04 [P3，非阻断] T-01 修复未在 `discovery.md` 登记 DC 条目（本包惯例为「修复登记」）
-
-- **位置**：`.agentdev/work/WP-02/discovery.md`（DC-01..DC-72，无 T-01/冻结投影条目）；对照 `.agentdev/work/WP-02/implementation.md` 的 T26（已完整记录现象、根因、修复与验证）。
-- **事实**：本包此前的每次缺陷/技术修正都有 DC 条目（DC-37 第一轮 RE-01..RE-13、DC-69 R13-03、DC-71/DC-72），T-01 只有 implementation 记录；且 R17-02 刚做过同族「记录 vs 代码」对齐。
-- **影响**：可追溯性/记录一致性，不影响行为。
-- **建议**：追加一条 DC（例如「DC-73 冻结投影的可选键：缺省即省略」），写明 `secretRef` 的约定、`resolve`/`freeze` 单一投影来源（R18-01）与读取端 nullish 对称性/升级恢复边界（R18-02），避免第二份口径继续漂移。
-
----
-
-## 6. 其它观察（不计入 Finding 编号）
-
-1. **`readFrozen` 无 Schema 校验**：`snapshot.payload` 仅受 `jsonObjectSchema`（「是 JSON 对象」）约束，`config.readFrozen`（`config.ts:524`）是类型断言而非解析；`FrozenProvider`（`config.ts:67-72`）只有类型、无运行时 Schema。这是 R18-02 的载体，也是「冻结形状」无法在读取时被拒绝的结构原因。
-2. **`run-lifecycle.ts:250` 是同类问题的正确处理范式**：读取端对两侧都做 `?? null` 归一，因此 `:390` 的显式 `cost: null`（R7-02 有意保留）不会造成误判；建议 R18-01/R18-02 的修复沿用该范式（归一而非依赖书写习惯）。
-3. **实体列的 `null ↔ undefined` 往返是对称的**：`packages/storage/src/repository.ts:112` 把 NULL 解码为 `undefined`，`:75` 把 `undefined` 编码为 NULL；因此 `orchestrator.ts:572`（`chiefRunId === undefined`）、`join.ts:168`（`child.parentRunId === undefined`）等判定安全（`exp2` 4c 实测确认）。**不对称只发生在 JSON 文本列（快照 payload）**——这是本轮扫描的关键结论。
-4. **Test 报告的两条 P3 观察本轮仍成立**（沿其 §1/§6，非阻断）：`resolve` 对「模型不支持该 reasoning」返回 `CONFIG_INVALID`，而 `dispatch` 统一映射为 `PROVIDER_UNAVAILABLE`（`config.ts:426-431` vs `orchestrator.ts:458-466`）；`frozenProfileOf` 对快照缺失抛 `STALE_ARTIFACT` 而非 `NOT_FOUND`（`model-gateway.ts:99-111`，与缓存/恢复语义相关）。二者均属错误码/可观测性，建议归入 WP-10 协议面统一。
-5. **`provider.upsert` 的 `secret?:string` 参数仍被忽略**（`protocol.md` §5 声明的入参，`config.ts:322` 的 `upsertProvider` 不消费它）：配置了 Secret 值但未给出 `secretRef` 的 Provider 会被当作匿名端点调用。这属 DC-31 已登记的 WP-07（Secret 存储）/WP-10 边界，本轮不计为缺陷，但建议 RP 接线时显式拒绝「给了 secret 却没有 secretRef」的输入，避免静默降级为无鉴权调用。
-6. **产物归属**：修复提交 `3506630` 与 Test 报告提交 `b9a2d12` 分离，Review 报告将单独提交，符合「Review 产物与开发/测试提交分离」；`discovery.md`/`implementation.md` 的改动均属开发记录范围，本轮只读未改。
-7. **记录数核对**：`implementation.md` T26 声称的 252/124 与我的实测一致；未声称 `docs:check`/`build`（本轮我补齐为 6/6 退出 0）。`docs/INDEX.md` 的实现起点仍只结算到 WP-01，未误称 WP-02 已实现（正确）。
+- **位置**：`.agentdev/work/WP-02/discovery.md:285`（末句）；`packages/core/src/model-gateway.ts:92-107`（`availability`）、`:136-141`（`complete()` 再次解析）；`packages/core/src/model-gateway.ts:56-58`（`SecretResolver` 接口无异常/纯度约定）。
+- **事实（我实跑）**：
+  - `exp2` D1/E2：DC-73 的「保证不因此崩溃」只在 `secretRef` 这一维度成立，任意畸形载荷仍抛原生 `TypeError`。
+  - `exp4` C3：一次被准入的调用会 **resolver 解析两次**（`availability` 一次、`complete()` 一次，`asked=["local-secret","local-secret"]`）。
+  - `exp4` D1–D3：若 resolver 是「一次性凭证」（第一次返回、第二次返回 `undefined`），**准入会消费掉凭证**，随后同一次调用以 `CONFIG_INVALID` 失败且 0 次 transport——即新代码给 `SecretResolver` 加了一条未在接口/记录中声明的隐式契约：**必须可重复调用、无副作用、且不会抛异常**（`execution.md` §2「Gateway 在 Core 受信侧持有 Provider Secret」表明真实实现是查表读值，故当前无实际缺陷）。
+  - `exp3` D1/D2：resolver 抛异常时，`availability` 与 `Orchestrator.dispatch` 都不做包装，直接以原始 `Error` 逃逸（不是 `PROVIDER_UNAVAILABLE`，也没有 Work/Run 上下文）。
+- **影响**：属跨包接口契约与可观测性；WP-07（SecretStore）尚未实现，当前无实际缺陷，也不影响 6 条 AC。
+- **建议**：把 DC-73 末句收窄为「已归一 `secretRef`；任意畸形载荷的完整 Schema 校验归 WP-08/WP-09」；在 `SecretResolver` 的 JSDoc（及 DC-73）写明「`resolve` 必须幂等/无副作用，异常视为 `CONFIG_INVALID`」，并考虑让 `availability` 捕获 resolver 异常转成结构化失败。
 
 ---
 
-## 7. 剩余风险（未闭环，供重新 Test / Settlement 与产品方判断）
+## 6. 回归扫描与「同类模式」扫描
 
-1. **R18-01（新增，P2 非阻断）**：`resolve`/`freeze` 双份 `FrozenProvider` 投影，只靠人工同步；建议合并为单一来源。
-2. **R18-02（新增，P2 非阻断）**：读取端不接受 JSON `null`；由修复前版本写入的配置快照在升级/`restore` 后仍会以误导性错误失败，`readFrozen` 也不校验载荷形状。未发布故当前无实际部署受影响。
-3. **R18-03/R18-04（新增，P3）**：匿名 `testConnection` 无产品级守卫；T-01 修复未登记 DC 条目。
-4. **测试缺口（本轮缩小）**：`complete()` 的匿名 Provider 正例已由新用例覆盖（我给 `exp3` 证明该用例确实能抓住旧行为）；仍缺「匿名 `testConnection` 正例」「修复前快照（`secretRef:null`）兼容负例」的产品级用例。
-5. **沿前轮继续有效**：真实 Provider 纵向验证（真实 HTTP/usage/reasoning 映射）归 WP-10；daemon HTTP/WS 协议面归 WP-09/WP-10；AC-082 的工具层负例（重启后试读窄范围外文件被拒）归 WP-07；`provider.upsert` 的 Secret 本体存储与 `secretRef` 绑定归 WP-07/WP-10（DC-31）。
-6. **产品待决项（沿前轮）**：DC-60（`Assessment.goal`/`scope` 是否落库）、DC-64（风险旗标词表是否升为契约枚举）、DC-70（`l3Paths`/`l3Keywords` 判定语义）、DC-27/RE-06（快照 `:ID` 与 hash 并存）、DC-46（`dispatch` 不校验 `work.status`）、R17-01 登记后的 WP-06 等级升级路径。
-7. **并发未验证（沿前轮）**：预算准入检查与事务内 `reserve` 之间的窗口；`timed_out`/`interrupted`/`recovery_required` 终态无产生路径、`onChildSettled` 无生产调用方、`Work blocked(provider)` 投影属 WP-05。
+### 6.1 回归面（本轮实测）
+
+- 契约命令 6/6 全绿（§2）；unit 255（= 252 + 3）与 integration 124 与 Test 第二轮逐字一致。
+- `availability` 新增 Secret 解析后，**所有注入 resolver 的准入路径**都被我覆盖：Chief 角色（`exp3` A/B/C 的不同配置语义）、悬空凭证、匿名 Provider、无 resolver；未观察到误拒或误放。
+- 冻结形状兼容：旧 hash 可读、旧 `null` 可调用、有价/无价模型双向 round-trip；`resolve`/`freeze`/`readFrozen` 三路一致。
+- `provider.upsert` 传 `secretRef: undefined` 的活配置行（Test 的 O3）实测无副作用：内存行有 own key，`resolve`/`freeze`/`readFrozen`/TOML/原始 payload 一律省略；`canonicalJson` 在哈希计算时过滤 `undefined`（`dispatcher.ts:91-94`），`freeze` 对含 `undefined` 的载荷直接拒绝（`exp4` A2）。
+
+### 6.2 「`?? null` / `undefined` 判定」同类模式（承接第十八轮全量扫描，本轮只补新增点）
+
+| 站点 | 性质 | 消费者判定 | 结论 |
+|---|---|---|---|
+| `config.ts:507-515` `readFrozen` 归一（**本轮新增**） | 冻结载荷读取面 | 全仓读冻结 payload 的三处：`model-gateway.ts:113`（经 `frozenProfileOf`）、`orchestrator.ts:737`（只取 `profile`）、`config.ts` 自身 | 归一正确；形状校验缺失 = R19-01 |
+| `model-gateway.ts:139` `?? undefined`（**本轮新增**） | 读取端二次归一 | 自身 | 正确（纵深防御） |
+| `model-gateway.ts:98-107` `availability` 解析（**本轮新增**） | 准入面 | 无（结果为布尔） | 语义正确；隐式纯度契约 = R19-03 |
+| `model-gateway.ts:182-184` `testConnection` | **仍未归一**（只认 `undefined`） | 活配置行 | 无实际缺陷：`providerInputSchema` 是 `strictObject` 且 `secretRef` 必须是字符串，`null` 无法经 `config.update`/`upsertProvider`/TOML 进入活文档（`exp2` C1）；仅当受信侧手工写入字面量 `"null"` 时才会被当成 Secret 名——本包不实现该写入面，记为观察（O-4） |
+| `config.ts:137`/`:541` 两处省略键 | 写入面 | — | 与读取端一致 ✓ |
+| `config.ts:342` `secretConfigured` | 协议响应 | 无 | 无缺陷 ✓ |
+| `orchestrator.ts:542/607/805/819/867`、`join.ts:262-264`、`run-lifecycle.ts:137/250/260-390`、`events-hub.ts:432-468` | 事件 data / 错误 details | 无 `=== undefined` 判定，或读取端已 nullish 归一 | 沿用第十八轮结论：无缺陷 ✓ |
+
+**新增点结论**：`cbf7471` 引入的三处判定（`readFrozen` 归一、`complete` 二次归一、`availability` 解析）**方向一致、无第二处写入端/读取端漂移**；剩余脆弱性是读取面缺形状校验（R19-01），已登记承接。
 
 ---
 
-## 8. 方法与边界声明
+## 7. 其它观察（不计入 Finding 编号）
 
-- 本报告只依据仓库文件、`b9a2d12`/`3506630` 上的 git 对象与差异、以及我自己执行的命令；未读取任何开发或 Test 会话对话，未引用外部同名技能或历史方案。
-- 阅读深度：`packages/core/src/config.ts`（全文件逐行，重点 `:130-180`、`:320-360`、`:390-540`）、`model-gateway.ts`（全文）、`orchestrator.ts`（全文逐行，重点 `:245-345`、`:355-550`、`:560-750`、`:756-1006`）、`stage.ts`/`join.ts`/`run-lifecycle.ts`/`snapshots.ts`/`events.ts`（全文），`dispatcher.ts`/`auth.ts`/`identity.ts`/`requirements.ts`/`mailbox.ts`/`errors.ts`/`events-hub.ts`/`toml.ts` 按注释声称与 `?? null`/`undefined` 判定点抽查；`packages/core/test/{model-gateway,config,orchestrator}.test.ts`；`packages/contracts/src/entities/structures.ts`（`:120-175`）、`packages/domain/src/routing.ts`（`:145-200`）、`packages/storage/src/repository.ts`（`:70-130`）；`docs/architecture` 六篇、`docs/rules/workflow.md`、`docs/rules/agents.md`（系统注入全文）、`docs/delivery/implementation.md` WP-02、`docs/delivery/acceptance.md` AC-043..047/082、`.agentdev/work/WP-02/{plan,discovery,implementation,review,test}.md` 全部通读。
-- 覆盖的手段：静态逐行核对 + 「记录/注释/提交信息 vs 代码」对账 + 冻结投影 8 维真值表（`exp1`）+ 旧快照兼容与 Orchestrator 端到端（`exp2`）+ 回归用例有效性反证（`exp3`）+ 全仓 `?? null` 站点与消费者对照表 + `git show` 历史回溯（`c4763d5`/`3506630`）。
-- 唯一写入文件为本文件 `.agentdev/work/WP-02/review.md`；实验脚本与日志独立写在 `/tmp/wp02r18/`（`lib.mjs`、`exp1..exp3.mjs`、`experiments.log`、`commands.log`），使用 `pnpm build` 产出的 `packages/*/dist`，通过 `/tmp/wp02r18/node_modules/@agentdev/*` 软链解析 workspace 包，**不 import 任何产品测试文件**。
-- 未修改产品代码、测试、`docs/**`、`plan.md`、`implementation.md`、`discovery.md`、`test.md`；`pnpm build` 只写 `.gitignore` 中的 `dist/`。写入本报告前 `git status --porcelain` 无输出、`HEAD=b9a2d1242bb7ea0ca950741b1be14b76cf32468d`。
+1. **O-1（O1 闭合声明）**：本轮 Review 的对象是与 `cbf7471` 逐字节相同的代码树，且已独立复现 R18-01/R18-02/R18-05/价格投影四项；Test 第二轮的 O1（「`cbf7471` 的代码改动尚无独立 Review 覆盖」）**由本报告闭合**，不再阻断结算。
+2. **O-2（`freeze` 的 `{ ...provider }` 冗余但无害）**：`config.ts:491` 对 `frozenProviderOf` 的返回值再浅拷贝一次；功能等价（`exp1` F1 证明 hash 与旧实现一致），属可读性。
+3. **O-3（resolver 异常未包装、双重解析）**：见 R19-03；真实 SecretStore（WP-07）实现前无实际影响。
+4. **O-4（`testConnection` 与 `complete` 的归一不对称）**：`complete()` 走冻结载荷（可含历史 `null`）故必须归一，`testConnection` 只走活文档（Schema 拒绝 `null`）；当前无缺陷，但两条路径写法差异值得在 WP-10 统一（否则未来「活文档也支持 `null`」时又会分叉）。
+5. **O-5（沿第十八轮成立的两条 P3 观察）**：`resolve` 对「模型不支持该 reasoning」返回 `CONFIG_INVALID` 而 `dispatch` 统一映射 `PROVIDER_UNAVAILABLE`（`config.ts:426-431` vs `orchestrator.ts:458-466`）；`frozenProfileOf` 对快照缺失抛 `STALE_ARTIFACT` 而非 `NOT_FOUND`。二者属错误码/可观测性，建议归 WP-10 协议面统一。
+6. **O-6（`provider.upsert` 的 `secret?:string` 参数仍被忽略）**：`protocol.md` §5 声明的入参在 `config.ts:322` 未被消费（DC-31 已登记的 WP-07/WP-10 边界）；建议接线时显式拒绝「给了 secret 却没给 secretRef」的输入。
+7. **O-7（产物归属）**：修复提交 `cbf7471`、Test 报告提交 `267751a`、本 Review 报告单独提交，符合「Review 产物与开发/测试提交分离」；`discovery.md`/`implementation.md` 的改动属开发记录范围，本轮只读未改。
+8. **O-8（`docs:check` 计数）**：15 文档 / 55 链接 / 94 验收用例 / 9 需求 / 11 工作包，与 Test 第二轮一致；`docs/INDEX.md` 未误称 WP-02 已结算。
+
+---
+
+## 8. 剩余风险（未闭环，供 Settlement 与产品方判断）
+
+1. **R19-01（新增，P2 非阻断）**：`readFrozen`/`complete()` 对畸形冻结载荷抛原生 `TypeError`，绕过 `GatewayResponse` 契约；当前写入路径不可达，承接 WP-08/WP-09 读取面统一 Schema 校验。**建议列入 Settlement 的 unresolved（有理由、不影响本包 AC）。**
+2. **R19-02（新增，P3）**：T27 记录与提交内容在「`config.test.ts` 形状断言」上口径不一致；建议在 Settlement 前做一次记录级修正（不改代码时属文档路线）。
+3. **R19-03（新增，P3）**：DC-73 末句过强；`SecretResolver` 的幂等/无副作用/异常语义未声明；`availability` 使凭证解析次数变为 2 次/调用。
+4. **测试缺口（本轮维持并缩小）**：匿名 `complete`/`testConnection`、历史 `null` 兼容已由产品用例覆盖（`model-gateway.test.ts:141-218`，我反向确认该守卫能抓住旧行为）；仍缺「畸形载荷 → 结构化错误」的产品级用例（取决于 R19-01 是否在 WP-02 内修）。
+5. **承接包（沿前轮，均非本包缺陷）**：真实 Provider 纵向（HTTP/usage/reasoning 映射）→ WP-10；daemon HTTP/WS 协议面与错误码统一 → WP-09/WP-10；工具层「重启后试读窄范围外文件被拒」负例、SecretStore/`once` 消费 → WP-07；`readFrozen` 全量 Schema 校验 → WP-08/WP-09；并发（预算准入与 `reserve` 窗口、多进程 Join、超 lease 恢复）→ WP-08。
+6. **产品待决项（沿前轮，未变化）**：DC-60（`Assessment.goal`/`scope` 是否落库）、DC-64（风险旗标词表是否升为契约枚举）、DC-70（`l3Paths`/`l3Keywords` 判定语义）、DC-27/RE-06（快照 `:ID` 与 hash 并存）、DC-46（`dispatch` 不校验 `work.status`）、DC-72 登记后的 WP-06 等级升级路径。
+
+---
+
+## 9. 能否进入结算（Settlement）——**可以**
+
+按 `workflow.md` §6/§7 与 skill 的 Completion contract 逐项核对：
+
+| 条件 | 状态 |
+|---|---|
+| 有生效 Plan | ✓ `plan.md`（planVersion 4），写入口径与本轮实际改动面一致 |
+| 实现与 Plan/批准偏差一致 | ✓ `cbf7471` 落在 `packages/core/{src,test}` 与本包记录 |
+| 阻断 Finding 全部闭合并经独立核验 | ✓ 0×P1；R18-01/R18-02/R18-05/价格投影四项由本报告独立复现闭合；本轮无新阻断项 |
+| Test 已执行、失败与未覆盖显式 | ✓ Test 第二轮 PASS（6/6 AC；AC-082 含 1 项 UNVERIFIED→WP-07），O1 由本报告闭合 |
+| 产品变更经用户确认 | ✓ 本轮无产品行为变更（R18-05 是 `agents.md` §5 既有要求，DC-73 已登记） |
+| 相关文档/索引已检查 | ✓ `docs:check` 绿；`docs/INDEX.md` 未误称；**Settlement 仍需把 `docs/INDEX.md` 的实现起点补到 WP-02，并在 `docs/delivery/acceptance.md` 登记 AC-043..047/082 的证据** |
+| 代码树冻结且未再改动 | ✓ `HEAD=267751a`、代码树 = `cbf7471`、`git status` 干净、6/6 命令绿 |
+| 剩余风险已登记 | ⚠ 需在 Settlement 清单登记 R19-01（P2，非阻断）与 §8 承接包 |
+
+**判定：进入 Settlement 无阻断项。** 建议 Settlement 动作：(1) 更新 `docs/INDEX.md` 实现起点到 WP-02；(2) 在 `acceptance.md` 的 AC-043/044/045/046/047/082 登记证据（Test 第二轮 + 本轮 Review）；(3) 在完成清单 `unresolved` 记入 R19-01/R19-02/R19-03 与 §8 承接包；(4) 记录级修正 T27 措辞（R19-02，可选同行完成）。
+
+---
+
+## 10. 方法与边界声明
+
+- 本报告只依据仓库文件、`267751a`/`cbf7471`/`a0b522d`/`b9a2d12`/`3506630` 的 git 对象与差异、以及我自己执行的命令；未读取任何开发或 Test 会话对话，未引用外部同名技能或历史方案。
+- 阅读深度：`packages/core/src/config.ts`（全文件逐行，重点 `:130-180`、`:320-360`、`:390-584`）、`model-gateway.ts`（全文）、`orchestrator.ts`（调度与准入路径 `:225-245`、`:420-480`、`:730-745`）、`snapshots.ts`（全文）、`dispatcher.ts` 的 `canonicalJson`（`:88-100`）；`packages/core/test/model-gateway.test.ts`（全文）、`config.test.ts:195-282`、`orchestrator.test.ts` 夹具；`packages/contracts/src/entities/structures.ts`（`:109-162`、`:236-262`）；`docs/architecture/data.md`（全文）、`docs/architecture/execution.md`（Secret/工具边界）、`docs/rules/workflow.md`（§6/§7）、`docs/delivery/{implementation,acceptance}.md`（WP-02、WP-07、AC-043..047/082）、`.agentdev/work/WP-02/{plan,discovery,implementation,review,test}.md` 全部通读。
+- 覆盖的手段：静态逐行核对 + 「提交信息/记录/注释 vs 代码」对账 + 冻结投影三路等价（`exp1`/`exp4`）+ `secretRef` 值域真值表（`exp4` A）+ 历史 `null` 端到端与畸形载荷（`exp2`）+ 准入凭证校验与 Orchestrator 端到端写入计数（`exp3`）+ 一次性凭证/双重解析（`exp4` C/D）+ 活文档显式 `undefined`（`exp5`）+ `git show --stat`/`git diff` 冻结面对账。
+- 唯一写入文件为本文件 `.agentdev/work/WP-02/review.md`；实验脚本与日志独立写在 `/tmp/wp02r19/`，使用 `pnpm build` 产出的 `packages/*/dist`，通过 `/tmp/wp02r19/node_modules/@agentdev/*` 软链解析 workspace 包，**不 import 任何产品测试文件**。
+- 未修改产品代码、测试、`docs/**`、`plan.md`、`implementation.md`、`discovery.md`、`test.md`；`pnpm build` 只写 `.gitignore` 中的 `dist/`。写入本报告前 `git status --porcelain` 无输出、`HEAD=267751a17fbf859324ad81c746a215947e321152`。
