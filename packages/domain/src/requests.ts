@@ -106,53 +106,63 @@ const QUESTION_PATTERNS: readonly RegExp[] = [
 ];
 
 /**
+ * The refusal vocabulary, shared by the two patterns below.
+ *
+ * Both patterns are built from this one string, so the "is this a refusal?" and "does this
+ * clause head a refusal?" judgements can never disagree about which verbs count (W3R19-01).
+ */
+const REFUSAL_ADVERBS = '(?:再|去|来|赶紧|尽快|立刻|马上|立即|直接|急着|着急|忙|先)?';
+const REFUSAL_CHANGE_VERBS =
+  '(?:改掉|改成|改为|改|修改|改进|更改|修复|修正|更正|动|碰|删|删除|移除|更新|添加|新增|实现|补充|重写|优化|完善|纠正|替换|换成|处理|整理|清理|重命名|重构|调整|修|补)';
+const REFUSAL_VERBS_EN =
+  '(?:change|modify|update|delete|remove|add|implement|fix|repair|rename|refactor|adjust|clean|tidy|replace|rewrite|optimi[sz]e|polish|improve|correct|edit)';
+
+/**
  * A refusal *heads* the clause.
  *
  * A clause that merely quotes or reports a negation ("报告说不要修改 Y") is not the user
  * refusing anything, so a clause only counts as a refusal when a refusal marker opens it
- * (after an optional politeness prefix) and is itself followed by the change verb. The
- * verb requirement is what keeps `别人说不要修改 Y` out: there `别` is part of the noun
+ * (after an optional politeness prefix) and is itself followed by a change verb. The verb
+ * requirement is what keeps `别人说不要修改 Y` out: there `别` is part of the noun
  * `别人`, not a refusal (W3R17-01).
  */
-const REFUSAL_HEAD_PATTERN =
-  /^(?:(?:请|麻烦|帮我|帮忙|劳驾|please|kindly)\s*)?(?:先)?(?:不要|不用|不需要|无需|先不|暂不|先别|不必|不想|不愿|请勿|切勿|禁止|严禁|不许|不准|暂缓|延后|推迟|不|别|do not|don't|dont|never|no need to|without changing|not asking)\s*(?:再|去|来|赶紧|尽快|立刻|马上|立即|直接|急着|着急|忙|先)?\s*(?:改|修改|动|碰|删|移除|更新|添加|新增|实现|修复|重命名|重构|调整|处理|补|touch|change|modify|update|delete|remove|add|fix|refactor|rename|adjust|rewrite|polish)/iu;
+const REFUSAL_HEAD_PATTERN = new RegExp(
+  `^(?:(?:请|麻烦|帮我|帮忙|劳驾|please|kindly)\\s*)?(?:先)?` +
+    `(?:不要|不用|不需要|无需|先不|暂不|先别|不必|不想|不愿|请勿|切勿|禁止|严禁|不许|不准|暂缓|延后|推迟|不|别|do not|don't|dont|never|no need to|without changing|not asking)` +
+    `\\s*${REFUSAL_ADVERBS}\\s*(?:${REFUSAL_CHANGE_VERBS}|${REFUSAL_VERBS_EN})`,
+  'iu',
+);
 
 /** Refusals; `别` only counts word-initially (`错别字`/`识别`/`特别`/`分别` stay intact). */
 const NEGATION_PATTERNS: readonly RegExp[] = [
-  /(不要|不用|不需要|无需|先不|暂不|先别|不必|不想|不愿|请勿|切勿|禁止|严禁|不许|不准|暂缓|延后|推迟|不|(?<![\p{Script=Han}\w])别)\s*(?:再|去|来|赶紧|尽快|立刻|马上|立即|直接|急着|着急|忙|先)?\s*(?:改|修改|动|碰|删|移除|更新|添加|新增|实现|修复|重命名|重构|调整|处理|补)/u,
+  new RegExp(
+    `(?:不要|不用|不需要|无需|先不|暂不|先别|不必|不想|不愿|请勿|切勿|禁止|严禁|不许|不准|暂缓|延后|推迟|不|(?<![\\p{Script=Han}\\w])别)` +
+      `\\s*${REFUSAL_ADVERBS}\\s*${REFUSAL_CHANGE_VERBS}`,
+    'u',
+  ),
   /(不是要你|没有让你|并没有要求|先说不要|不用管)/u,
   /\b(do not|don't|dont|never|no need to|without changing|not asking|not asking you to)\b/iu,
 ];
 
 /**
- * Any negation marker, wherever it appears in a clause.
+ * Is this clause nothing but one explanation request about one named path?
  *
- * `NEGATION_PATTERNS` matches a negation *plus a known change verb*, so an unregistered
- * verb (`别重写`, `别优化`) escapes it — and its Chinese `别` guard deliberately ignores a
- * `别` that follows a Han character, so `说明别改 Y` escapes it too. This coarse marker is
- * used only to keep an explanation request that quotes a negation from licensing a later
- * command (W3R18-01); it never authorizes anything.
- */
-const NEGATION_MARKER_PATTERN = /(不|别|甭|勿|无需|没有|n't|\b(?:not|never|without|no need)\b)/iu;
-
-/** True when the clause contains a negation marker anywhere. */
-function containsNegationMarker(clause: string): boolean {
-  return NEGATION_MARKER_PATTERN.test(clause);
-}
-
-/**
- * Any change verb, in a finite or nominalized/gerund form, in either language.
+ * The explanation lead is stripped and what remains must be a single path token. A clause
+ * that mentions a path and *also* carries anything else — a negation with any wording, a
+ * change verb with any wording, a topic phrase — is a statement about that path, not a
+ * request for words, so it must not license a later command (W3R18-01, W3R19-01).
  *
- * An explanation request that names a change ("explain the ban on updating X", "说明修复
- * 计划") is talking *about* a change rather than asking for one, so it must not license a
- * later command in the same message (W3R18-01).
+ * This is a shape test rather than a vocabulary test: an unregistered negation
+ * (`说明莫碰 Y`) or an unregistered verb fails it by construction, because the residual is
+ * not a path. A clause with no path at all carries nothing to launder and stays benign.
  */
-const CHANGE_VERB_ANY_PATTERN =
-  /(改|修改|修正|更正|修复|删除|移除|更新|添加|新增|实现|重命名|重构|调整|处理|补|整理|清理|替换|优化|完善|润色|重写|\b(?:chang|modif|updat|delet|remov|add|implement|fix|repair|renam|refactor|adjust|clean|tidy|replac|rewrit|optimi[sz]|polish|improv|correct|edit))/iu;
-
-/** True when the clause names a change in any form. */
-function containsChangeVerb(clause: string): boolean {
-  return CHANGE_VERB_ANY_PATTERN.test(clause);
+function isPureExplanationOfPath(clause: string, lead: RegExp): boolean {
+  const residual = clause
+    .trim()
+    .replace(lead, '')
+    .trim()
+    .replace(/[。！!?？\s]+$/u, '');
+  return PATH_TOKEN_PATTERN.test(residual);
 }
 
 /**
@@ -280,7 +290,7 @@ const POLITE_LEAD_PATTERN = /^(?:请|麻烦|帮我|帮忙|劳驾|kindly|please)\
 
 /** Adverbs and conjunctions that may precede the verb of a command. */
 const ADVERB_LEAD_PATTERN =
-  /^(?:(?:但是|而是|不过|但|然后|再|同时|也|另外|并且|而且|就|先|特别|重点|主要|务必|一定|直接|立刻|马上|尽快|顺便|顺手)\s*)+/u;
+  /^(?:(?:但是|而是|不过|但|然后|再|同时|也|则|另外|并且|而且|就|先|特别|重点|主要|务必|一定|直接|立刻|马上|尽快|顺便|顺手)\s*)+/u;
 
 /** Number of change verbs in a clause, in either language. */
 function countChangeVerbs(clause: string): number {
@@ -440,12 +450,15 @@ export function routeMessage(body: string): MessageRouting {
     const polite = POLITE_TAIL_PATTERN.test(clause.text) && index === clauses.length - 1;
     const explanationLead =
       EXPLANATION_LEAD_PATTERN.test(clause.text) || EXPLANATION_LEAD_EN_PATTERN.test(clause.text);
-    // An explanation lead is only benign when the clause really is a request for words. If
-    // it also contains a negation ("说明别改 Y", "先解释为什么不要修改 Y") or names a change
-    // ("explain the ban on updating Y"), that content is being talked about, not requested,
-    // so the clause must not license a later command (W3R18-01).
+    // An explanation lead is only benign when the clause really is a request for words about
+    // one named path, or names no path at all: anything else (a quoted negation, a named
+    // change, a topic phrase around a path) is being talked about, not requested, so it must
+    // not license a later command (W3R18-01, W3R19-01).
     const benignExplanation =
-      explanationLead && !containsNegationMarker(clause.text) && !containsChangeVerb(clause.text);
+      explanationLead &&
+      (isPureExplanationOfPath(clause.text, EXPLANATION_LEAD_PATTERN) ||
+        isPureExplanationOfPath(clause.text, EXPLANATION_LEAD_EN_PATTERN) ||
+        pathsIn(clause.text).length === 0);
     // "别改 A，但要修复 B": 要 belongs to a correction and only counts after a refusal.
     let target = reading.target;
     const previousWasRefusal =

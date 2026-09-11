@@ -1,14 +1,14 @@
 # WP-03 实现记录（直接协作与说明产物）
 
-- planVersion: 3（`.agentdev/work/WP-03/plan.md`）
+- planVersion: 5（`.agentdev/work/WP-03/plan.md`）
 - 依赖：WP-02（结算提交 `f9b61e0`，验证代码树 `cbf7471`）
 
 ## 记录口径订正（第十七轮 Review W3R17-04 处理；适用于全部历史条目）
 
-1. **绝对表述的范围**：本文件 T11～T25 中的「一律/永不/按结构关闭/永不下发写授权」只在**当时已登记语料范围内**成立。第十七轮以「否定出现在引述/报告/前提中」的框架句式、第十八轮以「解释领起子句里引用未登记否定词」的框架句式先后证伪了无限定的版本；现行为口径以本文件 **T26/T27** 与 `plan.md` **planVersion 4** 为准，历史条目保留原文不改写。
-2. **「外置语料 40 条 0 fail-open」**：指会话外 `/tmp` 下的自建脚本（**不在仓库**，不可从仓库复现）。仓库内可复现的语料是 `packages/domain/test/domain.test.ts`；按第十八轮评审计数法（`/tmp/w3r18/probe4-registered.mjs`：只提取各 `for (const body of [` / `for (const [body, expected] of [` 块中的字符串字面量，不 import 产品测试文件）实测并重放 **178 例 0 偏差**：必须授权 14、拒绝纠正接续 8、多命令 4、必须只读 152（`implementation.md` 订正前曾写 14/9/3/141；差异源于计数法不同，现按上述方法固定）。另有 `apps/daemon/test/server.test.ts`、`packages/core/test/*` 的 HTTP/Core 断言。
+1. **绝对表述的范围**：本文件 T11～T25 中的「一律/永不/按结构关闭/永不下发写授权」只在**当时已登记语料范围内**成立。第十七轮以「否定出现在引述/报告/前提中」的框架句式、第十八轮以「解释领起子句里引用未登记否定词」的框架句式先后证伪了无限定的版本；现行为口径以本文件 **T26/T27/T28** 与 `plan.md` **planVersion 5** 为准，历史条目保留原文不改写。
+2. **「外置语料 40 条 0 fail-open」**：指会话外 `/tmp` 下的自建脚本（**不在仓库**，不可从仓库复现）。仓库内可复现的语料是 `packages/domain/test/domain.test.ts`；按评审计数法（`/tmp/w3r18/probe4-registered.mjs`：只提取各 `for (const body of [` / `for (const [body, expected] of [` 块中的字符串字面量，不 import 产品测试文件）实测并重放 **187 例 0 偏差**：必须授权 14、拒绝纠正接续 10、多命令 4、必须只读 159（第十九轮另一实现 `/tmp/w3r19/probe3-registered.mjs` 计 189 例、同样 0 偏差；两者差异只在计数实现，均不 import 产品测试）。历史数字 14/9/3/141（第十七轮）与 14/8/4/152（第十八轮）因语料与计数法变化而作废，现按上述方法固定。另有 `apps/daemon/test/server.test.ts`、`packages/core/test/*` 的 HTTP/Core 断言。
 3. **陈旧待办作废**：「`../` 越界改为 `VALIDATION_ERROR`」不再适用。现行为是**只读 + 澄清**（HTTP 202、零授权行、`authorizationId=null`、无 500），`domain.test.ts` 已覆盖 `../`、`/etc/`、`~/.ssh/` 三例。
-4. **`plan.md` 版本**：`planVersion` 已由 2 升至 **4**，登记 T21～T27 的实际代价、第十七/十八轮 P1/P2 的闭合口径与新增 fail-closed 代价。
+4. **`plan.md` 版本**：`planVersion` 已由 2 升至 **5**，登记 T21～T28 的实际代价、第十七/十八轮 P1/P2 的闭合口径与新增 fail-closed 代价。
 
 ## T1 Artifact 存储与版本链
 
@@ -325,7 +325,21 @@
   1. **解释领起改为条件良性**：`benignExplanation = explanationLead && !containsNegationMarker(clause) && !containsChangeVerb(clause)`。否定标记用粗粒度 `NEGATION_MARKER_PATTERN`（`不|别|甭|勿|无需|没有|n't|\b(not|never|without|no need)\b`），变更动词用 `CHANGE_VERB_ANY_PATTERN`（中文含 `重写/优化/完善/清理/整理/替换/润色`，英文用词干以覆盖分词形式）。该判定只用于**抑制**，从不产生授权。
   2. **礼貌前导不再良性（W3R18-02）**：`polite` 仅在子句是**最后一个**子句时成立，`谢谢，然后修改 X` 与 `谢谢，修改 X` 的口径统一为只读；`修改 X。谢谢` 仍授权。
   3. 解释领起与普通否定无关的路径不变：`解释 X 并修复 Y`、`explain X and fix Y`、`先解释 X，然后修改 Y` 仍授权（正例回归 0 偏差）。
-- 回归网：新增第十八轮 11 条「解释领起里引用否定/变更」负例 + 5 条「前导礼貌」负例；多命令补 4 目标一例（`修改 X，删除 Y，更新 Z，新增 W` ⇒ 四目标全部入 scope）。
+- 回归网：新增第十八轮 10 条「解释领起里引用否定/变更」负例 + 5 条「前导礼貌」负例；多命令补 4 目标一例（`修改 X，删除 Y，更新 Z，新增 W` ⇒ 四目标全部入 scope）。
 - 验证（本轮实跑）：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**（19 files）；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。
 - 独立复核证据（评审第十八轮脚本，消费本轮 build）：`/tmp/w3r18/probe2b-negation-gap.mjs` **opens by neg: []**（385 组合全部关闭）；`probe2-frame-hole.mjs` **573 句 open 0**；`probe2c-variants.mjs` 4/4 只读；`probe1-failopen.mjs` 1317 例 scope-violations 0（仅 2 例 `obs-polite-conj` 的旧观测期望，已被 T27 第 2 条取代）；`probe4-registered.mjs` **178 例 0 偏差**；`probe3-live.mjs`（真实 HTTP + 真实 Orchestrator）**fail-open 0、误拒 0、documented positive 0 偏差**；`/tmp/w3r17/probe2-framing.mjs` 31 句 0 偏差；`/tmp/w3r16/{probe1,probe2}` FAIL-OPEN 0；`/tmp/w3r14/probe6-prior` 前轮 P0/P1 0 失败。
 - 承接（第十八轮 P3）：`/tmp/w3r18/probe1` 的 `obs-polite-conj` 观测期望、`w3r17/probe3-live` 的 B-partial 期望、`w3r16/probe2-launder` 的「加性片段/前导礼貌应授权」期望均与 planVersion 4 口径相左，属探针期望陈旧，非实现缺陷；「消息授权 → `assess` → `dispatch(backend/implementation)`」的**仓库内**产品用例仍未落测试，原因是 `apps/daemon` 尚未装配 `Orchestrator`（`dispatch` 接线属 WP-04）；该断言以本轮真实 HTTP + 真实 Orchestrator 的外置探针证据替代，待 WP-04 落地后补入仓库测试。
+
+## T28 独立 Review 第十九轮与修复（解释领起的形状判定 + 拒绝词表单一来源）
+
+- 第十九轮 Review 判 **FAIL**（0×P0、1×P1、1×P2、3×P3）。P1（W3R19-01）：第十八轮把「良性解释请求」建成**两张枚举表**（`NEGATION_MARKER_PATTERN` 与 `CHANGE_VERB_ANY_PATTERN`），而同一文件的拒绝侧（`NEGATION_PATTERNS`/`REFUSAL_HEAD_PATTERN`）把 `动|碰|删` 也列为变更动词——两张表互相矛盾，于是「未登记否定 × 未登记变更动词」同时逃过两张表，解释领起豁免继续放行并列命令：`说明莫碰 Y，然后修改 X`、`解释停止碰 Y`、`说明避免碰 Y`、`说明未碰 Y`、`解释禁止触碰 Y`、`修改 X，说明莫碰 Y` 在 route 层 216/4290 越权，并在真实 HTTP 上 10 句落库授权行 + L2 delivery + assessment，经真实 `Orchestrator` 建立 10 个真实写 Run（含源码路径）。
+- 修复（`packages/domain/src/requests.ts`）：
+  1. **解释领起改为形状判定**：`benignExplanation = explanationLead && (isPureExplanationOfPath(clause, EXPLANATION_LEAD_PATTERN) || isPureExplanationOfPath(clause, EXPLANATION_LEAD_EN_PATTERN) || pathsIn(clause).length === 0)`；`isPureExplanationOfPath` 剥离解释领起后要求剩余部分是**恰一个路径 token**。未登记的否定/变更动词使剩余部分不是路径 ⇒ 整条消息只读（**默认拒绝**，不再依赖词表）；不含路径的解释子句没有可夹带的目标，仍可作混合意图前导（`explain the routing rules and fix X` 保持授权，HTTP/Core 既有英文正例不丢）。
+  2. **删除两张互相矛盾的枚举表**（`NEGATION_MARKER_PATTERN`/`containsNegationMarker`、`CHANGE_VERB_ANY_PATTERN`/`containsChangeVerb`），根因消除。
+  3. **拒绝侧单一来源（W3R19-04）**：`REFUSAL_ADVERBS`/`REFUSAL_CHANGE_VERBS`/`REFUSAL_VERBS_EN` 同时构造 `NEGATION_PATTERNS` 与 `REFUSAL_HEAD_PATTERN`；补入 `重写/优化/完善/清理/整理/替换/纠正/补充` 与英文 `rewrite/polish/optimize/adjust/clean/replace`，`不重写 Y，修改 X`、`不要清理 Y，修改 X` 授权纠正目标。
+  4. **`则` 归一化（W3R19-04）**：`ADVERB_LEAD_PATTERN` 补 `则`，`修改 Y，则修改 X` 与 `修改 Y，也修改 X` 一致（两目标入写范围）。
+  5. **记录订正（W3R19-03）**：`implementation.md:3` 头由 3 升为 5；T27 的「11 条负例」订正为 **10 条**；语料计数按评审计数法重述为 **187 例 0 偏差**（14/10/4/159），并注明第十八轮 14/8/4/152 已作废。
+- 回归网：新增第十九轮 7 条「解释领起 + 未登记否定/变更」负例、2 条「拒绝未登记动词的纠正」正例、2 条「无路径解释前导」正例（含英文原例 `explain the routing rules and 修复 docs/INDEX.md`）。
+- 验证（本轮实跑）：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**（19 files)；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。
+- 独立复核证据（评审第十八/十九轮脚本，消费本轮 build）：`/tmp/w3r19/probe1-cross.mjs` **10 357 例 deviations 1（唯一为 `特别修改 X` 的探针期望冲突：该探针把 `特别` 当作 `别` 的同形词期望只读，而 `特别修改 X` 是登记正例，按登记语料保留授权）、scope-expansion 0**；`probe1b-open-forms.mjs` **open forms none**；`probe2-live.mjs`（真实 HTTP + 真实 Orchestrator）**fail-open 0、误拒 0、documented positive 0 偏差**；`/tmp/w3r18/probe2b-negation-gap.mjs` **opens by neg: []**；`probe2-frame-hole.mjs` 573 句 **open 0**；`probe3-registered.mjs` 189 例 0 偏差；`/tmp/w3r17/probe2-framing.mjs` 31 句 0 偏差、`probe3-live.mjs` 仅 B-partial 旧期望；`/tmp/w3r16/probe5-http.mjs` fail-open 0（1 例误拒为已登记的 `修改 Y，X 保持不动`）、`probe6-e2e.mjs` 非命令写 Run 0；`/tmp/w3r14/probe6-prior` 前轮 P0/P1 0 失败；自建外置语料 fail-open 0。
+- 承接（第十九轮 P2/P3）：W3R19-02 的「每族 ≥3 条长期断言」已补入主流；`Orchestrator` 级仓库内用例仍缺（`apps/daemon` 未装配 `Orchestrator`，`dispatch` 接线属 WP-04），该断言以外置真实 HTTP + 真实 Orchestrator 证据替代；W3R19-05 协议对账承接。

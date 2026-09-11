@@ -336,6 +336,10 @@ describe('level routing (workflow.md §2)', () => {
       "don't update docs/PLAN.md, then update docs/INDEX.md",
       '不修改 docs/PLAN.md，修改 docs/INDEX.md',
       '先别改 docs/PLAN.md，改 docs/INDEX.md',
+      // Round 19: the refusal vocabulary is one shared list, so a refusal whose verb used to
+      // be unregistered also authorizes its correction.
+      '不重写 docs/PLAN.md，修改 docs/INDEX.md',
+      '不要清理 docs/PLAN.md，修改 docs/INDEX.md',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(true);
@@ -352,6 +356,19 @@ describe('level routing (workflow.md §2)', () => {
       expect(routing.items.map((item) => item.intent).sort()).toEqual(['assist', 'delivery']);
       expect([...new Set(routing.items.flatMap((item) => item.writePaths))]).toEqual([
         'docs/PLAN.md',
+      ]);
+    }
+
+    // A missing path leaves nothing to launder, so a pure topic-phrase explanation request
+    // stays a legitimate preamble for a mixed-intent message (W3R18-01).
+    for (const [body, expected] of [
+      ['explain the routing rules and 修复 docs/INDEX.md', ['docs/INDEX.md']],
+      ['请先说明现状，然后修改 docs/PLAN.md', ['docs/PLAN.md']],
+    ] as const) {
+      const routing = routeMessage(body);
+      expect(routing.explicitAuthorization, body).toBe(true);
+      expect([...new Set(routing.items.flatMap((item) => item.writePaths))], body).toEqual([
+        ...expected,
       ]);
     }
 
@@ -525,6 +542,16 @@ describe('level routing (workflow.md §2)', () => {
       '先修改 docs/INDEX.md，然后说明别改 docs/PLAN.md',
       'explain the ban on updating docs/PLAN.md, then update docs/INDEX.md',
       'update docs/INDEX.md after explaining why you must not change docs/PLAN.md',
+      // Round 19: the explanation guard is a *shape* test, so a negation or change verb with
+      // an unregistered wording fails it too — and any extra words around a named path in an
+      // explanation clause make the message read-only (declared fail-closed cost).
+      '说明莫碰 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '解释停止碰 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '说明避免碰 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '说明未碰 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '解释禁止触碰 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '修改 docs/INDEX.md，说明莫碰 docs/PLAN.md',
+      '解释 docs/INDEX.md 的原因，然后修改 docs/PLAN.md',
       // Round 18: a leading politeness clause carries no request, so a command joined to it
       // is a fragment (`谢谢，修改 X` and `谢谢，然后修改 X` now agree).
       '谢谢，然后修改 docs/INDEX.md',

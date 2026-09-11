@@ -1,6 +1,6 @@
 # WP-03 实现 Plan（直接协作与说明产物）
 
-- planVersion: 4
+- planVersion: 5
 - workId: WP-03
 - level: L2（新增 Core 产物/附件/预览模块与 `apps/daemon` HTTP 面；按 `docs/product/experience.md` §3、`docs/architecture/{data,protocol,execution}.md` 既有定义实现，不改产品语义）
 - authorization_ref: 用户目标轮次「继续」（2026-09-11）；上级授权为「我要完全实现这个产品，让你来实现」
@@ -16,6 +16,16 @@
 - 新增 `packages/domain/src/requests.ts`（确定性 Chief 路由：message → work items + 授权判定）与 `packages/core/src/messages.ts`（conversation.message.send 的事务实现）、`packages/core/src/identity.ts` 的 `userIdFromSubject`。
 - **判定边界（必须与 Review/Test 对齐的口径）**：`routeMessage` 是模型 Assessment（WP-04/WP-06）之前的确定性基线，按 `docs/rules/workflow.md` §1/§2 的**结构事实**判定（指令子句 = 修改动词 + 命名路径，且不含疑问/拒绝/假设/引用/陈述/完成体标记）。它**不承诺覆盖自然语言的全部表达**：本包采用的语法是**默认拒绝**的——只有当子句本身是「动词 + 单一命名路径」（或 `把/将/对 + 目标 + 动词`）时才授权；未登记的措辞（同义变更词如 `重写/润色/polish`、名词短语祈使如 `修改 X 中的错别字`、轻动词处置式 `对 X 进行修改`、多目标列表 `修改 X、Y`、排除式 `修改 Y 而不是 X`、范围声明 `修改 Y，X 保持不动`）一律落到只读路线并要求澄清。真正语义分类由 WP-04/06 的模型 Assessment 接管；本包的责任是：正向覆盖文档化场景（明确修复/混合意图/拒绝纠正）、负向覆盖已登记的越权语料、并对任何不确定 fail-closed。
 - 残余风险的登记见 `implementation.md` T12/T13/T26 与结算材料；Review/Test 应针对「已登记语料 + 边界声明」判定，而不是要求启发式覆盖任意新句式。
+
+### planVersion 5 变更（授权来源：第十九轮 Review 的 P1 修复轮；2026-09-11）
+
+- **解释领起良性改为形状判定（不再用词表）**：`benignExplanation` = 解释领起 **且**（剥离解释领起后剩余部分恰为一个命名路径 **或** 该子句根本不含路径）。
+  - 依据：第十八轮用「否定标记表 + 变更动词表」两张枚举表判定，第十九轮证明「未登记否定 × 未登记变更动词」会同时逃过两张表（`说明莫碰 Y`、`解释停止碰 Y`、`说明避免碰 Y`、`说明未碰 Y`、`解释禁止触碰 Y`），并叠加解释领起豁免重开写授权（route 层 216/4290，真实 HTTP 10 句建 10 个写 Run）。
+  - 新规则是**形状**判定：解释子句若点名了路径却又夹带任何别的内容（任何措辞的否定、任何措辞的变更、主题短语），剩余部分就不是路径 ⇒ 整条消息只读。不含路径的解释子句没有可夹带的目标，仍可作为混合意图的前导（`explain the routing rules and fix X` 保持授权）。
+- **拒绝侧词表合并为一处来源**：`REFUSAL_ADVERBS`/`REFUSAL_CHANGE_VERBS`/`REFUSAL_VERBS_EN` 同时构造 `NEGATION_PATTERNS` 与 `REFUSAL_HEAD_PATTERN`，两者不再可能对「哪些动词算变更」给出不同答案；补入 `重写/优化/完善/清理/整理/替换/纠正/补充` 等，使 `不重写 Y，修改 X` 授权其纠正目标。
+- **`则` 归一化**：`ADVERB_LEAD_PATTERN` 补入 `则`，`修改 Y，则修改 X` 与 `修改 Y，也修改 X` 口径一致（两目标均入写范围）。
+- **新增 fail-closed 代价**：解释子句中「路径 + 任意附加内容」（`解释 docs/INDEX.md 的原因，然后修改 Y`、`explain the ban on updating Y, then update X`）整条消息只读。
+- 计数口径：**187 例 0 偏差**（必须授权 14 / 拒绝纠正接续 10 / 多命令 4 / 必须只读 159，`/tmp/w3r18/probe4-registered.mjs`）。
 
 ### planVersion 4 变更（授权来源：第十八轮 Review 的 P1 修复轮；2026-09-11）
 
