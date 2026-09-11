@@ -57,6 +57,22 @@ const QUESTION_PATTERNS: readonly RegExp[] = [
   /^(如何|怎么|怎样|为什么|为何|能否|是否可以|可不可以|要不要|是不是|有没有)/u,
   /^(how|why|what|when|where|which|can|could|should|would|is|are|does|do)\b/iu,
   /(请问|帮我看看|能不能|可以吗)/u,
+  // An explanation is not an instruction, even when it names a concrete target
+  // ("explain why docs/INDEX.md needs a fix", W3R4 review).
+  /^(请?\s*(解释|说明|描述|介绍|讲讲|梳理|分析))/u,
+  /^\s*(please\s+)?(explain|describe|summari[sz]e|walk me through|tell me)\b/iu,
+  /(解释一下|说明一下|是怎么回事|有什么问题)/u,
+];
+
+/**
+ * Markers that explicitly refuse a change ("don't fix X", "不要修改 X").
+ *
+ * A refusal is the opposite of an execution instruction; the router must not turn it
+ * into a write authorization (W3R4 review).
+ */
+const NEGATION_PATTERNS: readonly RegExp[] = [
+  /(不要|别|无需|不用|不需要|先别|暂不|不是要你|没有让你|并没有要求)/u,
+  /\b(do not|don't|dont|never|no need to|not asking|not asking you to|without changing)\b/iu,
 ];
 
 const DOCUMENT_PATTERNS: readonly RegExp[] = [
@@ -64,30 +80,72 @@ const DOCUMENT_PATTERNS: readonly RegExp[] = [
   /\bdocument(ation)?\b/iu,
 ];
 
-/** Paths a message names: `a/b.md`, `packages/core/src/x.ts`, `` `path` ``. */
-const PATH_PATTERN =
-  /(?:^|[\s(`"'])((?:[\w.@-]+\/)+[\w.@-]+(?:\.[A-Za-z0-9]+)?|[\w.@-]+\.(?:md|ts|tsx|js|json|toml|yml|yaml|txt|html|css|py|rs|go))/gu;
+/** Extensions that mark a token as a file reference. */
+const FILE_EXTENSIONS = new Set([
+  'md',
+  'ts',
+  'tsx',
+  'js',
+  'jsx',
+  'json',
+  'toml',
+  'yml',
+  'yaml',
+  'txt',
+  'html',
+  'css',
+  'py',
+  'rs',
+  'go',
+  'sql',
+]);
 
-const MAX_WORK_ITEMS = 4;
+/** One whitespace/punctuation separated token. */
+const TOKEN_PATTERN = /[^\s,;:()"'`[\]{}<>，。；：（）【】]+/gu;
 
+/** A conservative path shape; anchored and free of nested quantifiers. */
+const PATH_TOKEN_PATTERN = /^[\w.@-]+(?:\/[\w.@-]+)*$/u;
+
+const MAX_TOKEN_LENGTH = 512;
+
+/**
+ * Paths a message names.
+ *
+ * The scan is linear (tokens, then an anchored shape test) so a 64 000-character body
+ * cannot make routing quadratic; a token counts as a path only when it has a
+ * separator or a known file extension.
+ */
 function pathsIn(body: string): string[] {
   const found = new Set<string>();
-  for (const match of body.matchAll(PATH_PATTERN)) {
-    const value = match[1];
-    if (value === undefined) continue;
-    // A trailing slash or a sentence-final period is punctuation, not a path.
-    found.add(value.replace(/[.,;:]$/u, ''));
+  for (const match of body.matchAll(TOKEN_PATTERN)) {
+    const raw = match[0];
+    if (raw.length > MAX_TOKEN_LENGTH) continue;
+    const token = raw.replace(/[.,;:]+$/u, '');
+    if (token.length === 0 || token.includes('://')) continue;
+    if (!PATH_TOKEN_PATTERN.test(token)) continue;
+    const extension = token.includes('.')
+      ? token.slice(token.lastIndexOf('.') + 1).toLowerCase()
+      : '';
+    const looksLikePath = token.includes('/') || FILE_EXTENSIONS.has(extension);
+    if (!looksLikePath) continue;
+    found.add(token);
+    if (found.size >= 32) break;
   }
-  return [...found].slice(0, 32);
+  return [...found];
 }
+
+const MAX_WORK_ITEMS = 4;
 
 function matches(patterns: readonly RegExp[], body: string): boolean {
   return patterns.some((pattern) => pattern.test(body));
 }
 
-function parentOf(path: string): string {
-  const index = path.lastIndexOf('/');
-  return index === -1 ? path : path.slice(0, index);
+/** Clause boundaries: sentences, list separators and coordinating conjunctions. */
+function splitClauses(text: string): string[] {
+  return text
+    .split(/(?:[;；。!！\n]+)|(?:[，,]\s*(?:and|then|然后|并且|同时)?\s*)|(?:\s+(?:and|then)\s+)/iu)
+    .map((clause) => clause.trim())
+    .filter((clause) => clause.length > 0);
 }
 
 /**
@@ -100,60 +158,78 @@ function parentOf(path: string): string {
  */
 export function routeMessage(body: string): MessageRouting {
   const text = body.trim();
-  const paths = pathsIn(text);
-  const asksForExplanation = matches(EXPLANATION_PATTERNS, text);
-  const isQuestion = matches(QUESTION_PATTERNS, text);
-  // A question is never an execution message, however concrete its named target.
-  const asksForChange = !isQuestion && matches(MODIFICATION_PATTERNS, text);
+  const clauses = splitClauses(text);
   const asksForDocument = matches(DOCUMENT_PATTERNS, text);
 
-  const items: MessageWorkItem[] = [];
-  if (asksForChange && paths.length === 0) {
-    // A modification request with no named target still needs a scope before it can
-    // be executed; the Chief asks for it rather than guessing (no silent write scope).
-    return {
-      items: [
-        {
-          intent: 'assist',
-          goal: 'clarify the modification target',
-          scope: { ...emptyScope(), readPaths: ['docs'] },
-          writePaths: [],
-        },
-      ],
-      explicitAuthorization: false,
-      reason: 'modification request without an explicit target: ask before writing',
-    };
+  // Each clause is classified on its own, so a mixed message keeps its explanation and
+  // its instruction apart (AC-006) while an explanation clause never authorizes a
+  // change just because the message mentions a path (AC-005, W3R4 review).
+  const instructionPaths: string[] = [];
+  let explanation = false;
+  for (const clause of clauses) {
+    const clausePaths = pathsIn(clause);
+    const clauseExplains = matches(EXPLANATION_PATTERNS, clause);
+    const clauseQuestion = matches(QUESTION_PATTERNS, clause);
+    const clauseNegated = matches(NEGATION_PATTERNS, clause);
+    const clauseModifies = matches(MODIFICATION_PATTERNS, clause);
+    if (clauseExplains || clauseQuestion) {
+      explanation = true;
+      continue;
+    }
+    if (clauseNegated) {
+      explanation = true;
+      continue;
+    }
+    if (clauseModifies) {
+      if (clausePaths.length === 0) {
+        // A modification request with no named target cannot be authorized; the Chief
+        // asks for the target instead of guessing a write scope.
+        explanation = true;
+        continue;
+      }
+      instructionPaths.push(...clausePaths);
+      continue;
+    }
+    if (clausePaths.length > 0) explanation = true;
   }
-  if (asksForChange && paths.length > 0) {
-    const readPaths = [...new Set(paths.map(parentOf))];
+
+  const items: MessageWorkItem[] = [];
+  const paths = [...new Set(instructionPaths)];
+  if (paths.length > 0) {
     items.push({
       intent: 'delivery',
       goal: text.slice(0, 2_000),
       // Reading the target is part of changing it, so both capabilities are declared:
       // an authorization with `readPaths` but no read operation is self-contradictory
       // and would fail the Core's capability check (W3R3-01).
-      scope: { ...emptyScope(), readPaths, writePaths: paths, operations: ['read', 'edit'] },
+      scope: {
+        ...emptyScope(),
+        readPaths: paths,
+        writePaths: paths,
+        operations: ['read', 'edit'],
+      },
       writePaths: paths,
     });
   }
-  const explanationIntent: MessageWorkItem['intent'] = asksForDocument ? 'document' : 'assist';
-  if (asksForExplanation || items.length === 0) {
+  if (explanation || items.length === 0) {
+    const mentionPaths = pathsIn(text);
     items.push({
-      intent: items.length === 0 && asksForDocument ? 'document' : explanationIntent,
+      intent: items.length === 0 && asksForDocument ? 'document' : 'assist',
       goal: text.slice(0, 2_000),
-      scope: { ...emptyScope(), readPaths: paths.length > 0 ? [...new Set(paths)] : ['docs'] },
+      scope: {
+        ...emptyScope(),
+        readPaths: mentionPaths.length > 0 ? [...new Set(mentionPaths)] : ['docs'],
+      },
       writePaths: [],
     });
   }
   const trimmed = items.slice(0, MAX_WORK_ITEMS);
   const explicit = trimmed.some((item) => item.writePaths.length > 0);
-  const reason = isQuestion
-    ? 'question: asks for an explanation even when it names a target, so it grants nothing'
-    : explicit
-      ? trimmed.length > 1
-        ? 'mixed message: one explanation Work and one authorized modification Work'
-        : 'explicit target: the message authorizes its own scope'
-      : 'question or explanation: read-only assist route';
+  const reason = explicit
+    ? trimmed.length > 1
+      ? 'mixed message: one explanation Work and one authorized modification Work'
+      : 'explicit instruction with a target: the message authorizes its own scope'
+    : 'question, explanation or refusal: read-only route, nothing granted';
   return {
     items: trimmed,
     explicitAuthorization: explicit,

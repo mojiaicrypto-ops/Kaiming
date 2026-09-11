@@ -145,23 +145,51 @@ export function sendMessage(
   // delivered while the fix continues (AC-006). Which intents a message has is the
   // Chief's assessment; this is the mechanism it drives.
   const routing = routeMessage(body);
+  const allowedIntents = ['assist', 'artifact', 'document', 'delivery'] as const;
+  for (const item of input.workItems ?? []) {
+    if (
+      item === null ||
+      typeof item !== 'object' ||
+      !allowedIntents.includes(item.intent) ||
+      typeof item.goal !== 'string' ||
+      item.goal.trim().length === 0
+    ) {
+      throw new ProtocolError(
+        'VALIDATION_ERROR',
+        'workItems entries must name an intent and a goal',
+        {
+          details: { item: JSON.stringify(item) },
+        },
+      );
+    }
+  }
   const explicitItems: readonly {
     readonly intent: 'assist' | 'artifact' | 'document' | 'delivery';
     readonly goal: string;
   }[] = input.workItems ?? routing.items;
+  // Client-supplied items are matched to routing scopes by position first, so two
+  // items of the same intent keep independent scopes (W3R4-01).
+  const scopeFor = (item: { readonly intent: string }, index: number): Scope | undefined =>
+    input.workItems === undefined
+      ? routing.items[index]?.scope
+      : routing.items.filter((candidate) => candidate.intent === item.intent)[
+          input.workItems.filter(
+            (candidate, position) => position < index && candidate.intent === item.intent,
+          ).length
+        ]?.scope;
   const works: Work[] = [];
   if (input.targetWorkId !== undefined) {
     works.push(requireWork(context, input.targetWorkId, conversation.id));
   } else {
-    for (const item of explicitItems) {
-      const routingItem = routing.items.find((candidate) => candidate.intent === item.intent);
+    for (const [index, item] of explicitItems.entries()) {
+      const scope = scopeFor(item, index);
       works.push(
         createAssistWork(context, {
           messageId,
           body: item.goal,
           now: before,
           intent: item.intent,
-          ...(routingItem === undefined ? {} : { scope: routingItem.scope }),
+          ...(scope === undefined ? {} : { scope }),
         }),
       );
     }
@@ -174,17 +202,24 @@ export function sendMessage(
   // the Authorization and binds it to the Work, so a delivery assessment has a real
   // `authorizationRef` to point at (AC-005).
   let authorizationId: string | null = null;
-  const granted = input.authorization ?? grantedByMessage(body, routing);
+  // A follow-up into an existing Work never rewrites that Work's authority facts
+  // (W3R4 review): no level change and no new authorization.
+  const modifyingWork =
+    input.targetWorkId === undefined
+      ? works.find((entry) => entry.scope.writePaths.length > 0)
+      : undefined;
+  const granted =
+    input.targetWorkId !== undefined
+      ? undefined
+      : (input.authorization ?? grantedByMessage(body, routing));
   if (granted !== undefined) {
     // A caller-provided authority may never exceed the scope the message itself
     // named; otherwise the Core would hand out write/environment authority nobody
     // asked for (W3R3 review).
     assertGrantWithinMessage(granted, routing);
   }
-  if (granted !== undefined) {
-    // The authorization belongs to the Work that will modify something, not to the
-    // first work item (W3R3-02).
-    const authorized = works.find((entry) => entry.scope.writePaths.length > 0) ?? work;
+  if (granted !== undefined && modifyingWork !== undefined) {
+    const authorized = modifyingWork;
     const row = context.store.authorizations.insert({
       sourceRef: { kind: 'message', id: messageId, version: '1' },
       workId: authorized.id,
@@ -193,9 +228,17 @@ export function sendMessage(
       operations: [...granted.operations],
       acceptedAt: new Date(before).toISOString(),
     });
+    // `workflow.md` §2.4 keeps L1 for presentation-only changes; a scope that
+    // declares operations is L2, which is also what the Core's routing floor
+    // enforces, so the recorded level and the gate agree (W3R4-D).
+    const level = routing.items.some(
+      (item) => item.intent === 'delivery' && item.scope.operations.length > 0,
+    )
+      ? ('L2' as const)
+      : ('L1' as const);
     const updated = context.store.works.update(
       authorized.id,
-      { authorizationRef: row.id, level: 'L1' as const },
+      { authorizationRef: row.id, level },
       authorized.version,
     );
     const index = works.findIndex((entry) => entry.id === authorized.id);
@@ -210,14 +253,14 @@ export function sendMessage(
     context.store.assessments.insert({
       workId: updated.id,
       intent: updated.intent,
-      level: 'L1',
+      level,
       semanticImpact: false,
       riskFlags: [],
       uncertainties: [],
       authorizationRef: row.id,
       policyRevision: 1,
       reason: routing.reason,
-    } as never);
+    });
   }
 
   // Validate and bind every upload before the message row exists, so a bad list

@@ -104,3 +104,19 @@
   - W3R3-08/09/10/11（P3）：`download.prepare` 返回 `validity` 并顺带 `prune()`；staged 配额按 owner 跨 Conversation 统计；记录数字与实测对齐（8 workspace、12 daemon 例、286 单测）。
 - 修复后验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **286 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。
 - 待办：第四轮独立 Review（重点复核 AC-005 授权端到端可用、越权两条、CSP 对账）→ 独立 Test → 结算。
+
+## T11 独立 Review 第四轮（评审判 PASS，对抗性核验证伪 → 修复）
+
+- 第四轮独立 Review 判 **PASS**（0×P1、3×P2、11×P3），但同轮对抗性核验以 HTTP 端到端证伪了「越权已闭合」这一支柱：**非执行消息仍产生可用的写授权**——`explain why docs/INDEX.md needs a fix`、`describe how to fix docs/INDEX.md`、`Please describe the fix needed in docs/INDEX.md`、`请解释为什么 docs/INDEX.md 需要 fix`、`don't fix docs/INDEX.md`、`不要修改 docs/INDEX.md`、`I am not asking you to fix docs/INDEX.md` 等都能落库 Authorization、把 Work 升到 L1 并派发写 Run（违反 AC-004/AC-005）。
+- 另补：`targetWorkId` 可把 `none` 级 Work 升为 L1、把 L3 Work 降为 L1 并覆盖其 `authorizationRef`（对抗性 B，违反「自动降级不支持」）；`Content-Security-Policy-Sandbox` 不是标准头，sandbox 纵深防御结论不成立（对抗性 C）；消息授权写入 L1 而 Core 的 `routingFloor` 要求 L2（对抗性 D）；`workItems:[null]`/`intent:'operation'` 造成 500 或非法 Work（对抗性 E）。
+- 修复：
+  - 路由改为**逐子句分类**（`splitClauses`）：解释句、疑问句、否定句（不要/别/don't/never/not asking）永不下发写授权；只有「修改动词 + 命名目标」的指令子句才产生 delivery 项与授权。混合消息因此仍能拆成 assist + delivery（AC-006），而纯解释/否定消息只得到只读 Work（AC-004/AC-005）。
+  - `pathsIn` 改为线性分词 + 锚定形状判定（原正则对长文本呈二次回溯，64k 消息会拖垮路由）。
+  - `targetWorkId` 追发消息**不再改写**目标 Work 的 `level`/`authorizationRef`（`granted` 仅在新建 Work 时产生，且只绑定到含写路径的 Work）。
+  - 消息授权的等级按 `routingFloor` 一致口径取 L2（scope 含操作），Assessment 与 Work 同步为 L2。
+  - `workItems` 逐项校验（intent ∈ assist/artifact/document/delivery、goal 非空字符串），非法项 `VALIDATION_ERROR`；同 intent 多 Work 按位置匹配各自 scope。
+  - 预览：保留 `execution.md` §45 的逐字 CSP 作为唯一的 `Content-Security-Policy`，sandbox 由 iframe 属性契约（`x-agentdev-preview-sandbox`）承担，删除无效的第二 CSP 头名。
+  - daemon 的 `message.received` 事件 data 与响应都带 `workIds`/`authorizationId`；`StorageError` 映射收窄、500 不再回显内部消息；`download.prepare` 返回 `validity` 并 `prune()`。
+  - 记录数字更正：unit **287**、integration 124、build **8** workspace、daemon 15 例。
+- 修复后验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **287 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。
+- 承接/待办：`protocol.md` §5 的 `conversation.message.send` 返回字段目前只列 `{messageId,workId,state,version}`，本包新增 `workIds`/`authorizationId` 属加法补充，需在文档侧对账（结算材料登记）；下一轮独立 Review 复核上述修复。

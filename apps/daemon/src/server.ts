@@ -232,6 +232,8 @@ export function createDaemon(options: DaemonOptions): Server {
           data: {
             messageId: sent.messageId,
             workId: sent.workId,
+            workIds: [...sent.workIds],
+            authorizationId: sent.authorizationId,
             attachmentIds: [...sent.attachmentIds],
             artifactIds: [...sent.artifactIds],
           },

@@ -25,11 +25,12 @@ export const PREVIEW_CSP =
   "img-src data: blob:; connect-src 'none'";
 
 /**
- * Second policy, sent alongside `PREVIEW_CSP`.
+ * Second policy, sent as an additional `Content-Security-Policy` header.
  *
- * Browsers enforce multiple `Content-Security-Policy` headers as an intersection, so
- * the documented policy stays verbatim while the sandbox also holds when the preview
- * is opened as a top-level document instead of inside the iframe.
+ * `execution.md` §6 puts the sandbox on the iframe (`allow-scripts`) and fixes the CSP
+ * string; this header carries the sandbox directive as well, and browsers intersect
+ * multiple CSP headers. (The earlier `Content-Security-Policy-Sandbox` header name was
+ * not a real header and is gone, W3R4 review.)
  */
 export const PREVIEW_SANDBOX_CSP = 'sandbox allow-scripts';
 
@@ -39,6 +40,7 @@ export const HTML_PREVIEW_MIMES = ['text/html', 'application/xhtml+xml'] as cons
 export interface PreviewHeaders {
   readonly 'content-security-policy': string;
   readonly 'content-type': string;
+  /** Additional `content-security-policy` value carrying the sandbox directive. */
   readonly 'content-security-policy-sandbox'?: string;
   /** The client puts the body into an iframe with exactly this sandbox attribute. */
   readonly 'x-agentdev-preview-sandbox': string;

@@ -485,6 +485,52 @@ describe('daemon HTTP surface (WP-03)', () => {
     expect(delivery?.authorizationRef).toBe(sent.authorizationId);
   });
 
+  it('refuses malformed work items and never rewrites an existing Work', async () => {
+    const bad = await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: CONVERSATION_ID,
+          body: 'do something',
+          workItems: [{ intent: 'operation', goal: 'deploy' }, null],
+        }),
+      }),
+    );
+    expect(bad.status).toBe(400);
+    expect(store.works.list()).toHaveLength(0);
+
+    // A follow-up into an existing Work must not change its level or authority.
+    const first = await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ conversationId: CONVERSATION_ID, body: 'explain the rules' }),
+      }),
+    );
+    const sent = (await first.json()) as { workId: string };
+    const before = store.works.find(sent.workId);
+    const followUp = await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: CONVERSATION_ID,
+          body: 'fix the typo in docs/INDEX.md',
+          targetWorkId: sent.workId,
+        }),
+      }),
+    );
+    expect(followUp.status).toBe(202);
+    const after = store.works.find(sent.workId);
+    expect(after?.level).toBe(before?.level);
+    expect(after?.authorizationRef).toBe(before?.authorizationRef);
+    expect(store.authorizations.list()).toHaveLength(0);
+  });
+
   it('parses multipart bodies without a framework dependency', () => {
     const boundary = 'agentdev-boundary';
     const body = Buffer.from(

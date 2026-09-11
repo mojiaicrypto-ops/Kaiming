@@ -278,6 +278,26 @@ describe('level routing (workflow.md §2)', () => {
 
     // A documentation request is its own intent.
     expect(routeMessage('write the documentation for the API').items[0]?.intent).toBe('document');
+
+    // Explanation-led, interrogative and negated messages must never authorize a
+    // change, even when they name a concrete path (W3R4 review).
+    for (const body of [
+      'explain why docs/INDEX.md needs a fix',
+      'describe how to fix docs/INDEX.md',
+      'Please describe the fix needed in docs/INDEX.md',
+      '请解释为什么 docs/INDEX.md 需要 fix',
+      "don't fix docs/INDEX.md",
+      '不要修改 docs/INDEX.md',
+      'I am not asking you to fix docs/INDEX.md, just explain it',
+      'how do I fix the typo in docs/INDEX.md?',
+    ]) {
+      const routing = routeMessage(body);
+      expect(routing.explicitAuthorization, body).toBe(false);
+      expect(
+        routing.items.every((item) => item.writePaths.length === 0),
+        body,
+      ).toBe(true);
+    }
   });
 
   it('classifies every contract operation as read-only, workspace write or environment', () => {

@@ -427,9 +427,11 @@ describe('attachments, artifacts and previews (WP-03)', () => {
     });
     // The Assessment records the routing evidence for that authorization.
     const assessment = store.assessments.list({ where: 'work_id = ?', params: [sent.workId] })[0];
+    // A scope that declares operations is L2 (`workflow.md` §2.4 keeps L1 for
+    // presentation-only changes), which is also the Core's routing floor.
     expect(assessment).toMatchObject({
       intent: 'delivery',
-      level: 'L1',
+      level: 'L2',
       authorizationRef: sent.authorizationId,
     });
     // The granted scope itself lives on the Authorization (DC-60 keeps the assessment
