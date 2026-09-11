@@ -128,6 +128,17 @@ const CHOICE_PATTERNS: readonly RegExp[] = [
   /\b(or leave|or not\b|or keep|yes or no|which (?:one|is better))\b/iu,
 ];
 
+/**
+ * Conditions that gate a command.
+ *
+ * A conditional clause makes the next clause hypothetical too: "一旦确认，修复 X" and
+ * "after you confirm, update X" ask for a future action, not for one now.
+ */
+const CONDITION_PATTERNS: readonly RegExp[] = [
+  /(一旦|的话|确认后|确认之后|经确认|批准后|之后|以后|否则)/u,
+  /\b(once|after (?:you|i|we)|assuming|provided that|subject to)\b/iu,
+];
+
 /** Hypotheticals and quotations are not instructions. */
 const HYPOTHETICAL_PATTERNS: readonly RegExp[] = [
   /(如果|假如|若是|要是|万一|假设)/u,
@@ -257,29 +268,63 @@ const ADVERB_LEAD_PATTERN =
 const CHANGE_VERB_LEAD_PATTERN =
   /^(?:修复|修正|更正|改掉|改成|改为|修改|改进|更改|改|实现|新增|添加|删除|移除|更新|补充|重命名|重构|调整|优化|完善|纠正|替换|换成|处理|整理|清理|修|补)/u;
 
-const CHANGE_VERB_LEAD_EN_PATTERN =
-  /^(?:fix|fixes|implement|update|updates|add|adds|remove|removes|delete|deletes|refactor|rename|change|changes|correct|corrects|edit|edits)\b/iu;
-
-const CHANGE_VERB_TAIL_PATTERN =
-  /(?:修复|修正|更正|改掉|改成|改为|修改|改进|更改|改|实现|新增|添加|删除|移除|更新|补充|重命名|重构|调整|优化|完善|纠正|替换|换成|处理|整理|清理|修|补)(?:一下|下|吧|掉|好)?[。！!\s]*$/u;
-
 /**
- * Markers that make a clause a statement or a passive/conditional description rather
- * than a command (`X 需要被修改`, `X 被更新了`, `X 可能修复`).
+ * Markers that make a clause a statement, a question, a choice or a condition rather
+ * than a command (`X 需要被修改`, `X 被更新了`, `修改 X 该不该`, `一旦确认，修复 X`).
+ *
+ * This list is a *guard*, not the decision: a clause also has to match a strict command
+ * template below, so an unlisted marker can only cause a clarification, never an
+ * authorization (default-deny).
  */
 const NON_COMMAND_MARKERS =
-  /(被|需要|应该|应当|必须|会|值得|得到|已经|已|刚才|刚刚|了|过|可能|也许|大概|是否|如果|假如|若是|要是|万一|假设)/u;
+  /(被|需要|应该|应当|必须|会|值得|得到|已经|已|刚才|刚刚|了|过|可能|也许|大概|是否|如果|假如|若是|要是|万一|假设|还是|或者|行不行|该不该|对不对|也行|好不好|要不要|一旦|的话|之后|以后|确认后|经确认|完毕|vs\.?|\bor\b|\byes\b|\bno\b|\bunless\b|\bwhether\b)/iu;
 
-/** True when the clause reads as an imperative command to change something. */
+/** One change verb, optionally followed by a command particle. */
+const VERB_GROUP =
+  '(?:修复|修正|更正|改掉|改成|改为|修改|改进|更改|改|实现|新增|添加|删除|移除|更新|补充|重命名|重构|调整|优化|完善|纠正|替换|换成|处理|整理|清理|修|补)';
+
+/** A token that looks like a repository path (the only thing a command may target). */
+const PATH_TOKEN_SOURCE = '[\\w.@-]+(?:/[\\w.@-]+)*';
+
+/**
+ * Verb-first command: the verb is immediately followed by its target.
+ *
+ * `修改哪个文件 docs/INDEX.md` does not match, because the object does not start with a
+ * path — the clause asks a question instead of commanding (W3R10 review).
+ */
+const COMMAND_LEAD_PATTERN = new RegExp(
+  `^${VERB_GROUP}(?:一下|下|掉|为|成|好)?[\\s:：]*(?:把|将|对)?[\\s:：]*(${PATH_TOKEN_SOURCE})`,
+  'u',
+);
+
+const COMMAND_LEAD_EN_PATTERN = new RegExp(
+  `^(?:fix|fixes|implement|update|updates|add|adds|remove|removes|delete|deletes|refactor|rename|change|changes|correct|corrects|edit|edits)\\b[^，。；！？]{0,120}?(${PATH_TOKEN_SOURCE})`,
+  'iu',
+);
+
+/** Target-first command: the target opens the clause and the verb closes it. */
+const COMMAND_TAIL_PATTERN = new RegExp(
+  `^(${PATH_TOKEN_SOURCE})[^，。；！？]{0,60}${VERB_GROUP}(?:一下|下|掉|为|成|好)?[。！!\\s]*$`,
+  'u',
+);
+
+/**
+ * True when the clause matches a strict command template.
+ *
+ * Default-deny: anything that is not a verb-plus-target command (or target-plus-verb
+ * command) stays read-only, so an unregistered phrasing can only ask for clarification.
+ */
 function isImperative(clause: string): boolean {
   const stripped = clause.replace(POLITE_LEAD_PATTERN, '').replace(ADVERB_LEAD_PATTERN, '');
   if (NON_COMMAND_MARKERS.test(stripped)) return false;
   // A command names one action: a bare list of verbs ("X 修复 更新 整理") is ambiguous
   // and asks for clarification instead of guessing which verb applies (W3R9 review).
   if (countChangeVerbs(stripped) !== 1) return false;
-  if (CHANGE_VERB_LEAD_PATTERN.test(stripped)) return true;
-  if (CHANGE_VERB_LEAD_EN_PATTERN.test(clause)) return true;
-  return CHANGE_VERB_TAIL_PATTERN.test(stripped);
+  return (
+    COMMAND_LEAD_PATTERN.test(stripped) ||
+    COMMAND_LEAD_EN_PATTERN.test(clause) ||
+    COMMAND_TAIL_PATTERN.test(stripped)
+  );
 }
 
 /** Number of change verbs in a clause, in either language. */
@@ -363,13 +408,21 @@ export function routeMessage(body: string): MessageRouting {
   const instructionPaths: string[] = [];
   let explanation = false;
 
-  let conditional = false;
+  // If any clause asks a question or weighs options, the whole message is a question:
+  // "refactor X, yes or no" must not authorize through its first clause (W3R10).
+  const interrogative = clauses.some(
+    (clause) =>
+      matches(QUESTION_PATTERNS, clause) ||
+      matches(CHOICE_PATTERNS, clause) ||
+      matches(ADVICE_PATTERNS, clause),
+  );
+  let conditional = interrogative;
   for (const clause of clauses) {
     const reading = readClause(clause);
-    // The clause after a conditional inherits it: "如果要改，就修改 X" is a hypothesis,
-    // not a command (W3R9 A2).
-    const isConditional = matches(HYPOTHETICAL_PATTERNS, clause);
-    if (reading.instruction && !conditional) {
+    // A conditional clause makes the next one hypothetical too (W3R9 A2, W3R10-02).
+    const isConditional =
+      matches(CONDITION_PATTERNS, clause) || matches(HYPOTHETICAL_PATTERNS, clause);
+    if (reading.instruction && !conditional && !interrogative) {
       instructionPaths.push(...reading.paths);
     } else if (reading.instruction) {
       explanation = true;

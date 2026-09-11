@@ -356,6 +356,23 @@ describe('level routing (workflow.md §2)', () => {
       '如果要改，就修改 docs/INDEX.md',
       'docs/INDEX.md 修复 更新 整理',
       'fix docs/INDEX.md update docs/PLAN.md',
+      // Round 10: choice-question variants, conditional fronts, completion particles
+      // without 了 and mismatched verb/noun markers.
+      '更新 docs/INDEX.md 还是新建一个文档',
+      '修 docs/INDEX.md 行不行',
+      '修改 docs/INDEX.md 该不该',
+      '修改 docs/INDEX.md 对不对',
+      '修改 docs/INDEX.md 也行',
+      '修改哪个文件 docs/INDEX.md',
+      'fix docs/INDEX.md vs. leave it',
+      'refactor docs/INDEX.md, yes or no',
+      '一旦确认，修复 docs/INDEX.md',
+      '经确认后，修改 docs/INDEX.md',
+      '有错误的话，修复 docs/INDEX.md',
+      'once approved, fix docs/INDEX.md',
+      'after you confirm, update docs/INDEX.md',
+      '补充完毕 docs/INDEX.md',
+      '改进完毕 docs/INDEX.md',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(false);
@@ -387,6 +404,8 @@ describe('level routing (workflow.md §2)', () => {
       '修改 docs/INDEX.md、docs/PLAN.md',
       '参考 docs/INDEX.md，修改 docs/PLAN.md',
       'regarding docs/INDEX.md, fix docs/PLAN.md',
+      '删除 docs/INDEX.md 的旧内容',
+      '清理 docs/PLAN.md 的重复段落',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(true);
