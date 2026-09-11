@@ -3,13 +3,18 @@
  *
  * The Chief is an agent, so its assessment is normally produced by a model
  * (WP-04/WP-06). This module is the deterministic baseline the Core applies before
- * that model exists: it detects the *structural* facts of a message — does it ask for
- * an explanation, does it name a concrete modification target, does it do both — and
- * turns them into work items with independent scopes.
+ * that model exists. It is deliberately **conservative**: a work item only carries
+ * write authority when the message reads as an unambiguous instruction, because
+ * granting write scope to a question is a security failure while asking for
+ * clarification is merely slower.
  *
- * It never decides product semantics and never invents a requirement: an explicit
- * target is the message's own scope authorization (AC-005), and a mixed message is
- * split into one Work per intent so the explanation can finish first (AC-006).
+ * The two directions are equally important, so the rules are explicit:
+ * - an instruction clause (modification verb + a named path) authorizes exactly that
+ *   path (AC-005);
+ * - a question, explanation, refusal, conditional or quotation never does — even when
+ *   it names a path (AC-004);
+ * - a message that mixes an instruction with an explanation becomes two Works with
+ *   independent scopes, the explanation first (AC-006).
  */
 import { emptyScope, type Intent, type Scope } from '@agentdev/contracts';
 
@@ -18,62 +23,60 @@ export interface MessageWorkItem {
   readonly intent: Extract<Intent, 'assist' | 'artifact' | 'document' | 'delivery'>;
   readonly goal: string;
   readonly scope: Scope;
-  /**
-   * Paths the message explicitly named and may modify.
-   *
-   * Non-empty only for a modification intent: it becomes the Authorization envelope
-   * the message itself grants.
-   */
+  /** Paths the message explicitly instructed to modify, in this clause. */
   readonly writePaths: readonly string[];
 }
 
 export interface MessageRouting {
   readonly items: readonly MessageWorkItem[];
-  /** True when the message names a modification target (an execution message). */
+  /** True when at least one clause is an instruction with a named target. */
   readonly explicitAuthorization: boolean;
   /** Why the routing decided this, for the Assessment reason. */
   readonly reason: string;
 }
 
-const EXPLANATION_PATTERNS: readonly RegExp[] = [
-  /解释|说明|为什么|为何|怎么|如何|介绍|讲讲|梳理/iu,
-  /\bexplain\b|\bdescribe\b|\bwhy\b|\bhow\b|\bwhat\b|\bsummar/iu,
-];
+/** Verbs that ask for an explanation; only leading in a clause do they count. */
+const EXPLANATION_LEAD_PATTERN =
+  /^(?:请|帮我|麻烦|请帮我)?\s*(?:解释|说明|介绍|描述|讲讲|梳理|分析)/u;
 
-const MODIFICATION_PATTERNS: readonly RegExp[] = [
-  /修复|修正|更正|改掉|改成|修改|实现|新增|添加|删除|移除|更新|补充|重命名|重构/iu,
-  /\bfix\b|\bimplement\b|\bupdate\b|\badd\b|\bremove\b|\bdelete\b|\brefactor\b|\brename\b/iu,
-];
+const EXPLANATION_LEAD_EN_PATTERN =
+  /^(?:please\s+)?(?:explain|describe|summari[sz]e|analy[sz]e|walk me through|tell me|show me)\b/iu;
 
-/**
- * Markers of a question.
- *
- * `workflow.md` §1 only lets an *execution* message authorize its target; "how do I
- * fix X?" names a path but asks for an explanation, so it must never create a write
- * authorization (W3R3 review).
- */
+/** Words that make a clause a question wherever they appear. */
 const QUESTION_PATTERNS: readonly RegExp[] = [
-  /[?？]\s*$/u,
-  /^(如何|怎么|怎样|为什么|为何|能否|是否可以|可不可以|要不要|是不是|有没有)/u,
-  /^(how|why|what|when|where|which|can|could|should|would|is|are|does|do)\b/iu,
-  /(请问|帮我看看|能不能|可以吗)/u,
-  // An explanation is not an instruction, even when it names a concrete target
-  // ("explain why docs/INDEX.md needs a fix", W3R4 review).
-  /^(请?\s*(解释|说明|描述|介绍|讲讲|梳理|分析))/u,
-  /^\s*(please\s+)?(explain|describe|summari[sz]e|walk me through|tell me)\b/iu,
-  /(解释一下|说明一下|是怎么回事|有什么问题)/u,
+  /[?？]/u,
+  /(吗|呢|么|如何|怎么|怎样|为什么|为何|能否|是否可以|可不可以|要不要|是不是|有没有|请问|帮我看看|能不能|可以吗|是否已经)/u,
+  /\b(how|why|what|when|where|which|who|can|could|should|would|is|are|am|does|do|did|have you|has it)\b/iu,
+  /(question|not sure|wondering|curious)/iu,
 ];
 
 /**
- * Markers that explicitly refuse a change ("don't fix X", "不要修改 X").
+ * Refusals.
  *
- * A refusal is the opposite of an execution instruction; the router must not turn it
- * into a write authorization (W3R4 review).
+ * The Chinese marker `别` only counts where it negates an action (`别改`, `别修改`), so
+ * words such as 错别字 / 识别 / 特别 / 分别 stay instructions (W3R5-02).
  */
 const NEGATION_PATTERNS: readonly RegExp[] = [
-  /(不要|别|无需|不用|不需要|先别|暂不|不是要你|没有让你|并没有要求)/u,
-  /\b(do not|don't|dont|never|no need to|not asking|not asking you to|without changing)\b/iu,
+  // `别` only negates when it starts a word; 错别字 / 识别 / 特别 / 分别 must stay
+  // instructions (W3R5-02).
+  /(不要|不用|不需要|无需|先不|暂不|不必|(?<![\p{Script=Han}\w])别)\s*(?:再|去|来)?\s*(?:改|修改|动|碰|删|移除|更新|添加|新增|实现|修复|重命名|重构)/u,
+  /(不是要你|没有让你|并没有要求|先说不要)/u,
+  /\b(do not|don't|dont|never|no need to|without changing|not asking|not asking you to)\b/iu,
 ];
+
+/** Hypotheticals and quotations are not instructions. */
+const HYPOTHETICAL_PATTERNS: readonly RegExp[] = [
+  /(如果|假如|若是|要是|万一|假设)/u,
+  /\b(if|whether|suppose|assuming|in case)\b/iu,
+  /(你(刚才|之前)?说|你提到|引用|所说的)/u,
+  /["“][^"”]{0,80}["”]/u,
+];
+
+const MODIFICATION_PATTERN =
+  /(修复|修正|更正|改掉|改成|修改|改进|更改|改|实现|新增|添加|删除|移除|更新|补充|重命名|重构)/u;
+
+const MODIFICATION_EN_PATTERN =
+  /\b(fix|fixes|fixed|implement|update|updates|add|adds|remove|removes|delete|deletes|refactor|rename|change|changes|correct|corrects|edit|edits)\b/iu;
 
 const DOCUMENT_PATTERNS: readonly RegExp[] = [
   /文档|说明书|readme|设计文档/iu,
@@ -100,22 +103,24 @@ const FILE_EXTENSIONS = new Set([
   'sql',
 ]);
 
-/** One whitespace/punctuation separated token. */
-const TOKEN_PATTERN = /[^\s,;:()"'`[\]{}<>，。；：（）【】]+/gu;
+/** One whitespace/punctuation separated token; `、` is a list separator. */
+const TOKEN_PATTERN = /[^\s,;:()"'`[\]{}<>，。；：（）【】、]+/gu;
 
 /** A conservative path shape; anchored and free of nested quantifiers. */
 const PATH_TOKEN_PATTERN = /^[\w.@-]+(?:\/[\w.@-]+)*$/u;
 
 const MAX_TOKEN_LENGTH = 512;
+const MAX_PATHS = 32;
 
-/**
- * Paths a message names.
- *
- * The scan is linear (tokens, then an anchored shape test) so a 64 000-character body
- * cannot make routing quadratic; a token counts as a path only when it has a
- * separator or a known file extension.
- */
-function pathsIn(body: string): string[] {
+/** Clause boundaries: sentences and coordinating conjunctions, never list commas. */
+const CLAUSE_SPLIT_PATTERN =
+  /(?:[;；。!！\n]+)|(?:\s+(?:and|then)\s+)|(?:[，,]\s*(?:and|then|然后|并且|同时|而且)\s*)/iu;
+
+/** Upper bound on the Works one message may create (`messages.ts` enforces it). */
+export const MAX_WORK_ITEMS = 4;
+
+/** Paths a message names; linear in the body length. */
+export function pathsIn(body: string): string[] {
   const found = new Set<string>();
   for (const match of body.matchAll(TOKEN_PATTERN)) {
     const raw = match[0];
@@ -126,71 +131,73 @@ function pathsIn(body: string): string[] {
     const extension = token.includes('.')
       ? token.slice(token.lastIndexOf('.') + 1).toLowerCase()
       : '';
-    const looksLikePath = token.includes('/') || FILE_EXTENSIONS.has(extension);
-    if (!looksLikePath) continue;
+    if (!token.includes('/') && !FILE_EXTENSIONS.has(extension)) continue;
     found.add(token);
-    if (found.size >= 32) break;
+    if (found.size >= MAX_PATHS) break;
   }
   return [...found];
 }
 
-const MAX_WORK_ITEMS = 4;
+function splitClauses(text: string): string[] {
+  return text
+    .split(CLAUSE_SPLIT_PATTERN)
+    .map((clause) => clause.trim())
+    .filter((clause) => clause.length > 0);
+}
 
 function matches(patterns: readonly RegExp[], body: string): boolean {
   return patterns.some((pattern) => pattern.test(body));
 }
 
-/** Clause boundaries: sentences, list separators and coordinating conjunctions. */
-function splitClauses(text: string): string[] {
-  return text
-    .split(/(?:[;；。!！\n]+)|(?:[，,]\s*(?:and|then|然后|并且|同时)?\s*)|(?:\s+(?:and|then)\s+)/iu)
-    .map((clause) => clause.trim())
-    .filter((clause) => clause.length > 0);
+interface ClauseReading {
+  readonly paths: readonly string[];
+  readonly instruction: boolean;
+  readonly explanation: boolean;
+}
+
+/** Classifies one clause: instruction, explanation, or neither. */
+function readClause(clause: string): ClauseReading {
+  const paths = pathsIn(clause);
+  if (matches(QUESTION_PATTERNS, clause)) {
+    return { paths, instruction: false, explanation: true };
+  }
+  if (matches(NEGATION_PATTERNS, clause)) {
+    return { paths, instruction: false, explanation: true };
+  }
+  if (matches(HYPOTHETICAL_PATTERNS, clause)) {
+    return { paths, instruction: false, explanation: true };
+  }
+  const leadsExplanation =
+    EXPLANATION_LEAD_PATTERN.test(clause) || EXPLANATION_LEAD_EN_PATTERN.test(clause);
+  const modifies = MODIFICATION_PATTERN.test(clause) || MODIFICATION_EN_PATTERN.test(clause);
+  if (leadsExplanation) {
+    // The leading verb decides: "describe the fix needed in X" is an explanation even
+    // though it contains the word "fix".
+    return { paths, instruction: false, explanation: true };
+  }
+  if (modifies && paths.length > 0) {
+    return { paths, instruction: true, explanation: false };
+  }
+  // A change without a target (ask before writing) or a mention without a verb.
+  return { paths, instruction: false, explanation: modifies || paths.length > 0 };
 }
 
 /**
  * Routes one message body into work items.
- *
- * - a pure question/explanation → one `assist` Work with a read-only scope;
- * - an explicit modification with a target → one `delivery` Work whose scope is the
- *   named target (the message is the authorization source);
- * - both at once → two Works with independent scopes, the explanation first.
  */
 export function routeMessage(body: string): MessageRouting {
   const text = body.trim();
   const clauses = splitClauses(text);
-  const asksForDocument = matches(DOCUMENT_PATTERNS, text);
-
-  // Each clause is classified on its own, so a mixed message keeps its explanation and
-  // its instruction apart (AC-006) while an explanation clause never authorizes a
-  // change just because the message mentions a path (AC-005, W3R4 review).
   const instructionPaths: string[] = [];
   let explanation = false;
+
   for (const clause of clauses) {
-    const clausePaths = pathsIn(clause);
-    const clauseExplains = matches(EXPLANATION_PATTERNS, clause);
-    const clauseQuestion = matches(QUESTION_PATTERNS, clause);
-    const clauseNegated = matches(NEGATION_PATTERNS, clause);
-    const clauseModifies = matches(MODIFICATION_PATTERNS, clause);
-    if (clauseExplains || clauseQuestion) {
-      explanation = true;
+    const reading = readClause(clause);
+    if (reading.instruction) {
+      instructionPaths.push(...reading.paths);
       continue;
     }
-    if (clauseNegated) {
-      explanation = true;
-      continue;
-    }
-    if (clauseModifies) {
-      if (clausePaths.length === 0) {
-        // A modification request with no named target cannot be authorized; the Chief
-        // asks for the target instead of guessing a write scope.
-        explanation = true;
-        continue;
-      }
-      instructionPaths.push(...clausePaths);
-      continue;
-    }
-    if (clausePaths.length > 0) explanation = true;
+    if (reading.explanation) explanation = true;
   }
 
   const items: MessageWorkItem[] = [];
@@ -199,30 +206,26 @@ export function routeMessage(body: string): MessageRouting {
     items.push({
       intent: 'delivery',
       goal: text.slice(0, 2_000),
-      // Reading the target is part of changing it, so both capabilities are declared:
-      // an authorization with `readPaths` but no read operation is self-contradictory
-      // and would fail the Core's capability check (W3R3-01).
-      scope: {
-        ...emptyScope(),
-        readPaths: paths,
-        writePaths: paths,
-        operations: ['read', 'edit'],
-      },
+      // Reading the target is part of changing it: an authorization with `readPaths`
+      // but no read operation would fail the Core's own capability check.
+      scope: { ...emptyScope(), readPaths: paths, writePaths: paths, operations: ['read', 'edit'] },
       writePaths: paths,
     });
   }
   if (explanation || items.length === 0) {
-    const mentionPaths = pathsIn(text);
+    const mentioned = pathsIn(text);
+    const asksForDocument = matches(DOCUMENT_PATTERNS, text);
     items.push({
       intent: items.length === 0 && asksForDocument ? 'document' : 'assist',
       goal: text.slice(0, 2_000),
       scope: {
         ...emptyScope(),
-        readPaths: mentionPaths.length > 0 ? [...new Set(mentionPaths)] : ['docs'],
+        readPaths: mentioned.length > 0 ? [...new Set(mentioned)] : ['docs'],
       },
       writePaths: [],
     });
   }
+
   const trimmed = items.slice(0, MAX_WORK_ITEMS);
   const explicit = trimmed.some((item) => item.writePaths.length > 0);
   const reason = explicit
@@ -230,9 +233,5 @@ export function routeMessage(body: string): MessageRouting {
       ? 'mixed message: one explanation Work and one authorized modification Work'
       : 'explicit instruction with a target: the message authorizes its own scope'
     : 'question, explanation or refusal: read-only route, nothing granted';
-  return {
-    items: trimmed,
-    explicitAuthorization: explicit,
-    reason,
-  };
+  return { items: trimmed, explicitAuthorization: explicit, reason };
 }

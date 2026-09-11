@@ -531,6 +531,43 @@ describe('daemon HTTP surface (WP-03)', () => {
     expect(store.authorizations.list()).toHaveLength(0);
   });
 
+  it('caps client-supplied work items and keeps questions read-only end to end', async () => {
+    // A client cannot multiply works (or their budgets) without bound.
+    const many = await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: CONVERSATION_ID,
+          body: 'do the work',
+          workItems: Array.from({ length: 50 }, (_, index) => ({
+            intent: 'assist',
+            goal: `item ${index}`,
+          })),
+        }),
+      }),
+    );
+    expect(many.status).toBe(400);
+    expect(store.works.list()).toHaveLength(0);
+
+    // A question phrased as a status check is never an authorization.
+    const question = await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: CONVERSATION_ID,
+          body: '你修复 docs/INDEX.md 了吗',
+        }),
+      }),
+    );
+    expect(question.status).toBe(202);
+    expect(store.authorizations.list()).toHaveLength(0);
+    expect(store.works.list()[0]?.level).toBe('none');
+  });
+
   it('parses multipart bodies without a framework dependency', () => {
     const boundary = 'agentdev-boundary';
     const body = Buffer.from(

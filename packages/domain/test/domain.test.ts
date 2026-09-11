@@ -279,8 +279,8 @@ describe('level routing (workflow.md §2)', () => {
     // A documentation request is its own intent.
     expect(routeMessage('write the documentation for the API').items[0]?.intent).toBe('document');
 
-    // Explanation-led, interrogative and negated messages must never authorize a
-    // change, even when they name a concrete path (W3R4 review).
+    // Explanations, questions, refusals, hypotheticals and quotations must never
+    // authorize a change, in either language (W3R4/W3R5 review corpora).
     for (const body of [
       'explain why docs/INDEX.md needs a fix',
       'describe how to fix docs/INDEX.md',
@@ -290,6 +290,17 @@ describe('level routing (workflow.md §2)', () => {
       '不要修改 docs/INDEX.md',
       'I am not asking you to fix docs/INDEX.md, just explain it',
       'how do I fix the typo in docs/INDEX.md?',
+      '你修复 docs/INDEX.md 了吗',
+      '是否已经修复 docs/INDEX.md',
+      'Did you fix docs/INDEX.md',
+      'I have a question about the fix in docs/INDEX.md',
+      'The fix needed in docs/INDEX.md is unclear',
+      '我先不修改 docs/INDEX.md',
+      'Regarding the fix in docs/INDEX.md, what do you suggest?',
+      '如果 docs/INDEX.md 需要修改，请告诉我',
+      'fix docs/INDEX.md if you think it helps',
+      '你说要修复 docs/INDEX.md',
+      '你提到 docs/INDEX.md 需要修复',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(false);
@@ -298,6 +309,26 @@ describe('level routing (workflow.md §2)', () => {
         body,
       ).toBe(true);
     }
+
+    // Explicit instructions must still authorize — including the everyday Chinese
+    // wordings that a naive negation pattern would misread (W3R5-02).
+    for (const body of [
+      '修改 docs/INDEX.md 中的错别字',
+      '识别并修复 docs/INDEX.md',
+      '特别修改 docs/INDEX.md',
+      '分别修复 docs/INDEX.md 和 docs/PLAN.md',
+      '更新 docs/INDEX.md 的说明',
+      '改 docs/INDEX.md',
+      'fix the typo in docs/INDEX.md',
+      'update docs/INDEX.md',
+    ]) {
+      const routing = routeMessage(body);
+      expect(routing.explicitAuthorization, body).toBe(true);
+      expect(routing.items[0]?.scope.writePaths.length, body).toBeGreaterThan(0);
+    }
+
+    // The noun "说明" is not an explanation verb unless it leads the clause.
+    expect(routeMessage('更新 docs/INDEX.md 的说明').explicitAuthorization).toBe(true);
   });
 
   it('classifies every contract operation as read-only, workspace write or environment', () => {

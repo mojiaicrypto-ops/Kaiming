@@ -19,7 +19,7 @@ import {
 } from '@agentdev/contracts';
 import { uuidv7 } from '@agentdev/storage';
 import type { BlobStore } from '@agentdev/storage';
-import { routeMessage } from '@agentdev/domain';
+import { MAX_WORK_ITEMS, routeMessage } from '@agentdev/domain';
 import { userIdFromSubject } from './identity.js';
 import type { OperationDefinition, OperationContext } from './dispatcher.js';
 import { ProtocolError } from './errors.js';
@@ -146,6 +146,11 @@ export function sendMessage(
   // Chief's assessment; this is the mechanism it drives.
   const routing = routeMessage(body);
   const allowedIntents = ['assist', 'artifact', 'document', 'delivery'] as const;
+  if ((input.workItems?.length ?? 0) > MAX_WORK_ITEMS) {
+    throw new ProtocolError('VALIDATION_ERROR', 'a message may create at most four works', {
+      details: { count: input.workItems?.length ?? 0, max: MAX_WORK_ITEMS },
+    });
+  }
   for (const item of input.workItems ?? []) {
     if (
       item === null ||
@@ -406,7 +411,10 @@ function assertGrantWithinMessage(
   routing: ReturnType<typeof routeMessage>,
 ): void {
   const named = new Set(routing.items.flatMap((item) => item.writePaths));
-  const outside = granted.scope.writePaths.filter((path) => !named.has(path));
+  const outside = [
+    ...granted.scope.writePaths.filter((path) => !named.has(path)),
+    ...granted.scope.readPaths.filter((path) => !named.has(path)),
+  ];
   const environment = granted.scope.operations.some((operation) =>
     ['bash', 'network', 'secret', 'push', 'deploy', 'delete_data'].includes(operation),
   );

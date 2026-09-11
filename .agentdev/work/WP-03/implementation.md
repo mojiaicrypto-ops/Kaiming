@@ -120,3 +120,15 @@
   - 记录数字更正：unit **287**、integration 124、build **8** workspace、daemon 15 例。
 - 修复后验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **287 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。
 - 承接/待办：`protocol.md` §5 的 `conversation.message.send` 返回字段目前只列 `{messageId,workId,state,version}`，本包新增 `workIds`/`authorizationId` 属加法补充，需在文档侧对账（结算材料登记）；下一轮独立 Review 复核上述修复。
+
+## T12 独立 Review 第五轮与修复（FAIL → 修复）
+
+- 第五轮独立 Review 判 **FAIL**（2×P1、2×P2、5×P3）：P1 为「同义新句式仍越权」（**你修复…了吗 / 是否已经修复 / Did you fix / I have a question about the fix / The fix needed in… / 我先不修改… / Regarding the fix…, what do you suggest?** 等 17 例，HTTP 端到端可落授权并派发写 Run）与「反向误拒」（裸 `别` 命中错别字/识别/特别/分别、名词化说明/介绍、`、` 未参与分词，导致「修改 docs/INDEX.md 中的错别字」这类明确指令不授权）。对抗性核验另补：客户端 `workItems` 无数量上限（50/500 个 Work 均可建）、`别改 A，改 docs/plan.md` 误拒、CSP 第二头名残留与提交信息不实、`assertGrantWithinMessage` 未约束 `readPaths`。
+- 修复（`requests.ts` 重写为保守判定）：
+  - 判定收敛为「**指令子句**」：子句内同时出现修改动词与命名路径，且该子句不含疑问（吗/呢/如何/是否已经/how/did/…）、拒绝（不要/别+动词/don't/never/…）、假设与引用（如果/假如/if/whether/引号/你提到…）标记；解释动词**仅在子句开头**才算解释，`说明/介绍` 作名词不再误判。
+  - `别` 仅在词首否定动作（负向后顾，排除错别字/识别/特别/分别）；`、` 作为路径分词符但不作子句分隔符，`修改 a、b` 保持同一指令子句。
+  - 可疑即 fail-closed：拿不准时只给只读 Work（并向用户澄清），绝不猜测写范围。
+  - `workItems` 在 Core 侧限 `MAX_WORK_ITEMS=4`（与服务端路由一致）；`assertGrantWithinMessage` 同时约束 `readPaths`；预览只发送 `execution.md` §45 的 CSP 单头（无效的第二头名已真正删除）。
+- 回归网：把第五轮 Review/对抗性给出的正/负例句表（19 条不得授权 + 8 条必须授权）与 HTTP 级用例（workItems 上限、状态询问句）落成长期测试。
+- 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **288 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace。
+- 后续：第六轮独立 Review 复核（重点是句式矩阵与 `workItems` 上限），通过后进入独立 Test。
