@@ -249,3 +249,13 @@
 - 取舍（与 T20 一致并扩大）：`修改 X 中的错别字`、`fix the typo in X`、`把 X 里的错别字改掉`、`修改 X、Y`、`修改 X 而不是 Y` 等丰富措辞一律**只读并请求澄清**——为保证「非命令永不授权」付出的 fail-closed 代价，已登记；真正语义理解由 WP-04/06 的模型 Assessment 接管。
 - 回归网：必须授权 11 条（严格命令）+ 必须只读 84 条（覆盖第四至第十三轮全部登记语料与新增评述/别名/条件族）。
 - 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。
+
+## T22 第十三轮修复续（结构性前件规则与评述抑制）
+
+- 在 T21 的无尾命令文法之上补两条**结构性**规则（不再依赖词表覆盖）：
+  1. **前件规则**：命令只能出现在消息首子句，或由并列连词（并且/然后/同时/而且/并/and/then）或承接副词（但/但是/而是/不过/也/再/就/则）引入的子句；其他任何前件（`经批准`、`视具体情况`、`depending on the result`）都使后续命令降级为假设。子句切分按捕获分隔符的奇偶位置识别连词，因此 `解释 X 并修复 Y`、`explain X and 修复 Y` 正常拆分。
+  2. **评述抑制**：任一分句是评价/意见（`明智/必要/必需/属于/由…决定/seems/wrong/wise/not needed` 等）⇒ 整条消息不授权。
+- 目标校验：命令捕获的目标必须与消息点名的路径逐字相同，尾随标点无法铸造别名（修 ADV-01）。
+- 外置语料：第十三轮新语料 40 条「必须只读」**0 fail-open**；本轮新增/修订测试 11 条必须授权 + 84 条必须只读全部通过。
+- 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。
+- 结论（工程判断，供产品方决定）：确定性基线的 fail-open 方向现已按结构关闭；代价是丰富措辞（含名词短语的祈使、多目标、排除式）一律请求澄清。自然语言语义必须由 WP-04/06 的模型 Assessment 承担，否则只能继续以可用性换取确定性。

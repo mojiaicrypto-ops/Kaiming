@@ -283,13 +283,35 @@ const DOCUMENT_PATTERNS: readonly RegExp[] = [
  * introduces a fresh change verb.
  */
 const CLAUSE_SPLIT_PATTERN =
-  /(?:[，,；;。!！\n]+)|(?:\s+(?:and|then)\s+)|(?:(?:并且|然后|同时|而且))|(?:并(?=\s*(?:请|麻烦|帮我)?\s*(?:修复|修正|修改|更新|删除|移除|添加|新增|实现|改|补|整理|清理|处理)))/iu;
+  /([，,；;。!！\n]+|\s+(?:and|then)\s+|并且|然后|同时|而且|并(?=\s*(?:请|麻烦|帮我)?\s*(?:修复|修正|修改|更新|删除|移除|添加|新增|实现|改|补|整理|清理|处理)))/iu;
 
-function splitClauses(text: string): string[] {
-  return text
-    .split(CLAUSE_SPLIT_PATTERN)
-    .map((clause) => clause.trim())
-    .filter((clause) => clause.length > 0);
+const CONJUNCTION_SPLIT_PATTERN = /^(?:and|then|并且|然后|同时|而且|并)$/iu;
+
+interface Clause {
+  readonly text: string;
+  /** True when this clause was introduced by a coordinating conjunction. */
+  readonly conjunction: boolean;
+}
+
+/**
+ * Splits a message into clauses and remembers whether a conjunction introduced each
+ * one, because only a conjunction may carry a command into a following clause.
+ */
+function splitClauses(text: string): Clause[] {
+  // With a capturing separator, `split` alternates text and separator: even indices are
+  // clause texts, odd indices are the separators that introduced the next clause.
+  const parts = text.split(CLAUSE_SPLIT_PATTERN);
+  const clauses: Clause[] = [];
+  for (let index = 0; index < parts.length; index += 2) {
+    const trimmed = (parts[index] ?? '').trim();
+    if (trimmed.length === 0) continue;
+    const separator = index === 0 ? undefined : parts[index - 1];
+    clauses.push({
+      text: trimmed,
+      conjunction: separator !== undefined && CONJUNCTION_SPLIT_PATTERN.test(separator.trim()),
+    });
+  }
+  return clauses;
 }
 
 function matches(patterns: readonly RegExp[], body: string): boolean {
@@ -337,26 +359,34 @@ export function routeMessage(body: string): MessageRouting {
   // clause may authorize (`refactor X, yes or no` must not authorize through clause one).
   const interrogative = clauses.some(
     (clause) =>
-      matches(QUESTION_PATTERNS, clause) ||
-      matches(CHOICE_PATTERNS, clause) ||
-      matches(ADVICE_PATTERNS, clause) ||
-      matches(COMMENT_PATTERNS, clause),
+      matches(QUESTION_PATTERNS, clause.text) ||
+      matches(CHOICE_PATTERNS, clause.text) ||
+      matches(ADVICE_PATTERNS, clause.text) ||
+      matches(COMMENT_PATTERNS, clause.text),
   );
   let conditional = interrogative;
   const targets: string[] = [];
   let explanation = false;
 
-  for (const clause of clauses) {
-    const reading = readClause(clause);
-    if (reading.target !== undefined && !conditional && !interrogative) {
+  clauses.forEach((clause, index) => {
+    const reading = readClause(clause.text);
+    // A command may open the message or continue it after a coordinating conjunction.
+    // Any other preamble ("经批准", "视具体情况", "depending on the result") makes the
+    // following clause a hypothetical rather than an order — that rule is structural,
+    // so an unregistered preamble cannot open a hole (W3R13 review).
+    const continues = /^(?:但|但是|而是|不过|也|再|就|则)/u.test(clause.text);
+    const allowed = index === 0 || clause.conjunction || continues;
+    if (reading.target !== undefined && !conditional && !interrogative && allowed) {
       targets.push(reading.target);
     } else if (reading.target !== undefined) {
       explanation = true;
     }
     if (reading.explanation) explanation = true;
     conditional =
-      matches(CONDITION_PATTERNS, clause) || matches(HYPOTHETICAL_PATTERNS, clause) || conditional;
-  }
+      matches(CONDITION_PATTERNS, clause.text) ||
+      matches(HYPOTHETICAL_PATTERNS, clause.text) ||
+      conditional;
+  });
 
   const items: MessageWorkItem[] = [];
   const paths = [...new Set(targets)];
