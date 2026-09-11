@@ -78,6 +78,12 @@ export function pathsIn(body: string): string[] {
     if (raw.length > MAX_TOKEN_LENGTH) continue;
     const token = raw.replace(/[.,;:]+$/u, '');
     if (token.length === 0 || token.includes('://')) continue;
+    // A target must stay inside the repository: `..`, a leading `/` or `~` is refused at
+    // routing time so the request fails as a validation error instead of a storage
+    // failure deep in the transaction (W3R15 adversarial 5).
+    if (token.startsWith('/') || token.startsWith('~') || token.split('/').includes('..')) {
+      continue;
+    }
     if (!PATH_TOKEN_PATTERN.test(token)) continue;
     const extension = token.includes('.')
       ? token.slice(token.lastIndexOf('.') + 1).toLowerCase()

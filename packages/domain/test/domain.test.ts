@@ -411,6 +411,10 @@ describe('level routing (workflow.md §2)', () => {
       'I think it needs work, then update docs/INDEX.md',
       'report 提到需要修改 docs/INDEX.md，然后修改 docs/PLAN.md',
       '解释 docs/INDEX.md，视具体情况',
+      // Targets outside the repository are refused at routing time.
+      '修改 ../secret.md',
+      '修改 /etc/hosts.md',
+      '修改 ~/.ssh/config.md',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(false);
