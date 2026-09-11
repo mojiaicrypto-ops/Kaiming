@@ -252,6 +252,24 @@ export class Orchestrator {
       'assessment.submit',
     );
     const work = this.requireWork(workId);
+    // The same authority invariant as `dispatch`: a `none` Work cannot declare a
+    // scope that writes or acts on an environment, so `assess` and `dispatch` cannot
+    // disagree about the same scope (R16-01/M-2).
+    if (
+      !grantsModificationAuthority(work.level) &&
+      (declaresWorkspaceWrite(payload.scope) || touchesRunningEnvironment(payload.scope))
+    ) {
+      fail(
+        'VALIDATION_ERROR',
+        `Work ${work.id} is ${work.level} and cannot declare a write or environment scope`,
+        {
+          workId: work.id,
+          workLevel: work.level,
+          writePaths: [...payload.scope.writePaths],
+          operations: [...payload.scope.operations],
+        },
+      );
+    }
     // The documented routing order is re-applied here (`workflow.md` §2) so a Chief
     // cannot record a lower level than the lockdown/operation rules demand. Only
     // the L3 floor is enforced as a hard error: L1 vs L2 depends on criteria the
@@ -368,15 +386,20 @@ export class Orchestrator {
     // Modification authority is the *Work's* level: a spec cannot upgrade it by
     // declaring an authorized environment operation (R13-02), and a local write
     // operation counts even when the path list is empty (R13-01 adversarial).
-    if (!grantsModificationAuthority(work.level) && declaresWorkspaceWrite(spec.scope)) {
+    if (
+      !grantsModificationAuthority(work.level) &&
+      (declaresWorkspaceWrite(spec.scope) || environmentScope)
+    ) {
       fail(
         'NOT_AUTHORIZED',
-        `Work ${work.id} is ${work.level} and cannot create a Run with write authority`,
+        `Work ${work.id} is ${work.level} and cannot create a Run with write or environment authority`,
         {
           workId: work.id,
           workLevel: work.level,
           runLevel,
           writePaths: [...spec.scope.writePaths],
+          operations: [...spec.scope.operations],
+          environmentScope,
         },
       );
     }
@@ -751,7 +774,9 @@ export class Orchestrator {
    * revoked (DC-63), and when a `scope` is supplied it must cover that scope:
    * every `operations` entry and every `writePaths`/`readPaths` entry must be inside
    * the grant, every network target must be granted *and* backed by the `network`
-   * operation, and a network target alone never grants a write (R12-02/R13-01/R14).
+   * operation, a declared path requires the matching read/write operation in the
+   * grant, and a network target alone never grants a write
+   * (R12-02/R13-01/R14/R15).
    * A reference provided on a level that does not require one is still verified, so
    * a fabricated id can never be persisted. Returns the reference that was actually
    * verified, for freezing.

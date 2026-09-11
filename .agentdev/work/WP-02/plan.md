@@ -33,6 +33,7 @@ writePaths:
 readPaths: `docs/**`（主要 `rules/agents.md`、`rules/workflow.md`、`architecture/{ARCHITECTURE,data,protocol,reliability,context}.md`、`delivery/{implementation,acceptance}.md`）
 - planVersion 2 写入范围变更（授权来源：本包 Review R-05；用户目标轮次「继续」）：新增 `packages/core/src/snapshots.ts`，并把 `packages/contracts/src/entities/{run.ts,structures.ts}` 与 `packages/contracts/test/entities.test.ts` 明确列入授权缺口修复范围。
 - planVersion 3 写入范围变更（授权来源：本包 Review 第四轮 Q-09；用户目标轮次「继续」）：新增 `packages/core/src/run-lifecycle.ts` 与 `packages/core/src/events.ts`。
+- planVersion 4 写入范围变更（授权来源：本包 Review 第十三/十五/十六轮 R13-01/R15-02/R16-01；用户目标轮次「继续」）：明确 `packages/domain/src/routing.ts` 与 `packages/domain/test/domain.test.ts`（路由等级、风险词表、操作分类）与 `packages/contracts/src/entities/work.ts`（`authorization.operations` 使用契约枚举）、`packages/contracts/test/entities.test.ts`（枚举负例）列入写入范围；这些是等级/授权门禁修复的必需文件。
 不可写：`docs/**`（除结算时更新 `docs/INDEX.md` 的实现状态事实）、`packages/storage`、`webui/**`、`docker/**`
 
 ## 3. tasks（DAG）

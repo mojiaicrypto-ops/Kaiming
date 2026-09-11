@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { operationNameSchema, type Budget, type Grant } from '@agentdev/contracts';
 import {
+  ARTIFACT_WRITE_OPERATIONS,
   ATTEMPT_TRANSITIONS,
   ENVIRONMENT_OPERATIONS,
   L1_BOUNDS,
@@ -27,6 +28,7 @@ import {
   isTerminalRunStatus,
   lockdownRiskVocabulary,
   l1Failures,
+  READ_OPERATIONS,
   restoreTarget,
   riskFromFlags,
   touchesRunningEnvironment,
@@ -236,6 +238,9 @@ describe('level routing (workflow.md §2)', () => {
     expect(declaresWorkspaceWrite({ operations: ['edit'], writePaths: [] })).toBe(true);
     expect(declaresWorkspaceWrite({ operations: ['write'], writePaths: [] })).toBe(true);
     expect(declaresWorkspaceWrite({ operations: ['git'], writePaths: [] })).toBe(true);
+    // Writing only the Run's own Artifact is not repository modification authority
+    // (`execution.md` §21/§53, R16-01).
+    expect(declaresWorkspaceWrite({ operations: ['artifact_write'], writePaths: [] })).toBe(false);
     expect(declaresWorkspaceWrite({ operations: ['read', 'search'], writePaths: [] })).toBe(false);
     expect(declaresWorkspaceWrite({ operations: [], writePaths: [] })).toBe(false);
     // Environment operations are handled by their own predicate.
@@ -249,8 +254,8 @@ describe('level routing (workflow.md §2)', () => {
     const classified = new Set<string>([
       ...WORKSPACE_WRITE_OPERATIONS,
       ...ENVIRONMENT_OPERATIONS,
-      'read',
-      'search',
+      ...ARTIFACT_WRITE_OPERATIONS,
+      ...READ_OPERATIONS,
     ]);
     for (const operation of operationNameSchema.options) {
       expect(classified.has(operation)).toBe(true);

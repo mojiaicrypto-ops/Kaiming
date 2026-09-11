@@ -694,12 +694,12 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
       scope: { ...emptyScope, operations: ['git'] },
     });
     expect(() => orchestrator.dispatch({ spec: gitSpec })).toThrowError(
-      /cannot create a Run with write authority/,
+      /cannot create a Run with write or environment authority/,
     );
     // A grant bound to this very Work does not change the Work's own authority.
     expect(() =>
       orchestrator.dispatch({ spec: gitSpec, authorizationRef: NONE_GIT_AUTHORIZATION_ID }),
-    ).toThrowError(/cannot create a Run with write authority/);
+    ).toThrowError(/cannot create a Run with write or environment authority/);
 
     const chief = chiefRun();
     // Listing a target in the grant is not enough: reaching it is a network write.
@@ -759,6 +759,69 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     ).toThrowError(/does not cover the declared scope/);
   });
 
+  it('lets a none-level Work produce its own artifact but not act on the world (R16-01/M-1)', () => {
+    const noneChief = orchestrator.dispatch({ spec: { ...chiefSpec(), workId: NONE_WORK_ID } }).run;
+    // `execution.md` §21/§53: artifact_write belongs to every role, so an assist Work
+    // may dispatch a Run that writes its own Artifact.
+    const artifactRun = orchestrator.dispatch({
+      spec: backendSpec(noneChief.id, {
+        workId: NONE_WORK_ID,
+        taskId: undefined,
+        scope: { ...emptyScope, operations: ['artifact_write'] },
+      }),
+    }).run;
+    expect(artifactRun.workId).toBe(NONE_WORK_ID);
+
+    // The same Work cannot gain write or environment authority from a grant.
+    const deploySpec = backendSpec(noneChief.id, {
+      workId: NONE_WORK_ID,
+      taskId: undefined,
+      scope: { ...emptyScope, operations: ['deploy'] },
+    });
+    expect(() => orchestrator.dispatch({ spec: deploySpec })).toThrowError(
+      /cannot create a Run with write or environment authority/,
+    );
+    expect(() =>
+      orchestrator.dispatch({ spec: deploySpec, authorizationRef: NONE_GIT_AUTHORIZATION_ID }),
+    ).toThrowError(/cannot create a Run with write or environment authority/);
+
+    // `assess` agrees with `dispatch` about the same scope.
+    expect(() =>
+      orchestrator.assess({
+        workId: NONE_WORK_ID,
+        payload: {
+          ...assessmentPayloadFixture(),
+          intent: 'assist',
+          level: 'none',
+          scope: { ...emptyScope, operations: ['deploy'] },
+        },
+      }),
+    ).toThrowError(/cannot declare a write or environment scope/);
+    expect(() =>
+      orchestrator.assess({
+        workId: NONE_WORK_ID,
+        payload: {
+          ...assessmentPayloadFixture(),
+          intent: 'artifact',
+          level: 'none',
+          scope: { ...emptyScope, writePaths: ['docs'] },
+        },
+      }),
+    ).toThrowError(/cannot declare a write or environment scope/);
+
+    // An artifact-only assessment is still accepted on the assist route.
+    const accepted = orchestrator.assess({
+      workId: NONE_WORK_ID,
+      payload: {
+        ...assessmentPayloadFixture(),
+        intent: 'artifact',
+        level: 'none',
+        scope: { ...emptyScope, operations: ['artifact_write'] },
+      },
+    });
+    expect(accepted.level).toBe('none');
+  });
+
   it('counts a local write operation as modification authority (R13-02)', () => {
     const noneChief = orchestrator.dispatch({ spec: { ...chiefSpec(), workId: NONE_WORK_ID } }).run;
     // No path list at all, just an operation that edits the workspace.
@@ -770,7 +833,7 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
           scope: { ...emptyScope, operations: ['edit'] },
         }),
       }),
-    ).toThrowError(/cannot create a Run with write authority/);
+    ).toThrowError(/cannot create a Run with write or environment authority/);
   });
 
   it('cleans absent optional fields instead of failing on the snapshot (R13-03)', () => {
@@ -791,7 +854,7 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
       orchestrator.dispatch({
         spec: backendSpec(noneChief.id, { workId: NONE_WORK_ID, taskId: undefined }),
       }),
-    ).toThrowError(/cannot create a Run with write authority/);
+    ).toThrowError(/cannot create a Run with write or environment authority/);
     // A read-only child of the same Work is still allowed.
     const readOnly = orchestrator.dispatch({
       spec: backendSpec(noneChief.id, {

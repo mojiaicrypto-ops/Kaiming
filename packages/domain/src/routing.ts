@@ -179,11 +179,22 @@ const ENVIRONMENT_OPERATION_SET: ReadonlySet<string> = new Set(ENVIRONMENT_OPERA
 export const WORKSPACE_WRITE_OPERATIONS = [
   'edit',
   'write',
-  'artifact_write',
   // `git` covers commit/checkout/reset, all of which rewrite tracked files
   // (`execution.md` §53 lists it among the modifying operations); the remote half is
   // the separate `push` operation, which the environment set already gates (R14-01).
   'git',
+] as const satisfies readonly OperationName[];
+
+/**
+ * Writes that only produce the Run's own Artifact.
+ *
+ * `execution.md` §21/§53 makes `artifact_write` a base tool for every role — a
+ * read-only investigation writes its own report — so it is not modification
+ * authority over the repository and a `none`-level Work may use it (R16-01).
+ * Writing tracked files still needs `writePaths` and a write operation.
+ */
+export const ARTIFACT_WRITE_OPERATIONS = [
+  'artifact_write',
 ] as const satisfies readonly OperationName[];
 
 const WORKSPACE_WRITE_OPERATION_SET: ReadonlySet<string> = new Set(WORKSPACE_WRITE_OPERATIONS);

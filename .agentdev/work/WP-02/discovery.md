@@ -223,7 +223,8 @@ delivery/document 若未声明可核查的 L1 前提（`semanticImpact=false`、
 - `ref` 指向不存在的行 ⇒ `NOT_AUTHORIZED`；属于其他 Work ⇒ `NOT_AUTHORIZED`；已 `revokedAt` ⇒ `NOT_AUTHORIZED`；
 - 只要提供了 `ref`（即便该等级不要求）都会核对，伪造 id 不能落库；
 - 提供 `scope` 时逐项核对覆盖：`operations` ⊆ 授权 `operations`；`networkTargets` ⊆ 授权 `scope.networkTargets` **且授权必须带 `network` 操作**（只把目标列进 scope 不等于网络写授权，第十四轮 D-2）；`writePaths`/`readPaths` 必须位于授权 `scope.writePaths`/`readPaths` 之内（路径前缀包含）。未被覆盖 ⇒ `NOT_AUTHORIZED`，details 列出各未覆盖项。
-- 能力交叉核对（第十五轮 R15-01）：声明路径即声明能力——spec 声明 `writePaths` 时授权必须含至少一个工作区写操作（`WORKSPACE_WRITE_OPERATIONS`），声明 `readPaths` 时授权必须含读操作（`read`/`search`），声明 `networkTargets` 时授权必须含 `network`。否则即使路径在授权 scope 之内也判 `NOT_AUTHORIZED`（details 的 `capabilityGaps`/`networkTargetsWithoutGrant`）。原因：只读授权（或空操作授权）不得为写范围背书并把它冻结进 `effectiveScope`。
+- 能力交叉核对（第十五轮 R15-01，限定在**授权侧**）：spec 声明 `writePaths` 时授权必须含至少一个工作区写操作（`WORKSPACE_WRITE_OPERATIONS`），声明 `readPaths` 时授权必须含读操作（`read`/`search`），声明 `networkTargets` 时授权必须含 `network`。否则即使路径在授权 scope 之内也判 `NOT_AUTHORIZED`（details 的 `capabilityGaps`/`networkTargetsWithoutGrant`）。原因：只读授权（或空操作授权）不得为写范围背书并把它冻结进 `effectiveScope`。
+- 边界（第十六轮 R16-02）：该核对只约束**授权**，不约束 spec 自己的 `operations` 列表——`spec.scope.operations` 是工具层的允许清单，Core 不因「声明了路径」就替 Chief 推断操作意图；因此 `writePaths` + `operations: []` 的 spec 在授权具备写能力时被接受，冻结出的 `effectiveScope` 就是 Chief 声明的样子（写入是否执行由 Runner 的工具门禁按 `operations` 判定，WP-04/WP-06 落线）。这是有意的最小惊讶边界，登记于此而非静默。
 - 授权的能力清单取自 `Authorization.operations`（契约枚举 `operationNameSchema`，第十五轮 R15-02），路径/网络目标信封取自 `Authorization.scope`；两者是不同维度，本包不做「`scope.operations` 与 `operations` 求交」的额外规则（授权 schema 的 `operations` 是授权操作清单）。
 - 路径维度是对既有行为的收紧（第十四轮 D-3）：L3 Work 拿一张 `scope.readPaths` 为空的授权后，声明 `readPaths` 的 Run 也会被拒；这一收紧是有意的 fail-closed，登记于此。
 - `dispatch` 用 `extras.authorizationRef ?? work.authorizationRef`，因此 L3 Work 始终有可核对的授权来源（第十一轮 R11-03），并把核对通过的引用冻结进 DispatchSnapshot（第十二轮 R12-03）。
@@ -264,3 +265,10 @@ zod 的解析结果会保留调用方显式传入的 `undefined` 可选字段（
 ## DC-70 `config.policy.l3Paths`/`l3Keywords` 无消费方（Review 第十三轮 R13-06；承接：WP-04/WP-05）
 
 全局配置 schema 有 `policy.l3Paths`/`l3Keywords`（`ARCHITECTURE.md` §5 的可覆盖限制项），但全仓无读取点，`workflow.md` 也未定义「L3 路径/关键词」的判定语义；当前 L3 判定只依据 `workflow.md` §2.2/§2.3 的明文判据（DC-62/DC-65）。按用户策略扩展 L3 判定（例如把 `l3Paths` 命中视为 L3）属 WP-04/WP-05 的策略落线工作，本包只登记缺口，未实现。
+
+## DC-71 `artifact_write` 不是工作区修改权（Review 第十六轮 R16-01/M-1..M-4）
+
+`execution.md` §21/§53：`artifact_write` 是所有角色的基础工具（Chief/只读调查「写：自己的 Artifact」），修改角色才「另有 edit/write/bash/git」。因此 `artifact_write` 移出 `WORKSPACE_WRITE_OPERATIONS`（现为 `['edit','write','git']`），单独归入 `ARTIFACT_WRITE_OPERATIONS`：`none` 级 Work（assist/artifact 路线）可以派发只写自己 Artifact 的 Run，但**不能**写跟踪文件（`writePaths` 仍受门禁）也不能取得环境权限。派生不变式（第十六轮 M-1/M-2）：
+- `dispatch`：`!grantsModificationAuthority(work.level) && (declaresWorkspaceWrite(spec.scope) || touchesRunningEnvironment(spec.scope))` ⇒ `NOT_AUTHORIZED`（授权不能把 `none` Work 变成 L3 执行者）；
+- `assess`：同一条件 ⇒ `VALIDATION_ERROR`（评估与 Run 边界对同一 scope 的结论必须一致）；
+- 操作分类完备性由 `packages/domain/test/domain.test.ts` 的用例守卫：12 个契约取值分别是环境操作（6）、工作区写（3）、Artifact 写（1）、只读（2）。

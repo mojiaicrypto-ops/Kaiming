@@ -227,7 +227,7 @@
   - R14-03：`verifyAuthorization` 的 JSDoc 补齐路径维度与 `network` 操作要求。
   - R14-04：R13-01 的断言改为检查 `uncoveredWritePaths`（路径维度）而非仅匹配错误消息。
   - D-3/D-4：DC-63 登记路径收紧，DC-66 登记 `assess` 不是 Run 边界与 Work 等级回写缺口。
-- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **247 passed**（该修复提交时点数；随后 `088bdd7` 增加分类完备性用例，当前为 248）；`pnpm test:integration` 124 passed。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **247 passed**（该修复提交时点数；`088bdd7` 增加分类完备性用例后为 248，第十五轮修复后为 250）；`pnpm test:integration` 124 passed。
 
 ## T23 独立 Review 第十五轮与修复（第十五轮 FAIL → 修复）
 
@@ -238,6 +238,18 @@
   - R15-03：补「none 级 Work × `git` × 带本 Work 授权」与「只读授权 × 写范围」用例。
   - R15-04：DC-67 的操作集更正为含 `git`；T22 的 247 标注为修复提交时点数（随后 248）。
 - 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **250 passed**；`pnpm test:integration` 124 passed。
+
+## T24 独立 Review 第十六轮（Review PASS，对抗性核验异议 → 复核修复）
+
+- 第十六轮独立 Review 判 **PASS**（0×P1、1×P2 非阻断、5×P3），确认 R15-01..R15-04 真修好；对抗性核验认为应判 FAIL，理由是 `artifact_write` 被计入工作区写操作会导致 `none` 级 Work（assist/artifact 路线）无法派发写自己 Artifact 的 Run（与 `execution.md` §21/§53、`workflow.md` §2.1/§3 相反），另补 M-1（`none` Work 可经授权取得环境权限派 L3 Run）与 M-2（`assess` 与 `dispatch` 对同一 scope 结论不一致）。
+- 采纳对抗性异议并修复（本轮不新增独立 Review 轮次，改动进入下一轮复核）：
+  - R16-01/M-3/M-4（DC-71）：`artifact_write` 移出 `WORKSPACE_WRITE_OPERATIONS`，单列 `ARTIFACT_WRITE_OPERATIONS`；补「`none` Work 派 artifact_write Run」与 `intent:'artifact'` 的端到端用例。
+  - M-1（DC-71）：`none` 级 Work 不能取得环境权限（`dispatch` 的写/环境门禁统一）。
+  - M-2（DC-71）：`assess` 对同一条件报 `VALIDATION_ERROR`，与 `dispatch` 一致。
+  - R16-02（DC-63）：登记「能力交叉核对只约束授权侧、spec 的 `operations` 是工具层允许清单」这一边界。
+  - R16-03：`plan.md` planVersion 4 明确列入 `packages/domain/**` 与 `packages/contracts/src/entities/work.ts` 等实际写入文件。
+  - R16-04：`verifyAuthorization` JSDoc 补齐能力交叉核对；R16-05：domain 分类测试改用 `READ_OPERATIONS`/`ARTIFACT_WRITE_OPERATIONS`；R16-06：T22 计数标注更正。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **251 passed**；`pnpm test:integration` 124 passed。
 
 ## T9 待办
 
