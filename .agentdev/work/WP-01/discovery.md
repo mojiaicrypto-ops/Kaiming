@@ -59,3 +59,14 @@
 - 影响：无真实模型参与的端到端与验收路径尚不可执行。
 - 实际路由：WP-09 提供端到端骨架，WP-10 在用户提供真实 Provider（baseUrl + 模型 ID + Secret 注入）后复验。
 - 关联：Test 报告 §8.5；`.agentdev/work/WP-00/discovery.md` DC-14。
+
+## DC-26 followup：备份护栏的 4 项 P3 残余（复评三 NF3-01…NF3-04）
+
+- 证据（`.agentdev/work/WP-01/review.md` §4，均以 `/tmp` 探针实测，非推测）：
+  1. **NF3-01**：显式传入 `backupPath`（无自定义 hook）时，复用判定只看"可读完整"，不校验副本的来源版本；探针 F 显示 v1→v2 的备份与 v0 副本逐字节相同（`ledger=[]`）。生产默认路径为版本化文件名（`pre-migration-v<version>.sqlite`），不受影响，且仓库内无调用方以该组合传参。
+  2. **NF3-02**：1 字节残留文件被 SQLite 视为合法空库且 `integrity_check='ok'`，`size === 0` 只挡住 0 字节；新的写入路径先写 `.partial` 再 rename，目标文件不会由本进程产生该状态，故仅影响历史遗留文件。
+  3. **NF3-03**：复用分支未清理已存在的 `<target>.partial`，成功路径可能留下无害垃圾文件（从不被读取，下次替换时删除）。
+  4. **NF3-04**：`:memory:` 数据库叠加 `backupPath` 时，`backupDatabase` 按设计跳过，随后 `renameSync` 抛裸 `ENOENT`（非 `StorageError`）；仓库内无此组合调用。
+- 影响：四项均不阻断 WP-01 验收（复评三判定 PASS，5 项 P3；本组为其中 4 项），生产默认路径不受影响；属健壮性/诊断一致性改进。
+- 建议/实际路由：随 **WP-09**（daemon 备份/迁移接线）一并收紧——为显式 `backupPath` 增加来源版本标记或改为每次刷新、复用判定追加 `schema_migrations` 表存在性检查、复用分支清理 `.partial`、内存库路径显式返回"不备份"而非抛裸错。已在 `settlement.md` §6 登记为残余项。
+- 关联：复评三 NF3-01…NF3-04；AC-065；DC-20/DC-21。

@@ -25,7 +25,9 @@
 
 WP-00（工具链与执行底座）已按 L2 实现并完成独立 Review/Test：根工程与十个工程命令、`packages/contracts` 契约 Schema、`packages/pi-runtime`（Pi 会话工厂、显式资源加载、事件映射、内置扩展注册）、`apps/runner` 单 Attempt 进程、`apps/cli doctor` 与固定执行镜像。`doctor` 真实探测依赖、镜像 digest 与镜像运行能力、目录与端口；容器隔离负例覆盖只读 rootfs、只读挂载、非 root、cap-drop、无网络与 pid/内存上限；证据链见 `.agentdev/work/WP-00/`。
 
-Core、真实 Provider 纵向运行、协议与存储、交付门禁、权限隔离、知识投影和恢复仍未实现：`pnpm test:e2e`、`pnpm test:acceptance`、`pnpm test:live` 按契约返回 NOT_IMPLEMENTED，后续按[实施工作包](delivery/implementation.md)的依赖顺序继续。
+WP-01（数据、状态与协议核心）已按 L2 实现并完成独立 Review/Test：`packages/contracts` 覆盖 `data.md` §2 全 28 张表与 §3 结构，`packages/domain` 提供状态机/路由/权限/需求判定，`packages/storage` 提供单项目单库迁移与备份、版本 CAS 仓储、幂等命令账本、事件日志、outbox/租约/内容寻址 blob，`packages/core` 提供串行邮箱与命令分发、事件订阅与背压、连接认证与 Project 身份、需求投影。独立测试在冻结点 `c201f42` 上通过（unit 13 文件/173 用例、integration 10 文件/124 用例含真实容器）；证据链见 `.agentdev/work/WP-01/`。
+
+Work/Run 执行编排、真实 Provider 纵向运行、协议接线（daemon/BFF/WS）、交付门禁、权限隔离、知识投影和恢复仍未实现：`pnpm test:e2e`、`pnpm test:acceptance`、`pnpm test:live` 按契约返回 NOT_IMPLEMENTED，后续按[实施工作包](delivery/implementation.md)的依赖顺序继续。
 
 开发从[实施工作包](delivery/implementation.md)开始，按依赖实现共享Schema与底座，再完成各项能力和[验收](delivery/acceptance.md)。规范中的包路径和工程命令是待交付接口，不能假定已经存在。
 
