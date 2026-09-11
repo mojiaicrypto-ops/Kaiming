@@ -30,6 +30,7 @@ import {
   l1Failures,
   READ_OPERATIONS,
   restoreTarget,
+  routeMessage,
   riskFromFlags,
   touchesRunningEnvironment,
   runAcceptsNewAttempt,
@@ -246,6 +247,37 @@ describe('level routing (workflow.md §2)', () => {
     // Environment operations are handled by their own predicate.
     expect(touchesRunningEnvironment({ operations: ['deploy'], networkTargets: [] })).toBe(true);
     expect(touchesRunningEnvironment({ operations: ['edit'], networkTargets: [] })).toBe(false);
+  });
+
+  it('routes a message into independent work items (AC-005/AC-006)', () => {
+    // A pure question: one read-only assist Work, no write scope.
+    const question = routeMessage('explain how the routing rules work');
+    expect(question.items.map((item) => item.intent)).toEqual(['assist']);
+    expect(question.items[0]?.scope.writePaths).toEqual([]);
+    expect(question.explicitAuthorization).toBe(false);
+
+    // An explicit fix with a named target: the message authorizes its own scope.
+    const fix = routeMessage('fix the typo in docs/INDEX.md');
+    expect(fix.items.map((item) => item.intent)).toEqual(['delivery']);
+    expect(fix.items[0]?.scope.writePaths).toEqual(['docs/INDEX.md']);
+    expect(fix.explicitAuthorization).toBe(true);
+
+    // A mixed message: explanation first, modification with its own scope.
+    const mixed = routeMessage('explain the routing rules and fix the typo in docs/INDEX.md');
+    expect(mixed.items.map((item) => item.intent).sort()).toEqual(['assist', 'delivery']);
+    const delivery = mixed.items.find((item) => item.intent === 'delivery');
+    const assist = mixed.items.find((item) => item.intent === 'assist');
+    expect(delivery?.scope.writePaths).toEqual(['docs/INDEX.md']);
+    expect(assist?.scope.writePaths).toEqual([]);
+    expect(mixed.explicitAuthorization).toBe(true);
+
+    // A modification with no target is not guessed: the Chief asks first.
+    const vague = routeMessage('fix the bug');
+    expect(vague.items.map((item) => item.intent)).toEqual(['assist']);
+    expect(vague.explicitAuthorization).toBe(false);
+
+    // A documentation request is its own intent.
+    expect(routeMessage('write the documentation for the API').items[0]?.intent).toBe('document');
   });
 
   it('classifies every contract operation as read-only, workspace write or environment', () => {

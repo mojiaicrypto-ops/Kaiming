@@ -79,3 +79,12 @@
   - 对抗性 7：`assertReadable` 注释改为与单用户现实一致。
 - 修复后验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **283 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace。
 - 待办：第三轮独立 Review（复核上述修复与 AC-005/006 机制是否满足验收口径）→ 独立 Test → 结算。
+
+## T9 AC-005 / AC-006 完整实现（用户决定：必须在本包内实现）
+
+用户（产品方）在第二轮 Review 后明确选择「AC-005/AC-006 必须在 WP-03 内完整实现」，因此本包补充**确定性的 Chief 路由**（`packages/domain/src/requests.ts` 的 `routeMessage`），作为模型 Assessment（WP-04/06）之前的基线：
+
+- **AC-005 明确启动**：消息里出现修改动词（修复/改/实现/删除/更新/重构…）且**点名了具体目标路径**时，Core 把它路由为 `delivery` Work：以命名路径为 `writePaths`、`operations:['edit']` 建 Authorization 行（`sourceRef` = 该消息），绑定 `work.authorizationRef`，Work 升为 L1，并写入 Assessment（intent/level/authorizationRef/reason）。原消息即范围授权，**范围内不再要求二次确认**。未点名目标的修改请求不被猜测（先走 assist 澄清，避免静默写权限）。
+- **AC-006 混合意图**：同一消息同时要求解释与修改时拆成两个 Work（`assist` 只读 + `delivery` 带授权范围），各自独立 scope 与 budget，共享同一 source message，响应返回 `workIds`；解释 Work 无写权限，可先完成并返回产物。
+- 证据：`packages/domain/test/domain.test.ts`（路由规则矩阵）、`packages/core/test/artifacts.test.ts`（端到端：Authorization 行 + work.authorizationRef + Assessment + 多 Work 独立 scope + 纯问答零授权）。
+- 说明（DC-60）：`assessment` 行按 `data.md` §2 的列定义写入，不新增 goal/scope 列（goal 在 Work 行、scope 在 Authorization 行）；模型驱动的语义评估与更细的拆分粒度仍由 WP-04/06 接管，本包提供可运行的确定性基线。

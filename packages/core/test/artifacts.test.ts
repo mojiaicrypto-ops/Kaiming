@@ -406,16 +406,14 @@ describe('attachments, artifacts and previews (WP-03)', () => {
 
   it('records the authority an explicit message grants (AC-005)', () => {
     const owner = userIdFromSubject('installation:local');
+    // The message itself names the target, so the Chief routes it as delivery and the
+    // message is its own scope authorization — no second confirmation (AC-005).
     const sent = sendMessage(
       { projectId, store, attachments, artifacts, blobs, now: () => clock },
       {
         conversationId: CONVERSATION_ID,
         body: 'fix the typo in docs/INDEX.md',
         ownerUserId: owner,
-        authorization: {
-          scope: { readPaths: ['docs'], writePaths: ['docs'], operations: [], networkTargets: [] },
-          operations: [],
-        },
       },
     );
     expect(sent.authorizationId).not.toBeNull();
@@ -424,29 +422,56 @@ describe('attachments, artifacts and previews (WP-03)', () => {
     expect(store.authorizations.find(sent.authorizationId ?? '')).toMatchObject({
       workId: sent.workId,
       sourceRef: { kind: 'message', id: sent.messageId },
-      scope: { writePaths: ['docs'] },
+      scope: { writePaths: ['docs/INDEX.md'] },
+      operations: ['edit'],
     });
+    // The Assessment records the routing evidence for that authorization.
+    const assessment = store.assessments.list({ where: 'work_id = ?', params: [sent.workId] })[0];
+    expect(assessment).toMatchObject({
+      intent: 'delivery',
+      level: 'L1',
+      authorizationRef: sent.authorizationId,
+    });
+    // The granted scope itself lives on the Authorization (DC-60 keeps the assessment
+    // row to its documented columns).
+    expect(store.works.find(sent.workId)?.scope).toMatchObject({
+      writePaths: ['docs/INDEX.md'],
+    });
+    // A pure question grants nothing and stays read-only.
+    const question = sendMessage(
+      { projectId, store, attachments, artifacts, blobs, now: () => clock },
+      {
+        conversationId: CONVERSATION_ID,
+        body: 'explain how the routing rules work',
+        ownerUserId: owner,
+      },
+    );
+    expect(question.authorizationId).toBeNull();
+    expect(store.works.find(question.workId)).toMatchObject({ intent: 'assist', level: 'none' });
   });
 
   it('splits one mixed message into the work items it names (AC-006)', () => {
     const owner = userIdFromSubject('installation:local');
+    // One message asking for both an explanation and a fix is split by the Chief
+    // route itself: the explanation is read-only and can finish first.
     const sent = sendMessage(
       { projectId, store, attachments, artifacts, blobs, now: () => clock },
       {
         conversationId: CONVERSATION_ID,
-        body: 'explain the routing rules and fix the typo',
+        body: 'explain the routing rules and fix the typo in docs/INDEX.md',
         ownerUserId: owner,
-        workItems: [
-          { intent: 'assist', goal: 'explain the routing rules' },
-          { intent: 'delivery', goal: 'fix the typo' },
-        ],
       },
     );
     // One message, two independent Works, each with its own scope and budget.
     expect(sent.workIds).toHaveLength(2);
     expect(sent.workId).toBe(sent.workIds[0]);
     const works = sent.workIds.map((id) => store.works.find(id));
-    expect(works.map((work) => work?.intent)).toEqual(['assist', 'delivery']);
+    expect(works.map((work) => work?.intent).sort()).toEqual(['assist', 'delivery']);
+    // Independent scopes: only the delivery Work may write, and only the named path.
+    const delivery = works.find((work) => work?.intent === 'delivery');
+    const explanation = works.find((work) => work?.intent === 'assist');
+    expect(delivery?.scope).toMatchObject({ writePaths: ['docs/INDEX.md'], operations: ['edit'] });
+    expect(explanation?.scope.writePaths).toEqual([]);
     for (const work of works) {
       expect(work?.sourceRef).toMatchObject({ kind: 'message', id: sent.messageId });
       expect(store.budgets.list({ where: 'work_id = ?', params: [work?.id ?? ''] })).toHaveLength(

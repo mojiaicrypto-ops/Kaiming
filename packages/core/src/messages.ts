@@ -19,6 +19,7 @@ import {
 } from '@agentdev/contracts';
 import { uuidv7 } from '@agentdev/storage';
 import type { BlobStore } from '@agentdev/storage';
+import { routeMessage } from '@agentdev/domain';
 import { userIdFromSubject } from './identity.js';
 import type { OperationDefinition, OperationContext } from './dispatcher.js';
 import { ProtocolError } from './errors.js';
@@ -143,23 +144,27 @@ export function sendMessage(
   // Work per item, all bound to the same source message, so an explanation can be
   // delivered while the fix continues (AC-006). Which intents a message has is the
   // Chief's assessment; this is the mechanism it drives.
-  const workItems = input.workItems ?? [];
+  const routing = routeMessage(body);
+  const explicitItems: readonly {
+    readonly intent: 'assist' | 'artifact' | 'document' | 'delivery';
+    readonly goal: string;
+  }[] = input.workItems ?? routing.items;
   const works: Work[] = [];
   if (input.targetWorkId !== undefined) {
     works.push(requireWork(context, input.targetWorkId, conversation.id));
-  } else if (workItems.length > 0) {
-    for (const item of workItems) {
+  } else {
+    for (const item of explicitItems) {
+      const routingItem = routing.items.find((candidate) => candidate.intent === item.intent);
       works.push(
         createAssistWork(context, {
           messageId,
           body: item.goal,
           now: before,
           intent: item.intent,
+          ...(routingItem === undefined ? {} : { scope: routingItem.scope }),
         }),
       );
     }
-  } else {
-    works.push(createAssistWork(context, { messageId, body, now: before, intent: 'assist' }));
   }
   const work = works[0];
   if (work === undefined) {
@@ -169,17 +174,40 @@ export function sendMessage(
   // the Authorization and binds it to the Work, so a delivery assessment has a real
   // `authorizationRef` to point at (AC-005).
   let authorizationId: string | null = null;
-  if (input.authorization !== undefined) {
+  const granted = input.authorization ?? grantedByMessage(body, routing);
+  if (granted !== undefined) {
     const row = context.store.authorizations.insert({
       sourceRef: { kind: 'message', id: messageId, version: '1' },
       workId: work.id,
       goal: body.slice(0, 2_000),
-      scope: input.authorization.scope,
-      operations: [...input.authorization.operations],
+      scope: granted.scope,
+      operations: [...granted.operations],
       acceptedAt: new Date(before).toISOString(),
     });
-    context.store.works.update(work.id, { authorizationRef: row.id, level: 'L1' }, work.version);
+    const updated = context.store.works.update(
+      work.id,
+      { authorizationRef: row.id, level: 'L1' },
+      work.version,
+    );
+    works[0] = updated;
     authorizationId = row.id;
+    // The Assessment records who routed the message and why (`workflow.md` §1): the
+    // user message is the scope authorization, so no second confirmation is required
+    // inside that scope (AC-005).
+    // The `assessment` row holds the routing facts (its `data.md` §2 definition has no
+    // goal/scope columns, DC-60); the goal lives on the Work and the scope on the
+    // Authorization this message granted.
+    context.store.assessments.insert({
+      workId: updated.id,
+      intent: updated.intent,
+      level: 'L1',
+      semanticImpact: false,
+      riskFlags: [],
+      uncertainties: [],
+      authorizationRef: row.id,
+      policyRevision: 1,
+      reason: routing.reason,
+    } as never);
   }
 
   // Validate and bind every upload before the message row exists, so a bad list
@@ -295,6 +323,30 @@ export function createMessageOperations(
   ];
 }
 
+/**
+ * The authority an explicit message grants (`workflow.md` §1, AC-005).
+ *
+ * A named modification target is the user's own authorization; a pure question grants
+ * nothing.
+ */
+function grantedByMessage(
+  body: string,
+  routing: ReturnType<typeof routeMessage>,
+): { readonly scope: Scope; readonly operations: readonly OperationName[] } | undefined {
+  if (!routing.explicitAuthorization) return undefined;
+  const writes = routing.items.flatMap((item) => item.writePaths);
+  if (writes.length === 0) return undefined;
+  return {
+    scope: {
+      readPaths: [...new Set(writes.map((path) => path.replace(/\/[^/]*$/u, '')))],
+      writePaths: writes,
+      operations: ['edit'],
+      networkTargets: [],
+    },
+    operations: ['edit'],
+  };
+}
+
 /** Creates the assist Work a new message is the scope authorization for. */
 function createAssistWork(
   context: {
@@ -306,6 +358,7 @@ function createAssistWork(
     readonly body: string;
     readonly now: number;
     readonly intent: 'assist' | 'artifact' | 'document' | 'delivery';
+    readonly scope?: Scope;
   },
 ): Work {
   const workId = uuidv7(input.now);
@@ -330,7 +383,7 @@ function createAssistWork(
     purpose: input.body.slice(0, 200),
     level: 'none',
     goal: input.body.slice(0, 2_000),
-    scope: { readPaths: [], writePaths: [], operations: [], networkTargets: [] },
+    scope: input.scope ?? { readPaths: [], writePaths: [], operations: [], networkTargets: [] },
     sourceRef: { kind: 'message', id: input.messageId, version: '1' },
     status: 'queued',
     blockerIds: [],
