@@ -64,6 +64,25 @@ const NEGATION_PATTERNS: readonly RegExp[] = [
   /\b(do not|don't|dont|never|no need to|without changing|not asking|not asking you to)\b/iu,
 ];
 
+/**
+ * Statements and status questions.
+ *
+ * A message that reports a change ("我已经修改了 X"), states a need ("X 需要修改") or
+ * asks whether something should change ("是否应该修改 X") is not an instruction, even
+ * though it contains a modification verb right next to a path (W3R6 review).
+ */
+const STATEMENT_PATTERNS: readonly RegExp[] = [
+  /\b(?:已经|已|刚才|刚刚)\s*(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整)/u,
+  /(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整)了/u,
+  /(?:需要|应该|应当|必须|得|该)\s*(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整|处理)/u,
+  /(?:有没有|是否)\s*(?:应该|需要|该|要)/u,
+  /\b(already|have (?:already )?(?:fixed|changed|updated|added|removed|deleted)|i(?:'ve| have) (?:fixed|changed|updated)|needs? (?:to be )?(?:fixed|changed|updated|removed|deleted)|should (?:we|i|it)|ought to)\b/iu,
+];
+
+/** Plain request verbs that ask for an action without naming a change verb. */
+const REQUEST_ACTION_PATTERN =
+  /(处理|调整|优化|完善|纠正|替换|换成|补上|弄好|搞定|过一遍|处理下|处理一下|看一下|检查一下|帮忙|帮我|麻烦|请)/u;
+
 /** Hypotheticals and quotations are not instructions. */
 const HYPOTHETICAL_PATTERNS: readonly RegExp[] = [
   /(如果|假如|若是|要是|万一|假设)/u,
@@ -73,7 +92,7 @@ const HYPOTHETICAL_PATTERNS: readonly RegExp[] = [
 ];
 
 const MODIFICATION_PATTERN =
-  /(修复|修正|更正|改掉|改成|修改|改进|更改|改|实现|新增|添加|删除|移除|更新|补充|重命名|重构)/u;
+  /(修复|修正|更正|改掉|改成|修改|改进|更改|改|实现|新增|添加|删除|移除|更新|补充|重命名|重构|调整|优化|完善|纠正|替换|换成|处理)/u;
 
 const MODIFICATION_EN_PATTERN =
   /\b(fix|fixes|fixed|implement|update|updates|add|adds|remove|removes|delete|deletes|refactor|rename|change|changes|correct|corrects|edit|edits)\b/iu;
@@ -167,9 +186,15 @@ function readClause(clause: string): ClauseReading {
   if (matches(HYPOTHETICAL_PATTERNS, clause)) {
     return { paths, instruction: false, explanation: true };
   }
+  if (matches(STATEMENT_PATTERNS, clause)) {
+    return { paths, instruction: false, explanation: true };
+  }
   const leadsExplanation =
     EXPLANATION_LEAD_PATTERN.test(clause) || EXPLANATION_LEAD_EN_PATTERN.test(clause);
-  const modifies = MODIFICATION_PATTERN.test(clause) || MODIFICATION_EN_PATTERN.test(clause);
+  const modifies =
+    MODIFICATION_PATTERN.test(clause) ||
+    MODIFICATION_EN_PATTERN.test(clause) ||
+    REQUEST_ACTION_PATTERN.test(clause);
   if (leadsExplanation) {
     // The leading verb decides: "describe the fix needed in X" is an explanation even
     // though it contains the word "fix".

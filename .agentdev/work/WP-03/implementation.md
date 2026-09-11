@@ -127,8 +127,19 @@
 - 修复（`requests.ts` 重写为保守判定）：
   - 判定收敛为「**指令子句**」：子句内同时出现修改动词与命名路径，且该子句不含疑问（吗/呢/如何/是否已经/how/did/…）、拒绝（不要/别+动词/don't/never/…）、假设与引用（如果/假如/if/whether/引号/你提到…）标记；解释动词**仅在子句开头**才算解释，`说明/介绍` 作名词不再误判。
   - `别` 仅在词首否定动作（负向后顾，排除错别字/识别/特别/分别）；`、` 作为路径分词符但不作子句分隔符，`修改 a、b` 保持同一指令子句。
-  - 可疑即 fail-closed：拿不准时只给只读 Work（并向用户澄清），绝不猜测写范围。
+  - 可疑即 fail-closed：拿不准时只给只读 Work（并向用户澄清），绝不猜测写范围。**但不宣称「永不下发」**——自然语言判定是启发式的，第六轮对抗性核验又补出「陈述/完成体」（我已经修改了 X、X 需要修改、是否应该修改 X）与「日常祈使句」（X 的错别字麻烦处理下）两类反例；本包已补入这些词表与回归用例，剩余误判属启发式固有的残余风险，真正的语义分类由 WP-04/06 的模型 Assessment 接管。
   - `workItems` 在 Core 侧限 `MAX_WORK_ITEMS=4`（与服务端路由一致）；`assertGrantWithinMessage` 同时约束 `readPaths`；预览只发送 `execution.md` §45 的 CSP 单头（无效的第二头名已真正删除）。
 - 回归网：把第五轮 Review/对抗性给出的正/负例句表（19 条不得授权 + 8 条必须授权）与 HTTP 级用例（workItems 上限、状态询问句）落成长期测试。
 - 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **288 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace。
 - 后续：第六轮独立 Review 复核（重点是句式矩阵与 `workItems` 上限），通过后进入独立 Test。
+
+## T13 独立 Review 第六轮（报告缺档，对抗性核验补项）与修复
+
+- 第六轮 Reviewer 未产出报告（空文件），同轮对抗性核验以 `7c01c9d` 为冻结点独立复现，确认第五轮点名的误拒/CSP/readPaths 三组已闭合，但指出**新的 fail-open 家族**：陈述/完成体与认识情态（`我已经修改了 docs/INDEX.md`、`刚修复了…`、`I already fixed…`、`docs/INDEX.md 需要修改`、`是否应该修改 …`、`是否需要更新 …`、`麻烦评估一下 … 是否需要修改`）仍产生可派发的写授权；以及**反向误拒**：不含规范变更动词的日常祈使句（`docs/INDEX.md 的错别字麻烦处理下`）不授权；另指出 `workItems` 第二个同 intent 项 scope 为空、记录中「永不下发写授权」的措辞不实。
+- 修复：
+  - 新增 `STATEMENT_PATTERNS`（已经/已/…了 + 变更动词、需要/应该/必须 + 变更动词、是否应该/是否需要、already/needs to/should we 等）——陈述、完成体与认识情态一律只读。
+  - 新增请求类动词与表达（处理/调整/优化/完善/纠正/替换/换成/处理下/处理一下/帮忙/麻烦/请…），使日常祈使句在命名目标时正常授权。
+  - `workItems` 的 scope 匹配在同 intent 超出路由项数时回落到该 intent 的 scope，不再产生空 scope Work。
+  - 订正记录措辞（见 T12 修订），不再宣称启发式判定「永不」误判。
+  - 回归网扩充：新增陈述/完成体/认识情态 8 句（不得授权）与日常祈使句 3 句（必须授权）。
+- 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **288 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace。

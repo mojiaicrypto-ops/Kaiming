@@ -174,14 +174,16 @@ export function sendMessage(
   }[] = input.workItems ?? routing.items;
   // Client-supplied items are matched to routing scopes by position first, so two
   // items of the same intent keep independent scopes (W3R4-01).
-  const scopeFor = (item: { readonly intent: string }, index: number): Scope | undefined =>
-    input.workItems === undefined
-      ? routing.items[index]?.scope
-      : routing.items.filter((candidate) => candidate.intent === item.intent)[
-          input.workItems.filter(
-            (candidate, position) => position < index && candidate.intent === item.intent,
-          ).length
-        ]?.scope;
+  const scopeFor = (item: { readonly intent: string }, index: number): Scope | undefined => {
+    if (input.workItems === undefined) return routing.items[index]?.scope;
+    const matching = routing.items.filter((candidate) => candidate.intent === item.intent);
+    const rank = input.workItems.filter(
+      (candidate, position) => position < index && candidate.intent === item.intent,
+    ).length;
+    // A client may name more items of one intent than the router produced; the extra
+    // one reuses that intent's scope instead of silently losing it (W3R6 review).
+    return matching[rank]?.scope ?? matching.at(-1)?.scope;
+  };
   const works: Work[] = [];
   if (input.targetWorkId !== undefined) {
     works.push(requireWork(context, input.targetWorkId, conversation.id));

@@ -301,6 +301,15 @@ describe('level routing (workflow.md §2)', () => {
       'fix docs/INDEX.md if you think it helps',
       '你说要修复 docs/INDEX.md',
       '你提到 docs/INDEX.md 需要修复',
+      // Statements and completion aspect report a change; they are not instructions.
+      '我已经修改了 docs/INDEX.md',
+      '刚修复了 docs/INDEX.md',
+      'I already fixed docs/INDEX.md',
+      'docs/INDEX.md 需要修改',
+      'docs/INDEX.md 有错误需要修复',
+      '是否应该修改 docs/INDEX.md',
+      '是否需要更新 docs/INDEX.md',
+      '麻烦评估一下 docs/INDEX.md 是否需要修改',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(false);
@@ -321,6 +330,10 @@ describe('level routing (workflow.md §2)', () => {
       '改 docs/INDEX.md',
       'fix the typo in docs/INDEX.md',
       'update docs/INDEX.md',
+      // Everyday imperative wording without a canonical change verb.
+      'docs/INDEX.md 的错别字麻烦处理下',
+      '麻烦处理一下 docs/INDEX.md 里的错别字',
+      'docs/INDEX.md 的错别字请帮忙处理',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(true);
