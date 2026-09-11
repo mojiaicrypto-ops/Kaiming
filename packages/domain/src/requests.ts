@@ -45,6 +45,20 @@ const MODIFICATION_PATTERNS: readonly RegExp[] = [
   /\bfix\b|\bimplement\b|\bupdate\b|\badd\b|\bremove\b|\bdelete\b|\brefactor\b|\brename\b/iu,
 ];
 
+/**
+ * Markers of a question.
+ *
+ * `workflow.md` §1 only lets an *execution* message authorize its target; "how do I
+ * fix X?" names a path but asks for an explanation, so it must never create a write
+ * authorization (W3R3 review).
+ */
+const QUESTION_PATTERNS: readonly RegExp[] = [
+  /[?？]\s*$/u,
+  /^(如何|怎么|怎样|为什么|为何|能否|是否可以|可不可以|要不要|是不是|有没有)/u,
+  /^(how|why|what|when|where|which|can|could|should|would|is|are|does|do)\b/iu,
+  /(请问|帮我看看|能不能|可以吗)/u,
+];
+
 const DOCUMENT_PATTERNS: readonly RegExp[] = [
   /文档|说明书|readme|设计文档/iu,
   /\bdocument(ation)?\b/iu,
@@ -88,7 +102,9 @@ export function routeMessage(body: string): MessageRouting {
   const text = body.trim();
   const paths = pathsIn(text);
   const asksForExplanation = matches(EXPLANATION_PATTERNS, text);
-  const asksForChange = matches(MODIFICATION_PATTERNS, text);
+  const isQuestion = matches(QUESTION_PATTERNS, text);
+  // A question is never an execution message, however concrete its named target.
+  const asksForChange = !isQuestion && matches(MODIFICATION_PATTERNS, text);
   const asksForDocument = matches(DOCUMENT_PATTERNS, text);
 
   const items: MessageWorkItem[] = [];
@@ -113,7 +129,10 @@ export function routeMessage(body: string): MessageRouting {
     items.push({
       intent: 'delivery',
       goal: text.slice(0, 2_000),
-      scope: { ...emptyScope(), readPaths, writePaths: paths, operations: ['edit'] },
+      // Reading the target is part of changing it, so both capabilities are declared:
+      // an authorization with `readPaths` but no read operation is self-contradictory
+      // and would fail the Core's capability check (W3R3-01).
+      scope: { ...emptyScope(), readPaths, writePaths: paths, operations: ['read', 'edit'] },
       writePaths: paths,
     });
   }
@@ -128,10 +147,16 @@ export function routeMessage(body: string): MessageRouting {
   }
   const trimmed = items.slice(0, MAX_WORK_ITEMS);
   const explicit = trimmed.some((item) => item.writePaths.length > 0);
-  const reason = explicit
-    ? trimmed.length > 1
-      ? 'mixed message: one explanation Work and one authorized modification Work'
-      : 'explicit target: the message authorizes its own scope'
-    : 'question or explanation: read-only assist route';
-  return { items: trimmed, explicitAuthorization: explicit, reason };
+  const reason = isQuestion
+    ? 'question: asks for an explanation even when it names a target, so it grants nothing'
+    : explicit
+      ? trimmed.length > 1
+        ? 'mixed message: one explanation Work and one authorized modification Work'
+        : 'explicit target: the message authorizes its own scope'
+      : 'question or explanation: read-only assist route';
+  return {
+    items: trimmed,
+    explicitAuthorization: explicit,
+    reason,
+  };
 }

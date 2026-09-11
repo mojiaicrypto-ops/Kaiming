@@ -88,3 +88,19 @@
 - **AC-006 混合意图**：同一消息同时要求解释与修改时拆成两个 Work（`assist` 只读 + `delivery` 带授权范围），各自独立 scope 与 budget，共享同一 source message，响应返回 `workIds`；解释 Work 无写权限，可先完成并返回产物。
 - 证据：`packages/domain/test/domain.test.ts`（路由规则矩阵）、`packages/core/test/artifacts.test.ts`（端到端：Authorization 行 + work.authorizationRef + Assessment + 多 Work 独立 scope + 纯问答零授权）。
 - 说明（DC-60）：`assessment` 行按 `data.md` §2 的列定义写入，不新增 goal/scope 列（goal 在 Work 行、scope 在 Authorization 行）；模型驱动的语义评估与更细的拆分粒度仍由 WP-04/06 接管，本包提供可运行的确定性基线。
+
+## T10 独立 Review 第三轮与修复（FAIL → 修复）
+
+- 第三轮独立 Review 判 **FAIL**（1×P1、5×P2、8×P3）：P1 是 AC-005 的授权自相矛盾（消息授权声明 `readPaths` 却没有 `read` 操作 ⇒ 任何用它准入的 Run/Assessment 都被 `capabilityGaps` 拒绝，交付路线死锁）。对抗性核验确认 FAIL 成立，并补出两条**越权**缺陷：疑问句（如「如何修复 docs/INDEX.md？」）会被当成执行消息生成写授权；HTTP 客户端可自报 `authorization`（甚至 `deploy`）凭空造权。
+- 修复：
+  - W3R3-01/03（P1）：消息授权的 `operations` 改为 `['read','edit']`（读目标本身是修改的一部分），`readPaths` 与 `writePaths` 一致；补「授权自洽且可用」的断言（`operations` 含 `read`、`readPaths` 覆盖命名路径）。端到端可用性（喂回 `Orchestrator.assess/dispatch`）由第四轮 Review 独立复核。
+  - 对抗性 1（越权）：`routeMessage` 增加疑问句识别（`?`/`？`、如何/怎么/为什么/能否/是否、how/why/what/can/should…）——疑问句即使点名路径也不产生写授权，仍走 assist/document。
+  - 对抗性 2（越权）：daemon 不再接受客户端 `authorization` 字段（`protocol.md` 未定义该参数）；Core 侧对任何调用方提供的授权执行 `assertGrantWithinMessage`——写路径必须来自消息点名的目标、不得含环境操作或网络目标，否则 `NOT_AUTHORIZED`。
+  - W3R3-02（P2）：消息授权绑定到**含写路径的那个 Work**（而非 `works[0]`），混合消息的 delivery Work 才拿 `authorizationRef`。
+  - W3R3-04（P2）：`conversation.message.send` 响应增加 `workIds` 与 `authorizationId`（协议表只列四字段，属加法补充，需在文档侧对账）。
+  - W3R3-05（P2）：同 intent 的多个 Work 由 `routeMessage` 的 per-item scope 决定，不再共用首个 scope。
+  - W3R3-06（P2）：预览恢复 `execution.md` §45 的逐字 CSP，sandbox 作为**第二个** `Content-Security-Policy` 头（浏览器按交集执行），不再改动文档化策略原文。
+  - W3R3-07（P2）：`StorageError` 只把「引用不存在」映射为 404，其余保持 500；通用 500 不再回显内部消息或路径。
+  - W3R3-08/09/10/11（P3）：`download.prepare` 返回 `validity` 并顺带 `prune()`；staged 配额按 owner 跨 Conversation 统计；记录数字与实测对齐（8 workspace、12 daemon 例、286 单测）。
+- 修复后验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **286 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。
+- 待办：第四轮独立 Review（重点复核 AC-005 授权端到端可用、越权两条、CSP 对账）→ 独立 Test → 结算。

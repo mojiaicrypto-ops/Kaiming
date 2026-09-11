@@ -21,9 +21,17 @@ export const PREVIEW_SANDBOX = 'allow-scripts';
  * that omits the custom header cannot weaken the policy (W3 review, adversarial 4).
  */
 export const PREVIEW_CSP =
-  "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; " +
-  "style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; " +
-  "frame-ancestors 'self'";
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
+  "img-src data: blob:; connect-src 'none'";
+
+/**
+ * Second policy, sent alongside `PREVIEW_CSP`.
+ *
+ * Browsers enforce multiple `Content-Security-Policy` headers as an intersection, so
+ * the documented policy stays verbatim while the sandbox also holds when the preview
+ * is opened as a top-level document instead of inside the iframe.
+ */
+export const PREVIEW_SANDBOX_CSP = 'sandbox allow-scripts';
 
 /** Mimes that may be rendered as HTML in a preview. */
 export const HTML_PREVIEW_MIMES = ['text/html', 'application/xhtml+xml'] as const;
@@ -31,6 +39,7 @@ export const HTML_PREVIEW_MIMES = ['text/html', 'application/xhtml+xml'] as cons
 export interface PreviewHeaders {
   readonly 'content-security-policy': string;
   readonly 'content-type': string;
+  readonly 'content-security-policy-sandbox'?: string;
   /** The client puts the body into an iframe with exactly this sandbox attribute. */
   readonly 'x-agentdev-preview-sandbox': string;
   /** A preview never reads or sets the workbench session cookie. */
@@ -47,6 +56,7 @@ export interface PreviewHeaders {
 export function previewHeaders(mime: string): PreviewHeaders {
   return {
     'content-security-policy': PREVIEW_CSP,
+    'content-security-policy-sandbox': PREVIEW_SANDBOX_CSP,
     'content-type': mime.trim().toLowerCase(),
     'x-agentdev-preview-sandbox': PREVIEW_SANDBOX,
     'x-agentdev-preview-credentials': 'omit',

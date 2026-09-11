@@ -426,6 +426,65 @@ describe('daemon HTTP surface (WP-03)', () => {
     expect(guessed.status).toBe(403);
   });
 
+  it('never lets a client inject its own authorization (W3R3 review)', async () => {
+    // The wire format has no authorization field: a question stays read-only even
+    // when the client asks for write authority.
+    const response = await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: CONVERSATION_ID,
+          body: 'explain the routing rules',
+          authorization: {
+            scope: {
+              readPaths: ['packages/core/src'],
+              writePaths: ['packages/core/src'],
+              operations: ['edit'],
+              networkTargets: [],
+            },
+            operations: ['edit'],
+          },
+        }),
+      }),
+    );
+    expect(response.status).toBe(202);
+    const sent = (await response.json()) as { workId: string; authorizationId: string | null };
+    expect(sent.authorizationId).toBeNull();
+    expect(store.works.find(sent.workId)?.scope.writePaths).toEqual([]);
+    expect(store.authorizations.list()).toHaveLength(0);
+  });
+
+  it('reports every Work of a split message and the authorization it created', async () => {
+    const response = await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: CONVERSATION_ID,
+          body: 'explain the routing rules and fix the typo in docs/INDEX.md',
+        }),
+      }),
+    );
+    expect(response.status).toBe(202);
+    const sent = (await response.json()) as {
+      workId: string;
+      workIds: string[];
+      authorizationId: string | null;
+    };
+    expect(sent.workIds).toHaveLength(2);
+    expect(sent.authorizationId).not.toBeNull();
+    // The authorization belongs to the delivery Work, never to the explanation.
+    const authorized = store.authorizations.find(sent.authorizationId ?? '');
+    const delivery = sent.workIds
+      .map((id) => store.works.find(id))
+      .find((work) => work?.intent === 'delivery');
+    expect(authorized?.workId).toBe(delivery?.id);
+    expect(delivery?.authorizationRef).toBe(sent.authorizationId);
+  });
+
   it('parses multipart bodies without a framework dependency', () => {
     const boundary = 'agentdev-boundary';
     const body = Buffer.from(

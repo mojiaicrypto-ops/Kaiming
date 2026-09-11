@@ -6,7 +6,7 @@
  * headers or leak a path in `/healthz`.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { JsonObject, OperationName, Role, Scope } from '@agentdev/contracts';
+import type { JsonObject, Role } from '@agentdev/contracts';
 import { StorageError, withTransaction } from '@agentdev/storage';
 import type { BlobStore, ProjectStore } from '@agentdev/storage';
 import {
@@ -142,12 +142,14 @@ export function createDaemon(options: DaemonOptions): Server {
       }
       const artifact = options.artifacts.get(artifactId, version);
       assertReadable(artifact, authed.userId);
+      options.tokens.prune();
       const grant = options.tokens.issue(artifact);
       json(response, 200, {
         downloadToken: grant.token,
         expiresAt: grant.expiresAt,
         artifactId: grant.artifactId,
         artifactVersion: grant.artifactVersion,
+        validity: artifact.validity,
       });
       return;
     }
@@ -176,14 +178,6 @@ export function createDaemon(options: DaemonOptions): Server {
         ...(typeof payload['targetWorkId'] === 'string'
           ? { targetWorkId: payload['targetWorkId'] }
           : {}),
-        ...(payload['authorization'] === undefined
-          ? {}
-          : {
-              authorization: payload['authorization'] as {
-                scope: Scope;
-                operations: OperationName[];
-              },
-            }),
         ...(Array.isArray(payload['workItems'])
           ? { workItems: payload['workItems'] as NonNullable<MessageSendParams['workItems']> }
           : {}),
@@ -191,6 +185,9 @@ export function createDaemon(options: DaemonOptions): Server {
       // The message, its Work, the attachment bindings, the user artifacts, the
       // command-ledger entry and the `message.received` event commit together; a
       // failure leaves every upload staged so the client can retry with the same ids.
+      // A client cannot hand itself authority: the only authorization a message
+      // creates is the one the Core derives from the message's own named target
+      // (AC-005); the wire format has no `authorization` field (W3R3 review).
       const outcome = withTransaction(options.store.db, () => {
         let commandId: string | undefined;
         if (idempotencyKey !== undefined) {
@@ -222,6 +219,9 @@ export function createDaemon(options: DaemonOptions): Server {
         const reply: JsonObject = {
           messageId: sent.messageId,
           workId: sent.workId,
+          // A split message needs every Work id and the authorization it created.
+          workIds: [...sent.workIds],
+          authorizationId: sent.authorizationId,
           state: sent.state,
           version: sent.version,
         };
@@ -368,12 +368,24 @@ export function createDaemon(options: DaemonOptions): Server {
       return;
     }
     if (error instanceof StorageError) {
-      // A foreign key or constraint failure is a bad request, not a server crash.
-      const notFound = error.code === 'NOT_FOUND' || /FOREIGN KEY/u.test(error.message);
-      json(response, notFound ? 404 : 400, {
+      // Only a reference to a missing record is the caller's fault; anything else
+      // (busy, conflict, blob mismatch) stays a server-side failure.
+      const missing = error.code === 'NOT_FOUND' || /FOREIGN KEY/u.test(error.message);
+      if (!missing) {
+        json(response, 500, {
+          ok: false,
+          error: {
+            code: 'INTERNAL_ERROR',
+            message: 'the change could not be stored',
+            retryable: false,
+          },
+        });
+        return;
+      }
+      json(response, 404, {
         ok: false,
         error: {
-          code: notFound ? 'NOT_FOUND' : 'VALIDATION_ERROR',
+          code: 'NOT_FOUND',
           message: 'the request references a record that does not exist',
           retryable: false,
         },
@@ -387,11 +399,12 @@ export function createDaemon(options: DaemonOptions): Server {
       });
       return;
     }
+    // Never echo an internal message or a path to the client.
     json(response, 500, {
       ok: false,
       error: {
         code: 'INTERNAL_ERROR',
-        message: error instanceof Error ? error.message : 'unknown failure',
+        message: 'the request could not be completed',
         retryable: false,
       },
     });

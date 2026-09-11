@@ -422,8 +422,8 @@ describe('attachments, artifacts and previews (WP-03)', () => {
     expect(store.authorizations.find(sent.authorizationId ?? '')).toMatchObject({
       workId: sent.workId,
       sourceRef: { kind: 'message', id: sent.messageId },
-      scope: { writePaths: ['docs/INDEX.md'] },
-      operations: ['edit'],
+      scope: { writePaths: ['docs/INDEX.md'], readPaths: ['docs/INDEX.md'] },
+      operations: ['read', 'edit'],
     });
     // The Assessment records the routing evidence for that authorization.
     const assessment = store.assessments.list({ where: 'work_id = ?', params: [sent.workId] })[0];
@@ -437,6 +437,23 @@ describe('attachments, artifacts and previews (WP-03)', () => {
     expect(store.works.find(sent.workId)?.scope).toMatchObject({
       writePaths: ['docs/INDEX.md'],
     });
+    // The granted authorization is self-consistent: a Run that reads and edits the
+    // named path satisfies the Core's capability check (W3R3-01).
+    const granted = store.authorizations.find(sent.authorizationId ?? '');
+    expect(granted?.operations).toContain('read');
+    expect(granted?.scope.readPaths).toContain('docs/INDEX.md');
+    // A question that names a target is still a question.
+    const questionWithPath = sendMessage(
+      { projectId, store, attachments, artifacts, blobs, now: () => clock },
+      {
+        conversationId: CONVERSATION_ID,
+        body: 'how do I fix the typo in docs/INDEX.md?',
+        ownerUserId: owner,
+      },
+    );
+    expect(questionWithPath.authorizationId).toBeNull();
+    expect(store.works.find(questionWithPath.workId)?.intent).toBe('assist');
+
     // A pure question grants nothing and stays read-only.
     const question = sendMessage(
       { projectId, store, attachments, artifacts, blobs, now: () => clock },
@@ -470,7 +487,10 @@ describe('attachments, artifacts and previews (WP-03)', () => {
     // Independent scopes: only the delivery Work may write, and only the named path.
     const delivery = works.find((work) => work?.intent === 'delivery');
     const explanation = works.find((work) => work?.intent === 'assist');
-    expect(delivery?.scope).toMatchObject({ writePaths: ['docs/INDEX.md'], operations: ['edit'] });
+    expect(delivery?.scope).toMatchObject({
+      writePaths: ['docs/INDEX.md'],
+      operations: ['read', 'edit'],
+    });
     expect(explanation?.scope.writePaths).toEqual([]);
     for (const work of works) {
       expect(work?.sourceRef).toMatchObject({ kind: 'message', id: sent.messageId });

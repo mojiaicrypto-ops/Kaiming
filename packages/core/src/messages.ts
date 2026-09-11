@@ -176,20 +176,30 @@ export function sendMessage(
   let authorizationId: string | null = null;
   const granted = input.authorization ?? grantedByMessage(body, routing);
   if (granted !== undefined) {
+    // A caller-provided authority may never exceed the scope the message itself
+    // named; otherwise the Core would hand out write/environment authority nobody
+    // asked for (W3R3 review).
+    assertGrantWithinMessage(granted, routing);
+  }
+  if (granted !== undefined) {
+    // The authorization belongs to the Work that will modify something, not to the
+    // first work item (W3R3-02).
+    const authorized = works.find((entry) => entry.scope.writePaths.length > 0) ?? work;
     const row = context.store.authorizations.insert({
       sourceRef: { kind: 'message', id: messageId, version: '1' },
-      workId: work.id,
+      workId: authorized.id,
       goal: body.slice(0, 2_000),
       scope: granted.scope,
       operations: [...granted.operations],
       acceptedAt: new Date(before).toISOString(),
     });
     const updated = context.store.works.update(
-      work.id,
-      { authorizationRef: row.id, level: 'L1' },
-      work.version,
+      authorized.id,
+      { authorizationRef: row.id, level: 'L1' as const },
+      authorized.version,
     );
-    works[0] = updated;
+    const index = works.findIndex((entry) => entry.id === authorized.id);
+    if (index >= 0) works[index] = updated;
     authorizationId = row.id;
     // The Assessment records who routed the message and why (`workflow.md` §1): the
     // user message is the scope authorization, so no second confirmation is required
@@ -338,13 +348,37 @@ function grantedByMessage(
   if (writes.length === 0) return undefined;
   return {
     scope: {
-      readPaths: [...new Set(writes.map((path) => path.replace(/\/[^/]*$/u, '')))],
+      readPaths: [...new Set(writes)],
       writePaths: writes,
-      operations: ['edit'],
+      operations: ['read', 'edit'],
       networkTargets: [],
     },
-    operations: ['edit'],
+    operations: ['read', 'edit'],
   };
+}
+
+/** Rejects authority that goes beyond the paths the message itself named. */
+function assertGrantWithinMessage(
+  granted: { readonly scope: Scope; readonly operations: readonly OperationName[] },
+  routing: ReturnType<typeof routeMessage>,
+): void {
+  const named = new Set(routing.items.flatMap((item) => item.writePaths));
+  const outside = granted.scope.writePaths.filter((path) => !named.has(path));
+  const environment = granted.scope.operations.some((operation) =>
+    ['bash', 'network', 'secret', 'push', 'deploy', 'delete_data'].includes(operation),
+  );
+  if (outside.length > 0 || environment || granted.scope.networkTargets.length > 0) {
+    throw new ProtocolError(
+      'NOT_AUTHORIZED',
+      'the supplied authorization exceeds what the message named',
+      {
+        details: {
+          outsideWritePaths: outside,
+          operations: [...granted.operations],
+        },
+      },
+    );
+  }
 }
 
 /** Creates the assist Work a new message is the scope authorization for. */
