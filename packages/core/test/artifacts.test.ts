@@ -18,6 +18,8 @@ import {
   ProtocolError,
   renderPreview,
   previewHeaders,
+  sendMessage,
+  userIdFromSubject,
 } from '../src/index.js';
 
 const ROOT = '/tmp/agentdev-artifacts-root';
@@ -300,6 +302,56 @@ describe('attachments, artifacts and previews (WP-03)', () => {
       expect(error).toBeInstanceOf(ProtocolError);
       expect(error).toMatchObject({ code: 'ARTIFACT_MISSING' });
     }
+  });
+
+  it('sends a message, creates its assist Work and binds uploads atomically (AC-084)', () => {
+    // The upload owner and the message author are the same derived subject, exactly
+    // as the daemon binds them.
+    const subject = 'installation:local';
+    const owner = userIdFromSubject(subject);
+    const staged = attachments.stage({
+      conversationId: CONVERSATION_ID,
+      ownerUserId: owner,
+      mime: 'text/html',
+      bytes: Buffer.from('<p>hi</p>', 'utf8'),
+    });
+    const sent = sendMessage(
+      { projectId, store, attachments, artifacts, now: () => clock },
+      {
+        conversationId: CONVERSATION_ID,
+        body: 'explain the routing rules',
+        attachmentIds: [staged.id],
+        owner: subject,
+      },
+    );
+    const work = store.works.find(sent.workId);
+    expect(work).toMatchObject({ intent: 'assist', level: 'none', status: 'queued' });
+    // No Requirement is ever created on the direct-collaboration route.
+    expect(store.requirements.list()).toHaveLength(0);
+    expect(store.attachments.find(staged.id)).toMatchObject({
+      state: 'bound',
+      workId: sent.workId,
+      boundMessageId: sent.messageId,
+    });
+    expect(store.artifacts.list({ where: 'origin = ?', params: ['user'] })).toHaveLength(1);
+    expect(store.messages.find(sent.messageId)?.seq).toBe(1);
+
+    // A second message reuses the conversation sequence and creates its own Work.
+    const second = sendMessage(
+      { projectId, store, attachments, artifacts, now: () => clock },
+      { conversationId: CONVERSATION_ID, body: 'and now a follow-up', owner: subject },
+    );
+    expect(store.messages.find(second.messageId)?.seq).toBe(2);
+    expect(second.workId).not.toBe(sent.workId);
+
+    // An oversized body is refused before any row is written.
+    expect(() =>
+      sendMessage(
+        { projectId, store, attachments, artifacts, now: () => clock },
+        { conversationId: CONVERSATION_ID, body: 'x'.repeat(64_001), owner: subject },
+      ),
+    ).toThrowError(/too long/);
+    expect(store.messages.list()).toHaveLength(2);
   });
 
   it('carries the isolation policy on every preview (AC-052)', () => {

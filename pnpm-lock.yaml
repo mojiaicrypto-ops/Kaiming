@@ -140,6 +140,18 @@ importers:
         specifier: workspace:*
         version: link:../../packages/contracts
 
+  apps/daemon:
+    dependencies:
+      '@agentdev/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@agentdev/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@agentdev/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
+
   apps/runner:
     dependencies:
       '@agentdev/contracts':

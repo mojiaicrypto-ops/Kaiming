@@ -7,7 +7,27 @@
  */
 import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
-import { projectIdFromRoot } from '@agentdev/storage';
+import { projectIdFromRoot, sha256 } from '@agentdev/storage';
+
+/**
+ * Stable entity id for an authenticated subject.
+ *
+ * `data.md` §2 stores user ids as entity ids (UUIDv7 or a project id), while a
+ * session subject is `user:<sessionId>` and the daemon/CLI subject is
+ * `installation:local`. Deriving a UUIDv7-shaped id from the subject keeps one
+ * subject one owner across restarts without inventing a user table.
+ */
+export function userIdFromSubject(subject: string): string {
+  const digest = sha256(`subject:${subject}`);
+  const variant = ((Number.parseInt(digest[16] ?? '0', 16) & 0x3) | 0x8).toString(16);
+  return [
+    digest.slice(0, 8),
+    digest.slice(8, 12),
+    `7${digest.slice(13, 16)}`,
+    `${variant}${digest.slice(17, 20)}`,
+    digest.slice(20, 32),
+  ].join('-');
+}
 
 export interface ProjectIdentity {
   /** Canonical absolute repository root: the git toplevel when there is one. */
