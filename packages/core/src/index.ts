@@ -20,3 +20,6 @@ export * from './run-lifecycle.js';
 export * from './orchestrator.js';
 export * from './join.js';
 export * from './stage.js';
+export * from './attachments.js';
+export * from './artifacts.js';
+export * from './preview.js';
