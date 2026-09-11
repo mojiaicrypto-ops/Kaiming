@@ -283,4 +283,5 @@ zod 的解析结果会保留调用方显式传入的 `undefined` 可选字段（
 - 冻结投影的单一定义：`frozenProviderOf(provider)` 是 `FrozenProvider` 的唯一来源（`resolve` 与 `freeze` 共用），`secretRef` 缺省时**省略键**而不是写 `null`；`readFrozen` 把历史/外来快照里的 `null` 归一为「无 Secret」，`complete()` 也按 `?? undefined` 归一（Test T-01：写 `null` 而读取端只认 `undefined`，会使无鉴权端点每次都 `CONFIG_INVALID`）。
 - 可用性包含凭证：`ModelGateway.availability` 在注入了 `SecretResolver` 时解析 `secretRef`，取不到即视为不可用（`agents.md` §5：不存在可用模型时不排队）。未注入 resolver 时 Secret 存储未知（WP-07/DC-31），保持放行。
 - 冻结的 `model` 投影保留 `inputPricePerMTokens`/`outputPricePerMTokens`（可选字段，存在才写），使 `resolve()` 与 `readFrozen()` 形状一致，并为成本核算保留依据。
-- 承接：真实 Secret 存储与解析（`SecretResolver` 的实现、`once` 授权消费）属 WP-07；`readFrozen` 对任意畸形载荷的完整 Schema 校验在 WP-08/WP-09 的读取面统一处理（当前已归一 `secretRef` 并保证不因此崩溃）。
+- `SecretResolver` 的隐式契约（第十九轮 R19-03）：`availability` 与 `complete` 各解析一次凭证，因此 resolver 必须是幂等、无副作用且不抛异常的；真实 Secret 存储（DB/IO 可能失败）属 WP-07，落线时需把 IO 失败包装为结构化错误（`PROVIDER_UNAVAILABLE`/`CONFIG_INVALID`），本包不在 resolver 外层兜底。
+- 承接：真实 Secret 存储与解析（`SecretResolver` 的实现、`once` 授权消费）属 WP-07；`readFrozen` 对任意畸形载荷的完整 Schema 校验（缺 `provider`/`model` 会抛原生 `TypeError`，第十九轮 R19-01，P2 非阻断）在 WP-08/WP-09 的读取面统一处理——当前写入方只有 `ConfigStore.freeze`，JSON 快照天然是合法对象，故不可达。

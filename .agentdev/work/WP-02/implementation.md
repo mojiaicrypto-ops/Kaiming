@@ -275,9 +275,17 @@
   - R18-02：`readFrozen` 把历史 `secretRef: null` 归一为缺省，`complete()` 同样按 `?? undefined` 处理。
   - R18-05（DC-73）：`availability` 在注入了 `SecretResolver` 时解析 `secretRef`，取不到即不可用（不注入时保持放行，真实 Secret 存储属 WP-07）。
   - 对抗性 3.2：`model` 冻结投影保留可选价格字段，`resolve()` 与 `readFrozen()` 形状一致。
-  - R18-03/R18-04：补匿名 `testConnection` 与冻结 provider 形状断言；新增 DC-73 登记。
+  - R18-03/R18-04：补匿名 `testConnection` 用例与冻结 provider 形状断言（形状守卫在 `model-gateway.test.ts`；`config.test.ts` 未被本提交触碰——第十九轮 R19-02 更正原记录口径）；新增 DC-73 登记。
 - 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **255 passed**；`pnpm test:integration` 124 passed。
 
 ## T9 待办
 
 - 独立 Review 与 Test（独立上下文）、结算与 `docs/INDEX.md` 状态更新、以及 `docs/delivery/acceptance.md` 中本包 AC 的证据登记。
+
+## T28 独立 Review 第十九轮（PASS，覆盖 cbf7471 的 R18 补修）
+
+- 第十九轮独立 Review 判 **PASS**（0×P1、1×P2、2×P3），对抗性核验同样裁 PASS（有条件），并闭合了第二轮 Test 提出的 O1（`cbf7471` 的代码改动此前无 Review 覆盖）。
+- 复核：R18-01（单一 `FrozenProvider` 投影，`resolve`/`freeze`/`readFrozen` 三路一致）、R18-02（历史 `secretRef:null` 归一）、R18-05（`availability` 校验凭证，悬空引用时 `PROVIDER_UNAVAILABLE` 且零写入）、model 价格投影四项全部真修好、无回归；契约命令 typecheck/lint/unit **255**/integration **124**/docs:check/build 全绿。
+- 新增非阻断项：R19-01（P2，`readFrozen` 对缺 `provider`/`model` 的畸形载荷抛原生 `TypeError`，承接 WP-08/WP-09）、R19-02（P3，T27 记录口径，已更正）、R19-03（P3，`SecretResolver` 隐式契约与双重解析，已登记 DC-73）。
+- 对抗性核验的记录级更正：`frozenProviderOf` 注释不再引用 `data.md` 中不存在的 `FrozenProvider` 结构（注释级修正，不改变行为）；R19-01/R19-03 已按上述登记。
+- 结论：WP-02 具备结算条件（0×P1、6/6 AC 有有效 Test 证据、代码树冻结）。

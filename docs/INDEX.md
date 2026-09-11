@@ -27,7 +27,9 @@ WP-00（工具链与执行底座）已按 L2 实现并完成独立 Review/Test�
 
 WP-01（数据、状态与协议核心）已按 L2 实现并完成独立 Review/Test：`packages/contracts` 覆盖 `data.md` §2 全 28 张表与 §3 结构，`packages/domain` 提供状态机/路由/权限/需求判定，`packages/storage` 提供单项目单库迁移与备份、版本 CAS 仓储、幂等命令账本、事件日志、outbox/租约/内容寻址 blob，`packages/core` 提供串行邮箱与命令分发、事件订阅与背压、连接认证与 Project 身份、需求投影。独立测试在冻结点 `c201f42` 上通过（unit 13 文件/173 用例、integration 10 文件/124 用例含真实容器）；证据链见 `.agentdev/work/WP-01/`。
 
-Work/Run 执行编排、真实 Provider 纵向运行、协议接线（daemon/BFF/WS）、交付门禁、权限隔离、知识投影和恢复仍未实现：`pnpm test:e2e`、`pnpm test:acceptance`、`pnpm test:live` 按契约返回 NOT_IMPLEMENTED，后续按[实施工作包](delivery/implementation.md)的依赖顺序继续。
+WP-02（主管与独立Agent调度）已按 L2 实现并完成独立 Review/Test：`packages/core` 提供 Assessment 与等级路由底线（环境操作/lockdown 风险/授权范围）、DispatchSpec 冻结与准入（角色×目的、父 Run、Work 预算、Provider 可用性与凭证、授权覆盖 `operations`/`writePaths`/`readPaths`/`networkTargets`）、Run 建立与 `config`/`context`/`dispatch` 三快照、Run 生命周期与 Work 预算预留-核销（`reconcile` 幂等）、Join/父唤醒/`chief_action_required`、StageResult 结构化交付与二次 Schema 错误 `contract_violation`、`request_dispatch` 幂等待办、角色 Profile 解析与模型网关；`packages/domain` 同时提供等级路由与风险词表。19 轮独立 Review 与 2 轮独立 Test 在代码树 `cbf7471` 上通过（unit 17 文件/255 用例、integration 10 文件/124 用例含真实容器）；AC-043/044/045/046/047/082 有证据（AC-082 的工具层执行负例承接 WP-07）；证据链见 `.agentdev/work/WP-02/`。
+
+真实 Provider 纵向运行、协议接线（daemon/BFF/WS）、交付门禁、权限隔离、工具执行层、知识投影和恢复仍未实现：`pnpm test:e2e`、`pnpm test:acceptance`、`pnpm test:live` 按契约返回 NOT_IMPLEMENTED，后续按[实施工作包](delivery/implementation.md)的依赖顺序继续。
 
 开发从[实施工作包](delivery/implementation.md)开始，按依赖实现共享Schema与底座，再完成各项能力和[验收](delivery/acceptance.md)。规范中的包路径和工程命令是待交付接口，不能假定已经存在。
 

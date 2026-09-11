@@ -527,7 +527,11 @@ export class ConfigStore {
 }
 
 /**
- * The single frozen projection of a Provider (`data.md` §3 `FrozenProvider`).
+ * The single frozen projection of a Provider inside the `config` snapshot.
+ *
+ * The projection (not the whole `ProviderConfig`) is what the snapshot stores
+ * (R-09); `data.md` does not name this structure, so this comment deliberately
+ * avoids a false document anchor (Review 19 adversarial).
  *
  * A Provider without a `secretRef` is a legitimate endpoint (local or
  * unauthenticated) and must not be frozen as `null`: the gateway reads only
