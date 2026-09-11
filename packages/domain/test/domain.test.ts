@@ -391,9 +391,7 @@ describe('level routing (workflow.md §2)', () => {
       '识别并修复 docs/PLAN.md',
       '特别修改 docs/PLAN.md',
       '更新 docs/INDEX.md 的说明',
-      'docs/INDEX.md 的错别字麻烦处理下',
       '麻烦处理一下 docs/INDEX.md 里的错别字',
-      'docs/INDEX.md 的错别字请帮忙处理',
       '改 docs/INDEX.md',
       '请修复 docs/INDEX.md',
       '处理一下 docs/PLAN.md 的错别字',
@@ -410,6 +408,22 @@ describe('level routing (workflow.md §2)', () => {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(true);
       expect(routing.items[0]?.scope.writePaths.length, body).toBeGreaterThan(0);
+    }
+
+    // Target-first phrasing is *not* a command template: the same shape also describes
+    // statements ("X 尚未修改"), so it stays read-only and the Chief asks for the
+    // action to be phrased as a command (declared fail-closed cost, planVersion 2).
+    for (const body of [
+      'docs/INDEX.md 的错别字麻烦处理下',
+      'docs/INDEX.md 的错别字请帮忙处理',
+      'docs/INDEX.md 里的接口说明更新一下',
+    ]) {
+      const routing = routeMessage(body);
+      expect(routing.explicitAuthorization, body).toBe(false);
+      expect(
+        routing.items.every((item) => item.writePaths.length === 0),
+        body,
+      ).toBe(true);
     }
 
     // A reference clause authorizes only the target it names, never the reference.

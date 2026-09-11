@@ -135,8 +135,8 @@ const CHOICE_PATTERNS: readonly RegExp[] = [
  * "after you confirm, update X" ask for a future action, not for one now.
  */
 const CONDITION_PATTERNS: readonly RegExp[] = [
-  /(一旦|的话|确认后|确认之后|经确认|批准后|之后|以后|否则)/u,
-  /\b(once|after (?:you|i|we)|assuming|provided that|subject to)\b/iu,
+  /(一旦|的话|确认后|确认之后|经确认|批准后|之后|以后|否则|待你|等你|看情况|酌情|发现问题|如有问题)/u,
+  /\b(once|after (?:you|i|we)|assuming|provided that|subject to|upon approval|following approval|pending review)\b/iu,
 ];
 
 /** Hypotheticals and quotations are not instructions. */
@@ -277,7 +277,7 @@ const CHANGE_VERB_LEAD_PATTERN =
  * authorization (default-deny).
  */
 const NON_COMMAND_MARKERS =
-  /(被|需要|应该|应当|必须|会|值得|得到|已经|已|刚才|刚刚|了|过|可能|也许|大概|是否|如果|假如|若是|要是|万一|假设|还是|或者|行不行|该不该|对不对|也行|好不好|要不要|一旦|的话|之后|以后|确认后|经确认|完毕|vs\.?|\bor\b|\byes\b|\bno\b|\bunless\b|\bwhether\b)/iu;
+  /(被|需要|应该|应当|必须|会|值得|得到|已经|已|刚才|刚刚|了|过|可能|也许|大概|是否|如果|假如|若是|要是|万一|假设|还是|或者|行不行|该不该|对不对|也行|好不好|要不要|一旦|的话|之后|以后|确认后|经确认|完毕|与否|哪个|哪一个|更好|抑或|要不然|也可以|vs\.?|\bor\b|\byes\b|\bno\b|\bunless\b|\bwhether\b|\bmaybe\b|\bperhaps\b|\bpossibly\b)/iu;
 
 /** One change verb, optionally followed by a command particle. */
 const VERB_GROUP =
@@ -302,17 +302,25 @@ const COMMAND_LEAD_EN_PATTERN = new RegExp(
   'iu',
 );
 
-/** Target-first command: the target opens the clause and the verb closes it. */
-const COMMAND_TAIL_PATTERN = new RegExp(
-  `^(${PATH_TOKEN_SOURCE})[^，。；！？]{0,60}${VERB_GROUP}(?:一下|下|掉|为|成|好)?[。！!\\s]*$`,
+/**
+ * Disposal command: 把/将/对 + target + … + change verb ("把 X 里的错别字改掉").
+ *
+ * The lead particle makes the clause an imperative; a statement can start with the
+ * target alone, which is why the bare target-first form is **not** accepted
+ * (W3R11 review: "X 尚未修改" used to authorize through that hole).
+ */
+const COMMAND_DISPOSAL_PATTERN = new RegExp(
+  `^(?:把|将|对)[\\s:：]*(${PATH_TOKEN_SOURCE})[^，。；！？]{0,60}${VERB_GROUP}(?:一下|下|掉|为|成|好)?[。！!\\s]*$`,
   'u',
 );
 
 /**
  * True when the clause matches a strict command template.
  *
- * Default-deny: anything that is not a verb-plus-target command (or target-plus-verb
- * command) stays read-only, so an unregistered phrasing can only ask for clarification.
+ * Default-deny: only a verb-plus-target command (or a 把/将/对 disposal command) is
+ * accepted. A target-first sentence is *not* a command template, because the same shape
+ * also describes statements ("X 尚未修改"), which is how the previous round's fail-open
+ * survived (W3R11 review). Everything else stays read-only and asks for clarification.
  */
 function isImperative(clause: string): boolean {
   const stripped = clause.replace(POLITE_LEAD_PATTERN, '').replace(ADVERB_LEAD_PATTERN, '');
@@ -323,7 +331,7 @@ function isImperative(clause: string): boolean {
   return (
     COMMAND_LEAD_PATTERN.test(stripped) ||
     COMMAND_LEAD_EN_PATTERN.test(clause) ||
-    COMMAND_TAIL_PATTERN.test(stripped)
+    COMMAND_DISPOSAL_PATTERN.test(stripped)
   );
 }
 
