@@ -1,18 +1,18 @@
-# WP-02 独立 Review 报告（第十七轮）
+# WP-02 独立 Review 报告（第十八轮）
 
 - 评审对象：工作包 WP-02「主管与独立Agent调度」
-- 评审轮次：**第十七轮**（复核第十六轮 Review PASS + 同轮对抗性核验异议 → 修复提交 `c695fcc` 是否真解决该异议、是否引入回归，并找新问题）
-- 冻结点：git `3dc12db`（`docs(review): WP-02 independent review report, round 16`），修复提交 `c695fcc`（`fix(core): WP-02 round-16 adversarial follow-up (artifact_write, none-Work authority)`）
-- HEAD 校验：`git rev-parse HEAD` = `3dc12dbb9ade8022d60063cb854fca5da711c6ab`；`git log -1` = `3dc12db docs(review): WP-02 independent review report, round 16`
-- 工作树：复核开始、每组实验后、全部契约命令后、本报告写入前 `git status --porcelain` 均无输出（干净；`pnpm build` 只写被 `.gitignore` 忽略的 `dist/`）
-- 评审角色：Review（独立上下文，未读取任何开发对话；只依据仓库文件、git 对象与我自己的实验）
-- 权威依据：`AGENTS.md`、`docs/rules/{workflow,agents}.md`（§1、§2）、`docs/architecture/{ARCHITECTURE,data,protocol,reliability,context,execution}.md`、`docs/delivery/{implementation,acceptance}.md`（WP-02 与 AC-043/044/045/046/047/082）、`.agentdev/work/WP-02/{plan,discovery,implementation,review}.md` 全部记录、`packages/core/src` 全部 17 个文件、`packages/domain/src` 全部 5 个文件与 `packages/domain/test/domain.test.ts`、`packages/contracts/src/entities/{structures,work}.ts` 与 `primitives.ts`、`packages/core/test/orchestrator.test.ts`
-- 方法：逐行核对「注释/记录/提交信息声称」与代码；在 `/tmp/wp02r17/` 自建夹具与 5 组实验脚本（`fixture.mjs`、`lib.mjs`、`exp1..exp5.mjs`），用 `pnpm build` 产出的 `packages/*/dist` 独立复现（软链 `/tmp/wp02r17/node_modules/@agentdev/*`）；**不修改产品代码、测试、`docs/**`、`plan/implementation/discovery`**
-- 工具：`node v24.8.0`、`pnpm 12.3.4`
+- 评审轮次：**第十八轮**（第十七轮 Review PASS → 独立 Test 判 FAIL：T-01/P1 → 开发修复 `3506630` 并提交 Test 报告 `b9a2d12` → 本轮复核 T-01 是否真修好、是否引入回归、同类模式是否仍在别处）
+- 冻结点：git `b9a2d12`（`docs(test): WP-02 independent test report, round 1 (FAIL: T-01)`），父提交 `3506630`（`fix(core): do not freeze a null secretRef (WP-02 Test T-01)`）
+- HEAD 校验：`git rev-parse HEAD` = `b9a2d1242bb7ea0ca950741b1be14b76cf32468d`；`git log -1` = `b9a2d12 docs(test): WP-02 independent test report, round 1 (FAIL: T-01)`
+- 工作树：复核开始、每组实验前、全部契约命令后、本报告写入前 `git status --porcelain` 均无输出（干净；`pnpm build` 只写被 `.gitignore` 忽略的 `dist/`）
+- 评审角色：Review（独立上下文，未读取任何开发或 Test 会话对话；只依据仓库文件、git 对象与我自己的实验）
+- 权威依据：`AGENTS.md`、`docs/rules/{workflow,agents}.md`、`docs/architecture/{ARCHITECTURE,data,protocol,reliability,context,execution}.md`、`docs/delivery/{implementation,acceptance}.md`（WP-02 与 AC-043/044/045/046/047/082）、`.agentdev/work/WP-02/{plan,discovery,implementation,review,test}.md` 全部记录、`packages/core/src` 全部 17 个文件、`packages/core/test` 全部 10 个文件、`packages/contracts/src/entities/structures.ts`、`packages/domain/src/routing.ts`、`packages/storage/src/{repository,snapshots 相关}.ts`
+- 方法：逐行核对「注释/记录/提交信息声称」与代码；在 `/tmp/wp02r18/` 自建夹具与 3 组实验脚本（`lib.mjs`、`exp1..exp3.mjs`），用 `pnpm build` 产出的 `packages/*/dist` 独立复现（软链 `/tmp/wp02r18/node_modules/@agentdev/*`）；**不修改产品代码、测试、`docs/**`、`plan/implementation/discovery/test`**
+- 工具：`node v24.8.0`、`pnpm 12.3.4`、macOS（宿主执行）
 
 ---
 
-## 0. 历史轮次结论摘要（保留，第一至十六轮）
+## 0. 历史轮次结论摘要（保留，第一至十七轮）
 
 | 轮次 | 冻结点 | 结论 | 计数 |
 |---|---|---|---|
@@ -29,165 +29,167 @@
 | 第十一轮 | `080aa4c` | FAIL | 0×P1、2×P2、3×P3（R11-01..R11-05） |
 | 第十二轮 | `fec9a9d` | FAIL | 0×P1、2×P2、3×P3（R12-01..R12-05）＋对抗性两项 |
 | 第十三轮 | `e3b210c` | FAIL | 0×P1、3×P2、3×P3（R13-01..R13-06） |
-| 第十四轮 | `9f62582` | FAIL | 0×P1、1×P2、4×P3（R14-01..R14-05）＋对抗性 D-1..D-4；阻断项 R14-01（`git` 未计入工作区写操作） |
-| 第十五轮 | `088bdd7` | FAIL | 0×P1、1×P2、3×P3（R15-01..R15-04）；阻断项 R15-01（只读授权可为写范围背书并把写 scope 冻结进 `effectiveScope`）。报告正文随 `f2cb657` 入库 |
-| 第十六轮 | `f2cb657`（修复 `546593d`） | **PASS** | 0×P1、1×P2（非阻断，R16-01）、5×P3（R16-02..R16-06）。同轮对抗性核验认为应判 FAIL（R16-01 `artifact_write` 计入工作区写操作 ⇒ `none` Work 无法派发写自己 Artifact 的 Run；M-1 `none` Work 可经授权取得环境权限；M-2 `assess` 与 `dispatch` 同 scope 结论相反）。报告正文随 `3dc12db` 入库 |
+| 第十四轮 | `9f62582` | FAIL | 0×P1、1×P2、4×P3（R14-01..R14-05）＋对抗性 D-1..D-4 |
+| 第十五轮 | `088bdd7` | FAIL | 0×P1、1×P2、3×P3（R15-01..R15-04）；阻断项 R15-01 |
+| 第十六轮 | `f2cb657`（修复 `546593d`） | **PASS** | 0×P1、1×P2（非阻断，R16-01）、5×P3（R16-02..R16-06）；同轮对抗性核验异议 M-1/M-2 |
+| 第十七轮 | `3dc12db`（修复 `c695fcc`） | **PASS** | 0×P1、0×P2、5×P3（R17-01..R17-05）；第十六轮三项异议（R16-01 主诉、M-1、M-2）全部真实闭合，R15-01 未回退 |
+| （第七轮之后）独立 Test 第一轮 | `17dfe26` | **FAIL** | AC-043 不通过：T-01（P1）——无 `secretRef` 的 Provider 冻结成 `null`，每次调用 `CONFIG_INVALID`；其余 5 条 AC 通过；自建 51 断言 0 失败 |
 
-**各轮要点（原文见各轮报告或 git 对象）**：本轮不重复；第十六轮报告 §0 的「各轮要点」列表与非阻断项明细见 `git show 3dc12db:.agentdev/work/WP-02/review.md`。
+**各轮要点**：本轮不重复；第十七轮报告正文见 `git show 17dfe26:.agentdev/work/WP-02/review.md`，第一、二轮原文见第二轮报告 §0，依此回溯。
 
-**追溯口径（沿用第五轮 DC-53/DC-56 与第十五/十六轮口径）**：行为/需求缺失＝P1（阻断）；局部质量/维护＝P2；建议＝P3。P2/P3 是否阻断由本轮按 `workflow.md` §6（第 65 行）「影响验收则阻断」判定。**L3/授权门禁类缺陷沿用 R9-01..R15-01 的 P2 标定。**
+**追溯口径（沿用第五轮 DC-53/DC-56 与第十五至十七轮口径）**：行为/需求缺失＝P1（阻断）；局部质量/维护＝P2；建议＝P3。P2/P3 是否阻断由本轮按 `workflow.md` §6（第 65 行）「影响验收则阻断」判定。**L3/授权门禁类缺陷沿用 R9-01..R15-01 的 P2 标定。**
 
-**历史报告取回方式**：第十六轮报告正文随 `3dc12db` 入库（= 本文件被覆盖前的内容，`git show 3dc12db:.agentdev/work/WP-02/review.md`）；第十五轮 `git show f2cb657:…`；依此回溯至第一、二轮原文见第二轮报告 §0。
+**R17-01..R17-05 的关闭状态（本轮实读复核）**：`79790e0` 已逐条关闭——R17-01 → `discovery.md:277` DC-72；R17-02 → `discovery.md:247/:255` 现为 `['edit','write','git']`；R17-03 → `discovery.md:227`；R17-04 → `orchestrator.ts:270` 的 `environmentScope`；R17-05 → `routing.ts:151-160` 注释已改并注明 R17-05。**五条全部关闭 ✓**。
 
 ---
 
 ## 1. 本轮结论
 
-**PASS（Review Passed）——第十六轮对抗性异议的三项（R16-01 主诉、M-1、M-2）在 `c695fcc` 上均真实修好，R15-01 的能力交叉核对未回退，且未发现阻断性回归。本轮共新增 0×P1、0×P2、5×P3（R17-01..R17-05）；无阻断项，建议进入独立 Test。**
+**PASS（Review Passed）——Test T-01（P1：无 `secretRef` 的 Provider 冻结成 `null` 导致每次调用 `CONFIG_INVALID`）已在 `3506630` 上真实修好并被我独立复现验证；有 `secretRef` 的路径与 `testConnection` 不受影响、两条路径结论一致；未发现阻断性回归。本轮新增 0×P1、2×P2（R18-01、R18-02，均非阻断）、2×P3（R18-03、R18-04）；建议进入重新独立 Test。**
 
-我对异议的三条主张逐条做了独立复现与反证：
+三条主判据的独立证据：
 
-1. **R16-01（主诉，`artifact_write` 分类）**：`WORKSPACE_WRITE_OPERATIONS` 现为 `['edit','write','git']`，`artifact_write` 单列 `ARTIFACT_WRITE_OPERATIONS`；四个分类集合（环境 6 / 工作区写 3 / Artifact 写 1 / 只读 2）对 12 个契约取值构成**不重不漏的划分**（`exp1` A：并集排序后与 `operationNameSchema.options` 逐字相等）。`none` 级 Work 现在可以派发 `operations:['artifact_write']`（以及 `['read','artifact_write']`）的 Chief/专业 Run，冻结的 `effectiveScope` 就带该操作；`none` 级 Work 的**跟踪文件**写权（`edit`/`write`/`git`/`writePaths`）与**环境**权（6 个环境操作与 `networkTargets`）仍然全部拒绝——**带本 Work 的授权也拒绝**（`exp1` B/C/D，共 42 条断言）。这条异议成立且已闭合。
-2. **M-1（`none` Work 经授权取得环境权限）**：`dispatch` 门禁从「只看 `declaresWorkspaceWrite`」扩为 `declaresWorkspaceWrite(spec.scope) || environmentScope`，且判据仍是 **Work 自己的等级**（`runLevel` 不被用来放行）。7 种环境形态 × {无授权, 本 Work 授权} = 14 例全拒；`deploy + writePaths` 叠加授权也拒（`exp1` D/F，「不能借 deploy 洗白成写权限」）。
-3. **M-2（`assess` 与 `dispatch` 对同一 scope 结论相反）**：两者现在用同一条谓词（`!grantsModificationAuthority(work.level) && (declaresWorkspaceWrite(scope) || touchesRunningEnvironment(scope))`）。我做了**全量差分**：4 种 Work 等级 × 17 种 scope 形态 = 68 例（`exp2`），在 `none` 级上 `assess` 接受集合 = `dispatch` 接受集合 = `{empty, read, search, artifact_write, readPaths}`，**不存在「assess 接受而 dispatch 拒绝」的格**。方向性差异只有两类，且都不是 fail-open：L1 Work 上的带操作 payload 被 `assess` 以「routing rules require L2」拒绝（路由底线，非 Run 边界），L3 `assess` 要求显式授权引用。
+1. **无 `secretRef` 的 Provider 能完成调用**：`exp1` A7（`complete()` → `{ok:true,'pong'}`）、`exp2` 3b/3c（**经真实 `Orchestrator.dispatch` 建立的 Chief Run 与专业 Run** 都能完成调用）、3f（重启后仍成功）。
+2. **冻结快照真的不含该键**：`exp1` A3/A4（`readFrozen().provider` 无 own property `secretRef`）、A5（**SQLite 原始 payload 字符串**不含 `secretRef`）、A6/E1（也不含任何 `null` 字面量）、`exp3` P1（冻结 provider 恰为 providerId/type/baseUrl 三键）。
+3. **有 `secretRef` 的路径不受影响、`testConnection` 一致**：`exp1` B1（原始 payload 记录 `secretRef`）、B2/B3（解析出 `sk-test` 并下发）、C1–C4（密钥取不到时仍 `CONFIG_INVALID` 且 0 次 transport 调用，`testConnection` 同结论）、A12/A13（匿名 `testConnection` 成功且不带 apiKey）。
 
-**新发现**：R17-01（P3，`assess` 的同一不变式在既有 `none` Work 上连带拒绝「重新评估为写/环境 scope」，未在 DC-71 登记该边界）、R17-02（P3，DC-66/DC-67 仍写四元素 `WORKSPACE_WRITE_OPERATIONS`，与代码相反）、R17-03（P3，`verifyAuthorization` JSDoc 未登记 `artifact_write` 不再为 `writePaths` 背书这一收紧）、R17-04（P3，`assess` 拒绝 details 缺 `environmentScope`，与 `dispatch` 同语义字段不对称）、R17-05（P3，`routing.ts` 环境集合注释未随分类变更更新）。
-
-### 第十六轮条目的当前状态（本轮实跑复核）
-
-| 第十六轮条目 | 本轮裁定 |
-|---|---|
-| **R16-01**（P2，不阻断）`artifact_write` 计入工作区写操作 ⇒ `none` 级 assist/artifact 无法建立声明该操作的 Run | **完全修好 ✓**：`exp1` A/B（分类划分 + `none` Work 派 artifact_write Run）、`exp4` P5（AC-082 恢复视图对该 Run 成立）；异议主诉闭合 |
-| **M-1**（对抗性）`none` Work 可经授权取得环境权限 | **完全修好 ✓**：`exp1` D（14 例全拒）、`exp1` F（deploy 授权不能洗白写权限） |
-| **M-2**（对抗性）`assess` 与 `dispatch` 对同一 scope 结论相反 | **修好 ✓，但登记见 R17-01**：`exp2` 68 例差分 0 个 fail-open 格；新门禁对既有 `none` Work 的写 scope 评估产生连带拒绝 |
-| **R16-02**（P3）spec 侧声明不交叉核对 | **登记到位 ✓（形态保留）**：DC-63 新增「边界（第十六轮 R16-02）」条目；`exp4` P3 复现 `writePaths + operations:[]` 在授权具备写能力时仍被接受且 `effectiveScope` 原样冻结（方向 fail-closed，已显式登记） |
-| **R16-03**（P3）`entities/work.ts` 越界写入 Plan | **修好 ✓**：`plan.md` planVersion 4 明列 `packages/domain/src/routing.ts`、`packages/domain/test/domain.test.ts`、`packages/contracts/src/entities/work.ts`、`packages/contracts/test/entities.test.ts` |
-| **R16-04**（P3）`verifyAuthorization` JSDoc 缺能力交叉核对 | **修好 ✓**：JSDoc（`orchestrator.ts:774-779`）现含「a declared path requires the matching read/write operation in the grant」（**残留**：未登记 `artifact_write` 出集合这一收紧，见 R17-03） |
-| **R16-05**（P3）domain 分类测试硬编码读操作 | **修好 ✓**：`domain.test.ts:252-266` 用 `...ARTIFACT_WRITE_OPERATIONS`/`...READ_OPERATIONS` 且断言 `classified.size === options.length`；`:243` 新增 `artifact_write ⇒ false` |
-| **R16-06**（P3）T22「当前为 248」 | **修好 ✓**：T22 现写「247（该修复提交时点数；`088bdd7` 后为 248，第十五轮修复后为 250）」，与 T23=250、T24=251 及实测 251 自洽 |
+修复提交 `3506630` 只改 `packages/core/src/config.ts`（冻结投影省略缺省键）、`packages/core/test/model-gateway.test.ts`（+1 条回归用例）与 `implementation.md`（T26 记录），`git show --stat 3506630` 确认无其它运行代码触碰；契约命令 6/6 退出 0（unit **252** = 251+1，integration 124）。
 
 ---
 
 ## 2. 契约命令原始结果（本轮实跑）
 
-执行方式：`export PATH="$HOME/.local/bin:$PATH"`，在仓库根目录按序执行，日志 `/tmp/wp02r17/cmds.log`。
+执行方式：`export PATH="$HOME/.local/bin:$PATH"`，在仓库根目录**按序**执行，日志 `/tmp/wp02r18/commands.log`。
 
 | 命令 | 退出码 | 原始结果要点 |
 |---|---|---|
 | `pnpm typecheck` | **0** | `tsc -p tsconfig.json --pretty false`，无输出 |
 | `pnpm lint` | **0** | `node scripts/lint.mjs`：`Checking formatting...` / `All matched files use Prettier code style!` |
-| `pnpm test:unit` | **0** | `Test Files 17 passed (17)` / **`Tests 251 passed (251)`** / `Duration 2.60s`（与 T24 声称的 251 及提交信息一致；`orchestrator.test.ts` 45 条、`domain.test.ts` 31 条） |
-| `pnpm test:integration` | **0** | `Test Files 10 passed (10)` / **`Tests 124 passed (124)`** / `Duration 32.77s` |
+| `pnpm test:unit` | **0** | `Test Files 17 passed (17)` / **`Tests 252 passed (252)`** / `Duration 7.69s`（= Test 冻结点的 251 + 1 条新回归用例） |
+| `pnpm test:integration` | **0** | `Test Files 10 passed (10)` / **`Tests 124 passed (124)`** / `Duration 90.94s`（含真实容器与 doctor 检查） |
 | `pnpm docs:check` | **0** | `docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages` |
 | `pnpm build` | **0** | `packages/{contracts,domain,storage,core,pi-runtime}`、`apps/{cli,runner}` 共 7 个 workspace `build: Done` |
-| `git status --porcelain` | — | 复核开始、每组实验后、全部契约命令后、本报告写入前均**无输出**（干净） |
-| `git rev-parse HEAD` | — | `3dc12dbb9ade8022d60063cb854fca5da711c6ab`（= 冻结点） |
+| `git status --porcelain` | — | 开始、每组实验后、全部契约命令后、本报告写入前均**无输出**（干净） |
+| `git rev-parse HEAD` | — | `b9a2d1242bb7ea0ca950741b1be14b76cf32468d`（= 冻结点） |
 
-**自建实验（观察值记录；标记 `FAIL` 的断言即 Finding 证据）：**
-`exp1`（分类划分 + `none` Work 写/环境/Artifact 三维门禁 + `assess` 一致性 + L2 对照）**56 passed / 0 failed / 1 info**；`exp2`（4 等级 × 17 scope 的 assess↔dispatch 差分矩阵）**3 / 0（13 INFO，全部为已知方向性差异）**；`exp3`（R15-01 能力交叉核对 × 3 维度 × 12 授权能力 + 操作覆盖）**56 / 0**；`exp4`（对抗性：洗白路径、授权引用、R16-02 边界、消费者与记录一致性、AC-082 恢复）**10 / 0（4 INFO）**；`exp5`（details 形状、记录字符串、`none` Work 评估三态）**4 / 0（9 INFO）**。脚本与日志存 `/tmp/wp02r17/{fixture,lib,exp1..exp5}.mjs` 与 `cmds.log`；全部使用 `pnpm build` 后的 `packages/*/dist`，通过 `/tmp/wp02r17/node_modules/@agentdev/*` 软链解析，**不 import 任何产品测试文件**。
+**自建实验（观察值记录；标记即 Finding 证据）**：
+`exp1`（T-01 复核：匿名 provider × resolve/freeze/readFrozen/原始 payload/complete/testConnection/重启/显式 undefined/双角色独立）**35 passed / 0 failed / 1 INFO**；`exp2`（旧快照兼容 + `null` 写入拒绝 + Orchestrator 端到端 + dispatch 载荷无 null）**15 / 0（3 INFO）**；`exp3`（回归用例有效性证明：旧 payload 重现 T-01、新冻结形状三键）**6 / 0**。合计 **56 条断言、0 失败**。脚本与日志：`/tmp/wp02r18/{lib,exp1,exp2,exp3}.mjs`、`experiments.log`、`commands.log`；全部消费 `pnpm build` 后的 `packages/*/dist`，通过软链解析 workspace 包，**不 import 任何产品测试文件**。
 
 ---
 
-## 3. 逐条复核表
+## 3. T-01 复核（逐项：Test 的 D1–D6 是否闭合）
 
-### 3.1 异议三项（第十六轮对抗性核验）
-
-| 主张 | 本轮实测证据（脚本/观察值） | 判定 |
+| Test 断言 | 修复后的独立观察值（本轮） | 判定 |
 |---|---|---|
-| **R16-01** `artifact_write` 计入工作区写操作 ⇒ `none` 级 assist/artifact 路线无法派发写自己 Artifact 的 Run（与 `execution.md:21/:53`、`workflow.md:11` 相反） | `exp1` A：`WORKSPACE_WRITE_OPERATIONS = ['edit','write','git']`、`ARTIFACT_WRITE_OPERATIONS = ['artifact_write']`、四类并集 = 12 契约取值（不重不漏）；`exp1` B：`none` Work 上 `['artifact_write']` 与 `['read','artifact_write']` 的 Run 接受（`workId` 正确、`effectiveScope.operations` 冻结为声明值）；`exp1` F：L2 Work 同样接受；`exp4` P5：该 Run 的 AC-082 恢复视图可取回且哈希与 Run 行一致；`domain.test.ts:243` 断言 `artifact_write ⇒ false` | **完全修好 ✓** |
-| **M-1** `none` Work 可经授权取得环境权限派 L3 Run | `exp1` D：`deploy`/`bash`/`delete_data`/`push`/`secret`/`network`/`networkTargets` 7 形态 × {无授权, `NONE_DEPLOY_AUTH`} = 14 例全部 `NOT_AUTHORIZED`；`none` Work 的 `git` 授权同样不能放行 `git`；`exp1` F：`deploy + writePaths` + 授权仍拒（门禁判 Work 等级，非派生 `runLevel`） | **完全修好 ✓** |
-| **M-2** `assess` 与 `dispatch` 对同一 scope 结论相反 | `exp2`：`none` Work 上 assess 接受集合 = dispatch 接受集合 = `{empty, read, search, artifact_write, readPaths}`（逐格一致）；`exp1` E：10 个 scope 形态两条边界同向；`orchestrator.test.ts:759-822` 的端到端断言与我的观察一致 | **修好 ✓（连带拒绝见 R17-01）** |
+| D1 未配 `secretRef` 仍可 `availability`/`dispatch` | `exp1` A1 `availability.ok === true`；`exp2` 3a `configSnapshotId` 为 64 位 hash，Run 正常创建 | 保持 ✓ |
+| D2 冻结投影把缺省写成 `null` | **已反转**：`exp1` A3–A6 / `exp3` P1/P6 —— `readFrozen().provider` 无 `secretRef` own key，SQLite 原始 payload 不含 `secretRef`、不含任何 `null` | **修好 ✓** |
+| D3 `complete()` 被拒 | **已反转**：`exp1` A7/A8/A9/A10 —— `{ok:true}`、transport 恰 1 次、请求**无 `apiKey` 键**（`hasOwnProperty === false`） | **修好 ✓** |
+| D4 对照组（配 `secretRef`） | `exp1` B1–B3：payload 含 `"secretRef":"local-secret"`，`apiKey='sk-test'` 正常下发；`exp2` 3d 逐调用核对键存在性 | 不受影响 ✓ |
+| D5 负例对照（`secretRef` 存在但取不到值） | `exp1` C1–C4：仍 `CONFIG_INVALID: secret MISSING_KEY is not available`，0 次 transport 调用，`testConnection` 同结论、同样 0 调用 | 不受影响 ✓ |
+| D6 重启后复现 | **已反转**：`exp1` D1–D3（重开库后 readFrozen 无键、`complete()` 成功、原始 payload 无 `secretRef`）；`exp2` 3e/3f（真实 restart 后 `recoveryView` 的冻结 provider 无键、调用成功） | **修好 ✓** |
 
-### 3.2 R15-01 能力交叉核对是否仍成立（本轮实跑）
+补充复核（Test 未覆盖的角度）：
 
-| 声明维度 | 授权能力集合中可背书者（实测） | 拒绝者（实测） |
-|---|---|---|
-| `writePaths`（信封覆盖） | `edit`、`write`、`git` | 其余 9 个（含 **`artifact_write`**） |
-| `readPaths`（信封覆盖） | `read`、`search` | 其余 10 个 |
-| `networkTargets`（目标在授权 scope 内） | `network` | 其余 11 个（`networkTargetsWithoutGrant`） |
-| `scope.operations` ⊆ 授权 `operations` | 恰为授权中列出的操作 | 其余（`uncoveredOperations`） |
-
-`exp3` 共 56 例断言 0 失败：`writePaths` 的合法背书者从第十六轮的 4 个（`edit`/`write`/`artifact_write`/`git`）收紧为 **3 个**（`artifact_write` 现在与 `read`/`deploy` 一样被拒，details `capabilityGaps:['writePaths without a write operation']`）；第十六轮的原始负例（只读授权 + 覆盖写路径 ⇒ `NOT_AUTHORIZED`）与 `git` 背书写路径仍成立。**结论：R15-01 未回退，其判定集合随分类变更正确收紧。**
-
-### 3.3 关联验收回归（AC-043/044/045/046/047/082）
-
-`c695fcc` 只改 `packages/core/src/orchestrator.ts`、`packages/domain/src/routing.ts` 与两个测试文件（`git show --stat c695fcc`），未触碰 `StageGate`/`JoinCoordinator`/`RunLifecycle`/快照层。本轮 `pnpm test:unit` 251 与 `pnpm test:integration` 124 全绿；`exp4` P5 对新增的 `artifact_write` Run 复算了 AC-082 的窄范围恢复（`effectiveScope` 与 `dispatchSnapshot.hash` 与 Run 行一致）；`exp2` 显示 L2/L3 的派发与评估边界未变。**未发现关联验收回归。**
+- **显式 `secretRef: undefined`** 与「键缺省」等价：`exp1` E1–E4（冻结省略、`secretConfigured=false`、磁盘 `config.toml` 省略、调用成功）。
+- **`testConnection` 一致性**：`exp1` A12/A13（匿名 → `{ok:true,latencyMs:0}` 且无 apiKey）、C3/C4（缺 Secret → 同一错误串且 0 调用）。Test 指出的「实时配置与冻结路径结论相反」已消失。
+- **回归用例确实能抓住旧行为**：`exp3` P2–P4 —— 把修复前 `freeze()` 会写出的同形 payload（`secretRef:null`）重新冻结后，`readFrozen().provider` 确实带 own key `secretRef:null`，`complete()` 精确重现 `{ok:false,code:'CONFIG_INVALID',message:'secret null is not available'}`。即 `model-gateway.test.ts:149` 的 `not.toHaveProperty('secretRef')` 在修复前必然失败，这条守卫是真的。
+- **AC-043 独立性未受影响**：`exp1` H1–H6 —— 同一时刻两个角色（一匿名、一带 Secret）冻结出不同快照，各自 baseUrl/apiKey 正确，互不串用。
 
 ---
 
-## 4. 新 Findings（R17-01..R17-05）
+## 4. 回归扫描与「同类模式」扫描
 
-### R17-01 [P3] `assess` 的新不变式连带拒绝「既有 `none` Work 被重新评估为写/环境 scope」，而该边界未在 DC-71 登记
+### 4.1 回归面
 
-- **位置**：`packages/core/src/orchestrator.ts:255-272`（`assess` 的 `!grantsModificationAuthority(work.level) && (declaresWorkspaceWrite(payload.scope) || touchesRunningEnvironment(payload.scope))` ⇒ `VALIDATION_ERROR`）；对照 `docs/architecture/data.md:55`（`Assessment` 结构含 `scope`）、`.agentdev/work/WP-02/discovery.md:269-274`（DC-71 只登记 `dispatch`/`assess` 两条不变式，未登记「既有 Work 重新评估」这一副作用）、`docs/rules/workflow.md:17`（「升级保持同 Work 和已有证据」）、`docs/architecture/data.md:22`（`work | … level:none/L1/L2/L3 …`）。
-- **事实（`exp2`/`exp5` 实跑）**：
-  - `none` Work + `intent:'delivery'`/`level:'L2'` + `scope:{operations:['edit'],writePaths:['packages/core/src']}` ⇒ `VALIDATION_ERROR: Work … is none and cannot declare a write or environment scope`；同 payload 去掉 `scope` 后 **接受**（`level:'L2'` 落库）。因此路由结论本身仍可记录，只是**必须省略 scope**；
-  - 同一 Work 的 `dispatch` 在评估被拒后仍以旧结论（`none`）拒绝写 scope（这是既有行为，非本轮引入）；
-  - `packages/*/src` 中 `works.update`/`works.insert` 的调用点数量为 **0**（`exp4` P4c），即 `work.level` 在创建后没有任何回写路径；DC-63/DC-66 已把该回写登记为 WP-04/WP-05 承接项。
-- **影响**：`assess` 是记录**新**路由结论的接口，但它用**旧**的 `work.level` 做硬门禁，于是「先 assist、后改口做 delivery」的既有 Work 在带完整（文档形状）载荷时会被拒；错误消息指向一个调用方无法修改的字段（Work 等级无写入路径）。方向 fail-closed，且存在零成本绕行（省略 scope），故不判阻断；但它把「`none` Work 的重评估」锁成「不能带写/环境 scope」，属应由 WP-06（等级升级）承接的语义，宜显式登记而不是隐含在代码里。
-- **建议**：(a) 在 DC-71 补一句「该门禁判据是 Work **当前**等级，因此在 `work.level` 可回写（WP-06）之前，既有 `none` Work 的写/环境 scope 评估会被拒；路由结论可在省略 scope 时记录」；(b) 由 WP-06 决定升级路径是「先回写 Work 等级、再带 scope 评估」还是「评估本身就是升级入口」，并同步 `data.md` 的 `Assessment.scope` 语义（该字段当前不落库，DC-60）。
+修复提交的差异面**仅**为 `packages/core/src/config.ts` 的冻结投影、1 条测试用例与 `implementation.md` 记录。`config.ts` 的其余投影（`:136` `toToml`、`:448` `resolve`）在修复前**已经**使用「缺省即省略」，本次只是把 `freeze`（`:493-500`）对齐；因此：
 
-### R17-02 [P3] DC-66/DC-67 仍写四元素 `WORKSPACE_WRITE_OPERATIONS`，与 `c695fcc` 后的代码相反
+- 快照哈希只对「无 Secret 的 Provider」变化，且内容寻址快照不可变：修复前写下的行仍按原 hash 可读（`exp2` 1 证明其可读、只是网关仍拒绝，见 R18-02）；
+- `availability()`/`dispatch()` 走 `resolve()`，修复前就正常，现在与 `freeze()` 同源同形（`exp1` A2/A3 两处投影一致）；
+- `pnpm test:unit` 252、`pnpm test:integration` 124 全绿；本轮未发现任何 AC-043/044/045/046/047/082 关联回归。
 
-- **位置**：`.agentdev/work/WP-02/discovery.md:246`（DC-66 第 1 条：「命中 `WORKSPACE_WRITE_OPERATIONS = ['edit','write','artifact_write','git']`」）与 `:254`（DC-67：「`WORKSPACE_WRITE_OPERATIONS = ['edit','write','artifact_write','git']`」）；对照 `packages/domain/src/routing.ts:179-186`（实际为 `['edit','write','git']`）与 `:196-198`（`ARTIFACT_WRITE_OPERATIONS`）。
-- **事实（`exp5` 实读 + 逐行定位）**：两处字符串在 `c695fcc` 中未被更新；同一提交新增的 DC-71（`discovery.md:271`）写的是正确三元素集合，因此同一文件内自相矛盾。
-- **影响**：DC-66/DC-67 是本包「Run 建立边界」的实现事实源；后续 WP-04/WP-06 若按 DC-66 第 1 条实现工具层判权，会把 `artifact_write` 当工作区写操作，重新引入第十六轮异议。这与第十五轮 R15-04、第十六轮 R16-06 属同一族（「声称集合/声称数 = 实测」核对手段失效），按 `workflow.md` §6 属记录缺陷，不影响运行行为。
-- **建议**：把两处改为 `['edit','write','git']`，并各加半句「`artifact_write` 归 `ARTIFACT_WRITE_OPERATIONS`，见 DC-71」，避免第二份集合副本继续漂移（或直接指向 `routing.ts` 的常量而不复写值）。
+### 4.2 同类「`?? null` 冻结投影 vs `undefined` 判定」全量扫描
 
-### R17-03 [P3] `verifyAuthorization` JSDoc 未登记「`artifact_write` 不再为 `writePaths` 背书」这一收紧
+我把全仓 `?? null` / `|| null` 站点逐一与其消费者对照（grep 证据 + `exp2` 4a–4f 实跑）：
 
-- **位置**：`packages/core/src/orchestrator.ts:768-783`（JSDoc 现含「a declared path requires the matching read/write operation in the grant」，但未说明工作区写能力集合已不含 `artifact_write`）；对照 `.agentdev/work/WP-02/discovery.md:229-232`（DC-63 的能力交叉核对只写「命中文档所述写操作」，未列集合成员）。
-- **事实（`exp3` 实跑）**：同一个「授权 `['artifact_write']` + 信封覆盖写路径 + spec 声明该写路径」的请求，第十六轮**接受**、本轮**拒绝**（`capabilityGaps:['writePaths without a write operation']`）。这是一次真实的行为收紧，且只体现在常量变化上，JSDoc/DC-63/§5 观察都未记录。
-- **影响**：维护者按 DC-63 读会以为 `writePaths` 的背书集合仍是四元素；WP-04 接线（授权 → 工具）时可能按旧集合实现而放行 `artifact_write` 背书的仓库写范围。属 R16-04/R15-04 同族（注释/记录范围小于实现变化）。
-- **建议**：JSDoc 与 DC-63 各补一句「工作区写能力 = `WORKSPACE_WRITE_OPERATIONS`（`edit`/`write`/`git`）；`artifact_write` 不再是路径写能力的背书者（第十六轮 R16-01 后的收紧）」。
+| 站点 | 性质 | 是否存在 `=== undefined` 判定 | 结论 |
+|---|---|---|---|
+| `config.ts:492-500`（**已修**） | 冻结权威（config snapshot） | `model-gateway.ts:125/128` | **T-01 的唯一现场，已闭合** |
+| `orchestrator.ts:542` `parentRunId: null`（`run.queued` 事件） | 事件 data | 否（仓内无消费者读该字段做 undefined 判定；DB 行由 `repository.ts:112` 把 NULL 解码成 `undefined`，`exp2` 4c 实测 Chief Run 的 `parentRunId === undefined`） | 无缺陷 |
+| `orchestrator.ts:607` `reason: null`（`request_dispatch` 指纹/事件） | 事件 data | 否 | 无缺陷 |
+| `orchestrator.ts:805/813/819/867` `level: level ?? null` | 错误 details | 否 | 无缺陷 |
+| `join.ts:262-264` `stageResult: … ? null : {…}` | 事件 data；`join.ts:308` 用 `??` 归一读取 | 否 | 无缺陷 |
+| `run-lifecycle.ts:137` `runnerId: null` | 事件 data | 否 | 无缺陷 |
+| `run-lifecycle.ts:250` `(recordedCost ?? null) === (usage.cost ?? null)` | **两侧都做 nullish 归一** | — | **正确范式**（与 T-01 相反方向的反例：读取端归一，故 `:390` 的显式 null 是安全的） |
+| `run-lifecycle.ts:260/262/288/390` `cost: null` | 错误 details / 事件 data | `:247` 读取处已 `?? null` 归一 | 无缺陷 |
+| `events-hub.ts:432/445/455/468` `project/work/run/conversation ?? null` | 协议订阅快照（「不存在」标记） | 否 | 无缺陷 |
+| `apps/runner/src/cli.ts:76` `modelsPath ?? null` | CLI 选项 | 否 | 无关 |
 
-### R17-04 [P3] `assess` 的拒绝 details 缺 `environmentScope`，与 `dispatch` 同语义字段不对称
-
-- **位置**：`packages/core/src/orchestrator.ts:262-271`（assess details = `{workId, workLevel, writePaths, operations}`）与 `:393-404`（dispatch details = `{workId, workLevel, runLevel, writePaths, operations, environmentScope}`）。
-- **事实（`exp5` 实读）**：同一条不变式被拒时，`dispatch` 返回 `environmentScope:true`，`assess` 不返回该键；两侧 `operations` 都是 scope 声明列表（键名相同，与 DC-63 的 `Authorization.operations` 维度不同源）。
-- **影响**：WP-04 若按 details 渲染「为什么被拒」，`assess` 侧无法区分「写范围」与「环境范围」；不影响判定本身。属最小可观测性缺口。
-- **建议**：`assess` details 增加 `environmentScope`（同一谓词结果）；或在 DC-71 登记 details 形状是「实现级、不保证对称」。
-
-### R17-05 [P3] `routing.ts` 的集合注释未随分类变更更新
-
-- **位置**：`packages/domain/src/routing.ts:151-160`（`ENVIRONMENT_OPERATIONS` 的文档块仍写「`git`, `edit`, `write` and `artifact_write` stay out: they act on the local workspace」——把 Artifact 写入与跟踪文件写入并列在同一理由下）；`:172-178`（`WORKSPACE_WRITE_OPERATIONS` 的文档块只描述「modify tracked files」，未提 `git` 的 ref 语义与 `artifact_write` 的新归属）。
-- **事实（实读）**：`artifact_write` 现在写在 `routing.ts:188-195` 的独立文档块里（理由正确），但环境集合的文档块仍以旧措辞把它与 `edit`/`write` 合述，读者从 `:151-160` 得到的印象与 `:179-198` 的分类不一致。
-- **影响**：纯注释；不影响行为（分类由常量与测试守卫）。
-- **建议**：`:157` 的列举改为「`git`, `edit`, `write` stay out (local workspace writes) and `artifact_write` stays out (the Run's own Artifact; see below)」，并在 `:172-178` 补一句集合成员的判据来源。
+**判定依据**：唯一对**冻结载荷**（JSON 文本列，`null` 会原样保留而非像实体列那样解码成 `undefined`）做 `=== undefined` 判定、且不先做 nullish 归一的消费者，是 `model-gateway.ts` 的 `secretRef`（`grep -rn "readFrozen\|frozenProfileOf"` 显示仅 `orchestrator.ts:737`（只取 profile）与 `model-gateway.ts` 两处；`profile.temperature` 全仓无消费者）。**除已修的 `config.ts` 外，没有第二处同类「写入端 null、读取端判 undefined」的活跃缺陷。** 残留的是读取端本身的脆弱性（R18-02）。
 
 ---
 
-## 5. 其它观察（不计入 Finding 编号）
+## 5. 新 Findings（R18-01..R18-04）
 
-1. **`none` Work 的 Artifact Run 不携带任何授权背书**：`exp4` P2/`exp5` 显示，只有主动引用一张 `operations:['artifact_write']` 的授权时才会做覆盖面核对（错误授权被拒）；不带引用时 `effectiveScope.operations:['artifact_write']` 来自 spec 自身声明，无授权实体背书。这是 DC-63+R16-02 的既定边界（工具层按 `operations` 判权、路径写范围仍由 `writePaths` 门禁把守），方向 fail-closed，沿第十六轮 §5 记录。
-2. **`git` 仍可为任意覆盖路径的写范围背书**（`exp3`）：`git` 与 `edit`/`write` 在授权语义上并不同质；沿第十五/十六轮 §5 的产品待决项。
-3. **`Authorization.operations` 与 `Authorization.scope.operations` 双列表仍并存**（DC-63 已声明能力取自前者），沿第十二/十三/十五/十六轮待决项。
-4. **`assess` 的 `goal`/`scope` 仍不落库、不落事件**（DC-60）：本轮 R17-01 的绕行（省略 scope）之所以无副作用，正是因为它本来就被丢弃；这让「评估带 scope」变成一种只有门禁意义、没有记录意义的输入，建议与 R17-01 的建议 (b) 一并定性。
-5. **L1 Work 上带操作的 payload 被 `assess` 以「routing rules require L2」拒绝而 `dispatch` 接受**（`exp2` 的 12 条 INFO）：属路由底线与 Run 边界的既定非对称（`assess` 不是 Run 边界，DC-66 第 4 条），方向 fail-closed，未判缺陷。
-6. **磁盘/索引状态**：`docs/INDEX.md` 的「实现起点」仍只结算到 WP-01，未声称 WP-02 已实现（正确）；根目录 `cmds.log` 未被跟踪，不构成记录不一致。
-7. **产物归属**：修复提交 `c695fcc` 与第十六轮评审报告提交 `3dc12db` 分离，符合「Review 产物与开发提交分离」；`c695fcc` 同时改写了 `discovery.md`/`implementation.md`/`plan.md`（属开发记录范围），本轮我只读未改。
+### R18-01 [P2，非阻断] `FrozenProvider` 投影在 `resolve()` 与 `freeze()` 重复实现——T-01 正是两处漂移的产物
+
+- **位置**：`packages/core/src/config.ts:444-449`（`resolve` 内构造 `frozenProvider`）与 `:492-500`（`freeze` 内逐字段重造同一投影）；`:478` 已解构出 `provider`，它**就是** `resolve` 返回的 `FrozenProvider`。
+- **事实（git 对象 + 实读）**：`git show c4763d5:packages/core/src/config.ts` 显示第一轮修复把「缺省即省略」只加进了 `resolve`（当时 `:446`），`freeze`（当时 `:494`）保持 `secretRef: provider.secretRef ?? null`，两份投影并行存在了 17 轮；`3506630` 才把 `freeze` 对齐。`exp1` A2/A3 证明两者现在一致，但一致性靠人工同步维持。
+- **影响**：纯维护性缺陷，当前无行为影响；但 R18-02 表明「投影漂移」的代价是 P1（每次调用失败），而 `resolve`/`freeze` 恰好是最容易被分别修改的两处。
+- **建议**：`freeze` 直接使用已解构的 `provider`（或抽出 `frozenProviderOf(provider: ProviderConfig): FrozenProvider` 供两处调用），并在 `config.test.ts:206-239` 的 freeze 用例补一条「冻结 provider 恰为 providerId/type/baseUrl（+可选 secretRef）」的形状断言。
+- **非阻断理由**：不改变任何观测行为，不影响 AC-043..047/082 的通过与否。
+
+### R18-02 [P2，非阻断] `ModelGateway.complete` 仍只把 `undefined` 当「无需 Secret」；含 `secretRef: null` 的冻结载荷被判成「Secret 不可用」，且 `readFrozen` 不校验载荷
+
+- **位置**：`packages/core/src/model-gateway.ts:125-135`（`frozen.provider.secretRef === undefined` / `!== undefined` 判定）；`packages/core/src/config.ts:521-540`（`readFrozen` 仅做类型断言，**不对 payload 做 Schema 校验**）。
+- **事实（`exp2` 1、`exp3` P2–P5 实跑）**：把修复前 `freeze()` 会写出的同一 payload（`secretRef: null`）冻结后，`readFrozen().provider` 原样返回 `null`，`complete()` 返回 `{ok:false,code:'CONFIG_INVALID',retryable:false,message:'secret null is not available'}` 且 **0 次** transport 调用——与 T-01 的观察值逐字相同。即写入端已约定「缺省即省略」，读取端仍不接受语义等价的 JSON `null`。
+- **影响**：对**新写入**的配置快照无影响（T-01 已闭合）；受影响的是 (a) 由修复前版本写下的快照（升级/`reliability.md` §8 的 `restore` 会整体复制 SQLite 快照），(b) 任何绕过 `ConfigStore.freeze` 的载荷（手工修复、未来 WP-05 等级/配置迁移），都会再次以**方向误导**的错误信息失败。`readFrozen` 不校验形状，使这类载荷不会被读侧拒绝。
+- **建议**：(a) `complete()` 改为 nullish 归一（例如 `const ref = frozen.provider.secretRef ?? undefined;`，`testConnection` 同理），或 (b) 在 `readFrozen` 用 `FrozenProvider` 对应的运行时 Schema 解析 payload，把非法形状转成结构化的 `STALE_ARTIFACT`/`CONFIG_INVALID`，而不是让 `null` 冒充一个名为 `null` 的 Secret。
+- **非阻断理由**：WP-02 尚未发布（`docs/INDEX.md:28` 的实现起点只结算到 WP-01），不存在携带旧快照的部署；所有受支持路径新写入的关键字都省略，AC-043 在受支持路径上成立。
+
+### R18-03 [P3，非阻断] 回归用例只覆盖 `complete()`，未覆盖无 `secretRef` 的 `testConnection`；freeze 用例不校验冻结 provider 形状
+
+- **位置**：`packages/core/test/model-gateway.test.ts:140-156`（新增用例，只调 `complete()`）；`:239-247`（`testConnection` 用例仍使用带 `secretRef: 'local-secret'` 的夹具，`:26`）；`packages/core/test/config.test.ts:206-239`（freeze 用例只断言 `role`/`effectiveContextLimit`/`reasoning`，无 provider 形状断言）。
+- **事实**：我实测匿名 `testConnection` 行为正确（`exp1` A12/A13），但产品套件对该组合无守卫——Test 指出的「同配置两条路径结论相反」正是这类守卫缺失的后果。
+- **建议**：补一条匿名 Provider 的 `provider.test` 用例（断言 `ok === true` 且 transport 请求无 `apiKey`），并把 `exp3` P1 的三键形状断言加入 `config.test.ts`。
+- **非阻断理由**：仅测试覆盖度，不影响当前行为与验收。
+
+### R18-04 [P3，非阻断] T-01 修复未在 `discovery.md` 登记 DC 条目（本包惯例为「修复登记」）
+
+- **位置**：`.agentdev/work/WP-02/discovery.md`（DC-01..DC-72，无 T-01/冻结投影条目）；对照 `.agentdev/work/WP-02/implementation.md` 的 T26（已完整记录现象、根因、修复与验证）。
+- **事实**：本包此前的每次缺陷/技术修正都有 DC 条目（DC-37 第一轮 RE-01..RE-13、DC-69 R13-03、DC-71/DC-72），T-01 只有 implementation 记录；且 R17-02 刚做过同族「记录 vs 代码」对齐。
+- **影响**：可追溯性/记录一致性，不影响行为。
+- **建议**：追加一条 DC（例如「DC-73 冻结投影的可选键：缺省即省略」），写明 `secretRef` 的约定、`resolve`/`freeze` 单一投影来源（R18-01）与读取端 nullish 对称性/升级恢复边界（R18-02），避免第二份口径继续漂移。
 
 ---
 
-## 6. 剩余风险（未闭环，供 Test/Settlement 与产品方判断）
+## 6. 其它观察（不计入 Finding 编号）
 
-1. **R17-01（新增，P3）**：`assess` 对既有 `none` Work 的写/环境 scope 评估连带拒绝；绕行是省略 scope。需在 DC-71 登记，并由 WP-06（等级升级）决定 `work.level` 回写路径；在此之前「assist → delivery 改口」的评估形态与文档形状不一致。
-2. **R17-02..R17-05（新增，P3）**：DC-66/DC-67 陈旧集合、`artifact_write` 背书收紧未登记、details 不对称、集合注释未更新。
-3. **`none` Work 的 Artifact 产出仍无授权实体背书**（§5.1，沿 R16-02/DC-63 边界）：WP-04/WP-07 接线时需确认工具层是否只认冻结的 `effectiveScope.operations`，以及 Artifact 写入是否需要独立的路径授权。
-4. **授权语义的悬置项**：`Authorization.operations` 与 `scope.operations` 优先级（§5.3）；L1/L2 写范围是否必须绑定授权（沿第十六轮 §5.5）；`git` 跨能力背书（§5.2）。
-5. **DC-66 明确推迟的项**：授权 `acceptedAt`/来源消息核对、`once` 类授权消费记账、`work.level` 回写（`works.update` 生产调用点仍为 0，本轮实测确认）。
-6. **DC-70 承接项**：`config.policy.l3Paths`/`l3Keywords` 公开可配但无判定语义。
-7. **测试缺口（本轮缩小）**：251 条单测已覆盖「`none` Work × `artifact_write` Run」「`assess`/`dispatch` 同 scope」「分类完备性」；仍无「既有 `none` Work 被重评估为写 scope」（R17-01）、「spec 声明 `writePaths` 而 `operations` 不含写操作」（R16-02 边界）的显式正例/反例。
-8. **并发未验证**：预算准入检查与事务内 `reserve` 之间的窗口（沿前几轮）；`timed_out`/`interrupted`/`recovery_required` 终态无产生路径、`onChildSettled` 无生产调用方、`Work blocked(provider)` 投影属 WP-05。
-9. **待产品方决定项**（沿前轮继续有效）：DC-64（风险旗标词表是否升为契约枚举）、DC-60（`Assessment.goal`/`scope` 是否落库，与 R17-01 耦合）、DC-27/RE-06（快照 `:ID` 与哈希并存）、DC-46（`dispatch` 不校验 `work.status`）、第十二轮 §5.4（lockdown 门禁是否严格限于 delivery/document）、R14-05（`l3Paths`/`l3Keywords` 目标语义）、第十五轮 §5.1（`none` Work 是否允许只读 git）。
-10. **`capabilityGaps` 的协议可见性**：details 键未在 `protocol.md` §7 定义；WP-04 接线时需确认 `details` 是否透出给客户端（沿第十六轮 §6.6）。
+1. **`readFrozen` 无 Schema 校验**：`snapshot.payload` 仅受 `jsonObjectSchema`（「是 JSON 对象」）约束，`config.readFrozen`（`config.ts:524`）是类型断言而非解析；`FrozenProvider`（`config.ts:67-72`）只有类型、无运行时 Schema。这是 R18-02 的载体，也是「冻结形状」无法在读取时被拒绝的结构原因。
+2. **`run-lifecycle.ts:250` 是同类问题的正确处理范式**：读取端对两侧都做 `?? null` 归一，因此 `:390` 的显式 `cost: null`（R7-02 有意保留）不会造成误判；建议 R18-01/R18-02 的修复沿用该范式（归一而非依赖书写习惯）。
+3. **实体列的 `null ↔ undefined` 往返是对称的**：`packages/storage/src/repository.ts:112` 把 NULL 解码为 `undefined`，`:75` 把 `undefined` 编码为 NULL；因此 `orchestrator.ts:572`（`chiefRunId === undefined`）、`join.ts:168`（`child.parentRunId === undefined`）等判定安全（`exp2` 4c 实测确认）。**不对称只发生在 JSON 文本列（快照 payload）**——这是本轮扫描的关键结论。
+4. **Test 报告的两条 P3 观察本轮仍成立**（沿其 §1/§6，非阻断）：`resolve` 对「模型不支持该 reasoning」返回 `CONFIG_INVALID`，而 `dispatch` 统一映射为 `PROVIDER_UNAVAILABLE`（`config.ts:426-431` vs `orchestrator.ts:458-466`）；`frozenProfileOf` 对快照缺失抛 `STALE_ARTIFACT` 而非 `NOT_FOUND`（`model-gateway.ts:99-111`，与缓存/恢复语义相关）。二者均属错误码/可观测性，建议归入 WP-10 协议面统一。
+5. **`provider.upsert` 的 `secret?:string` 参数仍被忽略**（`protocol.md` §5 声明的入参，`config.ts:322` 的 `upsertProvider` 不消费它）：配置了 Secret 值但未给出 `secretRef` 的 Provider 会被当作匿名端点调用。这属 DC-31 已登记的 WP-07（Secret 存储）/WP-10 边界，本轮不计为缺陷，但建议 RP 接线时显式拒绝「给了 secret 却没有 secretRef」的输入，避免静默降级为无鉴权调用。
+6. **产物归属**：修复提交 `3506630` 与 Test 报告提交 `b9a2d12` 分离，Review 报告将单独提交，符合「Review 产物与开发/测试提交分离」；`discovery.md`/`implementation.md` 的改动均属开发记录范围，本轮只读未改。
+7. **记录数核对**：`implementation.md` T26 声称的 252/124 与我的实测一致；未声称 `docs:check`/`build`（本轮我补齐为 6/6 退出 0）。`docs/INDEX.md` 的实现起点仍只结算到 WP-01，未误称 WP-02 已实现（正确）。
 
 ---
 
-## 7. 方法与边界声明
+## 7. 剩余风险（未闭环，供重新 Test / Settlement 与产品方判断）
 
-- 本报告只依据仓库文件、`3dc12db`/`c695fcc` 上的 git 对象/差异与实跑命令；未读取任何开发对话、未引用外部同名技能或历史方案。
-- 阅读深度：`packages/core/src/orchestrator.ts` 全文件逐行（重点 `:239-344`、`:354-549`、`:756-879`）；`packages/domain/src/routing.ts` 全文件；`packages/contracts/src/primitives.ts`（`:100-150`）与 `entities/work.ts`（`:113-141`）、`entities/structures.ts`（`:34-46`）；`packages/core/test/orchestrator.test.ts`（`:1-450`、`:680-870`）与 `packages/domain/test/domain.test.ts`（`:228-266`）；`docs/architecture/execution.md` §1-§7 通读、`data.md`（`:20-24`、`:55`）；`docs/rules/workflow.md` §1/§2；`docs/delivery/implementation.md` WP-02 与 `acceptance.md`（AC-043..047、AC-082）；`.agentdev/work/WP-02/{plan,discovery,implementation,review}.md` 全部记录通读；`packages/core/src` 其余文件按注释声称与关键分支抽查（`run-lifecycle.ts`/`stage.ts`/`join.ts` 未在本提交差异内，只做回归定位）。
-- 覆盖的手段：静态逐行核对 + 「注释/记录/提交信息 vs 代码」对账 + 分类划分与三维门禁真值表（`exp1`）+ **4 等级 × 17 scope 的 assess↔dispatch 全量差分**（`exp2`）+ 能力×维度背书矩阵（`exp3`）+ 对抗性洗白/授权引用/R16-02 边界/AC-082 恢复（`exp4`）+ details 与记录字符串核对（`exp5`）。
-- 唯一写入文件为本文件 `.agentdev/work/WP-02/review.md`；实验脚本与日志独立写在 `/tmp/wp02r17/`（`fixture.mjs`、`lib.mjs`、`exp1..exp5.mjs`、`cmds.log`），使用 `pnpm build` 产出的 `packages/*/dist`，通过 `/tmp/wp02r17/node_modules/@agentdev/*` 软链解析 workspace 包，**不 import 任何产品测试文件**。
-- 未修改产品代码、测试、`docs/**`、`plan.md`、`implementation.md`、`discovery.md`；`pnpm build` 只写 `.gitignore` 中的 `dist/`。写入本报告前 `git status --porcelain` 无输出、`HEAD=3dc12dbb9ade8022d60063cb854fca5da711c6ab`。
+1. **R18-01（新增，P2 非阻断）**：`resolve`/`freeze` 双份 `FrozenProvider` 投影，只靠人工同步；建议合并为单一来源。
+2. **R18-02（新增，P2 非阻断）**：读取端不接受 JSON `null`；由修复前版本写入的配置快照在升级/`restore` 后仍会以误导性错误失败，`readFrozen` 也不校验载荷形状。未发布故当前无实际部署受影响。
+3. **R18-03/R18-04（新增，P3）**：匿名 `testConnection` 无产品级守卫；T-01 修复未登记 DC 条目。
+4. **测试缺口（本轮缩小）**：`complete()` 的匿名 Provider 正例已由新用例覆盖（我给 `exp3` 证明该用例确实能抓住旧行为）；仍缺「匿名 `testConnection` 正例」「修复前快照（`secretRef:null`）兼容负例」的产品级用例。
+5. **沿前轮继续有效**：真实 Provider 纵向验证（真实 HTTP/usage/reasoning 映射）归 WP-10；daemon HTTP/WS 协议面归 WP-09/WP-10；AC-082 的工具层负例（重启后试读窄范围外文件被拒）归 WP-07；`provider.upsert` 的 Secret 本体存储与 `secretRef` 绑定归 WP-07/WP-10（DC-31）。
+6. **产品待决项（沿前轮）**：DC-60（`Assessment.goal`/`scope` 是否落库）、DC-64（风险旗标词表是否升为契约枚举）、DC-70（`l3Paths`/`l3Keywords` 判定语义）、DC-27/RE-06（快照 `:ID` 与 hash 并存）、DC-46（`dispatch` 不校验 `work.status`）、R17-01 登记后的 WP-06 等级升级路径。
+7. **并发未验证（沿前轮）**：预算准入检查与事务内 `reserve` 之间的窗口；`timed_out`/`interrupted`/`recovery_required` 终态无产生路径、`onChildSettled` 无生产调用方、`Work blocked(provider)` 投影属 WP-05。
+
+---
+
+## 8. 方法与边界声明
+
+- 本报告只依据仓库文件、`b9a2d12`/`3506630` 上的 git 对象与差异、以及我自己执行的命令；未读取任何开发或 Test 会话对话，未引用外部同名技能或历史方案。
+- 阅读深度：`packages/core/src/config.ts`（全文件逐行，重点 `:130-180`、`:320-360`、`:390-540`）、`model-gateway.ts`（全文）、`orchestrator.ts`（全文逐行，重点 `:245-345`、`:355-550`、`:560-750`、`:756-1006`）、`stage.ts`/`join.ts`/`run-lifecycle.ts`/`snapshots.ts`/`events.ts`（全文），`dispatcher.ts`/`auth.ts`/`identity.ts`/`requirements.ts`/`mailbox.ts`/`errors.ts`/`events-hub.ts`/`toml.ts` 按注释声称与 `?? null`/`undefined` 判定点抽查；`packages/core/test/{model-gateway,config,orchestrator}.test.ts`；`packages/contracts/src/entities/structures.ts`（`:120-175`）、`packages/domain/src/routing.ts`（`:145-200`）、`packages/storage/src/repository.ts`（`:70-130`）；`docs/architecture` 六篇、`docs/rules/workflow.md`、`docs/rules/agents.md`（系统注入全文）、`docs/delivery/implementation.md` WP-02、`docs/delivery/acceptance.md` AC-043..047/082、`.agentdev/work/WP-02/{plan,discovery,implementation,review,test}.md` 全部通读。
+- 覆盖的手段：静态逐行核对 + 「记录/注释/提交信息 vs 代码」对账 + 冻结投影 8 维真值表（`exp1`）+ 旧快照兼容与 Orchestrator 端到端（`exp2`）+ 回归用例有效性反证（`exp3`）+ 全仓 `?? null` 站点与消费者对照表 + `git show` 历史回溯（`c4763d5`/`3506630`）。
+- 唯一写入文件为本文件 `.agentdev/work/WP-02/review.md`；实验脚本与日志独立写在 `/tmp/wp02r18/`（`lib.mjs`、`exp1..exp3.mjs`、`experiments.log`、`commands.log`），使用 `pnpm build` 产出的 `packages/*/dist`，通过 `/tmp/wp02r18/node_modules/@agentdev/*` 软链解析 workspace 包，**不 import 任何产品测试文件**。
+- 未修改产品代码、测试、`docs/**`、`plan.md`、`implementation.md`、`discovery.md`、`test.md`；`pnpm build` 只写 `.gitignore` 中的 `dist/`。写入本报告前 `git status --porcelain` 无输出、`HEAD=b9a2d1242bb7ea0ca950741b1be14b76cf32468d`。
