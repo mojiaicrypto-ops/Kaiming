@@ -1,3 +1,344 @@
+# WP-03 独立 Review 报告（第二十轮）
+
+- 评审对象：工作包 WP-03「直接协作与说明产物」
+- 评审轮次：**第二十轮**（第一～十六轮摘要见文末「附一～附十六」，第十七轮报告全文见「附十七」，第十八轮报告全文见「附十八」，第十九轮报告全文见「附十九」，全部保留）
+- 冻结点 / HEAD：`git rev-parse HEAD` = `408c9e71880626ef9e4e9b18c5b6f65ce90ec984`（= 任务下达的 `408c9e7`，**无漂移**）
+- 工作树：全部契约命令与全部探针执行前后 `git status --porcelain` 为空（末行为空串，见文末）；除本报告外无未提交修改
+- 评审角色：Review（独立上下文；未读取任何开发/Test 会话；只依据仓库文件、契约文档与我自建的 `/tmp/w3r20/` 6 个脚本 + 只读复用 `/tmp/w3r19|w3r18|w3r17|w3r16|w3r14|w3r13/` 的 23 个脚本）
+- 工具：`node v24.8.0`、`pnpm 12.3.4`、macOS 宿主；全部脚本消费 `pnpm build` 产物（`packages/domain/dist`、`packages/core/dist`、`apps/daemon/dist`、`packages/storage/dist`），**未 import 任何产品测试文件**（`domain.test.ts` 仅以文本方式提取语料）
+- 记录哈希（`git hash-object`，前 8 位）：`packages/domain/src/requests.ts` **`9026dd3c`**（第十九轮 `06f45210`）、`packages/domain/test/domain.test.ts` **`08d110d2`**（第十九轮 `58566130`）、`.agentdev/work/WP-03/plan.md` **`355f3780`**（第十九轮 `ec493451`）、`.agentdev/work/WP-03/implementation.md` **`758b0a78`**（第十九轮 `c3dd4e12`）；`apps/daemon/src/server.ts` `3a348304`（末次改动 `c82169b`，第七轮）、`packages/core/src/messages.ts` `283d4c04`（`c82169b`，第七轮）、`packages/core/src/preview.ts` `803b502a`（`d07cc67`，第五轮）、`packages/core/src/artifacts.ts` `057ff403`（`9a58435`）、`packages/core/src/attachments.ts` `3ee94838`（`0b04f79`，第二轮）——后五个文件与第十三～二十轮**逐字相同**
+- 变更范围（`git diff --numstat 52b4fca 408c9e7`）：`69c575f`（`requests.ts` +49/−36、`domain.test.ts` +27/−0、`plan.md` +11/−1、`implementation.md` +19/−5）；`408c9e7` 只改 `review.md`（第十九轮报告落库，+380/−0）。`packages/core/src/**`、`apps/daemon/src/**`、`docs/**` **零改动**
+- 权威依据：`AGENTS.md`、`docs/INDEX.md`、`docs/rules/{workflow,agents}.md`（§1/§6）、`docs/product/experience.md`（§3）、`docs/architecture/{data,protocol,execution,reliability}.md`、`docs/delivery/{implementation,acceptance}.md`（AC-001..006/052/076/084）、`.agentdev/work/WP-03/{plan,implementation,review}.md`、`packages/**`、`apps/daemon/**`、相关测试
+
+---
+
+## 1. 结论
+
+**PASS（可以进入独立 Test）。本轮判 0×P0、0×P1、2×P2、2×P3。**
+
+**第十九轮唯一 P1（W3R19-01）的三层主张全部闭合，且新规则经独立对抗性证伪成立。** 支持证据：
+
+- **三层闭合（第十九轮点名的越权族）**：
+  - **routeMessage 层**：`/tmp/w3r19/probe1-cross.mjs` 10 357 例中，第十九轮的三个越权族**全部归零**——F2 解释领起交叉积 **4 290 → 0**、F3 后置变体 **390 → 0**、F13 同义否定×同义变更网格 **494 → 0**（仅余 F9 `特别修改 X` 一例**探针期望错误**，与第十九轮同）；`probe1b-open-forms.mjs` `open forms: 0/65`、report-frame `none`。我自建的**新词表**交叉积（`/tmp/w3r20/probe1-shape.mjs`，232 735 例）中，**带命名路径**的解释领起族 **201 600 例 0 偏差**（F1 114 240 / F2 85 680 / F3 1 680）与已识别路径对照族 **192 例 0 偏差**。
+  - **真实 HTTP**：`/tmp/w3r19/probe2-live.mjs` 54 例中，第十九轮 §5.3 的 **10 句证据句全部 `http=202`、`writes=[]`、`authorizationId=null`、`level=["none"]`、`assess=0`**；我自建的 `/tmp/w3r20/probe2-live.mjs` 33 例中 **17 句 must-read 全部只读**（含源码路径 `packages/core/src/orchestrator.ts` 目标）。
+  - **真实 `Orchestrator`**：上述 27 句**全部 `runs=[]`**，无一个 `backend:implementation:queued` 写 Run；对照地，登记正例（第十九轮 9 例 + 本轮 9 例）全部建立真实写 Run 且写范围与期望逐字一致。
+- **根因消除**：两张互相矛盾的枚举表（`NEGATION_MARKER_PATTERN` / `CHANGE_VERB_ANY_PATTERN`）在 `packages/domain/src/**` 与 `apps/**` 中 `grep` **0 命中**；拒绝侧词表（`REFUSAL_ADVERBS`/`REFUSAL_CHANGE_VERBS`/`REFUSAL_VERBS_EN`）现在是 `NEGATION_PATTERNS` 与 `REFUSAL_HEAD_PATTERN` 的**单一来源**（`requests.ts:114-145`）。
+- **新形状判定的证伪结果**：`isPureExplanationOfPath`（剥离解释领起后剩余部分须恰为一个路径 token）对**任何措辞**的否定/变更都按形状关闭——我以 47 个否定词（含 `莫/休/毋/未/没/无/非/停止/住手/打消/搁置/免于/谨防/abstain from/hold off/withhold/…`，与第十八/十九轮词表**不同**）× 12 个变更词 × 35 个领起 × 多种接续生成的 20 万级组合**0 越权**；且**写范围恒等 0/232 735（route）+ 0/33（真实 HTTP）**，未发现任何写范围扩张。
+- **记录对账**：`planVersion: 5`（`plan.md:3`）、`implementation.md:3 planVersion: 5`、T27 负例订正为 10、语料计数 **187 = 14+10+4+159 例 0 偏差**（`/tmp/w3r18/probe4-registered.mjs`）与另一实现 **189 例 0 偏差**（`/tmp/w3r19/probe3-registered.mjs`）**均逐字复现**。
+- **前轮无回归**：21 个只读复用脚本结果与第十九轮一致（前轮 P0/P1 17/17 通过、注入面 0 通路、仓库外目标只读不 500、预览/下载/ACL 断言不变）。
+
+**未闭合项（不阻断验收面，必须在 Test/结算前闭环）**：
+
+- **W3R20-01 [P2]**：`benignExplanation` 的「无路径」分支以 `pathsIn(clause).length === 0` 判定，而 `pathsIn` 是**目标形状**判据（须含 `/` 或已知扩展名，且拒绝 `..`/`/`/`~`/`://`）。于是「框架子句点名了一个**不可授权目标**」的形态（`src`、`docs/`、`docs//PLAN.md`、`docs/../PLAN.md`、`/etc/hosts.md`、`~/.ssh/config.md`、URL）与「根本不含目标」的形态落入同一良性分支：`说明莫碰 src，然后修改 docs/INDEX.md`、`说明莫碰 docs/../PLAN.md，然后修改 docs/INDEX.md`、`修改 docs/DESIGN.md，解释莫碰，然后修改 docs/INDEX.md` 均授权，而同形登记否定版本（`说明不要碰 src`、`修改 docs/DESIGN.md，解释不要碰，…`）**只读**。方向：**无写范围扩张**（授权集合恒等于消息中显式命令点名的路径），不违反 AC-004/AC-005，故不判 P1；但该分支边界未在 `plan.md` 登记，且 registered/unregistered 两种措辞结果不同，须登记并落成长期断言。
+- **W3R20-02 [P2]**：第十九轮 P2（W3R19-02「每族 ≥3 条长期断言」）**未闭合**：第十九轮 §11.2 点名的四个族中，只有第一个部分落地——同义否定维度 **5/7**（缺 `说明莫动`、`杜绝碰`）、同义变更维度 **1/7**（仅 `碰/触碰`；`动/删/变更/删掉/动它` grep **0**）、后置 **1/3**、英文 `avoid touching`/`prohibition on` **0/2**、同形对照 `说明莫修改`/`报告说莫碰` **0/2**；`Orchestrator` 级**仓库内**用例仍缺（`grep -rn Orchestrator apps/daemon/src/` **0 命中**，第十九轮已声明属 WP-04 接线）。因 P1 类别已按形状关闭，该缺口不阻断验收面，但 Test 必须把未覆盖族列入 `not_covered` 或以本轮外置证据替代。
+
+| 维度 | 第十九轮 | 第二十轮 |
+|---|---|---|
+| W3R19-01 route 越权（4 290 + 390 + 494） | 越权 216 + 24 + 204 | **归零（0+0+0）** |
+| W3R19-01 真实 HTTP 10 句 | 10 句落库授权 + L2 delivery | **全部只读（writes=[]、authId=null、assess=0）** |
+| W3R19-01 真实写 Run | 10 个 `backend:implementation:queued` | **0 个（runs=[]）** |
+| 内部矛盾词表（两张枚举表） | 存在（`碰/动/删` 两侧不一致） | **删除，单一来源（grep 0）** |
+| 新形状判定（带命名路径 × 任意否定/变更） | — | **201 600 例 0 偏差** |
+| 「无路径/不可授权目标」分支 | — | **边界：528/528 授权；与登记否定版不一致（W3R20-01 P2）** |
+| 写范围扩张 | 0/10 357 + 0/54 | **0/232 735 + 0/33** |
+| 登记语料计数 | 187 / 189，0 偏差 | **187 / 189，0 偏差（逐字复现）** |
+| 长期断言覆盖（W3R19-02） | 10 条、族覆盖缺 | **7 条负例 + 2+2 正例；族覆盖仍缺（W3R20-02 P2）** |
+| 前轮 P0/P1 与注入面 | 17/17、0 通路 | **17/17、0 通路（保持）** |
+
+---
+
+## 2. 契约命令原始结果（冻结树 `408c9e7`，`/tmp/w3r20/contract.log`）
+
+| 命令 | 结果 | 关键输出 |
+|---|---|---|
+| `pnpm typecheck` | **exit 0** | 无诊断 |
+| `pnpm lint` | **exit 0** | 无告警（两张枚举表删除后无未用符号） |
+| `pnpm test:unit` | **exit 0** | `Test Files 19 passed (19)`、`Tests 289 passed (289)`、3.6s |
+| `pnpm test:integration`（真实 Docker） | **exit 0** | `Test Files 10 passed (10)`、`Tests 124 passed (124)` |
+| `pnpm docs:check` | **exit 0** | 15 docs / 55 internal links / 94 AC / 9 REQ / 11 WP 全部成立 |
+| `pnpm build` | **exit 0** | 8 workspace 全部构建成功 |
+
+未执行（按设计属 WP-09/WP-10，脚本 `NOT_IMPLEMENTED`）：`test:e2e`、`test:acceptance`、`test:live`。
+
+说明：`test:unit` 计数仍是 289，是因为路由语料位于单个 `it(...)` 的数据驱动循环内，新增语料条目不改变用例数——**不能据 289 未变推断语料未增**（§7 用文本提取核对）。
+
+---
+
+## 3. 方法
+
+1. 冻结点校验：`git rev-parse HEAD`、`git status --porcelain`、`git diff --numstat 52b4fca 408c9e7`、`git hash-object` 逐文件比对、`git log -1 -- <file>` 定位末次改动（§头部）。
+2. 契约命令全跑（§2），在**同一冻结树**上执行；报告写入前后各查一次工作树。
+3. **三层验证「W3R19-01 已闭合」**：(a) `routeMessage` 直调；(b) **真实 HTTP**：`createDaemon` + 真实 SQLite + 真实 blob + Bearer 认证 + 真实 `MessageService`（授权行数、`authorizationId`、Work `level`/`intent`/`scope.writePaths`、assessment 行数）；(c) **真实 `Orchestrator`**：`assess` → Chief `dispatch(purpose=analysis)` → `dispatch(professionalSpec(backend, implementation))`，检查是否出现真实 `backend:implementation:queued` 写 Run。
+4. **独立、新词表的对抗性证伪**（不沿用第十八/十九轮的词表作为假设）：35 个解释领起 × 47 个否定词 × 12 个变更词 × 接续 4 种 + 后置 3 种 + 源码目标 + 已识别/被拒目标对照 + 登记正例 + 报告框架，共 **232 735 例**；并对每个用例断言「授权路径 ∈ 消息点名路径」。
+5. **边界形态专项**（回合 4 发现）：`src`、`docs`、`PLAN`、`PLAN.md.x`、`docs/`、`docs//PLAN.md`、`docs/../PLAN.md`、`docs/../../etc/hosts.md`、`/etc/hosts.md`、`~/.ssh/config.md`、URL 共 11 种被拒/畸形形态 × 8 领起 × 6 否定 = 528 例，并以 `docs/PLAN.md`、`PLAN.md`、`docs/PLAN`、`docs/DESIGN.md` 192 例作对照。
+6. **记录对账**：`plan.md` planVersion 5 计数口径 → 文本提取复算（187 / 189）；T28 各条证据脚本复跑；T27/T28 断言逐族 `grep` 计数。
+7. 只读复用前轮脚本 **23 个**（§6），全部消费同一 `pnpm build` 产物。
+
+---
+
+## 4. 第十九轮 P1（W3R19-01）闭合复核 —— **闭合**
+
+### 4.1 routeMessage 层
+
+| 语料 | 规模 | 第十九轮 | 本轮 |
+|---|---|---|---|
+| `probe1-cross` F2 解释领起交叉积 | 4 290 | 越权 216 | **0** |
+| `probe1-cross` F3 后置变体 | 390 | 越权 24 | **0** |
+| `probe1-cross` F13 同义否定×同义变更 | 494 | 越权 204 | **0** |
+| `probe1-cross` F1 报告框架（对照） | 4 875 | 0 | **0** |
+| `probe1-cross` 全量 | 10 357 | deviations 428 | **deviations 1（仅 F9 `特别修改 X` 探针期望错误）、scope-expansion 0** |
+| `probe1b-open-forms` | 65 否定 × 22 领起 + 网格 | open 4 个否定 | **open forms 0/65；report-frame open none** |
+| 自建 `probe1-shape` 带命名路径族（F1+F2+F3） | 201 600 | — | **0 偏差** |
+| 自建 `probe1-shape` 已识别路径对照（F5b） | 192 | — | **0 偏差** |
+
+第十九轮点名的 4 个越权否定措辞（`莫碰`/`停止碰`/`避免碰`/`杜绝碰`）与 7 个同义变更（`碰/动/删/触碰/变更/删掉/动它`）在本轮**逐格只读**；`probe1b-open-forms` 的 `opens by neg` 为空。
+
+### 4.2 真实 HTTP
+
+- `probe2-live`（第十九轮 54 例，本轮复跑）：第十九轮 §5.3 的 **10 句证据句**（含源码路径、后置变体、英文）**全部 `http=202`、`levels=["none"]`、`writes=[]`、`authId=null`、`assess=0`、`runs=[]`**；同批 2 句同形对照（`说明别碰`、`报告说莫碰`）只读；`fail-open 0`、`误拒 0`、`documented positive 写集合偏差 0`。
+- `probe2-live`（本轮自建 33 例）：**17 句 must-read 全部只读且零写 Run**（含 `说明莫碰 docs/PLAN.md，然后修改 packages/core/src/orchestrator.ts`、`描述拒绝触碰 …`、`分析谨防删 …`、`explain abstaining from touching …`、`修改 docs/INDEX.md。解释拒绝触碰 …`、`解释 docs/INDEX.md 的原因，然后修改 docs/PLAN.md`）。
+
+### 4.3 真实 `Orchestrator`
+
+| 断言 | 结果 |
+|---|---|
+| 第十九轮 10 句 + 本轮 17 句 must-read → 是否建写 Run | **27/27 `runs=[]`**（`backend:implementation:queued` 0） |
+| 登记正例（第十九轮 9 例 + 本轮 9 例）→ 是否建写 Run | **18/18 建立真实 `backend:implementation:queued`**，写范围与期望逐字一致（含 `修改 docs/PLAN.md，则修改 docs/INDEX.md` 两目标） |
+| 授权行 / `authorizationId` / `level` | must-read 侧 `authId=null`、`levels=["none"]`；正例侧 `authId=yes`、`levels=["L2"(+"none")]` |
+
+### 4.4 机制核对（与记录一致）
+
+- `benignExplanation`（`requests.ts:457-461`）**不再含任何否定/变更枚举表**；`isPureExplanationOfPath`（`:159-166`）只做形状判定；两张旧表已删除（`grep` 0）。
+- 拒绝侧单一来源（`:114-118`）同时构造 `NEGATION_PATTERNS`（`:137-145`）与 `REFUSAL_HEAD_PATTERN`（`:129-134`）。
+- `ADVERB_LEAD_PATTERN`（`:292-293`）含 `则`，与 `additiveLead`（`:443`）一致。
+
+---
+
+## 5. 新形状规则的对抗性证伪
+
+### 5.1 带命名路径的解释领起（P1 族）—— **按形状关闭**
+
+| 族 | 规模 | 结果 |
+|---|---|---|
+| F1 `〈领起〉〈任意否定〉〈任意变更〉〈路径〉〈接续〉` | 114 240 | **0 越权** |
+| F2 后置 `修改 X〈分隔〉〈领起〉〈否定〉〈变更〉〈路径〉` | 85 680 | **0 越权** |
+| F3 源码路径目标 `…，然后修改 packages/core/src/orchestrator.ts` | 1 680 | **0 越权** |
+| F7 报告/陈述框架 × 新否定词 | 1 836 | **0 越权** |
+| F5b 已识别路径（`docs/PLAN.md`/`PLAN.md`/`docs/PLAN`/`docs/DESIGN.md`） | 192 | **0 越权** |
+| F6 登记正例（混合意图/拒绝纠正/多命令/`则`/末尾礼貌/英文） | 19 | **0 偏差** |
+
+结论：只要解释子句点名了一个**可授权目标**，剩余部分不是该目标即整条消息只读；该判定与否定/变更**措辞无关**，因此第十九轮的「枚举表缺口」根因在结构上不可能复现。
+
+### 5.2 「无路径 / 不可授权目标」分支 —— **边界，W3R20-01（P2）**
+
+| 族 | 规模 | 观测 |
+|---|---|---|
+| F4 `修改 Z，〈领起〉〈否定〉〈变更〉，然后修改 X`（子句无目标） | 28 560 | 授权 21 999 / 只读 6 561（只读者全部是**登记否定**，如 `解释不要碰`） |
+| F5a 框架子句点名**被拒/畸形目标**（`src`、`docs`、`PLAN`、`PLAN.md.x`、`docs/`、`docs//PLAN.md`、`docs/../PLAN.md`、`/etc/hosts.md`、`~/.ssh/config.md`、URL 等 11 种）× 8 领起 × 6 否定 | 528 | **授权 528 / 只读 0** |
+
+真实 HTTP 复核（`probe2-live` 33 例）：5 例边界形态授权（`说明莫碰 src`、`说明莫碰 ~/.ssh/config.md`、`说明莫碰 docs/../PLAN.md`、`说明莫碰 /etc/hosts.md`、`修改 docs/DESIGN.md，解释莫碰，然后修改 docs/INDEX.md`），写范围**恒等于消息显式命令点名的路径**（`["docs/INDEX.md"]` 或 `["docs/DESIGN.md","docs/INDEX.md"]`）；同形登记否定版本 2 例**只读**（`说明不要碰 src`、`修改 docs/DESIGN.md，解释不要碰，…`）。
+
+**裁定**：授权目标均为用户在同一消息中以完整命令形态（`修改 <路径>`）点名的路径，属 `docs/rules/workflow.md` §1「执行消息可直接授权明确目标」；全量 232 735 + 33 例**写范围扩张 0**，不违反 AC-004（非「仅询问」）与 AC-005（范围内授权）。因此**不判 P1**；但 planVersion 5 只说「不含路径的解释子句没有可夹带的目标」，未登记「路径」的判定基准是 `pathsIn`（目标形状、仓库内、须 `/` 或已知扩展名），导致（i）被拒/畸形目标形态与无目标形态同判、（ii）registered/unregistered 两种否定措辞结果不同。记为 **W3R20-01 [P2]**，须登记并落成长期断言（建议最小修法：良性分支的「无路径」条件改为「子句不含任何**路径形状** token（含被拒形态：含 `/`、含已知扩展名、或为 `..`/`/`/`~`/URL 形态）」——仍保留 `explain the routing rules and fix X` 这类**无路径形状**前导的授权）。
+
+### 5.3 与 `planVersion 3 §23` 的关系（诚实说明）
+
+`planVersion 3 §23`「子句含否定式但否定不领起 ⇒ 整条消息不授权」在**带可授权目标**的解释子句上已被本轮完整实现（§4/§5.1）；在**无可授权目标**的子句上，`planVersion 5`「不含路径的解释子句仍可作为混合意图前导」是其显式例外，实现与该例外一致（仅登记否定仍会经 `reportedNegation` 额外收紧为只读）。故 §23 无范围限定的绝对版本同样只在其**已登记语料**内成立——这与 `implementation.md` 订正块第 1 条的口径一致。
+
+---
+
+## 6. 写范围恒等、登记语料与前轮无回归
+
+- **写范围恒等**：`probe1-shape` **0/232 735**、`probe2-live`（本轮）**0/33**、`probe2-live`（第十九轮）**0/54**、`probe1-cross` **0/10 357**；`/tmp/w3r17/probe4-scope.mjs` 授权路径 **102/102 ⊆ 消息点名路径**（其 30 条 `EXPANSION` 全部是 planVersion 3 §31 已取代的「多子句只授权第一个目标」旧期望）。
+- **登记语料复算**（文本提取、不 import 产品测试）：
+  - `/tmp/w3r18/probe4-registered.mjs`：块起始 `[284,308,330,364,378]`，提取 **187 = 必须授权 14 + 拒绝纠正接续 10 + 多命令 4 + 必须只读 159**，重放 **0 偏差**；与 `plan.md` planVersion 5 计数条与 `implementation.md:9` 订正块第 2 条**逐字一致**。
+  - `/tmp/w3r19/probe3-registered.mjs`：**189 例 0 偏差**（多命令按 tuple 计 6），与 `implementation.md:9` 的「另一实现」说明一致。
+  - `/tmp/w3r13/probe7-registered.mjs`：**14 positives + 161 negatives，deviations 0**。
+- **前轮脚本复用结果**（全部只读、消费本轮 build）：
+
+| 脚本 | 规模 | 本轮结果 |
+|---|---|---|
+| `/tmp/w3r19/probe1-cross.mjs` | 10 357 | 见 §4.1；deviations 1（F9 期望陈旧）、scope-expansion 0 |
+| `/tmp/w3r19/probe1b-open-forms.mjs` | 65 × 22 + 网格 | open forms 0/65、report-frame none |
+| `/tmp/w3r19/probe2-live.mjs` | 54（真实 HTTP + Orchestrator） | fail-open 0、误拒 0、写集合偏差 0、10 句 must-read 零 Run |
+| `/tmp/w3r19/probe3-registered.mjs` | 189 | 0 偏差 |
+| `/tmp/w3r18/probe4-registered.mjs` | 187 | 0 偏差 |
+| `/tmp/w3r18/probe2b-negation-gap.mjs` | 385 | `open=0`、`opens by lead/neg: []` |
+| `/tmp/w3r18/probe2-frame-hole.mjs` | 573 | `open=0` |
+| `/tmp/w3r18/probe2c-variants.mjs` | 10 | 10/10 只读 |
+| `/tmp/w3r18/probe1-failopen.mjs` | 1 317 | `mismatches=2`（均为 planVersion 4 已取代的 `obs-polite-conj` 旧观测期望）、`scope-violations=0` |
+| `/tmp/w3r18/probe3-live.mjs` | 71（真实 HTTP + Orchestrator） | fail-open 0、误拒 0、写集合偏差 0 |
+| `/tmp/w3r17/probe1-corpus.mjs` | 13 848 | `commandSanityFailures=0`；A 档 59（`务必` 族，探针期望陈旧）、B 档 43 |
+| `/tmp/w3r17/probe2-framing.mjs` | 31 | `mismatches=0` |
+| `/tmp/w3r17/probe3-live.mjs` | 39（真实 HTTP + Orchestrator） | 唯一 `!!` 为 `B-partial`（多目标旧期望），miss/false-reject 0 |
+| `/tmp/w3r17/probe4-scope.mjs` | 510 + 12 | 包含 102/102；EXPANSION 30 为旧期望 |
+| `/tmp/w3r16/probe1-corpus.mjs` | 223 | FAIL-OPEN 0、FALSE-REJECT 1（范围声明）、UNEXPECTED-WRITE 1（K-multi 旧期望）、AMBIG-WRITE 1 |
+| `/tmp/w3r16/probe2-launder.mjs` | 110 | FAIL-OPEN 0、FALSE-REJECT 4（前导加性/礼貌旧期望）、AMBIG-WRITE 3 |
+| `/tmp/w3r16/probe5-http.mjs` | 真实 HTTP | fail-open 0；1 例 UNEXPECTED 为已登记 `修改 Y，X 保持不动` |
+| `/tmp/w3r16/probe6-e2e.mjs` | 25（真实 Orchestrator） | 非命令写 Run 0、正例失败 0 |
+| `/tmp/w3r16/probe7-escape.mjs` | 12 | 仓库外目标只读、零授权行、无 500（未知字段项见 W3R20-04） |
+| `/tmp/w3r14/probe1-corpus.mjs` | 201 | FAIL-OPEN 0、FALSE-REJECT 3 |
+| `/tmp/w3r14/probe5-injection.mjs` | 11 | 注入通路 **0** |
+| `/tmp/w3r14/probe6-prior.mjs` | 17 | 前轮 P0/P1 失败 **0** |
+| `/tmp/w3r13/probe7-registered.mjs` | 14 + 161 | `deviations: 0` |
+
+---
+
+## 7. 记录与实现一致性核对
+
+| 记录主张（来源） | 实测 | 结论 |
+|---|---|---|
+| 冻结 `HEAD=408c9e7`、工作树干净 | 一致 | **准确** |
+| `plan.md:3` `planVersion: 5` | 一致 | **准确** |
+| `implementation.md:3` `planVersion: 5` | 一致（第十九轮 W3R19-03 已订正） | **准确** |
+| planVersion 5「解释领起良性 = 剩余恰一个命名路径 或 不含路径」 | `requests.ts:457-461` + `:159-166` 一致 | **准确**（「不含路径」= `pathsIn==0`，边界见 W3R20-01） |
+| planVersion 5「删除两张枚举表、拒绝侧单一来源」 | `grep NEGATION_MARKER_PATTERN\|CHANGE_VERB_ANY_PATTERN` **0**；`:114-145` 单一来源 | **准确** |
+| planVersion 5「补入 `重写/优化/…` 使 `不重写 Y，修改 X` 授权」 | `domain.test.ts:341-342` + route/HTTP 实测授权 | **准确** |
+| planVersion 5「`则` 归一化，两目标入写范围」 | `修改 docs/PLAN.md，则修改 docs/INDEX.md` → `["docs/INDEX.md","docs/PLAN.md"]`（route + 真实写 Run） | **准确** |
+| planVersion 5 计数「187 例 0 偏差（14/10/4/159）」 | `probe4-registered` 逐字复现 | **准确** |
+| `implementation.md:9` 计数块（187 + 189 双实现） | 两个脚本均 0 偏差、计数一致 | **准确** |
+| T27 负例「11 条」订正为 **10 条** | `domain.test.ts` 实测 10（`git diff` 佐证） | **准确** |
+| T28「新增 7 条负例 / 2 条拒绝纠正正例 / 2 条无路径正例」 | `git diff 974411f 69c575f`：must-not +7（`:548-554`）、must-authorize +2（`:341-342`）、无路径正例 +2（`:364-366`） | **准确** |
+| T28「解释子句中路径+附加内容整条只读」 | `解释 docs/INDEX.md 的原因，然后修改 docs/PLAN.md` → 只读（route + HTTP） | **准确** |
+| T28「W3R19-02 的每族 ≥3 条已补入主流」 | 族覆盖：同义否定 5/7、同义变更 1/7、后置 1/3、英文 0/2、同形对照 2/4；Orchestrator 仓库内用例 0 | **夸大（W3R20-02/03）** |
+| 订立 `则`/未登记否定动词纠正口径（W3R19-04） | `则` 已归一；`不重写/不要清理` 授权；其余未登记动词仍 fail-closed（planVersion 2 通用代价） | **闭合** |
+| 协议对账（W3R19-05） | 未订正（`probe7-escape`：未知字段仍 202 静默） | **承接（W3R20-04）** |
+| 绝对表述限定（订正块第 1 条） | T11–T25 已限定；T28 未使用无限定绝对表述 | **准确** |
+
+---
+
+## 8. 第十九轮 P2/P3 闭合状态
+
+| 编号 | 内容 | 状态 |
+|---|---|---|
+| W3R19-02 [P2] | 每族 ≥3 条长期断言 + Orchestrator 仓库内用例 | **部分闭合 → W3R20-02**（7 条负例 + 2+2 正例落地；族覆盖与 Orchestrator 用例仍缺） |
+| W3R19-03 [P3] | `implementation.md:3` planVersion；T27 计数 | **闭合**（5；10） |
+| W3R19-04 [P3] | `则` 接续；未登记否定动词的纠正 | **闭合**（`则` 归一并真实授权两目标；词表补入后 `不重写/不要清理` 授权，其余由 planVersion 2 通用 fail-closed 覆盖） |
+| W3R19-05 [P3] | 协议未知字段与 §5 响应 | **未订正，承接 → W3R20-04** |
+
+---
+
+## 9. 新 Findings（W3R20-xx）
+
+### W3R20-01 [P2] 解释领起「无路径」分支以 `pathsIn` 为判据：被拒/畸形目标形态与无目标形态同判良性，且与登记否定版本结果不一致（方向：无写范围扩张）
+
+- **位置**：`packages/domain/src/requests.ts:457-461`（`benignExplanation` 第三分支 `pathsIn(clause.text).length === 0`）、`:74-96`（`pathsIn` 的 `/`、`~`、`..`、`://`、扩展名判据）、`:502-505`（`reportedNegation` 只认 `NEGATION_PATTERNS` 词表）。
+- **实测**：
+  - route：F5a **528/528 授权**（11 种被拒/畸形目标 × 8 领起 × 6 否定），F5b 对照 **192/192 只读**；F4 **21 999 授权 / 6 561 只读**（只读者全部是登记否定）。
+  - 真实 HTTP + Orchestrator：5 例边界形态授权并建立真实写 Run，写范围恒等于消息显式命令路径；2 例登记否定对照只读。
+  - 对照：`说明莫碰 src，然后修改 docs/INDEX.md` **授权** vs `说明不要碰 src，然后修改 docs/INDEX.md` **只读**；`修改 docs/DESIGN.md，解释莫碰，然后修改 docs/INDEX.md` **授权** vs `…解释不要碰…` **只读**。
+- **性质**：不是第十九轮 P1 的复现（被拒形态**不可**成为授权目标，`docs/../PLAN.md` 等在任何消息中都只读），故**无越权写范围**、不违反 AC-004/AC-005；但 `plan.md` planVersion 5 未登记「路径」判定基准，且 registered/unregistered 措辞导致结果不同，属应登记的口径边界（P2）。
+- **修复方向**：在 `plan.md` 明示良性分支的「路径」= `pathsIn` 可识别目标；或把「无路径」条件改为「子句不含任何路径**形状** token（含被拒形态）」，同时保留 `explain the routing rules and fix X` 一类无路径形状前导的授权；并把 §5.2 的 5 例边界 + 2 例对照落成长期断言。
+
+### W3R20-02 [P2] 第十九轮 P2（W3R19-02）未闭合：同义变更/后置/英文/同形对照族覆盖不足，Orchestrator 仓库内用例仍缺
+
+- **位置**：`packages/domain/test/domain.test.ts:341-342/548-554`（第十九轮新增）、`:500-535`（第十八轮块）、`apps/daemon/src/**`（无 `Orchestrator` 装配）。
+- **实测**：第十九轮 §11.2 的族覆盖：同义否定 **5/7**（`说明莫动`、`杜绝碰` grep 0）、同义变更 **1/7**（`动/删/变更/删掉/动它` grep 0）、后置 **1/3**（`解释避免碰 docs` grep 0）、英文 **0/2**（`avoid touching`/`prohibition on` grep 0）、同形对照 **2/4**（`说明莫修改`、`报告说莫碰` grep 0）；`grep -rn Orchestrator apps/daemon/src/` **0 命中**。
+- **性质**：P1 类别已按形状关闭，故该缺口不影响本轮验收面；但无回归网的族会在后续措辞演化中静默开口，且 Test 需要明确 `not_covered`。
+- **修复方向**：按族补齐 ≥3 条（尤其同义变更 `碰/动/删/触碰/变更/删掉/动它` 与后置/英文族）；`Orchestrator` 仓库内用例待 WP-04 装配后补入（当前以外置真实 HTTP + 真实 Orchestrator 证据替代）。
+
+### W3R20-03 [P3] T28 记录高估：`implementation.md:345`「W3R19-02 的每族 ≥3 条长期断言已补入主流」
+
+- **位置**：`.agentdev/work/WP-03/implementation.md:345`。
+- **实测**：见 W3R20-02 的族计数；第十九轮 §11.2 列出的四个族中仅第一个部分落地。
+- **修复方向**：改为「已补入 7 条负例 + 2+2 条正例；同义变更/后置/英文/同形对照族与 Orchestrator 用例仍缺（承接 Test/WP-04）」。
+
+### W3R20-04 [P3] 协议对账与 wire 语义承接（W3R19-05 延续，unchanged）
+
+- **实测**：`/tmp/w3r16/probe7-escape.mjs` 复跑一致——未知字段 `foo`/`targetRole`/`level`/`intent`/`authorization` 仍 **202 静默忽略**，而 `docs/architecture/protocol.md` §1 要求未知字段 `VALIDATION_ERROR`；响应仍含 §5 未列的 `workIds`/`authorizationId`；multipart `projectId` 忽略、多文件只保留最后、`StorageError` 映射、错误响应非 §1 封装等前轮项未动。
+- **性质**：不阻断，承接 Test/结算登记。
+
+---
+
+## 10. 计数与阻断判定
+
+| 严重度 | 数量 | 编号 | 是否阻断 |
+|---|---|---|---|
+| P0 | 0 | — | — |
+| **P1** | **0** | 第十九轮唯一 P1（W3R19-01）三层闭合、根因消除、232 735 例 0 越权、0 写范围扩张 | 不阻断 |
+| P2 | 2 | W3R20-01（良性分支「无路径」判据边界，无写范围扩张）、W3R20-02（长期断言族覆盖 + Orchestrator 仓库内用例） | 不阻断验收面，须随 Test/结算闭环 |
+| P3 | 2 | W3R20-03（T28 记录高估）、W3R20-04（协议对账承接） | 不阻断，承接 Test/结算 |
+
+- **验收面**：AC-001..006/052/076/084 在本轮未发现新的失败；AC-004 负例族（仅询问不授权）与 AC-005 授权边界在本轮 232 768 例（232 735 route + 33 live）中**未出现越权或写范围扩张**；写授权恒等于消息中显式命令点名的路径。
+- **失败路由**：无（不触发 `Blocking Review Finding`）。
+- 前轮裁定的本轮复核：**W3R19-01 闭合**；W3R19-02 部分闭合（→ W3R20-02）；W3R19-03 闭合；W3R19-04 闭合；W3R19-05 承接（→ W3R20-04）。
+
+---
+
+## 11. 能否进入独立 Test —— **能（PASS）**
+
+**判据**：`docs/rules/workflow.md` §6「P0/P1 阻断」。本轮 0×P0、0×P1；第十九轮 P1 已按形状判定闭合且经三层复核与 232 735 例对抗性证伪；两个 P2 均不影响验收面（无越权写范围、无 AC 违反），但 **Test 必须**：
+
+1. 把 W3R20-01 的边界形态（`src`、`docs/`、`docs//PLAN.md`、`docs/../PLAN.md`、`/etc/hosts.md`、`~/.ssh/config.md`、URL）与登记否定对照各 ≥3 条落成断言，或按 `plan.md` 登记后的口径判定期望；
+2. 把 W3R20-02 未覆盖族（同义变更 7 词、后置 3 式、英文 2 句、同形对照 2 句）纳入 `not_covered` 或补测；
+3. 记录 W3R20-03/04 为结算前必须闭环的文档/协议项。
+
+### 11.1 Test 最小覆盖矩阵（在第十九轮 §11.3 基础上增补）
+
+| # | 维度 | 最小用例（≥） | 期望 |
+|---|---|---|---|
+| 23 | 解释领起 + 任意否定 × 任意变更（W3R19-01） | 12 句（含源码路径 1、后置 3、英文 2） | 只读、零授权行、零写 Run |
+| 24 | 同形对照 | `说明别碰 X`、`说明不要碰 X`、`说明莫修改 X`、`报告说莫碰 X` | 只读 |
+| 25 | 计数对账 | 文本提取 14 / 10 / 4 / 159（187）与 189；T27 = 10 + 5 | 与记录一致 |
+| 26 | 接续口径 | `修改 Y，则修改 X`、`修改 Y，也修改 X`、`不重写 Y，修改 X`、`不修改 Y，修改 X` | 授权且写范围符合登记 |
+| 27 | Orchestrator 授权回归 | 正例 `assess(L2)`→`dispatch backend/implementation` 成功；§23 族不得建 Run | 建 Run / 拒绝（WP-04 落地后入仓库） |
+| 28 | 边界形态（W3R20-01） | `src`/`docs/`/`docs/../PLAN.md`/`/etc/hosts.md`/`~/.ssh/config.md`/URL × 登记否定对照各 ≥3 | 与登记口径一致、写范围恒等 |
+
+### 11.2 残余风险清单（区分已登记与未登记）
+
+**A. 未登记项 —— 须处理**
+1. W3R20-01 良性分支「无路径」判据边界（P2，无写范围扩张）。
+2. W3R20-02 长期断言族覆盖与 Orchestrator 仓库内用例（P2）。
+3. W3R20-03 T28 记录高估（P3）。
+4. W3R20-04 协议未知字段/响应字段对账（P3，承接）。
+
+**B. 已登记 fail-closed 代价 —— 接受并需 Test 承认**
+5. 解释子句「路径 + 任意附加内容」→ 只读（planVersion 5 新增；`解释 X 的原因，然后修改 Y`、`explain the ban on updating Y, then update X`）。
+6. 未登记同义祈使、名词短语祈使、轻动词处置式、范围声明、排除式、多目标列表 → 只读 + 澄清（planVersion 2/3）。
+7. 前导礼貌、`顺便/顺手修改 X`、`多谢。修改 X` → 只读（planVersion 4）。
+8. 未登记否定动词的纠正（`不要打磨 Y，修改 X`）→ 只读（planVersion 2 通用代价）。
+9. 仓库外目标（`..`/`/`/`~`）→ 只读、不 500。
+10. 同形子串误拒（`识别/特别/分别/别人/别的`）→ 只读（方向安全）。
+11. 语义分类最终责任在 WP-04/06 模型 Assessment；本包只承诺已登记语料与形态规则。
+
+**C. 与本包无关或已承接**
+12. W3R19-05/协议对账与 W3R4-05/06/08/10/12/13、W3R13-08/09、W3R14-06/07/08、W3R15-06/07、W3R16-06/07、W3R17-05/06、W3R18-04/05 同项（P3，结算前登记）。
+13. 真实无头浏览器攻防（WP-10）；真实 Provider 纵向与 `artifact_write` 工具接线（WP-10/WP-07）。
+
+---
+
+## 12. 方法与边界声明
+
+- **独立上下文**：未读取任何开发/Test 会话；结论只来自仓库文件、`docs/**` 契约与我自建的 6 个脚本（`probe1-shape` 232 735 例、`probe2-live` 33 例真实 HTTP + Orchestrator、`sanity` 21 句、`asym` 16 句、`run-contract.sh`、`run-prior.sh`）+ 只读复用的 23 个前轮脚本。全部消费 `pnpm build` 产物；**未 import 任何产品测试文件**（`domain.test.ts` 仅以文本方式提取语料）。
+- **对开发方主张的裁决**：T28「W3R19-01 闭合、两张枚举表删除、拒绝侧单一来源、`则` 归一、计数订正」**全部成立**；T28「W3R19-02 每族 ≥3 条已补入主流」**不成立**（W3R20-02/03）。
+- **未做**：真实无头浏览器执行、真实 Provider 纵向、Docker 容器内复验、故障注入下的孤儿 blob 复验、`pnpm test:e2e`/`test:acceptance`（脚本按设计指向 WP-09/WP-10，未实现）。
+- **未改仓库**：本轮只覆盖写入 `.agentdev/work/WP-03/review.md`（本报告）；除该文件外 `git status --porcelain` 为空，`HEAD` 仍为 `408c9e71880626ef9e4e9b18c5b6f65ce90ec984`，全部 6 条契约命令在上述工作树上执行。`/tmp/w3r20/*.mjs`、`/tmp/w3r20/*.log` 均为 `/tmp` 下的评审脚本与日志，**不是**对仓库文件的修改。
+
+---
+
+# 结论输出（按任务要求）
+
+**(a) 裁决与严重度计数**：**PASS（可以进入独立 Test）**；P0 = 0、P1 = 0、P2 = 2（W3R20-01、W3R20-02）、P3 = 2（W3R20-03、W3R20-04）。
+
+**(b) 冻结点与工作树**：
+- `git rev-parse HEAD` = `408c9e71880626ef9e4e9b18c5b6f65ce90ec984`
+- `git status --porcelain` 末行 = **（空串；契约命令与全部探针执行时工作树干净，无输出）**；本报告写入后工作树仅 `.agentdev/work/WP-03/review.md` 被修改
+
+**(c) 证据脚本与用例数**：
+- 自建 `/tmp/w3r20/probe1-shape.mjs` = 232 735 例（F1 114 240 / F2 85 680 / F3 1 680 / F4 28 560 / F5a 528 / F5b 192 / F6 19 / F7 1 836）；deviations 0、scope-expansion 0。
+- 自建 `/tmp/w3r20/probe2-live.mjs` = 33 例真实 HTTP + 真实 Orchestrator（must-read 17 / pos 9 / boundary 5 / boundary-control 2）；must-read fail-open 0、写 Run 0、误拒 0、写集合偏差 0、写范围扩张 0。
+- 自建 `/tmp/w3r20/sanity.mjs` = 21 句；`/tmp/w3r20/asym.mjs` = 16 句（边界对照）。
+- 复用 `/tmp/w3r19/probe1-cross.mjs` = 10 357 例；`probe1b-open-forms.mjs` = 65 × 22 + 网格；`probe2-live.mjs` = 54 例；`probe3-registered.mjs` = 189 例。
+- 复用 `/tmp/w3r18/probe4-registered.mjs` = 187 例；`probe2b-negation-gap.mjs` = 385；`probe2-frame-hole.mjs` = 573；`probe2c-variants.mjs` = 10；`probe1-failopen.mjs` = 1 317；`probe3-live.mjs` = 71。
+- 复用 `/tmp/w3r17/probe1-corpus.mjs` = 13 848；`probe2-framing.mjs` = 31；`probe3-live.mjs` = 39；`probe4-scope.mjs` = 510 + 12。
+- 复用 `/tmp/w3r16/probe1-corpus.mjs` = 223；`probe2-launder.mjs` = 110；`probe5-http.mjs` = 真实 HTTP 全批；`probe6-e2e.mjs` = 25；`probe7-escape.mjs` = 12。
+- 复用 `/tmp/w3r14/probe1-corpus.mjs` = 201；`probe5-injection.mjs` = 11；`probe6-prior.mjs` = 17。
+- 复用 `/tmp/w3r13/probe7-registered.mjs` = 14 + 161。
+- 契约命令日志：`/tmp/w3r20/contract.log`（6 条命令，全部 exit 0）；前轮脚本日志：`/tmp/w3r20/prior.log`。
+
+---
+
+## 附十九：第十九轮报告（保留）
+
 # WP-03 独立 Review 报告（第十九轮）
 
 - 评审对象：工作包 WP-03「直接协作与说明产物」
