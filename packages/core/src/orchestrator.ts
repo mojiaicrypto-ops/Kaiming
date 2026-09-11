@@ -746,10 +746,13 @@ export class Orchestrator {
    * `workflow.md` §1 / `data.md` §2: the Core checks the authorization, and
    * `Authorization` is documented as revocable and never forged, so existence
    * alone is not enough — it must belong to the same Work, must not have been
-   * revoked (DC-63), and when a `scope` is supplied it must cover that scope's
-   * operations and network targets (R12-02). A reference provided on a level that
-   * does not require one is still verified, so a fabricated id can never be
-   * persisted. Returns the reference that was actually verified, for freezing.
+   * revoked (DC-63), and when a `scope` is supplied it must cover that scope:
+   * every `operations` entry and every `writePaths`/`readPaths` entry must be inside
+   * the grant, every network target must be granted *and* backed by the `network`
+   * operation, and a network target alone never grants a write (R12-02/R13-01/R14).
+   * A reference provided on a level that does not require one is still verified, so
+   * a fabricated id can never be persisted. Returns the reference that was actually
+   * verified, for freezing.
    */
   private verifyAuthorization(
     authorizationRef: string | undefined,
@@ -800,6 +803,10 @@ export class Orchestrator {
       // The authorization's own scope is the envelope: every path the Run declares
       // must be inside it (`data.md` §3 `effectiveScope`), for reads as well as
       // writes (R13-01).
+      // Reaching a network target is a network write: the grant must carry the
+      // `network` operation, not merely list the target (R14 D-2).
+      const networkTargetsWithoutGrant =
+        scope.networkTargets.length > 0 && !granted.has('network') ? [...scope.networkTargets] : [];
       const uncoveredWritePaths = scope.writePaths.filter(
         (path) => !isInsideScope(path, authorization.scope.writePaths),
       );
@@ -809,6 +816,7 @@ export class Orchestrator {
       if (
         uncoveredOperations.length > 0 ||
         uncoveredNetworkTargets.length > 0 ||
+        networkTargetsWithoutGrant.length > 0 ||
         uncoveredWritePaths.length > 0 ||
         uncoveredReadPaths.length > 0
       ) {
@@ -821,6 +829,7 @@ export class Orchestrator {
             authorizationRef,
             uncoveredOperations: [...uncoveredOperations],
             uncoveredNetworkTargets: [...uncoveredNetworkTargets],
+            networkTargetsWithoutGrant,
             uncoveredWritePaths: [...uncoveredWritePaths],
             uncoveredReadPaths: [...uncoveredReadPaths],
           },

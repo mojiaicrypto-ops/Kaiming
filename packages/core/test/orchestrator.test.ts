@@ -36,6 +36,7 @@ const L3_UNAUTHORIZED_WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e53';
 const L3_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e84';
 const NONE_WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e54';
 const WRITE_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e85';
+const NETWORK_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e86';
 const MODEL_ID = 'test-model';
 const emptyScope = { readPaths: [], writePaths: [], operations: [], networkTargets: [] };
 
@@ -241,6 +242,18 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
       goal: 'authorized workspace write',
       scope: { ...emptyScope, writePaths: ['packages/storage/src'] },
       operations: ['write'],
+      acceptedAt: new Date().toISOString(),
+    });
+
+    // A grant that lists a network target but carries no `network` operation.
+    store.authorizations.insert({
+      id: NETWORK_AUTHORIZATION_ID,
+      projectId,
+      sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      workId: WORK_ID,
+      goal: 'authorized to read from a host',
+      scope: { ...emptyScope, networkTargets: ['10.0.0.5'] },
+      operations: ['read'],
       acceptedAt: new Date().toISOString(),
     });
 
@@ -589,10 +602,17 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
 
   it('treats the authorization envelope as the scope boundary (R13-01)', () => {
     const chief = chiefRun();
-    // The grant has no write paths, so a Run that writes is not covered.
-    expect(() =>
-      orchestrator.dispatch({ spec: backendSpec(chief.id), authorizationRef: AUTHORIZATION_ID }),
-    ).toThrowError(/does not cover the declared scope/);
+    // The grant has no write paths, so a Run that writes is not covered — and the
+    // path dimension must be the reason (the spec declares no operations).
+    try {
+      orchestrator.dispatch({ spec: backendSpec(chief.id), authorizationRef: AUTHORIZATION_ID });
+      throw new Error('expected a coverage error');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'NOT_AUTHORIZED' });
+      const details = (error as { details: Record<string, unknown> }).details;
+      expect(details['uncoveredWritePaths']).toEqual(['packages/storage/src']);
+      expect(details['uncoveredOperations']).toEqual([]);
+    }
 
     // A grant that covers the path and the write operation is accepted.
     const covered = orchestrator.dispatch({
@@ -624,6 +644,37 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
         },
       }),
     ).toThrowError(/does not cover the declared scope/);
+  });
+
+  it('treats git as a workspace write and network targets as network writes (R14-01)', () => {
+    const noneChief = orchestrator.dispatch({ spec: { ...chiefSpec(), workId: NONE_WORK_ID } }).run;
+    // `git` rewrites tracked files, so a none-level Work must not get it — with or
+    // without a grant of its own.
+    expect(() =>
+      orchestrator.dispatch({
+        spec: backendSpec(noneChief.id, {
+          workId: NONE_WORK_ID,
+          taskId: undefined,
+          scope: { ...emptyScope, operations: ['git'] },
+        }),
+      }),
+    ).toThrowError(/cannot create a Run with write authority/);
+
+    const chief = chiefRun();
+    // Listing a target in the grant is not enough: reaching it is a network write.
+    try {
+      orchestrator.dispatch({
+        spec: backendSpec(chief.id, {
+          scope: { ...emptyScope, operations: ['network'], networkTargets: ['10.0.0.5'] },
+        }),
+        authorizationRef: NETWORK_AUTHORIZATION_ID,
+      });
+      throw new Error('expected a coverage error');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'NOT_AUTHORIZED' });
+      const details = (error as { details: Record<string, unknown> }).details;
+      expect(details['networkTargetsWithoutGrant']).toEqual(['10.0.0.5']);
+    }
   });
 
   it('counts a local write operation as modification authority (R13-02)', () => {

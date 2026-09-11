@@ -216,6 +216,19 @@
   - R13-06（DC-70）：`config.policy.l3Paths`/`l3Keywords` 无消费方登记为 WP-04/WP-05 承接缺口。
 - 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **246 passed**；`pnpm test:integration` 124 passed。
 
+## T22 独立 Review 第十四轮与修复（第十四轮 FAIL → 修复）
+
+- 第十四轮独立 Review 确认 R13-01/R13-03/R13-06 真修好，R13-02 主体修好但漏了 `git`，新增 R14-01..R14-05；对抗性核验另补 D-1..D-4（`git` 零授权即可派发、只读授权可为网络目标背书、readPaths 收紧未登记、`assess` 不做 `none` 写门禁）。
+- 说明：本轮报告中 R14-04（称 R13-01 新用例的拒绝原因是 operations 维度）的前提不成立——`backendSpec` 默认 `operations: []`，该用例正是由 `uncoveredWritePaths` 拒绝（对抗性核验已复现并更正）；本包仍按结论补强该断言，直接断言 details 的路径维度。
+- 修复：
+  - R14-01/D-1（阻断，DC-66）：`git` 计入 `WORKSPACE_WRITE_OPERATIONS`，`none` 级 Work 无论是否带授权都不能派发 `git`。
+  - D-2（DC-63）：声明 `networkTargets` 的 Run 要求授权带 `network` 操作，只有目标被列举不再足够。
+  - R14-02：DC-66 重写为与实现一致（用 Work 等级判写权限、writePaths 覆盖已实现）。
+  - R14-03：`verifyAuthorization` 的 JSDoc 补齐路径维度与 `network` 操作要求。
+  - R14-04：R13-01 的断言改为检查 `uncoveredWritePaths`（路径维度）而非仅匹配错误消息。
+  - D-3/D-4：DC-63 登记路径收紧，DC-66 登记 `assess` 不是 Run 边界与 Work 等级回写缺口。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **247 passed**；`pnpm test:integration` 124 passed。
+
 ## T9 待办
 
 - 独立 Review 与 Test（独立上下文）、结算与 `docs/INDEX.md` 状态更新、以及 `docs/delivery/acceptance.md` 中本包 AC 的证据登记。

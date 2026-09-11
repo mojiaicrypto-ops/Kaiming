@@ -180,6 +180,10 @@ export const WORKSPACE_WRITE_OPERATIONS = [
   'edit',
   'write',
   'artifact_write',
+  // `git` covers commit/checkout/reset, all of which rewrite tracked files
+  // (`execution.md` §53 lists it among the modifying operations); the remote half is
+  // the separate `push` operation, which the environment set already gates (R14-01).
+  'git',
 ] as const satisfies readonly OperationName[];
 
 const WORKSPACE_WRITE_OPERATION_SET: ReadonlySet<string> = new Set(WORKSPACE_WRITE_OPERATIONS);

@@ -222,7 +222,8 @@ delivery/document 若未声明可核查的 L1 前提（`semanticImpact=false`、
 - `ref` 缺省：`requiresExplicitAuthorization(level)` ⇒ `NOT_AUTHORIZED`；否则无授权需求（`assess` 传入等级，`dispatch` 传入由 Work 等级与 spec scope 推出的 `runLevel`）；
 - `ref` 指向不存在的行 ⇒ `NOT_AUTHORIZED`；属于其他 Work ⇒ `NOT_AUTHORIZED`；已 `revokedAt` ⇒ `NOT_AUTHORIZED`；
 - 只要提供了 `ref`（即便该等级不要求）都会核对，伪造 id 不能落库；
-- 提供 `scope` 时逐项核对覆盖：`operations` ⊆ 授权 `operations`、`networkTargets` ⊆ 授权 `scope.networkTargets`、`writePaths`/`readPaths` 必须位于授权 `scope.writePaths`/`readPaths` 之内（路径前缀包含）。未被覆盖 ⇒ `NOT_AUTHORIZED`，details 列出四类未覆盖项。
+- 提供 `scope` 时逐项核对覆盖：`operations` ⊆ 授权 `operations`；`networkTargets` ⊆ 授权 `scope.networkTargets` **且授权必须带 `network` 操作**（只把目标列进 scope 不等于网络写授权，第十四轮 D-2）；`writePaths`/`readPaths` 必须位于授权 `scope.writePaths`/`readPaths` 之内（路径前缀包含）。未被覆盖 ⇒ `NOT_AUTHORIZED`，details 列出各未覆盖项。
+- 路径维度是对既有行为的收紧（第十四轮 D-3）：L3 Work 拿一张 `scope.readPaths` 为空的授权后，声明 `readPaths` 的 Run 也会被拒；这一收紧是有意的 fail-closed，登记于此。
 - `dispatch` 用 `extras.authorizationRef ?? work.authorizationRef`，因此 L3 Work 始终有可核对的授权来源（第十一轮 R11-03），并把核对通过的引用冻结进 DispatchSnapshot（第十二轮 R12-03）。
 - 仍属后续工作（承接 WP-04/WP-05）：授权的 `acceptedAt`/来源消息核对、`once` 类授权的消费记账、`work.level` 的写入（`assess` 目前不回写 Work 行，`works.update` 全仓无调用点）。
 
@@ -236,15 +237,13 @@ delivery/document 若未声明可核查的 L1 前提（`semanticImpact=false`、
 - 硬门禁优先：`decideLevel` 先判环境操作与 lockdown 风险，再判 `assist`/`artifact` ⇒ `none`。此前 `assist`/`artifact` 的提前返回使这两条 L3 门禁对两个 intent 取值 fail-open（声明 `deploy`/`bash`/`networkTargets` 或文档化风险旗标仍可落 `none`/L1/L2），本轮修复并补 `assist`/`artifact` × 环境操作 × 风险旗标的失败测试。lockdown 风险门禁对全部 intent 生效（`workflow.md` §2.3 字面只写 delivery/document，本包按 fail-closed 推广到所有 intent，属保守偏离，登记于此）。
 - 底线（`routingFloor`）：`decideLevel` 判 L3 ⇒ L3；`assist`/`artifact` ⇒ none；`operation` ⇒ 至少 L2（`workflow.md` §2.4 的 L1 只允许样式/文案/注释类改动，操作类工作不满足）；`delivery`/`document` 未声明可核查的 L1 前提 ⇒ 至少 L2，否则允许 L1。因此 `operation` 不能落 L1/none（第十一轮 R11-02）。
 
-## DC-66 Run 建立边界的独立授权/等级底线（Review 第十二轮 R12-01/R12-02/R12-03）
+## DC-66 Run 建立边界的独立授权/等级底线（Review 第十二轮 R12-01..R12-03、第十三轮 R13-01/R13-02、第十四轮 R14-01）
 
-第十一轮只按 `work.level` 判授权需求，于是 L1/L2/none 的 Work 可以在零授权下建立声明 `deploy`/`delete_data`/网络写入的 Run，并把该 scope 冻结进 DispatchSnapshot；只读授权也能给数据操作背书。修复：
-- `dispatch` 由 **spec 自身的 scope** 与 Work 等级共同决定 `runLevel`：`touchesRunningEnvironment(spec.scope)` ⇒ L3（`decideLevel` 的同一判据，单一来源在 `domain/routing.ts`）；
-- `runLevel` 无修改授权（`none`）时拒绝带 `writePaths` 的 spec（`data.md` §2「none不产生修改授权」）；
-- 授权核对加入范围覆盖：spec 的每个 `operations` 必须在授权的 `operations` 中、每个 `networkTargets` 必须在授权 `scope.networkTargets` 中；
-- 核对通过的引用（含来自 Work 行的引用）写入 `DispatchSnapshot.authorizationRef`，重启恢复（AC-082）能重建授权来源。
-- 仍属 WP-04/WP-05 的后续工作：`writePaths` 是否必须在授权 `scope.writePaths` 内、授权的 `acceptedAt`/来源消息核对、Work 行等级的更新（`assess` 目前不写 `work.level`，`works.update` 全仓无调用点）。
-
+Run 建立的 Core 唯一入口（`Orchestrator.dispatch`）按下列顺序判定，`assess` 不是 Run 边界（它只记录路由；`work.level` 的回写属 WP-04/WP-05）：
+1. **修改授权**：`!grantsModificationAuthority(work.level) && declaresWorkspaceWrite(spec.scope)` ⇒ `NOT_AUTHORIZED`。判据用 **Work 自己的等级**（spec 不能靠声明环境操作把派生等级升到 L3 来取得写权限，R13-02），"是否修改"由 `writePaths` 非空**或**命中 `WORKSPACE_WRITE_OPERATIONS = ['edit','write','artifact_write','git']` 判定（R13-01/R14-01：`git` 的 commit/checkout/reset 会重写工作区文件，`push` 属环境操作集合）。
+2. **等级底线**：`runLevel = touchesRunningEnvironment(spec.scope) ? 'L3' : work.level`；环境操作/网络目标⇒ L3，与 Work 等级和 intent 标签都无关（DC-62）。
+3. **授权核对**：`verifyAuthorization(extras.authorizationRef ?? work.authorizationRef, work.id, runLevel, spec.scope)`，四类覆盖面（`operations`、`networkTargets` 且必须有 `network` 操作、`writePaths`、`readPaths`）见 DC-63；核对通过的引用冻结进 DispatchSnapshot（AC-082 可重建来源）。
+4. 仍属后续工作（承接 WP-04/WP-05/WP-07）：授权的 `acceptedAt`/来源消息核对、`once` 类授权的消费记账、`work.level` 的回写（`assess` 目前不回写 Work 行，`works.update` 全仓无调用点，因此 Work 等级在评估后可能过期）、`writePaths` 之外的文件级授权粒度。
 ## DC-67 本地写操作也属修改授权（Review 第十三轮 R13-01/R13-02）
 
 `dispatch` 的写权限门禁原先只看 `spec.scope.writePaths`，于是两处 fail-open：`none` 级 Work 用 `operations:['edit']`（空 `writePaths`）即可建 Run；`none` 级 Work 声明一个被授权的环境操作（如 `deploy`）后，派生的 `runLevel='L3'` 会覆盖 Work 等级，从而也能带 `writePaths`。修复：

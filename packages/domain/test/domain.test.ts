@@ -233,6 +233,7 @@ describe('level routing (workflow.md §2)', () => {
     );
     expect(declaresWorkspaceWrite({ operations: ['edit'], writePaths: [] })).toBe(true);
     expect(declaresWorkspaceWrite({ operations: ['write'], writePaths: [] })).toBe(true);
+    expect(declaresWorkspaceWrite({ operations: ['git'], writePaths: [] })).toBe(true);
     expect(declaresWorkspaceWrite({ operations: ['read', 'search'], writePaths: [] })).toBe(false);
     expect(declaresWorkspaceWrite({ operations: [], writePaths: [] })).toBe(false);
     // Environment operations are handled by their own predicate.
