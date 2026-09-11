@@ -424,6 +424,48 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
     ).toHaveLength(0);
   });
 
+  it('counts rejections and dedupes todos across more than one event page (D3)', () => {
+    // Derived reads must not depend on the first page of the cursor stream, so
+    // push the real events past the page size with unrelated ones.
+    const noise = 1_200;
+    for (let index = 0; index < noise; index += 1) {
+      store.events.append({
+        name: 'stage.failed',
+        entityId: chief.id,
+        entityVersion: 1,
+        data: { attemptId: `other-${String(index)}`, outcome: 'schema_invalid' },
+      });
+    }
+    const run = child();
+    const attemptId = orchestrator.beginAttempt(run.id).id;
+    const first = stages.submit({ runId: run.id, attemptId, epoch: 0, payload: {} });
+    expect(first).toMatchObject({ accepted: false, correctionsRemaining: 1 });
+    const second = stages.submit({ runId: run.id, attemptId, epoch: 0, payload: {} });
+    // The second non-compliant submission still escalates, far past the first page.
+    expect(second).toMatchObject({ accepted: false, code: 'CONTRACT_VIOLATION' });
+    expect(store.runs.find(run.id)?.status).toBe('contract_violation');
+
+    // The same paging rule keeps Chief paging idempotent.
+    for (let index = 0; index < noise; index += 1) {
+      store.events.append({
+        name: 'chief_action_required',
+        entityId: chief.id,
+        entityVersion: 1,
+        data: { reason: 'noise', failed: [`noise-${String(index)}`] },
+      });
+    }
+    const broken = child();
+    attemptAndSettle(broken, 'failed');
+    joins.onChildSettled(broken.id);
+    joins.onChildSettled(broken.id);
+    const todos = store.events
+      .readAfter(0, { limit: 5_000 })
+      .filter(
+        (event) => event.entityId === chief.id && event.data['reason'] === 'required_child_failed',
+      );
+    expect(todos).toHaveLength(1);
+  });
+
   it('pages the Chief once for one failure set (N-06) and carries every result', () => {
     const broken = child();
     attemptAndSettle(broken, 'failed');
@@ -446,6 +488,8 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
         'changedPaths',
         'evidenceRefs',
         'findingIds',
+        'readLedgerHash',
+        'readLedgerSeq',
         'requestedActions',
         'status',
         'summary',

@@ -30,6 +30,7 @@ import {
   canAllocateBudget,
   decideLevel,
   isDirectChiefChild,
+  isTerminalRunStatus,
   PRIMARY_PURPOSE_BY_ROLE,
   type LockdownRisk,
   requiresExplicitAuthorization,
@@ -41,6 +42,7 @@ import { withTransaction, type ProjectStore } from '@agentdev/storage';
 import type { ConfigStore, ProfileLayer, ProfileResolution } from './config.js';
 import { RunLifecycle } from './run-lifecycle.js';
 import { ProtocolError, type ProtocolErrorCode } from './errors.js';
+import { findEvent } from './events.js';
 import type { ModelGateway } from './model-gateway.js';
 import { canonicalJson } from './dispatcher.js';
 import { sha256 } from '@agentdev/storage';
@@ -126,6 +128,8 @@ export interface DispatchRequestInput {
   readonly requiredOutputs?: readonly string[];
   readonly requiredChild?: boolean;
   readonly budgetAllocation?: number;
+  /** Idempotency key for one request (`reliability.md` §1). */
+  readonly operationId?: string;
 }
 
 export interface DispatchRequestResult {
@@ -442,14 +446,44 @@ export class Orchestrator {
       (PRIMARY_PURPOSE_BY_ROLE as Record<string, string | undefined>)[input.requestedRole] ??
       '';
     enforce(validateRolePurpose(input.requestedRole, purpose), 'dispatch request');
+    // A Run that already ended cannot keep filing Chief todos (`workflow.md` §5.3).
+    if (!RunLifecycle.canParentDispatch(run.status)) {
+      fail('INVALID_STATE', `Run ${run.id} is ${run.status} and cannot request more work`, {
+        runId: run.id,
+        status: run.status,
+      });
+    }
+    const chief = this.store.runs.find(chiefRunId);
+    if (chief === undefined) fail('NOT_FOUND', `Chief Run ${chiefRunId} does not exist`);
+    // The todo is idempotent per `operationId`: a retried request must not become a
+    // second Chief action (reliability.md §1 "至少一次投递、避免重复创建").
+    if (input.operationId !== undefined) {
+      const existing = findEvent(this.store, {
+        names: ['chief_action_required'],
+        stopAt: (event) =>
+          event.entityId === chiefRunId && event.data['operationId'] === input.operationId,
+      });
+      if (existing !== undefined) {
+        return {
+          disposition: 'chief_action_required' as const,
+          runId: run.id,
+          workId: run.workId,
+          chiefTodo: String(existing.cursor),
+        };
+      }
+    }
     return withTransaction(this.store.db, () => {
       const event = this.store.events.append({
         name: 'chief_action_required',
+        // The event describes the Chief Run, so it carries the Chief's version —
+        // consumers keying on (entityId, entityVersion) would otherwise see a
+        // version the entity never had (D1).
         entityId: chiefRunId,
-        entityVersion: run.version,
+        entityVersion: chief.version,
         data: {
           reason: 'agent_dispatch',
           requestedBy: run.id,
+          operationId: input.operationId ?? null,
           workId: run.workId,
           role: input.requestedRole,
           purpose,
@@ -543,11 +577,17 @@ export class Orchestrator {
       where: 'parent_run_id = ?',
       params: [parent.id],
     });
-    const allocated = siblings.reduce((total, sibling) => total + sibling.budgetAllocation, 0);
+    // Only children that can still spend their allocation count against the
+    // parent's own allocation: a settled child released its reservation, and
+    // counting it forever would make a long-lived Chief Run unable to dispatch
+    // after a few sequential children (M-01).
+    const allocated = siblings
+      .filter((sibling) => !isTerminalRunStatus(sibling.status))
+      .reduce((total, sibling) => total + sibling.budgetAllocation, 0);
     if (allocated + spec.budgetAllocation > parent.budgetAllocation) {
       fail(
         'BUDGET_EXCEEDED',
-        `children of Run ${parent.id} already hold ${allocated} of ${parent.budgetAllocation} tokens`,
+        `live children of Run ${parent.id} hold ${allocated} of ${parent.budgetAllocation} tokens`,
         { parentRunId: parent.id, allocated, requested: spec.budgetAllocation },
       );
     }

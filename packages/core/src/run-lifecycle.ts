@@ -20,6 +20,17 @@ export const ACTIVE_PARENT_STATUSES: readonly RunStatus[] = [
   'waiting_children',
 ];
 
+/**
+ * What a Run actually consumed.
+ *
+ * `measured: false` means no provider usage report was available; the amount is
+ * still charged as zero but the event records the distinction (DC-41).
+ */
+export interface RunUsage {
+  readonly tokensUsed: number;
+  readonly measured: boolean;
+}
+
 /** Terminal states a caller may settle a Run into. */
 export type TerminalRunStatus = Extract<Run['status'], 'completed' | 'failed' | 'cancelled'>;
 
@@ -115,13 +126,30 @@ export class RunLifecycle {
   }
 
   /**
-   * Moves a Run to a terminal state, releasing its budget reservation.
+   * Moves a Run to a terminal state.
    *
-   * The terminal event carries the real outcome: clients must not render every
-   * `run.ended` as a success (`protocol.md` §7).
+   * `usage` is the tokens the Run actually consumed. It is charged against the
+   * Work budget (`tokensUsed`) and only the remainder of the reservation is
+   * released (`reliability.md` §3: "扣除实际usage并释放剩余"). A caller that has
+   * no measurement must say so explicitly by passing `measured: false`, which is
+   * recorded on the event instead of being presented as a real zero (DC-41).
    */
-  settle(runId: string, status: TerminalRunStatus): Run {
-    return this.end(runId, status, (run) => ({ outcome: status, workId: run.workId }));
+  settle(
+    runId: string,
+    status: TerminalRunStatus,
+    usage: RunUsage = { tokensUsed: 0, measured: false },
+  ): Run {
+    return this.end(
+      runId,
+      status,
+      (run) => ({
+        outcome: status,
+        workId: run.workId,
+        tokensUsed: usage.tokensUsed,
+        usageMeasured: usage.measured,
+      }),
+      usage.tokensUsed,
+    );
   }
 
   /**
@@ -143,7 +171,12 @@ export class RunLifecycle {
     }));
   }
 
-  private end(runId: string, status: RunStatus, data: (run: Run) => Record<string, unknown>): Run {
+  private end(
+    runId: string,
+    status: RunStatus,
+    data: (run: Run) => Record<string, unknown>,
+    tokensUsed = 0,
+  ): Run {
     const run = this.requireRun(runId);
     if (!canTransitionRun(run.status, status)) {
       fail('VALIDATION_ERROR', `Run ${run.id} cannot move ${run.status} → ${status}`, {
@@ -153,15 +186,37 @@ export class RunLifecycle {
     }
     return withTransaction(this.store.db, () => {
       const updated = this.store.runs.update(run.id, { status }, run.version);
+      // Release the whole reservation, then charge what was really used: keeping
+      // the usage inside `reserved` would double-count it against the same limit.
       this.release(updated.workId, run.budgetAllocation);
+      this.charge(updated.workId, tokensUsed);
       this.store.events.append({
         name: 'run.ended',
         entityId: updated.id,
         entityVersion: updated.version,
-        data: { ...data(updated), releasedTokens: run.budgetAllocation },
+        data: {
+          ...data(updated),
+          releasedTokens: run.budgetAllocation,
+        },
       });
       return updated;
     });
+  }
+
+  /**
+   * Moves measured usage from the reservation into `tokensUsed`.
+   *
+   * The Work schema invariant (`used + reserved <= limit`) still holds: the
+   * reservation was released first and the measured usage is at most it.
+   */
+  private charge(workId: string, tokensUsed: number): void {
+    if (tokensUsed <= 0) return;
+    const budget = this.budgetOf(workId);
+    this.store.budgets.update(
+      budget.id,
+      { tokensUsed: budget.tokensUsed + tokensUsed },
+      budget.version,
+    );
   }
 
   /** Whether a Chief Run may still take a new professional child. */

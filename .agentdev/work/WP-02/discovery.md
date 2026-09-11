@@ -39,8 +39,8 @@
 
 ## DC-33 WP-02 提供最小 Attempt 起点
 
-- 事实：`attempt` 行与 `run.starting/running` 属 WP-05（RunnerSupervisor/监督）。但 T5 Join 与 T7 Stage 契约都需要「Run 已 running 且有 Attempt」的前置。
-- 处理：`Orchestrator.beginAttempt(runId, {runnerId?})` 按 `queued → starting → running` 建 Attempt 行并写 `run.starting`/`run.running`；`settleRun(runId, status)` 只允许 `canTransitionRun` 允许的终态。心跳、租约、崩溃恢复、Attempt 证据不可改写仍属 WP-05，本包不做。
+- 事实：`attempt` 行与 Run 的开始/终态迁移属 WP-05（RunnerSupervisor/监督）。但 T5 Join 与 T7 Stage 契约都需要「Run 已 running 且有 Attempt」的前置。
+- 处理：`RunLifecycle.beginAttempt(runId, {runnerId?})` 按 `queued → starting → running` 建 Attempt 行并写 `run.started`；`RunLifecycle.settle/contractViolation` 只允许 `canTransitionRun` 允许的终态并写 `run.ended(outcome)`。心跳、租约、崩溃恢复、Attempt 证据不可改写仍属 WP-05，本包不做。
 - 影响：WP-05 可在此之上实现监督；若 WP-05 改变建 Attempt 的入口，需同步本包测试。
 
 ## DC-34 profileRevision 采用「全局高位 + Project 低位」编码，过期即拒
@@ -58,7 +58,7 @@
 
 - 归属字段（`id/projectId/version/createdAt/updatedAt/runId/attemptId/taskId`）由客户端提交时抛 `NOT_AUTHORIZED`（伪造归属是协议失败，不走「修正一次」路径）；未知字段走可修正的 Schema 拒绝。
 - 行 Schema 含服务端列，直接校验客户端载荷会因缺列全部失败，故 `contracts` 新增 `stageResultContentSchema = stageResultRowSchema.omit(服务端列)`，Core 用它校验后再由仓储注入归属列。
-- 修正计数由事件日志推导（`stage.rejected` 按 attemptId 计数），因此重启后仍然成立；第二次失败写 `run.contract_violation` 要求 `canTransitionRun` 允许，否则 fail-closed 报错而不是降级。
+- 修正计数由事件日志推导（`stage.failed(outcome='schema_invalid')` 按 attemptId 全量分页计数，见 DC-44），因此重启后仍然成立；第二次失败经 `RunLifecycle.contractViolation` 写 `run.ended(outcome='contract_violation')`，要求 `canTransitionRun` 允许，否则 fail-closed 报错而不是降级。
 
 ## DC-37 独立 Review 第一轮的偏离与修复（RE-01..RE-13）
 
@@ -85,3 +85,26 @@ WP-02 第一轮独立 Review（`.agentdev/work/WP-02/review.md`）判 FAIL：1×
 ## DC-39 Join 状态没有协议事件（承接：WP-08 读模型）
 
 `protocol.md` §7 的持久事件清单不含 Join 专用事件名，因此 `JoinCoordinator` **不发明**事件：父 Run 的 `waiting_children`/回到 `running` 只体现在 Run 行版本上，`chief_action_required` 负责需要 Chief 介入的失败路径。前端要看 Join 进度时，由 WP-08 读模型从 Run 行与 `run.ended` 派生，并在那时显式扩展协议（而不是由 Core 私自写未定义事件名）。第一轮修复记录声称「已删除」但代码中仍在发出（Review N-03），第二轮已真正删除。
+
+## DC-40 父 Run 额度的口径：只统计在场子 Run（Review 第三轮 M-01）
+
+第三轮 Review（M-01）实测：Chief Run 20k 顺序派发 3 个 10k 子 Run，前两个 `completed` 后第三个仍被 `BUDGET_EXCEEDED` 永久拒绝（提高 Work 预算也无效）。事实成立，原因在 `requireBudget` 把**全部**子 Run 的 `budgetAllocation`（含已终态）计入父额度。处理：只统计非终态（在场）子 Run 的额度——已终态子 Run 的预留已释放，继续占用父额度会与 Work 层口径矛盾。`agents.md`/`data.md` 未定义父 Run 级上限的细节，本条属于本包的实现约定：父 Run 的 `budgetAllocation` 约束的是**并发在场**子 Run 之和，不是历史累计。对抗性核验另指出「提高 Work 预算无法恢复」被夸大——新建 Chief Run 是文档化的恢复路径（`agents.md` §3），据此 M-01 由 P1 重评为 P2，但功能缺口仍按 P2 修复（已修）。
+
+## DC-41 usage 记账：目前只有零值，真实用量归 WP-10（Review 第三轮 M-02）
+
+`RunLifecycle.settle(runId, status, {tokensUsed, measured})` 现在把实测用量从预留转入 `tokensUsed`（`reliability.md` §3「扣除实际usage并释放剩余」），并在 `run.ended` 里记录 `usageMeasured`。但**当前没有任何生产调用方提供用量**：真实 usage 来自 Provider 响应，属 WP-10（真实调用与 ModelGateway 的响应解析）。因此本包结束时所有 Run 的结算都是 `tokensUsed=0, measured=false`——这是**显式缺口**，事件里已把「未测量」与「实测为零」区分开，不允许把零值当作用量为零的证据。
+
+## DC-42 Work 级 blocked(provider) 未实现（承接：WP-05）
+
+`agents.md` §5 要求「不存在可用模型时 Work 为 blocked(provider)，未准入 Run 保持 queued」。本包实现了「Run 不进入执行 + `PROVIDER_UNAVAILABLE`」这一半；Work 侧的 blocker 需要 WorkBlocker 实体/状态投影与 `work.control_changed` 事件，属 WP-05（Work 控制与监督）。`implementation.md` T2 的原表述「失败即 Work blocked(provider)」已更正，避免文档声称超出实现。
+
+## DC-43 派生读取必须全量分页（Review 第三轮 D3/F1/F2）
+
+`EventStore.readAfter` 是游标流，`limit` 取的是**最旧**的一页。原来 `StageGate.rejections()` 与 `JoinCoordinator.pageChief()` 都用 `readAfter(0,{limit:10_000})`，日志超过一万条后：同一次 Attempt 可以无限次提交不合规载荷（击穿 `protocol.md` §6 的二次升级与 AC-047），Chief 待办幂等也失效（重复待办）。处理：新增 `packages/core/src/events.ts` 的 `scanEvents`/`findEvent`，按页推进直到读完（`findEvent` 命中即停），两处改用它们；新增回归测试在 1200 条噪音事件之后仍要求第二次不合规升级为 `contract_violation`、重复 `onChildSettled` 只产生一条待办。
+
+## DC-44 事件版本语义与 `request_dispatch` 幂等（Review 第三轮 D1/D2/M-05）
+
+- D1：`requestDispatch` 写 `entityId=chiefRunId` 却用**请求者** Run 的 `entityVersion`，按 `(entityId, entityVersion)` 增量消费的一方会拿到 Chief 从未有过的版本（违背 `protocol.md` §7 事件定义）。已改为 Chief Run 的版本。
+- D2：终态专业 Run 仍可 `request_dispatch` 持续给 Chief 塞待办。已改为要求请求者处于 `queued/starting/running/waiting_children`，否则 `INVALID_STATE`。
+- M-05：`request_dispatch` 无幂等键。已支持 `operationId`：同一 `operationId` 重放返回既有待办游标而不新增事件（`reliability.md` §1）。
+- 另：`implementation.md` T7 与 `discovery.md` 中残留的旧事件名（`stage.submitted`/`stage.rejected`/`run.contract_violation`）已按实际代码更正为 `stage.completed`/`stage.failed`/`run.ended`。

@@ -393,7 +393,7 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     orchestrator.dispatch({ spec: backendSpec(chief.id) });
     orchestrator.dispatch({ spec: backendSpec(chief.id) });
     expect(() => orchestrator.dispatch({ spec: backendSpec(chief.id) })).toThrowError(
-      /already hold 8000 of 10000/,
+      /live children of Run .* hold 8000 of 10000/,
     );
     expect(store.runs.list({ where: 'parent_run_id = ?', params: [chief.id] })).toHaveLength(2);
   });
@@ -537,6 +537,61 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     expect(saved[0]?.data).toMatchObject({ decidedLevel: 'L3' });
   });
 
+  it("frees a settled child's share of the parent allocation (M-01)", () => {
+    const parent = orchestrator.dispatch({ spec: chiefSpec({ budgetAllocation: 20_000 }) }).run;
+    const spec = (goal: string) =>
+      professionalSpec({
+        workId: WORK_ID,
+        role: 'backend',
+        purpose: 'implementation',
+        goal,
+        scope: emptyScope,
+        stage: 'develop',
+        contextSelection: selection,
+        profileRevision: orchestrator.currentProfileRevision('backend'),
+        requiredOutputs: ['stage.submit'],
+        requiredChild: true,
+        joinPolicy: 'all',
+        budgetAllocation: 10_000,
+        parentRunId: parent.id,
+      });
+    const first = orchestrator.dispatch({ spec: spec('first') }).run;
+    const second = orchestrator.dispatch({ spec: spec('second') }).run;
+    // Both live children fill the parent's allocation, so a third cannot fit.
+    expect(() => orchestrator.dispatch({ spec: spec('third') })).toThrowError(/live children/);
+    orchestrator.beginAttempt(first.id);
+    orchestrator.settleRun(first.id, 'completed');
+    // The settled child released its share, so the third child fits again.
+    const third = orchestrator.dispatch({ spec: spec('third') }).run;
+    expect(third.parentRunId).toBe(parent.id);
+    expect(second.parentRunId).toBe(parent.id);
+  });
+
+  it('charges measured usage and records an unmeasured release honestly (M-02)', () => {
+    const budgetRow = store.budgets.list({ where: 'work_id = ?', params: [WORK_ID] })[0];
+    if (budgetRow === undefined) throw new Error('budget fixture missing');
+    const run = orchestrator.dispatch({ spec: chiefSpec({ budgetAllocation: 40_000 }) }).run;
+    orchestrator.beginAttempt(run.id);
+    orchestrator.settleRun(run.id, 'completed');
+    // Without a provider usage report the release is recorded as unmeasured.
+    const unmeasured = store.events
+      .readAfter(0, { limit: 100 })
+      .filter((event) => event.name === 'run.ended')[0];
+    expect(unmeasured?.data).toMatchObject({ usageMeasured: false, tokensUsed: 0 });
+
+    const measured = orchestrator.dispatch({ spec: chiefSpec({ budgetAllocation: 40_000 }) }).run;
+    orchestrator.beginAttempt(measured.id);
+    orchestrator.lifecycle.settle(measured.id, 'completed', { tokensUsed: 12_000, measured: true });
+    const budget = store.budgets.find(budgetRow.id);
+    expect(budget?.tokensUsed).toBe(12_000);
+    expect(budget?.tokensReserved).toBe(0);
+    const ended = store.events
+      .readAfter(0, { limit: 100 })
+      .filter((event) => event.name === 'run.ended')
+      .at(-1);
+    expect(ended?.data).toMatchObject({ usageMeasured: true, tokensUsed: 12_000 });
+  });
+
   it('turns an agent dispatch request into a chief todo, never a grandchild Run', () => {
     const chief = chiefRun();
     const child = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
@@ -564,6 +619,40 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
       purpose: 'test',
       requestReason: 'the adapter needs behaviour verification',
     });
+    // The todo is idempotent per operationId and describes the Chief Run.
+    const deduped = orchestrator.requestDispatch({
+      runId: child.id,
+      requestedRole: 'review',
+      goal: 'review the adapter',
+      operationId: 'op-1',
+    });
+    const again = orchestrator.requestDispatch({
+      runId: child.id,
+      requestedRole: 'review',
+      goal: 'review the adapter',
+      operationId: 'op-1',
+    });
+    expect(again.chiefTodo).toBe(deduped.chiefTodo);
+    const all = store.events
+      .readAfter(0, { limit: 100 })
+      .filter((event) => event.name === 'chief_action_required');
+    expect(all).toHaveLength(2);
+    const chiefRunId = child.parentRunId;
+    if (chiefRunId === undefined) throw new Error('child has no Chief parent');
+    const chiefRow = store.runs.find(chiefRunId);
+    expect(all[1]?.entityId).toBe(chiefRunId);
+    expect(all[1]?.entityVersion).toBe(chiefRow?.version);
+
+    // A Run that already ended cannot file more Chief todos.
+    orchestrator.beginAttempt(child.id);
+    orchestrator.settleRun(child.id, 'failed');
+    expect(() =>
+      orchestrator.requestDispatch({
+        runId: child.id,
+        requestedRole: 'review',
+        goal: 'too late',
+      }),
+    ).toThrowError(/cannot request more work/);
 
     // Asking another Run for work, or dispatching from the Chief, is refused.
     expect(() =>

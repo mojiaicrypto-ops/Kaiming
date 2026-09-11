@@ -13,7 +13,7 @@
 
 ## T2 模型网关（AC-043, AC-044）—— 完成
 
-- `packages/core/src/model-gateway.ts`：`availability(role, runParams)`（准入判定，失败即 Work `blocked(provider)`）、`frozenProfileOf(run)`（读 Run 的 `config` 快照，缺失抛 `STALE_ARTIFACT`）、`complete(run, messages)`（模型/reasoning/上下文上限只来自冻结快照，签名上不提供任何选择模型的入口）、`testConnection(providerId, modelId)`（最小请求 + 延迟）、`tokensOf`。
+- `packages/core/src/model-gateway.ts`：`availability(role, runParams)`（准入判定；不可用时抛 `PROVIDER_UNAVAILABLE` 并保持 Run `queued`。`agents.md` §5 要求此时 Work 为 `blocked(provider)`，但 Work blocker 实体/状态投影属 WP-05，本包**未实现 Work 级 blocked**，见 DC-42）、`frozenProfileOf(run)`（读 Run 的 `config` 快照，缺失抛 `STALE_ARTIFACT`）、`complete(run, messages)`（模型/reasoning/上下文上限只来自冻结快照，签名上不提供任何选择模型的入口）、`testConnection(providerId, modelId)`（最小请求 + 延迟）、`tokensOf`。
 - `GatewayTransport`、`SecretResolver` 为注入缝；真实 Provider 调用与 Secret 存储属于 WP-07/WP-10（DC-31）。
 - 测试 `packages/core/test/model-gateway.test.ts`（6 条）：按冻结档运行并携带 secret、配置变更后活动 Run 仍用旧模型而新冻结生效、无可用模型时准入失败且不回落、快照缺失/secret 缺失分别报 `STALE_ARTIFACT`/`CONFIG_INVALID` 且不发请求、provider 失败原样上报（retryable）、连接测试成功与未配置模型报错。
 
@@ -44,7 +44,7 @@
 
 ## T7 Stage 契约与 contract_violation（AC-047）—— 完成
 
-- `packages/core/src/stage.ts`：`StageGate.submit` 校验归属与字段（DC-36），第一次 Schema 失败写 `stage.rejected` 并允许修正，第二次把 Run 置为 `contract_violation`（`canTransitionRun` 校验）并写 `run.contract_violation`；接受时写 `stage_result` 行 + `stage.submitted`「结构化交付」证据。
+- `packages/core/src/stage.ts`：`StageGate.submit` 校验归属与字段（DC-36），且只在 Run `running` 时接受；第一次 Schema 失败写 `stage.failed(outcome='schema_invalid', rejection=1)` 并允许一次修正，第二次经 `RunLifecycle.contractViolation` 把 Run 置为 `contract_violation` 并写 `run.ended(outcome='contract_violation')`（含预留释放）；接受时写 `stage_result` 行 + `stage.completed`/`stage.failed(outcome=<交付状态>)`「结构化交付」证据。
 
 ## T8 重启窄范围（AC-082）—— 完成
 
@@ -71,6 +71,18 @@
 - 预算准入对所有 spec（含 Core 构造的 chief spec）在下沉写入前统一判定，超限返回文档规定的 `BUDGET_EXCEEDED` 而非 Schema 约束错误（N-10）。
 - 记录修正：DC-37 RE-04 的不实表述已更正；补 DC-38（Run 参数层无授权来源）、DC-39（Join 无协议事件，承接 WP-08）。
 - 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **210 passed**；`pnpm test:integration` 124 passed；`pnpm docs:check` ok。
+
+## T11 独立 Review 第三轮与修复（第三轮 FAIL → 修复）
+
+- 第三轮独立 Review（`review.md` 第三轮章节）判 FAIL：N-01..N-10 全部经对方实跑确认修好（0 条残留），但新增 1×P1、2×P2、2×P3（M-01..M-05）；对抗性核验又补出 D1/D2/D3/D4/D5，并把 M-01 的量级从「无 API 可恢复」修正为「现有 Chief Run 不可恢复，新建 Chief Run 是文档化恢复路径」，同时证伪了「N-06/AC-047 已完全修好」——两者的 10k 窗口可达。
+- 修复：
+  - 新增 `packages/core/src/events.ts`（`scanEvents`/`findEvent` 全量分页），`StageGate.rejections()` 与 `JoinCoordinator.pageChief()` 改用它，消除 1 万条窗口对 AC-047 二次升级与待办幂等的击穿（M-06/N-06 残留、F1/F2、D3）。
+  - `requireBudget` 只统计**非终态**子 Run 的额度（M-01），并补「顺序子 Run 结算后可继续派发」测试。
+  - `RunLifecycle.settle` 支持实测用量：释放整笔预留后把 `tokensUsed` 计入用量，`run.ended` 记录 `usageMeasured`；真实用量来源归 WP-10（M-02、DC-41）。
+  - `requestDispatch`：`entityVersion` 用 Chief Run 版本（D1）、终态请求者 `INVALID_STATE`（D2）、支持 `operationId` 幂等（M-05）。
+  - `ChildOutcome` 与阻断事件 data 补齐 `readLedgerSeq`/`readLedgerHash`（M-04、N-07）。
+  - 记录更正：M-03 的 Work `blocked(provider)` 声明改为显式缺口（DC-42），T7/DC 中旧事件名更正（DC-44）。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **213 passed**；`pnpm test:integration` 124 passed。
 
 ## T9 待办
 

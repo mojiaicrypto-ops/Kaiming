@@ -13,6 +13,7 @@ import type { Event, Run, RunStatus, StageResultRow } from '@agentdev/contracts'
 import type { ProjectStore } from '@agentdev/storage';
 import { withTransaction } from '@agentdev/storage';
 import { ProtocolError } from './errors.js';
+import { findEvent } from './events.js';
 
 /** One child Run's settled or in-flight outcome, as the parent sees it. */
 export interface ChildOutcome {
@@ -31,6 +32,9 @@ export interface ChildOutcome {
     readonly findingIds: readonly string[];
     readonly unknowns: readonly string[];
     readonly requestedActions: readonly string[];
+    /** Which repository state the delivery is based on (`context.md` §3). */
+    readonly readLedgerSeq: number;
+    readonly readLedgerHash: string;
   };
 }
 
@@ -106,6 +110,8 @@ export class JoinCoordinator {
               findingIds: stageResult.findingIds,
               unknowns: stageResult.unknowns,
               requestedActions: stageResult.requestedActions,
+              readLedgerSeq: stageResult.readLedgerSeq,
+              readLedgerHash: stageResult.readLedgerHash,
             },
           }),
     };
@@ -223,14 +229,16 @@ export class JoinCoordinator {
     children: readonly ChildOutcome[] = this.childrenOf(parent.id),
   ): Event {
     const failedIds = failed.map((entry) => entry.runId).sort();
-    const existing = this.store.events
-      .readAfter(0, { limit: 10_000, names: ['chief_action_required'] })
-      .find((event) => {
+    // A complete scan, so idempotency does not depend on how long the log is.
+    const existing = findEvent(this.store, {
+      names: ['chief_action_required'],
+      stopAt: (event) => {
         if (event.entityId !== parent.id || event.data['reason'] !== reason) return false;
         const recorded = event.data['failed'] ?? event.data['failedRequired'];
         if (!Array.isArray(recorded)) return false;
         return (recorded as string[]).slice().sort().join(',') === failedIds.join(',');
-      });
+      },
+    });
     if (existing !== undefined) return existing;
     return this.store.events.append({
       name: 'chief_action_required',
@@ -260,6 +268,10 @@ export class JoinCoordinator {
                   findingIds: [...entry.stageResult.findingIds],
                   unknowns: [...entry.stageResult.unknowns],
                   requestedActions: [...entry.stageResult.requestedActions],
+                  // The read ledger travels too: without it the Chief cannot tell
+                  // which repository state the delivery is based on (`context.md` §3).
+                  readLedgerSeq: entry.stageResult.readLedgerSeq,
+                  readLedgerHash: entry.stageResult.readLedgerHash,
                 },
         })),
       },

@@ -15,6 +15,7 @@ import {
 import { canTransitionRun } from '@agentdev/domain';
 import { withTransaction, type ProjectStore } from '@agentdev/storage';
 import { ProtocolError } from './errors.js';
+import { scanEvents } from './events.js';
 import { RunLifecycle } from './run-lifecycle.js';
 
 /** Server-owned fields a client must never set on `stage.submit`. */
@@ -220,14 +221,17 @@ export class StageGate {
     });
   }
 
-  /** Schema rejections already recorded for this Attempt, from the event log. */
+  /**
+   * Schema rejections already recorded for this Attempt, from the event log.
+   *
+   * Scanned to the end of the log (not the first page): the two-strike rule in
+   * `protocol.md` §6 must not degrade into "unlimited strikes" once the log grows.
+   */
   rejections(attemptId: string): number {
-    return this.store.events
-      .readAfter(0, { limit: 10_000, names: ['stage.failed'] })
-      .filter(
-        (event) =>
-          event.data['attemptId'] === attemptId && event.data['outcome'] === 'schema_invalid',
-      ).length;
+    return scanEvents(this.store, { names: ['stage.failed'] }).filter(
+      (event) =>
+        event.data['attemptId'] === attemptId && event.data['outcome'] === 'schema_invalid',
+    ).length;
   }
 
   /**
