@@ -177,14 +177,28 @@ describe('level routing (workflow.md §2)', () => {
       }).level,
     ).toBe('L3');
     // A delivery that deploys touches the same environment; the label must not
-    // change the route (R10-01/M-2).
+    // change the route (R10-01/M-2). The same holds for the light routes (R11-01).
+    for (const intent of ['delivery', 'document', 'assist', 'artifact'] as const) {
+      expect(
+        decideLevel({ intent, operationTouchesEnvironment: true, risk: NO_LOCKDOWN_RISK }).level,
+      ).toBe('L3');
+    }
+    // A documented lockdown risk is L3 even when the intent is assist/artifact.
     expect(
       decideLevel({
-        intent: 'delivery',
-        operationTouchesEnvironment: true,
-        risk: NO_LOCKDOWN_RISK,
+        intent: 'assist',
+        operationTouchesEnvironment: false,
+        risk: { ...NO_LOCKDOWN_RISK, securityBoundary: true },
       }).level,
     ).toBe('L3');
+    // assist/artifact without environment evidence or risk stay `none`.
+    expect(
+      decideLevel({
+        intent: 'assist',
+        operationTouchesEnvironment: false,
+        risk: NO_LOCKDOWN_RISK,
+      }).level,
+    ).toBe('none');
   });
 
   it('recognizes the documented risk vocabulary and refuses unknown flags', () => {

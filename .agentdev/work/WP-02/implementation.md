@@ -182,6 +182,17 @@
   - R10-06（DC-60）：更正记录——`goal`/`scope` 既不落行也不落事件。
 - 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **237 passed**；`pnpm test:integration` 124 passed。
 
+## T19 独立 Review 第十一轮与修复（第十一轮 FAIL → 修复）
+
+- 第十一轮独立 Review 确认 R10-01..R10-07 主体全部真修好（词表、授权存在性/同 Work/未撤销、runParams、floor 记录、DC-60 更正、只读操作不升级均 verified），但发现两个 intent 取值仍能整体绕过 L3 门禁，另有 operation 底线与记录/注释问题。
+- 修复：
+  - R11-01（阻断，DC-65）：`decideLevel` 把环境操作与 lockdown 风险判定提到 `assist`/`artifact` 之前；补 `assist`/`artifact` × `deploy`/`networkTargets`/风险旗标的失败测试。
+  - R11-02（DC-65）：`routingFloor` 对 `operation` intent 至少返回 L2；同步更正 docstring。
+  - R11-03（阻断，DC-63）：`dispatch` 用 `extras.authorizationRef ?? work.authorizationRef` 与 `work.level` 做授权核对，L3 Work 无有效授权时拒绝建 Run；补 L3 Work（有/无授权）的回归测试。
+  - R11-04：把误挂的 `operationFingerprint` JSDoc 移回其函数上方（新常量块不再截断注释）。
+  - R11-05：环境操作集合从 core 移到 `domain/routing.ts`（`ENVIRONMENT_OPERATIONS`，按 `operationNameSchema` 分类并说明 `git`/`edit`/`write` 不入选的理由）。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **239 passed**；`pnpm test:integration` 124 passed。
+
 ## T9 待办
 
 - 独立 Review 与 Test（独立上下文）、结算与 `docs/INDEX.md` 状态更新、以及 `docs/delivery/acceptance.md` 中本包 AC 的证据登记。

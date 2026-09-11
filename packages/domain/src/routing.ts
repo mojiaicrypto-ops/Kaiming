@@ -5,7 +5,7 @@
  * fail-closed: anything that is not `none` by intent, not an explicit `L3` risk
  * and not a fully satisfied L1 is `L2` — never silently smaller.
  */
-import type { Intent, Level } from '@agentdev/contracts';
+import type { Intent, Level, OperationName } from '@agentdev/contracts';
 
 /** L1 admission conditions (`workflow.md` §2 step 4). */
 export interface L1Criteria {
@@ -149,6 +149,38 @@ export function isKnownLockdownRiskTerm(flag: string): boolean {
 }
 
 /**
+ * Operations with a side effect on a running environment, the network or data
+ * (`workflow.md` §2.2).
+ *
+ * The set lives here, next to the routing decision and the risk vocabulary, and is
+ * derived from the contract's `operationNameSchema` so a new operation name is a
+ * compile-time reminder to classify it. `git`, `edit`, `write` and `artifact_write`
+ * stay out: they act on the local workspace (the `push` operation covers a remote
+ * write, which is the environment-touching half of git).
+ */
+export const ENVIRONMENT_OPERATIONS = [
+  'bash',
+  'network',
+  'secret',
+  'push',
+  'deploy',
+  'delete_data',
+] as const satisfies readonly OperationName[];
+
+const ENVIRONMENT_OPERATION_SET: ReadonlySet<string> = new Set(ENVIRONMENT_OPERATIONS);
+
+/** True when the declared scope reaches beyond the local workspace. */
+export function touchesRunningEnvironment(scope: {
+  readonly operations: readonly string[];
+  readonly networkTargets: readonly string[];
+}): boolean {
+  return (
+    scope.networkTargets.length > 0 ||
+    scope.operations.some((operation) => ENVIRONMENT_OPERATION_SET.has(operation))
+  );
+}
+
+/**
  * Risk flags the vocabulary does not recognize.
  *
  * A Chief must classify with the documented terms or the canonical flags; an
@@ -198,22 +230,23 @@ export interface RoutingDecision {
  * operation authorization and cannot be auto-approved.
  */
 export function decideLevel(input: RoutingInput): RoutingDecision {
-  if (input.intent === 'assist' || input.intent === 'artifact') {
-    return { level: 'none', reason: `${input.intent} routes to level none` };
-  }
-  // The evidence is the declared scope, not the `intent` label: a delivery that
-  // deploys or deletes data touches the same running environment and must not slip
-  // past the gate by being labelled differently (DC-62).
+  // The hard gates come first, before any per-intent shortcut: an `assist` (or
+  // `artifact`) request that declares a deployment, a network write or a documented
+  // lockdown risk is still an L3 action, and a label must never open the gate
+  // (R11-01).
   if (input.operationTouchesEnvironment) {
     return { level: 'L3', reason: 'operation touches a running environment' };
   }
+  if (hasLockdownRisk(input.risk)) {
+    return {
+      level: 'L3',
+      reason: `lockdown risk: ${lockdownRiskFlags(input.risk).join(', ')}`,
+    };
+  }
+  if (input.intent === 'assist' || input.intent === 'artifact') {
+    return { level: 'none', reason: `${input.intent} routes to level none` };
+  }
   if (input.intent === 'delivery' || input.intent === 'document') {
-    if (hasLockdownRisk(input.risk)) {
-      return {
-        level: 'L3',
-        reason: `lockdown risk: ${lockdownRiskFlags(input.risk).join(', ')}`,
-      };
-    }
     if (input.l1 !== undefined && isL1Eligible(input.l1)) {
       return { level: 'L1', reason: 'L1 conditions all hold' };
     }

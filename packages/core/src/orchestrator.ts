@@ -40,6 +40,7 @@ import {
   requiresExplicitAuthorization,
   lockdownRiskVocabulary,
   riskFromFlags,
+  touchesRunningEnvironment,
   unknownRiskFlags,
   validateDispatchSpec,
   validateRolePurpose,
@@ -153,26 +154,8 @@ export interface DispatchRequestResult {
  * Only the request's own fields: a replay with the same key and same content
  * returns the original todo, anything else is a conflict.
  */
-/**
- * Operations with a side effect on a running environment, the network or data
- * (`workflow.md` §2.2). A read-only investigation is not one of them, so it must
- * not be pushed into the L3 route (R10-07).
- */
-const ENVIRONMENT_OPERATIONS = new Set([
-  'bash',
-  'network',
-  'secret',
-  'push',
-  'deploy',
-  'delete_data',
-]);
-
-/** True when the declared scope reaches beyond the local workspace. */
-function touchesRunningEnvironment(payload: AssessmentPayload): boolean {
-  return (
-    payload.scope.networkTargets.length > 0 ||
-    payload.scope.operations.some((operation) => ENVIRONMENT_OPERATIONS.has(operation))
-  );
+function operationFingerprint(request: JsonObject): string {
+  return sha256(canonicalJson(request));
 }
 
 /**
@@ -188,7 +171,11 @@ function routingFloor(
   decided: 'none' | 'L1' | 'L2' | 'L3',
 ): 'none' | 'L1' | 'L2' | 'L3' {
   if (decided === 'L3') return 'L3';
-  if (payload.intent !== 'delivery' && payload.intent !== 'document') return 'none';
+  if (payload.intent === 'assist' || payload.intent === 'artifact') return 'none';
+  // An operation performs an action even when it stays inside the workspace, and
+  // `workflow.md` §2.4 restricts L1 to presentation-only edits, so its floor is L2
+  // (R11-02).
+  if (payload.intent === 'operation') return 'L2';
   const claimsL1 =
     !payload.semanticImpact &&
     payload.scope.operations.length === 0 &&
@@ -199,10 +186,6 @@ function routingFloor(
 /** Order of the routing levels; `none` is below every modification level. */
 function levelRank(level: string): number {
   return level === 'none' ? 0 : level === 'L1' ? 1 : level === 'L2' ? 2 : 3;
-}
-
-function operationFingerprint(request: JsonObject): string {
-  return sha256(canonicalJson(request));
 }
 
 function fail(code: ProtocolErrorCode, message: string, details?: JsonObject): never {
@@ -286,7 +269,7 @@ export class Orchestrator {
     // delivery cannot smuggle a deployment past the gate.
     const decided = decideLevel({
       intent: payload.intent,
-      operationTouchesEnvironment: touchesRunningEnvironment(payload),
+      operationTouchesEnvironment: touchesRunningEnvironment(payload.scope),
       risk: riskFromFlags(payload.riskFlags),
     });
     // The Core decision is a floor: a Chief may escalate but never downgrade it
@@ -372,7 +355,10 @@ export class Orchestrator {
     // A frozen authorization reference must be real authority for this Work; a
     // fabricated id would otherwise survive restarts in the DispatchSnapshot
     // (R10-02).
-    this.verifyAuthorization(extras.authorizationRef, work.id, undefined);
+    // An L3 Work needs a verified authorization even when the caller passes none:
+    // the Work row carries its own reference, and `data.md` §2 requires the Core to
+    // check the authorization before a Run is created (R11-03).
+    this.verifyAuthorization(extras.authorizationRef ?? work.authorizationRef, work.id, work.level);
 
     if (spec.kind === 'professional') {
       enforce(validateRolePurpose(spec.role, spec.purpose), 'dispatch spec');

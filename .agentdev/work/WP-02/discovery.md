@@ -209,7 +209,7 @@ Provider 报告的 usage 可能超过该 Run 的预留（估算偏差）。原�
 ## DC-62 L3 路由底线只依赖载荷本身（Review 第九轮 R9-01、对抗性漏项 A）
 
 原实现 `operationTouchesEnvironment` 取 `payload.intent === 'operation' && work.level === 'L3'`——循环依赖（`assess` 从不写 `work.level`），另加一个未文档化的魔法串。修复：
-- 运行环境判定改用载荷自身证据，且**与 `intent` 标签无关**（第十轮 M-2：同一个 `operations:['deploy']` 写成 `delivery` 就能绕过门禁）：`scope.networkTargets` 非空，或 `scope.operations` 命中环境副作用集合 `['bash','network','secret','push','deploy','delete_data']` ⇒ L3（`workflow.md` §2.2）。只读调查（`read`/`search`）不在此列，仍走 L2（第十轮 R10-07 的过严判定已收窄）；
+- 运行环境判定使用载荷自身证据（`packages/domain/src/routing.ts` 的 `touchesRunningEnvironment(scope)`）：`scope.networkTargets` 非空，或 `scope.operations` 命中环境副作用集合 `ENVIRONMENT_OPERATIONS`（`['bash','network','secret','push','deploy','delete_data']`，按 `operationNameSchema` 逐个分类，`git`/`edit`/`write`/`artifact_write` 属工作区本地操作故不入选——远端写入由 `push` 表达）⇒ L3（`workflow.md` §2.2）。只读调查（`read`/`search`）不在此列，仍走 L2（第十轮 R10-07）。**判定顺序**（第十一轮 R11-01）：环境操作与 lockdown 风险两个硬门禁在 `assist`/`artifact` 的 `none` 短路**之前**执行，因此任何 intent 取值都无法用标签打开 L3 门禁（`decideLevel` 的 `delivery`/`document` 分支只保留 L1 准入判定）。第十轮的「与 intent 标签无关」表述在第十轮时并不成立（当时 `assist`/`artifact` 仍提前返回 `none`），本轮才真正成立；
 - 风险旗标识别 `workflow.md` §2.3 的**文档用词**（含 `/` 合并措辞「数据删除/迁移」「支付金额/状态」「部署/发布」）与 camelCase 旗标（大小写与空白/`_`/`-`/`/` 无关），词表在 `packages/domain/src/routing.ts` 的 `LOCKDOWN_RISK_TERMS`；
 - **未登记旗标 fail-closed**（第十轮 R10-01）：`unknownRiskFlags` 非空 ⇒ `VALIDATION_ERROR` 并在 details 中返回可接受词表，不再把未登记拼写静默读成「无风险」；`isKnownLockdownRiskTerm` 由此有了真实调用方；
 delivery/document 若未声明可核查的 L1 前提（`semanticImpact=false`、无 operation、无 networkTargets）⇒ 不低于 L2；assist/artifact ⇒ none。L1 的文件数/行数准入仍属 Plan/Review 门禁（DC-19、WP-04），Core 不从载荷推断。
@@ -218,8 +218,13 @@ delivery/document 若未声明可核查的 L1 前提（`semanticImpact=false`、
 
 ## DC-63 L3 的 authorizationRef 必须指向真实授权（Review 第九轮 对抗性漏项 B）
 
-`workflow.md` §1「Core 检查角色、字段、授权、权限和版本」、`data.md` §2「Core 核对来源与权限」。原实现只检查 `authorizationRef` 是否存在字符串，伪造 UUID 即可获得 L3。修复（第十轮 R10-02 扩展）：`Orchestrator.verifyAuthorization` 统一核对——按 id 查 `authorization` 行（不存在 ⇒ `NOT_AUTHORIZED`）、必须属于同一 Work（跨 Work 授权拒绝）、必须未 `revokedAt`（已撤销拒绝）；只要调用方提供了 `authorizationRef` 就核对（即便该等级不要求，伪造 id 也不能落库）；`dispatch` 的 `authorizationRef` 走同一函数，避免伪造引用被冻结进 DispatchSnapshot。授权**范围是否覆盖本次 `scope`/`operations`** 仍登记为 WP-04/WP-05 的落线工作（`dispatch` 在不知道 Work 等级时不强制要求授权，否则 Chief 无法先做评估形成死锁）。
+`workflow.md` §1「Core 检查角色、字段、授权、权限和版本」、`data.md` §2「Core 核对来源与权限」。原实现只检查 `authorizationRef` 是否存在字符串，伪造 UUID 即可获得 L3。修复（第十轮 R10-02 扩展）：`Orchestrator.verifyAuthorization` 统一核对——按 id 查 `authorization` 行（不存在 ⇒ `NOT_AUTHORIZED`）、必须属于同一 Work（跨 Work 授权拒绝）、必须未 `revokedAt`（已撤销拒绝）；只要调用方提供了 `authorizationRef` 就核对（即便该等级不要求，伪造 id 也不能落库）；`dispatch` 用 `extras.authorizationRef ?? work.authorizationRef` 与 `work.level` 走同一函数（第十一轮 R11-03 更正：原记录写「`dispatch` 不知道 Work 等级」不实——`work.level` 与 `work.authorizationRef` 都在 Work 行上），因此 **L3 Work 必须有可核对的授权**（调用方提供，或 Work 行自带；两者都没有 ⇒ `NOT_AUTHORIZED`），同时不会造成「Chief 无法先做评估」的死锁，因为 L3 Work 的授权本就来自用户请求。授权**范围是否覆盖本次 `scope`/`operations`** 仍登记为 WP-04/WP-05 的落线工作（当前只核对存在性、同 Work、未撤销）。
 
 ## DC-64 风险旗标词表的归属与未登记值处理（Review 第十轮 R10-01；Product Decision Pending）
 
 `workflow.md` §2.3 用中文散文列出 L3 风险，`assessmentPayloadSchema.riskFlags` 是自由字符串。第十轮前实现只认一张等价拼写表，未登记值被静默忽略——文档化安全门禁 fail-open。当前处理：词表在 `packages/domain/src/routing.ts`（`LOCKDOWN_RISK_TERMS`），未登记值由 Core 以 `VALIDATION_ERROR` 拒绝并返回可接受词表。待产品决定：是否把该词表提升为 `data.md`/contracts 的正式枚举（则 Chief 与协议的取值集合被固定），以及是否允许 Chief 使用词表外的自定义旗标（当前不允许）。
+
+## DC-65 路由底线与硬门禁的顺序（Review 第十一轮 R11-01/R11-02）
+
+- 硬门禁优先：`decideLevel` 先判环境操作与 lockdown 风险，再判 `assist`/`artifact` ⇒ `none`。此前 `assist`/`artifact` 的提前返回使这两条 L3 门禁对两个 intent 取值 fail-open（声明 `deploy`/`bash`/`networkTargets` 或文档化风险旗标仍可落 `none`/L1/L2），本轮修复并补 `assist`/`artifact` × 环境操作 × 风险旗标的失败测试。lockdown 风险门禁对全部 intent 生效（`workflow.md` §2.3 字面只写 delivery/document，本包按 fail-closed 推广到所有 intent，属保守偏离，登记于此）。
+- 底线（`routingFloor`）：`decideLevel` 判 L3 ⇒ L3；`assist`/`artifact` ⇒ none；`operation` ⇒ 至少 L2（`workflow.md` §2.4 的 L1 只允许样式/文案/注释类改动，操作类工作不满足）；`delivery`/`document` 未声明可核查的 L1 前提 ⇒ 至少 L2，否则允许 L1。因此 `operation` 不能落 L1/none（第十一轮 R11-02）。

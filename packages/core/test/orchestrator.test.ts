@@ -31,6 +31,9 @@ const PROVIDER_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e71';
 const AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e81';
 const FOREIGN_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e82';
 const REVOKED_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e83';
+const L3_WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e52';
+const L3_UNAUTHORIZED_WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e53';
+const L3_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e84';
 const MODEL_ID = 'test-model';
 const emptyScope = { readPaths: [], writePaths: [], operations: [], networkTargets: [] };
 
@@ -140,6 +143,51 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
         policyRevision: 1,
       });
     }
+
+    // One L3 Work that carries its authorization, and one that does not: creating a
+    // Run for the latter must be refused (R11-03).
+    for (const [id, authorizationRef] of [
+      [L3_WORK_ID, L3_AUTHORIZATION_ID],
+      [L3_UNAUTHORIZED_WORK_ID, undefined],
+    ] as const) {
+      const l3Budget = store.budgets.insert({
+        projectId,
+        workId: id,
+        tokenLimit: 100_000,
+        tokensUsed: 0,
+        tokensReserved: 0,
+        activeTimeLimit: 600,
+        activeTimeUsed: 0,
+        repairLimit: 3,
+        repairUsed: 0,
+        costKnown: true,
+      });
+      store.works.insert({
+        id,
+        projectId,
+        intent: 'operation',
+        purpose: 'operate the environment',
+        level: 'L3',
+        goal: 'deploy the release',
+        scope: { ...emptyScope, operations: ['deploy'] },
+        sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+        ...(authorizationRef === undefined ? {} : { authorizationRef }),
+        status: 'running',
+        blockerIds: [],
+        budgetId: l3Budget.id,
+        policyRevision: 1,
+      });
+    }
+    store.authorizations.insert({
+      id: L3_AUTHORIZATION_ID,
+      projectId,
+      sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      workId: L3_WORK_ID,
+      goal: 'authorized deployment',
+      scope: { ...emptyScope, operations: ['deploy'] },
+      operations: ['deploy'],
+      acceptedAt: new Date().toISOString(),
+    });
 
     // The L3 route needs a real authorization row: the Core verifies that the
     // referenced authorization exists (`data.md` §2, DC-63).
@@ -399,6 +447,68 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     expect(deliver({ authorizationRef: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99' })).toThrowError(
       /does not exist/,
     );
+  });
+
+  it('never lets an intent label open the L3 gates (R11-01/R11-02)', () => {
+    const assessWith =
+      (payload: Partial<AssessmentPayload>): unknown =>
+      () =>
+        orchestrator.assess({
+          workId: WORK_ID,
+          payload: { ...assessmentPayloadFixture(), ...payload },
+        });
+
+    // assist/artifact are the light routes, but a deployment or a documented
+    // lockdown risk still forces L3 — the label cannot open the gate.
+    for (const intent of ['assist', 'artifact'] as const) {
+      expect(
+        assessWith({ intent, level: 'none', scope: { ...emptyScope, operations: ['deploy'] } }),
+      ).toThrowError(/routing rules require L3/);
+      expect(
+        assessWith({
+          intent,
+          level: 'none',
+          scope: { ...emptyScope, networkTargets: ['10.0.0.5'] },
+        }),
+      ).toThrowError(/routing rules require L3/);
+      expect(assessWith({ intent, level: 'none', riskFlags: ['安全边界'] })).toThrowError(
+        /routing rules require L3/,
+      );
+      expect(assessWith({ intent, level: 'L1', riskFlags: ['数据删除/迁移'] })).toThrowError(
+        /routing rules require L3/,
+      );
+    }
+
+    // An operation is never L1: the Core decision is L2 and the floor follows.
+    expect(assessWith({ intent: 'operation', level: 'none' })).toThrowError(
+      /routing rules require L2/,
+    );
+    expect(assessWith({ intent: 'operation', level: 'L1' })).toThrowError(
+      /routing rules require L2/,
+    );
+  });
+
+  it('requires a verified authorization to create a Run for an L3 Work (R11-03)', () => {
+    const spec = (workId: string): ChiefDispatchSpec => ({
+      ...chiefSpec(),
+      workId,
+      scope: { ...emptyScope, operations: ['deploy'] },
+    });
+
+    // The Work carries no authorization: no Run may be created.
+    expect(() => orchestrator.dispatch({ spec: spec(L3_UNAUTHORIZED_WORK_ID) })).toThrowError(
+      /requires an explicit authorizationRef/,
+    );
+    // A fabricated reference is not authority either.
+    expect(() =>
+      orchestrator.dispatch({
+        spec: spec(L3_UNAUTHORIZED_WORK_ID),
+        authorizationRef: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99',
+      }),
+    ).toThrowError(/does not exist/);
+    // The Work's own authorization is verified and accepted.
+    const run = orchestrator.dispatch({ spec: spec(L3_WORK_ID) }).run;
+    expect(run.workId).toBe(L3_WORK_ID);
   });
 
   it('routes environment operations to L3 whatever the intent label says (R10-07)', () => {
