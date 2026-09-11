@@ -54,15 +54,23 @@
 
 证据：`packages/storage/test/ledger.integration.test.ts` — 21 用例（真实 SQLite + 真实 blob 目录）：**丢应答重试返回原结果且效果只发生一次**、同键异载荷/异主体冲突、事件 cursor 单调与截断后 `RESYNC_REQUIRED`、事件禁改、outbox 租约内不重投与过期重领、lease 抢占与 owner 校验、blob 原子写入/缺失/损坏/GC、CAS 冲突与重复键。
 
-## 2. 尚未完成（下一轮）
+### T5 ProjectMailbox 与命令分发（完成）
 
-- T5 `packages/core`：ProjectMailbox（串行、256 项/4MiB、BUSY、>100ms 诊断、长操作在事务外）、命令分发（校验/expectedVersion/幂等/授权）。
+`packages/core/src/`：
+
+- `mailbox.ts`：短命令**串行**执行（单 Project 单邮箱、FIFO、峰值并发 1）；队列准入 256 项 / 4MiB，超限立即返回 `BUSY`（带 reason 与 limits）；单条命令超过 100ms 记 `SLOW_COMMAND` 诊断；长操作走 `runEffect`，**不进入队列**（模型/Shell/Git/Child 等待在事务外），并以 EFFECT_STARTED/FINISHED/FAILED 诊断暴露在飞状态；`drain`/`close`/`stats`。
+- `errors.ts`：`protocol.md` §7 全部 25 个错误码、retryable 默认策略（仅 BUSY 及显式标注的 Provider 瞬时错误）、请求/响应 Envelope 与 `okResponse`/`errorResponse`。
+- `dispatcher.ts`：Envelope 校验（v=1、type、id、method、projectId 归属、params Schema）、读方法绕过邮箱、写方法经邮箱串行；`idempotencyKey` 1–128 与 `expectedVersion` ≥0 校验、规范化 payload Hash（键序无关）、单事务内完成"幂等账本→领域行 CAS→event→outbox→记录 response"；冲突/存储错误映射为文档错误码（`VERSION_CONFLICT` 带 `currentVersion`）；处理函数必须同步，异步即 `INTERNAL_ERROR`。
+
+证据：`packages/core/test/mailbox.test.ts`（8 用例，unit）——串行与顺序、**长模型调用在飞时命令 <1 秒返回且不排队**、队列项/字节超限 BUSY、排空后可再准入、关闭后拒绝、>100ms 诊断、失败命令不阻塞队列、effect 失败诊断。`packages/core/test/dispatcher.integration.test.ts`（9 用例，真实 SQLite）——**丢应答重试返回完全相同响应且 event/outbox 不重复**、同键异载荷 `IDEMPOTENCY_CONFLICT`、`VERSION_CONFLICT` 带 `currentVersion` 且未记账、处理函数失败时账本/事件/outbox 全部回滚、邮箱满时 `BUSY` 且未执行、长 effect 在飞时写命令 1 秒内返回、规范化 Hash 稳定性。
+
+## 2. 尚未完成（下一轮）
 - T6：EventHub 与订阅（快照+C 水位、replay/snapshot、ack、RESYNC_REQUIRED、慢连接软硬限）。
 - T7：连接认证（安装凭证 0600 Bearer、会话 cookie/CSRF/Origin、24h 过期、登录限速）与 Project 身份（canonical realpath、git toplevel、嵌套仓库排除、relocate 别名）。
 - T8：需求投影幂等/冲突的存储层实现（判定函数已在 domain）。
 - T9：失败测试（丢应答重试、冲突键、慢连接、迁移失败、长操作不阻塞）、独立 Review/Test、`docs/INDEX.md` 更新与结算。
 
-`packages/core` 目前只有包骨架（`src/index.ts` 仅含包说明），**未实现任何功能**。
+`packages/core` 已实现邮箱与命令分发（T5）；EventHub、连接认证与 Project 身份（T6/T7）尚未实现。
 
 ## 3. 命令证据（2026-09-11）
 
@@ -71,8 +79,8 @@
 | `pnpm install --frozen-lockfile` | 退出 0；新增 better-sqlite3 13.0.3（`allowBuilds: true`，原生绑定编译成功） |
 | `pnpm typecheck` | 退出 0 |
 | `pnpm lint` | 退出 0 |
-| `pnpm test:unit` | 11 文件 / 147 用例通过 |
-| `pnpm test:integration` | 6 文件 / 73 用例通过（14 个迁移用例 + 21 个仓储/账本用例） |
+| `pnpm test:unit` | 12 文件 / 155 用例通过 |
+| `pnpm test:integration` | 7 文件 / 82 用例通过（14 迁移 + 21 仓储/账本 + 9 命令分发/邮箱） |
 | `pnpm docs:check` | 退出 0 |
 | `pnpm build` | 退出 0（contracts/domain/storage/core/pi-runtime/runner/cli） |
 | `pnpm test:e2e\|acceptance\|live` | 仍按契约 `NOT_IMPLEMENTED` 退出 1 |
