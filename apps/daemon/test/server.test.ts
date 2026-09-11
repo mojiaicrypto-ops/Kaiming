@@ -464,7 +464,7 @@ describe('daemon HTTP surface (WP-03)', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           conversationId: CONVERSATION_ID,
-          body: 'explain the routing rules and fix the typo in docs/INDEX.md',
+          body: 'explain the routing rules and 修复 docs/INDEX.md',
         }),
       }),
     );
@@ -515,7 +515,7 @@ describe('daemon HTTP surface (WP-03)', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           conversationId: CONVERSATION_ID,
-          body: 'fix the typo in docs/INDEX.md',
+          body: '修改 docs/INDEX.md',
           targetWorkId: sent.workId,
         }),
       }),

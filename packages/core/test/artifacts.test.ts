@@ -412,7 +412,7 @@ describe('attachments, artifacts and previews (WP-03)', () => {
       { projectId, store, attachments, artifacts, blobs, now: () => clock },
       {
         conversationId: CONVERSATION_ID,
-        body: 'fix the typo in docs/INDEX.md',
+        body: '修改 docs/INDEX.md',
         ownerUserId: owner,
       },
     );
@@ -477,7 +477,7 @@ describe('attachments, artifacts and previews (WP-03)', () => {
       { projectId, store, attachments, artifacts, blobs, now: () => clock },
       {
         conversationId: CONVERSATION_ID,
-        body: 'explain the routing rules and fix the typo in docs/INDEX.md',
+        body: 'explain the routing rules and 修复 docs/INDEX.md',
         ownerUserId: owner,
       },
     );

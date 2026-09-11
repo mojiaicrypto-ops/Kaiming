@@ -157,6 +157,17 @@ const CONDITION_PATTERNS: readonly RegExp[] = [
   /\b(once|after (?:you|i|we|discussion)|assuming|provided that|subject to|upon approval|following approval|pending review)\b/iu,
 ];
 
+/**
+ * Evaluative comments ("修改 X，不太明智", "X 属于越权").
+ *
+ * A clause that judges rather than requests makes the whole message an opinion, so no
+ * clause may authorize (W3R13 review).
+ */
+const COMMENT_PATTERNS: readonly RegExp[] = [
+  /(明智|愚蠢|必要|必需|合适|不妥|正确|错误|值得|重要|不错|很好|可以|行不通|越权|属于|由.{0,6}决定|不太|有点|有点不)/u,
+  /\b(seems?|looks?|probably|maybe|might be|is (?:not )?(?:right|wrong|wise|needed|necessary))\b/iu,
+];
+
 /** Hypotheticals and quotations are not instructions. */
 const HYPOTHETICAL_PATTERNS: readonly RegExp[] = [
   /(如果|假如|若是|要是|万一|假设)/u,
@@ -196,17 +207,17 @@ const PARTICLE = '(?:一下|下|掉|为|成|好)?';
  * rejected. That is what makes this rule sound instead of another keyword list.
  */
 const LEAD_COMMAND_PATTERN = new RegExp(
-  `^${POLITE}${VERB_GROUP}${PARTICLE}\\s*(${PATH_TOKEN})([^，。；！？]{0,16})$`,
+  `^${POLITE}${VERB_GROUP}${PARTICLE}\\s*(${PATH_TOKEN})[。！!\\s]*$`,
   'u',
 );
 
 const LEAD_COMMAND_EN_PATTERN = new RegExp(
-  `^${POLITE}${VERB_GROUP_EN}\\s+[^，。；！？]{0,24}?(${PATH_TOKEN})([^，。；！？]{0,12})$`,
+  `^${POLITE}${VERB_GROUP_EN}\\s+(${PATH_TOKEN})[。！!\\s]*$`,
   'iu',
 );
 
 const DISPOSAL_COMMAND_PATTERN = new RegExp(
-  `^${POLITE}(?:把|将|对)\\s*(${PATH_TOKEN})[^，。；！？]{0,24}${VERB_GROUP}${PARTICLE}[。！!\\s]*$`,
+  `^${POLITE}(?:把|将|对)\\s*(${PATH_TOKEN})\\s*${VERB_GROUP}${PARTICLE}[。！!\\s]*$`,
   'u',
 );
 
@@ -243,11 +254,9 @@ function commandTarget(clause: string): string | undefined {
     const match = pattern.exec(core);
     const target = match?.[1];
     if (target === undefined) continue;
-    // The captured token must really look like a path ("fix X was not requested" must not
-    // read "not" as a target).
-    if (pathsIn(target).length === 0) continue;
-    const tail = match?.[2] ?? '';
-    if (tail.length > 0 && (pathsIn(tail).length > 0 || NON_COMMAND_MARKERS.test(tail))) continue;
+    // The captured token must be exactly one of the paths the message names, so no
+    // trailing punctuation can mint an alias the user never wrote (W3R13 review).
+    if (!pathsIn(core).includes(target)) continue;
     return target;
   }
   return undefined;
@@ -307,6 +316,7 @@ function readClause(raw: string): ClauseReading {
   if (matches(STATEMENT_PATTERNS, core)) return { target: undefined, explanation: true };
   if (matches(PRECONDITION_PATTERNS, core)) return { target: undefined, explanation: true };
   if (matches(ADVICE_PATTERNS, core)) return { target: undefined, explanation: true };
+  if (matches(COMMENT_PATTERNS, core)) return { target: undefined, explanation: true };
   if (matches(TOPIC_PATTERNS, core)) return { target: undefined, explanation: true };
   if (EXPLANATION_LEAD_PATTERN.test(clause) || EXPLANATION_LEAD_EN_PATTERN.test(clause)) {
     // The leading verb decides: "describe the fix needed in X" asks for words.
@@ -329,7 +339,8 @@ export function routeMessage(body: string): MessageRouting {
     (clause) =>
       matches(QUESTION_PATTERNS, clause) ||
       matches(CHOICE_PATTERNS, clause) ||
-      matches(ADVICE_PATTERNS, clause),
+      matches(ADVICE_PATTERNS, clause) ||
+      matches(COMMENT_PATTERNS, clause),
   );
   let conditional = interrogative;
   const targets: string[] = [];
@@ -345,7 +356,6 @@ export function routeMessage(body: string): MessageRouting {
     if (reading.explanation) explanation = true;
     conditional =
       matches(CONDITION_PATTERNS, clause) || matches(HYPOTHETICAL_PATTERNS, clause) || conditional;
-    if (reading.target !== undefined) conditional = false;
   }
 
   const items: MessageWorkItem[] = [];

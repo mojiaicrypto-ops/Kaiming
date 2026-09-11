@@ -257,7 +257,7 @@ describe('level routing (workflow.md §2)', () => {
     expect(question.explicitAuthorization).toBe(false);
 
     // An explicit command with a named target: the message authorizes that target.
-    const fix = routeMessage('修改 docs/INDEX.md 中的错别字');
+    const fix = routeMessage('修改 docs/INDEX.md');
     expect(fix.items.map((item) => item.intent)).toEqual(['delivery']);
     expect(fix.items[0]?.scope.writePaths).toEqual(['docs/INDEX.md']);
     expect(fix.explicitAuthorization).toBe(true);
@@ -283,16 +283,16 @@ describe('level routing (workflow.md §2)', () => {
     // 把/将/对 disposal form, in both languages.
     for (const body of [
       '修复 docs/INDEX.md',
-      '修改 docs/INDEX.md 中的错别字',
-      '更新 docs/INDEX.md 的说明',
-      '处理一下 docs/PLAN.md 的错别字',
-      '删除 docs/INDEX.md 的旧内容',
-      '清理 docs/PLAN.md 的重复段落',
-      'fix the typo in docs/INDEX.md',
+      '修改 docs/INDEX.md',
+      '更新 docs/PLAN.md',
+      '处理 docs/PLAN.md',
+      '删除 docs/INDEX.md',
+      '清理 docs/PLAN.md',
+      'fix docs/INDEX.md',
       'update docs/INDEX.md',
-      '把 docs/INDEX.md 里的错别字改掉',
+      '把 docs/INDEX.md 改掉',
       '将 docs/PLAN.md 删除',
-      '对 docs/PLAN.md 进行修改',
+      '对 docs/PLAN.md 修改',
       '不要修改 docs/PLAN.md，但要修复 docs/INDEX.md',
     ]) {
       const routing = routeMessage(body);
@@ -375,7 +375,9 @@ describe('level routing (workflow.md §2)', () => {
       'docs/INDEX.md 的错别字麻烦处理下',
       'docs/INDEX.md 里的接口说明更新一下',
       '修改 docs/PLAN.md 参考 docs/INDEX.md',
+      '修改 docs/INDEX.md 中的错别字',
       '修改 docs/INDEX.md、docs/PLAN.md',
+      '修改 docs/INDEX.md，不太明智',
       '补充了 docs/INDEX.md',
       '更新完毕 docs/INDEX.md',
       '补充完毕 docs/INDEX.md',
