@@ -1,233 +1,298 @@
-# WP-03 独立 Review 报告（第四轮）
+# WP-03 独立 Review 报告（第五轮）
 
 - 评审对象：工作包 WP-03「直接协作与说明产物」
-- 评审轮次：**第四轮**（第一/二/三轮摘要见文末「附一/附二/附三」，均保留）
-- 冻结点 / HEAD：`git rev-parse HEAD` = `35e8674a5b93a0feecb645e3073d18180f2a5e53`
-  - **与任务下达的 `HEAD=d71dc07` 不一致**（见 W3R4-14）。`git diff --stat d71dc07..HEAD` 仅 `review.md` 一文件，**被审代码树与 `d71dc07` 完全相同**，差异只是第三轮报告提交在修复提交之上。
-- 工作树：全部命令前后、报告写入前 `git status --porcelain` 均为**空**。
+- 评审轮次：**第五轮**（第一/二/三/四轮摘要见文末「附一～附四」，均保留）
+- 冻结点 / HEAD：`git rev-parse HEAD` = `fd0a8935bcd51caea99341584baf9d87b5579438`
+  - **与任务下达的 `HEAD=3f52fbf` 不一致**；`git diff --stat 3f52fbf..HEAD` 仅 `.agentdev/work/WP-03/review.md` 一文件（+148/−185），**被审代码树与 `3f52fbf` 完全相同**，差异只是第四轮报告提交在修复提交之上（见 W3R5-09，与 W3R4-14 同源）。
+- 工作树：全部命令前后、本报告写入前 `git status --porcelain` 均为**空**。
 - 评审角色：Review（独立上下文，未读取任何开发/Test 会话；只依据仓库文件、契约文档与我自建实验）
 - 工具：`node v24.8.0`、`pnpm 12.3.4`、macOS 宿主
-- 记录哈希（`git hash-object`）：`packages/domain/src/requests.ts` `9a1bf9e5…`、`packages/core/src/messages.ts` `e0eaac87…`、`packages/core/src/preview.ts` `ad5ade05…`、`packages/core/src/artifacts.ts` `057ff403…`、`packages/core/src/attachments.ts` `3ee94838…`、`packages/core/src/orchestrator.ts` `828dde58…`、`apps/daemon/src/server.ts` `f2bf51d8…`、`docs/architecture/execution.md` `7ef649f4…`、`docs/architecture/data.md` `3c4884f9…`、`docs/architecture/protocol.md` `edbba2b8…`、`.agentdev/work/WP-03/implementation.md` `0e9cefef…`、`plan.md` `60103b27…`
-- 权威依据：`AGENTS.md`、`docs/INDEX.md`、`docs/rules/{workflow,agents}.md`、`docs/product/experience.md`（§3）、`docs/architecture/{data,protocol,execution,reliability}.md`、`docs/delivery/{implementation,acceptance}.md`（WP-03 与 AC-001..006/052/076/084）、`.agentdev/work/WP-03/{plan,implementation}.md`、`packages/**`、`apps/daemon/**`、相关测试
+- 记录哈希（`git hash-object`，前 8 位）：`packages/domain/src/requests.ts` `09cb4da4`、`packages/core/src/messages.ts` `78439c1c`、`packages/core/src/preview.ts` `bec75158`、`packages/core/src/artifacts.ts` `057ff403`、`packages/core/src/attachments.ts` `3ee94838`、`packages/core/src/orchestrator.ts` `828dde58`、`apps/daemon/src/server.ts` `f5aab4f5`、`docs/architecture/execution.md` `7ef649f4`、`docs/architecture/protocol.md` `edbba2b8`、`docs/architecture/data.md` `3c4884f9`、`docs/architecture/reliability.md` `29bbf2c1`、`docs/delivery/acceptance.md` `c0340ef4`、`.agentdev/work/WP-03/implementation.md` `7db63182`、`plan.md` `60103b27`
+- 权威依据：`AGENTS.md`、`docs/INDEX.md`、`docs/rules/{workflow,agents}.md`、`docs/product/experience.md`（§3）、`docs/architecture/{data,protocol,execution,reliability}.md`、`docs/delivery/{implementation,acceptance}.md`（AC-001..006/052/076/084）、`.agentdev/work/WP-03/{plan,implementation}.md`、`packages/**`、`apps/daemon/**`、相关测试
 
 ---
 
 ## 1. 结论
 
-**PASS（可进入独立 Test）。**
+**FAIL（不能进入独立 Test；按 `docs/rules/workflow.md` §6 走 `Blocking Review Finding → Develop → Independent Review`）。**
 
-第三轮唯一的 P1（W3R3-01：消息授权声明 `readPaths` 却无 `read` 操作，导致绑定它的 Work 的任何 Run/Assessment 都被 `capabilityGaps` 拒绝）**已真正闭合，且经端到端验证**：我把 HTTP `conversation.message.send` 产出的 `Authorization` 喂回 `Orchestrator.assess` 与 `dispatch`，命中范围内的 Assessment、Chief 只读 Run、专业写 Run **全部通过**，范围外的三类调用**全部被 `NOT_AUTHORIZED` 拒绝**；未显式传 `authorizationRef` 时走 `work.authorizationRef` 的兜底路径同样通过（probe1，18/18）。AC-006 混合意图的 delivery Work 现在能建立自己的 Chief Run 并在其下派发 Backend 写 Run（probe6，10/10）。第三轮对抗性两条越权（疑问句授权、客户端自报 `authorization`）在**产品边界上**已闭合（probe2：疑问句 5/5 不授权；HTTP 注入的 `deploy`/越界写/网络目标被完全忽略，库中零条 `deploy` 授权）。CSP 已与 `execution.md` §6 逐字对账（probe4：文档原文 = 常量 = 线上头，`sandbox allow-scripts` 作为第二个 CSP 头）。
+第四轮对抗性六项中 **4 项真修好、1 项部分、1 项未修且名实不符**：
 
-本轮新增 14 条 Finding：**0×P0、0×P1、3×P2、11×P3**。P2 集中在「**未文档化的客户端 `workItems` 参数**」与「`assertGrantWithinMessage` 的纵深防御不完整」，**不影响文档化的 AC-005/AC-006 主路径**（由 Core 自己的 `routeMessage` 决定时行为正确），且不涉及不可覆盖的权限/Gate 规则，故按 `docs/rules/workflow.md` §6 不阻断 Test。**失败路由修正为：无阻断项，进入 `Testing`**；P2/P3 按 §9 承接，W3R4-01/02/03 建议在结算前处理。
+| 对抗项 | 第四轮判定要求 | 本轮实测 |
+|---|---|---|
+| 逐子句分类（解释/疑问/否定不下发写授权） | 真修 | **部分**——第四轮列举的 8 个原句与「`?`/如何/能否/how/can」族已闭合，但同一缺陷类**仍可复现**（中英文疑问、否定、陈述、名词化解释共 **17 个新句式**），且 HTTP 端到端可评估为 L2 delivery 并派发写 Run（**W3R5-01，P1**） |
+| 线性路径检测（`pathsIn`） | 真修 | **已修**（probeE：64k 病态输入 ≤15 ms，2000 次普通路由 8.8 ms） |
+| `targetWorkId` 不改写目标 Work | 真修 | **已修**（probeC/H：`none`/`L1`/`L3` 三种目标的 level 与 authorizationRef 全部保持，零新增授权行） |
+| 消息授权等级与 `routingFloor` 一致（L2） | 真修 | **已修**（probeF：行/Work/Assessment 均 L2；`assess(level:'L1')` 被 floor 拒，`assess(L2)` 通过） |
+| `workItems` 逐项校验 | 真修 | **已修**（probeC：非法 intent/goal/非对象/空数组 → 400 且事务回滚零 Work 写入） |
+| CSP 单头（删除无效第二头名） | 真修 | **未修且记录不实**——wire 上仍同时出现 `content-security-policy` 与无效的 `content-security-policy-sandbox`（**W3R5-03，P2**）；`implementation.md:118` 与 `3f52fbf` 提交信息均称「已删除」 |
+
+**另发现一条与第四轮同类、但方向相反的阻断缺陷**：否定词表把单字「别」当作全词匹配，加上「说明/介绍」等名词化解释词与「、」不参与分词，使**明确指令**（如 AC-007 的典型用例「修改 docs/INDEX.md 中的错别字」）被判为拒绝/解释，既不下发授权也不建 delivery Work（**W3R5-02，P1**）。第四轮 `W3R4-02/04/07` 已闭合、`W3R4-01` 部分闭合；`W3R4-03/05/06/08/09/10/11/12/13` 未完全闭合（部分为 latent/record 级）。
+
+本轮新增 **9 条 Finding：0×P0、2×P1、2×P2、5×P3**。两条 P1 均直接落在本包验收面（AC-004 负例、AC-005 正例），违反不可覆盖的授权/Gate 规则，**阻断 Test**。
 
 ---
 
 ## 2. 契约命令原始结果（本轮实跑）
 
-执行目录：仓库根；逐条命令与退出码取自同一串行执行。
+执行目录：仓库根；逐条命令与退出码取自同一串行执行（`/tmp/wp03r5/commands.log`）。
 
 | 命令 | 退出码 | 原始结果要点 |
 |---|---|---|
-| `pnpm typecheck` | **0** | `tsc -p tsconfig.json --pretty false`，无输出 |
-| `pnpm lint` | **0** | `Checking formatting... All matched files use Prettier code style!` |
-| `pnpm test:unit` | **0** | `Test Files 19 passed (19)`、`Tests 286 passed (286)` |
-| `pnpm test:integration` | **0** | `Test Files 10 passed (10)`、`Tests 124 passed (124)`（含真实容器用例） |
+| `pnpm typecheck` | **0** | `tsc -p tsconfig.json --pretty false`，无输出（2.2s） |
+| `pnpm lint` | **0** | `Checking formatting... All matched files use Prettier code style!`（8.5s） |
+| `pnpm test:unit` | **0** | `Test Files 19 passed (19)`、`Tests 287 passed (287)`（2.7s） |
+| `pnpm test:integration` | **0** | `Test Files 10 passed (10)`、`Tests 124 passed (124)`（含真实容器/镜像用例） |
 | `pnpm docs:check` | **0** | `docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages` |
-| `pnpm build` | **0** | `pnpm -r build`，**8** 个 workspace `Done`：`contracts, domain, cli, storage, core, daemon, pi-runtime, runner` |
+| `pnpm build` | **0** | `pnpm -r build`，**8** 个 workspace `Done`：`contracts, cli, domain, storage, core, daemon, pi-runtime, runner` |
 
-`git status --porcelain` 在全部命令前后均为空；`HEAD` 全程 `35e8674a5b93a0feecb645e3073d18180f2a5e53`。
+`git status --porcelain` 在全部命令前后均为空；`HEAD` 全程 `fd0a8935bcd51caea99341584baf9d87b5579438`。
 
-**命令全绿仍不足以证明必验范围**：286 个单测里仍**没有**任何用例把消息授权喂回 `Orchestrator`；`packages/core/test/artifacts.test.ts:440-444` 只断言 `authorization.operations` 含 `read`、`scope.readPaths` 含命名路径（间接守护 W3R3-01 的回归），`apps/daemon/test/server.test.ts` 的两个新例也只断言响应/行绑定。端到端可用性是**本轮独立 probe** 建立的（W3R4-05）。
+补充实测（供结算对账）：`apps/daemon/test/server.test.ts`（unit）**15** 例、`packages/core/test/artifacts.test.ts` **16** 例、`packages/domain/test/domain.test.ts` **32** 例。`implementation.md:120`（T11）的 `unit 287 / integration 124 / 8 workspace / daemon 15` 与实测一致；`implementation.md:46`（T6）与 `:104`（T10）的旧数字未订正（W3R5-07）。
+
+**命令全绿不等于必验范围成立**：287 个单测中，唯一新增的路由断言是 `packages/domain/test/domain.test.ts:284-300` 的 **8 个第四轮原句**，没有任何用例覆盖「疑问句族/否定词族/名词化解释词/顿号列表」；`packages/core/test/artifacts.test.ts:434` 只把期望等级从 L1 改成 L2；仍**没有**任何用例把消息授权喂回 `Orchestrator.assess/dispatch`（W3R4-05 未闭合）。本轮断言全部由我自建 probe 建立。
 
 ---
 
-## 3. 第三轮 W3R3-01..14 逐条复核
+## 3. 第四轮对抗性逐条复核（含代码位置）
 
-判定口径：**已修** = 本轮实验观察到期望行为；**部分** = 主行为成立但有可指认残差；**未修** = 行为仍缺失。
+判定口径：**已修** = 本轮实验观察到期望行为；**部分** = 主行为成立但有可指认残差；**未修** = 行为仍缺失；**名实不符** = 记录/提交信息与代码相反。
 
-| 编号 | 三轮严重度 | 本轮判定 | 证据（文件:行 + 实测） |
+| # | 对抗项 | 判定 | 证据（文件:行 + 实测） |
 |---|---|---|---|
-| W3R3-01 授权 capability 缺口 → 交付死锁 | **P1 阻断** | **已修（端到端验证）** | `messages.ts:342-358`（`grantedByMessage` 现为 `readPaths=writes`、`operations:['read','edit']`）；probe1：`assess` 通过并记录 `authorizationRef`、Chief 只读 Run 通过、专业写 Run 通过、范围内外 3 例正确拒绝、`work.authorizationRef` 兜底通过；probe6 混合意图写 Run 通过 |
-| W3R3-02 授权绑定 `works[0]` | P2 | **部分** | 正常路由下已修：`messages.ts:187` 改为 `works.find(writePaths>0) ?? work`，probe3 `authorityOnDeliveryWork` 通过（delivery 拿引用、assist 无）；但**客户端 `workItems` 可抑制 delivery 项**，使授权落到只读 assist Work → **W3R4-02** |
-| W3R3-03 授权自相矛盾（与 F1 同因） | P2 | **已修** | 同 W3R3-01：`operations:['read','edit']` 与 `readPaths` 自洽（probe1 `authz.scope.selfConsistent`） |
-| W3R3-04 HTTP 响应不含 `workIds`/`authorizationId` | P2 | **部分** | 响应已含两字段（probe1 `responseKeys=messageId,workId,workIds,authorizationId,state,version`）；但 `protocol.md:46` 未对账、daemon 的 `message.received` 事件仍未带两字段 → **W3R4-06/07** |
-| W3R3-05 同 intent 重复共享 scope | P2 | **未修（记录声称已修）** | `messages.ts:156-166` 仍 `routing.items.find(...)`；probe3：`workItems:[delivery,d delivery]` 两个 Work 的 `writePaths` **都是** `["docs/INDEX.md","docs/product/experience.md"]` → **W3R4-01**；`d71dc07` 提交信息与 `implementation.md:101` 的「不再共用首个 scope」不成立 |
-| W3R3-06 CSP 与 `execution.md` §6 漂移 | P2 | **已修** | `preview.ts:22-25` 恢复逐字策略，`sandbox allow-scripts` 作为第二 `Content-Security-Policy` 头（`preview.ts:31-38`）；probe4：`PREVIEW_CSP` === 文档原文 === 线上头，第二头 `sandbox allow-scripts`；`frame-ancestors` 已移除 |
-| W3R3-07 `StorageError` 映射过宽 + 回显 | P2 | **部分** | 回显已修：probe4 `GET /artifacts/%E0%A4%A/preview` → `500 {"code":"INTERNAL_ERROR","message":"the request could not be completed"}`，不再含 `URI malformed`；但映射仍只分「缺引用→404 / 其余→500」，`VERSION_CONFLICT`/`DUPLICATE_KEY`/`BUSY` 未按 `protocol.md` §7 细化，且客户端输入触发的约束错仍是 500（probe5）→ **W3R4-08/04** |
-| W3R3-08 `download.prepare` 不报 validity | P3 | **已修** | `server.ts:152`；probe4：prepare 体 `keys=downloadToken,expiresAt,artifactId,artifactVersion,validity` |
-| W3R3-09 `targetWorkId` 归属只覆盖 message 来源 | P3 | **未修** | `messages.ts:440-447` 逻辑未变；probe5：跨会话、`sourceRef.kind='action'` 的 Work 作目标 → **202** → **W3R4-10** |
-| W3R3-10 daemon/Core owner 派生不一致 | P3 | **未修（latent）** | `server.ts:293` `userIdFromSubject('installation:local')`；`messages.ts:306` 仍 `userIdFromSubject(context.subject)`。`createMessageOperations` 全仓库**无调用方**（grep），故当前不可达；一旦按 `protocol.md` 接线即复发 |
-| W3R3-11 `prune()` 无调用方 | P3 | **已修** | `server.ts:145` `options.tokens.prune()`（grep：产品侧唯一调用方，另一处为测试） |
-| W3R3-12 AC-005 证据止于「行存在」 | P3 | **部分** | `artifacts.test.ts:440-444` 新增「operations 含 read」间接断言（可挡住 W3R3-01 的直接回归），但**仍无**任何 `Orchestrator.assess/dispatch` 用例 → **W3R4-05** |
-| W3R3-13 记录与实测数字不符 | P3 | **未修** | `implementation.md:46`（T6）仍写「278 passed / daemon 9 例 / 7 workspace」；T9 节无「修复后验证」行；T10 写「12 daemon 例」而实测 daemon 测试 **14** 例（`286/124/8 workspace` 三项正确）→ **W3R4-09** |
-| W3R3-14 `message.send` 未声明/校验 `workItems`、`authorization`；上传 `projectId`/多文件 | P3 | **部分** | `authorization` 已从 daemon 参数表移除（`server.ts` diff）；但 `workItems` 仍透传且未校验（probe5：非法 intent/空 goal → 500 而非 400），`projectId` 未知仍 201，multipart 第二个 file part 仍被静默丢弃（201）→ **W3R4-04/12** |
+| A | 逐子句分类：解释/疑问/否定永不下发写授权 | **部分** | `requests.ts:144-149`（`splitClauses`）、`:169-194`（逐子句判定）；probeA：第四轮 8 原句 **8/8 不授权**，`?`/如何/能否/how/can 族 **6/6 不授权**；但 probeA 另有 **17/17 新句式越权授权**（疑问 9、否定拒绝 3、陈述/名词化 5），probeB 走真实 HTTP 全部落库 Authorization + delivery Work L2，probeF 证其可 `assess` + 派发写 Run → **W3R5-01** |
+| A′ | 同方向的**反向**缺陷：明确指令被误判为拒绝/解释 | **新增缺陷** | `requests.ts:74`（否定词表含裸单字 `别`）、`:38-41`（解释词含 `说明/介绍`）、`:104`（分词不含 `、`）；probeA/B/H：「修改 docs/INDEX.md 中的错别字」「识别并修复 …」「特别修改 …」「分别修复 …」「更新 docs/INDEX.md 的说明」「补充 … 的说明文档」「修改 docs/a.md、docs/b.md」→ **7 例均不下发授权**（对照组「错字」「内容」「标题」正常授权）→ **W3R5-02** |
+| B | 路径检测线性化 | **已修** | `requests.ts:104-135`（`TOKEN_PATTERN` 线性 + 锚定 `PATH_TOKEN_PATTERN` + `MAX_TOKEN_LENGTH`）；probeE：64k 字母 1.5 ms、64k 路径 token 4.5 ms、64k 深路径 0.1 ms、64k 混合分隔符 14.4 ms、2000 次普通路由 8.8 ms（阈值 500 ms/3000 ms） |
+| C | CSP 第二头名无效 → 单头 | **未修 / 名实不符** | `preview.ts:44,61` 仍返回 `content-security-policy-sandbox`，`server.ts:121-122` 直接铺进 `writeHead`；probeD 原始 wire 头：`["content-security-policy", "default-src 'none'; …", "content-security-policy-sandbox", "sandbox allow-scripts", …]`。`implementation.md:118` 与提交信息称「删除无效的第二 CSP 头名」不成立 → **W3R5-03** |
+| D | 消息授权 L1 与 `routingFloor` 不一致 | **已修** | `messages.ts:234-238`（delivery scope 含操作 → L2）、`orchestrator.ts:174-189`（`operations.length>0` → floor L2）；probeF：Assessment/Work 均 L2，`assess(level:'L1')` 报 `routing rules require L2`，`assess(level:'L2')` 通过 |
+| E | `workItems:[null]` / `intent:'operation'` → 500 | **已修** | `messages.ts:149-165`（逐项校验）、`server.ts:181-183`（仅 Array 透传，Core 兜底）；probeC：`operation`+`null`、空 goal、字符串项、空数组、非字符串 goal → **全部 400 `VALIDATION_ERROR`**，且 `store.works` 计数不变（事务回滚） |
+| F | `targetWorkId` 可改写已有 Work 的 level/authorizationRef | **已修** | `messages.ts:181-183`（只取目标 Work）、`:207-214`（`targetWorkId` 时 `modifyingWork`/`granted` 均为 `undefined`）；probeC/H：none→none、L1→L1、L3→L3，authorizationRef 与授权行数完全不变，响应 `authorizationId=null` |
+| G | 前端提交的 `workItems` 抑制 delivery 项 | **已修** | `messages.ts:209`（`works.find(writePaths>0)`）；probeC：`workItems:[{assist}]` + 「fix docs/INDEX.md」→ 1 个 assist Work、level none、`authorizationId=null`、零授权行（W3R4-02 闭合） |
+| H | 同 intent 多 Work 共用一个 scope | **部分** | `messages.ts:172-179` 按下标出现次数匹配；probeC：两个 delivery 项不再共享全量 scope，越权方向已闭合；但**第二项拿不到任何 scope**（回落为空 scope），`implementation.md:117`「按位置匹配各自 scope」表述不精确（W3R5-07） |
 
 ---
 
-## 4. 对抗性项复核
+## 4. W3R4-01..14 逐条复核
 
-| 对抗项 | 来源 | 本轮判定 | 证据 |
+| 编号 | 四轮严重度 | 本轮判定 | 证据 |
 |---|---|---|---|
-| 疑问句被当作执行消息生成写授权 | 三轮新增 | **已修** | `requests.ts:55-60,107`；probe2：`how do I fix docs/INDEX.md?`、`如何修复 docs/INDEX.md？`、`can you fix docs/INDEX.md`、`why does docs/INDEX.md look wrong?`、`能否修改 docs/INDEX.md` 5/5 `authorizationId=null`、`level=none`，库中零条写范围授权行；probe7 覆盖中英/无问号疑问句 |
-| HTTP 客户端可自报 `authorization`（甚至 `deploy`） | 三轮新增 | **已修（产品边界）** | daemon 不再读 `payload['authorization']`（`server.ts` diff）；probe2：带 `authorization{writePaths:['/etc/hosts'],operations:['deploy'],networkTargets:['evil.example']}` 的请求返回 202，落库授权为 `["read","edit"]`/`["docs/INDEX.md"]`/无网络目标，`deploy` 授权行 0 条 |
-| Core 是否拒绝「超出消息命名范围」的授权 | 三轮新增（本包自设纵深防御） | **部分** | probe2：越界写路径、环境操作、网络目标、疑问句授权 4/4 拒绝；但 `granted.scope.readPaths` 不受命名约束、且不校验操作是否可由消息导出（无目标消息注入 `git`/`artifact_write` 被接受并生成 L1 Work，probe3 里该 Work 甚至能建立带 `git` 权限的 Run）→ **W3R4-03**；当前 daemon 已剥离该字段，属 latent |
-| 二轮对抗 1–7（内存放大/截断头/版本回退/幂等主体/ACL 覆盖/跨会话配额/注释一致） | 二轮 | **未见回归** | 本轮未逐项重跑；其中 6（跨会话 staged 配额）与 5（ACL）仍无产品回归测试；CSP 项已由 W3R3-06 修 |
+| W3R4-01 同 intent 多 Work 共用 scope | P2 | **部分** | 见上表 H；probeC `duplicate-intent scopes are independent` PASS、`only one Work carries the authorization` PASS；第二项空 scope（记录不精确） |
+| W3R4-02 `workItems` 把写授权挂到只读 Work | P2 | **已修** | probeC 两条断言 PASS；`messages.ts:209` |
+| W3R4-03 `assertGrantWithinMessage` 不约束 `readPaths` | P2 | **未修（latent）** | probeH：直调 `sendMessage`，消息只点名 `docs/INDEX.md`，注入 `scope.readPaths:['packages/core/src']` → **接受**，落库授权 `readPaths=["packages/core/src"]`；写路径越界仍被拒；无命名目标 + `git` 的注入因「无 modifying Work」不再落库（该分支已被 B/H 修复顺带关闭）。daemon 已剥离 `authorization`、`createMessageOperations` 仍无调用方（grep），故不可达 → **W3R5-04** |
+| W3R4-04 `workItems` 未校验 → 500 | P3 | **已修** | probeC（5 类非法输入全 400、零写入） |
+| W3R4-05 无「授权喂回 Orchestrator」回归测试 | P3 | **未修** | `grep -rn "orchestrator.assess\|orchestrator.dispatch" packages/*/test apps/*/test` 无命中；本轮的 probeF 是唯一端到端证据 |
+| W3R4-06 `protocol.md` 未列 `workIds`/`authorizationId`/`workItems` | P3 | **未修** | probeG：`protocol.md` 的 `conversation.message.send*` 行仍为 `…targetWorkId?:ID,targetRole?:Role | {messageId,workId,state:received,version}`；daemon 实际接受 `workItems` 并返回 `workIds`/`authorizationId`，且不读 `targetRole` |
+| W3R4-07 `message.received` 事件缺 `workIds`/`authorizationId` | P3 | **已修** | `server.ts:228-240`、`messages.ts:352-366`；probeG `message.received event carries workIds` PASS |
+| W3R4-08 `StorageError` 映射仍粗 | P3 | **部分（无进展）** | `server.ts:372-396` 仍只分「缺引用→404 / 其余→500 `retryable:false`」；客户端输入型错误已由 Core 的 `VALIDATION_ERROR` 在更早层拦下（probeC），但 `VERSION_CONFLICT`/`DUPLICATE_KEY` 未按 `protocol.md` §7 映射 |
+| W3R4-09 记录数字与实测不符 | P3 | **部分** | T11（`:120`）数字正确；T6（`:46`）仍写 `278 passed / 7 workspace`，T10（`:104`）仍写 `12 daemon 例`（probeG 三项 FAIL） |
+| W3R4-10 `targetWorkId` 归属只覆盖 message 来源 | P3 | **未修** | `messages.ts:483-490`；probeC：跨会话 `sourceRef.kind='message'` → 403（正确）；跨会话 `sourceRef.kind='action'` → **202**（应 403/404）→ W3R5-05 |
+| W3R4-11 失败发送留下孤儿正文 blob | P3 | **未修** | probeG：非法 `workItems` 被 400 拒后 `blob files 4 → 5`（DB 回滚，blob 不回滚）；`messages.ts:129` 先写 blob |
+| W3R4-12 multipart 第二 file 丢弃 / 未知 `projectId` 201 | P3 | **未修** | probeG：两个 file part → 201（保留其一）；未知 `projectId` → 201 |
+| W3R4-13 错误响应非 `protocol.md` §1 封装 | P3 | **未修** | probeG：404 体 `{ok:false,error:{…}}`，缺 `v/type/id` |
+| W3R4-14 冻结点与任务不一致 | P3（流程） | **复发** | 本轮任务称 `HEAD=3f52fbf`，实际 `fd0a893`（仅 `review.md` 之差）→ W3R5-09 |
 
 ---
 
-## 5. AC 复核（AC-001..006/052/076/084）
+## 5. 前三轮 P1/P2 回归复核
+
+结论：**未发现已修项回归**；六条契约命令全绿，`integration`（124）与三轮一致，`unit` 286 → **287**（新增 1 例 daemon 断言）。
+
+| 来源 | 项 | 本轮状态 |
+|---|---|---|
+| 一轮 P0 | W3-01 下载 token 可预测 | 已修、未见回归（probeG：≥43 字符 base64url、不含产物 id、两 token 不同、单次消费） |
+| 一轮 P0 | W3-02 产物读取无主体维度 | 单用户语义保持（probeD/G：`assertReadable` + owner 校验在预览/下载/prepare 三处生效） |
+| 一轮 P1 | W3-03 owner 由 sessionId 派生 | 设计未变（`server.ts:295` 统一 installation 用户；`messages.ts:349` 仍 `userIdFromSubject(context.subject)`，因 `createMessageOperations` 无调用方而不可达） |
+| 一轮 P1 | W3-04 正文未落 blob | 已修、未回归（probeG：`message_body` 行 + 64 hex hash + bytes 正确 + blob 落盘） |
+| 一轮 P1 | W3-05 未知会话 500 | 已修（probeG：404） |
+| 一轮 P1 | W3-06 失效产物仍可预览无标识 | 已修（probeG：validity 头 + prepare 返回 validity） |
+| 一轮 P1 | W3-07/W3-08 AC-006/AC-005 未实现 | 机制成立（probeB/F；AC 复核见 §7） |
+| 二轮 P1 | W3R2-01/02 AC-006/AC-005 | 仍成立（probeB/C/F） |
+| 二轮 P2 | W3R2-03 CSP 与文档漂移 | 逐字一致（probeD：`PREVIEW_CSP` === `execution.md` §45 原文 === wire 头）；但无效第二头名残留（W3R5-03） |
+| 二轮 P2 | W3R2-04 StorageError 映射/回显 | 回显已修（probeG：非法百分号编码 500 且不含 `URI`）；映射细分仍缺（W3R4-08） |
+| 三轮 P1 | W3R3-01 授权 capability 缺口 → 交付死锁 | **仍然修好**（probeF：`operations=['read','edit']` 自洽、`assess(L2)` 通过、Chief 只读 Run 通过、grant 内 Backend 写 Run 通过、grant 外写 Run `NOT_AUTHORIZED`、`none` Work 不能声明写 scope） |
+| 三轮 P2 | W3R3-02/04/05/06/07 | 见 §4（-02→已修；-04/-07 部分；-05 部分；-06 名实不符） |
+
+---
+
+## 6. 授权判定绕过实验（本轮重点）
+
+### 6.1 越权方向：非执行消息仍生成可用写授权（W3R5-01）
+
+`routeMessage` 的分类是「关键词锚定 + 子句切分」，只覆盖枚举过的词形。以下句式在 probeA（domain）与 probeB（真实 HTTP）中**全部**产生 `authorizationId`、`authorization` 行（`readPaths=writePaths=['docs/INDEX.md']`、`operations=['read','edit']`）与 `level=L2` 的 delivery Work；probeF 进一步证明该 Work 可 `assess(L2)` 并派发 Backend 写 Run：
+
+| 类别 | 句式（实测越权） | 未命中的判据 |
+|---|---|---|
+| 中文疑问 | `你修复 docs/INDEX.md 了吗`、`是否已经修复 docs/INDEX.md`、`是否要修改 docs/INDEX.md`、`修改 docs/INDEX.md 了没有`、`麻烦确认 docs/INDEX.md 有没有需要修改的地方` | `?` 仅在句尾；`吗/呢/了没有/是否` 未入 `QUESTION_PATTERNS`（`requests.ts:55-65`） |
+| 英文疑问 | `Did you fix docs/INDEX.md`、`Will you fix docs/INDEX.md` | 问号可省；`did/will/have/has/may` 未入句首助动词表（`:58`） |
+| 英文陈述/征询 | `Any thoughts on the fix for docs/INDEX.md`、`I have a question about the fix in docs/INDEX.md` | 子句含 `fix` + 路径即判指令；`question` 未入判据 |
+| 名词化解释 | `The explanation for the fix in docs/INDEX.md`、`I am describing the fix in docs/INDEX.md` | `\bexplain\b`/`\bdescribe\b` 只匹配原形，不匹配 explanation/describing（`:40`、`:63`） |
+| 陈述需求 | `docs/INDEX.md needs a fix`、`The fix needed in docs/INDEX.md` | 名词 `fix` 即被视为修改动词（`:43-46`） |
+| 中文拒绝 | `我先不修改 docs/INDEX.md`、`我不想修改 docs/INDEX.md`、`不必修改 docs/INDEX.md` | 否定表只含 `不要/别/无需/不用/不需要/先别/暂不`（`:74`） |
+| 话题子句 | `Regarding the fix in docs/INDEX.md, what do you suggest?` | 逗号切分把话题碎片切成「指令子句」，整句产出 delivery+assist（`splitClauses:146`） |
+
+`implementation.md:113` 的绝对表述「解释句、疑问句、否定句（不要/别/don't/never/not asking）**永不下发写授权**」与实测不符；`domain.test.ts:284-300` 的用例集恰好只覆盖第四轮列举的 8 个原句，因此命令全绿掩盖了该缺陷类。
+
+### 6.2 反向方向：明确指令被判为拒绝/解释（W3R5-02）
+
+| 触发 | 句式（实测**不**授权） | 对照（正常授权） | 根因 |
+|---|---|---|---|
+| 裸单字 `别` 全串匹配 | `修改 docs/INDEX.md 中的错别字`、`识别并修复 docs/INDEX.md`、`特别修改 docs/INDEX.md`、`分别修复 docs/INDEX.md 和 …` | `修改 docs/INDEX.md 中的错字`、`检查并修复 docs/INDEX.md` | `requests.ts:74` 的 `别` 无边界，命中「错别**字**/识**别**/特**别**/分**别**」 |
+| 解释词做名词 | `更新 docs/INDEX.md 的说明`、`补充 docs/INDEX.md 的说明文档`、`更新 docs/INDEX.md 的项目介绍`、`修复 docs/INDEX.md 中的特别说明` | `更新 docs/INDEX.md 的内容`、`更新 docs/INDEX.md 的标题` | `requests.ts:38-41` 的 `说明/介绍` 无词性约束 |
+| 顿号列表不参与分词 | `修改 docs/INDEX.md、docs/product/experience.md` | `修改 docs/INDEX.md 和 docs/product/experience.md` | `requests.ts:104` 的 `TOKEN_PATTERN` 未把 `、`（U+3001）当分隔符，整串不成路径 → 视为「无命名目标」 |
+| 逗号分隔目标列表 | `修改 docs/INDEX.md, docs/product/experience.md`（仅首路径获授权，第二项记为 explanation） | — | `splitClauses:146` 逗号无条件切分 |
+
+这些都属于 AC-005 正例（「用户明确修复具体目标 → 原消息作为范围授权」）与 AC-007 典型用例（普通错字）的失败；虽为 fail-closed（不放大权限），但同样使交付路线无法启动——与三轮 P1（W3R3-01 授权导致交付死锁）属同一严重性类别。
+
+### 6.3 仍然闭合的方向（本轮复核通过）
+
+- 客户端无法自报授权：probeB 注入 `authorization{writePaths:['/etc/hosts'],operations:['deploy'],networkTargets:['evil.example']}` → 落库仍是消息自身范围 `['docs/INDEX.md']`/`['read','edit']`；probeH 无命名目标 + `git` 注入不再落库。
+- 写路径越界被拒：probeH `NOT_AUTHORIZED`。
+- 疑问句带 `?`、`如何/能否/how/can/why/what` 族、`不要/别/don't/never/not asking/without changing` 族：probeA/B **不授权**（第四轮原句全数闭合）。
+- 混合意图仍正确拆分：probeH「先解释一下，然后修改 …」「不要修改 A，但是修复 B」「别解释，直接修改 …」等 8/8 符合预期（AC-006）。
+
+---
+
+## 7. AC 复核（AC-001..006/052/076/084）
 
 | AC | 本轮判定 | 依据 |
 |---|---|---|
-| AC-001 自由问答 | **部分** | 问答建 Work、不建 Requirement 成立；「Chief 调查→回答→Work 完成」执行链路仍依赖 WP-04/06/07 |
-| AC-002 HTML说明 | **部分** | 上传→绑定→user Artifact→受权预览→一次性下载全链路通过（probe4）；`prepare` 现报 `validity`；HTML「直接生成」的内容生产者仍属 WP-04/06 |
-| AC-003 按需委派 | **部分（无链路证据）** | 专业写 Run 的派发/准入链路已通（probe1/6），但「用户消息→Chief 分派 purpose=analysis/artifact 专业 Run→汇总」仍无端到端证据，属 WP-04/07 承接 |
-| AC-004 执行授权边界 | **通过（本包范围）** | probe6：`none` 级 explanation Work 的写 Run 被 `NOT_AUTHORIZED`；与 WP-02 一致 |
-| AC-005 明确启动 | **通过（端到端）** | probe1 18/18：授权自洽（read+edit）、`assess` 通过、Chief 只读 Run 通过、专业写 Run 通过、范围外 3 例拒绝、`work.authorizationRef` 兜底通过；probe6/7 覆盖中英措辞。**「范围内无重复确认」在准入层面可达** |
-| AC-006 混合意图 | **通过（机制层）** | probe6 10/10：一消息 → delivery+assist 两 Work、授权只在 delivery、assist 无授权且只读、独立 scope/budget、`requirements=0`、assist 可先行 assess/建 Run、delivery 可建自己的 Chief+Backend Run。「解释产物先返回」的执行者仍属 WP-04/06/07 |
-| AC-052 HTML安全 | **部分（HTTP 契约层）** | probe4：逐字 CSP + 第二 sandbox 头 + `omit`/`no-store`/`nosniff`；真实浏览器读 cookie/网络/父页/top-navigation 复验属 WP-10 |
-| AC-076 附件限制 | **通过（服务端）** | 数量/大小/mime/签名矩阵由既有用例与 probe4 覆盖；残差为 multipart 多文件（W3R4-12） |
-| AC-084 首条消息附件 | **通过（本包范围）** | 暂存→发送→原子绑定→user Artifact→幂等重放成立；probe4 复验 HTTP 链路 |
+| AC-001 自由问答 | **部分** | 问答建 Work、不建 Requirement 成立；完整「Chief 调查→回答→Work 完成」仍依赖 WP-04/06/07 |
+| AC-002 HTML说明 | **部分** | 上传→绑定→user Artifact→受权预览→一次性下载全链路通过（probeD/G）；失效产物可读且带 validity；内容生产者仍属 WP-04/06 |
+| AC-003 按需委派 | **部分（无链路证据）** | `assess`/`dispatch` 链路成立（probeF），但「用户消息→Chief 分派 purpose=analysis/artifact 专业 Run→汇总」无端到端证据 |
+| AC-004 执行授权边界 | **不通过** | probeB/F：疑问句（`你修复 docs/INDEX.md 了吗` 等 9 类）产生真实写授权、L2 delivery Work，并可 `assess` + 派发 Backend 写 Run；「消息与授权记录负例」要求不成立 |
+| AC-005 明确启动 | **不通过** | 正例失败：`修改 … 中的错别字`、`识别并修复 …`、`分别修复 …`、`更新 … 的说明`、`修改 a、b` 均不授权（probeA/B/H）；反例失败：非执行消息反而授权（同 AC-004） |
+| AC-006 混合意图 | **通过（机制层）** | probeB/C/F/H：一消息 → 解释 + delivery，各自 scope/budget、解释无授权、delivery L2 且可派发写 Run；「解释产物先返回」执行者仍属 WP-04/06/07 |
+| AC-052 HTML安全 | **部分（HTTP 契约层）** | probeD：逐字 CSP + `x-agentdev-preview-sandbox` + `omit`/`no-store`/`nosniff` 成立；**服务端第二 sandbox 头无效**（W3R5-03），真实浏览器攻防仍属 WP-10 |
+| AC-076 附件限制 | **通过（服务端）** | 数量/大小/mime/签名矩阵（既有用例）；残差为 multipart 多文件被静默丢弃（W3R5-08） |
+| AC-084 首条消息附件 | **通过（本包范围）** | 暂存→发送→原子绑定→user Artifact→幂等重放成立（probeG） |
 
 ---
 
-## 6. 新 Findings（W3R4-xx）
+## 8. 新 Findings（W3R5-xx）
 
 严重性口径：P0 数据/安全或关键不可用；P1 错误行为/需求缺失；P2 局部质量/维护问题；P3 建议。P0/P1 阻断；P2/P3 影响验收才阻断。
 
-### W3R4-01 [P2] W3R3-05 并未修复：同 intent 的多个 Work 仍共用同一 scope（记录声称已修）
+### W3R5-01 [P1] 非执行消息（疑问/拒绝/陈述/名词化解释）仍产生可用写授权并可派发写 Run
 
-- 位置：`packages/core/src/messages.ts:156-166`（`routing.items.find((candidate) => candidate.intent === item.intent)`）；对照 `packages/domain/src/requests.ts:127-137`（一条消息的 delivery 项含**全部**命名路径）
-- 实测（probe3）：`workItems:[{delivery,fix index},{delivery,fix experience}]`、消息体点名两个路径 → 两 Work 的 `scope.writePaths` **都为** `["docs/INDEX.md","docs/product/experience.md"]`；`W3R3-05.duplicateIntent.independentScope` 与 `perItemScope` 均 FAIL。
-- 影响：AC-006「各自范围独立」在**客户端给定同 intent 多 Work**时不成立；第二个 Work 实际持有首个 Work 未声明路径的写权限。正常路径（Core 自己路由）不会产生重复 intent，故不影响文档化 AC-006 主路径。
-- 记录问题：`d71dc07` 提交信息与 `implementation.md:101` 均称「同 intent 的多个 Work 由 `routeMessage` 的 per-item scope 决定，不再共用首个 scope」，与代码不符。
-- 最小修复：按 `workItems` 下标与路由项一一对应，或对重复 intent 直接 `VALIDATION_ERROR`。
+- 位置：`packages/domain/src/requests.ts:38-65`（词表）、`:104`（分词）、`:144-149`（切分）、`:169-194`（逐子句判定）
+- 实测（probeA 17 例越权；probeB 走真实 HTTP 10 族全部落库授权 + delivery Work L2；probeF 端到端）：
+  - HTTP：`POST /conversation.message.send {body:'你修复 docs/INDEX.md 了吗'}` → 202、`authorizationId=01a09076-675b-…`、授权行 `{readPaths:["docs/INDEX.md"],writePaths:["docs/INDEX.md"],operations:["read","edit"]}`、Work `intent=delivery, level=L2, authorizationRef=…`。
+  - 准入：`Orchestrator.assess` 通过；`Orchestrator.dispatch` 派发 Backend `purpose=implementation` 写 Run（scope `writePaths:['docs/INDEX.md']`）**成功**。
+- 影响：违反 AC-004（用户仅询问 → 未授权不启动交付）与 AC-005（只有明确执行消息才授权）；第四轮对抗性证伪的「越权已闭合」在**同类新句式上依然成立**，`implementation.md:113` 的绝对表述不实。
+- 最小修复方向：把判定从「关键词是否出现」改为「子句是否为命令式」（如句首/主语省略的命令模板 + 词形还原 explain/explains/explaining/explanation、did/will/have、是否/吗/呢/了没有；陈述句中 `needs a fix / the fix needed` 视为 topic 而非指令），并为每类补负例测试。
 
-### W3R4-02 [P2] 客户端 `workItems` 可抑制 delivery 项，把消息的写授权挂到只读 assist Work，且不产生任何 delivery Work
+### W3R5-02 [P1] 明确指令被判为拒绝/解释，AC-005 正例不成立（fail-closed 交付死锁）
 
-- 位置：`apps/daemon/src/server.ts:180-182`（`workItems` 透传）；`packages/core/src/messages.ts:151-187`（`explicitItems = input.workItems ?? routing.items`；`authorized = works.find(writePaths>0) ?? work`）
-- 实测（probe3，走真实 HTTP）：消息 `fix the typo in docs/INDEX.md` + `workItems:[{intent:'assist',goal:'just chat'}]` → 只创建 1 个 `assist` Work，`level=L1`、`authorizationRef=authorizationId`；`W3R3-02.suppressedDelivery.intents` 与 `authorityNotOnAssist` 均 FAIL。
-- 影响：这是 W3R3-02 的另一种形态——`works[0]` 兜底在「客户端抹掉写 Work」时又把授权交给只读 Work。工作身份与意图错配、AC-005 的 delivery 语义丢失；因该授权仍以消息点名的路径为界，不构成权限扩张。
-- 最小修复：Core 应以 `routeMessage` 为准（忽略或校验 `workItems`），或要求 `explicitAuthorization` 时必须有 `delivery` Work，否则 `VALIDATION_ERROR`。
+- 位置：`requests.ts:74`（`别` 无词边界）、`:38-41`（`说明/介绍` 无词性约束）、`:104`（`TOKEN_PATTERN` 不含 `、`）、`:146`（逗号无条件切分）
+- 实测：probeA/B/H —— `修改 docs/INDEX.md 中的错别字`、`识别并修复 docs/INDEX.md`、`特别修改 docs/INDEX.md`、`分别修复 docs/INDEX.md 和 docs/product/experience.md`、`更新 docs/INDEX.md 的说明`、`补充 docs/INDEX.md 的说明文档`、`修改 docs/INDEX.md、docs/product/experience.md` 全部 `authorizationId=null`、Work 回落为 `assist`/`document`、`level=none`；对照组（错字/内容/标题/检查并修复）正常授权。
+- 影响：AC-005「用户明确修复具体目标 → 原消息作为范围授权」与 AC-007 的典型错字用例失败；与三轮 P1（交付路线在准入即死锁）同类。
+- 最小修复方向：否定词表用带边界的词（`别` 仅作为独立命令词/与动词相邻时匹配，或改为 `别(?!的|字|人)` 类保守写法）；解释词仅在句首/疑问语境生效，或要求解释动词与 `疑问标记` 同现；分词补 `、`/`，`；逗号后仅路径的子句应并入前一指令子句或按列表解析。
 
-### W3R4-03 [P2] `assertGrantWithinMessage` 不完整：`readPaths` 不受命名约束，且不校验操作能否由消息导出
+### W3R5-03 [P2] 无效 `Content-Security-Policy-Sandbox` 头仍在 wire 上；修复记录与提交信息不实
 
-- 位置：`packages/core/src/messages.ts:361-382`（只比对 `granted.scope.writePaths` 是否属于命名集合，并黑名单环境操作）
-- 实测（probe2/3，直调 `sendMessage`，模拟进程内 dispatcher 调用方）：
-  - 消息只点名 `docs/INDEX.md`，注入 `scope.readPaths:['packages/core/src']` + `operations:['read']` → **接受**，授权行 `readPaths=["packages/core/src"]`（越过消息范围）。
-  - 消息 `hello there`（无命名目标）注入 `operations:['git']`、空 `writePaths` → **接受**，Work 升 `L1`，并成功 `dispatch` 出带 `git` 权限的 Run（probe3 `OVERAUTH.gitGrant.cannotCreateRun` FAIL）。
-  - 同上注入 `artifact_write` → **接受**。
-- 影响：Core 自称的「拒绝超出消息命名范围的授权」只覆盖写路径与环境操作，未覆盖读范围与「操作可导出性」。**当前产品不可达**：daemon 已剥离 `authorization`，且 `createMessageOperations` 全仓库无调用方（grep 确认）；一旦按 `protocol.md` 把它接线为 dispatcher operation（W3R3-10 描述的场景），该缺口即变为可用越权。
-- 最小修复：`assertGrantWithinMessage` 同时约束 `scope.readPaths ⊆ named`，并要求每个 `granted.operations` 能由命名目标导出（无命名目标时只允许空/只读操作）。
+- 位置：`packages/core/src/preview.ts:35,44,61`（`PREVIEW_SANDBOX_CSP` 仍以非标准头名返回）、`apps/daemon/src/server.ts:121-122`（原样 `writeHead`）
+- 实测（probeD 原始头）：`content-security-policy: default-src 'none'; …` 与 `content-security-policy-sandbox: sandbox allow-scripts` **同时存在**；浏览器不解析后者，故「第二个 CSP 头承担 sandbox 纵深防御」的注释结论不成立。
+- 记录问题：`implementation.md:118` 称「删除无效的第二 CSP 头名」、`3f52fbf` 提交信息称「the invalid Content-Security-Policy-Sandbox header is gone」——均与代码相反（该提交只改了注释，见 `git diff d71dc07..3f52fbf -- packages/core/src/preview.ts`）。
+- 影响：AC-052 的服务端纵深防御声明名不副实（文档 `execution.md` §45 只要求 iframe sandbox + 逐字 CSP，故功能契约本身仍满足；风险在于「多一个无效安全头」与不实记录）。
+- 最小修复：要么删除该键（文档已把 sandbox 交给 iframe 属性契约），要么用 Node 支持的数组形式发成**真正的**第二个 `Content-Security-Policy`（已实测 `writeHead(200,{'content-security-policy':[a,b]})` 会输出两个头）；同步订正记录与提交说明。
 
-### W3R4-04 [P3] 客户端 `workItems` 仍未校验：非法 intent/空 goal 落成 500 `INTERNAL_ERROR`
+### W3R5-04 [P2] W3R4-03 未修：调用方提供的 `authorization.readPaths` 仍不受消息范围约束（latent）
 
-- 位置：`apps/daemon/src/server.ts:180-182`（仅 `Array.isArray` 即 cast）；`packages/core/src/messages.ts:156-166`（直接使用）
-- 实测（probe5）：`workItems:[{intent:'not-an-intent',goal:'x'}]` → `500 {"code":"INTERNAL_ERROR","message":"the change could not be stored"}`；`[{intent:'assist',goal:''}]` 同。应为 `400 VALIDATION_ERROR` 且给出字段。
-- 附带：`workItems` 在 `protocol.md:46` 未定义（W3R3-14 的入口仍在）。
+- 位置：`packages/core/src/messages.ts:404-425`（只校验 `writePaths ⊆ named`，不校验 `readPaths`）
+- 实测（probeH，直调 `sendMessage`）：消息仅点名 `docs/INDEX.md`，注入 `scope.readPaths:['packages/core/src']`、`operations:['read','edit']` → **接受**，授权行 `readPaths=["packages/core/src"]`。
+- 可达性：daemon 已移除 `authorization` 字段，`createMessageOperations` 全仓库无调用方（grep），当前不可达；一旦按 `protocol.md` 接线即为可用越权。
+- 最小修复：`assertGrantWithinMessage` 同时约束 `readPaths ⊆ named`，并要求每个 `operations` 条目能由命名目标导出（无命名目标时只允许空/只读操作）。
 
-### W3R4-05 [P3] 仍无「授权喂回 Orchestrator」的回归测试（W3R3-12 未完全闭合）
+### W3R5-05 [P3] `targetWorkId` 归属仍只覆盖 `sourceRef.kind==='message'`
 
-- `packages/core/test/artifacts.test.ts:440-444` 只断言授权自洽（`operations` 含 `read`、`readPaths` 含路径），`apps/daemon/test/server.test.ts:429-487` 的两个新例只断言响应与行绑定；全仓库无 `orchestrator.assess/dispatch` 消费该授权的用例。
-- 影响：W3R3-01 的直接回归能被间接挡住，但「准入可用性」继续依赖人工 probe。建议把本轮 probe1 的矩阵（范围内通过 ×3、范围外拒绝 ×3）落成集成用例。
+- 位置：`messages.ts:483-490`；probeC：跨会话 `action` 来源 Work → **202**（应 403/404）。建议按 Work 所属 project/conversation 统一判定。
 
-### W3R4-06 [P3] `protocol.md` 未对账：`workIds`/`authorizationId` 未入表；`targetRole` 有文档无实现
+### W3R5-06 [P3] 被拒发送仍留下孤儿正文 blob（W3R4-11）
 
-- `docs/architecture/protocol.md:46` 仍为 `conversationId,body,attachmentIds,targetWorkId?,targetRole?` → `{messageId,workId,state,version}`；probe4 `RECORD.protocol.declaresWorkItemsAndWorkIds` FAIL。daemon 实际接受 `workItems` 并返回 `workIds`/`authorizationId`，且**不读 `targetRole`**。
-- 影响：文档与实现两个方向都不一致，Test 以文档为权威会漏测/误判。
+- 位置：`messages.ts:129`（先写 blob）；probeG：`workItems` 非法 → 400 后 blob 文件 4 → 5，DB 行已回滚。承接 GC 或「先校验后写 blob」。
 
-### W3R4-07 [P3] daemon 的 `message.received` 事件未带 `workIds`/`authorizationId`，与 T10 的「证据面」表述不符
+### W3R5-07 [P3] 记录与实测不一致（W3R4-06/09 未闭合、T11 表述不精确）
 
-- `apps/daemon/src/server.ts:225-236` 事件 `data` 仅 `messageId,workId,attachmentIds,artifactIds`；probe4 `HTTP.event.workIdsPresent` FAIL（`eventDataKeys=messageId,workId,attachmentIds,artifactIds`）。
-- 影响：`implementation.md:104`/三轮 W3R3-04 曾以该事件作为「关联多 Work」的证据面，表述不实；不过 HTTP 响应已带 `workIds`/`authorizationId`，可观测性本身满足。
+- `implementation.md:46`（T6）仍 `278 passed / 7 workspace`；`:104`（T10）仍 `12 daemon 例`；实测 unit 287（19 文件）、integration 124（10 文件）、build 8、daemon 15。
+- `implementation.md:117`「同 intent 多 Work 按位置匹配各自 scope」不精确：第二个同 intent 项回落空 scope（§3-H）。
+- `implementation.md:118` 关于 CSP 的表述（见 W3R5-03）。
+- `protocol.md:46` 未声明 `workItems`，返回体未列 `workIds`/`authorizationId`，`targetRole` 有文档无实现（probeG）。
 
-### W3R4-08 [P3] `StorageError` 映射仍粗：存储层错误不再有 4xx 细分与 `retryable` 语义
+### W3R5-08 [P3] 前轮剩余项无进展：`W3R4-12/13`、`W3R4-05`
 
-- `apps/daemon/src/server.ts:370-395`：仅「缺引用/FOREIGN KEY → 404」，其余一律 500 `retryable:false`；`protocol.md` §7 的 `VERSION_CONFLICT`/`DUPLICATE_KEY`（应 409）等未体现。probe5 证明客户端输入错误（非法 `workItems`）会以 500 呈现。
-- 相对三轮：**回显内部信息已修**，属部分闭合。
+- multipart 第二个 file part 静默丢弃（201）、未知 `projectId` 接受（201）、错误响应非 `protocol.md` §1 封装（probeG）；仍无「消息授权 → `Orchestrator.assess/dispatch`」回归用例（287 单测中不存在）。
 
-### W3R4-09 [P3] 记录数字仍与实测不符（W3R3-13 未修）
+### W3R5-09 [P3，流程/证据] 冻结点与任务下达不一致（W3R4-14 复发）
 
-- `implementation.md:46`（T6）「`pnpm test:unit` **278 passed**（含 daemon 9 例…）；`pnpm build` 7 workspace」；T9 节无「修复后验证」行；T10 称「12 daemon 例」。实测：unit **286**（19 文件）、integration **124**（10 文件）、build **8** workspace、daemon 测试 **14** 例、docs:check ok。`286/124/8` 三项正确，其余三处待订正。
-
-### W3R4-10 [P3] `targetWorkId` 归属仍只覆盖 `sourceRef.kind==='message'`
-
-- `packages/core/src/messages.ts:440-447`；probe5：跨会话、`sourceRef.kind='action'` 的 Work 作目标 → **202**（应 403/404）。建议按 Work 的 conversation/project 归属统一判定。
-
-### W3R4-11 [P3] 发送失败仍留下孤儿正文 blob（W3R2-13 未修）
-
-- `packages/core/src/messages.ts:129-141` 先写正文 blob，`bind`（`:225`）失败即抛出，无回收。probe5：失败发送后 `blob files=2 / message_body rows=1`（1 个无引用 blob）。承接 GC 或「先校验后写 blob」。
-
-### W3R4-12 [P3] multipart 第二个 file part 被静默丢弃；未知 `projectId` 仍 201
-
-- probe4/probe5：两个 file part → `201`（保留其一）；未知 `projectId` → `201`。建议拒绝第二个 file part，并校验/明确 `projectId` 可省略。
-
-### W3R4-13 [P3] 错误响应仍非 `protocol.md` §1 封装
-
-- probe4：404 体 `topKeys=ok,error`，缺 `v/type/id`，`HttpError.details` 平铺进 `error`（`server.ts:407-412`）。承接 W3R2-11。
-
-### W3R4-14 [P3，流程/证据] 任务下达的 `HEAD=d71dc07` 与仓库实际 `HEAD=35e8674` 不一致
-
-- `35e8674` 是第三轮报告提交，`git diff d71dc07..HEAD` 仅 `review.md`；**被审非 review 文件与 `d71dc07` 逐一相同**（§记录哈希）。不影响本次结论，但「冻结点」应以 `35e8674`（代码树等价 `d71dc07`）记录，避免后续对账漂移。
+- 任务要求 `HEAD=3f52fbf`，实际 `HEAD=fd0a893`；`git diff 3f52fbf..HEAD` 仅 `review.md`，被审代码树与 `3f52fbf` 逐一相同（§记录哈希）。不影响本轮结论，但冻结/对账应以「代码树 = `3f52fbf`（提交链 HEAD `fd0a893`）」记录，避免后续漂移。
 
 ---
 
-## 7. 计数与阻断判定
+## 9. 计数与阻断判定
 
 | 严重性 | 本轮新增 | 编号 | 是否阻断 |
 |---|---|---|---|
 | P0 | 0 | — | — |
-| P1 | **0** | — | — |
-| P2 | 3 | W3R4-01（同 intent scope 塌缩）、W3R4-02（客户端 workItems 错绑授权）、W3R4-03（授权守卫不完整，latent） | 不阻断 |
-| P3 | 11 | W3R4-04..W3R4-14 | 不阻断 |
+| P1 | **2** | W3R5-01（非执行消息越权授权，AC-004/AC-005）、W3R5-02（明确指令被判拒绝/解释，AC-005/AC-007 正例失败） | **阻断** |
+| P2 | 2 | W3R5-03（无效 CSP 第二头名 + 记录不实）、W3R5-04（`readPaths` 越界，latent） | W3R5-03 影响 AC-052 声明；W3R5-04 不可达 |
+| P3 | 5 | W3R5-05、W3R5-06、W3R5-07、W3R5-08、W3R5-09 | 不阻断 |
 
-**仍未修好清单（承接，不阻断 Test）**：W3R4-01、W3R4-02、W3R4-03（建议结算前处理）；W3R4-04..14（P3）。**已修好**：W3R3-01/03（P1 根因，端到端验证）、W3R3-06、W3R3-08、W3R3-11，以及三轮对抗性 1/2 的产品边界部分与二轮 W3R2-05/08；W3R3-02/04/07/12/14 记为部分。
+**仍未修好清单（按优先级）**
+1. **P1** W3R5-01：疑问/拒绝/陈述/名词化解释句仍授权并可派发写 Run。
+2. **P1** W3R5-02：`别` 子串、解释名词、`、` 列表使明确指令不授权。
+3. **P2** W3R5-03：CSP 第二头名未删（记录/提交信息不实）；W3R5-04：`assertGrantWithinMessage` `readPaths` 未闭合（接线前必须修）。
+4. **P3** W3R5-05（归属）、W3R5-06（孤儿 blob）、W3R5-07（记录/协议对账）、W3R5-08（前轮剩余）、W3R5-09（冻结点）。
 
----
-
-## 8. 回归与「同类模式」扫描
-
-- **回归面**：本轮重新跑通六条契约命令；WP-02 用例未削弱（integration 10 文件/124 用例与三轮一致）；unit 由 284 → **286**（新增 2 例 daemon 越权/拆分断言）。
-- **授权判定扫描（现状）**：消息生成路径 `grantedByMessage` 自洽；调用方注入路径有 `assertGrantWithinMessage`（不完整，W3R4-03）；`verifyAuthorization`（`orchestrator.ts:785-877`）对 Work/Chief/专业 Run 的范围、操作、网络目标、capability 缺口判定齐全，本轮专门用范围内外矩阵验证其边界成立。
-- **路由启发式**（probe7，14/14）：中英修改动词 + 命名路径 → delivery 授权；疑问句（含无问号 `how/what` 起头）→ assist 不授权；`please refactor everything`（无目标）→ 先澄清不猜权限；`write documentation for X` → document。**已知 fail-closed 边界**：`修复 docs/INDEX.md?` 与 `fix X?` 这类「命令句 + 问号」不授权，用户需改写；不构成安全洞，但 Test 应加语义边界样例。
-- **记录对账**：CSP 已对齐；`protocol.md`（W3R4-06）与 `implementation.md` 数字（W3R4-09）仍未对齐，须在结算材料中修正。
+**已修好确认**：W3R4-02、W3R4-04、W3R4-07；对抗 B/D/E/F/G；三轮 P1（W3R3-01）端到端仍成立；一轮 P0/P1 与二轮 P1 未见回归。
 
 ---
 
-## 9. 剩余风险与承接包
+## 10. 能否进入独立 Test —— **不能**
 
-### 9.1 建议结算前处理（P2）
-1. **W3R4-01/02**：`workItems` 要么由 Core 忽略、只信 `routeMessage`，要么逐项校验并按下标绑定 scope；`explicitAuthorization` 时保证存在 delivery Work。同时订正 `d71dc07` 与 `implementation.md:101` 的不实表述。
-2. **W3R4-03**：补全 `assertGrantWithinMessage`（约束 `readPaths`、要求操作可由命名目标导出），或在 `createMessageOperations` 接线前补齐并加负例。
+- 依据 `docs/rules/workflow.md` §6：P0/P1 阻断。本轮 **2×P1**，且都直接对应本包验收面：
+  - AC-004 的负例（「消息与授权记录负例」）被证伪——疑问句产生授权记录并可派发写 Run；
+  - AC-005 的正例在常见中文措辞（错别字/识别/特别/分别/说明/顿号列表）下不成立。
+- 失败路由：`Blocking Review Finding → Develop → Independent Review`。修复后必须**重新独立 Review**（因涉及授权判定这一安全边界，不能用开发自测替代），通过后才可进入 Test。
 
-### 9.2 承接 Test / 后续包（P3）
-3. **WP-04/05**：`workItems` 的协议化声明或移除（W3R4-04/06）；`targetRole` 实现或从 `protocol.md` 删除；owner 派生统一（W3R3-10）；`protocol.md` 增补 `workIds`/`authorizationId`。
-4. **WP-04/06/07**：AC-003 的 analyst/artist 专业 Run 端到端、AC-006「解释产物先返回」的执行接线、`level=none` Work 的运行触发。
-5. **WP-09/WP-10**：`download.prepare` 的 `validity` 已在包内提供，失效卡片渲染与真实无头浏览器攻防（读 cookie/网络/父页/top-navigation）复验。
-6. **本包/结算**：补 W3R4-05 的准入集成用例、W3R4-09 的数字订正、W3R4-10/11/12/13 的归属判定、孤儿 blob GC、multipart 多文件与 `projectId`、错误响应 §1 封装。
-
-### 9.3 未闭环风险（供结算/产品方判断）
-- **多用户语义**：单用户前提不变；未来多用户需重做 `assertReadable` 主体维度。
-- **真实 Provider 纵向**：AC-001/AC-003 的完整证据仍依赖 WP-07/WP-10，本包不评价。
-- **路由启发式 vs 模型 Assessment**：`routeMessage` 仍是模型评估（WP-04/06）接管前唯一判定者；已知「命令句 + ?」误判为疑问（fail-closed），建议 Test 固定样例。
-- **W3R4-03 的时效性**：只要 `createMessageOperations` 未被接线，风险为 latent；接线前必须闭合。
-
----
-
-## 10. 能否进入独立 Test —— **能**
-
-- 依据 `docs/rules/workflow.md` §6：P0/P1 阻断；本轮 **0×P0、0×P1**。三轮唯一 P1（W3R3-01）已由本轮独立 probe 端到端证伪其存在（授权可准入、范围边界正确），越权两条在产品边界闭合。
-- 3 条 P2 均位于**未文档化的客户端 `workItems` 参数**与**不可达的纵深防御**，不改变文档化 AC-005/AC-006 主路径，不违反不可覆盖的权限/Gate 规则，故不阻断 Test；建议 §9.1 在结算前处理，由其决定是否新开修复轮。
-- Test 应重点覆盖：AC-005 的授权→assess→dispatch 正向/反向矩阵（本轮 probe1）、AC-006 混合意图两 Work 独立性与 delivery 写 Run（probe6）、疑问句/注入负例（probe2）、CSP 逐字对账（probe4）、以及 §8 的语义边界样例；AC-003/WP-04 相关项按 not_covered 关联明确 AC 并交产品方处置。
+**Test 必须覆盖的条目（修复轮后的最小集）**
+1. 越权负例矩阵（W3R5-01）：§6.1 的 17 个句式 + 第四轮 8 原句，断言 `authorizationId=null`、零 authorization 行、所有新 Work `level=none`；至少取 3 例继续喂回 `Orchestrator.assess`/`dispatch`，断言写 Run 被 `NOT_AUTHORIZED`/`VALIDATION_ERROR` 拒绝。
+2. 正例矩阵（W3R5-02）：中英文明确指令（含 `错别字/识别/特别/分别/说明/介绍/、列表/逗号列表`），断言授权生成、`operations` 自洽（read+edit）、scope 等于命名路径、`assess(L2)` 通过、grant 内写 Run 通过、grant 外拒绝。
+3. L2 一致性：`assess(level:'L1')` 被 `routingFloor` 拒、`assess('L2')` 通过；Work/Assessment 行 level 一致（本轮 probeF 已建立样例，应落成用例，W3R4-05）。
+4. AC-006 混合意图：前置/后置解释 + 中英/分号/逗号变体，断言两 Work 独立 scope、解释 Work 无授权、delivery 可派发写 Run。
+5. `targetWorkId`：`none`/`L1`/`L3` 三类目标 + 跨会话 message 来源（403）+ 非 message 来源（W3R5-05 修复后应拒）。
+6. `workItems`：非法项 400 + 事务回滚零写入、重复 intent 的独立 scope、抑制 delivery、无命名目标的 delivery、空数组。
+7. 预览/CSP：wire 上恰有一个标准 `Content-Security-Policy` 且逐字等于 `execution.md` §45；`x-agentdev-preview-sandbox`/`omit`/`no-store`/`nosniff`；validity；1 MiB/2000 行截断头；下载 token 单次 + 60s TTL。
+8. 回归：token 不可预测、正文 blob、未知会话 404、失效预览、非整数 `artifactVersion` 400、幂等重放、未知 `projectId`/多 file part、错误响应封装。
 
 ---
 
-## 11. 方法与边界声明
+## 11. 剩余风险与承接包
 
-- 独立上下文：未读取任何开发/Test 会话对话；结论只来自仓库文件、`docs/**` 契约与 `/tmp/wp03r4/` 下我自建的 8 个文件（`harness.mjs` + `probe1..7.mjs`），全部消费 `pnpm build` 产物（**未 import 任何产品测试文件**）。
-- **实验统计**：probe1 18 项（18 通过）、probe2 17（14/3）、probe3 6（1/5）、probe4 17（12/5）、probe5 7（2/5）、probe6 10（10/0）、probe7 14（14/0）；合计 **89 项观察，71 通过 / 18 失败**，失败项与 Findings 一一对应（probe2 的 3 项为 W3R4-03，probe3 的 5 项为 W3R4-01/02/03，probe4 的 5 项为 W3R4-06/07/13/12，probe5 的 5 项为 W3R4-10/11/04/12）。
-- 未做：真实无头浏览器执行、真实 Provider 纵向、Docker 容器内复验、二轮对抗 1–7 的逐项重跑。
-- 未改仓库：本轮只覆盖写入 `.agentdev/work/WP-03/review.md`（本报告）；`git status --porcelain` 在写报告前后均为空，`HEAD` 仍为 `35e8674a5b93a0feecb645e3073d18180f2a5e53`。
+### 11.1 本轮必须回到 Develop
+1. **W3R5-01**：重做指令/非指令判定（命令式 vs 陈述/疑问/拒绝），并把 §6.1 全部句式落成 domain + daemon 负例。
+2. **W3R5-02**：修正词表边界与分词（`别`、解释名词、`、`），并把 §6.2 全部句式落成正例。
+3. **W3R5-03**：删除无效头或改发真正的第二 CSP 头；订正 `implementation.md:118` 与提交说明。
+
+### 11.2 承接 Test / 后续包（P2/P3）
+4. **W3R5-04**：`assertGrantWithinMessage` 补 `readPaths` 与操作可导出性约束；在 `createMessageOperations` 接线前必须有负例守护。
+5. **WP-04/05**：`workItems` 协议化声明或移除；`targetRole` 实现或删除；`workIds`/`authorizationId` 入表；owner 派生统一（W3R3-10）。
+6. **本包/结算**：`targetWorkId` 归属统一（W3R5-05）、孤儿 blob GC（W3R5-06）、`StorageError` 映射细化与 §1 错误封装（W3R4-08/13）、multipart 多文件与 `projectId`（W3R4-12）、T6/T10 数字订正（W3R5-07）。
+7. **WP-09/WP-10**：失效产物卡片渲染、真实无头浏览器攻防（读 cookie/网络/父页/top-navigation）、真实 Provider 生成解释内容。
+
+### 11.3 未闭环风险
+- **路由启发式 vs 模型 Assessment**：`routeMessage` 在 WP-04/06 接管前是唯一授权生成者；本轮证明「关键词启发式」在两个方向都会出错（越权与误拒），模型接管前后都需要一条确定性的负例防线。
+- **单用户语义**：`assertReadable` 主体维度不变；多用户需重做。
+- **W3R5-04 时效性**：只要 `createMessageOperations` 未被接线即为 latent，接线前必须闭合。
+- **文档漂移**：`protocol.md`、`implementation.md` 与提交信息三处与代码不符，结算时须一并订正，否则 Test 以文档为权威会误判。
+
+---
+
+## 12. 方法与边界声明
+
+- 独立上下文：未读取任何开发/Test 会话对话；结论只来自仓库文件、`docs/**` 契约与 `/tmp/wp03r5/` 下我自建的 9 个文件（`harness.mjs` + `probeA..H.mjs`），全部消费 `pnpm build` 产物（**未 import 任何产品测试文件**）。
+- **实验统计**：probeA 49（31/18）、probeB 70（37/33）、probeC 28（27/1）、probeD 13（12/1）、probeE 8（8/0）、probeF 12（9/3）、probeG 31（25/6）、probeH 24（15/9）；合计 **235 项观察，164 通过 / 71 失败**，失败项与 Findings 一一对应（probeB 33 = 10 个越权族 ×3 断言 + 3 个误拒；probeA 18 = 17 越权 + 1 误拒；probeF 3 = AC-004 越权端到端；probeG 6 = 记录/协议/孤儿 blob；probeH 9 = 误拒 7 + 越权 1 + W3R4-03 1；probeC 1 = W3R4-10；probeD 1 = CSP 无效头）。
+- 未做：真实无头浏览器执行、真实 Provider 纵向、Docker 容器内复验、`createMessageOperations` 接线后的越权复现（因无调用方而不可达）。
+- 未改仓库：本轮只覆盖写入 `.agentdev/work/WP-03/review.md`（本报告）；`git status --porcelain` 在写报告前后均为空，`HEAD` 仍为 `fd0a8935bcd51caea99341584baf9d87b5579438`。
 
 ---
 
@@ -243,21 +308,42 @@
 
 第三轮（报告冻结于 `35e8674`，被审代码树 `d71dc07`）结论 **FAIL**：AC-005 的授权机制（`routeMessage`、消息级 Authorization 行、`work.authorizationRef`、Assessment、混合意图多 Work 与独立 scope）全部**落库**且成立，但 `grantedByMessage` 生成 `readPaths:['docs']` + `operations:['edit']` 的自相矛盾授权，使绑定它的 Work 的任何 Run/Assessment 都被 `capabilityGaps:['readPaths without a read operation']` 拒绝——交付路线在准入即死锁（W3R3-01 P1）。新增 **1×P1、5×P2、8×P3**；对抗性另指出疑问句被当作执行消息、HTTP 客户端可自报 `authorization`（甚至 `deploy`）。失败路由 `Blocking Review Finding → Develop → Independent Review`。
 
-| 三轮编号 | 严重度 | 摘要 | 四轮状态 |
+| 三轮编号 | 严重度 | 摘要 | 第五轮状态 |
 |---|---|---|---|
-| W3R3-01 | P1 | 授权 capability 缺口 → 交付死锁 | **已修（端到端验证）** |
-| W3R3-02 | P2 | 授权绑定 `works[0]` | 部分 → W3R4-02 |
-| W3R3-03 | P2 | 授权自相矛盾（与 -01 同因） | **已修** |
-| W3R3-04 | P2 | HTTP 响应不含 `workIds`/`authorizationId` | 部分 → W3R4-06/07 |
-| W3R3-05 | P2 | 同 intent 重复共享 scope | **未修** → W3R4-01 |
-| W3R3-06 | P2 | CSP 与 `execution.md` §6 漂移 | **已修** |
-| W3R3-07 | P2 | StorageError 映射过宽 + 回显 | 部分 → W3R4-08 |
-| W3R3-08 | P3 | `download.prepare` 不报 validity | **已修** |
-| W3R3-09 | P3 | `targetWorkId` 归属只覆盖 message 来源 | 未修 → W3R4-10 |
+| W3R3-01 | P1 | 授权 capability 缺口 → 交付死锁 | 已修（本轮 probeF 端到端复核仍成立） |
+| W3R3-02 | P2 | 授权绑定 `works[0]` | 已修（W3R4-02 闭合） |
+| W3R3-03 | P2 | 授权自相矛盾 | 已修 |
+| W3R3-04 | P2 | HTTP 响应不含 `workIds`/`authorizationId` | 响应已含；`protocol.md` 仍未对账（W3R5-07） |
+| W3R3-05 | P2 | 同 intent 重复共享 scope | 部分（越权侧闭合；第二项空 scope） |
+| W3R3-06 | P2 | CSP 与 `execution.md` §6 漂移 | 逐字一致；无效第二头名残留（W3R5-03） |
+| W3R3-07 | P2 | StorageError 映射过宽 + 回显 | 回显已修；映射细分仍缺 |
+| W3R3-08 | P3 | `download.prepare` 不报 validity | 已修 |
+| W3R3-09 | P3 | `targetWorkId` 归属只覆盖 message 来源 | 未修（W3R5-05） |
 | W3R3-10 | P3 | daemon/Core owner 派生不一致 | 未修（latent） |
-| W3R3-11 | P3 | `prune()` 无调用方 | **已修** |
-| W3R3-12 | P3 | AC-005 证据止于「行存在」 | 部分 → W3R4-05 |
-| W3R3-13 | P3 | 记录与实测数字不符 | 未修 → W3R4-09 |
-| W3R3-14 | P3 | `workItems`/`authorization`/`projectId`/多文件 | 部分 → W3R4-04/12 |
+| W3R3-11 | P3 | `prune()` 无调用方 | 已修 |
+| W3R3-12 | P3 | AC-005 证据止于「行存在」 | 部分（仍无 Orchestrator 用例） |
+| W3R3-13 | P3 | 记录与实测数字不符 | 部分（T11 已正，T6/T10 未正） |
+| W3R3-14 | P3 | `workItems`/`authorization`/`projectId`/多文件 | 部分（`workItems` 已校验；协议/多文件未修） |
 
-第三轮对抗性 1/2 的**产品边界部分**在第四轮闭合；三轮对抗 3（CSP 对账）亦已闭合。
+## 附四：第四轮摘要（保留）
+
+第四轮（报告冻结于 `fd0a893`，被审代码树 `3f52fbf`）结论 **PASS（0×P1、3×P2、11×P3）**，但同轮对抗性核验以 HTTP 端到端证伪「越权已闭合」：`explain why … needs a fix`、`don't fix …`、`不要修改 …`、`I am not asking you to fix …` 等仍生成写授权并可派发写 Run；另指出 `targetWorkId` 可改写已有 Work 的 level/authorizationRef、`Content-Security-Policy-Sandbox` 不是标准头、消息授权 L1 与 `routingFloor` 的 L2 不一致、`workItems:[null]`/`intent:'operation'` 造成 500 或非法 Work。第四轮 P2 集中在未文档化的客户端 `workItems` 与不可达的纵深防御，故判不阻断 Test。
+
+| 四轮编号 | 严重度 | 摘要 | 第五轮状态 |
+|---|---|---|---|
+| W3R4-01 | P2 | 同 intent 多 Work 共用 scope | 部分（越权闭合，第二项空 scope） |
+| W3R4-02 | P2 | `workItems` 把授权挂到只读 Work | **已修** |
+| W3R4-03 | P2 | `assertGrantWithinMessage` 不约束 `readPaths` | 未修（latent）→ W3R5-04 |
+| W3R4-04 | P3 | `workItems` 未校验 → 500 | **已修**（400 + 回滚） |
+| W3R4-05 | P3 | 无 Orchestrator 授权回归用例 | 未修 → W3R5-08 |
+| W3R4-06 | P3 | `protocol.md` 未对账 | 未修 → W3R5-07 |
+| W3R4-07 | P3 | `message.received` 缺 `workIds`/`authorizationId` | **已修** |
+| W3R4-08 | P3 | `StorageError` 映射粗 | 部分（无进展） |
+| W3R4-09 | P3 | 记录数字不符 | 部分（T11 正、T6/T10 未正） |
+| W3R4-10 | P3 | `targetWorkId` 归属只覆盖 message 来源 | 未修 → W3R5-05 |
+| W3R4-11 | P3 | 失败发送孤儿 blob | 未修 → W3R5-06 |
+| W3R4-12 | P3 | multipart 多文件 / `projectId` | 未修 → W3R5-08 |
+| W3R4-13 | P3 | 错误响应非 §1 封装 | 未修 → W3R5-08 |
+| W3R4-14 | P3 | 冻结点与任务不一致 | 复发 → W3R5-09 |
+
+第四轮对抗性六项（逐子句分类 / 线性路径 / `targetWorkId` / L2 一致性 / `workItems` 校验 / CSP 单头）在第五轮的实测结论见 §3：**线性路径、`targetWorkId`、L2 一致性、`workItems` 校验确已修好；逐子句分类仅部分修好（新句式仍越权 + 新增误拒缺陷）；CSP 单头未修且记录不实。**
