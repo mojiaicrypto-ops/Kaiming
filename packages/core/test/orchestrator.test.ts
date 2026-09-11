@@ -34,6 +34,7 @@ const REVOKED_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e83';
 const L3_WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e52';
 const L3_UNAUTHORIZED_WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e53';
 const L3_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e84';
+const NONE_WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e54';
 const MODEL_ID = 'test-model';
 const emptyScope = { readPaths: [], writePaths: [], operations: [], networkTargets: [] };
 
@@ -143,6 +144,34 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
         policyRevision: 1,
       });
     }
+
+    // A `none` Work may not hand out write authority (`data.md` §2).
+    const noneBudget = store.budgets.insert({
+      projectId,
+      workId: NONE_WORK_ID,
+      tokenLimit: 100_000,
+      tokensUsed: 0,
+      tokensReserved: 0,
+      activeTimeLimit: 600,
+      activeTimeUsed: 0,
+      repairLimit: 3,
+      repairUsed: 0,
+      costKnown: true,
+    });
+    store.works.insert({
+      id: NONE_WORK_ID,
+      projectId,
+      intent: 'assist',
+      purpose: 'answer the question',
+      level: 'none',
+      goal: 'explain the routing rules',
+      scope: emptyScope,
+      sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      status: 'running',
+      blockerIds: [],
+      budgetId: noneBudget.id,
+      policyRevision: 1,
+    });
 
     // One L3 Work that carries its authorization, and one that does not: creating a
     // Run for the latter must be refused (R11-03).
@@ -509,6 +538,81 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     // The Work's own authorization is verified and accepted.
     const run = orchestrator.dispatch({ spec: spec(L3_WORK_ID) }).run;
     expect(run.workId).toBe(L3_WORK_ID);
+  });
+
+  it('applies the L3 floor from the spec scope, not only the Work level (R12-01/R12-02)', () => {
+    const chief = chiefRun();
+    const environmentScope = { ...emptyScope, operations: ['delete_data'] };
+
+    // The Work is L2, but this Run declares a data operation: it needs L3 authority
+    // and the Work has none, so no Run is created.
+    expect(() =>
+      orchestrator.dispatch({ spec: backendSpec(chief.id, { scope: environmentScope }) }),
+    ).toThrowError(/requires an explicit authorizationRef/);
+
+    // A read-only grant cannot back a data operation.
+    expect(() =>
+      orchestrator.dispatch({
+        spec: backendSpec(chief.id, { scope: environmentScope }),
+        authorizationRef: AUTHORIZATION_ID,
+      }),
+    ).toThrowError(/does not cover the declared scope/);
+
+    // The same Run is admitted once the grant covers its scope.
+    const admitted = orchestrator.dispatch({
+      spec: backendSpec(chief.id, { scope: { ...emptyScope, operations: ['deploy'] } }),
+      authorizationRef: AUTHORIZATION_ID,
+    });
+    expect(admitted.dispatchSnapshot.authorizationRef).toBe(AUTHORIZATION_ID);
+
+    // Network writes are checked against the authorization's targets too.
+    expect(() =>
+      orchestrator.dispatch({
+        spec: backendSpec(chief.id, { scope: { ...emptyScope, networkTargets: ['10.0.0.5'] } }),
+        authorizationRef: AUTHORIZATION_ID,
+      }),
+    ).toThrowError(/does not cover the declared scope/);
+  });
+
+  it('never freezes write authority for a none-level Work (R12-01, DC-65)', () => {
+    const noneChief = orchestrator.dispatch({ spec: { ...chiefSpec(), workId: NONE_WORK_ID } }).run;
+    expect(() =>
+      orchestrator.dispatch({
+        spec: backendSpec(noneChief.id, { workId: NONE_WORK_ID, taskId: undefined }),
+      }),
+    ).toThrowError(/cannot create a Run with write authority/);
+    // A read-only child of the same Work is still allowed.
+    const readOnly = orchestrator.dispatch({
+      spec: backendSpec(noneChief.id, {
+        workId: NONE_WORK_ID,
+        taskId: undefined,
+        scope: { ...emptyScope, readPaths: ['packages/core/src'] },
+      }),
+    }).run;
+    expect(readOnly.workId).toBe(NONE_WORK_ID);
+  });
+
+  it('freezes the authorization the Core actually verified (R12-03)', () => {
+    const result = orchestrator.dispatch({
+      spec: {
+        ...chiefSpec(),
+        workId: L3_WORK_ID,
+        scope: { ...emptyScope, operations: ['deploy'] },
+      },
+    });
+    // The reference comes from the Work row, and recovery must be able to rebuild it.
+    expect(result.dispatchSnapshot.authorizationRef).toBe(L3_AUTHORIZATION_ID);
+
+    // The Work's grant only covers `deploy`; a wider scope is refused.
+    expect(() =>
+      orchestrator.dispatch({
+        spec: {
+          ...chiefSpec(),
+          workId: L3_WORK_ID,
+          scope: { ...emptyScope, operations: ['delete_data'] },
+        },
+      }),
+    ).toThrowError(/does not cover the declared scope/);
   });
 
   it('routes environment operations to L3 whatever the intent label says (R10-07)', () => {

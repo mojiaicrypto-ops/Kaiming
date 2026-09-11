@@ -137,7 +137,7 @@ function normalizeRiskTerm(term: string): string {
   return term
     .trim()
     .toLowerCase()
-    .replace(/[\s_-]+/gu, '');
+    .replace(/[\s_/-]+/gu, '');
 }
 
 /** True for a risk flag that names a documented lockdown criterion. */

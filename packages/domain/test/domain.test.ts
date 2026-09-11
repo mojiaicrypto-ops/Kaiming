@@ -208,6 +208,10 @@ describe('level routing (workflow.md §2)', () => {
     expect(riskFromFlags(['security-boundary']).securityBoundary).toBe(true);
     expect(riskFromFlags(['SECURITY_BOUNDARY']).securityBoundary).toBe(true);
     expect(riskFromFlags(['数据删除/迁移']).dataDeletionOrMigration).toBe(true);
+    // Separator handling is part of the vocabulary contract: the joined spelling
+    // matches the documented slash wording (R12 adversarial ②).
+    expect(riskFromFlags(['数据删除迁移']).dataDeletionOrMigration).toBe(true);
+    expect(isKnownLockdownRiskTerm('部署发布')).toBe(true);
     expect(riskFromFlags(['部署/发布']).deployOrRelease).toBe(true);
     expect(riskFromFlags(['支付金额/状态']).payment).toBe(true);
     expect(hasLockdownRisk(riskFromFlags(['安全边界']))).toBe(true);

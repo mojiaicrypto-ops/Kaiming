@@ -193,6 +193,18 @@
   - R11-05：环境操作集合从 core 移到 `domain/routing.ts`（`ENVIRONMENT_OPERATIONS`，按 `operationNameSchema` 分类并说明 `git`/`edit`/`write` 不入选的理由）。
 - 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **239 passed**；`pnpm test:integration` 124 passed。
 
+## T20 独立 Review 第十二轮与修复（第十二轮 FAIL → 修复）
+
+- 第十二轮独立 Review 确认 R11-01/R11-02/R11-04/R11-05 真修好（R11-03 只覆盖了清单内一半），新增 R12-01..R12-05，对抗性核验另补两项（`none` 级 Work 可派写权限 Run 且 `grantsModificationAuthority` 是死代码、风险词表斜杠归一未生效）。
+- 修复：
+  - R12-01/R12-02（阻断，DC-66）：`dispatch` 用 `spec.scope` 推出 `runLevel`（环境操作 ⇒ L3），授权核对加入 `operations`/`networkTargets` 覆盖检查，`none` 级 Work 拒绝带 `writePaths` 的 spec（`grantsModificationAuthority` 接入）。
+  - R12-03（DC-66）：把实际核对的授权引用（含来自 Work 行）冻结进 DispatchSnapshot，AC-082 恢复可重建授权来源。
+  - R12-04：`verifyAuthorization` 的 JSDoc 与签名/调用点对齐（含 `scope` 与返回值）。
+  - R12-05：DC-62 明确 `ENVIRONMENT_OPERATIONS` 定义在 `domain/routing.ts`。
+  - 对抗性②：`normalizeRiskTerm` 增加 `/` 归一（`数据删除迁移` 与 `数据删除/迁移` 等价），补 domain 断言。
+  - 顺带修复：`professionalSpec` 去掉显式 `undefined` 的可选字段，避免把非 JSON 值带进快照 payload。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **242 passed**；`pnpm test:integration` 124 passed；`pnpm build` 通过。
+
 ## T9 待办
 
 - 独立 Review 与 Test（独立上下文）、结算与 `docs/INDEX.md` 状态更新、以及 `docs/delivery/acceptance.md` 中本包 AC 的证据登记。

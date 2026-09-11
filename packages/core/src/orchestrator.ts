@@ -29,11 +29,13 @@ import {
   type Level,
   type ProfessionalDispatchSpec,
   type Run,
+  type Scope,
   type Work,
 } from '@agentdev/contracts';
 import {
   canAllocateBudget,
   decideLevel,
+  grantsModificationAuthority,
   isDirectChiefChild,
   isTerminalRunStatus,
   PRIMARY_PURPOSE_BY_ROLE,
@@ -352,13 +354,34 @@ export class Orchestrator {
     );
     enforce(validateDispatchSpec(spec), 'dispatch spec');
     const work = this.requireWork(spec.workId);
-    // A frozen authorization reference must be real authority for this Work; a
-    // fabricated id would otherwise survive restarts in the DispatchSnapshot
-    // (R10-02).
-    // An L3 Work needs a verified authorization even when the caller passes none:
-    // the Work row carries its own reference, and `data.md` §2 requires the Core to
-    // check the authorization before a Run is created (R11-03).
-    this.verifyAuthorization(extras.authorizationRef ?? work.authorizationRef, work.id, work.level);
+    // The Run's own scope joins the Work level in deciding what authority is
+    // needed: a spec that declares environment operations, network writes or data
+    // operations is an L3 Run even when its Work row says otherwise, and a Work
+    // without modification authority cannot hand out a write scope (R12-01).
+    const environmentScope = touchesRunningEnvironment(spec.scope);
+    const runLevel: Level = environmentScope ? 'L3' : work.level;
+    if (!grantsModificationAuthority(runLevel) && spec.scope.writePaths.length > 0) {
+      fail(
+        'NOT_AUTHORIZED',
+        `Work ${work.id} is ${work.level} and cannot create a Run with write authority`,
+        {
+          workId: work.id,
+          workLevel: work.level,
+          runLevel,
+          writePaths: [...spec.scope.writePaths],
+        },
+      );
+    }
+    // A frozen authorization reference must be real authority for this Work and
+    // must cover the declared scope; the Work row's own reference is used when the
+    // caller passes none, so an L3 Work can always be authorized (R10-02/R11-03/
+    // R12-02) and the verified reference is what gets frozen (R12-03).
+    const authorizationRef = this.verifyAuthorization(
+      extras.authorizationRef ?? work.authorizationRef,
+      work.id,
+      runLevel,
+      spec.scope,
+    );
 
     if (spec.kind === 'professional') {
       enforce(validateRolePurpose(spec.role, spec.purpose), 'dispatch spec');
@@ -435,9 +458,7 @@ export class Orchestrator {
 
     const withoutHash = {
       dispatchSpec: spec,
-      ...(extras.authorizationRef === undefined
-        ? {}
-        : { authorizationRef: extras.authorizationRef }),
+      ...(authorizationRef === undefined ? {} : { authorizationRef }),
       effectiveScope: spec.scope,
       requiredOutputSchemas: [...(extras.requiredOutputSchemas ?? [])],
       profileRevision: spec.profileRevision,
@@ -718,16 +739,19 @@ export class Orchestrator {
    *
    * `workflow.md` §1 / `data.md` §2: the Core checks the authorization, and
    * `Authorization` is documented as revocable and never forged, so existence
-   * alone is not enough — it must belong to the same Work and must not have been
-   * revoked (DC-63). A reference provided on a level that does not require one is
-   * still verified, so a fabricated id can never be persisted.
+   * alone is not enough — it must belong to the same Work, must not have been
+   * revoked (DC-63), and when a `scope` is supplied it must cover that scope's
+   * operations and network targets (R12-02). A reference provided on a level that
+   * does not require one is still verified, so a fabricated id can never be
+   * persisted. Returns the reference that was actually verified, for freezing.
    */
   private verifyAuthorization(
     authorizationRef: string | undefined,
     workId: string,
-    /** `undefined` when no level is known yet (a dispatch only checks what it has). */
+    /** `undefined` when no level is known yet (an assessment checks what it has). */
     level: Level | undefined,
-  ): void {
+    scope?: Scope,
+  ): string | undefined {
     if (authorizationRef === undefined) {
       if (level !== undefined && requiresExplicitAuthorization(level)) {
         fail('NOT_AUTHORIZED', `${level} requires an explicit authorizationRef`, {
@@ -735,7 +759,7 @@ export class Orchestrator {
           level,
         });
       }
-      return;
+      return undefined;
     }
     const authorization = this.store.authorizations.find(authorizationRef);
     if (authorization === undefined) {
@@ -760,6 +784,26 @@ export class Orchestrator {
         revokedAt: authorization.revokedAt,
       });
     }
+    if (scope !== undefined) {
+      const granted = new Set(authorization.operations);
+      const uncovered = scope.operations.filter((operation) => !granted.has(operation));
+      const grantedTargets = new Set(authorization.scope.networkTargets);
+      const uncoveredTargets = scope.networkTargets.filter((target) => !grantedTargets.has(target));
+      if (uncovered.length > 0 || uncoveredTargets.length > 0) {
+        fail(
+          'NOT_AUTHORIZED',
+          `authorizationRef ${authorizationRef} does not cover the declared scope`,
+          {
+            workId,
+            level: level ?? null,
+            authorizationRef,
+            uncoveredOperations: [...uncovered],
+            uncoveredNetworkTargets: [...uncoveredTargets],
+          },
+        );
+      }
+    }
+    return authorization.id;
   }
 
   /** Rejects a professional spec whose parent cannot fund it. */
@@ -820,11 +864,12 @@ export class Orchestrator {
 export function professionalSpec(
   input: Omit<ProfessionalDispatchSpec, 'kind'>,
 ): ProfessionalDispatchSpec {
-  return parseOrFail(
-    professionalDispatchSpecSchema,
-    { ...input, kind: 'professional' },
-    'professional dispatch spec',
+  // An explicitly `undefined` optional field means "absent"; keeping the key would
+  // put a non-JSON value into the frozen snapshot payload (R12-01 test surface).
+  const defined = Object.fromEntries(
+    Object.entries({ ...input, kind: 'professional' }).filter(([, value]) => value !== undefined),
   );
+  return parseOrFail(professionalDispatchSpecSchema, defined, 'professional dispatch spec');
 }
 
 /**

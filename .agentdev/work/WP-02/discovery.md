@@ -209,8 +209,8 @@ Provider 报告的 usage 可能超过该 Run 的预留（估算偏差）。原�
 ## DC-62 L3 路由底线只依赖载荷本身（Review 第九轮 R9-01、对抗性漏项 A）
 
 原实现 `operationTouchesEnvironment` 取 `payload.intent === 'operation' && work.level === 'L3'`——循环依赖（`assess` 从不写 `work.level`），另加一个未文档化的魔法串。修复：
-- 运行环境判定使用载荷自身证据（`packages/domain/src/routing.ts` 的 `touchesRunningEnvironment(scope)`）：`scope.networkTargets` 非空，或 `scope.operations` 命中环境副作用集合 `ENVIRONMENT_OPERATIONS`（`['bash','network','secret','push','deploy','delete_data']`，按 `operationNameSchema` 逐个分类，`git`/`edit`/`write`/`artifact_write` 属工作区本地操作故不入选——远端写入由 `push` 表达）⇒ L3（`workflow.md` §2.2）。只读调查（`read`/`search`）不在此列，仍走 L2（第十轮 R10-07）。**判定顺序**（第十一轮 R11-01）：环境操作与 lockdown 风险两个硬门禁在 `assist`/`artifact` 的 `none` 短路**之前**执行，因此任何 intent 取值都无法用标签打开 L3 门禁（`decideLevel` 的 `delivery`/`document` 分支只保留 L1 准入判定）。第十轮的「与 intent 标签无关」表述在第十轮时并不成立（当时 `assist`/`artifact` 仍提前返回 `none`），本轮才真正成立；
-- 风险旗标识别 `workflow.md` §2.3 的**文档用词**（含 `/` 合并措辞「数据删除/迁移」「支付金额/状态」「部署/发布」）与 camelCase 旗标（大小写与空白/`_`/`-`/`/` 无关），词表在 `packages/domain/src/routing.ts` 的 `LOCKDOWN_RISK_TERMS`；
+- 运行环境判定使用载荷自身证据（`packages/domain/src/routing.ts` 的 `touchesRunningEnvironment(scope)`；集合 `ENVIRONMENT_OPERATIONS` **定义在 `domain/routing.ts`**，core 只调用）：`scope.networkTargets` 非空，或 `scope.operations` 命中环境副作用集合 `ENVIRONMENT_OPERATIONS`（`['bash','network','secret','push','deploy','delete_data']`，按 `operationNameSchema` 逐个分类，`git`/`edit`/`write`/`artifact_write` 属工作区本地操作故不入选——远端写入由 `push` 表达）⇒ L3（`workflow.md` §2.2）。只读调查（`read`/`search`）不在此列，仍走 L2（第十轮 R10-07）。**判定顺序**（第十一轮 R11-01）：环境操作与 lockdown 风险两个硬门禁在 `assist`/`artifact` 的 `none` 短路**之前**执行，因此任何 intent 取值都无法用标签打开 L3 门禁（`decideLevel` 的 `delivery`/`document` 分支只保留 L1 准入判定）。第十轮的「与 intent 标签无关」表述在第十轮时并不成立（当时 `assist`/`artifact` 仍提前返回 `none`），本轮才真正成立；
+- 风险旗标识别 `workflow.md` §2.3 的**文档用词**（含 `/` 合并措辞「数据删除/迁移」「支付金额/状态」「部署/发布」）与 camelCase 旗标（大小写与空白/`_`/`-`/`/` 无关，`数据删除迁移` 与 `数据删除/迁移` 等价），词表在 `packages/domain/src/routing.ts` 的 `LOCKDOWN_RISK_TERMS`；
 - **未登记旗标 fail-closed**（第十轮 R10-01）：`unknownRiskFlags` 非空 ⇒ `VALIDATION_ERROR` 并在 details 中返回可接受词表，不再把未登记拼写静默读成「无风险」；`isKnownLockdownRiskTerm` 由此有了真实调用方；
 delivery/document 若未声明可核查的 L1 前提（`semanticImpact=false`、无 operation、无 networkTargets）⇒ 不低于 L2；assist/artifact ⇒ none。L1 的文件数/行数准入仍属 Plan/Review 门禁（DC-19、WP-04），Core 不从载荷推断。
 - 接受的评估在 `assessment.saved` 里同时记录 `decidedLevel`、`floor` 与 `decidedReason`（第十轮 R10-03：原来只记 `decidedLevel`，与「L1 被接受」的记录互相矛盾）。
@@ -228,3 +228,12 @@ delivery/document 若未声明可核查的 L1 前提（`semanticImpact=false`、
 
 - 硬门禁优先：`decideLevel` 先判环境操作与 lockdown 风险，再判 `assist`/`artifact` ⇒ `none`。此前 `assist`/`artifact` 的提前返回使这两条 L3 门禁对两个 intent 取值 fail-open（声明 `deploy`/`bash`/`networkTargets` 或文档化风险旗标仍可落 `none`/L1/L2），本轮修复并补 `assist`/`artifact` × 环境操作 × 风险旗标的失败测试。lockdown 风险门禁对全部 intent 生效（`workflow.md` §2.3 字面只写 delivery/document，本包按 fail-closed 推广到所有 intent，属保守偏离，登记于此）。
 - 底线（`routingFloor`）：`decideLevel` 判 L3 ⇒ L3；`assist`/`artifact` ⇒ none；`operation` ⇒ 至少 L2（`workflow.md` §2.4 的 L1 只允许样式/文案/注释类改动，操作类工作不满足）；`delivery`/`document` 未声明可核查的 L1 前提 ⇒ 至少 L2，否则允许 L1。因此 `operation` 不能落 L1/none（第十一轮 R11-02）。
+
+## DC-66 Run 建立边界的独立授权/等级底线（Review 第十二轮 R12-01/R12-02/R12-03）
+
+第十一轮只按 `work.level` 判授权需求，于是 L1/L2/none 的 Work 可以在零授权下建立声明 `deploy`/`delete_data`/网络写入的 Run，并把该 scope 冻结进 DispatchSnapshot；只读授权也能给数据操作背书。修复：
+- `dispatch` 由 **spec 自身的 scope** 与 Work 等级共同决定 `runLevel`：`touchesRunningEnvironment(spec.scope)` ⇒ L3（`decideLevel` 的同一判据，单一来源在 `domain/routing.ts`）；
+- `runLevel` 无修改授权（`none`）时拒绝带 `writePaths` 的 spec（`data.md` §2「none不产生修改授权」）；
+- 授权核对加入范围覆盖：spec 的每个 `operations` 必须在授权的 `operations` 中、每个 `networkTargets` 必须在授权 `scope.networkTargets` 中；
+- 核对通过的引用（含来自 Work 行的引用）写入 `DispatchSnapshot.authorizationRef`，重启恢复（AC-082）能重建授权来源。
+- 仍属 WP-04/WP-05 的后续工作：`writePaths` 是否必须在授权 `scope.writePaths` 内、授权的 `acceptedAt`/来源消息核对、Work 行等级的更新（`assess` 目前不写 `work.level`，`works.update` 全仓无调用点）。
