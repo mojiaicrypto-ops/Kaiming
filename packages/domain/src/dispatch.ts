@@ -106,3 +106,42 @@ export function isDirectChiefChild(
     parent.id === child.parentRunId && parent.role === 'chief' && parent.workId === child.workId
   );
 }
+
+/**
+ * Purpose × role admission (`agents.md` §3: "Core校验role与purpose、Stage、权限").
+ *
+ * The rule book requires Core to validate the pair but does not tabulate it, so
+ * this table is derived from the documented duties in `agents.md` §1 and the
+ * stage inputs in §2: a role may carry the purposes that produce its deliverables
+ * plus `analysis` (read-only investigation) and, where the duty is explicit,
+ * `operation`/`document_check`. `initialize` is the bootstrap investigation every
+ * professional role may run before a Project overview exists (§2 first row).
+ */
+export const PURPOSES_BY_ROLE = {
+  product: ['analysis', 'artifact', 'document', 'document_check', 'initialize'],
+  planning: ['analysis', 'artifact', 'document', 'initialize'],
+  backend: ['analysis', 'implementation', 'operation', 'artifact', 'initialize'],
+  frontend: ['analysis', 'implementation', 'operation', 'artifact', 'initialize'],
+  review: ['analysis', 'review', 'document_check', 'initialize'],
+  test: ['analysis', 'test', 'initialize'],
+  settlement: ['analysis', 'settlement', 'document', 'document_check', 'initialize'],
+} as const satisfies Record<string, readonly string[]>;
+
+export type ProfessionalRole = keyof typeof PURPOSES_BY_ROLE;
+
+/** Whether `role` is allowed to carry `purpose` on a professional Run. */
+export function purposeAllowedForRole(role: string, purpose: string): boolean {
+  const allowed = (PURPOSES_BY_ROLE as Record<string, readonly string[]>)[role];
+  return allowed !== undefined && allowed.includes(purpose);
+}
+
+/** The rejection for an unlisted role/purpose pair, or `undefined`. */
+export function validateRolePurpose(role: string, purpose: string): DispatchDecision | undefined {
+  if (role === 'chief') {
+    return reject('VALIDATION_ERROR', 'a professional dispatch cannot target the chief role');
+  }
+  if (!purposeAllowedForRole(role, purpose)) {
+    return reject('VALIDATION_ERROR', `role ${role} may not carry purpose ${purpose}`);
+  }
+  return undefined;
+}

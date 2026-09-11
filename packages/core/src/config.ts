@@ -513,6 +513,14 @@ export function removeConfigFile(file: string): void {
   rmSync(file, { force: true });
 }
 
+/**
+ * One integer naming both scopes' revisions.
+ *
+ * `DispatchSpec.profileRevision` is a single non-negative integer, so the global
+ * revision occupies the high digits and the Project revision the low ones: any
+ * change in either scope changes the value, and the mapping stays injective for
+ * fewer than a million Project writes.
+ */
 function layerRevision(global: ConfigDocument, project: ConfigDocument): number {
   return global.version * 1_000_000 + project.version;
 }

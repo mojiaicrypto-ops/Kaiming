@@ -49,9 +49,20 @@ export class SnapshotWriter {
    * repeatedly without accumulating duplicates, which is what makes a retried
    * dispatch or config freeze idempotent.
    */
-  freeze(type: SnapshotType, payload: JsonObject): FrozenSnapshot {
+  freeze(
+    type: SnapshotType,
+    payload: JsonObject,
+    /**
+     * Payload subset the identity is computed over.
+     *
+     * A `DispatchSnapshot` embeds its own `hash` field (`data.md` §3), so its
+     * identity is the hash of everything *except* that field; the stored payload
+     * then carries the matching hash and the row hash equals the inner one.
+     */
+    options: { readonly identityPayload?: JsonObject } = {},
+  ): FrozenSnapshot {
     const serialized = canonicalJson(payload);
-    const hash = sha256(serialized);
+    const hash = sha256(canonicalJson(options.identityPayload ?? payload));
     const existing = this.read(hash);
     if (existing !== undefined) {
       return { hash, type: existing.type, payload, created: false };

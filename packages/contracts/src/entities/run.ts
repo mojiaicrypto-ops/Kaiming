@@ -93,6 +93,26 @@ export const stageResultRowSchema = z.strictObject({
 });
 export type StageResultRow = z.infer<typeof stageResultRowSchema>;
 
+/**
+ * What an Attempt may submit (`rules/agents.md` §4 `stage.submit`).
+ *
+ * The storage columns (`id`/`projectId`/`version`/timestamps) are injected by the
+ * repository, and `runId`/`attemptId`/`taskId` come from the capability, so the
+ * client-visible contract is the row minus those — validating the full row before
+ * insert would reject every submission for missing server fields.
+ */
+export const stageResultContentSchema = stageResultRowSchema.omit({
+  id: true,
+  projectId: true,
+  version: true,
+  createdAt: true,
+  updatedAt: true,
+  runId: true,
+  attemptId: true,
+  taskId: true,
+});
+export type StageResultContent = z.infer<typeof stageResultContentSchema>;
+
 /** `snapshot` — an immutable frozen payload; content-addressed by `hash`. */
 export const snapshotSchema = z.strictObject({
   type: snapshotTypeSchema,
