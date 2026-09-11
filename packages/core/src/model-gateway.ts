@@ -4,8 +4,9 @@
  *
  * `rules/agents.md` §5 forbids two things that are easy to get wrong, so both are
  * structural here rather than conventional: a running call never silently switches
- * provider or lowers the model, and a Work whose role has no usable model is
- * blocked instead of silently falling back. `complete()` therefore takes a Run (not
+ * provider or lowers the model, and a role with no usable model fails with
+ * `PROVIDER_UNAVAILABLE` instead of silently falling back (the Work-level
+ * `blocked(provider)` projection is WP-05, DC-42). `complete()` therefore takes a Run (not
  * a role or a model id) and reads the provider/model from the Run's frozen `config`
  * snapshot; there is no parameter through which a caller could choose another one.
  *

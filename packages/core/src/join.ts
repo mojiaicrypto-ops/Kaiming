@@ -14,6 +14,7 @@ import type { ProjectStore } from '@agentdev/storage';
 import { withTransaction } from '@agentdev/storage';
 import { ProtocolError } from './errors.js';
 import { findEvent } from './events.js';
+import { RunLifecycle } from './run-lifecycle.js';
 
 /** One child Run's settled or in-flight outcome, as the parent sees it. */
 export interface ChildOutcome {
@@ -143,7 +144,15 @@ export class JoinCoordinator {
       (child) => child.join === 'all' && child.requiredChild && isFailed(child.status),
     );
     if (failedRequired.length > 0) {
-      return { kind: 'blocked', parentRunId: parent.id, children, failedRequired, chiefTodo: '' };
+      // The blocked outcome must carry the todo that was filed, otherwise the
+      // caller cannot tell which Chief action is pending (AC-046).
+      return {
+        kind: 'blocked',
+        parentRunId: parent.id,
+        children,
+        failedRequired,
+        chiefTodo: this.existingTodo(parent, 'required_child_failed', failedRequired),
+      };
     }
     return { kind: 'ready', parentRunId: parent.id, children };
   }
@@ -204,7 +213,7 @@ export class JoinCoordinator {
           parentRunId: parent.id,
           children,
           failedRequired,
-          chiefTodo: String(event.cursor),
+          chiefTodo: event === undefined ? '' : String(event.cursor),
         };
       }
 
@@ -227,19 +236,13 @@ export class JoinCoordinator {
     reason: 'required_child_failed' | 'fire_and_forget_child_failed',
     failed: readonly ChildOutcome[],
     children: readonly ChildOutcome[] = this.childrenOf(parent.id),
-  ): Event {
+  ): Event | undefined {
     const failedIds = failed.map((entry) => entry.runId).sort();
-    // A complete scan, so idempotency does not depend on how long the log is.
-    const existing = findEvent(this.store, {
-      names: ['chief_action_required'],
-      stopAt: (event) => {
-        if (event.entityId !== parent.id || event.data['reason'] !== reason) return false;
-        const recorded = event.data['failed'] ?? event.data['failedRequired'];
-        if (!Array.isArray(recorded)) return false;
-        return (recorded as string[]).slice().sort().join(',') === failedIds.join(',');
-      },
-    });
+    const existing = this.todoOf(parent, reason, failedIds);
     if (existing !== undefined) return existing;
+    // A todo is only actionable while its Chief Run can still dispatch; a Run that
+    // already ended gets none, so no orphaned Chief action is left behind (R5-05).
+    if (!RunLifecycle.canParentDispatch(parent.status)) return undefined;
     return this.store.events.append({
       name: 'chief_action_required',
       entityId: parent.id,
@@ -274,6 +277,37 @@ export class JoinCoordinator {
                   readLedgerHash: entry.stageResult.readLedgerHash,
                 },
         })),
+      },
+    });
+  }
+
+  /** The cursor of the todo already filed for this failure set, if any. */
+  private existingTodo(
+    parent: Run,
+    reason: 'required_child_failed' | 'fire_and_forget_child_failed',
+    failed: readonly ChildOutcome[],
+  ): string {
+    const found = this.todoOf(parent, reason, failed.map((entry) => entry.runId).sort());
+    return found === undefined ? '' : String(found.cursor);
+  }
+
+  /**
+   * The `chief_action_required` event for one (parent, reason, failed set).
+   *
+   * A complete scan, so idempotency does not depend on how long the log is.
+   */
+  private todoOf(
+    parent: Run,
+    reason: 'required_child_failed' | 'fire_and_forget_child_failed',
+    failedIds: readonly string[],
+  ): Event | undefined {
+    return findEvent(this.store, {
+      names: ['chief_action_required'],
+      stopAt: (event) => {
+        if (event.entityId !== parent.id || event.data['reason'] !== reason) return false;
+        const recorded = event.data['failed'] ?? event.data['failedRequired'];
+        if (!Array.isArray(recorded)) return false;
+        return (recorded as string[]).slice().sort().join(',') === failedIds.join(',');
       },
     });
   }

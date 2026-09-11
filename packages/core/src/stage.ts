@@ -276,7 +276,9 @@ export class StageGate {
           { details: { runId: run.id, status: run.status } },
         );
       }
-      // The shared terminal path releases the Work-budget reservation (N-01).
+      // The shared terminal path records the violation and keeps the Work
+      // reservation held as unknown cost (`reliability.md` §3, DC-45); a live
+      // join=all child is cancelled with its parent (DC-49).
       this.lifecycle.contractViolation(run.id, {
         attemptId,
         reason: message,

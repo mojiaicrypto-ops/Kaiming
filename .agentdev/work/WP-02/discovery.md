@@ -124,3 +124,28 @@ WP-02 第一轮独立 Review（`.agentdev/work/WP-02/review.md`）判 FAIL：1×
 ## DC-48 `run.ended` data 形状统一（Review 第四轮 H-02）
 
 `run.ended` 由 `RunLifecycle.end` 统一发出，所有终态路径的 data 都包含 `outcome`、`usageMeasured`、`costKnown`、`tokensUsed`、`releasedTokens`；`contract_violation` 额外带 `attemptId`/`rejections`/`reason`，核销补发额外带 `reconciled:true`。`protocol.md` §7 只要求「终态事件携带真实 outcome 与变更后实体摘要」，本条为消费方一致性的实现约定。
+
+## DC-49 父 Run 非正常终止时子 Run 一并取消（Review 第四/五轮 Q-04、M-1、M-3）
+
+不变式：Run 进入终态后，不能留下无人 Join 的 `join=all` 子 Run。
+- `completed`：仍有在场 `join=all` 子 Run 时拒绝终态（`INVALID_STATE`）——完成必须是收敛后的完成。
+- `failed`/`cancelled`/`contract_violation`（非正常终态）：**向下传播取消**，子 Run 在同一事务内一并终态，避免子 Run 之后结算进无人拥有的 Join、或把 `chief_action_required` 写给已终态父 Run（AC-046 Gate 阻断无人处理）。
+- `settleRun(..., 'cancelled')` 与 `RunLifecycle.cancel` 是同一路径：公开入口无法绕过子 Run 传播；`cancel` 先校验父 Run 迁移合法性，再在同一事务里取消子树（M-3：不会出现「父 Run 报错但子 Run 已被取消」的部分写入）。
+- 由此 `contract_violation` 的二次不合规升级不再被在场子 Run 挡住（M-1：原来第二击会被 `INVALID_STATE` 回滚吞掉，必须等子 Run 结算后才升级）。
+
+## DC-50 超预留 usage 的封顶与「未覆盖」记录（Review 第五轮 R5-03/Q-02）
+
+Provider 报告的 usage 可能超过该 Run 的预留（估算偏差）。原实现在结算时先释放预留再计入 usage，一旦 `used + usage` 触碰 Schema 上限就会整笔回滚：Run 永久停在 `running`、无 `run.ended`、预留不放。修复：计费封顶到预留额（`chargedTokens = min(usage, budgetAllocation)`），超出部分记入事件的 `uncoveredTokens`，Run 正常终态；事件字段语义固定为 `tokensUsed`（Provider 原始值）/`chargedTokens`（Work 实际吸收）/`uncoveredTokens`/`releasedTokens`（退还的预留余额）。同时 usage 必须是非负整数，否则 `VALIDATION_ERROR`（M-4：原来负值被预算侧钳到 0、事件却写原始值，两边账不一致）。
+
+## DC-51 request_dispatch 幂等：全载荷指纹 + 重放优先（Review 第五轮 R5-01、R5-09）
+
+- R5-01：指纹覆盖请求的全部字段（requestedBy/workId/role/purpose/goal/stage/reason/sourceRefs/requiredOutputs/requiredChild/budgetAllocation/parentRunId），任一字段不同即 `IDEMPOTENCY_CONFLICT`（原来只比对 6 个字段，改 `reason/sourceRefs/requiredOutputs/budgetAllocation` 会被静默吞掉）。
+- R5-09：同键重放的查库**先于**请求者/Chief Run 的状态校验——否则 Chief Run 已终态时重放会得到 `INVALID_STATE` 而不是原结果（`protocol.md` §1「应答丢失先查同幂等键结果」）。新请求仍需双方都可行动。
+
+## DC-52 核销幂等与 Work 级 costKnown 重算（Review 第五轮 R5-04）
+
+`RunLifecycle.reconcile` 以「该 Run 是否已有 `reconciled:true` 的 `run.ended`」判幂等，重放直接返回不再计费（原来二次核销会重复计费并把 `tokensReserved` 扣到 0，吃掉其他在场 Run 的预留）。同时 `costKnown` 是 Work 级标志，改为按「该 Work 的所有终态 Run 是否都已有实测/核销记录」重算，单个 Run 的核销不会把整个 Work 标成成本已知。
+
+## DC-53 第五轮 Finding 的严重度口径（记录更正）
+
+第五轮报告把 4 条影响验收的行为缺陷标为 P2 并称「本轮无 P1」；按 `workflow.md` §65 的定义（P1 = 错误行为/需求缺失），这些条目属 P1 级。本包按其阻断性处理（全部已修），并在记录中更正口径，避免后续 Settlement 按「仅 P2」低估本包返工范围。另：第四轮报告中的 H-03 是**报告质量问题**（对 D1..D5 的追溯口径），不是代码缺陷定义，仓库内无对应实体；D1..D5 的来源更正见 DC-47/T12。

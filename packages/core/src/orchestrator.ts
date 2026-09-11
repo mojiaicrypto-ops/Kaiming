@@ -41,7 +41,6 @@ import {
 import { withTransaction, type ProjectStore } from '@agentdev/storage';
 import type { ConfigStore, ProfileLayer, ProfileResolution } from './config.js';
 import { RunLifecycle, type RunUsage } from './run-lifecycle.js';
-import { createHash } from 'node:crypto';
 import { ProtocolError, type ProtocolErrorCode } from './errors.js';
 import { findEvent } from './events.js';
 import type { ModelGateway } from './model-gateway.js';
@@ -164,26 +163,8 @@ function riskFromFlags(flags: readonly string[]): LockdownRisk {
  * Only the request's own fields: a replay with the same key and same content
  * returns the original todo, anything else is a conflict.
  */
-function operationFingerprint(fields: {
-  readonly requestedBy: string;
-  readonly role: string;
-  readonly purpose: string;
-  readonly goal: string;
-  readonly stage: string;
-  readonly workId: string;
-}): string {
-  return createHash('sha256')
-    .update(
-      [
-        fields.requestedBy,
-        fields.role,
-        fields.purpose,
-        fields.goal,
-        fields.stage,
-        fields.workId,
-      ].join('\u0000'),
-    )
-    .digest('hex');
+function operationFingerprint(request: JsonObject): string {
+  return sha256(canonicalJson(request));
 }
 
 function fail(code: ProtocolErrorCode, message: string, details?: JsonObject): never {
@@ -349,7 +330,8 @@ export class Orchestrator {
     const role = spec.role;
     const availability = this.gateway.availability(role, input.runParams ?? {});
     if (!availability.ok) {
-      // A Work whose role has no usable model is blocked, never queued on a guess.
+      // The Run is refused rather than queued on a guess; the Work-level
+      // `blocked(provider)` projection is WP-05 (DC-42).
       fail('PROVIDER_UNAVAILABLE', `role ${role} has no usable model: ${availability.reason}`, {
         workId: work.id,
         role,
@@ -475,34 +457,31 @@ export class Orchestrator {
       (PRIMARY_PURPOSE_BY_ROLE as Record<string, string | undefined>)[input.requestedRole] ??
       '';
     enforce(validateRolePurpose(input.requestedRole, purpose), 'dispatch request');
-    // A Run that already ended cannot keep filing Chief todos (`workflow.md` §5.3).
-    if (!RunLifecycle.canParentDispatch(run.status)) {
-      fail('INVALID_STATE', `Run ${run.id} is ${run.status} and cannot request more work`, {
-        runId: run.id,
-        status: run.status,
-      });
-    }
     const chief = this.store.runs.find(chiefRunId);
     if (chief === undefined) fail('NOT_FOUND', `Chief Run ${chiefRunId} does not exist`);
-    // A todo is only actionable while its Chief Run can still dispatch; filing one
-    // against a finished Chief Run would leave it with nobody to act (AC-045).
-    if (!RunLifecycle.canParentDispatch(chief.status)) {
-      fail(
-        'INVALID_STATE',
-        `Chief Run ${chief.id} is ${chief.status} and cannot take a new dispatch request`,
-        { chiefRunId: chief.id, status: chief.status },
-      );
-    }
     // The todo is idempotent per `operationId`: a retried request must not become a
     // second Chief action (reliability.md §1 "至少一次投递、避免重复创建").
-    const fingerprint = operationFingerprint({
+    // The fingerprint covers the whole request: a key reused with any different
+    // field must be a conflict, not a silently dropped command (`protocol.md` §1).
+    const request = {
       requestedBy: run.id,
+      workId: run.workId,
       role: input.requestedRole,
       purpose,
       goal: input.goal,
       stage: input.stage ?? 'assist',
-      workId: run.workId,
-    });
+      reason: input.reason ?? null,
+      sourceRefs: (input.sourceRefs ?? []).map((ref) => ({
+        kind: ref.kind,
+        id: ref.id,
+        version: ref.version ?? '1',
+      })),
+      requiredOutputs: [...(input.requiredOutputs ?? [])],
+      requiredChild: input.requiredChild ?? false,
+      budgetAllocation: input.budgetAllocation ?? 0,
+      parentRunId: chiefRunId,
+    };
+    const fingerprint = operationFingerprint(request);
     if (input.operationId !== undefined) {
       const existing = findEvent(this.store, {
         names: ['chief_action_required'],
@@ -536,6 +515,22 @@ export class Orchestrator {
         };
       }
     }
+    // A replay is answered from the log above; only a *new* request needs both the
+    // requester and the Chief Run to be able to act (`workflow.md` §5.3). A todo is
+    // actionable only while its Chief Run can still dispatch (AC-045).
+    if (!RunLifecycle.canParentDispatch(run.status)) {
+      fail('INVALID_STATE', `Run ${run.id} is ${run.status} and cannot request more work`, {
+        runId: run.id,
+        status: run.status,
+      });
+    }
+    if (!RunLifecycle.canParentDispatch(chief.status)) {
+      fail(
+        'INVALID_STATE',
+        `Chief Run ${chief.id} is ${chief.status} and cannot take a new dispatch request`,
+        { chiefRunId: chief.id, status: chief.status },
+      );
+    }
     return withTransaction(this.store.db, () => {
       const event = this.store.events.append({
         name: 'chief_action_required',
@@ -550,19 +545,15 @@ export class Orchestrator {
           operationId: input.operationId ?? null,
           fingerprint,
           workId: run.workId,
-          role: input.requestedRole,
-          purpose,
-          goal: input.goal,
-          stage: input.stage ?? 'assist',
-          requestReason: input.reason ?? null,
-          sourceRefs: (input.sourceRefs ?? []).map((ref) => ({
-            kind: ref.kind,
-            id: ref.id,
-            version: ref.version ?? '1',
-          })),
-          requiredOutputs: [...(input.requiredOutputs ?? [])],
-          requiredChild: input.requiredChild ?? false,
-          budgetAllocation: input.budgetAllocation ?? 0,
+          role: request.role,
+          purpose: request.purpose,
+          goal: request.goal,
+          stage: request.stage,
+          requestReason: request.reason,
+          sourceRefs: request.sourceRefs,
+          requiredOutputs: request.requiredOutputs,
+          requiredChild: request.requiredChild,
+          budgetAllocation: request.budgetAllocation,
         },
       });
       return {

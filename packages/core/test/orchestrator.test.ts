@@ -605,6 +605,114 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     expect(ended?.data).toMatchObject({ usageMeasured: true, tokensUsed: 12_000 });
   });
 
+  it('keeps budget accounting honest across cancel, over-usage and replay (R5-02/03/04/09)', () => {
+    const budgetRow = store.budgets.list({ where: 'work_id = ?', params: [WORK_ID] })[0];
+    if (budgetRow === undefined) throw new Error('budget fixture missing');
+    const chief = chiefRun();
+    const first = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+    const second = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+
+    // R5-02: cancelling the parent through the public entry point takes the
+    // children with it instead of leaving them in a Join nobody owns.
+    const cancelled = orchestrator.settleRun(chief.id, 'cancelled');
+    expect(cancelled.status).toBe('cancelled');
+    expect(store.runs.find(first.id)?.status).toBe('cancelled');
+    expect(store.runs.find(second.id)?.status).toBe('cancelled');
+
+    // M-3: cancelling an already terminal Run must not touch its children.
+    const others = orchestrator.dispatch({ spec: chiefSpec({ budgetAllocation: 10_000 }) }).run;
+    const orphan = orchestrator.dispatch({ spec: backendSpec(others.id) }).run;
+    orchestrator.beginAttempt(others.id);
+    orchestrator.settleRun(others.id, 'failed');
+    expect(() => orchestrator.lifecycle.cancel(others.id)).toThrowError(/cannot move failed/);
+    expect(store.runs.find(orphan.id)?.status).toBe('cancelled');
+  });
+
+  it('caps a usage report that exceeds the reservation and records the excess (R5-03)', () => {
+    const budgetRow = store.budgets.list({ where: 'work_id = ?', params: [WORK_ID] })[0];
+    if (budgetRow === undefined) throw new Error('budget fixture missing');
+    const run = orchestrator.dispatch({ spec: chiefSpec({ budgetAllocation: 10_000 }) }).run;
+    orchestrator.beginAttempt(run.id);
+    // A provider may report more than the reservation; the terminal transition must
+    // still succeed, capped to what the Work budget can absorb.
+    const settled = orchestrator.settleRun(run.id, 'completed', {
+      tokensUsed: 25_000,
+      measured: true,
+    });
+    expect(settled.status).toBe('completed');
+    const budget = store.budgets.find(budgetRow.id);
+    expect(budget?.tokensReserved).toBe(0);
+    expect(budget?.tokensUsed).toBe(10_000);
+    const ended = store.events
+      .readAfter(0, { limit: 100 })
+      .filter((event) => event.entityId === run.id && event.name === 'run.ended');
+    expect(ended[0]?.data).toMatchObject({
+      tokensUsed: 25_000,
+      chargedTokens: 10_000,
+      uncoveredTokens: 15_000,
+      releasedTokens: 0,
+    });
+    // Usage is validated: a negative report is a validation error, not a silent
+    // clamp that disagrees with the event.
+    const next = orchestrator.dispatch({ spec: chiefSpec({ budgetAllocation: 1_000 }) }).run;
+    orchestrator.beginAttempt(next.id);
+    expect(() =>
+      orchestrator.settleRun(next.id, 'completed', { tokensUsed: -5, measured: true }),
+    ).toThrowError(/non-negative integer/);
+    expect(store.runs.find(next.id)?.status).toBe('running');
+  });
+
+  it('reconciles usage once and only consumes its own hold (R5-04)', () => {
+    const budgetRow = store.budgets.list({ where: 'work_id = ?', params: [WORK_ID] })[0];
+    if (budgetRow === undefined) throw new Error('budget fixture missing');
+    const chief = chiefRun();
+    const held = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+    const reconciled = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+    orchestrator.beginAttempt(reconciled.id);
+    orchestrator.settleRun(reconciled.id, 'completed');
+    const reservedBefore = store.budgets.find(budgetRow.id)?.tokensReserved ?? 0;
+
+    orchestrator.lifecycle.reconcile(reconciled.id, { tokensUsed: 1_000 });
+    const afterFirst = store.budgets.find(budgetRow.id);
+    // The other Run's hold survives: reconcile released only its own reservation.
+    expect(afterFirst?.tokensReserved).toBe(reservedBefore - reconciled.budgetAllocation);
+    expect(afterFirst?.tokensUsed).toBe(1_000);
+
+    // A replayed reconciliation is a no-op, never a second charge.
+    orchestrator.lifecycle.reconcile(reconciled.id, { tokensUsed: 1_000 });
+    const afterReplay = store.budgets.find(budgetRow.id);
+    expect(afterReplay?.tokensUsed).toBe(1_000);
+    expect(afterReplay?.tokensReserved).toBe(afterFirst?.tokensReserved);
+    expect(store.runs.find(held.id)?.status).toBe('queued');
+  });
+
+  it('answers an operationId replay even after the Chief Run has ended (R5-09)', () => {
+    const chief = chiefRun();
+    const child = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+    const first = orchestrator.requestDispatch({
+      runId: child.id,
+      requestedRole: 'review',
+      goal: 'review the adapter',
+      operationId: 'op-replay',
+    });
+    orchestrator.beginAttempt(chief.id);
+    orchestrator.settleRun(chief.id, 'failed');
+    const replay = orchestrator.requestDispatch({
+      runId: child.id,
+      requestedRole: 'review',
+      goal: 'review the adapter',
+      operationId: 'op-replay',
+    });
+    expect(replay.chiefTodo).toBe(first.chiefTodo);
+    expect(() =>
+      orchestrator.requestDispatch({
+        runId: child.id,
+        requestedRole: 'review',
+        goal: 'a new request now that the Chief ended',
+      }),
+    ).toThrowError(/cannot request more work|cannot take a new dispatch request/);
+  });
+
   it('refuses to end a parent while join=all children are live, and cancel propagates (Q-04)', () => {
     const parent = chiefRun();
     const spec = professionalSpec({
@@ -667,6 +775,16 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
         runId: second.id,
         requestedRole: 'review',
         goal: 'review the adapter',
+        operationId: 'op-shared',
+      }),
+    ).toThrowError(/already used for a different dispatch request/);
+    // Any differing field counts, not just the goal (R5-01).
+    expect(() =>
+      orchestrator.requestDispatch({
+        runId: first.id,
+        requestedRole: 'review',
+        goal: 'review the adapter',
+        budgetAllocation: 2_000,
         operationId: 'op-shared',
       }),
     ).toThrowError(/already used for a different dispatch request/);

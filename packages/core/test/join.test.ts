@@ -470,6 +470,58 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
     expect(todos).toHaveLength(1);
   });
 
+  it('stops the parent on the second strike even with a live child, taking it down (M-1)', () => {
+    const parent = chief;
+    const live = child();
+    const attempt = store.attempts.list({ where: 'run_id = ?', params: [parent.id] })[0];
+    if (attempt === undefined) throw new Error('chief attempt missing');
+    const attemptId = attempt.id;
+    const invalid = {};
+    const first = stages.submit({ runId: parent.id, attemptId, epoch: 0, payload: invalid });
+    expect(first).toMatchObject({ accepted: false, correctionsRemaining: 1 });
+    // The second strike must not be swallowed by the live-children guard.
+    const second = stages.submit({ runId: parent.id, attemptId, epoch: 0, payload: invalid });
+    expect(second).toMatchObject({ accepted: false, code: 'CONTRACT_VIOLATION' });
+    expect(store.runs.find(parent.id)?.status).toBe('contract_violation');
+    // The abnormal end takes the live join=all child with it: no orphaned Join.
+    expect(store.runs.find(live.id)?.status).toBe('cancelled');
+    expect(
+      store.events
+        .readAfter(0, { limit: 100 })
+        .filter((event) => event.data['outcome'] === 'schema_invalid'),
+    ).toHaveLength(2);
+  });
+
+  it('reports the filed todo in the blocked state and never pages an ended Chief (R5-05/R5-07)', () => {
+    const parent = chief;
+    const broken = child();
+    attemptAndSettle(broken, 'failed');
+    const blocked = joins.onChildSettled(broken.id);
+    expect(blocked).toMatchObject({ kind: 'blocked' });
+    if (blocked.kind !== 'blocked') throw new Error('expected blocked');
+    expect(blocked.chiefTodo).not.toBe('');
+    // The read-only state view reports the same pending Chief action.
+    const state = joins.state(parent.id);
+    expect(state).toMatchObject({ kind: 'blocked', chiefTodo: blocked.chiefTodo });
+
+    // Once the parent Run has ended there is nobody to act, so no new todo is filed.
+    const orphaned = child();
+    attemptAndSettle(orphaned, 'failed');
+    const current = store.runs.find(parent.id);
+    if (current === undefined) throw new Error('parent missing');
+    store.runs.update(current.id, { status: 'contract_violation' }, current.version);
+    const before = store.events
+      .readAfter(0, { limit: 100 })
+      .filter((event) => event.name === 'chief_action_required').length;
+    const after = joins.onChildSettled(orphaned.id);
+    expect(after).toMatchObject({ kind: 'blocked', chiefTodo: '' });
+    expect(
+      store.events
+        .readAfter(0, { limit: 100 })
+        .filter((event) => event.name === 'chief_action_required'),
+    ).toHaveLength(before);
+  });
+
   it('pages the Chief once for one failure set (N-06) and carries every result', () => {
     const broken = child();
     attemptAndSettle(broken, 'failed');

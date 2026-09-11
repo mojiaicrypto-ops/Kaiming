@@ -99,6 +99,21 @@
   - Q-10/D4：T5 记录中的两个未定义 Join 事件名已更正；D5（dispatch 不校验 Work 状态）登记 DC-46。
 - 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **216 passed**；`pnpm test:integration` 124 passed。
 
+## T13 独立 Review 第五轮与修复（第五轮 FAIL → 修复）
+
+- 第五轮独立 Review 判 FAIL（0×P1/5×P2/9×P3，编号 R5-01..R5-14），对抗性核验认为报告结论成立但严重度标定偏低（按 `workflow.md` §65 应为 P1），并补出 M-1..M-4。
+- 修复：
+  - R5-01/Q-01 残留：`operationId` 指纹覆盖全载荷，任一字段不同即 `IDEMPOTENCY_CONFLICT`（DC-51）。
+  - R5-02/Q-04 残留：`settleRun(...,'cancelled')` 与 `cancel` 合并为同一路径并向下传播；`cancel` 先校验父迁移、再在单事务内取消子树（DC-49、M-3）。
+  - R5-03/Q-02：计费封顶到预留额、超预留记 `uncoveredTokens`，Run 不再卡在 `running`；usage 必须为非负整数（DC-50、M-4）。
+  - R5-04：`reconcile` 幂等，重放不重复计费、不动其他 Run 的预留；Work 级 `costKnown` 按全部终态 Run 重算（DC-52）。
+  - R5-05/H-01 残留：`JoinCoordinator.pageChief` 对无法行动的 Chief Run 不再写待办；`state()` 的 blocked 结果返回已登记待办游标（R5-07）。
+  - R5-09：同键重放先查库，Chief 终态后重放仍返回原结果（DC-51）。
+  - M-1：父 Run 二次不合规升级不再被在场子 Run 挡住（DC-49）。
+  - R5-10..R5-13：`run.ended` data 统一含 `workId`/`chargedTokens`/`uncoveredTokens`；源码与记录中「Work blocked(provider)」「预留已释放」等注释全部改为与实现一致；DC-42/DC-46 缺口口径不变。
+  - 记录更正：见 DC-53（严重度口径与 H-03 性质）。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **222 passed**；`pnpm test:integration` 124 passed。
+
 ## T9 待办
 
 - 独立 Review 与 Test（独立上下文）、结算与 `docs/INDEX.md` 状态更新、以及 `docs/delivery/acceptance.md` 中本包 AC 的证据登记。
