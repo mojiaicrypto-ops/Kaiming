@@ -310,6 +310,13 @@ describe('level routing (workflow.md §2)', () => {
       '是否应该修改 docs/INDEX.md',
       '是否需要更新 docs/INDEX.md',
       '麻烦评估一下 docs/INDEX.md 是否需要修改',
+      '请给出 docs/INDEX.md 的修改建议',
+      '麻烦给 docs/INDEX.md 提些改进建议',
+      '请列出 docs/INDEX.md 里的错误',
+      '帮我看一下 docs/INDEX.md',
+      '请评估 docs/INDEX.md',
+      '帮我总结 docs/PLAN.md',
+      'Regarding the fix in docs/INDEX.md, what do you suggest?',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(false);
@@ -342,6 +349,29 @@ describe('level routing (workflow.md §2)', () => {
 
     // The noun "说明" is not an explanation verb unless it leads the clause.
     expect(routeMessage('更新 docs/INDEX.md 的说明').explicitAuthorization).toBe(true);
+
+    // Excluded targets never enter the write scope, while the intended one does.
+    for (const [body, wanted, unwanted] of [
+      ['修改 docs/PLAN.md 而不是 docs/INDEX.md', 'docs/PLAN.md', 'docs/INDEX.md'],
+      ['update docs/PLAN.md instead of docs/INDEX.md', 'docs/PLAN.md', 'docs/INDEX.md'],
+    ] as const) {
+      const routing = routeMessage(body);
+      const write = routing.items.flatMap((item) => item.writePaths);
+      expect(write, body).toContain(wanted);
+      expect(write, body).not.toContain(unwanted);
+    }
+
+    // Chinese mixed intent splits into an explanation and an authorized change.
+    const chineseMixed = routeMessage('解释 docs/INDEX.md 并修复 docs/PLAN.md');
+    expect(chineseMixed.items.map((item) => item.intent).sort()).toEqual(['assist', 'delivery']);
+    expect(chineseMixed.items.find((item) => item.intent === 'delivery')?.writePaths).toEqual([
+      'docs/PLAN.md',
+    ]);
+
+    // A short negation followed by a corrected target authorizes the target only.
+    const corrected = routeMessage('别改 docs/PLAN.md，改 docs/INDEX.md');
+    expect(corrected.explicitAuthorization).toBe(true);
+    expect(corrected.items.flatMap((item) => item.writePaths)).toEqual(['docs/INDEX.md']);
   });
 
   it('classifies every contract operation as read-only, workspace write or environment', () => {

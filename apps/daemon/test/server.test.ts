@@ -485,32 +485,28 @@ describe('daemon HTTP surface (WP-03)', () => {
     expect(delivery?.authorizationRef).toBe(sent.authorizationId);
   });
 
-  it('refuses malformed work items and never rewrites an existing Work', async () => {
-    const bad = await fetch(
+  it('never lets a client invent works and never rewrites an existing Work', async () => {
+    // The wire format has no work-item field: a client cannot multiply Works.
+    const injected = await fetch(
       `${url}/conversation.message.send`,
       authed({
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           conversationId: CONVERSATION_ID,
-          body: 'do something',
-          workItems: [{ intent: 'operation', goal: 'deploy' }, null],
+          body: 'explain the routing rules',
+          workItems: Array.from({ length: 50 }, (_, index) => ({
+            intent: 'assist',
+            goal: `item ${index}`,
+          })),
         }),
       }),
     );
-    expect(bad.status).toBe(400);
-    expect(store.works.list()).toHaveLength(0);
+    expect(injected.status).toBe(202);
+    expect(store.works.list()).toHaveLength(1);
 
     // A follow-up into an existing Work must not change its level or authority.
-    const first = await fetch(
-      `${url}/conversation.message.send`,
-      authed({
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ conversationId: CONVERSATION_ID, body: 'explain the rules' }),
-      }),
-    );
-    const sent = (await first.json()) as { workId: string };
+    const sent = (await injected.json()) as { workId: string };
     const before = store.works.find(sent.workId);
     const followUp = await fetch(
       `${url}/conversation.message.send`,
@@ -531,41 +527,63 @@ describe('daemon HTTP surface (WP-03)', () => {
     expect(store.authorizations.list()).toHaveLength(0);
   });
 
-  it('caps client-supplied work items and keeps questions read-only end to end', async () => {
-    // A client cannot multiply works (or their budgets) without bound.
-    const many = await fetch(
-      `${url}/conversation.message.send`,
-      authed({
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          conversationId: CONVERSATION_ID,
-          body: 'do the work',
-          workItems: Array.from({ length: 50 }, (_, index) => ({
-            intent: 'assist',
-            goal: `item ${index}`,
-          })),
+  it('keeps questions, advice and statements read-only end to end', async () => {
+    for (const body of [
+      '你修复 docs/INDEX.md 了吗',
+      '请给出 docs/INDEX.md 的修改建议',
+      '我已经修改了 docs/INDEX.md',
+      'Regarding the fix in docs/INDEX.md, what do you suggest?',
+    ]) {
+      const response = await fetch(
+        `${url}/conversation.message.send`,
+        authed({
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ conversationId: CONVERSATION_ID, body }),
         }),
-      }),
-    );
-    expect(many.status).toBe(400);
-    expect(store.works.list()).toHaveLength(0);
-
-    // A question phrased as a status check is never an authorization.
-    const question = await fetch(
-      `${url}/conversation.message.send`,
-      authed({
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          conversationId: CONVERSATION_ID,
-          body: '你修复 docs/INDEX.md 了吗',
-        }),
-      }),
-    );
-    expect(question.status).toBe(202);
+      );
+      expect(response.status, body).toBe(202);
+      expect(
+        store.works.list().every((work) => work.level === 'none'),
+        body,
+      ).toBe(true);
+    }
     expect(store.authorizations.list()).toHaveLength(0);
-    expect(store.works.list()[0]?.level).toBe('none');
+  });
+
+  it('splits a Chinese mixed message and authorizes only the excluded-free target', async () => {
+    const mixed = await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: CONVERSATION_ID,
+          body: '解释 docs/INDEX.md 并修复 docs/PLAN.md',
+        }),
+      }),
+    );
+    expect(mixed.status).toBe(202);
+    const sent = (await mixed.json()) as { workIds: string[]; authorizationId: string | null };
+    expect(sent.workIds).toHaveLength(2);
+    expect(sent.authorizationId).not.toBeNull();
+    const authorized = store.authorizations.find(sent.authorizationId ?? '');
+    expect(authorized?.scope.writePaths).toEqual(['docs/PLAN.md']);
+
+    const excluded = await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: CONVERSATION_ID,
+          body: '修改 docs/PLAN.md 而不是 docs/INDEX.md',
+        }),
+      }),
+    );
+    const excludedSent = (await excluded.json()) as { authorizationId: string | null };
+    const excludedAuth = store.authorizations.find(excludedSent.authorizationId ?? '');
+    expect(excludedAuth?.scope.writePaths).toEqual(['docs/PLAN.md']);
   });
 
   it('parses multipart bodies without a framework dependency', () => {

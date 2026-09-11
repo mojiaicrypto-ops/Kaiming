@@ -19,7 +19,7 @@ import {
 } from '@agentdev/contracts';
 import { uuidv7 } from '@agentdev/storage';
 import type { BlobStore } from '@agentdev/storage';
-import { MAX_WORK_ITEMS, routeMessage } from '@agentdev/domain';
+import { routeMessage } from '@agentdev/domain';
 import { userIdFromSubject } from './identity.js';
 import type { OperationDefinition, OperationContext } from './dispatcher.js';
 import { ProtocolError } from './errors.js';
@@ -33,11 +33,6 @@ export interface MessageSendParams {
   readonly targetWorkId?: string;
   /** Explicit authority the message itself grants (`workflow.md` §1, AC-005). */
   readonly authorization?: { readonly scope: Scope; readonly operations: readonly OperationName[] };
-  /** Explicit work items when one message carries several intents (AC-006). */
-  readonly workItems?: readonly {
-    readonly intent: 'assist' | 'artifact' | 'document' | 'delivery';
-    readonly goal: string;
-  }[];
 }
 
 export interface MessageSendResult {
@@ -75,11 +70,6 @@ export interface MessageTransactionInput {
   readonly acl?: readonly Role[];
   /** Explicit authority the message itself grants (`workflow.md` §1, AC-005). */
   readonly authorization?: { readonly scope: Scope; readonly operations: readonly OperationName[] };
-  /** Explicit work items when one message carries several intents (AC-006). */
-  readonly workItems?: readonly {
-    readonly intent: 'assist' | 'artifact' | 'document' | 'delivery';
-    readonly goal: string;
-  }[];
 }
 
 /**
@@ -140,56 +130,18 @@ export function sendMessage(
     bytes: bodyBlob.bytes,
   } as never);
 
-  // One message may carry several intents: with explicit work items Core creates one
-  // Work per item, all bound to the same source message, so an explanation can be
-  // delivered while the fix continues (AC-006). Which intents a message has is the
-  // Chief's assessment; this is the mechanism it drives.
+  // One message may carry several intents: the router returns one work item per
+  // intent (at most `MAX_WORK_ITEMS`), all bound to the same source message, so an
+  // explanation can be delivered while the fix continues (AC-006).
   const routing = routeMessage(body);
-  const allowedIntents = ['assist', 'artifact', 'document', 'delivery'] as const;
-  if ((input.workItems?.length ?? 0) > MAX_WORK_ITEMS) {
-    throw new ProtocolError('VALIDATION_ERROR', 'a message may create at most four works', {
-      details: { count: input.workItems?.length ?? 0, max: MAX_WORK_ITEMS },
-    });
-  }
-  for (const item of input.workItems ?? []) {
-    if (
-      item === null ||
-      typeof item !== 'object' ||
-      !allowedIntents.includes(item.intent) ||
-      typeof item.goal !== 'string' ||
-      item.goal.trim().length === 0
-    ) {
-      throw new ProtocolError(
-        'VALIDATION_ERROR',
-        'workItems entries must name an intent and a goal',
-        {
-          details: { item: JSON.stringify(item) },
-        },
-      );
-    }
-  }
-  const explicitItems: readonly {
-    readonly intent: 'assist' | 'artifact' | 'document' | 'delivery';
-    readonly goal: string;
-  }[] = input.workItems ?? routing.items;
-  // Client-supplied items are matched to routing scopes by position first, so two
-  // items of the same intent keep independent scopes (W3R4-01).
-  const scopeFor = (item: { readonly intent: string }, index: number): Scope | undefined => {
-    if (input.workItems === undefined) return routing.items[index]?.scope;
-    const matching = routing.items.filter((candidate) => candidate.intent === item.intent);
-    const rank = input.workItems.filter(
-      (candidate, position) => position < index && candidate.intent === item.intent,
-    ).length;
-    // A client may name more items of one intent than the router produced; the extra
-    // one reuses that intent's scope instead of silently losing it (W3R6 review).
-    return matching[rank]?.scope ?? matching.at(-1)?.scope;
-  };
+  // The deterministic router is the only classifier on the wire: a client cannot
+  // invent work items, scopes or authority (W3R4/W3R7 review).
   const works: Work[] = [];
   if (input.targetWorkId !== undefined) {
     works.push(requireWork(context, input.targetWorkId, conversation.id));
   } else {
-    for (const [index, item] of explicitItems.entries()) {
-      const scope = scopeFor(item, index);
+    for (const item of routing.items) {
+      const scope = item.scope;
       works.push(
         createAssistWork(context, {
           messageId,
@@ -350,9 +302,6 @@ export function createMessageOperations(
             ...(context.params.authorization === undefined
               ? {}
               : { authorization: context.params.authorization }),
-            ...(context.params.workItems === undefined
-              ? {}
-              : { workItems: context.params.workItems }),
             ownerUserId: userIdFromSubject(context.subject),
           },
         ),

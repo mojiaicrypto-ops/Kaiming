@@ -21,7 +21,6 @@ import {
   type AttachmentService,
   type AuthService,
   type DownloadTokenStore,
-  type MessageSendParams,
 } from '@agentdev/core';
 
 export interface DaemonOptions {
@@ -177,9 +176,6 @@ export function createDaemon(options: DaemonOptions): Server {
           : [],
         ...(typeof payload['targetWorkId'] === 'string'
           ? { targetWorkId: payload['targetWorkId'] }
-          : {}),
-        ...(Array.isArray(payload['workItems'])
-          ? { workItems: payload['workItems'] as NonNullable<MessageSendParams['workItems']> }
           : {}),
       };
       // The message, its Work, the attachment bindings, the user artifacts, the

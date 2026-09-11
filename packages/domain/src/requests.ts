@@ -3,18 +3,20 @@
  *
  * The Chief is an agent, so its assessment is normally produced by a model
  * (WP-04/WP-06). This module is the deterministic baseline the Core applies before
- * that model exists. It is deliberately **conservative**: a work item only carries
- * write authority when the message reads as an unambiguous instruction, because
- * granting write scope to a question is a security failure while asking for
- * clarification is merely slower.
+ * that model exists.
  *
- * The two directions are equally important, so the rules are explicit:
- * - an instruction clause (modification verb + a named path) authorizes exactly that
- *   path (AC-005);
- * - a question, explanation, refusal, conditional or quotation never does — even when
- *   it names a path (AC-004);
- * - a message that mixes an instruction with an explanation becomes two Works with
- *   independent scopes, the explanation first (AC-006).
+ * The safety rule is one-directional and absolute: **only an imperative clause that
+ * names a change verb and a target authorizes that target.** Everything else —
+ * questions, explanations, advice, statements, refusals, hypotheticals, quotations and
+ * any phrasing whose intent is unclear — is read-only, and the Chief asks for
+ * clarification instead of guessing a write scope. A refused write is a slower answer;
+ * a wrongly granted write is a security failure.
+ *
+ * Recorded residual risk: natural-language intent cannot be classified completely by
+ * rules. A phrasing outside the registered vocabulary may be read as read-only
+ * (fail-closed). The model-driven Assessment in WP-04/WP-06 replaces this baseline;
+ * WP-03 owns the documented scenarios and the registered regression corpora, not every
+ * possible sentence.
  */
 import { emptyScope, type Intent, type Scope } from '@agentdev/contracts';
 
@@ -23,7 +25,7 @@ export interface MessageWorkItem {
   readonly intent: Extract<Intent, 'assist' | 'artifact' | 'document' | 'delivery'>;
   readonly goal: string;
   readonly scope: Scope;
-  /** Paths the message explicitly instructed to modify, in this clause. */
+  /** Paths this clause instructed to modify (already exclusion-filtered). */
   readonly writePaths: readonly string[];
 }
 
@@ -35,6 +37,13 @@ export interface MessageRouting {
   readonly reason: string;
 }
 
+/** Verbs that request reading or advice: they never authorize a change by themselves. */
+const READ_ONLY_VERBS =
+  /(看一下|看看|查看|查阅|检查|评估|总结|阅读|参考|确认|列出|罗列|建议|咨询|征求意见|方案|意见|解释|说明|介绍|描述|分析|梳理|讲讲)/u;
+
+const READ_ONLY_VERBS_EN =
+  /\b(look at|check|review|assess|summari[sz]e|read|confirm|list|suggest|advice|advise|explain|describe|tell me|show me)\b/iu;
+
 /** Verbs that ask for an explanation; only leading in a clause do they count. */
 const EXPLANATION_LEAD_PATTERN =
   /^(?:请|帮我|麻烦|请帮我)?\s*(?:解释|说明|介绍|描述|讲讲|梳理|分析)/u;
@@ -45,7 +54,7 @@ const EXPLANATION_LEAD_EN_PATTERN =
 /** Words that make a clause a question wherever they appear. */
 const QUESTION_PATTERNS: readonly RegExp[] = [
   /[?？]/u,
-  /(吗|呢|么|如何|怎么|怎样|为什么|为何|能否|是否可以|可不可以|要不要|是不是|有没有|请问|帮我看看|能不能|可以吗|是否已经)/u,
+  /(吗|呢|么|如何|怎么|怎样|为什么|为何|能否|是否可以|可不可以|要不要|是不是|有没有|请问|能不能|可以吗|是否已经|是否应该|是否需要|谁|哪些|几点)/u,
   /\b(how|why|what|when|where|which|who|can|could|should|would|is|are|am|does|do|did|have you|has it)\b/iu,
   /(question|not sure|wondering|curious)/iu,
 ];
@@ -53,35 +62,49 @@ const QUESTION_PATTERNS: readonly RegExp[] = [
 /**
  * Refusals.
  *
- * The Chinese marker `别` only counts where it negates an action (`别改`, `别修改`), so
- * words such as 错别字 / 识别 / 特别 / 分别 stay instructions (W3R5-02).
+ * `别` only counts when it negates an action and starts a word, so 错别字 / 识别 /
+ * 特别 / 分别 stay instructions (W3R5-02).
  */
 const NEGATION_PATTERNS: readonly RegExp[] = [
-  // `别` only negates when it starts a word; 错别字 / 识别 / 特别 / 分别 must stay
-  // instructions (W3R5-02).
-  /(不要|不用|不需要|无需|先不|暂不|不必|(?<![\p{Script=Han}\w])别)\s*(?:再|去|来)?\s*(?:改|修改|动|碰|删|移除|更新|添加|新增|实现|修复|重命名|重构)/u,
-  /(不是要你|没有让你|并没有要求|先说不要)/u,
+  /(不要|不用|不需要|无需|先不|暂不|不必|(?<![\p{Script=Han}\w])别)\s*(?:再|去|来)?\s*(?:改|修改|动|碰|删|移除|更新|添加|新增|实现|修复|重命名|重构|调整|处理|补)/u,
+  /(不是要你|没有让你|并没有要求|先说不要|不用管)/u,
   /\b(do not|don't|dont|never|no need to|without changing|not asking|not asking you to)\b/iu,
 ];
 
 /**
  * Statements and status questions.
  *
- * A message that reports a change ("我已经修改了 X"), states a need ("X 需要修改") or
- * asks whether something should change ("是否应该修改 X") is not an instruction, even
- * though it contains a modification verb right next to a path (W3R6 review).
+ * Chinese has no word boundaries, so the completion-aspect patterns must not use `\b`
+ * (W3R7-02). "我已经修改了 X", "X 需要修改" and "The fix needed in X" report a state;
+ * they are not instructions.
  */
 const STATEMENT_PATTERNS: readonly RegExp[] = [
-  /\b(?:已经|已|刚才|刚刚)\s*(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整)/u,
-  /(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整)了/u,
+  /(?:已经|已|刚才|刚刚)[^，。；！？]{0,24}(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整|处理|补)/u,
+  /(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整|处理)了(?:[，。；！？\s]|$)/u,
   /(?:需要|应该|应当|必须|得|该)\s*(?:修改|修复|更新|改|实现|添加|删除|移除|重命名|重构|调整|处理)/u,
   /(?:有没有|是否)\s*(?:应该|需要|该|要)/u,
-  /\b(already|have (?:already )?(?:fixed|changed|updated|added|removed|deleted)|i(?:'ve| have) (?:fixed|changed|updated)|needs? (?:to be )?(?:fixed|changed|updated|removed|deleted)|should (?:we|i|it)|ought to)\b/iu,
+  /\b(already|have (?:already )?(?:fixed|changed|updated|added|removed|deleted)|i(?:'ve| have) (?:fixed|changed|updated)|needs? (?:to be )?(?:a )?(?:fix|change|update)|needs? (?:to be )?(?:fixed|changed|updated|removed|deleted)|the fix needed|should (?:we|i|it)|ought to)\b/iu,
 ];
 
-/** Plain request verbs that ask for an action without naming a change verb. */
-const REQUEST_ACTION_PATTERN =
-  /(处理|调整|优化|完善|纠正|替换|换成|补上|弄好|搞定|过一遍|处理下|处理一下|看一下|检查一下|帮忙|帮我|麻烦|请)/u;
+/**
+ * Advice and opinion requests (`workflow.md` §1: asking whether something could be
+ * improved only produces a suggestion, never an authorization).
+ */
+const ADVICE_PATTERNS: readonly RegExp[] = [
+  /(建议|咨询|征求意见|方案|意见|评估一下|怎么样|好不好|可行吗)/u,
+  /\b(advice|suggest(?:ion)?s?|suggest|your opinion|recommend)\b/iu,
+];
+
+/**
+ * Topic phrases and nominalised mentions ("关于 X 的修复", "the fix in X").
+ *
+ * Such a clause names a subject, not an action; the verb inside it belongs to a noun.
+ */
+const TOPIC_PATTERNS: readonly RegExp[] = [
+  /^(?:关于|对于|针对|至于|就)/u,
+  /^(?:regarding|about|as for|concerning|for)\b/iu,
+  /(?:的修复|的修改|的改动|的修正|的更新|的方案|的建议|的问题|the fix (?:in|to)|the change (?:in|to)|the update (?:to|in))/iu,
+];
 
 /** Hypotheticals and quotations are not instructions. */
 const HYPOTHETICAL_PATTERNS: readonly RegExp[] = [
@@ -91,11 +114,15 @@ const HYPOTHETICAL_PATTERNS: readonly RegExp[] = [
   /["“][^"”]{0,80}["”]/u,
 ];
 
+/** Paths the clause explicitly excludes; they never enter the write scope. */
+const EXCLUSION_MARKER_PATTERN =
+  /(而不是|而非|不是|别改|不要改|不用改|无需改|instead of|rather than)/u;
+
 const MODIFICATION_PATTERN =
-  /(修复|修正|更正|改掉|改成|修改|改进|更改|改|实现|新增|添加|删除|移除|更新|补充|重命名|重构|调整|优化|完善|纠正|替换|换成|处理)/u;
+  /(修复|修正|更正|改掉|改成|改为|修改|改进|更改|改|实现|新增|添加|删除|移除|更新|补充|重命名|重构|调整|优化|完善|纠正|替换|换成|处理|整理|清理|修|补)/u;
 
 const MODIFICATION_EN_PATTERN =
-  /\b(fix|fixes|fixed|implement|update|updates|add|adds|remove|removes|delete|deletes|refactor|rename|change|changes|correct|corrects|edit|edits)\b/iu;
+  /\b(fix|fixes|implement|update|updates|add|adds|remove|removes|delete|deletes|refactor|rename|change|changes|correct|corrects|edit|edits)\b/iu;
 
 const DOCUMENT_PATTERNS: readonly RegExp[] = [
   /文档|说明书|readme|设计文档/iu,
@@ -131,11 +158,17 @@ const PATH_TOKEN_PATTERN = /^[\w.@-]+(?:\/[\w.@-]+)*$/u;
 const MAX_TOKEN_LENGTH = 512;
 const MAX_PATHS = 32;
 
-/** Clause boundaries: sentences and coordinating conjunctions, never list commas. */
+/**
+ * Clause boundaries.
+ *
+ * A comma separates independent requests, which is what makes "别改 A，改 B" authorize
+ * only B. `并` only splits when it introduces a fresh change verb, so 合并/并且 inside a
+ * word cannot fork a clause by accident.
+ */
 const CLAUSE_SPLIT_PATTERN =
-  /(?:[;；。!！\n]+)|(?:\s+(?:and|then)\s+)|(?:[，,]\s*(?:and|then|然后|并且|同时|而且)\s*)/iu;
+  /(?:[，,；;。!！\n]+)|(?:\s+(?:and|then)\s+)|(?:(?:并且|然后|同时|而且))|(?:并(?=\s*(?:请|麻烦|帮我)?\s*(?:修复|修正|修改|更新|删除|移除|添加|新增|实现|改|补|整理|清理|处理)))/iu;
 
-/** Upper bound on the Works one message may create (`messages.ts` enforces it). */
+/** Upper bound on the Works one message may create. */
 export const MAX_WORK_ITEMS = 4;
 
 /** Paths a message names; linear in the body length. */
@@ -168,6 +201,22 @@ function matches(patterns: readonly RegExp[], body: string): boolean {
   return patterns.some((pattern) => pattern.test(body));
 }
 
+/**
+ * Write paths of one clause, minus the targets the clause excludes.
+ *
+ * "修改 docs/PLAN.md 而不是 docs/INDEX.md" authorizes the first path and never the
+ * second (W3R7 A1); a clause that starts with a refusal authorizes nothing.
+ */
+function authorizedPaths(clause: string): string[] {
+  if (matches(NEGATION_PATTERNS, clause)) return [];
+  const exclusion = EXCLUSION_MARKER_PATTERN.exec(clause);
+  if (exclusion === null) return pathsIn(clause);
+  const before = clause.slice(0, exclusion.index);
+  const after = clause.slice(exclusion.index + exclusion[0].length);
+  const excluded = new Set(pathsIn(after));
+  return pathsIn(before).filter((path) => !excluded.has(path));
+}
+
 interface ClauseReading {
   readonly paths: readonly string[];
   readonly instruction: boolean;
@@ -189,21 +238,29 @@ function readClause(clause: string): ClauseReading {
   if (matches(STATEMENT_PATTERNS, clause)) {
     return { paths, instruction: false, explanation: true };
   }
-  const leadsExplanation =
-    EXPLANATION_LEAD_PATTERN.test(clause) || EXPLANATION_LEAD_EN_PATTERN.test(clause);
-  const modifies =
-    MODIFICATION_PATTERN.test(clause) ||
-    MODIFICATION_EN_PATTERN.test(clause) ||
-    REQUEST_ACTION_PATTERN.test(clause);
-  if (leadsExplanation) {
-    // The leading verb decides: "describe the fix needed in X" is an explanation even
-    // though it contains the word "fix".
+  if (matches(ADVICE_PATTERNS, clause)) {
     return { paths, instruction: false, explanation: true };
   }
-  if (modifies && paths.length > 0) {
-    return { paths, instruction: true, explanation: false };
+  if (matches(TOPIC_PATTERNS, clause)) {
+    return { paths, instruction: false, explanation: true };
   }
-  // A change without a target (ask before writing) or a mention without a verb.
+  const leadsExplanation =
+    EXPLANATION_LEAD_PATTERN.test(clause) || EXPLANATION_LEAD_EN_PATTERN.test(clause);
+  if (leadsExplanation) {
+    // The leading verb decides: "describe the fix needed in X" asks for words.
+    return { paths, instruction: false, explanation: true };
+  }
+  const modifies = MODIFICATION_PATTERN.test(clause) || MODIFICATION_EN_PATTERN.test(clause);
+  const readOnlyOnly =
+    (READ_ONLY_VERBS.test(clause) || READ_ONLY_VERBS_EN.test(clause)) && !modifies;
+  if (readOnlyOnly) {
+    return { paths, instruction: false, explanation: true };
+  }
+  const writable = authorizedPaths(clause);
+  if (modifies && writable.length > 0) {
+    return { paths: writable, instruction: true, explanation: false };
+  }
+  // A change without an authorized target: ask before writing.
   return { paths, instruction: false, explanation: modifies || paths.length > 0 };
 }
 
@@ -257,6 +314,6 @@ export function routeMessage(body: string): MessageRouting {
     ? trimmed.length > 1
       ? 'mixed message: one explanation Work and one authorized modification Work'
       : 'explicit instruction with a target: the message authorizes its own scope'
-    : 'question, explanation or refusal: read-only route, nothing granted';
+    : 'no imperative instruction with a target: read-only route, nothing granted';
   return { items: trimmed, explicitAuthorization: explicit, reason };
 }
