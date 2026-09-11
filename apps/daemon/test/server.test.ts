@@ -68,6 +68,7 @@ describe('daemon HTTP surface (WP-03)', () => {
     server = createDaemon({
       projectId,
       store,
+      blobs,
       auth,
       attachments,
       artifacts,
@@ -301,6 +302,114 @@ describe('daemon HTTP surface (WP-03)', () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(refused.status).toBe(400);
+  });
+
+  it('refuses a wrong signature, an unknown conversation and a foreign target Work', async () => {
+    // A declared type that does not match the bytes is refused before storage.
+    const mislabelled = await upload('%PDF-1.7 not really an image', 'image/png', 'fake.png');
+    expect(mislabelled.status).toBe(400);
+    expect(store.attachments.list()).toHaveLength(0);
+
+    // An unknown conversation is NOT_FOUND, not a foreign-key crash.
+    const form = new FormData();
+    form.set('conversationId', '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d5f99');
+    form.set('file', new Blob(['<p>x</p>'], { type: 'text/html' }), 'x.html');
+    const orphan = await fetch(`${url}/artifacts/upload`, authed({ method: 'POST', body: form }));
+    expect(orphan.status).toBe(404);
+    expect(await orphan.text()).toContain('NOT_FOUND');
+
+    // A follow-up may not target a Work created from another conversation.
+    const elsewhere = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d5f02';
+    store.conversations.insert({
+      id: elsewhere,
+      projectId,
+      title: 'other',
+      archived: false,
+    });
+    const first = await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ conversationId: CONVERSATION_ID, body: 'first' }),
+      }),
+    );
+    const sent = (await first.json()) as { workId: string };
+    const wrongTarget = await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: elsewhere,
+          body: 'hijack',
+          targetWorkId: sent.workId,
+        }),
+      }),
+    );
+    expect(wrongTarget.status).toBe(403);
+  });
+
+  it('keeps the inline preview inside both ceilings and reports validity', async () => {
+    // A single 1 MiB+ line is truncated by bytes, not only by line count.
+    const long = 'a'.repeat(ARTIFACT_LIMITS.inlinePreviewMaxBytes + 1_024);
+    const uploadResponse = await upload(long, 'text/plain');
+    const uploaded = (await uploadResponse.json()) as { attachmentId: string };
+    await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: CONVERSATION_ID,
+          body: 'big',
+          attachmentIds: [uploaded.attachmentId],
+        }),
+      }),
+    );
+    const artifact = store.artifacts.list({ where: 'origin = ?', params: ['user'] }).at(-1);
+    if (artifact === undefined) throw new Error('no user artifact');
+    const preview = await fetch(`${url}/artifacts/${artifact.id}/preview`, authed());
+    expect(preview.status).toBe(200);
+    const body = await preview.text();
+    expect(Buffer.byteLength(body, 'utf8')).toBeLessThanOrEqual(
+      ARTIFACT_LIMITS.inlinePreviewMaxBytes,
+    );
+    expect(preview.headers.get('x-agentdev-artifact-validity')).toBe('valid');
+  });
+
+  it('issues unguessable one-shot download tokens (W3-01)', async () => {
+    const uploadResponse = await upload('<p>secret</p>', 'text/plain');
+    const uploaded = (await uploadResponse.json()) as { attachmentId: string };
+    await fetch(
+      `${url}/conversation.message.send`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: CONVERSATION_ID,
+          body: 'download',
+          attachmentIds: [uploaded.attachmentId],
+        }),
+      }),
+    );
+    const artifact = store.artifacts.list({ where: 'origin = ?', params: ['user'] }).at(-1);
+    if (artifact === undefined) throw new Error('no user artifact');
+    const prepare = await fetch(
+      `${url}/artifacts/download.prepare`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ artifactId: artifact.id }),
+      }),
+    );
+    const grant = (await prepare.json()) as { downloadToken: string };
+    // 256 bits of randomness, and the artifact id must not be derivable from the token.
+    expect(grant.downloadToken.length).toBeGreaterThanOrEqual(43);
+    expect(grant.downloadToken).not.toContain(artifact.id);
+    // A guessed token is refused.
+    const guessed = await fetch(`${url}/artifacts/download/${'a'.repeat(43)}`);
+    expect(guessed.status).toBe(403);
   });
 
   it('parses multipart bodies without a framework dependency', () => {

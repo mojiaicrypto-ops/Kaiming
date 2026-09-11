@@ -7,8 +7,8 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { JsonObject, Role } from '@agentdev/contracts';
-import { withTransaction } from '@agentdev/storage';
-import type { ProjectStore } from '@agentdev/storage';
+import { StorageError, withTransaction } from '@agentdev/storage';
+import type { BlobStore, ProjectStore } from '@agentdev/storage';
 import {
   ProtocolError,
   assertPreviewable,
@@ -26,6 +26,7 @@ import {
 export interface DaemonOptions {
   readonly projectId: string;
   readonly store: ProjectStore;
+  readonly blobs: BlobStore;
   readonly auth: AuthService;
   readonly attachments: AttachmentService;
   readonly artifacts: ArtifactService;
@@ -38,7 +39,16 @@ export interface DaemonOptions {
 }
 
 interface Authed {
+  /** Audit subject: the session or the installation credential. */
   readonly subject: string;
+  /**
+   * Ownership identity for uploads and messages.
+   *
+   * AgentDev is a single-user, self-hosted installation, so every authenticated
+   * session is the same user: an upload made in one browser session is bindable from
+   * another, and the value stays stable across restarts (W3-03).
+   */
+  readonly userId: string;
 }
 
 /** A request-level failure that already maps onto the protocol error table. */
@@ -96,21 +106,22 @@ export function createDaemon(options: DaemonOptions): Server {
     }
     if (path.startsWith('/artifacts/uploads/') && method === 'DELETE') {
       const attachmentId = segment(path, 3);
-      const removed = options.attachments.remove(attachmentId, userIdFromSubject(authed.subject));
+      const removed = options.attachments.remove(attachmentId, authed.userId);
       json(response, 200, { attachmentId: removed.id, state: removed.state });
       return;
     }
     if (path.startsWith('/artifacts/') && path.endsWith('/preview') && method === 'GET') {
       const artifactId = segment(path, 2);
       const artifact = options.artifacts.get(artifactId);
-      if (!options.artifacts.isReadable(artifact, role)) {
-        throw new HttpError(403, 'NOT_AUTHORIZED', 'the artifact is not readable by this role');
-      }
+      assertReadable(artifact, authed.userId);
       assertPreviewable(artifact.kind, artifact.mime);
       const bytes = options.artifacts.read(artifact);
       const body = renderPreview(artifact, bytes);
       response.writeHead(200, {
         ...previewHeaders(artifact.mime),
+        // The client renders the validity badge from the response, so an invalidated
+        // artifact is not silently presented as current (W3-06).
+        'x-agentdev-artifact-validity': artifact.validity,
         'content-length': String(Buffer.byteLength(body.text, 'utf8')),
       });
       response.end(body.text);
@@ -123,9 +134,7 @@ export function createDaemon(options: DaemonOptions): Server {
         artifactId,
         typeof payload['artifactVersion'] === 'number' ? payload['artifactVersion'] : undefined,
       );
-      if (!options.artifacts.isReadable(artifact, role)) {
-        throw new HttpError(403, 'NOT_AUTHORIZED', 'the artifact is not readable by this role');
-      }
+      assertReadable(artifact, authed.userId);
       const grant = options.tokens.issue(artifact);
       json(response, 200, {
         downloadToken: grant.token,
@@ -168,7 +177,7 @@ export function createDaemon(options: DaemonOptions): Server {
         let commandId: string | undefined;
         if (idempotencyKey !== undefined) {
           const begun = options.store.commands.begin({
-            subject: authed.subject,
+            subject: authed.userId,
             operation: 'conversation.message.send',
             key: idempotencyKey,
             payloadHash: payloadHashOf('conversation.message.send', params),
@@ -187,9 +196,10 @@ export function createDaemon(options: DaemonOptions): Server {
             store: options.store,
             attachments: options.attachments,
             artifacts: options.artifacts,
+            blobs: options.blobs,
             now,
           },
-          { ...params, owner: authed.subject },
+          { ...params, ownerUserId: authed.userId },
         );
         const reply: JsonObject = {
           messageId: sent.messageId,
@@ -218,6 +228,25 @@ export function createDaemon(options: DaemonOptions): Server {
     throw new HttpError(404, 'NOT_FOUND', `no route for ${method} ${path}`);
   }
 
+  /**
+   * Enforces artifact readability for one authenticated subject.
+   *
+   * The role ACL decides which roles may see an artifact; a user upload additionally
+   * stays with the subject that supplied it, so one browser session cannot read
+   * another's upload even inside the same project (W3 review).
+   */
+  function assertReadable(artifact: ReturnType<ArtifactService['get']>, userId: string): void {
+    if (!options.artifacts.isReadable(artifact, role)) {
+      throw new HttpError(403, 'NOT_AUTHORIZED', 'the artifact is not readable by this role');
+    }
+    if (artifact.origin === 'user' && artifact.attachmentId !== undefined) {
+      const attachment = options.store.attachments.find(artifact.attachmentId);
+      if (attachment !== undefined && attachment.ownerUserId !== userId) {
+        throw new HttpError(403, 'NOT_AUTHORIZED', 'the artifact belongs to another user');
+      }
+    }
+  }
+
   /** Serves one artifact body for a consumed download token. */
   function serveDownload(response: ServerResponse, token: string): void {
     const grant = options.tokens.consume(token);
@@ -235,15 +264,17 @@ export function createDaemon(options: DaemonOptions): Server {
       'content-disposition': `attachment; filename="${artifact.id}.${artifact.artifactVersion}"`,
       'cache-control': 'no-store',
       'x-content-type-options': 'nosniff',
+      'x-agentdev-artifact-validity': artifact.validity,
     });
     response.end(Buffer.from(bytes));
   }
 
   function authenticate(request: IncomingMessage, isWrite: boolean): Authed {
+    const userId = userIdFromSubject('installation:local');
     const bearer = options.auth.authenticateBearer(request.headers.authorization);
     if (bearer.ok) {
       // The daemon/CLI credential is a full-project subject.
-      return { subject: 'installation:local' };
+      return { subject: 'installation:local', userId };
     }
     const decision = options.auth.authenticate({
       ...(cookieOf(request) === undefined ? {} : { cookie: cookieOf(request) as string }),
@@ -256,7 +287,7 @@ export function createDaemon(options: DaemonOptions): Server {
     if (!decision.ok) {
       throw new HttpError(decision.status, decision.code, decision.message);
     }
-    return { subject: `user:${decision.session.id}` };
+    return { subject: `user:${decision.session.id}`, userId };
   }
 
   async function upload(
@@ -278,9 +309,12 @@ export function createDaemon(options: DaemonOptions): Server {
     if (file === undefined) {
       throw new HttpError(400, 'VALIDATION_ERROR', 'a file part is required');
     }
+    // Opportunistic sweep: staged uploads that outlived their TTL are released
+    // whenever a client uploads again (no scheduler exists yet).
+    options.attachments.expireStale();
     const attachment = options.attachments.stage({
       conversationId,
-      ownerUserId: userIdFromSubject(authed.subject),
+      ownerUserId: authed.userId,
       mime: file.mime || 'application/octet-stream',
       bytes: file.bytes,
     });
@@ -310,6 +344,19 @@ export function createDaemon(options: DaemonOptions): Server {
       json(response, status, {
         ok: false,
         error: { code: error.code, message: error.message, retryable: error.retryable },
+      });
+      return;
+    }
+    if (error instanceof StorageError) {
+      // A foreign key or constraint failure is a bad request, not a server crash.
+      const notFound = error.code === 'NOT_FOUND' || /FOREIGN KEY/u.test(error.message);
+      json(response, notFound ? 404 : 400, {
+        ok: false,
+        error: {
+          code: notFound ? 'NOT_FOUND' : 'VALIDATION_ERROR',
+          message: 'the request references a record that does not exist',
+          retryable: false,
+        },
       });
       return;
     }

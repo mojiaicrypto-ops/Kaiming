@@ -316,12 +316,12 @@ describe('attachments, artifacts and previews (WP-03)', () => {
       bytes: Buffer.from('<p>hi</p>', 'utf8'),
     });
     const sent = sendMessage(
-      { projectId, store, attachments, artifacts, now: () => clock },
+      { projectId, store, attachments, artifacts, blobs, now: () => clock },
       {
         conversationId: CONVERSATION_ID,
         body: 'explain the routing rules',
         attachmentIds: [staged.id],
-        owner: subject,
+        ownerUserId: owner,
       },
     );
     const work = store.works.find(sent.workId);
@@ -338,8 +338,8 @@ describe('attachments, artifacts and previews (WP-03)', () => {
 
     // A second message reuses the conversation sequence and creates its own Work.
     const second = sendMessage(
-      { projectId, store, attachments, artifacts, now: () => clock },
-      { conversationId: CONVERSATION_ID, body: 'and now a follow-up', owner: subject },
+      { projectId, store, attachments, artifacts, blobs, now: () => clock },
+      { conversationId: CONVERSATION_ID, body: 'and now a follow-up', ownerUserId: owner },
     );
     expect(store.messages.find(second.messageId)?.seq).toBe(2);
     expect(second.workId).not.toBe(sent.workId);
@@ -347,8 +347,8 @@ describe('attachments, artifacts and previews (WP-03)', () => {
     // An oversized body is refused before any row is written.
     expect(() =>
       sendMessage(
-        { projectId, store, attachments, artifacts, now: () => clock },
-        { conversationId: CONVERSATION_ID, body: 'x'.repeat(64_001), owner: subject },
+        { projectId, store, attachments, artifacts, blobs, now: () => clock },
+        { conversationId: CONVERSATION_ID, body: 'x'.repeat(64_001), ownerUserId: owner },
       ),
     ).toThrowError(/too long/);
     expect(store.messages.list()).toHaveLength(2);

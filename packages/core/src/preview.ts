@@ -6,16 +6,24 @@
  * network. The policy is expressed as response headers here so the HTTP layer cannot
  * accidentally serve a preview with a weaker one.
  */
+import { randomBytes } from 'node:crypto';
 import { ARTIFACT_LIMITS, type Artifact, type ArtifactKind } from '@agentdev/contracts';
 import { ProtocolError } from './errors.js';
 
 /** `execution.md` §6: scripts only — no same-origin, forms, navigation or popups. */
 export const PREVIEW_SANDBOX = 'allow-scripts';
 
-/** `execution.md` §6: static HTML, inline script/style, data images, no network. */
+/**
+ * `execution.md` §6: static HTML, inline script/style, data images, no network.
+ *
+ * The `sandbox allow-scripts` directive repeats the iframe attribute in the response
+ * itself, so a preview opened as a top-level document is still isolated and a client
+ * that omits the custom header cannot weaken the policy (W3 review, adversarial 4).
+ */
 export const PREVIEW_CSP =
-  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
-  "img-src data: blob:; connect-src 'none'";
+  "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; " +
+  "style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; " +
+  "frame-ancestors 'self'";
 
 /** Mimes that may be rendered as HTML in a preview. */
 export const HTML_PREVIEW_MIMES = ['text/html', 'application/xhtml+xml'] as const;
@@ -75,13 +83,27 @@ export function renderPreview(
     };
   }
   const kept = allLines.slice(0, ARTIFACT_LIMITS.inlinePreviewMaxLines);
+  const joined = kept.join('\n');
+  // Both ceilings are real: 2000 lines *and* 1 MiB, whichever binds first. Cutting
+  // only by lines let a 2 MiB single-line document through (W3 adversarial 1).
+  const clipped = clipToBytes(joined, ARTIFACT_LIMITS.inlinePreviewMaxBytes);
   return {
     mode: 'truncated',
-    text: kept.join('\n'),
-    lines: kept.length,
+    text: clipped,
+    lines: clipped.split('\n').length,
     truncatedAtLine: overLines ? ARTIFACT_LIMITS.inlinePreviewMaxLines : null,
     downloadRequired: true,
   };
+}
+
+/** UTF-8 safe truncation to a byte ceiling. */
+function clipToBytes(text: string, maxBytes: number): string {
+  const buffer = Buffer.from(text, 'utf8');
+  if (buffer.byteLength <= maxBytes) return text;
+  let end = maxBytes;
+  // Never split a multi-byte character: back up over continuation bytes.
+  while (end > 0 && (buffer[end] ?? 0) >= 0x80 && (buffer[end] ?? 0) < 0xc0) end -= 1;
+  return buffer.subarray(0, end).toString('utf8');
 }
 
 /** True when a preview must refuse to inline the artifact body. */
@@ -106,16 +128,25 @@ export class DownloadTokenStore {
   private readonly grants = new Map<string, DownloadGrant>();
   private readonly now: () => number;
   private readonly ttlMs: number;
-  private sequence = 0;
+  private readonly newToken: () => string;
 
-  constructor(options: { readonly now?: () => number; readonly ttlMs?: number } = {}) {
+  constructor(
+    options: {
+      readonly now?: () => number;
+      readonly ttlMs?: number;
+      readonly newToken?: () => string;
+    } = {},
+  ) {
     this.now = options.now ?? (() => Date.now());
     this.ttlMs = options.ttlMs ?? ARTIFACT_LIMITS.downloadTokenTtlSec * 1000;
+    // A 256-bit random token: guessing one must be infeasible, not merely unlikely
+    // (W3-01: the previous counter shape was predictable).
+    this.newToken = options.newToken ?? (() => randomBytes(32).toString('base64url'));
   }
 
   issue(artifact: Pick<Artifact, 'id' | 'artifactVersion'>): DownloadGrant {
     const before = this.now();
-    const token = `${artifact.id}.${artifact.artifactVersion}.${(this.sequence += 1)}`;
+    const token = this.newToken();
     const grant: DownloadGrant = {
       token,
       artifactId: artifact.id,

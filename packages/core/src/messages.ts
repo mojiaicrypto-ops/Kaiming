@@ -14,7 +14,8 @@ import {
   type Message,
   type Work,
 } from '@agentdev/contracts';
-import { sha256, uuidv7 } from '@agentdev/storage';
+import { uuidv7 } from '@agentdev/storage';
+import type { BlobStore } from '@agentdev/storage';
 import { userIdFromSubject } from './identity.js';
 import type { OperationDefinition, OperationContext } from './dispatcher.js';
 import { ProtocolError } from './errors.js';
@@ -40,6 +41,7 @@ export interface MessageSendResult {
 export interface MessageOperationsOptions {
   readonly attachments: AttachmentService;
   readonly artifacts: ArtifactService;
+  readonly blobs: BlobStore;
   /** Injectable clock, milliseconds. */
   readonly now?: () => number;
 }
@@ -49,8 +51,13 @@ export interface MessageTransactionInput {
   readonly body: string;
   readonly attachmentIds?: readonly string[];
   readonly targetWorkId?: string;
-  /** The authenticated author; also the owner of the uploads being bound. */
-  readonly owner: string;
+  /**
+   * Ownership id of the uploads being bound, already resolved by the caller.
+   *
+   * The daemon passes the installation user; the dispatcher operation derives it from
+   * the authenticated subject. Keeping it resolved avoids deriving twice.
+   */
+  readonly ownerUserId: string;
 }
 
 /**
@@ -65,6 +72,7 @@ export function sendMessage(
     readonly store: OperationContext['store'];
     readonly attachments: AttachmentService;
     readonly artifacts: ArtifactService;
+    readonly blobs: BlobStore;
     readonly now: () => number;
   },
   input: MessageTransactionInput,
@@ -92,22 +100,28 @@ export function sendMessage(
   }
 
   const messageId = uuidv7(before);
-  const owner = userIdFromSubject(input.owner);
+  const owner = input.ownerUserId;
   const sequence = context.store.messages.count('conversation_id = ?', [conversation.id]) + 1;
+  // `data.md` §4: the body blob is written first and the immutable `message_body`
+  // row references it by hash (W3-04).
+  const bodyBlob = context.blobs.write(body);
+  if (bodyBlob.hash !== bodyBlob.hash.toLowerCase() || bodyBlob.relativePath.length === 0) {
+    throw new ProtocolError('INTERNAL_ERROR', 'the message body could not be stored');
+  }
   const bodyRow = context.store.messageBodies.insert({
     id: uuidv7(before),
     ownerKind: 'user',
     ownerUserId: owner,
     mime: 'text/plain',
-    contentHash: sha256(body),
-    relativeBlobPath: `messages/${sha256(body)}`,
-    bytes: Buffer.byteLength(body, 'utf8'),
+    contentHash: bodyBlob.hash,
+    relativeBlobPath: bodyBlob.relativePath,
+    bytes: bodyBlob.bytes,
   } as never);
 
   const work =
     input.targetWorkId === undefined
       ? createAssistWork(context, { messageId, body, now: before })
-      : requireWork(context, input.targetWorkId);
+      : requireWork(context, input.targetWorkId, conversation.id);
 
   // Validate and bind every upload before the message row exists, so a bad list
   // cannot leave a half-sent message behind.
@@ -168,6 +182,7 @@ export function createMessageOperations(
             store: context.store,
             attachments: options.attachments,
             artifacts: options.artifacts,
+            blobs: options.blobs,
             now,
           },
           {
@@ -179,7 +194,7 @@ export function createMessageOperations(
             ...(context.params.targetWorkId === undefined
               ? {}
               : { targetWorkId: context.params.targetWorkId }),
-            owner: context.subject,
+            ownerUserId: userIdFromSubject(context.subject),
           },
         ),
       events: (_context, result) => [
@@ -244,10 +259,24 @@ function createAssistWork(
   } as never);
 }
 
-function requireWork(context: { readonly store: OperationContext['store'] }, workId: string): Work {
+function requireWork(
+  context: { readonly store: OperationContext['store'] },
+  workId: string,
+  conversationId: string,
+): Work {
   const work = context.store.works.find(workId);
   if (work === undefined) {
     throw new ProtocolError('NOT_FOUND', `Work ${workId} does not exist`, { details: { workId } });
+  }
+  // A follow-up may only target a Work created from this conversation; otherwise a
+  // session could attach its message to another conversation's Work (W3 review).
+  if (work.sourceRef.kind === 'message') {
+    const source = context.store.messages.find(work.sourceRef.id);
+    if (source !== undefined && source.conversationId !== conversationId) {
+      throw new ProtocolError('NOT_AUTHORIZED', `Work ${workId} belongs to another conversation`, {
+        details: { workId, conversationId },
+      });
+    }
   }
   return work;
 }

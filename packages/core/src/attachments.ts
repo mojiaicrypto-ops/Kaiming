@@ -30,6 +30,48 @@ export const ATTACHMENT_MIME_ALLOWLIST = [
   'application/pdf',
 ] as const;
 
+/**
+ * How many staged uploads one owner may keep before binding them.
+ *
+ * `ATTACHMENT_LIMITS` bounds a single message, not the pending queue; without this a
+ * client could park 20 MiB uploads indefinitely (W3 adversarial 5).
+ */
+export const MAX_STAGED_PER_OWNER = 50;
+
+/**
+ * True when the bytes look like the declared mime.
+ *
+ * `execution.md` §6 requires size, mime *and* file signature checks on upload, so the
+ * server does not trust a Content-Type alone.
+ */
+export function matchesDeclaredType(mime: string, bytes: Uint8Array): boolean {
+  const startsWith = (...signature: readonly number[]): boolean =>
+    signature.every((byte, index) => bytes[index] === byte);
+  switch (mime) {
+    case 'image/png':
+      return startsWith(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
+    case 'image/jpeg':
+      return startsWith(0xff, 0xd8, 0xff);
+    case 'image/webp':
+      return (
+        startsWith(0x52, 0x49, 0x46, 0x46) &&
+        bytes[8] === 0x57 &&
+        bytes[9] === 0x45 &&
+        bytes[10] === 0x42 &&
+        bytes[11] === 0x50
+      );
+    case 'application/pdf':
+      return startsWith(0x25, 0x50, 0x44, 0x46);
+    default: {
+      // Textual types must be valid UTF-8 without NUL bytes; a binary payload hiding
+      // behind text/html is refused.
+      if (bytes.includes(0)) return false;
+      const decoded = Buffer.from(bytes).toString('utf8');
+      return !decoded.includes('\uFFFD');
+    }
+  }
+}
+
 export interface AttachmentServiceOptions {
   readonly store: ProjectStore;
   readonly blobs: BlobStore;
@@ -66,6 +108,27 @@ export class AttachmentService {
 
   /** Uploads one file as a staged attachment; no Work or Run is required. */
   stage(input: StageAttachmentInput): Attachment {
+    // The conversation must exist before any bytes are stored, otherwise the insert
+    // fails on its foreign key after the blob is already on disk (W3-05).
+    const conversation = this.store.conversations.find(input.conversationId);
+    if (conversation === undefined) {
+      throw new ProtocolError('NOT_FOUND', `conversation ${input.conversationId} does not exist`, {
+        details: { conversationId: input.conversationId },
+      });
+    }
+    if (conversation.archived) {
+      throw new ProtocolError('INVALID_STATE', 'the conversation is archived', {
+        details: { conversationId: conversation.id },
+      });
+    }
+    const pending = this.list({ conversationId: input.conversationId, state: 'staged' }).filter(
+      (attachment) => attachment.ownerUserId === input.ownerUserId,
+    );
+    if (pending.length >= MAX_STAGED_PER_OWNER) {
+      throw new ProtocolError('VALIDATION_ERROR', 'too many pending uploads for this owner', {
+        details: { pending: pending.length, max: MAX_STAGED_PER_OWNER },
+      });
+    }
     const mime = input.mime.trim().toLowerCase();
     if (!(ATTACHMENT_MIME_ALLOWLIST as readonly string[]).includes(mime)) {
       throw new ProtocolError(
@@ -80,6 +143,13 @@ export class AttachmentService {
       throw new ProtocolError('VALIDATION_ERROR', 'attachment is empty', {
         details: { mime },
       });
+    }
+    if (!matchesDeclaredType(mime, input.bytes)) {
+      throw new ProtocolError(
+        'VALIDATION_ERROR',
+        `attachment content does not match its declared type ${mime}`,
+        { details: { mime } },
+      );
     }
     if (input.bytes.byteLength > ATTACHMENT_LIMITS.maxBytesEach) {
       throw new ProtocolError('VALIDATION_ERROR', 'attachment exceeds the per-file size limit', {
