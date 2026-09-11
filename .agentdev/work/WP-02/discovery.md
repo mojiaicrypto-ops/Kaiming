@@ -216,9 +216,16 @@ delivery/document 若未声明可核查的 L1 前提（`semanticImpact=false`、
 - 接受的评估在 `assessment.saved` 里同时记录 `decidedLevel`、`floor` 与 `decidedReason`（第十轮 R10-03：原来只记 `decidedLevel`，与「L1 被接受」的记录互相矛盾）。
 - 词表当前是实现级的（`routing.ts` + 本记录），是否提为 `data.md`/contracts 的正式枚举属产品决定（第十轮 R10-01 的选项 a）；在确认前，未登记旗标一律拒绝而不是放行。
 
-## DC-63 L3 的 authorizationRef 必须指向真实授权（Review 第九轮 对抗性漏项 B）
+## DC-63 授权核对：存在性、同一 Work、未撤销、范围覆盖（Review 第九/十/十二/十三轮）
 
-`workflow.md` §1「Core 检查角色、字段、授权、权限和版本」、`data.md` §2「Core 核对来源与权限」。原实现只检查 `authorizationRef` 是否存在字符串，伪造 UUID 即可获得 L3。修复（第十轮 R10-02 扩展）：`Orchestrator.verifyAuthorization` 统一核对——按 id 查 `authorization` 行（不存在 ⇒ `NOT_AUTHORIZED`）、必须属于同一 Work（跨 Work 授权拒绝）、必须未 `revokedAt`（已撤销拒绝）；只要调用方提供了 `authorizationRef` 就核对（即便该等级不要求，伪造 id 也不能落库）；`dispatch` 用 `extras.authorizationRef ?? work.authorizationRef` 与 `work.level` 走同一函数（第十一轮 R11-03 更正：原记录写「`dispatch` 不知道 Work 等级」不实——`work.level` 与 `work.authorizationRef` 都在 Work 行上），因此 **L3 Work 必须有可核对的授权**（调用方提供，或 Work 行自带；两者都没有 ⇒ `NOT_AUTHORIZED`），同时不会造成「Chief 无法先做评估」的死锁，因为 L3 Work 的授权本就来自用户请求。授权**范围是否覆盖本次 `scope`/`operations`** 仍登记为 WP-04/WP-05 的落线工作（当前只核对存在性、同 Work、未撤销）。
+`workflow.md` §1「Core 检查角色、字段、授权、权限和版本」、`data.md` §2「Core 核对来源与权限」、`data.md` §3（`effectiveScope` 必须在授权范围内）。`Orchestrator.verifyAuthorization(ref, workId, level, scope?)` 统一核对，返回实际核对的引用（供 DispatchSnapshot 冻结）：
+- `ref` 缺省：`requiresExplicitAuthorization(level)` ⇒ `NOT_AUTHORIZED`；否则无授权需求（`assess` 传入等级，`dispatch` 传入由 Work 等级与 spec scope 推出的 `runLevel`）；
+- `ref` 指向不存在的行 ⇒ `NOT_AUTHORIZED`；属于其他 Work ⇒ `NOT_AUTHORIZED`；已 `revokedAt` ⇒ `NOT_AUTHORIZED`；
+- 只要提供了 `ref`（即便该等级不要求）都会核对，伪造 id 不能落库；
+- 提供 `scope` 时逐项核对覆盖：`operations` ⊆ 授权 `operations`、`networkTargets` ⊆ 授权 `scope.networkTargets`、`writePaths`/`readPaths` 必须位于授权 `scope.writePaths`/`readPaths` 之内（路径前缀包含）。未被覆盖 ⇒ `NOT_AUTHORIZED`，details 列出四类未覆盖项。
+- `dispatch` 用 `extras.authorizationRef ?? work.authorizationRef`，因此 L3 Work 始终有可核对的授权来源（第十一轮 R11-03），并把核对通过的引用冻结进 DispatchSnapshot（第十二轮 R12-03）。
+- 仍属后续工作（承接 WP-04/WP-05）：授权的 `acceptedAt`/来源消息核对、`once` 类授权的消费记账、`work.level` 的写入（`assess` 目前不回写 Work 行，`works.update` 全仓无调用点）。
+
 
 ## DC-64 风险旗标词表的归属与未登记值处理（Review 第十轮 R10-01；Product Decision Pending）
 
@@ -237,3 +244,22 @@ delivery/document 若未声明可核查的 L1 前提（`semanticImpact=false`、
 - 授权核对加入范围覆盖：spec 的每个 `operations` 必须在授权的 `operations` 中、每个 `networkTargets` 必须在授权 `scope.networkTargets` 中；
 - 核对通过的引用（含来自 Work 行的引用）写入 `DispatchSnapshot.authorizationRef`，重启恢复（AC-082）能重建授权来源。
 - 仍属 WP-04/WP-05 的后续工作：`writePaths` 是否必须在授权 `scope.writePaths` 内、授权的 `acceptedAt`/来源消息核对、Work 行等级的更新（`assess` 目前不写 `work.level`，`works.update` 全仓无调用点）。
+
+## DC-67 本地写操作也属修改授权（Review 第十三轮 R13-01/R13-02）
+
+`dispatch` 的写权限门禁原先只看 `spec.scope.writePaths`，于是两处 fail-open：`none` 级 Work 用 `operations:['edit']`（空 `writePaths`）即可建 Run；`none` 级 Work 声明一个被授权的环境操作（如 `deploy`）后，派生的 `runLevel='L3'` 会覆盖 Work 等级，从而也能带 `writePaths`。修复：
+- 门禁改用 **Work 自己的等级**（`grantsModificationAuthority(work.level)`），spec 不能靠声明环境操作升级修改权；
+- 「是否修改」由 `declaresWorkspaceWrite(scope)` 判定：`writePaths` 非空 **或** 命中工作区写操作集合 `WORKSPACE_WRITE_OPERATIONS = ['edit','write','artifact_write']`（定义在 `domain/routing.ts`）。
+`data.md` §2「none不产生修改授权」由此在 Run 建立边界真正生效。
+
+## DC-68 授权范围覆盖的路径维度（Review 第十三轮 R13-01）
+
+原先范围覆盖只查 `operations`/`networkTargets`，只读授权（`scope.writePaths: []`）可以为声明 `writePaths:['packages/core/src']` 的 Run 背书并把该路径冻结为「生效范围」。修复：`verifyAuthorization` 增加路径覆盖（`writePaths`/`readPaths` 必须位于授权 scope 之内，按路径前缀包含判定，`isInsideScope`）；`assess` 也把自己的 `scope` 传入核对（此前只核对引用存在性）。
+
+## DC-69 `undefined` 可选字段的清理（Review 第十三轮 R13-03）
+
+zod 的解析结果会保留调用方显式传入的 `undefined` 可选字段（如 `taskId: undefined`），这种键在冻结快照时被 `jsonObjectSchema` 拒绝，产生 `StorageError/CONSTRAINT_VIOLATION` 且留下 `config`/`context` 快照（违反 `protocol.md` §1 的封闭错误表与 DC-58 的零副作用）。修复：`dispatch` 在解析后用 `jsonClean` 递归删除 `undefined` 值属性（`professionalSpec` 同样处理），使「可选字段=undefined」等价于「缺省」。
+
+## DC-70 `config.policy.l3Paths`/`l3Keywords` 无消费方（Review 第十三轮 R13-06；承接：WP-04/WP-05）
+
+全局配置 schema 有 `policy.l3Paths`/`l3Keywords`（`ARCHITECTURE.md` §5 的可覆盖限制项），但全仓无读取点，`workflow.md` 也未定义「L3 路径/关键词」的判定语义；当前 L3 判定只依据 `workflow.md` §2.2/§2.3 的明文判据（DC-62/DC-65）。按用户策略扩展 L3 判定（例如把 `l3Paths` 命中视为 L3）属 WP-04/WP-05 的策略落线工作，本包只登记缺口，未实现。

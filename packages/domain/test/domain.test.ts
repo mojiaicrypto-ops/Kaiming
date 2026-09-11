@@ -15,6 +15,7 @@ import {
   canTransitionTask,
   canTransitionWork,
   classifyImport,
+  declaresWorkspaceWrite,
   decideLevel,
   evaluateGrant,
   hasLockdownRisk,
@@ -27,6 +28,7 @@ import {
   l1Failures,
   restoreTarget,
   riskFromFlags,
+  touchesRunningEnvironment,
   runAcceptsNewAttempt,
   scopeBindingsSatisfied,
   validateContentSections,
@@ -223,6 +225,19 @@ describe('level routing (workflow.md §2)', () => {
     expect(isKnownLockdownRiskTerm('安全边界')).toBe(true);
     expect(isKnownLockdownRiskTerm('安全')).toBe(false);
     expect(lockdownRiskVocabulary()).toContain('安全边界');
+  });
+
+  it('treats workspace write operations as modification authority', () => {
+    expect(declaresWorkspaceWrite({ operations: [], writePaths: ['packages/core/src'] })).toBe(
+      true,
+    );
+    expect(declaresWorkspaceWrite({ operations: ['edit'], writePaths: [] })).toBe(true);
+    expect(declaresWorkspaceWrite({ operations: ['write'], writePaths: [] })).toBe(true);
+    expect(declaresWorkspaceWrite({ operations: ['read', 'search'], writePaths: [] })).toBe(false);
+    expect(declaresWorkspaceWrite({ operations: [], writePaths: [] })).toBe(false);
+    // Environment operations are handled by their own predicate.
+    expect(touchesRunningEnvironment({ operations: ['deploy'], networkTargets: [] })).toBe(true);
+    expect(touchesRunningEnvironment({ operations: ['edit'], networkTargets: [] })).toBe(false);
   });
 
   it('routes any lockdown risk to L3 before considering L1', () => {

@@ -35,6 +35,7 @@ const L3_WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e52';
 const L3_UNAUTHORIZED_WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e53';
 const L3_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e84';
 const NONE_WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e54';
+const WRITE_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e85';
 const MODEL_ID = 'test-model';
 const emptyScope = { readPaths: [], writePaths: [], operations: [], networkTargets: [] };
 
@@ -228,6 +229,18 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
       goal: 'authorized environment operation',
       scope: emptyScope,
       operations: ['deploy'],
+      acceptedAt: new Date().toISOString(),
+    });
+
+    // A grant whose envelope covers one workspace path, for the path-coverage checks.
+    store.authorizations.insert({
+      id: WRITE_AUTHORIZATION_ID,
+      projectId,
+      sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      workId: WORK_ID,
+      goal: 'authorized workspace write',
+      scope: { ...emptyScope, writePaths: ['packages/storage/src'] },
+      operations: ['write'],
       acceptedAt: new Date().toISOString(),
     });
 
@@ -550,7 +563,7 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
       orchestrator.dispatch({ spec: backendSpec(chief.id, { scope: environmentScope }) }),
     ).toThrowError(/requires an explicit authorizationRef/);
 
-    // A read-only grant cannot back a data operation.
+    // A grant that does not cover the operation cannot back it.
     expect(() =>
       orchestrator.dispatch({
         spec: backendSpec(chief.id, { scope: environmentScope }),
@@ -574,7 +587,72 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     ).toThrowError(/does not cover the declared scope/);
   });
 
-  it('never freezes write authority for a none-level Work (R12-01, DC-65)', () => {
+  it('treats the authorization envelope as the scope boundary (R13-01)', () => {
+    const chief = chiefRun();
+    // The grant has no write paths, so a Run that writes is not covered.
+    expect(() =>
+      orchestrator.dispatch({ spec: backendSpec(chief.id), authorizationRef: AUTHORIZATION_ID }),
+    ).toThrowError(/does not cover the declared scope/);
+
+    // A grant that covers the path and the write operation is accepted.
+    const covered = orchestrator.dispatch({
+      spec: backendSpec(chief.id, {
+        scope: { ...emptyScope, writePaths: ['packages/storage/src'] },
+      }),
+      authorizationRef: WRITE_AUTHORIZATION_ID,
+    });
+    expect(covered.dispatchSnapshot.effectiveScope.writePaths).toEqual(['packages/storage/src']);
+
+    // An operation outside the grant is refused even on the same path.
+    expect(() =>
+      orchestrator.dispatch({
+        spec: backendSpec(chief.id, {
+          scope: { ...emptyScope, writePaths: ['packages/storage/src'], operations: ['edit'] },
+        }),
+        authorizationRef: WRITE_AUTHORIZATION_ID,
+      }),
+    ).toThrowError(/does not cover the declared scope/);
+
+    // An assessment is checked against its own scope too.
+    expect(() =>
+      orchestrator.assess({
+        workId: WORK_ID,
+        payload: {
+          ...assessmentPayloadFixture(),
+          scope: { ...emptyScope, writePaths: ['packages/core/src'] },
+          authorizationRef: WRITE_AUTHORIZATION_ID,
+        },
+      }),
+    ).toThrowError(/does not cover the declared scope/);
+  });
+
+  it('counts a local write operation as modification authority (R13-02)', () => {
+    const noneChief = orchestrator.dispatch({ spec: { ...chiefSpec(), workId: NONE_WORK_ID } }).run;
+    // No path list at all, just an operation that edits the workspace.
+    expect(() =>
+      orchestrator.dispatch({
+        spec: backendSpec(noneChief.id, {
+          workId: NONE_WORK_ID,
+          taskId: undefined,
+          scope: { ...emptyScope, operations: ['edit'] },
+        }),
+      }),
+    ).toThrowError(/cannot create a Run with write authority/);
+  });
+
+  it('cleans absent optional fields instead of failing on the snapshot (R13-03)', () => {
+    const chief = chiefRun();
+    const before = store.snapshots.list().length;
+    // A raw spec object that carries an explicit `undefined` optional field.
+    const run = orchestrator.dispatch({
+      spec: { ...backendSpec(chief.id), taskId: undefined },
+    }).run;
+    expect(run.taskId).toBeUndefined();
+    // Three snapshots for the Run; nothing was left behind by a failed dispatch.
+    expect(store.snapshots.list().length).toBe(before + 3);
+  });
+
+  it('never freezes write authority for a none-level Work (R12-01, DC-66)', () => {
     const noneChief = orchestrator.dispatch({ spec: { ...chiefSpec(), workId: NONE_WORK_ID } }).run;
     expect(() =>
       orchestrator.dispatch({

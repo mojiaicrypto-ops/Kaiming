@@ -205,6 +205,17 @@
   - 顺带修复：`professionalSpec` 去掉显式 `undefined` 的可选字段，避免把非 JSON 值带进快照 payload。
 - 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **242 passed**；`pnpm test:integration` 124 passed；`pnpm build` 通过。
 
+## T21 独立 Review 第十三轮与修复（第十三轮 FAIL → 修复）
+
+- 第十三轮独立 Review 确认 R12-01/R12-03/R12-04/R12-05 与对抗性②真修好，R12-02 与对抗性①只修了一半；新增 R13-01..R13-06，对抗性核验另补一项（`none` Work 用本地写操作绕过写权限门禁）。
+- 修复：
+  - R13-01/对抗性补项（阻断，DC-67/DC-68）：写权限门禁改用 Work 自身等级并计入 `WORKSPACE_WRITE_OPERATIONS`；授权范围覆盖增加 `writePaths`/`readPaths` 路径维度，`assess` 也把自身 `scope` 传入核对。
+  - R13-02（阻断，DC-67）：`none` Work 不能靠声明环境操作把 `runLevel` 升到 L3 来获得写权限。
+  - R13-03（DC-69）：`dispatch`/`professionalSpec` 用 `jsonClean` 删除显式 `undefined` 可选字段，不再产生 `CONSTRAINT_VIOLATION` 与孤儿快照。
+  - R13-04/R13-05：DC-63 重写为与实现一致（含四类覆盖与后续承接）；测试中错误的 `DC-65` 编号与「read-only grant」注释更正（`DC-66`、授权不覆盖该操作）。
+  - R13-06（DC-70）：`config.policy.l3Paths`/`l3Keywords` 无消费方登记为 WP-04/WP-05 承接缺口。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **246 passed**；`pnpm test:integration` 124 passed。
+
 ## T9 待办
 
 - 独立 Review 与 Test（独立上下文）、结算与 `docs/INDEX.md` 状态更新、以及 `docs/delivery/acceptance.md` 中本包 AC 的证据登记。

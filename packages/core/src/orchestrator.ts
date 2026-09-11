@@ -34,6 +34,7 @@ import {
 } from '@agentdev/contracts';
 import {
   canAllocateBudget,
+  declaresWorkspaceWrite,
   decideLevel,
   grantsModificationAuthority,
   isDirectChiefChild,
@@ -287,7 +288,7 @@ export class Orchestrator {
         { workId: work.id, decidedLevel: decided.level, floor, submittedLevel: payload.level },
       );
     }
-    this.verifyAuthorization(payload.authorizationRef, work.id, payload.level);
+    this.verifyAuthorization(payload.authorizationRef, work.id, payload.level, payload.scope);
     return withTransaction(this.store.db, () => {
       const row = this.store.assessments.insert({
         workId: work.id,
@@ -334,7 +335,9 @@ export class Orchestrator {
     // The contract Schema runs first: `validateDispatchSpec` reads fields such as
     // `contextSelection.codePaths`, and a malformed spec must fail as
     // `VALIDATION_ERROR` rather than as an uncaught `TypeError` (R7-01).
-    const spec = parseOrFail(dispatchSpecSchema, input.spec, 'dispatch spec');
+    // `undefined`-valued optional fields mean "absent": zod keeps them in the parsed
+    // object, and a frozen payload must be pure JSON (R13-03).
+    const spec = jsonClean(parseOrFail(dispatchSpecSchema, input.spec, 'dispatch spec'));
     // The remaining frozen inputs are validated before anything is written, so an
     // invalid `authorizationRef`/`requiredOutputSchemas`/`contextPayload` cannot
     // leave snapshot rows behind (R8-04/R8-09).
@@ -360,7 +363,10 @@ export class Orchestrator {
     // without modification authority cannot hand out a write scope (R12-01).
     const environmentScope = touchesRunningEnvironment(spec.scope);
     const runLevel: Level = environmentScope ? 'L3' : work.level;
-    if (!grantsModificationAuthority(runLevel) && spec.scope.writePaths.length > 0) {
+    // Modification authority is the *Work's* level: a spec cannot upgrade it by
+    // declaring an authorized environment operation (R13-02), and a local write
+    // operation counts even when the path list is empty (R13-01 adversarial).
+    if (!grantsModificationAuthority(work.level) && declaresWorkspaceWrite(spec.scope)) {
       fail(
         'NOT_AUTHORIZED',
         `Work ${work.id} is ${work.level} and cannot create a Run with write authority`,
@@ -786,10 +792,26 @@ export class Orchestrator {
     }
     if (scope !== undefined) {
       const granted = new Set(authorization.operations);
-      const uncovered = scope.operations.filter((operation) => !granted.has(operation));
+      const uncoveredOperations = scope.operations.filter((operation) => !granted.has(operation));
       const grantedTargets = new Set(authorization.scope.networkTargets);
-      const uncoveredTargets = scope.networkTargets.filter((target) => !grantedTargets.has(target));
-      if (uncovered.length > 0 || uncoveredTargets.length > 0) {
+      const uncoveredNetworkTargets = scope.networkTargets.filter(
+        (target) => !grantedTargets.has(target),
+      );
+      // The authorization's own scope is the envelope: every path the Run declares
+      // must be inside it (`data.md` §3 `effectiveScope`), for reads as well as
+      // writes (R13-01).
+      const uncoveredWritePaths = scope.writePaths.filter(
+        (path) => !isInsideScope(path, authorization.scope.writePaths),
+      );
+      const uncoveredReadPaths = scope.readPaths.filter(
+        (path) => !isInsideScope(path, authorization.scope.readPaths),
+      );
+      if (
+        uncoveredOperations.length > 0 ||
+        uncoveredNetworkTargets.length > 0 ||
+        uncoveredWritePaths.length > 0 ||
+        uncoveredReadPaths.length > 0
+      ) {
         fail(
           'NOT_AUTHORIZED',
           `authorizationRef ${authorizationRef} does not cover the declared scope`,
@@ -797,8 +819,10 @@ export class Orchestrator {
             workId,
             level: level ?? null,
             authorizationRef,
-            uncoveredOperations: [...uncovered],
-            uncoveredNetworkTargets: [...uncoveredTargets],
+            uncoveredOperations: [...uncoveredOperations],
+            uncoveredNetworkTargets: [...uncoveredNetworkTargets],
+            uncoveredWritePaths: [...uncoveredWritePaths],
+            uncoveredReadPaths: [...uncoveredReadPaths],
           },
         );
       }
@@ -864,12 +888,45 @@ export class Orchestrator {
 export function professionalSpec(
   input: Omit<ProfessionalDispatchSpec, 'kind'>,
 ): ProfessionalDispatchSpec {
-  // An explicitly `undefined` optional field means "absent"; keeping the key would
-  // put a non-JSON value into the frozen snapshot payload (R12-01 test surface).
-  const defined = Object.fromEntries(
-    Object.entries({ ...input, kind: 'professional' }).filter(([, value]) => value !== undefined),
+  return jsonClean(
+    parseOrFail(
+      professionalDispatchSpecSchema,
+      { ...input, kind: 'professional' },
+      'professional dispatch spec',
+    ),
   );
-  return parseOrFail(professionalDispatchSpecSchema, defined, 'professional dispatch spec');
+}
+
+/**
+ * Drops `undefined`-valued object properties recursively.
+ *
+ * An optional field set to `undefined` means "absent", but zod keeps the key in its
+ * parsed output, which would put a non-JSON value into a frozen snapshot payload
+ * (R13-03).
+ */
+function jsonClean<T>(value: T): T {
+  if (Array.isArray(value)) {
+    const items: unknown[] = value as unknown[];
+    return items.map((entry: unknown) => jsonClean(entry)) as unknown as T;
+  }
+  if (value !== null && typeof value === 'object') {
+    const cleaned: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      if (entry === undefined) continue;
+      cleaned[key] = jsonClean(entry);
+    }
+    return cleaned as unknown as T;
+  }
+  return value;
+}
+
+/** True when `path` is `root` itself or lives under it. */
+function isInsideScope(path: string, roots: readonly string[]): boolean {
+  const normalized = path.replace(/\/+$/u, '');
+  return roots.some((root) => {
+    const candidate = root.replace(/\/+$/u, '');
+    return normalized === candidate || normalized.startsWith(`${candidate}/`);
+  });
 }
 
 /**

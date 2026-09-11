@@ -169,6 +169,32 @@ export const ENVIRONMENT_OPERATIONS = [
 
 const ENVIRONMENT_OPERATION_SET: ReadonlySet<string> = new Set(ENVIRONMENT_OPERATIONS);
 
+/**
+ * Operations that write inside the workspace.
+ *
+ * They do not reach a running environment, but they do modify tracked files, so a
+ * Work that grants no modification authority (`none`) must not hand them out even
+ * when the path list happens to be empty (R13-02).
+ */
+export const WORKSPACE_WRITE_OPERATIONS = [
+  'edit',
+  'write',
+  'artifact_write',
+] as const satisfies readonly OperationName[];
+
+const WORKSPACE_WRITE_OPERATION_SET: ReadonlySet<string> = new Set(WORKSPACE_WRITE_OPERATIONS);
+
+/** True when the declared scope writes anything, by path or by operation. */
+export function declaresWorkspaceWrite(scope: {
+  readonly operations: readonly string[];
+  readonly writePaths: readonly string[];
+}): boolean {
+  return (
+    scope.writePaths.length > 0 ||
+    scope.operations.some((operation) => WORKSPACE_WRITE_OPERATION_SET.has(operation))
+  );
+}
+
 /** True when the declared scope reaches beyond the local workspace. */
 export function touchesRunningEnvironment(scope: {
   readonly operations: readonly string[];
