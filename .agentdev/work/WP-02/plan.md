@@ -1,6 +1,6 @@
 # WP-02 实现 Plan（主管与独立Agent调度）
 
-- planVersion: 3
+- planVersion: 4
 - workId: WP-02
 - level: L2（新增 Core 调度/配置/网关模块与冻结快照；涉及身份权限与模型配置，但按 `docs/rules/agents.md`、`protocol.md`、`data.md` 既有定义实现，不改产品语义）
 - authorization_ref: 用户目标轮次「继续」（2026-09-11）；上级授权为「我要完全实现这个产品，让你来实现」

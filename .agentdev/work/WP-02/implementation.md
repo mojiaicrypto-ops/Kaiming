@@ -251,6 +251,14 @@
   - R16-04：`verifyAuthorization` JSDoc 补齐能力交叉核对；R16-05：domain 分类测试改用 `READ_OPERATIONS`/`ARTIFACT_WRITE_OPERATIONS`；R16-06：T22 计数标注更正。
 - 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **251 passed**；`pnpm test:integration` 124 passed。
 
+## T25 独立 Review 第十七轮（Review PASS，含对抗性核验一致 PASS）
+
+- 第十七轮独立 Review 判 **PASS**（0×P1、0×P2、5×P3），对抗性核验同样裁 PASS（另补 N-17-01：`plan.md` 头字段 `planVersion` 未随 planVersion 4 变更条目更新）：
+  - R16-01/M-1/M-2 三条异议经独立复现全部闭合（artifact_write 归入 Artifact 输出、`none` 级 Work 写/环境权限 11 例全拒、assess↔dispatch 84 格差分 0 fail-open）；R15-01 未回退（写路径背书者由 4 收紧为 3）。
+  - 契约命令：typecheck/lint/unit **251 passed**/integration **124 passed**/docs:check/build 全绿。
+- 本轮记录级修正（不改运行行为）：R17-02（DC-66/DC-67 三元素写集合）、R17-03（`artifact_write` 不参与能力交叉核对）、R17-04（`assess` 拒绝 details 补 `environmentScope`）、R17-05（环境操作集合注释随分类更新）、N-17-01（`planVersion: 4`）、R17-01（新增 DC-72 登记 `none` Work 的升级路径限制）。
+- 结论：WP-02 进入独立 Test。
+
 ## T9 待办
 
 - 独立 Review 与 Test（独立上下文）、结算与 `docs/INDEX.md` 状态更新、以及 `docs/delivery/acceptance.md` 中本包 AC 的证据登记。

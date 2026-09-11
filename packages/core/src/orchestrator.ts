@@ -267,6 +267,7 @@ export class Orchestrator {
           workLevel: work.level,
           writePaths: [...payload.scope.writePaths],
           operations: [...payload.scope.operations],
+          environmentScope: touchesRunningEnvironment(payload.scope),
         },
       );
     }

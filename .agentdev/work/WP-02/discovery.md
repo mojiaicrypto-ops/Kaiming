@@ -224,6 +224,7 @@ delivery/document 若未声明可核查的 L1 前提（`semanticImpact=false`、
 - 只要提供了 `ref`（即便该等级不要求）都会核对，伪造 id 不能落库；
 - 提供 `scope` 时逐项核对覆盖：`operations` ⊆ 授权 `operations`；`networkTargets` ⊆ 授权 `scope.networkTargets` **且授权必须带 `network` 操作**（只把目标列进 scope 不等于网络写授权，第十四轮 D-2）；`writePaths`/`readPaths` 必须位于授权 `scope.writePaths`/`readPaths` 之内（路径前缀包含）。未被覆盖 ⇒ `NOT_AUTHORIZED`，details 列出各未覆盖项。
 - 能力交叉核对（第十五轮 R15-01，限定在**授权侧**）：spec 声明 `writePaths` 时授权必须含至少一个工作区写操作（`WORKSPACE_WRITE_OPERATIONS`），声明 `readPaths` 时授权必须含读操作（`read`/`search`），声明 `networkTargets` 时授权必须含 `network`。否则即使路径在授权 scope 之内也判 `NOT_AUTHORIZED`（details 的 `capabilityGaps`/`networkTargetsWithoutGrant`）。原因：只读授权（或空操作授权）不得为写范围背书并把它冻结进 `effectiveScope`。
+- `artifact_write` 不参与能力交叉核对（第十六轮 R16-01 后它不在 `WORKSPACE_WRITE_OPERATIONS` 内）：一张只含 `artifact_write` 的授权不能为 `writePaths` 背书（R17-03）。
 - 边界（第十六轮 R16-02）：该核对只约束**授权**，不约束 spec 自己的 `operations` 列表——`spec.scope.operations` 是工具层的允许清单，Core 不因「声明了路径」就替 Chief 推断操作意图；因此 `writePaths` + `operations: []` 的 spec 在授权具备写能力时被接受，冻结出的 `effectiveScope` 就是 Chief 声明的样子（写入是否执行由 Runner 的工具门禁按 `operations` 判定，WP-04/WP-06 落线）。这是有意的最小惊讶边界，登记于此而非静默。
 - 授权的能力清单取自 `Authorization.operations`（契约枚举 `operationNameSchema`，第十五轮 R15-02），路径/网络目标信封取自 `Authorization.scope`；两者是不同维度，本包不做「`scope.operations` 与 `operations` 求交」的额外规则（授权 schema 的 `operations` 是授权操作清单）。
 - 路径维度是对既有行为的收紧（第十四轮 D-3）：L3 Work 拿一张 `scope.readPaths` 为空的授权后，声明 `readPaths` 的 Run 也会被拒；这一收紧是有意的 fail-closed，登记于此。
@@ -243,7 +244,7 @@ delivery/document 若未声明可核查的 L1 前提（`semanticImpact=false`、
 ## DC-66 Run 建立边界的独立授权/等级底线（Review 第十二轮 R12-01..R12-03、第十三轮 R13-01/R13-02、第十四轮 R14-01）
 
 Run 建立的 Core 唯一入口（`Orchestrator.dispatch`）按下列顺序判定，`assess` 不是 Run 边界（它只记录路由；`work.level` 的回写属 WP-04/WP-05）：
-1. **修改授权**：`!grantsModificationAuthority(work.level) && declaresWorkspaceWrite(spec.scope)` ⇒ `NOT_AUTHORIZED`。判据用 **Work 自己的等级**（spec 不能靠声明环境操作把派生等级升到 L3 来取得写权限，R13-02），"是否修改"由 `writePaths` 非空**或**命中 `WORKSPACE_WRITE_OPERATIONS = ['edit','write','artifact_write','git']` 判定（R13-01/R14-01：`git` 的 commit/checkout/reset 会重写工作区文件，`push` 属环境操作集合）。
+1. **修改授权**：`!grantsModificationAuthority(work.level) && declaresWorkspaceWrite(spec.scope)` ⇒ `NOT_AUTHORIZED`。判据用 **Work 自己的等级**（spec 不能靠声明环境操作把派生等级升到 L3 来取得写权限，R13-02），"是否修改"由 `writePaths` 非空**或**命中 `WORKSPACE_WRITE_OPERATIONS = ['edit','write','git']` 判定（R13-01/R14-01 补入 `git`；第十六轮 R16-01 把 `artifact_write` 移到 `ARTIFACT_WRITE_OPERATIONS`，见 DC-71——它只写自己的 Artifact，`push` 属环境操作集合）。
 2. **等级底线**：`runLevel = touchesRunningEnvironment(spec.scope) ? 'L3' : work.level`；环境操作/网络目标⇒ L3，与 Work 等级和 intent 标签都无关（DC-62）。
 3. **授权核对**：`verifyAuthorization(extras.authorizationRef ?? work.authorizationRef, work.id, runLevel, spec.scope)`，四类覆盖面（`operations`、`networkTargets` 且必须有 `network` 操作、`writePaths`、`readPaths`）见 DC-63；核对通过的引用冻结进 DispatchSnapshot（AC-082 可重建来源）。
 4. 仍属后续工作（承接 WP-04/WP-05/WP-07）：授权的 `acceptedAt`/来源消息核对、`once` 类授权的消费记账、`work.level` 的回写（`assess` 目前不回写 Work 行，`works.update` 全仓无调用点，因此 Work 等级在评估后可能过期）、`writePaths` 之外的文件级授权粒度。
@@ -251,7 +252,7 @@ Run 建立的 Core 唯一入口（`Orchestrator.dispatch`）按下列顺序判�
 
 `dispatch` 的写权限门禁原先只看 `spec.scope.writePaths`，于是两处 fail-open：`none` 级 Work 用 `operations:['edit']`（空 `writePaths`）即可建 Run；`none` 级 Work 声明一个被授权的环境操作（如 `deploy`）后，派生的 `runLevel='L3'` 会覆盖 Work 等级，从而也能带 `writePaths`。修复：
 - 门禁改用 **Work 自己的等级**（`grantsModificationAuthority(work.level)`），spec 不能靠声明环境操作升级修改权；
-- 「是否修改」由 `declaresWorkspaceWrite(scope)` 判定：`writePaths` 非空 **或** 命中工作区写操作集合 `WORKSPACE_WRITE_OPERATIONS = ['edit','write','artifact_write','git']`（定义在 `domain/routing.ts`；`git` 于第十四轮 R14-01 补入，`push` 属环境操作集合）。
+- 「是否修改」由 `declaresWorkspaceWrite(scope)` 判定：`writePaths` 非空 **或** 命中工作区写操作集合 `WORKSPACE_WRITE_OPERATIONS = ['edit','write','git']`（定义在 `domain/routing.ts`；`git` 于第十四轮 R14-01 补入，`artifact_write` 于第十六轮 R16-01 移出，`push` 属环境操作集合）。
 `data.md` §2「none不产生修改授权」由此在 Run 建立边界真正生效。
 
 ## DC-68 授权范围覆盖的路径维度（Review 第十三轮 R13-01）
@@ -272,3 +273,7 @@ zod 的解析结果会保留调用方显式传入的 `undefined` 可选字段（
 - `dispatch`：`!grantsModificationAuthority(work.level) && (declaresWorkspaceWrite(spec.scope) || touchesRunningEnvironment(spec.scope))` ⇒ `NOT_AUTHORIZED`（授权不能把 `none` Work 变成 L3 执行者）；
 - `assess`：同一条件 ⇒ `VALIDATION_ERROR`（评估与 Run 边界对同一 scope 的结论必须一致）；
 - 操作分类完备性由 `packages/domain/test/domain.test.ts` 的用例守卫：12 个契约取值分别是环境操作（6）、工作区写（3）、Artifact 写（1）、只读（2）。
+
+## DC-72 `none` 级 Work 的等级只能由 Work 控制面变更（Review 第十七轮 R17-01）
+
+`assess` 现在对「`none` 级 Work + 声明写/环境 scope」报 `VALIDATION_ERROR`（与 `dispatch` 一致，DC-71）。副作用：由于 `assess` 从不回写 `work.level`（`works.update` 全仓无生产调用点），一个已经落成 `none` 的 Work **无法**通过后续 Assessment 升级到 L2/L3——升级必须走 Work 控制面（重路由或新建 Work，属 WP-05）。这是有意的 fail-closed 边界（错误地放行写范围比要求重新建 Work 更危险），登记于此；WP-05 落线 Work 等级回写时应一并考虑「重新评估→升级等级」的合法路径。

@@ -154,9 +154,12 @@ export function isKnownLockdownRiskTerm(flag: string): boolean {
  *
  * The set lives here, next to the routing decision and the risk vocabulary, and is
  * derived from the contract's `operationNameSchema` so a new operation name is a
- * compile-time reminder to classify it. `git`, `edit`, `write` and `artifact_write`
- * stay out: they act on the local workspace (the `push` operation covers a remote
- * write, which is the environment-touching half of git).
+ * compile-time reminder to classify it. `git`, `edit` and `write` stay out because
+ * they act on the local workspace (the `push` operation covers a remote write, which
+ * is the environment-touching half of git); `artifact_write` stays out because it
+ * only produces the Run's own Artifact (`execution.md` §21/§53); `read`/`search` are
+ * read-only. Every one of the twelve contract operations is classified exactly once
+ * (R17-05, guarded by the domain test).
  */
 export const ENVIRONMENT_OPERATIONS = [
   'bash',
