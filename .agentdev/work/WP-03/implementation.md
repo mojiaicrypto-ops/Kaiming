@@ -271,3 +271,15 @@
   5. 评价词表补 `i think|it seems|in my opinion`。
 - 回归网：新增第十四轮 10 条必须只读 + 3 条必须授权；外置语料 40 条 0 fail-open。
 - 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。
+
+## T24 独立 Review 第十五轮与修复（子句类别判据）
+
+- 第十五轮 Review 判 **FAIL**（2×P1：并列连词重开前件门、裸 `要` 仍被剥离；3×P2；2×P3）。对抗性核验确认 FAIL 成立，并补出「后置未登记条件通道」「fail-closed 规模低估」「`../` 越界返回 500 而非 `VALIDATION_ERROR`」等。
+- 修复（判据从「前缀/位置」改为**子句类别**）：
+  1. **只有四类子句是良性的**：命令、拒绝、纯礼貌、显式解释请求；**其余任何子句**（陈述、条件、片段、意见、提问——无论是否在词表中）⇒ 整条消息不授权。这样 `视具体情况，然后修改 X`、`修改 X，视具体情况`、`需要修改 X，也需要修改 Y`、`I think it needs work, then update X` 都只读，且不依赖条件词表。
+  2. **模态词不再归一**：`normalizeCore` 仅在子句以逆接连词（但/但是/而是/不过）开头时剥离裸 `要`；`另外要更新 X`、`也要修改 X` 保持陈述并被抑制。
+  3. **纠正例外收窄**：命令可紧接拒绝子句，但当纠正子句以 `也/再/就/则/并且/而且/然后/同时` 开头时不允许（闭合 `目前不用改 Y，也要更新 X`）。
+  4. 删除已失效的 `CONDITION_PATTERNS`（条件识别改由「非良性子句」结构性覆盖）。
+- 回归网：新增第十五轮 12 条必须只读 + 1 条必须授权（多命令并列）；外置语料 40 条 0 fail-open。
+- 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。
+- 待办（对抗性建议，下一轮）：`../` 越界改为 `VALIDATION_ERROR`；fail-closed 清单按类补齐（动宾补足语、英文副词祈使、处置式轻动词）；订正 `implementation.md` 中关于「含名词短语祈使仍授权」的假声明。

@@ -296,6 +296,7 @@ describe('level routing (workflow.md §2)', () => {
       '不要修改 docs/PLAN.md，但要修复 docs/INDEX.md',
       '别改 docs/PLAN.md，改 docs/INDEX.md',
       '修改 docs/INDEX.md。谢谢',
+      '修复 docs/INDEX.md，删除 docs/PLAN.md',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(true);
@@ -397,6 +398,19 @@ describe('level routing (workflow.md §2)', () => {
       'I think it needs work, then update docs/INDEX.md',
       '需要修改 docs/INDEX.md，也需要修改 docs/PLAN.md',
       '修改 docs/INDEX.md。不太明智',
+      // Round 15: preamble/postamble fragments, additive modals and verbatim conditions.
+      '视具体情况，然后修改 docs/INDEX.md',
+      '经审批，然后修改 docs/INDEX.md',
+      'depending on the result, then update docs/INDEX.md',
+      '修改 docs/INDEX.md，视具体情况',
+      '修改 docs/INDEX.md，看结果',
+      '另外要更新 docs/INDEX.md',
+      '也要修改 docs/INDEX.md',
+      '目前不用改 docs/PLAN.md，也要更新 docs/INDEX.md',
+      '需要修改 docs/INDEX.md，也需要修改 docs/PLAN.md',
+      'I think it needs work, then update docs/INDEX.md',
+      'report 提到需要修改 docs/INDEX.md，然后修改 docs/PLAN.md',
+      '解释 docs/INDEX.md，视具体情况',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(false);
