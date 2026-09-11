@@ -49,7 +49,14 @@ export const CODE_MAP_PATH = 'CODE_MAP.md';
 /** Document-root-relative path of the generated project navigation. */
 export const PROJECT_PATH = 'PROJECT.md';
 
-const SENTENCE_END = /[。．.!！?？\n]/u;
+/**
+ * Sentence end for a one-line summary.
+ *
+ * CJK/full-width terminators always end the sentence; an ASCII dot only counts when
+ * whitespace or the end of the text follows it, so `支持 v1.2 语义与 .ts 扩展名`
+ * is never truncated to `支持 v1` (W4R1-02).
+ */
+const SENTENCE_END = /[。．！？!?\n]|\.(?=\s|$)/u;
 
 /** Lowercase SHA256 over the UTF-8 Markdown bytes of a rendered document. */
 export function contentHash(markdown: string): string {

@@ -76,6 +76,9 @@ export const SCAN_EXCLUDED_DIRECTORIES: readonly string[] = [
 /** Primary index ceiling; `INITIALIZATION_BUDGET.maxIndexEntries` (10000). */
 export const SCAN_INDEX_LIMIT = INITIALIZATION_BUDGET.maxIndexEntries;
 
+/** Module key for files that sit at the repository root. */
+export const ROOT_MODULE_KEY = 'root';
+
 /** Files whose names mark the build/test entry-point tier. */
 const ENTRY_POINT_FILES: readonly string[] = [
   'Dockerfile',
@@ -1079,7 +1082,11 @@ function entryPathOf(item: string): string {
 /** Module key of a repo-relative path, or `null` for a root-level file. */
 export function moduleKeyOf(path: string): string | null {
   const segments = path.split('/').filter((segment) => segment !== '');
-  if (segments.length < 2) return null;
+  // A root-level file is still an observable capability: it belongs to the `root`
+  // module. Returning `null` here used to strand a project whose only files are at
+  // the repository root between "no capability" and "not an empty project", which
+  // made the Ready gate unsatisfiable (W4R1-01).
+  if (segments.length < 2) return ROOT_MODULE_KEY;
   const first = segments[0] ?? '';
   if (SOURCE_ROOTS.has(first))
     return segments.length >= 3 ? `${first}/${segments[1] ?? ''}` : first;
@@ -1223,8 +1230,8 @@ export function generateCandidateKnowledge(input: CandidateKnowledgeInput): Cand
     });
   }
 
-  const emptyProject = scan.indexTotal === 0;
-  if (emptyProject) {
+  const indexedEmpty = scan.indexTotal === 0;
+  if (indexedEmpty) {
     observations.push({
       kind: 'empty-project',
       path: null,
@@ -1276,6 +1283,18 @@ export function generateCandidateKnowledge(input: CandidateKnowledgeInput): Cand
       usedIds,
     }),
   );
+
+  // A project has a capability once at least one candidate Feature was observed;
+  // otherwise it is an explicit empty (no-capability) project, even when the index
+  // holds non-code files such as a lone README (W4R1-01).
+  const emptyProject = features.length === 0;
+  if (emptyProject && !indexedEmpty) {
+    observations.push({
+      kind: 'empty-project',
+      path: null,
+      detail: '观察到文件但未识别出可确认能力：明确空项目状态，尚无已实现能力',
+    });
+  }
 
   const indexEntries: FeatureIndexEntry[] = features.map((candidate) => ({
     featureId: candidate.feature.featureId,

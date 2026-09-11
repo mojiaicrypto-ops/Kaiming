@@ -246,6 +246,16 @@ describe('parseFeatureDocument', () => {
     expectError(parseDocument(buildDocument({ sections: { 已知差距: null } })), '已知差距');
   });
 
+  it('does not let a level-1 heading satisfy a required section (W4R1-06)', () => {
+    // The document title is a level-1 heading; only `## 用途` counts.
+    expectError(
+      parseDocument(
+        buildDocument({ sections: { 用途: null }, append: ['# 用途', '标题不是小节。', ''] }),
+      ),
+      '用途',
+    );
+  });
+
   it('rejects a duplicate required heading', () => {
     expectError(
       parseDocument(buildDocument({ append: ['## 已知差距', '重复标题。', ''] })),

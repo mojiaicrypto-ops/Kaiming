@@ -702,3 +702,50 @@ describe('design/code conflict (AC-042)', () => {
     expect(ready.record.conflictResolutions).toHaveLength(1);
   });
 });
+
+describe('root-only projects reach Ready (W4R1-01 regression)', () => {
+  const shapes: readonly (readonly [string, Readonly<Record<string, string>>])[] = [
+    [
+      'a root README and one root source file',
+      { 'README.md': '# demo\n', 'main.ts': 'export const main = 1;\n' },
+    ],
+    [
+      'a root README plus a root python module and test',
+      {
+        'README.md': '# demo\n',
+        'main.py': 'print(1)\n',
+        'test_main.py': 'def test_ok():\n    pass\n',
+      },
+    ],
+  ];
+
+  for (const [name, files] of shapes) {
+    it(`reaches Ready for ${name}`, () => {
+      const { dir } = seedRepository(files);
+      const store = createMemoryInitStateStore();
+      const init = createInitializer({ store, git, now: clock });
+      okOf(init.start({ id: 'init-root', root: dir }));
+      driveToWriting(init, 'init-root');
+      const done = okOf(init.step('init-root'));
+      expect(done.phase).toBe('ready');
+      expect(done.done).toBe(true);
+      // A root-level file is an observed capability, not an unsatisfiable gate.
+      expect(done.record.emptyProject).toBe(false);
+      expect(done.record.featureCount).toBeGreaterThan(0);
+      expect(init.verifyReady('init-root').ok).toBe(true);
+    });
+  }
+
+  it('treats a README-only project as an explicit no-capability project', () => {
+    const { dir } = seedRepository({ 'README.md': '# docs only\n' });
+    const store = createMemoryInitStateStore();
+    const init = createInitializer({ store, git, now: clock });
+    okOf(init.start({ id: 'init-docs', root: dir }));
+    driveToWriting(init, 'init-docs');
+    const done = okOf(init.step('init-docs'));
+    expect(done.phase).toBe('ready');
+    expect(done.record.featureCount).toBe(0);
+    expect(done.record.emptyProject).toBe(true);
+    expect(init.verifyReady('init-docs').ok).toBe(true);
+  });
+});

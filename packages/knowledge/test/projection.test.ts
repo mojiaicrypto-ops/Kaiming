@@ -4,6 +4,7 @@ import {
   buildProjection,
   contentHash,
   deliveryBlockedByLinks,
+  firstSentence,
   createInMemoryProjectionCache,
   parseFeatureDocument,
   type FeatureDocumentInput,
@@ -448,5 +449,15 @@ describe('broken-link diagnostics in a projection (AC-040)', () => {
     expect(readable.links.diagnostics.length).toBeGreaterThan(0);
     expect(readable.links.blockedFeatureIds).toEqual([]);
     expect(deliveryBlockedByLinks(readable)).toBe(false);
+  });
+});
+
+describe('one-line summaries (W4R1-02 regression)', () => {
+  it('does not truncate at a dot inside a version or an extension', () => {
+    expect(firstSentence('支持 v1.2 语义与 .ts 扩展名。后续由 WP-05 消费。')).toBe(
+      '支持 v1.2 语义与 .ts 扩展名',
+    );
+    expect(firstSentence('First sentence. Second sentence.')).toBe('First sentence');
+    expect(firstSentence('只有一个句子没有终止符')).toBe('只有一个句子没有终止符');
   });
 });

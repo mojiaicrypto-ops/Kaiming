@@ -64,3 +64,19 @@
   4. 正式 Confirmed 文档只有在调用方给定可解析 decision id 时才判为 `design-code-conflict`，否则先由格式校验报 `invalid-document`（fail-closed，绝不静默信任）。
   5. Writing 的脏工作区门禁会过滤本次初始化自己写入的路径，避免批处理/恢复自锁；`checkDeliveryReadiness` 保持不过滤。
   6. 真实 Provider 纵向、HTTP/WS 接线（`project.initialize` 等）、Docker 集成、Artifact 持久化不在本包。
+
+## T9 独立 Review 第一轮与修复（根级项目 Ready 死锁 + 摘要截断）
+
+- 第一轮独立 Review 判 **FAIL**（0×P0、1×P1、1×P2、4×P3）。P1（W4R1-01）：`moduleKeyOf` 对根级文件返回 `null`，而 `emptyProject` 以 `indexTotal===0` 判定，于是「有文件但无模块能力」的项目既不算「有能力」也不算「明确空项目」，Ready 门禁两个分支同时为假，`step` 永久 `failed/ready-gate`（三种形状 3/3 复现：`README+main.ts`、`README+main.py+test_main.py`、仅 `README.md`）。
+- 修复：
+  1. `moduleKeyOf` 对根级文件返回新的 `ROOT_MODULE_KEY='root'`（根级文件同样是可观察能力，归入 `root` 模块）。
+  2. `emptyProject` 改判为「**未观察到任何候选 Feature**」而非「索引为空」；索引非空但没有可确认能力时，显式记一条「观察到文件但未识别出可确认能力 ⇒ 明确空项目」的观察，PROJECT 候选仍写 `absent`。这样三种根级形状都能走完 `Identifying→…→Ready`，仅 README 的项目按「明确空项目」通过最小门禁。
+  3. W4R1-02（P2）：`firstSentence` 的句末判定改为「CJK/全角终止符，或**后接空白/结尾的 ASCII 句点**」，`支持 v1.2 语义与 .ts 扩展名。…` 不再被截断为 `支持 v1`。
+  4. W4R1-06 的 fail-open 面：六段固定小节改为**只认二级标题**（`## 用途`），一级标题不再满足格式要求。
+- 回归网：`packages/workspace/test/initialize.test.ts` 新增 3 例根级形状（两种有代码 + 仅 README，均须到达 Ready 且 `verifyReady` 通过）；`packages/knowledge/test/projection.test.ts` 新增 1 例摘要截断；`feature-format.test.ts` 新增 1 例一级标题不满足小节。
+- 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **26 文件 / 420 用例**；`pnpm test:integration` 124；`pnpm build` 10 workspace。
+- 承接（第一轮 P3，均为非阻断，登记如下）：
+  1. **W4R1-03**：`plan.md` §5 承诺的 WP-04 端到端集成演练（真实文件系统 + SQLite + 临时 Git 仓库的「扫描 → 候选 → 写入 → 投影 → 查询」串联、需求池 Clone 导入演练）尚未落地，现有 `packages/core` 的 `requirements.integration.test.ts` 走的是 `RequirementProjection` 而非需求池路径。该演练与正式提交/CAS 一并留 WP-08（与 `plan.md` §1 的「正式 Git 提交与初始化写入的最终事务由 WP-08/WP-10 验证」一致），Test 须列入 `not_covered`。
+  2. **W4R1-04**：用错处置 API（例如对 `confirmation-required` 调 `resolveConflict`）会把记录写成 `failed/internal`；专用 API 仍可恢复。属调用方误用，登记为已知口径。
+  3. **W4R1-05**：`requirement:<id>@<version>` 只校验 id 存在性，不校验版本存在性（需求记录版本信息在需求池侧，WP-05 消费时按 `recordVersion` 复核）。
+  4. **W4R1-06 残余**：目录符号链接在索引里记为 `kind:'file'`、池根散落的 `requirement.json` 无专用诊断（不产生错误行为，登记待 WP-08 扫描器增强）。

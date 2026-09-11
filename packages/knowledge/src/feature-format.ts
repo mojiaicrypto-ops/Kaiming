@@ -406,7 +406,9 @@ export function parseFeatureDocument(
   }
 
   for (const heading of FEATURE_SECTION_HEADINGS) {
-    const count = scan.headings.filter((item) => item.text === heading).length;
+    // The six sections are level-2 headings (`## 用途`); a level-1 title that happens
+    // to read 用途 must not satisfy the format (W4R1-06).
+    const count = scan.headings.filter((item) => item.text === heading && item.level === 2).length;
     if (count === 0) errors.push(knowledgeError(heading, `missing required heading: ${heading}`));
     else if (count > 1) errors.push(knowledgeError(heading, `duplicate heading: ${heading}`));
   }
@@ -573,7 +575,7 @@ export function parseFeatureDocument(
 
   const bodies = new Map<string, FeatureSectionBody>();
   for (const heading of FEATURE_SECTION_HEADINGS) {
-    const first = scan.headings.find((item) => item.text === heading);
+    const first = scan.headings.find((item) => item.text === heading && item.level === 2);
     if (first === undefined) continue;
     bodies.set(heading, buildSection(heading, sectionLines(scan, first)));
   }
