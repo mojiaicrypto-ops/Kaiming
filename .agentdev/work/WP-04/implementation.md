@@ -96,3 +96,18 @@
 - **W4R2-05**：T8 残余 3 的措辞随 T9/T10 更新（根级文件现归 `(root)` 模块；其余残余见 T9 承接列表）。
 - 回归网：`initialize.test.ts` 新增 2 例（41 README 无代码 ⇒ `investigation-budget` 阻断、重复 step 仍阻断、`confirmNoCapability` 后 Ready 且 PROJECT 不写 absent；41 README + `src/mod.ts` ⇒ 扩大批次后观察到能力、走确认流程到 Ready）；`projection.test.ts` 新增 1 例缩写句点。
 - 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **26 文件 / 423 用例**；`pnpm test:integration` 124；`pnpm build` 10 workspace。
+
+## T11 独立 Review 第三轮（PASS）与结算前 P2 闭环
+
+- 第三轮 Review 判 **PASS（0×P0、0×P1、3×P2、5×P3）**，W4R2-01 的三层闭合被独立证实（41 包零能力仓库停在 `investigation-budget`、重复 step/resume 不推进、两条处置路径可解、扩大批次能找到预算外能力、六种形状与 AC-025/AC-028 无回归）。本轮按报告建议在结算前闭环三条 P2：
+  1. **W4R3-01（P2，记录不可恢复）**：`confirmNoCapability`/`investigateMore` 的**调用方输入错误**不再持久化 `failed` 状态——新增 `rejected()` 帮助函数（返回失败但不 `persist`），误用后记录保持 `blocked`/`ready` 且 `failure=null`，仍可被正确调用解封。
+  2. **W4R3-02（P2，无阶段门禁）**：`confirmNoCapability` 仅允许 `confirming`，`investigateMore` 仅允许 `mapping`/`confirming`；对 `ready`/`writing` 返回 `INVALID_STATE` 且不降级记录（不再出现与自产物撞 `content-conflict` 的死局）。
+  3. **W4R3-03（P2，路径逃逸）**：`normalizeDocumentRoot` 拒绝绝对路径与含 `..` 的相对路径（`VALIDATION_ERROR`），候选文档不再可能写到项目根之外。
+- 同时闭环两条 P3：
+  4. **W4R3-04**：`investigateMore` 必须**真正扩大**预算（新的 `maxBodyFiles`/`maxBodyBytes` 至少一项大于当前生效值），更小或等于的批次被拒且文案与实际一致。
+  5. **W4R3-05**：`confirmNoCapability` 同步重写候选 PROJECT.md 的「实现状态」行为 `absent（未实现，明确空项目，用户已确认）` 并重算 `contentHash`，发布的文档与用户决定一致。
+- 承接（P3，非阻断）：
+  6. **W4R3-06**：Mapping 阶段前的 `confirmNoCapability` 现由阶段门禁拒绝（已随第 2 条闭合）。
+  7. **W4R3-07**：重复 `step` 在阻断态会追加 `blocked` 证据行（同内容 blocker 不重复入 `blockers`，但证据账本仍增长）；长期运行的调用方应轮询 `get` 而非空转 `step`，如需硬上限随 WP-08 状态存储一并处理。
+  8. **W4R3-08 / W4R2-05**：T8 残余 3 的措辞已随 T9/T10/T11 更新；W4R1-03..06 与 W4R3-07 的承接状态以本节为准。
+- 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **26 文件 / 426 用例**；`pnpm test:integration` 124；`pnpm build` 10 workspace；`pnpm docs:check` ok。

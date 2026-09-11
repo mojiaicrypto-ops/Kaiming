@@ -138,6 +138,11 @@ function failedOf(outcome: InitOutcome): InitFailed {
   return outcome;
 }
 
+function refusalOf(outcome: InitOutcome): Extract<InitOutcome, { ok: false }> {
+  if (outcome.ok) throw new Error('expected a rejection, got ok');
+  return outcome;
+}
+
 /**
  * Drives start → Identifying → Mapping → Confirming → Writing, confirming the
  * product-intent inferences when Confirming asks for them.
@@ -792,9 +797,9 @@ describe('budget exhaustion without capability (W4R2-01 regression)', () => {
     expect(done.phase).toBe('ready');
     expect(init.verifyReady('init-budget').ok).toBe(true);
     const project = readFileSync(join(dir, 'docs', 'agentdev', 'PROJECT.md'), 'utf8');
-    // A budget-limited scan never claims the project is an empty (no-capability) project.
-    expect(project).not.toContain('absent（未实现，明确空项目）');
-    expect(project).toContain('未调查（预算耗尽');
+    // The published document reflects the explicit decision, not the earlier unknown state.
+    expect(project).toContain('absent（未实现，明确空项目，用户已确认）');
+    expect(project).not.toContain('未调查（预算耗尽');
   });
 
   it('finds the capability once the investigation batch is enlarged', () => {
@@ -818,5 +823,70 @@ describe('budget exhaustion without capability (W4R2-01 regression)', () => {
     const done = okOf(init.step('init-more'));
     expect(done.phase).toBe('ready');
     expect(done.record.emptyProjectConfirmed).toBe(false);
+  });
+});
+
+describe('budget-grant APIs reject bad input without bricking the record (W4R3-01..04)', () => {
+  function budgetedRepository(): string {
+    const files: Record<string, string> = {};
+    for (let index = 0; index < 41; index += 1)
+      files[`pkg${index}/README.md`] = `# package ${index}\n`;
+    files['src/mod.ts'] = 'export const mod = 1;\n';
+    return seedRepository(files).dir;
+  }
+
+  it('rejects a smaller batch, a wrong phase and a missing id without persisting failure', () => {
+    const dir = budgetedRepository();
+    const store = createMemoryInitStateStore();
+    const init = createInitializer({ store, git, now: clock });
+    okOf(init.start({ id: 'init-guard', root: dir }));
+    okOf(init.step('init-guard')); // identifying -> mapping
+    okOf(init.step('init-guard')); // mapping -> confirming
+    blockedOf(init.step('init-guard'));
+
+    // A batch that does not actually grow the budget is refused ...
+    const smaller = refusalOf(init.investigateMore('init-guard', { maxBodyFiles: 5 }));
+    expect(smaller.errors[0]?.code).toBe('VALIDATION_ERROR');
+    // ... and the record is still a healthy blocked record that a real batch can advance.
+    expect(init.get('init-guard')?.status).toBe('blocked');
+    expect(init.get('init-guard')?.failure).toBeNull();
+    expect(blockedOf(init.step('init-guard')).blocker.kind).toBe('investigation-budget');
+
+    // confirmNoCapability in the wrong phase is refused the same way.
+    const wrongPhase = init.confirmNoCapability('missing-id', { authorizationRef: 'a', by: 'b' });
+    expect(wrongPhase.status).toBe('not-found');
+
+    // A batch that cannot help is refused while capabilities are already observed.
+    const grown = okOf(init.investigateMore('init-guard', { maxBodyFiles: 200 }));
+    expect(grown.record.featureCount).toBeGreaterThan(0);
+    const tooLate = refusalOf(init.investigateMore('init-guard', { maxBodyFiles: 400 }));
+    expect(tooLate.errors[0]?.code).toBe('VALIDATION_ERROR');
+    expect(init.get('init-guard')?.failure).toBeNull();
+  });
+
+  it('refuses to degrade a Ready record through investigateMore', () => {
+    const dir = seedRepository().dir;
+    const store = createMemoryInitStateStore();
+    const init = createInitializer({ store, git, now: clock });
+    okOf(init.start({ id: 'init-ready', root: dir }));
+    driveToWriting(init, 'init-ready');
+    const done = okOf(init.step('init-ready'));
+    expect(done.phase).toBe('ready');
+
+    const degraded = refusalOf(init.investigateMore('init-ready', { maxBodyFiles: 1_000 }));
+    expect(degraded.errors[0]?.code).toBe('INVALID_STATE');
+    expect(init.get('init-ready')?.phase).toBe('ready');
+    const noCapability = init.confirmNoCapability('init-ready', {
+      authorizationRef: 'user-action:2',
+      by: 'user',
+    });
+    expect(refusalOf(noCapability).errors[0]?.code).toBe('INVALID_STATE');
+    expect(init.get('init-ready')?.phase).toBe('ready');
+  });
+
+  it('refuses a document-root that escapes the project (W4R3-03)', () => {
+    expect(() =>
+      createInitializer({ store: createMemoryInitStateStore(), git, documentRoot: '../escape' }),
+    ).toThrowError(/document-root/u);
   });
 });

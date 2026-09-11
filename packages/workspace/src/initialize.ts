@@ -57,6 +57,7 @@ import {
 } from './git-port.js';
 import {
   DEFAULT_DOCUMENT_ROOT,
+  DEFAULT_SCAN_BUDGET,
   generateCandidateKnowledge,
   normalizeDocumentRoot,
   readKnowledgeDocuments,
@@ -960,6 +961,23 @@ export function createInitializer(options: InitializerOptions): Initializer {
     record: null,
     phase: null,
     errors: [{ code: 'NOT_FOUND', message: `未找到初始化记录：${id}` }],
+  });
+
+  /**
+   * A caller-input rejection: reports the problem without persisting a `failed` status, so
+   * a mistyped request can never brick an otherwise healthy record (W4R3-01).
+   */
+  const rejected = (
+    record: InitRecord,
+    message: string,
+    code: WorkspaceDiagnostic['code'] = 'VALIDATION_ERROR',
+  ): InitFailed => ({
+    ok: false,
+    status: 'failed',
+    record,
+    phase: record.phase,
+    failure: { kind: 'internal', message, recoverable: false, details: null },
+    errors: [{ code, message }],
   });
 
   const ok = (record: InitRecord, advanced: boolean): InitSuccess => ({
@@ -1934,41 +1952,37 @@ export function createInitializer(options: InitializerOptions): Initializer {
   const confirmNoCapability = (id: string, input: ConfirmNoCapabilityInput): InitOutcome => {
     const record = store.load(id);
     if (record === null) return notFound(id);
-    if (input.authorizationRef.trim() === '' || input.by.trim() === '') {
-      return failed(
+    if (record.phase !== 'confirming') {
+      return rejected(
         record,
-        {
-          kind: 'internal',
-          message: '确认无能力必须携带 authorizationRef 与 by',
-          recoverable: false,
-          details: null,
-        },
-        [{ code: 'VALIDATION_ERROR', message: '确认无能力必须携带 authorizationRef 与 by' }],
+        `确认无能力只能在 Confirming 阶段进行（当前 ${record.phase}）`,
+        'INVALID_STATE',
       );
+    }
+    if (input.authorizationRef.trim() === '' || input.by.trim() === '') {
+      return rejected(record, '确认无能力必须携带 authorizationRef 与 by');
     }
     if (record.featureCount > 0) {
-      return failed(
-        record,
-        {
-          kind: 'internal',
-          message: `已观察到 ${record.featureCount} 个候选能力，无需确认空项目`,
-          recoverable: false,
-          details: null,
-        },
-        [
-          {
-            code: 'VALIDATION_ERROR',
-            message: `已观察到 ${record.featureCount} 个候选能力，无需确认空项目`,
-          },
-        ],
-      );
+      return rejected(record, `已观察到 ${record.featureCount} 个候选能力，无需确认空项目`);
     }
+    // The candidate PROJECT.md was rendered while the project was still unknown; the
+    // explicit decision must be reflected in the document it will publish (W4R3-05).
+    const documents = record.documents.map((document) => {
+      if (document.kind !== 'project') return document;
+      const markdown = document.markdown.replace(
+        /^- 实现状态：未调查（预算耗尽的扫描未观察到能力，尚不能断言项目为空）$/mu,
+        '- 实现状态：absent（未实现，明确空项目，用户已确认）',
+      );
+      if (markdown === document.markdown) return document;
+      return { ...document, markdown, contentHash: sha256Hex(markdown) };
+    });
     const next = persist(
       addEvidence(
         {
           ...record,
           emptyProject: true,
           emptyProjectConfirmed: true,
+          documents,
           blocked: null,
           status: record.phase,
         },
@@ -1984,43 +1998,37 @@ export function createInitializer(options: InitializerOptions): Initializer {
   const investigateMore = (id: string, input: InvestigateMoreInput): InitOutcome => {
     const record = store.load(id);
     if (record === null) return notFound(id);
-    if (record.featureCount > 0) {
-      return failed(
+    if (record.phase !== 'mapping' && record.phase !== 'confirming') {
+      return rejected(
         record,
-        {
-          kind: 'internal',
-          message: '已观察到候选能力，无需扩大调查批次',
-          recoverable: false,
-          details: null,
-        },
-        [{ code: 'VALIDATION_ERROR', message: '已观察到候选能力，无需扩大调查批次' }],
+        `扩大调查批次只能在 Mapping/Confirming 阶段进行（当前 ${record.phase}）`,
+        'INVALID_STATE',
       );
+    }
+    if (record.featureCount > 0) {
+      return rejected(record, '已观察到候选能力，无需扩大调查批次');
     }
     const positive = (value: number | undefined): number | undefined =>
       value === undefined ? undefined : value > 0 ? value : undefined;
     const maxBodyFiles = positive(input.maxBodyFiles);
     const maxBodyBytes = positive(input.maxBodyBytes);
-    if (maxBodyFiles === undefined && maxBodyBytes === undefined) {
-      return failed(
+    const effective = {
+      ...DEFAULT_SCAN_BUDGET,
+      ...(options.budget ?? {}),
+      ...(record.budgetOverride ?? {}),
+    };
+    const growsFiles = maxBodyFiles !== undefined && maxBodyFiles > effective.maxBodyFiles;
+    const growsBytes = maxBodyBytes !== undefined && maxBodyBytes > effective.maxBodyBytes;
+    if (!growsFiles && !growsBytes) {
+      return rejected(
         record,
-        {
-          kind: 'internal',
-          message: '扩大调查批次必须给出更大的 maxBodyFiles 或 maxBodyBytes',
-          recoverable: false,
-          details: null,
-        },
-        [
-          {
-            code: 'VALIDATION_ERROR',
-            message: '扩大调查批次必须给出更大的 maxBodyFiles 或 maxBodyBytes',
-          },
-        ],
+        `扩大调查批次必须真正扩大预算：当前 maxBodyFiles=${effective.maxBodyFiles}、maxBodyBytes=${effective.maxBodyBytes}`,
       );
     }
     const budgetOverride: Partial<ScanBudget> = {
       ...record.budgetOverride,
-      ...(maxBodyFiles === undefined ? {} : { maxBodyFiles }),
-      ...(maxBodyBytes === undefined ? {} : { maxBodyBytes }),
+      ...(growsFiles ? { maxBodyFiles } : {}),
+      ...(growsBytes ? { maxBodyBytes } : {}),
     };
     const restarted = persist(
       addEvidence(
@@ -2034,7 +2042,7 @@ export function createInitializer(options: InitializerOptions): Initializer {
         },
         'mapping',
         'investigation-batch',
-        `用户扩大调查批次：maxBodyFiles=${maxBodyFiles ?? '继承'}、maxBodyBytes=${maxBodyBytes ?? '继承'}${input.note === undefined ? '' : `；${input.note}`}`,
+        `用户扩大调查批次：maxBodyFiles=${budgetOverride.maxBodyFiles ?? effective.maxBodyFiles}、maxBodyBytes=${budgetOverride.maxBodyBytes ?? effective.maxBodyBytes}${input.note === undefined ? '' : `；${input.note}`}`,
         [],
       ),
     );

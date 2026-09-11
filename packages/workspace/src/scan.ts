@@ -407,12 +407,27 @@ export function sourceRefFor(revision: string | null, path: string): string {
 }
 
 /** Normalizes a document-root value; an empty value falls back to the default. */
+/**
+ * Normalizes `document-root` and rejects anything that could escape the project.
+ *
+ * A relative `..` segment or an absolute path would let candidate documents be written
+ * outside the project root, so both are refused (W4R3-03).
+ */
 export function normalizeDocumentRoot(value: string | undefined): string {
   const trimmed = (value ?? DEFAULT_DOCUMENT_ROOT)
     .replace(/\\/gu, '/')
     .replace(/^\.\//u, '')
     .replace(/\/+$/u, '');
-  return trimmed === '' ? DEFAULT_DOCUMENT_ROOT : trimmed;
+  if (trimmed === '') return DEFAULT_DOCUMENT_ROOT;
+  const segments = trimmed.split('/');
+  if (trimmed.startsWith('/') || segments.includes('..')) {
+    throw new WorkspaceError(
+      'VALIDATION_ERROR',
+      `document-root 必须是项目内相对路径且不得包含 ..：${value ?? ''}`,
+      { details: { documentRoot: value ?? null } },
+    );
+  }
+  return trimmed;
 }
 
 export interface ProjectIdentity {
