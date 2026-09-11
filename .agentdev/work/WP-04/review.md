@@ -1,3 +1,249 @@
+# WP-04 独立 Review 报告（第三轮）
+
+- 评审对象：工作包 WP-04「知识与新旧项目」（`docs/delivery/implementation.md` WP-04；关联 AC-025–029、AC-037–040、AC-042、AC-086–088、AC-092、AC-093）
+- 评审轮次：**第三轮**（本轮报告置于文件前部；第一轮报告保留为 **附一**、第二轮报告保留为 **附二**，二者原文逐字未改）
+- 冻结点 / 代码树：`git rev-parse HEAD` = **`f80092fe32ac608bae5645ed502ae779c17bfb56`**（`f80092f docs(review): WP-04 independent review report, round 2 (FAIL)`），`git rev-parse HEAD^{tree}` = **`d05c38ab1260e8ac732daf53f130b92f67273d81`**
+- 被评审的修复提交：**`fd26662dd1f5701089a288ef6accdf4170af1441`**（`fd26662 fix(workspace): a budget-limited scan is not an empty project`），其代码树 = **`6c31365c351b18118d7569783b1933c31ce17bb0`**
+- 冻结点与修复点的差异：`git diff --stat fd26662 HEAD` = **仅 `.agentdev/work/WP-04/review.md`（+214 行，第二轮报告）**；即 `HEAD` 相对 `fd26662` 无源码/测试/文档变化，本轮评审的代码面等价于 `fd26662`；`git status --porcelain` 在全部契约命令与全部探针执行前后均为空
+- 评审角色：Review（独立上下文；未读取任何开发/Test 会话与聊天记录；`.agentdev/work/WP-04/test.md` 尚不存在；仅依据仓库代码、`docs/**` 契约、WP-04 的 `plan.md`/`implementation.md`，以及我自建的 `/tmp/wp04r3/` 脚本与本仓库既有测试的运行结果）
+- 工具：`node v24.8.0`、`pnpm 12.3.4`、真实 `git`、macOS 宿主；探针只消费 `pnpm build` 产物（`packages/workspace/dist/index.js`、`packages/knowledge/dist/index.js`），**未 import 任何产品测试文件**
+- 修复提交范围核对（`git show --stat fd26662`）：6 文件 / +328 −16，全部落在 `packages/knowledge/**`、`packages/workspace/**`、`.agentdev/work/WP-04/**`；`docs/**`、`packages/contracts/**`、`packages/storage/**`、`webui/**`、`docker/**` 零改动（符合 `plan.md` §2 的不可写清单）
+- 记录哈希（`git hash-object`，前 8 位，**`fd26662`/`HEAD` 状态**）：`packages/workspace/src/initialize.ts` **`b45a3a93`**（二轮 `fdbfdc4` 未改此文件）、`packages/workspace/src/scan.ts` **`518230c0`**（二轮 `e173da55`）、`packages/knowledge/src/projection.ts` **`1b69f9eb`**（二轮 `9688f16b`）、`packages/knowledge/src/feature-format.ts` **`e1d4f758`**（二轮未变）、`packages/workspace/test/initialize.test.ts` **`7f43f95e`**、`packages/knowledge/test/projection.test.ts` **`a10ece03`**、`.agentdev/work/WP-04/implementation.md` **`ea167745`**、`.agentdev/work/WP-04/plan.md` **`a78655b0`**（未变）
+
+---
+
+## 1. 结论
+
+**PASS（`fd26662` 可进入独立 Test；本轮判 0×P0、0×P1、3×P2、5×P3）。**
+
+第二轮唯一阻断项 **W4R2-01（部分地图零能力被当成明确空项目并静默 Ready）经本轮独立取证确认已闭合**：默认预算下的 41 包 monorepo 现在稳定停在 `blocked/investigation-budget`（错误码 `MISSING_CONTEXT`），不再 Ready、不再写 `absent（未实现，明确空项目）`；两条新增处置路径（`investigateMore` 扩大批次、`confirmNoCapability` 显式确认）均可用且**不会自行通过**；一轮的全部正向形状（根级 `README+main.ts`、`README+main.py+test_main.py`、仅 `README.md`、空目录、仅根级 `main.ts`、嵌套 `src/mod.ts`）与 AC-025 空项目、AC-028 脏工作区处置仍全部成立；二轮的 P2/P3 修复（`ROOT_MODULE_KEY='(root)'`、`moduleKeyOf` 收紧为 `string`、`firstSentence` 跳过缩写句点）逐项复核成立。因此本轮无阻断项。
+
+但本轮在被修复点**新增的两个 API 及其调用边界上**发现 **3 项 P2 + 5 项 P3**（均为非阻断，须登记并由开发轮处置）：
+
+- **W4R3-01 [P2]**：对 Ready（已有能力）记录调用一次被拒的 `confirmNoCapability`/`investigateMore`，会把记录持久写成 `failed/internal`（`recoverable:false`），此后 `step`/`resume` 均返回 `INVALID_STATE`、`verifyReady` 不通过，**无任何 API 可恢复**，只有重新 `start` 新 id；磁盘产物未变、无数据损坏，但「一次非法请求即永久摧毁 Ready 状态」属 `reliability.md` §1「先校验后更新」与 `protocol.md` 错误表语义（`VALIDATION_ERROR` 表示修正输入后可重试）的反例，且与既有承接项 W4R1-04 同族。该 guard 由 `fd26662` 新增（`initialize.ts:1949`、`1987`）。
+- **W4R3-02 [P2]**：`investigateMore`/`confirmNoCapability` **无阶段门禁**，可作用在 `ready` 记录上：`investigateMore` 会把已 Ready 的空项目拉回 `mapping→confirming`，重算的候选文档与已写盘内容不再一致，`verifyReady` 报 `candidate-documents-written` 失败，下一步写入撞上 `content-conflict`（与自己的产物冲突）后停在 `failed/writing`——即 Ready 被降级后既无法验证也无法自愈。
+- **W4R3-03 [P2]**：`documentRoot` 允许相对路径逃逸。`normalizeDocumentRoot` 只去 `./` 与尾部 `/`（`scan.ts:410`），`documentRoot:'../escape-target'` 会让候选 `PROJECT.md`/`INDEX.md`/Feature 文档**写到项目根之外**的目录（实测 `wroteOutsideRoot:true`、根内 `wroteInsideRoot:false`，且流程正常到达 Ready）。`execution.md` §4 明确「文件工具拒绝相对路径逃逸」，`knowledge.md` §5 把 document-root 固定为项目相对 `docs/agentdev`，故该输入应在 `start` 即被 `VALIDATION_ERROR` 拒绝。
+
+P3 共 5 项：W4R3-04（`investigateMore` 接受更小/相等批次，与「必须给出更大的」文案不符）、W4R3-05（显式确认无能力后写出的 PROJECT.md 仍写「尚不能断言项目为空」）、W4R3-06（Mapping 之前确认无能力 ⇒ 记录自相矛盾 `emptyProjectConfirmed:true`/`emptyProject:false` 并终态 `failed/ready-gate`）、W4R3-07（未解阻断上重复 `step` 使证据账本无界增长：200 次调用 +200 行、持久化 JSON +76 800 字节）、W4R3-08（T10 的 W4R2-05 声称已订正 T8 残余 3 措辞，但该行与修复前逐字相同，声明未落地）。详见 §5。
+
+**正面结论（按证据）**：
+
+- **W4R2-01 闭合**：默认预算 41 包（每包 `README.md` + `package.json`，无代码）→ `scan.partial=true`、`bodyRead=40`、`skipped=42`、`knowledge.emptyProject=false`、`partialWithoutCapability=true`、`features=0`；驱动到 `blocked/confirming`，`blocker.kind='investigation-budget'`、`errors[0].code='MISSING_CONTEXT'`，记录 `emptyProject=false`/`emptyProjectConfirmed=false`/`scanPartial=true`；重复 `step`/`resume` 仍阻断且不改阶段、不写盘；候选 PROJECT.md 写「未调查（预算耗尽的扫描未观察到能力，尚不能断言项目为空）」，**不含 `absent（未实现，明确空项目）`**。二轮 `probe3-realistic.mjs` 的三条「缺陷形状断言」本轮全部翻转为失败（M-3/M-4/M-5），正是所期望的反向证据（`/tmp/wp04r3/` 与 `/tmp/wp04r2/probe3-realistic.out` 对照）。
+- **两条处置路径可用且 fail-closed**：`investigateMore({maxBodyFiles:200})` 在「能力位于预算之外」的仓库上重跑 Mapping、观察到 1 个真实候选能力（`source_refs` 含 `zzz-late/src/mod.ts`），再经正常确认路径到达 Ready 且 `emptyProject=false`；`confirmNoCapability` 必须携带 `authorizationRef`+`by`（空串 → `VALIDATION_ERROR`），成功后 `emptyProject/emptyProjectConfirmed=true`、写入 `no-capability` 证据行、到达 Ready；`resolveBlocker` 不能顶替它处置预算阻断；`investigateMore({})`/`{maxBodyFiles:0}` 被拒；在无能力仓库上重复 `investigateMore` 5 次从不自确认（下一步必回 `investigation-budget`）。
+- **不会回归一轮/二轮正向面**：六种根级/空目录形状仍全部 Ready 且 `verifyReady.ok`；仅 README 与空目录 `emptyProject=true`，含代码形状 `featureCount>0`；只含 README + 二进制/生成物/`node_modules` 的仓库 `partial=false`、仍判为完整空项目并 Ready（修复未把二进制/排除项误当预算耗尽）；索引截断（`maxIndexEntries` 用小预算等价）会阻断但可由 `confirmNoCapability` 解除；确认状态可跨 `createJsonFileInitStateStore` 重启存活，`start` 同 id 幂等且不丢确认、新 id 干净重置；AC-028 脏工作区仍先阻断、`committed` 未提交时拒绝、`authorized` 后用户文件保留且流程完成。
+- **二轮 P2/P3 逐项复核成立**：`ROOT_MODULE_KEY='(root)'` 与真实 `root/` 目录端到端产出两个独立模块（`modules=['(root)','root']`），`moduleKeyOf` 对 5 类路径均返回非空 `string`；`firstSentence` 6 例矩阵全部正确（`e.g.`/`i.e.`/`J. Smith`/`v1.2`/`.ts`/无终止符/空串）。
+
+---
+
+## 2. 契约命令原始结果（代码树 `fd26662`，`/tmp/wp04r3/contract.log`）
+
+| 命令 | 结果 | 关键输出 |
+|---|---|---|
+| `pnpm install --frozen-lockfile` | **exit 0** | `Lockfile is up to date`、供应链策略通过、11 workspace |
+| `pnpm typecheck` | **exit 0** | 无诊断 |
+| `pnpm lint` | **exit 0** | `All matched files use Prettier code style!` |
+| `pnpm docs:check` | **exit 0** | `docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages` |
+| `pnpm test:unit` | **exit 0** | `Test Files 26 passed (26)`、`Tests 423 passed (423)` |
+| `pnpm test:integration` | **exit 0** | `Test Files 10 passed (10)`、`Tests 124 passed (124)` |
+| `pnpm build` | **exit 0** | 10 个 workspace 全部 `Done`（contracts/cli/knowledge/domain/pi-runtime/storage/workspace/core/daemon/runner） |
+
+WP-04 自有测试单独重跑（`pnpm exec vitest run --project unit packages/knowledge packages/workspace`）：**7 文件 / 134 用例全部通过**——`relations.test.ts` 11、`feature-format.test.ts` 44、`projection.test.ts` 13、`views.test.ts` 9、`requirements-pool.test.ts` 25、`scan.test.ts` 16、`initialize.test.ts` 16。相对二轮（7 文件 / 131 用例、unit 总数 420）净增 3 例，全部来自 `fd26662`：`initialize.test.ts` +2（预算耗尽必阻断且重复 step 仍阻断；扩大批次后观察能力并走确认到 Ready）、`projection.test.ts` +1（缩写句点），与 `git show fd26662` 的测试差异逐条对应；unit 总数 420→423、integration 仍 124、build 仍 10 workspace，与 T10 记录一致。
+
+integration 层仍**不含任何 WP-04 文件**（`packages/knowledge`、`packages/workspace` 无 `*.integration.test.ts`；10 个文件为 `apps/cli/{container,doctor}`、`apps/runner/attempt`、`packages/core/{dispatcher,events-hub,identity,requirements}`、`packages/pi-runtime/session`、`packages/storage/{ledger,migrations}`）——与 `implementation.md` T9 承接 1（W4R1-03 留 WP-08、Test 须列入 `not_covered`）一致，属已登记承接，非本轮新缺陷。
+
+---
+
+## 3. 方法、证据脚本与回归重跑
+
+### 3.1 本轮自建脚本（全部 `/tmp/wp04r3/`，独立上下文，真实临时目录 + 真实 `git`）
+
+| 脚本 | 用例 | 结果 | 覆盖 |
+|---|---|---|---|
+| `probe1-closure.mjs` | 36 | **36 pass / 0 fail** | W4R2-01 闭合矩阵：部分扫描的 scan/knowledge 形状、不得 Ready、blocker 种类与错误码、重复 `step`/`resume` 不推进、确认前后磁盘产物、`confirmNoCapability` 与 `investigateMore` 两条路径、AC-025 六形状回归 |
+| `probe2-adversarial.mjs` | 29 | **25 pass / 4 fail** | 对抗面：更小批次、缺 id、有能力时的两 API、Ready 空项目上 `investigateMore`、Mapping 之前确认、budgetOverride 持久性、账本增长、脏工作区、`documentRoot` 逃逸、`resolveBlocker` 顶替 |
+| `probe3-residual.mjs` | 32 | **25 pass / 7 fail** | 二轮 P2/P3 复核（`(root)` 哨兵与真实 `root/`、`moduleKeyOf`、`firstSentence`）+ 上述缺陷的后续刻画（Ready 记录被写坏后的恢复尝试、自产物冲突、确认后 PROJECT 文案、早确认自相矛盾、账本增长量、脏工作区、绝对 documentRoot） |
+| `probe4-boundaries.mjs` | 16 | **16 pass / 0 fail** | 修复的边界：二进制/生成物/排除目录不得把完整扫描变部分、索引截断可阻断且可解、确认状态跨 JSON 存储重启存活、`start` 幂等与新 id 干净重置、重复 `investigateMore` 不自确认 |
+
+**合计 113 例：102 pass / 11 fail；11 处失败去掉重复后收敛为 6 个独立缺陷（§5 的 W4R3-01/02/03/05/06/07）**，其余全为「闭合应成立」的正向断言。另记录 15 条 observation（不影响判定，用于刻画未列为缺陷的瞬态与既有口径）。
+
+### 3.2 二轮脚本回归重跑（`/tmp/wp04r2/`，同一代码树）
+
+| 脚本 | 本轮结果 | 解读 |
+|---|---|---|
+| `probe1-closures.mjs` | **57 pass / 3 fail** | 3 处失败全部是「断言旧行为」：`moduleKeyOf('main.ts')==='root'`（×2，已被 W4R2-02 刻意改为 `(root)`）、`firstSentence('见 e.g. 示例。')` 断言截断为 `见 e.g`（已被 W4R2-04 刻意修好）。**无意外回归** |
+| `probe2-newdefects.mjs` | 失败集中在 A-1/A-2/A-4、B-1/B-3/B-4、C-2、D-3、F-1、F-3 | 全部是二轮缺陷或死代码形状，均已被 `fd26662` 反转/删除；E-1（W4R1-04 用错 API ⇒ `failed/internal`）与 E-2/E-3/E-4（W4R1-05/06 残余）仍复现，与承接登记一致 |
+| `probe3-realistic.mjs` | **2 pass / 3 fail**（M-3/M-4/M-5 反转） | 二轮 P1 的原始缺陷形状已消除：41 包默认预算 → `emptyProject=false`、`ready=false`、`blockers=['investigation-budget']`，不再写 `absent`；4 包对照仍产出 4 个能力并停在 `confirmation-required` |
+
+---
+
+## 4. W4R2-01 闭合的独立验证
+
+### 4.1 负例（部分地图 + 零能力）：不再 Ready（`probe1` A1–A12）
+
+41 包（每包 `README.md` + `package.json`，无代码），默认预算：
+
+| 观测点 | 实测 |
+|---|---|
+| `scanProject` | `partial=true`、`bodyFiles.length=40`、`skippedFiles.length=42`、`unknowns` 含 `budget-body-files` |
+| `generateCandidateKnowledge` | `emptyProject=false`、`partialWithoutCapability=true`、`features=0` |
+| 初始化终态 | `blocked/confirming`，`blocker.kind='investigation-budget'`，`errors[0].code='MISSING_CONTEXT'` |
+| 记录 | `emptyProject=false`、`emptyProjectConfirmed=false`、`scanPartial=true`、`featureCount=0` |
+| 重复 `step`/`resume` | 仍 `blocked`、同 blocker；阶段/状态/文档数不变，`blockers` 保持 1 条（`evidence` 增长见 W4R3-07） |
+| 候选 PROJECT.md | 含「尚不能断言项目为空」，**不含** `absent（未实现，明确空项目）` |
+| 磁盘 | 阻断路径下 `docs/` 根本未创建（`A12`、`E`） |
+
+### 4.2 正例（两条处置路径）：可解但不自解（`probe1` B/C、`probe4`）
+
+- `confirmNoCapability`：空 `authorizationRef`/`by` → `VALIDATION_ERROR`；带授权后 `emptyProject/emptyProjectConfirmed=true`、证据行 `no-capability` 带 `authorizationRef`，驱动到 Ready；此时写出的 PROJECT.md 仍不含 `absent`（措辞问题另见 W4R3-05）。
+- `investigateMore`：`{}`/`{maxBodyFiles:0}` 被拒且记录不变（`phase='confirming'`、`budgetOverride=null`、原 blocker 保留）；`{maxBodyFiles:200}` 在「能力在预算之外」的仓库上重跑 Mapping、`featureCount>0`、`budgetOverride` 落库并在后续 `step`/`resume` 保持；随后走正常确认路径 Ready 且 `emptyProject=false`，Feature 文档 `source_refs` 含 `zzz-late/src/mod.ts`。
+- `resolveBlocker` 不能顶替处置预算阻断（`VALIDATION_ERROR`，记录仍阻断、未确认）。
+- 边界：索引截断型部分地图同样阻断（`investigation-budget`）且可由 `confirmNoCapability` 解除；只含二进制/生成物/`node_modules` 的 README 仓库 `partial=false`，仍按 AC-025 完整空项目 Ready（未被修复误伤）。
+- AC-026 附带核对：常规 `README.md` + `src/mod.ts` 仓库到达 Ready 后，候选文档仅 `docs/agentdev/{PROJECT,INDEX,CODE_MAP}.md` 与 `features/**`，`git diff HEAD` 为空、`git status --porcelain` 仅 `?? docs/`（已跟踪代码零改动），且不存在 `.agentdev/requirements`。
+
+### 4.3 AC 逐项核对（本轮直接取证范围）
+
+| AC | 结论 | 本轮证据 |
+|---|---|---|
+| AC-025 空项目 | **通过** | 空目录与仅 README → Ready、`emptyProject=true`、PROJECT.md 明确空项目；`probe1` D、`probe4` A（二进制/生成物不改变结论） |
+| AC-026 旧项目初始化 | **通过（含新回归网）** | `probe1` A/C（预算耗尽显式阻断、扩大后观察能力、代码不移动、无 `.agentdev/requirements`）、`probe3` G/H、`probe4` B |
+| AC-028 脏工作区 | **通过** | `probe3` H1–H5：未提交文件先阻断、`committed` 未清空时拒绝、`authorized` 后用户文件保留且流程完成 |
+| AC-029 中断/冲突/Ready 门禁 | **通过（新缺陷另记）** | 内容冲突不覆盖与 Hash 恢复由本仓库 unit 套件在本轮重跑通过（`initialize.test.ts`「never overwrites an existing file with different content and requires explicit recovery」「resumes from a JSON-file state store without rewriting already-written documents」）；本轮新发现「重扫自己的产物会撞 `content-conflict`」→ W4R3-02 |
+| AC-027/037–040/042/086–088/092/093 | **承接前两轮证据** | 本轮未重复取证；一轮/二轮报告与回归重跑未显示松动（见 §3.2），Test 仍须按二轮 §8.4 的矩阵覆盖 |
+
+---
+
+## 5. Findings（W4R3-xx）
+
+### W4R3-01 [P2] 被拒的 `confirmNoCapability`/`investigateMore` 把 Ready 记录写成 `failed/internal`，不可恢复
+
+- **现象（`probe2` C3、`probe3` C1–C6）**：在一个 `status='ready'`、`featureCount>0` 的记录上调用 `confirmNoCapability`（或 `investigateMore`），返回 `VALIDATION_ERROR`（正确），但实现走的是 `failed(record, {kind:'internal', recoverable:false})`，而 `failed()` 会 `persist({...status:'failed', failure})`（`initialize.ts:1005`）。实测随后：`step` → `failed`/`INVALID_STATE`（`initialize.ts:1551-1563`）、`resume` → `failed`/`INVALID_STATE`（`recoverable=false` 分支）、`verifyReady` → 不通过；再补一次修正输入的调用仍 `VALIDATION_ERROR`（因为 `record.featureCount>0` 依然为真）。**没有任何 API 能把该记录恢复为 Ready**，只能 `start` 一个新 id。磁盘产物与 Hash 未变（`diskUnchanged:true`），故不是数据损坏，而是**一次非法请求永久摧毁 Ready 状态**。
+- **定位**：`initialize.ts:1934`（`confirmNoCapability`）与 `1984`（`investigateMore`），`featureCount>0` guard 分别位于 `1949`、`1987`；两处 guard 均由 `fd26662` 新增（`git show fd26662` 中 `+ if (record.featureCount > 0)`）。
+- **契约依据**：`reliability.md` §1「校验身份/版本/幂等 → 更新领域行 → …COMMIT」——校验失败不得更新领域行；`protocol.md` 错误表把 `VALIDATION_ERROR` 定义为「修正输入」可重试、把 `INVALID_STATE` 定义为「当前实体状态不允许该操作」；当前实现把前者变成了后者。
+- **同族**：与既有承接项 **W4R1-04**（用错处置 API ⇒ `failed/internal`）同一根因；另有既存同型路径：`start` 对「同 id 绑定其它 root/document-root/branch」也走 `failed()` 持久化（`initialize.ts:2090-2114`），以及 `confirm`/`authorizeGitInitialization`/`resolveBlocker` 的阶段错误同样 `failed()`。建议一次性统一：**输入/状态校验失败只返回错误视图，不改写记录状态**。
+- **建议修法**：把 guard 改为「返回失败视图但不 `persist` status」，或先判阶段（`phase === 'confirming'` 且当前 blocker 为 `investigation-budget`）并以 `INVALID_STATE` 拒绝且不动状态；补断言「Ready 记录上的一次被拒调用后 `status/phase/failure` 原样不变、`verifyReady` 仍为 true」。
+
+### W4R3-02 [P2] `investigateMore`/`confirmNoCapability` 缺阶段门禁：Ready 项目被降级且无法自愈
+
+- **现象（`probe2` D1–D3、`probe3` D1–D2）**：对一个已 Ready 的「完整扫描 + 明确空项目」记录调用 `investigateMore({maxBodyFiles:999})` 被**接受**：记录被置为 `phase='mapping', status='mapping'` 并清空 `blocked/failure`（`initialize.ts:2020-2035`），重跑 Mapping 时重新渲染候选文档（此时仓库里已有上一轮写下的 `docs/agentdev/*`，扫描输入已变化，Hash 随之变化）。此后 `verifyReady` 报 `candidate-documents-written` 失败（磁盘不一致：`docs/agentdev/PROJECT.md`、`INDEX.md`），继续驱动写入会撞 `content-conflict`（候选与**自己上一轮写下的文件**内容不同，按 fail-closed 不覆盖），终态 `failed/writing`、`recoverable:true` 但 `resolveConflict` 对该自产物冲突无实际出路。
+- **定位**：两个 API 只检查 `featureCount`，不检查 `record.phase`/`record.status`；其余写操作（`confirm`、`authorizeGitInitialization`、`resolveBlocker`、`confirmNoCapability` 的语义前提）都隐含阶段约束。
+- **影响**：Ready 是初始化状态机的终态，产品语义上不应被「再调查」降级；一旦发生，投影与磁盘产物失配且无法自动恢复，只能人工清理 `docs/agentdev` 后重来。
+- **建议修法**：对 `phase === 'ready'`（或 `status === 'ready'`）直接以 `INVALID_STATE` 拒绝（且不改状态，见 W4R3-01 的同一修法）；若产品确需「Ready 后重新调查」，须设计为显式的新一轮（重写产物 + 原子替换 + Hash 复核），不能在原记录上原地重扫。
+
+### W4R3-03 [P2] `documentRoot` 允许相对路径逃逸，候选文档写到项目根之外
+
+- **现象（`probe2` H1/H2）**：`start({id, root, documentRoot:'../escape-target'})` → 记录 `documentRoot='../escape-target'`，候选文档 `path='../escape-target/PROJECT.md'`、`INDEX.md`；写入阶段 `join(root, document.path)` 解析到**项目根的父目录**，实测 `wroteOutsideRoot:true`、`wroteInsideRoot:false`，且流程正常到达 Ready、`verifyReady` 通过，全程零诊断。
+- **定位**：`normalizeDocumentRoot`（`scan.ts:410`）只做 `\\→/`、去开头 `./`、去尾部 `/`，不拒绝 `..` 段、不校验是否落在 root 内；`candidateDocument`（`scan.ts:1179`）直接拼 `"${documentRoot}/${documentPath}"`；写入用 `join(next.root, document.path)`（`initialize.ts:1383`）。**绝对路径** `documentRoot='/tmp/...'` 因 `join` 语义被拼进 root（`<root>/tmp/...`）而未逃逸（`probe3` I1/I2），故缺口仅限 `..`。
+- **契约依据**：`execution.md` 运行隔离：「文件工具拒绝相对路径逃逸、符号链接逃逸、嵌套仓库逃逸」；`knowledge.md` §5 将 document-root 固定为 `docs/agentdev`；`data.md` 中 `documentRoot:Path` 为项目内路径。
+- **影响**：初始化会在用户指定的任意相对位置创建 `PROJECT.md`/`INDEX.md`/Feature 目录（不覆盖同名不同内容文件，仍属越界写），并把该越界路径持久化进项目记录供后续投影使用。
+- **建议修法**：`start`（以及 `scanProject`）校验 `documentRoot` 规范化后不得含 `..` 段、不得绝对、`resolve(root, documentRoot)` 必须仍在 `root` 内，否则 `VALIDATION_ERROR`；补断言「`../x` 与绝对路径均被拒绝且不产生任何写盘」。
+
+### W4R3-04 [P3] `investigateMore` 接受更小/相等批次，与「必须给出更大的」文案不符
+
+- `positive()`（`initialize.ts:1994`）只要求 `>0`。`probe2` A1：默认预算 40 时 `investigateMore({maxBodyFiles:1})` 被接受，`budgetOverride={maxBodyFiles:1}`，重扫 `正文 1 个 / 19 字节（partial）`。行为安全（A2/A3/A4：仍未 Ready、下一步仍 `investigation-budget`、从不自确认），但报错文案「扩大调查批次必须给出更大的 maxBodyFiles 或 maxBodyBytes」与实现相反，且一个手误的小数字会静默让地图更小。建议要求严格大于当前生效预算，或改文案为「给出新的正数批次」。
+
+### W4R3-05 [P3] 显式确认无能力后，写出的 PROJECT.md 仍写「尚不能断言项目为空」
+
+- `probe3` E1：41 包部分扫描 → `confirmNoCapability` → Ready，记录 `emptyProject=true`、`emptyProjectConfirmed=true`、`scanPartial=true`，但磁盘 `docs/agentdev/PROJECT.md` 的「实现状态」= `未调查（预算耗尽的扫描未观察到能力，尚不能断言项目为空）`。原因是候选文档在 Mapping 阶段一次性渲染（`scan.ts:1417-1421` 的三分支只看 `emptyProject`/`scanPartial`），确认后未重渲染，而 `confirmNoCapability` 只改记录字段（`initialize.ts:1966-1980`）。
+- 本轮要求只到「**未确认时不得写 absent**」（已满足，`probe1` A11、`probe3` E2），故此条为记录/投影与用户决定不一致的 P3；建议确认后以记录为准重渲染 PROJECT（`实现状态：absent（未实现，已由用户明确确认）` 之类），或把该行改为写盘时按记录计算。
+
+### W4R3-06 [P3] Mapping 之前确认无能力 ⇒ 自相矛盾状态 + `ready-gate` 失败
+
+- `probe3` F1/F2：`confirmNoCapability` 在 `phase='identifying'` 即被接受（同样缺阶段门禁），置 `emptyProject/emptyProjectConfirmed=true`；随后 Mapping 用 `emptyProject: knowledge.emptyProject` 覆盖为 `false`（`initialize.ts:1114`），却保留 `emptyProjectConfirmed`。终态：`failed/writing`、`failure.kind='ready-gate'`、错误 `GATE_NOT_READY: feature-or-empty-project`，记录 `emptyProject=false` + `emptyProjectConfirmed=true` + `scanPartial=true`，磁盘已写入候选文档。用户的授权被记录（证据行 `no-capability`）但不产生任何效果。
+- 与 W4R3-01/02 同根因（缺阶段门禁）。建议确认只在 `phase='confirming'` 且 blocker 为 `investigation-budget` 时接受；若允许提前表达意图，则 Mapping 不得清掉已确认字段。
+
+### W4R3-07 [P3] 未解阻断上重复 `step` 使证据账本无界增长
+
+- `blocked()`（`initialize.ts:976`）每次调用都 `addEvidence(..., 'blocked', message, [])`，只有 `blockers` 数组做了同 kind+message 去重。实测（`probe1` A9、`probe3` G1，JSON 文件存储）：200 次重复 `step()` 后 `evidence` 4→204（+200 行），持久化文件 29 657→106 457 字节（**+76 800 字节**），`blockers` 保持 1。客户端轮询/重试即可无界放大项目记录，且这一增长会进入后续提交与备份。
+- 建议：对「同一阶段 + 同 kind + 同 message」的 `blocked` 证据做与 `blockers` 相同的去重（或折叠为 `repeatCount`），并补一条「N 次重复 step 后证据行数不变」的断言。
+
+### W4R3-08 [P3] 记录订正声明未落地：W4R2-05 声称已订正 T8 残余 3，实际该行未变
+
+- `implementation.md:96`（T10 的 W4R2-05）写「T8 残余 3 的措辞随 T9/T10 更新（根级文件现归 `(root)` 模块…）」，但 `implementation.md:63`（T8 残余 3）与修复前提交逐字相同：`git show 9ee1a82:.agentdev/work/WP-04/implementation.md | sed -n 63p` 与 `HEAD` 同行为 **IDENTICAL**。即声明与产物不一致（纯记录问题，行为无影响）。建议真正补上括注（指向 T9 的 `ROOT_MODULE_KEY` 与「其他源文件层」各自适用范围），或改正 W4R2-05 的表述。
+
+### 二轮 P2/P3 与一轮承接项复核（未重新编号）
+
+| 编号 | 复核结论（本轮实测） |
+|---|---|
+| W4R2-01（P1） | **闭合**（§4；`probe1` 36/0、二轮 `probe3-realistic` M-3/M-4/M-5 反转） |
+| W4R2-02（P2） | **闭合**：`ROOT_MODULE_KEY='(root)'`（`scan.ts:85`）；根级 `main.ts` + 真实 `root/` 目录端到端产出 `modules=['(root)','root']` 两个独立能力（`probe3` A1–A6） |
+| W4R2-03（P3） | **闭合**：`moduleKeyOf` 返回 `string`（`scan.ts:1090`），5 类路径实测均非空字符串；`null` 死分支与 `?? null` 已删（二轮 `probe2` D-3 反转） |
+| W4R2-04（P3） | **闭合**：`SENTENCE_END`（`projection.ts:60`）跳过单字母缩写句点，6 例矩阵全对（`probe3` B） |
+| W4R2-05（P3） | **未落地** → W4R3-08 |
+| W4R1-03 集成演练 | **记录面闭合**：T9 承接 1 明确留 WP-08 且 Test 须列 `not_covered`；integration 层确无 WP-04 文件（§2 清单），与登记一致 |
+| W4R1-04 用错处置 API | **仍可复现**（二轮 `probe2` E-1 重跑）：`confirmation-required` 上调 `resolveBlocker` → `VALIDATION_ERROR` 且记录 `failed/internal`/`recoverable:false`；本轮发现同一根因的两个新入口 → W4R3-01 |
+| W4R1-05 版本不校验 | **仍可复现**：`resolveSourceRef('requirement:R-1@99')` → `{ok:true,version:'99'}`；未知 id 仍拒绝 |
+| W4R1-06 残余 | **仍可复现**：池根裸 `requirement.json` → `ok=true, errors=0, records=0`；目录符号链接记 `kind:'file'`+`symlink:true`。其 fail-open 面（一级标题）仍闭合 |
+
+---
+
+## 6. 记录与实现一致性核对
+
+| 记录条目 | 核对结果 |
+|---|---|
+| T10：`emptyProject = features.length===0 && !scan.partial`、新增 `partialWithoutCapability` | 一致（`scan.ts:1299-1300`） |
+| T10：新增 blocker `investigation-budget` → 错误码 `MISSING_CONTEXT` | 一致（`initialize.ts:249`、`262`；`probe1` A4/A5） |
+| T10：Ready 门禁改为 `featureCount>0 \|\| (emptyProject && emptyProjectConfirmed)` | 一致（`initialize.ts:619-622`；`probe1` A3/A10） |
+| T10：新增 `investigateMore`（`budgetOverride`，回 Mapping）/ `confirmNoCapability`（置 `emptyProject+emptyProjectConfirmed`） | 一致（`initialize.ts:1934/1984`；`probe1` B/C、`probe4` C） |
+| T10：PROJECT.md 三种措辞（有代码 `partial` / 完整空项目 `absent` / 预算耗尽未确认 `未调查…尚不能断言`） | 一致（`scan.ts:1417-1421`；`probe1` A11、`probe3` E2）；确认后文案未同步 → W4R3-05 |
+| T10：W4R2-02/03/04（`(root)`、`moduleKeyOf:string`、缩写句点） | 一致（§4、`probe3` A/B） |
+| T10：W4R2-05（T8 残余 3 措辞随 T9/T10 更新） | **不一致 → W4R3-08** |
+| T10：`unit 26 文件 / 423 用例`、`integration 124`、`build 10 workspace` | 一致（§2；WP-04 自有 7 文件 / 134 用例单独重跑一致；420→423 与新增 3 例对应） |
+| T10：回归网新增 2 + 1 例 | 一致（`git show fd26662` 的测试差异；initialize 14→16、projection 12→13） |
+| T9 承接 1–4：W4R1-03/04/05/06 | 一致（§5 复核表；W4R1-03 的 integration 缺席与登记相符） |
+| T8 残余 1–6 | 本轮未发现与代码矛盾之处；1/2/4/5/6 属已登记承接 |
+| `plan.md` §2 写路径与不可写清单 | 一致：`fd26662` 6 文件全部在允许集合内，`docs/**`、`contracts/**`、`storage/**`、`webui/**`、`docker/**` 零改动 |
+| `plan.md` §5 集成演练（真实 SQLite + 临时 Git 端到端） | 仍不落地，但已由 T9 承接 1 显式登记 → 记录面一致 |
+
+---
+
+## 7. 计数与阻断判定
+
+| 严重度 | 数量 | 编号 | 阻断 |
+|---|---|---|---|
+| P0 | **0** | — | — |
+| P1 | **0** | — | — |
+| P2 | **3** | W4R3-01、W4R3-02、W4R3-03 | 否（建议结算前修） |
+| P3 | **5** | W4R3-04、W4R3-05、W4R3-06、W4R3-07、W4R3-08 | 否 |
+| （承接复核） | 5 | W4R1-03（记录面闭合）、W4R1-04（并见 W4R3-01）、W4R1-05、W4R1-06 残余、W4R1-04 新入口 | 否 |
+
+阻断项：**无**。W4R2-01 已闭合，且本轮未在 WP-04 验收面（AC-025–029、AC-037–040、AC-042、AC-086–088、AC-092、AC-093）复现任何 P0/P1。
+
+---
+
+## 8. 能否进入独立 Test —— **能**
+
+理由：第二轮唯一 P1（W4R2-01）在默认预算大仓库与等价小预算形状上均已消除，且两条处置路径完整可用并保持 fail-closed；一轮/二轮全部正向闭合经重跑无意外回归；契约命令 7/7 通过、工作树干净、代码面与 `fd26662` 等价。本轮发现的 3×P2 + 5×P3 均**不阻断**（P2 集中在 `fd26662` 新增的两个 API 与 `documentRoot` 规范化边界，属调用边界与记录质量问题，不影响 WP-04 的验收面判定），但应在结算前登记并对齐：
+
+1. **修 W4R3-01/02（强烈建议，同一修法）**：给 `confirmNoCapability`/`investigateMore` 加阶段门禁，并让「校验失败」不再 `persist` 为 `failed`（可与承接项 W4R1-04 一并统一）；补断言「Ready 记录被拒后状态不变」「Ready 记录不接受重新调查」。
+2. **修 W4R3-03（建议）**：`documentRoot` 拒绝 `..`/绝对路径，保证 `resolve(root, documentRoot)` 仍在 root 内；补负例断言。
+3. **记录订正（必须）**：`implementation.md` 登记 W4R3-01..08 的处置与承接，保留 W4R1-03..06、W4R2-02..04 的既有登记，并改正 W4R2-05 的声明（或补齐 T8 残余 3 的措辞）。
+4. **Test 最小覆盖矩阵（沿用二轮 §8.4，并新增本轮形状）**：AC-025 空目录 + 仅 README +「README + 二进制/生成物」（授权前不建 `.git`）；AC-026 **根级三种形状 + 超预算大仓库（默认预算 41 包）**的对照（代码不移动、无 Requirement、超预算形状须显式阻断且不写 absent；扩大批次后能观察到预算外能力）；AC-027/028/029（无 Git 只读、脏工作区处置、中断按 Hash 恢复、冲突不覆盖、门禁篡改复核）；AC-040 非法知识（不发布 + stale + 断链按当前需求阻断，含「无需求范围不阻断」负例）；AC-086 正负例；AC-042 设计/代码冲突；AC-087/088/092/093 组件级（本地状态 + 真实临时 Git；SQLite/Core/UI 集成按 W4R1-03 归 WP-08 并在 Test 报告 `not_covered`）。建议 Test 额外覆盖本轮 P2 形状（Ready 记录被拒调用、Ready 记录上 `investigateMore`、`documentRoot:'..'`），若开发轮已修则作为回归断言，若未修则列入 `known_issues`。
+
+---
+
+## 9. 方法与边界声明
+
+- 本轮只审阅 `fd26662`（代码面等价于 `HEAD`）的仓库状态，不读取开发/Test 会话；全部结论可由 `/tmp/wp04r3/*.mjs`、`/tmp/wp04r3/*.out`、`/tmp/wp04r3/contract.log` 与 `/tmp/wp04r2/` 的重跑复现。冻结前后 `git status --porcelain` 为空。
+- 探针只消费 `pnpm build` 产物，未 import 任何产品测试文件；所有仓库均为真实临时目录 + 真实 `git init/commit`，无 mock 文件系统。
+- **覆盖边界（未验证项，Test/后续包需承接）**：`feature_projection` 的 SQLite 落地与交付提交/CAS、需求池保存侧原子提交（WP-08/WP-05）；`GitPort`/`FileSystemPort` 的真实崩溃注入；HTTP/WS 接线（`project.initialize` 等）；真实 Provider 纵向；AC-039 的实际上下文选择接线（WP-05）；`views` 中「不复用旧决策引用」等无独立断言可判定的表述。
+- 本轮未做：跨平台/Windows 路径语义、超大仓库（>10 000 索引条目）性能实测（仅以小预算等价验证截断路径）、多进程并发写同一 `InitStateStore`、符号链接逃逸（属 WP-08 扫描器增强，见 W4R1-06 残余）。
+- 严重度口径：`docs/rules/workflow.md` §6 —— P0 数据/安全或关键不可用、P1 错误行为/需求缺失、P2 局部质量/维护、P3 建议；**P0/P1 阻断**。W4R3-03 判 P2 的理由：需要调用方显式传入越界 `documentRoot`，本产品为同用户单机自托管、无权限边界可跨越，默认 `docs/agentdev` 不触发，且已存在同名不同内容文件的「不覆盖」保护。
+
+## 文末打印（本轮取证汇总）
+
+- **结论：PASS**（`0×P0`、`0×P1`、`3×P2`、`5×P3`；无阻断项；W4R2-01 闭合）
+- 冻结点：`git rev-parse HEAD` = `f80092fe32ac608bae5645ed502ae779c17bfb56`；`git rev-parse HEAD^{tree}` = `d05c38ab1260e8ac732daf53f130b92f67273d81`
+- 被评审代码树：`fd26662` → `6c31365c351b18118d7569783b1933c31ce17bb0`（`git diff --stat fd26662 HEAD` = 仅 `review.md` +214 行）
+- 报告写入后 `git status --porcelain` 最后一行 = ` M .agentdev/work/WP-04/review.md`
+- 契约命令：install/typecheck/lint/docs:check/test:unit/test:integration/build = **7/7 exit 0**（unit 26 文件 423 用例；integration 10 文件 124 用例；build 10 workspace；docs:check 15 文档/55 链接/94 验收用例）
+- 证据脚本与用例数（本轮自建）：`probe1-closure.mjs` 36/0、`probe2-adversarial.mjs` 29 例（25 pass / 4 fail）、`probe3-residual.mjs` 32 例（25 pass / 7 fail）、`probe4-boundaries.mjs` 16/0 = **113 例、102 pass / 11 fail，收敛为 6 个独立缺陷（W4R3-01/02/03/05/06/07）**
+- 二轮脚本重跑（回归）：`probe1-closures.mjs` 57/3（3 处均为旧行为断言）、`probe2-newdefects.mjs` 失败集中在已修缺陷/死代码形状（E-1/E-2/E-3/E-4 承接项仍复现）、`probe3-realistic.mjs` 2/3（M-3/M-4/M-5 为期望的缺陷反转）
+- 二轮 P2/P3 复核：W4R2-02/03/04 **闭合**；W4R2-05 **未落地**（→ W4R3-08）；一轮承接 W4R1-03 记录面闭合、W4R1-04/05/06 仍复现
+
+---
+
+## 附二：第二轮报告（保留）
+
 # WP-04 独立 Review 报告（第二轮）
 
 - 评审对象：工作包 WP-04「知识与新旧项目」（`docs/delivery/implementation.md` WP-04；关联 AC-025–029、AC-037–040、AC-042、AC-086–088、AC-092、AC-093）
