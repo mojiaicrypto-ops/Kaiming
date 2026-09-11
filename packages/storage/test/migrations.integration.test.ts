@@ -14,6 +14,7 @@ import {
   SCHEMA_TABLES,
   StorageError,
   backupDatabase,
+  migrationChecksum,
   closeDatabase,
   openDatabase,
   readAppliedMigrations,
@@ -286,6 +287,48 @@ describe('schema matches the entity contracts', () => {
     expect(ddl).toContain('UNIQUE (operation, key)');
     expect(ddl).toContain('UNIQUE (revision, feature_id)');
     expect((CORE_SCHEMA_SQL.match(/resource TEXT NOT NULL UNIQUE/g) ?? []).length).toBe(1);
+  });
+});
+
+describe('successive upgrades', () => {
+  it('keeps one backup per source version instead of colliding', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentdev-upgrade-'));
+    const db = openDatabase({ file: join(dataDir, 'project.sqlite') });
+    const backupDir = join(dataDir, 'backups');
+    const migration = (version: number): Migration => ({
+      version,
+      name: `m${String(version)}`,
+      sql: `CREATE TABLE step_${String(version)} (id INTEGER PRIMARY KEY);`,
+    });
+    try {
+      const first = runMigrations(db, [migration(1)], { backupDir });
+      expect(first.applied).toEqual([1]);
+      // The second upgrade runs from version 1 and must not target version 0's copy.
+      const second = runMigrations(db, [migration(1), migration(2)], { backupDir });
+      expect(second.applied).toEqual([2]);
+      expect(existsSync(join(backupDir, 'pre-migration-v0.sqlite'))).toBe(true);
+      expect(existsSync(join(backupDir, 'pre-migration-v1.sqlite'))).toBe(true);
+      // A resumed attempt for the same version reuses its copy.
+      const again = runMigrations(db, [migration(1), migration(2)], { backupDir });
+      expect(again.applied).toEqual([]);
+    } finally {
+      closeDatabase(db);
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('frozen migrations', () => {
+  it('freezes migration 0001 and requires later changes to append a migration', () => {
+    // WP-01 is the first release of this schema: 0001 was corrected in place before
+    // any database shipped, and its checksum is frozen here. Editing 0001 again
+    // would make every existing database fail MIGRATION_CHECKSUM_MISMATCH, so a
+    // schema change must add a new migration instead (data.md §5).
+    const first = MIGRATIONS[0];
+    if (first === undefined) throw new Error('migration 0001 is missing');
+    expect(migrationChecksum(first)).toBe(
+      '8de041504378a4caf4292a38f6d542100c7b97fe90a4e560d43a623fc98e2dff',
+    );
   });
 });
 

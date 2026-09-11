@@ -195,3 +195,74 @@ $ git diff --name-only 79d5895..c3a581f -- docs apps webui docker package.json
 # 共 59 文件、+10233/-1；packages/contracts/src/{index,primitives}.ts 为纯新增导出/类型，
 # 未改动 WP-00 既有类型语义
 ```
+
+## 2. 复评（re-review）
+
+- 复评对象：commit `8e96ee2df29db589653e9fbfedd0569ea3217a96`，tree `f1589696a5938dc83f282d5e929f81976967e6e5`（均以 `git rev-parse HEAD` / `git rev-parse HEAD^{tree}` 实测）。
+- 任务书给出的 commit `8e96ee2f9b4d9ffbbd0f2e2c6b6d6a66b0b1b8f9` 在本仓库对象库中**不存在**（`git cat-file -t` 退出 128；`git rev-parse --verify` 只做了形式校验）；复评以实际 `HEAD` 为准，二者均如实记录。
+- 首次 Review 对象：commit `c3a581ffacf588c56754c505ca16dfd83c79174f`，tree `196f56ffa6a28ae0ca844acfb5c4e76f1df017e6`。
+- 方法：独立上下文，不读开发聊天。读首次报告、`implementation.md` §2 处置表、`git show 8e96ee2` 全量 diff、HEAD 源码/测试与正式文档；在 `/tmp` 的 HEAD 归档副本（`git archive` + `node_modules` 符号链接）中执行“回退修复→复跑测试”的非空泛性实验与升级路径实验。仓库 tracked 文件仅本文追加，复评前后 `git status --short` 为空。
+
+### 2.1 逐项判定
+
+| id | 原级别 | 判定 | 证据与说明 |
+|---|---|---|---|
+| RE-01 | P1 | **verified（已修复）** | 默认路径改为目录且带 `.agentdev/` 前缀：`packages/core/src/requirements.ts:31`（`REQUIREMENT_RECORD_DIR`）、`:241`（`portableRef.path` 默认）、`:234`（`sourceRef.path`）。与 `docs/architecture/data.md` §6「portableRef.path为目录而非单文件」、`docs/product/requirements.md` §1「.agentdev/requirements/<requirement-id>/」一致。测试期望同步修正：`packages/core/test/requirements.integration.test.ts:100-106`。回退实验（把常量改回 `requirements/<id>/requirement.json`）后该用例失败：`expected 'requirements/018f…' to be '.agentdev/requirements/018f…'`。残留：`ImportRequirementInput.portableRef.path` 仍可被调用方覆盖（`:241` 的 `??`），Git 导入方（WP-04/WP-08）必须传目录。 |
+| RE-02 | P1 | **verified（已修复）** | `RequirementProjection.import` 整体包进 `withTransaction`：`packages/core/src/requirements.ts:112-114`（`BEGIN IMMEDIATE` 见 `packages/storage/src/sqlite.ts:62-65`）。新增用例 `packages/core/test/requirements.integration.test.ts:210-226`（事件写入失败→行不存在→重试为 `new`）。回退实验（删去 `withTransaction` 包装）后该用例失败于 `store.requirements.find(...)` 应为 `undefined` 但留下投影行处。另实测嵌套 `withTransaction`（dispatcher 事务内再调 import）以 SAVEPOINT 正常工作，嵌套不会报错。 |
+| RE-03 | P2 | **verified（已修复）** | `assessment` 加入 `UPDATE_BLOCKED_TABLES`：`packages/storage/src/schema.ts:58-64`，触发器由 `:467-474` 生成；负例见 `packages/storage/test/migrations.integration.test.ts:384-398`（重评 UPDATE 抛 `immutable`）。观察（非本次发现范围）：`DELETE_BLOCKED_TABLES`（`:65`）未含 assessment，`DELETE FROM assessment` 仍可执行；首次发现只要求 UPDATE 不可变，故记为观察项。 |
+| RE-04 | P2 | **verified（默认接线已补齐，但见 NF-01）** | `ProjectStore.open` 默认传 `backupPath`：`packages/storage/src/store.ts:169`（`defaultBackupPath` 定义于 `:52`）；`runMigrations` 在无回调而有 `backupPath` 时调用 `backupDatabase`：`packages/storage/src/migrations.ts:145-149`；用例 `packages/storage/test/ledger.integration.test.ts:327-339`。默认接线成立，但该默认路径在第二次待迁移时必然失败，见 NF-01。 |
+| RE-05 | P2 | **verified（能力已具备；调用方义务归 WP-04/WP-08）** | `metadataHashOf/recordHashOf` 接受原始字节：`packages/core/src/requirements.ts:79-88`；输入字段 `rawMetadata` 见 `:46-53`；用例 `packages/core/test/requirements.integration.test.ts:200-208`（`metadataHashOf(...,raw) === sha256(raw)`，且与规范化结果不同）。仓库内尚无 Git 导入调用方传字节（属 WP-04/WP-08），届时必须传 `rawMetadata` 才满足 `requirements.md` §6。 |
+| RE-06 | P2 | **verified（已修复）** | `packages/domain/src/transitions.ts:47-48` 补入 `review: ['test','done','develop']`、`test: ['done','develop']`，符合 `docs/rules/workflow.md` §5.2「Review或Test失败返回develop；修复后重新独立Review」；断言 `packages/domain/test/domain.test.ts:118-119`。 |
+| RE-07 | P2 | **verified（已修复）** | 重载路径不再保留明文：`packages/core/src/auth.ts:148-153` 返回 `new InstallationCredential(path, undefined)`；`revealOnce()` `:162-166` 因无值返回 `undefined`，`matches()` 每次读文件比对 `:169-173`。断言 `packages/core/test/auth.test.ts:51`。 |
+| RE-08 | P2 | **verified（已修复）** | `OperationDefinition.scope` 见 `packages/core/src/dispatcher.ts:52`；缺 `projectId` 的 project 方法返回 `VALIDATION_ERROR` 见 `:172-174`，符合 `docs/architecture/protocol.md` §1「全局方法省略projectId……Project方法必填projectId」；用例 `packages/core/test/dispatcher.integration.test.ts:191-209`（project 方法缺 id 拒绝 + `connection.hello` scope=global 通过）。 |
+| RE-09 | P2 | **partially_fixed** | §1/§2 范围矛盾已消除（`implementation.md:132-137`），entities 计数改为 12（`:18`）。但命令证据表仍是旧计数：`:147`「10 文件 / 115 用例（14 迁移 + 21 仓储/账本 + 9 分发 + 16 事件订阅 + 9 身份 + 8 需求投影）」——括注相加为 77，与 115 自相矛盾；实测 WP-01 六个集成文件为 82 用例（14/22/10/17/9/10），加 WP-00 四个文件 38 用例共 120，与 fix commit 信息一致。另 `:65` 称 dispatcher 9 用例、`:109` 称需求投影 8 用例，实测均为 10。见 NF-04。 |
+| RE-10 | P3 | **verified（已修复）** | `packages/core/src/dispatcher.ts:253-254` 已改为 `const outcome = …; return outcome.response;`，死三元删除。 |
+| RE-11 | P3 | **accepted_risk_deferred（归 WP-09）** | 文档不一致仍在：`docs/architecture/protocol.md:37` `project.create` 要求 `root,name`，`docs/architecture/data.md:17` project 表无 name，`packages/contracts/src/entities/project.ts:139-150` 读模型暴露 name。`implementation.md:127` 声明归 WP-09 处置。但仓库内并无该 Discovery 记录，见 NF-05。 |
+| RE-12 | P3 | **accepted_risk_deferred（归 WP-02/WP-06）** | `planSchema` 仍 `productRef?`、`rollback` 允许空：`packages/contracts/src/entities/structures.ts:243-255`；`implementation.md:128` 声明归 WP-02/WP-06 的 Gate 落地。同样缺 Discovery 记录（NF-05）。 |
+| RE-13 | P3 | **verified（已修复）** | `packages/contracts/src/entities/system.ts:136` 改用 `operationKindSchema`，其 7 个值（`packages/contracts/src/entities/run.ts:209-217`）与 DDL CHECK（`packages/storage/src/schema.ts:397`）完全一致；无循环依赖（`run.ts` 不反向引用 `system.ts`）。小瑕疵：`system.ts:135` 注释写 “eight operation kinds”，实为 7 个，属注释笔误。 |
+| RE-14 | P3 | **verified（代码已修复；其证明用例空泛）** | `subscribe`/`poll` 仅在 `ResyncRequiredError` 时转换：`packages/core/src/events-hub.ts:267-270`、`:338-342`，非截断异常原样抛出。代码行为正确，但新增负例 `packages/core/test/events-hub.integration.test.ts:233-241` 不能证明该修复，见 NF-03。 |
+
+### 2.2 两项 P1 的专门核对
+
+- **RE-01 记录目录**：默认值现为 `.agentdev/requirements/<id>`（目录、含 `.agentdev/` 前缀），与 `data.md` §6、`requirements.md` §1 完全一致；测试基准已同步，且回退修复会使用例失败——非空泛。
+- **RE-02 原子性**：HEAD 实测「事件 append 抛错 → 投影行不存在 → 重试返回 `new`」通过；回退实验证明该用例确实受被测代码支配（去掉事务即失败）。行→事件顺序见 `requirements.ts:172-178`（new）与 `:189-195`（update），同事务内任一步失败整体回滚；嵌套 `withTransaction` 经 SAVEPOINT 实测可用，dispatcher 外层事务包裹 import 不会冲突。
+- 结论：两项 P1 均已真正修复且有非空泛证据。
+
+### 2.3 复评新发现
+
+| id | severity | target | 描述 | 证据 | blocking |
+|---|---|---|---|---|---|
+| **NF-01** | **P1** | task T3/T4（AC-065；`data.md` §5） | 默认迁移前备份目标固定为 `<stateDir>/backups/pre-migration.sqlite`，而**首次安装**（migration 0001 待应用）就会创建该文件；`backupDatabase` 用 `VACUUM INTO` 且拒绝覆盖，因此下一次有待迁移（如 0002）时在备份处抛裸 `SqliteError: output file already exists`，且该调用位于每迁移 `try` 之外，不以 `MIGRATION_FAILED` 包装，迁移根本不会执行。RE-04 新增的默认接线恰好使其所服务的「版本升级」路径不可用。 | `packages/storage/src/store.ts:169`；`packages/storage/src/migrations.ts:145-149`（备份在 `:155` 的 try 之外）、`:187-190`（`VACUUM INTO`）；`packages/storage/test/ledger.integration.test.ts:327-339` 把「首次安装即备份」固化为期望。实测：首次 `ProjectStore.open` 后备份文件存在；再以 `[...MIGRATIONS, {version:2}]` + 同一默认路径跑 `runMigrations` 得 `SqliteError:output file already exists`（`/tmp` 归档副本复现，未改动仓库）。 | yes |
+| **NF-02** | P2 | task T3/T4（AC-065）；`packages/storage/src/schema.ts` | RE-03 通过直接改 `schema.ts` 的 `UPDATE_BLOCKED_TABLES` 实现，而 migration 0001 的 SQL 由该常量派生（`MIGRATIONS[0].sql = CORE_SCHEMA_SQL + IMMUTABILITY_SQL`），导致 migration 0001 checksum 变化：`6224f5a3…`（首次 Review 树 c3a581f）→ `8de04150…`（HEAD）。由 tree `196f56ff` 创建的库在 HEAD 打开时必然 `MIGRATION_CHECKSUM_MISMATCH` 而拒绝启动，既有升级路径被这处就地 schema 编辑破坏。修复应为追加 0002 迁移，或在发布前明确记录「0001 可重发」。注：dab17f9→722b60d 也曾重发 0001，属既有做法，本次再次触发且可实测。 | `packages/storage/src/schema.ts:58-64`、`:467-482`；`packages/storage/src/migrations.ts:23-29`、`:55-57`、`:95-102`。实测跨版本：旧 schema 建库 → HEAD schema 重开，得 `StorageError:MIGRATION_CHECKSUM_MISMATCH`。 | no（但直接影响 AC-065 升级路径） |
+| **NF-03** | P3 | test（RE-14 的证明用例） | `events-hub.integration.test.ts:233-241` 无法证明 RE-14：`poll` 在进入 `try` 之前先调用 `watermark()`（`packages/core/src/events-hub.ts:332`），`DROP TABLE event` 使该调用先抛 `SqliteError`，catch 内的过滤逻辑从未执行。实测：把 `poll` 的 catch 回退为「捕获一切」后该文件仍 17/17 通过；探针显示抛出 `{ctor:'SqliteError', code:'SQLITE_ERROR', message:'no such table: event'}`。应改为只让 `readAfter` 抛非 Resync 错误，并补 `subscribe(afterCursor)` 分支同类负例。 | 同上；`/tmp` 归档副本回退实验。 | no |
+| **NF-04** | P3 | 文档（`implementation.md`） | RE-09 只修了一部分：`:147` 集成计数 115/括注 77 与实测 120（WP-01 六文件 82）不符；`:65`（dispatcher 9→实际 10）、`:109`（需求投影 8→实际 10）同样过时。结算若直接引用会再次误判范围。 | `.agentdev/work/WP-01/implementation.md:65,109,147`；实测用例数（`grep -cE "^\s*(it|test)\("` 且与运行一致）。 | no |
+| **NF-05** | P3 | 文档/流程（Discovery 与 Test 证据绑定） | ① `implementation.md:127-128` 声称 RE-11/RE-12「记为 Discovery（DC-18/DC-19）」，但 `.agentdev/work/WP-01/` 下无 `discovery.md`，DC-18/DC-19 仅出现在 implementation.md，全仓无对应 Discovery 记录。② fix commit 同时提交了 `test-report.md`，而其 §1 绑定 tree `196f56ff`（修复前），T9 的 Test 证据不覆盖 HEAD 树；本次代码变更后按 workflow §7 仍需新的独立 Test。 | `find .agentdev -type f`（WP-01 仅 plan/implementation/review/test-report）；`grep -rn "DC-18\|DC-19" .agentdev`；`.agentdev/work/WP-01/test-report.md:11-12`。 | no |
+
+### 2.4 命令证据（复评实测）
+
+| 命令 | 退出码 | 结果 |
+|---|---|---|
+| `git rev-parse HEAD` / `HEAD^{tree}` / `git status --short` | 0 | HEAD=`8e96ee2df29db589653e9fbfedd0569ea3217a96`；tree=`f1589696a5938dc83f282d5e929f81976967e6e5`；工作区干净 |
+| `git cat-file -t 8e96ee2f9b4d9ffbbd0f2e2c6b6d6a66b0b1b8f9` | 128 | 任务书 commit 不存在于对象库 |
+| `pnpm typecheck` | 0 | 无错误 |
+| `pnpm lint` | 0 | `All matched files use Prettier code style!` |
+| `pnpm test:unit` | 0 | 13 文件 / 173 用例通过 |
+| `pnpm docs:check` | 0 | 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages |
+| `pnpm vitest run --project integration <requirements,migrations,ledger,events-hub,dispatcher,identity>` | 0 | 6 文件 / 82 用例通过（14 迁移 + 22 账本 + 10 分发 + 17 事件订阅 + 9 身份 + 10 需求投影） |
+| `/tmp` 归档副本：RE-01/RE-02 回退实验 | 1 | 各自对应用例失败（非空泛性成立） |
+| `/tmp` 归档副本：RE-14 回退实验 | 0 | 全部 17 用例仍通过（证明该负例空泛） |
+| `/tmp` 归档副本：跨版本 checksum 与默认备份升级探针 | 0 | `MIGRATION_CHECKSUM_MISMATCH`；第二次迁移 `SqliteError:output file already exists` |
+
+### 2.5 未覆盖与遗留
+
+- 未执行 `pnpm test:integration` 全量（按约定属 Test 角色）；仅复跑 WP-01 六个集成文件，CLI/runner/pi-runtime 的 4 个集成文件与 `pnpm build` 未复跑。
+- NF-01 用合成 0002 迁移复现；仓库当前只有 0001，故现有测试不会暴露该缺陷。
+- 真实端到端（daemon/BFF/WebSocket/UI）与 Git 往返仍不存在，属 WP-04/WP-08/WP-09；与首次 Review 一致。
+
+### 2.6 复评结论
+
+**FAIL**
+
+理由：首次两项 P1 确已修复且证据非空泛（RE-01、RE-02，回退实验均可让对应用例失败）；12 项 P2/P3 中 RE-03/04/05/06/07/08/10/13/14 已修复、RE-09 部分修复、RE-11/RE-12 合理移交后续工作包。但本次修复提交引入了一项新的 P1（NF-01：默认迁移备份路径使 AC-065 的「版本升级」路径不可用）及一项直接关联 AC-065 升级路径的新 P2（NF-02：就地编辑 migration 0001 改变 checksum，使首次 Review 树创建的库无法打开）。按 `workflow.md` §6，P1 阻断、影响验收的 P2 亦阻断，故不能 PASS。
+
+建议处置：① 默认备份改为按版本/时间命名，并在无既有 schema 的首次安装跳过备份；② RE-03 的 schema 改动改为追加 0002 迁移；③ 修正实现记录用例计数；④ 修复 RE-14 的空泛用例并补 `subscribe` 分支负例；⑤ 在 WP-01 记录中创建实际 Discovery 记录并明确 T9 Test 需绑定修复后树。完成后重新独立 Review 与 Test。

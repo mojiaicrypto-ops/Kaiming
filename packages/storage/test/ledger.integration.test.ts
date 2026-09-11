@@ -329,7 +329,7 @@ describe('project store wiring', () => {
     const fresh = Store.open({ dataDir: freshDir, canonicalRoot: ROOT });
     try {
       expect(fresh.migration.applied).toEqual([1]);
-      expect(fresh.migration.backupPath).toBe(join(freshDir, 'backups', 'pre-migration.sqlite'));
+      expect(fresh.migration.backupPath).toBe(join(freshDir, 'backups', 'pre-migration-v0.sqlite'));
       expect(existsSync(fresh.migration.backupPath as string)).toBe(true);
     } finally {
       fresh.close();

@@ -48,9 +48,13 @@ import { closeDatabase, openDatabase, type SqliteDatabase } from './sqlite.js';
 import { TABLES } from './tables.js';
 import { nowIso, projectIdFromRoot, uuidv7 } from './ids.js';
 
-/** Pre-migration copy location when the caller does not choose one. */
-export function defaultBackupPath(dataDir: string): string {
-  return join(dataDir, 'backups', 'pre-migration.sqlite');
+/**
+ * Pre-migration copies live here when the caller does not choose a location.
+ *
+ * One file per source version, so a second upgrade cannot collide with the first.
+ */
+export function defaultBackupDir(dataDir: string): string {
+  return join(dataDir, 'backups');
 }
 
 export interface OpenProjectStoreOptions {
@@ -166,7 +170,7 @@ export class ProjectStore {
     const migration = runMigrations(db, undefined, {
       // `data.md` §5 requires a usable backup before a version upgrade. The daemon
       // has no separate backup target, so the copy sits beside the live database.
-      backupPath: defaultBackupPath(options.dataDir),
+      backupDir: defaultBackupDir(options.dataDir),
       ...options.migrations,
     });
     const projectId =

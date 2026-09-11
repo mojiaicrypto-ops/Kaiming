@@ -8,8 +8,8 @@
  */
 import { CORE_SCHEMA_SQL, IMMUTABILITY_SQL } from './schema.js';
 import { nowIso, sha256 } from './ids.js';
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { StorageError } from './errors.js';
 import { withTransaction, type SqliteDatabase } from './sqlite.js';
 
@@ -108,6 +108,14 @@ export interface RunMigrationsOptions {
   /** Receives a consistent copy path before any pending migration runs. */
   readonly backup?: (destination: string) => void;
   /**
+   * Backup directory used when the caller supplies no hook and no exact path.
+   *
+   * The copy is named after the version being upgraded **from**, so successive
+   * upgrades never target the same file; `VACUUM INTO` refuses to overwrite, and a
+   * repeated attempt for the same version reuses the copy already taken.
+   */
+  readonly backupDir?: string;
+  /**
    * Backup destination. With a custom `backup` hook the hook writes it; without
    * one, `backupDatabase` is used directly, so a caller cannot skip the copy by
    * forgetting the hook.
@@ -142,10 +150,12 @@ export function runMigrations(
   if (options.backup !== undefined) {
     backupPath = options.backupPath ?? `${String(currentVersion)}.backup`;
     options.backup(backupPath);
-  } else if (options.backupPath !== undefined) {
+  } else if (options.backupPath !== undefined || options.backupDir !== undefined) {
     // No caller-supplied hook: still take the documented pre-upgrade copy.
-    backupPath = options.backupPath;
-    backupDatabase(db, backupPath);
+    backupPath =
+      options.backupPath ??
+      join(options.backupDir as string, `pre-migration-v${String(currentVersion)}.sqlite`);
+    if (!existsSync(backupPath)) backupDatabase(db, backupPath);
   }
 
   const now = options.now ?? nowIso;

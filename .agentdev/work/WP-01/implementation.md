@@ -62,7 +62,7 @@
 - `errors.ts`：`protocol.md` §7 全部 25 个错误码、retryable 默认策略（仅 BUSY 及显式标注的 Provider 瞬时错误）、请求/响应 Envelope 与 `okResponse`/`errorResponse`。
 - `dispatcher.ts`：Envelope 校验（v=1、type、id、method、projectId 归属、params Schema）、读方法绕过邮箱、写方法经邮箱串行；`idempotencyKey` 1–128 与 `expectedVersion` ≥0 校验、规范化 payload Hash（键序无关）、单事务内完成"幂等账本→领域行 CAS→event→outbox→记录 response"；冲突/存储错误映射为文档错误码（`VERSION_CONFLICT` 带 `currentVersion`）；处理函数必须同步，异步即 `INTERNAL_ERROR`。
 
-证据：`packages/core/test/mailbox.test.ts`（8 用例，unit）——串行与顺序、**长模型调用在飞时命令 <1 秒返回且不排队**、队列项/字节超限 BUSY、排空后可再准入、关闭后拒绝、>100ms 诊断、失败命令不阻塞队列、effect 失败诊断。`packages/core/test/dispatcher.integration.test.ts`（9 用例，真实 SQLite）——**丢应答重试返回完全相同响应且 event/outbox 不重复**、同键异载荷 `IDEMPOTENCY_CONFLICT`、`VERSION_CONFLICT` 带 `currentVersion` 且未记账、处理函数失败时账本/事件/outbox 全部回滚、邮箱满时 `BUSY` 且未执行、长 effect 在飞时写命令 1 秒内返回、规范化 Hash 稳定性。
+证据：`packages/core/test/mailbox.test.ts`（8 用例，unit）——串行与顺序、**长模型调用在飞时命令 <1 秒返回且不排队**、队列项/字节超限 BUSY、排空后可再准入、关闭后拒绝、>100ms 诊断、失败命令不阻塞队列、effect 失败诊断。`packages/core/test/dispatcher.integration.test.ts`（10 用例，真实 SQLite）——**丢应答重试返回完全相同响应且 event/outbox 不重复**、同键异载荷 `IDEMPOTENCY_CONFLICT`、`VERSION_CONFLICT` 带 `currentVersion` 且未记账、处理函数失败时账本/事件/outbox 全部回滚、邮箱满时 `BUSY` 且未执行、长 effect 在飞时写命令 1 秒内返回、规范化 Hash 稳定性。
 
 ### T6 EventHub 与订阅（完成）
 
@@ -106,7 +106,7 @@
 
 存储层加固：`EntityRepository` 支持 `defaultProjectId`，`ProjectStore` 为所有仓储注入本项目 id（`project` 行因 id 即项目 id 而排除），从结构上防止行落入错误项目。
 
-证据：`packages/core/test/requirements.integration.test.ts` — 8 用例：建行与 portableRef、绑定本地 Work、**同记录重复导入不产生第二次写入**、版本推进刷新投影、同版本异内容冲突且行未变、降级冲突、非法记录不落库、metadata/record Hash 分离。
+证据：`packages/core/test/requirements.integration.test.ts` — 10 用例：建行与 portableRef/目录路径、绑定本地 Work、**同记录重复导入不产生第二次写入**、版本推进刷新投影、同版本异内容冲突且行未变、降级冲突、非法记录不落库、按原始字节计算 metadataHash、**事件写入失败时行回滚**、metadata/record Hash 分离。
 
 ## 2. 独立 Review 发现与处置（2026-09-11）
 

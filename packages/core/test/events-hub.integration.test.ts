@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { JsonObject } from '@agentdev/contracts';
-import { ProjectStore as Store, projectIdFromRoot, type ProjectStore } from '@agentdev/storage';
+import {
+  ResyncRequiredError,
+  ProjectStore as Store,
+  projectIdFromRoot,
+  type ProjectStore,
+} from '@agentdev/storage';
 import {
   CONNECTION_QUEUE_LIMITS,
   ConnectionQueue,
@@ -231,12 +236,35 @@ describe('scope change (AC-060)', () => {
   });
 
   it('does not disguise a storage failure as a resync request', () => {
-    const subscription = hub.subscribe({ connectionId: 'c1', scope: { kind: 'summary' } });
-    // Dropping the table is a real storage failure, not a truncated cursor.
-    store.db.exec('DROP TABLE event');
-    expect(() => hub.poll(subscription.subscriptionId)).toThrowError(
-      expect.not.objectContaining({ code: 'RESYNC_REQUIRED' }),
-    );
+    // `watermark()` must succeed so the batch read is the failing call: an
+    // unrelated storage error is not a truncated cursor.
+    const withFailingRead = (error: Error): ProjectStore =>
+      ({
+        ...store,
+        events: new Proxy(store.events, {
+          get: (target, property, receiver) =>
+            property === 'readAfter'
+              ? () => {
+                  throw error;
+                }
+              : (Reflect.get(target, property, receiver) as unknown),
+        }),
+      }) as unknown as ProjectStore;
+    const broken = new EventHub({
+      store: withFailingRead(new Error('disk failure')),
+      batchSize: 10,
+    });
+    const failing = broken.subscribe({ connectionId: 'c1', scope: { kind: 'summary' } });
+    expect(() => broken.poll(failing.subscriptionId)).toThrowError('disk failure');
+    expect(() => broken.poll(failing.subscriptionId)).not.toThrowError(/RESYNC_REQUIRED/);
+
+    // A genuinely truncated cursor is still translated for the client.
+    const truncated = new EventHub({
+      store: withFailingRead(new ResyncRequiredError(99, 1)),
+      batchSize: 10,
+    });
+    const stale = truncated.subscribe({ connectionId: 'c2', scope: { kind: 'summary' } });
+    expect(() => truncated.poll(stale.subscriptionId)).toThrowError(/no longer retained|truncated/);
   });
 
   it('validates scope shape and removes subscriptions', () => {
