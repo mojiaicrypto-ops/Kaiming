@@ -1,3 +1,382 @@
+# WP-03 独立 Review 报告（第十九轮）
+
+- 评审对象：工作包 WP-03「直接协作与说明产物」
+- 评审轮次：**第十九轮**（第一～十六轮摘要见文末「附一～附十六」，第十七轮报告全文见「附十七」，第十八轮报告全文见「附十八」，全部保留）
+- 冻结点 / HEAD：`git rev-parse HEAD` = `52b4fcacb11063ce03de5a6edbadac1921e8d790`（= 任务下达的 `52b4fca`，**无漂移**）
+- 工作树：全部契约命令执行前后 `git status --porcelain` 为空；除本报告外无未提交修改
+- 评审角色：Review（独立上下文；未读取任何开发/Test 会话；只依据仓库文件、契约文档与我自建的 `/tmp/w3r19/` 4 个脚本 + 只读复用 `/tmp/w3r18|w3r17|w3r16|w3r14|w3r13/` 的 13 个脚本）
+- 工具：`node v24.8.0`、`pnpm 12.3.4`、macOS 宿主；全部脚本消费 `pnpm build` 产物（`packages/domain/dist`、`packages/core/dist`、`apps/daemon/dist`、`packages/storage/dist`），**未 import 任何产品测试文件**（`domain.test.ts` 仅以文本方式提取语料）
+- 记录哈希（`git hash-object`，前 8 位）：`packages/domain/src/requests.ts` **`06f45210`**（第十八轮 `04178753`）、`packages/domain/test/domain.test.ts` **`58566130`**（第十八轮 `61d8e5e5`）、`.agentdev/work/WP-03/plan.md` **`ec493451`**（第十八轮 `6c85bb2e`）、`.agentdev/work/WP-03/implementation.md` **`c3dd4e12`**（第十八轮 `ccf747ea`）、`apps/daemon/src/server.ts` `3a348304`、`packages/core/src/messages.ts` `283d4c04`、`packages/core/src/preview.ts` `803b502a`、`packages/core/src/artifacts.ts` `057ff403`、`packages/core/src/attachments.ts` `3ee94838`（后五个文件与第十三～十八轮**逐字相同**）
+- 变更范围（`git diff --numstat 3ed2434 52b4fca`）：`974411f`（`requests.ts` +43/−3、`domain.test.ts` +25/−0、`plan.md` +8/−1、`implementation.md` +16/−4）；`52b4fca` 只改 `review.md`（第十八轮报告落库，+617/−250）。`packages/core/src/**`、`apps/daemon/src/**`、`docs/**` **零改动**
+- 权威依据：`AGENTS.md`、`docs/INDEX.md`、`docs/rules/{workflow,agents}.md`、`docs/product/experience.md`（§3）、`docs/architecture/{data,protocol,execution,reliability}.md`、`docs/delivery/{implementation,acceptance}.md`（AC-001..006/052/076/084）、`.agentdev/work/WP-03/{plan,implementation,review}.md`、`packages/**`、`apps/daemon/**`、相关测试
+
+---
+
+## 1. 结论
+
+**FAIL（不能进入独立 Test；按 `docs/rules/workflow.md` §6 走 `Blocking Review Finding → Develop → Independent Review`）。**
+
+本轮判 **FAIL（0×P0、1×P1、1×P2、3×P3）**。
+
+**第十八轮两项登记缺陷的「字面证据」都已闭合，但 P1 的「根因类别」没有闭合——第十八轮的修复把解释领起的良性判定改成「不含否定标记 + 不点名变更」的两张词表，而这两张词表与同一文件自己的 `NEGATION_PATTERNS` / `REFUSAL_HEAD_PATTERN` 词表不一致。**
+
+- **成立的部分（可复核的真实改善）**：
+  - **W3R18-01 字面证据闭合**：第十八轮 §5.3 的 13 句 + 8 句同形变体 + 2 句同形对照（本报告 §4.1：route 20 例、真实 HTTP 20 例、真实 `Orchestrator` 20 例）**全部只读**：`http=202`、`writes=[]`、`authorizationId=null`、`level=["none"]`、`assess=0`、`runs=[]`。第十八轮自建探针在本轮 build 上复跑：`probe2b` 385 组合 **open 0**、`probe2-frame-hole` 573 句 **open 0**、`probe2c` 10 句 **10/10 只读**、`probe1-failopen` 1 317 例 **scope-violations 0**。
+  - **W3R18-02 闭合**：`谢谢，修改 X`、`谢谢，然后修改 X`、`麻烦了，修改 X`、`麻烦了，然后修改 X`、`多谢。修改 X`、`thanks, update X`、`感谢，修复 X` **一律只读**（route + 真实 HTTP 零授权行）；末尾礼貌 `修改 X。谢谢` / `修改 X，谢谢` **授权且写范围仅 `X`**（真实写 Run）。二者在 `planVersion 4` 下口径统一。
+  - **混合意图正例无回归**：`解释 X 并修复 Y`、`explain Z and fix Y`、`先解释 X，然后修改 Y`、`说明 X，然后修改 Y` 全部 `assist + delivery` 双 Work、`authId=yes`、写范围**仅命令目标**；真实 HTTP 上 0 误拒、0 写范围偏差（54 例）。
+  - **拒绝纠正正例无回归**：`不修改 Y，修改 X`、`先别改 Y，改 X`、`不要修改 Y，但要修复 X`、`不要修改 Y，然后修改 X` 全部授权、写范围仅纠正目标。
+  - **写范围恒等**：`probe1-cross` **10 357 例 0 例**授权路径非消息点名路径；真实 HTTP 54 例 **0 例**写范围偏差；`/tmp/w3r17/probe4-scope` 授权路径 **102/102 ⊆ 消息点名路径**——**本轮未发现任何写范围扩张**。
+  - **登记语料零偏差**：按第十八轮评审计数法（只提取 `packages/domain/test/domain.test.ts` 中 `for (const body of [` / `for (const [body, expected] of [` 块的字面量）**178 例 = 必须授权 14 + 拒绝纠正接续 8 + 多命令 4 + 必须只读 152**，逐句复跑 **0 偏差**；与 `plan.md` planVersion 4 与 `implementation.md` 订正块第 2 条**逐字一致**。
+  - **前轮 P0/P1 与注入面无回归**：`/tmp/w3r14/probe6-prior` **0 失败**（17 项，含一次性下载 token、预览 ACL/CSP、跨会话 `targetWorkId` 403）；`/tmp/w3r14/probe5-injection` **注入通路 0**（11 项）；`/tmp/w3r16/probe7-escape` 仓库外目标 `../`、`/etc/hosts.md`、`~/.ssh/config.md`、`docs/../../secret.md` **202 + 零授权行 + 无 500**。
+- **不成立的部分（本轮 P1）**：
+  **解释领起的良性判定仍是两张「小词表」，且二者互相矛盾。** `benignExplanation = explanationLead && !containsNegationMarker && !containsChangeVerb`（`requests.ts:447-448`）依赖：
+  - `NEGATION_MARKER_PATTERN`（`requests.ts:136`）= `不|别|甭|勿|无需|没有|n't|\b(not|never|without|no need)\b`——**不含** `莫/休/毋/未/没/无/非/停止/避免/杜绝/拒绝/切忌/免于/谨防/取消/放弃/搁置/暂缓/avoid/refrain from/prohibited/forbidden`；
+  - `CHANGE_VERB_ANY_PATTERN`（`requests.ts:150-152`）——**不含** `碰/动/删/触碰/变更/删掉/动它/touch`，而**同一文件**的 `REFUSAL_HEAD_PATTERN`（`:117-119`）与 `NEGATION_PATTERNS`（`:121-125`）恰恰把 `动|碰|删` 列为变更动词。
+  两个缺口叠加后，`说明莫碰 Y，然后修改 X`、`解释停止碰 Y，然后修改 X`、`说明避免碰 Y，然后修改 X`、`说明未碰 Y，然后修改 X`、`解释禁止触碰 Y，然后修改 X`、`修改 X，说明莫碰 Y` 等句式**既不被 `reportedNegation`（`:489-492`）识别为「含否定的非命令子句」，也不被 `classSuppressed`（`:482-486`）按类别关闭**，其后的并列命令重获写授权。实测：`probe1-cross` 的解释领起交叉积 **216/4 290 越权**、同义否定×同义变更网格 **204/494 越权**、后置变体 **24/390 越权**；`probe2-live` 的 **10 句在真实 HTTP 上落库 `authorizationId` + 1 授权行 + `level=["L2","none"]` + 1 assessment，并经真实 `Orchestrator` 建立 10 个真实 `backend:implementation:queued` 写 Run**（其中 `说明莫碰 docs/PLAN.md，然后修改 packages/core/src/orchestrator.ts` 为**源码路径**）。同形态对照 `说明别碰 Y，然后修改 X`、`说明不要碰 Y，然后修改 X`、`报告说莫碰 Y，然后修改 X` **全部只读**——差别只在否定措辞，证明根因是**词表**，不是类别规则。
+  这是 `plan.md` planVersion 3 §23「**子句含否定式但否定不领起 ⇒ 整条消息不授权**」与 planVersion 4「解释领起子句里的否定/变更是**被谈论的对象**」的直接反例，且属**同一文件内部两类词表互相矛盾**（refusal 侧把 `动/碰/删` 当变更，解释领起侧不认），不是「已声明的 fail-closed 代价」。
+
+本结论落在本包验收面（AC-004 负例族、AC-005 授权边界、`plan.md` planVersion 3 §17/§23、planVersion 4 变更块），**以真实 HTTP + 真实 Orchestrator 端到端可复现**，阻断 Test。
+
+| 维度 | 第十八轮 | 第十九轮 |
+|---|---|---|
+| W3R18-01 的 13 句字面证据 | 13 句真实 HTTP 开（P1） | **归零（闭合）** |
+| W3R18-01 根因类别（解释领起内未识别否定/变更 × 并列命令） | 90/385 词法组合开 | **未闭合：216/4290 + 204/494 + 24/390；真实 HTTP 10 句开（W3R19-01 新 P1）** |
+| W3R18-02 礼貌领起口径 | 不一致（P2） | **归零（闭合：前导一致只读、末尾仍授权）** |
+| W3R18-03 记录计数 | 不实（14/9/3/141） | **归零（闭合：178 = 14+8+4+152，0 偏差）** |
+| 写范围超出命令目标 | 未发现 | **未发现（0/10 357 + 0/54）** |
+| 拒绝 + 加性 / 并列 / 逆接片段 | 只读 / 授权 / 只读 | **保持（12/12、12/12、24/24）** |
+| 混合意图 `先解释…然后修改` / `解释 X 并修复 Y` | 授权 | **授权（写范围仅命令目标）** |
+| 客户端注入面 / 仓库外目标 | 无通路 / 只读不 500 | **无通路 / 只读不 500（保持）** |
+| 前轮 P0/P1 | 17/17 | **17/17（保持）** |
+| 长期断言覆盖（W3R18-04） | 缺 Orchestrator 用例 | **仍缺；且 W3R18 §12.2 的每族 ≥3 条未落地（W3R19-02）** |
+
+---
+
+## 2. 契约命令原始结果（冻结树 `52b4fca`，`/tmp/w3r19/contract.log`）
+
+| 命令 | 结果 | 关键输出 |
+|---|---|---|
+| `pnpm typecheck` | **exit 0** | 无诊断 |
+| `pnpm lint` | **exit 0** | 无告警 |
+| `pnpm test:unit` | **exit 0** | `Test Files 19 passed (19)`、`Tests 289 passed (289)`、3.66s |
+| `pnpm test:integration`（真实 Docker） | **exit 0** | `Test Files 10 passed (10)`、`Tests 124 passed (124)`、43.18s |
+| `pnpm docs:check` | **exit 0** | 15 docs / 55 links / 94 AC / 9 REQ / 11 WP 全部成立 |
+| `pnpm build` | **exit 0** | 8 workspace 全部构建成功 |
+
+未执行（按设计属 WP-09/WP-10，脚本 `NOT_IMPLEMENTED`）：`test:e2e`、`test:acceptance`、`test:live`。
+
+说明：`test:unit` 计数仍是 289，是因为路由语料位于单个 `it(...)` 的数据驱动循环内，新增语料条目不改变用例数——**不能据 289 未变推断语料未增**（§6 用文本提取核对）。
+
+---
+
+## 3. 方法
+
+1. 冻结点校验：`git rev-parse HEAD`、`git status --porcelain`、`git diff --numstat 3ed2434 52b4fca`、`git hash-object` 逐文件比对（§头部）。
+2. 契约命令全跑（§2），在**同一冻结树**上执行；报告写入前后各查一次工作树。
+3. **三层验证 W3R18-01 闭合主张**：(a) `routeMessage` 直调（`probe1-cross` / `probe1b-open-forms` / `probe2-live` 的 route 段）；(b) **真实 HTTP**：`createDaemon` + 真实 SQLite + 真实 blob + Bearer 认证 + 真实 `MessageService`（授权行数、`authorizationId`、Work `level`/`intent`/`scope.writePaths`、assessment 行数）；(c) **真实 `Orchestrator`**：`assess` → Chief `dispatch(purpose=analysis)` → `dispatch(professionalSpec(backend, implementation))`，检查是否出现真实 `backend:implementation:queued` 写 Run。
+4. **系统性交叉积**（非举例）作为反例搜寻：报告框架（15）× 否定形式（65）× 接续（5）= 4 875；解释领起（22）× 否定（65）× 接续（3）= 4 290；同义否定（26）× 同义变更（19）= 494；后置变体 390；`reportedNegation × benignExplanation` 120；礼貌领起 48 + 末尾礼貌 16；接续/加性/逆接 48；裸 `不` 18；同形异义 10；多命令链 9；已声明代价 15；正例 12。
+5. **写范围恒等**：对全部 10 357 例断言「授权路径 ∈ 消息点名路径」，并对真实 HTTP 断言写范围与期望集合一致。
+6. **记录对账**：`plan.md` planVersion 4 计数口径 → 文本提取复算；T27 各条证据脚本复跑；断言覆盖逐族 `grep`。
+7. 只读复用前轮脚本 13 个（§7）。
+
+**口径声明（先声明后实测）**：本轮以 `plan.md` **planVersion 4**（第 1-7 行、planVersion 4/3/2 变更块）为契约；`planVersion 3 §23`、§17 未被 planVersion 4 撤销，累计有效。凡前轮探针期望与 planVersion 4 冲突者，一律**按产品契约判定并显式标注**（§8）。
+
+---
+
+## 4. 第十八轮两项 P1/P2 的闭合复核
+
+### 4.1 W3R18-01（解释领起 + 未识别否定）—— **字面证据闭合，根因未闭合**
+
+**（a）routeMessage 层**
+
+| 语料 | 规模 | 结果 |
+|---|---|---|
+| 第十八轮 §5.3 的 13 句 | 13 | **13/13 只读** |
+| 同形发明变体（`描述一下别删除`、`介绍一下不要清理`、`说明不要完善`、`explain why you should not update`、`explain the no changes policy`） | 5 | **5/5 只读** |
+| 同形对照（`修改 X，说明不要修改 Y`、`修改 X，报告说别改 Y`） | 2 | **2/2 只读** |
+| 第十八轮自建探针复跑（`probe2b` 385 / `probe2-frame-hole` 573 / `probe2c` 10 / `probe1-failopen` 1 317） | 2 285 | **open 0 / 0 / 0 / scope-violations 0** |
+
+`probe2b` 的 `opens by lead: []`、`opens by neg: []` 在冻结树上**逐字复现**；`probe1-failopen` 仅剩 2 例 `obs-polite-conj` 观测期望不符（该期望已被 planVersion 4「前导礼貌只读」取代，属**探针期望陈旧**，非实现缺陷）。
+
+**（b）真实 HTTP + 真实 Orchestrator**：`probe2-live` 的 20 例 R18 家族（13 句 + 5 变体 + 2 对照）**全部 `http=202`、`writes=[]`、`authId=null`、`level=["none"]`、`assess=0`、`runs=[]`**，与第十八轮 20 例的对照结果一致。
+
+**（c）机制核对**：`benignExplanation`（`requests.ts:447-448`）现在确实同时要求 `!containsNegationMarker` 与 `!containsChangeVerb`；`NEGATION_MARKER_PATTERN`（`:136`）与 `CHANGE_VERB_ANY_PATTERN`（`:150-152`）已覆盖第十八轮点名的三处缺口（`别`+汉字符号前缀、`重写/优化/完善/清理/整理/替换`、英文分词 `updating/deleting/changing`）。**结论：第十八轮点名的证据与三处缺口均已处理。**
+
+**（d）长期断言**：`domain.test.ts:518-527` 已落 10 条解释领起负例（含 `说明别改`、`先说明别改`、`解释别重写`、`说明不要修改`、`报告别改`、后置 3 条、英文 2 条），`grep` 命中非零。
+
+**（e）根因未闭合**：见 §5 与 W3R19-01。
+
+### 4.2 W3R18-02（态度不一致：礼貌领起 + 并列连词）—— **闭合**
+
+| 断言 | route（`probe1-cross` / `probe2-live`） | 真实 HTTP |
+|---|---|---|
+| `谢谢，修改 X` / `麻烦了，修改 X` / `多谢。修改 X` / `thanks, update X` / `感谢，修复 X` | 只读 | `writes=[]`、`authId=null`、`assess=0` |
+| `谢谢，然后修改 X` / `麻烦了，然后修改 X` | **只读（与上一行一致）** | `writes=[]`、`authId=null`、`assess=0` |
+| `修改 X。谢谢` / `修改 X，谢谢` | 授权 | `L2`、`writes=["docs/INDEX.md"]`、`authId=yes`、真实写 Run |
+| `解释 X 并修复 Y` / `explain Z and fix Y` / `先解释 X，然后修改 Y` / `说明 X，然后修改 Y` | 授权，写范围仅 `Y` | `level=["L2","none"]`、`intent=["delivery","assist"]`、`writes=["docs/PLAN.md"]`、真实写 Run |
+
+「前导礼貌是否阻断后续命令」已由 `planVersion 4` 第 2 条固定为「阻断（只读）」，实现与记录一致。
+
+---
+
+## 5. 本轮 P1 实证（W3R19-01）：解释领起两张词表互相矛盾 = 写授权重开
+
+### 5.1 缺口定位（同一文件内部矛盾）
+
+- **refusal 侧**（`requests.ts:117-119`、`:121-125`）把 `改|修改|动|碰|删|移除|更新|添加|新增|实现|修复|重命名|重构|调整|处理|补` 当作变更动词；
+- **解释领起良性判定侧**（`requests.ts:150-152`）的 `CHANGE_VERB_ANY_PATTERN` **没有** `碰|动|删|触碰|变更|删掉|动它|touch`；
+- **否定标记侧**（`requests.ts:136`）的 `NEGATION_MARKER_PATTERN` **没有** `莫|休|毋|未|没|无|非|停止|避免|杜绝|拒绝|切忌|免于|谨防|取消|放弃|搁置|暂缓|avoid|refrain from|prohibited|forbidden`。
+
+因此「**未被标记词表覆盖的否定** × **未被变更词表覆盖的变更动词**」落在解释领起豁免里，`reportedNegation`（`:489-492`）与 `classSuppressed`（`:482-486`）都不会关闭该子句，其后的并列命令 `allowed`（`:514-522`）成立。
+
+### 5.2 词法交叉积（route 层）
+
+| 语料 | 规模 | 越权 | 说明 |
+|---|---|---|---|
+| `probe1-cross` F2：解释领起（15 中 + 7 英）× 否定（65）× 接续（3） | 4 290 | **216** | 越权形态仅 4 个否定措辞：`莫碰`(18 领起)、`停止碰`(18)、`避免碰`(18)、`杜绝碰`(18)，×3 接续 |
+| `probe1-cross` F3：`修改 X，说明/解释<否定> Y` | 390 | **24** | 同一 4 个否定措辞 × 3 分隔符（`，`/`。`/`；`）× 2 领起 |
+| `probe1-cross` F13：同义否定（26）× 同义变更（19） | 494 | **204** | 24 个否定（`莫/休/毋/未/没/无/非/停止/避免/杜绝/拒绝/切忌/免于/谨防/取消/放弃/搁置/暂缓/avoid/refrain from/prohibited/forbidden`）× 7 个变更（`碰/动/删/触碰/变更/删掉/动它`） |
+| `probe1-cross` F1：报告框架（15）× 否定（65）× 接续（5） | 4 875 | **0** | 同一批否定措辞在同一文件里被 `reportedNegation` 正确关闭 |
+
+**判别依据（同形对照，`probe1b-open-forms`）**：
+
+| 句式 | 结果 |
+|---|---|
+| `说明莫碰 Y，然后修改 X` | **授权 `Y` 之外的目标 X** |
+| `说明别碰 Y，然后修改 X` | 只读（`别` 在标记词表内） |
+| `说明不要碰 Y，然后修改 X` | 只读（`不` 在标记词表内） |
+| `报告说莫碰 Y，然后修改 X` | 只读（报告框架 → 类别抑制） |
+| `说明莫修改 Y，然后修改 X` | 只读（`修改` 在变更词表内） |
+| `说明停止碰 Y，然后修改 X` | **授权** |
+
+差别只在**词表**，不在类别规则，也不在抑制集合。
+
+### 5.3 真实 HTTP + 真实 Orchestrator（`probe2-live`，10 句越权 / 54 例）
+
+| 证据句 | HTTP | Work / 授权 | 真实 Run |
+|---|---|---|---|
+| `说明莫碰 docs/PLAN.md，然后修改 docs/INDEX.md` | 202 | `level=["L2","none"]`、`intent=["delivery","assist"]`、`writes=["docs/INDEX.md"]`、`authId=yes`、`assess=1` | `backend:implementation:queued` |
+| `说明莫碰 docs/PLAN.md，然后修改 packages/core/src/orchestrator.ts` | 202 | 同上，写范围为**源码路径** | `backend:implementation:queued` |
+| `解释停止碰 docs/PLAN.md，然后修改 docs/INDEX.md` | 202 | 同上 | `backend:implementation:queued` |
+| `说明避免碰 docs/PLAN.md，然后修改 docs/INDEX.md` | 202 | 同上 | `backend:implementation:queued` |
+| `说明杜绝碰 docs/PLAN.md，然后删除 docs/DESIGN.md` | 202 | `writes=["docs/DESIGN.md"]` | `backend:implementation:queued` |
+| `说明莫动 docs/PLAN.md，然后修改 docs/INDEX.md` | 202 | 同上 | `backend:implementation:queued` |
+| `说明未碰 docs/PLAN.md，然后修改 docs/INDEX.md` | 202 | 同上 | `backend:implementation:queued` |
+| `解释禁止触碰 docs/PLAN.md，然后修改 docs/INDEX.md` | 202 | 同上 | `backend:implementation:queued` |
+| `修改 docs/INDEX.md，说明莫碰 docs/PLAN.md` | 202 | 同上 | `backend:implementation:queued` |
+| `修改 docs/INDEX.md，说明避免碰 docs/PLAN.md，然后修改 docs/DESIGN.md` | 202 | `writes=["docs/DESIGN.md","docs/INDEX.md"]` | `backend:implementation:queued` |
+
+对照（同批、同 harness）：`说明别碰 Y，然后修改 X`、`说明不要碰 Y，然后修改 X`、`报告说莫碰 Y，然后修改 X` **只读**（`authId=null`、零授权行、零 Run）；`explain why to avoid touching Y, then update X`、`explain why touching Y is forbidden, then update X` 只读（英文 `why` 命中疑问标记）。全批 54 例 **误拒 0、写范围偏差 0**。
+
+### 5.4 危害上界与修复方向
+
+- **危害上界**：越权写范围恒等于句中**被并列连词命令点名的那一个路径**（`operations=['read','edit']`、`networkTargets=[]`）；10 357 例 route 交叉积 **0 例**写范围非消息点名路径。目标不限 `docs/`：源码路径同样可授权并建立真实 `backend:queued` 写 Run。属 `workflow.md` §6 的 P1（AC-004 负例族失败 + AC-005 边界违反 `planVersion 3 §23` / planVersion 4 变更块）；无环境/网络/数据删除通路，不构成 P0。
+- **修复方向（建议，未改仓库）**：
+  1. **两张词表与 refusal 侧对齐**：把 `CHANGE_VERB_ANY_PATTERN`（`:150-152`）的动词表与 `NEGATION_PATTERNS`（`:121-125`）/ `REFUSAL_HEAD_PATTERN`（`:117-119`）共享同一个 `CHANGE_VERB` 常量（至少补 `碰|动|删|触碰|变更|删掉`，英文补 `touch`），消除同文件内部矛盾；
+  2. **否定标记改用结构而非枚举**：「`<可选副词>` + 变更动词」前若出现**任一**未登记的否定性词素（`莫|休|毋|未|没|无|非|停止|避免|杜绝|拒绝|切忌|免于|谨防|取消|放弃|搁置|暂缓|avoid|refrain from|prohibited|forbidden`），或直接改用「子句含**任一** `NEGATION_PATTERNS` 命中（含未领起）即不豁免」的规则；
+  3. 或**取消良性豁免的独立性**：`benignExplanation` 仅在子句**只有解释动词 + 一个路径**（无任何其他内容）时成立——这是最接近「结构判据」的做法，代价是新增若干 fail-closed 澄清（方向安全），须在 `plan.md` 登记；
+  4. **长期断言**：把 §5.3 的 10 句 + §5.2 的 4 个否定措辞 × 7 个变更措辞网格中每族 ≥3 条落入 `domain.test.ts` must-not 语料（承接 W3R18 §12.2 的未完成项），并补 Orchestrator 级回归（真实 `assess(L2)`→`dispatch backend/implementation` 正例成功 / 上述族不得建 Run）。
+
+---
+
+## 6. 系统性语料、写范围恒等与前轮无回归
+
+- **`probe1-cross` 总计 10 357 例、428 例偏差、0 例写范围扩张**。分族：`F1-report-frame` 4875/0、`F2-explanation-frame` 4290/**216**、`F3-postposed` 390/**24**、`F4-leading-politeness` 48/0、`F5-trailing-politeness` 16/0、`F6-report-x-benign` 120/0、`F7-continuation` 12/1（`则`，方向安全，见 W3R19-04）、`F7-additive-fragment` 12/0、`F7-adversative-fragment` 24/0、`F8-bare-bu-alone` 6/0、`F8-bare-bu-correction` 12/2（`不重写 Y，修改 X`，方向安全，见 W3R19-04）、`F8-bare-bu-additive` 12/0、`F9-homograph` 10/1（`特别修改 X` 授权，**探针期望错误**：X 是命令点名的目标，授权正确）、`F10-multi-chain` 5/0、`F10-path-list` 4/0、`F11-declared-cost` 15/0、`F12-mixed-positive` 12/0、`F13-synonym-grid` 494/**204**。
+- **登记语料复算**（`probe3-registered`，文本提取、不 import 产品测试）：`for (const body of [` / `for (const [body, expected] of [` 共 4 块 → **178 = 14 + 8 + 4 + 152**，逐句复跑 **0 偏差**；与 `plan.md` planVersion 4 与 `implementation.md:9` **逐字一致**。
+- **写范围恒等**：`0 / 10 357`（route）、`0 / 54`（真实 HTTP）、`/tmp/w3r17/probe4-scope` **102/102 包含**（其 30 条 `EXPANSION` 全部是 planVersion 3 §31 已取代的「多子句只授权第一个目标」旧期望）。
+- **前轮脚本复用结果**（全部只读、消费本轮 build）：
+
+| 脚本 | 规模 | 本轮结果 |
+|---|---|---|
+| `/tmp/w3r18/probe1-failopen.mjs` | 1 317 | `mismatches=2`（均为 planVersion 4 已取代的 `obs-polite-conj` 旧观测期望）、`scope-violations=0` |
+| `/tmp/w3r18/probe2-frame-hole.mjs` | 573 | `open=0` |
+| `/tmp/w3r18/probe2b-negation-gap.mjs` | 385 | `open=0` |
+| `/tmp/w3r18/probe2c-variants.mjs` | 10 | 10/10 只读 |
+| `/tmp/w3r18/probe3-live.mjs` | 71（真实 HTTP + Orchestrator） | `fail-open 0`、`误拒 0`、`写范围偏差 0` |
+| `/tmp/w3r17/probe1-corpus.mjs` | 13 848 | `commandSanityFailures=0`（其 `务必` 族被记为探针误判，见 §8） |
+| `/tmp/w3r17/probe2-framing.mjs` | 31 | `mismatches=0` |
+| `/tmp/w3r17/probe4-scope.mjs` | 510 + 102 | 包含 102/102 |
+| `/tmp/w3r16/probe1-corpus.mjs` | 223 | `FAIL-OPEN 0`、`FALSE-REJECT 1`（范围声明，已登记）、`UNEXPECTED-WRITE 1`（K-multi，§31 已取代） |
+| `/tmp/w3r16/probe2-launder.mjs` | 110 | `FAIL-OPEN 0`（`FALSE-REJECT 4` 含 T27 第 2 条新增的前导礼貌代价） |
+| `/tmp/w3r16/probe7-escape.mjs` | 12 | 仓库外目标只读不 500（协议未知字段项见 W3R19-05） |
+| `/tmp/w3r14/probe1-corpus.mjs` | 201 | `FAIL-OPEN 0`、`FALSE-REJECT 3` |
+| `/tmp/w3r14/probe5-injection.mjs` | 11 | 注入通路 **0** |
+| `/tmp/w3r14/probe6-prior.mjs` | 17 | 前轮 P0/P1 失败 **0** |
+| `/tmp/w3r13/probe7-registered.mjs` | 14 + 154 | `deviations: 0`（其 154 含块外 2 条个体负例，与 §6 的 152 计数法差异已在第十八轮说明，非新差异） |
+
+---
+
+## 7. 记录与实现一致性核对
+
+| 记录主张（来源） | 实测 | 结论 |
+|---|---|---|
+| 冻结 `HEAD=52b4fca`、工作树干净 | 一致 | **准确** |
+| `plan.md:3` `planVersion: 4` | 一致 | **准确** |
+| `implementation.md:3` `planVersion: 3` | 与 `plan.md` 的 4 **不一致**；同文件订正块第 4 条却自称「已由 2 升至 4」 | **不成立（W3R19-03）** |
+| planVersion 4 计数口径「178 例 0 偏差：14/8/4/152」 | 文本提取复算 **178 = 14+8+4+152**，逐句 0 偏差 | **准确** |
+| `implementation.md:9` 订正块第 2 条同口径 | 同上 | **准确** |
+| 订正块第 3 条「`../` 只读 + 澄清、HTTP 202、零授权行、无 500」 | `probe7-escape` 一致 | **准确** |
+| T27「解释领起改为条件良性（粗粒度标记 + 变更动词）」 | `requests.ts:136/150-152/447-448` 一致 | **准确（但两张词表内部矛盾 → W3R19-01）** |
+| T27「礼貌前导不再良性」 | route + 真实 HTTP 一致 | **准确** |
+| T27「`/tmp/w3r18/probe2b` opens by neg: []」 | 385 组合 open 0 逐字复现 | **准确（范围限于该探针的 65 措辞 × 22 领起）** |
+| T27「`probe2-frame-hole` 573 句 open 0」 | 一致 | **准确** |
+| T27「`probe1-failopen` 1 317 例 scope-violations 0」 | 一致（另有 2 例陈旧观测期望） | **准确** |
+| T27「`probe4-registered` 178 例 0 偏差」 | 一致 | **准确** |
+| T27「`probe3-live` fail-open 0、误拒 0」 | 71 例复跑一致 | **准确** |
+| T27「`explain X and fix Y`、`先解释 X，然后修改 Y` 仍授权」 | 真实 HTTP 一致，写范围仅命令目标 | **准确** |
+| T27「新增第十八轮 **11** 条解释领起负例 + 5 条前导礼貌负例」 | 实测 `domain.test.ts:518-527` = **10** 条、`:530-534` = 5 条（块 D 137→152 = +15） | **计数偏大 1（W3R19-03）** |
+| W3R18 §12.1 #2「§5.3 的 13 句落成长期断言、每族 ≥3 条」 | §5.3 仅 **5/13** 句字面入语料；未登记否定动词族（`不要重写/优化/完善/清理/整理/替换`）**0 条**；后置 `解释不要优化 Y`、`。说明别改 Y` **0 条**；英文 `should not`/`no changes` **0 条** | **未完成（W3R19-02）** |
+| W3R18 §12.1 #5「承接 W3R18-04/05」 | `apps/daemon/src/**` 无 `Orchestrator` 装配（`grep` 0 命中），仓库内仍无「消息授权 → `assess` → `dispatch backend/implementation`」产品用例；协议未知字段仍 202 | **未完成（W3R19-02/W3R19-05 承接）** |
+| 绝对表述限定（订正块第 1 条） | T11–T25 的绝对表述已被限定；T27 未使用无限定绝对表述，但其「解释领起里引用否定…不能授权」的**类别**主张被 §5 证伪 | **范围限定不足（并入 W3R19-01）** |
+
+**记录侧硬约束（对 Test 有直接影响）**：`planVersion 4` 只列出两张**枚举**词表，若 Test 直接按该枚举设计负例，§5.3 的 10 句会被判为「预期只读」而**漏报**——Test 必须把该族纳入 `not_covered`，或按 `planVersion 3 §23` 与 planVersion 4 变更块的**理由**判为缺陷。
+
+---
+
+## 8. 与 planVersion 4 冲突的旧探针期望（按产品契约裁定）
+
+| 旧期望 | 来源 | 本轮裁定 |
+|---|---|---|
+| `务必修改 X` / `务必修好 X` 应只读（「务必」族 59 例） | `/tmp/w3r17/probe1-corpus`（T26 记为「语料自身问题」） | **探针期望陈旧**：`务必` 是副词，`务必修改 X` 是「动词 + 单一命名路径」的合法命令，`ADVERB_LEAD_PATTERN`（`:282-283`）显式包含 `务必`；本轮 `probe4-scope` 实测授权，**符合契约** |
+| 多子句「只授权第一个目标」（部分授权） | `/tmp/w3r15` G8-multi、`/tmp/w3r16` K-multi、`/tmp/w3r17/probe4-scope` 的 30 条 EXPANSION | **探针期望陈旧**：planVersion 3 §31 已改为「每个本身就是命令的子句都进入同一 delivery 的写范围」；本轮 `probe1-cross` F10 与真实 HTTP 三目标用例均为**全目标授权**，且写范围 ⊆ 消息点名路径，**符合契约** |
+| `谢谢，然后修改 X` 应授权、`也/顺便` 应授权 | `/tmp/w3r18/probe1-failopen` `obs-polite-conj`、`/tmp/w3r16/probe2-launder` | **探针期望陈旧**：planVersion 4 第 2 条固定「前导礼貌一律只读」；本轮只读，**符合契约** |
+| `修改 Y，也/顺便修改 X` 单句只读 vs 接续授权 | 第十八轮 §7 观察 | **口径未登记**（`additiveLead` `:433` 与 `ADVERB_LEAD_PATTERN` `:282-283` 不一致，见 W3R19-04）；不是实现缺陷，但须在 `plan.md` 逐词登记 |
+| `特别修改 X` 应只读 | `/tmp/w3r16/probe2-launder` AMBIG-WRITE | **探针期望错误**：`特别` 是副词（`ADVERB_LEAD_PATTERN` 含 `特别`），X 是命令点名的目标，授权正确 |
+
+---
+
+## 9. 新 Findings（W3R19-xx）
+
+### W3R19-01 [P1] 解释领起良性判定的两张词表与同文件 refusal 词表矛盾：`<未登记否定> + <未登记变更>` 在解释领起内重开写授权（真实 HTTP + 真实写 Run）
+
+- **位置**：`packages/domain/src/requests.ts:136`（`NEGATION_MARKER_PATTERN` 枚举）、`:150-152`（`CHANGE_VERB_ANY_PATTERN` 枚举，缺 `碰/动/删/触碰/变更/touch`）、`:447-448`（`benignExplanation = explanationLead && !containsNegationMarker && !containsChangeVerb`）、`:482-486`（`classSuppressed` 的解释领起豁免）、`:489-492`（`reportedNegation` 依赖 `NEGATION_PATTERNS`）、`:514-522`（`allowed`）。对照组：`:117-119`（`REFUSAL_HEAD_PATTERN`）与 `:121-125`（`NEGATION_PATTERNS`）**均把 `动|碰|删` 列为变更动词**。
+- **实测**：
+  - `/tmp/w3r19/probe1-cross.mjs`：F2 解释领起交叉积 **216/4 290 越权**（4 个未登记否定措辞 × 18 个领起 × 3 种接续），F3 后置变体 **24/390**，F13 同义否定×同义变更网格 **204/494**；同批 F1 报告框架 **0/4 875**；
+  - `/tmp/w3r19/probe1b-open-forms.mjs`：`opens by neg` 仅 `莫碰/停止碰/避免碰/杜绝碰`（各 18 个领起）；网格中 24 个否定 × 7 个变更（`碰/动/删/触碰/变更/删掉/动它`）全部越权；
+  - `/tmp/w3r19/probe2-live.mjs`：**10 句真实 HTTP**（`authId` 非空、+1 授权行、`level=["L2","none"]`、`intent=["delivery","assist"]`、`assess=1`）并经**真实 `Orchestrator`** 建立 **10 个 `backend:implementation:queued` 写 Run**，其中一句为源码路径 `packages/core/src/orchestrator.ts`；同批对照 3 句（`说明别碰`/`说明不要碰`/`报告说莫碰`）只读；
+  - 全批 **写范围扩张 0**（10 357 route + 54 live）。
+- **支撑证据句**：`说明莫碰 Y，然后修改 X`、`说明莫碰 Y，然后修改 packages/core/src/orchestrator.ts`、`解释停止碰 Y，然后修改 X`、`说明避免碰 Y，然后修改 X`、`说明杜绝碰 Y，然后删除 Z`、`说明莫动 Y，然后修改 X`、`说明未碰 Y，然后修改 X`、`解释禁止触碰 Y，然后修改 X`、`修改 X，说明莫碰 Y`、`修改 X，说明避免碰 Y，然后修改 Z`（Y=`docs/PLAN.md`、X=`docs/INDEX.md`、Z=`docs/DESIGN.md`）。
+- **判别依据（同形对照）**：`说明别碰 Y，然后修改 X` 只读 vs `说明莫碰 Y，然后修改 X` 授权；`说明不要碰 Y` 只读 vs `说明避免碰 Y` 授权；`说明莫修改 Y` 只读 vs `说明莫碰 Y` 授权；`报告说莫碰 Y` 只读 vs `说明莫碰 Y` 授权——差别只在**标记词表 / 变更词表是否覆盖**。
+- **验收面**：AC-004 负例族、AC-005 授权边界；违反 `plan.md` planVersion 3 §17「未登记措辞 fail-closed」与 §23「子句含否定式但否定不领起 ⇒ 整条消息不授权」，以及 planVersion 4 变更块「解释领起子句里的否定/变更是**被谈论的对象**，不是用户的请求」。**内部矛盾证据**：同一文件的 `NEGATION_PATTERNS` 把 `碰/动/删` 视为变更动词（refusal 侧），而解释领起侧不认——这不是「未登记同义词一律 fail-closed」的已声明代价，而是同一语义在同一文件内的两种判定。
+- **严重度裁定（诚实说明）**：若把 planVersion 4 括号内的两张**枚举**词表读作穷尽定义，则本项是「口径缺口」（P2）；但（i）planVersion 4 变更块给出的**理由**是语义的（「被谈论的对象」），（ii）planVersion 3 §23 未被撤销，（iii）实现内部自相矛盾——三点合起来构成本包验收面上的**可复现 P1**，与第十八轮 W3R18-01 同形同级（该轮同一形态被判定为 P1 并触发修复轮）。故判 **P1，阻断**。
+- **修复方向**：见 §5.4（词表对齐、否定识别结构化、或取消解释领起豁免的独立性；并补 §5.3/§5.2 的长期断言与 Orchestrator 回归）。
+
+### W3R19-02 [P2] 回归网缺口未按第十八轮最低要求落地：未登记否定动词族零断言（W3R18-04 承接）
+
+- **位置**：`packages/domain/test/domain.test.ts:514-535`（第十八轮新增块）、`:361-535`（must-not 块）。
+- **实测**：
+  - 第十八轮 §12.2 要求「每族 ≥3 条」：实际 `说明别改`×2（含 `先说明别改`）、`解释别重写`×1、`报告别改`×1、`说明不要修改`×1（**对照项**，非缺口族）、英文 `ban on updating`×1 + `must not change`×1 = **10 条**；
+  - **完全未断言**的族：`<解释领起>不要重写/不要优化/不要完善/不要清理/不要整理/不要替换 + ，然后修改 Y`（`grep` 各 **0** 命中）；后置 `解释不要优化 Y`（0）、`。说明别改 Y`（0）；英文 `should not`（0）、`no changes`（0）；
+  - 第十八轮 §5.3 的 13 句仅 **5 句**字面入语料；§12.3 矩阵 #19「9 领起 × 3 措辞 = 27 句」实际新增 10 句；
+  - §12.1 #5 的 Orchestrator 级用例仍缺：`grep -rn Orchestrator apps/daemon/src/` **0 命中**，`packages/*/test` 与 `apps/*/test` 中 `orchestrator` 仅 `core/test/{join,orchestrator}.test.ts`（WP-02 既有），无「消息授权 → `assess(L2)` → `dispatch(backend/implementation)`」产品用例。
+- **性质**：不单独阻断（P1 已由自建脚本 + 真实 HTTP/Orchestrator 证明），但 W3R19-01 表明词表仍在演化，**无回归网的族会在下一轮再次静默开口**。
+- **修复方向**：把 §5.3 的 10 句 + §5.2 的 4×7 网格每族 ≥3 条落入 must-not 语料；补 Orchestrator 级正/负用例（待 WP-04 落地 `apps/daemon` 的 `Orchestrator` 装配，或先在 `packages/core/test` 直接用 Core 编排复现该路径）。
+
+### W3R19-03 [P3] 记录名实不符：`implementation.md` 头部 `planVersion` 未随 plan 升到 4；T27 负例计数偏大 1
+
+- **位置**：`.agentdev/work/WP-03/implementation.md:3`（`- planVersion: 3`）、同文件订正块第 4 条（自称「`planVersion` 已由 2 升至 **4**」，自相矛盾）；`.agentdev/work/WP-03/implementation.md` T27「新增第十八轮 11 条…负例」。
+- **实测**：`plan.md:3` = `planVersion: 4`；`implementation.md:3` = `planVersion: 3`；`domain.test.ts:518-527` = **10** 条（非 11）。
+- **性质**：不阻断，但会误导 Test 选择权威口径（记录声称 v4、头部声称 v3）。
+- **修复方向**：把 `implementation.md:3` 改为 `planVersion: 4`；T27 计数改为 10 + 5。
+
+### W3R19-04 [P3] 口径不一致未登记（方向安全）：`则` 接续与未登记否定动词的纠正（W3R18-02 余项）
+
+- **位置**：`requests.ts:433`（`additiveLead` 含 `则`）与 `:282-283`（`ADVERB_LEAD_PATTERN` **不含** `则`）；`:121-125`（`NEGATION_PATTERNS` 不含 `重写/优化/完善/清理/整理/替换`）与 `:447` 的类别抑制。
+- **实测**：`修改 Y，则修改 X` **只读**，而 `修改 Y，就修改 X`、`修改 Y，再修改 X`、`修改 Y，也修改 X` 均**授权两目标**（`probe1-cross` F7 12 例 1 偏差）；`不重写 Y，修改 X`、`不重写 Y，然后修改 X` **只读**，而 `不修改 Y，修改 X`、`不修改 Y，然后修改 X` **授权**（F8 12 例 2 偏差）。
+- **性质**：方向安全（fail-closed），但两处均属同文件两张表不一致，且 `修改 Y，则修改 X` 是自然中文；Test 需要明确预期。
+- **修复方向**：把 `则` 补入 `ADVERB_LEAD_PATTERN`（与 `additiveLead` 对齐）；在 `plan.md` 登记「未登记否定动词的纠正 → 只读」为已声明代价，或把 `NEGATION_PATTERNS` 动词表与 `CHANGE_VERB_ANY_PATTERN` 统一（与 W3R19-01 修复方向 1 同源）。
+
+### W3R19-05 [P3] 协议对账与 wire 语义承接（W3R18-05 延续，unchanged）
+
+- **实测**（`/tmp/w3r16/probe7-escape.mjs` + `probe2-live`）：未知字段 `foo`、`targetRole`（含非法枚举值）、`level`/`intent`、`authorization` 注入仍 **202 静默忽略**，而 `docs/architecture/protocol.md` §1 要求未知字段返回 `VALIDATION_ERROR`；响应仍含 §5 未列的 `workIds`/`authorizationId`；`POST /artifacts/upload` 的 multipart `projectId` 忽略/多文件只保留最后、`StorageError` 映射、错误响应非 §1 封装等前轮项未动。
+- **性质**：不阻断，承接 Test/结算登记。
+
+---
+
+## 10. 计数与阻断判定
+
+| 严重度 | 数量 | 编号 | 是否阻断 |
+|---|---|---|---|
+| P0 | 0 | — | — |
+| **P1** | **1** | W3R19-01（解释领起两张词表与 refusal 词表矛盾：10 句真实 HTTP + 10 个真实写 Run，含源码路径；词法组合 216/4 290 + 204/494 + 24/390） | **阻断** |
+| P2 | 1 | W3R19-02（W3R18 §12.2 每族 ≥3 条长期断言未落地、§5.3 仅 5/13 句入语料、Orchestrator 级用例仍缺） | 不单独阻断，须随修复轮补齐 |
+| P3 | 3 | W3R19-03（`implementation.md:3` planVersion 未升 4；T27 11 条实为 10 条）、W3R19-04（`则` 接续、未登记否定动词纠正的口径不一致）、W3R19-05（协议对账承接） | 不阻断，承接 Test/结算 |
+
+- 唯一 P1 **落在本包验收面**：AC-004 负例族被证伪、AC-005 授权边界违反 `planVersion 3 §17/§23` 与 planVersion 4 变更块；以真实 HTTP + 真实 `Orchestrator` 证明可派发真实 Backend 写 Run（含源码路径）。
+- 失败路由：`Blocking Review Finding → Develop → Independent Review`（`docs/rules/workflow.md` §6）。
+- 前轮裁定的本轮复核：**W3R18-01 字面证据已闭合、根因未闭合 → W3R19-01**；**W3R18-02 已闭合**；**W3R18-03 已闭合（178 = 14+8+4+152，0 偏差）**；**W3R18-04 部分闭合（解释领起 10 条已落库；每族 ≥3 条与 Orchestrator 用例仍缺 → W3R19-02）**；**W3R18-05 未订正（→ W3R19-05）**。
+
+---
+
+## 11. 能否进入独立 Test —— **不能**
+
+**判据**：`docs/rules/workflow.md` §6「P0/P1 阻断」。唯一 P1 可端到端复现（`probe2-live`：10 句 → 授权行 + L2 delivery + assessment + 真实 `backend:implementation` 写 Run）。
+
+### 11.1 修复轮最低要求
+
+1. **修 W3R19-01**：按 §5.4 统一变更动词词表（至少补 `碰|动|删|触碰|变更|删掉|touch`），并让否定识别不依赖两张枚举词表（结构判据，或「含任一 `NEGATION_PATTERNS` 命中即不豁免」）；`plan.md` 同步登记新增的 fail-closed 代价。
+2. **补齐 W3R19-02**：把 §5.3 的 10 句与 §5.2 的 4×7 网格中每族 ≥3 条落入 `domain.test.ts` must-not 语料；补 Orchestrator 级回归（授权正例成功 / 上述族不得建 Run）。
+3. **订正 W3R19-03**：`implementation.md:3` 升为 4；T27 计数改为 10 + 5；把「解释领起里引用否定不能授权」的类别主张按实际词表范围限定。
+4. **登记或修 W3R19-04**：`则` 与 `additiveLead` 对齐；未登记否定动词的纠正写入已声明代价。
+5. **承接 W3R19-05**（协议未知字段与 §5 响应）。
+
+### 11.2 必须只读并落成长期断言（W3R19-01，每族 ≥3 条）
+
+- `说明/解释/描述一下/梳理/分析/讲讲/介绍一下/帮我解释/先说明` + `莫碰/莫动/停止碰/避免碰/杜绝碰/未碰/禁止触碰` + `，然后修改 Y`；
+- 同一领起 + `<同义否定>` + `<同义变更>`（`碰/动/删/触碰/变更/删掉/动它`）+ `，然后修改 Y`；
+- 后置变体 `修改 Y，说明莫碰 X`、`修改 Y。解释避免碰 X`、`修改 Y，说明莫动 X`；
+- 英文 `explain why to avoid touching X, then update Y`（本轮只读，须固定）、`explain the prohibition on X, then update Y`；
+- 同形对照必须保持只读：`说明别碰 X，然后修改 Y`、`说明不要碰 X，然后修改 Y`、`说明莫修改 X，然后修改 Y`、`报告说莫碰 X，然后修改 Y`；
+- 对照必须保持授权：`先解释 X，然后修改 Y`、`解释 X 并修复 Y`、`不修改 X，修改 Y`、`不要修改 X，然后修改 Y`、`修改 X。谢谢`、`修改 X，删除 Y，更新 Z`。
+
+### 11.3 Test 最小覆盖矩阵（在第十八轮 §12.3 基础上增补）
+
+| # | 维度 | 最小用例（≥） | 期望 |
+|---|---|---|---|
+| 23 | 解释领起 + 同义否定 × 同义变更（W3R19-01） | 12 句（含源码路径 1、后置 3、英文 2） | 只读、零授权行、零写 Run |
+| 24 | 同形对照（W3R19-01） | `说明别碰 X，然后修改 Y`、`说明不要碰 X，然后修改 Y`、`说明莫修改 X，然后修改 Y`、`报告说莫碰 X，然后修改 Y` | 只读 |
+| 25 | 计数对账（W3R19-03） | 文本提取 14 / 8 / 4 / 152；T27 负例 10 + 5 | 与记录一致或已订正 |
+| 26 | 接续口径（W3R19-04） | `修改 Y，则修改 X`、`修改 Y，就修改 X`、`不重写 Y，修改 X`、`不修改 Y，修改 X` | 与 `plan.md` 登记一致 |
+| 27 | Orchestrator 授权回归（W3R19-02） | 授权正例 `assess(L2)`→`dispatch backend/implementation` 成功；§23 族不得建 Run | 建 Run / 拒绝 |
+
+### 11.4 残余风险清单（区分已登记与未登记）
+
+**A. 未登记缺陷 —— 必须处理**
+1. W3R19-01 解释领起两张词表与 refusal 词表矛盾（P1，10 句真实写 Run）。
+2. W3R19-02 长期断言未按第十八轮最低要求落地（P2）。
+3. W3R19-03 记录 `planVersion` 与计数名实不符（P3）。
+4. W3R19-04 `则` 接续与未登记否定动词纠正的口径不一致（P3）。
+5. W3R19-05 协议未知字段与 §5 响应对账（P3，承接）。
+
+**B. 已登记 fail-closed 代价 —— 已登记，接受并需 Test 承认**
+6. 未登记同义祈使（`重写/润色/rewrite/polish/tweak`）→ 只读 + 澄清（`plan.md:17-18/32`）。
+7. 名词短语祈使、轻动词处置式、范围声明、排除式、多目标列表 → 只读 + 澄清（`plan.md:32`，本轮 15/15 只读 + 真实 HTTP 只读）。
+8. 解释请求中夹带变更叙述（`解释如何修改 Y，然后修改 X`、`explain the plan to update Y, then update X`）→ 只读（planVersion 4）。
+9. `顺便/顺手修改 X`、`多谢。修改 X` → 只读（planVersion 4 新增代价）。
+10. 目标优先日常祈使（`X 的错别字麻烦处理下`）→ 只读（T19–T21）。
+11. 未登记否定动词的纠正（`不重写 Y，修改 X`）→ 只读（**未登记**，见 W3R19-04）。
+12. 标记子串导致路径名/复合词误拒（`识别/特别/分别/别人/别的`）→ 只读（方向安全，本轮 F9 9/10）。
+13. 仓库外目标（`..`/`/`/`~`）→ 只读、不 500（Test 固定）。
+14. 语义分类的最终责任在 WP-04/06 模型 Assessment；本包只承诺已登记语料与形态规则。
+
+**C. 与本包无关或已承接**
+15. W3R19-02/05 与 W3R4-05/06/08/10/12/13、W3R13-08/09、W3R14-06/07/08、W3R15-06/07、W3R16-06/07、W3R17-05/06、W3R18-04/05 同项（P3，结算前登记或修复）。
+16. 真实无头浏览器攻防（WP-10）；真实 Provider 纵向与 `artifact_write` 工具接线（WP-10/WP-07）。
+
+---
+
+## 12. 方法与边界声明
+
+- **独立上下文**：未读取任何开发/Test 会话；结论只来自仓库文件、`docs/**` 契约与我自建的 4 个脚本（`probe1-cross` 10 357 例、`probe1b-open-forms`（65 措辞 × 22 领起 + 网格）、`probe2-live` 54 例真实 HTTP + Orchestrator、`probe3-registered` 178 例文本提取）+ 只读复用的 13 个前轮脚本。全部消费 `pnpm build` 产物；**未 import 任何产品测试文件**（`domain.test.ts` 仅以文本方式提取语料）。
+- **实验统计（观测 / 缺陷证据）**：§5、§6 的分族统计；`probe1-cross` 的 `F2/F3/F13` 为缺陷族，其余为对照族。
+- **对开发方主张的裁决**：**第十八轮 W3R18-01 的字面证据与三处点名词法缺口已闭合，W3R18-02 已闭合，W3R18-03 已闭合（178 = 14+8+4+152，0 偏差）**；但第十八轮修复把良性判定建成两张**枚举**词表，且与同一文件 `NEGATION_PATTERNS`/`REFUSAL_HEAD_PATTERN` 的变更动词表不一致，因此「解释领起里引用否定/变更 → 不能授权」的**类别主张不成立**（216/4 290 + 204/494 + 24/390；真实 HTTP 10 句 → 10 个真实写 Run）。故**冻结点的 P1 修复只完成了字面层，未完成类别层**。
+- **未做**：真实无头浏览器执行、真实 Provider 纵向、Docker 容器内复验、故障注入下的孤儿 blob 复验、`pnpm test:e2e`/`test:acceptance`（脚本按设计指向 WP-09/WP-10，未实现）。
+- **未改仓库**：本轮只覆盖写入 `.agentdev/work/WP-03/review.md`（本报告）；除该文件外 `git status --porcelain` 为空，`HEAD` 仍为 `52b4fcacb11063ce03de5a6edbadac1921e8d790`，全部 6 条契约命令在上述工作树上执行。`/tmp/w3r19/*.mjs`、`/tmp/w3r19/contract.log` 均为 `/tmp` 下的评审脚本与日志，**不是**对仓库文件的修改。
+
+---
+
+## 附十八：第十八轮报告（保留）
+
 # WP-03 独立 Review 报告（第十八轮）
 
 - 评审对象：工作包 WP-03「直接协作与说明产物」
@@ -355,6 +734,7 @@
 - **未改仓库**：本轮只覆盖写入 `.agentdev/work/WP-03/review.md`（本报告）；除该文件外 `git status --porcelain` 为空，`HEAD` 仍为 `b3624cb306276c47de70809db852f51e54fcd601`，全部 6 条契约命令在上述工作树上执行。`/tmp/w3r18/pre-requests.ts` 是 `87f50e4` 版 `requests.ts` 的 `/tmp` 副本，**不是**对仓库文件的修改。
 
 ---
+
 
 ## 附十七：第十七轮报告（保留）
 
