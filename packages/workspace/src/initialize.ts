@@ -171,7 +171,9 @@ export type InitEvidenceKind =
   | 'blocked'
   | 'failure'
   | 'resume'
-  | 'conflict-resolution';
+  | 'conflict-resolution'
+  | 'no-capability'
+  | 'investigation-batch';
 
 /** One recorded step result; the evidence trail the caller reports. */
 export interface InitEvidence {
@@ -237,6 +239,17 @@ export type InitBlocker =
       readonly kind: 'design-conflict';
       readonly conflicts: readonly KnowledgeConflict[];
       readonly message: string;
+    }
+  | {
+      /**
+       * The scan hit its budget without observing a single capability. This must never be
+       * mistaken for an explicit empty project (W4R2-01): the caller either grants another
+       * investigation batch or explicitly confirms that the project has no capability.
+       */
+      readonly kind: 'investigation-budget';
+      readonly reads: number;
+      readonly unknownCount: number;
+      readonly message: string;
     };
 
 /** Error code each blocker kind is reported under. */
@@ -246,6 +259,7 @@ export const BLOCKER_CODES: Readonly<Record<InitBlocker['kind'], WorkspaceDiagno
   'dirty-workspace': 'INVALID_STATE',
   'confirmation-required': 'GATE_NOT_READY',
   'design-conflict': 'KNOWLEDGE_INVALID',
+  'investigation-budget': 'MISSING_CONTEXT',
 };
 
 export type InitFailureKind =
@@ -328,8 +342,15 @@ export interface InitRecord {
   readonly gitRoot: string | null;
   readonly gitRevision: string | null;
   readonly emptyProject: boolean;
+  /**
+   * `true` when the empty-project state is trustworthy: a complete scan observed no
+   * capability, or the user explicitly confirmed it after a budget-limited scan.
+   */
+  readonly emptyProjectConfirmed: boolean;
   readonly needsGitInitialization: boolean;
   readonly scanPartial: boolean;
+  /** Extra budget granted through `investigateMore`; replaces the initializer default. */
+  readonly budgetOverride: Partial<ScanBudget> | null;
   readonly featureCount: number;
   readonly unknowns: readonly string[];
   readonly observations: readonly Observation[];
@@ -595,15 +616,18 @@ export function evaluateReadyGate(input: {
         : `磁盘不一致：${diskMismatch.join('、') || '无'}；缺少入口：${missingEntries.join('、') || '无'}`,
   });
 
+  const emptyAccepted = record.emptyProject && record.emptyProjectConfirmed;
   checks.push({
     id: 'feature-or-empty-project',
-    passed: record.featureCount > 0 || record.emptyProject,
+    passed: record.featureCount > 0 || emptyAccepted,
     detail:
       record.featureCount > 0
         ? `观察到 ${record.featureCount} 个候选能力`
-        : record.emptyProject
-          ? '明确空项目状态（尚无已实现能力）'
-          : '既没有候选能力也不是明确的空项目状态',
+        : emptyAccepted
+          ? '明确空项目状态（尚无已实现能力，已确认）'
+          : record.emptyProject
+            ? '扫描未观察到能力但扫描是部分地图，未经用户确认，不得视为明确空项目'
+            : '既没有候选能力也不是明确的空项目状态',
   });
 
   checks.push({
@@ -691,6 +715,20 @@ export interface ResolveBlockerInput {
   readonly authorizationRef: string;
   /** Required for a dirty-workspace blocker. */
   readonly dirtyChoice?: DirtyHandlingChoice;
+  readonly note?: string;
+}
+
+/** Explicit "this project has no capability yet" decision after a budget-limited scan. */
+export interface ConfirmNoCapabilityInput {
+  readonly authorizationRef: string;
+  readonly by: string;
+  readonly note?: string;
+}
+
+/** Another, larger investigation batch for a scan that ran out of budget. */
+export interface InvestigateMoreInput {
+  readonly maxBodyFiles?: number;
+  readonly maxBodyBytes?: number;
   readonly note?: string;
 }
 
@@ -847,6 +885,13 @@ export interface Initializer {
   authorizeGitInitialization(id: string, input: AuthorizeGitInitInput): InitOutcome;
   /** Records the explicit handling of a blocker and continues. */
   resolveBlocker(id: string, input: ResolveBlockerInput): InitOutcome;
+  /**
+   * Confirms that a budget-limited scan really found no capability, so the project may be
+   * treated as an explicit empty project instead of looping on the Ready gate (W4R2-01).
+   */
+  confirmNoCapability(id: string, input: ConfirmNoCapabilityInput): InitOutcome;
+  /** Grants another investigation batch and re-runs Mapping with the extended budget. */
+  investigateMore(id: string, input: InvestigateMoreInput): InitOutcome;
   /** Records the user decision for one design/code conflict and continues. */
   resolveConflict(id: string, input: ResolveConflictInput): InitOutcome;
   /** Read-only scan of the record's root; never writes. */
@@ -1006,11 +1051,12 @@ export function createInitializer(options: InitializerOptions): Initializer {
   };
 
   const mappingPhase = (record: InitRecord): InitOutcome => {
+    const budget = record.budgetOverride ?? options.budget;
     const scan = scanProject({
       root: record.root,
       git,
       documentRoot: record.documentRoot,
-      ...(options.budget === undefined ? {} : { budget: options.budget }),
+      ...(budget === undefined ? {} : { budget }),
     });
     if (!scan.ok) {
       return failed(
@@ -1066,6 +1112,10 @@ export function createInitializer(options: InitializerOptions): Initializer {
       gitRevision: scan.gitRevision,
       needsGitInitialization: scan.gitRoot === null,
       emptyProject: knowledge.emptyProject,
+      // A complete scan that observed nothing is trustworthy on its own; a partial scan
+      // needs the user's explicit confirmation before it may count as an empty project.
+      emptyProjectConfirmed:
+        knowledge.emptyProject && !scan.partial ? true : record.emptyProjectConfirmed,
       scanPartial: scan.partial,
       featureCount: knowledge.features.length,
       unknowns,
@@ -1108,6 +1158,14 @@ export function createInitializer(options: InitializerOptions): Initializer {
         kind: 'design-conflict',
         conflicts: unresolved,
         message: `存在 ${unresolved.length} 项已有文档与观察事实冲突，需用户处置后才能继续；候选文档保持 design=unconfirmed，绝不擅自确认`,
+      });
+    }
+    if (record.featureCount === 0 && !record.emptyProjectConfirmed) {
+      return blocked(record, {
+        kind: 'investigation-budget',
+        reads: record.reads.length,
+        unknownCount: record.unknowns.length,
+        message: `扫描在预算内未观察到任何能力（正文 ${record.reads.length} 个、未知 ${record.unknowns.length} 项），不能据此认定项目为空：请扩大调查批次（investigateMore）或显式确认项目确无能力（confirmNoCapability）`,
       });
     }
     const required = record.inferences.filter((inference) => inference.requiresConfirmation);
@@ -1704,6 +1762,25 @@ export function createInitializer(options: InitializerOptions): Initializer {
         [{ code: 'VALIDATION_ERROR', message: '待确认推断需使用 confirm 处置' }],
       );
     }
+    if (blocker.kind === 'investigation-budget') {
+      return failed(
+        record,
+        {
+          kind: 'internal',
+          message:
+            '预算耗尽且未观察到能力：请使用 investigateMore 扩大批次或 confirmNoCapability 显式确认无能力',
+          recoverable: false,
+          details: null,
+        },
+        [
+          {
+            code: 'VALIDATION_ERROR',
+            message:
+              '预算耗尽且未观察到能力：请使用 investigateMore 扩大批次或 confirmNoCapability 显式确认无能力',
+          },
+        ],
+      );
+    }
     if (blocker.kind === 'design-conflict') {
       return failed(
         record,
@@ -1854,6 +1931,116 @@ export function createInitializer(options: InitializerOptions): Initializer {
     return step(next.id);
   };
 
+  const confirmNoCapability = (id: string, input: ConfirmNoCapabilityInput): InitOutcome => {
+    const record = store.load(id);
+    if (record === null) return notFound(id);
+    if (input.authorizationRef.trim() === '' || input.by.trim() === '') {
+      return failed(
+        record,
+        {
+          kind: 'internal',
+          message: '确认无能力必须携带 authorizationRef 与 by',
+          recoverable: false,
+          details: null,
+        },
+        [{ code: 'VALIDATION_ERROR', message: '确认无能力必须携带 authorizationRef 与 by' }],
+      );
+    }
+    if (record.featureCount > 0) {
+      return failed(
+        record,
+        {
+          kind: 'internal',
+          message: `已观察到 ${record.featureCount} 个候选能力，无需确认空项目`,
+          recoverable: false,
+          details: null,
+        },
+        [
+          {
+            code: 'VALIDATION_ERROR',
+            message: `已观察到 ${record.featureCount} 个候选能力，无需确认空项目`,
+          },
+        ],
+      );
+    }
+    const next = persist(
+      addEvidence(
+        {
+          ...record,
+          emptyProject: true,
+          emptyProjectConfirmed: true,
+          blocked: null,
+          status: record.phase,
+        },
+        record.phase,
+        'no-capability',
+        `用户显式确认项目确无能力：${input.authorizationRef}（by ${input.by}${input.note === undefined ? '' : `；${input.note}`}）`,
+        [input.authorizationRef],
+      ),
+    );
+    return step(next.id);
+  };
+
+  const investigateMore = (id: string, input: InvestigateMoreInput): InitOutcome => {
+    const record = store.load(id);
+    if (record === null) return notFound(id);
+    if (record.featureCount > 0) {
+      return failed(
+        record,
+        {
+          kind: 'internal',
+          message: '已观察到候选能力，无需扩大调查批次',
+          recoverable: false,
+          details: null,
+        },
+        [{ code: 'VALIDATION_ERROR', message: '已观察到候选能力，无需扩大调查批次' }],
+      );
+    }
+    const positive = (value: number | undefined): number | undefined =>
+      value === undefined ? undefined : value > 0 ? value : undefined;
+    const maxBodyFiles = positive(input.maxBodyFiles);
+    const maxBodyBytes = positive(input.maxBodyBytes);
+    if (maxBodyFiles === undefined && maxBodyBytes === undefined) {
+      return failed(
+        record,
+        {
+          kind: 'internal',
+          message: '扩大调查批次必须给出更大的 maxBodyFiles 或 maxBodyBytes',
+          recoverable: false,
+          details: null,
+        },
+        [
+          {
+            code: 'VALIDATION_ERROR',
+            message: '扩大调查批次必须给出更大的 maxBodyFiles 或 maxBodyBytes',
+          },
+        ],
+      );
+    }
+    const budgetOverride: Partial<ScanBudget> = {
+      ...record.budgetOverride,
+      ...(maxBodyFiles === undefined ? {} : { maxBodyFiles }),
+      ...(maxBodyBytes === undefined ? {} : { maxBodyBytes }),
+    };
+    const restarted = persist(
+      addEvidence(
+        {
+          ...record,
+          phase: 'mapping',
+          status: 'mapping',
+          budgetOverride,
+          blocked: null,
+          failure: null,
+        },
+        'mapping',
+        'investigation-batch',
+        `用户扩大调查批次：maxBodyFiles=${maxBodyFiles ?? '继承'}、maxBodyBytes=${maxBodyBytes ?? '继承'}${input.note === undefined ? '' : `；${input.note}`}`,
+        [],
+      ),
+    );
+    return step(restarted.id);
+  };
+
   const investigate = (id: string): InvestigationOutcome => {
     const record = store.load(id);
     if (record === null) {
@@ -1954,8 +2141,10 @@ export function createInitializer(options: InitializerOptions): Initializer {
         gitRoot: null,
         gitRevision: null,
         emptyProject: false,
+        emptyProjectConfirmed: false,
         needsGitInitialization: false,
         scanPartial: false,
+        budgetOverride: null,
         featureCount: 0,
         unknowns: [],
         observations: [],
@@ -1994,6 +2183,8 @@ export function createInitializer(options: InitializerOptions): Initializer {
     authorizeGitInitialization,
     resolveBlocker,
     resolveConflict,
+    confirmNoCapability,
+    investigateMore,
     investigate,
     verifyReady,
   };

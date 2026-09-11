@@ -54,9 +54,10 @@ export const PROJECT_PATH = 'PROJECT.md';
  *
  * CJK/full-width terminators always end the sentence; an ASCII dot only counts when
  * whitespace or the end of the text follows it, so `支持 v1.2 语义与 .ts 扩展名`
- * is never truncated to `支持 v1` (W4R1-02).
+ * is never truncated to `支持 v1`, and a dot that closes a single-letter
+ * abbreviation (`e.g.`, `i.e.`, initials) is skipped too (W4R1-02, W4R2-04).
  */
-const SENTENCE_END = /[。．！？!?\n]|\.(?=\s|$)/u;
+const SENTENCE_END = /[。．！？!?]|\.(?=\s|$)(?<!\b[a-z]\.)/iu;
 
 /** Lowercase SHA256 over the UTF-8 Markdown bytes of a rendered document. */
 export function contentHash(markdown: string): string {

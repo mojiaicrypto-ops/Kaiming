@@ -80,3 +80,19 @@
   2. **W4R1-04**：用错处置 API（例如对 `confirmation-required` 调 `resolveConflict`）会把记录写成 `failed/internal`；专用 API 仍可恢复。属调用方误用，登记为已知口径。
   3. **W4R1-05**：`requirement:<id>@<version>` 只校验 id 存在性，不校验版本存在性（需求记录版本信息在需求池侧，WP-05 消费时按 `recordVersion` 复核）。
   4. **W4R1-06 残余**：目录符号链接在索引里记为 `kind:'file'`、池根散落的 `requirement.json` 无专用诊断（不产生错误行为，登记待 WP-08 扫描器增强）。
+
+## T10 独立 Review 第二轮与修复（预算耗尽≠空项目）
+
+- 第二轮独立 Review 判 **FAIL**（0×P0、1×P1、1×P2、3×P3）：T9 的根级修复成立（六种形状全部 Ready），但 `emptyProject = features.length===0` 引入同类新 fail-open。
+- **W4R2-01 [P1]**：默认预算下的 41 包 monorepo（正文预算 40 全被 README 占满、84 项跳过、`features=0`）被判为 `emptyProject=true`，**无任何 blocker 直达 Ready**，PROJECT.md 写「absent（未实现，明确空项目）」，等于把「预算耗尽、未知」谎称为「确认无能力」。
+  修复：
+  1. `emptyProject` 改判为 `features.length === 0 && !scan.partial`（只有**完整**扫描一无所获才算可信的空项目），并新增 `partialWithoutCapability` 字段。
+  2. 新增 `InitBlocker` 种类 `investigation-budget`（错误码 `MISSING_CONTEXT`）：Confirming 阶段在 `featureCount===0 && !emptyProjectConfirmed` 时阻断，且**重复 step 不会自行通过**（无用户动作不可解）。
+  3. 新增两条可处置 API：`investigateMore(id,{maxBodyFiles?,maxBodyBytes?})`（记录 `budgetOverride`，回到 Mapping 以扩大后的预算重扫）与 `confirmNoCapability(id,{authorizationRef,by,note?})`（用户显式确认项目确无能力）。
+  4. Ready 门禁的能力分支改为 `featureCount>0 || (emptyProject && emptyProjectConfirmed)`，并更新 detail 文案；`confirmNoCapability` 同时置 `emptyProject=true`、`emptyProjectConfirmed=true`。
+  5. 候选 PROJECT.md 措辞三分：有能力 ⇒ `partial（观察到代码，未经确认）`；完整扫描无能力 ⇒ `absent（未实现，明确空项目）`；预算耗尽未确认 ⇒ `未调查（预算耗尽的扫描未观察到能力，尚不能断言项目为空）`（不再写 absent）。
+- **W4R2-02 [P2]**：`ROOT_MODULE_KEY` 由 `'root'` 改为 `'(root)'`——括号不可能出现在被扫描的路径键里，因此不会与真实顶层 `root/` 目录合并成一个（虚假）能力。
+- **W4R2-03/04 [P3]**：`moduleKeyOf` 返回类型收紧为 `string`（删除已死的 `null` 分支与调用点 `?? null`）；`firstSentence` 跳过「单字母缩写后的句点」（`见 e.g. 说明`、`Use e.g. this form.`），并删掉归一化后不可达的 `\n` 分支。
+- **W4R2-05**：T8 残余 3 的措辞随 T9/T10 更新（根级文件现归 `(root)` 模块；其余残余见 T9 承接列表）。
+- 回归网：`initialize.test.ts` 新增 2 例（41 README 无代码 ⇒ `investigation-budget` 阻断、重复 step 仍阻断、`confirmNoCapability` 后 Ready 且 PROJECT 不写 absent；41 README + `src/mod.ts` ⇒ 扩大批次后观察到能力、走确认流程到 Ready）；`projection.test.ts` 新增 1 例缩写句点。
+- 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **26 文件 / 423 用例**；`pnpm test:integration` 124；`pnpm build` 10 workspace。

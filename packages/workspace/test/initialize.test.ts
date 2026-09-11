@@ -749,3 +749,74 @@ describe('root-only projects reach Ready (W4R1-01 regression)', () => {
     expect(init.verifyReady('init-docs').ok).toBe(true);
   });
 });
+
+describe('budget exhaustion without capability (W4R2-01 regression)', () => {
+  /** 41 README files fill the default 40-file body budget; the source file is never read. */
+  function readmeHeavyRepository(extra: Readonly<Record<string, string>> = {}): string {
+    const files: Record<string, string> = {};
+    for (let index = 0; index < 41; index += 1) {
+      files[`pkg${index}/README.md`] = `# package ${index}\n`;
+    }
+    return seedRepository({ ...files, ...extra }).dir;
+  }
+
+  it('never reaches Ready by claiming an unconfirmed empty project', () => {
+    const dir = readmeHeavyRepository();
+    const store = createMemoryInitStateStore();
+    const init = createInitializer({ store, git, now: clock });
+    okOf(init.start({ id: 'init-budget', root: dir }));
+    okOf(init.step('init-budget')); // identifying -> mapping
+    const mapped = okOf(init.step('init-budget')); // mapping -> confirming
+    expect(mapped.record.scanPartial).toBe(true);
+    expect(mapped.record.featureCount).toBe(0);
+    expect(mapped.record.emptyProject).toBe(false);
+
+    const blocked = blockedOf(init.step('init-budget'));
+    expect(blocked.blocker.kind).toBe('investigation-budget');
+    expect(blocked.errors[0]?.code).toBe('MISSING_CONTEXT');
+    // Retrying the same phase can never succeed on its own.
+    const again = blockedOf(init.step('init-budget'));
+    expect(again.blocker.kind).toBe('investigation-budget');
+    expect(existsSync(join(dir, 'docs', 'agentdev', 'PROJECT.md'))).toBe(false);
+
+    // The explicit no-capability decision is the resoluble path.
+    const decided = okOf(
+      init.confirmNoCapability('init-budget', {
+        authorizationRef: 'user-action:no-capability',
+        by: 'user',
+      }),
+    );
+    expect(decided.phase).toBe('writing');
+    expect(decided.record.emptyProjectConfirmed).toBe(true);
+    const done = okOf(init.step('init-budget'));
+    expect(done.phase).toBe('ready');
+    expect(init.verifyReady('init-budget').ok).toBe(true);
+    const project = readFileSync(join(dir, 'docs', 'agentdev', 'PROJECT.md'), 'utf8');
+    // A budget-limited scan never claims the project is an empty (no-capability) project.
+    expect(project).not.toContain('absent（未实现，明确空项目）');
+    expect(project).toContain('未调查（预算耗尽');
+  });
+
+  it('finds the capability once the investigation batch is enlarged', () => {
+    const dir = readmeHeavyRepository({ 'src/mod.ts': 'export const mod = 1;\n' });
+    const store = createMemoryInitStateStore();
+    const init = createInitializer({ store, git, now: clock });
+    okOf(init.start({ id: 'init-more', root: dir }));
+    okOf(init.step('init-more')); // identifying -> mapping
+    okOf(init.step('init-more')); // mapping -> confirming
+    const blocked = blockedOf(init.step('init-more'));
+    expect(blocked.blocker.kind).toBe('investigation-budget');
+
+    const reMapped = okOf(init.investigateMore('init-more', { maxBodyFiles: 200 }));
+    expect(reMapped.phase).toBe('confirming');
+    expect(reMapped.record.featureCount).toBeGreaterThan(0);
+    expect(reMapped.record.emptyProject).toBe(false);
+
+    const needsConfirmation = blockedOf(init.step('init-more'));
+    expect(needsConfirmation.blocker.kind).toBe('confirmation-required');
+    okOf(init.confirm('init-more', { authorizationRef: 'user-action:1', by: 'user' }));
+    const done = okOf(init.step('init-more'));
+    expect(done.phase).toBe('ready');
+    expect(done.record.emptyProjectConfirmed).toBe(false);
+  });
+});

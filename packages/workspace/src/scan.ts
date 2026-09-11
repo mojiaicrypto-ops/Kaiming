@@ -76,8 +76,13 @@ export const SCAN_EXCLUDED_DIRECTORIES: readonly string[] = [
 /** Primary index ceiling; `INITIALIZATION_BUDGET.maxIndexEntries` (10000). */
 export const SCAN_INDEX_LIMIT = INITIALIZATION_BUDGET.maxIndexEntries;
 
-/** Module key for files that sit at the repository root. */
-export const ROOT_MODULE_KEY = 'root';
+/**
+ * Module key for files that sit at the repository root.
+ *
+ * Parentheses cannot appear in a scanned path key, so this sentinel can never collide
+ * with a real top-level `root/` directory (W4R2-02).
+ */
+export const ROOT_MODULE_KEY = '(root)';
 
 /** Files whose names mark the build/test entry-point tier. */
 const ENTRY_POINT_FILES: readonly string[] = [
@@ -1049,6 +1054,8 @@ export interface CandidateKnowledge {
   readonly documentRoot: string;
   readonly revision: string | null;
   readonly emptyProject: boolean;
+  /** `true` when the budget stopped the scan before any capability was observed. */
+  readonly partialWithoutCapability: boolean;
   readonly features: readonly CandidateFeature[];
   readonly documents: readonly CandidateDocument[];
   readonly conflicts: readonly KnowledgeConflict[];
@@ -1080,7 +1087,7 @@ function entryPathOf(item: string): string {
 }
 
 /** Module key of a repo-relative path, or `null` for a root-level file. */
-export function moduleKeyOf(path: string): string | null {
+export function moduleKeyOf(path: string): string {
   const segments = path.split('/').filter((segment) => segment !== '');
   // A root-level file is still an observable capability: it belongs to the `root`
   // module. Returning `null` here used to strand a project whose only files are at
@@ -1127,7 +1134,7 @@ export function detectKnowledgeConflicts(input: {
     const entries = feature.sections.entries.items.map((item) => entryPathOf(item));
     const missing = entries.filter((path) => path !== '' && !observed.has(path));
     if (missing.length === 0) continue;
-    const moduleKey = moduleKeyOf(missing[0] ?? '') ?? null;
+    const moduleKey = moduleKeyOf(missing[0] ?? '');
     const kind: KnowledgeConflictKind =
       feature.design === 'confirmed'
         ? 'design-code-conflict'
@@ -1259,7 +1266,6 @@ export function generateCandidateKnowledge(input: CandidateKnowledgeInput): Cand
   const filesByModule = new Map<string, ScannedBodyFile[]>();
   for (const file of scan.bodyFiles) {
     const key = moduleKeyOf(file.path);
-    if (key === null) continue;
     const list = filesByModule.get(key) ?? [];
     list.push(file);
     filesByModule.set(key, list);
@@ -1287,7 +1293,11 @@ export function generateCandidateKnowledge(input: CandidateKnowledgeInput): Cand
   // A project has a capability once at least one candidate Feature was observed;
   // otherwise it is an explicit empty (no-capability) project, even when the index
   // holds non-code files such as a lone README (W4R1-01).
-  const emptyProject = features.length === 0;
+  // A *complete* scan that observed no capability is a trustworthy empty project; a scan
+  // that stopped at its budget observed nothing only because it stopped early, so it must
+  // not be presented as an explicit empty project (W4R2-01).
+  const emptyProject = features.length === 0 && !scan.partial;
+  const partialWithoutCapability = scan.partial && features.length === 0;
   if (emptyProject && !indexedEmpty) {
     observations.push({
       kind: 'empty-project',
@@ -1320,7 +1330,14 @@ export function generateCandidateKnowledge(input: CandidateKnowledgeInput): Cand
     candidateDocument({
       documentRoot,
       documentPath: 'PROJECT.md',
-      markdown: renderCandidateProject({ scan, documentRoot, features, unknowns, emptyProject }),
+      markdown: renderCandidateProject({
+        scan,
+        documentRoot,
+        features,
+        unknowns,
+        emptyProject,
+        scanPartial: scan.partial,
+      }),
       kind: 'project',
       featureId: null,
     }),
@@ -1355,6 +1372,7 @@ export function generateCandidateKnowledge(input: CandidateKnowledgeInput): Cand
     documentRoot,
     revision,
     emptyProject,
+    partialWithoutCapability,
     features,
     documents,
     conflicts,
@@ -1377,6 +1395,7 @@ function renderCandidateProject(input: {
   readonly features: readonly CandidateFeature[];
   readonly unknowns: readonly ScanUnknown[];
   readonly emptyProject: boolean;
+  readonly scanPartial: boolean;
 }): string {
   const { scan } = input;
   const lines: string[] = [
@@ -1394,7 +1413,13 @@ function renderCandidateProject(input: {
     `- 扫描根：${scan.root}`,
     `- document-root：${input.documentRoot}`,
     `- 代码 revision：${scan.gitRevision ?? '未调查'}`,
-    `- 实现状态：${input.emptyProject ? 'absent（未实现，明确空项目）' : 'partial（观察到代码，未经确认）'}`,
+    `- 实现状态：${
+      input.emptyProject
+        ? 'absent（未实现，明确空项目）'
+        : input.scanPartial && input.features.length === 0
+          ? '未调查（预算耗尽的扫描未观察到能力，尚不能断言项目为空）'
+          : 'partial（观察到代码，未经确认）'
+    }`,
     `- 观察模块：${input.features.length} 个`,
     `- 正文预算：最多 ${scan.budget.maxBodyFiles} 个文件 / ${scan.budget.maxBodyBytes} 字节；已读取 ${scan.bodyFiles.length} 个 / ${scan.bodyBytesRead} 字节（${scan.completeness}）`,
     '',

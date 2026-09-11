@@ -461,3 +461,11 @@ describe('one-line summaries (W4R1-02 regression)', () => {
     expect(firstSentence('只有一个句子没有终止符')).toBe('只有一个句子没有终止符');
   });
 });
+
+describe('abbreviations in one-line summaries (W4R2-04 regression)', () => {
+  it('does not stop at a dot that closes a single-letter abbreviation', () => {
+    expect(firstSentence('见 e.g. 说明与示例。后续补充。')).toBe('见 e.g. 说明与示例');
+    expect(firstSentence('Use e.g. this form. Then stop.')).toBe('Use e.g. this form');
+    expect(firstSentence('Ends here. Next sentence.')).toBe('Ends here');
+  });
+});
