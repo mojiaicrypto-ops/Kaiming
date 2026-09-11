@@ -1,3 +1,217 @@
+# WP-04 独立 Review 报告（第二轮）
+
+- 评审对象：工作包 WP-04「知识与新旧项目」（`docs/delivery/implementation.md` WP-04；关联 AC-025–029、AC-037–040、AC-042、AC-086–088、AC-092、AC-093）
+- 评审轮次：**第二轮**（本轮报告置于文件前部；第一轮报告逐字保留为 **附一**，未做任何改写）
+- 冻结点 / 代码树：`git rev-parse HEAD` = **`479d07bc965354f326b9415347eacf38ee9644b3`**（`479d07b docs(review): WP-04 independent review report, round 1 (FAIL)`），`git rev-parse HEAD^{tree}` = **`bb4e8a3f9fe56a728287573e867623e633ae7051`**
+- 被评审的修复提交：**`fdbfdc4d6bb4c17c285de21a8decf6f1292bf148`**（`fdbfdc4 fix(workspace,knowledge): root-only projects reach Ready and summaries keep dots`），其代码树 = **`13fa9de496581766f089d78aa8df80f2dfed2873`**
+- 冻结点与修复点的差异：`git diff --stat fdbfdc4 HEAD` = **仅 `.agentdev/work/WP-04/review.md`（+205 行，第一轮报告）**；即 `HEAD` 相对 `fdbfdc4` 无源码/测试/文档变化，本轮评审的代码面等价于 `fdbfdc4`
+- 工作树：本轮全部契约命令与全部探针执行前后 `git status --porcelain` 均为空；本报告写入后工作树仅 `.agentdev/work/WP-04/review.md`（见文末）
+- 评审角色：Review（独立上下文；未读取任何开发/Test 会话；`.agentdev/work/WP-04/test.md` 尚不存在；仅依据仓库代码、`docs/**` 契约、WP-04 的 `plan.md`/`implementation.md`，以及我自建的 `/tmp/wp04r2/` 脚本与第一轮 `/tmp/wp04r/` 脚本的重跑）
+- 工具：`node v24.8.0`、`pnpm 12.3.4`、真实 `git`、macOS 宿主；探针只消费 `pnpm build` 产物（`packages/knowledge/dist/index.js`、`packages/workspace/dist/index.js`），**未 import 任何产品测试文件**
+- 修复提交范围核对（`git show --stat fdbfdc4`）：7 文件 / +118 −6，全部落在 `plan.md` §2 允许的 `packages/knowledge/**`、`packages/workspace/**`、`packages/*/test/**`、`.agentdev/work/WP-04/**`；`docs/**`、`packages/contracts/**`、`packages/storage/**`、`webui/**`、`docker/**` 零改动（符合 plan §2 的不可写清单）
+- 记录哈希（`git hash-object`，前 8 位，**`fdbfdc4` 状态**）：`packages/workspace/src/scan.ts` **`e173da55`**（一轮 `8ffc1880`）、`packages/knowledge/src/projection.ts` **`9688f16b`**（一轮 `195e699a`）、`packages/knowledge/src/feature-format.ts` **`e1d4f758`**（一轮 `a8115503`）、`packages/workspace/test/initialize.test.ts` **`faea91a2`**、`packages/knowledge/test/projection.test.ts` **`f914d1e2`**、`packages/knowledge/test/feature-format.test.ts` **`aec2a9bd`**、`.agentdev/work/WP-04/implementation.md` **`80479a9f`**（一轮 `cda1e65a`）、`.agentdev/work/WP-04/plan.md` **`a78655b0`**（未变）、`.agentdev/work/WP-04/review.md`（`HEAD` 版）**`2bbe31a0`**
+- 未改动的一轮代码：`initialize.ts`、`git-port.ts`、`relations.ts`、`views.ts`、`model.ts`、`requirements-pool.ts` 与一轮相同（`git show --stat fdbfdc4` 未列出）
+
+---
+
+## 1. 结论
+
+**FAIL（`fdbfdc4` 不能承接入独立 Test；本轮判 0×P0、1×P1、1×P2、3×P3）。**
+
+第一轮的三条闭合项（W4R1-01、W4R1-02、W4R1-06 的 fail-open 面）经本轮独立取证**全部成立**，且一轮 6 个脚本重跑后原 5 处失败用例全部翻正、无新增回归。但 W4R1-01 的修复方式引入了**同类的新 fail-open**：`emptyProject` 被重新定义为「未观察到候选能力」，Ready 门禁的 `feature-or-empty-project` **不区分「完整地图下确无能力」与「正文预算耗尽的部分地图」**。在**默认预算**下，一个 41 包 monorepo（每个包都有 `README.md`、`src/index.ts` 与 `src/index.test.ts`）会以 `bodyRead=40`（全部为 readme 层）、`skipped=84`、`features=0`、`emptyProject=true` **直接 Ready**，PROJECT.md 写下 `实现状态：absent（未实现，明确空项目）`，并生成一条 `empty-project`、`requiresConfirmation:false` 的推断——**全程无任何用户确认、无 blocker**，与 `context.md` §4「至少一个真实能力或明确空项目状态」及 `knowledge.md` §5「达到预算输出部分地图和未知，不声称全量理解」冲突。对照组（4 包 monorepo）会正常产出 4 个候选能力并停在 `confirmation-required`，证明该分支只在预算耗尽时静默滑过。此为本轮唯一阻断项 **W4R2-01 [P1]**。
+
+**正面结论（按证据）**：
+
+- **W4R1-01 闭合**：`README+main.ts`、`README+main.py+test_main.py`、仅 `README.md`、空目录、仅根级 `main.ts`（无 README）、嵌套 `src/mod.ts` 六种形状全部走完 `Identifying→…→Ready`，`verifyReady.ok` 全为 true，候选 Feature 文档可解析、`candidate:true`/`deliveryRef:null`、不创建 `.agentdev/requirements`；仅 README/空目录形状 `emptyProject=true` 且 PROJECT.md 明写「明确空项目」，根级源码形状 `featureCount>0`、`emptyProject=false`；额外确认「只有嵌套仓库的父仓库」这一同类死锁形状也已可达 Ready（`/tmp/wp04r2/probe1-closures.mjs`）。
+- **W4R1-02 闭合**：句末判据落为「CJK/全角终止符，或后接空白/结尾的 ASCII 句点」，10 例矩阵（版本号 `v1.2`、扩展名 `.ts`、`Node.js`、行尾句点、无终止符、`A.B`、中文感叹号、多行、英文缩写）逐例核对；投影 `features/README.md` 索引行的 `| 支持 v1.2 语义与 .ts 扩展名 |` 逐字正确，一轮失败用例 `summary-is-the-whole-first-sentence` 已翻正。
+- **W4R1-06 的 fail-open 面闭合**：六段固定小节只认二级标题；`# 用途` 不再满足（拒绝且错误定位到 `用途`），`## 用途` 接受，重复二级标题仍拒绝；`renderReadme` → 再解析的 35 例格式矩阵（一轮脚本重跑）全部通过，无回归。
+- **fail-closed 取向未因修复松动**：非法知识不发布/stale、断链只按当前需求阻断、脏工作区阻断、冲突不覆盖、候选文档不更新交付 ref 等一轮全部结论在重跑中保持不变（`probe1-format` 35/35、`probe2-views` 40/40、`probe3-pool` 43/43）。
+
+---
+
+## 2. 契约命令原始结果（代码树 `13fa9de`，`/tmp/wp04r2/contract-all.log`、`/tmp/wp04r2/contract-codes.txt`）
+
+| 命令 | 结果 | 关键输出 |
+|---|---|---|
+| `pnpm install --frozen-lockfile` | **exit 0** | `Scope: all 11 workspace projects`；`Lockfile is up to date`；`✓ Lockfile passes supply-chain policies` |
+| `pnpm typecheck` | **exit 0** | 无诊断 |
+| `pnpm lint` | **exit 0** | `All matched files use Prettier code style!` |
+| `pnpm docs:check` | **exit 0** | `docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages` |
+| `pnpm test:unit` | **exit 0** | `Test Files 26 passed (26)`、`Tests 420 passed (420)`、12.57s |
+| `pnpm test:integration` | **exit 0** | `Test Files 10 passed (10)`、`Tests 124 passed (124)`、65.58s（真实 Docker） |
+| `pnpm build` | **exit 0** | 10 个 workspace 全部 `Done`（contracts/cli/knowledge/domain/pi-runtime/storage/workspace/core/daemon/runner） |
+
+WP-04 自有测试（单独重跑：`pnpm exec vitest run --project unit packages/knowledge packages/workspace`，7 文件 / **131 用例全部通过**）：`feature-format.test.ts` 44、`projection.test.ts` 12、`views.test.ts` 9、`relations.test.ts` 11、`requirements-pool.test.ts` 25、`scan.test.ts` 16、`initialize.test.ts` 14。相对一轮（26 文件 / 415 用例、WP-04 126 用例）净增 5 例，全部来自修复提交：`initialize.test.ts` +3（两种根级有代码形状 + 仅 README 形状必达 Ready 且 `verifyReady` 通过）、`projection.test.ts` +1（版本号/扩展名不截断）、`feature-format.test.ts` +1（一级标题不满足小节），与 `git show fdbfdc4` 的测试差异逐条对应。
+
+integration 层仍**不含任何 WP-04 文件**（`packages/knowledge`、`packages/workspace` 无 `*.integration.test.ts`；10 个文件为 `apps/cli/{container,doctor}`、`apps/runner/attempt`、`packages/core/{dispatcher,events-hub,identity,requirements}`、`packages/pi-runtime/session`、`packages/storage/{ledger,migrations}`）——这与 `implementation.md` T9 承接项 1（W4R1-03 留 WP-08、Test 须列入 `not_covered`）一致，属已登记承接，非本轮新缺陷。
+
+---
+
+## 3. 方法、证据脚本与一轮脚本重跑
+
+### 3.1 本轮自建脚本（全部 `/tmp/wp04r2/`，独立上下文，真实临时目录 + 真实 `git`）
+
+| 脚本 | 用例 | 结果 | 覆盖 |
+|---|---|---|---|
+| `probe1-closures.mjs` | 60 | **60 pass / 0 fail** | W4R1-01 六形状（含仅根级源码、空目录、嵌套模块回归）+ 嵌套仓库父级 + 确定性/feature-id 稳定性 + 候选文档候选性与 `deliveryRef` + W4R1-02 十例句末矩阵 + 投影索引行 + W4R1-06 标题级别四例 |
+| `probe2-newdefects.mjs` | 21 | **21 pass / 0 fail** | 新缺陷取证：`root` 模块键碰撞（A）、部分地图空项目声明（B）、索引截断（C）、delta 记录卫生（D）、一轮 P3 复核（E）、摘要残余（F） |
+| `probe3-realistic.mjs` | 5 | **5 pass / 0 fail** | **默认预算**下的 4 包（对照）与 41 包 monorepo（缺陷形状）：预算耗尽、能力为 0、Ready、PROJECT.md 断言、推断与 blocker |
+
+三个脚本的全部用例断言都编码「闭合应成立」或「缺陷形状应复现」，因此 **0 fail 即：闭合成立、缺陷复现**。
+
+### 3.2 第一轮脚本重跑（`/tmp/wp04r2/r1/`，同一批文件，只换新 `dist`）
+
+| 脚本 | 一轮（旧树） | 二轮（`fdbfdc4`） | 二轮失败项性质 |
+|---|---|---|---|
+| `probe1-format.mjs` | 35 / 0 | **35 / 0** | — |
+| `probe2-views.mjs` | 40 / 1 | **40 / 0** | 一轮唯一失败 `summary-is-the-whole-first-sentence` 翻正 |
+| `probe3-pool.mjs` | 43 / 0 | **43 / 0** | — |
+| `probe4-init.mjs` | 76 / 1 | 76 / 1 | 一轮失败 `root-only-project-can-reach-ready` 翻正；断言**旧缺陷形状**的 `root-only-observes-code-but-no-capability` 随即变为失败（其配对用例 `root-only-project-can-reach-ready` 现为 PASS） |
+| `probe5-rootonly.mjs` | 23 / 3 | 23 / 4 | 三个 `*-can-reach-ready` 全部翻正；断言旧形状的 `*-investigation-shape`（3）与 `root-only-init-fails-before-fix`（明确断言修复前必失败）随之失败 |
+| `probe6-observations.mjs` | 14 / 0 | 14 / 2 | `level1-heading-accepted-observation`（现 `level1HeadingAccepted=false`）与 `summary-truncates-at-decimal-point`（现不再截断）两处**旧行为**断言失败 |
+
+即：**一轮 231 例中，原本 5 处失败全部消除，零意外回归**；二轮 7 处失败全部是「断言已被修复的旧行为」，且每一处都有同脚本内现已通过的配对断言（`*-can-reach-ready`、`level1HeadingAccepted=false`、`firstSentence` 正确值）。本轮证据用例合计 **86（新）+ 231（重跑）= 317 例**。
+
+---
+
+## 4. 三项闭合的独立验证
+
+### 4.1 W4R1-01 [P1，一轮] 仅根级文件的项目无法通过 Ready 门禁 —— **已闭合**
+
+| 形状 | 调查 | 初始化 | 记录 |
+|---|---|---|---|
+| `README.md`+`main.ts` | `featureCount=1`、`emptyProject=false` | `Ready`、`verifyReady.ok=true` | 候选 Feature 文档可解析、`candidate:true`/`deliveryRef:null`、无 `.agentdev/requirements` |
+| `README.md`+`main.py`+`test_main.py` | 同上（reads 3） | `Ready` | 同上 |
+| 仅 `README.md` | `featureCount=0`、`emptyProject=true` | `Ready` | PROJECT.md 明写「明确空项目」，未知显式 |
+| 空目录（空提交） | `featureCount=0`、`emptyProject=true` | `Ready` | 同上 |
+| 仅 `main.ts`（无 README） | `featureCount=1`、`emptyProject=false` | `Ready` | 同上 |
+| `README.md`+`src/mod.ts`（回归） | `featureCount=1`、`emptyProject=false` | `Ready` | 一轮既有形状不回归 |
+
+补充：`investigateWorkspace` 两次调用逐字相同；两个不同仓库的同内容根级项目得到**相同**的 `moduleKey='root'` 与 `featureId`（确定性）；「只有嵌套仓库的父仓库」也到达 Ready（同类死锁一并解除）。修复实现（`moduleKeyOf` 返回 `ROOT_MODULE_KEY='root'`；`emptyProject = features.length === 0`；非索引空时补一条显式 empty-project 观察）与 T9 记录一致。
+
+### 4.2 W4R1-02 [P2，一轮] 投影一句话摘要在任意 ASCII `.` 处截断 —— **已闭合（含残余，见 W4R2-04）**
+
+`firstSentence` 十例：`支持 v1.2 语义与 .ts 扩展名。后续…` → `支持 v1.2 语义与 .ts 扩展名`；`First sentence. Second sentence.` → `First sentence`；`支持 Node.js 运行时。` → `支持 Node.js 运行时`；`Supports Node.js.` → `Supports Node.js`；`全文结束.` → `全文结束`；`版本 1.2.3 已确认！下一句。` → `版本 1.2.3 已确认`；`A.B` 与无终止符句子保持不变。投影 `features/README.md` 索引行含完整 `支持 v1.2 语义与 .ts 扩展名`，且不含 `| 支持 v1 |`。残余：`见 e.g. 示例。` → `见 e.g`（英文缩写仍截断）、`SENTENCE_END` 的 `\n` 分支因先折叠空白而不可达 → 记为 W4R2-04 [P3]。
+
+### 4.3 W4R1-06 fail-open 面（一级标题充当固定小节） —— **已闭合**
+
+`# 用途` 替换 `## 用途` 后解析被拒（错误字段 `用途`）；`## 用途` 正常；`### 用途` 亦不接受（判据为严格二级）；重复二级小节仍报 duplicate。`renderReadme` 回读（一轮 35 例矩阵）无回归，说明渲染侧与解析侧级别一致。
+
+---
+
+## 5. Findings（W4R2-xx）
+
+### W4R2-01 [P1] 部分地图（正文预算耗尽）下「零候选能力」被当成「明确空项目」并静默 Ready（**阻断**）
+
+- **现象**：`generateCandidateKnowledge` 把 `emptyProject` 定义为 `features.length === 0`（`scan.ts:1290`），Ready 门禁 `feature-or-empty-project` 只判 `record.featureCount > 0 || record.emptyProject`（`initialize.ts:600`），**不看 `record.scanPartial`**。而候选能力只来自正文预算内的 `scan.bodyFiles`（`scan.ts:1260`），正文选择按 `readme → manifest → 构建测试入口 → 路由/模型 → 源码` 的层级排序（`scan.ts:753`）。因此当 readme 层文件多于正文预算（默认 40 个 / 512 KiB）时，代码文件全部被跳过，`features=0`，门禁走「明确空项目」分支。
+- **默认预算复现（`/tmp/wp04r2/probe3-realistic.mjs` M-2..M-5；41 包，每包 `README.md` + `src/index.ts` + `src/index.test.ts`，根另有 `README.md`）**：`indexTotal=207`、`bodyRead=40`、`bodyCategories=["readme"]`、`skipped=84`、`partial=true`、`unknownKinds=["budget-body-files"]`；`features=0`、`emptyProject=true`；`step` 直达 `Ready`（`done=true`），**blocker 列表为空**（对照组 4 包 monorepo：`features=4`、`emptyProject=false`、停在 `confirmation-required`）；`record.scanPartial=true`、`record.inferences=["empty-project:false"]`；`PROJECT.md` 写 `实现状态：absent（未实现，明确空项目）`、`主要模块` 为「无已观察模块」，同时「未知」节列出「正文文件预算用尽：…未读取 84 个候选文件」。
+- **小预算等价复现（`/tmp/wp04r2/probe2-newdefects.mjs` B-1..B-4）**：`README.md`+`ci/a.txt`+`ci/b.txt`+`src/main.ts`、`budget={maxBodyFiles:2}` → 正文仅 README 与 `ci/a.txt`，索引内含 `src/main.ts`，`features=0`、`emptyProject=true`、Ready、PROJECT.md 断言 absent。即缺陷与预算值无关，只看「预算内是否碰到代码层」。
+- **影响**：`context.md` §4 的 Ready 条件为「至少一个真实能力**或明确空项目状态**」；部分地图既非「有真实能力」也非「明确空项目」，门禁却按后者放行。`knowledge.md` §5 要求「达到预算输出部分地图和未知，**不声称全量理解**」，而 PROJECT.md 的 `absent（未实现，明确空项目）` 与推断 `empty-project`（`requiresConfirmation:false`）正是对全仓的实现状态下断言；副作用是**用户无需任何确认**即可让含代码的大型仓库以「未实现空项目」完成初始化。一轮修复前该形状是永久 `failed/ready-gate`（同族 P1），本次修复把「死锁」换成了「静默误判」，属新引入的 fail-open，落在 WP-04 退出条件（候选知识组件）与 AC-026 的验收面。
+- **最小修法（不得退回死锁）**：把「预算耗尽下的零能力」建成**显式、可处置**的状态，而不是复用 `emptyProject`——例如门禁改为 `featureCount>0 || (emptyProject && !record.scanPartial)` **并**为 `scanPartial && featureCount===0` 增加一种 blocker（如 `budget-partial`／`confirmation-required`），用户可「接受本次部分地图」或「申请下一批有理由的范围内调查」（`knowledge.md` §5 已有该路径）；同时 PROJECT.md 在 `scanPartial` 时改写为「本次预算内未观察到已实现能力（部分地图，未声称全量）」，删除 `absent（未实现，明确空项目）` 与 `empty-project` 免确认推断。**必须补的长期断言**：(i) 默认预算 41 包 monorepo 不得无阻断直达 Ready、且不得写 `absent`；(ii) 4 包对照仍产出候选能力并停在确认；(iii) 一轮三种根级形状与空目录/仅 README 形状**仍须** Ready（不得回归 W4R1-01）。
+
+### W4R2-02 [P2] `ROOT_MODULE_KEY='root'` 与真实顶层目录 `root/` 同键，两个模块被合并为一个候选 Feature
+
+- **现象**：`moduleKeyOf('main.ts') === moduleKeyOf('root/other.ts') === 'root'`（`scan.ts:1089` 对 <2 段路径返回 `'root'`；`scan.ts:1093` 对任意顶层目录名原样返回）。两者无法区分。
+- **证据（`/tmp/wp04r2/probe2-newdefects.mjs` A-1..A-4）**：`README.md`+`main.ts`+`root/other.ts` 只产出 **1** 个候选 Feature，`moduleKey='root'`、`name='root'`、`module='root'`，`sourceRefs` 同时含 `README.md`、`main.ts`、`root/other.ts`，`实现入口` 三条并列；`detectKnowledgeConflicts` 的 `conflict.moduleKey === moduleKey` / `moduleKeyOf(path) === moduleKey` 映射同样合并；对照（只有真实 `root/` 目录）也为 `root`，故碰撞静默发生、不报诊断。
+- **影响**：模块边界写错进候选知识（索引、CODE_MAP、Feature 文档、后续 Context 选择都会把两个模块当同一个能力），用户确认后错误固化。属局部质量问题（候选文档、`design=unconfirmed`、不影响 Ready 与 fail-closed 门禁），但建议在 WP-05 消费索引前修。
+- **建议**：改用不可能等于任何路径段的哨兵（如 `'.'` 或 `'(root)'`），或对真实顶层 `root/` 目录加后缀去重；补断言「根级源码 + 真实 `root/` 目录必须产出两个模块」。
+
+### W4R2-03 [P3] delta 记录卫生：`moduleKeyOf` 注释与两处不可达分支未同步
+
+- `scan.ts:1082` 仍写 `/** Module key of a repo-relative path, or `null` for a root-level file. */`，但函数已**永不返回 null**（对 `main.ts`/`root/other.ts`/`src/a/a.ts`/`''`/`a/b/c` 实测均非 null）；
+- `scan.ts:1261-1262` 的 `if (key === null) continue;` 已成死分支；`scan.ts:1130` 的 `?? null` 同样不可达。
+- 证据：`probe2-newdefects.mjs` D-1..D-3。建议同步注释与删除死分支（或把返回类型收窄为 `string`）。
+
+### W4R2-04 [P3] 摘要残余：英文缩写仍被截断，`\n` 终止分支不可达
+
+- `firstSentence('见 e.g. 示例。')` = `见 e.g`（点后接空格被判句末）；W4R1-02 的既定判据（「`.` 后接空白或行尾」）已实现且有断言，故按残余记；
+- `SENTENCE_END` 的 `\n` 分支在 `text.replace(/\s+/gu,' ')` 之后不可达：`firstSentence('第一行\n第二行')` = `第一行 第二行`（多行且无句号的 `用途` 会把整段作为摘要）。
+- 证据：`probe2-newdefects.mjs` F-1..F-3、`probe1-closures.mjs` 矩阵第 9 例。建议：若需支持缩写，用「点后接空白且前一词非单字母缩写/常见缩写表」或先按行取首行；并删掉不可达的 `\n` 分支或改为先按行切分。
+
+### W4R2-05 [P3] 记录订正不完整：T8 残余 3 的括注未随修复同步订正
+
+- 一轮要求「如采纳 (a)/(b)，同步订正残余 3 的『其他源文件层』表述，避免再次声称覆盖根级源码」。`implementation.md` T9 已新增根级模块说明（T9 修复项 1/2）并补了 W4R1-03 的承接登记（T9 承接 1，**记录面已闭合**），但 **T8 残余 3**（`implementation.md:63`）的括注仍为「否则仅有源码的旧项目无法产出可观察模块」——该层只对 ≥2 段路径生效，根级源码靠的是 `ROOT_MODULE_KEY`；单独读残余 3 仍可能被理解为该层已覆盖根级源码。建议订正该括注并指向 T9。
+- 另：`implementation.md` 未登记 W4R2-01/02（本轮发现），修复后应一并登记。
+
+### 一轮 P3 承接项复核（未重新编号）
+
+| 编号 | 复核结论（本轮实测） |
+|---|---|
+| W4R1-03 集成演练 | **记录面闭合**：T9 承接 1 明确留 WP-08 且 Test 须列 `not_covered`；integration 层确无 WP-04 文件（10 文件清单见 §2），与登记一致 |
+| W4R1-04 用错处置 API | **仍可复现**（`probe2` E-1）：`confirmation-required` 上调 `resolveBlocker` → `VALIDATION_ERROR` 且记录 `status='failed'`、`failure.kind='internal'`、`recoverable=false`，随后 `step` 恒 `failed/internal` |
+| W4R1-05 `requirement:<id>@<version>` 版本不校验 | **仍可复现**（`probe2` E-2）：`resolveSourceRef('requirement:R-1@99',{requirementIds:['R-1']})` → `{ok:true,version:'99'}`；未知 id 仍正确拒绝 |
+| W4R1-06 残余（池根散落 `requirement.json`、目录符号链接记 `kind:'file'`） | **仍可复现**（`probe2` E-3/E-4）：池根裸 `requirement.json` → `ok=true, errors=0, records=0`；`src/linked-dir → 外部目录` 记 `kind:'file'`+`symlink:true`。其 fail-open 面（一级标题）已闭合 |
+
+---
+
+## 6. 记录与实现一致性核对
+
+| 记录条目 | 核对结果 |
+|---|---|
+| T0：build 由 8 变 **10** workspace | 一致（`pnpm build` 10 个 `Done`） |
+| T9：`typecheck`/`lint` 0、`test:unit` **26 文件 / 420 用例**、`test:integration` 124、`build` 10 workspace | 一致（§2 原始日志；WP-04 自有 7 文件 / 131 用例单独重跑一致） |
+| T9 修复项 1/2：`moduleKeyOf` 返回 `root`；`emptyProject` = 未观察到候选 Feature，并显式记观察 | 代码一致（`scan.ts:80/1089/1233/1290-1297`）；行为见 §4.1。**副作用未登记** → W4R2-01/02 |
+| T9 修复项 3：`firstSentence` 判据改为「CJK/全角 或 后接空白/结尾的 ASCII 句点」 | 一致（`projection.ts:59`）；残余见 W4R2-04 |
+| T9 修复项 4：六段固定小节只认二级标题 | 一致（`feature-format.ts` 两处 `item.level === 2`）；`renderReadme` 回读无回归 |
+| T9 回归网：新增 3 + 2 + 1 例 | 一致（`git show fdbfdc4` 新增 5 例；unit 415→420；WP-04 126→131） |
+| T9 验证数字（420/124/10） | 一致（§2） |
+| T9 承接 1：W4R1-03 留 WP-08、Test `not_covered` | 一致（§2 integration 无 WP-04 文件） |
+| T9 承接 2/3/4：W4R1-04/05/06 残余 | 行为一致（§5 复核表）；**T8 残余 3 括注未订正** → W4R2-05 |
+| T8 残余 1（SQLite 落地留 WP-08）、2（无 Git 不回填 git ref）、4（confirmed 无 decision id 先报 invalid）、5（Writing 脏门禁过滤自写路径）、6（Provider/HTTP/Docker 不在本包） | 本轮未发现与代码矛盾之处；均属已登记承接 |
+| plan §2 写路径与不可写清单 | 一致：`fdbfdc4` 7 文件全部在允许集合内，`docs/**`、`contracts/**`、`storage/**`、`webui/**`、`docker/**` 零改动 |
+| plan §5 集成演练（真实 SQLite + 临时 Git 的端到端） | 仍不落地，但已由 T9 承接 1 显式登记 → 记录面一致 |
+| plan §7/T3「不复用旧决策引用」等无独立断言的表述 | 与一轮相同：视图按入参即时构造，未发现跨投影复用；因无可判定断言，不计为已验证项（覆盖边界见 §9） |
+
+---
+
+## 7. 计数与阻断判定
+
+| 严重度 | 数量 | 编号 | 阻断 |
+|---|---|---|---|
+| P0 | **0** | — | — |
+| P1 | **1** | W4R2-01 | **是** |
+| P2 | **1** | W4R2-02 | 否 |
+| P3 | **3** | W4R2-03、W4R2-04、W4R2-05 | 否 |
+| （承接复核） | 4 | W4R1-03（记录面闭合）、W4R1-04、W4R1-05、W4R1-06 残余 | 否 |
+
+| 阻断项 | 严重度 | 阻断内容 | 解除条件 |
+|---|---|---|---|
+| W4R2-01 | P1 | 部分地图（正文预算耗尽）零候选能力被当作「明确空项目」静默 Ready；默认预算 41 包 monorepo 写成 `absent（未实现，明确空项目）`，无确认、无 blocker，违反 `context.md` §4 Ready 条件与 `knowledge.md` §5「不声称全量理解」 | 按 §5 修法把「预算耗尽 + 零能力」变为显式可处置状态（不得复用 `emptyProject` 免确认）；PROJECT.md 不写 absent；补三条长期断言（默认预算大 monorepo 不得静默 Ready、4 包对照仍产出能力并确认、根级三形状与空目录/仅 README 仍 Ready） |
+
+---
+
+## 8. 能否进入独立 Test —— **不能**
+
+理由：W4R2-01 为 P1 且落在 WP-04 退出条件（候选知识）与 AC-026 的验收面；独立 Test 若按「含代码测试的旧项目」构造一个超过正文预算的仓库（41 包 monorepo 即最小自然形状），将稳定复现「静默 Ready + PROJECT.md 断言未实现」，Test 结论会被同一缺陷支配。修复轮最低要求：
+
+1. **修 W4R2-01（必须）**：区分「完整地图下确无能力」（可免确认的明确空项目）与「预算耗尽的部分地图」（显式 blocker，可由用户接受或申请下一批），并订正 PROJECT.md/推断措辞；不得放宽其余门禁（非法知识不发布/stale、断链按需求阻断、脏工作区、冲突不覆盖、交付 ref 不变仍须 fail-closed），也不得让 W4R1-01 的三种根级形状回归死锁。
+2. **建议同轮修（非阻断）**：W4R2-02（`root` 键碰撞）——在 WP-05 消费索引前修更省事；补 `moduleKeyOf` 注释与死分支（W4R2-03）；订正 T8 残余 3 括注并登记 W4R2-01/02（W4R2-05）；W4R2-04 可留 WP-05 前。
+3. **记录订正（必须）**：`implementation.md` 登记 W4R2-01/02 的处置与承接，并保留 W4R1-03..06 的既有登记。
+4. **Test 最小覆盖矩阵**：AC-025 空目录（授权前不建 `.git`）；AC-026 **根级三种形状 + 超预算大仓库**两种极端的对照（代码不移动、无 Requirement、超预算形状不得静默宣称 absent）；AC-027/028/029（无 Git 只读、脏工作区处置、中断按 Hash 恢复、冲突不覆盖、门禁篡改复核）；AC-040 非法知识（不发布 + stale + 断链按当前需求阻断，含「无需求范围不阻断」负例）；AC-086 正负例；AC-042 设计/代码冲突；AC-087/088/092/093 组件级（本地状态 + 真实临时 Git；SQLite/Core/UI 集成按 W4R1-03 归 WP-08 并在 Test 报告 `not_covered`）。
+
+---
+
+## 9. 方法与边界声明
+
+- 本轮只审阅 `fdbfdc4`（代码面等价于 `HEAD`）的仓库状态，不读取开发/Test 会话；全部结论可由 `/tmp/wp04r2/*.mjs` 与 `/tmp/wp04r2/contract-*.{log,txt}` 复现。冻结前后 `git status --porcelain` 为空（本报告写入前）。
+- **覆盖边界（未验证项，测试/后续包需承接）**：`feature_projection` 的 SQLite 落地与交付提交/CAS、需求池保存侧原子提交与 Context 加载同 revision（WP-08/WP-05）；`GitPort`/`FileSystemPort` 的真实提交事务与崩溃注入；HTTP/WS 接线（`project.initialize` 等）；真实 Provider 纵向；AC-039 的实际上下文选择接线（WP-05）；`views` 中「不复用旧决策引用」等无独立断言可判定的表述。
+- 本轮未做：跨平台/Windows 路径、超大仓库（>10000 索引条目）性能实测（仅以 `maxIndexEntries=2` 的小预算等价验证截断路径）、并发多进程同时写同一 `InitStateStore` 文件、`diagnoseLinks` 对非 Map 运行时的误用。
+- 严重度口径：`docs/rules/workflow.md` §6 —— P0 数据/安全或关键不可用、P1 错误行为/需求缺失、P2 局部质量/维护、P3 建议；P0/P1 阻断。
+
+## 文末打印（本轮取证汇总）
+
+- **结论：FAIL**（`0×P0`、`1×P1`、`1×P2`、`3×P3`；阻断项 **W4R2-01**）
+- 冻结点：`git rev-parse HEAD` = `479d07bc965354f326b9415347eacf38ee9644b3`；`git rev-parse HEAD^{tree}` = `bb4e8a3f9fe56a728287573e867623e633ae7051`
+- 被评审代码树：`fdbfdc4` → `13fa9de496581766f089d78aa8df80f2dfed2873`（`fdbfdc4 HEAD` 差异仅 `review.md` +205 行）
+- 报告写入后 `git status --porcelain` 最后一行 = ` M .agentdev/work/WP-04/review.md`
+- 契约命令：install/typecheck/lint/docs:check/test:unit/test:integration/build = **7/7 exit 0**（unit 26 文件 420 用例；integration 10 文件 124 用例；build 10 workspace；docs:check 15 文档/55 链接/94 验收用例）
+- 证据脚本与用例数（本轮）：`probe1-closures.mjs` 60/0、`probe2-newdefects.mjs` 21/0、`probe3-realistic.mjs` 5/0 = **86 例 0 失败**
+- 一轮脚本重跑（回归）：35/0、40/0（原 39/1）、43/0、76/1（原 75/1，失败项换为断言旧缺陷形状者）、23/4（原 20/3，同上）、14/2（原 14/0，失败项为断言旧缺陷者）= **231 例、7 处失败全部是「旧行为断言」，原 5 处失败全部翻正、无意外回归**
+
+---
+
+## 附一：第一轮报告（保留）
+
 # WP-04 独立 Review 报告（第一轮）
 
 - 评审对象：工作包 WP-04「知识与新旧项目」（`docs/delivery/implementation.md` WP-04；关联 AC-025–029、AC-037–040、AC-042、AC-086–088、AC-092、AC-093）
