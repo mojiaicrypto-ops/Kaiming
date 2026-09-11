@@ -1,6 +1,6 @@
 # WP-03 实现 Plan（直接协作与说明产物）
 
-- planVersion: 1
+- planVersion: 2
 - workId: WP-03
 - level: L2（新增 Core 产物/附件/预览模块与 `apps/daemon` HTTP 面；按 `docs/product/experience.md` §3、`docs/architecture/{data,protocol,execution}.md` 既有定义实现，不改产品语义）
 - authorization_ref: 用户目标轮次「继续」（2026-09-11）；上级授权为「我要完全实现这个产品，让你来实现」
@@ -10,6 +10,12 @@
 ## 1. goal
 
 让「先解释、再决定是否交付」这条路真实可用：Chief 在不创建 Requirement/Gate 的前提下回答并调查（assist/artifact，`level=none`），按需分派 analysis/artifact 专业 Run（独立 Session、独立 DispatchSpec）；产物落成可版本化的 Artifact（agent 产物绑定 Run、user 产物绑定 Attachment），HTML 说明可隔离预览与一次性下载；附件可先暂存、发送首条消息时原子绑定到新 Work，超限/过期/重复绑定都被显式拒绝；恶意 HTML 在预览路径被隔离策略挡住。真实 Provider 纵向与工具层 `artifact_write` 的执行接线不在本包（WP-10 / WP-07）。
+
+### planVersion 2 变更（授权来源：用户决定「AC-005/AC-006 必须在 WP-03 内完整实现」；2026-09-11）
+
+- 新增 `packages/domain/src/requests.ts`（确定性 Chief 路由：message → work items + 授权判定）与 `packages/core/src/messages.ts`（conversation.message.send 的事务实现）、`packages/core/src/identity.ts` 的 `userIdFromSubject`。
+- **判定边界（必须与 Review/Test 对齐的口径）**：`routeMessage` 是模型 Assessment（WP-04/WP-06）之前的确定性基线，按 `docs/rules/workflow.md` §1/§2 的**结构事实**判定（指令子句 = 修改动词 + 命名路径，且不含疑问/拒绝/假设/引用/陈述/完成体标记）。它**不承诺覆盖自然语言的全部表达**：未登记的措辞可能落到只读路线（fail-closed，代价是澄清一轮）或（在未登记的同义变更词 + 命名路径下）产生授权。真正语义分类由 WP-04/06 的模型 Assessment 接管；本包的责任是：正向覆盖文档化场景（明确修复/混合意图）、负向覆盖已登记的越权语料、并对任何不确定一律 fail-closed。
+- 残余风险的登记见 `implementation.md` T12/T13 与结算材料；Review/Test 应针对「已登记语料 + 边界声明」判定，而不是要求启发式覆盖任意新句式。
 
 ## 2. scope
 
