@@ -147,8 +147,9 @@ export class InstallationCredential {
     const path = join(stateDir, CREDENTIAL_FILE);
     if (existsSync(path)) {
       enforcePrivateMode(path);
-      const token = readFileSync(path, 'utf8').trim();
-      return { credential: new InstallationCredential(path, token) };
+      // The value is deliberately not retained: only the installing process may
+      // ever reveal it, and every later load verifies by reading the file.
+      return { credential: new InstallationCredential(path, undefined) };
     }
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     const token = randomBytes(INSTALLATION_TOKEN_BYTES).toString('base64url');

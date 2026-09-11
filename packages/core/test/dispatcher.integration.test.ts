@@ -188,12 +188,31 @@ describe('dispatcher validation', () => {
     });
   });
 
+  it('requires projectId for a project method and allows a global one', async () => {
+    // "Project方法必填projectId"（protocol.md §1）.
+    expect(
+      await dispatcher.dispatch({ v: 1, type: 'request', id: 'r', method: 'test.budget.get' }),
+    ).toMatchObject({ ok: false, error: { code: 'VALIDATION_ERROR' } });
+
+    const global = new CommandDispatcher({ projectId, store, mailbox, subject: SUBJECT });
+    global.register({
+      method: 'connection.hello',
+      kind: 'read',
+      scope: 'global',
+      handle: () => ({ protocolVersion: 1 }),
+    });
+    expect(
+      await global.dispatch({ v: 1, type: 'request', id: 'r2', method: 'connection.hello' }),
+    ).toMatchObject({ ok: true, result: { protocolVersion: 1 } });
+  });
+
   it('answers a read without an idempotency key', async () => {
     const response = await dispatcher.dispatch({
       v: 1,
       type: 'request',
       id: 'req-read',
       method: 'test.budget.get',
+      projectId,
       params: {},
     });
     expect(response).toMatchObject({ ok: true, id: 'req-read' });

@@ -8,6 +8,8 @@
  */
 import { CORE_SCHEMA_SQL, IMMUTABILITY_SQL } from './schema.js';
 import { nowIso, sha256 } from './ids.js';
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { StorageError } from './errors.js';
 import { withTransaction, type SqliteDatabase } from './sqlite.js';
 
@@ -105,7 +107,11 @@ export function verifyMigrations(
 export interface RunMigrationsOptions {
   /** Receives a consistent copy path before any pending migration runs. */
   readonly backup?: (destination: string) => void;
-  /** Overrides the backup path (tests use a temp directory). */
+  /**
+   * Backup destination. With a custom `backup` hook the hook writes it; without
+   * one, `backupDatabase` is used directly, so a caller cannot skip the copy by
+   * forgetting the hook.
+   */
   readonly backupPath?: string;
   readonly now?: () => string;
 }
@@ -136,6 +142,10 @@ export function runMigrations(
   if (options.backup !== undefined) {
     backupPath = options.backupPath ?? `${String(currentVersion)}.backup`;
     options.backup(backupPath);
+  } else if (options.backupPath !== undefined) {
+    // No caller-supplied hook: still take the documented pre-upgrade copy.
+    backupPath = options.backupPath;
+    backupDatabase(db, backupPath);
   }
 
   const now = options.now ?? nowIso;
@@ -176,5 +186,6 @@ export function runMigrations(
  */
 export function backupDatabase(db: SqliteDatabase, destination: string): void {
   if (db.name === ':memory:') return;
+  mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
   db.prepare('VACUUM INTO ?').run(destination);
 }

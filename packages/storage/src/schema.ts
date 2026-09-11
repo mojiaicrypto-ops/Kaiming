@@ -55,7 +55,13 @@ export type SchemaTable = (typeof SCHEMA_TABLES)[number];
  * trigger blocks UPDATE only. Snapshots and user actions can never be rewritten
  * or deleted.
  */
-export const UPDATE_BLOCKED_TABLES = ['event', 'snapshot', 'user_action'] as const;
+export const UPDATE_BLOCKED_TABLES = [
+  'event',
+  'snapshot',
+  'user_action',
+  // "assessment — 不可变路由记录；每次重评是新行"（data.md §2）.
+  'assessment',
+] as const;
 export const DELETE_BLOCKED_TABLES = ['snapshot', 'user_action'] as const;
 /** @deprecated kept for callers that only need the update-blocked set. */
 export const IMMUTABLE_TABLES = UPDATE_BLOCKED_TABLES;

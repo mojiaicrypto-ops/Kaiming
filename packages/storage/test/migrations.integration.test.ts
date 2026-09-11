@@ -381,6 +381,21 @@ describe('database-level invariants', () => {
        VALUES ('018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e70', ?, 1, ?, ?, '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e71', 'work.pause', '{}', ?)`,
     ).run(PROJECT_ID, '2026-09-11T00:00:00.000Z', '2026-09-11T00:00:00.000Z', 'b'.repeat(64));
 
+    // An assessment references a Work, which references a Budget.
+    db.prepare(
+      `INSERT INTO budget (id, project_id, version, created_at, updated_at, work_id, token_limit, tokens_used, tokens_reserved, active_time_limit, active_time_used, repair_limit, repair_used, cost_known)
+       VALUES ('018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e82', ?, 1, ?, ?, '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e81', 1000, 0, 0, 60, 0, 3, 0, 1)`,
+    ).run(PROJECT_ID, '2026-09-11T00:00:00.000Z', '2026-09-11T00:00:00.000Z');
+    db.prepare(
+      `INSERT INTO work (id, project_id, version, created_at, updated_at, intent, purpose, level, goal, scope, source_ref, status, blocker_ids, budget_id, policy_revision)
+       VALUES ('018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e81', ?, 1, ?, ?, 'delivery', 'purpose', 'L2', 'goal', '{"readPaths":[],"writePaths":[],"operations":[],"networkTargets":[]}', '{"kind":"message","id":"018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e60","version":"1"}', 'running', '[]', '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e82', 1)`,
+    ).run(PROJECT_ID, '2026-09-11T00:00:00.000Z', '2026-09-11T00:00:00.000Z');
+    db.prepare(
+      `INSERT INTO assessment (id, project_id, version, created_at, updated_at, work_id, intent, level, semantic_impact, risk_flags, uncertainties, policy_revision, reason)
+       VALUES ('018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e80', ?, 1, ?, ?, '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e81', 'delivery', 'L2', 1, '[]', '[]', 1, 'bounded change')`,
+    ).run(PROJECT_ID, '2026-09-11T00:00:00.000Z', '2026-09-11T00:00:00.000Z');
+    // A re-assessment is a new row, never an edit (data.md §2).
+    expect(() => db.prepare(`UPDATE assessment SET level = 'L1'`).run()).toThrow(/immutable/);
     expect(() => db.prepare(`UPDATE event SET name = 'x'`).run()).toThrow(/immutable/);
     expect(() => db.prepare(`UPDATE snapshot SET blob_path = 'x'`).run()).toThrow(/immutable/);
     expect(() => db.prepare(`UPDATE user_action SET action = 'x'`).run()).toThrow(/immutable/);

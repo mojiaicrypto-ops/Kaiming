@@ -15,7 +15,7 @@
 - `system.ts`：artifact（agent/user 归属约束）、command（幂等账本）、event、outbox、operation、feature_projection。
 - `structures.ts`：Assessment、ContextSelection、Profile、ConfigLimits/ConfigPatch、ProviderInput/ModelDescriptor、Professional/Chief/DispatchSpec、DispatchSnapshot、ProductDefinition、Plan/CompactPlan、CheckResult、Review/Test/SettlementResult、Verification/CompletionManifest、StageResult。
 
-证据：`packages/contracts/test/entities.test.ts` — 11 用例，含"覆盖 `data.md` §2 全部 28 张表"的表清单断言、每表最小合法行、每表未声明字段拒绝，以及逐条文档约束负例（message_body 归属、finding taskId、grant scope、artifact 归属、budget 上限、requirement 生命周期、枚举/路径/Hash/时间格式）。
+证据：`packages/contracts/test/entities.test.ts` — 12 用例，含"覆盖 `data.md` §2 全部 28 张表"的表清单断言、每表最小合法行、每表未声明字段拒绝，以及逐条文档约束负例（message_body 归属、finding taskId、grant scope、artifact 归属、budget 上限、requirement 生命周期、枚举/路径/Hash/时间格式）。
 
 ### T2 packages/domain（完成）
 
@@ -108,13 +108,33 @@
 
 证据：`packages/core/test/requirements.integration.test.ts` — 8 用例：建行与 portableRef、绑定本地 Work、**同记录重复导入不产生第二次写入**、版本推进刷新投影、同版本异内容冲突且行未变、降级冲突、非法记录不落库、metadata/record Hash 分离。
 
-## 2. 尚未完成（下一轮）
-- T6：EventHub 与订阅（快照+C 水位、replay/snapshot、ack、RESYNC_REQUIRED、慢连接软硬限）。
-- T7：连接认证（安装凭证 0600 Bearer、会话 cookie/CSRF/Origin、24h 过期、登录限速）与 Project 身份（canonical realpath、git toplevel、嵌套仓库排除、relocate 别名）。
-- T8：需求投影幂等/冲突的存储层实现（判定函数已在 domain）。
-- T9：失败测试证据汇总（丢应答重试、冲突键、慢连接、迁移失败、长操作不阻塞均已实现，待独立复跑）、独立 Review/Test、`docs/INDEX.md` 更新与结算文档。
+## 2. 独立 Review 发现与处置（2026-09-11）
 
-`packages/core` 已实现邮箱与命令分发（T5）；EventHub、连接认证与 Project 身份（T6/T7）尚未实现。
+首次独立 Review（`.agentdev/work/WP-01/review.md`，对象 tree `196f56ff…`）判定 **FAIL**，2 项 P1 阻断与 12 项 P2/P3。处置如下（全部已修复并补测，复评见 `review.md` 追加小节）：
+
+| 编号 | 级别 | 问题 | 处置 |
+|---|---|---|---|
+| RE-01 | P1 | `portableRef.path` 写成 `requirements/<id>/requirement.json`（单文件、缺前缀） | 改为目录 `.agentdev/requirements/<id>`（`data.md` §6、`requirements.md` §1）；`sourceRef` 同步指向目录并携带 revision/hash；测试期望随之修正 |
+| RE-02 | P1 | 需求导入的行写入与事件写入不在同一事务 | `RequirementProjection.import` 整体包进 `withTransaction`；新增"事件写入失败则行不存在、重试可成功"用例 |
+| RE-03 | P2 | `assessment` 未按文档设为不可变 | 加入 `UPDATE_BLOCKED_TABLES`，迁移测试新增"重评必须是新行"负例 |
+| RE-04 | P2 | 迁移前备份仅在显式注入回调时发生 | `runMigrations` 在给定 `backupPath` 而无回调时直接 `backupDatabase`；`ProjectStore.open` 默认 `<stateDir>/backups/pre-migration.sqlite`；补默认路径用例 |
+| RE-05 | P2 | metadataHash 取再序列化结果而非文件字节 | `metadataHashOf/recordHashOf` 支持传入 `rawMetadata` 原始字节（Git 导入路径）；补字节 Hash 用例 |
+| RE-06 | P2 | Task 转换表缺 `review→develop`、`test→develop` | 依 `workflow.md` §5.2 补入并加断言 |
+| RE-07 | P2 | 重新加载凭证时仍保留明文 token，`revealOnce()` 可再次取回 | 加载路径不再保留明文；测试断言重载后 `revealOnce()` 为 undefined |
+| RE-08 | P2 | Project 方法不强制 `projectId` | `OperationDefinition.scope`（默认 `project`）区分全局/项目方法；缺 `projectId` 返回 VALIDATION_ERROR，补 `connection.hello` 全局方法用例 |
+| RE-09 | P2 | 实现记录自相矛盾、用例计数过时 | 本节即修正；用例计数按实测更新 |
+| RE-10 | P3 | dispatcher 死三元 | 删除 |
+| RE-11 | P3 | 文档内部不一致：`project.create` 要求 name 但 project 表无 name 字段 | 记为 Discovery（DC-18），归 WP-09 产品/协议处置 |
+| RE-12 | P3 | `planSchema` 未表达非 L1 需 productRef、L3 rollback 非空 | 记为 Discovery（DC-19），归 WP-02/WP-06 Gate 落地 |
+| RE-13 | P3 | `operation.kind` 用自由字符串，与 DDL 七值枚举不一致 | 改为 `operationKindSchema` |
+| RE-14 | P3 | EventHub 把任意读取异常都当 `RESYNC_REQUIRED` | 仅 `ResyncRequiredError` 转换，其余原样抛出；补负例用例 |
+
+## 2.1 尚未完成（后续工作包）
+
+- WP-09：`project.open/clone/create`、`connection.hello` 注册与真实 WS 传输绑定、`test:e2e`。
+- WP-10：真实 Provider 纵向运行、`test:acceptance`/`test:live`、跨服务器需求往返回归。
+- WP-04/WP-08：需求 Git 往返（目录读写、ignore 检查、`REQUIREMENT_PATH_IGNORED`/`LEGACY_REQUIREMENT_FORMAT`）。
+- WP-01 自身任务 T1–T8 已完成，T9 的独立 Review/Test 与结算见 `review.md`、`test-report.md`、`settlement.md`。
 
 ## 3. 命令证据（2026-09-11）
 

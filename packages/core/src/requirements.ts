@@ -12,6 +12,7 @@ import { portableRequirementSchema } from '@agentdev/contracts';
 import {
   requirementRecordHash,
   sha256,
+  withTransaction,
   type EntityRepository,
   type ProjectStore,
 } from '@agentdev/storage';
@@ -23,9 +24,15 @@ import {
   type RequirementIdentity,
 } from '@agentdev/domain';
 
-/** Directory layout is fixed by `requirements.md` §2. */
-export const REQUIREMENT_RECORD_PATH = (id: string): string =>
-  `requirements/${id}/requirement.json`;
+/**
+ * Requirement records live in `.agentdev/requirements/<id>/`, and the projection
+ * stores the **directory**, not the JSON file (`data.md` §6, `requirements.md` §1).
+ */
+export const REQUIREMENT_RECORD_DIR = (id: string): string => `.agentdev/requirements/${id}`;
+
+/** The metadata file inside that directory. */
+export const REQUIREMENT_RECORD_FILE = (id: string): string =>
+  `${REQUIREMENT_RECORD_DIR(id)}/requirement.json`;
 
 export interface ImportRequirementInput {
   /** The parsed `requirement.json` plus `content.md`, or the raw record. */
@@ -36,6 +43,14 @@ export interface ImportRequirementInput {
   readonly workId?: string;
   /** Set when the record was verified as committed to Git. */
   readonly recordCommitted?: boolean;
+  /**
+   * Raw `requirement.json` bytes.
+   *
+   * `requirements.md` §6 hashes the file as stored, so the Git import path passes
+   * the exact bytes; without them the canonical JSON form of the parsed record is
+   * hashed instead, which is only valid for a record this process wrote.
+   */
+  readonly rawMetadata?: string;
 }
 
 export interface RequirementConflict {
@@ -57,16 +72,19 @@ export type ImportRequirementOutcome =
     }
   | { readonly verdict: 'conflict'; readonly conflict: RequirementConflict };
 
-/** Hashes a metadata object: everything except the separately hashed body. */
-export function metadataHashOf(metadata: RequirementMetadata): string {
-  return sha256(canonicalJson(metadata));
+/**
+ * Hashes the metadata: the exact `requirement.json` bytes when the caller has
+ * them, otherwise the canonical JSON of the parsed object.
+ */
+export function metadataHashOf(metadata: RequirementMetadata, rawMetadata?: string): string {
+  return sha256(rawMetadata ?? canonicalJson(metadata));
 }
 
-/** The record hash: metadata and body hashes combined (`requirements.md` §4). */
-export function recordHashOf(record: PortableRequirement): string {
+/** The record hash: metadata and body hashes combined (`requirements.md` §6). */
+export function recordHashOf(record: PortableRequirement, rawMetadata?: string): string {
   const { contentMarkdown, ...metadata } = record;
   void contentMarkdown;
-  return requirementRecordHash(metadataHashOf(metadata), record.contentHash);
+  return requirementRecordHash(metadataHashOf(metadata, rawMetadata), record.contentHash);
 }
 
 /**
@@ -84,7 +102,18 @@ export class RequirementProjection {
     this.rows = options.store.requirements;
   }
 
+  /**
+   * Applies one record.
+   *
+   * The row write and its event share one immediate transaction, so a crash can
+   * never leave a projection without its event (or the inverse) — the same
+   * boundary `reliability.md` §1 requires of every business command.
+   */
   import(input: ImportRequirementInput): ImportRequirementOutcome {
+    return withTransaction(this.store.db, () => this.apply(input));
+  }
+
+  private apply(input: ImportRequirementInput): ImportRequirementOutcome {
     const parsed = portableRequirementSchema.safeParse(input.record);
     if (!parsed.success) {
       const issues = parsed.error.issues
@@ -93,7 +122,7 @@ export class RequirementProjection {
       throw new RequirementRecordError('VALIDATION_ERROR', `invalid requirement record: ${issues}`);
     }
     const record = parsed.data;
-    const recordHash = recordHashOf(record);
+    const recordHash = recordHashOf(record, input.rawMetadata);
     const local = this.rows.find(record.id);
     const incomingIdentity: RequirementIdentity = { recordVersion: record.version, recordHash };
     const localIdentity: RequirementIdentity | undefined =
@@ -198,12 +227,18 @@ export class RequirementProjection {
         : { previousLifecycle: record.previousLifecycle }),
       // The record itself is a Git fact, and an imported record alone carries no
       // local evidence yet.
-      sourceRef: { kind: 'git', id: record.id, version: String(record.version) },
+      sourceRef: {
+        kind: 'git',
+        id: record.id,
+        version: input.portableRef?.revision ?? 'working-tree',
+        path: REQUIREMENT_RECORD_DIR(record.id),
+        hash: recordHash,
+      },
       recordVersion: record.version,
       portableRef: {
         // `portableRef.hash` is the record hash: it is what conflict detection
         // compares, and the row has no second hash column (`data.md` §2).
-        path: input.portableRef?.path ?? REQUIREMENT_RECORD_PATH(record.id),
+        path: input.portableRef?.path ?? REQUIREMENT_RECORD_DIR(record.id),
         revision: input.portableRef?.revision ?? 'working-tree',
         hash: recordHash,
       },

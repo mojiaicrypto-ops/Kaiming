@@ -16,6 +16,7 @@ import {
   timeSchema,
 } from '../primitives.js';
 import { artifactKindSchema, roleSchema } from '../enums.js';
+import { operationKindSchema } from './run.js';
 import {
   entityBaseShape,
   idRefSchema,
@@ -131,7 +132,8 @@ export const operationSchema = z.strictObject({
   workId: idRefSchema.optional(),
   requirementId: idRefSchema.optional(),
   sourceRef: sourceRefSchema,
-  kind: z.string().min(1),
+  // The eight operation kinds are a closed set (`data.md` §2, matching the DDL).
+  kind: operationKindSchema,
   state: operationStateSchema,
   expectedHead: z.string().min(1).optional(),
   candidateRevision: z.string().min(1).optional(),

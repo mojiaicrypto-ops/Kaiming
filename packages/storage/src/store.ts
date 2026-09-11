@@ -48,6 +48,11 @@ import { closeDatabase, openDatabase, type SqliteDatabase } from './sqlite.js';
 import { TABLES } from './tables.js';
 import { nowIso, projectIdFromRoot, uuidv7 } from './ids.js';
 
+/** Pre-migration copy location when the caller does not choose one. */
+export function defaultBackupPath(dataDir: string): string {
+  return join(dataDir, 'backups', 'pre-migration.sqlite');
+}
+
 export interface OpenProjectStoreOptions {
   /** Project state directory; holds `project.sqlite` and `blobs/`. */
   readonly dataDir: string;
@@ -158,7 +163,12 @@ export class ProjectStore {
   /** Opens, migrates and returns the store. */
   static open(options: OpenProjectStoreOptions): ProjectStore {
     const db = openDatabase({ file: join(options.dataDir, 'project.sqlite') });
-    const migration = runMigrations(db, undefined, options.migrations ?? {});
+    const migration = runMigrations(db, undefined, {
+      // `data.md` §5 requires a usable backup before a version upgrade. The daemon
+      // has no separate backup target, so the copy sits beside the live database.
+      backupPath: defaultBackupPath(options.dataDir),
+      ...options.migrations,
+    });
     const projectId =
       options.projectId ??
       (options.canonicalRoot === undefined ? undefined : projectIdFromRoot(options.canonicalRoot));

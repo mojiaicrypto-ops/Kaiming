@@ -324,6 +324,19 @@ describe('blob store', () => {
 });
 
 describe('project store wiring', () => {
+  it('takes a pre-migration backup by default (data.md §5)', () => {
+    const freshDir = mkdtempSync(join(tmpdir(), 'agentdev-backup-'));
+    const fresh = Store.open({ dataDir: freshDir, canonicalRoot: ROOT });
+    try {
+      expect(fresh.migration.applied).toEqual([1]);
+      expect(fresh.migration.backupPath).toBe(join(freshDir, 'backups', 'pre-migration.sqlite'));
+      expect(existsSync(fresh.migration.backupPath as string)).toBe(true);
+    } finally {
+      fresh.close();
+      rmSync(freshDir, { recursive: true, force: true });
+    }
+  });
+
   it('runs migrations on open and exposes repositories', () => {
     expect(store.migration.applied).toEqual([1]);
     expect(store.projects.get(projectId).root).toBe(ROOT);

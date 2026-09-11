@@ -12,7 +12,7 @@
  * reports its scan watermark, and a truncated cursor is `RESYNC_REQUIRED`.
  */
 import type { Event, JsonObject } from '@agentdev/contracts';
-import type { ProjectStore } from '@agentdev/storage';
+import { ResyncRequiredError, type ProjectStore } from '@agentdev/storage';
 import { ProtocolError } from './errors.js';
 
 export const SCOPE_KINDS = ['summary', 'conversation', 'work', 'run'] as const;
@@ -264,8 +264,10 @@ export class EventHub {
       let missed: Event[];
       try {
         missed = this.store.events.readAfter(input.afterCursor, { limit: this.batchSize });
-      } catch {
-        // The cursor fell out of the retention window: the client must resnapshot.
+      } catch (error) {
+        // Only a truncated cursor means "resnapshot"; anything else is a real
+        // storage failure and must not be disguised as a resync request.
+        if (!(error instanceof ResyncRequiredError)) throw error;
         this.subscriptions.delete(subscriptionId);
         throw new ProtocolError(
           'RESYNC_REQUIRED',
@@ -333,7 +335,8 @@ export class EventHub {
       events = this.store.events
         .readAfter(subscription.ackedCursor, { limit: this.batchSize })
         .filter((event) => matchesScope(event, subscription.scope));
-    } catch {
+    } catch (error) {
+      if (!(error instanceof ResyncRequiredError)) throw error;
       throw new ProtocolError('RESYNC_REQUIRED', 'subscription cursor was truncated', {
         details: { oldestCursor: this.store.events.oldestCursor() },
       });

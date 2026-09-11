@@ -45,6 +45,11 @@ export interface NewOutboxEntry {
 export interface OperationDefinition<P = JsonObject, R = unknown> {
   readonly method: string;
   readonly kind: 'read' | 'write';
+  /**
+   * `project` methods must carry `projectId`; only `connection.*`-style global
+   * methods may omit it (`protocol.md` §1). Defaults to `project`.
+   */
+  readonly scope?: 'project' | 'global';
   /** Validated before authorization, so a handler never sees a bad shape. */
   readonly params?: ContractSchema<P>;
   /** Returns a `ProtocolError` to refuse, or nothing to allow. */
@@ -163,7 +168,10 @@ export class CommandDispatcher {
     }
 
     // A Project method never reaches another Project's runtime; a borrowed id is
-    // indistinguishable from a missing one (`protocol.md` §1).
+    // indistinguishable from a missing one, and a Project method must carry one.
+    if ((definition.scope ?? 'project') === 'project' && envelope.projectId === undefined) {
+      throw new ProtocolError('VALIDATION_ERROR', `${definition.method} requires projectId`);
+    }
     if (envelope.projectId !== undefined && envelope.projectId !== this.options.projectId) {
       throw new ProtocolError('NOT_FOUND', `project ${envelope.projectId} is not open here`);
     }
@@ -243,7 +251,7 @@ export class CommandDispatcher {
     }
 
     const outcome = await admission.completion;
-    return outcome.replayed ? outcome.response : outcome.response;
+    return outcome.response;
   }
 
   /**

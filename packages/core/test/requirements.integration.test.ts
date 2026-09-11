@@ -96,7 +96,14 @@ describe('requirement projection', () => {
     });
     // The record hash is the conflict key and lives in portableRef.hash.
     expect(outcome.row?.portableRef.hash).toBe(outcome.recordHash);
-    expect(outcome.row?.portableRef.path).toBe(`requirements/${REQUIREMENT_ID}/requirement.json`);
+    // The projection points at the requirement *directory*, not the JSON file.
+    expect(outcome.row?.portableRef.path).toBe(`.agentdev/requirements/${REQUIREMENT_ID}`);
+    expect(outcome.row?.sourceRef).toMatchObject({
+      kind: 'git',
+      id: REQUIREMENT_ID,
+      path: `.agentdev/requirements/${REQUIREMENT_ID}`,
+      hash: outcome.recordHash,
+    });
     expect(store.projects.find(projectId)).toBeDefined();
     expect(store.events.latestForEntity(REQUIREMENT_ID)?.name).toBe('requirement.imported');
   });
@@ -188,6 +195,34 @@ describe('requirement projection', () => {
     );
     expect(store.requirements.list()).toEqual([]);
     expect(store.events.latestCursor()).toBe(0);
+  });
+
+  it('hashes the exact requirement.json bytes when the caller supplies them', () => {
+    const raw = '{\n  "schemaVersion": 1,\n  "id": "' + REQUIREMENT_ID + '"\n}';
+    const outcome = projection.import({ record: record(), rawMetadata: raw });
+    if (outcome.verdict === 'conflict') throw new Error('unexpected conflict');
+    expect(outcome.recordHash).toBe(recordHashOf(record() as never, raw));
+    expect(outcome.recordHash).not.toBe(recordHashOf(record() as never));
+    expect(metadataHashOf(record() as never, raw)).toBe(sha256(raw));
+    expect(outcome.row?.portableRef.hash).toBe(outcome.recordHash);
+  });
+
+  it('writes the row and its event in one transaction', () => {
+    // A failing event append must leave no projection behind: the caller sees the
+    // failure and the row is absent, so a retry imports cleanly.
+    const failing = new RequirementProjection({
+      store: {
+        ...store,
+        events: {
+          append: () => {
+            throw new Error('event log unavailable');
+          },
+        },
+      } as unknown as ProjectStore,
+    });
+    expect(() => failing.import({ record: record() })).toThrowError('event log unavailable');
+    expect(store.requirements.find(REQUIREMENT_ID)).toBeUndefined();
+    expect(projection.import({ record: record() }).verdict).toBe('new');
   });
 
   it('hashes metadata separately from the body', () => {

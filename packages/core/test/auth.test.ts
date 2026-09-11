@@ -47,6 +47,8 @@ describe('installation credential', () => {
     // A second process loads the credential but never sees the value.
     const reloaded = create();
     expect(reloaded.createdToken).toBeUndefined();
+    // Neither the service nor the credential can reproduce the secret.
+    expect(reloaded.credential.revealOnce()).toBeUndefined();
     expect(reloaded.credential.matches(token)).toBe(true);
     expect(reloaded.credential.matches('not-the-token')).toBe(false);
   });

@@ -230,6 +230,15 @@ describe('scope change (AC-060)', () => {
     );
   });
 
+  it('does not disguise a storage failure as a resync request', () => {
+    const subscription = hub.subscribe({ connectionId: 'c1', scope: { kind: 'summary' } });
+    // Dropping the table is a real storage failure, not a truncated cursor.
+    store.db.exec('DROP TABLE event');
+    expect(() => hub.poll(subscription.subscriptionId)).toThrowError(
+      expect.not.objectContaining({ code: 'RESYNC_REQUIRED' }),
+    );
+  });
+
   it('validates scope shape and removes subscriptions', () => {
     expect(() => hub.subscribe({ connectionId: 'c1', scope: { kind: 'work' } })).toThrowError(
       expect.objectContaining({ code: 'VALIDATION_ERROR' }),

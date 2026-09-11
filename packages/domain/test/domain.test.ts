@@ -114,6 +114,10 @@ describe('state machines (workflow.md §5)', () => {
     expect(canTransitionTask('review', 'done')).toBe(true);
     expect(canTransitionTask('done', 'ready')).toBe(true);
     expect(canTransitionTask('ready', 'done')).toBe(false);
+    // A failed gate reopens the task for the owning role.
+    expect(canTransitionTask('review', 'develop')).toBe(true);
+    expect(canTransitionTask('test', 'develop')).toBe(true);
+    expect(canTransitionTask('test', 'review')).toBe(false);
   });
 
   it('treats terminal Run states as absorbing and only reopens recoverable ones', () => {

@@ -42,9 +42,11 @@ export const REQUIREMENT_TRANSITIONS = {
 export const TASK_TRANSITIONS = {
   ready: ['develop'],
   develop: ['review'],
-  review: ['test', 'done'],
-  test: ['done'],
-  // Review/Test failure and invalidation both return to `ready`/`develop`.
+  // "Review或Test失败返回develop"（workflow.md §5.2），通过则前进；L1 与文档路线
+  // review 直接 done。
+  review: ['test', 'done', 'develop'],
+  test: ['done', 'develop'],
+  // 引用的产品/Plan/代码失效时重开 ready。
   done: ['ready'],
 } as const satisfies TransitionTable<TaskStage>;
 
