@@ -1,14 +1,14 @@
 # WP-03 实现记录（直接协作与说明产物）
 
-- planVersion: 5（`.agentdev/work/WP-03/plan.md`）
+- planVersion: 6（`.agentdev/work/WP-03/plan.md`）
 - 依赖：WP-02（结算提交 `f9b61e0`，验证代码树 `cbf7471`）
 
 ## 记录口径订正（第十七轮 Review W3R17-04 处理；适用于全部历史条目）
 
-1. **绝对表述的范围**：本文件 T11～T25 中的「一律/永不/按结构关闭/永不下发写授权」只在**当时已登记语料范围内**成立。第十七轮以「否定出现在引述/报告/前提中」的框架句式、第十八轮以「解释领起子句里引用未登记否定词」的框架句式先后证伪了无限定的版本；现行为口径以本文件 **T26/T27/T28** 与 `plan.md` **planVersion 5** 为准，历史条目保留原文不改写。
-2. **「外置语料 40 条 0 fail-open」**：指会话外 `/tmp` 下的自建脚本（**不在仓库**，不可从仓库复现）。仓库内可复现的语料是 `packages/domain/test/domain.test.ts`；按评审计数法（`/tmp/w3r18/probe4-registered.mjs`：只提取各 `for (const body of [` / `for (const [body, expected] of [` 块中的字符串字面量，不 import 产品测试文件）实测并重放 **187 例 0 偏差**：必须授权 14、拒绝纠正接续 10、多命令 4、必须只读 159（第十九轮另一实现 `/tmp/w3r19/probe3-registered.mjs` 计 189 例、同样 0 偏差；两者差异只在计数实现，均不 import 产品测试）。历史数字 14/9/3/141（第十七轮）与 14/8/4/152（第十八轮）因语料与计数法变化而作废，现按上述方法固定。另有 `apps/daemon/test/server.test.ts`、`packages/core/test/*` 的 HTTP/Core 断言。
+1. **绝对表述的范围**：本文件 T11～T25 中的「一律/永不/按结构关闭/永不下发写授权」只在**当时已登记语料范围内**成立。第十七轮以「否定出现在引述/报告/前提中」的框架句式、第十八轮以「解释领起子句里引用未登记否定词」的框架句式先后证伪了无限定的版本；现行为口径以本文件 **T26/T27/T28/T29** 与 `plan.md` **planVersion 6** 为准，历史条目保留原文不改写。
+2. **「外置语料 40 条 0 fail-open」**：指会话外 `/tmp` 下的自建脚本（**不在仓库**，不可从仓库复现）。仓库内可复现的语料是 `packages/domain/test/domain.test.ts`；按评审计数法（`/tmp/w3r18/probe4-registered.mjs`：只提取各 `for (const body of [` / `for (const [body, expected] of [` 块中的字符串字面量，不 import 产品测试文件）实测并重放 **205 例 0 偏差**：必须授权 14、拒绝纠正接续 10、多命令 4、必须只读 177（第十九轮另一实现 `/tmp/w3r19/probe3-registered.mjs` 在同批语料上同样 0 偏差；两者差异只在计数实现，均不 import 产品测试）。历史数字 14/9/3/141（第十七轮）、14/8/4/152（第十八轮）、14/10/4/159（第十九轮）因语料与计数法变化而作废，现按上述方法固定。另有 `apps/daemon/test/server.test.ts`、`packages/core/test/*` 的 HTTP/Core 断言。
 3. **陈旧待办作废**：「`../` 越界改为 `VALIDATION_ERROR`」不再适用。现行为是**只读 + 澄清**（HTTP 202、零授权行、`authorizationId=null`、无 500），`domain.test.ts` 已覆盖 `../`、`/etc/`、`~/.ssh/` 三例。
-4. **`plan.md` 版本**：`planVersion` 已由 2 升至 **5**，登记 T21～T28 的实际代价、第十七/十八轮 P1/P2 的闭合口径与新增 fail-closed 代价。
+4. **`plan.md` 版本**：`planVersion` 已由 2 升至 **6**，登记 T21～T29 的实际代价、第十七/十八轮 P1/P2 的闭合口径与新增 fail-closed 代价。
 
 ## T1 Artifact 存储与版本链
 
@@ -343,3 +343,14 @@
 - 验证（本轮实跑）：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**（19 files)；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。
 - 独立复核证据（评审第十八/十九轮脚本，消费本轮 build）：`/tmp/w3r19/probe1-cross.mjs` **10 357 例 deviations 1（唯一为 `特别修改 X` 的探针期望冲突：该探针把 `特别` 当作 `别` 的同形词期望只读，而 `特别修改 X` 是登记正例，按登记语料保留授权）、scope-expansion 0**；`probe1b-open-forms.mjs` **open forms none**；`probe2-live.mjs`（真实 HTTP + 真实 Orchestrator）**fail-open 0、误拒 0、documented positive 0 偏差**；`/tmp/w3r18/probe2b-negation-gap.mjs` **opens by neg: []**；`probe2-frame-hole.mjs` 573 句 **open 0**；`probe3-registered.mjs` 189 例 0 偏差；`/tmp/w3r17/probe2-framing.mjs` 31 句 0 偏差、`probe3-live.mjs` 仅 B-partial 旧期望；`/tmp/w3r16/probe5-http.mjs` fail-open 0（1 例误拒为已登记的 `修改 Y，X 保持不动`）、`probe6-e2e.mjs` 非命令写 Run 0；`/tmp/w3r14/probe6-prior` 前轮 P0/P1 0 失败；自建外置语料 fail-open 0。
 - 承接（第十九轮 P2/P3）：W3R19-02 的「每族 ≥3 条长期断言」已补入主流；`Orchestrator` 级仓库内用例仍缺（`apps/daemon` 未装配 `Orchestrator`，`dispatch` 接线属 WP-04），该断言以外置真实 HTTP + 真实 Orchestrator 证据替代；W3R19-05 协议对账承接。
+
+## T29 第二十轮 Review 的 P2 闭环（路径形状判据 + 族覆盖 + 记录订正）
+
+- 第二十轮 Review 判 **PASS（0×P0、0×P1、2×P2、2×P3）**，可进入独立 Test；本轮只做 P2/P3 闭环，不改判定方向。
+- W3R20-01（P2）：`benignExplanation` 的「不含路径」分支原用 `pathsIn`（目标判定），使被拒/畸形目标形态与无目标形态同判良性。修复：新增 `mentionsPathShape`（`~\/`、`/`、`./`、`../`、`xx/`、已知扩展名、`://`），良性分支改为「不含任何路径形状 token」。仍留在良性分支的仅剩**裸词伪目标**（如 `src`），该形态与主题词词法不可区分，已登记为已知口径并落成断言（授权集合恒等于显式命令点名的路径，写范围 0 扩张）。
+- W3R20-02（P2）：补齐第十九轮点名的族覆盖——同义否定（`莫动/杜绝碰`）、同义变更（`翻新/删掉/变更/打磨`）、后置（中英各 1）、英文 `avoiding touching`/`prohibition on`、同形对照（`说明莫修改`/`报告说莫碰`），并加 6 条被拒/畸形目标形状负例与 1 条裸词边界正例。`Orchestrator` 级**仓库内**用例仍缺（`apps/daemon` 未装配 `Orchestrator`，属 WP-04 接线），第十九/二十轮均已声明；该断言以真实 HTTP + 真实 Orchestrator 的外置探针替代，Test 须列入 `not_covered`。
+- W3R20-03（P3）：T28「每族 ≥3 条已补入主流」的夸大表述已由本节订正为逐族实测计数。
+- W3R20-04（P3，承接）：`protocol.md` 对账（未知字段 202 静默忽略、响应 `workIds`/`authorizationId` 未列）仍承接，不属本包验收面。
+- 验证（本轮实跑）：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。
+- 复核证据（消费本轮 build）：`/tmp/w3r20/probe1-shape.mjs` 重跑；`/tmp/w3r19/probe1-cross.mjs` F2/F3/F13 全 0；`/tmp/w3r18/probe4-registered.mjs` **205 例 0 偏差**（14/10/4/177）；`/tmp/w3r19/probe2-live.mjs` 与 `/tmp/w3r18/probe3-live.mjs`（真实 HTTP + 真实 Orchestrator）fail-open 0。
+

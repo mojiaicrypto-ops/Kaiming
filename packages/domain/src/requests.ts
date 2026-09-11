@@ -166,6 +166,23 @@ function isPureExplanationOfPath(clause: string, lead: RegExp): boolean {
 }
 
 /**
+ * Does the clause mention something shaped like a path at all?
+ *
+ * `pathsIn` only reports targets the router would accept, so a *rejected* or malformed
+ * target (`docs/`, `docs/../PLAN.md`, `/etc/hosts.md`, `~/.ssh/config.md`, a URL) would
+ * otherwise look like "no target" and leave an explanation clause benign. This coarser test
+ * keeps those clauses out of the benign class too, while a topic phrase such as
+ * "the routing rules" still names nothing path-shaped (W3R20-01).
+ */
+const PATH_SHAPE_PATTERN =
+  /(?:~\/|\/|\.\.?\/)[\w.@-]+|[\w.@-]+\/[\w.@-]*|[\w.@-]+\.(?:md|markdown|ts|tsx|js|jsx|mjs|cjs|json|jsonc|ya?ml|toml|html?|css|scss|sql|sh|py|go|rs|java|kt|rb|php|c|h|cpp|txt)\b|:\/\//iu;
+
+/** True when the clause contains a path-shaped token, accepted or not. */
+function mentionsPathShape(clause: string): boolean {
+  return PATH_SHAPE_PATTERN.test(clause);
+}
+
+/**
  * Statements and status reports.
  *
  * Chinese has no word boundaries, so completion aspect is matched without `\b`
@@ -458,7 +475,7 @@ export function routeMessage(body: string): MessageRouting {
       explanationLead &&
       (isPureExplanationOfPath(clause.text, EXPLANATION_LEAD_PATTERN) ||
         isPureExplanationOfPath(clause.text, EXPLANATION_LEAD_EN_PATTERN) ||
-        pathsIn(clause.text).length === 0);
+        !mentionsPathShape(clause.text));
     // "别改 A，但要修复 B": 要 belongs to a correction and only counts after a refusal.
     let target = reading.target;
     const previousWasRefusal =

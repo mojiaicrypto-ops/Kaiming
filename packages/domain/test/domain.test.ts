@@ -372,6 +372,18 @@ describe('level routing (workflow.md §2)', () => {
       ]);
     }
 
+    // W3R20-01 boundary: a bare token that could equally be a topic word (`src`) is not
+    // path-shaped, so the explanation clause stays benign and the message authorizes only
+    // the path its explicit command names. Every slash-, extension- or URL-shaped target is
+    // covered by the read-only corpus above.
+    {
+      const routing = routeMessage('说明莫碰 src，然后修改 docs/INDEX.md');
+      expect(routing.explicitAuthorization).toBe(true);
+      expect([...new Set(routing.items.flatMap((item) => item.writePaths))]).toEqual([
+        'docs/INDEX.md',
+      ]);
+    }
+
     // Every registered non-command family stays read-only: questions, explanations,
     // statements, completion aspect, passives, choices, conditions, advice, references,
     // quotations and multi-target lists (rounds 4-12 review corpora).
@@ -552,6 +564,26 @@ describe('level routing (workflow.md §2)', () => {
       '解释禁止触碰 docs/PLAN.md，然后修改 docs/INDEX.md',
       '修改 docs/INDEX.md，说明莫碰 docs/PLAN.md',
       '解释 docs/INDEX.md 的原因，然后修改 docs/PLAN.md',
+      // Round 20: a *rejected or malformed* target shape also counts as a named target, so
+      // these clauses are not benign either; only a clause with nothing path-shaped (a topic
+      // phrase) stays a legitimate preamble (W3R20-01).
+      '说明莫碰 docs/，然后修改 docs/INDEX.md',
+      '说明莫碰 docs//PLAN.md，然后修改 docs/INDEX.md',
+      '说明莫碰 docs/../PLAN.md，然后修改 docs/INDEX.md',
+      '说明莫碰 /etc/hosts.md，然后修改 docs/INDEX.md',
+      '说明莫碰 ~/.ssh/config.md，然后修改 docs/INDEX.md',
+      '说明莫碰 https://example.com/x.md，然后修改 docs/INDEX.md',
+      '说明莫动 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '杜绝碰 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '解释翻新 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '说明删掉 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '解释变更 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '修改 docs/INDEX.md，说明禁止碰 docs/PLAN.md',
+      '修改 docs/INDEX.md，explain the ban on updating docs/PLAN.md',
+      'explain avoiding touching docs/PLAN.md, then update docs/INDEX.md',
+      'explain the prohibition on updating docs/PLAN.md, then update docs/INDEX.md',
+      '说明莫修改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '报告说莫碰 docs/PLAN.md，然后修改 docs/INDEX.md',
       // Round 18: a leading politeness clause carries no request, so a command joined to it
       // is a fragment (`谢谢，修改 X` and `谢谢，然后修改 X` now agree).
       '谢谢，然后修改 docs/INDEX.md',

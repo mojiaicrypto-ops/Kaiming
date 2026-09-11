@@ -1,6 +1,6 @@
 # WP-03 实现 Plan（直接协作与说明产物）
 
-- planVersion: 5
+- planVersion: 6
 - workId: WP-03
 - level: L2（新增 Core 产物/附件/预览模块与 `apps/daemon` HTTP 面；按 `docs/product/experience.md` §3、`docs/architecture/{data,protocol,execution}.md` 既有定义实现，不改产品语义）
 - authorization_ref: 用户目标轮次「继续」（2026-09-11）；上级授权为「我要完全实现这个产品，让你来实现」
@@ -16,6 +16,13 @@
 - 新增 `packages/domain/src/requests.ts`（确定性 Chief 路由：message → work items + 授权判定）与 `packages/core/src/messages.ts`（conversation.message.send 的事务实现）、`packages/core/src/identity.ts` 的 `userIdFromSubject`。
 - **判定边界（必须与 Review/Test 对齐的口径）**：`routeMessage` 是模型 Assessment（WP-04/WP-06）之前的确定性基线，按 `docs/rules/workflow.md` §1/§2 的**结构事实**判定（指令子句 = 修改动词 + 命名路径，且不含疑问/拒绝/假设/引用/陈述/完成体标记）。它**不承诺覆盖自然语言的全部表达**：本包采用的语法是**默认拒绝**的——只有当子句本身是「动词 + 单一命名路径」（或 `把/将/对 + 目标 + 动词`）时才授权；未登记的措辞（同义变更词如 `重写/润色/polish`、名词短语祈使如 `修改 X 中的错别字`、轻动词处置式 `对 X 进行修改`、多目标列表 `修改 X、Y`、排除式 `修改 Y 而不是 X`、范围声明 `修改 Y，X 保持不动`）一律落到只读路线并要求澄清。真正语义分类由 WP-04/06 的模型 Assessment 接管；本包的责任是：正向覆盖文档化场景（明确修复/混合意图/拒绝纠正）、负向覆盖已登记的越权语料、并对任何不确定 fail-closed。
 - 残余风险的登记见 `implementation.md` T12/T13/T26 与结算材料；Review/Test 应针对「已登记语料 + 边界声明」判定，而不是要求启发式覆盖任意新句式。
+
+### planVersion 6 变更（授权来源：第二十轮 Review 的 P2 闭环；2026-09-11）
+
+- **「解释子句不含路径」的判据由目标判定改为路径形状判定**：第二十轮的 P2（W3R20-01）指出，原判据 `pathsIn(clause).length === 0` 会把**被拒绝或畸形**的目标形态（`docs/`、`docs//PLAN.md`、`docs/../PLAN.md`、`/etc/hosts.md`、`~/.ssh/config.md`、URL）与「完全不含目标」混为一谈，于是 `说明莫碰 docs/../PLAN.md，然后修改 X` 授权，而同形的登记否定版本只读。现在良性分支要求子句**不含任何路径形状 token**（含 `~\/`、`/`、`./`、`../`、`xx/`、已知扩展名、`://`）。
+- **登记残余边界（fail-closed 方向无关）**：仅含**裸词**的伪目标（如 `src`）在词法上与主题词（`the routing rules`）不可区分，因此仍留在良性分支；该消息的授权集合仍只等于其中**显式命令子句**点名的路径（写范围扩张恒为 0）。此边界已落成长期断言并登记为已知口径，不在确定性基线内解决（真正语义判定属 WP-04/06 模型 Assessment）。
+- **新增 fail-closed 代价**：`说明莫碰 docs/`、`说明莫碰 /etc/hosts.md`、`explain avoiding touching X` 等整条消息只读。
+- 计数口径：**205 例 0 偏差**（必须授权 14 / 拒绝纠正接续 10 / 多命令 4 / 必须只读 177）。
 
 ### planVersion 5 变更（授权来源：第十九轮 Review 的 P1 修复轮；2026-09-11）
 
