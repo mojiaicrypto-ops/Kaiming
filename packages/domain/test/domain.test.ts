@@ -296,11 +296,59 @@ describe('level routing (workflow.md §2)', () => {
       '不要修改 docs/PLAN.md，但要修复 docs/INDEX.md',
       '别改 docs/PLAN.md，改 docs/INDEX.md',
       '修改 docs/INDEX.md。谢谢',
-      '修复 docs/INDEX.md，删除 docs/PLAN.md',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(true);
       expect(routing.items[0]?.scope.writePaths.length, body).toBe(1);
+    }
+
+    // Two or more commands in one message all authorize; their targets share the delivery
+    // Work's scope. AC-006's split into independent Works is the explanation-vs-change
+    // split, not a per-clause split (W3R17).
+    for (const [body, expected] of [
+      ['修复 docs/INDEX.md，删除 docs/PLAN.md', ['docs/INDEX.md', 'docs/PLAN.md']],
+      ['fix docs/INDEX.md and update docs/PLAN.md', ['docs/INDEX.md', 'docs/PLAN.md']],
+      [
+        '修改 docs/INDEX.md，删除 docs/PLAN.md，更新 docs/DESIGN.md',
+        ['docs/DESIGN.md', 'docs/INDEX.md', 'docs/PLAN.md'],
+      ],
+    ] as const) {
+      const routing = routeMessage(body);
+      expect(routing.explicitAuthorization, body).toBe(true);
+      expect([...new Set(routing.items.flatMap((item) => item.writePaths))].sort(), body).toEqual([
+        ...expected,
+      ]);
+    }
+
+    // A refusal continued by a coordinating conjunction is still a correction
+    // (`不要修改 Y，然后修改 X`) and authorizes only the continued target; the same
+    // continuation after a *reported* or *quoted* negation does not (W3R17-01/03).
+    for (const body of [
+      '不要修改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '不要先改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '不要立刻修改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '不要马上改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '不要急着修改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      "don't update docs/PLAN.md, then update docs/INDEX.md",
+      '不修改 docs/PLAN.md，修改 docs/INDEX.md',
+      '先别改 docs/PLAN.md，改 docs/INDEX.md',
+    ]) {
+      const routing = routeMessage(body);
+      expect(routing.explicitAuthorization, body).toBe(true);
+      expect([...new Set(routing.items.flatMap((item) => item.writePaths))], body).toEqual([
+        'docs/INDEX.md',
+      ]);
+    }
+
+    // AC-006 mixed intent: an explicit explanation request may lead with 先 and still
+    // leave the following change command authorized (W3R17-03).
+    {
+      const routing = routeMessage('先解释 docs/INDEX.md，然后修改 docs/PLAN.md');
+      expect(routing.explicitAuthorization).toBe(true);
+      expect(routing.items.map((item) => item.intent).sort()).toEqual(['assist', 'delivery']);
+      expect([...new Set(routing.items.flatMap((item) => item.writePaths))]).toEqual([
+        'docs/PLAN.md',
+      ]);
     }
 
     // Every registered non-command family stays read-only: questions, explanations,
@@ -427,6 +475,38 @@ describe('level routing (workflow.md §2)', () => {
       '也修改 docs/INDEX.md',
       '同时也修改 docs/PLAN.md',
       '然后修改 docs/INDEX.md',
+      // Round 17: a clause counts as a refusal only when a refusal marker *heads* it, so a
+      // reported, quoted or presupposed negation ("报告说不要修改 Y", "在你不要修改 Y 的
+      // 前提下") is a non-benign statement and suppresses the whole message; a leading
+      // refusal may only be continued by a coordinating conjunction (see the must-authorize
+      // group above), never by an additive fragment.
+      '报告说不要修改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '报告说不要修改 docs/PLAN.md，然后修改 packages/core/src/orchestrator.ts',
+      '文档写着不要修改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '需求里写着不要修改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '评审说不要修改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '规则要求不要修改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '它说不要修改 docs/PLAN.md，然后删除 docs/DESIGN.md',
+      '工单里写着不要修改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '在你不要修改 docs/PLAN.md 的前提下，然后修改 docs/INDEX.md',
+      '由于不要修改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '既然不要修改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      "the report says don't update docs/PLAN.md, then update docs/INDEX.md",
+      "provided that you don't update docs/PLAN.md, then update docs/INDEX.md",
+      "given that you don't update docs/PLAN.md, then update docs/INDEX.md",
+      '不要碰 docs/PLAN.md，顺便修改 docs/INDEX.md',
+      '不要改 docs/PLAN.md，也修改 docs/INDEX.md',
+      '修改 docs/INDEX.md，报告说不要修改 docs/PLAN.md',
+      // Round 17: same-shape contrasts that must stay read-only, and adversative fragments.
+      '报告提到需要修改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '如果不要修改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      'assuming you never update docs/PLAN.md, then update docs/INDEX.md',
+      '但修改 docs/INDEX.md',
+      '但是修改 docs/INDEX.md',
+      // Registered fail-closed costs: light-verb disposal and noun-phrase imperatives ask
+      // for clarification instead of authorizing (`plan.md`).
+      '对 docs/PLAN.md 进行修改',
+      '把 docs/PLAN.md 里的错别字改掉',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(false);

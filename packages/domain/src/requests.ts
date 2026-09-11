@@ -105,9 +105,21 @@ const QUESTION_PATTERNS: readonly RegExp[] = [
   /(question|not sure|wondering|curious)/iu,
 ];
 
+/**
+ * A refusal *heads* the clause.
+ *
+ * A clause that merely quotes or reports a negation ("报告说不要修改 Y") is not the user
+ * refusing anything, so a clause only counts as a refusal when a refusal marker opens it
+ * (after an optional politeness prefix) and is itself followed by the change verb. The
+ * verb requirement is what keeps `别人说不要修改 Y` out: there `别` is part of the noun
+ * `别人`, not a refusal (W3R17-01).
+ */
+const REFUSAL_HEAD_PATTERN =
+  /^(?:(?:请|麻烦|帮我|帮忙|劳驾|please|kindly)\s*)?(?:先)?(?:不要|不用|不需要|无需|先不|暂不|先别|不必|不想|不愿|请勿|切勿|禁止|严禁|不许|不准|暂缓|延后|推迟|不|别|do not|don't|dont|never|no need to|without changing|not asking)\s*(?:再|去|来|赶紧|尽快|立刻|马上|立即|直接|急着|着急|忙|先)?\s*(?:改|修改|动|碰|删|移除|更新|添加|新增|实现|修复|重命名|重构|调整|处理|补|touch|change|modify|update|delete|remove|add|fix|refactor|rename|adjust|rewrite|polish)/iu;
+
 /** Refusals; `别` only counts word-initially (`错别字`/`识别`/`特别`/`分别` stay intact). */
 const NEGATION_PATTERNS: readonly RegExp[] = [
-  /(不要|不用|不需要|无需|先不|暂不|不必|不想|不愿|请勿|切勿|禁止|严禁|不许|不准|暂缓|延后|推迟|(?<![\p{Script=Han}\w])别)\s*(?:再|去|来|急着|着急|忙|先)?\s*(?:改|修改|动|碰|删|移除|更新|添加|新增|实现|修复|重命名|重构|调整|处理|补)/u,
+  /(不要|不用|不需要|无需|先不|暂不|先别|不必|不想|不愿|请勿|切勿|禁止|严禁|不许|不准|暂缓|延后|推迟|不|(?<![\p{Script=Han}\w])别)\s*(?:再|去|来|赶紧|尽快|立刻|马上|立即|直接|急着|着急|忙|先)?\s*(?:改|修改|动|碰|删|移除|更新|添加|新增|实现|修复|重命名|重构|调整|处理|补)/u,
   /(不是要你|没有让你|并没有要求|先说不要|不用管)/u,
   /\b(do not|don't|dont|never|no need to|without changing|not asking|not asking you to)\b/iu,
 ];
@@ -288,7 +300,7 @@ function commandTarget(clause: string): string | undefined {
 // --- clause resolution --------------------------------------------------------------
 
 const EXPLANATION_LEAD_PATTERN =
-  /^(?:请|帮我|麻烦|请帮我)?\s*(?:解释|说明|介绍|描述|讲讲|梳理|分析)/u;
+  /^(?:请|帮我|麻烦|请帮我)?\s*(?:先|优先)?\s*(?:解释|说明|介绍|描述|讲讲|梳理|分析)/u;
 
 const EXPLANATION_LEAD_EN_PATTERN =
   /^(?:please\s+)?(?:explain|describe|summari[sz]e|analy[sz]e|walk me through|tell me|show me)\b/iu;
@@ -390,7 +402,8 @@ export function routeMessage(body: string): MessageRouting {
   const additiveLead = /^(?:也|再|就|则|另外|同时|并且|而且|然后|顺便|顺手)/u;
   const readings = clauses.map((clause, index) => {
     const reading = readClause(clause.text);
-    const refusal = matches(NEGATION_PATTERNS, clause.text);
+    const refusal =
+      matches(NEGATION_PATTERNS, clause.text) && REFUSAL_HEAD_PATTERN.test(clause.text.trim());
     const polite = POLITE_TAIL_PATTERN.test(clause.text);
     const explanationLead =
       EXPLANATION_LEAD_PATTERN.test(clause.text) || EXPLANATION_LEAD_EN_PATTERN.test(clause.text);
@@ -398,11 +411,8 @@ export function routeMessage(body: string): MessageRouting {
     let target = reading.target;
     const previousWasRefusal =
       index > 0 &&
-      clauses
-        .slice(0, index)
-        .some((earlier, position) =>
-          position === index - 1 ? matches(NEGATION_PATTERNS, earlier.text) : false,
-        );
+      matches(NEGATION_PATTERNS, clauses[index - 1]?.text ?? '') &&
+      REFUSAL_HEAD_PATTERN.test((clauses[index - 1]?.text ?? '').trim());
     const adversative = /^(?:但是|而是|不过|但)/u.test(clause.text.trim());
     if (target === undefined && previousWasRefusal && adversative) {
       const correction = /^(?:但是|而是|不过|但)\s*要\s*(.+)$/u.exec(clause.text.trim());
@@ -433,28 +443,47 @@ export function routeMessage(body: string): MessageRouting {
     ({ target, refusal, polite, explanationLead }) =>
       target === undefined && !refusal && !polite && !explanationLead,
   );
-  // A message that *opens* with a conjunction has no clause to continue: "然后修改 X"
-  // is a fragment, not a command (W3R16 review).
-  const leadingConjunction = /^(?:并且|而且|然后|同时|并|也|再|就|则|另外|顺便|顺手)/u.test(text);
-  const suppressed = markerSuppressed || classSuppressed || leadingConjunction;
+  // A negation that does not *head* its clause is a report, a quotation or a premise
+  // ("报告说不要修改 Y", "说明不要修改 Y"), never the user refusing: such a clause makes
+  // the whole message read-only (W3R17-01).
+  const reportedNegation = clauses.some(
+    (clause) =>
+      matches(NEGATION_PATTERNS, clause.text) && !REFUSAL_HEAD_PATTERN.test(clause.text.trim()),
+  );
+  // A message that *opens* with a conjunction has no clause to continue: "然后修改 X" and
+  // "但是修改 X" are fragments, not commands (W3R16/W3R17 reviews).
+  const leadingConjunction =
+    /^(?:并且|而且|然后|同时|并|也|再|就|则|另外|顺便|顺手|但是|但|不过|而是)/u.test(text);
+  const suppressed = markerSuppressed || classSuppressed || reportedNegation || leadingConjunction;
 
   const targets: string[] = [];
   let explanation = false;
+  let previousWasCommand = false;
 
   readings.forEach(
     ({ clause, reading, polite, target, previousWasRefusal, adversative }, index) => {
-      if (polite) return;
+      if (polite) {
+        previousWasCommand = false;
+        return;
+      }
       const additive = additiveLead.test(clause.text.trim());
+      // A command may open the message, continue a previous command, follow a coordinating
+      // conjunction, or correct a refusal. After a refusal only a non-additive correction
+      // (or an explicit conjunction) counts, so "不要改 Y，也修改 X" stays read-only while
+      // "不要改 Y，然后修改 X" remains a registered positive (W3R16/W3R17 reviews).
       const allowed =
         index === 0
           ? !additive
-          : clause.conjunction || (previousWasRefusal && (adversative || !additive));
+          : clause.conjunction ||
+            previousWasCommand ||
+            (previousWasRefusal && (adversative || !additive));
       if (target !== undefined && !suppressed && allowed) {
         targets.push(target);
       } else if (target !== undefined) {
         explanation = true;
       }
       if (reading.explanation) explanation = true;
+      previousWasCommand = target !== undefined && allowed;
     },
   );
 

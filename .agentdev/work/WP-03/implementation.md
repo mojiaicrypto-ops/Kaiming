@@ -1,7 +1,14 @@
 # WP-03 实现记录（直接协作与说明产物）
 
-- planVersion: 1（`.agentdev/work/WP-03/plan.md`）
+- planVersion: 3（`.agentdev/work/WP-03/plan.md`）
 - 依赖：WP-02（结算提交 `f9b61e0`，验证代码树 `cbf7471`）
+
+## 记录口径订正（第十七轮 Review W3R17-04 处理；适用于全部历史条目）
+
+1. **绝对表述的范围**：本文件 T11～T25 中的「一律/永不/按结构关闭/永不下发写授权」只在**当时已登记语料范围内**成立。第十七轮以「否定出现在引述/报告/前提中」的框架句式（`报告说不要修改 Y，然后修改 X` 等 13 句）证伪了无限定的版本；现行为口径以本文件 **T26** 与 `plan.md` **planVersion 3** 为准，历史条目保留原文不改写。
+2. **「外置语料 40 条 0 fail-open」**：指会话外 `/tmp` 下的自建脚本（**不在仓库**，不可从仓库复现）。仓库内可复现的语料是 `packages/domain/test/domain.test.ts`：按引号字面量计，必须授权 14 条、拒绝纠正接续 9 条、多命令 3 条、必须只读 141 条；另有 `apps/daemon/test/server.test.ts`、`packages/core/test/*` 的 HTTP/Core 断言。
+3. **陈旧待办作废**：「`../` 越界改为 `VALIDATION_ERROR`」不再适用。现行为是**只读 + 澄清**（HTTP 202、零授权行、`authorizationId=null`、无 500），`domain.test.ts` 已覆盖 `../`、`/etc/`、`~/.ssh/` 三例。
+4. **`plan.md` 版本**：`planVersion` 已由 2 升至 3，登记 T21～T25 的实际代价、第十七轮 P1/P2 的闭合口径与新增 fail-closed 代价。
 
 ## T1 Artifact 存储与版本链
 
@@ -258,7 +265,7 @@
 - 目标校验：命令捕获的目标必须与消息点名的路径逐字相同，尾随标点无法铸造别名（修 ADV-01）。
 - 外置语料：第十三轮新语料 40 条「必须只读」**0 fail-open**；本轮新增/修订测试 11 条必须授权 + 84 条必须只读全部通过。
 - 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。
-- 结论（工程判断，供产品方决定）：确定性基线的 fail-open 方向现已按结构关闭；代价是丰富措辞（含名词短语的祈使、多目标、排除式）一律请求澄清。自然语言语义必须由 WP-04/06 的模型 Assessment 承担，否则只能继续以可用性换取确定性。
+- 结论（工程判断，供产品方决定）：确定性基线的 fail-open 方向**在已登记语料范围内**已按结构关闭（**第十七轮更正**：无范围限定的版本已被 13 句框架句证伪，见文首订正与 T26）；代价是丰富措辞（含名词短语的祈使、多目标、排除式）请求澄清。自然语言语义必须由 WP-04/06 的模型 Assessment 承担，否则只能继续以可用性换取确定性。
 
 ## T23 独立 Review 第十四轮与修复（抑制集合 + 拒绝纠正规则）
 
@@ -294,3 +301,19 @@
   4. 修 `但是/但` 交替顺序（长优先），使 `但是修改 X` 可识别。
 - 回归网：新增第十六轮 9 条必须只读；外置语料 40 条 0 fail-open。
 - 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。
+
+## T26 独立 Review 第十七轮与修复（拒绝类别判定 + 误拒闭合）
+
+- 第十七轮 Review 判 **FAIL**（0×P0、1×P1、3×P2、2×P3）。唯一 P1（W3R17-01）落在本包验收面：`classSuppressed` 的「拒绝」豁免是**子句内任意位置**的关键词命中，于是「否定式陈述/报告/前提」被当成用户拒绝，其后的并列连词命令重获写授权。13 句在真实 HTTP 上落库 Authorization（L2 + 1 授权行 + 1 assessment）并经真实 `Orchestrator` 建立真实 `backend:implementation:queued` 写 Run（其中 1 句为源码路径）。
+- 修复（`packages/domain/src/requests.ts`）：
+  1. **拒绝 = 子句判定**：`refusal = matches(NEGATION_PATTERNS, clause) && REFUSAL_HEAD_PATTERN.test(clause.trim())`；`REFUSAL_HEAD_PATTERN` 要求否定标记在（可选礼貌前缀、可选 `先` 之后）**领起**子句**并且其后紧跟变更动词**。动词要求使 `别人说不要修改 Y` 不再被 `别` 误判（`别人` 是名词）。
+  2. **未领起的否定 ⇒ 整条消息只读**：新增第四道抑制 `reportedNegation`（含否定式但否定不领起的子句），闭合 `别人说/说明不要修改 Y，然后修改 X` 等残余框架句。
+  3. **拒绝纠正口径**（与登记语料一致）：领起拒绝 + 并列连词接续 ⇒ 授权接续目标（`不要修改 Y，然后修改 X`、`don't update Y, then update X`）；领起拒绝 + 加性片段 ⇒ 只读（`不要修改 Y，也修改 X`）；逆接连词纠正 ⇒ 授权纠正目标（`不要修改 Y，但要修复 X`）；
+  4. **误拒闭合（W3R17-03）**：否定式直接否定变更动词的纠正（`不修改 Y，修改 X`、`先别改 Y，改 X`）授权纠正目标；`NEGATION_PATTERNS` 补齐 `先别`、裸 `不` 与 `立刻/马上/立即/直接/赶紧/尽快` 副词位；`EXPLANATION_LEAD_PATTERN` 允许 `先/优先` 领起，使 `先解释 X，然后修改 Y` 得到 assist + delivery 两 Work（AC-006）。
+  5. **逆接连词片段（W3R17-02）**：`leadingConjunction` 补入 `但是|但|不过|而是`，`但修改 X`/`但是修改 X`/`而是要更新 X` 只读，与加性片段口径一致。
+  6. **多目标单一口径（W3R17-03）**：`allowed` 增加 `previousWasCommand`（前一分句是已授权的命令 ⇒ 本分句是命令时同样授权）。该分支按构造安全：`suppressed` 是消息级判据，只有全部子句都属于良性类别（命令/拒绝/礼貌/显式解释请求）时才可能生效，因此不会让陈述/条件子句获得授权。结果：`修改 X，删除 Y，更新 Z` 三目标全部进入同一 delivery Work 的写范围，**静默部分授权消除**；仅「路径列表」子句（`修改 X、Y`、`修改 X and Y`）仍只读。
+  7. **记录订正（W3R17-04）**：文首「记录口径订正」块；`plan.md` 升 planVersion 3 并登记 T21～T26 的实际口径与新增 fail-closed 代价；`implementation.md` 头部同步。
+- 已登记 fail-closed 代价（fail-closed，不产生授权）：轻动词处置式 `对 X 进行修改`、名词短语祈使 `修改 X 中的错别字` / `把 X 里的错别字改掉`、范围声明 `修改 Y，X 保持不动`、排除式 `修改 Y 而不是 X`、多目标列表 `修改 X、Y`、未登记同义变更词（`重写/润色/polish`）。旧探针 `/tmp/w3r15` G8-multi 与 `/tmp/w3r16` K-multi 中「多子句只授权第一个目标」的部分授权期望已被 T26 第 6 条口径取代。
+- 回归网（`packages/domain/test/domain.test.ts`）：新增第十七轮 13 句框架负例（含源码路径变体）+ 3 句同形对照 + 2 句逆接连词片段 + 2 句 fail-closed 代价；新增 8 条「拒绝 + 连词接续 ⇒ 只授权接续目标」正例、3 条多命令（含三目标）正例、`先解释…然后修改` 混合意图正例。
+- 验证（本轮实跑）：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**（19 files）；`pnpm test:integration` 124 passed（10 files）；`pnpm build` 8 workspace；`pnpm docs:check` ok（15 documents / 55 internal links / 94 AC / 9 REQ / 11 WP）。
+- 独立复核证据（只读复用评审脚本，消费本轮 `pnpm build` 产物）：`/tmp/w3r17/probe1-corpus.mjs`（13 848 例）A 档仅剩评审已判定的 `务必` 误判族（59 例，语料自身问题）、B 档 37；`probe2-framing.mjs`（31 句）**0 偏差**；`probe3-live.mjs`（真实 HTTP + 真实 Orchestrator）fail-open 0（唯一标记项为被 T26 第 6 条取代的 B-partial 期望）、误拒 0；`probe4-scope.mjs` 作用域无扩张；`/tmp/w3r16/probe5-http.mjs` fail-open 0、`probe6-e2e.mjs` 非命令写 Run 0；`/tmp/w3r16/{probe1,probe2}` fail-open 0；`/tmp/w3r15` 仅多子句口径一项、`/tmp/w3r14/probe1` FAIL-OPEN 0、`probe5-injection` 注入通路 0、`probe6-prior` 前轮 P0/P1 0 失败。
