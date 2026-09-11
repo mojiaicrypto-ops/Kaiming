@@ -433,7 +433,10 @@ export function routeMessage(body: string): MessageRouting {
     ({ target, refusal, polite, explanationLead }) =>
       target === undefined && !refusal && !polite && !explanationLead,
   );
-  const suppressed = markerSuppressed || classSuppressed;
+  // A message that *opens* with a conjunction has no clause to continue: "然后修改 X"
+  // is a fragment, not a command (W3R16 review).
+  const leadingConjunction = /^(?:并且|而且|然后|同时|并|也|再|就|则|另外|顺便|顺手)/u.test(text);
+  const suppressed = markerSuppressed || classSuppressed || leadingConjunction;
 
   const targets: string[] = [];
   let explanation = false;
