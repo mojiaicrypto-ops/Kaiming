@@ -117,9 +117,14 @@ export class ProjectStore {
     this.outbox = new OutboxStore(this.db, this.projectId, options);
     this.leases = new LeaseStore(this.db, this.projectId, options);
 
+    // Every repository knows its Project, so a row cannot land in the wrong one.
+    const repositoryOptions: EntityRepositoryOptions = {
+      ...options,
+      defaultProjectId: handle.projectId,
+    };
     const repository = <T extends Record<string, unknown>>(
       spec: (typeof TABLES)[keyof typeof TABLES],
-    ): EntityRepository<T> => new EntityRepository<T>(this.db, spec as never, options);
+    ): EntityRepository<T> => new EntityRepository<T>(this.db, spec as never, repositoryOptions);
 
     this.projects = repository<Project>(TABLES.project);
     this.conversations = repository<Conversation>(TABLES.conversation);

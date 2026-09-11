@@ -64,11 +64,55 @@
 
 证据：`packages/core/test/mailbox.test.ts`（8 用例，unit）——串行与顺序、**长模型调用在飞时命令 <1 秒返回且不排队**、队列项/字节超限 BUSY、排空后可再准入、关闭后拒绝、>100ms 诊断、失败命令不阻塞队列、effect 失败诊断。`packages/core/test/dispatcher.integration.test.ts`（9 用例，真实 SQLite）——**丢应答重试返回完全相同响应且 event/outbox 不重复**、同键异载荷 `IDEMPOTENCY_CONFLICT`、`VERSION_CONFLICT` 带 `currentVersion` 且未记账、处理函数失败时账本/事件/outbox 全部回滚、邮箱满时 `BUSY` 且未执行、长 effect 在飞时写命令 1 秒内返回、规范化 Hash 稳定性。
 
+### T6 EventHub 与订阅（完成）
+
+`packages/core/src/events-hub.ts`：
+
+- 订阅作用域 summary/conversation/work/run；`subscribe` 首次返回**快照**、带 `afterCursor` 时返回 `replay`（只补发游标之后且 ≤ 边界的事件），游标被保留期截断时 `RESYNC_REQUIRED`。
+- `setScope` 作用域变更**始终**返回新快照与新的水位游标（AC-060：快照+C 后事件完整覆盖新增范围）。
+- `poll` 返回事件批次 + `scannedThrough`（空批次也发水位）+ `batchEnd`；`ack` 单调前进（回退拒绝、超出水位钳制）。
+- 每连接输出队列：软限 2MiB 合并/去重临时帧、硬限 8MiB **关闭该连接**；持久事件始终留在库中（AC-059），其它订阅不受影响。
+- 快照读取与游标的一致性顺序：**先读快照行，再取水位**，因此快照不会早于其游标（最多重复投递，绝不丢事件）。
+- `scan` 扫描已提交事件并报告 `laggingSubscriptions`。
+
+证据：`packages/core/test/events-hub.integration.test.ts` — 16 用例：快照与水位一致、replay 只补发范围内事件、截断后 `RESYNC_REQUIRED`、作用域扩大后快照+C 无缺口、空批次水位、ack 回退拒绝与钳制、连接关闭级联、软限合并与 merged 计数、**硬限关闭慢连接且事件仍可被其它订阅读到**、批量扫描水位、作用域匹配规则。
+
+### T7 连接认证与 Project 身份（完成）
+
+`packages/core/src/auth.ts`：
+
+- 安装凭证：`~/.agentdev/installation-token`，创建 0600 且**只显示一次**（`createdToken`）；模式被放宽时重新收紧并校验；`timingSafeEqual` 比对；`Authorization: Bearer` 解析。
+- 登录：`/auth/login` 成功返回 `HttpOnly; SameSite=Strict`（remote 部署加 `Secure`）cookie + CSRF token，24h 过期；失败 401，**每 IP 每分钟 5 次**超限 429（带 retryAfterSec，窗口滑动）；logout 清会话并下发 `Max-Age=0`。
+- 请求认证：无 cookie→`UNAUTHENTICATED`，过期→`AUTH_EXPIRED`（并即时丢弃），Origin 不在白名单→403，写请求 CSRF 不匹配→403（AC-078）。
+- Origin 策略：显式白名单**精确匹配**；无白名单时 loopback 部署允许 http+loopback，remote 部署只允许 https。
+
+`packages/core/src/identity.ts`：
+
+- `realpath` 规范化（含符号链接）、向上查找 `.git` 得到仓库根、`projectId=SHA256(canonicalRoot)[0:32]`；子目录/尾斜杠/符号路径归一到同一 Project（AC-024）。
+- 嵌套独立仓库扫描（深度可限）、`isInsideNestedRepo`/`nestedRepoExclusions`/`requireOwnIdentity`：父项目排除嵌套仓库路径且必须单独打开（AC-024）。
+- 两个真实 Git 根 → 不同 projectId 且各自独立 SQLite（AC-023）。
+
+证据：`packages/core/test/auth.test.ts`（18 用例，unit）与 `packages/core/test/identity.integration.test.ts`（9 用例，真实 `git init` 仓库、真实符号链接、真实 SQLite）。
+
+### T8 需求投影（完成，AC-092 部分）
+
+`packages/core/src/requirements.ts`：
+
+- `portableRequirementSchema` 校验后计算 `metadataHash`/`recordHash`（`requirementRecordHash(metadataHash, contentHash)`）。
+- 导入判定复用 domain `classifyImport`：`new` 建行、`unchanged` 不写、`update` 以 CAS 刷新、同 recordVersion 异内容或更旧版本 → `conflict`。
+- 冲突**不改行**，只写 `requirement.save_failed` 诊断事件（带 reason/recordVersion/Hash），返回结构化冲突信息。
+- 本地执行字段：`workId` + `executionAvailability`（active 且无 Work → `needs_replan`）；`phase`/`finalManifestId` 在导入时为缺省。
+- 非法记录在写库前抛 `RequirementRecordError`（VALIDATION_ERROR）。
+
+存储层加固：`EntityRepository` 支持 `defaultProjectId`，`ProjectStore` 为所有仓储注入本项目 id（`project` 行因 id 即项目 id 而排除），从结构上防止行落入错误项目。
+
+证据：`packages/core/test/requirements.integration.test.ts` — 8 用例：建行与 portableRef、绑定本地 Work、**同记录重复导入不产生第二次写入**、版本推进刷新投影、同版本异内容冲突且行未变、降级冲突、非法记录不落库、metadata/record Hash 分离。
+
 ## 2. 尚未完成（下一轮）
 - T6：EventHub 与订阅（快照+C 水位、replay/snapshot、ack、RESYNC_REQUIRED、慢连接软硬限）。
 - T7：连接认证（安装凭证 0600 Bearer、会话 cookie/CSRF/Origin、24h 过期、登录限速）与 Project 身份（canonical realpath、git toplevel、嵌套仓库排除、relocate 别名）。
 - T8：需求投影幂等/冲突的存储层实现（判定函数已在 domain）。
-- T9：失败测试（丢应答重试、冲突键、慢连接、迁移失败、长操作不阻塞）、独立 Review/Test、`docs/INDEX.md` 更新与结算。
+- T9：失败测试证据汇总（丢应答重试、冲突键、慢连接、迁移失败、长操作不阻塞均已实现，待独立复跑）、独立 Review/Test、`docs/INDEX.md` 更新与结算文档。
 
 `packages/core` 已实现邮箱与命令分发（T5）；EventHub、连接认证与 Project 身份（T6/T7）尚未实现。
 
@@ -79,8 +123,8 @@
 | `pnpm install --frozen-lockfile` | 退出 0；新增 better-sqlite3 13.0.3（`allowBuilds: true`，原生绑定编译成功） |
 | `pnpm typecheck` | 退出 0 |
 | `pnpm lint` | 退出 0 |
-| `pnpm test:unit` | 12 文件 / 155 用例通过 |
-| `pnpm test:integration` | 7 文件 / 82 用例通过（14 迁移 + 21 仓储/账本 + 9 命令分发/邮箱） |
+| `pnpm test:unit` | 13 文件 / 173 用例通过 |
+| `pnpm test:integration` | 10 文件 / 115 用例通过（14 迁移 + 21 仓储/账本 + 9 分发 + 16 事件订阅 + 9 身份 + 8 需求投影） |
 | `pnpm docs:check` | 退出 0 |
 | `pnpm build` | 退出 0（contracts/domain/storage/core/pi-runtime/runner/cli） |
 | `pnpm test:e2e\|acceptance\|live` | 仍按契约 `NOT_IMPLEMENTED` 退出 1 |
@@ -91,5 +135,6 @@
 - `project` 表不设 `project_id` 列：该行的 `id` 即项目标识（`ARCHITECTURE.md` §4），读模型仍暴露 `projectId` 的 `projectSummary`。
 - `outbox` 采用实体五列 + `operation_id UNIQUE`，以同时满足 `data.md` §1 的行列规则与 §2 的 operationId 唯一。
 - `requirement.portableRef` 以 JSON 列存储，与文档字段一一对应。
+- `portableRef.hash` 承载**记录 Hash**（`requirementRecordHash(metadataHash, contentHash)`）：`data.md` §2 的 requirement 行没有第二个 Hash 列，而冲突判定必须比较记录 Hash，故由该字段承担，`path`/`revision` 保持 Git 位置语义（`requirements.md` §4）。
 - `snapshot` 以 (type, hash) 复合主键；仓储层按 hash 读取，写入由 Core 使用显式 SQL。
 - `EntityRepository.update` 在同一事务内先读后写，SQLite 的写锁由 `BEGIN IMMEDIATE` 保证，因此 CAS 不会出现丢失更新。

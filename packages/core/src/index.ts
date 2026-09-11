@@ -8,3 +8,7 @@
 export * from './errors.js';
 export * from './mailbox.js';
 export * from './dispatcher.js';
+export * from './events-hub.js';
+export * from './auth.js';
+export * from './identity.js';
+export * from './requirements.js';

@@ -156,6 +156,13 @@ export interface EntityRepositoryOptions {
   readonly now?: () => string;
   /** Id injection for deterministic tests. */
   readonly newId?: () => string;
+  /**
+   * Project every inserted row belongs to.
+   *
+   * `ProjectStore` sets this, so a caller can never write a row into the wrong
+   * Project — or forget `projectId` entirely (`data.md` §1).
+   */
+  readonly defaultProjectId?: string;
 }
 
 /** Read/write access to one entity table with optimistic concurrency. */
@@ -164,12 +171,14 @@ export class EntityRepository<T extends Record<string, unknown>> {
   private readonly db: SqliteDatabase;
   private readonly now: () => string;
   private readonly newId: () => string;
+  private readonly defaultProjectId: string | undefined;
 
   constructor(db: SqliteDatabase, spec: TableSpec<T>, options: EntityRepositoryOptions = {}) {
     this.db = db;
     this.spec = spec;
     this.now = options.now ?? nowIso;
     this.newId = options.newId ?? uuidv7;
+    this.defaultProjectId = options.defaultProjectId;
   }
 
   get keyField(): string {
@@ -232,8 +241,14 @@ export class EntityRepository<T extends Record<string, unknown>> {
       createdAt: entity['createdAt'] ?? timestamp,
       updatedAt: entity['updatedAt'] ?? timestamp,
     };
-    if (candidate['projectId'] === undefined && options.projectId !== undefined) {
-      candidate['projectId'] = options.projectId;
+    const projectId = options.projectId ?? this.defaultProjectId;
+    // The `project` row's id *is* the project id, so it has no such column.
+    if (
+      candidate['projectId'] === undefined &&
+      projectId !== undefined &&
+      'projectId' in this.spec.schema.shape
+    ) {
+      candidate['projectId'] = projectId;
     }
     const parsed = this.spec.schema.safeParse(candidate);
     if (!parsed.success) {

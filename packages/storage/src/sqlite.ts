@@ -6,6 +6,8 @@
  * pragmas are applied on every open — including read-only opens, where
  * `foreign_keys` still guards integrity checks.
  */
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 
 export type SqliteDatabase = Database.Database;
@@ -20,6 +22,10 @@ export interface OpenDatabaseOptions {
 /** Opens a project database and applies the contract pragmas. */
 export function openDatabase(options: OpenDatabaseOptions): SqliteDatabase {
   const readOnly = options.readOnly === true;
+  // The daemon creates a state directory per Project; a read-only open never does.
+  if (!readOnly && options.file !== ':memory:') {
+    mkdirSync(dirname(options.file), { recursive: true, mode: 0o700 });
+  }
   const db = new Database(options.file, { readonly: readOnly, fileMustExist: readOnly });
   db.pragma('busy_timeout = 5000');
   db.pragma('foreign_keys = ON');
