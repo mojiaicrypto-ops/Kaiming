@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type {
+  AssessmentPayload,
   ChiefDispatchSpec,
   ContextSelection,
   Profile,
@@ -189,6 +190,20 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
       requiredOutputs: ['stage.submit'],
       budgetAllocation: 10_000,
       ...overrides,
+    };
+  }
+
+  function assessmentPayloadFixture(): AssessmentPayload {
+    return {
+      intent: 'delivery',
+      goal: 'ship WP-02',
+      scope: emptyScope,
+      level: 'L2',
+      semanticImpact: false,
+      riskFlags: [],
+      uncertainties: [],
+      policyRevision: 1,
+      reason: 'L2 delivery work',
     };
   }
 
@@ -715,6 +730,88 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     expect(store.snapshots.list().length).toBe(snapshotsBefore);
   });
 
+  it('rejects malformed protocol requests before persisting anything (R8-01/R8-02)', () => {
+    const chief = chiefRun();
+    const child = orchestrator.dispatch({ spec: backendSpec(chief.id) }).run;
+    const malformedRequests: readonly Record<string, unknown>[] = [
+      { runId: child.id, requestedRole: 'review', goal: 'ok', sourceRefs: 'oops' },
+      { runId: child.id, requestedRole: 'review', goal: 'ok', requiredOutputs: 5 },
+      { runId: child.id, requestedRole: 'review', goal: 'ok', sourceRefs: [null] },
+      { runId: child.id, requestedRole: 'review', goal: 123 },
+      { runId: child.id, requestedRole: 'review', goal: 'ok', stage: 42 },
+      { runId: child.id, requestedRole: 'review', goal: 'ok', budgetAllocation: -5 },
+      { runId: child.id, requestedRole: 'review', goal: 'ok', operationId: 123 },
+      { runId: child.id, requestedRole: 'nobody', goal: 'ok' },
+    ];
+    const todosBefore = store.events
+      .readAfter(0, { limit: 200 })
+      .filter((event) => event.name === 'chief_action_required').length;
+    for (const request of malformedRequests) {
+      try {
+        orchestrator.requestDispatch(request as never);
+        throw new Error('expected a validation error');
+      } catch (error) {
+        expect(error).toMatchObject({ code: 'VALIDATION_ERROR' });
+      }
+    }
+    // A rejected request leaves no Chief todo behind.
+    expect(
+      store.events
+        .readAfter(0, { limit: 200 })
+        .filter((event) => event.name === 'chief_action_required'),
+    ).toHaveLength(todosBefore);
+
+    // `assessment.submit` follows the protocol error space too.
+    const good = assessmentPayloadFixture();
+    const malformedAssessments: readonly unknown[] = [
+      { workId: WORK_ID, payload: null },
+      { workId: WORK_ID, payload: { ...good, riskFlags: null } },
+      { workId: WORK_ID, payload: { ...good, riskFlags: 5 } },
+      { workId: WORK_ID, payload: { ...good, uncertainties: null } },
+      { workId: WORK_ID, payload: { ...good, level: 'B2' } },
+      { workId: WORK_ID, payload: { ...good, intent: 123 } },
+    ];
+    for (const input of malformedAssessments) {
+      try {
+        orchestrator.assess(input as never);
+        throw new Error('expected a validation error');
+      } catch (error) {
+        // Never a storage-layer violation: only protocol codes may escape.
+        expect(error).toMatchObject({ code: 'VALIDATION_ERROR' });
+      }
+    }
+    // The good payload still works.
+    expect(orchestrator.assess({ workId: WORK_ID, payload: good }).level).toBe('L2');
+  });
+
+  it('leaves no snapshot behind when the frozen inputs are invalid (R8-04/R8-09)', () => {
+    const chief = chiefRun();
+    const snapshotsBefore = store.snapshots.list().length;
+    const contextBefore = store.snapshots.list({
+      where: 'type = ?',
+      params: ['context'],
+    }).length;
+    const runsBefore = store.runs.list().length;
+    const badInputs: readonly unknown[] = [
+      { spec: backendSpec(chief.id), authorizationRef: 'not-a-uuid' },
+      { spec: backendSpec(chief.id), requiredOutputSchemas: [{ kind: 'x' }] },
+      { spec: backendSpec(chief.id), contextPayload: ['not', 'an', 'object'] },
+    ];
+    for (const input of badInputs) {
+      try {
+        orchestrator.dispatch(input as never);
+        throw new Error('expected a validation error');
+      } catch (error) {
+        expect(error).toMatchObject({ code: 'VALIDATION_ERROR' });
+      }
+    }
+    expect(store.runs.list().length).toBe(runsBefore);
+    expect(store.snapshots.list().length).toBe(snapshotsBefore);
+    expect(store.snapshots.list({ where: 'type = ?', params: ['context'] }).length).toBe(
+      contextBefore,
+    );
+  });
+
   it('treats a different cost for the same Run as a conflict (R7-02/R7-03)', () => {
     const budgetRow = store.budgets.list({ where: 'work_id = ?', params: [WORK_ID] })[0];
     if (budgetRow === undefined) throw new Error('budget fixture missing');
@@ -747,14 +844,28 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     const reservedBefore = store.budgets.find(budgetRow.id)?.tokensReserved ?? 0;
     expect(reservedBefore).toBeGreaterThanOrEqual(neverStarted.budgetAllocation);
 
+    // Neither Run ever started an Attempt, so both are known-zero usage: cancelling
+    // the parent must hand back its own hold *and* the child's (R8-03), otherwise a
+    // zero-consumption cancel would block the Work budget forever.
     orchestrator.settleRun(chief.id, 'cancelled');
     expect(store.runs.find(neverStarted.id)?.status).toBe('cancelled');
-    // The child never ran, so nothing is owed and its hold comes back immediately.
-    // The cancelled parent did run, so its own hold stays unknown for reconciliation
-    // (`reliability.md` §3) — the two cases must not share one rule.
-    const after = store.budgets.find(budgetRow.id)?.tokensReserved ?? 0;
-    expect(after).toBe(reservedBefore - neverStarted.budgetAllocation);
-    expect(after).toBe(chief.budgetAllocation);
+    expect(store.budgets.find(budgetRow.id)?.tokensReserved).toBe(
+      reservedBefore - neverStarted.budgetAllocation - chief.budgetAllocation,
+    );
+    const events = store.events
+      .readAfter(0, { limit: 200 })
+      .filter((event) => event.name === 'run.ended' && event.entityId === chief.id);
+    expect(events[0]?.data).toMatchObject({
+      usageMeasured: true,
+      releasedTokens: chief.budgetAllocation,
+    });
+
+    // A Run that did start keeps its hold as unknown for later reconciliation.
+    const started = orchestrator.dispatch({ spec: chiefSpec({ budgetAllocation: 6_000 }) }).run;
+    orchestrator.beginAttempt(started.id);
+    const beforeStartedCancel = store.budgets.find(budgetRow.id)?.tokensReserved ?? 0;
+    orchestrator.settleRun(started.id, 'cancelled');
+    expect(store.budgets.find(budgetRow.id)?.tokensReserved).toBe(beforeStartedCancel);
   });
 
   it('never re-books an already measured Run (R6-01/R6-04/R6-05)', () => {

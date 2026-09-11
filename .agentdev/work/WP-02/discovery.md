@@ -51,7 +51,7 @@
 ## DC-35 「Gate 阻断」以 Join 结果与 chief_action_required 表达
 
 - 事实：文档要求 required 子 Run 失败时「Gate 阻断」，但当前 Schema 没有 Work 级 Gate 实体/enum。
-- 处理：`JoinCoordinator.onChildSettled` 返回 `{kind:'blocked', failedRequired, children, chiefTodo}`，并写 `chief_action_required`（含全部子结果）。父 Run 的状态按子 Run 集合决定：**非 required 子 Run 失败**时父仍可为 `running`（`joinPolicy=none` 不阻挡父），**required 子 Run 失败**时父进入 `waiting_children` 并等 Chief 处理，子 Run 全部终态后才回到 `running`（第六轮 R6-08、第七轮 R7-06 更正：原文笼统写「父停留在 waiting_children」，与实现不符）。不改 Work.status，避免发明未定义的状态语义。
+- 处理：`JoinCoordinator.onChildSettled` 返回 `{kind:'blocked', failedRequired, children, chiefTodo}`，并写 `chief_action_required`（含全部子结果）。父 Run 状态的实际语义（第六轮 R6-08、第七轮 R7-06、第八轮 R8-05 实测更正）：**只有 `join=all` 子 Run 在场时**父进入/保持 `waiting_children`；全部子 Run 终态且无 required 失败时回到 `running`（`kind=ready`）；有 required 失败时保持当前状态（单个 required 子 Run 失败时父从未进入 `waiting_children`，仍是 `running`）并交付 blocked 结果。两种状态都在 `ACTIVE_PARENT_STATUSES` 内，因此新 Chief 消息都能受理（AC-046）。不改 Work.status，避免发明未定义的状态语义。
 - 影响：后续若引入 Gate 状态（WP-06/流程 Gate），应消费该返回值并新增 Discovery。
 
 ## DC-36 stage.submit 的归属字段与内容校验
@@ -121,9 +121,22 @@ WP-02 第一轮独立 Review（`.agentdev/work/WP-02/review.md`）判 FAIL：1×
 
 父 Run 的 `budgetAllocation` 约束「**在场**（非终态）子 Run 额度之和」这一口径在 `data.md`/`agents.md`/`reliability.md` 中均无明文，属本包实现约定（DC-40）。理由：Run 的 `budgetAllocation` 若不设并发上限，Chief Run 可以把整笔 Work 预算重复授予多个子 Run；而若按历史累计统计，长寿命 Chief Run 会在若干顺序子 Run 后被永久卡死（M-01 实测）。文档未定义，故登记为需产品方确认的实现约定，与 DC-40 一致。
 
-## DC-48 `run.ended` data 形状统一（Review 第四轮 H-02）
+## DC-48 统一的 `run.ended` 事件形状（Review 第四轮 Q-08/H-02、第六轮 R6-05/R6-06、第七轮 R7-04、第八轮 R8-06）
 
-`run.ended` 由 `RunLifecycle.end` 统一发出，所有终态路径的 data 都包含 `outcome`、`usageMeasured`、`runCostKnown`、`tokensUsed`、`releasedTokens`；`contract_violation` 额外带 `attemptId`/`rejections`/`reason`，核销补发额外带 `reconciled:true`。`protocol.md` §7 只要求「终态事件携带真实 outcome 与变更后实体摘要」，本条为消费方一致性的实现约定。
+`run.ended` 由 `RunLifecycle.applyEnd` 统一发出，`protocol.md` §7 只要求「终态事件携带真实 outcome 与变更后实体摘要」，字段清单是实现约定（消费方一致性）。实测四种路径的 data 键：
+
+| 路径 | data 字段 |
+|---|---|
+| 常规终态（`completed`/`failed`/`timed_out`/`interrupted`） | `outcome`、`workId`、`tokensUsed`、`chargedTokens`、`uncoveredTokens`、`usageMeasured`、`runCostKnown`、`releasedTokens`、`cost` |
+| `contract_violation` | 同上 + `attemptId`、`rejections`、`reason` |
+| 核销补发（`reconcile`） | 常规字段 + `reconciled:true`（`cost` 为 Provider 报告值或 `null`） |
+| 级联取消的子 Run | 常规字段 + `cancelledWithParent`（父 Run id） |
+
+字段层级（第六轮 R6-06）：
+- `tokensUsed` = Provider 报告的原始用量；`chargedTokens` = Work 预算实际吸收的部分（= `min(tokensUsed, budgetAllocation)`）；`uncoveredTokens` = 超出预留未被吸收的部分；`releasedTokens` = 退还的预留余额；
+- `usageMeasured` 与 `runCostKnown` 是**每个 Run** 的事实；Work 级 `costKnown`（`budget` 行）由全部终态 Run 重算，两者同名易混，故事件里不再叫 `costKnown`。
+
+排序语义（第七轮 R7-04）：事件以其自身单调递增的 `cursor` 排序（`data.md` §2）；`entityVersion` 是发出事件时实体的版本，核销补发不会改动 Run 行，因此同一 Run 的两条 `run.ended` 会带相同 `entityVersion`，消费方不得用它排序。
 
 ## DC-49 父 Run 非正常终止时子 Run 一并取消（Review 第四/五轮 Q-04、M-1、M-3）
 
@@ -147,7 +160,7 @@ Provider 报告的 usage 可能超过该 Run 的预留（估算偏差）。原�
 `RunLifecycle.reconcile` 的幂等判定改为「该 Run 是否已有**实测**（结算时 `usageMeasured:true`）或**核销**（`reconciled:true`）的 `run.ended`」，且判定与写入在**同一个事务内**（第六轮 R6-01：只查 `reconciled:true` 会漏掉已按实测结算的 Run，二次核销会重复计费并把 `tokensReserved` 扣到 0、吃掉其他在场 Run 的预留，使真实承诺超出 `tokenLimit`）：
 - 同 Run 同 amount 的重放 → 无操作返回；
 - 同 Run 不同 amount → `IDEMPOTENCY_CONFLICT`（R6-04：原来静默无操作）；
-- 核销事件不再发明 `reconciliation` 序号（第七轮 R7-04：一个 Run 至多核销一次，该字段恒为 1）；事件顺序由事件自身的 `cursor` 表达（`data.md` §5），Run 行不变因此 `entityVersion` 会重复，这一点在 DC-48 记录；
+- 核销事件不再发明 `reconciliation` 序号（第七轮 R7-04：一个 Run 至多核销一次，该字段恒为 1）；事件顺序与 `entityVersion` 重复的处理见 DC-48；
 - 事件字段改名为 `runCostKnown`（每个 Run 的事实），Work 级 `costKnown` 仍按「该 Work 的全部终态 Run 是否都已实测/核销」重算（R6-06：原来事件里的 `costKnown` 与 Work 级标志同名但含义不同）。
 
 ## DC-53 第五轮 Finding 的严重度口径（记录更正）
@@ -164,12 +177,20 @@ Provider 报告的 usage 可能超过该 Run 的预留（估算偏差）。原�
 
 ## DC-56 记录级严重度口径（Review 第六轮）
 
-第六轮 Review 按 `workflow.md` §65 把 R6-01 定为 P1，同时指出第五轮报告把同类的行为缺陷标为 P2 属口径不一致。本包的处理原则：**凡影响 AC-043/044/045/046/047/082 或 `reliability.md` §3、`protocol.md` §1/§6 明文要求的条目，一律按阻断项对待并修复**（本节引用的严重性定义在 `workflow.md` §6 内、位于该文件第 65 行），记录中不再以 P2/P3 低估。R6-07 指出的「M-2 无定义」也已补齐：M-2 是第五轮对抗性核验提出的「`run-lifecycle.ts`/`stage.ts` 注释声称预留已释放、与实现（未测量时保持预留）不符」，已在 T13 修正（DC-53 口径更正同时适用）。
+第六轮 Review 按 `workflow.md` §6 的严重性定义（该文件第 65 行）把 R6-01 定为 P1，同时指出第五轮报告把同类的行为缺陷标为 P2 属口径不一致。本包的处理原则：**凡影响 AC-043/044/045/046/047/082 或 `reliability.md` §3、`protocol.md` §1/§6 明文要求的条目，一律按阻断项对待并修复**（本节引用的严重性定义在 `workflow.md` §6 内、位于该文件第 65 行），记录中不再以 P2/P3 低估。R6-07 指出的「M-2 无定义」也已补齐：M-2 是第五轮对抗性核验提出的「`run-lifecycle.ts`/`stage.ts` 注释声称预留已释放、与实现（未测量时保持预留）不符」，已在 T13 修正（DC-53 口径更正同时适用）。
 
 ## DC-57 级联取消时「从未启动」子 Run 的用量是已知零（Review 第七轮 R7-09）
 
-`cancelDescendants` 原来对所有子 Run 一律按「未测量」处理（保持预留 + `costKnown=false`），但**没有 Attempt 的 `queued` 子 Run 从未调用模型**，其用量是已知的零，不是未知。修复：按「该 Run 是否有 Attempt」区分——无 Attempt ⇒ `measured:true, tokensUsed:0`（立即释放预留）；有 Attempt ⇒ 保持 `measured:false`（等 WP-10 的 Provider 用量核销，DC-45）。否则父 Run 取消后死预留会占住 Work 额度，后续派发被 `BUDGET_EXCEEDED` 拒绝（实际消费为零）。
+`cancelDescendants` 原来对所有子 Run 一律按「未测量」处理（保持预留 + `costKnown=false`），但**没有 Attempt 的 `queued` 子 Run 从未调用模型**，其用量是已知的零，不是未知。修复：把判据抽成 `RunLifecycle.initialUsage(run)` 一处，被取消的 Run 自身与级联子 Run 共用——无 Attempt ⇒ `measured:true, tokensUsed:0`（立即释放预留）；有 Attempt ⇒ 保持 `measured:false`（等 WP-10 的 Provider 用量核销，DC-45）。第八轮 R8-03 指出第七轮只对子 Run 生效：直接取消一个未启动的 Chief Run 同样会留下死预留，使零消费的取消永久占用 Work 额度（后续同额派发被 `BUDGET_EXCEEDED` 拒绝）。
 
 ## DC-58 被拒绝的 dispatch 不留任何副作用（Review 第七轮 R7-07）
 
 `Orchestrator.dispatch` 原来的顺序是「校验 → 冻结 config/context/dispatch 快照 → 建 Run」。第七轮探针发现被拒请求仍会留下 dispatch/context 快照行（内容寻址，同载荷幂等，不同载荷逐次增长）。修复：把三类快照的冻结移到**全部准入判定之后**（spec 校验、Work/预算、父 Run、role×purpose、direct-chief-child、provider 可用性、profileRevision）。契约 Schema 校验提到最前，任何畸形 spec 以 `VALIDATION_ERROR` 结束，不再抛裸 `TypeError`（R7-01）。测试断言被拒后 Run 与快照行数均不变。
+
+## DC-59 协议入口的契约校验前移（Review 第八轮 R8-01/R8-02/R8-04/R8-09）
+
+第八轮实测：`dispatch` 已 fail-closed，但另外两个协议入口仍会以非协议形态失败。
+- `request_dispatch`（AC-045 点名）：`sourceRefs`/`requiredOutputs` 畸形抛裸 `TypeError`；非字符串 `goal`/`stage`、负 `budgetAllocation`、非字符串 `operationId` 被原样写进 `chief_action_required`。新增 `dispatchRequestSchema`（`contracts`，覆盖 `protocol.md` §6 的 `workId,reason,requestedRole,goal,sourceRefs` 与现有可选扩展字段），入口首行校验。
+- `assessment.submit`：`payload=null`/`riskFlags` 非数组/`uncertainties=null` 抛裸 `TypeError`，非法 `level`/`intent` 抛存储层 `StorageError/CONSTRAINT_VIOLATION`（不在 `protocol.md` §7 错误表内）。新增 `assessRequestSchema`，入口首行校验。
+- `dispatch` 的冻结输入：畸形 `authorizationRef`/`requiredOutputSchemas` 与「非对象 `contextPayload`」原先在快照冻结之后才被 `dispatchSnapshotSchema` 拒绝，留下不可读的 `config`/`context`/`dispatch` 快照行。新增 `dispatchExtrasSchema` 在任何 `freeze` 之前校验；`SnapshotWriter.freeze` 也加了 payload 必须是 JSON 对象的兜底（`CONSTRAINT_VIOLATION` / `SNAPSHOT_PAYLOAD_INVALID`）。
+- 影响：`protocol.md` §1 要求「必填参数缺失、未知字段或枚举错误返回 `VALIDATION_ERROR`」，§7 的错误表是封闭集合；三个入口现在都只在该集合内失败，且失败不留任何持久副作用。

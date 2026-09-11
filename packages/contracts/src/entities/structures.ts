@@ -229,6 +229,52 @@ export const dispatchSpecSchema = z.discriminatedUnion('kind', [
 ]);
 export type DispatchSpec = z.infer<typeof dispatchSpecSchema>;
 
+/**
+ * The extra frozen inputs of a dispatch that are not part of the spec itself.
+ *
+ * `data.md` §3 freezes them with the DispatchSnapshot; validating them here keeps a
+ * malformed request from leaving snapshot rows behind (DC-58).
+ */
+export const dispatchExtrasSchema = z.strictObject({
+  authorizationRef: idSchema.optional(),
+  requiredOutputSchemas: list(
+    z.strictObject({ kind: z.string().min(1), schemaVersion: z.literal(1) }),
+  ).optional(),
+  contextPayload: jsonObjectSchema.optional(),
+});
+export type DispatchExtras = z.infer<typeof dispatchExtrasSchema>;
+
+/**
+ * `agent.request_dispatch` (`protocol.md` §6).
+ *
+ * The documented parameters are `workId,reason,requestedRole,goal,sourceRefs`;
+ * `runId` is the capability's Run binding and the remaining optional fields let a
+ * caller be more specific without gaining the right to create the Run.
+ */
+export const dispatchRequestSchema = z.strictObject({
+  runId: idSchema,
+  workId: idSchema.optional(),
+  reason: z.string().min(1).optional(),
+  requestedRole: roleSchema,
+  goal: z.string().min(1),
+  sourceRefs: list(sourceRefSchema).optional(),
+  parentRunId: idSchema.optional(),
+  purpose: purposeSchema.optional(),
+  stage: z.string().min(1).optional(),
+  requiredOutputs: list(z.string().min(1)).optional(),
+  requiredChild: z.boolean().optional(),
+  budgetAllocation: nonNegativeIntSchema.optional(),
+  operationId: z.string().min(1).optional(),
+});
+export type DispatchRequest = z.infer<typeof dispatchRequestSchema>;
+
+/** `assessment.submit` (`protocol.md` §6). */
+export const assessRequestSchema = z.strictObject({
+  workId: idSchema,
+  payload: assessmentPayloadSchema,
+});
+export type AssessRequest = z.infer<typeof assessRequestSchema>;
+
 /** `DispatchSnapshot` — frozen before a Run is queued (`data.md` §3). */
 export const dispatchSnapshotSchema = z.strictObject({
   dispatchSpec: dispatchSpecSchema,

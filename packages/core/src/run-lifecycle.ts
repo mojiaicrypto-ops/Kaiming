@@ -4,7 +4,8 @@
  * Every path that moves a Run into a terminal state goes through this class, so
  * the budget rules of `reliability.md` §3 hold no matter how a Run ends:
  *
- * - measured usage releases the reservation and charges `tokensUsed`;
+ * - measured usage releases the reservation and charges `chargedTokens`, capped at
+ *   the Run's reservation;
  * - unknown usage keeps the hold and marks the Work `costKnown=false`, to be
  *   released later by `reconcile` (the Provider-usage path, WP-10);
  * - a parent never leaves `join=all` children behind that nobody can join:
@@ -145,16 +146,18 @@ export class RunLifecycle {
    * Cancellation is the same operation as `cancel` (it propagates to the live
    * children), so a caller cannot end a parent and leave orphans behind.
    */
-  settle(
-    runId: string,
-    status: TerminalRunStatus,
-    usage: RunUsage = { tokensUsed: 0, measured: false },
-  ): Run {
-    validateUsage(usage);
+  settle(runId: string, status: TerminalRunStatus, usage?: RunUsage): Run {
+    if (usage !== undefined) validateUsage(usage);
     // Cancellation goes through the propagating path, but a measured usage report
     // for the cancelled Run is still booked (R6-03).
     if (status === 'cancelled') return this.cancel(runId, usage);
-    return this.end(runId, status, (run) => ({ outcome: status, workId: run.workId }), usage);
+    const run = this.requireRun(runId);
+    return this.end(
+      runId,
+      status,
+      (ended) => ({ outcome: status, workId: ended.workId }),
+      usage ?? this.initialUsage(run),
+    );
   }
 
   /**
@@ -190,9 +193,13 @@ export class RunLifecycle {
    * The parent's own transition is validated *before* any child is touched, and
    * the whole cascade commits or rolls back together.
    */
-  cancel(runId: string, usage: RunUsage = { tokensUsed: 0, measured: false }): Run {
-    validateUsage(usage);
+  cancel(runId: string, usage?: RunUsage): Run {
+    if (usage !== undefined) validateUsage(usage);
     const run = this.requireRun(runId);
+    // A Run that never started an Attempt cannot have consumed anything: its usage
+    // is a known zero, so cancelling it releases the reservation instead of holding
+    // it as unknown forever (R7-09/R8-03).
+    const effective = usage ?? this.initialUsage(run);
     if (!canTransitionRun(run.status, 'cancelled')) {
       fail('VALIDATION_ERROR', `Run ${run.id} cannot move ${run.status} → cancelled`, {
         runId: run.id,
@@ -205,7 +212,7 @@ export class RunLifecycle {
         run,
         'cancelled',
         () => ({ outcome: 'cancelled', workId: run.workId }),
-        usage,
+        effective,
       );
     });
   }
@@ -265,8 +272,8 @@ export class RunLifecycle {
         name: 'run.ended',
         entityId: run.id,
         // The Run row does not change on reconciliation, so `entityVersion` repeats;
-        // the event's own `cursor` is the order ("data.md" §5), which is why no
-        // synthetic revision is invented (DC-48).
+        // the event's own `cursor` is the monotonic order (`data.md` §2), which is
+        // why no synthetic revision is invented (DC-48).
         entityVersion: run.version,
         data: {
           outcome: run.status,
@@ -284,6 +291,18 @@ export class RunLifecycle {
       this.refreshCostKnown(run.workId);
       return this.requireRun(run.id);
     });
+  }
+
+  /**
+   * The usage a Run can be assumed to have when nobody reported one.
+   *
+   * A Run with no Attempt never reached a model, so it is a known zero and its
+   * reservation is released; a Run that started keeps the hold as unknown until the
+   * Provider usage is reconciled (`reliability.md` §3).
+   */
+  private initialUsage(run: Run): RunUsage {
+    const started = this.store.attempts.list({ where: 'run_id = ?', params: [run.id] }).length > 0;
+    return started ? { tokensUsed: 0, measured: false } : { tokensUsed: 0, measured: true };
   }
 
   /**
@@ -432,16 +451,11 @@ export class RunLifecycle {
     for (const child of children) {
       if (!canTransitionRun(child.status, 'cancelled')) continue;
       this.cancelDescendants(child);
-      // A child that never started an Attempt cannot have consumed anything, so its
-      // usage is known to be zero and its reservation must be released. Only a child
-      // that really ran keeps the hold as unknown (R7-09).
-      const started =
-        this.store.attempts.list({ where: 'run_id = ?', params: [child.id] }).length > 0;
       this.applyEnd(
         child,
         'cancelled',
         () => ({ outcome: 'cancelled', workId: child.workId, cancelledWithParent: run.id }),
-        started ? { tokensUsed: 0, measured: false } : { tokensUsed: 0, measured: true },
+        this.initialUsage(child),
       );
     }
   }

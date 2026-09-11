@@ -101,7 +101,7 @@
 
 ## T13 独立 Review 第五轮与修复（第五轮 FAIL → 修复）
 
-- 第五轮独立 Review 判 FAIL（0×P1/5×P2/9×P3，编号 R5-01..R5-14），对抗性核验认为报告结论成立但严重度标定偏低（按 `workflow.md` §65 应为 P1），并补出 M-1..M-4。
+- 第五轮独立 Review 判 FAIL（0×P1/5×P2/9×P3，编号 R5-01..R5-14），对抗性核验认为报告结论成立但严重度标定偏低（按 `workflow.md` §6（第 65 行）应为 P1），并补出 M-1..M-4。
 - 修复：
   - R5-01/Q-01 残留：`operationId` 指纹覆盖全载荷，任一字段不同即 `IDEMPOTENCY_CONFLICT`（DC-51）。
   - R5-02/Q-04 残留：`settleRun(...,'cancelled')` 与 `cancel` 合并为同一路径并向下传播；`cancel` 先校验父迁移、再在单事务内取消子树（DC-49、M-3）。
@@ -142,6 +142,19 @@
   - R7-08：记录中 Work 状态改为 `workStatusSchema` 的真实取值；严重性引用改为 `workflow.md` §6（第 65 行）。
   - R7-09：级联取消按「有无 Attempt」区分已知零用量与未知用量（DC-57）。
 - 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **228 passed**；`pnpm test:integration` 124 passed。
+
+## T16 独立 Review 第八轮与修复（第八轮 FAIL → 修复）
+
+- 第八轮独立 Review 判 FAIL（0×P1、3×P2、6×P3，编号 R8-01..R8-09）。
+- 修复：
+  - R8-01/R8-02：新增 `dispatchRequestSchema` 与 `assessRequestSchema`（contracts），`requestDispatch`/`assess` 入口首行校验，畸形输入与非法枚举统一 `VALIDATION_ERROR`，且不留 Chief 待办（DC-59）。
+  - R8-03（P2）：`initialUsage(run)` 抽成一处，被取消的 Run 自身与级联子 Run 共用「无 Attempt ⇒ 已知零、立即释放预留」规则；补「取消未启动 Chief 后可再派发同额 Run」回归断言。
+  - R8-04/R8-09：新增 `dispatchExtrasSchema` 在任何快照冻结前校验 `authorizationRef`/`requiredOutputSchemas`/`contextPayload`；`SnapshotWriter.freeze` 增加 payload 必须是 JSON 对象的兜底校验（DC-59）。
+  - R8-05：DC-35 改写为实测语义（只有 `join=all` 在场才进 `waiting_children`；required 失败保持当前状态）。
+  - R8-06：DC-48 改为完整字段表 + 字段层级 + 排序语义；DC-52 指向 DC-48。
+  - R8-07：DC-56/T13 的 `§65` 引用改为 `workflow.md` §6（第 65 行）。
+  - R8-08：`data.md` §5→§2（事件游标）、`contextSelection.readPaths`→`codePaths`、`charges tokensUsed`→封顶后的 `chargedTokens` 三处注释更正。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **230 passed**；`pnpm test:integration` 124 passed。
 
 ## T9 待办
 

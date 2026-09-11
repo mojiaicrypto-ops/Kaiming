@@ -7,6 +7,7 @@
  * written and read with explicit SQL, and storage blocks UPDATE and DELETE.
  */
 import {
+  jsonObjectSchema,
   snapshotSchema,
   type JsonObject,
   type Snapshot,
@@ -68,6 +69,15 @@ export class SnapshotWriter {
      */
     options: { readonly identityPayload?: JsonObject } = {},
   ): FrozenSnapshot {
+    // A payload that is not a JSON object would be written and then fail on every
+    // read (`snapshotSchema` requires an object), so it is refused up front
+    // (R8-09).
+    if (!jsonObjectSchema.safeParse(payload).success) {
+      throw new StorageError('CONSTRAINT_VIOLATION', 'snapshot payload must be a JSON object', {
+        code: 'SNAPSHOT_PAYLOAD_INVALID',
+        type,
+      });
+    }
     const serialized = canonicalJson(payload);
     const hash = sha256(canonicalJson(options.identityPayload ?? payload));
     // Identity is `(type, hash)` (`data.md` §2), so re-freezing is idempotent per

@@ -14,6 +14,9 @@
  *   restart).
  */
 import {
+  assessRequestSchema,
+  dispatchExtrasSchema,
+  dispatchRequestSchema,
   dispatchSnapshotSchema,
   dispatchSpecSchema,
   professionalDispatchSpecSchema,
@@ -218,8 +221,10 @@ export class Orchestrator {
    * of how the Work was routed stays observable (`data.md` §2).
    */
   assess(input: AssessInput): Assessment {
-    const work = this.requireWork(input.workId);
-    const payload = input.payload;
+    // `protocol.md` §1: a malformed `assessment.submit` is a `VALIDATION_ERROR`,
+    // never a raw TypeError or a storage-layer violation (R8-02).
+    const { workId, payload } = parseOrFail(assessRequestSchema, input, 'assessment.submit');
+    const work = this.requireWork(workId);
     // The documented routing order is re-applied here (`workflow.md` §2) so a Chief
     // cannot record a lower level than the lockdown/operation rules demand. Only
     // the L3 floor is enforced as a hard error: L1 vs L2 depends on criteria the
@@ -286,9 +291,25 @@ export class Orchestrator {
    */
   dispatch(input: DispatchInput): DispatchResult {
     // The contract Schema runs first: `validateDispatchSpec` reads fields such as
-    // `contextSelection.readPaths`, and a malformed spec must fail as
+    // `contextSelection.codePaths`, and a malformed spec must fail as
     // `VALIDATION_ERROR` rather than as an uncaught `TypeError` (R7-01).
     const spec = parseOrFail(dispatchSpecSchema, input.spec, 'dispatch spec');
+    // The remaining frozen inputs are validated before anything is written, so an
+    // invalid `authorizationRef`/`requiredOutputSchemas`/`contextPayload` cannot
+    // leave snapshot rows behind (R8-04/R8-09).
+    const extras = parseOrFail(
+      dispatchExtrasSchema,
+      {
+        ...(input.authorizationRef === undefined
+          ? {}
+          : { authorizationRef: input.authorizationRef }),
+        ...(input.requiredOutputSchemas === undefined
+          ? {}
+          : { requiredOutputSchemas: input.requiredOutputSchemas }),
+        ...(input.contextPayload === undefined ? {} : { contextPayload: input.contextPayload }),
+      },
+      'dispatch input',
+    );
     enforce(validateDispatchSpec(spec), 'dispatch spec');
     const work = this.requireWork(spec.workId);
 
@@ -362,14 +383,16 @@ export class Orchestrator {
     } as unknown as JsonObject;
     const contextSnapshotId = this.snapshots.freeze(
       'context',
-      input.contextPayload ?? fallbackContext,
+      extras.contextPayload ?? fallbackContext,
     ).hash;
 
     const withoutHash = {
       dispatchSpec: spec,
-      ...(input.authorizationRef === undefined ? {} : { authorizationRef: input.authorizationRef }),
+      ...(extras.authorizationRef === undefined
+        ? {}
+        : { authorizationRef: extras.authorizationRef }),
       effectiveScope: spec.scope,
-      requiredOutputSchemas: [...(input.requiredOutputSchemas ?? [])],
+      requiredOutputSchemas: [...(extras.requiredOutputSchemas ?? [])],
       profileRevision: spec.profileRevision,
       contextSnapshotId,
     } as const;
@@ -434,8 +457,12 @@ export class Orchestrator {
    * a parent other than the caller's own Chief is refused outright.
    */
   requestDispatch(input: DispatchRequestInput): DispatchRequestResult {
-    const run = this.store.runs.find(input.runId);
-    if (run === undefined) fail('NOT_FOUND', `Run ${input.runId} does not exist`);
+    // The whole request is validated up front (`protocol.md` §1/§6): malformed
+    // source refs or output lists must not escape as a raw TypeError, and bad field
+    // values must not be persisted into `chief_action_required` (R8-01).
+    const request = parseOrFail(dispatchRequestSchema, input, 'request_dispatch request');
+    const run = this.store.runs.find(request.runId);
+    if (run === undefined) fail('NOT_FOUND', `Run ${request.runId} does not exist`);
     if (run.role === 'chief') {
       fail('VALIDATION_ERROR', 'a Chief Run dispatches directly; request_dispatch is for agents', {
         runId: run.id,
@@ -445,14 +472,14 @@ export class Orchestrator {
     if (chiefRunId === undefined) {
       fail('NOT_AUTHORIZED', `Run ${run.id} has no Chief parent`, { runId: run.id });
     }
-    if (input.parentRunId !== undefined && input.parentRunId !== chiefRunId) {
+    if (request.parentRunId !== undefined && request.parentRunId !== chiefRunId) {
       fail('NOT_AUTHORIZED', `Run ${run.id} may only request work from its own Chief Run`, {
-        requested: input.parentRunId,
+        requested: request.parentRunId,
         actual: chiefRunId,
       });
     }
-    if (input.workId !== undefined && input.workId !== run.workId) {
-      fail('NOT_AUTHORIZED', `Run ${run.id} belongs to Work ${run.workId}, not ${input.workId}`, {
+    if (request.workId !== undefined && request.workId !== run.workId) {
+      fail('NOT_AUTHORIZED', `Run ${run.id} belongs to Work ${run.workId}, not ${request.workId}`, {
         runId: run.id,
         workId: run.workId,
       });
@@ -460,38 +487,38 @@ export class Orchestrator {
     // `protocol.md` §6 does not carry a purpose; the role's primary purpose is the
     // honest default, and a caller may name another one it is allowed to carry.
     const purpose =
-      input.purpose ??
-      (PRIMARY_PURPOSE_BY_ROLE as Record<string, string | undefined>)[input.requestedRole] ??
+      request.purpose ??
+      (PRIMARY_PURPOSE_BY_ROLE as Record<string, string | undefined>)[request.requestedRole] ??
       '';
-    enforce(validateRolePurpose(input.requestedRole, purpose), 'dispatch request');
+    enforce(validateRolePurpose(request.requestedRole, purpose), 'dispatch request');
     const chief = this.store.runs.find(chiefRunId);
     if (chief === undefined) fail('NOT_FOUND', `Chief Run ${chiefRunId} does not exist`);
     // The todo is idempotent per `operationId`: a retried request must not become a
     // second Chief action (reliability.md §1 "至少一次投递、避免重复创建").
     // The fingerprint covers the whole request: a key reused with any different
     // field must be a conflict, not a silently dropped command (`protocol.md` §1).
-    const request = {
+    const frozenRequest = {
       requestedBy: run.id,
       workId: run.workId,
-      role: input.requestedRole,
+      role: request.requestedRole,
       purpose,
-      goal: input.goal,
-      stage: input.stage ?? 'assist',
-      reason: input.reason ?? null,
-      sourceRefs: (input.sourceRefs ?? []).map((ref) => ({
+      goal: request.goal,
+      stage: request.stage ?? 'assist',
+      reason: request.reason ?? null,
+      sourceRefs: (request.sourceRefs ?? []).map((ref) => ({
         kind: ref.kind,
         id: ref.id,
         version: ref.version ?? '1',
       })),
-      requiredOutputs: [...(input.requiredOutputs ?? [])],
-      requiredChild: input.requiredChild ?? false,
-      budgetAllocation: input.budgetAllocation ?? 0,
+      requiredOutputs: [...(request.requiredOutputs ?? [])],
+      requiredChild: request.requiredChild ?? false,
+      budgetAllocation: request.budgetAllocation ?? 0,
       parentRunId: chiefRunId,
     };
-    const fingerprint = operationFingerprint(request);
+    const fingerprint = operationFingerprint(frozenRequest);
     // Without a caller key an identical request must still not file a second todo,
     // so the fingerprint itself becomes the idempotency key (R6-09).
-    const operationId = input.operationId ?? `derived:${fingerprint}`;
+    const operationId = request.operationId ?? `derived:${fingerprint}`;
 
     const existing = findEvent(this.store, {
       names: ['chief_action_required'],
@@ -552,18 +579,18 @@ export class Orchestrator {
           reason: 'agent_dispatch',
           requestedBy: run.id,
           operationId,
-          operationIdSource: input.operationId === undefined ? 'derived' : 'client',
+          operationIdSource: request.operationId === undefined ? 'derived' : 'client',
           fingerprint,
           workId: run.workId,
-          role: request.role,
-          purpose: request.purpose,
-          goal: request.goal,
-          stage: request.stage,
-          requestReason: request.reason,
-          sourceRefs: request.sourceRefs,
-          requiredOutputs: request.requiredOutputs,
-          requiredChild: request.requiredChild,
-          budgetAllocation: request.budgetAllocation,
+          role: frozenRequest.role,
+          purpose: frozenRequest.purpose,
+          goal: frozenRequest.goal,
+          stage: frozenRequest.stage,
+          requestReason: frozenRequest.reason,
+          sourceRefs: frozenRequest.sourceRefs,
+          requiredOutputs: frozenRequest.requiredOutputs,
+          requiredChild: frozenRequest.requiredChild,
+          budgetAllocation: frozenRequest.budgetAllocation,
         },
       });
       return {
