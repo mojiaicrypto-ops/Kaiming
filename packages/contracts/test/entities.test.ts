@@ -390,6 +390,17 @@ describe('entity schemas', () => {
     expect(Object.keys(schemas).sort()).toEqual([...DOCUMENTED_TABLES].sort());
   });
 
+  it('rejects an authorization operation outside the operation vocabulary', () => {
+    // A typo must not sit in the database as a permanently unusable grant (R15-02).
+    const result = authorizationSchema.safeParse({ ...rows.authorization, operations: ['writ'] });
+    expect(result.success).toBe(false);
+    const valid = authorizationSchema.safeParse({
+      ...rows.authorization,
+      operations: ['read', 'edit', 'git', 'deploy'],
+    });
+    expect(valid.success).toBe(true);
+  });
+
   it('accepts one valid row per table', () => {
     for (const table of DOCUMENTED_TABLES) {
       const schema = schemas[table];

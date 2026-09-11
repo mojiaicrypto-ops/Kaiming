@@ -188,6 +188,21 @@ export const WORKSPACE_WRITE_OPERATIONS = [
 
 const WORKSPACE_WRITE_OPERATION_SET: ReadonlySet<string> = new Set(WORKSPACE_WRITE_OPERATIONS);
 
+/** Operations that read the workspace or the network. */
+export const READ_OPERATIONS = ['read', 'search'] as const satisfies readonly OperationName[];
+
+const READ_OPERATION_SET: ReadonlySet<string> = new Set(READ_OPERATIONS);
+
+/** True when any of `operations` can write inside the workspace. */
+export function includesWorkspaceWrite(operations: readonly string[]): boolean {
+  return operations.some((operation) => WORKSPACE_WRITE_OPERATION_SET.has(operation));
+}
+
+/** True when any of `operations` can read. */
+export function includesRead(operations: readonly string[]): boolean {
+  return operations.some((operation) => READ_OPERATION_SET.has(operation));
+}
+
 /** True when the declared scope writes anything, by path or by operation. */
 export function declaresWorkspaceWrite(scope: {
   readonly operations: readonly string[];

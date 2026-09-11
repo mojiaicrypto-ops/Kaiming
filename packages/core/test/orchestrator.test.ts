@@ -37,6 +37,9 @@ const L3_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e84';
 const NONE_WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e54';
 const WRITE_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e85';
 const NETWORK_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e86';
+const READONLY_WRITE_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e87';
+const DEPLOY_READ_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e88';
+const NONE_GIT_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e89';
 const MODEL_ID = 'test-model';
 const emptyScope = { readPaths: [], writePaths: [], operations: [], networkTargets: [] };
 
@@ -242,6 +245,41 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
       goal: 'authorized workspace write',
       scope: { ...emptyScope, writePaths: ['packages/storage/src'] },
       operations: ['write'],
+      acceptedAt: new Date().toISOString(),
+    });
+
+    // R15-01: a read-only grant whose path envelope covers a write path.
+    store.authorizations.insert({
+      id: READONLY_WRITE_AUTHORIZATION_ID,
+      projectId,
+      sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      workId: WORK_ID,
+      goal: 'authorized to read a subtree',
+      scope: { ...emptyScope, writePaths: ['packages/storage/src'] },
+      operations: ['read'],
+      acceptedAt: new Date().toISOString(),
+    });
+    // A deploy grant whose read envelope covers a path, with no read operation.
+    store.authorizations.insert({
+      id: DEPLOY_READ_AUTHORIZATION_ID,
+      projectId,
+      sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      workId: WORK_ID,
+      goal: 'authorized deployment',
+      scope: { ...emptyScope, readPaths: ['docs'] },
+      operations: ['deploy'],
+      acceptedAt: new Date().toISOString(),
+    });
+    // A git grant bound to the none-level Work, to prove the write gate is
+    // independent of the grant.
+    store.authorizations.insert({
+      id: NONE_GIT_AUTHORIZATION_ID,
+      projectId,
+      sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      workId: NONE_WORK_ID,
+      goal: 'authorized git use',
+      scope: emptyScope,
+      operations: ['git'],
       acceptedAt: new Date().toISOString(),
     });
 
@@ -650,14 +688,17 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     const noneChief = orchestrator.dispatch({ spec: { ...chiefSpec(), workId: NONE_WORK_ID } }).run;
     // `git` rewrites tracked files, so a none-level Work must not get it — with or
     // without a grant of its own.
+    const gitSpec = backendSpec(noneChief.id, {
+      workId: NONE_WORK_ID,
+      taskId: undefined,
+      scope: { ...emptyScope, operations: ['git'] },
+    });
+    expect(() => orchestrator.dispatch({ spec: gitSpec })).toThrowError(
+      /cannot create a Run with write authority/,
+    );
+    // A grant bound to this very Work does not change the Work's own authority.
     expect(() =>
-      orchestrator.dispatch({
-        spec: backendSpec(noneChief.id, {
-          workId: NONE_WORK_ID,
-          taskId: undefined,
-          scope: { ...emptyScope, operations: ['git'] },
-        }),
-      }),
+      orchestrator.dispatch({ spec: gitSpec, authorizationRef: NONE_GIT_AUTHORIZATION_ID }),
     ).toThrowError(/cannot create a Run with write authority/);
 
     const chief = chiefRun();
@@ -675,6 +716,47 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
       const details = (error as { details: Record<string, unknown> }).details;
       expect(details['networkTargetsWithoutGrant']).toEqual(['10.0.0.5']);
     }
+  });
+
+  it('requires a matching capability for every declared dimension (R15-01)', () => {
+    const chief = chiefRun();
+    const writeScope = { ...emptyScope, writePaths: ['packages/storage/src'] };
+
+    // The grant's path envelope covers the write, but it grants no write operation:
+    // a Run must not freeze write scope it cannot be authorized to use.
+    try {
+      orchestrator.dispatch({
+        spec: backendSpec(chief.id, { scope: writeScope }),
+        authorizationRef: READONLY_WRITE_AUTHORIZATION_ID,
+      });
+      throw new Error('expected a coverage error');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'NOT_AUTHORIZED' });
+      const details = (error as { details: Record<string, unknown> }).details;
+      expect(details['capabilityGaps']).toEqual(['writePaths without a write operation']);
+      expect(details['uncoveredWritePaths']).toEqual([]);
+    }
+
+    // Same rule on the read side.
+    try {
+      orchestrator.dispatch({
+        spec: backendSpec(chief.id, { scope: { ...emptyScope, readPaths: ['docs'] } }),
+        authorizationRef: DEPLOY_READ_AUTHORIZATION_ID,
+      });
+      throw new Error('expected a coverage error');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'NOT_AUTHORIZED' });
+      const details = (error as { details: Record<string, unknown> }).details;
+      expect(details['capabilityGaps']).toEqual(['readPaths without a read operation']);
+    }
+
+    // An environment-only grant cannot back a write range either.
+    expect(() =>
+      orchestrator.dispatch({
+        spec: backendSpec(chief.id, { scope: writeScope }),
+        authorizationRef: AUTHORIZATION_ID,
+      }),
+    ).toThrowError(/does not cover the declared scope/);
   });
 
   it('counts a local write operation as modification authority (R13-02)', () => {

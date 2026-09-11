@@ -227,7 +227,17 @@
   - R14-03：`verifyAuthorization` 的 JSDoc 补齐路径维度与 `network` 操作要求。
   - R14-04：R13-01 的断言改为检查 `uncoveredWritePaths`（路径维度）而非仅匹配错误消息。
   - D-3/D-4：DC-63 登记路径收紧，DC-66 登记 `assess` 不是 Run 边界与 Work 等级回写缺口。
-- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **247 passed**；`pnpm test:integration` 124 passed。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **247 passed**（该修复提交时点数；随后 `088bdd7` 增加分类完备性用例，当前为 248）；`pnpm test:integration` 124 passed。
+
+## T23 独立 Review 第十五轮与修复（第十五轮 FAIL → 修复）
+
+- 第十五轮独立 Review 确认 R14-01/D-1 真修好（12 种操作 × 写范围在 none 级 Work 上全拒、带授权亦拒）、R14-02/03/05 与 D-2/D-3/D-4 到位；新增 R15-01..R15-04，对抗性核验另补一条（同族的 `readPaths`/`networkTargets` 交叉缺失）。
+- 修复：
+  - R15-01（阻断，DC-63）：授权能力与声明维度交叉核对——声明 `writePaths` 需授权含写操作、声明 `readPaths` 需授权含读操作（`includesWorkspaceWrite`/`includesRead`），否则 `capabilityGaps` ⇒ `NOT_AUTHORIZED`；只读授权（或空操作授权）不再能为写范围背书。
+  - R15-02：`authorizationSchema.operations` 改用契约枚举 `operationNameSchema`，避免拼写错误形成永久死授权。
+  - R15-03：补「none 级 Work × `git` × 带本 Work 授权」与「只读授权 × 写范围」用例。
+  - R15-04：DC-67 的操作集更正为含 `git`；T22 的 247 标注为修复提交时点数（随后 248）。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **250 passed**；`pnpm test:integration` 124 passed。
 
 ## T9 待办
 

@@ -36,6 +36,8 @@ import {
   canAllocateBudget,
   declaresWorkspaceWrite,
   decideLevel,
+  includesRead,
+  includesWorkspaceWrite,
   grantsModificationAuthority,
   isDirectChiefChild,
   isTerminalRunStatus,
@@ -807,6 +809,16 @@ export class Orchestrator {
       // `network` operation, not merely list the target (R14 D-2).
       const networkTargetsWithoutGrant =
         scope.networkTargets.length > 0 && !granted.has('network') ? [...scope.networkTargets] : [];
+      // Declaring a path is declaring the capability: a grant that lists write paths
+      // but no write operation (or read paths but no read operation) would let a Run
+      // freeze a scope it was never authorized to exercise (R15-01/R15 D-1).
+      const capabilityGaps: string[] = [];
+      if (scope.writePaths.length > 0 && !includesWorkspaceWrite(authorization.operations)) {
+        capabilityGaps.push('writePaths without a write operation');
+      }
+      if (scope.readPaths.length > 0 && !includesRead(authorization.operations)) {
+        capabilityGaps.push('readPaths without a read operation');
+      }
       const uncoveredWritePaths = scope.writePaths.filter(
         (path) => !isInsideScope(path, authorization.scope.writePaths),
       );
@@ -817,6 +829,7 @@ export class Orchestrator {
         uncoveredOperations.length > 0 ||
         uncoveredNetworkTargets.length > 0 ||
         networkTargetsWithoutGrant.length > 0 ||
+        capabilityGaps.length > 0 ||
         uncoveredWritePaths.length > 0 ||
         uncoveredReadPaths.length > 0
       ) {
@@ -830,6 +843,7 @@ export class Orchestrator {
             uncoveredOperations: [...uncoveredOperations],
             uncoveredNetworkTargets: [...uncoveredNetworkTargets],
             networkTargetsWithoutGrant,
+            capabilityGaps,
             uncoveredWritePaths: [...uncoveredWritePaths],
             uncoveredReadPaths: [...uncoveredReadPaths],
           },

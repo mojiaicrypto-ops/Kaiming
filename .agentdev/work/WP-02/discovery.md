@@ -223,6 +223,8 @@ delivery/document 若未声明可核查的 L1 前提（`semanticImpact=false`、
 - `ref` 指向不存在的行 ⇒ `NOT_AUTHORIZED`；属于其他 Work ⇒ `NOT_AUTHORIZED`；已 `revokedAt` ⇒ `NOT_AUTHORIZED`；
 - 只要提供了 `ref`（即便该等级不要求）都会核对，伪造 id 不能落库；
 - 提供 `scope` 时逐项核对覆盖：`operations` ⊆ 授权 `operations`；`networkTargets` ⊆ 授权 `scope.networkTargets` **且授权必须带 `network` 操作**（只把目标列进 scope 不等于网络写授权，第十四轮 D-2）；`writePaths`/`readPaths` 必须位于授权 `scope.writePaths`/`readPaths` 之内（路径前缀包含）。未被覆盖 ⇒ `NOT_AUTHORIZED`，details 列出各未覆盖项。
+- 能力交叉核对（第十五轮 R15-01）：声明路径即声明能力——spec 声明 `writePaths` 时授权必须含至少一个工作区写操作（`WORKSPACE_WRITE_OPERATIONS`），声明 `readPaths` 时授权必须含读操作（`read`/`search`），声明 `networkTargets` 时授权必须含 `network`。否则即使路径在授权 scope 之内也判 `NOT_AUTHORIZED`（details 的 `capabilityGaps`/`networkTargetsWithoutGrant`）。原因：只读授权（或空操作授权）不得为写范围背书并把它冻结进 `effectiveScope`。
+- 授权的能力清单取自 `Authorization.operations`（契约枚举 `operationNameSchema`，第十五轮 R15-02），路径/网络目标信封取自 `Authorization.scope`；两者是不同维度，本包不做「`scope.operations` 与 `operations` 求交」的额外规则（授权 schema 的 `operations` 是授权操作清单）。
 - 路径维度是对既有行为的收紧（第十四轮 D-3）：L3 Work 拿一张 `scope.readPaths` 为空的授权后，声明 `readPaths` 的 Run 也会被拒；这一收紧是有意的 fail-closed，登记于此。
 - `dispatch` 用 `extras.authorizationRef ?? work.authorizationRef`，因此 L3 Work 始终有可核对的授权来源（第十一轮 R11-03），并把核对通过的引用冻结进 DispatchSnapshot（第十二轮 R12-03）。
 - 仍属后续工作（承接 WP-04/WP-05）：授权的 `acceptedAt`/来源消息核对、`once` 类授权的消费记账、`work.level` 的写入（`assess` 目前不回写 Work 行，`works.update` 全仓无调用点）。
@@ -248,7 +250,7 @@ Run 建立的 Core 唯一入口（`Orchestrator.dispatch`）按下列顺序判�
 
 `dispatch` 的写权限门禁原先只看 `spec.scope.writePaths`，于是两处 fail-open：`none` 级 Work 用 `operations:['edit']`（空 `writePaths`）即可建 Run；`none` 级 Work 声明一个被授权的环境操作（如 `deploy`）后，派生的 `runLevel='L3'` 会覆盖 Work 等级，从而也能带 `writePaths`。修复：
 - 门禁改用 **Work 自己的等级**（`grantsModificationAuthority(work.level)`），spec 不能靠声明环境操作升级修改权；
-- 「是否修改」由 `declaresWorkspaceWrite(scope)` 判定：`writePaths` 非空 **或** 命中工作区写操作集合 `WORKSPACE_WRITE_OPERATIONS = ['edit','write','artifact_write']`（定义在 `domain/routing.ts`）。
+- 「是否修改」由 `declaresWorkspaceWrite(scope)` 判定：`writePaths` 非空 **或** 命中工作区写操作集合 `WORKSPACE_WRITE_OPERATIONS = ['edit','write','artifact_write','git']`（定义在 `domain/routing.ts`；`git` 于第十四轮 R14-01 补入，`push` 属环境操作集合）。
 `data.md` §2「none不产生修改授权」由此在 Run 建立边界真正生效。
 
 ## DC-68 授权范围覆盖的路径维度（Review 第十三轮 R13-01）

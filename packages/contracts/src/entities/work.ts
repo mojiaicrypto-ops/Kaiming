@@ -11,6 +11,7 @@ import {
   gitRevisionSchema,
   hashSchema,
   idSchema,
+  operationNameSchema,
   repoPathSchema,
   scopeSchema,
   sourceRefSchema,
@@ -131,7 +132,9 @@ export const authorizationSchema = z.strictObject({
   workId: idRefSchema,
   goal: z.string().min(1),
   scope: scopeSchema,
-  operations: list(z.string().min(1)),
+  // The same vocabulary as `Scope.operations`; a free string would let a typo sit
+  // in the database as a permanently unusable grant (R15-02).
+  operations: list(operationNameSchema),
   acceptedAt: timeSchema,
   revokedAt: timeSchema.optional(),
 });
