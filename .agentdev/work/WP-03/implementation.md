@@ -259,3 +259,15 @@
 - 外置语料：第十三轮新语料 40 条「必须只读」**0 fail-open**；本轮新增/修订测试 11 条必须授权 + 84 条必须只读全部通过。
 - 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。
 - 结论（工程判断，供产品方决定）：确定性基线的 fail-open 方向现已按结构关闭；代价是丰富措辞（含名词短语的祈使、多目标、排除式）一律请求澄清。自然语言语义必须由 WP-04/06 的模型 Assessment 承担，否则只能继续以可用性换取确定性。
+
+## T23 独立 Review 第十四轮与修复（抑制集合 + 拒绝纠正规则）
+
+- 第十四轮 Review 判 **FAIL**（3×P1：前件+承接副词绕过、情态词归一洗白、拒绝纠正回归；2×P2：多目标静默部分授权、记录口径；3×P3）。对抗性核验确认 FAIL 成立，并补出「命令之后的（后置）条件同样失效」「命令尾礼貌语」「I think…then…」等同根因通道。
+- 修复：
+  1. **统一抑制集合**：任一分句命中疑问/选择/征询/评价/条件/假设/**前置条件** ⇒ 整条消息不授权（前件与**后置**条件对称：`修改 X，如果没问题` 不再授权）。条件词表补 `\bafter\b|\bbefore\b`。
+  2. **情态词不再被剥离**：`ADVERB_LEAD_PATTERN` 只允许剥离承接副词与裸 `要`；`需要/应该/必须/得/该` 保留在核心子句中，由陈述守卫拦下（`但需要修改 X` 只读，`但要修复 X` 仍可命令）。
+  3. **拒绝纠正规则**：命令可出现在首子句、并列连词之后，或**紧接一个拒绝子句**之后（`别改 A，改 B`、`不要改 A，但要修复 B`）。
+  4. **礼貌尾子句忽略**：`谢谢/thanks` 等不参与授权也不抑制（`修改 X。谢谢` 正常授权）。
+  5. 评价词表补 `i think|it seems|in my opinion`。
+- 回归网：新增第十四轮 10 条必须只读 + 3 条必须授权；外置语料 40 条 0 fail-open。
+- 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。

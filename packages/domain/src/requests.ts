@@ -154,7 +154,7 @@ const CHOICE_PATTERNS: readonly RegExp[] = [
 /** Conditions that gate a command, including bare temporal markers. */
 const CONDITION_PATTERNS: readonly RegExp[] = [
   /(一旦|的话|确认后|确认之后|经确认|经批准|批准后|之后|以后|否则|待你|等你|等消息|看情况|酌情|发现问题|如有问题|视情况|先讨论|收到回复)/u,
-  /\b(once|after (?:you|i|we|discussion)|assuming|provided that|subject to|upon approval|following approval|pending review)\b/iu,
+  /\b(once|after|before|assuming|provided that|subject to|upon approval|following approval|pending review)\b/iu,
 ];
 
 /**
@@ -165,8 +165,11 @@ const CONDITION_PATTERNS: readonly RegExp[] = [
  */
 const COMMENT_PATTERNS: readonly RegExp[] = [
   /(明智|愚蠢|必要|必需|合适|不妥|正确|错误|值得|重要|不错|很好|可以|行不通|越权|属于|由.{0,6}决定|不太|有点|有点不)/u,
-  /\b(seems?|looks?|probably|maybe|might be|is (?:not )?(?:right|wrong|wise|needed|necessary))\b/iu,
+  /\b(seems?|looks?|probably|maybe|might be|is (?:not )?(?:right|wrong|wise|needed|necessary)|i think|it seems|in my opinion)\b/iu,
 ];
+
+/** Clauses that are only politeness ("谢谢", "thanks") carry no request. */
+const POLITE_TAIL_PATTERN = /^(?:谢谢|多谢|感谢|thanks|thank you|thx|麻烦了|拜谢)[。！!\s]*$/iu;
 
 /** Hypotheticals and quotations are not instructions. */
 const HYPOTHETICAL_PATTERNS: readonly RegExp[] = [
@@ -225,7 +228,7 @@ const POLITE_LEAD_PATTERN = /^(?:请|麻烦|帮我|帮忙|劳驾|kindly|please)\
 
 /** Adverbs and conjunctions that may precede the verb of a command. */
 const ADVERB_LEAD_PATTERN =
-  /^(?:(?:但|但是|而是|不过|然后|再|同时|也|另外|并且|而且|就|先|特别|重点|主要|务必|一定|直接|立刻|马上|尽快|顺便|顺手)\s*)+(?:要|需要|请|麻烦|帮我|帮忙)?\s*/u;
+  /^(?:(?:但|但是|而是|不过|然后|再|同时|也|另外|并且|而且|就|先|特别|重点|主要|务必|一定|直接|立刻|马上|尽快|顺便|顺手)\s*)+(?:要)?\s*/u;
 
 /** Number of change verbs in a clause, in either language. */
 function countChangeVerbs(clause: string): number {
@@ -355,37 +358,42 @@ export function routeMessage(body: string): MessageRouting {
   const text = body.trim();
   const clauses = splitClauses(text);
 
-  // A message that asks, weighs options or asks for advice anywhere is a question: no
-  // clause may authorize (`refactor X, yes or no` must not authorize through clause one).
-  const interrogative = clauses.some(
+  // A message that asks, weighs options, asks for advice, states a condition or makes a
+  // judgement *anywhere* is not an order: no clause may authorize. Conditions count on
+  // both sides — "如果没问题，修改 X" and "修改 X，如果没问题" are the same request
+  // (W3R13/W3R14 review).
+  const suppressed = clauses.some(
     (clause) =>
       matches(QUESTION_PATTERNS, clause.text) ||
       matches(CHOICE_PATTERNS, clause.text) ||
       matches(ADVICE_PATTERNS, clause.text) ||
-      matches(COMMENT_PATTERNS, clause.text),
+      matches(COMMENT_PATTERNS, clause.text) ||
+      matches(CONDITION_PATTERNS, clause.text) ||
+      matches(HYPOTHETICAL_PATTERNS, clause.text) ||
+      matches(PRECONDITION_PATTERNS, clause.text),
   );
-  let conditional = interrogative;
   const targets: string[] = [];
   let explanation = false;
+  let previousWasRefusal = false;
 
   clauses.forEach((clause, index) => {
     const reading = readClause(clause.text);
-    // A command may open the message or continue it after a coordinating conjunction.
-    // Any other preamble ("经批准", "视具体情况", "depending on the result") makes the
-    // following clause a hypothetical rather than an order — that rule is structural,
-    // so an unregistered preamble cannot open a hole (W3R13 review).
-    const continues = /^(?:但|但是|而是|不过|也|再|就|则)/u.test(clause.text);
-    const allowed = index === 0 || clause.conjunction || continues;
-    if (reading.target !== undefined && !conditional && !interrogative && allowed) {
+    if (POLITE_TAIL_PATTERN.test(clause.text)) {
+      previousWasRefusal = false;
+      return;
+    }
+    // A command may open the message, follow a coordinating conjunction, or correct a
+    // refusal ("别改 A，改 B"). Any other preamble ("经批准", "视具体情况",
+    // "depending on the result") makes the following clause hypothetical — that rule is
+    // structural, so an unregistered preamble cannot open a hole (W3R13/W3R14 review).
+    const allowed = index === 0 || clause.conjunction || previousWasRefusal;
+    if (reading.target !== undefined && !suppressed && allowed) {
       targets.push(reading.target);
     } else if (reading.target !== undefined) {
       explanation = true;
     }
     if (reading.explanation) explanation = true;
-    conditional =
-      matches(CONDITION_PATTERNS, clause.text) ||
-      matches(HYPOTHETICAL_PATTERNS, clause.text) ||
-      conditional;
+    previousWasRefusal = matches(NEGATION_PATTERNS, clause.text);
   });
 
   const items: MessageWorkItem[] = [];

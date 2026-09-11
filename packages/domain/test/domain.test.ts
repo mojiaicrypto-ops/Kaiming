@@ -294,6 +294,8 @@ describe('level routing (workflow.md §2)', () => {
       '将 docs/PLAN.md 删除',
       '对 docs/PLAN.md 修改',
       '不要修改 docs/PLAN.md，但要修复 docs/INDEX.md',
+      '别改 docs/PLAN.md，改 docs/INDEX.md',
+      '修改 docs/INDEX.md。谢谢',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(true);
@@ -383,6 +385,18 @@ describe('level routing (workflow.md §2)', () => {
       '补充完毕 docs/INDEX.md',
       'fix docs/INDEX.md update docs/PLAN.md',
       'docs/INDEX.md 修复 更新 整理',
+      // Round 14: preamble plus continuative adverb, modal laundering, post-command
+      // conditions and opinion clauses.
+      '视具体情况，就修改 docs/INDEX.md',
+      '经审批，再修改 docs/INDEX.md',
+      'after review, then update docs/INDEX.md',
+      '但需要修改 docs/INDEX.md',
+      '另外需要修改 docs/INDEX.md',
+      '修改 docs/INDEX.md，如果没问题',
+      '删除 docs/PLAN.md，但是可能需要审批',
+      'I think it needs work, then update docs/INDEX.md',
+      '需要修改 docs/INDEX.md，也需要修改 docs/PLAN.md',
+      '修改 docs/INDEX.md。不太明智',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(false);
