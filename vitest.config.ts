@@ -13,6 +13,9 @@ export default defineConfig({
     alias: {
       '@agentdev/contracts': fromRoot('packages/contracts/src/index.ts'),
       '@agentdev/pi-runtime': fromRoot('packages/pi-runtime/src/index.ts'),
+      '@agentdev/domain': fromRoot('packages/domain/src/index.ts'),
+      '@agentdev/storage': fromRoot('packages/storage/src/index.ts'),
+      '@agentdev/core': fromRoot('packages/core/src/index.ts'),
     },
   },
   test: {

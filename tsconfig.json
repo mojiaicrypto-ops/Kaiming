@@ -6,7 +6,10 @@
     "declarationMap": false,
     "paths": {
       "@agentdev/contracts": ["./packages/contracts/src/index.ts"],
-      "@agentdev/pi-runtime": ["./packages/pi-runtime/src/index.ts"]
+      "@agentdev/pi-runtime": ["./packages/pi-runtime/src/index.ts"],
+      "@agentdev/domain": ["./packages/domain/src/index.ts"],
+      "@agentdev/storage": ["./packages/storage/src/index.ts"],
+      "@agentdev/core": ["./packages/core/src/index.ts"]
     }
   },
   "include": [

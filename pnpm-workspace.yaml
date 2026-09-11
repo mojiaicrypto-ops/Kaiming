@@ -11,6 +11,10 @@ allowBuilds:
   '@google/genai': false
   esbuild: false
   protobufjs: false
+  # better-sqlite3 is the pinned project database (ARCHITECTURE.md §3). Its
+  # install script fetches/compiles the native binding, so it must run; the
+  # version is exact and the lockfile is committed.
+  better-sqlite3: true
 
 minimumReleaseAgeExclude:
   - '@types/node@22.20.2'
