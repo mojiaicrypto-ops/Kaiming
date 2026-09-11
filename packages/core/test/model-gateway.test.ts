@@ -137,6 +137,24 @@ describe('model gateway (AC-043, AC-044, AC-045)', () => {
     expect(ModelGateway.tokensOf(response)).toEqual({ input: 3, output: 1 });
   });
 
+  it('runs against a Provider that needs no secret (T-01)', async () => {
+    // `secretRef` is optional: a local or unauthenticated endpoint is legitimate, and
+    // freezing it as `null` used to fail every call with CONFIG_INVALID.
+    const anonymous = provider({ secretRef: undefined });
+    delete (anonymous as { secretRef?: string }).secretRef;
+    config.upsertProvider(anonymous);
+    config.update('global', { roleOverrides: { backend: roleProfile } });
+    const frozen = config.freeze('backend');
+    // The frozen provider must omit the key rather than store `null`.
+    expect(config.readFrozen(frozen.snapshotId)?.provider).not.toHaveProperty('secretRef');
+    const response = await gateway.complete(
+      { role: 'backend', configSnapshotId: frozen.snapshotId } as unknown as Run,
+      [{ role: 'user', content: 'hi' }],
+    );
+    expect(response).toMatchObject({ ok: true, text: 'pong' });
+    expect(transport.requests[0]?.apiKey).toBeUndefined();
+  });
+
   it('never switches model for an active Run when configuration changes', async () => {
     const run = configure();
     // A new default model appears while the Run is active.

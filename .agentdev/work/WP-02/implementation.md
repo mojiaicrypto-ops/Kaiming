@@ -259,6 +259,14 @@
 - 本轮记录级修正（不改运行行为）：R17-02（DC-66/DC-67 三元素写集合）、R17-03（`artifact_write` 不参与能力交叉核对）、R17-04（`assess` 拒绝 details 补 `environmentScope`）、R17-05（环境操作集合注释随分类更新）、N-17-01（`planVersion: 4`）、R17-01（新增 DC-72 登记 `none` Work 的升级路径限制）。
 - 结论：WP-02 进入独立 Test。
 
+## T26 独立 Test 第一轮（FAIL：T-01）与修复
+
+- 独立 Test（第十七轮 Review PASS 后）判定 **FAIL**：AC-043 不通过（T-01，P1）。其余 5 条 AC（AC-044/045/046/047/082）通过，自建实验 51 断言 0 失败；契约命令全绿（unit 251、integration 124）。
+- T-01：`ConfigStore.freeze` 把「Provider 没有 `secretRef`」（合法的本地/无鉴权端点）冻结成 JSON `null`，而 `ModelGateway.complete` 以 `secretRef === undefined` 判断「无需 Secret」，于是 `null !== undefined` 被当成「Secret 不可用」，每个 Run 的每次模型调用都返回 `CONFIG_INVALID: secret null is not available`。产品测试夹具全部使用 `secretRef: 'local-secret'`，故 251 单测未覆盖。
+- 修复：冻结投影在 `secretRef === undefined` 时省略该键（不再写 `null`）；补「无 secretRef 的 Provider 可完成调用且冻结快照不含该键」的正例（`model-gateway.test.ts`）。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **252 passed**；`pnpm test:integration` 124 passed。
+- 后续：按失败路由进入独立 Review（第十八轮），通过后重新独立 Test（`test.md` 将记录第二轮）。
+
 ## T9 待办
 
 - 独立 Review 与 Test（独立上下文）、结算与 `docs/INDEX.md` 状态更新、以及 `docs/delivery/acceptance.md` 中本包 AC 的证据登记。

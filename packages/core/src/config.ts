@@ -493,7 +493,10 @@ export class ConfigStore {
         providerId: provider.providerId,
         type: provider.type,
         baseUrl: provider.baseUrl,
-        secretRef: provider.secretRef ?? null,
+        // A Provider without a `secretRef` is a legitimate endpoint (local or
+        // unauthenticated); freezing `null` would make the gateway read it as an
+        // unavailable secret and fail every call (T-01).
+        ...(provider.secretRef === undefined ? {} : { secretRef: provider.secretRef }),
       },
       model: {
         id: model.id,
