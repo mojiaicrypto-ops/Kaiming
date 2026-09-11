@@ -12,9 +12,10 @@ import {
   type StageResultContent,
   type StageResultRow,
 } from '@agentdev/contracts';
-import { canTransitionRun, isTerminalRunStatus } from '@agentdev/domain';
+import { canTransitionRun } from '@agentdev/domain';
 import { withTransaction, type ProjectStore } from '@agentdev/storage';
 import { ProtocolError } from './errors.js';
+import { RunLifecycle } from './run-lifecycle.js';
 
 /** Server-owned fields a client must never set on `stage.submit`. */
 export const OWNERSHIP_FIELDS = [
@@ -92,9 +93,11 @@ function issuesOf(error: {
 
 export class StageGate {
   private readonly store: ProjectStore;
+  private readonly lifecycle: RunLifecycle;
 
-  constructor(options: { readonly store: ProjectStore }) {
+  constructor(options: { readonly store: ProjectStore; readonly lifecycle?: RunLifecycle }) {
     this.store = options.store;
+    this.lifecycle = options.lifecycle ?? new RunLifecycle({ store: options.store });
   }
 
   /**
@@ -115,13 +118,14 @@ export class StageGate {
         details: { runId: run.id, attemptId: input.attemptId },
       });
     }
-    // A terminal Run never accepts more evidence (`workflow.md` §5.3), and a late
-    // or superseded Attempt may not rewrite it (`reliability.md` §2) — both are
-    // checked before anything is written.
-    if (isTerminalRunStatus(run.status)) {
+    // Only an executing Run accepts delivery. Terminal Runs are history
+    // (`workflow.md` §5.3) and `paused`/`waiting_permission`/`interrupted`/
+    // `recovery_required` Runs must not be rewritten by a late Attempt
+    // (`reliability.md` §2); both are refused before anything is written (N-02).
+    if (run.status !== 'running') {
       throw new ProtocolError(
         'INVALID_STATE',
-        `Run ${run.id} is ${run.status} and accepts no further stage results`,
+        `Run ${run.id} is ${run.status}; only a running Run accepts stage results`,
         { details: { runId: run.id, status: run.status } },
       );
     }
@@ -268,12 +272,11 @@ export class StageGate {
           { details: { runId: run.id, status: run.status } },
         );
       }
-      const updated = this.store.runs.update(run.id, { status: 'contract_violation' }, run.version);
-      this.store.events.append({
-        name: 'run.ended',
-        entityId: updated.id,
-        entityVersion: updated.version,
-        data: { attemptId, outcome: 'contract_violation', rejections: rejection, reason: message },
+      // The shared terminal path releases the Work-budget reservation (N-01).
+      this.lifecycle.contractViolation(run.id, {
+        attemptId,
+        reason: message,
+        rejections: rejection,
       });
       return {
         accepted: false as const,

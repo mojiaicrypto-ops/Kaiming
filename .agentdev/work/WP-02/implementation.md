@@ -61,6 +61,17 @@
 - 修复逐条记录在 `discovery.md` DC-37（RE-01..RE-13）。其中 RE-06（快照引用哈希 vs `data.md` 的 `ID` 记法）保留实现作为**需产品方确认的显式偏离**，不改写 `data.md`。
 - 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` 207 passed；`pnpm test:integration` 124 passed；`pnpm docs:check` ok。
 
+## T10 独立 Review 第二轮与修复（第二轮 FAIL → 修复）
+
+- 第二轮独立 Review（同一 `review.md` 的第二轮章节）判 FAIL：0×P1、5×P2、6×P3。第一轮 P1 已确认修好；R-05/R-09/R-10/R-11/R-12 确认修好；R-01/R-03/R-04/R-07/R-08/R-13 只算部分修复；R-02 未真正修复。
+- 新增 `packages/core/src/run-lifecycle.ts`：把「Run 进入终态的唯一下沉路径」和 Work 预算预留收敛到一处，`orchestrator.settleRun` 与 `StageGate` 的 `contract_violation` 共用，因此任何终态都会释放预留（N-01）。
+- `StageGate.submit` 改为**只有 `running` 可交付**：`paused`/`waiting_permission`/`interrupted`/`recovery_required` 与终态一律 `INVALID_STATE` 且零写入（N-02、N-08）。
+- `dispatch` 校验父 Run 状态（`ACTIVE_PARENT_STATUSES = queued/starting/running/waiting_children`）：终态或暂停的父 Run 不再接收新子 Run（N-04、N-05）；因此「父等待可接消息」测试现在有区分力——`waiting_children` 可继续分派、`completed` 必然被拒。
+- `JoinCoordinator` 真正删除未定义事件名，`chief_action_required` 按 `(parent, reason, 失败集合)` 幂等（重算不重复建待办），事件 data 携带完整结果契约（N-03、N-06、N-07）。
+- 预算准入对所有 spec（含 Core 构造的 chief spec）在下沉写入前统一判定，超限返回文档规定的 `BUDGET_EXCEEDED` 而非 Schema 约束错误（N-10）。
+- 记录修正：DC-37 RE-04 的不实表述已更正；补 DC-38（Run 参数层无授权来源）、DC-39（Join 无协议事件，承接 WP-08）。
+- 修复后验证：`pnpm typecheck` 通过；`pnpm lint` 通过；`pnpm test:unit` **210 passed**；`pnpm test:integration` 124 passed；`pnpm docs:check` ok。
+
 ## T9 待办
 
 - 独立 Review 与 Test（独立上下文）、结算与 `docs/INDEX.md` 状态更新、以及 `docs/delivery/acceptance.md` 中本包 AC 的证据登记。

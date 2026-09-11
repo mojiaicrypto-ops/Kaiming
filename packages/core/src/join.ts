@@ -9,7 +9,7 @@
  * continuing.
  */
 import { isTerminalRunStatus } from '@agentdev/domain';
-import type { Run, RunStatus, StageResultRow } from '@agentdev/contracts';
+import type { Event, Run, RunStatus, StageResultRow } from '@agentdev/contracts';
 import type { ProjectStore } from '@agentdev/storage';
 import { withTransaction } from '@agentdev/storage';
 import { ProtocolError } from './errors.js';
@@ -165,18 +165,10 @@ export class JoinCoordinator {
         (entry) => entry.join === 'all' && !isTerminalRunStatus(entry.status),
       );
       if (pending.length > 0) {
+        // The status change is the evidence: `protocol.md` §7 lists no persistent
+        // Join event, so none is invented (N-03/DC-39).
         if (parent.status === 'running') {
-          const updated = this.store.runs.update(
-            parent.id,
-            { status: 'waiting_children' },
-            parent.version,
-          );
-          this.store.events.append({
-            name: 'run.waiting_children',
-            entityId: updated.id,
-            entityVersion: updated.version,
-            data: { pending: pending.map((entry) => entry.runId) },
-          });
+          this.store.runs.update(parent.id, { status: 'waiting_children' }, parent.version);
         }
         return {
           kind: 'waiting',
@@ -192,44 +184,15 @@ export class JoinCoordinator {
         (entry) => entry.join === 'none' && isFailed(entry.status),
       );
       if (lostFireAndForget.length > 0) {
-        this.store.events.append({
-          name: 'chief_action_required',
-          entityId: parent.id,
-          entityVersion: parent.version,
-          data: {
-            reason: 'fire_and_forget_child_failed',
-            failed: lostFireAndForget.map((entry) => entry.runId),
-          },
-        });
+        this.pageChief(parent, 'fire_and_forget_child_failed', lostFireAndForget);
       }
       const failedRequired = children.filter(
         (entry) => entry.join === 'all' && entry.requiredChild && isFailed(entry.status),
       );
       if (failedRequired.length > 0) {
         // Siblings are untouched and every result travels with the todo, so the
-        // Chief can decide with the full picture (AC-046).
-        const event = this.store.events.append({
-          name: 'chief_action_required',
-          entityId: parent.id,
-          entityVersion: parent.version,
-          data: {
-            reason: 'required_child_failed',
-            failedRequired: failedRequired.map((entry) => entry.runId),
-            children: children.map((entry) => ({
-              runId: entry.runId,
-              role: entry.role,
-              status: entry.status,
-              requiredChild: entry.requiredChild,
-              join: entry.join,
-              // The Chief must be able to act from the event alone, so the
-              // delivery summary travels with it (AC-046「父获全部结果」).
-              summary: entry.stageResult?.summary ?? null,
-              artifactRefs: (entry.stageResult?.artifactRefs ?? []).map((ref) => ref.id),
-              unknowns: [...(entry.stageResult?.unknowns ?? [])],
-              requestedActions: [...(entry.stageResult?.requestedActions ?? [])],
-            })),
-          },
-        });
+        // Chief can decide with the full picture (AC-046「父获全部结果」).
+        const event = this.pageChief(parent, 'required_child_failed', failedRequired, children);
         return {
           kind: 'blocked',
           parentRunId: parent.id,
@@ -240,15 +203,66 @@ export class JoinCoordinator {
       }
 
       if (parent.status === 'waiting_children') {
-        const updated = this.store.runs.update(parent.id, { status: 'running' }, parent.version);
-        this.store.events.append({
-          name: 'run.children_joined',
-          entityId: updated.id,
-          entityVersion: updated.version,
-          data: { children: children.map((entry) => entry.runId) },
-        });
+        this.store.runs.update(parent.id, { status: 'running' }, parent.version);
       }
       return { kind: 'ready', parentRunId: parent.id, children };
+    });
+  }
+
+  /**
+   * Files one `chief_action_required` todo per (parent, reason, failed set).
+   *
+   * Recomputing a join (a retried supervisor step, a resumed daemon) must not turn
+   * one failure into a stream of duplicate Chief todos, so an identical todo that
+   * is already in the log is reused (N-06).
+   */
+  private pageChief(
+    parent: Run,
+    reason: 'required_child_failed' | 'fire_and_forget_child_failed',
+    failed: readonly ChildOutcome[],
+    children: readonly ChildOutcome[] = this.childrenOf(parent.id),
+  ): Event {
+    const failedIds = failed.map((entry) => entry.runId).sort();
+    const existing = this.store.events
+      .readAfter(0, { limit: 10_000, names: ['chief_action_required'] })
+      .find((event) => {
+        if (event.entityId !== parent.id || event.data['reason'] !== reason) return false;
+        const recorded = event.data['failed'] ?? event.data['failedRequired'];
+        if (!Array.isArray(recorded)) return false;
+        return (recorded as string[]).slice().sort().join(',') === failedIds.join(',');
+      });
+    if (existing !== undefined) return existing;
+    return this.store.events.append({
+      name: 'chief_action_required',
+      entityId: parent.id,
+      entityVersion: parent.version,
+      data: {
+        reason,
+        // The whole delivery travels with the todo, so the Chief can act from the
+        // event alone without re-reading every child's stage result.
+        failed: failedIds,
+        failedRequired: reason === 'required_child_failed' ? failedIds : [],
+        children: children.map((entry) => ({
+          runId: entry.runId,
+          role: entry.role,
+          status: entry.status,
+          requiredChild: entry.requiredChild,
+          join: entry.join,
+          stageResult:
+            entry.stageResult === undefined
+              ? null
+              : {
+                  status: entry.stageResult.status,
+                  summary: entry.stageResult.summary,
+                  artifactRefs: entry.stageResult.artifactRefs,
+                  evidenceRefs: [...entry.stageResult.evidenceRefs],
+                  changedPaths: [...entry.stageResult.changedPaths],
+                  findingIds: [...entry.stageResult.findingIds],
+                  unknowns: [...entry.stageResult.unknowns],
+                  requestedActions: [...entry.stageResult.requestedActions],
+                },
+        })),
+      },
     });
   }
 

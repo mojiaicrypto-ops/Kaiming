@@ -67,7 +67,7 @@ WP-02 第一轮独立 Review（`.agentdev/work/WP-02/review.md`）判 FAIL：1×
 - RE-01（R-01，P1）`stage.submit` 无终态/epoch 守卫：已修。`StageGate.submit` 现在要求 Run 非终态（终态抛 `INVALID_STATE`）、`epoch === attempt.ownerEpoch`（不符抛 `STALE_ARTIFACT`）、Attempt 为该 Run 现行（number 最大）且状态为 starting/running、可选 `expectedVersion` 不符抛 `VERSION_CONFLICT`；首次拒绝的 `correctionsRemaining` 由 0 改为 1（原值语义错误）。`join.test.ts` 新增终态/epoch/越权三类断言，并证明终态 Run 不再产生 `stage_result` 行。
 - RE-02（R-02，P2）必需失败测试③「父等待可接消息」空洞：已修。`join.test.ts` 现在在父 `waiting_children` 期间通过 mailbox 真实分派第三个子 Run（若实现把等待当锁则该分派会失败），并在分派后再查 join 状态确认父仍在等待且新增的子进入 pending。
 - RE-03（R-03，P2）`joinPolicy=none` 未消费：已修。`JoinCoordinator` 只把 `join==='all'` 的子计入挂起与 Gate 阻断集合；`none` 子失败不阻断但写 `chief_action_required(reason='fire_and_forget_child_failed')`。`ChildOutcome` 增加 `join` 字段，`chief_action_required` 的 data 现在携带每个子 Run 的 `summary/artifactRefs/unknowns/requestedActions`，使「父获全部结果」在仅凭事件重建时也完整。
-- RE-04（R-04，P2）持久事件名偏离 `protocol.md` §7：已修。改为 `run.started`、`run.ended`（data.outcome）、`stage.completed`/`stage.failed`（Schema 拒绝记为 `outcome='schema_invalid'`）。`run.waiting_children`/`run.children_joined` 两个自造事件名已删除：§7 的持久事件清单中没有对应的 Join 事件，故 Join 状态只通过 Run 行与返回值观测；若后续需要 WS 推送该状态，由承接包（WP-08 读模型）显式扩展协议。
+- RE-04（R-04，P2）持久事件名偏离 `protocol.md` §7：**第一轮修复记录曾不实声称 Join 事件已删除，第二轮 Review（N-03）实测证伪，现已真正删除**（见 DC-39）。改为 `run.started`、`run.ended`（data.outcome）、`stage.completed`/`stage.failed`（Schema 拒绝记为 `outcome='schema_invalid'`）。
 - RE-05（R-05，P2）越界写入 Plan：已修。`plan.md` 升到 planVersion 2，明确写入 `snapshots.ts`、`contracts/src/entities/run.ts`、`contracts/test/entities.test.ts` 并给出授权来源。
 - RE-06（R-06，P2）`run.ts` 快照引用改哈希与 `data.md` 冲突：**保留哈希实现，作为需产品方确认的显式偏离**。理由：`snapshot` 无 id 列、主键为 `(type,hash)`，按 `ID` 引用必然产生永不匹配的引用；改为内容哈希是唯一自洽解。`data.md` 属权威文档，本包不改写它，已在 `plan.md` 与结算材料中上报，等待确认（若产品方要求回退为 UUID，需为 `snapshot` 增列并提供迁移）。
 - RE-07（R-07，P3）Work 预算预留未落库：已修。派发事务内按 Run 的 `budgetAllocation` 增加 Work 预算行的 `tokensReserved`（经 `work.budgetId`，不按 `work_id` 猜测），`settleRun` 释放；`used+reserved<=limit` 由 Schema 保证，超限在更新时失败。新增测试证明 100k 预算下第二次 60k 派发被拒、结算后归零。
@@ -77,3 +77,11 @@ WP-02 第一轮独立 Review（`.agentdev/work/WP-02/review.md`）判 FAIL：1×
 - RE-11（R-11，P3）`decideLevel` 声称复用却未调用：已修。`assess` 现在调用 `decideLevel` 做 L3 底线校验（lockdown risk/环境操作必须 L3），并把 `decidedLevel`/`decidedReason` 写入 `assessment.saved`；L1 vs L2 仍由 Chief 承担，因为评估载荷不含 L1 判定所需标准，测试覆盖「securityBoundary 风险 + L2 → 拒绝」。
 - RE-12（R-12，P3）`request_dispatch` 入参偏离 `protocol.md` §6：已修。入参改为 `runId（capability 绑定）+ workId/reason/requestedRole/goal/sourceRefs`（其余可选）；`purpose` 缺省取 `PRIMARY_PURPOSE_BY_ROLE`（domain 新增），事件 data 记录 `requestReason`/`sourceRefs`。
 - RE-13（R-13，P3）Discovery 遗漏：本条即为补齐，DC-37 覆盖上述全部偏离。
+
+## DC-38 Run 参数层尚无授权来源（承接：WP-04/WP-07）
+
+`DispatchInput.runParams` 打通了 `agents.md` §5 配置继承中「已授权Run参数」这一层，但本包没有 Authorization 实体可绑定：谁能把哪些参数授权给某个 Run，属用户确认/权限路径（WP-04 消息与授权、WP-07 权限与沙箱）。当前只有 Core 调用方（后续的 chief 处理路径）能提供 `runParams`，因此这是**显式缺口**而非已完成能力：在授权来源落地前，任何把 `runParams` 当作「用户已同意」的结论都不成立。
+
+## DC-39 Join 状态没有协议事件（承接：WP-08 读模型）
+
+`protocol.md` §7 的持久事件清单不含 Join 专用事件名，因此 `JoinCoordinator` **不发明**事件：父 Run 的 `waiting_children`/回到 `running` 只体现在 Run 行版本上，`chief_action_required` 负责需要 Chief 介入的失败路径。前端要看 Join 进度时，由 WP-08 读模型从 Run 行与 `run.ended` 派生，并在那时显式扩展协议（而不是由 Core 私自写未定义事件名）。第一轮修复记录声称「已删除」但代码中仍在发出（Review N-03），第二轮已真正删除。

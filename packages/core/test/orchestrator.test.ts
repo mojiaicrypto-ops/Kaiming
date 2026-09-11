@@ -458,10 +458,15 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
 
     const run = orchestrator.dispatch({ spec: chiefSpec({ budgetAllocation: 60_000 }) }).run;
     expect(store.budgets.find(budgetRow.id)?.tokensReserved).toBe(60_000);
-    // The second dispatch cannot double-spend the same budget.
+    // The second dispatch cannot double-spend the same budget, and a Core-built
+    // chief spec reports the documented error code rather than a Schema violation.
     expect(() =>
       orchestrator.dispatch({ spec: chiefSpec({ budgetAllocation: 60_000 }) }),
-    ).toThrowError(/exceeds/);
+    ).toThrowError(expect.objectContaining({ code: 'BUDGET_EXCEEDED' }));
+    // A chief spec over the whole Work budget is refused before anything is written.
+    expect(() =>
+      orchestrator.dispatch({ spec: chiefSpec({ budgetAllocation: 1_000_000 }) }),
+    ).toThrowError(expect.objectContaining({ code: 'BUDGET_EXCEEDED' }));
     expect(store.runs.list().filter((row) => row.budgetAllocation === 60_000)).toHaveLength(1);
 
     orchestrator.beginAttempt(run.id);

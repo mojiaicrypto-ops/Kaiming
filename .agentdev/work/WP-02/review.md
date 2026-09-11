@@ -1,219 +1,226 @@
-# WP-02 独立 Review 报告
+# WP-02 独立 Review 报告（第二轮）
 
 - 评审对象：工作包 WP-02「主管与独立Agent调度」
-- 冻结点：git `785bdd6`（`feat(core): WP-02 T3-T8 ...`，前置 `a047a9f` T1-T2）
-- 工作树：`git status --porcelain` 无输出 → 无未提交改动
-- 评审角色：Review（独立上下文，不读取开发对话；只依据仓库文件与实跑命令）
+- 评审轮次：**第二轮**（复核第一轮 Review 的 R-01..R-13 是否真修，并找新问题）
+- 冻结点：git `c4763d5`（`fix(core): WP-02 independent review round 1 findings (RE-01..RE-13)`），前置 `785bdd6`
+- 工作树：`git status --porcelain` 无输出（`pnpm build` 只写被忽略的 `dist/`，复核后仍无输出）
+- 评审角色：Review（独立上下文，未读取开发对话；只依据仓库文件与实跑命令）
 - 权威依据：`docs/rules/{workflow,agents}.md`、`docs/architecture/{data,protocol,reliability,context,ARCHITECTURE}.md`、`docs/delivery/{implementation,acceptance}.md`、`.agentdev/work/WP-02/{plan,implementation,discovery}.md`
+- 方法：回到代码与测试，另在 `/tmp/wp02-r2/` 自建 5 个脚本用 `packages/*/dist` 复现（`exp.mjs`、`exp2.mjs`、`exp3.mjs`、`exp4.mjs`、`exp5.mjs`），不修改产品代码、测试、`docs/**`、plan/implementation/discovery。
+
+---
+
+## 0. 第一轮结论摘要（保留，供对照）
+
+> 第一轮（冻结点 `785bdd6`）判 **FAIL**：1×P1、5×P2、7×P3。P1 为 `stage.submit` 无终态/epoch 守卫（终态 Run 仍接受交付并落 `stage_result` 行）；P2 为「父等待可接消息」证据空洞、`joinPolicy=none` 未实现、持久事件名偏离 `protocol.md` §7、越界写入 Plan、`run.ts` 快照引用改哈希与 `data.md` 冲突；P3 为 R-07..R-13。第一轮命令全部通过（unit 202 / integration 124），失败原因是行为与证据，不是构建。
 
 ---
 
 ## 1. 结论
 
-**FAIL（Review Failed）**——1 个 P1、5 个 P2、7 个 P3。
+**FAIL（Review Failed）——0 个 P1（原 P1 已按终态/epoch 语义修复但留有残余）、5 个 P2、6 个 P3。**
 
-依据摘要：
+- 第一轮的 **R-05、R-09、R-10、R-11、R-12 已真实修好**；**R-01、R-03、R-07、R-08、R-13 为部分修复**；**R-02 实际上仍是无效证据**；**R-04 部分修复且 DC-37 的修复陈述与代码不符**；**R-06 已按流程记录为待产品确认的偏离，但未消解**。
+- 本轮实测到 3 个会改变行为的缺陷，其中 2 个与第一轮 P1/P2 同类：
+  1. **预算预留泄漏**：Run 经 `contract_violation` 终态时 `tokensReserved` 永不释放，Work 预算被永久占用，后续合法派发被拒（实测）。
+  2. **`stage.submit` 只排除终态**：`paused`/`waiting_permission`/`interrupted`/`recovery_required` 的 Run 仍接受交付并写 `stage_result` 行（实测），违反 `reliability.md` §2 迟到事件检查。
+  3. **DC-37 RE-04 声称已删除的 `run.waiting_children`/`run.children_joined` 仍在发出**（实测），且无 DC 承接方案——修复记录与代码不符。
+- `docs/INDEX.md` 仍只写 WP-00/WP-01 且称 Work/Run 编排「仍未实现」，`acceptance.md` 无 WP-02 证据登记——`implementation.md` T9 自述为待办，属结算未完成（不单独计 Finding，但阻断 Completed）。
 
-- 工程契约命令全部通过：`typecheck`、`lint`、`test:unit`（17 文件 / 202 用例）、`test:integration`（10 文件 / 124 用例，含真实 Docker）、`docs:check`、`build` 均退出 0；`test:e2e|acceptance|live` 按约定 `NOT_IMPLEMENTED`。T1–T8 的主体实现真实存在，四个快照/派发/Stage/Join 模块可运行，AC-044、AC-082 的证据有效。
-- **但必需失败测试③「父等待可接消息」是空洞证据**：`ProjectMailbox.submitCommand` 根本不感知 Run 状态，该断言在任何 Run 状态下都会通过，AC-046「新Chief消息可处理」未被有效验证（R-02）。
-- **P1：`StageGate.submit` 没有终态/epoch 守卫**。实跑证明一个已进入终态 `contract_violation` 的 Run 仍能接受合法 `stage.submit`，写入 `stage_result` 行与 `stage.submitted` 事件（R-01）。这违背 `agents.md` §4「结果到达Core后检查attempt/epoch/版本/预算/Scope」与 `workflow.md` §5.3 终态语义。
-- **P2：`joinPolicy=none` 语义完全未实现**。`JoinCoordinator` 从不读取 `run.join`；实跑证明两个 `joinPolicy=none` 的子 Run 中一个结算后，Chief Run 被挂到 `waiting_children`，与 `agents.md` §3「none持久分派后Chief可继续」相悖（R-03）。
-- **P2：持久事件名偏离 `protocol.md` §7**。文档规定 `run.started`/`run.ended`/`stage.completed|failed`，实现发出 `run.starting`/`run.running`/`run.settled`/`stage.submitted`/`stage.rejected`；文档名一个都没有发出（R-04）。
-- **P2：实现超出 Plan 的 writePaths**（新增 `snapshots.ts`、改 `contracts/src/entities/run.ts`、改 `contracts/test/entities.test.ts`），且 `run.ts` 把 Run 快照引用从 `ID` 改成内容哈希，与仍然权威的 `data.md` §2/§3 原文冲突，未获 Plan 授权、未在 Discovery 中作为偏离处理（R-05、R-06）。
-
-由于 R-01 直接违反状态机与 Stage 结果校验契约，R-02 使 AC-046 的关键行为缺少有效证据，R-03/R-04 是接口/语义偏离，按 `workflow.md` §6「影响验收则阻断」，本包**不具备进入独立 Test / Settlement 的条件**；T9（`docs/INDEX.md` 状态与结算材料）本记录也自述为待办，尚未完成。
+按 `workflow.md` §6「P2/P3 影响验收则阻断」：R-02 是 `implementation.md` WP-02 点名的**必需失败测试**，其证据仍无效；N-01/N-02 为可靠性/终局性缺陷。本包**不具备进入独立 Test 的条件**，须先返工。
 
 ---
 
 ## 2. 验证命令与原始结果
 
-环境：`export PATH="$HOME/.local/bin:$PATH"`，工作目录 `/Users/huyaohua/huyh/work/aigrouptool`，全部在 `785bdd6`、干净工作树上执行。
+环境：`export PATH="$HOME/.local/bin:$PATH"`，工作目录 `/Users/huyaohua/huyh/work/aigrouptool`，全部在 `c4763d5`、干净工作树上执行。
 
 | 命令 | 退出码 | 关键原始输出 |
 |---|---|---|
 | `pnpm typecheck` | 0 | `$ tsc -p tsconfig.json --pretty false`（无错误输出） |
 | `pnpm lint` | 0 | `Checking formatting... All matched files use Prettier code style!` |
-| `pnpm test:unit` | 0 | `Test Files  17 passed (17)` / `Tests  202 passed (202)`，耗时 6.76s |
-| `pnpm test:integration` | 0 | `Test Files  10 passed (10)` / `Tests  124 passed (124)`，耗时 91.82s（含 `container.integration.test.ts` 真实镜像 9 用例） |
 | `pnpm docs:check` | 0 | `docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages` |
-| `pnpm build` | 0 | 全部 workspace `Done`（contracts/domain/storage/pi-runtime/core/cli/runner） |
-| `pnpm test:e2e` | 1（预期） | `NOT_IMPLEMENTED: command test:e2e is not implemented yet; it lands with WP-09` |
+| `pnpm test:unit` | 0 | `Test Files 17 passed (17)` / `Tests 207 passed (207)`，6.53s（首轮 202 → 本树 207，`join.test.ts` 5→7、`orchestrator.test.ts` 10→13） |
+| `pnpm test:integration` | 0 | `Test Files 10 passed (10)` / `Tests 124 passed (124)`，82.90s；含真实 Docker `container.integration.test.ts` 9 用例与 `doctor.integration.test.ts` 8 用例 |
+| `pnpm build` | 0 | 全部 workspace `Done`（仅用于本轮独立实验读取 `dist/`；`dist/` 在 `.gitignore` 内） |
 
-新增测试文件与用例数（与 `implementation.md` 自述一致）：`config.test.ts` 8、`model-gateway.test.ts` 6、`orchestrator.test.ts` 10、`join.test.ts` 5；WP-02 前基线为 173（WP-01），本包新增 29 → 202，未回退。
-
-### 2.1 额外独立实验（Review 自建，脚本位于 `/tmp/wp02-review/`，不改产品代码）
-
-**实验 A：joinPolicy=none 是否真的不挂起父 Run**（`join-policy.mjs`，用 `packages/*/dist` 构建产物）
+`git log --oneline -3`：
 
 ```
-child A join = none | child B join = none
-after A(join=none) settles, outcome = waiting
-parent status = waiting_children (agents.md §3: joinPolicy=none => Chief 可继续, 不应挂起)
-parent childIds = 2 | child B join = none
+c4763d5 fix(core): WP-02 independent review round 1 findings (RE-01..RE-13)
+785bdd6 feat(core): WP-02 T3-T8 orchestration, join, stage contract and restart scope
+a047a9f feat(core): WP-02 T1-T2 role configuration, frozen snapshots and model gateway
 ```
 
-结论：两个子 Run 均为 `joinPolicy=none`，A 结算后父 Run 仍被置为 `waiting_children`。`run.join` 字段在 `packages/core/src`、`packages/domain/src` 中**从未被读取**（grep `.join` 无命中）。
+`git status --porcelain`：无输出。`test:e2e|acceptance|live` 本轮未执行（按契约返回 `NOT_IMPLEMENTED`，属 WP-09/WP-10）。
 
-**实验 B：终态 Run 是否仍接受 stage.submit**（`stage-terminal.mjs`）
+### 2.1 本轮独立实验结果（`/tmp/wp02-r2/*.mjs`）
 
 ```
-1st bad submit: ...{"accepted":false,"code":"VALIDATION_ERROR",...,"correctionsRemaining":0}
-2nd bad submit: ...{"accepted":false,"code":"CONTRACT_VIOLATION","runStatus":"contract_violation","rejections":2}
-run status now: contract_violation
-submit on TERMINAL run accepted? true | stage_results rows = 1
-```
+EXP1 实际持久事件名: ["run.children_joined","run.ended","run.queued","run.started","run.waiting_children","stage.completed"]
+EXP1 不在 protocol.md §7 清单中的名字: ["run.children_joined","run.waiting_children"]
 
-结论：Run 已是终态 `contract_violation` 后，一份合法载荷仍被接受并落 `stage_result` 行。
+EXP2 错误 epoch          -> STALE_ARTIFACT | stage_result rows = 0
+EXP2 首次 Schema 失败    -> {accepted:false, code:VALIDATION_ERROR, correctionsRemaining:1}
+EXP2 二次 Schema 失败    -> {accepted:false, code:CONTRACT_VIOLATION, runStatus:contract_violation, rejections:2}
+EXP2 终态 Run 再提交     -> INVALID_STATE | stage_result rows = 0
+EXP2 被取代 Attempt 提交 -> STALE_ARTIFACT | stage_result rows = 0
+EXP8 被拒提交的事件增量  -> wrong-epoch 0, terminal-submit 0（确实“不产生任何写入”）
+
+EXP3b chief(20k)+child(4k) reserved = 24000
+EXP3b child 经 contract_violation 后 reserved = 24000（若释放应为 20000）
+EXP4  Work 预算 100k：A(50k)+child(30k) 后 reserved=80000；child contract_violation 后仍 80000
+EXP4  此后合法 chief(30k) 派发 -> CONSTRAINT_VIOLATION: budget update failed its contract schema: tokens used + reserved exceeds the limit
+
+EXP4b 对同一个已失败 none 子调用两次 onChildSettled -> chief_action_required 2 条
+EXP4b 对同一个已失败 required 子调用两次 onChildSettled -> chief_action_required 2 条
+EXP5  把 Chief 父 Run 置为终态 completed 后，测试所用的 mailbox→dispatch 路径仍 accepted:true 并建成子 Run
+EXP6  joinPolicy=none 子结算：outcome=ready，父保持 running（不挂起）
+
+EXP7  被阻断 Gate 事件每个子项键: [runId, role, status, requiredChild, join, summary, artifactRefs, unknowns, requestedActions]
+      成功兄弟 summary 能带上（"the good sibling"），但 artifactRefs 只剩 id，缺 version/hash，且无 evidenceRefs/changedPaths/findingIds
+
+EXP9  run=paused            提交 -> accepted:true  | stage_result rows = 1
+EXP9  run=waiting_permission 提交 -> accepted:true  | stage_result rows = 1
+EXP9  run=interrupted        提交 -> accepted:true  | stage_result rows = 1
+EXP9  run=recovery_required  提交 -> accepted:true  | stage_result rows = 1
+EXP10 paused Run 第二次 Schema 失败 -> THROW VALIDATION_ERROR（无法形成 contract_violation，run 仍 paused，仅 1 条 schema_invalid 事件）
+```
 
 ---
 
-## 3. 逐条 AC 与 T1–T8 核对表
+## 3. R-01..R-13 逐条复核表
 
-### 3.1 Plan T1–T8（T9 未完成）
-
-| Task | 实现位置 | 证据 | 结论 |
+| 条目 | 首轮严重度 | 复核判定 | 证据（代码/实测） |
 |---|---|---|---|
-| T1 配置与继承（AC-043/044） | `packages/core/src/config.ts`、`toml.ts`、`snapshots.ts`；`contracts/src/entities/structures.ts` | `config.test.ts` 8 用例：四层继承 + 逐字段 `sources`、Run 参数覆盖、reasoning 不支持拒绝、`min(profile, window−maxOutput−4096)`、冻结后变更不影响、UPDATE 被触发器拒绝 | 实现真实。但新增 `snapshots.ts` 超出 Plan writePaths（R-05）；`config.ts` 的 Run 参数层在派发路径不可达（R-08） |
-| T2 模型网关（AC-043/044） | `packages/core/src/model-gateway.ts` | `model-gateway.test.ts`：`complete()` 签名无模型入口；配置变更后活动 Run 仍用旧 model/reasoning、新冻结用新 model；无可用模型不回落；缺快照/缺 secret 不发请求 | 通过。真实 HTTP/Secret 属 WP-07/WP-10（DC-31 已记录） |
-| T3 Assessment（AC-045） | `orchestrator.ts:157-193` | `orchestrator.test.ts`：不可变行 + `assessment.saved`、重复评估新行、L3 无 `authorizationRef` → `NOT_AUTHORIZED` | 通过。但实现记录称「等级判定复用 domain」，`decideLevel` 实际未被调用（R-11） |
-| T4 Dispatch 冻结与建 Run（AC-043/045/082） | `orchestrator.ts:203-316` | `orchestrator.test.ts`：三快照真实存在且类型正确、行哈希=内层 `hash`、`snapshot` UPDATE 报 immutable、`run.queued`、孙 Run 拒绝、跨 Work task 拒绝、stale `profileRevision` 拒绝、预算超限拒绝、purpose×role 拒绝 | 主体通过。事件名偏离 protocol §7（R-04）；Work 预算预留未落库（R-07）；`run.ts` 越界改动（R-05/R-06） |
-| T5 Join 与局部失败（AC-046） | `packages/core/src/join.ts` | `join.test.ts`：父 `waiting_children`→全终态回 `running`；required 失败→`blocked` + `chief_action_required`；兄弟保留；optional 失败不阻断 | 部分通过。`joinPolicy=none` 未实现（R-03）；「可接消息」证据空洞（R-02） |
-| T6 request_dispatch（AC-045） | `orchestrator.ts:325-369` | `orchestrator.test.ts`：只产生 `chief_action_required`、`entityId`=Chief Run、无孙 Run；非自身 Chief 父被拒、Chief 自身调用被拒 | 通过。内核入参与 protocol §6 不一致（R-12） |
-| T7 Stage 契约（AC-047） | `packages/core/src/stage.ts` | `join.test.ts`：口头/缺字段提交被拒且无 `stage_result` 行；第一次 `VALIDATION_ERROR`、第二次 `CONTRACT_VIOLATION` 且 Run=`contract_violation`；归属字段伪造抛错、跨 Run attempt 拒绝 | 部分通过。**终态 Run 仍接受合法提交，无 epoch/版本守卫（R-01）**；事件名缺失（R-04） |
-| T8 重启窄范围（AC-082） | `orchestrator.ts:379-412` | `orchestrator.test.ts`：Work scope 放宽后 `recoveryView` 仍返回冻结窄 scope 与 `requiredOutputSchemas`；快照缺失 → `STALE_ARTIFACT` | 通过（快照层）。工具层负例按 Plan 归 WP-07，属明示延后 |
-| T9 测试与记录 | `implementation.md:59-61` | 自述「待办」：独立 Review/Test、`docs/INDEX.md` 状态、`acceptance.md` 证据登记 | **未完成**。`docs/INDEX.md:26-30` 仍只写 WP-00/WP-01，且称 Work/Run 编排「仍未实现」，与本包代码不符（属 T9 待办，非造假） |
+| R-01 `stage.submit` 无终态/epoch 守卫 | P1 | **部分修复（实质部分已修）** | `stage.ts:121-161` 新增终态（`INVALID_STATE`）、`epoch !== attempt.ownerEpoch`（`STALE_ARTIFACT`）、Attempt 非 starting/running（`INVALID_STATE`）、被取代 Attempt（`STALE_ARTIFACT`）、可选 `expectedVersion`（`VERSION_CONFLICT`），全部在写行之前；`stage.ts:64,261` 首错 `correctionsRemaining=1`。EXP2/EXP8 实测：错误 epoch、终态、被取代三种提交均抛错且 `stage_result` 行数与事件增量均为 0。**残余：只排除“终态”，`paused`/`waiting_permission`/`interrupted`/`recovery_required` 仍接受交付（N-02）；第二次失败在这些状态抛 `VALIDATION_ERROR`（N-08）** |
+| R-02 「父等待可接消息」证据空洞 | P2 | **未真正修复** | 新测试 `join.test.ts:194-235` 在父 `waiting_children` 时经 mailbox 派发第三子。但 `mailbox.ts:129-147` 仍不读 `subject`/Run 状态，`orchestrator.ts:275-291` 的 `isDirectChiefChild` 也只校验 id/role/workId。EXP5 实测：父 Run 已是终态 `completed`，同一路径仍 `accepted:true` 并建成子 Run → 断言对 `running/waiting_children/completed` 无区分力。见 N-04 |
+| R-03 `joinPolicy=none` 未实现 | P2 | **已修复（附残余）** | `join.ts:125-127,164-166` 只把 `join==='all'` 未终态子计入 pending；`join.ts:136-138,205-207` 只把 `all` 子计入 Gate 阻断；`none` 失败写 `chief_action_required(reason='fire_and_forget_child_failed')`。EXP6 实测 none 子结算后 `kind=ready`、父 `running`。`ChildOutcome.join` 已补。残余：重复事件（N-06）、阻断事件 payload 仍不全（N-07） |
+| R-04 持久事件名偏离 `protocol.md` §7 | P2 | **部分修复，且 DC-37 陈述不实** | 文档名 `run.started`（`orchestrator.ts:536`）、`run.ended`（`:568`、`stage.ts:273`）、`stage.completed/stage.failed`（`stage.ts:203`）确已发出（EXP1）。但 `join.ts:175 run.waiting_children`、`join.ts:245 run.children_joined` **仍在发出**（EXP1），而 `discovery.md:70`（RE-04）明写这两个名字“已删除”。§7 清单无此二名，且无任何承接方案。见 N-03 |
+| R-05 越界写入 Plan writePaths | P2 | **已修复** | `plan.md:24,27,32` 升到 planVersion 2，明确纳入 `snapshots.ts`、`contracts/src/entities/run.ts`、`contracts/test/entities.test.ts` 并列授权来源；`git diff --name-only 785bdd6..c4763d5` 的 13 个文件全部落在更新后的 writePaths 内 |
+| R-06 `run.ts` 快照引用改哈希与 `data.md` 冲突 | P2 | **流程上已记录，产品确认未完成** | `plan.md:27` 与 `discovery.md:72`（RE-06）均将“`SnapshotRef=Hash` vs `data.md` §2/§3 `ID`”记为需产品方确认的显式偏离，并说明回退代价。`data.md:30,80` 仍写 `ID`，代码为 `packages/contracts/src/entities/run.ts:39 snapshotRefSchema = hashSchema`。判断：技术理由成立（`snapshot` 主键 `(type,hash)`、无 id 列），**本轮不作为阻断 Finding**，但 `plan.md:32` 的“授权来源”引用的是 Review 发现而非用户决定，属 `Product Decision Pending`，未确认前不得判 Completed。见 N-11 |
+| R-07 Work 预算预留未落库 | P3 | **部分修复** | `orchestrator.ts:348` 派发事务内 `reserveBudget`，`:588` 写 `tokensReserved`，`:566` `settleRun` 释放；EXP3b 实测落库、结算释放、第二次同额派发被拒（防双花）。**残余：`contract_violation` 终态不释放，预算泄漏并阻断后续派发（N-01）；chief 规格越 Work 预算时报 `CONSTRAINT_VIOLATION` 而非 `BUDGET_EXCEEDED`（N-10）** |
+| R-08 Run 参数层不可达 | P3 | **部分修复** | `orchestrator.ts:296,313` 把 `input.runParams` 传入 `availability`/`freeze`；`orchestrator.test.ts:481-492` 证明冻结快照 `sources.reasoning==='run'` 且重启路径可读。残余：`runParams` 未与 Authorization 绑定，代码注释 `orchestrator.ts:79` 指向 **DC-38**，但 `discovery.md` 只到 DC-37（N-09） |
+| R-09 `readFrozen` 返回非法 `ProviderConfig` | P3 | **已修复** | 新增 `FrozenProvider` 投影（`config.ts:67-73`），`freeze` 只写 providerId/type/baseUrl/secretRef（`config.ts:478-500`），`readFrozen` 返回该投影并保留 `sources`（`config.ts:516-535`） |
+| R-10 快照幂等对 `type` 不敏感 | P3 | **已修复** | `snapshots.ts:76,97-104` 以 `(type,hash)` 判幂等；同 hash 已属其他 type 时抛 `CONSTRAINT_VIOLATION`/`SNAPSHOT_TYPE_CONFLICT`（`:80-87`） |
+| R-11 `decideLevel` 声称复用却未调用 | P3 | **已修复** | `orchestrator.ts:208-222` 调用 `decideLevel`，L3 底线不符即 `VALIDATION_ERROR`，`decidedLevel/decidedReason` 写入 `assessment.saved`（`:252-253`）；`orchestrator.test.ts:494-533` 覆盖 L2+`securityBoundary` 被拒、L3+授权通过。L1/L2 仍由 Chief 承担，代码注释与 DC-37 RE-11 均已明示 |
+| R-12 `request_dispatch` 入参偏离 `protocol.md` §6 | P3 | **已修复** | `orchestrator.ts:111-128` 改为 `runId`（capability 绑定）+ `workId/reason/requestedRole/goal/sourceRefs`（余可选）；`:419-446` 记录 `requestReason`/`sourceRefs`，`purpose` 缺省取 `PRIMARY_PURPOSE_BY_ROLE`（`domain/dispatch.ts:139-147`）；测试 `orchestrator.test.ts:535-581` 覆盖 |
+| R-13 Discovery 遗漏偏离 | P3 | **部分修复** | DC-37 已为 RE-01..RE-13 建条目，R-01/R-03/R-05/R-06/R-07/R-08 均可追踪。但 RE-04 陈述与代码不符（N-03），RE-08 引用的 DC-38 不存在（N-09），P2 证据问题未作为缺陷记录 |
 
-### 3.2 AC 核对
+### 3.1 首轮点名的特别复核（任务书 a–f）
 
-| AC | 要求要点 | 实现/证据 | 结论 |
-|---|---|---|---|
-| AC-043 独立模型 | 角色配置不同 Provider；实际配置与角色一致；专业 Run 独立 | 每 Run `config.freeze(role)` + 「冻结快照」读取；`model-gateway.test.ts` 证明运行走冻结档 | **部分**：结构成立，但全部测试只用一个 Provider，未直接验证「不同角色不同 Provider」；Run 的独立 Session/工具属 WP-05/WP-07（P3） |
-| AC-044 配置冻结 | 修改配置仅新 Run 生效；原 Run 可查；无隐式换模型 | `config.test.ts:206-239` + `model-gateway.test.ts:140-169` 断言有效；`snapshot` UPDATE 触发器保证不可变 | **通过** |
-| AC-045 主控分派 | request_dispatch 只产生 Chief 待办；无孙 Run | `orchestrator.test.ts:330-361,453-494`：孙 Run 抛错且子表为 0；request_dispatch 只写事件 | **通过**（入参形状差异见 R-12） |
-| AC-046 Join 和失败 | 兄弟保留、父获全部结果、Gate 阻断、新 Chief 消息可处理 | `join.test.ts:188-238`：兄弟保留、`blocked`、`chief_action_required` 有效；「可接消息」断言空洞 | **部分/不通过**（R-02、R-03） |
-| AC-047 结构化交付 | 口头不通过；二次 Schema 错误 `contract_violation` | `join.test.ts:252-272` 有效；但终态后仍可提交 | **部分**（R-01、R-04） |
-| AC-082 重启保留窄范围 | 按 DispatchSnapshot 保持窄权限与输出 Schema，Work 宽范围不能替代 | `orchestrator.test.ts:412-451`：Work 放宽后 `recoveryView` 仍窄；工具层负例 Plan 明示归 WP-07 | **通过**（快照层） |
+- **a) 终态/错误 epoch/被取代提交是否被拒且无写入；首错 `correctionsRemaining`**：✅ 实测全部通过（EXP2/EXP8，行数与事件增量均为 0；首错返回 1）。残余见 N-02/N-08。
+- **b) `joinPolicy=none` 是否不再挂起；none 失败是否通知而不阻断；Gate 事件 data 是否带足全部结果**：✅ 不挂起（EXP6）；✅ 通知且不阻断（EXP4b 首次调用、`join.test.ts:249-270`）；⚠️ 事件 data **仍不全**（EXP7）：有 summary/artifactIds/unknowns/requestedActions，**缺 evidenceRefs、changedPaths、findingIds，且 artifactRefs 丢 version/hash**。
+- **c) 持久事件名是否只剩 §7 允许的名字**：❌ 仍发出 `run.waiting_children`、`run.children_joined`（EXP1）。无 DC 记录、无承接方案；DC-37 RE-04 反而声称已删除。
+- **d) 预算预留是否落库/结算释放/防双花**：✅ 落库与结算释放（EXP3b）、✅ 防双花（`orchestrator.test.ts:454-479`、EXP4）；❌ `contract_violation` 路径泄漏（EXP3b/EXP4）。
+- **e) `run.ts` 改哈希是否已在 plan/discovery 记为待确认偏离**：✅ 已记（`plan.md:27`、`discovery.md:72`）。判断：偏离技术理由成立且已上报，但 `data.md` 与代码冲突仍在，属产品决定待定（N-11）。
+- **f) DC-37 每条是否与代码一致**：RE-01/03/05/07/09/10/11/12 一致；**RE-04 不一致**（声称删除的两个事件名仍在）；RE-02 的“可接消息”证据仍无效；RE-08 引用的 DC-38 不存在。
 
 ---
 
-## 4. Findings
+## 4. 新 Findings
 
-### R-01 [P1] `stage.submit` 无终态/epoch/版本守卫，终态 Run 仍能接受交付
+### N-01 [P2] 预算预留泄漏：Run 经 `contract_violation` 终态时 `tokensReserved` 永不释放
 
-- 位置：`packages/core/src/stage.ts:103-167`（`submit`）、`packages/core/src/stage.ts:183-226`（`reject`）
-- 事实（实跑复现，见 §2.1 实验 B）：Run 已是终态 `contract_violation` 后，同一 `attemptId` 提交合法载荷仍返回 `accepted:true` 并写入 `stage_result` 行与 `stage.submitted` 事件。`submit` 只校验 `run` 存在与 `attempt.runId === run.id`，不校验 `run.status`、`attempt.epoch`、`expectedVersion`。
-- 违背：`docs/rules/agents.md` §4「结果到达Core后检查attempt/epoch/版本/预算/Scope」；`docs/architecture/protocol.md` §6 `stage.submit* | attemptId,epoch,result:StageResult`（epoch 为必填参数，内核未接收）；`docs/rules/workflow.md` §5.3「completed/failed/cancelled/timed_out/contract_violation终态；后续工作创建新Run」；`docs/architecture/reliability.md` §2「Late事件检查attempt/epoch/expected版本」。
-- 影响：终态 Run 可被追加交付证据，`JoinCoordinator.outcomeOf` 取「最新 `stage_result`」时可能把违规后的迟到结果当作该子 Run 的成果；「二次失败即 `contract_violation`」的终局性被绕过。
-- 建议：`submit` 在写入前要求 Run 处于允许提交的状态（非终态、非 waiting/Paused 之外），校验 `attemptId` 属于当前 `ownerEpoch`/现行 Attempt，并接收 `epoch`/`expectedVersion`；越界返回 `VALIDATION_ERROR`/`STALE_ATTEMPT` 且不落行不落事件。
-- 附带（P3，可并入本项）：`stage.ts:60` 首次拒绝返回 `correctionsRemaining: 0`，与同段注释「The Attempt may submit once more」及 `agents.md` §4「Schema第一次失败允许修正」矛盾，字段语义应为 1。
+- 位置：`packages/core/src/stage.ts:264-277`（`reject` 直接把 Run 置 `contract_violation` 并发 `run.ended`），对照 `packages/core/src/orchestrator.ts:564-574`（唯一释放点）与 `:593-601`。
+- 事实（实跑，EXP3b/EXP4）——A(50k) + child(30k) 后 `tokensReserved=80000`；child 连续两次 Schema 失败进入 `contract_violation` 后仍为 80000（应回落到 50000）。随后一份合法 chief(30k) 派发因 `used+reserved` 超限被拒：`CONSTRAINT_VIOLATION: budget update failed its contract schema`。
+- 违背依据：`docs/architecture/reliability.md` §3「模型调用前预留…**扣除实际usage并释放剩余**；并行调用共享Work预算事务，防止双花」；`docs/rules/workflow.md` §5.3 终态语义。
+- 影响：任一 Run 一次违规即永久占用 Work 预算；后续派发被误拒，需人工改库才能恢复，且错误码不是文档规定的 `BUDGET_EXCEEDED`。
+- 建议：把预留释放收敛到“Run 进入任一终态”的唯一内部入口（`StageGate.reject` 与 `Orchestrator.settleRun` 共用），并在该事件 data 中带上 `releasedTokens`；补一条「contract_violation 后 reserved 回落」的测试。
 
-### R-02 [P2] 必需失败测试③「父等待可接消息」是空洞断言，AC-046 关键行为缺有效证据
+### N-02 [P2] `stage.submit` 只把“终态”当拒绝条件，非终态但不可交付的 Run 仍接受交付
 
-- 位置：`packages/core/test/join.test.ts:194-206`；对照 `packages/core/src/mailbox.ts:129-147`
-- 事实：测试把父 Run 置入 `waiting_children` 后，调用 `mailbox.submitCommand({subject: chief.id, operation:'join.status', run: () => joins.state(chief.id)})` 并断言 `accepted === true` 与 `completion` 解出 `kind:'waiting'`。`ProjectMailbox.submitCommand` 只检查 `closed`/队列条数/字节数，**从不读取 `subject` 或任何 Run 状态**；因此该断言在任何 Run 状态下都成立，测试无法因「父被阻塞」而失败。全仓 grep 显示产品代码中除 `join.ts` 自身外没有任何地方读取 `waiting_children`，测试也未触及一个「会因等待而被拒绝」的命令路径。
-- 违背：`docs/delivery/implementation.md` WP-02「必需失败测试：…父等待可接消息…」；`docs/delivery/acceptance.md` AC-046「新Chief消息可处理」；`docs/rules/workflow.md` §6「报告不能以『应该通过』代替执行」。任务书明确将「只断言不抛错/只看返回对象存在」的测试判为无效证据。
-- 建议：补一个真正会在父 Run 阻塞时失败的断言——例如模拟「父 `waiting_children` 时新的用户命令/`request_dispatch` 仍被准入并产生事件」，或让命令处理路径显式校验 Run 状态，使测试在错误实现下必然失败。
+- 位置：`packages/core/src/stage.ts:121-161`（守卫仅 `isTerminalRunStatus` + epoch + Attempt 现行 + 可选版本，无状态白名单）。
+- 事实（实跑）：EXP9——Run 分别为 `paused`、`waiting_permission`、`interrupted`、`recovery_required` 时，一份合法载荷均返回 `accepted:true` 并写入 `stage_result` 行（rows=1）。
+- 违背依据：`docs/architecture/reliability.md` §2「**Late事件检查attempt/epoch/expected版本，不覆盖取消、更新后的Plan或新Attempt**」；`docs/rules/workflow.md` §5.3（`interrupted` 需检查后新 Attempt、`recovery_required` 先关闭 RecoveryDecision）；第一轮 R-01 建议原文「要求 Run 处于允许提交的状态（非终态、非 waiting/Paused 之外）」。
+- 影响：`interrupted`/`recovery_required`/`paused` 的 Run 仍可被旧 Attempt 追加交付证据，`JoinCoordinator.outcomeOf`（`join.ts:84-112`）按“最新 stage_result”取结果时会把迟到结果当成该子 Run 的成果——与首轮 P1 同类影响，只是状态不同。
+- 建议：改为状态白名单（仅 `running`；若 Chief 需在 `waiting_children` 交付须单独论证并落 DC），其余 `INVALID_STATE` 且不写行不写事件；与 N-08 一并处理。
 
-### R-03 [P2] `joinPolicy=none` 语义未实现，none 子 Run 仍把 Chief 挂起
+### N-03 [P2] DC-37 RE-04 与代码不符：两个自造 Join 事件名仍在发出，且无承接方案
 
-- 位置：`packages/core/src/join.ts:117-136`（`state`）、`packages/core/src/join.ts:155-178`（`onChildSettled`）；`run.join` 全仓无人读取
-- 事实（实跑复现，见 §2.1 实验 A）：两个 `joinPolicy=none` 子 Run，A 结算后 `onChildSettled` 返回 `waiting` 且父 Run 变为 `waiting_children`。`dispatch` 已把 `spec.joinPolicy` 存进 `run.join`（`orchestrator.ts:292`），但 Join 判定只看「是否有未终态子 Run」，从不区分 none/all。
-- 违背：`docs/rules/agents.md` §3「joinPolicy=none/all；**none持久分派后Chief可继续**，all挂起该ChiefRun直至指定子Run终态」；`docs/rules/workflow.md` §3/§4 隐含的 none 非阻塞语义；`implementation.md:39`「`join=none` 的父不进入等待」与该代码行为不符。
-- 影响：当前 `waiting_children` 未被视为锁（`join.ts:115` 注释、R-02），故「Chief 可继续」在消息层面尚能成立；但 Run 状态/事件与实际策略不符，任何后续把 `waiting_children` 当阻塞处理的组件都会升级为真实阻塞。
-- 建议：Join 判定只把 `join==='all'` 的子 Run 计入挂起集合（none 子 Run 仅在终态汇总时进入 `children`），并补 `joinPolicy=none` 的测试。
-- 附带（P3）：`join.ts:186-200` 写入的 `chief_action_required` 只带 `runId/role/status/requiredChild`，不含兄弟的 `summary/artifactRefs/evidenceRefs`；仅凭持久事件重建时，「父获全部结果」不完整（返回值对象里有，事件里没有）。
+- 位置：`packages/core/src/join.ts:175`（`run.waiting_children`）、`:245`（`run.children_joined`）；陈述见 `.agentdev/work/WP-02/discovery.md:70`。
+- 事实（实跑）：EXP1 在一次 `chief + 2×join=all` 全流程中实际发出的持久事件名为 `["run.children_joined","run.ended","run.queued","run.started","run.waiting_children","stage.completed"]`；`docs/architecture/protocol.md` §7 清单无 `run.waiting_children`/`run.children_joined`。DC-37 RE-04 明写“两个自造事件名**已删除**”，与代码矛盾。
+- 违背依据：`docs/architecture/protocol.md` §7 持久事件契约；`docs/rules/workflow.md` §6「Discovery：保存证据、影响、建议、实际路由」；`AGENTS.md`「按实际证据报告完成情况」。
+- 影响：事件日志中存在未被协议承认的类型；按文档实现的 WS/BFF 消费者（WP-08/WP-09）无对应契约可依；修复记录不可信会污染后续 Settlement 知识。
+- 建议：删除这两个事件（Join 状态仅保留在 Run 行与返回值），或在 `discovery.md` 中作为显式偏离记录并给出承接包（WP-08 读模型）与 `protocol.md` §7 扩展方案；同时修正 DC-37 RE-04 的不实表述。
 
-### R-04 [P2] 发出的持久事件名与 `protocol.md` §7 不符，文档事件名一个都没有产生
+### N-04 [P2] 必需失败测试「父等待可接消息」仍无区分力（R-02 未真正修复）
 
-- 位置：`packages/core/src/orchestrator.ts:300`（`run.queued`，符合）、`:445`（`run.starting`）、`:455`（`run.running`）、`:480`（`run.settled`）；`packages/core/src/stage.ts:153`（`stage.submitted`）、`:191`（`stage.rejected`）、`:213`（`run.contract_violation`）；`packages/core/src/join.ts:166`（`run.waiting_children`）、`:213`（`run.children_joined`）
-- 事实：`docs/architecture/protocol.md:120` 规定持久事件为 `run.queued/started/ended`、`stage.completed/failed`；实现发出的是 `run.starting`/`run.running`/`run.settled` 与 `stage.submitted`/`stage.rejected`，文档名 `run.started`、`run.ended`、`stage.completed`、`stage.failed` **均未发出**。事件名是自由字符串，无 Schema 校验，因此不会在测试中报错。
-- 违背：`docs/architecture/protocol.md` §7 持久事件契约（客户端/WS/BFF 依赖契约名渲染 run 起止与 stage 成败）；`plan.md:50`「按 `protocol.md` §6 实现内核」的对齐要求。
-- 影响：后续按文档实现的 WS/UI 消费者收不到 `run.ended`/`stage.completed`，无法正确渲染终态与失败。
-- 建议：改用文档事件名（或按流程变更 `protocol.md` 并新增 Discovery）；`stage.submit` 验证后应产生 `stage.completed`/`stage.failed`，并保留 `run.ended` 承载真实 outcome。
+- 位置：`packages/core/test/join.test.ts:194-235`；`packages/core/src/mailbox.ts:129-147`；`packages/core/src/orchestrator.ts:275-291`。
+- 事实（实跑）：EXP5——把 Chief 父 Run 置为终态 `completed` 后，测试所用的 `ProjectMailbox.submitCommand({subject: chief.id, operation:'agent.dispatch', run: …})` → `orchestrator.dispatch` 路径仍 `accepted:true` 并成功创建子 Run。即断言“父等待时能接命令”对 `running`/`waiting_children`/`completed` 无区分力；`submitCommand` 仍不读 `subject` 或任何 Run 状态。
+- 违背依据：`docs/delivery/implementation.md` WP-02「必需失败测试：…父等待可接消息…」；`docs/rules/workflow.md` §6「报告不能以『应该通过』代替执行」；`docs/delivery/acceptance.md` AC-046「新Chief消息可处理」。
+- 建议：二选一——(a) 在命令处理路径显式校验 Run 状态，使测试在“把等待当锁”的实现下必然失败；(b) 改用真正依赖父状态的路径断言（例如 `waiting_children` 时对同一父 Run 提交 `stage.submit`/`request_dispatch` 应被 `INVALID_STATE` 拒绝，而消息类命令仍准入），并断言“新 Chief 对话 Run 独立于等待中的父 Run”。
 
-### R-05 [P2] 实现对 Plan writePaths 的越界改动，Plan 未修订、Discovery 未作为偏离处理
+### N-05 [P2] `dispatch` 不校验父 Chief Run 状态，终态父 Run 仍可接收新子 Run
 
-- 位置：`.agentdev/work/WP-02/plan.md:16-29`（writePaths）对比 `git diff --name-only b9df25e..785bdd6`
-- 事实：Plan 明确 writePaths 只含 `core/src/{config,toml,model-gateway,orchestrator,join,stage,index}.ts`、`domain/src/**`、`contracts/src/entities/structures.ts`（仅 Schema 缺口）、`core/test/**`、`.agentdev/work/WP-02/**`，并写明「不可写 `packages/contracts`（除上述缺口）」。实际改动额外包含：
-  - `packages/core/src/snapshots.ts`（新增，Plan 未列；`config.ts` 条目只写「ConfigSnapshot 冻结」）
-  - `packages/contracts/src/entities/run.ts`（改 `runSchema` 三个快照引用 + 新增 `snapshotRefSchema`）
-  - `packages/contracts/test/entities.test.ts`（改 Run 夹具）
-- 违背：`docs/rules/workflow.md` §4 Plan 必需「写入范围」，`plan.md` 自身第 29 行「不可写」清单；skill/交付规则「Developer modifies only approved scope」。DC-27/DC-28 只记录了技术事实，未把「超出 Plan 写入范围」记为偏离，也未修订 Plan。
-- 建议：要么将上述文件补入 Plan（planVersion 递增 + 授权确认）并新建 Discovery 条目，要么把改动收敛回授权范围（新增模块可由 `config.ts` 承载）。R-06 的契约变更尤其需要授权。
+- 位置：`packages/core/src/orchestrator.ts:273-291`（`isDirectChiefChild`，`domain/src/dispatch.ts:101-108` 只校验 `id/role/workId`）。
+- 事实（实跑）：EXP5——父 Chief Run 已 `completed`，`orchestrator.dispatch({spec: professionalSpec({parentRunId: <completed chief>})})` 仍成功创建 `queued` 子 Run。
+- 违背依据：`docs/rules/workflow.md` §5.3「completed/…、contract_violation 终态；**后续工作创建新Run**」；`docs/rules/agents.md` §3「所有子Run为ChiefRun的直接子级」「父Run取消传播未终态子Run」；AC-045 主控分派。
+- 影响：终态 Chief 下的孤儿子 Run 永远不会被 Join 收敛（父不再运行），结果丢失；破坏“终态后新建 Run”的领域语义。
+- 建议：`dispatch` 在父子校验中增加 `parent.status` 允许集（如 `starting/running/waiting_children` 等执行态），终态父返回 `INVALID_STATE`；补负例测试。
 
-### R-06 [P2] `run.ts` 快照引用改为内容哈希，与仍然权威的 `data.md` §2/§3 冲突且未获授权
+### N-06 [P3] Join 重算非幂等：重复调用 `onChildSettled` 重复写 `chief_action_required`
 
-- 位置：`packages/contracts/src/entities/run.ts:31-37,53-55`；`packages/contracts/src/entities/structures.ts` `dispatchSnapshotSchema.contextSnapshotId`
-- 事实：`docs/architecture/data.md:30` 明确 `run.configSnapshotId:ID, contextSnapshotId:ID, dispatchSnapshotId:ID`，`:80` 明确 `DispatchSnapshot={..., contextSnapshotId:ID, ...}`。实现把三处改为 `hashSchema`。DC-27 记录「若按 id 建 Run，存储层会拒绝或产生永不匹配的引用」，技术上确有一致性问题（`snapshot` 主键为 `(type,hash)`、无 id 列），但本次同时把 **Run 实体契约**从 UUID 改成 64 位哈希，改变了对外数据契约。
-- 违背：`docs/architecture/data.md` §2/§3 原文；`docs/rules/workflow.md` §4/§8（产品/契约语义变更需 Decision 与用户确认）；`plan.md:29`「不可写 `packages/contracts`（除上述缺口）」。
-- 影响：`data.md` 与代码/测试现在互相矛盾（`entities.test.ts` 已改为哈希）：后续按文档实现的消费者/迁移会不匹配；知识库中「唯一行为与证据目录」的 `data.md` 与实际契约漂移。
-- 建议：本包内走正式偏离流程——补 Plan 授权、在 `settlement` 时更新 `data.md` §2/§3 为 `SnapshotRef:Hash`，或改回 `idRefSchema` 并在 storage 层建映射；二者必居其一，不能长期让文档与代码冲突。
+- 位置：`packages/core/src/join.ts:191-204`（`none` 失败）与 `:205-232`（required 失败）。
+- 事实（实跑）：EXP4b——对同一个已失败的 `none` 子 Run 调用两次 `onChildSettled`，`chief_action_required` 写 2 条；对同一个已失败的 required `all` 子 Run 同样 2 条。判定基于“当前所有子 Run 的失败集合”，不携带幂等键。
+- 违背依据：`docs/architecture/reliability.md` §1「Outbox以operationId至少一次投递；Supervisor先检查已存在的同operationId Runner/结果，**避免重复创建**」；`protocol.md` §7（`chief_action_required` 是驱动 Chief 待办的持久事件）。
+- 影响：重放/重算（WP-05 监督、WP-08 恢复）会把同一失败重复变成多条 Chief 待办，造成重复派发与重复计费风险。
+- 建议：以 `(parentRunId, reason, 失败子Run集合)` 做幂等判定，或在写事件前查是否已存在同集合的同类待办。
 
-### R-07 [P3] Work 级预算预留从未写库，`canAllocateBudget` 门槛实际失效
+### N-07 [P3] 被阻断 Gate 的事件 data 仍未带足「全部结果」
 
-- 位置：`packages/core/src/orchestrator.ts:490-510`（`requireBudget`）
-- 事实：`requireBudget` 只读取 `budgets` 行调用 `canAllocateBudget(budget, spec.budgetAllocation)`，随后既未增加 `tokensReserved` 也未创建预算预留；派发/结算路径也没有任何地方更新 `budget.tokensReserved`。因此 `tokensUsed + tokensReserved + requested` 恒等于 `requested`，Work 级检查起不到作用，真正的限制只来自父 Run 的 `budgetAllocation` 求和。
-- 违背：`docs/architecture/reliability.md` §3「模型调用前预留input估算+maxOutputTokens…并行调用共享Work预算事务，防止双花」；`docs/rules/agents.md` §3 `budgetAllocation` 语义；Plan T4「预算分配」。
-- 建议：派发事务内按 allocation 增加 `tokensReserved`（或明确记录该预留属 WP-05 并在 Discovery 标注），并补一个「Work 预算不足以拒绝第二次派发」的有效测试。
+- 位置：`packages/core/src/join.ts:218-230`。
+- 事实（实跑）：EXP7/exp5——子项键为 `[runId, role, status, requiredChild, join, summary, artifactRefs, unknowns, requestedActions]`；`artifactRefs` 被 `.map(ref => ref.id)` 降为裸 id（丢 `version/hash`），且**完全没有** `evidenceRefs`、`changedPaths`、`findingIds`，而 `ChildOutcome`（`join.ts:25-34`）本身持有这些字段。
+- 违背依据：`docs/delivery/acceptance.md` AC-046「父可获**全部结果**」；`docs/rules/agents.md` §4 结果契约字段清单（status/summary/artifactRefs/evidenceRefs/changedPaths/findingIds/unknowns/requestedActions）。
+- 建议：事件 data 直接携带完整 `stageResult`（至少补齐 evidenceRefs/changedPaths/findingIds 与 artifactRefs 全字段）。
 
-### R-08 [P3] 配置继承第一层「已授权 Run 参数」在派发路径不可达
+### N-08 [P3] 第二次 Schema 失败在 `paused` 等状态抛 `VALIDATION_ERROR`，无法形成 `contract_violation`
 
-- 位置：`packages/core/src/orchestrator.ts:231`（`gateway.availability(role)`）、`:248`（`this.config.freeze(role)`）；`packages/core/src/model-gateway.ts:90`（`availability(role, runParams={})`）
-- 事实：`ConfigStore.resolve` 实现了 Run→Project→globalRole→globalDefault，`config.test.ts:162-165` 也用 `config.resolve('review', {reasoning:'off',contextLimit:10000})` 验证了 run 层；但 `Orchestrator.dispatch`/`currentProfileRevision` 都只传 `role`，`DispatchSpec` 也没有承载 run 参数的位置，因此「已授权Run参数」层在生产路径永远为 `{}`。
-- 违背：`docs/rules/agents.md` §5 继承顺序首项「已授权Run参数」；Plan T1 声称的继承解析。
-- 建议：明确 Run 参数的来源（授权字段/BFF 入参）并接入 `dispatch`，或记录为「WP-02 只实现解析、接入在后续包」的 Discovery。
+- 位置：`packages/core/src/stage.ts:242-270`（先写 `stage.failed`，再以 `canTransitionRun(run.status,'contract_violation')` 校验；不满足即抛错回滚）。
+- 事实（实跑）：EXP10——`paused` Run 第一次失败返回 `VALIDATION_ERROR`（写 1 条 `schema_invalid` 事件），第二次失败抛 `VALIDATION_ERROR: Run … cannot record a contract violation from paused`，Run 仍 `paused`，`schema_invalid` 事件仅 1 条。
+- 违背依据：`docs/architecture/protocol.md` §6「普通文本结束没有该结果时Run等待提交提示，**连续两次不合规为contract_violation**」；`RUN_TRANSITIONS`（`domain/src/transitions.ts:69-73`）中 `waiting_permission/paused/waiting_children` 均无到 `contract_violation` 的迁移。
+- 影响：fail-closed（未静默降级）可接受，但“二次失败即 `contract_violation`”的终局性在多个非运行态不成立，且已落 1 条拒绝事件后停止升级，语义不完整。
+- 建议：与 N-02 合并——不可交付状态应直接拒绝提交（不产生修正计数），或在迁移表中补齐这些状态到 `contract_violation` 的路径并明确终局语义。
 
-### R-09 [P3] `readFrozen` 返回的对象不满足 `providerConfigSchema`，并丢失 `sources`
+### N-09 [P3] 代码引用不存在的 `DC-38`，Run 参数层与 Authorization 的绑定缺口未落 Discovery
 
-- 位置：`packages/core/src/config.ts:490-508`；冻结写入侧 `config.ts:458-485`
-- 事实：`freeze` 只写 `provider:{providerId,type,baseUrl,secretRef}`，缺 `providerConfigSchema` 必需的 `enabled` 与 `models`；`readFrozen` 直接 `as unknown as` 断言成 `ProviderConfig` 返回，并以 `sources:{}` 丢弃逐字段来源。`recoveryView.profile` 因此是一个 Schema 上非法的 `ProviderConfig`。
-- 违背：`docs/architecture/data.md` §3 Provider 字段（`enabled`、`models`）；`docs/rules/agents.md` §5「Profile字段…更改配置对后续Run生效」要求恢复时可核对来源。
-- 建议：冻结时写入完整 provider 描述或把快照里的 provider 投影单独定义为 `FrozenProvider` 类型；`readFrozen` 保留 `sources` 或用 `providerConfigSchema.parse` 显式校验。
+- 位置：`packages/core/src/orchestrator.ts:79`（`… binds them to the Authorization record (DC-38) …`）；`discovery.md` 仅到 DC-37。
+- 事实：全仓 `grep DC-38` 仅命中该注释，`.agentdev/work/WP-02/discovery.md` 无该条目。
+- 违背依据：`docs/rules/workflow.md` §6 Discovery 要求（偏离与缺口须有可追踪条目）；首轮 R-13。
+- 建议：补 DC-38（记录 `runParams` 尚无授权来源、归 WP-04/WP-07）或改用已存在的 DC 编号。
 
-### R-10 [P3] `SnapshotWriter.freeze` 的幂等判定对 `type` 不敏感，可能返回错误类型的快照
+### N-10 [P3] Chief 规格超出 Work 预算时返回 `CONSTRAINT_VIOLATION` 而非 `BUDGET_EXCEEDED`
 
-- 位置：`packages/core/src/snapshots.ts:52-76`（`this.read(hash)` 按 hash 单查，忽略 type）
-- 事实：`snapshot` 主键为 `(type,hash)`，同一 hash 可合法存在于两个 type 下；`freeze` 命中任意 type 的同 hash 行即返回 `created:false` 且不写新行。若 `dispatch` 的载荷哈希恰好与既有 `context`/`config` 行相同，Run 的 `dispatchSnapshotId` 会指向错误类型的行，`recoveryView` 随即报 `STALE_ARTIFACT`（`orchestrator.ts:388-392`）。
-- 违背：`docs/architecture/data.md` §2 `snapshot` 主键 `(type,hash)`；`docs/architecture/reliability.md` §1 快照读取一致性。
-- 建议：`freeze`/`read` 以 `(type,hash)` 为键，或至少在同 hash 命中但 type 不同时报错而非静默复用。
+- 位置：`packages/core/src/orchestrator.ts:345-348`（所有 kind 都走 `reserveBudget`）、`:583-591`；Work 预算准入 `canAllocateBudget` 只在 `requireBudget`（`:617-639`，professional 专用）被调用。
+- 事实（实跑）：EXP4——chief 规格超 Work 预算时抛 `CONSTRAINT_VIOLATION: budget update failed its contract schema: tokens used + reserved exceeds the limit`；`orchestrator.test.ts:462-464` 仅断言 `/exceeds/`，未断言错误码。
+- 违背依据：`docs/architecture/protocol.md` §7 错误表（预算不足应为 `BUDGET_EXCEEDED`）；`plan.md` T4 预算分配。
+- 建议：对 `chief`/`professional` 统一在写库前跑 `canAllocateBudget(workBudget, allocation)`，`reserveBudget` 只做已准入的原子写入。
 
-### R-11 [P3] 实现记录称「等级判定复用 domain」，但 `decideLevel` 从未被调用
+### N-11 [P3] `data.md` 与代码的 Run 快照引用类型冲突未消解（R-06 残余，产品确认未完成）
 
-- 位置：`packages/core/src/orchestrator.ts:157-165`；`.agentdev/work/WP-02/implementation.md:29`；对照 `packages/domain/src/routing.ts:120`
-- 事实：`assess()` 只读取调用方传入的 `payload.level`，仅用 `requiresExplicitAuthorization(payload.level)` 做 L3 授权判断；domain 的 `decideLevel`（`workflow.md` §2 顺序）未被 orchestrator 引用（grep 仅命中 domain 测试）。
-- 违背：`implementation.md` T3「等级判定复用 domain」及 `plan.md:37` 同表述的自我陈述；与「以实际证据报告完成情况」（AGENTS.md）冲突。
-- 建议：`assess` 调用 `decideLevel` 对 Chief 提交的语义输入做交叉校验（或修正记录措辞为「只做 L3 授权校验，等级语义由 Chief 负责」）。
-
-### R-12 [P3] `request_dispatch` 内核入参偏离 `protocol.md` §6
-
-- 位置：`packages/core/src/orchestrator.ts:92-102`（`DispatchRequestInput`）
-- 事实：`docs/architecture/protocol.md:108` 规定 `agent.request_dispatch* | workId,reason,requestedRole,goal,sourceRefs`；实现接收 `runId,role,purpose,goal,stage,parentRunId,requiredOutputs,requiredChild,budgetAllocation`，无 `reason`/`sourceRefs`。`plan.md:50` 声称「`agent.request_dispatch` 按 `protocol.md` §6 实现内核」。
-- 违背：`docs/architecture/protocol.md` §6 方法契约；`plan.md:50`。
-- 建议：补齐 `workId/reason/sourceRefs`（`runId` 应由 attempt capability 派生），或修订 Plan/协议并记录 Discovery。
-
-### R-13 [P3] Discovery（DC-27..DC-36）本身成立，但遗漏本报告发现的偏离
-
-- 位置：`.agentdev/work/WP-02/discovery.md:5-61`
-- 事实：DC-27（快照哈希引用）、DC-28（显式 SQL）、DC-29（config.toml 细节）、DC-30（ContextSelection 缺字段）、DC-31（Provider/Secret 缺口）、DC-32（purpose×role 矩阵）、DC-33（Attempt 起点归 WP-05）、DC-34（profileRevision 编码）、DC-35（Gate 以 join 结果表达）、DC-36（stage.submit 归属）逐条与代码/文档相符，且任务书点名的三项（purpose×role 矩阵、Gate 语义、Attempt 起点归属）均已记录。但以下应当记录的偏离/缺口未记录：joinPolicy=none 未消费（R-03）、持久事件名偏离 protocol §7（R-04）、越界写入 Plan writePaths 与 `run.ts` 契约变更（R-05/R-06）、Work 预算预留未落库（R-07）、Run 参数层不可达（R-08）、stage.submit 缺 epoch/终态守卫（R-01）。
-- 违背：`docs/rules/workflow.md` §6 Discovery 要求保存证据、影响、实际路由；`AGENTS.md`「按实际证据报告完成情况」。
-- 建议：为 R-01/R-03/R-04/R-05/R-06/R-07/R-08 各补 DC 条目（或将其标记为「归后续包」并给出承接包），使偏离可追踪。
+- 位置：`docs/architecture/data.md:30,80`（`configSnapshotId:ID, contextSnapshotId:ID, dispatchSnapshotId:ID`、`DispatchSnapshot.contextSnapshotId:ID`）对照 `packages/contracts/src/entities/run.ts:39`（`snapshotRefSchema = hashSchema`）与 `structures.ts` 的 `dispatchSnapshotSchema.contextSnapshotId`。
+- 事实：偏离已在 `plan.md:27`（planVersion 2）与 `discovery.md:72`（RE-06）记录，代码与测试一致地使用 64 位哈希；但权威文档 `data.md` 未改，`docs:check` 不做“代码 vs 文档契约”交叉校验，因此冲突不会被任何命令发现。`plan.md:32` 的“授权来源”引用的是 Review R-05 与用户「继续」，并非产品方对契约变更的确认。
+- 违背依据：`docs/rules/workflow.md` §4/§8（产品/契约语义变更需 Decision 与用户确认）；`reliability.md` §5（产品语义变更需 Decision 并回对应 Gate）。
+- 判断：本轮**不判为阻断**（理由充分、已显式记录、回退代价已说明），但属 `Product Decision Pending`。若不加确认，后续按 `data.md` 实现的消费者/迁移会与代码不匹配。
+- 建议：在 Settlement 前取得产品方 Decision：确认 `SnapshotRef=Hash` 并更新 `data.md` §2/§3，或回退为 `ID` 并为 `snapshot` 增列 + 迁移。二者必居其一，不能长期并存。
 
 ---
 
 ## 5. 未验证 / 无法验证项
 
-1. **WL-01 真实 Provider 调用与 Secret 存储**：WP-02 只实现解析/冻结/能力校验，`GatewayTransport`/`SecretResolver` 为注入缝；真实 HTTP 与 Secret 加密属 WP-07/WP-10（DC-31 已记录）。AC-043「不同 Provider」因此只做了结构验证，未做真实连通验证（见 AC-043 结论）。
-2. **WL-02 Run 的独立 Session/工具范围**：`agents.md` §1「每次Run有独立Session、Context、模型配置、工具范围及输出Schema」中的 Session/工具执行部分属 WP-05/WP-07；本包只验证了模型配置与三个快照。
-3. **WL-03 ContextBuilder/上下文内容与 token 计量**：`dispatch` 的 `contextPayload` 仅有 fallback（`orchestrator.ts:251-259`），`contextSnapshotSchema`/预算计量属 WP-06，AC-082 的工具层负例按 Plan 归 WP-07；本报告只验证快照引用与窄 scope 恢复。
-4. **WL-04 `stage.submit` 的 `readLedgerHash` 真实性**：实现只做 64 位十六进制 Schema 校验，未与读账本核对（属 WP-05/WP-06），AC-047 的「结构化交付」未覆盖该语义。
-5. **WL-05 事件消费者的兼容性**：R-04 的事件名偏离在 WS/BFF/UI 尚未实现（WP-08/WP-09）时不会暴露；本报告只能从 `protocol.md` §7 静态判定，未做端到端消费验证。
-6. **WL-06 `test:e2e`/`test:acceptance`/`test:live`**：按契约返回 `NOT_IMPLEMENTED`，未执行；发布回归统一在 WP-10。
-7. **WL-07 T9 未完成**：`docs/INDEX.md` 状态、`acceptance.md` 证据登记、结算材料均未产出，本次 Review 只能判定「实现是否成立」，无法判定「结算是否完成」。
+1. **WL-01 真实 Provider 调用与 Secret 存储**：`ModelGateway` 的 `GatewayTransport`/`SecretResolver` 仍为注入缝，真实 HTTP 与 Secret 加密属 WP-07/WP-10（DC-31）。AC-043「不同 Provider」仍只是结构验证（所有测试只用一个 Provider）。
+2. **WL-02 Run 的独立 Session/工具范围**：`agents.md` §1 的 Session/工具执行部分归 WP-05/WP-07，本包只验证模型配置与三个快照。
+3. **WL-03 ContextBuilder/上下文内容与 token 计量**：`dispatch` 的 `contextPayload` 仅有 fallback（`orchestrator.ts:316-324`），属 WP-06；AC-082 的工具层负例按 Plan 归 WP-07。
+4. **WL-04 `readLedgerHash` 真实性**：`stage.ts` 只做 64 位十六进制 Schema 校验，未与读账本核对（属 WP-05/WP-06）。
+5. **WL-05 事件消费者的端到端兼容性**：N-03 的残留事件名在 WS/BFF/UI 尚未实现（WP-08/WP-09）时不会暴露；本轮只从 `protocol.md` §7 静态判定。
+6. **WL-06 `test:e2e`/`test:acceptance`/`test:live`**：按契约 `NOT_IMPLEMENTED`，未执行。
+7. **WL-07 T9 未完成**：`docs/INDEX.md:26-30` 仍只列 WP-00/WP-01 且称 Work/Run 编排「仍未实现」；`docs/delivery/acceptance.md` 无 WP-02 证据登记；无 Settlement 材料。本次 Review 只能判定“实现是否成立”，不能判定“结算是否完成”。
+8. **WL-08 并发**：`reserveBudget` 与 Run 行写入同一事务、预算更新走版本 CAS，未见双花；但本轮未做真实并发压测（WP-05/WP-10 范围）。
 
 ---
 
 ## 6. 方法与边界声明
 
-- 本报告只依据仓库文件、`785bdd6` 上的 git 对象/差异与实跑命令；未读取任何开发对话、未引用外部同名技能或历史方案；未修改产品代码、测试、`docs/**` 或 WP-02 的 plan/implementation/discovery。
-- 写入仅限本文件 `.agentdev/work/WP-02/review.md` 与检查临时目录 `/tmp/wp02-review/`。
-- 额外实验使用 `pnpm build` 产生的 `packages/*/dist` 产物，等价复现 `join.test.ts`/`orchestrator.test.ts` 的夹具；脚本保留在 `/tmp/wp02-review/{join-policy.mjs,stage-terminal.mjs}` 以便复核。
+- 本报告只依据仓库文件、`c4763d5` 上的 git 对象/差异与实跑命令；未读取任何开发对话、未引用外部同名技能或历史方案；未修改产品代码、测试、`docs/**` 或 WP-02 的 plan/implementation/discovery。
+- 唯一写入文件为本文件 `.agentdev/work/WP-02/review.md`；实验脚本独立写在 `/tmp/wp02-r2/`（`exp.mjs`、`exp2.mjs`、`exp3.mjs`、`exp4.mjs`、`exp5.mjs`），使用 `pnpm build` 产出的 `packages/*/dist`，等价复现 `join.test.ts`/`orchestrator.test.ts` 的夹具。
+- `pnpm build` 只写 `.gitignore` 中的 `dist/`，复核结束时 `git status --porcelain` 仍无输出。

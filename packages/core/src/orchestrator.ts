@@ -18,7 +18,6 @@ import {
   professionalDispatchSpecSchema,
   type Assessment,
   type AssessmentPayload,
-  type Budget,
   type Attempt,
   type DispatchSnapshot,
   type DispatchSpec,
@@ -29,7 +28,6 @@ import {
 } from '@agentdev/contracts';
 import {
   canAllocateBudget,
-  canTransitionRun,
   decideLevel,
   isDirectChiefChild,
   PRIMARY_PURPOSE_BY_ROLE,
@@ -41,6 +39,7 @@ import {
 } from '@agentdev/domain';
 import { withTransaction, type ProjectStore } from '@agentdev/storage';
 import type { ConfigStore, ProfileLayer, ProfileResolution } from './config.js';
+import { RunLifecycle } from './run-lifecycle.js';
 import { ProtocolError, type ProtocolErrorCode } from './errors.js';
 import type { ModelGateway } from './model-gateway.js';
 import { canonicalJson } from './dispatcher.js';
@@ -52,6 +51,8 @@ export interface OrchestratorOptions {
   readonly config: ConfigStore;
   readonly snapshots: SnapshotWriter;
   readonly gateway: ModelGateway;
+  /** Shared lifecycle; a caller may pass its own so `StageGate` shares the path. */
+  readonly lifecycle?: RunLifecycle;
 }
 
 export interface AssessInput {
@@ -175,12 +176,15 @@ export class Orchestrator {
   private readonly config: ConfigStore;
   private readonly snapshots: SnapshotWriter;
   private readonly gateway: ModelGateway;
+  /** Shared terminal path: Run status plus budget reservation (N-01). */
+  readonly lifecycle: RunLifecycle;
 
   constructor(options: OrchestratorOptions) {
     this.store = options.store;
     this.config = options.config;
     this.snapshots = options.snapshots;
     this.gateway = options.gateway;
+    this.lifecycle = options.lifecycle ?? new RunLifecycle({ store: options.store });
   }
 
   /** The revision a DispatchSpec must name to be accepted (`profileRevision`). */
@@ -278,6 +282,15 @@ export class Orchestrator {
           workId: work.id,
         });
       }
+      // A parent that already ended (or is paused/cancelling) cannot take new
+      // work: its children would never be joined (`workflow.md` §5.3).
+      if (!RunLifecycle.canParentDispatch(parent.status)) {
+        fail(
+          'INVALID_STATE',
+          `parent Run ${parent.id} is ${parent.status} and cannot accept a new dispatch`,
+          { parentRunId: parent.id, parentStatus: parent.status },
+        );
+      }
       // A grandchild Run is refused here, before any row or snapshot is written.
       if (!isDirectChiefChild(spec, parent)) {
         fail(
@@ -291,6 +304,14 @@ export class Orchestrator {
     }
     // A Chief spec's purpose/stage pair is already narrowed by the shared Schema
     // and re-checked by `validateDispatchSpec`, so no extra branch is needed.
+
+    // The Work budget is the authority and is checked before anything is written,
+    // for Core-built chief specs as well as professional ones (N-10), so an
+    // over-commit is reported as BUDGET_EXCEEDED instead of a Schema violation.
+    enforce(
+      canAllocateBudget(this.lifecycle.budgetOf(work.id), spec.budgetAllocation),
+      'dispatch budget',
+    );
 
     const role = spec.role;
     const availability = this.gateway.availability(role, input.runParams ?? {});
@@ -345,7 +366,7 @@ export class Orchestrator {
     return withTransaction(this.store.db, () => {
       // The reservation happens in the same transaction as the Run row, so a
       // concurrent dispatch cannot double-spend the Work budget.
-      this.reserveBudget(work.id, spec.budgetAllocation);
+      this.lifecycle.reserve(work.id, spec.budgetAllocation);
       const run = this.store.runs.insert({
         workId: work.id,
         ...(spec.kind === 'professional' && spec.taskId !== undefined
@@ -497,120 +518,20 @@ export class Orchestrator {
     };
   }
 
-  /**
-   * Starts an Attempt for a queued Run.
-   *
-   * This is the Run-side half of the dispatch handshake: Core decides that a Run
-   * may execute, records the Attempt and moves the Run `queued → starting →
-   * running`. Supervision, heartbeats, leases and recovery build on these rows in
-   * WP-05; nothing else here assumes a Runner exists.
-   */
+  /** Starts an Attempt for a queued Run (see `RunLifecycle.beginAttempt`). */
   beginAttempt(runId: string, options: { readonly runnerId?: string } = {}): Attempt {
-    const run = this.store.runs.find(runId);
-    if (run === undefined) fail('NOT_FOUND', `Run ${runId} does not exist`);
-    // The documented path is `queued → starting → running` (`workflow.md` §5.3),
-    // so a Run that cannot legally start is refused here, before an Attempt row is
-    // written.
-    const alreadyStarting = run.status === 'starting';
-    if (!alreadyStarting && !canTransitionRun(run.status, 'starting')) {
-      fail('VALIDATION_ERROR', `Run ${run.id} cannot start from ${run.status}`, {
-        runId: run.id,
-        status: run.status,
-      });
-    }
-    return withTransaction(this.store.db, () => {
-      const previous = this.store.attempts.list({ where: 'run_id = ?', params: [run.id] });
-      const attempt = this.store.attempts.insert({
-        runId: run.id,
-        number: previous.length + 1,
-        status: 'starting',
-        ownerEpoch: previous.length,
-        ...(options.runnerId === undefined ? {} : { runnerId: options.runnerId }),
-      });
-      const starting = alreadyStarting
-        ? run
-        : this.store.runs.update(run.id, { status: 'starting' }, run.version);
-      const running = this.store.runs.update(starting.id, { status: 'running' }, starting.version);
-      // `protocol.md` §7 has one persistent name for a Run that is now executing.
-      this.store.events.append({
-        name: 'run.started',
-        entityId: running.id,
-        entityVersion: running.version,
-        data: { attemptId: attempt.id, number: attempt.number, runnerId: options.runnerId ?? null },
-      });
-      return attempt;
-    });
+    return this.lifecycle.beginAttempt(runId, options);
   }
 
   /**
-   * Marks a Run terminal.
-   *
-   * The transition table stays authoritative, the Run's budget reservation is
-   * released (`reliability.md` §3), and the terminal event carries the real
-   * outcome — clients must not render every `run.ended` as a success.
+   * Marks a Run terminal through the shared lifecycle, so the budget reservation
+   * is released exactly once (N-01).
    */
   settleRun(
     runId: string,
     status: Extract<Run['status'], 'completed' | 'failed' | 'cancelled'>,
   ): Run {
-    const run = this.store.runs.find(runId);
-    if (run === undefined) fail('NOT_FOUND', `Run ${runId} does not exist`);
-    if (!canTransitionRun(run.status, status)) {
-      fail('VALIDATION_ERROR', `Run ${run.id} cannot move ${run.status} → ${status}`, {
-        runId: run.id,
-        status: run.status,
-      });
-    }
-    return withTransaction(this.store.db, () => {
-      const updated = this.store.runs.update(run.id, { status }, run.version);
-      this.releaseReservation(updated.workId, run.budgetAllocation);
-      this.store.events.append({
-        name: 'run.ended',
-        entityId: updated.id,
-        entityVersion: updated.version,
-        data: { outcome: status, workId: updated.workId, releasedTokens: run.budgetAllocation },
-      });
-      return updated;
-    });
-  }
-
-  /**
-   * Reserves tokens for a dispatched Run (`reliability.md` §3).
-   *
-   * `used + reserved <= limit` is enforced by the Schema, so an over-commit fails
-   * at the update rather than at the model call.
-   */
-  private reserveBudget(workId: string, allocation: number): void {
-    if (allocation === 0) return;
-    const budget = this.budgetOf(workId);
-    this.store.budgets.update(
-      budget.id,
-      { tokensReserved: budget.tokensReserved + allocation },
-      budget.version,
-    );
-  }
-
-  private releaseReservation(workId: string, allocation: number): void {
-    if (allocation === 0) return;
-    const budget = this.budgetOf(workId);
-    this.store.budgets.update(
-      budget.id,
-      { tokensReserved: Math.max(0, budget.tokensReserved - allocation) },
-      budget.version,
-    );
-  }
-
-  /** The Work's own budget row (`work.budgetId`), never another Work's. */
-  private budgetOf(workId: string): Budget {
-    const work = this.requireWork(workId);
-    const budget = this.store.budgets.find(work.budgetId);
-    if (budget === undefined) {
-      fail('INTERNAL_ERROR', `Work ${workId} references missing budget ${work.budgetId}`, {
-        workId,
-        budgetId: work.budgetId,
-      });
-    }
-    return budget;
+    return this.lifecycle.settle(runId, status);
   }
 
   /** Rejects a professional spec whose parent cannot fund it. */
@@ -630,12 +551,8 @@ export class Orchestrator {
         { parentRunId: parent.id, allocated, requested: spec.budgetAllocation },
       );
     }
-    // The Work budget is the authority (`reliability.md` §3); the parent Run's
-    // allocation is a second, run-level ceiling.
-    enforce(
-      canAllocateBudget(this.budgetOf(parent.workId), spec.budgetAllocation),
-      'dispatch budget',
-    );
+    // The parent Run's own allocation is a second, run-level ceiling on top of the
+    // Work budget that `dispatch` already checked before writing anything.
   }
 
   /** Appends the child to its Chief Run's `childIds`. */

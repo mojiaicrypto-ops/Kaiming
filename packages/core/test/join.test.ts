@@ -246,6 +246,31 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
     expect(store.runs.find(chief.id)?.status).toBe('running');
   });
 
+  it('refuses a new child once the parent Chief Run has ended (N-04, N-05)', () => {
+    const ended = orchestrator.settleRun(chief.id, 'completed');
+    expect(ended.status).toBe('completed');
+    expect(() =>
+      orchestrator.dispatch({
+        spec: professionalSpec({
+          workId: WORK_ID,
+          role: 'backend',
+          purpose: 'implementation',
+          goal: 'too late',
+          scope: emptyScope,
+          stage: 'develop',
+          contextSelection: selection,
+          profileRevision: orchestrator.currentProfileRevision('backend'),
+          requiredOutputs: ['stage.submit'],
+          requiredChild: true,
+          joinPolicy: 'all',
+          budgetAllocation: 1_000,
+          parentRunId: chief.id,
+        }),
+      }),
+    ).toThrowError(/cannot accept a new dispatch/);
+    expect(store.runs.list({ where: 'parent_run_id = ?', params: [chief.id] })).toHaveLength(0);
+  });
+
   it('does not hold the parent for joinPolicy=none, but still pages the Chief', () => {
     const fireAndForget = child(true, 'none');
     attemptAndSettle(fireAndForget, 'failed');
@@ -271,6 +296,10 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
 
   it('refuses delivery for a terminal Run, a stale epoch or a superseded attempt', () => {
     const run = child();
+    const budgetRow = store.budgets.list({ where: 'work_id = ?', params: [WORK_ID] })[0];
+    if (budgetRow === undefined) throw new Error('budget fixture missing');
+    const reservedBefore = budgetRow.tokensReserved;
+    expect(reservedBefore).toBeGreaterThanOrEqual(run.budgetAllocation);
     const attemptId = orchestrator.beginAttempt(run.id).id;
     const valid = {
       status: 'success',
@@ -295,9 +324,14 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
     expect(rejected).toMatchObject({ accepted: false, code: 'VALIDATION_ERROR' });
     stages.submit({ runId: run.id, attemptId, epoch: 0, payload: {} });
     expect(store.runs.find(run.id)?.status).toBe('contract_violation');
+    // The terminal path releases this Run's Work-budget reservation (N-01); the
+    // Chief Run's own reservation stays.
+    expect(store.budgets.find(budgetRow.id)?.tokensReserved).toBe(
+      reservedBefore - run.budgetAllocation,
+    );
     expect(() =>
       stages.submit({ runId: run.id, attemptId, epoch: 0, payload: valid }),
-    ).toThrowError(/accepts no further stage results/);
+    ).toThrowError(/only a running Run accepts stage results/);
     expect(store.stageResults.list({ where: 'run_id = ?', params: [run.id] })).toHaveLength(0);
   });
 
@@ -358,6 +392,66 @@ describe('join and structured delivery (AC-046, AC-047)', () => {
     );
     // A spoken success never stands in for the Schema.
     expect(store.stageResults.list({ where: 'run_id = ?', params: [run.id] })).toHaveLength(0);
+  });
+
+  it('refuses delivery while the Run is not executing (N-02)', () => {
+    const run = child();
+    const attemptId = orchestrator.beginAttempt(run.id).id;
+    const current = store.runs.find(run.id);
+    if (current === undefined) throw new Error('run missing');
+    store.runs.update(current.id, { status: 'paused' }, current.version);
+    const payload = {
+      status: 'success',
+      summary: 'late delivery',
+      artifactRefs: [],
+      evidenceRefs: [],
+      changedPaths: [],
+      findingIds: [],
+      unknowns: [],
+      requestedActions: [],
+      readLedgerSeq: 1,
+      readLedgerHash: 'd'.repeat(64),
+    };
+    expect(() => stages.submit({ runId: run.id, attemptId, epoch: 0, payload })).toThrowError(
+      /only a running Run accepts stage results/,
+    );
+    expect(store.stageResults.list({ where: 'run_id = ?', params: [run.id] })).toHaveLength(0);
+    // No correction was consumed either: the rejection path never ran.
+    expect(
+      store.events
+        .readAfter(0, { limit: 100 })
+        .filter((event) => event.data['outcome'] === 'schema_invalid'),
+    ).toHaveLength(0);
+  });
+
+  it('pages the Chief once for one failure set (N-06) and carries every result', () => {
+    const broken = child();
+    attemptAndSettle(broken, 'failed');
+    joins.onChildSettled(broken.id);
+    // Recomputing the join must not duplicate the todo.
+    joins.onChildSettled(broken.id);
+    const todos = store.events
+      .readAfter(0, { limit: 100 })
+      .filter((event) => event.name === 'chief_action_required');
+    expect(todos).toHaveLength(1);
+    const children = todos[0]?.data['children'];
+    expect(Array.isArray(children)).toBe(true);
+    const first = (children as Record<string, unknown>[])[0] as {
+      stageResult: Record<string, unknown>;
+    };
+    // The whole result contract travels with the event (AC-046 / N-07).
+    expect(Object.keys(first.stageResult).sort()).toEqual(
+      [
+        'artifactRefs',
+        'changedPaths',
+        'evidenceRefs',
+        'findingIds',
+        'requestedActions',
+        'status',
+        'summary',
+        'unknowns',
+      ].sort(),
+    );
   });
 
   it('records a valid stage result without letting a client claim another Run', () => {
