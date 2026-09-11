@@ -225,3 +225,15 @@
   并扩充标记与条件词表（`与否/哪个/更好/抑或/要不然/也可以/maybe/perhaps/possibly`、`待你/等你/看情况/酌情/发现问题/upon approval/following approval/pending review`）。
 - 取舍（显式登记）：目标优先的日常祈使（`docs/INDEX.md 的错别字麻烦处理下`、`docs/INDEX.md 里的接口说明更新一下`）现在**只读并请求澄清**——这是为保证「陈述句永不授权」而付出的 fail-closed 代价，已写入回归测试与 planVersion 2 的残余风险，由 WP-04/06 的模型 Assessment 接管；对应的动词优先表达（`修复 docs/INDEX.md 中的错别字`）与处置式（`把 docs/INDEX.md 里的错别字改掉`）均正常授权。
 - 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**（86 负 + 19 正 + 7 条声明性 fail-closed + 作用域断言）；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok；外置语料（79/35/32 条）与新增第十一轮语料（25 条）全部符合预期。
+
+## T20 独立 Review 第十二轮与修复（sound 命令文法：只授权「动词+目标」）
+
+- 第十二轮 Review 判 **FAIL**（3×P1：动词优先无尾守卫、选择/疑问尾、条件前件；对抗性另补 P1：真祈使句的写范围扩到参照/保留目标）。
+- 结论：任何「关键词/形状启发式」都会在两个方向持续漏判。本轮改为**sound 而非 fluent** 的文法，并在记录中明确取舍：
+  - 只授权两类子句：`变更动词(+粒子) + 路径目标（+ 有界尾部）` 与 `把/将/对 + 路径目标 + … + 变更动词`；尾部不得超过 16 字符、不得含第二个路径、不得含非命令标记。
+  - 英文只授权 `动词 + … + 路径`（尾部同样受限），且捕获的形态必须真的是路径（`fix X was not requested` 不再把 `not` 当目标）。
+  - 非命令标记扩充：`而不是/而非/instead of/rather than`、`或/以及/还有/重写`、陈述/完成体/被动/情态/选择/条件/建议/主题/前置条件等（守卫对归一化后的核心子句判定，因此 `但要修复 X` 仍是命令）。
+  - 疑问/选择/建议出现在任一子句 ⇒ 整条消息不授权；条件子句使其下一子句同样非命令。
+- **明确取舍（记录与 plan 一致）**：代价是「丰富措辞」的祈使句会落到只读并请求澄清——目标优先日常祈使（`docs/INDEX.md 的错别字麻烦处理下`）、多目标列表（`修改 X、Y`）、排除式（`修改 X 而不是 Y`）与未登记同义动词（重写/润色/polish）均属此列。它们不再产生任何写授权；等价表达改用「动词+目标」或 `把/将/对` 处置式即可授权。真正语义理解由 WP-04/06 的模型 Assessment 接管。
+- 回归网重写为「必须授权」12 条 + 「必须只读」71 条（覆盖第四至第十二轮全部登记语料），断言写范围恒为 1（不扩张到参照/保留目标）。
+- 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。

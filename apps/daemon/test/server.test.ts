@@ -551,7 +551,7 @@ describe('daemon HTTP surface (WP-03)', () => {
     expect(store.authorizations.list()).toHaveLength(0);
   });
 
-  it('splits a Chinese mixed message and authorizes only the excluded-free target', async () => {
+  it('splits a Chinese mixed message and keeps reference/exclusion forms read-only', async () => {
     const mixed = await fetch(
       `${url}/conversation.message.send`,
       authed({
@@ -570,6 +570,8 @@ describe('daemon HTTP surface (WP-03)', () => {
     const authorized = store.authorizations.find(sent.authorizationId ?? '');
     expect(authorized?.scope.writePaths).toEqual(['docs/PLAN.md']);
 
+    // An exclusion/reference form is *not* a command template: it asks for
+    // clarification instead of granting either path (declared fail-closed cost).
     const excluded = await fetch(
       `${url}/conversation.message.send`,
       authed({
@@ -582,8 +584,8 @@ describe('daemon HTTP surface (WP-03)', () => {
       }),
     );
     const excludedSent = (await excluded.json()) as { authorizationId: string | null };
-    const excludedAuth = store.authorizations.find(excludedSent.authorizationId ?? '');
-    expect(excludedAuth?.scope.writePaths).toEqual(['docs/PLAN.md']);
+    expect(excludedSent.authorizationId).toBeNull();
+    expect(store.authorizations.list()).toHaveLength(1);
   });
 
   it('parses multipart bodies without a framework dependency', () => {

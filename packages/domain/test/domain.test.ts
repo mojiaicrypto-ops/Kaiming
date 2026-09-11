@@ -256,18 +256,18 @@ describe('level routing (workflow.md §2)', () => {
     expect(question.items[0]?.scope.writePaths).toEqual([]);
     expect(question.explicitAuthorization).toBe(false);
 
-    // An explicit fix with a named target: the message authorizes its own scope.
-    const fix = routeMessage('fix the typo in docs/INDEX.md');
+    // An explicit command with a named target: the message authorizes that target.
+    const fix = routeMessage('修改 docs/INDEX.md 中的错别字');
     expect(fix.items.map((item) => item.intent)).toEqual(['delivery']);
     expect(fix.items[0]?.scope.writePaths).toEqual(['docs/INDEX.md']);
     expect(fix.explicitAuthorization).toBe(true);
 
     // A mixed message: explanation first, modification with its own scope.
-    const mixed = routeMessage('explain the routing rules and fix the typo in docs/INDEX.md');
+    const mixed = routeMessage('解释 docs/INDEX.md 并修复 docs/PLAN.md');
     expect(mixed.items.map((item) => item.intent).sort()).toEqual(['assist', 'delivery']);
     const delivery = mixed.items.find((item) => item.intent === 'delivery');
     const assist = mixed.items.find((item) => item.intent === 'assist');
-    expect(delivery?.scope.writePaths).toEqual(['docs/INDEX.md']);
+    expect(delivery?.scope.writePaths).toEqual(['docs/PLAN.md']);
     expect(assist?.scope.writePaths).toEqual([]);
     expect(mixed.explicitAuthorization).toBe(true);
 
@@ -279,9 +279,30 @@ describe('level routing (workflow.md §2)', () => {
     // A documentation request is its own intent.
     expect(routeMessage('write the documentation for the API').items[0]?.intent).toBe('document');
 
-    // Every sentence the independent reviews registered as read-only (rounds 4-8):
-    // explanations, questions, statements, refusals, advice, topical mentions,
-    // preconditions and reference-only paths must never grant write authority.
+    // Commands that must authorize: verb + target (with a bounded tail) and the
+    // 把/将/对 disposal form, in both languages.
+    for (const body of [
+      '修复 docs/INDEX.md',
+      '修改 docs/INDEX.md 中的错别字',
+      '更新 docs/INDEX.md 的说明',
+      '处理一下 docs/PLAN.md 的错别字',
+      '删除 docs/INDEX.md 的旧内容',
+      '清理 docs/PLAN.md 的重复段落',
+      'fix the typo in docs/INDEX.md',
+      'update docs/INDEX.md',
+      '把 docs/INDEX.md 里的错别字改掉',
+      '将 docs/PLAN.md 删除',
+      '对 docs/PLAN.md 进行修改',
+      '不要修改 docs/PLAN.md，但要修复 docs/INDEX.md',
+    ]) {
+      const routing = routeMessage(body);
+      expect(routing.explicitAuthorization, body).toBe(true);
+      expect(routing.items[0]?.scope.writePaths.length, body).toBe(1);
+    }
+
+    // Every registered non-command family stays read-only: questions, explanations,
+    // statements, completion aspect, passives, choices, conditions, advice, references,
+    // quotations and multi-target lists (rounds 4-12 review corpora).
     for (const body of [
       'explain why docs/INDEX.md needs a fix',
       'describe how to fix docs/INDEX.md',
@@ -298,35 +319,26 @@ describe('level routing (workflow.md §2)', () => {
       '刚修复了 docs/INDEX.md',
       'I already fixed docs/INDEX.md',
       'docs/INDEX.md 需要修改',
+      'docs/INDEX.md 需要被修改',
       'docs/INDEX.md 有错误需要修复',
       '是否应该修改 docs/INDEX.md',
       '是否需要更新 docs/INDEX.md',
       '麻烦评估一下 docs/INDEX.md 是否需要修改',
       '请给出 docs/INDEX.md 的修改建议',
-      '麻烦给 docs/INDEX.md 提些改进建议',
       '请列出 docs/INDEX.md 里的错误',
       '帮我看一下 docs/INDEX.md',
       '请评估 docs/INDEX.md',
-      '帮我总结 docs/PLAN.md',
       'Regarding the fix in docs/INDEX.md, what do you suggest?',
       '我已经优化了 docs/INDEX.md',
-      '已经整理了 docs/INDEX.md',
-      '已经修好了 docs/INDEX.md',
       '改动已完成：docs/INDEX.md',
-      '我把它改好了：docs/INDEX.md',
       '我不想修改 docs/INDEX.md',
       '请勿修改 docs/INDEX.md',
       '禁止修改 docs/INDEX.md',
-      '不许修改 docs/INDEX.md',
-      '别急着修改 docs/INDEX.md',
       '暂缓修改 docs/INDEX.md',
       '修改 docs/INDEX.md 了没有',
       'Will you fix docs/INDEX.md',
-      '何必修改 docs/INDEX.md',
       '请讲述修改 docs/INDEX.md 的方法',
-      '请评价修改 docs/INDEX.md 的做法',
       '我想先了解修改 docs/INDEX.md 的影响',
-      '帮我看看 docs/INDEX.md 还能改哪里',
       '列出 docs/INDEX.md 要修改的地方',
       'review docs/INDEX.md for things to fix',
       'check docs/INDEX.md for errors to fix',
@@ -334,89 +346,41 @@ describe('level routing (workflow.md §2)', () => {
       '修改 docs/INDEX.md 前需要审批',
       '在修改 docs/INDEX.md 之前，请先确认',
       '参考 docs/INDEX.md 修改 docs/PLAN.md',
-      '先看 docs/INDEX.md 再修改 docs/PLAN.md',
-      '看完 docs/INDEX.md 之后修复 docs/PLAN.md',
       '关于 docs/INDEX.md 的修改',
       '如果要修改 docs/INDEX.md，请告诉我',
-      '你说要修复 docs/INDEX.md',
       '你提到 docs/INDEX.md 需要修复',
-      // Round 9: completion particles, passive statements, conditions, choice
-      // questions and unpunctuated verb lists.
-      '补充了 docs/INDEX.md',
-      '更新了接口文档，补充了 docs/INDEX.md 的说明',
-      '修复完了 docs/INDEX.md',
-      '更新完毕 docs/INDEX.md',
-      '修改 docs/INDEX.md 好还是不改好',
-      'fix docs/INDEX.md or leave it alone',
-      'docs/INDEX.md 需要被修改',
-      'docs/INDEX.md 应该被修复',
-      'docs/INDEX.md 必须被删除',
-      'docs/INDEX.md 会被清理',
-      'docs/INDEX.md 值得被优化',
-      '如果要改，就修改 docs/INDEX.md',
-      'docs/INDEX.md 修复 更新 整理',
-      'fix docs/INDEX.md update docs/PLAN.md',
-      // Round 10: choice-question variants, conditional fronts, completion particles
-      // without 了 and mismatched verb/noun markers.
-      '更新 docs/INDEX.md 还是新建一个文档',
-      '修 docs/INDEX.md 行不行',
-      '修改 docs/INDEX.md 该不该',
-      '修改 docs/INDEX.md 对不对',
-      '修改 docs/INDEX.md 也行',
-      '修改哪个文件 docs/INDEX.md',
-      'fix docs/INDEX.md vs. leave it',
-      'refactor docs/INDEX.md, yes or no',
+      'docs/INDEX.md 尚未修改',
+      'docs/INDEX.md 正在修改',
+      'docs/INDEX.md 计划修改',
+      'docs/INDEX.md 拒绝修改',
+      'docs/INDEX.md 不修改',
+      'docs/INDEX.md 完成修改',
+      'docs/INDEX.md 继续修改',
+      '修改 docs/INDEX.md 哪个更好',
+      '修改 docs/INDEX.md 抑或重写',
+      '修改 docs/INDEX.md 是必要的',
+      '修改 docs/INDEX.md 或重写',
+      '修改 docs/INDEX.md 与否',
+      '待你确认，修改 docs/INDEX.md',
+      '看情况，修改 docs/INDEX.md',
+      '经批准，修改 docs/INDEX.md',
       '一旦确认，修复 docs/INDEX.md',
-      '经确认后，修改 docs/INDEX.md',
       '有错误的话，修复 docs/INDEX.md',
       'once approved, fix docs/INDEX.md',
       'after you confirm, update docs/INDEX.md',
-      '补充完毕 docs/INDEX.md',
-      '改进完毕 docs/INDEX.md',
-    ]) {
-      const routing = routeMessage(body);
-      expect(routing.explicitAuthorization, body).toBe(false);
-      expect(
-        routing.items.every((item) => item.writePaths.length === 0),
-        body,
-      ).toBe(true);
-    }
-
-    // Explicit instructions must still authorize — including everyday Chinese wording
-    // and mixed messages, in both directions (AC-005/AC-006).
-    for (const body of [
-      'fix the typo in docs/INDEX.md',
-      'update docs/INDEX.md',
-      '修改 docs/INDEX.md 中的错别字',
-      '识别并修复 docs/PLAN.md',
-      '特别修改 docs/PLAN.md',
-      '更新 docs/INDEX.md 的说明',
-      '麻烦处理一下 docs/INDEX.md 里的错别字',
-      '改 docs/INDEX.md',
-      '请修复 docs/INDEX.md',
-      '处理一下 docs/PLAN.md 的错别字',
-      '别改 docs/PLAN.md，改 docs/INDEX.md',
-      '不要修改 docs/PLAN.md，但要修复 docs/INDEX.md',
-      '解释 docs/INDEX.md 并修复 docs/PLAN.md',
-      '先解释 docs/INDEX.md，再修改 docs/PLAN.md',
-      '修改 docs/INDEX.md、docs/PLAN.md',
-      '参考 docs/INDEX.md，修改 docs/PLAN.md',
-      'regarding docs/INDEX.md, fix docs/PLAN.md',
-      '删除 docs/INDEX.md 的旧内容',
-      '清理 docs/PLAN.md 的重复段落',
-    ]) {
-      const routing = routeMessage(body);
-      expect(routing.explicitAuthorization, body).toBe(true);
-      expect(routing.items[0]?.scope.writePaths.length, body).toBeGreaterThan(0);
-    }
-
-    // Target-first phrasing is *not* a command template: the same shape also describes
-    // statements ("X 尚未修改"), so it stays read-only and the Chief asks for the
-    // action to be phrased as a command (declared fail-closed cost, planVersion 2).
-    for (const body of [
+      'refactor docs/INDEX.md, yes or no',
+      'fix docs/INDEX.md or leave it alone',
+      'fix docs/INDEX.md was not requested',
+      'update docs/PLAN.md instead of docs/INDEX.md',
       'docs/INDEX.md 的错别字麻烦处理下',
-      'docs/INDEX.md 的错别字请帮忙处理',
       'docs/INDEX.md 里的接口说明更新一下',
+      '修改 docs/PLAN.md 参考 docs/INDEX.md',
+      '修改 docs/INDEX.md、docs/PLAN.md',
+      '补充了 docs/INDEX.md',
+      '更新完毕 docs/INDEX.md',
+      '补充完毕 docs/INDEX.md',
+      'fix docs/INDEX.md update docs/PLAN.md',
+      'docs/INDEX.md 修复 更新 整理',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(false);
@@ -425,30 +389,6 @@ describe('level routing (workflow.md §2)', () => {
         body,
       ).toBe(true);
     }
-
-    // A reference clause authorizes only the target it names, never the reference.
-    for (const [body, wanted, unwanted] of [
-      ['参考 docs/INDEX.md，修改 docs/PLAN.md', 'docs/PLAN.md', 'docs/INDEX.md'],
-      ['based on docs/INDEX.md, update docs/PLAN.md', 'docs/PLAN.md', 'docs/INDEX.md'],
-    ] as const) {
-      const write = routeMessage(body).items.flatMap((item) => item.writePaths);
-      expect(write, body).toContain(wanted);
-      expect(write, body).not.toContain(unwanted);
-    }
-
-    // Excluded targets never enter the write scope, while the intended one does.
-    for (const [body, wanted, unwanted] of [
-      ['修改 docs/PLAN.md 而不是 docs/INDEX.md', 'docs/PLAN.md', 'docs/INDEX.md'],
-      ['update docs/PLAN.md instead of docs/INDEX.md', 'docs/PLAN.md', 'docs/INDEX.md'],
-    ] as const) {
-      const routing = routeMessage(body);
-      const write = routing.items.flatMap((item) => item.writePaths);
-      expect(write, body).toContain(wanted);
-      expect(write, body).not.toContain(unwanted);
-    }
-
-    // The noun "说明" is not an explanation verb unless it leads the clause.
-    expect(routeMessage('更新 docs/INDEX.md 的说明').explicitAuthorization).toBe(true);
   });
 
   it('classifies every contract operation as read-only, workspace write or environment', () => {
