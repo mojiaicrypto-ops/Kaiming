@@ -1,6 +1,6 @@
 # WP-03 实现 Plan（直接协作与说明产物）
 
-- planVersion: 3
+- planVersion: 4
 - workId: WP-03
 - level: L2（新增 Core 产物/附件/预览模块与 `apps/daemon` HTTP 面；按 `docs/product/experience.md` §3、`docs/architecture/{data,protocol,execution}.md` 既有定义实现，不改产品语义）
 - authorization_ref: 用户目标轮次「继续」（2026-09-11）；上级授权为「我要完全实现这个产品，让你来实现」
@@ -16,6 +16,13 @@
 - 新增 `packages/domain/src/requests.ts`（确定性 Chief 路由：message → work items + 授权判定）与 `packages/core/src/messages.ts`（conversation.message.send 的事务实现）、`packages/core/src/identity.ts` 的 `userIdFromSubject`。
 - **判定边界（必须与 Review/Test 对齐的口径）**：`routeMessage` 是模型 Assessment（WP-04/WP-06）之前的确定性基线，按 `docs/rules/workflow.md` §1/§2 的**结构事实**判定（指令子句 = 修改动词 + 命名路径，且不含疑问/拒绝/假设/引用/陈述/完成体标记）。它**不承诺覆盖自然语言的全部表达**：本包采用的语法是**默认拒绝**的——只有当子句本身是「动词 + 单一命名路径」（或 `把/将/对 + 目标 + 动词`）时才授权；未登记的措辞（同义变更词如 `重写/润色/polish`、名词短语祈使如 `修改 X 中的错别字`、轻动词处置式 `对 X 进行修改`、多目标列表 `修改 X、Y`、排除式 `修改 Y 而不是 X`、范围声明 `修改 Y，X 保持不动`）一律落到只读路线并要求澄清。真正语义分类由 WP-04/06 的模型 Assessment 接管；本包的责任是：正向覆盖文档化场景（明确修复/混合意图/拒绝纠正）、负向覆盖已登记的越权语料、并对任何不确定 fail-closed。
 - 残余风险的登记见 `implementation.md` T12/T13/T26 与结算材料；Review/Test 应针对「已登记语料 + 边界声明」判定，而不是要求启发式覆盖任意新句式。
+
+### planVersion 4 变更（授权来源：第十八轮 Review 的 P1 修复轮；2026-09-11）
+
+- **解释领起子句不再是天然的良性类别**：仅当该子句既**不含否定标记**（`不/别/甭/勿/无需/没有/not/never/without/n't`）又**不点名任何变更**（中英动词，含 `重写/优化/清理/整理/替换` 与英文分词形式 `updating/deleting/changing`）时，才算「显式解释请求」。理由：`说明别改 Y，然后修改 X`、`解释别重写 Y，然后修改 X`、`explain the ban on updating Y, then update X` 里的否定/变更都是**被谈论的对象**，不是用户的请求；把它们当良性会让并列命令获得授权（W3R18-01）。
+- **前导礼貌子句不再良性**：只有**末尾**的纯礼貌子句（`修改 X。谢谢`）才被忽略；`谢谢，修改 X` 与 `谢谢，然后修改 X` 现在一致地只读（W3R18-02）。
+- **新增 fail-closed 代价**：解释请求中夹带变更叙述（`解释如何修改 Y，然后修改 X`、`explain the plan to update Y, then update X`）整条消息只读并请求澄清；`顺便/顺手修改 X`、`多谢。修改 X` 同样只读。
+- 计数口径固定：仓库内路由语料按第十八轮评审计数法（只提取测试文件里 `for (const body of [` / `for (const [body, expected] of [` 块的字面量）实测 **178 例 0 偏差**：必须授权 14、拒绝纠正接续 8、多命令 4、必须只读 152。
 
 ### planVersion 3 变更（授权来源：第十七轮 Review 的 P1 修复轮；2026-09-11）
 

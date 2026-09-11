@@ -125,6 +125,37 @@ const NEGATION_PATTERNS: readonly RegExp[] = [
 ];
 
 /**
+ * Any negation marker, wherever it appears in a clause.
+ *
+ * `NEGATION_PATTERNS` matches a negation *plus a known change verb*, so an unregistered
+ * verb (`别重写`, `别优化`) escapes it — and its Chinese `别` guard deliberately ignores a
+ * `别` that follows a Han character, so `说明别改 Y` escapes it too. This coarse marker is
+ * used only to keep an explanation request that quotes a negation from licensing a later
+ * command (W3R18-01); it never authorizes anything.
+ */
+const NEGATION_MARKER_PATTERN = /(不|别|甭|勿|无需|没有|n't|\b(?:not|never|without|no need)\b)/iu;
+
+/** True when the clause contains a negation marker anywhere. */
+function containsNegationMarker(clause: string): boolean {
+  return NEGATION_MARKER_PATTERN.test(clause);
+}
+
+/**
+ * Any change verb, in a finite or nominalized/gerund form, in either language.
+ *
+ * An explanation request that names a change ("explain the ban on updating X", "说明修复
+ * 计划") is talking *about* a change rather than asking for one, so it must not license a
+ * later command in the same message (W3R18-01).
+ */
+const CHANGE_VERB_ANY_PATTERN =
+  /(改|修改|修正|更正|修复|删除|移除|更新|添加|新增|实现|重命名|重构|调整|处理|补|整理|清理|替换|优化|完善|润色|重写|\b(?:chang|modif|updat|delet|remov|add|implement|fix|repair|renam|refactor|adjust|clean|tidy|replac|rewrit|optimi[sz]|polish|improv|correct|edit))/iu;
+
+/** True when the clause names a change in any form. */
+function containsChangeVerb(clause: string): boolean {
+  return CHANGE_VERB_ANY_PATTERN.test(clause);
+}
+
+/**
  * Statements and status reports.
  *
  * Chinese has no word boundaries, so completion aspect is matched without `\b`
@@ -404,9 +435,17 @@ export function routeMessage(body: string): MessageRouting {
     const reading = readClause(clause.text);
     const refusal =
       matches(NEGATION_PATTERNS, clause.text) && REFUSAL_HEAD_PATTERN.test(clause.text.trim());
-    const polite = POLITE_TAIL_PATTERN.test(clause.text);
+    // Only a *trailing* politeness clause is benign: a leading "谢谢" carries no request, so
+    // a command that follows it via a conjunction is a fragment, not an order (W3R18-02).
+    const polite = POLITE_TAIL_PATTERN.test(clause.text) && index === clauses.length - 1;
     const explanationLead =
       EXPLANATION_LEAD_PATTERN.test(clause.text) || EXPLANATION_LEAD_EN_PATTERN.test(clause.text);
+    // An explanation lead is only benign when the clause really is a request for words. If
+    // it also contains a negation ("说明别改 Y", "先解释为什么不要修改 Y") or names a change
+    // ("explain the ban on updating Y"), that content is being talked about, not requested,
+    // so the clause must not license a later command (W3R18-01).
+    const benignExplanation =
+      explanationLead && !containsNegationMarker(clause.text) && !containsChangeVerb(clause.text);
     // "别改 A，但要修复 B": 要 belongs to a correction and only counts after a refusal.
     let target = reading.target;
     const previousWasRefusal =
@@ -424,6 +463,7 @@ export function routeMessage(body: string): MessageRouting {
       refusal,
       polite,
       explanationLead,
+      benignExplanation,
       target,
       previousWasRefusal,
       adversative,
@@ -440,8 +480,8 @@ export function routeMessage(body: string): MessageRouting {
       matches(PRECONDITION_PATTERNS, clause.text),
   );
   const classSuppressed = readings.some(
-    ({ target, refusal, polite, explanationLead }) =>
-      target === undefined && !refusal && !polite && !explanationLead,
+    ({ target, refusal, polite, benignExplanation }) =>
+      target === undefined && !refusal && !polite && !benignExplanation,
   );
   // A negation that does not *head* its clause is a report, a quotation or a premise
   // ("报告说不要修改 Y", "说明不要修改 Y"), never the user refusing: such a clause makes

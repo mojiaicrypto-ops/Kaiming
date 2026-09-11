@@ -5,10 +5,10 @@
 
 ## 记录口径订正（第十七轮 Review W3R17-04 处理；适用于全部历史条目）
 
-1. **绝对表述的范围**：本文件 T11～T25 中的「一律/永不/按结构关闭/永不下发写授权」只在**当时已登记语料范围内**成立。第十七轮以「否定出现在引述/报告/前提中」的框架句式（`报告说不要修改 Y，然后修改 X` 等 13 句）证伪了无限定的版本；现行为口径以本文件 **T26** 与 `plan.md` **planVersion 3** 为准，历史条目保留原文不改写。
-2. **「外置语料 40 条 0 fail-open」**：指会话外 `/tmp` 下的自建脚本（**不在仓库**，不可从仓库复现）。仓库内可复现的语料是 `packages/domain/test/domain.test.ts`：按引号字面量计，必须授权 14 条、拒绝纠正接续 9 条、多命令 3 条、必须只读 141 条；另有 `apps/daemon/test/server.test.ts`、`packages/core/test/*` 的 HTTP/Core 断言。
+1. **绝对表述的范围**：本文件 T11～T25 中的「一律/永不/按结构关闭/永不下发写授权」只在**当时已登记语料范围内**成立。第十七轮以「否定出现在引述/报告/前提中」的框架句式、第十八轮以「解释领起子句里引用未登记否定词」的框架句式先后证伪了无限定的版本；现行为口径以本文件 **T26/T27** 与 `plan.md` **planVersion 4** 为准，历史条目保留原文不改写。
+2. **「外置语料 40 条 0 fail-open」**：指会话外 `/tmp` 下的自建脚本（**不在仓库**，不可从仓库复现）。仓库内可复现的语料是 `packages/domain/test/domain.test.ts`；按第十八轮评审计数法（`/tmp/w3r18/probe4-registered.mjs`：只提取各 `for (const body of [` / `for (const [body, expected] of [` 块中的字符串字面量，不 import 产品测试文件）实测并重放 **178 例 0 偏差**：必须授权 14、拒绝纠正接续 8、多命令 4、必须只读 152（`implementation.md` 订正前曾写 14/9/3/141；差异源于计数法不同，现按上述方法固定）。另有 `apps/daemon/test/server.test.ts`、`packages/core/test/*` 的 HTTP/Core 断言。
 3. **陈旧待办作废**：「`../` 越界改为 `VALIDATION_ERROR`」不再适用。现行为是**只读 + 澄清**（HTTP 202、零授权行、`authorizationId=null`、无 500），`domain.test.ts` 已覆盖 `../`、`/etc/`、`~/.ssh/` 三例。
-4. **`plan.md` 版本**：`planVersion` 已由 2 升至 3，登记 T21～T25 的实际代价、第十七轮 P1/P2 的闭合口径与新增 fail-closed 代价。
+4. **`plan.md` 版本**：`planVersion` 已由 2 升至 **4**，登记 T21～T27 的实际代价、第十七/十八轮 P1/P2 的闭合口径与新增 fail-closed 代价。
 
 ## T1 Artifact 存储与版本链
 
@@ -316,4 +316,16 @@
 - 已登记 fail-closed 代价（fail-closed，不产生授权）：轻动词处置式 `对 X 进行修改`、名词短语祈使 `修改 X 中的错别字` / `把 X 里的错别字改掉`、范围声明 `修改 Y，X 保持不动`、排除式 `修改 Y 而不是 X`、多目标列表 `修改 X、Y`、未登记同义变更词（`重写/润色/polish`）。旧探针 `/tmp/w3r15` G8-multi 与 `/tmp/w3r16` K-multi 中「多子句只授权第一个目标」的部分授权期望已被 T26 第 6 条口径取代。
 - 回归网（`packages/domain/test/domain.test.ts`）：新增第十七轮 13 句框架负例（含源码路径变体）+ 3 句同形对照 + 2 句逆接连词片段 + 2 句 fail-closed 代价；新增 8 条「拒绝 + 连词接续 ⇒ 只授权接续目标」正例、3 条多命令（含三目标）正例、`先解释…然后修改` 混合意图正例。
 - 验证（本轮实跑）：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**（19 files）；`pnpm test:integration` 124 passed（10 files）；`pnpm build` 8 workspace；`pnpm docs:check` ok（15 documents / 55 internal links / 94 AC / 9 REQ / 11 WP）。
-- 独立复核证据（只读复用评审脚本，消费本轮 `pnpm build` 产物）：`/tmp/w3r17/probe1-corpus.mjs`（13 848 例）A 档仅剩评审已判定的 `务必` 误判族（59 例，语料自身问题）、B 档 37；`probe2-framing.mjs`（31 句）**0 偏差**；`probe3-live.mjs`（真实 HTTP + 真实 Orchestrator）fail-open 0（唯一标记项为被 T26 第 6 条取代的 B-partial 期望）、误拒 0；`probe4-scope.mjs` 作用域无扩张；`/tmp/w3r16/probe5-http.mjs` fail-open 0、`probe6-e2e.mjs` 非命令写 Run 0；`/tmp/w3r16/{probe1,probe2}` fail-open 0；`/tmp/w3r15` 仅多子句口径一项、`/tmp/w3r14/probe1` FAIL-OPEN 0、`probe5-injection` 注入通路 0、`probe6-prior` 前轮 P0/P1 0 失败。
+- 独立复核证据（只读复用评审脚本，消费本轮 `pnpm build` 产物）：`/tmp/w3r17/probe1-corpus.mjs`（13 848 例）A 档仅剩评审已判定的 `务必` 误判族（59 例，语料自身问题）、B 档 37；`probe2-framing.mjs`（31 句）**0 偏差**；`probe3-live.mjs`（真实 HTTP + 真实 Orchestrator）**除下列一项外 fail-open 0、误拒 0**：`修改 X，删除 Y，更新 Z` 被该探针记为 B-partial（它期望「只授权第一个目标」），该期望已被 T26 第 6 条口径取代（第十八轮在此 build 上实测：fail-open 0、误拒 0、documented positive 0 偏差，因为该口径的探针版本已更新）；`probe4-scope.mjs` 作用域无扩张；`/tmp/w3r16/probe5-http.mjs` fail-open 0、`probe6-e2e.mjs` 非命令写 Run 0；`/tmp/w3r16/{probe1,probe2}` fail-open 0；`/tmp/w3r15` 仅多子句口径一项、`/tmp/w3r14/probe1` FAIL-OPEN 0、`probe5-injection` 注入通路 0、`probe6-prior` 前轮 P0/P1 0 失败。
+
+## T27 独立 Review 第十八轮与修复（解释领起的类别判定 + 礼貌前导）
+
+- 第十八轮 Review 判 **FAIL**（0×P0、1×P1、2×P2、2×P3）。P1（W3R18-01）：`reportedNegation`/`refusal` 都建立在 `NEGATION_PATTERNS` 上，而该词表有两处缺口——(a) `别` 的 `(?<![\p{Script=Han}\w])` 守卫排除了任何**汉字之后**的 `别`，于是 `说明别改 Y` 根本不被识别为「含否定」；(b) 变更动词表不含 `重写/优化/完善/清理/整理/替换`。两者叠加第十七轮新放开的**解释领起**豁免（`EXPLANATION_LEAD_PATTERN` 允许 `先|优先`），使「解释领起 + 未登记否定」整类子句保持良性，其后的并列命令重获写授权：`probe2b` 385 组合 90 组越权、13 句在真实 HTTP 落库并经真实 `Orchestrator` 建立 13 个写 Run（含源码路径）。
+- 修复（`packages/domain/src/requests.ts`）：
+  1. **解释领起改为条件良性**：`benignExplanation = explanationLead && !containsNegationMarker(clause) && !containsChangeVerb(clause)`。否定标记用粗粒度 `NEGATION_MARKER_PATTERN`（`不|别|甭|勿|无需|没有|n't|\b(not|never|without|no need)\b`），变更动词用 `CHANGE_VERB_ANY_PATTERN`（中文含 `重写/优化/完善/清理/整理/替换/润色`，英文用词干以覆盖分词形式）。该判定只用于**抑制**，从不产生授权。
+  2. **礼貌前导不再良性（W3R18-02）**：`polite` 仅在子句是**最后一个**子句时成立，`谢谢，然后修改 X` 与 `谢谢，修改 X` 的口径统一为只读；`修改 X。谢谢` 仍授权。
+  3. 解释领起与普通否定无关的路径不变：`解释 X 并修复 Y`、`explain X and fix Y`、`先解释 X，然后修改 Y` 仍授权（正例回归 0 偏差）。
+- 回归网：新增第十八轮 11 条「解释领起里引用否定/变更」负例 + 5 条「前导礼貌」负例；多命令补 4 目标一例（`修改 X，删除 Y，更新 Z，新增 W` ⇒ 四目标全部入 scope）。
+- 验证（本轮实跑）：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **289 passed**（19 files）；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace；`pnpm docs:check` ok。
+- 独立复核证据（评审第十八轮脚本，消费本轮 build）：`/tmp/w3r18/probe2b-negation-gap.mjs` **opens by neg: []**（385 组合全部关闭）；`probe2-frame-hole.mjs` **573 句 open 0**；`probe2c-variants.mjs` 4/4 只读；`probe1-failopen.mjs` 1317 例 scope-violations 0（仅 2 例 `obs-polite-conj` 的旧观测期望，已被 T27 第 2 条取代）；`probe4-registered.mjs` **178 例 0 偏差**；`probe3-live.mjs`（真实 HTTP + 真实 Orchestrator）**fail-open 0、误拒 0、documented positive 0 偏差**；`/tmp/w3r17/probe2-framing.mjs` 31 句 0 偏差；`/tmp/w3r16/{probe1,probe2}` FAIL-OPEN 0；`/tmp/w3r14/probe6-prior` 前轮 P0/P1 0 失败。
+- 承接（第十八轮 P3）：`/tmp/w3r18/probe1` 的 `obs-polite-conj` 观测期望、`w3r17/probe3-live` 的 B-partial 期望、`w3r16/probe2-launder` 的「加性片段/前导礼貌应授权」期望均与 planVersion 4 口径相左，属探针期望陈旧，非实现缺陷；「消息授权 → `assess` → `dispatch(backend/implementation)`」的**仓库内**产品用例仍未落测试，原因是 `apps/daemon` 尚未装配 `Orchestrator`（`dispatch` 接线属 WP-04）；该断言以本轮真实 HTTP + 真实 Orchestrator 的外置探针证据替代，待 WP-04 落地后补入仓库测试。

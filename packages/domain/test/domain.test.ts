@@ -312,6 +312,10 @@ describe('level routing (workflow.md §2)', () => {
         '修改 docs/INDEX.md，删除 docs/PLAN.md，更新 docs/DESIGN.md',
         ['docs/DESIGN.md', 'docs/INDEX.md', 'docs/PLAN.md'],
       ],
+      [
+        '修改 docs/INDEX.md，删除 docs/PLAN.md，更新 docs/DESIGN.md，新增 docs/KNOWLEDGE.md',
+        ['docs/DESIGN.md', 'docs/INDEX.md', 'docs/KNOWLEDGE.md', 'docs/PLAN.md'],
+      ],
     ] as const) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(true);
@@ -507,6 +511,27 @@ describe('level routing (workflow.md §2)', () => {
       // for clarification instead of authorizing (`plan.md`).
       '对 docs/PLAN.md 进行修改',
       '把 docs/PLAN.md 里的错别字改掉',
+      // Round 18: an explanation lead that quotes a negation or names a change is a request
+      // for words *about* that change, so it cannot license a later command. The negation
+      // here escapes `NEGATION_PATTERNS` (unregistered verb `重写`, `别` after a Han
+      // character, nominalized English), which is exactly why the guard is structural.
+      '说明别改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '先说明别改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '解释别重写 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '说明不要修改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '报告别改 docs/PLAN.md，然后修改 docs/INDEX.md',
+      '修改 docs/INDEX.md，说明别改 docs/PLAN.md',
+      '修改 docs/INDEX.md，请说明别改 docs/PLAN.md',
+      '先修改 docs/INDEX.md，然后说明别改 docs/PLAN.md',
+      'explain the ban on updating docs/PLAN.md, then update docs/INDEX.md',
+      'update docs/INDEX.md after explaining why you must not change docs/PLAN.md',
+      // Round 18: a leading politeness clause carries no request, so a command joined to it
+      // is a fragment (`谢谢，修改 X` and `谢谢，然后修改 X` now agree).
+      '谢谢，然后修改 docs/INDEX.md',
+      '麻烦了，然后修改 docs/INDEX.md',
+      '多谢。修改 docs/INDEX.md',
+      'thanks, update docs/INDEX.md',
+      '感谢，修复 docs/INDEX.md',
     ]) {
       const routing = routeMessage(body);
       expect(routing.explicitAuthorization, body).toBe(false);
