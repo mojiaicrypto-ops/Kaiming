@@ -63,3 +63,19 @@
   - 对抗性 5（孤儿 blob 与 staged 无上限）：上传每 owner 最多 50 个 staged（`MAX_STAGED_PER_OWNER`），daemon 每次上传先 `expireStale()` 机会式清理；`stage` 先校验后写 blob。
 - 记录级承接（W3-07/W3-08）：AC-005「原消息作为范围授权」的 Authorization 行绑定与 AC-006「混合意图拆分」依赖 Chief 的语义 Assessment 与消息拆分（WP-04/WP-05 落线），本包实现消息→Work 的 `sourceRef` 绑定与「不误建 Requirement/Gate」，其余在结算材料登记承接。
 - 修复后验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **281 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace。
+
+## T8 独立 Review 第二轮与修复（FAIL → 修复）
+
+- 第二轮独立 Review 判 **FAIL**（P1×2、P2×2、P3×9）：两个 P1 是 AC-005（消息授权未落 Authorization 行）与 AC-006（混合意图未拆分）；对抗性核验确认 FAIL 成立，并补 7 项（预览中间态内存放大、截断信息未下发、非数字 `artifactVersion` 静默回退、修复引入的幂等主体塌缩、`acl:['chief']` 与 daemon `role` 冲突、`MAX_STAGED_PER_OWNER` 只在单会话内计数、`assertReadable` 注释与实现相反）。
+- 修复：
+  - AC-005（W3R2-02）：`message.send` 支持显式 `authorization`（scope + operations）——在同一事务内创建 `authorization` 行（`sourceRef`=该消息）、绑定 `work.authorizationRef` 并把 Work 提升到 L1；`assess` 因此有真实授权可引用。
+  - AC-006（W3R2-01）：`message.send` 支持显式 `workItems`（intent + goal）——一条消息按给定意图创建多个 Work（各自独立 budget），全部绑定同一 source message，响应返回 `workIds`；语义拆分仍由 Chief 的 Assessment 决定，本包提供机制与证据。
+  - 对抗性 1：`renderPreview` 对超限 Artifact 先按字节裁剪再解码/分行，20 MiB 上传不再物化整串。
+  - 对抗性 2：预览响应下发 `x-agentdev-preview-mode` / `x-agentdev-preview-download-required` / `x-agentdev-preview-truncated-at-line`。
+  - 对抗性 3：`artifactVersion` 非整数 ⇒ `VALIDATION_ERROR`，不再静默回退最新版本。
+  - 对抗性 4：命令账本主体恢复为 `authed.subject`（会话维度），owner 仍是安装用户。
+  - 对抗性 5：`sendMessage` 的 user Artifact ACL 由调用方指定（daemon 传当前服务角色，默认空=所有角色可读）。
+  - 对抗性 6：`MAX_STAGED_PER_OWNER` 改为按 owner 跨 Conversation 统计。
+  - 对抗性 7：`assertReadable` 注释改为与单用户现实一致。
+- 修复后验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **283 passed**；`pnpm test:integration` 124 passed；`pnpm build` 8 workspace。
+- 待办：第三轮独立 Review（复核上述修复与 AC-005/006 机制是否满足验收口径）→ 独立 Test → 结算。

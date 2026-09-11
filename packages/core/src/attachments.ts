@@ -121,7 +121,9 @@ export class AttachmentService {
         details: { conversationId: conversation.id },
       });
     }
-    const pending = this.list({ conversationId: input.conversationId, state: 'staged' }).filter(
+    // The quota is per owner, not per conversation: switching conversations must not
+    // reset it (W3R2 review).
+    const pending = this.list({ state: 'staged' }).filter(
       (attachment) => attachment.ownerUserId === input.ownerUserId,
     );
     if (pending.length >= MAX_STAGED_PER_OWNER) {

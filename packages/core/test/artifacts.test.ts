@@ -404,6 +404,59 @@ describe('attachments, artifacts and previews (WP-03)', () => {
     expect(artifacts.isReadable(artifact, 'chief')).toBe(true);
   });
 
+  it('records the authority an explicit message grants (AC-005)', () => {
+    const owner = userIdFromSubject('installation:local');
+    const sent = sendMessage(
+      { projectId, store, attachments, artifacts, blobs, now: () => clock },
+      {
+        conversationId: CONVERSATION_ID,
+        body: 'fix the typo in docs/INDEX.md',
+        ownerUserId: owner,
+        authorization: {
+          scope: { readPaths: ['docs'], writePaths: ['docs'], operations: [], networkTargets: [] },
+          operations: [],
+        },
+      },
+    );
+    expect(sent.authorizationId).not.toBeNull();
+    const work = store.works.find(sent.workId);
+    expect(work?.authorizationRef).toBe(sent.authorizationId);
+    expect(store.authorizations.find(sent.authorizationId ?? '')).toMatchObject({
+      workId: sent.workId,
+      sourceRef: { kind: 'message', id: sent.messageId },
+      scope: { writePaths: ['docs'] },
+    });
+  });
+
+  it('splits one mixed message into the work items it names (AC-006)', () => {
+    const owner = userIdFromSubject('installation:local');
+    const sent = sendMessage(
+      { projectId, store, attachments, artifacts, blobs, now: () => clock },
+      {
+        conversationId: CONVERSATION_ID,
+        body: 'explain the routing rules and fix the typo',
+        ownerUserId: owner,
+        workItems: [
+          { intent: 'assist', goal: 'explain the routing rules' },
+          { intent: 'delivery', goal: 'fix the typo' },
+        ],
+      },
+    );
+    // One message, two independent Works, each with its own scope and budget.
+    expect(sent.workIds).toHaveLength(2);
+    expect(sent.workId).toBe(sent.workIds[0]);
+    const works = sent.workIds.map((id) => store.works.find(id));
+    expect(works.map((work) => work?.intent)).toEqual(['assist', 'delivery']);
+    for (const work of works) {
+      expect(work?.sourceRef).toMatchObject({ kind: 'message', id: sent.messageId });
+      expect(store.budgets.list({ where: 'work_id = ?', params: [work?.id ?? ''] })).toHaveLength(
+        1,
+      );
+    }
+    // Still no Requirement on either route.
+    expect(store.requirements.list()).toHaveLength(0);
+  });
+
   it('carries the isolation policy on every preview (AC-052)', () => {
     const headers = previewHeaders('text/html');
     expect(headers['content-security-policy']).toBe(PREVIEW_CSP);

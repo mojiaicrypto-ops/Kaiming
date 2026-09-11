@@ -37,6 +37,10 @@ export interface PreviewHeaders {
   readonly 'x-agentdev-preview-credentials': 'omit';
   readonly 'cache-control': 'no-store';
   readonly 'x-content-type-options': 'nosniff';
+  /** `inline` or `truncated`; a truncated body must offer the download entry. */
+  readonly 'x-agentdev-preview-mode'?: 'inline' | 'truncated';
+  readonly 'x-agentdev-preview-download-required'?: 'true' | 'false';
+  readonly 'x-agentdev-preview-truncated-at-line'?: string;
 }
 
 /** The isolation headers for one artifact mime. */
@@ -69,31 +73,57 @@ export function renderPreview(
   artifact: Pick<Artifact, 'kind' | 'mime' | 'bytes'>,
   content: Uint8Array,
 ): PreviewBody {
-  const text = Buffer.from(content).toString('utf8');
-  const allLines = text.split('\n');
   const overBytes = content.byteLength > ARTIFACT_LIMITS.inlinePreviewMaxBytes;
-  const overLines = allLines.length > ARTIFACT_LIMITS.inlinePreviewMaxLines;
-  if (!overBytes && !overLines) {
+  if (!overBytes) {
+    const text = Buffer.from(content).toString('utf8');
+    const allLines = text.split('\n');
+    if (allLines.length <= ARTIFACT_LIMITS.inlinePreviewMaxLines) {
+      return {
+        mode: 'inline',
+        text,
+        lines: allLines.length,
+        truncatedAtLine: null,
+        downloadRequired: false,
+      };
+    }
+    const kept = allLines.slice(0, ARTIFACT_LIMITS.inlinePreviewMaxLines).join('\n');
     return {
-      mode: 'inline',
-      text,
-      lines: allLines.length,
-      truncatedAtLine: null,
-      downloadRequired: false,
+      mode: 'truncated',
+      text: clipToBytes(kept, ARTIFACT_LIMITS.inlinePreviewMaxBytes),
+      lines: ARTIFACT_LIMITS.inlinePreviewMaxLines,
+      truncatedAtLine: ARTIFACT_LIMITS.inlinePreviewMaxLines,
+      downloadRequired: true,
     };
   }
-  const kept = allLines.slice(0, ARTIFACT_LIMITS.inlinePreviewMaxLines);
-  const joined = kept.join('\n');
-  // Both ceilings are real: 2000 lines *and* 1 MiB, whichever binds first. Cutting
-  // only by lines let a 2 MiB single-line document through (W3 adversarial 1).
-  const clipped = clipToBytes(joined, ARTIFACT_LIMITS.inlinePreviewMaxBytes);
+  // An oversized artifact is clipped *before* decoding every byte: a 20 MiB upload
+  // must not be materialised as a 180 MB string just to return 2 KB of preview
+  // (W3R2 review).
+  const window = clipBytes(content, ARTIFACT_LIMITS.inlinePreviewMaxBytes);
+  const text = Buffer.from(window).toString('utf8');
+  const allLines = text.split('\n');
+  const kept =
+    allLines.length <= ARTIFACT_LIMITS.inlinePreviewMaxLines
+      ? text
+      : allLines.slice(0, ARTIFACT_LIMITS.inlinePreviewMaxLines).join('\n');
+  const clipped = clipToBytes(kept, ARTIFACT_LIMITS.inlinePreviewMaxBytes);
   return {
     mode: 'truncated',
     text: clipped,
     lines: clipped.split('\n').length,
-    truncatedAtLine: overLines ? ARTIFACT_LIMITS.inlinePreviewMaxLines : null,
+    truncatedAtLine:
+      allLines.length > ARTIFACT_LIMITS.inlinePreviewMaxLines
+        ? ARTIFACT_LIMITS.inlinePreviewMaxLines
+        : null,
     downloadRequired: true,
   };
+}
+
+/** UTF-8 safe byte truncation of raw bytes. */
+function clipBytes(bytes: Uint8Array, maxBytes: number): Uint8Array {
+  if (bytes.byteLength <= maxBytes) return bytes;
+  let end = maxBytes;
+  while (end > 0 && (bytes[end] ?? 0) >= 0x80 && (bytes[end] ?? 0) < 0xc0) end -= 1;
+  return bytes.subarray(0, end);
 }
 
 /** UTF-8 safe truncation to a byte ceiling. */

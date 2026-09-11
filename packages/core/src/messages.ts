@@ -11,6 +11,9 @@ import {
   LIMITS,
   PROTOCOL_LIMITS,
   type JsonObject,
+  type OperationName,
+  type Role,
+  type Scope,
   type Message,
   type Work,
 } from '@agentdev/contracts';
@@ -27,11 +30,20 @@ export interface MessageSendParams {
   readonly body: string;
   readonly attachmentIds: readonly string[];
   readonly targetWorkId?: string;
+  /** Explicit authority the message itself grants (`workflow.md` §1, AC-005). */
+  readonly authorization?: { readonly scope: Scope; readonly operations: readonly OperationName[] };
+  /** Explicit work items when one message carries several intents (AC-006). */
+  readonly workItems?: readonly {
+    readonly intent: 'assist' | 'artifact' | 'document' | 'delivery';
+    readonly goal: string;
+  }[];
 }
 
 export interface MessageSendResult {
   readonly messageId: string;
   readonly workId: string;
+  readonly workIds: readonly string[];
+  readonly authorizationId: string | null;
   readonly state: Message['state'];
   readonly version: number;
   readonly attachmentIds: readonly string[];
@@ -58,6 +70,15 @@ export interface MessageTransactionInput {
    * the authenticated subject. Keeping it resolved avoids deriving twice.
    */
   readonly ownerUserId: string;
+  /** Roles allowed to read the uploaded artifacts; empty means every role. */
+  readonly acl?: readonly Role[];
+  /** Explicit authority the message itself grants (`workflow.md` §1, AC-005). */
+  readonly authorization?: { readonly scope: Scope; readonly operations: readonly OperationName[] };
+  /** Explicit work items when one message carries several intents (AC-006). */
+  readonly workItems?: readonly {
+    readonly intent: 'assist' | 'artifact' | 'document' | 'delivery';
+    readonly goal: string;
+  }[];
 }
 
 /**
@@ -118,10 +139,48 @@ export function sendMessage(
     bytes: bodyBlob.bytes,
   } as never);
 
-  const work =
-    input.targetWorkId === undefined
-      ? createAssistWork(context, { messageId, body, now: before })
-      : requireWork(context, input.targetWorkId, conversation.id);
+  // One message may carry several intents: with explicit work items Core creates one
+  // Work per item, all bound to the same source message, so an explanation can be
+  // delivered while the fix continues (AC-006). Which intents a message has is the
+  // Chief's assessment; this is the mechanism it drives.
+  const workItems = input.workItems ?? [];
+  const works: Work[] = [];
+  if (input.targetWorkId !== undefined) {
+    works.push(requireWork(context, input.targetWorkId, conversation.id));
+  } else if (workItems.length > 0) {
+    for (const item of workItems) {
+      works.push(
+        createAssistWork(context, {
+          messageId,
+          body: item.goal,
+          now: before,
+          intent: item.intent,
+        }),
+      );
+    }
+  } else {
+    works.push(createAssistWork(context, { messageId, body, now: before, intent: 'assist' }));
+  }
+  const work = works[0];
+  if (work === undefined) {
+    throw new ProtocolError('VALIDATION_ERROR', 'a message needs at least one work item');
+  }
+  // An explicit message grants its own authority (`workflow.md` §1): the Core records
+  // the Authorization and binds it to the Work, so a delivery assessment has a real
+  // `authorizationRef` to point at (AC-005).
+  let authorizationId: string | null = null;
+  if (input.authorization !== undefined) {
+    const row = context.store.authorizations.insert({
+      sourceRef: { kind: 'message', id: messageId, version: '1' },
+      workId: work.id,
+      goal: body.slice(0, 2_000),
+      scope: input.authorization.scope,
+      operations: [...input.authorization.operations],
+      acceptedAt: new Date(before).toISOString(),
+    });
+    context.store.works.update(work.id, { authorizationRef: row.id, level: 'L1' }, work.version);
+    authorizationId = row.id;
+  }
 
   // Validate and bind every upload before the message row exists, so a bad list
   // cannot leave a half-sent message behind.
@@ -147,13 +206,19 @@ export function sendMessage(
   const artifactIds: string[] = [];
   for (const attachment of staged) {
     artifactIds.push(
-      context.artifacts.createUser({ workId: work.id, attachment, acl: ['chief'] }).id,
+      context.artifacts.createUser({
+        workId: work.id,
+        attachment,
+        ...(input.acl === undefined ? {} : { acl: input.acl }),
+      }).id,
     );
   }
 
   return {
     messageId: message.id,
     workId: work.id,
+    workIds: works.map((entry) => entry.id),
+    authorizationId,
     state: message.state,
     version: message.version,
     attachmentIds: staged.map((attachment) => attachment.id),
@@ -194,6 +259,12 @@ export function createMessageOperations(
             ...(context.params.targetWorkId === undefined
               ? {}
               : { targetWorkId: context.params.targetWorkId }),
+            ...(context.params.authorization === undefined
+              ? {}
+              : { authorization: context.params.authorization }),
+            ...(context.params.workItems === undefined
+              ? {}
+              : { workItems: context.params.workItems }),
             ownerUserId: userIdFromSubject(context.subject),
           },
         ),
@@ -205,6 +276,8 @@ export function createMessageOperations(
           data: {
             messageId: result.messageId,
             workId: result.workId,
+            workIds: [...result.workIds],
+            authorizationId: result.authorizationId,
             attachmentIds: [...result.attachmentIds],
             artifactIds: [...result.artifactIds],
           },
@@ -213,6 +286,8 @@ export function createMessageOperations(
       response: (_context, result): JsonObject => ({
         messageId: result.messageId,
         workId: result.workId,
+        workIds: [...result.workIds],
+        authorizationId: result.authorizationId,
         state: result.state,
         version: result.version,
       }),
@@ -226,7 +301,12 @@ function createAssistWork(
     readonly projectId: string;
     readonly store: OperationContext['store'];
   },
-  input: { readonly messageId: string; readonly body: string; readonly now: number },
+  input: {
+    readonly messageId: string;
+    readonly body: string;
+    readonly now: number;
+    readonly intent: 'assist' | 'artifact' | 'document' | 'delivery';
+  },
 ): Work {
   const workId = uuidv7(input.now);
   const budget = context.store.budgets.insert({
@@ -244,9 +324,9 @@ function createAssistWork(
   return context.store.works.insert({
     id: workId,
     projectId: context.projectId,
-    // A new message starts on the direct-collaboration route; the Chief's assessment
-    // refines intent/level and that route never needs a Requirement.
-    intent: 'assist',
+    // The intent comes from the Chief's assessment (or the explicit work item); the
+    // direct-collaboration route never needs a Requirement.
+    intent: input.intent,
     purpose: input.body.slice(0, 200),
     level: 'none',
     goal: input.body.slice(0, 2_000),

@@ -376,6 +376,20 @@ describe('daemon HTTP surface (WP-03)', () => {
       ARTIFACT_LIMITS.inlinePreviewMaxBytes,
     );
     expect(preview.headers.get('x-agentdev-artifact-validity')).toBe('valid');
+    // The client is told that the body is truncated and that a download is required.
+    expect(preview.headers.get('x-agentdev-preview-mode')).toBe('truncated');
+    expect(preview.headers.get('x-agentdev-preview-download-required')).toBe('true');
+
+    // A string version is a bad request, never a silent fallback to the latest one.
+    const badVersion = await fetch(
+      `${url}/artifacts/download.prepare`,
+      authed({
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ artifactId: artifact.id, artifactVersion: '1' }),
+      }),
+    );
+    expect(badVersion.status).toBe(400);
   });
 
   it('issues unguessable one-shot download tokens (W3-01)', async () => {

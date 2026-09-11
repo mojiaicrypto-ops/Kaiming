@@ -6,7 +6,7 @@
  * headers or leak a path in `/healthz`.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { JsonObject, Role } from '@agentdev/contracts';
+import type { JsonObject, OperationName, Role, Scope } from '@agentdev/contracts';
 import { StorageError, withTransaction } from '@agentdev/storage';
 import type { BlobStore, ProjectStore } from '@agentdev/storage';
 import {
@@ -21,6 +21,7 @@ import {
   type AttachmentService,
   type AuthService,
   type DownloadTokenStore,
+  type MessageSendParams,
 } from '@agentdev/core';
 
 export interface DaemonOptions {
@@ -122,6 +123,11 @@ export function createDaemon(options: DaemonOptions): Server {
         // The client renders the validity badge from the response, so an invalidated
         // artifact is not silently presented as current (W3-06).
         'x-agentdev-artifact-validity': artifact.validity,
+        'x-agentdev-preview-mode': body.mode,
+        'x-agentdev-preview-download-required': body.downloadRequired ? 'true' : 'false',
+        ...(body.truncatedAtLine === null
+          ? {}
+          : { 'x-agentdev-preview-truncated-at-line': String(body.truncatedAtLine) }),
         'content-length': String(Buffer.byteLength(body.text, 'utf8')),
       });
       response.end(body.text);
@@ -130,10 +136,11 @@ export function createDaemon(options: DaemonOptions): Server {
     if (path === '/artifacts/download.prepare' && method === 'POST') {
       const payload = await readJson(request);
       const artifactId = stringField(payload, 'artifactId');
-      const artifact = options.artifacts.get(
-        artifactId,
-        typeof payload['artifactVersion'] === 'number' ? payload['artifactVersion'] : undefined,
-      );
+      const version = payload['artifactVersion'];
+      if (version !== undefined && (typeof version !== 'number' || !Number.isInteger(version))) {
+        throw new HttpError(400, 'VALIDATION_ERROR', 'artifactVersion must be an integer');
+      }
+      const artifact = options.artifacts.get(artifactId, version);
       assertReadable(artifact, authed.userId);
       const grant = options.tokens.issue(artifact);
       json(response, 200, {
@@ -169,6 +176,17 @@ export function createDaemon(options: DaemonOptions): Server {
         ...(typeof payload['targetWorkId'] === 'string'
           ? { targetWorkId: payload['targetWorkId'] }
           : {}),
+        ...(payload['authorization'] === undefined
+          ? {}
+          : {
+              authorization: payload['authorization'] as {
+                scope: Scope;
+                operations: OperationName[];
+              },
+            }),
+        ...(Array.isArray(payload['workItems'])
+          ? { workItems: payload['workItems'] as NonNullable<MessageSendParams['workItems']> }
+          : {}),
       };
       // The message, its Work, the attachment bindings, the user artifacts, the
       // command-ledger entry and the `message.received` event commit together; a
@@ -177,7 +195,7 @@ export function createDaemon(options: DaemonOptions): Server {
         let commandId: string | undefined;
         if (idempotencyKey !== undefined) {
           const begun = options.store.commands.begin({
-            subject: authed.userId,
+            subject: authed.subject,
             operation: 'conversation.message.send',
             key: idempotencyKey,
             payloadHash: payloadHashOf('conversation.message.send', params),
@@ -199,7 +217,7 @@ export function createDaemon(options: DaemonOptions): Server {
             blobs: options.blobs,
             now,
           },
-          { ...params, ownerUserId: authed.userId },
+          { ...params, ownerUserId: authed.userId, acl: [role] },
         );
         const reply: JsonObject = {
           messageId: sent.messageId,
@@ -229,11 +247,13 @@ export function createDaemon(options: DaemonOptions): Server {
   }
 
   /**
-   * Enforces artifact readability for one authenticated subject.
+   * Enforces artifact readability for one authenticated user.
    *
-   * The role ACL decides which roles may see an artifact; a user upload additionally
-   * stays with the subject that supplied it, so one browser session cannot read
-   * another's upload even inside the same project (W3 review).
+   * The role ACL decides which roles may see an artifact, and a user upload is
+   * additionally tied to the user that supplied it. Under the single-user product
+   * model every authenticated session maps to the same installation user, so this is
+   * a second deployment's data that stays out of reach, not one browser from another
+   * (the session id stays an audit subject only).
    */
   function assertReadable(artifact: ReturnType<ArtifactService['get']>, userId: string): void {
     if (!options.artifacts.isReadable(artifact, role)) {
