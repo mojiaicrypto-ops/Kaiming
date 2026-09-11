@@ -29,6 +29,8 @@ WP-01（数据、状态与协议核心）已按 L2 实现并完成独立 Review/
 
 WP-02（主管与独立Agent调度）已按 L2 实现并完成独立 Review/Test：`packages/core` 提供 Assessment 与等级路由底线（环境操作/lockdown 风险/授权范围）、DispatchSpec 冻结与准入（角色×目的、父 Run、Work 预算、Provider 可用性与凭证、授权覆盖 `operations`/`writePaths`/`readPaths`/`networkTargets`）、Run 建立与 `config`/`context`/`dispatch` 三快照、Run 生命周期与 Work 预算预留-核销（`reconcile` 幂等）、Join/父唤醒/`chief_action_required`、StageResult 结构化交付与二次 Schema 错误 `contract_violation`、`request_dispatch` 幂等待办、角色 Profile 解析与模型网关；`packages/domain` 同时提供等级路由与风险词表。19 轮独立 Review 与 2 轮独立 Test 在代码树 `cbf7471` 上通过（unit 17 文件/255 用例、integration 10 文件/124 用例含真实容器）；AC-043/044/045/046/047/082 有证据（AC-082 的工具层执行负例承接 WP-07）；证据链见 `.agentdev/work/WP-02/`。
 
+WP-03（直接协作与说明产物）已按 L2 实现并完成独立 Review/Test：`packages/domain` 提供确定性 Chief 路由（消息 → Work 项与授权判定，默认拒绝的文法：命令子句 = 变更动词 + 单一命名路径，或 `把/将/对 + 目标 + 动词`；拒绝/陈述/疑问/条件/意见/引用/前件一律只读），`packages/core` 提供附件暂存与原子绑定（数量/单文件/总量/mime 限制、TTL、重复绑定拒绝）、版本化 Artifact（agent 产物绑定 Run、user 产物绑定 Attachment、ACL、版本链）、HTML 隔离预览（CSP `default-src 'none'`、sandbox `allow-scripts`、无 cookie、1 MiB/2000 行截断、60 秒单次下载 token）与 `conversation.message.send` 事务；`apps/daemon` 提供 HTTP 面（健康检查、上传/删除、预览、下载准备与下载、消息发送含幂等账本）。21 轮独立 Review（末两轮 PASS）与 1 轮独立 Test（PASS）在代码树 `7512159` 上通过（unit 19 文件/289 用例、integration 10 文件/124 用例含真实容器）；AC-001/002/004/005/006/052/076/084 有证据，AC-003 的委派实体（DispatchSpec/快照/独立 Session）承接 WP-04/06，路由的丰富自然语言语义属已登记的 fail-closed 代价、由模型 Assessment 接管；证据链见 `.agentdev/work/WP-03/`。
+
 真实 Provider 纵向运行、协议接线（daemon/BFF/WS）、交付门禁、权限隔离、工具执行层、知识投影和恢复仍未实现：`pnpm test:e2e`、`pnpm test:acceptance`、`pnpm test:live` 按契约返回 NOT_IMPLEMENTED，后续按[实施工作包](delivery/implementation.md)的依赖顺序继续。
 
 开发从[实施工作包](delivery/implementation.md)开始，按依赖实现共享Schema与底座，再完成各项能力和[验收](delivery/acceptance.md)。规范中的包路径和工程命令是待交付接口，不能假定已经存在。
