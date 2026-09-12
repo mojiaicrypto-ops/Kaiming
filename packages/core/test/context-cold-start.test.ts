@@ -293,6 +293,44 @@ function heavyProjection(): ColdStartProjection {
   return result.projection;
 }
 
+/**
+ * A sample where the cancellation Feature constrains the oversized Feature.
+ *
+ * This is the shape the review reproduced: the heavy Feature enters the selection
+ * through the cancel Feature's `constrained_by` relation (tier 4), while its own
+ * body (tier 5) does not fit the startup budget. Its body facts must therefore not
+ * be delivered even though its id is in the selection (W5R2-06).
+ */
+function heavyConstraintProjection(): ColdStartProjection {
+  const cancel = featureDocument({
+    featureId: CANCEL_ID,
+    name: '订单取消',
+    module: 'orders',
+    purpose: '允许用户取消未付款订单，已付款订单走退款流程。',
+    behaviour: CANCEL_BEHAVIOUR,
+    entries: ['src/orders/cancel.ts', 'tests/orders/cancel.test.ts'],
+    relations: [
+      `| ${HEAVY_ID} | constrained_by | 取消流程受重负载约束 | features/${HEAVY_ID}/README.md |`,
+    ],
+    gaps: CANCEL_GAP,
+    investigationScope: '订单取消路由、状态转换和测试',
+  });
+  const result = buildProjection({
+    documents: [cancel, heavyDocument(), ...UNRELATED],
+    revision: REVISION,
+    codeTreeRevision: REVISION,
+    knownIds: [DECISION_ID],
+  });
+  if (!result.published) {
+    throw new Error(
+      `the heavy-constraint sample must publish: ${result.diagnostics
+        .map((entry) => `${entry.documentPath}: ${entry.message}`)
+        .join('; ')}`,
+    );
+  }
+  return result.projection;
+}
+
 const TRANSCRIPTS = [
   {
     id: `transcript:${TRANSCRIPT_PATH}`,
@@ -543,6 +581,56 @@ describe('cold start: the answer recalls the fixed sample (AC-037)', () => {
     expect(assembled.package.context.selection.some((entry) => entry.featureId === HEAVY_ID)).toBe(
       false,
     );
+  });
+
+  it('answers only from budget-admitted Features (W5R2-06)', () => {
+    const projection = heavyConstraintProjection();
+    const result = expectOk(
+      coldStartAnswer({
+        projection,
+        query: '订单取消时如何处理支付约束？',
+        limits: { startupTokens: 4_096 },
+      }),
+    );
+    const { answer } = result;
+    // The heavy Feature is selected as the constraint target (its id is in the
+    // selection), but its own body did not fit tier 5 — so none of its facts may be
+    // delivered: behaviour, entry paths, gaps and attribution all stay clear.
+    expect(answer.constraints.some((entry) => entry.targetFeatureId === HEAVY_ID)).toBe(true);
+    expect(answer.selectedFeatureIds).not.toContain(HEAVY_ID);
+    expect(answer.currentBehaviour.some((fact) => fact.featureId === HEAVY_ID)).toBe(false);
+    expect(answer.attribution.some((entry) => entry.featureId === HEAVY_ID)).toBe(false);
+    expect(answer.knownGaps.some((gap) => gap.featureId === HEAVY_ID)).toBe(false);
+    expect(answer.entryPaths.codePaths).not.toContain('src/orders/heavy.ts');
+    expect(
+      answer.packages.context.selection.some(
+        (entry) => entry.phase === 'role_bodies' && entry.featureId === HEAVY_ID,
+      ),
+    ).toBe(false);
+    // The refusal is still recorded as a concrete gap, not silently dropped.
+    const heavyPath = `features/${HEAVY_ID}/README.md`;
+    expect(
+      answer.excluded.some((entry) => entry.kind === 'budget' && entry.reason.includes(heavyPath)),
+    ).toBe(true);
+    expect(answer.unknowns.some((line) => line.includes(heavyPath))).toBe(true);
+  });
+
+  it('records each budget-refused source exactly once (W5R2-13)', () => {
+    const assembled = expectOk(
+      assembleColdStart({
+        projection: heavyProjection(),
+        query: '订单取消时如何处理支付约束？',
+        limits: { startupTokens: 4_096 },
+      }),
+    );
+    const budgetEntries = assembled.package.context.excluded.filter(
+      (entry) => entry.kind === 'budget',
+    );
+    expect(budgetEntries.length).toBeGreaterThan(0);
+    const keys = budgetEntries.map((entry) => `${entry.ref.kind}:${entry.ref.id}`);
+    // The tier-5 refusal used to be pushed a second time, so the same dropped source
+    // appeared twice in `excluded`/usage reporting.
+    expect(new Set(keys).size).toBe(keys.length);
   });
 
   it('charges the fixed seed against the startup budget and fails closed at zero (W5R1-07)', () => {
@@ -916,6 +1004,65 @@ describe('cold start: resuming from a Checkpoint (context.md §5)', () => {
       TRANSCRIPTS.length,
     );
     expect(JSON.stringify(result.answer)).not.toContain(MISLEADING_CONCLUSION);
+  });
+
+  it('does not deliver a budget-refused checkpoint resume position (W5R2-07)', () => {
+    const projection = fixtureProjection();
+    const store = createCheckpointStore({ now: () => T0 });
+    const runId = '0191f000-0000-7000-8000-0000000000ab';
+    const sessionRef = 'session-heavy';
+    expectOk(
+      store.registerRun({
+        runId,
+        role: 'backend',
+        projectId: PROJECT_ID,
+        workId: 'WP-07',
+        sessionRef,
+      }),
+    );
+    const hugeNextAction = 'x'.repeat(20_000);
+    const saved = expectOk(
+      store.save({
+        runId,
+        checkpoint: {
+          runId,
+          projectId: PROJECT_ID,
+          role: 'backend',
+          sessionRef,
+          workId: 'WP-07',
+          stage: 'develop-L2',
+          manifest: { id: DECISION_ID, version: 1, hash: 'b'.repeat(64) },
+          pendingDecisions: [],
+          artifactRefs: [],
+          nextAction: hugeNextAction,
+          recentMessages: [],
+          approval: { state: 'approved', decidedAt: T0, role: 'backend' },
+          sourceRefs: [],
+        },
+      }),
+    );
+
+    const assembled = expectOk(
+      assembleColdStart({
+        projection,
+        query: '订单取消时如何处理支付约束？',
+        checkpoint: saved.checkpoint,
+        limits: { startupTokens: 4_096 },
+      }),
+    );
+    const { seed, context } = assembled.package;
+    // The fixed rules and the Project overview fit; the oversized position does not.
+    expect(context.selection.some((entry) => entry.phase === 'current_work')).toBe(false);
+    expect(
+      context.excluded.some(
+        (entry) => entry.kind === 'budget' && entry.reason.includes(`checkpoint:${runId}`),
+      ),
+    ).toBe(true);
+    expect(context.unknowns.some((line) => line.includes(`checkpoint:${runId}`))).toBe(true);
+    // A refused position is not delivered as uncharged seed content.
+    expect(seed.domain.resume).toBeUndefined();
+    expect(seed.domain.workId).toBeUndefined();
+    expect(JSON.stringify(seed)).not.toContain('x'.repeat(64));
   });
 
   it("still enforces the caller's readScope when the Project roots are narrower", () => {

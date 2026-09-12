@@ -133,3 +133,80 @@
 10. **extraTokens 上限**：`grantExpansion.extraTokens` 仍只要求非负整数（可为任意大小以放宽 token 上限，符合「扩展只能放宽」）；若需按 Profile/模型窗口设上界，属 WP-08/WP-09 的 Profile 注入。
 11. **readBudget 上界的来源**：本轮采用 `agents.md` §6 的固定 4096–2000000；`min(Profile.contextLimit, 模型 contextWindow − maxOutput − 4096)` 的动态钳制仍需 Profile 输入（Review 建议方向），属集成包。
 12. **内存 corpus `contents`**：`createTranscriptGuard` 的内存正文分支不做文件系统校验（无真实路径可校验）；真实目录分支已执行 realpath 包含性检查。
+
+## T8 独立 Review Round 2 修复（W5R2-01…14）与验证
+
+- Review 依据：`.agentdev/work/WP-05/review.md` 第 2 轮（冻结点 `3f02b4b`）。
+- 修改范围：仅 `packages/core/src/context/**` 与 `packages/core/test/context-*.test.ts`（另加本 T8 记录）；未触碰其他包。
+- 修复后 context 用例：ACL **50**、builder **45**、checkpoint **16**、cold-start **23**、ledger **36**、requirements **37**，合计 **207**（T7 为 188，新增 19 条回归用例）。
+- 旧行为反证：把 `packages/core/src/context/**` 临时 stash 回 T7 版本后，本轮新增的 **18 条**行为回归用例全部失败（`Test Files 5 failed | 1 passed`，`Tests 18 failed | 189 passed`）；即每条修复都有能在旧实现上失败的回归测试。W5R2-12 无代码改动（见残余 13）。
+- 验证：`prettier --write` 全部 unchanged；`pnpm typecheck` EXIT 0；`pnpm lint` EXIT 0（All matched files use Prettier code style）；`pnpm test:unit` **32 文件 / 638 用例** EXIT 0；`pnpm build` **10 workspace 全部 Done** EXIT 0。
+
+### P1
+
+#### W5R2-01 覆盖层不得新增 selection 未声明的 `path`/`hash`；声明 id 即读取目标
+- 改动：`builder.ts` 新增 `STRICT_IDENTITY_KINDS=['git','policy','role_contract']`。`overlayConflict` 对这三类要求 `overlay.path === (source.path ?? source.id)`、`overlay.hash === source.hash`（未声明 hash 时覆盖层不得新增），任何不一致 ⇒ `VALIDATION_ERROR` 且不调 resolver、不落快照；`bondSource` 对严格类别只采用声明的 `hash`。`gatherSource` 同步收紧 resolver：严格类别下 `resolved.path` 也必须等于 `source.path ?? source.id`（`data.md` §1 的 `SourceRef.path?` 缺失时读取目标就是 `id`）。
+- 回归：`context-builder.test.ts` 新 describe `the overlay may not introduce identity (W5R2-01, W5R2-14)`：`refuses a git overlay that adds a path the selection never declared`（旧行为把声明 `src/a.ts` 读成/冻结 `src/b.ts`）、`refuses a policy overlay that points a declared policy file elsewhere`（旧行为把 `docs/rules/agents.md` 读成 `docs/OTHER.md`）、`refuses an overlay hash the selection never declared`、`refuses a resolver that reads another path for a declared id`、对照 `accepts a matching overlay and freezes the declared bytes`（path/hash 与声明一致时成功且冻结声明字节）。
+
+#### W5R2-02 覆盖层 `artifactClass` 必须与 `artifacts/<class>/` 路径一致
+- 改动：`acl.ts` 的 `canRead` 在 artifact 分支先用 `artifactClassFromPath(path)` 推导路径类别；路径可推导出类别且与声明的 `artifactClass` 不一致 ⇒ `CONTEXT_FORBIDDEN`（无内容、resolver 调用前）；一致或未声明时仍按原规则过滤未来产物。原 `classOf` helper 被该逻辑取代并删除。
+- 回归：`context-builder.test.ts` `refuses an artifact class that contradicts its blob path (W5R2-02)`（product:product 用 `artifactClass='explanation'` + `path=artifacts/plan/<id>`：`CONTEXT_FORBIDDEN`，artifact 未被 resolver/fetch 触达，无快照；老实的 `plan` 类别仍被拒）；`context-acl.test.ts` `refuses a declared class that contradicts the artifact blob path (W5R2-02)`（欺骗类别被拒、真实类别仍被拒、合法类别 `explanation` 与路径一致时放行、非 `artifacts/` 路径不做类别比对）。
+
+### P2
+
+#### W5R2-03 selection 声明的 `hash` 必须与解析/冻结内容一致
+- 改动：`builder.ts` 的 `gatherSource` 在取得 `content` 后统一计算 `sha256(content)`：先比对 resolver 的 `resolved.hash`，再比对 selection 声明的 `source.hash`，任一不符 ⇒ `STALE_ARTIFACT`（不落快照）。`ref.hash` 与 `ResolvedSource.hash` 因此不可能互相矛盾。
+- 回归：`context-builder.test.ts` 新 describe `the declared hash pins the frozen content (W5R2-03)`：`returns STALE_ARTIFACT when the resolved bytes differ from the declared hash`（resolver 自身 hash 与改动后字节一致，旧行为 `ok:true` 且 `ref.hash` 与 `hash` 矛盾）。
+
+#### W5R2-04 调用方断言不得满足 artifact 类必需输入
+- 改动：`requirements.ts` 新增 `isAssertableInputKey(key)`（catalog 中既无 `artifactClass` 也无 `pathPrefixes` 的键才可断言）；`builder.ts` 的 `availabilityOf` 只让可断言的 `contextInputs` 计入必需项表。artifact 类/路径类输入（`productDefinition`/`plan`/`projectOverview`/`roleContract`…）必须来自 resolved source。
+- 回归：`context-builder.test.ts` `does not let an asserted artifact-backed input satisfy the table (W5R2-04)`（planning 仅 `contextInputs:['productDefinition','acceptance']` ⇒ `MISSING_CONTEXT` 点名 `productDefinition`、无快照；对照：提供真实 product 产物 + 断言 `acceptance` 仍成功）；`context-requirements.test.ts` `only lets a handle-less input be asserted by the caller (W5R2-04)`。
+
+#### W5R2-05 `grantExpansion` 的 `extraTokens` 与扩展上限必须有界
+- 改动：`ledger.ts` 的 `grantExpansion` 用共享 `readBudgetValueError` 同时校验 `extraTokens` 与增量后的 `expansionLimit`（0 或 4096–2000000 的整数），任一非法 ⇒ `VALIDATION_ERROR`，且在改动 scope/预算之前返回（请求保持 pending）。
+- 回归：`context-ledger.test.ts` `refuses an expansion grant outside the documented token range (W5R2-05)`（`3_000_000`/`MAX_SAFE_INTEGER`/`2_000_000`（在 4096 基础上溢出）/`4_095`/`24`/`-1`/`1.5` 全拒且 usage/scope 不变、越界读取仍 `CONTEXT_FORBIDDEN`；对照：0 上限 + `2_000_000` 合法，上限恰为 2 000 000）。
+- 旧期望订正（说明）：既有 `makes granted extra tokens usable…` 用 `extraTokens: tokensOf(second)=24`（低于 `agents.md` §6 下限）来制造“扩展后可用”，该期望本身与本轮新口径矛盾，已改为最小合法增量 4096，并同步修正 `usage().expansion.limit/remainingTokens`；`does not leak internal state…` 的 `extraTokens: 32` 一并改为 4096。两者仍计入原 619 用例。
+
+#### W5R2-06 冷启动 answer 只报告已入选正文的 Feature
+- 改动：`cold-start.ts` 的 `coldStartAnswer` 改为从 `selection` 中 `phase==='role_bodies'` 的条目派生 `selectedFeatureIds`/正文事实；被预算拒绝的 Feature 不进入 behaviour/entryPaths/knownGaps/attribution，其缺口已由 `admit` 记入 `excluded`/`unknowns`。约束事实仍来自已入选 Feature 的 `constrained_by` 关系。
+- 回归：`context-cold-start.test.ts` `answers only from budget-admitted Features (W5R2-06)`：重负载 Feature 通过 `constrained_by` 进入选择（`constraints` 仍报告该约束），但其正文未入选 ⇒ 不输出它的当前行为/入口/差距/归属，且缺口被点名。
+
+#### W5R2-07 Checkpoint resume 事实必须随 `current_work` 入选
+- 改动：`cold-start.ts` 的 `admit` 返回值提升为 `positionAdmission`；`seed.domain` 的 `workId`/`taskId`/`resume` 只在 `current_work` 入选时携带，否则不交付（拒绝原因已在 `excluded`/`unknowns`）。
+- 回归：`context-cold-start.test.ts` `does not deliver a budget-refused checkpoint resume position (W5R2-07)`：`nextAction` 20 000 字符 + `startupTokens:4096` ⇒ 无 `current_work` 选择项、`seed.domain.resume`/`workId` 均为 undefined，且缺口点名 `checkpoint:<runId>`。
+
+#### W5R2-08 Checkpoint store 注入时钟封闭失败
+- 改动：`checkpoint.ts` 新增模块级 `safeClock`；`save` 与 `rotateSession` 的时钟调用改用 `safeClock`，抛异常或非 UTC 返回值 ⇒ `{ok:false, code:'INTERNAL_ERROR'}`，不回传端口原始 message，且不写入任何状态。
+- 回归：`context-checkpoint.test.ts` `closes a throwing store clock instead of escaping with its raw message (W5R2-08)`（save 封闭且无落库；`rotateSession` 无 `at` 时封闭且 session/updatedAt 不变）。
+
+### P3
+
+#### W5R2-09 “返回型” `INTERNAL_ERROR` 脱敏
+- 改动：`builder.ts` 新增 `portMessage(code,message,internal)`；resolver/content/gates 返回 `INTERNAL_ERROR` 时替换为固定文案，业务码（`NOT_FOUND`/`STALE_ARTIFACT`/`CONTEXT_FORBIDDEN`）保留可诊断 message。
+- 回归：`context-builder.test.ts` `redacts a returned INTERNAL_ERROR and keeps a business message (W5R2-09)`（resolver/content/gates 三处返回的泄露串均不出现在结果中；`STALE_ARTIFACT` 的业务 message 仍保留）。
+
+#### W5R2-10 inline（`fetch.kind='none'`）内容必须校验 hash
+- 改动：`gatherSource` 把 hash 校验移到 inline/fetch 分支汇合之后，inline 正文同样要求 `sha256(content)===resolved.hash`，否则 `STALE_ARTIFACT`；不再依赖 writer 兜底。
+- 回归：`context-builder.test.ts` `refuses inline content that does not hash to the declared identity (W5R2-10)`（内存 writer 下也拒绝，无快照）。
+
+#### W5R2-11 `rotateSession.at` 必须校验
+- 改动：`checkpoint.ts` 先 `isTime(input.at)`，非法 ⇒ `VALIDATION_ERROR`；无 `at` 时走 `safeClock`。校验发生在 `runs.set` 之前。
+- 回归：`context-checkpoint.test.ts` `refuses an unvalidated rotation timestamp (W5R2-11)`（'NOT-A-TIME'/日期/空串/数字全拒，session 与 `updatedAt` 不变；合法 `T1` 仍被记录）。
+
+#### W5R2-13 预算缺口只登记一次
+- 改动：`cold-start.ts` 删除 tier-5 `role_bodies` 未被入选时的第二次 `excluded.push`（`admit` 已按同一 ref 记录一次）。
+- 回归：`context-cold-start.test.ts` `records each budget-refused source exactly once (W5R2-13)`（`excluded` 中 budget 项的 `kind:id` 无重复）。
+
+#### W5R2-14 重复覆盖层键必须拒绝
+- 改动：`builder.ts` 构建 `fullSources` 时检测同 `kind:id` 重复，命中 ⇒ `VALIDATION_ERROR`（不再 last-wins），不调 resolver、不落快照。
+- 回归：`context-builder.test.ts` `refuses duplicate contextSources keys instead of resolving last-wins (W5R2-14)`。
+
+### 明确不处理（登记转交）
+
+- **W5R2-12（命名式 transcript 路径网的固有上限）**：按任务要求不引入语义级聊天分类器；结构性防线（`kind=transcript` 全角色拒绝 + corpus allow-list + realpath 包含性）保持不变。`docs/my-dev-chat.md` 等未入表的名字仍是已知残余，见下方残余 13。
+
+### 本轮新增残余（承接而非静默）
+
+13. **Transcript 路径网仍是命名式（W5R2-12）**：`DENIED_SOURCE_PATTERNS` 只覆盖已文档化的命名族；任意改名（如 `docs/my-dev-chat.md`）仍可读，除非被 `kind=transcript` 或 corpus allow-list 截住。要彻底闭合需要内容头/来源元数据识别，属后续语义/DLP 能力，本轮不实现。
+14. **`extraTokens` 与扩展上限的最终上界**：本轮只按 `agents.md` §6 的固定 4096–2000000 校验（含增量后的 ceiling），因此 T7 残余 10「`extraTokens` 可为任意大小」的说法自本轮起不再成立；`min(Profile.contextLimit, 模型 contextWindow − maxOutput − 4096)` 的动态钳制仍需 Profile 输入（WP-08/WP-09）。
+15. **冷启动 `domainSummary` 的计费口径**：`summary` 由已入选的选择条目派生（未入选的 checkpoint 位置不再出现在其中），但其文本本身不单独计费；如需按 token 精确计账，属冷启动预算模型细化。

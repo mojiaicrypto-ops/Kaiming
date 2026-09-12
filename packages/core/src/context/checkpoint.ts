@@ -268,6 +268,22 @@ function isTime(value: unknown): value is Time {
   return typeof value === 'string' && TIME_PATTERN.test(value);
 }
 
+/**
+ * Reads the injected clock without letting a port failure escape.
+ *
+ * `null` means the clock threw or returned a non-UTC timestamp; the caller turns
+ * that into a closed `INTERNAL_ERROR` that carries no port message
+ * (`reliability.md` §1, W5R2-08).
+ */
+function safeClock(clock: () => Time): Time | null {
+  try {
+    const value = clock();
+    return isTime(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function isNonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value.trim() !== '';
 }
@@ -707,7 +723,12 @@ export function createCheckpointStore(
           },
         ]);
       }
-      const now = clock();
+      const now = safeClock(clock);
+      // A throwing or malformed clock is a closed failure: it must not escape with
+      // the port's raw message, and it must not have written anything (W5R2-08).
+      if (now === null) {
+        return invalid([{ code: 'INTERNAL_ERROR', message: 'Checkpoint 时钟调用失败' }]);
+      }
       const stamps = {
         createdAt: input.checkpoint.createdAt ?? previous?.createdAt ?? now,
         updatedAt: input.checkpoint.updatedAt ?? now,
@@ -760,6 +781,24 @@ export function createCheckpointStore(
       if (previous === undefined) {
         return invalid([{ code: 'NOT_FOUND', message: `Run ${input.runId} 没有 Checkpoint` }]);
       }
+      // The rotation timestamp is part of the stored Checkpoint (`data.md` §1: UTC
+      // ISO8601 milliseconds), so an explicit `at` is validated before anything is
+      // written; an absent `at` comes from the wrapped clock (W5R2-08/W5R2-11).
+      let updatedAt: Time;
+      if (input.at !== undefined) {
+        if (!isTime(input.at)) {
+          return invalid([
+            { code: 'VALIDATION_ERROR', message: 'rotateSession.at 必须是 UTC 时间（data.md §1）' },
+          ]);
+        }
+        updatedAt = input.at;
+      } else {
+        const clocked = safeClock(clock);
+        if (clocked === null) {
+          return invalid([{ code: 'INTERNAL_ERROR', message: 'Checkpoint 时钟调用失败' }]);
+        }
+        updatedAt = clocked;
+      }
       const rotated = Object.freeze({ ...run, sessionRef: input.toSessionRef });
       runs.set(input.runId, rotated);
       // Role, task, permissions, sources and approval survive the rotation: only
@@ -768,7 +807,7 @@ export function createCheckpointStore(
         ...previous,
         sessionRef: input.toSessionRef,
         rotatedFromSessionRef: previous.sessionRef,
-        updatedAt: input.at ?? clock(),
+        updatedAt,
       });
       store.set(input.runId, checkpoint);
       return { ok: true, run: rotated, checkpoint };

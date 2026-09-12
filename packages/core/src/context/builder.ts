@@ -51,6 +51,7 @@ import { canRead, scopeFor } from './acl.js';
 import {
   evaluateRequirements,
   inputKeyForSource,
+  isAssertableInputKey,
   selectionGaps,
   type AvailableInputs,
 } from './requirements.js';
@@ -75,6 +76,7 @@ import {
   type ReaderContext,
   type ReadScope,
   type ResolvedSource,
+  type SourceKind,
   type TokenAccounting,
 } from './types.js';
 
@@ -387,6 +389,16 @@ function contextSourceRefKey(source: ContextSourceRef): string {
 }
 
 /**
+ * The source kinds whose identity is fully declared by the selection itself.
+ *
+ * `git`/`policy`/`role_contract` are addressed by `path` (falling back to `id`) and
+ * an optional content `hash`; the ACL classifies them from the path alone. The
+ * overlay therefore has nothing legitimate to add for them — unlike an `artifact`
+ * (whose class must be stated) or a `message` (whose sender must be stated).
+ */
+const STRICT_IDENTITY_KINDS: readonly SourceKind[] = ['git', 'policy', 'role_contract'];
+
+/**
  * Widens a selection entry into the Context vocabulary with its Project binding.
  *
  * A selection entry belongs to this Project by construction; a handle that names
@@ -400,6 +412,12 @@ function contextSourceRefKey(source: ContextSourceRef): string {
  * owning Run, a cross-Project `projectId`. A `path`/`version`/`hash` that
  * disagrees with the declared identity is refused (`AC-030`, `AC-093`) instead of
  * silently freezing content from a different revision or file.
+ *
+ * For `git`/`policy`/`role_contract` the overlay may not *introduce* a `path` or a
+ * `hash` the selection never declared either (W5R2-01): an overlay path must equal
+ * the declared path (or the declared `id`), and an overlay hash must equal the
+ * declared hash. Otherwise a declaration of `src/a.ts` could be resolved and frozen
+ * from `src/b.ts` while the snapshot still claimed the declared id.
  */
 function bondSource(
   source: ContextSourceRef,
@@ -422,9 +440,13 @@ function bondSource(
   }
   const projectId = overlay?.projectId ?? source.projectId ?? project.projectId;
   // The declared identity always wins over the overlay; the overlay may only fill
-  // in what the narrow handle could not carry.
+  // in what the narrow handle could not carry. For the strict kinds the overlay was
+  // already checked to agree with the declaration, so the value taken is the
+  // declared one (never an overlay-chosen replacement), and a `hash` is only ever
+  // the declared hash.
+  const strictIdentity = STRICT_IDENTITY_KINDS.includes(source.kind);
   const path = source.path ?? overlay?.path;
-  const hash = source.hash ?? overlay?.hash;
+  const hash = strictIdentity ? source.hash : (source.hash ?? overlay?.hash);
   return {
     ok: true,
     source: {
@@ -445,12 +467,26 @@ function bondSource(
  * The conflict between a selection declaration and its `contextSources` overlay.
  *
  * `null` means the overlay only adds metadata; a different path, version or hash
- * for the same `kind:id` is the behaviour W5R1-01 removed.
+ * for the same `kind:id` is the behaviour W5R1-01 removed. For `git`/`policy`/
+ * `role_contract` the comparison also refuses an overlay that *adds* a `path` or
+ * `hash` the selection never declared (W5R2-01): the overlay's path must equal the
+ * declared path (or the declared `id`), and its hash must equal the declared hash.
  */
 function overlayConflict(source: ContextSourceRef, overlay: ContextSourceRef): string | null {
   const key = contextSourceRefKey(source);
+  const strictIdentity = STRICT_IDENTITY_KINDS.includes(source.kind);
   if (overlay.version !== source.version) {
     return `来源 ${key} 的 contextSources version=${overlay.version} 与 selection 声明的 ${source.version} 不一致（AC-030/AC-093）`;
+  }
+  if (strictIdentity) {
+    const declaredPath = source.path ?? source.id;
+    if (overlay.path !== undefined && overlay.path !== declaredPath) {
+      return `来源 ${key} 的 contextSources path=${overlay.path} 与 selection 声明的 ${declaredPath} 不一致（AC-030/AC-093）`;
+    }
+    if (overlay.hash !== undefined && overlay.hash !== source.hash) {
+      return `来源 ${key} 的 contextSources hash 与 selection 声明的 hash 不一致（未声明的 hash 不得由覆盖层新增，AC-030/AC-093）`;
+    }
+    return null;
   }
   if (source.path !== undefined && overlay.path !== undefined && overlay.path !== source.path) {
     return `来源 ${key} 的 contextSources path=${overlay.path} 与 selection 声明的 ${source.path} 不一致（AC-030/AC-093）`;
@@ -597,6 +633,18 @@ function fatal(code: ErrorCode, message: string, ref: SourceRef): GatherStep {
 }
 
 /**
+ * The message a port failure is reported with.
+ *
+ * An `INTERNAL_ERROR` is an internal failure: the port's raw message may name a
+ * file, a secret or a stack detail, so it is replaced with the caller's fixed text.
+ * A business code (`NOT_FOUND`, `STALE_ARTIFACT`, `CONTEXT_FORBIDDEN`) keeps the
+ * port's message, which names the concrete gap Chief has to fix (W5R2-09).
+ */
+function portMessage(code: ErrorCode, message: string, internal: string): string {
+  return code === 'INTERNAL_ERROR' ? internal : message;
+}
+
+/**
  * Authorises one source and resolves its identity through the ports.
  *
  * A refusal by the ACL is always fatal: a context that quietly omitted a source
@@ -647,11 +695,22 @@ function gatherSource(args: {
     if (code === 'NOT_FOUND') {
       return { ok: false, fatal: false, message: resolution.message, ref: refFor(source) };
     }
-    return fatal(code, resolution.message, refFor(source));
+    return fatal(
+      code,
+      portMessage(
+        code,
+        resolution.message,
+        `来源解析端口返回内部错误：${contextSourceRefKey(source)}`,
+      ),
+      refFor(source),
+    );
   }
   const resolved: ResolvedSourceContent = resolution;
   // The resolver may not rewrite the declaration either: a resolution that claims
   // another path or version would freeze a different source than Chief selected.
+  // For `git`/`policy`/`role_contract` the declared read target is the declared
+  // `path`, or the declared `id` when no path was given (`data.md` §1: `path?`), so
+  // a resolver may not substitute another path for a declared id either (W5R2-01).
   if (resolved.version !== undefined && resolved.version !== source.version) {
     return fatal(
       'VALIDATION_ERROR',
@@ -659,7 +718,20 @@ function gatherSource(args: {
       refFor(source),
     );
   }
-  if (source.path !== undefined && resolved.path !== undefined && resolved.path !== source.path) {
+  if (STRICT_IDENTITY_KINDS.includes(source.kind)) {
+    const declaredPath = source.path ?? source.id;
+    if (resolved.path !== undefined && resolved.path !== declaredPath) {
+      return fatal(
+        'VALIDATION_ERROR',
+        `resolver 返回的 path ${resolved.path} 与 selection 声明的 ${declaredPath} 不一致（AC-030）`,
+        refFor(source),
+      );
+    }
+  } else if (
+    source.path !== undefined &&
+    resolved.path !== undefined &&
+    resolved.path !== source.path
+  ) {
     return fatal(
       'VALIDATION_ERROR',
       `resolver 返回的 path ${resolved.path} 与 selection 声明的 ${source.path} 不一致（AC-030）`,
@@ -699,17 +771,42 @@ function gatherSource(args: {
       }
       const code: ErrorCode =
         fetched.code === 'STALE_ARTIFACT' ? 'STALE_ARTIFACT' : 'INTERNAL_ERROR';
-      return fatal(code, fetched.message, refFor(source, resolved));
-    }
-    content = fetched.content;
-    const actual = sha256(content);
-    if (actual !== resolved.hash) {
       return fatal(
-        'STALE_ARTIFACT',
-        `来源内容与声明的 hash 不一致：${contextSourceRefKey(source)}（声明 ${resolved.hash}，实际 ${actual}）`,
+        code,
+        portMessage(
+          code,
+          fetched.message,
+          `来源内容端口返回内部错误：${contextSourceRefKey(source)}`,
+        ),
         refFor(source, resolved),
       );
     }
+    content = fetched.content;
+  }
+  // The frozen content must match what was declared, on both sides:
+  //
+  // - the resolver's `hash` is the identity the fetched/inline body claims
+  //   (`data.md` §4 "内容需 Hash 一致"); the inline branch is checked here too, so
+  //   the builder never depends on a snapshot writer to detect mislabeled bytes
+  //   (W5R2-10);
+  // - the selection's own `hash`, when Chief pinned one, is authoritative: a
+  //   resolution that returns different bytes at the same revision is
+  //   `STALE_ARTIFACT`, never a snapshot whose `ref.hash` contradicts its `hash`
+  //   (W5R2-03).
+  const actual = sha256(content);
+  if (actual !== resolved.hash) {
+    return fatal(
+      'STALE_ARTIFACT',
+      `来源内容与声明的 hash 不一致：${contextSourceRefKey(source)}（声明 ${resolved.hash}，实际 ${actual}）`,
+      refFor(source, resolved),
+    );
+  }
+  if (source.hash !== undefined && source.hash !== actual) {
+    return fatal(
+      'STALE_ARTIFACT',
+      `来源内容与 selection 声明的 hash 不一致：${contextSourceRefKey(source)}（声明 ${source.hash}，实际 ${actual}）`,
+      refFor(source, resolved),
+    );
   }
   let tokens: number;
   try {
@@ -755,7 +852,14 @@ function availabilityOf(
     if (key === null) continue;
     inputs[key] = true;
   }
-  for (const key of asserted) inputs[key] = true;
+  // A caller assertion only stands in for an input that has no resolvable handle
+  // at all (`bootstrapObservation`, `acceptance`, `workGoal`, …). An input the
+  // catalog binds to an artifact class or a path prefix must come from a resolved
+  // source: otherwise `contextInputs: ['productDefinition']` could satisfy
+  // Planning's upstream artifact and `AC-031`'s real gap would be hidden (W5R2-04).
+  for (const key of asserted) {
+    if (isAssertableInputKey(key)) inputs[key] = true;
+  }
   return inputs;
 }
 
@@ -853,7 +957,16 @@ export function buildContext(input: BuildContextInput): BuildContextResult {
     };
   }
   if (!gates.ok) {
-    return { ok: false, code: gates.code, errors: [{ code: gates.code, message: gates.message }] };
+    return {
+      ok: false,
+      code: gates.code,
+      errors: [
+        {
+          code: gates.code,
+          message: portMessage(gates.code, gates.message, 'Project 门禁端口返回内部错误'),
+        },
+      ],
+    };
   }
   const policyHash = sha256(gates.policyContent);
   // The role contract and the policy revision are Project-level facts, not Chief's
@@ -887,9 +1000,28 @@ export function buildContext(input: BuildContextInput): BuildContextResult {
   // Full handles keyed by `kind:id`: `selection.sourceRefs` are storage handles
   // (`SourceRef`) that carry no sender/class metadata, so a caller-supplied
   // `contextSources` entry with the same key supplies it for the ACL and manifest.
+  //
+  // Two entries with the same key would make the overlay's identity depend on
+  // array order (last one wins), so a duplicate is refused instead of silently
+  // overriding the earlier handle (W5R2-14).
   const fullSources = new Map<string, ContextSourceRef>();
-  for (const entry of input.contextSources ?? [])
-    fullSources.set(contextSourceRefKey(entry), entry);
+  for (const entry of input.contextSources ?? []) {
+    const key = contextSourceRefKey(entry);
+    if (fullSources.has(key)) {
+      return {
+        ok: false,
+        code: 'VALIDATION_ERROR',
+        errors: [
+          {
+            code: 'VALIDATION_ERROR',
+            message: `contextSources 存在重复键 ${key}：同一来源的元数据不得由顺序决定（AC-030）`,
+            ref: denialSourceRef(entry),
+          },
+        ],
+      };
+    }
+    fullSources.set(key, entry);
+  }
   const selectedKeys = new Set<string>([
     ...selection.sourceRefs.map((entry) => `${fromSourceRefKind(entry.kind)}:${entry.id}`),
     ...selection.artifactRefs.map((entry) => `artifact:${entry.id}`),

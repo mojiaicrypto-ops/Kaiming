@@ -26,6 +26,7 @@ import {
   availabilityFromSelection,
   evaluateRequirements,
   inputKeyForSource,
+  isAssertableInputKey,
   isInputRequired,
   referencesFutureArtifact,
   requiredInputRow,
@@ -577,6 +578,30 @@ describe('context requirements — helper predicates', () => {
   it('exposes a positive requirement count for every row', () => {
     for (const rule of requirementRows()) {
       expect(rule.required.length, `${rule.role}:${rule.stage}`).toBeGreaterThan(0);
+    }
+  });
+
+  it('only lets a handle-less input be asserted by the caller (W5R2-04)', () => {
+    // Initialization/meta inputs have no artifact class and no path prefix, so a
+    // caller assertion is the only way to supply them.
+    for (const key of ['bootstrapObservation', 'acceptance', 'workGoal', 'currentFacts'] as const) {
+      expect(isAssertableInputKey(key), key).toBe(true);
+    }
+    // Artifact-backed and path-backed inputs must come from a resolved source: an
+    // assertion would otherwise satisfy Planning's upstream ProductDefinition.
+    for (const key of [
+      'productDefinition',
+      'plan',
+      'compactPlan',
+      'frozenDiff',
+      'reviewResult',
+      'testEvidence',
+      'projectOverview',
+      'roleContract',
+      'applicableRules',
+      'featureNavigation',
+    ] as const) {
+      expect(isAssertableInputKey(key), key).toBe(false);
     }
   });
 });

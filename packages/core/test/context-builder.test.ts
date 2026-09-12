@@ -359,6 +359,9 @@ function selectionOf(input: {
     id: ref.id,
     version: ref.version,
     ...(ref.path === undefined ? {} : { path: ref.path }),
+    // A declared hash pins the frozen content (`data.md` §4); the builder must
+    // refuse a resolution whose bytes hash differently (W5R2-03).
+    ...(ref.hash === undefined ? {} : { hash: ref.hash }),
   }));
   const reasons: Record<string, string> = {};
   for (const { ref } of sources) {
@@ -747,6 +750,55 @@ describe('buildContext — ACL before resolution (AC-033, AC-034)', () => {
     expect(unknown).toBeDefined();
     expect(unknown?.reason).toContain('不存在');
   });
+
+  it('refuses an artifact class that contradicts its blob path (W5R2-02)', () => {
+    // A `plan` artifact (a future product for the Product stage) is relabelled
+    // "explanation" in the overlay. The path `artifacts/plan/...` is authoritative,
+    // so the ACL must refuse it before the resolver is touched.
+    const writer = memoryWriter();
+    const selection = selectionOf({
+      sources: [AGENTS, USER_REQUEST],
+      artifactRefs: [artifactRef(ARTIFACT_PLAN, 1)],
+      reasonPerSource: { [`artifact:${ARTIFACT_PLAN}`]: '未来 Plan 产物' },
+    });
+    const lying = makeHarness(selection, {
+      role: 'product',
+      stage: 'product',
+      blobs: BASE_BLOBS,
+      writer,
+      artifacts: { [ARTIFACT_PLAN]: { version: 1, content: PLAN_BODY } },
+      contextSources: [
+        AGENTS.ref,
+        USER_REQUEST.ref,
+        {
+          ...artifact(ARTIFACT_PLAN, 1, 'explanation'),
+          path: `artifacts/plan/${ARTIFACT_PLAN}`,
+        },
+      ],
+    });
+    const result = build(lying);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('CONTEXT_FORBIDDEN');
+    expect(JSON.stringify(result)).not.toContain(PLAN_BODY);
+    // The ACL refused before the artifact was ever resolved or fetched.
+    expect(lying.resolutions.map((ref) => ref.id)).not.toContain(ARTIFACT_PLAN);
+    expect(lying.fetches).toHaveLength(0);
+    expect(writer.requests).toHaveLength(0);
+
+    // The truthful class is still refused for the same stage (the Product stage may
+    // not read a future `plan` artifact), so relabelling gains nothing.
+    const truthful = makeHarness(selection, {
+      role: 'product',
+      stage: 'product',
+      blobs: BASE_BLOBS,
+      artifacts: { [ARTIFACT_PLAN]: { version: 1, content: PLAN_BODY } },
+      contextSources: [AGENTS.ref, USER_REQUEST.ref, artifact(ARTIFACT_PLAN, 1, 'plan')],
+    });
+    const truthfulResult = build(truthful);
+    expect(truthfulResult.ok).toBe(false);
+    if (!truthfulResult.ok) expect(truthfulResult.code).toBe('CONTEXT_FORBIDDEN');
+  });
 });
 
 describe('buildContext — the selection is the authority over its overlay (AC-030)', () => {
@@ -845,6 +897,208 @@ describe('buildContext — the selection is the authority over its overlay (AC-0
   });
 });
 
+describe('buildContext — the overlay may not introduce identity (W5R2-01, W5R2-14)', () => {
+  const A_BODY = '# body of a\n\nDeclared path src/a.ts.\n';
+  const B_BODY = '# BODY-OF-B\n\nThe overlay pointed the read here.\n';
+  const OTHER_POLICY_BODY = '# REVISION TWO BODY\n\ndocs/OTHER.md.\n';
+
+  it('refuses a git overlay that adds a path the selection never declared (W5R2-01)', () => {
+    // The selection declares the git source only by id (`src/a.ts`) — the shape
+    // `data.md` §1 allows. The overlay tries to make the read target `src/b.ts`;
+    // the declaration is Chief's authority, so this must be refused instead of
+    // resolving and freezing `src/b.ts` under the declared id.
+    const selected: SelectedSource = {
+      ref: { kind: 'git', id: 'src/a.ts', version: 'revision-1' },
+    };
+    const writer = memoryWriter();
+    const port = makeHarness(selectionOf({ sources: [selected, WORK_GOAL, USER_REQUEST] }), {
+      blobs: {
+        ...BASE_BLOBS,
+        'src/a.ts@revision-1': A_BODY,
+        'src/b.ts@revision-1': B_BODY,
+      },
+      writer,
+      contextSources: [
+        { kind: 'git', id: 'src/a.ts', version: 'revision-1', path: 'src/b.ts' },
+        WORK_GOAL.ref,
+        USER_REQUEST.ref,
+      ],
+      contextInputs: WORK_GOAL_INPUT,
+    });
+    const result = build(port);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('VALIDATION_ERROR');
+    expect(result.errors.some((error) => error.message.includes('不一致'))).toBe(true);
+    // Nothing was resolved or frozen, and the other file's bytes never appeared.
+    expect(port.resolutions).toHaveLength(0);
+    expect(writer.requests).toHaveLength(0);
+    expect(JSON.stringify(result)).not.toContain('BODY-OF-B');
+  });
+
+  it('refuses a resolver that reads another path for a declared id (W5R2-01)', () => {
+    // When the selection declares no `path`, the declared `id` is the read target
+    // (`data.md` §1 `SourceRef.path?`); the resolver may not substitute another file.
+    const selected: SelectedSource = {
+      ref: { kind: 'git', id: 'src/a.ts', version: 'revision-1' },
+    };
+    const writer = memoryWriter();
+    const base = makeHarness(
+      selectionOf({ sources: [selected, AGENTS, WORK_GOAL, USER_REQUEST] }),
+      {
+        blobs: {
+          ...BASE_BLOBS,
+          'src/a.ts@revision-1': A_BODY,
+          'src/b.ts@revision-1': B_BODY,
+        },
+        writer,
+        contextSources: [selected.ref, AGENTS.ref, WORK_GOAL.ref, USER_REQUEST.ref],
+        contextInputs: WORK_GOAL_INPUT,
+      },
+    );
+    const result = build(base, {
+      resolver: {
+        resolve(input) {
+          const answer = base.input.resolver.resolve(input);
+          if (answer.ok && input.ref.id === 'src/a.ts') {
+            return { ...answer, path: 'src/b.ts' };
+          }
+          return answer;
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('VALIDATION_ERROR');
+    expect(JSON.stringify(result)).not.toContain('BODY-OF-B');
+    expect(writer.requests).toHaveLength(0);
+  });
+
+  it('refuses a policy overlay that points a declared policy file elsewhere (W5R2-01)', () => {
+    // The review's policy variant: `docs/rules/agents.md` (declared by id) must not
+    // be read as `docs/OTHER.md` just because the overlay names another path.
+    const selected: SelectedSource = {
+      ref: { kind: 'policy', id: 'docs/rules/agents.md', version: 'revision-1' },
+    };
+    const writer = memoryWriter();
+    const port = makeHarness(selectionOf({ sources: [selected, WORK_GOAL, USER_REQUEST] }), {
+      blobs: {
+        ...BASE_BLOBS,
+        'docs/OTHER.md@revision-1': OTHER_POLICY_BODY,
+      },
+      writer,
+      contextSources: [
+        {
+          kind: 'policy',
+          id: 'docs/rules/agents.md',
+          version: 'revision-1',
+          path: 'docs/OTHER.md',
+        },
+        WORK_GOAL.ref,
+        USER_REQUEST.ref,
+      ],
+      contextInputs: WORK_GOAL_INPUT,
+    });
+    const result = build(port);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('VALIDATION_ERROR');
+    expect(port.resolutions).toHaveLength(0);
+    expect(writer.requests).toHaveLength(0);
+    expect(JSON.stringify(result)).not.toContain('REVISION TWO');
+  });
+
+  it('accepts a matching overlay and freezes the declared bytes (W5R2-01 control)', () => {
+    // The control: an overlay whose path and hash equal the declaration is metadata
+    // that agrees with the selection, so the build proceeds and freezes `A_BODY`.
+    const selected: SelectedSource = {
+      ref: {
+        kind: 'git',
+        id: 'src/a.ts',
+        version: 'revision-1',
+        path: 'src/a.ts',
+        hash: sha256(A_BODY),
+      },
+    };
+    const selection = selectionOf({ sources: [selected, WORK_GOAL, USER_REQUEST] });
+    const result = buildOk(
+      makeHarness(selection, {
+        blobs: { ...BASE_BLOBS, 'src/a.ts@revision-1': A_BODY },
+        contextSources: [
+          {
+            kind: 'git',
+            id: 'src/a.ts',
+            version: 'revision-1',
+            path: 'src/a.ts',
+            hash: sha256(A_BODY),
+          },
+          WORK_GOAL.ref,
+          USER_REQUEST.ref,
+        ],
+        contextInputs: WORK_GOAL_INPUT,
+      }),
+    );
+    const resolved = result.snapshot.resolvedSources.find((source) => source.id === 'src/a.ts');
+    expect(resolved?.hash).toBe(sha256(A_BODY));
+    expect(resolved?.ref.hash).toBe(sha256(A_BODY));
+    expect(resolved?.path).toBe('src/a.ts');
+  });
+
+  it('refuses an overlay hash the selection never declared (W5R2-01)', () => {
+    const selected: SelectedSource = {
+      ref: { kind: 'git', id: 'src/a.ts', version: 'revision-1', path: 'src/a.ts' },
+    };
+    const writer = memoryWriter();
+    const port = makeHarness(selectionOf({ sources: [selected, WORK_GOAL, USER_REQUEST] }), {
+      blobs: { ...BASE_BLOBS, 'src/a.ts@revision-1': A_BODY },
+      writer,
+      contextSources: [
+        {
+          kind: 'git',
+          id: 'src/a.ts',
+          version: 'revision-1',
+          path: 'src/a.ts',
+          hash: sha256(B_BODY),
+        },
+        WORK_GOAL.ref,
+        USER_REQUEST.ref,
+      ],
+      contextInputs: WORK_GOAL_INPUT,
+    });
+    const result = build(port);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('VALIDATION_ERROR');
+    expect(port.resolutions).toHaveLength(0);
+    expect(writer.requests).toHaveLength(0);
+  });
+
+  it('refuses duplicate contextSources keys instead of resolving last-wins (W5R2-14)', () => {
+    // Two handles for the same `message:msg-user-1` disagree about the sender. The
+    // old implementation silently kept the last one, making the ACL classification
+    // depend on array order; the overlay is now refused outright.
+    const writer = memoryWriter();
+    const port = makeHarness(selectionOf({ sources: [AGENTS, WORK_GOAL, USER_REQUEST] }), {
+      blobs: BASE_BLOBS,
+      writer,
+      contextSources: [
+        AGENTS.ref,
+        WORK_GOAL.ref,
+        USER_REQUEST.ref,
+        { kind: 'message', id: USER_REQUEST.ref.id, version: '1', sender: 'system' },
+      ],
+      contextInputs: WORK_GOAL_INPUT,
+    });
+    const result = build(port);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('VALIDATION_ERROR');
+    expect(result.errors.some((error) => error.message.includes('重复键'))).toBe(true);
+    expect(port.resolutions).toHaveLength(0);
+    expect(writer.requests).toHaveLength(0);
+  });
+});
+
 describe('buildContext — required inputs (AC-031, AC-079)', () => {
   it('returns MISSING_CONTEXT with the precise gap and no frozen snapshot', () => {
     const selection = selectionOf({ sources: [AGENTS] });
@@ -879,6 +1133,51 @@ describe('buildContext — required inputs (AC-031, AC-079)', () => {
     // never expanded to close the gap.
     expect(port.resolutions.map((ref) => ref.id)).toEqual(['docs/rules/agents.md']);
     expect(port.fetches).toHaveLength(0);
+  });
+
+  it('does not let an asserted artifact-backed input satisfy the table (W5R2-04)', () => {
+    // Planning needs a ProductDefinition artifact. Asserting it through
+    // `contextInputs` used to build successfully with no upstream product at all,
+    // hiding the real AC-031 gap; only handle-less inputs may be asserted.
+    const writer = memoryWriter();
+    const selection = selectionOf({ sources: [AGENTS, USER_REQUEST] });
+    const port = makeHarness(selection, {
+      role: 'planning',
+      stage: 'planning',
+      blobs: BASE_BLOBS,
+      writer,
+      contextSources: [AGENTS.ref, USER_REQUEST.ref],
+      contextInputs: ['productDefinition', 'acceptance'],
+    });
+    const result = build(port);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('MISSING_CONTEXT');
+    expect(result.errors.map((error) => (error as { input?: string }).input)).toContain(
+      'productDefinition',
+    );
+    expect(writer.requests).toHaveLength(0);
+
+    // Control: the same assertion for a handle-less input (`acceptance`) still
+    // counts, so the refusal is about the artifact-backed key, not assertions.
+    const assertedOk = build(
+      makeHarness(
+        selectionOf({
+          sources: [AGENTS, USER_REQUEST],
+          artifactRefs: [artifactRef(ARTIFACT_PRODUCT, 1)],
+          reasonPerSource: { [`artifact:${ARTIFACT_PRODUCT}`]: '有效 ProductDefinition' },
+        }),
+        {
+          role: 'planning',
+          stage: 'planning',
+          blobs: BASE_BLOBS,
+          contextSources: [AGENTS.ref, USER_REQUEST.ref, artifact(ARTIFACT_PRODUCT, 1, 'product')],
+          contextInputs: ['acceptance'],
+          artifacts: { [ARTIFACT_PRODUCT]: { version: 1, content: DESIGN_BODY } },
+        },
+      ),
+    );
+    expect(assertedOk.ok).toBe(true);
   });
 
   it('starts initialize in an empty Project with a BootstrapObservation (AC-079 #1)', () => {
@@ -1356,6 +1655,153 @@ describe('buildContext — failure closure', () => {
       expect(serialized, port.name).not.toContain('exploded');
     }
     // No failure path reached the writer: a closed failure leaves no snapshot.
+    expect(writer.requests).toHaveLength(0);
+  });
+
+  it('redacts a returned INTERNAL_ERROR and keeps a business message (W5R2-09)', () => {
+    const writer = memoryWriter();
+    const leak = 'LEAKED-PORT-MESSAGE-abc';
+    const artifactBase = makeHarness(
+      selectionOf({
+        sources: [AGENTS, WORK_GOAL, USER_REQUEST],
+        artifactRefs: [artifactRef(ARTIFACT_PLAN, 1)],
+        reasonPerSource: { [`artifact:${ARTIFACT_PLAN}`]: 'L1 CompactPlan' },
+      }),
+      {
+        blobs: BASE_BLOBS,
+        writer,
+        contextSources: [
+          AGENTS.ref,
+          WORK_GOAL.ref,
+          USER_REQUEST.ref,
+          artifact(ARTIFACT_PLAN, 1, 'plan'),
+        ],
+        contextInputs: WORK_GOAL_INPUT,
+        artifacts: { [ARTIFACT_PLAN]: { version: 1, content: PLAN_BODY } },
+      },
+    );
+    const returnedPorts: readonly {
+      readonly name: string;
+      readonly overrides: Partial<BuildContextInput>;
+    }[] = [
+      {
+        name: 'resolver',
+        overrides: {
+          resolver: {
+            resolve() {
+              return { ok: false as const, code: 'INTERNAL_ERROR' as const, message: leak };
+            },
+          },
+        },
+      },
+      {
+        name: 'content',
+        overrides: {
+          content: {
+            fetch() {
+              return { ok: false as const, code: 'INTERNAL_ERROR' as const, message: leak };
+            },
+          },
+        },
+      },
+      {
+        name: 'gates',
+        overrides: {
+          gates: {
+            current() {
+              return { ok: false as const, code: 'INTERNAL_ERROR' as const, message: leak };
+            },
+          },
+        },
+      },
+    ];
+    for (const port of returnedPorts) {
+      const result = build(artifactBase, port.overrides);
+      expect(result.ok, port.name).toBe(false);
+      if (result.ok) continue;
+      expect(result.code, port.name).toBe('INTERNAL_ERROR');
+      expect(JSON.stringify(result), port.name).not.toContain(leak);
+    }
+    // A business code keeps the port's message: it names the gap Chief must fix.
+    const stale = build(artifactBase, {
+      resolver: {
+        resolve() {
+          return { ok: false as const, code: 'STALE_ARTIFACT' as const, message: '版本已过期' };
+        },
+      },
+    });
+    expect(stale.ok).toBe(false);
+    if (!stale.ok) {
+      expect(stale.code).toBe('STALE_ARTIFACT');
+      expect(stale.errors[0]?.message).toContain('版本已过期');
+    }
+    expect(writer.requests).toHaveLength(0);
+  });
+
+  it('refuses inline content that does not hash to the declared identity (W5R2-10)', () => {
+    const writer = memoryWriter();
+    const declared = 'DECLARED-BODY';
+    const tampered = 'TAMPERED-INLINE-BODY';
+    const base = assistHarness({ writer });
+    const result = build(base, {
+      resolver: {
+        resolve(input) {
+          const answer = base.input.resolver.resolve(input);
+          if (answer.ok && input.ref.id === WORK_GOAL.ref.id) {
+            // The resolver claims the declared hash but hands back other bytes, with
+            // `fetch.kind='none'` so no content port ever sees them. A memory writer
+            // cannot catch this: the builder itself must.
+            return { ...answer, hash: sha256(declared), content: tampered };
+          }
+          return answer;
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('STALE_ARTIFACT');
+    expect(JSON.stringify(result)).not.toContain(tampered);
+    expect(writer.requests).toHaveLength(0);
+  });
+});
+
+describe('buildContext — the declared hash pins the frozen content (W5R2-03)', () => {
+  it('returns STALE_ARTIFACT when the resolved bytes differ from the declared hash', () => {
+    const frozen = '# frozen body\n\nThis is what Chief pinned.\n';
+    const changed = '# changed body\n\nThis is what the port returned.\n';
+    const selected: SelectedSource = {
+      ref: {
+        kind: 'git',
+        id: 'src/pinned.ts',
+        version: 'revision-1',
+        path: 'src/pinned.ts',
+        hash: sha256(frozen),
+      },
+    };
+    const writer = memoryWriter();
+    const port = makeHarness(
+      selectionOf({ sources: [selected, AGENTS, WORK_GOAL, USER_REQUEST] }),
+      {
+        blobs: {
+          ...BASE_BLOBS,
+          'src/pinned.ts@revision-1': changed,
+        },
+        writer,
+        contextSources: [selected.ref, AGENTS.ref, WORK_GOAL.ref, USER_REQUEST.ref],
+        contextInputs: WORK_GOAL_INPUT,
+      },
+    );
+    const result = build(port);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    // The resolver's own hash agrees with the changed bytes, so only the declared
+    // hash can catch this: the snapshot must never claim `ref.hash=frozen` while
+    // freezing `changed`.
+    expect(result.code).toBe('STALE_ARTIFACT');
+    expect(result.errors.some((error) => error.message.includes('selection 声明的 hash'))).toBe(
+      true,
+    );
+    expect(JSON.stringify(result)).not.toContain('changed body');
     expect(writer.requests).toHaveLength(0);
   });
 });

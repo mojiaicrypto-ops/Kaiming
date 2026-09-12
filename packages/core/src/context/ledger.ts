@@ -635,12 +635,17 @@ class ReadLedgerImpl implements ReadLedger {
     if (expandedScope === undefined) {
       return fail('VALIDATION_ERROR', `授予扩展必须提供 expandedScope：${key}`);
     }
-    if (
-      input.extraTokens !== undefined &&
-      (!Number.isInteger(input.extraTokens) || input.extraTokens < 0)
-    ) {
-      return fail('VALIDATION_ERROR', `extraTokens 必须是非负整数：${key}（AC-036）`);
-    }
+    // An expansion may widen the ceiling, but only inside the documented
+    // configurable range (`agents.md` §6: 4096–2000000). Both the granted extra and
+    // the resulting ceiling are validated with the same shared validator as the
+    // builder and the cold start, so `extraTokens: 3_000_000` can no longer push the
+    // ledger past the ceiling and admit a 2 025 000-token read (W5R2-05).
+    const extra = input.extraTokens ?? 0;
+    const extraError = readBudgetValueError('extraTokens', extra);
+    if (extraError !== null) return fail('VALIDATION_ERROR', `${extraError}：${key}`);
+    const ceiling = this.expansionLimit + extra;
+    const ceilingError = readBudgetValueError('expansionLimit', ceiling);
+    if (ceilingError !== null) return fail('VALIDATION_ERROR', `${ceilingError}：${key}`);
     if (expandedScope.projectId !== this.scope.projectId) {
       return fail(
         'VALIDATION_ERROR',
@@ -677,7 +682,6 @@ class ReadLedgerImpl implements ReadLedger {
     const grantedAt = safeClock(this.clock);
     if (grantedAt === null) return fail('INTERNAL_ERROR', 'read ledger 时钟调用失败');
     this.scope = freezeReadScope(expandedScope);
-    const extra = input.extraTokens ?? 0;
     this.expansionLimit += extra;
     const granted: ExpansionRecord = Object.freeze({
       ...pending,

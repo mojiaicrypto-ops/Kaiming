@@ -1057,35 +1057,40 @@ export function assembleColdStart(
   // Tier 3 — the current Work/Task position and the resume position from the
   // checkpoint. Only the resume facts cross a session boundary; the previous
   // Conversation's messages do not (`§5`).
-  if (options.checkpoint !== undefined) {
-    const position = [
-      `workId=${options.checkpoint.workId}`,
-      ...(options.checkpoint.taskId === undefined ? [] : [`taskId=${options.checkpoint.taskId}`]),
-      `stage=${options.checkpoint.stage}`,
-      `manifest=${options.checkpoint.manifest.id}@${options.checkpoint.manifest.version}`,
-      `nextAction=${options.checkpoint.nextAction}`,
-    ].join('\n');
-    admit({
-      phase: 'current_work',
-      key: `checkpoint:${options.checkpoint.runId}`,
-      reason: 'Checkpoint 的 work/task/stage 与 next action 是当前 Work 位置（context.md §5）',
-      content: position,
-      source: {
-        ref: {
-          kind: 'policy',
-          id: `checkpoint:${options.checkpoint.runId}`,
-          version: '1',
-          hash: sha256(position),
-        },
-        kind: 'policy',
-        id: `checkpoint:${options.checkpoint.runId}`,
-        revision: options.checkpoint.stage,
-        hash: sha256(position),
-        bytes: Buffer.byteLength(position, 'utf8'),
-        reason: 'Checkpoint resume position',
-      },
-    });
-  }
+  const checkpoint = options.checkpoint;
+  const position =
+    checkpoint === undefined
+      ? null
+      : [
+          `workId=${checkpoint.workId}`,
+          ...(checkpoint.taskId === undefined ? [] : [`taskId=${checkpoint.taskId}`]),
+          `stage=${checkpoint.stage}`,
+          `manifest=${checkpoint.manifest.id}@${checkpoint.manifest.version}`,
+          `nextAction=${checkpoint.nextAction}`,
+        ].join('\n');
+  const positionAdmission =
+    checkpoint === undefined || position === null
+      ? null
+      : admit({
+          phase: 'current_work',
+          key: `checkpoint:${checkpoint.runId}`,
+          reason: 'Checkpoint 的 work/task/stage 与 next action 是当前 Work 位置（context.md §5）',
+          content: position,
+          source: {
+            ref: {
+              kind: 'policy',
+              id: `checkpoint:${checkpoint.runId}`,
+              version: '1',
+              hash: sha256(position),
+            },
+            kind: 'policy',
+            id: `checkpoint:${checkpoint.runId}`,
+            revision: checkpoint.stage,
+            hash: sha256(position),
+            bytes: Buffer.byteLength(position, 'utf8'),
+            reason: 'Checkpoint resume position',
+          },
+        });
 
   // Tier 3/4 — feature navigation (the one-line index), then the matching Features.
   const terms = queryTerms(options.query);
@@ -1176,7 +1181,7 @@ export function assembleColdStart(
       `实现入口：${feature.sections.entries.items.join('；')}`,
       `已知差距：${[...feature.sections.gaps.items, feature.sections.gaps.text].filter((line) => line.trim() !== '').join('；')}`,
     ].join('\n');
-    const admission = admit({
+    admit({
       phase: 'role_bodies',
       key: `git:${feature.documentPath}`,
       path: feature.documentPath,
@@ -1199,18 +1204,6 @@ export function assembleColdStart(
         reason: 'Feature 正文（当前行为/入口/差距）',
       },
     });
-    if (!admission.admitted) {
-      excluded.push({
-        ref: {
-          kind: 'git',
-          id: feature.documentPath,
-          version: feature.revision,
-          path: feature.documentPath,
-        },
-        reason: `预算不足，未纳入 ${feature.featureId} 正文（AC-036）`,
-        kind: 'budget',
-      });
-    }
   }
 
   // Everything else Chief registered but the query did not match: excluded, with a
@@ -1261,6 +1254,11 @@ export function assembleColdStart(
   }
 
   const projectOverviewMarkdown = overviewDocument.markdown;
+  // The checkpoint position is seed content like any other: when the budget refused
+  // its `current_work` entry (`positionAdmission`), the seed carries none of its
+  // facts — the refusal is already recorded in `excluded`/`unknowns` by `admit`, so
+  // delivering `workId`/`resume` here would be uncharged content (W5R2-07).
+  const positionAdmitted = positionAdmission?.admitted === true && checkpoint !== undefined;
   const seed: ColdStartSeed = Object.freeze({
     role,
     stage,
@@ -1271,20 +1269,18 @@ export function assembleColdStart(
       contentHash: sha256(projectOverviewMarkdown),
     }),
     domain: Object.freeze({
-      ...(options.checkpoint === undefined
-        ? {}
-        : {
-            workId: options.checkpoint.workId,
-            ...(options.checkpoint.taskId === undefined
-              ? {}
-              : { taskId: options.checkpoint.taskId }),
+      ...(positionAdmitted && checkpoint !== undefined
+        ? {
+            workId: checkpoint.workId,
+            ...(checkpoint.taskId === undefined ? {} : { taskId: checkpoint.taskId }),
             resume: Object.freeze({
-              stage: options.checkpoint.stage,
-              nextAction: options.checkpoint.nextAction,
-              manifest: `${options.checkpoint.manifest.id}@${options.checkpoint.manifest.version}`,
-              approval: options.checkpoint.approval.state,
+              stage: checkpoint.stage,
+              nextAction: checkpoint.nextAction,
+              manifest: `${checkpoint.manifest.id}@${checkpoint.manifest.version}`,
+              approval: checkpoint.approval.state,
             }),
-          }),
+          }
+        : {}),
       summary: domainSummary(options.query, selection),
     }),
   });
@@ -1408,11 +1404,15 @@ export function coldStartAnswer(options: ColdStartOptions): ColdStartResult<{
   const assembled = assembleColdStart(options);
   if (!assembled.ok) return assembled;
   const coldPackage = assembled.package;
-  // The Features whose facts the answer reports are exactly the Features the
-  // selection named: a query match (tier 5) or a directly related constraint's
-  // target (tier 4, e.g. the payment Feature constraining order cancellation).
+  // The Features whose facts the answer reports are exactly the Features whose body
+  // entry was *admitted* by the budget (tier 5): a Feature whose `role_bodies` entry
+  // was refused is a recorded gap (`excluded`/`unknowns`), never delivered content —
+  // reporting its behaviour/entry paths/gaps anyway would hand over uncharged
+  // bodies (W5R2-06). A directly related constraint still comes from the declaring
+  // Feature's own `constrained_by` relation below.
   const selectedIds = new Set(
     coldPackage.context.selection
+      .filter((entry) => entry.phase === 'role_bodies')
       .map((entry) => entry.featureId)
       .filter((id): id is string => id !== undefined),
   );

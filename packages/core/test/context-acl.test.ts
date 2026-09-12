@@ -509,6 +509,35 @@ describe('context ACL — future artifacts (AC-079)', () => {
     if (!decision.allowed) expect(decision.code).toBe('VALIDATION_ERROR');
   });
 
+  it('refuses a declared class that contradicts the artifact blob path (W5R2-02)', () => {
+    const productScope = scopeFor('product', 'product', PROJECT);
+    if (productScope === null) throw new Error('product must have a scope');
+    // A `plan` blob relabelled "explanation": the path is authoritative, so the
+    // Product stage must not be able to read a future artifact by renaming its class.
+    const lying = artifactSource('explanation', {
+      id: '0191f000-0000-7000-8000-0000000000ee',
+      path: `${ARTIFACT_ROOT}/plan/0191f000-0000-7000-8000-0000000000ee`,
+    });
+    const lyingDecision = canRead('product', 'product', lying, productScope);
+    expect(lyingDecision.allowed).toBe(false);
+    if (!lyingDecision.allowed) expect(lyingDecision.code).toBe('CONTEXT_FORBIDDEN');
+    // The truthful class is still refused for the same stage.
+    const truthful = artifactSource('plan', {
+      id: '0191f000-0000-7000-8000-0000000000ee',
+      path: `${ARTIFACT_ROOT}/plan/0191f000-0000-7000-8000-0000000000ee`,
+    });
+    expect(canRead('product', 'product', truthful, productScope).allowed).toBe(false);
+    // A legal class that agrees with its path still works.
+    const legal = artifactSource('explanation', {
+      id: '0191f000-0000-7000-8000-0000000000ef',
+      path: `${ARTIFACT_ROOT}/explanation/0191f000-0000-7000-8000-0000000000ef`,
+    });
+    expect(canRead('product', 'product', legal, productScope).allowed).toBe(true);
+    // A non-artifact path never triggers the class comparison (nothing to compare).
+    const plain = artifactSource('explanation', { path: 'docs/explanation.md' });
+    expect(canRead('product', 'product', plain, productScope).allowed).toBe(true);
+  });
+
   it('lets a downstream stage read a Chief-session decision or attachment (W5R1-03)', () => {
     const productScope = scopeFor('product', 'product', PROJECT);
     const developerScope = scopeFor('backend', 'develop-L2', PROJECT);

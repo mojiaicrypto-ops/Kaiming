@@ -530,17 +530,20 @@ describe('read ledger — reasoned expansion (AC-032, AC-036)', () => {
       'BUDGET_EXCEEDED',
     );
 
-    // A second, token-bearing grant makes the same read fit.
+    // A second, token-bearing grant makes the same read fit. The granted extra must
+    // itself be a documented configured ceiling (4096–2000000), so the grant adds
+    // the minimum legal amount rather than the 24 tokens the body happens to need
+    // (W5R2-05: `agents.md` §6 bounds every configured limit).
     expectOk(ledger.requestExpansion({ request }));
     const granted = expectOk(
       ledger.grantExpansion({
         request,
         granted: true,
         expandedScope: widened(scope, 'vendor'),
-        extraTokens: tokensOf(second),
+        extraTokens: 4_096,
       }),
     );
-    expect(granted.expansion.extraTokens).toBe(24);
+    expect(granted.expansion.extraTokens).toBe(4_096);
 
     const appended = expectOk(
       ledger.append({
@@ -550,14 +553,68 @@ describe('read ledger — reasoned expansion (AC-032, AC-036)', () => {
       }),
     );
     expect(appended.consumedTokens).toBe(24);
-    expect(appended.remainingTokens).toBe(0);
+    expect(appended.remainingTokens).toBe(4_096 - 24);
     expect(ledger.usage()).toEqual({
       initial: { limit: 4_096, used: 4_096 },
-      expansion: { limit: 24, used: 24 },
+      expansion: { limit: 4_096, used: 24 },
       consumedTokens: 4_120,
-      remainingTokens: 0,
+      remainingTokens: 4_072,
       entries: 2,
     });
+  });
+
+  it('refuses an expansion grant outside the documented token range (W5R2-05)', () => {
+    // The review reproduced `extraTokens: 3_000_000` driving the expansion ceiling to
+    // 3 004 096 and then admitting a 2 025 000-token read. The grant is now bounded
+    // by the same validator as every other configured budget (`agents.md` §6).
+    const { ledger, scope } = openLedger({
+      budget: { initialTokens: 4_096, expansionTokens: 4_096 },
+    });
+    const request = requestFor('vendor/shared-types.ts');
+    const usageBefore = ledger.usage();
+    const scopeBefore = ledger.readScope();
+    expectOk(ledger.requestExpansion({ request }));
+
+    for (const extraTokens of [3_000_000, Number.MAX_SAFE_INTEGER, 2_000_000, 4_095, 24, -1, 1.5]) {
+      expectRefusal(
+        ledger.grantExpansion({
+          request,
+          granted: true,
+          expandedScope: widened(scope, 'vendor'),
+          extraTokens,
+        }),
+        'VALIDATION_ERROR',
+      );
+    }
+    // A refused grant changes neither the scope nor the budget, and leaves the
+    // request pending.
+    expect(ledger.usage()).toEqual(usageBefore);
+    expect(ledger.readScope()).toEqual(scopeBefore);
+    expect(ledger.expansions()).toHaveLength(1);
+    expect(ledger.expansions()[0]?.decision).toBe('pending');
+    expectRefusal(
+      ledger.append({
+        path: 'vendor/shared-types.ts',
+        reason: '越界授权不得放大预算',
+        content: 'x\n',
+      }),
+      'CONTEXT_FORBIDDEN',
+    );
+
+    // `2_000_000` alone is legal at a zero ceiling, but the *resulting* ceiling is
+    // still bounded: 4096 + 2_000_000 would exceed the documented maximum.
+    const zeroCeiling = openLedger({ budget: { initialTokens: 4_096, expansionTokens: 0 } });
+    expectOk(zeroCeiling.ledger.requestExpansion({ request }));
+    const granted = expectOk(
+      zeroCeiling.ledger.grantExpansion({
+        request,
+        granted: true,
+        expandedScope: widened(zeroCeiling.scope, 'vendor'),
+        extraTokens: 2_000_000,
+      }),
+    );
+    expect(granted.expansion.extraTokens).toBe(2_000_000);
+    expect(zeroCeiling.ledger.usage().expansion.limit).toBe(2_000_000);
   });
 
   it('records a denied request without changing the ledger', () => {
@@ -901,7 +958,7 @@ describe('read ledger — immutable snapshot getters', () => {
         request,
         granted: true,
         expandedScope: widened(scope, 'vendor'),
-        extraTokens: 32,
+        extraTokens: 4_096,
       }),
     );
     const record = ledger.expansions()[0] as ExpansionRecord;

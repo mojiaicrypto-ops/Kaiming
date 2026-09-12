@@ -116,6 +116,22 @@ export const INPUT_CATALOG: Readonly<Record<ContextInputKey, InputSpec>> = {
   secret: { key: 'secret', description: 'SecretStore（禁止注入）', forbidden: true },
 };
 
+/**
+ * `true` when a caller may assert this input through `BuildContextInput.contextInputs`.
+ *
+ * Only a key with no resolvable handle at all may be asserted: the initialization
+ * and meta inputs (`bootstrapObservation`, `acceptance`, `workGoal`, …). A key the
+ * catalog binds to an artifact class (`productDefinition`, `plan`, `reviewResult`,
+ * …) or to a path prefix (`projectOverview`, `roleContract`, `featureNavigation`,
+ * …) must be satisfied by a *resolved source*, or a caller could declare its own
+ * upstream input and hide a real `MISSING_CONTEXT` (`AC-031`, `AC-079`, W5R2-04).
+ */
+export function isAssertableInputKey(key: ContextInputKey): boolean {
+  const spec: InputSpec | undefined = INPUT_CATALOG[key];
+  if (spec === undefined) return false;
+  return spec.artifactClass === undefined && spec.pathPrefixes === undefined;
+}
+
 /** One row of the required-input table. */
 export interface RequirementRow extends StageRules {
   /** The stage row this one is documented under (`agents.md` §2). */

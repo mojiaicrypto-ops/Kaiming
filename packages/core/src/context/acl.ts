@@ -497,7 +497,23 @@ export function canRead(
     return forbidden(source, 'CONTEXT_FORBIDDEN', otherRun);
   }
   if (source.kind === 'artifact') {
-    const artifactClass = source.artifactClass ?? classOf(source);
+    // `data.md` §4 stores an artifact as `artifacts/<class>/…`, so a path that names
+    // a class is authoritative. A declared class that contradicts it is refused: a
+    // caller could otherwise label a future `plan` artifact "explanation" and read
+    // it from an early stage, bypassing the "no future artifact" rule (W5R2-02).
+    const fromPath = source.path === undefined ? null : artifactClassFromPath(source.path);
+    if (
+      fromPath !== null &&
+      source.artifactClass !== undefined &&
+      source.artifactClass !== fromPath
+    ) {
+      return forbidden(
+        source,
+        'CONTEXT_FORBIDDEN',
+        `Artifact 声明的类别 ${source.artifactClass} 与路径类别 ${fromPath} 不一致（data.md §4）`,
+      );
+    }
+    const artifactClass = source.artifactClass ?? fromPath;
     if (artifactClass === null) {
       return forbidden(
         source,
@@ -569,10 +585,6 @@ export function roleStagePairs(): readonly (readonly [ContextRole, ContextStage]
 
 /** Every canonical stage, for completeness assertions in tests. */
 export const ACL_STAGES: readonly ContextStage[] = PIPELINE_ORDER;
-
-function classOf(source: ContextSourceRef): ArtifactClass | null {
-  return source.path === undefined ? null : artifactClassFromPath(source.path);
-}
 
 function pathInPrefix(path: string, prefix: string): boolean {
   // `.`/`./` is the legacy whole-repository root (`knowledge.md` §5): it matches

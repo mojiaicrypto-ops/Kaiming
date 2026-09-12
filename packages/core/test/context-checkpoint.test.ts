@@ -17,7 +17,7 @@
  * - a malformed checkpoint is refused with `VALIDATION_ERROR`, never repaired.
  */
 import { describe, expect, it } from 'vitest';
-import type { DecisionState, Hash, Ref, Role, SourceRef } from '@agentdev/contracts';
+import type { DecisionState, Hash, Ref, Role, SourceRef, Time } from '@agentdev/contracts';
 import {
   APPROVAL_STATES,
   compactCheckpoint,
@@ -469,6 +469,100 @@ describe('checkpoint: session rotation (AC-035)', () => {
     );
     expect(afterSummary.checkpoint.approval).toEqual(saved.checkpoint.approval);
     expect(validateCheckpoint(afterSummary.checkpoint)).toEqual([]);
+  });
+});
+
+describe('checkpoint: closed clock and validated rotation stamp (W5R2-08, W5R2-11)', () => {
+  it('closes a throwing store clock instead of escaping with its raw message (W5R2-08)', () => {
+    const secret = 'CHECKPOINT-CLOCK-EXPLODED';
+    const broken = createCheckpointStore({
+      now: () => {
+        throw new Error(secret);
+      },
+    });
+    expectOk(broken.registerRun(run()));
+    const saved = broken.save({ runId: RUN_ID, checkpoint: draft() });
+    expect(saved.ok).toBe(false);
+    if (saved.ok) return;
+    expect(saved.errors[0]?.code).toBe('INTERNAL_ERROR');
+    expect(JSON.stringify(saved)).not.toContain(secret);
+    // A closed failure stores nothing: the Run has no checkpoint to load.
+    expectRefusal(
+      broken.load({ runId: RUN_ID, role: 'backend', runScope: { projectId: PROJECT_ID } }),
+      'NOT_FOUND',
+    );
+
+    // `rotateSession` reads the same clock: with an explicit `at` it can proceed,
+    // but without one it must close the same way and leave the session untouched.
+    let explode = false;
+    const store = createCheckpointStore({
+      now: () => {
+        if (explode) throw new Error(secret);
+        return T0;
+      },
+    });
+    expectOk(store.registerRun(run()));
+    const stored = expectOk(store.save({ runId: RUN_ID, checkpoint: draft() }));
+    expect(stored.checkpoint.updatedAt).toBe(T0);
+    explode = true;
+    const rotated = store.rotateSession({
+      runId: RUN_ID,
+      fromSessionRef: SESSION_A,
+      toSessionRef: SESSION_B,
+      role: 'backend',
+      runScope: { projectId: PROJECT_ID, workId: WORK_ID },
+    });
+    expect(rotated.ok).toBe(false);
+    if (rotated.ok) return;
+    expect(rotated.errors[0]?.code).toBe('INTERNAL_ERROR');
+    expect(JSON.stringify(rotated)).not.toContain(secret);
+    // Validate first, mutate last: nothing partial was written.
+    expect(store.runOf(RUN_ID)?.sessionRef).toBe(SESSION_A);
+    const reloaded = expectOk(
+      store.load({ runId: RUN_ID, role: 'backend', runScope: { projectId: PROJECT_ID } }),
+    );
+    expect(reloaded.sessionRef).toBe(SESSION_A);
+    expect(reloaded.checkpoint.updatedAt).toBe(T0);
+  });
+
+  it('refuses an unvalidated rotation timestamp (W5R2-11)', () => {
+    const store = createCheckpointStore({ now: () => T0 });
+    expectOk(store.registerRun(run()));
+    expectOk(store.save({ runId: RUN_ID, checkpoint: draft() }));
+
+    for (const at of ['NOT-A-TIME', '2026-09-11', '', 42 as unknown as Time]) {
+      expectRefusal(
+        store.rotateSession({
+          runId: RUN_ID,
+          fromSessionRef: SESSION_A,
+          toSessionRef: SESSION_B,
+          role: 'backend',
+          runScope: { projectId: PROJECT_ID, workId: WORK_ID },
+          at,
+        }),
+        'VALIDATION_ERROR',
+      );
+    }
+    // The rejected rotations bound nothing and stored no bad stamp.
+    expect(store.runOf(RUN_ID)?.sessionRef).toBe(SESSION_A);
+    const still = expectOk(
+      store.load({ runId: RUN_ID, role: 'backend', runScope: { projectId: PROJECT_ID } }),
+    );
+    expect(still.checkpoint.updatedAt).toBe(T0);
+    expect(still.checkpoint.sessionRef).toBe(SESSION_A);
+
+    // A valid stamp is still accepted and recorded.
+    const rotated = expectOk(
+      store.rotateSession({
+        runId: RUN_ID,
+        fromSessionRef: SESSION_A,
+        toSessionRef: SESSION_B,
+        role: 'backend',
+        runScope: { projectId: PROJECT_ID, workId: WORK_ID },
+        at: T1,
+      }),
+    );
+    expect(rotated.checkpoint.updatedAt).toBe(T1);
   });
 });
 
