@@ -8,6 +8,7 @@
  * those transitions once so storage, core and clients cannot disagree.
  */
 export * from './transitions.js';
+export * from './delivery.js';
 export * from './routing.js';
 export * from './permission.js';
 export * from './dispatch.js';
