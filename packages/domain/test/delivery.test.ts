@@ -369,23 +369,87 @@ describe('stage manifests and routes (AC-010/AC-011/AC-012)', () => {
       expect(messages).toContain('drill');
     }
 
+    // W6R3-06: the three L3 items are structured artifact references. Naming the
+    // words in free text — even self-negating prose — is not evidence.
+    const proseOnly = evaluateStageChain({
+      route: 'code',
+      level: 'L3',
+      requirement: { requirementId: ID, previousLevel: 'L3' },
+      manifests: [
+        without(manifest('Plan', undefined, ['there is no rollback plan, but rollback']), [
+          'codeRevision',
+          'environmentRef',
+        ]),
+        manifest('Develop', 'Plan'),
+        manifest('Review', 'Develop', ['NO audit was performed, audit absent']),
+        manifest('Test', 'Review', ['NO audit was performed']),
+        manifest('Recovery', 'Test', ['no drill happened, drill']),
+        without(manifest('Settlement', 'Recovery'), ['codeRevision', 'environmentRef']),
+      ],
+    });
+    expect(proseOnly.ok).toBe(false);
+    if (!proseOnly.ok) {
+      expect(proseOnly.code).toBe('MISSING_CONTEXT');
+      const messages = proseOnly.gaps.map((gap) => gap.message).join(' ');
+      expect(messages).toContain('rollback');
+      expect(messages).toContain('audit');
+      expect(messages).toContain('drill');
+    }
+
     const completeL3 = evaluateStageChain({
       route: 'code',
       level: 'L3',
       requirement: { requirementId: ID, previousLevel: 'L3' },
       manifests: [
-        without(manifest('Plan', undefined, ['rollback: restore the previous revision']), [
-          'codeRevision',
-          'environmentRef',
-        ]),
+        without(
+          {
+            ...manifest('Plan', undefined, ['rollback plan: restore the previous revision']),
+            rollbackPlanRef: { id: ID, version: 1, hash: HASH },
+          },
+          ['codeRevision', 'environmentRef'],
+        ),
         manifest('Develop', 'Plan'),
-        manifest('Review', 'Develop', ['audit: per-item authorisation reviewed']),
+        {
+          ...manifest('Review', 'Develop', ['audit: per-item authorisation reviewed']),
+          auditRef: { id: ID2, version: 1, hash: HASH },
+        },
         manifest('Test', 'Review', ['audit: per-item verification result']),
-        manifest('Recovery', 'Test', ['drill: restore from backup in a clean root']),
+        {
+          ...manifest('Recovery', 'Test', ['drill: restore from backup in a clean root']),
+          recoveryDrillRef: { id: ID3, version: 1, hash: HASH },
+        },
         without(manifest('Settlement', 'Recovery'), ['codeRevision', 'environmentRef']),
       ],
     });
     expect(completeL3.ok).toBe(true);
+
+    // An incomplete reference (`id` without a `hash`) is not a binding either.
+    const incompleteRef = evaluateStageChain({
+      route: 'code',
+      level: 'L3',
+      requirement: { requirementId: ID, previousLevel: 'L3' },
+      manifests: [
+        without(
+          {
+            ...manifest('Plan'),
+            rollbackPlanRef: { id: '', version: 1, hash: '' },
+          },
+          ['codeRevision', 'environmentRef'],
+        ),
+        manifest('Develop', 'Plan'),
+        {
+          ...manifest('Review', 'Develop'),
+          auditRef: { id: ID2, version: 1, hash: '' },
+        },
+        manifest('Test', 'Review'),
+        {
+          ...manifest('Recovery', 'Test'),
+          recoveryDrillRef: { id: ID3, version: 1, hash: HASH },
+        },
+        without(manifest('Settlement', 'Recovery'), ['codeRevision', 'environmentRef']),
+      ],
+    });
+    expect(incompleteRef.ok).toBe(false);
   });
 
   it('accepts a document chain that binds no code revision or environment (AC-012, W6R1-04/W6R2-10)', () => {
@@ -989,6 +1053,23 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
     const unbound = findingCanBeVerified({ ...base, reviewRun, testRun });
     expect(unbound.ok).toBe(false);
     if (!unbound.ok) expect(unbound.code).toBe('GATE_NOT_READY');
+
+    // W6R3-03: a fully new, passed Review/Test pair is still refused when the
+    // fixing revision is one the Finding already invalidated — the closure cannot
+    // be anchored back onto the rejected tree.
+    const reanchored = findingCanBeVerified({
+      ...base,
+      reviewRun,
+      testRun,
+      fixingRevision,
+      currentWorkRevision: FIX_REV,
+      invalidatedRevisions: [FIX_REV],
+    });
+    expect(reanchored.ok).toBe(false);
+    if (!reanchored.ok) {
+      expect(reanchored.code).toBe('GATE_NOT_READY');
+      expect(reanchored.message).toContain('invalidated');
+    }
   });
 
   it('closes through evaluateFindingClosure and stops at the rework allowance (AC-017/AC-022)', () => {
@@ -1280,18 +1361,28 @@ describe('route-aware completion evidence (AC-007/AC-012/AC-019, W6R2-09)', () =
   });
 });
 
-describe('the shared write barrier (AC-020/AC-021, W6R2-07)', () => {
-  it('refuses writes on paused, cancelling and cancelled Work and nothing else', () => {
-    for (const status of ['paused', 'cancelling', 'cancelled'] as const) {
+describe('the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02)', () => {
+  it('admits writes only while the Work is running', () => {
+    // W6R3-02: the rule is a whitelist. The old test asserted the complement
+    // (only paused/cancelling/cancelled blocked), which left `completed`,
+    // `blocked`, `failed` and `queued` admitting writes and emitting
+    // `delivery.write_admitted` events.
+    expect(workWriteBarrier('running').blocked).toBe(false);
+    for (const status of [
+      'queued',
+      'paused',
+      'cancelling',
+      'cancelled',
+      'completed',
+      'blocked',
+      'failed',
+    ] as const) {
       const barrier = workWriteBarrier(status);
       expect(barrier.blocked).toBe(true);
       if (barrier.blocked) {
         expect(barrier.code).toBe('INVALID_STATE');
-        expect(barrier.message).toContain(status === 'paused' ? 'paused' : status);
+        expect(barrier.message).toContain(status);
       }
-    }
-    for (const status of ['queued', 'running', 'blocked', 'completed', 'failed'] as const) {
-      expect(workWriteBarrier(status).blocked).toBe(false);
     }
   });
 

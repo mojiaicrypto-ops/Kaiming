@@ -562,6 +562,9 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
     readonly dependsOn?: readonly string[];
     readonly evidence?: readonly string[];
     readonly candidateDiffRef?: Ref;
+    readonly rollbackPlanRef?: Ref;
+    readonly auditRef?: Ref;
+    readonly recoveryDrillRef?: Ref;
   }): StageManifest {
     const documentRoute = input.route === 'document';
     return {
@@ -579,6 +582,9 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
       ...(input.dependsOn === undefined ? {} : { dependsOn: [...input.dependsOn] }),
       ...(input.evidence === undefined ? {} : { evidence: [...input.evidence] }),
       ...(input.candidateDiffRef === undefined ? {} : { candidateDiffRef: input.candidateDiffRef }),
+      ...(input.rollbackPlanRef === undefined ? {} : { rollbackPlanRef: input.rollbackPlanRef }),
+      ...(input.auditRef === undefined ? {} : { auditRef: input.auditRef }),
+      ...(input.recoveryDrillRef === undefined ? {} : { recoveryDrillRef: input.recoveryDrillRef }),
     };
   }
 
@@ -1295,6 +1301,29 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
       kind: 'recovery',
       body: '# recovery drill: restore the backup into a scratch database and re-run the checks\n',
     });
+    // W6R3-06: the rollback plan and the per-item audit are bindable artifacts, not
+    // keywords in a description line.
+    const rollbackPlan = artifact({
+      runId: RUNS.l3Plan,
+      workId: IDS.l3Migration,
+      role: 'planning',
+      kind: 'plan',
+      body: '# rollback plan: revert the migration in reverse table order\n',
+    });
+    const auditReport = artifact({
+      runId: RUNS.l3Review,
+      workId: IDS.l3Migration,
+      role: 'review',
+      kind: 'review',
+      body: '# per-item audit: every migrated row accounted for by id range\n',
+    });
+    const rollbackRef: Ref = {
+      id: rollbackPlan.id,
+      version: 1,
+      hash: rollbackPlan.contentHash,
+    };
+    const auditRef: Ref = { id: auditReport.id, version: 1, hash: auditReport.contentHash };
+    const drillRef: Ref = { id: drill.id, version: 1, hash: drill.contentHash };
 
     const full = stageChain({
       route: 'code',
@@ -1304,6 +1333,7 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
           stage: 'Plan',
           workId: IDS.l3Migration,
           evidence: ['rollback plan: revert the migration in reverse table order'],
+          rollbackPlanRef: rollbackRef,
         }),
         stageView({ stage: 'Develop', workId: IDS.l3Migration, dependsOn: ['Plan'] }),
         stageView({
@@ -1311,6 +1341,7 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
           workId: IDS.l3Migration,
           dependsOn: ['Develop'],
           evidence: ['per-item audit: every migrated row accounted for by id range'],
+          auditRef,
         }),
         stageView({ stage: 'Test', workId: IDS.l3Migration, dependsOn: ['Review'] }),
         stageView({
@@ -1318,6 +1349,7 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
           workId: IDS.l3Migration,
           dependsOn: ['Test'],
           evidence: ['recovery drill evidence: restore into a scratch database'],
+          recoveryDrillRef: drillRef,
         }),
         stageView({ stage: 'Settlement', workId: IDS.l3Migration, dependsOn: ['Recovery'] }),
       ],
@@ -1338,6 +1370,7 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
           stage: 'Plan',
           workId: IDS.l3Migration,
           evidence: ['rollback plan: revert the migration'],
+          rollbackPlanRef: rollbackRef,
         }),
         stageView({ stage: 'Develop', workId: IDS.l3Migration, dependsOn: ['Plan'] }),
         stageView({
@@ -1345,6 +1378,7 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
           workId: IDS.l3Migration,
           dependsOn: ['Develop'],
           evidence: ['per-item audit'],
+          auditRef,
         }),
         stageView({ stage: 'Test', workId: IDS.l3Migration, dependsOn: ['Review'] }),
         stageView({
@@ -1352,6 +1386,7 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
           workId: IDS.l3Migration,
           dependsOn: ['Test'],
           evidence: ['recovery drill evidence'],
+          recoveryDrillRef: drillRef,
         }),
         stageView({ stage: 'Settlement', workId: IDS.l3Migration, dependsOn: ['Recovery'] }),
       ],

@@ -12,7 +12,13 @@ import {
   type ProjectStore,
 } from '@agentdev/storage';
 import { scanEvents } from '../src/events.js';
-import { ArtifactService, FindingService, StageGate, StoreSourceHashPort } from '../src/index.js';
+import {
+  ArtifactService,
+  FindingService,
+  PlanGateService,
+  StageGate,
+  StoreSourceHashPort,
+} from '../src/index.js';
 
 /**
  * Finding lifecycle, the completion gate and the pause/resume/cancel controls over
@@ -1601,9 +1607,23 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     const event = scanEvents(store, { names: ['delivery.work_completed'] })[0];
     expect(event?.data['evidenceKind']).toBe('review');
     expect(event?.data['completionManifestHash']).toBe(manifestRef.hash);
+    // W6R3-07: a Review completion exposes review-named fields and never writes
+    // Review evidence into Test-named fields (`testStatus`/`testRunId`/…).
+    expect(event?.data['reviewRunId']).toBe(REVIEW_RUN_ID);
+    expect(event?.data['reviewStatus']).toBe('passed');
+    expect(event?.data['reviewEvidenceRevision']).toBe(REVISION);
+    expect(event?.data['evidenceRunId']).toBe(REVIEW_RUN_ID);
+    const keys = Object.keys(event?.data ?? {});
+    expect(keys).not.toContain('testStatus');
+    expect(keys).not.toContain('testRunId');
+    expect(keys).not.toContain('testEvidenceRevision');
   });
 
   it('keeps the document route on its own rule: Review evidence, no code Test Run (AC-012, W6R2-09)', () => {
+    const work = store.works.find(WORK_ID);
+    if (work === undefined) throw new Error('unreachable');
+    // The route comes from the Work's persisted intent (W6R3-01).
+    store.works.update(WORK_ID, { intent: 'document' }, work.version);
     recordReviewArtifact(REVIEW_RUN_ID, REVISION);
     recordStageResult(REVIEW_RUN_ID, 'success');
     const manifestRef = freezeCompletionManifest(WORK_ID, REVISION);
@@ -1630,16 +1650,200 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     expect(done.evidenceKind).toBe('review');
   });
 
-  it('refuses an unrecognised route/level instead of guessing a completion rule (W6R2-09)', () => {
-    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
-    const result = service.completeWork({
+  it('derives the completion route from the Work intent and refuses a conflicting one (AC-019, W6R3-01)', () => {
+    recordReviewArtifact(REVIEW_RUN_ID, REVISION);
+    recordStageResult(REVIEW_RUN_ID, 'success');
+    const manifestRef = freezeCompletionManifest(WORK_ID, REVISION);
+
+    // WORK_ID is `intent='delivery'`. Declaring the document route used to let an
+    // L2/L3 code Work complete on Review evidence with zero Test Runs.
+    for (const level of ['L2', 'L3'] as const) {
+      const work = store.works.find(WORK_ID);
+      if (work === undefined) throw new Error('unreachable');
+      store.works.update(WORK_ID, { level }, work.version);
+      const bypass = service.completeWork({
+        workId: WORK_ID,
+        route: 'document',
+        reviewRunId: REVIEW_RUN_ID,
+        completionManifestRef: manifestRef,
+      });
+      expect(bypass.ok).toBe(false);
+      if (bypass.ok) throw new Error('unreachable');
+      expect(bypass.code).toBe('VALIDATION_ERROR');
+      expect(bypass.reasons.join(' ')).toContain('document');
+      expect(store.artifacts.count("work_id = ? AND kind = 'test'", [WORK_ID])).toBe(0);
+      expect(store.works.find(WORK_ID)?.status).toBe('running');
+    }
+
+    // The same Work on its own route still refuses without a Test Run, and the
+    // conflict check does not weaken that rule.
+    const code = service.completeWork({
+      workId: WORK_ID,
+      route: 'code',
+      reviewRunId: REVIEW_RUN_ID,
+    });
+    expect(code.ok).toBe(false);
+    if (code.ok) throw new Error('unreachable');
+    expect(code.reasons.join(' ')).toContain('Test Run');
+
+    // A genuinely document-intent Work completes on its Review evidence.
+    const work = store.works.find(WORK_ID);
+    if (work === undefined) throw new Error('unreachable');
+    store.works.update(WORK_ID, { intent: 'document', level: 'L2' }, work.version);
+    const document = service.completeWork({
       workId: WORK_ID,
       route: 'document',
-      testRunId: NEW_TEST_RUN_ID,
+      reviewRunId: REVIEW_RUN_ID,
+      completionManifestRef: manifestRef,
     });
-    // The document/L2 rule needs the Review, so the refusal is about evidence...
-    expect(result.ok).toBe(false);
-    // ...and the completion list, never about falling back to a Test.
-    if (!result.ok) expect(result.reasons.join(' ')).not.toContain('CheckResult');
+    expect(document.ok).toBe(true);
+    if (!document.ok) throw new Error('unreachable');
+    expect(document.evidenceKind).toBe('review');
+  });
+
+  it('refuses every write once the Work is completed or failed, with zero write events (AC-013/AC-020, W6R3-02)', () => {
+    const gates = new PlanGateService({
+      store,
+      artifacts,
+      blobs: new BlobStore({ root: dataDir }),
+    });
+    const port = new StoreSourceHashPort({ store });
+
+    // While the Work is running the barrier does not block: without an approved
+    // Plan the refusal is about the Plan, never about the Work state.
+    const running = gates.requestCodeWrite({
+      workId: WORK_ID,
+      revision: REVISION,
+      targets: [PATH],
+    });
+    expect(running.allowed).toBe(false);
+    if (!running.allowed) expect(running.code).toBe('GATE_NOT_READY');
+
+    // A real completion moves the Work to `completed`.
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
+    const done = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
+    expect(done.ok).toBe(true);
+    const admission = service.writeAdmission(PAUSE_RUN_ID);
+    expect(admission.admitted).toBe(false);
+    expect(admission.code).toBe('INVALID_STATE');
+
+    const before = port.snapshot(WORK_ID);
+    const completedWrite = gates.requestCodeWrite({
+      workId: WORK_ID,
+      revision: REVISION,
+      targets: [PATH],
+    });
+    expect(completedWrite.allowed).toBe(false);
+    if (!completedWrite.allowed) expect(completedWrite.code).toBe('INVALID_STATE');
+    // The completed Work admitted no write at all: no event, no new row.
+    expect(scanEvents(store, { names: ['delivery.write_admitted'] })).toHaveLength(0);
+    expect(port.snapshot(WORK_ID).digest).toBe(before.digest);
+
+    // A `failed` Work is refused by the same whitelist.
+    const current = store.works.find(WORK_ID);
+    if (current === undefined) throw new Error('unreachable');
+    store.works.update(WORK_ID, { status: 'failed' }, current.version);
+    const failedWrite = gates.requestCodeWrite({
+      workId: WORK_ID,
+      revision: REVISION,
+      targets: [PATH],
+    });
+    expect(failedWrite.allowed).toBe(false);
+    if (!failedWrite.allowed) expect(failedWrite.code).toBe('INVALID_STATE');
+    expect(scanEvents(store, { names: ['delivery.write_admitted'] })).toHaveLength(0);
+  });
+
+  it('refuses writes after a cancel stops at blocked(recovery) (AC-021, W6R3-02)', () => {
+    const gates = new PlanGateService({
+      store,
+      artifacts,
+      blobs: new BlobStore({ root: dataDir }),
+    });
+    const port = new StoreSourceHashPort({ store });
+
+    const cancel = service.cancelWork({
+      workId: WORK_ID,
+      reason: 'unknown side effects',
+      sideEffectsUnknown: true,
+    });
+    expect(cancel.ok).toBe(true);
+    if (!cancel.ok) throw new Error('unreachable');
+    expect(cancel.status).toBe('blocked');
+
+    const admission = service.writeAdmission(PAUSE_RUN_ID);
+    expect(admission.admitted).toBe(false);
+    expect(admission.code).toBe('INVALID_STATE');
+
+    const before = port.snapshot(WORK_ID);
+    const refused = gates.requestCodeWrite({
+      workId: WORK_ID,
+      revision: REVISION,
+      targets: [PATH],
+    });
+    expect(refused.allowed).toBe(false);
+    if (!refused.allowed) expect(refused.code).toBe('INVALID_STATE');
+    expect(scanEvents(store, { names: ['delivery.write_admitted'] })).toHaveLength(0);
+    expect(port.snapshot(WORK_ID).digest).toBe(before.digest);
+  });
+
+  it('refuses a fix that re-anchors to a revision a Finding invalidated (AC-017/AC-018, W6R3-03)', () => {
+    const PRE_FIX = 'e'.repeat(40);
+    // A Review artifact mislabelled with the pre-fix revision raises the Finding.
+    recordReviewArtifact(REVIEW_RUN_ID, PRE_FIX);
+    const findingId = submitIntegrationFinding();
+    const invalidatedArtifacts = store.artifacts.list({
+      where: "work_id = ? AND kind = 'review' AND validity != 'valid'",
+      params: [WORK_ID],
+    });
+    expect(invalidatedArtifacts.map((artifact) => artifact.sourceRevision)).toEqual([PRE_FIX]);
+
+    // The fixing Run re-reports the same invalidated revision. The Work revision
+    // differs, so the pre-W6R3-03 rule accepted it and advanced the Work onto the
+    // very tree the Finding had rejected.
+    recordFixArtifact(FIX_RUN_ID, PRE_FIX);
+    const addressed = service.markAddressed({
+      findingId,
+      actorRole: 'backend',
+      fixRunId: FIX_RUN_ID,
+    });
+    expect(addressed.ok).toBe(false);
+    if (addressed.ok) throw new Error('unreachable');
+    expect(addressed.code).toBe('GATE_NOT_READY');
+    expect(addressed.message).toContain('invalidated');
+    expect(store.findings.find(findingId)?.state).toBe('open');
+    expect(store.works.find(WORK_ID)?.baseRevision).toBe(REVISION);
+  });
+
+  it('keeps the frozen-manifest lookup on the real manifestId key space (W6R3-05)', () => {
+    const manifestHash = freezeVerificationManifest(
+      WORK_ID,
+      'Test',
+      FROZEN_MANIFEST_UUID,
+      REVISION,
+    );
+    expect(manifestHash).toMatch(/^[0-9a-f]{64}$/);
+    // `stage_result.manifest_id` is an `idRefSchema` (UUIDv7), so the snapshot
+    // digest cannot be a lookup key: the storage contract refuses it. The old
+    // documentation claimed both key spaces were reachable through this caller.
+    expect(() =>
+      recordStageResult(NEW_TEST_RUN_ID, 'success', {
+        manifestId: manifestHash,
+        checkStatus: 'passed',
+      }),
+    ).toThrow();
+
+    // The refusal names the declared `manifestId` key space and does not advertise
+    // a hash key space the only caller can never supply.
+    recordStageResult(NEW_TEST_RUN_ID, 'success', {
+      manifestId: MISSING_MANIFEST_UUID,
+      checkStatus: 'passed',
+    });
+    const refused = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
+    expect(refused.ok).toBe(false);
+    if (refused.ok) throw new Error('unreachable');
+    expect(refused.code).toBe('GATE_NOT_READY');
+    const reasons = refused.reasons.join(' ');
+    expect(reasons).toContain('no VerificationManifest declares that manifestId');
+    expect(reasons).not.toContain('or hash');
   });
 });

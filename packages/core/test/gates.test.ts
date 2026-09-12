@@ -776,14 +776,25 @@ describe('Plan gate persistence (AC-009, AC-013, AC-014)', () => {
     expect(store.budgets.find(budget.id)?.tokensReserved).toBe(100);
   });
 
-  it('refuses a code write on a paused or cancelled Work (AC-020/AC-021, W6R2-07)', () => {
+  it('admits a code write only while the Work is running (AC-020/AC-021, W6R2-07/W6R3-02)', () => {
     const planRef = approve();
     expect(
       gates.requestCodeWrite({ workId: WORK_ID, revision: REVISION, targets: [PATH], planRef })
         .allowed,
     ).toBe(true);
 
-    for (const status of ['paused', 'cancelling', 'cancelled'] as const) {
+    // W6R3-02: the barrier is a whitelist. `completed`/`blocked`/`failed`/`queued`
+    // used to be admitted, so a completion record's code tree could be modified
+    // afterwards and a `delivery.write_admitted` event emitted for it.
+    for (const status of [
+      'queued',
+      'paused',
+      'cancelling',
+      'cancelled',
+      'completed',
+      'blocked',
+      'failed',
+    ] as const) {
       const work = store.works.find(WORK_ID);
       if (work === undefined) throw new Error('unreachable');
       store.works.update(WORK_ID, { status }, work.version);
@@ -798,9 +809,11 @@ describe('Plan gate persistence (AC-009, AC-013, AC-014)', () => {
       if (refused.allowed) throw new Error('unreachable');
       // The same fail-closed code the Run-level pause barrier reports.
       expect(refused.code).toBe('INVALID_STATE');
-      expect(refused.gaps.join(' ')).toContain(status === 'paused' ? 'paused' : status);
+      expect(refused.gaps.join(' ')).toContain(status);
       expect(port.snapshot(WORK_ID).digest).toBe(before.digest);
     }
+    // Only the one admission at the top wrote an event.
+    expect(scanEvents(store, { names: ['delivery.write_admitted'] })).toHaveLength(1);
 
     // Back at `running`, the same approved Plan is admitted again.
     const running = store.works.find(WORK_ID);
@@ -810,5 +823,66 @@ describe('Plan gate persistence (AC-009, AC-013, AC-014)', () => {
       gates.requestCodeWrite({ workId: WORK_ID, revision: REVISION, targets: [PATH], planRef })
         .allowed,
     ).toBe(true);
+  });
+
+  it('fails closed on an unbound Work and supersedes its previous Plan on an upgrade (W6R3-04)', () => {
+    const planRef = approve();
+    const work = store.works.find(WORK_ID);
+    if (work === undefined) throw new Error('unreachable');
+    // The AC-089 shape: a Work that froze no base revision. The write gate used to
+    // skip the revision comparison entirely, so the caller's `revision` was free.
+    store.works.update(WORK_ID, { baseRevision: undefined }, work.version);
+
+    const unboundWrite = gates.requestCodeWrite({
+      workId: WORK_ID,
+      revision: REVISION,
+      targets: [PATH],
+      planRef,
+    });
+    expect(unboundWrite.allowed).toBe(false);
+    if (!unboundWrite.allowed) expect(unboundWrite.code).toBe('GATE_NOT_READY');
+    expect(scanEvents(store, { names: ['delivery.write_admitted'] })).toHaveLength(0);
+
+    // The raised level's replacement Plan is approved, then the upgrade applies.
+    const replacement = approve({
+      plan: draft({
+        goal: 'complete delivery coordination',
+        tasks: [task(), { ...task('018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e41'), goal: 'second task' }],
+      }),
+      approval: {
+        authorizationRef: AUTHORIZATION_ID,
+        runId: RUN_ID,
+        productChanged: false,
+        at: nextTime(),
+      },
+    });
+    const upgrade = gates.upgradeLevel({
+      workId: WORK_ID,
+      diff: {
+        filesChanged: 4,
+        diffLines: 24,
+        signals: { presentationOnly: true, goalSubstitutionExplicit: true },
+      },
+      logicChange: false,
+      newPlanRef: replacement,
+    });
+    expect(upgrade.upgraded).toBe(true);
+    if (!upgrade.upgraded) throw new Error('unreachable');
+    expect(upgrade.previousLevel).toBe('L1');
+    expect(upgrade.level).toBe('L2');
+    // The search spans every approved record of the Work, so the Plan approved for
+    // the unbound Work is the one the upgrade supersedes.
+    expect(upgrade.stalePlanRefs).toEqual([planRef.hash]);
+    expect(store.artifacts.find(planRef.id)?.validity).toBe('invalid');
+
+    // The superseded Plan cannot authorise a write on the unbound Work.
+    const staleWrite = gates.requestCodeWrite({
+      workId: WORK_ID,
+      revision: REVISION,
+      targets: [PATH],
+      planRef,
+    });
+    expect(staleWrite.allowed).toBe(false);
+    if (!staleWrite.allowed) expect(staleWrite.code).toBe('GATE_NOT_READY');
   });
 });

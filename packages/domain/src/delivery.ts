@@ -320,6 +320,14 @@ export interface LevelUpgradeInput {
    * supersedes.
    */
   readonly workRevision: string;
+  /**
+   * Revisions a Finding/Decision invalidated for this Work (W6R3-03).
+   *
+   * The shared evidence rule never reuses an invalidated revision; feeding the
+   * set here keeps a Plan approved for the rejected tree from being treated as
+   * the authority a level re-evaluation supersedes.
+   */
+  readonly invalidatedRevisions?: readonly string[];
 }
 
 /**
@@ -452,7 +460,12 @@ function planEvidenceOf(input: LevelUpgradeInput): EvidenceValidityDecision | un
       revision: plan.revision,
       ...(plan.approvedAt === undefined ? {} : { createdAt: plan.approvedAt }),
     },
-    lineage: { workRevision: input.workRevision },
+    lineage: {
+      workRevision: input.workRevision,
+      ...(input.invalidatedRevisions === undefined
+        ? {}
+        : { invalidatedRevisions: input.invalidatedRevisions }),
+    },
   });
 }
 
@@ -574,7 +587,19 @@ export interface StageManifest {
    * the chain by naming the word "diff".
    */
   readonly candidateDiffRef?: Ref;
-  /** Stage-specific evidence: rollback plan, per-item audit, recovery drill. */
+  /**
+   * The rollback plan artifact an L3 Plan binds (AC-011).
+   *
+   * L3 evidence is a concrete artifact reference, not a keyword: the free-text
+   * `evidence` entries are descriptions only, so a line saying "there is no
+   * rollback plan but the word rollback appears" cannot satisfy AC-011 (W6R3-06).
+   */
+  readonly rollbackPlanRef?: Ref;
+  /** The per-item audit report an L3 Review/Test binds (AC-011, W6R3-06). */
+  readonly auditRef?: Ref;
+  /** The recovery drill record the L3 Recovery stage binds (AC-011, W6R3-06). */
+  readonly recoveryDrillRef?: Ref;
+  /** Stage-specific evidence: descriptions of the rollback plan, audit, drill. */
   readonly evidence?: readonly string[];
 }
 
@@ -756,22 +781,33 @@ function l3EvidenceGaps(
   const gaps: StageChainGap[] = [];
   const byStage = indexManifests(input.manifests ?? []);
   const plan = byStage.get('Plan');
-  const evidence = (stage: string): readonly string[] => byStage.get(stage)?.evidence ?? [];
-  const has = (values: readonly string[], needle: string): boolean =>
-    values.some((value) => value.toLowerCase().includes(needle));
-  if (!has(evidence('Plan'), 'rollback')) {
-    gaps.push({ code: 'MISSING_CONTEXT', stage: 'Plan', message: 'L3 needs a rollback plan' });
+  const review = byStage.get('Review');
+  const test = byStage.get('Test');
+  const recovery = byStage.get('Recovery');
+  // W6R3-06: each of the three L3 evidence items is a real artifact binding
+  // (`id` + `hash`), not a substring of a free-text description. The keyword
+  // match it replaces was satisfied by self-negating prose ("no rollback plan
+  // but the word rollback appears"), which is not AC-011 evidence.
+  if (!bindsRef(plan?.rollbackPlanRef)) {
+    gaps.push({
+      code: 'MISSING_CONTEXT',
+      stage: 'Plan',
+      message: 'L3 needs a rollback plan ref (a bindable artifact, not a description)',
+    });
   }
-  const audit = [...evidence('Review'), ...evidence('Test')];
-  if (!has(audit, 'audit')) {
-    gaps.push({ code: 'MISSING_CONTEXT', stage: 'Review', message: 'L3 needs a per-item audit' });
+  if (!bindsRef(review?.auditRef) && !bindsRef(test?.auditRef)) {
+    gaps.push({
+      code: 'MISSING_CONTEXT',
+      stage: 'Review',
+      message: 'L3 needs a per-item audit ref (a bindable artifact, not a description)',
+    });
   }
-  const drill = [...evidence('Recovery'), ...(plan?.evidence ?? [])];
-  if (!has(drill, 'drill')) {
+  const drillRef = recovery?.recoveryDrillRef ?? plan?.recoveryDrillRef;
+  if (!bindsRef(drillRef)) {
     gaps.push({
       code: 'MISSING_CONTEXT',
       stage: 'Recovery',
-      message: 'L3 needs a recovery drill evidence item',
+      message: 'L3 needs a recovery drill evidence ref (a bindable artifact, not a description)',
     });
   }
   if (requirement?.existingRequirementId !== undefined) {
@@ -784,6 +820,11 @@ function l3EvidenceGaps(
     }
   }
   return gaps;
+}
+
+/** Whether a structured evidence reference is complete (`id` and `hash` set). */
+function bindsRef(ref: Ref | undefined): boolean {
+  return ref !== undefined && ref.id !== '' && ref.hash !== '';
 }
 
 function worstCode(gaps: readonly StageChainGap[]): StageChainGapCode {
@@ -1062,31 +1103,29 @@ export type WorkWriteBarrier =
   | { readonly blocked: false };
 
 /**
- * AC-020/AC-021: the Work statuses at which no write may be admitted.
+ * AC-020/AC-021: the Work statuses at which a write may be admitted.
  *
  * One rule, two gates (W6R2-07): the Run-level pause barrier
  * (`FindingService.writeAdmission`) and the Plan gate
- * (`PlanGateService.requestCodeWrite`) both consult this, so a paused, cancelling
- * or cancelled Work cannot be written through the gate that forgot the status
+ * (`PlanGateService.requestCodeWrite`) both consult this, so a Work state that
+ * forbids writing cannot be written through the gate that forgot the status
  * check. `workflow.md` §7 "暂停停止新准入"; AC-021 keeps a cancelled Work from
  * continuing to write.
+ *
+ * The rule is a **whitelist** (W6R3-02): only a `running` Work admits a write.
+ * Listing the forbidden states instead left the complement open — a `completed`,
+ * `blocked`, `failed` or `queued` Work still admitted a write and emitted
+ * `delivery.write_admitted`, so the code tree a completion record bound could be
+ * modified afterwards. Every non-running status now fails closed with the same
+ * `INVALID_STATE` code.
  */
 export function workWriteBarrier(status: WorkStatus): WorkWriteBarrier {
-  if (status === 'paused') {
-    return {
-      blocked: true,
-      code: 'INVALID_STATE',
-      message: 'the Work is paused; no write is admitted until it resumes',
-    };
-  }
-  if (status === 'cancelling' || status === 'cancelled') {
-    return {
-      blocked: true,
-      code: 'INVALID_STATE',
-      message: `the Work is ${status}; no write is admitted`,
-    };
-  }
-  return { blocked: false };
+  if (status === 'running') return { blocked: false };
+  return {
+    blocked: true,
+    code: 'INVALID_STATE',
+    message: `the Work is ${status}; only a running Work admits writes`,
+  };
 }
 
 /**
@@ -1611,6 +1650,14 @@ export interface FindingVerificationInput {
    * Finding rejected (W6R2-03). Absent is refused rather than skipped.
    */
   readonly currentWorkRevision?: string;
+  /**
+   * Revisions a Finding already invalidated for this Work (W6R3-03).
+   *
+   * A fix cannot anchor the closure to a revision that is in this set: that is
+   * the very tree the Finding judged "旧结果无效", whatever the fixing Run
+   * self-reports.
+   */
+  readonly invalidatedRevisions?: readonly string[];
 }
 
 export type FindingVerificationFailureCode =
@@ -1660,6 +1707,9 @@ export function findingCanBeVerified(input: FindingVerificationInput): FindingVe
         ...(input.currentWorkRevision === undefined
           ? {}
           : { currentWorkRevision: input.currentWorkRevision }),
+        ...(input.invalidatedRevisions === undefined
+          ? {}
+          : { invalidatedRevisions: input.invalidatedRevisions }),
       })
     ) {
       return {
@@ -1699,11 +1749,24 @@ export function findingCanBeVerified(input: FindingVerificationInput): FindingVe
       message: `the fixing Run froze revision ${fixingRevision}, not the Work's current revision ${currentWorkRevision}; a fix must produce a new revision`,
     };
   }
+  // W6R3-03: a revision a Finding already invalidated is never an anchor for the
+  // closure, even when it happens to equal the Work's current revision (the
+  // `markAddressed` path advanced the Work to it).
+  if ((input.invalidatedRevisions ?? []).includes(fixingRevision)) {
+    return {
+      ok: false,
+      code: 'GATE_NOT_READY',
+      message: `the fixing revision ${fixingRevision} is a revision a Finding invalidated; the closure cannot be anchored to it`,
+    };
+  }
   if (
     !runIsIndependent(input.reviewRun, {
       stage: 'review',
       fixingRevision,
       currentWorkRevision,
+      ...(input.invalidatedRevisions === undefined
+        ? {}
+        : { invalidatedRevisions: input.invalidatedRevisions }),
     })
   ) {
     return {
@@ -1720,6 +1783,9 @@ export function findingCanBeVerified(input: FindingVerificationInput): FindingVe
       fixingRevision,
       currentWorkRevision,
       requireConclusion: true,
+      ...(input.invalidatedRevisions === undefined
+        ? {}
+        : { invalidatedRevisions: input.invalidatedRevisions }),
     })
   ) {
     return {
@@ -1750,6 +1816,7 @@ function runIsIndependent(
     readonly fixingRevision: string | undefined;
     readonly currentWorkRevision?: string;
     readonly requireConclusion?: boolean;
+    readonly invalidatedRevisions?: readonly string[];
   },
 ): boolean {
   if (run === undefined) return false;
@@ -1774,6 +1841,9 @@ function runIsIndependent(
     lineage: {
       ...(workRevision === undefined ? {} : { workRevision }),
       ...(options.fixingRevision === undefined ? {} : { fixingRevision: options.fixingRevision }),
+      ...(options.invalidatedRevisions === undefined
+        ? {}
+        : { invalidatedRevisions: options.invalidatedRevisions }),
     },
   });
   return binding.valid;
@@ -1855,6 +1925,8 @@ export interface FindingClosureInput {
   readonly fixingRevision?: string;
   /** The Work's current (post-fix) revision; see `FindingVerificationInput`. */
   readonly currentWorkRevision?: string;
+  /** Revisions a Finding already invalidated for this Work (W6R3-03). */
+  readonly invalidatedRevisions?: readonly string[];
   /** The number of repair rounds already used against `repairLimit`. */
   readonly repairUsed?: number;
   readonly repairLimit?: number;
@@ -1904,6 +1976,9 @@ export function evaluateFindingClosure(input: FindingClosureInput): FindingClosu
     ...(input.currentWorkRevision === undefined
       ? {}
       : { currentWorkRevision: input.currentWorkRevision }),
+    ...(input.invalidatedRevisions === undefined
+      ? {}
+      : { invalidatedRevisions: input.invalidatedRevisions }),
   });
   if (!verification.ok) {
     return {

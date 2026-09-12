@@ -40,6 +40,7 @@ import {
   type Decision,
   type Finding,
   type FindingSeverity,
+  type Intent,
   type JsonObject,
   type Ref,
   type RequirementState,
@@ -85,8 +86,62 @@ export const FINDING_RECORD_VERSION = 1;
 /** The immutable table the binding/verification evidence is frozen in. */
 export const FINDING_EVIDENCE_SNAPSHOT_TYPE = 'verification';
 
-/** The immutable table the pause/cancel barriers are frozen in. */
+/** The pause/cancel barriers are frozen in the immutable table below. */
 export const WORK_BARRIER_SNAPSHOT_TYPE = 'checkpoint';
+
+/** Payload kind of the record naming the revisions a Finding invalidated (W6R3-03). */
+export const FINDING_INVALIDATION_RECORD_KIND = 'finding_invalidated_evidence';
+
+/**
+ * The delivery route a Work's persisted `intent` defines (W6R3-01).
+ *
+ * The route is a durable property of the Work, not a per-call argument: a caller
+ * that could name the route could pick the weaker evidence rule ("document" needs
+ * no Test Run) for an `intent='delivery'` Work and complete an L2/L3 code Work
+ * with Review evidence only. `orchestrator` already routes by `intent`, so the
+ * completion gate derives the same route here and only accepts a caller route
+ * that agrees with it. `assist`/`artifact` are not delivery intents and have no
+ * completion route at all (fail closed).
+ */
+export function deliveryRouteOfIntent(intent: Intent): DeliveryRoute | undefined {
+  if (intent === 'delivery') return 'code';
+  if (intent === 'document') return 'document';
+  if (intent === 'operation') return 'operation';
+  return undefined;
+}
+
+/**
+ * The revisions a Finding's invalidation took out of service for a Work (W6R3-03).
+ *
+ * `submitFinding` marks the Work's valid Review/Test artifacts `invalid` and
+ * freezes the frozen `sourceRevision` of each one in a
+ * `finding_invalidated_evidence` record. Reading that record back is what gives
+ * `EvidenceLineage.invalidatedRevisions` a producer: the revision the Finding
+ * rejected is a persisted fact, not whatever the fixing Run later asserts, so
+ * completion, Finding closure and level re-evaluation all refuse to anchor to it.
+ */
+export function invalidatedEvidenceRevisions(store: ProjectStore, workId: string): string[] {
+  const rows = store.db
+    .prepare('SELECT payload FROM snapshot WHERE type = ? ORDER BY rowid ASC')
+    .all(FINDING_EVIDENCE_SNAPSHOT_TYPE) as { payload: string }[];
+  const revisions = new Set<string>();
+  for (const row of rows) {
+    let payload: JsonObject;
+    try {
+      payload = JSON.parse(row.payload) as JsonObject;
+    } catch {
+      continue;
+    }
+    if (payload['kind'] !== FINDING_INVALIDATION_RECORD_KIND) continue;
+    if (payload['workId'] !== workId) continue;
+    const listed = payload['revisions'];
+    if (!Array.isArray(listed)) continue;
+    for (const revision of listed) {
+      if (typeof revision === 'string' && revision !== '') revisions.add(revision);
+    }
+  }
+  return [...revisions];
+}
 
 /**
  * Roles that may move a Finding to `addressed`.
@@ -261,11 +316,14 @@ export interface RiskDispositionInput {
 export interface CompleteWorkInput {
   readonly workId: string;
   /**
-   * The delivery route the Work follows (`workflow.md` §3); `code` by default.
+   * The delivery route the caller believes the Work follows (`workflow.md` §3).
    *
-   * The route/level decides which executed result completes the Work (W6R2-09):
-   * code L2/L3 complete on a Test Run, while the L1 code lane and the document
-   * lane have no Test stage and complete on the route's own Review evidence.
+   * W6R3-01: the route is **not** selected here. The gate derives it from the
+   * Work's persisted `intent` (`delivery` → code, `document` → document,
+   * `operation` → operation), and a value that conflicts with that derivation is a
+   * `VALIDATION_ERROR`. The parameter exists only so a caller that already knows
+   * the route can be cross-checked against the durable fact; omitting it is
+   * equivalent to agreeing with the Work.
    */
   readonly route?: DeliveryRoute;
   /**
@@ -595,10 +653,24 @@ export class FindingService {
     const routing = evaluateFindingRouting(this.candidateOf(row));
     // A Review Finding returns to development automatically: the Review/Test
     // evidence it invalidates can never verify the fix (AC-017).
-    const invalidatedEvidenceRefs =
+    const invalidated =
       routing.transition === 'return_to_development'
         ? this.invalidateVerificationEvidence(work.id, row.id)
-        : [];
+        : { ids: [] as string[], revisions: [] as string[] };
+    const invalidatedEvidenceRefs = invalidated.ids;
+    // W6R3-03: freeze the revision(s) the Finding just invalidated, so the shared
+    // evidence rule has a producer for `lineage.invalidatedRevisions` and no later
+    // closure can be anchored back onto the rejected tree.
+    if (invalidated.revisions.length > 0) {
+      this.appendSnapshot(FINDING_EVIDENCE_SNAPSHOT_TYPE, {
+        kind: FINDING_INVALIDATION_RECORD_KIND,
+        schemaVersion: FINDING_RECORD_VERSION,
+        workId: work.id,
+        findingId: row.id,
+        revisions: [...invalidated.revisions],
+        recordedAt: at,
+      });
+    }
     const returnedTaskIds =
       routing.transition === 'return_to_development' ? this.reopenTasks(work.id, row) : [];
 
@@ -696,6 +768,18 @@ export class FindingService {
       return refusal(
         'GATE_NOT_READY',
         `the fixing Run ${fixRun.id} froze revision ${fixingRevision}, the very revision the Finding invalidated; a fix must advance the Work revision`,
+      );
+    }
+    // W6R3-03: the invariant is not "different from `work.baseRevision`" but
+    // "different from *any* revision a Finding invalidated". A review artifact can
+    // have been mislabelled with an older revision, and the fix Run can then
+    // re-report that same invalidated revision while the Work revision differs;
+    // anchoring there would put the whole closure chain back on the rejected tree.
+    const invalidatedRevisions = invalidatedEvidenceRevisions(this.store, work.id);
+    if (invalidatedRevisions.includes(fixingRevision)) {
+      return refusal(
+        'GATE_NOT_READY',
+        `the fixing Run ${fixRun.id} froze revision ${fixingRevision}, a revision a Finding already invalidated; a fix must produce a new revision`,
       );
     }
     // Advancing `work.baseRevision` is what makes the old evidence unusable for
@@ -835,6 +919,9 @@ export class FindingService {
       };
     }
 
+    // W6R3-03: the revisions a Finding invalidated are a persisted fact, so a
+    // closure can never be anchored to the rejected tree.
+    const invalidatedRevisions = invalidatedEvidenceRevisions(this.store, finding.workId);
     const outcome = evaluateFindingClosure({
       finding: this.candidateOf(finding),
       actorRole: input.actorRole,
@@ -843,6 +930,7 @@ export class FindingService {
       // `markAddressed` advanced to the revision the fix froze. A fix that self-
       // reports the invalidated pre-fix revision is rejected by the domain rule.
       ...(work.baseRevision === undefined ? {} : { currentWorkRevision: work.baseRevision }),
+      ...(invalidatedRevisions.length === 0 ? {} : { invalidatedRevisions }),
       reviewRun: this.verificationRunOf(reviewRow, 'review', finding, fixRun, fixingRevision),
       ...(testRow === undefined
         ? {}
@@ -988,7 +1076,32 @@ export class FindingService {
     // and from its frozen evidence, never from the caller. A missing Run, missing
     // evidence, an invalidated artifact/stage result, an unbound Work revision or a
     // foreign revision all refuse before anything is decided.
-    const route: DeliveryRoute = input.route ?? 'code';
+    //
+    // W6R3-01: the route itself is derived from the Work's **persisted** `intent`,
+    // not chosen by the caller. Letting the caller name the route let an
+    // `intent='delivery'` L2/L3 Work declare `route='document'`, complete on Review
+    // evidence only and skip the Test Run AC-019/`workflow.md` §7 require.
+    const route = deliveryRouteOfIntent(work.intent);
+    if (route === undefined) {
+      return {
+        ok: false,
+        code: 'VALIDATION_ERROR',
+        message: `Work ${work.id} has intent ${work.intent}, which defines no delivery route`,
+        reasons: [`intent ${work.intent} has no completion route`],
+        needsRiskDisposition: [],
+      };
+    }
+    if (input.route !== undefined && input.route !== route) {
+      return {
+        ok: false,
+        code: 'VALIDATION_ERROR',
+        message: `Work ${work.id} persists intent ${work.intent}, which completes on the ${route} route; the declared ${input.route} route conflicts with it`,
+        reasons: [
+          `declared route ${input.route} conflicts with the Work's persisted ${route} route`,
+        ],
+        needsRiskDisposition: [],
+      };
+    }
     const kind = completionEvidenceKindFor(route, work.level);
     if (kind === undefined) {
       return {
@@ -1164,24 +1277,40 @@ export class FindingService {
       };
     }
     const updated = this.store.works.update(work.id, { status: 'completed' }, work.version);
+    const evidenceRunId = evidence.test.testRunId;
+    // W6R3-07: the event fields follow `evidenceKind`. Writing Review evidence into
+    // `testStatus`/`testRunId` made an audit read a Review completion as a passed
+    // Test; the review branch exposes review-named fields instead.
+    const eventData: JsonObject = {
+      workId: updated.id,
+      route,
+      evidenceKind: evidence.test.kind,
+      evidenceRunId,
+      ...(evidence.test.kind === 'test'
+        ? {
+            testStatus: testResult.status,
+            testRunId: evidenceRunId,
+            testEvidenceRevision: evidence.test.revision,
+            testEnvironmentRef: evidence.test.environmentRef,
+          }
+        : {
+            reviewStatus: 'passed',
+            reviewRunId: evidenceRunId,
+            reviewEvidenceRevision: evidence.test.revision,
+            ...(evidence.test.environmentRef === ''
+              ? {}
+              : { reviewEnvironmentRef: evidence.test.environmentRef }),
+          }),
+      completionManifestHash,
+      completionManifestFinalRevision: completionFinalRevision,
+      riskDecisionIds: [...new Set(riskDecisionIds)],
+      completedAt: input.at ?? this.store.now(),
+    };
     this.store.events.append({
       name: 'delivery.work_completed',
       entityId: updated.id,
       entityVersion: updated.version,
-      data: {
-        workId: updated.id,
-        route,
-        evidenceKind: evidence.test.kind,
-        testStatus: testResult.status,
-        testRunId: evidence.test.testRunId,
-        evidenceRunId: evidence.test.testRunId,
-        testEvidenceRevision: evidence.test.revision,
-        testEnvironmentRef: evidence.test.environmentRef,
-        completionManifestHash,
-        completionManifestFinalRevision: completionFinalRevision,
-        riskDecisionIds: [...new Set(riskDecisionIds)],
-        completedAt: input.at ?? this.store.now(),
-      },
+      data: eventData,
     });
     return {
       ok: true,
@@ -2009,17 +2138,22 @@ export class FindingService {
         message:
           manifestId === undefined || manifestId === ''
             ? `Run ${run.id} binds no frozen revision; the completion cannot be bound to a tree`
-            : `Run ${run.id} names frozen manifest ${manifestId}, but no VerificationManifest with that id or hash is frozen and the Run produced no artifact; the completion cannot be bound to a tree`,
+            : `Run ${run.id} names frozen manifest ${manifestId}, but no VerificationManifest declares that manifestId and the Run produced no artifact; the completion cannot be bound to a tree`,
       };
     }
     // The single evidence rule (W6R2-01/03/04): validity, revision, lineage.
     const fix = this.latestFixRecord(work.id);
+    // W6R3-03: the revisions a Finding invalidated for this Work are fed into the
+    // shared rule, so completion cannot rest on the tree a Finding rejected even
+    // when the evidence names it again.
+    const invalidatedRevisions = invalidatedEvidenceRevisions(this.store, work.id);
     const validity: EvidenceValidityDecision = evaluateEvidenceValidity({
       evidence: frozen.evidence,
       lineage: {
         // `work.baseRevision` is the binding; a Work without one is refused rather
         // than completed by an unbound revision (W6R2-04, fail closed).
         ...(work.baseRevision === undefined ? {} : { workRevision: work.baseRevision }),
+        ...(invalidatedRevisions.length === 0 ? {} : { invalidatedRevisions }),
         ...(fix === undefined ? {} : { fixingRevision: fix.baseRevision }),
         ...(fix?.fixEvidenceAt === undefined ? {} : { producedAfter: fix.fixEvidenceAt }),
       },
@@ -2072,24 +2206,23 @@ export class FindingService {
   /**
    * Reads a frozen `VerificationManifest` by the stage result's manifest reference.
    *
-   * ## Why this is a scan, not a keyed read (W6R2-05)
+   * ## The real key space is the payload-declared `manifestId` (W6R2-05/W6R3-05)
    *
    * The manifest is frozen as `snapshot(type=verification, kind=verification_manifest)`
    * in the immutable, content-addressed table. A `stage_result.manifest_id` is a
-   * UUIDv7 `id` (`data.md` §3), while `snapshot.hash` is a 64-character digest, so
-   * looking the id up in the hash column can never match: the old code did exactly
-   * that and the branch was silently unreachable. The lookup below therefore
-   * accepts both identities a frozen manifest can carry — the digest of its own
-   * payload (what a Core writer that freezes the payload directly returns) and the
-   * `manifestId` the payload declares — so the branch is reachable in both key
-   * spaces. When neither matches, the caller fails closed with a precise message
-   * (see `completionEvidence`) instead of silently preferring an artifact.
+   * UUIDv7 `id` (`data.md` §3, enforced by the contracts), while `snapshot.hash` is
+   * a 64-character digest, so the two key spaces cannot intersect on the only
+   * caller path. The lookup below therefore matches the `manifestId` the payload
+   * declares — the identity `stage_result.manifest_id` actually carries — and does
+   * **not** pretend a 64-hex digest is an id. A stage result that names a digest is
+   * refused like any other unresolved manifest (see `completionEvidence`), because
+   * there is no writer that addresses a frozen manifest by hash through this path.
    */
   private frozenManifestOf(manifestId: string | undefined): VerificationManifest | undefined {
     if (manifestId === undefined || manifestId === '') return undefined;
     const rows = this.store.db
-      .prepare("SELECT hash, payload FROM snapshot WHERE type = 'verification' ORDER BY rowid ASC")
-      .all() as { hash: string; payload: string }[];
+      .prepare("SELECT payload FROM snapshot WHERE type = 'verification' ORDER BY rowid ASC")
+      .all() as { payload: string }[];
     for (const row of rows) {
       let payload: JsonObject;
       try {
@@ -2098,8 +2231,7 @@ export class FindingService {
         continue;
       }
       if (payload['kind'] !== 'verification_manifest') continue;
-      const declared = payload['manifestId'];
-      if (row.hash !== manifestId && declared !== manifestId) continue;
+      if (payload['manifestId'] !== manifestId) continue;
       const manifest = payload['manifest'] as VerificationManifest | undefined;
       if (manifest !== undefined) return manifest;
     }
@@ -2181,22 +2313,35 @@ export class FindingService {
     return found;
   }
 
-  /** Marks every valid Review/Test artifact of a Work invalid. */
-  private invalidateVerificationEvidence(workId: string, findingId: string): string[] {
+  /**
+   * Marks every valid Review/Test artifact of a Work invalid.
+   *
+   * Returns both the invalidated artifact ids (the caller's evidence refs) and the
+   * distinct frozen revisions they belonged to. The revisions are what a later fix
+   * must not re-anchor to (W6R3-03).
+   */
+  private invalidateVerificationEvidence(
+    workId: string,
+    findingId: string,
+  ): { readonly ids: string[]; readonly revisions: string[] } {
     const rows = this.store.artifacts.list({
       where: "work_id = ? AND kind IN ('review','test') AND validity = 'valid'",
       params: [workId],
       orderBy: 'created_at ASC',
     });
     const invalidated: string[] = [];
+    const revisions = new Set<string>();
     for (const artifact of rows) {
       this.artifacts.invalidate(
         artifact.id,
         `Finding ${findingId} returned the Work to development; this result is superseded`,
       );
       invalidated.push(artifact.id);
+      if (artifact.sourceRevision !== undefined && artifact.sourceRevision !== '') {
+        revisions.add(artifact.sourceRevision);
+      }
     }
-    return invalidated;
+    return { ids: invalidated, revisions: [...revisions] };
   }
 
   /** Re-opens the targeted task, or the whole verification stage for a task-less target. */

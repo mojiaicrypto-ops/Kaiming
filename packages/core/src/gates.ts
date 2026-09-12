@@ -52,6 +52,7 @@ import { BlobStore, sha256, withTransaction, type ProjectStore } from '@agentdev
 import { ArtifactService } from './artifacts.js';
 import { canonicalJson } from './dispatcher.js';
 import { ProtocolError, type ProtocolErrorCode } from './errors.js';
+import { invalidatedEvidenceRevisions } from './findings.js';
 
 /** The snapshot type the approval/staleness records are frozen under. */
 export const PLAN_GATE_SNAPSHOT_TYPE = 'verification';
@@ -760,7 +761,21 @@ export class PlanGateService {
         stalePlan: false,
       };
     }
-    if (work.baseRevision !== undefined && input.revision !== work.baseRevision) {
+    if (work.baseRevision === undefined || work.baseRevision === '') {
+      // W6R3-04: an unbound Work has no revision to bind a write to. Skipping the
+      // comparison (the old behaviour) let the caller's `revision` be any value at
+      // all, so the approved Plan and the tree it was approved for were unrelated.
+      return {
+        allowed: false,
+        code: 'GATE_NOT_READY',
+        message: `Work ${work.id} has no base revision; a write cannot be bound to a tree`,
+        gaps: ['the Work froze no base revision'],
+        sourceHash: contentBefore,
+        sourceHashAfter: contentAfter(),
+        stalePlan: false,
+      };
+    }
+    if (input.revision !== work.baseRevision) {
       return {
         allowed: false,
         code: 'VALIDATION_ERROR',
@@ -962,15 +977,25 @@ export class PlanGateService {
   private upgradeLevelTx(input: UpgradeLevelInput): UpgradeLevelResult {
     const work = this.store.works.find(input.workId);
     if (work === undefined) fail('NOT_FOUND', `Work ${input.workId} does not exist`);
-    const revision = work.baseRevision ?? 'working-tree';
     /**
      * The Plan the Work is upgrading *away from*.
      *
      * The replacement Plan is approved before the upgrade is applied (the raised
      * level needs its own Plan), so the newest record is the replacement; the Plan
-     * that must go stale is the newest approved one that is not it.
+     * that must go stale is the newest approved one that is not it. W6R3-04: the
+     * search spans **every** approved record of the Work, not only the current
+     * revision — an unbound Work (`baseRevision` absent, the AC-089 shape) has no
+     * revision to look under, and the old filter then found nothing and left the
+     * superseded Plan valid and write-authorising.
      */
-    const previous = this.findPreviousApprovedPlan(work.id, revision, input.newPlanRef.hash);
+    const previous = this.findPreviousApprovedPlan(work.id, input.newPlanRef.hash);
+    // The lineage revision of the Plan being superseded. A bound Work re-evaluates
+    // against its own revision; an unbound Work has none, so the superseded Plan's
+    // approved revision is what the upgrade is leaving (`requestCodeWrite` refuses
+    // that Work regardless, see the write gate).
+    const revision = work.baseRevision ?? previous?.revision ?? 'working-tree';
+    // W6R3-03: revisions a Finding invalidated are fed to the shared evidence rule.
+    const invalidatedRevisions = invalidatedEvidenceRevisions(this.store, work.id);
     const replacement = this.findApprovedPlanByRef(work.id, input.newPlanRef);
     if (replacement === undefined) {
       return {
@@ -991,8 +1016,11 @@ export class PlanGateService {
       ...(input.riskFlags === undefined ? {} : { riskFlags: input.riskFlags }),
       // The level re-evaluation consults the shared evidence rule: only a Plan that
       // is still valid and bound to the Work's current revision is superseded
-      // (W6R2-06 lineage, `evaluateEvidenceValidity`).
+      // (W6R2-06 lineage, `evaluateEvidenceValidity`). W6R3-03: revisions a Finding
+      // invalidated are fed in too, so a Plan for the rejected tree is not treated
+      // as the authority this upgrade supersedes.
       workRevision: revision,
+      ...(invalidatedRevisions.length === 0 ? {} : { invalidatedRevisions }),
       ...(previous === undefined
         ? {}
         : {
@@ -1357,19 +1385,21 @@ export class PlanGateService {
   }
 
   /**
-   * The newest approved Plan for a revision that is not the replacement.
+   * The newest approved Plan of a Work that is not the replacement.
    *
    * This is the Plan the level upgrade supersedes; `undefined` means the Work had
-   * no prior approved Plan, so there is nothing to mark stale.
+   * no prior approved Plan, so there is nothing to mark stale. W6R3-04: the search
+   * is deliberately **not** narrowed to one revision — the previous authority is a
+   * fact about the Work, and a Work without a `baseRevision` still has the Plan
+   * that was just superseded.
    */
   private findPreviousApprovedPlan(
     workId: string,
-    revision: string,
     replacementHash: string,
   ): ApprovedPlanRecord | undefined {
     const match = [...this.approvedRecords(workId)]
       .reverse()
-      .find((record) => record.revision === revision && record.planRef.hash !== replacementHash);
+      .find((record) => record.planRef.hash !== replacementHash);
     return match === undefined ? undefined : this.toApprovedPlanRecord(match);
   }
 
