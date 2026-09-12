@@ -399,6 +399,23 @@ function contextSourceRefKey(source: ContextSourceRef): string {
 const STRICT_IDENTITY_KINDS: readonly SourceKind[] = ['git', 'policy', 'role_contract'];
 
 /**
+ * The revision the snapshot freezes for one resolved source (`AC-030`, W5R3-01).
+ *
+ * The selection is the authority over identity: `ContextSourceRef.version` is the
+ * declared revision/version of the source, so a `git`/`policy`/`role_contract`
+ * source always freezes that declaration — never a revision the resolver invented.
+ * The other kinds keep the resolver's answer, which `gatherSource` has already
+ * proven equal to the declaration whenever it was present.
+ */
+function frozenRevision(
+  source: ContextSourceRef,
+  resolved: ResolvedSourceContent,
+): string | undefined {
+  if (STRICT_IDENTITY_KINDS.includes(source.kind)) return source.version;
+  return resolved.revision;
+}
+
+/**
  * Widens a selection entry into the Context vocabulary with its Project binding.
  *
  * A selection entry belongs to this Project by construction; a handle that names
@@ -707,14 +724,27 @@ function gatherSource(args: {
   }
   const resolved: ResolvedSourceContent = resolution;
   // The resolver may not rewrite the declaration either: a resolution that claims
-  // another path or version would freeze a different source than Chief selected.
-  // For `git`/`policy`/`role_contract` the declared read target is the declared
-  // `path`, or the declared `id` when no path was given (`data.md` §1: `path?`), so
-  // a resolver may not substitute another path for a declared id either (W5R2-01).
+  // another path, revision or version would freeze a different source than Chief
+  // selected. For `git`/`policy`/`role_contract` the declared read target is the
+  // declared `path`, or the declared `id` when no path was given (`data.md` §1:
+  // `path?`), so a resolver may not substitute another path for a declared id
+  // either (W5R2-01).
+  //
+  // `version` is the declared revision/version of the source, so a resolver that
+  // reports another `revision` is contradicting the selection: freezing it would
+  // leave `ResolvedSource.revision` and `ref.version` disagreeing about the same
+  // bytes (W5R3-01).
   if (resolved.version !== undefined && resolved.version !== source.version) {
     return fatal(
       'VALIDATION_ERROR',
       `resolver 返回的 version ${resolved.version} 与 selection 声明的 ${source.version} 不一致（AC-030）`,
+      refFor(source),
+    );
+  }
+  if (resolved.revision !== undefined && resolved.revision !== source.version) {
+    return fatal(
+      'VALIDATION_ERROR',
+      `resolver 返回的 revision ${resolved.revision} 与 selection 声明的 ${source.version} 不一致（AC-030）`,
       refFor(source),
     );
   }
@@ -825,6 +855,7 @@ function gatherSource(args: {
       refFor(source, resolved),
     );
   }
+  const revision = frozenRevision(source, resolved);
   const gathered: GatheredSource = {
     ref: refFor(source, resolved),
     source,
@@ -835,7 +866,7 @@ function gatherSource(args: {
     hash: resolved.hash,
     tokens,
     ...(resolved.path === undefined ? {} : { path: resolved.path }),
-    ...(resolved.revision === undefined ? {} : { revision: resolved.revision }),
+    ...(revision === undefined ? {} : { revision }),
     ...(resolved.version === undefined ? {} : { version: resolved.version }),
   };
   return { ok: true, gathered };

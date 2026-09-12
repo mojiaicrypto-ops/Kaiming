@@ -195,7 +195,7 @@
 
 #### W5R2-13 预算缺口只登记一次
 - 改动：`cold-start.ts` 删除 tier-5 `role_bodies` 未被入选时的第二次 `excluded.push`（`admit` 已按同一 ref 记录一次）。
-- 回归：`context-cold-start.test.ts` `records each budget-refused source exactly once (W5R2-13)`（`excluded` 中 budget 项的 `kind:id` 无重复）。
+- 回归：`context-cold-start.test.ts` `records each budget-refused source exactly once (W5R2-13)`（单 Feature 场景下 `excluded` 中 budget 项的 `kind:id` 无重复；多 Feature + `constrained_by` 场景当时仍可重复，T9/W5R3-03 已把该断言变为普遍成立）。
 
 #### W5R2-14 重复覆盖层键必须拒绝
 - 改动：`builder.ts` 构建 `fullSources` 时检测同 `kind:id` 重复，命中 ⇒ `VALIDATION_ERROR`（不再 last-wins），不调 resolver、不落快照。
@@ -210,3 +210,45 @@
 13. **Transcript 路径网仍是命名式（W5R2-12）**：`DENIED_SOURCE_PATTERNS` 只覆盖已文档化的命名族；任意改名（如 `docs/my-dev-chat.md`）仍可读，除非被 `kind=transcript` 或 corpus allow-list 截住。要彻底闭合需要内容头/来源元数据识别，属后续语义/DLP 能力，本轮不实现。
 14. **`extraTokens` 与扩展上限的最终上界**：本轮只按 `agents.md` §6 的固定 4096–2000000 校验（含增量后的 ceiling），因此 T7 残余 10「`extraTokens` 可为任意大小」的说法自本轮起不再成立；`min(Profile.contextLimit, 模型 contextWindow − maxOutput − 4096)` 的动态钳制仍需 Profile 输入（WP-08/WP-09）。
 15. **冷启动 `domainSummary` 的计费口径**：`summary` 由已入选的选择条目派生（未入选的 checkpoint 位置不再出现在其中），但其文本本身不单独计费；如需按 token 精确计账，属冷启动预算模型细化。
+
+## T9 独立 Review Round 3 修复（W5R3-01…03）与验证
+
+- Review 依据：`.agentdev/work/WP-05/review.md` 第 3 轮（冻结点 `909f95b`；R3.6 Findings W5R3-01/02/03）。
+- 修改范围：仅 `packages/core/src/context/**` 与 `packages/core/test/context-*.test.ts`（另加本 T9 记录）；未触碰其他包。
+- 旧行为反证：先写回归用例、后改实现；**6 条**新用例在未修复代码上全部失败（仅跑三个 context 文件：`Test Files 3 failed (3)`、`Tests 6 failed | 84 passed (90)`）——W5R3-01 两条（伪造 revision 被冻结、resolver 省略 revision 时冻结值缺失）、W5R3-02 三条（`save` / 注入时钟 / `rotateSession.at` 各一条）、W5R3-03 一条（同一 ref 在 `excluded` 出现两次）。
+- 修复后 context 用例：ACL **50**、builder **47**、checkpoint **19**、cold-start **24**、ledger **36**、requirements **37**，合计 **213**（T8 为 207，新增 6 条回归用例）。
+
+### P2
+
+#### W5R3-01 selection 是 revision 的权威：resolver 返回另一 revision ⇒ 拒绝；声明值写入 ResolvedSource
+- 改动：`builder.ts` 的 `gatherSource` 在原有 `version` 校验之后增加 `resolved.revision !== undefined && resolved.revision !== source.version ⇒ VALIDATION_ERROR`（位于 fetch、token 计数与冻结之前，与既有 `version`/`path` 校验同级）；新增 `frozenRevision(source, resolved)`：`git`/`policy`/`role_contract` 一律采用声明的 `source.version`（resolver 省略 `revision` 时也写入声明值），其余类别保留已证明等于声明的 resolver 值。`ResolvedSource.revision` 由此不可能与 `ref.version` 互相矛盾；`gatherResolved`（门禁内联角色契约，`revision` 为 policy revision）不走该分支，语义不变。
+- 回归：`context-builder.test.ts` 新 describe `the selection is the authority over the frozen revision (W5R3-01)`：`refuses a resolver that advances the revision while returning the declared bytes`（resolver 返回声明字节与 hash、同时声称 `revision-2` ⇒ `VALIDATION_ERROR`、无 fetch、无快照；旧行为 `ok:true` 且快照自相矛盾）、对照 `freezes the declared revision when the resolver reports none`（resolver 省略 `revision` 时冻结值仍为声明的 `revision-1`；旧行为 `undefined`）。
+
+### P3
+
+#### W5R3-02 `isTime` 必须要求真实历法时刻
+- 改动：`checkpoint.ts` 的 `isTime` 在 `TIME_PATTERN` 之后追加 `Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value`；一处修正即覆盖 `save`（`createdAt`/`updatedAt` 及 decision/approval/tool 时间）、`safeClock`（注入时钟）与 `rotateSession.at` 全部调用点。字形合法但月 13/日 45/时 99、`2026-02-30`、`9999-99-99`、`0000-00-00` 一律不再是有效 `Time`：显式入参 ⇒ `VALIDATION_ERROR`，注入时钟 ⇒ 封闭 `INTERNAL_ERROR`，且不落库、不绑定新 session。
+- 回归：`context-checkpoint.test.ts` 新 describe `a stamp must name a real instant (W5R3-02)`：`refuses an impossible createdAt/updatedAt instead of persisting it`（四例 `VALIDATION_ERROR`，随后 `load` 仍 `NOT_FOUND`）、`closes an injected clock that returns an impossible instant`（`INTERNAL_ERROR`、无落库）、`refuses an impossible rotation stamp and keeps the previous one`（四例 `VALIDATION_ERROR`，session 与 `updatedAt` 保持 `T0`；合法 `T1` 仍被记录）。旧行为把四例全部接受并持久化。
+
+#### W5R3-03 budget 排除记录按 ref 身份（`kind:id`）幂等并合并原因
+- 改动：`cold-start.ts` 的 `admit` 新增 `budgetGapIndex`（`kind:id` → `excluded`/`unknowns` 首次写入位置）。同一 ref 被多个 tier 拒绝时不再二次 push，而是把后一条原因以 `；` 合并进首条（保留首条 ref 实例），并同步更新对应的 `unknowns` 行；`excluded` 条目仍逐条冻结，`unknowns`/`excluded` 的语义（每次拒绝都报告具体缺口）不变。
+- 回归：`context-cold-start.test.ts` 新增 `duplicatedRefusalProjection()`（订单取消 Feature 的 `constrained_by` 关系体与其自身正文各 20 000 字，均超 4096 启动预算，取消文档因此在 tier-4 `related_constraints` 与 tier-5 `role_bodies` 各被拒一次）与用例 `records a shared budget-refused ref once and merges its reasons (W5R3-03)`：每个 budget 项的 `kind:id` 唯一、取消文档只有一条且原因同时含 `relation:F-1a2b3c4d->F-9e8d7c6b` 与 `git:features/F-1a2b3c4d/README.md`、`unknowns` 同 ref 仅一行且文本一致（失败信息会打印实际 `budget refusals` 键序列；旧行为该 ref 出现 2 次）。
+
+### 记录订正
+
+- T8 第 198 行原述「`excluded` 中 budget 项的 `kind:id` 无重复」在多 Feature + `constrained_by` 场景下不成立（review R3.6 记录核对）；W5R3-03 的修复已把该断言变为普遍成立，并在 T8 原文处补注单 Feature 的历史口径与 T9 指向。
+
+### 验证
+
+- `node_modules/.bin/prettier --write`：`builder.ts`/`checkpoint.ts`/`cold-start.ts` 与三个测试文件共 6 个文件全部 **unchanged**（无二次改动）。
+- `pnpm typecheck`：**EXIT 0**（无输出错误）。
+- `pnpm lint`：**EXIT 0**（`All matched files use Prettier code style!`）。
+- `pnpm test:unit`：**32 文件 / 644 用例** 全过 **EXIT 0**（T8 为 638，+6）。
+- `pnpm build`：**10 workspace 全部 Done**（contracts/domain/storage/workspace/knowledge/core/pi-runtime 与 apps/cli/daemon/runner）**EXIT 0**。
+- 独立复跑第 3 轮 Review 探针（只消费重建后的 `packages/core/dist`，不 import 产品测试）：`/tmp/wp05r3/closure3.mjs` 151/151、`hunt3.mjs` 27/27、`ac3d.mjs` 72/72、`ac.patched.mjs` 90/90、`closure.patched.mjs` 218/218、`/tmp/wp05r2/fail4.mjs` 34/34，合计 **592/592** 通过，`gitvariant.mjs` 仍复现既定的 path 拒绝；即 R3 记录的 6 个失败断言（W5R3-01/02/03）全部转为通过（closure3 由 147/151 变 151/151，hunt3 由 26/27 变 27/27）。
+
+### 本轮残余（承接而非静默）
+
+16. **W5R3-01 的下游影响仍未量化**：`ResolvedSource.revision` 在工作包/账本落库路径上的实际消费属 WP-08/WP-09 接线后才可验证；本轮只保证冻结层内部一致。
+17. **W5R3-02 只做历法校验**：`isTime` 现在拒绝不存在的历法时刻，但不做时区归一化（非 `Z` 偏移在正则阶段已被拒），也不接受闰秒 `:60`（符合 `data.md` §1 的毫秒 UTC 口径）。
+18. **W5R3-03 的合并文本形态**：同 ref 的多条原因以 `；` 连接并保留首条 ref 实例；未评估真实两轮交付后的 `excluded` 规模分布（承接 R3.9 第 6 项）。

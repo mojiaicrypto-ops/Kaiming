@@ -897,6 +897,56 @@ describe('buildContext — the selection is the authority over its overlay (AC-0
   });
 });
 
+describe('buildContext — the selection is the authority over the frozen revision (W5R3-01)', () => {
+  it('refuses a resolver that advances the revision while returning the declared bytes', () => {
+    // The resolver answers with the declared bytes and hash, but claims it read
+    // `revision-2`. Freezing that would leave `ref.version` and `revision` saying
+    // different things about the same frozen body, so the resolution is refused
+    // before any content is fetched or frozen.
+    const writer = memoryWriter();
+    const base = assistHarness({ writer });
+    const result = build(base, {
+      resolver: {
+        resolve(input) {
+          const answer = base.input.resolver.resolve(input);
+          if (answer.ok && input.ref.id === AGENTS.ref.id) {
+            return { ...answer, revision: 'revision-2' };
+          }
+          return answer;
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('VALIDATION_ERROR');
+    expect(result.errors.some((error) => error.message.includes('revision-2'))).toBe(true);
+    expect(base.fetches).toHaveLength(0);
+    expect(writer.requests).toHaveLength(0);
+  });
+
+  it('freezes the declared revision when the resolver reports none (W5R3-01 control)', () => {
+    const base = assistHarness({});
+    const result = buildOk(base, {
+      resolver: {
+        resolve(input) {
+          const answer = base.input.resolver.resolve(input);
+          if (answer.ok && input.ref.id === WORK_GOAL.ref.id) {
+            const { revision: _revision, ...rest } = answer;
+            return rest;
+          }
+          return answer;
+        },
+      },
+    });
+    const goal = result.snapshot.resolvedSources.find((source) => source.id === WORK_GOAL.ref.id);
+    // A strict-identity source freezes the declared revision even when the
+    // resolver's answer omitted it: `ResolvedSource.revision` can never disagree
+    // with the selection (`AC-030`, `AC-093`).
+    expect(goal?.revision).toBe(WORK_GOAL.ref.version);
+    expect(goal?.ref.version).toBe(WORK_GOAL.ref.version);
+  });
+});
+
 describe('buildContext — the overlay may not introduce identity (W5R2-01, W5R2-14)', () => {
   const A_BODY = '# body of a\n\nDeclared path src/a.ts.\n';
   const B_BODY = '# BODY-OF-B\n\nThe overlay pointed the read here.\n';

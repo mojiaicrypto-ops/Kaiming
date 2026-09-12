@@ -263,9 +263,19 @@ function isHash(value: unknown): value is Hash {
   return typeof value === 'string' && HASH_PATTERN.test(value);
 }
 
-/** `true` when the string is UTC ISO8601 with millisecond precision. */
+/**
+ * `true` when the string is a UTC ISO8601 instant with millisecond precision.
+ *
+ * The glyph pattern alone only checks the shape: `2026-13-45T99:99:99.999Z` has
+ * every documented character yet names no instant, and `2026-02-30T10:00:00.000Z`
+ * names a day February does not have. A real instant is required as well, which the
+ * `Date.parse` + `toISOString()` round trip proves: month 13, day 45, hour 99, an
+ * absent calendar day and leap seconds all fail it (`data.md` §1, W5R3-02).
+ */
 function isTime(value: unknown): value is Time {
-  return typeof value === 'string' && TIME_PATTERN.test(value);
+  if (typeof value !== 'string' || !TIME_PATTERN.test(value)) return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
 }
 
 /**

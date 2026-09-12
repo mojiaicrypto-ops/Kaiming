@@ -566,6 +566,83 @@ describe('checkpoint: closed clock and validated rotation stamp (W5R2-08, W5R2-1
   });
 });
 
+describe('checkpoint: a stamp must name a real instant (W5R3-02)', () => {
+  // Shape-valid but impossible instants: month 13/day 45/hour 99, an absent
+  // calendar day, an all-nines stamp and the nonexistent year 0. The glyph pattern
+  // alone accepts every one of them.
+  const IMPOSSIBLE: readonly Time[] = [
+    '2026-13-45T99:99:99.999Z',
+    '2026-02-30T10:00:00.000Z',
+    '9999-99-99T99:99:99.999Z',
+    '0000-00-00T00:00:00.000Z',
+  ];
+
+  it('refuses an impossible createdAt/updatedAt instead of persisting it', () => {
+    for (const at of IMPOSSIBLE) {
+      const store = createCheckpointStore({ now: () => T0 });
+      expectOk(store.registerRun(run()));
+      expectRefusal(
+        store.save({ runId: RUN_ID, checkpoint: draft({ createdAt: at, updatedAt: at }) }),
+        'VALIDATION_ERROR',
+      );
+      // Validate first, mutate last: the refused stamp was not stored.
+      expectRefusal(
+        store.load({ runId: RUN_ID, role: 'backend', runScope: { projectId: PROJECT_ID } }),
+        'NOT_FOUND',
+      );
+    }
+  });
+
+  it('closes an injected clock that returns an impossible instant', () => {
+    const store = createCheckpointStore({ now: () => '2026-02-30T10:00:00.000Z' });
+    expectOk(store.registerRun(run()));
+    const saved = store.save({ runId: RUN_ID, checkpoint: draft() });
+    expect(saved.ok).toBe(false);
+    if (saved.ok) return;
+    expect(saved.errors[0]?.code).toBe('INTERNAL_ERROR');
+    expectRefusal(
+      store.load({ runId: RUN_ID, role: 'backend', runScope: { projectId: PROJECT_ID } }),
+      'NOT_FOUND',
+    );
+  });
+
+  it('refuses an impossible rotation stamp and keeps the previous one', () => {
+    const store = createCheckpointStore({ now: () => T0 });
+    expectOk(store.registerRun(run()));
+    expectOk(store.save({ runId: RUN_ID, checkpoint: draft() }));
+    for (const at of IMPOSSIBLE) {
+      expectRefusal(
+        store.rotateSession({
+          runId: RUN_ID,
+          fromSessionRef: SESSION_A,
+          toSessionRef: SESSION_B,
+          role: 'backend',
+          runScope: { projectId: PROJECT_ID, workId: WORK_ID },
+          at,
+        }),
+        'VALIDATION_ERROR',
+      );
+    }
+    expect(store.runOf(RUN_ID)?.sessionRef).toBe(SESSION_A);
+    const still = expectOk(
+      store.load({ runId: RUN_ID, role: 'backend', runScope: { projectId: PROJECT_ID } }),
+    );
+    expect(still.checkpoint.updatedAt).toBe(T0);
+    // A real instant is still accepted and recorded.
+    const rotated = expectOk(
+      store.rotateSession({
+        runId: RUN_ID,
+        fromSessionRef: SESSION_A,
+        toSessionRef: SESSION_B,
+        role: 'backend',
+        runScope: { projectId: PROJECT_ID, workId: WORK_ID },
+        at: T1,
+      }),
+    );
+    expect(rotated.checkpoint.updatedAt).toBe(T1);
+  });
+});
+
 describe('checkpoint: compaction (AC-035)', () => {
   it('reduces recent message refs but leaves manifest/decisions/approval unchanged', () => {
     const store = createCheckpointStore({ now: () => T0 });

@@ -951,6 +951,15 @@ export function assembleColdStart(
   const sources: ResolvedSource[] = [];
   const excluded: ColdStartExclusion[] = [];
   const unknowns: string[] = [];
+  /**
+   * Where each budget-refused ref identity (`kind:id`) was first recorded.
+   *
+   * The same source can be offered by more than one tier — `related_constraints`
+   * (tier 4) and `role_bodies` (tier 5) share the owner Feature's document ref — so
+   * the gap report de-duplicates by ref identity and merges the reasons: a dropped
+   * source is counted once however many tiers refused it (`AC-036`, W5R3-03).
+   */
+  const budgetGapIndex = new Map<string, { readonly excluded: number; readonly unknown: number }>();
   let consumed = 0;
 
   /**
@@ -973,8 +982,22 @@ export function assembleColdStart(
     if (consumed + tokens > limits.startupTokens) {
       const shortfall = consumed + tokens - limits.startupTokens;
       const reason = `预算不足：选择 ${entry.key} 需要 ${tokens} tokens，缺口 ${shortfall} tokens（AC-036）`;
-      excluded.push({ ref: entry.source.ref, reason, kind: 'budget' });
-      unknowns.push(reason);
+      const key = `${entry.source.ref.kind}:${entry.source.ref.id}`;
+      const first = budgetGapIndex.get(key);
+      if (first === undefined) {
+        budgetGapIndex.set(key, { excluded: excluded.length, unknown: unknowns.length });
+        excluded.push({ ref: entry.source.ref, reason, kind: 'budget' });
+        unknowns.push(reason);
+      } else {
+        // One ref identity, one record: merge the second refusal's reason into the
+        // first instead of counting the same dropped source twice.
+        const recorded = excluded[first.excluded];
+        if (recorded !== undefined) {
+          const merged = `${recorded.reason}；${reason}`;
+          excluded[first.excluded] = { ...recorded, reason: merged };
+          unknowns[first.unknown] = merged;
+        }
+      }
       return { admitted: false, tokens, shortfall };
     }
     consumed += tokens;

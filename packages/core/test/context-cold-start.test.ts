@@ -331,6 +331,49 @@ function heavyConstraintProjection(): ColdStartProjection {
   return result.projection;
 }
 
+/**
+ * A Feature whose `constrained_by` relation body *and* own body both overflow the
+ * minimum startup budget.
+ *
+ * The same owner document is offered at tier 4 (`related_constraints`, the relation
+ * body) and tier 5 (`role_bodies`, the Feature body), so both refusals share one
+ * `kind:id` ref identity; the gap report must still name that source once (W5R3-03).
+ */
+function duplicatedRefusalProjection(): ColdStartProjection {
+  const oversized = '重'.repeat(20_000);
+  const result = buildProjection({
+    documents: [
+      featureDocument({
+        featureId: CANCEL_ID,
+        name: '订单取消',
+        module: 'orders',
+        purpose: '允许用户取消未付款订单，已付款订单走退款流程。',
+        behaviour: `${CANCEL_BEHAVIOUR}\n${oversized}`,
+        entries: ['src/orders/cancel.ts', 'tests/orders/cancel.test.ts'],
+        relations: [
+          `| ${HEAVY_ID} | constrained_by | 约束理由${oversized} | features/${HEAVY_ID}/README.md |`,
+        ],
+        gaps: CANCEL_GAP,
+        investigationScope: '订单取消路由、状态转换和测试',
+      }),
+      paymentDocument(),
+      heavyDocument(),
+      ...UNRELATED,
+    ],
+    revision: REVISION,
+    codeTreeRevision: REVISION,
+    knownIds: [DECISION_ID],
+  });
+  if (!result.published) {
+    throw new Error(
+      `the duplicated-refusal sample must publish: ${result.diagnostics
+        .map((entry) => `${entry.documentPath}: ${entry.message}`)
+        .join('; ')}`,
+    );
+  }
+  return result.projection;
+}
+
 const TRANSCRIPTS = [
   {
     id: `transcript:${TRANSCRIPT_PATH}`,
@@ -631,6 +674,38 @@ describe('cold start: the answer recalls the fixed sample (AC-037)', () => {
     // The tier-5 refusal used to be pushed a second time, so the same dropped source
     // appeared twice in `excluded`/usage reporting.
     expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('records a shared budget-refused ref once and merges its reasons (W5R3-03)', () => {
+    const assembled = expectOk(
+      assembleColdStart({
+        projection: duplicatedRefusalProjection(),
+        query: '订单取消时如何处理支付约束？',
+        limits: { startupTokens: 4_096 },
+      }),
+    );
+    const budgetEntries = assembled.package.context.excluded.filter(
+      (entry) => entry.kind === 'budget',
+    );
+    const keys = budgetEntries.map((entry) => `${entry.ref.kind}:${entry.ref.id}`);
+    // The cancel Feature's owner document is refused at tier 4 (its `constrained_by`
+    // relation body) and again at tier 5 (its own body): one ref identity, one entry.
+    expect(keys, `budget refusals: ${JSON.stringify(keys)}`).toEqual([...new Set(keys)]);
+    const ownerKey = `git:features/${CANCEL_ID}/README.md`;
+    const ownerRows = budgetEntries.filter(
+      (entry) => `${entry.ref.kind}:${entry.ref.id}` === ownerKey,
+    );
+    expect(ownerRows).toHaveLength(1);
+    // Both refusals stay reported: the reasons are merged, never dropped.
+    const reason = ownerRows[0]?.reason ?? '';
+    expect(reason).toContain(`relation:${CANCEL_ID}->${HEAVY_ID}`);
+    expect(reason).toContain(ownerKey);
+    // `unknowns` keeps one line per refused ref identity, carrying the same text.
+    const ownerUnknowns = assembled.package.context.unknowns.filter((line) =>
+      line.includes(ownerKey),
+    );
+    expect(ownerUnknowns).toHaveLength(1);
+    expect(ownerUnknowns[0]).toContain(`relation:${CANCEL_ID}->${HEAVY_ID}`);
   });
 
   it('charges the fixed seed against the startup budget and fails closed at zero (W5R1-07)', () => {
