@@ -298,3 +298,13 @@
 | `pnpm test:integration` | **15 文件 / 157 用例全部通过**（与 T8 相同；真实 Docker 用例实际执行，无 skip） |
 | `pnpm build` | 10 workspace 全部 Done |
 
+
+## T10 独立 Test（PASS）与残余登记
+
+- 第四轮聚焦 Review 判 **PASS**（0×P0、0×P1）：W7R3-01/02（P2）与 W7R3-03/04/05（P3）共 5/5 独立复现为关闭；新增一条非阻断 **W7R4-01 [P3]**。
+- 独立 Test 判 **PASS**：AC-048/049/050/051/053/080 全部接受；自建 12 组探针 72 通过 / 0 失败 / 4 观察；四个必需失败测试独立复现；六条契约命令退出 0（unit 44 文件/916、integration 15 文件/157 含真实容器、build 10 workspace、docs:check ok）。
+- 本轮登记残余（供结算与后续工作包）：
+  1. **W7R4-01 [P3]**：工具体永不 settle（或进程在 await 窗口中断）时，`once` Grant 保持已认领、`tool_operation` 停在 `prepared`，同 `toolOperationId` 重试得 `RECOVERY_REQUIRED`，且无公开的 resume/超时回滚入口。方向 fail-closed（不重复执行、不伪造 finished），协调入口建议随 WP-08 恢复路径补齐。
+  2. **T-01 [P3]**：只读角色 + 路径型 mutating 操作 + 空 `targets` 会通过角色门禁（`ADMITTED`），但内置执行器对该操作返回 `INVALID_STATE`，且 `ToolContext` 仍受报告根与只读 `run` 桩约束，故不构成写通道；后续可在能力分类里对「mutating 且无路径」一律拒绝。
+  3. **T-03/T-04 [P3，可核验性]**：T5/T7/T9 记录的「突变-还原」实验与 T8 的历史逐文件计数无法仅凭当前树核验（Review/Test 不得改源码）；当前树计数与 T9 声明一致（broker 55、grants 39）。后续记录只写可由仓库直接核验的证据。
+  4. **既有限制（按记录接受）**：根内硬链接可读根外 inode（W7R1-08，无 AC 覆盖）；注入 fetcher 收到 pin 但 Broker 无法强制其兑现（T8 残余 1）；容器网络代理 `networkProxy` 未配置；`loadTrustedExtensions` 尚未接入 `apps/runner`（属 WP-08）；持久化 Secret 后端属安装范围；Linux `/proc` 端口归属分支未在本机（macOS）执行。
