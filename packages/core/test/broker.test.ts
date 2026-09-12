@@ -1,0 +1,867 @@
+/**
+ * WP-07 T3 — the tool Broker, the file/network boundaries and the isolated test
+ * environment (AC-048, AC-050).
+ *
+ * The suite drives the real `Broker` against a real SQLite `ProjectStore` and real
+ * `GrantStore` rows, and a real temporary workspace on disk, so every claim is
+ * about persisted state and real paths rather than a mock:
+ *
+ * - **Admission (AC-048, AC-080):** a valid Grant runs the tool and writes the
+ *   `tool_operation` audit row (operation, input hash, Grant reference, finished
+ *   state); an out-of-scope target/operation, an expired Grant, a wrong role and a
+ *   sibling Run refuse with the documented code, execute nothing and are recorded
+ *   as `tool.refused`.
+ * - **No Docker (required failure test):** container mode without a reachable
+ *   daemon is refused with the observed reason and never falls back to the host.
+ * - **File boundary (required failure test):** a symlink pointing outside the
+ *   workspace, a `..` escape and an absolute escape are refused in **both** modes
+ *   with no read and no write.
+ * - **Host-mode gates (AC-050):** a Review Run gains no write access to source in
+ *   host mode, and the run database stays unreadable to it.
+ * - **Network policy:** private/loopback/link-local/metadata targets are refused
+ *   by default and pass only when exactly authorized; the container plan is
+ *   hardened and has no network unless the Grant covers it.
+ * - **Test environment (required failure test):** its own DB file and port, never
+ *   the reserved development values, and a cleanup that fails is reported as
+ *   `RECOVERY_REQUIRED` instead of being swallowed.
+ *
+ * The real-process and real-HTTP-server scenarios live in
+ * `broker.integration.test.ts`.
+ */
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { Scope } from '@agentdev/contracts';
+import { ProjectStore as Store, projectIdFromRoot, type ProjectStore } from '@agentdev/storage';
+import {
+  Broker,
+  GrantStore,
+  NetworkPolicy,
+  TestEnvironmentManager,
+  TOOL_EVENTS,
+  defaultTestEnvironmentPorts,
+  hashToolInput,
+  isPrivateAddress,
+  planContainerRun,
+  resolveWithinRoots,
+  type BrokerOptions,
+  type GrantIssueInput,
+  type ProcessResult,
+  type ProcessRunner,
+  type TestEnvironment,
+  type TestEnvironmentPorts,
+  type ToolInvocation,
+  type ToolOutcome,
+} from '../src/index.js';
+import { scanEvents } from '../src/events.js';
+
+const WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d5e00';
+const RUN_A = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d5e10';
+const RUN_B = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d5e11';
+const RUN_REVIEW = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d5e12';
+const ATTEMPT_A = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d5e50';
+const ATTEMPT_B = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d5e51';
+const ATTEMPT_REVIEW = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d5e52';
+const DECISION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d5e30';
+const TASK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d5e40';
+const REVIEW_TASK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d5e41';
+const REVISION = 'c'.repeat(40);
+const HASH = 'a'.repeat(64);
+const A = 'src/a.ts';
+const B = 'src/b.ts';
+const LINK = 'link/secret.txt';
+const DEV_DB = 'dev.sqlite';
+
+const SCOPE: Scope = {
+  readPaths: [A, B, LINK, DEV_DB],
+  writePaths: [A, B, LINK, DEV_DB],
+  operations: ['read', 'search', 'write', 'edit', 'artifact_write', 'bash', 'network'],
+  networkTargets: [],
+};
+
+let clock = Date.parse('2026-09-11T00:00:00.000Z');
+
+function nextTime(stepMs = 1_000): string {
+  clock += stepMs;
+  return new Date(clock).toISOString();
+}
+
+/** A deterministic lowercase UUIDv7-ish id; the schema only checks the form. */
+function uuid(sequence: number): string {
+  const tail = sequence.toString(16).padStart(12, '0');
+  return `018f2c1e-9a4b-7c3d-8e5f-${tail}`;
+}
+
+describe('Broker (AC-048, AC-050)', () => {
+  let dataDir: string;
+  let workspace: string;
+  let outside: string;
+  let store: ProjectStore;
+  let grants: GrantStore;
+  let broker: Broker;
+  let projectId: string;
+
+  beforeEach(() => {
+    clock = Date.parse('2026-09-11T00:00:00.000Z');
+    dataDir = mkdtempSync(join(tmpdir(), 'agentdev-broker-data-'));
+    workspace = mkdtempSync(join(tmpdir(), 'agentdev-broker-ws-'));
+    outside = mkdtempSync(join(tmpdir(), 'agentdev-broker-out-'));
+    mkdirSync(join(workspace, 'src'), { recursive: true });
+    writeFileSync(join(workspace, A), 'export const a = 1;\n', 'utf8');
+    writeFileSync(join(workspace, B), 'export const b = 2;\n', 'utf8');
+    writeFileSync(join(outside, 'secret.txt'), 'top-secret\n', 'utf8');
+    symlinkSync(outside, join(workspace, 'link'), 'dir');
+
+    store = Store.open({
+      dataDir,
+      canonicalRoot: workspace,
+      migrations: { backup: () => undefined, backupPath: join(dataDir, 'pre.sqlite') },
+    });
+    projectId = projectIdFromRoot(workspace);
+    store.projects.insert({
+      id: projectId,
+      root: workspace,
+      codeRoot: 'src',
+      documentRoot: 'docs',
+      deliveryBranch: 'agentdev/main',
+      trust: 'trusted',
+      state: 'open',
+    });
+    grants = new GrantStore({ store, now: () => nextTime() });
+
+    const budget = store.budgets.insert({
+      projectId,
+      workId: WORK_ID,
+      tokenLimit: 100_000,
+      tokensUsed: 0,
+      tokensReserved: 0,
+      activeTimeLimit: 600,
+      activeTimeUsed: 0,
+      repairLimit: 3,
+      repairUsed: 0,
+      costKnown: true,
+    });
+    store.works.insert({
+      id: WORK_ID,
+      projectId,
+      intent: 'delivery',
+      purpose: 'deliver WP-07 T3 broker',
+      level: 'L2',
+      goal: 'make the tool boundary real',
+      scope: SCOPE,
+      sourceRef: { kind: 'message', id: WORK_ID, version: '1' },
+      status: 'running',
+      blockerIds: [],
+      baseRevision: REVISION,
+      budgetId: budget.id,
+      policyRevision: 1,
+    });
+    store.tasks.insert({
+      id: TASK_ID,
+      projectId,
+      workId: WORK_ID,
+      planRef: { id: TASK_ID, version: 1, hash: HASH },
+      role: 'backend',
+      dependsOn: [],
+      dependencyManifestRefs: [],
+      scope: SCOPE,
+      stage: 'develop',
+      acceptanceIds: ['AC-048', 'AC-080'],
+    });
+    store.tasks.insert({
+      id: REVIEW_TASK_ID,
+      projectId,
+      workId: WORK_ID,
+      planRef: { id: REVIEW_TASK_ID, version: 1, hash: HASH },
+      role: 'review',
+      dependsOn: [],
+      dependencyManifestRefs: [],
+      scope: SCOPE,
+      stage: 'review',
+      acceptanceIds: ['AC-050'],
+    });
+    addRun(RUN_A, ATTEMPT_A, 'backend', 'develop-L2');
+    addRun(RUN_B, ATTEMPT_B, 'backend', 'develop-L2');
+    addRun(RUN_REVIEW, ATTEMPT_REVIEW, 'review', 'review');
+    store.decisions.insert({
+      id: DECISION_ID,
+      projectId,
+      workId: WORK_ID,
+      kind: 'permission',
+      targetRef: { id: WORK_ID, version: 1, hash: HASH },
+      choices: ['allow', 'deny'],
+      state: 'accepted',
+      choice: 'allow',
+      actor: 'user',
+      effectRefs: [],
+    });
+    broker = makeBroker();
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+    rmSync(workspace, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+
+  function addRun(id: string, attemptId: string, role: 'backend' | 'review', stage: string): void {
+    store.runs.insert({
+      id,
+      projectId,
+      workId: WORK_ID,
+      taskId: role === 'review' ? REVIEW_TASK_ID : TASK_ID,
+      role,
+      purpose: role === 'review' ? 'review' : 'implementation',
+      stage,
+      status: 'running',
+      requiredChild: false,
+      join: 'none',
+      childIds: [],
+      configSnapshotId: '1'.repeat(64),
+      contextSnapshotId: '2'.repeat(64),
+      dispatchSnapshotId: '3'.repeat(64),
+      budgetAllocation: 1_000,
+    });
+    store.attempts.insert({
+      id: attemptId,
+      projectId,
+      runId: id,
+      number: 1,
+      status: 'running',
+      ownerEpoch: 1,
+    });
+  }
+
+  function makeBroker(overrides: Partial<BrokerOptions> = {}): Broker {
+    return new Broker({
+      store,
+      grants,
+      now: () => nextTime(),
+      docker: () => ({ available: true, version: '27.0.0' }),
+      ...overrides,
+    });
+  }
+
+  function issue(overrides: Partial<GrantIssueInput> = {}): void {
+    const outcome = grants.issue({
+      workId: WORK_ID,
+      role: 'backend',
+      stage: 'develop-L2',
+      scope: 'run',
+      operation: 'read',
+      targets: [A],
+      runId: RUN_A,
+      decisionId: DECISION_ID,
+      expiresAt: new Date(clock + 3_600_000).toISOString(),
+      ...overrides,
+    });
+    if (!outcome.ok) throw new Error(`grant refused: ${outcome.code} ${outcome.reason}`);
+  }
+
+  function invocation(overrides: Partial<ToolInvocation> = {}): ToolInvocation {
+    return {
+      workId: WORK_ID,
+      runId: RUN_A,
+      attemptId: ATTEMPT_A,
+      epoch: 1,
+      role: 'backend',
+      stage: 'develop-L2',
+      operation: 'read',
+      targets: [A],
+      input: { path: A },
+      roots: [workspace],
+      at: nextTime(),
+      ...overrides,
+    };
+  }
+
+  function invoke(overrides: Partial<ToolInvocation> = {}): ToolOutcome {
+    return broker.invoke(invocation(overrides));
+  }
+
+  function refusedEvents() {
+    return scanEvents(store, { names: [TOOL_EVENTS.refused] });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Admission
+  // ---------------------------------------------------------------------------
+
+  describe('admission through the Grant service (AC-048)', () => {
+    it('admits a read and records the tool operation and the audit event (AC-048)', () => {
+      issue();
+      const operationId = uuid(0x700000000001);
+      const outcome = invoke({ toolOperationId: operationId });
+
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) throw new Error('unreachable');
+      expect(outcome.result).toContain('export const a = 1;');
+      expect(outcome.mode).toBe('host');
+
+      // The audit row is in SQLite: operation, input hash, Grant reference, outcome.
+      const row = store.toolOperations.find(operationId);
+      expect(row?.state).toBe('finished');
+      expect(row?.toolName).toBe('read');
+      expect(row?.inputHash).toBe(hashToolInput({ path: A }));
+      expect(row?.grantId).toBe(outcome.grantId);
+      expect(row?.resultRef).toBeDefined();
+
+      const invoked = scanEvents(store, { names: [TOOL_EVENTS.invoked] });
+      expect(invoked).toHaveLength(1);
+      expect(invoked[0]?.data['operation']).toBe('read');
+      expect(invoked[0]?.data['grantId']).toBe(outcome.grantId);
+      expect(invoked[0]?.data['outcome']).toBe('executed');
+      // The audit trail never carries the decoded input itself.
+      expect(JSON.stringify(invoked[0]?.data)).not.toContain('export const');
+    });
+
+    it('refuses an out-of-scope target with no execution and records the refusal (AC-048)', () => {
+      issue({ targets: [A] });
+      let executions = 0;
+      const outcome = invoke({
+        targets: [B],
+        input: { path: B },
+        run: () => (executions += 1),
+      });
+
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('unreachable');
+      expect(outcome.code).toBe('NOT_AUTHORIZED');
+      expect(executions).toBe(0);
+      expect(store.toolOperations.count()).toBe(0);
+
+      const refusals = refusedEvents();
+      expect(refusals).toHaveLength(1);
+      expect(refusals[0]?.data['code']).toBe('NOT_AUTHORIZED');
+      expect(refusals[0]?.data['operation']).toBe('read');
+    });
+
+    it('refuses an operation the Grant does not cover (AC-048)', () => {
+      issue({ operation: 'read' });
+      let executions = 0;
+      const outcome = invoke({ operation: 'write', run: () => (executions += 1) });
+
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('unreachable');
+      expect(outcome.code).toBe('NOT_AUTHORIZED');
+      expect(executions).toBe(0);
+      expect(store.toolOperations.count()).toBe(0);
+    });
+
+    it('refuses an expired Grant at use time and does not execute (AC-048)', () => {
+      issue({ expiresAt: new Date(clock + 1_000).toISOString() });
+      let executions = 0;
+      const outcome = invoke({ at: nextTime(3_600_000), run: () => (executions += 1) });
+
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('unreachable');
+      expect(outcome.code).toBe('AUTH_EXPIRED');
+      expect(executions).toBe(0);
+      expect(store.toolOperations.count()).toBe(0);
+    });
+
+    it('refuses a role the Grant does not belong to (AC-048)', () => {
+      issue({ role: 'backend', stage: 'develop-L2', runId: RUN_A });
+      let executions = 0;
+      const outcome = invoke({
+        role: 'review',
+        stage: 'review',
+        runId: RUN_REVIEW,
+        attemptId: ATTEMPT_REVIEW,
+        run: () => (executions += 1),
+      });
+
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('unreachable');
+      expect(outcome.code).toBe('NOT_AUTHORIZED');
+      expect(executions).toBe(0);
+    });
+
+    it('refuses the sibling Run of the same role with no side effect (AC-080)', () => {
+      issue({ scope: 'run', runId: RUN_A });
+      let executions = 0;
+      const outcome = invoke({
+        runId: RUN_B,
+        attemptId: ATTEMPT_B,
+        run: () => (executions += 1),
+      });
+
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('unreachable');
+      expect(outcome.code).toBe('NOT_AUTHORIZED');
+      expect(outcome.fields).toContain('runId');
+      expect(executions).toBe(0);
+      expect(store.toolOperations.count()).toBe(0);
+    });
+
+    it('replays the recorded result for the same once operation (AC-080)', () => {
+      const operationId = uuid(0x700000000010);
+      const input = { path: A };
+      issue({
+        scope: 'once',
+        operation: 'read',
+        targets: [A],
+        toolOperationId: operationId,
+        inputHash: hashToolInput(input),
+      });
+      let executions = 0;
+      const first = invoke({
+        toolOperationId: operationId,
+        input,
+        run: () => {
+          executions += 1;
+          return 'original';
+        },
+      });
+      expect(first.ok).toBe(true);
+      if (!first.ok) throw new Error('unreachable');
+      expect(first.outcome).toBe('executed');
+      expect(first.result).toBe('original');
+
+      const replay = invoke({
+        toolOperationId: operationId,
+        input,
+        run: () => {
+          executions += 1;
+          return 'second';
+        },
+      });
+      expect(replay.ok).toBe(true);
+      if (!replay.ok) throw new Error('unreachable');
+      expect(replay.outcome).toBe('replayed');
+      expect(replay.result).toBe('original');
+      expect(executions).toBe(1);
+      expect(store.toolOperations.count()).toBe(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // File boundary (required failure test)
+  // ---------------------------------------------------------------------------
+
+  describe('file boundary (AC-048)', () => {
+    it('refuses a symlink pointing outside the workspace in both modes with no read (AC-048)', () => {
+      issue({ operation: 'read', targets: [LINK] });
+      for (const mode of ['host', 'container'] as const) {
+        const outcome = invoke({ mode, operation: 'read', targets: [LINK], input: { path: LINK } });
+        expect(outcome.ok).toBe(false);
+        if (outcome.ok) throw new Error('unreachable');
+        expect(outcome.code).toBe('NOT_AUTHORIZED');
+        expect(outcome.reason).toContain('outside the allowed roots');
+      }
+      // Nothing was read (the secret is still only in the outside directory) and
+      // no tool operation was recorded.
+      expect(readFileSync(join(outside, 'secret.txt'), 'utf8')).toBe('top-secret\n');
+      expect(store.toolOperations.count()).toBe(0);
+      expect(refusedEvents()).toHaveLength(2);
+    });
+
+    it('refuses a symlink escape for a write in both modes with no write (AC-048)', () => {
+      issue({ operation: 'write', targets: [LINK] });
+      for (const mode of ['host', 'container'] as const) {
+        const outcome = invoke({
+          mode,
+          operation: 'write',
+          targets: [LINK],
+          input: { path: LINK, content: 'overwritten' },
+        });
+        expect(outcome.ok).toBe(false);
+        if (outcome.ok) throw new Error('unreachable');
+        expect(outcome.code).toBe('NOT_AUTHORIZED');
+      }
+      expect(readFileSync(join(outside, 'secret.txt'), 'utf8')).toBe('top-secret\n');
+      expect(store.toolOperations.count()).toBe(0);
+    });
+
+    it('refuses a .. escape and an absolute escape (AC-048)', () => {
+      const dotdot = invoke({ operation: 'read', targets: ['../outside/secret.txt'], input: {} });
+      expect(dotdot.ok).toBe(false);
+      if (dotdot.ok) throw new Error('unreachable');
+      expect(dotdot.code).toBe('NOT_AUTHORIZED');
+
+      const absolute = invoke({ operation: 'read', targets: ['/etc/passwd'], input: {} });
+      expect(absolute.ok).toBe(false);
+      if (absolute.ok) throw new Error('unreachable');
+      expect(absolute.code).toBe('NOT_AUTHORIZED');
+
+      expect(store.toolOperations.count()).toBe(0);
+    });
+
+    it('resolves a legitimate path inside the root (positive control)', () => {
+      const decision = resolveWithinRoots({
+        path: '../src/a.ts',
+        access: 'read',
+        roots: [join(workspace, 'src')],
+      });
+      expect(decision.ok).toBe(true);
+      if (!decision.ok) throw new Error('unreachable');
+      // The resolved path is canonical (`/tmp` is a symlink to `/private/var` on
+      // macOS), which is exactly why the boundary compares real paths.
+      expect(decision.realPath).toBe(realpathSync.native(join(workspace, A)));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // No Docker (required failure test)
+  // ---------------------------------------------------------------------------
+
+  describe('container mode without a Docker daemon (AC-048)', () => {
+    it('refuses with the observed reason and never falls back to host execution (AC-048)', () => {
+      const spawned: string[] = [];
+      const runner: ProcessRunner = {
+        run(command, args): ProcessResult {
+          spawned.push([command, ...args].join(' '));
+          return { status: 0, stdout: '', stderr: '', signal: null };
+        },
+      };
+      broker = makeBroker({
+        docker: () => ({ available: false, reason: 'Cannot connect to the Docker daemon' }),
+        process: runner,
+      });
+      issue();
+      let executions = 0;
+      const outcome = invoke({ mode: 'container', run: () => (executions += 1) });
+
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('unreachable');
+      expect(outcome.code).toBe('PROVIDER_UNAVAILABLE');
+      expect(outcome.reason).toContain('Cannot connect to the Docker daemon');
+      expect(outcome.reason).toContain('does not fall back to host');
+      expect(executions).toBe(0);
+      expect(spawned).toEqual([]);
+      expect(store.toolOperations.count()).toBe(0);
+      expect(refusedEvents()).toHaveLength(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Host-mode domain gates (AC-050)
+  // ---------------------------------------------------------------------------
+
+  describe('host-mode domain gates (AC-050)', () => {
+    it('refuses a Review Run write access to source even in host mode (AC-050)', () => {
+      const before = readFileSync(join(workspace, A), 'utf8');
+      issue({
+        role: 'review',
+        stage: 'review',
+        scope: 'run',
+        operation: 'write',
+        targets: [A],
+        runId: RUN_REVIEW,
+      });
+      let executions = 0;
+      const outcome = invoke({
+        mode: 'host',
+        role: 'review',
+        stage: 'review',
+        runId: RUN_REVIEW,
+        attemptId: ATTEMPT_REVIEW,
+        operation: 'write',
+        targets: [A],
+        input: { path: A, content: 'mutated' },
+        run: () => (executions += 1),
+      });
+
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('unreachable');
+      expect(outcome.code).toBe('NOT_AUTHORIZED');
+      expect(outcome.reason).toContain('read-only');
+      expect(executions).toBe(0);
+      expect(readFileSync(join(workspace, A), 'utf8')).toBe(before);
+      expect(store.toolOperations.count()).toBe(0);
+    });
+
+    it('keeps the run database unreadable to a Review Run in both modes (AC-050)', () => {
+      const devDb = join(workspace, DEV_DB);
+      writeFileSync(devDb, 'run database\n', 'utf8');
+      broker = makeBroker({ protectedPaths: [devDb] });
+      issue({
+        role: 'review',
+        stage: 'review',
+        scope: 'run',
+        operation: 'read',
+        targets: [DEV_DB],
+        runId: RUN_REVIEW,
+      });
+      for (const mode of ['host', 'container'] as const) {
+        const outcome = invoke({
+          mode,
+          role: 'review',
+          stage: 'review',
+          runId: RUN_REVIEW,
+          attemptId: ATTEMPT_REVIEW,
+          operation: 'read',
+          targets: [DEV_DB],
+          input: { path: DEV_DB },
+        });
+        expect(outcome.ok).toBe(false);
+        if (outcome.ok) throw new Error('unreachable');
+        expect(outcome.code).toBe('NOT_AUTHORIZED');
+        expect(outcome.reason).toContain('protected root');
+      }
+      expect(store.toolOperations.count()).toBe(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Network boundary
+  // ---------------------------------------------------------------------------
+
+  describe('network boundary (AC-048)', () => {
+    it('classifies loopback, private, link-local and metadata hosts as internal', () => {
+      for (const host of [
+        '127.0.0.1',
+        'localhost',
+        '10.0.0.5',
+        '172.16.4.4',
+        '192.168.1.10',
+        '169.254.169.254',
+        '100.64.0.1',
+        '::1',
+        'fe80::1',
+        'fd00::1',
+        'metadata.google.internal',
+      ]) {
+        expect(isPrivateAddress(host), host).toBe(true);
+      }
+      expect(isPrivateAddress('8.8.8.8')).toBe(false);
+      expect(isPrivateAddress('example.com')).toBe(false);
+    });
+
+    it('refuses a private target by default and passes an exact authorized target', () => {
+      const policy = new NetworkPolicy();
+      const refused = policy.checkUrl('http://10.0.0.5/private');
+      expect(refused.ok).toBe(false);
+      if (refused.ok) throw new Error('unreachable');
+      expect(refused.code).toBe('NOT_AUTHORIZED');
+
+      const loopback = policy.checkUrl('http://127.0.0.1:8080/');
+      expect(loopback.ok).toBe(false);
+
+      const scheme = policy.checkUrl('ftp://example.com/file');
+      expect(scheme.ok).toBe(false);
+
+      const authorized = new NetworkPolicy({ allowedTargets: ['127.0.0.1:8080'] });
+      expect(authorized.checkUrl('http://127.0.0.1:8080/ok').ok).toBe(true);
+      // The authorization is exact: another port of the same host stays refused.
+      expect(authorized.checkUrl('http://127.0.0.1:8081/other').ok).toBe(false);
+    });
+
+    it('refuses a private network target before any tool runs (AC-048)', () => {
+      let executions = 0;
+      const outcome = invoke({
+        operation: 'network',
+        targets: [],
+        input: { url: 'http://169.254.169.254/latest/meta-data/' },
+        network: { url: 'http://169.254.169.254/latest/meta-data/' },
+        run: () => (executions += 1),
+      });
+
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('unreachable');
+      expect(outcome.code).toBe('NOT_AUTHORIZED');
+      expect(executions).toBe(0);
+      expect(store.toolOperations.count()).toBe(0);
+    });
+
+    it('refuses a container network call when no Core proxy exists, even if the Grant covers it (AC-048)', () => {
+      issue({ operation: 'network', targets: [], limits: { network: 'proxy' } });
+      const outcome = invoke({
+        mode: 'container',
+        operation: 'network',
+        targets: [],
+        input: { url: 'https://example.com/' },
+        network: { url: 'https://example.com/' },
+      });
+
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('unreachable');
+      expect(outcome.code).toBe('PROVIDER_UNAVAILABLE');
+      expect(outcome.reason).toContain('no Core-controlled proxy');
+      expect(store.toolOperations.count()).toBe(0);
+    });
+
+    it('refuses an operation with no built-in executor instead of faking a result (AC-048)', () => {
+      const operationId = uuid(0x700000000020);
+      const input = { url: 'https://example.com/' };
+      issue({
+        scope: 'once',
+        operation: 'network',
+        targets: [],
+        limits: { network: 'proxy' },
+        toolOperationId: operationId,
+        inputHash: hashToolInput(input),
+      });
+      const outcome = invoke({
+        mode: 'host',
+        operation: 'network',
+        targets: [],
+        input,
+        toolOperationId: operationId,
+        network: { url: 'https://example.com/' },
+      });
+
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('unreachable');
+      expect(outcome.code).toBe('INVALID_STATE');
+      expect(outcome.reason).toContain('no built-in executor');
+      // The execution rolled back with its Grant consumption and tool operation.
+      expect(store.toolOperations.count()).toBe(0);
+      expect(store.grants.list()[0]?.consumedAt).toBeUndefined();
+    });
+
+    it('plans the hardened container invocation with no network by default (AC-048)', () => {
+      const plan = planContainerRun({ command: 'id -u', roots: ['/tmp/ws'] });
+      expect(plan.args).toContain('--read-only');
+      expect(plan.args).toContain('--cap-drop=ALL');
+      expect(plan.args).toContain('no-new-privileges');
+      expect(plan.args).toContain('--tmpfs');
+      expect(plan.args.join(' ')).toContain('--user 10001:10001');
+      expect(plan.args.join(' ')).toContain('--network none');
+      expect(plan.args.join(' ')).toContain('--volume /tmp/ws:/workspace:ro');
+      expect(plan.mounts).toEqual([{ path: '/tmp/ws', target: '/workspace', mode: 'ro' }]);
+
+      const proxied = planContainerRun({ command: 'id -u', roots: ['/tmp/ws'], network: 'proxy' });
+      expect(proxied.args.join(' ')).toContain('--network bridge');
+
+      const writable = planContainerRun({
+        command: 'id -u',
+        roots: ['/tmp/ws'],
+        writableRoots: ['/tmp/ws'],
+      });
+      expect(writable.mounts[0]?.mode).toBe('rw');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Test environment (required failure test)
+  // ---------------------------------------------------------------------------
+
+  describe('test environment', () => {
+    it('creates its own database file and port, never the reserved dev values', async () => {
+      const manager = new TestEnvironmentManager({ prefix: 'agentdev-broker-env-' });
+      const created = manager.create({
+        workId: WORK_ID,
+        attemptId: ATTEMPT_A,
+        command: [process.execPath, '-e', 'process.exit(0)'],
+        reserved: { port: 4317, dbPath: '/tmp/agentdev-dev.sqlite' },
+        portRange: { min: 4700, max: 4709 },
+      });
+      expect(created.ok).toBe(true);
+      if (!created.ok) throw new Error('unreachable');
+      const environment = created.environment;
+      expect(environment.port).not.toBe(4317);
+      expect(environment.port).toBeGreaterThanOrEqual(4700);
+      expect(environment.port).toBeLessThanOrEqual(4709);
+      expect(environment.dbPath.startsWith(environment.dir)).toBe(true);
+      expect(environment.dbPath).not.toBe('/tmp/agentdev-dev.sqlite');
+      expect(existsSync(environment.dbPath)).toBe(true);
+      expect(environment.env['AGENTDEV_TEST_DB']).toBe(environment.dbPath);
+      expect(environment.env['PORT']).toBe(String(environment.port));
+
+      // A second environment never takes the first one's port.
+      const second = manager.create({
+        workId: WORK_ID,
+        attemptId: ATTEMPT_B,
+        command: [process.execPath, '-e', 'process.exit(0)'],
+        portRange: { min: 4700, max: 4709 },
+      });
+      expect(second.ok).toBe(true);
+      if (!second.ok) throw new Error('unreachable');
+      expect(second.environment.port).not.toBe(environment.port);
+
+      const stopped = await manager.cleanup(environment);
+      expect(stopped.ok).toBe(true);
+      expect(existsSync(environment.dir)).toBe(false);
+      await manager.cleanup(second.environment);
+    });
+
+    it('refuses to allocate when the only port is the reserved development port', () => {
+      const manager = new TestEnvironmentManager();
+      const created = manager.create({
+        workId: WORK_ID,
+        attemptId: ATTEMPT_A,
+        command: [process.execPath, '-e', 'process.exit(0)'],
+        reserved: { port: 4700 },
+        portRange: { min: 4700, max: 4700 },
+      });
+      expect(created.ok).toBe(false);
+      if (created.ok) throw new Error('unreachable');
+      expect(created.code).toBe('PROVIDER_UNAVAILABLE');
+      expect(created.reason).toContain('refusing to reuse the development port');
+    });
+
+    it('reports a temp-directory cleanup failure as RECOVERY_REQUIRED (required failure test)', async () => {
+      const ports: TestEnvironmentPorts = {
+        ...defaultTestEnvironmentPorts,
+        removeDir: () => {
+          throw new Error('EBUSY: resource busy or locked');
+        },
+      };
+      const manager = new TestEnvironmentManager({ ports, prefix: 'agentdev-broker-cleanup-' });
+      const created = manager.create({
+        workId: WORK_ID,
+        attemptId: ATTEMPT_A,
+        command: [process.execPath, '-e', 'process.exit(0)'],
+      });
+      expect(created.ok).toBe(true);
+      if (!created.ok) throw new Error('unreachable');
+
+      const cleanup = await manager.cleanup(created.environment);
+      expect(cleanup.ok).toBe(false);
+      if (cleanup.ok) throw new Error('unreachable');
+      expect(cleanup.code).toBe('RECOVERY_REQUIRED');
+      expect(cleanup.failures.join('; ')).toContain('EBUSY');
+      expect(cleanup.environment.state).toBe('cleanup_failed');
+      // The state is tracked, so a supervisor can retry the real removal.
+      expect(manager.get(created.environment.id)?.state).toBe('cleanup_failed');
+      rmSync(created.environment.dir, { recursive: true, force: true });
+    });
+
+    it('reports a process-group cleanup failure as RECOVERY_REQUIRED (required failure test)', async () => {
+      const ports: TestEnvironmentPorts = {
+        ...defaultTestEnvironmentPorts,
+        signal: () => {
+          throw new Error('EPERM: not permitted to signal the group');
+        },
+        alive: () => true,
+      };
+      const manager = new TestEnvironmentManager({ ports, stopGraceMs: 60 });
+      const environment: TestEnvironment = {
+        id: 'env-cleanup-failure',
+        workId: WORK_ID,
+        attemptId: ATTEMPT_A,
+        dir: '/tmp/agentdev-does-not-exist',
+        dbPath: '/tmp/agentdev-does-not-exist/test.sqlite',
+        host: '127.0.0.1',
+        port: 4788,
+        env: {},
+        command: [],
+        state: 'running',
+        pid: 4_242,
+        reserved: {},
+      };
+      const stopped = await manager.stop(environment);
+      expect(stopped.ok).toBe(false);
+      if (stopped.ok) throw new Error('unreachable');
+      expect(stopped.code).toBe('RECOVERY_REQUIRED');
+      expect(stopped.failures.join('; ')).toContain('EPERM');
+      expect(stopped.failures.join('; ')).toContain('still alive after SIGKILL');
+    });
+  });
+});

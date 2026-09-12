@@ -29,3 +29,7 @@ export * from './gates.js';
 export * from './decisions.js';
 export * from './findings.js';
 export * from './requirement-continue.js';
+export * from './grants.js';
+export * from './secrets.js';
+export * from './broker.js';
+export * from './test-environment.js';
