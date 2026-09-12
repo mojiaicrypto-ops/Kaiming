@@ -546,3 +546,350 @@ pnpm test:integration        Test Files 10 passed (10) / Tests 124 passed (124) 
 6. Checkpoint 为内存 store，未验证 `attempt.checkpoint_ref`/`session_ref` 与 `snapshot(type='checkpoint')` 的落库幂等（T7 残余 5）。
 7. 未运行 `pnpm test:e2e`/`test:acceptance`/`test:live`（按契约返回 NOT_IMPLEMENTED，属 WP-09/WP-10）。
 8. 未读取任何开发/Test 聊天或会话记录；`/tmp/wp05r2/*.mjs` 探针由 `dist` 类型声明与正式文档编写，未 import 产品测试文件。
+
+---
+
+# WP-05 独立 Review 报告 · 第 3 轮（W5R2 修复验证与新缺陷巡检）
+
+## R3.0 元数据与冻结点
+
+| 项 | 值 |
+|---|---|
+| 冻结点（task 指定） | `909f95b`（`909f95b1df4b2f6e50197da488106cf399d5249c`，fix(core): close WP-05 review round-2 findings） |
+| `git rev-parse HEAD` | `3fb3820a78a59f11e010032ec8cae19cc75f0b71`（docs(review) 提交，位于冻结点之上） |
+| `git rev-parse 909f95b^{tree}` | `43cfc941126237162dbc4c48bda8e8e345260e90` |
+| `git rev-parse HEAD^{tree}` | `ee5884f5bf08ba9725a3261a322263914945f92d` |
+| `git diff --stat 909f95b HEAD` | `.agentdev/work/WP-05/review.md \| 286 +++`（仅第 2 轮报告，无源码改动） |
+| `git status --porcelain`（本报告写入前） | 空（工作树干净） |
+| Review 写入范围 | 仅 `.agentdev/work/WP-05/review.md`（本轮追加）；探针只在 `/tmp/wp05r3/` |
+| 第 1/2 轮原文 | 未改动：写入前 `git hash-object .agentdev/work/WP-05/review.md` = `git rev-parse HEAD:.agentdev/work/WP-05/review.md` = `bc10c6f063a0199312693baf22adbc2957be1d0d`（548 行） |
+| 开发/Test 聊天 | 未读取（证据来自仓库文件、`dist` 产物与本次独立探针） |
+
+被审查文件与 HEAD 树逐字节一致（`git hash-object` 与 `git rev-parse HEAD:<path>` 全部 MATCH）：
+
+| 文件 | git blob |
+|---|---|
+| `packages/core/src/context/types.ts` | `bfd282c7279ee9035076da51f2566bb73b30ff1f` |
+| `packages/core/src/context/acl.ts` | `659a38c08d2510c2d4bd31316e5970948ab0a132` |
+| `packages/core/src/context/requirements.ts` | `7070b792575ad647d05ba1d5c08f85c7cdb6c6ef` |
+| `packages/core/src/context/builder.ts` | `4ab65490141bf5eabed0c457942c123fa53992d6` |
+| `packages/core/src/context/ledger.ts` | `d22f693859ebb9858fd563c3cd48696ab003a35d` |
+| `packages/core/src/context/checkpoint.ts` | `b53c0dd0b8bccb28ca86aa7ed15713149d93ea0a` |
+| `packages/core/src/context/cold-start.ts` | `6b0504a3c8d426665611d89583ac2c775d0787e8` |
+| `packages/core/src/context/index.ts` | `eee9d50916d3f992562bdd586bd477b6fc45f18c` |
+| `.agentdev/work/WP-05/implementation.md` | `769dd6e1efbf9d80dfd459b87046b7093db90cce` |
+
+## R3.1 结论（verdict）
+
+**PASS（按 task 判定规则：FAIL 的条件是「任一 P0/P1 可复现」，本轮无可复现的 P0/P1）** —— task 枚举的 13 项闭合（W5R2-01…11、13、14）中 **12 项独立复现为已闭**，W5R2-12 的残余登记与结构性防线属实；四项必需失败测试全过；冻结点的六条契约命令全绿。第 2 轮的两个 P1（W5R2-01/02）已在冻结点上验证关闭。
+
+本轮仍记录 **1 个新的 P2**（W5R3-01：端口伪造的 `revision` 未经校验即冻结入快照，`ref.version` 与 `revision` 互相矛盾）与 **2 个 P3**（W5R3-02：时间戳只做正则形状校验；W5R3-03：W5R2-13 的「每条只登记一次」只做到部分）。按规则 P2/P3 不阻断、必须记录并带账进入 Test。
+
+- **闭合达成**：W5R2-01、02、03、04、05、06、07、08、09、10、11、14 —— 12/13。
+- **部分达成**：W5R2-13 —— `admit` 侧的重复 push 已删除，但同一被拒绝 ref 仍可由 tier-4（`related_constraints`）与 tier-5（`role_bodies`）各登记一次（W5R3-03）。
+- **残余（按任务不修）**：W5R2-12 —— 命名式路径网；`kind=transcript` 全角色拒绝 / corpus allow-list / realpath 包含性三道结构防线独立复现仍成立。
+
+## R3.2 契约命令原始结果
+
+| 命令 | 退出码 | 原始结果 |
+|---|---|---|
+| `pnpm typecheck` | 0 | 无输出错误（`TYPECHECK_EXIT=0`） |
+| `pnpm lint` | 0 | `All matched files use Prettier code style!`（`LINT_EXIT=0`） |
+| `pnpm test:unit` | 0 | `Test Files 32 passed (32)`、`Tests 638 passed (638)`（`UNIT_EXIT=0`） |
+| `pnpm test:integration` | 0 | `Test Files 10 passed (10)`、`Tests 124 passed (124)`，含 `doctor.integration.test.ts`(8) 与 `container.integration.test.ts`(9，真实容器：非 root、只读根、tmpfs、能力全部丢弃、无网络、pid/内存限制)；`Duration 47.56s`（`INTEGRATION_EXIT=0`） |
+| `pnpm docs:check` | 0 | `DOCS_EXIT=0` |
+| `pnpm build` | 0 | 10 个 workspace 全部 `Done`（contracts/domain/storage/workspace/core/pi-runtime/knowledge、apps/cli/daemon/runner，`BUILD_EXIT=0`） |
+
+Docker 集成测试本轮**未超时**（doctor 16.1s、container 47.0s），因此无需降级到非 Docker 子集。
+
+## R3.3 方法与探针清单
+
+复用第 2 轮 `/tmp/wp05r2/*.mjs` 的基础库（`lib.mjs` 端口/夹具、`fixture.mjs` 冷启动投影），本轮新增 `/tmp/wp05r3/` 探针。全部只消费 `packages/core/dist`（`pnpm build` 产物，构建时间 11:51:37 晚于源码改动 11:48:42）与正式文档，**不 import 任何产品测试文件**。每个反向用例使用**独立的端口对象**（`makePorts()` 在用例内调用），因此调用计数是逐用例的；每例同时断言副作用缺失（按 ref 的 resolver 调用、content fetch、快照目录、状态变更）。
+
+| 探针 | 行数 | 用例 | 通过 | 说明 |
+|---|---|---|---|---|
+| `/tmp/wp05r3/closure3.mjs` | 1315 | 151 | 147 | W5R2-01…14 逐条闭合验证（失败 4 例全部对应 W5R3-01/02/03） |
+| `/tmp/wp05r3/hunt3.mjs` | 441 | 27 | 26 | 新缺陷巡检：伪造 revision、未来产物走私、预算、账本/检查点伪造、需求环、记录核对（失败 1 例＝W5R3-01） |
+| `/tmp/wp05r3/ac3d.mjs` | 745 | 72 | 72 | 本轮 AC 深度矩阵（AC-030…036、079、085、093），按闭合项重写输入 |
+| `/tmp/wp05r3/ac.patched.mjs` | 682 | 90 | 90 | 第 2 轮 AC 矩阵；唯一的过期期望（AC-079「Product with a Project overview」）按 W5R2-04 的新口径改为断言 `bootstrapObservation` |
+| `/tmp/wp05r3/closure.patched.mjs` | 1186 | 218 | 218 | 第 2 轮闭合矩阵；两处过期期望（L2 build 曾用断言满足 `productDefinition`/`plan`）改为提供真实 product/plan 产物 |
+| `/tmp/wp05r2/fail4.mjs` | — | 34 | 34 | 四项必需失败测试（无改动，直接复用） |
+| `/tmp/wp05r2/gitvariant.mjs` | — | 1 | 复现拒绝 | W5R2-01 的 git 变体：`VALIDATION_ERROR`「contextSources path=src/b.ts 与 selection 声明的 src/a.ts 不一致」 |
+| 合计 | — | **593** | 587 通过 / 6 失败 | 6 个失败＝本轮 3 个 findings 的 6 个断言 |
+
+**期望过期说明（不作为缺陷）**：第 2 轮 AC-079 正例与 closure 的两处 L2 build 依赖「`contextInputs` 断言即可满足 artifact 类必需项」——这正是 W5R2-04 明令关闭的旁路。按新口径改写输入后全部通过；改写只发生在 `/tmp/wp05r3/` 的副本，第 2 轮原始探针与日志保持原样。
+
+## R3.4 逐条闭合验证（W5R2-01…14）
+
+| 项 | 判定 | 依据（本轮独立探针） |
+|---|---|---|
+| W5R2-01 | **PASS** | git / policy / role_contract 三类声明在 overlay 新增另一 `path` 时全部 `VALIDATION_ERROR`、无 fetch、无快照（4 例）；overlay 与声明一致时成功并冻结声明 path 与 `sha256(AGENTS_MD)`；overlay 新增未声明 `hash` 被拒；resolver 返回另一 path 或另一 version 均在 fetch 之前被拒；无 path 的 `role_contract` 仍按其 id 解析。`gitvariant.mjs` 复现同一拒绝。 |
+| W5R2-02 | **PASS** | `artifactClass='explanation'` + `artifacts/plan/<id>` 在 product:product ⇒ `CONTEXT_FORBIDDEN`，**artifact 从未进入 resolver**（按 ref 断言）且无 fetch/快照；老实写 `plan` 同样被拒（阶段规则未被放宽）；无显式 class 时由路径推导类别并成功；非 `artifacts/` 路径不做类别比对（`canRead` 返回 `allowed:true` + 信息码）；`referencesFutureArtifact` 全表为空。 |
+| W5R2-03 | **PASS** | selection 的 `ref.hash` 与冻结内容不一致（inline 与 content-port 两条路径）⇒ `STALE_ARTIFACT`、无快照；hash 一致时成功且 `ref.hash === resolved.hash === sha256(content)`，不再自相矛盾。 |
+| W5R2-04 | **PASS** | planning 仅断言 `productDefinition`/`acceptance` ⇒ `MISSING_CONTEXT` 点名 `productDefinition`、无快照、无 artifact 解析；补真实 product 产物后成功；路径类键（`projectOverview`@planning、`featureNavigation`@develop-L1）仅凭断言不能满足必需项；`bootstrapObservation`/`workGoal` 等无句柄初始化输入仍可断言（chief:initialize 与 product:product 均成功）；`secret` 仍 `CONTEXT_FORBIDDEN`。 |
+| W5R2-05 | **PASS** | `extraTokens` ∈ {3_000_000, MAX_SAFE_INTEGER, 2_000_000(+4096 溢出), 1_999_000, 4095, 24, −1, 1.5, NaN, Infinity} 全部 `VALIDATION_ERROR`，`usage().expansion.limit/used` 与 scope 均不变（`.git/config` 仍 `CONTEXT_FORBIDDEN`）；省略即 0；恰落到 2_000_000 的增量被接受；7 组增量中任何被接受的授权上限 ≤ 2_000_000。 |
+| W5R2-06 | **PASS** | 重负载 Feature（20 000 字符 currentBehaviour，`startupTokens:4096`）正文未入选 ⇒ `currentBehaviour`/`entryPaths`/`knownGaps`/`attribution` 均不含该 Feature 正文，缺口由 `excluded(budget)` 报告；对照：无预算压力时已入选 Feature 的正常正文仍被回答（非空集，非「一律不答」）。 |
+| W5R2-07 | **PASS** | 预算吃紧时 Checkpoint 位置未入选 ⇒ `seed.domain.resume`/`workId` 均为 `undefined`，SEED 文本不含 `RESUME-SECRET-NEXT-ACTION-`，缺口点名 `checkpoint:<runId>`；对照：无压力时 `resume.nextAction` 正常交付。 |
+| W5R2-08 | **PASS** | 抛异常时钟：`save` 与 `rotateSession` 均 `{ok:false, code:'INTERNAL_ERROR'}`、结果文本不含端口原始串、`load` 仍 `NOT_FOUND`（无部分落库）、失败轮换后 `runOf().sessionRef` 不变；`now` 返回 `'not-a-time'/42/null/undefined/''` 五种畸形值同样封闭；合法时钟的 save/rotate 对照成功。 |
+| W5R2-09 | **PASS** | resolver / content / gates 三处**返回**的 `INTERNAL_ERROR` 均被脱敏（结果不含泄露串）；抛异常的 resolver 同样脱敏；`STALE_ARTIFACT`/`CONTEXT_FORBIDDEN` 业务 message 原样保留；`NOT_FOUND` 作为非致命缺口进入 `snapshot.excluded` 且保留业务 message。 |
+| W5R2-10 | **PASS** | 内存 writer 下 inline 内容与声明 hash 不符 ⇒ 被拒（`STALE_ARTIFACT`）、无快照，不再依赖目录 writer 兜底；hash 相符的 inline 对照仍可构建。 |
+| W5R2-11 | **PASS** | `at` ∈ {'NOT-A-TIME', '', '2026-09-12', 12345, null} 全部 `VALIDATION_ERROR` 且 `sessionRef`/`updatedAt` 逐字节不变（每例独立 store）；合法 `at` 被记录。**注**：`'2026-13-45T99:99:99.999Z'` 属结构性非法但字形合法，被接受 ⇒ W5R3-02。 |
+| W5R2-13 | **部分**（唯一未完全闭合项） | tier-5 的二次 `excluded.push` 已删除；单 Feature 场景每 ref 一次。但同一被拒绝 ref 仍可同时以 `related_constraints`（`relation:F-aaaaaaaa->F-bbbbbbbb` 的 ref 指向目标 Feature 文档）与 `role_bodies` 两个条目各登记一次，`git:features/F-aaaaaaaa/README.md` 在 `excluded` 出现 2 次 ⇒ W5R3-03。 |
+| W5R2-14 | **PASS** | 同 `kind:id` 重复 overlay（hash 不同 / 字段相同 / projectId 不同）全部 `VALIDATION_ERROR`、无 resolver 调用、无快照；唯一键对照正常构建。 |
+| W5R2-12 | **登记确认 PASS** | `implementation.md` 第 206/210 行明确登记为残余 13 并说明不引入语义级聊天分类器。三道结构防线独立复现：(1) `kind=transcript` 在 `roleStagePairs()` 的**全部**角色/阶段组合上均被拒；(2) corpus allow-list 拒绝未登记路径，已登记的非 transcript 文档可读；(3) 目录 writer 仍正常冻结真实快照目录。命名网仍拒 `docs/dev-chat.md`、`docs/DEVELOPER_TRANSCRIPT.md`、`docs/devchat.md`、`docs/dev-transcript.json`、`.agentdev/x/chat-1.md`；`docs/my-dev-chat.md` 仍可读（残余本身，非回归）。 |
+
+## R3.5 逐 AC 判定
+
+`ac.patched.mjs` 90/90、`ac3d.mjs` 72/72、`closure3.mjs` 与 `hunt3.mjs` 交叉印证。
+
+| AC | 判定 | 依据 |
+|---|---|---|
+| AC-030 | **PASS** | 冻结源的 path/hash 与声明一致、`snapshot.selection.sourceRefs` 与输入逐字节相同；overlay 改 path/hash/version 均 `VALIDATION_ERROR` 且无快照；重复键拒绝（不由顺序决定身份）；transcript 伪装成 user message 仍被拒；未知 sender 被拒；`SourceRef` 无对象级「未知字段拒绝」校验（overlay 可为 policy 附加 `sender`），因不改变可读性/归属而未列为阻断项（覆盖限制 9）。 |
+| AC-031 | **PASS** | planning 缺 ProductDefinition ⇒ `MISSING_CONTEXT` 点名 `productDefinition`；补真实产物成功；`productDefinition`/`plan`/`reviewResult`/`testEvidence` 一律不能被断言满足。 |
+| AC-032 | **PASS** | 空 reason `VALIDATION_ERROR`、越界 `CONTEXT_FORBIDDEN`、追加记录 seq/path/revision/hash/reason/bytes；理由化请求可接受、重复 pending `INVALID_STATE`、收窄授权被拒、同 scope 授权成功；`entries()` 为冻结副本；封口后 append/request 均 `INVALID_STATE`；seal 绑定末 seq。 |
+| AC-033 | **PASS** | 8 角色 × 全阶段对 transcript 全拒；名称网拒绝已文档化命名族；transcript 路径在解析前被拒且无正文；误导性聊天文档不进入冷启动选择；同输入两次构建 `snapshotRef` 相同（transcript 不影响结果）。 |
+| AC-034 | **PASS** | 跨 Project 来源在路径判断前 `CONTEXT_FORBIDDEN` 且点名对方 projectId；外来 Project scope 的 `load` 无 `checkpoint` 字段；Review 读者同样无内容；本 Run 正常读取。 |
+| AC-035 | **PASS** | 往返成功；错误 `fromSessionRef` ⇒ `INVALID_STATE`；轮换保留 work/task/stage/manifest/approval 只换 session；时钟与时间戳问题见 W5R3-02。 |
+| AC-036 | **PASS** | `startupTokens` ∈ {0, 4095, 2000001, −1, 4096.5} 全部封闭失败，0 预算结果不含固定规则正文；**必需 artifact 源**超预算 ⇒ `BUDGET_EXCEEDED` 点名 `input=productDefinition` 且 `usage.dropped` 记录 shortfall、无快照；**可选**源超预算不阻断但进 `excluded`/`unknowns`/`dropped`；20 份登记但无关的文档注入 0 条；账本侧 `extraTokens`/`initialUsed` 越界均被拒。 |
+| AC-079 | **PASS** | 四正例（initialize/BootstrapObservation、Product/BootstrapObservation 替代、Planning/ProductDefinition、L1/CompactPlan）全过；四负例精确点名 `productDefinition`/`plan`/`reviewResult`/`verificationResult`；`referencesFutureArtifact` 全表为空、`oneOf` 组非空、required/optional 键均在目录内；早阶段读不到晚阶段 artifact 产物。 |
+| AC-085 | **PASS** | 空账本封口 seq 0；重复封口幂等；正确绑定通过，旧 seq / 错 hash ⇒ `STALE_ARTIFACT`，非整数 seq / 非法 hash / 超末 seq ⇒ `VALIDATION_ERROR`；`sealedBinding()` 一致；封口后写入 `INVALID_STATE`；`entries()` 不可写；越限扩展授权被拒。 |
+| AC-093 | **PASS（枚举项）** | 同 revision 两源均按该 revision 冻结（策略文件与 INDEX.md 均为 `revision-1`）；声明 hash 钉住内容，字节改变 ⇒ `STALE_ARTIFACT`；重复冻结身份稳定（同输入两次 `snapshotRef` 相同）；resolver 的 `version` 前进被拒。**但** resolver 伪造的 `revision` 字段被原样冻结（W5R3-01）。 |
+
+四项必需失败测试（`fail4.mjs` 34/34 全过）：
+
+1. **跨项目/Transcript 攻击**：跨项目句柄 `CONTEXT_FORBIDDEN`、点名对方 Project、不解析、无 `snapshot`/正文；transcript 来源同样拒绝且 guard 二次拒绝。
+2. **Snapshot 失效**：revision 钉住 hash、内容被改后重建 ⇒ `STALE_ARTIFACT`；已冻结目录字节不变、重冻结 manifest 逐字节不变；artifact 版本前进 ⇒ `STALE_ARTIFACT` 且无快照。
+3. **预算不足**：必需源超限 ⇒ `BUDGET_EXCEEDED` 点名 input + 缺口且不冻结；ledger 拒绝并不追加/不计费；冷启动 0 预算封闭且无 seed 正文。
+4. **冷启动关联召回**：召回取消行为、支付约束、`tests/orders/cancel.test.ts`、`src/orders/cancel.ts`、已知差距；20 份无关文档 0 注入；误导聊天前后答案逐字节相同。
+
+## R3.6 Findings
+
+### W5R3-01 [P2] resolver 伪造的 `revision` 被原样冻结入快照：`ref.version` 与 `revision` 互相矛盾
+
+- 位置：`packages/core/src/context/builder.ts:714`（只比对 `resolved.version`，从不比对 `resolved.revision`）、`:838`（`...(resolved.revision === undefined ? {} : { revision: resolved.revision })` 原样写入 `ResolvedSource`）、`:1340`（同一写法）；对照 `:721-729` 已对 `resolved.path` 做严格校验，`:732` 起对 `resolved.hash`/`source.hash` 做校验。
+- 复现：`node /tmp/wp05r3/hunt3.mjs`（N1）与 `node /tmp/wp05r3/closure3.mjs`（`W5R2-01/a resolver that advances the revision is refused`）。
+- 观察：selection 声明 `{kind:'policy', id:'docs/rules/agents.md', version:'revision-1'}`，resolver 返回 `{ok:true, revision:'revision-2', path:'docs/rules/agents.md', hash:sha256(AGENTS_MD), content:AGENTS_MD}`（未给 `version`）⇒ `ok:true`；冻结结果为 `ref.version='revision-1'`、`ref.path` 正确、`hash` 正确，但 `revision:'revision-2'`，冻结正文实际仍是 `revision-1` 的字节。`ResolvedSource` 同时携带两个互相矛盾的 revision 事实。
+- 期望：`revision` 是 `context.md` 记录的「该来源在哪个 revision 被读取」的事实，必须与 `ref.version` 一致；resolver 不得改写任一 revision 声明（与 path/version/hash 同级）。
+- 契约/AC：AC-030（`acceptance.md`「Snapshot 忠实记录选择」）、AC-093（同一 Revision、revision 绑定、绝不半读）、`data.md` §1（`SourceRef.version`）、`context.md` §1（Snapshot 保存 resolvedSources 的 path/ref/hash）。
+- 严重性理由：不可被外部输入直接触发（需 trusted 端口返回错误 `revision`），且内容字节与 hash 仍被钉住，无直接内容越权；但它使「revision 绑定」在快照层可被单方面重写，且 `ResolvedSource.revision` 是下游（工作包/账本）复用 revision 的现成字段，因此定 P2 而非 P1。
+- 修复方向：在 `gatherSource` 的严格类别分支增加 `resolved.revision !== undefined && resolved.revision !== source.version ⇒ VALIDATION_ERROR`（与 `resolved.path` 同处、fetch 之前），或对严格类别完全忽略 `resolved.revision`、一律采用 `source.version`；补一条「resolver 返回另一 revision、同内容」的回归用例。
+
+### W5R3-02 [P3] `isTime` 只校验字形：结构性非法的 UTC 时间戳被接受并持久化
+
+- 位置：`packages/core/src/context/checkpoint.ts:45`（`const TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u`）、`:267`（`isTime`）、`:789`（`rotateSession.at`）、`:726`/`:796`（`safeClock` 同样走 `isTime`）。
+- 复现：`node /tmp/wp05r3/closure3.mjs`（`W5R2-11/rotateSession.at "2026-13-45T99:99:99.999Z"`）；直接 store 探针：`save` 对 `createdAt/updatedAt` 为 `'2026-13-45T99:99:99.999Z'`、`'2026-02-30T10:00:00.000Z'`、`'9999-99-99T99:99:99.999Z'`、`'0000-00-00T00:00:00.000Z'` 全部 `ok:true`。
+- 观察：月 13、日 45、时 99 之类的字符串通过正则即被视为合法 `Time`，被写入 Checkpoint（`updatedAt='2026-13-45T99:99:99.999Z'`）并驱动会话轮换。`isTime` 的注释自述「`true` when the string is UTC ISO8601 with millisecond precision」，与实际行为不符。
+- 期望：`data.md` §1「时间为 UTC ISO8601 毫秒」；形状合法但日期不存在的字符串不是有效 Time，应 `VALIDATION_ERROR`（`rotateSession.at`）/封闭 `INTERNAL_ERROR`（注入时钟）。
+- 契约/AC：`data.md` §1、AC-035（Checkpoint 往返与元数据契约）。
+- 修复方向：`isTime` 在正则之后再断言 `Number.isFinite(Date.parse(value))` 且 `new Date(value).toISOString() === value`（后者可同时排除 `2026-02-30`、`24:00` 与闰秒），一处修正即覆盖 save/load/rotateSession/safeClock 全部调用点；补 `'2026-02-30T...'` 与 `'2026-13-45T...'` 负例。
+
+### W5R3-03 [P3] W5R2-13 只部分闭合：同一被拒绝 ref 仍可由两个条目各登记一次
+
+- 位置：`packages/core/src/context/cold-start.ts:1150-1151`（tier-4 `phase:'related_constraints'`，`key: 'relation:F-aaaaaaaa->F-bbbbbbbb'`，但 `source.ref` 指向目标 Feature 的文档源）、`:1184-1185`（tier-5 `phase:'role_bodies'`，`key: 'git:features/F-aaaaaaaa/README.md'`）、`admit` 在 `:976-977` 按 ref 逐次 `excluded.push` + `unknowns.push`；T8 记录 `.agentdev/work/WP-05/implementation.md:198` 声明「`excluded` 中 budget 项的 `kind:id` 无重复」。
+- 复现：`node /tmp/wp05r3/closure3.mjs`（`W5R2-13/every budget-refused ref is listed exactly once`）。
+- 观察：`excluded` 的 budget 项为 `['git:features/README.md', 'git:features/F-aaaaaaaa/README.md'(原因＝relation 缺口), 'git:features/F-aaaaaaaa/README.md'(原因＝role_bodies 缺口), 'git:features/F-bbbbbbbb/README.md']` —— 同一 ref 出现 2 次，两条原因分别是 tier-4 的 `relation:F-aaaaaaaa->F-bbbbbbbb` 与 tier-5 的正文条目。T8 删除了 tier-5 的第二次 push，但 tier-4 的登记与 tier-5 的登记对同一 ref 仍然重复。
+- 期望：task 对 W5R2-13 的判据是「每条被预算拒绝的来源在 `excluded` 中只出现一次」（第 2 轮原文亦为「每条被放弃来源只登记一次，避免 usage/报告重复计数」）。当前仅对 tier-5 自身的重复生效。
+- 契约/AC：AC-036（`acceptance.md`「报告具体缺口」——重复计数会放大缺口统计）、T8 记录第 198 行的自述。
+- 严重性理由：只影响报告计数（`excluded`/`unknowns` 的条目数），不注入内容、不放宽预算、不改变选择集；已选的 `role_bodies` 正文仍正确交付，故 P3 而非 P2。
+- 修复方向：在 `admit` 内按 `ref.kind:id` 去重（同 ref 只保留首条并合并原因），或在 tier-4 的 `source.ref` 上使用与 tier-5 相同的稳定身份并让 `admit` 做幂等登记；同时把 T8 第 198 行的「无重复」措辞收紧为「tier-5 自身不重复」，或补一条多 Feature + 紧预算、含 `constrained_by` 关系的回归用例。
+
+### 记录核对（implementation.md T8）
+
+- T8 用例数声明**准确**：实测 `context-acl.test.ts` 50、`context-builder.test.ts` 45、`context-checkpoint.test.ts` 16、`context-cold-start.test.ts` 23、`context-ledger.test.ts` 36、`context-requirements.test.ts` 37，合计 **207**（与第 141 行一致）。
+- T8 命令声明**准确**：typecheck/lint 0、unit 32 文件/638 用例、build 10 workspace、docs:check ok；本轮复跑完全一致（另加 integration 10/124）。
+- T8 修改范围声明**准确**：`git show 909f95b --stat` 为 13 个文件（7 源文件 + 5 测试 + implementation.md），仅 `packages/core/src/context/**`、`packages/core/test/context-*.test.ts` 与本记录。
+- **过度/待收紧的声明 1 处**：第 198 行「`excluded` 中 budget 项的 `kind:id` 无重复」在多 Feature + `constrained_by` 场景下不成立（W5R3-03）。
+- W5R2-01 的「覆盖层只允许补 sender/artifactClass/ownedRunId/projectId」自本轮起与代码一致（`bondSource` 对严格类别只取声明 `hash`）；W5R2-10 的「不回传端口原始 message」覆盖 resolver/content/gates 三处**返回**与抛异常路径，与代码一致。
+- `extraTokens` 残余（第 211 行登记 14）自述「T7 残余 10 的说法自本轮起不再成立」——与代码一致（叠加后的 ceiling 亦受 4096–2000000 约束）。
+
+## R3.7 计数与阻断表
+
+| 严重性 | 数量 | 编号 | 是否阻断 | 说明 |
+|---|---|---|---|---|
+| P0 | 0 | — | — | — |
+| P1 | 0 | — | — | 第 2 轮的 2 个 P1（W5R2-01/02）已独立验证关闭，本轮未复现新的 P1 |
+| P2 | 1 | W5R3-01 | 不阻断（记录） | resolver 伪造 `revision` 未校验即冻结；需 trusted 端口返回错误数据才可达，无内容越权 |
+| P3 | 2 | W5R3-02, W5R3-03 | 不阻断 | 时间戳仅形状校验；W5R2-13 只部分闭合（报告重复计数） |
+| 合计 | 3 | — | — | W5R2-01…11、13（部分）、14 已闭；W5R2-12 登记转交 |
+
+## R3.8 能否进入独立 Test
+
+**可以（按 task 的判定规则放行进入独立 Test，并把 3 个 P2/P3 带账）**。冻结点 `909f95b` 上，第 2 轮枚举的 W5R2-01…11、14 已独立复现为关闭，W5R2-12 的残余登记与三道结构防线属实，四项必需失败测试全过、六条契约命令全绿；**不存在可复现的 P0/P1**，第 2 轮的阻断理由（AC-030/AC-079/AC-093 的验收面缺陷）已经消除。
+
+放行的前提是本报告作为带账依据，独立 Test 必须额外覆盖三条复现路径：(1) W5R3-03 —— W5R2-13 的判据「每条被预算拒绝的来源在 `excluded` 中只出现一次」在多 Feature + `constrained_by` 场景下**不成立**，Test 需按实际实现口径（tier-4 与 tier-5 各一条）记录或直接判失败并回流 Develop；(2) W5R3-01 —— resolver 返回另一 `revision` 时快照内部矛盾；(3) W5R3-02 —— 结构性非法的 UTC 时间戳被接受。
+
+若用户/Planning 要求 W5R2-13 的字面闭合，则返回 Develop 做一次小修（`admit` 去重 + `isTime` 严格化 + `resolved.revision` 校验，均为单点改动），修后重走独立 Review 再进入 Test。
+
+## R3.9 覆盖限制
+
+1. 本包只验证 **API/身份边界**：AC-033/AC-034 的容器挂载级负例属 WP-07；本轮 integration 虽全绿（含真实容器 9 例），但不含挂载级越权探针。
+2. 端口与 scope 由 Core 注入，`contextSources` 的完整句柄同样来自上层（WP-08/09 尚未接线）；本轮 W5R3-01 在包公共 API 上以自定义端口复现，未做端到端 HTTP 复现。
+3. W5R3-01 未量化下游影响：`ResolvedSource.revision` 在工作包/账本落库路径上的实际消费属 WP-08/WP-09 接线后才可验证。
+4. 冷启动检索为确定性 CJK 二元打分；本轮只验证固定样例的四类事实召回与 20 份无关文档 0 注入，未做大规模召回率评估。
+5. `readBudget` 的最终上界仍来自 Profile/模型窗口（本包无该输入）；本轮只证明账本/构建/冷启动三处对 0 与 4096–2000000 的一致校验，未量化真实模型窗口下的钳制。
+6. W5R3-03 的重复计数以「多 Feature + 紧预算 + 含 `constrained_by` 关系」的合成投影复现；未评估真实两轮交付后的 `excluded` 规模分布。
+7. Checkpoint 为内存 store，未验证 `attempt.checkpoint_ref`/`session_ref` 与 `snapshot(type='checkpoint')` 的落库幂等（T8 残余 5）。
+8. 未运行 `pnpm test:e2e`/`test:acceptance`/`test:live`（按契约返回 NOT_IMPLEMENTED，属 WP-09/WP-10）。
+9. `SourceRef` 的对象级「未知字段拒绝」（`data.md` §1「JSON 对象拒绝未声明字段」）在 Context 层未强制：overlay 可为 policy 来源附加 `sender` 而不报错（该字段不影响可读性、归属或计费，故未列 finding，仅登记为覆盖限制）。
+10. 未读取任何开发/Test 聊天或会话记录；`/tmp/wp05r3/*.mjs` 探针由 `dist` 类型声明与正式文档编写，未 import 产品测试文件。
+
+# WP-05 独立 Review 报告 · 第 4 轮（W5R3-01…03 修复验证）
+
+## R4.0 元数据与冻结点
+
+| 项 | 值 |
+|---|---|
+| 第 3 轮冻结点 | `909f95b`（`909f95b1df4b2f6e50197da488106cf399d5249c`，fix(core): close WP-05 review round-2 findings），tree `43cfc941126237162dbc4c48bda8e8e345260e90` |
+| `git rev-parse HEAD` | `3fb3820a78a59f11e010032ec8cae19cc75f0b71`（`docs(review)` 第 2 轮报告提交） |
+| `git rev-parse HEAD^{tree}` | `ee5884f5bf08ba9725a3261a322263914945f92d` |
+| 被审代码树（工作树，写入本报告前） | `7aecf1ac04199df6698d3b27dd9594f36ef79805`（用临时 index/object 目录 `git add -A && git write-tree` 计算，未触碰仓库 index；`.git/index` mtime 仍为 11:52） |
+| `git log --oneline -3` | `3fb3820 docs(review): WP-05 independent review report, round 2 (FAIL)` / `909f95b fix(core): close WP-05 review round-2 findings` / `15e2368 docs(review): WP-05 independent review report, round 1 (FAIL)` |
+| `git status --porcelain`（本报告写入前） | ` M .agentdev/work/WP-05/implementation.md`、` M .agentdev/work/WP-05/review.md`、` M packages/core/src/context/builder.ts`、` M packages/core/src/context/checkpoint.ts`、` M packages/core/src/context/cold-start.ts`、` M packages/core/test/context-builder.test.ts`、` M packages/core/test/context-checkpoint.test.ts`、` M packages/core/test/context-cold-start.test.ts`（8 项，全部未提交） |
+| `git diff --stat 909f95b`（工作树） | 6 文件 / +275 −9：`builder.ts +41`、`checkpoint.ts +14`、`cold-start.ts +27`、`context-builder.test.ts +50`、`context-checkpoint.test.ts +77`、`context-cold-start.test.ts +75`（仅 `packages/core/src/context/**` 与 `context-*.test.ts`） |
+| 第 1/2/3 轮原文 | 未改动：写入前 `git hash-object .agentdev/work/WP-05/review.md` = `head -n 734` 的 `git hash-object --stdin` = `7d11f342909bf00a0b3553e56a110043bc38a15a`（734 行） |
+| 改动文件 blob（工作树） | `builder.ts 50e5e3d9…`、`checkpoint.ts a9b1d5a1…`、`cold-start.ts 76bad6fe…`、`context-builder.test.ts 002f424e…`、`context-checkpoint.test.ts 1b88dded…`、`context-cold-start.test.ts fdc37719…`、`implementation.md 2e88e5dd…` |
+| Review 写入范围 | 仅 `.agentdev/work/WP-05/review.md`（本轮追加）；探针只在 `/tmp/wp05r4/`（复用 `/tmp/wp05r2`、`/tmp/wp05r3` 的既有 harness 与日志） |
+| 开发/Test 聊天 | 未读取（证据来自仓库文件、`dist` 产物与本次独立探针） |
+
+## R4.1 结论（verdict）
+
+**PASS** —— 按 task 的判定规则（FAIL 仅当任一 P0/P1 可复现），本轮无可复现的 P0/P1。第 3 轮的 3 个 finding（W5R3-01 P2、W5R3-02 P3、W5R3-03 P3）在 **工作树代码** 上逐条独立复现为**已关闭**：resolver 伪造的 `revision` 不再能进入快照、结构性非法的 UTC 时间戳在 `save`/注入时钟/`rotateSession.at` 三处全部被拒且无副作用、多 Feature 紧预算 `constrained_by` 场景下同一被拒 ref 只登记一次并合并原因。四条契约命令 + `pnpm test:integration` 全绿，四项必需失败测试与 AC 切片（AC-030/031/033/034/036/079/085/093）无回归。
+
+本轮另记录 **2 个新 P3**（均**先于本轮修复存在**、非 T9 回归，且均为 fail-closed 或仅报告层不一致）：W5R4-01（gate 路径的角色契约可冻结出 `revision≠ref.version`，与 W5R3-01 修好的不变式同类但不在本次修复范围内）、W5R4-02（`contextSources` 的「附加完整句柄」路径丢掉 `sender`/`artifactClass`/`ownedRunId`）。两者不阻断，带账进入独立 Test。
+
+## R4.2 契约命令原始结果
+
+| 命令 | 退出码 | 原始结果 |
+|---|---|---|
+| `pnpm typecheck` | 0 | 无输出错误（`TYPECHECK_EXIT=0`） |
+| `pnpm lint` | 0 | `All matched files use Prettier code style!`（`LINT_EXIT=0`） |
+| `pnpm test:unit` | 0 | `Test Files 32 passed (32)`、`Tests 644 passed (644)`、`Duration 9.85s`（`UNIT_EXIT=0`） |
+| `pnpm build` | 0 | 10 个 workspace 全部 `Done`（contracts/domain/storage/workspace/knowledge/core/pi-runtime 与 apps/cli/daemon/runner，`BUILD_EXIT=0`）；`packages/core/dist` 重建于 12:15，晚于源码 12:14 |
+| `pnpm test:integration` | 0 | `Test Files 10 passed (10)`、`Tests 124 passed (124)`、`Duration 28.85s`，含 `container.integration.test.ts`(9，真实容器：非 root、只读 rootfs、tmpfs、只读挂载拒绝、cap-drop、无网络、pid/内存限制) 与 `doctor`(8)（`INTEGRATION_EXIT=0`） |
+
+原始日志：`/tmp/wp05r4/commands.log`、`/tmp/wp05r4/integration.log`。
+
+## R4.3 方法与探针清单
+
+全部探针只消费 `pnpm build` 产物（`packages/core/dist`、`packages/storage/dist`）与正式文档，**不 import 任何产品测试文件**；每个反向用例在用例内新建独立端口对象，并同时断言副作用缺失（resolver 调用、内容 fetch、快照目录、状态变更）。第 3 轮 harness（`/tmp/wp05r2/lib.mjs`、`fixture.mjs`）为本人前几轮按 `dist` 类型声明所写，本轮新增 `/tmp/wp05r4/`。
+
+| 探针 | 用例 | 通过 | 说明 |
+|---|---|---|---|
+| `/tmp/wp05r4/r4.mjs` | 132 | 132 | W5R3-01 冻结身份（A 组）、W5R3-02 `isTime`（B 组）、四项必需失败测试（C 组） |
+| `/tmp/wp05r4/r4cs.mjs` | 12 | 12 | W5R3-03：多 Feature + 紧预算 + `constrained_by` 的去重与原因合并 |
+| `/tmp/wp05r4/acr4.mjs` | 63 | 63 | 本轮 AC 切片：AC-030/031/033/034/036/079/085/093 逐条重写输入 |
+| `/tmp/wp05r4/w5r4.mjs` | 9 | 8 | 新缺陷巡检；1 例失败＝W5R4-01 的证据断言（`revision !== ref.version`） |
+| `/tmp/wp05r3/closure3.mjs` | 151 | 151 | 第 3 轮闭合矩阵（R3 时 147/151，6 个失败断言全部转绿） |
+| `/tmp/wp05r3/hunt3.mjs` | 27 | 27 | 第 3 轮缺陷巡检（R3 时 26/27） |
+| `/tmp/wp05r3/ac3d.mjs` | 72 | 72 | 第 3 轮 AC 深度矩阵（同 8 条 AC） |
+| `/tmp/wp05r3/ac.patched.mjs` | 90 | 90 | 第 2 轮 AC 矩阵 |
+| `/tmp/wp05r3/closure.patched.mjs` | 218 | 218 | 第 2 轮闭合矩阵 |
+| `/tmp/wp05r2/fail4.mjs` | 34 | 34 | 四项必需失败测试（历史版，作为互证） |
+| 合计 | **808** | **807 通过 / 1 失败** | 唯一失败＝W5R4-01 的证据断言，非 W5R3 回归 |
+
+## R4.4 逐条修复验证（W5R3-01…03）
+
+### W5R3-01 [P2 → 已闭] selection 是 revision 的权威
+
+- **改动核对**：`builder.ts:744-750` 在 `version` 校验后新增 `resolved.revision !== undefined && resolved.revision !== source.version ⇒ VALIDATION_ERROR`（位于 fetch、token 计数与冻结之前）；`:410-416` 新增 `frozenRevision`，`git`/`policy`/`role_contract` 一律采用声明的 `source.version`（resolver 省略时也写入声明值），其余类别保留已证明等于声明的 resolver 值；`:858-869` 改用它。与 R3 修复方向一致。
+- **A1 正例（`r4.mjs` A1）**：selection 声明 `policy:docs/rules/agents.md@revision-1`、`message:msg-user-1@1`，resolver 回 `revision=version=声明值` ⇒ `ok:true`；`ResolvedSource` 的 `revision`/`version`/`path` 与 `ref.version` **全部等于声明值**，`hash === sha256(AGENTS_MD)`，只冻结 1 个快照，同输入两次构建 `snapshotRef` 相同。
+- **A2/A3 伪造必拒**：resolver 返回 `version=revision-2`（旧行为即拒）与返回 `revision=revision-2 / revision-9 / revision+version / ''`（本轮新拒，含 policy 与 message 两类）全部 `VALIDATION_ERROR`，**无内容 fetch、无快照**，且确认 resolver 确被调用（非空断言）；`git` 源走内容端口（`inline:false`）同样在 fetch 之前被拒。
+- **A4 声明身份被采纳**：resolver 省略 `revision` 时，`git`/`policy` 冻结值仍为声明的 `revision-1`（旧行为为 `undefined`）；非严格类别（message）不产生与 `ref.version` 矛盾的取值。
+- **A6 伪造扫描**：4 组伪造（含 `revision+path` 同时改写）4 次全部拒绝，冻结结果中「与声明矛盾」计数 = **0**。R3.6 记录的旧行为（`ref.version='revision-1'` 而 `revision='revision-2'` 同时入快照）**已不可复现**。
+- **AC 交叉印证**：`acr4.mjs` AC-030（选择逐字节冻结、overlay path/version/hash 冲突拒绝且 0 次 resolver 调用、重复键拒绝、resolver 伪造 revision 拒绝）、AC-093（同 revision 两源同 revision 冻结、resolver 前进 version/revision 均拒）；`closure3.mjs`(151/151)、`hunt3.mjs`(27/27) 亦转绿。
+
+### W5R3-02 [P3 → 已闭] `isTime` 必须要求真实历法时刻
+
+- **改动核对**：`checkpoint.ts:265-278` 在 `TIME_PATTERN` 之后追加 `Number.isFinite(Date.parse(value)) && new Date(parsed).toISOString() === value`；一处修正覆盖 `save`（`createdAt`/`updatedAt` 及 decision/approval/tool 时间）、`safeClock` 与 `rotateSession.at`。
+- **B1 `save`**：`createdAt`/`updatedAt` 为 `2026-02-30T10:00:00.000Z`、`2026-13-45T99:99:99.999Z` ⇒ `VALIDATION_ERROR`，随后 `load` 仍 `NOT_FOUND`（无部分落库）；追加 `2026-02-29T10:00:00.000Z`（2026 非闰年）、`2026-09-12T24:00:00.000Z`、`0000-00-00T00:00:00.000Z`、`9999-99-99T99:99:99.999Z` 同样拒绝。
+- **B1 正例**：`2026-09-12T00:00:00.000Z`、`2028-02-29T10:00:00.000Z`（闰日）、`2026-12-31T23:59:59.999Z` 被接受并**逐字节持久化**。
+- **B2 注入时钟**：两种非法值 ⇒ 封闭 `INTERNAL_ERROR`（`Checkpoint 时钟调用失败`），`load` 仍 `NOT_FOUND`。
+- **B3 `rotateSession.at`**：两种非法值 ⇒ `VALIDATION_ERROR`，`runOf().sessionRef` 仍为 `session-1`，`updatedAt` 保持 `T0`；**B4** 合法 `T1` 被记录、session 绑定到 `session-2`、`load().rotated === true` 往返成功。
+
+### W5R3-03 [P3 → 已闭] 被拒 ref 按 `kind:id` 幂等登记并合并原因
+
+- **改动核对**：`cold-start.ts` 的 `admit` 新增 `budgetGapIndex`，同 ref 首次写入 `excluded`/`unknowns` 位置，后续拒绝不再二次 push，而是把原因以 `；` 合并进首条并同步 `unknowns`。
+- **r4cs.mjs 场景**：3 Feature 投影 + `constrained_by` 关系，Project 概览正文撑满 `startupTokens:4096`。观测到的 budget 拒绝序列：
+  `["git:features/README.md","git:features/F-aaaaaaaa/README.md","git:features/F-bbbbbbbb/README.md"]`；其中 `git:features/F-aaaaaaaa/README.md` **只出现 1 次**，原因同时含 `relation:F-aaaaaaaa->F-bbbbbbbb`、`git:features/F-aaaaaaaa/README.md` 与两个「预算不足：选择 …」段（`；` 合并）；`unknowns` 中同 ref 亦仅一行且文本与 `excluded` 一致；唯一性与非空断言均成立；对照组（宽松预算）budget 排除数为 0。
+- **记录口径**：T8 第 198 行「`excluded` 中 budget 项的 `kind:id` 无重复」现**普遍成立**；`closure3.mjs` 的 `W5R2-13/every budget-refused ref is listed exactly once` 由失败转通过。
+
+## R4.5 AC 切片与四项必需失败测试
+
+`acr4.mjs` 63/63；`ac3d.mjs` 72/72；`ac.patched.mjs` 90/90；`closure.patched.mjs` 218/218。
+
+| AC | 判定 | 本轮依据（节选） |
+|---|---|---|
+| AC-030 | **PASS** | 选择/reason 逐字节进入快照；`ResolvedSource` 的 path/hash/revision/version 与声明一致；overlay 的 path/version/hash 冲突全部 `VALIDATION_ERROR` 且 0 次 resolver 调用；重复 overlay 键拒绝；resolver 伪造 `revision` ⇒ `VALIDATION_ERROR` |
+| AC-031 | **PASS** | planning 缺 ProductDefinition ⇒ `MISSING_CONTEXT` 点名 `productDefinition`；断言 `productDefinition/plan/reviewResult/testEvidence` 不能满足；补真实 product 产物后成功 |
+| AC-033 | **PASS** | `roleStagePairs()` 全部角色/阶段对 transcript 拒绝；guard 拒绝已登记的聊天且无正文；build 中 transcript 来源 `CONTEXT_FORBIDDEN` 且无正文；命名网拒绝 `docs/dev-chat.md|DEVELOPER_TRANSCRIPT.md|devchat.md` |
+| AC-034 | **PASS** | 跨 Project 来源 `CONTEXT_FORBIDDEN` 且点名对方 projectId、无正文、未被解析；外来 Project 与 Reviewer 角色 `load` 均 `CONTEXT_FORBIDDEN` 且结果无 `checkpoint` 字段 |
+| AC-036 | **PASS** | `startupTokens` ∈ {0,4095,2000001,−1,4096.5} 全封闭失败，0 预算交付无固定规则正文；**必需**源超预算 ⇒ `BUDGET_EXCEEDED` 点名 `input=userRequest` 且不冻结；**可选**源超预算 ⇒ 构建成功、进入 `excluded`/`unknowns` 且不在 `resolvedSources` |
+| AC-079 | **PASS** | 四正例（initialize/BootstrapObservation、Product/概览替代、Planning/ProductDefinition、L1/CompactPlan）全过；四负例精确点名 `productDefinition`/`plan`/`reviewResult`/`verificationResult`；`referencesFutureArtifact` 全表为空 |
+| AC-085 | **PASS** | 空账本封口 seq 0；重复封口幂等；正确绑定通过，错 hash 拒绝，非整数 seq ⇒ `VALIDATION_ERROR`；封口后 append 拒绝；`entries()` 冻结 |
+| AC-093 | **PASS** | 同 revision 两源均按该 revision 冻结；声明 hash 钉住内容（改字节 ⇒ `STALE_ARTIFACT`）；resolver 前进 version/revision 均 `VALIDATION_ERROR` |
+
+四项必需失败测试（`/tmp/wp05r2/fail4.mjs` 34/34 全过，`r4.mjs` C 组同口径再证 42 例）：
+
+1. **跨项目/Transcript 攻击**：跨 Project `CONTEXT_FORBIDDEN`、点名对方 Project、无正文、未解析；transcript 同样拒绝且 guard 二次拒绝。
+2. **Snapshot 失效**：同 revision 原地改字节 ⇒ `STALE_ARTIFACT` 且已冻结目录字节不变；revision 前进 ⇒ `STALE_ARTIFACT`；同输入重冻结 manifest 与文件列表逐字节不变且 `snapshotRef` 相同。
+3. **预算不足**：必需源超限 ⇒ `BUDGET_EXCEEDED` 点名 input 且不冻结；ledger 拒绝追加、不计费；冷启动 0 预算封闭且无 seed 正文。
+4. **冷启动关联召回**：召回取消行为、支付约束、`tests/orders/cancel.test.ts`、`src/orders/cancel.ts`、已知差距；20 份无关文档 0 注入且全部登记为 `unrelated`；误导聊天前后答案逐字节相同、聊天按 `transcript` 排除。
+
+## R4.6 Findings
+
+### W5R4-01 [P3] gate 路径的角色契约可冻结出 `revision ≠ ref.version`（W5R3-01 不变式未覆盖该路径）
+
+- 位置：`packages/core/src/context/builder.ts:1009`（`roleContractSource.version = '1'` 硬编码）、`:1016`（`roleContractResolution.revision = gates.policyRevision`）、`:1371`（`gatherResolved` 原样写入 `resolved.revision`）、`:1283`/`:1291`（快照拷贝）。
+- 复现：`node /tmp/wp05r4/w5r4.mjs`（N2）—— gates 端口返回 `policyRevision:'policy-rev-7'`，构建成功，观测 `{"id":"backend:contract","refVersion":"1","revision":"policy-rev-7","version":undefined}`；即同一 `ResolvedSource` 同时携带两个互相矛盾的 revision 事实。
+- 期望：与 W5R3-01 同一不变式——`ResolvedSource.revision` 与 `ref.version` 必须一致（`context.md` §1 “resolvedSources（path/ref、hash、bytes、revision）”、AC-030/AC-093 的「Snapshot 忠实记录选择」）。
+- 先于修复存在：`909f95b` 的同一文件 `:978`/`:985` 即为此两行，且 T9 明确「`gatherResolved` … 不走该分支，语义不变」；**非 T9 回归**。
+- 严重性理由：触发者是受信 gate 端口而非恶意 resolver，内容为内联且 hash 已钉住，无越权/无泄露；但 `policyRevision ≠ '1'` 是**正常取值**（`data.md` §2 `policyRevision:int`），因此比 W5R3-01 更易在真实接线（WP-08/09）中出现，仅影响报告层身份一致性与下游对 `revision` 的复用，故 P3。
+- 修复方向：`roleContractSource.version` 采用 `gates.policyRevision`（或让 `gatherResolved` 复用 `frozenRevision` 的采纳语义），并补一条 `policyRevision ≠ '1'` 的回归用例。
+
+### W5R4-02 [P3] `contextSources` 的「附加完整句柄」丢失 `sender`/`artifactClass`/`ownedRunId`
+
+- 位置：`packages/core/src/context/builder.ts:1124`（`bondSource(contextual, project)`，未把句柄自身当作 overlay）；`bondSource`（`:467-481`）只在 `overlay` 存在时拷贝 `sender`/`artifactClass`/`ownedRunId`。`:1121-1122` 的注释却声明未命中 selection 的条目是「additional, fully specified handle」。
+- 复现：`node /tmp/wp05r4/w5r4.mjs`（N1）—— `contextSources` 增补 `{kind:'message', id:'msg-extra-1', version:'1', sender:'user'}`（句柄自带 sender），构建结果 `CONTEXT_FORBIDDEN`「chief 角色不读取该消息正文」，正文未外泄；对照：同身份写进 `selection.sourceRefs` 并由 overlay 提供 sender 时正常可读。
+- 先于修复存在：`909f95b:1093` 为同一调用（工作树仅注释变动），**非 T9 回归**。
+- 严重性理由：fail-closed（拒绝读取而非越权），无路径/类别旁路；`artifact` 尚可由路径推导类别，主要影响 message 类附加句柄；存在 workaround，故 P3。
+- 修复方向：该分支把 `contextual` 自身作为 overlay 传入（或直接从 `contextual` 拷贝三类字段），并补一条「附加 message 句柄可读」的回归；或在 T 记录中把「附加句柄不携带分类元数据」写成明确口径。
+
+## R4.7 记录核对（implementation.md T9）
+
+- **修改范围准确**：`git diff --stat 909f95b` 为 6 文件（3 源 + 3 测试），全部在 `packages/core/src/context/**`、`packages/core/test/context-*.test.ts`；另加 T9 记录本身。未触碰其他包。
+- **测试数准确**：独立复跑 6 个 context 测试文件（vitest json）：acl **50**、builder **47**、checkpoint **19**、cold-start **24**、ledger **36**、requirements **37**，合计 **213**（T8 为 207，+6），与 T9 第 219 行一致；`pnpm test:unit` 32 文件 / **644** 用例（+6）一致。
+- **6 条新回归用例确实存在**且断言与修复一一对应（标题含 `W5R3-01`×2、`W5R3-02`×3、`W5R3-03`×1，见 `/tmp/wp05r4/context-tests.json`）。
+- **命令声明准确**：typecheck/lint/build/unit 结果与 T9 第 244-247 行一致；`lint` 全绿 ⇒ 「prettier --write 后 unchanged」与现状不矛盾。
+- **第 3 轮探针复跑声明准确**：T9 第 248 行「592/592」实测 `151+27+72+90+218+34 = 592`，逐脚本一致。
+- **T8 订正已落实**：第 198 行已注明单 Feature 历史口径并指向 T9/W5R3-03，与代码现状一致。
+- **待保留说明 1 处（非缺陷）**：T9 第 218 行「6 条新用例在未修复代码上全部失败」的旧码反跑本轮未独立复现（写权限仅限 `review.md`，不得改写工作树）；但 R3.6 已独立复现三处旧行为、diff 显示修复点与用例一一对应，声明与既有证据一致。
+- **残余 16/17/18 与代码一致**：下游对 `revision` 的消费确未验证（且见 W5R4-01）；`isTime` 只做历法校验（非 `Z` 偏移在正则阶段已拒、闰秒 `:60` 不接受）；`excluded` 合并文本以 `；` 连接且保留首条 ref 实例。
+
+## R4.8 计数与阻断表
+
+| 严重性 | 数量 | 编号 | 是否阻断 | 说明 |
+|---|---|---|---|---|
+| P0 | 0 | — | — | — |
+| P1 | 0 | — | — | 第 3 轮的 P2 W5R3-01 已独立验证关闭，本轮未复现 P0/P1 |
+| P2 | 0 | — | — | — |
+| P3 | 2 | W5R4-01, W5R4-02 | 不阻断（记录） | 均为先于本轮修复存在的 fail-closed / 报告层不一致 |
+| 合计 | 2 | — | — | W5R3-01/02/03 全部闭合；W5R2-12 残余维持登记 |
+
+## R4.9 能否进入独立 Test
+
+**可以。** 工作树代码（`7aecf1ac…`）上：第 3 轮的 3 个 finding 全部独立复现为关闭；`pnpm typecheck`/`lint`/`build`/`test:unit`（32 文件 644 用例）/`test:integration`（10 文件 124 用例，含真实容器）全绿；四项必需失败测试与 AC-030/031/033/034/036/079/085/093 切片无回归；**不存在可复现的 P0/P1**。
+
+放行时请把 2 个新 P3 带账，独立 Test 需额外覆盖：(1) W5R4-01 —— 用 `policyRevision ≠ '1'` 的 gate 端口构建，核对角色契约源的 `revision` 与 `ref.version` 是否一致（当前不一致）；(2) W5R4-02 —— 在 `contextSources` 以「附加完整句柄」方式提供带 `sender` 的 message，确认当前被 `CONTEXT_FORBIDDEN` 拒绝。二者均不改变本轮 PASS 判定，但应作为 Test 的显式观察项或按用户/Planning 要求回 Develop 小修后重走独立 Review。
+
+## R4.10 覆盖限制
+
+1. 本轮为**聚焦复验轮**：只对 W5R3-01…03 与 8 条 AC 做重写输入验证，未逐条重跑 `acceptance.md` 全表（AC-032/035/037/039 等由第 3 轮与 `closure.patched` 覆盖，本轮未再驱动）。
+2. 未读取任何开发/Test 聊天或会话记录；探针 harness 为本人前几轮按 `dist` 类型声明与正式文档编写，本轮未 import 产品测试文件。
+3. W5R4-01 的可达性依赖真实 gate 端口的 `policyRevision ≠ '1'`，而 WP-08/09 尚未接线；本轮以自定义端口复现。
+4. W5R3-01 的新校验对**全部 kind** 生效：若上游用 `ResolvedSource.revision` 承载 artifact 的 `sourceRevision`（`data.md` §2 `artifact.sourceRevision`）而非 artifact version，将改为 `VALIDATION_ERROR`；现有已接入端口（lib harness）不如此返回，真实端口未接线，故未量化该影响。
+5. 非严格类别（artifact/message/knowledge）在 resolver 省略 `revision` 时冻结 `revision=undefined`（不构成矛盾，已由 A4 断言）；未评估下游是否依赖该字段非空。
+6. `isTime` 只做历法与字形校验：不接受非 `Z` 偏移与闰秒 `:60`（符合 `data.md` §1 毫秒 UTC 口径），未做时区归一化。
+7. `pnpm test:integration` 本轮真实执行（28.85s，10 文件/124 用例）；AC-033/AC-034 的容器挂载级负例仍属 WP-07。
+8. W5R4-02 的复现基于内存端口与 `chief:assist`；未穷举其他角色/阶段与 artifact 类别的附加句柄行为。
+9. 未运行 `pnpm test:e2e`/`test:acceptance`/`test:live`（按契约返回 NOT_IMPLEMENTED，属 WP-09/WP-10）。
+10. T9 第 218 行的「旧码反跑」未独立复现（写权限仅限 `review.md`），仅以第 2/3 轮既有证据与 diff 互证。
