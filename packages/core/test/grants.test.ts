@@ -19,7 +19,7 @@
  *   Grant fails its guarded claim, so exactly one execution happens and the retry
  *   replays the recorded result.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -27,8 +27,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Grant, Scope, ToolOperation } from '@agentdev/contracts';
 import { ProjectStore as Store, projectIdFromRoot, type ProjectStore } from '@agentdev/storage';
 import {
+  DEFERRED_RESULT_MANIFEST,
   GrantStore,
   InMemoryDeferredResultStore,
+  ProjectStoreDeferredResultStore,
+  collectProjectGarbage,
+  deferredResultGcRoots,
   type DeferredResultStore,
   type GrantConsumeRequest,
   type GrantIssueInput,
@@ -1183,8 +1187,13 @@ describe('GrantStore (AC-049, AC-080)', () => {
       expect(replayed.outcome).toBe('replayed');
       if (replayed.outcome !== 'replayed') throw new Error('unreachable');
       expect(replayed.result).toEqual({ tool: 'edit', ok: true });
-      // The blob the reference points at is persisted under the project state dir.
-      expect(store.blobs.has(`deferred-results/index.json`)).toBe(true);
+      // W7R2-04/10 corrected this expectation: the durable record is now one file
+      // per reference (`deferred-results/refs/<ref>.json`), not a shared manifest
+      // under `deferred-results/index.json`. The old assertion encoded the
+      // manifest layout whose stale cache and read-modify-write were the bug.
+      const ref = first.toolOperation.resultRef ?? '';
+      expect(ref).not.toBe('');
+      expect(new ProjectStoreDeferredResultStore({ store }).has(ref)).toBe(true);
     });
 
     it('reports RECOVERY_REQUIRED only for a sink that cannot resolve the reference', () => {
@@ -1217,6 +1226,95 @@ describe('GrantStore (AC-049, AC-080)', () => {
           executor: () => 'never',
         }),
       ).toThrowError(/cannot resolve/);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Review round 2 (W7R2-04/09/10)
+  // ---------------------------------------------------------------------------
+
+  describe('multi-writer deferred results (W7R2-04/09/10)', () => {
+    it("sees another sink's result immediately, with no stale manifest cache (W7R2-04)", () => {
+      const sinkA = new ProjectStoreDeferredResultStore({ store });
+      const refA = sinkA.put({ writer: 'a' });
+      const sinkB = new ProjectStoreDeferredResultStore({ store });
+      const refB = sinkB.put({ writer: 'b' });
+
+      // The old store cached its manifest after the first `put`, so sinkA never
+      // saw anything sinkB wrote afterwards.
+      expect(sinkA.has(refB)).toBe(true);
+      expect(sinkA.get(refB)).toEqual({ writer: 'b' });
+      expect(sinkB.has(refA)).toBe(true);
+      expect(sinkB.get(refA)).toEqual({ writer: 'a' });
+    });
+
+    it('replays a recorded null result instead of reporting it missing (W7R2-09)', () => {
+      force(issueOnce());
+      const first = consume({ executor: () => null });
+      expect(first.outcome).toBe('executed');
+      if (first.outcome !== 'executed') throw new Error('unreachable');
+      expect(first.result).toBeNull();
+
+      // The retry must replay the recorded `null`, not surface RECOVERY_REQUIRED.
+      const replay = consume({
+        executor: () => {
+          throw new Error('the replayed operation must not execute again');
+        },
+      });
+      expect(replay.outcome).toBe('replayed');
+      if (replay.outcome !== 'replayed') throw new Error('unreachable');
+      expect(replay.result).toBeNull();
+      expect(consume({})).toMatchObject({ outcome: 'replayed', result: null });
+    });
+
+    it('replays a recorded undefined result as present (W7R2-09)', () => {
+      force(issueOnce());
+      const first = consume({ executor: () => undefined });
+      expect(first.outcome).toBe('executed');
+
+      const replay = consume({
+        executor: () => {
+          throw new Error('the replayed operation must not execute again');
+        },
+      });
+      expect(replay.outcome).toBe('replayed');
+      if (replay.outcome !== 'replayed') throw new Error('unreachable');
+      expect(replay.result).toBeUndefined();
+    });
+
+    it('keeps a recorded result alive through an offline blob GC (W7R2-10)', () => {
+      force(issueOnce());
+      const first = consume({ executor: () => ({ kept: true }) });
+      expect(first.outcome).toBe('executed');
+
+      // The database-derived reference set is empty for this result. Before the
+      // fix the result blob was swept and the retry became RECOVERY_REQUIRED.
+      expect(store.blobs.collectGarbage(new Set())).toEqual([]);
+      const replay = consume({});
+      expect(replay.outcome).toBe('replayed');
+      if (replay.outcome !== 'replayed') throw new Error('unreachable');
+      expect(replay.result).toEqual({ kept: true });
+    });
+
+    it('registers the deferred-result records and legacy blobs as GC roots (W7R2-10)', () => {
+      force(issueOnce());
+      const first = consume({ executor: () => 'kept' });
+      expect(first.outcome).toBe('executed');
+      if (first.outcome !== 'executed') throw new Error('unreachable');
+      const ref = first.toolOperation.resultRef ?? '';
+      expect(deferredResultGcRoots(store)).toContain(`deferred-results/refs/${ref}.json`);
+
+      // A result written by the pre-W7R2 layout is still referenced through its
+      // manifest blob, so the GC root set keeps it too.
+      const legacy = store.blobs.write('legacy-value');
+      writeFileSync(
+        store.blobs.resolve(DEFERRED_RESULT_MANIFEST),
+        JSON.stringify({ 'legacy-ref': legacy.relativePath }),
+        'utf8',
+      );
+      const removed = collectProjectGarbage(store, new Set());
+      expect(removed).not.toContain(legacy.relativePath);
+      expect(store.blobs.has(legacy.relativePath)).toBe(true);
     });
   });
 });

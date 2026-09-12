@@ -124,8 +124,8 @@ interface Harness {
   readonly executed: string[];
   issue(overrides?: Partial<GrantIssueInput>): void;
   invocation(overrides?: Partial<ToolInvocation>): ToolInvocation;
-  invoke(overrides?: Partial<ToolInvocation>): ToolOutcome;
-  invokeBuiltin(overrides?: Partial<ToolInvocation>): ToolOutcome;
+  invoke(overrides?: Partial<ToolInvocation>): Promise<ToolOutcome>;
+  invokeBuiltin(overrides?: Partial<ToolInvocation>): Promise<ToolOutcome>;
   dispose(): void;
 }
 
@@ -321,7 +321,7 @@ function makeHarness(): Harness {
       };
       return { ...base, ...overrides };
     },
-    invoke(overrides = {}) {
+    async invoke(overrides = {}) {
       const call = harness.invocation(overrides);
       // An explicit body records that the tool really ran; an override replaces it.
       const body =
@@ -331,11 +331,11 @@ function makeHarness(): Harness {
               return call.operation;
             }
           : overrides.run;
-      return broker.invoke({ ...call, run: body });
+      return await broker.invoke({ ...call, run: body });
     },
     /** Runs the Broker's *built-in* executor, so a read really reads the file. */
-    invokeBuiltin(overrides = {}) {
-      return broker.invoke(harness.invocation(overrides));
+    async invokeBuiltin(overrides = {}) {
+      return await broker.invoke(harness.invocation(overrides));
     },
     dispose() {
       store.close();
@@ -378,11 +378,11 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
     harness.dispose();
   });
 
-  it('executes an in-scope granted call and audits it, and refuses out-of-scope/expired/sibling calls with no side effect (AC-049, AC-080)', () => {
+  it('executes an in-scope granted call and audits it, and refuses out-of-scope/expired/sibling calls with no side effect (AC-049, AC-080)', async () => {
     const operationId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3e0500';
     harness.issue({ operation: 'read', targets: [SOURCE] });
 
-    const admitted = harness.invoke({ toolOperationId: operationId });
+    const admitted = await harness.invoke({ toolOperationId: operationId });
     expect(admitted.ok).toBe(true);
     if (!admitted.ok) throw new Error(admitted.reason);
     expect(admitted.outcome).toBe('executed');
@@ -403,7 +403,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
 
     // 1. An out-of-scope target: the only Grant names `src/feature.ts`, so a read of
     //    `src/other.ts` is refused and nothing runs.
-    const outOfScope = harness.invoke({ targets: [SOURCE_B], input: { path: SOURCE_B } });
+    const outOfScope = await harness.invoke({ targets: [SOURCE_B], input: { path: SOURCE_B } });
     expect(outOfScope.ok).toBe(false);
     if (outOfScope.ok) throw new Error('unreachable');
     expect(outOfScope.code).toBe('NOT_AUTHORIZED');
@@ -424,7 +424,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
     const expiredHarness = makeHarness();
     try {
       expiredHarness.issue({ operation: 'read', targets: [SOURCE], expiresAt: PAST });
-      const expired = expiredHarness.invoke({ toolOperationId: operationId });
+      const expired = await expiredHarness.invoke({ toolOperationId: operationId });
       expect(expired.ok).toBe(false);
       if (expired.ok) throw new Error('unreachable');
       expect(expired.code).toBe('AUTH_EXPIRED');
@@ -440,7 +440,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
     const siblingHarness = makeHarness();
     try {
       siblingHarness.issue({ operation: 'read', targets: [SOURCE] });
-      const sibling = siblingHarness.invoke({
+      const sibling = await siblingHarness.invoke({
         runId: RUN_B,
         attemptId: ATTEMPT_B,
         toolOperationId: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3e0501',
@@ -457,7 +457,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
     }
   });
 
-  it('replays the original once result for the same input and refuses a different input (AC-080)', () => {
+  it('replays the original once result for the same input and refuses a different input (AC-080)', async () => {
     const operationId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3e0510';
     const sideEffect = join(harness.workspace, 'src', 'side-effect.txt');
     const marker = 'the tool ran';
@@ -474,14 +474,14 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
       expiresAt: FUTURE,
     });
 
-    const first = harness.broker.invoke(
+    const first = await harness.broker.invoke(
       harness.invocation({ operation: 'bash', toolOperationId: operationId, input }),
     );
     expect(first.ok).toBe(true);
     if (!first.ok) throw new Error(first.reason);
     expect(first.outcome).toBe('executed');
 
-    const second = harness.broker.invoke(
+    const second = await harness.broker.invoke(
       harness.invocation({ operation: 'bash', toolOperationId: operationId, input }),
     );
     expect(second.ok).toBe(true);
@@ -499,7 +499,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
     // idempotency conflict — the recorded result is never presented as the answer
     // to a different request — and the side effect stays a single line.
     const otherCommand = `"${process.execPath}" -e 'process.stdout.write("other")'`;
-    const different = harness.broker.invoke(
+    const different = await harness.broker.invoke(
       harness.invocation({
         operation: 'bash',
         toolOperationId: operationId,
@@ -512,9 +512,9 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
     expect(readFileSync(sideEffect, 'utf8')).toBe(`${marker}\n`);
   });
 
-  it('refuses an out-of-scope read by the same role with no executor call and no row (AC-049)', () => {
+  it('refuses an out-of-scope read by the same role with no executor call and no row (AC-049)', async () => {
     harness.issue({ operation: 'read', targets: [SOURCE] });
-    const outside = harness.invoke({
+    const outside = await harness.invoke({
       targets: [SOURCE_B],
       input: { path: SOURCE_B },
       run: () => {
@@ -531,7 +531,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
     ).toHaveLength(0);
   });
 
-  it('reads the frozen verification input but not the source, and gains no write, in host and container mode (AC-048, AC-050)', () => {
+  it('reads the frozen verification input but not the source, and gains no write, in host and container mode (AC-048, AC-050)', async () => {
     const reviewOperationId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3e0520';
     const testOperationId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3e0521';
     harness.issue({
@@ -555,7 +555,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
       [RUN_TEST, ATTEMPT_TEST, 'test', 'test', testOperationId],
     ];
     for (const [runId, attemptId, role, stage, toolOperationId] of roles) {
-      const verified = harness.broker.invoke({
+      const verified = await harness.broker.invoke({
         workId: WORK_ID,
         runId,
         attemptId,
@@ -574,7 +574,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
 
       // A write to the frozen input is refused for a read-only role in every mode.
       for (const mode of ['host', 'container'] as const) {
-        const write = harness.broker.invoke({
+        const write = await harness.broker.invoke({
           workId: WORK_ID,
           runId,
           attemptId,
@@ -598,7 +598,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
     // A verifier holds no Grant for the developer workspace, so neither the source
     // nor the run database is readable: that is not a role privilege.
     for (const target of [SOURCE, DEV_DB]) {
-      const forbidden = harness.broker.invoke({
+      const forbidden = await harness.broker.invoke({
         workId: WORK_ID,
         runId: RUN_REVIEW,
         attemptId: ATTEMPT_REVIEW,
@@ -618,7 +618,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
     // the verifier's refusal is about its scope and not about a broken boundary.
     // The built-in executor really reads the file.
     harness.issue({ operation: 'read', targets: [SOURCE], runId: RUN_A });
-    const owner = harness.invokeBuiltin({ targets: [SOURCE], input: { path: SOURCE } });
+    const owner = await harness.invokeBuiltin({ targets: [SOURCE], input: { path: SOURCE } });
     expect(owner.ok).toBe(true);
     if (!owner.ok) throw new Error(owner.reason);
     expect(owner.result).toBe(SOURCE_BODY);
@@ -637,7 +637,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
       runId: RUN_REVIEW,
       toolOperationId: reportOperationId,
     });
-    const reported = harness.broker.invoke({
+    const reported = await harness.broker.invoke({
       workId: WORK_ID,
       runId: RUN_REVIEW,
       attemptId: ATTEMPT_REVIEW,
@@ -662,7 +662,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
     expect(readFileSync(join(harness.frozen, FROZEN), 'utf8')).toBe(FROZEN_BODY);
   });
 
-  it('writes a Review report inside its declared report root and never the source (W7R1-13)', () => {
+  it('writes a Review report inside its declared report root and never the source (W7R1-13)', async () => {
     const reportOperationId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3e0540';
     harness.issue({
       role: 'review',
@@ -681,7 +681,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
       writableReportRoots: [join(harness.frozen, 'reports')],
     });
     const report = join(harness.frozen, REVIEW_REPORT);
-    const written = governed.invoke({
+    const written = await governed.invoke({
       workId: WORK_ID,
       runId: RUN_REVIEW,
       attemptId: ATTEMPT_REVIEW,
@@ -701,7 +701,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
 
     // The same role still has no write path to source or to the run database.
     const sourceBefore = readFileSync(join(harness.workspace, SOURCE), 'utf8');
-    const sourceWrite = governed.invoke({
+    const sourceWrite = await governed.invoke({
       workId: WORK_ID,
       runId: RUN_REVIEW,
       attemptId: ATTEMPT_REVIEW,
@@ -720,7 +720,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
     expect(sourceWrite.reason).toContain('report/scratch root');
     expect(readFileSync(join(harness.workspace, SOURCE), 'utf8')).toBe(sourceBefore);
 
-    const dbWrite = governed.invoke({
+    const dbWrite = await governed.invoke({
       workId: WORK_ID,
       runId: RUN_REVIEW,
       attemptId: ATTEMPT_REVIEW,
@@ -738,7 +738,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
     expect(dbWrite.reason).toContain('report/scratch root');
   });
 
-  it('refuses the run database to a verifier without any caller-declared protected path (W7R1-04)', () => {
+  it('refuses the run database to a verifier without any caller-declared protected path (W7R1-04)', async () => {
     const dataDir = harness.store.dataDir;
     const dbFile = join(dataDir, 'project.sqlite');
     // No `protectedPaths` option: the roots are derived from the store, so even a
@@ -756,7 +756,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
       runId: RUN_REVIEW,
       toolOperationId: operationId,
     });
-    const read = plain.invoke({
+    const read = await plain.invoke({
       workId: WORK_ID,
       runId: RUN_REVIEW,
       attemptId: ATTEMPT_REVIEW,
@@ -778,7 +778,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
 
   it.skipIf(!DOCKER.ready)(
     'keeps the frozen source read-only inside the real container (AC-048, AC-050)',
-    () => {
+    async () => {
       const reviewOperationId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3e0530';
       harness.issue({
         role: 'review',
@@ -787,7 +787,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
         runId: RUN_REVIEW,
         toolOperationId: reviewOperationId,
       });
-      const verified = harness.broker.invoke({
+      const verified = await harness.broker.invoke({
         workId: WORK_ID,
         runId: RUN_REVIEW,
         attemptId: ATTEMPT_REVIEW,
@@ -806,7 +806,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
       expect(verified.result).toContain('export const feature = 1;');
 
       // A real container write attempt is refused before Docker is even asked.
-      const write = harness.broker.invoke({
+      const write = await harness.broker.invoke({
         workId: WORK_ID,
         runId: RUN_REVIEW,
         attemptId: ATTEMPT_REVIEW,
@@ -852,7 +852,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
     // The host tool process the Broker spawns never inherits the credential: the
     // real child starts from the host environment, which holds no secret value.
     harness.issue({ operation: 'bash', targets: [SOURCE], runId: RUN_A });
-    const brokerEnv = harness.broker.invoke(
+    const brokerEnv = await harness.broker.invoke(
       harness.invocation({
         operation: 'bash',
         input: {
@@ -938,7 +938,7 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
 
     // The Broker refuses the same use for the sibling — before any executor is
     // prepared — and records no secret value.
-    const refused = harness.invoke({
+    const refused = await harness.invoke({
       runId: RUN_B,
       attemptId: ATTEMPT_B,
       operation: 'secret',

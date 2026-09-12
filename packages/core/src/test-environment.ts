@@ -23,7 +23,14 @@
  * socket.
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createConnection, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -98,6 +105,17 @@ export interface TestEnvironmentPorts {
    * reported by an event, not a thrown error.
    */
   portAvailable(port: number): Promise<boolean>;
+  /**
+   * The pid that owns the listening socket on this port, when the OS can say.
+   *
+   * Readiness must be *proved* to belong to the command this environment started
+   * (W7R2-07): a bare connectable port lets any external listener impersonate the
+   * environment. `undefined` means ownership could not be proved, which is a
+   * refusal rather than a guess.
+   */
+  listeningPid(port: number, host: string): number | undefined;
+  /** Whether `pid` is `ancestor` itself or a descendant of it. */
+  processDescends(pid: number, ancestor: number): boolean;
 }
 
 function toResult(result: {
@@ -155,6 +173,120 @@ export function portBindable(port: number, host = '127.0.0.1'): Promise<boolean>
     server.listen({ port, host, exclusive: true });
     server.unref();
   });
+}
+
+/**
+ * The pid owning the listening socket on `port`, when this OS can report it.
+ *
+ * `lsof` maps a listening socket to its process on macOS/BSD, and Linux is served
+ * from `/proc/net/tcp` plus the owning process's descriptor table. `undefined`
+ * means the question could not be answered — no listener seen *or* no probe
+ * available — and the readiness check refuses rather than trusting the port
+ * (W7R2-07).
+ */
+export function listeningProcess(port: number): number | undefined {
+  if (process.platform === 'linux') {
+    const fromProc = procListeningProcess(port);
+    if (fromProc !== undefined) return fromProc;
+  }
+  return lsofListeningProcess(port);
+}
+
+function lsofListeningProcess(port: number): number | undefined {
+  const result = spawnSync('lsof', ['-nP', `-iTCP:${String(port)}`, '-sTCP:LISTEN', '-Fp'], {
+    encoding: 'utf8',
+    timeout: 5_000,
+  });
+  if (result.error !== undefined || result.status !== 0) return undefined;
+  for (const line of (result.stdout ?? '').split('\n')) {
+    const match = /^p(\d+)$/.exec(line.trim());
+    if (match !== null) return Number.parseInt(match[1] ?? '', 10);
+  }
+  return undefined;
+}
+
+/** Linux: the socket inode from `/proc/net/tcp{,6}` → the process holding it. */
+function procListeningProcess(port: number): number | undefined {
+  const inodes = new Set<string>();
+  for (const file of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    let text: string;
+    try {
+      text = readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    for (const line of text.split('\n').slice(1)) {
+      const fields = line.trim().split(/\s+/);
+      const local = fields[1];
+      const state = fields[3];
+      const inode = fields[9];
+      if (local === undefined || state !== '0A' || inode === undefined) continue;
+      const localPort = Number.parseInt(local.split(':')[1] ?? '', 16);
+      if (localPort !== port) continue;
+      inodes.add(inode);
+    }
+  }
+  if (inodes.size === 0) return undefined;
+  for (const entry of readDirectory('/proc')) {
+    if (!/^\d+$/.test(entry)) continue;
+    const fdDir = `/proc/${entry}/fd`;
+    for (const fd of readDirectory(fdDir)) {
+      let link: string;
+      try {
+        link = readlinkSync(join(fdDir, fd));
+      } catch {
+        continue;
+      }
+      const match = /^socket:\[(\d+)\]$/.exec(link);
+      if (match !== null && inodes.has(match[1] ?? '')) return Number.parseInt(entry, 10);
+    }
+  }
+  return undefined;
+}
+
+function readDirectory(path: string): string[] {
+  try {
+    return readdirSync(path);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Whether `pid` is `ancestor` or one of its descendants.
+ *
+ * A command may legitimately bind its port from a helper it spawned, so ownership
+ * is a process-tree question rather than an exact pid comparison.
+ */
+export function processDescends(pid: number, ancestor: number): boolean {
+  let current = pid;
+  for (let depth = 0; depth < 64; depth += 1) {
+    if (current === ancestor) return true;
+    const parent = parentProcess(current);
+    if (parent === undefined || parent <= 1 || parent === current) return false;
+    current = parent;
+  }
+  return false;
+}
+
+function parentProcess(pid: number): number | undefined {
+  if (process.platform === 'linux') {
+    try {
+      const stat = readFileSync(`/proc/${String(pid)}/stat`, 'utf8');
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      const parent = Number.parseInt(fields[1] ?? '', 10);
+      return Number.isInteger(parent) ? parent : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  const result = spawnSync('ps', ['-o', 'ppid=', '-p', String(pid)], {
+    encoding: 'utf8',
+    timeout: 5_000,
+  });
+  if (result.error !== undefined || result.status !== 0) return undefined;
+  const parent = Number.parseInt((result.stdout ?? '').trim(), 10);
+  return Number.isInteger(parent) ? parent : undefined;
 }
 
 /**
@@ -247,6 +379,8 @@ export const defaultTestEnvironmentPorts: TestEnvironmentPorts = {
     });
   },
   portAvailable: (port) => portBindable(port, '127.0.0.1'),
+  listeningPid: (port) => listeningProcess(port),
+  processDescends: (pid, ancestor) => processDescends(pid, ancestor),
 };
 
 export interface TestEnvironmentRequest {
@@ -351,6 +485,11 @@ export class TestEnvironmentManager {
    * probed against the OS before it is promised (W7R1-05). The database file lives
    * inside the new temporary directory, so it cannot be the development database.
    * Exhaustion is a refusal, not a reuse.
+   *
+   * Every step after the port claim runs inside a `try`: a failure (for example a
+   * full disk while creating the directory) releases the claim and is returned as a
+   * `PROVIDER_UNAVAILABLE` result, so it can never leak the port permanently or
+   * escape as an exception (W7R2-08).
    */
   async create(request: TestEnvironmentRequest): Promise<CreateOutcome> {
     const range = request.portRange ?? DEFAULT_TEST_PORT_RANGE;
@@ -363,48 +502,68 @@ export class TestEnvironmentManager {
         reason: `no free test port in ${String(range.min)}–${String(range.max)}; refusing to reuse the development port ${String(reservedPort ?? 'n/a')}`,
       };
     }
-    const dir = this.ports.createDir(this.prefix);
-    const dbPath = join(dir, 'test.sqlite');
-    const reservedDb = request.reserved?.dbPath;
-    if (reservedDb !== undefined && resolve(reservedDb) === resolve(dbPath)) {
+    let dir: string | undefined;
+    try {
+      dir = this.ports.createDir(this.prefix);
+      const dbPath = join(dir, 'test.sqlite');
+      const reservedDb = request.reserved?.dbPath;
+      if (reservedDb !== undefined && resolve(reservedDb) === resolve(dbPath)) {
+        this.releasePort(port);
+        this.ports.removeDir(dir);
+        return {
+          ok: false,
+          code: 'INVALID_STATE',
+          reason: `isolated database resolved to the reserved development database ${reservedDb}`,
+        };
+      }
+      this.ports.writeFile(dbPath, '');
+      const id = uuidv7();
+      const host = '127.0.0.1';
+      const env: Record<string, string> = {
+        ...(request.env ?? {}),
+        AGENTDEV_TEST_ENV_ID: id,
+        AGENTDEV_TEST_DB: dbPath,
+        AGENTDEV_TEST_PORT: String(port),
+        AGENTDEV_TEST_HOST: host,
+        PORT: String(port),
+        HOST: host,
+      };
+      const environment: TestEnvironment = {
+        id,
+        workId: request.workId,
+        attemptId: request.attemptId,
+        dir,
+        dbPath,
+        host,
+        port,
+        env,
+        command: [...request.command],
+        state: 'created',
+        reserved: {
+          ...(reservedPort === undefined ? {} : { port: reservedPort }),
+          ...(reservedDb === undefined ? {} : { dbPath: reservedDb }),
+        },
+      };
+      this.environments.set(id, environment);
+      return { ok: true, environment };
+    } catch (error) {
+      // Release the claim on **every** failure path: a process-level port claim
+      // that outlives its environment makes the port permanently unusable.
       this.releasePort(port);
-      this.ports.removeDir(dir);
+      if (dir !== undefined) {
+        try {
+          this.ports.removeDir(dir);
+        } catch {
+          // The directory could not be removed either; the failure below is the
+          // one the caller needs, and the port is already released.
+        }
+      }
       return {
         ok: false,
-        code: 'INVALID_STATE',
-        reason: `isolated database resolved to the reserved development database ${reservedDb}`,
+        code: 'PROVIDER_UNAVAILABLE',
+        reason: `test environment could not be created on port ${String(port)}: ${messageOf(error)}`,
       };
     }
-    this.ports.writeFile(dbPath, '');
-    const id = uuidv7();
-    const host = '127.0.0.1';
-    const env: Record<string, string> = {
-      ...(request.env ?? {}),
-      AGENTDEV_TEST_ENV_ID: id,
-      AGENTDEV_TEST_DB: dbPath,
-      AGENTDEV_TEST_PORT: String(port),
-      AGENTDEV_TEST_HOST: host,
-      PORT: String(port),
-      HOST: host,
-    };
-    const environment: TestEnvironment = {
-      id,
-      workId: request.workId,
-      attemptId: request.attemptId,
-      dir,
-      dbPath,
-      host,
-      port,
-      env,
-      command: [...request.command],
-      state: 'created',
-      reserved: {
-        ...(reservedPort === undefined ? {} : { port: reservedPort }),
-        ...(reservedDb === undefined ? {} : { dbPath: reservedDb }),
-      },
-    };
-    this.environments.set(id, environment);
-    return { ok: true, environment };
   }
 
   /**
@@ -632,13 +791,13 @@ export class TestEnvironmentManager {
    * Waits until this environment's own command is ready, and never reports
    * another process's listener as its own.
    *
-   * Readiness is accepted only when the port answers **and** the spawned command
-   * is still alive, re-checked after a short settle window so a child that dies
-   * immediately after binding the port is reported as failed rather than running
-   * (W7R1-05). Because `create` already refused an occupied port and this manager
-   * owns the port claim, an answer on this port belongs to this environment —
-   * whereas the failing probe's "port open, child dead" case is refused here with
-   * the child's own exit evidence.
+   * Readiness needs three facts, not one: the port answers, the spawned command is
+   * still alive after a settle window (W7R1-05), and the listening socket is
+   * **owned** by that command or one of its descendants (W7R2-07). The third is
+   * what stops an external listener from impersonating the environment: a live
+   * child that never listened would otherwise be reported `running` on somebody
+   * else's socket. When ownership cannot be proved the start fails with
+   * `INVALID_STATE` rather than guessing.
    */
   private async waitForPort(
     handle: ProcessHandle,
@@ -662,9 +821,12 @@ export class TestEnvironmentManager {
       if (handle.exited()) return dead();
       if (await portOpen(environment.host, environment.port)) {
         // The port answered. Confirm ownership: the command must still be alive,
-        // and must stay alive across a settle window before readiness is claimed.
+        // must stay alive across a settle window, and must be the process the OS
+        // names as the socket's owner before readiness is claimed.
         await delay(50);
         if (handle.exited()) return dead();
+        const ownership = this.verifyOwnership(handle, environment);
+        if (ownership !== undefined) return ownership;
         return { ok: true };
       }
       await delay(50);
@@ -673,6 +835,35 @@ export class TestEnvironmentManager {
       ok: false,
       code: 'PROVIDER_UNAVAILABLE',
       reason: `test environment ${environment.id} did not accept a connection on ${environment.host}:${String(environment.port)} within ${String(timeoutMs)}ms`,
+    };
+  }
+
+  /** Proves the listening socket belongs to this environment's command. */
+  private verifyOwnership(
+    handle: ProcessHandle,
+    environment: TestEnvironment,
+  ): { readonly ok: false; readonly code: BrokerErrorCode; readonly reason: string } | undefined {
+    const pid = handle.pid;
+    if (pid === undefined) {
+      return {
+        ok: false,
+        code: 'INVALID_STATE',
+        reason: `test environment ${environment.id} has no process id, so ownership of ${environment.host}:${String(environment.port)} cannot be proved`,
+      };
+    }
+    const owner = this.ports.listeningPid(environment.port, environment.host);
+    if (owner === undefined) {
+      return {
+        ok: false,
+        code: 'INVALID_STATE',
+        reason: `test environment ${environment.id} readiness could not be proved: the OS did not report which process owns ${environment.host}:${String(environment.port)}`,
+      };
+    }
+    if (owner === pid || this.ports.processDescends(owner, pid)) return undefined;
+    return {
+      ok: false,
+      code: 'INVALID_STATE',
+      reason: `test environment ${environment.id} reported ${environment.host}:${String(environment.port)} ready, but the listening socket is owned by pid ${String(owner)}, not by the started command (pid ${String(pid)})`,
     };
   }
 

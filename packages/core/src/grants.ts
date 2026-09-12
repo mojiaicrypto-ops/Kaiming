@@ -32,7 +32,14 @@
  *   projections: they run the same admission rules and return Grant rows, and a
  *   refusal never carries a secret value.
  */
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname } from 'node:path';
 import type { Grant, GrantScope, JsonObject, Role, ToolOperation } from '@agentdev/contracts';
 import {
@@ -72,6 +79,15 @@ export interface DeferredResultStore {
   put(value: unknown): string;
   /** Reads a stored result; `undefined` when the reference is unknown. */
   get(ref: string): unknown;
+  /**
+   * Whether a result is recorded for this reference.
+   *
+   * `get` alone cannot answer this: a legitimate tool result may itself be `null`
+   * or `undefined`, and treating that as "missing" refused to replay a recorded
+   * result with `RECOVERY_REQUIRED` (W7R2-09). The presence question is therefore
+   * separate from the value question.
+   */
+  has(ref: string): boolean;
 }
 
 /** What one `once` consumption is asked to do. */
@@ -185,61 +201,165 @@ export class InMemoryDeferredResultStore implements DeferredResultStore {
   get(ref: string): unknown {
     return this.values.get(ref);
   }
+
+  has(ref: string): boolean {
+    return this.values.has(ref);
+  }
 }
 
 /** Blob subdirectory the durable result store keeps its values in. */
 export const DEFERRED_RESULT_BLOB_DIR = 'deferred-results';
 
-/** The manifest mapping a recorded `resultRef` onto its content-addressed blob. */
-export const DEFERRED_RESULT_MANIFEST = `${DEFERRED_RESULT_BLOB_DIR}/index.json`;
+/**
+ * One file per recorded result: `<ref>.json` under this directory.
+ *
+ * There is deliberately **no shared index**: a manifest rewritten by every writer
+ * was not multi-writer safe (W7R2-04) and made the GC reachable from the blob
+ * sweep (W7R2-10). An independent file per result makes `put` a single atomic
+ * write, so a stale in-process cache cannot hide another writer's entry and two
+ * concurrent writers cannot lose each other's rows.
+ */
+export const DEFERRED_RESULT_REFS_DIR = `${DEFERRED_RESULT_BLOB_DIR}/refs`;
 
 /**
- * The blob-backed deferred-result store: the durable sink `GrantStore` uses by
- * default.
+ * The pre-W7R2 manifest.
  *
- * The review's cross-process probe (W7R1-10) showed the in-memory sink could only
+ * Still read (never written) so a result recorded by the old layout keeps
+ * resolving after an upgrade; {@link ProjectStoreDeferredResultStore.referencedPaths}
+ * keeps its blobs alive through an offline GC.
+ */
+export const DEFERRED_RESULT_MANIFEST = `${DEFERRED_RESULT_BLOB_DIR}/index.json`;
+
+/** What one per-reference result file records. */
+interface StoredResultRecord {
+  readonly present: true;
+  readonly value?: unknown;
+  /** `true` when the tool result was literally `undefined`. */
+  readonly undefined?: true;
+}
+
+/**
+ * The durable deferred-result store: the sink `GrantStore` uses by default.
+ *
+ * The review's cross-process probe (W7R1-10) showed an in-memory sink could only
  * prove "executed once": every other process answered `RECOVERY_REQUIRED` because
- * it had never seen the value. `ProjectStore.blobs` is already durable and
- * content-addressed, so each result is written as a blob and the recorded
- * `resultRef` points at it through a manifest that every process sharing the
- * project state directory reads. That is what makes the documented "retry the
- * original operation and get the original result" true across processes rather
- * than only within one.
+ * it had never seen the value. This store is durable and shared through the
+ * project state directory instead.
  *
- * `resultRef` stays a UUIDv7 because `tool_operation.resultRef` is an entity
- * reference in the contract; the manifest is the indirection that keeps the
- * contract shape and durability at once.
+ * Layout (W7R2-04/09/10):
+ *
+ * - each result is one file `deferred-results/refs/<ref>.json`, written through a
+ *   temporary file and an atomic rename — no read-modify-write and no cache, so
+ *   any writer's result is immediately resolvable by every process sharing the
+ *   directory and concurrent writers cannot lose entries;
+ * - the file itself is the presence marker, so a recorded `null` (or `undefined`)
+ *   result is replayed rather than reported as missing;
+ * - the files live outside `blobs/`, which is the only tree
+ *   `BlobStore.collectGarbage` sweeps, so an offline GC can no longer delete a
+ *   live deferred result;
+ * - `resultRef` stays a UUIDv7 because `tool_operation.resultRef` is an entity
+ *   reference in the contract.
  */
 export class ProjectStoreDeferredResultStore implements DeferredResultStore {
   private readonly blobs: ProjectStore['blobs'];
-  private manifest: Record<string, string> | undefined;
 
   constructor(options: { readonly store: ProjectStore }) {
     this.blobs = options.store.blobs;
   }
 
   put(value: unknown): string {
-    // The value is a JSON tool result. `?? null` keeps a `null` result
-    // distinguishable from a missing one, which is what `get` reports.
-    const blob = this.blobs.write(JSON.stringify(value ?? null));
     const ref = uuidv7();
-    const manifest = this.readManifest();
-    manifest[ref] = blob.relativePath;
-    this.writeManifest(manifest);
-    this.manifest = manifest;
+    const record: StoredResultRecord =
+      value === undefined ? { present: true, undefined: true } : { present: true, value };
+    const target = this.blobs.resolve(this.refPath(ref));
+    mkdirSync(dirname(target), { recursive: true });
+    // A unique temporary name: two writers of the *same* reference still cannot
+    // corrupt each other's file, and the rename is atomic on one filesystem.
+    const temporary = `${target}.tmp-${String(process.pid)}-${String(Date.now())}-${Math.random().toString(16).slice(2)}`;
+    writeFileSync(temporary, JSON.stringify(record), { encoding: 'utf8', mode: 0o600 });
+    renameSync(temporary, target);
     return ref;
   }
 
   get(ref: string): unknown {
-    const relativePath = this.readManifest()[ref];
-    if (relativePath === undefined || !this.blobs.has(relativePath)) return undefined;
-    const parsed: unknown = JSON.parse(this.blobs.read(relativePath).toString('utf8'));
-    return parsed === null ? undefined : parsed;
+    const record = this.readRecord(ref);
+    if (record === undefined) return undefined;
+    return record.undefined === true ? undefined : record.value;
   }
 
-  /** The manifest, cached for this process lifetime after the first write. */
+  has(ref: string): boolean {
+    // A file that cannot be parsed is not a resolvable result, so presence is the
+    // same question as "is there a value we can return"; replay then reports
+    // `RECOVERY_REQUIRED` instead of inventing one.
+    return this.readRecord(ref) !== undefined;
+  }
+
+  /**
+   * Every stored path that an offline GC must treat as a root (W7R2-10).
+   *
+   * The per-reference files are already outside `blobs/`; the legacy manifest and
+   * the content-addressed blobs it points at are listed too, so an upgrade cannot
+   * make the GC delete results recorded by the previous layout.
+   */
+  referencedPaths(): string[] {
+    const paths: string[] = [DEFERRED_RESULT_MANIFEST];
+    const refsDir = this.blobs.resolve(DEFERRED_RESULT_REFS_DIR);
+    if (existsSync(refsDir)) {
+      for (const name of readdirSync(refsDir)) {
+        paths.push(`${DEFERRED_RESULT_REFS_DIR}/${name}`);
+      }
+    }
+    for (const relativePath of Object.values(this.readManifest())) {
+      paths.push(relativePath);
+    }
+    return paths;
+  }
+
+  private refPath(ref: string): string {
+    return `${DEFERRED_RESULT_REFS_DIR}/${ref}.json`;
+  }
+
+  private readRecord(ref: string): StoredResultRecord | undefined {
+    const target = this.blobs.resolve(this.refPath(ref));
+    if (existsSync(target)) {
+      try {
+        const parsed: unknown = JSON.parse(readFileSync(target, 'utf8'));
+        if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+          // The explicit `present` marker is what distinguishes a stored `null`
+          // from a missing record (W7R2-09).
+          if ((parsed as { present?: unknown }).present === true) {
+            return parsed as StoredResultRecord;
+          }
+        }
+      } catch {
+        // A corrupt record is not a result: `has` reports the reference as
+        // unresolvable (so replay surfaces `RECOVERY_REQUIRED`) rather than
+        // fabricating a value from a half-written file.
+      }
+    }
+    const legacy = this.legacyBlobPath(ref);
+    if (legacy === undefined) return undefined;
+    try {
+      return { present: true, value: JSON.parse(this.blobs.read(legacy).toString('utf8')) };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private legacyBlobPath(ref: string): string | undefined {
+    const relativePath = this.readManifest()[ref];
+    if (relativePath === undefined || !this.blobs.has(relativePath)) return undefined;
+    return relativePath;
+  }
+
+  /**
+   * Reads the legacy manifest from disk every time.
+   *
+   * There is intentionally no in-process cache: caching it made a second store in
+   * the same data directory blind to every entry written after its first `put`
+   * (W7R2-04).
+   */
   private readManifest(): Record<string, string> {
-    if (this.manifest !== undefined) return { ...this.manifest };
     if (!this.blobs.has(DEFERRED_RESULT_MANIFEST)) return {};
     try {
       const parsed: unknown = JSON.parse(
@@ -257,18 +377,27 @@ export class ProjectStoreDeferredResultStore implements DeferredResultStore {
       return {};
     }
   }
+}
 
-  /**
-   * Persists the manifest through a temporary file and an atomic rename, so a
-   * concurrent reader never sees a half-written index.
-   */
-  private writeManifest(entries: Record<string, string>): void {
-    const target = this.blobs.resolve(DEFERRED_RESULT_MANIFEST);
-    mkdirSync(dirname(target), { recursive: true });
-    const temporary = `${target}.tmp-${String(process.pid)}-${String(Date.now())}`;
-    writeFileSync(temporary, JSON.stringify(entries), { encoding: 'utf8', mode: 0o600 });
-    renameSync(temporary, target);
-  }
+/**
+ * The deferred-result records an offline GC must keep (W7R2-10).
+ *
+ * `data.md` §4 makes `BlobStore.collectGarbage` an offline action over a
+ * caller-supplied reference set; before this helper the deferred-result manifest
+ * was not part of it and a live result's blob was swept away. Results now live in
+ * `deferred-results/` (outside the swept `blobs/` tree), and this function also
+ * lists the legacy manifest plus the blobs it references.
+ */
+export function deferredResultGcRoots(store: ProjectStore): string[] {
+  return new ProjectStoreDeferredResultStore({ store }).referencedPaths();
+}
+
+/** `BlobStore.collectGarbage` with the deferred-result roots included. */
+export function collectProjectGarbage(
+  store: ProjectStore,
+  referenced: ReadonlySet<string>,
+): string[] {
+  return store.blobs.collectGarbage(new Set([...referenced, ...deferredResultGcRoots(store)]));
 }
 
 export class GrantStore {
@@ -845,17 +974,18 @@ export class GrantStore {
         { details: { toolOperationId: operation.id, grantId: grant.id } },
       );
     }
-    const result = results.get(operation.resultRef);
-    if (result === undefined) {
+    if (!results.has(operation.resultRef)) {
       // The row records a result the store can no longer resolve. Returning
       // `undefined` would present a missing value as the original result, so the
-      // honest answer is a recovery state (`reliability.md` §2).
+      // honest answer is a recovery state (`reliability.md` §2). A recorded `null`
+      // or `undefined` is *present* and replays normally (W7R2-09).
       throw new ProtocolError(
         'RECOVERY_REQUIRED',
         `tool operation ${operation.id} references result ${operation.resultRef}, which the result store cannot resolve`,
         { details: { toolOperationId: operation.id, resultRef: operation.resultRef } },
       );
     }
+    const result = results.get(operation.resultRef);
     return {
       outcome: 'replayed',
       grant,

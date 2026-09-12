@@ -348,7 +348,7 @@ describe('WP-07 required failure tests', () => {
     //    read out of the workspace.
     harness.issue({ operation: 'read', targets: [ESCAPE] });
     let readBodyRan = false;
-    const read = harness.broker().invoke(
+    const read = await harness.broker().invoke(
       harness.invocation({
         targets: [ESCAPE],
         input: { path: ESCAPE },
@@ -371,7 +371,7 @@ describe('WP-07 required failure tests', () => {
     // byte-for-byte untouched.
     harness.issue({ operation: 'write', targets: [ESCAPE] });
     let writeBodyRan = false;
-    const write = harness.broker().invoke(
+    const write = await harness.broker().invoke(
       harness.invocation({
         operation: 'write',
         access: 'write',
@@ -519,6 +519,11 @@ describe('WP-07 required failure tests', () => {
         onExit: () => undefined,
       }),
       alive: () => true,
+      // The fake child cannot really bind, so ownership of the injected listener
+      // is proved by the fake probe: this fixture exercises the cleanup path, while
+      // W7R2-07 owns the proof of a *real* child's socket.
+      listeningPid: () => port,
+      processDescends: () => false,
       signal: (pid) => {
         signalFailures.push(String(pid));
         throw new Error('ESRCH: the process group is already gone');
@@ -613,14 +618,14 @@ describe('WP-07 required failure tests', () => {
   // 无 Docker 拒绝
   // -------------------------------------------------------------------------
 
-  it('无 Docker 拒绝: container mode refuses with a precise reason when Docker is unavailable and never falls back to the host', () => {
+  it('无 Docker 拒绝: container mode refuses with a precise reason when Docker is unavailable and never falls back to the host', async () => {
     const probe: DockerProbe = () => ({
       available: false,
       reason: 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock',
     });
     const runner = recordingRunner();
     harness.issue({ operation: 'bash', targets: [TARGET] });
-    const outcome: ToolOutcome = harness.broker({ docker: probe, process: runner }).invoke(
+    const outcome: ToolOutcome = await harness.broker({ docker: probe, process: runner }).invoke(
       harness.invocation({
         mode: 'container',
         operation: 'bash',

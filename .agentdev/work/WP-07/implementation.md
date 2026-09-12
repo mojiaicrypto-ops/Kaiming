@@ -156,3 +156,88 @@
 4. **`create` 变为异步**（`Promise<CreateOutcome>`）：OS 端口探测本质异步，同步 API 无法在不骗人的情况下探测占用；非本包调用方（apps）如已接线需相应 `await`（当前仓库内调用点仅为测试）。
 5. **明文 http 需双重显式**：`allowInsecureHttp` + 精确目标授权；容器/代理路径默认仍是 https。
 6. **跨进程重放的持久化范围**：结果落 `ProjectStore.blobs` 的 `deferred-results/`，随项目状态目录一起备份/GC；`blobs.collectGarbage` 的引用集合目前只读数据库列，尚未把该清单纳入（离线 GC 属运维范围）。
+
+## T8 Review 第 2 轮修复（W7R2-01..10）
+
+冻结点/审查报告：`c7400d7`（tree `744b9828`）上的 `.agentdev/work/WP-07/review.md` 第 2 轮（第 264 行起）。本轮仍只改本包归属文件（`packages/core/src/{grants,secrets,broker,test-environment}.ts`、`packages/domain/src/permission.ts`、`packages/pi-runtime/src/extensions.ts` 及其测试；`secrets.ts`/`permission.ts`/`extensions.ts` 本轮无改动）。每条修复配一条**在旧行为下会失败**的回归用例。
+
+### W7R2-01（P1）只读角色经 `bash`/`git` 写源码；容器 `writableRoots` 提权
+
+- **改了什么**：写门禁由「操作名名单」改为**能力分类**（`broker.ts`）。新增 `toolCapability(operation)`（`read`/`search`/`network`/`secret` = `read-only`，**其余一律 `mutating`**，未知名字 fail-closed）与 `isArbitraryCommandOperation`（`bash`/`git`）；删除了旧的 `WRITE_OPERATIONS`/`isWriteOperation`。`access` 缺省由能力推导（`mutating` ⇒ `write`），因此不能把 `bash` 声明成 read 蒙混。对 review/test：任意 `mutating` 工具被拒——`bash`/`git`（任意命令）与**非路径型** mutating 工具（`push`/`deploy`/未知名）无论是否声明 report root 都拒绝（`NOT_AUTHORIZED`，`fields=['role','operation']`），只有「效果就是某个路径」的 mutating 工具（`write`/`edit`/`artifact_write`/`delete_data`）可在声明的 report root 内放行（W7R1-13 语义保留）。`containerPlan` 对只读角色**剥离调用方 `writableRoots`**，只把 `writableReportRoots` 挂 `rw`，源码根恒为 `ro`；host 模式的写复查同样按能力走。
+- **回归测试**（`broker.test.ts`）：`refuses a read-only role a host bash write to source, leaving the file intact (W7R2-01)`、`refuses a read-only role a host git write to source (W7R2-01)`（源码字节不变 + 零 `tool_operation`）、`refuses a read-only role a non-path mutating tool even with a report root (W7R2-01)`（`push`：即便声明了 report root 也拒绝，工具体零执行）、`strips caller writableRoots for a read-only role in container mode (W7R2-01)`（`docker run` 参数含 `<ws>:/workspace:ro` 与 report 根 `:rw`，且不含 `<ws>:/workspace:rw`）、`still admits a report write for a read-only role (W7R2-01)`、`still runs an arbitrary-command tool for a write-capable role (W7R2-01)`。旧行为下前四条失败（bash/git/push 被放行；workspace 被 `rw` 挂载）。
+- **记录修正**：`implementation.md:138`（T7/W7R1-13）「对 review/test，写操作仅在 `writeRoots` 内放行」现对**所有** mutating 工具成立，且 `bash`/`git` 对只读角色一律拒绝，不再是文档与代码的偏离。
+
+### W7R2-02（P2）准入早于异步 DNS 决议，拒绝目标仍消费 Grant
+
+- **改了什么**：`Broker.invoke` 改为 `async invoke(...): Promise<ToolOutcome>`；准入第 4 步由同步 `checkTarget` 改为 `await networkPolicy(invocation).decide(...)`，因此「解析后才是私网」或「不可解析」的目标在 `consumeOnce` 之前被拒，Grant 不被消费、不写 `tool_operation`。网络决议顺带返回已校验地址供钉扎（见 W7R2-03）。同步 `checkTarget`/`checkUrl` 保留为纯策略快路径。
+- **回归测试**（`broker.test.ts`）：`refuses a target whose DNS answer is private before consuming the Grant (W7R2-02)`（桩解析器 `localtest.example → 127.0.0.1`；`NOT_AUTHORIZED`、`consumedAt` 未写、`toolOperations.count()===0`）与 `still admits a public address literal at admission (W7R2-02)`（`93.184.216.34` 字面量仍放行并执行）。
+- **调用点适配**：`Broker` 在本仓库内尚无生产调用点（仅测试），`packages/core/test/*` 的 `invoke` 调用点全部改为 `await`；`permissions.integration.test.ts` 的 `Harness.invoke`/`invokeBuiltin` 返回类型改为 `Promise<ToolOutcome>`。
+
+### W7R2-03（P2）DNS TOCTOU：校验地址未钉在连接上
+
+- **改了什么**：`NetworkPolicyDecision` 的 `ok` 分支新增 `addresses`（仅当**真的发生解析**时携带；字面量的 URL host 本身就是地址，无需钉扎）；`classifyHostResolution` 返回已校验地址；`GuardedRequester` 每一跳把 `decision.addresses` 作为 `pinnedAddresses` 传给 `NetworkFetcher`。默认传输 `defaultNetworkFetcher` 在存在钉扎时改用 `node:http(s)` + 只返回该地址的 `lookup`（`pinnedLookup`），因此守卫与连接之间再解析一次也拿不到第二个（私网）地址；未钉扎路径仍走 `fetch`。`decide()` 因授权而提前放行但解析成功时同样返回地址（授权名字也被钉扎）。**残余**：`pinnedAddresses` 是交给注入 fetcher 的约定——调用方自带的 transport 必须自行兑现（见 T8 残余 1）。
+- **回归测试**（`broker.test.ts`）：`pins the transport to the address the policy validated (W7R2-03)`（记录 fetcher 收到 `['93.184.216.34']`）、`never lets a rebinding answer reach the second address (W7R2-03)`（解析器第二次返回 `127.0.0.1`；fetcher 记录的实际连接目标是首次校验值，且只发生一次查找）、`connects to the pinned address through the built-in transport (W7R2-03)`（真实本地 HTTP 服务器；`rebind.example` 并不存在于 DNS，只有钉扎地址能解释成功连接）。
+
+### W7R2-04（P2）持久延迟结果存储非多写者安全
+
+- **改了什么**：`packages/core/src/grants.ts` 的 `ProjectStoreDeferredResultStore` 由「共享 manifest + 哈希 blob」改为**每个结果一个文件** `deferred-results/refs/<ref>.json`（临时文件 + 原子 rename，`put` 无读改写）。彻底删除进程内 manifest 缓存：任何写者写入的结果对同目录所有进程**立即可解析**，并发写者不会互相丢条目。旧 manifest（`deferred-results/index.json`）仅保留**只读兼容**路径，使升级前写入的结果仍可解析。
+- **回归测试**：单元 `packages/core/test/grants.test.ts › sees another sink's result immediately, with no stale manifest cache (W7R2-04)`（旧行为：sinkA 首次 `put` 后缓存 manifest，读不到 sinkB 的 ref ⇒ 失败）；集成 **新增文件** `packages/core/test/grants.integration.test.ts › loses no entry when two processes write results concurrently (W7R2-04)`（两个真实 `node` 进程各写 25 条，断言 50 个 ref 全部唯一且全部可解析；旧行为下并发读改写 manifest 会丢条目）。
+
+### W7R2-05（P3）解析器抛异常逃逸为异常
+
+- **改了什么**：`grants.ts` 无改动；`broker.ts` 新增 `safeResolve`，把 `resolver.resolve` 的同步/异步抛出转换为 `{ok:false, reason}`，`classifyHostResolution`/`resolvesToPrivateAddress` 与 `GuardedRequester` 因此把「解析器坏了」按**不可解析**处理，返回 `NOT_AUTHORIZED` + 原因，而不是抛出。
+- **回归测试**（`broker.test.ts`）：`turns a throwing resolver into a refusal instead of an exception (W7R2-05)`——`decide()` 与 `GuardedRequester.request()` 均返回带 `resolver exploded` 原因的拒绝，不抛异常。
+
+### W7R2-06（P3）仅解码 `64:ff9b::/96`；本地用途 NAT64 被判公网
+
+- **改了什么**：`broker.ts` 新增 `DEFAULT_NAT64_PREFIXES = ['64:ff9b::/96', '64:ff9b:1::/48']`（RFC 6052 well-known + RFC 8215 local-use，可经 `NetworkPolicy`/`BrokerOptions.nat64Prefixes` 配置）与 CIDR 解析/匹配；`isPrivateIpv6` 对每个命中前缀解出内嵌 IPv4 并套用**完整** IPv4 规则：`/96`（及更长）取末 32 位，短前缀按 bits 48..79（`u` 八位组必须为 0）并同时检查末字；**无法解码一律按内网**。
+- **回归测试**（`broker.test.ts`）：`decodes local-use NAT64 prefixes and treats undecodable ones as private (W7R2-06)`——`64:ff9b:1::7f00:1`、`64:ff9b:1::a00:1` 判内网，`64:ff9b::7f00:1` 仍内网，配置前缀 `2001:db8:64::/96` 生效，不可解码布局判内网，且 `NetworkPolicy.decide` 对 `https://[2001:db8:64::7f00:1]/` 拒绝。
+
+### W7R2-07（P3）就绪靠「端口可连 + 子进程存活」，外部监听器可冒充
+
+- **改了什么**：`test-environment.ts` 的 `TestEnvironmentPorts` 新增 `listeningPid(port)` 与 `processDescends(pid, ancestor)`；默认实现 `listeningProcess` 在 macOS/BSD 用 `lsof -sTCP:LISTEN -Fp`，Linux 用 `/proc/net/tcp{,6}` 的 inode 反查 `/proc/<pid>/fd`，`processDescends` 用 `/proc/<pid>/stat` / `ps -o ppid=`。`waitForPort` 在端口可连、子进程存活且跨过 settle 窗口后，还要求套接字属主是该子进程或其**后代**；归属无法证明（探针不可用/无 pid/属主是别人）一律 `INVALID_STATE`，绝不报 running。
+- **回归测试**（`broker.test.ts`）：`refuses readiness when the port is owned by an external listener (W7R2-07)`——真实外部 `net` 监听器占用该端口 + 一个存活但从不监听的子进程 ⇒ `start` 返回 `INVALID_STATE` 且 reason 含 `owned by pid`（旧行为：`ok:true`/running）。既有真实子进程用例（unit + integration）继续通过，证明该证明不误伤真就绪。
+- **既有 fixture 适配**：`permissions-failures.test.ts` 的「进程清理失败」用例用一个假 `spawn`（从不真正 bind）配合注入监听器，为使该用例仍聚焦清理失败路径，其 fake ports 显式提供 `listeningPid: () => <fake pid>` 与 `processDescends: () => false`。
+
+### W7R2-08（P3）`create` 认领端口后抛异常会永久泄漏
+
+- **改了什么**：`TestEnvironmentManager.create` 把端口认领之后的所有步骤包进 `try`；任何抛出都 `releasePort(port)`（并尽力 `removeDir`），然后**以结果对象**返回 `{ok:false, code:'PROVIDER_UNAVAILABLE', reason:'…ENOSPC…'}`，不再抛异常，也不再让进程级认领存活。
+- **回归测试**（`broker.test.ts`）：`releases a claimed port when create fails, so a later create succeeds (W7R2-08)`——注入 `createDir` 抛 `ENOSPC`；断言返回结果对象、`claimedTestPorts()` 不含该端口、同一端口随后可被另一个 manager 成功创建。
+
+### W7R2-09（P3）合法 `null`（或 `undefined`）结果无法重放
+
+- **改了什么**：`DeferredResultStore` 新增 `has(ref): boolean` 作为**存在性**信号（`InMemoryDeferredResultStore` 用 `Map.has`；持久存储以「每 ref 一个文件」为存在标记，并把 `undefined` 显式编码进记录）。`replayOperation` 改为 `if (!results.has(ref)) throw RECOVERY_REQUIRED` 后再取 `get(ref)`，因此已记录的 `null`/`undefined` 正常重放，只有真正缺失才报恢复态。
+- **回归测试**（`grants.test.ts`）：`replays a recorded null result instead of reporting it missing (W7R2-09)`（首次 `executed`、`result === null`；重试 `replayed`、`result === null`，旧行为下抛 `RECOVERY_REQUIRED`）与 `replays a recorded undefined result as present (W7R2-09)`。
+
+### W7R2-10（P3）离线 blob GC 删除延迟结果；清单线性增长/整体重写
+
+- **改了什么**：结果文件落在 `deferred-results/refs/`，**不在** `BlobStore.collectGarbage` 唯一清扫的 `blobs/**` 树内；新增 `ProjectStoreDeferredResultStore.referencedPaths()` 与模块级 `deferredResultGcRoots(store)`、`collectProjectGarbage(store, referenced)`，把「延迟结果 + 旧 manifest + 旧 manifest 引用的 blob」并入 GC 引用根。新布局没有共享 manifest，`put` 不再整体重写，清单随结果数线性增长的问题消失（旧 manifest 仅兼容读）。
+- **回归测试**（`grants.test.ts`）：`keeps a recorded result alive through an offline blob GC (W7R2-10)`（`blobs.collectGarbage(new Set())` 返回 `[]`，随后重放仍成功；旧行为下结果 blob 被删、重放 `RECOVERY_REQUIRED`）与 `registers the deferred-result records and legacy blobs as GC roots (W7R2-10)`（`deferredResultGcRoots` 含该 ref 文件；`collectProjectGarbage` 保留旧 manifest 引用的 blob）。
+
+### T8 修正的旧期望/记录
+
+1. `grants.test.ts › replays the recorded result from a second store…` 原断言 `store.blobs.has('deferred-results/index.json')`——该期望**编码了 W7R2-04/10 的缺陷布局**（共享 manifest），已改为断言该 `resultRef` 的 per-ref 记录存在（`ProjectStoreDeferredResultStore.has(ref)`）。
+2. `broker.test.ts › refuses a container network call when no Core proxy exists…` 与 `› refuses an operation with no built-in executor…` 原用 `https://example.com/`；旧同步准入不解析 DNS、把未知名字当公网，W7R2-02 后改为使用本地桩解析器认识的 `public.example`（fixture，离线）才能走到「无代理拒绝」/「无内置执行器」分支。这是**期望随修复变更**，不是放宽。
+3. `permissions-failures.test.ts` 与其余 3 个测试文件的 `invoke` 调用点因 `Broker.invoke` 变为异步而改为 `await`（纯适配，无断言语义变化）；其中「进程清理失败」fake ports 增补归属探针（见 W7R2-07）。
+4. T7 残余 #6（GC 未纳入清单）**关闭**：结果已移出 blobs 树，并提供 `collectProjectGarbage` 合并引用根；不再声称「尚未把该清单纳入」。
+5. 旧 `implementation.md` 中「跨进程重放依赖 manifest 缓存」的实现细节随 W7R2-04 失效；T7/W7R1-10 的**行为**结论（第二个 OS 进程能重放原结果）仍成立且已由集成用例覆盖。
+
+### T8 新登记残余
+
+1. **W7R2-03 钉扎依赖 transport 兑现 `pinnedAddresses`**：内建传输用 `lookup` 真正钉扎；调用方注入的 `NetworkFetcher` 会收到该 pin，但 Broker 无法强制其使用（这是接缝契约）。另外字面量目标不带 pin（URL host 即地址），而 `ToolInvocation.run` 体若自建传输会绕过 `GuardedRequester`——准入阶段仍会按 W7R2-02 解析并拒绝私网目标，但「工具体自己发起的第二次连接」不在本包的守卫范围内。
+2. **W7R2-07 归属证明依赖 OS 探针**：macOS/BSD 需 `lsof`、Linux 需 `/proc`；两者都不可用或 `lsof` 无权看到属主时无法证明归属，`start` 以 `INVALID_STATE` fail-closed（可能对特殊宿主产生假阴性——按设计不猜测）。
+3. **W7R2-04 布局是单向兼容**：新版本仍能读旧 manifest，但旧版本进程读不到新写入的 per-ref 结果；滚动升级期间不应混跑两个版本。
+4. **W7R2-01 能力清单是封闭集合**：新增只读工具名必须显式加入 `READ_ONLY_OPERATIONS`，否则按 mutating fail-closed（`delete_data`/`push`/`deploy` 仍为 mutating）。
+5. **W7R2-08 API 变化**：`create` 失败路径由「抛出」改为「返回 `PROVIDER_UNAVAILABLE` 结果对象」（空目录等成功语义不变）；调用方需按既有 `CreateOutcome` 分支处理。
+
+### T8 验证数字（本轮，全部命令真实执行）
+
+| 命令 | 结果 |
+|---|---|
+| `prettier --write`（本包归属文件） | 全部符合 Prettier |
+| `pnpm typecheck` | 退出 0 |
+| `pnpm lint` | 退出 0（ESLint + `All matched files use Prettier code style!`） |
+| `pnpm test:unit` | **44 文件 / 905 用例全部通过**（T7 为 885；本轮 +20：broker W7R2 15 例 + grants W7R2 5 例） |
+| `pnpm test:integration` | **15 文件 / 157 用例全部通过**（T7 为 14/156；新增 `grants.integration.test.ts` 1 例并发写者；真实 Docker 用例实际执行，无 skip） |
+| `pnpm build` | 10 workspace 全部 Done |
+

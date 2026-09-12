@@ -296,10 +296,10 @@ describe('Broker integration (AC-048, AC-050)', () => {
     harness.dispose();
   });
 
-  it('runs a real host child process through an admitted Grant (AC-048)', () => {
+  it('runs a real host child process through an admitted Grant (AC-048)', async () => {
     issue(harness, { operation: 'bash', targets: [A] });
     const command = `"${process.execPath}" -e 'process.stdout.write("host-ok")'`;
-    const outcome: ToolOutcome = harness.broker.invoke(
+    const outcome: ToolOutcome = await harness.broker.invoke(
       invocation(harness, { operation: 'bash', input: { command } }),
     );
 
@@ -487,9 +487,9 @@ describe('Broker integration (AC-048, AC-050)', () => {
 
   it.skipIf(!DOCKER.ready)(
     'runs a container read through Docker and reports the real non-root account',
-    () => {
+    async () => {
       issue(harness, { operation: 'read', targets: [A] });
-      const read = harness.broker.invoke(
+      const read = await harness.broker.invoke(
         invocation(harness, { mode: 'container', operation: 'read', input: { path: A } }),
       );
       expect(read.ok).toBe(true);
@@ -499,7 +499,7 @@ describe('Broker integration (AC-048, AC-050)', () => {
       expect(readFileSync(join(harness.workspace, A), 'utf8')).toBe('export const a = 1;\n');
 
       issue(harness, { operation: 'bash', targets: [A] });
-      const identity = harness.broker.invoke(
+      const identity = await harness.broker.invoke(
         invocation(harness, { mode: 'container', operation: 'bash', input: { command: 'id -u' } }),
       );
       expect(identity.ok).toBe(true);
@@ -508,7 +508,7 @@ describe('Broker integration (AC-048, AC-050)', () => {
     },
   );
 
-  it('replays a once result in a separate OS process through the durable store (W7R1-10)', () => {
+  it('replays a once result in a separate OS process through the durable store (W7R1-10)', async () => {
     const operationId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d6e70';
     const input = { path: A };
     issue(harness, {
@@ -519,7 +519,7 @@ describe('Broker integration (AC-048, AC-050)', () => {
       inputHash: hashToolInput(input),
     });
     let executions = 0;
-    const first = harness.broker.invoke(
+    const first = await harness.broker.invoke(
       invocation(harness, {
         toolOperationId: operationId,
         input,
@@ -598,7 +598,7 @@ describe('Broker integration (AC-048, AC-050)', () => {
     expect(harness.store.toolOperations.count()).toBe(1);
   });
 
-  it('keeps the once result replayable across a real execution (AC-080)', () => {
+  it('keeps the once result replayable across a real execution (AC-080)', async () => {
     const operationId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d6e70';
     const input = { path: A };
     issue(harness, {
@@ -608,12 +608,12 @@ describe('Broker integration (AC-048, AC-050)', () => {
       toolOperationId: operationId,
       inputHash: hashToolInput(input),
     });
-    const first = harness.broker.invoke(
+    const first = await harness.broker.invoke(
       invocation(harness, { toolOperationId: operationId, input }),
     );
     expect(first.ok).toBe(true);
     if (!first.ok) throw new Error('unreachable');
-    const second = harness.broker.invoke(
+    const second = await harness.broker.invoke(
       invocation(harness, { toolOperationId: operationId, input }),
     );
     expect(second.ok).toBe(true);

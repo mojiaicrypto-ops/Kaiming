@@ -26,8 +26,17 @@
  *    precise reason** — there is deliberately no host fallback, because falling
  *    back would silently change the isolation the caller asked for. `host` keeps
  *    exactly the same domain gates: the file boundary, the role write gate and
- *    the network policy are evaluated before either mode runs.
- * 3. **File boundary is a real path, not a string.** `resolveWithinRoots`
+ *    the network policy are evaluated before either mode runs. A read-only role's
+ *    caller-supplied `writableRoots` are stripped in container mode, so only its
+ *    report/scratch root can ever be mounted `rw` (W7R2-01).
+ * 3. **The write gate is a capability, not a name.** {@link toolCapability}
+ *    classifies a tool by what it does: `read`/`search`/`network`/`secret` read,
+ *    everything else may mutate, and `bash`/`git` run an arbitrary command that no
+ *    root can confine. Review/Test therefore get no mutating tool at all, and
+ *    specifically no arbitrary-command tool, in **both** modes (W7R2-01) — an
+ *    operation-name list that happened to omit `bash`/`git` used to let them write
+ *    source through a shell.
+ * 4. **File boundary is a real path, not a string.** `resolveWithinRoots`
  *    resolves symlinks (including a symlinked parent of a not-yet-existing
  *    file), refuses `..` and absolute escapes, and refuses a path inside a
  *    protected root. The Broker checks it before admission and re-checks it
@@ -37,18 +46,25 @@
  *    Grant cannot authorize reading the run database (W7R1-04). A hard link
  *    inside the root is a documented limit of any path-containment rule
  *    (W7R1-08).
- * 4. **Network boundary is per hop and per resolution.** `NetworkPolicy` refuses
+ * 5. **Network boundary is per hop and per resolution.** `NetworkPolicy` refuses
  *    loopback, private, link-local and metadata addresses by default; a user may
  *    authorize an exact target (`host` or `host:port`) and only then does it pass.
  *    Every hostname is resolved through an injectable {@link HostResolver} before
  *    the decision, and **any** answer in loopback/private/link-local/CGNAT/
  *    metadata space refuses the request (W7R1-01), including the hexadecimal
- *    IPv4-mapped IPv6 spellings the URL parser produces (W7R1-02). Plain `http:`
- *    is refused unless the caller explicitly opted in for an authorized local
- *    test endpoint (W7R1-07). `GuardedRequester` performs a request with
- *    `redirect: 'manual'` and re-validates every hop through the same async
- *    decision, so a 302 pointing at a private address — or at a name resolving to
- *    one — is refused **without following it**.
+ *    IPv4-mapped IPv6 spellings the URL parser produces (W7R1-02) and the RFC 8215
+ *    local-use NAT64 prefixes (W7R2-06). A resolver that throws is a refusal, not
+ *    an escaped exception (W7R2-05). Plain `http:` is refused unless the caller
+ *    explicitly opted in for an authorized local test endpoint (W7R1-07).
+ *    Admission **awaits** this decision (W7R2-02), so a target whose name resolves
+ *    privately leaves the Grant unconsumed and writes no `tool_operation` row.
+ *    `GuardedRequester` performs a request with `redirect: 'manual'` and
+ *    re-validates every hop through the same async decision, handing the validated
+ *    answers to the transport as `pinnedAddresses`; the built-in transport then
+ *    connects with a `lookup` that can only return those answers, so a rebinding
+ *    between the guard and the connection cannot reach a private address
+ *    (W7R2-03). A caller that injects its own `fetcher` is handed the same pin and
+ *    is responsible for honouring it.
  *
  * Everything here is deliberately explicit: refusals are typed results, never
  * silently swallowed exceptions, and no secret value is ever read from or written
@@ -56,8 +72,11 @@
  * re-implemented here.
  */
 import { spawnSync } from 'node:child_process';
+import type { LookupAddress, LookupOptions } from 'node:dns';
 import { lookup } from 'node:dns/promises';
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { isIPv4, isIPv6 } from 'node:net';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { ErrorCode, Grant, JsonObject, Role, ToolOperation } from '@agentdev/contracts';
@@ -259,15 +278,37 @@ export function isReadOnlyRole(role: Role): boolean {
   return READ_ONLY_ROLES.includes(role);
 }
 
-/** Operations that write, edit or delete something. */
-const WRITE_OPERATIONS: readonly string[] = [
-  'write',
-  'edit',
-  'artifact_write',
-  'delete_data',
-  'push',
-  'deploy',
-];
+/**
+ * Operations whose only effect is to read.
+ *
+ * The write gate is a **capability** question, not an operation-name question
+ * (W7R2-01): classifying `bash`/`git` as reads because their names were absent
+ * from a write list let a read-only Review/Test role write source through a shell.
+ * Everything not listed here is treated as possibly mutating, so an unknown tool
+ * name fails closed rather than being assumed harmless.
+ */
+const READ_ONLY_OPERATIONS: readonly string[] = ['read', 'search', 'network', 'secret'];
+
+/**
+ * Operations that execute an arbitrary caller-supplied command.
+ *
+ * Such a tool cannot be confined to a directory: a single `bash`/`git` call can
+ * write anywhere the process may write, so no path boundary makes it safe for a
+ * read-only role. They are refused for Review/Test outright, in both modes.
+ */
+const ARBITRARY_COMMAND_OPERATIONS: readonly string[] = ['bash', 'git'];
+
+export type ToolCapability = 'read-only' | 'mutating';
+
+/** Whether a tool can change state, classified by what it does, not by its name. */
+export function toolCapability(operation: string): ToolCapability {
+  return READ_ONLY_OPERATIONS.includes(operation) ? 'read-only' : 'mutating';
+}
+
+/** Whether an operation runs an arbitrary command that no root can confine. */
+export function isArbitraryCommandOperation(operation: string): boolean {
+  return ARBITRARY_COMMAND_OPERATIONS.includes(operation);
+}
 
 /** Operations whose targets name real filesystem paths. */
 const FILE_OPERATIONS: readonly string[] = [
@@ -281,8 +322,9 @@ const FILE_OPERATIONS: readonly string[] = [
   'git',
 ];
 
-function isWriteOperation(operation: string): boolean {
-  return WRITE_OPERATIONS.includes(operation);
+/** The access a call has unless it declared one, derived from the capability. */
+function declaredAccess(operation: string, declared?: 'read' | 'write'): 'read' | 'write' {
+  return declared ?? (toolCapability(operation) === 'mutating' ? 'write' : 'read');
 }
 
 function isFileOperation(operation: string): boolean {
@@ -442,7 +484,18 @@ export interface NetworkTargetSpec {
 }
 
 export type NetworkPolicyDecision =
-  | { readonly ok: true }
+  | {
+      readonly ok: true;
+      /**
+       * The answers that were validated, when a DNS lookup actually happened.
+       *
+       * The transport uses them to pin its connection to the checked address so a
+       * second lookup cannot rebind to a private one (W7R2-03). Absent for a
+       * literal (whose URL host already *is* the address) and for a name admitted
+       * without a successful lookup.
+       */
+      readonly addresses?: readonly string[];
+    }
   | { readonly ok: false; readonly code: BrokerErrorCode; readonly reason: string };
 
 /** Hosts that always mean an internal service, never a public target. */
@@ -485,6 +538,44 @@ function isResolverInternalName(host: string): boolean {
 }
 
 /**
+ * NAT64 prefixes whose embedded IPv4 is decoded before classification (W7R2-06).
+ *
+ * `64:ff9b::/96` is the RFC 6052 well-known prefix and `64:ff9b:1::/48` the RFC
+ * 8215 local-use prefix — the second was previously judged public, so a network
+ * using local NAT64 could be used to reach internal addresses through the
+ * translator. The set is configurable through {@link NetworkPolicy}.
+ */
+export const DEFAULT_NAT64_PREFIXES: readonly string[] = ['64:ff9b::/96', '64:ff9b:1::/48'];
+
+/** The 16 bytes of an IPv6 prefix and its length in bits. */
+interface Ipv6Prefix {
+  readonly bytes: readonly number[];
+  readonly length: number;
+}
+
+/** Parses an IPv6 CIDR (`64:ff9b::/96`); `undefined` when it is malformed. */
+function parseIpv6Prefix(text: string): Ipv6Prefix | undefined {
+  const [address, lengthText] = text.trim().split('/');
+  const bytes = ipv6Bytes(address ?? '');
+  if (bytes === undefined) return undefined;
+  const length = lengthText === undefined ? 128 : Number.parseInt(lengthText, 10);
+  if (!Number.isInteger(length) || length < 0 || length > 128) return undefined;
+  return { bytes, length };
+}
+
+/** Whether a 16-byte address falls inside an IPv6 prefix. */
+function matchesIpv6Prefix(bytes: readonly number[], prefix: Ipv6Prefix): boolean {
+  const wholeBytes = Math.floor(prefix.length / 8);
+  for (let index = 0; index < wholeBytes; index += 1) {
+    if (bytes[index] !== prefix.bytes[index]) return false;
+  }
+  const remaining = prefix.length % 8;
+  if (remaining === 0) return true;
+  const mask = (0xff << (8 - remaining)) & 0xff;
+  return ((bytes[wholeBytes] ?? 0) & mask) === ((prefix.bytes[wholeBytes] ?? 0) & mask);
+}
+
+/**
  * Classifies an address literal as loopback, private, link-local, CGNAT,
  * benchmarking, multicast/reserved or metadata space.
  *
@@ -494,11 +585,14 @@ function isResolverInternalName(host: string): boolean {
  * `127.0.0.1` and a hexadecimal IPv4-mapped literal (`::ffff:7f00:1`) each slipped
  * through a name-only/literal-prefix check.
  */
-export function classifyAddressLiteral(address: string): boolean | undefined {
+export function classifyAddressLiteral(
+  address: string,
+  nat64Prefixes: readonly string[] = DEFAULT_NAT64_PREFIXES,
+): boolean | undefined {
   const normalized = normalizeHost(address);
   if (normalized === '') return true;
   if (isIPv4(normalized)) return isPrivateIpv4(normalized);
-  if (isIPv6(normalized)) return isPrivateIpv6(normalized);
+  if (isIPv6(normalized)) return isPrivateIpv6(normalized, nat64Prefixes);
   return undefined;
 }
 
@@ -514,11 +608,15 @@ export function classifyAddressLiteral(address: string): boolean | undefined {
  * caller must resolve it through {@link resolvesToPrivateAddress} before deciding
  * (W7R1-01).
  */
-export function isPrivateAddress(host: string, classifyHost?: HostClassifier): boolean {
+export function isPrivateAddress(
+  host: string,
+  classifyHost?: HostClassifier,
+  nat64Prefixes: readonly string[] = DEFAULT_NAT64_PREFIXES,
+): boolean {
   const normalized = normalizeHost(host);
   if (normalized === '') return true;
   if (isAlwaysInternalHost(normalized)) return true;
-  const literal = classifyAddressLiteral(normalized);
+  const literal = classifyAddressLiteral(normalized, nat64Prefixes);
   if (literal !== undefined) return literal;
   if (isResolverInternalName(normalized)) return true;
   const classified = classifyHost?.(normalized);
@@ -615,9 +713,14 @@ export function ipv6Bytes(address: string): number[] | undefined {
  * WHATWG normalises `http://[::ffff:127.0.0.1]/` to `::ffff:7f00:1`, so the
  * IPv4-mapped form must be decoded from bytes and inherit **every** IPv4 rule
  * (loopback, RFC1918, link-local, CGNAT, `0.0.0.0/8`), not just the dotted-quad
- * spelling (W7R1-02).
+ * spelling (W7R1-02). Every configured NAT64 prefix is decoded the same way
+ * (W7R2-06); a matching address whose embedded IPv4 cannot be decoded is treated
+ * as internal rather than public.
  */
-function isPrivateIpv6(address: string): boolean {
+function isPrivateIpv6(
+  address: string,
+  nat64Prefixes: readonly string[] = DEFAULT_NAT64_PREFIXES,
+): boolean {
   const bytes = ipv6Bytes(address);
   if (bytes === undefined) return true;
   const allZero = bytes.every((byte) => byte === 0);
@@ -632,15 +735,15 @@ function isPrivateIpv6(address: string): boolean {
   if (bytes.slice(0, 12).every((byte) => byte === 0)) {
     return isPrivateIpv4(asIpv4(ipv4At(12)));
   }
-  // 64:ff9b::/96 NAT64 well-known prefix.
-  if (
-    (bytes[0] ?? 0) === 0x00 &&
-    (bytes[1] ?? 0) === 0x64 &&
-    (bytes[2] ?? 0) === 0xff &&
-    (bytes[3] ?? 0) === 0x9b &&
-    bytes.slice(4, 12).every((byte) => byte === 0)
-  ) {
-    return isPrivateIpv4(asIpv4(ipv4At(12)));
+  // NAT64 prefixes: decode the embedded IPv4 and apply the whole IPv4 rule set.
+  for (const text of nat64Prefixes) {
+    const prefix = parseIpv6Prefix(text);
+    if (prefix === undefined || !matchesIpv6Prefix(bytes, prefix)) continue;
+    const embedded = nat64EmbeddedIpv4(bytes, prefix, asIpv4);
+    // An address under a NAT64 prefix whose embedded IPv4 we cannot decode is not
+    // a public destination (W7R2-06: "a prefix you cannot decode must be treated
+    // as private").
+    return embedded === undefined ? true : isPrivateIpv4(embedded);
   }
   // fe80::/10 link-local.
   if (bytes[0] === 0xfe && ((bytes[1] ?? 0) & 0xc0) === 0x80) return true;
@@ -658,6 +761,30 @@ function isPrivateIpv6(address: string): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * The IPv4 address a NAT64 prefix embeds, or `undefined` when it cannot be decoded.
+ *
+ * RFC 6052 puts the IPv4 in the last 32 bits for a `/96` (and longer) prefix; the
+ * RFC 8215 local-use `/48` places it in bits 48..79 with the reserved `u` octet
+ * zero. Both layouts are examined, and a short prefix that cannot certify a public
+ * embedded address returns `undefined` so the caller treats it as internal.
+ */
+function nat64EmbeddedIpv4(
+  bytes: readonly number[],
+  prefix: Ipv6Prefix,
+  asIpv4: (parts: readonly number[]) => string,
+): string | undefined {
+  const trailing = asIpv4(bytes.slice(12, 16));
+  if (prefix.length >= 96) return trailing;
+  if ((bytes[8] ?? 0) !== 0) return undefined;
+  const shortForm = asIpv4([bytes[6] ?? 0, bytes[7] ?? 0, bytes[8] ?? 0, bytes[9] ?? 0]);
+  if (isPrivateIpv4(shortForm)) return shortForm;
+  // A local-use prefix leaves too little structure to certify the trailing word as
+  // the destination, so an address that is private by either reading is private
+  // and anything else stays fail-closed.
+  return isPrivateIpv4(trailing) ? trailing : undefined;
 }
 
 /**
@@ -693,32 +820,96 @@ export const defaultHostResolver: HostResolver = {
 };
 
 /**
- * Whether a host name resolves into internal address space.
+ * What a host name resolves to and how it classifies.
+ *
+ * `classification` is `true` (internal), `false` (public) or a reason string when
+ * the host cannot be verified at all. `addresses` carries the answers that were
+ * validated so the transport can pin its connection to one of them (W7R2-03); it
+ * is absent when no lookup happened (a literal or an unverifiable name).
+ */
+export interface HostResolution {
+  readonly classification: boolean | string;
+  readonly addresses?: readonly string[];
+}
+
+/**
+ * Resolves a host without ever throwing.
+ *
+ * A resolver that throws is a refusal, not an escaped exception (W7R2-05): the
+ * failure is reported exactly like an unresolvable name, so
+ * `docs/architecture/execution.md` §4 "an unverifiable target is refused" holds
+ * for a misbehaving resolver too.
+ */
+async function safeResolve(host: string, resolver: HostResolver): Promise<ResolvedAddresses> {
+  try {
+    return await resolver.resolve(host);
+  } catch (error) {
+    return { ok: false, reason: `${host} could not be resolved: ${messageOf(error)}` };
+  }
+}
+
+/**
+ * The full decision for a host name: internal-by-construction, literal, or DNS.
  *
  * A name that resolves to *any* private/loopback/link-local/CGNAT/metadata
  * address is internal, because the transport may pick that answer. A name that
- * cannot be resolved is also refused: an unverifiable target is not a public one.
+ * cannot be resolved (or whose resolver throws) is also refused: an unverifiable
+ * target is not a public one. The validated answers are returned so the transport
+ * can connect to them directly rather than resolving the name a second time.
+ */
+export async function classifyHostResolution(
+  host: string,
+  resolver: HostResolver,
+  nat64Prefixes: readonly string[] = DEFAULT_NAT64_PREFIXES,
+): Promise<HostResolution> {
+  const normalized = normalizeHost(host);
+  if (normalized === '') return { classification: true };
+  if (isAlwaysInternalHost(normalized)) {
+    const addresses = await resolvedAddresses(normalized, resolver);
+    return addresses === undefined ? { classification: true } : { classification: true, addresses };
+  }
+  const literal = classifyAddressLiteral(normalized, nat64Prefixes);
+  if (literal !== undefined) return { classification: literal, addresses: [normalized] };
+  if (isResolverInternalName(normalized)) {
+    const addresses = await resolvedAddresses(normalized, resolver);
+    return addresses === undefined ? { classification: true } : { classification: true, addresses };
+  }
+  const resolved = await safeResolve(normalized, resolver);
+  if (!resolved.ok) return { classification: resolved.reason };
+  const addresses: string[] = [];
+  for (const address of resolved.addresses) {
+    const classified = classifyAddressLiteral(address, nat64Prefixes);
+    if (classified === undefined) {
+      return {
+        classification: `resolved address ${address} is not an address literal and cannot be classified`,
+      };
+    }
+    addresses.push(address);
+    if (classified) return { classification: true, addresses };
+  }
+  return { classification: false, addresses };
+}
+
+/** The addresses a name resolves to, or `undefined` when the lookup failed. */
+async function resolvedAddresses(
+  host: string,
+  resolver: HostResolver,
+): Promise<readonly string[] | undefined> {
+  const resolved = await safeResolve(host, resolver);
+  return resolved.ok ? resolved.addresses : undefined;
+}
+
+/**
+ * Whether a host name resolves into internal address space.
+ *
+ * Kept as the boolean/reason projection of {@link classifyHostResolution} for
+ * callers that only need the admission decision.
  */
 export async function resolvesToPrivateAddress(
   host: string,
   resolver: HostResolver,
 ): Promise<boolean | string> {
-  const normalized = normalizeHost(host);
-  if (normalized === '') return true;
-  if (isAlwaysInternalHost(normalized)) return true;
-  const literal = classifyAddressLiteral(normalized);
-  if (literal !== undefined) return literal;
-  if (isResolverInternalName(normalized)) return true;
-  const resolved = await resolver.resolve(normalized);
-  if (!resolved.ok) return resolved.reason;
-  for (const address of resolved.addresses) {
-    const classified = classifyAddressLiteral(address);
-    if (classified === undefined) {
-      return `resolved address ${address} is not an address literal and cannot be classified`;
-    }
-    if (classified) return true;
-  }
-  return false;
+  return (await classifyHostResolution(host, resolver)).classification;
 }
 
 /**
@@ -737,6 +928,7 @@ export class NetworkPolicy {
   private readonly allowed: readonly string[];
   private readonly allowInsecureHttp: boolean;
   private readonly resolver: HostResolver | undefined;
+  private readonly nat64Prefixes: readonly string[];
 
   constructor(
     options: {
@@ -745,6 +937,13 @@ export class NetworkPolicy {
       readonly allowInsecureHttp?: boolean;
       /** Injected DNS port; the default is a real `dns.lookup`. */
       readonly resolver?: HostResolver;
+      /**
+       * NAT64 prefixes whose embedded IPv4 is decoded before classification.
+       *
+       * Defaults to {@link DEFAULT_NAT64_PREFIXES}; a deployment that uses a
+       * site-specific translator prefix adds it here (W7R2-06).
+       */
+      readonly nat64Prefixes?: readonly string[];
     } = {},
   ) {
     // An authorized target may be written `host`, `host:port`, `http(s)://host…`;
@@ -758,6 +957,12 @@ export class NetworkPolicy {
     });
     this.allowInsecureHttp = options.allowInsecureHttp ?? false;
     this.resolver = options.resolver;
+    this.nat64Prefixes = options.nat64Prefixes ?? DEFAULT_NAT64_PREFIXES;
+  }
+
+  /** The NAT64 prefixes this policy decodes. */
+  get decodedNat64Prefixes(): readonly string[] {
+    return this.nat64Prefixes;
   }
 
   /** The resolver this policy was given, if any. */
@@ -794,9 +999,10 @@ export class NetworkPolicy {
   /**
    * The synchronous target decision: scheme, then the literal/internal host rule.
    *
-   * It cannot resolve DNS, so it is used where the caller is synchronous
-   * (`Broker.invoke`) and as a fast path; the transport always awaits
-   * {@link decide} so a name resolving privately is refused before a request.
+   * It cannot resolve DNS, so it is only a fast path and a helper for callers that
+   * need a synchronous answer (for example `checkUrl` documentation and the
+   * container proxy pre-check). Admission itself now awaits {@link decide}, so a
+   * name resolving privately is refused **before** a Grant is consumed (W7R2-02).
    */
   checkTarget(target: NetworkTargetSpec): NetworkPolicyDecision {
     if (target.url !== undefined) return this.checkUrl(target.url);
@@ -842,7 +1048,13 @@ export class NetworkPolicy {
       if (!parsed.ok) return parsed;
       const decision = await this.decideHost(parsed.url.hostname, parsed.port);
       if (!decision.ok) return decision;
-      return this.checkScheme(parsed.url);
+      const scheme = this.checkScheme(parsed.url);
+      if (!scheme.ok) return scheme;
+      // The scheme check adds no address information, so the validated answers
+      // survive into the transport's pinning seam (W7R2-03).
+      return decision.addresses === undefined
+        ? { ok: true }
+        : { ok: true, addresses: decision.addresses };
     }
     const host = input.host;
     if (host === undefined || host.trim() === '') {
@@ -878,35 +1090,33 @@ export class NetworkPolicy {
     };
   }
 
+  /**
+   * Decides a host name, resolving it when the name itself is not conclusive.
+   *
+   * A literal address is classified from its bytes, an internal-by-construction
+   * name is refused unless exactly authorized, and every other name is resolved
+   * through {@link HostResolver}. The validated answers travel with the decision
+   * so the transport pins its connection to them (W7R2-03); an authorized name is
+   * still resolved when it can be, for the same pinning reason.
+   */
   private async decideHost(host: string, port: number | undefined): Promise<NetworkPolicyDecision> {
     const normalized = normalizeHost(host);
-    // A known-internal name is decided by name: only an exact authorization
-    // relaxes it, and no DNS answer can change that. `undefined` marks a name
-    // whose classification needs the resolver.
-    if (isAlwaysInternalHost(normalized) || isResolverInternalName(normalized)) {
-      if (this.allows(normalized, port)) return { ok: true };
-      return this.refuse(normalized, port);
-    }
-    // `isPrivateAddress` returns a boolean for everything it can decide alone
-    // (address literals and internal names), so the resolver is only consulted
-    // when it answers `false` and the caller did not authorize the exact target.
-    if (isPrivateAddress(normalized)) {
-      if (this.allows(normalized, port)) return { ok: true };
-      return this.refuse(normalized, port);
-    }
-    if (this.allows(normalized, port)) return { ok: true };
-    const classified = await resolvesToPrivateAddress(
+    const resolved = await classifyHostResolution(
       normalized,
       this.resolver ?? defaultHostResolver,
+      this.nat64Prefixes,
     );
-    if (classified === false) return { ok: true };
-    if (classified === true) return this.refuse(normalized, port);
-    // A name that could not be resolved (or whose answer is not an address) is
-    // not a public target: an unverifiable destination is refused.
+    const addresses = resolved.addresses === undefined ? {} : { addresses: resolved.addresses };
+    if (resolved.classification === false) return { ok: true, ...addresses };
+    if (this.allows(normalized, port)) return { ok: true, ...addresses };
+    if (resolved.classification === true) return this.refuse(normalized, port);
+    // A name that could not be resolved (or whose resolver threw, or whose answer
+    // is not an address) is not a public target: an unverifiable destination is
+    // refused (W7R2-05).
     return {
       ok: false,
       code: 'NOT_AUTHORIZED',
-      reason: `network target ${normalized} is refused: ${classified}`,
+      reason: `network target ${normalized} is refused: ${resolved.classification}`,
     };
   }
 
@@ -942,7 +1152,7 @@ export class NetworkPolicy {
   }
 
   private decideSync(host: string, port?: number): NetworkPolicyDecision {
-    if (!isPrivateAddress(host)) return { ok: true };
+    if (!isPrivateAddress(host, undefined, this.nat64Prefixes)) return { ok: true };
     if (this.allows(host, port)) return { ok: true };
     return this.refuse(host, port);
   }
@@ -982,20 +1192,125 @@ export type NetworkFetchOutcome =
 /** The minimal `fetch` surface the guarded requester needs. */
 export interface NetworkResponseLike {
   readonly status: number;
-  readonly headers: { get(name: string): string | null };
+  readonly headers: {
+    get(name: string): string | null;
+    forEach?(callback: (value: string, key: string) => void): void;
+  };
   text(): Promise<string>;
 }
 
+/**
+ * The transport seam, with an address-pinning option.
+ *
+ * `pinnedAddresses` carries the answers {@link NetworkPolicy.decide} validated for
+ * this hop. A fetcher that can bind its connection must connect only to one of
+ * them, so a second DNS lookup cannot rebind the name to a private address between
+ * the guard and the connection (W7R2-03). {@link defaultNetworkFetcher} does that
+ * with a `lookup` callback that ignores DNS; a caller-supplied fetcher is handed
+ * the same list and decides whether it can honour it.
+ */
 export type NetworkFetcher = (
   url: string,
   init: {
     readonly method: string;
     readonly redirect: 'manual';
     readonly headers: Record<string, string>;
+    readonly pinnedAddresses?: readonly string[];
   },
 ) => Promise<NetworkResponseLike>;
 
-const defaultNetworkFetcher: NetworkFetcher = (url, init) => fetch(url, init);
+/** The built-in `fetch`, captured so a replaced global can be detected. */
+const nativeFetch: typeof globalThis.fetch = globalThis.fetch;
+
+/**
+ * The default transport.
+ *
+ * An un-pinned hop goes through `fetch` unchanged. A hop the policy pinned is
+ * performed by {@link pinnedNodeRequest}, which supplies a `lookup` that answers
+ * only with a validated address — so the connection cannot be rebound. If the
+ * process replaced the global `fetch` (a test double, or a caller's own
+ * proxy-aware transport), that transport is authoritative and is used as-is; the
+ * pin is still passed on `init` for it to honour.
+ */
+export const defaultNetworkFetcher: NetworkFetcher = (url, init) => {
+  const pinned = init.pinnedAddresses?.[0];
+  if (pinned !== undefined && globalThis.fetch === nativeFetch) {
+    return pinnedNodeRequest(url, init, pinned);
+  }
+  return globalThis.fetch(url, init);
+};
+
+/**
+ * A `lookup` that always answers with the address the policy validated.
+ *
+ * Node calls this instead of the system resolver while connecting, which is what
+ * turns "the address was checked" into "the checked address was used".
+ */
+function pinnedLookup(address: string) {
+  const family = isIPv6(address) ? 6 : 4;
+  return (
+    _hostname: string,
+    options: LookupOptions,
+    callback: (
+      error: NodeJS.ErrnoException | null,
+      resolved: string | LookupAddress[],
+      resolvedFamily?: number,
+    ) => void,
+  ): void => {
+    if (options.all === true) {
+      callback(null, [{ address, family }]);
+      return;
+    }
+    callback(null, address, family);
+  };
+}
+
+/** Performs one request through `node:http(s)` while pinned to `address`. */
+function pinnedNodeRequest(
+  url: string,
+  init: { readonly method: string; readonly headers: Record<string, string> },
+  address: string,
+): Promise<NetworkResponseLike> {
+  return new Promise((settle, fail) => {
+    const parsed = new URL(url);
+    const transport = parsed.protocol === 'https:' ? httpsRequest : httpRequest;
+    const request = transport(
+      parsed,
+      {
+        method: init.method,
+        headers: init.headers,
+        lookup: pinnedLookup(address),
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => {
+          settle({
+            status: response.statusCode ?? 0,
+            headers: nodeHeaders(response.headers),
+            text: () => Promise.resolve(Buffer.concat(chunks).toString('utf8')),
+          });
+        });
+      },
+    );
+    request.on('error', fail);
+    request.end();
+  });
+}
+
+function nodeHeaders(headers: IncomingHttpHeaders): NetworkResponseLike['headers'] {
+  const lower = new Map<string, string>();
+  for (const [key, value] of Object.entries(headers)) {
+    if (value === undefined) continue;
+    lower.set(key.toLowerCase(), Array.isArray(value) ? value.join(', ') : value);
+  }
+  return {
+    get: (name) => lower.get(name.toLowerCase()) ?? null,
+    forEach: (callback) => {
+      for (const [key, value] of lower) callback(value, key);
+    },
+  };
+}
 
 const REDIRECT_STATUSES: readonly number[] = [301, 302, 303, 307, 308];
 
@@ -1008,7 +1323,9 @@ const REDIRECT_STATUSES: readonly number[] = [301, 302, 303, 307, 308];
  * **before** each fetch — through the async decision, so the hop's hostname is
  * resolved and refused when any answer is loopback/private (W7R1-01) — so a 302
  * to `169.254.169.254` or to a name resolving to `127.0.0.1` is refused without
- * the request ever leaving the process.
+ * the request ever leaving the process. The validated answers from that same
+ * decision are handed to the fetcher as `pinnedAddresses`, so the hop connects to
+ * the address that was checked rather than resolving the name again (W7R2-03).
  */
 export class GuardedRequester {
   private readonly policy: NetworkPolicy;
@@ -1054,7 +1371,12 @@ export class GuardedRequester {
           hops,
         };
       }
-      const response = await this.fetcher(current, { method, redirect: 'manual', headers });
+      const response = await this.fetcher(current, {
+        method,
+        redirect: 'manual',
+        headers,
+        ...(decision.addresses === undefined ? {} : { pinnedAddresses: decision.addresses }),
+      });
       hops.push({ url: current, status: response.status, allowed: true });
       if (!REDIRECT_STATUSES.includes(response.status)) {
         const body = await response.text();
@@ -1358,6 +1680,15 @@ export interface BrokerOptions {
   readonly writableReportRoots?: readonly string[];
   /** Injected DNS port for the network policy; defaults to a real lookup. */
   readonly resolver?: HostResolver;
+  /** NAT64 prefixes whose embedded IPv4 is decoded (W7R2-06). */
+  readonly nat64Prefixes?: readonly string[];
+  /**
+   * Injected transport for the guarded requester.
+   *
+   * Defaults to {@link defaultNetworkFetcher}; a caller may supply its own (for
+   * example a proxy-aware transport) and honour `pinnedAddresses` itself.
+   */
+  readonly fetcher?: NetworkFetcher;
   /** Explicit opt-in for plaintext `http:` on an authorized local test endpoint. */
   readonly allowInsecureHttp?: boolean;
   /**
@@ -1380,6 +1711,8 @@ export class Broker {
   private readonly protectedPaths: readonly string[];
   private readonly writableReportRoots: readonly string[];
   private readonly resolver: HostResolver;
+  private readonly nat64Prefixes: readonly string[];
+  private readonly fetcher: NetworkFetcher;
   private readonly allowInsecureHttp: boolean;
   private readonly networkProxy: string | undefined;
 
@@ -1400,6 +1733,8 @@ export class Broker {
     );
     this.writableReportRoots = (options.writableReportRoots ?? []).map(canonicalExisting);
     this.resolver = options.resolver ?? defaultHostResolver;
+    this.nat64Prefixes = options.nat64Prefixes ?? DEFAULT_NAT64_PREFIXES;
+    this.fetcher = options.fetcher ?? defaultNetworkFetcher;
     this.allowInsecureHttp = options.allowInsecureHttp ?? false;
     this.networkProxy = options.networkProxy;
   }
@@ -1419,6 +1754,7 @@ export class Broker {
     return new NetworkPolicy({
       allowedTargets: [...this.allowedNetworkTargets, ...(invocation.allowedNetworkTargets ?? [])],
       resolver: this.resolver,
+      nat64Prefixes: this.nat64Prefixes,
       allowInsecureHttp: this.allowInsecureHttp,
     });
   }
@@ -1428,6 +1764,7 @@ export class Broker {
     return new GuardedRequester({
       policy: this.networkPolicy(invocation),
       resolver: this.resolver,
+      fetcher: this.fetcher,
     });
   }
 
@@ -1438,8 +1775,12 @@ export class Broker {
    * `tool.refused` audit event; nothing executes on a refusal. An admitted call
    * is recorded by `GrantStore.consumeOnce` as a `tool_operation` row (tool name,
    * input hash, Grant reference, state) and by a `tool.invoked` event.
+   *
+   * The method is **async** because network admission resolves DNS before deciding
+   * (W7R2-02): a target whose name resolves into private space is refused before
+   * `consumeOnce`, so no Grant is consumed and no `tool_operation` row is written.
    */
-  invoke(invocation: ToolInvocation): ToolOutcome {
+  async invoke(invocation: ToolInvocation): Promise<ToolOutcome> {
     const at = invocation.at ?? this.now();
     const mode = invocation.mode ?? this.defaultMode;
     const operation = invocation.operation;
@@ -1462,26 +1803,41 @@ export class Broker {
     if (shape !== undefined) return refuse(shape.code, shape.reason, shape.fields);
 
     // 2. Role gate (AC-050). Review/Test never gain a write to source or
-    //    verification input, in any mode. `execution.md` §3 gives them exactly one
-    //    write boundary — their own report/check scratch directory — so a write is
-    //    admitted only inside a declared report root (W7R1-13).
-    const access = invocation.access ?? (isWriteOperation(operation) ? 'write' : 'read');
+    //    verification input, in any mode. The question is a tool's **capability**,
+    //    not its name (W7R2-01): only a mutating tool whose whole effect is a path
+    //    can be confined to a declared report root; `bash`/`git` run an arbitrary
+    //    command, and `push`/`deploy`/an unknown name have no path to bound, so all
+    //    of them are refused outright for a read-only role.
+    const capability = toolCapability(operation);
+    const access = declaredAccess(operation, invocation.access);
     const writeRoots = reportWriteRootsFor(invocation, access, this.writableReportRoots);
-    if (isReadOnlyRole(invocation.role)) {
-      if (access === 'write' || isWriteOperation(operation)) {
-        if (writeRoots.length === 0) {
-          return refuse(
-            'NOT_AUTHORIZED',
-            `${invocation.role} runs are read-only; ${operation} cannot write source or verification input`,
-            ['role'],
-          );
-        }
+    if (isReadOnlyRole(invocation.role) && capability === 'mutating') {
+      if (isArbitraryCommandOperation(operation)) {
+        return refuse(
+          'NOT_AUTHORIZED',
+          `${invocation.role} runs are read-only; ${operation} executes an arbitrary command and cannot be confined to a report/scratch root`,
+          ['role', 'operation'],
+        );
+      }
+      if (!isFileOperation(operation)) {
+        return refuse(
+          'NOT_AUTHORIZED',
+          `${invocation.role} runs are read-only; ${operation} is not confined to a path inside a report/scratch root`,
+          ['role', 'operation'],
+        );
+      }
+      if (writeRoots.length === 0) {
+        return refuse(
+          'NOT_AUTHORIZED',
+          `${invocation.role} runs are read-only; ${operation} cannot write source or verification input`,
+          ['role'],
+        );
       }
     }
-    if (access === 'write' && isWriteOperation(operation) === false) {
+    if (invocation.access === 'write' && capability === 'read-only') {
       return refuse(
         'VALIDATION_ERROR',
-        `operation ${operation} is not a write operation but was declared as one`,
+        `operation ${operation} is read-only but was declared as a write`,
       );
     }
 
@@ -1523,9 +1879,11 @@ export class Broker {
       );
     }
 
-    // 4. Network boundary, before anything leaves the process.
+    // 4. Network boundary, before anything leaves the process. The decision is
+    //    awaited, so a name resolving into private space (or not resolving at all)
+    //    is refused here — before step 6 consumes the Grant (W7R2-02).
     if (operation === 'network' || invocation.network !== undefined) {
-      const decision = this.networkPolicy(invocation).checkTarget(invocation.network ?? {});
+      const decision = await this.networkPolicy(invocation).decide(invocation.network ?? {});
       if (!decision.ok) return refuse(decision.code, decision.reason, ['network']);
     }
 
@@ -1678,7 +2036,7 @@ export class Broker {
     const requester = this.networkRequester(invocation);
     const writeRoots = reportWriteRootsFor(
       invocation,
-      invocation.access ?? (isWriteOperation(operation) ? 'write' : 'read'),
+      declaredAccess(operation, invocation.access),
       this.writableReportRoots,
     );
     const check = (path: string, checkAccess: 'read' | 'write'): string => {
@@ -1753,14 +2111,20 @@ export class Broker {
         : 'none';
     const reportRoots = reportWriteRootsFor(
       invocation,
-      invocation.access ?? (isWriteOperation(invocation.operation) ? 'write' : 'read'),
+      declaredAccess(invocation.operation, invocation.access),
       this.writableReportRoots,
     );
+    // A read-only role's caller-supplied `writableRoots` are **stripped**: the
+    // report/scratch root is the only thing that may be mounted `rw`, so a Review
+    // or Test call cannot ask for the source tree to become writable (W7R2-01).
+    const callerWritable = isReadOnlyRole(invocation.role)
+      ? []
+      : [...(invocation.writableRoots ?? [])];
     return planContainerRun({
       command,
       image: this.execImage,
       roots: [...(invocation.roots ?? []), ...reportRoots],
-      writableRoots: [...(invocation.writableRoots ?? []), ...reportRoots],
+      writableRoots: [...callerWritable, ...reportRoots],
       network,
       ...(this.networkProxy === undefined
         ? {}
@@ -1806,7 +2170,7 @@ export class Broker {
   private containerPath(realPath: string, invocation: ToolInvocation): string {
     const reportRoots = reportWriteRootsFor(
       invocation,
-      invocation.access ?? (isWriteOperation(invocation.operation) ? 'write' : 'read'),
+      declaredAccess(invocation.operation, invocation.access),
       this.writableReportRoots,
     );
     const roots = [...(invocation.roots ?? []), ...reportRoots];
