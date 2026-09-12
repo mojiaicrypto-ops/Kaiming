@@ -43,6 +43,7 @@ import {
   evaluatePlanApproval,
   evaluateWriteGate,
   isWithinScope,
+  workWriteBarrier,
   type ChangeDiff,
   type PlanApprovalEvidence,
   type PlanRevision,
@@ -268,7 +269,13 @@ export interface RequestCodeWriteInput {
 }
 
 export type CodeWriteRefusalCode =
-  'GATE_NOT_READY' | 'VALIDATION_ERROR' | 'NOT_FOUND' | 'STALE_ARTIFACT' | 'NOT_AUTHORIZED';
+  | 'GATE_NOT_READY'
+  | 'VALIDATION_ERROR'
+  | 'NOT_FOUND'
+  | 'STALE_ARTIFACT'
+  | 'NOT_AUTHORIZED'
+  /** The Work is paused/cancelling/cancelled: the pause barrier admits no write (W6R2-07). */
+  | 'INVALID_STATE';
 
 export type RequestCodeWriteResult =
   | {
@@ -603,6 +610,18 @@ export class PlanGateService {
     };
     const requirementId = input.requirementId ?? work.requirementId;
     const budget = this.store.budgets.find(work.budgetId);
+    const requestedTokens = input.approval.requestedTokens;
+    if (requestedTokens !== undefined && budget === undefined) {
+      // Fail closed: a Plan that asks for tokens with no budget row to charge them
+      // to would approve an unbounded reservation (W6R2-06).
+      return {
+        approved: false,
+        code: 'GATE_NOT_READY',
+        message: `Work ${work.id} has no budget row; the Plan's token request cannot be reserved`,
+        decisionRequired: false,
+        gaps: ['no budget row to reserve the requested tokens against'],
+      };
+    }
     const decision = evaluatePlanApproval({
       plan: planRevision,
       revision: input.revision,
@@ -616,7 +635,7 @@ export class PlanGateService {
       scope: content.scope,
       productChanged: input.approval.productChanged,
       at: input.approval.at,
-      ...(input.approval.requestedTokens === undefined || budget === undefined
+      ...(requestedTokens === undefined || budget === undefined
         ? {}
         : {
             budget: {
@@ -624,8 +643,10 @@ export class PlanGateService {
               // The Work's *real* usage: passing 0 here approved Plans that exceeded
               // the budget (W6R1-03).
               used: budget.tokensUsed,
+              // Tokens already reserved by earlier approvals count too, so a second
+              // approval cannot consume the same headroom twice (W6R2-06).
               reserved: budget.tokensReserved,
-              requested: input.approval.requestedTokens,
+              requested: requestedTokens,
             },
           }),
     });
@@ -661,6 +682,20 @@ export class PlanGateService {
       this.measureSourceHash(work.id, input.sourceHashPort),
     );
     this.linkRequirementPlan(work, requirementId, planRef);
+    // W6R2-06: an approval reserves the tokens it was approved for, in the same
+    // transaction as the approval record. Without this, two Plans of 60 tokens
+    // against a 100-token limit were both approved because `tokensReserved` stayed
+    // 0; with it, the second sees the first's reservation and is refused by the
+    // domain rule (`used + reserved + requested <= limit`, AC-022). Tokens actually
+    // spent are settled by the Run lifecycle, which is out of this package's scope;
+    // the reservation is what makes the approval path accountable in the meantime.
+    if (requestedTokens !== undefined && budget !== undefined) {
+      this.store.budgets.update(
+        budget.id,
+        { tokensReserved: budget.tokensReserved + requestedTokens },
+        budget.version,
+      );
+    }
     this.store.events.append({
       // `decision.created` is the documented name for a recorded Plan approval
       // (`protocol.md` §7); the other names below are this module's own domain
@@ -677,6 +712,9 @@ export class PlanGateService {
         approvedBy: decision.evidence.approvedBy,
         authorizationRef: decision.evidence.authorizationRef ?? null,
         approvalRecordHash: approval.hash,
+        requestedTokens: requestedTokens ?? null,
+        tokensReserved:
+          budget === undefined ? null : budget.tokensReserved + (requestedTokens ?? 0),
       },
     });
     return {
@@ -728,6 +766,22 @@ export class PlanGateService {
         code: 'VALIDATION_ERROR',
         message: `revision ${input.revision} is not the Work's current revision ${work.baseRevision}`,
         gaps: ['stale revision'],
+        sourceHash: contentBefore,
+        sourceHashAfter: contentAfter(),
+        stalePlan: false,
+      };
+    }
+    // W6R2-07: the Plan gate reads the Work status too. `workflow.md` §7 makes a
+    // pause stop new admission and AC-021 keeps a cancelled Work from writing; the
+    // Run-level `writeAdmission` already refuses these statuses, so the two gates
+    // share one rule (`workWriteBarrier`) instead of disagreeing.
+    const barrier = workWriteBarrier(work.status);
+    if (barrier.blocked) {
+      return {
+        allowed: false,
+        code: barrier.code,
+        message: `Work ${work.id}: ${barrier.message}`,
+        gaps: [barrier.message],
         sourceHash: contentBefore,
         sourceHashAfter: contentAfter(),
         stalePlan: false,
@@ -810,13 +864,25 @@ export class PlanGateService {
       };
     }
 
-    // The expected hash is the caller's own pre-write measurement when it supplied
-    // one, otherwise the tree the Plan was approved against. Comparing it with the
-    // measurement taken here is a real moved-source check (W6R1-07): the previous
-    // version passed the same value for both sides, so the check could never fire.
+    // W6R2-02: the approved record's hash is the authority and is compared with the
+    // live measurement *unconditionally*. A caller-supplied expectation is only a
+    // second requirement (`callerExpectedSourceHash`), so a moved source cannot be
+    // "selected out" by handing the gate the moved value as the expectation.
     const recordedSourceHash = current.current.sourceHash;
-    const expectedSourceHash =
-      input.expectedSourceHash ?? (recordedSourceHash === '' ? contentBefore : recordedSourceHash);
+    if (recordedSourceHash === '') {
+      // Fail closed: an approval without a recorded source cannot bind the write to
+      // any tree. `submitPlan` always records one, so this is a legacy/garbage row.
+      return {
+        allowed: false,
+        code: 'GATE_NOT_READY',
+        message: 'the approved Plan records no source hash; the write cannot be bound to a tree',
+        gaps: ['the approval record has no source hash'],
+        sourceHash: contentBefore,
+        sourceHashAfter: contentAfter(),
+        stalePlan: false,
+        currentPlanRef: current.current.planRef,
+      };
+    }
     const decision = evaluateWriteGate({
       plan: {
         id: current.current.planRef.id,
@@ -830,8 +896,11 @@ export class PlanGateService {
       revision: input.revision,
       work: { id: work.id, revision: input.revision, level: work.level },
       authorizedTargets: approvedPaths,
-      expectedSourceHash,
+      expectedSourceHash: recordedSourceHash,
       actualSourceHash: contentBefore,
+      ...(input.expectedSourceHash === undefined
+        ? {}
+        : { callerExpectedSourceHash: input.expectedSourceHash }),
       planHash: current.current.planRef.hash,
       diffHash: '',
     });
@@ -920,6 +989,10 @@ export class PlanGateService {
       diff: input.diff,
       logicChange: input.logicChange,
       ...(input.riskFlags === undefined ? {} : { riskFlags: input.riskFlags }),
+      // The level re-evaluation consults the shared evidence rule: only a Plan that
+      // is still valid and bound to the Work's current revision is superseded
+      // (W6R2-06 lineage, `evaluateEvidenceValidity`).
+      workRevision: revision,
       ...(previous === undefined
         ? {}
         : {
@@ -931,6 +1004,7 @@ export class PlanGateService {
               stage: 'Plan',
               approval: previous.approval.approvedBy,
               approvedAt: previous.approval.at,
+              validity: this.store.artifacts.find(previous.planRef.id)?.validity ?? 'valid',
             } satisfies PlanRevision,
           }),
     });

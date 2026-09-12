@@ -132,3 +132,121 @@ Review 判定：`FAIL`（2 × P1 + 4 × P2 + 4 × P3）。本节逐条记录修�
 3. **`writeAdmission` 的 Attempt 就绪判定**以 `attempt.status='running'` 为准；Runner 侧的 ready 确认（epoch/进程/环境）仍属 WP-05/WP-07，`StageGate.submit` 目前仍接受 `starting` Attempt（不在本包文件范围）。
 4. **operation 路线的阶段证据**仍沿用 code 路线的 `codeRevision`/`environmentRef` 要求：本 Finding 只要求文档路线 route-aware，operation 路线的证据模型属后续工作包。
 5. `requestCodeWrite` 的授权复核覆盖 Plan 写路径/operations 与信封的交集；Grant（`grant` 行）与 Broker/工具级准入仍属 WP-07。
+
+## T7 Review 第 2 轮修复（W6R2-01…W6R2-10）
+
+Review 判定：`FAIL`（1 × P1 + 7 × P2 + 2 × P3）。本轮按要求**先引入共享原语**，再逐条修复；除 `packages/domain/src/delivery.ts`、`packages/core/src/{gates,findings}.ts`、其测试文件与本记录外未改动其他包（`decisions.ts`/`requirement-continue.ts` 无本轮 Finding，未改动）。
+
+### 新增共享原语：证据有效性与 Revision 血缘（W6R2-01/03/04/05 的共同基础）
+
+`packages/domain/src/delivery.ts` 新增（`docs/rules/workflow.md` §6/§7、AC-017/AC-019）：
+
+- 类型：`EvidenceValidity`（`valid`/`invalid`/`superseded`）、`RevisionEvidence`（ref/kind/validity/revision/createdAt）、`EvidenceLineage`（workRevision/fixingRevision/invalidatedRevisions/producedAfter）、`EvidenceValidityCode`、`EvidenceValidityDecision`。
+- 函数：`evaluateEvidenceValidity({ evidence, lineage })` 与布尔形式 `evidenceBindsRevision(...)`（`evidenceBindsRevision` 只调用同一判定，不是第二套规则）。
+- **规则（代码注释逐条写明；按序命中即拒）**：
+  1. `evidence.validity !== 'valid'` ⇒ `INVALIDATED`（Finding/Decision 失效的产物永不复用，AC-017）；
+  2. 未冻结 Revision ⇒ `NO_REVISION`；
+  3. `lineage.invalidatedRevisions` 含该 Revision ⇒ `INVALIDATED`；
+  4. `lineage.workRevision` 缺失 ⇒ `REVISION_UNBOUND`（**fail-closed**，W6R2-04）；
+  5. `lineage.fixingRevision` 存在且不等于证据 Revision ⇒ `PRE_FIX_REVISION`（W6R2-01/03）；
+  6. `evidence.revision !== lineage.workRevision` ⇒ `REVISION_MISMATCH`（候选树必须就是被验证树）；
+  7. `lineage.producedAfter` 存在且 `createdAt <= producedAfter` ⇒ `PRODUCED_BEFORE_FIX`（早于修复执行的证据即使 Revision 相同也不算）；
+  8. 其余为 `VALID`。
+- **消费点（三处全部改为只走它）**：完成门禁（core `completionEvidence`）、Finding 关闭（domain `runIsIndependent`/`findingCanBeVerified`、core `verificationRunOf` 提供 `evidenceValid`）、等级重评（domain `evaluateLevelUpgrade` 的 `planEvidence`）。
+- 同批新增两条同为“单一事实来源”的纯规则：`workWriteBarrier(status)`（暂停/取消屏障，W6R2-07 让 `writeAdmission` 与 `requestCodeWrite` 共用）与 `completionEvidenceKindFor(route, level)`（路线/等级的完成证据选择，W6R2-09）。
+- 回归测试：`packages/domain/test/delivery.test.ts` 新增 `evidence validity and revision lineage`（6 例，逐条钉住上述 7 条判定）与 `level re-evaluation consults the evidence rule`（1 例）。
+
+### W6R2-01 [P1] 被 Finding 失效的修复前 Test 证据仍可完成 Work
+
+- **变更**：① `packages/core/src/findings.ts` 的 `completionEvidence` 不再只看 `revision === work.baseRevision`：`Run` 的**证据**（最新冻结 Revision 的 artifact，或 stage result 命名的冻结 `VerificationManifest`）先过 `evaluateEvidenceValidity`（有效性 + Revision + 血缘）；② `markAddressed` 读取修复 Run 自己的证据 Revision 并把 `work.baseRevision` **推进**到该 Revision（同事务，写 `finding_addressed` 血缘快照，含 `previousBaseRevision`/`baseRevision`/`fixEvidenceAt`），因此修复前证据再也无法满足 Revision 绑定；③ `latestFixRecord` 提供 `producedAfter`，早于修复执行的证据即使 Revision 相同也拒绝。
+- **回归测试**：`packages/core/test/findings.test.ts`「never completes on Test evidence a Finding invalidated and advances the revision on the fix」（旧行为：`ok:true` + `delivery.work_completed`；现在失效证据 ⇒ `GATE_NOT_READY`「invalid」、零完成事件、`baseRevision` 由 `REVISION` 推进到 `FIX_REVISION`，修复后新 Test 才完成）。
+
+### W6R2-02 [P2] 调用方 `expectedSourceHash` 可覆盖批准记录 Hash
+
+- **变更**：`packages/core/src/gates.ts` 的 `requestCodeWrite` 把批准记录的 `sourceHash` 作为**无条件**期望（缺失即 fail-closed 拒绝），调用方期望改走 `WriteGateInput.callerExpectedSourceHash` —— 只能是**追加**条件，永远不能替换批准记录的比较；domain `evaluateWriteGate` 对两者分别判定。
+- **回归测试**：`packages/core/test/gates.test.ts`「never lets a caller expectation replace the approved source hash」（旧行为：源码移动后把移动后的值当期望即 `allowed:true`；现在 `GATE_NOT_READY`、零 `delivery.write_admitted` 事件、digest 不变）；domain 测试「never lets a caller expectation replace the approved source hash」覆盖同一规则的纯函数形态。
+
+### W6R2-03 [P2] 修复 Revision 完全取自修复 Run 自述
+
+- **变更**：`markAddressed` 要求修复 Run 冻结了 Revision，且该 Revision **必须不同于** `work.baseRevision`（否则即“修复”声称的正是 Finding 已判失效的树）⇒ `GATE_NOT_READY`；domain `findingCanBeVerified` 新增 `currentWorkRevision`，要求 `fixingRevision === currentWorkRevision`（缺失即拒，fail-closed），core `verifyTx` 传 `work.baseRevision`。
+- **回归测试**：`findings.test.ts`「refuses a fix whose Run self-reports the invalidated pre-fix revision」（旧行为：`markAddressed` 成功、整条关闭链锚定修复前 Revision；现在拒绝且 Finding 保持 `open`、`baseRevision` 不变）；domain 侧既有正例全部改为显式传 `currentWorkRevision`。
+
+### W6R2-04 [P2] `work.baseRevision` 缺失时跳过 Revision 绑定
+
+- **变更**：绑定规则回到共享原语 —— `work.baseRevision` 缺失 ⇒ `REVISION_UNBOUND` ⇒ `GATE_NOT_READY`，不再“无 Revision 即放行”。`requirement-continue.ts` 未改动（AC-089 仍允许创建无 `baseRevision` 的 Work），但该 Work 现在**不能完成**，直到有真实 Revision（登记为残余）。
+- **回归测试**：`findings.test.ts`「refuses to complete a Work that froze no base revision」（旧行为：任意 Revision 的 Test 都完成 Work；现在 `GATE_NOT_READY` 且 Work 保持 `running`）；domain 判定单测覆盖 `REVISION_UNBOUND`。
+
+### W6R2-05 [P2] 冻结 `VerificationManifest` 回退路径为死分支
+
+- **变更**：`frozenManifestOf` 不再用 UUIDv7 去查 64 位 `snapshot.hash`（该查询恒不可达）。改为扫描 `snapshot(type=verification, kind=verification_manifest)`，同时接受两种身份：该冻结行的**hash**（payload 直接冻结时的内容地址）与 payload **声明的 `manifestId`**（`data.md` §3 给 `stage_result.manifest_id` 的 UUIDv7 键空间），两个键空间都真实可达。无法解析且 Run 无 artifact 时，`completionEvidence` 以**精确消息**点名该 manifest 并拒绝（不再静默降级为“binds no frozen revision”）。同时新增 `frozenCompletionManifestOf`（`Ref.hash` 是内容摘要，按 hash 键真读）。
+- **回归测试**：`findings.test.ts`「binds a Test to its frozen VerificationManifest when the Run produced no artifact」（旧行为：该案 `GATE_NOT_READY`／死分支；现在无 artifact 的 Test 经冻结 Manifest 完成，事件 `testEvidenceRevision`/`testEnvironmentRef` 来自 Manifest）与「fails closed when a stage result names a manifest that is not frozen」（拒绝消息含该 manifest id 与 `no VerificationManifest`）。
+
+### W6R2-06 [P2] Plan 批准不预留 `requestedTokens`，重复批准累计超限
+
+- **变更**：`submitPlanTx` 在批准同一事务内 `tokensReserved += requestedTokens`（`budget.tokensReserved` 参与下一次 `evaluatePlanApproval` 的 `used + reserved + requested <= limit` 判定），并在批准事件中记录 `requestedTokens`/`tokensReserved`；`requestedTokens` 存在但 Work 无预算行 ⇒ fail-closed `GATE_NOT_READY`（不再跳过预算判定）。
+- **回归测试**：`gates.test.ts`「reserves the approved tokens so a second Plan cannot exceed the limit」（旧行为：100 限额下两份 60 token Plan 都 `approved:true` 且 `tokensReserved` 仍为 0；现在第一份批准后 `tokensReserved=60`，第二份 `BUDGET_EXCEEDED` 且不写预算，剩余 40 的请求仍批准并预留到 100）。
+
+### W6R2-07 [P2] `requestCodeWrite` 不读 Work 状态
+
+- **变更**：domain 新增 `workWriteBarrier(status)`，`writeAdmission` 与 `requestCodeWrite` 共用同一条暂停/取消屏障规则；`requestCodeWrite` 对 `paused`/`cancelling`/`cancelled` 返回与暂停屏障相同的 fail-closed 代码 `INVALID_STATE`（`CodeWriteRefusalCode` 相应扩展），拒绝零写入。
+- **回归测试**：`gates.test.ts`「refuses a code write on a paused or cancelled Work」（旧行为：三种状态均 `allowed:true`；现在 `INVALID_STATE`、digest 不变，回到 `running` 后同一批准 Plan 仍可准入）；domain 测试「refuses writes on paused, cancelling and cancelled Work and nothing else」。
+
+### W6R2-08 [P2] 就绪判定是“任一 Attempt 为 running”
+
+- **变更**：`readyAttemptOf` 取 `number DESC` 的**最新** Attempt，仅当其 `status === 'running'` 才视为就绪；旧 epoch 的 `running` Attempt 不能再为 `starting` 的新 Attempt 放行。
+- **回归测试**：`findings.test.ts`「admits a write only when the newest Attempt is ready」（旧行为：Attempt#1 `running` + Attempt#2 `starting` ⇒ `admitted:true`；现在拒绝且 reason 含 `ready Attempt`，把 #2 置 `running` 后才准入）。
+
+### W6R2-09 [P3] `completeWork` 路线无关，L1 无法完成
+
+- **变更**：domain 新增 `completionEvidenceKindFor(route, level)`（按该路线自己的阶段序判定：含 `Test` 阶段的 code L2/L3 用 Test；L1 code、document、operation 用该路线自己的 Review 证据）。`CompleteWorkInput` 增加 `route`/`reviewRunId`/`completionManifestRef`；`completeTx` 对 `review` 证据要求同 Work、`role=review`、`completed`、持久 `stage_result` 为 `success`、artifact 有效且绑定 Work Revision；并**要求冻结的 `CompletionManifest`**（按 hash 读取、校验 schema 与 `workId`、要求 `verifiedManifestIds` 非空），事件记录 `evidenceKind`/`completionManifestHash`/`completionManifestFinalRevision`。未知 route/level ⇒ `VALIDATION_ERROR`。
+- **回归测试**：`findings.test.ts`「completes an L1 Work without a Test Run, through its Review and a frozen CompletionManifest」（旧行为：L1 `GATE_NOT_READY`“no Test Run is bound”；现在无 Test 证据也能完成，缺 Review 或缺 CompletionManifest 分别拒绝）与「keeps the document route on its own rule」「refuses an unrecognised route/level instead of guessing a completion rule」；集成侧 `delivery.integration.test.ts` 的 AC-007 L1 链在 CAS 之后**真实调用 `completeWork`** 完成 Work（ReviewCheck 证据 + 冻结完成清单）。
+
+### W6R2-10 [P3] 文档路线“候选 Diff”是子串匹配
+
+- **变更**：`StageManifest` 新增结构化 `candidateDiffRef: Ref`；文档路线 Review 必须绑定该 Ref（id 与 hash 非空），`namesCandidateDiff` 的 `includes('diff')/('candidate')` 子串判定被删除。
+- **回归测试**：`packages/domain/test/delivery.test.ts` 的文档链用例改为：绑定 Ref ⇒ `ok:true`；去掉 Ref 但写上 “candidate diff approved” ⇒ `VALIDATION_ERROR`（旧行为：该文本即可通过）；Ref 不完整亦拒绝。集成测试 `delivery.integration.test.ts` 的文档链 Review 改为绑定 Planning 候选 Diff 的真实 artifact Ref。
+
+### 接口变更（调用方需知）
+
+| 位置 | 变更 |
+|---|---|
+| `CompleteWorkInput` | 新增 `route?`/`reviewRunId?`/`completionManifestRef?`（`testRunId` 语义不变，仅 code L2/L3 必需） |
+| `CompleteWorkResult`（成功分支） | 新增 `evidenceKind`/`completionManifestHash` |
+| `LevelUpgradeInput` | 新增必填 `workRevision`（等级重评走共享证据规则） |
+| `VerificationRun` | 新增必填 `evidenceValid`（省略即视为无效，fail-closed） |
+| `FindingVerificationInput`/`FindingClosureInput` | 新增 `currentWorkRevision`（addressed 路径必填） |
+| `StageManifest` | 新增 `candidateDiffRef`（文档路线 Review 必填） |
+| `CodeWriteRefusalCode` | 新增 `INVALID_STATE`（暂停/取消屏障） |
+| `WriteGateInput` | 新增可选 `callerExpectedSourceHash`（追加条件） |
+
+### 修正的旧测试期望（原期望本身有误）
+
+1. `findings.test.ts`「blocks completion while a blocking Finding is open or addressed」原先把**修复后 Revision** 的 Test 证据用于“修复前”的完成尝试，掩盖了 Revision 绑定；现在先建当前 Revision 的 Test 证明“通过 Test 也不能关闭阻塞 Finding”，修复后再建新 Revision 的 Test。
+2. `findings.test.ts`/`delivery-failures.test.ts`/`delivery.integration.test.ts` 中原先修复 Run 冻结的 Revision 与 `work.baseRevision` **相同**（`recordFixArtifact` 默认 `REVISION`），在新规则下“修复未产生新 Revision”被拒；用例改为 `FIX_REVISION`/`NEXT_REVISION` 并断言 `work.baseRevision` 被推进。
+3. `delivery.integration.test.ts` 的 AC-007 L1 链原先完全手工拼装、从不调用 `completeWork`（Review 也因此没有持久 `stage_result`）；现在补上 ReviewCheck 结果并真实调用完成门禁。
+4. `delivery.integration.test.ts` 的 Finding 闭环原先在 `markAddressed` **之后**才创建修复 Run 的证据；现在修复证据先落库再标记（这正是 W6R2-03 要求的不变量）。
+
+### 验证数字（本轮，全部为原始命令结果）
+
+| 命令 | 原始结果 | 结论 |
+|---|---|---|
+| `node_modules/.bin/prettier --write <files>` | 8 个被改文件全部格式化完成（末次运行 8/8 `unchanged`，已收敛；此前 `delivery.test.ts`/`findings.test.ts`/`gates.test.ts` 与三个 src 有改动） | 通过 |
+| `pnpm typecheck` | `tsc -p tsconfig.json --pretty false`，无输出（`TYPECHECK_EXIT=0`） | 通过 |
+| `pnpm lint` | `Checking formatting... All matched files use Prettier code style!`（`LINT_EXIT=0`） | 通过 |
+| `pnpm test:unit` | `Test Files 38 passed (38)` / `Tests 749 passed (749)`（`UNIT_EXIT=0`）；较 T6 的 727 增加 **22** 条回归（domain 10 + `findings.test.ts` 9 + `gates.test.ts` 3） | 通过 |
+| `pnpm test:integration` | `Test Files 11 passed (11)` / `Tests 132 passed (132)`（`INTEGRATION_EXIT=0`）；本次 `docker info` 成功，Docker 环境阻塞未复现 | 通过 |
+| `pnpm build` | `pnpm -r build`：contracts/pi-runtime/domain/knowledge/storage/workspace/core/cli/daemon/runner 共 **10 workspace** 全 `Done`（`BUILD_EXIT=0`） | 通过 |
+| `pnpm docs:check` | `docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages`（`DOCSCHECK_EXIT=0`） | 通过 |
+
+原始日志：`/tmp/wp06t7.log`（prettier/typecheck/lint）、`/tmp/wp06t7b.log`（unit/integration）、`/tmp/wp06t7c.log`（build/docs:check）。
+
+### T7 残余（供独立 Review/Test 判定）
+
+1. **CompletionManifest 覆盖度**：L1/document 现在必须提供冻结且 schema 合法、属于本 Work、`verifiedManifestIds` 非空的 `CompletionManifest`；但“清单必须覆盖每一个被验证 Manifest / 与 CAS 后 `finalRevision` 一致”的完整核对仍属 WP-08（`workflow.md` §7 的最终绑定）。本轮只绑定“清单属于本 Work”与“证据 Revision = Work Revision”。
+2. **无 `baseRevision` 的 Work 不能完成**：这是 W6R2-04 要求的 fail-closed 结果；AC-089 继续允许创建无 `baseRevision` 的 Work（本包未改 `requirement-continue.ts`），该 Work 需要真实 Revision（WP-08 的 Git 交付路径）后才能完成。
+3. **Revision 全序仍不存在**：修复 Revision 只接受“等于 Work 当前 Revision 且不同于修复前 Revision”，未实现“后代 Revision”偏序（无 Git 祖先关系）。
+4. **预算预留 vs 核销**：批准路径现在预留 `requestedTokens` 并 fail-closed；`tokensReserved` 的核销/退还仍由 `RunLifecycle.settle` 负责（WP-02/WP-08），审批与派发之间不重复计费的并发压测未做。
+5. **冻结 Manifest 的写入方**：`frozenManifestOf` 现在同时认 hash 与 payload 声明的 `manifestId` 两种键；真实写入 `VerificationManifest`/`CompletionManifest` 快照的接线方（并声明 id）属 WP-08。
+6. **operation 路线**：无 `Test` 阶段，故 `completionEvidenceKindFor` 为它选择 Review 证据；专门的 `Verify` 证据规则属 WP-08（与 T6 残余 4 同源）。
+7. **`writeAdmission` 与 `requestCodeWrite` 的 Run/Attempt 条件未合并**：Work 状态两门共用 `workWriteBarrier`；Run/Attempt 就绪条件仍只在 `writeAdmission`（Broker/工具准入接线属 WP-07）。
+8. **`evidenceValid` 必需字段**：domain 类型要求调用方显式给出；本包 core 全部从持久 artifact 读取，但外部（WP-07）接线时必须同样从 `artifact.validity` 读取，否则省略即被拒。

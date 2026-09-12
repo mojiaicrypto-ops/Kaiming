@@ -692,4 +692,123 @@ describe('Plan gate persistence (AC-009, AC-013, AC-014)', () => {
     expect(scanEvents(store, { names: ['delivery.level_upgraded'] })).toHaveLength(0);
     expect(port.snapshot(DOWNGRADE_WORK_ID).digest).toBe(before.digest);
   });
+  it('never lets a caller expectation replace the approved source hash (AC-013, W6R2-02)', () => {
+    // A caller-owned measurement port, so the "source" can really move.
+    let content = 'a'.repeat(40);
+    const moving: SourceHashPort = {
+      measure: () => content,
+      contentHash: () => content,
+    };
+    const planRef = approve({ sourceHashPort: moving });
+
+    // The source moves before the write. Supplying the *moved* value as the
+    // caller's own expectation used to select the gate out of moved-source
+    // detection; the approved hash is now compared unconditionally.
+    content = 'b'.repeat(40);
+    const before = port.snapshot(WORK_ID);
+    const overridden = gates.requestCodeWrite({
+      workId: WORK_ID,
+      revision: REVISION,
+      targets: [PATH],
+      planRef,
+      sourceHashPort: moving,
+      expectedSourceHash: 'b'.repeat(40),
+    });
+    expect(overridden.allowed).toBe(false);
+    if (overridden.allowed) throw new Error('unreachable');
+    expect(overridden.code).toBe('GATE_NOT_READY');
+    expect(overridden.gaps.join(' ')).toContain('source hash changed');
+    expect(overridden.sourceHash).toBe(overridden.sourceHashAfter);
+    // The refusal admitted no write: no event, no new row.
+    expect(scanEvents(store, { names: ['delivery.write_admitted'] })).toHaveLength(0);
+    expect(port.snapshot(WORK_ID).digest).toBe(before.digest);
+  });
+
+  it('reserves the approved tokens so a second Plan cannot exceed the limit (AC-022, W6R2-06)', () => {
+    const work = store.works.find(WORK_ID);
+    if (work === undefined) throw new Error('unreachable');
+    const budget = store.budgets.find(work.budgetId);
+    if (budget === undefined) throw new Error('unreachable');
+    store.budgets.update(budget.id, { tokenLimit: 100 }, budget.version);
+
+    const first = submit({
+      approval: {
+        authorizationRef: AUTHORIZATION_ID,
+        runId: RUN_ID,
+        productChanged: false,
+        requestedTokens: 60,
+        at: nextTime(),
+      },
+    });
+    expect(first.approved).toBe(true);
+    // The approval is accounted for: the tokens are reserved, not forgotten.
+    expect(store.budgets.find(budget.id)?.tokensReserved).toBe(60);
+
+    // A second 60-token Plan sees the first reservation and is refused instead of
+    // silently consuming the same headroom twice.
+    const second = submit({
+      plan: draft({ goal: 'the second 60-token Plan' }),
+      approval: {
+        authorizationRef: AUTHORIZATION_ID,
+        runId: RUN_ID,
+        productChanged: false,
+        requestedTokens: 60,
+        at: nextTime(),
+      },
+    });
+    expect(second.approved).toBe(false);
+    if (second.approved) throw new Error('unreachable');
+    expect(second.code).toBe('BUDGET_EXCEEDED');
+    expect(store.budgets.find(budget.id)?.tokensReserved).toBe(60);
+
+    // What still fits the remaining headroom is approved and reserved.
+    const third = submit({
+      plan: draft({ goal: 'the fitting remainder' }),
+      approval: {
+        authorizationRef: AUTHORIZATION_ID,
+        runId: RUN_ID,
+        productChanged: false,
+        requestedTokens: 40,
+        at: nextTime(),
+      },
+    });
+    expect(third.approved).toBe(true);
+    expect(store.budgets.find(budget.id)?.tokensReserved).toBe(100);
+  });
+
+  it('refuses a code write on a paused or cancelled Work (AC-020/AC-021, W6R2-07)', () => {
+    const planRef = approve();
+    expect(
+      gates.requestCodeWrite({ workId: WORK_ID, revision: REVISION, targets: [PATH], planRef })
+        .allowed,
+    ).toBe(true);
+
+    for (const status of ['paused', 'cancelling', 'cancelled'] as const) {
+      const work = store.works.find(WORK_ID);
+      if (work === undefined) throw new Error('unreachable');
+      store.works.update(WORK_ID, { status }, work.version);
+      const before = port.snapshot(WORK_ID);
+      const refused = gates.requestCodeWrite({
+        workId: WORK_ID,
+        revision: REVISION,
+        targets: [PATH],
+        planRef,
+      });
+      expect(refused.allowed).toBe(false);
+      if (refused.allowed) throw new Error('unreachable');
+      // The same fail-closed code the Run-level pause barrier reports.
+      expect(refused.code).toBe('INVALID_STATE');
+      expect(refused.gaps.join(' ')).toContain(status === 'paused' ? 'paused' : status);
+      expect(port.snapshot(WORK_ID).digest).toBe(before.digest);
+    }
+
+    // Back at `running`, the same approved Plan is admitted again.
+    const running = store.works.find(WORK_ID);
+    if (running === undefined) throw new Error('unreachable');
+    store.works.update(WORK_ID, { status: 'running' }, running.version);
+    expect(
+      gates.requestCodeWrite({ workId: WORK_ID, revision: REVISION, targets: [PATH], planRef })
+        .allowed,
+    ).toBe(true);
+  });
 });

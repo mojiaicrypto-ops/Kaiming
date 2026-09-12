@@ -31,6 +31,8 @@ import {
 const ROOT = '/tmp/agentdev-delivery-failures-root';
 const HASH = 'a'.repeat(64);
 const REVISION = 'a'.repeat(40);
+/** The revision the fixing Run freezes: a fix must advance the Work revision. */
+const FIX_REVISION = 'f'.repeat(40);
 const CONFIG_HASH = HASH;
 const PATH = 'packages/domain/src/permission.ts';
 const OTHER_PATH = 'packages/domain/src/delivery.ts';
@@ -407,6 +409,7 @@ describe('required WP-06 failure tests', () => {
         },
       },
       logicChange: false,
+      workRevision: REVISION,
       plan: {
         id: HASH,
         version: 1,
@@ -467,6 +470,7 @@ describe('required WP-06 failure tests', () => {
         signals: { presentationOnly: true, goalSubstitutionExplicit: true },
       },
       logicChange: false,
+      workRevision: REVISION,
       plan: {
         id: replacement.id,
         version: replacement.version,
@@ -802,8 +806,11 @@ describe('required WP-06 failure tests', () => {
       role: 'backend',
       stage: 'Develop',
     });
-    // The fix froze the revision the verifiers must reference (W6R1-01).
-    recordFixArtifact(RUNS.findingFix, IDS.findingWork);
+    // The fix froze the new revision the verifiers must reference: a fix has to
+    // advance the Work revision, and `markAddressed` records it (W6R2-01/W6R2-03).
+    recordFixArtifact(RUNS.findingFix, IDS.findingWork, FIX_REVISION);
+    const baseBefore = store.works.find(IDS.findingWork)?.baseRevision;
+    expect(baseBefore).toBe(REVISION);
     const addressed = findings.markAddressed({
       findingId,
       actorRole: 'backend',
@@ -811,6 +818,7 @@ describe('required WP-06 failure tests', () => {
     });
     expect(addressed.ok).toBe(true);
     if (!addressed.ok) throw new Error('unreachable');
+    expect(store.works.find(IDS.findingWork)?.baseRevision).toBe(FIX_REVISION);
 
     // The pre-fix Review cannot close the fix, even paired with a fresh Test.
     addRun({
@@ -819,7 +827,12 @@ describe('required WP-06 failure tests', () => {
       role: 'test',
       stage: 'Test',
     });
-    recordTestCheck({ runId: RUNS.findingNewTest, workId: IDS.findingWork, status: 'passed' });
+    recordTestCheck({
+      runId: RUNS.findingNewTest,
+      workId: IDS.findingWork,
+      status: 'passed',
+      revision: FIX_REVISION,
+    });
     const staleReview = findings.verifyFinding({
       findingId,
       actorRole: 'review',
@@ -838,7 +851,7 @@ describe('required WP-06 failure tests', () => {
       role: 'review',
       stage: 'Review',
     });
-    recordReviewArtifact(RUNS.findingNewReview, IDS.findingWork);
+    recordReviewArtifact(RUNS.findingNewReview, IDS.findingWork, FIX_REVISION);
     const staleTest = findings.verifyFinding({
       findingId,
       actorRole: 'review',

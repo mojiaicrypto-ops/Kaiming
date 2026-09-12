@@ -24,8 +24,10 @@ import {
   bindFindingTarget,
   canReserveBudget,
   classifyChange,
+  completionEvidenceKindFor,
   documentRouteRules,
   evaluateBehaviourChoice,
+  evaluateEvidenceValidity,
   evaluateFindingClosure,
   evaluateFindingRouting,
   evaluateL1Eligibility,
@@ -34,6 +36,7 @@ import {
   evaluateReworkAllowance,
   evaluateStageChain,
   evaluateWriteGate,
+  evidenceBindsRevision,
   findingBlocksCompletion,
   findingCanBeVerified,
   invalidateEvidenceForChoice,
@@ -41,6 +44,7 @@ import {
   levelRank,
   requirementStateForChoice,
   stageOrderFor,
+  workWriteBarrier,
   type ChangeDiff,
   type CodeSignals,
   type LevelUpgradeInput,
@@ -196,6 +200,7 @@ describe('L1 eligibility and bounds (AC-007/AC-008/AC-009)', () => {
       diff: { ...typoDiff, filesChanged: 5, diffLines: 40 },
       logicChange: false,
       plan,
+      workRevision: REV,
     };
     const upgrade = evaluateLevelUpgrade(input);
     expect(upgrade.ok).toBe(false);
@@ -217,6 +222,7 @@ describe('L1 eligibility and bounds (AC-007/AC-008/AC-009)', () => {
       diff: typoDiff,
       logicChange: true,
       plan,
+      workRevision: REV,
     });
     expect(upgrade.ok).toBe(false);
     expect(upgrade.upgradeRequired).toBe(true);
@@ -234,6 +240,7 @@ describe('L1 eligibility and bounds (AC-007/AC-008/AC-009)', () => {
       diff: typoDiff,
       logicChange: false,
       plan,
+      workRevision: REV,
     });
     expect(downgrade.ok).toBe(false);
     expect(downgrade.outcome).toBe('downgrade_refused');
@@ -247,6 +254,7 @@ describe('L1 eligibility and bounds (AC-007/AC-008/AC-009)', () => {
       diff: typoDiff,
       logicChange: false,
       plan,
+      workRevision: REV,
     });
     expect(unchanged.ok).toBe(true);
     expect(unchanged.outcome).toBe('noop');
@@ -380,7 +388,7 @@ describe('stage manifests and routes (AC-010/AC-011/AC-012)', () => {
     expect(completeL3.ok).toBe(true);
   });
 
-  it('accepts a document chain that binds no code revision or environment (AC-012, W6R1-04)', () => {
+  it('accepts a document chain that binds no code revision or environment (AC-012, W6R1-04/W6R2-10)', () => {
     // The document lane has no code Test and no code revision (`workflow.md` §3):
     // the chain validator used to demand both on Review, rejecting a compliant
     // document delivery.
@@ -388,7 +396,12 @@ describe('stage manifests and routes (AC-010/AC-011/AC-012)', () => {
       without(manifest('Product'), NO_CODE_FIELDS),
       without(manifest('Planning', 'Product'), NO_CODE_FIELDS),
       without(
-        manifest('Review', 'Planning', ['candidate diff: docs/product/requirements.md']),
+        {
+          ...manifest('Review', 'Planning'),
+          // W6R2-10: the candidate diff is a concrete artifact binding, not the
+          // word "diff" in a free-text evidence line.
+          candidateDiffRef: { id: ID, version: 1, hash: HASH },
+        },
         NO_CODE_FIELDS,
       ),
       without(manifest('Settlement', 'Review'), NO_CODE_FIELDS),
@@ -397,20 +410,36 @@ describe('stage manifests and routes (AC-010/AC-011/AC-012)', () => {
       evaluateStageChain({ route: 'document', level: 'L2', manifests: documentChain }),
     ).toEqual({ ok: true, stages: ['Product', 'Planning', 'Review', 'Settlement'] });
 
-    // The exemption is not a blanket removal: the document Review still has to name
-    // the candidate diff it reviewed.
+    // The exemption is not a blanket removal: the document Review still has to bind
+    // the candidate diff it reviewed. W6R2-10: naming the words "candidate diff" in
+    // free text — the old, substring-only rule — must not satisfy it any more.
+    const stripCandidateDiff = (entry: StageManifest): StageManifest => {
+      if (entry.stage !== 'Review') return entry;
+      const copy: Record<string, unknown> = { ...entry };
+      delete copy['candidateDiffRef'];
+      return { ...(copy as unknown as StageManifest), evidence: ['candidate diff approved'] };
+    };
     const noDiffEvidence = evaluateStageChain({
       route: 'document',
       level: 'L2',
-      manifests: documentChain.map((entry) =>
-        entry.stage === 'Review' ? { ...entry, evidence: ['looks fine to me'] } : entry,
-      ),
+      manifests: documentChain.map(stripCandidateDiff),
     });
     expect(noDiffEvidence.ok).toBe(false);
     if (!noDiffEvidence.ok) {
       expect(noDiffEvidence.code).toBe('VALIDATION_ERROR');
       expect(noDiffEvidence.gaps.map((gap) => gap.message).join(' ')).toContain('candidate diff');
     }
+    // An incomplete binding is not a binding either.
+    const incompleteRef = evaluateStageChain({
+      route: 'document',
+      level: 'L2',
+      manifests: documentChain.map((entry) =>
+        entry.stage === 'Review'
+          ? { ...entry, candidateDiffRef: { id: '', version: 1, hash: '' } }
+          : entry,
+      ),
+    });
+    expect(incompleteRef.ok).toBe(false);
 
     // The code route keeps the code requirements: the same manifests without a
     // frozen revision are refused there.
@@ -809,12 +838,14 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
   const reviewRun = {
     stage: 'review',
     reviewsCurrentRevision: true,
+    evidenceValid: true,
     status: 'passed' as const,
     revision: FIX_REV,
   };
   const testRun = {
     stage: 'test',
     reviewsCurrentRevision: true,
+    evidenceValid: true,
     status: 'passed' as const,
     revision: FIX_REV,
   };
@@ -837,6 +868,7 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
       reviewRun,
       testRun,
       fixingRevision,
+      currentWorkRevision: FIX_REV,
     });
     expect(selfVerify.ok).toBe(false);
     if (!selfVerify.ok) expect(selfVerify.code).toBe('NOT_AUTHORIZED');
@@ -848,6 +880,7 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
       reviewRun: { ...reviewRun, reviewsCurrentRevision: false },
       testRun,
       fixingRevision,
+      currentWorkRevision: FIX_REV,
     });
     expect(oldEvidence.ok).toBe(false);
     if (!oldEvidence.ok) expect(oldEvidence.code).toBe('GATE_NOT_READY');
@@ -858,6 +891,7 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
       actorRole: 'review',
       reviewRun,
       fixingRevision,
+      currentWorkRevision: FIX_REV,
     });
     expect(reviewOnly.ok).toBe(false);
 
@@ -869,6 +903,7 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
         reviewRun,
         testRun,
         fixingRevision,
+        currentWorkRevision: FIX_REV,
       }),
     ).toEqual({ ok: true, state: 'verified' });
     // A review role may verify, a test role may too; neither may be the developer.
@@ -879,6 +914,7 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
         reviewRun,
         testRun,
         fixingRevision,
+        currentWorkRevision: FIX_REV,
       }).ok,
     ).toBe(true);
     expect(
@@ -888,6 +924,7 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
         reviewRun,
         testRun,
         fixingRevision,
+        currentWorkRevision: FIX_REV,
       }).ok,
     ).toBe(false);
     // An open Finding is not verifiable at all.
@@ -898,6 +935,7 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
         reviewRun,
         testRun,
         fixingRevision,
+        currentWorkRevision: FIX_REV,
       }).ok,
     ).toBe(false);
   });
@@ -913,6 +951,7 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
       reviewRun: { ...reviewRun, revision: REV2 },
       testRun,
       fixingRevision,
+      currentWorkRevision: FIX_REV,
     });
     expect(preFixReview.ok).toBe(false);
     if (!preFixReview.ok) expect(preFixReview.code).toBe('GATE_NOT_READY');
@@ -925,6 +964,7 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
         reviewRun,
         testRun: { ...testRun, status },
         fixingRevision,
+        currentWorkRevision: FIX_REV,
       });
       expect(notPassed.ok).toBe(false);
       if (!notPassed.ok) expect(notPassed.code).toBe('GATE_NOT_READY');
@@ -934,8 +974,14 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
     const noConclusion = findingCanBeVerified({
       ...base,
       reviewRun,
-      testRun: { stage: 'test', reviewsCurrentRevision: true, revision: FIX_REV },
+      testRun: {
+        stage: 'test',
+        reviewsCurrentRevision: true,
+        evidenceValid: true,
+        revision: FIX_REV,
+      },
       fixingRevision,
+      currentWorkRevision: FIX_REV,
     });
     expect(noConclusion.ok).toBe(false);
 
@@ -953,6 +999,7 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
       reviewRun,
       testRun,
       fixingRevision,
+      currentWorkRevision: FIX_REV,
     });
     expect(closed).toEqual({ closed: true, state: 'verified' });
 
@@ -962,6 +1009,7 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
       reviewRun,
       testRun,
       fixingRevision,
+      currentWorkRevision: FIX_REV,
       repairUsed: 3,
       repairLimit: 3,
     });
@@ -1057,6 +1105,7 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
       reviewRun,
       testRun,
       fixingRevision,
+      currentWorkRevision: FIX_REV,
     });
     expect(closure).toEqual({ closed: true, state: 'verified' });
   });
@@ -1109,5 +1158,219 @@ describe('budget reservation (AC-022)', () => {
     expect(exhausted.code).toBe('BUDGET_EXCEEDED');
     expect(exhausted.requiresUserTopUp).toBe(true);
     expect(exhausted.repairLimit).toBe(3);
+  });
+});
+
+/**
+ * The shared evidence-validity + revision-lineage primitive (W6R2-01…W6R2-05).
+ *
+ * Completion, Finding closure and level re-evaluation all consult this one rule,
+ * so each of its clauses is pinned here rather than only through its consumers.
+ */
+describe('evidence validity and revision lineage (AC-017/AC-019, W6R2-01…W6R2-05)', () => {
+  const evidence = (
+    overrides: Partial<Parameters<typeof evaluateEvidenceValidity>[0]['evidence']> = {},
+  ) => ({
+    ref: 'artifact-1',
+    kind: 'test',
+    validity: 'valid' as const,
+    revision: REV,
+    createdAt: TIME,
+    ...overrides,
+  });
+
+  it('accepts only valid evidence frozen on the Work revision', () => {
+    const decision = evaluateEvidenceValidity({
+      evidence: evidence(),
+      lineage: { workRevision: REV },
+    });
+    expect(decision.valid).toBe(true);
+    expect(decision.code).toBe('VALID');
+    expect(decision.revision).toBe(REV);
+    expect(evidenceBindsRevision({ evidence: evidence(), lineage: { workRevision: REV } })).toBe(
+      true,
+    );
+    expect(evidenceBindsRevision({ evidence: evidence(), lineage: { workRevision: REV2 } })).toBe(
+      false,
+    );
+  });
+
+  it('refuses invalidated evidence whatever revision it names (AC-017)', () => {
+    for (const validity of ['invalid', 'superseded'] as const) {
+      const decision = evaluateEvidenceValidity({
+        evidence: evidence({ validity }),
+        lineage: { workRevision: REV },
+      });
+      expect(decision.valid).toBe(false);
+      expect(decision.code).toBe('INVALIDATED');
+      expect(decision.message).toContain(validity);
+    }
+  });
+
+  it('fails closed on evidence without a revision and on a Work without one (W6R2-04)', () => {
+    const noRevision = evaluateEvidenceValidity({
+      evidence: { ref: 'artifact-1', kind: 'test', validity: 'valid' },
+      lineage: { workRevision: REV },
+    });
+    expect(noRevision.code).toBe('NO_REVISION');
+
+    const unbound = evaluateEvidenceValidity({ evidence: evidence(), lineage: {} });
+    expect(unbound.valid).toBe(false);
+    // The old completion gate skipped the revision comparison entirely when
+    // `work.baseRevision` was missing; the rule refuses instead.
+    expect(unbound.code).toBe('REVISION_UNBOUND');
+  });
+
+  it('refuses an explicitly invalidated revision even when the evidence claims valid', () => {
+    const decision = evaluateEvidenceValidity({
+      evidence: evidence(),
+      lineage: { workRevision: REV, invalidatedRevisions: [REV] },
+    });
+    expect(decision.code).toBe('INVALIDATED');
+  });
+
+  it('refuses pre-fix evidence and evidence produced at or before the fix (W6R2-01/03)', () => {
+    const preFix = evaluateEvidenceValidity({
+      evidence: evidence(),
+      lineage: { workRevision: REV2, fixingRevision: REV2 },
+    });
+    expect(preFix.valid).toBe(false);
+    expect(preFix.code).toBe('PRE_FIX_REVISION');
+
+    const tooEarly = evaluateEvidenceValidity({
+      evidence: evidence(),
+      lineage: { workRevision: REV, fixingRevision: REV, producedAfter: TIME },
+    });
+    expect(tooEarly.valid).toBe(false);
+    expect(tooEarly.code).toBe('PRODUCED_BEFORE_FIX');
+
+    const after = evaluateEvidenceValidity({
+      evidence: evidence(),
+      lineage: {
+        workRevision: REV,
+        fixingRevision: REV,
+        producedAfter: '2026-09-10T00:00:00.000Z',
+      },
+    });
+    expect(after.valid).toBe(true);
+  });
+
+  it('refuses evidence bound to a different revision than the Work (binding, not order)', () => {
+    const decision = evaluateEvidenceValidity({
+      evidence: evidence(),
+      lineage: { workRevision: REV2 },
+    });
+    expect(decision.valid).toBe(false);
+    expect(decision.code).toBe('REVISION_MISMATCH');
+    expect(decision.revision).toBe(REV);
+  });
+});
+
+describe('route-aware completion evidence (AC-007/AC-012/AC-019, W6R2-09)', () => {
+  it('selects a Test for code L2/L3 and the route Review otherwise', () => {
+    expect(completionEvidenceKindFor('code', 'L2')).toBe('test');
+    expect(completionEvidenceKindFor('code', 'L3')).toBe('test');
+    // AC-007: the L1 chain has no Test stage, so L1 completes on its ReviewCheck.
+    expect(completionEvidenceKindFor('code', 'L1')).toBe('review');
+    // AC-012: the document lane has no code Test either.
+    expect(completionEvidenceKindFor('document', 'L2')).toBe('review');
+    expect(completionEvidenceKindFor('operation', 'L2')).toBe('review');
+    // An undefined combination is not a rule: the caller must fail closed.
+    expect(completionEvidenceKindFor('code', 'none')).toBeUndefined();
+  });
+});
+
+describe('the shared write barrier (AC-020/AC-021, W6R2-07)', () => {
+  it('refuses writes on paused, cancelling and cancelled Work and nothing else', () => {
+    for (const status of ['paused', 'cancelling', 'cancelled'] as const) {
+      const barrier = workWriteBarrier(status);
+      expect(barrier.blocked).toBe(true);
+      if (barrier.blocked) {
+        expect(barrier.code).toBe('INVALID_STATE');
+        expect(barrier.message).toContain(status === 'paused' ? 'paused' : status);
+      }
+    }
+    for (const status of ['queued', 'running', 'blocked', 'completed', 'failed'] as const) {
+      expect(workWriteBarrier(status).blocked).toBe(false);
+    }
+  });
+
+  it('never lets a caller expectation replace the approved source hash (W6R2-02)', () => {
+    const planRevision: PlanRevision = { ...plan, revision: REV };
+    const base = {
+      plan: planRevision,
+      revision: REV,
+      work: { id: ID, revision: REV, level: 'L2' as const },
+      authorizedTargets: ['src/'],
+      planHash: HASH,
+      diffHash: HASH2,
+    };
+    // The source moved. Handing the gate the moved value as the caller's own
+    // expectation used to select the gate out of moved-source detection.
+    const override = evaluateWriteGate({
+      ...base,
+      expectedSourceHash: HASH,
+      actualSourceHash: HASH2,
+      callerExpectedSourceHash: HASH2,
+    });
+    expect(override.ok).toBe(false);
+    if (!override.ok) expect(override.gaps.join(' ')).toContain('source hash changed');
+
+    // A matching expectation adds nothing when the approved hash still matches.
+    expect(
+      evaluateWriteGate({
+        ...base,
+        expectedSourceHash: HASH,
+        actualSourceHash: HASH,
+        callerExpectedSourceHash: HASH,
+      }).ok,
+    ).toBe(true);
+    // ...and a mismatching one refuses even then.
+    const callerOnly = evaluateWriteGate({
+      ...base,
+      expectedSourceHash: HASH,
+      actualSourceHash: HASH,
+      callerExpectedSourceHash: HASH2,
+    });
+    expect(callerOnly.ok).toBe(false);
+  });
+});
+
+describe('level re-evaluation consults the evidence rule (W6R2-06 lineage)', () => {
+  const upgradeDiff: ChangeDiff = { ...typoDiff, filesChanged: 5, diffLines: 40 };
+
+  it('does not supersede a Plan the persisted validity already rejects', () => {
+    const invalidated = evaluateLevelUpgrade({
+      previousLevel: 'L1',
+      diff: upgradeDiff,
+      logicChange: false,
+      plan: { ...plan, validity: 'invalid' },
+      workRevision: REV,
+    });
+    expect(invalidated.outcome).toBe('upgrade');
+    // The Plan was already dead: this upgrade is not what supersedes it.
+    expect(invalidated.stalePlan).toBe(false);
+    expect(invalidated.planEvidence?.code).toBe('INVALIDATED');
+
+    const bound = evaluateLevelUpgrade({
+      previousLevel: 'L1',
+      diff: upgradeDiff,
+      logicChange: false,
+      plan,
+      workRevision: REV,
+    });
+    expect(bound.stalePlan).toBe(true);
+    expect(bound.planEvidence?.valid).toBe(true);
+
+    // A Plan bound to another revision is not the current authority either.
+    const foreign = evaluateLevelUpgrade({
+      previousLevel: 'L1',
+      diff: upgradeDiff,
+      logicChange: false,
+      plan,
+      workRevision: REV2,
+    });
+    expect(foreign.stalePlan).toBe(false);
+    expect(foreign.planEvidence?.code).toBe('REVISION_MISMATCH');
   });
 });

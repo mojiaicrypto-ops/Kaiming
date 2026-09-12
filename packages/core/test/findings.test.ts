@@ -3,10 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CheckStatus, Ref, Run, RunStatus, Scope } from '@agentdev/contracts';
+import { completionManifestSchema, verificationManifestSchema } from '@agentdev/contracts';
 import {
   BlobStore,
   ProjectStore as Store,
   projectIdFromRoot,
+  sha256,
   type ProjectStore,
 } from '@agentdev/storage';
 import { scanEvents } from '../src/events.js';
@@ -35,6 +37,9 @@ const PAUSE_RUN_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e17';
 const RECOVERY_RUN_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e18';
 const BARE_TEST_RUN_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e19';
 const ATTEMPT_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e60';
+const SECOND_ATTEMPT_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e61';
+const FROZEN_MANIFEST_UUID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e80';
+const MISSING_MANIFEST_UUID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e81';
 const TASK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e40';
 const FOREIGN_TASK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e41';
 const PLAN_REF_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e42';
@@ -45,6 +50,8 @@ const PENDING_DECISION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e51';
 const FOREIGN_DECISION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e52';
 const PRODUCT_DECISION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e53';
 const REVISION = 'a'.repeat(40);
+/** The revision the fixing Run freezes: a fix must advance the Work revision. */
+const FIX_REVISION = 'f'.repeat(40);
 const HASH = 'b'.repeat(64);
 const SNAPSHOT_ID = 'c'.repeat(64);
 const CHECK_ENVIRONMENT_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e70';
@@ -444,6 +451,139 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     });
   }
 
+  /**
+   * A persisted stage result for a Run that need not have produced an artifact.
+   *
+   * It is what the completion gate reads for a ReviewCheck result, and what a
+   * Test Run uses to name the `VerificationManifest` it ran under (W6R2-05).
+   */
+  function recordStageResult(
+    runId: string,
+    status: 'success' | 'failed',
+    options: {
+      readonly manifestId?: string;
+      readonly checkStatus?: CheckStatus;
+    } = {},
+  ): void {
+    const attempt = store.attempts.insert({
+      runId,
+      number: store.attempts.count('run_id = ?', [runId]) + 1,
+      status: 'running',
+      ownerEpoch: 0,
+    });
+    store.stageResults.insert({
+      runId,
+      attemptId: attempt.id,
+      status,
+      summary: `${runId} ${status}`,
+      artifactRefs: [],
+      evidenceRefs: [],
+      changedPaths: [],
+      findingIds: [],
+      unknowns: [],
+      requestedActions: [],
+      readLedgerSeq: 0,
+      readLedgerHash: HASH,
+      ...(options.manifestId === undefined ? {} : { manifestId: options.manifestId }),
+      ...(options.checkStatus === undefined
+        ? {}
+        : {
+            checkResult: {
+              status: options.checkStatus,
+              checks: [
+                {
+                  command: 'pnpm test:unit',
+                  environmentRef: CHECK_ENVIRONMENT_ID,
+                  acceptanceIds: [],
+                  inputTree: HASH,
+                  exitCode: options.checkStatus === 'passed' ? 0 : 1,
+                  outputRef: CHECK_OUTPUT_ID,
+                  result: options.checkStatus,
+                },
+              ],
+              uncovered: [],
+            },
+          }),
+    });
+  }
+
+  /**
+   * Freezes one `VerificationManifest` snapshot, addressable by its declared
+   * UUIDv7 id (the key space `data.md` §3 gives `stage_result.manifest_id`).
+   */
+  function freezeVerificationManifest(
+    workId: string,
+    stage: string,
+    manifestId: string,
+    codeRevision: string,
+  ): string {
+    const manifest = verificationManifestSchema.parse({
+      workId,
+      level: 'L2',
+      route: 'code',
+      planRef: { id: PLAN_REF_ID, version: 1, hash: HASH },
+      dependencyRevision: codeRevision,
+      dependencyManifestRefs: [],
+      codeRevision,
+      codeTree: HASH,
+      policyHash: HASH,
+      contextSnapshotId: TARGET_REF_ID,
+      readLedgerSeq: 0,
+      readLedgerHash: HASH,
+      configHash: HASH,
+      environmentRef: CHECK_ENVIRONMENT_ID,
+      acceptanceIds: ['AC-019'],
+    });
+    const payload = {
+      kind: 'verification_manifest',
+      manifestId,
+      schemaVersion: 1,
+      workId,
+      stage,
+      manifest,
+    };
+    const hash = sha256(JSON.stringify(payload));
+    store.db
+      .prepare(
+        'INSERT OR IGNORE INTO snapshot (type, hash, payload, blob_path, created_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run(
+        'verification',
+        hash,
+        JSON.stringify(payload),
+        `snapshots/verification/${hash}.json`,
+        iso(900),
+      );
+    return hash;
+  }
+
+  /** Freezes one `CompletionManifest` snapshot and returns its `Ref`. */
+  function freezeCompletionManifest(workId: string, finalRevision: string): Ref {
+    const manifest = completionManifestSchema.parse({
+      workId,
+      verifiedManifestIds: [MANIFEST_ID],
+      finalRevision,
+      verifiedCodeTree: HASH,
+      knowledgeTree: HASH,
+      settlementResultRef: TARGET_REF_ID,
+      riskDecisionIds: [],
+    });
+    const payload = { kind: 'completion_manifest', schemaVersion: 1, workId, manifest };
+    const hash = sha256(JSON.stringify(payload));
+    store.db
+      .prepare(
+        'INSERT OR IGNORE INTO snapshot (type, hash, payload, blob_path, created_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run(
+        'verification',
+        hash,
+        JSON.stringify(payload),
+        `snapshots/verification/${hash}.json`,
+        iso(900),
+      );
+    return { id: hash, version: 1, hash };
+  }
+
   // -------------------------------------------------------------------------
   // AC-083 / AC-017
   // -------------------------------------------------------------------------
@@ -567,9 +707,9 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
 
   it('closes a fixed Finding only after a new independent Review and Test, and refuses a developer self-verify (AC-018)', () => {
     const findingId = submitIntegrationFinding();
-    const fixArtifactId = recordFixArtifact(FIX_RUN_ID);
-    recordReviewArtifact(NEW_REVIEW_RUN_ID);
-    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
+    const fixArtifactId = recordFixArtifact(FIX_RUN_ID, FIX_REVISION);
+    recordReviewArtifact(NEW_REVIEW_RUN_ID, FIX_REVISION);
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed', revision: FIX_REVISION });
 
     // Open: nothing may close it yet.
     const early = service.verifyFinding({
@@ -601,7 +741,10 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     if (!addressed.ok) throw new Error('unreachable');
     expect(addressed.finding.state).toBe('addressed');
     expect(addressed.finding.resolutionRef).toBe(FIX_RUN_ID);
-    expect(store.artifacts.find(fixArtifactId)?.sourceRevision).toBe(REVISION);
+    // W6R2-01/W6R2-03: the fix advances the Work revision, so the pre-fix evidence
+    // can never satisfy a later revision binding again.
+    expect(store.artifacts.find(fixArtifactId)?.sourceRevision).toBe(FIX_REVISION);
+    expect(store.works.find(WORK_ID)?.baseRevision).toBe(FIX_REVISION);
 
     // The developer that fixed it cannot verify it, even with real Runs in hand.
     const selfVerify = service.verifyFinding({
@@ -655,8 +798,8 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
 
   it('refuses a pre-fix revision and a non-passed Test conclusion even when the Runs are new (AC-018, W6R1-01/W6R1-08)', () => {
     const findingId = submitIntegrationFinding();
-    // The fix froze REVISION; the verifying Runs exist and are created after it.
-    recordFixArtifact(FIX_RUN_ID);
+    // The fix froze FIX_REVISION; the verifying Runs exist and are created after it.
+    recordFixArtifact(FIX_RUN_ID, FIX_REVISION);
     expect(
       service.markAddressed({ findingId, actorRole: 'backend', fixRunId: FIX_RUN_ID }).ok,
     ).toBe(true);
@@ -664,7 +807,7 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     // A new Review whose own evidence is the pre-fix revision cannot verify, even
     // though the Run itself is new and independent by identity/order.
     recordReviewArtifact(NEW_REVIEW_RUN_ID, 'OLDREVISION'.padEnd(40, '0'));
-    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed', revision: FIX_REVISION });
     const preFixRevision = service.verifyFinding({
       findingId,
       actorRole: 'review',
@@ -678,8 +821,8 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
 
     // A Test Run that completed with `failed` is not a passing Test: the old code
     // mapped `completed` to `passed` and closed the Finding anyway.
-    recordReviewArtifact(NEW_REVIEW_RUN_ID);
-    recordTestCheck(NEW_TEST_RUN_ID, { status: 'failed' });
+    recordReviewArtifact(NEW_REVIEW_RUN_ID, FIX_REVISION);
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'failed', revision: FIX_REVISION });
     const failedTest = service.verifyFinding({
       findingId,
       actorRole: 'review',
@@ -704,12 +847,12 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
 
   it('refuses an old Review, the raising Review and a wrong-role Run as the fix verifier (AC-017, AC-018)', () => {
     const findingId = submitIntegrationFinding();
-    recordFixArtifact(FIX_RUN_ID);
+    recordFixArtifact(FIX_RUN_ID, FIX_REVISION);
     expect(
       service.markAddressed({ findingId, actorRole: 'backend', fixRunId: FIX_RUN_ID }).ok,
     ).toBe(true);
-    recordReviewArtifact(NEW_REVIEW_RUN_ID);
-    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
+    recordReviewArtifact(NEW_REVIEW_RUN_ID, FIX_REVISION);
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed', revision: FIX_REVISION });
 
     // The Review that raised the Finding can never verify its own fix.
     const raisingReview = service.verifyFinding({
@@ -905,8 +1048,11 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
 
   it('blocks completion while a blocking Finding is open or addressed (AC-017, AC-019)', () => {
     const findingId = submitIntegrationFinding();
-    recordFixArtifact(FIX_RUN_ID);
-    recordReviewArtifact(NEW_REVIEW_RUN_ID);
+    recordFixArtifact(FIX_RUN_ID, FIX_REVISION);
+    recordReviewArtifact(NEW_REVIEW_RUN_ID, FIX_REVISION);
+    // The pre-fix Test is bound to the Work's *current* revision, so the refusal
+    // below is the blocking Finding and not a revision mismatch: a passing Test
+    // never closes a Finding by itself (`workflow.md` §6).
     recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
 
     const open = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
@@ -919,9 +1065,14 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     expect(
       service.markAddressed({ findingId, actorRole: 'backend', fixRunId: FIX_RUN_ID }).ok,
     ).toBe(true);
+    // Marking the fix addressed advances the Work revision (W6R2-01), so the
+    // pre-fix Test no longer binds anything.
+    expect(store.works.find(WORK_ID)?.baseRevision).toBe(FIX_REVISION);
     const addressed = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
     expect(addressed.ok).toBe(false);
 
+    // Only a Test of the post-fix revision, paired with the new Review, completes.
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed', revision: FIX_REVISION });
     const closed = service.verifyFinding({
       findingId,
       actorRole: 'review',
@@ -931,6 +1082,7 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     expect(closed.ok).toBe(true);
     const done = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
     expect(done.ok).toBe(true);
+    expect(done.ok && done.testRunId).toBe(NEW_TEST_RUN_ID);
     expect(store.works.find(WORK_ID)?.status).toBe('completed');
   });
 
@@ -1237,5 +1389,257 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     expect(cancelled.ok).toBe(false);
     if (cancelled.ok) throw new Error('unreachable');
     expect(cancelled.code).toBe('INVALID_STATE');
+  });
+
+  // -------------------------------------------------------------------------
+  // W6R2 regressions — evidence validity, revision lineage, route awareness
+  // -------------------------------------------------------------------------
+
+  it('never completes on Test evidence a Finding invalidated and advances the revision on the fix (AC-017/AC-019, W6R2-01)', () => {
+    // The pre-fix Test is real, executed and bound to the current revision.
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
+    const preFixArtifact = store.artifacts.list({
+      where: "run_id = ? AND kind = 'test'",
+      params: [NEW_TEST_RUN_ID],
+    })[0];
+    expect(preFixArtifact).toBeDefined();
+    if (preFixArtifact === undefined) throw new Error('unreachable');
+
+    // A P2 Finding returns the Work to development (it does not block completion
+    // by itself), which invalidates that Test artifact.
+    const submitted = service.submitFinding({
+      reviewRunId: REVIEW_RUN_ID,
+      target: {
+        targetKind: 'integration',
+        targetRef: { id: TARGET_REF_ID, version: 1, hash: HASH },
+      },
+      manifestRef: manifestRef(),
+      finding: { description: 'the gate misses an edge case', severity: 'P2' },
+    });
+    expect(submitted.ok).toBe(true);
+    if (!submitted.ok) throw new Error('unreachable');
+    const findingId = submitted.finding.id;
+    expect(store.artifacts.find(preFixArtifact.id)?.validity).toBe('invalid');
+
+    // The invalidated pre-fix Test must not complete the Work.
+    const stale = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
+    expect(stale.ok).toBe(false);
+    if (stale.ok) throw new Error('unreachable');
+    expect(stale.code).toBe('GATE_NOT_READY');
+    expect(stale.reasons.join(' ')).toContain('invalid');
+    expect(store.works.find(WORK_ID)?.status).toBe('running');
+    expect(scanEvents(store, { names: ['delivery.work_completed'] })).toHaveLength(0);
+
+    // The fix freezes a new revision; recording it advances the Work revision so
+    // the pre-fix evidence can never satisfy the binding again.
+    recordFixArtifact(FIX_RUN_ID, FIX_REVISION);
+    const addressed = service.markAddressed({
+      findingId,
+      actorRole: 'backend',
+      fixRunId: FIX_RUN_ID,
+    });
+    expect(addressed.ok).toBe(true);
+    if (!addressed.ok) throw new Error('unreachable');
+    expect(store.works.find(WORK_ID)?.baseRevision).toBe(FIX_REVISION);
+    const stillStale = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
+    expect(stillStale.ok).toBe(false);
+
+    // A Test of the post-fix revision, produced after the fix, does complete.
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed', revision: FIX_REVISION });
+    const done = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
+    expect(done.ok).toBe(true);
+    if (!done.ok) throw new Error('unreachable');
+    expect(done.evidenceKind).toBe('test');
+    expect(
+      scanEvents(store, { names: ['delivery.work_completed'] })[0]?.data['testEvidenceRevision'],
+    ).toBe(FIX_REVISION);
+  });
+
+  it('refuses a fix whose Run self-reports the invalidated pre-fix revision (AC-018, W6R2-03)', () => {
+    const findingId = submitIntegrationFinding();
+    // The fixing Run claims it froze the pre-fix revision: the very tree the
+    // Finding rejected. The whole closure chain would still anchor to it.
+    recordFixArtifact(FIX_RUN_ID, REVISION);
+    const addressed = service.markAddressed({
+      findingId,
+      actorRole: 'backend',
+      fixRunId: FIX_RUN_ID,
+    });
+    expect(addressed.ok).toBe(false);
+    if (addressed.ok) throw new Error('unreachable');
+    expect(addressed.code).toBe('GATE_NOT_READY');
+    expect(addressed.message).toContain('advance the Work revision');
+    expect(store.findings.find(findingId)?.state).toBe('open');
+    expect(store.works.find(WORK_ID)?.baseRevision).toBe(REVISION);
+
+    // Even a fix Run that froze no revision at all cannot be addressed.
+    addRun({
+      id: RECOVERY_RUN_ID,
+      role: 'backend',
+      status: 'completed',
+      createdAt: iso(50),
+      stage: 'Develop',
+      purpose: 'implementation',
+    });
+    const unbound = service.markAddressed({
+      findingId,
+      actorRole: 'backend',
+      fixRunId: RECOVERY_RUN_ID,
+    });
+    expect(unbound.ok).toBe(false);
+    if (unbound.ok) throw new Error('unreachable');
+    expect(unbound.message).toContain('froze no revision');
+  });
+
+  it('refuses to complete a Work that froze no base revision (AC-019, W6R2-04)', () => {
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
+    const work = store.works.find(WORK_ID);
+    if (work === undefined) throw new Error('unreachable');
+    store.works.update(WORK_ID, { baseRevision: undefined }, work.version);
+
+    const result = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.code).toBe('GATE_NOT_READY');
+    expect(result.reasons.join(' ')).toContain('no frozen revision');
+    expect(store.works.find(WORK_ID)?.status).toBe('running');
+  });
+
+  it('binds a Test to its frozen VerificationManifest when the Run produced no artifact (AC-019, W6R2-05)', () => {
+    const frozenHash = freezeVerificationManifest(WORK_ID, 'Test', FROZEN_MANIFEST_UUID, REVISION);
+    expect(frozenHash).toMatch(/^[0-9a-f]{64}$/);
+    // No artifact: the only frozen evidence is the manifest the stage result names
+    // by its UUIDv7 id.
+    recordStageResult(NEW_TEST_RUN_ID, 'success', {
+      manifestId: FROZEN_MANIFEST_UUID,
+      checkStatus: 'passed',
+    });
+
+    const done = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
+    expect(done.ok).toBe(true);
+    if (!done.ok) throw new Error('unreachable');
+    expect(done.testStatus).toBe('passed');
+    const event = scanEvents(store, { names: ['delivery.work_completed'] })[0];
+    expect(event?.data['testEvidenceRevision']).toBe(REVISION);
+    expect(event?.data['testEnvironmentRef']).toBe(CHECK_ENVIRONMENT_ID);
+  });
+
+  it('fails closed when a stage result names a manifest that is not frozen (W6R2-05)', () => {
+    recordStageResult(NEW_TEST_RUN_ID, 'success', {
+      manifestId: MISSING_MANIFEST_UUID,
+      checkStatus: 'passed',
+    });
+    const refused = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
+    expect(refused.ok).toBe(false);
+    if (refused.ok) throw new Error('unreachable');
+    expect(refused.code).toBe('GATE_NOT_READY');
+    // The refusal names the manifest it could not resolve instead of silently
+    // falling through to an artifact the Run never produced.
+    expect(refused.reasons.join(' ')).toContain(MISSING_MANIFEST_UUID);
+    expect(refused.reasons.join(' ')).toContain('no VerificationManifest');
+    expect(store.works.find(WORK_ID)?.status).toBe('running');
+  });
+
+  it('admits a write only when the newest Attempt is ready (AC-020, W6R2-08)', () => {
+    expect(service.writeAdmission(PAUSE_RUN_ID).admitted).toBe(true);
+
+    // A new Attempt is opened (the resume window) while the old `running` Attempt
+    // is still on the row: the stale Attempt must not admit the write.
+    store.attempts.insert({
+      id: SECOND_ATTEMPT_ID,
+      runId: PAUSE_RUN_ID,
+      number: 2,
+      status: 'starting',
+      ownerEpoch: 1,
+    });
+    const starting = service.writeAdmission(PAUSE_RUN_ID);
+    expect(starting.admitted).toBe(false);
+    expect(starting.reason).toContain('ready Attempt');
+
+    const attempt = store.attempts.find(SECOND_ATTEMPT_ID);
+    if (attempt === undefined) throw new Error('unreachable');
+    store.attempts.update(SECOND_ATTEMPT_ID, { status: 'running' }, attempt.version);
+    expect(service.writeAdmission(PAUSE_RUN_ID).admitted).toBe(true);
+  });
+
+  it('completes an L1 Work without a Test Run, through its Review and a frozen CompletionManifest (AC-007/AC-019, W6R2-09)', () => {
+    const work = store.works.find(WORK_ID);
+    if (work === undefined) throw new Error('unreachable');
+    store.works.update(WORK_ID, { level: 'L1' }, work.version);
+
+    // AC-007's L1 chain is Develop → Review → Settlement: the ReviewCheck result is
+    // the evidence, and no Test Run exists.
+    recordReviewArtifact(REVIEW_RUN_ID, REVISION);
+    recordStageResult(REVIEW_RUN_ID, 'success');
+    // No Test evidence exists for this Work at all: the completion below cannot be
+    // resting on a Test Run.
+    expect(store.artifacts.count("work_id = ? AND kind = 'test'", [WORK_ID])).toBe(0);
+    const manifestRef = freezeCompletionManifest(WORK_ID, REVISION);
+
+    // Supplying no Review is not silently replaced by the L1 route.
+    const noReview = service.completeWork({ workId: WORK_ID, completionManifestRef: manifestRef });
+    expect(noReview.ok).toBe(false);
+    if (noReview.ok) throw new Error('unreachable');
+    expect(noReview.reasons.join(' ')).toContain('Review Run');
+
+    // The completion list is required on a route/level without a Test Run.
+    const noManifest = service.completeWork({ workId: WORK_ID, reviewRunId: REVIEW_RUN_ID });
+    expect(noManifest.ok).toBe(false);
+    if (noManifest.ok) throw new Error('unreachable');
+    expect(noManifest.reasons.join(' ')).toContain('CompletionManifest');
+
+    const done = service.completeWork({
+      workId: WORK_ID,
+      reviewRunId: REVIEW_RUN_ID,
+      completionManifestRef: manifestRef,
+    });
+    expect(done.ok).toBe(true);
+    if (!done.ok) throw new Error('unreachable');
+    expect(done.evidenceKind).toBe('review');
+    expect(done.completionManifestHash).toBe(manifestRef.hash);
+    expect(store.works.find(WORK_ID)?.status).toBe('completed');
+    const event = scanEvents(store, { names: ['delivery.work_completed'] })[0];
+    expect(event?.data['evidenceKind']).toBe('review');
+    expect(event?.data['completionManifestHash']).toBe(manifestRef.hash);
+  });
+
+  it('keeps the document route on its own rule: Review evidence, no code Test Run (AC-012, W6R2-09)', () => {
+    recordReviewArtifact(REVIEW_RUN_ID, REVISION);
+    recordStageResult(REVIEW_RUN_ID, 'success');
+    const manifestRef = freezeCompletionManifest(WORK_ID, REVISION);
+
+    // A Test Run is ignored on the document route: the rule comes from the route.
+    const testInstead = service.completeWork({
+      workId: WORK_ID,
+      route: 'document',
+      testRunId: NEW_TEST_RUN_ID,
+      completionManifestRef: manifestRef,
+    });
+    expect(testInstead.ok).toBe(false);
+    if (testInstead.ok) throw new Error('unreachable');
+    expect(testInstead.reasons.join(' ')).toContain('Review Run');
+
+    const done = service.completeWork({
+      workId: WORK_ID,
+      route: 'document',
+      reviewRunId: REVIEW_RUN_ID,
+      completionManifestRef: manifestRef,
+    });
+    expect(done.ok).toBe(true);
+    if (!done.ok) throw new Error('unreachable');
+    expect(done.evidenceKind).toBe('review');
+  });
+
+  it('refuses an unrecognised route/level instead of guessing a completion rule (W6R2-09)', () => {
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
+    const result = service.completeWork({
+      workId: WORK_ID,
+      route: 'document',
+      testRunId: NEW_TEST_RUN_ID,
+    });
+    // The document/L2 rule needs the Review, so the refusal is about evidence...
+    expect(result.ok).toBe(false);
+    // ...and the completion list, never about falling back to a Test.
+    if (!result.ok) expect(result.reasons.join(' ')).not.toContain('CheckResult');
   });
 });

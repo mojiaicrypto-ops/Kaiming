@@ -561,6 +561,7 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
     readonly route?: 'code' | 'document' | 'operation';
     readonly dependsOn?: readonly string[];
     readonly evidence?: readonly string[];
+    readonly candidateDiffRef?: Ref;
   }): StageManifest {
     const documentRoute = input.route === 'document';
     return {
@@ -577,6 +578,7 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
           }),
       ...(input.dependsOn === undefined ? {} : { dependsOn: [...input.dependsOn] }),
       ...(input.evidence === undefined ? {} : { evidence: [...input.evidence] }),
+      ...(input.candidateDiffRef === undefined ? {} : { candidateDiffRef: input.candidateDiffRef }),
     };
   }
 
@@ -786,6 +788,28 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
       body: '# review: the one-line typo fix matches the requested target\n',
       sourceRevision: REVISION,
     });
+    // The persisted ReviewCheck result: the L1 route's own verification evidence,
+    // which `completeWork` reads instead of a Test Run (W6R2-09).
+    const l1ReviewAttempt = store.attempts.insert({
+      runId: RUNS.l1Review,
+      number: 1,
+      status: 'running',
+      ownerEpoch: 0,
+    });
+    store.stageResults.insert({
+      runId: RUNS.l1Review,
+      attemptId: l1ReviewAttempt.id,
+      status: 'success',
+      summary: 'review: the one-line typo fix matches the request',
+      artifactRefs: [],
+      evidenceRefs: [],
+      changedPaths: [],
+      findingIds: [],
+      unknowns: [],
+      requestedActions: [],
+      readLedgerSeq: 0,
+      readLedgerHash: PROJECT_ID_HASH,
+    });
     addRun({ id: RUNS.l1Settlement, workId: IDS.l1Typos, role: 'settlement', stage: 'Settlement' });
     const settlement = artifact({
       runId: RUNS.l1Settlement,
@@ -856,6 +880,19 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
     // A stale CAS expectation is refused rather than silently moving the ref.
     expect(cas.updateRef('refs/heads/agentdev/main', PRIOR_REVISION, REVISION).updated).toBe(false);
     expect(cas.expectedHead()).toBe(NEXT_REVISION);
+
+    // W6R2-09: the L1 route completes through `completeWork` with no Test Run at
+    // all — the ReviewCheck result and the frozen completion list are its evidence.
+    const completed = findings.completeWork({
+      workId: IDS.l1Typos,
+      reviewRunId: RUNS.l1Review,
+      completionManifestRef: { id: completion.hash, version: 1, hash: completion.hash },
+    });
+    expect(completed.ok).toBe(true);
+    if (!completed.ok) throw new Error('unreachable');
+    expect(completed.evidenceKind).toBe('review');
+    expect(completed.completionManifestHash).toBe(completion.hash);
+    expect(store.works.find(IDS.l1Typos)?.status).toBe('completed');
   });
 
   // -------------------------------------------------------------------------
@@ -1109,7 +1146,13 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
         workId: IDS.documentRoute,
         route: 'document',
         dependsOn: ['Planning'],
-        evidence: ['candidate diff: docs/product/requirements.md'],
+        // W6R2-10: the candidate diff is a concrete artifact binding, not the words
+        // "candidate diff" in a free-text evidence line.
+        candidateDiffRef: {
+          id: planningCandidate.id,
+          version: planningCandidate.artifactVersion,
+          hash: planningCandidate.contentHash,
+        },
       }),
       stageView({
         stage: 'Settlement',
@@ -1127,14 +1170,21 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
     const chain = stageChain({ route: 'document', level: 'L2', manifests: documentViews });
     expect(chain).toEqual({ ok: true, stages: ['Product', 'Planning', 'Review', 'Settlement'] });
 
-    // The rule is real, not a blanket removal: a document Review that does not name
-    // the candidate diff it reviewed is refused.
+    // The rule is real, not a blanket removal: a document Review that does not bind
+    // the candidate diff it reviewed is refused — naming it in free text is not a
+    // binding (W6R2-10).
     const unreviewed = stageChain({
       route: 'document',
       level: 'L2',
-      manifests: documentViews.map((view) =>
-        view.stage === 'Review' ? { ...view, evidence: [] } : view,
-      ),
+      manifests: documentViews.map((view) => {
+        if (view.stage !== 'Review') return view;
+        const copy: Record<string, unknown> = { ...view };
+        delete copy['candidateDiffRef'];
+        return {
+          ...(copy as unknown as StageManifest),
+          evidence: ['candidate diff: docs/product/requirements.md'],
+        };
+      }),
     });
     expect(unreviewed.ok).toBe(false);
     if (unreviewed.ok) throw new Error('unreachable');
@@ -1409,6 +1459,16 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
     expect(store.tasks.find(TASKS.finding)?.stage).toBe('develop');
 
     addRun({ id: RUNS.findingFix, workId: IDS.findingLoop, role: 'backend', stage: 'Develop' });
+    // The fix's own evidence must exist before the fix is recorded: it is the
+    // revision the Work advances to and every verifier must reference (W6R2-01/03).
+    const fixDiff = artifact({
+      runId: RUNS.findingFix,
+      workId: IDS.findingLoop,
+      role: 'backend',
+      kind: 'diff',
+      body: '--- a\n+++ b\n+gate check\n',
+      sourceRevision: NEXT_REVISION,
+    });
     const fixed = findings.markAddressed({
       findingId,
       actorRole: 'backend',
@@ -1417,6 +1477,7 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
     expect(fixed.ok).toBe(true);
     if (!fixed.ok) throw new Error('unreachable');
     expect(fixed.finding.state).toBe('addressed');
+    expect(store.works.find(IDS.findingLoop)?.baseRevision).toBe(NEXT_REVISION);
 
     // AC-018: the developer that fixed it cannot verify it.
     const selfVerify = findings.verifyFinding({
@@ -1438,15 +1499,13 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
     });
     addRun({ id: RUNS.findingNewTest, workId: IDS.findingLoop, role: 'test', stage: 'Test' });
     // The new Test's persisted `passed` conclusion is what closes the Finding
-    // (W6R1-01/W6R1-08) and later completes the Work (W6R1-02).
-    recordTestCheck({ runId: RUNS.findingNewTest, workId: IDS.findingLoop, status: 'passed' });
-    const fixDiff = artifact({
-      runId: RUNS.findingFix,
+    // (W6R1-01/W6R1-08) and later completes the Work (W6R1-02); every verifier is
+    // bound to the post-fix revision the fix advanced the Work to.
+    recordTestCheck({
+      runId: RUNS.findingNewTest,
       workId: IDS.findingLoop,
-      role: 'backend',
-      kind: 'diff',
-      body: '--- a\n+++ b\n+gate check\n',
-      sourceRevision: REVISION,
+      status: 'passed',
+      revision: NEXT_REVISION,
     });
     const verifiedReview = artifact({
       runId: RUNS.findingNewReview,
@@ -1454,7 +1513,7 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
       role: 'review',
       kind: 'review',
       body: '# review v2 of the post-fix revision: the gate is now wired in\n',
-      sourceRevision: REVISION,
+      sourceRevision: NEXT_REVISION,
     });
     const verifiedTest = artifact({
       runId: RUNS.findingNewTest,
@@ -1462,7 +1521,7 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
       role: 'test',
       kind: 'test',
       body: '# test v2: passed\n',
-      sourceRevision: REVISION,
+      sourceRevision: NEXT_REVISION,
     });
 
     const closed = findings.verifyFinding({

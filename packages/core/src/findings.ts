@@ -31,10 +31,12 @@
  * one transaction together with its event (`reliability.md` §1).
  */
 import {
+  completionManifestSchema,
   workStatusSchema,
   type Attempt,
   type CheckResult,
   type CheckStatus,
+  type CompletionManifest,
   type Decision,
   type Finding,
   type FindingSeverity,
@@ -55,13 +57,20 @@ import {
   canTransitionRun,
   canTransitionTask,
   canTransitionWork,
+  completionEvidenceKindFor,
+  evaluateEvidenceValidity,
   evaluateFindingClosure,
   evaluateFindingRouting,
   findingBlocksCompletion,
   isTerminalRunStatus,
+  workWriteBarrier,
+  type CompletionEvidenceKind,
+  type DeliveryRoute,
+  type EvidenceValidityDecision,
   type FindingBinding,
   type FindingCandidate,
   type FindingTargetBinding,
+  type RevisionEvidence,
   type VerificationRun,
 } from '@agentdev/domain';
 import { BlobStore, sha256, withTransaction, type ProjectStore } from '@agentdev/storage';
@@ -230,14 +239,16 @@ export type AcceptFindingRiskResult =
  * below is the persisted `CheckResult.status`, never a claim (W6R1-02).
  */
 export interface CompletedTestEvidence {
-  /** The persisted Test Run the completion gate reads. */
+  /** The persisted Run the completion gate reads (Test or Review, per route). */
   readonly testRunId: string;
-  /** The Run's real conclusion, read from its persisted `CheckResult`. */
+  /** Which route/level rule selected the Run (W6R2-09). */
+  readonly kind: CompletionEvidenceKind;
+  /** The Run's real conclusion, read from its persisted `CheckResult` (Test path). */
   readonly status: CheckStatus;
   readonly uncovered: CheckResult['uncovered'];
-  /** The frozen revision the Test evidence belongs to. */
+  /** The frozen revision the evidence belongs to. */
   readonly revision: string;
-  /** The verification environment the Test ran in. */
+  /** The verification environment the Test ran in (Test path only). */
   readonly environmentRef: string;
 }
 
@@ -250,12 +261,37 @@ export interface RiskDispositionInput {
 export interface CompleteWorkInput {
   readonly workId: string;
   /**
+   * The delivery route the Work follows (`workflow.md` §3); `code` by default.
+   *
+   * The route/level decides which executed result completes the Work (W6R2-09):
+   * code L2/L3 complete on a Test Run, while the L1 code lane and the document
+   * lane have no Test stage and complete on the route's own Review evidence.
+   */
+  readonly route?: DeliveryRoute;
+  /**
    * The persisted Test Run whose frozen result is the completion evidence
    * (`data.md` §3 `TestResult`). A caller-asserted status is **not** accepted: the
    * gate reads the Run's own `stage_result.checkResult`, so "the Work is done"
    * cannot be claimed without an executed Test (W6R1-02, AC-018/AC-019).
    */
   readonly testRunId?: string;
+  /**
+   * The persisted Review Run that carries the completion evidence on a route/level
+   * without a Test stage (code L1, document). It must be a completed Review of this
+   * Work whose ReviewCheck result and artifact are valid and bound to the Work
+   * revision.
+   */
+  readonly reviewRunId?: string;
+  /**
+   * The frozen `CompletionManifest` the completion list binds to.
+   *
+   * `workflow.md` §7 requires the final completion list to bind the verified code
+   * tree, the final document revision and the evidence hashes, so the L1/document
+   * path requires this ref: it is validated against the immutable snapshot and
+   * against `work.baseRevision`. Code L2/L3 still complete on the Test evidence;
+   * making their CompletionManifest mandatory is the WP-08 wiring.
+   */
+  readonly completionManifestRef?: Ref;
   readonly riskDispositions?: readonly RiskDispositionInput[];
   readonly at?: string;
 }
@@ -266,6 +302,9 @@ export type CompleteWorkResult =
       readonly work: Work;
       readonly testStatus: CheckStatus;
       readonly testRunId: string;
+      /** The route/level rule that selected `testRunId` (W6R2-09). */
+      readonly evidenceKind: CompletionEvidenceKind;
+      readonly completionManifestHash: string | null;
       readonly riskDecisionIds: readonly string[];
     }
   | {
@@ -638,11 +677,55 @@ export class FindingService {
         `Run ${fixRun.id} is ${fixRun.status}; a completed fixing Run is required`,
       );
     }
+    const work = this.store.works.find(finding.workId);
+    if (work === undefined) return refusal('NOT_FOUND', `Work ${finding.workId} does not exist`);
+    // W6R2-01/W6R2-03: the fix must have produced a *new* revision. The revision is
+    // read from the fixing Run's own frozen evidence, and it has to differ from the
+    // revision the Finding returned to development — otherwise the "fix" is the very
+    // tree the Finding rejected, and every later comparison against a Work revision
+    // would still be satisfied by the invalidated pre-fix evidence.
+    const fixEvidence = this.runEvidenceOf(fixRun.id);
+    if (fixEvidence === undefined || (fixEvidence.evidence.revision ?? '') === '') {
+      return refusal(
+        'GATE_NOT_READY',
+        `Run ${fixRun.id} froze no revision; a fix must produce a new revision before it is addressed`,
+      );
+    }
+    const fixingRevision = fixEvidence.evidence.revision as string;
+    if (work.baseRevision !== undefined && work.baseRevision === fixingRevision) {
+      return refusal(
+        'GATE_NOT_READY',
+        `the fixing Run ${fixRun.id} froze revision ${fixingRevision}, the very revision the Finding invalidated; a fix must advance the Work revision`,
+      );
+    }
+    // Advancing `work.baseRevision` is what makes the old evidence unusable for
+    // good: completion and closure both bind evidence to the Work's current
+    // revision, so after this write no pre-fix artifact can satisfy them again.
+    const previousBaseRevision = work.baseRevision;
+    const advanced = this.store.works.update(
+      work.id,
+      { baseRevision: fixingRevision },
+      work.version,
+    );
     const updated = this.store.findings.update(
       finding.id,
       { state: 'addressed', resolutionRef: fixRun.id },
       finding.version,
     );
+    this.appendSnapshot(FINDING_EVIDENCE_SNAPSHOT_TYPE, {
+      kind: 'finding_addressed',
+      schemaVersion: FINDING_RECORD_VERSION,
+      workId: work.id,
+      findingId: finding.id,
+      fixRunId: fixRun.id,
+      fixEvidenceRef: fixEvidence.evidence.ref,
+      previousBaseRevision: previousBaseRevision ?? null,
+      baseRevision: fixingRevision,
+      // The moment the fixing evidence was produced: completion refuses Test
+      // evidence that predates it, even if it names the same revision.
+      fixEvidenceAt: fixEvidence.evidence.createdAt ?? null,
+      recordedAt: input.at ?? this.store.now(),
+    });
     this.store.events.append({
       name: 'finding.addressed',
       entityId: updated.id,
@@ -652,6 +735,9 @@ export class FindingService {
         findingId: updated.id,
         fixRunId: fixRun.id,
         actorRole: input.actorRole,
+        previousBaseRevision: previousBaseRevision ?? null,
+        baseRevision: fixingRevision,
+        workVersion: advanced.version,
         recordedAt: input.at ?? this.store.now(),
       },
     });
@@ -709,6 +795,14 @@ export class FindingService {
         requiresNewTest: true,
       };
     }
+    const work = this.store.works.find(finding.workId);
+    if (work === undefined) {
+      return {
+        ...refusal('NOT_FOUND', `Work ${finding.workId} does not exist`),
+        requiresNewReview: true,
+        requiresNewTest: true,
+      };
+    }
     // AC-018/W6R1-01: the revision the fix froze is read from the fixing Run's own
     // evidence. Without one there is nothing for a verifier to bind to, so the
     // closure is refused instead of being decided on Run identity alone.
@@ -745,6 +839,10 @@ export class FindingService {
       finding: this.candidateOf(finding),
       actorRole: input.actorRole,
       fixingRevision,
+      // W6R2-03: the fixing revision must be the Work's *current* revision, which
+      // `markAddressed` advanced to the revision the fix froze. A fix that self-
+      // reports the invalidated pre-fix revision is rejected by the domain rule.
+      ...(work.baseRevision === undefined ? {} : { currentWorkRevision: work.baseRevision }),
       reviewRun: this.verificationRunOf(reviewRow, 'review', finding, fixRun, fixingRevision),
       ...(testRow === undefined
         ? {}
@@ -885,10 +983,84 @@ export class FindingService {
       };
     }
 
-    // AC-019/W6R1-02: the Test result is read from the persisted Test Run and its
-    // frozen `CheckResult`, never from the caller. No Run, no evidence, a foreign
-    // revision or a missing environment all refuse before anything is decided.
-    const evidence = this.completionEvidence(input.testRunId, work);
+    // AC-019/W6R1-02/W6R2-09: the result is read from the persisted Run the
+    // route/level selects (a Test for code L2/L3, the route's own Review otherwise)
+    // and from its frozen evidence, never from the caller. A missing Run, missing
+    // evidence, an invalidated artifact/stage result, an unbound Work revision or a
+    // foreign revision all refuse before anything is decided.
+    const route: DeliveryRoute = input.route ?? 'code';
+    const kind = completionEvidenceKindFor(route, work.level);
+    if (kind === undefined) {
+      return {
+        ok: false,
+        code: 'VALIDATION_ERROR',
+        message: `route ${route} has no completion rule for level ${work.level}`,
+        reasons: [`unknown route/level ${route}/${work.level}`],
+        needsRiskDisposition: [],
+      };
+    }
+    // `workflow.md` §7: the final completion list binds the verified tree, the final
+    // document revision and the evidence hashes, so the routes/levels that have no
+    // Test Run complete through a frozen CompletionManifest. Validating it here is
+    // what keeps "no Test" from meaning "no evidence at all" (W6R2-09).
+    let completionManifestHash: string | null = null;
+    let completionFinalRevision: string | null = null;
+    if (kind === 'review') {
+      if (input.completionManifestRef === undefined) {
+        return {
+          ok: false,
+          code: 'GATE_NOT_READY',
+          message: `a ${route}/${work.level} Work completes through a frozen CompletionManifest; none was supplied`,
+          reasons: ['no CompletionManifest ref for a route/level without a Test Run'],
+          needsRiskDisposition: [],
+        };
+      }
+      const frozen = this.frozenCompletionManifestOf(input.completionManifestRef, work.id);
+      if (frozen === undefined) {
+        return {
+          ok: false,
+          code: 'GATE_NOT_READY',
+          message: `no frozen CompletionManifest ${input.completionManifestRef.hash} for Work ${work.id}; a claim is not a completion list`,
+          reasons: [
+            'the CompletionManifest ref does not resolve to a frozen manifest of this Work',
+          ],
+          needsRiskDisposition: [],
+        };
+      }
+      if (frozen.manifest.verifiedManifestIds.length === 0) {
+        return {
+          ok: false,
+          code: 'GATE_NOT_READY',
+          message: `the CompletionManifest ${frozen.hash} names no verified evidence; an empty completion list completes nothing`,
+          reasons: ['the CompletionManifest lists no verified evidence'],
+          needsRiskDisposition: [],
+        };
+      }
+      // The manifest's `finalRevision` is the *delivered* revision (the CAS target,
+      // `workflow.md` §7), which is not the Work's `baseRevision` — the base is the
+      // tree the Work started from. The tree binding is carried by the evidence
+      // itself (the shared rule binds it to `work.baseRevision`); whether the
+      // completion list covers every verified manifest is the WP-08 wiring.
+      completionManifestHash = frozen.hash;
+      completionFinalRevision = frozen.manifest.finalRevision;
+    } else if (input.completionManifestRef !== undefined) {
+      // Code L2/L3 may bind a completion list too; when supplied it must be real.
+      const frozen = this.frozenCompletionManifestOf(input.completionManifestRef, work.id);
+      if (frozen === undefined) {
+        return {
+          ok: false,
+          code: 'GATE_NOT_READY',
+          message: `no frozen CompletionManifest ${input.completionManifestRef.hash} for Work ${work.id}`,
+          reasons: [
+            'the CompletionManifest ref does not resolve to a frozen manifest of this Work',
+          ],
+          needsRiskDisposition: [],
+        };
+      }
+      completionManifestHash = frozen.hash;
+      completionFinalRevision = frozen.manifest.finalRevision;
+    }
+    const evidence = this.completionEvidence(input, work, kind);
     if (!evidence.ok) {
       return {
         ok: false,
@@ -998,10 +1170,15 @@ export class FindingService {
       entityVersion: updated.version,
       data: {
         workId: updated.id,
+        route,
+        evidenceKind: evidence.test.kind,
         testStatus: testResult.status,
         testRunId: evidence.test.testRunId,
+        evidenceRunId: evidence.test.testRunId,
         testEvidenceRevision: evidence.test.revision,
         testEnvironmentRef: evidence.test.environmentRef,
+        completionManifestHash,
+        completionManifestFinalRevision: completionFinalRevision,
         riskDecisionIds: [...new Set(riskDecisionIds)],
         completedAt: input.at ?? this.store.now(),
       },
@@ -1011,6 +1188,8 @@ export class FindingService {
       work: updated,
       testStatus: testResult.status,
       testRunId: evidence.test.testRunId,
+      evidenceKind: evidence.test.kind,
+      completionManifestHash,
       riskDecisionIds: [...new Set(riskDecisionIds)],
     };
   }
@@ -1039,19 +1218,11 @@ export class FindingService {
     if (work === undefined) {
       return { admitted: false, code: 'NOT_FOUND', reason: `Work ${run.workId} does not exist` };
     }
-    if (work.status === 'paused') {
-      return {
-        admitted: false,
-        code: 'INVALID_STATE',
-        reason: `Work ${work.id} is paused; no write is admitted until it resumes`,
-      };
-    }
-    if (work.status === 'cancelling' || work.status === 'cancelled') {
-      return {
-        admitted: false,
-        code: 'INVALID_STATE',
-        reason: `Work ${work.id} is ${work.status}; no write is admitted`,
-      };
+    // One shared rule with the Plan gate (`PlanGateService.requestCodeWrite`), so
+    // the pause barrier cannot be bypassed through the other gate (W6R2-07).
+    const barrier = workWriteBarrier(work.status);
+    if (barrier.blocked) {
+      return { admitted: false, code: barrier.code, reason: `Work ${work.id}: ${barrier.message}` };
     }
     if (run.status !== 'running') {
       return {
@@ -1076,11 +1247,13 @@ export class FindingService {
   }
 
   /**
-   * The newest Attempt of a Run that has reached the ready state.
+   * The Run's newest Attempt, returned only when it has reached the ready state.
    *
    * `starting` is deliberately not ready: the Runner confirms epoch/process/
    * environment before an Attempt may write (`reliability.md` §2, `execution.md`
-   * §1). A superseded or stopped Attempt is not ready either.
+   * §1). W6R2-08: readiness is a property of the **latest** Attempt, not of any
+   * Attempt — a stale `running` Attempt left over from an earlier epoch must not
+   * admit writes while the new Attempt is still starting.
    */
   private readyAttemptOf(runId: string): Attempt | undefined {
     const attempts = this.store.attempts.list({
@@ -1088,7 +1261,8 @@ export class FindingService {
       params: [runId],
       orderBy: 'number DESC',
     });
-    return attempts.find((attempt) => attempt.status === 'running');
+    const newest = attempts[0];
+    return newest !== undefined && newest.status === 'running' ? newest : undefined;
   }
 
   // -------------------------------------------------------------------------
@@ -1636,10 +1810,10 @@ export class FindingService {
    * Independence is a fact read from the store, not a claim from the caller: the
    * Run must belong to the same Work, carry the verifying role, have completed,
    * differ from both the fixing Run and the Review that raised the Finding, have
-   * been created *after* the fix, and — the binding W6R1-01 added — its own frozen
-   * revision must be the revision the fix froze. The conclusion is the Run's
-   * persisted `CheckResult` status; `completed` alone is never read as `passed`
-   * (W6R1-08), and a Test with no recorded conclusion is `blocked`.
+   * been created *after* the fix, and its own frozen evidence must be valid and
+   * bound to the revision the fix froze. The conclusion is the Run's persisted
+   * `CheckResult` status; `completed` alone is never read as `passed` (W6R1-08),
+   * and a Test with no recorded conclusion is `blocked`.
    */
   private verificationRunOf(
     run: Run,
@@ -1649,7 +1823,9 @@ export class FindingService {
     fixingRevision: string,
   ): VerificationRun {
     const completed = run.status === 'completed';
-    const revision = this.runRevisionOf(run.id);
+    const frozen = this.runEvidenceOf(run.id);
+    const revision = frozen?.evidence.revision;
+    const evidenceValid = frozen !== undefined && frozen.evidence.validity === 'valid';
     const independent =
       completed &&
       run.workId === finding.workId &&
@@ -1668,21 +1844,26 @@ export class FindingService {
     return {
       stage: expectedRole,
       reviewsCurrentRevision: independent,
+      // W6R2-01: an artifact the Finding invalidated is not verification evidence,
+      // however new the Run is.
+      evidenceValid,
       ...(status === undefined ? {} : { status }),
       ...(revision === undefined ? {} : { revision }),
     };
   }
 
   /**
-   * The revision a Run's own evidence froze.
+   * The revision and validity of a Run's own evidence.
    *
-   * The newest artifact the Run produced wins (a fix's diff carries the revision
-   * the fix was made against, `Artifact.sourceRevision`); when the Run produced no
-   * artifact the frozen `VerificationManifest` its stage result names is the
-   * fallback. `undefined` means the Run froze no revision at all — a fact the
-   * callers treat as a refusal, never as "current".
+   * The newest artifact that froze a revision wins (a fix's diff carries the
+   * revision the fix was made against, `Artifact.sourceRevision`); when the Run
+   * produced no such artifact, the frozen `VerificationManifest` its stage result
+   * names is the fallback. `undefined` means the Run froze no evidence at all — a
+   * fact the callers treat as a refusal, never as "current".
    */
-  private runRevisionOf(runId: string): string | undefined {
+  private runEvidenceOf(
+    runId: string,
+  ): { readonly evidence: RevisionEvidence; readonly manifest?: VerificationManifest } | undefined {
     const artifacts = this.store.artifacts.list({
       where: 'run_id = ?',
       params: [runId],
@@ -1692,11 +1873,36 @@ export class FindingService {
       orderBy: 'rowid DESC',
     });
     for (const artifact of artifacts) {
-      if (artifact.sourceRevision !== undefined && artifact.sourceRevision !== '') {
-        return artifact.sourceRevision;
-      }
+      if (artifact.sourceRevision === undefined || artifact.sourceRevision === '') continue;
+      return {
+        evidence: {
+          ref: artifact.id,
+          kind: artifact.kind,
+          validity: artifact.validity,
+          revision: artifact.sourceRevision,
+          createdAt: artifact.createdAt,
+        },
+      };
     }
-    return this.frozenManifestOf(this.latestStageResult(runId)?.manifestId)?.codeRevision;
+    const stageRow = this.latestStageResult(runId);
+    const manifest = this.frozenManifestOf(stageRow?.manifestId);
+    if (manifest === undefined) return undefined;
+    return {
+      evidence: {
+        ref: stageRow?.manifestId ?? manifest.codeRevision,
+        kind: 'verification_manifest',
+        // A frozen manifest is immutable history and carries no validity flag; an
+        // artifact that was invalidated is caught by the artifact branch above.
+        validity: 'valid',
+        revision: manifest.codeRevision,
+      },
+      manifest,
+    };
+  }
+
+  /** The revision a Run's own evidence froze, or `undefined` when it froze none. */
+  private runRevisionOf(runId: string): string | undefined {
+    return this.runEvidenceOf(runId)?.evidence.revision;
   }
 
   /** The persisted conclusion of a Run's own stage result, when it recorded one. */
@@ -1708,15 +1914,21 @@ export class FindingService {
   }
 
   /**
-   * The Test evidence a completion rests on (W6R1-02).
+   * The executed evidence a completion rests on (W6R1-02, W6R2-01…W6R2-05/09).
    *
-   * A caller-asserted status is not evidence: the gate demands a persisted Test Run
-   * of this Work, completed, with a frozen `CheckResult`, a revision equal to the
-   * Work's frozen revision, and a named verification environment.
+   * A caller-asserted status is not evidence. The gate demands the persisted Run
+   * the route/level selects — a Test for code L2/L3, the route's own Review for the
+   * L1 code lane and the document lane — belonging to this Work, completed, with
+   * the persisted result that route needs (a `CheckResult` for a Test, a successful
+   * `stage_result` for a Review), and evidence that passes the shared
+   * `evaluateEvidenceValidity` rule: not invalidated by a Finding/Decision, frozen
+   * on a revision, produced after the newest recorded fix, and bound to the Work's
+   * current revision.
    */
   private completionEvidence(
-    testRunId: string | undefined,
+    input: CompleteWorkInput,
     work: Work,
+    kind: CompletionEvidenceKind,
   ):
     | { readonly ok: true; readonly test: CompletedTestEvidence }
     | {
@@ -1724,77 +1936,119 @@ export class FindingService {
         readonly code: 'GATE_NOT_READY' | 'NOT_FOUND' | 'NOT_AUTHORIZED' | 'VALIDATION_ERROR';
         readonly message: string;
       } {
-    if (testRunId === undefined || testRunId === '') {
+    const runId = kind === 'test' ? input.testRunId : input.reviewRunId;
+    if (runId === undefined || runId === '') {
       return {
         ok: false,
         code: 'GATE_NOT_READY',
-        message: 'no Test Run is bound; an executed Test result is required to complete a Work',
+        message:
+          kind === 'test'
+            ? 'no Test Run is bound; an executed Test result is required to complete a Work'
+            : 'no Review Run is bound; this route/level completes on its persisted Review result',
       };
     }
-    const testRun = this.store.runs.find(testRunId);
-    if (testRun === undefined) {
-      return { ok: false, code: 'NOT_FOUND', message: `Test Run ${testRunId} does not exist` };
+    const run = this.store.runs.find(runId);
+    if (run === undefined) {
+      return { ok: false, code: 'NOT_FOUND', message: `Run ${runId} does not exist` };
     }
-    if (testRun.workId !== work.id) {
+    if (run.workId !== work.id) {
       return {
         ok: false,
         code: 'NOT_AUTHORIZED',
-        message: `Test Run ${testRun.id} belongs to another Work`,
+        message: `Run ${run.id} belongs to another Work`,
       };
     }
-    if (testRun.role !== 'test') {
+    if (run.role !== kind) {
       return {
         ok: false,
         code: 'GATE_NOT_READY',
-        message: `Run ${testRun.id} has role ${testRun.role}; a Test Run is required`,
+        message: `Run ${run.id} has role ${run.role}; a ${kind === 'test' ? 'Test' : 'Review'} Run is required for this route/level`,
       };
     }
-    if (testRun.status !== 'completed') {
+    if (run.status !== 'completed') {
       return {
         ok: false,
         code: 'GATE_NOT_READY',
-        message: `Test Run ${testRun.id} is ${testRun.status}; a completed Test Run is required`,
+        message: `Run ${run.id} is ${run.status}; a completed ${kind === 'test' ? 'Test' : 'Review'} Run is required`,
       };
     }
-    const row = this.stageResultsOf(testRun.id).find((entry) => entry.checkResult !== undefined);
-    if (row === undefined || row.checkResult === undefined) {
+    const rows = this.stageResultsOf(run.id);
+    const row = kind === 'test' ? rows.find((entry) => entry.checkResult !== undefined) : rows[0];
+    if (row === undefined) {
+      // A completed Run with no persisted result is a Run, not a result: "it should
+      // have passed" is never evidence (W6R1-02).
       return {
         ok: false,
         code: 'GATE_NOT_READY',
-        message: `Test Run ${testRun.id} has no persisted CheckResult; a claim is not a Test result`,
+        message:
+          kind === 'test'
+            ? `Test Run ${run.id} has no persisted CheckResult; a claim is not a Test result`
+            : `Review Run ${run.id} has no persisted stage result; a claim is not a ReviewCheck result`,
       };
     }
-    const manifest = this.frozenManifestOf(row.manifestId);
-    const revision = manifest?.codeRevision ?? this.runRevisionOf(testRun.id);
-    if (revision === undefined || revision === '') {
+    if (kind === 'test' && row.checkResult === undefined) {
       return {
         ok: false,
         code: 'GATE_NOT_READY',
-        message: `Test Run ${testRun.id} binds no frozen revision`,
+        message: `Test Run ${run.id} has no persisted CheckResult; a claim is not a Test result`,
       };
     }
-    if (work.baseRevision !== undefined && revision !== work.baseRevision) {
+    if (kind === 'review' && row.status !== 'success') {
       return {
         ok: false,
         code: 'GATE_NOT_READY',
-        message: `Test Run ${testRun.id} verified revision ${revision}, not the Work revision ${work.baseRevision}`,
+        message: `Review Run ${run.id} concluded ${row.status}; only a successful ReviewCheck completes this route/level`,
       };
     }
-    const checkEnvironment = row.checkResult.checks[0]?.environmentRef ?? '';
-    const environmentRef = manifest?.environmentRef ?? checkEnvironment;
-    if (environmentRef === '') {
+    const frozen = this.runEvidenceOf(run.id);
+    if (frozen === undefined) {
+      const manifestId = row.manifestId;
       return {
         ok: false,
         code: 'GATE_NOT_READY',
-        message: `Test Run ${testRun.id} names no verification environment`,
+        message:
+          manifestId === undefined || manifestId === ''
+            ? `Run ${run.id} binds no frozen revision; the completion cannot be bound to a tree`
+            : `Run ${run.id} names frozen manifest ${manifestId}, but no VerificationManifest with that id or hash is frozen and the Run produced no artifact; the completion cannot be bound to a tree`,
+      };
+    }
+    // The single evidence rule (W6R2-01/03/04): validity, revision, lineage.
+    const fix = this.latestFixRecord(work.id);
+    const validity: EvidenceValidityDecision = evaluateEvidenceValidity({
+      evidence: frozen.evidence,
+      lineage: {
+        // `work.baseRevision` is the binding; a Work without one is refused rather
+        // than completed by an unbound revision (W6R2-04, fail closed).
+        ...(work.baseRevision === undefined ? {} : { workRevision: work.baseRevision }),
+        ...(fix === undefined ? {} : { fixingRevision: fix.baseRevision }),
+        ...(fix?.fixEvidenceAt === undefined ? {} : { producedAfter: fix.fixEvidenceAt }),
+      },
+    });
+    if (!validity.valid) {
+      return {
+        ok: false,
+        code: 'GATE_NOT_READY',
+        message: `Run ${run.id} cannot carry the completion: ${validity.message}`,
+      };
+    }
+    const revision = validity.revision as string;
+    const manifest = frozen.manifest;
+    const environmentRef =
+      manifest?.environmentRef ?? row.checkResult?.checks[0]?.environmentRef ?? '';
+    if (kind === 'test' && environmentRef === '') {
+      return {
+        ok: false,
+        code: 'GATE_NOT_READY',
+        message: `Test Run ${run.id} names no verification environment`,
       };
     }
     return {
       ok: true,
       test: {
-        testRunId: testRun.id,
-        status: row.checkResult.status,
-        uncovered: row.checkResult.uncovered,
+        testRunId: run.id,
+        kind,
+        status: kind === 'test' ? (row.checkResult as CheckResult).status : 'passed',
+        uncovered: kind === 'test' ? (row.checkResult as CheckResult).uncovered : [],
         revision,
         environmentRef,
       },
@@ -1816,16 +2070,58 @@ export class FindingService {
   }
 
   /**
-   * Reads a frozen `VerificationManifest` snapshot by the stage result's manifest id.
+   * Reads a frozen `VerificationManifest` by the stage result's manifest reference.
    *
-   * The manifest is stored as `snapshot(type=verification, kind=verification_manifest)`
-   * and keyed by hash, so it is read straight from the immutable table.
+   * ## Why this is a scan, not a keyed read (W6R2-05)
+   *
+   * The manifest is frozen as `snapshot(type=verification, kind=verification_manifest)`
+   * in the immutable, content-addressed table. A `stage_result.manifest_id` is a
+   * UUIDv7 `id` (`data.md` §3), while `snapshot.hash` is a 64-character digest, so
+   * looking the id up in the hash column can never match: the old code did exactly
+   * that and the branch was silently unreachable. The lookup below therefore
+   * accepts both identities a frozen manifest can carry — the digest of its own
+   * payload (what a Core writer that freezes the payload directly returns) and the
+   * `manifestId` the payload declares — so the branch is reachable in both key
+   * spaces. When neither matches, the caller fails closed with a precise message
+   * (see `completionEvidence`) instead of silently preferring an artifact.
    */
   private frozenManifestOf(manifestId: string | undefined): VerificationManifest | undefined {
     if (manifestId === undefined || manifestId === '') return undefined;
+    const rows = this.store.db
+      .prepare("SELECT hash, payload FROM snapshot WHERE type = 'verification' ORDER BY rowid ASC")
+      .all() as { hash: string; payload: string }[];
+    for (const row of rows) {
+      let payload: JsonObject;
+      try {
+        payload = JSON.parse(row.payload) as JsonObject;
+      } catch {
+        continue;
+      }
+      if (payload['kind'] !== 'verification_manifest') continue;
+      const declared = payload['manifestId'];
+      if (row.hash !== manifestId && declared !== manifestId) continue;
+      const manifest = payload['manifest'] as VerificationManifest | undefined;
+      if (manifest !== undefined) return manifest;
+    }
+    return undefined;
+  }
+
+  /**
+   * Reads a frozen `CompletionManifest` by its `Ref`.
+   *
+   * Unlike a `stage_result.manifest_id`, a `Ref.hash` *is* the content digest of
+   * the frozen payload (`data.md` §2/§4), so this is a real keyed read of the same
+   * immutable table. The manifest must be a valid `CompletionManifest` bound to
+   * this Work; anything else is `undefined` and the caller refuses.
+   */
+  private frozenCompletionManifestOf(
+    ref: Ref | undefined,
+    workId: string,
+  ): { readonly manifest: CompletionManifest; readonly hash: string } | undefined {
+    if (ref === undefined || ref.hash === '') return undefined;
     const row = this.store.db
       .prepare("SELECT payload FROM snapshot WHERE hash = ? AND type = 'verification' LIMIT 1")
-      .get(manifestId) as { payload: string } | undefined;
+      .get(ref.hash) as { payload: string } | undefined;
     if (row === undefined) return undefined;
     let payload: JsonObject;
     try {
@@ -1833,9 +2129,56 @@ export class FindingService {
     } catch {
       return undefined;
     }
-    if (payload['kind'] !== 'verification_manifest') return undefined;
-    const manifest = payload['manifest'] as VerificationManifest | undefined;
-    return manifest;
+    if (payload['kind'] !== 'completion_manifest' || payload['workId'] !== workId) return undefined;
+    const parsed = completionManifestSchema.safeParse(payload['manifest']);
+    if (!parsed.success || parsed.data.workId !== workId) return undefined;
+    return { manifest: parsed.data, hash: ref.hash };
+  }
+
+  /**
+   * The newest recorded fix for a Work, as completion's pre-fix boundary.
+   *
+   * `markAddressed` freezes one `finding_addressed` record per fix with the moment
+   * the fixing evidence was produced; completion refuses Test/Review evidence that
+   * predates the newest one, so a re-executed Test cannot complete a Work on
+   * evidence that was produced before the fix even when it names the new revision.
+   */
+  private latestFixRecord(workId: string):
+    | {
+        readonly previousBaseRevision?: string;
+        readonly baseRevision: string;
+        readonly fixEvidenceAt?: string;
+      }
+    | undefined {
+    const rows = this.store.db
+      .prepare("SELECT payload FROM snapshot WHERE type = 'verification' ORDER BY rowid ASC")
+      .all() as { payload: string }[];
+    let found:
+      | {
+          readonly previousBaseRevision?: string;
+          readonly baseRevision: string;
+          readonly fixEvidenceAt?: string;
+        }
+      | undefined;
+    for (const row of rows) {
+      let payload: JsonObject;
+      try {
+        payload = JSON.parse(row.payload) as JsonObject;
+      } catch {
+        continue;
+      }
+      if (payload['kind'] !== 'finding_addressed' || payload['workId'] !== workId) continue;
+      const baseRevision = payload['baseRevision'];
+      if (typeof baseRevision !== 'string') continue;
+      const previous = payload['previousBaseRevision'];
+      const at = payload['fixEvidenceAt'];
+      found = {
+        ...(typeof previous === 'string' ? { previousBaseRevision: previous } : {}),
+        baseRevision,
+        ...(typeof at === 'string' ? { fixEvidenceAt: at } : {}),
+      };
+    }
+    return found;
   }
 
   /** Marks every valid Review/Test artifact of a Work invalid. */

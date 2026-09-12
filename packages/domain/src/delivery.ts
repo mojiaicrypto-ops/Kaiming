@@ -19,6 +19,7 @@ import type {
   RequirementState,
   Role,
   Scope,
+  WorkStatus,
 } from '@agentdev/contracts';
 import { canAllocateBudget, canStartRepair, type DispatchRejectionCode } from './dispatch.js';
 import {
@@ -294,6 +295,13 @@ export interface PlanRevision {
   readonly stage: string;
   readonly approval?: 'auto' | 'user';
   readonly approvedAt?: string;
+  /**
+   * The Plan artifact's persisted validity (`data.md` §2).
+   *
+   * A Plan a Finding or Decision invalidated cannot be the authority a level
+   * re-evaluation supersedes (W6R2-06 lineage; `evaluateEvidenceValidity`).
+   */
+  readonly validity?: EvidenceValidity;
 }
 
 export interface LevelUpgradeInput {
@@ -303,6 +311,15 @@ export interface LevelUpgradeInput {
   readonly logicChange: boolean;
   readonly riskFlags?: readonly string[];
   readonly plan?: PlanRevision;
+  /**
+   * The Work's current frozen revision.
+   *
+   * Level re-evaluation consults the shared evidence rule, and that rule refuses
+   * to bind anything without a Work revision (fail closed, W6R2-04): a Plan that
+   * cannot be shown to be the current revision's Plan is not the Plan this upgrade
+   * supersedes.
+   */
+  readonly workRevision: string;
 }
 
 /**
@@ -324,6 +341,8 @@ export type LevelUpgradeResult =
       readonly upgradeRequired: false;
       readonly stalePlan: false;
       readonly reasons: readonly string[];
+      /** The shared evidence verdict for the Plan under re-evaluation. */
+      readonly planEvidence?: EvidenceValidityDecision;
     }
   | {
       readonly ok: false;
@@ -332,6 +351,8 @@ export type LevelUpgradeResult =
       readonly upgradeRequired: true;
       readonly stalePlan: boolean;
       readonly reasons: readonly string[];
+      /** The shared evidence verdict for the Plan under re-evaluation. */
+      readonly planEvidence?: EvidenceValidityDecision;
     }
   | {
       readonly ok: false;
@@ -345,6 +366,8 @@ export type LevelUpgradeResult =
       readonly upgradeRequired: true;
       readonly stalePlan: false;
       readonly reasons: readonly string[];
+      /** The shared evidence verdict for the Plan under re-evaluation. */
+      readonly planEvidence?: EvidenceValidityDecision;
     };
 
 /**
@@ -355,6 +378,12 @@ export type LevelUpgradeResult =
  * 2. a downgrade is never automatic, so a locked L3 cannot fall back to L2;
  * 3. the old Plan is rejected as stale when the level rises, because the write
  *    scope is about to expand and the Plan was approved for the smaller scope.
+ *
+ * The Plan half of (3) goes through `evaluateEvidenceValidity` (W6R2-06 lineage):
+ * only a Plan that is still valid *and* bound to the Work's current revision is
+ * the Plan this upgrade supersedes. An already-invalidated or foreign-revision
+ * Plan is not "made stale" by an upgrade — it was never the authority — so the
+ * caller learns `stalePlan:false` together with the reason in `planEvidence`.
  */
 export function evaluateLevelUpgrade(input: LevelUpgradeInput): LevelUpgradeResult {
   const signals: CodeSignals = {
@@ -366,6 +395,7 @@ export function evaluateLevelUpgrade(input: LevelUpgradeInput): LevelUpgradeResu
   const classifiedRank = levelRank(classified.level);
   const forcedUpgrade = input.logicChange && input.previousLevel === 'L1';
   const upgradeRequired = forcedUpgrade || classifiedRank > previousRank;
+  const planEvidence = planEvidenceOf(input);
 
   if (classifiedRank < previousRank) {
     // A classification below the recorded level is a refusal, never a silent
@@ -379,6 +409,7 @@ export function evaluateLevelUpgrade(input: LevelUpgradeInput): LevelUpgradeResu
       upgradeRequired: true,
       stalePlan: false,
       reasons: [...classified.reasons, `downgrade refused; the Work keeps ${input.previousLevel}`],
+      ...(planEvidence === undefined ? {} : { planEvidence }),
     };
   }
   if (!upgradeRequired) {
@@ -389,6 +420,7 @@ export function evaluateLevelUpgrade(input: LevelUpgradeInput): LevelUpgradeResu
       upgradeRequired: false,
       stalePlan: false,
       reasons: classified.reasons,
+      ...(planEvidence === undefined ? {} : { planEvidence }),
     };
   }
 
@@ -401,9 +433,27 @@ export function evaluateLevelUpgrade(input: LevelUpgradeInput): LevelUpgradeResu
     outcome: 'upgrade',
     level,
     upgradeRequired: true,
-    stalePlan: input.plan !== undefined,
+    // Only valid, revision-bound Plan evidence is superseded by the upgrade.
+    stalePlan: planEvidence?.valid === true,
     reasons,
+    ...(planEvidence === undefined ? {} : { planEvidence }),
   };
+}
+
+/** The shared evidence verdict for a level re-evaluation's Plan, when one exists. */
+function planEvidenceOf(input: LevelUpgradeInput): EvidenceValidityDecision | undefined {
+  const plan = input.plan;
+  if (plan === undefined) return undefined;
+  return evaluateEvidenceValidity({
+    evidence: {
+      ref: plan.id,
+      kind: 'plan',
+      validity: plan.validity ?? 'valid',
+      revision: plan.revision,
+      ...(plan.approvedAt === undefined ? {} : { createdAt: plan.approvedAt }),
+    },
+    lineage: { workRevision: input.workRevision },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -438,6 +488,33 @@ export const STAGE_ORDER: Readonly<
 /** The stages of one route/level, or `undefined` for a combination the rules do not define. */
 export function stageOrderFor(route: DeliveryRoute, level: Level): readonly string[] | undefined {
   return STAGE_ORDER[route][level];
+}
+
+/** Which persisted verification result completes a Work (AC-007/AC-012/AC-019). */
+export type CompletionEvidenceKind = 'test' | 'review';
+
+/**
+ * The evidence a completion rests on for one route/level (W6R2-09).
+ *
+ * `workflow.md` §7: "L1及纯文档使用ReviewCheck与适用检查；L2/L3代码使用独立Review和Test".
+ * The rule is read off the route's own stage order, so it cannot drift from the
+ * chain the same route has to produce:
+ *
+ * - a route/level whose stages contain `Test` (code L2/L3) requires a Test Run;
+ * - the L1 code lane and both document levels have no Test stage and complete on
+ *   the route's own Review evidence (the `ReviewCheck` result);
+ * - the operation route has no `Test` stage either (`Plan → Execute → Review →
+ *   Verify → Settlement`), so it selects its Review evidence as well; a dedicated
+ *   `Verify` evidence rule is the WP-08 wiring;
+ * - an unknown route/level returns `undefined` and the caller fails closed.
+ */
+export function completionEvidenceKindFor(
+  route: DeliveryRoute,
+  level: Level,
+): CompletionEvidenceKind | undefined {
+  const stages = stageOrderFor(route, level);
+  if (stages === undefined) return undefined;
+  return stages.includes('Test') ? 'test' : 'review';
 }
 
 /**
@@ -488,6 +565,15 @@ export interface StageManifest {
   readonly acceptanceIds?: readonly string[];
   /** Stages this Manifest consumed as frozen input (`dependencyManifestRefs`). */
   readonly dependsOn?: readonly string[];
+  /**
+   * The candidate diff this stage reviewed, as a concrete artifact/ref binding.
+   *
+   * The document lane is defined by its candidate diff (`workflow.md` §3), and a
+   * free-text "we looked at a diff" is not a binding: W6R2-10 replaced the old
+   * substring check with this ref, so an unreviewed document delivery cannot pass
+   * the chain by naming the word "diff".
+   */
+  readonly candidateDiffRef?: Ref;
   /** Stage-specific evidence: rollback plan, per-item audit, recovery drill. */
   readonly evidence?: readonly string[];
 }
@@ -611,8 +697,9 @@ function indexManifests(manifests: readonly StageManifest[]): Map<string, StageM
  * Review/Test executed in. The document lane has neither: `workflow.md` §3 gives it
  * a candidate diff, an independent Review and a Settlement, and nothing else — so
  * demanding a `codeRevision`/`environmentRef` there rejects a compliant document
- * delivery (W6R1-04). The document Review instead has to name the candidate diff it
- * actually reviewed, which is the evidence AC-012 is about.
+ * delivery (W6R1-04). The document Review instead has to bind the candidate diff it
+ * actually reviewed (`candidateDiffRef`), which is the concrete evidence AC-012 is
+ * about; free text cannot satisfy it (W6R2-10).
  */
 function stageEvidenceGaps(
   stage: string,
@@ -621,11 +708,11 @@ function stageEvidenceGaps(
 ): StageChainGap[] {
   const gaps: StageChainGap[] = [];
   if (route === 'document') {
-    if (stage === 'Review' && !namesCandidateDiff(manifest.evidence ?? [])) {
+    if (stage === 'Review' && !bindsCandidateDiff(manifest)) {
       gaps.push({
         code: 'VALIDATION_ERROR',
         stage,
-        message: `document-stage ${stage} must name the candidate diff it reviewed`,
+        message: `document-stage ${stage} must bind the candidate diff artifact it reviewed (candidateDiffRef)`,
       });
     }
     return gaps;
@@ -649,12 +736,16 @@ function stageEvidenceGaps(
   return gaps;
 }
 
-/** Whether a document Review's evidence names the candidate diff it reviewed. */
-function namesCandidateDiff(evidence: readonly string[]): boolean {
-  return evidence.some((entry) => {
-    const text = entry.toLowerCase();
-    return text.includes('diff') || text.includes('candidate');
-  });
+/**
+ * Whether a document Review names the candidate diff it reviewed (W6R2-10).
+ *
+ * The binding is a `Ref` (id + version + hash): a substring such as "diff" in a
+ * free-text evidence line was satisfied by "we saw no diff at all", which is not
+ * evidence at all.
+ */
+function bindsCandidateDiff(manifest: StageManifest): boolean {
+  const ref = manifest.candidateDiffRef;
+  return ref !== undefined && ref.id !== '' && ref.hash !== '';
 }
 
 /** AC-011: L3 needs authorisation, rollback, per-item audit and a recovery drill. */
@@ -880,10 +971,21 @@ export interface WriteGateInput {
   readonly revision: string;
   readonly work: { readonly id: string; readonly revision: string; readonly level: Level };
   readonly authorizedTargets: readonly string[];
-  /** The frozen source hash the caller measured before the write. */
+  /**
+   * The source hash the approved Plan froze. This is the authority: it is always
+   * compared with `actualSourceHash` (W6R2-02).
+   */
   readonly expectedSourceHash: string;
   /** The hash measured at admission time; a mismatch means the source moved. */
   readonly actualSourceHash: string;
+  /**
+   * A second, *additional* expectation the caller measured before writing.
+   *
+   * It can only ever add a refusal: a mismatching caller measurement fails the
+   * gate even when the approved hash still matches, and a matching one never
+   * replaces the approved-hash comparison (W6R2-02).
+   */
+  readonly callerExpectedSourceHash?: string;
   /** The content hash the approval recorded; a mismatch means the Plan changed. */
   readonly planHash: string;
   readonly diffHash: string;
@@ -932,7 +1034,16 @@ export function evaluateWriteGate(input: WriteGateInput): WriteGateDecision {
     }
   }
   if (input.expectedSourceHash !== input.actualSourceHash) {
-    gaps.push('the source hash changed since the write request was admitted');
+    gaps.push('the source hash changed since the Plan was approved');
+  }
+  if (
+    input.callerExpectedSourceHash !== undefined &&
+    input.callerExpectedSourceHash !== input.actualSourceHash
+  ) {
+    // A caller expectation is a second requirement, never a replacement: the
+    // approved hash above is compared unconditionally, so a moved source cannot be
+    // "selected out" by supplying the moved value as the expectation (W6R2-02).
+    gaps.push('the source hash changed since the write request was measured');
   }
   if (gaps.length > 0) {
     return { ok: false, code: 'GATE_NOT_READY', message: gaps.join('; '), gaps };
@@ -943,6 +1054,39 @@ export function evaluateWriteGate(input: WriteGateInput): WriteGateDecision {
 
 function refOf(plan: PlanRevision): Ref {
   return { id: plan.id, version: plan.version, hash: plan.hash };
+}
+
+/** The Work state a write barrier is in, when it is in one. */
+export type WorkWriteBarrier =
+  | { readonly blocked: true; readonly code: 'INVALID_STATE'; readonly message: string }
+  | { readonly blocked: false };
+
+/**
+ * AC-020/AC-021: the Work statuses at which no write may be admitted.
+ *
+ * One rule, two gates (W6R2-07): the Run-level pause barrier
+ * (`FindingService.writeAdmission`) and the Plan gate
+ * (`PlanGateService.requestCodeWrite`) both consult this, so a paused, cancelling
+ * or cancelled Work cannot be written through the gate that forgot the status
+ * check. `workflow.md` §7 "暂停停止新准入"; AC-021 keeps a cancelled Work from
+ * continuing to write.
+ */
+export function workWriteBarrier(status: WorkStatus): WorkWriteBarrier {
+  if (status === 'paused') {
+    return {
+      blocked: true,
+      code: 'INVALID_STATE',
+      message: 'the Work is paused; no write is admitted until it resumes',
+    };
+  }
+  if (status === 'cancelling' || status === 'cancelled') {
+    return {
+      blocked: true,
+      code: 'INVALID_STATE',
+      message: `the Work is ${status}; no write is admitted`,
+    };
+  }
+  return { blocked: false };
 }
 
 /**
@@ -1156,7 +1300,187 @@ export function requirementStateForChoice(
 }
 
 // ---------------------------------------------------------------------------
-// 5. Findings (AC-017/018/019/083)
+// 5. Evidence validity and revision lineage (AC-013/AC-017/AC-019)
+// ---------------------------------------------------------------------------
+
+/**
+ * The `data.md` §2 validity flag of an artifact.
+ *
+ * A stage result has no flag of its own: the caller derives one from the
+ * artifacts it references (a `stage_result` whose `artifactRefs` were invalidated
+ * is invalid evidence).
+ */
+export type EvidenceValidity = 'valid' | 'invalid' | 'superseded';
+
+/** One artifact or stage result, as the evidence rules read it. */
+export interface RevisionEvidence {
+  /** The identity a refusal can name (artifact id, manifest hash, …). */
+  readonly ref: string;
+  /** What kind of evidence it is (`plan`, `review`, `test`, `verification_manifest`). */
+  readonly kind: string;
+  readonly validity: EvidenceValidity;
+  /** The frozen revision this evidence belongs to; absent means unbound. */
+  readonly revision?: string;
+  /** When it was produced, ISO-8601; compared lexicographically. */
+  readonly createdAt?: string;
+}
+
+/** What a piece of evidence has to bind to in order to be usable. */
+export interface EvidenceLineage {
+  /** The Work's current frozen revision. Absent = the Work is unbound. */
+  readonly workRevision?: string;
+  /** The revision a fix froze; evidence of any other revision is pre-fix. */
+  readonly fixingRevision?: string;
+  /** Revisions a Finding/Decision invalidated by name. */
+  readonly invalidatedRevisions?: readonly string[];
+  /** When the fix was produced; evidence at or before it is pre-fix. */
+  readonly producedAfter?: string;
+}
+
+export type EvidenceValidityCode =
+  | 'VALID'
+  | 'INVALIDATED'
+  | 'NO_REVISION'
+  | 'REVISION_UNBOUND'
+  | 'PRE_FIX_REVISION'
+  | 'REVISION_MISMATCH'
+  | 'PRODUCED_BEFORE_FIX';
+
+export interface EvidenceValidityDecision {
+  readonly valid: boolean;
+  readonly code: EvidenceValidityCode;
+  readonly message: string;
+  /** The revision the evidence belongs to, when it froze one. */
+  readonly revision?: string;
+}
+
+/**
+ * AC-013/AC-017/AC-019: the single answer to "may this evidence still be used?".
+ *
+ * Completion (`completeWork`), Finding closure (`findingCanBeVerified`) and level
+ * re-evaluation (`evaluateLevelUpgrade`) all consult this one function instead of
+ * carrying their own validity/revision checks (W6R2-01…W6R2-05). It answers four
+ * questions at once: is the artifact/stage result still valid, which revision
+ * produced it, was it produced after the fixing revision, and does it bind the
+ * Work's current revision.
+ *
+ * ## The rule, in order (the first failure decides)
+ *
+ * 1. **Validity.** `evidence.validity` must be `'valid'`. A Finding that returns a
+ *    Work to development (`workflow.md` §6 "旧结果无效") and a `now` behaviour
+ *    Decision both mark the affected artifacts `invalid`, and invalidated evidence
+ *    is never reused: `INVALIDATED`.
+ * 2. **A revision must exist.** Evidence that froze no revision cannot be bound to
+ *    anything, and "unknown" is never read as "current": `NO_REVISION`.
+ * 3. **Not an invalidated revision.** A revision the lineage explicitly
+ *    invalidated is the pre-fix/pre-change tree, whatever the evidence claims:
+ *    `INVALIDATED`.
+ * 4. **The Work revision must exist (fail closed).** Without
+ *    `lineage.workRevision` there is nothing to bind the evidence to, so the
+ *    answer is `REVISION_UNBOUND` rather than a silent pass (W6R2-04).
+ * 5. **Pre-fix evidence is refused.** When the lineage names the revision a fix
+ *    froze, evidence of any *other* revision belongs to the tree the Finding
+ *    invalidated: `PRE_FIX_REVISION` (W6R2-01/W6R2-03).
+ * 6. **Binding.** `evidence.revision` must equal `lineage.workRevision`: the
+ *    verified tree and the delivered tree have to be the same tree
+ *    (`workflow.md` §7 "候选树/语义依据一致"): `REVISION_MISMATCH`.
+ * 7. **Order.** When `lineage.producedAfter` is present, the evidence must have
+ *    been produced strictly after it. Evidence that predates the fix is the
+ *    invalidated pre-fix evidence even when it happens to name the same revision:
+ *    `PRODUCED_BEFORE_FIX`.
+ *
+ * Anything else is `VALID`, which is the only value that admits reuse.
+ */
+export function evaluateEvidenceValidity(input: {
+  readonly evidence: RevisionEvidence;
+  readonly lineage: EvidenceLineage;
+}): EvidenceValidityDecision {
+  const { evidence, lineage } = input;
+  const revision =
+    evidence.revision === undefined || evidence.revision === '' ? undefined : evidence.revision;
+  const reject = (code: EvidenceValidityCode, message: string): EvidenceValidityDecision => ({
+    valid: false,
+    code,
+    message,
+    ...(revision === undefined ? {} : { revision }),
+  });
+  const label = `${evidence.kind} ${evidence.ref}`;
+
+  if (evidence.validity !== 'valid') {
+    return reject(
+      'INVALIDATED',
+      `${label} is ${evidence.validity}; invalidated evidence is never reused (AC-017)`,
+    );
+  }
+  if (revision === undefined) {
+    return reject('NO_REVISION', `${label} froze no revision and cannot be bound to the Work`);
+  }
+  if ((lineage.invalidatedRevisions ?? []).includes(revision)) {
+    return reject(
+      'INVALIDATED',
+      `${label} belongs to revision ${revision}, which a Finding/Decision invalidated`,
+    );
+  }
+  const workRevision =
+    lineage.workRevision === undefined || lineage.workRevision === ''
+      ? undefined
+      : lineage.workRevision;
+  if (workRevision === undefined) {
+    return reject(
+      'REVISION_UNBOUND',
+      `the Work has no frozen revision; ${label} cannot be bound to it`,
+    );
+  }
+  const fixingRevision =
+    lineage.fixingRevision === undefined || lineage.fixingRevision === ''
+      ? undefined
+      : lineage.fixingRevision;
+  if (fixingRevision !== undefined && revision !== fixingRevision) {
+    return reject(
+      'PRE_FIX_REVISION',
+      `${label} belongs to revision ${revision}, not the fixing revision ${fixingRevision}`,
+    );
+  }
+  if (revision !== workRevision) {
+    return reject(
+      'REVISION_MISMATCH',
+      `${label} belongs to revision ${revision}, not the Work revision ${workRevision}`,
+    );
+  }
+  if (
+    lineage.producedAfter !== undefined &&
+    lineage.producedAfter !== '' &&
+    evidence.createdAt !== undefined &&
+    evidence.createdAt <= lineage.producedAfter
+  ) {
+    return reject(
+      'PRODUCED_BEFORE_FIX',
+      `${label} was produced at ${evidence.createdAt}, at or before the fix at ${lineage.producedAfter}`,
+    );
+  }
+  return {
+    valid: true,
+    code: 'VALID',
+    message: `${label} is valid evidence for revision ${revision}`,
+    revision,
+  };
+}
+
+/**
+ * The boolean form of {@link evaluateEvidenceValidity}.
+ *
+ * It is the same decision, not a second rule: a caller that only needs "may I use
+ * this?" cannot accidentally accept a revision the full decision refuses.
+ */
+export function evidenceBindsRevision(input: {
+  readonly evidence: RevisionEvidence;
+  readonly lineage: EvidenceLineage;
+}): boolean {
+  return evaluateEvidenceValidity(input).valid;
+}
+
+// ---------------------------------------------------------------------------
+// 6. Findings (AC-017/018/019/083)
 // ---------------------------------------------------------------------------
 
 /** The finding fields the rules need; storage rows carry the rest. */
@@ -1241,6 +1565,17 @@ export interface VerificationRun {
   /** A verification whose input is the post-fix revision. */
   readonly reviewsCurrentRevision: boolean;
   /**
+   * Whether the Run's own evidence is still valid, read from the persisted
+   * artifact/stage result (`data.md` §2 `validity`).
+   *
+   * A Finding invalidates the Review/Test artifacts of the revision it returns to
+   * development, so a Run whose evidence was invalidated cannot verify anything —
+   * however new the Run is (`evaluateEvidenceValidity`, W6R2-01). The field is
+   * required so a caller cannot omit the validity flag and be read as "valid": an
+   * absent value fails the check.
+   */
+  readonly evidenceValid: boolean;
+  /**
    * The stage's real conclusion (`CheckStatus`), never inferred from the Run's
    * lifecycle: `completed` says the process ended, not that the Test passed
    * (W6R1-08). Absent means "this stage recorded no conclusion".
@@ -1267,6 +1602,15 @@ export interface FindingVerificationInput {
    * be bound to the fix at all and is refused rather than assumed.
    */
   readonly fixingRevision?: string;
+  /**
+   * The Work's current (post-fix) revision.
+   *
+   * A fix advances the Work revision (`markAddressed`), so the fixing revision has
+   * to be exactly this value: a fixing Run that self-reports the invalidated
+   * pre-fix revision would otherwise anchor the whole closure to the very tree the
+   * Finding rejected (W6R2-03). Absent is refused rather than skipped.
+   */
+  readonly currentWorkRevision?: string;
 }
 
 export type FindingVerificationFailureCode =
@@ -1309,7 +1653,15 @@ export function findingCanBeVerified(input: FindingVerificationInput): FindingVe
   if (finding.state === 'accepted_risk') {
     // Risk acceptance is a user decision, never an agent's; the state is recorded
     // by the caller, so a reviewer presenting it needs a valid Review.
-    if (!runIsIndependent(input.reviewRun, { stage: 'review', fixingRevision: undefined })) {
+    if (
+      !runIsIndependent(input.reviewRun, {
+        stage: 'review',
+        fixingRevision: input.fixingRevision,
+        ...(input.currentWorkRevision === undefined
+          ? {}
+          : { currentWorkRevision: input.currentWorkRevision }),
+      })
+    ) {
       return {
         ok: false,
         code: 'GATE_NOT_READY',
@@ -1329,7 +1681,31 @@ export function findingCanBeVerified(input: FindingVerificationInput): FindingVe
       message: 'the fixing Run froze no revision; the fix cannot be independently verified',
     };
   }
-  if (!runIsIndependent(input.reviewRun, { stage: 'review', fixingRevision })) {
+  // W6R2-03: the fixing revision is not whatever the fixing Run asserts. The fix
+  // must have advanced the Work, so the Work's current revision *is* the revision
+  // to verify; self-reporting the invalidated pre-fix revision closes nothing.
+  const currentWorkRevision = input.currentWorkRevision;
+  if (currentWorkRevision === undefined || currentWorkRevision === '') {
+    return {
+      ok: false,
+      code: 'GATE_NOT_READY',
+      message: 'the Work records no current revision; the fixing revision cannot be bound to it',
+    };
+  }
+  if (fixingRevision !== currentWorkRevision) {
+    return {
+      ok: false,
+      code: 'GATE_NOT_READY',
+      message: `the fixing Run froze revision ${fixingRevision}, not the Work's current revision ${currentWorkRevision}; a fix must produce a new revision`,
+    };
+  }
+  if (
+    !runIsIndependent(input.reviewRun, {
+      stage: 'review',
+      fixingRevision,
+      currentWorkRevision,
+    })
+  ) {
     return {
       ok: false,
       code: 'GATE_NOT_READY',
@@ -1342,6 +1718,7 @@ export function findingCanBeVerified(input: FindingVerificationInput): FindingVe
     !runIsIndependent(input.testRun, {
       stage: 'test',
       fixingRevision,
+      currentWorkRevision,
       requireConclusion: true,
     })
   ) {
@@ -1360,26 +1737,46 @@ export function findingCanBeVerified(input: FindingVerificationInput): FindingVe
  * Independence is a fact about the Run *and* its evidence: the Run must be
  * completed, belong to the same Work, carry the verifying role, differ from both
  * the fixing Run and the Review that raised the Finding, be created after the fix,
- * and its own frozen revision must be the fixing revision. `reviewsCurrentRevision`
- * is the caller's identity/order verdict; the revision comparison is what binds
- * the verdict to the code the fix actually produced.
+ * and its own evidence must pass the shared rule of
+ * {@link evaluateEvidenceValidity} — valid (not invalidated by the Finding),
+ * frozen on a revision, and bound to the fixing/current Work revision.
+ * `reviewsCurrentRevision` is the caller's identity/order verdict; the evidence
+ * rule is what binds that verdict to the code the fix actually produced.
  */
 function runIsIndependent(
   run: VerificationRun | undefined,
   options: {
     readonly stage: 'review' | 'test';
     readonly fixingRevision: string | undefined;
+    readonly currentWorkRevision?: string;
     readonly requireConclusion?: boolean;
   },
 ): boolean {
   if (run === undefined) return false;
   if (!run.reviewsCurrentRevision) return false;
   if (run.stage !== options.stage) return false;
-  if (options.fixingRevision !== undefined && run.revision !== options.fixingRevision) return false;
+  if (!run.evidenceValid) return false;
   if (options.requireConclusion === true && run.status === undefined) return false;
   // `completed` is never read as `passed`: any recorded conclusion other than
   // `passed` refuses the closure.
-  return run.status === undefined || run.status === 'passed';
+  if (run.status !== undefined && run.status !== 'passed') return false;
+  // The lineage falls back to the Run's own frozen revision only for the
+  // risk-acceptance path, where no fix lineage exists to bind to; the closure path
+  // always supplies the Work's current revision.
+  const workRevision = options.currentWorkRevision ?? options.fixingRevision ?? run.revision;
+  const binding = evaluateEvidenceValidity({
+    evidence: {
+      ref: `${options.stage} evidence`,
+      kind: options.stage,
+      validity: run.evidenceValid ? 'valid' : 'invalid',
+      ...(run.revision === undefined ? {} : { revision: run.revision }),
+    },
+    lineage: {
+      ...(workRevision === undefined ? {} : { workRevision }),
+      ...(options.fixingRevision === undefined ? {} : { fixingRevision: options.fixingRevision }),
+    },
+  });
+  return binding.valid;
 }
 
 export interface TestResultLike {
@@ -1456,6 +1853,8 @@ export interface FindingClosureInput {
   readonly testRun?: VerificationRun;
   /** The revision the fixing Run froze; every verifier must reference it. */
   readonly fixingRevision?: string;
+  /** The Work's current (post-fix) revision; see `FindingVerificationInput`. */
+  readonly currentWorkRevision?: string;
   /** The number of repair rounds already used against `repairLimit`. */
   readonly repairUsed?: number;
   readonly repairLimit?: number;
@@ -1502,6 +1901,9 @@ export function evaluateFindingClosure(input: FindingClosureInput): FindingClosu
     ...(input.reviewRun === undefined ? {} : { reviewRun: input.reviewRun }),
     ...(input.testRun === undefined ? {} : { testRun: input.testRun }),
     ...(input.fixingRevision === undefined ? {} : { fixingRevision: input.fixingRevision }),
+    ...(input.currentWorkRevision === undefined
+      ? {}
+      : { currentWorkRevision: input.currentWorkRevision }),
   });
   if (!verification.ok) {
     return {
@@ -1568,7 +1970,7 @@ export function bindFindingTarget(input: FindingBindingInput): FindingBinding {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Budget reservation (AC-022)
+// 7. Budget reservation (AC-022)
 // ---------------------------------------------------------------------------
 
 /** The subset of `contracts.Budget` the reservation rules read. */
