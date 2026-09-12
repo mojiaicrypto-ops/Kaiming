@@ -43,7 +43,6 @@ import {
   evaluatePlanApproval,
   evaluateWriteGate,
   isWithinScope,
-  levelRank,
   type ChangeDiff,
   type PlanApprovalEvidence,
   type PlanRevision,
@@ -98,6 +97,14 @@ export interface SubmitPlanInput {
   readonly approval: PlanApprovalRequest;
   /** The Requirement to associate; defaults to `work.requirementId`. */
   readonly requirementId?: string;
+  /**
+   * The measurement port used to freeze the source the Plan was approved against.
+   *
+   * The recorded hash is what `requestCodeWrite` compares the live source with, so
+   * "the source moved after the Plan was approved" is a real measurement instead
+   * of a comparison of one value with itself (W6R1-07).
+   */
+  readonly sourceHashPort?: SourceHashPort;
 }
 
 export interface ApprovedPlanRecord {
@@ -107,6 +114,8 @@ export interface ApprovedPlanRecord {
   readonly approval: PlanApprovalEvidence;
   /** The immutable approval snapshot this record was read from. */
   readonly approvalRecordHash: string;
+  /** The source hash measured when the Plan was approved (see `SubmitPlanInput`). */
+  readonly sourceHash: string;
 }
 
 export type PlanStatus = 'missing' | 'approved' | 'stale';
@@ -248,6 +257,14 @@ export interface RequestCodeWriteInput {
   readonly planRef?: Ref;
   /** Measurement port; defaults to a `StoreSourceHashPort` over the store. */
   readonly sourceHashPort?: SourceHashPort;
+  /**
+   * The source hash the caller measured *before* asking for admission (W6R1-07).
+   *
+   * The gate compares it with the hash it measures now, so a source that moved
+   * between the caller's measurement and the admission is refused. Without one,
+   * the approval record's own `sourceHash` is the expectation.
+   */
+  readonly expectedSourceHash?: string;
 }
 
 export type CodeWriteRefusalCode =
@@ -280,9 +297,21 @@ export type RequestCodeWriteResult =
 export type UpgradeLevelCode =
   'VALIDATION_ERROR' | 'NOT_FOUND' | 'GATE_NOT_READY' | 'STALE_ARTIFACT' | 'MISSING_CONTEXT';
 
+/**
+ * Which outcome `upgradeLevel` reached (W6R1-06).
+ *
+ * `noop` means the recorded level already covers the diff and *nothing* moved;
+ * `downgrade_refused` means the new classification is below the recorded level, so
+ * the level stays and the current Plan is still valid; `refused` is a precondition
+ * failure before the domain was consulted. Only `upgraded` may mark an old Plan
+ * stale or invalidate its artifact.
+ */
+export type UpgradeLevelOutcome = 'upgraded' | 'noop' | 'downgrade_refused' | 'refused';
+
 export type UpgradeLevelResult =
   | {
       readonly upgraded: true;
+      readonly outcome: 'upgraded';
       readonly previousLevel: Level;
       readonly level: Level;
       readonly requirementId?: string;
@@ -292,6 +321,7 @@ export type UpgradeLevelResult =
     }
   | {
       readonly upgraded: false;
+      readonly outcome: Exclude<UpgradeLevelOutcome, 'upgraded'>;
       readonly code: UpgradeLevelCode;
       readonly message: string;
       readonly level: Level;
@@ -331,6 +361,13 @@ interface PlanApprovalRecord extends PlanGateBase {
    * once the Product moves on.
    */
   readonly productVersion: number;
+  /**
+   * The measured source content hash at approval time (W6R1-07).
+   *
+   * Recorded so the write gate compares the live tree against the tree the Plan
+   * was approved for, instead of comparing one measurement with itself.
+   */
+  readonly sourceHash: string;
 }
 
 interface PlanStaleRecord extends PlanGateBase {
@@ -412,6 +449,9 @@ function decodeGateRecord(payload: JsonObject): PlanGateRecord | undefined {
       planHash,
       approval,
       productVersion: typeof payload['productVersion'] === 'number' ? payload['productVersion'] : 0,
+      // A record written before the field existed has no source hash; `''` keeps it
+      // decodable and the write gate then falls back to the caller's measurement.
+      sourceHash: typeof payload['sourceHash'] === 'string' ? payload['sourceHash'] : '',
     };
   }
   if (status === 'plan_stale') {
@@ -581,6 +621,9 @@ export class PlanGateService {
         : {
             budget: {
               tokenLimit: budget.tokenLimit,
+              // The Work's *real* usage: passing 0 here approved Plans that exceeded
+              // the budget (W6R1-03).
+              used: budget.tokensUsed,
               reserved: budget.tokensReserved,
               requested: input.approval.requestedTokens,
             },
@@ -615,6 +658,7 @@ export class PlanGateService {
       planRef,
       decision.evidence,
       this.currentProductVersion(work.id),
+      this.measureSourceHash(work.id, input.sourceHashPort),
     );
     this.linkRequirementPlan(work, requirementId, planRef);
     this.store.events.append({
@@ -729,7 +773,29 @@ export class PlanGateService {
       };
     }
 
-    const approvedPaths = this.planWritePaths(current.current.planRef.id);
+    const planContent = this.readPlanContent(current.current.planRef.id);
+    const approvedPaths = planContent.scope.writePaths;
+    // The authorization envelope is re-read *at write time* (W6R1-05): a Plan
+    // approved yesterday must not keep writing through an envelope the user has
+    // revoked or narrowed since. The approval record names the envelope it used.
+    const authorization = this.writeAuthorization(
+      current.current,
+      work.id,
+      planContent.scope.writePaths,
+      planContent.scope.operations,
+    );
+    if ('code' in authorization) {
+      return {
+        allowed: false,
+        code: 'NOT_AUTHORIZED',
+        message: authorization.message,
+        gaps: [authorization.message],
+        sourceHash: contentBefore,
+        sourceHashAfter: contentAfter(),
+        stalePlan: false,
+        currentPlanRef: current.current.planRef,
+      };
+    }
     const outside = (input.targets ?? []).filter((target) => !isWithinScope(target, approvedPaths));
     if (outside.length > 0) {
       return {
@@ -744,6 +810,13 @@ export class PlanGateService {
       };
     }
 
+    // The expected hash is the caller's own pre-write measurement when it supplied
+    // one, otherwise the tree the Plan was approved against. Comparing it with the
+    // measurement taken here is a real moved-source check (W6R1-07): the previous
+    // version passed the same value for both sides, so the check could never fire.
+    const recordedSourceHash = current.current.sourceHash;
+    const expectedSourceHash =
+      input.expectedSourceHash ?? (recordedSourceHash === '' ? contentBefore : recordedSourceHash);
     const decision = evaluateWriteGate({
       plan: {
         id: current.current.planRef.id,
@@ -757,7 +830,7 @@ export class PlanGateService {
       revision: input.revision,
       work: { id: work.id, revision: input.revision, level: work.level },
       authorizedTargets: approvedPaths,
-      expectedSourceHash: contentBefore,
+      expectedSourceHash,
       actualSourceHash: contentBefore,
       planHash: current.current.planRef.hash,
       diffHash: '',
@@ -833,6 +906,9 @@ export class PlanGateService {
     if (replacement === undefined) {
       return {
         upgraded: false,
+        // A precondition failure, not one of the domain's three level outcomes:
+        // the evaluation never ran, so nothing was promoted or invalidated.
+        outcome: 'refused',
         code: 'GATE_NOT_READY',
         message: `the replacement Plan ${input.newPlanRef.id} has no approval record for ${work.id}`,
         level: work.level,
@@ -858,18 +934,24 @@ export class PlanGateService {
             } satisfies PlanRevision,
           }),
     });
-    if (decision.ok) {
+    if (decision.outcome === 'noop') {
+      // The recorded level already covers this diff: no Work, Plan or artifact
+      // state moves at all (W6R1-06).
       return {
         upgraded: false,
+        outcome: 'noop',
         code: 'GATE_NOT_READY',
         message: 'no upgrade is required for this diff',
         level: work.level,
         reasons: decision.reasons,
       };
     }
-    if (levelRank(decision.level) < levelRank(work.level)) {
+    if (decision.outcome === 'downgrade_refused') {
+      // The classification is below the recorded level. The Work keeps its level
+      // and the current Plan stays valid: nothing is marked stale or invalidated.
       return {
         upgraded: false,
+        outcome: 'downgrade_refused',
         code: 'STALE_ARTIFACT',
         message: `a downgrade to ${decision.level} is refused; the Work keeps ${work.level}`,
         level: work.level,
@@ -920,6 +1002,7 @@ export class PlanGateService {
     });
     return {
       upgraded: true,
+      outcome: 'upgraded',
       previousLevel: work.level,
       level: decision.level,
       ...(requirementId === undefined ? {} : { requirementId }),
@@ -962,6 +1045,7 @@ export class PlanGateService {
       workId: approval.workId,
       approval: approval.approval,
       approvalRecordHash: this.snapshotHashOf(approval),
+      sourceHash: approval.sourceHash,
     };
     if (staleMarker !== undefined) {
       return { workId, revision, status: 'stale', current, stalePlanRef: staleMarker.stalePlanRef };
@@ -1079,6 +1163,51 @@ export class PlanGateService {
     return authorization;
   }
 
+  /**
+   * Re-reads the authorization an approved Plan rests on, at write time (W6R1-05).
+   *
+   * `submitPlan` validates the envelope once; a write that happens later must not
+   * inherit that verdict, because the user can revoke or narrow an authorization
+   * while an approved Plan is still on file. The Plan's own scope is re-checked
+   * against the envelope as well, so a narrowed authorization refuses a Plan that
+   * has left it.
+   */
+  private writeAuthorization(
+    record: ApprovedPlanRecord,
+    workId: string,
+    planPaths: readonly string[],
+    planOperations: readonly string[],
+  ): Authorization | { readonly code: 'NOT_AUTHORIZED'; readonly message: string } {
+    const authorizationRef = record.approval.authorizationRef;
+    if (authorizationRef === undefined || authorizationRef === '') {
+      return {
+        code: 'NOT_AUTHORIZED',
+        message: 'the approved Plan records no authorization envelope',
+      };
+    }
+    const authorization = this.authorizationOrRefusal(authorizationRef, workId);
+    if ('code' in authorization) return authorization;
+    const outside = planPaths.filter(
+      (path) => !isWithinScope(path, authorization.scope.writePaths),
+    );
+    if (outside.length > 0) {
+      return {
+        code: 'NOT_AUTHORIZED',
+        message: `authorization ${authorizationRef} no longer covers the Plan write scope: ${outside.join(', ')}`,
+      };
+    }
+    const ungranted = planOperations.filter(
+      (operation) => !(authorization.operations as readonly string[]).includes(operation),
+    );
+    if (ungranted.length > 0) {
+      return {
+        code: 'NOT_AUTHORIZED',
+        message: `authorization ${authorizationRef} no longer grants Plan operations: ${ungranted.join(', ')}`,
+      };
+    }
+    return authorization;
+  }
+
   /** The next Plan version for a Work: strictly greater than every version seen. */
   private nextPlanVersion(workId: string): number {
     const planVersions = this.store.artifacts
@@ -1093,12 +1222,6 @@ export class PlanGateService {
     const work = this.store.works.find(workId);
     const requirementId = work?.requirementId;
     return requirementId === undefined ? undefined : this.store.requirements.find(requirementId);
-  }
-
-  /** The write paths of an approved Plan, read from its stored content. */
-  private planWritePaths(artifactId: string | undefined): readonly string[] {
-    if (artifactId === undefined) return [];
-    return this.readPlanContent(artifactId).scope.writePaths;
   }
 
   /** Points the Requirement's `planRef` at the approved Plan and bumps the record. */
@@ -1147,6 +1270,7 @@ export class PlanGateService {
       workId: match.workId,
       approval: match.approval,
       approvalRecordHash: this.snapshotHashOf(match),
+      sourceHash: match.sourceHash,
     };
   }
 
@@ -1185,6 +1309,7 @@ export class PlanGateService {
     planRef: Ref,
     approval: PlanApprovalEvidence,
     productVersion: number,
+    sourceHash: string,
   ): Snapshot {
     const payload: PlanApprovalRecord = {
       schemaVersion: PLAN_GATE_RECORD_VERSION,
@@ -1195,8 +1320,20 @@ export class PlanGateService {
       planHash: planRef.hash,
       approval,
       productVersion,
+      sourceHash,
     };
     return this.appendSnapshot(payload as unknown as JsonObject);
+  }
+
+  /**
+   * Measures the source content hash a Plan approval is frozen against.
+   *
+   * The default port reads the Work's `baseRevision`, which is what a real caller
+   * with a Git worktree replaces with the tree OID it measured itself.
+   */
+  private measureSourceHash(workId: string, port?: SourceHashPort): string {
+    const measured = port ?? new StoreSourceHashPort({ store: this.store });
+    return measured.contentHash?.(workId) ?? measured.measure(workId);
   }
 
   private appendStaleRecord(

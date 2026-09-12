@@ -305,9 +305,21 @@ export interface LevelUpgradeInput {
   readonly plan?: PlanRevision;
 }
 
+/**
+ * Which of the three documented outcomes an upgrade evaluation reached.
+ *
+ * The distinction is load-bearing (`W6R1-06`): "the recorded level already covers
+ * this diff" and "the new classification is *below* the recorded level" both
+ * return `ok:false` with the *current* level, so a caller that only compared
+ * level ranks treated a refused downgrade as a promotion and invalidated a Plan
+ * that was still valid. The `outcome` tag is what a caller switches on.
+ */
+export type LevelUpgradeOutcome = 'noop' | 'upgrade' | 'downgrade_refused';
+
 export type LevelUpgradeResult =
   | {
       readonly ok: true;
+      readonly outcome: 'noop';
       readonly level: Level;
       readonly upgradeRequired: false;
       readonly stalePlan: false;
@@ -315,9 +327,23 @@ export type LevelUpgradeResult =
     }
   | {
       readonly ok: false;
+      readonly outcome: 'upgrade';
       readonly level: Level;
       readonly upgradeRequired: true;
       readonly stalePlan: boolean;
+      readonly reasons: readonly string[];
+    }
+  | {
+      readonly ok: false;
+      readonly outcome: 'downgrade_refused';
+      readonly level: Level;
+      /**
+       * The diff is not an upgrade, but it is not a legal no-op either: the
+       * recorded level stands and this classification is refused. No evidence is
+       * invalidated, which is why `stalePlan` is always `false` here.
+       */
+      readonly upgradeRequired: true;
+      readonly stalePlan: false;
       readonly reasons: readonly string[];
     };
 
@@ -343,19 +369,22 @@ export function evaluateLevelUpgrade(input: LevelUpgradeInput): LevelUpgradeResu
 
   if (classifiedRank < previousRank) {
     // A classification below the recorded level is a refusal, never a silent
-    // downgrade: the Work keeps the stronger envelope it already carries and the
-    // Plan written for that envelope is rejected as stale.
+    // downgrade: the Work keeps the stronger envelope it already carries. The
+    // current Plan is *not* stale — the level did not move, so the Plan that was
+    // approved for it is still the valid authority (W6R1-06).
     return {
       ok: false,
+      outcome: 'downgrade_refused',
       level: input.previousLevel,
       upgradeRequired: true,
-      stalePlan: input.plan !== undefined,
+      stalePlan: false,
       reasons: [...classified.reasons, `downgrade refused; the Work keeps ${input.previousLevel}`],
     };
   }
   if (!upgradeRequired) {
     return {
       ok: true,
+      outcome: 'noop',
       level: input.previousLevel,
       upgradeRequired: false,
       stalePlan: false,
@@ -369,6 +398,7 @@ export function evaluateLevelUpgrade(input: LevelUpgradeInput): LevelUpgradeResu
   if (forcedUpgrade) reasons.push('a logic change cannot stay L1');
   return {
     ok: false,
+    outcome: 'upgrade',
     level,
     upgradeRequired: true,
     stalePlan: input.plan !== undefined,
@@ -549,7 +579,7 @@ export function evaluateStageChain(input: StageChainInput): StageChainDecision {
         message: `stage ${stage} does not depend on ${previous}`,
       });
     }
-    const missingEvidence = stageEvidenceGaps(stage, manifest);
+    const missingEvidence = stageEvidenceGaps(stage, manifest, input.route);
     gaps.push(...missingEvidence);
     previous = stage;
   }
@@ -574,8 +604,32 @@ function indexManifests(manifests: readonly StageManifest[]): Map<string, StageM
   return byStage;
 }
 
-function stageEvidenceGaps(stage: string, manifest: StageManifest): StageChainGap[] {
+/**
+ * The evidence a stage owes its own chain, resolved per route (AC-010/AC-012).
+ *
+ * A code stage freezes the tree it ran against and names the environment its
+ * Review/Test executed in. The document lane has neither: `workflow.md` §3 gives it
+ * a candidate diff, an independent Review and a Settlement, and nothing else — so
+ * demanding a `codeRevision`/`environmentRef` there rejects a compliant document
+ * delivery (W6R1-04). The document Review instead has to name the candidate diff it
+ * actually reviewed, which is the evidence AC-012 is about.
+ */
+function stageEvidenceGaps(
+  stage: string,
+  manifest: StageManifest,
+  route: DeliveryRoute,
+): StageChainGap[] {
   const gaps: StageChainGap[] = [];
+  if (route === 'document') {
+    if (stage === 'Review' && !namesCandidateDiff(manifest.evidence ?? [])) {
+      gaps.push({
+        code: 'VALIDATION_ERROR',
+        stage,
+        message: `document-stage ${stage} must name the candidate diff it reviewed`,
+      });
+    }
+    return gaps;
+  }
   if (MANIFEST_STAGES.has(stage) && (manifest.codeRevision ?? '') === '') {
     gaps.push({
       code: 'VALIDATION_ERROR',
@@ -593,6 +647,14 @@ function stageEvidenceGaps(stage: string, manifest: StageManifest): StageChainGa
     }
   }
   return gaps;
+}
+
+/** Whether a document Review's evidence names the candidate diff it reviewed. */
+function namesCandidateDiff(evidence: readonly string[]): boolean {
+  return evidence.some((entry) => {
+    const text = entry.toLowerCase();
+    return text.includes('diff') || text.includes('candidate');
+  });
 }
 
 /** AC-011: L3 needs authorisation, rollback, per-item audit and a recovery drill. */
@@ -655,6 +717,15 @@ export interface PlanApprovalInput {
   };
   readonly budget?: {
     readonly tokenLimit: number;
+    /**
+     * Tokens the Work has already charged.
+     *
+     * Required, and validated at run time, because an admission computed from an
+     * assumed zero usage silently tops the Work budget up (W6R1-03): a Plan that
+     * would exceed `used + reserved + requested <= limit` must be refused, not
+     * approved on a fiction.
+     */
+    readonly used: number;
     readonly reserved: number;
     readonly requested: number;
   };
@@ -750,10 +821,34 @@ export function evaluatePlanApproval(request: PlanApprovalRequest): PlanApproval
     };
   }
   if (request.budget !== undefined) {
+    // Fail closed on a missing usage report (W6R1-03): `used` is required by the
+    // type, but a JavaScript caller can omit it, and reading the omission as zero
+    // is exactly the silent top-up AC-022 forbids. A missing usage is a
+    // `VALIDATION_ERROR`; a request that cannot fit even with `used = 0` is a
+    // `BUDGET_EXCEEDED` on its own evidence.
+    const used = (request.budget as { readonly used?: unknown }).used;
+    if (!Number.isInteger(used) || (used as number) < 0) {
+      const wouldExceed =
+        request.budget.reserved + request.budget.requested > request.budget.tokenLimit;
+      return wouldExceed
+        ? {
+            ok: false,
+            code: 'BUDGET_EXCEEDED',
+            message: `used tokens were not supplied and reserved ${request.budget.reserved} + requested ${request.budget.requested} already exceeds ${request.budget.tokenLimit}`,
+            decisionRequired: false,
+          }
+        : {
+            ok: false,
+            code: 'VALIDATION_ERROR',
+            message:
+              "the caller must supply the Work's used tokens; assuming zero is a silent top-up",
+            decisionRequired: false,
+          };
+    }
     const decision = canAllocateBudget(
       budgetRowOf({
         tokenLimit: request.budget.tokenLimit,
-        tokensUsed: 0,
+        tokensUsed: used as number,
         tokensReserved: request.budget.reserved,
       }),
       request.budget.requested,
@@ -850,7 +945,22 @@ function refOf(plan: PlanRevision): Ref {
   return { id: plan.id, version: plan.version, hash: plan.hash };
 }
 
-/** Whether one repository path sits inside a set of authorized targets. */
+/**
+ * Whether one repository path sits inside a set of authorized targets.
+ *
+ * ## Known boundary: coverage is exact match, not directory prefix (W6R1-10)
+ *
+ * The `target.endsWith('/')` branch is reachable only from a caller that hands in
+ * a raw string. It is **unreachable from Core**, because every path here comes
+ * from `repoPathSchema` (`data.md` §1), which rejects a trailing `/` as an empty
+ * segment ("path must not end with /") as well as `..` and absolute paths. A
+ * directory grant therefore has to be expressed as the exact file paths it covers
+ * (`packages/core/src/a.ts`, `packages/core/src/b.ts`, …); `packages/core/src` does
+ * **not** cover `packages/core/src/a.ts`, and it must never cover
+ * `packages/core/srcX/a.ts`. Widening this to real directory coverage requires an
+ * explicit schema-legal form (e.g. `packages/core/src/**`) plus the matching
+ * `data.md` rule — not a silent prefix match on a path that no longer parses.
+ */
 export function isWithinScope(path: string, targets: readonly string[]): boolean {
   return targets.some(
     (target) => path === target || (target.endsWith('/') && path.startsWith(target)),
@@ -1130,8 +1240,19 @@ export interface VerificationRun {
   readonly stage: string;
   /** A verification whose input is the post-fix revision. */
   readonly reviewsCurrentRevision: boolean;
-  /** The stage outcome; a Test result is `passed` only when nothing is uncovered. */
+  /**
+   * The stage's real conclusion (`CheckStatus`), never inferred from the Run's
+   * lifecycle: `completed` says the process ended, not that the Test passed
+   * (W6R1-08). Absent means "this stage recorded no conclusion".
+   */
   readonly status?: CheckStatus;
+  /**
+   * The frozen revision this Run's own evidence belongs to.
+   *
+   * A Review or Test whose evidence still belongs to the pre-fix revision cannot
+   * verify the fix, however new the Run is (W6R1-01).
+   */
+  readonly revision?: string;
 }
 
 export interface FindingVerificationInput {
@@ -1139,6 +1260,13 @@ export interface FindingVerificationInput {
   readonly actorRole: Role;
   readonly reviewRun?: VerificationRun;
   readonly testRun?: VerificationRun;
+  /**
+   * The revision the fix froze, read from the fixing Run's own evidence.
+   *
+   * Every verifying Review/Test must reference it; without it the closure cannot
+   * be bound to the fix at all and is refused rather than assumed.
+   */
+  readonly fixingRevision?: string;
 }
 
 export type FindingVerificationFailureCode =
@@ -1181,7 +1309,7 @@ export function findingCanBeVerified(input: FindingVerificationInput): FindingVe
   if (finding.state === 'accepted_risk') {
     // Risk acceptance is a user decision, never an agent's; the state is recorded
     // by the caller, so a reviewer presenting it needs a valid Review.
-    if (!runIsIndependent(input.reviewRun, false)) {
+    if (!runIsIndependent(input.reviewRun, { stage: 'review', fixingRevision: undefined })) {
       return {
         ok: false,
         code: 'GATE_NOT_READY',
@@ -1190,30 +1318,67 @@ export function findingCanBeVerified(input: FindingVerificationInput): FindingVe
     }
     return { ok: true, state: 'accepted_risk' };
   }
-  if (!runIsIndependent(input.reviewRun, true)) {
+  // AC-018/W6R1-01: the closure is anchored to the revision the *fix* froze. A
+  // Review/Test whose evidence belongs to an earlier revision — however new the
+  // Run itself — is the pre-fix evidence the Finding invalidated.
+  const fixingRevision = input.fixingRevision;
+  if (fixingRevision === undefined || fixingRevision === '') {
     return {
       ok: false,
       code: 'GATE_NOT_READY',
-      message: 'the addressed Finding needs a new independent Review of the current revision',
+      message: 'the fixing Run froze no revision; the fix cannot be independently verified',
     };
   }
-  if (!runIsIndependent(input.testRun, true)) {
+  if (!runIsIndependent(input.reviewRun, { stage: 'review', fixingRevision })) {
     return {
       ok: false,
       code: 'GATE_NOT_READY',
-      message: 'the fix also needs a new Test of the current revision',
+      message: 'the addressed Finding needs a new independent Review of the fixing revision',
+    };
+  }
+  // The Test must reach a real `passed` conclusion: `failed`, `not_covered` and
+  // `blocked` all keep the Finding open (W6R1-01/W6R1-08).
+  if (
+    !runIsIndependent(input.testRun, {
+      stage: 'test',
+      fixingRevision,
+      requireConclusion: true,
+    })
+  ) {
+    return {
+      ok: false,
+      code: 'GATE_NOT_READY',
+      message: 'the fix also needs a new, passed Test of the fixing revision',
     };
   }
   return { ok: true, state: 'verified' };
 }
 
-function runIsIndependent(run: VerificationRun | undefined, requireNewTest: boolean): boolean {
+/**
+ * Whether one verification Run may stand as independent evidence.
+ *
+ * Independence is a fact about the Run *and* its evidence: the Run must be
+ * completed, belong to the same Work, carry the verifying role, differ from both
+ * the fixing Run and the Review that raised the Finding, be created after the fix,
+ * and its own frozen revision must be the fixing revision. `reviewsCurrentRevision`
+ * is the caller's identity/order verdict; the revision comparison is what binds
+ * the verdict to the code the fix actually produced.
+ */
+function runIsIndependent(
+  run: VerificationRun | undefined,
+  options: {
+    readonly stage: 'review' | 'test';
+    readonly fixingRevision: string | undefined;
+    readonly requireConclusion?: boolean;
+  },
+): boolean {
   if (run === undefined) return false;
   if (!run.reviewsCurrentRevision) return false;
-  // A re-run of the old Run is not a new verification: the caller marks the new
-  // Run explicitly. `Stale` input is precisely what must not be accepted.
-  if (run.stage !== 'review' && run.stage !== 'test') return false;
-  if (requireNewTest && run.status === undefined) return false;
+  if (run.stage !== options.stage) return false;
+  if (options.fixingRevision !== undefined && run.revision !== options.fixingRevision) return false;
+  if (options.requireConclusion === true && run.status === undefined) return false;
+  // `completed` is never read as `passed`: any recorded conclusion other than
+  // `passed` refuses the closure.
   return run.status === undefined || run.status === 'passed';
 }
 
@@ -1289,6 +1454,8 @@ export interface FindingClosureInput {
   readonly actorRole: Role;
   readonly reviewRun?: VerificationRun;
   readonly testRun?: VerificationRun;
+  /** The revision the fixing Run froze; every verifier must reference it. */
+  readonly fixingRevision?: string;
   /** The number of repair rounds already used against `repairLimit`. */
   readonly repairUsed?: number;
   readonly repairLimit?: number;
@@ -1334,6 +1501,7 @@ export function evaluateFindingClosure(input: FindingClosureInput): FindingClosu
     actorRole: input.actorRole,
     ...(input.reviewRun === undefined ? {} : { reviewRun: input.reviewRun }),
     ...(input.testRun === undefined ? {} : { testRun: input.testRun }),
+    ...(input.fixingRevision === undefined ? {} : { fixingRevision: input.fixingRevision }),
   });
   if (!verification.ok) {
     return {

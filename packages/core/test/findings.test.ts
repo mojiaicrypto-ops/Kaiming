@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Ref, Run, RunStatus, Scope } from '@agentdev/contracts';
+import type { CheckStatus, Ref, Run, RunStatus, Scope } from '@agentdev/contracts';
 import {
   BlobStore,
   ProjectStore as Store,
@@ -33,6 +33,7 @@ const CHIEF_RUN_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e15';
 const CHILD_RUN_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e16';
 const PAUSE_RUN_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e17';
 const RECOVERY_RUN_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e18';
+const BARE_TEST_RUN_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e19';
 const ATTEMPT_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e60';
 const TASK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e40';
 const FOREIGN_TASK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e41';
@@ -46,6 +47,8 @@ const PRODUCT_DECISION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e53';
 const REVISION = 'a'.repeat(40);
 const HASH = 'b'.repeat(64);
 const SNAPSHOT_ID = 'c'.repeat(64);
+const CHECK_ENVIRONMENT_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e70';
+const CHECK_OUTPUT_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e71';
 const PATH = 'packages/core/src/findings.ts';
 
 const BASE_TIME = Date.parse('2026-09-11T00:00:00.000Z');
@@ -203,6 +206,15 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
       stage: 'Test',
       purpose: 'test',
     });
+    // A completed Test Run that recorded no CheckResult at all.
+    addRun({
+      id: BARE_TEST_RUN_ID,
+      role: 'test',
+      status: 'completed',
+      createdAt: iso(40),
+      stage: 'Test',
+      purpose: 'test',
+    });
     store.attempts.insert({
       id: ATTEMPT_ID,
       runId: PAUSE_RUN_ID,
@@ -337,6 +349,101 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     return result.finding.id;
   }
 
+  /**
+   * The fix Run's own frozen evidence: the revision the fix was made against.
+   *
+   * `W6R1-01` binds every verifier to this revision, so a fix without one cannot
+   * be verified at all.
+   */
+  function recordFixArtifact(runId: string, revision = REVISION): string {
+    return artifacts.createAgent({
+      run: { id: runId, workId: WORK_ID, role: 'backend' },
+      kind: 'diff',
+      mime: 'text/plain',
+      bytes: Buffer.from('--- a\n+++ b\n+fixed\n'),
+      sourceRevision: revision,
+    }).id;
+  }
+
+  /** A Review Run's artifact, frozen against the revision it reviewed. */
+  function recordReviewArtifact(runId: string, revision = REVISION): string {
+    return artifacts.createAgent({
+      run: { id: runId, workId: WORK_ID, role: 'review' },
+      kind: 'review',
+      mime: 'text/markdown',
+      bytes: Buffer.from('# review of the post-fix revision\n'),
+      sourceRevision: revision,
+    }).id;
+  }
+
+  /**
+   * A Test Run's persisted result.
+   *
+   * The artifact freezes the revision the Test ran against and the `stage_result`
+   * carries the real `CheckResult`; completion and Finding closure both read this
+   * evidence rather than a caller-asserted status (`W6R1-01`/`W6R1-02`).
+   */
+  function recordTestCheck(
+    runId: string,
+    input: {
+      readonly status: CheckStatus;
+      readonly revision?: string;
+      readonly noEnvironment?: boolean;
+      readonly uncovered?: readonly {
+        readonly acceptanceId: string;
+        readonly reason: string;
+      }[];
+    },
+  ): void {
+    artifacts.createAgent({
+      run: { id: runId, workId: WORK_ID, role: 'test' },
+      kind: 'test',
+      mime: 'text/markdown',
+      bytes: Buffer.from(`# test ${input.status}\n`),
+      sourceRevision: input.revision ?? REVISION,
+    });
+    const attempt = store.attempts.insert({
+      runId,
+      number: store.attempts.count('run_id = ?', [runId]) + 1,
+      status: 'running',
+      ownerEpoch: 0,
+    });
+    store.stageResults.insert({
+      runId,
+      attemptId: attempt.id,
+      status: input.status === 'passed' ? 'success' : 'failed',
+      summary: `test ${input.status}`,
+      artifactRefs: [],
+      evidenceRefs: [],
+      changedPaths: [],
+      findingIds: [],
+      unknowns: [],
+      requestedActions: [],
+      readLedgerSeq: 0,
+      readLedgerHash: HASH,
+      checkResult: {
+        status: input.status,
+        // `noEnvironment` models a CheckResult that recorded no environment at all
+        // (the schema forbids an empty environment id, so the absence is structural).
+        checks:
+          input.noEnvironment === true
+            ? []
+            : [
+                {
+                  command: 'pnpm test:unit',
+                  environmentRef: CHECK_ENVIRONMENT_ID,
+                  acceptanceIds: [],
+                  inputTree: HASH,
+                  exitCode: input.status === 'passed' ? 0 : 1,
+                  outputRef: CHECK_OUTPUT_ID,
+                  result: input.status,
+                },
+              ],
+        uncovered: [...(input.uncovered ?? [])],
+      },
+    });
+  }
+
   // -------------------------------------------------------------------------
   // AC-083 / AC-017
   // -------------------------------------------------------------------------
@@ -460,6 +567,9 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
 
   it('closes a fixed Finding only after a new independent Review and Test, and refuses a developer self-verify (AC-018)', () => {
     const findingId = submitIntegrationFinding();
+    const fixArtifactId = recordFixArtifact(FIX_RUN_ID);
+    recordReviewArtifact(NEW_REVIEW_RUN_ID);
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
 
     // Open: nothing may close it yet.
     const early = service.verifyFinding({
@@ -491,6 +601,7 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     if (!addressed.ok) throw new Error('unreachable');
     expect(addressed.finding.state).toBe('addressed');
     expect(addressed.finding.resolutionRef).toBe(FIX_RUN_ID);
+    expect(store.artifacts.find(fixArtifactId)?.sourceRevision).toBe(REVISION);
 
     // The developer that fixed it cannot verify it, even with real Runs in hand.
     const selfVerify = service.verifyFinding({
@@ -542,11 +653,63 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     expect(again.code).toBe('INVALID_STATE');
   });
 
-  it('refuses an old Review, the raising Review and a wrong-role Run as the fix verifier (AC-017, AC-018)', () => {
+  it('refuses a pre-fix revision and a non-passed Test conclusion even when the Runs are new (AC-018, W6R1-01/W6R1-08)', () => {
     const findingId = submitIntegrationFinding();
+    // The fix froze REVISION; the verifying Runs exist and are created after it.
+    recordFixArtifact(FIX_RUN_ID);
     expect(
       service.markAddressed({ findingId, actorRole: 'backend', fixRunId: FIX_RUN_ID }).ok,
     ).toBe(true);
+
+    // A new Review whose own evidence is the pre-fix revision cannot verify, even
+    // though the Run itself is new and independent by identity/order.
+    recordReviewArtifact(NEW_REVIEW_RUN_ID, 'OLDREVISION'.padEnd(40, '0'));
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
+    const preFixRevision = service.verifyFinding({
+      findingId,
+      actorRole: 'review',
+      reviewRun: { runId: NEW_REVIEW_RUN_ID },
+      testRun: { runId: NEW_TEST_RUN_ID },
+    });
+    expect(preFixRevision.ok).toBe(false);
+    if (preFixRevision.ok) throw new Error('unreachable');
+    expect(preFixRevision.code).toBe('GATE_NOT_READY');
+    expect(store.findings.find(findingId)?.state).toBe('addressed');
+
+    // A Test Run that completed with `failed` is not a passing Test: the old code
+    // mapped `completed` to `passed` and closed the Finding anyway.
+    recordReviewArtifact(NEW_REVIEW_RUN_ID);
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'failed' });
+    const failedTest = service.verifyFinding({
+      findingId,
+      actorRole: 'review',
+      reviewRun: { runId: NEW_REVIEW_RUN_ID },
+      testRun: { runId: NEW_TEST_RUN_ID },
+    });
+    expect(failedTest.ok).toBe(false);
+    if (failedTest.ok) throw new Error('unreachable');
+    expect(failedTest.code).toBe('GATE_NOT_READY');
+    expect(scanEvents(store, { names: ['finding.verified'] })).toHaveLength(0);
+
+    // A Test Run with no persisted CheckResult is never assumed to have passed.
+    const noEvidenceTest = service.verifyFinding({
+      findingId,
+      actorRole: 'review',
+      reviewRun: { runId: NEW_REVIEW_RUN_ID },
+      testRun: { runId: BARE_TEST_RUN_ID },
+    });
+    expect(noEvidenceTest.ok).toBe(false);
+    expect(store.findings.find(findingId)?.state).toBe('addressed');
+  });
+
+  it('refuses an old Review, the raising Review and a wrong-role Run as the fix verifier (AC-017, AC-018)', () => {
+    const findingId = submitIntegrationFinding();
+    recordFixArtifact(FIX_RUN_ID);
+    expect(
+      service.markAddressed({ findingId, actorRole: 'backend', fixRunId: FIX_RUN_ID }).ok,
+    ).toBe(true);
+    recordReviewArtifact(NEW_REVIEW_RUN_ID);
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
 
     // The Review that raised the Finding can never verify its own fix.
     const raisingReview = service.verifyFinding({
@@ -621,20 +784,36 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
   // AC-019
   // -------------------------------------------------------------------------
 
-  it('never completes on a blocked Test result (AC-019)', () => {
+  it('never completes on a blocked Test result and never on a caller-asserted one (AC-019, W6R1-02)', () => {
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'blocked' });
     const port = new StoreSourceHashPort({ store });
     const before = port.snapshot(WORK_ID);
 
-    const blocked = service.completeWork({ workId: WORK_ID, testResult: { status: 'blocked' } });
+    const blocked = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
     expect(blocked.ok).toBe(false);
     if (blocked.ok) throw new Error('unreachable');
     expect(blocked.code).toBe('GATE_NOT_READY');
     expect(blocked.reasons.join(' ')).toContain('blocked');
 
+    // No Test Run at all is a refusal, not an assumed pass.
     const missing = service.completeWork({ workId: WORK_ID });
     expect(missing.ok).toBe(false);
     if (missing.ok) throw new Error('unreachable');
-    expect(missing.reasons.join(' ')).toContain('no Test result');
+    expect(missing.reasons.join(' ')).toContain('no Test Run');
+
+    // A Test Run of another Work, or with a non-Test role, is refused too.
+    const foreignRun = service.completeWork({ workId: WORK_ID, testRunId: CHILD_RUN_ID });
+    expect(foreignRun.ok).toBe(false);
+    if (foreignRun.ok) throw new Error('unreachable');
+    expect(foreignRun.code).toBe('GATE_NOT_READY');
+    expect(foreignRun.reasons.join(' ')).toContain('Test Run');
+
+    // A completed Test Run with no persisted CheckResult is not evidence either.
+    const noEvidence = service.completeWork({ workId: WORK_ID, testRunId: BARE_TEST_RUN_ID });
+    expect(noEvidence.ok).toBe(false);
+    if (noEvidence.ok) throw new Error('unreachable');
+    expect(noEvidence.code).toBe('GATE_NOT_READY');
+    expect(noEvidence.reasons.join(' ')).toContain('CheckResult');
 
     expect(store.works.find(WORK_ID)?.status).toBe('running');
     expect(scanEvents(store, { names: ['delivery.work_completed'] })).toHaveLength(0);
@@ -642,12 +821,34 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     expect(after.digest).toBe(before.digest);
   });
 
+  it('refuses a Test evidence bound to another revision or without an environment (AC-019, W6R1-02)', () => {
+    // The Work revision is REVISION; this Test evidence froze a different one.
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed', revision: 'e'.repeat(40) });
+    const foreignRevision = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
+    expect(foreignRevision.ok).toBe(false);
+    if (foreignRevision.ok) throw new Error('unreachable');
+    expect(foreignRevision.code).toBe('GATE_NOT_READY');
+    expect(foreignRevision.reasons.join(' ')).toContain('revision');
+
+    // A Test that names no verification environment cannot carry the completion.
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed', noEnvironment: true });
+    const noEnvironment = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
+    expect(noEnvironment.ok).toBe(false);
+    if (noEnvironment.ok) throw new Error('unreachable');
+    expect(noEnvironment.code).toBe('GATE_NOT_READY');
+    expect(noEnvironment.reasons.join(' ')).toContain('environment');
+
+    expect(store.works.find(WORK_ID)?.status).toBe('running');
+  });
+
   it('requires an explicit risk disposition for every not_covered acceptance id (AC-019)', () => {
     const uncovered = [{ acceptanceId: 'AC-019', reason: 'the fixture has no live provider' }];
+    // The Test result is persisted now; the dispositions below are what varies.
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'not_covered', uncovered });
 
     const undisposed = service.completeWork({
       workId: WORK_ID,
-      testResult: { status: 'not_covered', uncovered },
+      testRunId: NEW_TEST_RUN_ID,
     });
     expect(undisposed.ok).toBe(false);
     if (undisposed.ok) throw new Error('unreachable');
@@ -657,7 +858,7 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
 
     const pending = service.completeWork({
       workId: WORK_ID,
-      testResult: { status: 'not_covered', uncovered },
+      testRunId: NEW_TEST_RUN_ID,
       riskDispositions: [{ acceptanceId: 'AC-019', decisionId: PENDING_DECISION_ID }],
     });
     expect(pending.ok).toBe(false);
@@ -667,7 +868,7 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
 
     const unmatched = service.completeWork({
       workId: WORK_ID,
-      testResult: { status: 'not_covered', uncovered },
+      testRunId: NEW_TEST_RUN_ID,
       riskDispositions: [{ acceptanceId: 'AC-999', decisionId: RISK_DECISION_ID }],
     });
     expect(unmatched.ok).toBe(false);
@@ -676,31 +877,39 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
 
     const disposed = service.completeWork({
       workId: WORK_ID,
-      testResult: { status: 'not_covered', uncovered },
+      testRunId: NEW_TEST_RUN_ID,
       riskDispositions: [{ acceptanceId: 'AC-019', decisionId: RISK_DECISION_ID }],
     });
     expect(disposed.ok).toBe(true);
     if (!disposed.ok) throw new Error('unreachable');
     expect(disposed.riskDecisionIds).toEqual([RISK_DECISION_ID]);
+    expect(disposed.testRunId).toBe(NEW_TEST_RUN_ID);
     expect(disposed.work.status).toBe('completed');
     expect(store.works.find(WORK_ID)?.status).toBe('completed');
     const completed = scanEvents(store, { names: ['delivery.work_completed'] });
     expect(completed).toHaveLength(1);
     expect(completed[0]?.data['riskDecisionIds']).toEqual([RISK_DECISION_ID]);
+    expect(completed[0]?.data['testRunId']).toBe(NEW_TEST_RUN_ID);
+    expect(completed[0]?.data['testStatus']).toBe('not_covered');
   });
 
   it('completes a passed Test result with no uncovered acceptance ids (AC-019)', () => {
-    const result = service.completeWork({ workId: WORK_ID, testResult: { status: 'passed' } });
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
+    const result = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('unreachable');
     expect(result.testStatus).toBe('passed');
+    expect(result.testRunId).toBe(NEW_TEST_RUN_ID);
     expect(store.works.find(WORK_ID)?.status).toBe('completed');
   });
 
   it('blocks completion while a blocking Finding is open or addressed (AC-017, AC-019)', () => {
     const findingId = submitIntegrationFinding();
+    recordFixArtifact(FIX_RUN_ID);
+    recordReviewArtifact(NEW_REVIEW_RUN_ID);
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
 
-    const open = service.completeWork({ workId: WORK_ID, testResult: { status: 'passed' } });
+    const open = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
     expect(open.ok).toBe(false);
     if (open.ok) throw new Error('unreachable');
     expect(open.code).toBe('GATE_NOT_READY');
@@ -710,7 +919,7 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     expect(
       service.markAddressed({ findingId, actorRole: 'backend', fixRunId: FIX_RUN_ID }).ok,
     ).toBe(true);
-    const addressed = service.completeWork({ workId: WORK_ID, testResult: { status: 'passed' } });
+    const addressed = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
     expect(addressed.ok).toBe(false);
 
     const closed = service.verifyFinding({
@@ -720,7 +929,7 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
       testRun: { runId: NEW_TEST_RUN_ID },
     });
     expect(closed.ok).toBe(true);
-    const done = service.completeWork({ workId: WORK_ID, testResult: { status: 'passed' } });
+    const done = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
     expect(done.ok).toBe(true);
     expect(store.works.find(WORK_ID)?.status).toBe('completed');
   });
@@ -817,6 +1026,15 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     expect(opened.number).toBe(2);
     expect(store.attempts.find(opened.attemptId)?.number).toBe(2);
     expect(store.runs.find(PAUSE_RUN_ID)?.status).toBe('running');
+    // W6R1-09: the resumed Attempt is only `starting`, so a write immediately after
+    // resume is refused. It is admitted once the Runner confirms readiness.
+    expect(store.attempts.find(opened.attemptId)?.status).toBe('starting');
+    const beforeReady = service.writeAdmission(PAUSE_RUN_ID);
+    expect(beforeReady.admitted).toBe(false);
+    expect(beforeReady.reason).toContain('ready Attempt');
+    const readyAttempt = store.attempts.find(opened.attemptId);
+    if (readyAttempt === undefined) throw new Error('unreachable');
+    store.attempts.update(opened.attemptId, { status: 'running' }, readyAttempt.version);
     expect(service.writeAdmission(PAUSE_RUN_ID).admitted).toBe(true);
     expect(scanEvents(store, { names: ['work.control_changed'] }).length).toBeGreaterThan(0);
   });
@@ -1012,7 +1230,8 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
   });
 
   it('refuses to cancel a finished Work', () => {
-    const completed = service.completeWork({ workId: WORK_ID, testResult: { status: 'passed' } });
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
+    const completed = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
     expect(completed.ok).toBe(true);
     const cancelled = service.cancelWork({ workId: WORK_ID });
     expect(cancelled.ok).toBe(false);

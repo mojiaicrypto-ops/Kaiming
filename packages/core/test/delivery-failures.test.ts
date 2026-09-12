@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Decision, PlanTask, Ref, Scope } from '@agentdev/contracts';
+import type { CheckStatus, Decision, PlanTask, Ref, Scope } from '@agentdev/contracts';
 import {
   BlobStore,
   ProjectStore as Store,
@@ -63,6 +63,7 @@ const RUNS = {
   findingFix: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c8d0207',
   findingNewReview: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c8d0208',
   findingNewTest: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c8d0209',
+  uncoveredTest: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c8d0210',
 } as const;
 
 const TASK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c8d0301';
@@ -70,6 +71,8 @@ const SECOND_TASK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c8d0302';
 const FINDING_TARGET_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c8d0310';
 const FINDING_MANIFEST_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c8d0311';
 const RISK_DECISION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c8d0320';
+const CHECK_ENVIRONMENT_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c8d0330';
+const CHECK_OUTPUT_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c8d0331';
 
 const SCOPE: Scope = {
   readPaths: [],
@@ -252,6 +255,85 @@ describe('required WP-06 failure tests', () => {
       throw new Error(`expected an approved Plan, got ${result.code}: ${result.message}`);
     }
     return result.planRef;
+  }
+
+  /**
+   * The fix Run's frozen evidence: the revision the fix was made against.
+   *
+   * `W6R1-01` binds verification to this revision, so the helpers below always
+   * attach a `sourceRevision` to the artifact that carries the Run's result.
+   */
+  function recordFixArtifact(runId: string, workId: string, revision = REVISION): void {
+    artifacts.createAgent({
+      run: { id: runId, workId, role: 'backend' },
+      kind: 'diff',
+      mime: 'text/plain',
+      bytes: Buffer.from('--- a\n+++ b\n+fixed\n'),
+      sourceRevision: revision,
+    });
+  }
+
+  function recordReviewArtifact(runId: string, workId: string, revision = REVISION): void {
+    artifacts.createAgent({
+      run: { id: runId, workId, role: 'review' },
+      kind: 'review',
+      mime: 'text/markdown',
+      bytes: Buffer.from('# review of the post-fix revision\n'),
+      sourceRevision: revision,
+    });
+  }
+
+  /** A Test Run's persisted result: the artifact plus its frozen `CheckResult`. */
+  function recordTestCheck(input: {
+    readonly runId: string;
+    readonly workId: string;
+    readonly status: CheckStatus;
+    readonly revision?: string;
+    readonly environmentRef?: string;
+    readonly uncovered?: readonly { readonly acceptanceId: string; readonly reason: string }[];
+  }): void {
+    artifacts.createAgent({
+      run: { id: input.runId, workId: input.workId, role: 'test' },
+      kind: 'test',
+      mime: 'text/markdown',
+      bytes: Buffer.from(`# test ${input.status}\n`),
+      sourceRevision: input.revision ?? REVISION,
+    });
+    const attempt = store.attempts.insert({
+      runId: input.runId,
+      number: store.attempts.count('run_id = ?', [input.runId]) + 1,
+      status: 'running',
+      ownerEpoch: 0,
+    });
+    store.stageResults.insert({
+      runId: input.runId,
+      attemptId: attempt.id,
+      status: input.status === 'passed' ? 'success' : 'failed',
+      summary: `test ${input.status}`,
+      artifactRefs: [],
+      evidenceRefs: [],
+      changedPaths: [],
+      findingIds: [],
+      unknowns: [],
+      requestedActions: [],
+      readLedgerSeq: 0,
+      readLedgerHash: HASH,
+      checkResult: {
+        status: input.status,
+        checks: [
+          {
+            command: 'pnpm test:unit',
+            environmentRef: input.environmentRef ?? CHECK_ENVIRONMENT_ID,
+            acceptanceIds: [],
+            inputTree: HASH,
+            exitCode: input.status === 'passed' ? 0 : 1,
+            outputRef: CHECK_OUTPUT_ID,
+            result: input.status,
+          },
+        ],
+        uncovered: [...(input.uncovered ?? [])],
+      },
+    });
   }
 
   // =========================================================================
@@ -720,6 +802,8 @@ describe('required WP-06 failure tests', () => {
       role: 'backend',
       stage: 'Develop',
     });
+    // The fix froze the revision the verifiers must reference (W6R1-01).
+    recordFixArtifact(RUNS.findingFix, IDS.findingWork);
     const addressed = findings.markAddressed({
       findingId,
       actorRole: 'backend',
@@ -735,6 +819,7 @@ describe('required WP-06 failure tests', () => {
       role: 'test',
       stage: 'Test',
     });
+    recordTestCheck({ runId: RUNS.findingNewTest, workId: IDS.findingWork, status: 'passed' });
     const staleReview = findings.verifyFinding({
       findingId,
       actorRole: 'review',
@@ -753,6 +838,7 @@ describe('required WP-06 failure tests', () => {
       role: 'review',
       stage: 'Review',
     });
+    recordReviewArtifact(RUNS.findingNewReview, IDS.findingWork);
     const staleTest = findings.verifyFinding({
       findingId,
       actorRole: 'review',
@@ -800,11 +886,14 @@ describe('required WP-06 failure tests', () => {
 
   it('未覆盖阻断: a Test result with not_covered or blocked cannot complete the Work', () => {
     addWork(IDS.uncoveredWork, 'L2', AUTH.uncovered);
+    // The Test evidence is persisted; the completion gate reads it (W6R1-02).
+    addRun({ id: RUNS.uncoveredTest, workId: IDS.uncoveredWork, role: 'test', stage: 'Test' });
 
     // `blocked` is a hard stop: no disposition exists that opens the Gate.
+    recordTestCheck({ runId: RUNS.uncoveredTest, workId: IDS.uncoveredWork, status: 'blocked' });
     const blocked = findings.completeWork({
       workId: IDS.uncoveredWork,
-      testResult: { status: 'blocked' },
+      testRunId: RUNS.uncoveredTest,
     });
     expect(blocked.ok).toBe(false);
     if (blocked.ok) throw new Error('unreachable');
@@ -818,9 +907,15 @@ describe('required WP-06 failure tests', () => {
       { acceptanceId: 'AC-007', reason: 'the fixture has no live provider' },
       { acceptanceId: 'AC-009', reason: 'no environment for the upgrade path' },
     ];
+    recordTestCheck({
+      runId: RUNS.uncoveredTest,
+      workId: IDS.uncoveredWork,
+      status: 'not_covered',
+      uncovered,
+    });
     const undisposed = findings.completeWork({
       workId: IDS.uncoveredWork,
-      testResult: { status: 'not_covered', uncovered },
+      testRunId: RUNS.uncoveredTest,
     });
     expect(undisposed.ok).toBe(false);
     if (undisposed.ok) throw new Error('unreachable');
@@ -831,7 +926,7 @@ describe('required WP-06 failure tests', () => {
     // A disposition for an acceptance id that was never uncovered is refused.
     const unmatched = findings.completeWork({
       workId: IDS.uncoveredWork,
-      testResult: { status: 'not_covered', uncovered },
+      testRunId: RUNS.uncoveredTest,
       riskDispositions: [{ acceptanceId: 'AC-999', decisionId: RISK_DECISION_ID }],
     });
     expect(unmatched.ok).toBe(false);
@@ -852,7 +947,7 @@ describe('required WP-06 failure tests', () => {
     });
     const pending = findings.completeWork({
       workId: IDS.uncoveredWork,
-      testResult: { status: 'not_covered', uncovered },
+      testRunId: RUNS.uncoveredTest,
       riskDispositions: [{ acceptanceId: 'AC-007', decisionId: RISK_DECISION_ID }],
     });
     expect(pending.ok).toBe(false);
@@ -868,17 +963,21 @@ describe('required WP-06 failure tests', () => {
       store.decisions.find(RISK_DECISION_ID)?.version ?? 1,
     );
     expect(accepted.state).toBe('accepted');
+    recordTestCheck({
+      runId: RUNS.uncoveredTest,
+      workId: IDS.uncoveredWork,
+      status: 'not_covered',
+      uncovered: [uncovered[0] ?? { acceptanceId: 'AC-007', reason: '' }],
+    });
     const opened = findings.completeWork({
       workId: IDS.uncoveredWork,
-      testResult: {
-        status: 'not_covered',
-        uncovered: [uncovered[0] ?? { acceptanceId: 'AC-007', reason: '' }],
-      },
+      testRunId: RUNS.uncoveredTest,
       riskDispositions: [{ acceptanceId: 'AC-007', decisionId: RISK_DECISION_ID }],
     });
     expect(opened.ok).toBe(true);
     if (!opened.ok) throw new Error('unreachable');
     expect(opened.riskDecisionIds).toEqual([RISK_DECISION_ID]);
+    expect(opened.testRunId).toBe(RUNS.uncoveredTest);
     expect(store.works.find(IDS.uncoveredWork)?.status).toBe('completed');
   });
 });

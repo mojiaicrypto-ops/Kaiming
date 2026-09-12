@@ -199,6 +199,7 @@ describe('L1 eligibility and bounds (AC-007/AC-008/AC-009)', () => {
     };
     const upgrade = evaluateLevelUpgrade(input);
     expect(upgrade.ok).toBe(false);
+    expect(upgrade.outcome).toBe('upgrade');
     expect(upgrade.upgradeRequired).toBe(true);
     expect(upgrade.level).toBe('L2');
     expect(upgrade.stalePlan).toBe(true);
@@ -225,8 +226,9 @@ describe('L1 eligibility and bounds (AC-007/AC-008/AC-009)', () => {
   });
 
   it('never downgrades automatically (AC-008/AC-009)', () => {
-    // A recorded L3 whose new classification is L1 keeps L3 and rejects the Plan,
-    // because the new classification arrives with a narrower Plan (AC-009).
+    // A recorded L3 whose new classification is L1 keeps L3. The refusal is a
+    // distinct outcome and leaves the current Plan valid: `stalePlan` is false even
+    // though a Plan was supplied (W6R1-06).
     const downgrade = evaluateLevelUpgrade({
       previousLevel: 'L3',
       diff: typoDiff,
@@ -234,7 +236,9 @@ describe('L1 eligibility and bounds (AC-007/AC-008/AC-009)', () => {
       plan,
     });
     expect(downgrade.ok).toBe(false);
+    expect(downgrade.outcome).toBe('downgrade_refused');
     expect(downgrade.level).toBe('L3');
+    expect(downgrade.stalePlan).toBe(false);
     expect(downgrade.reasons.join(' ')).toContain('downgrade refused');
 
     // An unchanged L1 work is a no-op, not an upgrade.
@@ -245,6 +249,7 @@ describe('L1 eligibility and bounds (AC-007/AC-008/AC-009)', () => {
       plan,
     });
     expect(unchanged.ok).toBe(true);
+    expect(unchanged.outcome).toBe('noop');
     expect(unchanged.level).toBe('L1');
     expect(unchanged.stalePlan).toBe(false);
     expect(levelRank('L3')).toBeGreaterThan(levelRank('L2'));
@@ -375,6 +380,55 @@ describe('stage manifests and routes (AC-010/AC-011/AC-012)', () => {
     expect(completeL3.ok).toBe(true);
   });
 
+  it('accepts a document chain that binds no code revision or environment (AC-012, W6R1-04)', () => {
+    // The document lane has no code Test and no code revision (`workflow.md` §3):
+    // the chain validator used to demand both on Review, rejecting a compliant
+    // document delivery.
+    const documentChain = [
+      without(manifest('Product'), NO_CODE_FIELDS),
+      without(manifest('Planning', 'Product'), NO_CODE_FIELDS),
+      without(
+        manifest('Review', 'Planning', ['candidate diff: docs/product/requirements.md']),
+        NO_CODE_FIELDS,
+      ),
+      without(manifest('Settlement', 'Review'), NO_CODE_FIELDS),
+    ];
+    expect(
+      evaluateStageChain({ route: 'document', level: 'L2', manifests: documentChain }),
+    ).toEqual({ ok: true, stages: ['Product', 'Planning', 'Review', 'Settlement'] });
+
+    // The exemption is not a blanket removal: the document Review still has to name
+    // the candidate diff it reviewed.
+    const noDiffEvidence = evaluateStageChain({
+      route: 'document',
+      level: 'L2',
+      manifests: documentChain.map((entry) =>
+        entry.stage === 'Review' ? { ...entry, evidence: ['looks fine to me'] } : entry,
+      ),
+    });
+    expect(noDiffEvidence.ok).toBe(false);
+    if (!noDiffEvidence.ok) {
+      expect(noDiffEvidence.code).toBe('VALIDATION_ERROR');
+      expect(noDiffEvidence.gaps.map((gap) => gap.message).join(' ')).toContain('candidate diff');
+    }
+
+    // The code route keeps the code requirements: the same manifests without a
+    // frozen revision are refused there.
+    const codeWithoutRevision = evaluateStageChain({
+      route: 'code',
+      level: 'L2',
+      requirement: { requirementId: ID },
+      manifests: l2Chain().map((entry) =>
+        entry.stage === 'Review' ? without(entry, ['codeRevision', 'environmentRef']) : entry,
+      ),
+    });
+    expect(codeWithoutRevision.ok).toBe(false);
+    if (!codeWithoutRevision.ok) {
+      expect(codeWithoutRevision.code).toBe('VALIDATION_ERROR');
+      expect(codeWithoutRevision.gaps.map((gap) => gap.stage)).toContain('Review');
+    }
+  });
+
   it('rejects an unknown route/level combination instead of guessing', () => {
     const decision = evaluateStageChain({
       route: 'code',
@@ -481,7 +535,7 @@ describe('gate readiness (AC-013/AC-014)', () => {
         workId: ID,
       },
       scope: scope(['src/a.ts']),
-      budget: { tokenLimit: 1000, reserved: 100, requested: 200 },
+      budget: { tokenLimit: 1000, used: 0, reserved: 100, requested: 200 },
       productChanged: false,
       at: TIME,
     });
@@ -508,7 +562,7 @@ describe('gate readiness (AC-013/AC-014)', () => {
         authorizedOperations: ['edit', 'read'],
         workId: ID,
       },
-      budget: { tokenLimit: 1000, reserved: 0, requested: 200 },
+      budget: { tokenLimit: 1000, used: 0, reserved: 0, requested: 200 },
       at: TIME,
     };
     const productChange = evaluatePlanApproval({ ...base, productChanged: true });
@@ -530,7 +584,7 @@ describe('gate readiness (AC-013/AC-014)', () => {
       ...base,
       productChanged: false,
       scope: scope(['src/a.ts']),
-      budget: { tokenLimit: 100, reserved: 90, requested: 20 },
+      budget: { tokenLimit: 100, used: 0, reserved: 90, requested: 20 },
     });
     expect(overBudget.ok).toBe(false);
     if (!overBudget.ok) {
@@ -569,6 +623,61 @@ describe('gate readiness (AC-013/AC-014)', () => {
     expect(isWithinScope('src/a.ts', ['src/a.ts'])).toBe(true);
     expect(isWithinScope('srcs/a.ts', ['src/'])).toBe(false);
     expect(isWithinScope('src/a.ts', [])).toBe(false);
+    // W6R1-10 documents the boundary rather than leaving a dead branch: a path that
+    // is schema-legal (`repoPathSchema` rejects a trailing `/`) covers only itself,
+    // so `packages/core/src` neither covers its children nor a sibling prefix.
+    expect(isWithinScope('packages/core/src/a.ts', ['packages/core/src'])).toBe(false);
+    expect(isWithinScope('packages/core/srcX/a.ts', ['packages/core/src'])).toBe(false);
+    expect(isWithinScope('packages/core/src', ['packages/core/src'])).toBe(true);
+  });
+
+  it('refuses an over-used budget instead of assuming a zero usage (AC-022, W6R1-03)', () => {
+    const base = {
+      plan,
+      revision: REV,
+      selection: {
+        authorizationRef: ID3,
+        authorizedTargets: ['src/'],
+        authorizedOperations: ['edit', 'read'],
+        workId: ID,
+      },
+      scope: scope(['src/a.ts']),
+      productChanged: false,
+      at: TIME,
+    };
+    // used 60 + reserved 30 + 50 > 100: the old code passed `tokensUsed: 0` and
+    // approved this Plan, which is a silent top-up.
+    const overUsed = evaluatePlanApproval({
+      ...base,
+      budget: { tokenLimit: 100, used: 60, reserved: 30, requested: 50 },
+    });
+    expect(overUsed.ok).toBe(false);
+    if (!overUsed.ok) {
+      expect(overUsed.code).toBe('BUDGET_EXCEEDED');
+      expect(overUsed.decisionRequired).toBe(false);
+    }
+
+    // A caller that supplies no usage at all is refused as well: it must not be
+    // read as `used = 0`. (The field is required by the type; this is the
+    // JavaScript-caller path.)
+    const missingUsed = evaluatePlanApproval({
+      ...base,
+      budget: { tokenLimit: 100, reserved: 30, requested: 50 } as unknown as {
+        tokenLimit: number;
+        used: number;
+        reserved: number;
+        requested: number;
+      },
+    });
+    expect(missingUsed.ok).toBe(false);
+    if (!missingUsed.ok) expect(missingUsed.code).toBe('VALIDATION_ERROR');
+
+    // The same request fits once the real usage is small enough.
+    const fits = evaluatePlanApproval({
+      ...base,
+      budget: { tokenLimit: 100, used: 10, reserved: 30, requested: 50 },
+    });
+    expect(fits.ok).toBe(true);
   });
 });
 
@@ -696,8 +805,20 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
     blocking: true,
   };
 
-  const reviewRun = { stage: 'review', reviewsCurrentRevision: true, status: 'passed' as const };
-  const testRun = { stage: 'test', reviewsCurrentRevision: true, status: 'passed' as const };
+  const FIX_REV = 'f'.repeat(40);
+  const reviewRun = {
+    stage: 'review',
+    reviewsCurrentRevision: true,
+    status: 'passed' as const,
+    revision: FIX_REV,
+  };
+  const testRun = {
+    stage: 'test',
+    reviewsCurrentRevision: true,
+    status: 'passed' as const,
+    revision: FIX_REV,
+  };
+  const fixingRevision = FIX_REV;
 
   it('returns work to development without a human forwarding step (AC-017)', () => {
     const routing = evaluateFindingRouting(openFinding);
@@ -715,6 +836,7 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
       actorRole: 'backend',
       reviewRun,
       testRun,
+      fixingRevision,
     });
     expect(selfVerify.ok).toBe(false);
     if (!selfVerify.ok) expect(selfVerify.code).toBe('NOT_AUTHORIZED');
@@ -725,6 +847,7 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
       actorRole: 'review',
       reviewRun: { ...reviewRun, reviewsCurrentRevision: false },
       testRun,
+      fixingRevision,
     });
     expect(oldEvidence.ok).toBe(false);
     if (!oldEvidence.ok) expect(oldEvidence.code).toBe('GATE_NOT_READY');
@@ -734,24 +857,92 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
       finding: addressed,
       actorRole: 'review',
       reviewRun,
+      fixingRevision,
     });
     expect(reviewOnly.ok).toBe(false);
 
     // A genuinely new independent pair verifies it.
     expect(
-      findingCanBeVerified({ finding: addressed, actorRole: 'review', reviewRun, testRun }),
+      findingCanBeVerified({
+        finding: addressed,
+        actorRole: 'review',
+        reviewRun,
+        testRun,
+        fixingRevision,
+      }),
     ).toEqual({ ok: true, state: 'verified' });
     // A review role may verify, a test role may too; neither may be the developer.
     expect(
-      findingCanBeVerified({ finding: addressed, actorRole: 'test', reviewRun, testRun }).ok,
+      findingCanBeVerified({
+        finding: addressed,
+        actorRole: 'test',
+        reviewRun,
+        testRun,
+        fixingRevision,
+      }).ok,
     ).toBe(true);
     expect(
-      findingCanBeVerified({ finding: addressed, actorRole: 'frontend', reviewRun, testRun }).ok,
+      findingCanBeVerified({
+        finding: addressed,
+        actorRole: 'frontend',
+        reviewRun,
+        testRun,
+        fixingRevision,
+      }).ok,
     ).toBe(false);
     // An open Finding is not verifiable at all.
     expect(
-      findingCanBeVerified({ finding: openFinding, actorRole: 'review', reviewRun, testRun }).ok,
+      findingCanBeVerified({
+        finding: openFinding,
+        actorRole: 'review',
+        reviewRun,
+        testRun,
+        fixingRevision,
+      }).ok,
     ).toBe(false);
+  });
+
+  it('binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08)', () => {
+    const addressed = { ...openFinding, state: 'addressed' as const };
+    const base = { finding: addressed, actorRole: 'review' as const };
+
+    // A Review whose own evidence still belongs to the pre-fix revision is not a
+    // verification of the fix, however new the Run is.
+    const preFixReview = findingCanBeVerified({
+      ...base,
+      reviewRun: { ...reviewRun, revision: REV2 },
+      testRun,
+      fixingRevision,
+    });
+    expect(preFixReview.ok).toBe(false);
+    if (!preFixReview.ok) expect(preFixReview.code).toBe('GATE_NOT_READY');
+
+    // A Test that completed but concluded `failed` (or `not_covered`) cannot close
+    // the Finding: `completed` is not `passed`.
+    for (const status of ['failed', 'not_covered', 'blocked'] as const) {
+      const notPassed = findingCanBeVerified({
+        ...base,
+        reviewRun,
+        testRun: { ...testRun, status },
+        fixingRevision,
+      });
+      expect(notPassed.ok).toBe(false);
+      if (!notPassed.ok) expect(notPassed.code).toBe('GATE_NOT_READY');
+    }
+
+    // A Test Run that recorded no conclusion at all is refused, never assumed.
+    const noConclusion = findingCanBeVerified({
+      ...base,
+      reviewRun,
+      testRun: { stage: 'test', reviewsCurrentRevision: true, revision: FIX_REV },
+      fixingRevision,
+    });
+    expect(noConclusion.ok).toBe(false);
+
+    // Without a fixing revision there is nothing to bind to: fail closed.
+    const unbound = findingCanBeVerified({ ...base, reviewRun, testRun });
+    expect(unbound.ok).toBe(false);
+    if (!unbound.ok) expect(unbound.code).toBe('GATE_NOT_READY');
   });
 
   it('closes through evaluateFindingClosure and stops at the rework allowance (AC-017/AC-022)', () => {
@@ -761,6 +952,7 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
       actorRole: 'review',
       reviewRun,
       testRun,
+      fixingRevision,
     });
     expect(closed).toEqual({ closed: true, state: 'verified' });
 
@@ -769,6 +961,7 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
       actorRole: 'review',
       reviewRun,
       testRun,
+      fixingRevision,
       repairUsed: 3,
       repairLimit: 3,
     });
@@ -863,6 +1056,7 @@ describe('findings (AC-017/AC-018/AC-019/AC-083)', () => {
       actorRole: 'review',
       reviewRun,
       testRun,
+      fixingRevision,
     });
     expect(closure).toEqual({ closed: true, state: 'verified' });
   });

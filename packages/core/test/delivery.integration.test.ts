@@ -546,24 +546,90 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
     });
   }
 
-  /** The `StageManifest` view the domain chain rules consume. */
+  /**
+   * The `StageManifest` view the domain chain rules consume.
+   *
+   * `route` is not a decoration: the document lane has no frozen code revision and
+   * no verification environment (AC-012/W6R1-04), so the document view omits both
+   * instead of injecting values the route never produces. The old fixture injected
+   * `codeRevision`/`environmentRef` into document stages, which is exactly what hid
+   * the contradictory chain validator.
+   */
   function stageView(input: {
     readonly stage: string;
     readonly workId: string;
+    readonly route?: 'code' | 'document' | 'operation';
     readonly dependsOn?: readonly string[];
     readonly evidence?: readonly string[];
   }): StageManifest {
+    const documentRoute = input.route === 'document';
     return {
       stage: input.stage,
       workId: input.workId,
       planRef: { id: PROJECT_ID_HASH, version: 1, hash: PROJECT_ID_HASH },
-      codeRevision: REVISION,
-      codeTree: PROJECT_ID_HASH,
-      environmentRef: uuidFor(`${input.stage}:env`),
       acceptanceIds: ['AC-010'],
+      ...(documentRoute
+        ? {}
+        : {
+            codeRevision: REVISION,
+            codeTree: PROJECT_ID_HASH,
+            environmentRef: uuidFor(`${input.stage}:env`),
+          }),
       ...(input.dependsOn === undefined ? {} : { dependsOn: [...input.dependsOn] }),
       ...(input.evidence === undefined ? {} : { evidence: [...input.evidence] }),
     };
+  }
+
+  /** A Test Run's persisted result: an artifact plus its frozen `CheckResult`. */
+  function recordTestCheck(input: {
+    readonly runId: string;
+    readonly workId: string;
+    readonly status: 'passed' | 'failed' | 'not_covered' | 'blocked';
+    readonly revision?: string;
+  }): void {
+    artifact({
+      runId: input.runId,
+      workId: input.workId,
+      role: 'test',
+      kind: 'test',
+      body: `# test ${input.status}\n`,
+      sourceRevision: input.revision ?? REVISION,
+    });
+    const attempt = store.attempts.insert({
+      runId: input.runId,
+      number: store.attempts.count('run_id = ?', [input.runId]) + 1,
+      status: 'running',
+      ownerEpoch: 0,
+    });
+    store.stageResults.insert({
+      runId: input.runId,
+      attemptId: attempt.id,
+      status: input.status === 'passed' ? 'success' : 'failed',
+      summary: `test ${input.status}`,
+      artifactRefs: [],
+      evidenceRefs: [],
+      changedPaths: [],
+      findingIds: [],
+      unknowns: [],
+      requestedActions: [],
+      readLedgerSeq: 0,
+      readLedgerHash: PROJECT_ID_HASH,
+      checkResult: {
+        status: input.status,
+        checks: [
+          {
+            command: 'pnpm test:unit',
+            environmentRef: uuidFor(`${input.runId}:env`),
+            acceptanceIds: [],
+            inputTree: PROJECT_ID_HASH,
+            exitCode: input.status === 'passed' ? 0 : 1,
+            outputRef: uuidFor(`${input.runId}:output`),
+            result: input.status,
+          },
+        ],
+        uncovered: [],
+      },
+    });
   }
 
   function freezeManifest(
@@ -1028,17 +1094,52 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
       store.runs.list({ where: 'work_id = ?', params: [IDS.documentRoute] }).map((run) => run.role),
     ).not.toContain('test');
 
-    const chain = stageChain({
+    // AC-012/W6R1-04: the document stages bind no code revision and no code
+    // verification environment; the Review names the candidate diff it reviewed.
+    const documentViews: StageManifest[] = [
+      stageView({ stage: 'Product', workId: IDS.documentRoute, route: 'document' }),
+      stageView({
+        stage: 'Planning',
+        workId: IDS.documentRoute,
+        route: 'document',
+        dependsOn: ['Product'],
+      }),
+      stageView({
+        stage: 'Review',
+        workId: IDS.documentRoute,
+        route: 'document',
+        dependsOn: ['Planning'],
+        evidence: ['candidate diff: docs/product/requirements.md'],
+      }),
+      stageView({
+        stage: 'Settlement',
+        workId: IDS.documentRoute,
+        route: 'document',
+        dependsOn: ['Review'],
+      }),
+    ];
+    expect(
+      documentViews.every(
+        (view) => view.codeRevision === undefined && view.environmentRef === undefined,
+      ),
+    ).toBe(true);
+
+    const chain = stageChain({ route: 'document', level: 'L2', manifests: documentViews });
+    expect(chain).toEqual({ ok: true, stages: ['Product', 'Planning', 'Review', 'Settlement'] });
+
+    // The rule is real, not a blanket removal: a document Review that does not name
+    // the candidate diff it reviewed is refused.
+    const unreviewed = stageChain({
       route: 'document',
       level: 'L2',
-      manifests: [
-        stageView({ stage: 'Product', workId: IDS.documentRoute }),
-        stageView({ stage: 'Planning', workId: IDS.documentRoute, dependsOn: ['Product'] }),
-        stageView({ stage: 'Review', workId: IDS.documentRoute, dependsOn: ['Planning'] }),
-        stageView({ stage: 'Settlement', workId: IDS.documentRoute, dependsOn: ['Review'] }),
-      ],
+      manifests: documentViews.map((view) =>
+        view.stage === 'Review' ? { ...view, evidence: [] } : view,
+      ),
     });
-    expect(chain).toEqual({ ok: true, stages: ['Product', 'Planning', 'Review', 'Settlement'] });
+    expect(unreviewed.ok).toBe(false);
+    if (unreviewed.ok) throw new Error('unreachable');
+    expect(unreviewed.code).toBe('VALIDATION_ERROR');
+    expect(unreviewed.gaps.map((gap) => gap.message).join(' ')).toContain('candidate diff');
 
     // The independent Review and the Settlement are real, readable artifacts.
     expect(store.artifacts.find(documentReview.id)?.validity).toBe('valid');
@@ -1336,6 +1437,9 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
       stage: 'Review',
     });
     addRun({ id: RUNS.findingNewTest, workId: IDS.findingLoop, role: 'test', stage: 'Test' });
+    // The new Test's persisted `passed` conclusion is what closes the Finding
+    // (W6R1-01/W6R1-08) and later completes the Work (W6R1-02).
+    recordTestCheck({ runId: RUNS.findingNewTest, workId: IDS.findingLoop, status: 'passed' });
     const fixDiff = artifact({
       runId: RUNS.findingFix,
       workId: IDS.findingLoop,
@@ -1379,11 +1483,12 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
     expect(verifiedReview.validity).toBe('valid');
     expect(verifiedTest.validity).toBe('valid');
 
-    // The Work can now complete: the blocking Finding is closed.
+    // The Work can now complete: the blocking Finding is closed and the persisted
+    // Test Run is the completion evidence.
     expect(store.tasks.find(TASKS.finding)?.stage).toBe('develop');
     const completion = findings.completeWork({
       workId: IDS.findingLoop,
-      testResult: { status: 'passed' },
+      testRunId: RUNS.findingNewTest,
     });
     expect(completion.ok).toBe(true);
   });
@@ -1444,6 +1549,14 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
     const opened = resumed.attempts.find((entry) => entry.runId === RUNS.pauseRun);
     expect(opened?.number).toBe(2);
     expect(store.attempts.find(opened?.attemptId ?? '')?.status).toBe('starting');
+    // W6R1-09: immediately after resume the new Attempt is only `starting`, so the
+    // write admission refuses until the Runner confirms readiness.
+    const beforeReady = findings.writeAdmission(RUNS.pauseRun);
+    expect(beforeReady.admitted).toBe(false);
+    expect(beforeReady.reason).toContain('ready Attempt');
+    const readyAttempt = store.attempts.find(opened?.attemptId ?? '');
+    if (readyAttempt === undefined) throw new Error('unreachable');
+    store.attempts.update(readyAttempt.id, { status: 'running' }, readyAttempt.version);
     expect(findings.writeAdmission(RUNS.pauseRun).admitted).toBe(true);
 
     // Cancel: parent and child Runs end together, the diff stays readable and

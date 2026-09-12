@@ -11,6 +11,7 @@ import {
   StoreSourceHashPort,
   normalizePlan,
   type PlanDraft,
+  type SourceHashPort,
   type SourceSnapshot,
   type SubmitPlanInput,
   type SubmitPlanResult,
@@ -28,10 +29,13 @@ const ROOT = '/tmp/agentdev-gates-root';
 const WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e01';
 const OTHER_WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e02';
 const REVOKED_WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e03';
+const DOWNGRADE_WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e04';
 const RUN_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e10';
+const DOWNGRADE_RUN_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e11';
 const AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e20';
 const REVOKED_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e21';
 const FOREIGN_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e22';
+const DOWNGRADE_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e23';
 const REQUIREMENT_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e30';
 const REVISION = 'a'.repeat(40);
 const TASK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e40';
@@ -115,6 +119,7 @@ describe('Plan gate persistence (AC-009, AC-013, AC-014)', () => {
       [WORK_ID, 'L1'],
       [OTHER_WORK_ID, 'L1'],
       [REVOKED_WORK_ID, 'L1'],
+      [DOWNGRADE_WORK_ID, 'L3'],
     ] as const) {
       const budget = store.budgets.insert({
         projectId,
@@ -178,6 +183,32 @@ describe('Plan gate persistence (AC-009, AC-013, AC-014)', () => {
       contextSnapshotId: 'b'.repeat(64),
       dispatchSnapshotId: 'c'.repeat(64),
       budgetAllocation: 1_000,
+    });
+    store.runs.insert({
+      id: DOWNGRADE_RUN_ID,
+      projectId,
+      workId: DOWNGRADE_WORK_ID,
+      role: 'planning',
+      purpose: 'analysis',
+      stage: 'Plan',
+      status: 'running',
+      requiredChild: false,
+      join: 'none',
+      childIds: [],
+      configSnapshotId: 'a'.repeat(64),
+      contextSnapshotId: 'b'.repeat(64),
+      dispatchSnapshotId: 'c'.repeat(64),
+      budgetAllocation: 1_000,
+    });
+    store.authorizations.insert({
+      id: DOWNGRADE_AUTHORIZATION_ID,
+      projectId,
+      sourceRef: { kind: 'message', id: DOWNGRADE_WORK_ID, version: '1' },
+      workId: DOWNGRADE_WORK_ID,
+      goal: 'authorized scope for the L3 Work',
+      scope: WELL_FORMED_SCOPE,
+      operations: ['edit'],
+      acceptedAt: '2026-09-11T00:00:00.000Z',
     });
     store.authorizations.insert({
       id: AUTHORIZATION_ID,
@@ -457,5 +488,208 @@ describe('Plan gate persistence (AC-009, AC-013, AC-014)', () => {
     const normalized = normalizePlan(draft(), 3, AUTHORIZATION_ID);
     expect(normalized.tasks[0]?.paths).toEqual([PATH]);
     expect(normalized.approval).toBe('auto');
+  });
+
+  it('refuses a Plan whose reservation exceeds the budget once real usage counts (AC-022, W6R1-03)', () => {
+    const work = store.works.find(WORK_ID);
+    if (work === undefined) throw new Error('unreachable');
+    const budget = store.budgets.find(work.budgetId);
+    if (budget === undefined) throw new Error('unreachable');
+    // The Work has already charged 95k and holds 4k; the Plan asks for 2k more.
+    store.budgets.update(budget.id, { tokensUsed: 95_000, tokensReserved: 4_000 }, budget.version);
+
+    const before = port.snapshot(WORK_ID);
+    const overBudget = submit({
+      approval: {
+        authorizationRef: AUTHORIZATION_ID,
+        runId: RUN_ID,
+        productChanged: false,
+        requestedTokens: 2_000,
+        at: nextTime(),
+      },
+    });
+    expect(overBudget.approved).toBe(false);
+    if (overBudget.approved) throw new Error('unreachable');
+    expect(overBudget.code).toBe('BUDGET_EXCEEDED');
+    // No silent top-up: nothing was written and the usage was not zeroed.
+    expect(store.artifacts.count()).toBe(0);
+    expect(port.snapshot(WORK_ID).digest).toBe(before.digest);
+
+    // A request that fits the real usage is still approved.
+    const fitted = submit({
+      approval: {
+        authorizationRef: AUTHORIZATION_ID,
+        runId: RUN_ID,
+        productChanged: false,
+        requestedTokens: 500,
+        at: nextTime(),
+      },
+    });
+    expect(fitted.approved).toBe(true);
+  });
+
+  it('re-reads the authorization at write time and refuses a revoked envelope (AC-013, W6R1-05)', () => {
+    const planRef = approve();
+    expect(
+      gates.requestCodeWrite({ workId: WORK_ID, revision: REVISION, targets: [PATH], planRef })
+        .allowed,
+    ).toBe(true);
+
+    // The user revokes the envelope the Plan was approved on.
+    const authorization = store.authorizations.find(AUTHORIZATION_ID);
+    if (authorization === undefined) throw new Error('unreachable');
+    store.authorizations.update(AUTHORIZATION_ID, { revokedAt: nextTime() }, authorization.version);
+
+    const before = port.snapshot(WORK_ID);
+    const refused = gates.requestCodeWrite({
+      workId: WORK_ID,
+      revision: REVISION,
+      targets: [PATH],
+      planRef,
+    });
+    expect(refused.allowed).toBe(false);
+    if (refused.allowed) throw new Error('unreachable');
+    expect(refused.code).toBe('NOT_AUTHORIZED');
+    expect(refused.gaps.join(' ')).toContain('revoked');
+    // The refusal is side-effect free and appends no admission event.
+    expect(refused.sourceHash).toBe(refused.sourceHashAfter);
+    expect(port.snapshot(WORK_ID).digest).toBe(before.digest);
+    expect(scanEvents(store, { names: ['delivery.write_admitted'] })).toHaveLength(1);
+  });
+
+  it('compares the approval source hash with the live measurement (AC-013, W6R1-07)', () => {
+    // A caller-owned measurement port, so the "source" can really move.
+    let content = 'a'.repeat(40);
+    const moving: SourceHashPort = {
+      measure: () => content,
+      contentHash: () => content,
+    };
+    const planRef = approve({ sourceHashPort: moving });
+
+    // The source moves after the Plan was approved: the gate compares the frozen
+    // approval hash with the live measurement instead of one value with itself.
+    content = 'b'.repeat(40);
+    const moved = gates.requestCodeWrite({
+      workId: WORK_ID,
+      revision: REVISION,
+      targets: [PATH],
+      planRef,
+      sourceHashPort: moving,
+    });
+    expect(moved.allowed).toBe(false);
+    if (moved.allowed) throw new Error('unreachable');
+    expect(moved.code).toBe('GATE_NOT_READY');
+    expect(moved.gaps.join(' ')).toContain('source hash changed');
+
+    // A caller-supplied pre-write expectation is compared the same way.
+    content = 'a'.repeat(40);
+    const mismatched = gates.requestCodeWrite({
+      workId: WORK_ID,
+      revision: REVISION,
+      targets: [PATH],
+      planRef,
+      sourceHashPort: moving,
+      expectedSourceHash: 'c'.repeat(40),
+    });
+    expect(mismatched.allowed).toBe(false);
+    if (mismatched.allowed) throw new Error('unreachable');
+    expect(mismatched.gaps.join(' ')).toContain('source hash changed');
+
+    // The agreed expectation still admits the write.
+    const agreed = gates.requestCodeWrite({
+      workId: WORK_ID,
+      revision: REVISION,
+      targets: [PATH],
+      planRef,
+      sourceHashPort: moving,
+      expectedSourceHash: 'a'.repeat(40),
+    });
+    expect(agreed.allowed).toBe(true);
+  });
+
+  it('distinguishes a no-op from a real upgrade and touches nothing on a no-op (AC-009, W6R1-06)', () => {
+    const original = approve();
+    const replacement = approve({
+      plan: draft({ goal: 'a replacement Plan' }),
+      approval: {
+        authorizationRef: AUTHORIZATION_ID,
+        runId: RUN_ID,
+        productChanged: false,
+        at: nextTime(),
+      },
+    });
+
+    const before = port.snapshot(WORK_ID);
+    const snapshotsBefore = store.snapshots.count();
+    const result = gates.upgradeLevel({
+      workId: WORK_ID,
+      // A presentation-only typo stays inside the recorded L1 level.
+      diff: {
+        filesChanged: 1,
+        diffLines: 1,
+        changedCharacters: 1,
+        signals: { presentationOnly: true, goalSubstitutionExplicit: true },
+      },
+      logicChange: false,
+      newPlanRef: replacement,
+    });
+    expect(result.upgraded).toBe(false);
+    if (result.upgraded) throw new Error('unreachable');
+    expect(result.outcome).toBe('noop');
+    expect(result.level).toBe('L1');
+    expect(gates.getWorkLevel(WORK_ID)).toBe('L1');
+    // No Plan was invalidated, no stale marker written, no upgrade event.
+    expect(store.artifacts.find(original.id)?.validity).toBe('valid');
+    expect(store.artifacts.find(replacement.id)?.validity).toBe('valid');
+    expect(store.snapshots.count()).toBe(snapshotsBefore);
+    expect(scanEvents(store, { names: ['delivery.level_upgraded'] })).toHaveLength(0);
+    expect(port.snapshot(WORK_ID).digest).toBe(before.digest);
+  });
+
+  it('refuses a downgrade without invalidating the still-valid Plan (AC-008/AC-009, W6R1-06)', () => {
+    const submitFor = (goal: string): Ref => {
+      const result = gates.submitPlan({
+        workId: DOWNGRADE_WORK_ID,
+        revision: REVISION,
+        plan: draft({ goal }),
+        approval: {
+          authorizationRef: DOWNGRADE_AUTHORIZATION_ID,
+          runId: DOWNGRADE_RUN_ID,
+          productChanged: false,
+          at: nextTime(),
+        },
+      });
+      if (!result.approved) {
+        throw new Error(`expected an approval, got ${result.code}: ${result.message}`);
+      }
+      return result.planRef;
+    };
+    const original = submitFor('the L3 Plan that stays valid');
+    const replacement = submitFor('the replacement the caller holds');
+
+    const before = port.snapshot(DOWNGRADE_WORK_ID);
+    const result = gates.upgradeLevel({
+      workId: DOWNGRADE_WORK_ID,
+      // The recorded level is L3; this diff classifies as L1, i.e. a downgrade.
+      diff: {
+        filesChanged: 1,
+        diffLines: 1,
+        changedCharacters: 1,
+        signals: { presentationOnly: true, goalSubstitutionExplicit: true },
+      },
+      logicChange: false,
+      newPlanRef: replacement,
+    });
+    expect(result.upgraded).toBe(false);
+    if (result.upgraded) throw new Error('unreachable');
+    expect(result.outcome).toBe('downgrade_refused');
+    expect(result.code).toBe('STALE_ARTIFACT');
+    expect(gates.getWorkLevel(DOWNGRADE_WORK_ID)).toBe('L3');
+    // The refusal changes no evidence: no Plan is stale or invalidated.
+    expect(store.artifacts.find(original.id)?.validity).toBe('valid');
+    expect(store.artifacts.find(replacement.id)?.validity).toBe('valid');
+    expect(gates.getCurrentPlanApproval(DOWNGRADE_WORK_ID, REVISION).status).toBe('approved');
+    expect(scanEvents(store, { names: ['delivery.level_upgraded'] })).toHaveLength(0);
+    expect(port.snapshot(DOWNGRADE_WORK_ID).digest).toBe(before.digest);
   });
 });

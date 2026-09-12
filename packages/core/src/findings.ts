@@ -33,6 +33,7 @@
 import {
   workStatusSchema,
   type Attempt,
+  type CheckResult,
   type CheckStatus,
   type Decision,
   type Finding,
@@ -43,6 +44,8 @@ import {
   type Role,
   type Run,
   type RunStatus,
+  type StageResultRow,
+  type VerificationManifest,
   type Work,
   type WorkStatus,
 } from '@agentdev/contracts';
@@ -220,13 +223,22 @@ export type AcceptFindingRiskResult =
 // Completion (AC-019)
 // ---------------------------------------------------------------------------
 
-export interface TestResultInput {
+/**
+ * The Test evidence the completion gate read, for the caller's own evidence refs.
+ *
+ * There is deliberately no caller-supplied equivalent of this shape: the status
+ * below is the persisted `CheckResult.status`, never a claim (W6R1-02).
+ */
+export interface CompletedTestEvidence {
+  /** The persisted Test Run the completion gate reads. */
+  readonly testRunId: string;
+  /** The Run's real conclusion, read from its persisted `CheckResult`. */
   readonly status: CheckStatus;
-  readonly uncovered?: readonly {
-    readonly acceptanceId: string;
-    readonly reason: string;
-    readonly riskDecisionId?: string;
-  }[];
+  readonly uncovered: CheckResult['uncovered'];
+  /** The frozen revision the Test evidence belongs to. */
+  readonly revision: string;
+  /** The verification environment the Test ran in. */
+  readonly environmentRef: string;
 }
 
 export interface RiskDispositionInput {
@@ -238,10 +250,12 @@ export interface RiskDispositionInput {
 export interface CompleteWorkInput {
   readonly workId: string;
   /**
-   * The Test result bound to the Work. Omitted means "no Test result yet", which
-   * is a `GATE_NOT_READY` rather than an assumed pass.
+   * The persisted Test Run whose frozen result is the completion evidence
+   * (`data.md` §3 `TestResult`). A caller-asserted status is **not** accepted: the
+   * gate reads the Run's own `stage_result.checkResult`, so "the Work is done"
+   * cannot be claimed without an executed Test (W6R1-02, AC-018/AC-019).
    */
-  readonly testResult?: TestResultInput;
+  readonly testRunId?: string;
   readonly riskDispositions?: readonly RiskDispositionInput[];
   readonly at?: string;
 }
@@ -251,13 +265,14 @@ export type CompleteWorkResult =
       readonly ok: true;
       readonly work: Work;
       readonly testStatus: CheckStatus;
+      readonly testRunId: string;
       readonly riskDecisionIds: readonly string[];
     }
   | {
       readonly ok: false;
       readonly code: Extract<
         FindingServiceCode,
-        'GATE_NOT_READY' | 'VALIDATION_ERROR' | 'INVALID_STATE' | 'NOT_FOUND'
+        'GATE_NOT_READY' | 'VALIDATION_ERROR' | 'INVALID_STATE' | 'NOT_FOUND' | 'NOT_AUTHORIZED'
       >;
       readonly message: string;
       readonly reasons: readonly string[];
@@ -694,6 +709,20 @@ export class FindingService {
         requiresNewTest: true,
       };
     }
+    // AC-018/W6R1-01: the revision the fix froze is read from the fixing Run's own
+    // evidence. Without one there is nothing for a verifier to bind to, so the
+    // closure is refused instead of being decided on Run identity alone.
+    const fixingRevision = this.runRevisionOf(fixRun.id);
+    if (fixingRevision === undefined) {
+      return {
+        ...refusal(
+          'GATE_NOT_READY',
+          `the fixing Run ${fixRun.id} froze no revision; the fix cannot be independently verified`,
+        ),
+        requiresNewReview: true,
+        requiresNewTest: true,
+      };
+    }
     const reviewRow = this.store.runs.find(input.reviewRun.runId);
     if (reviewRow === undefined) {
       return {
@@ -715,10 +744,11 @@ export class FindingService {
     const outcome = evaluateFindingClosure({
       finding: this.candidateOf(finding),
       actorRole: input.actorRole,
-      reviewRun: this.verificationRunOf(reviewRow, 'review', finding, fixRun),
+      fixingRevision,
+      reviewRun: this.verificationRunOf(reviewRow, 'review', finding, fixRun, fixingRevision),
       ...(testRow === undefined
         ? {}
-        : { testRun: this.verificationRunOf(testRow, 'test', finding, fixRun) }),
+        : { testRun: this.verificationRunOf(testRow, 'test', finding, fixRun, fixingRevision) }),
       ...(input.repairUsed === undefined ? {} : { repairUsed: input.repairUsed }),
       ...(input.repairLimit === undefined ? {} : { repairLimit: input.repairLimit }),
     });
@@ -744,8 +774,13 @@ export class FindingService {
       findingId: finding.id,
       state: outcome.state,
       fixingRunId: fixRun.id,
+      // The binding that makes the closure provable: which revision was verified and
+      // what conclusion the Test actually reached.
+      fixingRevision,
       reviewRunId: reviewRow.id,
+      reviewRevision: this.runRevisionOf(reviewRow.id) ?? null,
       testRunId: testRow?.id ?? null,
+      testRunConclusion: testRow === undefined ? null : (this.runConclusionOf(testRow.id) ?? null),
       reviewRunCreatedAt: reviewRow.createdAt,
       testRunCreatedAt: testRow?.createdAt ?? null,
       recordedAt: input.at ?? this.store.now(),
@@ -759,6 +794,7 @@ export class FindingService {
         findingId: updated.id,
         state: outcome.state,
         actorRole: input.actorRole,
+        fixingRevision,
         reviewRunId: reviewRow.id,
         testRunId: testRow?.id ?? null,
         verificationRef,
@@ -849,7 +885,20 @@ export class FindingService {
       };
     }
 
-    const testResult = input.testResult;
+    // AC-019/W6R1-02: the Test result is read from the persisted Test Run and its
+    // frozen `CheckResult`, never from the caller. No Run, no evidence, a foreign
+    // revision or a missing environment all refuse before anything is decided.
+    const evidence = this.completionEvidence(input.testRunId, work);
+    if (!evidence.ok) {
+      return {
+        ok: false,
+        code: evidence.code,
+        message: evidence.message,
+        reasons: [evidence.message],
+        needsRiskDisposition: [],
+      };
+    }
+    const testResult = { status: evidence.test.status, uncovered: evidence.test.uncovered };
     const dispositions = new Map<string, string>();
     for (const disposition of input.riskDispositions ?? []) {
       if (dispositions.has(disposition.acceptanceId)) {
@@ -863,7 +912,7 @@ export class FindingService {
       }
       dispositions.set(disposition.acceptanceId, disposition.decisionId);
     }
-    const uncoveredIds = new Set((testResult?.uncovered ?? []).map((entry) => entry.acceptanceId));
+    const uncoveredIds = new Set(testResult.uncovered.map((entry) => entry.acceptanceId));
     for (const acceptanceId of dispositions.keys()) {
       if (!uncoveredIds.has(acceptanceId)) {
         return {
@@ -882,7 +931,7 @@ export class FindingService {
       readonly reason: string;
       readonly riskDecisionId?: string;
     }[] = [];
-    for (const entry of testResult?.uncovered ?? []) {
+    for (const entry of testResult.uncovered) {
       const decisionId = entry.riskDecisionId ?? dispositions.get(entry.acceptanceId);
       if (decisionId === undefined) {
         uncovered.push({ acceptanceId: entry.acceptanceId, reason: entry.reason });
@@ -906,9 +955,7 @@ export class FindingService {
       });
     }
 
-    const gate = findingBlocksCompletion(
-      testResult === undefined ? undefined : { status: testResult.status, uncovered },
-    );
+    const gate = findingBlocksCompletion({ status: testResult.status, uncovered });
     // `workflow.md` §6: a P0/P1 Finding blocks until an independent Review verifies
     // it or the user accepts the residual risk; a passing Test does not close it.
     const blockingFindings = this.store.findings.list({
@@ -951,7 +998,10 @@ export class FindingService {
       entityVersion: updated.version,
       data: {
         workId: updated.id,
-        testStatus: testResult?.status ?? null,
+        testStatus: testResult.status,
+        testRunId: evidence.test.testRunId,
+        testEvidenceRevision: evidence.test.revision,
+        testEnvironmentRef: evidence.test.environmentRef,
         riskDecisionIds: [...new Set(riskDecisionIds)],
         completedAt: input.at ?? this.store.now(),
       },
@@ -959,7 +1009,8 @@ export class FindingService {
     return {
       ok: true,
       work: updated,
-      testStatus: testResult?.status ?? 'blocked',
+      testStatus: testResult.status,
+      testRunId: evidence.test.testRunId,
       riskDecisionIds: [...new Set(riskDecisionIds)],
     };
   }
@@ -971,9 +1022,13 @@ export class FindingService {
   /**
    * Whether one Run may still write.
    *
-   * The barrier is the persisted Work/Run state, not a flag: a paused or
-   * cancelling Work admits nothing, and a Run that is not `running` admits
-   * nothing (`workflow.md` §5.3, `reliability.md` §2).
+   * The barrier is the persisted Work/Run/Attempt state, not a flag: a paused or
+   * cancelling Work admits nothing, and a Run admits nothing unless it is running
+   * **and** its newest Attempt has reached the ready (`running`) state. The Attempt
+   * half is what closes the resume window (W6R1-09): `resumeWork` opens the new
+   * Attempt in `starting`, so a write attempted before the Runner confirms
+   * readiness is refused instead of landing under a Run that merely says running
+   * (`reliability.md` §2).
    */
   writeAdmission(runId: string): WriteAdmission {
     const run = this.store.runs.find(runId);
@@ -1005,7 +1060,35 @@ export class FindingService {
         reason: `Run ${run.id} is ${run.status}; only a running Run may write`,
       };
     }
-    return { admitted: true, code: null, reason: `Run ${run.id} is running under ${work.status}` };
+    const ready = this.readyAttemptOf(run.id);
+    if (ready === undefined) {
+      return {
+        admitted: false,
+        code: 'INVALID_STATE',
+        reason: `Run ${run.id} has no ready Attempt; a starting Attempt is not admitted to write`,
+      };
+    }
+    return {
+      admitted: true,
+      code: null,
+      reason: `Run ${run.id} is running under ${work.status} with ready Attempt ${ready.id}`,
+    };
+  }
+
+  /**
+   * The newest Attempt of a Run that has reached the ready state.
+   *
+   * `starting` is deliberately not ready: the Runner confirms epoch/process/
+   * environment before an Attempt may write (`reliability.md` §2, `execution.md`
+   * §1). A superseded or stopped Attempt is not ready either.
+   */
+  private readyAttemptOf(runId: string): Attempt | undefined {
+    const attempts = this.store.attempts.list({
+      where: 'run_id = ?',
+      params: [runId],
+      orderBy: 'number DESC',
+    });
+    return attempts.find((attempt) => attempt.status === 'running');
   }
 
   // -------------------------------------------------------------------------
@@ -1253,12 +1336,20 @@ export class FindingService {
     for (const run of runs) {
       if (isTerminalRunStatus(run.status)) continue;
       if (run.status === 'paused') {
+        // W6R1-09: the new Attempt is opened *before* the Run is marked running, so
+        // the resume never publishes a running Run whose only Attempt is not ready.
         // `RUN_TRANSITIONS` allows `paused → running` but not `paused → starting`,
-        // so the resumed Run's new Attempt is appended directly: Attempt rows are
-        // per-Run (`UNIQUE(run_id, number)`) with an incrementing epoch
-        // (`reliability.md` §2).
+        // so the Attempt is appended directly: Attempt rows are per-Run
+        // (`UNIQUE(run_id, number)`) with an incrementing epoch
+        // (`reliability.md` §2). `writeAdmission` refuses until it is ready.
+        const attempt = this.openAttempt(run);
         const running = this.store.runs.update(run.id, { status: 'running' }, run.version);
-        const attempt = this.openAttempt(running);
+        this.store.events.append({
+          name: 'run.started',
+          entityId: running.id,
+          entityVersion: running.version,
+          data: { attemptId: attempt.id, number: attempt.number, resumed: true },
+        });
         attempts.push({
           runId: running.id,
           attemptId: attempt.id,
@@ -1544,28 +1635,207 @@ export class FindingService {
    *
    * Independence is a fact read from the store, not a claim from the caller: the
    * Run must belong to the same Work, carry the verifying role, have completed,
-   * differ from both the fixing Run and the Review that raised the Finding, and
-   * have been created *after* the fix (so the evidence is of the post-fix tree).
+   * differ from both the fixing Run and the Review that raised the Finding, have
+   * been created *after* the fix, and — the binding W6R1-01 added — its own frozen
+   * revision must be the revision the fix froze. The conclusion is the Run's
+   * persisted `CheckResult` status; `completed` alone is never read as `passed`
+   * (W6R1-08), and a Test with no recorded conclusion is `blocked`.
    */
   private verificationRunOf(
     run: Run,
     expectedRole: 'review' | 'test',
     finding: Finding,
     fixRun: Run,
+    fixingRevision: string,
   ): VerificationRun {
     const completed = run.status === 'completed';
+    const revision = this.runRevisionOf(run.id);
     const independent =
       completed &&
       run.workId === finding.workId &&
       run.role === expectedRole &&
       run.id !== finding.reviewRunId &&
       run.id !== fixRun.id &&
-      run.createdAt > fixRun.createdAt;
+      run.createdAt > fixRun.createdAt &&
+      revision !== undefined &&
+      revision === fixingRevision;
+    const conclusion = this.runConclusionOf(run.id);
+    // `completed` only means the process ended. A Test with no recorded conclusion
+    // is `blocked`; a Review without one carries no conclusion at all (W6R1-08).
+    const status: CheckStatus | undefined = completed
+      ? (conclusion ?? (expectedRole === 'test' ? 'blocked' : undefined))
+      : 'blocked';
     return {
       stage: expectedRole,
       reviewsCurrentRevision: independent,
-      status: completed ? 'passed' : 'blocked',
+      ...(status === undefined ? {} : { status }),
+      ...(revision === undefined ? {} : { revision }),
     };
+  }
+
+  /**
+   * The revision a Run's own evidence froze.
+   *
+   * The newest artifact the Run produced wins (a fix's diff carries the revision
+   * the fix was made against, `Artifact.sourceRevision`); when the Run produced no
+   * artifact the frozen `VerificationManifest` its stage result names is the
+   * fallback. `undefined` means the Run froze no revision at all — a fact the
+   * callers treat as a refusal, never as "current".
+   */
+  private runRevisionOf(runId: string): string | undefined {
+    const artifacts = this.store.artifacts.list({
+      where: 'run_id = ?',
+      params: [runId],
+      // Insertion order, not the wall clock: two artifacts of one Run can share a
+      // timestamp, and the newest evidence is what "the revision this Run froze"
+      // means.
+      orderBy: 'rowid DESC',
+    });
+    for (const artifact of artifacts) {
+      if (artifact.sourceRevision !== undefined && artifact.sourceRevision !== '') {
+        return artifact.sourceRevision;
+      }
+    }
+    return this.frozenManifestOf(this.latestStageResult(runId)?.manifestId)?.codeRevision;
+  }
+
+  /** The persisted conclusion of a Run's own stage result, when it recorded one. */
+  private runConclusionOf(runId: string): CheckStatus | undefined {
+    for (const row of this.stageResultsOf(runId)) {
+      if (row.checkResult !== undefined) return row.checkResult.status;
+    }
+    return undefined;
+  }
+
+  /**
+   * The Test evidence a completion rests on (W6R1-02).
+   *
+   * A caller-asserted status is not evidence: the gate demands a persisted Test Run
+   * of this Work, completed, with a frozen `CheckResult`, a revision equal to the
+   * Work's frozen revision, and a named verification environment.
+   */
+  private completionEvidence(
+    testRunId: string | undefined,
+    work: Work,
+  ):
+    | { readonly ok: true; readonly test: CompletedTestEvidence }
+    | {
+        readonly ok: false;
+        readonly code: 'GATE_NOT_READY' | 'NOT_FOUND' | 'NOT_AUTHORIZED' | 'VALIDATION_ERROR';
+        readonly message: string;
+      } {
+    if (testRunId === undefined || testRunId === '') {
+      return {
+        ok: false,
+        code: 'GATE_NOT_READY',
+        message: 'no Test Run is bound; an executed Test result is required to complete a Work',
+      };
+    }
+    const testRun = this.store.runs.find(testRunId);
+    if (testRun === undefined) {
+      return { ok: false, code: 'NOT_FOUND', message: `Test Run ${testRunId} does not exist` };
+    }
+    if (testRun.workId !== work.id) {
+      return {
+        ok: false,
+        code: 'NOT_AUTHORIZED',
+        message: `Test Run ${testRun.id} belongs to another Work`,
+      };
+    }
+    if (testRun.role !== 'test') {
+      return {
+        ok: false,
+        code: 'GATE_NOT_READY',
+        message: `Run ${testRun.id} has role ${testRun.role}; a Test Run is required`,
+      };
+    }
+    if (testRun.status !== 'completed') {
+      return {
+        ok: false,
+        code: 'GATE_NOT_READY',
+        message: `Test Run ${testRun.id} is ${testRun.status}; a completed Test Run is required`,
+      };
+    }
+    const row = this.stageResultsOf(testRun.id).find((entry) => entry.checkResult !== undefined);
+    if (row === undefined || row.checkResult === undefined) {
+      return {
+        ok: false,
+        code: 'GATE_NOT_READY',
+        message: `Test Run ${testRun.id} has no persisted CheckResult; a claim is not a Test result`,
+      };
+    }
+    const manifest = this.frozenManifestOf(row.manifestId);
+    const revision = manifest?.codeRevision ?? this.runRevisionOf(testRun.id);
+    if (revision === undefined || revision === '') {
+      return {
+        ok: false,
+        code: 'GATE_NOT_READY',
+        message: `Test Run ${testRun.id} binds no frozen revision`,
+      };
+    }
+    if (work.baseRevision !== undefined && revision !== work.baseRevision) {
+      return {
+        ok: false,
+        code: 'GATE_NOT_READY',
+        message: `Test Run ${testRun.id} verified revision ${revision}, not the Work revision ${work.baseRevision}`,
+      };
+    }
+    const checkEnvironment = row.checkResult.checks[0]?.environmentRef ?? '';
+    const environmentRef = manifest?.environmentRef ?? checkEnvironment;
+    if (environmentRef === '') {
+      return {
+        ok: false,
+        code: 'GATE_NOT_READY',
+        message: `Test Run ${testRun.id} names no verification environment`,
+      };
+    }
+    return {
+      ok: true,
+      test: {
+        testRunId: testRun.id,
+        status: row.checkResult.status,
+        uncovered: row.checkResult.uncovered,
+        revision,
+        environmentRef,
+      },
+    };
+  }
+
+  /** A Run's stage results, newest first. */
+  private stageResultsOf(runId: string): StageResultRow[] {
+    return this.store.stageResults.list({
+      where: 'run_id = ?',
+      params: [runId],
+      orderBy: 'rowid DESC',
+    });
+  }
+
+  /** The newest stage result of a Run, when it has one. */
+  private latestStageResult(runId: string): StageResultRow | undefined {
+    return this.stageResultsOf(runId)[0];
+  }
+
+  /**
+   * Reads a frozen `VerificationManifest` snapshot by the stage result's manifest id.
+   *
+   * The manifest is stored as `snapshot(type=verification, kind=verification_manifest)`
+   * and keyed by hash, so it is read straight from the immutable table.
+   */
+  private frozenManifestOf(manifestId: string | undefined): VerificationManifest | undefined {
+    if (manifestId === undefined || manifestId === '') return undefined;
+    const row = this.store.db
+      .prepare("SELECT payload FROM snapshot WHERE hash = ? AND type = 'verification' LIMIT 1")
+      .get(manifestId) as { payload: string } | undefined;
+    if (row === undefined) return undefined;
+    let payload: JsonObject;
+    try {
+      payload = JSON.parse(row.payload) as JsonObject;
+    } catch {
+      return undefined;
+    }
+    if (payload['kind'] !== 'verification_manifest') return undefined;
+    const manifest = payload['manifest'] as VerificationManifest | undefined;
+    return manifest;
   }
 
   /** Marks every valid Review/Test artifact of a Work invalid. */
@@ -1736,19 +2006,12 @@ export class FindingService {
   /** Appends one Attempt to a resumed Run (see `resumeTx`). */
   private openAttempt(run: Run): Attempt {
     const previous = this.store.attempts.list({ where: 'run_id = ?', params: [run.id] });
-    const attempt = this.store.attempts.insert({
+    return this.store.attempts.insert({
       runId: run.id,
       number: previous.length + 1,
       status: 'starting',
       ownerEpoch: previous.length,
     });
-    this.store.events.append({
-      name: 'run.started',
-      entityId: run.id,
-      entityVersion: run.version,
-      data: { attemptId: attempt.id, number: attempt.number, resumed: true },
-    });
-    return attempt;
   }
 
   /** Walks a Work to `target` through documented transitions, logging each step. */
