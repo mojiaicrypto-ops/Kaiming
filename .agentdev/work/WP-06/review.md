@@ -514,3 +514,266 @@ Docker：`docker info` 成功；`pnpm test:integration` 全绿，故 §19 无需
 ## 20. 能否进入独立 Test
 
 **否。** 第 1 轮 10 条 Finding 已全部关闭且六条契约命令全绿，但回归挖掘在冻结点 `6996405` 复现出 1 个 P1（W6R2-01：`completeWork` 接受被 Finding 失效的修复前 Test 证据，AC-017/AC-019 未满足）。建议按 W6R2-01…08 修复后重新提交独立 Review；修复必须包含负例测试：①失效（`invalid`）Test 证据完成 Work ⇒ `GATE_NOT_READY`；②带 `expectedSourceHash` 的移动源码写 ⇒ 仍拒绝；③修复 Run 自述修复前 Revision 的关闭请求 ⇒ 拒绝；④`baseRevision` 缺失的完成请求 ⇒ 拒绝；⑤连续两份超额度 Plan ⇒ 第二份 `BUDGET_EXCEEDED`；⑥暂停/取消后的 `requestCodeWrite` ⇒ 拒绝；⑦`running`+`starting` 双 Attempt ⇒ `writeAdmission` 拒绝。
+
+---
+
+# WP-06 独立 Review 报告（第 3 轮：修复复核、回归与新缺陷挖掘）
+
+## 21. 元数据与冻结点（第 3 轮）
+
+| 项 | 值 |
+|---|---|
+| 冻结点（task 指定） | `4f5a1f3`（`4f5a1f3b7fc31a4cb7fdce0d89ab96e327164c37`，`fix(domain,core): close WP-06 review round-2 findings via a shared evidence rule`） |
+| `git rev-parse HEAD` | `4f5a1f3b7fc31a4cb7fdce0d89ab96e327164c37`（= 冻结点） |
+| `git rev-parse 4f5a1f3^{tree}` | `18bfe7298b4065e7e3ecb8c6a916d77f9c271ebb` |
+| `git status --porcelain`（本报告追加前） | 空（工作树干净） |
+| 第 1、2 轮报告保真 | 追加前 `git show HEAD:.agentdev/work/WP-06/review.md \| shasum -a 256` = 工作树 `shasum -a 256` = `86a10b2f10acc80791d00519badec8f3867d859aa4bf2ac20671d579e897aade`；追加后 `git diff --numstat` 仅新增行、零删除（见 §28） |
+| Review 写入范围 | 仅 `.agentdev/work/WP-06/review.md`（追加第 3 轮）；探针只在 `/tmp/wp06r3/` |
+| 开发/Test 聊天 | **未读取**；证据来自仓库文件、`packages/*/dist` 构建产物、`git show <rev>:<path>` 与本次独立探针 |
+| 环境 | macOS 26.5.1，Node v24.8.0，**Docker 守护进程可用**（`docker info` 成功），`pnpm test:integration` 11 文件/132 用例全通过（含真实容器用例） |
+| 被审改动 | `4f5a1f3` 相对 `9981902`：`packages/domain/src/delivery.ts`、`packages/core/src/{gates,findings}.ts` + 4 个测试文件 + `implementation.md`（9 文件，+1948/−153）；`decisions.ts`/`requirement-continue.ts` 未改动（与 T7 声明一致） |
+
+被审代码 Hash（`git rev-parse 4f5a1f3:<path>` = git blob；`shasum -a 256` = 工作树字节）：
+
+| 文件 | git blob | sha256 |
+|---|---|---|
+| `packages/domain/src/delivery.ts` | `b7833fc32be38a4d56a7919229fe16f8647d6675` | `1473638b9c4dec4e0686b46e96967e2e6b101ed8c20448747ab0518a302a3220` |
+| `packages/core/src/gates.ts` | `5b51f9259090f61d2f856b31fe4f31a5adccf826` | `cb38a024f31594f1880dd8ba1942804700919640bfb2327533f2e9e19a546127` |
+| `packages/core/src/findings.ts` | `4c7671a02fcc0dc608f8346bd14c55c0c78a5cfd` | `49850140cdd7a6de4b08c5888b5725ebeb267d663a4605ecded34550045a6c25` |
+| `packages/domain/test/delivery.test.ts` | `cefab30a9f56581c4192bf789a4075883d7154e2` | `197c220596e754e7cb338ddc0d2bf1a7b8465b04200d9798b0d00764a061e110` |
+| `packages/core/test/findings.test.ts` | `a463e4a67e392afd5ee9a45dbbd675a5001d3416` | `80d17ef880e84751dc6eb0feb490a2374598402ef83fce0a9e95a9a8eb34a006` |
+| `packages/core/test/gates.test.ts` | `80dc09d498d039039c37fe35d42774673717907f` | `b097eb61b588d5f91c6b66aa5cebf6cff0a3b5eba57c4aa2dc85111a3c89da7f` |
+| `packages/core/test/delivery-failures.test.ts` | `c19eb1427e74eaeaa95ab827f8de423361a1621e` | `2b2f2861d1640451c8289b10662198a845b999903c8fe162949c35ee84076753` |
+| `packages/core/test/delivery.integration.test.ts` | `c689008ec538176a9688be538bd3fcbc5b7700c4` | `e0a054cd4227919e7dc8c699ed2ced964779c78042c2469f2c27e4ae46e46431` |
+
+## 22. 结论（verdict）
+
+**FAIL** — 第 2 轮 10 条 Finding（W6R2-01…10）经本次独立探针**逐条关闭**（10/10，见 §25；W6R2-03 的口径内判定通过，其残余另立 W6R3-03），六条契约命令全部通过（Docker 可用，integration 132/132；unit 749/749），但回归挖掘在冻结树 `4f5a1f3` 的公共 API 上复现出 **1 个 P1**：
+
+- **W6R3-01（P1）`completeWork` 的完成路线由调用方声明、且不与 Work 的持久事实（`intent`/`level`）交叉校验**：一个 `intent='delivery'`、`level='L2'`（或 `L3`）的代码 Work，只要调用方传 `route:'document'`，就能**仅凭 Review 证据 + 冻结 CompletionManifest 完成，零 Test Run**，直接违反 `workflow.md` §7「L2/L3代码使用独立Review和Test」。这是 `4f5a1f3` **新引入的 fail-open 回归**：修复前的 `completionEvidence(input.testRunId, work)`（`9981902:packages/core/src/findings.ts:891`）无条件要求 Test Run，路由参数化（W6R2-09）把它换成了调用方自选规则。
+
+另有 **3 个 P2 + 3 个 P3**（非阻断但已记录）：W6R3-02（共享写屏障漏 `completed`/`failed`/`blocked`，完成后仍准入代码写）、W6R3-03（共享规则的 `invalidatedRevisions` 分支生产代码零生产者）、W6R3-04（无 `baseRevision` 的 Work 在写门禁与等级升级血缘中跳过 Revision 绑定）、W6R3-05/06/07（P3，见 §27）。
+
+**能否进入独立 Test：否。** 需返回 Develop 修复 W6R3-01（建议同批处理 P2），修复后重新走独立 Review。
+
+## 23. 契约命令原始结果
+
+| 命令 | 原始结果 | 结论 |
+|---|---|---|
+| `pnpm typecheck` | `$ tsc -p tsconfig.json --pretty false`，无输出；`TYPECHECK_EXIT=0` | 通过 |
+| `pnpm lint` | `$ node scripts/lint.mjs`；`Checking formatting...` / `All matched files use Prettier code style!`；`LINT_EXIT=0` | 通过 |
+| `pnpm test:unit` | `Test Files 38 passed (38)` / `Tests 749 passed (749)` / Duration 15.95s；`UNIT_EXIT=0` | 通过（与 T7 声明的 38/749 逐字一致） |
+| `pnpm test:integration` | `Test Files 11 passed (11)` / `Tests 132 passed (132)` / Duration 16.51s；`INTEGRATION_EXIT=0`；含 `apps/cli/test/doctor.integration.test.ts (8 tests)` 7599ms 与 `container.integration.test.ts (9 tests)` 16028ms（真实容器） | 通过（**Docker 可用，环境阻塞不复现**；与 T7 的 132/132 一致） |
+| `pnpm docs:check` | `docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages`；`DOCSCHECK_EXIT=0` | 通过 |
+| `pnpm build` | `pnpm -r build`：contracts/pi-runtime/domain/knowledge/storage/workspace/core/cli/daemon/runner 共 **10 workspace** 全 `Done`；`BUILD_EXIT=0` | 通过（10 workspace 与 T7 一致） |
+
+原始日志：`/tmp/wp06r3/logs/contracts.log`（typecheck/lint/docs:check/build）、`/tmp/wp06r3/logs/unit.log`、`/tmp/wp06r3/logs/integration.log`。
+
+命令尾部原始输出：
+
+```
+TYPECHECK_EXIT=0
+LINT_EXIT=0      Checking formatting... / All matched files use Prettier code style!
+UNIT_EXIT=0      Test Files  38 passed (38) / Tests  749 passed (749)
+INTEGRATION_EXIT=0  Test Files  11 passed (11) / Tests  132 passed (132)
+DOCSCHECK_EXIT=0 docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages
+BUILD_EXIT=0     packages/contracts build: Done ... apps/runner build: Done (10 workspace)
+```
+
+五项必需失败测试（`node_modules/.bin/vitest run --project unit packages/core/test/delivery-failures.test.ts --reporter=verbose`）：
+
+```
+✓ |unit| packages/core/test/delivery-failures.test.ts > required WP-06 failure tests > 一字符高风险: a one-character permission/amount change is L3 and is not downgraded 43ms
+✓ |unit| ... > 超L1升级: a diff above the L1 bounds upgrades the level, associates the Requirement, refills the Gate and rejects the old Plan 38ms
+✓ |unit| ... > 过期Plan: a stale Plan cannot authorise a write; the gate says GATE_NOT_READY and the source hash is unchanged 31ms
+✓ |unit| ... > 修复后证据失效: after a fix the previous Review/Test evidence cannot close the Finding 59ms
+✓ |unit| ... > 未覆盖阻断: a Test result with not_covered or blocked cannot complete the Work 29ms
+ Test Files  1 passed (1) / Tests  5 passed (5)
+```
+
+## 24. 方法与探针清单
+
+探针消费 `packages/{storage,domain,core}/dist`（`pnpm build` 产物），**不 import 任何产品测试文件**；涉及存储的用例均使用真实 `mkdtempSync` 临时目录 + 真实 SQLite（`ProjectStore.open`）+ 真实 `BlobStore`，证据用真实 `artifact` / `attempt` / `stage_result.checkResult` / `snapshot` 行构造。运行器：`/tmp/wp06r3/probe/run-all.sh`，日志 `/tmp/wp06r3/logs/aggregate.log`。
+
+方法说明：第 3 轮新增 4 个脚本；同时把**第 2 轮的 19 个探针原样搬到 `/tmp/wp06r3/probe/`（仅改 harness 路径）**重跑，用同一批断言做回归与反证——它们当初被判为「W6R2-CANDIDATE（旧行为）」的用例现在应当反向通过，因此是关闭核对最直接的证据；其中因接口按 T7 变更（如删除 `testResult`、`LevelUpgradeInput.workRevision` 必填、修复 Run 必须有新 Revision）而失效的旧断言单列为「探针期望漂移」，不计为缺陷。
+
+| 脚本 | 用例数 | 失败 | 说明 |
+|---|---|---|---|
+| `closures3.mjs` | 37 | 0 | **关闭核对**：W6R2-01（失效证据/Revision 推进/血缘顺序）、W6R2-03、W6R2-04、W6R2-05（声明式 manifestId 命中 + 精确拒绝消息）、W6R2-08（最新 Attempt 就绪） |
+| `gates3.mjs` | 47 | 7 | **关闭核对 + 挖掘**：W6R2-02/06/07 关闭；屏障「八状态 × 两门禁」对照；真实 `completed`/`blocked` 链上的写准入（W6R3-02）；无 `baseRevision` 的写准入（W6R3-04）。7 失败 = 6 条 W6R3-02 证据 + 1 条探针期望漂移（FK 使「无预算行」不可达） |
+| `route3.mjs` | 33 | 3 | **关闭核对 + 挖掘**：W6R2-09（L1 无 Test 完成、L2/L3 仍需 Test、document/operation 各自规则、未知 route/level fail-closed）、W6R2-10（结构化 Ref）。3 失败全部是 **W6R3-01** 的 P1 证据 |
+| `extra3.mjs` | 9 | 2 | **挖掘**：无 `baseRevision` 的 Work 在等级升级后旧 Plan 不打 stale/不失效且仍可写（**W6R3-04**）；完成事件对 review 证据的字段语义（W6R3-07，OBS） |
+| `r2-ac07-09-domain.mjs` | 38 | 1 | AC-007/008/009 域级；1 失败 = 旧断言未传新必填 `workRevision`（漂移） |
+| `r2-ac07-09-13-14-core.mjs` | 37 | 0 | AC-007/009/013/014：真实 `PlanGateService` 批准/拒绝、零写入 |
+| `r2-ac083.mjs` | 9 | 0 | AC-083 绑定、外来 Task、Developer 不得提 Finding |
+| `r2-ac089-continue.mjs` | 34 | 0 | AC-089 待继续只读、继续建 Work、负例 |
+| `r2-ac10-12-19-domain.mjs` | 25 | 1 | AC-010/011/012/019 域级；1 失败 = 文档链现要求 `candidateDiffRef`（W6R2-10 的**预期**变更） |
+| `r2-ac15-16-decisions.mjs` | 29 | 0 | AC-015/016 now/later/decline、版本推进、证据失效 |
+| `r2-ac17-19-83-findings.mjs` | 26 | 7 | AC-017/018/019/083；7 失败全为旧 API 漂移（已删除的 `testResult` 自述入口、修复 Run 无 Revision） |
+| `r2-ac20-21-pause-cancel.mjs` | 44 | 0 | AC-020/021：安全点、Checkpoint、恢复新 Attempt、取消级联、recovery |
+| `r2-ac22-budget.mjs` | 18 | 0 | AC-022 域级原子拒绝、store 级超限、无静默加额 |
+| `r2-adversarial.mjs` | 11 | 0 | 跨 Work Plan、旧 Revision、拒绝零写入、`now` 后旧 Plan 失效 |
+| `r2-authhash2.mjs` | 17 | 0 | 撤销/收窄/删除授权 + 源码移动 + 期望 Hash 覆盖（W6R2-02 反向通过） |
+| `r2-budget2.mjs` | 14 | 0 | 预算计费与重复批准（W6R2-06 反向通过） |
+| `r2-closures.mjs` | 38 | 3 | W6R1-01/02/08 关闭核对 + W6R2-01/04/05 反向通过；3 失败 = 1 条 **W6R3-03** 证据 + 2 条漂移（拒绝消息改写、级联的 Finding 未 addressed） |
+| `r2-continue2.mjs` | 17 | 0 | AC-089 纯投影、无 Run、不复用旧验证、二次继续拒绝 |
+| `r2-falsify.mjs` | 18 | 0 | 第 1 轮对抗探针重跑（F1…F8） |
+| `r2-resume2.mjs` | 15 | 0 | W6R1-09 关闭 + W6R2-07/08 反向通过 |
+| `r2-route2.mjs` | 13 | 2 | W6R1-04 文档路线；2 失败 = 文档链现要求 `candidateDiffRef`（**预期**变更） |
+| `r2-scope2.mjs` | 6 | 0 | W6R1-10 精确匹配边界 |
+| `r2-upgrade2.mjs` | 20 | 0 | W6R1-06：noop / upgrade / downgrade_refused 三态与零写入 |
+| **合计** | **555** | **26** | 12 条为真缺陷证据（W6R3-01×3、W6R3-02×6、W6R3-03×1、W6R3-04×2），14 条为探针期望漂移（接口按 T7 变更或拒绝消息改写），逐条在 §25/§27 说明 |
+
+Docker：`docker info` 成功；`pnpm test:integration` 全绿，故无容器环境阻塞登记。
+
+## 25. 第 2 轮 Finding 关闭核对（W6R2-01…10）
+
+| 编号 | 关闭判定 | 独立证据 |
+|---|---|---|
+| W6R2-01 | **已关闭** | `closures3.mjs`：修复前 Test artifact 被 `submitFinding` 置 `invalid` 并列入 `invalidatedEvidenceRefs`；`markAddressed` 把 `work.baseRevision` 由 `REV` **推进**到 `REV_FIX`；同一失效 Test 再 `completeWork` ⇒ `GATE_NOT_READY` 且消息含 `invalid`、Work 保持 `running`、`delivery.work_completed` 事件数 0；随后以闭环后的 post-fix Test（`REV_FIX`）完成 ⇒ `ok:true`，事件 `testEvidenceRevision=REV_FIX`。血缘顺序分支亦验证：Revision 相同但 `createdAt <= fixEvidenceAt` 的证据被拒（`PRODUCED_BEFORE_FIX`）。`r2-closures.mjs` 的 `cl-stalecomplete` 由旧行为 `ok:true` 反转为通过 |
+| W6R2-02 | **已关闭** | `gates3.mjs`：把移动后的值当 `expectedSourceHash` 传入 ⇒ `GATE_NOT_READY`（`hash-override` 反向通过），零写入事件、digest 不变；无期望时源码移动同样拒绝；期望与批准 Hash 一致时放行，仅期望不符时追加拒绝（`delivery.ts:1036-1047` 两重比较）。`r2-authhash2.mjs` 17/17 全通过 |
+| W6R2-03 | **已关闭（口径内）** | `closures3.mjs`：修复 Run 自述 `work.baseRevision` 同一 Revision ⇒ `markAddressed` 拒绝（`GATE_NOT_READY`）、Finding 保持 `open`、`baseRevision` 不变；修复 Run 完全无 Revision 亦拒绝。域侧 `findingCanBeVerified` 要求 `fixingRevision === currentWorkRevision`（缺失 fail-closed）。**残余另立 W6R3-03**（被失效证据的 Revision ≠ `work.baseRevision` 时仍可锚定） |
+| W6R2-04 | **已关闭** | `closures3.mjs`：`baseRevision: null` 的 Work 用任意 Revision 的 Test ⇒ `GATE_NOT_READY`、Work 保持 `running`；同形但有 `baseRevision` 的 Work 正常完成（对照证明拒绝来自绑定）。`r2-closures.mjs` 的 `cw-norev` 反向通过 |
+| W6R2-05 | **已关闭** | `closures3.mjs`：无 artifact 的 Test Run 经 `stage_result.manifest_id`（UUIDv7）解析到 **payload 声明的 `manifestId`** ⇒ 完成成功，`testEvidenceRevision` 来自 `manifest.codeRevision`、`testEnvironmentRef` 来自 `manifest.environmentRef`（两者都不来自 artifact/CheckResult，证明确实读到冻结 Manifest）；未被冻结的合法 id ⇒ `GATE_NOT_READY` 且消息精确点名该 manifest 与 `no VerificationManifest`。不再是死分支。**hash 键空间仍对唯一调用方不可达 → W6R3-05（P3）**。`r2-closures.mjs` 的 `cw-manifest` 第 3 断言因消息改写而漂移，行为已按预期 fail-closed |
+| W6R2-06 | **已关闭** | `gates3.mjs`：限额 100、`requestedTokens=60` ⇒ 第一份批准后 `budget.tokensReserved=60`（存储可见），第二份 60 ⇒ `BUDGET_EXCEEDED` 且不写预算；剩余 40 批准后预留到 100，再要 1 token 拒绝；无 token 请求的 Plan 不预留也不阻断。`r2-budget2.mjs` 的 `bud-double` 反向通过（14/14） |
+| W6R2-07 | **已关闭** | `gates3.mjs`：`paused`/`cancelling`/`cancelled` 的 Work 经 `requestCodeWrite` ⇒ `INVALID_STATE`、digest 不变、`writeAdmission` 同判；`resumeWork` 回到 `running` 后同一批准 Plan 再次准入。`r2-resume2.mjs` 的 `res-plangate*` 反向通过 |
+| W6R2-08 | **已关闭** | `closures3.mjs`：Attempt#1 `running` + Attempt#2 `starting` ⇒ `writeAdmission` 拒绝且 reason 含 `ready Attempt`；把最新 Attempt 置 `running` 后准入；最新为 `stopped`、或完全没有 Attempt 均拒绝。`r2-resume2.mjs` 的 `res-anyattempt` 反向通过 |
+| W6R2-09 | **已关闭** | `route3.mjs`：`completionEvidenceKindFor` 四路线 × 等级判定正确；L1 code Work **无 Test Run** 经 Review + 冻结 CompletionManifest 真实 `completeWork` 完成（事件 `evidenceKind='review'`、`completionManifestHash` 落地）；缺 Review / 缺 Manifest / 异 Work Manifest / 空 `verifiedManifestIds` / `failed` Review 分别拒绝；`level='none'` ⇒ `VALIDATION_ERROR`。集成侧 AC-007 亦补上真实完成调用。**但路由由调用方选择引入 P1 回归 → W6R3-01** |
+| W6R2-10 | **已关闭** | `route3.mjs`：文档 L2 链 Review 绑定 `candidateDiffRef`（id/hash 非空）⇒ `ok:true`；删掉 Ref 只留 `evidence:['candidate diff approved','we saw the diff']` ⇒ `VALIDATION_ERROR`（子串判定确已删除）；Ref 缺 id 或 hash 均拒绝；code 路线仍要求 `codeRevision` + `environmentRef`。`r2-route2.mjs` 两条旧断言按预期反转为拒绝。**L3 的 rollback/audit/drill 仍是子串匹配 → W6R3-06（P3）** |
+
+第 2 轮 10 条 Finding 的判定标准全部满足；本轮 FAIL 由回归挖掘的新 P1 驱动。
+
+## 26. 逐 AC 判定（AC-007…022、AC-083、AC-089）
+
+判定证据取自 §24 的探针（代表性深度：域级纯规则 + 真实 SQLite 服务级正负例），不以产品测试为唯一依据。
+
+| AC | 判定 | 依据 |
+|---|---|---|
+| AC-007 | PASS | `route3.mjs`：`stageOrderFor('code','L1')` 无 Plan/Test；L1 Work 无 Test Run 经 Review + CompletionManifest 真实完成；集成 L1 全链（`delivery.integration.test.ts`）。`r2-ac07-09-domain.mjs` 37/38 |
+| AC-008 | PASS | 一字符 permission/interface/payment ⇒ L3 且不降级（域 + `r2-upgrade2.mjs` 20/20 + `r2-falsify.mjs`） |
+| AC-009 | **PASS（带 P2 W6R3-04）** | 绑定 Work：超界/逻辑改动升级、同 Work 关联 Requirement、旧 Plan `plan_stale` + artifact `invalid`、旧 Plan 写请求被拒（`extra3.mjs` 对照用例通过）。**无 `baseRevision` 的 Work 升级后旧 Plan 不打 stale、不失效、且仍可写** ⇒ 见 W6R3-04 |
+| AC-010 | PASS | L2 链缺阶段/缺 Requirement/错依赖/缺环境均拒绝，完整链通过（`r2-ac10-12-19-domain.mjs`、`route3.mjs`） |
+| AC-011 | PASS | L3 需显式授权（`previousLevel`）、回退计划、逐项审核、恢复演练证据；真实迁移输出属 WP-08。**证据为自由文本子串 → W6R3-06（P3）** |
+| AC-012 | PASS | 文档路线：候选 Diff 结构化 Ref + 独立 Review + Settlement，无代码测试与开发 Requirement（`route3.mjs`、`r2-route2.mjs` 的预期变更） |
+| AC-013 | **PASS（带 P2 W6R3-02、P2 W6R3-04）** | 无批准 Plan ⇒ `GATE_NOT_READY` 且零写入；授权撤销/收窄/删除 ⇒ `NOT_AUTHORIZED`；调用方期望 Hash 只能追加拒绝（W6R2-02 已关闭）。**但 `completed`/`failed`/`blocked` Work 仍准入写，且无 `baseRevision` 的 Work 跳过 Revision 绑定** ⇒ W6R3-02/04 |
+| AC-014 | PASS | 合规 Plan 自动批准并留依据（authorizationRef/版本/Hash/Revision/预算预留），可重读校验；越界/产品变化/异 Revision 拒绝（`r2-ac07-09-13-14-core.mjs` 37/37） |
+| AC-015 | PASS | `now` ⇒ 新 Product/Plan 版本、Requirement 回 `product`、受影响证据失效、旧 Plan `stale` 且写被拒（`r2-ac15-16-decisions.mjs` 29/29） |
+| AC-016 | PASS | `later` ⇒ 新 Queued Requirement、当前验收不变；`decline` ⇒ 记录原因、不排队、验收不变 |
+| AC-017 | PASS | 提交即 `return_to_development`，失效 review/test 产物并重开 Task；被失效的修复前 Test 证据不再能完成 Work（W6R2-01 已关闭，`closures3.mjs`）；`r2-falsify.mjs` 修复后证据失效反向通过 |
+| AC-018 | PASS | Developer 自证拒绝、旧 Review/提 Finding 的 Review/错误角色拒绝、新独立 Review+Test 且 Revision 相等、结论 `passed` 才 `verified`（`closures3.mjs`）；残余见 W6R3-03 |
+| AC-019 | **FAIL（P1 W6R3-01）** | `blocked` 不完成、`not_covered` 需已接受风险处置、未关闭阻塞 Finding 阻断、失效证据不完成——均正确；**但 L2/L3 代码 Work 可由调用方声明 `route:'document'` 仅凭 Review 证据完成，零 Test Run**，`workflow.md` §7「L2/L3代码使用独立Review和Test」被绕过 |
+| AC-020 | **PASS（带 P2 W6R3-02）** | 安全点暂停、`writeAdmission`/`requestCodeWrite` 双门禁对 `paused` 同判拒绝、恢复版本校验 + 新 Attempt（`starting` 窗口拒绝）、最新 Attempt 就绪判定；**但 `blocked`/`failed` 状态未纳入屏障** |
+| AC-021 | **PASS（带 P2 W6R3-02）** | `cancelling`→级联 `cancelled`、Attempt `stopped`、产物保留、Requirement `cancelled`、recovery 停 `blocked`；`cancelling`/`cancelled` 两门禁均拒绝写；**recovery `blocked` 后 Plan gate 仍准入写** |
+| AC-022 | **PASS** | 单次调用超额原子拒绝、`budgetAfter` 不变、`requiresUserTopUp`、返工额度耗尽拒绝；批准即预留、重复批准不可累计超限（W6R2-06 已关闭，`gates3.mjs`/`r2-budget2.mjs`） |
+| AC-083 | PASS | 无 taskId 的 document/integration Finding 绑定 Review Run + Manifest 并冻结 `finding_binding`；task 目标缺 taskId ⇒ `VALIDATION_ERROR`，外来 Task ⇒ `NOT_AUTHORIZED`，Developer Run 不得提 Finding（`r2-ac083.mjs` 9/9） |
+| AC-089 | **PASS（带 P2 W6R3-04）** | `listContinuable` 纯投影、继续创建新 Work + 预算 + 本地 Authorization、不创建任何 Run、`reusedPreviousVerification:false`、二次继续拒绝（`r2-ac089-continue.mjs` 34/34、`r2-continue2.mjs` 17/17）；**该形状的 Work 同时是 W6R3-04 的入口** |
+
+## 27. 第 3 轮 Findings
+
+### W6R3-01 [P1] 完成路线由调用方声明且不与 Work 的持久事实交叉校验，代码 L2/L3 Work 可零 Test Run 完成
+
+- 位置：`packages/core/src/findings.ts:991`（`const route: DeliveryRoute = input.route ?? 'code'`）、`:992`（`completionEvidenceKindFor(route, work.level)`）、`:1008-1045`（`kind==='review'` 只要求 Review + CompletionManifest）、`packages/domain/src/delivery.ts:511-518`（`completionEvidenceKindFor`）。`work.intent`（`delivery`/`document`/`operation`，`packages/contracts/src/enums.ts:33`）与 `work.level` 在 `completeTx` 中除 `level` 外**从未被用于校验 route**。
+- 复现：`node /tmp/wp06r3/probe/route3.mjs`（`cases=33 failed=3`，两条为 `W6R3-01 a code L2/L3 Work declared route=document completes with Review-only evidence`）。步骤：`addWork({intent:'delivery', level:'L2'})` → 建一个 `role='review'`、`completed`、带有效 artifact（`sourceRevision=REV`）与 `stage_result.status='success'` 的 Review Run → 冻结一个属于该 Work、`verifiedManifestIds` 非空的 `CompletionManifest` → 先 `completeWork({workId, reviewRunId, completionManifestRef})`（route 缺省 `code`）⇒ **正确拒绝**「no Test Run is bound」；再 `completeWork({workId, route:'document', reviewRunId, completionManifestRef})`。
+- 观察：`ok:true`，Work 转 `completed`，事件 `delivery.work_completed` 记 `route:'document'`、`evidenceKind:'review'`、`testStatus:'passed'`、`testEvidenceRevision=REV`；探针同时断言该 Work 的 `role='test'` Run 数为 **0**。L2 与 L3 均复现（`OBS bypass L2/L3: intent=delivery testRuns=0 evidenceKind=review route=document`）。
+- 期望：`workflow.md` §7「L1及纯文档使用ReviewCheck与适用检查；L2/L3代码使用独立Review和Test」；路线是实现/交付的持久属性（`intent` 已落库，`orchestrator.ts:174-189` 亦按 `intent` 决定等级地板），完成门禁不得让被约束方自行选择更弱的证据规则。
+- 契约/AC：AC-019、AC-007（对照）、`workflow.md` §3/§7。
+- 成因：W6R2-09 为让 L1/document 可完成而把路线参数化，但只信 `input.route`；`9981902:packages/core/src/findings.ts:891` 的旧实现（`completionEvidence(input.testRunId, work)`）无条件要求 Test Run，故这是 `4f5a1f3` 引入的**回归**（fail-open 方向）。
+- 旁证（产品测试把该行为固化为期望）：`packages/core/test/findings.test.ts:1607-1636`「keeps the document route on its own rule」使用的 `WORK_ID`（`addWork(WORK_ID,'L2',…)`，`:296-311` `intent:'delivery'`）传 `route:'document'` 被判 `done.ok===true`、`evidenceKind==='review'`；同一用例还断言「A Test Run is ignored on the document route」（供给 Test Run 也不报错，只是被路线忽略）。即 `intent='delivery'` 的 L2 Work 被 route 覆盖是**当前期望**，与 `workflow.md` §7 冲突。
+- 修复方向：在 `completeTx` 由持久事实推导路线（`work.intent === 'document' ? 'document' : work.intent === 'operation' ? 'operation' : 'code'`），调用方 route 只能与之相等或缺失，冲突即 `VALIDATION_ERROR`；或在 Work 上持久化 `route` 并与之比对。同时保留「L2/L3 代码必须有 Test Run」为无条件规则。补负例测试：`intent='delivery'`、`level='L2'` 的 Work 传 `route:'document'` ⇒ 拒绝。
+
+### W6R3-02 [P2] 共享写屏障只覆盖 3 个状态，`completed`/`failed`/`blocked` 的 Work 仍经 Plan gate 准入代码写
+
+- 位置：`packages/domain/src/delivery.ts:1074-1090`（`workWriteBarrier` 仅 `paused`/`cancelling`/`cancelled`）；消费点 `packages/core/src/gates.ts:778-789` 与 `packages/core/src/findings.ts:1223-1226`。
+- 复现：`node /tmp/wp06r3/probe/gates3.mjs`（`cases=47 failed=7`，其中 6 条为本条）。① 真实完成链：批准 Plan → 真实有效 Test Run → `completeWork` ⇒ `ok:true`；随后 `requestCodeWrite({workId, revision, targets})` ⇒ `allowed:true`（`planRef`/`evidenceRefs` 返回）且**新增一条 `delivery.write_admitted` 事件**（`4 -> 5`）。② recovery 取消链：`cancelWork({sideEffectsUnknown:true})` 使 Work 进入 `blocked`，同一次 `requestCodeWrite` ⇒ `allowed:true`。③ 状态矩阵（`OBS parity`）：`completed`/`failed`/`blocked`/`queued` 四状态下 `writeAdmission` 与 `requestCodeWrite` **同为放行**。
+- 期望：`workflow.md` §5.1「queued→running→completed；…完成后追问创建关联新Work」、§7「暂停停止新准入」「最终完成清单绑定验证代码树」；AC-020/AC-021 的写屏障语义应覆盖一切非 `running` 的失控状态（至少 `completed`/`failed`/`blocked`），否则完成记录绑定的代码树在完成后仍可被同一 Plan 改动。
+- 契约/AC：AC-013、AC-020、AC-021；`workflow.md` §5.1/§7。
+- 修复方向：把 `workWriteBarrier` 改为白名单（只有 `running` 可写，`queued`/`completed`/`blocked`/`failed` 与现有三个状态一并拒绝），两门禁继续共用；补「完成后写请求 ⇒ 拒绝且零 `delivery.write_admitted`」与「recovery `blocked` 写请求 ⇒ 拒绝」的回归测试。
+- 说明：`paused`/`cancelling`/`cancelled` 三态（W6R2-07 的范围）确认已关闭，本条是其状态集的补集。
+
+### W6R3-03 [P2] 共享规则的 `invalidatedRevisions` 分支在生产代码中零生产者，闭环可锚定在已被 Finding 失效的 Revision
+
+- 位置：`packages/domain/src/delivery.ts:1334/1418`（规则第 3 条「被失效的 Revision 永不复用」）；应当喂入它的三处调用均未传该字段：`packages/core/src/findings.ts:2017-2026`（完成）、`packages/core/src/findings.ts:687-709`（`markAddressed`，只与 `work.baseRevision` 比较）、`packages/domain/src/delivery.ts:1767-1778`（Finding 关闭）。`grep -rn invalidatedRevisions packages/*/src` 仅命中类型声明、判定读取与产品测试 `packages/domain/test/delivery.test.ts:1227`，**生产代码零生产者**。
+- 复现：`node /tmp/wp06r3/probe/r2-closures.mjs`（`cases=38 failed=3` 中的 `W6R2-CANDIDATE all-pre-fix-revision evidence closes the Finding`）：Work `baseRevision=REV`；一个 Review Run 的 artifact `sourceRevision=REV_PRE` 提交 P1 Finding（`submitFinding` 不校验 Review 证据 Revision 与 `work.baseRevision` 一致）⇒ 该 artifact 被置 `invalid`；修复 Run artifact 自述 `REV_PRE` ⇒ `markAddressed` **接受**（`REV_PRE ≠ work.baseRevision`）并把 `baseRevision` 推进为 `REV_PRE`；再以 `REV_PRE` 的新 Review+Test ⇒ `ok:true, state:'verified'`。
+- 观察：整条关闭链（`fixingRevision`/`reviewRevision`/`testRunRevision`）锚定在 `REV_PRE`——正是 Finding 已判定「旧结果无效」的那个 Revision；`evaluateEvidenceValidity` 的第 3 条（本例唯一能识别该事实的分支）从未被触发。
+- 期望：AC-017「旧结果无效」、AC-018「修复后重新独立 Review」；W6R2-03 的实际不变量应是「修复 Revision 不得等于**任何被该 Finding 失效的证据 Revision**」，`work.baseRevision` 只是其中一个候选。
+- 契约/AC：AC-017、AC-018；`workflow.md` §6/§7。
+- 修复方向：由 `submitFinding` 返回/持久化的 `invalidatedEvidenceRefs` 解析出被失效 Revision 集合，作为 `lineage.invalidatedRevisions` 传入完成、关闭与等级重评三处；或让 `markAddressed` 直接拒绝「修复 Revision ∈ 被失效证据 Revision 集合」。补负例测试：被失效 Review 的 Revision 被复位为修复 Revision ⇒ `GATE_NOT_READY`。
+- 可达性说明：需要 Review artifact 的 `sourceRevision` 被错标（该字段由 Run 侧提供，`ArtifactService.createAgent({sourceRevision})` 不做 Work 绑定校验），但这是本包公共 API 内的可达状态，不是外部假设。
+
+### W6R3-04 [P2] 无 `baseRevision` 的 Work：写门禁跳过 Revision 绑定，等级升级不打 stale 且旧 Plan 仍可写
+
+- 位置：`packages/core/src/gates.ts:763`（`if (work.baseRevision !== undefined && input.revision !== work.baseRevision)`——缺失即跳过）、`:965`（`const revision = work.baseRevision ?? 'working-tree'`）、`:973`（`findPreviousApprovedPlan(work.id, revision, …)`）；`packages/domain/src/delivery.ts:437`（`stalePlan: planEvidence?.valid === true`，`plan` 缺失即 `false`）。`work.baseRevision` 缺失是 AC-089 的正常形状（`requirement-continue.ts:244`，本包未改）。
+- 复现：`node /tmp/wp06r3/probe/gates3.mjs`（`OBS write on unbound Work at the approved revision: allowed=true`）与 `node /tmp/wp06r3/probe/extra3.mjs`（`cases=9 failed=2`）：① `addWork({level:'L1', baseRevision:null})`，在 revision `R1` 批准 Plan P1 ⇒ `requestCodeWrite({revision:R1})` **放行**（`revision` 完全由调用方设定）；② 在 `R2` 批准替换 Plan P2 后 `upgradeLevel` ⇒ Work 升为 L2，但 `stalePlanRefs=[]`、P1 artifact 仍 `validity:'valid'`；③ `requestCodeWrite({revision:R1, planRef:P1})` 仍 **`allowed:true`**（`workLevel:'L2'`，却由 L1 期批准的 Plan 授权）。同链在绑定 Work（`baseRevision=REV`）上对照：`stalePlanRefs=[P1.hash]`、artifact `invalid`、写被拒。
+- 期望：AC-009「升级后旧 Plan `stale`/`invalid` 且旧 Plan 写请求被拒」、AC-013 的 Revision 绑定。无 Revision 不等于「任意 Revision 均可」；W6R2-04 对完成门禁已按 fail-closed 修正，写门禁与升级血缘应同规则。
+- 契约/AC：AC-009、AC-013、AC-089；`data.md` §2 `work.baseRevision`。
+- 修复方向：`work.baseRevision` 缺失时写门禁 fail-closed（或要求调用方提供可验证的 Revision 来源，如 `VerificationManifest.codeRevision`）；`upgradeLevel` 不应用 `'working-tree'` 占位去查找旧 Plan——应遍历该 Work 的全部批准记录（不限 revision）取「升级前最新的、仍有效的批准 Plan」作为被取代对象，从而在无 `baseRevision` 时也打 stale + invalidate。补负例：无 `baseRevision` 的 Work 升级后旧 Plan 写请求 ⇒ 拒绝。
+
+### W6R3-05 [P3] `frozenManifestOf` 的 hash 键空间对唯一调用方仍不可达，T7「两个键空间都真实可达」不被代码支持
+
+- 位置：`packages/core/src/findings.ts:2088-2107`（`frozenManifestOf` 同时比较 `row.hash` 与 `payload.manifestId`）；唯一调用方 `:1888` 传入的是 `stageRow.manifestId`，其契约类型为 `idSchema`（UUIDv7，`packages/contracts/src/entities/structures.ts:468`），而 `snapshot.hash` 是 64 位摘要（`packages/storage/src/schema.ts:296` `CHECK (length(hash) = 64)`、`PRIMARY KEY (type, hash)`），两键空间不相交。
+- 复现：`node /tmp/wp06r3/probe/closures3.mjs`（`W6R2-05 the hash key space is NOT reachable through the only caller`）：以 64 位 Hash 作 `stage_result.manifestId` 插入被存储层契约拒绝（`CONSTRAINT_VIOLATION`）；改用 payload 声明 `manifestId` 的合法 UUIDv7 时该分支命中并通过。
+- 观察：死分支已由「payload 声明 `manifestId`」这一真实键空间复活（W6R2-05 的实质要求已满足），但 `row.hash === manifestId` 这一半在唯一调用路径上恒不成立。
+- 期望：实现记录不得声称两条键空间都可达；或让 `stage_result.manifest_id`/读取侧显式支持 hash。
+- 契约/AC：AC-018/AC-019；`data.md` §3。
+- 修复方向：把 T7 的措辞改为「payload 声明的 `manifestId` 键空间可达；hash 键空间保留给直接冻结 payload 的写入方」，或删除 `row.hash` 比较以免误导；若确有写入方以 hash 为 id，则补一条端到端用例。
+
+### W6R3-06 [P3] L3 的 rollback/audit/drill 证据仍是自由文本子串匹配，与 W6R2-10 的修复方向不一致
+
+- 位置：`packages/domain/src/delivery.ts:760-776`（`has(values, needle) = values.some(v => v.toLowerCase().includes(needle))`，分别匹配 `rollback`/`audit`/`drill`）；与已改为结构化 Ref 的 `bindsCandidateDiff`（`:746-749`）同处一个证据校验函数族。
+- 复现：`node /tmp/wp06r3/probe/route3.mjs`（`OBS L3 evidence given as self-negating free text: ok=true gaps=[]`）：`Plan.evidence=['there is no rollback plan but the word rollback appears']`、`Review.evidence=['NO audit was performed, audit absent']`、`Recovery.evidence=['no drill happened, drill']` ⇒ 阶段链 `ok:true`。
+- 观察：AC-011「回退计划、逐项审核、恢复演练证据」可被任意含关键词的自否定文本满足，与 W6R2-10 已确立的「证据须可追溯到具体产物引用」标准不一致。
+- 期望：AC-011 的 L3 证据项应为结构化引用（rollback plan artifact ref / 逐项审核报告 ref / 恢复演练记录 ref），或至少要求产物路径形态。
+- 契约/AC：AC-011；`workflow.md` §3/§7。
+- 修复方向：为 L3 的三个证据项各增一个 `Ref`（或 `evidenceRefs`）字段并校验非空，文本仅作说明；补负例：自否定文本 ⇒ `MISSING_CONTEXT`。
+
+### W6R3-07 [P3] 完成事件把 Review 证据写成 Test 字段（`testStatus:'passed'`、`testEvidenceRevision`、`testRunId`）
+
+- 位置：`packages/core/src/findings.ts:2050`（review 分支硬编码 `status: 'passed'`）与事件写入 `:1174-1179`（`testStatus`/`testRunId`/`evidenceRunId`/`testEvidenceRevision`/`testEnvironmentRef` 对两条路线同名）。
+- 复现：`node /tmp/wp06r3/probe/extra3.mjs`：L1 Work 经 Review 完成，`OBS completion event (review evidence): evidenceKind=review testStatus=passed testRunId=<review run> evidenceRunId=<review run>`。
+- 观察：事件同时携带 `evidenceKind:'review'` 与 `testStatus:'passed'`、`testRunId` 指向 Review Run；审计侧按 `testStatus`/`testRunId` 读取会得到误导性结论（`evidenceKind` 已能区分）。
+- 期望：字段名/取值应与证据种类一致（review 证据不应产生 Test 语义字段，或显式置空）。
+- 契约/AC：AC-007/AC-012/AC-019 的证据可追溯性（`workflow.md` §7）。
+- 修复方向：事件按 `evidenceKind` 分列（`reviewStatus`/`reviewRunId`），或在 review 分支把 `testStatus` 置 `null`、`testRunId` 改名 `evidenceRunId`。不阻断。
+
+## 28. 计数与阻断表
+
+| 严重性 | 数量 | 编号 | 是否阻断 | 说明 |
+|---|---|---|---|---|
+| P0 | 0 | — | — | — |
+| P1 | 1 | W6R3-01 | **阻断** | `completeWork` 路线由调用方选择，L2/L3 代码 Work 可零 Test Run 完成（AC-019、`workflow.md` §7），系 `4f5a1f3` 引入的回归 |
+| P2 | 3 | W6R3-02, 03, 04 | 不阻断（已说明影响面） | 02 完成/失败/阻塞的 Work 仍准入写（AC-013/020/021）；03 共享规则的失效 Revision 分支无生产者，闭环可锚定已失效 Revision（AC-017/018）；04 无 `baseRevision` 的 Work 写门禁与升级血缘跳过绑定（AC-009/013） |
+| P3 | 3 | W6R3-05, 06, 07 | 不阻断 | 05 记录与代码不符（Manifest hash 键空间不可达）；06 L3 证据仍子串匹配（AC-011）；07 完成事件字段语义 |
+| 合计 | 7 | — | — | 第 2 轮 10 条 Finding 全部关闭 |
+| 第 2 轮遗留 | 0 | — | — | W6R2-01…10 逐条验证关闭（W6R2-03 口径内；残余另立 W6R3-03） |
+
+验收面结论：存在 1 个可复现 P1 ⇒ **FAIL**，不进入独立 Test。
+
+报告保真核对（追加后）：`git diff --numstat .agentdev/work/WP-06/review.md` = 仅新增行、0 删除；`git show HEAD:.agentdev/work/WP-06/review.md | diff - <(head -516 .agentdev/work/WP-06/review.md)` 无差异（第 1、2 轮逐字保留）。
+
+## 29. 记录核对（implementation.md T1–T7）
+
+- **用例数声明准确**：`pnpm test:unit` 38 文件/749 用例与 T7 完全一致（T6 为 727，+22 条回归）；`pnpm test:integration` 132/132 与 T7 一致且本轮 Docker 可用（`doctor`/`container` 真实容器用例通过）；`pnpm build` 10 workspace、`docs:check` 输出（15 文档/55 链接/94 AC/9 需求/11 工作包）与 T7 逐字一致。
+- **T1–T6 未改动且第 2 轮已逐条核对**：本轮 `git show --stat 4f5a1f3` 确认改动仅 `delivery.ts`、`gates.ts`、`findings.ts`、4 个测试文件与 `implementation.md`，T1–T6 涉及的声明未变；本轮对其中仍构成验收面的部分做了重跑（§24 的 19 个第 2 轮脚本，555 用例）。
+- **T7 新增共享原语与代码一致**：`EvidenceValidity`/`RevisionEvidence`/`EvidenceLineage`/`EvidenceValidityDecision` 类型与 7 条判定顺序（`delivery.ts:1394-1467`）与记录逐条相符；`evidenceBindsRevision` 确认只调用 `evaluateEvidenceValidity`（`:1475-1480`，非第二套规则）；三处消费点（`findings.ts:2017`、`delivery.ts:447`、`delivery.ts:1767`）确实全部改走它，未发现仍在自行判定 validity/revision 的旧检查（`grep` 仅剩构造入参的 `validity === 'valid'` 与失效写入方）。
+- **T7 逐条与代码核对结论**：W6R2-01/02/04/06/07/08/09/10 的修复与记录一致（见 §25）；W6R2-03 的实现与记录文字一致，但记录未登记「被失效证据 Revision ≠ `work.baseRevision`」的残余（W6R3-03）。
+- **过度/不实声明 1 处**：T7 W6R2-05 称 `frozenManifestOf`「同时接受…该冻结行的 hash…与 payload 声明的 `manifestId`…**两个键空间都真实可达**」——hash 键空间对唯一调用方（`stage_result.manifest_id` = UUIDv7）不可达（W6R3-05）。
+- **T7 未登记的新问题 3 项**：W6R3-01（完成路线由调用方选择，L2/L3 可零 Test 完成）、W6R3-02（屏障漏 `completed`/`failed`/`blocked`）、W6R3-04（无 `baseRevision` 的 Work 写门禁与升级血缘）。T7 残余 7「`writeAdmission` 与 `requestCodeWrite` 的 Run/Attempt 条件未合并」与 W6R3-02 相邻但更窄：T7 只承认 Run/Attempt 条件未合并，实际连 **Work 状态集合** 两门共用后仍不完整。
+- **T7 残余清单**：8 项（CompletionManifest 覆盖度、无 `baseRevision` 不能完成、无 Revision 全序、预算预留 vs 核销、Manifest 写入方、operation 路线、两门禁 Run/Attempt 条件、`evidenceValid` 必需字段）均属实；其中「无 `baseRevision` 不能完成」只覆盖完成门禁，未提及写门禁与升级血缘（W6R3-04）。
+- **测试覆盖缺口**：`findings.test.ts` 现有回归覆盖了「失效证据不得完成」「修复必须产生新 Revision」「manifest 绑定与精确拒绝」「最新 Attempt 就绪」；但**没有**把 route 与 Work 持久事实交叉校验的用例——`findings.test.ts:1607` 反而把「`intent='delivery'` 的 L2 Work 以 `route:'document'` 完成」写成期望（W6R3-01），也**无**「`completed`/`blocked` 后的写准入」用例（W6R3-02），故这两条未被已提交测试作为缺陷捕获。
+
+## 30. 覆盖限制
+
+1. **Docker 本轮可用**：`pnpm test:integration` 11 文件/132 用例全通过（含真实容器），无环境阻塞登记；容器级隔离负例仍属 WP-07/WP-10 的完整复验。
+2. **未接线的上层**：本包服务尚无 HTTP/WS/Broker 消费者；W6R3-01/02/04 的可达性来自**包公共 API 的直接调用**（WP-07/WP-08 将以此为接线面），非端到端页面路径。W6R3-01 额外依赖「该 Work 已有冻结 CompletionManifest」，当前包内只有测试写入该快照，真实写入方属 WP-08；但门禁是被约束方的最后一道，且 Work 已持久化 `intent`/`level` 可自查，故仍按 P1 记录。
+3. **Revision 全序不存在**：服务端无 Git 祖先关系，W6R3-03/04 只能证明「可锚定到被失效 Revision」「无 `baseRevision` 即跳过绑定」，无法评估「后代 Revision 放宽」方案。
+4. **`failed` 状态的写准入**：`failed` 用例以 `store.works.update` 直接置位（`workflow.md` §5.1 允许 `failed` 启动同 Work 新 Run）；`completed`/`blocked` 两条则为真实 API 链（`completeWork`、`cancelWork({sideEffectsUnknown:true})`）。`failed` 的具体可达调用序列属 WP-07 的 Run 失败接线。
+5. **L3 子串匹配（W6R3-06）** 只在域级纯函数上证明；其是否影响真实交付取决于 WP-08 的 L3 接线。
+6. **预算端到端**：W6R2-06 只证明批准路径预留；派发/核销（`RunLifecycle.reserve/settle`）的并发双花防护未做并发压测（属 WP-02/WP-08）。
+7. **未读取任何开发/Test 聊天或会话记录**；探针由 `dist` 类型声明、公开 API 与正式文档编写，不 import 任何产品测试文件。第 2 轮探针的复制只改 harness 路径，用于同断言回归。
+8. **未运行** `pnpm test:e2e`/`test:acceptance`/`test:live`（按契约返回 NOT_IMPLEMENTED，属 WP-09/WP-10）。
+
+## 31. 能否进入独立 Test
+
+**否。** 第 2 轮 10 条 Finding 已全部关闭（W6R2-03 口径内关闭并登记残余）且六条契约命令全绿（unit 749/749、integration 132/132、Docker 可用），但回归挖掘在冻结点 `4f5a1f3` 复现出 1 个 P1：**W6R3-01 —— `completeWork` 的完成路线由调用方声明，`intent='delivery'`、`level='L2'/'L3'` 的 Work 传 `route:'document'` 即可仅凭 Review 证据完成，零 Test Run（AC-019、`workflow.md` §7）**。该行为是 W6R2-09 修复引入的 fail-open 回归（修复前无条件要求 Test Run）。
+
+建议按 W6R3-01…04 修复后重新提交独立 Review；修复必须包含负例测试：① `intent='delivery'` 的 L2/L3 Work 传 `route:'document'` ⇒ 拒绝；② `completed`/`blocked` Work 的 `requestCodeWrite` ⇒ 拒绝且零 `delivery.write_admitted`；③ 修复/验证 Revision 等于被 Finding 失效证据的 Revision ⇒ 拒绝；④ 无 `baseRevision` 的 Work 升级后旧 Plan 写请求 ⇒ 拒绝且旧 Plan `stale` + `invalid`。
