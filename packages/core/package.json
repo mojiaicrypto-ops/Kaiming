@@ -20,6 +20,8 @@
   "dependencies": {
     "@agentdev/contracts": "workspace:*",
     "@agentdev/domain": "workspace:*",
-    "@agentdev/storage": "workspace:*"
+    "@agentdev/knowledge": "workspace:*",
+    "@agentdev/storage": "workspace:*",
+    "@agentdev/workspace": "workspace:*"
   }
 }

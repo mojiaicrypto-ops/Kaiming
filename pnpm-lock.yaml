@@ -181,9 +181,15 @@ importers:
       '@agentdev/domain':
         specifier: workspace:*
         version: link:../domain
+      '@agentdev/knowledge':
+        specifier: workspace:*
+        version: link:../knowledge
       '@agentdev/storage':
         specifier: workspace:*
         version: link:../storage
+      '@agentdev/workspace':
+        specifier: workspace:*
+        version: link:../workspace
 
   packages/domain:
     dependencies:
