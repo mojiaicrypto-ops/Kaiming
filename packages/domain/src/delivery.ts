@@ -507,27 +507,50 @@ export function stageOrderFor(route: DeliveryRoute, level: Level): readonly stri
 export type CompletionEvidenceKind = 'test' | 'review';
 
 /**
- * The evidence a completion rests on for one route/level (W6R2-09).
+ * Every evidence kind a completion must bind for one route/level (W6R4-01).
  *
  * `workflow.md` §7: "L1及纯文档使用ReviewCheck与适用检查；L2/L3代码使用独立Review和Test".
  * The rule is read off the route's own stage order, so it cannot drift from the
- * chain the same route has to produce:
+ * chain the same route has to produce. The order is the rule's priority: the
+ * primary kind (what the completion event and the `evidenceKind` label report)
+ * comes first.
  *
- * - a route/level whose stages contain `Test` (code L2/L3) requires a Test Run;
+ * - a route/level whose stages contain `Test` (code L2/L3) requires **both** the
+ *   Test evidence and the independent Review evidence the same stage order puts
+ *   before it — `workflow.md` §3's L2/L3 code lane is
+ *   `Product→Plan→Develop→Review→Test→Accept→Settle`, so a Test Run alone is not
+ *   enough (W6R4-01);
  * - the L1 code lane and both document levels have no Test stage and complete on
  *   the route's own Review evidence (the `ReviewCheck` result);
  * - the operation route has no `Test` stage either (`Plan → Execute → Review →
- *   Verify → Settlement`), so it selects its Review evidence as well; a dedicated
+ *   Verify → Settlement`), so it requires its Review evidence as well; a dedicated
  *   `Verify` evidence rule is the WP-08 wiring;
  * - an unknown route/level returns `undefined` and the caller fails closed.
+ */
+export function completionEvidenceKindsFor(
+  route: DeliveryRoute,
+  level: Level,
+): readonly CompletionEvidenceKind[] | undefined {
+  const stages = stageOrderFor(route, level);
+  if (stages === undefined) return undefined;
+  const kinds: CompletionEvidenceKind[] = [];
+  if (stages.includes('Test')) kinds.push('test');
+  if (stages.includes('Review')) kinds.push('review');
+  return kinds;
+}
+
+/**
+ * The primary evidence kind for one route/level (W6R2-09).
+ *
+ * It is the first entry of {@link completionEvidenceKindsFor}, not a second rule:
+ * code L2/L3 still report a Test as their primary evidence, and every route/level
+ * keeps the value it always had.
  */
 export function completionEvidenceKindFor(
   route: DeliveryRoute,
   level: Level,
 ): CompletionEvidenceKind | undefined {
-  const stages = stageOrderFor(route, level);
-  if (stages === undefined) return undefined;
-  return stages.includes('Test') ? 'test' : 'review';
+  return completionEvidenceKindsFor(route, level)?.[0];
 }
 
 /**

@@ -25,6 +25,7 @@ import {
   canReserveBudget,
   classifyChange,
   completionEvidenceKindFor,
+  completionEvidenceKindsFor,
   documentRouteRules,
   evaluateBehaviourChoice,
   evaluateEvidenceValidity,
@@ -1358,6 +1359,20 @@ describe('route-aware completion evidence (AC-007/AC-012/AC-019, W6R2-09)', () =
     expect(completionEvidenceKindFor('operation', 'L2')).toBe('review');
     // An undefined combination is not a rule: the caller must fail closed.
     expect(completionEvidenceKindFor('code', 'none')).toBeUndefined();
+  });
+
+  it('requires an independent Review in addition to the Test for code L2/L3 (W6R4-01)', () => {
+    // `workflow.md` §3/§7: the L2/L3 code lane is …Review→Test…, so the completion
+    // gate binds both. The primary kind stays the Test, which is why the single
+    // selection above is unchanged.
+    expect(completionEvidenceKindsFor('code', 'L2')).toEqual(['test', 'review']);
+    expect(completionEvidenceKindsFor('code', 'L3')).toEqual(['test', 'review']);
+    // L1 code, document and operation have exactly one required kind each.
+    expect(completionEvidenceKindsFor('code', 'L1')).toEqual(['review']);
+    expect(completionEvidenceKindsFor('document', 'L2')).toEqual(['review']);
+    expect(completionEvidenceKindsFor('operation', 'L3')).toEqual(['review']);
+    // Unknown combinations are not a rule and both forms fail closed.
+    expect(completionEvidenceKindsFor('code', 'none')).toBeUndefined();
   });
 });
 

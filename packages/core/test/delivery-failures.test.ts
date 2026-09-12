@@ -66,6 +66,7 @@ const RUNS = {
   findingNewReview: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c8d0208',
   findingNewTest: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c8d0209',
   uncoveredTest: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c8d0210',
+  uncoveredReview: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c8d0211',
 } as const;
 
 const TASK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c8d0301';
@@ -282,6 +283,36 @@ describe('required WP-06 failure tests', () => {
       mime: 'text/markdown',
       bytes: Buffer.from('# review of the post-fix revision\n'),
       sourceRevision: revision,
+    });
+  }
+
+  /**
+   * A completed Review Run's evidence: its artifact plus the successful ReviewCheck.
+   *
+   * W6R4-01: code L2/L3 completion binds an independent Review **and** a Test, so
+   * the positive completion path needs a real `role='review'` Run behind it.
+   */
+  function recordReviewCheck(runId: string, workId: string, revision = REVISION): void {
+    recordReviewArtifact(runId, workId, revision);
+    const attempt = store.attempts.insert({
+      runId,
+      number: store.attempts.count('run_id = ?', [runId]) + 1,
+      status: 'running',
+      ownerEpoch: 0,
+    });
+    store.stageResults.insert({
+      runId,
+      attemptId: attempt.id,
+      status: 'success',
+      summary: `review ${runId}`,
+      artifactRefs: [],
+      evidenceRefs: [],
+      changedPaths: [],
+      findingIds: [],
+      unknowns: [],
+      requestedActions: [],
+      readLedgerSeq: 0,
+      readLedgerHash: HASH,
     });
   }
 
@@ -982,15 +1013,25 @@ describe('required WP-06 failure tests', () => {
       status: 'not_covered',
       uncovered: [uncovered[0] ?? { acceptanceId: 'AC-007', reason: '' }],
     });
+    // W6R4-01: an L2 Work completes on the independent Review **and** the Test.
+    addRun({
+      id: RUNS.uncoveredReview,
+      workId: IDS.uncoveredWork,
+      role: 'review',
+      stage: 'Review',
+    });
+    recordReviewCheck(RUNS.uncoveredReview, IDS.uncoveredWork);
     const opened = findings.completeWork({
       workId: IDS.uncoveredWork,
       testRunId: RUNS.uncoveredTest,
+      reviewRunId: RUNS.uncoveredReview,
       riskDispositions: [{ acceptanceId: 'AC-007', decisionId: RISK_DECISION_ID }],
     });
     expect(opened.ok).toBe(true);
     if (!opened.ok) throw new Error('unreachable');
     expect(opened.riskDecisionIds).toEqual([RISK_DECISION_ID]);
     expect(opened.testRunId).toBe(RUNS.uncoveredTest);
+    expect(opened.reviewRunId).toBe(RUNS.uncoveredReview);
     expect(store.works.find(IDS.uncoveredWork)?.status).toBe('completed');
   });
 });

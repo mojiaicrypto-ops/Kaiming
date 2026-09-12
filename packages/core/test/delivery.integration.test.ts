@@ -1578,13 +1578,38 @@ describe('graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089)', () 
     expect(verifiedTest.validity).toBe('valid');
 
     // The Work can now complete: the blocking Finding is closed and the persisted
-    // Test Run is the completion evidence.
+    // Test Run is the completion evidence. W6R4-01: an L2 code Work binds the
+    // independent Review Run as well, so its persisted ReviewCheck must exist.
+    const reviewAttempt = store.attempts.insert({
+      runId: RUNS.findingNewReview,
+      number: 1,
+      status: 'running',
+      ownerEpoch: 0,
+    });
+    store.stageResults.insert({
+      runId: RUNS.findingNewReview,
+      attemptId: reviewAttempt.id,
+      status: 'success',
+      summary: 'review: the fix is verified',
+      artifactRefs: [],
+      evidenceRefs: [],
+      changedPaths: [],
+      findingIds: [],
+      unknowns: [],
+      requestedActions: [],
+      readLedgerSeq: 0,
+      readLedgerHash: PROJECT_ID_HASH,
+    });
     expect(store.tasks.find(TASKS.finding)?.stage).toBe('develop');
     const completion = findings.completeWork({
       workId: IDS.findingLoop,
       testRunId: RUNS.findingNewTest,
+      reviewRunId: RUNS.findingNewReview,
     });
     expect(completion.ok).toBe(true);
+    if (!completion.ok) throw new Error('unreachable');
+    expect(completion.evidenceKinds).toEqual(['test', 'review']);
+    expect(completion.reviewRunId).toBe(RUNS.findingNewReview);
   });
 
   // -------------------------------------------------------------------------

@@ -331,5 +331,60 @@ Review 判定：`FAIL`（1 × P1 + 3 × P2 + 3 × P3）。改动仅限 `packages
 4. **W6R3-05 的 hash 键空间按「不可达」处理**：`frozenManifestOf` 只认 payload 声明的 `manifestId`；若 WP-08 出现以 64 位摘要为 `stage_result.manifest_id` 的写入方，需同时放开契约类型与读取侧。
 5. **`workWriteBarrier` 白名单**：`requestCodeWrite` 对无 `baseRevision` 或非 `running` 的 Work 一律 fail-closed；真实 Broker/工具级准入接线仍属 WP-07。
 6. **review 完成事件的 `reviewStatus`** 固定为 `'passed'`（ReviewCheck 已由 `completionEvidence` 校验为 `stage_result.status === 'success'`）；更细的 Review 结论分类属 WP-08。
-7. **`CompleteWorkResult` 的 `testStatus`/`testRunId` 字段名未改**（仅事件按 `evidenceKind` 分列）；若调用方需要对称的 review 字段，属 WP-08 的接口整理。
+7. **`CompleteWorkResult` 的 `testStatus`/`testRunId` 字段名未改**（仅事件按 `evidenceKind` 分列）；若调用方需要对称的 review 字段，属 WP-08 的接口整理。（**T9/W6R4-02 已修复**：结果对象按 `evidenceKind` 分列，review 完成暴露 `reviewStatus`/`reviewRunId` 且不再写 test 命名字段，见 T9。）
 8. **`continueRequirement` 仍以 `intent:'delivery'` 创建 Work**（`requirement-continue.ts` 本轮未改）：W6R3-01 之后完成路线取自持久 `intent`，因此以 `route:'document'` 继续的需求所创建的 Work 目前只能按 code 路线完成（fail-closed）。这是 AC-089 路径的既有形状；把 `intent` 与 `route` 对齐属 WP-08 的 Work 创建整理。
+
+## T9 Review 第 4 轮修复（W6R4-01…W6R4-02）
+
+Review 第 4 轮判定：**PASS**（无 P0/P1），本轮处理其中 2 条非阻断残余（1 × P2 + 1 × P3）。改动仅限 `packages/domain/src/delivery.ts`、`packages/core/src/findings.ts`、其测试文件与本记录；`gates.ts`、`decisions.ts`、`requirement-continue.ts` 本轮未改动。每条 Finding 附「旧行为 ⇒ 现在的行为」回归与验证数字。
+
+### W6R4-01 [P2] 代码 L2/L3 完成必须同时绑定独立 Review Run 与 Test Run
+
+- **变更（domain，`packages/domain/src/delivery.ts`）**：新增 `completionEvidenceKindsFor(route, level)`，按该路线自己的阶段序返回**全部**必需证据种类（顺序即优先级）：`code/L2` 与 `code/L3` 返回 `['test','review']`（`workflow.md` §3 的 L2/L3 代码链含 `Review` 与 `Test`），`code/L1`、`document/L1..L3`、`operation/L1..L3` 各返回 `['review']`，未知组合返回 `undefined`（fail-closed）。原 `completionEvidenceKindFor` 改为返回该集合的**首项**（同一规则，不是第二套规则），因此「主证据」语义与 T7/T8 完全一致（code L2/L3 仍报 `'test'`）。
+- **变更（core，`packages/core/src/findings.ts` 的 `completeTx`）**：完成门禁不再只校验单一证据。① 先校验**主证据**（路线/等级选中的那一种，code L2/L3 为 Test），其结论照旧驱动 `not_covered` 风险处置与阻塞 Finding 判定；② 主证据通过后，对 `kinds` 中其余种类逐项复用**同一个** `completionEvidence` 分支校验（code L2/L3 为 Review），任一项失败即拒绝且零写入；③ 全部通过才 `running→completed` 并写事件。Review 分支要求：本 Work 的 `role='review'`、`completed` Run、持久 `stage_result.status='success'`、其自身 artifact / 冻结 Manifest 有效且绑定 `work.baseRevision`、非失效 Revision、晚于最近一次修复（与 Test 共用 `evaluateEvidenceValidity`）。因此「有 Test 无 Review」不再可能完成，且 Review 不能是 Test Run 或实现 Run（角色/身份检查）。事件仍只按**主证据**分列（W6R3-07 的 test/review 命名分列口径不变，见 T9 残余 1）。
+- **回归测试（负例 + 正例）**：`packages/core/test/findings.test.ts`「never completes a code L2 Work on a Test Run alone (AC-010/AC-019, W6R4-01)」——真实 `passed`、绑定当前 Revision 的 Test Run **零 Review 绑定** ⇒ `GATE_NOT_READY`、消息含 `Review Run`、Work 保持 `running`、零 `delivery.work_completed`；`reviewRunId` 指向非 review 角色 Run ⇒ 拒绝（消息含 `role`）；Review 证据绑定异 Revision ⇒ 拒绝（消息含 `revision`，证明 Review 半同样走共享证据规则）；补上绑定同 Revision 的 Review 证据与成功 ReviewCheck ⇒ 完成，`evidenceKind='test'`、`evidenceKinds=['test','review']`、同时暴露 `testRunId`/`reviewRunId`。`packages/domain/test/delivery.test.ts`「requires an independent Review in addition to the Test for code L2/L3 (W6R4-01)」钉住 `completionEvidenceKindsFor` 的六个组合与 `undefined`。
+- **修正的旧期望（原期望编码了 W6R4-01 的单证据缺陷）**：9 个既有的**正向**完成用例原先在 L2 代码 Work 上只传 `testRunId` 即断言 `ok:true`（Review 证据缺失或未绑定），即 Review 报告点名的旁路；现改为同时提供并传入独立 Review 证据（`reviewRunId` + artifact + 成功 ReviewCheck），断言未放宽、未反转。逐个为：`findings.test.ts` 的「requires an explicit risk disposition…」（`disposed`）、「completes a passed Test result…」、「blocks completion while a blocking Finding…」（`done`）、「refuses to cancel a finished Work」、「never completes on Test evidence a Finding invalidated…（W6R2-01）」（`done`）、「binds a Test to its frozen VerificationManifest…（W6R2-05）」（`done`）、「refuses every write once the Work is completed or failed…（W6R3-02）」（`done`）；`delivery-failures.test.ts` 的「未覆盖阻断」（`opened`，新增 `RUNS.uncoveredReview` 与 `recordReviewCheck`）；`delivery.integration.test.ts` 的 AC-017/018/083 Finding 闭环（补 `RUNS.findingNewReview` 的真实 ReviewCheck 并传入 `reviewRunId`，另断言 `evidenceKinds`/`reviewRunId`）。这些用例的**负例断言**（blocked/not_covered/失效 Revision/异 Revision/未覆盖等）全部原样保留：门禁先报主证据自身的结论，再要求其余证据种类，故拒绝理由不被「缺 Review」掩盖。
+
+### W6R4-02 [P3] `CompleteWorkResult` 按 `evidenceKind` 分列，不再用 test 命名承载 review 证据
+
+- **变更**：`CompleteWorkResult` 成功分支新增 `evidenceKinds: readonly CompletionEvidenceKind[]`（本次完成实际绑定的全部种类，规则序）与 review 命名证据；`testStatus`/`testRunId` 改为**仅在存在 Test 证据时出现**（用条件展开构造，`exactOptionalPropertyTypes` 下键真正缺席），review 完成不再返回 `testStatus:'passed'` 与指向 Review Run 的 `testRunId`；review 证据改为 `reviewStatus`/`reviewRunId`（异步对称于事件字段）。文档化且被测试消费的 `testStatus`/`testRunId` 在 Test 完成路径上保持原值原义（向后兼容）；`CompletedTestEvidence` 类型名保留（历史命名，已注明其为「按 kind 记录的运行证据」）。
+- **回归测试**：`packages/core/test/findings.test.ts`「reports review evidence under review fields and no test status on an L1 completion (AC-007, W6R4-02)」——L1 代码 Work 经 Review + 冻结 CompletionManifest 完成，断言 `evidenceKind='review'`、`evidenceKinds=['review']`、`reviewStatus='passed'`、`reviewRunId=REVIEW_RUN_ID`，且 `'testStatus' in result` 与 `'testRunId' in result` **均为 false**（旧代码下该用例返回 `testStatus:'passed'` + Review Run 的 `testRunId`，故为真回归）。既有正向 Test 完成用例另断言 `reviewStatus`/`reviewRunId` 同时存在（`'completes a passed Test result…'`、W6R4-01 用例）。
+- **说明**：T8 残余 7 登记的字段命名问题即本条，现已修复；Review 完成事件本就按 W6R3-07 分列，本轮仅结果对象对齐。
+
+### 接口变更（调用方需知）
+
+| 位置 | 变更 |
+|---|---|
+| `completionEvidenceKindsFor(route, level)` | 新增导出：该路线/等级需要的**全部**证据种类（顺序即优先级；未知组合 `undefined`） |
+| `completionEvidenceKindFor` | 语义不变，改为返回上述集合首项（单一事实来源，非第二套规则） |
+| `CompleteWorkInput.reviewRunId` | 语义扩展：code L2/L3 现在**必需**（此前仅 L1/document/operation 使用） |
+| `CompleteWorkResult` | 新增 `evidenceKinds`、`reviewStatus?`、`reviewRunId?`；`testStatus?`/`testRunId?` 仅在 Test 证据存在时出现 |
+
+### 验证数字（本轮，全部为原始命令结果）
+
+| 命令 | 原始结果 | 结论 |
+|---|---|---|
+| `node_modules/.bin/prettier --write <6 文件>` | 6 个文件全部 `unchanged`（已收敛） | 通过 |
+| `pnpm typecheck` | `tsc -p tsconfig.json --pretty false`，无输出（`TYPECHECK_EXIT=0`） | 通过 |
+| `pnpm lint` | `Checking formatting... All matched files use Prettier code style!`（`LINT_EXIT=0`） | 通过 |
+| `pnpm test:unit` | `Test Files 38 passed (38)` / `Tests 757 passed (757)`（`UNIT_EXIT=0`）；较 T8 的 754 增加 **3** 条（domain 1 + `findings.test.ts` 2），既有 754 条全部保持通过 | 通过 |
+| `pnpm test:integration` | `Test Files 11 passed (11)` / `Tests 132 passed (132)`；`delivery.integration.test.ts (8 tests)` 通过，`docker info` 成功、doctor/container 真实容器用例通过 | 通过（Docker 可用，无环境阻塞） |
+| `pnpm build` | contracts/pi-runtime/domain/knowledge/storage/workspace/core/cli/daemon/runner 共 **10 workspace** 全 `Done`（`BUILD_EXIT=0`） | 通过 |
+| `pnpm docs:check` | `docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages`（`DOCSCHECK_EXIT=0`） | 通过 |
+
+### 独立探针复验（Review 第 4 轮探针在修复树上重跑，仅作外部证据）
+
+用 Review 第 4 轮留在 `/tmp/wp06r4/probe/` 的探针（消费 `packages/{storage,domain,core}/dist` 构建产物，不 import 产品测试）在修复后重跑：
+
+- `closures4.mjs`：`OBS HUNT code L2 Test-only completion: reviewRuns=0 ok=false kind=- code=GATE_NOT_READY`——第 4 轮该观察为 `ok=true`，现被拒绝（W6R4-01 关闭）；`OBS W6R3-07 residual: … {"evidenceKind":"review"}`——review 完成的 `testStatus`/`testRunId` 已为 `undefined`（W6R4-02 关闭）；`OBS L1 review completion result object: {"evidenceKind":"review"}` 同样不再含 test 命名字段。该轮 73 用例的 12 条失败全部是该探针为**第 4 轮缺陷行为**写下的正向期望（4 × W6R3-01「code L2/L3 仅凭 Test Run 完成」、2 × W6R3-05「按 manifestId 解析即完成」、1 × W6R3-07「test 完成事件」）及其级联（W6R3-02 的 5 条：完成被拒后 Work 仍为 `running`，其后的写屏障断言自然取反），无一条指向新缺陷。
+- `hunt4.mjs`：`OBS route gap: code L2 Test-only (reviewRuns=1) ok=false`——即使 Work 存在 Review Run，未绑定/未通过也不放行；`cases=30 failed=1`，唯一失败为同一旧期望「post-fix Test completes the Work」（现要求 Review，属预期变更）。
+- 结论：两条残余在**包公共 API** 上已按 Review 的修复方向关闭；探针的旧期望不修改（它们是 Review 侧资产，非本包测试）。
+
+### T9 残余（供独立 Review/Test 判定）
+
+1. **code L2/L3 完成事件仍只带主证据（Test）字段**：`delivery.work_completed` 保持 W6R3-07 的 test/review 命名分列（test 完成事件不含 review 命名）。必需的 Review Run 记录在结果对象（`evidenceKinds`/`reviewRunId`）与持久 Run/`stage_result` 行上；若审计要求事件本身也点出被绑定的 Review Run，属 WP-08 的事件 schema 整理。
+2. **`reviewStatus` 仍固定为 `'passed'`**（与 T8 残余 6 同源）：Review 证据的通过性由 `stage_result.status === 'success'` 校验，结果/事件报 `'passed'`；更细的 Review 结论分类属 WP-08。
+3. **`CompletedTestEvidence` 类型名未改**：它是按 kind 记录的运行证据（Test 或 Review），W6R4-02 只要求对外结果对象按 kind 分列；若 WP-08 统一命名，需同步其唯一消费者（`completeWork`）。
+4. **Review 的「独立性」仍是角色/身份分离**：core 可从持久状态判定「本 Work 的 `role='review'` Run、非 Test/实现 Run、自身证据绑定当前 Revision」，但 schema 没有「实现 Run ↔ Review Run」的显式血缘，无法证明 Review 未与实现者同源；持久 Manifest 接线后应追加该绑定（与 T5 残余 4 / T7 残余 1 同源，属 WP-08）。
+5. **代码 L2/L3 的 CompletionManifest 仍为可选**（T7 残余 1）：本轮只要求 Review+Test 双证据，未把 `verifiedManifestIds` 覆盖度设为必填；该完整性核对属 WP-08。
+6. **operation 路线**仍无 `Test` 阶段，`completionEvidenceKindsFor('operation', *)` 只要求 Review（T6 残余 4 / T7 残余 6 不变）。

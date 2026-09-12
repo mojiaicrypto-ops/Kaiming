@@ -514,6 +514,18 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
   }
 
   /**
+   * A completed Review Run's evidence for a completion.
+   *
+   * W6R4-01: code L2/L3 must bind an independent Review **and** a Test, so a
+   * positive L2 completion has to supply a real `role='review'` Run whose artifact
+   * froze the revision and whose persisted ReviewCheck succeeded.
+   */
+  function recordReviewCheck(runId: string, revision = REVISION): void {
+    recordReviewArtifact(runId, revision);
+    recordStageResult(runId, 'success');
+  }
+
+  /**
    * Freezes one `VerificationManifest` snapshot, addressable by its declared
    * UUIDv7 id (the key space `data.md` §3 gives `stage_result.manifest_id`).
    */
@@ -1024,15 +1036,19 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     if (unmatched.ok) throw new Error('unreachable');
     expect(unmatched.code).toBe('VALIDATION_ERROR');
 
+    // W6R4-01: the positive path binds the independent Review as well as the Test.
+    recordReviewCheck(NEW_REVIEW_RUN_ID);
     const disposed = service.completeWork({
       workId: WORK_ID,
       testRunId: NEW_TEST_RUN_ID,
+      reviewRunId: NEW_REVIEW_RUN_ID,
       riskDispositions: [{ acceptanceId: 'AC-019', decisionId: RISK_DECISION_ID }],
     });
     expect(disposed.ok).toBe(true);
     if (!disposed.ok) throw new Error('unreachable');
     expect(disposed.riskDecisionIds).toEqual([RISK_DECISION_ID]);
     expect(disposed.testRunId).toBe(NEW_TEST_RUN_ID);
+    expect(disposed.reviewRunId).toBe(NEW_REVIEW_RUN_ID);
     expect(disposed.work.status).toBe('completed');
     expect(store.works.find(WORK_ID)?.status).toBe('completed');
     const completed = scanEvents(store, { names: ['delivery.work_completed'] });
@@ -1044,12 +1060,82 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
 
   it('completes a passed Test result with no uncovered acceptance ids (AC-019)', () => {
     recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
-    const result = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
+    recordReviewCheck(NEW_REVIEW_RUN_ID);
+    const result = service.completeWork({
+      workId: WORK_ID,
+      testRunId: NEW_TEST_RUN_ID,
+      reviewRunId: NEW_REVIEW_RUN_ID,
+    });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('unreachable');
     expect(result.testStatus).toBe('passed');
     expect(result.testRunId).toBe(NEW_TEST_RUN_ID);
+    expect(result.reviewStatus).toBe('passed');
+    expect(result.reviewRunId).toBe(NEW_REVIEW_RUN_ID);
     expect(store.works.find(WORK_ID)?.status).toBe('completed');
+  });
+
+  it('never completes a code L2 Work on a Test Run alone (AC-010/AC-019, W6R4-01)', () => {
+    // The Test is real, executed, bound to the Work revision and passing. The old
+    // gate completed the Work here with **zero** bound Review evidence; `workflow.md`
+    // §3/§7 puts an independent Review before the Test on the L2/L3 code lane.
+    recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
+    // Completed Review Runs of this Work already exist: the gate must not pick one on
+    // the caller's behalf, it must refuse the Test-only completion.
+    expect(
+      store.runs.count("work_id = ? AND role = 'review' AND status = 'completed'", [WORK_ID]),
+    ).toBeGreaterThan(0);
+
+    const testOnly = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
+    expect(testOnly.ok).toBe(false);
+    if (testOnly.ok) throw new Error('unreachable');
+    expect(testOnly.code).toBe('GATE_NOT_READY');
+    expect(testOnly.reasons.join(' ')).toContain('Review Run');
+    expect(store.works.find(WORK_ID)?.status).toBe('running');
+    expect(scanEvents(store, { names: ['delivery.work_completed'] })).toHaveLength(0);
+
+    // Naming a Run that is not a Review of this Work is not a Review either.
+    const wrongRole = service.completeWork({
+      workId: WORK_ID,
+      testRunId: NEW_TEST_RUN_ID,
+      reviewRunId: CHILD_RUN_ID,
+    });
+    expect(wrongRole.ok).toBe(false);
+    if (wrongRole.ok) throw new Error('unreachable');
+    expect(wrongRole.code).toBe('GATE_NOT_READY');
+    expect(wrongRole.reasons.join(' ')).toContain('role');
+
+    // The Review half goes through the same shared evidence rule: a completed
+    // Review Run whose artifact froze another revision cannot carry the completion.
+    recordReviewArtifact(NEW_REVIEW_RUN_ID, 'd'.repeat(40));
+    recordStageResult(NEW_REVIEW_RUN_ID, 'success');
+    const foreignRevision = service.completeWork({
+      workId: WORK_ID,
+      testRunId: NEW_TEST_RUN_ID,
+      reviewRunId: NEW_REVIEW_RUN_ID,
+    });
+    expect(foreignRevision.ok).toBe(false);
+    if (foreignRevision.ok) throw new Error('unreachable');
+    expect(foreignRevision.code).toBe('GATE_NOT_READY');
+    expect(foreignRevision.reasons.join(' ')).toContain('revision');
+    expect(store.works.find(WORK_ID)?.status).toBe('running');
+
+    // Both evidence, both bound to the Work revision: the completion succeeds and
+    // reports each piece under its own evidence kind.
+    recordReviewCheck(NEW_REVIEW_RUN_ID);
+    const both = service.completeWork({
+      workId: WORK_ID,
+      testRunId: NEW_TEST_RUN_ID,
+      reviewRunId: NEW_REVIEW_RUN_ID,
+    });
+    expect(both.ok).toBe(true);
+    if (!both.ok) throw new Error('unreachable');
+    expect(both.evidenceKind).toBe('test');
+    expect(both.evidenceKinds).toEqual(['test', 'review']);
+    expect(both.testRunId).toBe(NEW_TEST_RUN_ID);
+    expect(both.reviewRunId).toBe(NEW_REVIEW_RUN_ID);
+    expect(store.works.find(WORK_ID)?.status).toBe('completed');
+    expect(scanEvents(store, { names: ['delivery.work_completed'] })).toHaveLength(1);
   });
 
   it('blocks completion while a blocking Finding is open or addressed (AC-017, AC-019)', () => {
@@ -1079,6 +1165,8 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
 
     // Only a Test of the post-fix revision, paired with the new Review, completes.
     recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed', revision: FIX_REVISION });
+    // W6R4-01: the Review Run's own persisted ReviewCheck is part of the evidence.
+    recordStageResult(NEW_REVIEW_RUN_ID, 'success');
     const closed = service.verifyFinding({
       findingId,
       actorRole: 'review',
@@ -1086,7 +1174,11 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
       testRun: { runId: NEW_TEST_RUN_ID },
     });
     expect(closed.ok).toBe(true);
-    const done = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
+    const done = service.completeWork({
+      workId: WORK_ID,
+      testRunId: NEW_TEST_RUN_ID,
+      reviewRunId: NEW_REVIEW_RUN_ID,
+    });
     expect(done.ok).toBe(true);
     expect(done.ok && done.testRunId).toBe(NEW_TEST_RUN_ID);
     expect(store.works.find(WORK_ID)?.status).toBe('completed');
@@ -1389,7 +1481,12 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
 
   it('refuses to cancel a finished Work', () => {
     recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
-    const completed = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
+    recordReviewCheck(NEW_REVIEW_RUN_ID);
+    const completed = service.completeWork({
+      workId: WORK_ID,
+      testRunId: NEW_TEST_RUN_ID,
+      reviewRunId: NEW_REVIEW_RUN_ID,
+    });
     expect(completed.ok).toBe(true);
     const cancelled = service.cancelWork({ workId: WORK_ID });
     expect(cancelled.ok).toBe(false);
@@ -1450,12 +1547,19 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     const stillStale = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
     expect(stillStale.ok).toBe(false);
 
-    // A Test of the post-fix revision, produced after the fix, does complete.
+    // A Test of the post-fix revision, produced after the fix, does complete —
+    // together with the independent Review the same stage order requires (W6R4-01).
     recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed', revision: FIX_REVISION });
-    const done = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
+    recordReviewCheck(NEW_REVIEW_RUN_ID, FIX_REVISION);
+    const done = service.completeWork({
+      workId: WORK_ID,
+      testRunId: NEW_TEST_RUN_ID,
+      reviewRunId: NEW_REVIEW_RUN_ID,
+    });
     expect(done.ok).toBe(true);
     if (!done.ok) throw new Error('unreachable');
     expect(done.evidenceKind).toBe('test');
+    expect(done.reviewRunId).toBe(NEW_REVIEW_RUN_ID);
     expect(
       scanEvents(store, { names: ['delivery.work_completed'] })[0]?.data['testEvidenceRevision'],
     ).toBe(FIX_REVISION);
@@ -1520,8 +1624,14 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
       manifestId: FROZEN_MANIFEST_UUID,
       checkStatus: 'passed',
     });
+    // W6R4-01: the independent Review Run is the other half of an L2 completion.
+    recordReviewCheck(NEW_REVIEW_RUN_ID);
 
-    const done = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
+    const done = service.completeWork({
+      workId: WORK_ID,
+      testRunId: NEW_TEST_RUN_ID,
+      reviewRunId: NEW_REVIEW_RUN_ID,
+    });
     expect(done.ok).toBe(true);
     if (!done.ok) throw new Error('unreachable');
     expect(done.testStatus).toBe('passed');
@@ -1617,6 +1727,31 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     expect(keys).not.toContain('testStatus');
     expect(keys).not.toContain('testRunId');
     expect(keys).not.toContain('testEvidenceRevision');
+  });
+
+  it('reports review evidence under review fields and no test status on an L1 completion (AC-007, W6R4-02)', () => {
+    const work = store.works.find(WORK_ID);
+    if (work === undefined) throw new Error('unreachable');
+    store.works.update(WORK_ID, { level: 'L1' }, work.version);
+    recordReviewCheck(REVIEW_RUN_ID);
+    const manifestRef = freezeCompletionManifest(WORK_ID, REVISION);
+
+    const done = service.completeWork({
+      workId: WORK_ID,
+      reviewRunId: REVIEW_RUN_ID,
+      completionManifestRef: manifestRef,
+    });
+    expect(done.ok).toBe(true);
+    if (!done.ok) throw new Error('unreachable');
+    // W6R4-02: the result is named after the evidence it holds. The old shape
+    // reported this very case as `testStatus: 'passed'` with the Review Run in
+    // `testRunId`, which read as a Test that never ran.
+    expect(done.evidenceKind).toBe('review');
+    expect(done.evidenceKinds).toEqual(['review']);
+    expect(done.reviewStatus).toBe('passed');
+    expect(done.reviewRunId).toBe(REVIEW_RUN_ID);
+    expect('testStatus' in done).toBe(false);
+    expect('testRunId' in done).toBe(false);
   });
 
   it('keeps the document route on its own rule: Review evidence, no code Test Run (AC-012, W6R2-09)', () => {
@@ -1721,7 +1856,12 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
 
     // A real completion moves the Work to `completed`.
     recordTestCheck(NEW_TEST_RUN_ID, { status: 'passed' });
-    const done = service.completeWork({ workId: WORK_ID, testRunId: NEW_TEST_RUN_ID });
+    recordReviewCheck(NEW_REVIEW_RUN_ID);
+    const done = service.completeWork({
+      workId: WORK_ID,
+      testRunId: NEW_TEST_RUN_ID,
+      reviewRunId: NEW_REVIEW_RUN_ID,
+    });
     expect(done.ok).toBe(true);
     const admission = service.writeAdmission(PAUSE_RUN_ID);
     expect(admission.admitted).toBe(false);

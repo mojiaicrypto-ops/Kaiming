@@ -59,6 +59,7 @@ import {
   canTransitionTask,
   canTransitionWork,
   completionEvidenceKindFor,
+  completionEvidenceKindsFor,
   evaluateEvidenceValidity,
   evaluateFindingClosure,
   evaluateFindingRouting,
@@ -291,7 +292,9 @@ export type AcceptFindingRiskResult =
  * The Test evidence the completion gate read, for the caller's own evidence refs.
  *
  * There is deliberately no caller-supplied equivalent of this shape: the status
- * below is the persisted `CheckResult.status`, never a claim (W6R1-02).
+ * below is the persisted `CheckResult.status`, never a claim (W6R1-02). The name
+ * is historical — `completeWork` now records one of these per required evidence
+ * kind and exposes them under kind-named result fields (W6R4-02).
  */
 export interface CompletedTestEvidence {
   /** The persisted Run the completion gate reads (Test or Review, per route). */
@@ -331,13 +334,20 @@ export interface CompleteWorkInput {
    * (`data.md` §3 `TestResult`). A caller-asserted status is **not** accepted: the
    * gate reads the Run's own `stage_result.checkResult`, so "the Work is done"
    * cannot be claimed without an executed Test (W6R1-02, AC-018/AC-019).
+   *
+   * A code L2/L3 Work needs this **and** {@link reviewRunId} (W6R4-01).
    */
   readonly testRunId?: string;
   /**
-   * The persisted Review Run that carries the completion evidence on a route/level
-   * without a Test stage (code L1, document). It must be a completed Review of this
-   * Work whose ReviewCheck result and artifact are valid and bound to the Work
-   * revision.
+   * The persisted Review Run that carries the completion's Review evidence.
+   *
+   * It is required for every route/level whose stage order contains a `Review`
+   * step, which is all of them: the code L1 lane, both document levels and the
+   * operation route complete on this evidence alone, while code L2/L3 must bind it
+   * **in addition** to `testRunId` (`workflow.md` §3/§7, W6R4-01). It must be a
+   * completed `role='review'` Run of this Work — never the Test Run and never the
+   * implementing Run — whose ReviewCheck result and artifact are valid and bound
+   * to the Work revision.
    */
   readonly reviewRunId?: string;
   /**
@@ -358,10 +368,28 @@ export type CompleteWorkResult =
   | {
       readonly ok: true;
       readonly work: Work;
-      readonly testStatus: CheckStatus;
-      readonly testRunId: string;
-      /** The route/level rule that selected `testRunId` (W6R2-09). */
+      /** The route/level rule that selected the primary evidence (W6R2-09). */
       readonly evidenceKind: CompletionEvidenceKind;
+      /**
+       * Every evidence kind this completion had to bind, in rule order (W6R4-01).
+       *
+       * Code L2/L3 is `['test','review']`; every other route/level is `['review']`.
+       */
+      readonly evidenceKinds: readonly CompletionEvidenceKind[];
+      /**
+       * The Test evidence, present exactly when a Test Run carried the completion.
+       *
+       * W6R4-02: the fields are named after the evidence they hold. A Review
+       * completion no longer reports its Review Run as `testRunId` with an invented
+       * `testStatus: 'passed'`; the Review evidence is on `reviewStatus`/
+       * `reviewRunId` below. `testStatus`/`testRunId` stay for the documented
+       * Test-completion callers.
+       */
+      readonly testStatus?: CheckStatus;
+      readonly testRunId?: string;
+      /** The Review evidence, present when a Review Run is part of the completion. */
+      readonly reviewStatus?: CheckStatus;
+      readonly reviewRunId?: string;
       readonly completionManifestHash: string | null;
       readonly riskDecisionIds: readonly string[];
     }
@@ -1103,7 +1131,8 @@ export class FindingService {
       };
     }
     const kind = completionEvidenceKindFor(route, work.level);
-    if (kind === undefined) {
+    const kinds = completionEvidenceKindsFor(route, work.level);
+    if (kind === undefined || kinds === undefined) {
       return {
         ok: false,
         code: 'VALIDATION_ERROR',
@@ -1173,17 +1202,26 @@ export class FindingService {
       completionManifestHash = frozen.hash;
       completionFinalRevision = frozen.manifest.finalRevision;
     }
-    const evidence = this.completionEvidence(input, work, kind);
-    if (!evidence.ok) {
+    // W6R4-01: the route/level's own stage order may require more than one evidence
+    // kind — code L2/L3 requires the independent Review **and** the Test
+    // (`workflow.md` §3/§7). The primary kind (the one the route/level rule selects)
+    // is validated here; the remaining required kinds follow once the primary
+    // evidence's own rules have been applied, so a refused Test result is reported
+    // as itself rather than as a missing Review.
+    const evidenceByKind = new Map<CompletionEvidenceKind, CompletedTestEvidence>();
+    const primaryEvidence = this.completionEvidence(input, work, kind);
+    if (!primaryEvidence.ok) {
       return {
         ok: false,
-        code: evidence.code,
-        message: evidence.message,
-        reasons: [evidence.message],
+        code: primaryEvidence.code,
+        message: primaryEvidence.message,
+        reasons: [primaryEvidence.message],
         needsRiskDisposition: [],
       };
     }
-    const testResult = { status: evidence.test.status, uncovered: evidence.test.uncovered };
+    const primary = primaryEvidence.test;
+    evidenceByKind.set(kind, primary);
+    const testResult = { status: primary.status, uncovered: primary.uncovered };
     const dispositions = new Map<string, string>();
     for (const disposition of input.riskDispositions ?? []) {
       if (dispositions.has(disposition.acceptanceId)) {
@@ -1267,6 +1305,25 @@ export class FindingService {
         needsRiskDisposition: gate.blocked ? gate.needsRiskDisposition : [],
       };
     }
+    // W6R4-01: with the primary evidence sound, every remaining kind the route/level
+    // requires must be bound too. For code L2/L3 that is the independent Review Run
+    // the same stage order puts before the Test: it goes through the identical
+    // Review branch of `completionEvidence`, so "a green Test" can no longer stand in
+    // for "was independently reviewed" (AC-010, `workflow.md` §3/§7).
+    for (const requiredKind of kinds) {
+      if (requiredKind === kind) continue;
+      const required = this.completionEvidence(input, work, requiredKind);
+      if (!required.ok) {
+        return {
+          ok: false,
+          code: required.code,
+          message: required.message,
+          reasons: [required.message],
+          needsRiskDisposition: [],
+        };
+      }
+      evidenceByKind.set(requiredKind, required.test);
+    }
     if (!canTransitionWork(work.status, 'completed')) {
       return {
         ok: false,
@@ -1277,29 +1334,30 @@ export class FindingService {
       };
     }
     const updated = this.store.works.update(work.id, { status: 'completed' }, work.version);
-    const evidenceRunId = evidence.test.testRunId;
+    const evidenceRunId = primary.testRunId;
     // W6R3-07: the event fields follow `evidenceKind`. Writing Review evidence into
     // `testStatus`/`testRunId` made an audit read a Review completion as a passed
-    // Test; the review branch exposes review-named fields instead.
+    // Test; the review branch exposes review-named fields instead. W6R4-01 keeps the
+    // event on the primary evidence so that split stays exact.
     const eventData: JsonObject = {
       workId: updated.id,
       route,
-      evidenceKind: evidence.test.kind,
+      evidenceKind: primary.kind,
       evidenceRunId,
-      ...(evidence.test.kind === 'test'
+      ...(primary.kind === 'test'
         ? {
             testStatus: testResult.status,
             testRunId: evidenceRunId,
-            testEvidenceRevision: evidence.test.revision,
-            testEnvironmentRef: evidence.test.environmentRef,
+            testEvidenceRevision: primary.revision,
+            testEnvironmentRef: primary.environmentRef,
           }
         : {
             reviewStatus: 'passed',
             reviewRunId: evidenceRunId,
-            reviewEvidenceRevision: evidence.test.revision,
-            ...(evidence.test.environmentRef === ''
+            reviewEvidenceRevision: primary.revision,
+            ...(primary.environmentRef === ''
               ? {}
-              : { reviewEnvironmentRef: evidence.test.environmentRef }),
+              : { reviewEnvironmentRef: primary.environmentRef }),
           }),
       completionManifestHash,
       completionManifestFinalRevision: completionFinalRevision,
@@ -1312,12 +1370,23 @@ export class FindingService {
       entityVersion: updated.version,
       data: eventData,
     });
+    // W6R4-02: report each piece of evidence under its own kind. A Review
+    // completion exposes `reviewStatus`/`reviewRunId` and leaves the Test-named
+    // fields absent, so `testStatus: 'passed'` can no longer be misread as a Test
+    // that never ran; `testStatus`/`testRunId` stay present for a Test completion.
+    const testEvidence = evidenceByKind.get('test');
+    const reviewEvidence = evidenceByKind.get('review');
     return {
       ok: true,
       work: updated,
-      testStatus: testResult.status,
-      testRunId: evidence.test.testRunId,
-      evidenceKind: evidence.test.kind,
+      evidenceKind: primary.kind,
+      evidenceKinds: [...kinds],
+      ...(testEvidence === undefined
+        ? {}
+        : { testStatus: testEvidence.status, testRunId: testEvidence.testRunId }),
+      ...(reviewEvidence === undefined
+        ? {}
+        : { reviewStatus: reviewEvidence.status, reviewRunId: reviewEvidence.testRunId }),
       completionManifestHash,
       riskDecisionIds: [...new Set(riskDecisionIds)],
     };
@@ -2053,6 +2122,12 @@ export class FindingService {
    * `evaluateEvidenceValidity` rule: not invalidated by a Finding/Decision, frozen
    * on a revision, produced after the newest recorded fix, and bound to the Work's
    * current revision.
+   *
+   * The Review branch is also how code L2/L3 binds its independent Review
+   * (W6R4-01): the caller loop above runs it for every required kind, so the Review
+   * must come from its own completed `role='review'` Run of this Work — it can never
+   * be the Test Run or the implementing Run — and it must clear the same validity,
+   * revision and pre-fix rules the Test does.
    */
   private completionEvidence(
     input: CompleteWorkInput,
@@ -2073,7 +2148,7 @@ export class FindingService {
         message:
           kind === 'test'
             ? 'no Test Run is bound; an executed Test result is required to complete a Work'
-            : 'no Review Run is bound; this route/level completes on its persisted Review result',
+            : 'no Review Run is bound; completion requires the persisted Review result of this route/level',
       };
     }
     const run = this.store.runs.find(runId);
