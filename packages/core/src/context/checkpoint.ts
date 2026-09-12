@@ -687,6 +687,17 @@ export function createCheckpointStore(
           `Checkpoint 声明的角色 ${input.checkpoint.role} 与 Run 的 ${run.role} 不一致（AC-035）`,
         );
       }
+      // `Checkpoint仅来自当前Run` covers the Work identity too: a Run bound to
+      // WP-05 may not store a position claiming WP-99, or the cold-start seed
+      // would resume at a Work this Run never ran (context.md §5).
+      if (input.checkpoint.workId !== run.workId) {
+        return invalid([
+          {
+            code: 'VALIDATION_ERROR',
+            message: `Checkpoint 声明的 Work ${input.checkpoint.workId} 与 Run ${run.workId} 不一致（§5）`,
+          },
+        ]);
+      }
       const previous = store.get(input.runId);
       if (input.checkpoint.sessionRef !== run.sessionRef) {
         return invalid([
@@ -742,12 +753,15 @@ export function createCheckpointStore(
       if (input.toSessionRef === input.fromSessionRef) {
         return invalid([{ code: 'VALIDATION_ERROR', message: '新 Session 不能与旧 Session 相同' }]);
       }
-      const rotated = Object.freeze({ ...run, sessionRef: input.toSessionRef });
-      runs.set(input.runId, rotated);
+      // Validate first, mutate last (`reliability.md` §1): a rotation of a Run
+      // that has no checkpoint must fail without binding the new session, so the
+      // rejected operation leaves no partial state behind.
       const previous = store.get(input.runId);
       if (previous === undefined) {
         return invalid([{ code: 'NOT_FOUND', message: `Run ${input.runId} 没有 Checkpoint` }]);
       }
+      const rotated = Object.freeze({ ...run, sessionRef: input.toSessionRef });
+      runs.set(input.runId, rotated);
       // Role, task, permissions, sources and approval survive the rotation: only
       // the physical session changes (`context.md` §5 会话轮换).
       const checkpoint = freezeCheckpoint({

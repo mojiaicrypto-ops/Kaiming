@@ -146,7 +146,7 @@ function computeSeal(entries: readonly ReadLedgerEntry[]): Hash {
 
 describe('read ledger — append inside readScope (AC-032)', () => {
   it('appends a reasoned read with its full identity and accounts its tokens', () => {
-    const { ledger } = openLedger({ budget: { initialTokens: 1_000, expansionTokens: 0 } });
+    const { ledger } = openLedger({ budget: { initialTokens: 4_096, expansionTokens: 0 } });
     const content = 'export const cancel = () => confirmed;\n';
 
     const appended = expectOk(
@@ -163,7 +163,7 @@ describe('read ledger — append inside readScope (AC-032)', () => {
     expect(appended.hash).toBe(sha256(content));
     expect(appended.bytes).toBe(Buffer.byteLength(content, 'utf8'));
     expect(appended.consumedTokens).toBe(tokensOf(content));
-    expect(appended.remainingTokens).toBe(1_000 - tokensOf(content));
+    expect(appended.remainingTokens).toBe(4_096 - tokensOf(content));
 
     expect(ledger.entries()).toEqual([
       {
@@ -178,10 +178,10 @@ describe('read ledger — append inside readScope (AC-032)', () => {
       },
     ]);
     expect(ledger.usage()).toEqual({
-      initial: { limit: 1_000, used: tokensOf(content) },
+      initial: { limit: 4_096, used: tokensOf(content) },
       expansion: { limit: 0, used: 0 },
       consumedTokens: tokensOf(content),
-      remainingTokens: 1_000 - tokensOf(content),
+      remainingTokens: 4_096 - tokensOf(content),
       entries: 1,
     });
   });
@@ -250,6 +250,58 @@ describe('read ledger — append inside readScope (AC-032)', () => {
     expect(ledger.entries()).toHaveLength(0);
   });
 
+  it('refuses the developer-chat/dev-transcript path markers (W5R1-05)', () => {
+    const { ledger } = openLedger();
+    for (const path of ['docs/dev-chat.md', 'docs/developer-transcript.md']) {
+      expectRefusal(
+        ledger.append({ path, reason: '读取开发聊天导出', content: 'chat contents\n' }),
+        'CONTEXT_FORBIDDEN',
+      );
+    }
+    expect(ledger.entries()).toHaveLength(0);
+  });
+
+  it('closes a throwing counter or clock instead of escaping (W5R1-10)', () => {
+    const scope = scopeFor('backend', 'develop-L2', PROJECT);
+    if (scope === null) throw new Error('missing scope');
+    const withBadCounter = createReadLedger({
+      runId: RUN_ID,
+      role: 'backend',
+      stage: 'develop-L2',
+      scope,
+      budget: { initialTokens: 24_000, expansionTokens: 0 },
+      tokenCounter: () => {
+        throw new Error('counter boom: secret-token');
+      },
+    });
+    const counterLedger = expectOk(withBadCounter).ledger;
+    const counterError = expectRefusal(
+      counterLedger.append({ path: 'src/a.ts', reason: '计数器异常', content: 'a\n' }),
+      'INTERNAL_ERROR',
+    );
+    expect(counterError.message).not.toContain('secret-token');
+    expect(counterLedger.entries()).toHaveLength(0);
+
+    const withBadClock = createReadLedger({
+      runId: RUN_ID,
+      role: 'backend',
+      stage: 'develop-L2',
+      scope,
+      budget: { initialTokens: 24_000, expansionTokens: 0 },
+      now: () => {
+        throw new Error('clock boom: secret-token');
+      },
+    });
+    const clockLedger = expectOk(withBadClock).ledger;
+    const clockError = expectRefusal(
+      clockLedger.append({ path: 'src/a.ts', reason: '时钟异常', content: 'a\n' }),
+      'INTERNAL_ERROR',
+    );
+    expect(clockError.message).not.toContain('secret-token');
+    expect(clockLedger.usage().initial.used).toBe(0);
+    expect(clockLedger.entries()).toHaveLength(0);
+  });
+
   it('refuses another Work process directory', () => {
     const { ledger } = openLedger();
     expectRefusal(
@@ -301,16 +353,19 @@ describe('read ledger — append inside readScope (AC-032)', () => {
 
 describe('read ledger — budget accounting (AC-036)', () => {
   it('charges the startup package and refuses the read that would exceed the ceiling', () => {
-    const first = body('a', 64);
+    // `body(marker, 4 * n)` costs exactly `n` tokens under the character/4
+    // estimator, so the documented minimum ceiling can be exhausted exactly.
+    const first = body('a', 16_384);
     const second = body('b', 96);
     const { ledger } = openLedger({
       budget: { initialTokens: tokensOf(first), expansionTokens: 0 },
     });
+    expect(tokensOf(first)).toBe(4_096);
 
     const appended = expectOk(
       ledger.append({ path: 'src/a.ts', reason: '第一处读取', content: first }),
     );
-    expect(appended.consumedTokens).toBe(16);
+    expect(appended.consumedTokens).toBe(4_096);
     expect(appended.remainingTokens).toBe(0);
 
     const error = expectRefusal(
@@ -326,34 +381,34 @@ describe('read ledger — budget accounting (AC-036)', () => {
 
     // The refused read is not appended and does not move the accounting.
     expect(ledger.entries()).toHaveLength(1);
-    expect(ledger.usage().initial).toEqual({ limit: 16, used: 16 });
-    expect(ledger.usage().consumedTokens).toBe(16);
+    expect(ledger.usage().initial).toEqual({ limit: 4_096, used: 4_096 });
+    expect(ledger.usage().consumedTokens).toBe(4_096);
   });
 
   it('accounts tokens the frozen startup package already spent', () => {
     const { ledger } = openLedger({
-      budget: { initialTokens: 100, initialUsed: 60, expansionTokens: 0 },
+      budget: { initialTokens: 4_096, initialUsed: 4_090, expansionTokens: 0 },
     });
     expect(ledger.usage()).toEqual({
-      initial: { limit: 100, used: 60 },
+      initial: { limit: 4_096, used: 4_090 },
       expansion: { limit: 0, used: 0 },
       consumedTokens: 0,
-      remainingTokens: 40,
+      remainingTokens: 6,
       entries: 0,
     });
 
     expectOk(
-      ledger.append({ path: 'src/a.ts', reason: '使用剩余初始预算', content: body('a', 120) }),
+      ledger.append({ path: 'src/a.ts', reason: '使用剩余初始预算', content: body('a', 24) }),
     );
-    expect(ledger.usage().initial).toEqual({ limit: 100, used: 90 });
-    expect(ledger.usage().remainingTokens).toBe(10);
+    expect(ledger.usage().initial).toEqual({ limit: 4_096, used: 4_096 });
+    expect(ledger.usage().remainingTokens).toBe(0);
 
     const error = expectRefusal(
-      ledger.append({ path: 'src/b.ts', reason: '超出剩余初始预算', content: body('b', 80) }),
+      ledger.append({ path: 'src/b.ts', reason: '超出剩余初始预算', content: body('b', 32) }),
       'BUDGET_EXCEEDED',
     );
-    expect(error.requiredTokens).toBe(20);
-    expect(error.remainingTokens).toBe(10);
+    expect(error.requiredTokens).toBe(8);
+    expect(error.remainingTokens).toBe(0);
   });
 
   it('refuses invalid budget input when the ledger is created', () => {
@@ -362,7 +417,12 @@ describe('read ledger — budget accounting (AC-036)', () => {
     for (const budget of [
       { initialTokens: -1, expansionTokens: 0 },
       { initialTokens: 1.5, expansionTokens: 0 },
+      { initialTokens: 4096.5, expansionTokens: 0 },
+      { initialTokens: 4_095, expansionTokens: 0 },
+      { initialTokens: 2_000_001, expansionTokens: 0 },
+      { initialTokens: 1e15, expansionTokens: 0 },
       { initialTokens: 10, expansionTokens: -4 },
+      { initialTokens: 24_000, expansionTokens: 4_095 },
       { initialTokens: 10, initialUsed: 11, expansionTokens: 0 },
     ]) {
       const created = createReadLedger({
@@ -376,11 +436,31 @@ describe('read ledger — budget accounting (AC-036)', () => {
       expectRefusal(created, 'VALIDATION_ERROR');
     }
   });
+
+  it('accepts the documented budget boundaries and the explicit empty budget', () => {
+    const scope = scopeFor('backend', 'develop-L2', PROJECT);
+    if (scope === null) throw new Error('missing scope');
+    for (const budget of [
+      { initialTokens: 4_096, expansionTokens: 0 },
+      { initialTokens: 2_000_000, expansionTokens: 16_000 },
+      { initialTokens: 0, expansionTokens: 0 },
+    ]) {
+      const created = createReadLedger({
+        runId: RUN_ID,
+        role: 'backend',
+        stage: 'develop-L2',
+        scope,
+        budget,
+        now: () => FIXED_TIME,
+      });
+      expect(created.ok, JSON.stringify(budget)).toBe(true);
+    }
+  });
 });
 
 describe('read ledger — reasoned expansion (AC-032, AC-036)', () => {
   it('keeps reads beyond the scope impossible until a grant widens it', () => {
-    const { ledger, scope } = openLedger({ budget: { initialTokens: 1_000, expansionTokens: 0 } });
+    const { ledger, scope } = openLedger({ budget: { initialTokens: 4_096, expansionTokens: 0 } });
     const request = requestFor('vendor/shared-types.ts');
 
     expectRefusal(
@@ -423,11 +503,14 @@ describe('read ledger — reasoned expansion (AC-032, AC-036)', () => {
   });
 
   it('makes granted extra tokens usable and still enforces the ceiling without them', () => {
-    const first = body('a', 64);
+    // The documented minimum ceiling, exhausted exactly (16 384 characters = 4096
+    // tokens), so the ceiling is real without using a sub-minimum budget.
+    const first = body('a', 16_384);
     const second = body('b', 96);
     const { ledger, scope } = openLedger({
       budget: { initialTokens: tokensOf(first), expansionTokens: 0 },
     });
+    expect(tokensOf(first)).toBe(4_096);
     const request = requestFor('vendor/shared-types.ts');
 
     expectOk(ledger.append({ path: 'src/a.ts', reason: '第一处读取', content: first }));
@@ -469,9 +552,9 @@ describe('read ledger — reasoned expansion (AC-032, AC-036)', () => {
     expect(appended.consumedTokens).toBe(24);
     expect(appended.remainingTokens).toBe(0);
     expect(ledger.usage()).toEqual({
-      initial: { limit: 16, used: 16 },
+      initial: { limit: 4_096, used: 4_096 },
       expansion: { limit: 24, used: 24 },
-      consumedTokens: 40,
+      consumedTokens: 4_120,
       remainingTokens: 0,
       entries: 2,
     });
@@ -564,6 +647,32 @@ describe('read ledger — reasoned expansion (AC-032, AC-036)', () => {
       ledger.append({ path: 'vendor/shared-types.ts', reason: '无效授权后读取', content: 'x\n' }),
       'CONTEXT_FORBIDDEN',
     );
+  });
+
+  it('refuses a grant that drops the permanent denials (W5R1-04)', () => {
+    const { ledger, scope } = openLedger();
+    const request = requestFor('vendor/shared-types.ts');
+    expectOk(ledger.requestExpansion({ request }));
+
+    // A "wider" scope that widens the allowed prefixes but erases the permanent
+    // denials would make `.git/config` and `node_modules` readable; the grant must
+    // be refused because an expansion may only widen, never narrow, constraints.
+    expectRefusal(
+      ledger.grantExpansion({
+        request,
+        granted: true,
+        expandedScope: { ...scope, pathPrefixes: [''], deniedPaths: [] },
+      }),
+      'VALIDATION_ERROR',
+    );
+    // The ledger's scope and denials are untouched, so the denied paths stay denied.
+    expect(ledger.readScope().deniedPaths).toEqual(scope.deniedPaths);
+    for (const path of ['.git/config', 'node_modules/x/index.js']) {
+      expectRefusal(
+        ledger.append({ path, reason: '尝试读取永久拒绝路径', content: 'x\n' }),
+        'CONTEXT_FORBIDDEN',
+      );
+    }
   });
 
   it('refuses a Transcript, an escaping path or a reasonless expansion request', () => {

@@ -20,13 +20,12 @@
 import type { ErrorCode, RepoPath } from '@agentdev/contracts';
 import { requiredInputRow } from './requirements.js';
 import {
-  ARTIFACT_PRODUCER_STAGE,
   ARTIFACT_ROOT,
   artifactClassFromPath,
   classifyMessageSender,
   denialSourceRef,
   isDeniedSourcePath,
-  pipelineRank,
+  isFutureArtifact,
   PIPELINE_ORDER,
   type AclDecision,
   type ArtifactClass,
@@ -326,6 +325,17 @@ function repoPath(prefix: string): RepoPath {
   return prefix;
 }
 
+/**
+ * Normalizes a Project root into a read prefix.
+ *
+ * A legacy Project is initialised with `code-root=.` (`knowledge.md` §5), which is
+ * the whole repository rather than a directory literally named `.`, so it becomes
+ * the empty prefix. Without this, a `"."`-rooted project could read no code at all.
+ */
+function rootPrefix(root: string): string {
+  return root === '.' || root === './' ? '' : root;
+}
+
 /** The reason a path is refused regardless of role, or `null` when it is not. */
 function permanentPathDenial(path: string, scope: ReadScope): string | null {
   const normalized = path.replaceAll('\\', '/');
@@ -372,14 +382,13 @@ function denialsFor(role: ContextRole, stage: ContextStage): readonly DeniedSour
   return denials;
 }
 
-/** Artifact classes a stage may resolve: produced at or before that stage. */
+/** Artifact classes a stage may resolve: readable at or before that stage. */
 export function artifactClassesFor(
   role: ContextRole,
   stage: ContextStage,
 ): readonly ArtifactClass[] {
-  const stageRank = pipelineRank(stage);
   return ROLE_ARTIFACT_CLASSES[role].filter(
-    (artifactClass) => pipelineRank(ARTIFACT_PRODUCER_STAGE[artifactClass]) <= stageRank,
+    (artifactClass) => !isFutureArtifact(artifactClass, stage),
   );
 }
 
@@ -412,8 +421,8 @@ export function scopeFor(
   if (!ROLE_STAGES[role].includes(stage)) return null;
   const prefixes = new Set<string>();
   for (const rule of ROLE_PREFIX_RULES[role]) {
-    if (rule.kind === 'code') prefixes.add(project.codeRoot);
-    if (rule.kind === 'document') prefixes.add(project.documentRoot);
+    if (rule.kind === 'code') prefixes.add(rootPrefix(project.codeRoot));
+    if (rule.kind === 'document') prefixes.add(rootPrefix(project.documentRoot));
     if (rule.kind === 'feature') {
       prefixes.add(FEATURE_NAVIGATION_PREFIX);
       prefixes.add(ARTIFACT_PREFIX);
@@ -566,7 +575,9 @@ function classOf(source: ContextSourceRef): ArtifactClass | null {
 }
 
 function pathInPrefix(path: string, prefix: string): boolean {
-  if (prefix === '') return true;
+  // `.`/`./` is the legacy whole-repository root (`knowledge.md` §5): it matches
+  // every repository-relative path, exactly like the empty prefix.
+  if (prefix === '' || prefix === '.' || prefix === './') return true;
   const base = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
   const normalized = path.replaceAll('\\', '/');
   return normalized === base || normalized.startsWith(`${base}/`);

@@ -41,14 +41,22 @@
  * keeps the package graph acyclic and still makes a genuine WP-04 projection
  * assignable and testable.
  */
-import type { ErrorCode, Hash, ProjectionState, RepoPath, Time } from '@agentdev/contracts';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import type {
+  ErrorCode,
+  Hash,
+  ProjectionState,
+  RepoPath,
+  SourceRef,
+  Time,
+} from '@agentdev/contracts';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { nowIso, sha256 } from '@agentdev/storage';
 import { canonicalJson } from '../dispatcher.js';
 import { canRead, scopeFor } from './acl.js';
 import {
   isDeniedSourcePath,
+  readBudgetValueError,
   type ContextError,
   type ContextResult,
   type ContextRole,
@@ -331,6 +339,17 @@ export function createTranscriptGuard(input: CreateTranscriptGuardInput): Transc
     if (!decision.allowed) {
       return { code: decision.code, message: decision.message, ref: decision.ref };
     }
+    // `execution.md` §3: a file tool refuses relative-path escapes, symlink
+    // escapes and nested repositories, and re-checks the *real* path when it
+    // opens. A symlink inside the project that resolves outside the root is
+    // therefore refused even though `join()` would read it.
+    if (directory !== undefined && corpusPathState(directory, path).kind === 'outside') {
+      return {
+        code: 'CONTEXT_FORBIDDEN',
+        message: `符号链接逃逸项目根：${path}（execution.md §3）`,
+        ref: denialRefForPath(path),
+      };
+    }
     if (!registered.has(path)) {
       return { code: 'CONTEXT_FORBIDDEN', message: `路径未注册进本次冷启动 corpus：${path}` };
     }
@@ -369,7 +388,20 @@ export function createTranscriptGuard(input: CreateTranscriptGuardInput): Transc
           errors: [{ code: 'NOT_FOUND', message: `corpus 没有该路径的正文：${path}` }],
         };
       }
-      const content = readCorpusFile(directory, path);
+      const state = corpusPathState(directory, path);
+      if (state.kind === 'outside') {
+        return {
+          ok: false,
+          errors: [
+            {
+              code: 'CONTEXT_FORBIDDEN',
+              message: `符号链接逃逸项目根：${path}（execution.md §3）`,
+              ref: denialRefForPath(path),
+            },
+          ],
+        };
+      }
+      const content = readCorpusFile(state);
       if (content === null) {
         return { ok: false, errors: [{ code: 'NOT_FOUND', message: `文件不存在：${path}` }] };
       }
@@ -379,10 +411,56 @@ export function createTranscriptGuard(input: CreateTranscriptGuardInput): Transc
   return Object.freeze(guard);
 }
 
-/** Reads one corpus file; `null` when it cannot be read (never throws). */
-function readCorpusFile(directory: string, path: string): string | null {
+/** The denial handle of one corpus path, so a refusal is always loggable. */
+function denialRefForPath(path: string): SourceRef {
+  return { kind: 'git', id: path, version: '1', path: repoPathOf(path) };
+}
+
+/** Where one corpus path really lives, relative to a real project root. */
+type CorpusPathState =
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'outside' }
+  | { readonly kind: 'inside'; readonly realPath: string };
+
+/**
+ * Classifies one corpus path against a real directory (`execution.md` §3).
+ *
+ * Both the root and the target are resolved with `realpathSync`, and the resolved
+ * target must stay inside the resolved root; a path that does not exist is
+ * `missing`. This is what makes a symlink pointing outside the project unreadable
+ * instead of silently following it.
+ */
+function corpusPathState(directory: string, path: string): CorpusPathState {
+  let root: string;
   try {
-    return readFileSync(join(directory, path), 'utf8');
+    root = realpathSync(directory);
+  } catch {
+    return { kind: 'missing' };
+  }
+  const candidate = resolve(root, path);
+  try {
+    lstatSync(candidate);
+  } catch {
+    return { kind: 'missing' };
+  }
+  let realPath: string;
+  try {
+    realPath = realpathSync(candidate);
+  } catch {
+    return { kind: 'missing' };
+  }
+  const inside = relative(root, realPath);
+  if (inside === '' || (!inside.startsWith('..') && !isAbsolute(inside))) {
+    return { kind: 'inside', realPath };
+  }
+  return { kind: 'outside' };
+}
+
+/** Reads one already-classified corpus file; `null` when it cannot be read. */
+function readCorpusFile(state: CorpusPathState): string | null {
+  if (state.kind !== 'inside') return null;
+  try {
+    return readFileSync(state.realPath, 'utf8');
   } catch {
     return null;
   }
@@ -836,13 +914,12 @@ export function assembleColdStart(
     ['startupTokens', limits.startupTokens],
     ['expansionTokens', limits.expansionTokens],
   ] as const) {
-    if (!Number.isInteger(value) || value < 0) {
+    const message = readBudgetValueError(name, value);
+    if (message !== null) {
       return {
         ok: false,
         code: 'VALIDATION_ERROR',
-        errors: [
-          { code: 'VALIDATION_ERROR', message: `readBudget.${name} 必须是非负整数（AC-036）` },
-        ],
+        errors: [{ code: 'VALIDATION_ERROR', message }],
       };
     }
   }
@@ -876,7 +953,13 @@ export function assembleColdStart(
   const unknowns: string[] = [];
   let consumed = 0;
 
-  /** Admits one entry when it fits the startup budget, otherwise records the gap. */
+  /**
+   * Admits one entry when it fits the startup budget, otherwise records the gap.
+   *
+   * Every entry — including the seed's fixed rules and Project overview — is
+   * charged, so a budget that cannot carry the seed is a closed failure instead of
+   * a package that quietly bypasses the ceiling (`AC-036`, W5R1-07).
+   */
   const admit = (entry: {
     readonly phase: ColdStartSelectionPhase;
     readonly key: string;
@@ -885,14 +968,14 @@ export function assembleColdStart(
     readonly reason: string;
     readonly content: string;
     readonly source: ResolvedSource;
-  }): boolean => {
+  }): { readonly admitted: boolean; readonly tokens: number; readonly shortfall: number } => {
     const tokens = tokensOf(entry.content);
     if (consumed + tokens > limits.startupTokens) {
       const shortfall = consumed + tokens - limits.startupTokens;
       const reason = `预算不足：选择 ${entry.key} 需要 ${tokens} tokens，缺口 ${shortfall} tokens（AC-036）`;
       excluded.push({ ref: entry.source.ref, reason, kind: 'budget' });
       unknowns.push(reason);
-      return false;
+      return { admitted: false, tokens, shortfall };
     }
     consumed += tokens;
     selection.push({
@@ -904,12 +987,12 @@ export function assembleColdStart(
       tokens,
     });
     sources.push(entry.source);
-    return true;
+    return { admitted: true, tokens, shortfall: 0 };
   };
 
   // Tier 1 — the Chief's fixed rules (`§5`: 新Conversation从Chief固定规则开始).
   const rules = fixedRulesSource();
-  admit({
+  const rulesAdmission = admit({
     phase: 'role_contract',
     key: `policy:${CHIEF_RULES_PATH}`,
     path: CHIEF_RULES_PATH,
@@ -923,7 +1006,7 @@ export function assembleColdStart(
   const overviewPath = repoPathOf(
     overviewDocument.path === '' ? 'PROJECT.md' : overviewDocument.path,
   );
-  admit({
+  const overviewAdmission = admit({
     phase: 'project_overview',
     key: `git:${overviewPath}`,
     path: overviewPath,
@@ -945,6 +1028,31 @@ export function assembleColdStart(
       reason: 'Project 概览（knowledge.md §1 总览）',
     },
   });
+
+  // The seed is not exempt from the budget: when the fixed rules or the Project
+  // overview do not fit, the cold start fails closed with the concrete gap rather
+  // than handing the caller bodies the accounting did not charge (`AC-036`).
+  const seedGaps: ContextError[] = [];
+  if (!rulesAdmission.admitted) {
+    seedGaps.push({
+      code: 'BUDGET_EXCEEDED',
+      message: `启动预算不足：固定规则 ${CHIEF_RULES_PATH} 需要 ${rulesAdmission.tokens} tokens，缺口 ${rulesAdmission.shortfall} tokens（AC-036）`,
+      ref: rules.ref,
+    });
+  }
+  if (!overviewAdmission.admitted) {
+    seedGaps.push({
+      code: 'BUDGET_EXCEEDED',
+      message: `启动预算不足：Project 概览 ${overviewPath} 需要 ${overviewAdmission.tokens} tokens，缺口 ${overviewAdmission.shortfall} tokens（AC-036）`,
+      ref: {
+        kind: 'git',
+        id: overviewPath,
+        version: options.projection.revision,
+        path: overviewPath,
+      },
+    });
+  }
+  if (seedGaps.length > 0) return { ok: false, code: 'BUDGET_EXCEEDED', errors: seedGaps };
 
   // Tier 3 — the current Work/Task position and the resume position from the
   // checkpoint. Only the resume facts cross a session boundary; the previous
@@ -1068,7 +1176,7 @@ export function assembleColdStart(
       `实现入口：${feature.sections.entries.items.join('；')}`,
       `已知差距：${[...feature.sections.gaps.items, feature.sections.gaps.text].filter((line) => line.trim() !== '').join('；')}`,
     ].join('\n');
-    const admitted = admit({
+    const admission = admit({
       phase: 'role_bodies',
       key: `git:${feature.documentPath}`,
       path: feature.documentPath,
@@ -1091,7 +1199,7 @@ export function assembleColdStart(
         reason: 'Feature 正文（当前行为/入口/差距）',
       },
     });
-    if (!admitted) {
+    if (!admission.admitted) {
       excluded.push({
         ref: {
           kind: 'git',
@@ -1181,6 +1289,16 @@ export function assembleColdStart(
     }),
   });
 
+  let createdAt: Time;
+  try {
+    createdAt = now();
+  } catch {
+    return {
+      ok: false,
+      code: 'INTERNAL_ERROR',
+      errors: [{ code: 'INTERNAL_ERROR', message: '冷启动时钟调用失败' }],
+    };
+  }
   const context: ColdStartContext = Object.freeze({
     role,
     stage,
@@ -1193,7 +1311,7 @@ export function assembleColdStart(
     policyHash: rules.hash,
     configHash: sha256(canonicalJson({ limits })),
     readScopeDigest: sha256(canonicalJson({ role, stage, project: project.projectId })),
-    createdAt: now(),
+    createdAt,
     tokenAccounting: Object.freeze({
       initial: Object.freeze({ limit: limits.startupTokens, used: consumed }),
       expansion: Object.freeze({ limit: limits.expansionTokens, used: 0 }),

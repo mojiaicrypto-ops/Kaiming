@@ -344,6 +344,27 @@ describe('checkpoint: only the current Run may write or read it (AC-033, AC-034)
       'NOT_FOUND',
     );
   });
+
+  it('refuses a checkpoint that claims another Work (W5R1-09)', () => {
+    const store = createCheckpointStore({ now: () => T0 });
+    expectOk(store.registerRun(run()));
+    const errors = expectRefusal(
+      store.save({ runId: RUN_ID, checkpoint: draft({ workId: 'WP-99' }) }),
+      'VALIDATION_ERROR',
+    );
+    expect(errors[0]?.message).toContain('WP-99');
+    // Nothing was stored for the foreign Work...
+    expectRefusal(
+      store.load({ runId: RUN_ID, role: 'backend', runScope: { projectId: PROJECT_ID } }),
+      'NOT_FOUND',
+    );
+    // ...and the Run's real Work still saves, so the rule is not a blanket denial.
+    expectOk(store.save({ runId: RUN_ID, checkpoint: draft() }));
+    const loaded = expectOk(
+      store.load({ runId: RUN_ID, role: 'backend', runScope: { projectId: PROJECT_ID } }),
+    );
+    expect(loaded.checkpoint.workId).toBe(WORK_ID);
+  });
 });
 
 describe('checkpoint: session rotation (AC-035)', () => {
@@ -401,6 +422,36 @@ describe('checkpoint: session rotation (AC-035)', () => {
       }),
       'INVALID_STATE',
     );
+  });
+
+  it('leaves the stored session unchanged when there is no checkpoint to rotate (W5R1-08)', () => {
+    const store = createCheckpointStore({ now: () => T0 });
+    expectOk(store.registerRun(run()));
+    expectRefusal(
+      store.rotateSession({
+        runId: RUN_ID,
+        fromSessionRef: SESSION_A,
+        toSessionRef: SESSION_B,
+        role: 'backend',
+        runScope: { projectId: PROJECT_ID, workId: WORK_ID },
+      }),
+      'NOT_FOUND',
+    );
+    // Validate first, mutate last: the rejected rotation did not bind session-b.
+    expect(store.runOf(RUN_ID)?.sessionRef).toBe(SESSION_A);
+    // The Run is still usable once a real checkpoint exists.
+    expectOk(store.save({ runId: RUN_ID, checkpoint: draft() }));
+    const rotated = expectOk(
+      store.rotateSession({
+        runId: RUN_ID,
+        fromSessionRef: SESSION_A,
+        toSessionRef: SESSION_B,
+        role: 'backend',
+        runScope: { projectId: PROJECT_ID, workId: WORK_ID },
+        at: T1,
+      }),
+    );
+    expect(rotated.run.sessionRef).toBe(SESSION_B);
   });
 
   it('does not let a staleness/rotation of the message list touch the approval', () => {

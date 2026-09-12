@@ -288,6 +288,10 @@ describe('context ACL — transcript isolation (AC-033)', () => {
       '.agentdev/work/WP-05/chat_history.txt',
       'transcripts/session-1.md',
       'docs/conversation-notes.md',
+      // W5R1-05: developer-prefixed chat/transcript exports are the same class of
+      // record and must be denied by the marker, not merely by a missing prefix.
+      'docs/dev-chat.md',
+      'docs/developer-transcript.md',
     ];
     for (const [role, stage] of roleStagePairs()) {
       const scope = scopeFor(role, stage, PROJECT);
@@ -308,6 +312,34 @@ describe('context ACL — transcript isolation (AC-033)', () => {
     expect(isDeniedSourcePath('.agentdev/work/WP-05/plan.md')).toBe(false);
     expect(isDeniedSourcePath('src/chat.ts')).toBe(false);
     expect(isDeniedSourcePath('docs/rules/agents.md')).toBe(false);
+    // W5R1-05 markers, and the ordinary files they must not swallow.
+    for (const marker of [
+      'docs/dev-chat.md',
+      'docs/developer-transcript.md',
+      'docs/dev-transcript.json',
+      'docs/developer-chat-log.md',
+      'dev-chat/notes.md',
+    ]) {
+      expect(isDeniedSourcePath(marker), marker).toBe(true);
+    }
+    for (const ordinary of ['src/developer-chat.ts', 'docs/development.md', 'src/dev-chat.ts']) {
+      expect(isDeniedSourcePath(ordinary), ordinary).toBe(false);
+    }
+  });
+
+  it('refuses the dev-chat markers for a role whose prefixes would admit them (W5R1-05)', () => {
+    // `docs/dev-chat.md` sits inside the readable `docs` prefix, so only the marker
+    // denies it; the same holds for the developer-transcript export.
+    const scope = scopeFor('chief', 'assist', PROJECT);
+    if (scope === null) throw new Error('chief must have a scope');
+    for (const path of ['docs/dev-chat.md', 'docs/developer-transcript.md']) {
+      const decision = canRead('chief', 'assist', gitSource(path), scope);
+      expect(decision.allowed, path).toBe(false);
+      if (!decision.allowed) {
+        expect(decision.code).toBe('CONTEXT_FORBIDDEN');
+        expect(decision.message).toContain('Transcript');
+      }
+    }
   });
 
   it('lets a Developer read the user request but never the transcript', () => {
@@ -477,6 +509,58 @@ describe('context ACL — future artifacts (AC-079)', () => {
     if (!decision.allowed) expect(decision.code).toBe('VALIDATION_ERROR');
   });
 
+  it('lets a downstream stage read a Chief-session decision or attachment (W5R1-03)', () => {
+    const productScope = scopeFor('product', 'product', PROJECT);
+    const developerScope = scopeFor('backend', 'develop-L2', PROJECT);
+    if (productScope === null || developerScope === null) throw new Error('scopes required');
+    // Product takes its `confirmedSource` from a user decision (`requirements.ts`).
+    expect(productScope.artifactClasses).toContain('decision');
+    expect(canRead('product', 'product', artifactSource('decision'), productScope).allowed).toBe(
+      true,
+    );
+    // A Developer reads the attachment it was pointed at.
+    expect(developerScope.artifactClasses).toContain('attachment');
+    expect(
+      canRead('backend', 'develop-L2', artifactSource('attachment'), developerScope).allowed,
+    ).toBe(true);
+    // Every role that declares a Chief-session class can actually reach it, so the
+    // matrix and the stage filter cannot contradict each other again.
+    for (const [role, stage] of roleStagePairs()) {
+      const scope = scopeFor(role, stage, PROJECT);
+      if (scope === null) continue;
+      for (const artifactClass of ['decision', 'attachment', 'log', 'recovery'] as const) {
+        if (!ROLE_ARTIFACT_CLASSES[role].includes(artifactClass)) continue;
+        expect(scope.artifactClasses, `${role}:${stage}`).toContain(artifactClass);
+      }
+    }
+  });
+
+  it('still refuses a future pipeline artifact to an earlier stage (W5R1-03, AC-079)', () => {
+    const productScope = scopeFor('product', 'product', PROJECT);
+    const planningScope = scopeFor('planning', 'planning', PROJECT);
+    const l1Scope = scopeFor('backend', 'develop-L1', PROJECT);
+    if (productScope === null || planningScope === null || l1Scope === null) {
+      throw new Error('scopes required');
+    }
+    // Product runs before Planning: the Plan is a future product.
+    expect(productScope.artifactClasses).not.toContain('plan');
+    expect(canRead('product', 'product', artifactSource('plan'), productScope).allowed).toBe(false);
+    // Planning runs before Review/Test.
+    for (const artifactClass of ['review', 'test'] as const) {
+      expect(
+        canRead('planning', 'planning', artifactSource(artifactClass), planningScope).allowed,
+        artifactClass,
+      ).toBe(false);
+    }
+    // L1 Develop reads the CompactPlan but never the Review/Test/Settlement report.
+    for (const artifactClass of ['review', 'test', 'settlement'] as const) {
+      expect(
+        canRead('backend', 'develop-L1', artifactSource(artifactClass), l1Scope).allowed,
+        artifactClass,
+      ).toBe(false);
+    }
+  });
+
   it('lets an L1 Develop read nothing from a future Plan', () => {
     const scope = scopeFor('backend', 'develop-L1', PROJECT);
     if (scope === null) throw new Error('backend must have a scope');
@@ -485,13 +569,17 @@ describe('context ACL — future artifacts (AC-079)', () => {
     expect(scope.artifactClasses).toContain('plan');
   });
 
-  it('never lists an artifact class a role cannot produce or consume', () => {
-    for (const [role, stage] of roleStagePairs()) {
-      const scope = scopeFor(role, stage, PROJECT);
-      if (scope === null) continue;
-      for (const artifactClass of scope.artifactClasses) {
-        expect(ROLE_ARTIFACT_CLASSES[role]).toContain(artifactClass);
+  it('derives every declared artifact class from a legal stage (W5R1-03)', () => {
+    // The union over a role's stages must equal the declared matrix: a class that
+    // is declared but reachable at no stage is the W5R1-03 defect.
+    for (const role of CONTEXT_ROLES) {
+      const reachable = new Set<ArtifactClass>();
+      for (const stage of ROLE_STAGES[role]) {
+        const scope = scopeFor(role, stage, PROJECT);
+        if (scope === null) continue;
+        for (const artifactClass of scope.artifactClasses) reachable.add(artifactClass);
       }
+      expect([...reachable].sort(), role).toEqual([...ROLE_ARTIFACT_CLASSES[role]].sort());
     }
   });
 });
@@ -566,6 +654,49 @@ describe('context ACL — read scope', () => {
         const decision = canRead(role, stage, gitSource(path), scope);
         expect(decision.allowed, `${role}:${stage} ${path}`).toBe(false);
       }
+    }
+  });
+});
+
+describe('context ACL — legacy whole-repository root (W5R1-11)', () => {
+  // `knowledge.md` §5 initialises an old Project with `code-root=.`; the root is
+  // the whole repository, not a directory literally named `.`, so a Developer must
+  // still be able to read the authorised source tree.
+  const LEGACY: ProjectScope = {
+    projectId: PROJECT.projectId,
+    codeRoot: '.',
+    documentRoot: 'docs/agentdev',
+    deliveryBranch: PROJECT.deliveryBranch,
+  };
+
+  it('reads repository code from a "."-rooted project', () => {
+    const scope = scopeFor('backend', 'develop-L2', LEGACY);
+    if (scope === null) throw new Error('backend must have a scope');
+    expect(scope.pathPrefixes).not.toContain('.');
+    expect(scope.pathPrefixes).toContain('');
+    for (const path of [
+      'src/orders/cancel.ts',
+      'packages/core/src/index.ts',
+      'docs/agentdev/PROJECT.md',
+    ]) {
+      expect(canRead('backend', 'develop-L2', gitSource(path), scope).allowed, path).toBe(true);
+    }
+  });
+
+  it('still denies permanent denials and transcript markers in a "."-rooted project', () => {
+    const scope = scopeFor('backend', 'develop-L2', LEGACY);
+    if (scope === null) throw new Error('backend must have a scope');
+    for (const path of [
+      '.git/config',
+      'node_modules/zod/index.js',
+      'dist/index.js',
+      'docs/dev-chat.md',
+      'docs/developer-transcript.md',
+      'transcripts/run-1.md',
+    ]) {
+      const decision = canRead('backend', 'develop-L2', gitSource(path), scope);
+      expect(decision.allowed, path).toBe(false);
+      if (!decision.allowed) expect(decision.code).toBe('CONTEXT_FORBIDDEN');
     }
   });
 });

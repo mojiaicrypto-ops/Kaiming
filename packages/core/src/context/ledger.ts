@@ -60,11 +60,14 @@ import {
   denialSourceRef,
   isDeniedSourcePath,
   pathIsInsidePrefix,
+  readBudgetValueError,
   type ContextError,
   type ContextRequest,
   type ContextRole,
   type ContextSourceRef,
   type ContextStage,
+  type DeniedSource,
+  type PathRestriction,
   type ReadScope,
   type ReaderContext,
 } from './types.js';
@@ -309,6 +312,48 @@ function coversPrefixes(outer: readonly string[], inner: readonly string[]): boo
   return inner.every((prefix) => outer.some((candidate) => pathIsInsidePrefix(prefix, candidate)));
 }
 
+/** `true` when every permanent path denial of `inner` is restated by `outer`. */
+function coversPathRestrictions(
+  outer: readonly PathRestriction[],
+  inner: readonly PathRestriction[],
+): boolean {
+  return inner.every((entry) =>
+    outer.some(
+      (candidate) => candidate.prefix === entry.prefix && candidate.reason === entry.reason,
+    ),
+  );
+}
+
+/** `true` when every source-class denial of `inner` is restated by `outer`. */
+function coversDenials(outer: readonly DeniedSource[], inner: readonly DeniedSource[]): boolean {
+  return inner.every((entry) =>
+    outer.some((candidate) => candidate.kind === entry.kind && candidate.reason === entry.reason),
+  );
+}
+
+/**
+ * Counts one body through an injected counter; `null` on a throw or an illegal
+ * value, so a bad counter becomes a closed `INTERNAL_ERROR` (W5R1-10) instead of
+ * escaping with the caller's stack.
+ */
+function safeTokens(counter: TokenCounter, content: string): number | null {
+  try {
+    const value = counter(content);
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Reads an injected clock; `null` on a throw, so the failure stays closed. */
+function safeClock(clock: () => Time): Time | null {
+  try {
+    return clock();
+  } catch {
+    return null;
+  }
+}
+
 /** Validation of one `append`; `null` means the shape is acceptable. */
 function appendShapeErrors(input: ReadLedgerAppendInput): readonly LedgerError[] {
   const errors: LedgerError[] = [];
@@ -441,7 +486,12 @@ class ReadLedgerImpl implements ReadLedger {
       });
     }
 
-    const required = this.counter(input.content);
+    const required = safeTokens(this.counter, input.content);
+    if (required === null) {
+      return fail('INTERNAL_ERROR', `token 计数器调用失败：${input.path}`);
+    }
+    const at = safeClock(this.clock);
+    if (at === null) return fail('INTERNAL_ERROR', 'read ledger 时钟调用失败');
     const remaining = this.remaining();
     if (required > remaining) {
       return fail(
@@ -465,7 +515,7 @@ class ReadLedgerImpl implements ReadLedger {
       reason: input.reason,
       bytes: Buffer.byteLength(input.content, 'utf8'),
       tokens: required,
-      at: this.clock(),
+      at,
     });
     this.appended.push(entry);
     return {
@@ -526,10 +576,12 @@ class ReadLedgerImpl implements ReadLedger {
     ) {
       return fail('INVALID_STATE', `该来源已有待处理的扩展请求：${key}（AC-032）`);
     }
+    const requestedAt = safeClock(this.clock);
+    if (requestedAt === null) return fail('INTERNAL_ERROR', 'read ledger 时钟调用失败');
     const record: ExpansionRecord = Object.freeze({
       request: freezeRequest(request),
       decision: 'pending',
-      requestedAt: this.clock(),
+      requestedAt,
     });
     this.requested.push(record);
     return { ok: true, expansion: freezeExpansion(record) };
@@ -567,10 +619,12 @@ class ReadLedgerImpl implements ReadLedger {
           `被拒绝的扩展请求不能携带 expandedScope/extraTokens：${key}（AC-036）`,
         );
       }
+      const deniedAt = safeClock(this.clock);
+      if (deniedAt === null) return fail('INTERNAL_ERROR', 'read ledger 时钟调用失败');
       const denied: ExpansionRecord = Object.freeze({
         ...pending,
         decision: 'denied',
-        decidedAt: this.clock(),
+        decidedAt: deniedAt,
         ...(input.note === undefined ? {} : { note: input.note }),
       });
       this.requested[index] = denied;
@@ -607,14 +661,28 @@ class ReadLedgerImpl implements ReadLedger {
     if (!coversAll(expandedScope.messageClasses, this.scope.messageClasses)) {
       return fail('VALIDATION_ERROR', `扩展后的 scope 必须覆盖原有 messageClasses：${key}`);
     }
+    // Permanent denials are not a setting an expansion may trade away: `.git`,
+    // `node_modules` and the other markers stay refused, with the same reason, or
+    // the grant is refused (`AC-032`; `acl.ts` DENIED_PATH_MARKERS).
+    if (!coversPathRestrictions(expandedScope.deniedPaths, this.scope.deniedPaths)) {
+      return fail(
+        'VALIDATION_ERROR',
+        `扩展后的 scope 必须保留原有 deniedPaths（含 reason）：${key}`,
+      );
+    }
+    if (!coversDenials(expandedScope.denied, this.scope.denied)) {
+      return fail('VALIDATION_ERROR', `扩展后的 scope 必须保留原有 denied（含 reason）：${key}`);
+    }
 
+    const grantedAt = safeClock(this.clock);
+    if (grantedAt === null) return fail('INTERNAL_ERROR', 'read ledger 时钟调用失败');
     this.scope = freezeReadScope(expandedScope);
     const extra = input.extraTokens ?? 0;
     this.expansionLimit += extra;
     const granted: ExpansionRecord = Object.freeze({
       ...pending,
       decision: 'granted',
-      decidedAt: this.clock(),
+      decidedAt: grantedAt,
       expandedScope: freezeReadScope(expandedScope),
       extraTokens: extra,
       ...(input.note === undefined ? {} : { note: input.note }),
@@ -789,11 +857,9 @@ export function createReadLedger(input: CreateReadLedgerInput): CreateReadLedger
       ['initialTokens', budget.initialTokens],
       ['expansionTokens', budget.expansionTokens],
     ] as const) {
-      if (!Number.isInteger(value) || value < 0) {
-        errors.push({
-          code: 'VALIDATION_ERROR',
-          message: `readBudget.${name} 必须是非负整数（AC-036）`,
-        });
+      const message = readBudgetValueError(name, value);
+      if (message !== null) {
+        errors.push({ code: 'VALIDATION_ERROR', message });
       }
     }
     const used = budget.initialUsed ?? 0;

@@ -60,3 +60,76 @@
   6. **容器/挂载负例**：AC-033/AC-034 的容器级隔离与挂载负例属 WP-07；本包证明 **API/身份边界**。
   7. **接线**：Builder 的 `snapshotRef` 与 `SnapshotWriter.freeze('context', …, {identityPayload})`、`stage_result.read_ledger_seq/hash` 的封口绑定、冷启动接入真实 Conversation/Chief，均属集成/HTTP 包（WP-08/WP-09）。
   8. **冷启动检索**：CJK 二元组 + 停用词的确定性打分（保守、无嵌入/BM25）；真实两轮交付后的端到端路径属 WP-08/WP-10。
+
+## T7 独立 Review Round 1 修复（W5R1-01…12）与验证
+
+- Review 依据：`.agentdev/work/WP-05/review.md`（冻结点 `fc4072e`）。
+- 修改范围：仅 `packages/core/src/context/**` 与 `packages/core/test/context-*.test.ts`（另加本 T7 记录）；未触碰其他包。
+- 修复后 context 用例：ACL **49**、builder **34**、checkpoint **14**、cold-start **20**、ledger **35**、requirements **36**，合计 **188**（修复前 166，新增/改写净增 22 条回归用例）。
+- 验证：`prettier --write` 全部 unchanged；`pnpm typecheck` EXIT 0；`pnpm lint` EXIT 0；`pnpm test:unit` **32 文件 / 619 用例** EXIT 0；`pnpm build` **10 workspace 全部 Done** EXIT 0。
+
+### P1
+
+#### W5R1-01 选择（Chief）是权威，`contextSources` 覆盖层不得改写声明身份
+- 改动：`builder.ts` 的 `bondSource` 不再整体采用同 `kind:id` 的覆盖层句柄。新增 `overlayConflict`：对同一 ref 的 `version`/`path`/`hash` 与 selection 声明逐字段比对，任一不一致即返回 `VALIDATION_ERROR`（不调用 resolver、不落快照）；一致时覆盖层只允许补 `sender`/`artifactClass`/`ownedRunId`/`projectId`。`refFor` 与 `ResolvedSource` 的 `version`/`path` 一律以声明值优先；resolver 返回的 `version`/`path` 若与声明不一致同样拒绝（防止半读/错归属）。
+- 回归：`context-builder.test.ts` 新增 `buildContext — the selection is the authority over its overlay (AC-030)`：`refuses an overlay that rewrites the declared path/version and freezes nothing`（旧行为会 resolve 并冻结 `revision-2/docs/OTHER.md`）、`keeps the declared revision and path when the overlay only adds metadata`（旧行为会因覆盖层无 path 而丢 path、解析错 blob）、`refuses an artifact overlay that names another version`。
+
+#### W5R1-02 冷启动 corpus 读取必须解析 realpath 并留在项目根内
+- 改动：`cold-start.ts` 新增 `corpusPathState`（对根与目标都 `realpathSync`，再以 `path.relative` 判包含）与 `denialRefForPath`。`TranscriptGuard.refusal` 与 `read` 对指向根外的符号链接返回 `CONTEXT_FORBIDDEN` 且**不返回任何 content**；根内普通文件仍可读，不存在的路径仍为 `NOT_FOUND`（保持既有负例语义）。
+- 回归：`context-cold-start.test.ts` 新增 `refuses a corpus symlink that escapes the project root (W5R1-02)`：真实 `mkdtempSync` 目录 + `symlinkSync` 指向根外文件，断言 `readable=false`、`CONTEXT_FORBIDDEN`、无 content、失败串不含外部正文，并以根内正常文件作对照（`execution.md` §3 符号链接逃逸）。
+
+#### W5R1-03 Chief 会话产物（decision/attachment/log/recovery）对下游阶段可读
+- 改动：`types.ts` 新增 `CHIEF_SESSION_ARTIFACT_CLASSES`、`artifactReadRank`（Chief 会话类排在 `initialize` 之前，等价于所有阶段可读）与 `isFutureArtifact`；`acl.artifactClassesFor`、`requirements.referencesFutureArtifact`/`stagePrecedesArtifact` 统一改用 `isFutureArtifact`。未来 *pipeline* 产物（plan/review/test/verification/settlement…）仍受「阶段不得读自身未来产物」约束（AC-079）。
+- 回归：`context-acl.test.ts` 新增 `lets a downstream stage read a Chief-session decision or attachment (W5R1-03)`（Product 从 decision 满足 `confirmedSource`；Developer 读 selected attachment）、`still refuses a future pipeline artifact to an earlier stage`；并把原单向包含断言改为等价的并集断言 `derives every declared artifact class from a legal stage (W5R1-03)`（旧实现对专业角色缺 decision/attachment/log/recovery，会失败）。
+
+### P2
+
+#### W5R1-04 扩展授权必须保留永久拒绝
+- 改动：`ledger.ts` 新增 `coversPathRestrictions`/`coversDenials`；`grantExpansion` 在授予前要求 `deniedPaths` 与 `denied` 逐条（含 reason 相同）被 expandedScope 覆盖，否则 `VALIDATION_ERROR`，且拒绝时不改变 scope/预算。
+- 回归：`context-ledger.test.ts` 新增 `refuses a grant that drops the permanent denials (W5R1-04)`：以 `{...scope, pathPrefixes:[''], deniedPaths:[]}` 请求授权被拒，随后 `append('.git/config')` 与 `append('node_modules/x/index.js')` 仍 `CONTEXT_FORBIDDEN`。
+
+#### W5R1-05 补齐开发聊天/Transcript 路径标记
+- 改动：`types.ts` 的 `DENIED_SOURCE_PATTERNS` 新增两条（`dev|develop|developer|development|agent` 前缀 + `chat|conversation|transcript`），覆盖 `docs/dev-chat.md`、`docs/developer-transcript.md`、`docs/dev-transcript.json`、`docs/developer-chat-log.md`、`dev-chat/` 目录等；普通源码 `src/developer-chat.ts`、`src/chat.ts` 仍可读。ACL、ledger、corpus guard 三处共用该表。
+- 回归：`context-acl.test.ts`（deniedPaths 全角色拒绝 + `rejects the documented path markers…` 正负例 + `refuses the dev-chat markers for a role whose prefixes would admit it`）、`context-ledger.test.ts` `refuses the developer-chat/dev-transcript path markers (W5R1-05)`、`context-cold-start.test.ts` `refuses the dev-chat and developer-transcript path markers (W5R1-05)`。
+
+#### W5R1-06 readBudget 必须落在 agents.md §6 的 4096–2000000 内
+- 改动：`types.ts` 新增 `READ_BUDGET_MIN_TOKENS=4096`、`READ_BUDGET_MAX_TOKENS=2000000` 与单一校验器 `readBudgetValueError`（拒绝非整数、负数、1…4095、>2000000；**0 保留**为「本包不得携带任何内容/未授予追加读取」的显式预算，W5R1-07 与 ledger 的 `expansionTokens:0` 语义依赖它）；builder、`createReadLedger`、cold-start limits 全部改用该校验器，因此三处口径一致。
+- 回归：`context-builder.test.ts` `refuses a budget outside the documented 4096–2000000 range (AC-036)`（4095 / 2000001 / 4096.5 / 1e15 / MAX_SAFE_INTEGER / 3e6 expansion 全拒，边界 4096 与 2000000 不报 VALIDATION_ERROR）、`context-ledger.test.ts` 扩充 `refuses invalid budget input when the ledger is created` 并新增 `accepts the documented budget boundaries and the explicit empty budget`、`context-cold-start.test.ts` `refuses cold-start limits outside the documented range (W5R1-06)`。
+- 旧期望订正（说明）：旧测试用 7/16/100/140/260 等**低于配置下限**的预算来制造溢出，该期望本身不符合 `agents.md` §6，已改为合法上限（4096）+ 更大正文（`DUMP_BODY` 20 000 字符、ledger 首个读取 16 384 字符 = 4096 tokens、cold-start 用重负载投影）来制造真实溢出；断言随之调整。
+
+#### W5R1-07 冷启动 seed 必须计入启动预算，0 预算封闭失败
+- 改动：`cold-start.ts` 的 `admit` 改为返回 `{admitted,tokens,shortfall}`；固定规则与 Project 概览的准入结果被记录，任一未准入即返回封闭的 `{ok:false, code:'BUDGET_EXCEEDED', errors:[…]}` 并点名具体文档与 token 缺口（选择的方案：**不交付正文**，而不是把概览/规则降级为可选项），`tokenAccounting.initial.used` 与实际交付保持一致。
+- 回归：`context-cold-start.test.ts` `charges the fixed seed against the startup budget and fails closed at zero (W5R1-07)`（`startupTokens:0` ⇒ `BUDGET_EXCEEDED`，失败串不含固定规则正文与概览正文；`coldStartAnswer` 同步封闭）；原 `reports a precise budget gap…` 改用重负载投影（`heavyProjection`）在合法上限 4096 下制造真实的部分预算缺口（旧用例 260 低于下限）。
+
+#### W5R1-08 `rotateSession` 先校验后写入（原子性）
+- 改动：`checkpoint.ts` 把「是否存在 Checkpoint」的校验移到 `runs.set` 之前；无 Checkpoint 时直接 `NOT_FOUND`，不再先把新 session 绑到 Run 上。
+- 回归：`context-checkpoint.test.ts` `leaves the stored session unchanged when there is no checkpoint to rotate (W5R1-08)`：拒绝后 `runOf(runId).sessionRef` 仍为旧 session，并验证补上 Checkpoint 后轮换可正常成功。
+
+#### W5R1-09 Checkpoint 不得声称其他 Work
+- 改动：`save` 在写入前校验 `checkpoint.workId === run.workId`，不一致返回 `VALIDATION_ERROR` 且不落库（`context.md` §5「Checkpoint 仅来自当前 Run」）。
+- 回归：`context-checkpoint.test.ts` `refuses a checkpoint that claims another Work (W5R1-09)`：`workId=WP-99` 被拒且 `load` 仍 `NOT_FOUND`，随后同一 Run 的 `WP-05` 可正常保存。
+
+#### W5R1-10 端口抛异常一律收敛为封闭失败
+- 改动：`builder.ts` 对 `gates.current`、`resolver.resolve`、`content.fetch`、`tokenCounter`、`now` 全部 try/catch，失败返回 `{ok:false, code:'INTERNAL_ERROR'}` 且错误信息不回传端口原始 message；`ledger.ts` 新增 `safeTokens`/`safeClock` 包裹计数器与时钟（且在校验/计费/变更前取值，保证拒绝无副作用）；`cold-start.ts` 包裹 `now`。快照 writer 的既有 catch 也改为不回传原始 message。
+- 回归：`context-builder.test.ts` `closes a throwing resolver, content or gates port without freezing anything`（三端口抛异常、无快照、无 `secret-token`/`exploded` 泄漏）、`context-ledger.test.ts` `closes a throwing counter or clock instead of escaping (W5R1-10)`、`context-cold-start.test.ts` `closes a throwing cold-start clock instead of escaping (W5R1-10)`；并订正 writer 失败用例的旧断言（原文要求错误信息包含端口原始 `disk full`，与「不回传原始 message」矛盾，改为断言不泄漏）。
+
+#### W5R1-11 legacy `codeRoot='.'` 视为整仓根
+- 改动：`types.pathIsInsidePrefix` 与 `acl.pathInPrefix` 把 `'.'`/`'./'` 视为空前缀（整仓）；`acl.scopeFor` 新增 `rootPrefix` 把 codeRoot/documentRoot 的 `'.'`/`'./'` 归一为 `''`，避免 scope 里残留字面 `'.'`。
+- 回归：`context-acl.test.ts` 新增 `context ACL — legacy whole-repository root (W5R1-11)`：`'.'` 根项目下 `src/orders/cancel.ts`、`packages/core/src/index.ts`、`docs/agentdev/PROJECT.md` 可读，同时 `.git/config`、`node_modules`、`dist`、`docs/dev-chat.md`、`docs/developer-transcript.md`、`transcripts/**` 仍被拒。
+
+### P3
+
+#### W5R1-12 冻结快照目录不可变（manifest 不被重写）
+- 改动：`builder.ts` 的 `createSnapshotDirectoryWriter` 在 `manifest.json` 已存在时直接返回，不再用新 `createdAt` 重写；`snapshotRef` 仍排除 `createdAt`（身份 = 冻结了什么，不含何时冻结），`snapshot.createdAt` 仍是本次构建的时刻并已在注释中明确。
+- 回归：`context-builder.test.ts` `leaves the frozen directory byte-identical when re-frozen under a different clock`：两次相同输入、不同时钟冻结，目录字节完全一致且 manifest 保留首次 `createdAt`，同时 `snapshot.createdAt` 反映第二次构建。
+
+### 明确不处理（登记转交）
+
+- **W5R1-13（reader-Run capability 绑定）**：按任务要求不实现，转 WP-01/WP-07（`CheckpointStore.load`/`save` 的 `runId` 需由 Run capability/epoch 注入并校验）。本轮只登记，不改代码。
+
+### 本轮新增残余（承接而非静默）
+
+9. **Checkpoint taskId 归属**：`save` 现校验 `workId`；`CheckpointRun` 不携带 Task 列表，因此「taskId 是否属于该 Work」无法在 Core 内存 store 判定，属 Work/Task registry（WP-08 接线）。
+10. **extraTokens 上限**：`grantExpansion.extraTokens` 仍只要求非负整数（可为任意大小以放宽 token 上限，符合「扩展只能放宽」）；若需按 Profile/模型窗口设上界，属 WP-08/WP-09 的 Profile 注入。
+11. **readBudget 上界的来源**：本轮采用 `agents.md` §6 的固定 4096–2000000；`min(Profile.contextLimit, 模型 contextWindow − maxOutput − 4096)` 的动态钳制仍需 Profile 输入（Review 建议方向），属集成包。
+12. **内存 corpus `contents`**：`createTranscriptGuard` 的内存正文分支不做文件系统校验（无真实路径可校验）；真实目录分支已执行 realpath 包含性检查。

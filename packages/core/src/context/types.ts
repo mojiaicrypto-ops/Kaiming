@@ -227,6 +227,11 @@ export const DENIED_SOURCE_PATTERNS: readonly RegExp[] = [
   /(?:^|\/)(?:transcripts?)(?:\/|$)/iu,
   /(?:^|\/)chat[-_ ](?:log|history|transcript|record|export)[^/]*$/iu,
   /(?:^|\/)(?:chat|conversation|transcript|chat_history)[^/]*\.(?:log|md|txt|json|jsonl)$/iu,
+  // A chat/transcript record exported from a development or agent session:
+  // `docs/dev-chat.md` and `docs/developer-transcript.md` are the same class of
+  // record as `chat.log`, so the developer/agent prefix must not evade the net.
+  /(?:^|\/)(?:dev(?:elop(?:er|ment)?)?|agent)[-_ ]?(?:chat|conversation|transcripts?)(?:[-_ ]?(?:log|history|record|export|notes?))?\.(?:log|md|txt|json|jsonl)$/iu,
+  /(?:^|\/)(?:dev(?:elop(?:er|ment)?)?|agent)[-_ ]?(?:chat|conversation|transcripts?)(?:\/|$)/iu,
 ];
 
 /** `true` when a repository-relative path carries a denied transcript marker. */
@@ -256,6 +261,36 @@ export const ARTIFACT_PRODUCER_STAGE: Readonly<Record<ArtifactClass, ContextStag
   log: 'assist',
   evidence: 'develop-L1',
 };
+
+/**
+ * Artifact classes the Chief/user conversation produces (`assist`/`coordinate`).
+ *
+ * `agents.md` §2 documents a user-confirmed decision and a selected attachment as
+ * inputs to *professional* stages — a Product takes its `confirmedSource` from a
+ * decision Artifact and a Developer reads the attachment it was pointed at — so
+ * these classes are readable from the first professional stage on. A Chief session
+ * is not a stage of the artifact pipeline, so its products are not "future
+ * products" of an earlier pipeline stage; only `plan`/`review`/`test`/… keep the
+ * "a stage cannot read its own future artifact" rule (`AC-079`).
+ */
+export const CHIEF_SESSION_ARTIFACT_CLASSES: readonly ArtifactClass[] = [
+  'decision',
+  'recovery',
+  'attachment',
+  'log',
+];
+
+/**
+ * The pipeline position a class becomes readable at.
+ *
+ * Chief-session classes rank before `initialize` (i.e. at every stage); a pipeline
+ * class ranks at its producer stage. This is the single ordering the ACL and the
+ * required-input table must agree on, so the two tables cannot contradict.
+ */
+export function artifactReadRank(artifactClass: ArtifactClass): number {
+  if (CHIEF_SESSION_ARTIFACT_CLASSES.includes(artifactClass)) return -1;
+  return pipelineRank(ARTIFACT_PRODUCER_STAGE[artifactClass]);
+}
 
 /** Ordering of the stages an artifact pipeline passes through (`workflow.md` §2). */
 export const PIPELINE_ORDER: readonly ContextStage[] = [
@@ -292,6 +327,17 @@ export function pipelineRank(stage: ContextStage): number {
 /** `true` when `producer` runs after `consumer`, so it is a future artifact. */
 export function isFutureProduct(producer: ContextStage, consumer: ContextStage): boolean {
   return pipelineRank(producer) > pipelineRank(consumer);
+}
+
+/**
+ * `true` when `consumer` sits before `artifactClass` becomes readable.
+ *
+ * This is the artifact-level form of the "no future read" rule (`AC-079`): it uses
+ * `artifactReadRank`, so a Chief-session class (a user decision or an attachment)
+ * is never a future product for a professional stage.
+ */
+export function isFutureArtifact(artifactClass: ArtifactClass, consumer: ContextStage): boolean {
+  return artifactReadRank(artifactClass) > pipelineRank(consumer);
 }
 
 /** One documented denial: the scope excludes it and says why. */
@@ -533,6 +579,43 @@ export interface TokenAccounting {
 }
 
 /**
+ * The documented adjustable range of a configured read budget (`agents.md` §6:
+ * `限制可以在配置范围4096–2000000内调整`).
+ *
+ * `0` is deliberately *inside* the accepted set as the explicit "this package may
+ * carry nothing" budget: `AC-036` requires a zero-budget startup to fail with a
+ * reported gap rather than with a validation error, and a ledger uses
+ * `expansionTokens: 0` for "no additional reads were granted".
+ */
+export const READ_BUDGET_MIN_TOKENS = 4_096;
+export const READ_BUDGET_MAX_TOKENS = 2_000_000;
+
+/**
+ * Validates one configured budget value; `null` when it is acceptable.
+ *
+ * The single validator the builder, the ledger and the cold-start limits share, so
+ * a value accepted in one place can never be refused in another. Non-integers,
+ * negatives, and anything outside `[4096, 2000000]` (except the explicit `0`) are
+ * refused rather than clamped, so a mis-sized ceiling is surfaced to Chief.
+ */
+export function readBudgetValueError(name: string, value: unknown): string | null {
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    return `readBudget.${name} 必须是整数（AC-036）`;
+  }
+  if (value < 0) {
+    return `readBudget.${name} 不能为负（AC-036）`;
+  }
+  if (value === 0) return null;
+  if (value < READ_BUDGET_MIN_TOKENS) {
+    return `readBudget.${name} ${value} 低于配置下限 ${READ_BUDGET_MIN_TOKENS}（agents.md §6）`;
+  }
+  if (value > READ_BUDGET_MAX_TOKENS) {
+    return `readBudget.${name} ${value} 超过配置上限 ${READ_BUDGET_MAX_TOKENS}（agents.md §6）`;
+  }
+  return null;
+}
+
+/**
  * Logical input keys the required-input table speaks in (`context.md` §1).
  *
  * They are deliberately coarse: the Builder resolves a `SourceRef`/`Path` into
@@ -600,9 +683,12 @@ export function stageRuleKey(role: ContextRole, stage: ContextStage): string {
   return `${role}:${stage}`;
 }
 
-/** Repository-relative prefix test that treats "" as "everything". */
+/** Repository-relative prefix test that treats `""`/`"."` as "everything". */
 export function pathIsInsidePrefix(path: string, prefix: string): boolean {
-  if (prefix === '') return true;
+  // `.`/`./` is the legacy "whole repository" root (`knowledge.md` §5 old-Project
+  // initialisation: `code-root=.`, code range excludes only the document root), so
+  // it must match every repository-relative path instead of being a literal name.
+  if (prefix === '' || prefix === '.' || prefix === './') return true;
   const normalized = path.replaceAll('\\', '/');
   const base = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
   return normalized === base || normalized.startsWith(`${base}/`);

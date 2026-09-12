@@ -59,6 +59,7 @@ import {
   fromSourceRef,
   fromSourceRefKind,
   normalizeContextStage,
+  readBudgetValueError,
   sourceRefKey,
   toSourceRefKind,
   type ContextError,
@@ -393,42 +394,88 @@ function contextSourceRefKey(source: ContextSourceRef): string {
  * `SourceRef` carries no sender/class metadata, so an equivalent full handle from
  * `contextSources` is preferred when one exists: without it the ACL could not
  * classify a user message and would refuse it ("chief 角色不读取该消息正文").
+ *
+ * **The selection is Chief's authority.** The overlay may only *add* what the
+ * narrow `SourceRef` cannot express — a message `sender`, an artifact class, the
+ * owning Run, a cross-Project `projectId`. A `path`/`version`/`hash` that
+ * disagrees with the declared identity is refused (`AC-030`, `AC-093`) instead of
+ * silently freezing content from a different revision or file.
  */
 function bondSource(
   source: ContextSourceRef,
   project: ProjectScope,
-  contextSources: ReadonlyMap<string, ContextSourceRef>,
-): ContextSourceRef {
-  const full = contextSources.get(contextSourceRefKey(source)) ?? source;
+  overlay?: ContextSourceRef,
+):
+  | { readonly ok: true; readonly source: ContextSourceRef }
+  | {
+      readonly ok: false;
+      readonly errors: readonly ContextError[];
+    } {
+  if (overlay !== undefined) {
+    const conflict = overlayConflict(source, overlay);
+    if (conflict !== null) {
+      return {
+        ok: false,
+        errors: [{ code: 'VALIDATION_ERROR', message: conflict, ref: denialSourceRef(source) }],
+      };
+    }
+  }
+  const projectId = overlay?.projectId ?? source.projectId ?? project.projectId;
+  // The declared identity always wins over the overlay; the overlay may only fill
+  // in what the narrow handle could not carry.
+  const path = source.path ?? overlay?.path;
+  const hash = source.hash ?? overlay?.hash;
   return {
-    kind: full.kind,
-    id: full.id,
-    version: full.version,
-    projectId: full.projectId ?? project.projectId,
-    ...(full.path === undefined ? {} : { path: full.path }),
-    ...(full.hash === undefined ? {} : { hash: full.hash }),
-    ...(full.sender === undefined ? {} : { sender: full.sender }),
-    ...(full.artifactClass === undefined ? {} : { artifactClass: full.artifactClass }),
-    ...(full.ownedRunId === undefined ? {} : { ownedRunId: full.ownedRunId }),
+    ok: true,
+    source: {
+      kind: source.kind,
+      id: source.id,
+      version: source.version,
+      projectId,
+      ...(path === undefined ? {} : { path }),
+      ...(hash === undefined ? {} : { hash }),
+      ...(overlay?.sender === undefined ? {} : { sender: overlay.sender }),
+      ...(overlay?.artifactClass === undefined ? {} : { artifactClass: overlay.artifactClass }),
+      ...(overlay?.ownedRunId === undefined ? {} : { ownedRunId: overlay.ownedRunId }),
+    },
   };
+}
+
+/**
+ * The conflict between a selection declaration and its `contextSources` overlay.
+ *
+ * `null` means the overlay only adds metadata; a different path, version or hash
+ * for the same `kind:id` is the behaviour W5R1-01 removed.
+ */
+function overlayConflict(source: ContextSourceRef, overlay: ContextSourceRef): string | null {
+  const key = contextSourceRefKey(source);
+  if (overlay.version !== source.version) {
+    return `来源 ${key} 的 contextSources version=${overlay.version} 与 selection 声明的 ${source.version} 不一致（AC-030/AC-093）`;
+  }
+  if (source.path !== undefined && overlay.path !== undefined && overlay.path !== source.path) {
+    return `来源 ${key} 的 contextSources path=${overlay.path} 与 selection 声明的 ${source.path} 不一致（AC-030/AC-093）`;
+  }
+  if (source.hash !== undefined && overlay.hash !== undefined && overlay.hash !== source.hash) {
+    return `来源 ${key} 的 contextSources hash 与 selection 声明的 hash 不一致（AC-030/AC-093）`;
+  }
+  return null;
 }
 
 /**
  * The `SourceRef` a resolution outcome is reported against.
  *
  * Built from the storage-level kind mapping, so a `knowledge`/`transcript` source
- * still produces a loggable handle instead of a fabricated kind.
+ * still produces a loggable handle instead of a fabricated kind. The declared
+ * `version`/`path` always win: the resolver may add a path the selection could not
+ * express, but it may never replace the identity Chief chose (`AC-030`).
  */
 function refFor(source: ContextSourceRef, resolved?: ResolvedSourceContent): SourceRef {
+  const path = source.path ?? resolved?.path;
   return {
     kind: toSourceRefKind(source.kind),
     id: source.id,
-    version: resolved?.version ?? source.version,
-    ...(resolved?.path === undefined
-      ? source.path === undefined
-        ? {}
-        : { path: source.path }
-      : { path: resolved.path }),
+    version: source.version,
+    ...(path === undefined ? {} : { path }),
     ...(source.hash === undefined ? {} : { hash: source.hash }),
   };
 }
@@ -519,6 +566,13 @@ export function createSnapshotDirectoryWriter(options: {
       }
       // The manifest records which logical source each hash-addressed file holds;
       // it is metadata, not content, so it never changes the snapshot identity.
+      // Once written it is never rewritten: the directory is immutable, and the
+      // first freeze's `createdAt` is the one recorded, so re-freezing identical
+      // inputs with a different clock leaves the directory byte-identical
+      // (`snapshotRef` excludes `createdAt`; only `snapshot.createdAt` — the
+      // in-memory record of *when this build ran* — may differ).
+      const manifestPath = join(directory, 'manifest.json');
+      if (existsSync(manifestPath)) return { directory, created };
       const manifest = {
         snapshotRef: request.snapshotRef,
         policyHash: request.policyHash,
@@ -531,7 +585,7 @@ export function createSnapshotDirectoryWriter(options: {
           bytes: file.bytes,
         })),
       };
-      writeFileSync(join(directory, 'manifest.json'), `${canonicalJson(manifest)}\n`, 'utf8');
+      writeFileSync(manifestPath, `${canonicalJson(manifest)}\n`, 'utf8');
       return { directory, created };
     },
   };
@@ -574,7 +628,20 @@ function gatherSource(args: {
       denialSourceRef(source),
     );
   }
-  const resolution = input.resolver.resolve({ ref: source, role, stage, scope, reader });
+  // Every injected port call is closed: a throwing resolver/fetch port must yield
+  // `{ok:false, code:INTERNAL_ERROR}`, never escape with the caller's stack
+  // (`reliability.md` §1 controlled failure), and the raw message never enters
+  // the result.
+  let resolution: SourceResolutionResult;
+  try {
+    resolution = input.resolver.resolve({ ref: source, role, stage, scope, reader });
+  } catch {
+    return fatal(
+      'INTERNAL_ERROR',
+      `来源解析端口调用失败：${contextSourceRefKey(source)}`,
+      refFor(source),
+    );
+  }
   if (!resolution.ok) {
     const code = resolutionCode(resolution.code);
     if (code === 'NOT_FOUND') {
@@ -583,6 +650,22 @@ function gatherSource(args: {
     return fatal(code, resolution.message, refFor(source));
   }
   const resolved: ResolvedSourceContent = resolution;
+  // The resolver may not rewrite the declaration either: a resolution that claims
+  // another path or version would freeze a different source than Chief selected.
+  if (resolved.version !== undefined && resolved.version !== source.version) {
+    return fatal(
+      'VALIDATION_ERROR',
+      `resolver 返回的 version ${resolved.version} 与 selection 声明的 ${source.version} 不一致（AC-030）`,
+      refFor(source),
+    );
+  }
+  if (source.path !== undefined && resolved.path !== undefined && resolved.path !== source.path) {
+    return fatal(
+      'VALIDATION_ERROR',
+      `resolver 返回的 path ${resolved.path} 与 selection 声明的 ${source.path} 不一致（AC-030）`,
+      refFor(source),
+    );
+  }
   let content: string;
   if (resolved.fetch.kind === 'none') {
     content = resolved.content ?? '';
@@ -595,7 +678,16 @@ function gatherSource(args: {
         refFor(source, resolved),
       );
     }
-    const fetched = input.content.fetch(fetchRef);
+    let fetched: ContentFetchResult;
+    try {
+      fetched = input.content.fetch(fetchRef);
+    } catch {
+      return fatal(
+        'INTERNAL_ERROR',
+        `来源内容端口调用失败：${contextSourceRefKey(source)}`,
+        refFor(source, resolved),
+      );
+    }
     if (!fetched.ok) {
       if (fetched.code === 'NOT_FOUND' || fetched.code === 'ARTIFACT_MISSING') {
         return {
@@ -619,6 +711,23 @@ function gatherSource(args: {
       );
     }
   }
+  let tokens: number;
+  try {
+    tokens = counter(content);
+  } catch {
+    return fatal(
+      'INTERNAL_ERROR',
+      `token 计数器调用失败：${contextSourceRefKey(source)}`,
+      refFor(source, resolved),
+    );
+  }
+  if (!Number.isFinite(tokens) || tokens < 0) {
+    return fatal(
+      'INTERNAL_ERROR',
+      `token 计数器返回非法值：${contextSourceRefKey(source)}`,
+      refFor(source, resolved),
+    );
+  }
   const gathered: GatheredSource = {
     ref: refFor(source, resolved),
     source,
@@ -627,7 +736,7 @@ function gatherSource(args: {
     content,
     bytes: Buffer.byteLength(content, 'utf8'),
     hash: resolved.hash,
-    tokens: counter(content),
+    tokens,
     ...(resolved.path === undefined ? {} : { path: resolved.path }),
     ...(resolved.revision === undefined ? {} : { revision: resolved.revision }),
     ...(resolved.version === undefined ? {} : { version: resolved.version }),
@@ -690,17 +799,17 @@ export function buildContext(input: BuildContextInput): BuildContextResult {
       ...(gap.ref === undefined ? {} : { ref: gap.ref }),
     });
   }
-  // The budget is part of the frozen record (`AC-036`), so a negative or
-  // fractional ceiling is refused here instead of being silently rounded.
+  // The budget is part of the frozen record (`AC-036`), so a negative,
+  // fractional, or out-of-range ceiling is refused here instead of being
+  // silently rounded or accepted (`agents.md` §6 bounds a configured limit to
+  // 4096–2000000; `0` stays legal as the explicit empty budget).
   for (const [name, value] of [
     ['initialTokens', selection.readBudget?.initialTokens],
     ['expansionTokens', selection.readBudget?.expansionTokens],
   ] as const) {
-    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
-      selectionErrors.push({
-        code: 'VALIDATION_ERROR',
-        message: `readBudget.${name} 必须是非负整数（AC-036）`,
-      });
+    const message = readBudgetValueError(name, value);
+    if (message !== null) {
+      selectionErrors.push({ code: 'VALIDATION_ERROR', message });
     }
   }
   if (selectionErrors.length > 0) {
@@ -733,7 +842,16 @@ export function buildContext(input: BuildContextInput): BuildContextResult {
   };
 
   // Step 3 — the Project gates: the policy revision and the role contract.
-  const gates = input.gates.current({ role: input.role, stage, project });
+  let gates: ContextGatesResult;
+  try {
+    gates = input.gates.current({ role: input.role, stage, project });
+  } catch {
+    return {
+      ok: false,
+      code: 'INTERNAL_ERROR',
+      errors: [{ code: 'INTERNAL_ERROR', message: 'Project 门禁端口调用失败' }],
+    };
+  }
   if (!gates.ok) {
     return { ok: false, code: gates.code, errors: [{ code: gates.code, message: gates.message }] };
   }
@@ -780,7 +898,10 @@ export function buildContext(input: BuildContextInput): BuildContextResult {
   for (const raw of selection.sourceRefs) {
     // `selection.sourceRefs` are storage handles (`SourceRef`); `fromSourceRef`
     // restates the same scalar shape in the Context vocabulary (`types.ts`).
-    const source = bondSource(fromSourceRef(raw), project, fullSources);
+    const declared = fromSourceRef(raw);
+    const bonded = bondSource(declared, project, fullSources.get(contextSourceRefKey(declared)));
+    if (!bonded.ok) return { ok: false, code: 'VALIDATION_ERROR', errors: bonded.errors };
+    const source = bonded.source;
     const reason = selection.reasonPerSource[sourceRefKey(raw)] ?? '';
     const step = gatherSource({
       source,
@@ -810,7 +931,9 @@ export function buildContext(input: BuildContextInput): BuildContextResult {
     };
     // An artifact `Ref` carries no class, so the ACL needs the full handle from
     // `contextSources`; without one the source cannot be classified at all.
-    const source = bondSource(base, project, fullSources);
+    const bonded = bondSource(base, project, fullSources.get(contextSourceRefKey(base)));
+    if (!bonded.ok) return { ok: false, code: 'VALIDATION_ERROR', errors: bonded.errors };
+    const source = bonded.source;
     const reason = selection.reasonPerSource[`artifact:${artifact.id}`] ?? '';
     const step = gatherSource({
       source,
@@ -835,7 +958,9 @@ export function buildContext(input: BuildContextInput): BuildContextResult {
     // An entry that overlays a selected source (same `kind:id`) only supplies its
     // metadata; anything else is an additional, fully specified handle.
     if (selectedKeys.has(contextSourceRefKey(contextual))) continue;
-    const source = bondSource(contextual, project, fullSources);
+    const bonded = bondSource(contextual, project);
+    if (!bonded.ok) return { ok: false, code: 'VALIDATION_ERROR', errors: bonded.errors };
+    const source = bonded.source;
     const reason = selection.reasonPerSource[contextSourceRefKey(contextual)] ?? '';
     const step = gatherSource({
       source,
@@ -970,7 +1095,16 @@ export function buildContext(input: BuildContextInput): BuildContextResult {
 
   // Step 7 — freeze what survived; nothing above this line leaves a snapshot.
   const scopeDigest = readScopeDigest(scope);
-  const createdAt = now();
+  let createdAt: Time;
+  try {
+    createdAt = now();
+  } catch {
+    return {
+      ok: false,
+      code: 'INTERNAL_ERROR',
+      errors: [{ code: 'INTERNAL_ERROR', message: '构建时钟调用失败' }],
+    };
+  }
   const resolvedSources: ResolvedSource[] = included.map((source) => {
     const resolved: {
       ref: SourceRef;
@@ -1025,12 +1159,13 @@ export function buildContext(input: BuildContextInput): BuildContextResult {
       readScopeDigest: scopeDigest,
       createdAt,
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+  } catch {
+    // A port failure is closed and never leaks the port's raw message into the
+    // returned context (`reliability.md` §1, W5R1-10).
     return {
       ok: false,
       code: 'INTERNAL_ERROR',
-      errors: [{ code: 'INTERNAL_ERROR', message: `冻结 ContextSnapshot 失败：${message}` }],
+      errors: [{ code: 'INTERNAL_ERROR', message: '冻结 ContextSnapshot 失败（writer 端口）' }],
     };
   }
   const snapshot: ContextSnapshot = { snapshotRef, createdAt, ...identity };
@@ -1051,6 +1186,15 @@ function gatherResolved(args: {
 }): GatheredSource | undefined {
   const { source, resolved, reason, counter } = args;
   if (resolved.fetch.kind !== 'none' || resolved.content === undefined) return undefined;
+  // `undefined` on a throwing/invalid counter collapses into the caller's closed
+  // `INTERNAL_ERROR`, so an injected counter can never break failure closure.
+  let tokens: number;
+  try {
+    tokens = counter(resolved.content);
+  } catch {
+    return undefined;
+  }
+  if (!Number.isFinite(tokens) || tokens < 0) return undefined;
   return {
     ref: refFor(source, resolved),
     source,
@@ -1059,7 +1203,7 @@ function gatherResolved(args: {
     content: resolved.content,
     bytes: Buffer.byteLength(resolved.content, 'utf8'),
     hash: resolved.hash,
-    tokens: counter(resolved.content),
+    tokens,
     ...(resolved.path === undefined ? {} : { path: resolved.path }),
     ...(resolved.revision === undefined ? {} : { revision: resolved.revision }),
     ...(resolved.version === undefined ? {} : { version: resolved.version }),

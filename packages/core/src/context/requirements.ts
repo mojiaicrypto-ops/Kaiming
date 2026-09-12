@@ -22,12 +22,10 @@ import {
   type SourceRef,
 } from '@agentdev/contracts';
 import {
-  ARTIFACT_PRODUCER_STAGE,
   CONTEXT_INPUT_KEYS,
   FORBIDDEN_INPUT_KEYS,
   fromSourceRef,
-  isFutureProduct,
-  pipelineRank,
+  isFutureArtifact,
   sourceRefKey,
   stageRuleKey,
   type ContextGap,
@@ -837,16 +835,16 @@ export function referencesFutureArtifact(rule: RequirementRow): readonly Artifac
     if (rule.allowedAbsent.includes(key)) continue;
     const artifactClass = INPUT_CATALOG[key].artifactClass;
     if (artifactClass === undefined) continue;
-    if (isFutureProduct(ARTIFACT_PRODUCER_STAGE[artifactClass], rule.stage)) {
+    if (isFutureArtifact(artifactClass, rule.stage)) {
       offenders.push(artifactClass);
     }
   }
   return offenders;
 }
 
-/** `true` when the stage row sits before the artifact class is produced. */
+/** `true` when the stage row sits before the artifact class becomes readable. */
 export function stagePrecedesArtifact(stage: ContextStage, artifactClass: ArtifactKind): boolean {
-  return pipelineRank(ARTIFACT_PRODUCER_STAGE[artifactClass]) > pipelineRank(stage);
+  return isFutureArtifact(artifactClass, stage);
 }
 
 /** Every catalog key, exported so tests can prove coverage of the table. */

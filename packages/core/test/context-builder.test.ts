@@ -77,7 +77,12 @@ const USER_MESSAGE = 'Implement WP-05 context isolation.\n';
 const PLAN_BODY = '# L1 compact plan\n\nChange src/context/builder.ts.\n';
 const DESIGN_BODY = '# product design\n\nContext selection is explicit.\n';
 const INDEX_BODY = '# document index\n';
-const DUMP_BODY = `# history dump\n${'x'.repeat(4_000)}\n`;
+/**
+ * An oversized optional document: more tokens than the documented minimum budget
+ * (`agents.md` §6), so "the budget dropped it" is a real overflow and not a
+ * fixture that only fits a sub-minimum ceiling.
+ */
+const DUMP_BODY = `# history dump\n${'x'.repeat(20_000)}\n`;
 
 /** `characterTokenCounter` of a body, so a test can size its budget exactly. */
 const tokensOf = (content: string): number => characterTokenCounter(content);
@@ -377,7 +382,7 @@ function selectionOf(input: {
     artifactRefs: [...(input.artifactRefs ?? [])],
     excluded: [...(input.excluded ?? [])],
     unknowns: [...(input.unknowns ?? [])],
-    readBudget: { initialTokens: input.initialTokens ?? 1_000, expansionTokens: 500 },
+    readBudget: { initialTokens: input.initialTokens ?? 24_000, expansionTokens: 16_000 },
   };
 }
 
@@ -455,8 +460,8 @@ describe('buildContext — happy path (AC-030)', () => {
     expect(snapshot.excluded).toHaveLength(0);
     expect(snapshot.unknowns).toHaveLength(0);
     expect(snapshot.tokenAccounting).toEqual({
-      initial: { limit: 1_000, used: result.usage.consumedTokens },
-      expansion: { limit: 500, used: 0 },
+      initial: { limit: 24_000, used: result.usage.consumedTokens },
+      expansion: { limit: 16_000, used: 0 },
     });
 
     const policy = snapshot.resolvedSources.find(
@@ -493,9 +498,9 @@ describe('buildContext — happy path (AC-030)', () => {
     const { snapshotRef, ...identity } = snapshot;
     expect(snapshotRef).toBe(contextSnapshotRef(identity));
 
-    expect(result.usage.initialTokens).toBe(1_000);
+    expect(result.usage.initialTokens).toBe(24_000);
     expect(result.usage.consumedTokens).toBeGreaterThan(0);
-    expect(result.usage.remainingTokens).toBe(1_000 - result.usage.consumedTokens);
+    expect(result.usage.remainingTokens).toBe(24_000 - result.usage.consumedTokens);
     expect(result.usage.dropped).toHaveLength(0);
     expect(result.directory).toBe(join(root, 'snapshots', 'context', snapshotRef));
   });
@@ -509,7 +514,7 @@ describe('buildContext — happy path (AC-030)', () => {
     const result = buildOk(harness);
     const expected = AGENTS_MD.length + GOAL_MD.length + USER_MESSAGE.length + CONTRACT_BODY.length;
     expect(result.usage.consumedTokens).toBe(expected);
-    expect(result.usage.remainingTokens).toBe(1_000 - expected);
+    expect(result.usage.remainingTokens).toBe(24_000 - expected);
   });
 
   it('resolves an artifact id@version through the fetch port', () => {
@@ -579,6 +584,43 @@ describe('buildContext — selection validation (AC-030)', () => {
     if (result.ok) return;
     expect(result.code).toBe('VALIDATION_ERROR');
     expect(result.errors.some((error) => error.message.includes('initialTokens'))).toBe(true);
+  });
+
+  it('refuses a budget outside the documented 4096–2000000 range (AC-036)', () => {
+    const selection = selectionOf({ sources: [AGENTS] });
+    const rejected: readonly (readonly [string, ContextSelection['readBudget']])[] = [
+      ['below the floor', { initialTokens: 4_095, expansionTokens: 16_000 }],
+      ['above the ceiling', { initialTokens: 2_000_001, expansionTokens: 16_000 }],
+      ['fractional', { initialTokens: 4_096.5, expansionTokens: 16_000 }],
+      ['unbounded', { initialTokens: 1e15, expansionTokens: 16_000 }],
+      ['max safe integer', { initialTokens: Number.MAX_SAFE_INTEGER, expansionTokens: 16_000 }],
+      ['expansion above the ceiling', { initialTokens: 24_000, expansionTokens: 3_000_000 }],
+    ];
+    for (const [label, readBudget] of rejected) {
+      const result = build(
+        makeHarness(
+          { ...selection, readBudget },
+          { blobs: BASE_BLOBS, contextSources: [AGENTS.ref] },
+        ),
+      );
+      expect(result.ok, label).toBe(false);
+      if (result.ok) continue;
+      expect(result.code, label).toBe('VALIDATION_ERROR');
+    }
+    // The documented boundaries themselves are accepted: the build then fails on
+    // the missing required inputs, never on the budget.
+    for (const initialTokens of [4_096, 2_000_000]) {
+      const result = build(
+        makeHarness(
+          { ...selection, readBudget: { initialTokens, expansionTokens: 16_000 } },
+          { blobs: BASE_BLOBS, contextSources: [AGENTS.ref] },
+        ),
+      );
+      expect(result.ok, String(initialTokens)).toBe(false);
+      if (!result.ok) {
+        expect(result.errors.every((error) => error.code !== 'VALIDATION_ERROR')).toBe(true);
+      }
+    }
   });
 
   it('rejects an artifactRef without its own reason', () => {
@@ -704,6 +746,102 @@ describe('buildContext — ACL before resolution (AC-033, AC-034)', () => {
     const unknown = result.snapshot.unknowns.find((entry) => entry.ref.id === ARTIFACT_FOREIGN);
     expect(unknown).toBeDefined();
     expect(unknown?.reason).toContain('不存在');
+  });
+});
+
+describe('buildContext — the selection is the authority over its overlay (AC-030)', () => {
+  it('refuses an overlay that rewrites the declared path/version and freezes nothing', () => {
+    const writer = memoryWriter();
+    const port = makeHarness(selectionOf({ sources: [AGENTS, WORK_GOAL, USER_REQUEST] }), {
+      blobs: { ...BASE_BLOBS, 'docs/OTHER.md@revision-2': '# REVISION TWO BODY\n' },
+      writer,
+      // The overlay points the same `policy:docs/rules/agents.md` handle at another
+      // revision and another file. The selection is Chief's declaration, so this
+      // must be refused instead of freezing revision-2/docs/OTHER.md.
+      contextSources: [
+        { kind: 'policy', id: AGENTS.ref.id, version: 'revision-2', path: 'docs/OTHER.md' },
+        WORK_GOAL.ref,
+        USER_REQUEST.ref,
+      ],
+      contextInputs: WORK_GOAL_INPUT,
+    });
+    const result = build(port);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('VALIDATION_ERROR');
+    expect(result.errors.some((error) => error.message.includes('不一致'))).toBe(true);
+    // Nothing was resolved, nothing was frozen, and the other revision's bytes
+    // never entered the result.
+    expect(port.resolutions).toHaveLength(0);
+    expect(writer.requests).toHaveLength(0);
+    expect(JSON.stringify(result)).not.toContain('REVISION TWO');
+  });
+
+  it('keeps the declared revision and path when the overlay only adds metadata', () => {
+    // A `SourceRef` cannot carry a message sender or an artifact class, so the
+    // overlay is the only place that information can come from — but it may not
+    // replace the identity the selection declared.
+    const handle: SelectedSource = {
+      ref: {
+        kind: 'policy',
+        id: 'rules:agents',
+        version: 'revision-1',
+        path: 'docs/rules/agents.md',
+      },
+    };
+    const selection = selectionOf({ sources: [handle, WORK_GOAL, USER_REQUEST] });
+    const result = buildOk(
+      makeHarness(selection, {
+        blobs: BASE_BLOBS,
+        // The overlay deliberately omits the path: an overlay that "won" would
+        // lose it and resolve the wrong blob.
+        contextSources: [
+          { kind: 'policy', id: 'rules:agents', version: 'revision-1' },
+          WORK_GOAL.ref,
+          USER_REQUEST.ref,
+        ],
+        contextInputs: WORK_GOAL_INPUT,
+      }),
+    );
+    const resolved = result.snapshot.resolvedSources.find((source) => source.id === 'rules:agents');
+    expect(resolved?.path).toBe('docs/rules/agents.md');
+    expect(resolved?.revision).toBe('revision-1');
+    expect(resolved?.ref).toEqual({
+      kind: 'policy',
+      id: 'rules:agents',
+      version: 'revision-1',
+      path: 'docs/rules/agents.md',
+    });
+    expect(result.snapshot.selection.sourceRefs).toContainEqual({
+      kind: 'policy',
+      id: 'rules:agents',
+      version: 'revision-1',
+      path: 'docs/rules/agents.md',
+    });
+  });
+
+  it('refuses an artifact overlay that names another version', () => {
+    const selection = selectionOf({
+      sources: [AGENTS, WORK_GOAL, USER_REQUEST],
+      artifactRefs: [artifactRef(ARTIFACT_PLAN, 1)],
+      reasonPerSource: { [`artifact:${ARTIFACT_PLAN}`]: 'L1 CompactPlan，版本已冻结' },
+    });
+    const port = makeHarness(selection, {
+      blobs: BASE_BLOBS,
+      artifacts: { [ARTIFACT_PLAN]: { version: 1, content: PLAN_BODY } },
+      contextSources: [
+        AGENTS.ref,
+        WORK_GOAL.ref,
+        USER_REQUEST.ref,
+        artifact(ARTIFACT_PLAN, 2, 'plan'),
+      ],
+      contextInputs: WORK_GOAL_INPUT,
+    });
+    const result = build(port);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('VALIDATION_ERROR');
+    expect(port.fetches).toHaveLength(0);
   });
 });
 
@@ -838,15 +976,22 @@ describe('buildContext — required inputs (AC-031, AC-079)', () => {
 
 describe('buildContext — budget (AC-036)', () => {
   it('reports BUDGET_EXCEEDED with the dropped ref and the missing tokens', () => {
-    // The tiny policy file (1 token) fits, then the user message (9) does not;
-    // `userRequest` is a hard requirement of `chief:assist`, so the gap must be
-    // reported as a budget gap rather than as a missing selection (`AC-036`).
+    // The tiny policy file (1 token) fits, then the oversized user message (5000
+    // tokens) does not; `userRequest` is a hard requirement of `chief:assist`, so
+    // the gap must be reported as a budget gap rather than as a missing selection
+    // (`AC-036`). The ceiling is the documented minimum (4096), so the body — not
+    // the budget — is what makes the drop real.
+    const largeMessage = 'u'.repeat(20_000);
     const selection = selectionOf({
       sources: [TINY_POLICY, USER_REQUEST],
-      initialTokens: 7,
+      initialTokens: 4_096,
     });
     const port = makeHarness(selection, {
-      blobs: { ...BASE_BLOBS, [`${TINY_POLICY.ref.path}@revision-1`]: TINY_POLICY_BODY },
+      blobs: {
+        ...BASE_BLOBS,
+        [`${TINY_POLICY.ref.path}@revision-1`]: TINY_POLICY_BODY,
+        [`${USER_REQUEST.ref.id}@1`]: largeMessage,
+      },
       contextSources: [TINY_POLICY.ref, USER_REQUEST.ref],
       contextInputs: WORK_GOAL_INPUT,
     });
@@ -858,16 +1003,13 @@ describe('buildContext — budget (AC-036)', () => {
     expect(first?.code).toBe('BUDGET_EXCEEDED');
     expect((first as { readonly input?: string }).input).toBe('userRequest');
     expect(first?.message).toMatch(/缺口 \d+ tokens/);
-    // The user message is dropped first; the role contract is then also over the
-    // tiny ceiling, but its requirement is already satisfied by the policy file.
-    expect(result.usage?.dropped.map((entry) => entry.ref.id)).toEqual([
-      USER_REQUEST.ref.id,
-      'backend:contract',
-    ]);
+    // The user message is the only source over the ceiling; the role contract
+    // still fits, and its requirement is already satisfied by the policy file.
+    expect(result.usage?.dropped.map((entry) => entry.ref.id)).toEqual([USER_REQUEST.ref.id]);
     const dropped = result.usage?.dropped[0];
-    expect(dropped?.tokens).toBe(tokensOf(USER_MESSAGE));
-    expect(dropped?.shortfall).toBe(tokensOf(TINY_POLICY_BODY) + tokensOf(USER_MESSAGE) - 7);
-    expect(result.usage?.consumedTokens).toBe(tokensOf(TINY_POLICY_BODY));
+    expect(dropped?.tokens).toBe(tokensOf(largeMessage));
+    expect(dropped?.shortfall).toBe(tokensOf(TINY_POLICY_BODY) + tokensOf(largeMessage) - 4_096);
+    expect(result.usage?.consumedTokens).toBe(tokensOf(TINY_POLICY_BODY) + tokensOf(CONTRACT_BODY));
     // Only the sources before the overflow were resolved; nothing was scanned.
     expect(port.resolutions.map((ref) => ref.id)).toEqual([
       TINY_POLICY.ref.id,
@@ -878,7 +1020,7 @@ describe('buildContext — budget (AC-036)', () => {
   it('drops an optional source instead of the whole package and names it', () => {
     const selection = selectionOf({
       sources: [AGENTS, WORK_GOAL, USER_REQUEST, DUMP],
-      initialTokens: 140,
+      initialTokens: 4_096,
     });
     const result = buildOk(
       makeHarness(selection, {
@@ -892,7 +1034,7 @@ describe('buildContext — budget (AC-036)', () => {
     expect(dropped?.ref.id).toBe(DUMP.ref.id);
     expect(result.snapshot.excluded.some((entry) => entry.ref.id === DUMP.ref.id)).toBe(true);
     expect(result.snapshot.unknowns.some((entry) => entry.ref.id === DUMP.ref.id)).toBe(true);
-    expect(result.usage.consumedTokens).toBeLessThanOrEqual(140);
+    expect(result.usage.consumedTokens).toBeLessThanOrEqual(4_096);
     expect(
       result.snapshot.resolvedSources.some((source) => source.path === WORK_GOAL.ref.path),
     ).toBe(true);
@@ -1035,6 +1177,34 @@ describe('buildContext — snapshot immutability and idempotence', () => {
       first.snapshot.snapshotRef,
     );
   });
+
+  it('leaves the frozen directory byte-identical when re-frozen under a different clock', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ctx-immutable-'));
+    temporaryRoots.push(root);
+    const writer = createSnapshotDirectoryWriter({ root });
+    const harness = assistHarness({ writer });
+    const readDirectory = (directory: string): Record<string, string> =>
+      Object.fromEntries(
+        readdirSync(directory)
+          .sort()
+          .map((name) => [name, readFileSync(join(directory, name), 'utf8')]),
+      );
+
+    const first = buildOk(harness, { now: () => '2026-09-11T00:00:00.000Z' });
+    const before = readDirectory(first.directory);
+    const second = buildOk(harness, { now: () => '2027-01-01T00:00:00.000Z' });
+
+    // The identity ignores the clock and the directory is immutable: a re-freeze
+    // must not rewrite `manifest.json` with a new `createdAt` (W5R1-12).
+    expect(second.directory).toBe(first.directory);
+    expect(second.snapshot.snapshotRef).toBe(first.snapshot.snapshotRef);
+    expect(readDirectory(second.directory)).toEqual(before);
+    const manifest = JSON.parse(before['manifest.json'] ?? '{}') as { readonly createdAt?: string };
+    expect(manifest.createdAt).toBe('2026-09-11T00:00:00.000Z');
+    // `createdAt` is still part of the in-memory snapshot: it records when *this*
+    // build ran, while the frozen directory keeps the first freeze's stamp.
+    expect(second.snapshot.createdAt).toBe('2027-01-01T00:00:00.000Z');
+  });
 });
 
 describe('buildContext — excluded and unknown refs (AC-093)', () => {
@@ -1109,7 +1279,84 @@ describe('buildContext — failure closure', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.code).toBe('INTERNAL_ERROR');
-    expect(result.errors[0]?.message).toContain('disk full');
+    // A port failure is closed and never leaks the raw port message (W5R1-10).
+    expect(JSON.stringify(result)).not.toContain('disk full');
+  });
+
+  it('closes a throwing resolver, content or gates port without freezing anything', () => {
+    const writer = memoryWriter();
+    const assistBase = assistHarness({ writer });
+    // The assistant route resolves its content inline, so the *content* port is
+    // only reached through an artifact fetch: give that case its own harness.
+    const artifactBase = makeHarness(
+      selectionOf({
+        sources: [AGENTS, WORK_GOAL, USER_REQUEST],
+        artifactRefs: [artifactRef(ARTIFACT_PLAN, 1)],
+        reasonPerSource: { [`artifact:${ARTIFACT_PLAN}`]: 'L1 CompactPlan' },
+      }),
+      {
+        blobs: BASE_BLOBS,
+        writer,
+        contextSources: [
+          AGENTS.ref,
+          WORK_GOAL.ref,
+          USER_REQUEST.ref,
+          artifact(ARTIFACT_PLAN, 1, 'plan'),
+        ],
+        contextInputs: WORK_GOAL_INPUT,
+        artifacts: { [ARTIFACT_PLAN]: { version: 1, content: PLAN_BODY } },
+      },
+    );
+    const throwingPorts: readonly {
+      readonly name: string;
+      readonly base: Harness;
+      readonly overrides: Partial<BuildContextInput>;
+    }[] = [
+      {
+        name: 'resolver',
+        base: assistBase,
+        overrides: {
+          resolver: {
+            resolve() {
+              throw new Error('resolver exploded: secret-token');
+            },
+          },
+        },
+      },
+      {
+        name: 'content',
+        base: artifactBase,
+        overrides: {
+          content: {
+            fetch() {
+              throw new Error('fetch exploded: secret-token');
+            },
+          },
+        },
+      },
+      {
+        name: 'gates',
+        base: assistBase,
+        overrides: {
+          gates: {
+            current() {
+              throw new Error('gates exploded: secret-token');
+            },
+          },
+        },
+      },
+    ];
+    for (const port of throwingPorts) {
+      const result = build(port.base, port.overrides);
+      expect(result.ok, port.name).toBe(false);
+      if (result.ok) continue;
+      expect(result.code, port.name).toBe('INTERNAL_ERROR');
+      const serialized = JSON.stringify(result);
+      expect(serialized, port.name).not.toContain('secret-token');
+      expect(serialized, port.name).not.toContain('exploded');
+    }
+    // No failure path reached the writer: a closed failure leaves no snapshot.
+    expect(writer.requests).toHaveLength(0);
   });
 });
 

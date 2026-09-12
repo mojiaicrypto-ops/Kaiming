@@ -19,7 +19,7 @@
  * - a misleading development-chat transcript is neither selected nor readable and
  *   cannot change the answer (`AC-033`).
  */
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -247,6 +247,51 @@ const UNRELATED_CORPUS = UNRELATED.map((document) => ({
   kind: 'document' as const,
   reason: 'Chief 登记的无关文档，用于验证不默认注入',
 }));
+
+const HEAVY_ID = 'F-9e8d7c6b';
+
+/** A cancellation Feature whose delivered body alone exceeds the minimum budget. */
+function heavyDocument(): FeatureDocumentInput {
+  return featureDocument({
+    featureId: HEAVY_ID,
+    name: '订单取消重负载',
+    module: 'orders-heavy',
+    purpose: '订单取消的完整现状（重负载样例）。',
+    behaviour: `${CANCEL_BEHAVIOUR}\n${'重'.repeat(20_000)}`,
+    entries: ['src/orders/heavy.ts', 'tests/orders/heavy.test.ts'],
+    investigationScope: '订单取消重负载',
+  });
+}
+
+/**
+ * The fixed sample plus one oversized Feature.
+ *
+ * `agents.md` §6 sets the minimum *configurable* ceiling at 4096 tokens, so a real
+ * budget overflow cannot be produced from the small fixed sample; the heavy
+ * Feature is what makes "the budget dropped it" observable at a legal ceiling.
+ */
+function heavyProjection(): ColdStartProjection {
+  const result = buildProjection({
+    documents: [
+      cancelDocument(),
+      paymentDocument(),
+      sessionDocument(),
+      heavyDocument(),
+      ...UNRELATED,
+    ],
+    revision: REVISION,
+    codeTreeRevision: REVISION,
+    knownIds: [DECISION_ID],
+  });
+  if (!result.published) {
+    throw new Error(
+      `the heavy sample must publish: ${result.diagnostics
+        .map((entry) => `${entry.documentPath}: ${entry.message}`)
+        .join('; ')}`,
+    );
+  }
+  return result.projection;
+}
 
 const TRANSCRIPTS = [
   {
@@ -479,12 +524,12 @@ describe('cold start: the answer recalls the fixed sample (AC-037)', () => {
   });
 
   it('reports a precise budget gap instead of injecting more (AC-036)', () => {
-    const projection = fixtureProjection();
+    const projection = heavyProjection();
     const assembled = expectOk(
       assembleColdStart({
         projection,
         query: '订单取消时如何处理支付约束？',
-        limits: { startupTokens: 260 },
+        limits: { startupTokens: 4_096 },
       }),
     );
     const budgetEntries = assembled.package.context.excluded.filter(
@@ -493,7 +538,85 @@ describe('cold start: the answer recalls the fixed sample (AC-037)', () => {
     expect(budgetEntries.length).toBeGreaterThan(0);
     expect(budgetEntries[0]?.reason).toContain('预算不足');
     expect(assembled.package.context.unknowns.some((line) => line.includes('预算不足'))).toBe(true);
-    expect(assembled.package.context.tokenAccounting.initial.used).toBeLessThanOrEqual(260);
+    expect(assembled.package.context.tokenAccounting.initial.used).toBeLessThanOrEqual(4_096);
+    // The oversized Feature's body was not selected at all.
+    expect(assembled.package.context.selection.some((entry) => entry.featureId === HEAVY_ID)).toBe(
+      false,
+    );
+  });
+
+  it('charges the fixed seed against the startup budget and fails closed at zero (W5R1-07)', () => {
+    const projection = fixtureProjection();
+    const assembled = assembleColdStart({
+      projection,
+      query: '订单取消时如何处理支付约束？',
+      limits: { startupTokens: 0 },
+    });
+    expect(assembled.ok).toBe(false);
+    if (assembled.ok) return;
+    expect(assembled.code).toBe('BUDGET_EXCEEDED');
+    const messages = assembled.errors.map((error) => error.message).join(' | ');
+    expect(messages).toContain(CHIEF_RULES_PATH);
+    expect(messages).toContain('缺口');
+    // No seed body leaked through the refusal: the fixed-rules body and the
+    // Project overview are not part of the failure.
+    const serialized = JSON.stringify(assembled);
+    expect(serialized).not.toContain('# Agent 固定规则');
+    expect(serialized).not.toContain('项目知识导航');
+    // The answer entry point closes the same way.
+    const answered = coldStartAnswer({
+      projection,
+      query: '订单取消时如何处理支付约束？',
+      limits: { startupTokens: 0 },
+    });
+    expect(answered.ok).toBe(false);
+    if (!answered.ok) expect(answered.code).toBe('BUDGET_EXCEEDED');
+  });
+
+  it('refuses cold-start limits outside the documented range (W5R1-06)', () => {
+    const projection = fixtureProjection();
+    const rejected = [
+      { startupTokens: 4_095 },
+      { startupTokens: 2_000_001 },
+      { startupTokens: 4_096.5 },
+      { startupTokens: 1e15 },
+      { startupTokens: Number.MAX_SAFE_INTEGER },
+      { startupTokens: 24_000, expansionTokens: 4_095 },
+    ];
+    for (const limits of rejected) {
+      const result = assembleColdStart({
+        projection,
+        query: '订单取消时如何处理支付约束？',
+        limits,
+      });
+      expect(result.ok, JSON.stringify(limits)).toBe(false);
+      if (result.ok) continue;
+      expect(result.code, JSON.stringify(limits)).toBe('VALIDATION_ERROR');
+    }
+    // The documented boundaries are not a validation error (the seed may still be
+    // too large for the smallest legal ceiling, which is a reported budget gap).
+    for (const startupTokens of [4_096, 2_000_000]) {
+      const result = assembleColdStart({
+        projection,
+        query: '订单取消时如何处理支付约束？',
+        limits: { startupTokens },
+      });
+      if (!result.ok) expect(result.code, String(startupTokens)).not.toBe('VALIDATION_ERROR');
+    }
+  });
+
+  it('closes a throwing cold-start clock instead of escaping (W5R1-10)', () => {
+    const result = assembleColdStart({
+      projection: fixtureProjection(),
+      query: '订单取消时如何处理支付约束？',
+      now: () => {
+        throw new Error('clock boom: secret-token');
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('INTERNAL_ERROR');
+    expect(JSON.stringify(result)).not.toContain('secret-token');
   });
 
   it('marks a stale projection as an unknown rather than presenting it as current', () => {
@@ -629,6 +752,72 @@ describe('cold start: the transcript is unreadable and cannot change the answer 
     expect(guard.readable(TRANSCRIPT_PATH)).toBe(false);
     expect(guard.read(TRANSCRIPT_PATH).ok).toBe(false);
     expect(guard.refusal(TRANSCRIPT_PATH)?.code).toBe('CONTEXT_FORBIDDEN');
+  });
+
+  it('refuses the dev-chat and developer-transcript path markers (W5R1-05)', () => {
+    for (const path of ['docs/dev-chat.md', 'docs/developer-transcript.md']) {
+      const guard = createTranscriptGuard({
+        role: 'chief',
+        stage: 'assist',
+        project: {
+          projectId: PROJECT_ID,
+          codeRoot: '',
+          documentRoot: 'docs',
+          deliveryBranch: 'agentdev/main',
+        },
+        corpus: [{ id: `doc:${path}`, path, kind: 'document', reason: 'smuggled as a document' }],
+      });
+      expect(guard.readable(path), path).toBe(false);
+      expect(guard.refusal(path)?.code, path).toBe('CONTEXT_FORBIDDEN');
+      expect(guard.read(path).ok, path).toBe(false);
+    }
+  });
+
+  it('refuses a corpus symlink that escapes the project root (W5R1-02)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agentdev-symlink-root-'));
+    const outside = mkdtempSync(join(tmpdir(), 'agentdev-symlink-outside-'));
+    tempDirectories.push(root, outside);
+    mkdirSync(join(root, 'docs'), { recursive: true });
+    const secret = join(outside, 'secret.md');
+    writeFileSync(secret, 'HOST-SECRET-OUTSIDE-PROJECT\n', 'utf8');
+    symlinkSync(secret, join(root, 'docs/notes.md'));
+
+    const guardFor = (corpus: { readonly id: string; readonly path: string }[]) =>
+      createTranscriptGuard({
+        role: 'chief',
+        stage: 'assist',
+        project: {
+          projectId: PROJECT_ID,
+          codeRoot: '',
+          documentRoot: 'docs',
+          deliveryBranch: 'agentdev/main',
+        },
+        directory: root,
+        corpus: corpus.map((entry) => ({
+          id: entry.id,
+          path: entry.path,
+          kind: 'document' as const,
+          reason: 'corpus entry',
+        })),
+      });
+
+    // The symlink is inside the project but resolves outside it: `execution.md` §3
+    // forbids the escape, so it is refused and its bytes never come back.
+    const escaping = guardFor([{ id: 'doc:docs/notes.md', path: 'docs/notes.md' }]);
+    expect(escaping.readable('docs/notes.md')).toBe(false);
+    expect(escaping.refusal('docs/notes.md')?.code).toBe('CONTEXT_FORBIDDEN');
+    const read = escaping.read('docs/notes.md');
+    expect(read.ok).toBe(false);
+    if (read.ok) throw new Error('expected the symlink to be unreadable');
+    expect(read).not.toHaveProperty('content');
+    expect(JSON.stringify(read)).not.toContain('HOST-SECRET');
+
+    // Control: a regular file inside the root is still readable.
+    writeFileSync(join(root, 'docs/README.md'), 'inside the project\n', 'utf8');
+    const inside = guardFor([{ id: 'doc:docs/README.md', path: 'docs/README.md' }]);
+    const insideRead = inside.read('docs/README.md');
+    expect(insideRead.ok).toBe(true);
+    if (insideRead.ok) expect(insideRead.content).toBe('inside the project\n');
   });
 
   it('rejects an empty query and a non-projection input', () => {
