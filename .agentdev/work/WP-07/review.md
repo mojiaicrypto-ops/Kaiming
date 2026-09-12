@@ -547,3 +547,235 @@ INTEGRATION_EXIT=0
 9. 未调用真实模型/Provider；`gatewaySecretResolver` 接线属 WP-09。
 10. 持久化 Secret 后端（Keychain/加密文件）属安装范围，未验证。
 11. NAT64 本地前缀（W7R2-06）的「可达内网」结论依赖目标网络确实部署本地用途 NAT64；本轮只断言分类结果（被判公网），未构造真实 NAT64 网络。
+
+---
+
+# WP-07 独立 Review 报告 · 第 3 轮（Review Round 3）
+
+> 第 1 轮（第 1–263 行）与第 2 轮（第 264–549 行）报告保持原样未改；本文件自第 550 行起追加第 3 轮。已用 `git show HEAD:.agentdev/work/WP-07/review.md | shasum -a 256` 与本地文件前 549 行逐字节比对确认（见 §0）。
+
+## 0. 元数据与冻结点
+
+| 项 | 值 |
+|---|---|
+| 冻结点（task 指定） | `b1c5328` |
+| `git rev-parse HEAD` | `b1c5328e4b6e11e73033e1b537c9d7c97cdbd6aa` |
+| `git rev-parse b1c5328^{tree}` | `801f2464dec0bdf29af5349b833cc989b51267b5` |
+| `git status --porcelain`（Review 写入前） | 空（工作树干净） |
+| 第 1–2 轮 review.md 完整性 | 前 549 行 `shasum -a 256` = `6f6e85ea20030e6b5f2d76b6559f94b63cb8d55980eaeb36850e31dd91611e22`，与 `git show HEAD:.agentdev/work/WP-07/review.md` 一致（逐字节未改） |
+| Review 写入范围 | 仅 `.agentdev/work/WP-07/review.md`；全部探针/日志在 `/tmp/wp07r3/` |
+| 开发/Test 聊天 | 未读取；证据仅来自仓库文件、`dist` 构建产物、真实 SQLite/子进程/Docker 与本次独立探针 |
+| Docker | 守护进程 **UP**（Server 28.4.0）；执行镜像 `agentdev/exec:0.0.0`（`sha256:edd3aa5051c7…`）在位；`pnpm test:integration` 的容器用例真实执行（无 skip） |
+| 探针宿主 | macOS arm64 / Node v24.8.0（无 `/proc`，归属探针走 `lsof`） |
+
+被审文件 Hash（`git hash-object` = 仓库 blob SHA-1）：
+
+| 文件 | git blob |
+|---|---|
+| `packages/core/src/broker.ts` | `06b4c79711e6f40bac09539656872fdd8e07b2bb` |
+| `packages/core/src/grants.ts` | `c829c9b338b2ecc1b5c9fa1712544563ddbc04ba` |
+| `packages/core/src/test-environment.ts` | `d80ca603f07ae383d98896a1e874736261e6d8df` |
+| `packages/core/src/secrets.ts` | `d574ac952aa4ca7a3bdf6d9bb92eff6484091ffa` |
+| `packages/domain/src/permission.ts` | `8e7677b22b86cc9b4ac5ad226be271d14c0b2ec9` |
+| `packages/pi-runtime/src/extensions.ts` | `6dd9b76905931f6c95176de62cbaf6c2646437fe` |
+| `.agentdev/work/WP-07/implementation.md` | `5e8097d597b682e8674e4a5457659c3a726d9174` |
+
+## 1. 结论（verdict）
+
+**PASS** —— 第 2 轮的 **1 个 P1（W7R2-01）与 3 个 P2、6 个 P3（W7R2-01..10）全部关闭**，并由本轮独立探针逐条复现为已修复；四个必需失败测试（符号链接/私网/重定向、Secret 泄漏、进程清理失败、无 Docker 拒绝）与 AC-048..051/053/080 代表切片全部通过；6 条契约命令全部退出 0。
+
+本轮在**同一验收面**上新增 **2 个 P2、3 个 P3（W7R3-01..05）**，均为非阻断缺陷/记录不一致（详见 §6）：
+- P2：只读角色的 `run` 工具体仍可绕过能力分类写源码/执行 shell（W7R3-01）；异步 `run` 体未被 await，结果被记录为 Promise、重放得到 `{}`、失败体被记为 finished 并产生未处理拒绝（W7R3-02）。
+- P3：传输失败逃逸为异常（W7R3-03）；`portAvailable` 抛异常逃出 `create()`（W7R3-04）；字面量目标实际带 pin，与注释/T8 残余声明不符（W7R3-05）。
+
+**能否进入独立 Test：可以。** 无 P0/P1 可复现；按任务规则 P2/P3 记录不阻断，建议随 Test 反馈回 Develop 一并修复。
+
+## 2. 契约命令原始结果
+
+全部命令在冻结点 `b1c5328`（tree `801f2464`）工作树干净状态下真实执行一次；原始日志 `/tmp/wp07r3/logs/commands.log`。
+
+| 命令 | 原始结果 | 结论 |
+|---|---|---|
+| `pnpm typecheck` | `$ tsc -p tsconfig.json --pretty false`；`EXIT=0` | 通过 |
+| `pnpm lint` | `$ node scripts/lint.mjs`；`Checking formatting...`；`All matched files use Prettier code style!`；`EXIT=0` | 通过 |
+| `pnpm test:unit` | `Test Files 44 passed (44)` / `Tests 905 passed (905)` / Duration 12.28s；`EXIT=0` | 通过（与 `implementation.md` T8 的 44/905 一致） |
+| `pnpm test:integration` | `Test Files 15 passed (15)` / `Tests 157 passed (157)` / Duration 23.67s；`EXIT=0`；容器用例真实执行（`✓ runs as the non-root execution account`、`✓ keeps the root filesystem read-only`、`✓ drops every Linux capability`、`✓ has no network access but a working name resolver`、`✓ applies the pid and memory limits`），无 skip | 通过（与 T8 的 15/157 一致） |
+| `pnpm docs:check` | `docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages`；`EXIT=0` | 通过 |
+| `pnpm build` | `pnpm -r build`：contracts/pi-runtime/domain/knowledge/storage/workspace/core/cli/daemon/runner 共 10 workspace 全 `Done`；`EXIT=0` | 通过 |
+
+命令尾部原始输出：
+
+```
+$ pnpm typecheck
+EXIT(pnpm typecheck)=0
+$ pnpm lint
+Checking formatting...
+All matched files use Prettier code style!
+EXIT(pnpm lint)=0
+docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages
+EXIT(pnpm docs:check)=0
+packages/core build: Done
+apps/daemon build: Done
+apps/runner build: Done
+EXIT(pnpm build)=0
+ Test Files  44 passed (44)
+      Tests  905 passed (905)
+EXIT(pnpm test:unit)=0
+ Test Files  15 passed (15)
+      Tests  157 passed (157)
+EXIT(pnpm test:integration)=0
+```
+
+### 2b. 四个必需失败测试 + AC 代表切片的重跑（仓库自带用例）
+
+日志 `/tmp/wp07r3/logs/ac-unit.log`、`/tmp/wp07r3/logs/ac-integration.log`：
+
+| 批次 | 结果 | 退出码 |
+|---|---|---|
+| unit：`permissions-failures.test.ts`(4) + `broker.test.ts`(47) + `grants.test.ts`(36) + `secrets.test.ts`(27) + `permission-delivery.test.ts`(20) + `trust.test.ts`(14) | `Test Files 6 passed (6)` / `Tests 148 passed (148)` | `0` |
+| integration：`permissions.integration.test.ts`(11) + `broker.integration.test.ts`(8) + `secrets.integration.test.ts`(5) + `grants.integration.test.ts`(1) | `Test Files 4 passed (4)` / `Tests 25 passed (25)` | `0` |
+
+逐文件用例数与 T8 记录一致（broker 47、grants 36、failures 4、permissions.integration 11、broker.integration 8、secrets.integration 5、grants.integration 1）；unit 切片 128→148、integration 切片 24→25 与 T8 的 +20/+1 一致。
+
+## 3. 方法（每个脚本与用例数）
+
+全部探针消费**已构建产物**（`packages/*/dist/index.js` 绝对路径导入），不 import 任何产品测试文件；真实 SQLite（`ProjectStore` 文件）、真实 `node` 子进程、真实第二/第三个 OS 进程、真实 OS 端口监听器、真实本机回环 HTTP 服务器、真实 Docker（仅仓库自带集成套件）。所有网络探针**离线**：桩解析器（`HostResolver`）与桩/本机 fetcher，不发外部请求。脚本与日志在 `/tmp/wp07r3/`，一键脚本 `/tmp/wp07r3/run-all.sh`，全量日志 `/tmp/wp07r3/logs/all.log`。
+
+| 脚本 | 用例数 | 覆盖 |
+|---|---|---|
+| `probe-capability.mjs` | 16 | W7R2-01（host bash/git、无 roots、access=write、容器 rw 剥离、容器内 bash 拒绝、report-root 正例、源码拒绝、写角色可用、未知工具 fail-closed、非路径 mutating、`push`、符号链接逃逸、`..` 逃逸）+ W7R3-01 两条 hunt |
+| `probe-network3.mjs` | 15 | W7R2-02（私网/不可解析准入前拒绝 + Grant 未消费 + 零行、公网正例、授权名带 pin、rebinding 在传输跳拒绝）、W7R2-03（fetcher 收到 pin、内建传输连到 pin、第二地址不可达、重定向每跳）、W7R2-05（解析器抛异常）、W7R2-06（NAT64 本地前缀/可配置前缀/不可解码 fail-closed）+ 传输异常 hunt |
+| `probe-grants3.mjs` | 9 | W7R2-04（同目录两 store 立即可见、两并发进程 50 条零丢失、旧 manifest 只读兼容）、W7R2-09（null/undefined 重放、缺失 ref 仍 RECOVERY_REQUIRED）、W7R2-10（离线 GC 不删活结果、GC 引用根含 per-ref 与旧 manifest blob、无共享 manifest 增长） |
+| `probe-testenv3.mjs` | 9 | W7R2-07（外部监听器 + 存活非监听子进程 ⇒ INVALID_STATE、真监听正例、探针不可用/外部 pid fail-closed、后代进程绑定正例、监听错端口不 running）、W7R2-08（createDir 抛错释放端口并返回结果对象、cleanup 后端口可复用）+ `portAvailable` 抛异常 hunt |
+| `probe-ac.mjs` | 11 | AC-048.p1/n1、AC-049.p1/n1、AC-050.n1、AC-051.p1/n1、AC-053.p1、AC-080.p1/n1/p2 |
+| `probe-broker.mjs` | 16 | **四个必需失败测试**（REQ-1 符号链接/私网/重定向、REQ-2 Secret 泄漏、REQ-3 进程清理失败、REQ-4 无 Docker 拒绝 + REQ-3b 控制组）与 W7R1-04/09/13 回归 |
+| `probe-async.mjs` | 4 | W7R3-02（异步体结果=Promise、重放 `{}`、失败体 finished + 未处理拒绝）与 W7R3-01（被准入的 report 写体内嵌 shell 写源码） |
+| `probe-records.mjs` | 5 | T8 记录对账：能力分类矩阵、导出面、`Broker.invoke` 为 AsyncFunction、同步 `checkTarget` 残余、字面量 pin 与注释不符 |
+| **合计** | **85** | 其中 **9** 条断言失败 = 本轮 5 个新 Finding 的证据（其余 76 条通过） |
+
+## 4. 第 2 轮 Finding 关闭核验（W7R2-01..10）
+
+| 编号 | 严重度 | 关闭判定 | 独立证据（本轮到具体用例） |
+|---|---|---|---|
+| W7R2-01 只读角色经 bash/git 写源码；容器 `writableRoots` 提权 | P1 | **关闭** | `probe-capability` 01.a/01.b/01.c/01.d：review 的 `bash`/`git`（含不声明 roots、显式 `access:'write'`）一律 `NOT_AUTHORIZED`、源码字节不变、零 `tool_operation`；01.e：容器模式挂载 `…:/workspace:ro` + `…/reports:/mnt/agentdev-1:rw`，无 `<ws>:/workspace:rw`；01.f：容器内 bash 在任何 `docker` 进程前被拒；01.g：report root 内写仍 `executed` 并落盘；01.h/01.m/01.n：源码、report root 内符号链接、`reports/../src/feature.ts` 均拒绝且源码不变；01.i：backend 的 `bash`/`git` 仍 `executed`；01.j/01.k：未知名（`frobnicate`）与 `push` 对只读角色 fail-closed；01.l：写角色对未在 Work 范围内的未知操作也不静默执行（签发即被范围拒绝、准入无 Grant） |
+| W7R2-02 准入早于 DNS、拒绝仍消费 Grant | P2 | **关闭** | `probe-network3` 02.a：`localtest.example→127.0.0.1` 在准入即 `NOT_AUTHORIZED`，`consumedAt=null`、`toolOperations=0`、工具体零执行；02.b：不可解析名同样；02.c：公网字面量仍 `executed` 且消费 + 1 行（非空洞）；02.d：精确授权名仍准入且 fetcher 收到 pin `['127.0.0.1']`；02.e：rebinding（首次公网、二次私网）在传输跳被拒、`fetches=0` |
+| W7R2-03 DNS TOCTOU、未钉扎地址 | P2 | **关闭** | `probe-network3` 03.a：fetcher 收到 `pinnedAddresses=['93.184.216.34']`；03.b：内建传输经 pin 连到本机服务器（`rebind.test` 在 DNS 中不存在，只能由 pin 解释）`status=200`、`serverHits=1`、`resolutions=1`；03.c：首次答案公网 + 本机 server 在第二答案地址上 ⇒ `serverHits=0`、`resolutions=1`（未触及第二地址）；03.e：302 到私网名第 2 跳拒绝且只 fetch 首跳 |
+| W7R2-04 持久延迟结果非多写者安全 | P2 | **关闭** | `probe-grants3` 04.a：同目录两个 store 互见对端结果（无陈旧缓存）；04.b：两个真实子进程各写 25 条 ⇒ `refs=50/unique=50/missing=0/files=50`，第三 store 全部可解析；04.c：旧 `deferred-results/index.json` 布局仍只读可解析 |
+| W7R2-05 解析器抛异常逃逸 | P3 | **关闭** | `probe-network3` 05.a：`decide()` 返回 `NOT_AUTHORIZED`（reason 含 `resolver exploded`），`GuardedRequester.request()` 返回 `{ok:false}` 而非抛出；05.b：Broker 准入同样拒绝、无异常、Grant 未消费 |
+| W7R2-06 本地用途 NAT64 被判公网 | P3 | **关闭** | `probe-network3` 06.a：`64:ff9b:1::7f00:1`、`64:ff9b:1::a00:1`、`64:ff9b::7f00:1` 均 `true`，`NetworkPolicy.decide('https://[64:ff9b:1::7f00:1]/')` 拒绝；06.b：可配置前缀 `2001:db9:64::/96` 生效（默认前缀下同地址为 `false`）、不可解码布局判内网（fail-closed） |
+| W7R2-07 就绪归属不能证明 | P3 | **关闭** | `probe-testenv3` 07.a：真实外部监听器占住 `127.0.0.1:49300` + 存活但从不监听的子进程 ⇒ `INVALID_STATE`，reason 含 `owned by pid 53977, not by the started command (pid 53997)`、状态 `failed`；07.b：真监听子进程仍 `running`（owner=childPid，非空洞）；07.c：探针不可用 ⇒ `INVALID_STATE`；07.d：外部 pid 999999 ⇒ `INVALID_STATE`；07.e：`sh -c node` 的后代进程绑定仍 `running`（所有权按进程树，不误伤）；07.f：监听错端口 1.5s 后 `PROVIDER_UNAVAILABLE`/`failed` |
+| W7R2-08 `create` 认领端口后抛异常泄漏 | P3 | **关闭** | `probe-testenv3` 08.a：注入 `createDir` 抛 `ENOSPC` ⇒ 返回结果对象 `PROVIDER_UNAVAILABLE`、`claimedTestPorts()` 不含 49310、随后同端口 `create` 成功；08.b：`cleanup` 释放进程级认领后同端口可复用 |
+| W7R2-09 合法 `null` 结果无法重放 | P3 | **关闭** | `probe-grants3` 09.a：once 体返回 `null` ⇒ 首次 `executed`/`result=null`，重试 `replayed`/`result=null`；09.b：`undefined` 同样 `replayed`；09.c：显式注入全新内存 sink 时仍如实 `RECOVERY_REQUIRED`（缺失路径未被掩盖） |
+| W7R2-10 离线 GC 删除延迟结果 | P3 | **关闭** | `probe-grants3` 10.a：`blobs.collectGarbage(new Set())` 返回 `[]`（结果文件在 `blobs/**` 之外），随后重放 `replayed`/`{sentinel:true}`；10.b：`deferredResultGcRoots` 含 per-ref 记录与旧 manifest，`collectProjectGarbage` 保留旧 manifest 引用的 blob 且已无共享 manifest；10.c：40 次 `put` ⇒ 40 个 per-ref 文件、无 `index.json`、ref 全唯一 |
+
+**小结：W7R2-01..10 全部关闭**（10/10），无一条需要重开。
+
+## 5. 逐 AC 结论
+
+| AC | 结论 | 依据 |
+|---|---|---|
+| **AC-048 Workspace 边界** | **通过** | `probe-ac` AC-048.p1：容器计划含 `--read-only`/`--tmpfs`/`--cap-drop=ALL`/no-new-privileges/`--pids-limit 256`/`--memory 2g`/`--cpus 2`/`--user 10001:10001`/`:ro`/默认 `--network none`；AC-048.n1：符号链接在 host/container 两模式均 `NOT_AUTHORIZED` 且零读；`probe-network3`：私网/不可解析/rebinding/重定向/明文 http 与 NAT64 全在准入或每跳被拒；`probe-broker` REQ-4：无 Docker ⇒ `PROVIDER_UNAVAILABLE`、零进程、零行、绝不回退 host。残余（非阻断）：传输错误抛出（W7R3-03）与工具体自建传输（T8 残余 1，已登记） |
+| **AC-049 Autonomous 范围** | **通过** | `probe-ac` AC-049.p1：范围内调用执行并落 `tool_operation finished` + `grant.issued`/`tool.invoked`；AC-049.n1：越界目标/错 operation/过期 Grant 分别拒绝（`NOT_AUTHORIZED`/`NOT_AUTHORIZED`/`AUTH_EXPIRED`），零 `tool_operation` 行 |
+| **AC-050 Full Access 门禁** | **通过（含 P2 残余）** | `probe-ac` AC-050.n1：host 模式 review 写源码被拒且源码不变、读运行库被拒；`probe-capability` 01.a–01.n：bash/git/未知/非路径 mutating 全拒、report root 边界（含符号链接与 `..` 逃逸）成立、容器 rw 剥离、写角色不受影响。**残余（P2，W7R3-01）**：只读角色的 `run` 工具体经 `ToolContext.writeFile`/`run` 仍可写源码/执行 shell；因该体由 Core 提供、当前无生产调用点，故记 P2 而非阻断 |
+| **AC-051 Secret 隔离** | **通过** | `probe-ac` AC-051.p1/n1：诱饵经真实 node 子进程送达已授权 Run，兄弟 Run `NOT_AUTHORIZED` 且拿不到；查询面/`JSON.stringify`/`list`/`refs` 零明文；`probe-broker` REQ-2：日志/嵌套 UI payload 命中，`maskAll`/`redactValue` 后零命中，store JSON/list 无泄漏 |
+| **AC-053 信任与资源** | **通过** | `probe-ac` AC-053.p1：未信任项目零读零 import，信任后仅「显式选中 ∧ 发布白名单」才 import（import 计数=1）；`probe-broker`/T7 回归：逃逸符号链接零读 `refused/VALIDATION_ERROR`；`trust.test.ts` 14 例全通过 |
+| **AC-080 授权精确绑定** | **通过（含 P2 残余）** | `probe-ac` AC-080.p1：首次 `executed`、同输入 `replayed` 且执行计数=1、异 inputHash `IDEMPOTENCY_CONFLICT`；AC-080.n1：兄弟 Run 对 once/run Grant 均拒绝（`fields=['runId']`）；AC-080.p2：work 作用域两 Run 均可用；`probe-grants3`：跨进程/多写者重放与 `null` 重放成立。**残余（P2，W7R3-02）**：异步 `run` 工具体的结果被记录为 Promise，`once` 重放得到 `{}`（同步体不受影响） |
+
+### 四个必需失败测试（独立复现 + 仓库自带）
+
+| 必需失败测试 | 独立复现（`probe-broker.mjs`） | 仓库用例 |
+|---|---|---|
+| 符号链接/私网/重定向 | **通过** REQ-1：符号链接读 `NOT_AUTHORIZED` 且外部文件不变；私网字面量准入拒绝；公网→私网 302 第 2 跳拒绝且 `hops` 只有首跳 | `permissions-failures.test.ts`(4) + `broker.test.ts` 相关例 |
+| Secret 泄漏 | **通过** REQ-2：scan 命中日志 1 处、嵌套 payload 2 处；store JSON/list/refs 无明文；mask/redact 后零命中 | 同上 |
+| 进程清理失败 | **通过** REQ-3：真实子进程 + 注入 SIGTERM/SIGKILL 与目录删除失败 ⇒ `RECOVERY_REQUIRED`、`failures` 逐条列出、状态 `cleanup_failed`；REQ-3b 真实环境正常清理 | 同上（标题逐字含「进程清理失败」） |
+| 无 Docker 拒绝 | **通过** REQ-4：`PROVIDER_UNAVAILABLE`、原样原因、`fields=['mode']`、零进程、零 `tool_operation` 行 | 同上 |
+
+## 6. Findings（第 3 轮新增）
+
+### W7R3-01（P2）只读角色的 `run` 工具体仍可写源码/执行 shell —— 能力分类只看 `operation` 名
+
+- 位置：`packages/core/src/broker.ts:290`（`READ_ONLY_OPERATIONS` = read/search/network/secret）、`packages/core/src/broker.ts:304-306`（`toolCapability` 按 **operation 名**分类）、`packages/core/src/broker.ts:1811-1836`（角色门禁只判 operation 能力）、`packages/core/src/broker.ts:1989-1990`（`execute` 无条件执行 `invocation.run(context)`）、`packages/core/src/broker.ts:2057-2081`（`ToolContext` 对任何角色都暴露 `writeFile`/`run`；`writeFile` 的 open 时复查用 `access` 推导的 roots，`broker.ts:2042-2056`）
+- 契约/AC：AC-050「Review/Test 仍隔离」；`docs/architecture/execution.md` §1「确保**源码**只读」、§3 角色表只给 Review/Test「自己报告与检查临时目录」；`implementation.md:166`（T8）声称「对 review/test：**任意** mutating 工具被拒」。
+- 复现（离线、真实文件）：
+  - `node /tmp/wp07r3/probe-capability.mjs` 用例 `W7R2-01.o`：签发 `role=review, operation=read, targets=[src/feature.ts]` 的 run Grant，以 `run: (ctx) => ctx.writeFile(<ws>/src/feature.ts, 'pwned-via-run-writeFile')` 调用 ⇒ `outcome=executed`，源码变为 `pwned-via-run-writeFile`。
+  - 同脚本 `W7R2-01.p`：`run: (ctx) => ctx.run("printf 'pwned-via-run-shell' > <ws>/src/feature.ts")` ⇒ 源码变为 `pwned-via-run-shell`（host 模式 `/bin/sh -lc`，无任何文件边界）。
+  - `node /tmp/wp07r3/probe-async.mjs` 用例 `W7R3-BODY.a`：review 被**准入**的 report-root 写（`operation=write`，report root 内）内嵌 `ctx.run(...)` ⇒ 源码被改（即 report 写通道本身可携带任意命令）。
+- 观测 vs 期望：观测为「只读角色的写通道只要换成 `run` 工具体即可绕过能力门禁」；期望 Review/Test 在**所有**工具体下都写不到源码/验证输入，`ToolContext` 不向只读角色提供未受限的 `run`，且 `writeFile` 对只读角色恒以 `writeRoots` 为界。
+- 严重度依据：`ToolInvocation.run` 是公开 API（`broker.ts:1556`）且是 `network`/`secret` 等只读操作既定接缝，但该体由 Core 工具层提供、当前仓库 `Broker.invoke` 无生产调用点（`grep -rn "\.invoke(" apps packages --include=*.ts` 仅测试），Agent 无法仅凭工具输入构造该体，故非现网可利用漏洞 ⇒ P2。
+- 修复方向：(a) 只读角色不注入 `context.run`（或注入即抛 `NOT_AUTHORIZED`）；(b) `context.writeFile` 对只读角色与 `access` 无关地限定在 `writeRoots`，无 report root 即拒绝；(c) 或在 `invocation.run !== undefined` 时按「任意命令能力」分类并拒绝只读角色；文档同步收紧 T8 的「任意 mutating 工具被拒」。
+
+### W7R3-02（P2）异步 `run` 工具体未被 await：结果记录为 Promise、重放得到 `{}`、失败体记为 finished 并产生未处理拒绝
+
+- 位置：`packages/core/src/broker.ts:1556`（`readonly run?: (context: ToolContext) => unknown`，允许返回 Promise）、`packages/core/src/broker.ts:1989-1990`（`execute` 直接 `return invocation.run(context)`）、`packages/core/src/grants.ts:871-872`（`const executed = request.executor(); const resultRef = results.put(executed);`，无 await）、`packages/core/src/grants.ts:270-282`（持久存储 `JSON.stringify({present:true, value})` 把 Promise 写成 `{}`）
+- 契约/AC：AC-080「once … 原子消费且**重试原操作返回原结果**」；`implementation.md:12`（T1）「同输入重试**返回原结果且不重放执行**」；`reliability.md` §2（未知/失败结果不得当成完成）。`implementation.md:61`（T6 残余 #3）已登记「执行器同步 vs 传输异步」的接缝限制，但未登记本条的后果。
+- 复现（离线、真实 SQLite）：
+  - `node /tmp/wp07r3/probe-async.mjs` 用例 `W7R3-ASYNC.a`：`once` Grant + 异步体（10ms 后返回 `'SENTINEL-ASYNC'`）⇒ 首次 `executed`、`typeof result.then === 'function'`；同输入重试 `replayed` 但 `result === {}`（观测输出 `retryResult:{}`、`retryResultType:"object"`）——记录的「原结果」已不是工具返回值。
+  - 用例 `W7R3-ASYNC.b`：异步体 10ms 后抛 `tool body exploded` ⇒ `invoke` 仍返回 `outcome=executed`，`tool_operation.state=finished`（`resultRef` 指向 `{}`），随后进程收到未处理拒绝 `tool body exploded`；本轮在未加处理器时已实际观察到 Node `triggerUncaughtException` 终止进程（`probe-network3` 首次运行）。
+- 观测 vs 期望：观测为「结果=Promise、重放=`{}`、失败体=已完成、拒绝未处理」；期望在记录结果前 await 工具体（或显式拒绝返回 thenable 的体），失败体不得留下 `finished`，`once` 重试必须返回原结果。
+- 修复方向：把执行移出同步事务（先提交 `prepared` → await 体 → 再写 `finished`/`resultRef`），或对返回 thenable 的体 fail-closed（`VALIDATION_ERROR`/`INVALID_STATE` + 回滚）；`GrantConsumeRequest.executor` 与 `ToolInvocation.run` 的类型应收紧为同步，或在文档中明确异步体不受支持（当前实现是**静默损坏**，不是明确拒绝）。
+
+### W7R3-03（P3）传输失败（ECONNREFUSED 等）不是结构化拒绝，而是重新抛出
+
+- 位置：`packages/core/src/broker.ts:1374`（`const response = await this.fetcher(...)` 无 try/catch）、`packages/core/src/broker.ts:1235-1241`（`defaultNetworkFetcher`/`pinnedNodeRequest` 以 reject 结束）
+- 契约/AC：AC-048/049 的「失败以契约错误码上报」；`reliability.md` §2。
+- 复现：`node /tmp/wp07r3/probe-network3.mjs` 用例 `W7R2-03.d`：fetcher 立即抛 `connect ECONNREFUSED 93.184.216.34:443` ⇒ `GuardedRequester.request()` 抛出该异常（`NetworkFetchOutcome` 的 `{ok:false,code}` 未覆盖此情形）。
+- 观测 vs 期望：观测异常逃逸（叠加 W7R3-02 后成为未处理拒绝）；期望闭合为 `NetworkFetchOutcome`（如 `PROVIDER_UNAVAILABLE`/`INVALID_STATE` + 原因），或在类型/文档中明确「传输错误抛出」，让调用方必须显式处理。
+- 修复方向：在 `GuardedRequester.request` 包一层 try/catch，把传输错误转成带 code/reason 的拒绝结果。
+
+### W7R3-04（P3）`portAvailable` 探针抛异常会逃出 `create()`（认领前路径）
+
+- 位置：`packages/core/src/test-environment.ts:497`（`allocatePort` 调用在 `try` 之外）、`packages/core/src/test-environment.ts:749`（`if (!(await this.ports.portAvailable(port))) continue;`）、`packages/core/src/test-environment.ts:506`（`try` 从 `createDir` 开始）
+- 契约/AC：W7R2-08 的同一契约（`implementation.md:204` 只声称「端口认领**之后**的所有步骤包进 try」，与代码一致，属未覆盖边界）；`execution.md` §5（端口/临时资源失败需可判定）。
+- 复现：`node /tmp/wp07r3/probe-testenv3.mjs` 用例 `W7R2-08.c`：注入 `portAvailable: () => { throw new Error('probe exploded') }` ⇒ `create()` 以异常 reject（`threw:"probe exploded"`），而非返回结果对象；无端口泄漏（认领发生在探针之后，`claimedTestPorts()` 不含该端口）。
+- 观测 vs 期望：观测异常；期望与 W7R2-08 同样返回 `PROVIDER_UNAVAILABLE` 结果对象，或在 `TestEnvironmentPorts` 文档中明确探针不得抛出。
+- 修复方向：把 `allocatePort`（或至少 `portAvailable` 调用）纳入 try/catch，把探针异常转为结果对象。
+
+### W7R3-05（P3）字面量目标实际带 pin，与注释/T8 残余声明不一致
+
+- 位置：`packages/core/src/broker.ts:489-497`（`NetworkPolicyDecision.ok.addresses` 注释「Absent for a literal (whose URL host already *is* the address)」）、`packages/core/src/broker.ts:872`（`classifyHostResolution` 对字面量返回 `{ classification: literal, addresses: [normalized] }`）、`implementation.md:227`（T8 残余 1「另外字面量目标不带 pin（URL host 即地址）」）
+- 契约/AC：记录一致性（`implementation.md` ↔ 代码）；AC-048。
+- 复现：`node /tmp/wp07r3/probe-records.mjs` 用例 `REC.d`：`new NetworkPolicy({}).decide({url:'https://93.184.216.34/'})` ⇒ `{ok:true, addresses:['93.184.216.34']}`，而注释声称 absent。
+- 观测 vs 期望：观测字面量带 pin（行为更保守：内建传输对字面量也走 `pinnedLookup`，无安全缺陷）；期望注释与 T8 残余改成「字面量同样携带其自身地址」，或代码不返回 addresses。
+- 修复方向：改注释与 `implementation.md:227`（推荐），或对字面量不返回 `addresses`。
+
+## 7. 记录对账（implementation.md T1..T8 ↔ 代码）
+
+- **T8 验证数字全部可核验**：`pnpm test:unit` 44/905、`pnpm test:integration` 15/157 与实际一致；+20 = `broker.test.ts` 32→47（+15）、`grants.test.ts` 31→36（+5）；集成 +1 = 新增 `grants.integration.test.ts` 1 例；Docker 用例真实执行。
+- **T1–T7 主要机制与代码一致**：本轮对 W7R1-04/09/13、W7R2-01..10 的机制逐条独立复现（§4、§5）；`checkTarget` 仍为同步快路径（`broker.ts:1007`）；旧的 `WRITE_OPERATIONS`/`isWriteOperation` 已从 `broker.ts` 删除（domain 的 `WORKSPACE_WRITE_OPERATIONS` 与本包无关）；`Broker.prototype.invoke` 为 `AsyncFunction`，生产代码无 `.invoke(` 调用点（仅测试）。
+- **被代码否证/需修正的记录（3 处）**：
+  1. `implementation.md:166`「对 review/test：**任意** mutating 工具被拒」——对 `operation` 名为只读、但携带 `run` 工具体的调用不成立（W7R3-01）。
+  2. `implementation.md:12`（T1）/AC-080「同输入重试返回原结果」——对异步 `run` 工具体不成立，重放返回 `{}`（W7R3-02）；T6 残余 #3 只登记了同步执行器接缝，未登记该后果。
+  3. `implementation.md:227`（T8 残余 1）「字面量目标不带 pin」——代码实际携带 pin（W7R3-05）。
+- **T5 的「突变-还原」实验**：本轮的独立行为探针已复现这些用例所要保护的性质（W7R1-01/06/13 的关键分支），但**未**在源码上重做突变（Review 不得改源码；见 §10）——该实验仍属开发者自述。
+- **T8 残余 1（注入 fetcher 不兑现 pin）**：本轮确认其为接缝契约（03.c 用内建传输证明第二地址不可达；内建传输之外不做承诺），与记录一致。
+- 未发现把未实现行为说成已实现的夸大；本轮问题集中在「已实现但边界有洞」与少量记录漂移。
+
+## 8. 判定计数与阻断
+
+| 严重度 | 第 1 轮 | 第 2 轮新增 | 第 3 轮新增 | 阻断 |
+|---|---|---|---|---|
+| P0 | 0 | 0 | 0 | — |
+| P1 | 3（全部关闭） | 1（W7R2-01，已关闭） | **0** | — |
+| P2 | 4（全部关闭） | 3（全部关闭） | **2（W7R3-01/02）** | 否 |
+| P3 | 6（全部关闭） | 6（全部关闭） | **3（W7R3-03/04/05）** | 否 |
+
+- 关闭率：第 1 轮 13/13、第 2 轮 10/10（合计 23/23，100%）均由本轮独立复现。
+- 探针规模：8 个脚本 / **85** 用例；9 条断言失败 = 5 个新 Finding 的证据，76 条通过。
+- 契约命令 6/6 退出 0；AC 切片重跑 unit 6 文件/148 例、integration 4 文件/25 例全通过。
+
+## 9. 决定
+
+**可以进入独立 Test。** 第 2 轮的 1 个 P1 与全部 P2/P3（W7R2-01..10）已关闭并逐条复现；四个必需失败测试与 AC-048..051/053/080 代表切片通过；6 条契约命令全绿；本轮无 P0/P1。新登记的 2 个 P2（W7R3-01 只读角色的 `run` 工具体写通道、W7R3-02 异步工具体的结果记录/重放）与 3 个 P3 按任务规则不阻断，但**应在 Test 阶段一并回 Develop 修复**：W7R3-01/02 涉及 `ToolContext` 与结果记录的契约形状，若不修，接入真实工具层（`network`/自定义工具体）时会使 AC-050/AC-080 在运行期失效。
+
+## 10. 覆盖限制（coverage limits）
+
+1. 未读取任何开发/Test 聊天或会话；实现意图仅按正式文档与代码推断。
+2. T5 的「突变-还原」实验未由本轮独立重做（Review 写入范围仅限本报告，不得改源码）；其保护性质由行为探针覆盖，「用例在旧行为下会失败」仍属开发者自述。
+3. 容器侧仅用**真实 Docker** 跑了仓库自带集成套件（15 文件/157 例，含只读 rootfs/`cap-drop`/非 root/pid+内存/无网络+可用解析器）；W7R2-01 的容器变体（`writableRoots` 剥离）以 `docker run` 参数断言（`<ws>:/workspace:ro`、report 根 `:rw`），未另起容器实测写盘；容器网络代理（`networkProxy`）本机未配置，未做真实出网经代理的端到端验证。
+4. 网络探针全部离线（桩 resolver/fetcher + 本机回环 HTTP 服务器）；`W7R2-03.c` 中直连 `93.184.216.34` 在 5s 内未 settle（记录 `PROBE_TIMEOUT`），「未触及第二地址」由「本机服务器 0 次命中 + 仅发生 1 次解析」证明；未使用真实可重绑定域名。
+5. 跨进程验证为同机真实子进程 + 同一 SQLite 文件；无跨主机、无长时压测；进程级 `claimedPorts` 只在本进程内有效（跨进程端口唯一性仍靠 OS 探测）。
+6. W7R3-01/02 为库级探针复现；因当前仓库内 `Broker.invoke` 无生产调用点、`run` 体由 Core 提供，未评估 apps 接线后的实际可利用性与严重度（故按 P2 记录）。
+7. macOS 无 `/proc`，`test-environment.ts` 的 Linux `/proc` 归属分支未在本机执行；本机归属探针走 `lsof`（可用），`/proc` 路径属静态审阅。
+8. 硬链接逃逸（W7R1-08）在路径包含性模型下仍不可阻断，按记录不主张阻断。
+9. 未调用真实模型/Provider；`gatewaySecretResolver`/Secret 注入接线属 WP-09；`loadTrustedExtensions` 未接入 session 创建（T6 残余 #8），AC-053 只在加载器 API 面验证。
+10. 持久化 Secret 后端（Keychain/加密文件）属安装范围，未验证；契约命令按任务要求各只运行一次（AC 切片为另一次定向重跑），未做 flakiness 重复。
