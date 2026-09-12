@@ -540,3 +540,32 @@ describe('placeholders survive HTML stripping (T-02 regression)', () => {
     expect(errorsOf(result).some((error) => error.field === '实现入口')).toBe(true);
   });
 });
+
+describe('inline HTML versus placeholders in formal documents (W4R4-03/04)', () => {
+  it('strips real inline markup and keeps the bare path', () => {
+    const result = parseDocument(
+      buildDocument({
+        sections: {
+          实现入口: [
+            '- <code>src/orders/cancel.ts</code>',
+            '- <b>tests/orders/cancel.test.ts</b>',
+          ].join('\n'),
+        },
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.feature.sections.entries.items).toEqual([
+      'src/orders/cancel.ts',
+      'tests/orders/cancel.test.ts',
+    ]);
+  });
+
+  it('rejects a placeholder in any section body, prose included', () => {
+    const result = parseDocument(
+      buildDocument({ sections: { 用途: '订单取消由 <真实ID> 决定。' } }),
+    );
+    expect(result.ok).toBe(false);
+    expect(errorsOf(result).some((error) => error.field === '用途')).toBe(true);
+  });
+});

@@ -1020,7 +1020,14 @@ export function createInitializer(options: InitializerOptions): Initializer {
     errors: readonly WorkspaceDiagnostic[],
   ): InitFailed => {
     const withEvidence = addEvidence(record, record.phase, 'failure', failure.message, []);
-    const next = persist({ ...withEvidence, status: 'failed', failure });
+    // An `internal` failure is a caller-input or configuration rejection: report it to the
+    // caller but do NOT persist a `failed` status, or a mistyped request could leave a
+    // Ready/blocked record permanently unusable (T-01, W4R4-01). Real recoverable failures
+    // (`interrupted`, `content-conflict`, `ready-gate`, `git-error`) still persist.
+    const next =
+      failure.kind === 'internal'
+        ? persist(withEvidence)
+        : persist({ ...withEvidence, status: 'failed', failure });
     return {
       ok: false,
       status: 'failed',
@@ -1635,6 +1642,10 @@ export function createInitializer(options: InitializerOptions): Initializer {
   const confirm = (id: string, input: ConfirmInitInput): InitOutcome => {
     const record = store.load(id);
     if (record === null) return notFound(id);
+    if (record.confirmation !== null) {
+      // The confirmation is already recorded: re-sending it is a harmless no-op.
+      return ok(record, false);
+    }
     if (record.phase !== 'confirming') {
       // A rejected request must not persist a failure: a Ready record stays Ready (T-01).
       return rejected(record, `当前阶段 ${record.phase} 不接受确认`, 'INVALID_STATE');
@@ -1918,6 +1929,10 @@ export function createInitializer(options: InitializerOptions): Initializer {
   const confirmNoCapability = (id: string, input: ConfirmNoCapabilityInput): InitOutcome => {
     const record = store.load(id);
     if (record === null) return notFound(id);
+    if (record.emptyProjectConfirmed && record.featureCount === 0) {
+      // The decision is already recorded: re-sending it is a harmless no-op.
+      return ok(record, false);
+    }
     if (record.phase !== 'confirming') {
       return rejected(
         record,

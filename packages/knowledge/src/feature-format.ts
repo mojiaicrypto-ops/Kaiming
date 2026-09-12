@@ -154,8 +154,82 @@ interface ScanResult {
 }
 
 /** Removes inline HTML from text used for structure matching. */
+/** Inline HTML element names that are markup, not placeholders (`<code>`, `<b>`, ...). */
+const HTML_TAG_NAMES = new Set([
+  'a',
+  'abbr',
+  'b',
+  'bdi',
+  'bdo',
+  'br',
+  'caption',
+  'cite',
+  'code',
+  'col',
+  'dd',
+  'del',
+  'details',
+  'dfn',
+  'div',
+  'dl',
+  'dt',
+  'em',
+  'figcaption',
+  'figure',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'hr',
+  'i',
+  'img',
+  'ins',
+  'kbd',
+  'li',
+  'mark',
+  'ol',
+  'p',
+  'pre',
+  'q',
+  's',
+  'samp',
+  'small',
+  'span',
+  'strong',
+  'sub',
+  'summary',
+  'sup',
+  'table',
+  'tbody',
+  'td',
+  'tfoot',
+  'th',
+  'thead',
+  'tr',
+  'u',
+  'ul',
+  'var',
+  'script',
+  'style',
+  'html',
+  'head',
+  'body',
+  'meta',
+  'link',
+  'title',
+]);
+
+/** `true` when an angle token is markup (`<code>`, `</b>`) rather than a placeholder. */
+function isHtmlTag(token: string): boolean {
+  const match = /^<\s*\/?\s*([a-z][a-z0-9-]*)/iu.exec(token);
+  if (match === null) return false;
+  return HTML_TAG_NAMES.has((match[1] ?? '').toLowerCase());
+}
+
 function stripHtml(text: string): string {
-  return text.replace(/<[^<>]*>/gu, '');
+  return text.replace(/<[^<>]*>/gu, (token) => (isHtmlTag(token) ? '' : token));
 }
 
 function splitRow(line: string): string[] {
@@ -273,19 +347,22 @@ function buildSection(heading: string, bodyLines: readonly string[]): FeatureSec
       // the strip so validation can reject it (T-02): otherwise `- src/orders/<path>.ts`
       // would pass and a fabricated `src/orders/.ts` would enter CODE_MAP.
       const rawItem = (bullet[1] ?? '').trim();
-      if (findPlaceholder(rawItem) !== undefined) {
+      const item = stripHtml(rawItem).trim();
+      // Keep the raw form only when a placeholder *survives* stripping (a real angle-bracket
+      // placeholder); genuine inline markup is stripped and the bare value is kept.
+      if (findPlaceholder(rawItem) !== undefined && findPlaceholder(item) !== undefined) {
         items.push(rawItem);
         continue;
       }
-      const item = stripHtml(rawItem).trim();
       if (item !== '') items.push(item);
       continue;
     }
-    if (findPlaceholder(line) !== undefined) {
+    const stripped = stripHtml(line).trim();
+    if (findPlaceholder(line) !== undefined && findPlaceholder(stripped) !== undefined) {
       text.push(line);
       continue;
     }
-    text.push(stripHtml(line).trim());
+    text.push(stripped);
   }
   return { heading, text: text.join('\n').trim(), items };
 }
@@ -603,10 +680,12 @@ export function parseFeatureDocument(
   const relations =
     relationHeading === undefined ? [] : parseRelations(scan, relationHeading, errors);
 
-  for (const section of [bodies.get(FEATURE_ENTRIES_HEADING), bodies.get('关键决定')]) {
-    if (section === undefined) continue;
-    for (const item of section.items) {
-      const placeholder = findPlaceholder(item);
+  // A formal document must not carry template placeholders anywhere (context.md §2):
+  // check every section body, prose and list items alike (W4R4-04).
+  for (const section of bodies.values()) {
+    const values = [section.text, ...section.items];
+    for (const value of values) {
+      const placeholder = findPlaceholder(value);
       if (placeholder !== undefined) {
         errors.push(knowledgeError(section.heading, `placeholder value: ${placeholder}`));
       }

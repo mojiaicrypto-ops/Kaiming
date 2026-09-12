@@ -901,8 +901,9 @@ describe('rejections never brick a record (T-01 regression)', () => {
     const done = okOf(init.step('init-t01'));
     expect(done.phase).toBe('ready');
 
-    const repeated = refusalOf(init.confirm('init-t01', { authorizationRef: 'user-action:2' }));
-    expect(repeated.errors[0]?.code).toBe('INVALID_STATE');
+    // A repeated confirmation is a harmless no-op: it neither advances nor breaks the record.
+    const repeated = okOf(init.confirm('init-t01', { authorizationRef: 'user-action:2' }));
+    expect(repeated.done).toBe(true);
     const record = init.get('init-t01');
     expect(record?.phase).toBe('ready');
     expect(record?.failure).toBeNull();
@@ -922,5 +923,32 @@ describe('rejections never brick a record (T-01 regression)', () => {
     );
     expect(lateGit.errors[0]?.code).toBe('INVALID_STATE');
     expect(init.get('init-t01')?.phase).toBe('ready');
+  });
+});
+
+describe('input errors never downgrade a Ready record (W4R4-01 regression)', () => {
+  it('keeps done and Ready after resolveBlocker/resolveConflict misuse', () => {
+    const { dir } = seedRepository();
+    const store = createMemoryInitStateStore();
+    const init = createInitializer({ store, git, now: clock });
+    okOf(init.start({ id: 'init-w4r4', root: dir }));
+    driveToWriting(init, 'init-w4r4');
+    expect(okOf(init.step('init-w4r4')).done).toBe(true);
+
+    for (const outcome of [
+      init.resolveBlocker('init-w4r4', { authorizationRef: 'user-action:x' }),
+      init.resolveConflict('init-w4r4', {
+        documentPath: 'features/F-00000000/README.md',
+        kind: 'design-code-conflict',
+        decisionRef: 'decision:018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e5f',
+      }),
+    ]) {
+      refusalOf(outcome);
+      const record = init.get('init-w4r4');
+      expect(record?.status).toBe('ready');
+      expect(record?.failure).toBeNull();
+      expect(okOf(init.step('init-w4r4')).done).toBe(true);
+      expect(init.verifyReady('init-w4r4').ok).toBe(true);
+    }
   });
 });

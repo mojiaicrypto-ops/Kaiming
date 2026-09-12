@@ -60,7 +60,7 @@
 - 已登记残余（供 Review/Test 判定，均为承接而非静默）：
   1. `feature_projection` 的 **SQLite 落地**与交付提交/CAS、候选文档结算留 WP-08；本包只有内存 `ProjectionCache` Port。
   2. 无 Git 目录的候选 `source_refs` 用 `file:<path>`，Git 初始化后不回填为 `git:<sha>:<path>`（如需，WP-08 重扫或结算时替换）。
-  3. 扫描在选择顺序后追加了最低优先级的「其他源文件」层（否则仅有源码的旧项目无法产出可观察模块）；层内不挤占已登记层级预算，已在代码注释说明。
+  3. 扫描在选择顺序后追加了最低优先级的「其他源文件」层（否则仅有源码的旧项目无法产出可观察模块）；层内不挤占已登记层级预算，已在代码注释说明。**根级文件归 `(root)` 模块**（`ROOT_MODULE_KEY`），因此根级能力与目录级能力分属不同候选 Feature；`emptyProject` 仅在**完整**扫描无候选能力时为真（W4R2-01/T10）。
   4. 正式 Confirmed 文档只有在调用方给定可解析 decision id 时才判为 `design-code-conflict`，否则先由格式校验报 `invalid-document`（fail-closed，绝不静默信任）。
   5. Writing 的脏工作区门禁会过滤本次初始化自己写入的路径，避免批处理/恢复自锁；`checkDeliveryReadiness` 保持不过滤。
   6. 真实 Provider 纵向、HTTP/WS 接线（`project.initialize` 等）、Docker 集成、Artifact 持久化不在本包。
@@ -121,3 +121,16 @@
 - 其余观察与未覆盖面（需求池 SQLite/Core/UI 演练、`requirement.save` 原子提交、Context 双来源装载、正式提交/CAS、真实 Provider）与 T9-W4R1-03 的承接声明一致，登记为承接。
 - 回归网：`feature-format.test.ts` 新增 1 例「实现入口中的尖括号占位符必须被拒」；`initialize.test.ts` 新增 1 例「重复 confirm / 错阶段 Git 授权不破坏 Ready 记录」。
 - 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **26 文件 / 428 用例**；`pnpm build` 10 workspace；`pnpm docs:check` ok。`pnpm test:integration` 本轮在**宿主负载 load≈60** 下 Docker 型用例（`apps/cli/{container,doctor}.integration.test.ts`）超时；同批非 Docker 集成用例单独运行结果见 T13/结算记录，此前同树（`fd26662`/`1654004`）已多次 124/124 通过。
+
+## T13 独立 Review 第四轮（PASS）与 P2/P3 闭环
+
+- 第四轮独立 Review（针对 Test 后修复提交 `61ada58` 与随后的幂等改进）判 **PASS（0×P0、0×P1、1×P2、5×P3）**：T-01/T-02/O-01 全部被独立复现为已修复，幂等改进在指定场景成立，第一～三轮承接项无意外回归。
+- **W4R4-01 [P2]（已修）**：`resolveBlocker`/`resolveConflict`/`start` 重入等**调用方输入错误**此前仍会持久化 `status:'failed'`，且 `internal` 失败 `recoverable:false` 使 `resume` 无法恢复——Ready 记录会被写成 ready-but-failed（`done` 恒为 false）。修复：`failed()` 对 `kind:'internal'` 的失败**只记录证据、不改状态、不写 failure**（真实可恢复失败 `interrupted`/`content-conflict`/`ready-gate`/`git-error` 仍照常持久化）。这样任何误用都不会让记录不可恢复。
+- **W4R4-02 [P3]（已修）**：`confirm` 的幂等判定改为「只要已记录确认即 no-op」，因此在 Confirming 仍被其它阻断挂起时重复确认不会重写 `authorizationRef`。
+- **W4R4-03 [P3]（已修）**：占位符与内联 HTML 判别改为**标签白名单**：`<code>`/`<b>` 等已知 HTML 元素照常剥离并保留裸值，只有真正**在剥离后仍存活**的尖括号占位符（`<path>`、`<真实ID>`）才保留原文并触发 `KNOWLEDGE_INVALID`。
+- **W4R4-04 [P3]（已修）**：占位符校验从「仅 `实现入口`/`关键决定` 的列表项」扩展到**所有小节的正文与列表项**（`用途` 散文里的 `<真实ID>` 同样被拒）。
+- **W4R4-05 [P3]（登记）**：`normalizeDocumentRoot` 对绝对路径/`..` 逃逸在工厂构造期抛 `WorkspaceError('VALIDATION_ERROR')`（fail-closed；`scanProject`/`investigateWorkspace` 的 outcome 风格不覆盖该类配置错误）。Test 已固定该行为；如 WP-08 边界需要 outcome 形状，可在接线层捕获并映射。
+- **W4R4-06 [P3]（已订正）**：T8 残余 3 的措辞已更新（根级 `(root)` 模块与 `emptyProject` 口径）；T12 前向引用的 T13 即本节；幂等改进已登记于 W4R4-02。
+- 回归网：`feature-format.test.ts` 新增 2 例（内联 HTML 剥离保留裸路径；任一小节正文中的占位符被拒）；`initialize.test.ts` 新增 1 例（Ready 记录上 `resolveBlocker`/`resolveConflict` 误用不降级、`done` 与 Ready 保持）。
+- 验证：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **26 文件 / 431 用例**；`pnpm build` 10 workspace；非 Docker 集成 **8 文件 / 107 用例**通过。
+- **环境观测（诚实登记）**：宿主 load average ≈ 60，Docker 型集成用例 `apps/cli/{container,doctor}.integration.test.ts` 在 180s 超时（同一提交此前多次 124/124 通过；本轮非 Docker 子集 107/107 通过）。该超时与被测代码无关，Test/结算据此记录。

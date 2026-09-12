@@ -663,3 +663,311 @@ WP-04 自有测试（全部在 unit 层，真实临时目录 + 真实 `git`）�
 - 报告写入后 `git status --porcelain` 最后一行 = `?? .agentdev/work/WP-04/review.md`
 - 契约命令：install/typecheck/lint/docs:check/test:unit/test:integration/build = **7/7 exit 0**（unit 26 文件 415 用例；integration 10 文件 124 用例；build 10 workspace）
 - 证据脚本与用例数：`probe1-format.mjs` 35/0、`probe2-views.mjs` 40/1、`probe3-pool.mjs` 43/0、`probe4-init.mjs` 76/1、`probe5-rootonly.mjs` 23/3、`probe6-observations.mjs` 14/0 = **231 例、5 例失败，映射 2 个缺陷（W4R1-01 P1、W4R1-02 P2）**
+
+---
+
+# WP-04 独立 Review 报告（第四轮）
+
+- 评审对象：工作包 WP-04「知识与新旧项目」（`docs/delivery/implementation.md` WP-04；关联 AC-025–029、AC-037–040、AC-042、AC-086–088、AC-092、AC-093）
+- 评审轮次：**第四轮**（本轮报告按任务指令**追加于文件末尾**；第一、二、三轮报告及其附录位于本文件前部，**逐字未改**——`git diff` 仅显示尾部新增行）
+- 冻结点 / 代码树：
+  - `git rev-parse HEAD` = **`61ada58d52be51668157b4479cad5e18644bbe37`**（`61ada58 fix(knowledge,workspace): rejected requests never brick a record and placeholders survive HTML stripping`）
+  - `git rev-parse 61ada58^{tree}` = **`cba7f6b05aa627821c7c82f028caa3d0dbf33883`**
+- 未提交工作树改动（属被评审范围）：`packages/workspace/src/initialize.ts`（+8）与 `packages/workspace/test/initialize.test.ts`（+3/−2），合计 `git diff --stat` = 2 文件 / +11 −2；内容为
+  1. `confirm` 幂等空操作（`initialize.ts:1638-1641`：`record.confirmation !== null && record.phase !== 'confirming'` ⇒ `ok(record,false)`）；
+  2. `confirmNoCapability` 幂等空操作（`initialize.ts:1925-1928`：`record.emptyProjectConfirmed && record.featureCount === 0` ⇒ `ok(record,false)`）；
+  3. 回归测试把「重复 `confirm`」的断言由 `INVALID_STATE` 改为 `ok:true/done:true`。
+- 工作树等价树哈希（临时 index：`git read-tree HEAD && git add -u && git write-tree`）= **`b713b3404ba6d7c6afc2754f30963c28ed72a51a`**
+- 工作树状态：`git status --porcelain` 在全部契约命令与全部探针执行前后均**只有**两行 ` M`（上述两个文件）；本报告写入后共三行，末行 = ` M packages/workspace/test/initialize.test.ts`
+- 记录哈希（`git hash-object`，工作树；括注 `61ada58` 版本）：`packages/workspace/src/initialize.ts` **`f79b7782`**（`efe32f17`）、`packages/workspace/test/initialize.test.ts` **`c4fbcaec`**（`a3628a00`）、`packages/knowledge/src/feature-format.ts` **`b5a3567e`**（61ada58 改）、`packages/workspace/src/scan.ts` **`3618086b`**、`packages/knowledge/src/projection.ts` **`1b69f9eb`**、`.agentdev/work/WP-04/implementation.md` **`01fba0b7`**、`plan.md` **`a78655b0`**、`test.md` **`14a105a2`**
+- 被评审提交 `61ada58` 范围（`git show --stat`）：5 文件 / +79 −42，全部落在 `packages/knowledge/**`、`packages/workspace/**`、`.agentdev/work/WP-04/**`；`docs/**`、`packages/contracts/**`、`packages/storage/**`、`webui/**`、`docker/**` 零改动（符合 `plan.md` §2 不可写清单）
+- 评审角色：**Review**（独立上下文；**未读取任何开发/Test 会话或聊天记录**；输入 = 仓库 `docs/**`、`packages/**`、`apps/**`、git 对象、`.agentdev/work/WP-04/{plan,implementation,review,test}.md`，以及我自建并执行的 `/tmp/wp04r4/` 探针与原始输出；**未 import 任何产品测试文件**）
+- 环境：`node v24.8.0`、`pnpm 12.3.4`、macOS 宿主、真实 `git`、无网络/无模型 Provider；取证期间宿主负载由 `load≈29–60` 回落到 `load≈4`（高负载时 `node` 偶发长时间无输出，重跑即恢复，非代码问题）
+- 权威依据：`AGENTS.md`、`docs/INDEX.md`、`docs/rules/{workflow,agents}.md`、`docs/delivery/acceptance.md`（AC-025–029、AC-037–040、AC-042、AC-086–088、AC-092、AC-093 原文）、`docs/product/{knowledge,requirements}.md`、`docs/architecture/{context,data,protocol,reliability,execution}.md`、`.agentdev/work/WP-04/{plan,implementation,review,test}.md`、`packages/{knowledge,workspace}/**`
+
+---
+
+## 1. 结论
+
+**PASS（0×P0、0×P1；新增 1×P2 + 5×P3，均不阻断；T-01、T-02、O-01 三项修复与未提交的幂等后续经独立取证成立）。**
+
+独立复现结果：
+
+- **T-01 已修**：Ready 记录上重复 `confirm`、错阶段 `authorizeGitInitialization`/`investigateMore`/`confirmNoCapability`、空 `authorizationRef`、非法 Git 初始化请求（空 ref / 空 branch / 错 root）**全部不再持久化失败**，`phase/status/confirmation/evidence` 逐字节不变、`failure === null`、`verifyReady` 仍通过，且后续合法调用（`step`、正确的 Git 授权）照常工作（`r4probe1-t01` A1–A6、B0–B4）。提交信息中的行为在 `confirm`/`authorizeGitInitialization` 上成立。
+- **T-02 已修**：`- src/orders/<path>.ts` 在 `实现入口`、`- decision:<真实ID>：…` 在 `关键决定` 现被 `KNOWLEDGE_INVALID` 拒绝；A/B 对照（`1654004` 旧解析器 vs 现树）显示旧树确实产出 `src/orders/.ts`，现树不再产出；伪造路径不进入 `CODE_MAP.md`，合法文档仍发布且 `CODE_MAP` 只含真实入口（`r4probe3-t02` T1–T3、P0/P1，`r4probe3b-ab`）。
+- **O-01 已修**：`investigateMore` 之后 `investigate()` 继承 `record.budgetOverride`（`initialize.ts:2031`），`featureCount` 由 0 变 1、`partial:false`、读取 43 个文件且包含预算外 `zzz-late/src/mod.ts`，与状态机一致（`r4probe4-o01` 14/14）。
+- **幂等后续成立（就任务指定范围）**：Ready 记录上的第二次/第三次 `confirm`、重复 `confirmNoCapability`、Ready 上的 `investigateMore` 均为「记录逐字节不变」的空操作，`done/ready/verifyReady` 保持（`r4probe2-idempotent` RS1–RS5、RS7）。
+- **回归无松动**：预算耗尽阻断（W4R2-01 闭合）、六种根级/空形状、stale 投影保留、需求池冲突/幂等、非法知识 fail-closed 等 round-1..3 证据重跑后全部成立（`r4probe5-regression` 23/23、旧轮脚本重跑汇总见 §8）。
+
+但本轮在**修复未覆盖的同类入口**与**修复的作用边界**上发现 6 项新问题（1×P2 + 5×P3，均不阻断）：
+
+- **W4R4-01 [P2]**：`resolveBlocker`、`resolveConflict`、以及同 id 的 `start` 重入在**调用方输入错误**时仍走 `failed()`（`initialize.ts:1713/1725/1742/1754/1773/1788/1859/1874/2073/2090`）**持久化 `status:'failed'`**；对 Ready 记录而言这是与 T-01 完全相同的**不可恢复**形状——实测 `step`/`resume`/`confirm`/`authorizeGitInitialization`/`investigateMore`/`confirmNoCapability`/`start` **没有任何一个**能把 `status` 恢复为 `ready`。提交信息「rejected requests never brick a record」目前并不成立。
+- **W4R4-02 [P3]**：`confirm` 的幂等守卫把 `phase === 'confirming'` 排除在外；当记录**已记录决定但仍在 Confirming 被阻断**时，重复 `confirm` 会**改写已记录的 `authorizationRef`**（`user-action:1 → user-action:2`）并追加一条 `blocked` 证据行，与「决定已记录即为无害空操作」的自我声明不符（`initialize.ts:1638`）。
+- **W4R4-03 [P3]**：T-02 的修法以 `findPlaceholder(rawItem)` 作为分支条件，副作用超出占位符本身——(a) `- <code>src/orders/cancel.ts</code>` 这类「真实路径 + 表现型内联 HTML」由「剥离后接受」变为 `KNOWLEDGE_INVALID` 拒绝；(b) 散文小节里的 `<b>…</b>` 不再被剥离，而是**原样保留**进解析结果（`feature-format.ts:276-288`）。与任务「非占位内联 HTML 行为不变」的验收口径不符。
+- **W4R4-04 [P3]**：占位符校验仍只覆盖 `实现入口` 与 `关键决定` 的列表项（`feature-format.ts:606-614`）；`用途`/`当前行为`/`已知差距` 的正文（散文或列表项）含 `<path>`/`<feature>`/`<status>` 仍**解析通过并可发布**，未达本轮任务「或小节正文」的验收措辞（不产生伪造路径、不影响 `CODE_MAP`）。
+- **W4R4-05 [P3]**：`normalizeDocumentRoot` 的拒绝本身 fail-closed 且有 jsdoc（`scan.ts:410-431`），但 `scanProject`/`investigateWorkspace` 声明「以 outcome 返回失败」，却在遇到逃逸 `document-root` 时**抛 `WorkspaceError`**，两份 jsdoc 均未说明；同族的 `createInitializer` 构造期抛错因工厂无 outcome 类型而可接受（详见 §9 的 W4R4-05）。
+- **W4R4-06 [P3，记录类]**：`implementation.md` 过程记录不一致——W4R3-08（T8 残余 3 措辞订正）声称已更新但 `:63` 逐字未变；T12 前向引用不存在的 `T13`；未提交的幂等后续未登记。
+
+**六项修复/复核均无回归**：`implementation.md` T9–T12 的承接登记与实测一致（W4R1-03/04/05/06、W4R2-01..05、W4R3-01..07 状态逐条核对），仅 **W4R3-08 仍未落地**（T11 第 8 条声称「T8 残余 3 的措辞已随 T9/T10/T11 更新」，而 `implementation.md:63` 自 round-1 起逐字未变），并新见 T12 前向引用不存在的 `T13`、未提交的幂等后续未登记（并入 W4R4-06，见 §9）。
+
+---
+
+## 2. 契约命令原始结果
+
+执行方式：`export PATH="$HOME/.local/bin:$PATH"`，仓库根目录按序执行；日志 `/tmp/wp04r4/logs/`。
+
+| 命令 | 退出码 | 原始结果要点 |
+|---|---|---|
+| `pnpm typecheck` | **0** | `tsc -p tsconfig.json --pretty false`，无诊断 |
+| `pnpm lint` | **0** | `Checking formatting...`、`All matched files use Prettier code style!` |
+| `pnpm test:unit` | **0** | `Test Files 26 passed (26)`、`Tests 428 passed (428)`、8.18s |
+| `pnpm test:integration` | **1（环境受阻，见下）** | `Test Files 2 failed \| 8 passed (10)`、`Tests 2 failed \| 122 passed (124)`、533.31s；两处失败均为 **Docker 型用例 `Test timed out in 180000ms`**：`apps/cli/test/container.integration.test.ts > execution image > allows writes only inside the tmpfs`、`apps/cli/test/doctor.integration.test.ts > doctor report > refuses readiness when the data directory cannot be created` |
+| `pnpm exec vitest run --project integration packages apps/runner`（非 Docker 子集，按任务指示补跑） | **0** | `Test Files 8 passed (8)`、`Tests 107 passed (107)`、5.20s：`storage/{migrations 17,ledger 22}`、`pi-runtime/session 11`、`core/{requirements 10,dispatcher 10,events-hub 18,identity 9}`、`runner/attempt 10` |
+| `pnpm docs:check` | **0** | `docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages` |
+| `pnpm build` | **0** | 10 个 workspace 全部 `Done`（contracts、domain、storage、knowledge、workspace、pi-runtime、core、apps/{cli,daemon,runner}） |
+
+Docker 环境受阻说明（按任务口径）：124 用例 = 非 Docker 107 + 两个 Docker 文件 17；两处失败是宿主机高负载下的 180s 超时，**不是代码缺陷**（其余 122 个集成用例通过；此前同树 `fd26662`/`1654004` 已多次 124/124 通过）。
+
+WP-04 自有回归网单独重跑（`pnpm exec vitest run --project unit packages/knowledge packages/workspace`）：**7 文件 / 139 用例全部通过**——`feature-format` 45、`requirements-pool` 25、`projection` 13、`relations` 11、`views` 9、`scan` 16、`initialize` 20。相对 Test 报告（137：feature-format 44、initialize 19）净增 2，与 `61ada58` 的测试差异逐条对应。
+
+integration 层仍**不含任何 WP-04 文件**（`packages/knowledge`、`packages/workspace` 无 `*.integration.test.ts`），与 `implementation.md` T9 承接 1（W4R1-03 留 WP-08、Test 须列 `not_covered`）一致。
+
+---
+
+## 3. 方法、证据脚本与用例数
+
+### 3.1 本轮自建脚本（全部 `/tmp/wp04r4/`：真实临时目录 + 真实 `git` + 真实文件系统；只消费 `pnpm build` 产物）
+
+| 脚本 | 用例 | 结果 | 覆盖 |
+|---|---|---|---|
+| `r4probe1-t01.mjs` | 32 | **23 pass / 9 fail** | T-01 全部拒绝面（重复 confirm、错阶段 Git/More/NoCap、空 ref、非法 Git 请求）+ Ready 可用性 + 剩余输入错误路径（resolveBlocker / resolveConflict / start 重入）与恢复矩阵 |
+| `r4probe2-idempotent.mjs` | 22 | **21 pass / 1 fail** | 重复 confirm（Ready / Confirming-blocked）、重复 confirmNoCapability（partial 空项目 / 完整空项目 / 有能力项目）、重复 investigateMore |
+| `r4probe3-t02.mjs` | 18 | **12 pass / 6 fail** | 占位符在 `实现入口`/`关键决定`/散文与列表正文；内联 HTML 前后行为；投影发布与 `CODE_MAP` 不变式 |
+| `r4probe3b-ab.mjs` | 11 | **4 pass / 7 fail** | `1654004` 旧 `buildSection`（tsc 编译为 ESM）与现树 `dist` 的 A/B 差分 |
+| `r4probe4-o01.mjs` | 14 | **14 pass / 0 fail** | `budgetOverride` 继承（状态机 vs `investigate()` vs 直接 `investigateWorkspace`） |
+| `r4probe5-regression.mjs` | 23 | **23 pass / 0 fail** | 预算耗尽阻断与不写 absent、六种根级/空形状 Ready、stale 投影保留与清零 |
+| `r4probe6-docroot.mjs` | 20 | **20 pass / 0 fail** | `document-root` 逃逸的 5 种形状、构造期/扫描期拒绝、无越界写盘、合法 in-project 路径 |
+| **合计** | **140** | **117 pass / 23 fail** | 23 处失败去掉重复与「断言旧行为/旧错误码」后收敛为 **5 个新缺陷（W4R4-01..05）**；另有 21 条 observation 用于刻画未列为缺陷的瞬态与既有口径 |
+
+### 3.2 round-1..3 证据重跑（同一 `dist`，旧脚本原样）
+
+| 脚本 | 本轮结果 | 解读 |
+|---|---|---|
+| `/tmp/wp04r3/probe1-closure.mjs` | **36 / 0** | W4R2-01 三层闭合；六种形状、脏工作区、无 Git 只读、确认跨存储存活均无回归 |
+| `/tmp/wp04r3/probe2-adversarial.mjs` | **23 / 2**（执行到 H1 时因逃逸 `document-root` 现在抛错而中断） | 2 处失败是断言旧错误码（现为阶段门禁 `INVALID_STATE`）；C3/D2 证明 Ready 记录不再被降级；H1 旧缺陷形状已改为 fail-closed 抛错 |
+| `/tmp/wp04r3/probe3-residual.mjs` | **27 / 2** | C4 同为旧错误码断言；**G2 复现 W4R3-07**（200 次 `step` → evidence +200、JSON +76 800 字节）；C1/E1/F1/A5 显示 W4R3-01/05/06 与 W4R2-02 已闭合 |
+| `/tmp/wp04r3/probe4-boundaries.mjs` | **16 / 0** | 二进制/生成物不改变完整性、索引截断可阻断可解、状态跨 JSON 存储重启、`start` 幂等 |
+| `/tmp/wp04r/probe1-format.mjs` | **35 / 0** | AC-086 正负例矩阵无回归 |
+| `/tmp/wp04r/probe2-views.mjs` | **40 / 0** | 投影发布/确定性/**stale 保留**/断链按需求阻断 |
+| `/tmp/wp04r/probe3-pool.mjs` | **43 / 0** | 需求池解析/**导入幂等**/**`REQUIREMENT_CONFLICT` 逐条**/`stale_projection`/历史摘要 |
+| `/tmp/wp04r/probe4-init.mjs` | **75 / 1** | 唯一失败 = 断言旧「仅根级文件无法 Ready」的缺陷形状 |
+| `/tmp/wp04r/probe5-rootonly.mjs` | **19 / 4** | 4 处失败均为断言已修复的旧行为（含「修复前必失败」的元断言） |
+| `/tmp/wp04r/probe6-observations.mjs` | **12 / 2** | 2 处失败为旧行为断言（一级标题、摘要截断）；O-1/O-2/O-3/O-4 残余仍复现 |
+
+（`wave1 231 例 + round2 86 例 + round3 113 例` 的失败项全部可用上表解释为「旧行为/旧错误码断言」或「已登记残余」，**无意外回归**。）
+
+---
+
+## 4. T-01 复核（拒绝不持久、不摧毁记录）
+
+夹具：`README.md`+`package.json`+`src/orders/routes.ts`+`src/payments/model.ts` 的真实提交仓库，`createInitializer` + 内存状态存储，驱动到 Ready（`r4probe1-t01` A/B 块）。
+
+| 观测点 | 实测 |
+|---|---|
+| A1 第二次 `confirm`（不同 ref） | `ok:true, status:'ready', done:true, advanced:false`；记录 JSON 逐字节不变；`confirmation.authorizationRef` 仍为首个 `user-action:1`；`evidence` 行数不变 |
+| A2 错阶段 `authorizeGitInitialization` | `INVALID_STATE`；记录逐字节不变；`failure === null`；`verifyReady.ok === true` |
+| A3 错阶段 `investigateMore` | 同上 |
+| A4 错阶段 `confirmNoCapability` | 同上 |
+| A5 Ready 上空 `authorizationRef` 的 `confirm` | 记录逐字节不变；`failure === null`；门禁仍通过（幂等分支先于输入校验，故返回 `ok:true/done:true`；这是「已确认即幂等」的口径，未列为缺陷） |
+| A6 上述拒绝之后 | `step` 仍 `ok/done:true`；`verifyReady` 仍通过；记录 `failure` 始终为 `null` |
+| B0–B3 无 Git 目录、Writing 被 `git-initialization` 阻断 | 空 `authorizationRef` / 空 branch / 错 root 分别 `VALIDATION_ERROR`；记录保持 `phase:'writing' + status:'blocked' + failure:null`；`docs/agentdev/PROJECT.md` **不存在**（授权前零写盘） |
+| B4 随后合法授权 | 被接受并推进到下一个真实阻断（`dirty-workspace`，`INVALID_STATE`），说明合法后续调用未被拒绝面污染 |
+
+**结论：T-01 修复在 `confirm` / `authorizeGitInitialization` 上闭合**，且未提交的幂等守卫把 Ready 上重复 `confirm` 从 `INVALID_STATE` 变为 `ok` 空操作，仍然不写失败、不摧毁记录。
+
+---
+
+## 5. 剩余输入错误路径（W4R4-01）
+
+| 场景（`r4probe1-t01` C/D 块） | 实测 |
+|---|---|
+| C1 Ready 记录上 `resolveBlocker({authorizationRef})`（无待处置阻断） | 返回 `INVALID_STATE`，但记录 `status: ready → failed`、`failure.kind:'internal', recoverable:false` |
+| C1b 该记录上的恢复矩阵 | `step → failed/INVALID_STATE`；`resume → failed/INVALID_STATE`；`confirm → ok:true（status 仍 failed）`；`authorizeGit → failed`；`investigateMore → failed`；`confirmNoCapability → failed`；`start(同 id) → ok:true（status 仍 failed）`；`verifyReady.ok === true`（门禁只看磁盘，不看 status）。**无任何 API 恢复为 ready** |
+| C2 `confirmation-required` 阻断上错用 `resolveBlocker` | 同样持久化 `failed/internal`；但专用 `confirm` 随后把记录恢复为 `writing`（可恢复变体） |
+| C3 Ready 上 `resolveConflict(空 decisionRef)` | 持久化 `failed/internal`；不可恢复（同 C1） |
+| C3 Ready 上 `resolveConflict(未知冲突)` | 持久化 `failed/internal`（`NOT_FOUND`）；不可恢复（同 C1） |
+| D1 同 id `start` 换 `documentRoot` | 持久化 `failed/internal`（`已绑定其它 document-root/branch`） |
+| D2 同 id `start` 换 `root` | 持久化 `failed/internal`（`已绑定其它根`） |
+
+**结论**：T-01 的修复方式（`rejected()` 不持久化）只应用到 `confirm`/`authorizeGitInitialization`/`confirmNoCapability`/`investigateMore`；同族的 `resolveBlocker`、`resolveConflict`、`start` 重入仍会因一次输入错误把 Ready 记录写成不可恢复的 `failed`。这既是 round-1 `W4R1-04`（P3）的延续，也是 `W4R3-01`/T-01 的**同根因未闭口**，且直接反驳 `61ada58` 的提交声明。判 **P2**（需调用方误用触发、不落在 WP-04 验收面，故不阻断）。
+
+---
+
+## 6. 重复决策幂等复核（W4R4-02）
+
+| 场景（`r4probe2-idempotent`） | 实测 |
+|---|---|
+| RS1/RS2 Ready（confirm 路径）上第 2、3 次 `confirm`、以及空 ref 的 `confirm` | 全部 `ok/done` 空操作，记录逐字节不变，决定未被改写，`evidence` 不增长 |
+| RS3 有能力 Ready 上 `confirmNoCapability` | `INVALID_STATE`，记录不变、`failure === null`、仍 Ready |
+| RS4 partial 预算项目（`confirmNoCapability` 路径）Ready 上重复 | 第二次 `ok/done` 且逐字节不变；空 ref 亦为空操作；`confirm` 仍 `INVALID_STATE` 且不摧毁记录 |
+| RS5 完整空项目（只 README）Ready 上 `confirmNoCapability` | 空操作，记录保持 Ready |
+| RS7 Ready 上 `investigateMore` | 拒绝且记录不变 |
+| **RS6 已记录决定但仍在 Confirming 被 `design-conflict` 阻断** | 第二次 `confirm` **改写了已记录的决定**（`user-action:1 → user-action:2`）并追加 1 条 `blocked` 证据行；空 ref 的重复被 `VALIDATION_ERROR` 拒绝且不改记录 |
+
+**结论**：任务指定的「Ready 上重复决定 = 无害空操作」成立；但幂等守卫以 `phase !== 'confirming'` 为条件，导致「决定已记录、阶段仍 Confirming」这一最可能被 UI 重发的状态**不是**空操作（P3，W4R4-02）。
+
+---
+
+## 7. T-02 复核（占位符与内联 HTML）
+
+A/B 基线：把 `1654004:packages/knowledge/src/feature-format.ts`（+`model.ts`）用仓库 `tsc` 编译为 ESM，与现树 `packages/knowledge/dist` 跑同一文档集（`r4probe3b-ab`）。
+
+| 形状 | 1654004（旧） | 现树 | 判定 |
+|---|---|---|---|
+| `实现入口: - src/orders/<path>.ts` | `ok:true`，入口被剥成 **`src/orders/.ts`**（即 T-02 原始缺陷） | `KNOWLEDGE_INVALID`（`field: 实现入口`） | **T-02 已修** |
+| `关键决定: - decision:<真实ID>：…` | 通过（`decision:：…`） | `KNOWLEDGE_INVALID` | **T-02 已修** |
+| `实现入口` 散句含 `<path>` | 通过（占位符被剥除） | `KNOWLEDGE_INVALID` | 已修 |
+| `实现入口: - <code>src/orders/cancel.ts</code>` | `ok:true`，入口 = 真实 `src/orders/cancel.ts` | `KNOWLEDGE_INVALID`（`placeholder value: <code>`） | **行为改变 → W4R4-03** |
+| `用途: 允许<b>用户</b>取消未付款订单。` | 解析文本 = `允许用户取消未付款订单。`（已剥离） | 解析文本 = `允许<b>用户</b>取消未付款订单。`（**保留原始 HTML**） | **行为改变 → W4R4-03** |
+| `用途/已知差距/当前行为` 正文（散文或列表）含 `<feature>`/`<path>`/`<status>` | 通过（占位符被剥除） | **仍通过**（占位符原样保留） | **未达本轮「或小节正文」验收 → W4R4-04** |
+
+`CODE_MAP` 不变式（`r4probe3-t02` P0/P1）：合法文档发布后 `codeMap` 只含 `src/orders/cancel.ts`；含占位符的文档 `published:false`、`stale:true`、诊断全部 `KNOWLEDGE_INVALID`，保留上一版有效投影并标 `stale`，缓存行同步 `stale`；**任何渲染结果都不含 `src/orders/.ts`**。
+
+**结论**：T-02 的核心（占位符不得被 HTML 剥离绕过、伪造路径不得进 `CODE_MAP`）闭合；但修法的作用边界超出占位符本身（W4R4-03），且占位符规则仍未覆盖三个散文小节（W4R4-04）。
+
+---
+
+## 8. O-01 与 round-1..3 回归复核
+
+### 8.1 O-01（`r4probe4-o01`，14/14）
+
+41 个 README 占满默认正文预算 + 预算外 `zzz-late/src/mod.ts`：Confirming 阻断 `investigation-budget`/`MISSING_CONTEXT` 时 `investigate()` = `featureCount 0 / partial true`；`investigateMore({maxBodyFiles:500})` 后记录 `budgetOverride.maxBodyFiles=500`、`featureCount 1`，`investigate()` = **`featureCount 1 / partial false / reads 43 / 含 zzz-late/src/mod.ts`**、`wroteFiles:false`；同一 root 的直接 `investigateWorkspace` 在无 override 时仍为 0、带 override 时为 1。**O-01 闭合**。
+
+### 8.2 round-1..3 承接项状态（与 `implementation.md` T9–T12 逐条核对）
+
+| 编号 | 本轮复核 | 记录面 |
+|---|---|---|
+| W4R1-03 集成演练 | 仍未落地；integration 层确无 WP-04 文件（§2） | T9 承接 1 明确留 WP-08、Test 列 `not_covered` → **一致** |
+| W4R1-04 用错处置 API → `failed/internal`，专用 API 可恢复 | **仍复现**：C2（专用 `confirm` 可恢复）与 C1/C3/D1/D2（Ready 上不可恢复） | T9 承接 2 登记 → **一致**（新入口并入 W4R4-01） |
+| W4R1-05 `requirement:<id>@<version>` 不校验版本 | **仍复现**（`probe6-observations` O-4：`ok:true, version:'99'`） | T9 承接 3 登记 → **一致** |
+| W4R1-06 残余（目录符号链接记 `kind:'file'`、池根裸 `requirement.json` 无诊断） | **仍复现**（O-2、O-3）；其 fail-open 面（一级标题）已闭合（O-5 `level1HeadingAccepted:false`） | T9 承接 4 登记 → **一致** |
+| W4R2-01 预算耗尽 ≠ 空项目 | **闭合**（`probe1-closure` 36/0；`r4probe5` B1/B2） | T10 登记 → **一致** |
+| W4R2-02 `(root)` 哨兵 | **闭合**（A5：`modules:['(root)','root']`） | T10 登记 → **一致** |
+| W4R2-03/04 `moduleKeyOf`/摘要 | **闭合**（O-6 摘要完整；`firstSentence` 旧断言失败即反转证据） | T10 登记 → **一致** |
+| W4R2-05 / W4R3-08「T8 残余 3 措辞已更新」 | **未落地**：`implementation.md:63` 在 `9ee1a82`/`fd26662`/`1654004`/`61ada58` 四棵树逐字相同，而 `implementation.md:112`（T11 第 8 条）声称已更新 | **不一致 → W4R4-06(a)** |
+| W4R3-01 `confirmNoCapability`/`investigateMore` 输入错误不持久化 | **闭合**（C1/C5：Ready 保持 ready、`failure:null`、`diskUnchanged:true`） | T11 登记 → **一致** |
+| W4R3-02 阶段门禁 | **闭合**（D1/C2：Ready 记录不再被降级） | T11 登记 → **一致** |
+| W4R3-03 `documentRoot` 逃逸 | **闭合**（§9、`r4probe6` 20/20） | T11 登记 → **一致** |
+| W4R3-04 `investigateMore` 必须真正扩大 | **闭合**（A1：`maxBodyFiles:1` < 当前 40 → 拒绝且不动记录） | T11 登记 → **一致** |
+| W4R3-05 确认后 PROJECT 文案 | **闭合**（E1：`absent（未实现，明确空项目，用户已确认）`） | T11 登记 → **一致** |
+| W4R3-06 Mapping 前确认 | **闭合**（F1：`identifying` 阶段被 `INVALID_STATE` 拒绝且不写盘） | T11 登记 → **一致** |
+| W4R3-07 未解阻断上重复 `step` 账本增长 | **仍复现**（G2：200 次 → +200 行 / +76 800 字节） | T11 承接 7 登记 → **一致**（P3，非阻断） |
+
+另：`implementation.md:123`（T12 验证行）前向引用「同批非 Docker 集成用例单独运行结果见 **T13**/结算记录」，但本文件**不存在 T13**；未提交的幂等后续也未登记（并入 W4R4-06(b)(c)）。
+
+---
+
+## 9. Findings（W4R4-xx）
+
+### W4R4-01 [P2] `resolveBlocker`/`resolveConflict`/`start` 重入仍持久化 `failed`，在 Ready 记录上不可恢复
+
+- **现象**：见 §5。调用方输入/状态错误经 `failed()`（`initialize.ts:1017-1032`）`persist({status:'failed'})`，随后 `step`/`resume` 一律 `INVALID_STATE`、`record.failure.recoverable=false`，`confirm`/`start` 虽返回 `ok:true` 但**不改变 status**（`confirm` 幂等分支 `ok(record,false)`、`start` 的 `ok(existing,false)`），`verifyReady` 反而仍为 `true`（门禁只核磁盘），形成「显示失败却过门禁、且无 API 可推进」的死记录。
+- **定位**：`initialize.ts:1713`（无 blocker）、`:1725`（git-initialization）、`:1742`（confirmation-required）、`:1754`（investigation-budget）、`:1773`（design-conflict）、`:1788`（缺 `dirtyChoice`）、`:1859`（`resolveConflict` 空 `decisionRef`）、`:1874`（无匹配冲突）、`:2073`/`:2090`（`start` 同 id 根/document-root/branch 不一致）。
+- **契约依据**：`reliability.md` §1「校验身份/版本/幂等 → 更新领域行」——校验失败不得更新领域行；`protocol.md` 错误表把 `VALIDATION_ERROR` 定义为「修正输入」可重试、`INVALID_STATE` 定义为「当前实体状态不允许该操作」；当前实现把前者变成了后者（同族见 round-3 W4R3-01 与 round-1 W4R1-04）。
+- **影响**：一次误用即可让一个已 Ready 的初始化 id 永久不可用（须换 id 重来）；与 `61ada58` 提交信息「rejected requests never brick a record」矛盾。**不落在 AC-025–029 的正常/失败恢复路径上**，故不阻断。
+- **复现**：`/tmp/wp04r4/r4probe1-t01.mjs` C1/C1b/C2/C3/D1/D2（9 处失败）。
+- **修法方向**：把这十处输入/状态校验统一改为 `rejected()`（返回失败视图但不 `persist`），或在 `failed()` 与 `rejected()` 之间建立一致口径；补断言「Ready 记录被任一同族 API 误用后 `status/phase/failure` 原样、`verifyReady` 与 `step` 仍可用」；可顺带让 `verifyReady` 或 `step` 反映 `status:'failed'`，避免门禁与状态自相矛盾。
+
+### W4R4-02 [P3] 幂等守卫排除 `confirming`：决定已记录但仍在 Confirming 时重复 `confirm` 改写决定
+
+- **现象**（§6 RS6）：记录 `phase:'confirming'`、`status:'blocked'`（`design-conflict`）、`confirmation.authorizationRef='user-action:1'` 时，第二次 `confirm({authorizationRef:'user-action:2'})` 命中 `initialize.ts:1642` 之后的正常路径，`persist` 覆盖 `confirmation` 并追加 `blocked` 证据行；记录不再逐字节不变。
+- **定位**：`initialize.ts:1638-1641`（守卫条件 `record.phase !== 'confirming'`）。
+- **影响**：审计上的「用户授权来源」会被后一次重发静默替换；无阶段/门禁破坏，非阻断。
+- **修法方向**：把守卫改为「只要 `confirmation !== null` 即空操作」（或对 `confirming` 且 `confirmation !== null` 单独处理），使声明与实现一致；若确需换 ref，应显式提供「变更确认」API。
+
+### W4R4-03 [P3] T-02 修法以占位符分支改变内联 HTML 的既有行为
+
+- **现象**（§7）：(a) `- <code>src/orders/cancel.ts</code>` 由旧树「剥离 `<code>` 后接受真实路径」变为 `KNOWLEDGE_INVALID: placeholder value: <code>`；(b) 散文小节 `允许<b>用户</b>取消…` 的解析文本由「已剥离」变为「原样保留 `<b>`」。两者都超出 T-02 的目标（占位符），与任务「非占位内联 HTML 行为不变」的验收口径不符。
+- **定位**：`packages/knowledge/src/feature-format.ts:276-279`（`findPlaceholder(rawItem)` 分支）、`:284-288`（`findPlaceholder(line)` 分支）。
+- **影响**：合法的「表现型 HTML 包裹真实入口」正规文档会被拒（不发布 + stale）；散文中的原始 HTML 会进入投影文本/index 摘要。无 `CODE_MAP` 伪造、无 AC 阻断。
+- **修法方向**：判据改为「**剥离后**仍存在占位符才拒绝」——即 `findPlaceholder(stripHtml(raw)) !== undefined`（保留 `<path>` 这类占位符的拒绝力，同时让 `<code>`/`<em>` 等表现标签继续被剥离）；或分别对 raw 与 stripped 求值并只在 stripped 仍非法时拒绝。补 3 条断言（真实入口包 `<code>`、散文 `<b>`、`<path>` 仍被拒）。
+
+### W4R4-04 [P3] 占位符规则未覆盖 `用途`/`当前行为`/`已知差距` 正文
+
+- **现象**（§7 T4–T7）：`用途: 允许用户取消 <feature> 订单。`、`已知差距: - 见 <path> 的实现说明。`、`当前行为: - 已付款订单返回 <status>。` 均 `ok:true` 并可发布（`context.md` §2「示例占位只能用于模板，写入正式Feature时必须是真实值」未在这些小节生效）。旧树同样通过（只是把占位符剥掉），故**不是回归**；但本轮任务把「或小节正文」列为 T-02 的验收面。
+- **定位**：`feature-format.ts:606-614`（校验仅遍历 `实现入口` 与 `关键决定` 的 `items`；`buildSection` 产出的 `text` 从不做占位符校验）。
+- **影响**：模板文档可在散文/差距/行为三节残留 `<...>` 并发布；不产生伪造路径，不影响 AC-040/086 的枚举与证据规则。
+- **修法方向**：对全部小节统一做 `findPlaceholder`（对 `items` 与 `text`），或至少在 `parseFeatureDocument` 收口处对文档全文的占位符 token 报告 `KNOWLEDGE_INVALID`；同步补正/负例。
+
+### W4R4-05 [P3] `scanProject`/`investigateWorkspace` 会为非法 `document-root` 抛错，但 jsdoc 未说明
+
+- **现象**（`r4probe6` D1–D7）：`normalizeDocumentRoot` 对 `../x`、`docs/../evil`、`/abs`、`..` 抛 `WorkspaceError(VALIDATION_ERROR)`（**fail-closed、无越界写盘**，有 jsdoc）；`createInitializer` 在构造期抛出（无记录创建）；但 `scanProject`/`investigateWorkspace` 的 jsdoc 声明「以 `ScanOutcome`/`InvestigationOutcome` 返回失败」，实际会**抛异常**，两份 jsdoc 均未提及该输入类。
+- **定位**：`packages/workspace/src/scan.ts:410-431`（`normalizeDocumentRoot`）、`:851-857`（`scanProject` jsdoc）、`packages/workspace/src/initialize.ts:810-815`（`investigateWorkspace` jsdoc）。
+- **契约判断**：**工厂构造期抛错是可接受的**——`createInitializer` 没有 outcome 返回类型，越界配置必须在可用之前 fail-closed，抛 `VALIDATION_ERROR` 语义清晰，且已有负例测试（`initialize.test.ts`「refuses a document-root that escapes the project (W4R3-03)」）；但**同一校验在两个有 outcome 类型的入口上以抛错形式出现，属 API 收缩**：调用方按类型签名只处理 `ok:false` 时会崩溃。建议二选一并写进 jsdoc：(a) 保持抛出并在 `scanProject`/`investigateWorkspace` 文档中显式声明「非法 `document-root` 抛 `WorkspaceError(VALIDATION_ERROR)`」，由 WP-08 协议边界翻译为 `VALIDATION_ERROR` 响应；或 (b) 让二者返回 `{ok:false, errors:[VALIDATION_ERROR]}`（`createInitializer` 仍抛）。判 P3（文档/一致性）。
+
+### W4R4-06 [P3] 过程记录不一致：W4R3-08 未落地、T13 前向引用缺失、幂等后续未登记
+
+- **(a)** `implementation.md:112`（T11 第 8 条）与 `:96`（T10 W4R2-05）声称「T8 残余 3 的措辞已随 T9/T10/T11 更新」，但 `implementation.md:63` 在 `9ee1a82`/`fd26662`/`1654004`/`61ada58` 四棵树**逐字相同**（`git show <rev>:.agentdev/work/WP-04/implementation.md | sed -n 63p`）——W4R3-08 记录订正仍未落地。
+- **(b)** `implementation.md:123` 引用「见 T13/结算记录」，但文件内**不存在 T13 节**（末节为 T12）。
+- **(c)** 被评审的未提交幂等改动（`confirm`/`confirmNoCapability` 空操作）在 `implementation.md` 中无对应登记条目。
+- **影响**：纯记录问题，行为无影响；但 Settlement 需据此订正，否则「已完成」声明与产物不一致（属 `docs/rules/workflow.md` §7 的结算核对项）。判 P3。
+- **修法方向**：在 T12 之后补 T13 记录未提交幂等改动与非 Docker 集成结果；把 `:63` 的括注真正补齐（指向 `ROOT_MODULE_KEY` 与「其他源文件层」各自适用范围）；或撤回 T10/T11 中「已更新」的表述。
+
+---
+
+## 10. 计数与阻断判定
+
+| 严重度 | 数量 | 编号 | 阻断 |
+|---|---|---|---|
+| P0 | **0** | — | — |
+| P1 | **0** | — | — |
+| P2 | **1** | W4R4-01 | 否（需调用方误用；不在 WP-04 验收面） |
+| P3 | **5** | W4R4-02、W4R4-03、W4R4-04、W4R4-05、W4R4-06（记录类） | 否 |
+| （承接复核） | 17 | W4R1-03/04/05/06、W4R2-01..05、W4R3-01..08 | 其中 W4R3-07 与 W4R3-08 仍开放（均 P3，不阻断） |
+
+| 阻断项 | 严重度 | 内容 | 解除条件 |
+|---|---|---|---|
+| （无） | — | 本轮未在 WP-04 验收面（AC-025–029、AC-037–040、AC-042、AC-086–088、AC-092、AC-093）复现任何 P0/P1 | — |
+
+严重度口径：`docs/rules/workflow.md` §6 —— P0 数据/安全或关键不可用、P1 错误行为/需求缺失、P2 局部质量/维护、P3 建议；**P0/P1 阻断**。W4R4-01 判 P2 的理由：与已登记的 W4R1-04/W4R3-01/T-01 同族，仅由调用方误用触发，正常初始化与失败恢复路径均实测通过。
+
+---
+
+## 11. 能否进入独立 Test / 结算 —— **能**
+
+理由：
+
+1. **三项修复经独立取证成立**：T-01（拒绝不持久、Ready 可用，§4）、T-02（占位符不被 HTML 剥离绕过、伪造路径不进 `CODE_MAP`，§7）、O-01（`budgetOverride` 继承，§8.1）；未提交的幂等后续在任务指定范围内也成立（§6）。
+2. **无新 P0/P1**，round-1..3 的全部 P0/P1 均已闭合且经重跑确认（W4R1-01/02、W4R2-01 及 W4R1-06 fail-open 面），六种根级/空形状、预算耗尽阻断、stale 保留、需求池冲突与幂等均无意外回归。
+3. **契约命令**：typecheck/lint/unit/docs:check/build **5/5 exit 0**；integration 的 2 处失败为宿主机高负载下 Docker 用例 180s 超时（已按任务口径记录为**环境受阻**），同批非 Docker 8 文件 / 107 用例 exit 0，两文件合计 122/124 通过。
+4. **工作树干净**：`git status --porcelain` 仅被评审的两个文件（报告写入后仅 `review.md`）。
+
+进入独立 Test 时的最小覆盖矩阵（沿用第三轮 §8 并加入本轮形状）：
+
+- AC-025 空目录/仅 README 与「README+根级源码」六形状（授权前不建 `.git`；完整空项目自动 `emptyProjectConfirmed`，**无需**额外决策）。
+- AC-026 嵌套旧项目 + **默认预算 41 包**超预算形状（必须显式阻断、项目 PROJECT.md 不写 absent；扩大批次后能看到预算外能力）。
+- AC-027/028/029（无 Git 只读、脏工作区处置、中断按 Hash 恢复、冲突不覆盖、Ready 门禁篡改复核）。
+- AC-040/086/042：非法知识不发布 + stale + 断链按当前需求阻断（含「无需求范围不阻断」负例）；**新增本轮形状**：`实现入口` 角括号占位符必须 `KNOWLEDGE_INVALID`、`CODE_MAP` 不含 `src/orders/.ts`；`confirm`/`authorizeGitInitialization` 的错阶段与非法输入后记录保持 `ready`/`failure:null`。
+- AC-087/088/092/093 组件级（真实临时 Git + 本机状态；SQLite/Core/UI 集成按 W4R1-03 归 WP-08 并记 `not_covered`）。
+- 建议把 W4R4-01 的形状（Ready 记录上 `resolveBlocker(resolveConflict)` 误用、同 id `start` 换 root）纳入回归或 `known_issues`；把 W4R4-02..06 登记进 `implementation.md` 后结算。
+
+---
+
+## 12. 方法与边界声明
+
+- 本轮只审阅 `61ada58` + 指定的两处未提交改动；**未读取任何开发/Test 会话、聊天或未在仓库中的材料**；全部结论可由 `/tmp/wp04r4/r4probe*.mjs`、`/tmp/wp04r4/logs/*.out`（含旧轮重跑输出）与 `/tmp/wp04r4/old/`（1654004 旧解析器的 tsc 编译产物，仅用于 A/B）复现。
+- 探针只消费 `pnpm build` 产物（`packages/*/dist`）；**未 import 任何产品测试文件**；所有仓库均为 `mkdtemp` 下的真实目录 + 真实 `git init/commit`，无 mock 文件系统。
+- **覆盖边界（未验证项，Test/后续包需承接）**：`feature_projection` 的 SQLite 落地与交付提交/CAS、需求池保存侧原子提交与 Context 双来源装载（WP-08/WP-05）；`importRequirementPool` 的 Core/UI 端到端演练（W4R1-03）；HTTP/WS 接线（`project.initialize` 等）；真实 Provider 纵向；AC-039 的实际上下文选择接线（WP-05）；`views` 中「不复用旧决策引用」等无独立断言可判定的表述。
+- 本轮未做：跨平台/Windows 路径语义、超大仓库（>10 000 索引条目）性能实测、多进程并发写同一 `InitStateStore`、真实崩溃注入（仅契约桩/内存实现层面的中断路径由旧轮脚本覆盖）。
+- 已知环境限制：`pnpm test:integration` 的两个 Docker 用例在宿主高负载下 180s 超时，已按任务指示记为环境受阻并以非 Docker 子集补齐；`node` 在高负载下出现过 2 次长时间无输出，重跑即恢复（与代码无关）。
+
+## 文末打印（本轮取证汇总）
+
+- **结论：PASS**（`0×P0`、`0×P1`、`1×P2`、`5×P3`；无阻断项；T-01/T-02/O-01 与幂等后续成立）
+- 冻结点：`git rev-parse HEAD` = `61ada58d52be51668157b4479cad5e18644bbe37`；`git rev-parse 61ada58^{tree}` = `cba7f6b05aa627821c7c82f028caa3d0dbf33883`；工作树等价树 = `b713b3404ba6d7c6afc2754f30963c28ed72a51a`
+- 被评审 = `61ada58` + 未提交 ` M packages/workspace/src/initialize.ts`、` M packages/workspace/test/initialize.test.ts`（`git diff --stat` = 2 文件 / +11 −2）
+- 报告写入后 `git status --porcelain` 共三行，最后一行 = ` M packages/workspace/test/initialize.test.ts`
+- 契约命令：typecheck/lint/unit/docs:check/build = **5/5 exit 0**（unit 26 文件 428 用例；build 10 workspace；docs:check 15 文档/55 链接/94 验收用例）；integration = **环境受阻**（2 failed / 122 passed；两处 180s Docker 超时），非 Docker 子集 **8 文件 / 107 用例 exit 0**；WP-04 自有 **7 文件 / 139 用例通过**
+- 证据脚本与用例数（本轮自建）：`r4probe1-t01` 32（23/9）、`r4probe2-idempotent` 22（21/1）、`r4probe3-t02` 18（12/6）、`r4probe3b-ab` 11（4/7）、`r4probe4-o01` 14（14/0）、`r4probe5-regression` 23（23/0）、`r4probe6-docroot` 20（20/0）= **140 例、117 pass / 23 fail，收敛为 6 个新问题（W4R4-01 P2；W4R4-02/03/04/05/06 P3）**
+- 旧轮证据重跑：`wp04r3/probe1-closure` 36/0、`probe2-adversarial` 23/2（旧错误码+旧逃逸形状）、`probe3-residual` 27/2（含 W4R3-07 仍复现）、`probe4-boundaries` 16/0；`wp04r/probe1-format` 35/0、`probe2-views` 40/0、`probe3-pool` 43/0、`probe4-init` 75/1、`probe5-rootonly` 19/4、`probe6-observations` 12/2（失败均为旧行为断言或已登记残余）
+- 新增 Findings：W4R4-01（P2，resolveBlocker/resolveConflict/start 仍持久化 failed 且 Ready 上不可恢复）、W4R4-02（P3，confirming 阶段重复 confirm 改写决定）、W4R4-03（P3，T-02 修法改变非占位内联 HTML 行为）、W4R4-04（P3，占位符规则未覆盖三个散文小节）、W4R4-05（P3，两个 outcome 入口对非法 document-root 抛错未文档化）、W4R4-06（P3，W4R3-08/T13/幂等改动记录不一致）
