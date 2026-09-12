@@ -139,6 +139,29 @@ export type GrantConsumeOutcome =
       readonly fields: readonly string[];
     };
 
+/**
+ * The synchronous admission half of a consumption.
+ *
+ * `outcome` means the call is already decided (a replay or a refusal); `run` means
+ * the Grant has been claimed and the `prepared` row written, and the caller must
+ * now execute the tool and finish the operation.
+ */
+type PreparedConsume =
+  | { readonly kind: 'outcome'; readonly outcome: GrantConsumeOutcome }
+  | { readonly kind: 'run'; readonly grant: Grant; readonly once: boolean };
+
+/**
+ * Whether a value is thenable.
+ *
+ * The synchronous consumption path refuses a thenable executor rather than
+ * recording the `Promise` as the tool result (W7R3-02); the asynchronous path
+ * awaits it.
+ */
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return false;
+  return typeof (value as { then?: unknown }).then === 'function';
+}
+
 export type GrantIssueOutcome =
   | { readonly ok: true; readonly grant: Grant }
   | (GrantIssueRefusal & { readonly fields: readonly string[] });
@@ -671,7 +694,8 @@ export class GrantStore {
   // -------------------------------------------------------------------------
 
   /**
-   * Runs one authorized tool call, or replays the result it already recorded.
+   * Runs one authorized tool call **synchronously**, or replays the result it
+   * already recorded.
    *
    * Inside a single transaction the method selects the Grant that admits the
    * request, re-reads it through `domain/evaluateGrant`, and then either:
@@ -687,57 +711,117 @@ export class GrantStore {
    * `project` Grant is not consumed at all: it stays usable for further calls by
    * its own run or by both runs (`AC-080` sibling isolation), while each tool
    * operation is still replay-safe by its recorded `inputHash`.
+   *
+   * The executor must be **synchronous**: a thenable cannot be awaited here
+   * without holding the database write lock across an `await`, and recording the
+   * `Promise` itself silently corrupted the result (W7R3-02). Such a body is
+   * refused fail-closed and the transaction rolls back; use
+   * {@link consumeOnceAsync} for a tool that is genuinely asynchronous.
    */
   consumeOnce(
     request: GrantConsumeRequest,
     options: GrantConsumeOptions = {},
   ): GrantConsumeOutcome {
     const results = options.results ?? this.results;
-    return withTransaction(this.db, () => this.consumeInTransaction(request, results));
+    return withTransaction(this.db, () => {
+      const prepared = this.prepareInTransaction(request, results);
+      if (prepared.kind === 'outcome') return prepared.outcome;
+      const executed = request.executor();
+      if (isThenable(executed)) {
+        throw new ProtocolError(
+          'INVALID_STATE',
+          `the tool body for ${request.operation} returned a Promise; consumeOnceAsync() awaits an asynchronous tool`,
+          { details: { toolOperationId: request.toolOperationId } },
+        );
+      }
+      return this.finishOperation(prepared, request, results, executed);
+    });
   }
 
-  private consumeInTransaction(
+  /**
+   * Runs one authorized tool call, awaiting an asynchronous tool body (W7R3-02).
+   *
+   * The atomic half stays atomic: the `prepared` row and the `once` claim commit
+   * together in one transaction, so no second caller can claim the Grant. The tool
+   * body then runs **outside** any transaction, and a second transaction records
+   * the awaited result and marks the operation `finished`. When the body rejects,
+   * a third transaction rolls the claim and the `prepared` row back, so a failed
+   * execution consumes nothing, leaves nothing `finished`, and can be retried.
+   * The rejection is re-thrown to the caller, which awaits it, so it can never
+   * surface as an unhandled rejection.
+   */
+  async consumeOnceAsync(
+    request: GrantConsumeRequest,
+    options: GrantConsumeOptions = {},
+  ): Promise<GrantConsumeOutcome> {
+    const results = options.results ?? this.results;
+    const prepared = withTransaction(this.db, () => this.prepareInTransaction(request, results));
+    if (prepared.kind === 'outcome') return prepared.outcome;
+    let executed: unknown;
+    try {
+      executed = await request.executor();
+    } catch (error) {
+      this.rollbackPrepared(prepared, request);
+      throw error;
+    }
+    return withTransaction(this.db, () =>
+      this.finishOperation(prepared, request, results, executed),
+    );
+  }
+
+  /**
+   * The synchronous admission half of a consumption.
+   *
+   * Returns either the final outcome (a replay or a refusal) or the claim the
+   * caller must now execute and finish.
+   */
+  private prepareInTransaction(
     request: GrantConsumeRequest,
     results: DeferredResultStore,
-  ): GrantConsumeOutcome {
+  ): PreparedConsume {
     const grant = this.boundGrant(request);
     if (grant === undefined) {
-      return refuse('NOT_AUTHORIZED', 'no Grant admits this tool call', []);
+      return {
+        kind: 'outcome',
+        outcome: refuse('NOT_AUTHORIZED', 'no Grant admits this tool call', []),
+      };
     }
     const decision = evaluateGrant(grant, this.asGrantRequest(request));
     if (!decision.allowed) {
       const field = grantDenialField(decision.reason, grant, this.asGrantRequest(request));
-      return refuse(
-        grantDenialCode(decision.reason),
-        decision.reason,
-        field === undefined ? [] : [field],
-      );
+      return {
+        kind: 'outcome',
+        outcome: refuse(
+          grantDenialCode(decision.reason),
+          decision.reason,
+          field === undefined ? [] : [field],
+        ),
+      };
     }
-    if (decision.replay) return this.replay(grant, results);
-    if (grant.scope === 'once') return this.executeOnce(grant, request, results);
+    if (decision.replay) return { kind: 'outcome', outcome: this.replay(grant, results) };
+    if (grant.scope === 'once') return this.prepareOnce(grant, request, results);
     // `run`/`work`/`project` Grants stay usable more than once (AC-080: "work/
     // project-scoped Grants remain usable by both [Runs]"), so they are never
     // marked consumed. `evaluateGrant` already validated the binding; the tool
     // operation row below is the per-invocation record and the replay key.
-    return this.executeReusable(grant, request, results);
+    return this.prepareReusable(grant, request, results);
   }
 
   /**
-   * Executes one `once` Grant and claims it atomically.
+   * Writes the `prepared` row for a `once` Grant and claims it atomically.
    *
-   * The binding check, the guarded claim
-   * (`UPDATE ... WHERE consumed_at IS NULL AND ...`), the `prepared`→`finished`
-   * tool-operation row and the audit event commit together, so a retry can never
-   * run the tool twice. The claim's row count is what survives a second connection
-   * racing on the same row.
+   * The binding check and the guarded claim
+   * (`UPDATE ... WHERE consumed_at IS NULL AND ...`) commit together, so a retry
+   * can never run the tool twice; the claim's row count is what survives a second
+   * connection racing on the same row.
    */
-  private executeOnce(
+  private prepareOnce(
     grant: Grant,
     request: GrantConsumeRequest,
     results: DeferredResultStore,
-  ): GrantConsumeOutcome {
+  ): PreparedConsume {
     const record = this.prepareOperation(grant, request, results);
-    if (record !== undefined) return record;
+    if (record !== undefined) return { kind: 'outcome', outcome: record };
     const operationId = request.toolOperationId;
     const now = this.now();
     // The claim binds exactly the columns the Grant was issued with: a `once`
@@ -770,29 +854,62 @@ export class GrantStore {
       // transaction **commits** it: a normal return is not a rollback. That is
       // deliberate — the row records that this attempt claimed nothing, and the
       // Grant's own `consumed_by_operation_id` names the connection that won.
-      return refuse('IDEMPOTENCY_CONFLICT', `Grant ${grant.id} was consumed concurrently`, [
-        'toolOperationId',
-      ]);
+      return {
+        kind: 'outcome',
+        outcome: refuse('IDEMPOTENCY_CONFLICT', `Grant ${grant.id} was consumed concurrently`, [
+          'toolOperationId',
+        ]),
+      };
     }
     const consumed = this.grants.get(grant.id);
-    return this.finishOperation(consumed, request, results);
+    return { kind: 'run', grant: consumed, once: true };
   }
 
   /**
-   * Executes a reusable (`run`/`work`/`project`) Grant.
+   * Writes the `prepared` row for a reusable (`run`/`work`/`project`) Grant.
    *
    * The Grant itself is not consumed; the tool operation row is, so a retry of the
    * same operation is answered from the recorded result while a *different*
    * operation, input or run reuses the Grant legitimately.
    */
-  private executeReusable(
+  private prepareReusable(
     grant: Grant,
     request: GrantConsumeRequest,
     results: DeferredResultStore,
-  ): GrantConsumeOutcome {
+  ): PreparedConsume {
     const record = this.prepareOperation(grant, request, results);
-    if (record !== undefined) return record;
-    return this.finishOperation(grant, request, results);
+    if (record !== undefined) return { kind: 'outcome', outcome: record };
+    return { kind: 'run', grant, once: false };
+  }
+
+  /**
+   * Undoes a committed `prepared`/claim pair after the tool body rejected.
+   *
+   * The claim and the `prepared` row were committed so a concurrent caller could
+   * not also execute; rolling both back restores the pre-call state, so a failed
+   * execution consumes nothing and a retry can claim the Grant again. The guard on
+   * `consumed_by_operation_id` keeps the rollback from clearing a claim another
+   * attempt now owns, and the delete only touches a row still `prepared` (never a
+   * row another attempt already finished).
+   */
+  private rollbackPrepared(
+    prepared: Extract<PreparedConsume, { kind: 'run' }>,
+    request: GrantConsumeRequest,
+  ): void {
+    withTransaction(this.db, () => {
+      if (prepared.once) {
+        this.db
+          .prepare(
+            `UPDATE grant SET consumed_at = NULL, consumed_by_operation_id = NULL,
+               version = version + 1, updated_at = ?
+             WHERE id = ? AND consumed_by_operation_id = ?`,
+          )
+          .run(this.now(), prepared.grant.id, request.toolOperationId);
+      }
+      this.toolOperations.handle
+        .prepare("DELETE FROM tool_operation WHERE id = ? AND state = 'prepared'")
+        .run(request.toolOperationId);
+    });
   }
 
   /**
@@ -861,21 +978,28 @@ export class GrantStore {
     return undefined;
   }
 
-  /** Records the executed result and marks the tool operation finished. */
+  /**
+   * Records an already-executed result and marks the tool operation finished.
+   *
+   * The value is passed in rather than produced here, so the synchronous and the
+   * asynchronous consumption paths share one recording path; the async path has
+   * already awaited the body by this point (W7R3-02).
+   */
   private finishOperation(
-    grant: Grant,
+    prepared: Extract<PreparedConsume, { kind: 'run' }>,
     request: GrantConsumeRequest,
     results: DeferredResultStore,
+    executed: unknown,
   ): GrantConsumeOutcome {
+    const { grant } = prepared;
     const operationId = request.toolOperationId;
-    const executed = request.executor();
     const resultRef = results.put(executed);
     const now = this.now();
-    const prepared = this.toolOperations.get(operationId);
+    const operation = this.toolOperations.get(operationId);
     const finished = this.toolOperations.update(
       operationId,
       { state: 'finished', startedAt: now, finishedAt: now, resultRef },
-      prepared.version,
+      operation.version,
     );
     if (grant.scope === 'once') {
       const consumed = this.grants.get(grant.id);

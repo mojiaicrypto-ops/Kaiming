@@ -327,11 +327,8 @@ describe('GrantStore (AC-049, AC-080)', () => {
     });
   }
 
-  function consume(
-    overrides: Partial<GrantConsumeRequest> = {},
-    options: { readonly results?: DeferredResultStore } = {},
-  ) {
-    const request: GrantConsumeRequest = {
+  function consumeRequest(overrides: Partial<GrantConsumeRequest> = {}): GrantConsumeRequest {
+    return {
       workId: WORK_ID,
       role: 'backend',
       stage: 'develop-L2',
@@ -348,7 +345,20 @@ describe('GrantStore (AC-049, AC-080)', () => {
       executor: () => 'executed-result',
       ...overrides,
     };
-    return grants.consumeOnce(request, options);
+  }
+
+  function consume(
+    overrides: Partial<GrantConsumeRequest> = {},
+    options: { readonly results?: DeferredResultStore } = {},
+  ) {
+    return grants.consumeOnce(consumeRequest(overrides), options);
+  }
+
+  async function consumeAsync(
+    overrides: Partial<GrantConsumeRequest> = {},
+    options: { readonly results?: DeferredResultStore } = {},
+  ) {
+    return await grants.consumeOnceAsync(consumeRequest(overrides), options);
   }
 
   /**
@@ -717,6 +727,92 @@ describe('GrantStore (AC-049, AC-080)', () => {
       if (refused.outcome !== 'refused') throw new Error('unreachable');
       expect(refused.code).toBe('IDEMPOTENCY_CONFLICT');
       expect(store.toolOperations.count()).toBe(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Asynchronous tool bodies (W7R3-02)
+  // ---------------------------------------------------------------------------
+
+  describe('asynchronous tool bodies (W7R3-02)', () => {
+    it('awaits an async body, records its resolved value and replays it (W7R3-02)', async () => {
+      force(issueOnce());
+      let executions = 0;
+      const executor = async (): Promise<string> => {
+        executions += 1;
+        await new Promise((settle) => setTimeout(settle, 10));
+        return 'SENTINEL-ASYNC';
+      };
+
+      const first = await consumeAsync({ executor }, { results });
+      expect(first.outcome).toBe('executed');
+      if (first.outcome !== 'executed') throw new Error('unreachable');
+      // The recorded value is the resolved result, never the Promise itself.
+      expect(first.result).toBe('SENTINEL-ASYNC');
+      expect(first.toolOperation.state).toBe('finished');
+      expect(store.grants.get(first.grant.id).consumedAt).toBeDefined();
+      expect(executions).toBe(1);
+
+      const replay = await consumeAsync({ executor }, { results });
+      expect(replay.outcome).toBe('replayed');
+      if (replay.outcome !== 'replayed') throw new Error('unreachable');
+      expect(replay.result).toBe('SENTINEL-ASYNC');
+      expect(replay.resultRef).toBe(first.toolOperation.resultRef);
+      // The tool was never run a second time.
+      expect(executions).toBe(1);
+      expect(store.toolOperations.count()).toBe(1);
+    });
+
+    it('consumes nothing and leaves nothing finished when an async body rejects (W7R3-02)', async () => {
+      const minted = issueOnce();
+      force(minted);
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown): void => {
+        unhandled.push(reason);
+      };
+      process.on('unhandledRejection', onUnhandled);
+      try {
+        await expect(
+          consumeAsync(
+            {
+              executor: async () => {
+                await new Promise((settle) => setTimeout(settle, 5));
+                throw new Error('tool body exploded');
+              },
+            },
+            { results },
+          ),
+        ).rejects.toThrowError(/tool body exploded/);
+        // Give the rejection one macrotask to surface as unhandled if it had been
+        // discarded instead of awaited by the caller.
+        await new Promise((settle) => setTimeout(settle, 20));
+      } finally {
+        process.off('unhandledRejection', onUnhandled);
+      }
+      expect(unhandled).toEqual([]);
+
+      // A failed run is not a consumption, and no half-written operation survives.
+      expect(store.grants.get(minted.grant.id).consumedAt).toBeUndefined();
+      expect(store.toolOperations.count()).toBe(0);
+
+      // The Grant is still claimable, so the work can be retried.
+      const retry = await consumeAsync(
+        { executor: () => Promise.resolve('recovered') },
+        { results },
+      );
+      expect(retry.outcome).toBe('executed');
+      if (retry.outcome !== 'executed') throw new Error('unreachable');
+      expect(retry.result).toBe('recovered');
+      expect(store.toolOperations.count()).toBe(1);
+    });
+
+    it('refuses a thenable from the synchronous path instead of recording it (W7R3-02)', () => {
+      force(issueOnce());
+      expect(() => consume({ executor: () => Promise.resolve('sneaky-promise') })).toThrowError(
+        /asynchronous tool/,
+      );
+      expect(store.grants.list()[0]?.consumedAt).toBeUndefined();
+      expect(store.toolOperations.count()).toBe(0);
     });
   });
 

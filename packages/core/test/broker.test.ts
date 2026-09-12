@@ -1723,4 +1723,197 @@ describe('Broker (AC-048, AC-050)', () => {
       await healthy.cleanup(created.environment);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Review round 3 (W7R3-01..05)
+  // ---------------------------------------------------------------------------
+
+  describe('review round 3 regressions (W7R3)', () => {
+    it('refuses a read-only role writeFile to source from a read body, leaving the file intact (W7R3-01)', async () => {
+      const before = readFileSync(join(workspace, A), 'utf8');
+      const reviewBroker = makeBroker({ writableReportRoots: [join(workspace, 'reports')] });
+      // The Grant is issued on purpose: the refusal must come from the tool
+      // context, not from a missing Grant.
+      issue({
+        role: 'review',
+        stage: 'review',
+        scope: 'run',
+        operation: 'read',
+        targets: [A],
+        runId: RUN_REVIEW,
+      });
+      const outcome = await reviewBroker.invoke(
+        invocation({
+          role: 'review',
+          stage: 'review',
+          runId: RUN_REVIEW,
+          attemptId: ATTEMPT_REVIEW,
+          operation: 'read',
+          targets: [A],
+          run: (context) => context.writeFile(join(workspace, A), 'pwned-via-run-writeFile'),
+        }),
+      );
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('unreachable');
+      expect(outcome.code).toBe('NOT_AUTHORIZED');
+      expect(readFileSync(join(workspace, A), 'utf8')).toBe(before);
+      expect(store.grants.list()[0]?.consumedAt).toBeUndefined();
+      expect(store.toolOperations.count()).toBe(0);
+    });
+
+    it('refuses a read-only role ctx.run from a read body, leaving the file intact (W7R3-01)', async () => {
+      const before = readFileSync(join(workspace, A), 'utf8');
+      const reviewBroker = makeBroker({ writableReportRoots: [join(workspace, 'reports')] });
+      issue({
+        role: 'review',
+        stage: 'review',
+        scope: 'run',
+        operation: 'read',
+        targets: [A],
+        runId: RUN_REVIEW,
+      });
+      const outcome = await reviewBroker.invoke(
+        invocation({
+          role: 'review',
+          stage: 'review',
+          runId: RUN_REVIEW,
+          attemptId: ATTEMPT_REVIEW,
+          operation: 'read',
+          targets: [A],
+          run: (context) => context.run(`printf 'pwned-via-run-shell' > ${join(workspace, A)}`),
+        }),
+      );
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('unreachable');
+      expect(outcome.code).toBe('NOT_AUTHORIZED');
+      expect(outcome.reason).toContain('cannot execute shell commands');
+      expect(readFileSync(join(workspace, A), 'utf8')).toBe(before);
+      expect(store.toolOperations.count()).toBe(0);
+    });
+
+    it('still admits a report-root body write for a read-only role (W7R3-01)', async () => {
+      const reviewBroker = makeBroker({ writableReportRoots: [join(workspace, 'reports')] });
+      issue({
+        role: 'review',
+        stage: 'review',
+        scope: 'run',
+        operation: 'write',
+        targets: [REPORT],
+        runId: RUN_REVIEW,
+      });
+      const outcome = await reviewBroker.invoke(
+        invocation({
+          role: 'review',
+          stage: 'review',
+          runId: RUN_REVIEW,
+          attemptId: ATTEMPT_REVIEW,
+          operation: 'write',
+          targets: [REPORT],
+          access: 'write',
+          input: { path: REPORT, content: '# report\n' },
+          run: (context) => {
+            context.writeFile(join(workspace, REPORT), '# written through the body\n');
+            return 'report-written';
+          },
+        }),
+      );
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) throw new Error(outcome.reason);
+      expect(outcome.result).toBe('report-written');
+      expect(readFileSync(join(workspace, REPORT), 'utf8')).toBe('# written through the body\n');
+    });
+
+    it('refuses ctx.run inside an admitted report write body for a read-only role (W7R3-01)', async () => {
+      const before = readFileSync(join(workspace, A), 'utf8');
+      const reviewBroker = makeBroker({ writableReportRoots: [join(workspace, 'reports')] });
+      issue({
+        role: 'review',
+        stage: 'review',
+        scope: 'run',
+        operation: 'write',
+        targets: [REPORT],
+        runId: RUN_REVIEW,
+      });
+      const outcome = await reviewBroker.invoke(
+        invocation({
+          role: 'review',
+          stage: 'review',
+          runId: RUN_REVIEW,
+          attemptId: ATTEMPT_REVIEW,
+          operation: 'write',
+          targets: [REPORT],
+          access: 'write',
+          input: { path: REPORT, content: '# report\n' },
+          run: (context) => context.run(`printf 'pwned-report-body' > ${join(workspace, A)}`),
+        }),
+      );
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('unreachable');
+      expect(outcome.code).toBe('NOT_AUTHORIZED');
+      expect(readFileSync(join(workspace, A), 'utf8')).toBe(before);
+      expect(store.toolOperations.count()).toBe(0);
+    });
+
+    it('still gives a write-capable role both writeFile and run (W7R3-01)', async () => {
+      issue({ operation: 'bash', targets: [A] });
+      const outcome = await broker.invoke(
+        invocation({
+          operation: 'bash',
+          input: { command: 'true' },
+          run: (context) => {
+            context.writeFile(join(workspace, B), 'from-body\n');
+            return context.run(`"${process.execPath}" -e 'process.stdout.write("body-ok")'`);
+          },
+        }),
+      );
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) throw new Error(outcome.reason);
+      expect((outcome.result as ProcessResult).stdout).toBe('body-ok');
+      expect(readFileSync(join(workspace, B), 'utf8')).toBe('from-body\n');
+    });
+
+    it('turns a transport error into a structured refusal (W7R3-03)', async () => {
+      const policy = new NetworkPolicy({ resolver: FIXTURE_RESOLVER });
+      const requester = new GuardedRequester({
+        policy,
+        resolver: FIXTURE_RESOLVER,
+        fetcher: () => Promise.reject(new Error('connect ECONNREFUSED 93.184.216.34:443')),
+      });
+      const outcome = await requester.request('https://public.example/');
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('unreachable');
+      expect(outcome.code).toBe('PROVIDER_UNAVAILABLE');
+      expect(outcome.reason).toContain('ECONNREFUSED');
+      expect(outcome.blockedUrl).toBe('https://public.example/');
+    });
+
+    it('returns a PROVIDER_UNAVAILABLE result when the port probe throws (W7R3-04)', async () => {
+      const ports: TestEnvironmentPorts = {
+        ...defaultTestEnvironmentPorts,
+        portAvailable: () => {
+          throw new Error('probe exploded');
+        },
+      };
+      const manager = new TestEnvironmentManager({ ports, prefix: 'agentdev-broker-probe-' });
+      const outcome = await manager.create({
+        workId: WORK_ID,
+        attemptId: ATTEMPT_A,
+        command: [process.execPath, '-e', 'process.exit(0)'],
+        portRange: { min: 4760, max: 4762 },
+      });
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('unreachable');
+      expect(outcome.code).toBe('PROVIDER_UNAVAILABLE');
+      expect(outcome.reason).toContain('probe exploded');
+      // The probe throws before any claim is recorded, so no port leaked.
+      expect(claimedTestPorts()).not.toContain(4760);
+    });
+
+    it('carries a literal target its own address, pinning the transport (W7R3-05)', async () => {
+      const decision = await new NetworkPolicy({}).decide({ url: 'https://93.184.216.34/' });
+      expect(decision.ok).toBe(true);
+      if (!decision.ok) throw new Error('unreachable');
+      expect(decision.addresses).toEqual(['93.184.216.34']);
+    });
+  });
 });

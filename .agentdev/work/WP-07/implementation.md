@@ -224,7 +224,7 @@
 
 ### T8 新登记残余
 
-1. **W7R2-03 钉扎依赖 transport 兑现 `pinnedAddresses`**：内建传输用 `lookup` 真正钉扎；调用方注入的 `NetworkFetcher` 会收到该 pin，但 Broker 无法强制其使用（这是接缝契约）。另外字面量目标不带 pin（URL host 即地址），而 `ToolInvocation.run` 体若自建传输会绕过 `GuardedRequester`——准入阶段仍会按 W7R2-02 解析并拒绝私网目标，但「工具体自己发起的第二次连接」不在本包的守卫范围内。
+1. **W7R2-03 钉扎依赖 transport 兑现 `pinnedAddresses`**：内建传输用 `lookup` 真正钉扎；调用方注入的 `NetworkFetcher` 会收到该 pin，但 Broker 无法强制其使用（这是接缝契约）。另外**字面量目标同样携带它自身的地址**（URL host 即地址；返回该地址使内建传输钉在已校验的字面量上，行为更保守——早前此处「字面量不带 pin」的表述有误，已由 W7R3-05 更正）。而 `ToolInvocation.run` 体若自建传输会绕过 `GuardedRequester`——准入阶段仍会按 W7R2-02 解析并拒绝私网目标，但「工具体自己发起的第二次连接」不在本包的守卫范围内。
 2. **W7R2-07 归属证明依赖 OS 探针**：macOS/BSD 需 `lsof`、Linux 需 `/proc`；两者都不可用或 `lsof` 无权看到属主时无法证明归属，`start` 以 `INVALID_STATE` fail-closed（可能对特殊宿主产生假阴性——按设计不猜测）。
 3. **W7R2-04 布局是单向兼容**：新版本仍能读旧 manifest，但旧版本进程读不到新写入的 per-ref 结果；滚动升级期间不应混跑两个版本。
 4. **W7R2-01 能力清单是封闭集合**：新增只读工具名必须显式加入 `READ_ONLY_OPERATIONS`，否则按 mutating fail-closed（`delete_data`/`push`/`deploy` 仍为 mutating）。
@@ -239,5 +239,62 @@
 | `pnpm lint` | 退出 0（ESLint + `All matched files use Prettier code style!`） |
 | `pnpm test:unit` | **44 文件 / 905 用例全部通过**（T7 为 885；本轮 +20：broker W7R2 15 例 + grants W7R2 5 例） |
 | `pnpm test:integration` | **15 文件 / 157 用例全部通过**（T7 为 14/156；新增 `grants.integration.test.ts` 1 例并发写者；真实 Docker 用例实际执行，无 skip） |
+| `pnpm build` | 10 workspace 全部 Done |
+
+## T9 Review 第 3 轮修复（W7R3-01..05）
+
+冻结点/审查报告：`b1c5328`（tree `801f2464`）上的 `.agentdev/work/WP-07/review.md` 第 3 轮（第 553 行起）。本轮只改本包归属文件（`packages/core/src/{broker,grants,test-environment}.ts` 及其测试；`secrets.ts` 本轮无改动），并按任务要求把 T9 追加进本记录。每条修复配一条**在旧行为下会失败**的回归用例，且已用「突变-还原」逐条验证（见每条末的「突变验证」）。
+
+### W7R3-01（P2）只读角色的 `run` 工具体可经 `ctx.writeFile`/`ctx.run` 写源码
+
+- **改了什么**：`packages/core/src/broker.ts` 的 `contextFor`。
+  - `writeFile` 对只读角色的边界**不再由调用声明的 `access` 推导**：`operation:'read'` 的调用声明 `access:'read'`，旧代码因此得到空的 `writeRoots`，把限制丢掉。现在只读角色的任何 `writeFile` 一律以 `BrokerOptions.writableReportRoots` 为唯一可写边界；未配置报告根时直接以 `NOT_AUTHORIZED` 拒绝，源码路径（含经符号链接解析）一律拒绝。
+  - 只读角色注入的 `context.run` 改为 fail-closed 桩 `refuseReadOnlyCommand`：调用即抛 `ProtocolError('NOT_AUTHORIZED', "… cannot execute shell commands")`，不再是可执行的 `/bin/sh -lc`。写角色仍拿到真正的 `runCommand` 与 `writeFile`（能力未变）。
+- **回归测试**（`packages/core/test/broker.test.ts`）：`refuses a read-only role writeFile to source from a read body, leaving the file intact (W7R3-01)`、`refuses a read-only role ctx.run from a read body, leaving the file intact (W7R3-01)`、`refuses ctx.run inside an admitted report write body for a read-only role (W7R3-01)`、`still admits a report-root body write for a read-only role (W7R3-01)`、`still gives a write-capable role both writeFile and run (W7R3-01)`。
+- **突变验证**：把只读写分支的条件短路为 `false` ⇒ writeFile 用例失败（源码被改）；把 `run` 桩换回 `runCommand` ⇒ 两条 `ctx.run` 用例失败（源码被改）。均已还原。
+
+### W7R3-02（P2）异步 `run` 工具体未被 await
+
+- **改了什么**：`packages/core/src/grants.ts` 新增 `GrantStore.consumeOnceAsync`，把消费拆成三段：事务一（`prepareInTransaction`）完成绑定判定、写 `prepared` 行并**原子**认领 `once` Grant 后提交；工具执行移到事务**之外** `await request.executor()`；事务二（`finishOperation`）记录已 await 的结果并置 `finished`。执行体 reject 时 `rollbackPrepared` 在第三段事务里清空 `consumed_at`/`consumed_by_operation_id` 并删除 `prepared` 行，因此失败执行不消费 Grant、不留 `finished`、可重试；rejection 原样上抛给已 await 的调用方，不会成为未处理拒绝。`Broker.invoke` 改调 `consumeOnceAsync`。同步 `consumeOnce` 仍是原语义，但补一道 fail-closed 守卫：执行器返回 thenable 时抛 `ProtocolError('INVALID_STATE', …)`，事务回滚（旧代码会把 `Promise` 当结果记下）。
+- **回归测试**（`packages/core/test/grants.test.ts`）：`awaits an async body, records its resolved value and replays it (W7R3-02)`（首次 `executed`/结果为解析值/`finished`；同输入重放同一 `resultRef` 与解析值，执行计数 1）、`consumes nothing and leaves nothing finished when an async body rejects (W7R3-02)`（reject 上抛、无 `unhandledRejection`、`consumedAt` 未写、`toolOperations.count()===0`、随后重试成功）、`refuses a thenable from the synchronous path instead of recording it (W7R3-02)`。
+- **突变验证**：删除同步 thenable 守卫 ⇒ 同步路径用例失败；把 `await request.executor()` 改回直接取值 ⇒ 两条异步用例失败（结果被记成 Promise，并出现未处理拒绝）。均已还原。
+- **接口影响**：`GrantConsumeRequest.executor` 仍为 `() => unknown`；需要异步工具的调用方走 `consumeOnceAsync`，同步 API 对 thenable fail-closed（记录见 T9 残余）。
+
+### W7R3-03（P3）传输错误被重新抛出
+
+- **改了什么**：`packages/core/src/broker.ts` 的 `GuardedRequester.request` 用 `try/catch` 包住 `this.fetcher(...)` 与 `response.text()`；`ECONNREFUSED` 等传输/读取失败返回闭合的 `NetworkFetchOutcome`：`{ok:false, code:'PROVIDER_UNAVAILABLE', reason:'… failed: <原原因>', blockedUrl: <当前跳>, hops}`，不再让异常逃逸。
+- **回归测试**：`turns a transport error into a structured refusal (W7R3-03)`（fetcher 抛 `connect ECONNREFUSED …`；断言结果对象、code、原因与 `blockedUrl`，且不抛）。**突变验证**：让 catch 重新 `throw error` ⇒ 用例失败（reject）。已还原。
+
+### W7R3-04（P3）端口探测抛异常逃出 `create()`
+
+- **改了什么**：`packages/core/src/test-environment.ts` 的 `create` 把 `await this.allocatePort(...)` 包进 `try/catch`；探测抛异常时返回与其它创建失败**相同形状**的结果对象 `{ok:false, code:'PROVIDER_UNAVAILABLE', reason:'test environment port probe failed …: <原原因>'}`，不再 reject。认领发生在探测成功之后，因此该路径本就没有泄漏，`claimedTestPorts()` 保持不变。`TestEnvironmentPorts.portAvailable` 的文档同步说明「抛出的探针按探测失败处理」。
+- **回归测试**：`returns a PROVIDER_UNAVAILABLE result when the port probe throws (W7R3-04)`（注入抛异常的 `portAvailable`；断言结果对象、`PROVIDER_UNAVAILABLE`、原因含 `probe exploded`、端口未被认领）。**突变验证**：让 catch 重新 `throw error` ⇒ 用例失败（reject）。已还原。
+
+### W7R3-05（P3）字面量目标实际带 pin，与注释/T8 残余不符
+
+- **改了什么**：选择**保留 pin**（更保守）并修正措辞，不改行为：`packages/core/src/broker.ts` 中 `NetworkPolicyDecision.ok.addresses` 的注释改为「字面量携带自身规范化地址，用于把内建传输钉在已校验值上（W7R3-05）」，`classifyHostResolution` 的字面量分支补注释；`implementation.md` T8 残余 1 中「字面量目标不带 pin」更正为「字面量目标同样携带它自身的地址」。
+- **回归测试**（记录类修复，按任务要求为 regression-free）：`carries a literal target its own address, pinning the transport (W7R3-05)`——`new NetworkPolicy({}).decide({url:'https://93.184.216.34/'})` 为 `ok:true` 且 `addresses === ['93.184.216.34']`。
+
+### T9 修正的旧期望/记录
+
+1. `implementation.md` T8 残余 1 的「字面量目标不带 pin（URL host 即地址）」与代码不符（W7R3-05）；已按「保留 pin」更正为「字面量同样携带其自身地址」。
+2. T9 未修改任何既有测试期望：现有 905 条 unit 用例与 157 条 integration 用例全部原样通过；本轮只是**新增** 11 条 unit 用例（`broker.test.ts` 47→55、`grants.test.ts` 36→39）。旧行为下会失败的新用例由上面的「突变-还原」逐条证明。
+
+### T9 新登记残余
+
+1. **Broker 对工具体的非 `ProtocolError` 失败仍会抛出**：`consumeOnceAsync` 会把 rejection 补偿后原样上抛，`Broker.invoke` 只把 `ProtocolError` 转成契约拒绝。因此 `ctx.writeFile`/`ctx.run` 这类自带契约码的拒绝是结构化拒绝，而工具体抛出的普通 `Error` 仍会从 `invoke` 冒泡（调用方 await 得到，不会成为未处理拒绝）。把任意工具体异常也映射为契约码不在本轮范围。
+2. **`consumeOnceAsync` 的补偿会二次递增 `grant.version`**：认领与回滚各写一次 `version = version + 1`；`version` 是审计计数而非业务字段，回滚后 `consumed_at` 已清空、Grant 可再次认领，行为正确，但审计上会看到两次版本变化。
+3. **同步 `consumeOnce` 不再接受 thenable 执行器**：这是有意收紧（旧行为静默记录 `Promise`）；需要异步工具的调用方必须改用 `consumeOnceAsync`。
+4. **异步执行期间 `prepared` 行可见**：并发同 `toolOperationId` 的调用在 await 窗口内会得到 `RECOVERY_REQUIRED`（其结果尚未记录），这是 fail-closed 而非重复执行；窗口内的等待不属于重放路径。
+
+### T9 验证数字（本轮，全部命令真实执行）
+
+| 命令 | 结果 |
+|---|---|
+| `prettier --write`（本包归属文件 + 本记录） | 全部符合 Prettier |
+| `pnpm typecheck` | 退出 0 |
+| `pnpm lint` | 退出 0（ESLint + `All matched files use Prettier code style!`） |
+| `pnpm test:unit` | **44 文件 / 916 用例全部通过**（T8 为 905；本轮 +11：broker W7R3-01 5 例 + W7R3-03/04/05 各 1 例 = 8，grants W7R3-02 3 例） |
+| `pnpm test:integration` | **15 文件 / 157 用例全部通过**（与 T8 相同；真实 Docker 用例实际执行，无 skip） |
 | `pnpm build` | 10 workspace 全部 Done |
 

@@ -487,12 +487,14 @@ export type NetworkPolicyDecision =
   | {
       readonly ok: true;
       /**
-       * The answers that were validated, when a DNS lookup actually happened.
+       * The answers that were validated, when the policy classified an address.
        *
        * The transport uses them to pin its connection to the checked address so a
-       * second lookup cannot rebind to a private one (W7R2-03). Absent for a
-       * literal (whose URL host already *is* the address) and for a name admitted
-       * without a successful lookup.
+       * second lookup cannot rebind to a private one (W7R2-03). A literal carries
+       * its own normalised address: the URL host already *is* the address, and
+       * returning it pins the built-in transport to the value that was checked
+       * instead of re-deriving it (W7R3-05). A name admitted without a successful
+       * lookup carries none.
        */
       readonly addresses?: readonly string[];
     }
@@ -869,6 +871,8 @@ export async function classifyHostResolution(
     return addresses === undefined ? { classification: true } : { classification: true, addresses };
   }
   const literal = classifyAddressLiteral(normalized, nat64Prefixes);
+  // A literal is its own validated address; it is returned so the transport can
+  // pin to it as well, rather than being treated as an unclassified host.
   if (literal !== undefined) return { classification: literal, addresses: [normalized] };
   if (isResolverInternalName(normalized)) {
     const addresses = await resolvedAddresses(normalized, resolver);
@@ -1371,15 +1375,41 @@ export class GuardedRequester {
           hops,
         };
       }
-      const response = await this.fetcher(current, {
-        method,
-        redirect: 'manual',
-        headers,
-        ...(decision.addresses === undefined ? {} : { pinnedAddresses: decision.addresses }),
-      });
+      let response: NetworkResponseLike;
+      try {
+        response = await this.fetcher(current, {
+          method,
+          redirect: 'manual',
+          headers,
+          ...(decision.addresses === undefined ? {} : { pinnedAddresses: decision.addresses }),
+        });
+      } catch (error) {
+        // A transport failure (ECONNREFUSED, DNS/connect/TLS errors, an injected
+        // fetcher that throws) is a refusal, not an exception the caller has to
+        // guess how to handle (W7R3-03). It is reported with the hop it happened
+        // on and the original reason.
+        return {
+          ok: false,
+          code: 'PROVIDER_UNAVAILABLE',
+          reason: `network transport to ${current} failed: ${messageOf(error)}`,
+          blockedUrl: current,
+          hops,
+        };
+      }
       hops.push({ url: current, status: response.status, allowed: true });
       if (!REDIRECT_STATUSES.includes(response.status)) {
-        const body = await response.text();
+        let body: string;
+        try {
+          body = await response.text();
+        } catch (error) {
+          return {
+            ok: false,
+            code: 'PROVIDER_UNAVAILABLE',
+            reason: `reading the response body from ${current} failed: ${messageOf(error)}`,
+            blockedUrl: current,
+            hops,
+          };
+        }
         return {
           ok: true,
           status: response.status,
@@ -1773,12 +1803,13 @@ export class Broker {
    *
    * Every branch that refuses returns a typed outcome and appends a
    * `tool.refused` audit event; nothing executes on a refusal. An admitted call
-   * is recorded by `GrantStore.consumeOnce` as a `tool_operation` row (tool name,
+   * is recorded by `GrantStore.consumeOnceAsync` as a `tool_operation` row (tool name,
    * input hash, Grant reference, state) and by a `tool.invoked` event.
    *
    * The method is **async** because network admission resolves DNS before deciding
-   * (W7R2-02): a target whose name resolves into private space is refused before
-   * `consumeOnce`, so no Grant is consumed and no `tool_operation` row is written.
+   * (W7R2-02) and because the tool body itself may be asynchronous: a target whose
+   * name resolves into private space is refused before `consumeOnceAsync`, so no
+   * Grant is consumed and no `tool_operation` row is written.
    */
   async invoke(invocation: ToolInvocation): Promise<ToolOutcome> {
     const at = invocation.at ?? this.now();
@@ -1941,7 +1972,10 @@ export class Broker {
     };
     let consumed;
     try {
-      consumed = this.grants.consumeOnce(request);
+      // `consumeOnceAsync` awaits the tool body outside the database transaction,
+      // so an asynchronous body is recorded with its resolved value and a failing
+      // body rolls the claim back (W7R3-02).
+      consumed = await this.grants.consumeOnceAsync(request);
     } catch (error) {
       // A `ProtocolError` here is a recovery state (`core/grants.ts` replay of a
       // result the store cannot resolve); it is surfaced, never swallowed.
@@ -2034,19 +2068,36 @@ export class Broker {
   }): ToolContext {
     const { invocation, mode, operation, inputHash, toolOperationId, roots, paths } = input;
     const requester = this.networkRequester(invocation);
-    const writeRoots = reportWriteRootsFor(
-      invocation,
-      declaredAccess(operation, invocation.access),
-      this.writableReportRoots,
-    );
+    const readOnly = isReadOnlyRole(invocation.role);
     const check = (path: string, checkAccess: 'read' | 'write'): string => {
+      // A read-only role's write boundary must **not** come from the call's
+      // declared access (W7R3-01): a `read` call has `access: 'read'`, so
+      // deriving the write roots from it handed the tool body an unrestricted
+      // `writeFile` into source. Review/Test may only ever write inside the
+      // configured report/scratch roots, whatever access the call declared.
+      if (checkAccess === 'write' && readOnly) {
+        if (this.writableReportRoots.length === 0) {
+          throw new ProtocolError(
+            'NOT_AUTHORIZED',
+            `${invocation.role} runs are read-only; no report/scratch root is configured to write ${path}`,
+            { details: { path } },
+          );
+        }
+        const writeDecision = resolveWithinRoots({
+          path,
+          access: 'write',
+          roots: this.writableReportRoots,
+          protectedPaths: this.protectedPaths,
+        });
+        if (!writeDecision.ok) {
+          throw new ProtocolError(writeDecision.code, writeDecision.reason, { details: { path } });
+        }
+        return writeDecision.realPath;
+      }
       const decision = resolveWithinRoots({
         path,
         access: checkAccess,
-        roots: roots.length === 0 ? writeRoots : roots,
-        ...(checkAccess === 'write' && isReadOnlyRole(invocation.role) && writeRoots.length > 0
-          ? { writeRoots }
-          : {}),
+        roots,
         protectedPaths: this.protectedPaths,
       });
       if (!decision.ok) {
@@ -2076,7 +2127,13 @@ export class Broker {
         }
         writeFileSync(real, content, 'utf8');
       },
-      run: (command) => this.runCommand(command, invocation, mode),
+      run: (command) =>
+        // A read-only role never receives a run-capable context (W7R3-01): the
+        // stub fails closed with a typed refusal instead of executing a shell,
+        // and the tool body's call is what surfaces it.
+        readOnly
+          ? refuseReadOnlyCommand(invocation.role, operation)
+          : this.runCommand(command, invocation, mode),
       request: (url, init) => requester.request(url, init ?? {}),
     };
   }
@@ -2240,6 +2297,22 @@ export class Broker {
 
 function refuse(code: BrokerErrorCode, reason: string, fields: readonly string[] = []) {
   return { code, reason, fields };
+}
+
+/**
+ * The `ToolContext.run` a read-only role receives: always a typed refusal.
+ *
+ * Review/Test must not be able to turn a tool body into arbitrary command
+ * execution (W7R3-01), and a context member that simply did not exist would
+ * surface as an untyped `TypeError` instead of a contract refusal. The stub
+ * therefore throws the same `NOT_AUTHORIZED` a `bash`/`git` call gets.
+ */
+function refuseReadOnlyCommand(role: Role, operation: string): never {
+  throw new ProtocolError(
+    'NOT_AUTHORIZED',
+    `${role} runs are read-only; the ${operation} tool body cannot execute shell commands`,
+    { details: { role, operation } },
+  );
 }
 
 function validateInvocation(

@@ -103,6 +103,10 @@ export interface TestEnvironmentPorts {
    * The check binds and immediately releases, so it is an observation of the OS,
    * not a reservation — and it is asynchronous because an occupied port is
    * reported by an event, not a thrown error.
+   *
+   * A probe implementation that throws is treated as a failed probe: `create`
+   * returns a `PROVIDER_UNAVAILABLE` result object rather than letting the
+   * exception escape, and no port claim is left behind (W7R3-04).
    */
   portAvailable(port: number): Promise<boolean>;
   /**
@@ -489,12 +493,27 @@ export class TestEnvironmentManager {
    * Every step after the port claim runs inside a `try`: a failure (for example a
    * full disk while creating the directory) releases the claim and is returned as a
    * `PROVIDER_UNAVAILABLE` result, so it can never leak the port permanently or
-   * escape as an exception (W7R2-08).
+   * escape as an exception (W7R2-08). The OS availability probe runs before the
+   * claim and is wrapped as well: a probe that throws is a refused creation, not an
+   * exception out of `create` (W7R3-04).
    */
   async create(request: TestEnvironmentRequest): Promise<CreateOutcome> {
     const range = request.portRange ?? DEFAULT_TEST_PORT_RANGE;
     const reservedPort = request.reserved?.port;
-    const port = await this.allocatePort(range.min, range.max, reservedPort);
+    let port: number | undefined;
+    try {
+      port = await this.allocatePort(range.min, range.max, reservedPort);
+    } catch (error) {
+      // The throw happens before any claim is recorded (`allocatePort` claims only
+      // after a successful probe), so there is nothing to release here; the point
+      // is that the caller gets the same structured refusal as every other
+      // creation failure instead of an exception.
+      return {
+        ok: false,
+        code: 'PROVIDER_UNAVAILABLE',
+        reason: `test environment port probe failed for ${String(range.min)}–${String(range.max)}: ${messageOf(error)}`,
+      };
+    }
     if (port === undefined) {
       return {
         ok: false,
