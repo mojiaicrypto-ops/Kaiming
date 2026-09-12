@@ -156,7 +156,10 @@ describe('untrusted repository (AC-053)', () => {
     const result = await loadTrustedExtensions({
       projectRoot: repo,
       trust: 'untrusted',
-      manifest: [spec({ id: 'builtin-report', enabledByDefault: true, capabilities: ['report'] })],
+      manifest: [
+        spec({ id: 'builtin-report', enabledByDefault: true, capabilities: ['report'] }),
+        spec({ id: 'other-builtin' }),
+      ],
     });
 
     expect(result.loadedExtensions).toEqual([
@@ -172,6 +175,14 @@ describe('untrusted repository (AC-053)', () => {
       origin: 'builtin',
       decision: 'loaded',
     });
+
+    // W7R1-12: an unselected optional built-in is a non-error decision, recorded
+    // as `skipped` with no code — never `refused`/`INTERNAL_ERROR`.
+    const unselected = entryOf(result, 'extension', 'other-builtin');
+    expect(unselected).toMatchObject({ origin: 'builtin', decision: 'skipped' });
+    expect(unselected?.code).toBeUndefined();
+    expect(unselected?.reason).toContain('not-selected');
+    expect(result.refused).toEqual([]);
   });
 });
 
@@ -300,6 +311,36 @@ describe('trusted repository (AC-053)', () => {
     expect(readSkills).toHaveLength(1);
     expect(readSkills[0]).toContain('selected-skill');
     expect(JSON.stringify(result.trace)).not.toContain('other-skill');
+  });
+
+  it('refuses a symlinked SKILL.md inside a selected directory (W7R1-03)', async () => {
+    // The selection is a *directory* inside the repo; its SKILL.md is a symlink to
+    // a document outside the project and agent roots. The document must be refused
+    // before it is read, exactly like a symlinked module.
+    const outsideDocument = join(scratch, 'outside-skill.md');
+    await writeFile(outsideDocument, '---\nname: outside-secret-skill\n---\n\nsecret\n', 'utf8');
+    const linkedDir = join(repo, 'skills', 'linked-skill');
+    await mkdir(linkedDir, { recursive: true });
+    await symlink(outsideDocument, join(linkedDir, 'SKILL.md'));
+
+    const readSkills: string[] = [];
+    const result = await loadTrustedExtensions({
+      projectRoot: repo,
+      trust: 'trusted',
+      selectedSkillPaths: [linkedDir],
+      readSkillFile: async (absolutePath) => {
+        readSkills.push(absolutePath);
+        return readFile(absolutePath, 'utf8');
+      },
+    });
+
+    // Zero reads and zero loaded skills: the escape is refused, not recorded.
+    expect(readSkills).toEqual([]);
+    expect(result.loadedSkills).toEqual([]);
+    const entry = entryOf(result, 'skill', linkedDir);
+    expect(entry).toMatchObject({ decision: 'refused', code: 'VALIDATION_ERROR' });
+    expect(entry?.reason).toContain('skill-unreadable');
+    expect(JSON.stringify(result.trace)).not.toContain('outside-secret-skill');
   });
 
   it('refuses a selected skill outside the project and agent roots', async () => {

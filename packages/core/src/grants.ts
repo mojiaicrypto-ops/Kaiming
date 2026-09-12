@@ -32,6 +32,8 @@
  *   projections: they run the same admission rules and return Grant rows, and a
  *   refusal never carries a secret value.
  */
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { Grant, GrantScope, JsonObject, Role, ToolOperation } from '@agentdev/contracts';
 import {
   evaluateGrant,
@@ -161,11 +163,11 @@ export interface GrantIssueInput extends Omit<GrantRequest, 'at'> {
 /**
  * In-memory deferred-result store.
  *
- * The default is deliberately explicit rather than silent: the reference and the
- * value live in the same process, and a `once` Grant consumed by one result store
- * cannot be replayed by another that never saw the execution. The daemon wires a
- * blob-backed store; the behaviour under test (execute once, replay the stored
- * value, never re-execute) is identical.
+ * The value lives in the same process, and a `once` Grant consumed by one result
+ * store cannot be replayed by another that never saw the execution — which is why
+ * it is **not** the default for a store-backed `GrantStore` (W7R1-10): a second
+ * process would report `RECOVERY_REQUIRED` for a result it cannot resolve. Use it
+ * for a single-process lifetime, or to prove the missing-result path in a test.
  *
  * References are UUIDv7-form ids because `tool_operation.resultRef` is an entity
  * reference in the contract: a free-form string would fail the row schema, and the
@@ -185,6 +187,90 @@ export class InMemoryDeferredResultStore implements DeferredResultStore {
   }
 }
 
+/** Blob subdirectory the durable result store keeps its values in. */
+export const DEFERRED_RESULT_BLOB_DIR = 'deferred-results';
+
+/** The manifest mapping a recorded `resultRef` onto its content-addressed blob. */
+export const DEFERRED_RESULT_MANIFEST = `${DEFERRED_RESULT_BLOB_DIR}/index.json`;
+
+/**
+ * The blob-backed deferred-result store: the durable sink `GrantStore` uses by
+ * default.
+ *
+ * The review's cross-process probe (W7R1-10) showed the in-memory sink could only
+ * prove "executed once": every other process answered `RECOVERY_REQUIRED` because
+ * it had never seen the value. `ProjectStore.blobs` is already durable and
+ * content-addressed, so each result is written as a blob and the recorded
+ * `resultRef` points at it through a manifest that every process sharing the
+ * project state directory reads. That is what makes the documented "retry the
+ * original operation and get the original result" true across processes rather
+ * than only within one.
+ *
+ * `resultRef` stays a UUIDv7 because `tool_operation.resultRef` is an entity
+ * reference in the contract; the manifest is the indirection that keeps the
+ * contract shape and durability at once.
+ */
+export class ProjectStoreDeferredResultStore implements DeferredResultStore {
+  private readonly blobs: ProjectStore['blobs'];
+  private manifest: Record<string, string> | undefined;
+
+  constructor(options: { readonly store: ProjectStore }) {
+    this.blobs = options.store.blobs;
+  }
+
+  put(value: unknown): string {
+    // The value is a JSON tool result. `?? null` keeps a `null` result
+    // distinguishable from a missing one, which is what `get` reports.
+    const blob = this.blobs.write(JSON.stringify(value ?? null));
+    const ref = uuidv7();
+    const manifest = this.readManifest();
+    manifest[ref] = blob.relativePath;
+    this.writeManifest(manifest);
+    this.manifest = manifest;
+    return ref;
+  }
+
+  get(ref: string): unknown {
+    const relativePath = this.readManifest()[ref];
+    if (relativePath === undefined || !this.blobs.has(relativePath)) return undefined;
+    const parsed: unknown = JSON.parse(this.blobs.read(relativePath).toString('utf8'));
+    return parsed === null ? undefined : parsed;
+  }
+
+  /** The manifest, cached for this process lifetime after the first write. */
+  private readManifest(): Record<string, string> {
+    if (this.manifest !== undefined) return { ...this.manifest };
+    if (!this.blobs.has(DEFERRED_RESULT_MANIFEST)) return {};
+    try {
+      const parsed: unknown = JSON.parse(
+        this.blobs.read(DEFERRED_RESULT_MANIFEST).toString('utf8'),
+      );
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+      const entries: Record<string, string> = {};
+      for (const [key, stored] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof stored === 'string') entries[key] = stored;
+      }
+      return entries;
+    } catch {
+      // A corrupt manifest is not a result: `get` reports the reference as
+      // unresolvable and the caller surfaces `RECOVERY_REQUIRED`, never a value.
+      return {};
+    }
+  }
+
+  /**
+   * Persists the manifest through a temporary file and an atomic rename, so a
+   * concurrent reader never sees a half-written index.
+   */
+  private writeManifest(entries: Record<string, string>): void {
+    const target = this.blobs.resolve(DEFERRED_RESULT_MANIFEST);
+    mkdirSync(dirname(target), { recursive: true });
+    const temporary = `${target}.tmp-${String(process.pid)}-${String(Date.now())}`;
+    writeFileSync(temporary, JSON.stringify(entries), { encoding: 'utf8', mode: 0o600 });
+    renameSync(temporary, target);
+  }
+}
+
 export class GrantStore {
   private readonly store: ProjectStore;
   private readonly grants: EntityRepository<Grant>;
@@ -199,7 +285,9 @@ export class GrantStore {
     this.toolOperations = options.store.toolOperations;
     this.db = options.store.db;
     this.now = options.now ?? (() => options.store.now());
-    this.results = options.results ?? new InMemoryDeferredResultStore();
+    // W7R1-10: the default sink is durable, so a second process replaying the same
+    // tool operation resolves the recorded result instead of `RECOVERY_REQUIRED`.
+    this.results = options.results ?? new ProjectStoreDeferredResultStore({ store: options.store });
   }
 
   // -------------------------------------------------------------------------
@@ -406,6 +494,9 @@ export class GrantStore {
    * This runs the same rules as consumption, so "covered" can never be wider than
    * "admitted" — a consumed `once` Grant is included, because it still replays its
    * recorded result. The call performs no write and returns the Grant row only.
+   * The candidate set is pre-filtered by the full binding
+   * (operation/role/stage/include work) so a consumed Grant for one operation
+   * cannot be reported as covering another (W7R1-06).
    */
   findGrantFor(query: GrantQuery): Grant | undefined {
     return this.matchingGrants(query)[0];
@@ -423,6 +514,12 @@ export class GrantStore {
         params: [query.workId],
         orderBy: 'created_at ASC',
       })
+      .filter(
+        (grant) =>
+          grant.operation === query.operation &&
+          grant.role === query.role &&
+          grant.stage === query.stage,
+      )
       .filter((grant) => evaluateGrant(grant, this.asGrantRequest(query)).allowed);
   }
 
@@ -539,8 +636,11 @@ export class GrantStore {
       .run(...(bindings as never[]));
     if (claimed.changes !== 1) {
       // Another connection claimed the Grant between the read and the update. The
-      // tool has not run here yet, so the honest answer is a conflict and the
-      // transaction rolls the prepared row back.
+      // tool has not run here yet, so the honest answer is a conflict. The
+      // `prepared` row written above is still part of this transaction, and the
+      // transaction **commits** it: a normal return is not a rollback. That is
+      // deliberate — the row records that this attempt claimed nothing, and the
+      // Grant's own `consumed_by_operation_id` names the connection that won.
       return refuse('IDEMPOTENCY_CONFLICT', `Grant ${grant.id} was consumed concurrently`, [
         'toolOperationId',
       ]);

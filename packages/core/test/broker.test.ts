@@ -39,6 +39,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Scope } from '@agentdev/contracts';
@@ -46,9 +47,11 @@ import { ProjectStore as Store, projectIdFromRoot, type ProjectStore } from '@ag
 import {
   Broker,
   GrantStore,
+  GuardedRequester,
   NetworkPolicy,
   TestEnvironmentManager,
   TOOL_EVENTS,
+  claimedTestPorts,
   defaultTestEnvironmentPorts,
   hashToolInput,
   isPrivateAddress,
@@ -56,6 +59,7 @@ import {
   resolveWithinRoots,
   type BrokerOptions,
   type GrantIssueInput,
+  type HostResolver,
   type ProcessResult,
   type ProcessRunner,
   type TestEnvironment,
@@ -81,12 +85,34 @@ const A = 'src/a.ts';
 const B = 'src/b.ts';
 const LINK = 'link/secret.txt';
 const DEV_DB = 'dev.sqlite';
+/** `execution.md` §3: Review owns "自己报告与检查临时目录". */
+const REPORT = 'reports/review.md';
 
 const SCOPE: Scope = {
-  readPaths: [A, B, LINK, DEV_DB],
-  writePaths: [A, B, LINK, DEV_DB],
+  readPaths: [A, B, LINK, DEV_DB, REPORT],
+  writePaths: [A, B, LINK, DEV_DB, REPORT],
   operations: ['read', 'search', 'write', 'edit', 'artifact_write', 'bash', 'network'],
   networkTargets: [],
+};
+
+/**
+ * A local DNS fixture for the W7R1-01/07 regressions.
+ *
+ * `localtest.example` resolves to loopback and `public.example` to a public
+ * address, both from this stub — so the DNS branch is exercised with no external
+ * network. A name the fixture does not know is reported as unresolvable, which the
+ * policy refuses rather than admits.
+ */
+const FIXTURE_RESOLVER: HostResolver = {
+  resolve(host) {
+    if (host === 'localtest.example') {
+      return Promise.resolve({ ok: true, addresses: ['127.0.0.1', '::1'] });
+    }
+    if (host === 'public.example') {
+      return Promise.resolve({ ok: true, addresses: ['93.184.216.34'] });
+    }
+    return Promise.resolve({ ok: false, reason: `${host} is not in the local fixture` });
+  },
 };
 
 let clock = Date.parse('2026-09-11T00:00:00.000Z');
@@ -121,6 +147,7 @@ describe('Broker (AC-048, AC-050)', () => {
     writeFileSync(join(workspace, B), 'export const b = 2;\n', 'utf8');
     writeFileSync(join(outside, 'secret.txt'), 'top-secret\n', 'utf8');
     symlinkSync(outside, join(workspace, 'link'), 'dir');
+    mkdirSync(join(workspace, 'reports'), { recursive: true });
 
     store = Store.open({
       dataDir,
@@ -253,6 +280,7 @@ describe('Broker (AC-048, AC-050)', () => {
       grants,
       now: () => nextTime(),
       docker: () => ({ available: true, version: '27.0.0' }),
+      resolver: FIXTURE_RESOLVER,
       ...overrides,
     });
   }
@@ -656,7 +684,18 @@ describe('Broker (AC-048, AC-050)', () => {
       const scheme = policy.checkUrl('ftp://example.com/file');
       expect(scheme.ok).toBe(false);
 
-      const authorized = new NetworkPolicy({ allowedTargets: ['127.0.0.1:8080'] });
+      // W7R1-07: plain http is refused even for a private target the caller
+      // authorized, unless plaintext was explicitly enabled for that endpoint.
+      const insecure = new NetworkPolicy({ allowedTargets: ['127.0.0.1:8080'] });
+      const insecureDecision = insecure.checkUrl('http://127.0.0.1:8080/ok');
+      expect(insecureDecision.ok).toBe(false);
+      if (insecureDecision.ok) throw new Error('unreachable');
+      expect(insecureDecision.reason).toContain('http: is refused');
+
+      const authorized = new NetworkPolicy({
+        allowedTargets: ['127.0.0.1:8080'],
+        allowInsecureHttp: true,
+      });
       expect(authorized.checkUrl('http://127.0.0.1:8080/ok').ok).toBe(true);
       // The authorization is exact: another port of the same host stays refused.
       expect(authorized.checkUrl('http://127.0.0.1:8081/other').ok).toBe(false);
@@ -749,13 +788,282 @@ describe('Broker (AC-048, AC-050)', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // Review round 1 regressions (W7R1-01/02/04/07/09/13)
+  // ---------------------------------------------------------------------------
+
+  describe('review round 1 regressions (W7R1)', () => {
+    it('refuses a hostname that DNS resolves into loopback, with no transport call (W7R1-01)', async () => {
+      const policy = new NetworkPolicy({ resolver: FIXTURE_RESOLVER });
+      // The literal check cannot see this name; only the resolver can.
+      expect(isPrivateAddress('localtest.example')).toBe(false);
+      const decision = await policy.decide({ url: 'https://localtest.example/private' });
+      expect(decision.ok).toBe(false);
+      if (decision.ok) throw new Error('unreachable');
+      expect(decision.code).toBe('NOT_AUTHORIZED');
+      expect(decision.reason).toContain('loopback/private/link-local');
+
+      // The guarded transport refuses the same name before the transport runs.
+      const fetched: string[] = [];
+      const requester = new GuardedRequester({
+        policy,
+        resolver: FIXTURE_RESOLVER,
+        fetcher: (url) => {
+          fetched.push(url);
+          return Promise.resolve({
+            status: 200,
+            headers: { get: () => null },
+            text: () => Promise.resolve('never'),
+          });
+        },
+      });
+      const refused = await requester.request('https://localtest.example/private');
+      expect(refused.ok).toBe(false);
+      if (refused.ok) throw new Error('unreachable');
+      expect(refused.code).toBe('NOT_AUTHORIZED');
+      expect(refused.hops).toEqual([{ url: 'https://localtest.example/private', allowed: false }]);
+      expect(fetched).toEqual([]);
+
+      // A redirect to that name is refused at the second hop, not followed: the
+      // public origin is fetched exactly once.
+      const publicFetched: string[] = [];
+      const redirecting = new GuardedRequester({
+        policy,
+        resolver: FIXTURE_RESOLVER,
+        fetcher: (url) => {
+          publicFetched.push(url);
+          return Promise.resolve({
+            status: 302,
+            headers: {
+              get: (name) =>
+                name.toLowerCase() === 'location' ? 'https://localtest.example/private' : null,
+            },
+            text: () => Promise.resolve(''),
+          });
+        },
+      });
+      const redirect = await redirecting.request('https://public.example/start');
+      expect(redirect.ok).toBe(false);
+      if (redirect.ok) throw new Error('unreachable');
+      expect(publicFetched).toEqual(['https://public.example/start']);
+      expect(redirect.blockedUrl).toBe('https://localtest.example/private');
+      expect(redirect.hops.map((hop) => hop.allowed)).toEqual([true, false]);
+    });
+
+    it('refuses an authorized private literal over plain http unless plaintext was enabled (W7R1-07)', () => {
+      const secure = new NetworkPolicy({ resolver: FIXTURE_RESOLVER });
+      expect(secure.checkUrl('https://public.example/').ok).toBe(true);
+      const http = secure.checkUrl('http://public.example/');
+      expect(http.ok).toBe(false);
+      if (http.ok) throw new Error('unreachable');
+      expect(http.reason).toContain('https is required');
+
+      // An explicit local test endpoint: https passes, http needs the opt-in too.
+      const local = new NetworkPolicy({ allowedTargets: ['127.0.0.1:8080'] });
+      expect(local.checkUrl('https://127.0.0.1:8080/ok').ok).toBe(true);
+      expect(local.checkUrl('http://127.0.0.1:8080/ok').ok).toBe(false);
+      const optedIn = new NetworkPolicy({
+        allowedTargets: ['127.0.0.1:8080'],
+        allowInsecureHttp: true,
+      });
+      expect(optedIn.checkUrl('http://127.0.0.1:8080/ok').ok).toBe(true);
+    });
+
+    it('classifies the hexadecimal IPv4-mapped IPv6 forms the URL parser produces (W7R1-02)', () => {
+      expect(new URL('http://[::ffff:127.0.0.1]/').hostname).toBe('[::ffff:7f00:1]');
+      for (const host of [
+        '::ffff:7f00:1',
+        '::ffff:127.0.0.1',
+        '::ffff:a00:5',
+        '::ffff:10.0.0.5',
+        '::ffff:a9fe:a9fe',
+        '::ffff:169.254.169.254',
+        '::ffff:c0a8:101',
+        '::ffff:6440:1',
+        '::ffff:0:0',
+        '64:ff9b::7f00:1',
+      ]) {
+        expect(isPrivateAddress(host), host).toBe(true);
+        expect(isPrivateAddress(`[${host}]`), host).toBe(true);
+      }
+      // A public mapped address stays public; only the mapped IPv4 rule applies.
+      expect(isPrivateAddress('::ffff:8.8.8.8')).toBe(false);
+      expect(isPrivateAddress('::ffff:808:808')).toBe(false);
+
+      const policy = new NetworkPolicy();
+      expect(policy.checkUrl('http://[::ffff:7f00:1]/').ok).toBe(false);
+      expect(policy.checkUrl('https://[::ffff:7f00:1]/').ok).toBe(false);
+    });
+
+    it('protects the run database without any caller-declared protected path (W7R1-04)', () => {
+      // No `protectedPaths` option at all: the roots come from the store.
+      expect(broker.protectedRoots).toContain(realpathSync(dataDir));
+      const plain: BrokerOptions = { store, grants, now: () => nextTime() };
+      expect(new Broker(plain).protectedRoots).toContain(
+        realpathSync(join(dataDir, 'project.sqlite')),
+      );
+
+      // The run database is refused by the boundary even though the caller
+      // declared no protected path and the target sits inside a granted root.
+      const dbPath = join(dataDir, 'project.sqlite');
+      const decision = resolveWithinRoots({
+        path: dbPath,
+        access: 'read',
+        roots: [dataDir],
+        protectedPaths: broker.protectedRoots,
+      });
+      expect(decision.ok).toBe(false);
+      if (decision.ok) throw new Error('unreachable');
+      expect(decision.code).toBe('NOT_AUTHORIZED');
+      expect(decision.reason).toContain('protected root');
+      expect(broker.protectedRoots.some((root) => realpathSync(dbPath).startsWith(root))).toBe(
+        true,
+      );
+
+      // The same read reaches a real Grant admission and is still refused: the
+      // Grant itself is seeded directly because the contract's `targets` are
+      // repository-relative, and this fixture deliberately lives outside the
+      // repository.
+      const grant = store.grants.insert({
+        id: uuid(0x700000000041),
+        workId: WORK_ID,
+        runId: RUN_REVIEW,
+        scope: 'run',
+        role: 'review',
+        stage: 'review',
+        operation: 'read',
+        targets: [dbPath],
+        expiresAt: new Date(clock + 3_600_000).toISOString(),
+        limits: {},
+        decisionId: DECISION_ID,
+      });
+      expect(grant.targets).toEqual([dbPath]);
+      const outcome = broker.invoke(
+        invocation({
+          role: 'review',
+          stage: 'review',
+          runId: RUN_REVIEW,
+          attemptId: ATTEMPT_REVIEW,
+          operation: 'read',
+          targets: [dbPath],
+          input: { path: dbPath },
+          roots: [dataDir],
+        }),
+      );
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error('unreachable');
+      expect(outcome.code).toBe('NOT_AUTHORIZED');
+      expect(outcome.reason).toContain('protected root');
+      expect(store.toolOperations.count()).toBe(0);
+    });
+
+    it('allows a Review report write root while refusing source (W7R1-13)', () => {
+      const reviewBroker = makeBroker({ writableReportRoots: [join(workspace, 'reports')] });
+      issue({
+        role: 'review',
+        stage: 'review',
+        scope: 'run',
+        operation: 'write',
+        targets: [REPORT],
+        runId: RUN_REVIEW,
+      });
+      const allowed = reviewBroker.invoke(
+        invocation({
+          role: 'review',
+          stage: 'review',
+          runId: RUN_REVIEW,
+          attemptId: ATTEMPT_REVIEW,
+          operation: 'write',
+          targets: [REPORT],
+          access: 'write',
+          input: { path: REPORT, content: '# review report\n' },
+        }),
+      );
+      expect(allowed.ok).toBe(true);
+      expect(readFileSync(join(workspace, REPORT), 'utf8')).toBe('# review report\n');
+
+      // The source write the same role may never make stays refused, file intact.
+      // It is seeded directly so the file boundary — checked before admission — is
+      // what refuses it, not a missing Grant.
+      const before = readFileSync(join(workspace, A), 'utf8');
+      store.grants.insert({
+        id: uuid(0x700000000042),
+        workId: WORK_ID,
+        runId: RUN_REVIEW,
+        scope: 'run',
+        role: 'review',
+        stage: 'review',
+        operation: 'write',
+        targets: [A],
+        expiresAt: new Date(clock + 3_600_000).toISOString(),
+        limits: {},
+        decisionId: DECISION_ID,
+      });
+      const srcInvocation = invocation({
+        role: 'review',
+        stage: 'review',
+        runId: RUN_REVIEW,
+        attemptId: ATTEMPT_REVIEW,
+        operation: 'write',
+        targets: [A],
+        access: 'write',
+        input: { path: A, content: 'mutated' },
+      });
+      const refused = reviewBroker.invoke(srcInvocation);
+      expect(refused.ok).toBe(false);
+      if (refused.ok) throw new Error('unreachable');
+      expect(refused.code).toBe('NOT_AUTHORIZED');
+      expect(refused.reason).toContain('report/scratch root');
+      expect(readFileSync(join(workspace, A), 'utf8')).toBe(before);
+    });
+
+    it('passes container content over stdin, so a delimiter line cannot become a command (W7R1-09)', () => {
+      const calls: string[] = [];
+      const stdin: (string | undefined)[] = [];
+      const runner: ProcessRunner = {
+        run(command, args, options): ProcessResult {
+          calls.push([command, ...args].join(' '));
+          stdin.push(options?.stdin);
+          return { status: 0, stdout: '', stderr: '', signal: null };
+        },
+      };
+      const containerBroker = makeBroker({ process: runner, mode: 'container' });
+      const payload = `line one\nAGENTDEV_EOF\necho should-not-run\n`;
+      issue({
+        scope: 'once',
+        operation: 'write',
+        targets: [A],
+        limits: {},
+        toolOperationId: uuid(0x700000000030),
+        inputHash: hashToolInput({ path: A, content: payload }),
+      });
+      const outcome = containerBroker.invoke(
+        invocation({
+          mode: 'container',
+          operation: 'write',
+          targets: [A],
+          access: 'write',
+          input: { path: A, content: payload },
+          toolOperationId: uuid(0x700000000030),
+        }),
+      );
+      expect(outcome.ok).toBe(true);
+      const command = calls.at(-1) ?? '';
+      // The content is not in the command at all — it cannot close a here-doc.
+      expect(command).not.toContain('AGENTDEV_EOF');
+      expect(command).not.toContain('should-not-run');
+      expect(command).toContain('base64 -d >');
+      expect(stdin.at(-1)).toBe(Buffer.from(payload, 'utf8').toString('base64'));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Test environment (required failure test)
   // ---------------------------------------------------------------------------
 
   describe('test environment', () => {
     it('creates its own database file and port, never the reserved dev values', async () => {
       const manager = new TestEnvironmentManager({ prefix: 'agentdev-broker-env-' });
-      const created = manager.create({
+      const created = await manager.create({
         workId: WORK_ID,
         attemptId: ATTEMPT_A,
         command: [process.execPath, '-e', 'process.exit(0)'],
@@ -775,7 +1083,7 @@ describe('Broker (AC-048, AC-050)', () => {
       expect(environment.env['PORT']).toBe(String(environment.port));
 
       // A second environment never takes the first one's port.
-      const second = manager.create({
+      const second = await manager.create({
         workId: WORK_ID,
         attemptId: ATTEMPT_B,
         command: [process.execPath, '-e', 'process.exit(0)'],
@@ -791,9 +1099,9 @@ describe('Broker (AC-048, AC-050)', () => {
       await manager.cleanup(second.environment);
     });
 
-    it('refuses to allocate when the only port is the reserved development port', () => {
+    it('refuses to allocate when the only port is the reserved development port', async () => {
       const manager = new TestEnvironmentManager();
-      const created = manager.create({
+      const created = await manager.create({
         workId: WORK_ID,
         attemptId: ATTEMPT_A,
         command: [process.execPath, '-e', 'process.exit(0)'],
@@ -814,7 +1122,7 @@ describe('Broker (AC-048, AC-050)', () => {
         },
       };
       const manager = new TestEnvironmentManager({ ports, prefix: 'agentdev-broker-cleanup-' });
-      const created = manager.create({
+      const created = await manager.create({
         workId: WORK_ID,
         attemptId: ATTEMPT_A,
         command: [process.execPath, '-e', 'process.exit(0)'],
@@ -831,6 +1139,80 @@ describe('Broker (AC-048, AC-050)', () => {
       // The state is tracked, so a supervisor can retry the real removal.
       expect(manager.get(created.environment.id)?.state).toBe('cleanup_failed');
       rmSync(created.environment.dir, { recursive: true, force: true });
+    });
+
+    it('skips a port the OS has already taken and one a sibling manager holds (W7R1-05)', async () => {
+      // An external listener on a port inside the window: the review's failing
+      // probe showed `create` handing it out and `start` then reporting running on
+      // somebody else's socket.
+      const occupied = createServer();
+      await new Promise<void>((settle) => {
+        occupied.listen(0, '127.0.0.1', () => {
+          settle();
+        });
+      });
+      const occupiedPort = (occupied.address() as { port: number }).port;
+      const manager = new TestEnvironmentManager({ prefix: 'agentdev-broker-port-' });
+      try {
+        const created = await manager.create({
+          workId: WORK_ID,
+          attemptId: ATTEMPT_A,
+          command: [process.execPath, '-e', 'process.exit(0)'],
+          portRange: { min: occupiedPort, max: occupiedPort + 1 },
+        });
+        expect(created.ok).toBe(true);
+        if (!created.ok) throw new Error('unreachable');
+        expect(created.environment.port).toBe(occupiedPort + 1);
+
+        // Two managers never receive the same port, even though each one's own
+        // bookkeeping is empty.
+        const other = new TestEnvironmentManager({ prefix: 'agentdev-broker-port-b-' });
+        const second = await other.create({
+          workId: WORK_ID,
+          attemptId: ATTEMPT_B,
+          command: [process.execPath, '-e', 'process.exit(0)'],
+          portRange: { min: created.environment.port, max: created.environment.port + 1 },
+        });
+        expect(second.ok).toBe(true);
+        if (!second.ok) throw new Error('unreachable');
+        expect(second.environment.port).not.toBe(created.environment.port);
+        expect(claimedTestPorts()).toEqual(
+          expect.arrayContaining([created.environment.port, second.environment.port]),
+        );
+
+        await manager.cleanup(created.environment);
+        await other.cleanup(second.environment);
+      } finally {
+        await new Promise<void>((settle) => {
+          occupied.close(() => {
+            settle();
+          });
+        });
+      }
+    });
+
+    it('reports a child that dies before readiness as failed, never running (W7R1-05)', async () => {
+      const manager = new TestEnvironmentManager({ prefix: 'agentdev-broker-dead-' });
+      const created = await manager.create({
+        workId: WORK_ID,
+        attemptId: ATTEMPT_A,
+        // It exits immediately without ever listening on `$PORT`.
+        command: [process.execPath, '-e', 'process.exit(3)'],
+        portRange: { min: 4770, max: 4779 },
+      });
+      expect(created.ok).toBe(true);
+      if (!created.ok) throw new Error('unreachable');
+
+      const started = await manager.start(created.environment, { readinessTimeoutMs: 3_000 });
+      expect(started.ok).toBe(false);
+      if (started.ok) throw new Error('unreachable');
+      expect(started.code).toBe('INVALID_STATE');
+      expect(started.reason).toContain('before it owned');
+      expect(started.environment.state).toBe('failed');
+      // A failed environment never executes commands.
+      const run = manager.run(started.environment, [process.execPath, '-e', 'process.exit(0)']);
+      expect(run.ok).toBe(false);
+      await manager.cleanup(started.environment);
     });
 
     it('reports a process-group cleanup failure as RECOVERY_REQUIRED (required failure test)', async () => {

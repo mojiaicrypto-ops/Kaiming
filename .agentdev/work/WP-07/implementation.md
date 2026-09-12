@@ -11,9 +11,9 @@
   - 签发在同一事务内校验 Work（存在且 `running`）、引用的 Decision、Run 归属的 Work、角色确实在派发、目标/操作在 Work 范围内；拒绝时零写入（`VALIDATION_ERROR`/`INVALID_STATE`/`NOT_AUTHORIZED`/`MISSING_CONTEXT`）。
   - `once` 绑定 `operation + (runId, toolOperationId, inputHash)`：首次消费执行一次并把结果写入 tool_operation 的 `resultRef`；同输入重试**返回原结果且不重放执行**（执行计数与单行断言）；不同 inputHash 或不同 toolOperation ⇒ `IDEMPOTENCY_CONFLICT` 且零消费；已完成事务在过期后仍重放。
   - 兄弟隔离：`run` 作用域或被消费的 `once` Grant 对同 Work 同角色的另一 Run 一律拒绝（零副作用），`work`/`project` 作用域两 Run 均可使用。
-  - 原子性：`UPDATE ... WHERE consumed_at IS NULL` 的行数即原子认领；并发双消费（第二次连接握手进入同一进程事务）只有一次执行、一次重放。
+  - 原子性：`UPDATE ... WHERE consumed_at IS NULL` 的行数即原子认领；单进程并发双消费（第二条连接经 `worker_threads` 在同一 SQLite 文件上握手，落点在本进程事务持写锁期间）只有一次执行。**跨进程**并发的执行唯一性由同一守卫 UPDATE 保证；失败方能否重放原结果取决于结果存储——T3 起默认接持久 blob 结果存储（见 T7/W7R1-10），因此另一进程可重放；若调用方显式注入进程内 sink，则失败方按契约报 `RECOVERY_REQUIRED`（`grants.test.ts` 两条用例分别证明）。
   - 撤权：把 `expiresAt` 置为纪元并写 `consumedAt`（不写 `consumedByOperationId`），因此后续使用拒绝而已完成事务仍可重放。
-- 回归网：`packages/core/test/grants.test.ts`（28 例）、`packages/domain/test/permission-delivery.test.ts`（19 例）。
+- 回归网：`packages/core/test/grants.test.ts`（31 例）、`packages/domain/test/permission-delivery.test.ts`（20 例）。
 
 ## T2 SecretStore 与泄漏防护（AC-051）
 
@@ -22,7 +22,7 @@
   - `environmentFor(context, refs)` 只注入**被请求且已授权**的 secret；任一被拒则整体拒绝（不产生部分/未授权凭证）。
   - 查询面（`has`/`refs`/`list`、`JSON.stringify(store)`）永不返回值；`maskAll`/`scanAll` 供审计路径遮蔽/检测。
   - 脱敏覆盖嵌套对象/数组/键名/Map/Set/Date/`Error`（含 name/message/stack/cause），最长值优先替换，输入不被修改；`scanForLeaks` 只报告路径 + `secretIndex` + 遮蔽预览，绝不返回值。
-- 回归网：`secrets.test.ts`（26 例）、`secrets.integration.test.ts`（5 例，真实 SQLite + GrantStore + 真实 node 子进程）。
+- 回归网：`secrets.test.ts`（27 例）、`secrets.integration.test.ts`（5 例，真实 SQLite + GrantStore + 真实 node 子进程）。
 
 ## T3 Broker、文件/网络边界与测试环境（AC-048/AC-050）
 
@@ -31,7 +31,7 @@
   - 文件边界：解析含不存在的末段路径的符号链接祖先，符号链接/`..`/绝对逃逸在准入前拒绝并在读写时复查；`protectedPaths` 让 Review Run 在两种模式下都读不到运行库。
   - 网络：`NetworkPolicy` 拒绝 loopback/私网/link-local/CGNAT/元数据地址（除非精确授权 host 或 host:port）；`GuardedRequester` 用 `redirect:'manual'` 对每一跳校验后再取，302 到 `169.254.169.254` 在第 2 跳被拒且不跟随。
 - `core/test-environment.ts`：`TestEnvironmentManager` 从专用端口段分配端口（跳过保留的 dev 端口与自身在用端口），在新建临时目录里放 `test.sqlite`，以独立进程组启动命令并等待端口就绪，用 `AGENTDEV_TEST_DB`/`AGENTDEV_TEST_PORT` 在该环境内运行命令；清理任一步失败都上报 `RECOVERY_REQUIRED` 并给出具体失败项（同时继续尝试其余步骤）。
-- 回归网：`broker.test.ts`（24 例）、`broker.integration.test.ts`（6 例，含真实 Docker 只读读取与非 root 账户）。
+- 回归网：`broker.test.ts`（32 例）、`broker.integration.test.ts`（8 例，含真实 Docker 只读读取与非 root 账户）。
 
 ## T4 信任与 Skill/扩展加载边界（AC-053）
 
@@ -39,25 +39,120 @@
   - **未信任**项目在该路径上严格只读：不 import 任何仓库模块、不读 Skill、不采纳仓库配置（无 fs 访问），每个候选/配置/Skill 都记为 `skipped` + `NOT_AUTHORIZED` + 精确原因（`untrusted-project: …`），`readOnly: true`。
   - **已信任**后：仓库扩展必须**同时**被显式选择且在发布白名单内才可加载；否则 `NOT_AUTHORIZED`（not-selected）或 `VALIDATION_ERROR`（not-in-builtin-whitelist）；路径逃逸（含经 realpath 的符号链接）⇒ `VALIDATION_ERROR`（path-escape）；仓库配置永远记为 skipped（配置永不权威）；只有被显式选择的 Skill 在信任后被读取，且必须解析在项目/agent 根内。
   - 每次判定进入有序 `trace`（seq/kind/id/origin/decision/path/code/reason），每个拒绝都带契约 `ErrorCode`；import/读取失败不吞，转为带原因的拒绝。
-- 回归网：`pi-runtime/test/trust.test.ts`（13 例，真实临时仓库；fixture 模块 import 时会写 `pwned.marker`，用文件系统证明「是否被 import」）。
+- 回归网：`pi-runtime/test/trust.test.ts`（14 例，真实临时仓库；fixture 模块 import 时会写 `pwned.marker`，用文件系统证明「是否被 import」）。
 
 ## T5 集成与必需失败测试
 
-- `packages/core/test/permissions.integration.test.ts`（9 例，integration 项目）：AC-049/080（范围内执行并审计；越界/过期/兄弟 Run 拒绝且零执行零写入；`once` 重放与不同 inputHash 的 `IDEMPOTENCY_CONFLICT` 且有真实落盘副作用）、AC-048/050（review/test Run 在 host 与 container 两种模式下读冻结输入、拒绝源码/DB 读取与一切写；验证者报告写入被只读角色门禁拒绝且不留文件/行）、AC-051（诱饵经真实 node 子进程到达已授权子进程；未授权兄弟拿不到；Artifact 行/事件流/grant 行/UI payload/store JSON/host 环境/仓库均无泄漏）、AC-053（未信任仓库自动加载模块不写 marker；信任后只加载被选且白名单内的资源）。
+- `packages/core/test/permissions.integration.test.ts`（11 例，integration 项目）：AC-049/080（范围内执行并审计；越界/过期/兄弟 Run 拒绝且零执行零写入；`once` 重放与不同 inputHash 的 `IDEMPOTENCY_CONFLICT` 且有真实落盘副作用）、AC-048/050（review/test Run 在 host 与 container 两种模式下读冻结输入、拒绝源码/DB 读取；验证者报告写入只在声明的报告根内放行、源码仍只读；运行库默认受结构保护）、AC-051（诱饵经真实 node 子进程到达已授权子进程；未授权兄弟拿不到；Artifact 行/事件流/grant 行/UI payload/store JSON/host 环境/仓库均无泄漏）、AC-053（未信任仓库自动加载模块不写 marker；信任后只加载被选且白名单内的资源）。
 - `packages/core/test/permissions-failures.test.ts`（4 例）：**符号链接/私网/重定向**、**Secret 泄漏**、**进程清理失败**、**无 Docker 拒绝**，标题逐字命名。
-- 回归敏感性：三处临时改动（移除 `resolveWithinRoots` 的 realpath、移除 `once` 的 inputHash 比较、关闭只读角色门禁）分别被对应用例抓到并已还原。
+- 回归敏感性（可核验，替代早前「三处临时改动…」的不可核验表述；本轮实际执行的突变-还原实验）：
+  1. 把 `GuardedRequester` 每跳的 `policy.decide(...)` 换回同步 `policy.checkUrl(...)`（移除 DNS 解析）⇒ `broker.test.ts › refuses a hostname that DNS resolves into loopback, with no transport call (W7R1-01)` **失败**（1 failed | 5 passed）。
+  2. 从 `evaluateGrant` 的 replay 分支删除 `role`/`stage`/`operation` 比较（恢复旧行为）⇒ `permission-delivery.test.ts › binds a replay to the full operation/role/stage triple, not just the run (W7R1-06)` **失败**（1 failed | 50 passed）。
+  3. 同时移除只读角色门禁与「只读角色写入仅限 writeRoots」的约束（恢复 `review` 可写任意 roots 的旧行为）⇒ `broker.test.ts › allows a Review report write root while refusing source (W7R1-13)` **失败**（1 failed | 5 passed）。
+  三次突变均已还原，源码与上表一致。
 
 ## T6 验证与本轮状态
 
 - 契约命令（本记录时点）：`pnpm typecheck` 0；`pnpm lint` 0；`pnpm test:unit` **44 文件 / 872 用例**；`pnpm test:integration` **14 文件 / 152 用例**（含真实 Docker）；`pnpm build` **10 workspace**；`pnpm docs:check` ok。
+- 该时点数字现已被 T7 取代（T7 修复后为 44/885 与 14/156）；T6 保留为修复前的历史记录。
 - 已登记残余（供 Review/Test 判定，均为承接而非静默）：
   1. `grant.revokedAt` 不是契约列，撤权复用 `consumedAt` + 纪元 `expiresAt`（`consumedByOperationId` 保持未设以区分已完成）；新增真列需 contracts/schema/migration 与 `data.md` 更新（本包外）。
   2. `consumeOnce` 在事务内执行工具（失败回滚、零残留），但长任务会持写锁；如需「提交后执行」变体，`prepared`/`finished` 行形状已支持。
   3. 网络工具传输是异步而 `consumeOnce` 执行器同步：Broker 对无 `run()` 体的 `network` 操作拒绝（`INVALID_STATE`，事务回滚），真实传输经 `GuardedRequester` 暴露；跨 HTTP 调用的同步 `once` 原子消费需要 T1 侧尚未暴露的 Grant API 接缝。
-  4. 容器内文件写使用 here-doc，内容含分隔符行需转义（未被测试覆盖，不在必需行为内）。
+  4. ~~容器内文件写使用 here-doc，内容含分隔符行需转义~~ **已在 T7/W7R1-09 修复**：容器写改为 base64 经 stdin 送入（无分隔符可伪造），残余关闭。
   5. Secret 注入到工具子进程环境由 T2 的 SecretStore 提供，但**尚未接线进 Broker**；Broker 构造上不读/不记录/不持久化 secret（审计行只含 operation/inputHash/targets/grant 引用）。
   6. `gatewaySecretResolver` 是 WP-09 把某个 Run 的授权上下文绑到 Gateway 单参 `SecretResolver` 的适配点，接线属 WP-09。
   7. 持久化 Secret 后端（Keychain / 0600 加密文件 + 备份导出）属安装/部署范围；`SecretStore.put` 是注册接缝。
   8. `loadTrustedExtensions` **尚未接入 session 创建**（`apps/runner` 仍直接调 `activateExtensions`），接线属 WP-08/runner；`PiRuntimeErrorCode` 无 `NOT_AUTHORIZED`/`VALIDATION_ERROR`，当前以显式结果对象携带契约码，如经协议暴露需在调用点映射或扩展该枚举。
   9. 仓库扩展**发现**（解析 `.pi/extensions.json` 等）有意未实现：调用方传入只读观察到的候选，两种信任状态下都不采纳配置；未信任项目在该路径上从不扫描。
   10. 发布的可选扩展白名单仍为空（`execution.md` §7 未变），生产上仓库扩展无法满足「内置列表」，正向路径经 `manifest` 接缝（测试提供白名单项）验证。
+
+## T7 Review 第 1 轮修复（W7R1-01..13）
+
+冻结点/审查报告：`45cd1b3`（blob `170200bc…`）上的 `.agentdev/work/WP-07/review.md`。本轮只改本包归属文件；每条修复都配一条**在旧行为下会失败**的回归用例，并已用「突变-还原」验证（见 T5 末节）。
+
+### W7R1-01（P1）网络边界不解析 DNS
+
+- **改了什么**：`packages/core/src/broker.ts` 引入可注入 DNS 端口 `HostResolver`（默认 `defaultHostResolver` = `dns.lookup(..., {all:true})`）与 `resolvesToPrivateAddress`；`NetworkPolicy` 新增 `decide({url|host,port})` 异步判定，`GuardedRequester` 每一跳（含重定向后的新 URL）都改走它；**任一**解析结果落在 loopback/私网/link-local/CGNAT/metadata 即拒绝，解析失败/不可分类也拒绝（不再把「无法分类」当公网）。`BrokerOptions.resolver` 透传，`NetworkPolicy` 的同步 `checkUrl`/`checkTarget` 保留（`Broker.invoke` 仍是同步入口，同步面按构造性内网名 + 精确授权判定，真实传输一律走异步面）。
+- **回归测试**：`packages/core/test/broker.test.ts › refuses a hostname that DNS resolves into loopback, with no transport call (W7R1-01)`——桩解析器 `localtest.example → 127.0.0.1/::1`、`public.example → 93.184.216.34`（离线、无外部网络）。断言：首次请求被拒且 **fetcher 从未被调用**；`public.example` 302 到 `localtest.example` 时只 fetch 了首跳，第二跳 `allowed:false` 且 `blockedUrl` 指向该名。旧行为下该用例失败（旧 `checkUrl` 对 hostname 放行）。
+- **记录修正**：`T3` 的「网络：…拒绝 loopback/私网…」补上「每跳先解析、任一结果内网即拒」，模块 docstring 同步。
+
+### W7R1-02（P1）IPv4-mapped IPv6 十六进制形式绕过
+
+- **改了什么**：`isPrivateIpv6` 不再用字符串前缀，改为 `ipv6Bytes()` 展开 16 字节后按数值区间判定（`fe80::/10`、`fc00::/7`、`ff00::/8`、`2001:db8::/32`、`::`/`::1`），并把 `::ffff:0:0/96` 映射形式与 `64:ff9b::/96` NAT64 解出低 32 位后套用**完整 IPv4 规则**；`isPrivateIpv4` 补齐 `0.0.0.0/8`、`169.254/16`、`100.64/10`、`192.0.0/24`、`198.18/15`、`198.51.100/24`、`203.0.113/24`、`224/4` 与 `240/4`。嵌入点分四段（`::ffff:127.0.0.1`）同样解析。
+- **回归测试**：`broker.test.ts › classifies the hexadecimal IPv4-mapped IPv6 forms the URL parser produces (W7R1-02)`——断言 `new URL('http://[::ffff:127.0.0.1]/').hostname === '[::ffff:7f00:1]'`，并对 `::ffff:7f00:1`、`::ffff:a00:5`、`::ffff:a9fe:a9fe`、`::ffff:c0a8:101`、`::ffff:6440:1`、`::ffff:0:0`、`64:ff9b::7f00:1` 及点分形式判内网，`::ffff:8.8.8.8`/`::ffff:808:808` 判公网。旧行为下十六进制形式判为公网 ⇒ 失败。
+
+### W7R1-03（P1）选中目录的 SKILL.md 符号链接逃逸
+
+- **改了什么**：`packages/pi-runtime/src/extensions.ts` 的 `resolveSkillDocument(path, allowedRoots)` 在拼接 `SKILL.md` 之后同样 `realpath` + `isInside(canonicalSkillRoots)` 复检，未通过返回 `undefined`，因此调用方记 `refused`/`VALIDATION_ERROR`（`skill-unreadable`）且**零读取**；目录选择与文件选择走同一条安全路径。
+- **回归测试**：`packages/pi-runtime/test/trust.test.ts › refuses a symlinked SKILL.md inside a selected directory (W7R1-03)`——仓库内 `skills/linked-skill/SKILL.md` 符号链接到仓库外文档；断言 `readSkillFile` 零调用、`loadedSkills` 为空、trace 为 `refused`/`VALIDATION_ERROR`，且整条 trace 不含外部技能名。旧行为下会真实读取并记 `loaded` ⇒ 失败。
+
+### W7R1-04（P2）运行库默认不受结构保护
+
+- **改了什么**：`Broker` 构造时用 `deriveProtectedPaths(store, dataDir, extra)` 派生保护根：**配置数据目录**（`BrokerOptions.dataDir ?? store.dataDir`，含 `project.sqlite`、`blobs/`、迁移备份）与 store 文件本身，再并入调用方传入的 `protectedPaths`（只能收紧，不能放宽）。拒绝优先报「inside protected root」，因此不依赖调用方是否记得传参。新增只读属性 `protectedRoots` 便于审计。
+- **回归测试**：`broker.test.ts › protects the run database without any caller-declared protected path (W7R1-04)`（不传 `protectedPaths`，断言派生根包含数据目录与 `project.sqlite`，`resolveWithinRoots` 报 `protected root`）与 `packages/core/test/permissions.integration.test.ts › refuses the run database to a verifier without any caller-declared protected path (W7R1-04)`（真实 `ProjectStore` 文件 + 真实 Grant，端到端 `NOT_AUTHORIZED` 且零 `tool_operation` 行）。旧行为下 `protectedPaths` 为空 ⇒ 读取成功 ⇒ 失败。
+
+### W7R1-05（P2）端口分配不探测 OS、就绪不校验归属
+
+- **改了什么**：`packages/core/src/test-environment.ts` 的端口端口新增 `portAvailable(port): Promise<boolean>`（默认实现 `portBindable`：绑定成功后立刻释放；占用由 `error` 事件异步上报，因此必须 await，早前的同步 `listen()` try/catch 永远返回 true）。`allocatePort` 变为异步，逐个跳过保留 dev 端口、本 manager 已用端口、**进程级 `claimedPorts` 注册表**中其他 manager 已认领的端口，并对 OS 探测；`create` 相应变为 `async create(...): Promise<CreateOutcome>`。`waitForPort` 先查子进程是否已退出，端口可连后仍在 settle 窗口复查明子进程存活，死亡即报 `INVALID_STATE`（`… exited with code … before it owned host:port …`），绝不报 running；`cleanup` 释放进程级认领。
+- **回归测试**：单元 `broker.test.ts › skips a port the OS has already taken and one a sibling manager holds (W7R1-05)`（真实 `net` 监听器占用端口 + 两个 manager 不同端口）；`broker.test.ts › reports a child that dies before readiness as failed, never running (W7R1-05)`；集成 `broker.integration.test.ts › never hands the same port to a second manager, and skips an occupied one (W7R1-05)`（真实子进程各听各的端口 + 真实占用端口被跳过）。旧行为下占用端口被直接发出、manager 间复用 ⇒ 用例失败。
+
+### W7R1-06（P2）replay 分支与覆盖查询忽略 operation/role/stage
+
+- **改了什么**：`packages/domain/src/permission.ts` 的 `evaluateGrant` replay 分支补齐 `role`/`stage`/`operation` 全绑定比较（run/toolOperation/inputHash 原有）；`packages/core/src/grants.ts` 的 `matchingGrants` 在 `evaluateGrant` 之前先按 `operation`/`role`/`stage` 过滤，因此 `findGrantFor`/`checkCoverage`/`Broker.networkCovered` 的预判不再被已消费的异绑定 Grant 污染。
+- **回归测试**：`packages/domain/test/permission-delivery.test.ts › binds a replay to the full operation/role/stage triple, not just the run (W7R1-06)`（三种错绑定均不再 `replay:true`，精确绑定仍重放）与 `packages/core/test/grants.test.ts › does not let a consumed once grant cover a different operation/role/stage (W7R1-06)`（同绑定 `checkCoverage` 为 true，异 operation/role 为 false 且 `findGrantFor` 为 `undefined`）。旧行为下后者全为 true ⇒ 失败。
+
+### W7R1-07（P2）网络策略接受明文 http
+
+- **改了什么**：`NetworkPolicy` 新增 `allowInsecureHttp`（默认 false）与 `checkScheme`：https 放行；其它 scheme 精确拒绝；**http 仅在「该精确目标已被显式授权」且「调用方显式开启明文」时放行**。判定顺序为先地址后 scheme，因此内网目标仍报内网原因。`BrokerOptions.allowInsecureHttp` 透传。
+- **回归测试**：`broker.test.ts › refuses an authorized private literal over plain http unless plaintext was enabled (W7R1-07)`（`https://public.example` 放行、`http://public.example` 拒绝且 reason 含 `https is required`；`127.0.0.1:8080` 上 https 放行、http 拒绝、显式 opt-in 后 http 放行）。旧行为下 `http://example.com/` 直接放行 ⇒ 失败。集成套件的本地 loopback 明文测试端点显式设置 `allowInsecureHttp: true`。
+
+### W7R1-08（P3）根内硬链接可读根外内容（已知限制，文档化）
+
+- **改了什么**：`resolveWithinRoots` 的文档注释明确这是**路径包含性**规则而非 inode 规则：根内硬链接指向的 inode 可能同时被根外链接，「任何基于路径的检查都无法识别」；创建该链接本身已需要根内写权；`execution.md` §3 只承诺拒绝相对路径/符号链接/嵌套仓库逃逸，**没有 AC 覆盖硬链接**，因此这里记录边界而**不声称已阻断**。
+- **记录**：本 T7 条目即该限制的登记；未新增用例（用例只会固化「未阻断」，不构成承诺）。
+
+### W7R1-09（P3）容器 here-doc 分隔符可逃逸为容器内命令
+
+- **改了什么**：`Broker.containerWrite` 改为 `base64 -d > <shell-quoted target>`，内容以 base64 经**子进程 stdin** 送入（`ProcessRunOptions.stdin` → `spawnSync({input})`）；命令里不再出现内容，分隔符无法伪造。
+- **回归测试**：`broker.test.ts › passes container content over stdin, so a delimiter line cannot become a command (W7R1-09)`——payload 含单独一行 `AGENTDEV_EOF` 与后续 `echo should-not-run`；断言命令串既不含 `AGENTDEV_EOF` 也不含 `should-not-run`、含 `base64 -d >`，且 stdin 等于 payload 的 base64。旧行为下命令串含 `AGENTDEV_EOF` ⇒ 失败。
+
+### W7R1-10（P3）跨进程并发只有「执行一次」成立
+
+- **改了什么**：`packages/core/src/grants.ts` 新增 `ProjectStoreDeferredResultStore`（结果写 `ProjectStore.blobs`，`resultRef` 仍是 UUIDv7 以满足契约，UUID → blob `relativePath` 存在 `deferred-results/index.json` 清单，经临时文件 + 原子 rename 更新），并**把它设为 `GrantStore` 的默认结果存储**；`InMemoryDeferredResultStore` 保留为显式选择（用于单进程或证明缺失结果路径）。因此第二个进程重放同一 tool operation 时能解析到持久结果，而不是 `RECOVERY_REQUIRED`。
+- **回归测试**：单元 `packages/core/test/grants.test.ts › replays the recorded result from a second store, rather than RECOVERY_REQUIRED`（独立打开的 `GrantStore` 解析同一结果，且断言结果 blob 与清单存在）与 `… › reports RECOVERY_REQUIRED only for a sink that cannot resolve the reference`（显式注入全新进程内 sink 时仍如实报 recovery）；集成 `broker.integration.test.ts › replays a once result in a separate OS process through the durable store (W7R1-10)`——真实 `node` 子进程打开同一数据目录，`outcome: "replayed"`、`executed: 0`、结果等于首进程记录值。旧行为下子进程抛 `RECOVERY_REQUIRED` ⇒ 失败。
+- **记录修正**：T1 并发条目改写为「单进程第二条连接握手落在同一事务」并把「跨进程重放」明确为依赖持久结果存储（现已接线）。
+
+### W7R1-11（P3）实现记录不一致
+
+- **改了什么**：修正 `implementation.md`：`secrets.test.ts` 27 例（原写 26）；T1 并发描述（见上）；`grants.ts` 中 `prepared` 行注释改为「事务**提交**该 `prepared` 行（正常返回不是回滚）」，与 `claimed.changes !== 1` 分支的实际语义一致；T5「三处临时改动」不可核验声明删除，替换为**本轮实际执行的突变-还原实验**（3 条，含失败用例名与计数，见 T5 末节）。测试计数同步更新：`grants.test.ts` 31、`broker.test.ts` 32、`broker.integration.test.ts` 8、`permissions.integration.test.ts` 11、`permission-delivery.test.ts` 20、`trust.test.ts` 14。
+- **回归测试**：无（记录类修复）；可核验性由 T5 突变实验与本 T7 的计数提供。
+
+### W7R1-12（P3）未选中内置扩展被记为 refused + INTERNAL_ERROR
+
+- **改了什么**：`extensions.ts` 中内置扩展的 trace 判定改为：未选中/默认关闭 ⇒ `skipped` 且 `code: undefined`、原因 `not-selected: disabled`；`apiVersion` 不匹配仍是 `refused`/`VALIDATION_ERROR`；其余激活异常仍是 `refused`/`INTERNAL_ERROR`。
+- **回归测试**：`packages/pi-runtime/test/trust.test.ts › still activates the shipped release whitelist, which is not repository content`（新增 `other-builtin`，断言 `skipped` + 无 code + reason 含 `not-selected`，且 `refused` 为空）与集成 `permissions.integration.test.ts › does not execute an untrusted repository auto-load extension…`（原「refused」期望更正为 `skipped`/无 code，属**编码 bug 的旧期望**，已在 T7 说明）。
+
+### W7R1-13（P3）review/test 的写入被一律拒绝
+
+- **改了什么**：`BrokerOptions.writableReportRoots` 声明 `execution.md` §3 划给 Review/Test 的报告与检查临时目录。对 review/test，写操作仅在 `writeRoots` 内放行；`resolveWithinRoots` 在提供 `writeRoots` 时**只**以 `writeRoots` 为可写边界（源码 roots 仍可读但不可写），`contextFor` 的 open 时复查同规则；容器模式把报告根作为额外 `rw` 挂载。未声明 `writableReportRoots` 时保持原 fail-closed 行为。
+- **回归测试**：`broker.test.ts › allows a Review report write root while refusing source (W7R1-13)`（报告写入成功且文件落盘；源码写入拒绝且 reason 含 `report/scratch root`、文件不变）与集成 `permissions.integration.test.ts › writes a Review report inside its declared report root and never the source (W7R1-13)`（真实 store；源码与 `dev.sqlite` 均拒绝）。旧行为下报告写入被拒、而门禁一旦放开源码也可写 ⇒ 用例失败。
+
+### T7 验证数字（本轮，全部命令真实执行）
+
+| 命令 | 结果 |
+|---|---|
+| `pnpm typecheck` | 通过（`tsc -p tsconfig.json --pretty false`，退出 0） |
+| `pnpm lint` | 通过（Prettier 全部匹配） |
+| `pnpm test:unit` | **44 文件 / 885 用例全部通过**（修复前 872，新增 13） |
+| `pnpm test:integration` | **14 文件 / 156 用例全部通过**（修复前 152，新增 4；Docker 用例真实执行） |
+| `pnpm build` | 10 workspace 全部 Done |
+
+### T7 新登记残余
+
+1. **硬链接（W7R1-08）在任何路径包含性模型下不可阻断**：已作为已知限制写入 `resolveWithinRoots` 注释与 T7，不声称阻断；无 AC 覆盖。
+2. **报告/临时根需要调用方声明**：`writableReportRoots` 未接线时 review/test 写入仍 fail-closed；把「哪一个目录是本 Run 的报告根」接入 Runner 属 WP-08。
+3. **`protectedPaths` 的默认保护跟随构造参数**：`deriveProtectedPaths` 用 `BrokerOptions.dataDir ?? store.dataDir`；若调用方把 store 与 dataDir 指向不同位置，保护跟随该参数。调用方不得传入与运行库无关的目录来放宽保护（本包测试不这么做）。
+4. **`create` 变为异步**（`Promise<CreateOutcome>`）：OS 端口探测本质异步，同步 API 无法在不骗人的情况下探测占用；非本包调用方（apps）如已接线需相应 `await`（当前仓库内调用点仅为测试）。
+5. **明文 http 需双重显式**：`allowInsecureHttp` + 精确目标授权；容器/代理路径默认仍是 https。
+6. **跨进程重放的持久化范围**：结果落 `ProjectStore.blobs` 的 `deferred-results/`，随项目状态目录一起备份/GC；`blobs.collectGarbage` 的引用集合目前只读数据库列，尚未把该清单纳入（离线 GC 属运维范围）。

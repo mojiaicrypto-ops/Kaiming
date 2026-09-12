@@ -43,6 +43,7 @@ import {
   type BrokerOptions,
   type DockerProbe,
   type GrantIssueInput,
+  type HostResolver,
   type ProcessResult,
   type ProcessRunner,
   type TestEnvironmentPorts,
@@ -70,6 +71,22 @@ const LINK_LOCAL_URL = 'http://169.254.169.254/latest/meta-data/';
 
 const DECOY_REF = 'project/decoy-token';
 const DECOY_VALUE = 'decoy-credential-7b31-must-be-detected';
+
+/**
+ * A stub DNS port for the "public" fixtures.
+ *
+ * The suite stays offline: the only public names resolve through this local
+ * fixture instead of a real lookup, and every name it does not know is reported as
+ * unresolvable (which the policy refuses, never admits).
+ */
+const PUBLIC_FIXTURE_RESOLVER: HostResolver = {
+  resolve(host) {
+    if (host === 'api.example.test' || host === 'decoy.example.test') {
+      return Promise.resolve({ ok: true, addresses: ['93.184.216.34'] });
+    }
+    return Promise.resolve({ ok: false, reason: `${host} is not in the local fixture` });
+  },
+};
 
 const SCOPE: Scope = {
   readPaths: [TARGET, ESCAPE],
@@ -274,7 +291,13 @@ function makeHarness(): Harness {
       if (!outcome.ok) throw new Error(`grant refused: ${outcome.code} ${outcome.reason}`);
     },
     broker(overrides = {}) {
-      return new Broker({ store, grants, now: NOW, ...overrides });
+      return new Broker({
+        store,
+        grants,
+        now: NOW,
+        resolver: PUBLIC_FIXTURE_RESOLVER,
+        ...overrides,
+      });
     },
     invocation(overrides = {}) {
       return {
@@ -506,7 +529,7 @@ describe('WP-07 required failure tests', () => {
       },
     };
     const manager = new TestEnvironmentManager({ ports, stopGraceMs: 20 });
-    const created = manager.create({
+    const created = await manager.create({
       workId: WORK_ID,
       attemptId: ATTEMPT_A,
       command: [process.execPath, '-e', 'process.exit(0)'],
@@ -564,7 +587,7 @@ describe('WP-07 required failure tests', () => {
     const realManager = new TestEnvironmentManager({ prefix: 'agentdev-perm-cleanup-' });
     const script =
       "const http=require('http');http.createServer((q,r)=>{r.end('ok')}).listen(Number(process.env.PORT),'127.0.0.1');";
-    const realCreated = realManager.create({
+    const realCreated = await realManager.create({
       workId: WORK_ID,
       attemptId: ATTEMPT_A,
       command: [process.execPath, '-e', script],

@@ -98,6 +98,27 @@ describe('grant admission (AC-049, AC-080)', () => {
     expect(decision.replay).toBe(true);
   });
 
+  it('binds a replay to the full operation/role/stage triple, not just the run (W7R1-06)', () => {
+    const consumed = onceGrant({ consumedAt: AT, consumedByOperationId: OP });
+    // Before the fix the replay branch matched on run/tool-operation/input alone,
+    // so each of these answered `{allowed: true, replay: true}` for a Grant that
+    // never authorized it. A consumed transaction now answers only its own
+    // binding, and every other use is the documented "already consumed" conflict.
+    for (const request of [
+      { ...REQUEST, operation: 'secret' },
+      { ...REQUEST, role: 'review' as const },
+      { ...REQUEST, stage: 'review' },
+    ]) {
+      const decision = evaluateGrant(consumed, request);
+      expect(decision.allowed, `${request.operation}/${request.role}/${request.stage}`).toBe(false);
+      if (decision.allowed) throw new Error('unreachable');
+      expect(grantDenialCode(decision.reason)).toBe('IDEMPOTENCY_CONFLICT');
+    }
+    // The exact binding still replays.
+    const exact = evaluateGrant(consumed, REQUEST);
+    expect(exact.allowed).toBe(true);
+  });
+
   it('refuses a different input hash with IDEMPOTENCY_CONFLICT and names the field (AC-080)', () => {
     const decision = evaluateGrant(onceGrant({ consumedAt: AT, consumedByOperationId: OP }), {
       ...REQUEST,

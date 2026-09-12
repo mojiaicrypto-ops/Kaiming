@@ -515,8 +515,8 @@ export async function loadTrustedExtensions(
       });
       continue;
     }
-    const document = await resolveSkillDocument(skillFile);
-    if (document === undefined) {
+    const document = await resolveSkillDocument(skillFile, canonicalSkillRoots);
+    if (!document.ok) {
       record({
         kind: 'skill',
         id: skillPath,
@@ -524,20 +524,20 @@ export async function loadTrustedExtensions(
         decision: 'refused',
         path: skillFile,
         code: 'VALIDATION_ERROR',
-        reason: 'skill-unreadable: no SKILL.md document at the selected path',
+        reason: `skill-unreadable: ${document.reason}`,
       });
       continue;
     }
     const reader = options.readSkillFile ?? defaultReadSkillFile;
     try {
-      const content = await reader(document);
-      loadedSkills.push({ path: document, name: skillName(document, content) });
+      const content = await reader(document.path);
+      loadedSkills.push({ path: document.path, name: skillName(document.path, content) });
       record({
         kind: 'skill',
         id: skillPath,
         origin: 'repository',
         decision: 'loaded',
-        path: document,
+        path: document.path,
         code: undefined,
         reason: 'trusted-project: skill was explicitly selected',
       });
@@ -547,7 +547,7 @@ export async function loadTrustedExtensions(
         id: skillPath,
         origin: 'repository',
         decision: 'refused',
-        path: document,
+        path: document.path,
         code: 'VALIDATION_ERROR',
         reason: `skill-unreadable: ${describeError(error)}`,
       });
@@ -596,19 +596,23 @@ export async function loadTrustedExtensions(
     }
     const disabled = activation.disabled.find((entry) => entry.id === spec.id);
     const reason = disabled?.reason ?? 'disabled';
+    // "Not selected / disabled by default" is a non-error decision: it is recorded
+    // as `skipped` with no code, matching the repository-extension
+    // `NOT_AUTHORIZED(not-selected)` semantics instead of mislabelling it
+    // `refused`/`INTERNAL_ERROR` (W7R1-12). An unsupported apiVersion is a
+    // validation failure of that entry, and any other activation failure is the
+    // refused/internal case.
     const unsupportedApi = reason.startsWith('unsupported apiVersion');
+    const notSelected = disabled === undefined || reason === 'disabled';
+    const decision: LoaderDecision = notSelected ? 'skipped' : 'refused';
     record({
       kind: 'extension',
       id: spec.id,
       origin: 'builtin',
-      decision: unsupportedApi || disabled !== undefined ? 'refused' : 'skipped',
+      decision,
       path: undefined,
-      code: unsupportedApi
-        ? 'VALIDATION_ERROR'
-        : disabled === undefined
-          ? undefined
-          : 'INTERNAL_ERROR',
-      reason,
+      code: notSelected ? undefined : unsupportedApi ? 'VALIDATION_ERROR' : 'INTERNAL_ERROR',
+      reason: notSelected ? `not-selected: ${reason}` : reason,
     });
   }
 
@@ -631,13 +635,38 @@ async function canonicalRoot(root: string): Promise<string> {
   return canonical.path ?? root;
 }
 
-/** Resolves a selected skill path to its Markdown document, following `SKILL.md`. */
-async function resolveSkillDocument(path: string): Promise<string | undefined> {
+/**
+ * Resolves a selected skill path to its Markdown document, following `SKILL.md`.
+ *
+ * The document is resolved through the *same* canonicalisation and containment
+ * check as a module, including when the selection names a directory (W7R1-03): a
+ * `SKILL.md` that is a symlink pointing outside the project/agent roots must be
+ * refused **before** it is read, not read and recorded as loaded. The returned
+ * path is therefore always the canonical target inside an allowed root, and the
+ * refusal reason says which check failed.
+ */
+async function resolveSkillDocument(
+  path: string,
+  allowedRoots: readonly string[],
+): Promise<
+  { readonly ok: true; readonly path: string } | { readonly ok: false; readonly reason: string }
+> {
+  let selected: string;
   try {
     const info = await stat(path);
-    return info.isDirectory() ? join(path, 'SKILL.md') : path;
+    selected = info.isDirectory() ? join(path, 'SKILL.md') : path;
   } catch {
     // An unreadable selection is reported by the caller as `skill-unreadable`.
-    return undefined;
+    return { ok: false, reason: 'no readable SKILL.md document at the selected path' };
   }
+  const canonical = await canonicalize(selected);
+  if (canonical.path === undefined) {
+    return { ok: false, reason: canonical.error ?? 'the skill document is unresolvable' };
+  }
+  // The containment re-check is the W7R1-03 fix: the *document* (not only the
+  // selected entry) has to resolve inside an allowed root.
+  if (!allowedRoots.some((root) => isInside(root, canonical.path ?? ''))) {
+    return { ok: false, reason: 'the skill document resolves outside the allowed roots' };
+  }
+  return { ok: true, path: canonical.path };
 }

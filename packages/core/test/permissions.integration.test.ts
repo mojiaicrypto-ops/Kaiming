@@ -32,7 +32,7 @@
 import { spawnSync } from 'node:child_process';
 import { execFile } from 'node:child_process';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -662,6 +662,120 @@ describe('end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, A
     expect(readFileSync(join(harness.frozen, FROZEN), 'utf8')).toBe(FROZEN_BODY);
   });
 
+  it('writes a Review report inside its declared report root and never the source (W7R1-13)', () => {
+    const reportOperationId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3e0540';
+    harness.issue({
+      role: 'review',
+      stage: 'review',
+      operation: 'write',
+      targets: [REVIEW_REPORT],
+      runId: RUN_REVIEW,
+      toolOperationId: reportOperationId,
+    });
+    // `execution.md` §3 gives Review "自己报告与检查临时目录"; the Broker admits a
+    // write there, and only there.
+    const governed = new Broker({
+      store: harness.store,
+      grants: harness.grants,
+      now: NOW,
+      writableReportRoots: [join(harness.frozen, 'reports')],
+    });
+    const report = join(harness.frozen, REVIEW_REPORT);
+    const written = governed.invoke({
+      workId: WORK_ID,
+      runId: RUN_REVIEW,
+      attemptId: ATTEMPT_REVIEW,
+      epoch: 1,
+      role: 'review',
+      stage: 'review',
+      operation: 'write',
+      access: 'write',
+      targets: [REVIEW_REPORT],
+      input: { path: REVIEW_REPORT, content: 'reviewed\n' },
+      roots: [harness.frozen],
+      toolOperationId: reportOperationId,
+    });
+    expect(written.ok).toBe(true);
+    if (!written.ok) throw new Error(written.reason);
+    expect(readFileSync(report, 'utf8')).toBe('reviewed\n');
+
+    // The same role still has no write path to source or to the run database.
+    const sourceBefore = readFileSync(join(harness.workspace, SOURCE), 'utf8');
+    const sourceWrite = governed.invoke({
+      workId: WORK_ID,
+      runId: RUN_REVIEW,
+      attemptId: ATTEMPT_REVIEW,
+      epoch: 1,
+      role: 'review',
+      stage: 'review',
+      operation: 'write',
+      access: 'write',
+      targets: [SOURCE],
+      input: { path: SOURCE, content: 'mutated\n' },
+      roots: [harness.workspace],
+    });
+    expect(sourceWrite.ok).toBe(false);
+    if (sourceWrite.ok) throw new Error('unreachable');
+    expect(sourceWrite.code).toBe('NOT_AUTHORIZED');
+    expect(sourceWrite.reason).toContain('report/scratch root');
+    expect(readFileSync(join(harness.workspace, SOURCE), 'utf8')).toBe(sourceBefore);
+
+    const dbWrite = governed.invoke({
+      workId: WORK_ID,
+      runId: RUN_REVIEW,
+      attemptId: ATTEMPT_REVIEW,
+      epoch: 1,
+      role: 'review',
+      stage: 'review',
+      operation: 'write',
+      access: 'write',
+      targets: [DEV_DB],
+      input: { path: DEV_DB, content: 'mutated\n' },
+      roots: [harness.workspace],
+    });
+    expect(dbWrite.ok).toBe(false);
+    if (dbWrite.ok) throw new Error('unreachable');
+    expect(dbWrite.reason).toContain('report/scratch root');
+  });
+
+  it('refuses the run database to a verifier without any caller-declared protected path (W7R1-04)', () => {
+    const dataDir = harness.store.dataDir;
+    const dbFile = join(dataDir, 'project.sqlite');
+    // No `protectedPaths` option: the roots are derived from the store, so even a
+    // Grant whose target is a file outside the repository cannot read the run DB.
+    const plain = new Broker({ store: harness.store, grants: harness.grants, now: NOW });
+    expect(plain.protectedRoots).toContain(realpathSync(dataDir));
+    expect(plain.protectedRoots).toContain(realpathSync(dbFile));
+
+    const operationId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3e0550';
+    harness.issue({
+      role: 'review',
+      stage: 'review',
+      operation: 'read',
+      targets: [DEV_DB],
+      runId: RUN_REVIEW,
+      toolOperationId: operationId,
+    });
+    const read = plain.invoke({
+      workId: WORK_ID,
+      runId: RUN_REVIEW,
+      attemptId: ATTEMPT_REVIEW,
+      epoch: 1,
+      role: 'review',
+      stage: 'review',
+      operation: 'read',
+      targets: [DEV_DB],
+      input: { path: DEV_DB },
+      roots: [dataDir],
+      toolOperationId: operationId,
+    });
+    expect(read.ok).toBe(false);
+    if (read.ok) throw new Error('unreachable');
+    expect(read.code).toBe('NOT_AUTHORIZED');
+    expect(read.reason).toContain('protected root');
+    expect(harness.store.toolOperations.find(operationId)).toBeUndefined();
+  });
+
   it.skipIf(!DOCKER.ready)(
     'keeps the frozen source read-only inside the real container (AC-048, AC-050)',
     () => {
@@ -963,11 +1077,14 @@ describe('repository trust boundary over a real repository (AC-053)', () => {
     expect(readFileSync(marker, 'utf8')).toBe('executed');
     expect(trusted.loadedExtensions.map((entry) => entry.id)).toEqual(['auto-load']);
     expect(trusted.loadedSkills.map((entry) => entry.name)).toEqual(['selected-skill']);
-    // A whitelisted but unselected extension is refused, never auto-enabled.
+    // A whitelisted but unselected extension is never auto-enabled, and the audit
+    // entry says `skipped`/`not-selected` rather than mislabelling a non-error
+    // decision as `refused`/`INTERNAL_ERROR` (W7R1-12).
     expect(trusted.loadedExtensions.map((entry) => entry.id)).not.toContain('other-builtin');
-    expect(
-      trusted.trace.some((entry) => entry.id === 'other-builtin' && entry.decision === 'refused'),
-    ).toBe(true);
+    const unselected = trusted.trace.find((entry) => entry.id === 'other-builtin');
+    expect(unselected).toMatchObject({ decision: 'skipped' });
+    expect(unselected?.code).toBeUndefined();
+    expect(unselected?.reason).toContain('not-selected');
   });
 
   it('never reads a selected skill from an untrusted repository (AC-053)', async () => {

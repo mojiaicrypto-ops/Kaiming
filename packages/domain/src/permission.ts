@@ -157,15 +157,25 @@ export function targetCovers(granted: string, requested: string): boolean {
  * (`domain/revocationTime`), so a revoked Grant can never replay a stale result.
  * A replay is also bound to the run, so a sibling Run cannot claim another Run's
  * result (`AC-080` sibling isolation).
+ *
+ * The replay branch requires the **full** binding — role, stage and operation
+ * included, not only the run/tool-operation/input triple (W7R1-06). Otherwise a
+ * consumed `once` Grant would answer a coverage query for a different operation
+ * or role that the Grant never authorized, and `Broker.networkCovered` would
+ * treat an unrelated Grant as covering this call's network use.
  */
 export function evaluateGrant(grant: Grant, request: GrantRequest): GrantDecision {
   if (grant.consumedAt !== undefined) {
-    // Idempotent replay: the same run, tool operation and input hash, recorded.
-    // A completed `once` transaction outlives its expiry, so this is checked before
-    // the clock — that is what makes a lost tool response recoverable.
+    // Idempotent replay: the same run, role, stage, operation, tool operation and
+    // input hash, recorded. A completed `once` transaction outlives its expiry, so
+    // this is checked before the clock — that is what makes a lost tool response
+    // recoverable.
     if (
       grant.scope === 'once' &&
       grant.consumedByOperationId !== undefined &&
+      grant.role === request.role &&
+      grant.stage === request.stage &&
+      grant.operation === request.operation &&
       grant.runId === request.runId &&
       grant.toolOperationId === request.toolOperationId &&
       grant.inputHash === request.inputHash

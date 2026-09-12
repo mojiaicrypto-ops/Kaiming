@@ -60,7 +60,7 @@ const HASH_OTHER = 'b'.repeat(64);
 const SCOPE: Scope = {
   readPaths: [TARGET, 'packages/core/src/store.ts'],
   writePaths: [TARGET, 'packages/core/src/store.ts'],
-  operations: ['read', 'edit', 'write'],
+  operations: ['read', 'edit', 'write', 'secret'],
   networkTargets: [],
 };
 
@@ -345,6 +345,23 @@ describe('GrantStore (AC-049, AC-080)', () => {
       ...overrides,
     };
     return grants.consumeOnce(request, options);
+  }
+
+  /**
+   * Opens a second `ProjectStore` on the same state directory.
+   *
+   * It stands in for another process: separate handle, separate in-memory state,
+   * same durable data directory. The caller's `store` is reopened **after** the
+   * original is closed, so the file is not opened twice by the same test.
+   */
+  function reopened(): ProjectStore {
+    store.close();
+    store = Store.open({
+      dataDir,
+      canonicalRoot: ROOT,
+      migrations: { backup: () => undefined, backupPath: join(dataDir, 'pre.sqlite') },
+    });
+    return store;
   }
 
   function force(decision: GrantIssueOutcome): asserts decision is { ok: true; grant: Grant } {
@@ -949,6 +966,66 @@ describe('GrantStore (AC-049, AC-080)', () => {
       expect(store.events.latestCursor()).toBe(eventsBefore);
     });
 
+    it('does not let a consumed once grant cover a different operation/role/stage (W7R1-06)', () => {
+      force(issueOnce({ operation: 'secret' }));
+      const consumed = consume(
+        {
+          operation: 'secret',
+          toolName: 'secret',
+          executor: () => 'secret-result',
+        },
+        { results },
+      );
+      expect(consumed.outcome).toBe('executed');
+      if (consumed.outcome !== 'executed') throw new Error('unreachable');
+
+      // The same binding replays...
+      expect(
+        grants.checkCoverage({
+          workId: WORK_ID,
+          operation: 'secret',
+          role: 'backend',
+          stage: 'develop-L2',
+          targets: [TARGET],
+          at: nextTime(),
+          runId: RUN_A,
+          toolOperationId: operationId(1),
+          inputHash: HASH,
+        }),
+      ).toBe(true);
+
+      // ...but another operation, role or stage it never authorized does not. Before
+      // the fix `matchingGrants` filtered by work only and the replay branch ignored
+      // the triple, so every one of these answered `true`.
+      for (const query of [
+        {
+          workId: WORK_ID,
+          operation: 'read',
+          role: 'backend' as const,
+          stage: 'develop-L2',
+          targets: [TARGET],
+          at: nextTime(),
+          runId: RUN_A,
+          toolOperationId: operationId(1),
+          inputHash: HASH,
+        },
+        {
+          workId: WORK_ID,
+          operation: 'secret',
+          role: 'review' as const,
+          stage: 'review',
+          targets: [TARGET],
+          at: nextTime(),
+          runId: RUN_A,
+          toolOperationId: operationId(1),
+          inputHash: HASH,
+        },
+      ]) {
+        expect(grants.checkCoverage(query), `${query.operation}/${query.role}`).toBe(false);
+        expect(grants.findGrantFor(query)).toBeUndefined();
+      }
+    });
+
     it('surfaces the tool operation a grant was consumed by', () => {
       force(issueOnce());
       const outcome = consume({}, { results });
@@ -1064,6 +1141,82 @@ describe('GrantStore (AC-049, AC-080)', () => {
       if (replay.outcome !== 'replayed') throw new Error('unreachable');
       expect(replay.result).toBe('only-result');
       expect(executions).toBe(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Durable results (W7R1-10)
+  // ---------------------------------------------------------------------------
+
+  describe('durable deferred results (W7R1-10)', () => {
+    it('replays the recorded result from a second store, rather than RECOVERY_REQUIRED', () => {
+      force(issueOnce());
+      const op = operationId(1);
+      const first = consume({
+        toolOperationId: op,
+        executor: () => ({ tool: 'edit', ok: true }),
+      });
+      expect(first.outcome).toBe('executed');
+      if (first.outcome !== 'executed') throw new Error('unreachable');
+
+      // W7R1-10: the default sink is the blob-backed store, so an independently
+      // opened GrantStore on the same project state resolves the same result.
+      const other = new GrantStore({ store: reopened() });
+      const replayed = other.consumeOnce({
+        workId: WORK_ID,
+        role: 'backend',
+        stage: 'develop-L2',
+        operation: 'edit',
+        targets: [TARGET],
+        at: nextTime(),
+        runId: RUN_A,
+        toolName: 'edit',
+        toolOperationId: op,
+        inputHash: HASH,
+        argsRef: uuid(0x901),
+        attemptId: ATTEMPT_A,
+        epoch: 1,
+        executor: () => {
+          throw new Error('the replayed operation must not execute again');
+        },
+      });
+      expect(replayed.outcome).toBe('replayed');
+      if (replayed.outcome !== 'replayed') throw new Error('unreachable');
+      expect(replayed.result).toEqual({ tool: 'edit', ok: true });
+      // The blob the reference points at is persisted under the project state dir.
+      expect(store.blobs.has(`deferred-results/index.json`)).toBe(true);
+    });
+
+    it('reports RECOVERY_REQUIRED only for a sink that cannot resolve the reference', () => {
+      force(issueOnce());
+      const op = operationId(1);
+      const first = consume({ toolOperationId: op }, { results });
+      expect(first.outcome).toBe('executed');
+
+      // A process-local sink that never saw the execution is exactly the state
+      // W7R1-10 removed from the default: the caller must opt into it explicitly.
+      const isolated = new GrantStore({
+        store: reopened(),
+        results: new InMemoryDeferredResultStore(),
+      });
+      expect(() =>
+        isolated.consumeOnce({
+          workId: WORK_ID,
+          role: 'backend',
+          stage: 'develop-L2',
+          operation: 'edit',
+          targets: [TARGET],
+          at: nextTime(),
+          runId: RUN_A,
+          toolName: 'edit',
+          toolOperationId: op,
+          inputHash: HASH,
+          argsRef: uuid(0x902),
+          attemptId: ATTEMPT_A,
+          epoch: 1,
+          executor: () => 'never',
+        }),
+      ).toThrowError(/cannot resolve/);
     });
   });
 });

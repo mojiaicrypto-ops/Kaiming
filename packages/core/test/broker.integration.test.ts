@@ -12,11 +12,22 @@
  * required failure test never depends on this host's daemon.
  */
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Scope } from '@agentdev/contracts';
 import { ProjectStore as Store, projectIdFromRoot, type ProjectStore } from '@agentdev/storage';
@@ -37,6 +48,7 @@ import {
 const WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d6e00';
 const RUN_A = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d6e10';
 const ATTEMPT_A = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d6e50';
+const ATTEMPT_B = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d6e51';
 const TASK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d6e40';
 const DECISION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d6e30';
 const REVISION = 'c'.repeat(40);
@@ -52,6 +64,7 @@ const SCOPE: Scope = {
 
 interface Harness {
   readonly workspace: string;
+  readonly dataDir: string;
   readonly store: ProjectStore;
   readonly grants: GrantStore;
   readonly broker: Broker;
@@ -160,9 +173,13 @@ function makeHarness(): Harness {
     effectRefs: [],
   });
   const grants = new GrantStore({ store });
-  const broker = new Broker({ store, grants });
+  // `allowInsecureHttp` is the explicit opt-in W7R1-07 requires for the plaintext
+  // loopback test endpoint this suite starts; the target still has to be
+  // authorized per call, so no other host gains a plaintext path.
+  const broker = new Broker({ store, grants, allowInsecureHttp: true });
   return {
     workspace,
+    dataDir,
     store,
     grants,
     broker,
@@ -204,6 +221,44 @@ function invocation(harness: Harness, overrides: Partial<ToolInvocation> = {}): 
     roots: [harness.workspace],
     ...overrides,
   };
+}
+
+/**
+ * The built entry point of a workspace package, for a real child process.
+ *
+ * `vitest` aliases `@agentdev/*` to sources for the test process, but a spawned
+ * `node` has no such alias, so the cross-process case imports the compiled
+ * package. When the build is missing or stale, `pnpm build` is run once first, so
+ * the case tests the code under review instead of an older build.
+ */
+function builtEntry(name: 'core' | 'storage'): string {
+  const root = process.cwd();
+  const entry = join(root, 'packages', name, 'dist', 'index.js');
+  // The whole source directory counts: a change to `grants.ts` does not touch
+  // `index.ts`, so comparing only the entry file would test a stale build.
+  const sourceRoot = join(root, 'packages', name, 'src');
+  const sources: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.name.endsWith('.ts')) sources.push(path);
+    }
+  };
+  walk(sourceRoot);
+  const newestSource = Math.max(...sources.map((file) => statSync(file).mtimeMs));
+  const stale = !existsSync(entry) || statSync(entry).mtimeMs < newestSource;
+  if (stale) {
+    const built = spawnSync('pnpm', ['build'], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 300_000,
+    });
+    if (built.status !== 0 || !existsSync(entry)) {
+      throw new Error(`pnpm build is required for the cross-process case: ${built.stderr}`);
+    }
+  }
+  return pathToFileURL(entry).href;
 }
 
 function dockerStatus(): { readonly ready: boolean; readonly reason: string } {
@@ -316,7 +371,7 @@ describe('Broker integration (AC-048, AC-050)', () => {
     const manager = new TestEnvironmentManager({ prefix: 'agentdev-broker-int-env-' });
     const script =
       "const http=require('http');const s=http.createServer((q,r)=>{r.end('env-ok')});s.listen(Number(process.env.PORT),'127.0.0.1');";
-    const created = manager.create({
+    const created = await manager.create({
       workId: WORK_ID,
       attemptId: ATTEMPT_A,
       command: [process.execPath, '-e', script],
@@ -358,6 +413,78 @@ describe('Broker integration (AC-048, AC-050)', () => {
     expect(await portOpen(running.host, running.port)).toBe(false);
   });
 
+  it('never hands the same port to a second manager, and skips an occupied one (W7R1-05)', async () => {
+    const script =
+      "const http=require('http');const s=http.createServer((q,r)=>{r.end('env-ok')});s.listen(Number(process.env.PORT),'127.0.0.1');";
+    const first = new TestEnvironmentManager({ prefix: 'agentdev-broker-int-port-a-' });
+    const second = new TestEnvironmentManager({ prefix: 'agentdev-broker-int-port-b-' });
+    const range = { min: 4720, max: 4729 };
+    const createdA = await first.create({
+      workId: WORK_ID,
+      attemptId: ATTEMPT_A,
+      command: [process.execPath, '-e', script],
+      portRange: range,
+    });
+    const createdB = await second.create({
+      workId: WORK_ID,
+      attemptId: ATTEMPT_B,
+      command: [process.execPath, '-e', script],
+      portRange: range,
+    });
+    expect(createdA.ok && createdB.ok).toBe(true);
+    if (!createdA.ok || !createdB.ok) throw new Error('unreachable');
+    expect(createdA.environment.port).not.toBe(createdB.environment.port);
+
+    const startedA = await first.start(createdA.environment);
+    const startedB = await second.start(createdB.environment);
+    expect(startedA.ok && startedB.ok).toBe(true);
+    if (!startedA.ok || !startedB.ok) {
+      throw new Error(
+        `${startedA.ok ? '' : startedA.reason} ${startedB.ok ? '' : startedB.reason}`,
+      );
+    }
+    try {
+      // Each environment answers on its own port; neither sees the other's socket.
+      const [bodyA, bodyB] = await Promise.all([
+        fetch(`http://127.0.0.1:${String(startedA.environment.port)}/`).then((r) => r.text()),
+        fetch(`http://127.0.0.1:${String(startedB.environment.port)}/`).then((r) => r.text()),
+      ]);
+      expect(bodyA).toBe('env-ok');
+      expect(bodyB).toBe('env-ok');
+    } finally {
+      await first.cleanup(startedA.environment);
+      await second.cleanup(startedB.environment);
+    }
+
+    // An OS-occupied port is skipped rather than handed out.
+    const occupied = createServer();
+    await new Promise<void>((settle) => {
+      occupied.listen(0, '127.0.0.1', () => {
+        settle();
+      });
+    });
+    const occupiedPort = (occupied.address() as AddressInfo).port;
+    try {
+      const third = new TestEnvironmentManager({ prefix: 'agentdev-broker-int-port-c-' });
+      const created = await third.create({
+        workId: WORK_ID,
+        attemptId: ATTEMPT_A,
+        command: [process.execPath, '-e', 'process.exit(0)'],
+        portRange: { min: occupiedPort, max: occupiedPort + 1 },
+      });
+      expect(created.ok).toBe(true);
+      if (!created.ok) throw new Error('unreachable');
+      expect(created.environment.port).toBe(occupiedPort + 1);
+      await third.cleanup(created.environment);
+    } finally {
+      await new Promise<void>((settle) => {
+        occupied.close(() => {
+          settle();
+        });
+      });
+    }
+  });
+
   it.skipIf(!DOCKER.ready)(
     'runs a container read through Docker and reports the real non-root account',
     () => {
@@ -380,6 +507,96 @@ describe('Broker integration (AC-048, AC-050)', () => {
       expect((identity.result as ProcessResult).stdout.trim()).toBe('10001');
     },
   );
+
+  it('replays a once result in a separate OS process through the durable store (W7R1-10)', () => {
+    const operationId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d6e70';
+    const input = { path: A };
+    issue(harness, {
+      scope: 'once',
+      operation: 'read',
+      targets: [A],
+      toolOperationId: operationId,
+      inputHash: hashToolInput(input),
+    });
+    let executions = 0;
+    const first = harness.broker.invoke(
+      invocation(harness, {
+        toolOperationId: operationId,
+        input,
+        run: () => {
+          executions += 1;
+          return { tool: 'read', executions };
+        },
+      }),
+    );
+    expect(first.ok).toBe(true);
+    if (!first.ok) throw new Error(first.reason);
+    expect(executions).toBe(1);
+
+    const dataDir = harness.dataDir;
+    const workspace = harness.workspace;
+    const script = `
+      import { GrantStore } from '${builtEntry('core')}';
+      import { ProjectStore } from '${builtEntry('storage')}';
+      const { AGENTDEV_CASE_DATA_DIR: dataDir, AGENTDEV_CASE_WORKSPACE: workspace, AGENTDEV_CASE_OP: operationId } = process.env;
+      const store = ProjectStore.open({
+        dataDir,
+        canonicalRoot: workspace,
+        migrations: { backup: () => undefined, backupPath: dataDir + '/pre.sqlite' },
+      });
+      try {
+        const grants = new GrantStore({ store });
+        let executed = 0;
+        const outcome = grants.consumeOnce({
+          workId: ${JSON.stringify(WORK_ID)},
+          role: 'backend',
+          stage: 'develop-L2',
+          operation: 'read',
+          targets: [${JSON.stringify(A)}],
+          at: new Date(Date.now() + 60_000).toISOString(),
+          runId: ${JSON.stringify(RUN_A)},
+          toolName: 'read',
+          toolOperationId: operationId,
+          inputHash: ${JSON.stringify(hashToolInput(input))},
+          argsRef: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d6e71',
+          attemptId: ${JSON.stringify(ATTEMPT_A)},
+          epoch: 1,
+          executor: () => {
+            executed += 1;
+            return { tool: 'read', executions: 999 };
+          },
+        });
+        process.stdout.write(
+          JSON.stringify({ outcome: outcome.outcome, executed, result: outcome.result, dbg: [store.projectId, store.dataDir, store.db.prepare('SELECT COUNT(*) AS n FROM grant').get(), process.argv.slice(2)] }),
+        );
+      } finally {
+        store.close();
+      }
+    `;
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      encoding: 'utf8',
+      cwd: process.cwd(),
+      timeout: 60_000,
+      env: {
+        ...process.env,
+        AGENTDEV_CASE_DATA_DIR: dataDir,
+        AGENTDEV_CASE_WORKSPACE: workspace,
+        AGENTDEV_CASE_OP: operationId,
+      },
+    });
+    expect(child.status, child.stderr).toBe(0);
+    const reported = JSON.parse(child.stdout.trim()) as {
+      readonly outcome: string;
+      readonly executed: number;
+      readonly result: unknown;
+    };
+    // A different OS process replays the recorded result instead of executing.
+    expect(reported.outcome, JSON.stringify(reported)).toBe('replayed');
+    expect(reported.executed).toBe(0);
+    expect(reported.result).toEqual({ tool: 'read', executions: 1 });
+    expect(executions).toBe(1);
+    expect(harness.store.toolOperations.count()).toBe(1);
+  });
 
   it('keeps the once result replayable across a real execution (AC-080)', () => {
     const operationId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d6e70';

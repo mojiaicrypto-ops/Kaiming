@@ -24,7 +24,7 @@
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { createConnection } from 'node:net';
+import { createConnection, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { uuidv7 } from '@agentdev/storage';
@@ -88,6 +88,16 @@ export interface TestEnvironmentPorts {
     command: readonly string[],
     options: SpawnOptions & { readonly timeoutMs: number },
   ): ProcessResult;
+  /**
+   * Whether the OS can bind this port right now.
+   *
+   * `create` must not hand out a port something else already listens on (W7R1-05:
+   * the failing probe showed an occupied port reported as a ready environment).
+   * The check binds and immediately releases, so it is an observation of the OS,
+   * not a reservation — and it is asynchronous because an occupied port is
+   * reported by an event, not a thrown error.
+   */
+  portAvailable(port: number): Promise<boolean>;
 }
 
 function toResult(result: {
@@ -106,6 +116,60 @@ function toResult(result: {
         signal: result.signal,
         error: result.error.message,
       };
+}
+
+/**
+ * Whether the OS currently allows binding `host:port`.
+ *
+ * A successful bind is released immediately; `EADDRINUSE` (and any other bind
+ * failure) means the port is not the manager's to hand out.
+ *
+ * The probe emits a `port` event on success and an `error` event on failure, and
+ * `listen` is therefore wrapped in a promise: an occupied port is reported
+ * asynchronously by libuv, so a bare `try { listen() }` would claim every port is
+ * free and hand out somebody else's socket (W7R1-05).
+ */
+export function portBindable(port: number, host = '127.0.0.1'): Promise<boolean> {
+  return new Promise((settle) => {
+    const server = createServer();
+    const done = (bindable: boolean): void => {
+      server.removeAllListeners();
+      if (bindable) {
+        server.close();
+        settle(true);
+        return;
+      }
+      try {
+        server.close();
+      } catch {
+        // Nothing was listening, so there is nothing to release.
+      }
+      settle(false);
+    };
+    server.once('error', () => {
+      done(false);
+    });
+    server.once('listening', () => {
+      done(true);
+    });
+    server.listen({ port, host, exclusive: true });
+    server.unref();
+  });
+}
+
+/**
+ * Ports handed out by every manager in this process.
+ *
+ * Two `TestEnvironmentManager` instances must never receive the same port
+ * (W7R1-05): each manager only sees its own `usedPorts`, so the registry is the
+ * cross-manager claim. An OS bind check alone cannot catch two managers that both
+ * probe a free port before either child binds it.
+ */
+const claimedPorts = new Set<number>();
+
+/** The ports currently claimed by any manager in this process (diagnostics/tests). */
+export function claimedTestPorts(): readonly number[] {
+  return [...claimedPorts];
 }
 
 /** The default ports: real temp dirs, real process groups, real SQLite file. */
@@ -182,6 +246,7 @@ export const defaultTestEnvironmentPorts: TestEnvironmentPorts = {
       ...(result.error === undefined ? {} : { error: result.error }),
     });
   },
+  portAvailable: (port) => portBindable(port, '127.0.0.1'),
 };
 
 export interface TestEnvironmentRequest {
@@ -281,15 +346,16 @@ export class TestEnvironmentManager {
   /**
    * Creates the environment's directory, database file and port.
    *
-   * The port is taken from `portRange` and skips both the reserved development
-   * port and every port this manager already holds; the database file lives
-   * inside the new temporary directory, so it cannot be the development
-   * database. Exhaustion is a refusal, not a reuse.
+   * The port is taken from `portRange`, skips the reserved development port, every
+   * port this manager already holds and every port a sibling manager holds, and is
+   * probed against the OS before it is promised (W7R1-05). The database file lives
+   * inside the new temporary directory, so it cannot be the development database.
+   * Exhaustion is a refusal, not a reuse.
    */
-  create(request: TestEnvironmentRequest): CreateOutcome {
+  async create(request: TestEnvironmentRequest): Promise<CreateOutcome> {
     const range = request.portRange ?? DEFAULT_TEST_PORT_RANGE;
     const reservedPort = request.reserved?.port;
-    const port = this.allocatePort(range.min, range.max, reservedPort);
+    const port = await this.allocatePort(range.min, range.max, reservedPort);
     if (port === undefined) {
       return {
         ok: false,
@@ -301,7 +367,7 @@ export class TestEnvironmentManager {
     const dbPath = join(dir, 'test.sqlite');
     const reservedDb = request.reserved?.dbPath;
     if (reservedDb !== undefined && resolve(reservedDb) === resolve(dbPath)) {
-      this.usedPorts.delete(port);
+      this.releasePort(port);
       this.ports.removeDir(dir);
       return {
         ok: false,
@@ -477,6 +543,7 @@ export class TestEnvironmentManager {
       failures.push(`removing ${current.dir} failed: ${messageOf(error)}`);
     }
     this.usedPorts.delete(current.port);
+    claimedPorts.delete(current.port);
     if (failures.length > 0) {
       const failed = this.replace(current.id, { state: 'cleanup_failed' });
       return {
@@ -504,11 +571,25 @@ export class TestEnvironmentManager {
   // Internals
   // -------------------------------------------------------------------------
 
-  private allocatePort(min: number, max: number, reserved: number | undefined): number | undefined {
+  /**
+   * The first port in the window the OS can actually bind and no manager holds.
+   *
+   * Two independent conditions, because each covers a hole the other has: the OS
+   * bind probe skips an external listener (the review's occupied-port probe), and
+   * the process-wide claim set stops a second manager from handing out a port a
+   * sibling has already promised but whose child has not bound yet (W7R1-05).
+   */
+  private async allocatePort(
+    min: number,
+    max: number,
+    reserved: number | undefined,
+  ): Promise<number | undefined> {
     for (let port = min; port <= max; port += 1) {
       if (port === reserved) continue;
-      if (this.usedPorts.has(port)) continue;
+      if (this.usedPorts.has(port) || claimedPorts.has(port)) continue;
+      if (!(await this.ports.portAvailable(port))) continue;
       this.usedPorts.add(port);
+      claimedPorts.add(port);
       return port;
     }
     return undefined;
@@ -541,6 +622,24 @@ export class TestEnvironmentManager {
     }
   }
 
+  /** Releases this manager's and the process-wide claim on a port. */
+  private releasePort(port: number): void {
+    this.usedPorts.delete(port);
+    claimedPorts.delete(port);
+  }
+
+  /**
+   * Waits until this environment's own command is ready, and never reports
+   * another process's listener as its own.
+   *
+   * Readiness is accepted only when the port answers **and** the spawned command
+   * is still alive, re-checked after a short settle window so a child that dies
+   * immediately after binding the port is reported as failed rather than running
+   * (W7R1-05). Because `create` already refused an occupied port and this manager
+   * owns the port claim, an answer on this port belongs to this environment —
+   * whereas the failing probe's "port open, child dead" case is refused here with
+   * the child's own exit evidence.
+   */
   private async waitForPort(
     handle: ProcessHandle,
     environment: TestEnvironment,
@@ -550,14 +649,23 @@ export class TestEnvironmentManager {
     | { readonly ok: false; readonly code: BrokerErrorCode; readonly reason: string }
   > {
     const deadline = Date.now() + timeoutMs;
+    const dead = (): {
+      readonly ok: false;
+      readonly code: BrokerErrorCode;
+      readonly reason: string;
+    } => ({
+      ok: false,
+      code: 'INVALID_STATE',
+      reason: `test environment ${environment.id} exited with code ${String(handle.exitCode())} before it owned ${environment.host}:${String(environment.port)}: ${handle.stderr().trim()}`,
+    });
     while (Date.now() < deadline) {
-      if (await portOpen(environment.host, environment.port)) return { ok: true };
-      if (handle.exited()) {
-        return {
-          ok: false,
-          code: 'INVALID_STATE',
-          reason: `test environment ${environment.id} exited with code ${String(handle.exitCode())} before listening: ${handle.stderr().trim()}`,
-        };
+      if (handle.exited()) return dead();
+      if (await portOpen(environment.host, environment.port)) {
+        // The port answered. Confirm ownership: the command must still be alive,
+        // and must stay alive across a settle window before readiness is claimed.
+        await delay(50);
+        if (handle.exited()) return dead();
+        return { ok: true };
       }
       await delay(50);
     }
