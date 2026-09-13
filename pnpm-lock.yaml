@@ -167,6 +167,24 @@ importers:
         specifier: 4.5.4
         version: 4.5.4
 
+  apps/web:
+    dependencies:
+      '@agentdev/client':
+        specifier: workspace:*
+        version: link:../../packages/client
+      '@agentdev/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@agentdev/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+
+  packages/client:
+    dependencies:
+      '@agentdev/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+
   packages/contracts:
     dependencies:
       zod:

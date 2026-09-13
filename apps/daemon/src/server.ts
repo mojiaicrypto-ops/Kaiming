@@ -22,6 +22,12 @@ import {
   type AuthService,
   type DownloadTokenStore,
 } from '@agentdev/core';
+import {
+  HttpFailure,
+  statusForCode,
+  type WorkbenchAuthPort,
+  type WorkbenchProtocol,
+} from './protocol.js';
 
 export interface DaemonOptions {
   readonly projectId: string;
@@ -36,6 +42,14 @@ export interface DaemonOptions {
   /** Role whose artifacts the daemon serves; ACL checks use it. */
   readonly role?: Role;
   readonly now?: () => number;
+  /**
+   * The workbench protocol surface (`/rpc` and `/ws`).
+   *
+   * Built by the daemon bootstrap from the Project's real Core services; absent
+   * means the daemon serves only the WP-03 routes, which keeps the artifact tests
+   * independent of the wider capability set.
+   */
+  readonly workbench?: WorkbenchProtocol;
 }
 
 interface Authed {
@@ -73,6 +87,28 @@ class HttpError extends Error {
 export function createDaemon(options: DaemonOptions): Server {
   const role = options.role ?? 'chief';
   const now = options.now ?? (() => Date.now());
+  const workbench = options.workbench;
+
+  /** The auth seam the protocol layer uses; sessions stay owned by this module. */
+  const authPort: WorkbenchAuthPort = {
+    authenticate: (input) => {
+      const decision = options.auth.authenticate(input);
+      return decision.ok
+        ? {
+            ok: true,
+            userId: userIdFromSubject(`user:${decision.session.id}`),
+            subject: `user:${decision.session.id}`,
+          }
+        : {
+            ok: false,
+            status: decision.status,
+            code: decision.code,
+            message: decision.message,
+          };
+    },
+    cookieOf: (request) => cookieOf(request),
+    bearerOk: (header) => options.auth.authenticateBearer(header).ok,
+  };
 
   const server = createServer((request, response) => {
     void handle(request, response).catch((error: unknown) => {
@@ -80,6 +116,14 @@ export function createDaemon(options: DaemonOptions): Server {
     });
   });
   server.on('clientError', (_error, socket) => socket.destroy());
+  if (workbench !== undefined) {
+    // The upgrade listener is registered once; `handleUpgrade` owns everything
+    // after the socket is accepted, including the handshake and the hello frame.
+    server.on('upgrade', (request, socket) => {
+      workbench.handleUpgrade(request, socket, authPort);
+    });
+    server.on('close', () => workbench.closeAll());
+  }
 
   async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
@@ -88,6 +132,59 @@ export function createDaemon(options: DaemonOptions): Server {
 
     if (path === '/healthz' && method === 'GET') {
       json(response, 200, { version: options.version, ready: true });
+      return;
+    }
+
+    if (path === '/rpc' && method === 'POST') {
+      if (workbench === undefined) {
+        throw new HttpError(404, 'NOT_FOUND', 'this daemon does not serve the workbench protocol');
+      }
+      const body = await readBody(request);
+      try {
+        json(response, 200, workbench.handleRpc(body.toString('utf8'), authPort, request));
+      } catch (error) {
+        // The protocol error table is the wire contract, so `/rpc` answers the
+        // status its code implies while the legacy routes keep their own mapping.
+        if (error instanceof ProtocolError) {
+          json(response, statusForCode(error.code), {
+            ok: false,
+            error: error.toBody(),
+          });
+          return;
+        }
+        throw error;
+      }
+      return;
+    }
+
+    if (path === '/auth/login' && method === 'POST') {
+      const payload = await readJson(request);
+      const token = stringField(payload, 'token');
+      const result = options.auth.login({
+        token,
+        ip: request.socket.remoteAddress ?? '127.0.0.1',
+        ...(typeof request.headers.origin === 'string' ? { origin: request.headers.origin } : {}),
+      });
+      if (!result.ok) {
+        if (result.status === 429) {
+          response.setHeader('retry-after', String(result.retryAfterSec));
+          throw new HttpError(429, 'BUSY', 'too many login attempts; retry later');
+        }
+        throw new HttpError(401, 'UNAUTHENTICATED', result.message);
+      }
+      json(
+        response,
+        200,
+        { csrfToken: result.csrfToken, expiresAt: new Date(result.expiresAt).toISOString() },
+        { 'set-cookie': result.cookie },
+      );
+      return;
+    }
+
+    if (path === '/auth/logout' && method === 'POST') {
+      const cookie = cookieOf(request);
+      if (cookie !== undefined) options.auth.logout(cookie);
+      json(response, 200, { status: 'applied', loggedOut: true });
       return;
     }
 
@@ -350,22 +447,47 @@ export function createDaemon(options: DaemonOptions): Server {
       response.end();
       return;
     }
-    if (error instanceof ProtocolError) {
-      const status =
-        error.code === 'NOT_FOUND'
-          ? 404
-          : error.code === 'NOT_AUTHORIZED' || error.code === 'ATTACHMENT_ALREADY_BOUND'
-            ? 403
-            : error.code === 'INTERNAL_ERROR'
-              ? 500
-              : 400;
-      json(response, status, {
+    if (error instanceof HttpFailure) {
+      // The workbench protocol already chose the status its code implies.
+      json(response, error.status, {
         ok: false,
-        error: { code: error.code, message: error.message, retryable: error.retryable },
+        error: { code: error.code, message: error.message, retryable: false, ...error.details },
+      });
+      return;
+    }
+    if (error instanceof ProtocolError) {
+      // The legacy WP-03 routes keep the status `createDaemon` answered with before
+      // the protocol module existed; the workbench routes choose their own status
+      // where the error table implies one (`/rpc` catches and rewrites it).
+      json(response, legacyStatusOf(error.code), {
+        ok: false,
+        error:
+          error.details === undefined
+            ? { code: error.code, message: error.message, retryable: error.retryable }
+            : {
+                code: error.code,
+                message: error.message,
+                retryable: error.retryable,
+                details: error.details,
+              },
       });
       return;
     }
     if (error instanceof StorageError) {
+      // A version conflict is the caller's to resolve by re-reading; anything else
+      // (busy, constraint, blob mismatch) stays a server-side failure.
+      if (error.code === 'VERSION_CONFLICT') {
+        json(response, 409, {
+          ok: false,
+          error: {
+            code: 'VERSION_CONFLICT',
+            message: error.message,
+            retryable: false,
+            details: error.details,
+          },
+        });
+        return;
+      }
       // Only a reference to a missing record is the caller's fault; anything else
       // (busy, conflict, blob mismatch) stays a server-side failure.
       const missing = error.code === 'NOT_FOUND' || /FOREIGN KEY/u.test(error.message);
@@ -462,12 +584,31 @@ function segment(path: string, index: number): string {
   return decodeURIComponent(value);
 }
 
-function json(response: ServerResponse, status: number, body: unknown): void {
+/**
+ * The HTTP status the pre-protocol WP-03 routes answered with.
+ *
+ * Kept separate from `statusForCode` so the workbench's explicit mapping and an
+ * existing artifact client's mapping cannot silently change each other.
+ */
+function legacyStatusOf(code: string): number {
+  if (code === 'NOT_FOUND') return 404;
+  if (code === 'NOT_AUTHORIZED' || code === 'ATTACHMENT_ALREADY_BOUND') return 403;
+  if (code === 'INTERNAL_ERROR') return 500;
+  return 400;
+}
+
+function json(
+  response: ServerResponse,
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+): void {
   const payload = JSON.stringify(body);
   response.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'content-length': String(Buffer.byteLength(payload, 'utf8')),
     'cache-control': 'no-store',
+    ...headers,
   });
   response.end(payload);
 }

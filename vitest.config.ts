@@ -18,6 +18,8 @@ export default defineConfig({
       '@agentdev/knowledge': fromRoot('packages/knowledge/src/index.ts'),
       '@agentdev/workspace': fromRoot('packages/workspace/src/index.ts'),
       '@agentdev/core': fromRoot('packages/core/src/index.ts'),
+      '@agentdev/client': fromRoot('packages/client/src/index.ts'),
+      '@agentdev/web': fromRoot('apps/web/src/index.ts'),
     },
   },
   test: {

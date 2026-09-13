@@ -1,0 +1,138 @@
+/**
+ * `@agentdev/web` — the browser-facing workbench (WP-09 T3).
+ *
+ * The BFF owns the browser session, the Origin check, the `/rpc` and `/ws` proxies
+ * and the nine server-rendered pages; `docs/architecture/ARCHITECTURE.md` §2 and
+ * `docs/architecture/protocol.md` §2 fix that split, and `docs/product/experience.md`
+ * fixes what each page must show. No dependency is added: the pages, the stylesheet
+ * and the client script are plain assets served by `createWebApp`.
+ */
+export {
+  createWebApp,
+  defaultPublicDir,
+  pageOf,
+  planCard,
+  type WebApp,
+  type WebAppOptions,
+} from './app.js';
+export {
+  BrowserSocket,
+  acceptKey,
+  daemonLogin,
+  daemonLogout,
+  daemonRead,
+  decodeFrame,
+  encodeFrame,
+  forwardRpc,
+  handleUpgrade,
+  wsUrlOf,
+  type BridgeDependencies,
+  type DaemonTarget,
+  type DecodedFrame,
+  type RpcAnswer,
+} from './daemon.js';
+export {
+  FILE_LIMITS,
+  FileBoundaryError,
+  NodeFilePort,
+  isTextMime,
+  mimeOf,
+  relativeToRoot,
+  resolveInsideRoot,
+  sha256Of,
+  type FileContent,
+  type FileEntry,
+  type FileListing,
+  type FilePort,
+} from './files.js';
+export { attrs, escapeHtml, jsonIsland, renderDocument } from './html.js';
+export {
+  DEFAULT_LANGUAGE,
+  LANGUAGES,
+  LOCALE_TAG,
+  UI_STRINGS,
+  isLanguage,
+  normaliseLanguage,
+  translate,
+  translationKeys,
+  translator,
+  type InterfaceString,
+  type Language,
+  type Translator,
+} from './i18n.js';
+export {
+  renderAgentsPage,
+  renderBoardPage,
+  renderChiefPage,
+  renderDocsPage,
+  renderFilesPage,
+  renderInboxPage,
+  renderProjectsPage,
+  renderRequirementPage,
+  renderRunsPage,
+  renderSettingsPage,
+  section,
+} from './pages.js';
+export {
+  DEFAULT_PANEL_MODE,
+  PANEL_MODES,
+  isPanelMode,
+  nextPanelMode,
+  panelModeAriaKey,
+  panelModeLabelKey,
+  renderShell,
+  type PageKey,
+  type PanelMode,
+  type ShellState,
+} from './shell.js';
+export {
+  WEB_SESSION_COOKIE,
+  WebSessionStore,
+  authenticateDaemon,
+  cookieValue,
+  originAllowed,
+  parseCookies,
+  sessionClearCookie,
+  sessionSetCookie,
+  type WebSession,
+  type WebSessionOptions,
+} from './sessions.js';
+export {
+  ATTACHMENT_LIMITS,
+  BOARD_COLUMNS,
+  agentsModel,
+  artifactViewOf,
+  boardCardOf,
+  boardModel,
+  chiefModel,
+  filesModel,
+  inboxModel,
+  isSuccessfulRun,
+  liveEventOf,
+  requirementDetail,
+  runDetail,
+  runsModel,
+  settingsModel,
+  validateAttachments,
+  workRowOf,
+  type AgentsModel,
+  type ArtifactView,
+  type AttachmentRejection,
+  type BoardCard,
+  type BoardModel,
+  type ChiefModel,
+  type ConversationMessage,
+  type FileEntry as FileTreeEntry,
+  type FilesModel,
+  type InboxModel,
+  type InboxRow,
+  type LiveEvent,
+  type LiveModel,
+  type PlanView,
+  type RequirementDetail,
+  type RunDetail,
+  type RunSummary,
+  type RunsModel,
+  type SettingsModel,
+  type WorkRow,
+} from './views.js';

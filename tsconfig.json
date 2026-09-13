@@ -11,7 +11,9 @@
       "@agentdev/storage": ["./packages/storage/src/index.ts"],
       "@agentdev/knowledge": ["./packages/knowledge/src/index.ts"],
       "@agentdev/workspace": ["./packages/workspace/src/index.ts"],
-      "@agentdev/core": ["./packages/core/src/index.ts"]
+      "@agentdev/core": ["./packages/core/src/index.ts"],
+      "@agentdev/client": ["./packages/client/src/index.ts"],
+      "@agentdev/web": ["./apps/web/src/index.ts"]
     }
   },
   "include": [

@@ -19,6 +19,27 @@ const nodeGlobals = {
   setTimeout: 'readonly',
 };
 
+/** Browser globals for the zero-dependency workbench client script. */
+const browserGlobals = {
+  document: 'readonly',
+  window: 'readonly',
+  fetch: 'readonly',
+  FormData: 'readonly',
+  WebSocket: 'readonly',
+  Blob: 'readonly',
+  localStorage: 'readonly',
+  console: 'readonly',
+  setTimeout: 'readonly',
+  clearTimeout: 'readonly',
+  requestAnimationFrame: 'readonly',
+  Response: 'readonly',
+  Request: 'readonly',
+  Headers: 'readonly',
+  URL: 'readonly',
+  URLSearchParams: 'readonly',
+  Intl: 'readonly',
+};
+
 export default tseslint.config(
   {
     ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**', '**/*.tsbuildinfo', 'webui/**'],
@@ -47,6 +68,14 @@ export default tseslint.config(
     extends: [tseslint.configs.disableTypeChecked],
     languageOptions: {
       globals: nodeGlobals,
+    },
+  },
+  {
+    // The workbench's client script runs in the browser, not in Node.
+    files: ['apps/web/public/**/*.js'],
+    extends: [tseslint.configs.disableTypeChecked],
+    languageOptions: {
+      globals: browserGlobals,
     },
   },
   {
