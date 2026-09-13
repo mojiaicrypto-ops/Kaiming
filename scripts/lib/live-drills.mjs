@@ -494,6 +494,8 @@ export async function runL1Drill({ harness, product }) {
     encoding: 'utf8',
   }).trim();
   ensure(diff.length > 0, 'the L1 candidate carries no diff');
+  // The reviewer judges the frozen bytes, not a description of them.
+  const frozenCopy = gitShow(harness.repo, candidate, COPY_PATH);
   ensure(
     diff.split('\n').length <= 3,
     `the L1 diff touches ${String(diff.split('\n').length)} files`,
@@ -507,6 +509,7 @@ export async function runL1Drill({ harness, product }) {
     purpose: 'review',
     stage: 'L1-Review',
     goal: 'independently check the L1 typo diff',
+    validate: (text) => extractJsonObject(text) !== null,
     messages: [
       {
         role: 'system',
@@ -515,7 +518,13 @@ export async function runL1Drill({ harness, product }) {
       },
       {
         role: 'user',
-        content: `The frozen diff replaces a misspelled user-visible label in ${COPY_PATH}. The numstat is:\n${diff}\nReply with your independent verdict.`,
+        content: [
+          `The frozen candidate ${candidate} is a one-line L1 change to ${COPY_PATH}: a misspelled user-visible label is corrected.`,
+          `Acceptance criterion: the label reads "${TYPO_EXPECTED.trim()}" and no longer contains the misspelling, and nothing else changed.`,
+          `The numstat is:\n${diff}`,
+          `${COPY_PATH} as frozen:\n\`\`\`ts\n${frozenCopy}\`\`\``,
+          'Judge the frozen content above; reply "passed" when it satisfies the criterion.',
+        ].join('\n'),
       },
     ],
   });

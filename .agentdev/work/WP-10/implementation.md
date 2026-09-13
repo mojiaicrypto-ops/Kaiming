@@ -105,6 +105,7 @@ Review 冻结在 `0aff531`，判定 **FAIL**（3×P1 / 6×P2 / 3×P3）。逐条
 1. `scripts/lib/live-transport.mjs` 只读 `message.content`，reasoning 模型（deepseek-flash）在预算被思考耗尽时返回空 `content` + `reasoning_content`，导致 Provider 路径整体失败 → 增加 reasoning 回退（可见内容优先）。
 2. `packages/core/src/model-gateway.ts` 把输出预算硬压到 `min(4096, model.maxOutputTokens)`，长答案被截断、reasoning 模型整段思考后无正文；连通性探针只给 1 token → 改为使用模型配置的 `maxOutputTokens`（探针给 `min(64, …)`），并补两条单元测试（`packages/core/test/model-gateway.test.ts`）。
 3. L2 演练的任务描述与实际冻结内容不一致（未给出文件内容与接口签名、审阅者看不到候选内容、探针只调用无参 `cancel()`）→ 种子文件改为带 `Order` 类型与订单表、prompt 明确 `cancel(orderId: string): boolean`、Review/Test prompt 附带真实冻结文件内容、探针校验未付款/已付款/未知三条路径；JSON 抽取改为「逐个候选重试解析」，避免第一个畸形候选直接放弃。
+4. L1 演练的独立 Review 只拿到 numstat 摘要、拿不到冻结后的文件内容，真实的严格 Review 会（正确地）判 `failed`，使整条 Provider 纵向在验收聚合中 FAIL（AC-007 以及因演练中断而缺失的 AC-010/037/041）→ L1 Review prompt 现在附带真实冻结文件内容与明确验收判据，并对不可用回复做同一 Run 的有界重试（`validate` + 最多 3 次）。
 
 真实模型运行记录（不写凭证）：`HTML`、`L1`、`L2+结算` 三路径均通过，11 次 Provider 调用全部 HTTP 200；`live.md` 记录模型 id 与运行事实。
 
