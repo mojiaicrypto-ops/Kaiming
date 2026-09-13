@@ -41,6 +41,8 @@ WP-07（权限、工具和测试环境）已按 L2 实现并完成独立 Review/
 
 WP-08（集成、结算与恢复）已按 L2 实现并完成独立 Review/Test：`packages/workspace` 提供 per-Task worktree 与单写者租约、依赖血缘（`dependencyRevision`/`dependencyManifestRefs`、祖先失效、已合并祖先不重复应用）与 CAS 集成（`update-ref` 带 expected-old、候选后代校验、journal 崩溃恢复、双 Task 冲突产出独立修复 Task 并可 supersede 收敛）；`packages/core` 提供需求即时保存（共享 `integration:<projectId>` 集成锁、按目标 revision 读取需求池、逐条冲突、提交后只补投影、脏回写门禁）、恢复（按真实进程/epoch 判定、Run 级恢复决策绑定、窄范围保持、备份/恢复/迁移含哈希校验与租约授权回收、缺 Secret 阻断）与结算（最终 Manifest、知识补丁只经投影发布、ref 后崩溃复用提交且恰一次完成事件）。4 轮独立 Review（末轮聚焦 PASS）与 3 轮独立 Test（末轮 PASS）在代码树 `7422646` 上通过（unit 48 文件/975 用例、integration 20 文件/233 用例，真实 Git 与 SQLite）；AC-020/021/022/029/041/057/058/061～064/081～083/090/091/093/094 有证据，AC-054（BFF/浏览器断开）承接 WP-09；证据链见 `.agentdev/work/WP-08/`。
 
+WP-09（完整Web工作台）已按 L2 实现并完成独立 Review/Test：新增 `packages/client`（连接状态机与有界退避、幂等键写重放、订阅水位续订与本地越权拒绝）与 `apps/web`（零依赖 BFF：HttpOnly 会话、精确 Origin 写校验、`/rpc` 与 `/ws` 桥、只读文件访问；九面工作台 UI：Chief/看板/详情/Docs·Files/Agents/Settings/Inbox/Runs/Live，含面板三态与窄屏焦点、ARIA/键盘/i18n 且项目内容不翻译、Plan 版本与过期禁用、产物截断与一次性下载、Inbox 去重、Provider 校验保留输入、附件首条消息原子绑定），`apps/daemon` 提供工作台协议面（全部查询与命令、`plan.current`/`conversation.create`、统一写命令幂等账本、真实事件水位 `/ws` 订阅、单一安装用户身份）。3 轮独立 Review（末轮聚焦 PASS）与 2 轮独立 Test（末轮 PASS）在代码树 `e9e237d` 上通过（unit 55 文件/1105 用例、integration 26 文件/311 用例，真实 createDaemon + 真实 BFF + 真实 HTTP/WS）；AC-054、AC-068～078、AC-084、AC-087～090、AC-093 有证据；无头浏览器实机焦点遍历与真实 Provider 纵向承接 WP-10；证据链见 `.agentdev/work/WP-09/`。
+
 真实 Provider 纵向运行、协议接线（daemon/BFF/WS）、交付门禁、权限隔离、工具执行层、知识投影和恢复仍未实现：`pnpm test:e2e`、`pnpm test:acceptance`、`pnpm test:live` 按契约返回 NOT_IMPLEMENTED，后续按[实施工作包](delivery/implementation.md)的依赖顺序继续。
 
 开发从[实施工作包](delivery/implementation.md)开始，按依赖实现共享Schema与底座，再完成各项能力和[验收](delivery/acceptance.md)。规范中的包路径和工程命令是待交付接口，不能假定已经存在。
