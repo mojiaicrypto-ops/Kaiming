@@ -9,10 +9,12 @@
  * aggregate, because the forged file cannot carry the code digest of the tree it is
  * being read against without changing that tree.
  *
- * The digest is content based (`git ls-files` + SHA-256 of the working-tree bytes of
- * every tracked code path), not `HEAD` based, so committing the generated records
- * alone does not invalidate a report while any edit under `packages/`, `apps/` or
- * `scripts/` does.
+ * The digest is content based: the union of tracked and untracked-but-not-ignored code
+ * files under `CODE_PATHS`, hashed from their working-tree bytes. It is deliberately
+ * *not* derived from `HEAD` and not from the index alone, so it stays identical when
+ * records are committed (`git add` does not change it) while any edit under `packages/`,
+ * `apps/` or `scripts/` — including a brand new file that is not committed yet — does
+ * change it.
  *
  * A drill report is only ever consumed from the run that produced it
  * (`scripts/acceptance.mjs` spawns `scripts/e2e.mjs` and `scripts/live.mjs` itself), so
@@ -56,7 +58,18 @@ export function computeBinding(repoRoot) {
   const head = git(repoRoot, ['rev-parse', 'HEAD']);
   const tree = git(repoRoot, ['rev-parse', 'HEAD^{tree}']);
   const status = git(repoRoot, ['status', '--porcelain']);
-  const listed = git(repoRoot, ['ls-files', '-z', '--', ...CODE_PATHS]);
+  // `--cached --others --exclude-standard` is the tracked set plus every new code file
+  // that is not ignored, so staging or committing a change cannot silently keep an old
+  // digest valid.
+  const listed = git(repoRoot, [
+    'ls-files',
+    '-z',
+    '--cached',
+    '--others',
+    '--exclude-standard',
+    '--',
+    ...CODE_PATHS,
+  ]);
   const digest = createHash('sha256');
   const files = (listed ?? '')
     .split('\u0000')

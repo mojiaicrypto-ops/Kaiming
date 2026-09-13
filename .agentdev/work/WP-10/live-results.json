@@ -1,15 +1,15 @@
 {
   "tool": "pnpm test:live",
-  "generatedAt": "2026-09-13T14:51:07.143Z",
+  "generatedAt": "2026-09-13T14:56:13.837Z",
   "repoRoot": "/Users/huyaohua/huyh/work/aigrouptool",
-  "gitHead": "0aff531d6dd8c08e88ba99aea455db1c32f809fb",
+  "gitHead": "5ad533ea02ba7e322b3a9bedea2b269a559b1f39",
   "binding": {
-    "gitHead": "0aff531d6dd8c08e88ba99aea455db1c32f809fb",
-    "gitTree": "103baf68091cbc19dbb1f132d3f3cd2f945fbd9c",
-    "codeDigest": "sha256:255b4fb90330e365770551bbea93b6d407e62c3dea2305c3d59b415087450f1e",
-    "codeFiles": 249,
+    "gitHead": "5ad533ea02ba7e322b3a9bedea2b269a559b1f39",
+    "gitTree": "86ade91771d5e71e5063bf0237f8a3ccdf6e494f",
+    "codeDigest": "sha256:0949e14614c98d17398d1f3c8227d7cd3bc8b16971a3ceb532ebfc77ac545e5f",
+    "codeFiles": 252,
     "dirty": true,
-    "generatedAt": "2026-09-13T14:51:07.142Z",
+    "generatedAt": "2026-09-13T14:56:13.836Z",
     "nodeVersion": "v24.8.0"
   },
   "nonce": null,
