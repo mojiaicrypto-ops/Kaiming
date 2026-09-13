@@ -41,6 +41,16 @@
   };
 
   const shell = document.getElementById('shell');
+  /**
+   * The one bounded reconnect policy in this repository (`packages/client`
+   * `connection.ts` uses the same 1s/2s/4s…30s ladder and a finite attempt count);
+   * the browser script copies it so the UI cannot retry forever (W9R1-10).
+   */
+  const reconnectPolicy = {
+    baseDelayMs: 1000,
+    maxDelayMs: 30000,
+    maxAttempts: 6,
+  };
   const state = {
     language: shell ? shell.dataset.language || 'en' : 'en',
     csrfToken: null,
@@ -49,18 +59,14 @@
     subscription: null,
     socket: null,
     reconnectTimer: null,
+    reconnectAttempt: 0,
     strings: {},
   };
 
-  /** The server's real answer for this page, already escaped when rendered. */
-  function viewData() {
-    const island = document.getElementById('viewData');
-    if (!island) return null;
-    try {
-      return JSON.parse(island.textContent || 'null');
-    } catch {
-      return null;
-    }
+  /** Exponential backoff with the policy's ceiling; never below the base delay. */
+  function reconnectDelay(attempt) {
+    const exponent = Math.max(0, attempt - 1);
+    return Math.min(reconnectPolicy.maxDelayMs, reconnectPolicy.baseDelayMs * 2 ** exponent);
   }
 
   function storage() {
@@ -349,6 +355,8 @@
     state.socket = socket;
     socket.addEventListener('open', () => {
       showConnection('open');
+      // A successful open resets the ladder: the next break starts at 1s again.
+      state.reconnectAttempt = 0;
       const projectId = shell.dataset.project;
       send({
         v: 1,
@@ -416,7 +424,16 @@
       if (state.connection === 'expired') return;
       showConnection('reconnecting');
       if (state.reconnectTimer) window.clearTimeout(state.reconnectTimer);
-      state.reconnectTimer = window.setTimeout(openSocket, 2000);
+      // The same bounded backoff policy the `@agentdev/client` connection uses:
+      // 1s, 2s, 4s … capped at 30s and at a finite number of attempts, so a browser
+      // never spins forever on a fixed 2s timer (`AC-078`, W9R1-10).
+      state.reconnectAttempt += 1;
+      if (state.reconnectAttempt > reconnectPolicy.maxAttempts) {
+        showConnection('closed');
+        return;
+      }
+      const delay = reconnectDelay(state.reconnectAttempt);
+      state.reconnectTimer = window.setTimeout(openSocket, delay);
     });
     socket.addEventListener('error', () => showConnection('reconnecting'));
   }
@@ -497,6 +514,80 @@
     item.dataset.bytes = String(attachment.bytes || 0);
     item.textContent = `${name} · ${state.strings['chief.attachmentStaged'] || 'staged'}`;
     list.append(item);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Chief conversations (AC-072)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Creates a real conversation through `conversation.create` and opens it.
+   *
+   * `experience.md` §1 keeps creation and switching on the Chief page; the control
+   * therefore drives the daemon method that exists instead of being a dead button.
+   */
+  async function createConversation(trigger) {
+    const projectId = shell ? shell.dataset.project : '';
+    if (!projectId) return;
+    const titleElement = document.getElementById('composerBody');
+    const title = titleElement && titleElement.value.trim() !== '' ? titleElement.value.trim() : '';
+    if (trigger) trigger.disabled = true;
+    const answer = await rpc(
+      'conversation.create',
+      { ...(title === '' ? {} : { title: title.slice(0, 120) }) },
+      { idempotencyKey: newIdempotencyKey('conversation'), projectId },
+    );
+    if (trigger) trigger.disabled = false;
+    if (!answer.ok) {
+      showError('conversationError', answer.error);
+      return;
+    }
+    const conversationId =
+      answer.result && typeof answer.result.conversationId === 'string'
+        ? answer.result.conversationId
+        : '';
+    if (conversationId === '') {
+      showError('conversationError', {
+        code: 'INTERNAL_ERROR',
+        message: 'the daemon answered without a conversation id',
+      });
+      return;
+    }
+    showError('conversationError', null);
+    window.location.assign(
+      `/projects/${encodeURIComponent(projectId)}/chief?conversationId=${encodeURIComponent(conversationId)}`,
+    );
+  }
+
+  async function initConversations() {
+    const page = shell ? shell.dataset.page : '';
+    // A conversation control exists only on the Chief page; every other page links
+    // to Chief instead of offering a button that cannot act (`experience.md` §1).
+    if (page !== 'chief') return;
+    for (const id of ['newConversation', 'newConversationInline']) {
+      const button = document.getElementById(id);
+      if (button)
+        button.addEventListener('click', () => bestEffort(() => createConversation(button)));
+    }
+    const select = document.getElementById('conversationSelect');
+    if (select) {
+      select.addEventListener('change', () => {
+        const projectId = shell ? shell.dataset.project : '';
+        if (!projectId || !select.value) return;
+        window.location.assign(
+          `/projects/${encodeURIComponent(projectId)}/chief?conversationId=${encodeURIComponent(select.value)}`,
+        );
+      });
+    }
+    const switchButton = document.getElementById('switchConversation');
+    if (switchButton) {
+      switchButton.addEventListener('click', () => {
+        const expanded = switchButton.getAttribute('aria-expanded') === 'true';
+        switchButton.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+        const target = document.getElementById('conversationSelect');
+        if (target) target.focus();
+      });
+    }
   }
 
   async function initComposer() {
@@ -624,19 +715,62 @@
         showError('approveError', null);
         approve.disabled = true;
         const planVersion = Number(approve.dataset.planVersion || '0');
+        // The Plan body and the local authorization are read from the gate first:
+        // the page cannot invent them, and sending an empty body or a made-up
+        // authorizationRef is exactly what made every approval fail (W9R1-01).
+        const current = await rpc('plan.current', {
+          workId: approve.dataset.work,
+          revision: approve.dataset.planRevision,
+          planVersion,
+        });
+        if (!current.ok) {
+          approve.disabled = false;
+          showError('approveError', current.error);
+          return;
+        }
+        const gate = current.result || {};
+        const approval = gate.approval || {};
+        if (gate.current !== true || approval.enabled !== true) {
+          // The button is disabled before the click as well; this branch is the
+          // race where the gate moved between render and click.
+          approve.disabled = true;
+          approve.setAttribute('aria-disabled', 'true');
+          showError('approveError', {
+            code: gate.current === true ? 'INVALID_STATE' : 'VERSION_CONFLICT',
+            message:
+              approval.reason || state.strings['detail.approveExpired'] || 'approval unavailable',
+          });
+          return;
+        }
+        const authorizationId =
+          gate.authorizationId || (gate.plan && gate.plan.authorizationRef) || '';
+        const runId = gate.runId || '';
+        if (!gate.plan || authorizationId === '' || runId === '') {
+          approve.disabled = true;
+          approve.setAttribute('aria-disabled', 'true');
+          showError('approveError', {
+            code: 'INVALID_STATE',
+            message: state.strings['detail.approveUnavailable'] || 'approval unavailable',
+          });
+          return;
+        }
         const answer = await rpc(
           'plan.approve',
           {
             workId: approve.dataset.work,
             revision: approve.dataset.planRevision,
             planVersion,
-            plan: viewData() && viewData().plan ? viewData().plan.draft || {} : {},
-            approval: { authorizationRef: 'workbench', runId: 'workbench' },
+            plan: gate.plan,
+            approval: {
+              authorizationRef: authorizationId,
+              runId,
+              productChanged: false,
+            },
           },
           { idempotencyKey: newIdempotencyKey('plan'), expectedVersion: planVersion },
         );
-        approve.disabled = false;
         if (!answer.ok) {
+          approve.disabled = false;
           // A VERSION_CONFLICT is the expired card: relabel it and refresh the
           // version the page believes in (AC-070).
           if (answer.error.code === 'VERSION_CONFLICT') {
@@ -651,12 +785,26 @@
               if (plan) {
                 plan.dataset.currentVersion = String(answer.error.details.currentVersion);
                 plan.dataset.expired = 'true';
+                plan.dataset.approvable = 'false';
               }
             }
             return;
           }
           showError('approveError', answer.error);
           return;
+        }
+        // The approval created the next version, so the card the user was looking at
+        // is superseded now: it stays disabled instead of pretending the same version
+        // can be approved twice.
+        approve.disabled = true;
+        approve.setAttribute('aria-disabled', 'true');
+        const plan = document.getElementById('plan');
+        if (plan) {
+          plan.dataset.approvable = 'false';
+          plan.dataset.expired = 'true';
+          if (typeof answer.result?.version === 'number') {
+            plan.dataset.currentVersion = String(answer.result.version);
+          }
         }
         showStatus('approveStatus', state.strings['settings.saved'] || 'applied');
       });
@@ -933,6 +1081,7 @@
     }
 
     await initComposer();
+    await initConversations();
     await initBoard();
     await initDetail();
     await initInbox();

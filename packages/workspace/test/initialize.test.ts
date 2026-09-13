@@ -41,6 +41,16 @@ import {
 
 const created: string[] = [];
 
+/**
+ * Explicit timeout for the cases in this file.
+ *
+ * Every case here drives the real `git` binary (init/commit/status) and the real
+ * filesystem. The default 5s unit timeout made `pnpm test:unit` nondeterministic
+ * on a loaded host (W9R1-06); the bound stays well under the integration project's
+ * 180s and each case still finishes in well under a second on its own.
+ */
+const REAL_GIT_TEST_TIMEOUT = 30_000;
+
 function makeTempDir(prefix = 'agentdev-ws-init-'): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   created.push(dir);
@@ -198,7 +208,7 @@ function gitValue<T>(result: GitResult<T>, label: string): T {
   return result.value;
 }
 
-describe('initialization phase sequence', () => {
+describe('initialization phase sequence', { timeout: REAL_GIT_TEST_TIMEOUT }, () => {
   it('advances Identifying → Mapping → Confirming → Writing → Ready with evidence and a clean gate', () => {
     const { dir, revision } = seedRepository();
     const store = createMemoryInitStateStore();
@@ -330,7 +340,7 @@ describe('initialization phase sequence', () => {
   });
 });
 
-describe('interruption recovery in Writing', () => {
+describe('interruption recovery in Writing', { timeout: REAL_GIT_TEST_TIMEOUT }, () => {
   it('resumes from a JSON-file state store without rewriting already-written documents', () => {
     const { dir } = seedRepository();
     const stateFile = join(makeTempDir(), 'init-state.json');
@@ -420,7 +430,7 @@ describe('interruption recovery in Writing', () => {
   });
 });
 
-describe('write conflicts', () => {
+describe('write conflicts', { timeout: REAL_GIT_TEST_TIMEOUT }, () => {
   it('never overwrites an existing file with different content and requires explicit recovery', () => {
     const userContent = '# 用户自己的导航\n\n用户手工维护内容。\n';
     const { dir } = seedRepository({
@@ -474,7 +484,7 @@ describe('write conflicts', () => {
   });
 });
 
-describe('dirty workspace', () => {
+describe('dirty workspace', { timeout: REAL_GIT_TEST_TIMEOUT }, () => {
   it('blocks delivery start with a hash report while read-only investigation still works', () => {
     const { dir, revision } = seedRepository();
     writeFileAt(dir, 'notes.txt', 'user data\n');
@@ -525,7 +535,7 @@ describe('dirty workspace', () => {
   });
 });
 
-describe('no-Git directory', () => {
+describe('no-Git directory', { timeout: REAL_GIT_TEST_TIMEOUT }, () => {
   it('returns Blocked with the Git-initialization authorization request', () => {
     const dir = makeTempDir();
     writeFileAt(dir, 'README.md', '# app\n');
@@ -604,7 +614,7 @@ describe('no-Git directory', () => {
   });
 });
 
-describe('empty project (AC-025)', () => {
+describe('empty project (AC-025)', { timeout: REAL_GIT_TEST_TIMEOUT }, () => {
   it('creates the initial Git and delivery branch, then confirms an unimplemented project', () => {
     const dir = makeTempDir();
     const root = realpathSync(dir);
@@ -654,7 +664,7 @@ describe('empty project (AC-025)', () => {
   });
 });
 
-describe('design/code conflict (AC-042)', () => {
+describe('design/code conflict (AC-042)', { timeout: REAL_GIT_TEST_TIMEOUT }, () => {
   it('blocks Confirming, never confirms the existing document and keeps candidates observed', () => {
     const decisionId = '018f0a00-0000-7000-8000-000000000001';
     const existingMarkdown = renderReadme(confirmedFeature());
@@ -708,247 +718,267 @@ describe('design/code conflict (AC-042)', () => {
   });
 });
 
-describe('root-only projects reach Ready (W4R1-01 regression)', () => {
-  const shapes: readonly (readonly [string, Readonly<Record<string, string>>])[] = [
-    [
-      'a root README and one root source file',
-      { 'README.md': '# demo\n', 'main.ts': 'export const main = 1;\n' },
-    ],
-    [
-      'a root README plus a root python module and test',
-      {
-        'README.md': '# demo\n',
-        'main.py': 'print(1)\n',
-        'test_main.py': 'def test_ok():\n    pass\n',
-      },
-    ],
-  ];
+describe(
+  'root-only projects reach Ready (W4R1-01 regression)',
+  { timeout: REAL_GIT_TEST_TIMEOUT },
+  () => {
+    const shapes: readonly (readonly [string, Readonly<Record<string, string>>])[] = [
+      [
+        'a root README and one root source file',
+        { 'README.md': '# demo\n', 'main.ts': 'export const main = 1;\n' },
+      ],
+      [
+        'a root README plus a root python module and test',
+        {
+          'README.md': '# demo\n',
+          'main.py': 'print(1)\n',
+          'test_main.py': 'def test_ok():\n    pass\n',
+        },
+      ],
+    ];
 
-  for (const [name, files] of shapes) {
-    it(`reaches Ready for ${name}`, () => {
-      const { dir } = seedRepository(files);
+    for (const [name, files] of shapes) {
+      it(`reaches Ready for ${name}`, () => {
+        const { dir } = seedRepository(files);
+        const store = createMemoryInitStateStore();
+        const init = createInitializer({ store, git, now: clock });
+        okOf(init.start({ id: 'init-root', root: dir }));
+        driveToWriting(init, 'init-root');
+        const done = okOf(init.step('init-root'));
+        expect(done.phase).toBe('ready');
+        expect(done.done).toBe(true);
+        // A root-level file is an observed capability, not an unsatisfiable gate.
+        expect(done.record.emptyProject).toBe(false);
+        expect(done.record.featureCount).toBeGreaterThan(0);
+        expect(init.verifyReady('init-root').ok).toBe(true);
+      });
+    }
+
+    it('treats a README-only project as an explicit no-capability project', () => {
+      const { dir } = seedRepository({ 'README.md': '# docs only\n' });
       const store = createMemoryInitStateStore();
       const init = createInitializer({ store, git, now: clock });
-      okOf(init.start({ id: 'init-root', root: dir }));
-      driveToWriting(init, 'init-root');
-      const done = okOf(init.step('init-root'));
+      okOf(init.start({ id: 'init-docs', root: dir }));
+      driveToWriting(init, 'init-docs');
+      const done = okOf(init.step('init-docs'));
       expect(done.phase).toBe('ready');
-      expect(done.done).toBe(true);
-      // A root-level file is an observed capability, not an unsatisfiable gate.
-      expect(done.record.emptyProject).toBe(false);
-      expect(done.record.featureCount).toBeGreaterThan(0);
-      expect(init.verifyReady('init-root').ok).toBe(true);
+      expect(done.record.featureCount).toBe(0);
+      expect(done.record.emptyProject).toBe(true);
+      expect(init.verifyReady('init-docs').ok).toBe(true);
     });
-  }
+  },
+);
 
-  it('treats a README-only project as an explicit no-capability project', () => {
-    const { dir } = seedRepository({ 'README.md': '# docs only\n' });
-    const store = createMemoryInitStateStore();
-    const init = createInitializer({ store, git, now: clock });
-    okOf(init.start({ id: 'init-docs', root: dir }));
-    driveToWriting(init, 'init-docs');
-    const done = okOf(init.step('init-docs'));
-    expect(done.phase).toBe('ready');
-    expect(done.record.featureCount).toBe(0);
-    expect(done.record.emptyProject).toBe(true);
-    expect(init.verifyReady('init-docs').ok).toBe(true);
-  });
-});
-
-describe('budget exhaustion without capability (W4R2-01 regression)', () => {
-  /** 41 README files fill the default 40-file body budget; the source file is never read. */
-  function readmeHeavyRepository(extra: Readonly<Record<string, string>> = {}): string {
-    const files: Record<string, string> = {};
-    for (let index = 0; index < 41; index += 1) {
-      files[`pkg${index}/README.md`] = `# package ${index}\n`;
+describe(
+  'budget exhaustion without capability (W4R2-01 regression)',
+  { timeout: REAL_GIT_TEST_TIMEOUT },
+  () => {
+    /** 41 README files fill the default 40-file body budget; the source file is never read. */
+    function readmeHeavyRepository(extra: Readonly<Record<string, string>> = {}): string {
+      const files: Record<string, string> = {};
+      for (let index = 0; index < 41; index += 1) {
+        files[`pkg${index}/README.md`] = `# package ${index}\n`;
+      }
+      return seedRepository({ ...files, ...extra }).dir;
     }
-    return seedRepository({ ...files, ...extra }).dir;
-  }
 
-  it('never reaches Ready by claiming an unconfirmed empty project', () => {
-    const dir = readmeHeavyRepository();
-    const store = createMemoryInitStateStore();
-    const init = createInitializer({ store, git, now: clock });
-    okOf(init.start({ id: 'init-budget', root: dir }));
-    okOf(init.step('init-budget')); // identifying -> mapping
-    const mapped = okOf(init.step('init-budget')); // mapping -> confirming
-    expect(mapped.record.scanPartial).toBe(true);
-    expect(mapped.record.featureCount).toBe(0);
-    expect(mapped.record.emptyProject).toBe(false);
+    it('never reaches Ready by claiming an unconfirmed empty project', () => {
+      const dir = readmeHeavyRepository();
+      const store = createMemoryInitStateStore();
+      const init = createInitializer({ store, git, now: clock });
+      okOf(init.start({ id: 'init-budget', root: dir }));
+      okOf(init.step('init-budget')); // identifying -> mapping
+      const mapped = okOf(init.step('init-budget')); // mapping -> confirming
+      expect(mapped.record.scanPartial).toBe(true);
+      expect(mapped.record.featureCount).toBe(0);
+      expect(mapped.record.emptyProject).toBe(false);
 
-    const blocked = blockedOf(init.step('init-budget'));
-    expect(blocked.blocker.kind).toBe('investigation-budget');
-    expect(blocked.errors[0]?.code).toBe('MISSING_CONTEXT');
-    // Retrying the same phase can never succeed on its own.
-    const again = blockedOf(init.step('init-budget'));
-    expect(again.blocker.kind).toBe('investigation-budget');
-    expect(existsSync(join(dir, 'docs', 'agentdev', 'PROJECT.md'))).toBe(false);
+      const blocked = blockedOf(init.step('init-budget'));
+      expect(blocked.blocker.kind).toBe('investigation-budget');
+      expect(blocked.errors[0]?.code).toBe('MISSING_CONTEXT');
+      // Retrying the same phase can never succeed on its own.
+      const again = blockedOf(init.step('init-budget'));
+      expect(again.blocker.kind).toBe('investigation-budget');
+      expect(existsSync(join(dir, 'docs', 'agentdev', 'PROJECT.md'))).toBe(false);
 
-    // The explicit no-capability decision is the resoluble path.
-    const decided = okOf(
-      init.confirmNoCapability('init-budget', {
-        authorizationRef: 'user-action:no-capability',
+      // The explicit no-capability decision is the resoluble path.
+      const decided = okOf(
+        init.confirmNoCapability('init-budget', {
+          authorizationRef: 'user-action:no-capability',
+          by: 'user',
+        }),
+      );
+      expect(decided.phase).toBe('writing');
+      expect(decided.record.emptyProjectConfirmed).toBe(true);
+      const done = okOf(init.step('init-budget'));
+      expect(done.phase).toBe('ready');
+      expect(init.verifyReady('init-budget').ok).toBe(true);
+      const project = readFileSync(join(dir, 'docs', 'agentdev', 'PROJECT.md'), 'utf8');
+      // The published document reflects the explicit decision, not the earlier unknown state.
+      expect(project).toContain('absent（未实现，明确空项目，用户已确认）');
+      expect(project).not.toContain('未调查（预算耗尽');
+    });
+
+    it('finds the capability once the investigation batch is enlarged', () => {
+      const dir = readmeHeavyRepository({ 'src/mod.ts': 'export const mod = 1;\n' });
+      const store = createMemoryInitStateStore();
+      const init = createInitializer({ store, git, now: clock });
+      okOf(init.start({ id: 'init-more', root: dir }));
+      okOf(init.step('init-more')); // identifying -> mapping
+      okOf(init.step('init-more')); // mapping -> confirming
+      const blocked = blockedOf(init.step('init-more'));
+      expect(blocked.blocker.kind).toBe('investigation-budget');
+
+      const reMapped = okOf(init.investigateMore('init-more', { maxBodyFiles: 200 }));
+      expect(reMapped.phase).toBe('confirming');
+      expect(reMapped.record.featureCount).toBeGreaterThan(0);
+      expect(reMapped.record.emptyProject).toBe(false);
+
+      const needsConfirmation = blockedOf(init.step('init-more'));
+      expect(needsConfirmation.blocker.kind).toBe('confirmation-required');
+      okOf(init.confirm('init-more', { authorizationRef: 'user-action:1', by: 'user' }));
+      const done = okOf(init.step('init-more'));
+      expect(done.phase).toBe('ready');
+      expect(done.record.emptyProjectConfirmed).toBe(false);
+    });
+  },
+);
+
+describe(
+  'budget-grant APIs reject bad input without bricking the record (W4R3-01..04)',
+  { timeout: REAL_GIT_TEST_TIMEOUT },
+  () => {
+    function budgetedRepository(): string {
+      const files: Record<string, string> = {};
+      for (let index = 0; index < 41; index += 1)
+        files[`pkg${index}/README.md`] = `# package ${index}\n`;
+      files['src/mod.ts'] = 'export const mod = 1;\n';
+      return seedRepository(files).dir;
+    }
+
+    it('rejects a smaller batch, a wrong phase and a missing id without persisting failure', () => {
+      const dir = budgetedRepository();
+      const store = createMemoryInitStateStore();
+      const init = createInitializer({ store, git, now: clock });
+      okOf(init.start({ id: 'init-guard', root: dir }));
+      okOf(init.step('init-guard')); // identifying -> mapping
+      okOf(init.step('init-guard')); // mapping -> confirming
+      blockedOf(init.step('init-guard'));
+
+      // A batch that does not actually grow the budget is refused ...
+      const smaller = refusalOf(init.investigateMore('init-guard', { maxBodyFiles: 5 }));
+      expect(smaller.errors[0]?.code).toBe('VALIDATION_ERROR');
+      // ... and the record is still a healthy blocked record that a real batch can advance.
+      expect(init.get('init-guard')?.status).toBe('blocked');
+      expect(init.get('init-guard')?.failure).toBeNull();
+      expect(blockedOf(init.step('init-guard')).blocker.kind).toBe('investigation-budget');
+
+      // confirmNoCapability in the wrong phase is refused the same way.
+      const wrongPhase = init.confirmNoCapability('missing-id', { authorizationRef: 'a', by: 'b' });
+      expect(wrongPhase.status).toBe('not-found');
+
+      // A batch that cannot help is refused while capabilities are already observed.
+      const grown = okOf(init.investigateMore('init-guard', { maxBodyFiles: 200 }));
+      expect(grown.record.featureCount).toBeGreaterThan(0);
+      const tooLate = refusalOf(init.investigateMore('init-guard', { maxBodyFiles: 400 }));
+      expect(tooLate.errors[0]?.code).toBe('VALIDATION_ERROR');
+      expect(init.get('init-guard')?.failure).toBeNull();
+    });
+
+    it('refuses to degrade a Ready record through investigateMore', () => {
+      const dir = seedRepository().dir;
+      const store = createMemoryInitStateStore();
+      const init = createInitializer({ store, git, now: clock });
+      okOf(init.start({ id: 'init-ready', root: dir }));
+      driveToWriting(init, 'init-ready');
+      const done = okOf(init.step('init-ready'));
+      expect(done.phase).toBe('ready');
+
+      const degraded = refusalOf(init.investigateMore('init-ready', { maxBodyFiles: 1_000 }));
+      expect(degraded.errors[0]?.code).toBe('INVALID_STATE');
+      expect(init.get('init-ready')?.phase).toBe('ready');
+      const noCapability = init.confirmNoCapability('init-ready', {
+        authorizationRef: 'user-action:2',
         by: 'user',
-      }),
-    );
-    expect(decided.phase).toBe('writing');
-    expect(decided.record.emptyProjectConfirmed).toBe(true);
-    const done = okOf(init.step('init-budget'));
-    expect(done.phase).toBe('ready');
-    expect(init.verifyReady('init-budget').ok).toBe(true);
-    const project = readFileSync(join(dir, 'docs', 'agentdev', 'PROJECT.md'), 'utf8');
-    // The published document reflects the explicit decision, not the earlier unknown state.
-    expect(project).toContain('absent（未实现，明确空项目，用户已确认）');
-    expect(project).not.toContain('未调查（预算耗尽');
-  });
-
-  it('finds the capability once the investigation batch is enlarged', () => {
-    const dir = readmeHeavyRepository({ 'src/mod.ts': 'export const mod = 1;\n' });
-    const store = createMemoryInitStateStore();
-    const init = createInitializer({ store, git, now: clock });
-    okOf(init.start({ id: 'init-more', root: dir }));
-    okOf(init.step('init-more')); // identifying -> mapping
-    okOf(init.step('init-more')); // mapping -> confirming
-    const blocked = blockedOf(init.step('init-more'));
-    expect(blocked.blocker.kind).toBe('investigation-budget');
-
-    const reMapped = okOf(init.investigateMore('init-more', { maxBodyFiles: 200 }));
-    expect(reMapped.phase).toBe('confirming');
-    expect(reMapped.record.featureCount).toBeGreaterThan(0);
-    expect(reMapped.record.emptyProject).toBe(false);
-
-    const needsConfirmation = blockedOf(init.step('init-more'));
-    expect(needsConfirmation.blocker.kind).toBe('confirmation-required');
-    okOf(init.confirm('init-more', { authorizationRef: 'user-action:1', by: 'user' }));
-    const done = okOf(init.step('init-more'));
-    expect(done.phase).toBe('ready');
-    expect(done.record.emptyProjectConfirmed).toBe(false);
-  });
-});
-
-describe('budget-grant APIs reject bad input without bricking the record (W4R3-01..04)', () => {
-  function budgetedRepository(): string {
-    const files: Record<string, string> = {};
-    for (let index = 0; index < 41; index += 1)
-      files[`pkg${index}/README.md`] = `# package ${index}\n`;
-    files['src/mod.ts'] = 'export const mod = 1;\n';
-    return seedRepository(files).dir;
-  }
-
-  it('rejects a smaller batch, a wrong phase and a missing id without persisting failure', () => {
-    const dir = budgetedRepository();
-    const store = createMemoryInitStateStore();
-    const init = createInitializer({ store, git, now: clock });
-    okOf(init.start({ id: 'init-guard', root: dir }));
-    okOf(init.step('init-guard')); // identifying -> mapping
-    okOf(init.step('init-guard')); // mapping -> confirming
-    blockedOf(init.step('init-guard'));
-
-    // A batch that does not actually grow the budget is refused ...
-    const smaller = refusalOf(init.investigateMore('init-guard', { maxBodyFiles: 5 }));
-    expect(smaller.errors[0]?.code).toBe('VALIDATION_ERROR');
-    // ... and the record is still a healthy blocked record that a real batch can advance.
-    expect(init.get('init-guard')?.status).toBe('blocked');
-    expect(init.get('init-guard')?.failure).toBeNull();
-    expect(blockedOf(init.step('init-guard')).blocker.kind).toBe('investigation-budget');
-
-    // confirmNoCapability in the wrong phase is refused the same way.
-    const wrongPhase = init.confirmNoCapability('missing-id', { authorizationRef: 'a', by: 'b' });
-    expect(wrongPhase.status).toBe('not-found');
-
-    // A batch that cannot help is refused while capabilities are already observed.
-    const grown = okOf(init.investigateMore('init-guard', { maxBodyFiles: 200 }));
-    expect(grown.record.featureCount).toBeGreaterThan(0);
-    const tooLate = refusalOf(init.investigateMore('init-guard', { maxBodyFiles: 400 }));
-    expect(tooLate.errors[0]?.code).toBe('VALIDATION_ERROR');
-    expect(init.get('init-guard')?.failure).toBeNull();
-  });
-
-  it('refuses to degrade a Ready record through investigateMore', () => {
-    const dir = seedRepository().dir;
-    const store = createMemoryInitStateStore();
-    const init = createInitializer({ store, git, now: clock });
-    okOf(init.start({ id: 'init-ready', root: dir }));
-    driveToWriting(init, 'init-ready');
-    const done = okOf(init.step('init-ready'));
-    expect(done.phase).toBe('ready');
-
-    const degraded = refusalOf(init.investigateMore('init-ready', { maxBodyFiles: 1_000 }));
-    expect(degraded.errors[0]?.code).toBe('INVALID_STATE');
-    expect(init.get('init-ready')?.phase).toBe('ready');
-    const noCapability = init.confirmNoCapability('init-ready', {
-      authorizationRef: 'user-action:2',
-      by: 'user',
+      });
+      expect(refusalOf(noCapability).errors[0]?.code).toBe('INVALID_STATE');
+      expect(init.get('init-ready')?.phase).toBe('ready');
     });
-    expect(refusalOf(noCapability).errors[0]?.code).toBe('INVALID_STATE');
-    expect(init.get('init-ready')?.phase).toBe('ready');
-  });
 
-  it('refuses a document-root that escapes the project (W4R3-03)', () => {
-    expect(() =>
-      createInitializer({ store: createMemoryInitStateStore(), git, documentRoot: '../escape' }),
-    ).toThrowError(/document-root/u);
-  });
-});
+    it('refuses a document-root that escapes the project (W4R3-03)', () => {
+      expect(() =>
+        createInitializer({ store: createMemoryInitStateStore(), git, documentRoot: '../escape' }),
+      ).toThrowError(/document-root/u);
+    });
+  },
+);
 
-describe('rejections never brick a record (T-01 regression)', () => {
-  it('keeps a Ready record Ready after a repeated confirm', () => {
-    const { dir } = seedRepository();
-    const store = createMemoryInitStateStore();
-    const init = createInitializer({ store, git, now: clock });
-    okOf(init.start({ id: 'init-t01', root: dir }));
-    driveToWriting(init, 'init-t01');
-    const done = okOf(init.step('init-t01'));
-    expect(done.phase).toBe('ready');
+describe(
+  'rejections never brick a record (T-01 regression)',
+  { timeout: REAL_GIT_TEST_TIMEOUT },
+  () => {
+    it('keeps a Ready record Ready after a repeated confirm', () => {
+      const { dir } = seedRepository();
+      const store = createMemoryInitStateStore();
+      const init = createInitializer({ store, git, now: clock });
+      okOf(init.start({ id: 'init-t01', root: dir }));
+      driveToWriting(init, 'init-t01');
+      const done = okOf(init.step('init-t01'));
+      expect(done.phase).toBe('ready');
 
-    // A repeated confirmation is a harmless no-op: it neither advances nor breaks the record.
-    const repeated = okOf(init.confirm('init-t01', { authorizationRef: 'user-action:2' }));
-    expect(repeated.done).toBe(true);
-    const record = init.get('init-t01');
-    expect(record?.phase).toBe('ready');
-    expect(record?.failure).toBeNull();
-    expect(init.verifyReady('init-t01').ok).toBe(true);
-
-    const lateGit = refusalOf(
-      init.authorizeGitInitialization('init-t01', {
-        authorizationRef: 'user-action:3',
-        request: {
-          kind: 'git-initialization',
-          root: dir,
-          branch: 'agentdev/main',
-          initialCommit: false,
-          reason: 'x',
-        },
-      }),
-    );
-    expect(lateGit.errors[0]?.code).toBe('INVALID_STATE');
-    expect(init.get('init-t01')?.phase).toBe('ready');
-  });
-});
-
-describe('input errors never downgrade a Ready record (W4R4-01 regression)', () => {
-  it('keeps done and Ready after resolveBlocker/resolveConflict misuse', () => {
-    const { dir } = seedRepository();
-    const store = createMemoryInitStateStore();
-    const init = createInitializer({ store, git, now: clock });
-    okOf(init.start({ id: 'init-w4r4', root: dir }));
-    driveToWriting(init, 'init-w4r4');
-    expect(okOf(init.step('init-w4r4')).done).toBe(true);
-
-    for (const outcome of [
-      init.resolveBlocker('init-w4r4', { authorizationRef: 'user-action:x' }),
-      init.resolveConflict('init-w4r4', {
-        documentPath: 'features/F-00000000/README.md',
-        kind: 'design-code-conflict',
-        decisionRef: 'decision:018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e5f',
-      }),
-    ]) {
-      refusalOf(outcome);
-      const record = init.get('init-w4r4');
-      expect(record?.status).toBe('ready');
+      // A repeated confirmation is a harmless no-op: it neither advances nor breaks the record.
+      const repeated = okOf(init.confirm('init-t01', { authorizationRef: 'user-action:2' }));
+      expect(repeated.done).toBe(true);
+      const record = init.get('init-t01');
+      expect(record?.phase).toBe('ready');
       expect(record?.failure).toBeNull();
+      expect(init.verifyReady('init-t01').ok).toBe(true);
+
+      const lateGit = refusalOf(
+        init.authorizeGitInitialization('init-t01', {
+          authorizationRef: 'user-action:3',
+          request: {
+            kind: 'git-initialization',
+            root: dir,
+            branch: 'agentdev/main',
+            initialCommit: false,
+            reason: 'x',
+          },
+        }),
+      );
+      expect(lateGit.errors[0]?.code).toBe('INVALID_STATE');
+      expect(init.get('init-t01')?.phase).toBe('ready');
+    });
+  },
+);
+
+describe(
+  'input errors never downgrade a Ready record (W4R4-01 regression)',
+  { timeout: REAL_GIT_TEST_TIMEOUT },
+  () => {
+    it('keeps done and Ready after resolveBlocker/resolveConflict misuse', () => {
+      const { dir } = seedRepository();
+      const store = createMemoryInitStateStore();
+      const init = createInitializer({ store, git, now: clock });
+      okOf(init.start({ id: 'init-w4r4', root: dir }));
+      driveToWriting(init, 'init-w4r4');
       expect(okOf(init.step('init-w4r4')).done).toBe(true);
-      expect(init.verifyReady('init-w4r4').ok).toBe(true);
-    }
-  });
-});
+
+      for (const outcome of [
+        init.resolveBlocker('init-w4r4', { authorizationRef: 'user-action:x' }),
+        init.resolveConflict('init-w4r4', {
+          documentPath: 'features/F-00000000/README.md',
+          kind: 'design-code-conflict',
+          decisionRef: 'decision:018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e5f',
+        }),
+      ]) {
+        refusalOf(outcome);
+        const record = init.get('init-w4r4');
+        expect(record?.status).toBe('ready');
+        expect(record?.failure).toBeNull();
+        expect(okOf(init.step('init-w4r4')).done).toBe(true);
+        expect(init.verifyReady('init-w4r4').ok).toBe(true);
+      }
+    });
+  },
+);

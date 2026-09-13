@@ -68,6 +68,16 @@ import {
 import { scanEvents } from '../src/events.js';
 
 const created: string[] = [];
+
+/**
+ * Explicit timeout for this file's cases.
+ *
+ * Each case builds a real Git repository (init, commit, worktrees, CAS refs) and
+ * real SQLite; the default 5s unit timeout made `pnpm test:unit` nondeterministic
+ * under parallel load (W9R1-06), and the bound stays far below the integration
+ * project's 180s.
+ */
+const REAL_GIT_TEST_TIMEOUT = 30_000;
 const DELIVERY_REF = 'refs/heads/agentdev/main';
 const CODE_PATH = 'src/orders/cancel.ts';
 const HASH = 'a'.repeat(64);
@@ -236,7 +246,7 @@ function addWork(
 // 1. Task 合并冲突
 // ---------------------------------------------------------------------------
 
-describe('required WP-08 failure tests', () => {
+describe('required WP-08 failure tests', { timeout: REAL_GIT_TEST_TIMEOUT }, () => {
   it('Task 合并冲突: two passed Tasks conflict, the repair Task is independent and CAS protects HEAD (AC-062)', () => {
     const base = createRepo();
     try {

@@ -1173,4 +1173,177 @@ describe('workbench protocol over the real Core (WP-09 T2)', () => {
     expect(protocol.statusOf('UNAUTHENTICATED')).toBe(401);
     expect(protocol.statusOf('INTERNAL_ERROR')).toBe(500);
   });
+
+  // -------------------------------------------------------------------------
+  // Round-1 fixes: cross-Project refusal details and the shared command ledger
+  // -------------------------------------------------------------------------
+
+  it('does not echo the local Project id in a cross-Project refusal (W9R1-03)', async () => {
+    const refusal = expectRefusal(
+      () => call('board', {}, { projectId: OTHER_PROJECT }),
+      'NOT_FOUND',
+    );
+    expect(refusal.details?.['projectId']).toBe(OTHER_PROJECT);
+    // The refusal names only the id the caller sent; this installation's own id
+    // would leak which Project the daemon actually serves (W9R1-03).
+    expect(JSON.stringify(refusal.details ?? {})).not.toContain(projectId);
+    expect(Object.keys(refusal.details ?? {}).sort()).toEqual(['projectId']);
+    expect(refusal.message).not.toContain(projectId);
+
+    const client = connect();
+    await client.call('connection.hello', { protocolVersion: 1, client: 'web' });
+    const frame = await client.call(
+      'project.subscribe',
+      { scope: { kind: 'summary' } },
+      { projectId: OTHER_PROJECT },
+    );
+    expect(frame.ok).toBe(false);
+    expect(frame.error?.code).toBe('NOT_FOUND');
+    expect(JSON.stringify(frame.error?.details ?? {})).not.toContain(projectId);
+  });
+
+  it('replays a recorded write and refuses the same key with a different payload (W9R1-04)', () => {
+    const work = seedWork({ status: 'running' });
+    const pause = json({ action: 'pause', workId: work.id });
+    const first = call('work.control', pause, { idempotencyKey: 'w9r1-04-pause' });
+    expect(first['status']).toBe('accepted');
+    expect(typeof first['version']).toBe('number');
+    const replayedPause = call('work.control', pause, { idempotencyKey: 'w9r1-04-pause' });
+    expect(replayedPause).toEqual(first);
+    // A replay never advances the Work: the recorded result carries the first version.
+    expect(store.works.find(work.id)?.version).toBe(first['version']);
+    expectRefusal(
+      () =>
+        call(
+          'work.control',
+          { action: 'resume', workId: work.id },
+          { idempotencyKey: 'w9r1-04-pause' },
+        ),
+      'IDEMPOTENCY_CONFLICT',
+    );
+
+    // `defaultRole` is not part of `ConfigPatch`; `limits.shellTimeoutSec` is the
+    // overridable surface the contract actually exposes.
+    const configPatch = json({ scope: 'global', patch: { limits: { shellTimeoutSec: 300 } } });
+    const applied = call('config.save', configPatch, { idempotencyKey: 'w9r1-04-config' });
+    expect(applied['status']).toBe('applied');
+    const replayedConfig = call('config.save', configPatch, { idempotencyKey: 'w9r1-04-config' });
+    expect(replayedConfig['revision']).toBe(applied['revision']);
+    expectRefusal(
+      () =>
+        call(
+          'config.save',
+          { scope: 'global', patch: { limits: { shellTimeoutSec: 301 } } },
+          { idempotencyKey: 'w9r1-04-config' },
+        ),
+      'IDEMPOTENCY_CONFLICT',
+    );
+
+    const decisionWork = seedWork({ status: 'running', name: 'w2' });
+    const decision = store.decisions.insert({
+      id: uuid('a0'),
+      projectId,
+      workId: decisionWork.id,
+      kind: 'start',
+      targetRef: { id: uuid('a1'), version: 3, hash: sha256('w9r1-target') },
+      choices: ['now', 'later', 'decline'],
+      state: 'pending',
+      actor: 'user',
+      effectRefs: [],
+    });
+    const resolve = json({ decisionId: decision.id, choice: 'later', targetVersion: 3 });
+    const resolved = call('decision.resolve', resolve, { idempotencyKey: 'w9r1-04-decision' });
+    expect(resolved['status']).toBe('applied');
+    expect(call('decision.resolve', resolve, { idempotencyKey: 'w9r1-04-decision' })).toEqual(
+      resolved,
+    );
+    expectRefusal(
+      () =>
+        call(
+          'decision.resolve',
+          { decisionId: decision.id, choice: 'now', targetVersion: 3 },
+          { idempotencyKey: 'w9r1-04-decision' },
+        ),
+      'IDEMPOTENCY_CONFLICT',
+    );
+
+    // `backup.run`/`restore.run` cannot share the ledger's transaction: SQLite
+    // refuses `VACUUM INTO` inside one, so they record their ledger row around the
+    // operation instead and keep the full replay/conflict contract.
+    const temp = mkdtempSync(join(tmpdir(), 'agentdev-w9r1-'));
+    const backupDir = join(temp, 'backup');
+    const backup = call(
+      'backup.run',
+      { outputDir: backupDir },
+      { idempotencyKey: 'w9r1-04-backup' },
+    );
+    expect(backup['status']).toBe('applied');
+    expect(typeof backup['backupId']).toBe('string');
+    // The same key and payload replay the recorded backup instead of taking a second
+    // snapshot, and the same key with another directory is the documented conflict.
+    expect(
+      call('backup.run', { outputDir: backupDir }, { idempotencyKey: 'w9r1-04-backup' }),
+    ).toEqual(backup);
+    expect(store.commands.lookup(caller().subject, 'backup.run', 'w9r1-04-backup')?.state).toBe(
+      'completed',
+    );
+    expectRefusal(
+      () =>
+        call(
+          'backup.run',
+          { outputDir: join(temp, 'keyed-backup') },
+          { idempotencyKey: 'w9r1-04-backup' },
+        ),
+      'IDEMPOTENCY_CONFLICT',
+    );
+
+    const targetDir = join(temp, 'restore');
+    const restoreParams = json({ backupDir, targetDir });
+    const restored = call('restore.run', restoreParams, { idempotencyKey: 'w9r1-04-restore' });
+    expect(restored['status']).toBe('applied');
+    expect(restored['restoredStatus']).toBe('ready');
+    expect(call('restore.run', restoreParams, { idempotencyKey: 'w9r1-04-restore' })).toEqual(
+      restored,
+    );
+    expectRefusal(
+      () =>
+        call(
+          'restore.run',
+          { backupDir, targetDir: join(temp, 'restore-2') },
+          { idempotencyKey: 'w9r1-04-restore' },
+        ),
+      'IDEMPOTENCY_CONFLICT',
+    );
+    rmSync(temp, { recursive: true, force: true });
+  });
+
+  it('records a command only once for a replayed write and never on a failure (W9R1-04)', () => {
+    // A failed command leaves no ledger row, so its key stays free.
+    const requirement = seedRequirement('queued');
+    expectRefusal(
+      () =>
+        call(
+          'work.control',
+          { action: 'pause', requirementId: requirement.id },
+          { idempotencyKey: 'w9r1-04-failed' },
+        ),
+      'INVALID_STATE',
+    );
+    expect(
+      store.commands.lookup(caller().subject, 'work.control', 'w9r1-04-failed'),
+    ).toBeUndefined();
+
+    // A successful command is queryable and the recorded response is the replay.
+    const work = seedWork({ status: 'running' });
+    const pause = json({ action: 'pause', workId: work.id });
+    const paused = call('work.control', pause, { idempotencyKey: 'w9r1-04-recorded' });
+    const recorded = store.commands.lookup(caller().subject, 'work.control', 'w9r1-04-recorded');
+    expect(recorded?.state).toBe('completed');
+    expect(recorded?.response).toEqual(paused);
+    expect(call('work.control', pause, { idempotencyKey: 'w9r1-04-recorded' })).toEqual(paused);
+
+    // Without a key the ledger is never consulted, so the write still works.
+    const other = seedWork({ status: 'running', name: 'w2' });
+    expect(call('work.control', { action: 'pause', workId: other.id })['status']).toBe('accepted');
+  });
 });

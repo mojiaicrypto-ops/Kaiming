@@ -154,6 +154,10 @@ export const UI_STRINGS: Readonly<Record<string, InterfaceString>> = {
     en: 'This plan version is not current any more; refresh before approving.',
     zh: '该计划版本已非当前版本，请刷新后再批准。',
   },
+  'detail.approveUnavailable': {
+    en: 'Approval is unavailable: the Plan body or its local authorization cannot be read.',
+    zh: '当前无法批准：计划正文或其本地授权不可读取。',
+  },
   'detail.approvedAt': { en: 'Approved at', zh: '批准时间' },
   'detail.tasks': { en: 'Tasks', zh: '任务' },
   'detail.runs': { en: 'Runs', zh: '运行' },

@@ -18,6 +18,8 @@
 
 BFF到daemon和本机CLI使用0600安装凭证Bearer；daemon默认127.0.0.1:4318，BFF默认127.0.0.1:4317。对外反向代理只暴露BFF。Ready前只接受connection.hello。
 
+BFF不转发也不校验浏览器的x-csrf-token（WP-09 登记偏差）：BFF自身持有daemon会话，同源写以HttpOnly `agentdev_web`会话（SameSite=Lax）加精确Origin校验认证，再以BFF自己的session.csrfToken调用daemon，因此浏览器提供的该头既非必需也不被信任；浏览器仍按上表携带该头（`/rpc`契约面），判定权在BFF。此偏差由独立复查登记，避免后续Test按字面要求误判。
+
 | 方法 | params | result |
 |---|---|---|
 | connection.hello | protocolVersion:1,client:web/cli | {connectionId,protocolVersion:1,serverTime} |
@@ -71,8 +73,12 @@ BFF到daemon和本机CLI使用0600安装凭证Bearer；daemon默认127.0.0.1:431
 | task.list/get | workId（list）；taskId（get） | items<Task>或Task |
 | run.list/get | workId（list）；runId（get） | items<Run>或Run |
 | run.pause/resume/cancel* | runId,reason | accepted；影响必需子Run时Gate保持阻断 |
+| plan.current | workId,revision?,planVersion?:int | {currentVersion,requestedVersion,current,gateStatus,approvedVersion,approvedAt,runId,authorizationId,plan,approval:{enabled,reason}}；plan正文与本地授权取自gate自身的批准记录及其产物 |
+| plan.approve* | workId,revision?,planVersion:int,plan:PlanDraft,approval:{authorizationRef,runId,productChanged,requestedTokens?} | applied，planRef；请求版本非当前返回VERSION_CONFLICT和currentVersion |
 
 permission.request的scope=once时必须runId/toolOperationId/inputHash，scope=run必须runId，scope=work必须workId；服务端从请求引用解析真实绑定并拒绝跨项目。
+
+审批链以plan.current为唯一权威：UI不得自行拼装plan正文或authorizationRef；approval.enabled=false时批准控件必须禁用并显示reason（缺正文、缺本地授权、版本非当前或gate已失效）。Queued且无Work的需求取消由daemon生成content.md——六个二级标题各一次、顺序固定，取消原因写入完成摘要，再由RequirementSaveService提交Git。
 
 Decision choice必须属于该决定保存的选项；UI用户可直接提交，无sourceMessageId时保存按钮动作的user Action记录作为来源。Chief代表用户提交必须带sourceMessageId；来源必须user消息且同Project，语义无法确认时要求新的明确用户决定。Run恢复适用Manifest不一致则拒绝STALE_ARTIFACT，由Chief创建新Run。
 

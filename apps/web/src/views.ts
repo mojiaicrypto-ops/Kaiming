@@ -356,6 +356,14 @@ export interface PlanView {
   readonly approvedAt: string | null;
   readonly expired: boolean;
   readonly approvalReason: string | null;
+  /**
+   * The gate's own "this card may be approved" verdict (W9R1-01).
+   *
+   * It is false when the daemon cannot read the Plan body or its local
+   * authorization, so the button is disabled with `approvalReason` instead of
+   * sending a request that must fail.
+   */
+  readonly approvalEnabled: boolean;
 }
 
 export interface RunSummary {
@@ -478,6 +486,12 @@ export function requirementDetail(input: {
     const approvedVersion =
       approvedRaw === null || approvedRaw === undefined ? null : asNumber(approvedRaw);
     const planWork: JsonObject = work ?? {};
+    const approvalRaw = field(planRaw, 'approval');
+    // A card is disabled for exactly two honest reasons: the version shown is not
+    // the gate's current one, or the daemon cannot hand over a submittable Plan
+    // body plus its local authorization (W9R1-01/W9R1-02).
+    const requestedMatches = requestedVersion === currentVersion;
+    const approvalEnabled = requestedMatches && planRaw['approvalEnabled'] !== false;
     plan = {
       workId: asString(field(planRaw, 'workId'), asString(field(planWork, 'id'))),
       revision: asString(field(planRaw, 'revision'), 'working-tree'),
@@ -492,7 +506,10 @@ export function requirementDetail(input: {
       approvalReason:
         typeof field(planRaw, 'approvalReason') === 'string'
           ? (field(planRaw, 'approvalReason') as string)
-          : null,
+          : typeof approvalRaw === 'string'
+            ? approvalRaw
+            : null,
+      approvalEnabled,
     };
   }
   return {

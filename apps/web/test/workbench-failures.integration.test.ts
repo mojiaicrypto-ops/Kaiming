@@ -57,6 +57,9 @@ interface Frame {
   readonly entityId?: string;
   readonly subscriptionId?: string;
   readonly reason?: string;
+  /** `bridge.open` reports how many subscriptions the bridge resumed. */
+  readonly resumed?: number;
+  readonly attempt?: number;
 }
 
 interface Harness {
@@ -710,18 +713,29 @@ describe('WP-09 T4 required failure tests', () => {
       liveVersion,
     );
 
-    // The card always renders the version the gate holds, so no click can approve a
-    // superseded Plan silently: the page shows the live version as current.
+    // A card asked for an older version renders that version as expired — disabled
+    // with a visible reason — so the conflict precedes the click (W9R1-02).
     const card = await page(
       `/projects/${harness.projectId}/requirements/${requirement.id}?planVersion=${String(liveVersion - 1)}`,
     );
     expect(card.html).toContain(`data-current-version="${String(liveVersion)}"`);
-    expect(card.html).toContain(`data-plan-version="${String(liveVersion)}"`);
-    expect(card.html).toContain('data-expired="false"');
-    expect(card.html).toContain(
+    expect(card.html).toContain(`data-requested-version="${String(liveVersion - 1)}"`);
+    expect(card.html).toContain('data-expired="true"');
+    expect(card.html).toContain('id="planExpired"');
+    expect(card.html).toContain('data-approvable="false"');
+    expect(card.html).toMatch(/id="approvePlan"[^>]*disabled/u);
+    expect(card.html).toContain('data-i18n="detail.approve"');
+
+    // The same page asked for the version the gate holds is approvable again.
+    const current = await page(
+      `/projects/${harness.projectId}/requirements/${requirement.id}?planVersion=${String(liveVersion)}`,
+    );
+    expect(current.html).toContain(`data-plan-version="${String(liveVersion)}"`);
+    expect(current.html).toContain('data-expired="false"');
+    expect(current.html).toContain(
       `id="approvePlan" data-work="${work.id}" data-plan-version="${String(liveVersion)}"`,
     );
-    expect(card.html).toContain('data-i18n="detail.approve"');
+    expect(current.html).not.toMatch(/id="approvePlan"[^>]*disabled/u);
 
     // An expired decision card is inert on the server as well.
     const expired = store.decisions.insert({
@@ -803,6 +817,153 @@ describe('WP-09 T4 required failure tests', () => {
   });
 
   // -------------------------------------------------------------------------
+  // 归属 — the Chief conversation controls are real, not dead (AC-072)
+  // -------------------------------------------------------------------------
+
+  it('Chief: renders only conversation controls that a real method backs (AC-072, W9R1-07)', async () => {
+    const chief = await page(`/projects/${harness.projectId}/chief`);
+    expect(chief.status).toBe(200);
+    const script = readFileSync(
+      fileURLToPath(new URL('../public/app.js', import.meta.url)),
+      'utf8',
+    );
+    // Every conversation control the Chief page renders has a listener in the shipped
+    // script and a daemon method behind it; a control that cannot act is a dead
+    // control (`experience.md` §1).
+    for (const id of [
+      'newConversation',
+      'newConversationInline',
+      'switchConversation',
+      'conversationSelect',
+    ]) {
+      expect(chief.html, id).toContain(`id="${id}"`);
+      expect(script, id).toContain(`'${id}'`);
+    }
+    expect(script).toContain('initConversations');
+    expect(script).toContain("rpc(\n      'conversation.create'");
+
+    // The control performs a real, durable creation: a new conversation row plus a
+    // `conversation.created` event, and the page can then open it.
+    const before = harness.store.conversations.count();
+    const created = await rpc(
+      'conversation.create',
+      { title: 'a real chief conversation' },
+      { idempotencyKey: 'w9r1-07-create' },
+    );
+    expect(created.frame.ok, JSON.stringify(created.frame.error)).toBe(true);
+    const conversationId = text(created.frame.result ?? {}, 'conversationId');
+    expect(conversationId).not.toBe('');
+    expect(harness.store.conversations.count()).toBe(before + 1);
+    expect(harness.store.conversations.find(conversationId)?.title).toBe(
+      'a real chief conversation',
+    );
+    const events = harness.store.events.readAfter(0, { limit: 200 });
+    expect(events.some((event) => event.name === 'conversation.created')).toBe(true);
+
+    // Switch: the Chief page really reads the requested conversation.
+    const switched = await page(
+      `/projects/${harness.projectId}/chief?conversationId=${encodeURIComponent(conversationId)}`,
+    );
+    expect(switched.html).toContain(`data-conversation="${conversationId}"`);
+    expect(switched.html).toContain('a real chief conversation');
+
+    // A creation against a Work that does not exist is refused, not fabricated.
+    const refused = await rpc(
+      'conversation.create',
+      { title: 'ghost', focusWorkId: uuid('99') },
+      { idempotencyKey: 'w9r1-07-ghost' },
+    );
+    expect(refused.frame.ok).toBe(false);
+    expect(refused.frame.error?.code).toBe('NOT_FOUND');
+  });
+
+  // -------------------------------------------------------------------------
+  // 桥接 — the BFF `/ws` bridge is a transport, not a translation layer (W9R1-08)
+  // -------------------------------------------------------------------------
+
+  it('forwards idempotencyKey and expectedVersion over the /ws bridge (W9R1-08)', async () => {
+    // A paused Work, so `work.control resume` is a real write that reaches the
+    // version check instead of stopping at an `INVALID_STATE`.
+    const work = seedWork(harness, { status: 'running' });
+    const paused = await rpc(
+      'work.control',
+      { action: 'pause', workId: work.id, reason: 'w9r1-08' },
+      { idempotencyKey: 'w9r1-08-pause' },
+    );
+    expect(paused.frame.ok, JSON.stringify(paused.frame.error)).toBe(true);
+    expect(harness.store.works.find(work.id)?.status).toBe('paused');
+
+    const socket = new BrowserSocket(harness.wsUrl, cookie);
+    sockets.push(socket);
+    await socket.opened();
+    socket.send({
+      v: 1,
+      type: 'request',
+      id: 'hello-write',
+      method: 'connection.hello',
+      params: { protocolVersion: 1, client: 'web' },
+    });
+    expect((await socket.waitFor((frame) => frame.id === 'hello-write')).ok).toBe(true);
+
+    // The browser writes over `/ws` with its own envelope semantics; the bridge must
+    // carry both fields through, or the daemon silently ignores them and this
+    // expectedVersion never reaches the Work's version check.
+    socket.send({
+      v: 1,
+      type: 'request',
+      id: 'ws-write',
+      method: 'work.control',
+      params: { action: 'resume', workId: work.id },
+      idempotencyKey: 'w9r1-08-resume',
+      expectedVersion: 999,
+    });
+    const first = await socket.waitFor((frame) => frame.id === 'ws-write');
+    expect(first.ok).toBe(false);
+    expect(first.error?.code).toBe('VERSION_CONFLICT');
+    expect(JSON.stringify(first.error?.details ?? {})).toContain('999');
+    // The refused write changed nothing: the Work is still paused.
+    expect(harness.store.works.find(work.id)?.status).toBe('paused');
+
+    // The same key and payload travel as one command: the daemon replays the recorded
+    // answer, which it can only do if the idempotency key arrived.
+    socket.send({
+      v: 1,
+      type: 'request',
+      id: 'ws-write-again',
+      method: 'work.control',
+      params: { action: 'resume', workId: work.id },
+      idempotencyKey: 'w9r1-08-resume',
+      expectedVersion: 999,
+    });
+    const replayed = await socket.waitFor((frame) => frame.id === 'ws-write-again');
+    expect(replayed.ok).toBe(first.ok);
+    expect(replayed.error?.code).toBe(first.error?.code);
+    expect(replayed.error?.details).toEqual(first.error?.details);
+
+    // A successful write over the bridge is recorded in the same ledger as an HTTP
+    // write, under the bridge's own installation subject.
+    socket.send({
+      v: 1,
+      type: 'request',
+      id: 'ws-ok',
+      method: 'work.control',
+      params: { action: 'resume', workId: work.id },
+      idempotencyKey: 'w9r1-08-resume-ok',
+      expectedVersion: harness.store.works.find(work.id)?.version ?? 1,
+    });
+    const accepted = await socket.waitFor((frame) => frame.id === 'ws-ok');
+    expect(accepted.ok, JSON.stringify(accepted.error)).toBe(true);
+    expect(harness.store.works.find(work.id)?.status).toBe('running');
+    const recorded = harness.store.commands.lookup(
+      'installation:local',
+      'work.control',
+      'w9r1-08-resume-ok',
+    );
+    expect(recorded?.state).toBe('completed');
+    expect(recorded?.response).toEqual(accepted.result);
+  });
+
+  // -------------------------------------------------------------------------
   // 断连 — disconnected, reconnected, nothing lost
   // -------------------------------------------------------------------------
 
@@ -864,13 +1025,51 @@ describe('WP-09 T4 required failure tests', () => {
     // The background Work is untouched by the disconnect.
     expect(harness.store.works.find(work.id)?.status).toBe('running');
 
-    // Events committed while the bridge was down are not lost: a resume from the
-    // watermark replays exactly the newer ones.
+    // Events committed while the bridge was down are not lost: the bridge itself
+    // re-subscribes from the watermark it tracked and replays the newer ones on the
+    // same browser socket (AC-054, W9R1-11). No second browser socket is opened.
     await rpc(
       'conversation.message.send',
       { conversationId: uuid('1'), body: 'during the break', attachmentIds: [] },
       { idempotencyKey: 't4f-during-break' },
     );
+    const reopeningAt = socket.frames.length;
+    expect(socket.frames.some((frame) => frame.type === 'bridge.open')).toBe(true);
+    const reopened = await socket.waitFor(
+      (frame) => frame.type === 'bridge.open' && socket.frames.indexOf(frame) >= reopeningAt,
+      15_000,
+    );
+    // The bridge itself resumed the subscription it was tracking: the reconnect is
+    // observed on the same browser socket, not inferred from a new one (W9R1-11).
+    expect(reopened['resumed']).toBe(1);
+    const replayedOnSameSocket = await socket.waitFor(
+      (frame) =>
+        frame.type === 'event' &&
+        frame.name === 'message.received' &&
+        (frame.cursor ?? 0) > watermark,
+      15_000,
+    );
+    expect(replayedOnSameSocket.cursor).toBeGreaterThan(watermark);
+    await socket.waitFor((frame) => frame.type === 'batch_end', 15_000);
+    // Nothing at or below the watermark was delivered twice after the reconnect
+    // (the pre-break delivery itself is above the split point, not a duplicate).
+    const duplicated = socket.frames
+      .slice(reopeningAt)
+      .filter((frame) => frame.type === 'event' && (frame.cursor ?? 0) <= watermark);
+    expect(duplicated).toEqual([]);
+    // The bridge replayed through the browser socket: the resumed events and batch
+    // delimiter arrived there, without a second browser subscription request.
+    const batchEndsAfterBreak = socket.frames
+      .slice(reopeningAt)
+      .filter((frame) => frame.type === 'batch_end');
+    expect(batchEndsAfterBreak.length).toBeGreaterThan(0);
+    expect(
+      socket.frames
+        .slice(reopeningAt)
+        .some((frame) => frame.type === 'event' && (frame.cursor ?? 0) > watermark),
+    ).toBe(true);
+    // A fresh socket resuming from the same watermark sees the same newer events and
+    // no duplicates, so the bridge's replay is the same contract as a new reconnect.
     const resumed = new BrowserSocket(harness.wsUrl, cookie);
     sockets.push(resumed);
     await resumed.opened();
@@ -903,15 +1102,21 @@ describe('WP-09 T4 required failure tests', () => {
     );
     expect(newer.length).toBeGreaterThan(0);
 
-    // The client script shows the honest disconnected state and schedules a bounded
-    // retry instead of inferring that the Run stopped.
+    // The client script shows the honest disconnected state and schedules a bounded,
+    // exponential retry with a finite attempt cap (W9R1-10): no fixed 2s loop.
     const script = readFileSync(
       fileURLToPath(new URL('../public/app.js', import.meta.url)),
       'utf8',
     );
     expect(script).toContain("showConnection('reconnecting')");
     expect(script).toContain('connection.reconnecting');
-    expect(script).toMatch(/setTimeout\(openSocket, \d+\)/u);
+    expect(script).toContain('const reconnectPolicy');
+    expect(script).toContain('maxAttempts');
+    expect(script).toMatch(/baseDelayMs:\s*1000/u);
+    expect(script).toMatch(/maxDelayMs:\s*30000/u);
+    expect(script).toMatch(/window\.setTimeout\(openSocket, delay\)/u);
+    expect(script).not.toMatch(/setTimeout\(openSocket, 2000\)/u);
+    expect(script).toContain('reconnectDelay');
     expect(script).toContain('afterCursor');
     // The renderer offers the documented wording for a lost connection.
     const rendered = await page(`/projects/${harness.projectId}/chief`);

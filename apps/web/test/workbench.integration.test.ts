@@ -134,12 +134,23 @@ interface SaveHarness {
   readonly journal: ReturnType<typeof createMemoryCasJournal>;
   readonly projectId: string;
   readonly repoRoot: string;
-  /** The revision the delivery branch held when the Project row was written. */
+  /**
+   * The revision the delivery branch holds when the Project row is written.
+   *
+   * A getter, not a snapshot: the tests share one harness, and a test that writes a
+   * real Git record (the Queued cancellation) advances the branch. The baseline a
+   * later test must name is the branch it actually reads, which is what `head()`
+   * answers; the seed revision stays available as `seedRevision`.
+   */
   readonly baseRevision: string;
+  /** The delivery-branch revision at harness start. */
+  readonly seedRevision: string;
   /** Reads a repository-relative blob at a revision; `null` when it is absent. */
   readAtRevision(revision: string, path: string): string | null;
   /** Current delivery-branch revision, from the real Git port. */
   head(): string;
+  /** Commits `README.md` with the given message; used to advance the branch. */
+  commitAll(message: string): string;
 }
 
 interface Harness {
@@ -560,10 +571,20 @@ async function startHarness(): Promise<Harness> {
       journal,
       projectId,
       repoRoot,
-      baseRevision: seed.revision,
+      get baseRevision(): string {
+        return value(git.headRevision(repoRoot), 'head revision') ?? '';
+      },
+      seedRevision: seed.revision,
       readAtRevision: (revision, path) =>
         value(git.readBlob(repoRoot, revision, path), 'read blob'),
       head: () => value(git.headRevision(repoRoot), 'head revision') ?? '',
+      commitAll: (message) => {
+        const committed = value<{ revision: string }>(
+          git.commitPaths(repoRoot, message, ['README.md']),
+          'test commit',
+        );
+        return committed.revision;
+      },
     },
     projectId,
     providerId: provider.providerId,
@@ -1086,61 +1107,94 @@ describe('WP-09 T4: the workbench end to end over the real stack', () => {
   // AC-068: board identity, the Queued cancel, the absent L1
   // -------------------------------------------------------------------------
 
-  it('refuses a Queued requirement cancel honestly when the Git record service refuses (AC-068)', async () => {
-    const queued = seedRequirement(harness, 'queued', undefined, 'cancel me in Git');
+  it('cancels a Queued requirement with no Work through the real Git record service (AC-068)', async () => {
+    // The record has to exist in Git, because the save service reads the delivery
+    // baseline: a projection-only fixture is the honest REQUIREMENT_CONFLICT, not
+    // the cancellation path under test. `requirement.save` creates the real
+    // Queued record and its commit first.
+    const created = await rpc(
+      'requirement.save',
+      {
+        sourceRef: { kind: 'action', id: uuid('30'), version: '1' },
+        patch: {
+          title: 'cancel me in Git',
+          goal: 'cancel a Queued requirement without a Work',
+          scope: { readPaths: [], writePaths: [], operations: [], networkTargets: [] },
+          lifecycle: 'queued',
+          contentMarkdown: requirementBody('unpaid orders can be cancelled'),
+        },
+      },
+      { idempotencyKey: `t4-cancel-create`, expectedVersion: 0 },
+    );
+    expect(created.frame.ok, JSON.stringify(created.frame.error)).toBe(true);
+    const queuedId = text(created.frame.result ?? {}, 'requirementId');
+    expect(queuedId).not.toBe('');
     const beforeHead = harness.saves.head();
 
     const board = await page(`/projects/${harness.projectId}/requirements`);
-    expect(board.html).toContain(`data-requirement="${queued.id}"`);
+    expect(board.html).toContain(`data-requirement="${queuedId}"`);
     expect(board.html).toContain(
-      `data-action="pause" data-requirement="${queued.id}" data-refused="INVALID_STATE"`,
+      `data-action="pause" data-requirement="${queuedId}" data-refused="INVALID_STATE"`,
     );
-    expect(board.html).toContain(`data-action="cancel" data-requirement="${queued.id}"`);
+    expect(board.html).toContain(`data-action="cancel" data-requirement="${queuedId}"`);
 
     // Pausing a Queued requirement is refused: there is no local Work to pause.
     const refusedPause = await rpc('work.control', {
       action: 'pause',
-      requirementId: queued.id,
+      requirementId: queuedId,
       reason: 'ui',
     });
     expect(refusedPause.status).toBe(409);
     expect(refusedPause.frame.error?.code).toBe('INVALID_STATE');
 
-    // The cancel goes through the real `RequirementSaveService`. The daemon's own
-    // cancel path builds a body without the six documented sections, so the service
-    // refuses it with a structural `VALIDATION_ERROR`: the branch is untouched and
-    // the projection is not silently rewritten. (A daemon that built a conforming
-    // body would report `cancelled` plus a real commit; see the T4 report.)
+    // A Queued requirement with no Work cancels directly (AC-068): the daemon
+    // generates the canonical six-heading body, the real `RequirementSaveService`
+    // writes the Git record, and the projection follows it.
     const cancel = await rpc(
       'work.control',
-      { action: 'cancel', requirementId: queued.id, reason: 'no longer needed' },
-      { idempotencyKey: `t4-cancel-${queued.id}` },
+      { action: 'cancel', requirementId: queuedId, reason: 'no longer needed' },
+      { idempotencyKey: `t4-cancel-${queuedId}` },
     );
-    if (cancel.frame.ok) {
-      const git = cancel.frame.result?.['git'] as { commit?: string } | undefined;
-      expect(typeof git?.commit).toBe('string');
-      expect(cancel.frame.result?.['lifecycle']).toBe('cancelled');
-      expect(harness.saves.head()).not.toBe(beforeHead);
-      expect(
-        harness.saves.readAtRevision(
-          text(cancel.frame.result, 'head'),
-          `.agentdev/requirements/${queued.id}/content.md`,
-        ),
-      ).toContain('cancel me in Git');
-      const after = await page(`/projects/${harness.projectId}/requirements`);
-      expect(after.html).toContain(`data-lifecycle="cancelled"`);
-    } else {
-      expect(['VALIDATION_ERROR', 'INVALID_STATE']).toContain(cancel.frame.error?.code ?? '');
-      expect(harness.daemon.store.requirements.find(queued.id)?.lifecycle).toBe('queued');
-      expect(harness.saves.head()).toBe(beforeHead);
-      const branch = JSON.stringify(
-        (cancel.frame.error?.details as { branchUntouched?: unknown } | undefined) ?? {},
-      );
-      expect(branch).not.toContain('cancelled');
+    expect(cancel.frame.ok, JSON.stringify(cancel.frame.error)).toBe(true);
+    const git = cancel.frame.result?.['git'] as
+      { commit?: string; branch?: string; unpushed?: boolean } | undefined;
+    expect(cancel.frame.result?.['lifecycle']).toBe('cancelled');
+    expect(String(git?.commit ?? '')).toHaveLength(40);
+    expect(harness.saves.head()).toBe(String(git?.commit));
+    expect(harness.saves.head()).not.toBe(beforeHead);
+    // The committed body is the canonical record: all six level-2 headings, once
+    // each, with the recorded cancellation reason as the completion summary.
+    const content =
+      harness.saves.readAtRevision(
+        String(git?.commit),
+        `.agentdev/requirements/${queuedId}/content.md`,
+      ) ?? '';
+    for (const heading of [
+      '目标与背景',
+      '范围与行为',
+      '验收说明',
+      '已确认决定',
+      '未决问题',
+      '完成摘要',
+    ]) {
+      expect(content.split(`## ${heading}`)).toHaveLength(2);
     }
+    expect(content).toContain('no longer needed');
+    const metadata =
+      harness.saves.readAtRevision(
+        String(git?.commit),
+        `.agentdev/requirements/${queuedId}/requirement.json`,
+      ) ?? '';
+    expect(JSON.parse(metadata)).toMatchObject({
+      lifecycle: 'cancelled',
+      cancellation: { reason: 'no longer needed' },
+    });
+    expect(harness.daemon.store.requirements.find(queuedId)?.lifecycle).toBe('cancelled');
+
     // Whatever the outcome, the board still shows the true lifecycle.
     const after = await page(`/projects/${harness.projectId}/requirements`);
-    expect(after.html).toContain(`data-requirement="${queued.id}"`);
+    expect(after.html).toContain(`data-requirement="${queuedId}"`);
+    expect(after.html).toContain('data-lifecycle="cancelled"');
   });
 
   it('keeps an L1 Work off the board and reports it as excluded (AC-068)', async () => {
@@ -1319,16 +1373,166 @@ describe('WP-09 T4: the workbench end to end over the real stack', () => {
       liveVersion,
     );
 
-    // The page always renders the version the gate actually holds, so no card can
-    // silently approve a superseded Plan; an older revision is refused above.
+    // A card asked for an older version renders that version as expired and disables
+    // approval with a visible reason, so the conflict is visible before the click
+    // (AC-070, W9R1-02).
     const staleCard = await page(
       `/projects/${harness.projectId}/requirements/${requirement.id}?planVersion=${String(liveVersion - 1)}`,
     );
+    expect(staleCard.html).toContain(`data-requested-version="${String(liveVersion - 1)}"`);
     expect(staleCard.html).toContain(`data-current-version="${String(liveVersion)}"`);
-    expect(staleCard.html).toContain('data-expired="false"');
+    expect(staleCard.html).toContain('data-expired="true"');
+    expect(staleCard.html).toContain('id="planExpired"');
+    expect(staleCard.html).toMatch(/id="approvePlan"[^>]*disabled/u);
+    expect(staleCard.html).toContain('data-approvable="false"');
+
+    // The current version stays valid and approvable.
+    const currentCard = await page(
+      `/projects/${harness.projectId}/requirements/${requirement.id}?planVersion=${String(liveVersion)}`,
+    );
+    expect(currentCard.html).toContain('data-expired="false"');
+    expect(currentCard.html).not.toMatch(/id="approvePlan"[^>]*disabled/u);
 
     // The refusal did not touch the background Work.
     expect(store.works.find(work.id)?.status).toBe('running');
+  });
+
+  it('approves the Plan the card shows through the real gate (AC-070, W9R1-01)', async () => {
+    const store = harness.daemon.store;
+    const work = seedWork(harness, { status: 'running' });
+    const authorization = store.authorizations.insert({
+      projectId: harness.projectId,
+      workId: work.id,
+      sourceRef: { kind: 'action', id: uuid('30'), version: '1' },
+      goal: 'approve the shown plan',
+      scope: {
+        readPaths: ['src'],
+        writePaths: ['src'],
+        operations: ['read', 'edit'],
+        networkTargets: [],
+      },
+      operations: ['read', 'edit'],
+      acceptedAt: new Date().toISOString(),
+    });
+    const planningRun = seedRun(harness, { workId: work.id, role: 'planning', stage: 'plan' });
+    const submitted = harness.daemon.gates.submitPlan({
+      workId: work.id,
+      revision: harness.saves.baseRevision,
+      plan: {
+        goal: 'approve the shown plan',
+        scope: {
+          readPaths: ['src'],
+          writePaths: ['src'],
+          operations: ['read', 'edit'],
+          networkTargets: [],
+        },
+        tasks: [
+          {
+            id: store.newId(),
+            role: 'backend',
+            goal: 'edit the orders module',
+            paths: ['src'],
+            dependsOn: [],
+            acceptanceIds: [],
+            checks: ['pnpm test:unit'],
+          },
+        ],
+      },
+      approval: {
+        authorizationRef: authorization.id,
+        runId: planningRun.id,
+        productChanged: false,
+        at: TIME,
+      },
+    });
+    if (!submitted.approved) throw new Error(`the plan was refused: ${submitted.message}`);
+    const liveVersion = submitted.planRef.version;
+    const requirement = seedRequirement(harness, 'active', work.id, 'approve the card');
+    const detailUrl = `/projects/${harness.projectId}/requirements/${requirement.id}`;
+
+    // Step 1 — the card asks the gate for the Plan body and the local authorization,
+    // which is exactly the round trip `public/app.js` now performs (W9R1-01).
+    const planCurrent = await rpc('plan.current', { workId: work.id, planVersion: liveVersion });
+    expect(planCurrent.frame.ok, JSON.stringify(planCurrent.frame.error)).toBe(true);
+    const gate = planCurrent.frame.result ?? {};
+    expect(gate['current']).toBe(true);
+    expect(gate['currentVersion']).toBe(liveVersion);
+    expect(gate['authorizationId']).toBe(authorization.id);
+    expect(gate['runId']).toBe(planningRun.id);
+    expect((gate['approval'] as { enabled?: boolean })?.enabled).toBe(true);
+    const planBody = gate['plan'] as { tasks?: unknown[] } | undefined;
+    expect(Array.isArray(planBody?.tasks)).toBe(true);
+    expect((planBody?.tasks ?? []).length).toBeGreaterThan(0);
+
+    // Step 2 — that payload approves through the real PlanGateService: 200/applied
+    // and a real next version, never the old `plan:{}` + `workbench` 422.
+    const approved = await rpc(
+      'plan.approve',
+      {
+        workId: work.id,
+        revision: harness.saves.baseRevision,
+        planVersion: liveVersion,
+        plan: planBody,
+        approval: {
+          authorizationRef: gate['authorizationId'],
+          runId: gate['runId'],
+          productChanged: false,
+        },
+      },
+      { idempotencyKey: `t4-approve-${work.id}`, expectedVersion: liveVersion },
+    );
+    expect(approved.frame.ok, JSON.stringify(approved.frame.error)).toBe(true);
+    expect(approved.frame.result?.['status']).toBe('applied');
+    const approvedVersion = Number(approved.frame.result?.['version'] ?? 0);
+    expect(approvedVersion).toBeGreaterThan(liveVersion);
+    expect(
+      harness.daemon.gates.getCurrentPlanApproval(work.id, harness.saves.baseRevision).current
+        ?.planRef.version,
+    ).toBe(approvedVersion);
+    // The card now shows the new version as the live one.
+    const after = await page(detailUrl);
+    expect(after.html).toContain(`data-current-version="${String(approvedVersion)}"`);
+    expect(after.html).toContain('data-expired="false"');
+
+    // The same payload with the same key replays the recorded result instead of
+    // approving a third version (W9R1-04).
+    const replayed = await rpc(
+      'plan.approve',
+      {
+        workId: work.id,
+        revision: harness.saves.baseRevision,
+        planVersion: liveVersion,
+        plan: planBody,
+        approval: {
+          authorizationRef: gate['authorizationId'],
+          runId: gate['runId'],
+          productChanged: false,
+        },
+      },
+      { idempotencyKey: `t4-approve-${work.id}`, expectedVersion: liveVersion },
+    );
+    expect(replayed.frame.ok, JSON.stringify(replayed.frame.error)).toBe(true);
+    expect(replayed.frame.result?.['version']).toBe(approvedVersion);
+  });
+
+  it('disables Plan approval with a visible reason when the gate holds no Plan (W9R1-01)', async () => {
+    const work = seedWork(harness, { status: 'running' });
+    const requirement = seedRequirement(harness, 'active', work.id, 'no plan yet');
+
+    // The daemon says so honestly instead of the page promising an approval.
+    const planCurrent = await rpc('plan.current', { workId: work.id });
+    expect(planCurrent.frame.ok, JSON.stringify(planCurrent.frame.error)).toBe(true);
+    const gate = planCurrent.frame.result ?? {};
+    expect(gate['currentVersion']).toBe(0);
+    expect(gate['plan']).toBeNull();
+    expect(gate['authorizationId']).toBeNull();
+    expect((gate['approval'] as { enabled?: boolean })?.enabled).toBe(false);
+    expect(String((gate['approval'] as { reason?: string })?.reason ?? '')).not.toBe('');
+
+    const html = (await page(`/projects/${harness.projectId}/requirements/${requirement.id}`)).html;
+    expect(html).toMatch(/id="approvePlan"[^>]*disabled/u);
+    expect(html).toContain('data-approvable="false"');
+    expect(html).toContain('id="approveBlocked"');
   });
 
   it('renders a truncated artifact with the full one-shot download (AC-070)', async () => {
@@ -1390,9 +1594,12 @@ describe('WP-09 T4: the workbench end to end over the real stack', () => {
 
   it('reads the branch preview inside the root boundary without touching a snapshot (AC-077)', async () => {
     const projectId = harness.projectId;
+    // The Project row is seeded with the branch revision that existed when it was
+    // written; a later real commit must not silently move the label.
+    const seeded = harness.daemon.store.projects.find(projectId)?.head ?? '';
     const listing = await page(`/projects/${projectId}/files?path=README.md`);
     expect(listing.status).toBe(200);
-    expect(listing.html).toContain(`data-revision="${harness.saves.baseRevision}"`);
+    expect(listing.html).toContain(`data-revision="${seeded}"`);
     expect(listing.html).toContain(`data-branch="agentdev/main"`);
     expect(listing.html).toContain('data-i18n="files.rootBoundary"');
     expect(listing.html).toContain('data-i18n="files.snapshotUntouched"');
@@ -1418,13 +1625,19 @@ describe('WP-09 T4: the workbench end to end over the real stack', () => {
 
     // The page names the Project row's target revision, so advancing the delivery
     // branch moves the label only when the Project row itself moves.
+    writeFileSync(join(harness.daemon.projectRoot, 'README.md'), '# delivery fixture\n\nmoved\n');
+    const advanced = harness.saves.commitAll('chore: advance the delivery branch');
+    expect(advanced).not.toBe(seeded);
+    const stale = await page(`/projects/${projectId}/files?path=README.md`);
+    expect(stale.html).toContain(`data-revision="${seeded}"`);
+    expect(stale.html).not.toContain(`data-revision="${advanced}"`);
     harness.daemon.store.projects.update(
       projectId,
-      { head: harness.saves.head() },
+      { head: advanced },
       harness.daemon.store.projects.find(projectId)?.version ?? 1,
     );
     const moved = await page(`/projects/${projectId}/files?path=README.md`);
-    expect(moved.html).toContain(`data-revision="${harness.saves.head()}"`);
+    expect(moved.html).toContain(`data-revision="${advanced}"`);
   });
 
   // -------------------------------------------------------------------------

@@ -29,6 +29,7 @@ import {
 } from '../src/pages.js';
 import { UI_STRINGS, translator, translationKeys, type Language } from '../src/i18n.js';
 import { escapeHtml, renderDocument } from '../src/html.js';
+import { planCard, planVersionOf } from '../src/app.js';
 import {
   agentsModel,
   boardModel,
@@ -504,6 +505,130 @@ describe('requirement detail page', () => {
       t,
     });
     expect(html).toContain('data-success="false"');
+  });
+
+  it('derives the plan version only from the gate answer, not from plan artifacts (W9R1-12)', () => {
+    const gateAnswer = {
+      workId: 'w',
+      revision: 'rev',
+      currentVersion: 2,
+      requestedVersion: 2,
+      current: true,
+      approved: true,
+      gateStatus: 'approved',
+      approvedVersion: 2,
+      approvedAt: '2026-01-01T00:00:00.000Z',
+      authorizationId: 'auth-1',
+      plan: { goal: 'g', tasks: [{ id: 't1' }] },
+      approval: { enabled: true, reason: null },
+    };
+    const card = planCard({ work: {}, workId: 'w', revision: 'rev', planCurrent: gateAnswer });
+    expect(card.currentVersion).toBe(2);
+    expect(card.expired).toBe(false);
+    expect(card.approvalEnabled).toBe(true);
+    // A stale gate stays expired even when a historical artifact claims the version.
+    const stale = planCard({
+      work: {},
+      workId: 'w',
+      revision: 'rev',
+      planCurrent: { ...gateAnswer, gateStatus: 'stale' },
+    });
+    expect(stale.expired).toBe(true);
+    // Without the gate answer the card must not promise an approval the page cannot build.
+    const missing = planCard({ work: {}, workId: 'w', revision: 'rev' });
+    expect(missing.approvalEnabled).toBe(false);
+    expect(missing.approvalReason).not.toBeNull();
+  });
+
+  it('parses the planVersion query parameter and rejects a malformed one (W9R1-02)', () => {
+    expect(planVersionOf('3')).toBe(3);
+    expect(planVersionOf('0')).toBe(0);
+    expect(planVersionOf(null)).toBeUndefined();
+    expect(planVersionOf('')).toBeUndefined();
+    expect(planVersionOf('abc')).toBeUndefined();
+    expect(planVersionOf('-1')).toBeUndefined();
+    expect(planVersionOf('2.5')).toBeUndefined();
+  });
+
+  it('disables approval with a visible reason when the gate cannot hand over the Plan (W9R1-01)', () => {
+    const requirement = {
+      id: 'req-1',
+      title: 'x',
+      goal: 'g',
+      lifecycle: 'active',
+      recordVersion: 1,
+      work: { id: 'w' },
+    };
+    const blocked = requirementDetail({
+      requirement,
+      artifacts: [],
+      runs: [],
+      plan: {
+        workId: 'w',
+        revision: 'rev',
+        currentVersion: 4,
+        requestedVersion: 4,
+        approvalEnabled: false,
+        approvalReason: 'the Plan body could not be read back from the artifact store',
+      },
+    });
+    expect(blocked.plan?.approvalEnabled).toBe(false);
+    expect(blocked.plan?.approvalReason).toBe(
+      'the Plan body could not be read back from the artifact store',
+    );
+    const html = renderRequirementPage({ detail: blocked, projectId: 'proj-1', t });
+    expect(html).toContain('data-approvable="false"');
+    expect(html).toContain('id="approveBlocked"');
+    expect(html).toContain('the Plan body could not be read back from the artifact store');
+    expect(html).toMatch(/id="approvePlan"[^>]*disabled/u);
+    // The card is current, so it must not claim the version is expired.
+    expect(html).not.toContain('id="planExpired"');
+
+    const allowed = requirementDetail({
+      requirement,
+      artifacts: [],
+      runs: [],
+      plan: {
+        workId: 'w',
+        revision: 'rev',
+        currentVersion: 4,
+        requestedVersion: 4,
+        approvalEnabled: true,
+        approvalReason: null,
+      },
+    });
+    const allowedHtml = renderRequirementPage({ detail: allowed, projectId: 'proj-1', t });
+    expect(allowedHtml).toContain('data-approvable="true"');
+    expect(allowedHtml).not.toMatch(/id="approvePlan"[^>]*disabled/u);
+  });
+
+  it('renders an explicit expired card for a requested historical version (W9R1-02)', () => {
+    const detail = requirementDetail({
+      requirement: {
+        id: 'req-1',
+        title: 'x',
+        goal: 'g',
+        lifecycle: 'active',
+        recordVersion: 1,
+        work: { id: 'w' },
+      },
+      artifacts: [],
+      runs: [],
+      plan: {
+        workId: 'w',
+        revision: 'rev',
+        currentVersion: 5,
+        requestedVersion: 4,
+        approvalEnabled: false,
+      },
+    });
+    expect(detail.plan?.expired).toBe(true);
+    const html = renderRequirementPage({ detail, projectId: 'proj-1', t });
+    expect(html).toContain('data-requested-version="4"');
+    expect(html).toContain('data-current-version="5"');
+    expect(html).toContain('data-expired="true"');
+    expect(html).toContain('id="planExpired"');
+    expect(html).toMatch(/id="approvePlan"[^>]*disabled/u);
   });
 });
 

@@ -192,6 +192,7 @@ const GLOBAL_METHODS: readonly string[] = [
 /** Methods that change state and therefore accept an `idempotencyKey`. */
 export const WRITE_METHODS: readonly string[] = [
   'project.open',
+  'conversation.create',
   'conversation.message.send',
   'work.control',
   'requirement.save',
@@ -205,6 +206,54 @@ export const WRITE_METHODS: readonly string[] = [
   'backup.run',
   'restore.run',
 ];
+
+/**
+ * Write methods whose idempotency ledger entry the generic wrapper owns.
+ *
+ * `conversation.message.send` and `requirement.save` are deliberately absent: their
+ * effects already run inside their own transaction together with a dedicated ledger
+ * entry, and nesting a second wrapper there would double-record the same command.
+ * `backup.run`/`restore.run` use the non-transactional variant below.
+ */
+const LEDGER_WRAPPED_METHODS: readonly string[] = [
+  'conversation.create',
+  'project.open',
+  'work.control',
+  'requirement.continue',
+  'plan.approve',
+  'finding.submit',
+  'decision.resolve',
+  'config.save',
+  'config.test',
+];
+
+/**
+ * Write methods whose ledger entry cannot share a transaction with its effect.
+ *
+ * `backupProject` snapshots the database with SQLite `VACUUM INTO` on the same
+ * connection, and SQLite refuses that inside a transaction (W9R1-04). The ledger
+ * row is therefore written and completed around the operation on its own; a crash
+ * between the effect and `complete` can only cause a re-run, never a false replay.
+ */
+const NON_TRANSACTIONAL_LEDGER_METHODS: readonly string[] = ['backup.run', 'restore.run'];
+
+/**
+ * The six level-2 headings every `content.md` carries, in order
+ * (`requirements.md` §6). The daemon generates a canonical record for a
+ * cancellation, so the body is copied here instead of imported from Core's
+ * validator; the real `RequirementSaveService` still validates every save.
+ */
+const REQUIREMENT_CONTENT_HEADINGS = [
+  '目标与背景',
+  '范围与行为',
+  '验收说明',
+  '已确认决定',
+  '未决问题',
+  '完成摘要',
+] as const;
+
+/** Placeholder for a requirement section that carries no content yet. */
+const REQUIREMENT_EMPTY_SECTION = '待明确';
 
 /** The daemon's own interface-string catalogue; the UI owns its wordings. */
 const UI_STRINGS: Record<string, { readonly en: string; readonly zh: string }> = {
@@ -508,12 +557,13 @@ export class WorkbenchProtocol {
     const needsProject = !GLOBAL_METHODS.includes(method);
     if (needsProject && options.projectId !== undefined && options.projectId !== this.projectId) {
       // `protocol.md` §1: a cross-Project id is NOT_FOUND, never another Project's
-      // data. This daemon holds exactly one ProjectRuntime.
+      // data. This daemon holds exactly one ProjectRuntime, and the refusal echoes
+      // only the id the caller sent — never this installation's own id (W9R1-03).
       throw new ProtocolError(
         'NOT_FOUND',
         `Project ${options.projectId} is not open on this daemon`,
         {
-          details: { projectId: options.projectId, openProjectId: this.projectId },
+          details: { projectId: options.projectId },
         },
       );
     }
@@ -533,6 +583,110 @@ export class WorkbenchProtocol {
         throw new ProtocolError('VALIDATION_ERROR', 'expectedVersion must be an integer');
       }
     }
+    if (LEDGER_WRAPPED_METHODS.includes(method) && options.idempotencyKey !== undefined) {
+      // `protocol.md` §1: every `*` method honours the idempotency key. The two
+      // methods whose effects own their own transaction keep their dedicated
+      // ledger (see `sendMessageCommand`/`saveRequirement`); every other write is
+      // recorded here in the same transaction as its answer (W9R1-04).
+      return this.withCommandLedger(method, params, options, () =>
+        this.dispatchUnwrapped(method, params, options),
+      );
+    }
+    if (NON_TRANSACTIONAL_LEDGER_METHODS.includes(method) && options.idempotencyKey !== undefined) {
+      return this.withNonTransactionalCommandLedger(method, params, options, () =>
+        this.dispatchUnwrapped(method, params, options),
+      );
+    }
+    return this.dispatchUnwrapped(method, params, options);
+  }
+
+  /**
+   * Records one write command around `action` (W9R1-04).
+   *
+   * The ledger row and the command's own effects commit in one transaction, so a
+   * crash cannot leave an accepted key without its recorded result. The backing
+   * store is SQLite, so this nesting changes atomicity only, never durability.
+   */
+  private withCommandLedger(
+    method: string,
+    params: JsonObject,
+    options: { readonly caller: WorkbenchCaller; readonly idempotencyKey?: string },
+    action: () => unknown,
+  ): unknown {
+    const store = this.services.store;
+    return withTransaction(store.db, () => {
+      const key = options.idempotencyKey as string;
+      const begun = store.commands.begin({
+        subject: options.caller.subject,
+        operation: method,
+        key,
+        payloadHash: sha256Of(params),
+      });
+      if (begun.kind === 'conflict') {
+        throw new ProtocolError('IDEMPOTENCY_CONFLICT', begun.reason, {
+          details: { idempotencyKey: key },
+        });
+      }
+      if (begun.kind === 'replay') return begun.response;
+      const reply = action();
+      store.commands.complete(begun.commandId, reply ?? null);
+      return reply;
+    });
+  }
+
+  /**
+   * Records one write command whose effect cannot share this transaction (W9R1-04).
+   *
+   * The ledger row is durably accepted before the effect runs, so a replay after a
+   * lost response returns the recorded result instead of running the operation a
+   * second time. A refused effect deletes its accepted row, so a key never pins a
+   * failure and a retry with the same key is free to run again.
+   */
+  private withNonTransactionalCommandLedger(
+    method: string,
+    params: JsonObject,
+    options: { readonly caller: WorkbenchCaller; readonly idempotencyKey?: string },
+    action: () => unknown,
+  ): unknown {
+    const store = this.services.store;
+    const key = options.idempotencyKey as string;
+    const begun = store.commands.begin({
+      subject: options.caller.subject,
+      operation: method,
+      key,
+      payloadHash: sha256Of(params),
+    });
+    if (begun.kind === 'conflict') {
+      throw new ProtocolError('IDEMPOTENCY_CONFLICT', begun.reason, {
+        details: { idempotencyKey: key },
+      });
+    }
+    if (begun.kind === 'replay') return begun.response;
+    let reply: unknown;
+    try {
+      reply = action();
+    } catch (error) {
+      withTransaction(store.db, () => {
+        store.db.prepare('DELETE FROM command WHERE id = ?').run(begun.commandId);
+      });
+      throw error;
+    }
+    withTransaction(store.db, () => {
+      store.commands.complete(begun.commandId, reply ?? null);
+    });
+    return reply;
+  }
+
+  private dispatchUnwrapped(
+    method: string,
+    params: JsonObject,
+    options: {
+      readonly caller: WorkbenchCaller;
+      readonly idempotencyKey?: string;
+      readonly expectedVersion?: number;
+      readonly projectId?: string;
+    },
+  ): unknown {
     switch (method) {
       // ----- project / conversation -----------------------------------------
       case 'projects':
@@ -544,6 +698,8 @@ export class WorkbenchProtocol {
         return this.projectSnapshot();
       case 'conversation.list':
         return this.listConversations(params);
+      case 'conversation.create':
+        return this.createConversation(params, options);
       case 'conversation.get':
         return this.getConversation(params);
       case 'conversation.message.send':
@@ -597,6 +753,8 @@ export class WorkbenchProtocol {
       case 'config.test':
         return this.testConfig(params);
       // ----- gates / findings / decisions -----------------------------------
+      case 'plan.current':
+        return this.currentPlan(params);
       case 'plan.approve':
         return this.approvePlan(params, options);
       case 'finding.submit':
@@ -693,6 +851,52 @@ export class WorkbenchProtocol {
       })),
       nextCursor: null,
     };
+  }
+
+  /**
+   * `conversation.create` — a new Chief conversation (`protocol.md` §3).
+   *
+   * `experience.md` §1 keeps creation and switching on the Chief page; the row is
+   * the real one the Chief page then reads, so the control that calls this method
+   * is never a dead button (AC-072).
+   */
+  private createConversation(
+    params: JsonObject,
+    options: { readonly caller: WorkbenchCaller },
+  ): unknown {
+    const store = this.services.store;
+    const title = optionalString(params['title']) ?? 'Chief conversation';
+    const focusWorkId = optionalString(params['focusWorkId']);
+    if (focusWorkId !== undefined && store.works.find(focusWorkId) === undefined) {
+      throw new ProtocolError('NOT_FOUND', `Work ${focusWorkId} does not exist`, {
+        details: { focusWorkId },
+      });
+    }
+    return withTransaction(store.db, () => {
+      const conversation = store.conversations.insert({
+        title,
+        archived: false,
+        ...(focusWorkId === undefined ? {} : { focusWorkId }),
+      });
+      store.events.append({
+        name: 'conversation.created',
+        entityId: conversation.id,
+        entityVersion: conversation.version,
+        data: {
+          conversationId: conversation.id,
+          title: conversation.title,
+          focusWorkId: conversation.focusWorkId ?? null,
+          ownerUserId: options.caller.userId,
+        },
+      });
+      return {
+        status: 'applied',
+        entityId: conversation.id,
+        version: conversation.version,
+        conversationId: conversation.id,
+        conversation,
+      };
+    });
   }
 
   private getConversation(params: JsonObject): unknown {
@@ -1490,7 +1694,11 @@ export class WorkbenchProtocol {
         relatedRequirementIds: [],
         cancellation: { cancelledAt: now, reason: reason === '' ? '用户取消' : reason },
       },
-      contentMarkdown: `# ${requirement.title}\n\n${requirement.goal}\n`,
+      contentMarkdown: canonicalRequirementContent({
+        title: requirement.title,
+        goal: requirement.goal,
+        completion: reason === '' ? '用户取消' : reason,
+      }),
       expected: {
         recordVersion: requirement.recordVersion,
         recordHash: requirement.portableRef.hash,
@@ -1600,6 +1808,10 @@ export class WorkbenchProtocol {
     // A new record's identity is server-created; the client cannot choose it
     // (`protocol.md` §8 "version、contentFile及Hash由Core维护").
     const id = existing?.id ?? this.services.store.newId();
+    // A patch that names no scope keeps the empty envelope: a Requirement row has no
+    // scope field, so an unnamed scope must never be filled from `sourceRef`, which
+    // is a source reference and not a `Scope` (T4 §4.2, W9R1-05).
+    const requestedScope = patch['scope'] ?? existing?.sourceRef ?? emptyScope();
     const metadata = {
       schemaVersion: 1 as const,
       id,
@@ -1611,7 +1823,7 @@ export class WorkbenchProtocol {
       updatedAt: now,
       title: stringOr(patch, 'title', existing?.title ?? ''),
       goal: stringOr(patch, 'goal', existing?.goal ?? ''),
-      scope: (patch['scope'] ?? existing?.sourceRef ?? emptyScope()) as Scope,
+      scope: isScope(requestedScope) ? requestedScope : emptyScope(),
       lifecycle: (optionalString(patch['lifecycle']) ?? existing?.lifecycle ?? 'queued') as
         'queued' | 'active' | 'completed' | 'cancelled' | 'archived',
       featureIds: stringArray(patch['featureIds']),
@@ -1719,6 +1931,147 @@ export class WorkbenchProtocol {
       firstGate: result.firstGate,
       waitingToContinue: false,
     };
+  }
+
+  /**
+   * `plan.current` — the Plan a card may approve, read from the real gate.
+   *
+   * The workbench needs two things before it can call `plan.approve` without
+   * guessing (`AC-070`, W9R1-01): the Plan body the gate approved and the local
+   * authorization the Plan rests on. Both come from the gate's own approval record
+   * and its artifact — never from a second copy — so a card that cannot obtain them
+   * reports `approval.enabled=false` with the reason instead of sending a request
+   * that must fail.
+   */
+  private currentPlan(params: JsonObject): unknown {
+    const gates = this.requireGates();
+    const workId = requiredString(params, 'workId');
+    const work = this.services.store.works.find(workId);
+    if (work === undefined) {
+      throw new ProtocolError('NOT_FOUND', `Work ${workId} does not exist`);
+    }
+    const revision = optionalString(params['revision']) ?? work.baseRevision ?? 'working-tree';
+    const approval = gates.getCurrentPlanApproval(workId, revision);
+    const current = approval.current;
+    const currentVersion = current?.planRef.version ?? 0;
+    const requestedVersion = optionalInteger(params['planVersion']) ?? currentVersion;
+    const requested = requestedVersion === currentVersion;
+    const response: JsonObject = {
+      workId,
+      revision,
+      currentVersion,
+      requestedVersion,
+      current: requested,
+      // `approved` is the gate's own verdict: a `stale` record is visible but not
+      // approvable, so the card must not treat it as live (W9R1-12).
+      approved: approval.status === 'approved' && current !== undefined,
+      gateStatus: approval.status,
+      approvedVersion: current?.planRef.version ?? null,
+      approvedAt: current?.approval.at ?? null,
+      runId: this.planningRunIdOf(current?.planRef.id),
+      authorizationId: null,
+      plan: null,
+      approval: {
+        enabled: false,
+        reason: null,
+      },
+    };
+    if (current === undefined) {
+      // No approved Plan for this revision: the card renders the gate's own
+      // "missing" verdict instead of an approve button that cannot work.
+      response['approval'] = {
+        enabled: false,
+        reason: 'the gate holds no approved Plan for this Work revision',
+      };
+      return response;
+    }
+    if (!requested) {
+      response['approval'] = {
+        enabled: false,
+        reason: `Plan version ${requestedVersion} is not the current one (${currentVersion})`,
+      };
+      return response;
+    }
+    if (approval.status !== 'approved') {
+      response['approval'] = {
+        enabled: false,
+        reason: `the gate no longer accepts the Plan of version ${currentVersion} (${approval.status})`,
+      };
+      return response;
+    }
+    // A legacy approval record that names no authorization leaves the card
+    // unusable; saying so is better than approving the Plan with a fabricated ref.
+    const authorizationRef =
+      current.approval.authorizationRef === undefined || current.approval.authorizationRef === ''
+        ? null
+        : current.approval.authorizationRef;
+    response['authorizationId'] = authorizationRef;
+    const draft = this.readPlanBody(workId, current.planRef.id);
+    if (draft === null) {
+      response['approval'] = {
+        enabled: false,
+        reason: 'the Plan body could not be read back from the artifact store',
+      };
+      return response;
+    }
+    response['plan'] = draft;
+    if (authorizationRef === null) {
+      response['approval'] = {
+        enabled: false,
+        reason: 'the approved Plan records no local authorization envelope',
+      };
+      return response;
+    }
+    const authorization = this.services.store.authorizations.find(authorizationRef);
+    if (authorization === undefined || authorization.workId !== workId) {
+      response['approval'] = {
+        enabled: false,
+        reason: `the local authorization ${authorizationRef} is not readable for this Work`,
+      };
+      return response;
+    }
+    response['approval'] = { enabled: true, reason: null };
+    return response;
+  }
+
+  /**
+   * Reads one approved Plan artifact back into a submittable draft.
+   *
+   * The bytes are the canonical Plan JSON the gate hashed at approval, so the same
+   * body re-approves as the next version instead of a re-typed approximation.
+   */
+  /**
+   * The Planning Run that produced the approved Plan artifact.
+   *
+   * `submitPlan` re-reads the Run and refuses a Plan whose producer belongs to
+   * another Work, so the card must name this real run instead of a placeholder.
+   */
+  private planningRunIdOf(artifactId: string | undefined): string | null {
+    if (artifactId === undefined) return null;
+    const artifact = this.services.store.artifacts.find(artifactId);
+    if (artifact === undefined || artifact.runId === undefined) return null;
+    const run = this.services.store.runs.find(artifact.runId);
+    if (run === undefined || run.workId !== artifact.workId || run.role !== 'planning') return null;
+    return run.id;
+  }
+
+  private readPlanBody(workId: string, artifactId: string): JsonObject | null {
+    const artifact = this.services.store.artifacts.find(artifactId);
+    if (artifact === undefined || artifact.kind !== 'plan' || artifact.workId !== workId) {
+      return null;
+    }
+    let parsed: unknown;
+    try {
+      const bytes = this.services.artifacts.read(artifact);
+      parsed = JSON.parse(Buffer.from(bytes).toString('utf8'));
+    } catch {
+      return null;
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+    const plan = parsed as JsonObject;
+    if (!Array.isArray(plan['tasks']) || plan['tasks'].length === 0) return null;
+    if (typeof plan['goal'] !== 'string' || plan['goal'] === '') return null;
+    return plan;
   }
 
   /**
@@ -2205,9 +2558,11 @@ export class WorkbenchProtocol {
     subscriptions: Map<string, SubscriptionRecord>,
   ): JsonObject {
     if (projectId !== undefined && projectId !== this.projectId) {
-      // A cross-Project subscription is refused before any snapshot exists.
+      // A cross-Project subscription is refused before any snapshot exists; the
+      // details echo the requested id only, never this installation's own
+      // (`protocol.md` §1, W9R1-03).
       throw new ProtocolError('NOT_FOUND', `Project ${projectId} is not open on this daemon`, {
-        details: { projectId, openProjectId: this.projectId },
+        details: { projectId },
       });
     }
     const scope = params['scope'];
@@ -3128,6 +3483,48 @@ function matchesSubscription(
 
 function emptyScope(): Scope {
   return { readPaths: [], writePaths: [], operations: [], networkTargets: [] };
+}
+
+/** Whether a JSON value is a `Scope` envelope rather than some other object. */
+function isScope(value: unknown): value is Scope {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    Array.isArray(candidate['readPaths']) &&
+    Array.isArray(candidate['writePaths']) &&
+    Array.isArray(candidate['operations']) &&
+    Array.isArray(candidate['networkTargets'])
+  );
+}
+
+/**
+ * The canonical `content.md` body of a generated requirement record.
+ *
+ * `requirements.md` §6 requires the six level-2 headings, each exactly once and in
+ * order, with real content under them; the daemon generates this body when it
+ * cancels a Queued requirement, so the save is a real Git record instead of the
+ * structurally invalid body that made every cancellation fail (W9R1-05).
+ */
+function canonicalRequirementContent(input: {
+  readonly title: string;
+  readonly goal: string;
+  readonly completion: string;
+}): string {
+  const sections: Record<(typeof REQUIREMENT_CONTENT_HEADINGS)[number], string> = {
+    目标与背景: input.goal === '' ? REQUIREMENT_EMPTY_SECTION : input.goal,
+    范围与行为: REQUIREMENT_EMPTY_SECTION,
+    验收说明: REQUIREMENT_EMPTY_SECTION,
+    已确认决定: REQUIREMENT_EMPTY_SECTION,
+    未决问题: REQUIREMENT_EMPTY_SECTION,
+    完成摘要: input.completion === '' ? REQUIREMENT_EMPTY_SECTION : input.completion,
+  };
+  const body = REQUIREMENT_CONTENT_HEADINGS.flatMap((heading) => [
+    `## ${heading}`,
+    '',
+    sections[heading],
+    '',
+  ]);
+  return [`# ${input.title}`, '', ...body].join('\n');
 }
 
 function emptyTaskCounts(): JsonObject {

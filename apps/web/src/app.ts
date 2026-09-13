@@ -127,6 +127,7 @@ const READ_ONLY = new Set([
   'agents',
   'settings',
   'config.get',
+  'plan.current',
   'extension.list',
   'ui.translate',
   'project.subscribe',
@@ -387,6 +388,20 @@ export function createWebApp(options: WebAppOptions): WebApp {
     const raw = (await readBody(request)).toString('utf8');
     const method = methodOfEnvelope(raw);
     const isWrite = method === undefined ? true : !READ_ONLY.has(method);
+    /**
+     * CSRF: deliberate BFF deviation, registered (W9R1-09).
+     *
+     * `protocol.md` §2 requires a CSRF token for same-origin writes. The BFF does
+     * not forward or accept a browser-supplied `x-csrf-token`: it owns the daemon
+     * session instead, so the write is authenticated with the BFF's own HttpOnly
+     * `agentdev_web` cookie (SameSite=Lax) plus an exact-`Origin` check, and the
+     * daemon call then carries the *BFF's* `session.csrfToken` — never a value the
+     * browser can set. A cross-site form post therefore cannot produce an allowed
+     * Origin and cannot reach the daemon at all, and a stolen session cookie is
+     * useless without the Origin the daemon allowlists. The browser header is sent
+     * for the `/rpc` contract but is not the authority; the deviation is recorded in
+     * `implementation.md` §T5.
+     */
     if (isWrite && !originAllowed(headerOf(request, 'origin'), allowed)) {
       json(
         response,
@@ -580,6 +595,21 @@ export function createWebApp(options: WebAppOptions): WebApp {
           workId === '' ? empty() : await safeRead(session, 'artifact.list', { workId });
         const runs = workId === '' ? empty() : await safeRead(session, 'run.list', { workId });
         const work = workId === '' ? empty() : await safeRead(session, 'work.get', { workId });
+        // The version the user asked for comes from the URL (a historical card keeps
+        // its own version); without one the card shows the gate's current version
+        // (W9R1-02). The request carries `planVersion` only when the URL named one:
+        // `plan.current` answers `requestedVersion` unsolicited otherwise, and an
+        // explicit 0 has to stay distinguishable from "no version asked for".
+        const requestedPlanVersion = planVersionOf(url.searchParams.get('planVersion'));
+        const requestedPlanParams =
+          requestedPlanVersion === undefined ? {} : { planVersion: requestedPlanVersion };
+        const planCurrent =
+          workId === ''
+            ? undefined
+            : await safeRead(session, 'plan.current', {
+                workId,
+                ...requestedPlanParams,
+              });
         const plan =
           workId === ''
             ? undefined
@@ -587,7 +617,10 @@ export function createWebApp(options: WebAppOptions): WebApp {
                 work: work.ok ? work.value : {},
                 workId,
                 revision,
-                artifacts: artifacts.ok ? objectsOf(artifacts.value, 'items') : [],
+                ...(planCurrent?.ok === true ? { planCurrent: planCurrent.value } : {}),
+                ...(requestedPlanVersion === undefined
+                  ? {}
+                  : { requestedVersion: requestedPlanVersion }),
               });
         const detail = requirementDetail({
           requirement: {
@@ -838,44 +871,68 @@ function empty(): ReadResult {
 /**
  * Builds the Plan card for a Work.
  *
- * The workbench protocol exposes the gate's current Plan version through the Work's
- * assessment; the page marks a card expired exactly when the version the user is
- * looking at is not that one, so the refusal is visible before the click (AC-070).
+ * `plan.current` is the authority: it answers the gate's approved version, the
+ * requested version and whether the daemon can actually hand over a submittable
+ * Plan body plus its local authorization. The card is therefore expired — and the
+ * approve control disabled with a visible reason — exactly when the version the user
+ * is looking at is not the gate's, or when approval is genuinely unavailable
+ * (AC-070, W9R1-01/W9R1-02/W9R1-12).
  */
 export function planCard(input: {
   readonly work: JsonObject;
   readonly workId: string;
   readonly revision: string;
-  /** The Work's artifact list; the latest `plan` artifact carries the live version. */
-  readonly artifacts?: readonly JsonObject[];
+  /**
+   * The gate's own answer for this Work; without it the card cannot approve.
+   *
+   * The legacy artifact list is no longer consulted for the current version: a
+   * `validity=invalid` or higher historical plan artifact made an expired card look
+   * live (W9R1-12).
+   */
+  readonly planCurrent?: JsonObject;
   readonly requestedVersion?: number;
 }): JsonObject {
-  const assessment = asObject(input.work['assessment']);
-  const planRef = asObject(assessment['planRef']);
-  const fromAssessment = typeof planRef['version'] === 'number' ? planRef['version'] : 0;
-  // Without an assessment projection the gate's own Plan artifact is the authority:
-  // a newer `plan` artifact is exactly what makes an older card stale (AC-070).
-  const latestPlanArtifact = (input.artifacts ?? [])
-    .filter((artifact) => artifact['kind'] === 'plan')
-    .reduce(
-      (highest, artifact) =>
-        typeof artifact['artifactVersion'] === 'number' && artifact['artifactVersion'] > highest
-          ? artifact['artifactVersion']
-          : highest,
-      0,
-    );
-  const currentVersion = Math.max(fromAssessment, latestPlanArtifact);
-  const requested = input.requestedVersion ?? currentVersion;
-  const approvedAt: unknown = assessment['approvedAt'];
+  const answer = input.planCurrent ?? {};
+  const hasAnswer = input.planCurrent !== undefined;
+  const work = input.work;
+  const assessment = asObject(work['assessment']);
+  const assessmentRef = asObject(assessment['planRef']);
+  const gateVersion = numberField(answer, 'currentVersion');
+  const currentVersion = gateVersion ?? numberField(assessmentRef, 'version') ?? 0;
+  const requested = input.requestedVersion ?? gateVersion ?? currentVersion;
+  const gateStatus = typeof answer['gateStatus'] === 'string' ? answer['gateStatus'] : null;
+  // `approval.enabled` is the daemon's real verdict; a missing answer (an older
+  // daemon that does not expose `plan.current`) disables the button rather than
+  // promising an approval the page cannot build.
+  const approvalRaw = asObject(answer['approval']);
+  const approvalEnabled = approvalRaw['enabled'] === true;
+  const approvedVersionRaw = answer['approvedVersion'];
+  const approvedVersion =
+    typeof approvedVersionRaw === 'number'
+      ? approvedVersionRaw
+      : numberField(assessmentRef, 'version');
+  const approvedAt = typeof answer['approvedAt'] === 'string' ? answer['approvedAt'] : null;
+  const reasonRaw = approvalRaw['reason'];
+  const approvalReason =
+    typeof reasonRaw === 'string'
+      ? reasonRaw
+      : hasAnswer
+        ? null
+        : 'the Plan gate is not readable for this Work';
   return {
     workId: input.workId,
-    revision:
-      typeof input.work['baseRevision'] === 'string' ? input.work['baseRevision'] : input.revision,
+    revision: typeof work['baseRevision'] === 'string' ? work['baseRevision'] : input.revision,
     currentVersion,
     requestedVersion: requested,
-    approvedVersion: currentVersion === 0 ? null : currentVersion,
-    approvedAt: typeof approvedAt === 'string' ? approvedAt : null,
-    expired: requested !== currentVersion,
+    approvedVersion:
+      approvedVersion === undefined || approvedVersion === 0 ? null : approvedVersion,
+    approvedAt,
+    expired: requested !== currentVersion || gateStatus === 'stale',
+    approvalEnabled,
+    approvalReason,
+    authorizationId:
+      typeof answer['authorizationId'] === 'string' ? answer['authorizationId'] : null,
+    plan: answer['plan'] ?? null,
   };
 }
 
@@ -913,6 +970,19 @@ function docsViews(): Record<'delivered' | 'design' | 'work', JsonObject> {
   };
 }
 
+/**
+ * Parses `?planVersion=` into the version the card must show (W9R1-02).
+ *
+ * A malformed or absent parameter leaves the gate's current version in charge; a
+ * present one is what makes a historical card render as expired instead of silently
+ * presenting the live version as if the user were looking at it.
+ */
+export function planVersionOf(raw: string | null): number | undefined {
+  if (raw === null || raw.trim() === '') return undefined;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 function objectsOf(source: JsonObject, key: string): JsonObject[] {
   const value = source[key];
   if (!Array.isArray(value)) return [];
@@ -925,6 +995,12 @@ function objectsOf(source: JsonObject, key: string): JsonObject[] {
 function firstId(source: JsonObject, key: string): string | undefined {
   const id = objectsOf(source, key)[0]?.['id'];
   return typeof id === 'string' ? id : undefined;
+}
+
+/** A numeric JSON field, or `undefined` when it is absent or not a number. */
+function numberField(source: JsonObject, key: string): number | undefined {
+  const value = source[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function asObject(value: unknown): JsonObject {

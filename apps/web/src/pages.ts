@@ -187,6 +187,7 @@ export function renderChiefPage(input: {
         `<select id="conversationSelect" data-conversation="${escapeHtml(model.conversationId)}">${conversationOptions}</select>`,
         `<button type="button" id="newConversationInline" data-i18n="chief.newConversation">${escapeHtml(t('chief.newConversation'))}</button>`,
         '</div>',
+        `<p class="alert" id="conversationError" role="alert" hidden></p>`,
         `<ol class="messages" id="messages" data-i18n-aria="aria.messages" aria-label="${escapeHtml(t('aria.messages'))}" aria-live="polite">${messages}</ol>`,
         providerNotice,
         `<form class="composer" id="composer" data-conversation="${escapeHtml(model.conversationId)}" data-i18n-aria="aria.composer" aria-label="${escapeHtml(t('aria.composer'))}">`,
@@ -341,11 +342,20 @@ export function renderRequirementPage(input: {
   const t = input.t;
   const detail = input.detail;
   const plan = detail.plan;
+  // The approve control is disabled for exactly two honest reasons: the card shows a
+  // version that is not the gate's current one, or the daemon cannot hand over the
+  // Plan body plus its local authorization (W9R1-01/W9R1-02).
+  const approveBlocked = plan !== null && (plan.expired || !plan.approvalEnabled);
+  const blockReason =
+    plan === null
+      ? null
+      : (plan.approvalReason ??
+        (plan.expired ? t('detail.approveExpired') : t('detail.approveUnavailable')));
   const planSection =
     plan === null
       ? emptyNote(t, 'common.none')
       : [
-          `<div class="plan" id="plan" data-work="${escapeHtml(plan.workId)}" data-requested-version="${String(plan.requestedVersion)}" data-current-version="${String(plan.currentVersion)}" data-expired="${plan.expired ? 'true' : 'false'}">`,
+          `<div class="plan" id="plan" data-work="${escapeHtml(plan.workId)}" data-requested-version="${String(plan.requestedVersion)}" data-current-version="${String(plan.currentVersion)}" data-expired="${plan.expired ? 'true' : 'false'}" data-approvable="${approveBlocked ? 'false' : 'true'}"${plan.approvalReason === null ? '' : ` data-approve-reason="${escapeHtml(plan.approvalReason)}"`}>`,
           '<div class="chips">',
           chip(t('detail.planCurrent'), String(plan.currentVersion)),
           chip(t('detail.planVersion'), String(plan.requestedVersion)),
@@ -355,11 +365,11 @@ export function renderRequirementPage(input: {
           plan.expired
             ? `<p class="alert" id="planExpired" role="alert" data-i18n="detail.approveExpired">${escapeHtml(t('detail.approveExpired'))}</p>`
             : '',
-          plan.approvalReason === null
-            ? ''
-            : `<p class="hint">${escapeHtml(plan.approvalReason)}</p>`,
+          approveBlocked && blockReason !== null
+            ? `<p class="alert" id="approveBlocked" role="alert">${escapeHtml(blockReason)}</p>`
+            : '',
           `<button type="button" id="approvePlan" data-work="${escapeHtml(plan.workId)}" data-plan-version="${String(plan.requestedVersion)}" data-plan-revision="${escapeHtml(plan.revision)}"`,
-          plan.expired ? ' disabled aria-disabled="true"' : '',
+          approveBlocked ? ' disabled aria-disabled="true"' : '',
           ` data-i18n="detail.approve">${escapeHtml(t('detail.approve'))}</button>`,
           `<p class="alert" id="approveError" role="alert" hidden></p>`,
           `<p class="status" id="approveStatus" role="status" aria-live="polite" hidden></p>`,

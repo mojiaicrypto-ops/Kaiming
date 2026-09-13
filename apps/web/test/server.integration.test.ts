@@ -619,6 +619,73 @@ describe('workbench BFF over the real daemon (WP-09 T3)', () => {
     expect(daemon.protocol.connectionCount).toBeGreaterThanOrEqual(0);
   });
 
+  it('authenticates a same-Origin write without a browser CSRF header (W9R1-09)', async () => {
+    // Registered deliberate deviation (`protocol.md` §2 vs the BFF): the exact-Origin
+    // check plus the BFF's own HttpOnly `agentdev_web` session is the CSRF defence,
+    // and the daemon call carries the BFF's own `session.csrfToken`. A browser header
+    // is therefore neither required nor authoritative — a client cannot supply a
+    // value the BFF would trust.
+    const work = seedWork(daemon, { status: 'running' });
+    const envelope = {
+      v: 1,
+      type: 'request',
+      id: 'csrf-origin-only',
+      method: 'work.control',
+      params: { action: 'pause', workId: work.id, reason: 'w9r1-09' },
+      idempotencyKey: 'w9r1-09-origin-only',
+    };
+    const withoutHeader = await fetch(`${baseUrl}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie, origin: WEB_ORIGIN },
+      body: JSON.stringify(envelope),
+    });
+    expect(withoutHeader.status, await withoutHeader.clone().text()).toBe(200);
+    expect(daemon.store.works.find(work.id)?.status).toBe('paused');
+
+    // A foreign Origin is refused even when the caller presents the session's own
+    // CSRF token: the Origin, not the header, is what the BFF checks.
+    const foreignOrigin = await fetch(`${baseUrl}/rpc`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        cookie,
+        origin: 'http://evil.example',
+        'x-csrf-token': csrfToken,
+      },
+      body: JSON.stringify({
+        ...envelope,
+        id: 'csrf-foreign-origin',
+        idempotencyKey: 'w9r1-09-foreign',
+      }),
+    });
+    expect(foreignOrigin.status).toBe(403);
+    expect((await foreignOrigin.json()) as { error?: { code?: string } }).toMatchObject({
+      error: { code: 'NOT_AUTHORIZED' },
+    });
+
+    // A forged browser CSRF token is irrelevant: the BFF replaces it with its own
+    // session's token before it reaches the daemon.
+    const forged = await fetch(`${baseUrl}/rpc`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        cookie,
+        origin: WEB_ORIGIN,
+        'x-csrf-token': 'forged-by-the-browser',
+      },
+      body: JSON.stringify({
+        v: 1,
+        type: 'request',
+        id: 'csrf-forged',
+        method: 'work.control',
+        params: { action: 'resume', workId: work.id, reason: 'w9r1-09-forged' },
+        idempotencyKey: 'w9r1-09-forged',
+      }),
+    });
+    expect(forged.status, await forged.clone().text()).toBe(200);
+    expect(daemon.store.works.find(work.id)?.status).toBe('running');
+  });
+
   it('keeps the background Work after a logout and refuses the stale cookie (AC-078)', async () => {
     const work = seedWork(daemon, { status: 'running' });
     const spent = cookie;

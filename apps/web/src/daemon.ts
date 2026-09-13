@@ -333,6 +333,15 @@ interface TrackedSubscription {
   readonly projectId: string | undefined;
   subscriptionId: string | undefined;
   watermark: number;
+  /**
+   * The cursor the browser itself last acknowledged (`project.events.ack`).
+   *
+   * A resume must never replay an event the browser has already taken delivery of,
+   * so the bridge's own scan progress (`scannedThrough`) only widens this value.
+   * Without it a drop between the daemon's scan and the browser's frame left the
+   * bridge replaying already-acknowledged events on reconnect (W9R1-11).
+   */
+  browserCursor: number;
   /** Requests whose answer still needs to be matched to this scope. */
   awaitingId: string | undefined;
 }
@@ -443,6 +452,8 @@ export class BridgeConnection {
       method?: unknown;
       params?: unknown;
       projectId?: unknown;
+      idempotencyKey?: unknown;
+      expectedVersion?: unknown;
     };
     const id = typeof envelope.id === 'string' ? envelope.id : null;
     const method = typeof envelope.method === 'string' ? envelope.method : undefined;
@@ -456,6 +467,14 @@ export class BridgeConnection {
     }
     const params = asObject(envelope.params);
     const projectId = typeof envelope.projectId === 'string' ? envelope.projectId : undefined;
+    // The bridge is a transport, not a translation layer: the browser's write
+    // semantics travel with its frame, so a write over `/ws` reaches the daemon
+    // with the same idempotency key and expected version as one over `/rpc`
+    // (`protocol.md` §1/§2, W9R1-08).
+    const idempotencyKey =
+      typeof envelope.idempotencyKey === 'string' ? envelope.idempotencyKey : undefined;
+    const expectedVersion =
+      typeof envelope.expectedVersion === 'number' ? envelope.expectedVersion : undefined;
     this.counter += 1;
     const localId = `bff-${String(this.counter)}`;
     if (id !== null) this.pending.set(localId, id);
@@ -466,6 +485,8 @@ export class BridgeConnection {
       id: localId,
       method,
       ...(projectId === undefined ? {} : { projectId }),
+      ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+      ...(expectedVersion === undefined ? {} : { expectedVersion }),
       params,
     };
     try {
@@ -490,6 +511,9 @@ export class BridgeConnection {
     for (const tracked of this.subscriptions.values()) {
       this.counter += 1;
       const localId = `bff-resume-${String(this.counter)}`;
+      // The resume point is the furthest position either side durably holds: the
+      // bridge's own scan watermark and the cursor the browser acknowledged.
+      const resumeFrom = Math.max(tracked.watermark, tracked.browserCursor);
       tracked.awaitingId = localId;
       try {
         this.transport.send(
@@ -501,7 +525,7 @@ export class BridgeConnection {
             ...(tracked.projectId === undefined ? {} : { projectId: tracked.projectId }),
             params: {
               scope: tracked.scope,
-              ...(tracked.watermark > 0 ? { afterCursor: tracked.watermark } : {}),
+              ...(resumeFrom > 0 ? { afterCursor: resumeFrom } : {}),
             },
           }),
         );
@@ -608,6 +632,20 @@ export class BridgeConnection {
     params: JsonObject,
     projectId: string | undefined,
   ): void {
+    if (method === 'project.events.ack') {
+      // The browser states the watermark it has durably taken; the bridge keeps it
+      // so a later reconnect resumes from exactly there (W9R1-11).
+      const subscriptionId = params['subscriptionId'];
+      const cursor = params['cursor'];
+      if (typeof subscriptionId !== 'string' || typeof cursor !== 'number') return;
+      for (const tracked of this.subscriptions.values()) {
+        if (tracked.subscriptionId === subscriptionId) {
+          tracked.browserCursor = Math.max(tracked.browserCursor, cursor);
+          return;
+        }
+      }
+      return;
+    }
     if (method !== 'project.subscribe' && method !== 'subscription.set') return;
     const scope = asObject(params['scope']);
     if (scope === undefined) return;
@@ -615,12 +653,17 @@ export class BridgeConnection {
     const id = typeof scope['id'] === 'string' ? scope['id'] : '*';
     const key = `${projectId ?? '*'}/${kind}/${id}`;
     const afterCursor = params['afterCursor'];
+    const previous = this.subscriptions.get(key);
     const tracked: TrackedSubscription = {
       key,
       scope,
       projectId,
-      subscriptionId: this.subscriptions.get(key)?.subscriptionId,
+      subscriptionId: previous?.subscriptionId,
       watermark: typeof afterCursor === 'number' ? afterCursor : 0,
+      // A re-subscribe keeps the browser's acknowledged position: a fresh request
+      // without `afterCursor` means "from the snapshot", never "forget what the
+      // browser already holds".
+      browserCursor: typeof afterCursor === 'number' ? afterCursor : (previous?.browserCursor ?? 0),
       awaitingId: localId,
     };
     this.subscriptions.set(key, tracked);
@@ -658,7 +701,9 @@ export class BridgeConnection {
     if (typeof subscriptionId !== 'string' || typeof scannedThrough !== 'number') return;
     for (const tracked of this.subscriptions.values()) {
       if (tracked.subscriptionId === subscriptionId) {
-        tracked.watermark = Math.max(tracked.watermark, scannedThrough);
+        // The scan watermark widens the tracked position; it never lowers the
+        // browser's own acknowledged cursor, which stays the resume basis.
+        tracked.watermark = Math.max(tracked.watermark, scannedThrough, tracked.browserCursor);
         return;
       }
     }
