@@ -25,7 +25,10 @@
  *   Review/Test model) keeps a suite `PASS` from being reported as a full `PASS` — the
  *   AC's full Given/When/Then did not run (W10R1-03);
  * - a registered accepted gap (`RESIDUAL_GAPS`) also downgrades a suite `PASS` to
- *   `UNVERIFIED` unless a drill `PASS` actually closed that AC;
+ *   `UNVERIFIED` unless the drill named by its `closedBy` reported `PASS` for that AC;
+ *   when that drill did report `PASS`, a competing `UNVERIFIED` from a drill that by
+ *   design cannot supply the missing input (the offline e2e drill and the real model) no
+ *   longer downgrades the AC;
  * - every drill that reported on the AC is kept (W10R1-05), so the strongest evidence
  *   is never hidden by a weaker source that happened to be merged last.
  *
@@ -61,6 +64,9 @@ function mostSevere(left, right) {
 /**
  * Reads the executed test results out of the Vitest JSON reports.
  *
+ * A collected file that ran zero cases is deliberately absent from `byFile`: it is not
+ * evidence, and the caller's `diagnostics.unexecuted` check then fails closed on it.
+ *
  * @param {Array<{ project: string, report: unknown }>} reports
  * @param {(file: string) => string} [normalizeFile]
  * @returns {{ byFile: Map<string, object[]>, byAc: Map<string, object[]>, all: object[] }}
@@ -94,7 +100,10 @@ export function indexTestCases(reports, normalizeFile = (file) => file) {
           byAc.get(ac).push(record);
         }
       }
-      byFile.set(file, tests);
+      // A file that was collected but ran zero cases is NOT evidence: leaving it out of
+      // `byFile` is what makes it show up in `diagnostics.unexecuted` and fail the run
+      // closed (WP-10 review round 2, zero-case collection hole).
+      if (tests.length > 0) byFile.set(file, tests);
     }
   }
   return { byFile, byAc, all };
@@ -161,18 +170,24 @@ function resolveCurated(ac, byFile) {
 function suiteVerdict(acceptanceCase, index) {
   const id = acceptanceCase.id;
   const nameTests = index.byAc.get(id) ?? [];
-  let mapping = 'none';
-  let evidence = [];
-  let stale = [];
+  const curatedEntries = CURATED_EVIDENCE[id] ?? [];
+  // Curated entries are validated even when the AC is also mapped by test name: a dead
+  // mapping is an error, not a harmless leftover (WP-10 review round 2, W10R2-06).
+  const curated =
+    curatedEntries.length === 0 ? { resolved: [], missing: [] } : resolveCurated(id, index.byFile);
+  const stale = curated.missing;
 
-  if (nameTests.length > 0) {
-    mapping = 'test-name';
-    evidence = nameTests;
-  } else if ((CURATED_EVIDENCE[id] ?? []).length > 0) {
-    const resolved = resolveCurated(id, index.byFile);
-    mapping = 'curated';
-    evidence = resolved.resolved;
-    stale = resolved.missing;
+  let mapping = 'none';
+  if (nameTests.length > 0) mapping = 'test-name';
+  else if (curatedEntries.length > 0) mapping = 'curated';
+
+  const seen = new Set();
+  const evidence = [];
+  for (const test of [...nameTests, ...curated.resolved]) {
+    const key = `${test.file}\u0000${test.fullName}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    evidence.push(test);
   }
 
   const counts = summarize(evidence);
@@ -227,11 +242,18 @@ function aggregateOne(acceptanceCase, index, drills) {
   for (const drill of drills) status = mostSevere(status, drill.status);
   if (status === null) status = 'MISSING';
 
-  const gap = RESIDUAL_GAPS[id]?.gap ?? null;
-  const gapClosed = drills.some((drill) => drill.status === 'PASS');
+  const registration = RESIDUAL_GAPS[id];
+  const gap = registration?.gap ?? null;
+  // A gap is only closed by the drill that can actually supply the missing input.
+  const gapClosed =
+    registration?.closedBy !== undefined &&
+    drills.some((drill) => drill.tool === registration.closedBy && drill.status === 'PASS');
   // A registered gap downgrades a "complete" suite PASS: its unexecuted half means the
   // AC's full Given/When/Then was not verified.
   if (gap !== null && !gapClosed && status !== 'FAIL') status = 'UNVERIFIED';
+  // ...and once that drill really executed the missing half, the AC is verified: another
+  // drill's "I cannot use a real model / a browser" row is not evidence against it.
+  if (gapClosed && status === 'UNVERIFIED' && suite.status !== 'FAIL') status = 'PASS';
 
   let reason = null;
   if (status === 'UNVERIFIED') {
@@ -302,11 +324,15 @@ export function aggregateAcceptance({
 
   const curated = Object.keys(CURATED_EVIDENCE).map((id) => {
     const result = results.find((entry) => entry.id === id);
+    const stale =
+      result?.raw.filter((line) => line.startsWith('curated evidence is stale')).length ?? 0;
     return {
       id,
       entries: CURATED_EVIDENCE[id].length,
-      resolved: result?.mapping === 'curated' && result.status !== 'FAIL',
-      stale: result?.raw.filter((line) => line.startsWith('curated evidence is stale')).length ?? 0,
+      mapping: result?.mapping ?? 'none',
+      // Independent of which mapping won: the curated list itself must be fully alive.
+      resolved: stale === 0 && result?.status !== 'FAIL',
+      stale,
     };
   });
 

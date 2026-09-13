@@ -440,6 +440,44 @@ export const CURATED_EVIDENCE = Object.freeze({
       wpRecord: '.agentdev/work/WP-04/test.md',
     },
   ],
+  'AC-094': [
+    {
+      file: 'packages/core/test/requirement-save.integration.test.ts',
+      title:
+        'stale projection refuses to overwrite (AC-093) refuses a same-version record whose body another server changed',
+      rationale:
+        'the combined recordHash refuses a stale local projection instead of overwriting the newer Git record',
+      wpRecord: '.agentdev/work/WP-08/test.md',
+    },
+    {
+      file: 'packages/core/test/requirement-save.integration.test.ts',
+      title:
+        'stale projection refuses to overwrite (AC-093) reports a HEAD-only record as a per-record conflict instead of an ENOENT (W8R1-03)',
+      rationale: 'a HEAD-only record becomes a per-record conflict, never a silent overwrite',
+      wpRecord: '.agentdev/work/WP-08/test.md',
+    },
+    {
+      file: 'packages/core/test/requirement-save.integration.test.ts',
+      title:
+        'requirement save working copy and journal identity (W8R3-01..03, T-03/T-05) reports a half pair as a per-record conflict instead of dropping it (T-03)',
+      rationale: 'recovery never exposes a half pair of requirement files',
+      wpRecord: '.agentdev/work/WP-08/test.md',
+    },
+    {
+      file: 'packages/core/test/requirement-save.test.ts',
+      title:
+        'prepareRequirementSave (AC-093) builds both files with one version and the documented combined record hash',
+      rationale:
+        'requirement.json and content.md are built from the same facts with one version and one combined hash, so the completion summary cannot diverge between them',
+      wpRecord: '.agentdev/work/WP-08/test.md',
+    },
+    {
+      file: 'packages/core/test/requirement-save.test.ts',
+      title: 'completion/settlement consistency (AC-091) requires a completion summary at all',
+      rationale: 'a completed requirement always carries its completion summary',
+      wpRecord: '.agentdev/work/WP-08/test.md',
+    },
+  ],
   'AC-092': [
     {
       file: 'packages/knowledge/test/requirements-pool.test.ts',

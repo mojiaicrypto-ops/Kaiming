@@ -28,6 +28,7 @@
  * concrete gap instead of being invented.
  */
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -136,12 +137,12 @@ export function tailLines(output, count) {
 }
 
 /** Runs one documented command and captures its real exit code and output. */
-function runCommand(entry, repoRoot) {
+function runCommand(entry, repoRoot, env = process.env) {
   const startedAt = Date.now();
   const result = spawnSync(entry.bin, entry.args, {
     cwd: repoRoot,
     encoding: 'utf8',
-    env: process.env,
+    env,
     maxBuffer: 256 * 1024 * 1024,
     timeout: entry.timeoutMs,
   });
@@ -173,7 +174,7 @@ function runCommand(entry, repoRoot) {
  *             accepted: number|null, fail: number|null, missing: number|null,
  *             drillsExecuted: boolean, acceptedGaps: Array<{id: string, decision: string|null, gap: string|null}> }}
  */
-export function readAcceptanceResult(repoRoot, startedAt) {
+export function readAcceptanceResult(repoRoot, startedAt, runNonce) {
   const unavailable = (why) => ({
     available: false,
     why,
@@ -198,6 +199,13 @@ export function readAcceptanceResult(repoRoot, startedAt) {
       `acceptance-results.json 生成于 ${String(payload.generatedAt)}，早于本次发布演练开始时间 ${startedAt}（拒绝使用旧结果）`,
     );
   }
+  if (typeof runNonce !== 'string' || runNonce.length === 0 || payload.runNonce !== runNonce) {
+    // The nonce is generated in this process and handed only to the `pnpm test:acceptance`
+    // child, so a file planted in the repository cannot carry it.
+    return unavailable(
+      'acceptance-results.json 的 runNonce 与本次发布演练不一致（该文件不是本次运行产生的，拒绝使用）',
+    );
+  }
   const binding = computeBinding(repoRoot);
   if (payload.codeDigest !== binding.codeDigest) {
     return unavailable(
@@ -219,7 +227,12 @@ export function readAcceptanceResult(repoRoot, startedAt) {
     drillsExecuted: true,
     acceptedGaps: results
       .filter((entry) => entry.accepted === true)
-      .map((entry) => ({ id: entry.id, decision: entry.decision ?? null, gap: entry.gap ?? null })),
+      .map((entry) => ({
+        id: entry.id,
+        decision: entry.decision ?? null,
+        residual: entry.residual ?? null,
+        gap: entry.gap ?? null,
+      })),
   };
 }
 
@@ -283,16 +296,22 @@ export async function runReleaseDrill(options) {
   const startedAt = new Date().toISOString();
   process.stdout.write('release: running the documented engineering commands in order\n');
   const runs = [];
+  // The acceptance result of *this* run is bound to a nonce only this process knows.
+  const acceptanceNonce = randomUUID();
   for (const entry of RELEASE_COMMANDS) {
     process.stdout.write(`release: ${entry.command} ...\n`);
-    const run = runCommand(entry, repoRoot);
+    const env =
+      entry.id === 'test:acceptance'
+        ? { ...process.env, AGENTDEV_ACCEPTANCE_NONCE: acceptanceNonce }
+        : process.env;
+    const run = runCommand(entry, repoRoot, env);
     runs.push(run);
     process.stdout.write(
       `release: ${entry.command} exit=${String(run.exitCode)} (${String(run.durationMs)}ms)\n`,
     );
   }
 
-  const counts = readAcceptanceResult(repoRoot, startedAt);
+  const counts = readAcceptanceResult(repoRoot, startedAt, acceptanceNonce);
   const doctor = runDoctor(repoRoot);
   process.stdout.write(`release: pnpm doctor exit=${String(doctor.exitCode)}\n`);
 
@@ -368,11 +387,11 @@ export async function runReleaseDrill(options) {
     lines.push('- 详细逐 AC 结果见 `.agentdev/work/WP-10/acceptance.md`。');
     if (counts.acceptedGaps.length > 0) {
       lines.push('');
-      lines.push('| 已登记豁免 AC | 未执行部分 | 决定记录 |');
-      lines.push('|---|---|---|');
+      lines.push('| 已登记豁免 AC | 残余编号 | 未执行部分 | 决定记录 |');
+      lines.push('|---|---|---|---|');
       for (const gap of counts.acceptedGaps) {
         lines.push(
-          `| ${gap.id} | ${String(gap.gap ?? '').replace(/\|/gu, '\\|')} | ${String(gap.decision ?? '').replace(/\|/gu, '\\|')} |`,
+          `| ${gap.id} | ${String(gap.residual ?? '—').replace(/\|/gu, '\\|')} | ${String(gap.gap ?? '').replace(/\|/gu, '\\|')} | ${String(gap.decision ?? '').replace(/\|/gu, '\\|')} |`,
         );
       }
     }

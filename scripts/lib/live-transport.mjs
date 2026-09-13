@@ -103,7 +103,10 @@ export function readProviderEnvironment(env = process.env) {
     reviewModelId: envValue(env, PROVIDER_OPTIONAL_ENV.reviewModel) ?? null,
     secret: secret ?? '',
     contextWindow: envInt(env, PROVIDER_OPTIONAL_ENV.contextWindow, 128_000),
-    maxOutputTokens: envInt(env, PROVIDER_OPTIONAL_ENV.maxOutputTokens, 4_096),
+    // Reasoning models spend part of the budget on their chain of thought before any
+    // visible answer, so the drill's default output budget is generous; it stays
+    // overridable through AGENTDEV_PROVIDER_MAX_OUTPUT_TOKENS.
+    maxOutputTokens: envInt(env, PROVIDER_OPTIONAL_ENV.maxOutputTokens, 16_000),
   };
 }
 
@@ -160,21 +163,35 @@ function postJson(url, payload, headers, timeoutMs) {
   });
 }
 
-/** Extracts the assistant text from an OpenAI-compatible completion body. */
+/**
+ * Extracts the assistant text from an OpenAI-compatible completion body.
+ *
+ * Reasoning models (`deepseek-flash`, o-series, …) put the chain of thought in
+ * `message.reasoning_content` (or `message.reasoning`) and can return an empty
+ * `content` when the output budget is tiny — which is exactly what the Gateway's
+ * `provider.test` probe asks for (`maxOutputTokens: 1`). The visible `content` always
+ * wins; the reasoning text is only a fallback, so a working endpoint is not reported as
+ * unavailable when the model spends its whole budget thinking.
+ */
 export function extractCompletionText(payload) {
   const choices = payload?.choices;
   if (!Array.isArray(choices) || choices.length === 0) return null;
   const message = choices[0]?.message;
   const content = message?.content;
-  if (typeof content === 'string') return content;
+  if (typeof content === 'string' && content.length > 0) return content;
   if (Array.isArray(content)) {
     const parts = content
       .map((part) =>
         typeof part === 'string' ? part : typeof part?.text === 'string' ? part.text : '',
       )
       .filter((part) => part.length > 0);
-    return parts.length === 0 ? null : parts.join('');
+    if (parts.length > 0) return parts.join('');
   }
+  for (const key of ['reasoning_content', 'reasoning']) {
+    const reasoning = message?.[key];
+    if (typeof reasoning === 'string' && reasoning.trim().length > 0) return reasoning;
+  }
+  if (typeof content === 'string') return content;
   return null;
 }
 

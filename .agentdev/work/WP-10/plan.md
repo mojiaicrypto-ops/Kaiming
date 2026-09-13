@@ -17,6 +17,8 @@
 | D1 | `test:e2e` **不引入 Playwright**，改为真实 Core + 真实 BFF + 真实 loopback HTTP/WS 的无头端到端（Node 内建） | 与 `docs/delivery/implementation.md` §3 表格「Playwright+真实Core+Provider桩」字面不一致，属**已批准偏差**；浏览器像素/焦点类证据登记 UNVERIFIED。该偏差已同步写回 `docs/delivery/implementation.md` §3 的命令表 |
 | D2 | `test:live` 使用用户提供的真实 Provider（`baseUrl`/`model`/`secret`）；未配置时必须诚实 UNVERIFIED 且不得发起网络调用 | AC-001 在配置前保持 UNVERIFIED |
 | D3 | 未被执行的 AC 只有**登记在 `scripts/lib/drill-acs.mjs` 的缺口表且豁免条件在本次运行成立**时才计为 ACCEPTED；未登记、或条件已失效（例如 Provider 已配置却仍未跑通）一律按 FAIL 处置；`pnpm test:acceptance` 不再读取仓库内任何演练报告，演练证据一律由本次运行产生（run nonce + codeDigest 绑定） | 发布门禁不承认「文件里写着 PASS」；PASS 的含义收紧为「该 AC 的全部已映射证据通过且没有未验证的登记缺口」 |
+| D4 | 接受两个**已确认残余**为登记豁免（AC-066 真实 Pi SDK 会话语流、AC-090 界面的分支/提交/未推送展示），以 `condition: recorded-gap` + 残余编号 + 本决定记录入册；实现残余后该登记必须删除 | 发布会记录逐条列出这两个缺口及其决定，不把它们计入 PASS |
+| D5 | 真实 Provider 由用户提供（DeepSeek `https://api.deepseek.com` / `deepseek-flash`）；D2 的 `provider-absent` 豁免随之失效，AC-001/007/010/037/041 必须由真实演练通过 | 真实演练暴露并修复了三处缺陷：live 传输未处理 reasoning 模型、模型网关的 4096 输出硬上限、L2 演练任务描述与冻结内容不完整 |
 
 ## 3. 工作分解
 

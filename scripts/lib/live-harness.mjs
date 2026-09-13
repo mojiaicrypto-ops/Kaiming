@@ -141,7 +141,27 @@ export async function bootLiveStack({ product, provider, transport, meta }) {
 
   // 1. A real project: code, a presentation-only copy file (the L1 drill's target) and
   //    two Feature documents, committed together on the delivery branch.
-  writeFileAt(repo, CODE_PATH, 'export const cancel = (): boolean => false;\n');
+  writeFileAt(
+    repo,
+    CODE_PATH,
+    [
+      'export interface Order {',
+      '  readonly id: string;',
+      "  readonly status: 'unpaid' | 'paid';",
+      '}',
+      '',
+      'const orders: Order[] = [',
+      "  { id: 'O-1', status: 'unpaid' },",
+      "  { id: 'O-2', status: 'paid' },",
+      '];',
+      '',
+      'export const cancel = (orderId: string): boolean => {',
+      '  void orderId;',
+      '  return false;',
+      '};',
+      '',
+    ].join('\n'),
+  );
   writeFileAt(repo, TEST_PATH, "import { cancel } from '../../src/orders/cancel';\n");
   writeFileAt(repo, COPY_PATH, TYPO_BEFORE);
   writeFileAt(repo, PAYMENT_PATH, 'export const paid = (): boolean => false;\n');
@@ -608,6 +628,14 @@ export async function bootLiveStack({ product, provider, transport, meta }) {
     stage,
     messages,
     goal = 'live drill',
+    /**
+     * Optional `(text) => boolean` gate. A real agent re-asks when the model returns a
+     * reply it cannot use (a truncated or malformed JSON object), so the same Run and the
+     * same frozen configuration are retried up to `maxAttempts` times instead of failing
+     * the drill on one bad completion.
+     */
+    validate,
+    maxAttempts = 3,
   }) => {
     const frozen = config.freeze(role, {});
     const contextSnapshot = snapshots.freeze('context', {
@@ -646,8 +674,21 @@ export async function bootLiveStack({ product, provider, transport, meta }) {
       stage,
       runId: run.id,
     });
-    const response = await gateway.complete(run, messages);
-    return { run, response, resolution: frozen.resolution };
+    let response = await gateway.complete(run, messages);
+    let attempts = 1;
+    while (
+      typeof validate === 'function' &&
+      response.ok &&
+      validate(response.text) !== true &&
+      attempts < maxAttempts
+    ) {
+      attempts += 1;
+      process.stdout.write(
+        `live: model reply was unusable (attempt ${String(attempts - 1)}/${String(maxAttempts)}); asking the same frozen Run again\n`,
+      );
+      response = await gateway.complete(run, messages);
+    }
+    return { run, response, resolution: frozen.resolution, attempts };
   };
 
   /**

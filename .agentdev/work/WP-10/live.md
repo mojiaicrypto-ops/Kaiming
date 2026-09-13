@@ -4,43 +4,45 @@
 
 ## 0. 运行元数据
 
-- 生成时间：2026-09-13T14:56:13.838Z
+- 生成时间：2026-09-13T15:41:04.949Z
 - 命令：`pnpm test:live`（实际执行 `node scripts/live.mjs`）
 - Node：`v24.8.0`
 - 仓库：`/Users/huyaohua/huyh/work/aigrouptool`
-- Git HEAD：`5ad533ea02ba7e322b3a9bedea2b269a559b1f39`
+- Git HEAD：`c53b28dd5c97a3f106d467c518ea2e179e8f7dca`
 - 装载方式：Node 原生类型擦除 + 模块解析钩子直接执行 `packages/*/src`；真实 Provider HTTP（Node 内建 `node:http`/`node:https`），无新依赖、无浏览器。
-- 真实栈：未启动（未配置 Provider，演练在任何网络调用前退出）。
-- Provider：未配置。
-- 未验证原因：UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)
-- 检查：PASS 0 / FAIL 0 / UNVERIFIED 4（共 4）
-- 退出码：3
+- 真实栈：临时 Git 项目 `/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-live-repo-mOrcZu`、SQLite `/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-live-state-nCkxKE/project.sqlite`、真实 Core 服务、真实 `createDaemon` 与真实 `createWebApp` BFF（回环端口 0）。
+- Provider：`https://api.deepseek.com/`，模型 `deepseek-flash`；Review/Test 模型 `deepseek-flash`；Secret 已配置（值不落盘）。
+- 检查：PASS 4 / FAIL 0 / UNVERIFIED 2（共 6）
+- 退出码：0
 
 ## 1. 逐项检查（原始证据）
 
 | 检查 | 状态 | 关联 AC | 证据 |
 |---|---|---|---|
-| `provider.configuration` | **UNVERIFIED** | — | UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) |
-| `drill.html-explanation` | **UNVERIFIED** | AC-001 | UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) |
-| `drill.l1-typo` | **UNVERIFIED** | AC-007 | UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) |
-| `drill.l2-delivery` | **UNVERIFIED** | AC-010, AC-037, AC-041 | UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) |
+| `provider.connectivity` | **PASS** | — | provider.test completed in 1155ms against https://api.deepseek.com with model deepseek-flash; 1 call(s), HTTP 200, 1154ms total, 0 failed |
+| `drill.html-explanation` | **PASS** | AC-001 | message 01a09b6d-3c22-7bf4-80e2-0065152965a9 -> Work 01a09b6d-3c22-7957-afce-e317e7d81604 (intent=assist level=none, no Requirement); completion through run 01a09b6d-3c6f-7208-ad52-53f38bbfb428 (config snapshot ea50c4ccd111, 12675 chars) citing src/orders/cancel.ts and separating UNKNOWN; artifact 01a09b6d-9b7e-746c-9ae5-09e58c40706b v1 sha256 002aa95eb871 origin=agent kind=explanation; preview 200 CSP "default-src 'none'" sandbox allow-scripts credentials omit mode=inline; download token uOmDZmcv… matched the artifact bytes; the second GET answered 403; delivery branch unchanged at 663c3cdaf9be; 2 call(s), HTTP 200/200, 25475ms total, 0 failed |
+| `drill.l1-typo` | **PASS** | AC-007 | Work 01a09b6d-9baa-7fee-a22f-412ae656486a (level=L1, base 663c3cdaf9be) one-task Plan 01a09b6d-9fb approved by the real gate; write admitted for src/orders/messages.ts; real exec Run 01a09b6d-9fd1-768a-a080-9cae44b5b39c produced candidate 731fd8e3db50 tree ae0358dc0c97 (numstat: 1 1 src/orders/messages.ts); independent Review Run 01a09b6d-a474-7cc2-9d7d-d67a57441f70 -> stage 01a09b6d-ad92-7e49-9063-46482679e291; Settlement Run 01a09b6d-ad93-7d92-91e7-a681e6de51e0; L1 chain ["Develop","Review","Settlement"]; runs planning:L1-Plan, backend:L1-Develop, review:L1-Review, settlement:L1-Settlement (no Planning/Test Run); CompletionManifest e269a7c2b4e3 frozen; CAS moved agentdev/main 663c3cdaf9be -> 731fd8e3db50; Work completed with no Requirement; artifacts on the Work: 1 (the Plan) |
+| `drill.l2-delivery` | **PASS** | AC-010, AC-037, AC-041 | Work 01a09b6d-b2ea-7c53-84d3-89cadac35ffc (L2, base 731fd8e3db50) + Requirement 01a09b6d-b2f5-7de9-9c01-e317b7582d9e; model Plan 01a09b6d-c28 approved, Task 01a09b6d-c27c-77ec-8f00-c35f39152e1e; independent Runs planning:01a09b6d-b2f7-7384-af59-7b771fb79dbf, backend:01a09b6d-c29d-7f97-a6af-265c88a1bed8, review:01a09b6d-cff2-7ea1-8b5d-bba453efb225, test:01a09b6d-d60d-72d7-a4a3-b02a524ad383 with distinct config snapshots (097c0cb1, 1f8bcbf0, e702d354, 49b8ce13); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-flash, test=deepseek-flash; candidate a189136d7989 codeTree 96bffca28089; Develop 01a09b6d-cff1-7c60-a0f4-d96265526614, Review 01a09b6d-d5c7-7dab-8062-217d56166643, Test 01a09b6d-da4b-7b4d-bea0-aa6b0b65dd5e accepted (executed probe exit 0); L2 chain ["Plan","Develop","Review","Test","Settlement"]; a chain without Test is refused; CompletionManifest ce88a73a3785; settlement moved the ref to a189136d7989 with exactly one settlement.completed event; Requirement completed; knowledge commit f2a82112e68f (document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes); cold start selected ["F-0f0f0f0f","F-0a1b2c3d"] with "未付款订单可取消；已付款订单返回已确认的拒绝结果。" and code+test entries; 12 call(s), HTTP 200/200/200/200/200/200/200/200/200/200/200/200, 42441ms total, 0 failed |
+| `browser.html-rendering` | **UNVERIFIED** | AC-002, AC-052 | AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境；本仓库按产品决定不引入 Playwright 或浏览器下载。本演练已执行服务端部分：真实 Provider 产出的 HTML Artifact、预览 CSP/sandbox/credentials 头与一次性下载，浏览器侧仍未验证 |
+| `provider.independent-models` | **UNVERIFIED** | AC-043 | AC-043 的“角色配置不同 Provider/模型”需要 AGENTDEV_PROVIDER_REVIEW_MODEL 指定 Review/Test 的独立模型；本演练已验证每个专业 Run 独立且各自冻结 config 快照，但全部角色使用同一个已配置模型，因此多模型前提未执行 |
 
 ## 2. AC 聚合（供 `pnpm test:acceptance` 合并）
 
 | AC | 状态 | 证据 |
 |---|---|---|
-| AC-001 | **UNVERIFIED** | drill.html-explanation: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) |
-| AC-007 | **UNVERIFIED** | drill.l1-typo: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) |
-| AC-010 | **UNVERIFIED** | drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) |
-| AC-037 | **UNVERIFIED** | drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) |
-| AC-041 | **UNVERIFIED** | drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) |
+| AC-001 | **PASS** | drill.html-explanation: message 01a09b6d-3c22-7bf4-80e2-0065152965a9 -> Work 01a09b6d-3c22-7957-afce-e317e7d81604 (intent=assist level=none, no Requirement); completion through run 01a09b6d-3c6f-7208-ad52-53f38bbfb428 (config snapshot ea50c4ccd111, 12675 chars) citing src/orders/cancel.ts and separating UNKNOWN; artifact 01a09b6d-9b7e-746c-9ae5-09e58c40706b v1 sha256 002aa95eb871 origin=agent kind=explanation; preview 200 CSP "default-src 'none'" sandbox allow-scripts credentials omit mode=inline; download token uOmDZmcv… matched the artifact bytes; the second GET answered 403; delivery branch unchanged at 663c3cdaf9be; 2 call(s), HTTP 200/200, 25475ms total, 0 failed |
+| AC-002 | **UNVERIFIED** | browser.html-rendering: AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境；本仓库按产品决定不引入 Playwright 或浏览器下载。本演练已执行服务端部分：真实 Provider 产出的 HTML Artifact、预览 CSP/sandbox/credentials 头与一次性下载，浏览器侧仍未验证 |
+| AC-007 | **PASS** | drill.l1-typo: Work 01a09b6d-9baa-7fee-a22f-412ae656486a (level=L1, base 663c3cdaf9be) one-task Plan 01a09b6d-9fb approved by the real gate; write admitted for src/orders/messages.ts; real exec Run 01a09b6d-9fd1-768a-a080-9cae44b5b39c produced candidate 731fd8e3db50 tree ae0358dc0c97 (numstat: 1 1 src/orders/messages.ts); independent Review Run 01a09b6d-a474-7cc2-9d7d-d67a57441f70 -> stage 01a09b6d-ad92-7e49-9063-46482679e291; Settlement Run 01a09b6d-ad93-7d92-91e7-a681e6de51e0; L1 chain ["Develop","Review","Settlement"]; runs planning:L1-Plan, backend:L1-Develop, review:L1-Review, settlement:L1-Settlement (no Planning/Test Run); CompletionManifest e269a7c2b4e3 frozen; CAS moved agentdev/main 663c3cdaf9be -> 731fd8e3db50; Work completed with no Requirement; artifacts on the Work: 1 (the Plan) |
+| AC-010 | **PASS** | drill.l2-delivery: Work 01a09b6d-b2ea-7c53-84d3-89cadac35ffc (L2, base 731fd8e3db50) + Requirement 01a09b6d-b2f5-7de9-9c01-e317b7582d9e; model Plan 01a09b6d-c28 approved, Task 01a09b6d-c27c-77ec-8f00-c35f39152e1e; independent Runs planning:01a09b6d-b2f7-7384-af59-7b771fb79dbf, backend:01a09b6d-c29d-7f97-a6af-265c88a1bed8, review:01a09b6d-cff2-7ea1-8b5d-bba453efb225, test:01a09b6d-d60d-72d7-a4a3-b02a524ad383 with distinct config snapshots (097c0cb1, 1f8bcbf0, e702d354, 49b8ce13); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-flash, test=deepseek-flash; candidate a189136d7989 codeTree 96bffca28089; Develop 01a09b6d-cff1-7c60-a0f4-d96265526614, Review 01a09b6d-d5c7-7dab-8062-217d56166643, Test 01a09b6d-da4b-7b4d-bea0-aa6b0b65dd5e accepted (executed probe exit 0); L2 chain ["Plan","Develop","Review","Test","Settlement"]; a chain without Test is refused; CompletionManifest ce88a73a3785; settlement moved the ref to a189136d7989 with exactly one settlement.completed event; Requirement completed; knowledge commit f2a82112e68f (document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes); cold start selected ["F-0f0f0f0f","F-0a1b2c3d"] with "未付款订单可取消；已付款订单返回已确认的拒绝结果。" and code+test entries; 12 call(s), HTTP 200/200/200/200/200/200/200/200/200/200/200/200, 42441ms total, 0 failed |
+| AC-037 | **PASS** | drill.l2-delivery: Work 01a09b6d-b2ea-7c53-84d3-89cadac35ffc (L2, base 731fd8e3db50) + Requirement 01a09b6d-b2f5-7de9-9c01-e317b7582d9e; model Plan 01a09b6d-c28 approved, Task 01a09b6d-c27c-77ec-8f00-c35f39152e1e; independent Runs planning:01a09b6d-b2f7-7384-af59-7b771fb79dbf, backend:01a09b6d-c29d-7f97-a6af-265c88a1bed8, review:01a09b6d-cff2-7ea1-8b5d-bba453efb225, test:01a09b6d-d60d-72d7-a4a3-b02a524ad383 with distinct config snapshots (097c0cb1, 1f8bcbf0, e702d354, 49b8ce13); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-flash, test=deepseek-flash; candidate a189136d7989 codeTree 96bffca28089; Develop 01a09b6d-cff1-7c60-a0f4-d96265526614, Review 01a09b6d-d5c7-7dab-8062-217d56166643, Test 01a09b6d-da4b-7b4d-bea0-aa6b0b65dd5e accepted (executed probe exit 0); L2 chain ["Plan","Develop","Review","Test","Settlement"]; a chain without Test is refused; CompletionManifest ce88a73a3785; settlement moved the ref to a189136d7989 with exactly one settlement.completed event; Requirement completed; knowledge commit f2a82112e68f (document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes); cold start selected ["F-0f0f0f0f","F-0a1b2c3d"] with "未付款订单可取消；已付款订单返回已确认的拒绝结果。" and code+test entries; 12 call(s), HTTP 200/200/200/200/200/200/200/200/200/200/200/200, 42441ms total, 0 failed |
+| AC-041 | **PASS** | drill.l2-delivery: Work 01a09b6d-b2ea-7c53-84d3-89cadac35ffc (L2, base 731fd8e3db50) + Requirement 01a09b6d-b2f5-7de9-9c01-e317b7582d9e; model Plan 01a09b6d-c28 approved, Task 01a09b6d-c27c-77ec-8f00-c35f39152e1e; independent Runs planning:01a09b6d-b2f7-7384-af59-7b771fb79dbf, backend:01a09b6d-c29d-7f97-a6af-265c88a1bed8, review:01a09b6d-cff2-7ea1-8b5d-bba453efb225, test:01a09b6d-d60d-72d7-a4a3-b02a524ad383 with distinct config snapshots (097c0cb1, 1f8bcbf0, e702d354, 49b8ce13); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-flash, test=deepseek-flash; candidate a189136d7989 codeTree 96bffca28089; Develop 01a09b6d-cff1-7c60-a0f4-d96265526614, Review 01a09b6d-d5c7-7dab-8062-217d56166643, Test 01a09b6d-da4b-7b4d-bea0-aa6b0b65dd5e accepted (executed probe exit 0); L2 chain ["Plan","Develop","Review","Test","Settlement"]; a chain without Test is refused; CompletionManifest ce88a73a3785; settlement moved the ref to a189136d7989 with exactly one settlement.completed event; Requirement completed; knowledge commit f2a82112e68f (document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes); cold start selected ["F-0f0f0f0f","F-0a1b2c3d"] with "未付款订单可取消；已付款订单返回已确认的拒绝结果。" and code+test entries; 12 call(s), HTTP 200/200/200/200/200/200/200/200/200/200/200/200, 42441ms total, 0 failed |
+| AC-043 | **UNVERIFIED** | provider.independent-models: AC-043 的“角色配置不同 Provider/模型”需要 AGENTDEV_PROVIDER_REVIEW_MODEL 指定 Review/Test 的独立模型；本演练已验证每个专业 Run 独立且各自冻结 config 快照，但全部角色使用同一个已配置模型，因此多模型前提未执行 |
+| AC-052 | **UNVERIFIED** | browser.html-rendering: AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境；本仓库按产品决定不引入 Playwright 或浏览器下载。本演练已执行服务端部分：真实 Provider 产出的 HTML Artifact、预览 CSP/sandbox/credentials 头与一次性下载，浏览器侧仍未验证 |
 
 ## 3. UNVERIFIED 与残余
 
-- `provider.configuration`（—）：UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)
-- `drill.html-explanation`（AC-001）：UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)
-- `drill.l1-typo`（AC-007）：UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)
-- `drill.l2-delivery`（AC-010, AC-037, AC-041）：UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)
+- `browser.html-rendering`（AC-002, AC-052）：AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境；本仓库按产品决定不引入 Playwright 或浏览器下载。本演练已执行服务端部分：真实 Provider 产出的 HTML Artifact、预览 CSP/sandbox/credentials 头与一次性下载，浏览器侧仍未验证
+- `provider.independent-models`（AC-043）：AC-043 的“角色配置不同 Provider/模型”需要 AGENTDEV_PROVIDER_REVIEW_MODEL 指定 Review/Test 的独立模型；本演练已验证每个专业 Run 独立且各自冻结 config 快照，但全部角色使用同一个已配置模型，因此多模型前提未执行
 
 - 真实浏览器未执行（焦点遍历、像素级布局、脚本隔离攻击样例）：产品决定不引入 Playwright 或浏览器下载；浏览器级 AC-002/AC-052/AC-071/AC-073/AC-076 的浏览器侧证据仍为 UNVERIFIED（本演练只验证服务端 CSP/sandbox/一次性下载行为）。
 - L1 等级来源：`workflow.md` §2.4 的 L1 条件属于 Chief 评估，而当前协议面 `AssessmentPayload` 不携带 L1 判据、`orchestrator.routingFloor` 又会把“声明写路径的 delivery”抬到 L2（DC-62），因此没有真实协议路径能产生 L1 Work；live 演练按 WP-06/AC-068 的既有做法直接落 Work/Authorization/Assessment 行，再由真实 Gate 执行写入与结算。
@@ -53,5 +55,5 @@
 
 ## 4. 失败原始输出
 
-无检查失败；退出码非 0 由配置缺失或演练未执行导致，原因见 §3。
+无失败。
 

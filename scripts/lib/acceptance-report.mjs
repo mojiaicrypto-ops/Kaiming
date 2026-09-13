@@ -170,13 +170,13 @@ export function renderAcceptanceReport(input) {
     lines.push('无：本次没有任何 AC 依赖已登记豁免。');
     lines.push('');
   } else {
-    lines.push('| AC | 标题 | 未验证状态 | 登记缺口 | 豁免条件 | 决定记录 |');
-    lines.push('|---|---|---|---|---|---|');
+    lines.push('| AC | 标题 | 未验证状态 | 登记缺口 | 豁免条件 | 残余编号 | 决定记录 |');
+    lines.push('|---|---|---|---|---|---|---|');
     for (const result of accepted) {
       const acceptanceCase = byId.get(result.id);
       const registration = RESIDUAL_GAPS[result.id];
       lines.push(
-        `| ${result.id} | ${cell(acceptanceCase?.title ?? '')} | ${result.status} | ${cell(result.gap ?? '')} | \`${cell(registration?.condition ?? '')}\` | ${cell(result.decision ?? registration?.decision ?? '')} |`,
+        `| ${result.id} | ${cell(acceptanceCase?.title ?? '')} | ${result.status} | ${cell(result.gap ?? '')} | \`${cell(registration?.condition ?? '')}\` | ${cell(registration?.residual ?? '—')} | ${cell(result.decision ?? registration?.decision ?? '')} |`,
       );
     }
     lines.push('');
@@ -254,13 +254,17 @@ export function renderAcceptanceReport(input) {
   lines.push('');
   lines.push('### 6.2 人工映射解析结果（必须全部 resolved，且无 stale）');
   lines.push('');
-  lines.push('| AC | 条目数 | 已解析 | 过期条目 |');
-  lines.push('|---|---|---|---|');
+  lines.push('| AC | 条目数 | 采用映射 | 全部条目已解析 | 过期条目 |');
+  lines.push('|---|---|---|---|---|');
   for (const entry of diagnostics.curated) {
     lines.push(
-      `| ${entry.id} | ${entry.entries} | ${entry.resolved ? '是' : '否（FAIL）'} | ${entry.stale} |`,
+      `| ${entry.id} | ${entry.entries} | ${entry.mapping} | ${entry.resolved ? '是' : '否（FAIL）'} | ${entry.stale} |`,
     );
   }
+  lines.push('');
+  lines.push(
+    '人工条目对**每个**登记 AC 都校验（即使该 AC 由用例名映射命中）：任一条目解析不到已执行用例即为 FAIL，不存在「未被采用所以不校验」的死条目。',
+  );
   lines.push('');
   lines.push('### 6.3 未执行但含 AC 证据的测试文件（fail-closed）');
   lines.push('');

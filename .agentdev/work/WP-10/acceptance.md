@@ -4,57 +4,57 @@
 
 ## 0. 运行元数据
 
-- 生成时间：2026-09-13T14:56:13.104Z
+- 生成时间：2026-09-13T15:40:19.914Z
 - 命令：`pnpm test:acceptance`（实际执行 `node scripts/acceptance.mjs`）
 - 仓库：`/Users/huyaohua/huyh/work/aigrouptool`
-- Git HEAD：`5ad533ea02ba7e322b3a9bedea2b269a559b1f39`（工作区有未提交改动）
-- 证据绑定：`codeDigest sha256:0949e14614c98d17398d1f3c8227d7cd3bc8b16971a3ceb532ebfc77ac545e5f`（gitTree `86ade91771d5e71e5063bf0237f8a3ccdf6e494f`，252 个代码文件的内容哈希）；演练报告必须携带同一绑定才会被采用
+- Git HEAD：`c53b28dd5c97a3f106d467c518ea2e179e8f7dca`（工作区有未提交改动）
+- 证据绑定：`codeDigest sha256:e4f7a5054a89ab6d150fe13783042c9a0655195f45c8f8653f07e58e8e4eb2d4`（gitTree `4512743845e31503e77eb35728b28cd4a50f39f0`，252 个代码文件的内容哈希）；演练报告必须携带同一绑定才会被采用
 - Node：`v24.8.0`；Docker：可用
-- 真实 Provider 环境变量：未配置（AGENTDEV_PROVIDER_* 缺失）；Review/Test 独立模型：未配置
+- 真实 Provider 环境变量：已配置；Review/Test 独立模型：未配置
 - 发布演练：本次运行内执行了 `scripts/e2e.mjs` 与 `scripts/live.mjs`（非读取仓库文件）
 - 退出码：0
 
-- AC 统计：**共 94**（期望 94） → **PASS 83 / ACCEPTED 11 / FAIL 0 / MISSING 0**
+- AC 统计：**共 94**（期望 94） → **PASS 86 / ACCEPTED 8 / FAIL 0 / MISSING 0**
 - ACCEPTED = 该 AC 的完整 Given/When/Then 未全部执行，但缺口已在 `scripts/lib/drill-acs.mjs` 登记，且豁免条件在本次运行中依然成立（逐条见 §3）。PASS 只表示该 AC 的全部已映射证据通过且没有未验证的登记缺口。
-- 已执行提交用例：1416 个，覆盖 81/81 个测试文件
+- 已执行提交用例：1418 个，覆盖 81/81 个测试文件
 
 ## 1. 自动检查原始结果
 
 | 命令 | 退出码 | 结果摘要 | 原始输出尾部 |
 |---|---|---|---|
-| `vitest run --project unit` | 0 | 1105 tests / 1105 passed / 0 failed | JSON report written to /var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-acceptance-unit-6240.json |
-| `vitest run --project integration` | 0 | 311 tests / 311 passed / 0 failed | JSON report written to /var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-acceptance-integration-6240.json (node:23104) ExperimentalWarning: SQLite is an experimental feature and might change at any time (Use `node --trace-warnings ...` to show where the warning was created) (node:23105) ExperimentalWarning: SQLite is an experimental feature and might change at any time (Use `node --trace-warnings ...` to show where the warning was created) |
-| `pnpm test:e2e`（本次运行内执行） | 0 | 真实演练（见 §6.6） | PASS       offline.no-model-call                          [-] provider stub at http://127.0.0.1:52696/v1 received 0 requests across the whole drill; config.test resolved chief to 01a09b44-baaf-7cf9-9eeb-d35f08602ff3/e2e-offline-model with probe=capabilities-only UNVERIFIED browser.rendering-and-isolation                [AC-002,AC-052] AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境（无头或真实）；本仓库按产品决定不引入 Playwright 或浏览器下载，因此这两项在本演练中未执行（已提交用例覆盖 CSP/sandbox 预览头、一次性下载 token 与截断） UNVERIFIED browser.viewport-and-keyboard                  [AC-071,AC-073] AC-071 的 viewport 布局/焦点恢复与 AC-073 的键盘遍历/ARIA 实机朗读需要真实浏览器；本演练验证了三态面板标记与语言字典，未执行像素级与实机键盘检查 UNVERIFIED browser.upload-client-hints                    [AC-076] AC-076 的服务端拒绝（超类型 mime 无残留引用）已在本演练中执行并作为 attachment.upload-first-message 的证据；客户端提示文案需要浏览器执行，未验证 UNVERIFIED provider.fact-and-unknown                      [AC-001] AC-001 的“区分事实/未知”需要真实 Provider 纵向演练（pnpm test:live 与 AGENTDEV_PROVIDER_*）；本演练离线运行，Provider 桩被断言零调用 e2e: wrote drill report to /var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-acceptance-drills-q1QpGJ/e2e.mjs.json e2e: 20 checks — PASS 16 / FAIL 0 / UNVERIFIED 4 e2e: 23 ACs accounted for by the drill; exit 0 |
-| `pnpm test:live`（本次运行内执行） | 3 | 真实演练（见 §6.6） | UNVERIFIED provider.configuration                         [-] UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) UNVERIFIED drill.html-explanation                         [AC-001] UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) UNVERIFIED drill.l1-typo                                  [AC-007] UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) UNVERIFIED drill.l2-delivery                              [AC-010,AC-037,AC-041] UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) live: wrote drill report to /var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-acceptance-drills-q1QpGJ/live.mjs.json live: UNVERIFIED — 0 real Provider calls were made; set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET to run the drill UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) |
-| 演练报告 `pnpm test:e2e（本次运行，nonce f2d2e564…，绑定 sha256:0949e14614c9…）` | - | 已并入聚合（绑定已校验） | - |
-| 演练报告 `pnpm test:live（本次运行，nonce f2d2e564…，绑定 sha256:0949e14614c9…）` | - | 已并入聚合（绑定已校验） | - |
+| `vitest run --project unit` | 0 | 1107 tests / 1107 passed / 0 failed | JSON report written to /var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-acceptance-unit-68307.json |
+| `vitest run --project integration` | 0 | 311 tests / 311 passed / 0 failed | JSON report written to /var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-acceptance-integration-68307.json (node:85267) ExperimentalWarning: SQLite is an experimental feature and might change at any time (Use `node --trace-warnings ...` to show where the warning was created) (node:85268) ExperimentalWarning: SQLite is an experimental feature and might change at any time (Use `node --trace-warnings ...` to show where the warning was created) |
+| `pnpm test:e2e`（本次运行内执行） | 0 | 真实演练（见 §6.6） | PASS       offline.no-model-call                          [-] provider stub at http://127.0.0.1:58434/v1 received 0 requests across the whole drill; config.test resolved chief to 01a09b6c-5ff3-7e69-8116-3ca5793581bf/e2e-offline-model with probe=capabilities-only UNVERIFIED browser.rendering-and-isolation                [AC-002,AC-052] AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境（无头或真实）；本仓库按产品决定不引入 Playwright 或浏览器下载，因此这两项在本演练中未执行（已提交用例覆盖 CSP/sandbox 预览头、一次性下载 token 与截断） UNVERIFIED browser.viewport-and-keyboard                  [AC-071,AC-073] AC-071 的 viewport 布局/焦点恢复与 AC-073 的键盘遍历/ARIA 实机朗读需要真实浏览器；本演练验证了三态面板标记与语言字典，未执行像素级与实机键盘检查 UNVERIFIED browser.upload-client-hints                    [AC-076] AC-076 的服务端拒绝（超类型 mime 无残留引用）已在本演练中执行并作为 attachment.upload-first-message 的证据；客户端提示文案需要浏览器执行，未验证 UNVERIFIED provider.fact-and-unknown                      [AC-001] AC-001 的“区分事实/未知”需要真实 Provider 纵向演练（pnpm test:live 与 AGENTDEV_PROVIDER_*）；本演练离线运行，Provider 桩被断言零调用 e2e: wrote drill report to /var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-acceptance-drills-qTBKif/e2e.mjs.json e2e: 20 checks — PASS 16 / FAIL 0 / UNVERIFIED 4 e2e: 23 ACs accounted for by the drill; exit 0 |
+| `pnpm test:live`（本次运行内执行） | 0 | 真实演练（见 §6.6） | PASS       provider.connectivity                          [-] provider.test completed in 1318ms against https://api.deepseek.com with model deepseek-flash; 1 call(s), HTTP 200, 1317ms total, 0 failed PASS       drill.html-explanation                         [AC-001] message 01a09b6c-8629-79d8-9135-e49b187e42c6 -> Work 01a09b6c-8629-74f7-b2e5-62b7db78e89b (intent=assist level=none, no Requirement); completion through run 01a09b6c-867e-7979-bcc2-db85ae26ae39 (conf… PASS       drill.l1-typo                                  [AC-007] Work 01a09b6c-ecfc-7e47-89fb-a5777891d69b (level=L1, base ec2757ed3616) one-task Plan 01a09b6c-f38 approved by the real gate; write admitted for src/orders/messages.ts; real exec Run 01a09b6c-f3a2-75… PASS       drill.l2-delivery                              [AC-010,AC-037,AC-041] Work 01a09b6d-0f1c-706c-971c-079fe12f3614 (L2, base e347401e82a2) + Requirement 01a09b6d-0f28-725a-9f70-a87c5134bc96; model Plan 01a09b6d-186 approved, Task 01a09b6d-185b-75ce-ae04-5dc5756f555a; inde… UNVERIFIED browser.html-rendering                         [AC-002,AC-052] AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境；本仓库按产品决定不引入 Playwright 或浏览器下载。本演练已执行服务端部分：真实 Provider 产出的 HTML Artifact、预览 CSP/sandbox/credentials 头与一次性下载，浏览器侧仍未验证 UNVERIFIED provider.independent-models                    [AC-043] AC-043 的“角色配置不同 Provider/模型”需要 AGENTDEV_PROVIDER_REVIEW_MODEL 指定 Review/Test 的独立模型；本演练已验证每个专业 Run 独立且各自冻结 config 快照，但全部角色使用同一个已配置模型，因此多模型前提未执行 live: wrote drill report to /var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-acceptance-drills-qTBKif/live.mjs.json live: 4 passed / 0 failed / 2 unverified; 11 call(s), HTTP 200/200/200/200/200/200/200/200/200/200/200, 44070ms total, 0 failed |
+| 演练报告 `pnpm test:e2e（本次运行，nonce c96fd3e2…，绑定 sha256:e4f7a5054a89…）` | - | 已并入聚合（绑定已校验） | - |
+| 演练报告 `pnpm test:live（本次运行，nonce c96fd3e2…，绑定 sha256:e4f7a5054a89…）` | - | 已并入聚合（绑定已校验） | - |
 
 ## 2. 每 AC 结果
 
 | AC | 标题 | 状态 | 映射 | 已执行证据（文件 :: 用例） | 备注 / 未验证原因 |
 |---|---|---|---|---|---|
-| AC-001 | 自由问答 | **UNVERIFIED（已登记豁免）** | none | — | 已登记豁免：真实 Provider 的“区分事实/未知”答复未执行：离线只证明只读路由（不建 Requirement、不授权、Work 保持 level none），模型层断言需要 `pnpm test:live`。；演练 pnpm test:e2e：UNVERIFIED；演练 pnpm test:live：UNVERIFIED |
-| AC-002 | HTML说明 | **UNVERIFIED（已登记豁免）** | test-name | apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) uploads, binds and previews an HTML explanation end to end (AC-002/AC-084), apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) consumes a download token once and then refuses it (AC-002), apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) truncates a preview past the inline limit and keeps it downloadable (AC-002) …(+4) | 已登记豁免：真实浏览器中的隔离预览与脚本隔离未执行；提交用例与演练只证明 CSP/sandbox/credentials 预览头、一次性下载 token 与截断。；演练 pnpm test:e2e：UNVERIFIED |
+| AC-001 | 自由问答 | **PASS** | none | — | 演练 pnpm test:e2e：UNVERIFIED；演练 pnpm test:live：PASS |
+| AC-002 | HTML说明 | **UNVERIFIED（已登记豁免）** | test-name | apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) uploads, binds and previews an HTML explanation end to end (AC-002/AC-084), apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) consumes a download token once and then refuses it (AC-002), apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) truncates a preview past the inline limit and keeps it downloadable (AC-002) …(+4) | 已登记豁免：真实浏览器中的隔离预览与脚本隔离未执行；提交用例与演练只证明 CSP/sandbox/credentials 预览头、一次性下载 token 与截断。；演练 pnpm test:e2e：UNVERIFIED；演练 pnpm test:live：UNVERIFIED |
 | AC-003 | 按需委派 | **PASS** | test-name | packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) produces an agent explanation artifact for a delegated analysis Run (AC-003) | — |
 | AC-004 | 执行授权边界 | **PASS** | curated | packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes assist and artifact to none, apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) keeps questions, advice and statements read-only end to end | — |
-| AC-005 | 明确启动 | **PASS** | test-name | packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes a message into independent work items (AC-005/AC-006), packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) records the authority an explicit message grants (AC-005) | — |
-| AC-006 | 混合意图 | **PASS** | test-name | packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes a message into independent work items (AC-005/AC-006), packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) splits one mixed message into the work items it names (AC-006) | — |
-| AC-007 | L1错字 | **UNVERIFIED（已登记豁免）** | test-name | packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) is L2 when the diff exceeds the L1 bounds or changes logic (AC-009) …(+17) | 已登记豁免：L1 全链（一句话 Plan → 独立执行/Review/Settlement → CAS/CompletionManifest）的真实模型执行由 `pnpm test:live` 的 L1 演练覆盖；未配置 Provider 时该演练 UNVERIFIED，提交用例只证明领域规则与 Gate 顺序。；演练 pnpm test:live：UNVERIFIED |
-| AC-008 | 一字语义 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) is L2 when the diff exceeds the L1 bounds or changes logic (AC-009) …(+6) | — |
-| AC-009 | L1升级 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) is L2 when the diff exceeds the L1 bounds or changes logic (AC-009) …(+21) | — |
-| AC-010 | 标准交付 | **UNVERIFIED（已登记豁免）** | test-name | packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) requires each stage to depend on the previous one (AC-010) …(+5) | 已登记豁免：L2 交付链的真实模型纵向执行由 `pnpm test:live` 的 L2 演练覆盖；未配置 Provider 时该演练 UNVERIFIED，提交用例与 e2e 演练只证明真实 Gate/阶段顺序与交付物（输入由演练构造）。；演练 pnpm test:e2e：PASS；演练 pnpm test:live：UNVERIFIED |
-| AC-011 | 高风险交付 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) requires each stage to depend on the previous one (AC-010) …(+4) | — |
-| AC-012 | 正式结论 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) requires each stage to depend on the previous one (AC-010) …(+7) | — |
-| AC-013 | 无效Plan | **PASS** | test-name | packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a write without an approved Plan and leaves the source hash unchanged (AC-013), packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a Plan for another revision and a changed Plan hash (AC-013 required failure test), packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) admits the write when the Plan is approved for the current revision (AC-014) …(+21) | — |
-| AC-014 | 范围内自动Plan | **PASS** | test-name | packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a write without an approved Plan and leaves the source hash unchanged (AC-013), packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a Plan for another revision and a changed Plan hash (AC-013 required failure test), packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) admits the write when the Plan is approved for the current revision (AC-014) …(+19) | — |
-| AC-015 | 产品变化 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) handling now needs a new Product/Plan and invalidates affected evidence (AC-015), packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) queues a Requirement for later and leaves the acceptance alone (AC-016), packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) declining records a reason and changes nothing (AC-016) …(+7) | — |
-| AC-016 | 以后或拒绝 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) handling now needs a new Product/Plan and invalidates affected evidence (AC-015), packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) queues a Requirement for later and leaves the acceptance alone (AC-016), packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) declining records a reason and changes nothing (AC-016) …(+7) | — |
-| AC-017 | 自动返工 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08) …(+47) | — |
-| AC-018 | Finding关闭 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08) …(+11) | — |
-| AC-019 | 未覆盖验证 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08) …(+23) | — |
-| AC-020 | 暂停恢复 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) admits writes only while the Work is running, packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) never lets a caller expectation replace the approved source hash (W6R2-02), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) pauses at a safe point, admits no write, and resumes into a new Attempt after the version check (AC-020) …(+11) | — |
-| AC-021 | 取消需求 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) admits writes only while the Work is running, packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) never lets a caller expectation replace the approved source hash (W6R2-02), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) binds a task-less integration Finding and sends it straight back to development (AC-083, AC-017) …(+46) | — |
-| AC-022 | 预算止损 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses an over-used budget instead of assuming a zero usage (AC-022, W6R1-03), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) closes through evaluateFindingClosure and stops at the rework allowance (AC-017/AC-022), packages/domain/test/delivery.test.ts :: budget reservation (AC-022) refuses an over-limit reservation atomically with no partial charge (AC-022) …(+6) | — |
+| AC-005 | 明确启动 | **PASS** | test-name | packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) records the authority an explicit message grants (AC-005), packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes a message into independent work items (AC-005/AC-006) | — |
+| AC-006 | 混合意图 | **PASS** | test-name | packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) splits one mixed message into the work items it names (AC-006), packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes a message into independent work items (AC-005/AC-006) | — |
+| AC-007 | L1错字 | **PASS** | test-name | packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) completes an L1 Work without a Test Run, through its Review and a frozen CompletionManifest (AC-007/AC-019, W6R2-09), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) reports review evidence under review fields and no test status on an L1 completion (AC-007, W6R4-02), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007) …(+17) | 演练 pnpm test:live：PASS |
+| AC-008 | 一字语义 | **PASS** | test-name | packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) refuses a downgrade without invalidating the still-valid Plan (AC-008/AC-009, W6R1-06), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008) …(+6) | — |
+| AC-009 | L1升级 | **PASS** | test-name | packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) refuses a code write with no approved Plan and leaves the source hash unchanged (AC-013), packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) auto-approves a compliant Plan, stores the evidence and admits the write (AC-014), packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) rejects a non-compliant Plan without writing any gate state (AC-014 negative) …(+21) | — |
+| AC-010 | 标准交付 | **PASS** | test-name | packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) never completes a code L2 Work on a Test Run alone (AC-010/AC-019, W6R4-01), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010) …(+5) | 演练 pnpm test:e2e：PASS；演练 pnpm test:live：PASS |
+| AC-011 | 高风险交付 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) requires each stage to depend on the previous one (AC-010) …(+6) | — |
+| AC-012 | 正式结论 | **PASS** | test-name | packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) keeps the document route on its own rule: Review evidence, no code Test Run (AC-012, W6R2-09), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010) …(+7) | — |
+| AC-013 | 无效Plan | **PASS** | test-name | packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses every write once the Work is completed or failed, with zero write events (AC-013/AC-020, W6R3-02), packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) refuses a code write with no approved Plan and leaves the source hash unchanged (AC-013), packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) auto-approves a compliant Plan, stores the evidence and admits the write (AC-014) …(+21) | — |
+| AC-014 | 范围内自动Plan | **PASS** | test-name | packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) refuses a code write with no approved Plan and leaves the source hash unchanged (AC-013), packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) auto-approves a compliant Plan, stores the evidence and admits the write (AC-014), packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) rejects a non-compliant Plan without writing any gate state (AC-014 negative) …(+19) | — |
+| AC-015 | 产品变化 | **PASS** | test-name | packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) handles a product change now: new Product/Plan versions and invalidated evidence (AC-015), packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) queues a Requirement for later without moving the current acceptance (AC-016), packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) records a reason when the suggestion is declined and leaves acceptance unchanged (AC-016) …(+7) | — |
+| AC-016 | 以后或拒绝 | **PASS** | test-name | packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) handles a product change now: new Product/Plan versions and invalidated evidence (AC-015), packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) queues a Requirement for later without moving the current acceptance (AC-016), packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) records a reason when the suggestion is declined and leaves acceptance unchanged (AC-016) …(+7) | — |
+| AC-017 | 自动返工 | **PASS** | test-name | packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) binds a task-less integration Finding and sends it straight back to development (AC-083, AC-017), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a task target without a taskId, a foreign task and a developer Run, writing nothing (AC-083), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) closes a fixed Finding only after a new independent Review and Test, and refuses a developer self-verify (AC-018) …(+47) | — |
+| AC-018 | Finding关闭 | **PASS** | test-name | packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) closes a fixed Finding only after a new independent Review and Test, and refuses a developer self-verify (AC-018), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a pre-fix revision and a non-passed Test conclusion even when the Runs are new (AC-018, W6R1-01/W6R1-08), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses an old Review, the raising Review and a wrong-role Run as the fix verifier (AC-017, AC-018) …(+11) | — |
+| AC-019 | 未覆盖验证 | **PASS** | test-name | packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) never completes on a blocked Test result and never on a caller-asserted one (AC-019, W6R1-02), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a Test evidence bound to another revision or without an environment (AC-019, W6R1-02), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) requires an explicit risk disposition for every not_covered acceptance id (AC-019) …(+23) | — |
+| AC-020 | 暂停恢复 | **PASS** | test-name | packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) pauses at a safe point, admits no write, and resumes into a new Attempt after the version check (AC-020), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses to resume a Work that changed while it was paused (AC-020), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses to pause while a Run still needs recovery (AC-020) …(+11) | — |
+| AC-021 | 取消需求 | **PASS** | test-name | packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) binds a task-less integration Finding and sends it straight back to development (AC-083, AC-017), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a task target without a taskId, a foreign task and a developer Run, writing nothing (AC-083), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) closes a fixed Finding only after a new independent Review and Test, and refuses a developer self-verify (AC-018) …(+46) | — |
+| AC-022 | 预算止损 | **PASS** | test-name | packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) refuses a Plan whose reservation exceeds the budget once real usage counts (AC-022, W6R1-03), packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) reserves the approved tokens so a second Plan cannot exceed the limit (AC-022, W6R2-06), packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses an over-used budget instead of assuming a zero usage (AC-022, W6R1-03) …(+6) | — |
 | AC-023 | 无注册多项目 | **PASS** | test-name | packages/core/test/identity.integration.test.ts :: independent projects (AC-023) gives two real roots distinct ids and independent databases | — |
 | AC-024 | 路径识别 | **PASS** | test-name | packages/core/test/identity.integration.test.ts :: canonical roots (AC-024) normalizes a subdirectory to the repository root, packages/core/test/identity.integration.test.ts :: canonical roots (AC-024) normalizes a trailing separator and a symlinked path, packages/core/test/identity.integration.test.ts :: canonical roots (AC-024) finds the git root from a deep directory and reports no git root outside one …(+5) | — |
 | AC-025 | 空项目 | **PASS** | test-name | packages/workspace/test/initialize.test.ts :: empty project (AC-025) creates the initial Git and delivery branch, then confirms an unimplemented project | — |
@@ -69,25 +69,25 @@
 | AC-034 | 跨项目隔离 | **PASS** | test-name | packages/core/test/context-acl.test.ts :: context ACL — cross-project isolation (AC-034) denies a source that belongs to another Project, packages/core/test/context-acl.test.ts :: context ACL — cross-project isolation (AC-034) denies another Project source whatever the source class, packages/core/test/context-acl.test.ts :: context ACL — cross-project isolation (AC-034) accepts a source of the same Project …(+9) | — |
 | AC-035 | 会话轮换 | **PASS** | test-name | packages/core/test/context-checkpoint.test.ts :: checkpoint: session rotation (AC-035) recovers role/task/permissions/sources and keeps the approval state, packages/core/test/context-checkpoint.test.ts :: checkpoint: session rotation (AC-035) leaves the stored session unchanged when there is no checkpoint to rotate (W5R1-08), packages/core/test/context-checkpoint.test.ts :: checkpoint: session rotation (AC-035) does not let a staleness/rotation of the message list touch the approval …(+2) | — |
 | AC-036 | 预算不足 | **PASS** | test-name | packages/core/test/context-builder.test.ts :: buildContext — selection validation (AC-030) refuses a budget outside the documented 4096–2000000 range (AC-036), packages/core/test/context-builder.test.ts :: buildContext — budget (AC-036) reports BUDGET_EXCEEDED with the dropped ref and the missing tokens, packages/core/test/context-builder.test.ts :: buildContext — budget (AC-036) drops an optional source instead of the whole package and names it …(+16) | — |
-| AC-037 | 当前功能 | **UNVERIFIED（已登记豁免）** | test-name | packages/knowledge/test/projection.test.ts :: projection build renders a feature body that parses back to the same facts (AC-037), packages/knowledge/test/projection.test.ts :: projection build never injects an unrelated document into the feature body or index (AC-037), packages/knowledge/test/views.test.ts :: knowledge views separates confirmed intent from delivered reality (AC-038, AC-037) …(+11) | 已登记豁免：真实模型产出的知识补丁纵向执行由 `pnpm test:live` 的 L2 演练覆盖；未配置 Provider 时为 UNVERIFIED，提交测试只证明补丁/投影规则本身。；演练 pnpm test:e2e：PASS；演练 pnpm test:live：UNVERIFIED |
+| AC-037 | 当前功能 | **PASS** | test-name | packages/core/test/context-cold-start.test.ts :: cold start: the answer recalls the fixed sample (AC-037) finds the current cancellation behaviour, the payment constraint, the test path and the gap, packages/core/test/context-cold-start.test.ts :: cold start: the answer recalls the fixed sample (AC-037) does not inject the 20 unrelated documents (selected set and token usage), packages/core/test/context-cold-start.test.ts :: cold start: the answer recalls the fixed sample (AC-037) reports a precise budget gap instead of injecting more (AC-036) …(+11) | 演练 pnpm test:e2e：PASS；演练 pnpm test:live：PASS |
 | AC-038 | 状态分离 | **PASS** | test-name | packages/knowledge/test/views.test.ts :: knowledge views separates confirmed intent from delivered reality (AC-038, AC-037), packages/knowledge/test/views.test.ts :: knowledge views keeps a Work overlay out of the delivered answer and out of another Work (AC-038) | 演练 pnpm test:e2e：PASS |
 | AC-039 | 语义关系 | **PASS** | test-name | packages/core/test/context-cold-start.test.ts :: cold start: selection order and reasons (AC-039) follows overview → current work → navigation → constraints → bodies, with a reason each, packages/core/test/context-cold-start.test.ts :: cold start: selection order and reasons (AC-039) is deterministic: the same query selects the same entries in the same order | — |
 | AC-040 | 非法知识 | **PASS** | test-name | packages/knowledge/test/projection.test.ts :: projection build keeps the last valid projection, marks it stale and reports KNOWLEDGE_INVALID (AC-040), packages/knowledge/test/projection.test.ts :: projection build republishes and clears stale after a valid document follows an invalid one (AC-040), packages/knowledge/test/projection.test.ts :: broken-link diagnostics in a projection (AC-040) gates delivery for the current requirement only when the requirement touches the feature …(+1) | — |
-| AC-041 | 知识结算 | **UNVERIFIED（已登记豁免）** | test-name | packages/core/test/settlement.integration.test.ts :: Final manifest and settlement consistency (AC-041) builds a manifest that binds the verified revision, tree, knowledge and evidence, packages/core/test/settlement.integration.test.ts :: Final manifest and settlement consistency (AC-041) refuses an empty, foreign or stale verification set, packages/core/test/settlement.integration.test.ts :: Final manifest and settlement consistency (AC-041) freezes and reads a CompletionManifest through the real snapshot table …(+4) | 已登记豁免：真实模型结算后的知识更新与冷启动由 `pnpm test:live` 的 L2 演练覆盖；未配置 Provider 时为 UNVERIFIED，提交测试只证明投影与冷启动规则。；演练 pnpm test:e2e：PASS；演练 pnpm test:live：UNVERIFIED |
+| AC-041 | 知识结算 | **PASS** | test-name | packages/core/test/settlement.integration.test.ts :: Final manifest and settlement consistency (AC-041) builds a manifest that binds the verified revision, tree, knowledge and evidence, packages/core/test/settlement.integration.test.ts :: Final manifest and settlement consistency (AC-041) refuses an empty, foreign or stale verification set, packages/core/test/settlement.integration.test.ts :: Final manifest and settlement consistency (AC-041) freezes and reads a CompletionManifest through the real snapshot table …(+4) | 演练 pnpm test:e2e：PASS；演练 pnpm test:live：PASS |
 | AC-042 | 观察与意图 | **PASS** | test-name | packages/knowledge/test/views.test.ts :: knowledge views lists observed-versus-confirmed gaps without accepting observed behaviour (AC-042), packages/workspace/test/initialize.test.ts :: design/code conflict (AC-042) blocks Confirming, never confirms the existing document and keeps candidates observed, packages/workspace/test/scan.test.ts :: candidate knowledge reports an existing document that disagrees with the observed tree (AC-042) | — |
-| AC-043 | 独立模型 | **UNVERIFIED（已登记豁免）** | test-name | packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) inherits run → project → global role → global default in order, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) blocks a role whose model is missing or unsupported instead of downgrading, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) freezes a profile into an immutable snapshot and keeps it stable …(+13) | 已登记豁免：“角色配置不同 Provider/模型”需要为 Review/Test 指定独立模型（`AGENTDEV_PROVIDER_REVIEW_MODEL`）；未指定时全部角色共用一个已配置模型，只证明专业 Run 独立且各自冻结快照。 |
-| AC-044 | 配置冻结 | **PASS** | test-name | packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) inherits run → project → global role → global default in order, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) blocks a role whose model is missing or unsupported instead of downgrading, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) freezes a profile into an immutable snapshot and keeps it stable …(+58) | — |
-| AC-045 | 主控分派 | **PASS** | test-name | packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) runs through the frozen profile of the Run, packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) runs against a Provider that needs no secret (T-01), packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) refuses to admit a Run whose secret cannot be resolved (R18-05) …(+52) | — |
+| AC-043 | 独立模型 | **UNVERIFIED（已登记豁免）** | test-name | packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) inherits run → project → global role → global default in order, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) blocks a role whose model is missing or unsupported instead of downgrading, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) freezes a profile into an immutable snapshot and keeps it stable …(+15) | 已登记豁免：“角色配置不同 Provider/模型”需要为 Review/Test 指定独立模型（`AGENTDEV_PROVIDER_REVIEW_MODEL`）；未指定时全部角色共用一个已配置模型，只证明专业 Run 独立且各自冻结快照。；演练 pnpm test:live：UNVERIFIED |
+| AC-044 | 配置冻结 | **PASS** | test-name | packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) inherits run → project → global role → global default in order, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) blocks a role whose model is missing or unsupported instead of downgrading, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) freezes a profile into an immutable snapshot and keeps it stable …(+60) | — |
+| AC-045 | 主控分派 | **PASS** | test-name | packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) runs through the frozen profile of the Run, packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) runs against a Provider that needs no secret (T-01), packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) refuses to admit a Run whose secret cannot be resolved (R18-05) …(+54) | — |
 | AC-046 | Join和失败 | **PASS** | test-name | packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) holds the parent in waiting_children and keeps every sibling result, packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) refuses a new child once the parent Chief Run has ended (N-04, N-05), packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) does not hold the parent for joinPolicy=none, but still pages the Chief …(+11) | — |
 | AC-047 | 结构化交付 | **PASS** | test-name | packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) holds the parent in waiting_children and keeps every sibling result, packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) refuses a new child once the parent Chief Run has ended (N-04, N-05), packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) does not hold the parent for joinPolicy=none, but still pages the Chief …(+11) | — |
 | AC-048 | Workspace边界 | **PASS** | test-name | packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) admits a read and records the tool operation and the audit event (AC-048), packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) refuses an out-of-scope target with no execution and records the refusal (AC-048), packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) refuses an operation the Grant does not cover (AC-048) …(+69) | — |
-| AC-049 | Autonomous范围 | **PASS** | test-name | packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) admits the exact once binding and reports no replay for a first use, packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) replays a consumed once grant for the same operation and input (AC-080), packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) binds a replay to the full operation/role/stage triple, not just the run (W7R1-06) …(+65) | — |
+| AC-049 | Autonomous范围 | **PASS** | test-name | packages/core/test/grants.test.ts :: GrantStore (AC-049, AC-080) issuing mints a grant that carries every documented binding and audits it (AC-049), packages/core/test/grants.test.ts :: GrantStore (AC-049, AC-080) issuing refuses an unknown Work without writing a row (AC-049), packages/core/test/grants.test.ts :: GrantStore (AC-049, AC-080) issuing refuses an operation and a target outside the Work scope (AC-049) …(+65) | — |
 | AC-050 | Full Access门禁 | **PASS** | test-name | packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) admits a read and records the tool operation and the audit event (AC-048), packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) refuses an out-of-scope target with no execution and records the refusal (AC-048), packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) refuses an operation the Grant does not cover (AC-048) …(+69) | — |
 | AC-051 | Secret隔离 | **PASS** | test-name | packages/core/test/secrets.test.ts :: SecretStore resolution (AC-051) resolves a registered ref for the authorized Grantholder (AC-051), packages/core/test/secrets.test.ts :: SecretStore resolution (AC-051) refuses an unknown ref with NOT_FOUND for an authorized ref shape (AC-051), packages/core/test/secrets.test.ts :: SecretStore resolution (AC-051) refuses an unauthorized caller without disclosing whether the ref exists (AC-051) …(+38) | — |
-| AC-052 | HTML安全 | **UNVERIFIED（已登记豁免）** | test-name | apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) serves a preview of a hostile document under the same isolation (AC-052), packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) carries the isolation policy on every preview (AC-052) | 已登记豁免：真实浏览器中的攻击样例（读 cookie/网络/父页）未执行；提交用例只证明预览隔离策略与无 cookie。；演练 pnpm test:e2e：UNVERIFIED |
+| AC-052 | HTML安全 | **UNVERIFIED（已登记豁免）** | test-name | apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) serves a preview of a hostile document under the same isolation (AC-052), packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) carries the isolation policy on every preview (AC-052) | 已登记豁免：真实浏览器中的攻击样例（读 cookie/网络/父页）未执行；提交用例只证明预览隔离策略与无 cookie。；演练 pnpm test:e2e：UNVERIFIED；演练 pnpm test:live：UNVERIFIED |
 | AC-053 | 信任与资源 | **PASS** | test-name | packages/pi-runtime/test/trust.test.ts :: untrusted repository (AC-053) never imports, reads or activates a repository resource and reports every skip, packages/pi-runtime/test/trust.test.ts :: untrusted repository (AC-053) still activates the shipped release whitelist, which is not repository content, packages/pi-runtime/test/trust.test.ts :: trusted repository (AC-053) imports a selected, whitelisted repository extension only after trust …(+22) | — |
-| AC-054 | UI断开 | **PASS** | test-name | packages/client/test/commands.test.ts :: AC-054 reconnect and bounded backoff reconnects on the documented schedule and replays the hello, packages/client/test/commands.test.ts :: AC-054 reconnect and bounded backoff applies bounded exponential backoff while every reconnect fails, packages/client/test/commands.test.ts :: AC-054 reconnect and bounded backoff reports the attempt number while reconnecting and ends at the limit …(+9) | 演练 pnpm test:e2e：PASS |
-| AC-055 | 幂等接受 | **PASS** | test-name | packages/core/test/dispatcher.integration.test.ts :: write path (AC-055) applies one write, then replays the same result for the same key, packages/core/test/dispatcher.integration.test.ts :: write path (AC-055) refuses the same key with a different payload, packages/core/test/dispatcher.integration.test.ts :: write path (AC-055) reports a version conflict with the current version …(+5) | — |
+| AC-054 | UI断开 | **PASS** | test-name | packages/client/test/commands.test.ts :: AC-054 reconnect and bounded backoff reconnects on the documented schedule and replays the hello, packages/client/test/commands.test.ts :: AC-054 reconnect and bounded backoff applies bounded exponential backoff while every reconnect fails, packages/client/test/commands.test.ts :: AC-054 reconnect and bounded backoff reports the attempt number while reconnecting and ends at the limit …(+2) | 演练 pnpm test:e2e：PASS |
+| AC-055 | 幂等接受 | **PASS** | test-name | packages/client/test/commands.test.ts :: AC-055 write retry with the same idempotency key replays a write whose answer was lost and reports the replay, packages/client/test/commands.test.ts :: AC-055 write retry with the same idempotency key queues a write that never reached the wire and replays it after reconnect, packages/client/test/commands.test.ts :: AC-055 write retry with the same idempotency key retries a BUSY write with backoff and the same key …(+10) | — |
 | AC-056 | Mailbox非阻塞 | **PASS** | test-name | packages/core/test/mailbox.test.ts :: ProjectMailbox answers a new command while a long effect is still running (AC-056), packages/core/test/dispatcher.integration.test.ts :: long operations do not block commands (AC-056) answers a command within a second while a model call is in flight | — |
 | AC-057 | Runner失联 | **PASS** | test-name | packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) withholds a new Attempt while the old execution is unconfirmed (W8R1-04), packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) binds a resume decision to its own Run, not to the whole Work (W8R2-03), packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) keeps a Run-bound resume decision past a window of unrelated decisions (W8R3-04) …(+17) | — |
 | AC-058 | 过期结果 | **PASS** | test-name | packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) withholds a new Attempt while the old execution is unconfirmed (W8R1-04), packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) binds a resume decision to its own Run, not to the whole Work (W8R2-03), packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) keeps a Run-bound resume decision past a window of unrelated decisions (W8R3-04) …(+17) | — |
@@ -98,7 +98,7 @@
 | AC-063 | 部分结算 | **PASS** | test-name | packages/core/test/wp08-failures.test.ts :: required WP-08 failure tests ref 后崩溃: the restart reuses the commit, completes the state and emits one event (AC-063), packages/core/test/settlement.integration.test.ts :: Crash after the ref update: reuse the commit, complete once (AC-063) runs the whole settlement path: freeze, CAS and complete once, packages/core/test/settlement.integration.test.ts :: Crash after the ref update: reuse the commit, complete once (AC-063) takes the shared integration lock and refuses while a requirement save holds it (W8R2-02) …(+3) | — |
 | AC-064 | 备份恢复 | **PASS** | test-name | packages/core/test/wp08-failures.test.ts :: required WP-08 failure tests 备份演练: backup → restore keeps hashes/knowledge/evidence and blocks a missing Secret (AC-064), apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) backs up and restores the real database through the protocol (AC-064 surface), packages/core/test/backup.integration.test.ts :: Backup, restore and relocate (AC-064) restores a backup into a new directory with consistent hashes, knowledge and evidence …(+5) | — |
 | AC-065 | Migration | **PASS** | curated | packages/storage/test/migrations.integration.test.ts :: migrations backs up before pending work and writes a usable copy, packages/storage/test/migrations.integration.test.ts :: migrations rolls a failed migration back and reports its version, packages/storage/test/migrations.integration.test.ts :: migrations stops on a checksum mismatch instead of starting …(+3) | — |
-| AC-066 | SDK契约 | **PASS** | curated | packages/pi-runtime/test/session.integration.test.ts :: Pi session lifecycle creates a session with the configured model and no network, packages/pi-runtime/test/events.test.ts :: SDK event mapping maps assistant text and thinking deltas, packages/pi-runtime/test/events.test.ts :: SDK event mapping maps tool execution boundaries …(+4) | — |
+| AC-066 | SDK契约 | **UNVERIFIED（已登记豁免）** | curated | packages/pi-runtime/test/session.integration.test.ts :: Pi session lifecycle creates a session with the configured model and no network, packages/pi-runtime/test/events.test.ts :: SDK event mapping maps assistant text and thinking deltas, packages/pi-runtime/test/events.test.ts :: SDK event mapping maps tool execution boundaries …(+4) | 已登记豁免：AC-066 的 SDK 契约由锁定版本 0.85.1 的真实适配测试逐用例证明（事件映射含 assistant 文本/thinking 增量、工具边界、压缩、订阅、abort、资源释放、resume 路径接线）；但“真实模型经 Pi SDK 产生流式增量并从存储会话恢复历史”需要 Runner 侧真实驱动 Pi SDK 的生产级 models.json 与凭证注入，本包未执行，登记为已登记缺口。 |
 | AC-067 | 扩展故障 | **PASS** | curated | packages/pi-runtime/test/extensions.test.ts :: extension activation rejects an id the release does not ship, packages/pi-runtime/test/extensions.test.ts :: extension activation blocks startup when a critical capability fails, packages/pi-runtime/test/extensions.test.ts :: extension activation disables only the failing optional extension …(+2) | — |
 | AC-068 | 看板身份 | **PASS** | test-name | apps/web/test/pages.test.ts :: board page offers a direct cancel and a refused pause for Queued without Work (AC-068), apps/web/test/views.test.ts :: board projection (AC-068) keeps one identity per requirement, in the documented four columns, apps/web/test/views.test.ts :: board projection (AC-068) reports the pause refusal for a Queued requirement without local Work …(+10) | 演练 pnpm test:e2e：PASS |
 | AC-069 | 持续对话 | **PASS** | test-name | apps/web/test/views.test.ts :: run status honesty (AC-069/AC-070) treats only a completed Run as a success, apps/web/test/views.test.ts :: run status honesty (AC-069/AC-070) separates direct/L1 work from board work in the Runs page, apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) sends a message that creates real Work and a real event (AC-069/AC-084) …(+5) | 演练 pnpm test:e2e：PASS |
@@ -108,56 +108,40 @@
 | AC-073 | 语言可访问 | **UNVERIFIED（已登记豁免）** | test-name | apps/web/test/pages.test.ts :: shared shell exposes a language switch that only touches the interface dictionary (AC-073), apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) translates only the interface strings and leaves project content untouched (AC-073), apps/web/test/server.integration.test.ts :: workbench BFF over the real daemon (WP-09 T3) answers a page request with the language the browser asked for (AC-073) …(+1) | 已登记豁免：真实浏览器键盘遍历与 ARIA 朗读未执行；提交用例只证明字典级语言切换与项目内容不被翻译。；演练 pnpm test:e2e：UNVERIFIED |
 | AC-074 | Inbox去重 | **PASS** | test-name | apps/web/test/pages.test.ts :: inbox page (AC-074) renders one row per target version and disables an expired decision, apps/web/test/views.test.ts :: inbox projection (AC-074) collapses a decision to one row per target version, apps/web/test/views.test.ts :: inbox projection (AC-074) marks an expired decision actionable=none and expired=true …(+8) | 演练 pnpm test:e2e：PASS |
 | AC-075 | 配置错误 | **PASS** | test-name | apps/web/test/pages.test.ts :: settings page (AC-075) renders the active revision, the editor and the test control, apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) preserves the input and the active revision when config.save is refused (AC-075), apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) reports an unusable provider profile without changing the configuration (AC-075) …(+4) | 演练 pnpm test:e2e：PASS |
-| AC-076 | 附件限制 | **UNVERIFIED（已登记豁免）** | test-name | apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) rejects unsupported and oversized uploads server-side (AC-076), apps/web/test/views.test.ts :: attachment limits (AC-076) accepts a documented set, apps/web/test/views.test.ts :: attachment limits (AC-076) refuses more than five attachments …(+6) | 已登记豁免：客户端的超数量/大小/类型提示需要浏览器执行；服务端拒绝（无残留引用）已由提交用例与 e2e 演练执行。；演练 pnpm test:e2e：UNVERIFIED |
+| AC-076 | 附件限制 | **UNVERIFIED（已登记豁免）** | test-name | apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) rejects unsupported and oversized uploads server-side (AC-076), packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) enforces the upload limits before anything is stored (AC-076), apps/web/test/views.test.ts :: attachment limits (AC-076) accepts a documented set …(+6) | 已登记豁免：客户端的超数量/大小/类型提示需要浏览器执行；服务端拒绝（无残留引用）已由提交用例与 e2e 演练执行。；演练 pnpm test:e2e：UNVERIFIED |
 | AC-077 | 文件只读 | **PASS** | test-name | apps/web/test/pages.test.ts :: files page (AC-077) shows the branch, the target revision and the read-only boundary, apps/web/test/pages.test.ts :: files page (AC-077) renders a refused path as an error with its code, not an empty tree, apps/web/test/views.test.ts :: file boundary (AC-077) resolves a nested relative path inside the root …(+6) | 演练 pnpm test:e2e：PASS |
-| AC-078 | 认证生命周期 | **PASS** | test-name | apps/web/test/server.test.ts :: BFF HTTP surface (AC-078) accepts a read through the BFF cookie and forwards the daemon session, apps/web/test/server.test.ts :: BFF HTTP surface (AC-078) refuses an unauthenticated write with UNAUTHENTICATED and does not forward it, apps/web/test/server.test.ts :: BFF HTTP surface (AC-078) refuses a wrong-Origin write with NOT_AUTHORIZED while reads stay allowed …(+26) | 演练 pnpm test:e2e：PASS |
+| AC-078 | 认证生命周期 | **PASS** | test-name | packages/client/test/commands.test.ts :: AC-078 authentication lifecycle surfaces an expired session as a typed error without retrying, packages/client/test/commands.test.ts :: AC-078 authentication lifecycle never retries a NOT_AUTHORIZED write, packages/client/test/commands.test.ts :: AC-078 authentication lifecycle does not reconnect when the handshake itself is refused …(+27) | 演练 pnpm test:e2e：PASS |
 | AC-079 | 初始阶段上下文 | **PASS** | test-name | packages/core/test/context-acl.test.ts :: context ACL — future artifacts (AC-079) denies a future artifact class to an earlier stage, packages/core/test/context-acl.test.ts :: context ACL — future artifacts (AC-079) denies review/test artifacts to a Developer, packages/core/test/context-acl.test.ts :: context ACL — future artifacts (AC-079) keeps a plan readable to Review and Test but not a settlement report …(+28) | — |
-| AC-080 | 授权精确绑定 | **PASS** | test-name | packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) admits the exact once binding and reports no replay for a first use, packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) replays a consumed once grant for the same operation and input (AC-080), packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) binds a replay to the full operation/role/stage triple, not just the run (W7R1-06) …(+68) | — |
+| AC-080 | 授权精确绑定 | **PASS** | test-name | packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) refuses the sibling Run of the same role with no side effect (AC-080), packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) replays the recorded result for the same once operation (AC-080), packages/core/test/grants.test.ts :: GrantStore (AC-049, AC-080) issuing mints a grant that carries every documented binding and audits it (AC-049) …(+68) | — |
 | AC-081 | Task依赖输入 | **PASS** | test-name | packages/core/test/wp08.integration.test.ts :: WP-08 T4 end-to-end integration drill runs the L2 route Plan/Develop/Review/Test/Settlement and settles the Requirement (AC-081), packages/core/test/wp08.integration.test.ts :: WP-08 T4 end-to-end integration drill chains dependent Tasks, invalidates on ancestor change and skips a merged ancestor (AC-081), packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) orders the DAG deterministically and rejects a cycle …(+5) | — |
 | AC-082 | 重启保留窄范围 | **PASS** | test-name | packages/core/test/orchestrator.test.ts :: chief orchestration (AC-045, AC-044, AC-082) records an immutable assessment with the routing evidence, packages/core/test/orchestrator.test.ts :: chief orchestration (AC-045, AC-044, AC-082) applies the documented routing floor from the payload alone (R9-01, DC-62), packages/core/test/orchestrator.test.ts :: chief orchestration (AC-045, AC-044, AC-082) fails closed on unknown risk flags and on authorization provenance (R10-01/R10-02) …(+63) | — |
-| AC-083 | 组合及文档Finding | **PASS** | test-name | packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08) …(+49) | — |
+| AC-083 | 组合及文档Finding | **PASS** | test-name | packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) binds a task-less integration Finding and sends it straight back to development (AC-083, AC-017), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a task target without a taskId, a foreign task and a developer Run, writing nothing (AC-083), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) closes a fixed Finding only after a new independent Review and Test, and refuses a developer self-verify (AC-018) …(+49) | — |
 | AC-084 | 首条消息附件 | **PASS** | test-name | apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) refuses unauthenticated requests (AC-084), apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) uploads, binds and previews an HTML explanation end to end (AC-002/AC-084), apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) deletes only staged uploads and refuses bound ones (AC-084) …(+6) | 演练 pnpm test:e2e：PASS |
 | AC-085 | 证据读取封口 | **PASS** | test-name | packages/core/test/context-ledger.test.ts :: read ledger — seal and stale binding (AC-085) seals the ordered entries and refuses every later append, packages/core/test/context-ledger.test.ts :: read ledger — seal and stale binding (AC-085) re-sealing is idempotent, packages/core/test/context-ledger.test.ts :: read ledger — seal and stale binding (AC-085) verifies the correct binding and rejects an older seq or a different hash …(+3) | — |
 | AC-086 | 功能状态证据 | **PASS** | curated | packages/knowledge/test/feature-format.test.ts :: parseFeatureDocument parses a complete document with real-valued fields, packages/knowledge/test/feature-format.test.ts :: parseFeatureDocument rejects design=confirmed without one resolvable decision reference, packages/knowledge/test/feature-format.test.ts :: parseFeatureDocument rejects verification=passed without evidence references …(+4) | — |
 | AC-087 | 需求池随Git迁移 | **PASS** | test-name | apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) keeps an imported requirement identity and its evidence availability honest (AC-087/AC-088/AC-089), apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack reads all nine surfaces from real state in one drill (AC-068–AC-078, AC-084, AC-087–AC-090, AC-093), apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack shows an imported active requirement as waiting to continue with no Run (AC-087/AC-089) | — |
 | AC-088 | 历史需求展示 | **PASS** | test-name | packages/knowledge/test/requirements-pool.test.ts :: imported history (AC-088) keeps completion, cancellation and pre-archive state without migrating evidence, apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) keeps an imported requirement identity and its evidence availability honest (AC-087/AC-088/AC-089) | — |
 | AC-089 | 进行中需求继续 | **PASS** | test-name | packages/core/test/requirement-continue.test.ts :: Requirement continuation (AC-089) lists an imported active Requirement as waiting to continue without starting a Run (AC-089), packages/core/test/requirement-continue.test.ts :: Requirement continuation (AC-089) continues into a new local Work with a recorded authorization and the unmet Gates (AC-089), packages/core/test/requirement-continue.test.ts :: Requirement continuation (AC-089) refuses a Requirement that is not active or already has a local Work (AC-089) …(+11) | — |
-| AC-090 | 需求保存时机 | **PASS** | test-name | apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) refuses requirement.save without the Git record service instead of faking a save (AC-090/AC-093), apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack reads all nine surfaces from real state in one drill (AC-068–AC-078, AC-084, AC-087–AC-090, AC-093), apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack shows a requirement in the UI only after Git and the projection agree (AC-090/AC-093) …(+7) | 演练 pnpm test:e2e：PASS |
+| AC-090 | 需求保存时机 | **UNVERIFIED（已登记豁免）** | test-name | apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) refuses requirement.save without the Git record service instead of faking a save (AC-090/AC-093), packages/core/test/requirement-save.integration.test.ts :: requirement instant save (AC-090) commits requirement.json, content.md and the rebuilt README in one commit, packages/core/test/requirement-save.integration.test.ts :: requirement instant save (AC-090) reports the unpushed state against a configured remote (`AC-090`) …(+7) | 已登记豁免：AC-090 的 Git 侧与投影侧已由真实临时仓库、真实 SQLite 与 e2e 演练证明（原子提交两文件、recordVersion/recordHash、saveState 仅在与投影一致后为 saved、retry 恢复原操作、e2e 断言 git.unpushed=true）；但 Web 界面尚未渲染“分支、提交与未推送状态”（`apps/web/src` 无对应视图字段），该 Then 子句未实现，登记为已登记缺口。；演练 pnpm test:e2e：PASS |
 | AC-091 | 需求保存崩溃与交付竞争 | **PASS** | test-name | packages/core/test/requirement-save.test.ts :: completion/settlement consistency (AC-091) accepts a completion record that binds the Settlement revision, tree and manifests, packages/core/test/requirement-save.test.ts :: completion/settlement consistency (AC-091) refuses a completion record whose code revision is not the final revision, packages/core/test/requirement-save.test.ts :: completion/settlement consistency (AC-091) refuses a Settlement that verified a different code tree …(+12) | — |
 | AC-092 | 需求导入冲突与幂等 | **PASS** | curated | packages/knowledge/test/requirements-pool.test.ts :: importRequirementPool imports a pool, is idempotent, and keeps local and record versions apart, packages/knowledge/test/requirements-pool.test.ts :: parseRequirementPool keeps valid records visible next to a broken one and never rewrites the files, packages/knowledge/test/requirements-pool.test.ts :: importRequirementPool reports the same recordVersion with different content as a per-record conflict …(+4) | — |
 | AC-093 | 需求目录与正文一致性 | **PASS** | test-name | packages/core/test/context-builder.test.ts :: buildContext — excluded and unknown refs (AC-093) records a reference that does not exist and never expands it, packages/core/test/context-builder.test.ts :: buildContext — excluded and unknown refs (AC-093) keeps the selection’s own excluded and unknowns verbatim, packages/core/test/requirement-save.test.ts :: prepareRequirementSave (AC-093) builds both files with one version and the documented combined record hash …(+18) | 演练 pnpm test:e2e：PASS |
-| AC-094 | 需求正文保存与并发 | **PASS** | test-name | packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) creates the commit with the requirement pool files and moves the branch once, packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) refuses a stale writer with VERSION_CONFLICT and leaves the branch untouched, packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) re-uses the commit after a crash between the commit and the status write …(+7) | — |
+| AC-094 | 需求正文保存与并发 | **PASS** | test-name | packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) creates the commit with the requirement pool files and moves the branch once, packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) refuses a stale writer with VERSION_CONFLICT and leaves the branch untouched, packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) re-uses the commit after a crash between the commit and the status write …(+12) | — |
 
 ## 3. 已登记豁免（ACCEPTED）明细
 
-| AC | 标题 | 未验证状态 | 登记缺口 | 豁免条件 | 决定记录 |
-|---|---|---|---|---|---|
-| AC-001 | 自由问答 | UNVERIFIED | 真实 Provider 的“区分事实/未知”答复未执行：离线只证明只读路由（不建 Requirement、不授权、Work 保持 level none），模型层断言需要 `pnpm test:live`。 | `provider-absent` | WP-10 plan.md §2 D2（真实 Provider 由用户提供；未提供时 AC-001 保持 UNVERIFIED） |
-| AC-002 | HTML说明 | UNVERIFIED | 真实浏览器中的隔离预览与脚本隔离未执行；提交用例与演练只证明 CSP/sandbox/credentials 预览头、一次性下载 token 与截断。 | `browser-absent` | WP-10 plan.md §2 D1（用户确认不引入 Playwright / 浏览器下载） |
-| AC-007 | L1错字 | UNVERIFIED | L1 全链（一句话 Plan → 独立执行/Review/Settlement → CAS/CompletionManifest）的真实模型执行由 `pnpm test:live` 的 L1 演练覆盖；未配置 Provider 时该演练 UNVERIFIED，提交用例只证明领域规则与 Gate 顺序。 | `provider-absent` | WP-10 plan.md §2 D2 |
-| AC-010 | 标准交付 | UNVERIFIED | L2 交付链的真实模型纵向执行由 `pnpm test:live` 的 L2 演练覆盖；未配置 Provider 时该演练 UNVERIFIED，提交用例与 e2e 演练只证明真实 Gate/阶段顺序与交付物（输入由演练构造）。 | `provider-absent` | WP-10 plan.md §2 D2 |
-| AC-037 | 当前功能 | UNVERIFIED | 真实模型产出的知识补丁纵向执行由 `pnpm test:live` 的 L2 演练覆盖；未配置 Provider 时为 UNVERIFIED，提交测试只证明补丁/投影规则本身。 | `provider-absent` | WP-10 plan.md §2 D2 |
-| AC-041 | 知识结算 | UNVERIFIED | 真实模型结算后的知识更新与冷启动由 `pnpm test:live` 的 L2 演练覆盖；未配置 Provider 时为 UNVERIFIED，提交测试只证明投影与冷启动规则。 | `provider-absent` | WP-10 plan.md §2 D2 |
-| AC-043 | 独立模型 | UNVERIFIED | “角色配置不同 Provider/模型”需要为 Review/Test 指定独立模型（`AGENTDEV_PROVIDER_REVIEW_MODEL`）；未指定时全部角色共用一个已配置模型，只证明专业 Run 独立且各自冻结快照。 | `review-model-absent` | WP-10 plan.md §2 D2（`AGENTDEV_PROVIDER_REVIEW_MODEL` 未提供） |
-| AC-052 | HTML安全 | UNVERIFIED | 真实浏览器中的攻击样例（读 cookie/网络/父页）未执行；提交用例只证明预览隔离策略与无 cookie。 | `browser-absent` | WP-10 plan.md §2 D1 |
-| AC-071 | Live布局 | UNVERIFIED | 真实 viewport 截图与焦点切换未执行；演练与提交用例只证明面板三态、共享宽度标记与不干扰 Run。 | `browser-absent` | WP-10 plan.md §2 D1 |
-| AC-073 | 语言可访问 | UNVERIFIED | 真实浏览器键盘遍历与 ARIA 朗读未执行；提交用例只证明字典级语言切换与项目内容不被翻译。 | `browser-absent` | WP-10 plan.md §2 D1 |
-| AC-076 | 附件限制 | UNVERIFIED | 客户端的超数量/大小/类型提示需要浏览器执行；服务端拒绝（无残留引用）已由提交用例与 e2e 演练执行。 | `browser-absent` | WP-10 plan.md §2 D1 |
+| AC | 标题 | 未验证状态 | 登记缺口 | 豁免条件 | 残余编号 | 决定记录 |
+|---|---|---|---|---|---|---|
+| AC-002 | HTML说明 | UNVERIFIED | 真实浏览器中的隔离预览与脚本隔离未执行；提交用例与演练只证明 CSP/sandbox/credentials 预览头、一次性下载 token 与截断。 | `browser-absent` | — | WP-10 plan.md §2 D1（用户确认不引入 Playwright / 浏览器下载） |
+| AC-043 | 独立模型 | UNVERIFIED | “角色配置不同 Provider/模型”需要为 Review/Test 指定独立模型（`AGENTDEV_PROVIDER_REVIEW_MODEL`）；未指定时全部角色共用一个已配置模型，只证明专业 Run 独立且各自冻结快照。 | `review-model-absent` | — | WP-10 plan.md §2 D2（`AGENTDEV_PROVIDER_REVIEW_MODEL` 未提供） |
+| AC-052 | HTML安全 | UNVERIFIED | 真实浏览器中的攻击样例（读 cookie/网络/父页）未执行；提交用例只证明预览隔离策略与无 cookie。 | `browser-absent` | — | WP-10 plan.md §2 D1 |
+| AC-066 | SDK契约 | UNVERIFIED | AC-066 的 SDK 契约由锁定版本 0.85.1 的真实适配测试逐用例证明（事件映射含 assistant 文本/thinking 增量、工具边界、压缩、订阅、abort、资源释放、resume 路径接线）；但“真实模型经 Pi SDK 产生流式增量并从存储会话恢复历史”需要 Runner 侧真实驱动 Pi SDK 的生产级 models.json 与凭证注入，本包未执行，登记为已登记缺口。 | `recorded-gap` | WP-10-D4/AC-066 | WP-10 plan.md §2 D4（用户确认）：接受为已登记缺口，真实模型的一轮 Pi SDK 会话（流式增量与会话历史恢复）未在发布验收中执行 |
+| AC-071 | Live布局 | UNVERIFIED | 真实 viewport 截图与焦点切换未执行；演练与提交用例只证明面板三态、共享宽度标记与不干扰 Run。 | `browser-absent` | — | WP-10 plan.md §2 D1 |
+| AC-073 | 语言可访问 | UNVERIFIED | 真实浏览器键盘遍历与 ARIA 朗读未执行；提交用例只证明字典级语言切换与项目内容不被翻译。 | `browser-absent` | — | WP-10 plan.md §2 D1 |
+| AC-076 | 附件限制 | UNVERIFIED | 客户端的超数量/大小/类型提示需要浏览器执行；服务端拒绝（无残留引用）已由提交用例与 e2e 演练执行。 | `browser-absent` | — | WP-10 plan.md §2 D1 |
+| AC-090 | 需求保存时机 | UNVERIFIED | AC-090 的 Git 侧与投影侧已由真实临时仓库、真实 SQLite 与 e2e 演练证明（原子提交两文件、recordVersion/recordHash、saveState 仅在与投影一致后为 saved、retry 恢复原操作、e2e 断言 git.unpushed=true）；但 Web 界面尚未渲染“分支、提交与未推送状态”（`apps/web/src` 无对应视图字段），该 Then 子句未实现，登记为已登记缺口。 | `recorded-gap` | WP-10-D4/AC-090 | WP-10 plan.md §2 D4（用户确认）：接受为已登记缺口，界面侧的“分支/提交/未推送状态”展示未实现 |
 
 逐条 Given/When/Then 与原因：
-
-### AC-001 自由问答
-
-- 关联：REQ-ASSIST-001
-- Given：存在带来源的模式说明及代码
-- When：用户询问实际逻辑
-- Then：Chief按需调查并区分事实/未知，Work完成且无Requirement
-- 证据提示：读取记录、回复来源、DB查询。
-- 已执行证据：无
-- 未执行部分（登记缺口）：真实 Provider 的“区分事实/未知”答复未执行：离线只证明只读路由（不建 Requirement、不授权、Work 保持 level none），模型层断言需要 `pnpm test:live`。
-- 豁免条件与决定：WP-10 plan.md §2 D2（真实 Provider 由用户提供；未提供时 AC-001 保持 UNVERIFIED）
-- 演练 pnpm test:e2e：**UNVERIFIED** — provider.fact-and-unknown: AC-001 的“区分事实/未知”需要真实 Provider 纵向演练（pnpm test:live 与 AGENTDEV_PROVIDER_*）；本演练离线运行，Provider 桩被断言零调用
-- 演练 pnpm test:live：**UNVERIFIED** — drill.html-explanation: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)
 
 ### AC-002 HTML说明
 
@@ -170,57 +154,7 @@
 - 未执行部分（登记缺口）：真实浏览器中的隔离预览与脚本隔离未执行；提交用例与演练只证明 CSP/sandbox/credentials 预览头、一次性下载 token 与截断。
 - 豁免条件与决定：WP-10 plan.md §2 D1（用户确认不引入 Playwright / 浏览器下载）
 - 演练 pnpm test:e2e：**UNVERIFIED** — browser.rendering-and-isolation: AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境（无头或真实）；本仓库按产品决定不引入 Playwright 或浏览器下载，因此这两项在本演练中未执行（已提交用例覆盖 CSP/sandbox 预览头、一次性下载 token 与截断）
-
-### AC-007 L1错字
-
-- 关联：REQ-WFL-001
-- Given：明确普通错字且符合L1条件
-- When：修改执行
-- Then：一句话Plan、独立执行/Review/Settlement，直到CAS和CompletionManifest完成均无Planning/Test Run和看板建单
-- 证据提示：Diff、Run列表、完成清单。
-- 已执行证据：packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) is L2 when the diff exceeds the L1 bounds or changes logic (AC-009), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) upgrades an over-L1 diff to the same Work with a stale Plan (AC-009), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) upgrades a logic change that the line count hides (AC-009 required failure test), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades automatically (AC-008/AC-009) …(+14)
-- 未执行部分（登记缺口）：L1 全链（一句话 Plan → 独立执行/Review/Settlement → CAS/CompletionManifest）的真实模型执行由 `pnpm test:live` 的 L1 演练覆盖；未配置 Provider 时该演练 UNVERIFIED，提交用例只证明领域规则与 Gate 顺序。
-- 豁免条件与决定：WP-10 plan.md §2 D2
-- 演练 pnpm test:live：**UNVERIFIED** — drill.l1-typo: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)
-
-### AC-010 标准交付
-
-- 关联：REQ-WFL-001
-- Given：有效ProductDefinition
-- When：L2实现
-- Then：独立Plan/Develop/Review/Test/Settlement依序有效
-- 证据提示：阶段Manifest链。
-- 已执行证据：packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) requires each stage to depend on the previous one (AC-010), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) needs a Requirement for L2/L3 code and for L3 evidence (AC-011), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a document chain that binds no code revision or environment (AC-012, W6R1-04/W6R2-10), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) rejects an unknown route/level combination instead of guessing …(+2)
-- 未执行部分（登记缺口）：L2 交付链的真实模型纵向执行由 `pnpm test:live` 的 L2 演练覆盖；未配置 Provider 时该演练 UNVERIFIED，提交用例与 e2e 演练只证明真实 Gate/阶段顺序与交付物（输入由演练构造）。
-- 豁免条件与决定：WP-10 plan.md §2 D2
-- 演练 pnpm test:e2e：**PASS** — delivery.l2-chain: Work 01a09b44-c6e4-71e6-a3c5-7f274c3c1496 + Requirement 01a09b44-bb20-7abd-8b42-abf47b84df46 bound; Task 01a09b44-cc0c-7a7f-b6d4-af56a31daeaa; candidate 6510259ae3c6 tree b0da0daabd12 codeTree 134faea0ba6c; 5 real stage results (Plan/Develop/Review/Test/Settlement) accepted by StageGate; evaluateStageChain(route=code, level=L2) ok with the documented order and refuses a missing Test
-- 演练 pnpm test:live：**UNVERIFIED** — drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)
-
-### AC-037 当前功能
-
-- 关联：REQ-MEM-001
-- Given：功能经过两次需求修改
-- When：新会话查询
-- Then：从功能正文找到最新行为和约束，无需读全部需求历史
-- 证据提示：冷启动答案与读取。
-- 已执行证据：packages/knowledge/test/projection.test.ts :: projection build renders a feature body that parses back to the same facts (AC-037), packages/knowledge/test/projection.test.ts :: projection build never injects an unrelated document into the feature body or index (AC-037), packages/knowledge/test/views.test.ts :: knowledge views separates confirmed intent from delivered reality (AC-038, AC-037), packages/knowledge/test/views.test.ts :: knowledge views answers AC-037 from the feature body without injecting unrelated documents, packages/core/test/context-cold-start.test.ts :: cold start: the answer recalls the fixed sample (AC-037) finds the current cancellation behaviour, the payment constraint, the test path and the gap, packages/core/test/context-cold-start.test.ts :: cold start: the answer recalls the fixed sample (AC-037) does not inject the 20 unrelated documents (selected set and token usage) …(+8)
-- 未执行部分（登记缺口）：真实模型产出的知识补丁纵向执行由 `pnpm test:live` 的 L2 演练覆盖；未配置 Provider 时为 UNVERIFIED，提交测试只证明补丁/投影规则本身。
-- 豁免条件与决定：WP-10 plan.md §2 D2
-- 演练 pnpm test:e2e：**PASS** — knowledge.patch-cold-start: knowledge commit 25e1db76730a: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection 25e1db76730a state=valid (durable SQLite row valid); cold start selected ["F-0f0f0f0f","F-0a1b2c3d"] with "未付款订单可取消；已付款订单返回已确认的拒绝结果。", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid
-- 演练 pnpm test:live：**UNVERIFIED** — drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)
-
-### AC-041 知识结算
-
-- 关联：REQ-MEM-001
-- Given：代码/接口路径变化
-- When：完成
-- Then：更新功能/关系/入口和失效说明，冷启动能发现
-- 证据提示：最终文档、链接、查询。
-- 已执行证据：packages/core/test/settlement.integration.test.ts :: Final manifest and settlement consistency (AC-041) builds a manifest that binds the verified revision, tree, knowledge and evidence, packages/core/test/settlement.integration.test.ts :: Final manifest and settlement consistency (AC-041) refuses an empty, foreign or stale verification set, packages/core/test/settlement.integration.test.ts :: Final manifest and settlement consistency (AC-041) freezes and reads a CompletionManifest through the real snapshot table, packages/core/test/settlement.integration.test.ts :: Knowledge patch through the projection rules (AC-041) updates the body, relations and entries and is found by a cold-start query, packages/core/test/settlement.integration.test.ts :: Knowledge patch through the projection rules (AC-041) refuses invalid knowledge, publishes nothing and keeps the last valid projection stale, packages/core/test/settlement.integration.test.ts :: Knowledge patch through the projection rules (AC-041) refuses to patch a document that is not valid knowledge …(+1)
-- 未执行部分（登记缺口）：真实模型结算后的知识更新与冷启动由 `pnpm test:live` 的 L2 演练覆盖；未配置 Provider 时为 UNVERIFIED，提交测试只证明投影与冷启动规则。
-- 豁免条件与决定：WP-10 plan.md §2 D2
-- 演练 pnpm test:e2e：**PASS** — knowledge.patch-cold-start: knowledge commit 25e1db76730a: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection 25e1db76730a state=valid (durable SQLite row valid); cold start selected ["F-0f0f0f0f","F-0a1b2c3d"] with "未付款订单可取消；已付款订单返回已确认的拒绝结果。", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid
-- 演练 pnpm test:live：**UNVERIFIED** — drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)
+- 演练 pnpm test:live：**UNVERIFIED** — browser.html-rendering: AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境；本仓库按产品决定不引入 Playwright 或浏览器下载。本演练已执行服务端部分：真实 Provider 产出的 HTML Artifact、预览 CSP/sandbox/credentials 头与一次性下载，浏览器侧仍未验证
 
 ### AC-043 独立模型
 
@@ -229,9 +163,10 @@
 - When：Chief触发各角色
 - Then：实际配置与角色一致，所有专业Run独立
 - 证据提示：Config/Snapshot/Run。
-- 已执行证据：packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) inherits run → project → global role → global default in order, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) blocks a role whose model is missing or unsupported instead of downgrading, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) freezes a profile into an immutable snapshot and keeps it stable, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) validates patch values and never widens fixed limits, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) refuses an unreadable file instead of starting with defaults, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) persists across reopen with the same versions …(+10)
+- 已执行证据：packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) inherits run → project → global role → global default in order, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) blocks a role whose model is missing or unsupported instead of downgrading, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) freezes a profile into an immutable snapshot and keeps it stable, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) validates patch values and never widens fixed limits, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) refuses an unreadable file instead of starting with defaults, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) persists across reopen with the same versions …(+12)
 - 未执行部分（登记缺口）：“角色配置不同 Provider/模型”需要为 Review/Test 指定独立模型（`AGENTDEV_PROVIDER_REVIEW_MODEL`）；未指定时全部角色共用一个已配置模型，只证明专业 Run 独立且各自冻结快照。
 - 豁免条件与决定：WP-10 plan.md §2 D2（`AGENTDEV_PROVIDER_REVIEW_MODEL` 未提供）
+- 演练 pnpm test:live：**UNVERIFIED** — provider.independent-models: AC-043 的“角色配置不同 Provider/模型”需要 AGENTDEV_PROVIDER_REVIEW_MODEL 指定 Review/Test 的独立模型；本演练已验证每个专业 Run 独立且各自冻结 config 快照，但全部角色使用同一个已配置模型，因此多模型前提未执行
 
 ### AC-052 HTML安全
 
@@ -244,6 +179,18 @@
 - 未执行部分（登记缺口）：真实浏览器中的攻击样例（读 cookie/网络/父页）未执行；提交用例只证明预览隔离策略与无 cookie。
 - 豁免条件与决定：WP-10 plan.md §2 D1
 - 演练 pnpm test:e2e：**UNVERIFIED** — browser.rendering-and-isolation: AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境（无头或真实）；本仓库按产品决定不引入 Playwright 或浏览器下载，因此这两项在本演练中未执行（已提交用例覆盖 CSP/sandbox 预览头、一次性下载 token 与截断）
+- 演练 pnpm test:live：**UNVERIFIED** — browser.html-rendering: AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境；本仓库按产品决定不引入 Playwright 或浏览器下载。本演练已执行服务端部分：真实 Provider 产出的 HTML Artifact、预览 CSP/sandbox/credentials 头与一次性下载，浏览器侧仍未验证
+
+### AC-066 SDK契约
+
+- 关联：REQ-RUN-001
+- Given：锁定Pi版本
+- When：运行适配测试
+- Then：创建/流式/工具/abort/压缩/恢复/订阅与资源符合契约
+- 证据提示：实际SDK测试。
+- 已执行证据：packages/pi-runtime/test/session.integration.test.ts :: Pi session lifecycle creates a session with the configured model and no network, packages/pi-runtime/test/events.test.ts :: SDK event mapping maps assistant text and thinking deltas, packages/pi-runtime/test/events.test.ts :: SDK event mapping maps tool execution boundaries, packages/pi-runtime/test/session.integration.test.ts :: Pi session lifecycle subscribes, unsubscribes and disposes, packages/pi-runtime/test/session.integration.test.ts :: Pi session lifecycle aborts an idle session without error, packages/pi-runtime/test/session.integration.test.ts :: Pi session lifecycle refuses to compact a session that has nothing to compact …(+1)
+- 未执行部分（登记缺口）：AC-066 的 SDK 契约由锁定版本 0.85.1 的真实适配测试逐用例证明（事件映射含 assistant 文本/thinking 增量、工具边界、压缩、订阅、abort、资源释放、resume 路径接线）；但“真实模型经 Pi SDK 产生流式增量并从存储会话恢复历史”需要 Runner 侧真实驱动 Pi SDK 的生产级 models.json 与凭证注入，本包未执行，登记为已登记缺口。
+- 豁免条件与决定：WP-10 plan.md §2 D4（用户确认）：接受为已登记缺口，真实模型的一轮 Pi SDK 会话（流式增量与会话历史恢复）未在发布验收中执行
 
 ### AC-071 Live布局
 
@@ -276,10 +223,22 @@
 - When：上传
 - Then：客户端提示且服务端拒绝，无残留引用
 - 证据提示：HTTP测试。
-- 已执行证据：apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) rejects unsupported and oversized uploads server-side (AC-076), apps/web/test/views.test.ts :: attachment limits (AC-076) accepts a documented set, apps/web/test/views.test.ts :: attachment limits (AC-076) refuses more than five attachments, apps/web/test/views.test.ts :: attachment limits (AC-076) refuses one file over 20 MiB and a total over 50 MiB, apps/web/test/views.test.ts :: attachment limits (AC-076) refuses an unsupported mime type, apps/web/test/views.test.ts :: attachment limits (AC-076) treats a mime parameter as the same type …(+3)
+- 已执行证据：apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) rejects unsupported and oversized uploads server-side (AC-076), packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) enforces the upload limits before anything is stored (AC-076), apps/web/test/views.test.ts :: attachment limits (AC-076) accepts a documented set, apps/web/test/views.test.ts :: attachment limits (AC-076) refuses more than five attachments, apps/web/test/views.test.ts :: attachment limits (AC-076) refuses one file over 20 MiB and a total over 50 MiB, apps/web/test/views.test.ts :: attachment limits (AC-076) refuses an unsupported mime type …(+3)
 - 未执行部分（登记缺口）：客户端的超数量/大小/类型提示需要浏览器执行；服务端拒绝（无残留引用）已由提交用例与 e2e 演练执行。
 - 豁免条件与决定：WP-10 plan.md §2 D1
 - 演练 pnpm test:e2e：**UNVERIFIED** — browser.upload-client-hints: AC-076 的服务端拒绝（超类型 mime 无残留引用）已在本演练中执行并作为 attachment.upload-first-message 的证据；客户端提示文案需要浏览器执行，未验证
+
+### AC-090 需求保存时机
+
+- 关联：REQ-MEM-001
+- Given：创建或修改需求但尚未开发
+- When：执行保存并推送保存所在分支，再于新服务器拉取
+- Then：Git立即含需求及索引；仅Git与投影一致后显示已保存，失败通过requirement.save.retry恢复原操作，Git已提交时仅补投影且不重复提交；界面展示分支、提交与未推送状态
+- 证据提示：临时Git仓库、独立SQLite与Core/UI集成演练；记录提交和实际事件。
+- 已执行证据：apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) refuses requirement.save without the Git record service instead of faking a save (AC-090/AC-093), packages/core/test/requirement-save.integration.test.ts :: requirement instant save (AC-090) commits requirement.json, content.md and the rebuilt README in one commit, packages/core/test/requirement-save.integration.test.ts :: requirement instant save (AC-090) reports the unpushed state against a configured remote (`AC-090`), packages/core/test/requirement-save.integration.test.ts :: requirement instant save (AC-090) leaves the branch untouched when the integration lock is held by a delivery, packages/core/test/requirement-save.integration.test.ts :: requirement instant save (AC-090) refuses a second create for the same id and writes nothing, packages/core/test/requirement-save.integration.test.ts :: requirement instant save (AC-090) updates an existing record with a new version and includes both records in the pool …(+4)
+- 未执行部分（登记缺口）：AC-090 的 Git 侧与投影侧已由真实临时仓库、真实 SQLite 与 e2e 演练证明（原子提交两文件、recordVersion/recordHash、saveState 仅在与投影一致后为 saved、retry 恢复原操作、e2e 断言 git.unpushed=true）；但 Web 界面尚未渲染“分支、提交与未推送状态”（`apps/web/src` 无对应视图字段），该 Then 子句未实现，登记为已登记缺口。
+- 豁免条件与决定：WP-10 plan.md §2 D4（用户确认）：接受为已登记缺口，界面侧的“分支/提交/未推送状态”展示未实现
+- 演练 pnpm test:e2e：**PASS** — requirement.save-git: requirement 01a09b6c-60e4-7bfe-83de-2c8e5b05021f created at 1f141c918b14359bc216ed618ceb562fd954cc24 (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at 8002c1cd49b0 with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed
 
 ## 4. 未登记的未验证项（fail-closed）
 
@@ -301,18 +260,21 @@
 
 ### 6.2 人工映射解析结果（必须全部 resolved，且无 stale）
 
-| AC | 条目数 | 已解析 | 过期条目 |
-|---|---|---|---|
-| AC-004 | 2 | 是 | 0 |
-| AC-011 | 3 | 否（FAIL） | 0 |
-| AC-026 | 6 | 是 | 0 |
-| AC-027 | 2 | 是 | 0 |
-| AC-028 | 1 | 是 | 0 |
-| AC-065 | 6 | 是 | 0 |
-| AC-066 | 7 | 是 | 0 |
-| AC-067 | 5 | 是 | 0 |
-| AC-086 | 7 | 是 | 0 |
-| AC-092 | 7 | 是 | 0 |
+| AC | 条目数 | 采用映射 | 全部条目已解析 | 过期条目 |
+|---|---|---|---|---|
+| AC-004 | 2 | curated | 是 | 0 |
+| AC-011 | 3 | test-name | 是 | 0 |
+| AC-026 | 6 | curated | 是 | 0 |
+| AC-027 | 2 | curated | 是 | 0 |
+| AC-028 | 1 | curated | 是 | 0 |
+| AC-065 | 6 | curated | 是 | 0 |
+| AC-066 | 7 | curated | 是 | 0 |
+| AC-067 | 5 | curated | 是 | 0 |
+| AC-086 | 7 | curated | 是 | 0 |
+| AC-094 | 5 | test-name | 是 | 0 |
+| AC-092 | 7 | curated | 是 | 0 |
+
+人工条目对**每个**登记 AC 都校验（即使该 AC 由用例名映射命中）：任一条目解析不到已执行用例即为 FAIL，不存在「未被采用所以不校验」的死条目。
 
 ### 6.3 未执行但含 AC 证据的测试文件（fail-closed）
 
@@ -331,33 +293,36 @@
 | AC | 演练来源 | 状态 | 证据 |
 |---|---|---|---|
 | AC-001 | `pnpm test:e2e` | UNVERIFIED | provider.fact-and-unknown: AC-001 的“区分事实/未知”需要真实 Provider 纵向演练（pnpm test:live 与 AGENTDEV_PROVIDER_*）；本演练离线运行，Provider 桩被断言零调用 |
-| AC-001 | `pnpm test:live` | UNVERIFIED | drill.html-explanation: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) |
+| AC-001 | `pnpm test:live` | PASS | drill.html-explanation: message 01a09b6c-8629-79d8-9135-e49b187e42c6 -> Work 01a09b6c-8629-74f7-b2e5-62b7db78e89b (intent=assist level=none, no Requirement); completion through run 01a09b6c-867e-7979-bcc2-db85ae26ae39 (config snapshot 5ebb7e6d2301, 20155 chars) citing src/orders/cancel.ts and separating UNKNOWN; artifact 01a09b6c-eccf-7e76-8c43-41f7c21d9725 v1 sha256 58e423561b84 origin=agent kind=explanation; preview 200 CSP "default-src 'none'" sandbox allow-scripts credentials omit mode=inline; download token dznKrKH2… matched the artifact bytes; the second GET answered 403; delivery branch unchanged at ec2757ed3616; 2 call(s), HTTP 200/200, 27498ms total, 0 failed |
 | AC-002 | `pnpm test:e2e` | UNVERIFIED | browser.rendering-and-isolation: AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境（无头或真实）；本仓库按产品决定不引入 Playwright 或浏览器下载，因此这两项在本演练中未执行（已提交用例覆盖 CSP/sandbox 预览头、一次性下载 token 与截断） |
-| AC-007 | `pnpm test:live` | UNVERIFIED | drill.l1-typo: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) |
-| AC-010 | `pnpm test:e2e` | PASS | delivery.l2-chain: Work 01a09b44-c6e4-71e6-a3c5-7f274c3c1496 + Requirement 01a09b44-bb20-7abd-8b42-abf47b84df46 bound; Task 01a09b44-cc0c-7a7f-b6d4-af56a31daeaa; candidate 6510259ae3c6 tree b0da0daabd12 codeTree 134faea0ba6c; 5 real stage results (Plan/Develop/Review/Test/Settlement) accepted by StageGate; evaluateStageChain(route=code, level=L2) ok with the documented order and refuses a missing Test |
-| AC-010 | `pnpm test:live` | UNVERIFIED | drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) |
-| AC-037 | `pnpm test:e2e` | PASS | knowledge.patch-cold-start: knowledge commit 25e1db76730a: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection 25e1db76730a state=valid (durable SQLite row valid); cold start selected ["F-0f0f0f0f","F-0a1b2c3d"] with "未付款订单可取消；已付款订单返回已确认的拒绝结果。", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid |
-| AC-037 | `pnpm test:live` | UNVERIFIED | drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) |
-| AC-038 | `pnpm test:e2e` | PASS | surfaces.nine-real-state: 10 surfaces read real state (/projects ok; /projects/9aae0897d31423566b90d9e3abca3201/chief ok; /projects/9aae0897d31423566b90d9e3abca3201/requirements ok; /projects/9aae0897d31423566b90d9e3abca3201/requirements/01a09b44-bb20-7abd-8b42-abf47b84df46 ok; /projects/9aae0897d31423566b90d9e3abca3201/docs ok; /projects/9aae0897d31423566b90d9e3abca3201/files ok; /projects/9aae0897d31423566b90d9e3abca3201/agents ok; /projects/9aae0897d31423566b90d9e3abca3201/runs ok; /projects/9aae0897d31423566b90d9e3abca3201/inbox ok; /settings ok); Live panel modes open/compact/hidden; create/switch control only on the Chief page with the deep link elsewhere; docs delivered/design/work views all real answers |
-| AC-041 | `pnpm test:e2e` | PASS | knowledge.patch-cold-start: knowledge commit 25e1db76730a: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection 25e1db76730a state=valid (durable SQLite row valid); cold start selected ["F-0f0f0f0f","F-0a1b2c3d"] with "未付款订单可取消；已付款订单返回已确认的拒绝结果。", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid |
-| AC-041 | `pnpm test:live` | UNVERIFIED | drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET) |
+| AC-002 | `pnpm test:live` | UNVERIFIED | browser.html-rendering: AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境；本仓库按产品决定不引入 Playwright 或浏览器下载。本演练已执行服务端部分：真实 Provider 产出的 HTML Artifact、预览 CSP/sandbox/credentials 头与一次性下载，浏览器侧仍未验证 |
+| AC-007 | `pnpm test:live` | PASS | drill.l1-typo: Work 01a09b6c-ecfc-7e47-89fb-a5777891d69b (level=L1, base ec2757ed3616) one-task Plan 01a09b6c-f38 approved by the real gate; write admitted for src/orders/messages.ts; real exec Run 01a09b6c-f3a2-7551-82f1-d25126e3b3ef produced candidate e347401e82a2 tree ae0358dc0c97 (numstat: 1 1 src/orders/messages.ts); independent Review Run 01a09b6c-fa7f-74a9-9167-f659ad874da5 -> stage 01a09b6d-0846-76de-83a9-687c35faead3; Settlement Run 01a09b6d-0847-7e41-9d7c-b813dd387e6b; L1 chain ["Develop","Review","Settlement"]; runs planning:L1-Plan, backend:L1-Develop, review:L1-Review, settlement:L1-Settlement (no Planning/Test Run); CompletionManifest 77f3b3dd1bbe frozen; CAS moved agentdev/main ec2757ed3616 -> e347401e82a2; Work completed with no Requirement; artifacts on the Work: 1 (the Plan) |
+| AC-010 | `pnpm test:e2e` | PASS | delivery.l2-chain: Work 01a09b6c-76d0-7e63-9481-94e73a1cb0f5 + Requirement 01a09b6c-60e4-7bfe-83de-2c8e5b05021f bound; Task 01a09b6c-7c11-799c-a127-711948e40a75; candidate 09ef2d9884bf tree ca0e71106466 codeTree 4a0f6254a30a; 5 real stage results (Plan/Develop/Review/Test/Settlement) accepted by StageGate; evaluateStageChain(route=code, level=L2) ok with the documented order and refuses a missing Test |
+| AC-010 | `pnpm test:live` | PASS | drill.l2-delivery: Work 01a09b6d-0f1c-706c-971c-079fe12f3614 (L2, base e347401e82a2) + Requirement 01a09b6d-0f28-725a-9f70-a87c5134bc96; model Plan 01a09b6d-186 approved, Task 01a09b6d-185b-75ce-ae04-5dc5756f555a; independent Runs planning:01a09b6d-0f2a-71d6-b76b-efb5d9f73d3b, backend:01a09b6d-187a-70ec-ae8d-0fe51da2aa20, review:01a09b6d-2253-7add-94ef-cfac953b3644, test:01a09b6d-26ae-7b49-a6dd-94dab7f44929 with distinct config snapshots (0aeb486f, 5f0d997f, 727d0bdf, 8330ecf1); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-flash, test=deepseek-flash; candidate 74e3986634d2 codeTree 646f7a174f43; Develop 01a09b6d-2252-795f-aa01-8b2188cae605, Review 01a09b6d-265d-7564-8f4b-81b7c621eb1a, Test 01a09b6d-2b69-7abc-8d0a-98419869b1bf accepted (executed probe exit 0); L2 chain ["Plan","Develop","Review","Test","Settlement"]; a chain without Test is refused; Comp… |
+| AC-037 | `pnpm test:e2e` | PASS | knowledge.patch-cold-start: knowledge commit 11c1f4b5e80c: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection 11c1f4b5e80c state=valid (durable SQLite row valid); cold start selected ["F-0f0f0f0f","F-0a1b2c3d"] with "未付款订单可取消；已付款订单返回已确认的拒绝结果。", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid |
+| AC-037 | `pnpm test:live` | PASS | drill.l2-delivery: Work 01a09b6d-0f1c-706c-971c-079fe12f3614 (L2, base e347401e82a2) + Requirement 01a09b6d-0f28-725a-9f70-a87c5134bc96; model Plan 01a09b6d-186 approved, Task 01a09b6d-185b-75ce-ae04-5dc5756f555a; independent Runs planning:01a09b6d-0f2a-71d6-b76b-efb5d9f73d3b, backend:01a09b6d-187a-70ec-ae8d-0fe51da2aa20, review:01a09b6d-2253-7add-94ef-cfac953b3644, test:01a09b6d-26ae-7b49-a6dd-94dab7f44929 with distinct config snapshots (0aeb486f, 5f0d997f, 727d0bdf, 8330ecf1); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-flash, test=deepseek-flash; candidate 74e3986634d2 codeTree 646f7a174f43; Develop 01a09b6d-2252-795f-aa01-8b2188cae605, Review 01a09b6d-265d-7564-8f4b-81b7c621eb1a, Test 01a09b6d-2b69-7abc-8d0a-98419869b1bf accepted (executed probe exit 0); L2 chain ["Plan","Develop","Review","Test","Settlement"]; a chain without Test is refused; Comp… |
+| AC-038 | `pnpm test:e2e` | PASS | surfaces.nine-real-state: 10 surfaces read real state (/projects ok; /projects/1ded486b3a9d47dcbe0df889d9dc7ebe/chief ok; /projects/1ded486b3a9d47dcbe0df889d9dc7ebe/requirements ok; /projects/1ded486b3a9d47dcbe0df889d9dc7ebe/requirements/01a09b6c-60e4-7bfe-83de-2c8e5b05021f ok; /projects/1ded486b3a9d47dcbe0df889d9dc7ebe/docs ok; /projects/1ded486b3a9d47dcbe0df889d9dc7ebe/files ok; /projects/1ded486b3a9d47dcbe0df889d9dc7ebe/agents ok; /projects/1ded486b3a9d47dcbe0df889d9dc7ebe/runs ok; /projects/1ded486b3a9d47dcbe0df889d9dc7ebe/inbox ok; /settings ok); Live panel modes open/compact/hidden; create/switch control only on the Chief page with the deep link elsewhere; docs delivered/design/work views all real answers |
+| AC-041 | `pnpm test:e2e` | PASS | knowledge.patch-cold-start: knowledge commit 11c1f4b5e80c: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection 11c1f4b5e80c state=valid (durable SQLite row valid); cold start selected ["F-0f0f0f0f","F-0a1b2c3d"] with "未付款订单可取消；已付款订单返回已确认的拒绝结果。", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid |
+| AC-041 | `pnpm test:live` | PASS | drill.l2-delivery: Work 01a09b6d-0f1c-706c-971c-079fe12f3614 (L2, base e347401e82a2) + Requirement 01a09b6d-0f28-725a-9f70-a87c5134bc96; model Plan 01a09b6d-186 approved, Task 01a09b6d-185b-75ce-ae04-5dc5756f555a; independent Runs planning:01a09b6d-0f2a-71d6-b76b-efb5d9f73d3b, backend:01a09b6d-187a-70ec-ae8d-0fe51da2aa20, review:01a09b6d-2253-7add-94ef-cfac953b3644, test:01a09b6d-26ae-7b49-a6dd-94dab7f44929 with distinct config snapshots (0aeb486f, 5f0d997f, 727d0bdf, 8330ecf1); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-flash, test=deepseek-flash; candidate 74e3986634d2 codeTree 646f7a174f43; Develop 01a09b6d-2252-795f-aa01-8b2188cae605, Review 01a09b6d-265d-7564-8f4b-81b7c621eb1a, Test 01a09b6d-2b69-7abc-8d0a-98419869b1bf accepted (executed probe exit 0); L2 chain ["Plan","Develop","Review","Test","Settlement"]; a chain without Test is refused; Comp… |
+| AC-043 | `pnpm test:live` | UNVERIFIED | provider.independent-models: AC-043 的“角色配置不同 Provider/模型”需要 AGENTDEV_PROVIDER_REVIEW_MODEL 指定 Review/Test 的独立模型；本演练已验证每个专业 Run 独立且各自冻结 config 快照，但全部角色使用同一个已配置模型，因此多模型前提未执行 |
 | AC-052 | `pnpm test:e2e` | UNVERIFIED | browser.rendering-and-isolation: AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境（无头或真实）；本仓库按产品决定不引入 Playwright 或浏览器下载，因此这两项在本演练中未执行（已提交用例覆盖 CSP/sandbox 预览头、一次性下载 token 与截断） |
+| AC-052 | `pnpm test:live` | UNVERIFIED | browser.html-rendering: AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境；本仓库按产品决定不引入 Playwright 或浏览器下载。本演练已执行服务端部分：真实 Provider 产出的 HTML Artifact、预览 CSP/sandbox/credentials 头与一次性下载，浏览器侧仍未验证 |
 | AC-054 | `pnpm test:e2e` | PASS | events.watermark-reconnect: hello/subscribe over the BFF /ws; first cursor 15 acked; daemon dropped -> bridge.reconnecting -> bridge.open; the during-break event replayed above the watermark with no duplicate; a fresh socket resumed in mode=replay with nothing at or below 15; Work stayed running |
 | AC-060 | `pnpm test:e2e` | PASS | events.watermark-reconnect: hello/subscribe over the BFF /ws; first cursor 15 acked; daemon dropped -> bridge.reconnecting -> bridge.open; the during-break event replayed above the watermark with no duplicate; a fresh socket resumed in mode=replay with nothing at or below 15; Work stayed running |
-| AC-068 | `pnpm test:e2e` | PASS | board.rules: board identity shared (01a09b44-c094-768a-804a-986f69daf46e); L1 Work 01a09b44-c356-7500-9bda-574d98852c87 excluded and never a card; Queued pause -> 409 INVALID_STATE; Queued cancel -> cancelled at b0e88617508eba21a5abdef993f038f78ba13fc8; branch tip moved |
-| AC-069 | `pnpm test:e2e` | PASS | chief.routes-message: message 01a09b44-c6e4-71bd-bd2c-c3fd6e23b577 routed to Work 01a09b44-c6e4-71e6-a3c5-7f274c3c1496 (intent=delivery level=L2 authorization=01a09b44-c6f7-722a-88a9-7bba25a6680e); Work.sourceRef is the message; message.received emitted |
-| AC-070 | `pnpm test:e2e` | PASS | plan.approval-expired-card: no-plan refusal (enabled=false reasonCode=no_plan); plan.approve v1 planRef=01a09b44-c70e-7477-86e4-740246b5c55d; plan.current enabled=true with 1 task(s), authorization=01a09b44-c6f7-722a-88a9-7bba25a6680e; superseded v0 -> VERSION_CONFLICT currentVersion=1 |
+| AC-068 | `pnpm test:e2e` | PASS | board.rules: board identity shared (01a09b6c-6d9c-7ee0-a993-69a464fa8432); L1 Work 01a09b6c-729c-707c-bf04-4eeb042d17eb excluded and never a card; Queued pause -> 409 INVALID_STATE; Queued cancel -> cancelled at 5a62ed9175b39d2764327c319863c1eebc8250f0; branch tip moved |
+| AC-069 | `pnpm test:e2e` | PASS | chief.routes-message: message 01a09b6c-76d0-7c10-af6a-6f5152cf1b97 routed to Work 01a09b6c-76d0-7e63-9481-94e73a1cb0f5 (intent=delivery level=L2 authorization=01a09b6c-76e3-7683-80ba-7c2306f438db); Work.sourceRef is the message; message.received emitted |
+| AC-070 | `pnpm test:e2e` | PASS | plan.approval-expired-card: no-plan refusal (enabled=false reasonCode=no_plan); plan.approve v1 planRef=01a09b6c-76fc-7e69-9b1c-f5e6ba6640d7; plan.current enabled=true with 1 task(s), authorization=01a09b6c-76e3-7683-80ba-7c2306f438db; superseded v0 -> VERSION_CONFLICT currentVersion=1 |
 | AC-071 | `pnpm test:e2e` | UNVERIFIED | browser.viewport-and-keyboard: AC-071 的 viewport 布局/焦点恢复与 AC-073 的键盘遍历/ARIA 实机朗读需要真实浏览器；本演练验证了三态面板标记与语言字典，未执行像素级与实机键盘检查 |
-| AC-072 | `pnpm test:e2e` | PASS | surfaces.nine-real-state: 10 surfaces read real state (/projects ok; /projects/9aae0897d31423566b90d9e3abca3201/chief ok; /projects/9aae0897d31423566b90d9e3abca3201/requirements ok; /projects/9aae0897d31423566b90d9e3abca3201/requirements/01a09b44-bb20-7abd-8b42-abf47b84df46 ok; /projects/9aae0897d31423566b90d9e3abca3201/docs ok; /projects/9aae0897d31423566b90d9e3abca3201/files ok; /projects/9aae0897d31423566b90d9e3abca3201/agents ok; /projects/9aae0897d31423566b90d9e3abca3201/runs ok; /projects/9aae0897d31423566b90d9e3abca3201/inbox ok; /settings ok); Live panel modes open/compact/hidden; create/switch control only on the Chief page with the deep link elsewhere; docs delivered/design/work views all real answers |
+| AC-072 | `pnpm test:e2e` | PASS | surfaces.nine-real-state: 10 surfaces read real state (/projects ok; /projects/1ded486b3a9d47dcbe0df889d9dc7ebe/chief ok; /projects/1ded486b3a9d47dcbe0df889d9dc7ebe/requirements ok; /projects/1ded486b3a9d47dcbe0df889d9dc7ebe/requirements/01a09b6c-60e4-7bfe-83de-2c8e5b05021f ok; /projects/1ded486b3a9d47dcbe0df889d9dc7ebe/docs ok; /projects/1ded486b3a9d47dcbe0df889d9dc7ebe/files ok; /projects/1ded486b3a9d47dcbe0df889d9dc7ebe/agents ok; /projects/1ded486b3a9d47dcbe0df889d9dc7ebe/runs ok; /projects/1ded486b3a9d47dcbe0df889d9dc7ebe/inbox ok; /settings ok); Live panel modes open/compact/hidden; create/switch control only on the Chief page with the deep link elsewhere; docs delivered/design/work views all real answers |
 | AC-073 | `pnpm test:e2e` | UNVERIFIED | browser.viewport-and-keyboard: AC-071 的 viewport 布局/焦点恢复与 AC-073 的键盘遍历/ARIA 实机朗读需要真实浏览器；本演练验证了三态面板标记与语言字典，未执行像素级与实机键盘检查 |
-| AC-074 | `pnpm test:e2e` | PASS | inbox.decision-dedup: two same-target decisions collapsed to 1 Inbox row (ids 01a09b44-c715-7f14-9814-bf4fde5cb367/01a09b44-c716-7a00-8de0-0a45e9ab68b7); expired row actionable=false; resolve -> accepted + idempotent replay; duplicate row untouched |
+| AC-074 | `pnpm test:e2e` | PASS | inbox.decision-dedup: two same-target decisions collapsed to 1 Inbox row (ids 01a09b6c-7703-7d4f-8668-9d0b4cba40f2/01a09b6c-7704-75ae-8f2d-91263906f8be); expired row actionable=false; resolve -> accepted + idempotent replay; duplicate row untouched |
 | AC-075 | `pnpm test:e2e` | PASS | config.validation-preserves-input: unknownKey -> 422 VALIDATION_ERROR with preservedInput, revision unchanged at 2; reasoning=high saved (rev 3) then config.test -> PROVIDER_UNAVAILABLE with preservedInput; restored to off (rev 4), Settings revision matches |
 | AC-076 | `pnpm test:e2e` | UNVERIFIED | browser.upload-client-hints: AC-076 的服务端拒绝（超类型 mime 无残留引用）已在本演练中执行并作为 attachment.upload-first-message 的证据；客户端提示文案需要浏览器执行，未验证 |
-| AC-077 | `pnpm test:e2e` | PASS | files.branch-preview-boundaries: revision=922a063c35f0 branch=agentdev/main, real file content; search found src/orders/cancel.ts; absolute+traversal -> data-code=NOT_FOUND with no leak; snapshots unchanged (1); head advanced to 60ce981049d9 and the page followed |
-| AC-078 | `pnpm test:e2e` | PASS | stack.boot: daemon 200/BFF 200 healthz; anonymous page 401; /rpc without cookie 401 UNAUTHENTICATED; wrong Origin login 403 NOT_AUTHORIZED; wrong token 401; login 200 with agentdev_web cookie (HttpOnly) + csrfToken; snapshot projectId=9aae0897d31423566b90d9e3abca3201 |
-| AC-084 | `pnpm test:e2e` | PASS | attachment.upload-first-message: upload 201 attachmentId=01a09b44-c729-7f4b-8d57-bfe1d583e7ac (staged, installation owner); first message 01a09b44-c734-74c3-b181-6d8356e31462 bound it to Work 01a09b44-c734-71e7-9f74-08e4188cb28f atomically with 1 user artifact; unsupported mime refused (400) with no residue; duplicate bind -> ATTACHMENT_ALREADY_BOUND |
-| AC-090 | `pnpm test:e2e` | PASS | requirement.save-git: requirement 01a09b44-bb20-7abd-8b42-abf47b84df46 created at cfaef5e01405d98ada1eda939ceb72a6e0192484 (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at 627e92e76af8 with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed |
-| AC-093 | `pnpm test:e2e` | PASS | requirement.save-git: requirement 01a09b44-bb20-7abd-8b42-abf47b84df46 created at cfaef5e01405d98ada1eda939ceb72a6e0192484 (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at 627e92e76af8 with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed |
+| AC-077 | `pnpm test:e2e` | PASS | files.branch-preview-boundaries: revision=59c908936478 branch=agentdev/main, real file content; search found src/orders/cancel.ts; absolute+traversal -> data-code=NOT_FOUND with no leak; snapshots unchanged (1); head advanced to cc07a5563a78 and the page followed |
+| AC-078 | `pnpm test:e2e` | PASS | stack.boot: daemon 200/BFF 200 healthz; anonymous page 401; /rpc without cookie 401 UNAUTHENTICATED; wrong Origin login 403 NOT_AUTHORIZED; wrong token 401; login 200 with agentdev_web cookie (HttpOnly) + csrfToken; snapshot projectId=1ded486b3a9d47dcbe0df889d9dc7ebe |
+| AC-084 | `pnpm test:e2e` | PASS | attachment.upload-first-message: upload 201 attachmentId=01a09b6c-771b-790c-a503-fc3a6a3c7da2 (staged, installation owner); first message 01a09b6c-7727-73b5-83c3-f0fee79e3a14 bound it to Work 01a09b6c-7727-7753-8957-7199e6b9e350 atomically with 1 user artifact; unsupported mime refused (400) with no residue; duplicate bind -> ATTACHMENT_ALREADY_BOUND |
+| AC-090 | `pnpm test:e2e` | PASS | requirement.save-git: requirement 01a09b6c-60e4-7bfe-83de-2c8e5b05021f created at 1f141c918b14359bc216ed618ceb562fd954cc24 (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at 8002c1cd49b0 with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed |
+| AC-093 | `pnpm test:e2e` | PASS | requirement.save-git: requirement 01a09b6c-60e4-7bfe-83de-2c8e5b05021f created at 1f141c918b14359bc216ed618ceb562fd954cc24 (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at 8002c1cd49b0 with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed |
 
 合并规则：**最弱一环胜出**（FAIL > UNVERIFIED > PASS）。演练 UNVERIFIED 会把同一 AC 的套件 PASS 降级，因为该 AC 的完整 Given/When/Then 并未全部执行。
 
@@ -365,14 +330,14 @@
 
 ```json
 {
-  "generatedAt": "2026-09-13T14:56:13.104Z",
-  "gitHead": "5ad533ea02ba7e322b3a9bedea2b269a559b1f39",
-  "codeDigest": "sha256:0949e14614c98d17398d1f3c8227d7cd3bc8b16971a3ceb532ebfc77ac545e5f",
+  "generatedAt": "2026-09-13T15:40:19.914Z",
+  "gitHead": "c53b28dd5c97a3f106d467c518ea2e179e8f7dca",
+  "codeDigest": "sha256:e4f7a5054a89ab6d150fe13783042c9a0655195f45c8f8653f07e58e8e4eb2d4",
   "drillsExecuted": true,
   "exitCode": 0,
   "counts": {
-    "PASS": 83,
-    "ACCEPTED": 11,
+    "PASS": 86,
+    "ACCEPTED": 8,
     "FAIL": 0,
     "MISSING": 0
   },
@@ -380,8 +345,8 @@
   "results": [
     {
       "id": "AC-001",
-      "status": "UNVERIFIED",
-      "accepted": true,
+      "status": "PASS",
+      "accepted": false,
       "mapping": "none",
       "evidence": [],
       "drills": [
@@ -391,10 +356,10 @@
         },
         {
           "tool": "pnpm test:live",
-          "status": "UNVERIFIED"
+          "status": "PASS"
         }
       ],
-      "reason": "真实 Provider 的“区分事实/未知”答复未执行：离线只证明只读路由（不建 Requirement、不授权、Work 保持 level none），模型层断言需要 `pnpm test:live`。"
+      "reason": null
     },
     {
       "id": "AC-002",
@@ -413,6 +378,10 @@
       "drills": [
         {
           "tool": "pnpm test:e2e",
+          "status": "UNVERIFIED"
+        },
+        {
+          "tool": "pnpm test:live",
           "status": "UNVERIFIED"
         }
       ],
@@ -447,8 +416,8 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
-        "packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes a message into independent work items (AC-005/AC-006)",
-        "packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) records the authority an explicit message grants (AC-005)"
+        "packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) records the authority an explicit message grants (AC-005)",
+        "packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes a message into independent work items (AC-005/AC-006)"
       ],
       "drills": [],
       "reason": null
@@ -459,18 +428,20 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
-        "packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes a message into independent work items (AC-005/AC-006)",
-        "packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) splits one mixed message into the work items it names (AC-006)"
+        "packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) splits one mixed message into the work items it names (AC-006)",
+        "packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes a message into independent work items (AC-005/AC-006)"
       ],
       "drills": [],
       "reason": null
     },
     {
       "id": "AC-007",
-      "status": "UNVERIFIED",
-      "accepted": true,
+      "status": "PASS",
+      "accepted": false,
       "mapping": "test-name",
       "evidence": [
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) completes an L1 Work without a Test Run, through its Review and a frozen CompletionManifest (AC-007/AC-019, W6R2-09)",
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) reports review evidence under review fields and no test status on an L1 completion (AC-007, W6R4-02)",
         "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007)",
         "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008)",
         "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) is L2 when the diff exceeds the L1 bounds or changes logic (AC-009)",
@@ -481,8 +452,6 @@
         "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) reports the measured reasons behind a classification (AC-009)",
         "packages/domain/test/delivery.test.ts :: route-aware completion evidence (AC-007/AC-012/AC-019, W6R2-09) selects a Test for code L2/L3 and the route Review otherwise",
         "packages/domain/test/delivery.test.ts :: route-aware completion evidence (AC-007/AC-012/AC-019, W6R2-09) requires an independent Review in addition to the Test for code L2/L3 (W6R4-01)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) completes an L1 Work without a Test Run, through its Review and a frozen CompletionManifest (AC-007/AC-019, W6R2-09)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) reports review evidence under review fields and no test status on an L1 completion (AC-007, W6R4-02)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) runs the L1 typo chain to a CompletionManifest and CAS with no Planning/Test Run and no board entry (AC-007)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) drives a validated ProductDefinition through Plan/Develop/Review/Test/Settlement in order (AC-010)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) saves a confirmed design as Product/Planning candidate diffs with an independent Review and Settlement only (AC-012)",
@@ -495,10 +464,10 @@
       "drills": [
         {
           "tool": "pnpm test:live",
-          "status": "UNVERIFIED"
+          "status": "PASS"
         }
       ],
-      "reason": "L1 全链（一句话 Plan → 独立执行/Review/Settlement → CAS/CompletionManifest）的真实模型执行由 `pnpm test:live` 的 L1 演练覆盖；未配置 Provider 时该演练 UNVERIFIED，提交用例只证明领域规则与 Gate 顺序。"
+      "reason": null
     },
     {
       "id": "AC-008",
@@ -506,6 +475,7 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
+        "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) refuses a downgrade without invalidating the still-valid Plan (AC-008/AC-009, W6R1-06)",
         "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007)",
         "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008)",
         "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) is L2 when the diff exceeds the L1 bounds or changes logic (AC-009)",
@@ -513,8 +483,7 @@
         "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) upgrades a logic change that the line count hides (AC-009 required failure test)",
         "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades automatically (AC-008/AC-009)",
         "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) treats an unknown risk flag as inclusive, never as \"no risk\" (fail-closed)",
-        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) reports the measured reasons behind a classification (AC-009)",
-        "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) refuses a downgrade without invalidating the still-valid Plan (AC-008/AC-009, W6R1-06)"
+        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) reports the measured reasons behind a classification (AC-009)"
       ],
       "drills": [],
       "reason": null
@@ -525,14 +494,6 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
-        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007)",
-        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008)",
-        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) is L2 when the diff exceeds the L1 bounds or changes logic (AC-009)",
-        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) upgrades an over-L1 diff to the same Work with a stale Plan (AC-009)",
-        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) upgrades a logic change that the line count hides (AC-009 required failure test)",
-        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades automatically (AC-008/AC-009)",
-        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) treats an unknown risk flag as inclusive, never as \"no risk\" (fail-closed)",
-        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) reports the measured reasons behind a classification (AC-009)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) refuses a code write with no approved Plan and leaves the source hash unchanged (AC-013)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) auto-approves a compliant Plan, stores the evidence and admits the write (AC-014)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) rejects a non-compliant Plan without writing any gate state (AC-014 negative)",
@@ -548,6 +509,14 @@
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) reserves the approved tokens so a second Plan cannot exceed the limit (AC-022, W6R2-06)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) admits a code write only while the Work is running (AC-020/AC-021, W6R2-07/W6R3-02)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) fails closed on an unbound Work and supersedes its previous Plan on an upgrade (W6R3-04)",
+        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007)",
+        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008)",
+        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) is L2 when the diff exceeds the L1 bounds or changes logic (AC-009)",
+        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) upgrades an over-L1 diff to the same Work with a stale Plan (AC-009)",
+        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) upgrades a logic change that the line count hides (AC-009 required failure test)",
+        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades automatically (AC-008/AC-009)",
+        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) treats an unknown risk flag as inclusive, never as \"no risk\" (fail-closed)",
+        "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) reports the measured reasons behind a classification (AC-009)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) refuses the superseded Plan after an upgrade and leaves the source hash unchanged (AC-009, AC-013)"
       ],
       "drills": [],
@@ -555,17 +524,17 @@
     },
     {
       "id": "AC-010",
-      "status": "UNVERIFIED",
-      "accepted": true,
+      "status": "PASS",
+      "accepted": false,
       "mapping": "test-name",
       "evidence": [
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) never completes a code L2 Work on a Test Run alone (AC-010/AC-019, W6R4-01)",
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012)",
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010)",
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) requires each stage to depend on the previous one (AC-010)",
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) needs a Requirement for L2/L3 code and for L3 evidence (AC-011)",
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a document chain that binds no code revision or environment (AC-012, W6R1-04/W6R2-10)",
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) rejects an unknown route/level combination instead of guessing",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) never completes a code L2 Work on a Test Run alone (AC-010/AC-019, W6R4-01)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) drives a validated ProductDefinition through Plan/Develop/Review/Test/Settlement in order (AC-010)"
       ],
       "drills": [
@@ -575,10 +544,10 @@
         },
         {
           "tool": "pnpm test:live",
-          "status": "UNVERIFIED"
+          "status": "PASS"
         }
       ],
-      "reason": "L2 交付链的真实模型纵向执行由 `pnpm test:live` 的 L2 演练覆盖；未配置 Provider 时该演练 UNVERIFIED，提交用例与 e2e 演练只证明真实 Gate/阶段顺序与交付物（输入由演练构造）。"
+      "reason": null
     },
     {
       "id": "AC-011",
@@ -592,7 +561,9 @@
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) needs a Requirement for L2/L3 code and for L3 evidence (AC-011)",
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a document chain that binds no code revision or environment (AC-012, W6R1-04/W6R2-10)",
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) rejects an unknown route/level combination instead of guessing",
-        "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) requires explicit authorization, rollback, per-item audit and a recovery drill before an L3 migration is implemented (AC-011)"
+        "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) requires explicit authorization, rollback, per-item audit and a recovery drill before an L3 migration is implemented (AC-011)",
+        "packages/storage/test/migrations.integration.test.ts :: migrations rolls a failed migration back and reports its version",
+        "packages/core/test/backup.integration.test.ts :: Backup, restore and relocate (AC-064) restores a backup into a new directory with consistent hashes, knowledge and evidence"
       ],
       "drills": [],
       "reason": null
@@ -603,6 +574,7 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) keeps the document route on its own rule: Review evidence, no code Test Run (AC-012, W6R2-09)",
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012)",
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010)",
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) requires each stage to depend on the previous one (AC-010)",
@@ -611,7 +583,6 @@
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) rejects an unknown route/level combination instead of guessing",
         "packages/domain/test/delivery.test.ts :: route-aware completion evidence (AC-007/AC-012/AC-019, W6R2-09) selects a Test for code L2/L3 and the route Review otherwise",
         "packages/domain/test/delivery.test.ts :: route-aware completion evidence (AC-007/AC-012/AC-019, W6R2-09) requires an independent Review in addition to the Test for code L2/L3 (W6R4-01)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) keeps the document route on its own rule: Review evidence, no code Test Run (AC-012, W6R2-09)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) saves a confirmed design as Product/Planning candidate diffs with an independent Review and Settlement only (AC-012)"
       ],
       "drills": [],
@@ -623,13 +594,6 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
-        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a write without an approved Plan and leaves the source hash unchanged (AC-013)",
-        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a Plan for another revision and a changed Plan hash (AC-013 required failure test)",
-        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) admits the write when the Plan is approved for the current revision (AC-014)",
-        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) auto-approves a compliant Plan with recorded evidence (AC-014)",
-        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) never auto-approves a product choice or an out-of-scope Plan (AC-014 negative)",
-        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) covers targets only by equality or a directory prefix",
-        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses an over-used budget instead of assuming a zero usage (AC-022, W6R1-03)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses every write once the Work is completed or failed, with zero write events (AC-013/AC-020, W6R3-02)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) refuses a code write with no approved Plan and leaves the source hash unchanged (AC-013)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) auto-approves a compliant Plan, stores the evidence and admits the write (AC-014)",
@@ -646,6 +610,13 @@
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) reserves the approved tokens so a second Plan cannot exceed the limit (AC-022, W6R2-06)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) admits a code write only while the Work is running (AC-020/AC-021, W6R2-07/W6R3-02)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) fails closed on an unbound Work and supersedes its previous Plan on an upgrade (W6R3-04)",
+        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a write without an approved Plan and leaves the source hash unchanged (AC-013)",
+        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a Plan for another revision and a changed Plan hash (AC-013 required failure test)",
+        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) admits the write when the Plan is approved for the current revision (AC-014)",
+        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) auto-approves a compliant Plan with recorded evidence (AC-014)",
+        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) never auto-approves a product choice or an out-of-scope Plan (AC-014 negative)",
+        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) covers targets only by equality or a directory prefix",
+        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses an over-used budget instead of assuming a zero usage (AC-022, W6R1-03)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) refuses the superseded Plan after an upgrade and leaves the source hash unchanged (AC-009, AC-013)"
       ],
       "drills": [],
@@ -657,13 +628,6 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
-        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a write without an approved Plan and leaves the source hash unchanged (AC-013)",
-        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a Plan for another revision and a changed Plan hash (AC-013 required failure test)",
-        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) admits the write when the Plan is approved for the current revision (AC-014)",
-        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) auto-approves a compliant Plan with recorded evidence (AC-014)",
-        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) never auto-approves a product choice or an out-of-scope Plan (AC-014 negative)",
-        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) covers targets only by equality or a directory prefix",
-        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses an over-used budget instead of assuming a zero usage (AC-022, W6R1-03)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) refuses a code write with no approved Plan and leaves the source hash unchanged (AC-013)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) auto-approves a compliant Plan, stores the evidence and admits the write (AC-014)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) rejects a non-compliant Plan without writing any gate state (AC-014 negative)",
@@ -678,7 +642,14 @@
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) never lets a caller expectation replace the approved source hash (AC-013, W6R2-02)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) reserves the approved tokens so a second Plan cannot exceed the limit (AC-022, W6R2-06)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) admits a code write only while the Work is running (AC-020/AC-021, W6R2-07/W6R3-02)",
-        "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) fails closed on an unbound Work and supersedes its previous Plan on an upgrade (W6R3-04)"
+        "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) fails closed on an unbound Work and supersedes its previous Plan on an upgrade (W6R3-04)",
+        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a write without an approved Plan and leaves the source hash unchanged (AC-013)",
+        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a Plan for another revision and a changed Plan hash (AC-013 required failure test)",
+        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) admits the write when the Plan is approved for the current revision (AC-014)",
+        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) auto-approves a compliant Plan with recorded evidence (AC-014)",
+        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) never auto-approves a product choice or an out-of-scope Plan (AC-014 negative)",
+        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) covers targets only by equality or a directory prefix",
+        "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses an over-used budget instead of assuming a zero usage (AC-022, W6R1-03)"
       ],
       "drills": [],
       "reason": null
@@ -689,16 +660,16 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
-        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) handling now needs a new Product/Plan and invalidates affected evidence (AC-015)",
-        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) queues a Requirement for later and leaves the acceptance alone (AC-016)",
-        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) declining records a reason and changes nothing (AC-016)",
-        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) resolves the Requirement state for each branch (AC-016)",
-        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) invalidates by path and falls back to invalidating everything",
         "packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) handles a product change now: new Product/Plan versions and invalidated evidence (AC-015)",
         "packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) queues a Requirement for later without moving the current acceptance (AC-016)",
         "packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) records a reason when the suggestion is declined and leaves acceptance unchanged (AC-016)",
         "packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) keeps Product and Plan versions monotonic across several decisions (AC-015)",
-        "packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) refuses a decision for an unknown Work without writing anything"
+        "packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) refuses a decision for an unknown Work without writing anything",
+        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) handling now needs a new Product/Plan and invalidates affected evidence (AC-015)",
+        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) queues a Requirement for later and leaves the acceptance alone (AC-016)",
+        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) declining records a reason and changes nothing (AC-016)",
+        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) resolves the Requirement state for each branch (AC-016)",
+        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) invalidates by path and falls back to invalidating everything"
       ],
       "drills": [],
       "reason": null
@@ -709,16 +680,16 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
-        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) handling now needs a new Product/Plan and invalidates affected evidence (AC-015)",
-        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) queues a Requirement for later and leaves the acceptance alone (AC-016)",
-        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) declining records a reason and changes nothing (AC-016)",
-        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) resolves the Requirement state for each branch (AC-016)",
-        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) invalidates by path and falls back to invalidating everything",
         "packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) handles a product change now: new Product/Plan versions and invalidated evidence (AC-015)",
         "packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) queues a Requirement for later without moving the current acceptance (AC-016)",
         "packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) records a reason when the suggestion is declined and leaves acceptance unchanged (AC-016)",
         "packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) keeps Product and Plan versions monotonic across several decisions (AC-015)",
-        "packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) refuses a decision for an unknown Work without writing anything"
+        "packages/core/test/decisions.test.ts :: behaviour Decisions (AC-015, AC-016) refuses a decision for an unknown Work without writing anything",
+        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) handling now needs a new Product/Plan and invalidates affected evidence (AC-015)",
+        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) queues a Requirement for later and leaves the acceptance alone (AC-016)",
+        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) declining records a reason and changes nothing (AC-016)",
+        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) resolves the Requirement state for each branch (AC-016)",
+        "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) invalidates by path and falls back to invalidating everything"
       ],
       "drills": [],
       "reason": null
@@ -729,19 +700,6 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
-        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017)",
-        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018)",
-        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08)",
-        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) closes through evaluateFindingClosure and stops at the rework allowance (AC-017/AC-022)",
-        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) blocks completion for blocked and undisposed not_covered results (AC-019)",
-        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds a document/integration Finding without a taskId (AC-083)",
-        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) routes a document Finding through the same closure rules (AC-083)",
-        "packages/domain/test/delivery.test.ts :: evidence validity and revision lineage (AC-017/AC-019, W6R2-01…W6R2-05) accepts only valid evidence frozen on the Work revision",
-        "packages/domain/test/delivery.test.ts :: evidence validity and revision lineage (AC-017/AC-019, W6R2-01…W6R2-05) refuses invalidated evidence whatever revision it names (AC-017)",
-        "packages/domain/test/delivery.test.ts :: evidence validity and revision lineage (AC-017/AC-019, W6R2-01…W6R2-05) fails closed on evidence without a revision and on a Work without one (W6R2-04)",
-        "packages/domain/test/delivery.test.ts :: evidence validity and revision lineage (AC-017/AC-019, W6R2-01…W6R2-05) refuses an explicitly invalidated revision even when the evidence claims valid",
-        "packages/domain/test/delivery.test.ts :: evidence validity and revision lineage (AC-017/AC-019, W6R2-01…W6R2-05) refuses pre-fix evidence and evidence produced at or before the fix (W6R2-01/03)",
-        "packages/domain/test/delivery.test.ts :: evidence validity and revision lineage (AC-017/AC-019, W6R2-01…W6R2-05) refuses evidence bound to a different revision than the Work (binding, not order)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) binds a task-less integration Finding and sends it straight back to development (AC-083, AC-017)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a task target without a taskId, a foreign task and a developer Run, writing nothing (AC-083)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) closes a fixed Finding only after a new independent Review and Test, and refuses a developer self-verify (AC-018)",
@@ -778,6 +736,19 @@
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses writes after a cancel stops at blocked(recovery) (AC-021, W6R3-02)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a fix that re-anchors to a revision a Finding invalidated (AC-017/AC-018, W6R3-03)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) keeps the frozen-manifest lookup on the real manifestId key space (W6R3-05)",
+        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017)",
+        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018)",
+        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08)",
+        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) closes through evaluateFindingClosure and stops at the rework allowance (AC-017/AC-022)",
+        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) blocks completion for blocked and undisposed not_covered results (AC-019)",
+        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds a document/integration Finding without a taskId (AC-083)",
+        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) routes a document Finding through the same closure rules (AC-083)",
+        "packages/domain/test/delivery.test.ts :: evidence validity and revision lineage (AC-017/AC-019, W6R2-01…W6R2-05) accepts only valid evidence frozen on the Work revision",
+        "packages/domain/test/delivery.test.ts :: evidence validity and revision lineage (AC-017/AC-019, W6R2-01…W6R2-05) refuses invalidated evidence whatever revision it names (AC-017)",
+        "packages/domain/test/delivery.test.ts :: evidence validity and revision lineage (AC-017/AC-019, W6R2-01…W6R2-05) fails closed on evidence without a revision and on a Work without one (W6R2-04)",
+        "packages/domain/test/delivery.test.ts :: evidence validity and revision lineage (AC-017/AC-019, W6R2-01…W6R2-05) refuses an explicitly invalidated revision even when the evidence claims valid",
+        "packages/domain/test/delivery.test.ts :: evidence validity and revision lineage (AC-017/AC-019, W6R2-01…W6R2-05) refuses pre-fix evidence and evidence produced at or before the fix (W6R2-01/03)",
+        "packages/domain/test/delivery.test.ts :: evidence validity and revision lineage (AC-017/AC-019, W6R2-01…W6R2-05) refuses evidence bound to a different revision than the Work (binding, not order)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) closes a task-less Review Finding through a fix and a new independent Review/Test, refusing self-verification (AC-017, AC-018, AC-083)"
       ],
       "drills": [],
@@ -789,6 +760,12 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) closes a fixed Finding only after a new independent Review and Test, and refuses a developer self-verify (AC-018)",
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a pre-fix revision and a non-passed Test conclusion even when the Runs are new (AC-018, W6R1-01/W6R1-08)",
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses an old Review, the raising Review and a wrong-role Run as the fix verifier (AC-017, AC-018)",
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) records a user-accepted residual risk only from a real accepted risk Decision (AC-018)",
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a fix whose Run self-reports the invalidated pre-fix revision (AC-018, W6R2-03)",
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a fix that re-anchors to a revision a Finding invalidated (AC-017/AC-018, W6R3-03)",
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017)",
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018)",
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08)",
@@ -796,12 +773,6 @@
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) blocks completion for blocked and undisposed not_covered results (AC-019)",
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds a document/integration Finding without a taskId (AC-083)",
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) routes a document Finding through the same closure rules (AC-083)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) closes a fixed Finding only after a new independent Review and Test, and refuses a developer self-verify (AC-018)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a pre-fix revision and a non-passed Test conclusion even when the Runs are new (AC-018, W6R1-01/W6R1-08)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses an old Review, the raising Review and a wrong-role Run as the fix verifier (AC-017, AC-018)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) records a user-accepted residual risk only from a real accepted risk Decision (AC-018)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a fix whose Run self-reports the invalidated pre-fix revision (AC-018, W6R2-03)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a fix that re-anchors to a revision a Finding invalidated (AC-017/AC-018, W6R3-03)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) closes a task-less Review Finding through a fix and a new independent Review/Test, refusing self-verification (AC-017, AC-018, AC-083)"
       ],
       "drills": [],
@@ -813,6 +784,17 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) never completes on a blocked Test result and never on a caller-asserted one (AC-019, W6R1-02)",
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a Test evidence bound to another revision or without an environment (AC-019, W6R1-02)",
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) requires an explicit risk disposition for every not_covered acceptance id (AC-019)",
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) completes a passed Test result with no uncovered acceptance ids (AC-019)",
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) never completes a code L2 Work on a Test Run alone (AC-010/AC-019, W6R4-01)",
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) blocks completion while a blocking Finding is open or addressed (AC-017, AC-019)",
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) never completes on Test evidence a Finding invalidated and advances the revision on the fix (AC-017/AC-019, W6R2-01)",
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses to complete a Work that froze no base revision (AC-019, W6R2-04)",
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) binds a Test to its frozen VerificationManifest when the Run produced no artifact (AC-019, W6R2-05)",
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) completes an L1 Work without a Test Run, through its Review and a frozen CompletionManifest (AC-007/AC-019, W6R2-09)",
+        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) derives the completion route from the Work intent and refuses a conflicting one (AC-019, W6R3-01)",
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017)",
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018)",
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08)",
@@ -827,18 +809,7 @@
         "packages/domain/test/delivery.test.ts :: evidence validity and revision lineage (AC-017/AC-019, W6R2-01…W6R2-05) refuses pre-fix evidence and evidence produced at or before the fix (W6R2-01/03)",
         "packages/domain/test/delivery.test.ts :: evidence validity and revision lineage (AC-017/AC-019, W6R2-01…W6R2-05) refuses evidence bound to a different revision than the Work (binding, not order)",
         "packages/domain/test/delivery.test.ts :: route-aware completion evidence (AC-007/AC-012/AC-019, W6R2-09) selects a Test for code L2/L3 and the route Review otherwise",
-        "packages/domain/test/delivery.test.ts :: route-aware completion evidence (AC-007/AC-012/AC-019, W6R2-09) requires an independent Review in addition to the Test for code L2/L3 (W6R4-01)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) never completes on a blocked Test result and never on a caller-asserted one (AC-019, W6R1-02)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a Test evidence bound to another revision or without an environment (AC-019, W6R1-02)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) requires an explicit risk disposition for every not_covered acceptance id (AC-019)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) completes a passed Test result with no uncovered acceptance ids (AC-019)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) never completes a code L2 Work on a Test Run alone (AC-010/AC-019, W6R4-01)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) blocks completion while a blocking Finding is open or addressed (AC-017, AC-019)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) never completes on Test evidence a Finding invalidated and advances the revision on the fix (AC-017/AC-019, W6R2-01)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses to complete a Work that froze no base revision (AC-019, W6R2-04)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) binds a Test to its frozen VerificationManifest when the Run produced no artifact (AC-019, W6R2-05)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) completes an L1 Work without a Test Run, through its Review and a frozen CompletionManifest (AC-007/AC-019, W6R2-09)",
-        "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) derives the completion route from the Work intent and refuses a conflicting one (AC-019, W6R3-01)"
+        "packages/domain/test/delivery.test.ts :: route-aware completion evidence (AC-007/AC-012/AC-019, W6R2-09) requires an independent Review in addition to the Test for code L2/L3 (W6R4-01)"
       ],
       "drills": [],
       "reason": null
@@ -849,8 +820,6 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
-        "packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) admits writes only while the Work is running",
-        "packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) never lets a caller expectation replace the approved source hash (W6R2-02)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) pauses at a safe point, admits no write, and resumes into a new Attempt after the version check (AC-020)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses to resume a Work that changed while it was paused (AC-020)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses to pause while a Run still needs recovery (AC-020)",
@@ -860,6 +829,8 @@
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) admits a write only when the newest Attempt is ready (AC-020, W6R2-08)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses every write once the Work is completed or failed, with zero write events (AC-013/AC-020, W6R3-02)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) admits a code write only while the Work is running (AC-020/AC-021, W6R2-07/W6R3-02)",
+        "packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) admits writes only while the Work is running",
+        "packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) never lets a caller expectation replace the approved source hash (W6R2-02)",
         "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) pauses and resumes a real Work through the finding service (AC-020 surface)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) pauses at a safe point, resumes into a new Attempt, and cancels the Run tree while keeping the artifacts (AC-020, AC-021)",
         "packages/core/test/wp08.integration.test.ts :: WP-08 T4 end-to-end integration drill still holds pause/resume and unknown-side-effect cancel after an integrated delivery (AC-020, AC-021)"
@@ -873,8 +844,6 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
-        "packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) admits writes only while the Work is running",
-        "packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) never lets a caller expectation replace the approved source hash (W6R2-02)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) binds a task-less integration Finding and sends it straight back to development (AC-083, AC-017)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a task target without a taskId, a foreign task and a developer Run, writing nothing (AC-083)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) closes a fixed Finding only after a new independent Review and Test, and refuses a developer self-verify (AC-018)",
@@ -913,6 +882,8 @@
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) keeps the frozen-manifest lookup on the real manifestId key space (W6R3-05)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) admits a code write only while the Work is running (AC-020/AC-021, W6R2-07/W6R3-02)",
         "packages/core/test/wp08-failures.test.ts :: required WP-08 failure tests 取消未知副作用: cancel stops at blocked(recovery), keeps the Requirement active and integrates nothing (AC-021)",
+        "packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) admits writes only while the Work is running",
+        "packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) never lets a caller expectation replace the approved source hash (W6R2-02)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) runs the L1 typo chain to a CompletionManifest and CAS with no Planning/Test Run and no board entry (AC-007)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) drives a validated ProductDefinition through Plan/Develop/Review/Test/Settlement in order (AC-010)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) saves a confirmed design as Product/Planning candidate diffs with an independent Review and Settlement only (AC-012)",
@@ -932,14 +903,14 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
+        "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) refuses a Plan whose reservation exceeds the budget once real usage counts (AC-022, W6R1-03)",
+        "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) reserves the approved tokens so a second Plan cannot exceed the limit (AC-022, W6R2-06)",
         "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses an over-used budget instead of assuming a zero usage (AC-022, W6R1-03)",
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) closes through evaluateFindingClosure and stops at the rework allowance (AC-017/AC-022)",
         "packages/domain/test/delivery.test.ts :: budget reservation (AC-022) refuses an over-limit reservation atomically with no partial charge (AC-022)",
         "packages/domain/test/delivery.test.ts :: budget reservation (AC-022) admits a reservation that fits, even just under the limit (AC-022)",
         "packages/domain/test/delivery.test.ts :: budget reservation (AC-022) reports that a top-up must be explicit and user sourced (AC-022)",
         "packages/domain/test/delivery.test.ts :: budget reservation (AC-022) refuses the next rework round once the repair allowance is spent (AC-022)",
-        "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) refuses a Plan whose reservation exceeds the budget once real usage counts (AC-022, W6R1-03)",
-        "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) reserves the approved tokens so a second Plan cannot exceed the limit (AC-022, W6R2-06)",
         "packages/core/test/wp08.integration.test.ts :: WP-08 T4 end-to-end integration drill refuses an over-limit budget reservation atomically and keeps the refusal after integration (AC-022)"
       ],
       "drills": [],
@@ -1207,14 +1178,10 @@
     },
     {
       "id": "AC-037",
-      "status": "UNVERIFIED",
-      "accepted": true,
+      "status": "PASS",
+      "accepted": false,
       "mapping": "test-name",
       "evidence": [
-        "packages/knowledge/test/projection.test.ts :: projection build renders a feature body that parses back to the same facts (AC-037)",
-        "packages/knowledge/test/projection.test.ts :: projection build never injects an unrelated document into the feature body or index (AC-037)",
-        "packages/knowledge/test/views.test.ts :: knowledge views separates confirmed intent from delivered reality (AC-038, AC-037)",
-        "packages/knowledge/test/views.test.ts :: knowledge views answers AC-037 from the feature body without injecting unrelated documents",
         "packages/core/test/context-cold-start.test.ts :: cold start: the answer recalls the fixed sample (AC-037) finds the current cancellation behaviour, the payment constraint, the test path and the gap",
         "packages/core/test/context-cold-start.test.ts :: cold start: the answer recalls the fixed sample (AC-037) does not inject the 20 unrelated documents (selected set and token usage)",
         "packages/core/test/context-cold-start.test.ts :: cold start: the answer recalls the fixed sample (AC-037) reports a precise budget gap instead of injecting more (AC-036)",
@@ -1224,7 +1191,11 @@
         "packages/core/test/context-cold-start.test.ts :: cold start: the answer recalls the fixed sample (AC-037) charges the fixed seed against the startup budget and fails closed at zero (W5R1-07)",
         "packages/core/test/context-cold-start.test.ts :: cold start: the answer recalls the fixed sample (AC-037) refuses cold-start limits outside the documented range (W5R1-06)",
         "packages/core/test/context-cold-start.test.ts :: cold start: the answer recalls the fixed sample (AC-037) closes a throwing cold-start clock instead of escaping (W5R1-10)",
-        "packages/core/test/context-cold-start.test.ts :: cold start: the answer recalls the fixed sample (AC-037) marks a stale projection as an unknown rather than presenting it as current"
+        "packages/core/test/context-cold-start.test.ts :: cold start: the answer recalls the fixed sample (AC-037) marks a stale projection as an unknown rather than presenting it as current",
+        "packages/knowledge/test/projection.test.ts :: projection build renders a feature body that parses back to the same facts (AC-037)",
+        "packages/knowledge/test/projection.test.ts :: projection build never injects an unrelated document into the feature body or index (AC-037)",
+        "packages/knowledge/test/views.test.ts :: knowledge views separates confirmed intent from delivered reality (AC-038, AC-037)",
+        "packages/knowledge/test/views.test.ts :: knowledge views answers AC-037 from the feature body without injecting unrelated documents"
       ],
       "drills": [
         {
@@ -1233,10 +1204,10 @@
         },
         {
           "tool": "pnpm test:live",
-          "status": "UNVERIFIED"
+          "status": "PASS"
         }
       ],
-      "reason": "真实模型产出的知识补丁纵向执行由 `pnpm test:live` 的 L2 演练覆盖；未配置 Provider 时为 UNVERIFIED，提交测试只证明补丁/投影规则本身。"
+      "reason": null
     },
     {
       "id": "AC-038",
@@ -1283,8 +1254,8 @@
     },
     {
       "id": "AC-041",
-      "status": "UNVERIFIED",
-      "accepted": true,
+      "status": "PASS",
+      "accepted": false,
       "mapping": "test-name",
       "evidence": [
         "packages/core/test/settlement.integration.test.ts :: Final manifest and settlement consistency (AC-041) builds a manifest that binds the verified revision, tree, knowledge and evidence",
@@ -1302,10 +1273,10 @@
         },
         {
           "tool": "pnpm test:live",
-          "status": "UNVERIFIED"
+          "status": "PASS"
         }
       ],
-      "reason": "真实模型结算后的知识更新与冷启动由 `pnpm test:live` 的 L2 演练覆盖；未配置 Provider 时为 UNVERIFIED，提交测试只证明投影与冷启动规则。"
+      "reason": null
     },
     {
       "id": "AC-042",
@@ -1336,6 +1307,8 @@
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) runs against a Provider that needs no secret (T-01)",
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) refuses to admit a Run whose secret cannot be resolved (R18-05)",
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) normalizes a legacy frozen provider that stored a null secretRef (R18-02)",
+        "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) forwards the configured output budget instead of a hard-coded 4096 cap",
+        "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) gives the connectivity probe a budget a reasoning model can answer within",
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) tests an anonymous Provider connection without a secret (R18-03)",
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) never switches model for an active Run when configuration changes",
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) blocks a role with no usable model instead of falling back",
@@ -1343,7 +1316,12 @@
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) reports a provider failure without hiding it",
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) tests a configured provider against the live document"
       ],
-      "drills": [],
+      "drills": [
+        {
+          "tool": "pnpm test:live",
+          "status": "UNVERIFIED"
+        }
+      ],
       "reason": "“角色配置不同 Provider/模型”需要为 Review/Test 指定独立模型（`AGENTDEV_PROVIDER_REVIEW_MODEL`）；未指定时全部角色共用一个已配置模型，只证明专业 Run 独立且各自冻结快照。"
     },
     {
@@ -1362,6 +1340,8 @@
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) runs against a Provider that needs no secret (T-01)",
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) refuses to admit a Run whose secret cannot be resolved (R18-05)",
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) normalizes a legacy frozen provider that stored a null secretRef (R18-02)",
+        "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) forwards the configured output budget instead of a hard-coded 4096 cap",
+        "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) gives the connectivity probe a budget a reasoning model can answer within",
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) tests an anonymous Provider connection without a secret (R18-03)",
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) never switches model for an active Run when configuration changes",
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) blocks a role with no usable model instead of falling back",
@@ -1427,6 +1407,8 @@
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) runs against a Provider that needs no secret (T-01)",
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) refuses to admit a Run whose secret cannot be resolved (R18-05)",
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) normalizes a legacy frozen provider that stored a null secretRef (R18-02)",
+        "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) forwards the configured output budget instead of a hard-coded 4096 cap",
+        "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) gives the connectivity probe a budget a reasoning model can answer within",
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) tests an anonymous Provider connection without a secret (R18-03)",
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) never switches model for an active Run when configuration changes",
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) blocks a role with no usable model instead of falling back",
@@ -1618,26 +1600,6 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) admits the exact once binding and reports no replay for a first use",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) replays a consumed once grant for the same operation and input (AC-080)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) binds a replay to the full operation/role/stage triple, not just the run (W7R1-06)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a different input hash with IDEMPOTENCY_CONFLICT and names the field (AC-080)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a different tool operation on a consumed grant with IDEMPOTENCY_CONFLICT (AC-080)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a different operation on a live grant without consuming anything (AC-049)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses the wrong role or stage with NOT_AUTHORIZED (AC-049)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) isolates sibling runs on a run-scoped grant and keeps work-scoped grants shared (AC-080)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses every later use of an expired or revoked grant (AC-049)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) keeps replaying a completed once transaction after its expiry (AC-080)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a sibling run reaching for a consumed once grant (AC-080)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a malformed target and an out-of-grant target with the documented codes",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) keeps the target rules the rest of the codebase relies on",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) derives scope bindings from the request identity fields",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) accepts an in-scope request",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) refuses an operation outside the Work envelope",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) refuses a foreign work id and a role at a stage it does not operate",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) refuses a missing once binding and a malformed input hash with VALIDATION_ERROR",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) refuses a target outside the Work paths and a malformed target",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) does not apply the path envelope to non-path operations",
         "packages/core/test/grants.test.ts :: GrantStore (AC-049, AC-080) issuing mints a grant that carries every documented binding and audits it (AC-049)",
         "packages/core/test/grants.test.ts :: GrantStore (AC-049, AC-080) issuing refuses an unknown Work without writing a row (AC-049)",
         "packages/core/test/grants.test.ts :: GrantStore (AC-049, AC-080) issuing refuses an operation and a target outside the Work scope (AC-049)",
@@ -1677,6 +1639,26 @@
         "packages/core/test/grants.test.ts :: GrantStore (AC-049, AC-080) multi-writer deferred results (W7R2-04/09/10) replays a recorded undefined result as present (W7R2-09)",
         "packages/core/test/grants.test.ts :: GrantStore (AC-049, AC-080) multi-writer deferred results (W7R2-04/09/10) keeps a recorded result alive through an offline blob GC (W7R2-10)",
         "packages/core/test/grants.test.ts :: GrantStore (AC-049, AC-080) multi-writer deferred results (W7R2-04/09/10) registers the deferred-result records and legacy blobs as GC roots (W7R2-10)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) admits the exact once binding and reports no replay for a first use",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) replays a consumed once grant for the same operation and input (AC-080)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) binds a replay to the full operation/role/stage triple, not just the run (W7R1-06)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a different input hash with IDEMPOTENCY_CONFLICT and names the field (AC-080)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a different tool operation on a consumed grant with IDEMPOTENCY_CONFLICT (AC-080)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a different operation on a live grant without consuming anything (AC-049)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses the wrong role or stage with NOT_AUTHORIZED (AC-049)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) isolates sibling runs on a run-scoped grant and keeps work-scoped grants shared (AC-080)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses every later use of an expired or revoked grant (AC-049)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) keeps replaying a completed once transaction after its expiry (AC-080)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a sibling run reaching for a consumed once grant (AC-080)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a malformed target and an out-of-grant target with the documented codes",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) keeps the target rules the rest of the codebase relies on",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) derives scope bindings from the request identity fields",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) accepts an in-scope request",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) refuses an operation outside the Work envelope",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) refuses a foreign work id and a role at a stage it does not operate",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) refuses a missing once binding and a malformed input hash with VALIDATION_ERROR",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) refuses a target outside the Work paths and a malformed target",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) does not apply the path envelope to non-path operations",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) executes an in-scope granted call and audits it, and refuses out-of-scope/expired/sibling calls with no side effect (AC-049, AC-080)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) replays the original once result for the same input and refuses a different input (AC-080)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) refuses an out-of-scope read by the same role with no executor call and no row (AC-049)",
@@ -1836,6 +1818,10 @@
         {
           "tool": "pnpm test:e2e",
           "status": "UNVERIFIED"
+        },
+        {
+          "tool": "pnpm test:live",
+          "status": "UNVERIFIED"
         }
       ],
       "reason": "真实浏览器中的攻击样例（读 cookie/网络/父页）未执行；提交用例只证明预览隔离策略与无 cookie。"
@@ -1884,15 +1870,8 @@
         "packages/client/test/commands.test.ts :: AC-054 reconnect and bounded backoff reconnects on the documented schedule and replays the hello",
         "packages/client/test/commands.test.ts :: AC-054 reconnect and bounded backoff applies bounded exponential backoff while every reconnect fails",
         "packages/client/test/commands.test.ts :: AC-054 reconnect and bounded backoff reports the attempt number while reconnecting and ends at the limit",
-        "packages/client/test/commands.test.ts :: AC-054 write retry with the same idempotency key replays a write whose answer was lost and reports the replay",
-        "packages/client/test/commands.test.ts :: AC-054 write retry with the same idempotency key queues a write that never reached the wire and replays it after reconnect",
-        "packages/client/test/commands.test.ts :: AC-054 write retry with the same idempotency key retries a BUSY write with backoff and the same key",
-        "packages/client/test/commands.test.ts :: AC-054 write retry with the same idempotency key reports a first-attempt write as not replayed",
-        "packages/client/test/commands.test.ts :: AC-054 write retry with the same idempotency key fails a queued write when the client ends before a socket returns",
         "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) replays events after a watermark with no duplicates and no gaps (AC-054)",
-        "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) keeps background Work running when the WebSocket disconnects (AC-054/AC-078)",
-        "apps/web/test/workbench-failures.integration.test.ts :: WP-09 T4 required failure tests 订阅扩大: refuses a cross-Project widening and answers a fresh scoped snapshot (AC-054/AC-078)",
-        "apps/web/test/workbench-failures.integration.test.ts :: WP-09 T4 required failure tests 订阅扩大: refuses an out-of-authorisation scope locally, with no request sent (AC-054)"
+        "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) keeps background Work running when the WebSocket disconnects (AC-054/AC-078)"
       ],
       "drills": [
         {
@@ -1908,6 +1887,11 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
+        "packages/client/test/commands.test.ts :: AC-055 write retry with the same idempotency key replays a write whose answer was lost and reports the replay",
+        "packages/client/test/commands.test.ts :: AC-055 write retry with the same idempotency key queues a write that never reached the wire and replays it after reconnect",
+        "packages/client/test/commands.test.ts :: AC-055 write retry with the same idempotency key retries a BUSY write with backoff and the same key",
+        "packages/client/test/commands.test.ts :: AC-055 write retry with the same idempotency key reports a first-attempt write as not replayed",
+        "packages/client/test/commands.test.ts :: AC-055 write retry with the same idempotency key fails a queued write when the client ends before a socket returns",
         "packages/core/test/dispatcher.integration.test.ts :: write path (AC-055) applies one write, then replays the same result for the same key",
         "packages/core/test/dispatcher.integration.test.ts :: write path (AC-055) refuses the same key with a different payload",
         "packages/core/test/dispatcher.integration.test.ts :: write path (AC-055) reports a version conflict with the current version",
@@ -2125,8 +2109,8 @@
     },
     {
       "id": "AC-066",
-      "status": "PASS",
-      "accepted": false,
+      "status": "UNVERIFIED",
+      "accepted": true,
       "mapping": "curated",
       "evidence": [
         "packages/pi-runtime/test/session.integration.test.ts :: Pi session lifecycle creates a session with the configured model and no network",
@@ -2138,7 +2122,7 @@
         "packages/pi-runtime/test/session.integration.test.ts :: Pi session lifecycle wires the resume path for a stored session file"
       ],
       "drills": [],
-      "reason": null
+      "reason": "AC-066 的 SDK 契约由锁定版本 0.85.1 的真实适配测试逐用例证明（事件映射含 assistant 文本/thinking 增量、工具边界、压缩、订阅、abort、资源释放、resume 路径接线）；但“真实模型经 Pi SDK 产生流式增量并从存储会话恢复历史”需要 Runner 侧真实驱动 Pi SDK 的生产级 models.json 与凭证注入，本包未执行，登记为已登记缺口。"
     },
     {
       "id": "AC-067",
@@ -2167,7 +2151,7 @@
         "apps/web/test/views.test.ts :: board projection (AC-068) flags a requirement that appears in two columns as a duplicated identity",
         "apps/web/test/views.test.ts :: board projection (AC-068) reads the save state and the task ratio from the projection",
         "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) answers every workbench query from real state (AC-068/AC-070/AC-074)",
-        "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) cancels a Queued requirement without Work and refuses to pause it (AC-068)",
+        "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) refuses to cancel a Queued requirement it cannot record and refuses to pause it (AC-068)",
         "apps/web/test/server.integration.test.ts :: workbench BFF over the real daemon (WP-09 T3) renders the board with the same requirement identity and no L1 card (AC-068)",
         "apps/web/test/server.integration.test.ts :: workbench BFF over the real daemon (WP-09 T3) offers a direct cancel for a Queued requirement without Work and refuses its pause (AC-068)",
         "apps/web/test/server.integration.test.ts :: workbench BFF over the real daemon (WP-09 T3) walks login → board → detail → approve → event in one headless flow (AC-068–AC-072)",
@@ -2348,12 +2332,12 @@
       "mapping": "test-name",
       "evidence": [
         "apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) rejects unsupported and oversized uploads server-side (AC-076)",
+        "packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) enforces the upload limits before anything is stored (AC-076)",
         "apps/web/test/views.test.ts :: attachment limits (AC-076) accepts a documented set",
         "apps/web/test/views.test.ts :: attachment limits (AC-076) refuses more than five attachments",
         "apps/web/test/views.test.ts :: attachment limits (AC-076) refuses one file over 20 MiB and a total over 50 MiB",
         "apps/web/test/views.test.ts :: attachment limits (AC-076) refuses an unsupported mime type",
         "apps/web/test/views.test.ts :: attachment limits (AC-076) treats a mime parameter as the same type",
-        "packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) enforces the upload limits before anything is stored (AC-076)",
         "apps/web/test/server.integration.test.ts :: workbench BFF over the real daemon (WP-09 T3) binds an uploaded attachment to the first message and refuses a bad upload (AC-084/AC-076)",
         "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack binds an uploaded attachment to the first message and refuses a bad one (AC-084/AC-076)"
       ],
@@ -2395,6 +2379,13 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
+        "packages/client/test/commands.test.ts :: AC-078 authentication lifecycle surfaces an expired session as a typed error without retrying",
+        "packages/client/test/commands.test.ts :: AC-078 authentication lifecycle never retries a NOT_AUTHORIZED write",
+        "packages/client/test/commands.test.ts :: AC-078 authentication lifecycle does not reconnect when the handshake itself is refused",
+        "packages/client/test/subscriptions.test.ts :: AC-078 subscription expansion is refused refuses a subscription naming another Project",
+        "packages/client/test/subscriptions.test.ts :: AC-078 subscription expansion is refused refuses a kind outside the session allowlist",
+        "packages/client/test/subscriptions.test.ts :: AC-078 subscription expansion is refused surfaces the server refusal for a cross-Project id",
+        "packages/client/test/subscriptions.test.ts :: AC-078 subscription expansion is refused keys a subscription by project and scope",
         "apps/web/test/server.test.ts :: BFF HTTP surface (AC-078) accepts a read through the BFF cookie and forwards the daemon session",
         "apps/web/test/server.test.ts :: BFF HTTP surface (AC-078) refuses an unauthenticated write with UNAUTHENTICATED and does not forward it",
         "apps/web/test/server.test.ts :: BFF HTTP surface (AC-078) refuses a wrong-Origin write with NOT_AUTHORIZED while reads stay allowed",
@@ -2406,13 +2397,6 @@
         "apps/web/test/server.test.ts :: BFF HTTP surface (AC-078) renders the sign-in page instead of any workbench page without a session",
         "apps/web/test/server.test.ts :: BFF HTTP surface (AC-078) serves the static assets and refuses a traversal path",
         "apps/web/test/server.test.ts :: BFF HTTP surface (AC-078) reports health without a path or a secret",
-        "packages/client/test/commands.test.ts :: AC-078 authentication lifecycle surfaces an expired session as a typed error without retrying",
-        "packages/client/test/commands.test.ts :: AC-078 authentication lifecycle never retries a NOT_AUTHORIZED write",
-        "packages/client/test/commands.test.ts :: AC-078 authentication lifecycle does not reconnect when the handshake itself is refused",
-        "packages/client/test/subscriptions.test.ts :: AC-078 subscription expansion is refused refuses a subscription naming another Project",
-        "packages/client/test/subscriptions.test.ts :: AC-078 subscription expansion is refused refuses a kind outside the session allowlist",
-        "packages/client/test/subscriptions.test.ts :: AC-078 subscription expansion is refused surfaces the server refusal for a cross-Project id",
-        "packages/client/test/subscriptions.test.ts :: AC-078 subscription expansion is refused keys a subscription by project and scope",
         "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) answers a cross-project id with NOT_FOUND and never another project data (AC-078)",
         "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) refuses an unauthenticated or foreign-origin upgrade (AC-078)",
         "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) refuses a cross-project subscription and closes on an expired session (AC-078)",
@@ -2422,7 +2406,8 @@
         "apps/web/test/server.integration.test.ts :: workbench BFF over the real daemon (WP-09 T3) streams real events over the WebSocket proxy and resumes from a watermark (AC-069/AC-078)",
         "apps/web/test/server.integration.test.ts :: workbench BFF over the real daemon (WP-09 T3) refuses an unauthenticated WebSocket upgrade and keeps the Work alive (AC-078)",
         "apps/web/test/workbench-failures.integration.test.ts :: WP-09 T4 required failure tests 断连: reports the break, replays from the watermark and keeps the Work (AC-078/AC-069)",
-        "apps/web/test/workbench-failures.integration.test.ts :: WP-09 T4 required failure tests 订阅扩大: refuses a cross-Project widening and answers a fresh scoped snapshot (AC-054/AC-078)",
+        "apps/web/test/workbench-failures.integration.test.ts :: WP-09 T4 required failure tests 订阅扩大: refuses a cross-Project widening and answers a fresh scoped snapshot (AC-078)",
+        "apps/web/test/workbench-failures.integration.test.ts :: WP-09 T4 required failure tests 订阅扩大: refuses an out-of-authorisation scope locally, with no request sent (AC-078)",
         "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack reads all nine surfaces from real state in one drill (AC-068–AC-078, AC-084, AC-087–AC-090, AC-093)"
       ],
       "drills": [
@@ -2480,26 +2465,6 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) admits the exact once binding and reports no replay for a first use",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) replays a consumed once grant for the same operation and input (AC-080)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) binds a replay to the full operation/role/stage triple, not just the run (W7R1-06)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a different input hash with IDEMPOTENCY_CONFLICT and names the field (AC-080)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a different tool operation on a consumed grant with IDEMPOTENCY_CONFLICT (AC-080)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a different operation on a live grant without consuming anything (AC-049)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses the wrong role or stage with NOT_AUTHORIZED (AC-049)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) isolates sibling runs on a run-scoped grant and keeps work-scoped grants shared (AC-080)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses every later use of an expired or revoked grant (AC-049)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) keeps replaying a completed once transaction after its expiry (AC-080)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a sibling run reaching for a consumed once grant (AC-080)",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a malformed target and an out-of-grant target with the documented codes",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) keeps the target rules the rest of the codebase relies on",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) derives scope bindings from the request identity fields",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) accepts an in-scope request",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) refuses an operation outside the Work envelope",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) refuses a foreign work id and a role at a stage it does not operate",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) refuses a missing once binding and a malformed input hash with VALIDATION_ERROR",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) refuses a target outside the Work paths and a malformed target",
-        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) does not apply the path envelope to non-path operations",
         "packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) refuses the sibling Run of the same role with no side effect (AC-080)",
         "packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) replays the recorded result for the same once operation (AC-080)",
         "packages/core/test/grants.test.ts :: GrantStore (AC-049, AC-080) issuing mints a grant that carries every documented binding and audits it (AC-049)",
@@ -2541,6 +2506,26 @@
         "packages/core/test/grants.test.ts :: GrantStore (AC-049, AC-080) multi-writer deferred results (W7R2-04/09/10) replays a recorded undefined result as present (W7R2-09)",
         "packages/core/test/grants.test.ts :: GrantStore (AC-049, AC-080) multi-writer deferred results (W7R2-04/09/10) keeps a recorded result alive through an offline blob GC (W7R2-10)",
         "packages/core/test/grants.test.ts :: GrantStore (AC-049, AC-080) multi-writer deferred results (W7R2-04/09/10) registers the deferred-result records and legacy blobs as GC roots (W7R2-10)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) admits the exact once binding and reports no replay for a first use",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) replays a consumed once grant for the same operation and input (AC-080)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) binds a replay to the full operation/role/stage triple, not just the run (W7R1-06)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a different input hash with IDEMPOTENCY_CONFLICT and names the field (AC-080)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a different tool operation on a consumed grant with IDEMPOTENCY_CONFLICT (AC-080)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a different operation on a live grant without consuming anything (AC-049)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses the wrong role or stage with NOT_AUTHORIZED (AC-049)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) isolates sibling runs on a run-scoped grant and keeps work-scoped grants shared (AC-080)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses every later use of an expired or revoked grant (AC-049)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) keeps replaying a completed once transaction after its expiry (AC-080)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a sibling run reaching for a consumed once grant (AC-080)",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) refuses a malformed target and an out-of-grant target with the documented codes",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) keeps the target rules the rest of the codebase relies on",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) derives scope bindings from the request identity fields",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) accepts an in-scope request",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) refuses an operation outside the Work envelope",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) refuses a foreign work id and a role at a stage it does not operate",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) refuses a missing once binding and a malformed input hash with VALIDATION_ERROR",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) refuses a target outside the Work paths and a malformed target",
+        "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) issuance validation (AC-049) does not apply the path envelope to non-path operations",
         "packages/core/test/broker.integration.test.ts :: Broker integration (AC-048, AC-050) keeps the once result replayable across a real execution (AC-080)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) executes an in-scope granted call and audits it, and refuses out-of-scope/expired/sibling calls with no side effect (AC-049, AC-080)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) replays the original once result for the same input and refuses a different input (AC-080)",
@@ -2655,13 +2640,6 @@
       "accepted": false,
       "mapping": "test-name",
       "evidence": [
-        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017)",
-        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018)",
-        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08)",
-        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) closes through evaluateFindingClosure and stops at the rework allowance (AC-017/AC-022)",
-        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) blocks completion for blocked and undisposed not_covered results (AC-019)",
-        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds a document/integration Finding without a taskId (AC-083)",
-        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) routes a document Finding through the same closure rules (AC-083)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) binds a task-less integration Finding and sends it straight back to development (AC-083, AC-017)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a task target without a taskId, a foreign task and a developer Run, writing nothing (AC-083)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) closes a fixed Finding only after a new independent Review and Test, and refuses a developer self-verify (AC-018)",
@@ -2698,6 +2676,13 @@
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses writes after a cancel stops at blocked(recovery) (AC-021, W6R3-02)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses a fix that re-anchors to a revision a Finding invalidated (AC-017/AC-018, W6R3-03)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) keeps the frozen-manifest lookup on the real manifestId key space (W6R3-05)",
+        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017)",
+        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018)",
+        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08)",
+        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) closes through evaluateFindingClosure and stops at the rework allowance (AC-017/AC-022)",
+        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) blocks completion for blocked and undisposed not_covered results (AC-019)",
+        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds a document/integration Finding without a taskId (AC-083)",
+        "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) routes a document Finding through the same closure rules (AC-083)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) runs the L1 typo chain to a CompletionManifest and CAS with no Planning/Test Run and no board entry (AC-007)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) drives a validated ProductDefinition through Plan/Develop/Review/Test/Settlement in order (AC-010)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) saves a confirmed design as Product/Planning candidate diffs with an independent Review and Settlement only (AC-012)",
@@ -2804,7 +2789,6 @@
         "packages/core/test/requirement-continue.test.ts :: Requirement continuation (AC-089) refuses a Requirement that is not active or already has a local Work (AC-089)",
         "packages/core/test/requirement-continue.test.ts :: Requirement continuation (AC-089) reports the L3 stages plus the rollback/audit/drill evidence the continuation still owes (AC-089)",
         "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) keeps an imported requirement identity and its evidence availability honest (AC-087/AC-088/AC-089)",
-        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack shows an imported active requirement as waiting to continue with no Run (AC-087/AC-089)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) runs the L1 typo chain to a CompletionManifest and CAS with no Planning/Test Run and no board entry (AC-007)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) drives a validated ProductDefinition through Plan/Develop/Review/Test/Settlement in order (AC-010)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) saves a confirmed design as Product/Planning candidate diffs with an independent Review and Settlement only (AC-012)",
@@ -2812,27 +2796,28 @@
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) closes a task-less Review Finding through a fix and a new independent Review/Test, refusing self-verification (AC-017, AC-018, AC-083)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) pauses at a safe point, resumes into a new Attempt, and cancels the Run tree while keeping the artifacts (AC-020, AC-021)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) shows an imported active Requirement as waiting to continue and re-plans it in a new Work without reusing old verification (AC-089)",
-        "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) refuses the superseded Plan after an upgrade and leaves the source hash unchanged (AC-009, AC-013)"
+        "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) refuses the superseded Plan after an upgrade and leaves the source hash unchanged (AC-009, AC-013)",
+        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack shows an imported active requirement as waiting to continue with no Run (AC-087/AC-089)"
       ],
       "drills": [],
       "reason": null
     },
     {
       "id": "AC-090",
-      "status": "PASS",
-      "accepted": false,
+      "status": "UNVERIFIED",
+      "accepted": true,
       "mapping": "test-name",
       "evidence": [
         "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) refuses requirement.save without the Git record service instead of faking a save (AC-090/AC-093)",
-        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack reads all nine surfaces from real state in one drill (AC-068–AC-078, AC-084, AC-087–AC-090, AC-093)",
-        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack shows a requirement in the UI only after Git and the projection agree (AC-090/AC-093)",
         "packages/core/test/requirement-save.integration.test.ts :: requirement instant save (AC-090) commits requirement.json, content.md and the rebuilt README in one commit",
         "packages/core/test/requirement-save.integration.test.ts :: requirement instant save (AC-090) reports the unpushed state against a configured remote (`AC-090`)",
         "packages/core/test/requirement-save.integration.test.ts :: requirement instant save (AC-090) leaves the branch untouched when the integration lock is held by a delivery",
         "packages/core/test/requirement-save.integration.test.ts :: requirement instant save (AC-090) refuses a second create for the same id and writes nothing",
         "packages/core/test/requirement-save.integration.test.ts :: requirement instant save (AC-090) updates an existing record with a new version and includes both records in the pool",
         "packages/core/test/requirement-save.integration.test.ts :: requirement save failure and retry (AC-090) hands back the original operation when the baseline moved, and retries onto it",
-        "packages/core/test/requirement-save.integration.test.ts :: requirement save failure and retry (AC-090) reports RECOVERY_REQUIRED with a repair-only retry when the projection fails after the commit"
+        "packages/core/test/requirement-save.integration.test.ts :: requirement save failure and retry (AC-090) reports RECOVERY_REQUIRED with a repair-only retry when the projection fails after the commit",
+        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack reads all nine surfaces from real state in one drill (AC-068–AC-078, AC-084, AC-087–AC-090, AC-093)",
+        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack shows a requirement in the UI only after Git and the projection agree (AC-090/AC-093)"
       ],
       "drills": [
         {
@@ -2840,7 +2825,7 @@
           "status": "PASS"
         }
       ],
-      "reason": null
+      "reason": "AC-090 的 Git 侧与投影侧已由真实临时仓库、真实 SQLite 与 e2e 演练证明（原子提交两文件、recordVersion/recordHash、saveState 仅在与投影一致后为 saved、retry 恢复原操作、e2e 断言 git.unpushed=true）；但 Web 界面尚未渲染“分支、提交与未推送状态”（`apps/web/src` 无对应视图字段），该 Then 子句未实现，登记为已登记缺口。"
     },
     {
       "id": "AC-091",
@@ -2903,14 +2888,14 @@
         "packages/core/test/requirement-save.test.ts :: pool records and README (AC-093) rebuilds the README from the records and commits both files of each",
         "packages/core/test/requirement-save.test.ts :: pool records and README (AC-093) sorts the index by id so a rebuild is deterministic",
         "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) refuses requirement.save without the Git record service instead of faking a save (AC-090/AC-093)",
-        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack reads all nine surfaces from real state in one drill (AC-068–AC-078, AC-084, AC-087–AC-090, AC-093)",
-        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack shows a requirement in the UI only after Git and the projection agree (AC-090/AC-093)",
         "packages/core/test/requirement-save.integration.test.ts :: stale projection refuses to overwrite (AC-093) refuses a same-version record whose body another server changed",
         "packages/core/test/requirement-save.integration.test.ts :: stale projection refuses to overwrite (AC-093) refuses a create when Git already holds a record the projection does not know",
         "packages/core/test/requirement-save.integration.test.ts :: stale projection refuses to overwrite (AC-093) refuses a stale local expectation when it cannot satisfy the projection version",
         "packages/core/test/requirement-save.integration.test.ts :: stale projection refuses to overwrite (AC-093) reads the pool at the delivery ref, never the stale working tree (W8R1-02)",
         "packages/core/test/requirement-save.integration.test.ts :: stale projection refuses to overwrite (AC-093) reports a HEAD-only record as a per-record conflict instead of an ENOENT (W8R1-03)",
-        "packages/core/test/requirement-save.integration.test.ts :: stale projection refuses to overwrite (AC-093) returns a structured INTERNAL_ERROR when the committed blob cannot be read (W8R1-03)"
+        "packages/core/test/requirement-save.integration.test.ts :: stale projection refuses to overwrite (AC-093) returns a structured INTERNAL_ERROR when the committed blob cannot be read (W8R1-03)",
+        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack reads all nine surfaces from real state in one drill (AC-068–AC-078, AC-084, AC-087–AC-090, AC-093)",
+        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack shows a requirement in the UI only after Git and the projection agree (AC-090/AC-093)"
       ],
       "drills": [
         {
@@ -2935,7 +2920,12 @@
         "packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) never commits in the delivery working tree: a candidate revision is required (W8R1-01)",
         "packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) refuses a competing ref move between the compare and the swap (W8R1-01)",
         "packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) refuses a candidate that is not a descendant of the expected revision (W8R2-01)",
-        "packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) returns a structured INTERNAL_ERROR when the candidate tree cannot be read (W8R2-04)"
+        "packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) returns a structured INTERNAL_ERROR when the candidate tree cannot be read (W8R2-04)",
+        "packages/core/test/requirement-save.integration.test.ts :: stale projection refuses to overwrite (AC-093) refuses a same-version record whose body another server changed",
+        "packages/core/test/requirement-save.integration.test.ts :: stale projection refuses to overwrite (AC-093) reports a HEAD-only record as a per-record conflict instead of an ENOENT (W8R1-03)",
+        "packages/core/test/requirement-save.integration.test.ts :: requirement save working copy and journal identity (W8R3-01..03, T-03/T-05) reports a half pair as a per-record conflict instead of dropping it (T-03)",
+        "packages/core/test/requirement-save.test.ts :: prepareRequirementSave (AC-093) builds both files with one version and the documented combined record hash",
+        "packages/core/test/requirement-save.test.ts :: completion/settlement consistency (AC-091) requires a completion summary at all"
       ],
       "drills": [],
       "reason": null

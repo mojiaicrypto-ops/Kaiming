@@ -1,94 +1,118 @@
 {
   "tool": "pnpm test:live",
-  "generatedAt": "2026-09-13T14:56:13.837Z",
+  "generatedAt": "2026-09-13T15:41:04.948Z",
   "repoRoot": "/Users/huyaohua/huyh/work/aigrouptool",
-  "gitHead": "5ad533ea02ba7e322b3a9bedea2b269a559b1f39",
+  "gitHead": "c53b28dd5c97a3f106d467c518ea2e179e8f7dca",
   "binding": {
-    "gitHead": "5ad533ea02ba7e322b3a9bedea2b269a559b1f39",
-    "gitTree": "86ade91771d5e71e5063bf0237f8a3ccdf6e494f",
-    "codeDigest": "sha256:0949e14614c98d17398d1f3c8227d7cd3bc8b16971a3ceb532ebfc77ac545e5f",
+    "gitHead": "c53b28dd5c97a3f106d467c518ea2e179e8f7dca",
+    "gitTree": "4512743845e31503e77eb35728b28cd4a50f39f0",
+    "codeDigest": "sha256:e4f7a5054a89ab6d150fe13783042c9a0655195f45c8f8653f07e58e8e4eb2d4",
     "codeFiles": 252,
     "dirty": true,
-    "generatedAt": "2026-09-13T14:56:13.836Z",
+    "generatedAt": "2026-09-13T15:40:20.762Z",
     "nodeVersion": "v24.8.0"
   },
   "nonce": null,
-  "exitCode": 3,
+  "exitCode": 0,
   "provider": {
-    "configured": false,
-    "baseUrl": null,
-    "modelId": null,
-    "reviewModelId": null,
-    "secretConfigured": false,
-    "unavailableReason": "UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)"
+    "configured": true,
+    "baseUrl": "https://api.deepseek.com/",
+    "modelId": "deepseek-flash",
+    "reviewModelId": "deepseek-flash",
+    "secretConfigured": true,
+    "unavailableReason": null
   },
   "results": [
     {
       "ac": "AC-001",
-      "status": "UNVERIFIED",
-      "evidence": "drill.html-explanation: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)",
+      "status": "PASS",
+      "evidence": "drill.html-explanation: message 01a09b6d-3c22-7bf4-80e2-0065152965a9 -> Work 01a09b6d-3c22-7957-afce-e317e7d81604 (intent=assist level=none, no Requirement); completion through run 01a09b6d-3c6f-7208-ad52-53f38bbfb428 (config snapshot ea50c4ccd111, 12675 chars) citing src/orders/cancel.ts and separating UNKNOWN; artifact 01a09b6d-9b7e-746c-9ae5-09e58c40706b v1 sha256 002aa95eb871 origin=agent kind=explanation; preview 200 CSP \"default-src 'none'\" sandbox allow-scripts credentials omit mode=inline; download token uOmDZmcv… matched the artifact bytes; the second GET answered 403; delivery branch unchanged at 663c3cdaf9be; 2 call(s), HTTP 200/200, 25475ms total, 0 failed",
       "checks": [
         "drill.html-explanation"
       ]
     },
     {
-      "ac": "AC-007",
+      "ac": "AC-002",
       "status": "UNVERIFIED",
-      "evidence": "drill.l1-typo: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)",
+      "evidence": "browser.html-rendering: AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境；本仓库按产品决定不引入 Playwright 或浏览器下载。本演练已执行服务端部分：真实 Provider 产出的 HTML Artifact、预览 CSP/sandbox/credentials 头与一次性下载，浏览器侧仍未验证",
+      "checks": [
+        "browser.html-rendering"
+      ]
+    },
+    {
+      "ac": "AC-007",
+      "status": "PASS",
+      "evidence": "drill.l1-typo: Work 01a09b6d-9baa-7fee-a22f-412ae656486a (level=L1, base 663c3cdaf9be) one-task Plan 01a09b6d-9fb approved by the real gate; write admitted for src/orders/messages.ts; real exec Run 01a09b6d-9fd1-768a-a080-9cae44b5b39c produced candidate 731fd8e3db50 tree ae0358dc0c97 (numstat: 1 1 src/orders/messages.ts); independent Review Run 01a09b6d-a474-7cc2-9d7d-d67a57441f70 -> stage 01a09b6d-ad92-7e49-9063-46482679e291; Settlement Run 01a09b6d-ad93-7d92-91e7-a681e6de51e0; L1 chain [\"Develop\",\"Review\",\"Settlement\"]; runs planning:L1-Plan, backend:L1-Develop, review:L1-Review, settlement:L1-Settlement (no Planning/Test Run); CompletionManifest e269a7c2b4e3 frozen; CAS moved agentdev/main 663c3cdaf9be -> 731fd8e3db50; Work completed with no Requirement; artifacts on the Work: 1 (the Plan)",
       "checks": [
         "drill.l1-typo"
       ]
     },
     {
       "ac": "AC-010",
-      "status": "UNVERIFIED",
-      "evidence": "drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)",
+      "status": "PASS",
+      "evidence": "drill.l2-delivery: Work 01a09b6d-b2ea-7c53-84d3-89cadac35ffc (L2, base 731fd8e3db50) + Requirement 01a09b6d-b2f5-7de9-9c01-e317b7582d9e; model Plan 01a09b6d-c28 approved, Task 01a09b6d-c27c-77ec-8f00-c35f39152e1e; independent Runs planning:01a09b6d-b2f7-7384-af59-7b771fb79dbf, backend:01a09b6d-c29d-7f97-a6af-265c88a1bed8, review:01a09b6d-cff2-7ea1-8b5d-bba453efb225, test:01a09b6d-d60d-72d7-a4a3-b02a524ad383 with distinct config snapshots (097c0cb1, 1f8bcbf0, e702d354, 49b8ce13); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-flash, test=deepseek-flash; candidate a189136d7989 codeTree 96bffca28089; Develop 01a09b6d-cff1-7c60-a0f4-d96265526614, Review 01a09b6d-d5c7-7dab-8062-217d56166643, Test 01a09b6d-da4b-7b4d-bea0-aa6b0b65dd5e accepted (executed probe exit 0); L2 chain [\"Plan\",\"Develop\",\"Review\",\"Test\",\"Settlement\"]; a chain without Test is refused; Comp…",
       "checks": [
         "drill.l2-delivery"
       ]
     },
     {
       "ac": "AC-037",
-      "status": "UNVERIFIED",
-      "evidence": "drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)",
+      "status": "PASS",
+      "evidence": "drill.l2-delivery: Work 01a09b6d-b2ea-7c53-84d3-89cadac35ffc (L2, base 731fd8e3db50) + Requirement 01a09b6d-b2f5-7de9-9c01-e317b7582d9e; model Plan 01a09b6d-c28 approved, Task 01a09b6d-c27c-77ec-8f00-c35f39152e1e; independent Runs planning:01a09b6d-b2f7-7384-af59-7b771fb79dbf, backend:01a09b6d-c29d-7f97-a6af-265c88a1bed8, review:01a09b6d-cff2-7ea1-8b5d-bba453efb225, test:01a09b6d-d60d-72d7-a4a3-b02a524ad383 with distinct config snapshots (097c0cb1, 1f8bcbf0, e702d354, 49b8ce13); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-flash, test=deepseek-flash; candidate a189136d7989 codeTree 96bffca28089; Develop 01a09b6d-cff1-7c60-a0f4-d96265526614, Review 01a09b6d-d5c7-7dab-8062-217d56166643, Test 01a09b6d-da4b-7b4d-bea0-aa6b0b65dd5e accepted (executed probe exit 0); L2 chain [\"Plan\",\"Develop\",\"Review\",\"Test\",\"Settlement\"]; a chain without Test is refused; Comp…",
       "checks": [
         "drill.l2-delivery"
       ]
     },
     {
       "ac": "AC-041",
-      "status": "UNVERIFIED",
-      "evidence": "drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)",
+      "status": "PASS",
+      "evidence": "drill.l2-delivery: Work 01a09b6d-b2ea-7c53-84d3-89cadac35ffc (L2, base 731fd8e3db50) + Requirement 01a09b6d-b2f5-7de9-9c01-e317b7582d9e; model Plan 01a09b6d-c28 approved, Task 01a09b6d-c27c-77ec-8f00-c35f39152e1e; independent Runs planning:01a09b6d-b2f7-7384-af59-7b771fb79dbf, backend:01a09b6d-c29d-7f97-a6af-265c88a1bed8, review:01a09b6d-cff2-7ea1-8b5d-bba453efb225, test:01a09b6d-d60d-72d7-a4a3-b02a524ad383 with distinct config snapshots (097c0cb1, 1f8bcbf0, e702d354, 49b8ce13); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-flash, test=deepseek-flash; candidate a189136d7989 codeTree 96bffca28089; Develop 01a09b6d-cff1-7c60-a0f4-d96265526614, Review 01a09b6d-d5c7-7dab-8062-217d56166643, Test 01a09b6d-da4b-7b4d-bea0-aa6b0b65dd5e accepted (executed probe exit 0); L2 chain [\"Plan\",\"Develop\",\"Review\",\"Test\",\"Settlement\"]; a chain without Test is refused; Comp…",
       "checks": [
         "drill.l2-delivery"
+      ]
+    },
+    {
+      "ac": "AC-043",
+      "status": "UNVERIFIED",
+      "evidence": "provider.independent-models: AC-043 的“角色配置不同 Provider/模型”需要 AGENTDEV_PROVIDER_REVIEW_MODEL 指定 Review/Test 的独立模型；本演练已验证每个专业 Run 独立且各自冻结 config 快照，但全部角色使用同一个已配置模型，因此多模型前提未执行",
+      "checks": [
+        "provider.independent-models"
+      ]
+    },
+    {
+      "ac": "AC-052",
+      "status": "UNVERIFIED",
+      "evidence": "browser.html-rendering: AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境；本仓库按产品决定不引入 Playwright 或浏览器下载。本演练已执行服务端部分：真实 Provider 产出的 HTML Artifact、预览 CSP/sandbox/credentials 头与一次性下载，浏览器侧仍未验证",
+      "checks": [
+        "browser.html-rendering"
       ]
     }
   ],
   "checks": [
     {
-      "name": "provider.configuration",
+      "name": "provider.connectivity",
       "acs": [],
-      "status": "UNVERIFIED",
-      "evidence": "UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)",
-      "durationMs": 0
+      "status": "PASS",
+      "evidence": "provider.test completed in 1155ms against https://api.deepseek.com with model deepseek-flash; 1 call(s), HTTP 200, 1154ms total, 0 failed",
+      "durationMs": 1155
     },
     {
       "name": "drill.html-explanation",
       "acs": [
         "AC-001"
       ],
-      "status": "UNVERIFIED",
-      "evidence": "UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)",
-      "durationMs": 0
+      "status": "PASS",
+      "evidence": "message 01a09b6d-3c22-7bf4-80e2-0065152965a9 -> Work 01a09b6d-3c22-7957-afce-e317e7d81604 (intent=assist level=none, no Requirement); completion through run 01a09b6d-3c6f-7208-ad52-53f38bbfb428 (config snapshot ea50c4ccd111, 12675 chars) citing src/orders/cancel.ts and separating UNKNOWN; artifact 01a09b6d-9b7e-746c-9ae5-09e58c40706b v1 sha256 002aa95eb871 origin=agent kind=explanation; preview 200 CSP \"default-src 'none'\" sandbox allow-scripts credentials omit mode=inline; download token uOmDZmcv… matched the artifact bytes; the second GET answered 403; delivery branch unchanged at 663c3cdaf9be; 2 call(s), HTTP 200/200, 25475ms total, 0 failed",
+      "durationMs": 24477
     },
     {
       "name": "drill.l1-typo",
       "acs": [
         "AC-007"
       ],
-      "status": "UNVERIFIED",
-      "evidence": "UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)",
-      "durationMs": 0
+      "status": "PASS",
+      "evidence": "Work 01a09b6d-9baa-7fee-a22f-412ae656486a (level=L1, base 663c3cdaf9be) one-task Plan 01a09b6d-9fb approved by the real gate; write admitted for src/orders/messages.ts; real exec Run 01a09b6d-9fd1-768a-a080-9cae44b5b39c produced candidate 731fd8e3db50 tree ae0358dc0c97 (numstat: 1 1 src/orders/messages.ts); independent Review Run 01a09b6d-a474-7cc2-9d7d-d67a57441f70 -> stage 01a09b6d-ad92-7e49-9063-46482679e291; Settlement Run 01a09b6d-ad93-7d92-91e7-a681e6de51e0; L1 chain [\"Develop\",\"Review\",\"Settlement\"]; runs planning:L1-Plan, backend:L1-Develop, review:L1-Review, settlement:L1-Settlement (no Planning/Test Run); CompletionManifest e269a7c2b4e3 frozen; CAS moved agentdev/main 663c3cdaf9be -> 731fd8e3db50; Work completed with no Requirement; artifacts on the Work: 1 (the Plan)",
+      "durationMs": 5947
     },
     {
       "name": "drill.l2-delivery",
@@ -97,8 +121,27 @@
         "AC-037",
         "AC-041"
       ],
+      "status": "PASS",
+      "evidence": "Work 01a09b6d-b2ea-7c53-84d3-89cadac35ffc (L2, base 731fd8e3db50) + Requirement 01a09b6d-b2f5-7de9-9c01-e317b7582d9e; model Plan 01a09b6d-c28 approved, Task 01a09b6d-c27c-77ec-8f00-c35f39152e1e; independent Runs planning:01a09b6d-b2f7-7384-af59-7b771fb79dbf, backend:01a09b6d-c29d-7f97-a6af-265c88a1bed8, review:01a09b6d-cff2-7ea1-8b5d-bba453efb225, test:01a09b6d-d60d-72d7-a4a3-b02a524ad383 with distinct config snapshots (097c0cb1, 1f8bcbf0, e702d354, 49b8ce13); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-flash, test=deepseek-flash; candidate a189136d7989 codeTree 96bffca28089; Develop 01a09b6d-cff1-7c60-a0f4-d96265526614, Review 01a09b6d-d5c7-7dab-8062-217d56166643, Test 01a09b6d-da4b-7b4d-bea0-aa6b0b65dd5e accepted (executed probe exit 0); L2 chain [\"Plan\",\"Develop\",\"Review\",\"Test\",\"Settlement\"]; a chain without Test is refused; CompletionManifest ce88a73a3785; settlement moved the ref to a189136d7989 with exactly one settlement.completed event; Requirement completed; knowledge commit f2a82112e68f (document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes); cold start selected [\"F-0f0f0f0f\",\"F-0a1b2c3d\"] with \"未付款订单可取消；已付款订单返回已确认的拒绝结果。\" and code+test entries; 12 call(s), HTTP 200/200/200/200/200/200/200/200/200/200/200/200, 42441ms total, 0 failed",
+      "durationMs": 12108
+    },
+    {
+      "name": "browser.html-rendering",
+      "acs": [
+        "AC-002",
+        "AC-052"
+      ],
       "status": "UNVERIFIED",
-      "evidence": "UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)",
+      "evidence": "AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境；本仓库按产品决定不引入 Playwright 或浏览器下载。本演练已执行服务端部分：真实 Provider 产出的 HTML Artifact、预览 CSP/sandbox/credentials 头与一次性下载，浏览器侧仍未验证",
+      "durationMs": 0
+    },
+    {
+      "name": "provider.independent-models",
+      "acs": [
+        "AC-043"
+      ],
+      "status": "UNVERIFIED",
+      "evidence": "AC-043 的“角色配置不同 Provider/模型”需要 AGENTDEV_PROVIDER_REVIEW_MODEL 指定 Review/Test 的独立模型；本演练已验证每个专业 Run 独立且各自冻结 config 快照，但全部角色使用同一个已配置模型，因此多模型前提未执行",
       "durationMs": 0
     }
   ]

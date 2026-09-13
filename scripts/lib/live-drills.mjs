@@ -53,36 +53,58 @@ function requireCompletion(response, what) {
   return text;
 }
 
+/** A short, secret-free rendering of a reply for a failure message. */
+export function observed(text, limit = 240) {
+  const value = String(text ?? '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  return value.length <= limit
+    ? JSON.stringify(value)
+    : JSON.stringify(`${value.slice(0, limit)}…`);
+}
+
 /** Extracts the first fenced code block, or `null` when the reply has none. */
 export function extractFencedCode(text) {
   const match = /```[^\n]*\n([\s\S]*?)```/u.exec(text);
   return match?.[1] === undefined ? null : match[1];
 }
 
-/** Parses the first balanced JSON object in a reply; `null` when there is none. */
+/**
+ * Parses the first *parseable* balanced JSON object in a reply.
+ *
+ * Real models wrap the object in prose or a markdown fence, and sometimes emit a
+ * malformed first candidate (an unescaped quote, a stray `{` in an example). The scan
+ * therefore tries every `{` position until one yields valid JSON instead of giving up
+ * on the first balanced-but-unparsable slice; when nothing parses it returns `null` and
+ * the caller reports the observed reply.
+ */
 export function extractJsonObject(text) {
-  const start = text.indexOf('{');
-  if (start < 0) return null;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let index = start; index < text.length; index += 1) {
-    const character = text[index];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (character === '\\') escaped = true;
-      else if (character === '"') inString = false;
-      continue;
-    }
-    if (character === '"') inString = true;
-    else if (character === '{') depth += 1;
-    else if (character === '}') {
-      depth -= 1;
-      if (depth === 0) {
-        try {
-          return JSON.parse(text.slice(start, index + 1));
-        } catch {
-          return null;
+  const attempts = 64;
+  let tried = 0;
+  for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
+    tried += 1;
+    if (tried > attempts) break;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < text.length; index += 1) {
+      const character = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === '\\') escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') inString = true;
+      else if (character === '{') depth += 1;
+      else if (character === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            return JSON.parse(text.slice(start, index + 1));
+          } catch {
+            break;
+          }
         }
       }
     }
@@ -444,7 +466,10 @@ export async function runL1Drill({ harness, product }) {
   });
   const fixText = requireCompletion(fixCompletion.response, 'the L1 typo completion');
   const corrected = extractFencedCode(fixText);
-  ensure(corrected !== null, 'the L1 completion returned no fenced code block');
+  ensure(
+    corrected !== null,
+    `the L1 completion returned no fenced code block; reply was ${observed(fixText)}`,
+  );
   ensure(corrected.includes(TYPO_EXPECTED.trim()), 'the corrected label does not carry the fix');
   ensure(!corrected.includes('oreder'), 'the corrected label still contains the typo');
   const worktree = join(harness.dataDir, 'l1-worktree');
@@ -496,7 +521,10 @@ export async function runL1Drill({ harness, product }) {
   });
   const reviewText = requireCompletion(reviewCompletion.response, 'the L1 review completion');
   const review = extractJsonObject(reviewText);
-  ensure(review !== null, 'the L1 review returned no JSON object');
+  ensure(
+    review !== null,
+    `the L1 review returned no JSON object; reply was ${observed(reviewText)}`,
+  );
   ensure(review.status === 'passed', `the independent L1 review returned ${String(review.status)}`);
 
   const environmentRef = store.newId();
@@ -758,11 +786,12 @@ export async function runL2Drill({ harness, product }) {
     purpose: 'artifact',
     stage: 'Plan',
     goal: 'plan the unpaid-order cancellation change',
+    validate: (text) => extractJsonObject(text) !== null,
     messages: [
       {
         role: 'system',
         content:
-          'You are the AgentDev Planning Agent. Reply with a single JSON object {"goal":string,"summary":string,"checks":[string],"risks":[string]} and nothing else.',
+          'You are the AgentDev Planning Agent. Reply with a single compact JSON object {"goal":string,"summary":string,"checks":[string],"risks":[string]} and nothing else. Keep every string short and include no code or prose outside the object.',
       },
       {
         role: 'user',
@@ -776,7 +805,10 @@ export async function runL2Drill({ harness, product }) {
   });
   const planText = requireCompletion(planCompletion.response, 'the L2 plan completion');
   const planJson = extractJsonObject(planText);
-  ensure(planJson !== null, 'the L2 plan completion returned no JSON object');
+  ensure(
+    planJson !== null,
+    `the L2 plan completion returned no JSON object; reply was ${observed(planText)}`,
+  );
   const taskId = store.newId();
   const approved = gates.submitPlan({
     workId: work.id,
@@ -842,6 +874,7 @@ export async function runL2Drill({ harness, product }) {
   });
 
   // 3. Develop: the real Backend Run rewrites the file, committed in a real worktree.
+  const currentSource = gitShow(harness.repo, head, CODE_PATH);
   const developCompletion = await harness.callModel({
     workId: work.id,
     taskId,
@@ -849,6 +882,7 @@ export async function runL2Drill({ harness, product }) {
     purpose: 'implementation',
     stage: 'Develop',
     goal: 'implement the unpaid-order cancellation',
+    validate: (text) => extractJsonObject(text) !== null,
     messages: [
       {
         role: 'system',
@@ -858,15 +892,22 @@ export async function runL2Drill({ harness, product }) {
       {
         role: 'user',
         content: [
-          `Replace ${CODE_PATH} (currently "export const cancel = (): boolean => false;") so that cancel() returns true for an unpaid order.`,
-          `Also provide the content of ${TEST_PATH} covering both the unpaid and paid paths.`,
+          `Implement ${CODE_PATH} so cancel(orderId) reports whether an unpaid order may be cancelled.`,
+          'Keep the exported signature exactly `export const cancel = (orderId: string): boolean`.',
+          'It must return true when the order with that id has status "unpaid", and false when the order is paid or unknown.',
+          'The current file is:',
+          `\`\`\`ts\n${currentSource}\`\`\``,
+          `Also provide the complete content of ${TEST_PATH}, covering the unpaid, paid and unknown-id paths.`,
         ].join('\n'),
       },
     ],
   });
   const developText = requireCompletion(developCompletion.response, 'the L2 develop completion');
   const developJson = extractJsonObject(developText);
-  ensure(developJson !== null, 'the develop completion returned no JSON object');
+  ensure(
+    developJson !== null,
+    `the develop completion returned no JSON object; reply was ${observed(developText)}`,
+  );
   ensure(
     typeof developJson.code === 'string' && developJson.code.includes('cancel'),
     'the develop completion produced no source',
@@ -899,6 +940,10 @@ export async function runL2Drill({ harness, product }) {
     revision: candidate,
   });
   ensure(typeof codeTree === 'string' && codeTree.length === 64, 'no SHA256 code tree');
+  // The independent reviewer gets the frozen bytes a real Review Run would read, not a
+  // description of them: a reviewer that cannot see the content can only refuse it.
+  const frozenCode = gitShow(harness.repo, candidate, CODE_PATH);
+  const frozenTest = gitShow(harness.repo, candidate, TEST_PATH);
 
   const environmentRef = store.newId();
   const developRow = submitStage(product, store, {
@@ -926,6 +971,7 @@ export async function runL2Drill({ harness, product }) {
     purpose: 'review',
     stage: 'Review',
     goal: 'independently review the frozen cancellation diff',
+    validate: (text) => extractJsonObject(text) !== null,
     messages: [
       {
         role: 'system',
@@ -935,15 +981,22 @@ export async function runL2Drill({ harness, product }) {
       {
         role: 'user',
         content: [
-          `Frozen candidate ${candidate} changes ${CODE_PATH} so cancel() returns true for an unpaid order.`,
-          `Its code tree is ${codeTree}. Judge the frozen content only.`,
+          `Frozen candidate ${candidate} (code tree ${codeTree}) is the change under review.`,
+          `Acceptance criterion: cancel(orderId) returns true for the unpaid order O-1, and false for the paid order O-2 and for an unknown id.`,
+          `${CODE_PATH} as frozen:\n\`\`\`ts\n${frozenCode}\`\`\``,
+          `${TEST_PATH} as frozen:\n\`\`\`ts\n${frozenTest}\`\`\``,
+          'The test file must exercise the criterion. Judge the frozen content above and nothing else;',
+          'reply "passed" with an empty findings array when it satisfies the criterion.',
         ].join('\n'),
       },
     ],
   });
   const reviewText = requireCompletion(reviewCompletion.response, 'the L2 review completion');
   const reviewJson = extractJsonObject(reviewText);
-  ensure(reviewJson !== null, 'the review completion returned no JSON object');
+  ensure(
+    reviewJson !== null,
+    `the review completion returned no JSON object; reply was ${observed(reviewText)}`,
+  );
   ensure(
     reviewJson.status === 'passed',
     `the independent review returned ${String(reviewJson.status)}`,
@@ -987,7 +1040,13 @@ export async function runL2Drill({ harness, product }) {
   // executed check, plus the real Test Run's own verdict.
   const probeScript = [
     `const { cancel } = await import(${JSON.stringify(pathToFileURL(join(worktree, CODE_PATH)).href)});`,
-    'if (cancel() !== true) { console.error("cancel() did not confirm the unpaid cancellation"); process.exit(1); }',
+    'const unpaid = cancel("O-1");',
+    'const paid = cancel("O-2");',
+    'const unknown = cancel("O-missing");',
+    'if (unpaid !== true || paid !== false || unknown !== false) {',
+    '  console.error(`cancel() returned unpaid=${String(unpaid)} paid=${String(paid)} unknown=${String(unknown)}`);',
+    '  process.exit(1);',
+    '}',
   ].join('\n');
   let probeExit = 0;
   let probeOutput;
@@ -1010,6 +1069,7 @@ export async function runL2Drill({ harness, product }) {
     purpose: 'test',
     stage: 'Test',
     goal: 'verify the frozen cancellation behaviour',
+    validate: (text) => extractJsonObject(text) !== null,
     messages: [
       {
         role: 'system',
@@ -1020,15 +1080,21 @@ export async function runL2Drill({ harness, product }) {
         role: 'user',
         content: [
           `The frozen candidate ${candidate} changes ${CODE_PATH}.`,
-          `An executed probe of the frozen file exited ${String(probeExit)}.`,
-          'Report the behaviour verdict for the acceptance criterion "unpaid orders can be cancelled".',
+          `${CODE_PATH} as frozen:\n\`\`\`ts\n${frozenCode}\`\`\``,
+          `${TEST_PATH} as frozen:\n\`\`\`ts\n${frozenTest}\`\`\``,
+          `An executed probe of the frozen file exited ${String(probeExit)}: ${observed(probeOutput, 300)}`,
+          "The executed probe above is the drill's own check; report the behaviour verdict for the acceptance",
+          'criterion "cancel(orderId) is true for the unpaid order O-1 and false for the paid order O-2 and an unknown id".',
         ].join('\n'),
       },
     ],
   });
   const testText = requireCompletion(testCompletion.response, 'the L2 test completion');
   const testJson = extractJsonObject(testText);
-  ensure(testJson !== null, 'the test completion returned no JSON object');
+  ensure(
+    testJson !== null,
+    `the test completion returned no JSON object; reply was ${observed(testText)}`,
+  );
   ensure(testJson.status === 'passed', `the independent Test returned ${String(testJson.status)}`);
   const testRow = submitStage(product, store, {
     run: testCompletion.run,

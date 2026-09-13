@@ -9,10 +9,12 @@
  *
  * `RESIDUAL_GAPS` is the *accepted-gap register*: for each AC whose full
  * Given/When/Then needs an environment this release deliberately does not ship
- * (a real browser) or an input this environment does not have (a real Provider, a
- * distinct Review/Test model) it names the missing input. The aggregator downgrades
- * such an AC to UNVERIFIED unless a drill that actually executed covers it, and only
- * accepts that UNVERIFIED when the named condition still holds — see
+ * (a real browser), an input this environment does not have (a real Provider, a
+ * distinct Review/Test model) or a recorded product shortfall, it names the missing
+ * input. `closedBy` names the drill that can close the gap (its per-AC row must be
+ * `PASS`); a gap without `closedBy` is a product/browser shortfall no drill can close.
+ * The aggregator downgrades a registered AC to UNVERIFIED until its gap is closed, and
+ * only accepts that UNVERIFIED while the named condition still holds — see
  * `scripts/acceptance.mjs`.
  */
 
@@ -59,6 +61,9 @@ export const LIVE_REPORTED_ACS = Object.freeze([
  * - `provider-absent`      — only valid while `AGENTDEV_PROVIDER_*` is incomplete.
  * - `review-model-absent`  — only valid while `AGENTDEV_PROVIDER_REVIEW_MODEL` is unset.
  * - `browser-absent`       — permanent: product decision D1 (WP-10) ships no browser.
+ * - `recorded-gap`         — a product/environment shortfall recorded with a residual id
+ *                            and accepted by a user decision; permanent until the
+ *                            residual is implemented.
  *
  * `decision` names the record that authorises the acceptance, so a gap is never
  * silently invented by the tooling.
@@ -66,31 +71,37 @@ export const LIVE_REPORTED_ACS = Object.freeze([
 export const RESIDUAL_GAPS = Object.freeze({
   'AC-001': {
     condition: 'provider-absent',
+    closedBy: 'pnpm test:live',
     decision: 'WP-10 plan.md §2 D2（真实 Provider 由用户提供；未提供时 AC-001 保持 UNVERIFIED）',
     gap: '真实 Provider 的“区分事实/未知”答复未执行：离线只证明只读路由（不建 Requirement、不授权、Work 保持 level none），模型层断言需要 `pnpm test:live`。',
   },
   'AC-007': {
     condition: 'provider-absent',
+    closedBy: 'pnpm test:live',
     decision: 'WP-10 plan.md §2 D2',
     gap: 'L1 全链（一句话 Plan → 独立执行/Review/Settlement → CAS/CompletionManifest）的真实模型执行由 `pnpm test:live` 的 L1 演练覆盖；未配置 Provider 时该演练 UNVERIFIED，提交用例只证明领域规则与 Gate 顺序。',
   },
   'AC-010': {
     condition: 'provider-absent',
+    closedBy: 'pnpm test:live',
     decision: 'WP-10 plan.md §2 D2',
     gap: 'L2 交付链的真实模型纵向执行由 `pnpm test:live` 的 L2 演练覆盖；未配置 Provider 时该演练 UNVERIFIED，提交用例与 e2e 演练只证明真实 Gate/阶段顺序与交付物（输入由演练构造）。',
   },
   'AC-037': {
     condition: 'provider-absent',
+    closedBy: 'pnpm test:live',
     decision: 'WP-10 plan.md §2 D2',
     gap: '真实模型产出的知识补丁纵向执行由 `pnpm test:live` 的 L2 演练覆盖；未配置 Provider 时为 UNVERIFIED，提交测试只证明补丁/投影规则本身。',
   },
   'AC-041': {
     condition: 'provider-absent',
+    closedBy: 'pnpm test:live',
     decision: 'WP-10 plan.md §2 D2',
     gap: '真实模型结算后的知识更新与冷启动由 `pnpm test:live` 的 L2 演练覆盖；未配置 Provider 时为 UNVERIFIED，提交测试只证明投影与冷启动规则。',
   },
   'AC-043': {
     condition: 'review-model-absent',
+    closedBy: 'pnpm test:live',
     decision: 'WP-10 plan.md §2 D2（`AGENTDEV_PROVIDER_REVIEW_MODEL` 未提供）',
     gap: '“角色配置不同 Provider/模型”需要为 Review/Test 指定独立模型（`AGENTDEV_PROVIDER_REVIEW_MODEL`）；未指定时全部角色共用一个已配置模型，只证明专业 Run 独立且各自冻结快照。',
   },
@@ -113,6 +124,20 @@ export const RESIDUAL_GAPS = Object.freeze({
     condition: 'browser-absent',
     decision: 'WP-10 plan.md §2 D1',
     gap: '真实浏览器键盘遍历与 ARIA 朗读未执行；提交用例只证明字典级语言切换与项目内容不被翻译。',
+  },
+  'AC-066': {
+    condition: 'recorded-gap',
+    residual: 'WP-10-D4/AC-066',
+    decision:
+      'WP-10 plan.md §2 D4（用户确认）：接受为已登记缺口，真实模型的一轮 Pi SDK 会话（流式增量与会话历史恢复）未在发布验收中执行',
+    gap: 'AC-066 的 SDK 契约由锁定版本 0.85.1 的真实适配测试逐用例证明（事件映射含 assistant 文本/thinking 增量、工具边界、压缩、订阅、abort、资源释放、resume 路径接线）；但“真实模型经 Pi SDK 产生流式增量并从存储会话恢复历史”需要 Runner 侧真实驱动 Pi SDK 的生产级 models.json 与凭证注入，本包未执行，登记为已登记缺口。',
+  },
+  'AC-090': {
+    condition: 'recorded-gap',
+    residual: 'WP-10-D4/AC-090',
+    decision:
+      'WP-10 plan.md §2 D4（用户确认）：接受为已登记缺口，界面侧的“分支/提交/未推送状态”展示未实现',
+    gap: 'AC-090 的 Git 侧与投影侧已由真实临时仓库、真实 SQLite 与 e2e 演练证明（原子提交两文件、recordVersion/recordHash、saveState 仅在与投影一致后为 saved、retry 恢复原操作、e2e 断言 git.unpushed=true）；但 Web 界面尚未渲染“分支、提交与未推送状态”（`apps/web/src` 无对应视图字段），该 Then 子句未实现，登记为已登记缺口。',
   },
   'AC-076': {
     condition: 'browser-absent',
@@ -146,6 +171,12 @@ export function reviewModelConfigured(env = process.env) {
  * @returns {{ holds: boolean, why: string }}
  */
 export function conditionHolds(condition, env = process.env) {
+  if (condition === 'recorded-gap') {
+    return {
+      holds: true,
+      why: '该缺口由决定记录授权的常驻残余（实现该残余前一直成立）；验收报告逐条列出缺口与决定',
+    };
+  }
   if (condition === 'browser-absent') {
     return {
       holds: true,

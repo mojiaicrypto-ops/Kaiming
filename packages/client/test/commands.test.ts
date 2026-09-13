@@ -176,7 +176,7 @@ describe('AC-054 reconnect and bounded backoff', () => {
   });
 });
 
-describe('AC-054 write retry with the same idempotency key', () => {
+describe('AC-055 write retry with the same idempotency key', () => {
   it('replays a write whose answer was lost and reports the replay', async () => {
     let dropAnswer = true;
     const { client, server, clientTransport, clock } = createHarness({

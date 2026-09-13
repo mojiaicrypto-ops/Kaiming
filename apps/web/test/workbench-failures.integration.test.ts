@@ -1207,7 +1207,7 @@ describe('WP-09 T4 required failure tests', () => {
   // 订阅扩大 — widening a subscription is refused, never leaked
   // -------------------------------------------------------------------------
 
-  it('订阅扩大: refuses a cross-Project widening and answers a fresh scoped snapshot (AC-054/AC-078)', async () => {
+  it('订阅扩大: refuses a cross-Project widening and answers a fresh scoped snapshot (AC-078)', async () => {
     const otherProjectId = 'f'.repeat(32);
     const work = seedWork(harness, { status: 'running' });
     const run = seedRun(harness, { workId: work.id, epoch: 4 });
@@ -1309,7 +1309,7 @@ describe('WP-09 T4 required failure tests', () => {
     expect(harness.store.runs.find(run.id)?.workId).toBe(work.id);
   });
 
-  it('订阅扩大: refuses an out-of-authorisation scope locally, with no request sent (AC-054)', async () => {
+  it('订阅扩大: refuses an out-of-authorisation scope locally, with no request sent (AC-078)', async () => {
     const client = new ProtocolClient({
       transport: new WebSocketTransport({
         url: harness.wsUrl,

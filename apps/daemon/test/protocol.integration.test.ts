@@ -588,7 +588,7 @@ describe('workbench protocol over the real Core (WP-09 T2)', () => {
     );
   });
 
-  it('cancels a Queued requirement without Work and refuses to pause it (AC-068)', () => {
+  it('refuses to cancel a Queued requirement it cannot record and refuses to pause it (AC-068)', () => {
     const requirement = seedRequirement('queued');
     // No record service is wired here, so the honest answer is that the Git record
     // could not be cancelled — never a fabricated success.

@@ -4,7 +4,8 @@
 - 依赖：WP-00～WP-09（全部已结算，末包 WP-09 结算 `508bfaf`，代码树 `e9e237d`）
 - 关联验收：AC-001～AC-094 全部
 - **产品决定（用户确认）**：D1 不引入 Playwright/浏览器下载，`test:e2e` 以真实 Core + 真实 BFF + 真实 HTTP/WS 的无头端到端实现；D2 真实 Provider 由用户提供，未提供时显式 UNVERIFIED 且零网络调用；D3 未执行的 AC 只有登记且条件成立才算 ACCEPTED，`test:acceptance` 只采用本次运行产生的演练证据。
-- 本轮（Review 第 1 轮修复后）结果：`pnpm test:acceptance` → **94/94 ACs accounted — PASS 83 / ACCEPTED 11 / FAIL 0 / MISSING 0**，退出 0（详见 `.agentdev/work/WP-10/acceptance.md`）。
+- Review 第 1 轮修复后结果（未配置 Provider）：`pnpm test:acceptance` → **94/94 — PASS 83 / ACCEPTED 11 / FAIL 0 / MISSING 0**，退出 0。
+- **Review 第 2 轮修复 + 真实 Provider 接入后结果**：用户提供 DeepSeek 凭证后，`pnpm test:live` 三条纵向演练（HTML / L1 / L2+结算）**全部真实通过**（exit 0），`pnpm test:acceptance` → **94/94 ACs accounted — PASS 86 / ACCEPTED 8 / FAIL 0 / MISSING 0**，退出 0；`pnpm test:live --release` 十条命令全部退出 0，就绪结论 **READY (ACCEPTED RISK 8)**（8 项=A5 浏览器 + AC-043 独立模型 + AC-066/AC-090 已登记缺口）。真实演练同时暴露并修复了三处真实缺陷（见 T6）。
 
 ## T1 验收聚合运行器（`pnpm test:acceptance`）
 
@@ -83,11 +84,34 @@ Review 冻结在 `0aff531`，判定 **FAIL**（3×P1 / 6×P2 / 3×P3）。逐条
 - 把 D1 偏差写回权威命令表 `docs/delivery/implementation.md` §3（`test:e2e`/`test:acceptance`/`test:live` 三行）。
 - 记录文件（`acceptance.md`、`acceptance-results.json`、`e2e.md`、`e2e-results.json`、`live.md`、`live-results.json`、`release.md`）全部由本轮真实运行重新生成。
 
+## T6 独立 Review 第 2 轮（`review-round2.md`，FAIL：2×P1 / 2×P2 / 3×P3）与真实 Provider 接入
+
+第 2 轮冻结在 `c53b28d`，判定 FAIL：W10R2-01（AC-066 无覆盖却 PASS）、W10R2-02（Vitest 零用例/退出码不闭合）为 P1，W10R2-03（就绪门禁 sidecar 可被顶替）、W10R2-04（映射质量：AC-090/094/054/068）为 P2，W10R2-05/06/07 为 P3。逐条处置：
+
+| 发现 | 处置 |
+|---|---|
+| W10R2-01 AC-066 不可证 | 登记为 `recorded-gap` 豁免（残余 `WP-10-D4/AC-066`，用户决定 D4），并删除/修正把 AC-066 推给 live 的过期说法；离线 SDK 契约证据逐条登记 |
+| W10R2-02 零用例与退出码 | `indexTestCases` 不再把「已收集但零用例」的文件登记为已执行（落入 `diagnostics.unexecuted` ⇒ exit 2）；Vitest 项目非 0 退出即使有 JSON 报告也算基础设施失败 |
+| W10R2-03 sidecar 可顶替 | `pnpm test:acceptance` 把 `AGENTDEV_ACCEPTANCE_NONCE` 写进 sidecar；`--release` 校验 `runNonce`（本进程随机生成，只交给该子进程）+ 生成时间下界 + `codeDigest` + `drillsExecuted` |
+| W10R2-04 映射质量 | AC-094 逐条登记 recordHash/半对/摘要一致性用例；把 5 个幂等重试用例从 AC-054 改标为 AC-055、2 个订阅扩大失败用例改标 AC-078；AC-068 的 daemon 用例标题改为与其断言一致（拒绝无法记录取消） |
+| W10R2-05 记录 gitHead | 记录同时携带 `codeDigest`（权威、内容哈希）与生成时 `gitHead`；聚合器每次自行重跑演练并校验绑定，报告 §0 明确该口径 |
+| W10R2-06 curated 死条目 | 人工映射对**每个**登记 AC 都校验（不再只看被采用的那条），过期即 FAIL；报告 §6.2 增加「采用映射」列 |
+| W10R2-07 `--no-drills` | 明确打印「本次未执行发布演练，这不是发布结论」，sidecar `drillsExecuted:false` 被发布门禁拒绝；并新增显式豁免条件 `recorded-gap` 与 `closedBy`（只有指定演练的 PASS 才能关闭对应缺口） |
+
+真实 Provider 接入（D5）暴露并修复的三处**真实缺陷**：
+
+1. `scripts/lib/live-transport.mjs` 只读 `message.content`，reasoning 模型（deepseek-flash）在预算被思考耗尽时返回空 `content` + `reasoning_content`，导致 Provider 路径整体失败 → 增加 reasoning 回退（可见内容优先）。
+2. `packages/core/src/model-gateway.ts` 把输出预算硬压到 `min(4096, model.maxOutputTokens)`，长答案被截断、reasoning 模型整段思考后无正文；连通性探针只给 1 token → 改为使用模型配置的 `maxOutputTokens`（探针给 `min(64, …)`），并补两条单元测试（`packages/core/test/model-gateway.test.ts`）。
+3. L2 演练的任务描述与实际冻结内容不一致（未给出文件内容与接口签名、审阅者看不到候选内容、探针只调用无参 `cancel()`）→ 种子文件改为带 `Order` 类型与订单表、prompt 明确 `cancel(orderId: string): boolean`、Review/Test prompt 附带真实冻结文件内容、探针校验未付款/已付款/未知三条路径；JSON 抽取改为「逐个候选重试解析」，避免第一个畸形候选直接放弃。
+
+真实模型运行记录（不写凭证）：`HTML`、`L1`、`L2+结算` 三路径均通过，11 次 Provider 调用全部 HTTP 200；`live.md` 记录模型 id 与运行事实。
+
 ## 未验证 / 已登记残余（不冒充完成）
 
-1. **真实 Provider 纵向演练**（AC-001/007/010/037/041 的模型侧，以及 AC-043 的独立 Review/Test 模型）：本环境无 `AGENTDEV_PROVIDER_*`，已登记为 ACCEPTED；提供三项凭证后重跑 `pnpm test:live` 与 `pnpm test:acceptance` 即可关闭（`provider-absent` 条件随之失效，未跑通即 FAIL）。
+1. **真实 Provider 纵向演练已关闭**（AC-001/007/010/037/041 由真实 DeepSeek 演练 PASS）；**AC-043 仍为 ACCEPTED**：需要 `AGENTDEV_PROVIDER_REVIEW_MODEL` 指定 Review/Test 的独立模型，本次只提供了一个模型。
 2. **浏览器级证据**（AC-002/052/071/073/076 的客户端半边）：按产品决定 D1 不引入浏览器，永久登记为 ACCEPTED；服务端 CSP/sandbox/一次性下载/上传限制已由套件与演练执行。
-3. AC-066（SDK 契约）由锁定版本的真实 SDK 适配测试（事件映射含流式增量、会话创建/订阅/abort/压缩/resume/资源释放）逐用例证明；真实模型侧的纵向执行由 `pnpm test:live` 的 L1/L2 演练覆盖（配置 Provider 后为 PASS，当前计入 AC-001/007/010/037/041 的同一缺口）。
+3. **AC-066（SDK 契约）登记为已登记缺口**（残余 `WP-10-D4/AC-066`，用户决定 D4）：离线适配测试已逐用例证明契约；「真实模型经 Pi SDK 的流式增量与会话历史恢复」需要 Runner 侧真实驱动 Pi SDK（生产级 models.json + 凭证注入），未在发布验收中执行。
+10. **AC-090 的界面子句登记为已登记缺口**（残余 `WP-10-D4/AC-090`，用户决定 D4）：Git/投影/e2e 已证明；Web 界面尚未渲染「分支、提交与未推送状态」。
 4. AC-011 的「真实迁移/回退/恢复演练」由真实 SQLite 迁移回滚、备份恢复与 L3 Gate 用例逐条证明（不再作为未验证项）。
 5. 演练输入面：L2 的 Task 行、需求→Work 绑定、stage payload 由演练直接落真实 row 后交给真实 Gate；`e2e.md`/`live.md` 已登记，属「真实规则 + 合成输入」。
 6. CAS journal 在演练中使用内存实现；崩溃/恢复注入不在本切片。

@@ -207,6 +207,23 @@ describe('model gateway (AC-043, AC-044, AC-045)', () => {
     expect(response).toMatchObject({ ok: true, text: 'pong' });
   });
 
+  it('forwards the configured output budget instead of a hard-coded 4096 cap', async () => {
+    // Regression: the gateway used to send min(4096, model.maxOutputTokens), which
+    // truncated long answers and made a reasoning model exhaust its whole budget
+    // thinking. The WP-10 real Provider drill hit exactly that.
+    const run = configure();
+    await gateway.complete(run, [{ role: 'user', content: 'hi' }]);
+    expect(transport.requests.at(-1)?.maxOutputTokens).toBe(8_000);
+  });
+
+  it('gives the connectivity probe a budget a reasoning model can answer within', async () => {
+    configure();
+    await gateway.testConnection(PROVIDER_ID, MODEL_ID);
+    const probe = transport.requests.at(-1);
+    expect(probe?.maxOutputTokens).toBeGreaterThan(1);
+    expect(probe?.maxOutputTokens).toBeLessThanOrEqual(64);
+  });
+
   it('tests an anonymous Provider connection without a secret (R18-03)', async () => {
     const anonymous = provider({ secretRef: undefined });
     delete (anonymous as { secretRef?: string }).secretRef;

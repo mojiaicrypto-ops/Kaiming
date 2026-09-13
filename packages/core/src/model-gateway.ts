@@ -153,7 +153,11 @@ export class ModelGateway {
       baseUrl: frozen.provider.baseUrl,
       ...(apiKey === undefined ? {} : { apiKey }),
       messages,
-      maxOutputTokens: Math.min(4096, frozen.model.maxOutputTokens),
+      // The completion budget is the model's configured `maxOutputTokens`; capping it at
+      // a hard-coded 4096 silently truncated long answers and exhausted the whole budget
+      // of a reasoning model before it emitted any final text (found by the WP-10 real
+      // Provider drill).
+      maxOutputTokens: frozen.model.maxOutputTokens,
       contextLimit: frozen.effectiveContextLimit,
     });
   }
@@ -190,7 +194,9 @@ export class ModelGateway {
       baseUrl: provider.baseUrl,
       ...(apiKey === undefined ? {} : { apiKey }),
       messages: [{ role: 'user', content: 'ping' }],
-      maxOutputTokens: 1,
+      // A one-token probe makes a reasoning model spend its whole budget thinking and
+      // answer nothing, so the connectivity check gets a small but real budget.
+      maxOutputTokens: Math.min(64, model.maxOutputTokens),
       contextLimit: Math.min(4096, model.contextWindow),
     });
     const latencyMs = now() - started;

@@ -242,10 +242,23 @@ function main() {
       process.stderr.write(
         `acceptance: project "${project}" produced no JSON report (exit ${run.exitCode})\n${run.output.slice(-2000)}\n`,
       );
+    } else if (run.exitCode !== 0) {
+      // A Vitest project that exits non-zero is not a clean pass even when its JSON
+      // report happens to list no failing case (collection errors, unhandled rejections,
+      // a worker crash). Never treat that as acceptable evidence.
+      infraFailure = true;
+      process.stderr.write(
+        `acceptance: project "${project}" exited ${String(run.exitCode)} although it produced a JSON report\n${run.output.slice(-2000)}\n`,
+      );
     }
   }
 
   const drills = runDrills({ repoRoot, skip: !options.drills });
+  if (!drills.executed) {
+    process.stdout.write(
+      'acceptance: NOTE — release drills were NOT executed in this run (--no-drills); this aggregation is a development check, not a release verdict, and the release gate refuses its sidecar\n',
+    );
+  }
   runProblems.push(...drills.problems);
   const drillResults = new Map();
   for (const [ac, entries] of drills.results) drillResults.set(ac, [...entries]);
@@ -277,6 +290,7 @@ function main() {
     if (condition.holds) {
       result.accepted = true;
       result.decision = registration.decision;
+      result.residual = registration.residual ?? null;
     } else {
       result.accepted = false;
       unaccepted.push({
@@ -349,6 +363,10 @@ function main() {
   const sidecar = {
     tool: 'pnpm test:acceptance',
     generatedAt: meta.generatedAt,
+    // Nonce of the caller that asked for this run (`scripts/live.mjs --release`); the
+    // release gate rejects a sidecar that does not carry its own nonce, so a planted
+    // file with the right digest and a plausible timestamp is not accepted.
+    runNonce: process.env.AGENTDEV_ACCEPTANCE_NONCE ?? null,
     gitHead: meta.gitHead,
     gitTree: binding.gitTree,
     codeDigest: binding.codeDigest,
@@ -365,6 +383,7 @@ function main() {
       status: result.status,
       accepted: result.accepted === true,
       decision: result.decision ?? null,
+      residual: result.residual ?? null,
       mapping: result.mapping,
       gap: result.gap,
       reason: result.reason,
