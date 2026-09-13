@@ -4,11 +4,11 @@
 
 ## 0. 运行元数据
 
-- 生成时间：2026-09-13T13:33:09.313Z
+- 生成时间：2026-09-13T14:51:07.144Z
 - 命令：`pnpm test:live`（实际执行 `node scripts/live.mjs`）
 - Node：`v24.8.0`
 - 仓库：`/Users/huyaohua/huyh/work/aigrouptool`
-- Git HEAD：`508bfaf70cdf4368205382200fc82584d78977fd`
+- Git HEAD：`0aff531d6dd8c08e88ba99aea455db1c32f809fb`
 - 装载方式：Node 原生类型擦除 + 模块解析钩子直接执行 `packages/*/src`；真实 Provider HTTP（Node 内建 `node:http`/`node:https`），无新依赖、无浏览器。
 - 真实栈：未启动（未配置 Provider，演练在任何网络调用前退出）。
 - Provider：未配置。

@@ -2,11 +2,13 @@
  * Renders the WP-10 release acceptance report (`pnpm test:acceptance`).
  *
  * The output is machine generated on purpose: a per-AC table with the executed check
- * and its raw result, the raw suite summaries, the UNVERIFIED reasons and the FAIL raw
- * output. Nothing in the report is hand written, so Review/Test can audit it against
- * the same run that produced it.
+ * and its raw result, the raw suite and drill summaries, the accepted-gap register and
+ * the FAIL raw output. Nothing in the report is hand written, so Review/Test can audit
+ * it against the same run that produced it.
  */
 import { relative } from 'node:path';
+
+import { RESIDUAL_GAPS } from './drill-acs.mjs';
 
 /** Escapes a value for a Markdown table cell. */
 function cell(value) {
@@ -45,6 +47,12 @@ function countsOf(run) {
   return `${report.numTotalTests} tests / ${report.numPassedTests} passed / ${report.numFailedTests} failed`;
 }
 
+/** The status label shown per AC, keeping the accepted-gap distinction visible. */
+function statusLabel(result) {
+  if (result.accepted === true) return `${result.status}（已登记豁免）`;
+  return result.status;
+}
+
 /**
  * @param {object} input
  * @returns {string} Markdown report
@@ -56,9 +64,11 @@ export function renderAcceptanceReport(input) {
     results,
     counts,
     runs,
-    diagnostics,
+    drillRuns,
     drillSources,
-    registryProblems,
+    diagnostics,
+    problems,
+    unaccepted,
     exitCode,
   } = input;
 
@@ -66,9 +76,9 @@ export function renderAcceptanceReport(input) {
   const evidenceLabel = makeLabel(meta.repoRoot);
   const relativeOnly = (file) =>
     file.startsWith(meta.repoRoot) ? relative(meta.repoRoot, file) : file;
-  const unverified = results.filter((result) => result.status === 'UNVERIFIED');
+  const accepted = results.filter((result) => result.accepted === true);
   const failed = results.filter((result) => result.status === 'FAIL');
-  const externalDrills = results.filter((result) => result.drill !== null);
+  const withDrills = results.filter((result) => result.drills.length > 0);
 
   const lines = [];
   lines.push('# WP-10 发布验收证据汇总（自动生成）');
@@ -78,29 +88,38 @@ export function renderAcceptanceReport(input) {
   lines.push('## 0. 运行元数据');
   lines.push('');
   lines.push(`- 生成时间：${meta.generatedAt}`);
-  lines.push(`- 命令：\`pnpm test:acceptance\`（实际执行 \`node scripts/acceptance.mjs\`）`);
+  lines.push('- 命令：`pnpm test:acceptance`（实际执行 `node scripts/acceptance.mjs`）');
   lines.push(`- 仓库：\`${meta.repoRoot}\``);
   lines.push(
     `- Git HEAD：\`${meta.gitHead}\`${meta.gitDirty ? '（工作区有未提交改动）' : '（工作区干净）'}`,
   );
   lines.push(
+    `- 证据绑定：\`codeDigest ${meta.binding.codeDigest}\`（gitTree \`${meta.binding.gitTree}\`，${String(meta.binding.codeFiles)} 个代码文件的内容哈希）；演练报告必须携带同一绑定才会被采用`,
+  );
+  lines.push(
     `- Node：\`${meta.nodeVersion}\`；Docker：${meta.dockerAvailable ? '可用' : '不可用'}`,
   );
   lines.push(
-    `- 真实 Provider 环境变量：${meta.providerConfigured ? '已配置' : '未配置（AGENTDEV_PROVIDER_* 缺失，`pnpm test:live` 将显式失败）'}`,
+    `- 真实 Provider 环境变量：${meta.providerConfigured ? '已配置' : '未配置（AGENTDEV_PROVIDER_* 缺失）'}；Review/Test 独立模型：${meta.reviewModelConfigured ? '已配置' : '未配置'}`,
+  );
+  lines.push(
+    `- 发布演练：${meta.drillsExecuted ? '本次运行内执行了 `scripts/e2e.mjs` 与 `scripts/live.mjs`（非读取仓库文件）' : '本次未执行（`--no-drills`）'}`,
   );
   lines.push(`- 退出码：${exitCode}`);
   lines.push('');
   lines.push(
-    `- AC 统计：**共 ${results.length}**（期望 ${cases.length}） → **PASS ${counts.PASS} / FAIL ${counts.FAIL} / UNVERIFIED ${counts.UNVERIFIED}**`,
+    `- AC 统计：**共 ${results.length}**（期望 ${cases.length}） → **PASS ${counts.PASS} / ACCEPTED ${counts.ACCEPTED} / FAIL ${counts.FAIL} / MISSING ${counts.MISSING}**`,
+  );
+  lines.push(
+    '- ACCEPTED = 该 AC 的完整 Given/When/Then 未全部执行，但缺口已在 `scripts/lib/drill-acs.mjs` 登记，且豁免条件在本次运行中依然成立（逐条见 §3）。PASS 只表示该 AC 的全部已映射证据通过且没有未验证的登记缺口。',
   );
   lines.push(
     `- 已执行提交用例：${diagnostics.testCounts} 个，覆盖 ${diagnostics.executedFiles}/${diagnostics.scannedFiles} 个测试文件`,
   );
-  if (registryProblems.length > 0) {
+  if (problems.length > 0) {
     lines.push('');
-    lines.push('> **注册表问题（fail-closed）**');
-    for (const problem of registryProblems) lines.push(`> - ${problem}`);
+    lines.push('> **fail-closed 问题（本次运行判定为不可信证据）**');
+    for (const problem of problems) lines.push(`> - ${problem}`);
   }
   lines.push('');
 
@@ -113,13 +132,16 @@ export function renderAcceptanceReport(input) {
       `| \`vitest run --project ${cell(run.project)}\` | ${run.exitCode} | ${cell(countsOf(run))} | ${cell(tail(run.output, 6))} |`,
     );
   }
-  for (const source of drillSources) {
-    lines.push(`| 演练报告 \`${cell(source)}\` | - | 已并入聚合 | - |`);
-  }
-  if (drillSources.length === 0) {
+  for (const run of drillRuns) {
     lines.push(
-      '| `pnpm test:e2e` / `pnpm test:live` | - | 本次未运行（无 `--drill-report`，未发现演练结果文件） | - |',
+      `| \`${cell(run.tool)}\`（本次运行内执行） | ${run.exitCode} | 真实演练（见 §6.6） | ${cell(tail(run.output, 8))} |`,
     );
+  }
+  for (const source of drillSources) {
+    lines.push(`| 演练报告 \`${cell(source)}\` | - | 已并入聚合（绑定已校验） | - |`);
+  }
+  if (drillRuns.length === 0 && drillSources.length === 0) {
+    lines.push('| `pnpm test:e2e` / `pnpm test:live` | - | 本次未执行（`--no-drills`） | - |');
   }
   lines.push('');
 
@@ -131,24 +153,36 @@ export function renderAcceptanceReport(input) {
     const acceptanceCase = byId.get(result.id);
     const evidence = result.evidence.map(evidenceLabel);
     const note = [];
-    if (result.status === 'UNVERIFIED' && result.reason !== null) note.push(result.reason);
-    if (result.status === 'PASS' && result.residual !== null) note.push(`残余：${result.residual}`);
-    if (result.status === 'FAIL') note.push('映射用例失败，原始输出见 §4');
-    if (result.drill !== null)
-      note.push(`演练：${result.drill.status}（${result.drill.sourceFile}）`);
+    if (result.accepted === true) note.push(`已登记豁免：${result.gap ?? ''}`);
+    else if (result.status === 'UNVERIFIED' && result.reason !== null) note.push(result.reason);
+    else if (result.status === 'MISSING') note.push(result.reason ?? '无证据');
+    if (result.status === 'FAIL') note.push('映射用例失败或缺口未登记，原始输出见 §5');
+    for (const drill of result.drills) note.push(`演练 ${drill.tool}：${drill.status}`);
     lines.push(
-      `| ${result.id} | ${cell(acceptanceCase?.title ?? '')} | **${result.status}** | ${result.mapping} | ${cell(brief(evidence, 3)) || '—'} | ${cell(note.join('；')) || '—'} |`,
+      `| ${result.id} | ${cell(acceptanceCase?.title ?? '')} | **${cell(statusLabel(result))}** | ${result.mapping} | ${cell(brief(evidence, 3)) || '—'} | ${cell(note.filter((part) => part.length > 0).join('；')) || '—'} |`,
     );
   }
   lines.push('');
 
-  lines.push('## 3. UNVERIFIED 明细');
+  lines.push('## 3. 已登记豁免（ACCEPTED）明细');
   lines.push('');
-  if (unverified.length === 0) {
-    lines.push('无。');
+  if (accepted.length === 0) {
+    lines.push('无：本次没有任何 AC 依赖已登记豁免。');
     lines.push('');
   } else {
-    for (const result of unverified) {
+    lines.push('| AC | 标题 | 未验证状态 | 登记缺口 | 豁免条件 | 决定记录 |');
+    lines.push('|---|---|---|---|---|---|');
+    for (const result of accepted) {
+      const acceptanceCase = byId.get(result.id);
+      const registration = RESIDUAL_GAPS[result.id];
+      lines.push(
+        `| ${result.id} | ${cell(acceptanceCase?.title ?? '')} | ${result.status} | ${cell(result.gap ?? '')} | \`${cell(registration?.condition ?? '')}\` | ${cell(result.decision ?? registration?.decision ?? '')} |`,
+      );
+    }
+    lines.push('');
+    lines.push('逐条 Given/When/Then 与原因：');
+    lines.push('');
+    for (const result of accepted) {
       const acceptanceCase = byId.get(result.id);
       lines.push(`### ${result.id} ${acceptanceCase?.title ?? ''}`);
       lines.push('');
@@ -156,14 +190,31 @@ export function renderAcceptanceReport(input) {
       lines.push(`- Given：${acceptanceCase?.given ?? ''}`);
       lines.push(`- When：${acceptanceCase?.when ?? ''}`);
       lines.push(`- Then：${acceptanceCase?.then ?? ''}`);
-      lines.push(`- 原因：${result.reason ?? '未说明'}`);
       lines.push(`- 证据提示：${acceptanceCase?.evidence ?? ''}`);
-      if (result.residual !== null) lines.push(`- 已知残余：${result.residual}`);
+      lines.push(`- 已执行证据：${brief(result.evidence.map(evidenceLabel), 6) || '无'}`);
+      lines.push(`- 未执行部分（登记缺口）：${result.gap ?? '未登记'}`);
+      lines.push(`- 豁免条件与决定：${result.decision ?? '未登记'}`);
+      for (const drill of result.drills) {
+        lines.push(`- 演练 ${drill.tool}：**${drill.status}** — ${cell(drill.evidence)}`);
+      }
       lines.push('');
     }
   }
 
-  lines.push('## 4. FAIL 明细');
+  lines.push('## 4. 未登记的未验证项（fail-closed）');
+  lines.push('');
+  if (unaccepted.length === 0) {
+    lines.push('无：每个 UNVERIFIED/MISSING 都在登记表中且条件成立。');
+  } else {
+    lines.push('| AC | 状态 | 原因 |');
+    lines.push('|---|---|---|');
+    for (const entry of unaccepted) {
+      lines.push(`| ${entry.id} | ${entry.status} | ${cell(entry.why)} |`);
+    }
+  }
+  lines.push('');
+
+  lines.push('## 5. FAIL 明细');
   lines.push('');
   if (failed.length === 0) {
     lines.push('无。');
@@ -183,21 +234,7 @@ export function renderAcceptanceReport(input) {
     }
   }
 
-  lines.push('## 5. 已执行证据之外仍未覆盖的部分');
-  lines.push('');
-  const withResiduals = results.filter((result) => result.residual !== null);
-  if (withResiduals.length === 0) {
-    lines.push('无。');
-  } else {
-    lines.push('| AC | 状态 | 未执行部分 |');
-    lines.push('|---|---|---|');
-    for (const result of withResiduals) {
-      lines.push(`| ${result.id} | ${result.status} | ${cell(result.residual)} |`);
-    }
-  }
-  lines.push('');
-
-  lines.push('## 6. 映射审计');
+  lines.push('## 6. 映射与证据审计');
   lines.push('');
   lines.push('### 6.1 映射来源统计');
   lines.push('');
@@ -208,25 +245,24 @@ export function renderAcceptanceReport(input) {
   lines.push('| 映射来源 | AC 数 | 含义 |');
   lines.push('|---|---|---|');
   lines.push(
-    `| test-name | ${mappingCounts.get('test-name') ?? 0} | 用例名直接含 AC 编号（最强证据） |`,
+    `| test-name | ${mappingCounts.get('test-name') ?? 0} | 用例名（含 describe 链）直接含 AC 编号，逐用例绑定 |`,
   );
   lines.push(
-    `| file | ${mappingCounts.get('file') ?? 0} | 测试文件提到该 AC 但用例名未写；该文件全部用例为证据 |`,
+    `| curated | ${mappingCounts.get('curated') ?? 0} | 人工登记到具体用例（文件 :: 用例名），逐条解析，缺一条即 FAIL |`,
   );
-  lines.push(
-    `| supplemental | ${mappingCounts.get('supplemental') ?? 0} | 经 WP 记录核对的人工映射，逐条解析到已执行用例 |`,
-  );
-  lines.push(`| none | ${mappingCounts.get('none') ?? 0} | 无提交测试证据，依赖演练或环境 |`);
+  lines.push(`| none | ${mappingCounts.get('none') ?? 0} | 无提交测试证据，依赖演练或已登记豁免 |`);
   lines.push('');
-  lines.push('### 6.2 人工映射解析结果（必须全部 resolved）');
+  lines.push('### 6.2 人工映射解析结果（必须全部 resolved，且无 stale）');
   lines.push('');
-  lines.push('| AC | 条目数 | 已解析 |');
-  lines.push('|---|---|---|');
-  for (const entry of diagnostics.supplemental) {
-    lines.push(`| ${entry.id} | ${entry.entries} | ${entry.resolved ? '是' : '否（FAIL）'} |`);
+  lines.push('| AC | 条目数 | 已解析 | 过期条目 |');
+  lines.push('|---|---|---|---|');
+  for (const entry of diagnostics.curated) {
+    lines.push(
+      `| ${entry.id} | ${entry.entries} | ${entry.resolved ? '是' : '否（FAIL）'} | ${entry.stale} |`,
+    );
   }
   lines.push('');
-  lines.push('### 6.3 未执行但含 AC 证据的测试文件');
+  lines.push('### 6.3 未执行但含 AC 证据的测试文件（fail-closed）');
   lines.push('');
   if (diagnostics.unexecuted.length === 0) {
     lines.push('无：全部含 AC 证据的测试文件都出现在 Vitest 报告中。');
@@ -254,25 +290,26 @@ export function renderAcceptanceReport(input) {
     }
   }
   lines.push('');
-  if (externalDrills.length > 0) {
-    lines.push('### 6.6 演练结果接入');
-    lines.push('');
-    lines.push('| AC | 演练状态 | 来源 | 说明 |');
+  lines.push('### 6.6 每个 AC 的全部演练来源（不做覆盖式合并）');
+  lines.push('');
+  if (withDrills.length === 0) {
+    lines.push('无：本次没有演练报告。');
+  } else {
+    lines.push('| AC | 演练来源 | 状态 | 证据 |');
     lines.push('|---|---|---|---|');
-    for (const result of externalDrills) {
-      lines.push(
-        `| ${result.id} | ${result.drill.status} | \`${result.drill.sourceFile}\` | ${cell(result.drill.evidence)} |`,
-      );
+    for (const result of withDrills) {
+      for (const drill of result.drills) {
+        lines.push(
+          `| ${result.id} | \`${cell(drill.tool)}\` | ${drill.status} | ${cell(drill.evidence)} |`,
+        );
+      }
     }
     lines.push('');
     lines.push(
-      '演练报告格式：`{ "results": [ { "ac": "AC-002", "status": "PASS|FAIL|UNVERIFIED", "evidence": "…" } ] }`；',
+      '合并规则：**最弱一环胜出**（FAIL > UNVERIFIED > PASS）。演练 UNVERIFIED 会把同一 AC 的套件 PASS 降级，因为该 AC 的完整 Given/When/Then 并未全部执行。',
     );
-    lines.push(
-      '通过 `--drill-report <path>` 或 `AGENTDEV_DRILL_REPORTS` 传入，也会自动读取 `.agentdev/work/WP-10/drills/*.json`。',
-    );
-    lines.push('');
   }
+  lines.push('');
 
   lines.push('## 7. 机器可读结果');
   lines.push('');
@@ -282,13 +319,18 @@ export function renderAcceptanceReport(input) {
       {
         generatedAt: meta.generatedAt,
         gitHead: meta.gitHead,
+        codeDigest: meta.binding.codeDigest,
+        drillsExecuted: meta.drillsExecuted,
         exitCode,
         counts,
+        problems,
         results: results.map((result) => ({
           id: result.id,
           status: result.status,
+          accepted: result.accepted === true,
           mapping: result.mapping,
           evidence: result.evidence.map(evidenceLabel),
+          drills: result.drills.map((drill) => ({ tool: drill.tool, status: drill.status })),
           reason: result.reason,
         })),
       },
@@ -310,15 +352,17 @@ export function renderConsoleTable(results, repoRoot) {
   for (const result of results) {
     const evidence = result.evidence.map(evidenceLabel);
     let note = '';
-    if (result.status === 'UNVERIFIED') note = (result.reason ?? '').slice(0, 90);
-    else if (result.status === 'PASS' && result.residual !== null) note = 'residual';
+    if (result.accepted === true) note = 'accepted gap';
+    else if (result.status === 'UNVERIFIED') note = (result.reason ?? '').slice(0, 90);
+    else if (result.status === 'MISSING') note = (result.reason ?? 'no evidence').slice(0, 90);
+    const drillNote = result.drills.map((drill) => `${drill.status}`).join('/');
     lines.push(
       [
         result.id.padEnd(width),
-        result.status.padEnd(10),
-        result.mapping.padEnd(12),
+        (result.accepted === true ? `${result.status}*` : result.status).padEnd(12),
+        result.mapping.padEnd(10),
         brief(evidence, 2) || '—',
-        note,
+        note.length > 0 ? note : drillNote,
       ].join('  '),
     );
   }

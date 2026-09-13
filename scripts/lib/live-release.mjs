@@ -7,11 +7,21 @@
  * output tail. Nothing is summarised from memory: every row is a spawn result.
  *
  * The drill also carries the **release-readiness check** integrated into the same run
- * (there is no separate command): it fails (non-zero) when any documented command
- * exited non-zero or when the acceptance aggregation reports any `FAIL` AC, and it
- * prints the final summary either way. `UNVERIFIED` ACs do not fail readiness by
- * themselves — they are the honest record of what this environment could not supply —
- * but a missing/unrun acceptance report does.
+ * (there is no separate command). It reads the acceptance result **of this run** — the
+ * `acceptance-results.json` sidecar written by the `pnpm test:acceptance` command above,
+ * only when its binding matches the current code tree, it was produced inside this run
+ * and it comes from a run that really executed the release drills (WP-10 review round 1,
+ * W10R1-06/07). Readiness then fails when:
+ *
+ * - any documented command exited non-zero;
+ * - the acceptance result is missing, stale, unbound or drill-less;
+ * - any AC is `FAIL` or `MISSING`;
+ * - any AC is `UNVERIFIED` without a registered, condition-checked accepted gap.
+ *
+ * Accepted gaps (the browser half this release deliberately does not ship, the real
+ * Provider when the environment has none) do not block readiness, but they are printed
+ * as an explicit `READY (ACCEPTED RISK n)` verdict with the list, never folded into a
+ * plain `READY` (W10R1-08).
  *
  * The deployment notes are generated with the exact commands this release actually
  * implements. Commands the product does not ship yet are marked `UNVERIFIED` with the
@@ -20,6 +30,9 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+
+import { computeBinding } from './acceptance-binding.mjs';
+import { providerConfigured } from './drill-acs.mjs';
 
 /** Where the drill writes its record, relative to the repository root. */
 export const RELEASE_REPORT = join('.agentdev', 'work', 'WP-10', 'release.md');
@@ -146,25 +159,67 @@ function runCommand(entry, repoRoot) {
 }
 
 /**
- * Reads the acceptance aggregation counts out of the command output and the report.
+ * Reads the acceptance result of *this* run from its machine-readable sidecar.
  *
- * @returns {{ total: number|null, expected: number|null, pass: number|null, fail: number|null, unverified: number|null }}
+ * The sidecar is only trusted when it was produced inside this release run
+ * (`generatedAt >= startedAt`), carries a binding that matches the current code tree,
+ * and comes from a run that executed the release drills. A stale or forged report is
+ * reported as unavailable instead of being summarised (WP-10 review round 1,
+ * W10R1-06/07).
+ *
+ * @param {string} repoRoot
+ * @param {string} startedAt ISO timestamp the release drill started at
+ * @returns {{ available: boolean, why: string|null, total: number|null, pass: number|null,
+ *             accepted: number|null, fail: number|null, missing: number|null,
+ *             drillsExecuted: boolean, acceptedGaps: Array<{id: string, decision: string|null, gap: string|null}> }}
  */
-export function readAcceptanceCounts(repoRoot, output) {
-  const reportPath = join(repoRoot, '.agentdev', 'work', 'WP-10', 'acceptance.md');
-  const report = existsSync(reportPath) ? readFileSync(reportPath, 'utf8') : '';
-  const pattern =
-    /AC 统计：\*\*共 (\d+)\*\*（期望 (\d+)） → \*\*PASS (\d+) \/ FAIL (\d+) \/ UNVERIFIED (\d+)\*\*/u;
-  const match = pattern.exec(report) ?? pattern.exec(String(output ?? ''));
-  if (match === null) {
-    return { total: null, expected: null, pass: null, fail: null, unverified: null };
+export function readAcceptanceResult(repoRoot, startedAt) {
+  const unavailable = (why) => ({
+    available: false,
+    why,
+    total: null,
+    pass: null,
+    accepted: null,
+    fail: null,
+    missing: null,
+    drillsExecuted: false,
+    acceptedGaps: [],
+  });
+  const sidecar = join(repoRoot, '.agentdev', 'work', 'WP-10', 'acceptance-results.json');
+  if (!existsSync(sidecar)) return unavailable('本次运行没有产出 acceptance-results.json');
+  let payload;
+  try {
+    payload = JSON.parse(readFileSync(sidecar, 'utf8'));
+  } catch (error) {
+    return unavailable(`acceptance-results.json 无法解析：${error.message}`);
   }
+  if (typeof payload.generatedAt !== 'string' || payload.generatedAt < startedAt) {
+    return unavailable(
+      `acceptance-results.json 生成于 ${String(payload.generatedAt)}，早于本次发布演练开始时间 ${startedAt}（拒绝使用旧结果）`,
+    );
+  }
+  const binding = computeBinding(repoRoot);
+  if (payload.codeDigest !== binding.codeDigest) {
+    return unavailable(
+      `acceptance-results.json 的 codeDigest ${String(payload.codeDigest)} 与当前代码树 ${binding.codeDigest} 不一致`,
+    );
+  }
+  if (payload.drillsExecuted !== true) {
+    return unavailable('acceptance-results.json 来自未执行发布演练的聚合运行（--no-drills）');
+  }
+  const results = Array.isArray(payload.results) ? payload.results : [];
   return {
-    total: Number(match[1]),
-    expected: Number(match[2]),
-    pass: Number(match[3]),
-    fail: Number(match[4]),
-    unverified: Number(match[5]),
+    available: true,
+    why: null,
+    total: results.length,
+    pass: payload.counts?.PASS ?? null,
+    accepted: payload.counts?.ACCEPTED ?? null,
+    fail: payload.counts?.FAIL ?? null,
+    missing: payload.counts?.MISSING ?? null,
+    drillsExecuted: true,
+    acceptedGaps: results
+      .filter((entry) => entry.accepted === true)
+      .map((entry) => ({ id: entry.id, decision: entry.decision ?? null, gap: entry.gap ?? null })),
   };
 }
 
@@ -237,23 +292,39 @@ export async function runReleaseDrill(options) {
     );
   }
 
-  const acceptanceRun = runs.find((run) => run.id === 'test:acceptance');
-  const counts = readAcceptanceCounts(repoRoot, acceptanceRun?.output ?? '');
+  const counts = readAcceptanceResult(repoRoot, startedAt);
   const doctor = runDoctor(repoRoot);
   process.stdout.write(`release: pnpm doctor exit=${String(doctor.exitCode)}\n`);
 
   const failedCommands = runs.filter((run) => run.exitCode !== 0);
   const readinessProblems = [];
   for (const run of failedCommands) {
+    if (run.id === 'test:live' && !providerConfigured()) {
+      // Exit 3 is `test:live`'s documented "no real Provider configured" refusal. It is
+      // the registered AC-001/007/010/037/041 gap (plan.md §2 D2), not a code failure —
+      // but it does mean the Provider longitudinal path is unverified, so the release is
+      // not fully verified either. Reported as blocking *and* as the registered gap.
+      readinessProblems.push(
+        `真实 Provider 纵向验证未执行：\`pnpm test:live\` exit ${String(run.exitCode)}（AGENTDEV_PROVIDER_* 未配置；已登记豁免 AC-001/007/010/037/041，决定见 WP-10 plan.md §2 D2）`,
+      );
+      continue;
+    }
     readinessProblems.push(`命令失败：${run.command}（exit ${String(run.exitCode)}）`);
   }
-  if (counts.fail !== null && counts.fail > 0) {
-    readinessProblems.push(`验收存在 FAIL：${String(counts.fail)} 个 AC`);
-  }
-  if (counts.fail === null) {
-    readinessProblems.push('没有可解析的验收统计（test:acceptance 未产出报告）');
+  if (!counts.available) {
+    readinessProblems.push(`无法采用本次运行的验收结果：${String(counts.why)}`);
+  } else {
+    if ((counts.fail ?? 0) > 0)
+      readinessProblems.push(`验收存在 FAIL：${String(counts.fail)} 个 AC`);
+    if ((counts.missing ?? 0) > 0)
+      readinessProblems.push(`验收存在 MISSING：${String(counts.missing)} 个 AC 没有任何结果`);
   }
   const ready = readinessProblems.length === 0;
+  const verdict = !ready
+    ? 'NOT READY'
+    : (counts.accepted ?? 0) > 0
+      ? `READY (ACCEPTED RISK ${String(counts.accepted)})`
+      : 'READY';
 
   const gitHead = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' });
   const lines = [];
@@ -285,29 +356,42 @@ export async function runReleaseDrill(options) {
   lines.push('');
   lines.push('## 2. 验收聚合');
   lines.push('');
-  if (counts.fail === null) {
-    lines.push('无法解析验收统计：`pnpm test:acceptance` 没有产出可解析的报告（按未就绪处理）。');
+  if (!counts.available) {
+    lines.push(`无法采用本次运行的验收结果：${String(counts.why)}（按未就绪处理）。`);
   } else {
     lines.push(
-      `- AC 统计：**共 ${String(counts.total)}**（期望 ${String(counts.expected)}） → **PASS ${String(counts.pass)} / FAIL ${String(counts.fail)} / UNVERIFIED ${String(counts.unverified)}**`,
+      `- AC 统计：**共 ${String(counts.total)}**（期望 94） → **PASS ${String(counts.pass)} / ACCEPTED ${String(counts.accepted)} / FAIL ${String(counts.fail)} / MISSING ${String(counts.missing)}**`,
     );
     lines.push(
-      '- 详细逐 AC 结果见 `.agentdev/work/WP-10/acceptance.md`；UNVERIFIED 条目是环境无法提供的输入，已在该报告逐条给出原因。',
+      '- 来源：本次运行的 `.agentdev/work/WP-10/acceptance-results.json`（已校验 `codeDigest`、生成时间与「本次运行内执行了发布演练」）。',
     );
+    lines.push('- 详细逐 AC 结果见 `.agentdev/work/WP-10/acceptance.md`。');
+    if (counts.acceptedGaps.length > 0) {
+      lines.push('');
+      lines.push('| 已登记豁免 AC | 未执行部分 | 决定记录 |');
+      lines.push('|---|---|---|');
+      for (const gap of counts.acceptedGaps) {
+        lines.push(
+          `| ${gap.id} | ${String(gap.gap ?? '').replace(/\|/gu, '\\|')} | ${String(gap.decision ?? '').replace(/\|/gu, '\\|')} |`,
+        );
+      }
+    }
   }
   lines.push('');
   lines.push('## 3. 发布就绪检查（本演练内置，无独立命令）');
   lines.push('');
-  lines.push(`- 结论：**${ready ? 'READY' : 'NOT READY'}**`);
+  lines.push(`- 结论：**${verdict}**`);
   if (ready) {
-    lines.push('- 所有文档化工程命令退出 0，且验收聚合没有 FAIL。');
+    lines.push(
+      '- 所有文档化工程命令退出 0；本次运行的验收聚合没有 FAIL、没有 MISSING、没有未登记的 UNVERIFIED。',
+    );
+    if ((counts.accepted ?? 0) > 0) {
+      lines.push(
+        `- **已登记豁免 ${String(counts.accepted)} 个 AC**（完整 Given/When/Then 未全部执行，缺口与决定记录见 §2 表）：这些缺口不阻断就绪，但发布记录必须随版本保留；本结论不声称它们已被验证。`,
+      );
+    }
   } else {
     for (const problem of readinessProblems) lines.push(`- ${problem}`);
-  }
-  if (counts.unverified !== null && counts.unverified > 0) {
-    lines.push(
-      `- 提示：${String(counts.unverified)} 个 AC 为 UNVERIFIED（缺少真实浏览器 / 真实 Provider 等环境输入），未计入失败，但发布记录必须保留。`,
-    );
   }
   lines.push('');
   lines.push('## 4. 失败命令原始输出');
@@ -344,10 +428,10 @@ export async function runReleaseDrill(options) {
 
   process.stdout.write('\n');
   process.stdout.write(
-    `release: ${ready ? 'READY' : 'NOT READY'} — commands ${String(runs.length - failedCommands.length)}/${String(runs.length)} ok` +
-      (counts.fail === null
-        ? '; acceptance counts unavailable'
-        : `; AC PASS ${String(counts.pass)} / FAIL ${String(counts.fail)} / UNVERIFIED ${String(counts.unverified)}`) +
+    `release: ${verdict} — commands ${String(runs.length - failedCommands.length)}/${String(runs.length)} ok` +
+      (counts.available
+        ? `; AC PASS ${String(counts.pass)} / ACCEPTED ${String(counts.accepted)} / FAIL ${String(counts.fail)} / MISSING ${String(counts.missing)}`
+        : '; acceptance result unavailable') +
       '\n',
   );
   if (!ready) {

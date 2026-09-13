@@ -5,8 +5,11 @@
  *
  * - `.agentdev/work/WP-10/live-results.json` — the drill-report shape
  *   `scripts/lib/acceptance-registry.mjs` parses (`{results:[{ac,status,evidence}]}`),
- *   which `pnpm test:acceptance` merges. An UNVERIFIED row can only refine the reason
- *   of an AC that no executed evidence covers; it can never downgrade a suite PASS.
+ *   which `pnpm test:acceptance` merges. The merge is *weakest link wins*: an
+ *   UNVERIFIED row keeps a suite PASS from being reported as a full PASS (the
+ *   real-Provider half of the AC did not run), and a FAIL row fails the AC outright.
+ *   The report also carries the `binding` (git HEAD/tree and code digest) of the tree
+ *   it ran against; the aggregator refuses a report whose binding does not match.
  * - `.agentdev/work/WP-10/live.md` — the same run rendered as the WP-10 T3 record,
  *   with the raw provider metadata, per-check evidence and the exact UNVERIFIED
  *   reason.
@@ -44,6 +47,8 @@ export function liveDrillReport(checks, meta = {}) {
     generatedAt: new Date().toISOString(),
     repoRoot: meta.repoRoot,
     gitHead: meta.gitHead,
+    binding: meta.binding ?? null,
+    nonce: meta.nonce ?? null,
     exitCode: meta.exitCode,
     provider: {
       configured: meta.providerConfigured === true,
@@ -57,6 +62,7 @@ export function liveDrillReport(checks, meta = {}) {
       ac: entry.ac,
       status: entry.status,
       evidence: shorten(entry.evidence, 900),
+      checks: entry.checks,
     })),
     checks: checks.records.map((record) => ({
       name: record.name,

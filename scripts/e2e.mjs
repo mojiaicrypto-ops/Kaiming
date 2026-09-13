@@ -26,11 +26,19 @@
  * `.agentdev/work/WP-10/e2e-results.json` (the drill report `pnpm test:acceptance`
  * merges) and `.agentdev/work/WP-10/e2e.md` (the WP record).
  *
- * Usage: node scripts/e2e.mjs [--no-write] [--keep-temp] [--help]
+ * Usage: node scripts/e2e.mjs [--no-write] [--keep-temp] [--drill-out <path>] [--help]
  */
 import { createServer } from 'node:http';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { join } from 'node:path';
+import { computeBinding } from './lib/acceptance-binding.mjs';
+import {
+  E2E_BROWSER_ISOLATION_ACS,
+  E2E_BROWSER_UPLOAD_ACS,
+  E2E_BROWSER_VIEWPORT_ACS,
+  E2E_PROVIDER_ACS,
+} from './lib/drill-acs.mjs';
 import { CheckFailure, CheckList, drillReport, renderE2eRecord } from './lib/e2e-checks.mjs';
 import {
   REPO_ROOT,
@@ -71,9 +79,11 @@ function usage() {
   return [
     'Usage: node scripts/e2e.mjs [options]',
     '',
-    '  --no-write    print the checks only; do not write the WP-10 reports',
-    '  --keep-temp   keep the temporary project/state directories for forensics',
-    '  --help        show this help',
+    '  --no-write        print the checks only; do not write the WP-10 reports',
+    '  --keep-temp       keep the temporary project/state directories for forensics',
+    '  --drill-out <p>   write the drill JSON to <p> instead of the WP-10 records',
+    '                    (used by scripts/acceptance.mjs, which runs this drill itself)',
+    '  --help            show this help',
     '',
     'Environment: none. The drill is offline by design; the real Provider drill is',
     '`pnpm test:live` with AGENTDEV_PROVIDER_BASE_URL/MODEL/SECRET.',
@@ -81,11 +91,16 @@ function usage() {
 }
 
 function parseArgs(argv) {
-  const options = { write: true, keepTemp: false, help: false };
-  for (const arg of argv) {
+  const options = { write: true, keepTemp: false, drillOut: null, help: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
     if (arg === '--no-write') options.write = false;
     else if (arg === '--keep-temp') options.keepTemp = true;
-    else if (arg === '--help' || arg === '-h') options.help = true;
+    else if (arg === '--drill-out') {
+      index += 1;
+      if (index >= argv.length) throw new Error('--drill-out requires a path');
+      options.drillOut = argv[index];
+    } else if (arg === '--help' || arg === '-h') options.help = true;
     else throw new Error(`unknown option: ${arg}`);
   }
   return options;
@@ -155,6 +170,8 @@ async function main(options) {
   const meta = {
     repoRoot: REPO_ROOT,
     gitHead: revisionOf(REPO_ROOT) || 'unavailable',
+    binding: computeBinding(REPO_ROOT),
+    providerConfigured: false,
     exitCode: 1,
     residuals: [
       '真实浏览器未执行（焦点遍历、像素级布局、脚本隔离攻击样例）：产品决定不引入 Playwright 或浏览器下载；浏览器级 AC-002/AC-052/AC-071/AC-073/AC-076 在演练报告中标为 UNVERIFIED。',
@@ -183,10 +200,19 @@ async function main(options) {
   const report = drillReport(checks, {
     repoRoot: REPO_ROOT,
     gitHead: meta.gitHead,
+    binding: meta.binding,
+    nonce: process.env.AGENTDEV_DRILL_NONCE ?? null,
+    providerConfigured: false,
     exitCode: meta.exitCode,
   });
 
-  if (options.write) {
+  if (options.drillOut !== null) {
+    // In-run evidence for scripts/acceptance.mjs: the JSON goes to the nonce path the
+    // aggregator created and the WP-10 records stay untouched.
+    mkdirSync(dirname(options.drillOut), { recursive: true });
+    writeFileSync(options.drillOut, `${JSON.stringify(report, null, 2)}\n`);
+    process.stdout.write(`e2e: wrote drill report to ${options.drillOut}\n`);
+  } else if (options.write) {
     mkdirSync(REPORT_DIR, { recursive: true });
     writeFileSync(join(REPORT_DIR, 'e2e-results.json'), `${JSON.stringify(report, null, 2)}\n`);
     writeFileSync(join(REPORT_DIR, 'e2e.md'), renderE2eRecord(checks, meta));
@@ -2207,22 +2233,22 @@ async function runChecks({ checks, harness, product }) {
 
   checks.unverified(
     'browser.rendering-and-isolation',
-    ['AC-002', 'AC-052'],
+    E2E_BROWSER_ISOLATION_ACS,
     'AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境（无头或真实）；本仓库按产品决定不引入 Playwright 或浏览器下载，因此这两项在本演练中未执行（已提交用例覆盖 CSP/sandbox 预览头、一次性下载 token 与截断）',
   );
   checks.unverified(
     'browser.viewport-and-keyboard',
-    ['AC-071', 'AC-073'],
+    E2E_BROWSER_VIEWPORT_ACS,
     'AC-071 的 viewport 布局/焦点恢复与 AC-073 的键盘遍历/ARIA 实机朗读需要真实浏览器；本演练验证了三态面板标记与语言字典，未执行像素级与实机键盘检查',
   );
   checks.unverified(
     'browser.upload-client-hints',
-    ['AC-076'],
+    E2E_BROWSER_UPLOAD_ACS,
     'AC-076 的服务端拒绝（超类型 mime 无残留引用）已在本演练中执行并作为 attachment.upload-first-message 的证据；客户端提示文案需要浏览器执行，未验证',
   );
   checks.unverified(
     'provider.fact-and-unknown',
-    ['AC-001'],
+    E2E_PROVIDER_ACS,
     'AC-001 的“区分事实/未知”需要真实 Provider 纵向演练（pnpm test:live 与 AGENTDEV_PROVIDER_*）；本演练离线运行，Provider 桩被断言零调用',
   );
 }

@@ -1,8 +1,18 @@
 {
   "tool": "pnpm test:live",
-  "generatedAt": "2026-09-13T13:33:09.312Z",
+  "generatedAt": "2026-09-13T14:51:07.143Z",
   "repoRoot": "/Users/huyaohua/huyh/work/aigrouptool",
-  "gitHead": "508bfaf70cdf4368205382200fc82584d78977fd",
+  "gitHead": "0aff531d6dd8c08e88ba99aea455db1c32f809fb",
+  "binding": {
+    "gitHead": "0aff531d6dd8c08e88ba99aea455db1c32f809fb",
+    "gitTree": "103baf68091cbc19dbb1f132d3f3cd2f945fbd9c",
+    "codeDigest": "sha256:255b4fb90330e365770551bbea93b6d407e62c3dea2305c3d59b415087450f1e",
+    "codeFiles": 249,
+    "dirty": true,
+    "generatedAt": "2026-09-13T14:51:07.142Z",
+    "nodeVersion": "v24.8.0"
+  },
+  "nonce": null,
   "exitCode": 3,
   "provider": {
     "configured": false,
@@ -16,27 +26,42 @@
     {
       "ac": "AC-001",
       "status": "UNVERIFIED",
-      "evidence": "drill.html-explanation: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)"
+      "evidence": "drill.html-explanation: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)",
+      "checks": [
+        "drill.html-explanation"
+      ]
     },
     {
       "ac": "AC-007",
       "status": "UNVERIFIED",
-      "evidence": "drill.l1-typo: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)"
+      "evidence": "drill.l1-typo: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)",
+      "checks": [
+        "drill.l1-typo"
+      ]
     },
     {
       "ac": "AC-010",
       "status": "UNVERIFIED",
-      "evidence": "drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)"
+      "evidence": "drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)",
+      "checks": [
+        "drill.l2-delivery"
+      ]
     },
     {
       "ac": "AC-037",
       "status": "UNVERIFIED",
-      "evidence": "drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)"
+      "evidence": "drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)",
+      "checks": [
+        "drill.l2-delivery"
+      ]
     },
     {
       "ac": "AC-041",
       "status": "UNVERIFIED",
-      "evidence": "drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)"
+      "evidence": "drill.l2-delivery: UNVERIFIED: real Provider not configured (set AGENTDEV_PROVIDER_BASE_URL, AGENTDEV_PROVIDER_MODEL, AGENTDEV_PROVIDER_SECRET)",
+      "checks": [
+        "drill.l2-delivery"
+      ]
     }
   ],
   "checks": [

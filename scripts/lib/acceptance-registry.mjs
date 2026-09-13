@@ -6,16 +6,22 @@
  * turns that document into a machine-checked registry and holds the two mapping aids
  * the aggregator needs when the committed suites do not spell an AC id in a test name:
  *
- * 1. `SUPPLEMENTAL_EVIDENCE` — committed test cases that prove a specific AC without
+ * 1. `CURATED_EVIDENCE` — committed test cases that prove a specific AC without
  *    naming it, cross-checked against the owning work package records. Every entry is
  *    resolved against the executed Vitest report; an unresolved entry fails closed.
- * 2. `DRILL_DEPENDENCIES` / `KNOWN_RESIDUALS` — the parts of an AC that only a release
- *    drill (real browser, real Provider, Docker) can execute, so the report can state
- *    precisely what remains UNVERIFIED instead of over-claiming.
+ *    There is deliberately **no** file-level mapping any more: WP-10 review round 1
+ *    (W10R1-04) showed that mapping every executed case of a file to one AC let an
+ *    unrelated case in the same file stand in for a deleted key case.
+ * 2. `RESIDUAL_GAPS` (`./drill-acs.mjs`) — the accepted gaps: the parts of an AC that
+ *    only a release drill (real browser, real Provider, distinct Review/Test model) can
+ *    execute, with the condition that makes the gap tolerable and the decision record
+ *    that authorises it.
  *
  * Nothing here decides PASS: it only describes how evidence is found. The executed
  * test result is always the authority.
  */
+
+import { RESIDUAL_GAPS } from './drill-acs.mjs';
 
 /** Path of the canonical acceptance catalog, relative to the repository root. */
 export const ACCEPTANCE_DOC = 'docs/delivery/acceptance.md';
@@ -158,12 +164,13 @@ export function parseAcceptanceDoc(markdown) {
 }
 
 /**
- * Committed test cases that prove an AC without carrying its id in the test name or
- * a file-level AC comment. Each entry names the work package that owns the claim so a
- * reviewer can audit why the mapping is legitimate. The aggregator requires every
- * entry to resolve to an executed Vitest case; an unresolved entry is a hard failure.
+ * Committed test cases that prove an AC without carrying its id in the test name.
+ *
+ * Each entry names the work package that owns the claim so a reviewer can audit why the
+ * mapping is legitimate. The aggregator requires **every** entry to resolve to an
+ * executed Vitest case, and a mapped AC is only `PASS` when all of its entries did.
  */
-export const SUPPLEMENTAL_EVIDENCE = Object.freeze({
+export const CURATED_EVIDENCE = Object.freeze({
   'AC-004': [
     {
       file: 'packages/domain/test/domain.test.ts',
@@ -178,6 +185,183 @@ export const SUPPLEMENTAL_EVIDENCE = Object.freeze({
       rationale:
         'questions/advice/statements create no authorizations and leave every Work at level none',
       wpRecord: '.agentdev/work/WP-03/test.md',
+    },
+  ],
+  'AC-011': [
+    {
+      file: 'packages/core/test/delivery.integration.test.ts',
+      title:
+        'requires explicit authorization, rollback, per-item audit and a recovery drill before an L3 migration is implemented (AC-011)',
+      rationale:
+        'the L3 gate refuses the implementation until authorization, rollback plan, per-item audit and recovery evidence exist',
+      wpRecord: '.agentdev/work/WP-06/test.md',
+    },
+    {
+      file: 'packages/storage/test/migrations.integration.test.ts',
+      title: 'migrations rolls a failed migration back and reports its version',
+      rationale:
+        'a real failed migration is rolled back inside its transaction and its version reported',
+      wpRecord: '.agentdev/work/WP-01/test.md',
+    },
+    {
+      file: 'packages/core/test/backup.integration.test.ts',
+      title:
+        'Backup, restore and relocate (AC-064) restores a backup into a new directory with consistent hashes, knowledge and evidence',
+      rationale:
+        'the real recovery drill restores a backup with consistent hashes, knowledge and evidence',
+      wpRecord: '.agentdev/work/WP-08/test.md',
+    },
+  ],
+  'AC-026': [
+    {
+      file: 'packages/workspace/test/scan.test.ts',
+      title:
+        'scanProject budgets stops at 40 body files and reports a partial map with explicit unknowns',
+      rationale:
+        'the bounded investigation stops at the documented budget and names what it did not read',
+      wpRecord: '.agentdev/work/WP-04/test.md',
+    },
+    {
+      file: 'packages/workspace/test/scan.test.ts',
+      title: 'scanProject budgets stops before exceeding 512 KiB of body content',
+      rationale: 'the body budget is a real bound, not a promise',
+      wpRecord: '.agentdev/work/WP-04/test.md',
+    },
+    {
+      file: 'packages/workspace/test/scan.test.ts',
+      title:
+        'scanProject exclusions does not follow symlinks and reports escapes and broken links as unknowns',
+      rationale: 'source/unknown separation: an unreadable path becomes an explicit unknown',
+      wpRecord: '.agentdev/work/WP-04/test.md',
+    },
+    {
+      file: 'packages/workspace/test/scan.test.ts',
+      title:
+        'candidate knowledge generates observed candidate features and documents without touching a delivery ref',
+      rationale:
+        'initialization produces candidate knowledge and never moves code or a delivery ref',
+      wpRecord: '.agentdev/work/WP-04/test.md',
+    },
+    {
+      file: 'packages/workspace/test/scan.test.ts',
+      title:
+        'candidate knowledge records git-unavailable as an unknown instead of claiming a revision',
+      rationale: 'the source revision is reported as unknown rather than invented',
+      wpRecord: '.agentdev/work/WP-04/test.md',
+    },
+    {
+      file: 'packages/workspace/test/scan.test.ts',
+      title: 'file fixtures stay untouched by scanning does not create files while scanning',
+      rationale: 'the investigation does not move or create project files',
+      wpRecord: '.agentdev/work/WP-04/test.md',
+    },
+  ],
+  'AC-027': [
+    {
+      file: 'packages/workspace/test/initialize.test.ts',
+      title: 'no-Git directory returns Blocked with the Git-initialization authorization request',
+      rationale:
+        'a formal write in a directory without Git is blocked behind an explicit Git-initialization authorization',
+      wpRecord: '.agentdev/work/WP-04/test.md',
+    },
+    {
+      file: 'packages/workspace/test/initialize.test.ts',
+      title:
+        'dirty workspace blocks delivery start with a hash report while read-only investigation still works',
+      rationale: 'the read-only question lane still completes while the write lane is blocked',
+      wpRecord: '.agentdev/work/WP-04/test.md',
+    },
+  ],
+  'AC-028': [
+    {
+      file: 'packages/workspace/test/initialize.test.ts',
+      title:
+        'dirty workspace blocks delivery start with a hash report while read-only investigation still works',
+      rationale:
+        'uncommitted user files are preserved and reported as a hash, delivery start is blocked until explicit handling',
+      wpRecord: '.agentdev/work/WP-04/test.md',
+    },
+  ],
+  'AC-065': [
+    {
+      file: 'packages/storage/test/migrations.integration.test.ts',
+      title: 'migrations backs up before pending work and writes a usable copy',
+      rationale: 'a real backup is written before pending migration work',
+      wpRecord: '.agentdev/work/WP-01/test.md',
+    },
+    {
+      file: 'packages/storage/test/migrations.integration.test.ts',
+      title: 'migrations rolls a failed migration back and reports its version',
+      rationale: 'the migration transaction rolls back and reports the failing version',
+      wpRecord: '.agentdev/work/WP-01/test.md',
+    },
+    {
+      file: 'packages/storage/test/migrations.integration.test.ts',
+      title: 'migrations stops on a checksum mismatch instead of starting',
+      rationale: 'a checksum error stops startup instead of migrating',
+      wpRecord: '.agentdev/work/WP-01/test.md',
+    },
+    {
+      file: 'packages/storage/test/migrations.integration.test.ts',
+      title: 'migrations refuses a database written by a newer build',
+      rationale: 'a newer-build database is refused instead of downgraded',
+      wpRecord: '.agentdev/work/WP-01/test.md',
+    },
+    {
+      file: 'packages/storage/test/migrations.integration.test.ts',
+      title: 'migrations is idempotent on the second start',
+      rationale: 'a second start performs no further migration work',
+      wpRecord: '.agentdev/work/WP-01/test.md',
+    },
+    {
+      file: 'packages/storage/test/migrations.integration.test.ts',
+      title: 'migrations applies the core schema and records a checksum',
+      rationale: 'the applied schema is recorded with its checksum',
+      wpRecord: '.agentdev/work/WP-01/test.md',
+    },
+  ],
+  'AC-066': [
+    {
+      file: 'packages/pi-runtime/test/session.integration.test.ts',
+      title: 'Pi session lifecycle creates a session with the configured model and no network',
+      rationale: 'session creation binds the configured model without network use',
+      wpRecord: '.agentdev/work/WP-00/test-report.md',
+    },
+    {
+      file: 'packages/pi-runtime/test/events.test.ts',
+      title: 'SDK event mapping maps assistant text and thinking deltas',
+      rationale: 'streaming deltas map onto the documented events',
+      wpRecord: '.agentdev/work/WP-00/test-report.md',
+    },
+    {
+      file: 'packages/pi-runtime/test/events.test.ts',
+      title: 'SDK event mapping maps tool execution boundaries',
+      rationale: 'tool boundaries map onto the documented events',
+      wpRecord: '.agentdev/work/WP-00/test-report.md',
+    },
+    {
+      file: 'packages/pi-runtime/test/session.integration.test.ts',
+      title: 'Pi session lifecycle subscribes, unsubscribes and disposes',
+      rationale: 'subscription and resource release follow the contract',
+      wpRecord: '.agentdev/work/WP-00/test-report.md',
+    },
+    {
+      file: 'packages/pi-runtime/test/session.integration.test.ts',
+      title: 'Pi session lifecycle aborts an idle session without error',
+      rationale: 'abort is part of the locked contract',
+      wpRecord: '.agentdev/work/WP-00/test-report.md',
+    },
+    {
+      file: 'packages/pi-runtime/test/session.integration.test.ts',
+      title: 'Pi session lifecycle refuses to compact a session that has nothing to compact',
+      rationale: 'compaction refuses an empty compaction instead of corrupting the session',
+      wpRecord: '.agentdev/work/WP-00/test-report.md',
+    },
+    {
+      file: 'packages/pi-runtime/test/session.integration.test.ts',
+      title: 'Pi session lifecycle wires the resume path for a stored session file',
+      rationale: 'session history recovery is wired against the locked SDK',
+      wpRecord: '.agentdev/work/WP-00/test-report.md',
     },
   ],
   'AC-067': [
@@ -256,6 +440,59 @@ export const SUPPLEMENTAL_EVIDENCE = Object.freeze({
       wpRecord: '.agentdev/work/WP-04/test.md',
     },
   ],
+  'AC-092': [
+    {
+      file: 'packages/knowledge/test/requirements-pool.test.ts',
+      title:
+        'importRequirementPool imports a pool, is idempotent, and keeps local and record versions apart',
+      rationale:
+        'a second import writes nothing and the local version stays distinct from recordVersion',
+      wpRecord: '.agentdev/work/WP-04/test.md',
+    },
+    {
+      file: 'packages/knowledge/test/requirements-pool.test.ts',
+      title:
+        'parseRequirementPool keeps valid records visible next to a broken one and never rewrites the files',
+      rationale: 'valid records stay visible beside a conflicted record without rewriting it',
+      wpRecord: '.agentdev/work/WP-04/test.md',
+    },
+    {
+      file: 'packages/knowledge/test/requirements-pool.test.ts',
+      title:
+        'importRequirementPool reports the same recordVersion with different content as a per-record conflict',
+      rationale:
+        'a same-version/different-content record becomes REQUIREMENT_CONFLICT instead of a silent overwrite',
+      wpRecord: '.agentdev/work/WP-04/test.md',
+    },
+    {
+      file: 'packages/knowledge/test/requirements-pool.test.ts',
+      title:
+        'importRequirementPool refuses to overwrite when Git moved but the projection is stale',
+      rationale: 'a stale projection refuses the save instead of overwriting the newer Git record',
+      wpRecord: '.agentdev/work/WP-08/test.md',
+    },
+    {
+      file: 'packages/knowledge/test/requirements-pool.test.ts',
+      title:
+        'importRequirementPool conflicts per record when a local row has no readable Git record',
+      rationale: 'a missing record is reported per record, not deleted',
+      wpRecord: '.agentdev/work/WP-08/test.md',
+    },
+    {
+      file: 'packages/knowledge/test/requirements-pool.test.ts',
+      title:
+        'importRequirementPool reports a duplicate id inside one batch instead of importing either copy',
+      rationale: 'a duplicate id in one batch is reported instead of silently importing one copy',
+      wpRecord: '.agentdev/work/WP-04/test.md',
+    },
+    {
+      file: 'packages/knowledge/test/requirements-pool.test.ts',
+      title:
+        'importRequirementPool clears a conflict after Git is repaired and the record is re-imported',
+      rationale: 'an explicit re-import after the Git repair clears the conflict',
+      wpRecord: '.agentdev/work/WP-08/test.md',
+    },
+  ],
 });
 
 /** Reason prefixes used when an AC cannot be executed in this environment. */
@@ -265,46 +502,6 @@ export const ENVIRONMENT_REASONS = Object.freeze({
   provider:
     '需要真实 Provider 纵向演练（pnpm test:live 及 AGENTDEV_PROVIDER_BASE_URL/MODEL/SECRET）。本环境未配置 Provider，演练未执行',
   generic: '没有任何已提交测试或已运行演练覆盖该 AC；需要相应发布演练或人工环境',
-});
-
-/**
- * ACs whose full Given/When/Then needs an environment this command cannot supply.
- * The aggregator uses the reason only when no executed evidence exists; a drill report
- * (`--drill-report`) overrides it.
- */
-export const DRILL_DEPENDENCIES = Object.freeze({
-  'AC-001': {
-    drill: 'live',
-    reason:
-      'AC-001 的 Then 要求 Chief 区分事实/未知，只能由真实 Provider 的问答演练（pnpm test:live）执行；仓库内没有提交测试覆盖该模型输出，本环境也未配置 AGENTDEV_PROVIDER_*',
-  },
-  'AC-011': {
-    drill: 'live',
-    reason: 'AC-011 的真实数据迁移与回退执行需要发布环境演练；仓库测试只覆盖 L3 结构化证据链',
-  },
-  'AC-043': {
-    drill: 'live',
-    reason: 'AC-043 的真实多 Provider 分派需要 pnpm test:live 与 AGENTDEV_PROVIDER_*',
-  },
-  'AC-066': {
-    drill: 'live',
-    reason: 'AC-066 的真实模型流式事件与会话历史恢复需要 pnpm test:live 与 AGENTDEV_PROVIDER_*',
-  },
-});
-
-/** Parts of an AC that stay unexecuted even when its committed tests pass. */
-export const KNOWN_RESIDUALS = Object.freeze({
-  'AC-001':
-    '离线部分由已提交的只读路由用例覆盖（不建 Requirement、不授权、Work 保持 level none）；模型层“区分事实/未知”未执行',
-  'AC-002':
-    '真实浏览器渲染与隔离未执行；已提交用例覆盖 CSP/sandbox 预览头、一次性下载 token 与截断',
-  'AC-011': '真实迁移/回退输出未执行；已提交用例覆盖 L3 授权、回退与逐项审核的结构化证据',
-  'AC-043': '真实多 Provider 连通未执行；已提交用例覆盖冻结角色配置与模型网关（Provider 桩）',
-  'AC-052': '真实浏览器攻击样例未执行；已提交用例覆盖预览的 CSP/sandbox 隔离策略与无 cookie',
-  'AC-054': '真实无头浏览器断开/重连未执行；已提交用例覆盖 WS 水位续订与后台 Work 继续运行',
-  'AC-066': '真实模型流式增量与会话历史恢复未执行；已提交用例覆盖创建/订阅/abort/压缩/资源契约',
-  'AC-071': '真实 viewport 截图与焦点切换未执行；已提交用例覆盖面板三态恢复与 tab 顺序',
-  'AC-073': '真实浏览器键盘遍历/ARIA 未执行；已提交用例覆盖字典级语言切换与项目内容不翻译',
 });
 
 /** Normalizes a drill status string. Returns null when it is not recognized. */
@@ -349,12 +546,12 @@ export function parseDrillReport(payload, sourceFile) {
       problems.push(`${sourceFile}: unknown drill status "${rawStatus}" for ${id}`);
       return;
     }
-    results.set(id, {
-      status,
-      evidence:
-        typeof evidence === 'string' && evidence.length > 0 ? evidence : '(no evidence text)',
-      sourceFile,
-    });
+    if (typeof evidence !== 'string' || evidence.trim().length === 0) {
+      // Fail closed: a drill row without evidence text proves nothing (W10R1-11).
+      problems.push(`${sourceFile}: drill row for ${id} carries no evidence text (ignored)`);
+      return;
+    }
+    results.set(id, { status, evidence, sourceFile });
   };
 
   if (payload === null || typeof payload !== 'object') {
@@ -395,8 +592,8 @@ export function parseDrillReport(payload, sourceFile) {
  * @param {{ evidence?: string }} acceptanceCase
  */
 export function missingEnvironmentReason(ac, acceptanceCase) {
-  const dependency = DRILL_DEPENDENCIES[ac];
-  if (dependency !== undefined) return dependency.reason;
+  const gap = RESIDUAL_GAPS[ac];
+  if (gap !== undefined) return gap.gap;
   const hint = acceptanceCase?.evidence ?? '';
   if (/浏览器|截图|viewport|a11y/i.test(hint)) return ENVIRONMENT_REASONS.browser;
   if (/Provider|真实模型/.test(hint)) return ENVIRONMENT_REASONS.provider;

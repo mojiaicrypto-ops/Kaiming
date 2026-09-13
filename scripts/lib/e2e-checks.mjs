@@ -8,8 +8,10 @@
  *   the real stack did;
  * - `.agentdev/work/WP-10/e2e-results.json` — the drill report shape
  *   `scripts/lib/acceptance-registry.mjs` parses (`{results:[{ac,status,evidence}]}`),
- *   which `pnpm test:acceptance` merges so a drill PASS closes an AC the offline
- *   suites cannot reach and a drill FAIL overrides a suite PASS;
+ *   which `pnpm test:acceptance` merges. The merge is **weakest link wins**: a drill
+ *   FAIL fails the AC, a drill UNVERIFIED keeps a suite PASS from being reported as a
+ *   full PASS, and only a drill PASS closes an AC the offline suites cannot reach. The
+ *   report also carries the `binding` of the code tree it ran against.
  * - `.agentdev/work/WP-10/e2e.md` — the same run rendered as a WP record.
  *
  * A check is only `PASS` when its body returned evidence; a thrown error is `FAIL`
@@ -27,8 +29,15 @@ export class CheckFailure extends Error {
   }
 }
 
-/** Ordering used when one acceptance id is proved by several checks. */
-const STATUS_RANK = { FAIL: 3, PASS: 2, UNVERIFIED: 1 };
+/**
+ * Ordering used when one acceptance id is touched by several checks.
+ *
+ * The **weakest link wins**: an AC whose browser half this release cannot execute is
+ * `UNVERIFIED` even when another check proved its server half with `PASS`, because the
+ * AC's full Given/When/Then is not verified (WP-10 review round 1, W10R1-03). A `FAIL`
+ * still outranks everything.
+ */
+const STATUS_RANK = { PASS: 1, UNVERIFIED: 2, FAIL: 3 };
 
 function shorten(text, limit) {
   const value = String(text ?? '')
@@ -68,12 +77,18 @@ export class CheckList {
     const startedAt = this.now();
     try {
       const evidence = await body();
+      // Fail closed (W10R1-11): a check that returns no evidence text has not shown
+      // what it observed, so it may never be recorded as a PASS.
+      if (evidence === undefined || evidence === null || String(evidence).trim().length === 0) {
+        throw new Error(
+          'check returned no evidence text; a check without observed evidence fails closed',
+        );
+      }
       const record = {
         name,
         acs: [...acs],
         status: 'PASS',
-        evidence:
-          evidence === undefined || evidence === '' ? '(no evidence text)' : String(evidence),
+        evidence: String(evidence),
         durationMs: this.now() - startedAt,
       };
       this.records.push(record);
@@ -104,6 +119,9 @@ export class CheckList {
 
   /** Records something this environment cannot execute, with the input it lacks. */
   unverified(name, acs, reason) {
+    if (typeof reason !== 'string' || reason.trim().length === 0) {
+      throw new Error(`unverified check ${name} must name the missing input`);
+    }
     const record = {
       name,
       acs: [...acs],
@@ -151,13 +169,17 @@ export class CheckList {
 /** Builds the drill report `pnpm test:acceptance` merges (`e2e-results.json`). */
 export function drillReport(checks, meta = {}) {
   return {
-    tool: 'pnpm test:e2e',
+    tool: meta.tool ?? 'pnpm test:e2e',
     generatedAt: new Date().toISOString(),
     ...meta,
+    // Every report is bound to the code tree it ran against; the acceptance
+    // aggregator recomputes the binding and refuses a report that does not match.
+    binding: meta.binding ?? null,
     results: checks.aggregate().map((entry) => ({
       ac: entry.ac,
       status: entry.status,
       evidence: shorten(entry.evidence, 900),
+      checks: entry.checks,
     })),
     checks: checks.records.map((record) => ({
       name: record.name,

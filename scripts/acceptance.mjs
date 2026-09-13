@@ -8,20 +8,28 @@
  * 1. parses `docs/delivery/acceptance.md` into the AC-001…AC-094 registry and fails
  *    closed when the catalog is incomplete, duplicated or out of range;
  * 2. runs the real `unit` and `integration` Vitest projects and keeps their raw JSON;
- * 3. maps every executed test to the ACs it proves (test name, file comment, curated
- *    WP-record-checked mapping) and derives PASS / FAIL / UNVERIFIED per AC;
- * 4. merges optional release-drill reports (`--drill-report`), because a drill FAIL must
- *    override a suite PASS and a drill PASS must close an AC the offline suite cannot;
- * 5. writes `.agentdev/work/WP-10/acceptance.md` with the raw results and exits non-zero
- *    on any FAIL, any missing AC result, or a suite that did not produce a report.
- *
- * UNVERIFIED is allowed only when it names the missing environment (real Provider,
- * browser or drill) and the AC is registered in the report.
+ * 3. **runs the release drills itself** (`scripts/e2e.mjs`, `scripts/live.mjs`) with a
+ *    nonce `--drill-out` path, so the drill evidence is produced by this run instead of
+ *    read from a repository file a reviewer can edit (WP-10 review round 1, W10R1-01);
+ * 4. maps every executed test to the ACs it proves — by test name, or by an explicit
+ *    curated `{file, title}` entry, never by "the file mentions the id" (W10R1-04);
+ * 5. takes the **weakest link** across all sources per AC: `FAIL` fails it, any
+ *    `UNVERIFIED` keeps a suite `PASS` from being reported as a full pass, and every
+ *    source is listed (W10R1-03/05);
+ * 6. accepts an `UNVERIFIED`/`MISSING` only when it is a **registered accepted gap**
+ *    (`scripts/lib/drill-acs.mjs`) whose condition still holds in this environment;
+ *    an unregistered or no-longer-valid gap is a FAIL (W10R1-02/08);
+ * 7. fails closed on infrastructure problems: a Vitest project with no JSON report, a
+ *    mapped test file that executed zero tests, a failing test mapped to no AC, a drill
+ *    report that is missing/unparsable, or a drill report whose `binding` does not match
+ *    the current code tree;
+ * 8. writes `.agentdev/work/WP-10/acceptance.md` (report) and
+ *    `acceptance-results.json` (machine readable, consumed by the release gate).
  *
  * Usage:
  *   node scripts/acceptance.mjs [--report <path>] [--json <path>]
- *                               [--drill-report <path>]... [--projects unit,integration]
- *                               [--no-write] [--help]
+ *                               [--projects unit,integration]
+ *                               [--no-drills] [--no-write] [--help]
  */
 import { spawnSync } from 'node:child_process';
 import {
@@ -34,42 +42,49 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { computeBinding } from './lib/acceptance-binding.mjs';
+import { runDrills } from './lib/acceptance-drills.mjs';
 import { aggregateAcceptance } from './lib/acceptance-evidence.mjs';
-import {
-  ACCEPTANCE_DOC,
-  EXPECTED_AC_IDS,
-  parseAcceptanceDoc,
-  parseDrillReport,
-} from './lib/acceptance-registry.mjs';
+import { ACCEPTANCE_DOC, EXPECTED_AC_IDS, parseAcceptanceDoc } from './lib/acceptance-registry.mjs';
 import { renderAcceptanceReport, renderConsoleTable } from './lib/acceptance-report.mjs';
+import {
+  RESIDUAL_GAPS,
+  conditionHolds,
+  providerConfigured,
+  reviewModelConfigured,
+} from './lib/drill-acs.mjs';
 
 const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const DEFAULT_REPORT = join(repoRoot, '.agentdev', 'work', 'WP-10', 'acceptance.md');
-const DRILL_DIR = join(repoRoot, '.agentdev', 'work', 'WP-10', 'drills');
+const REPORT_DIR = join(repoRoot, '.agentdev', 'work', 'WP-10');
+const DEFAULT_REPORT = join(REPORT_DIR, 'acceptance.md');
+const DEFAULT_JSON = join(REPORT_DIR, 'acceptance-results.json');
 
 function usage() {
   return [
     'Usage: node scripts/acceptance.mjs [options]',
     '',
     '  --report <path>          markdown output (default .agentdev/work/WP-10/acceptance.md)',
-    '  --json <path>            optional machine-readable sidecar',
-    '  --drill-report <path>    merge a drill report (repeatable)',
-    '  --projects <list>        vitest projects to run (default unit,integration;',
-    '                           a subset leaves unrun ACs FAIL/UNVERIFIED, by design)',
-    '  --no-write               print only, do not write the report',
+    '  --json <path>            machine-readable sidecar (default …/acceptance-results.json)',
+    '  --projects <list>        vitest projects to run (default unit,integration)',
+    '  --no-drills              do not run scripts/e2e.mjs / scripts/live.mjs in this run',
+    '  --no-write               print only, do not write the reports',
     '  --help                   show this help',
+    '',
+    'The release drills run by default so drill evidence is produced by this run.',
+    'There is no option to feed an externally produced drill report: a report is only',
+    "adopted when it carries this run's nonce and matches the current code binding.",
   ].join('\n');
 }
 
 function parseArgs(argv) {
   const options = {
     report: DEFAULT_REPORT,
-    json: null,
-    drillReports: [],
+    json: DEFAULT_JSON,
     projects: ['unit', 'integration'],
+    drills: true,
     write: true,
     help: false,
   };
@@ -82,11 +97,11 @@ function parseArgs(argv) {
     };
     if (arg === '--report') options.report = resolve(repoRoot, next());
     else if (arg === '--json') options.json = resolve(repoRoot, next());
-    else if (arg === '--drill-report') options.drillReports.push(resolve(repoRoot, next()));
     else if (arg === '--projects')
       options.projects = next()
         .split(',')
         .map((name) => name.trim());
+    else if (arg === '--no-drills') options.drills = false;
     else if (arg === '--no-write') options.write = false;
     else if (arg === '--help' || arg === '-h') options.help = true;
     else throw new Error(`unknown option: ${arg}`);
@@ -176,59 +191,6 @@ function dockerAvailable() {
   return probe.status === 0;
 }
 
-function providerConfigured() {
-  return [
-    'AGENTDEV_PROVIDER_BASE_URL',
-    'AGENTDEV_PROVIDER_MODEL',
-    'AGENTDEV_PROVIDER_SECRET',
-  ].every((name) => typeof process.env[name] === 'string' && process.env[name].length > 0);
-}
-
-/** Discovers drill reports from CLI flags, the environment and the WP-10 drill dir. */
-function discoverDrillReports(explicit) {
-  const paths = [...explicit];
-  const fromEnv = process.env.AGENTDEV_DRILL_REPORTS;
-  if (typeof fromEnv === 'string' && fromEnv.length > 0) {
-    for (const part of fromEnv.split(delimiter).join(',').split(',')) {
-      if (part.trim().length > 0) paths.push(resolve(repoRoot, part.trim()));
-    }
-  }
-  if (existsSync(DRILL_DIR)) {
-    for (const entry of readdirSync(DRILL_DIR)) {
-      if (entry.endsWith('.json')) paths.push(join(DRILL_DIR, entry));
-    }
-  }
-  for (const candidate of ['e2e-results.json', 'live-results.json']) {
-    const full = join(repoRoot, '.agentdev', 'work', 'WP-10', candidate);
-    if (existsSync(full)) paths.push(full);
-  }
-  return [...new Set(paths)].sort();
-}
-
-function loadDrillReports(paths) {
-  const results = new Map();
-  const problems = [];
-  const sources = [];
-  for (const path of paths) {
-    if (!existsSync(path)) {
-      problems.push(`drill report not found: ${toRepoPath(path)}`);
-      continue;
-    }
-    let payload;
-    try {
-      payload = JSON.parse(readFileSync(path, 'utf8'));
-    } catch (error) {
-      problems.push(`drill report ${toRepoPath(path)} is not valid JSON: ${error.message}`);
-      continue;
-    }
-    const parsed = parseDrillReport(payload, toRepoPath(path));
-    for (const problem of parsed.problems) problems.push(problem);
-    for (const [id, entry] of parsed.results) results.set(id, entry);
-    sources.push(toRepoPath(path));
-  }
-  return { results, problems, sources };
-}
-
 function main() {
   let options;
   try {
@@ -242,11 +204,15 @@ function main() {
     return 0;
   }
 
+  const binding = computeBinding(repoRoot);
   const docPath = join(repoRoot, ACCEPTANCE_DOC);
   const { cases, problems: registryProblems } = parseAcceptanceDoc(readFileSync(docPath, 'utf8'));
   const runProblems = [...registryProblems];
 
   process.stdout.write(`acceptance: parsed ${cases.length} ACs from ${ACCEPTANCE_DOC}\n`);
+  process.stdout.write(
+    `acceptance: evidence binding ${binding.codeDigest.slice(0, 19)}… (HEAD ${binding.gitHead.slice(0, 7)}, ${String(binding.codeFiles)} code files)\n`,
+  );
   if (registryProblems.length > 0) {
     process.stderr.write(
       `acceptance: registry is not valid:\n  ${registryProblems.join('\n  ')}\n`,
@@ -279,78 +245,144 @@ function main() {
     }
   }
 
-  const drill = loadDrillReports(discoverDrillReports(options.drillReports));
-  runProblems.push(...drill.problems);
+  const drills = runDrills({ repoRoot, skip: !options.drills });
+  runProblems.push(...drills.problems);
+  const drillResults = new Map();
+  for (const [ac, entries] of drills.results) drillResults.set(ac, [...entries]);
 
-  const { results, counts, diagnostics } = aggregateAcceptance({
+  const { results, diagnostics } = aggregateAcceptance({
     cases,
     reports: runs.map((run) => ({ project: run.project, report: run.report })),
     sources,
-    drillResults: drill.results,
+    drillResults,
     normalizeFile: toRepoPath,
   });
+
+  // Accepted gaps: an UNVERIFIED/MISSING AC is tolerable only when it is registered
+  // *and* the condition behind its registration still holds. Anything else is a FAIL.
+  const unaccepted = [];
+  for (const result of results) {
+    if (result.status !== 'UNVERIFIED' && result.status !== 'MISSING') continue;
+    const registration = RESIDUAL_GAPS[result.id];
+    if (registration === undefined) {
+      result.accepted = false;
+      unaccepted.push({
+        id: result.id,
+        status: result.status,
+        why: `未登记的 ${result.status}：${String(result.reason ?? '未给出原因')}；未验证项必须有已登记的豁免与产品决定`,
+      });
+      continue;
+    }
+    const condition = conditionHolds(registration.condition);
+    if (condition.holds) {
+      result.accepted = true;
+      result.decision = registration.decision;
+    } else {
+      result.accepted = false;
+      unaccepted.push({
+        id: result.id,
+        status: result.status,
+        why: `豁免条件不再成立（${registration.condition}）：${condition.why}`,
+      });
+    }
+  }
+
+  const acceptedCount = results.filter((result) => result.accepted === true).length;
+  const finalCounts = {
+    PASS: results.filter((result) => result.status === 'PASS').length,
+    ACCEPTED: acceptedCount,
+    FAIL: results.filter((result) => result.status === 'FAIL').length + unaccepted.length,
+    MISSING: results.filter((result) => result.status === 'MISSING' && result.accepted !== true)
+      .length,
+  };
 
   const missingResults = EXPECTED_AC_IDS.filter(
     (id) => !results.some((result) => result.id === id),
   );
 
+  // Fail closed on infrastructure problems: they mean the evidence is not trustworthy.
+  const infraProblems = [
+    ...runProblems,
+    ...(infraFailure ? ['某个 Vitest 项目没有产出 JSON 报告'] : []),
+    ...diagnostics.unexecuted.map(
+      (file) => `含 AC 证据的测试文件没有执行任何用例：${file}（文件消失/未被收集）`,
+    ),
+    ...diagnostics.unmappedFailures.map(
+      (test) => `失败用例未映射到任何 AC：${test.file} :: ${test.fullName}`,
+    ),
+    ...missingResults.map((id) => `没有 ${id} 的结果`),
+  ];
+
   let exitCode = 0;
-  if (infraFailure || registryProblems.length > 0) exitCode = 2;
-  else if (
-    counts.FAIL > 0 ||
-    missingResults.length > 0 ||
-    diagnostics.unmappedFailures.length > 0
-  ) {
-    exitCode = 1;
-  }
+  if (infraProblems.length > 0) exitCode = 2;
+  else if (finalCounts.FAIL > 0) exitCode = 1;
 
   const git = gitState();
+  const meta = {
+    generatedAt: new Date().toISOString(),
+    repoRoot,
+    gitHead: git.head,
+    gitDirty: git.dirty,
+    nodeVersion: process.version,
+    dockerAvailable: dockerAvailable(),
+    providerConfigured: providerConfigured(),
+    reviewModelConfigured: reviewModelConfigured(),
+    binding,
+    drillsExecuted: drills.executed,
+    exitCode,
+  };
+
   const report = renderAcceptanceReport({
-    meta: {
-      generatedAt: new Date().toISOString(),
-      repoRoot,
-      gitHead: git.head,
-      gitDirty: git.dirty,
-      nodeVersion: process.version,
-      dockerAvailable: dockerAvailable(),
-      providerConfigured: providerConfigured(),
-    },
+    meta,
     cases,
     results,
-    counts,
+    counts: finalCounts,
     runs,
+    drillRuns: drills.runs,
+    drillSources: drills.sources,
     diagnostics,
-    drillSources: drill.sources,
-    registryProblems: [...runProblems, ...missingResults.map((id) => `no result for ${id}`)],
+    problems: infraProblems,
+    unaccepted,
     exitCode,
   });
+
+  const sidecar = {
+    tool: 'pnpm test:acceptance',
+    generatedAt: meta.generatedAt,
+    gitHead: meta.gitHead,
+    gitTree: binding.gitTree,
+    codeDigest: binding.codeDigest,
+    nodeVersion: meta.nodeVersion,
+    providerConfigured: meta.providerConfigured,
+    reviewModelConfigured: meta.reviewModelConfigured,
+    drillsExecuted: meta.drillsExecuted,
+    exitCode,
+    counts: finalCounts,
+    problems: infraProblems,
+    unaccepted,
+    results: results.map((result) => ({
+      id: result.id,
+      status: result.status,
+      accepted: result.accepted === true,
+      decision: result.decision ?? null,
+      mapping: result.mapping,
+      gap: result.gap,
+      reason: result.reason,
+      evidence: result.evidence.map((test) => `${toRepoPath(test.file)} :: ${test.fullName}`),
+      drills: result.drills.map((drill) => ({
+        tool: drill.tool,
+        status: drill.status,
+        evidence: drill.evidence,
+      })),
+    })),
+  };
 
   if (options.write) {
     mkdirSync(dirname(options.report), { recursive: true });
     writeFileSync(options.report, report, 'utf8');
     process.stdout.write(`acceptance: wrote ${toRepoPath(options.report)}\n`);
-  }
-  if (options.json !== null) {
     mkdirSync(dirname(options.json), { recursive: true });
-    writeFileSync(
-      options.json,
-      `${JSON.stringify(
-        {
-          generatedAt: new Date().toISOString(),
-          counts,
-          results: results.map((result) => ({
-            id: result.id,
-            status: result.status,
-            mapping: result.mapping,
-            evidence: result.evidence.map((test) => `${toRepoPath(test.file)} :: ${test.fullName}`),
-            reason: result.reason,
-          })),
-        },
-        null,
-        2,
-      )}\n`,
-      'utf8',
-    );
+    writeFileSync(options.json, `${JSON.stringify(sidecar, null, 2)}\n`, 'utf8');
     process.stdout.write(`acceptance: wrote ${toRepoPath(options.json)}\n`);
   }
 
@@ -358,28 +390,31 @@ function main() {
   process.stdout.write(renderConsoleTable(results, repoRoot));
   process.stdout.write('\n\n');
   process.stdout.write(
-    `acceptance: ${results.length}/${EXPECTED_AC_IDS.length} ACs accounted — PASS ${counts.PASS} / FAIL ${counts.FAIL} / UNVERIFIED ${counts.UNVERIFIED}\n`,
+    `acceptance: ${String(results.length)}/${String(EXPECTED_AC_IDS.length)} ACs accounted — PASS ${String(finalCounts.PASS)} / ACCEPTED ${String(finalCounts.ACCEPTED)} / FAIL ${String(finalCounts.FAIL)} / MISSING ${String(finalCounts.MISSING)}\n`,
   );
-  if (missingResults.length > 0) {
-    process.stderr.write(`acceptance: no result for ${missingResults.join(', ')}\n`);
-  }
-  if (diagnostics.unmappedFailures.length > 0) {
-    process.stderr.write(
-      `acceptance: ${diagnostics.unmappedFailures.length} failing test(s) are not mapped to any AC\n`,
+  if (finalCounts.ACCEPTED > 0) {
+    process.stdout.write(
+      `acceptance: ${String(finalCounts.ACCEPTED)} ACs are UNVERIFIED under a registered, condition-checked accepted gap (see the report).\n`,
     );
+  }
+  for (const problem of infraProblems) {
+    process.stderr.write(`acceptance: ${problem}\n`);
+  }
+  for (const entry of unaccepted) {
+    process.stderr.write(`acceptance: ${entry.id} ${entry.status} — ${entry.why}\n`);
   }
   if (exitCode !== 0) {
     process.stderr.write(
-      `acceptance: FAILED (exit ${exitCode}) — ${
-        infraFailure
-          ? 'a Vitest project produced no JSON report'
-          : registryProblems.length > 0
-            ? 'the AC registry is invalid'
-            : 'there are FAIL results, missing AC results or unmapped failing tests'
+      `acceptance: FAILED (exit ${String(exitCode)}) — ${
+        exitCode === 2
+          ? 'the evidence itself is not trustworthy (infrastructure problem)'
+          : 'there are FAIL results or unaccepted UNVERIFIED/MISSING results'
       }\n`,
     );
   } else {
-    process.stdout.write('acceptance: OK — every AC has a result and no mapped check failed\n');
+    process.stdout.write(
+      'acceptance: OK — every AC is PASS or a registered, condition-checked accepted gap\n',
+    );
   }
   return exitCode;
 }

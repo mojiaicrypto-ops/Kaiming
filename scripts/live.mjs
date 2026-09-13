@@ -18,12 +18,18 @@
  * the integrated readiness gate (`scripts/lib/live-release.mjs`).
  *
  * Usage:
- *   node scripts/live.mjs [--no-write] [--keep-temp] [--help]
+ *   node scripts/live.mjs [--no-write] [--keep-temp] [--drill-out <path>] [--help]
  *   node scripts/live.mjs --release [--no-write] [--help]
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
+import { computeBinding } from './lib/acceptance-binding.mjs';
+import {
+  E2E_BROWSER_ISOLATION_ACS,
+  INDEPENDENT_MODEL_AC,
+  LIVE_DRILL_ACS,
+} from './lib/drill-acs.mjs';
 import { CheckFailure } from './lib/e2e-checks.mjs';
 import { runHtmlDrill, runL1Drill, runL2Drill } from './lib/live-drills.mjs';
 import { bootLiveStack, shutdownLiveStack } from './lib/live-harness.mjs';
@@ -41,11 +47,11 @@ const REPORT_DIR = join(REPO_ROOT, '.agentdev', 'work', 'WP-10');
 const EXIT_UNVERIFIED = 3;
 
 /**
- * The ACs each live drill closes.
- *
- * The offline suites and the e2e drill cannot reach these: `provider.fact-and-unknown`
- * (AC-001) needs a real model answer, AC-007's L1 lane needs a real execution, and
- * AC-010/AC-037/AC-041 need the real Review/Test/settlement/knowledge path.
+ * The drill -> AC mapping lives in `scripts/lib/drill-acs.mjs`, shared with the
+ * acceptance aggregator so the two lists cannot drift (WP-10 review round 1,
+ * W10R1-10). The offline suites and the e2e drill cannot reach these: AC-001 needs a
+ * real model answer, AC-007's L1 lane needs a real execution, and AC-010/AC-037/AC-041
+ * need the real Review/Test/settlement/knowledge path.
  *
  * AC-002/AC-052 stay UNVERIFIED even here: the drill proves the server-side isolation
  * policy (`default-src 'none'`, `allow-scripts`, credential omission) and a real
@@ -54,17 +60,7 @@ const EXIT_UNVERIFIED = 3;
  * distinct Review/Test model; otherwise the drill still proves independent Runs and
  * distinct frozen snapshots and the AC is recorded UNVERIFIED.
  */
-const DRILL_ACS = Object.freeze({
-  html: ['AC-001'],
-  l1: ['AC-007'],
-  l2: ['AC-010', 'AC-037', 'AC-041'],
-});
-
-/** The AC a distinct Review/Test model would close (`AC-043`). */
-const INDEPENDENT_MODEL_AC = 'AC-043';
-
-/** The browser-side ACs this command can never close (no Playwright, no download). */
-const BROWSER_ACS = ['AC-002', 'AC-052'];
+const DRILL_ACS = LIVE_DRILL_ACS;
 
 function usage() {
   return [
@@ -72,8 +68,10 @@ function usage() {
     '',
     '  --release    run the release drill (every documented engineering command,',
     '               the acceptance aggregation, the readiness gate and release.md)',
-    '  --no-write   print the run only; do not write the WP-10 reports',
-    '  --keep-temp  keep the temporary project/state directories for forensics',
+    '  --no-write        print the run only; do not write the WP-10 reports',
+    '  --keep-temp       keep the temporary project/state directories for forensics',
+    '  --drill-out <p>   write the drill JSON to <p> instead of the WP-10 records',
+    '                    (used by scripts/acceptance.mjs, which runs this drill itself)',
     '  --help       show this help',
     '',
     `Environment: ${Object.values(PROVIDER_ENV).join(', ')}.`,
@@ -83,20 +81,36 @@ function usage() {
 }
 
 function parseArgs(argv) {
-  const options = { release: false, write: true, keepTemp: false, help: false };
-  for (const arg of argv) {
+  const options = { release: false, write: true, keepTemp: false, drillOut: null, help: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
     if (arg === '--release') options.release = true;
     else if (arg === '--no-write') options.write = false;
     else if (arg === '--keep-temp') options.keepTemp = true;
-    else if (arg === '--help' || arg === '-h') options.help = true;
+    else if (arg === '--drill-out') {
+      index += 1;
+      if (index >= argv.length) throw new Error('--drill-out requires a path');
+      options.drillOut = argv[index];
+    } else if (arg === '--help' || arg === '-h') options.help = true;
     else throw new Error(`unknown option: ${arg}`);
   }
   return options;
 }
 
-/** Writes `live-results.json` and `live.md` from the executed check list. */
-function writeLiveReports(checks, meta, write) {
+/**
+ * Writes `live-results.json` and `live.md` from the executed check list.
+ *
+ * With `--drill-out` (the aggregator's in-run mode) only the nonce JSON file is
+ * written; the WP-10 records stay as the standalone `pnpm test:live` run left them.
+ */
+function writeLiveReports(checks, meta, write, drillOut = null) {
   const report = liveDrillReport(checks, meta);
+  if (drillOut !== null) {
+    mkdirSync(dirname(drillOut), { recursive: true });
+    writeFileSync(drillOut, `${JSON.stringify(report, null, 2)}\n`);
+    process.stdout.write(`live: wrote drill report to ${drillOut}\n`);
+    return;
+  }
   if (!write) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return;
@@ -125,6 +139,8 @@ async function runProviderDrill(options) {
   const meta = {
     repoRoot: REPO_ROOT,
     gitHead: revisionOf(REPO_ROOT) || 'unavailable',
+    binding: computeBinding(REPO_ROOT),
+    nonce: process.env.AGENTDEV_DRILL_NONCE ?? null,
     exitCode: EXIT_UNVERIFIED,
     providerConfigured: provider.configured,
     providerMessage: provider.message,
@@ -143,7 +159,7 @@ async function runProviderDrill(options) {
     checks.unverified('drill.html-explanation', DRILL_ACS.html, provider.message);
     checks.unverified('drill.l1-typo', DRILL_ACS.l1, provider.message);
     checks.unverified('drill.l2-delivery', DRILL_ACS.l2, provider.message);
-    writeLiveReports(checks, meta, options.write);
+    writeLiveReports(checks, meta, options.write, options.drillOut);
     process.stdout.write(
       `\nlive: UNVERIFIED — 0 real Provider calls were made; set ${Object.values(PROVIDER_ENV).join(', ')} to run the drill\n`,
     );
@@ -173,7 +189,7 @@ async function runProviderDrill(options) {
     );
     checks.unverified(
       'browser.html-rendering',
-      BROWSER_ACS,
+      E2E_BROWSER_ISOLATION_ACS,
       'AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境；本仓库按产品决定不引入 Playwright 或浏览器下载。本演练已执行服务端部分：真实 Provider 产出的 HTML Artifact、预览 CSP/sandbox/credentials 头与一次性下载，浏览器侧仍未验证',
     );
     if (provider.reviewModelId === null) {
@@ -191,7 +207,7 @@ async function runProviderDrill(options) {
     await shutdownLiveStack(harness, options.keepTemp);
   }
 
-  writeLiveReports(checks, meta, options.write);
+  writeLiveReports(checks, meta, options.write, options.drillOut);
   process.stdout.write(
     `\nlive: ${checks.passed} passed / ${checks.failed} failed / ${checks.unverifiedCount} unverified; ${transport.summary()}\n`,
   );
