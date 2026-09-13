@@ -174,8 +174,10 @@ async function startHarness(): Promise<Harness> {
       return decision.ok
         ? {
             ok: true,
+            // T-01: identity is always the installation user; the session id stays an
+            // audit subject only, exactly as `createDaemon` resolves it.
             subject: `user:${decision.session.id}`,
-            userId: userIdFromSubject(`user:${decision.session.id}`),
+            userId: userIdFromSubject('installation:local'),
           }
         : {
             ok: false,
@@ -1020,7 +1022,8 @@ describe('WP-09 T4 required failure tests', () => {
     // The daemon connection breaks: the bridge tells the browser and reconnects.
     harness.protocol.closeAll(1001, 'network dropped');
     const notice = await socket.waitFor((frame) => frame.type === 'bridge.reconnecting');
-    expect(typeof notice.id === 'string' || true).toBe(true);
+    // The notice carries the real reconnect attempt, not a vacuous `|| true` (W9R2-06).
+    expect(Number.isInteger(notice.attempt) && (notice.attempt ?? 0) > 0).toBe(true);
 
     // The background Work is untouched by the disconnect.
     expect(harness.store.works.find(work.id)?.status).toBe('running');

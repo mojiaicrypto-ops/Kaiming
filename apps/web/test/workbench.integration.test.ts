@@ -72,6 +72,7 @@ import {
   statusForCode,
   type WorkbenchAuthPort,
 } from '../../daemon/src/protocol.js';
+import { UI_STRINGS } from '../src/i18n.js';
 import { createWebApp } from '../src/app.js';
 import { WebSessionStore } from '../src/sessions.js';
 
@@ -306,8 +307,12 @@ async function startHarness(): Promise<Harness> {
       return decision.ok
         ? {
             ok: true,
+            // T-01: the session is the audit subject, but the owner identity is the
+            // installation's — the same value the production `createDaemon` resolves
+            // and the same one the upload route records. A fixture that derived a
+            // per-session user here would let a broken product path pass.
             subject: `user:${decision.session.id}`,
-            userId: userIdFromSubject(`user:${decision.session.id}`),
+            userId: userIdFromSubject('installation:local'),
           }
         : {
             ok: false,
@@ -1197,6 +1202,267 @@ describe('WP-09 T4: the workbench end to end over the real stack', () => {
     expect(after.html).toContain('data-lifecycle="cancelled"');
   });
 
+  // -------------------------------------------------------------------------
+  // WP-09 round-2 findings: the requirement record's idempotency and fidelity
+  // -------------------------------------------------------------------------
+
+  it('replays requirement.save for the same key and refuses a different payload (W9R2-01)', async () => {
+    const store = harness.daemon.store;
+    const before = store.requirements.count();
+    const key = `t6-save-idem-${uuid('61')}`;
+    const params = {
+      patch: {
+        title: '幂等的需求创建',
+        goal: '同一个幂等键不产生第二条需求',
+        lifecycle: 'queued',
+        scope: {
+          readPaths: ['src/orders.ts'],
+          writePaths: [],
+          operations: ['read'],
+          networkTargets: [],
+        },
+        contentMarkdown: requirementBody('同一个幂等键只产生一条需求。'),
+      },
+    };
+    const first = await rpc('requirement.save', params, {
+      idempotencyKey: key,
+      expectedVersion: 0,
+    });
+    expect(first.frame.ok, JSON.stringify(first.frame.error)).toBe(true);
+    const requirementId = text(first.frame.result ?? {}, 'requirementId');
+    expect(requirementId).not.toBe('');
+    expect(store.requirements.count()).toBe(before + 1);
+
+    // The same key with the same payload is the recorded operation, not a second
+    // Requirement (W9R2-01).
+    const replay = await rpc('requirement.save', params, {
+      idempotencyKey: key,
+      expectedVersion: 0,
+    });
+    expect(replay.frame.ok, JSON.stringify(replay.frame.error)).toBe(true);
+    expect(replay.frame.result).toEqual(first.frame.result);
+    expect(text(replay.frame.result ?? {}, 'requirementId')).toBe(requirementId);
+    expect(store.requirements.count()).toBe(before + 1);
+
+    // The same key with a different payload is the documented conflict.
+    const conflict = await rpc(
+      'requirement.save',
+      { patch: { ...params.patch, title: '另一个标题' } },
+      { idempotencyKey: key, expectedVersion: 0 },
+    );
+    expect(conflict.status).toBe(409);
+    expect(conflict.frame.error?.code).toBe('IDEMPOTENCY_CONFLICT');
+    expect(store.requirements.count()).toBe(before + 1);
+
+    // A key that was refused because the payload was invalid does not pin the key:
+    // the corrected payload may reuse it.
+    const retryKey = `t6-save-retry-${uuid('62')}`;
+    const refused = await rpc(
+      'requirement.save',
+      { patch: { lifecycle: 'queued' } },
+      { idempotencyKey: retryKey, expectedVersion: 0 },
+    );
+    expect(refused.frame.ok).toBe(false);
+    const corrected = await rpc('requirement.save', params, {
+      idempotencyKey: retryKey,
+      expectedVersion: 0,
+    });
+    expect(corrected.frame.ok, JSON.stringify(corrected.frame.error)).toBe(true);
+    expect(store.requirements.count()).toBe(before + 2);
+  });
+
+  it('keeps the recorded fields an update does not name (W9R2-02)', async () => {
+    const acceptance = [{ id: 'AC-1', given: '一个排队需求', when: '更新目标', then: '范围不变' }];
+    const confirmed = [
+      {
+        id: 'D-1',
+        summary: '保留已确认决定',
+        decidedAt: TIME,
+        sourceKind: 'user_action',
+      },
+    ];
+    const created = await rpc(
+      'requirement.save',
+      {
+        patch: {
+          title: '范围必须保留',
+          goal: '初始目标',
+          lifecycle: 'queued',
+          scope: {
+            readPaths: ['src/orders.ts'],
+            writePaths: ['src/orders.ts'],
+            operations: ['read', 'edit'],
+            networkTargets: [],
+          },
+          featureIds: ['F-1'],
+          acceptance,
+          openQuestions: ['何时上线？'],
+          confirmedDecisions: confirmed,
+          contentMarkdown: requirementBody('未付款订单可取消。'),
+        },
+      },
+      { idempotencyKey: `t6-scope-create-${uuid('63')}`, expectedVersion: 0 },
+    );
+    expect(created.frame.ok, JSON.stringify(created.frame.error)).toBe(true);
+    const requirementId = text(created.frame.result ?? {}, 'requirementId');
+    const createdCommit = String(
+      (created.frame.result?.['git'] as { commit?: string } | undefined)?.commit ?? '',
+    );
+    expect(createdCommit).toHaveLength(40);
+
+    // An unrelated update names none of the arrays and no scope: the recorded
+    // values must survive (`protocol.md` §8 "未提供字段保持原值").
+    const updated = await rpc(
+      'requirement.save',
+      {
+        requirementId,
+        patch: {
+          goal: '更新后的目标',
+          contentMarkdown: requirementBody('更新后的正文。'),
+        },
+      },
+      { idempotencyKey: `t6-scope-update-${uuid('64')}`, expectedVersion: 1 },
+    );
+    expect(updated.frame.ok, JSON.stringify(updated.frame.error)).toBe(true);
+    expect(Number(updated.frame.result?.['recordVersion'] ?? 0)).toBe(2);
+
+    const commit = harness.saves.head();
+    expect(commit).not.toBe(createdCommit);
+    const record = JSON.parse(
+      harness.saves.readAtRevision(
+        commit,
+        `.agentdev/requirements/${requirementId}/requirement.json`,
+      ) ?? '{}',
+    ) as {
+      goal?: string;
+      scope?: { readPaths?: string[] };
+      acceptance?: unknown[];
+      openQuestions?: string[];
+      confirmedDecisions?: unknown[];
+      featureIds?: string[];
+    };
+    // The named field changed; nothing else did.
+    expect(record.goal).toBe('更新后的目标');
+    expect(record.scope?.readPaths).toEqual(['src/orders.ts']);
+    expect(record.featureIds).toEqual(['F-1']);
+    expect(record.acceptance).toEqual(acceptance);
+    expect(record.openQuestions).toEqual(['何时上线？']);
+    expect(record.confirmedDecisions).toEqual(confirmed);
+  });
+
+  it('cancels a requirement without rewriting its recorded body or fields (W9R2-03)', async () => {
+    const acceptance = [{ id: 'AC-9', given: 'g', when: 'w', then: 't' }];
+    const confirmed = [
+      { id: 'D-9', summary: 's', decidedAt: TIME, sourceKind: 'user_action' as const },
+    ];
+    const body = [
+      '# 取消保真',
+      '',
+      '## 目标与背景',
+      '',
+      '背景原文。',
+      '',
+      '## 范围与行为',
+      '',
+      '范围原文。',
+      '',
+      '## 验收说明',
+      '',
+      '验收原文。',
+      '',
+      '## 已确认决定',
+      '',
+      '决定原文。',
+      '',
+      '## 未决问题',
+      '',
+      '问题原文。',
+      '',
+      '## 完成摘要',
+      '',
+      '尚未完成。',
+      '',
+    ].join('\n');
+    const created = await rpc(
+      'requirement.save',
+      {
+        patch: {
+          title: '取消保真',
+          goal: '取消不改写已记录成果',
+          lifecycle: 'queued',
+          scope: {
+            readPaths: ['src/orders.ts'],
+            writePaths: ['src/orders.ts'],
+            operations: ['read', 'edit'],
+            networkTargets: [],
+          },
+          featureIds: ['F-9'],
+          acceptance,
+          openQuestions: ['问题原文。'],
+          confirmedDecisions: confirmed,
+          contentMarkdown: body,
+        },
+      },
+      { idempotencyKey: `t6-cancel-fidelity-${uuid('65')}`, expectedVersion: 0 },
+    );
+    expect(created.frame.ok, JSON.stringify(created.frame.error)).toBe(true);
+    const requirementId = text(created.frame.result ?? {}, 'requirementId');
+
+    const cancelled = await rpc(
+      'work.control',
+      { action: 'cancel', requirementId, reason: '产品决定不再需要' },
+      { idempotencyKey: `t6-cancel-fidelity-run-${uuid('66')}` },
+    );
+    expect(cancelled.frame.ok, JSON.stringify(cancelled.frame.error)).toBe(true);
+    expect(cancelled.frame.result?.['lifecycle']).toBe('cancelled');
+    const commit = String(
+      (cancelled.frame.result?.['git'] as { commit?: string } | undefined)?.commit ?? '',
+    );
+    expect(commit).toHaveLength(40);
+
+    const metadata = JSON.parse(
+      harness.saves.readAtRevision(
+        commit,
+        `.agentdev/requirements/${requirementId}/requirement.json`,
+      ) ?? '{}',
+    ) as {
+      lifecycle?: string;
+      cancellation?: { reason?: string };
+      scope?: { readPaths?: string[] };
+      featureIds?: string[];
+      acceptance?: unknown[];
+      openQuestions?: string[];
+      confirmedDecisions?: unknown[];
+    };
+    expect(metadata.lifecycle).toBe('cancelled');
+    expect(metadata.cancellation?.reason).toBe('产品决定不再需要');
+    // Everything the record held before the cancel is still there.
+    expect(metadata.scope?.readPaths).toEqual(['src/orders.ts']);
+    expect(metadata.featureIds).toEqual(['F-9']);
+    expect(metadata.acceptance).toEqual(acceptance);
+    expect(metadata.openQuestions).toEqual(['问题原文。']);
+    expect(metadata.confirmedDecisions).toEqual(confirmed);
+
+    const content =
+      harness.saves.readAtRevision(commit, `.agentdev/requirements/${requirementId}/content.md`) ??
+      '';
+    for (const section of ['背景原文。', '范围原文。', '验收原文。', '决定原文。', '问题原文。']) {
+      expect(content).toContain(section);
+    }
+    // Only the completion summary is rewritten, with the real reason.
+    expect(content).toContain('产品决定不再需要');
+    for (const heading of [
+      '目标与背景',
+      '范围与行为',
+      '验收说明',
+      '已确认决定',
+      '未决问题',
+      '完成摘要',
+    ]) {
+      expect(content.split(`## ${heading}`)).toHaveLength(2);
+    }
+  });
+
   it('keeps an L1 Work off the board and reports it as excluded (AC-068)', async () => {
     const l1 = seedWork(harness, { level: 'L1', status: 'running', goal: 'explain the fixture' });
     // The deliverable record that does belong on the board, for contrast.
@@ -1528,11 +1794,40 @@ describe('WP-09 T4: the workbench end to end over the real stack', () => {
     expect(gate['authorizationId']).toBeNull();
     expect((gate['approval'] as { enabled?: boolean })?.enabled).toBe(false);
     expect(String((gate['approval'] as { reason?: string })?.reason ?? '')).not.toBe('');
+    // The daemon also answers the machine-readable code the page localises (W9R2-05).
+    expect((gate['approval'] as { reasonCode?: string })?.reasonCode).toBe('no_plan');
 
     const html = (await page(`/projects/${harness.projectId}/requirements/${requirement.id}`)).html;
     expect(html).toMatch(/id="approvePlan"[^>]*disabled/u);
     expect(html).toContain('data-approvable="false"');
     expect(html).toContain('id="approveBlocked"');
+    // The visible reason is an interface string keyed by the daemon's code; the
+    // daemon's English sentence is only the diagnostic tooltip.
+    expect(html).toContain('data-i18n="detail.approveReason.no_plan"');
+    expect(html).toContain('data-approve-reason="no_plan"');
+    expect(html).not.toMatch(/>the gate holds no approved Plan for this Work revision</u);
+  });
+
+  it('renders the disabled approval reason in the page language (W9R2-05)', async () => {
+    const work = seedWork(harness, { status: 'running' });
+    const requirement = seedRequirement(harness, 'active', work.id, 'no plan yet');
+    const response = await fetch(
+      `${harness.baseUrl}/projects/${harness.projectId}/requirements/${requirement.id}`,
+      {
+        headers: {
+          accept: 'text/html',
+          cookie: `${cookie}; agentdev_language=zh`,
+        },
+      },
+    );
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain('<html lang="zh-CN"');
+    // The visible reason is Chinese; the daemon's English sentence is not the text of
+    // the alert (it stays available as the diagnostic title).
+    expect(html).toContain(UI_STRINGS['detail.approveReason.no_plan']?.zh ?? '');
+    expect(html).toContain('data-i18n="detail.approveReason.no_plan"');
+    expect(html).not.toMatch(/>the gate holds no approved Plan for this Work revision</u);
   });
 
   it('renders a truncated artifact with the full one-shot download (AC-070)', async () => {

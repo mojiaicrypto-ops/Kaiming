@@ -60,7 +60,8 @@ interface Authed {
    *
    * AgentDev is a single-user, self-hosted installation, so every authenticated
    * session is the same user: an upload made in one browser session is bindable from
-   * another, and the value stays stable across restarts (W3-03).
+   * another, and the value stays stable across restarts (W3-03/T-01). It is always
+   * `userIdFromSubject('installation:local')`.
    */
   readonly userId: string;
 }
@@ -89,6 +90,17 @@ export function createDaemon(options: DaemonOptions): Server {
   const now = options.now ?? (() => Date.now());
   const workbench = options.workbench;
 
+  /**
+   * The single owner identity of this installation.
+   *
+   * AgentDev is single-user and self-hosted, so every authenticated session maps to
+   * the same installer user, exactly as WP-03's `/artifacts/*` routes already do.
+   * Deriving the owner from the session id made an upload (installation user) and a
+   * message sent through the same browser (session user) disagree and the binding
+   * failed with `NOT_AUTHORIZED` (T-01).
+   */
+  const installationUserId = userIdFromSubject('installation:local');
+
   /** The auth seam the protocol layer uses; sessions stay owned by this module. */
   const authPort: WorkbenchAuthPort = {
     authenticate: (input) => {
@@ -96,7 +108,9 @@ export function createDaemon(options: DaemonOptions): Server {
       return decision.ok
         ? {
             ok: true,
-            userId: userIdFromSubject(`user:${decision.session.id}`),
+            // Identity is the installation's, not the session's; the session id
+            // stays an audit subject only (`protocol.md` §1, W3-03).
+            userId: installationUserId,
             subject: `user:${decision.session.id}`,
           }
         : {
@@ -385,7 +399,7 @@ export function createDaemon(options: DaemonOptions): Server {
   }
 
   function authenticate(request: IncomingMessage, isWrite: boolean): Authed {
-    const userId = userIdFromSubject('installation:local');
+    const userId = installationUserId;
     const bearer = options.auth.authenticateBearer(request.headers.authorization);
     if (bearer.ok) {
       // The daemon/CLI credential is a full-project subject.

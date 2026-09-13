@@ -16,7 +16,7 @@
  */
 import type { JsonObject } from '@agentdev/contracts';
 import { attrs, badge, escapeHtml, isoUtc, pair, stateLabel } from './html.js';
-import type { Translator } from './i18n.js';
+import { UI_STRINGS, type Translator } from './i18n.js';
 import {
   BOARD_COLUMNS,
   isSuccessfulRun,
@@ -62,6 +62,19 @@ function text(value: unknown, fallback = ''): string {
 
 function emptyNote(t: Translator, key: string): string {
   return `<p class="empty" data-i18n="${escapeHtml(key)}">${escapeHtml(t(key))}</p>`;
+}
+
+/**
+ * The dictionary key for one machine-readable Plan-approval reason (W9R2-05).
+ *
+ * The daemon answers `approval.reasonCode` and keeps its English sentence as a
+ * diagnostic, so the page can render the reason in the current interface language.
+ * An unknown code — a newer daemon, or a fixture — falls back to the generic
+ * "unavailable" wording rather than rendering the code itself.
+ */
+function approveReasonKeyOf(code: string): string {
+  const key = `detail.approveReason.${code}`;
+  return UI_STRINGS[key] === undefined ? 'detail.approveUnavailable' : key;
 }
 
 /** Deep link into Chief carrying the object reference, never a copy of its body. */
@@ -346,16 +359,23 @@ export function renderRequirementPage(input: {
   // version that is not the gate's current one, or the daemon cannot hand over the
   // Plan body plus its local authorization (W9R1-01/W9R1-02).
   const approveBlocked = plan !== null && (plan.expired || !plan.approvalEnabled);
-  const blockReason =
+  // The visible reason is always an interface string: the daemon's English
+  // sentence is a diagnostic and moves to the element's `title` (W9R2-05).
+  const blockReasonKey =
     plan === null
       ? null
-      : (plan.approvalReason ??
-        (plan.expired ? t('detail.approveExpired') : t('detail.approveUnavailable')));
+      : plan.expired
+        ? 'detail.approveExpired'
+        : plan.approvalReasonCode === null
+          ? 'detail.approveUnavailable'
+          : approveReasonKeyOf(plan.approvalReasonCode);
+  const blockReason = blockReasonKey === null ? null : t(blockReasonKey);
+  const blockDiagnostic = plan?.approvalReason ?? null;
   const planSection =
     plan === null
       ? emptyNote(t, 'common.none')
       : [
-          `<div class="plan" id="plan" data-work="${escapeHtml(plan.workId)}" data-requested-version="${String(plan.requestedVersion)}" data-current-version="${String(plan.currentVersion)}" data-expired="${plan.expired ? 'true' : 'false'}" data-approvable="${approveBlocked ? 'false' : 'true'}"${plan.approvalReason === null ? '' : ` data-approve-reason="${escapeHtml(plan.approvalReason)}"`}>`,
+          `<div class="plan" id="plan" data-work="${escapeHtml(plan.workId)}" data-requested-version="${String(plan.requestedVersion)}" data-current-version="${String(plan.currentVersion)}" data-expired="${plan.expired ? 'true' : 'false'}" data-approvable="${approveBlocked ? 'false' : 'true'}"${plan.approvalReasonCode === null ? '' : ` data-approve-reason="${escapeHtml(plan.approvalReasonCode)}"`}${blockDiagnostic === null ? '' : ` data-approve-detail="${escapeHtml(blockDiagnostic)}"`}>`,
           '<div class="chips">',
           chip(t('detail.planCurrent'), String(plan.currentVersion)),
           chip(t('detail.planVersion'), String(plan.requestedVersion)),
@@ -365,8 +385,8 @@ export function renderRequirementPage(input: {
           plan.expired
             ? `<p class="alert" id="planExpired" role="alert" data-i18n="detail.approveExpired">${escapeHtml(t('detail.approveExpired'))}</p>`
             : '',
-          approveBlocked && blockReason !== null
-            ? `<p class="alert" id="approveBlocked" role="alert">${escapeHtml(blockReason)}</p>`
+          approveBlocked && blockReasonKey !== null
+            ? `<p class="alert" id="approveBlocked" role="alert" data-i18n="${escapeHtml(blockReasonKey)}"${blockDiagnostic === null ? '' : ` title="${escapeHtml(blockDiagnostic)}"`}>${escapeHtml(blockReason ?? '')}</p>`
             : '',
           `<button type="button" id="approvePlan" data-work="${escapeHtml(plan.workId)}" data-plan-version="${String(plan.requestedVersion)}" data-plan-revision="${escapeHtml(plan.revision)}"`,
           approveBlocked ? ' disabled aria-disabled="true"' : '',

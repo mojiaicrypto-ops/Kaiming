@@ -602,6 +602,61 @@ describe('requirement detail page', () => {
     expect(allowedHtml).not.toMatch(/id="approvePlan"[^>]*disabled/u);
   });
 
+  it('renders the disabled approval reason from the dictionary, not the daemon sentence (W9R2-05)', () => {
+    const requirement = {
+      id: 'req-1',
+      title: 'x',
+      goal: 'g',
+      lifecycle: 'active',
+      recordVersion: 1,
+      work: { id: 'w' },
+    };
+    const blocked = requirementDetail({
+      requirement,
+      artifacts: [],
+      runs: [],
+      plan: {
+        workId: 'w',
+        revision: 'rev',
+        currentVersion: 0,
+        requestedVersion: 0,
+        approvalEnabled: false,
+        // The daemon's English diagnostic plus its machine-readable code.
+        approvalReason: 'the gate holds no approved Plan for this Work revision',
+        approvalReasonCode: 'no_plan',
+      },
+    });
+    const zh = renderRequirementPage({ detail: blocked, projectId: 'proj-1', t: tzh });
+    // The Chinese page shows the Chinese interface string …
+    expect(zh).toContain(tzh('detail.approveReason.no_plan'));
+    expect(zh).toContain('data-i18n="detail.approveReason.no_plan"');
+    // … and the daemon's English sentence survives only as a diagnostic tooltip.
+    expect(zh).toContain('title="the gate holds no approved Plan for this Work revision"');
+    expect(zh).not.toMatch(/>the gate holds no approved Plan for this Work revision</u);
+    // `data-approve-reason` on the card is the machine-readable code.
+    expect(zh).toContain('data-approve-reason="no_plan"');
+
+    // A code the dictionary does not know falls back to the generic wording rather
+    // than rendering the raw code or the daemon's sentence as the visible text.
+    const unknown = requirementDetail({
+      requirement,
+      artifacts: [],
+      runs: [],
+      plan: {
+        workId: 'w',
+        revision: 'rev',
+        currentVersion: 0,
+        requestedVersion: 0,
+        approvalEnabled: false,
+        approvalReason: 'something the daemon invented',
+        approvalReasonCode: 'not_a_known_code',
+      },
+    });
+    const fallback = renderRequirementPage({ detail: unknown, projectId: 'proj-1', t: tzh });
+    expect(fallback).toContain(tzh('detail.approveUnavailable'));
+    expect(fallback).not.toMatch(/>something the daemon invented</u);
+  });
+
   it('renders an explicit expired card for a requested historical version (W9R1-02)', () => {
     const detail = requirementDetail({
       requirement: {

@@ -18,6 +18,8 @@
 
 BFF到daemon和本机CLI使用0600安装凭证Bearer；daemon默认127.0.0.1:4318，BFF默认127.0.0.1:4317。对外反向代理只暴露BFF。Ready前只接受connection.hello。
 
+AgentDev为单用户自托管安装：认证后的每个浏览器会话解析为**同一个安装用户**（`userIdFromSubject('installation:local')`），会话id仅作为审计主体（ledger的subject）保留，不再派生per-session身份。因此经BFF上传的staged附件可以由同一浏览器经BFF发送的消息绑定，换一次登录或换一个浏览器也仍属同一属主；附件属主、消息属主、产物归属与ACL一律使用该安装身份（WP-09 T-01）。
+
 BFF不转发也不校验浏览器的x-csrf-token（WP-09 登记偏差）：BFF自身持有daemon会话，同源写以HttpOnly `agentdev_web`会话（SameSite=Lax）加精确Origin校验认证，再以BFF自己的session.csrfToken调用daemon，因此浏览器提供的该头既非必需也不被信任；浏览器仍按上表携带该头（`/rpc`契约面），判定权在BFF。此偏差由独立复查登记，避免后续Test按字面要求误判。
 
 | 方法 | params | result |
@@ -73,12 +75,12 @@ BFF不转发也不校验浏览器的x-csrf-token（WP-09 登记偏差）：BFF�
 | task.list/get | workId（list）；taskId（get） | items<Task>或Task |
 | run.list/get | workId（list）；runId（get） | items<Run>或Run |
 | run.pause/resume/cancel* | runId,reason | accepted；影响必需子Run时Gate保持阻断 |
-| plan.current | workId,revision?,planVersion?:int | {currentVersion,requestedVersion,current,gateStatus,approvedVersion,approvedAt,runId,authorizationId,plan,approval:{enabled,reason}}；plan正文与本地授权取自gate自身的批准记录及其产物 |
+| plan.current | workId,revision?,planVersion?:int | {currentVersion,requestedVersion,current,gateStatus,approvedVersion,approvedAt,runId,authorizationId,plan,approval:{enabled,reason,reasonCode}}；plan正文与本地授权取自gate自身的批准记录及其产物 |
 | plan.approve* | workId,revision?,planVersion:int,plan:PlanDraft,approval:{authorizationRef,runId,productChanged,requestedTokens?} | applied，planRef；请求版本非当前返回VERSION_CONFLICT和currentVersion |
 
 permission.request的scope=once时必须runId/toolOperationId/inputHash，scope=run必须runId，scope=work必须workId；服务端从请求引用解析真实绑定并拒绝跨项目。
 
-审批链以plan.current为唯一权威：UI不得自行拼装plan正文或authorizationRef；approval.enabled=false时批准控件必须禁用并显示reason（缺正文、缺本地授权、版本非当前或gate已失效）。Queued且无Work的需求取消由daemon生成content.md——六个二级标题各一次、顺序固定，取消原因写入完成摘要，再由RequirementSaveService提交Git。
+审批链以plan.current为唯一权威：UI不得自行拼装plan正文或authorizationRef；approval.enabled=false时批准控件必须禁用并显示reason。approval.reasonCode为机器可读原因码（no_plan/stale_version/gate_not_approved/plan_unreadable/no_authorization/authorization_unreadable），界面必须用自身i18n目录按该码渲染可见原因，approval.reason仅作英文诊断（如元素的title），保证界面语言一致（W9R2-05）。Queued且无Work的需求取消由daemon先读回Git中现有记录，仅替换「完成摘要」写入取消原因并追加lifecycle/cancellation事实，其余正文段落与scope/acceptance/featureIds/openQuestions/confirmedDecisions原样保留，再由RequirementSaveService提交Git（W9R2-03）。
 
 Decision choice必须属于该决定保存的选项；UI用户可直接提交，无sourceMessageId时保存按钮动作的user Action记录作为来源。Chief代表用户提交必须带sourceMessageId；来源必须user消息且同Project，语义无法确认时要求新的明确用户决定。Run恢复适用Manifest不一致则拒绝STALE_ARTIFACT，由Chief创建新Run。
 
@@ -139,4 +141,6 @@ requirement.save.retry* params={operationId:ID}：仅真实用户或有对应授
 
 冲突解除：用户在Git保留并合并双方内容、恢复缺失记录后，调用requirement.import指定当前交付HEAD Revision。有效且无重复ID的记录以该Git版本重建投影，标resolved并解除写阻断；相同version异内容的首次发现保持冲突，后续明确用户导入动作确认修复后的当前Revision才可解除。自动导入不能自动解除冲突。旧失败操作的预期Hash不因此改变；用户基于新投影重新提交变更，旧操作标superseded并关联新操作，不能重放旧payload。归档/取消须在记录恢复且冲突解除后执行，不提供绕过冲突的写入口。
 
-需求create必须提供contentMarkdown；update可修改正文或元数据，未提供字段保持原值，Core重新计算contentHash和组合recordHash。version、contentFile及Hash由Core维护，客户端不可覆盖。requirement.saved包含recordVersion、portableRef与本机version；get返回完整contentMarkdown，list返回元数据及portableRef，不携带长正文。目录格式错误使用REQUIREMENT_CONFLICT并带reason；Git忽略为REQUIREMENT_PATH_IGNORED；旧格式为LEGACY_REQUIREMENT_FORMAT。
+需求create必须提供contentMarkdown；update可修改正文或元数据，未提供字段保持原值，Core重新计算contentHash和组合recordHash。daemon在update/取消前按投影的portableRef.revision读回Git中的requirement.json与content.md，用记录值补齐请求未命名的字段，因此部分patch不会把scope清零或把acceptance/openQuestions/confirmedDecisions/featureIds重置为空（W9R2-02）。version、contentFile及Hash由Core维护，客户端不可覆盖。requirement.saved包含recordVersion、portableRef与本机version；get返回完整contentMarkdown，list返回元数据及portableRef，不携带长正文。目录格式错误使用REQUIREMENT_CONFLICT并带reason；Git忽略为REQUIREMENT_PATH_IGNORED；旧格式为LEGACY_REQUIREMENT_FORMAT。
+
+requirement.save遵循§1的通用写幂等账本：同键同载荷重放返回首次记录的结果（同requirementId/version，不新建投影行，也不再产生commit），同键异载荷返回IDEMPOTENCY_CONFLICT；被拒绝的调用不占用键，修正载荷后可用同键重试（W9R2-01）。requirement.save.retry仍按本节走「新请求键指向原operation」的独立语义，不入通用账本。

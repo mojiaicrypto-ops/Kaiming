@@ -919,6 +919,16 @@ export function planCard(input: {
       : hasAnswer
         ? null
         : 'the Plan gate is not readable for this Work';
+  // The daemon's machine-readable half: the page localises this code instead of
+  // rendering the English diagnostic (W9R2-05). An answer that carries no code
+  // (an older daemon, or a fixture) falls back to the generic "unavailable" text.
+  const reasonCodeRaw = approvalRaw['reasonCode'];
+  const approvalReasonCode =
+    typeof reasonCodeRaw === 'string' && reasonCodeRaw !== ''
+      ? reasonCodeRaw
+      : hasAnswer
+        ? null
+        : 'gate_unavailable';
   return {
     workId: input.workId,
     revision: typeof work['baseRevision'] === 'string' ? work['baseRevision'] : input.revision,
@@ -930,6 +940,7 @@ export function planCard(input: {
     expired: requested !== currentVersion || gateStatus === 'stale',
     approvalEnabled,
     approvalReason,
+    approvalReasonCode,
     authorizationId:
       typeof answer['authorizationId'] === 'string' ? answer['authorizationId'] : null,
     plan: answer['plan'] ?? null,

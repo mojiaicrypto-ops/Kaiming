@@ -19,6 +19,7 @@
  * protocol only needs text frames.
  */
 import { createHash, randomBytes } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import {
@@ -31,8 +32,10 @@ import {
   type FindingSeverity,
   type JsonObject,
   type Plan,
+  type PortableRequirement,
   type ProjectSummary,
   type Ref,
+  type Requirement,
   type Role,
   type Scope,
   type SourceRef,
@@ -85,9 +88,26 @@ export interface WorkbenchServices {
   readonly findings?: FindingService;
   readonly requirements?: RequirementContinuation;
   readonly requirementSaves?: RequirementSaveService;
+  /**
+   * Reads a Requirement record's committed files at a revision.
+   *
+   * The local projection row does not carry `scope`, `acceptance`, the open
+   * questions, the confirmed decisions or the feature ids — they live in the
+   * portable `requirement.json` (`data.md` §2). An update or a cancellation must
+   * therefore read the record back before rewriting it, or it silently resets the
+   * fields the caller did not name (W9R2-02/W9R2-03). The daemon's default port
+   * reads with the real `git` binary; a caller may inject its own.
+   */
+  readonly requirementRecords?: RequirementRecordPort;
   /** Backup/restore port; defaults to the real `git`-backed implementation. */
   readonly backupGit?: BackupGitPort;
   readonly now?: () => number;
+}
+
+/** One Requirement record file's committed content at a Git revision. */
+export interface RequirementRecordPort {
+  /** The blob's text, or `null` when the revision or the path does not exist. */
+  read(repoRoot: string, revision: string, path: string): string | null;
 }
 
 /** The upgrade decision for one WebSocket request. */
@@ -210,15 +230,20 @@ export const WRITE_METHODS: readonly string[] = [
 /**
  * Write methods whose idempotency ledger entry the generic wrapper owns.
  *
- * `conversation.message.send` and `requirement.save` are deliberately absent: their
- * effects already run inside their own transaction together with a dedicated ledger
- * entry, and nesting a second wrapper there would double-record the same command.
- * `backup.run`/`restore.run` use the non-transactional variant below.
+ * `conversation.message.send` is deliberately absent: its effect owns its own
+ * transaction and records its own ledger entry, so nesting the wrapper would
+ * double-record the same command. `requirement.save` used to be excluded for the
+ * same reason, but its Git-record service only de-duplicates *commits*: a replay
+ * still minted a new Requirement id and a second projection row, and a same-key
+ * different payload was accepted (W9R2-01). The wrapper now answers the replay
+ * before any id is generated. `backup.run`/`restore.run` use the non-transactional
+ * variant below.
  */
 const LEDGER_WRAPPED_METHODS: readonly string[] = [
   'conversation.create',
   'project.open',
   'work.control',
+  'requirement.save',
   'requirement.continue',
   'plan.approve',
   'finding.submit',
@@ -278,6 +303,37 @@ const UI_STRINGS: Record<string, { readonly en: string; readonly zh: string }> =
   'board.completed': { en: 'Completed', zh: '已完成' },
   'board.archived': { en: 'Archived', zh: '已归档' },
   'config.invalid': { en: 'The configuration was rejected', zh: '配置未通过校验' },
+  // Machine-readable Plan-approval reasons (`plan.current`'s `approval.reasonCode`),
+  // so the workbench can render the disabled reason in its own language instead of
+  // echoing the daemon's English diagnostic (W9R2-05).
+  'detail.approveReason.no_plan': {
+    en: 'The gate holds no approved Plan for this Work revision.',
+    zh: '该工作版本尚无已批准的计划。',
+  },
+  'detail.approveReason.stale_version': {
+    en: 'This plan version is not current any more; refresh before approving.',
+    zh: '该计划版本已非当前版本，请刷新后再批准。',
+  },
+  'detail.approveReason.gate_not_approved': {
+    en: 'The gate no longer accepts this plan version.',
+    zh: '该计划版本已不再被闸门接受。',
+  },
+  'detail.approveReason.plan_unreadable': {
+    en: 'Approval is unavailable: the Plan body cannot be read.',
+    zh: '当前无法批准：无法读取计划正文。',
+  },
+  'detail.approveReason.no_authorization': {
+    en: 'Approval is unavailable: the Plan records no local authorization.',
+    zh: '当前无法批准：计划未记录本地授权。',
+  },
+  'detail.approveReason.authorization_unreadable': {
+    en: 'Approval is unavailable: the local authorization is not readable for this Work.',
+    zh: '当前无法批准：该工作的本地授权不可读取。',
+  },
+  'detail.approveReason.gate_unavailable': {
+    en: 'Approval is unavailable: the Plan gate is not readable.',
+    zh: '当前无法批准：计划闸门不可读取。',
+  },
   disconnected: { en: 'Connection lost; background state pending', zh: '连接中断，后台状态待同步' },
 };
 
@@ -309,6 +365,7 @@ export class WorkbenchProtocol {
   private readonly services: WorkbenchServices;
   private readonly now: () => number;
   private readonly backupGit: BackupGitPort;
+  private readonly requirementRecords: RequirementRecordPort;
   private connectionSequence = 0;
   /** Live WebSocket connections, so a shutdown or failure can close them honestly. */
   private readonly sockets = new Set<ServerWebSocket>();
@@ -317,6 +374,7 @@ export class WorkbenchProtocol {
     this.services = services;
     this.now = services.now ?? (() => Date.now());
     this.backupGit = services.backupGit ?? createNodeBackupGitPort();
+    this.requirementRecords = services.requirementRecords ?? createNodeRequirementRecordPort();
   }
 
   /** The Project this daemon serves; also the ACL boundary of every query. */
@@ -1674,31 +1732,54 @@ export class WorkbenchProtocol {
       );
     }
     const now = this.services.store.now();
+    const cancellationReason = reason === '' ? '用户取消' : reason;
+    // The cancellation adds lifecycle facts to the record that exists; it does not
+    // replace it. The recorded metadata and body are read back from Git so the
+    // scope, the acceptance list, the confirmed decisions, the open questions, the
+    // feature ids and every content section survive the cancel, and only the
+    // completion summary is rewritten with the reason (W9R2-03,
+    // `experience.md`「取消保留部分成果及处置结果」).
+    const record = this.readRequirementRecord(requirement);
+    const metadata = (
+      record === null
+        ? {
+            schemaVersion: 1 as const,
+            id: requirement.id,
+            version: requirement.recordVersion + 1,
+            contentFile: 'content.md' as const,
+            createdAt: requirement.createdAt,
+            updatedAt: now,
+            title: requirement.title,
+            goal: requirement.goal,
+            scope: emptyScope(),
+            lifecycle: 'cancelled' as const,
+            featureIds: [],
+            acceptance: [],
+            openQuestions: [],
+            confirmedDecisions: [],
+            relatedRequirementIds: [],
+            cancellation: { cancelledAt: now, reason: cancellationReason },
+          }
+        : {
+            ...stripRecordBody(record),
+            id: requirement.id,
+            version: requirement.recordVersion + 1,
+            updatedAt: now,
+            lifecycle: 'cancelled' as const,
+            cancellation: { cancelledAt: now, reason: cancellationReason },
+          }
+    ) as Parameters<RequirementSaveService['save']>[0]['metadata'];
     const outcome = saves.save({
       operationId,
-      metadata: {
-        schemaVersion: 1,
-        id: requirement.id,
-        version: requirement.recordVersion + 1,
-        contentFile: 'content.md',
-        createdAt: requirement.createdAt,
-        updatedAt: now,
-        title: requirement.title,
-        goal: requirement.goal,
-        scope: emptyScope(),
-        lifecycle: 'cancelled',
-        featureIds: [],
-        acceptance: [],
-        openQuestions: [],
-        confirmedDecisions: [],
-        relatedRequirementIds: [],
-        cancellation: { cancelledAt: now, reason: reason === '' ? '用户取消' : reason },
-      },
-      contentMarkdown: canonicalRequirementContent({
-        title: requirement.title,
-        goal: requirement.goal,
-        completion: reason === '' ? '用户取消' : reason,
-      }),
+      metadata,
+      contentMarkdown:
+        record === null
+          ? canonicalRequirementContent({
+              title: requirement.title,
+              goal: requirement.goal,
+              completion: cancellationReason,
+            })
+          : withCompletionSummary(record.contentMarkdown, cancellationReason),
       expected: {
         recordVersion: requirement.recordVersion,
         recordHash: requirement.portableRef.hash,
@@ -1727,12 +1808,49 @@ export class WorkbenchProtocol {
   }
 
   /**
+   * Reads the committed record behind a projection row (W9R2-02/W9R2-03).
+   *
+   * The projection carries the record identity and version but not the portable
+   * metadata, so a save that only changes one field must read `requirement.json`
+   * and `content.md` back from the revision the projection points at. A missing or
+   * unparseable record answers `null`, which makes the caller fall back to the
+   * conservative behaviour instead of inventing metadata.
+   */
+  private readRequirementRecord(row: Requirement): PortableRequirement | null {
+    const project = this.services.store.projects.find(this.projectId);
+    const root = project?.gitRoot ?? project?.root;
+    if (root === undefined || root === '') return null;
+    const directory = row.portableRef.path;
+    if (directory === undefined || directory === '') return null;
+    const revision = row.portableRef.revision;
+    if (revision === undefined || revision === '' || revision === 'working-tree') return null;
+    const metadataJson = this.requirementRecords.read(
+      root,
+      revision,
+      `${directory}/requirement.json`,
+    );
+    if (metadataJson === null) return null;
+    const contentMarkdown =
+      this.requirementRecords.read(root, revision, `${directory}/content.md`) ?? '';
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(metadataJson);
+    } catch {
+      return null;
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return { ...(parsed as Record<string, unknown>), contentMarkdown } as PortableRequirement;
+  }
+
+  /**
    * `requirement.save` / `requirement.save.retry`.
    *
    * Git is written first and the projection follows, so this answers only after the
    * real service reports the save (`AC-090/AC-093`). A refused save keeps the
    * caller's input in the error `details`, and the retry path names the original
-   * `operationId` (`protocol.md` §8).
+   * `operationId` (`protocol.md` §8). An update or a cancellation reads the
+   * committed record first and overrides only what the request names, so a partial
+   * patch never resets the recorded scope, arrays or body (W9R2-02/W9R2-03).
    */
   private saveRequirement(
     params: JsonObject,
@@ -1808,10 +1926,19 @@ export class WorkbenchProtocol {
     // A new record's identity is server-created; the client cannot choose it
     // (`protocol.md` §8 "version、contentFile及Hash由Core维护").
     const id = existing?.id ?? this.services.store.newId();
-    // A patch that names no scope keeps the empty envelope: a Requirement row has no
-    // scope field, so an unnamed scope must never be filled from `sourceRef`, which
-    // is a source reference and not a `Scope` (T4 §4.2, W9R1-05).
-    const requestedScope = patch['scope'] ?? existing?.sourceRef ?? emptyScope();
+    // The committed record is the authority for every field the request does not
+    // name (`protocol.md` §8 "未提供字段保持原值"): the projection row carries none of
+    // the portable metadata, so reading it back is the only way a partial update
+    // preserves scope/acceptance/decisions instead of resetting them (W9R2-02).
+    const record = existing === undefined ? null : this.readRequirementRecord(existing);
+    // An unnamed scope keeps the recorded envelope; a Requirement row has no scope
+    // field, so it must never be filled from `sourceRef`, which is a source
+    // reference and not a `Scope` (T4 §4.2, W9R1-05).
+    const requestedScope = patch['scope'] ?? record?.scope ?? emptyScope();
+    const lifecycle = (optionalString(patch['lifecycle']) ??
+      record?.lifecycle ??
+      existing?.lifecycle ??
+      'queued') as 'queued' | 'active' | 'completed' | 'cancelled' | 'archived';
     const metadata = {
       schemaVersion: 1 as const,
       id,
@@ -1819,21 +1946,33 @@ export class WorkbenchProtocol {
       contentFile: 'content.md' as const,
       // `contentHash` is recomputed by the save service from the real body bytes;
       // a client cannot supply it (`protocol.md` §8).
-      createdAt: existing?.createdAt ?? now,
+      createdAt: record?.createdAt ?? existing?.createdAt ?? now,
       updatedAt: now,
-      title: stringOr(patch, 'title', existing?.title ?? ''),
-      goal: stringOr(patch, 'goal', existing?.goal ?? ''),
+      title: stringOr(patch, 'title', record?.title ?? existing?.title ?? ''),
+      goal: stringOr(patch, 'goal', record?.goal ?? existing?.goal ?? ''),
       scope: isScope(requestedScope) ? requestedScope : emptyScope(),
-      lifecycle: (optionalString(patch['lifecycle']) ?? existing?.lifecycle ?? 'queued') as
-        'queued' | 'active' | 'completed' | 'cancelled' | 'archived',
-      featureIds: stringArray(patch['featureIds']),
-      acceptance: arrayField(patch, 'acceptance'),
-      openQuestions: stringArray(patch['openQuestions']),
-      confirmedDecisions: arrayField(patch, 'confirmedDecisions'),
-      relatedRequirementIds: stringArray(patch['relatedRequirementIds']),
+      lifecycle,
+      // Lifecycle facts recorded on the committed record survive an unrelated
+      // update; dropping them would make a later archive of a completed record
+      // structurally invalid.
+      ...(record?.previousLifecycle === undefined
+        ? {}
+        : { previousLifecycle: record.previousLifecycle }),
+      ...(record?.completion === undefined ? {} : { completion: record.completion }),
+      ...(record?.cancellation === undefined ? {} : { cancellation: record.cancellation }),
+      featureIds: stringArrayOr(patch['featureIds'], record?.featureIds ?? []),
+      acceptance: arrayOr(patch, 'acceptance', record?.acceptance ?? []),
+      openQuestions: stringArrayOr(patch['openQuestions'], record?.openQuestions ?? []),
+      confirmedDecisions: arrayOr(patch, 'confirmedDecisions', record?.confirmedDecisions ?? []),
+      relatedRequirementIds: stringArrayOr(
+        patch['relatedRequirementIds'],
+        record?.relatedRequirementIds ?? [],
+      ),
     };
     const contentMarkdown =
-      optionalString(patch['contentMarkdown']) ?? `# ${metadata.title}\n\n${metadata.goal}\n`;
+      optionalString(patch['contentMarkdown']) ??
+      record?.contentMarkdown ??
+      `# ${metadata.title}\n\n${metadata.goal}\n`;
     const candidate: Parameters<RequirementSaveService['save']>[0] = {
       operationId,
       metadata: metadata as Parameters<RequirementSaveService['save']>[0]['metadata'],
@@ -1974,13 +2113,17 @@ export class WorkbenchProtocol {
       approval: {
         enabled: false,
         reason: null,
+        reasonCode: null,
       },
     };
     if (current === undefined) {
       // No approved Plan for this revision: the card renders the gate's own
-      // "missing" verdict instead of an approve button that cannot work.
+      // "missing" verdict instead of an approve button that cannot work. The
+      // `reasonCode` is the machine-readable half the UI localises; `reason` stays
+      // the English diagnostic (W9R2-05).
       response['approval'] = {
         enabled: false,
+        reasonCode: 'no_plan',
         reason: 'the gate holds no approved Plan for this Work revision',
       };
       return response;
@@ -1988,6 +2131,7 @@ export class WorkbenchProtocol {
     if (!requested) {
       response['approval'] = {
         enabled: false,
+        reasonCode: 'stale_version',
         reason: `Plan version ${requestedVersion} is not the current one (${currentVersion})`,
       };
       return response;
@@ -1995,6 +2139,7 @@ export class WorkbenchProtocol {
     if (approval.status !== 'approved') {
       response['approval'] = {
         enabled: false,
+        reasonCode: 'gate_not_approved',
         reason: `the gate no longer accepts the Plan of version ${currentVersion} (${approval.status})`,
       };
       return response;
@@ -2010,6 +2155,7 @@ export class WorkbenchProtocol {
     if (draft === null) {
       response['approval'] = {
         enabled: false,
+        reasonCode: 'plan_unreadable',
         reason: 'the Plan body could not be read back from the artifact store',
       };
       return response;
@@ -2018,6 +2164,7 @@ export class WorkbenchProtocol {
     if (authorizationRef === null) {
       response['approval'] = {
         enabled: false,
+        reasonCode: 'no_authorization',
         reason: 'the approved Plan records no local authorization envelope',
       };
       return response;
@@ -2026,11 +2173,12 @@ export class WorkbenchProtocol {
     if (authorization === undefined || authorization.workId !== workId) {
       response['approval'] = {
         enabled: false,
+        reasonCode: 'authorization_unreadable',
         reason: `the local authorization ${authorizationRef} is not readable for this Work`,
       };
       return response;
     }
-    response['approval'] = { enabled: true, reason: null };
+    response['approval'] = { enabled: true, reason: null, reasonCode: null };
     return response;
   }
 
@@ -3342,6 +3490,19 @@ function stringArray(value: unknown): string[] {
   });
 }
 
+/**
+ * An array field that keeps its recorded value when the request omits it
+ * (`protocol.md` §8 "未提供字段保持原值", W9R2-02).
+ */
+function stringArrayOr(value: unknown, fallback: readonly string[]): string[] {
+  return value === undefined ? [...fallback] : stringArray(value);
+}
+
+/** As `stringArrayOr`, for the arrays whose entries are objects. */
+function arrayOr(source: JsonObject, key: string, fallback: readonly unknown[]): unknown[] {
+  return source[key] === undefined ? [...fallback] : arrayField(source, key);
+}
+
 function arrayField(source: JsonObject, key: string): unknown[] {
   const value = source[key];
   if (value === undefined) return [];
@@ -3483,6 +3644,79 @@ function matchesSubscription(
 
 function emptyScope(): Scope {
   return { readPaths: [], writePaths: [], operations: [], networkTargets: [] };
+}
+
+/**
+ * A committed record's metadata without the body and the derived content hash.
+ *
+ * A cancellation rewrites only lifecycle facts, so it starts from the read-back
+ * record and drops the two members the save service owns: `contentMarkdown` is not
+ * metadata at all, and `contentHash` is recomputed from the new body bytes
+ * (`protocol.md` §8 "Hash由Core维护").
+ */
+function stripRecordBody(record: PortableRequirement): Record<string, unknown> {
+  const { contentMarkdown: _body, contentHash: _hash, ...metadata } = record;
+  return metadata;
+}
+
+/** The `## 完成摘要` heading every portable body carries (`requirements.md` §6). */
+const REQUIREMENT_COMPLETION_HEADING = '完成摘要';
+
+/**
+ * Replaces only the completion summary of a recorded body (W9R2-03).
+ *
+ * A cancellation keeps every recorded content section; it appends the lifecycle
+ * fact by rewriting the one section that reports the outcome. The rest of the body
+ * — including the version marker Core prepends and every other level-2 section — is
+ * handed back untouched, so the cancel cannot silently blank a delivered
+ * requirement's record.
+ */
+function withCompletionSummary(content: string, summary: string): string {
+  const lines = content.split('\n');
+  const headingIndex = lines.findIndex((line) =>
+    new RegExp(`^##\\s+${REQUIREMENT_COMPLETION_HEADING}\\s*$`, 'u').test(line.trim()),
+  );
+  if (headingIndex === -1) {
+    // A legacy body without the section still gets a structurally valid record.
+    return `${content.replace(/\s+$/u, '')}\n\n## ${REQUIREMENT_COMPLETION_HEADING}\n\n${summary}\n`;
+  }
+  let nextHeading = lines.length;
+  for (let cursor = headingIndex + 1; cursor < lines.length; cursor += 1) {
+    if (/^##\s+/u.test((lines[cursor] ?? '').trim())) {
+      nextHeading = cursor;
+      break;
+    }
+  }
+  const head = lines
+    .slice(0, headingIndex + 1)
+    .join('\n')
+    .replace(/\s+$/u, '');
+  const tail = lines.slice(nextHeading).join('\n').replace(/^\s+/u, '');
+  return tail === '' ? `${head}\n\n${summary}\n` : `${head}\n\n${summary}\n\n${tail}\n`;
+}
+
+/**
+ * The daemon's own record reader: real `git show <revision>:<path>`.
+ *
+ * `requirement.json` is the only place the portable metadata lives, so the daemon
+ * reads the blob through the same `git` binary the rest of the deployment uses. A
+ * missing revision or path is `null`; the caller then falls back rather than
+ * fabricating a record.
+ */
+function createNodeRequirementRecordPort(): RequirementRecordPort {
+  return {
+    read: (repoRoot, revision, path) => {
+      try {
+        return execFileSync('git', ['-C', repoRoot, 'show', `${revision}:${path}`], {
+          encoding: 'utf8',
+          maxBuffer: 32 * 1024 * 1024,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        });
+      } catch {
+        return null;
+      }
+    },
+  };
 }
 
 /** Whether a JSON value is a `Scope` envelope rather than some other object. */

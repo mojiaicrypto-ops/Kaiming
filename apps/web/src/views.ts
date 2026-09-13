@@ -355,7 +355,17 @@ export interface PlanView {
   readonly approvedVersion: number | null;
   readonly approvedAt: string | null;
   readonly expired: boolean;
+  /**
+   * The daemon's English diagnostic; kept for the element's `title` (W9R2-05).
+   */
   readonly approvalReason: string | null;
+  /**
+   * The machine-readable approval reason (`no_plan`, `stale_version`, …).
+   *
+   * The page renders this through the i18n dictionary instead of the daemon's
+   * English sentence, so the interface language stays consistent (W9R2-05).
+   */
+  readonly approvalReasonCode: string | null;
   /**
    * The gate's own "this card may be approved" verdict (W9R1-01).
    *
@@ -509,6 +519,10 @@ export function requirementDetail(input: {
           : typeof approvalRaw === 'string'
             ? approvalRaw
             : null,
+      approvalReasonCode:
+        typeof field(planRaw, 'approvalReasonCode') === 'string'
+          ? (field(planRaw, 'approvalReasonCode') as string)
+          : null,
       approvalEnabled,
     };
   }

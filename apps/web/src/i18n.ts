@@ -158,6 +158,38 @@ export const UI_STRINGS: Readonly<Record<string, InterfaceString>> = {
     en: 'Approval is unavailable: the Plan body or its local authorization cannot be read.',
     zh: '当前无法批准：计划正文或其本地授权不可读取。',
   },
+  // The daemon returns `approval.reasonCode` as a machine-readable identifier; the
+  // page renders the interface string from here, so a Chinese page never mixes in
+  // the daemon's English diagnostic (W9R2-05). The English text stays available in
+  // the element's `title` for diagnosis.
+  'detail.approveReason.no_plan': {
+    en: 'The gate holds no approved Plan for this Work revision.',
+    zh: '该工作版本尚无已批准的计划。',
+  },
+  'detail.approveReason.stale_version': {
+    en: 'This plan version is not current any more; refresh before approving.',
+    zh: '该计划版本已非当前版本，请刷新后再批准。',
+  },
+  'detail.approveReason.gate_not_approved': {
+    en: 'The gate no longer accepts this plan version.',
+    zh: '该计划版本已不再被闸门接受。',
+  },
+  'detail.approveReason.plan_unreadable': {
+    en: 'Approval is unavailable: the Plan body cannot be read.',
+    zh: '当前无法批准：无法读取计划正文。',
+  },
+  'detail.approveReason.no_authorization': {
+    en: 'Approval is unavailable: the Plan records no local authorization.',
+    zh: '当前无法批准：计划未记录本地授权。',
+  },
+  'detail.approveReason.authorization_unreadable': {
+    en: 'Approval is unavailable: the local authorization is not readable for this Work.',
+    zh: '当前无法批准：该工作的本地授权不可读取。',
+  },
+  'detail.approveReason.gate_unavailable': {
+    en: 'Approval is unavailable: the Plan gate is not readable.',
+    zh: '当前无法批准：计划闸门不可读取。',
+  },
   'detail.approvedAt': { en: 'Approved at', zh: '批准时间' },
   'detail.tasks': { en: 'Tasks', zh: '任务' },
   'detail.runs': { en: 'Runs', zh: '运行' },

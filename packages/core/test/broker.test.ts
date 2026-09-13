@@ -157,6 +157,33 @@ async function freePort(): Promise<number> {
   return port;
 }
 
+/**
+ * The first port in `[min, max]` the OS can bind right now (W9R2-04).
+ *
+ * The manager's own probe binds and releases, so this is the same observation it
+ * makes; a `undefined` answer means the window is saturated and the caller must
+ * pick another window rather than assert against a port a neighbour owns.
+ */
+async function firstFreePort(min: number, max: number): Promise<number | undefined> {
+  for (let port = min; port <= max; port += 1) {
+    const server = createServer();
+    const bindable = await new Promise<boolean>((settle) => {
+      server.once('error', () => settle(false));
+      server.listen(port, '127.0.0.1', () => settle(true));
+    });
+    await closeServer(server);
+    if (bindable) return port;
+  }
+  return undefined;
+}
+
+/** Closes a probe listener, tolerating one that never opened. */
+async function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
+  await new Promise<void>((settle) => {
+    server.close(() => settle());
+  });
+}
+
 describe('Broker (AC-048, AC-050)', () => {
   let dataDir: string;
   let workspace: string;
@@ -1183,28 +1210,54 @@ describe('Broker (AC-048, AC-050)', () => {
       // An external listener on a port inside the window: the review's failing
       // probe showed `create` handing it out and `start` then reporting running on
       // somebody else's socket.
-      const occupied = createServer();
-      await new Promise<void>((settle) => {
-        occupied.listen(0, '127.0.0.1', () => {
-          settle();
-        });
-      });
-      const occupiedPort = (occupied.address() as { port: number }).port;
+      //
+      // W9R2-04: the answer must be a fact about this test, not about a neighbour.
+      // `listen(0)` hands back an arbitrary ephemeral port, and at default worker
+      // concurrency a sibling worker can already own `occupiedPort + 1`, which used
+      // to fail `expect(created.ok)` intermittently. The fixture now (a) scans for
+      // the window's first genuinely free port with a real bind check and (b) retries
+      // the whole attempt if a concurrent socket wins the race, so the assertion
+      // stays exact — the manager must hand out the first free port of the window.
       const manager = new TestEnvironmentManager({ prefix: 'agentdev-broker-port-' });
+      const other = new TestEnvironmentManager({ prefix: 'agentdev-broker-port-b-' });
+      let occupied: ReturnType<typeof createServer> | undefined;
+      let created: Awaited<ReturnType<TestEnvironmentManager['create']>> | undefined;
       try {
-        const created = await manager.create({
-          workId: WORK_ID,
-          attemptId: ATTEMPT_A,
-          command: [process.execPath, '-e', 'process.exit(0)'],
-          portRange: { min: occupiedPort, max: occupiedPort + 1 },
-        });
-        expect(created.ok).toBe(true);
-        if (!created.ok) throw new Error('unreachable');
-        expect(created.environment.port).toBe(occupiedPort + 1);
+        for (let attempt = 0; attempt < 20 && created === undefined; attempt += 1) {
+          const listener = createServer();
+          await new Promise<void>((settle) => {
+            listener.listen(0, '127.0.0.1', () => {
+              settle();
+            });
+          });
+          const occupiedPort = (listener.address() as AddressInfo).port;
+          const freePort = await firstFreePort(occupiedPort + 1, occupiedPort + 9);
+          if (freePort === undefined) {
+            await closeServer(listener);
+            continue;
+          }
+          const candidate = await manager.create({
+            workId: WORK_ID,
+            attemptId: ATTEMPT_A,
+            command: [process.execPath, '-e', 'process.exit(0)'],
+            portRange: { min: occupiedPort, max: freePort },
+          });
+          if (candidate.ok && candidate.environment.port === freePort) {
+            occupied = listener;
+            created = candidate;
+            break;
+          }
+          // A concurrent socket took the port between the probe and the allocation:
+          // release everything and try again instead of asserting a race.
+          if (candidate.ok) await manager.cleanup(candidate.environment);
+          await closeServer(listener);
+        }
+        expect(occupied).toBeDefined();
+        expect(created?.ok).toBe(true);
+        if (created === undefined || !created.ok) throw new Error('unreachable');
 
         // Two managers never receive the same port, even though each one's own
         // bookkeeping is empty.
-        const other = new TestEnvironmentManager({ prefix: 'agentdev-broker-port-b-' });
         const second = await other.create({
           workId: WORK_ID,
           attemptId: ATTEMPT_B,
@@ -1221,11 +1274,7 @@ describe('Broker (AC-048, AC-050)', () => {
         await manager.cleanup(created.environment);
         await other.cleanup(second.environment);
       } finally {
-        await new Promise<void>((settle) => {
-          occupied.close(() => {
-            settle();
-          });
-        });
+        if (occupied !== undefined) await closeServer(occupied);
       }
     });
 

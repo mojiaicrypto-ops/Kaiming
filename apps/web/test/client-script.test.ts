@@ -12,6 +12,36 @@ import { describe, expect, it } from 'vitest';
 
 const script = readFileSync(fileURLToPath(new URL('../public/app.js', import.meta.url)), 'utf8');
 
+/**
+ * The required failure-test suite (`W9R2-06`).
+ *
+ * The disconnect case used to assert `typeof notice.id === 'string' || true`, which
+ * is true under every outcome and therefore evidence of nothing. The assertion is
+ * now a real field check; this guard keeps it that way, because the defect is the
+ * test itself and a vacuous assertion cannot fail at runtime.
+ */
+const failures = readFileSync(
+  fileURLToPath(new URL('./workbench-failures.integration.test.ts', import.meta.url)),
+  'utf8',
+);
+
+describe('required failure-test hygiene (W9R2-06)', () => {
+  it('contains no always-true assertion', () => {
+    // `x || true`, `expect(true)`, `toBeTruthy()` on a literal — any of them would
+    // pin the suite green regardless of the product.
+    expect(failures).not.toMatch(/\|\|\s*true\s*\)/u);
+    expect(failures).not.toMatch(/expect\(true\)/u);
+  });
+
+  it('asserts the real reconnect attempt of the disconnection notice', () => {
+    expect(failures).toMatch(/notice\.attempt/u);
+    expect(failures).toMatch(
+      /expect\(Number\.isInteger\(notice\.attempt\) && \(notice\.attempt \?\? 0\) > 0\)\.toBe\(true\)/u,
+    );
+    expect(failures).not.toMatch(/notice\.id === 'string'/u);
+  });
+});
+
 /** The shipped policy object, parsed out of the script source. */
 function shippedPolicy(): {
   readonly baseDelayMs: number;

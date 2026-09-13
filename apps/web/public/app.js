@@ -119,6 +119,23 @@
       const key = element.getAttribute('data-i18n-aria');
       if (key) keys.add(key);
     }
+    // The Plan gate can refuse after the page was rendered (the gate moved between
+    // render and click), and the refusal carries a reason code, not a sentence: the
+    // code's interface strings are fetched unconditionally so the failure message is
+    // localised too (W9R2-05).
+    for (const key of [
+      'detail.approveReason.no_plan',
+      'detail.approveReason.stale_version',
+      'detail.approveReason.gate_not_approved',
+      'detail.approveReason.plan_unreadable',
+      'detail.approveReason.no_authorization',
+      'detail.approveReason.authorization_unreadable',
+      'detail.approveReason.gate_unavailable',
+      'detail.approveExpired',
+      'detail.approveUnavailable',
+    ]) {
+      keys.add(key);
+    }
     const resolved = {};
     await Promise.all(
       [...keys].map(async (key) => {
@@ -735,10 +752,17 @@
           // race where the gate moved between render and click.
           approve.disabled = true;
           approve.setAttribute('aria-disabled', 'true');
+          const reasonCode = typeof approval.reasonCode === 'string' ? approval.reasonCode : '';
+          const reasonKey = reasonCode ? 'detail.approveReason.' + reasonCode : '';
           showError('approveError', {
             code: gate.current === true ? 'INVALID_STATE' : 'VERSION_CONFLICT',
+            // The interface string wins over the daemon's English diagnostic, which
+            // is only a fallback for a code the catalogue does not know (W9R2-05).
             message:
-              approval.reason || state.strings['detail.approveExpired'] || 'approval unavailable',
+              (reasonKey && state.strings[reasonKey]) ||
+              state.strings['detail.approveExpired'] ||
+              approval.reason ||
+              'approval unavailable',
           });
           return;
         }

@@ -78,3 +78,49 @@
 | `pnpm build` | 12 个 workspace 全部 `Done` |
 
 并发说明：宿主在一次 JSON 复跑（`--reporter=json`）期间处于高负载，出现 4 例与本片无关的既有用例失败（`apps/cli` Docker 容器写边界、`packages/core` 需求保存/WP-08 演练、`packages/workspace` 依赖血缘），均在 `apps/daemon`/`apps/web`/两份单元测试之外；同一命令在前一次运行 304/304 全绿。本片新增/改写的用例在两次运行中均通过。
+
+## T6 独立 Test（T-01）与第二轮 Review（W9R2-01..06）修复记录
+
+- 输入：`.agentdev/work/WP-09/test.md`（判定 **FAIL**：`T-01`/P1）与 `.agentdev/work/WP-09/review.md` 第 2 轮（`W9R2-01..06`）。
+- 范围：`apps/daemon/src/{server,protocol}.ts`、`apps/web/src/**`、`apps/web/public/app.js`、`apps/web/test/**`、`docs/architecture/protocol.md`（登记行为）、`packages/core/test/broker.test.ts`（**仅该测试夹具**：`W9R2-04` 指名的文件，见「越界说明」），本节记录。`packages/client/src/**` 未改动。
+- 下表「回归测试」均为**在旧行为上会失败**的断言；已逐项以「临时还原旧行为 → 定向复跑 → 还原修复」验证（见「旧行为失败证据」）。
+
+| 发现 | 修改 | 回归测试（旧行为上失败） |
+|---|---|---|
+| T-01 [P1] 浏览器工作台上传的附件无法随消息发送（上传=安装用户，`/rpc`=per-session 用户 ⇒ 403 `NOT_AUTHORIZED`，附件停留 staged） | `apps/daemon/src/server.ts`：`installationUserId = userIdFromSubject('installation:local')` 计算一次；`authPort.authenticate` 对每个会话返回该安装 userId（会话 id 仅作审计 subject），`authenticate()` 的 WP-03 路由复用同一常量。附件属主、消息属主、产物归属与 ACL 全部收敛到同一身份；`protocol.ts` 的 `WorkbenchCaller.userId` 因此对所有会话稳定（`T-03` 的根因一并消除）。`docs/architecture/protocol.md` §2 登记 | 新增 `apps/web/test/workbench-identity.integration.test.ts`：以**产品 `createDaemon`** + 真实 BFF 驱动出厂同款两次请求——`POST /artifacts/upload`（BFF）→ `POST /rpc conversation.message.send`（BFF，带该 attachmentId）→ 200、`state=bound`、`boundMessageId` 一致、`origin=user` 且指向该上传的 Artifact 恰 1 条；另两例：无附件消息仍 200；daemon 安装 Bearer 路径仍是 200/bound；**跨会话**（两次登录）上传→发送仍绑定 |
+| W9R2-01 [P2] `requirement.save` 创建分支不遵守幂等键（同键同载荷建第二条需求、同键异载荷被接受） | `protocol.ts`：把 `requirement.save` 纳入 `LEDGER_WRAPPED_METHODS`（通用 `withCommandLedger`，按 subject+method+payloadHash 记账）。重放在生成任何 id 之前返回首次记录的结果；同键异载荷 `IDEMPOTENCY_CONFLICT`；被拒调用事务回滚不占键。`requirement.save.retry` 保持 §8 独立语义，不入通用账本 | `apps/web/test/workbench.integration.test.ts`「replays requirement.save for the same key and refuses a different payload (W9R2-01)」：同键同载荷重放 `result` 逐字段相等且投影行数不变；同键异载荷 409 `IDEMPOTENCY_CONFLICT` 且行数不变；被拒键修正载荷后可用 |
+| W9R2-02 [P2] `requirement.update` 把未命名字段重置为空（scope 清空，acceptance/openQuestions/confirmedDecisions/featureIds 清空） | `protocol.ts`：`saveRequirement` 更新分支先用新增的 `readRequirementRecord()` 从**投影 `portableRef.revision` 的 Git 记录**读回 `requirement.json`（缺省 `requirementRecords` 端口默认用真实 `git show`），再用 `stringArrayOr`/`arrayOr` 只覆盖 patch 显式给出的字段；未命名时沿用记录值（scope/数组/正文/createdAt/previousLifecycle/completion/cancellation）。删除原先错误的 `existing.sourceRef` scope 回退 | 同文件「keeps the recorded fields an update does not name (W9R2-02)」：创建时写入的 scope.readPaths、featureIds、acceptance、openQuestions、confirmedDecisions 在一次只改 goal+正文的更新后于新 commit 的 `requirement.json` 中逐项保留（旧行为下 scope 为空 envelope、数组全空） |
+| W9R2-03 [P2] 取消重写正文并清空已记录字段（五个内容段被 `待明确` 取代、scope/数组清空） | `protocol.ts`：`cancelRequirement` 改为读回现有记录，metadata 由记录派生（仅覆盖 `version/updatedAt/lifecycle/cancellation`），正文用新增的 `withCompletionSummary()` **只替换「完成摘要」段**；读取失败时才回落到原 canonical 生成器（诚实降级） | 同文件「cancels a requirement without rewriting its recorded body or fields (W9R2-03)」：取消 commit 中六段标题各一次、创建时写入的五段原文全部仍在、`完成摘要` 含真实取消原因，且 scope/featureIds/acceptance/openQuestions/confirmedDecisions 逐项保真 |
+| W9R2-04 [P2] `pnpm test:unit` 默认 workers 偶发失败（`packages/core/test/broker.test.ts` 的端口竞态） | `packages/core/test/broker.test.ts`：夹具确定化——先自行占住 `P`，再用真实 bind 探测窗口内**第一个真空闲端口** `F`，以 `portRange {min:P,max:F}` 断言管理器恰好取 `F`；若并发套接字在探测与分配之间抢走端口则整轮重试（≤20 次）。断言强度不降（仍精确到具体端口），另保留兄弟管理器互斥与 `claimedTestPorts()` 断言 | 该用例本身即回归网；以默认 workers **连续 5 次**执行 `pnpm test:unit`（每次 55 文件 / 1105 用例全绿、零端口失败），另在 6 个 CPU 满载进程下复跑 1 次仍全绿（见验证数字） |
+| W9R2-05 [P3] 中文界面的禁用批准原因渲染 daemon 英文句子 | `protocol.ts`：`plan.current` 的 `approval` 增加机器可读 `reasonCode`（`no_plan`/`stale_version`/`gate_not_approved`/`plan_unreadable`/`no_authorization`/`authorization_unreadable`），英文句保留在 `reason`；`app.ts` 的 `planCard` 透传 `approvalReasonCode`；`views.ts` 的 `PlanView` 增加该字段；`pages.ts` 用 `approveReasonKeyOf()` 从 i18n 目录渲染可见原因，英文诊断移到元素 `title` 与 `data-approve-detail`，`data-approve-reason` 改为原因码；`i18n.ts` 与 daemon 的 `ui.translate` 目录都补齐 7 条词条；`public/app.js` 的点击竞态分支优先用 `state.strings['detail.approveReason.<code>']`，并在 `loadStrings` 中固定预取这批键 | `apps/web/test/pages.test.ts`「renders the disabled approval reason from the dictionary, not the daemon sentence (W9R2-05)」（zh 页面渲染中文、英文仅在 `title`、未知码回落 `detail.approveUnavailable`）；`apps/web/test/workbench.integration.test.ts` 扩展「disables Plan approval…」断言 `approval.reasonCode === 'no_plan'` + 页面 `data-i18n="detail.approveReason.no_plan"`，并新增「renders the disabled approval reason in the page language (W9R2-05)」以 `agentdev_language=zh` 走真实 BFF 断言 `<html lang="zh-CN">` 与中文原因 |
+| W9R2-06 [P3]「断连」用例含恒真断言 `typeof notice.id === 'string' \|\| true` | `apps/web/test/workbench-failures.integration.test.ts`：改为断言真实字段 `expect(Number.isInteger(notice.attempt) && (notice.attempt ?? 0) > 0).toBe(true)` | 新增 `apps/web/test/client-script.test.ts` 的「required failure-test hygiene (W9R2-06)」：对出厂失败用例源码断言不存在 `\|\| true`/`expect(true)`，且断连用例确实断言 `notice.attempt` 且不再有 `notice.id === 'string'`（恒真断言无法在运行时失败，只能以源码守卫回归） |
+
+### 旧行为失败证据（逐项还原验证）
+
+| 项 | 还原的旧行为 | 定向复跑结果 |
+|---|---|---|
+| T-01 | `server.ts` 的 `authPort.authenticate` 改回 `userIdFromSubject(\`user:${session.id}\`)` | `workbench-identity.integration.test.ts`：**2 failed / 1 passed**，失败均为 `403 NOT_AUTHORIZED: attachment … belongs to another owner`（BFF 上传→BFF 发送；跨会话上传→发送），安装 Bearer 路径仍通过 |
+| W9R2-01/02/03 | 从 `LEDGER_WRAPPED_METHODS` 移除 `requirement.save`，并令 `readRequirementRecord()` 返回 `null` | `workbench.integration.test.ts`：**4 failed / 13 passed**，失败为新增的 W9R2-01/02/03 三例与既有 AC-090 用例（重复创建路径引出的 `RECOVERY_REQUIRED`，即 R2.10-8 记录的放大器） |
+| W9R2-05 | `pages.ts` 的 `#approveBlocked` 改回直接渲染 `plan.approvalReason` | `pages.test.ts`：**1 failed**（「renders the disabled approval reason from the dictionary…」，中文页出现英文句子）；`workbench.integration.test.ts` 侧的 `approval.reasonCode === 'no_plan'` 断言在还原 `currentPlan` 时同样失败 |
+| W9R2-06 | 把断连用例改回 `expect(typeof notice.id === 'string' \|\| true).toBe(true)` | `client-script.test.ts`：**2 failed / 2 passed**（「required failure-test hygiene (W9R2-06)」两例：源码含恒真断言、未断言 `notice.attempt`） |
+
+### 验证数字（T6 修复后）
+
+| 命令 | 结果 |
+|---|---|
+| `prettier --write <13 个改动源/测试文件>` | 全部 unchanged/已格式化；`pnpm lint` 的 Prettier check 通过 |
+| `pnpm typecheck` | 退出 0，无输出 |
+| `pnpm lint` | 退出 0（ESLint + Prettier check） |
+| `pnpm test:unit`（默认 workers，契约命令原文） | **55 文件 / 1105 用例**全部通过；默认 workers **连续 6 次**全绿（10.7–14.3s），另在 6 个满载进程下 1 次全绿（16.0s），合计 **7 次零失败**（W9R2-04；旧夹具在默认并发下曾于 `broker.test.ts:1201` 偶发失败） |
+| `node_modules/.bin/vitest run --project integration --maxWorkers=4` | **26 文件 / 311 用例**全部通过（96.2s / 93.1s 两次；新增 `workbench-identity.integration.test.ts` 与 7 例回归） |
+| `pnpm docs:check` | `docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages` |
+| `pnpm build` | 12 个 workspace 全部 `Done` |
+
+### 越界说明与未修项
+
+- **越界**：`packages/core/test/broker.test.ts` 不在本任务的文件所有权清单内，但 `W9R2-04` 明确指名为「契约命令不稳定」的修复靶点，且属测试夹具而非 `packages/core/src`，故只改该测试文件并在此登记；未触碰其他任何包。
+- **`docs/INDEX.md` 第 44 行的文档漂移**（「协议接线（daemon/BFF/WS）…仍未实现」）未改：按任务要求留给 Settlement 更新，T6 不代劳。
+- **`requirement.save.retry` 未纳入通用账本**：按 `protocol.md` §8「新请求键指向原 operation」的独立语义保留（`W9R2-01` 仅针对创建/更新分支）；已在协议文档登记。
+- **两份既有 T4/E2E 测试夹具**（`workbench.integration.test.ts`、`workbench-failures.integration.test.ts`）仍自行复刻 daemon 路由；本轮只把它们的身份改为与生产一致的安装用户（避免夹具继续掩盖 T-01），未整体替换为 `createDaemon`。T-01 的真实产品路径由新增的 `workbench-identity.integration.test.ts` 覆盖。
+- **`T-02`（探针自身计数缺陷）** 属 Test 侧脚本，不在本片代码内，无需修；`T-04`（`docs/INDEX.md`）同上归 Settlement。
+- **AC-070 的大 Diff 截断/一次性下载、`test:e2e`/`test:acceptance`/`test:live`、无头浏览器焦点遍历**仍按原分工留给 WP-03/WP-10。
