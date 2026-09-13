@@ -486,3 +486,185 @@
 - `W9R2-02`/`W9R2-03` 需求记录在 update/取消时的字段与正文保真度；
 - `W9R2-04` `pnpm test:unit` 默认 workers 的偶发端口竞态（契约命令需多次运行或按有界并发口径记录）；
 - `W9R2-05` 中文界面的英文诊断、`W9R2-06` 恒真断言。
+
+---
+
+# WP-09（完整 Web 工作台）独立 Review 报告 · 第 3 轮（聚焦复核 T-01 与 W9R2-01..06）
+
+- 角色：INDEPENDENT REVIEW（独立上下文；**未读取任何开发/Test 聊天或会话**）
+- 工作包：WP-09 完整 Web 工作台
+- 冻结点：`e9e237d`（`fix(daemon,web): unify the installation identity and close the WP-09 findings`）；第 1 轮 `9f107ac`、第 2 轮 `ce2fc80`
+- 输入：本文件第 1/2 轮报告（原文保留于上）、`.agentdev/work/WP-09/implementation.md` §T6、冻结 Diff `ce2fc80..e9e237d`（17 文件，+1911/−84）
+- 证据目录：`/tmp/wp09r3/`（Reviewer 自建探针，消费 **已构建** `dist` 产物；真实 `createDaemon` + 真实 BFF + 真实 loopback HTTP/WS + 真实 SQLite + 真实 Git 工作树 + 真实 `RequirementSaveService`）
+- 唯一写入：本文件（追加；第 1、2 轮内容逐字保留）
+
+## R3.1 冻结与哈希
+
+| 项 | 值 |
+|---|---|
+| `git rev-parse HEAD` | `e9e237dde78a2347d397b2b7a8cf0f1d4a47ddc6` |
+| `git rev-parse e9e237d^{tree}` | `a4f9fd99cfa46e30938f4dac8a3fa14f317f6e04` |
+| `git status --porcelain` | 空（工作区干净；本报告写入后仅本文件 `M`） |
+
+受审文件（`git rev-parse HEAD:<path>`）：
+
+| 文件 | blob |
+|---|---|
+| `apps/daemon/src/server.ts` | `5590c37c661fec27f0ed5fa1a8324d9dcbbb24b1` |
+| `apps/daemon/src/protocol.ts` | `fd7ac930d375a7bd2a58a66fd270a0bc8fbbe486` |
+| `apps/web/src/app.ts` | `c613439d1079cec275b319720ffcbbf9c4772cb6` |
+| `apps/web/src/pages.ts` | `57fb0415ac2544f888ef32efc9311900a9f8325b` |
+| `apps/web/src/views.ts` | `e45de889dc09c3840495d69ec24480ab2d5746e3` |
+| `apps/web/src/i18n.ts` | `d0f391358457c65b1fd5e68505b52e84af4cc055` |
+| `apps/web/public/app.js` | `962f7fdddb7620b29ce3c4d1b54ffa7e98c2cfe7` |
+| `packages/core/test/broker.test.ts` | `54fda6b43765a498cafde1e7721ad38f626ed280` |
+| `apps/web/test/workbench-identity.integration.test.ts` | `1a890b64860a5035d8e4f23b12c61b2cc3a9daa1` |
+| `apps/web/test/workbench.integration.test.ts` | `853fd7429755755e24202d14aa507c56b2f823ce` |
+| `apps/web/test/workbench-failures.integration.test.ts` | `c33a8cd8a9f248231a3adbfb8608ec186a848a63` |
+| `apps/web/test/pages.test.ts` | `c83a17873d35e7dad3303cbedb4a414d7fcbdfa1` |
+| `apps/web/test/client-script.test.ts` | `925f91729104390a57bfbc77e03fbbce14d442bd` |
+| `docs/architecture/protocol.md` | `80fa0be127eb3af9e3c032f97f8cf65a0d19f0a8` |
+
+`packages/client/src/**` 未改动（与 §T6 声明一致）。
+
+## R3.2 结论
+
+**PASS** —— 目标项 `T-01` 与 `W9R2-01..03`、`W9R2-05`、`W9R2-06` 全部独立复现为**已关闭**；`W9R2-04` 具名靶点（`broker.test.ts` 首个端口分配）已确定化，但同一用例的**第二个管理器分配仍会竞态**，默认 workers 10 次中失败 1 次（`W9R3-01`）。新发现 `W9R3-02`（completed/archived 生命周期在协议面上不可达）。**未复现任何 P0/P1，可以进入独立 Test/结算**；残留 2×P2 + 1×P3 须在 Test/结算中显式登记。
+
+### 计数与阻断
+
+| 严重度 | 第 1 轮 | 第 2 轮 | 本轮新增 | 是否阻断 |
+|---|---|---|---|---|
+| P0 | 0 | 0 | 0 | — |
+| P1 | 2（关闭） | 0 | 0 | 不阻断（无复现） |
+| P2 | 6（关闭） | 4（关闭） | 2（`W9R3-01`、`W9R3-02`） | 不阻断，已登记 |
+| P3 | 4（关闭） | 2（关闭） | 1（`W9R3-03`） | 不阻断，已登记 |
+
+## R3.3 契约命令原始结果
+
+全部在仓库根、`export PATH="$HOME/.local/bin:$PATH"` 下执行；日志 `/tmp/wp09r3/logs/{contracts1,unit,integration,targeted,docs-build}.log`。宿主为 8 vCPU，本轮采样期间 `load average` 约 25–40（持续高负载；探针与命令串行执行，`pnpm test:unit` 的 10 次采样未与其他重负载命令重叠）。
+
+| 命令 | 退出码 | 原始结果 |
+|---|---|---|
+| `pnpm typecheck` | 0 | `tsc -p tsconfig.json --pretty false`，无输出 |
+| `pnpm lint` | 0 | `node scripts/lint.mjs`，`All matched files use Prettier code style!` |
+| `pnpm test:unit`（默认 workers，**10 次**） | **1 / 0 ×9** | 9 次 `Test Files 55 passed (55)`、`Tests 1105 passed (1105)`（10.82–13.41s）；第 4 次 `Test Files 1 failed | 54 passed (55)`、`Tests 1 failed | 1104 passed (1105)`，失败为 `packages/core/test/broker.test.ts > … skips a port the OS has already taken … (W7R1-05)` 的 `expect(second.ok).toBe(true)`（`:1267`）。**十次运行零 5s 超时** |
+| `pnpm test:integration --maxWorkers=4` | 0 | `Test Files 26 passed (26)`、`Tests 311 passed (311)`，`Duration 106.16s` |
+| 定向集成复跑（`--maxWorkers=2 --reporter=verbose`，3 文件） | 0 | `Test Files 3 passed (3)`、`Tests 30 passed (30)`，`Duration 13.03s`；含六个必需失败测试、`workbench-identity.integration.test.ts` 三例、W9R2-01/02/03/05 回归 |
+| `pnpm docs:check` | 0 | `docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages` |
+| `pnpm build` | 0 | `pnpm -r build` 全 12 个 project `Done` |
+
+> 数字核对：`implementation.md` §T6 声称 `test:unit 55 文件 / 1105 用例`、`test:integration 26 文件 / 311 用例`、`build 12 workspace` —— 与实测一致；但「默认 workers 连续 6 次全绿」在本次采样中**未复现为稳定**（10 次中 1 次失败，但失败断言已从 §T6 指名的 `broker.test.ts:1201` 移到 `:1267`，见 `W9R3-01`）。
+
+## R3.4 方法与用例数
+
+全部探针由 Reviewer 独立编写，只消费 **dist 构建产物**，不 import 任何产品测试文件。全部临时根目录 `realpathSync`（沿用第 2 轮教训）。
+
+| 脚本（`/tmp/wp09r3/`） | 覆盖 | 判定数 | 结果 |
+|---|---|---|---|
+| `probeT01.mjs` | T-01：BFF 上传 → BFF 首条消息原子绑定、无附件消息、安装 Bearer 路径、跨会话共享属主、被拒发送不绑定、审计 subject vs 身份 | 7 | **7 PASS** |
+| `probeR2.mjs` | W9R2-01（同键同载荷重放、同键异载荷冲突、被拒不占键）、W9R2-02（无关更新保真）、W9R2-03（取消保真 + 投影前进 + 历史保留） | 7 | **7 PASS** |
+| `probeR4.mjs` | `W9R3-02` 生命周期可达性；真实 Git 上 completed 记录的无关更新与归档保真 | 3 | 2 PASS / **1 FAIL（`W9R3-02`）** |
+| `probeF.mjs` | W9R2-05（zh 页面原因来自 i18n + daemon 目录双语）、W9R2-06（无恒真断言 + 断连真实字段）、桥同一 socket 自动重连 | 4 | **4 PASS** |
+| `probeR3.mjs` | **夹具已证伪、判定不计入**（见 R3.10-11：Reviewer 写坏 `requirement.json` 导致 `REQUIREMENT_CONFLICT hash-mismatch`，与产品行为无关）；其意图已由 `probeR2`/`probeR4` 覆盖 | 5 | 0 PASS / 5 FAIL（不计） |
+
+合计 **21 个带判定用例，20 PASS / 1 FAIL**（唯一失败即 `W9R3-02` 的证据）。
+
+关键排除性证据（防止把探针缺陷当成产品缺陷）：
+
+- `probeR3`（v1）：Reviewer 的夹具把 `requirement.json` 写成 `contentHash='e'*64` 并在提交后重写文件，daemon 诚实返回 `REQUIREMENT_CONFLICT hash-mismatch`；`probeR4` 按 Core 的字节口径（`JSON.stringify(meta, null, 2)+'\n'` 与 `<!-- record-version: N -->` 前缀）重写夹具后，同一路径返回 `200 applied` 且字段保真。**该失败是探针缺陷，不作为发现**。
+- `probeR4 R09`：`requirement.save` 携带 `completion` 被 `422 VALIDATION_ERROR: completed requirement requires completion` 拒绝，说明 daemon 没有把 `patch.completion` 映射进 metadata；`probeR4 R10/R11` 用真实 Git 上的 completed 记录证明**读回/保真链路本身正确**——两者合起来定位的是 `W9R3-02`（不可达），不是 `W9R2-02` 的回归。
+
+## R3.5 目标项逐项关闭核验
+
+| 项 | 要求 | 本轮结论 | 证据 |
+|---|---|---|---|
+| **T-01**（P1） | BFF 上传 → BFF 首条消息原子绑定并创建 user 产物；无附件消息可用；安装 Bearer 路径可用；两个浏览器会话共享同一属主 | **关闭** | `probeT01 T01a–T01g`（全部 7 PASS）：两次登录得到两个不同 BFF 会话（`T01a`）→ 上传 `201` + 发送 `200`，`state=bound`、`boundMessageId` 一致、`attachment.ownerUserId = body.ownerUserId = userIdFromSubject('installation:local')`、`origin=user` 产物恰 1 条（`T01b`）；无附件消息 `200` 且属主同一（`T01c`）；B 会话上传 / A 会话发送仍 `bound`，三者属主全等（`T01d`）；安装 Bearer 上传 `201` + 会话发送 `200`（`T01e`）；被拒发送（未知会话）返回 `404 NOT_FOUND` 且附件仍 `staged`（`T01f`）；命令账本 subject 仍是 `user:<session>`（审计），身份是安装用户（`T01g`） |
+| **W9R2-01**（P2） | 同键同载荷重放原结果 + 一条投影行；同键异载荷 `IDEMPOTENCY_CONFLICT`；被拒不占键 | **关闭** | `probeR2 R01a`：`result` 逐字节相同、`requirementId` 相同、投影行 `1→1`；`R01b`：`409 IDEMPOTENCY_CONFLICT` 且行数不变；`R01c`：结构非法的调用 `422 VALIDATION_ERROR`，用**同一键**修正载荷后 `200 applied` |
+| **W9R2-02**（P2） | 无关更新保留 scope/acceptance/decisions/featureIds | **关闭** | `probeR2 R02`：只改 `goal` + 正文的更新后，新 commit 的 `requirement.json` 中 `scope`（`readPaths/operations` 全等）、`featureIds=['F-100','F-101']`、`acceptance`、`openQuestions`、`confirmedDecisions`、`createdAt` 逐项保留，`goal` 已更新。`probeR4 R10/R11`：真实 Git 上 `lifecycle=completed` 的记录在无关更新后仍 `completed` 且 `completion` 原样保留，随后归档为 `archived` 仍保留 `completion` |
+| **W9R2-03**（P2） | 取消保留正文各段与字段，只改写完成摘要 + 取消事实 | **关闭** | `probeR2 R03a`：取消 commit 的 `content.md` 六个二级标题各一次（`[1,1,1,1,1,1]`），创建/更新时写入的五段原文全部仍在，取消原因落在「完成摘要」，`scope`/`featureIds`/`openQuestions` 保真，`lifecycle=cancelled`、`cancellation.reason="产品决定不再需要"`；`R03b`：投影 `recordVersion 2`、`lifecycle=cancelled`、`portableRef.revision=cancelCommit`；`R03c`：取消前的 commit 仍可读回原记录（Git 历史保留） |
+| **W9R2-04**（P2） | `pnpm test:unit` 默认 workers 稳定 | **部分关闭：具名靶点已修，同一用例仍有残留竞态** | 10 次运行 9 次 `55/1105` 全绿、零超时；第 4 次失败断言已从 §T6 指名的 `:1201`（第一个管理器取 `P+1`）移到 `:1267`（第二个管理器取 `P+1`）→ `W9R3-01`。夹具确定化改动本身诚实有效（第一个分配改为「真实 bind 探测窗口内第一个空闲端口 + 抢走即整轮重试」） |
+| **W9R2-05**（P3） | 禁用批准原因来自 i18n | **关闭** | `probeF F01`（真实 BFF，`agentdev_language=zh`）：`<html lang="zh-CN">`，`#approveBlocked` 渲染 `该工作版本尚无已批准的计划。`（中文、无英文句子），`data-i18n="detail.approveReason.no_plan"`，`data-approve-reason="no_plan"`，英文诊断只出现在 `title`；同页 en 版仍为 daemon 英文原句；`F02`：`ui.translate` 对同一键在 `zh`/`en` 两个 locale 都返回目录词条 |
+| **W9R2-06**（P3） | 断连断言不恒真 | **关闭** | `probeF F03`：出厂失败用例源码无 `\|\| true` / `expect(true)`，且断言 `notice.attempt`、不再出现 `notice.id === 'string'`；`F04`：在同一浏览器 socket 上真实观察到 `bridge.reconnecting{attempt:1}` → `bridge.open{resumed:1}`（非恒真、且是产品行为的独立复现） |
+
+## R3.6 六个必需失败测试与代表性 AC 切片
+
+定向 verbose 复跑（真实 daemon + 真实 SQLite + 真实 BFF）逐字命中：
+
+- `持续对话`、`过期卡片`、`窄屏焦点`、`断连`、`配置失败`、`订阅扩大`（服务端 + 客户端本地两例）= 7 例，全部 PASS；另有 `Chief: renders only conversation controls that a real method backs (AC-072, W9R1-07)`、`forwards idempotencyKey and expectedVersion over the /ws bridge (W9R1-08)`。
+- 代表性 AC 切片（同次 30/30 PASS）：AC-068（L1 不入板、真实 Git 取消）、AC-069（Chief 路由与 Composer）、AC-070（真实闸门批准 / 过期拒绝 / 截断产物一次性下载）、AC-074（按目标版本去重）、AC-075（Provider 失败保留输入）、AC-077（分支预览根边界）、AC-084（首条消息附件绑定与拒绝）、AC-085/AC-087–090/AC-093（导入的 active 记录待继续、Git 与投影一致后才显示）、以及新增 `binds an attachment uploaded through the BFF…`、`keeps the recorded fields an update does not name (W9R2-02)`、`cancels a requirement without rewriting its recorded body or fields (W9R2-03)`、`replays requirement.save for the same key… (W9R2-01)`、`renders the disabled approval reason in the page language (W9R2-05)`。
+- 独立探针侧的 AC 切片：AC-084（`probeT01`）、AC-070/AC-073（`probeA` 第 2 轮 + `probeF`）、AC-068/AC-090/AC-093（`probeR2`/`probeR4`）、AC-054（`probeF F04`）。
+
+## R3.7 发现（本轮）
+
+### W9R3-01（P2）`W9R2-04` 具名靶点已修，但同一用例的第二个端口分配仍是竞态，`pnpm test:unit` 在默认 workers 下仍非稳定绿
+
+- 位置：`packages/core/test/broker.test.ts:1261-1267`（`other.create({ portRange: { min: created.environment.port, max: created.environment.port + 1 } })` 与 `:1267 expect(second.ok).toBe(true)`）；对照已修的 `:1210-1257`（第一个分配改为「真实 bind 探测窗口内第一个空闲端口 + 抢走即整轮重试 ≤20 次」）
+- 复现：同一冻结树、默认 workers 连续 10 次 `pnpm test:unit` → 第 4 次 `Test Files 1 failed | 54 passed (55)`、`Tests 1 failed | 1104 passed (1105)`，失败为 `AssertionError: expected false to be true` 于 `broker.test.ts:1267`（`second.ok`，即第二个管理器的 `PROVIDER_UNAVAILABLE`），其余 9 次 `55/1105` 全绿、零超时
+- 观察 vs 期望：观察到「同一 commit 的契约命令退出码仍依赖并发时机」；期望退出码稳定
+- 根因（源码 + 运行时可证）：第二个 `create` 的窗口是 `{P, P+1}`（`P = created.environment.port` 即第一个管理器刚拿到的端口）。`TestEnvironmentManager.create` 对同一进程内的 `claimedPorts` 会跳过，因此正常情况下它会取 `P`；但当 `P` 恰好被同进程外的并发套接字（或其他 worker 的环境子进程）在探测后占用时，`P+1` 亦不可 bind，于是 `allocatePort` 返回 `undefined` → `PROVIDER_UNAVAILABLE` → `second.ok === false`。这一段**没有**像第一个分配那样包在重试循环内
+- 契约：`docs/delivery/implementation.md` 命令契约；`implementation.md` §T6「默认 workers 连续 6 次全绿（W9R2-04）」
+- 修复方向：把「第二个管理器的分配」纳入既有的 20 次重试循环（失败即换一个新窗口，连同 `occupied`/`created` 一起重建）；或用一个显式持有 `P+1` 的监听夹具 + 真实空闲端口探测替代等价类断言；并在 `implementation.md` 把「连续 6 次全绿」标注为采样口径而非保证
+- 影响边界：不构成本片代码回归（失败文件属 WP-07 域、本轮未改其 `src`），仅使 Test 阶段的契约命令不可复现；不阻断
+
+### W9R3-02（P2）completed/archived 生命周期在协议面上不可达（`completion` 载荷无入口，`requirement.archive` 未实现）
+
+- 位置：`apps/daemon/src/protocol.ts:1942-1979`（`saveRequirement` 的 `metadata` 只从 `patch` 取 `title/goal/scope/lifecycle/featureIds/acceptance/openQuestions/confirmedDecisions/relatedRequirementIds/contentMarkdown`；`record.completion` 仅在读回时透传，见 `:1961`）、`apps/daemon/src/protocol.ts:1690`（`work.control` 的 `accepted: ['pause','resume','cancel','continue']`——无 archive）、`packages/contracts/src/entities/work.ts:236-282`（`requirementMetadataSchema` 是 strictObject 且 `refineRequirementLifecycle` 要求 `lifecycle='completed'` 必须带 `completion`）
+- 复现：`probeR4 R09`（真实 Git + 真实 `RequirementSaveService` + 真实 BFF）：
+  1. `requirement.save` 新建时 `patch.lifecycle='completed'` + `patch.completion={...}` → `422 VALIDATION_ERROR`，`details.reasons=["(root): completed requirement requires completion"]`（daemon 丢掉了 `patch.completion`）；
+  2. `requirement.save` 对已有记录 `patch.lifecycle='completed'`（真实 Git 上确有 completed 记录时）同样因缺少 `completion` 被拒；
+  3. `requirement.archive`（协议 §4 表格中列出）→ `404 NOT_FOUND`（`no protocol method named requirement.archive`）。
+- 观察 vs 期望：观察到「只有导入路径（`RequirementProjection` 读真实 Git 记录）能产生 completed/archived 记录，线上写路径无法把需求置为 completed 或归档」；期望 `requirement.update` 能按文档提交完成摘要并归档（`protocol.md:69` 明列 `requirement.archive/restore`，`protocol.md:65` 的 update patch 含元数据修改）
+- 契约：`docs/architecture/protocol.md:65,69,144`；`docs/product/requirements.md:55,67-68,85`（「完成、取消或归档均在用户授权后立即提交」「completed 及从 completed 归档的需求必须填写实际完成摘要」）；AC-088 的 completed/archived 展示面
+- 修复方向：`saveRequirement` 把 `patch.completion`（严格按 `requirementCompletionSchema` 校验）与 `patch.previousLifecycle` 一并映射进 metadata；补 `requirement.archive`/`requirement.restore`（走 `RequirementSaveService`、入 §1 账本），或把两条命令与 completion 入口明确登记为「本片未实现」并从协议表格中移除，避免 Test 以文档为准判为缺陷
+- 影响边界：`probeR4 R10/R11` 证明**读回与保真链路本身正确**（真实 completed 记录的无关更新与归档都保留 `completion`），因此 `W9R2-02` 的修复没有回归；缺的是入口而非保真。UI 不调用 `requirement.save`，不阻断
+- 附注：§T5 残余 1 已登记「`requirement.archive/restore` 未实现」，但**未同时登记**「completed 无法通过线上写路径到达」；`refineRequirementLifecycle` 的存在使这条缺口从「未实现」升级为「文档化的生命周期状态不可达」
+
+### W9R3-03（P3）`createNodeRequirementRecordPort` 用 `execFileSync` 直接拼接 `git show` 参数，无 `--end-of-options`
+
+- 位置：`apps/daemon/src/protocol.ts:3712-3726`（`execFileSync('git', ['-C', repoRoot, 'show', `${revision}:${path}`], …)`；`repoRoot` 来自 `store.projects.find(...)`，`revision` 来自投影行 `portableRef.revision`）
+- 复现：本机实测（`git version 2.39.3`）——`git show "--output=<file>" <rev>:<path>` 会创建/清空该文件（写入内容为 0 字节）；即当 `revision` 以 `-` 开头时该参数被当作选项而非修订。`execFileSync` 不带 shell，因此没有命令注入；受影响的是「以调用方可控的路径创建/清空空文件」
+- 观察 vs 期望：观察到理论上可通过 `expectedVersion`/`recordVersion` 之类的字符串字段把 `-` 开头的修订写入投影，从而让 daemon 反射出一个空文件；`portableRef.revision` 正常由 Core 写成 40 位 commit，实际路径不可达。期望改用 `git show --end-of-options <revision>:<path>`（本机实测可用）或先校验 revision 形状
+- 契约：防御性加固（`protocol.md` §1 授权边界；无明文条款）
+- 修复方向：`git show` 加 `--end-of-options`，并对 `revision` 做 `[0-9a-f]{7,64}` 或 ref 形状校验；同时把 `portableRef.path` 约束在 `.agentdev/requirements/<id>` 前缀内
+- 影响边界：单用户安装、需先能写投影行，实际风险低；登记为加固项
+
+## R3.8 记录核对（`implementation.md` §T6 与代码/证据）
+
+| T6 声明 | 核对 |
+|---|---|
+| T-01：`installationUserId` 计算一次，`authPort.authenticate` 对所有会话返回它，会话 id 仅作审计 subject | **一致**（`server.ts:102/113`；`probeT01 T01a–T01g`） |
+| T-01：附件属主、消息属主、产物归属、ACL 收敛到同一身份 | **一致**：`attachment.ownerUserId` 与 `messageBody.ownerUserId` 同为安装用户；`origin=user` 产物经由绑定附件指向同一上传（`probeT01 T01b/T01d`）；`assertReadable` 的附件属主比对（`server.ts:371-376`）在 Bearer 上传 + 会话发送的组合下也成立（`T01e`） |
+| W9R2-01：`requirement.save` 纳入 `LEDGER_WRAPPED_METHODS`，重放在生成 id 前返回首次结果 | **一致**（`protocol.ts:246` 列表 + `:668-693` 包装；`probeR2 R01a-c`） |
+| W9R2-02：`readRequirementRecord()` 从 Git 记录读回并只覆盖 patch 显式字段 | **一致**（`protocol.ts:1810-1842`、`:1929-1979`；`probeR2 R02`、`probeR4 R10`） |
+| W9R2-03：取消只替换「完成摘要」段 + 覆盖 lifecycle facts | **一致**（`protocol.ts:1735-1760`、`:3652-3700`；`probeR2 R03a-c`） |
+| W9R2-04：「夹具确定化；默认 workers 连续 5 次全绿」 | **部分一致**：夹具确定化成立且首个分配已无竞态；但 10 次采样中 1 次失败于第二个分配 → `W9R3-01`。§T6 表格外的「验证数字」声称 7 次全绿，本次未复现为稳定 |
+| W9R2-05：`approval.reasonCode` + `pages.ts` 走 i18n + 双语目录 | **一致**（`protocol.ts:305-338`/`:2113-2180`、`pages.ts:67-77`/`:362-390`、`i18n.ts:165-192`、`app.js:127-135`/`:756-766`；`probeF F01/F02`） |
+| W9R2-06：断言改为 `notice.attempt`，并以源码守卫回归 | **一致**（`probeF F03/F04`） |
+| 越界说明：`packages/core/test/broker.test.ts` 只改测试夹具 | **一致**：该文件 diff 仅含夹具与注释；`packages/core/src` 未改 |
+| 「§T6 未修项：`docs/INDEX.md` 漂移、`requirement.save.retry` 不入通用账本、两份 T4 夹具仍复刻路由、`T-02/T-04`」 | **一致**：`docs/INDEX.md` 第 44 行仍写「协议接线…仍未实现」，本轮未改（结算时更新即可） |
+
+## R3.9 覆盖限制（Coverage Limits）
+
+1. **无无头/真实浏览器**：`app.js` 的行为仍以「真实 SSR 标记 + BFF 真实资产 + 真实 HTTP/WS」为证据；焦点遍历、ARIA 实机、像素级留 WP-10。
+2. **无真实模型/Provider**：全部路由与配置结论来自确定性 Assessment 与配置解析，未调用任何 LLM。
+3. **无 `pnpm test:e2e` / `test:acceptance` / `test:live`**：按契约返回 `NOT_IMPLEMENTED`。
+4. **`pnpm test:unit` 稳定性只做了 10 次采样**（1 失败 / 9 通过），足以推翻「稳定」的强声明，但不足以给出精确失败率。
+5. **集成为单次运行**（`26/311`，`--maxWorkers=4`）+ 一次定向 verbose（`3 文件 / 30 用例`，`--maxWorkers=2`）；未多次重复以估计集成项目稳定性。
+6. **`W9R3-02` 的 (2) 分支**（对已有记录置 completed）以「真实 completed 记录 + patch.lifecycle」复现，未再构造「已归档记录恢复」路径。
+7. **`W9R3-03` 为静态 + 本机 `git` 行为实测**（`git show --output`），未在 daemon 上构造端到端反例（需要能写投影行）。
+8. **`probeR3` 的 5 个失败为 Reviewer 夹具缺陷**（`hash-mismatch`），已按 R3.4 的排除性证据修正口径，不计入发现；其意图（生命周期保真/标题级部分更新）由 `probeR2 R02`、`probeR4 R10/R11` 覆盖。
+9. **探针只消费 dist 产物**；`W9R3-01`/`W9R3-02`/`W9R3-03` 的定位为「源码阅读 + 运行时复现」双证据。
+10. **`requirement.save.retry` 未新增探针**：其语义为「新请求键指向原 operation」，不属通用账本（沿用第 2 轮登记）。
+11. **T-01 的产物 ACL 维度**：属主一致性由附件/消息体行与 `assertReadable` 的附件比对证成；产物本身按角色 ACL（无 owner 列），未构造「跨会话读取他会话产物」的额外探针（单用户安装下两会话同角色，结论不受影响）。
+
+## R3.10 能否进入独立 Test/结算
+
+**能。** `T-01`（P1）与 `W9R2-01/02/03/05/06` 已由本轮独立探针（真实 `createDaemon` + 真实 BFF + 真实 SQLite + 真实 Git）逐项复现为关闭；`W9R2-04` 的具名靶点已修，剩余残差是同一用例第二个端口分配的竞态（`W9R3-01`，P2、非本片产品代码），新发现 `W9R3-02`（P2，completed/archived 线上不可达）与 `W9R3-03`（P3，加固项）。**本轮未复现任何 P0/P1。**
+
+须在 Test/结算中显式登记的残留（**不得**把「测试全绿」当作这些行为已成立）：
+
+- `W9R3-01`：`pnpm test:unit` 默认 workers 的残留端口竞态（`broker.test.ts:1267`），契约命令须按多次运行或 `--maxWorkers` 有界口径记录；
+- `W9R3-02`：completed/archived 生命周期在协议面上不可达（`completion` 无入口、`requirement.archive/restore` 未实现）；`W9R2-02` 的保真链路本身经真实 completed 记录验证成立；
+- `W9R3-03`：`git show` 未加 `--end-of-options`（加固）；
+- 既有：`docs/INDEX.md` 第 44 行的协议接线漂移（结算时更新）、`requirement.save.retry` 的独立语义、两份 T4 夹具仍复刻 daemon 路由（T-01 的真实产品路径由 `workbench-identity.integration.test.ts` 覆盖）。

@@ -124,3 +124,15 @@
 - **两份既有 T4/E2E 测试夹具**（`workbench.integration.test.ts`、`workbench-failures.integration.test.ts`）仍自行复刻 daemon 路由；本轮只把它们的身份改为与生产一致的安装用户（避免夹具继续掩盖 T-01），未整体替换为 `createDaemon`。T-01 的真实产品路径由新增的 `workbench-identity.integration.test.ts` 覆盖。
 - **`T-02`（探针自身计数缺陷）** 属 Test 侧脚本，不在本片代码内，无需修；`T-04`（`docs/INDEX.md`）同上归 Settlement。
 - **AC-070 的大 Diff 截断/一次性下载、`test:e2e`/`test:acceptance`/`test:live`、无头浏览器焦点遍历**仍按原分工留给 WP-03/WP-10。
+
+## T6 第三轮 Review 与第二轮 Test（均 PASS）及残余登记
+
+- 第三轮聚焦 Review 判 **PASS**（0×P0、0×P1）：T-01（P1）与 W9R2-01/02/03/05/06 独立复现为关闭；新增 2×P2（W9R3-01 unit 端口竞态、W9R3-02 completed/archived 在协议面不可达）与 1×P3（W9R3-03 `git show` 未加 `--end-of-options`）。
+- 第二轮独立 Test 判 **PASS**：全部 AC（AC-054、AC-068～078、AC-084、AC-087～090、AC-093）接受；自建 13 组探针 **397 判定 / 396 通过**，唯一失败为新 P3 **T2-01**（窄屏覆盖层关闭控件不回焦顶栏触发按钮）；六条契约命令退出 0（unit 55 文件/1105 用例、integration 26 文件/311 用例、build 12 workspace、docs:check ok）。
+- 本轮登记残余：
+  1. **T2-01 [P3]**：`public/app.js` 的 `#liveDockClose` 只切 `compact`，未把焦点交还 `#liveDockToggle`（AC-071 明文要求「关闭后焦点回到触发按钮」）；现有用例在点击 toggle 后断言 `toggle.focus()`，无法发现该缺口。修复方向：关闭路径与 toggle 分支共用回焦逻辑。
+  2. **W9R3-01 [P2]**：`packages/core/test/broker.test.ts` 第二次端口分配仍存在并发竞态（本片采样 8 次全绿、Review 10 次中 1 次失败）；建议把第二次分配也纳入重试循环，或改由显式占用 + 真实空闲探测，并把「稳定」表述限定为采样口径。
+  3. **W9R3-02 [P2]**：协议面无法写 `lifecycle='completed'`（`patch.completion` 未映射）且 `requirement.archive/restore` 未实现；导入与读回保真链路本身正常（AC-088 的展示面已通过）。修复方向：映射 `requirementCompletionSchema`/`previousLifecycle` 并实现 archive/restore（或删除文档行并显式登记）。
+  4. **W9R3-03 [P3]**：`createNodeRequirementRecordPort` 的 `git show` 未加 `--end-of-options`（无 shell 注入，影响限于可创建调用方命名空文件；真实 revision 为 40 hex，实务不可达）。
+  5. **docs/INDEX.md 漂移**：`:44` 仍写「协议接线（daemon/BFF/WS）…仍未实现」，本结算已更新。
+  6. 既有承接不变：`test:e2e`/`test:acceptance`/`test:live` 按契约 `NOT_IMPLEMENTED`（WP-10）；无头浏览器焦点/ARIA 实机遍历与真实 Provider 属 WP-10；`requirement.save.retry` 按 §8 独立语义未加探针。
