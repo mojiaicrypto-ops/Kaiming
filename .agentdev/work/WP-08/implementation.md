@@ -294,3 +294,14 @@
 3. W8R3-05 允许调用方**显式**传入跨子系统的相同 owner 字符串（例如同时传 `save:x` 与 `integrate:x` 之外的第三方前缀）；服务默认路径与显式同 raw id 的路径已不可能碰撞，但锁端口本身仍无 `purpose` 维度。
 4. T-03 的逐条冲突目前由池读取器与保存路径消费；导入/Clone 路径（WP-04）是否展示该列表未在本包接线验证。
 5. T-07 已登记的其余接线残余不变：`WorktreeLeaseStore` 未落 storage `lease` 表、CAS 事件/`operation` 行与 ProjectMailbox 的接线、备份 secret 加密导出、`apps/cli`/`apps/daemon` 接线、`packages/workspace/src/backup.ts` 归位、进程身份仅宿主 PID、Run 级 recovery 决策入口（`openRecoveryDecision` 仍写 Work 级 `targetRef`）。本轮 W8R3-04 只修正准入的**查询窗口**，不改变「需要 Run 级决策入口」这一既有残余。
+
+## T9 独立 Test（第三轮，PASS）与残余登记
+
+- 第四轮聚焦 Review 判 **PASS**（0×P0、0×P1、0×P2）：T-01..T-05 与 W8R3-01..06 共 11/11 独立复现为关闭；新增 2 条非阻断 P3（W8R4-01 `supersedes` 无输入校验、W8R4-02 被取代路线的第三方依赖被删除而非改指）。
+- 第三轮独立 Test 判 **PASS**：18 个关联 AC 中 17 个接受（AC-054 属 WP-09，not_covered）；自建 11 组探针 **608 断言 0 失败**；五项必需失败测试独立复现（含 T-01 收敛）；六条契约命令退出 0（unit 48 文件/975、integration 20 文件/233、build 10 workspace、docs:check ok）。
+- 本轮登记残余（供结算与后续工作包）：
+  1. **W8R4-01 [P3]**：`supersedes` 缺输入校验（自取代被静默接受为 noop 且仍发完成事件；非请求内 id 生成 `revision:''` 的 applied 条目）——建议与「修复 Task 派发接线」一并补校验。
+  2. **W8R4-02 [P3]**：被取代路线的第三方依赖被删除而非改指取代者，回放顺序退化为输入顺序（当前无生产调用点）。
+  3. **Test T-01 [P3]**：每个回放 Task 在交付分支多落一个树相同的**空包装提交**（`cherry-pick` 已产生提交后又 `commitPaths([])`）；内容/祖先/Manifest 均正确，属交付历史质量问题。
+  4. **观察**：`runIntegration` 同 operationId 重放返回 `IDEMPOTENCY_CONFLICT`（每次重新 cherry-pick 生成新候选），ref 不动、零新增事件，fail-closed；CAS 首次 swap 报 `reused:true` 与 `refUpdated:true` 自洽（语义为「本服务未创建提交」）。
+  5. T5～T8 的接线残余不变：WorktreeLeaseStore 未落 `lease` 表、CAS 事件/operation 行接线、冲突产物与修复 Task 派发、Secret 加密导出、`apps/cli`/`apps/daemon` 接线、`packages/workspace/src/backup.ts` 位置、宿主 PID 身份、Run 级恢复决策入口（`openRecoveryDecision` 仍写 Work 级 `targetRef`）。
