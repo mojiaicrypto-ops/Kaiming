@@ -1047,7 +1047,9 @@ export class SettlementService {
    * lock is always released.
    */
   settle(request: SettleRequest): SettlementOutcome {
-    const ownerAttemptId = request.ownerAttemptId ?? `settle:${request.operationId}`;
+    // `W8R3-05`: prefix the subsystem even for a caller-supplied owner id, so a
+    // settlement can never share an owner with a save or a delivery by accident.
+    const ownerAttemptId = `settle:${request.ownerAttemptId ?? request.operationId}`;
     const epoch = request.epoch ?? 1;
     const taken = this.lock.acquire({
       ownerAttemptId,

@@ -579,6 +579,18 @@ export interface IntegrationTask {
   readonly dependencyRevision: string | null;
   readonly role?: string;
   readonly acceptanceIds?: readonly string[];
+  /**
+   * Task ids whose results this Task replaces (`T-01`, AC-062).
+   *
+   * A repair Task built from a conflict artifact is cut from the frozen
+   * `dependencyRevision` and already *contains* the resolution of the conflicting
+   * routes: replaying the routes it replaces would reproduce the conflict. Marking
+   * them superseded makes the final integration skip them and apply this Task's own
+   * commits instead, which is what turns the conflict into a converged combination.
+   * A superseded Task id also satisfies a `dependsOn` entry naming it, so a repair
+   * plan can be handed to the integration on its own.
+   */
+  readonly supersedes?: readonly string[];
 }
 
 export interface IntegrationRequest {
@@ -600,6 +612,8 @@ export interface AppliedIntegrationTask {
   /** The commit the integration created for this Task; `null` when skipped. */
   readonly commit: string | null;
   readonly reusedManifestIds: readonly string[];
+  /** `true` when a repair Task replaced this Task (`T-01`). */
+  readonly superseded?: boolean;
 }
 
 export interface IntegrationConflict {
@@ -618,6 +632,8 @@ export interface IntegrationPlan {
   readonly applied: readonly AppliedIntegrationTask[];
   /** Revisions the integration skipped because the target already contained them. */
   readonly skippedTaskIds: readonly string[];
+  /** Task ids a repair Task in this plan replaces (`T-01`). */
+  readonly supersededTaskIds: readonly string[];
   readonly conflict: IntegrationConflict | null;
   /** Merge base of the target and the Task dependency revisions, when one exists. */
   readonly mergeBase: string | null;
@@ -638,10 +654,21 @@ export function planIntegration(input: {
   readonly git: WorktreeGitPort;
 }): IntegrationPlan {
   const { request, git } = input;
+  // A repair Task whose revision already contains the resolution replaces the
+  // conflicting routes (`T-01`): they are not planned at all, so the resumed
+  // integration cannot reproduce the conflict it was created to fix.
+  const superseded = new Set<string>();
+  for (const task of request.tasks) {
+    for (const taskId of task.supersedes ?? []) superseded.add(taskId);
+  }
+  const activeTasks = request.tasks.filter((task) => !superseded.has(task.taskId));
+  const activeIds = new Set(activeTasks.map((task) => task.taskId));
   const order = orderTasks(
-    request.tasks.map((task) => ({
+    activeTasks.map((task) => ({
       id: task.taskId,
-      dependsOn: [...task.dependsOn],
+      // A dependency a superseding Task replaces is satisfied by that Task, so a
+      // repair plan can be integrated without also passing the routes it replaced.
+      dependsOn: task.dependsOn.filter((taskId) => activeIds.has(taskId)),
       revision: task.revision,
       ...(task.dependencyRevision === null
         ? {}
@@ -649,7 +676,7 @@ export function planIntegration(input: {
       recordedDependencyManifestRefs: [],
     })),
   );
-  const byId = new Map(request.tasks.map((task) => [task.taskId, task]));
+  const byId = new Map(activeTasks.map((task) => [task.taskId, task]));
   const applied: AppliedIntegrationTask[] = [];
   const skipped: string[] = [];
 
@@ -707,7 +734,7 @@ export function planIntegration(input: {
   // integration replays from; reporting it here is what lets a caller explain exactly
   // which ancestor is being reused.
   const mergeBase =
-    request.tasks
+    activeTasks
       .map((task) => task.dependencyRevision)
       .filter((revision): revision is string => revision !== null)
       .map((revision) => {
@@ -720,6 +747,7 @@ export function planIntegration(input: {
     order,
     applied,
     skippedTaskIds: skipped,
+    supersededTaskIds: [...superseded].sort(),
     conflict,
     mergeBase,
     tip: request.targetRevision,
@@ -841,7 +869,7 @@ export interface CasIntegrationLock {
 
 /** In-memory integration lock for tests and callers that own no database. */
 export function createMemoryIntegrationLock(projectId: string): CasIntegrationLock {
-  const resource = `integration:${projectId}`;
+  const resource = integrationLockResourceName(projectId);
   let holder: CasIntegrationLockHolder | null = null;
   return {
     resource,
@@ -902,7 +930,17 @@ export interface RunIntegrationOptions {
    * only individually serialized and AC-091's "same lock" guarantee is not met.
    */
   readonly lock: CasIntegrationLock;
-  /** Lock owner; defaults to `operationId` (the CAS idempotency key). */
+  /**
+   * The Project whose `integration:<projectId>` lock must be `lock` (`W8R3-06`).
+   *
+   * The delivery side used to accept *any* `CasIntegrationLock`, so passing a
+   * different instance (for example an in-memory one) silently removed the mutex a
+   * requirement save holds. The resource is asserted against `projectId` before the
+   * lock is taken, which makes "the same lock as the save path" a checkable property
+   * instead of a caller convention.
+   */
+  readonly projectId: string;
+  /** Lock owner; defaulted to `integrate:<operationId>`. */
   readonly ownerAttemptId?: string;
   readonly epoch?: number;
   readonly ttlMs?: number;
@@ -914,6 +952,8 @@ export type RunIntegrationResult =
       readonly ok: true;
       readonly appliedTaskIds: readonly string[];
       readonly skippedTaskIds: readonly string[];
+      /** Task ids a repair Task replaced (`T-01`); they were not replayed. */
+      readonly supersededTaskIds: readonly string[];
       /** One entry per Task: what was replayed and what was already present. */
       readonly applied: readonly AppliedIntegrationTask[];
       readonly revision: string;
@@ -927,6 +967,20 @@ export type RunIntegrationResult =
       readonly conflict: IntegrationConflict;
       readonly repair: RepairPlan;
       /** The delivery branch was never touched (CAS protects HEAD). */
+      readonly branchUntouched: true;
+      readonly appliedTaskIds: readonly string[];
+      readonly applied: readonly AppliedIntegrationTask[];
+    }
+  | {
+      /**
+       * The plan itself cannot proceed: a Task's frozen revision is missing from the
+       * repository (`T-02`). This is a Gate failure, not an internal error, and no
+       * repair Task can be created for it — the caller re-runs or re-freezes the Task.
+       */
+      readonly ok: false;
+      readonly code: 'GATE_NOT_READY';
+      readonly conflict: IntegrationConflict;
+      readonly message: string;
       readonly branchUntouched: true;
       readonly appliedTaskIds: readonly string[];
       readonly applied: readonly AppliedIntegrationTask[];
@@ -951,21 +1005,42 @@ export type RunIntegrationResult =
     }
   | Extract<CasOutcome, { ok: false }>;
 
+/** The `lease.resource` of one Project's shared integration lock (`AC-091`). */
+export function integrationLockResourceName(projectId: string): string {
+  return `integration:${projectId}`;
+}
+
 /**
  * Runs the whole final-integration step of `reliability.md` §4 on a real worktree,
  * under the shared Project integration lock (`AC-091`, `W8R2-02`).
  *
  * The integration worktree is checked out at the frozen target revision; each Task is
  * replayed from *its own* commits (`git cherry <dependencyRevision> <taskRevision>`),
- * already-merged ancestors are skipped, and a conflict between two already-passed
- * Tasks stops with the independent repair Task and a fresh-verification requirement.
- * The delivery ref is moved only by the CAS step, so a conflicting attempt can never
- * corrupt the branch. A held lock refuses with `BUSY` before any worktree is touched,
- * and the lock is always released — the integration path owns the same mutex a
- * requirement save takes.
+ * already-merged ancestors are skipped, Tasks a repair Task supersedes are skipped
+ * (`T-01`), and a conflict between two already-passed Tasks stops with the independent
+ * repair Task and a fresh-verification requirement. The delivery ref is moved only by
+ * the CAS step, so a conflicting attempt can never corrupt the branch. A held lock
+ * refuses with `BUSY` before any worktree is touched, and the lock is always released
+ * — the integration path owns the same mutex a requirement save takes.
  */
 export function runIntegration(options: RunIntegrationOptions): RunIntegrationResult {
-  const ownerAttemptId = options.ownerAttemptId ?? options.operationId;
+  // `W8R3-06`: the lock must *be* this Project's shared integration lock. A different
+  // instance is a different mutex, so the delivery would run beside a save it was
+  // supposed to be serialized against.
+  const expectedResource = integrationLockResourceName(options.projectId);
+  if (options.lock.resource !== expectedResource) {
+    return {
+      ok: false,
+      code: 'INVALID_STATE',
+      message: `交付锁 ${options.lock.resource} 不是 Project ${options.projectId} 的共享集成锁 ${expectedResource}；拒绝在没有共享互斥的情况下交付`,
+      branchUntouched: true,
+      appliedTaskIds: [],
+      applied: [],
+    };
+  }
+  // `W8R3-05`: the owner id is subsystem-prefixed, so a save and a delivery that
+  // happen to reuse one raw operation id are still two different lock owners.
+  const ownerAttemptId = `integrate:${options.ownerAttemptId ?? options.operationId}`;
   const epoch = options.epoch ?? 1;
   const taken = options.lock.acquire({
     ownerAttemptId,
@@ -1053,6 +1128,46 @@ function integrateTasks(options: RunIntegrationOptions): RunIntegrationResult {
     },
     git,
   });
+
+  // A plan that already failed produces no repair Task: a missing frozen revision is
+  // a Gate problem (`T-02`), not a merge conflict. Surface the modelled reason instead
+  // of letting the replay below turn it into an opaque `git cherry` internal error.
+  if (plan.conflict !== null) {
+    const conflict = plan.conflict;
+    if (conflict.reason === 'revision') {
+      return {
+        ok: false,
+        code: 'GATE_NOT_READY',
+        conflict,
+        message: conflict.message,
+        branchUntouched: true,
+        appliedTaskIds,
+        applied,
+      };
+    }
+    return conflictResult({
+      taskId: conflict.taskId ?? '',
+      paths: conflict.paths,
+      message: conflict.message,
+      mergeBase: conflict.mergeBase,
+      conflictingTaskIds: conflict.taskId === null ? [] : [conflict.taskId],
+    });
+  }
+
+  // Tasks a repair Task replaces are recorded as superseded and never replayed
+  // (`T-01`); the repair revision below carries their resolution.
+  for (const taskId of plan.supersededTaskIds) {
+    const task = options.tasks.find((entry) => entry.taskId === taskId);
+    applied.push({
+      taskId,
+      revision: task?.revision ?? '',
+      dependencyRevision: task?.dependencyRevision ?? null,
+      alreadyMerged: false,
+      commit: null,
+      reusedManifestIds: [],
+      superseded: true,
+    });
+  }
 
   for (const taskId of plan.order) {
     const task = options.tasks.find((entry) => entry.taskId === taskId);
@@ -1180,6 +1295,7 @@ function integrateTasks(options: RunIntegrationOptions): RunIntegrationResult {
       ok: true,
       appliedTaskIds,
       skippedTaskIds: plan.skippedTaskIds,
+      supersededTaskIds: plan.supersededTaskIds,
       applied,
       revision: options.targetRevision,
       outcome: 'noop',
@@ -1227,6 +1343,7 @@ function integrateTasks(options: RunIntegrationOptions): RunIntegrationResult {
     ok: true,
     appliedTaskIds,
     skippedTaskIds: plan.skippedTaskIds,
+    supersededTaskIds: plan.supersededTaskIds,
     applied,
     revision: cas.targetRevision,
     outcome: replayedCommit ? 'integrated' : 'noop',
@@ -1304,6 +1421,37 @@ export function createRepairTask(input: {
     conflict: input.conflict,
     repairTask,
     artifact: { path: artifactPath, markdown, sha256: sha256Hex(markdown) },
+  };
+}
+
+/**
+ * Turns a conflict's `RepairPlan` into the `IntegrationTask` the final integration
+ * consumes (`T-01`, AC-062).
+ *
+ * The repair Task's *own* revision is cut from the same frozen `dependencyRevision`
+ * the conflicting integration started from and already contains the resolution, so
+ * this Task **supersedes** the routes named by `repairTask.dependsOn`: the resumed
+ * integration skips them and replays the repair's own commits. That is the path
+ * AC-062 "独立修复任务并对最终组合重新验证" needs — without it the integration replays
+ * every Task again and reports the same conflict forever.
+ */
+export function repairIntegrationTask(input: {
+  readonly repair: RepairPlan;
+  /** The revision the repair Task passed with (its frozen code result). */
+  readonly revision: string;
+  /** Overrides the frozen dependency revision recorded in the plan. */
+  readonly dependencyRevision?: string;
+  readonly acceptanceIds?: readonly string[];
+}): IntegrationTask {
+  const task = input.repair.repairTask;
+  return {
+    taskId: task.id,
+    dependsOn: [...task.dependsOn],
+    revision: input.revision,
+    dependencyRevision: input.dependencyRevision ?? task.dependencyRevision,
+    supersedes: [...task.dependsOn],
+    role: task.role,
+    ...(input.acceptanceIds === undefined ? {} : { acceptanceIds: [...input.acceptanceIds] }),
   };
 }
 
@@ -1579,6 +1727,37 @@ export function createCasService(options: CasOptions): CasService {
         expectedRevision: request.expectedRevision,
         actualRevision: refRevision(repoRoot, request.ref),
       });
+    }
+
+    // The path-shape check above only proves the *caller's* description is well formed;
+    // `T-04` requires the candidate tree to really carry the pair. A candidate that
+    // declares `content.md` while committing only `requirement.json` used to move the
+    // ref, exposing exactly the half record AC-094 forbids.
+    if (request.candidateRevision !== undefined) {
+      const missing: string[] = [];
+      for (const record of request.requirementPool ?? []) {
+        for (const path of [record.metadataPath, record.contentPath]) {
+          const present = git.pathAtRevision(repoRoot, request.candidateRevision, path);
+          if (!present.ok) {
+            return refusal(
+              'INTERNAL_ERROR',
+              `无法核对候选 ${request.candidateRevision} 的 ${path}`,
+              {
+                expectedRevision: request.expectedRevision,
+                errors: present.errors,
+              },
+            );
+          }
+          if (!present.value) missing.push(path);
+        }
+      }
+      if (missing.length > 0) {
+        return refusal(
+          'VALIDATION_ERROR',
+          `候选 ${request.candidateRevision} 的提交树缺少需求记录文件（${missing.join('、')}）；拒绝提交半对记录`,
+          { expectedRevision: request.expectedRevision },
+        );
+      }
     }
 
     const actual = refRevision(repoRoot, request.ref);

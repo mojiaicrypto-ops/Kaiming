@@ -25,6 +25,7 @@ import {
   LATE_RESULT_REJECTED_EVENT,
   RUN_RECOVERED_EVENT,
   createMemoryProcessProbe,
+  newAttemptAdmission,
   createNodeProcessProbe,
   parseRunnerPid,
   RunLifecycle,
@@ -388,6 +389,59 @@ describe('Run recovery: leases, epochs and restart inspection (AC-057/058/061/08
       effectRefs: [],
     });
     expect(lifecycle.beginAttempt(RUN_ID).number).toBe(2);
+  });
+
+  it('keeps a Run-bound resume decision past a window of unrelated decisions (W8R3-04)', () => {
+    addRun({ status: 'starting' });
+    probe.setAlive('pid:1000', true);
+    addAttempt({
+      id: ATTEMPT_ID,
+      runId: RUN_ID,
+      number: 1,
+      epoch: 0,
+      runnerId: 'pid:1000',
+      status: 'starting',
+    });
+    expect(service.recoverRun(RUN_ID).to).toBe('interrupted');
+    expect(newAttemptAdmission(store, RUN_ID).allowed).toBe(false);
+
+    advance(1_000);
+    store.decisions.insert({
+      id: DECISION_ID,
+      projectId,
+      workId: WORK_ID,
+      kind: 'recovery',
+      targetRef: { id: RUN_ID, version: 1, hash: HASH },
+      choices: ['resume', 'accept_cancel'],
+      state: 'rejected',
+      choice: 'resume',
+      actor: 'user',
+      effectRefs: [],
+    });
+    expect(newAttemptAdmission(store, RUN_ID).allowed).toBe(true);
+
+    // The same Work accumulates many later recovery decisions that do *not* cover this
+    // Run: a fixed-size scan used to push the Run-bound decision out of its window.
+    for (let index = 0; index < 30; index += 1) {
+      advance(1);
+      store.decisions.insert({
+        id: `018f2c1e-9a4b-7c3d-8e5f-${(0xa00000000000 + index).toString(16)}`,
+        projectId,
+        workId: WORK_ID,
+        kind: 'recovery',
+        targetRef: { id: WORK_ID, version: 1, hash: HASH },
+        choices: ['accept_cancel'],
+        state: 'rejected',
+        choice: 'accept_cancel',
+        actor: 'user',
+        effectRefs: [],
+      });
+    }
+    // FALSIFY (W8R3-04): the Run was already released, so the unrelated decisions must
+    // not re-block it.
+    const admission = newAttemptAdmission(store, RUN_ID);
+    expect(admission.allowed).toBe(true);
+    expect(admission.resolvedByDecisionId).toBe(DECISION_ID);
   });
 
   it('parses only real process identities and reports the rest as unconfirmed', () => {

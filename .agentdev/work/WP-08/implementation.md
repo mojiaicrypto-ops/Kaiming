@@ -186,3 +186,111 @@
 - 反证复核：对 W8R2-01a/01b/02（交付与结算两侧）/03/04/05（两例）/06 逐项把对应修复临时还原为旧行为后重跑各自回归用例，**全部由通过转为失败**，随后还原并复跑全绿。
 - 残余（本轮未收口）：T5 残余 1–7、9 与 T6 的两条边界不变；新增一条与本轮 W8R2-03 直接相关的边界——准入现要求 `decision.targetRef.id` 指向该 Run 或其 `run.recovered` 事件 id，而产品侧 `openRecoveryDecision` 仍写 Work 级 targetRef，因此「为某个确认存活的 Run 显式放行」需要一个 Run 级 recovery 决策入口（属 CLI/BFF 接线，同 T5 残余 5）。该边界是 W8R2-03 的预期收紧：Work 级决策不再能解除任何单个 Run 的活进程阻断。
 
+
+## T8 独立 Review 第三轮（W8R3-01..06）与 Test 第二轮（T-01..T-05）修复
+
+- 修复范围：`packages/workspace/src/cas.ts`、`packages/core/src/{requirement-save,recovery,settlement}.ts` 及其测试（`packages/workspace/test/cas.integration.test.ts`、`packages/core/test/{requirement-save.integration,recovery,wp08-failures,wp08.integration}.test.ts`）；`packages/core/test/wp08.integration.test.ts` 与既有 `runIntegration` 调用点仅补 `projectId`（API 收紧的机械适配）。未触碰其他包；全部改动文件先经 `prettier --write`。
+- 新增回归测试 **13 例**（unit 973 → **975**：`recovery.test.ts` +1、`wp08-failures.test.ts` +1；integration 222 → **233**：`cas.integration.test.ts` +5、`requirement-save.integration.test.ts` +6）。每条 finding 至少一例，且逐条以「临时还原为旧行为 → 对应回归用例失败 → 还原后复跑全绿」反证（见文末反证清单）。
+
+### T-01（P2）— 修复 Task 的重新集成回路不收敛
+
+- 变更（替代/取代路径）：`cas.ts` 的 `IntegrationTask` 新增可选 `supersedes: readonly string[]`；`planIntegration` 先把所有被取代的 Task id 从计划中剔除，并让其 `dependsOn` 中「被取代」的条目由取代者满足（`orderTasks` 不再因缺依赖抛 `INVALID_STATE`）；`IntegrationPlan` 新增 `supersededTaskIds`，`AppliedIntegrationTask` 新增 `superseded`。`integrateTasks` 为被取代 Task 记 `superseded:true` 的 `applied` 条目并**从不回放**它们；`RunIntegrationResult` 成功分支新增 `supersededTaskIds`。新增导出 `repairIntegrationTask({repair, revision, dependencyRevision?})`：直接把冲突产物 `RepairPlan` 变成 `runIntegration` 可用的 `IntegrationTask`，其 revision 取代 `repairTask.dependsOn` 的两条路线。
+- 语义约定（已写入 T8 与代码注释）：修复 revision 必须与冲突集成同一 `dependencyRevision` 为基点，且其自身 diff 即为冲突的解决；这正是 `createRepairTask` 冻结 `dependencyRevision` 的目的。
+- 回归测试：
+  - `packages/workspace/test/cas.integration.test.ts`「converges the conflict through the repair revision and emits one completion event (T-01)」：两冲突 Task → `TASK_MERGE_CONFLICT` + 修复 Task；随后仅传 `repairIntegrationTask` → `supersededTaskIds` 为两条路线、`appliedTaskIds` 为修复 Task id、最终 revision 含解决后的内容、恰 1 条完成事件、两条路线 revision 都不是最终 revision 的祖先。
+  - `packages/core/test/wp08-failures.test.ts`「T-01: the repair revision converges and is what the final manifest records (AC-062)」：收敛后 `buildFinalManifest` 记录的 `finalRevision` 即修复后的 revision，且同一验证 Manifest 对修复前 revision 报 `STALE_ARTIFACT`。
+- 旧行为：旧 `planIntegration` 忽略 `supersedes`，重新集成会重放两条路线并再次 `TASK_MERGE_CONFLICT`；只传修复 Task 则因缺依赖抛 `INVALID_STATE`。两例在旧行为下实测失败。
+
+### T-02（P3）— `runIntegration` 不消费 `planIntegration` 的 `reason:'revision'`
+
+- 变更：`integrateTasks` 在回放前检查 `plan.conflict`；`reason==='revision'`（冻结 revision 不在仓库）返回结构化 `GATE_NOT_READY` + `conflict`（含 `taskId`/`reason`），不再落成 `git cherry 失败` 的 `INTERNAL_ERROR`；`git` 冲突仍走修复 Task 形态。`RunIntegrationResult` 新增 `GATE_NOT_READY` 分支（`CasFailureCode` 保持不变，避免与 `CasOutcome` 失败联合重叠）。
+- 回归测试：`cas.integration.test.ts`「reports a missing Task revision as a gate refusal instead of an internal error (T-02)」：断言 `code==='GATE_NOT_READY'`、`conflict.reason==='revision'`、`conflict.taskId`、`branchUntouched`、分支不动、零事件。
+- 旧行为：返回 `INTERNAL_ERROR`（旧探针实测），用例失败。
+- 说明（非残余，属刻意取舍）：缺失 revision 不是合并冲突，因此不伪造修复 Task——可处置的 Gate 失败更符合 `reliability.md` §4/§5 的分类要求。
+
+### W8R3-01（P2）— `installJournaledCommit` 以记录路径为键，跳过不同记录的核对
+
+- 变更：`journaledRecordHash` → `journaledRecord`（返回 `{recordPath, recordHash, version}`）；`installJournaledCommit` 现在要求 journal **恰含本次 `prepared.directoryPath` 且 hash 相等**，否则 `IDEMPOTENCY_CONFLICT`（消息同时点名「journal 未记录该路径」或「记录的是另一条记录」）。核对失败绝不再 `refreshWorkingTree`/`refreshProjection`。
+- 回归测试：`requirement-save.integration.test.ts`「refuses a journaled install when the operation recorded another record (W8R3-01)」：`op-e3` 保存需求 A 时于 `updateRef` 崩溃（journal pending + target、ref 未动），随后同一 operationId 保存需求 B → `IDEMPOTENCY_CONFLICT`、分支停在基线、提交数不变、B 无投影、零 `requirement.saved`。
+- 旧行为：路径不匹配时 `journaledHash===null` 跳过核对，安装 A 的提交并回报 B `saved`（旧探针 E3 实测），用例失败。
+
+### W8R3-02（P2）— 非脏写回失败只记诊断但仍报 `saved`
+
+- 变更：`requirement-save.ts` 新增 `worktreeRefreshRefusal`；`saveUnderLock` 与 `installJournaledCommit` 的「非 `DeliveryWorktreeDirtyError`」分支由「appendDiagnostic 后继续 finishSave」改为返回 **repair-only `RECOVERY_REQUIRED`**（operation 置 `projectionFailed`、写 `requirement.save_worktree_refresh_failed` 诊断、`branchUntouched:false`、`repairOnly:true`）。
+- 回归测试：`requirement-save.integration.test.ts`「reports RECOVERY_REQUIRED when the working copy write-back really fails (W8R3-02)」：把 `content.md` 位置预建成目录（真实 `EISDIR`）→ `RECOVERY_REQUIRED` + `repairOnly` + `branchUntouched:false` + 消息含「写回失败」+ 投影未前移；删除目录后用同一 operationId 重试 → `projection_repaired` 且磁盘字节等于提交字节。
+- 旧行为：返回 `ok:true, status:'saved'`（旧探针 H1 实测），用例失败。
+
+### W8R3-03（P2）— 干净但停在另一修订的工作树被判成本地修改且不收敛
+
+- 变更：`dirtyDeliveryPaths` 重写判定：①完全干净的工作树（`git status --porcelain` 为空）直接判定无本地修改；②可读目标的字节若等于「基线 blob」或「该机实际检出的已知 revision（工作树 HEAD / 本机投影 revision）的 blob」即为干净检出而非本地编辑；③只有 Git 的 worktree 侧（第二列）改动、或等于任何已知提交都解释不了的未跟踪内容，才算本地修改；④不可读路径（目录/权限）不在此处判脏，交由写入失败走 W8R3-02 的 `RECOVERY_REQUIRED`。`refreshWorkingTree` 新增 `targetRevision`/`branch` 入参，并在「完全干净且 HEAD ≠ 目标 revision」时调用新增的 `rewindCleanCheckout`（仅当工作树 detached 或就在交付分支上，绝不移动其他分支；`reset --hard` + `clean -fd`，干净态下无内容可丢）。
+- 回归测试：`requirement-save.integration.test.ts`「rewinds a clean checkout parked at another revision instead of calling it dirty (W8R3-03)」：保存 v1、v2 后在交付工作树 `git checkout -f --detach <v1>`（porcelain 为空）再保存 v3 → `saved`、磁盘等于提交字节、工作树 HEAD 被复位到 v3，随后 v4 仍可保存（收敛）。
+- 旧行为：字节判定把 v1 字节当本地修改，返回 `RECOVERY_REQUIRED`（旧探针 B3b 实测），用例失败。
+
+### W8R3-04（P3）— 新 Attempt 准入只扫描最近 25 条决策
+
+- 变更：`recovery.ts` 的 `newAttemptAdmission` 把 Run/判定绑定下推到查询：`json_extract(target_ref, '$.id') IN (runId, verdict.eventId)`，去掉固定 `limit:25`，仅在 SQL 结果上做「`choice==='resume'` 且晚于本 Run 判定」的存在性判断。
+- 回归测试：`recovery.test.ts`「keeps a Run-bound resume decision past a window of unrelated decisions (W8R3-04)」：Run 因活进程 park 后写一条 Run 级 `resume` 决策（准入放行），再为同一 Work 写 30 条 Work 级恢复决策（时钟递增）→ 准入仍 `allowed:true` 且 `resolvedByDecisionId` 为原决策。
+- 旧行为：有效决策被挤出 25 条窗口，准入翻回 `allowed:false`，用例失败。
+
+### W8R3-05（P3）— 集成锁对「同 owner id + 同 epoch」可重入
+
+- 变更：子系统前缀由服务侧强制拼接——`requirement-save.ts` 的 `save` 用 `save:<ownerAttemptId ?? operationId>`，`cas.ts` 的 `runIntegration` 用 `integrate:<ownerAttemptId ?? operationId>`，`settlement.ts` 的 `settle` 用 `settle:<ownerAttemptId ?? operationId>`（`recover` 原已用 `settle:<operationId>`）。即使调用方显式传入相同 raw id，保存/交付/结算也分属不同 owner，不再互相重入。
+- 回归测试：`cas.integration.test.ts`「does not let a delivery re-enter a save owner that reuses the raw operation id (W8R3-05)」：以旧保存路径的 owner `op-shared` 持锁，再以 `operationId:'op-shared'` 交付 → `BUSY` 且 `heldBy.ownerAttemptId==='op-shared'`，分支不动。
+- 旧行为：交付默认 owner 等于 operationId，与持锁 owner 相同 → 直接重入并交付（旧探针 C5 实测），用例失败。
+
+### W8R3-06（P3）— 交付锁是注入式实例，可绕过共享互斥
+
+- 变更：`RunIntegrationOptions` 新增**必填** `projectId`；新增导出 `integrationLockResourceName(projectId)`（`integration:<projectId>`，`createMemoryIntegrationLock` 同源）；`runIntegration` 在取锁前断言 `lock.resource === integrationLockResourceName(projectId)`，不等即结构化 `INVALID_STATE`（消息含期望资源名），分支不动、零事件。
+- 回归测试：`cas.integration.test.ts`「refuses a lock that is not the Project shared integration lock (W8R3-06)」：传另一 Project 的内存锁 → `INVALID_STATE`、分支停在基线、零事件。
+- 旧行为：任意 `CasIntegrationLock` 实例都被接受，交付在共享资源被他人持有时仍移动 ref（旧探针 C6 实测），用例失败。
+
+### T-03（P3）— 需求池读取器没有逐条冲突通道
+
+- 变更：`RequirementPoolAtRevision` 新增 `conflicts: readonly RequirementPoolConflict[]`（`missing-content` / `missing-metadata` / `hash-mismatch` / `invalid-metadata`）；`readRequirementPoolAtRevision` 对缺 `content.md` 的记录记冲突（不再静默 `continue`）、对只有 `content.md` 没有 `requirement.json` 的记录记冲突、对 `metadata.contentHash` 与正文哈希不一致记冲突、对无法解析的元数据记冲突（不再抛 `SyntaxError`）。`compareExpectation` 在保存路径把「本记录路径的逐条冲突」升级为 `REQUIREMENT_CONFLICT`（`explicitRepair` 仍显式放行）。
+- 回归测试：`requirement-save.integration.test.ts`「reports a half pair as a per-record conflict instead of dropping it (T-03)」（读取器 `conflicts` 含 `missing-content` 与 `content.md` 路径，且 `save()` 返回 `REQUIREMENT_CONFLICT` 点名路径、分支不动）与「reports a metadata/body hash mismatch per record (T-03)」（`hash-mismatch`，记录仍可读但被标冲突）。
+- 旧行为：半对记录被 `continue` 丢弃、`records.length===0` 且无任何诊断。
+- 说明：冲突记录仍随 `records` 返回（`hash-mismatch`）以便调用方展示可读原文；半对/非法元数据因无法产出成对记录而只出现在 `conflicts`。
+
+### T-04（P3）— CAS 半对检查只校验路径形状
+
+- 变更：`createCasService().integrate()` 在候选存在性校验后，按 `requirementPool` 声明的每条记录核对 `candidateRevision` 的树**确实同时含 `requirement.json` 与 `content.md`**（`git.pathAtRevision`）；缺失即 `VALIDATION_ERROR` 并列出缺失路径，ref 不动、无完成事件。
+- 回归测试：`cas.integration.test.ts`「refuses a candidate that declares content.md but does not commit it (T-04)」：候选提交只含 `requirement.json` → `VALIDATION_ERROR`（消息含 `content.md`）、分支停在基线、零事件。
+- 旧行为：路径形状合法即 `ok:true` 并移动 ref（旧探针实测），用例失败。
+
+### T-05（P3）— 陈旧投影保存给出误导性 dirty 诊断且分支领先工作树
+
+- 变更：同 W8R3-03 的判定重写——磁盘字节等于「本机实际检出的已知 revision（工作树 HEAD / 本机投影 revision）」的 blob 时视为陈旧检出，不再判成本地修改；写回后工作副本与提交字节一致，分支不再领先。
+- 回归测试：`requirement-save.integration.test.ts`「treats a ref that moved without a checkout as a stale projection, not local edits (T-05)」：另一服务器提交 v2 并移动 ref（不 checkout），本机 `explicitRepair:true` 保存 v3 → `saved`（非 `RECOVERY_REQUIRED`）、`previousCommit` 为对方提交、磁盘字节等于提交字节。
+- 旧行为：返回 `RECOVERY_REQUIRED` 并把 `content.md`/`requirement.json`/`README.md` 说成「未提交的本地修改」（旧探针实测），用例失败。
+
+### 本轮 API/契约收紧（必须登记）
+
+- `RunIntegrationOptions.projectId` **必填**（W8R3-06）；`IntegrationTask.supersedes?`、`AppliedIntegrationTask.superseded?`、`IntegrationPlan.supersededTaskIds`、`RunIntegrationResult` 成功分支的 `supersededTaskIds` 与新增 `GATE_NOT_READY` 分支（T-01/T-02）；新增导出 `repairIntegrationTask`、`integrationLockResourceName`。
+- `RequirementPoolAtRevision.conflicts` **必填**、新增导出 `RequirementPoolConflict`（T-03）。
+- 服务侧锁 owner 前缀：`save:` / `integrate:` / `settle:`（W8R3-05）。
+
+### 记录更正（T8）
+
+- **无旧期望被更正**：既有 973 unit / 222 integration 用例的断言全部保留并通过。唯一的机械改动是给既有 `runIntegration` 调用点补上必填 `projectId`（`wp08.integration.test.ts` 4 处、`wp08-failures.test.ts` 2 处、`requirement-save.integration.test.ts` 3 处、`cas.integration.test.ts` 7 处），不涉及任何断言语义，因此不构成本轮缺陷的旧期望。
+
+### 反证复核（逐条临时还原旧行为 → 回归用例失败）
+
+对 11 条改动分别把实现临时还原为旧行为后重跑对应回归用例，**全部由通过转为失败**，随后还原并复跑全绿：W8R3-01、W8R3-02、W8R3-03、T-05、W8R3-04、W8R3-05、W8R3-06、T-02、T-04、T-01（workspace）、T-01（core manifest）。
+
+### 本轮验证（T8 时点，命令在仓库根顺序执行）
+
+- `prettier --write`：上列全部改动文件（`pnpm lint` 复核 `All matched files use Prettier code style!`）。
+- `pnpm typecheck`：退出码 0，无输出。
+- `pnpm lint`：退出码 0（ESLint 无告警 + Prettier 通过）。
+- `pnpm test:unit`：**48 文件 / 975 用例全部通过**（T7 后 973，新增 2）。
+- `pnpm test:integration`：**20 文件 / 233 用例全部通过**（T7 后 222，新增 11；含真实临时 Git 仓库、真实 SQLite 与容器用例）。
+- `pnpm build`：**10 workspace** 全部 `Done`。
+- `pnpm docs:check`：ok（15 documents、55 internal links、94 acceptance cases、9 requirements、11 work packages）。
+
+### 残余（本轮未收口，明确登记）
+
+1. T-01 要求「修复 revision 以冲突集成的冻结 `dependencyRevision` 为基点、其 diff 即冲突解决」这一调用约定，产品侧尚无自动派发/接线（`createRepairTask` 的 conflict artifact 落库与修复 Task 派发仍是 T5 残余 3）；本轮只保证该约定在服务 API 层可收敛并被回归网固定。
+2. T-02 对「缺失冻结 revision」选择 Gate 失败而非创建修复 Task（刻意取舍，见上）。
+3. W8R3-05 允许调用方**显式**传入跨子系统的相同 owner 字符串（例如同时传 `save:x` 与 `integrate:x` 之外的第三方前缀）；服务默认路径与显式同 raw id 的路径已不可能碰撞，但锁端口本身仍无 `purpose` 维度。
+4. T-03 的逐条冲突目前由池读取器与保存路径消费；导入/Clone 路径（WP-04）是否展示该列表未在本包接线验证。
+5. T-07 已登记的其余接线残余不变：`WorktreeLeaseStore` 未落 storage `lease` 表、CAS 事件/`operation` 行与 ProjectMailbox 的接线、备份 secret 加密导出、`apps/cli`/`apps/daemon` 接线、`packages/workspace/src/backup.ts` 归位、进程身份仅宿主 PID、Run 级 recovery 决策入口（`openRecoveryDecision` 仍写 Work 级 `targetRef`）。本轮 W8R3-04 只修正准入的**查询窗口**，不改变「需要 Run 级决策入口」这一既有残余。

@@ -28,6 +28,7 @@ import {
   createWorktreeManager,
   orderTasks,
   planDependencies,
+  repairIntegrationTask,
   repairTaskId,
   requirementPoolPaths,
   runIntegration,
@@ -68,9 +69,12 @@ afterEach(() => {
 const git: WorktreeGitPort = createNodeWorktreeGitPort();
 const DELIVERY_REF = 'refs/heads/agentdev/main';
 
+/** The Project every integration fixture delivers (`W8R3-06`). */
+const PROJECT_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4000';
+
 /** A fresh shared Project integration lock for one delivery (`W8R2-02`). */
 function integrationLock(): ReturnType<typeof createMemoryIntegrationLock> {
-  return createMemoryIntegrationLock('018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4000');
+  return createMemoryIntegrationLock(PROJECT_ID);
 }
 
 /** Unwraps a `GitResult`, failing the test loudly when Git refused. */
@@ -1083,6 +1087,7 @@ describe('dependency lineage with real revisions (AC-081)', () => {
       repoRoot: lineage.repo,
       cas,
       lock: integrationLock(),
+      projectId: PROJECT_ID,
       worktreePath: taskWorktree({
         repo: lineage.repo,
         name: 'integration-a',
@@ -1112,6 +1117,7 @@ describe('dependency lineage with real revisions (AC-081)', () => {
       repoRoot: lineage.repo,
       cas,
       lock: integrationLock(),
+      projectId: PROJECT_ID,
       worktreePath: taskWorktree({
         repo: lineage.repo,
         name: 'integration-b',
@@ -1182,6 +1188,7 @@ describe('dependency lineage with real revisions (AC-081)', () => {
       repoRoot: lineage.repo,
       cas,
       lock: integrationLock(),
+      projectId: PROJECT_ID,
       worktreePath: taskWorktree({
         repo: lineage.repo,
         name: 'conflict-a',
@@ -1204,6 +1211,7 @@ describe('dependency lineage with real revisions (AC-081)', () => {
       repoRoot: lineage.repo,
       cas,
       lock: integrationLock(),
+      projectId: PROJECT_ID,
       worktreePath: taskWorktree({
         repo: lineage.repo,
         name: 'conflict-integration',
@@ -1294,6 +1302,7 @@ describe('dependency lineage with real revisions (AC-081)', () => {
       repoRoot: lineage.repo,
       cas,
       lock: integrationLock(),
+      projectId: PROJECT_ID,
       worktreePath: taskWorktree({
         repo: lineage.repo,
         name: 'conflict-integration-retry',
@@ -1347,6 +1356,7 @@ describe('dependency lineage with real revisions (AC-081)', () => {
       repoRoot: repo,
       cas,
       lock: integrationLock(),
+      projectId: PROJECT_ID,
       worktreePath: taskWorktree({ repo, name: 'integration-two', baseRevision: revision }).path,
       operationId: 'op-integrate-two',
       ref: DELIVERY_REF,
@@ -1382,6 +1392,7 @@ describe('dependency lineage with real revisions (AC-081)', () => {
       repoRoot: repo,
       cas,
       lock: integrationLock(),
+      projectId: PROJECT_ID,
       worktreePath: taskWorktree({
         repo,
         name: 'integration-two-replay',
@@ -1469,5 +1480,310 @@ describe('worktree ownership against a real repository (AC-062)', () => {
       'worktree list',
     );
     expect(after.some((entry) => entry.path === first.record.path)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Final integration convergence and its guard rails (T-01/T-02/T-04,
+// W8R3-05/W8R3-06)
+// ---------------------------------------------------------------------------
+
+describe('final integration repair convergence (AC-062, T-01/T-02)', () => {
+  /** Two passed Tasks cut from one base that change the same line, so they conflict. */
+  function conflictingRoutes(): {
+    readonly repo: string;
+    readonly baseRevision: string;
+    readonly taskA: string;
+    readonly taskC: string;
+  } {
+    const { repo, revision } = seedDeliveryRepo({ 'src/orders.ts': 'export const orders = [];\n' });
+    const a = taskWorktree({ repo, name: 'repair-route-a', baseRevision: revision });
+    writeFileAt(
+      a.path,
+      'src/orders.ts',
+      'export const orders = [];\nexport const cancel = true;\n',
+    );
+    const taskA = commitIn(a.path, 'feat: route A', ['src/orders.ts']);
+    const c = taskWorktree({ repo, name: 'repair-route-c', baseRevision: revision });
+    writeFileAt(
+      c.path,
+      'src/orders.ts',
+      'export const orders = [];\nexport const cancel = 1 as never;\n',
+    );
+    const taskC = commitIn(c.path, 'feat: route C', ['src/orders.ts']);
+    return { repo, baseRevision: revision, taskA, taskC };
+  }
+
+  function conflictRequest(input: {
+    readonly repo: string;
+    readonly baseRevision: string;
+    readonly taskA: string;
+    readonly taskC: string;
+    readonly cas: ReturnType<typeof createCasService>;
+    readonly operationId: string;
+    readonly worktreePath: string;
+  }): Parameters<typeof runIntegration>[0] {
+    return {
+      git,
+      repoRoot: input.repo,
+      cas: input.cas,
+      lock: integrationLock(),
+      projectId: PROJECT_ID,
+      worktreePath: input.worktreePath,
+      operationId: input.operationId,
+      ref: DELIVERY_REF,
+      targetRevision: input.baseRevision,
+      tasks: [
+        { taskId: 'task-a', dependsOn: [], revision: input.taskA, dependencyRevision: null },
+        {
+          taskId: 'task-c',
+          dependsOn: ['task-a'],
+          revision: input.taskC,
+          dependencyRevision: input.baseRevision,
+        },
+      ],
+      workId: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4b01',
+      acceptanceIds: ['AC-062'],
+    };
+  }
+
+  it('converges the conflict through the repair revision and emits one completion event (T-01)', () => {
+    const routes = conflictingRoutes();
+    const { cas, events } = casFor({ file: join(makeTempDir(), 'journal.sqlite') });
+    const failed = runIntegration(
+      conflictRequest({
+        ...routes,
+        cas,
+        operationId: 'op-repair-conflict',
+        worktreePath: taskWorktree({
+          repo: routes.repo,
+          name: 'repair-conflict',
+          baseRevision: routes.baseRevision,
+        }).path,
+      }),
+    );
+    expect(failed.ok).toBe(false);
+    if (failed.ok || failed.code !== 'TASK_MERGE_CONFLICT') throw new Error('expected a conflict');
+    const repair = failed.repair;
+    expect(refHead(routes.repo, DELIVERY_REF)).toBe(routes.baseRevision);
+    expect(events.appended).toHaveLength(0);
+
+    // The repair Task resolves both routes in one commit cut from the same frozen
+    // revision the conflicting integration started from.
+    const resolution = taskWorktree({
+      repo: routes.repo,
+      name: 'repair-resolution',
+      baseRevision: routes.baseRevision,
+    });
+    writeFileAt(
+      resolution.path,
+      'src/orders.ts',
+      'export const orders = [];\nexport const cancel = "resolved" as const;\n',
+    );
+    const repairRevision = commitIn(resolution.path, 'fix: resolve A and C', ['src/orders.ts']);
+
+    const converged = runIntegration({
+      git,
+      repoRoot: routes.repo,
+      cas,
+      lock: integrationLock(),
+      projectId: PROJECT_ID,
+      worktreePath: taskWorktree({
+        repo: routes.repo,
+        name: 'repair-converged',
+        baseRevision: routes.baseRevision,
+      }).path,
+      operationId: 'op-repair-converged',
+      ref: DELIVERY_REF,
+      targetRevision: routes.baseRevision,
+      tasks: [repairIntegrationTask({ repair, revision: repairRevision })],
+      workId: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4b01',
+      acceptanceIds: ['AC-062'],
+    });
+    if (!converged.ok) {
+      throw new Error(`the repair integration did not converge: ${JSON.stringify(converged)}`);
+    }
+    // The repair Task replaced both conflicting routes instead of replaying them.
+    expect(converged.supersededTaskIds).toEqual([...repair.repairTask.dependsOn].sort());
+    expect(converged.appliedTaskIds).toEqual([repair.repairTask.id]);
+    expect(
+      converged.applied
+        .filter((entry) => entry.superseded === true)
+        .map((entry) => entry.taskId)
+        .sort(),
+    ).toEqual([...repair.repairTask.dependsOn].sort());
+    // The branch carries the seed, the cherry-picked resolution and the integration's
+    // own commit (the replay commits the picked change and then records the Task
+    // integration), and exactly one completion event covers the whole convergence.
+    expect(branchCommitCount(routes.repo)).toBe(3);
+    expect(events.appended).toHaveLength(1);
+    expect(refHead(routes.repo, DELIVERY_REF)).toBe(converged.revision);
+    expect(
+      requireValue<string | null>(
+        git.readBlob(routes.repo, converged.revision, 'src/orders.ts'),
+        'resolved orders',
+      ),
+    ).toContain('resolved');
+    expect(git.isAncestor(routes.repo, routes.taskA, converged.revision)).toEqual({
+      ok: true,
+      value: false,
+    });
+    expect(git.isAncestor(routes.repo, routes.taskC, converged.revision)).toEqual({
+      ok: true,
+      value: false,
+    });
+  });
+
+  it('reports a missing Task revision as a gate refusal instead of an internal error (T-02)', () => {
+    const routes = conflictingRoutes();
+    const { cas, events } = casFor({ file: join(makeTempDir(), 'journal.sqlite') });
+    const refused = runIntegration({
+      git,
+      repoRoot: routes.repo,
+      cas,
+      lock: integrationLock(),
+      projectId: PROJECT_ID,
+      worktreePath: taskWorktree({
+        repo: routes.repo,
+        name: 'repair-ghost',
+        baseRevision: routes.baseRevision,
+      }).path,
+      operationId: 'op-ghost-task',
+      ref: DELIVERY_REF,
+      targetRevision: routes.baseRevision,
+      tasks: [
+        {
+          taskId: 'task-ghost',
+          dependsOn: [],
+          revision: 'f'.repeat(40),
+          dependencyRevision: routes.baseRevision,
+        },
+      ],
+      workId: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4b01',
+    });
+    expect(refused.ok).toBe(false);
+    if (refused.ok) throw new Error('unreachable');
+    // FALSIFY (T-02): the modelled `reason: 'revision'` used to surface as
+    // `INTERNAL_ERROR` from the replay, with no actionable classification.
+    expect(refused.code).toBe('GATE_NOT_READY');
+    if (refused.code !== 'GATE_NOT_READY') throw new Error('unreachable');
+    expect(refused.conflict.reason).toBe('revision');
+    expect(refused.conflict.taskId).toBe('task-ghost');
+    expect(refused.branchUntouched).toBe(true);
+    expect(refHead(routes.repo, DELIVERY_REF)).toBe(routes.baseRevision);
+    expect(events.appended).toHaveLength(0);
+  });
+});
+
+describe('integration delivery guard rails (T-04, W8R3-05/W8R3-06)', () => {
+  it('refuses a candidate that declares content.md but does not commit it (T-04)', () => {
+    const { repo, revision } = seedDeliveryRepo({ 'src/orders.ts': 'export const orders = [];\n' });
+    const { cas, events } = casFor({ file: join(makeTempDir(), 'journal.sqlite') });
+    const record = requirementFiles(REQUIREMENT_ID, {
+      version: 1,
+      title: '半对记录',
+      body: 'half pair candidate',
+    });
+    const metadataPath = `${record.recordPath}/requirement.json`;
+    const candidateWorktree = taskWorktree({ repo, name: 't04-half', baseRevision: revision });
+    writeFileAt(candidateWorktree.path, metadataPath, record.files[metadataPath] ?? '');
+    const candidate = commitIn(candidateWorktree.path, 'doc: half candidate', [metadataPath]);
+    const pool: RequirementPoolCommit = {
+      recordPath: record.recordPath,
+      metadataPath,
+      contentPath: `${record.recordPath}/content.md`,
+      recordHash: requirementRecordHash('a', 'b'),
+      version: 1,
+    };
+
+    const refused = expectRefused(
+      cas.integrate({
+        operationId: 'op-t04-half',
+        kind: 'requirement_save',
+        repoRoot: repo,
+        ref: DELIVERY_REF,
+        expectedRevision: revision,
+        candidateRevision: candidate,
+        message: 'doc: half candidate',
+        requirementPool: [pool],
+      }),
+    );
+    // FALSIFY (T-04): the old check was path-shape only, so this candidate moved the
+    // branch and exposed a half record (AC-094).
+    expect(refused.code).toBe('VALIDATION_ERROR');
+    expect(refused.message).toContain(`${record.recordPath}/content.md`);
+    expect(refused.branchUntouched).toBe(true);
+    expect(refHead(repo, DELIVERY_REF)).toBe(revision);
+    expect(events.appended).toHaveLength(0);
+  });
+
+  it('does not let a delivery re-enter a save owner that reuses the raw operation id (W8R3-05)', () => {
+    const { repo, revision } = seedDeliveryRepo({ 'src/orders.ts': 'export const orders = [];\n' });
+    const { cas } = casFor({ file: join(makeTempDir(), 'journal.sqlite') });
+    const lock = integrationLock();
+    // The pre-fix save path keyed the owner by the raw operationId; the delivery then
+    // shared the owner and re-entered the critical section.
+    expect(lock.acquire({ ownerAttemptId: 'op-shared', epoch: 1 }).acquired).toBe(true);
+    const refused = runIntegration({
+      git,
+      repoRoot: repo,
+      cas,
+      lock,
+      projectId: PROJECT_ID,
+      worktreePath: taskWorktree({ repo, name: 'shared-owner', baseRevision: revision }).path,
+      operationId: 'op-shared',
+      ref: DELIVERY_REF,
+      targetRevision: revision,
+      tasks: [],
+      workId: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4b02',
+    });
+    expect(refused.ok).toBe(false);
+    if (refused.ok) throw new Error('unreachable');
+    expect(refused.code).toBe('BUSY');
+    if (refused.code !== 'BUSY') throw new Error('unreachable');
+    expect(refused.heldBy.ownerAttemptId).toBe('op-shared');
+    expect(refHead(repo, DELIVERY_REF)).toBe(revision);
+  });
+
+  it('refuses a lock that is not the Project shared integration lock (W8R3-06)', () => {
+    const { repo, revision } = seedDeliveryRepo({ 'src/orders.ts': 'export const orders = [];\n' });
+    const { cas, events } = casFor({ file: join(makeTempDir(), 'journal.sqlite') });
+    const candidate = commitThroughWorktree({
+      repo,
+      name: 'wrong-lock-candidate',
+      baseRevision: revision,
+      message: 'feat: candidate',
+      files: { 'src/orders.ts': 'export const orders = [1];\n' },
+    });
+    const refused = runIntegration({
+      git,
+      repoRoot: repo,
+      cas,
+      lock: createMemoryIntegrationLock('018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4999'),
+      projectId: PROJECT_ID,
+      worktreePath: taskWorktree({ repo, name: 'wrong-lock', baseRevision: revision }).path,
+      operationId: 'op-wrong-lock',
+      ref: DELIVERY_REF,
+      targetRevision: revision,
+      tasks: [
+        {
+          taskId: 'task-wrong-lock',
+          dependsOn: [],
+          revision: candidate,
+          dependencyRevision: revision,
+        },
+      ],
+      workId: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4b03',
+    });
+    expect(refused.ok).toBe(false);
+    if (refused.ok) throw new Error('unreachable');
+    // FALSIFY (W8R3-06): an independently injected lock instance used to integrate
+    // while the Project lock was held by someone else.
+    expect(refused.code).toBe('INVALID_STATE');
+    if (refused.code !== 'INVALID_STATE') throw new Error('unreachable');
+    expect(refused.message).toContain('integration:');
+    expect(refused.branchUntouched).toBe(true);
+    expect(refHead(repo, DELIVERY_REF)).toBe(revision);
+    expect(events.appended).toHaveLength(0);
   });
 });

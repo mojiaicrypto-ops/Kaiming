@@ -43,6 +43,7 @@ import {
   createMemoryCasEvents,
   createMemoryCasJournal,
   createNodeWorktreeGitPort,
+  repairIntegrationTask,
   runIntegration,
   type CasJournal,
   type CasJournalRecord,
@@ -269,6 +270,7 @@ describe('required WP-08 failure tests', () => {
           events: createMemoryCasEvents(),
         }),
         lock: new ProjectIntegrationLock({ projectId: base.projectId, leases: base.store.leases }),
+        projectId: base.projectId,
         worktreePath: integration,
         operationId: 'op-conflict',
         ref: DELIVERY_REF,
@@ -323,6 +325,7 @@ describe('required WP-08 failure tests', () => {
           events: createMemoryCasEvents(),
         }),
         lock: new ProjectIntegrationLock({ projectId: base.projectId, leases: base.store.leases }),
+        projectId: base.projectId,
         worktreePath: worktreeAt(base.repo, base.seedRevision, 'integration-conflict-retry'),
         operationId: 'op-conflict-retry',
         ref: DELIVERY_REF,
@@ -355,6 +358,139 @@ describe('required WP-08 failure tests', () => {
 
       // CAS protects HEAD: the delivery branch never moved.
       expect(refHead(base.repo)).toBe(base.seedRevision);
+    } finally {
+      base.store.close();
+    }
+  });
+
+  it('T-01: the repair revision converges and is what the final manifest records (AC-062)', () => {
+    const base = createRepo();
+    try {
+      const workId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d5b01';
+      const taskA = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d5b10';
+      const taskC = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d5b11';
+      addWork(base, workId);
+      const revisionA = commitAt(
+        base.repo,
+        base.seedRevision,
+        'repair-revision-a',
+        CODE_PATH,
+        'export const cancel = (): boolean => true;\n',
+      );
+      const revisionC = commitAt(
+        base.repo,
+        base.seedRevision,
+        'repair-revision-c',
+        CODE_PATH,
+        'export const cancel = (): boolean => 1 as unknown as boolean;\n',
+      );
+      const failed = runIntegration({
+        git: port,
+        repoRoot: base.repo,
+        cas: createCasService({
+          git: port,
+          journal: createMemoryCasJournal(),
+          events: createMemoryCasEvents(),
+        }),
+        lock: new ProjectIntegrationLock({ projectId: base.projectId, leases: base.store.leases }),
+        projectId: base.projectId,
+        worktreePath: worktreeAt(base.repo, base.seedRevision, 'integration-repair-conflict'),
+        operationId: 'op-repair-conflict',
+        ref: DELIVERY_REF,
+        targetRevision: base.seedRevision,
+        tasks: [
+          { taskId: taskA, dependsOn: [], revision: revisionA, dependencyRevision: null },
+          {
+            taskId: taskC,
+            dependsOn: [taskA],
+            revision: revisionC,
+            dependencyRevision: base.seedRevision,
+          },
+        ],
+        workId,
+        acceptanceIds: ['AC-062'],
+      });
+      expect(failed.ok).toBe(false);
+      if (failed.ok || failed.code !== 'TASK_MERGE_CONFLICT') throw new Error('unreachable');
+      const repair = failed.repair;
+
+      // The repair Task resolves both routes in one commit cut from the frozen base.
+      const repairRevision = commitAt(
+        base.repo,
+        base.seedRevision,
+        'repair-resolution',
+        CODE_PATH,
+        'export const cancel = (): boolean => "resolved" as unknown as boolean;\n',
+      );
+      const converged = runIntegration({
+        git: port,
+        repoRoot: base.repo,
+        cas: createCasService({
+          git: port,
+          journal: createMemoryCasJournal(),
+          events: createMemoryCasEvents(),
+        }),
+        lock: new ProjectIntegrationLock({ projectId: base.projectId, leases: base.store.leases }),
+        projectId: base.projectId,
+        worktreePath: worktreeAt(base.repo, base.seedRevision, 'integration-repaired'),
+        operationId: 'op-repair-converged',
+        ref: DELIVERY_REF,
+        targetRevision: base.seedRevision,
+        tasks: [repairIntegrationTask({ repair, revision: repairRevision })],
+        workId,
+        acceptanceIds: ['AC-062'],
+      });
+      if (!converged.ok) throw new Error(`repair did not converge: ${converged.code}`);
+      // FALSIFY (T-01): the conflicting routes are replaced, and the branch holds the
+      // repaired combination instead of replaying both routes into the same conflict.
+      expect(converged.supersededTaskIds).toEqual([...repair.repairTask.dependsOn].sort());
+      expect(converged.appliedTaskIds).toEqual([repair.repairTask.id]);
+      expect(refHead(base.repo)).toBe(converged.revision);
+
+      // The final manifest records exactly the repaired revision; the pre-repair
+      // revision is not evidence for it.
+      const finalTree = deliveredCodeTreeHash({
+        repoRoot: base.repo,
+        revision: converged.revision,
+      });
+      const verified = {
+        manifestId: 'manifest-repair',
+        workId,
+        kind: 'integration' as const,
+        codeRevision: converged.revision,
+        codeTree: finalTree,
+        acceptanceIds: ['AC-062'],
+        valid: true,
+      };
+      const manifest = buildFinalManifest({
+        workId,
+        verifiedManifests: [verified],
+        finalRevision: converged.revision,
+        finalTree,
+        knowledgeTree: sha256('knowledge'),
+        settlementResultRef: 'settlement-repair',
+      });
+      if (!manifest.ok) throw new Error(manifest.message);
+      expect(manifest.manifest.finalRevision).toBe(converged.revision);
+      expect(manifest.evidence.verifiedRevisions).toEqual([converged.revision]);
+      expect(
+        gitOk(
+          port.isAncestor(base.repo, base.seedRevision, manifest.manifest.finalRevision),
+          'ancestor',
+        ),
+      ).toBe(true);
+
+      const stale = buildFinalManifest({
+        workId,
+        verifiedManifests: [verified],
+        finalRevision: base.seedRevision,
+        finalTree: sha256('seed-tree'),
+        knowledgeTree: sha256('knowledge'),
+        settlementResultRef: 'settlement-repair',
+      });
+      expect(stale.ok).toBe(false);
+      if (stale.ok) throw new Error('unreachable');
+      expect(stale.code).toBe('STALE_ARTIFACT');
     } finally {
       base.store.close();
     }

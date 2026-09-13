@@ -300,16 +300,18 @@ export function newAttemptAdmission(store: ProjectStoreType, runId: string): New
       ? undefined
       : store.decisions
           .list({
-            where: 'work_id = ? AND kind = ?',
-            params: [run.workId, RECOVERY_DECISION_KIND],
+            // `W8R3-04`: bind the Run/verdict to the query. Scanning only the newest
+            // 25 Work-scoped decisions meant unrelated recovery decisions recorded
+            // later could push the decision that actually covers this Run out of the
+            // window, silently re-blocking a Run that had been released.
+            where: "work_id = ? AND kind = ? AND json_extract(target_ref, '$.id') IN (?, ?)",
+            params: [run.workId, RECOVERY_DECISION_KIND, runId, verdict.eventId],
             orderBy: 'created_at DESC',
-            limit: 25,
           })
           .find(
             (decision) =>
               decision.choice === 'resume' &&
-              Date.parse(decision.createdAt) > Date.parse(verdict.occurredAt) &&
-              (decision.targetRef.id === runId || decision.targetRef.id === verdict.eventId),
+              Date.parse(decision.createdAt) > Date.parse(verdict.occurredAt),
           );
   if (resolved !== undefined) {
     return { ...allowed, requiresRecoveryDecision, resolvedByDecisionId: resolved.id };

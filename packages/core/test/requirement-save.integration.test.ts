@@ -1223,6 +1223,7 @@ describe('requirement save versus code delivery (AC-091)', () => {
         events: createMemoryCasEvents(),
       }),
       lock: h.lock,
+      projectId: h.projectId,
       worktreePath: integrationWorktree,
       operationId: 'op-integrate-concurrent',
       ref: DELIVERY_REF,
@@ -1371,6 +1372,7 @@ describe('requirement save versus code delivery (AC-091)', () => {
         events: createMemoryCasEvents(),
       }),
       lock: h.lock,
+      projectId: h.projectId,
       worktreePath: integrationWorktree,
       operationId: 'op-integration-serialized',
       ref: DELIVERY_REF,
@@ -1403,6 +1405,7 @@ describe('requirement save versus code delivery (AC-091)', () => {
         events: createMemoryCasEvents(),
       }),
       lock: h.lock,
+      projectId: h.projectId,
       worktreePath: integrationWorktree,
       operationId: 'op-integration-serialized',
       ref: DELIVERY_REF,
@@ -1782,3 +1785,280 @@ function checkCompletionSettlementForTest(input: {
     codeStartRevision: input.codeStartRevision,
   });
 }
+
+// ---------------------------------------------------------------------------
+// Round-3 findings: journal identity, write-back failure, stale checkouts and the
+// per-record pool conflicts (W8R3-01..03, T-03/T-05)
+// ---------------------------------------------------------------------------
+
+describe('requirement save working copy and journal identity (W8R3-01..03, T-03/T-05)', () => {
+  const sourceRef = { kind: 'action' as const, id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99' };
+
+  it('refuses a journaled install when the operation recorded another record (W8R3-01)', () => {
+    const h = harness();
+    const operationId = 'op-journal-other-record';
+    const first = {
+      operationId,
+      metadata: metadataDraft(),
+      contentMarkdown: body('记录 A 的正文。'),
+      expected: { expectedAbsent: true },
+      sourceRef,
+    };
+    const crashingService = createRequirementSaveService({
+      store: h.store,
+      worktrees: portCrashingBeforeSwap(h.repo),
+      journal: h.journal,
+      events: h.events,
+      lock: h.lock,
+      worktreeRoot: h.worktreeRoot,
+      now: () => TIME,
+      keepWorktree: false,
+    });
+    expect(requireRefused(crashingService.save(first)).code).toBe('INTERNAL_ERROR');
+    const recorded = h.journal.load(operationId)?.targetRevision ?? '';
+    expect(recorded).not.toBe('');
+
+    // The same operationId is reused for a *different* requirement: the journaled
+    // commit is not this record's, so it must never be installed under its name.
+    const refused = requireRefused(
+      h.service.save({
+        operationId,
+        metadata: metadataDraft({ id: SECOND_ID }),
+        contentMarkdown: body('记录 B 的正文。'),
+        expected: { expectedAbsent: true },
+        sourceRef,
+      }),
+    );
+    // FALSIFY (W8R3-01): the old hash lookup returned null for the other path, skipped
+    // the check and reported `saved` while installing record A's commit.
+    expect(refused.code).toBe('IDEMPOTENCY_CONFLICT');
+    expect(refused.message).toContain(`.agentdev/requirements/${SECOND_ID}`);
+    expect(refused.branchUntouched).toBe(true);
+    expect(refHead(h.repo)).toBe(h.baseRevision);
+    expect(commitCount(h.repo)).toBe(1);
+    expect(h.store.requirements.find(SECOND_ID)).toBeUndefined();
+    expect(h.events.appended.filter((event) => event.operationId === operationId)).toHaveLength(0);
+    h.store.close();
+  });
+
+  it('reports RECOVERY_REQUIRED when the working copy write-back really fails (W8R3-02)', () => {
+    const h = harness();
+    const contentPath = join(h.repo, '.agentdev', 'requirements', REQUIREMENT_ID, 'content.md');
+    // A directory where the committed content.md must be written: a real `EISDIR`.
+    mkdirSync(contentPath, { recursive: true });
+    const input = {
+      operationId: 'op-write-back-fails',
+      metadata: metadataDraft(),
+      contentMarkdown: body('写回失败的正文。'),
+      expected: { expectedAbsent: true },
+      sourceRef,
+    };
+    const refused = requireRefused(h.service.save(input));
+    // FALSIFY (W8R3-02): the old code only logged a diagnostic and still reported
+    // `saved`, claiming a working copy that was never written.
+    expect(refused.code).toBe('RECOVERY_REQUIRED');
+    expect(refused.operation?.repairOnly).toBe(true);
+    expect(refused.branchUntouched).toBe(false);
+    expect(refused.message).toContain('写回失败');
+    // Git moved, the projection did not.
+    expect(refHead(h.repo)).not.toBe(h.baseRevision);
+    expect(commitCount(h.repo)).toBe(2);
+    expect(h.store.requirements.find(REQUIREMENT_ID)).toBeUndefined();
+
+    // Once the path is a file again the same operation repairs only the projection.
+    rmSync(contentPath, { recursive: true, force: true });
+    const repaired = requireSaved(h.service.retry(input));
+    expect(repaired.status).toBe('projection_repaired');
+    expect(existsSync(contentPath)).toBe(true);
+    expect(readFileSync(contentPath, 'utf8')).toContain('写回失败的正文。');
+    h.store.close();
+  });
+
+  it('rewinds a clean checkout parked at another revision instead of calling it dirty (W8R3-03)', () => {
+    const h = harness();
+    const first = requireSaved(
+      h.service.save({
+        operationId: 'op-parked-v1',
+        metadata: metadataDraft(),
+        contentMarkdown: body('第一版。'),
+        expected: { expectedAbsent: true },
+        sourceRef,
+      }),
+    );
+    const second = requireSaved(
+      h.service.save({
+        operationId: 'op-parked-v2',
+        metadata: metadataDraft({ version: 2, title: '第二版' }),
+        contentMarkdown: body('第二版。'),
+        expected: { recordVersion: 1, recordHash: first.recordHash },
+        sourceRef,
+      }),
+    );
+    // The delivery working tree is cleanly parked at v1 while the delivery ref is v2.
+    const detached = runGit(['checkout', '-f', '--detach', first.git.commit], { cwd: h.repo });
+    expect(detached.ok).toBe(true);
+    expect(requireValue(port.statusPorcelain(h.repo), 'porcelain')).toEqual([]);
+
+    const third = requireSaved(
+      h.service.save({
+        operationId: 'op-parked-v3',
+        metadata: metadataDraft({ version: 3, title: '第三版' }),
+        contentMarkdown: body('第三版。'),
+        expected: { recordVersion: 2, recordHash: second.recordHash },
+        sourceRef,
+      }),
+    );
+    // FALSIFY (W8R3-03): the byte check saw the v1 bytes and refused with a
+    // "未提交的本地修改" message that never converged.
+    expect(third.status).toBe('saved');
+    const contentPath = join(h.repo, third.recordPath, 'content.md');
+    expect(readFileSync(contentPath, 'utf8')).toBe(
+      requireValue<string | null>(
+        port.readBlob(h.repo, third.git.commit, `${third.recordPath}/content.md`),
+        'committed content',
+      ),
+    );
+    // The clean checkout was rewound to the new delivery revision.
+    expect(requireValue(port.headRevision(h.repo), 'head')).toBe(third.git.commit);
+
+    // The next save still converges: the repair did not leave the branch ahead.
+    const fourth = requireSaved(
+      h.service.save({
+        operationId: 'op-parked-v4',
+        metadata: metadataDraft({ version: 4, title: '第四版' }),
+        contentMarkdown: body('第四版。'),
+        expected: { recordVersion: 3, recordHash: third.recordHash },
+        sourceRef,
+      }),
+    );
+    expect(fourth.status).toBe('saved');
+    expect(requireValue(port.headRevision(h.repo), 'head')).toBe(fourth.git.commit);
+    h.store.close();
+  });
+
+  it('treats a ref that moved without a checkout as a stale projection, not local edits (T-05)', () => {
+    const h = harness();
+    const first = requireSaved(
+      h.service.save({
+        operationId: 'op-stale-projection-v1',
+        metadata: metadataDraft(),
+        contentMarkdown: body('第一版。'),
+        expected: { expectedAbsent: true },
+        sourceRef,
+      }),
+    );
+    // Another server commits v2 and moves the ref; this working tree stays at v1.
+    const remoteRevision = commitRemoteRecord({
+      repo: h.repo,
+      baseRevision: first.git.commit,
+      id: REQUIREMENT_ID,
+      version: 2,
+      body: '其他服务器的 v2 正文。',
+    });
+    expect(refHead(h.repo)).toBe(remoteRevision);
+
+    const saved = requireSaved(
+      h.service.save({
+        operationId: 'op-stale-projection-repair',
+        metadata: metadataDraft({ version: 3, title: '本机 v3' }),
+        contentMarkdown: body('本机 v3 正文。'),
+        expected: { recordVersion: 1, recordHash: first.recordHash },
+        explicitRepair: true,
+        sourceRef,
+      }),
+    );
+    // FALSIFY (T-05): the stale checkout used to be diagnosed as uncommitted local
+    // modifications and left the branch ahead of the working copy.
+    expect(saved.status).toBe('saved');
+    expect(saved.git.previousCommit).toBe(remoteRevision);
+    const contentPath = join(h.repo, `${first.recordPath}/content.md`);
+    expect(readFileSync(contentPath, 'utf8')).toBe(
+      requireValue<string | null>(
+        port.readBlob(h.repo, saved.git.commit, `${first.recordPath}/content.md`),
+        'committed content',
+      ),
+    );
+    h.store.close();
+  });
+
+  it('reports a half pair as a per-record conflict instead of dropping it (T-03)', () => {
+    const h = harness();
+    const recordPath = `.agentdev/requirements/${SECOND_ID}`;
+    const worktree = detachedWorktree(h.repo, 'half-pair', h.baseRevision);
+    writeFileAt(
+      worktree,
+      `${recordPath}/requirement.json`,
+      `${JSON.stringify({ ...metadataDraft({ id: SECOND_ID }), contentHash: 'f'.repeat(64) }, null, 2)}\n`,
+    );
+    const committed = requireValue<{ revision: string }>(
+      port.commitPaths(worktree, 'doc(requirement): half pair', [`${recordPath}/requirement.json`]),
+      'commit half pair',
+    );
+    requireValue(
+      port.updateRef({
+        repoRoot: h.repo,
+        ref: DELIVERY_REF,
+        newRevision: committed.revision,
+        expectedOldRevision: h.baseRevision,
+      }),
+      'move the delivery ref to the half pair',
+    );
+
+    const pool = readRequirementPoolAtRevision({
+      git: gitReader,
+      repoRoot: h.repo,
+      revision: committed.revision,
+    });
+    // FALSIFY (T-03): the reader used to `continue` with no conflict and no record.
+    expect(pool.records).toEqual([]);
+    expect(pool.conflicts).toHaveLength(1);
+    expect(pool.conflicts[0]?.recordPath).toBe(recordPath);
+    expect(pool.conflicts[0]?.reason).toBe('missing-content');
+    expect(pool.conflicts[0]?.paths).toContain(`${recordPath}/content.md`);
+
+    // The save path surfaces it as a per-record conflict, not a silent overwrite.
+    const refused = requireRefused(
+      h.service.save({
+        operationId: 'op-half-pair-save',
+        metadata: metadataDraft({ id: SECOND_ID }),
+        contentMarkdown: body('本机正文。'),
+        expected: { expectedAbsent: true },
+        sourceRef,
+      }),
+    );
+    expect(refused.code).toBe('REQUIREMENT_CONFLICT');
+    expect(refused.message).toContain(recordPath);
+    expect(refHead(h.repo)).toBe(committed.revision);
+    h.store.close();
+  });
+
+  it('reports a metadata/body hash mismatch per record (T-03)', () => {
+    const h = harness();
+    const recordPath = `.agentdev/requirements/${SECOND_ID}`;
+    const worktree = detachedWorktree(h.repo, 'hash-mismatch', h.baseRevision);
+    const contentMarkdown = `${normalizeContentMarkdown('# body\n\n正文。\n')}`;
+    writeFileAt(worktree, `${recordPath}/content.md`, contentMarkdown);
+    writeFileAt(
+      worktree,
+      `${recordPath}/requirement.json`,
+      `${JSON.stringify({ ...metadataDraft({ id: SECOND_ID }), contentHash: 'f'.repeat(64) }, null, 2)}\n`,
+    );
+    const committed = requireValue<{ revision: string }>(
+      port.commitPaths(worktree, 'doc(requirement): hash mismatch', [
+        `${recordPath}/content.md`,
+        `${recordPath}/requirement.json`,
+      ]),
+      'commit hash mismatch',
+    );
+
+    const pool = readRequirementPoolAtRevision({
+      git: gitReader,
+      repoRoot: h.repo,
+      revision: committed.revision,
+    });
+    expect(pool.records.map((record) => record.id)).toEqual([SECOND_ID]);
+    expect(pool.conflicts.map((conflict) => conflict.reason)).toEqual(['hash-mismatch']);
+    expect(pool.conflicts[0]?.recordPath).toBe(recordPath);
+    h.store.close();
+  });
+});

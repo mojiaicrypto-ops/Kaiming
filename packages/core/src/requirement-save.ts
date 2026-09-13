@@ -146,6 +146,20 @@ export class DeliveryWorktreeDirtyError extends Error {
 }
 
 /**
+ * Whether one `git status --porcelain` line touches `path`.
+ *
+ * An untracked directory is reported as `?? dir/`, so a target *inside* it counts as
+ * touched; that is what lets the write-back refuse to overwrite untracked content
+ * (`W8R2-06`) instead of silently replacing it.
+ */
+function porcelainTouches(line: string, path: string): boolean {
+  return dirtyPathsOf(line).some((entry) => {
+    const normalized = entry.endsWith('/') ? entry.slice(0, -1) : entry;
+    return path === normalized || path.startsWith(`${normalized}/`);
+  });
+}
+
+/**
  * The integration mutex of one Project (`reliability.md` §4/§9).
  *
  * `lease.resource` is unique in `data.md` §2, so this string is the *whole*
@@ -523,10 +537,28 @@ export interface RequirementPoolRevisionRecord {
   readonly version: number;
 }
 
+/**
+ * One record-level problem in a revision's pool (`T-03`, AC-093).
+ *
+ * `requirements.md` §4 requires such records to be reported per record ("缺任一文件、
+ * Hash 不一致…标该条冲突，不静默补空正文") instead of being dropped from the reader's
+ * output with no diagnostic.
+ */
+export interface RequirementPoolConflict {
+  /** Repository-relative record directory, e.g. `.agentdev/requirements/<id>`. */
+  readonly recordPath: string;
+  /** The files that are missing or inconsistent. */
+  readonly paths: readonly string[];
+  readonly reason: 'missing-content' | 'missing-metadata' | 'hash-mismatch' | 'invalid-metadata';
+  readonly message: string;
+}
+
 /** The pool as committed at one revision. */
 export interface RequirementPoolAtRevision {
   readonly revision: string | null;
   readonly records: readonly RequirementPoolRevisionRecord[];
+  /** Per-record conflicts; a record listed here is not in `records`. */
+  readonly conflicts: readonly RequirementPoolConflict[];
   /** The committed pool README text, when it exists at that revision. */
   readonly readme?: string;
 }
@@ -586,7 +618,7 @@ export function readRequirementPoolAtRevision(input: {
   readonly revision: string | null;
 }): RequirementPoolAtRevision {
   const revision = input.revision;
-  if (revision === null) return { revision: null, records: [] };
+  if (revision === null) return { revision: null, records: [], conflicts: [] };
   const listed = input.git.listTree(input.repoRoot, revision, [REQUIREMENTS_ROOT]);
   if (!listed.ok) {
     throw new ProtocolError('INTERNAL_ERROR', `读取需求池树失败：${revision}`, {
@@ -602,17 +634,67 @@ export function readRequirementPoolAtRevision(input: {
         path.endsWith(`/${REQUIREMENT_METADATA_FILE_NAME}`),
     )
     .sort();
+  const contentPaths = files
+    .filter(
+      (path) =>
+        path.startsWith(`${REQUIREMENTS_ROOT}/`) &&
+        path.endsWith(`/${REQUIREMENT_CONTENT_FILE_NAME}`),
+    )
+    .sort();
   const records: RequirementPoolRevisionRecord[] = [];
+  const conflicts: RequirementPoolConflict[] = [];
   for (const metadataPath of metadataPaths) {
     const segments = metadataPath.split('/');
     const id = segments[segments.length - 2] ?? '';
     const recordPath = `${REQUIREMENTS_ROOT}/${id}`;
     const contentPath = `${recordPath}/${REQUIREMENT_CONTENT_FILE_NAME}`;
-    if (!present.has(contentPath)) continue;
+    if (!present.has(contentPath)) {
+      // `T-03`: report the half pair instead of dropping it silently, and never
+      // fabricate an empty body for it.
+      conflicts.push({
+        recordPath,
+        paths: [metadataPath, contentPath],
+        reason: 'missing-content',
+        message: `需求记录 ${recordPath} 只有 requirement.json（缺少 content.md）；标该条冲突，不补空正文`,
+      });
+      continue;
+    }
     const metadataJson = readBlobAt(input, revision, metadataPath);
     const contentMarkdown = readBlobAt(input, revision, contentPath);
     const metadataHash = sha256Hex(metadataJson);
     const contentHash = sha256Hex(normalizeContentMarkdown(contentMarkdown));
+    let declaredContentHash: string | undefined;
+    let version: number;
+    try {
+      const parsed: unknown = JSON.parse(metadataJson);
+      if (typeof parsed !== 'object' || parsed === null) {
+        throw new Error('需求记录元数据不是对象');
+      }
+      const candidate = parsed as { readonly contentHash?: unknown; readonly version?: unknown };
+      declaredContentHash =
+        typeof candidate.contentHash === 'string' ? candidate.contentHash : undefined;
+      version = typeof candidate.version === 'number' ? candidate.version : 0;
+    } catch (error) {
+      conflicts.push({
+        recordPath,
+        paths: [metadataPath],
+        reason: 'invalid-metadata',
+        message: `需求记录 ${recordPath} 的 requirement.json 无法解析：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      });
+      continue;
+    }
+    if (declaredContentHash !== undefined && declaredContentHash !== contentHash) {
+      // The record is still readable (the caller can show the original bytes), but
+      // the mismatch is a per-record conflict rather than a silent recomputation.
+      conflicts.push({
+        recordPath,
+        paths: [metadataPath, contentPath],
+        reason: 'hash-mismatch',
+        message: `需求记录 ${recordPath} 的 metadata.contentHash=${declaredContentHash} 与正文哈希 ${contentHash} 不一致；标该条冲突`,
+      });
+    }
     records.push({
       id,
       recordPath,
@@ -623,7 +705,18 @@ export function readRequirementPoolAtRevision(input: {
       metadataHash,
       contentHash,
       recordHash: requirementRecordHash(metadataHash, contentHash),
-      version: metadataVersionOf(metadataJson),
+      version,
+    });
+  }
+  // The other half of a half pair: a committed body with no metadata.
+  for (const contentPath of contentPaths) {
+    const directory = contentPath.slice(0, contentPath.lastIndexOf('/'));
+    if (present.has(`${directory}/${REQUIREMENT_METADATA_FILE_NAME}`)) continue;
+    conflicts.push({
+      recordPath: directory,
+      paths: [contentPath],
+      reason: 'missing-metadata',
+      message: `需求记录 ${directory} 只有 content.md（缺少 requirement.json）；标该条冲突`,
     });
   }
   records.sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
@@ -632,6 +725,9 @@ export function readRequirementPoolAtRevision(input: {
   return {
     revision,
     records,
+    conflicts: conflicts.sort((left, right) =>
+      left.recordPath < right.recordPath ? -1 : left.recordPath > right.recordPath ? 1 : 0,
+    ),
     ...(readme === undefined ? {} : { readme }),
   };
 }
@@ -665,13 +761,6 @@ function readBlobAt(
     );
   }
   return blob.value;
-}
-
-function metadataVersionOf(metadataJson: string): number {
-  const parsed: unknown = JSON.parse(metadataJson);
-  if (typeof parsed !== 'object' || parsed === null) return 0;
-  const version = (parsed as { readonly version?: unknown }).version;
-  return typeof version === 'number' ? version : 0;
 }
 
 /** The rebuilt README text for a set of records (`requirements.md` §6). */
@@ -1160,7 +1249,10 @@ export class RequirementSaveService {
         'operationId is the CAS idempotency key',
       ]);
     }
-    const ownerAttemptId = input.ownerAttemptId ?? input.operationId;
+    // `W8R3-05`: the owner id is subsystem-prefixed so a save and a delivery that
+    // happen to reuse one raw operation id (or an explicit owner id) are still two
+    // different lock owners and cannot re-enter each other's critical section.
+    const ownerAttemptId = `save:${input.ownerAttemptId ?? input.operationId}`;
     const epoch = input.epoch ?? 1;
     const taken = this.lock.acquire({
       ownerAttemptId,
@@ -1497,6 +1589,8 @@ export class RequirementSaveService {
         this.refreshWorkingTree({
           repoRoot,
           baselineRevision: headRevision,
+          targetRevision: cas.targetRevision,
+          branch,
           prepared,
           poolRecords,
         });
@@ -1517,9 +1611,19 @@ export class RequirementSaveService {
             error,
           });
         }
-        // The commit is durable and the branch is correct; only the working copy of
-        // the pool is behind, and the repair path rebuilds it.
-        this.appendDiagnostic(REQUIREMENT_WORKTREE_REFRESH_FAILED_EVENT, input, record.id, {
+        // `W8R3-02`: the commit is durable but the working copy could not be written
+        // (a read-only pool directory, an `EISDIR` at a target path, ...). Reporting
+        // `saved` would claim a working copy that does not exist, so this is the same
+        // repair-only recovery the dirty case takes.
+        return this.worktreeRefreshRefusal({
+          input,
+          project: { branch, ref, repoRoot },
+          record,
+          operationRowId,
+          stepResults,
+          targetRevision: cas.targetRevision,
+          targetTree: cas.targetTree,
+          recordHash: prepared.recordHash,
           message: error instanceof Error ? error.message : String(error),
         });
       }
@@ -1563,6 +1667,8 @@ export class RequirementSaveService {
       this.refreshWorkingTree({
         repoRoot: project.repoRoot,
         baselineRevision: args.previousRevision,
+        targetRevision: args.targetRevision,
+        branch: project.branch,
         prepared,
         poolRecords: args.poolRecords,
       });
@@ -1683,10 +1789,19 @@ export class RequirementSaveService {
   }): RequirementSaveOutcome {
     const { input, prepared, record } = args;
     const journal = this.journal.load(input.operationId);
-    const journaledHash =
-      journal === null ? null : this.journaledRecordHash(journal, prepared.directoryPath);
-    if (journaledHash !== null && journaledHash !== prepared.recordHash) {
-      const message = `operationId ${input.operationId} 已在 ${args.targetRevision} 记录 ${prepared.directoryPath} 的 recordHash ${journaledHash}，与本次 ${prepared.recordHash} 不一致：原操作挂起的是另一份正文；用原正文重试或改用新的 operationId`;
+    // `W8R3-01`: the journal must name *this* record path with *this* body hash. The
+    // old lookup returned `null` for a different path and skipped the check, so
+    // reusing a crashed operationId for another requirement installed the journaled
+    // commit of the other record while reporting the new one as saved. A journal that
+    // does not describe this exact record is an idempotency conflict.
+    const journaled =
+      journal === null ? null : this.journaledRecord(journal, prepared.directoryPath);
+    if (journaled === null || journaled.recordHash !== prepared.recordHash) {
+      const recorded =
+        journaled === null
+          ? `未记录记录路径 ${prepared.directoryPath}`
+          : `记录路径 ${journaled.recordPath} 的 recordHash 为 ${journaled.recordHash}`;
+      const message = `operationId ${input.operationId} 已在 ${args.targetRevision} 记录的是另一份需求记录（${recorded}），与本次 ${prepared.directoryPath} 的 ${prepared.recordHash} 不一致：原操作挂起的是另一条记录或另一份正文；用原记录/原正文重试，或改用新的 operationId`;
       return this.refusal(
         'IDEMPOTENCY_CONFLICT',
         message,
@@ -1779,6 +1894,8 @@ export class RequirementSaveService {
       this.refreshWorkingTree({
         repoRoot: args.project.repoRoot,
         baselineRevision: args.previousRevision,
+        targetRevision: cas.targetRevision,
+        branch: args.project.branch,
         prepared,
         poolRecords,
       });
@@ -1796,7 +1913,17 @@ export class RequirementSaveService {
           error,
         });
       }
-      this.appendDiagnostic(REQUIREMENT_WORKTREE_REFRESH_FAILED_EVENT, input, record.id, {
+      // `W8R3-02`: the journaled commit is installed but the working copy could not be
+      // written; the caller gets the repair-only recovery instead of a false `saved`.
+      return this.worktreeRefreshRefusal({
+        input,
+        project: args.project,
+        record,
+        operationRowId,
+        stepResults: after,
+        targetRevision: cas.targetRevision,
+        targetTree: cas.targetTree,
+        recordHash: prepared.recordHash,
         message: error instanceof Error ? error.message : String(error),
       });
     }
@@ -1814,15 +1941,26 @@ export class RequirementSaveService {
     });
   }
 
-  /** The `recordHash` the CAS journal recorded for one record path, if any. */
-  private journaledRecordHash(journal: CasJournalRecord, recordPath: string): string | null {
+  /** The journal entry the CAS recorded for one record path, if any (`W8R3-01`). */
+  private journaledRecord(
+    journal: CasJournalRecord,
+    recordPath: string,
+  ): { readonly recordPath: string; readonly recordHash: string; readonly version: number } | null {
     const records = journal.stepResults['requirementRecords'];
     if (!Array.isArray(records)) return null;
     for (const entry of records) {
       if (typeof entry !== 'object' || entry === null) continue;
-      const candidate = entry as { readonly recordPath?: unknown; readonly recordHash?: unknown };
+      const candidate = entry as {
+        readonly recordPath?: unknown;
+        readonly recordHash?: unknown;
+        readonly version?: unknown;
+      };
       if (candidate.recordPath === recordPath && typeof candidate.recordHash === 'string') {
-        return candidate.recordHash;
+        return {
+          recordPath,
+          recordHash: candidate.recordHash,
+          version: typeof candidate.version === 'number' ? candidate.version : 0,
+        };
       }
     }
     return null;
@@ -2081,6 +2219,28 @@ export class RequirementSaveService {
       repoRoot: args.repoRoot,
       revision: args.revision,
     });
+    const directoryPath = requirementRecordDirectory(args.input.metadata.id);
+    const recordConflict = pool.conflicts.find((conflict) => conflict.recordPath === directoryPath);
+    if (recordConflict !== undefined && args.input.explicitRepair !== true) {
+      // `T-03`: a half pair at the delivery ref is a per-record conflict, never a
+      // silent overwrite (or a silent skip that would add a second half pair).
+      return {
+        ok: false,
+        failure: this.refusal(
+          'REQUIREMENT_CONFLICT',
+          recordConflict.message,
+          [`${recordConflict.reason}: ${recordConflict.paths.join('、')}`],
+          this.recoveryOperation({
+            input: args.input,
+            ref: args.ref,
+            expectedRevision: args.revision,
+            recordHash: args.previous?.portableRef.hash ?? '',
+            repairOnly: false,
+            messages: [recordConflict.message],
+          }),
+        ),
+      };
+    }
     const head = pool.records.find((entry) => entry.id === args.input.metadata.id);
     if (args.input.explicitRepair === true) return { ok: true };
     const conflict = (
@@ -2248,11 +2408,19 @@ export class RequirementSaveService {
    * check the committed bytes unconditionally replaced whatever was on disk, so a
    * locally edited `content.md` was silently lost. A dirty target raises
    * `DeliveryWorktreeDirtyError` and the caller reports it (AC-028).
+   *
+   * `W8R3-03`: a *clean* checkout parked at another revision is not a local edit. The
+   * delivery worktree is rewound to the ref revision (never while any local change is
+   * present, and never when it is on an unrelated branch) so the projection repair
+   * converges instead of refusing forever.
    */
   private refreshWorkingTree(input: {
     readonly repoRoot: string;
-    /** The revision the working tree is expected to be a checkout of. */
+    /** The revision the new commit was based on. */
     readonly baselineRevision: string;
+    /** The revision the delivery ref now holds. */
+    readonly targetRevision: string;
+    readonly branch: string;
     readonly prepared: PreparedRequirementRecord;
     readonly poolRecords: readonly RequirementPoolRevisionRecord[];
   }): void {
@@ -2261,56 +2429,211 @@ export class RequirementSaveService {
       { path: input.prepared.contentPath, content: input.prepared.contentMarkdown },
       { path: REQUIREMENTS_README, content: requirementPoolReadme(input.poolRecords) },
     ];
-    const dirty = this.dirtyDeliveryPaths(input.repoRoot, input.baselineRevision, targets);
+    const dirty = this.dirtyDeliveryPaths({
+      repoRoot: input.repoRoot,
+      baselineRevision: input.baselineRevision,
+      targets,
+      knownRevisions: this.knownDeliveryRevisions(input.prepared.record.id),
+    });
     if (dirty.paths.length > 0) {
       throw new DeliveryWorktreeDirtyError(dirty.paths, dirty.porcelainLines);
     }
+    this.rewindCleanCheckout({
+      repoRoot: input.repoRoot,
+      branch: input.branch,
+      targetRevision: input.targetRevision,
+    });
     for (const target of targets) this.writeRecord(input.repoRoot, target.path, target.content);
   }
 
   /**
-   * The target paths whose on-disk bytes differ from the patch about to be written
-   * **and** are not the baseline revision's own content (`W8R2-06`).
+   * Committed revisions this machine may legitimately have checked out (`W8R3-03`).
    *
-   * A stale index after the ref move is not a local edit: `git status --porcelain`
-   * shows that in the first column (or as `??` for a not-yet-indexed directory), so
-   * worktree-side modifications are taken from the second column, and the decisive
-   * test is a byte comparison against the committed blob at `baselineRevision`.
+   * The local projection records the revision of the last record this machine saved;
+   * when the delivery ref moves underneath (another server committed without a
+   * checkout) the on-disk bytes still describe that revision, which is a stale
+   * checkout rather than an uncommitted local edit.
    */
-  private dirtyDeliveryPaths(
-    repoRoot: string,
-    baselineRevision: string,
-    targets: readonly { readonly path: string; readonly content: string }[],
-  ): { readonly paths: readonly string[]; readonly porcelainLines: readonly string[] } {
-    const known = new Set(targets.map((target) => target.path));
+  private knownDeliveryRevisions(recordId: string): readonly string[] {
+    const local = this.store.requirements.find(recordId);
+    return local === undefined ? [] : [local.portableRef.revision];
+  }
+
+  /**
+   * The target paths that carry *uncommitted local edits* (`W8R2-06`, `W8R3-03`).
+   *
+   * Git's own worktree column is the authority: an unstaged modification (` M`, ` D`)
+   * is a local edit. A path whose bytes differ from the patch but which Git reports as
+   * staged-only (after a ref move without checkout) or as a clean checkout of another
+   * revision is *not* a local edit — its delete/overwrite is exactly what the save is
+   * repairing. Untracked content that differs from what the save would write is a
+   * local edit too, because there is no committed revision that explains it.
+   */
+  private dirtyDeliveryPaths(input: {
+    readonly repoRoot: string;
+    readonly baselineRevision: string;
+    readonly targets: readonly { readonly path: string; readonly content: string }[];
+    readonly knownRevisions: readonly string[];
+  }): { readonly paths: readonly string[]; readonly porcelainLines: readonly string[] } {
+    const { repoRoot, baselineRevision, targets } = input;
+    const status = this.worktrees.statusPorcelain(repoRoot);
+    const lines = status.ok ? status.value : [];
+    // A completely clean worktree has no local edits by definition: whatever the
+    // bytes are, they belong to a committed checkout, and the caller rewinds it.
+    if (status.ok && lines.length === 0) return { paths: [], porcelainLines: [] };
+    const head = this.worktrees.headRevision(repoRoot);
+    const knownRevisions = [
+      ...(head.ok && head.value !== null ? [head.value] : []),
+      ...input.knownRevisions,
+    ];
     const dirty = new Set<string>();
     const porcelainLines: string[] = [];
-    const status = this.worktrees.statusPorcelain(repoRoot);
-    if (status.ok) {
-      for (const line of status.value) {
-        const relevant = dirtyPathsOf(line).filter((path) => known.has(path));
-        if (relevant.length === 0) continue;
-        porcelainLines.push(line);
-        const worktreeSide = line.slice(1, 2);
-        if (worktreeSide !== ' ' && worktreeSide !== '?') {
-          for (const path of relevant) dirty.add(path);
-        }
-      }
-    }
     for (const target of targets) {
-      const absolute = join(repoRoot, target.path);
+      const relevant = lines.filter((line) => porcelainTouches(line, target.path));
+      const worktreeSide = relevant.filter((line) => {
+        const code = line.slice(1, 2);
+        return code !== ' ' && code !== '?';
+      });
+      const untracked = relevant.filter((line) => line.startsWith('??'));
       let onDisk: string | null;
+      let unreadable = false;
       try {
-        onDisk = readFileSync(absolute, 'utf8');
-      } catch {
+        onDisk = readFileSync(join(repoRoot, target.path), 'utf8');
+      } catch (error) {
         onDisk = null;
+        // Anything other than "the path does not exist" (a directory, a permission
+        // problem) is left to the write itself, which reports it as a refresh
+        // failure instead of a dirty path (`W8R3-02`).
+        unreadable = (error as { readonly code?: unknown }).code !== 'ENOENT';
       }
-      if (onDisk === null || onDisk === target.content) continue;
-      const committed = this.worktrees.readBlob(repoRoot, baselineRevision, target.path);
-      if (committed.ok && committed.value === onDisk) continue;
-      dirty.add(target.path);
+      if (!unreadable && onDisk !== null && onDisk === target.content) continue;
+      if (!unreadable && onDisk !== null) {
+        const committed = this.worktrees.readBlob(repoRoot, baselineRevision, target.path);
+        if (committed.ok && committed.value === onDisk) continue;
+        if (worktreeSide.length > 0) {
+          dirty.add(target.path);
+          porcelainLines.push(...worktreeSide);
+          continue;
+        }
+        // Bytes that equal a committed revision this machine legitimately has checked
+        // out are a stale checkout (`W8R3-03`), even when the index is far enough
+        // behind that Git reports the whole pool directory as untracked.
+        if (
+          knownRevisions.some((revision) => {
+            const blob = this.worktrees.readBlob(repoRoot, revision, target.path);
+            return blob.ok && blob.value === onDisk;
+          })
+        ) {
+          continue;
+        }
+        if (untracked.length > 0) {
+          dirty.add(target.path);
+          porcelainLines.push(...untracked);
+          continue;
+        }
+        dirty.add(target.path);
+        porcelainLines.push(...relevant);
+        continue;
+      }
+      // Absent paths are the normal create case; a worktree-side deletion is a local
+      // edit and must never be silently recreated.
+      if (!unreadable && worktreeSide.length > 0) {
+        dirty.add(target.path);
+        porcelainLines.push(...worktreeSide);
+      }
     }
     return { paths: [...dirty].sort(), porcelainLines };
+  }
+
+  /**
+   * Rewinds a *completely clean* delivery worktree that is parked at another revision
+   * (`W8R3-03`).
+   *
+   * Only a worktree with no tracked modification and no untracked file is rewound, and
+   * only when it is detached or on the delivery branch — an unrelated branch is never
+   * moved. After the CAS the ref revision is the correct checkout, so this makes the
+   * repair converge instead of leaving the branch ahead of the working copy.
+   */
+  private rewindCleanCheckout(input: {
+    readonly repoRoot: string;
+    readonly branch: string;
+    readonly targetRevision: string;
+  }): void {
+    const status = this.worktrees.statusPorcelain(input.repoRoot);
+    if (!status.ok || status.value.length > 0) return;
+    const head = this.worktrees.headRevision(input.repoRoot);
+    if (!head.ok || head.value === null || head.value === input.targetRevision) return;
+    const listed = this.worktrees.listWorktrees(input.repoRoot);
+    if (listed.ok) {
+      const wanted = canonicalPath(input.repoRoot) ?? input.repoRoot;
+      const entry = listed.value.find(
+        (candidate) => (canonicalPath(candidate.path) ?? candidate.path) === wanted,
+      );
+      if (
+        entry !== undefined &&
+        !entry.detached &&
+        entry.branchRef !== `refs/heads/${input.branch}`
+      ) {
+        return;
+      }
+    }
+    const reset = this.worktrees.resetHard(input.repoRoot, input.targetRevision);
+    if (!reset.ok) {
+      throw new ProtocolError(
+        'INTERNAL_ERROR',
+        `交付工作树停在 ${head.value}，无法复位到 ${input.targetRevision}`,
+        { details: { errors: reset.errors.length } },
+      );
+    }
+  }
+
+  /**
+   * Reports a working-copy write-back that failed for a reason other than a dirty
+   * path (`W8R3-02`).
+   *
+   * Git already holds the commit, but the on-disk pool could not be updated (a
+   * read-only directory, an `EISDIR` where a file is expected, ...). Reporting
+   * `saved` here would claim a working copy that does not exist; the caller gets a
+   * repair-only `RECOVERY_REQUIRED` and can retry the write-back.
+   */
+  private worktreeRefreshRefusal(args: {
+    readonly input: SaveRequirementInput;
+    readonly project: { readonly branch: string; readonly ref: string; readonly repoRoot: string };
+    readonly record: PortableRequirement;
+    readonly operationRowId: string;
+    readonly stepResults: JsonObject;
+    readonly targetRevision: string;
+    readonly targetTree: string;
+    readonly recordHash: string;
+    readonly message: string;
+  }): RequirementSaveOutcome {
+    const message = `需求已提交 ${args.targetRevision}，但交付工作副本写回失败：${args.message}；分支未被回滚，修复工作副本后用同一 operationId 重试（只补投影）`;
+    this.updateOperation(args.operationRowId, {
+      state: SAVE_OPERATION_STATE.projectionFailed,
+      candidateRevision: args.targetRevision,
+      stepResults: { ...args.stepResults, worktreeRefreshFailed: true },
+      error: { code: 'RECOVERY_REQUIRED', message },
+    });
+    this.appendDiagnostic(REQUIREMENT_WORKTREE_REFRESH_FAILED_EVENT, args.input, args.record.id, {
+      message: args.message,
+      targetRevision: args.targetRevision,
+    });
+    return this.refusal(
+      'RECOVERY_REQUIRED',
+      message,
+      [args.message],
+      this.recoveryOperation({
+        input: args.input,
+        ref: args.project.ref,
+        expectedRevision: null,
+        targetRevision: args.targetRevision,
+        targetTree: args.targetTree,
+        recordHash: args.recordHash,
+        repairOnly: true,
+        messages: [args.message],
+      }),
+      false,
+    );
   }
 
   /** Reports a refused working-copy refresh without touching the dirty content. */
