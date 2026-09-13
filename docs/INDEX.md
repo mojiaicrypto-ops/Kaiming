@@ -39,6 +39,8 @@ WP-06（分级交付与独立验证）已按 L2 实现并完成独立 Review/Tes
 
 WP-07（权限、工具和测试环境）已按 L2 实现并完成独立 Review/Test：`packages/core` 新增 `GrantStore`（签发/撤权/覆盖，`once` 绑定 operation+inputHash 的原子认领与幂等重放，兄弟 Run 隔离，跨进程可重放且 GC 安全的结果存储）、`SecretStore`（Grant 校验后解析、按用途注入环境、脱敏与泄漏扫描，查询面永不返回值）、工具 `Broker`（能力分类准入 + `tool_operation` 审计、容器/宿主两种模式且无 Docker 绝不回退、realpath 文件边界、逐跳网络策略含 DNS 解析/IPv4-mapped/NAT64/HTTPS 与地址钉扎、只读角色报告写边界）与隔离测试环境（OS 端口探测与进程级认领、就绪归属证明、独立 DB/端口、清理失败上报 `RECOVERY_REQUIRED`）；`packages/pi-runtime` 提供 `loadTrustedExtensions`（未信任零加载、信任后仅「显式选中 ∧ 白名单」、逃逸拒绝与可审计 trace）。4 轮独立 Review（末轮聚焦 PASS）与 1 轮独立 Test（PASS）在代码树 `96e196b` 上通过（unit 44 文件/916 用例、integration 15 文件/157 用例含真实容器）；AC-048/049/050/051/053/080 有证据（P3 残余与工具层接线分别承接 WP-08/WP-09）；证据链见 `.agentdev/work/WP-07/`。
 
+WP-08（集成、结算与恢复）已按 L2 实现并完成独立 Review/Test：`packages/workspace` 提供 per-Task worktree 与单写者租约、依赖血缘（`dependencyRevision`/`dependencyManifestRefs`、祖先失效、已合并祖先不重复应用）与 CAS 集成（`update-ref` 带 expected-old、候选后代校验、journal 崩溃恢复、双 Task 冲突产出独立修复 Task 并可 supersede 收敛）；`packages/core` 提供需求即时保存（共享 `integration:<projectId>` 集成锁、按目标 revision 读取需求池、逐条冲突、提交后只补投影、脏回写门禁）、恢复（按真实进程/epoch 判定、Run 级恢复决策绑定、窄范围保持、备份/恢复/迁移含哈希校验与租约授权回收、缺 Secret 阻断）与结算（最终 Manifest、知识补丁只经投影发布、ref 后崩溃复用提交且恰一次完成事件）。4 轮独立 Review（末轮聚焦 PASS）与 3 轮独立 Test（末轮 PASS）在代码树 `7422646` 上通过（unit 48 文件/975 用例、integration 20 文件/233 用例，真实 Git 与 SQLite）；AC-020/021/022/029/041/057/058/061～064/081～083/090/091/093/094 有证据，AC-054（BFF/浏览器断开）承接 WP-09；证据链见 `.agentdev/work/WP-08/`。
+
 真实 Provider 纵向运行、协议接线（daemon/BFF/WS）、交付门禁、权限隔离、工具执行层、知识投影和恢复仍未实现：`pnpm test:e2e`、`pnpm test:acceptance`、`pnpm test:live` 按契约返回 NOT_IMPLEMENTED，后续按[实施工作包](delivery/implementation.md)的依赖顺序继续。
 
 开发从[实施工作包](delivery/implementation.md)开始，按依赖实现共享Schema与底座，再完成各项能力和[验收](delivery/acceptance.md)。规范中的包路径和工程命令是待交付接口，不能假定已经存在。
