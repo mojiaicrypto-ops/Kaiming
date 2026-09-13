@@ -20,15 +20,17 @@
   - **已登记豁免（ACCEPTED）**：`drill-acs.mjs` 的 `RESIDUAL_GAPS` 为每个未执行 AC 登记缺口、豁免条件与决定记录；聚合器每次运行复核条件（`provider-absent` / `review-model-absent` / `browser-absent`）。未登记，或条件已失效（例如 Provider 已配置却仍未 PASS），一律按 FAIL 处置（Review W10R1-02/08）。
   - **失败闭合**：Vitest 项目无 JSON 报告、含 AC 证据的测试文件零用例执行、失败用例未映射到任何 AC、演练命令非预期退出、演练报告缺失/不可解析、证据绑定不符 —— 全部非 0（exit 2）。
   - 产出 `.agentdev/work/WP-10/acceptance.md`（逐 AC 表、原始套件与演练输出、ACCEPTED 明细、fail-closed 问题、映射审计、机器可读段）与 `acceptance-results.json`（供发布就绪门禁消费）。
-- 本轮结果：unit **55 文件 / 1105 用例**、integration **26 文件 / 311 用例**（Docker 容器用例真实执行）、e2e 20 检查（PASS 16 / UNVERIFIED 4）、live 未配置 Provider → exit 3；聚合 **PASS 83 / ACCEPTED 11 / FAIL 0 / MISSING 0**，退出 0。
+- 本轮结果：unit **55 文件 / 1107 用例**、integration **26 文件 / 311 用例**（Docker 容器用例真实执行）、e2e 20 检查（PASS 16 / UNVERIFIED 4）、live 真实 Provider → exit 0；聚合 **PASS 86 / ACCEPTED 8 / FAIL 0 / MISSING 0**，退出 0。
 
-### ACCEPTED 的 11 个 AC（缺口均已登记、条件均成立）
+### ACCEPTED 的 8 个 AC（缺口均已登记、条件均成立）
 
 | 类别 | AC | 缺口（未执行部分） |
 |---|---|---|
-| 真实 Provider（条件 `provider-absent`） | AC-001、AC-007、AC-010、AC-037、AC-041 | 真实模型纵向执行（HTML 说明、L1 全链、L2+结算、知识补丁与冷启动）；由 `pnpm test:live` 在配置 Provider 后关闭 |
-| 独立 Review/Test 模型（`review-model-absent`） | AC-043 | `AGENTDEV_PROVIDER_REVIEW_MODEL` 未配置，多模型前提未执行 |
 | 浏览器（`browser-absent`，D1 决定） | AC-002、AC-052、AC-071、AC-073、AC-076 | 真实浏览器中的隔离/攻击样例、viewport 与焦点、键盘与 ARIA、客户端上传提示 |
+| 独立 Review/Test 模型（`review-model-absent`） | AC-043 | `AGENTDEV_PROVIDER_REVIEW_MODEL` 未配置，多模型前提未执行 |
+| 已登记缺口（`recorded-gap`，D4 决定） | AC-066、AC-090 | AC-066 真实 Pi SDK 会话语流/历史恢复未执行；AC-090 界面未渲染分支/提交/未推送状态 |
+
+> 真实 Provider 缺口（AC-001、AC-007、AC-010、AC-037、AC-041）已由用户提供的 DeepSeek 凭证真实跑通并转为 PASS（见 T6）。
 
 ## T2 无头端到端运行器（`pnpm test:e2e`）
 
@@ -50,11 +52,11 @@
 | `pnpm install --frozen-lockfile` | 0（锁文件一致） |
 | `pnpm typecheck` | 0（strict 无错误） |
 | `pnpm lint` | 0（ESLint + Prettier） |
-| `pnpm test:unit` | 0（55 文件 / 1105 用例） |
+| `pnpm test:unit` | 0（55 文件 / 1107 用例） |
 | `pnpm test:integration` | 0（26 文件 / 311 用例，含真实 Docker 容器只读用例） |
 | `pnpm test:e2e` | 0（20 检查；23 个 AC） |
-| `pnpm test:acceptance` | 0（94/94；PASS 83 / ACCEPTED 11 / FAIL 0 / MISSING 0） |
-| `pnpm test:live` | 3（诚实 UNVERIFIED：未配置 `AGENTDEV_PROVIDER_*`） |
+| `pnpm test:acceptance` | 0（94/94；PASS 86 / ACCEPTED 8 / FAIL 0 / MISSING 0，真实 Provider 已配置） |
+| `pnpm test:live` | 0（真实 Provider 三条纵向演练全部通过；未配置时仍为 3/UNVERIFIED） |
 | `pnpm docs:check` | 0（15 文档 / 55 链接 / 94 AC / 9 REQ / 11 WP） |
 | `pnpm build` | 0（12 workspace） |
 | `pnpm doctor` | 0（`executionReady=true`） |
@@ -105,6 +107,17 @@ Review 冻结在 `0aff531`，判定 **FAIL**（3×P1 / 6×P2 / 3×P3）。逐条
 3. L2 演练的任务描述与实际冻结内容不一致（未给出文件内容与接口签名、审阅者看不到候选内容、探针只调用无参 `cancel()`）→ 种子文件改为带 `Order` 类型与订单表、prompt 明确 `cancel(orderId: string): boolean`、Review/Test prompt 附带真实冻结文件内容、探针校验未付款/已付款/未知三条路径；JSON 抽取改为「逐个候选重试解析」，避免第一个畸形候选直接放弃。
 
 真实模型运行记录（不写凭证）：`HTML`、`L1`、`L2+结算` 三路径均通过，11 次 Provider 调用全部 HTTP 200；`live.md` 记录模型 id 与运行事实。
+
+## T7 独立 Review 第 3 轮（`review-round3.md`）结论与残余
+
+第 3 轮冻结在 `239b9ef`，判定 **PASS**（P0 0 / P1 0 / P2 1 / P3 3），不阻断独立 Test。第 1 轮 12 条、第 2 轮 7 条发现中除记录层残余外全部关闭。本轮处置：
+
+| 发现 | 处置 |
+|---|---|
+| W10R3-01（P2）本记录 §T1/§T4 数值过期（unit 1105→实际 1107；聚合 83/11→实际 86/8；ACCEPTED 表仍列已 PASS 的 Provider AC） | 已按真实运行更新 §T1/§T4 与 ACCEPTED 表（8 项，含两个 `recorded-gap`） |
+| W10R3-02（P3）`live-transport.mjs` 注释仍写默认 4096 / 探针 1 token | 注释改为实际值（默认 16000；探针 `min(64, model.maxOutputTokens)`） |
+| W10R3-03（P3）记录文件 `gitHead` 仍为父提交 | 记录同时携带 `codeDigest`（权威、内容哈希）与生成时 `gitHead`；门禁只校验 `codeDigest` + run nonce，记录文件本身不是证据来源（评审确认「不影响门禁」） |
+| W10R3-04（P3）AC-001 的「读取记录」子句由演练直接注入来源、未经 ContextBuilder/read ledger | 已在 `live.md` 与本文 §未验证第 5 条披露；read ledger 契约由 AC-032/036 的提交用例证明，不在本包重复声称 |
 
 ## 未验证 / 已登记残余（不冒充完成）
 

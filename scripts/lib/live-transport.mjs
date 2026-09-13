@@ -34,7 +34,7 @@ export const PROVIDER_OPTIONAL_ENV = Object.freeze({
   reviewModel: 'AGENTDEV_PROVIDER_REVIEW_MODEL',
   /** Declared model window; the drill defaults to a documented-safe 128k. */
   contextWindow: 'AGENTDEV_PROVIDER_CONTEXT_WINDOW',
-  /** Declared per-call output cap; the drill defaults to 4096. */
+  /** Declared per-call output cap; the drill defaults to 16 000 tokens. */
   maxOutputTokens: 'AGENTDEV_PROVIDER_MAX_OUTPUT_TOKENS',
 });
 
@@ -168,10 +168,10 @@ function postJson(url, payload, headers, timeoutMs) {
  *
  * Reasoning models (`deepseek-flash`, o-series, …) put the chain of thought in
  * `message.reasoning_content` (or `message.reasoning`) and can return an empty
- * `content` when the output budget is tiny — which is exactly what the Gateway's
- * `provider.test` probe asks for (`maxOutputTokens: 1`). The visible `content` always
- * wins; the reasoning text is only a fallback, so a working endpoint is not reported as
- * unavailable when the model spends its whole budget thinking.
+ * `content` when the output budget is small — the Gateway's `provider.test` probe asks
+ * for `min(64, model.maxOutputTokens)` tokens, which a reasoning model can spend
+ * entirely on thinking. The visible `content` always wins; the reasoning text is only a
+ * fallback, so a working endpoint is not reported as unavailable in that case.
  */
 export function extractCompletionText(payload) {
   const choices = payload?.choices;
