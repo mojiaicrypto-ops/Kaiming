@@ -287,3 +287,266 @@ b8c877127db5fcf6b97ae202a7dbd0d1d54d6b624b3ba1f56f41aed17ccf37b4  packages/core/
 ## 10. 结论
 
 WP-08 的骨架与绝大多数验收行为是真实、可复现、且以真实 Git/SQLite 为证据的（AC-020/021/022/029/041/057/058/061/062/063/064/081/082/090/091/093 的绝大多数正例均通过我的独立探针）。但存在 3 项 P1 可复现缺陷：需求池读取源错误导致 AC-094 的“旧投影不得覆盖”在陈旧工作树下失效（并在缺失文件时抛出未捕获异常，AC-093），以及恢复后仍可对确认存活的旧执行开启新 Attempt 形成双写者（AC-057）。另有 2 项 P2 与 3 项 P3。**判定 FAIL，不允许进入独立 Test**；须 `Develop → 新独立 Review → Test`。
+
+---
+
+# WP-08 独立 Review 报告（第二轮：W8R1-01..08 收口复核与回归搜寻）
+
+## R2-0. 元数据（round 2）
+
+| 项 | 值 |
+|---|---|
+| 工作包 | WP-08 集成、结算与恢复 |
+| Review 角色 | 独立 Review（独立上下文；未读取任何开发/Test 聊天或会话） |
+| 轮次 | 第二轮（复核 round 1 的 8 条 finding 收口 + 回归搜寻） |
+| 冻结提交 | `dbfa9af`（task-issued freeze point） |
+| `git rev-parse HEAD` | `dbfa9aff6624df717e61e0da64aedca372ef5e47` |
+| `git rev-parse dbfa9af^{tree}` | `6c8f6c915a42192061b2edea7c111d23d3c17a9b` |
+| `git status --porcelain` | 空（唯一变更为本报告尾部追加） |
+| 平台 | macOS arm64，Node v24.8.0，pnpm 12.3.4，真实 `git`，真实 SQLite（`node:sqlite` / better-sqlite3）；未使用 Docker |
+| 探针目录 | `/tmp/wp08r2/`（只消费 `packages/*/dist` 构建产物，从不 import 产品测试文件） |
+| 判定 | **FAIL**（P1 可复现：W8R2-01；见 R2-5、R2-6） |
+| round 1 保留 | §0–§10（原 34952 字节）逐字保留；本轮仅追加。`git diff --numstat` = `N 0 .agentdev/work/WP-08/review.md`（新增 N 行、删除 0 行），见 R2-1 |
+
+### 受审文件哈希（SHA256，冻结提交 `dbfa9af` 实际内容）
+
+```
+f8d47a161e7eed0d92c6634434f5568c4220d6b05bbdc1bc31a3a02f79e529da  packages/workspace/src/worktree.ts
+ddb3b1df3bfa68757dc7ccc1789eb545972efbfd0b235345e81d54fc7e83efe2  packages/workspace/src/cas.ts
+882bd85454118a142dcdaf911b17b4029b328a3c758fcbb49a37abbb039064f1  packages/core/src/requirement-save.ts
+fc0531977514c87f6bbe379f7fbbaeec718844c28d8e8a31b9810f244fdec131  packages/core/src/recovery.ts
+e322d87a5b7ee6d5a9426ac4071b302742dfa3eab7d5ab6461ca011e6a7ee0a4  packages/core/src/settlement.ts
+7efd540361c43411f45acc66ee4c6605722f766eb2040471cc96546fd88c5222  packages/core/src/run-lifecycle.ts
+f3edbabf1a85c34663932847aa9799e52b077eeca88c4b5a0a95aab8586a8674  packages/core/src/findings.ts
+33e6053e08e5206a13fbabbef5e2ed073ed255db039cf6679ab451a01e05e1f8  packages/workspace/test/worktree.test.ts
+2f024f05c7368d8b82c406b81130a3b1cbca5d1b05a32b6ad0e90a63f1980088  packages/workspace/test/cas.integration.test.ts
+8967a9efbfd88fde156206dba89c69abaf1b53a08523a0e8656bbe318027918e  packages/core/test/requirement-save.test.ts
+21405dde553f8337b77eeae661ff121a3b84d9102a64f0a9651613329c99115b  packages/core/test/requirement-save.integration.test.ts
+b3787b5dbb331943e58142c56a786a547f5b3f7fba9095aa1b2bebdc401a27a1  packages/core/test/recovery.test.ts
+3797b27071389beaa128b94c8e3c78f3bd08bf17f4699fb6dfeca29b55888b9d  packages/core/test/settlement.integration.test.ts
+cdbbbbb046dbd859690fa56f60e14103b4db9e36838d8c82d42b124414cf6575  packages/core/test/backup.integration.test.ts
+eeb692c5c404cada3a4f0058fd72037cccac71cacf67f1ba21e416bdc7b45245  packages/core/test/wp08.integration.test.ts
+d00fd55b44f4cd8bf3976fef91d1ed9f161061e5d6c16e403184b685706e15b5  packages/core/test/wp08-failures.test.ts
+```
+
+### 已加载依据
+
+`AGENTS.md`、`docs/INDEX.md`、`docs/rules/{workflow,agents}.md`、`docs/architecture/{reliability,data,execution}.md`、`docs/product/{knowledge,requirements}.md`、`docs/delivery/acceptance.md`（AC-020/021/022/029/041/054/057/058/061/062/063/064/081/082/083/090/091/093/094 全文）、`docs/delivery/implementation.md`（WP-08）、`.agentdev/work/WP-08/{plan,implementation,review}.md`，以及 `dbfa9af` 的受审源码与回归网。
+刻意排除：任何开发/Test 会话或聊天、`webui/`、历史任务记录。
+
+---
+
+## R2-1. 契约命令原始结果（`dbfa9af` 工作树根目录，顺序执行）
+
+日志全文 `/tmp/wp08r2/contract.log`；每行 `EXIT_CODE` 为真实退出码。
+
+| # | 命令 | 退出码 | 原始结果（关键行） |
+|---|---|---|---|
+| 1 | `pnpm typecheck` | 0 | `tsc -p tsconfig.json --pretty false`，无输出（real 1.35s） |
+| 2 | `pnpm lint` | 0 | `Checking formatting...` / `All matched files use Prettier code style!`（real 15.76s） |
+| 3 | `pnpm test:unit` | 0 | `Test Files 48 passed (48)` / `Tests 971 passed (971)`，Duration 10.94s |
+| 4 | `pnpm test:integration` | 0 | `Test Files 20 passed (20)` / `Tests 215 passed (215)`，Duration 56.59s（含真实容器用例） |
+| 5 | `pnpm docs:check` | 0 | `docs:check ok — 15 documents, 55 internal links, 94 acceptance cases, 9 requirements, 11 work packages` |
+| 6 | `pnpm build` | 0 | `Done` ×10：contracts、domain、knowledge、storage、workspace、core、pi-runtime、cli、daemon、runner（real 3.40s） |
+
+WP-08 相关测试文件逐文件用例数（本次独立复跑，与 `implementation.md` T6 声明逐项吻合）：
+
+| 文件 | 用例数 | 文件 | 用例数 |
+|---|---|---|---|
+| `workspace/test/worktree.test.ts` | 10 | `core/test/backup.integration.test.ts` | 6 |
+| `workspace/test/cas.integration.test.ts` | 15 | `core/test/settlement.integration.test.ts` | 10 |
+| `core/test/requirement-save.test.ts` | 22 | `core/test/wp08.integration.test.ts` | 12 |
+| `core/test/requirement-save.integration.test.ts` | 15 | `core/test/wp08-failures.test.ts` | 5 |
+| `core/test/recovery.test.ts` | 18 | | |
+
+**五项必需失败测试**（`pnpm vitest run --project unit packages/core/test/wp08-failures.test.ts`）：`Tests 5 passed (5)` —— Task 合并冲突 / CAS 失败 / ref 后崩溃 / 取消未知副作用 / 备份演练 全部通过。
+
+**round 1 逐字保留校验**：`git show HEAD:.agentdev/work/WP-08/review.md` 与追加前工作树文件同为 34952 字节；追加后 `git diff --numstat -- .agentdev/work/WP-08/review.md` 的删除计数为 0（仅新增本 round 2 段落）。
+
+---
+
+## R2-2. 方法
+
+9 个脚本位于 `/tmp/wp08r2/`，全部通过 `packages/*/dist/index.js` 消费**构建产物**；真实临时 Git 仓库（`worktree add` / `commit` / `update-ref` / `cherry-pick` / `clone`）与真实 SQLite（`ProjectStore`）承载集成状态；脚本自实现断言与故障注入，从不 import 任何产品测试文件；每个脚本自建 fixture（另一服务器的提交、崩溃点、竞争 ref 移动）。
+
+| 脚本 | 覆盖 | 结果 |
+|---|---|---|
+| `a-cas.mjs` | W8R1-01（无候选拒绝 / 竞争移动 / 成功与重放）、AC-093 半对拒绝、候选基点反证 | checks=22，failures=3（全部属 W8R2-01） |
+| `b-save.mjs` | W8R1-02/03、AC-090 投影修复重试、AC-093 组合 hash 独立复算、W8R2-01 两段反证、W8R2-06 反证 | checks=38，failures=9（W8R2-01×7、W8R2-06×2） |
+| `c-recovery.mjs` | W8R1-04（活进程停放、beginAttempt/resumeWork 拒绝、决策放行、确认已死放行）、租约单写者、AC-061/058/082 反证、W8R2-03 反证 | checks=31，failures=1（W8R2-03） |
+| `d-settlement.mjs` | W8R1-06/08（直连 + recover 两路）、AC-063 ref 后崩溃/重放、AC-041 知识补丁 + 冷启动查询 + 非法知识 | checks=29，failures=0 |
+| `e-backup.mjs` | AC-064 backup→新目录 restore、活动 Run 需恢复、租约/grant 回收、缺 Secret 阻断、W8R1-05 非仓库目标拒绝 + **同仓库另一真实副本** relocate 成功 | checks=23，failures=0 |
+| `f-integration.mjs` | AC-081 血缘（含失效/缺冻结输入）、AC-062 冲突与修复任务、W8R1-07 完成门禁、AC-090/091 锁、W8R2-02 反证 | checks=30，failures=1（W8R2-02） |
+| `g-flow.mjs` | AC-020 暂停恢复、AC-021 未知副作用取消、AC-022 预算原子拒绝、AC-029 初始化中断/冲突 | checks=33，failures=0 |
+| `h-casthrow.mjs` | 候选 tree 读取失败时的 CAS 返回契约 | checks=2，failures=1（W8R2-04） |
+| `i-cas-journal-crash.mjs` | journal 记录 target 与 ref 交换之间的崩溃重试（AC-090「在 Git CAS 前后注入退出并重试」） | checks=7，failures=2（W8R2-05） |
+
+合计 **215 项断言，17 项失败**，全部归属 R2-5 的六条 finding（10 + 1 + 1 + 1 + 2 + 2）。
+
+反证手法：
+- **真实 Git 竞态注入**：包装 `CasJournal.save`，在 CAS「比较」之后、「交换」之前用真实 `update-ref` 移动交付 ref；包装 `WorktreeGitPort.updateRef` 在 ref 交换处抛出，模拟进程在 journal 记录 target 之后崩溃。
+- **崩溃残留状态**：按默认 `keepWorktree=true` 的真实残留 worktree（停在旧基点）直接构造「提交后崩溃」现场，不依赖任何注入。
+- **端口故障注入**：注入 `commitPaths` 首次失败（留下 worktree）、注入 `mergeTree` 失败、注入 `requirements` 投影写入失败。
+- **状态机反证**：在恢复判定 `newAttemptAllowed:false` 之后，直接走产品自身的 `RunLifecycle.beginAttempt` / `FindingService.resumeWork` 尝试开新 Attempt；以及在**同一 Work 的另一 Run 的**恢复决策之后重读准入。
+- **过期工作树**：detached worktree 提交后只 `update-ref`、不 checkout，制造「ref 领先工作树」的真实状态。
+
+---
+
+## R2-3. W8R1-01..08 收口逐条复核
+
+| finding | 严重性 | 收口结论 | 独立证据 |
+|---|---|---|---|
+| W8R1-01 无候选版本时 CAS 用 `git commit` 推进交付分支 | P2 | **已关闭** | `a-cas` 15 项：无 `candidateRevision` → `VALIDATION_ERROR`、交付工作树无提交（`commitCount` 不变）、已暂存记录文件仍为未提交、无完成事件；竞争移动 → `VERSION_CONFLICT`、`actualRevision` 为竞争者、分支未动、无事件；成功路径一次 `update-ref` + 一条事件；同 operationId 重放 `reused:true` 且零新增事件。代码：`cas.ts:1386-1401`（候选必需）、`1578-1583`（唯一 ref 写入点） |
+| W8R1-02 需求池读工作树而非目标修订 | P1 | **已关闭** | `b-save` 前 6 项：v2 由另一服务器提交并移动 ref、工作树仍 v1 时，带 v1 期望的保存被 `REQUIREMENT_CONFLICT` 拒绝；分支停在 v2、提交数不变、修订处 v2 正文完整。代码：`requirement-save.ts:1267`（按交付 ref 解析）、`1812-1816`（按 revision 比较）、`612-634`（`readBlobAt` 无 `readFileSync` 回退，`RequirementPoolGitPort.readBlob` 为必需端口） |
+| W8R1-03 HEAD 独有记录抛未捕获 `ENOENT` | P1 | **已关闭** | `b-save`：`save()` 直接调用（不包 `expect`）未抛异常，返回 `REQUIREMENT_CONFLICT` 且消息含 `.agentdev/requirements/<id>`；分支未动。代码：`1135-1145`（外层 catch→`unexpectedFailure`）、`620-632`（读失败/缺 blob → 结构化 `INTERNAL_ERROR`/`REQUIREMENT_CONFLICT`）。另：正文变更确实改变组合 `recordHash`（提交字节独立复算 = `requirementRecordHash(sha256(metadataJson), sha256(normalize(content)))`） |
+| W8R1-04 parked Run（旧进程存活）仍可开新 Attempt | P1 | **已关闭（含 1 条 P2 残余，见 W8R2-03）** | `c-recovery` 15 项：活进程 → park `interrupted` + `newAttemptAllowed:false`；`beginAttempt` 抛 `RECOVERY_REQUIRED`、Attempt 仍 1 条、Run 仍 `interrupted`、worktree 租约 0 行（未交给第二个 owner，且持有期间第二次 acquire 被拒）；`resumeWork` 返回 `RECOVERY_REQUIRED` 且不建 Attempt；判定**之后**的 `decision(kind='recovery',choice='resume')` 才放行（Attempt #2、epoch 1、租约恰好 1 个 owner）；确认已死直接放行；判定**之前**的决策不生效。代码：`recovery.ts:276-321`、`run-lifecycle.ts:118-131`、`findings.ts:1693-1705` |
+| W8R1-05 relocate 先改根后体检、无回滚 | P2 | **已关闭（并用更强正例复验）** | `e-backup`：空目录 + `move:false` → `INVALID_STATE`、消息含「根映射未改写」，重开 store 断言 `root`/`gitRoot` 未变；随后 relocate 到**同仓库的另一真实 `git clone`**（不同目录、同 revision/tree、干净工作树）→ `ok:true`、映射改写、`doctor.ok`。代码：`recovery.ts:2114-2169`（先读记录绑定 → 校验目标 → 才改映射，失败回滚） |
+| W8R1-06 结算完成后不清 `phase` | P3 | **已关闭** | `d-settlement`：直连 `settle()` 与 ref 后 `recover()` 两条路径均 `lifecycle==='completed'` 且 `phase===undefined`。代码：`settlement.ts:1252-1266` |
+| W8R1-07 空变更集冒充代码验证、`codeStartRevision` 不被读取 | P3 | **已关闭** | `f-integration` 5 项：空变更集 → `GATE_NOT_READY`（消息含「变更集为空」）；`codeStartRevision===finalRevision` / `null` → `GATE_NOT_READY`；成功结果回报 `codeStartRevision`；metadata-only → `GATE_NOT_READY`。代码：`requirement-save.ts:853-878` |
+| W8R1-08 `SettlementOutcome.tree` 两路径语义不同 | P3 | **已关闭** | `d-settlement` 6 项：直连与 recover 均 `commitTree===git rev-parse <rev>^{tree}`、`codeTreeHash===deliveredCodeTreeHash(...)`、二者互不相等；`settlement.completed` 事件与 `operation.stepResults` 同时带两字段；重放零新增事件、零新增提交 |
+
+**结论：8/8 收口在代码与测试中均成立**，且 5 项必需失败测试独立复跑通过。
+
+---
+
+## R2-4. 逐 AC 结论（本轮指定切片）
+
+| AC | 结论 | 证据要点 |
+|---|---|---|
+| AC-020 暂停恢复 | **passed** | 暂停关闭 live Attempt + 冻结写准入；恢复恰开 1 个新 Attempt，且在新 Attempt ready 前不放开写（`g-flow`） |
+| AC-021 取消需求 | **passed** | 未知副作用 → `blocked(recovery)`、Requirement 保持 active、未集成；`accept_cancel` → cancelled、Requirement 落 cancelled、仍无写准入；已交付的先前提交不回滚（`g-flow`） |
+| AC-022 预算止损 | **passed** | 超限 `BUDGET_EXCEEDED`、`tokensReserved` 仍 0、无 Artifact；限额内预留 60；第二次超限再拒且预留不变（`g-flow`） |
+| AC-029 初始化冲突中断 | **passed** | 第 3 次写入中断 → `failed/interrupted` 且 `recoverable:true`、已写 2 份；新进程 `resume` 按 receipt 续写至 done 且不动交付 ref；用户自维护 `PROJECT.md` → `content-conflict`、字节原样保留、不再写后续文档、`resume` 拒绝（`g-flow`） |
+| AC-041 知识结算 | **passed** | 补丁更新正文/入口/失效说明，只经 `applyKnowledgePatch` 发布；冷启动 `queryFeatureView(view=delivered)` 找到新行为与新入口；非法文档 `KNOWLEDGE_INVALID`、不发布、保留最后有效并标 stale（`d-settlement`） |
+| AC-054 UI 断开 | **not_covered** | 属 WP-09（与 `implementation.md` T5 残余 9 一致） |
+| AC-057 Runner 失联 | **passed（本包必验面）** | 租约过期轮转、旧 epoch/取消/新决定后结果拒绝并留诊断；本次重点的「旧进程未确认终止 ⇒ 不开新 Attempt / 不双写」在 `beginAttempt`/`resumeWork` 上成立。残余：W8R2-03（Work 级决策会一并解除其他 Run 的阻断） |
+| AC-058 过期结果 | **passed** | 旧 epoch 成功被拒（`accepted:false`），`stage.result_rejected` 诊断持久保留（`c-recovery`） |
+| AC-061 启动恢复 | **passed** | 新心跳 + 进程已死仍 park `interrupted`；等值/更旧 daemon epoch 被 `VERSION_CONFLICT` 围栏；host epoch 前进（`c-recovery`） |
+| AC-062 集成冲突 | **passed** | 两已通过 Task 冲突 → `TASK_MERGE_CONFLICT`、HEAD 不动、无完成事件、独立修复 Task（依赖双方、`requiresFreshVerification:true`、`committed:false`、冲突产物 SHA256、确定性 id，重试同 id）；最终集成跳过已合并祖先且祖先只出现一次（`f-integration`） |
+| AC-063 部分结算 | **passed** | ref 后崩溃 `recover` 复用提交、不新增提交、恰一条 `settlement.completed`；重放零新增事件（`d-settlement`） |
+| AC-064 备份恢复 | **passed** | 新目录 restore 逐文件/逐 blob 哈希校验一致、tree 与知识工作树干净、活动 Run park `interrupted`（Attempt `lost`）、租约清零、grant 撤销、缺 Secret → `blocked` 且 `executionReady:false`；manifest 只存 secret 标识不含值（`e-backup`） |
+| AC-081 Task 依赖输入 | **passed** | `dependencyRevision`/`dependencyManifestRefs` 精确；未记录冻结输入或缺 manifest ref → `GATE_NOT_READY`；祖先 revision 变化 → `STALE_ARTIFACT`+`invalidated`；最终集成不重复应用祖先（`f-integration`） |
+| AC-082 重启保留窄范围 | **passed** | 冻结 DispatchSnapshot 的窄 Scope 在恢复后保持、Work 宽范围标 `workScopeIgnored`；范围外路径/操作拒绝；快照缺失 `STALE_ARTIFACT`（`c-recovery`） |
+| AC-090 需求保存时机 | **passed（正常/重试/投影修复路径）** | 保存报告 branch/ref/commit/previousCommit/未推送状态；投影失败 → `RECOVERY_REQUIRED`（`branchUntouched:false`、`repairOnly:true`），重试 `projection_repaired`、复用同一提交、无第二提交、无第二事件。**残余：W8R2-05**（journal 记录 target 与 ref 交换之间的崩溃无法用同一 operationId 恢复） |
+| AC-091 崩溃与交付竞争 | **partial** | metadata-only 不冒充代码验证、旧基线交付与新需求池共存的正例均通过；但**代码交付路径并不取得共享集成锁**（W8R2-02，实测持锁时 `runIntegration` 照常推进 ref），且保存重试路径存在 W8R2-01 的静默丢弃 |
+| AC-093 目录与正文一致性 | **passed** | 两文件共享版本、组合 `recordHash` 由提交字节独立复算吻合、正文变更递增版本且 hash 改变、半对记录在 CAS 前被拒、分支不动、无事件（`b-save`、`a-cas`）。残余：W8R2-06（写回工作树无脏检查） |
+| AC-094 需求正文保存与并发 | **passed（读取源）/ P1 于崩溃重试** | 「陈旧工作树不得覆盖新记录」已成立（W8R1-02 关闭）；但崩溃重试会丢弃交付分支上的新提交（W8R2-01） |
+
+---
+
+## R2-5. 新发现（W8R2-xx）
+
+### W8R2-01（P1，阻断）— 崩溃重试复用陈旧 save worktree，且 CAS 不校验候选基点，静默把交付分支回退到旧基线（丢弃已集成提交）
+
+- **位置**：`packages/core/src/requirement-save.ts:1913-1917`（`prepareWorktree` 只要路径相同就直接复用 worktree，从不校验其 HEAD 是否等于 `baseRevision`；`worktreePathFor` = `<worktreeRoot>/<operationId>`，见 `2133-2135`）；`packages/core/src/requirement-save.ts:1093`（`keepWorktree = options.keepWorktree ?? true`，**默认保留**残留 worktree）；`packages/workspace/src/cas.ts:1560-1602`（`integrate()` 只用 `update-ref <ref> <new> <old>`，**从不校验 `candidateRevision` 是否为 `expectedRevision` 的后代**，`isAncestor` 只出现在 `prepareDependencies`，`cas.ts:658`）。
+- **复现**（两种，均真实 Git + 真实 SQLite）：
+  1. `node /tmp/wp08r2/b-save.mjs`「W8R2 stale-basis」段：默认 `keepWorktree` 下，`op-rx-2` 的 `commitPaths` 首次失败 → worktree 留在旧基点；随后一个代码交付把 `agentdev/main` 推进到 `b2`（`src/orders.ts = ["integrated"]`）；用同一 operationId 重试保存 → **返回 `status:'saved'`**，`ref` 变成该重试的新提交，`b2` 不再是分支祖先，`src/orders.ts` 回退为 `[]`，工作树同样回退。
+  2. 同脚本「W8R2b」段（**零注入**）：直接构造崩溃残留现场（`<dataDir>/save-worktrees/op-crash-2` 停在基点 `b1`），再让代码交付推进 ref，然后调用 `save()` → 同样 `saved` 且丢弃 `delivery` 提交。
+  3. CAS 层最小反证 `/tmp/wp08r2/a-cas.mjs`「W8R2 candidate-basis」段：`expectedRevision=b2`（ref 当前值）而 candidate 由旧基点提交 → `integrate()` 返回 `ok:true`、发 1 条完成事件、`b2` 从分支消失。
+- **观测 vs 期望**：观测 = 交付 ref 静默丢弃已集成提交、`src/` 源码回退、调用方得到「已保存」；期望 = `reliability.md` §4 步骤 2/8（候选必须由 `expectedRevision` 生成，ref 仅由 `update-ref` 按 expected-old 移动）与 AC-090/AC-091「重试不产生重复提交、不静默丢内容」；`reliability.md` §2/§4 也要求集成建立在捕获的 `expectedHead` 之上。
+- **契约/AC 条款**：AC-090、AC-091、AC-094、AC-062（CAS 保护 HEAD）、`reliability.md` §4/§5。
+- **修复方向**：① `cas.integrate()` 在交换前要求 `git merge-base --is-ancestor <expectedRevision> <candidateRevision>`（或校验候选 tree 含 expected 的非池路径），不成立返回 `STALE_ARTIFACT`；② `prepareWorktree` 对已存在的 worktree 校验 HEAD/基点，不等于 `baseRevision` 时拒绝或 `reset --hard <baseRevision>` 后使用；③ `keepWorktree` 默认改为 `false`，或把复核基点作为复用的前置条件；④ `packages/workspace/src/worktree.ts:785-813` 的 `WorktreeManager.create` 也用路径复用而非基点校验，应一并收紧。
+
+### W8R2-02（P2）— 代码交付路径不取得 Project 集成锁（AC-091 的「保存与交付同一把锁」只有一半）
+
+- **位置**：全仓 `ProjectIntegrationLock|integrationLockResource` 只在 `packages/core/src/requirement-save.ts:1122`（`save()` 取锁）出现；`packages/workspace/src/cas.ts:1085`（`runIntegration` → `cas.integrate`）与 `packages/core/src/settlement.ts:1027`（`settle`）没有任何取锁调用（`grep -rn "ProjectIntegrationLock" packages/*/src apps/*/src` 除 requirement-save 外为空）。
+- **复现**：`node /tmp/wp08r2/f-integration.mjs`「W8R2 lock scope」段：先让 `lock.acquire({ownerAttemptId:'save-op'})` 成功（模拟需求保存持锁），随后调用真实 `runIntegration()` → `ok:true` 且交付 ref 被推进。
+- **观测 vs 期望**：观测 = 持锁期间代码交付照常集成并移动 ref；期望 = AC-091 Given「需求保存与代码交付共享 Project 集成锁」、`implementation.md` T2「`ProjectIntegrationLock`（共享资源 `integration:<projectId>`，需求保存与代码交付同一把锁）」。产品测试 `wp08.integration.test.ts:1601` 的「delivery takes the lock first」是**手工** `d.lock.acquire(...)`，并不构成「交付路径取锁」的证据。
+- **影响**：不造成数据丢失（CAS expected-old 会拒绝其一并保留候选）；但保存与交付之间的互斥、以及「新代码提交自动包含最新需求池」的时序保证在实现层缺失，二者只能靠 CAS 冲突后重新集成。
+- **修复方向**：把集成锁下沉到交付入口（`runIntegration`/`SettlementService`）或由 daemon 的集成命令事务持有 `integration:<projectId>`；同时把产品测试改为验证交付路径自身取锁（当前为手工取锁）。
+
+### W8R2-03（P2）— 新 Attempt 准入是「Work 级决策」而非「Run/判定级」，一条写给别的 Run 的 resume 决策会解除本 Run 的活进程阻断
+
+- **位置**：`packages/core/src/recovery.ts:292-310`（解除阻断只按 `work_id = ? AND kind='recovery'` + `choice='resume'` + `created_at > verdict.occurredAt` 查找，不绑定 `runId`/`verdictEventId`）。
+- **复现**：`node /tmp/wp08r2/c-recovery.mjs`「W8R2 sibling-decision scope」段：同一 Work 的两个 Run——Run A 记录一条恢复决策（对应 Work 级取消/恢复），Run B 因**自身进程存活**被 park `interrupted`（`newAttemptAllowed:false`）；在 B 的判定之后插入该决策 → `newAttemptAdmission(runIdB) = {allowed:true, resolvedByDecisionId:<A 的决策>}`，`beginAttempt` 放行。
+- **观测 vs 期望**：观测 = 「旧进程未确认终止」的 Run 因一条并非针对它的恢复决策而获得新 Attempt；期望 = AC-057「无重复副作用或双写者」、`reliability.md` §2「旧进程未确认终止时不把工作区授予新写者」、`workflow.md` §5.1「所有适用阻断关闭才恢复」。W8R1-04 的执行侧闸门是真实存在的，但准入规则的范围过宽。
+- **修复方向**：把决策与判定绑定（决策 `targetRef.id` = runId 或持久化 `verdictEventId`），或要求 Work 内**每个**被阻断 Run 都有一条晚于其判定的 resume 决策；至少在 `NewAttemptAdmission` 返回 `resolvedByDecisionId` 时校验该决策覆盖本 Run。
+
+### W8R2-04（P3）— `createCasService().integrate()` 在候选 tree 不可读时抛异常而非返回拒绝（`settle()` 无 catch）
+
+- **位置**：`packages/workspace/src/cas.ts:1562-1564`（`requireGit(git.mergeTree(...), 'INTERNAL_ERROR', …)` 抛出 `WorkspaceError`，不在任何 try/catch 内），而 `integrate` 的返回类型是 `CasOutcome`；`packages/core/src/settlement.ts:1027` 直接调用且未捕获。
+- **复现**：`node /tmp/wp08r2/h-casthrow.mjs`（注入 `mergeTree` 失败）→ `threw = WorkspaceError: 读取候选 tree 失败…`，`outcome = null`；ref 未被污染。
+- **观测 vs 期望**：观测 = 公共 API 抛出未声明异常；期望 = 与同函数其他失败一致返回结构化 `INTERNAL_ERROR` 拒绝（`settle()` 的返回类型同样是结果联合）。
+- **修复方向**：把该处改为 `const tree = git.mergeTree(...); if (!tree.ok || tree.value === null) return refusal('INTERNAL_ERROR', …)`；或给 `settle()` 加与 `save()` 等价的外层 catch。
+
+### W8R2-05（P2）— CAS journal 已记录 target、ref 尚未交换这一崩溃窗口无法用同一 operationId 恢复（「Git commit 存在则复用」未实现）
+
+- **位置**：`packages/core/src/requirement-save.ts:1273-1290`（`repairOnly` 要求 `journal.targetRevision === headRevision`，即 ref **已经**移动；ref 未移动时走普通路径）、`1913-1917`（复用停在候选提交上的残留 worktree，导致再次 `git commit` 无内容可提交）、`packages/workspace/src/cas.ts:1502-1511`（journal 已有 `targetRevision` 且与本次候选不同 → `IDEMPOTENCY_CONFLICT`）。对照：`packages/core/src/settlement.ts:1124-1153` 对 `recover()` 实现了「ref 未移动则用 journal 候选完成交换」，需求保存侧没有等价路径。
+- **复现**：`node /tmp/wp08r2/i-cas-journal-crash.mjs`（在 `updateRef` 处抛出，模拟进程崩溃；journal 已写 `targetRevision`，ref 仍在基线）：重试同 operationId 且正文一致 → `INTERNAL_ERROR: 需求保存提交失败`；正文略变 → `IDEMPOTENCY_CONFLICT: operationId … 已提交 <C1>，与本次候选 <C2> 不一致`。两条路径下 ref 都停在基线，journal 里的提交永远不会被安装；该 operationId 永久卡住。
+- **观测 vs 期望**：观测 = 崩溃点之后无法恢复、且会再产生一个游离提交；期望 = `reliability.md` §5「崩溃重启逐步核对：Artifact 存在且 Hash 一致则复用；Git commit 存在则复用；ref 已指向目标则补记完成」、AC-090/AC-091「在 Git CAS 前后注入退出并重试」、WP-08 退出条件「部分提交恢复不重复执行」。
+- **修复方向**：在 `RequirementSaveService` 增加与 `settlement.recover()` 对称的分支：`journal.state==='pending' && journal.targetRevision !== undefined && headRevision === journal.expectedRevision` ⇒ 直接用 journal 的候选调用 CAS 完成交换并补投影（不得新建提交）；同时让 `prepareWorktree` 在基点不符时先复位（与 W8R2-01 同源）。
+
+### W8R2-06（P3）— 保存路径无条件把提交字节写回交付工作树，未提交的本地编辑被静默替换（AC-028 的脏工作区保护未覆盖该路径）
+
+- **位置**：`packages/core/src/requirement-save.ts:1965-1973`（`refreshWorkingTree` 无条件 `writeRecord(repoRoot, …)`，`writeRecord` 见 `1951-1955`），调用点 `1429`；全路径没有 `statusPorcelain` 脏检查。
+- **复现**：`node /tmp/wp08r2/b-save.mjs`「W8R2-06」段：v1 保存后手工改写 `.agentdev/requirements/<id>/content.md`（未提交，`git status` 可见），再以 v2 正文保存 → 磁盘文件变为 v2 的 API 正文，本地编辑消失，结果仍为 `status:'saved'`。
+- **观测 vs 期望**：观测 = 未提交本地内容被覆盖且无任何诊断；期望 = AC-028「用户文件未提交 ⇒ 保留数据并阻断到明确处置」（至少对将被覆盖的具体路径给出门禁或诊断）。
+- **修复方向**：写回前对目标路径做 `statusPorcelain` 校验（脏则拒绝或先让用户处置/备份差异），或改为只更新索引/工作树的“干净子集”，并对被覆盖的差异写出诊断事件。
+
+---
+
+## R2-6. 计数与阻断表
+
+| 项 | 数量 |
+|---|---|
+| 独立探针脚本 | 9 |
+| 独立探针断言 | 215 |
+| 失败断言 | 17（W8R2-01×10、W8R2-02×1、W8R2-03×1、W8R2-04×1、W8R2-05×2、W8R2-06×2） |
+| P0 | 0 |
+| P1 | 1（W8R2-01） |
+| P2 | 3（W8R2-02、W8R2-03、W8R2-05） |
+| P3 | 2（W8R2-04、W8R2-06） |
+| 阻断 finding | 1（W8R2-01） |
+| W8R1 收口复核 | 8/8 已关闭 |
+| 五项必需失败测试 | 5/5 通过（独立复跑） |
+| 契约命令 | 6/6 退出码 0 |
+
+| 门禁问题 | 结果 |
+|---|---|
+| 契约命令是否全绿 | 是（typecheck/lint/unit 971/integration 215/docs:check/build 10） |
+| W8R1-01..08 是否真正收口 | 是（逐条独立探针 + 代码位置复核） |
+| 声明与代码是否一致 | 否（T2「需求保存与代码交付同一把锁」不成立 → W8R2-02；T1「候选由调用方提供 + 仅 update-ref 移动 ref」成立，但**缺少候选基点校验** → W8R2-01） |
+| 是否存在未登记的水平缺口 | 是（W8R2-01/02/03/05/06 未登记；W8R2-04 未登记） |
+| 是否存在阻塞缺陷 | 是（1 × P1） |
+
+**能否进入独立 Test：否（阻塞）。** 依据 `docs/rules/workflow.md`：P0/P1 阻断，须走 `Develop → 新独立 Review → Test`。建议优先级：W8R2-01（P1，静默丢弃已集成提交；修 CAS 基点校验 + worktree 基点校验/默认不保留）→ W8R2-05（同一崩溃家族的恢复路径）→ W8R2-02（把集成锁落到交付入口）→ W8R2-03（决策与判定/Run 绑定）→ W8R2-04/06。修复后代码树哈希必然变化，需重做一轮独立 Review 才能进入 Test。
+
+---
+
+## R2-7. 记录对账（`implementation.md` T1..T6 与代码）
+
+**准确的部分**
+
+- T5 的命令数字与本次独立复跑完全一致：unit 48 文件/971 用例、integration 20 文件/215 用例、build 10 workspace、docs:check ok；逐文件用例数与 T6 列举一致（见 R2-1）。
+- T6 的 8 条修复描述与代码一一对应：`cas.ts:1386-1401`（候选必需）、`requirement-save.ts:1267/1812-1816/612-634`（按 ref 与 revision 读取）、`1135-1145`（`save()` 不抛异常）、`recovery.ts:276-321` + `run-lifecycle.ts:118-131` + `findings.ts:1693-1705`（准入闸门）、`recovery.ts:2114-2169`（relocate 先校验后改根 + 回滚）、`settlement.ts:1252-1266`（清 `phase`）、`requirement-save.ts:853-878`（空变更集/空范围拒绝）、`settlement.ts` 的 `commitTree`/`codeTreeHash` 双字段（`972-983`、`1050-1062`、`1102-1123`、`1283-1287`、`1307-1308`）。
+- T6 记录更正项与代码一致：CAS 描述已改为「安装调用方提供的候选提交」（`cas.ts:1554-1560`）；失实注释已删除，改述为按交付 ref 修订读取（`requirement-save.ts:605-611`）；`SettlementOutcome` 双字段与事件同步（`settlement.ts:1283-1287`）。
+- T5 残余核对：1（`WorktreeLeaseStore` 未落 `lease` 表——`worktreeLeaseResource` 在 product 源码中无消费者）属实；2（无生产 SQLite `CasJournal`/`CasEventPort` 实现，只有 `createMemoryCasJournal`）属实；3（`createRepairTask` 仅在 `cas.ts:892` 内部使用，无 Artifact 落库与派发）属实；4（备份只存 secret 标识，本次 AC-064 探针确认 manifest 不含值）属实；5（`apps/` 下 `backupProject|restoreProject|relocateProject|recoverAfterRestart` 零引用）属实；6（`packages/workspace/src/backup.ts` 不存在）属实；7（`parseRunnerPid` 对容器/远端标识返回 `null` 并按不可确认 fail-closed）属实；9（AC-054 属 WP-09）属实。
+- T6 末尾登记的两条边界属实：解除阻断目前只认 `decision(kind='recovery',choice='resume')`（CLI/BFF 入口未接线），以及 `interrupted` 不在 `RESUMABLE_STATUSES`（`recovery.ts:214-219`）因而不会被后续 `recoverAfterRestart` 重新核对（已 park 者不重复处理）。后者是**已如实披露的 fail-closed 代价**，不计为新 finding，但意味着「旧进程事后确认已死」也必须靠一条人工决策放行。
+
+**不准确/未登记的部分**
+
+- T2「`ProjectIntegrationLock`（共享资源 `integration:<projectId>`，需求保存与代码交付同一把锁）」：代码侧只有需求保存取锁，交付路径无取锁调用（W8R2-02）。
+- T1/`cas.ts` 模块头「CAS 保护 HEAD / 候选由调用方提供」：缺少候选基点（后代）校验，因而在崩溃重试场景下不保护已集成提交（W8R2-01）。
+- 未登记的缺口：requirement save 的 worktree 基点复用与 `keepWorktree` 默认保留（W8R2-01）、journal 已记 target 而 ref 未交换的恢复缺口（W8R2-05）、准入决策的 Work 级范围（W8R2-03）、`integrate` 的抛异常路径（W8R2-04）、写回工作树无脏检查（W8R2-06）。
+
+---
+
+## R2-8. 覆盖限制
+
+1. **AC-054 不可在本包验证**：BFF/浏览器断开与水位同步属 WP-09，本包无 HTTP/WS 接线，故 `not_covered`（与记录一致）。
+2. **AC-083 仅间接覆盖**：document 路线与无 `taskId` 的 Finding 关闭由 `wp08.integration.test.ts` 断言并通过；本轮未另写独立探针验证 Finding 目标绑定/`manifestId` 的数据库约束。
+3. **UI/接线层未验证**：AC-090/091 的分支、提交、未推送状态只在 `RequirementSaveService` 返回结构层验证；`apps/cli`/`apps/daemon` 与 BFF/UI 接线按 T5 残余 5 尚未落地，因此本报告的 W8R2-01/05 是**服务 API 层**的可复现缺陷（按 AC-090/091 的文档用法即可触发），不是端到端 CLI 演练。
+4. **容器与环境**：WP-08 不需要 Docker；`pnpm test:integration` 中的容器用例在本机通过，但非本包重点，未做额外反证。
+5. **并发时序**：除 CAS 读后写、锁竞争与准入判定外，未做多进程并发压测；AC-091 的并发验证在单进程内以真实 SQLite + 真实 Git 状态观测完成。
+6. **备份范围**：未验证 `.agentdev/work` 等本机过程目录在“未提交”状态下的备份（实现只复制 DB、`blobs`、`documentRoot` 知识树与 git bundle）；`knowledge.treeHash` 被记录但 restore 只逐文件校验、未重新汇总该 aggregate（弱校验，未构成 AC 失败）。
+7. **Secret**：按设计只验证“缺 Secret 阻断”与“清单不含值”，未演练 secret 的加密导出/导入（T5 残余 4）。
+8. **ref 交换前崩溃的覆盖**：W8R2-05 以“在 `updateRef` 处抛出”等价模拟进程在该窗口死亡，未使用真实 `SIGKILL`（同一可观测状态）；其余崩溃点（提交后、ref 后）由产品测试与 `d-settlement`/`i-cas-journal-crash` 交叉覆盖。
+9. **一次性工具副作用披露**：本轮未使用子代理、未在仓库根写入任何临时文件；唯一写入为本报告追加，`git status --porcelain` 除该文件外为空。
+
+---
+
+## R2-9. 结论
+
+W8R1-01..08 的八条修复**全部真实收口**：本轮用独立探针（真实临时仓库 + 真实 SQLite，215 项断言）逐条复现了正确行为，五项必需失败测试独立复跑通过，六项契约命令全绿，`implementation.md` T6 的记录在修复范围内与代码一致。但本轮新发现 **1 项 P1**：崩溃重试会复用停在旧基点的 save worktree，而 CAS 不校验候选是否为 `expectedRevision` 的后代，于是交付分支被静默回退到旧基线、已集成提交（含源码改动）被丢弃，调用方仍收到 `status:'saved'`（两段独立复现，其中一段零注入）。另有 3 项 P2（交付路径不取集成锁、准入决策的 Work 级范围、journal 与 ref 之间的崩溃窗口不可恢复）与 2 项 P3（`integrate` 抛异常路径、写回工作树无脏检查）。
+
+**判定 FAIL，不允许进入独立 Test**；须 `Develop → 新独立 Review → Test`。修复 W8R2-01（及同源的 W8R2-05）后，本报告的 §R2-3 收口结论仍可作为下一轮的起点，但 R2-5 的 finding 需逐条复核关闭。
