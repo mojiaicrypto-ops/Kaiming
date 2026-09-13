@@ -79,6 +79,7 @@ import { BlobStore, sha256, withTransaction, type ProjectStore } from '@agentdev
 import { ArtifactService } from './artifacts.js';
 import { canonicalJson } from './dispatcher.js';
 import { ProtocolError } from './errors.js';
+import { newAttemptAdmission } from './recovery.js';
 import { RunLifecycle } from './run-lifecycle.js';
 
 /** Payload schema version of the records this module freezes. */
@@ -1685,10 +1686,16 @@ export class FindingService {
     }
     // A Run whose side effects are unresolved needs a RecoveryDecision, not a fresh
     // Attempt (`workflow.md` §5.3, `reliability.md` §6). Refused before any resume
-    // write so the Work is left exactly as the pause left it.
-    const unresolved = this.store.runs
-      .list({ where: 'work_id = ?', params: [work.id] })
-      .filter((run) => !isTerminalRunStatus(run.status) && run.status === 'recovery_required');
+    // write so the Work is left exactly as the pause left it. `W8R1-04`: the
+    // persisted recovery verdict is the authority — a Run parked because its old
+    // process was alive/unconfirmable is `interrupted` (not `recovery_required`), and
+    // resuming it used to open a second writer.
+    const resumedRuns = this.store.runs.list({ where: 'work_id = ?', params: [work.id] });
+    const unresolved = resumedRuns.filter((run) => {
+      if (isTerminalRunStatus(run.status)) return false;
+      if (run.status === 'recovery_required') return true;
+      return !newAttemptAdmission(this.store, run.id).allowed;
+    });
     if (unresolved.length > 0) {
       return {
         ok: false,

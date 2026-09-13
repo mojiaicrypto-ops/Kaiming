@@ -229,6 +229,35 @@ function expectRefused(outcome: CasOutcome): Extract<CasOutcome, { ok: false }> 
 }
 
 /**
+ * A `WorktreeGitPort` that moves `ref` to `competitor` immediately before its own
+ * `update-ref` — the real "another writer moved the branch between the compare and
+ * the swap" race (`W8R1-01`).
+ */
+function portWithCompetingMove(input: {
+  readonly repo: string;
+  readonly ref: string;
+  readonly expectedOld: string;
+  readonly competitor: string;
+}): WorktreeGitPort {
+  const racing = Object.create(git) as WorktreeGitPort;
+  let moved = false;
+  racing.updateRef = (request) => {
+    if (!moved && request.ref === input.ref) {
+      moved = true;
+      const outcome = git.updateRef({
+        repoRoot: input.repo,
+        ref: input.ref,
+        newRevision: input.competitor,
+        expectedOldRevision: input.expectedOld,
+      });
+      if (!outcome.ok) throw new Error('the competing ref move failed');
+    }
+    return git.updateRef(request);
+  };
+  return racing;
+}
+
+/**
  * Creates a commit through a real integration worktree at `baseRevision`.
  *
  * A commit must never be created on the checked-out delivery branch: Git refuses to
@@ -412,11 +441,25 @@ describe('CAS integration against a real Git repository (AC-094)', () => {
     );
     const headAfterWinner = refHead(repo, DELIVERY_REF);
 
-    // A second writer still believes the old baseline is current.
+    // A second writer still believes the old baseline is current. It has its own
+    // candidate commit (created at the same base revision) — a write request without
+    // one is now refused before the compare, so the stale-writer protection is only
+    // reachable with a real candidate (`W8R1-01`).
     const stale: RequirementPoolCommit = {
       ...first,
       recordHash: requirementRecordHash('stale-writer', 'stale-writer'),
     };
+    const staleCandidate = commitThroughWorktree({
+      repo,
+      name: 'save-stale',
+      baseRevision: revision,
+      message: 'doc(requirement): stale',
+      files: requirementFiles(REQUIREMENT_ID, {
+        version: 2,
+        title: '未付款订单可取消',
+        body: 'Stale writer content.',
+      }).files,
+    });
     const refused = expectRefused(
       cas.integrate({
         operationId: 'op-save-stale',
@@ -424,6 +467,7 @@ describe('CAS integration against a real Git repository (AC-094)', () => {
         repoRoot: repo,
         ref: DELIVERY_REF,
         expectedRevision: revision,
+        candidateRevision: staleCandidate,
         message: 'doc(requirement): stale',
         requirementPool: [stale],
       }),
@@ -538,6 +582,8 @@ describe('CAS integration against a real Git repository (AC-094)', () => {
         repoRoot: repo,
         ref: DELIVERY_REF,
         expectedRevision: revision,
+        // A valid candidate, so the refusal is the half pair and nothing else.
+        candidateRevision: revision,
         message: 'doc(requirement): half',
         requirementPool: [{ ...pool, contentPath: `${pool.recordPath}/other.md` }],
       }),
@@ -614,6 +660,120 @@ describe('CAS integration against a real Git repository (AC-094)', () => {
     expect(raced.actualRevision).toBe(candidate);
     expect(refHead(repo, DELIVERY_REF)).toBe(candidate);
     expect(events.appended).toHaveLength(1);
+  });
+
+  it('never commits in the delivery working tree: a candidate revision is required (W8R1-01)', () => {
+    const { repo, revision } = seedDeliveryRepo({ 'src/orders.ts': 'export const orders = [];\n' });
+    const { events, journal } = casFor({ file: join(makeTempDir(), 'journal.sqlite') });
+    // The record is already on disk in the delivery worktree, exactly as a save that
+    // refreshed the working copy leaves it — which is what the removed fallback
+    // `git commit` used to pick up.
+    const record = requirementFiles(REQUIREMENT_ID, {
+      version: 1,
+      title: '未付款订单可取消',
+      body: 'Unpaid orders can be cancelled.',
+    });
+    for (const [relativePath, content] of Object.entries(record.files)) {
+      writeFileAt(repo, relativePath, content);
+    }
+    const pool: RequirementPoolCommit = {
+      recordPath: record.recordPath,
+      metadataPath: `${record.recordPath}/requirement.json`,
+      contentPath: `${record.recordPath}/content.md`,
+      readmePath: '.agentdev/requirements/README.md',
+      recordHash: requirementRecordHash('a', body_fingerprint('Unpaid orders can be cancelled.')),
+      version: 1,
+    };
+    // A competitor moves the branch between the compare and the write half. The old
+    // fallback committed on top of that move and reported success; the branch here
+    // must stay exactly where the competitor left it.
+    const competitor = commitThroughWorktree({
+      repo,
+      name: 'competitor-nocandidate',
+      baseRevision: revision,
+      message: 'chore: competitor',
+      files: { 'src/other.ts': 'export const other = 1;\n' },
+    });
+    const racingCas = createCasService({
+      git: portWithCompetingMove({
+        repo,
+        ref: DELIVERY_REF,
+        expectedOld: revision,
+        competitor,
+      }),
+      journal,
+      events,
+    });
+
+    const refused = expectRefused(
+      racingCas.integrate({
+        operationId: 'op-no-candidate',
+        kind: 'requirement_save',
+        repoRoot: repo,
+        ref: DELIVERY_REF,
+        expectedRevision: revision,
+        message: 'doc(requirement): 保存需求 未付款订单可取消',
+        requirementPool: [pool],
+      }),
+    );
+    expect(refused.code).toBe('VALIDATION_ERROR');
+    expect(refused.branchUntouched).toBe(true);
+    // The branch never moved through this service, and no completion event exists.
+    expect(refHead(repo, DELIVERY_REF)).toBe(revision);
+    expect(events.appended).toHaveLength(0);
+    // The competitor's commit was never picked up by a commit in this service.
+    expect(branchCommitCount(repo)).toBe(1);
+  });
+
+  it('refuses a competing ref move between the compare and the swap (W8R1-01)', () => {
+    const { repo, revision } = seedDeliveryRepo({ 'src/orders.ts': 'export const orders = [];\n' });
+    const { events, journal } = casFor({ file: join(makeTempDir(), 'journal.sqlite') });
+    const { pool, candidate } = commitRequirement({
+      repo,
+      name: 'candidate-race',
+      baseRevision: revision,
+      message: 'doc(requirement): race',
+      id: REQUIREMENT_ID,
+      version: 1,
+      title: 'race',
+      body: 'race body',
+    });
+    const competitor = commitThroughWorktree({
+      repo,
+      name: 'competitor-candidate',
+      baseRevision: revision,
+      message: 'chore: competitor',
+      files: { 'src/other.ts': 'export const other = 2;\n' },
+    });
+    const racingCas = createCasService({
+      git: portWithCompetingMove({
+        repo,
+        ref: DELIVERY_REF,
+        expectedOld: revision,
+        competitor,
+      }),
+      journal,
+      events,
+    });
+
+    const refused = expectRefused(
+      racingCas.integrate({
+        operationId: 'op-competing-move',
+        kind: 'requirement_save',
+        repoRoot: repo,
+        ref: DELIVERY_REF,
+        expectedRevision: revision,
+        candidateRevision: candidate,
+        message: 'doc(requirement): race',
+        requirementPool: [pool],
+      }),
+    );
+    expect(refused.code).toBe('VERSION_CONFLICT');
+    expect(refused.branchUntouched).toBe(true);
+    expect(refused.actualRevision).toBe(competitor);
+    // The competitor's commit is untouched and no completion event was emitted.
+    expect(refHead(repo, DELIVERY_REF)).toBe(competitor);
+    expect(events.appended).toHaveLength(0);
   });
 });
 

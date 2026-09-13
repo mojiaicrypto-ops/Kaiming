@@ -34,7 +34,7 @@
  *   revision whose change set is only `.agentdev/requirements/**` is reported as
  *   metadata rather than accepted as verified code.
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
   portableRequirementSchema,
@@ -506,8 +506,15 @@ export interface RequirementPoolGitPort {
     paths: readonly string[],
   ): GitResult<readonly string[]>;
   pathAtRevision(repoRoot: string, revision: string, path: string): GitResult<boolean>;
-  /** Optional blob reader; when absent the checked-out copy is read instead. */
-  readBlob?(repoRoot: string, revision: string, path: string): GitResult<string | null>;
+  /**
+   * Reads a blob at `<revision>:<path>` (`W8R1-02`).
+   *
+   * **Required, never optional**: a caller that cannot read the committed bytes of
+   * the target revision must not fall back to the working tree, because a branch can
+   * move without a checkout — the checked-out record would then be an older
+   * projection that silently overwrites the newer one on Git (`AC-094`).
+   */
+  readBlob(repoRoot: string, revision: string, path: string): GitResult<string | null>;
 }
 
 function toPoolRecord(record: RequirementPoolRevisionRecord): RequirementPoolRecord {
@@ -595,6 +602,13 @@ export function readRequirementPoolAtRevision(input: {
   };
 }
 
+/**
+ * Reads one committed blob, converting every failure into a structured error.
+ *
+ * The revision is the only source of truth (`W8R1-02/03`): the working tree is never
+ * consulted, so a stale checkout can neither supply an older projection nor make the
+ * reader throw `ENOENT` for a record that exists only in Git.
+ */
 function readBlobAt(
   input: {
     readonly git: RequirementPoolGitPort;
@@ -603,16 +617,20 @@ function readBlobAt(
   revision: string,
   path: string,
 ): string {
-  if (input.git.readBlob !== undefined) {
-    const blob = input.git.readBlob(input.repoRoot, revision, path);
-    if (!blob.ok || blob.value === null) {
-      throw new ProtocolError('INTERNAL_ERROR', `读取 Git blob 失败：${revision}:${path}`);
-    }
-    return blob.value;
+  const blob = input.git.readBlob(input.repoRoot, revision, path);
+  if (!blob.ok) {
+    throw new ProtocolError('INTERNAL_ERROR', `读取 Git blob 失败：${revision}:${path}`, {
+      details: { revision, path, errors: blob.errors.length },
+    });
   }
-  // A caller that injected only the worktree port reads the checked-out copy; the
-  // save path checks the committed bytes out first, so the answer is the same.
-  return readFileSync(join(input.repoRoot, path), 'utf8');
+  if (blob.value === null) {
+    throw new ProtocolError(
+      'REQUIREMENT_CONFLICT',
+      `Git 修订 ${revision} 的树缺少记录文件：${path}`,
+      { details: { revision, path } },
+    );
+  }
+  return blob.value;
 }
 
 function metadataVersionOf(metadataJson: string): number {
@@ -724,6 +742,8 @@ export type CompletionSettlementCheck =
       /** Paths of the change set that are requirement-pool metadata. */
       readonly metadataPaths: readonly string[];
       readonly changedPaths: readonly string[];
+      /** The revision the (non-empty) change set was measured from (`W8R1-07`). */
+      readonly codeStartRevision: string;
     }
   | {
       readonly ok: false;
@@ -743,7 +763,7 @@ export function isRequirementMetadataPath(path: string): boolean {
  * Checks a `CompletionManifest` against the Settlement it claims to describe
  * (AC-091: "完成记录与结算一致，metadata变更不冒充代码验证").
  *
- * Three facts are compared, never asserted:
+ * Four facts are compared, never asserted:
  *
  * 1. the Settlement's `finalRevision`/`codeTree` must be the revision and tree the
  *    completion record binds;
@@ -753,7 +773,10 @@ export function isRequirementMetadataPath(path: string): boolean {
  * 3. the change set under `codeStartRevision..finalRevision` decides whether the
  *    revision is a **code** revision. When every changed path is
  *    `.agentdev/requirements/**` the delivery is metadata-only, and evidence that
- *    claims to verify code for it is refused rather than accepted.
+ *    claims to verify code for it is refused rather than accepted;
+ * 4. a **zero-path** change set is refused too: no change is no code verification
+ *    (`W8R1-07`), and the range must actually start somewhere other than the final
+ *    revision, otherwise the "diff" it claims to describe is empty by construction.
  */
 export function checkCompletionSettlement(
   input: CompletionSettlementInput,
@@ -825,6 +848,25 @@ export function checkCompletionSettlement(
 
   if (reasons.length > 0) return refusal('STALE_ARTIFACT', reasons.join('；'));
 
+  // An empty change set is not evidence of a code change (`W8R1-07`): without at
+  // least one path there is nothing the verified Manifests could have verified.
+  if (input.changedPaths.length === 0) {
+    return refusal(
+      'GATE_NOT_READY',
+      `最终提交 ${input.finalRevision} 的变更集为空（${input.codeStartRevision ?? 'unknown'}..${input.finalRevision} 没有任何路径），不能作为代码验证结果`,
+    );
+  }
+  // The claimed range must be a real range: a `codeStartRevision` equal to the final
+  // revision (or absent) makes `codeStartRevision..finalRevision` empty by
+  // construction, so the change set cannot have been measured from it.
+  const codeStartRevision = input.codeStartRevision;
+  if (codeStartRevision === null || codeStartRevision === input.finalRevision) {
+    return refusal(
+      'GATE_NOT_READY',
+      `无法证明变更集来自 codeStartRevision..finalRevision：codeStartRevision 为 ${codeStartRevision ?? 'null'}，与最终 ${input.finalRevision} 不构成有效范围`,
+    );
+  }
+
   // A metadata-only revision is a legitimate record change (AC-090) but it is not
   // code verification: the completion record must say so instead of presenting the
   // metadata edit as a verified code result.
@@ -846,6 +888,7 @@ export function checkCompletionSettlement(
     finalTree: input.finalTree,
     metadataPaths,
     changedPaths,
+    codeStartRevision,
   };
 }
 
@@ -1091,6 +1134,12 @@ export class RequirementSaveService {
     }
     try {
       return this.saveUnderLock(input);
+    } catch (error) {
+      // `W8R1-03`: no exception may escape `save()`. Every read/parse failure of the
+      // pool path is already structured by `readBlobAt`, so this catch keeps the
+      // precise code and the record path instead of letting an `ENOENT` (or a
+      // storage error) reach the caller as a crash.
+      return this.unexpectedFailure(error);
     } finally {
       this.lock.release(ownerAttemptId, epoch);
     }
@@ -1152,6 +1201,19 @@ export class RequirementSaveService {
     };
   }
 
+  /**
+   * Turns an escaped read/parse/storage failure into a structured refusal
+   * (`W8R1-03`). A `ProtocolError` keeps its own code and message — which names the
+   * record path for a pool read — and anything else becomes `INTERNAL_ERROR`.
+   */
+  private unexpectedFailure(error: unknown): RequirementSaveOutcome {
+    if (error instanceof ProtocolError) {
+      return this.refusal(error.code, error.message, [error.message]);
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    return this.refusal('INTERNAL_ERROR', `需求保存失败：${message}`, [message]);
+  }
+
   private saveUnderLock(input: SaveRequirementInput): RequirementSaveOutcome {
     const project = this.store.projects.find(this.store.projectId);
     if (project === undefined) {
@@ -1202,7 +1264,7 @@ export class RequirementSaveService {
     if (!prepared.ok) return this.refusal(prepared.code, prepared.message, prepared.issues);
     const record = prepared.record;
 
-    const base = this.readHead(project.gitRoot ?? project.root);
+    const base = this.readHead(project.gitRoot ?? project.root, ref);
     if (!base.ok) return base.failure;
     const { repoRoot, revision: headRevision } = base.value;
 
@@ -1227,8 +1289,9 @@ export class RequirementSaveService {
       });
     }
 
-    // The expectation is compared against the *directory* record hash at HEAD, not
-    // against the local row (`reliability.md` §9, AC-093).
+    // The expectation is compared against the *committed* directory record at the
+    // delivery ref revision — bytes read with `git cat-file`, never from the
+    // working tree — not against the local row (`reliability.md` §9, AC-093/094).
     const expectation = this.compareExpectation({
       repoRoot,
       revision: headRevision,
@@ -1692,9 +1755,16 @@ export class RequirementSaveService {
    */
   onProjectionCommitted?: () => void;
 
-  /** The HEAD of the delivery branch, refusing an unborn branch. */
+  /**
+   * The revision of the delivery ref the save will compare-and-swap.
+   *
+   * The ref — never `HEAD` and never the working tree — is the target revision
+   * (`W8R1-02`): a branch can move without a checkout, so `HEAD`/the checked-out
+   * files may still describe an older baseline than the ref the CAS will move.
+   */
   private readHead(
     repoRoot: string,
+    ref: string,
   ):
     | { ok: true; value: { repoRoot: string; revision: string } }
     | { ok: false; failure: RequirementSaveOutcome } {
@@ -1703,13 +1773,13 @@ export class RequirementSaveService {
       return { ok: false, failure: this.refusal('INVALID_STATE', `交付仓库不可用：${repoRoot}`) };
     }
     const root = resolved.value;
-    const head = this.worktrees.headRevision(root);
+    const head = this.worktrees.resolveRevision(root, ref);
     if (!head.ok) {
       return {
         ok: false,
         failure: this.refusal(
           'INTERNAL_ERROR',
-          '读取交付 HEAD 失败',
+          `读取交付 ref ${ref} 失败`,
           head.errors.map((error) => error.message),
         ),
       };
@@ -1717,18 +1787,19 @@ export class RequirementSaveService {
     if (head.value === null) {
       return {
         ok: false,
-        failure: this.refusal('INVALID_STATE', `交付分支还没有提交，无法保存需求：${root}`),
+        failure: this.refusal('INVALID_STATE', `交付分支 ${ref} 还没有提交，无法保存需求：${root}`),
       };
     }
     return { ok: true, value: { repoRoot: root, revision: head.value } };
   }
 
   /**
-   * Compares the caller's expectation against the record at HEAD (`AC-093`).
+   * Compares the caller's expectation against the record committed at the delivery
+   * ref revision (`AC-093`/`AC-094`).
    *
-   * `expectedAbsent` is a create guard; a record that exists at HEAD although the
-   * caller expected none is a conflict, never a silent overwrite. A changed
-   * directory hash for the version the projection already knows is the
+   * `expectedAbsent` is a create guard; a record that exists at the target revision
+   * although the caller expected none is a conflict, never a silent overwrite. A
+   * changed directory hash for the version the projection already knows is the
    * `stale_projection` conflict `requirements.md` §4 describes.
    */
   private compareExpectation(args: {
@@ -1777,7 +1848,7 @@ export class RequirementSaveService {
     }
     if (args.input.expected.expectedAbsent === true) {
       return conflict(
-        `需求 ${args.input.metadata.id} 已存在于 Git 基线 ${args.revision}（recordVersion ${head.version}），不能按创建保存`,
+        `需求 ${args.input.metadata.id} 已存在于 Git 基线 ${args.revision}（recordVersion ${head.version}，记录路径 ${head.recordPath}），不能按创建保存`,
         [
           'REQUIREMENT_CONFLICT: 预期不存在却已存在',
           '用户修复 Git 记录后显式重新导入再保存（requirements.md §4）',
@@ -1788,7 +1859,7 @@ export class RequirementSaveService {
     const expectedHash = args.input.expected.recordHash ?? args.previous?.portableRef.hash;
     if (expectedVersion !== undefined && head.version < expectedVersion) {
       return conflict(
-        `Git 基线 ${args.revision} 的需求 ${args.input.metadata.id} recordVersion 为 ${head.version}，低于期望 ${expectedVersion}；禁止旧投影覆盖`,
+        `Git 基线 ${args.revision} 的需求 ${args.input.metadata.id}（记录路径 ${head.recordPath}）recordVersion 为 ${head.version}，低于期望 ${expectedVersion}；禁止旧投影覆盖`,
         ['REQUIREMENT_CONFLICT: HEAD 版本低于期望'],
       );
     }
@@ -1799,7 +1870,7 @@ export class RequirementSaveService {
       head.recordHash !== expectedHash
     ) {
       return conflict(
-        `Git 基线 ${args.revision} 的需求 ${args.input.metadata.id} 与期望内容不同：期望 ${expectedHash}，实际 ${head.recordHash}；投影未刷新时拒绝覆盖`,
+        `Git 基线 ${args.revision} 的需求 ${args.input.metadata.id}（记录路径 ${head.recordPath}）与期望内容不同：期望 ${expectedHash}，实际 ${head.recordHash}；投影未刷新时拒绝覆盖`,
         [
           'REQUIREMENT_CONFLICT: 同 recordVersion 不同内容',
           '用户修复 Git 后显式重试才能基于新投影保存（AC-093）',
@@ -1813,7 +1884,7 @@ export class RequirementSaveService {
       args.previous.recordVersion === expectedVersion
     ) {
       return conflict(
-        `Git 基线 ${args.revision} 的需求 ${args.input.metadata.id} 已前进到 recordVersion ${head.version}（本机投影 ${expectedVersion}）；先刷新投影或显式重试`,
+        `Git 基线 ${args.revision} 的需求 ${args.input.metadata.id}（记录路径 ${head.recordPath}）已前进到 recordVersion ${head.version}（本机投影 ${expectedVersion}）；先刷新投影或显式重试`,
         ['REQUIREMENT_CONFLICT: Git 记录已前进，本机投影未刷新'],
       );
     }

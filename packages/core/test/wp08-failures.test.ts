@@ -483,6 +483,8 @@ describe('required WP-08 failure tests', () => {
         'export const cancel = (): boolean => true;\n',
       );
       const tree = deliveredCodeTreeHash({ repoRoot: base.repo, revision: candidate });
+      const commitTree = gitOk<string | null>(port.mergeTree(base.repo, candidate), 'merge tree');
+      if (commitTree === null) throw new Error('candidate has no Git tree');
       const built = buildFinalManifest({
         workId,
         requirementId,
@@ -566,7 +568,9 @@ describe('required WP-08 failure tests', () => {
         const recovered = restarted.recover('op-crash-after-ref');
         if (!recovered.ok) throw new Error(`${recovered.code}: ${recovered.message}`);
         expect(recovered.revision).toBe(candidate);
-        expect(recovered.tree).toBe(tree);
+        // W8R1-08: the recover path reports the same two distinct identifiers.
+        expect(recovered.codeTreeHash).toBe(tree);
+        expect(recovered.commitTree).toBe(commitTree);
         expect(recovered.reusedCommit).toBe(true);
         expect(recovered.refUpdated).toBe(false);
         expect(recovered.emittedEvent).toBe(true);

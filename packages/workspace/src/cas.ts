@@ -12,11 +12,11 @@
  *   of every verified ancestor. A Task whose recorded dependency revision no longer
  *   holds is invalidated: its snapshot and its verification cannot be reused.
  * - **CAS integration** (`integrate`): the expected delivery-branch revision is
- *   compared with the current one, the candidate commit is created (requirement-pool
- *   files included, AC-091), and only then is the ref moved with
+ *   compared with the current one, the caller-supplied candidate commit (with its
+ *   requirement-pool files, AC-091) is installed, and the ref is moved only with
  *   `git update-ref <ref> <new> <expected>`. A moved branch yields `VERSION_CONFLICT`
  *   or `STALE_ARTIFACT` and the branch is left exactly as it was. There is no force
- *   push path anywhere.
+ *   push path anywhere, and no `git commit` in the delivery working tree.
  * - **Idempotent retry** (AC-063/AC-094): the operation's step results are journaled
  *   before and after the ref update, so a crash between `commit` and the status write
  *   re-uses the original commit and emits exactly one completion event.
@@ -116,13 +116,14 @@ export interface CasRequest {
   /** The delivery revision the caller believes is current. */
   readonly expectedRevision: string;
   /**
-   * The commit the operation wants the ref to point at. When omitted the candidate
-   * is created from the requirement-pool files (a requirement save produces its own
-   * commit).
+   * The commit the operation wants the ref to point at. **Required**: the candidate
+   * must already exist (created in a detached integration worktree or by the
+   * caller), so this service never runs `git commit` in the delivery working tree
+   * and the ref only ever moves through `update-ref <ref> <new> <old>`.
    */
   readonly candidateRevision?: string;
   readonly message: string;
-  /** Frozen tree of the candidate, when the caller measured it itself. */
+  /** `git rev-parse <candidateRevision>^{tree}`, when the caller measured it. */
   readonly candidateTree?: string;
   /** Worktrees that must be clean before anything is written. */
   readonly worktreePaths?: readonly string[];
@@ -1382,7 +1383,16 @@ export function createCasService(options: CasOptions): CasService {
         { expectedRevision: request.expectedRevision },
       );
     }
-    if (request.candidateRevision !== undefined && !FULL_OID.test(request.candidateRevision)) {
+    if (request.candidateRevision === undefined) {
+      // The candidate is always produced outside this service; committing here would
+      // move the delivery branch without the expected-old protection (`W8R1-01`).
+      return refusal(
+        'VALIDATION_ERROR',
+        'CAS 需要 candidateRevision：交付提交必须在集成 worktree 中创建，ref 只由 CAS 的 update-ref 移动',
+        { expectedRevision: request.expectedRevision },
+      );
+    }
+    if (!FULL_OID.test(request.candidateRevision)) {
       return refusal(
         'VALIDATION_ERROR',
         `candidateRevision 不是完整 Git OID：${request.candidateRevision}`,
@@ -1395,9 +1405,10 @@ export function createCasService(options: CasOptions): CasService {
       });
     }
 
-    let poolPaths: readonly string[];
     try {
-      poolPaths = requirementPoolPaths(request.requirementPool ?? []);
+      // Validated even though the commit is produced elsewhere: a half record pair
+      // must be refused before the ref can move (`AC-093`).
+      requirementPoolPaths(request.requirementPool ?? []);
     } catch (error) {
       if (error instanceof WorkspaceError) {
         return refusal('VALIDATION_ERROR', error.message, {
@@ -1540,28 +1551,13 @@ export function createCasService(options: CasOptions): CasService {
     };
     record = save(record, 'pending', {});
 
-    // 3. The commit. A candidate produced by the integration worktree is already
-    //    committed; a requirement save creates its own commit from the pool files.
-    let targetRevision: string;
-    if (request.candidateRevision !== undefined) {
-      targetRevision = request.candidateRevision;
-    } else {
-      if ((request.requirementPool ?? []).length === 0) {
-        return refusal('VALIDATION_ERROR', 'CAS 需要 candidateRevision 或需求池文件', {
-          expectedRevision: request.expectedRevision,
-          actualRevision: actual,
-        });
-      }
-      const commit = git.commitPaths(repoRoot, request.message, poolPaths);
-      if (!commit.ok) {
-        return refusal('INTERNAL_ERROR', `创建提交失败：${request.message}`, {
-          expectedRevision: request.expectedRevision,
-          actualRevision: actual,
-          errors: commit.errors,
-        });
-      }
-      targetRevision = commit.value.revision;
-    }
+    // 3. The commit. The candidate is always produced *outside* this service — in a
+    //    detached integration worktree or by the caller's own commit step — and this
+    //    service only ever installs it with `update-ref <ref> <new> <old>`. Committing
+    //    here would move the delivery branch without the expected-old protection
+    //    (silently absorbing a competing move), so the fallback was removed and the
+    //    candidate revision is validated before the journal is touched.
+    const targetRevision = request.candidateRevision;
 
     const targetTree =
       options.candidateTree ??

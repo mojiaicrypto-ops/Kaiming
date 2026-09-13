@@ -469,6 +469,79 @@ describe('completion/settlement consistency (AC-091)', () => {
     if (result.ok) throw new Error('expected a refusal');
     expect(result.code).toBe('MISSING_CONTEXT');
   });
+
+  it('refuses an empty change set as code verification (W8R1-07)', () => {
+    const result = checkCompletionSettlement({
+      work,
+      route: 'code',
+      completion,
+      finalRevision,
+      finalTree,
+      settlement,
+      verifiedManifests: [manifest],
+      // Zero paths: nothing the Manifests could have verified.
+      changedPaths: [],
+      codeStartRevision: 'a'.repeat(40),
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected a refusal');
+    expect(result.code).toBe('GATE_NOT_READY');
+    expect(result.message).toContain('变更集为空');
+    expect(result.metadataOnly).toBe(false);
+  });
+
+  it('refuses a revision range that starts at the final revision (W8R1-07)', () => {
+    const sameRange = checkCompletionSettlement({
+      work,
+      route: 'code',
+      completion,
+      finalRevision,
+      finalTree,
+      settlement,
+      verifiedManifests: [manifest],
+      changedPaths: [{ path: 'src/orders.ts', change: 'modified' }],
+      // `codeStartRevision === finalRevision` makes the diff empty by construction.
+      codeStartRevision: finalRevision,
+    });
+    expect(sameRange.ok).toBe(false);
+    if (sameRange.ok) throw new Error('expected a refusal');
+    expect(sameRange.code).toBe('GATE_NOT_READY');
+    expect(sameRange.message).toContain('codeStartRevision');
+
+    const unknownRange = checkCompletionSettlement({
+      work,
+      route: 'code',
+      completion,
+      finalRevision,
+      finalTree,
+      settlement,
+      verifiedManifests: [manifest],
+      changedPaths: [{ path: 'src/orders.ts', change: 'modified' }],
+      codeStartRevision: null,
+    });
+    expect(unknownRange.ok).toBe(false);
+    if (unknownRange.ok) throw new Error('expected a refusal');
+    expect(unknownRange.code).toBe('GATE_NOT_READY');
+  });
+
+  it('reports the range it verified on success (W8R1-07)', () => {
+    const start = 'a'.repeat(40);
+    const result = checkCompletionSettlement({
+      work,
+      route: 'code',
+      completion,
+      finalRevision,
+      finalTree,
+      settlement,
+      verifiedManifests: [manifest],
+      changedPaths: [{ path: 'src/orders.ts', change: 'modified' }],
+      codeStartRevision: start,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.message);
+    expect(result.codeChanged).toBe(true);
+    expect(result.codeStartRevision).toBe(start);
+  });
 });
 
 describe('Project integration lock (AC-091)', () => {

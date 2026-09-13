@@ -245,6 +245,77 @@ describe('Run recovery: leases, epochs and restart inspection (AC-057/058/061/08
     return result.lease;
   }
 
+  it('withholds a new Attempt while the old execution is unconfirmed (W8R1-04)', () => {
+    // `starting` + a *live* process: `recovery_required` is not a legal target from
+    // `starting`, so the Run parks as `interrupted` with a new Attempt withheld.
+    addRun({ status: 'starting' });
+    probe.setAlive('pid:1000', true);
+    addAttempt({
+      id: ATTEMPT_ID,
+      runId: RUN_ID,
+      number: 1,
+      epoch: 0,
+      runnerId: 'pid:1000',
+      status: 'starting',
+    });
+    addLease(ATTEMPT_ID, 0);
+
+    const parked = service.recoverRun(RUN_ID);
+    expect(parked.to).toBe('interrupted');
+    expect(parked.inspection.newAttemptAllowed).toBe(false);
+
+    // The persisted verdict is the admission gate: a second writer is refused and no
+    // Attempt row is created beside the one whose process is still alive.
+    const lifecycle = new RunLifecycle({ store });
+    expect(() => lifecycle.beginAttempt(RUN_ID)).toThrowError(
+      /RecoveryDecision|未确认终止|new Attempt/u,
+    );
+    expect(store.attempts.list({ where: 'run_id = ?', params: [RUN_ID] })).toHaveLength(1);
+    expect(store.runs.find(RUN_ID)?.status).toBe('interrupted');
+    // The worktree is not handed to a second owner either: the only lease record was
+    // the revoked one, and no new Attempt ever asked for it.
+    expect(store.leases_.list({ where: 'resource = ?', params: ['worktree:task-1'] })).toHaveLength(
+      0,
+    );
+
+    // An explicit recovery decision ("resume") recorded *after* the verdict is the
+    // auditable way to lift the block; nothing else is.
+    advance(1_000);
+    store.decisions.insert({
+      id: DECISION_ID,
+      projectId,
+      workId: WORK_ID,
+      kind: 'recovery',
+      targetRef: { id: WORK_ID, version: 1, hash: HASH },
+      choices: ['resume', 'accept_cancel'],
+      state: 'rejected',
+      choice: 'resume',
+      actor: 'user',
+      effectRefs: [],
+    });
+    const resumed = lifecycle.beginAttempt(RUN_ID);
+    expect(resumed.number).toBe(2);
+    expect(resumed.ownerEpoch).toBe(1);
+
+    // A confirmed-dead process is the documented "safe to resume" case: no verdict
+    // withholds the Attempt.
+    const dead = addRun({ id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e15', status: 'starting' });
+    probe.setAlive('pid:3000', false);
+    addAttempt({
+      id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e65',
+      runId: dead.id,
+      number: 1,
+      epoch: 0,
+      runnerId: 'pid:3000',
+      status: 'starting',
+    });
+    const deadParked = service.recoverRun(dead.id);
+    expect(deadParked.to).toBe('interrupted');
+    expect(deadParked.inspection.newAttemptAllowed).toBe(true);
+    const deadAttempt = lifecycle.beginAttempt(dead.id);
+    expect(deadAttempt.number).toBe(2);
+  });
+
   it('parses only real process identities and reports the rest as unconfirmed', () => {
     expect(parseRunnerPid('pid:4242')).toBe(4242);
     expect(parseRunnerPid('4242')).toBe(4242);

@@ -122,6 +122,7 @@ function fakeWorktreeGit(seed: Partial<FakeState> = {}): {
     cherryPickSkip: () => ({ ok: true, value: null }),
     listTree: () => ({ ok: true, value: [] }),
     pathAtRevision: () => ({ ok: true, value: true }),
+    readBlob: () => ({ ok: true, value: null }),
   };
   return { git, state };
 }

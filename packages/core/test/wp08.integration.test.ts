@@ -1726,7 +1726,7 @@ describe('WP-08 T4 end-to-end integration drill', () => {
           { path: saved.recordPath + '/content.md', change: 'added' },
           { path: REQUIREMENTS_README, change: 'modified' },
         ],
-        codeStartRevision: null,
+        codeStartRevision: d.seedRevision,
       });
       expect(metadataOnly.ok).toBe(false);
       if (metadataOnly.ok) throw new Error('unreachable');
@@ -2143,10 +2143,65 @@ describe('WP-08 T4 end-to-end integration drill', () => {
     }
   });
 
+  it('refuses to resume a Work whose Run was parked with an unconfirmed execution (W8R1-04)', () => {
+    const d = createDrill();
+    try {
+      const workId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4a60';
+      addWork(d, { id: workId, level: 'L2' });
+      const runId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4a61';
+      addRun(d, { id: runId, workId, role: 'backend', stage: 'develop', status: 'starting' });
+      const attempt = d.store.attempts.insert({
+        runId,
+        number: 1,
+        status: 'starting',
+        ownerEpoch: 0,
+        runnerId: 'pid:8888',
+        heartbeatAt: d.now(),
+      });
+      const lease = d.store.leases.acquire({
+        resource: `worktree:${runId}`,
+        ownerAttemptId: attempt.id,
+        epoch: 0,
+        expiresAt: new Date(BASE_TIME + 600_000).toISOString(),
+        at: d.now(),
+      });
+      expect(lease.acquired).toBe(true);
+
+      // `starting` + a live process parks `interrupted` with a new Attempt withheld.
+      const recovery = new RunRecoveryService({
+        store: d.store,
+        probe: createMemoryProcessProbe({ 'pid:8888': true }),
+        now: () => d.now(),
+        heartbeatTimeoutMs: 20_000,
+      });
+      const applied = recovery.recoverRun(runId);
+      expect(applied.to).toBe('interrupted');
+      expect(applied.inspection.newAttemptAllowed).toBe(false);
+
+      // Pausing the Work holds the interrupted Run; resuming it must refuse instead
+      // of opening a second Attempt beside the still-live process.
+      const paused = d.findings.pauseWork({ workId, reason: '用户暂停', at: d.now() });
+      expect(paused.ok).toBe(true);
+      if (!paused.ok) throw new Error(paused.message);
+      const refused = d.findings.resumeWork({
+        workId,
+        expectedWorkVersion: paused.work.version,
+        at: d.now(),
+      });
+      expect(refused.ok).toBe(false);
+      if (refused.ok) throw new Error('expected a refusal');
+      expect(refused.code).toBe('RECOVERY_REQUIRED');
+      expect(refused.message).toContain(runId);
+      expect(d.store.attempts.list({ where: 'run_id = ?', params: [runId] })).toHaveLength(1);
+      expect(d.store.runs.find(runId)?.status).toBe('interrupted');
+    } finally {
+      d.store.close();
+    }
+  });
+
   // -------------------------------------------------------------------------
   // Manifest schema sanity
   // -------------------------------------------------------------------------
-
   it('validates the final manifest with the shared contract schema', () => {
     const manifest: CompletionManifest = completionManifestSchema.parse({
       workId: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4a40',

@@ -9,7 +9,15 @@
  * (`reliability.md` §5/§9: after the commit, before the projection; between the ref
  * update and the status write).
  */
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { dirname, join } from 'node:path';
@@ -25,6 +33,7 @@ import {
   type CasJournal,
   type CasJournalRecord,
   type RequirementPoolCommit,
+  type WorktreeGitPort,
 } from '@agentdev/workspace';
 import {
   checkCompletionSettlement,
@@ -837,6 +846,75 @@ describe('requirement save failure and retry (AC-090)', () => {
   });
 });
 
+/**
+ * "Another server" commits one record pair and moves the delivery ref **without**
+ * refreshing the delivery working tree (`W8R1-02/03`).
+ *
+ * That is the real state after a fetch/other clone lands on a branch this checkout
+ * has not switched to: the ref (and therefore the pool a save must compare against)
+ * is ahead of the bytes on disk. Nothing is written back to `repoRoot`.
+ */
+function commitRemoteRecord(input: {
+  readonly repo: string;
+  readonly baseRevision: string;
+  readonly id: string;
+  readonly version: number;
+  readonly body: string;
+}): string {
+  const worktree = detachedWorktree(
+    input.repo,
+    `remote-${input.id.slice(0, 8)}-${String(input.version)}`,
+    input.baseRevision,
+  );
+  const recordPath = `.agentdev/requirements/${input.id}`;
+  const contentMarkdown = normalizeContentMarkdown(
+    `<!-- record-version: ${String(input.version)} -->\n# body\n\n${input.body}\n`,
+  );
+  const metadataJson = `${JSON.stringify(
+    {
+      schemaVersion: 1,
+      id: input.id,
+      version: input.version,
+      contentFile: 'content.md',
+      contentHash: sha256Hex(contentMarkdown),
+      createdAt: TIME,
+      updatedAt: TIME,
+      title: 'other server',
+      goal: 'other server',
+      scope: { readPaths: [], writePaths: [], operations: ['edit'], networkTargets: [] },
+      lifecycle: 'queued',
+      featureIds: [],
+      acceptance: [],
+      openQuestions: [],
+      confirmedDecisions: [],
+      relatedRequirementIds: [],
+    },
+    null,
+    2,
+  )}\n`;
+  writeFileAt(worktree, `${recordPath}/requirement.json`, metadataJson);
+  writeFileAt(worktree, `${recordPath}/content.md`, contentMarkdown);
+  writeFileAt(worktree, REQUIREMENTS_README, '# 需求池索引\n');
+  const committed = requireValue<{ revision: string }>(
+    port.commitPaths(worktree, 'doc(requirement): other server', [
+      `${recordPath}/requirement.json`,
+      `${recordPath}/content.md`,
+      REQUIREMENTS_README,
+    ]),
+    'commit remote record',
+  );
+  requireValue(
+    port.updateRef({
+      repoRoot: input.repo,
+      ref: DELIVERY_REF,
+      newRevision: committed.revision,
+      expectedOldRevision: input.baseRevision,
+    }),
+    'update-ref for the other server commit',
+  );
+  return committed.revision;
+}
+
 describe('stale projection refuses to overwrite (AC-093)', () => {
   it('refuses a same-version record whose body another server changed', () => {
     const h = harness();
@@ -950,6 +1028,149 @@ describe('stale projection refuses to overwrite (AC-093)', () => {
     );
     expect(refused.code).toBe('VERSION_CONFLICT');
     expect(refused.branchUntouched).toBe(true);
+    expect(refHead(h.repo)).toBe(first.git.commit);
+    h.store.close();
+  });
+
+  it('reads the pool at the delivery ref, never the stale working tree (W8R1-02)', () => {
+    const h = harness();
+    const first = requireSaved(
+      h.service.save({
+        operationId: 'op-stale-worktree-1',
+        metadata: metadataDraft(),
+        contentMarkdown: body(),
+        expected: { expectedAbsent: true },
+        sourceRef: { kind: 'action', id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99' },
+      }),
+    );
+    // The other server moves the ref to v2; the checked-out bytes stay at v1.
+    const remoteRevision = commitRemoteRecord({
+      repo: h.repo,
+      baseRevision: first.git.commit,
+      id: REQUIREMENT_ID,
+      version: 2,
+      body: '其他服务器的 v2 正文。',
+    });
+    expect(refHead(h.repo)).toBe(remoteRevision);
+    expect(readFileSync(join(h.repo, `${first.recordPath}/content.md`), 'utf8')).not.toContain(
+      '其他服务器的 v2 正文。',
+    );
+    const commitsBefore = commitCount(h.repo);
+
+    const refused = requireRefused(
+      h.service.save({
+        operationId: 'op-stale-worktree-2',
+        metadata: metadataDraft({ version: 2, title: '本机 v2' }),
+        contentMarkdown: body('本机 v2 正文。'),
+        expected: { recordVersion: 1, recordHash: first.recordHash },
+        sourceRef: { kind: 'action', id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99' },
+      }),
+    );
+    expect(refused.code).toBe('REQUIREMENT_CONFLICT');
+    expect(refused.branchUntouched).toBe(true);
+    expect(refused.message).toContain('已前进');
+    // The stale projection did not overwrite the newer record: the branch still
+    // carries v2 and no commit was created.
+    expect(refHead(h.repo)).toBe(remoteRevision);
+    expect(commitCount(h.repo)).toBe(commitsBefore);
+    const pool = readRequirementPoolAtRevision({
+      git: gitReader,
+      repoRoot: h.repo,
+      revision: remoteRevision,
+    });
+    expect(pool.records[0]?.version).toBe(2);
+    expect(pool.records[0]?.contentMarkdown).toContain('其他服务器的 v2 正文。');
+    h.store.close();
+  });
+
+  it('reports a HEAD-only record as a per-record conflict instead of an ENOENT (W8R1-03)', () => {
+    const h = harness();
+    const first = requireSaved(
+      h.service.save({
+        operationId: 'op-head-only-1',
+        metadata: metadataDraft(),
+        contentMarkdown: body(),
+        expected: { expectedAbsent: true },
+        sourceRef: { kind: 'action', id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99' },
+      }),
+    );
+    // Another server adds SECOND_ID and moves the ref; this working tree never sees
+    // the file, so a working-tree read would raise ENOENT for it.
+    const remoteRevision = commitRemoteRecord({
+      repo: h.repo,
+      baseRevision: first.git.commit,
+      id: SECOND_ID,
+      version: 1,
+      body: 'HEAD 独有记录。',
+    });
+    expect(existsSync(join(h.repo, `.agentdev/requirements/${SECOND_ID}/requirement.json`))).toBe(
+      false,
+    );
+    expect(refHead(h.repo)).toBe(remoteRevision);
+
+    // No exception escapes `save()`; the caller sees the precise per-record conflict.
+    const outcome = h.service.save({
+      operationId: 'op-head-only-2',
+      metadata: metadataDraft({ id: SECOND_ID, version: 1 }),
+      contentMarkdown: body('本机新建。'),
+      expected: { expectedAbsent: true },
+      sourceRef: { kind: 'action', id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99' },
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error('expected a refusal');
+    expect(outcome.code).toBe('REQUIREMENT_CONFLICT');
+    expect(outcome.message).toContain(`.agentdev/requirements/${SECOND_ID}`);
+    expect(outcome.branchUntouched).toBe(true);
+    expect(refHead(h.repo)).toBe(remoteRevision);
+    h.store.close();
+  });
+
+  it('returns a structured INTERNAL_ERROR when the committed blob cannot be read (W8R1-03)', () => {
+    const h = harness();
+    const first = requireSaved(
+      h.service.save({
+        operationId: 'op-unreadable-blob-1',
+        metadata: metadataDraft(),
+        contentMarkdown: body(),
+        expected: { expectedAbsent: true },
+        sourceRef: { kind: 'action', id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99' },
+      }),
+    );
+    // A port whose committed-blob reader fails: the comparison must report that
+    // instead of letting the error escape the save API.
+    const failing = Object.create(port) as WorktreeGitPort;
+    failing.readBlob = () => ({
+      ok: false,
+      errors: [{ code: 'INTERNAL_ERROR', message: 'injected blob read failure', path: h.repo }],
+    });
+    const broken = createRequirementSaveService({
+      store: h.store,
+      worktrees: failing,
+      journal: sqliteJournal(join(h.dataDir, 'unreadable.sqlite')),
+      events: createMemoryCasEvents(),
+      lock: new ProjectIntegrationLock({
+        projectId: h.projectId,
+        leases: h.store.leases,
+        now: () => TIME,
+      }),
+      worktreeRoot: join(h.dataDir, 'unreadable-worktrees'),
+      now: () => TIME,
+      keepWorktree: false,
+    });
+
+    const outcome = broken.save({
+      operationId: 'op-unreadable-blob-2',
+      metadata: metadataDraft({ version: 2, title: '读不到 blob' }),
+      contentMarkdown: body('读不到 blob。'),
+      expected: { recordVersion: 1, recordHash: first.recordHash },
+      sourceRef: { kind: 'action', id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99' },
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error('expected a refusal');
+    expect(outcome.code).toBe('INTERNAL_ERROR');
+    expect(outcome.message).toContain('读取 Git blob 失败');
+    expect(outcome.message).toContain(`${first.recordPath}/requirement.json`);
+    expect(outcome.branchUntouched).toBe(true);
     expect(refHead(h.repo)).toBe(first.git.commit);
     h.store.close();
   });
@@ -1080,6 +1301,7 @@ describe('requirement save versus code delivery (AC-091)', () => {
         { path: `${saved.recordPath}/content.md`, change: 'added' as const },
         { path: REQUIREMENTS_README, change: 'modified' as const },
       ],
+      codeStartRevision: h.baseRevision,
     });
     expect(accepted.ok).toBe(true);
 
@@ -1094,6 +1316,7 @@ describe('requirement save versus code delivery (AC-091)', () => {
         { path: `${saved.recordPath}/requirement.json`, change: 'modified' as const },
         { path: `${saved.recordPath}/content.md`, change: 'modified' as const },
       ],
+      codeStartRevision: h.baseRevision,
     });
     expect(metadataOnly.ok).toBe(false);
     if (metadataOnly.ok) throw new Error('expected a refusal');
@@ -1230,6 +1453,11 @@ function checkCompletionSettlementForTest(input: {
     readonly path: string;
     readonly change: 'added' | 'modified' | 'deleted';
   }[];
+  /**
+   * The revision the change set was measured from. A null/equal-to-final revision is
+   * an empty range and is now refused (`W8R1-07`), so callers pass a real start.
+   */
+  readonly codeStartRevision: string;
 }): ReturnType<typeof checkCompletionSettlement> {
   return checkCompletionSettlement({
     work: { id: input.manifest.workId, level: 'L2' },
@@ -1240,6 +1468,6 @@ function checkCompletionSettlementForTest(input: {
     settlement: input.settlement,
     verifiedManifests: [input.manifest],
     changedPaths: input.changedPaths,
-    codeStartRevision: null,
+    codeStartRevision: input.codeStartRevision,
   });
 }

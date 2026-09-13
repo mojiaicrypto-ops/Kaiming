@@ -127,6 +127,16 @@ export interface WorktreeGitPort extends GitPort {
   ): GitResult<readonly string[]>;
   /** `true` when `<revision>:<path>` exists (a blob, in practice). */
   pathAtRevision(repoRoot: string, revision: string, path: string): GitResult<boolean>;
+  /**
+   * The blob at `<revision>:<path>` (`git cat-file blob`), or `null` when the path
+   * does not exist at that revision.
+   *
+   * This is the only sanctioned way to read committed content: a *working tree* can
+   * be stale (a branch moved without a checkout), so a reader that must see the
+   * record a revision committed may never fall back to `readFileSync`. An empty
+   * blob is the empty string, never `null`.
+   */
+  readBlob(repoRoot: string, revision: string, path: string): GitResult<string | null>;
 }
 
 /** Diagnostics as a JSON detail payload. */
@@ -470,6 +480,18 @@ export class NodeWorktreeGitPort implements WorktreeGitPort {
     if (outcome.ok) return { ok: true, value: true };
     if (outcome.status === 128) return { ok: true, value: false };
     return failure(gitDiagnostic(repoRoot, args, outcome, 'git cat-file 失败'));
+  }
+
+  readBlob(repoRoot: string, revision: string, path: string): GitResult<string | null> {
+    const args = ['cat-file', 'blob', `${revision}:${path}`];
+    const outcome = this.spawn(repoRoot, args);
+    // Exit 128 is Git's "the path does not exist at this revision"; anything else is
+    // a real failure and must be reported instead of looking like an absent blob.
+    if (!outcome.ok && outcome.status !== 128) {
+      return failure(gitDiagnostic(repoRoot, args, outcome, 'git cat-file blob 失败'));
+    }
+    if (!outcome.ok) return { ok: true, value: null };
+    return { ok: true, value: outcome.stdout };
   }
 
   /** HEAD after a successful commit; a commit that produced no HEAD is fatal. */

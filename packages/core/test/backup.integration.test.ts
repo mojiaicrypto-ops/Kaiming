@@ -601,4 +601,62 @@ describe('Backup, restore and relocate (AC-064)', () => {
       h.store.close();
     }
   });
+
+  it('refuses a relocate onto a directory that is not this repository, leaving the mapping (W8R1-05)', () => {
+    const h = harness();
+    try {
+      const backupDir = makeTempDir('agentdev-backup-out-');
+      const backup = backupProject({
+        store: h.store,
+        git: createBackupGit(),
+        outputDir: backupDir,
+      });
+      if (!backup.ok) throw new Error(`${backup.code}: ${backup.message}`);
+
+      const targetDir = makeTempDir('agentdev-restore-');
+      const dataDir = join(targetDir, 'state');
+      const repoRoot = join(targetDir, 'repo');
+      const restored = restoreProject({
+        backupDir,
+        targetDir,
+        dataDir,
+        repoRoot,
+        git: createBackupGit(),
+        probe: createMemoryProcessProbe({ 'pid:1000': false }),
+      });
+      if (!restored.ok) throw new Error(`${restored.code}: ${restored.message}`);
+
+      // An existing directory that is *not* this project's Git repository: the
+      // relocate must be refused before the Project row is rewritten.
+      const notARepo = makeTempDir('agentdev-relocate-not-a-repo-');
+      const refused = relocateProject({ dataDir, newRoot: notARepo, move: false });
+      expect(refused.ok).toBe(false);
+      if (refused.ok) throw new Error('expected the relocate to be refused');
+      expect(refused.code).toBe('INVALID_STATE');
+      expect(refused.message).toContain('根映射未改写');
+
+      const reopened = Store.open({ dataDir, projectId: h.projectId, canonicalRoot: repoRoot });
+      try {
+        expect(reopened.projects.find(h.projectId)?.root).toBe(repoRoot);
+        expect(reopened.projects.find(h.projectId)?.gitRoot).toBe(repoRoot);
+      } finally {
+        reopened.close();
+      }
+
+      // A relocate onto the *same* repository still works, so the guard is not
+      // vacuous.
+      const relocated = relocateProject({
+        dataDir,
+        newRoot: repoRoot,
+        move: false,
+        probe: createMemoryProcessProbe({ 'pid:1000': false }),
+      });
+      expect(relocated.ok).toBe(true);
+      if (!relocated.ok) throw new Error(relocated.message);
+      expect(relocated.repoRoot).toBe(repoRoot);
+      expect(relocated.doctor.ok).toBe(true);
+    } finally {
+      h.store.close();
+    }
+  });
 });

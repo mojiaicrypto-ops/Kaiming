@@ -20,6 +20,7 @@ import { canTransitionRun, isTerminalRunStatus } from '@agentdev/domain';
 import { withTransaction, type ProjectStore } from '@agentdev/storage';
 import { ProtocolError, type ProtocolErrorCode } from './errors.js';
 import { findEvent, scanEvents } from './events.js';
+import { newAttemptAdmission } from './recovery.js';
 
 /** Run states in which a Chief Run may still accept a new professional child. */
 export const ACTIVE_PARENT_STATUSES: readonly RunStatus[] = [
@@ -107,9 +108,27 @@ export class RunLifecycle {
    *
    * The documented path is `queued → starting → running` (`workflow.md` §5.3); a
    * Run that cannot legally start is refused before an Attempt row exists.
+   *
+   * The recovery verdict is an admission gate on top of the state transition
+   * (`W8R1-04`, AC-057): while a persisted `run.recovered` verdict says
+   * `newAttemptAllowed:false` — the old execution was not confirmed terminated, or
+   * an unresolved side effect is pending — no new Attempt may open, so one worktree
+   * can never have two writers.
    */
   beginAttempt(runId: string, options: { readonly runnerId?: string } = {}): Attempt {
     const run = this.requireRun(runId);
+    const admission = newAttemptAdmission(this.store, run.id);
+    if (!admission.allowed) {
+      fail(
+        admission.code ?? 'RECOVERY_REQUIRED',
+        admission.message ?? `Run ${run.id} 不能开新 Attempt`,
+        {
+          runId: run.id,
+          verdictEventId: admission.verdictEventId,
+          requiresRecoveryDecision: admission.requiresRecoveryDecision,
+        },
+      );
+    }
     const alreadyStarting = run.status === 'starting';
     if (!alreadyStarting && !canTransitionRun(run.status, 'starting')) {
       fail('VALIDATION_ERROR', `Run ${run.id} cannot start from ${run.status}`, {

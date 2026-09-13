@@ -655,6 +655,11 @@ describe('Crash after the ref update: reuse the commit, complete once (AC-063)',
         'export const cancel = (): boolean => true;\n',
       );
       const tree = deliveredCodeTreeHash({ repoRoot: h.repo, revision: candidate });
+      const commitTree = requireValue<string | null>(
+        port.mergeTree(h.repo, candidate),
+        'merge tree',
+      );
+      if (commitTree === null) throw new Error('candidate has no Git tree');
       const built = buildFinalManifest({
         workId: WORK_ID,
         requirementId: REQUIREMENT_ID,
@@ -685,14 +690,28 @@ describe('Crash after the ref update: reuse the commit, complete once (AC-063)',
       expect(outcome.revision).toBe(candidate);
       expect(outcome.refUpdated).toBe(true);
       expect(outcome.emittedEvent).toBe(true);
+      // W8R1-08: the direct settle path reports the Git tree OID and the SHA256 code
+      // tree as two separate, correctly-valued fields.
+      expect(outcome.commitTree).toBe(commitTree);
+      expect(outcome.codeTreeHash).toBe(tree);
       expect(
         requireValue<string | null>(port.resolveRevision(h.repo, DELIVERY_REF), 'resolve ref'),
       ).toBe(candidate);
-      expect(scanEvents(h.store, { names: [SETTLEMENT_COMPLETED_EVENT] })).toHaveLength(1);
+      const settledEvents = scanEvents(h.store, { names: [SETTLEMENT_COMPLETED_EVENT] });
+      expect(settledEvents).toHaveLength(1);
+      expect(settledEvents[0]?.data['commitTree']).toBe(commitTree);
+      expect(settledEvents[0]?.data['codeTreeHash']).toBe(tree);
       // The operation is completed with the real CAS revision.
       const operation = h.store.operations.list({ where: 'kind = ?', params: ['settle'] })[0];
       expect(operation?.state).toBe('completed');
       expect(operation?.candidateRevision).toBe(candidate);
+      expect(operation?.stepResults['commitTree']).toBe(commitTree);
+      expect(operation?.stepResults['codeTree']).toBe(tree);
+      // `workflow.md` §5.1: `phase` only applies to an active Requirement, so
+      // completing it clears the phase in the same transaction (W8R1-06).
+      const settledRow = h.store.requirements.find(REQUIREMENT_ID);
+      expect(settledRow?.lifecycle).toBe('completed');
+      expect(settledRow?.phase).toBeUndefined();
     } finally {
       h.store.close();
     }
@@ -709,6 +728,11 @@ describe('Crash after the ref update: reuse the commit, complete once (AC-063)',
         'export const cancel = (): boolean => true;\n',
       );
       const tree = deliveredCodeTreeHash({ repoRoot: h.repo, revision: candidate });
+      const commitTree = requireValue<string | null>(
+        port.mergeTree(h.repo, candidate),
+        'merge tree',
+      );
+      if (commitTree === null) throw new Error('candidate has no Git tree');
 
       const built = buildFinalManifest({
         workId: WORK_ID,
@@ -760,7 +784,11 @@ describe('Crash after the ref update: reuse the commit, complete once (AC-063)',
       expect(recovered.ok).toBe(true);
       if (!recovered.ok) throw new Error(recovered.message);
       expect(recovered.revision).toBe(candidate);
-      expect(recovered.tree).toBe(tree);
+      // W8R1-08: the Git tree OID and the SHA256 code tree stay distinct on both
+      // paths, instead of sharing one `tree` field whose meaning depended on the path.
+      expect(recovered.codeTreeHash).toBe(tree);
+      expect(recovered.commitTree).toBe(commitTree);
+      expect(recovered.commitTree).not.toBe(recovered.codeTreeHash);
       expect(recovered.reusedCommit).toBe(true);
       expect(recovered.refUpdated).toBe(false);
       expect(recovered.emittedEvent).toBe(true);
@@ -777,6 +805,8 @@ describe('Crash after the ref update: reuse the commit, complete once (AC-063)',
       expect(events[0]?.data['revision']).toBe(candidate);
       expect(h.store.works.find(WORK_ID)?.status).toBe('completed');
       expect(h.store.requirements.find(REQUIREMENT_ID)?.lifecycle).toBe('completed');
+      // W8R1-06: the completed row carries no stale `phase`.
+      expect(h.store.requirements.find(REQUIREMENT_ID)?.phase).toBeUndefined();
       const operation = h.store.operations.list({ where: 'kind = ?', params: ['settle'] })[0];
       expect(operation?.state).toBe('completed');
       expect(operation?.candidateRevision).toBe(candidate);

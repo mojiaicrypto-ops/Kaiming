@@ -64,6 +64,7 @@ import {
 } from '@agentdev/storage';
 import { runGit, type GitResult, type WorkspaceDiagnostic } from '@agentdev/workspace';
 import { canonicalJson } from './dispatcher.js';
+import { scanEvents } from './events.js';
 import { ProtocolError, type ProtocolErrorCode } from './errors.js';
 
 /** Heartbeat budget before a Run is considered no longer live (`reliability.md` §2). */
@@ -239,12 +240,92 @@ export interface RunRecoveryApplyResult {
   readonly inspection: RunRecoveryInspection;
 }
 
+/** `decision.kind` of the recovery decision that resolves a parked Run. */
+export const RECOVERY_DECISION_KIND = 'recovery';
+
+/** What the persisted recovery evidence says about opening a new Attempt. */
+export interface NewAttemptAdmission {
+  /** `true` when a new Attempt may open for the Run. */
+  readonly allowed: boolean;
+  /** `run.recovered` id of the verdict that decided this answer, or `null`. */
+  readonly verdictEventId: string | null;
+  /** `true` when the blocking verdict explicitly demands a RecoveryDecision. */
+  readonly requiresRecoveryDecision: boolean;
+  /** The recovery decision (`choice: 'resume'`) that lifted the block, if any. */
+  readonly resolvedByDecisionId: string | null;
+  readonly code: ProtocolErrorCode | null;
+  readonly message: string | null;
+}
+
+/**
+ * Whether a Run may open a new Attempt, read from **persisted** recovery evidence
+ * (`W8R1-04`, AC-057).
+ *
+ * The recovery report's `newAttemptAllowed:false` used to live only in the return
+ * value, so nothing stopped `RunLifecycle.beginAttempt`/`resumeWork` from starting a
+ * second writer beside an old process that was never confirmed terminated. The
+ * verdict is durable in the `run.recovered` event; this function is the single
+ * admission rule every Attempt-opening path consults:
+ *
+ * - no recovery verdict, or a verdict that allowed a new Attempt → **allowed** (a
+ *   process confirmed gone is the documented "safe to resume" case);
+ * - a verdict that withheld it → **refused** until an operator records a recovery
+ *   decision with `choice: 'resume'` after that verdict — the explicit,
+ *   auditable "the old execution is dealt with, proceed" act.
+ */
+export function newAttemptAdmission(store: ProjectStoreType, runId: string): NewAttemptAdmission {
+  const verdicts = scanEvents(store, { names: [RUN_RECOVERED_EVENT] });
+  let verdict: (typeof verdicts)[number] | undefined;
+  for (const event of verdicts) {
+    if (event.entityId === runId) verdict = event;
+  }
+  const allowed: NewAttemptAdmission = {
+    allowed: true,
+    verdictEventId: verdict?.eventId ?? null,
+    requiresRecoveryDecision: false,
+    resolvedByDecisionId: null,
+    code: null,
+    message: null,
+  };
+  if (verdict === undefined || verdict.data['newAttemptAllowed'] !== false) return allowed;
+  const requiresRecoveryDecision = verdict.data['requiresRecoveryDecision'] === true;
+  const run = store.runs.find(runId);
+  const resolved =
+    run === undefined
+      ? undefined
+      : store.decisions
+          .list({
+            where: 'work_id = ? AND kind = ?',
+            params: [run.workId, RECOVERY_DECISION_KIND],
+            orderBy: 'created_at DESC',
+            limit: 25,
+          })
+          .find(
+            (decision) =>
+              decision.choice === 'resume' &&
+              Date.parse(decision.createdAt) > Date.parse(verdict.occurredAt),
+          );
+  if (resolved !== undefined) {
+    return { ...allowed, requiresRecoveryDecision, resolvedByDecisionId: resolved.id };
+  }
+  return {
+    allowed: false,
+    verdictEventId: verdict.eventId,
+    requiresRecoveryDecision,
+    resolvedByDecisionId: null,
+    code: 'RECOVERY_REQUIRED',
+    message: requiresRecoveryDecision
+      ? `Run ${runId} 的旧执行未确认终止（或存在未确认副作用），恢复判定禁止开新 Attempt；先记录 RecoveryDecision（AC-057）`
+      : `Run ${runId} 的恢复判定未放行新 Attempt（旧工作区可能仍有写者）；先记录 RecoveryDecision（AC-057）`,
+  };
+}
+
 /**
  * Lease/epoch supervision and daemon-restart inspection for one Project.
  *
  * The service is deliberately narrow: it inspects, it parks, and it fences late
- * results. It never starts an Attempt — a parked Run is resumed by the documented
- * resume path with a fresh epoch.
+ * results. It never starts an Attempt — it persists the `newAttemptAllowed` verdict
+ * (see `newAttemptAdmission`), and every Attempt-opening path must consult it.
  */
 export class RunRecoveryService {
   private readonly store: ProjectStoreType;
@@ -2007,9 +2088,11 @@ export type RelocateResult = RelocateOutcome | RestoreFailure;
  * Relocates an existing project to a new root (`reliability.md` §7 CLI
  * `relocate <projectId> --root <path>`).
  *
- * The canonical root mapping is rewritten, every old lease/capability is revoked
- * and active Runs are parked, so a project that comes back at a new path never
- * inherits authority from its previous location.
+ * The target is validated **before** the root mapping is touched (`W8R1-05`): it must
+ * be the same Git repository as the recorded one — the delivery ref at the recorded
+ * revision and tree with a clean knowledge tree — otherwise the relocate is refused
+ * and the Project row keeps pointing at the old root. Once the mapping is rewritten,
+ * any later failure rolls it back, so a half-relocated project cannot be left behind.
  */
 export function relocateProject(input: RelocateProjectInput): RelocateResult {
   const dataDir = resolve(input.dataDir);
@@ -2029,6 +2112,17 @@ export function relocateProject(input: RelocateProjectInput): RelocateResult {
       return restoreFailure('INVALID_STATE', '找不到 Project 行', false);
     }
     const previousRoot = project.gitRoot ?? project.root;
+    const ref = `refs/heads/${project.deliveryBranch}`;
+    // 1. The recorded binding, read from the current repository *before* anything
+    //    moves. A relocation may only land on the same revision/tree.
+    const recorded = readRelocatedBinding(git, previousRoot, ref);
+    if (recorded === null) {
+      return restoreFailure(
+        'INVALID_STATE',
+        `原仓库 ${previousRoot} 的交付 ref ${ref} 不可读，拒绝 relocate`,
+        false,
+      );
+    }
     const relocatedRoot = relocateRoot(previousRoot, newRoot, input.move === true);
     if (relocatedRoot === null) {
       return restoreFailure(
@@ -2037,48 +2131,89 @@ export function relocateProject(input: RelocateProjectInput): RelocateResult {
         false,
       );
     }
-    store.projects.update(
-      project.id,
-      { root: relocatedRoot, gitRoot: relocatedRoot },
-      project.version,
-    );
-    const service = new RunRecoveryService({
-      store,
-      ...(input.probe === undefined ? {} : { probe: input.probe }),
-      ...(input.now === undefined ? {} : { now: input.now }),
-    });
-    const recovery = parkAll(store, service);
-    const revisionResult = git.revision(relocatedRoot, `refs/heads/${project.deliveryBranch}`);
-    const revision = revisionResult.ok ? revisionResult.value : null;
-    const treeResult = revision === null ? null : git.tree(relocatedRoot, revision);
-    const tree = treeResult !== null && treeResult.ok ? treeResult.value : null;
-    const clean = git.isClean(relocatedRoot);
-    const evidence = inspectRestoredEvidence(store);
-    const doctor = doctorReport(store, {
-      repoRoot: relocatedRoot,
-      dataDir,
-      revision,
-      expectedTree: tree,
-      treeMatches: revision !== null && tree !== null,
-      knowledgeMatchesTree: clean.ok && clean.value,
-      evidenceVerified: evidence.verified,
-      evidenceExpected: store.artifacts.list().length,
-    });
-    const missing = (input.secretRefs ?? []).filter(
-      (ref) => !(input.secretAvailable ?? (() => false))(ref),
-    );
-    return {
-      ok: true,
-      projectId: store.projectId,
-      dataDir,
-      repoRoot: relocatedRoot,
-      previousRoot,
-      recovery,
-      doctor: {
-        ...doctor,
-        executionReady: doctor.ok && missing.length === 0 && evidence.missing.length === 0,
-      },
-    };
+    // 2. Validate the target *before* rewriting the root mapping, and undo a `move`
+    //    that landed on something other than this project's repository.
+    const target = readRelocatedBinding(git, relocatedRoot, ref);
+    const sameBinding =
+      target !== null &&
+      target.revision === recorded.revision &&
+      target.tree === recorded.tree &&
+      recorded.revision !== null;
+    if (!sameBinding) {
+      rollbackRelocateRoot(relocatedRoot, previousRoot, input.move === true);
+      return restoreFailure(
+        'INVALID_STATE',
+        `relocate 目标 ${relocatedRoot} 不是同一交付仓库（记录 ${ref}@${recorded.revision ?? 'unborn'}/tree ${recorded.tree ?? 'none'}，目标 ${target?.revision ?? 'unborn'}/tree ${target?.tree ?? 'none'}）；根映射未改写`,
+        false,
+      );
+    }
+    if (target.clean !== true) {
+      rollbackRelocateRoot(relocatedRoot, previousRoot, input.move === true);
+      return restoreFailure(
+        'INVALID_STATE',
+        `relocate 目标 ${relocatedRoot} 的工作树有未提交差异，知识文件与提交树不一致；根映射未改写`,
+        false,
+      );
+    }
+
+    // 3. Only now rewrite the mapping — and roll it back if anything after it fails.
+    let mappedVersion = project.version;
+    let mappingRewritten = false;
+    try {
+      const updated = store.projects.update(
+        project.id,
+        { root: relocatedRoot, gitRoot: relocatedRoot },
+        project.version,
+      );
+      mappedVersion = updated.version;
+      mappingRewritten = true;
+      const service = new RunRecoveryService({
+        store,
+        ...(input.probe === undefined ? {} : { probe: input.probe }),
+        ...(input.now === undefined ? {} : { now: input.now }),
+      });
+      const recovery = parkAll(store, service);
+      const revision = target.revision;
+      const evidence = inspectRestoredEvidence(store);
+      const doctor = doctorReport(store, {
+        repoRoot: relocatedRoot,
+        dataDir,
+        revision,
+        expectedTree: recorded.tree,
+        treeMatches: sameBinding,
+        knowledgeMatchesTree: target.clean,
+        evidenceVerified: evidence.verified,
+        evidenceExpected: store.artifacts.list().length,
+      });
+      const missing = (input.secretRefs ?? []).filter(
+        (ref) => !(input.secretAvailable ?? (() => false))(ref),
+      );
+      return {
+        ok: true,
+        projectId: store.projectId,
+        dataDir,
+        repoRoot: relocatedRoot,
+        previousRoot,
+        recovery,
+        doctor: {
+          ...doctor,
+          executionReady: doctor.ok && missing.length === 0 && evidence.missing.length === 0,
+        },
+      };
+    } catch (error) {
+      if (mappingRewritten) {
+        store.projects.update(
+          project.id,
+          { root: previousRoot, gitRoot: previousRoot },
+          mappedVersion,
+        );
+      }
+      return restoreFailure(
+        'INTERNAL_ERROR',
+        `relocate 失败（根映射已回滚）：${error instanceof Error ? error.message : String(error)}`,
+        true,
+      );
+    }
   } catch (error) {
     return restoreFailure(
       'INTERNAL_ERROR',
@@ -2088,6 +2223,34 @@ export function relocateProject(input: RelocateProjectInput): RelocateResult {
   } finally {
     store.close();
   }
+}
+
+/** The delivery binding a relocate target must match, or `null` when unreadable. */
+function readRelocatedBinding(
+  git: BackupGitPort,
+  root: string,
+  ref: string,
+): {
+  readonly revision: string | null;
+  readonly tree: string | null;
+  readonly clean: boolean;
+} | null {
+  if (!existsSync(root)) return null;
+  const revisionResult = git.revision(root, ref);
+  if (!revisionResult.ok) return null;
+  const revision = revisionResult.value;
+  if (revision === null) return { revision: null, tree: null, clean: false };
+  const treeResult = git.tree(root, revision);
+  if (!treeResult.ok) return null;
+  const cleanResult = git.isClean(root);
+  return { revision, tree: treeResult.value, clean: cleanResult.ok && cleanResult.value };
+}
+
+/** Undoes the directory move of a failed `move: true` relocate. */
+function rollbackRelocateRoot(relocatedRoot: string, previousRoot: string, move: boolean): void {
+  if (!move || relocatedRoot === previousRoot) return;
+  if (!existsSync(relocatedRoot) || existsSync(previousRoot)) return;
+  renameSync(relocatedRoot, previousRoot);
 }
 
 /** Moves the repository to `newRoot`; `null` when the target already exists. */

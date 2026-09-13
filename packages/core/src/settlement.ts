@@ -758,6 +758,11 @@ export interface SettleRequest {
   readonly expectedRevision: string;
   /** The commit the settlement installs (already created by the code route). */
   readonly candidateRevision: string;
+  /**
+   * The delivered **code tree hash** (SHA256 over the recursive tree listing,
+   * `data.md` §3 `codeTree`) when the caller measured it itself. It is *not* the Git
+   * tree OID: the two are reported separately as `codeTreeHash` and `commitTree`.
+   */
   readonly candidateTree?: string;
   /** The final manifest to freeze and bind. */
   readonly manifest: CompletionManifest;
@@ -773,7 +778,10 @@ export interface PreparedSettlement {
   readonly manifest: CompletionManifest;
   readonly manifestHash: string;
   readonly targetRevision: string;
-  readonly targetTree: string;
+  /** `git rev-parse <targetRevision>^{tree}` — the Git tree OID. */
+  readonly commitTree: string;
+  /** The SHA256 code tree of `targetRevision` (`data.md` §3 `codeTree`). */
+  readonly codeTreeHash: string;
   readonly casRequest: CasRequest;
 }
 
@@ -793,7 +801,18 @@ export type SettlementOutcome =
       readonly operationId: string;
       readonly operationRowId: string;
       readonly revision: string;
-      readonly tree: string;
+      /**
+       * Git tree OID of `revision` (`git rev-parse <revision>^{tree}`).
+       *
+       * `W8R1-08`: this is deliberately **not** the same value as `codeTreeHash` —
+       * an OID names a Git object, while the contract's `codeTree` is a SHA256 over
+       * the recursive listing. The two used to share the single `tree` field, so the
+       * direct `settle` path and the crash-`recover` path reported different things
+       * under one name.
+       */
+      readonly commitTree: string;
+      /** SHA256 code tree of `revision` (`data.md` §3 `codeTree`). */
+      readonly codeTreeHash: string;
       readonly manifestId: string;
       readonly manifestHash: string;
       /** `true` when this call created no commit (the documented reuse). */
@@ -821,7 +840,8 @@ interface SettlementOperationState {
   readonly ref: string;
   readonly expectedRevision: string;
   readonly targetRevision: string;
-  readonly targetTree: string;
+  readonly commitTree: string;
+  readonly codeTreeHash: string;
   readonly manifestHash: string;
   readonly manifestId: string;
   readonly workId: string;
@@ -836,7 +856,8 @@ interface SettlementFinishInput {
   readonly manifest: CompletionManifest;
   readonly manifestHash: string;
   readonly revision: string;
-  readonly tree: string;
+  readonly commitTree: string;
+  readonly codeTreeHash: string;
   readonly reusedCommit: boolean;
   readonly refUpdated: boolean;
 }
@@ -892,6 +913,13 @@ export class SettlementService {
     }
     const existing = this.operationState(request.operationId);
     if (existing !== null) {
+      // A legacy row that predates the field split has no `commitTree`; derive it so
+      // the CAS still receives a real Git tree OID (`W8R1-08`).
+      let commitTree = existing.commitTree;
+      if (commitTree === '') {
+        const derived = this.worktrees.mergeTree(repoRoot, existing.targetRevision);
+        commitTree = derived.ok && derived.value !== null ? derived.value : '';
+      }
       return {
         ok: true,
         prepared: {
@@ -901,18 +929,21 @@ export class SettlementService {
           manifest: request.manifest,
           manifestHash: existing.manifestHash,
           targetRevision: existing.targetRevision,
-          targetTree: existing.targetTree,
-          casRequest: this.casRequest(request, existing.targetTree),
+          commitTree,
+          codeTreeHash: existing.codeTreeHash,
+          casRequest: this.casRequest(request, commitTree),
         },
       };
     }
     const frozen = freezeFinalManifest({ snapshots: this.snapshots, manifest: request.manifest });
-    // The CAS journal records a Git tree OID; the contract's `codeTree` is a SHA256,
-    // so the caller's own tree hash is preferred and derived here when absent.
-    let tree = request.candidateTree;
-    if (tree === undefined) {
+    // `codeTreeHash` is the contract's SHA256 code tree (`data.md` §3), derived from
+    // the candidate when the caller did not measure it itself. `commitTree` is the
+    // Git tree OID the CAS journals and the event records — a different identifier
+    // that must never be reported under the same name (`W8R1-08`).
+    let codeTreeHash = request.candidateTree;
+    if (codeTreeHash === undefined) {
       try {
-        tree = deliveredCodeTreeHash({ repoRoot, revision: request.candidateRevision });
+        codeTreeHash = deliveredCodeTreeHash({ repoRoot, revision: request.candidateRevision });
       } catch (error) {
         return this.refusal(
           'INTERNAL_ERROR',
@@ -921,10 +952,19 @@ export class SettlementService {
         );
       }
     }
-    if (!HASH.test(tree)) {
+    if (!HASH.test(codeTreeHash)) {
       return this.refusal(
         'VALIDATION_ERROR',
-        `candidateTree 必须是 SHA256 代码树 Hash：${tree}`,
+        `candidateTree 必须是 SHA256 代码树 Hash：${codeTreeHash}`,
+        [],
+      );
+    }
+    const commitTreeResult = this.worktrees.mergeTree(repoRoot, request.candidateRevision);
+    const commitTree = commitTreeResult.ok ? commitTreeResult.value : null;
+    if (commitTree === null) {
+      return this.refusal(
+        'INTERNAL_ERROR',
+        `无法读取候选提交 ${request.candidateRevision} 的 Git tree OID`,
         [],
       );
     }
@@ -934,7 +974,8 @@ export class SettlementService {
       ref: request.ref,
       expectedRevision: request.expectedRevision,
       targetRevision: request.candidateRevision,
-      targetTree: tree,
+      commitTree,
+      codeTree: codeTreeHash,
       manifestHash: frozen.hash,
       manifestId: request.manifest.settlementResultRef,
       workId: request.workId,
@@ -963,8 +1004,9 @@ export class SettlementService {
         manifest: request.manifest,
         manifestHash: frozen.hash,
         targetRevision: request.candidateRevision,
-        targetTree: tree,
-        casRequest: this.casRequest(request, tree),
+        commitTree,
+        codeTreeHash,
+        casRequest: this.casRequest(request, commitTree),
       },
     };
   }
@@ -1011,7 +1053,10 @@ export class SettlementService {
       manifest: prepared.prepared.manifest,
       manifestHash: prepared.prepared.manifestHash,
       revision: cas.targetRevision,
-      tree: cas.targetTree,
+      // `cas.targetTree` is the Git tree OID (the CAS journals exactly that);
+      // `codeTreeHash` is the SHA256 code tree measured at prepare time.
+      commitTree: cas.targetTree,
+      codeTreeHash: prepared.prepared.codeTreeHash,
       reusedCommit: cas.reused,
       refUpdated: cas.refUpdated,
     });
@@ -1038,8 +1083,6 @@ export class SettlementService {
     }
     const journal = this.journal.load(operationId);
     const targetRevision = journal?.targetRevision ?? state.targetRevision;
-    // The persisted `codeTree` (a SHA256) wins over the CAS journal's Git tree OID.
-    const targetTree = state.targetTree !== '' ? state.targetTree : (journal?.targetTree ?? '');
     const manifest = readFrozenFinalManifest(this.store, state.manifestHash);
     if (manifest === null) {
       return {
@@ -1051,13 +1094,32 @@ export class SettlementService {
         operationId,
       };
     }
+    // Two distinct values, two distinct sources (`W8R1-08`): the Git tree OID (the
+    // CAS journal's `targetTree`, or the persisted `commitTree`) and the SHA256 code
+    // tree (the persisted `codeTree`, the manifest's `verifiedCodeTree`, or derived
+    // from the revision when a legacy operation row predates the split).
+    const repoRoot = this.repoRoot();
+    let commitTree = state.commitTree !== '' ? state.commitTree : (journal?.targetTree ?? '');
+    if (commitTree === '') {
+      const derived = this.worktrees.mergeTree(repoRoot, targetRevision);
+      commitTree = derived.ok && derived.value !== null ? derived.value : '';
+    }
+    let codeTreeHash = state.codeTreeHash;
+    if (codeTreeHash === '') {
+      try {
+        codeTreeHash = deliveredCodeTreeHash({ repoRoot, revision: targetRevision });
+      } catch {
+        codeTreeHash = manifest.verifiedCodeTree;
+      }
+    }
     const finishInput = {
       operationRowId: state.operationRowId,
       operationId: state.operationId,
       manifest,
       manifestHash: state.manifestHash,
       revision: targetRevision,
-      tree: targetTree,
+      commitTree,
+      codeTreeHash,
     };
     const actual = this.refRevision(state.ref);
     if (actual === targetRevision) {
@@ -1075,7 +1137,8 @@ export class SettlementService {
       };
     }
     // The ref never moved: complete the operation by installing the commit that
-    // already exists (the CAS never creates a second commit for a candidate).
+    // already exists (the CAS never creates a second commit for a candidate). The CAS
+    // takes the Git tree OID as its `candidateTree`.
     const cas = this.cas.integrate({
       operationId,
       kind: 'settle',
@@ -1083,7 +1146,7 @@ export class SettlementService {
       ref: state.ref,
       expectedRevision: state.expectedRevision,
       candidateRevision: targetRevision,
-      candidateTree: targetTree,
+      candidateTree: commitTree,
       message: `chore: settle Work ${state.workId}`,
       workId: state.workId,
       ...(state.requirementId === null ? {} : { requirementId: state.requirementId }),
@@ -1101,7 +1164,7 @@ export class SettlementService {
     return this.finish({
       ...finishInput,
       revision: cas.targetRevision,
-      tree: cas.targetTree,
+      commitTree: cas.targetTree,
       reusedCommit: cas.reused,
       refUpdated: cas.refUpdated,
     });
@@ -1131,7 +1194,8 @@ export class SettlementService {
         ref: step('ref') ?? '',
         expectedRevision: step('expectedRevision') ?? row.expectedHead ?? '',
         targetRevision,
-        targetTree: step('targetTree') ?? '',
+        commitTree: step('commitTree') ?? '',
+        codeTreeHash: step('codeTree') ?? '',
         manifestHash,
         manifestId: step('manifestId') ?? '',
         workId: step('workId') ?? row.workId ?? '',
@@ -1146,7 +1210,8 @@ export class SettlementService {
   // Internals
   // -------------------------------------------------------------------------
 
-  private casRequest(request: SettleRequest, targetTree: string): CasRequest {
+  /** The CAS request for a settlement; `commitTree` is a Git tree OID, not a SHA256. */
+  private casRequest(request: SettleRequest, commitTree: string): CasRequest {
     return {
       operationId: request.operationId,
       kind: 'settle',
@@ -1154,7 +1219,7 @@ export class SettlementService {
       ref: request.ref,
       expectedRevision: request.expectedRevision,
       candidateRevision: request.candidateRevision,
-      candidateTree: targetTree,
+      candidateTree: commitTree,
       message: request.message ?? `chore: settle Work ${request.workId}`,
       ...(request.taskIds === undefined ? {} : { taskIds: request.taskIds }),
       ...(request.requirementPool === undefined
@@ -1188,6 +1253,11 @@ export class SettlementService {
             requirement.id,
             {
               lifecycle: 'completed',
+              // `workflow.md` §5.1: `phase` is only meaningful for an *active*
+              // Requirement, so completing it clears the phase in the same
+              // transaction instead of leaving `lifecycle='completed' phase='settle'`
+              // (W8R1-06). The repository turns an explicit `undefined` into SQL NULL.
+              phase: undefined,
               // `finalManifestId` is an id, and the CompletionManifest is addressed
               // by its settlement-result id (the manifest itself is frozen by hash).
               finalManifestId: input.manifest.settlementResultRef,
@@ -1210,7 +1280,10 @@ export class SettlementService {
             workId: input.manifest.workId,
             requirementId: requirementId ?? null,
             revision: input.revision,
-            tree: input.tree,
+            // `W8R1-08`: the event records the two identifiers under their own names,
+            // so a reader never has to guess which kind of "tree" it received.
+            commitTree: input.commitTree,
+            codeTreeHash: input.codeTreeHash,
             manifestHash: input.manifestHash,
             verifiedManifestIds: [...input.manifest.verifiedManifestIds],
             reusedCommit: input.reusedCommit,
@@ -1231,7 +1304,8 @@ export class SettlementService {
             stepResults: {
               ...row.stepResults,
               targetRevision: input.revision,
-              targetTree: input.tree,
+              commitTree: input.commitTree,
+              codeTree: input.codeTreeHash,
               manifestHash: input.manifestHash,
               completionEventId: String(eventCursor),
               reusedCommit: input.reusedCommit,
@@ -1246,7 +1320,8 @@ export class SettlementService {
         operationId: input.operationId,
         operationRowId: input.operationRowId,
         revision: input.revision,
-        tree: input.tree,
+        commitTree: input.commitTree,
+        codeTreeHash: input.codeTreeHash,
         manifestId: input.manifest.settlementResultRef,
         manifestHash: input.manifestHash,
         reusedCommit: input.reusedCommit,

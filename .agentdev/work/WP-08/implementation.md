@@ -6,24 +6,24 @@
 
 ## T1 Git Worktree、CAS 与依赖血缘（AC-062/AC-081/AC-094）
 
-- `packages/workspace/src/worktree.ts`：`WorktreeGitPort`（扩展既有 `GitPort`）+ `NodeWorktreeGitPort`（显式 argv、`shell:false`、真实 `git worktree add/remove/list`、`update-ref` 带 expected-old、`merge-base`/`is-ancestor`/`cherry`/`cherry-pick`/`ls-tree`/`cat-file`）；`WorktreeLeaseStore`（Port + 内存实现，`worktreeLeaseResource(id)`）保证同一 worktree 只有一个 owner（外来/过期 owner 拒绝 `BUSY` 或按 TTL 替换）；**脏 worktree 拒绝删除**并列出路径，除非显式 `discard`。
-- `packages/workspace/src/cas.ts`：依赖血缘（`orderTasks` 拓扑 + 环拒绝、`planDependencies`/`prepareDependencies` 计算 `dependencyRevision`/`dependencyManifestRefs`、`verifyTaskStart` 要求上游冻结成果且祖先变化即失效）、CAS 集成（`createCasService().integrate()`：比较期望 revision、候选提交（含需求池文件并按 metadata+content 成对校验）、`pending → pending(commit) → committed → completed` 日志、**只用 `update-ref <ref> <new> <old>` 移动 ref**、冲突返回 `VERSION_CONFLICT`/`STALE_ARTIFACT`/`IDEMPOTENCY_CONFLICT` 且分支不变、崩溃后复用提交且**只发一次完成事件**）、`runIntegration`（按依赖顺序 cherry 各 Task 自身提交、跳过已合并/已存在祖先、冲突时产出独立修复 Task + 冲突产物哈希且 HEAD 不动）。
-- 回归网：`worktree.test.ts`（10 例）、`cas.integration.test.ts`（13 例，真实临时仓库）。
+- `packages/workspace/src/worktree.ts`：`WorktreeGitPort`（扩展既有 `GitPort`）+ `NodeWorktreeGitPort`（显式 argv、`shell:false`、真实 `git worktree add/remove/list`、`update-ref` 带 expected-old、`merge-base`/`is-ancestor`/`cherry`/`cherry-pick`/`ls-tree`/`cat-file`/`cat-file blob`）；`WorktreeLeaseStore`（Port + 内存实现，`worktreeLeaseResource(id)`）保证同一 worktree 只有一个 owner（外来/过期 owner 拒绝 `BUSY` 或按 TTL 替换）；**脏 worktree 拒绝删除**并列出路径，除非显式 `discard`。
+- `packages/workspace/src/cas.ts`：依赖血缘（`orderTasks` 拓扑 + 环拒绝、`planDependencies`/`prepareDependencies` 计算 `dependencyRevision`/`dependencyManifestRefs`、`verifyTaskStart` 要求上游冻结成果且祖先变化即失效）、CAS 集成（`createCasService().integrate()`：比较期望 revision、安装调用方提供的候选提交（含需求池文件并按 metadata+content 成对校验）、`pending → pending(commit) → committed → completed` 日志、**只用 `update-ref <ref> <new> <old>` 移动 ref**、冲突返回 `VERSION_CONFLICT`/`STALE_ARTIFACT`/`IDEMPOTENCY_CONFLICT` 且分支不变、崩溃后复用提交且**只发一次完成事件**）、`runIntegration`（按依赖顺序 cherry 各 Task 自身提交、跳过已合并/已存在祖先、冲突时产出独立修复 Task + 冲突产物哈希且 HEAD 不动）。
+- 回归网：`worktree.test.ts`（10 例）、`cas.integration.test.ts`（13 例 → T6 后 15 例，真实临时仓库）。
 
 ## T2 需求即时保存与投影一致性（AC-090/AC-091/AC-093）
 
-- `packages/core/src/requirement-save.ts`：`ProjectIntegrationLock`（共享资源 `integration:<projectId>`，需求保存与代码交付同一把锁）；`prepareRequirementSave`（两文件共享版本、正文 `<!-- record-version: n -->`、六段标题校验、recordVersion 单调、组合 `recordHash`）；`readRequirementPoolAtRevision`/`requirementPoolReadme`；`RequirementSaveService.save/retry/pendingRepairs`（取锁 → 期望 vs HEAD 目录 `recordHash` → detached worktree 构造提交 → 经 CAS 移动交付 ref → 刷新投影 → 才报告 `saved`；返回 branch/ref/commit/unpushed/upstreamRevision 与投影 verdict；失败返回 `requirement.save.retry`，已提交时重试**只补投影、不产生第二个提交**）；`checkCompletionSettlement`（metadata-only 变更不得冒充代码验证）。
-- 回归网：`requirement-save.test.ts`（19 例）、`requirement-save.integration.test.ts`（12 例，真实仓库 + 真实 SQLite）。
+- `packages/core/src/requirement-save.ts`：`ProjectIntegrationLock`（共享资源 `integration:<projectId>`，需求保存与代码交付同一把锁）；`prepareRequirementSave`（两文件共享版本、正文 `<!-- record-version: n -->`、六段标题校验、recordVersion 单调、组合 `recordHash`）；`readRequirementPoolAtRevision`/`requirementPoolReadme`（`RequirementPoolGitPort.readBlob` 为必需端口，池按修订的**提交字节**读取）；`RequirementSaveService.save/retry/pendingRepairs`（取锁 → 对**交付 ref 修订**的已提交 `recordHash` 比较期望 → detached worktree 构造提交 → 经 CAS 移动交付 ref → 刷新投影 → 才报告 `saved`；返回 branch/ref/commit/unpushed/upstreamRevision 与投影 verdict；失败返回 `requirement.save.retry`，已提交时重试**只补投影、不产生第二个提交**；任何读/解析失败都转成结构化结果，`save()` 不抛异常）；`checkCompletionSettlement`（metadata-only 变更不得冒充代码验证；空变更集与空修订范围同样拒绝，并回报 `codeStartRevision`）。
+- 回归网：`requirement-save.test.ts`（19 例 → T6 后 22 例）、`requirement-save.integration.test.ts`（12 例 → T6 后 15 例，真实仓库 + 真实 SQLite）。
 
 ## T3 租约/epoch 恢复、结算与备份（AC-041/AC-057/AC-058/AC-061/AC-063/AC-064/AC-082）
 
-- `packages/core/src/recovery.ts`：`RunRecoveryService`（**绝不按持久字段直接恢复**：检查真实进程身份与 tool operation 状态后置 `interrupted`（可恢复）或 `recovery_required`（存活/不可确认/未知副作用）；租约回收与 daemon epoch 围栏 `lastHostEpoch`；旧 epoch 结果按 epoch/取消/新决定拒绝并持久诊断 `stage.result_rejected`；`recoveryScope`/`verifyRecoveredScope` 只读冻结 DispatchSnapshot，重启后窄范围保持、Work 宽范围记为忽略）；备份/恢复/迁移（SQLite `VACUUM INTO` + 全 refs Git bundle + blobs/知识 + 哈希清单；restore 逐项校验哈希、重映射根、回收租约与授权、活动 Run 需恢复、缺 Secret 阻断 `PROVIDER_UNAVAILABLE`；`relocateProject` 同规则换根）。
-- `packages/core/src/settlement.ts`：`buildKnowledgePatch`/`applyKnowledgePatch`（只经 `buildProjection` 应用，非法知识不发布、保留最后有效并标 stale）、`buildFinalManifest`/`freezeFinalManifest`/`readFrozenFinalManifest`、`SettlementService.prepareSettlement/settle/recover`（冻结 CompletionManifest、CAS 提交、**ref 后崩溃复用提交并只发一次 `settlement.completed`**）。
-- 回归网：`recovery.test.ts`（17 例）、`settlement.integration.test.ts`（10 例）、`backup.integration.test.ts`（5 例）。
+- `packages/core/src/recovery.ts`：`RunRecoveryService`（**绝不按持久字段直接恢复**：检查真实进程身份与 tool operation 状态后置 `interrupted`（可恢复）或 `recovery_required`（存活/不可确认/未知副作用）；租约回收与 daemon epoch 围栏 `lastHostEpoch`；旧 epoch 结果按 epoch/取消/新决定拒绝并持久诊断 `stage.result_rejected`；**恢复判定 `newAttemptAllowed` 持久化在 `run.recovered` 事件中，并由 `newAttemptAdmission()` 作为开新 Attempt 的唯一准入规则**；`recoveryScope`/`verifyRecoveredScope` 只读冻结 DispatchSnapshot，重启后窄范围保持、Work 宽范围记为忽略）；备份/恢复/迁移（SQLite `VACUUM INTO` + 全 refs Git bundle + blobs/知识 + 哈希清单；restore 逐项校验哈希、重映射根、回收租约与授权、活动 Run 需恢复、缺 Secret 阻断 `PROVIDER_UNAVAILABLE`；`relocateProject` **先校验目标仓库、后改根、失败回滚**）。
+- `packages/core/src/settlement.ts`：`buildKnowledgePatch`/`applyKnowledgePatch`（只经 `buildProjection` 应用，非法知识不发布、保留最后有效并标 stale）、`buildFinalManifest`/`freezeFinalManifest`/`readFrozenFinalManifest`、`SettlementService.prepareSettlement/settle/recover`（冻结 CompletionManifest、CAS 提交、**ref 后崩溃复用提交并只发一次 `settlement.completed`**；结果与事件/`stepResults` 用 `commitTree`（Git tree OID）与 `codeTreeHash`（SHA256 codeTree）两个字段区分语义；完成 Requirement 时同事务清 `phase`）。
+- 回归网：`recovery.test.ts`（17 例 → T6 后 18 例）、`settlement.integration.test.ts`（10 例）、`backup.integration.test.ts`（5 例 → T6 后 6 例）。
 
 ## T4 端到端集成与必需失败测试
 
-- `packages/core/test/wp08.integration.test.ts`（11 例）：单需求 L1 链到 CAS/CompletionManifest、L2 阶段链、document 路线（含无 taskId 的 Finding 绑定与独立 Review+Test 关闭）、初始化路线（中断按 Hash 续写、冲突不覆盖、Ready 最小门禁）、依赖 Task 链（依赖 revision 记录、祖先变化失效、最终集成跳过已合并祖先）、结算知识补丁 + 冷启动查询找到新事实、需求保存与交付共享锁（含 metadata-only 拒绝）、暂停/恢复与取消未知副作用、预算拒绝在集成后仍成立。
+- `packages/core/test/wp08.integration.test.ts`（11 例 → T6 后 12 例）：单需求 L1 链到 CAS/CompletionManifest、L2 阶段链、document 路线（含无 taskId 的 Finding 绑定与独立 Review+Test 关闭）、初始化路线（中断按 Hash 续写、冲突不覆盖、Ready 最小门禁）、依赖 Task 链（依赖 revision 记录、祖先变化失效、最终集成跳过已合并祖先）、结算知识补丁 + 冷启动查询找到新事实、需求保存与交付共享锁（含 metadata-only 拒绝）、暂停/恢复与取消未知副作用、恢复判定后的 resume 拒绝（W8R1-04）、预算拒绝在集成后仍成立。
 - `packages/core/test/wp08-failures.test.ts`（5 例）：**Task 合并冲突**、**CAS 失败**、**ref 后崩溃**、**取消未知副作用**、**备份演练**。
 - 仅两处桩：无真实模型调用（Run 用冻结阶段记录）、无容器（恢复所需进程表用确定性探针）。
 
@@ -39,5 +39,81 @@
   5. `apps/cli` 的 `backup/restore/relocate` 与 `apps/daemon` 启动时的 `recoverAfterRestart(hostEpoch)` 未接线（函数已导出）。
   6. 计划中的 `packages/workspace/src/backup.ts` 未落在 workspace 包，备份/恢复实现全部在 `core/recovery.ts`（纯搬移可后续重构）。
   7. 进程身份仅识别宿主数字 PID；容器/远端身份返回 `null` 并按「不可确认」fail-closed。
-  8. `SettlementService` 置 Requirement `lifecycle='completed'` 与 `finalManifestId`，但不清 `phase`（需 schema 所有者决定 raw UPDATE）。
+  8. ~~`SettlementService` 置 Requirement `lifecycle='completed'` 与 `finalManifestId`，但不清 `phase`（需 schema 所有者决定 raw UPDATE）。~~ **T6/W8R1-06 已收口**：完成时同事务写 `phase: undefined`（repository 落 SQL NULL），不再是残余。
   9. AC-054（BFF/浏览器断开继续）属 WP-09，本包未覆盖。
+
+## T6 独立 Review 第一轮（W8R1-01..08）修复
+
+- 修复范围：`packages/workspace/src/{worktree,cas}.ts`、`packages/core/src/{requirement-save,recovery,settlement}.ts` 及其测试。为让 W8R1-04 的恢复判定真正成为**执行侧准入**，另改同包内的 `packages/core/src/{run-lifecycle,findings}.ts`（`beginAttempt`/`resumeWork` 各加一道闸）；未触碰其他包。全部改动文件先经 `prettier --write`。
+- 新增回归测试 11 例（unit 967 → **971**，integration 208 → **215**），每条 finding 至少一例，且都建立在旧行为的失败之上（见各条「旧行为」）。
+- 记录更正（本轮，均已在正文同步）：
+  - T1 的 CAS 描述由「候选提交（含需求池文件…）」更正为「**安装调用方提供的候选提交**」：服务内不再有任何 `git commit` 回退（W8R1-01），ref 仍只由 `update-ref <ref> <new> <old>` 移动。
+  - 删除/更正了 `requirement-save.ts` 中「save path checks the committed bytes out first」「与 HEAD 目录比较」的失实注释（W8R1-02）；现为「按**交付 ref 修订**的提交字节（`git cat-file blob`）比较」。
+  - `SettlementOutcome.tree` 的双语义更正为 `commitTree`（Git tree OID）与 `codeTreeHash`（SHA256 codeTree）两个字段，事件与 `stepResults` 同步区分（W8R1-08）；`SettleRequest.candidateTree` 的文档明确为 SHA256 codeTree。
+  - T5 残余 8（结算不清 `phase`）已收口并标注（W8R1-06）。
+  - **三处旧期望确实在编码缺陷，已更正（未放宽任何断言）**：① `requirement-save.integration.test.ts` 的 `checkCompletionSettlementForTest` 原先恒传 `codeStartRevision: null`（旧实现从不读它），② `wp08.integration.test.ts` 的 metadata-only 用例同样传 `null`；两者改为传真实 `baseRevision`/`seedRevision`，否则新契约下的空范围检查会（正确地）先拒绝。③ `cas.integration.test.ts` 的「refuses a stale writer…」原先不传 `candidateRevision`，只因旧代码在比较之后才走 `git commit` 回退而恰好拿到 `VERSION_CONFLICT`；现改为传一个真实的 stale 候选提交（同为 `revision` 基线的独立 worktree 提交），仍断言 `VERSION_CONFLICT` 且分支不动——现在它验证的是真正的陈旧写者路径。同文件「refuses a half requirement pair」补传一个有效候选，使拒绝原因确实是半对记录。settlement 测试原先断言的 `outcome.tree`/`recovered.tree` 改为新字段并断言二者互不相等。
+
+### W8R1-01（P2）— 无候选版本时 CAS 用 `git commit` 直接推进交付分支
+
+- 变更：`cas.ts` 删除 `candidateRevision === undefined` 的 `git.commitPaths` 回退；缺少候选版本直接 `VALIDATION_ERROR`（需求池仍做半对校验）。候选提交必须由集成 worktree/调用方先创建，ref 只由 `update-ref` 带 expected-old 移动。
+- 回归测试：`cas.integration.test.ts`
+  - 「never commits in the delivery working tree: a candidate revision is required (W8R1-01)」：工作树里已放好记录文件，竞争者在比较与写入之间移动 ref；断言 `VALIDATION_ERROR`、分支停在基线、无完成事件、提交数不变。
+  - 「refuses a competing ref move between the compare and the swap (W8R1-01)」：带候选版本 + 注入竞争移动 → `VERSION_CONFLICT`、`actualRevision` 为竞争者提交、无完成事件。
+- 旧行为：第一条会返回 `ok:true` 并在竞争者之上提交（`expectRefused` 即失败）。
+
+### W8R1-02（P1）— 需求池读工作树而非目标修订
+
+- 变更：`RequirementPoolGitPort.readBlob` 变为**必需**端口（`worktree.ts` 的 `WorktreeGitPort`/`NodeWorktreeGitPort` 新增 `readBlob`，`git cat-file blob`，缺失即 `null`，并把「按修订读取」写进接口契约）；`readBlobAt` 删除 `readFileSync` 回退；`readHead` 改为解析**交付 ref**（`refs/heads/<deliveryBranch>`）而不是 `HEAD`，比较与提交基线都取该修订。
+- 回归测试：`requirement-save.integration.test.ts`「reads the pool at the delivery ref, never the stale working tree (W8R1-02)」：先正常保存 v1，另一服务器把 v2 提交并移动 ref 而不 checkout（工作树仍是 v1），带 `expected {recordVersion:1, recordHash:v1}` 的保存被 `REQUIREMENT_CONFLICT` 拒绝，分支与提交数不变，修订处仍是 v2。
+- 旧行为：`readFileSync` 读到 v1 → 比较通过 → 用本地 v2 覆盖其他服务器的 v2 并返回 `ok:true`（`requireRefused` 失败）。
+
+### W8R1-03（P1）— HEAD 独有记录导致未捕获 `ENOENT`
+
+- 变更：`readBlobAt` 把读失败/缺 blob 转成结构化 `ProtocolError`（`INTERNAL_ERROR`/`REQUIREMENT_CONFLICT`，消息含 `revision:path`）；`RequirementSaveService.save()` 外层 try/catch 把任何逃逸错误转成 `RequirementSaveOutcome`，`save()` 不再抛异常（`ProtocolError` 保留原 code 与消息）；`compareExpectation` 的冲突消息补上记录路径。
+- 回归测试：`requirement-save.integration.test.ts`
+  - 「reports a HEAD-only record as a per-record conflict instead of an ENOENT (W8R1-03)」：ref 上有工作树没有的 `SECOND_ID`，`save()` 直接调用（不包 `expect`）返回 `REQUIREMENT_CONFLICT` 且消息含 `.agentdev/requirements/<id>`，分支不动。
+  - 「returns a structured INTERNAL_ERROR when the committed blob cannot be read (W8R1-03)」：注入失败 `readBlob` → `INTERNAL_ERROR`、消息含 `读取 Git blob 失败` 与记录路径，分支不动。
+- 旧行为：第一条抛 `ENOENT` 终止测试；第二条让 `ProtocolError` 逃出 `save()`（测试因未捕获异常失败）。
+
+### W8R1-04（P1）— 恢复后仍可对确认存活的旧执行开新 Attempt（双写者）
+
+- 变更：`recovery.ts` 新增导出 `newAttemptAdmission(store, runId)`：以持久化的 `run.recovered` 判定（`newAttemptAllowed`）为唯一准入规则，只有**判定之后**记录的 `decision(kind='recovery', choice='resume')` 才能解除阻断。`RunLifecycle.beginAttempt` 在任何 Attempt 写入前校验该判定（拒绝抛 `RECOVERY_REQUIRED`，带 `verdictEventId`/`requiresRecoveryDecision`）；`FindingService.resumeWork` 的 unresolved 检查扩展到「状态非终态且准入被拒」的所有 Run，返回结构化 `RECOVERY_REQUIRED`。确认进程已死（`park_interrupted` 且 `newAttemptAllowed:true`）时照常恢复。
+- 回归测试：
+  - `recovery.test.ts`「withholds a new Attempt while the old execution is unconfirmed (W8R1-04)」：`starting` + 存活进程 → park `interrupted` → `beginAttempt` 抛错、Attempt 仍 1 条、worktree 租约未落到第二个 owner；随后一条 `choice:'resume'` 的 recovery decision 才放行（Attempt #2）；确认已死的 Run 直接开 Attempt #2。
+  - `wp08.integration.test.ts`「refuses to resume a Work whose Run was parked with an unconfirmed execution (W8R1-04)」：pause 持有该 `interrupted` Run 后，`resumeWork` 返回 `RECOVERY_REQUIRED` 且不新建 Attempt。
+- 旧行为：`beginAttempt` 只查状态转换，`interrupted → starting` 合法 → 成功开出 Attempt #2（`toThrowError`/`expect(refused.ok).toBe(false)` 失败）。
+
+### W8R1-05（P2）— `relocateProject` 先改根后体检、无回滚
+
+- 变更：`relocateProject` 先读取**当前仓库记录**的 `refs/heads/<deliveryBranch>` 修订与 tree（改根前），再移动/解析目标；随后校验目标确为同一交付仓库（同一修订与 tree）且工作树干净，不通过即拒绝（`INVALID_STATE`，消息含「根映射未改写」），`move:true` 目标校验失败时把目录移回；通过后才改写 root 映射，此后的任何失败都在同一路径回滚映射。doctor 的 `expectedTree/treeMatches` 改用记录值而非目标自证。
+- 回归测试：`backup.integration.test.ts`「refuses a relocate onto a directory that is not this repository, leaving the mapping (W8R1-05)」：restore 后对空目录 `move:false` relocate → 返回 `INVALID_STATE`，重开 store 断言 `root`/`gitRoot` 仍是原仓库；随后对同一仓库的 relocate 仍成功（证明闸门不是一律拒绝）。
+- 旧行为：返回 `ok:true` 并把 Project 行改写到非仓库目录（`expect(refused.ok).toBe(false)` 失败）。
+
+### W8R1-06（P3）— 结算完成后不清 `phase`
+
+- 变更：`SettlementService.finish` 在同一事务内写 `phase: undefined`（repository 的 `toColumns` 将其落为 SQL NULL），`lifecycle='completed'` 与 `finalManifestId` 不变。
+- 回归测试：`settlement.integration.test.ts` 直连 settle 与 ref 后 recover 两条路径都断言 `lifecycle==='completed'` 且 `phase` 为 `undefined`（fixture 原本 `phase:'settle'`）。
+- 旧行为：`phase` 仍为 `'settle'`（`toBeUndefined()` 失败）。
+
+### W8R1-07（P3）— 空变更集被当作代码验证；`codeStartRevision` 从不读取
+
+- 变更：`checkCompletionSettlement` 先拒绝 `changedPaths` 为空（`GATE_NOT_READY`，消息含「变更集为空」），再要求 `codeStartRevision` 非空且不等于 `finalRevision`（否则 `codeStartRevision..finalRevision` 恒空）；成功结果新增 `codeStartRevision` 供审计。
+- 回归测试：`requirement-save.test.ts`「refuses an empty change set as code verification (W8R1-07)」「refuses a revision range that starts at the final revision (W8R1-07)」「reports the range it verified on success (W8R1-07)」。
+- 旧行为：空变更集返回 `ok:true, codeChanged:false`；`codeStartRevision` 完全未读（前两例失败）。
+
+### W8R1-08（P3）— `SettlementOutcome.tree` 两条路径语义不同
+
+- 变更：`SettlementOutcome`/`PreparedSettlement`/operation 状态与 `finish` 输入改用 `commitTree`（Git tree OID）与 `codeTreeHash`（SHA256 codeTree）；`prepareSettlement` 既持久化 SHA256（`stepResults.codeTree`）又计算并向 CAS 传递 Git tree OID（`stepResults.commitTree`，作为 CAS `candidateTree`）；`recover` 分别取值（缺 SHA256 时由 `deliveredCodeTreeHash` 或冻结 manifest 的 `verifiedCodeTree` 派生）；`settlement.completed` 事件与 `stepResults` 记录 `commitTree` + `codeTreeHash` 两个字段。
+- 回归测试：`settlement.integration.test.ts` 直连 settle 与 recover 两路径都断言 `commitTree` 为 `git rev-parse <rev>^{tree}` 且 `codeTreeHash` 为 `deliveredCodeTreeHash(...)`、二者互不相等，事件与 operation 行同样带两个字段；`wp08-failures.test.ts` 的 ref 后崩溃用例同步断言 recover 的两个字段。
+- 旧行为：不存在这两个字段（旧代码只有 `tree`，按路径承载不同值），断言与类型检查都会失败。
+
+### 本轮验证（T6 时点，命令在仓库根顺序执行）
+
+- `prettier --write`：上列全部改动文件（`All matched files use Prettier code style!` 由 `pnpm lint` 复核）。
+- `pnpm typecheck`：退出码 0，无输出。
+- `pnpm lint`：退出码 0（ESLint 无告警 + Prettier 检查通过）。
+- `pnpm test:unit`：**48 文件 / 971 用例全部通过**（原 967，新增 4）。
+- `pnpm test:integration`：**20 文件 / 215 用例全部通过**（原 208，新增 7；含真实临时 Git 仓库、真实 SQLite 与容器用例）。
+- `pnpm build`：**10 workspace** 全部 `Done`。
+- `pnpm docs:check`：ok（15 documents、55 internal links、94 acceptance cases、9 requirements、11 work packages）。
+- 残余（本轮未收口，供新 Review/Test 判定）：`WorktreeLeaseStore` 仍未落 storage `lease` 表、CAS 事件/`operation` 行与 ProjectMailbox 的接线、冲突产物与修复 Task 派发、备份 secret 加密导出、`apps/cli`/`apps/daemon` 接线、`packages/workspace/src/backup.ts` 归位、进程身份仅宿主 PID（即 T5 残余 1–7、9 不变）。另有两项与本轮修复直接相关的已知边界：① 解除恢复阻断目前要求一条 `decision(kind='recovery', choice='resume')`（`resolveCancellation` 的 resume 分支），其 CLI/BFF 入口属接线范围（T5 残余 5）；② 因进程存活而 park 成 `interrupted` 的 Run **不会**被后续 `recoverAfterRestart` 重新核对（`interrupted` 不在 `RESUMABLE_STATUSES`，保持「已 park 者不重复处理」的既有不变量），因此「旧进程后来确认已死」这条路径也要靠同一 decision 显式放行，而非自动解封。
