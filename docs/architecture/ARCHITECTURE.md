@@ -39,7 +39,7 @@ agentdevd拥有全部业务状态。ProjectRuntime是进程内逻辑隔离，各
 
 ## 3. 工具链基线
 
-Node.js 24 LTS，pnpm 12.3.4，TypeScript 7.0.2，React 19.3.0，Vite 8.2.2，Fastify 5.12.3，better-sqlite3 13.0.3，ws 8.21.3，zod 4.5.4，Pi coding-agent/pi-ai 0.85.1，Vitest 5.0.0，Playwright 1.63.0。package.json写精确版本，提交pnpm-lock.yaml；Node最低24.0.0，安装验证选定的24.x补丁并记录doctor输出。
+Node.js 24 LTS，pnpm 12.3.4，TypeScript 7.0.2，React 19.3.0，Vite 8.2.2，Fastify 5.12.3，better-sqlite3 13.0.3，ws 8.21.3，zod 4.5.4，Pi coding-agent/pi-ai 0.85.1，Vitest 5.0.0。浏览器自动化（Playwright 1.63.0）按 WP-10 的已批准偏差（`.agentdev/work/WP-10/plan.md` §2 D1，用户确认）**不引入**：浏览器级证据登记为 UNVERIFIED 并由发布记录逐条列出，真实 Core+BFF+HTTP/WS 的无头端到端由 `pnpm test:e2e` 承担。package.json写精确版本，提交pnpm-lock.yaml；Node最低24.0.0，安装验证选定的24.x补丁并记录doctor输出。
 
 依赖版本在2026-09-10从npm注册信息核对；兼容性由WP-00执行，发现不兼容须通过技术修正记录显式更新依赖和锁文件并重跑契约测试。没有自动latest更新。
 
