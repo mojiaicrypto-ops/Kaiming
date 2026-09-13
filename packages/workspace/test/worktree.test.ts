@@ -6,7 +6,7 @@
  * deterministically; the real `git worktree` invocation is exercised end to end in
  * `cas.integration.test.ts` and against real temporary repositories.
  */
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -51,6 +51,7 @@ interface FakeState {
   worktrees: WorktreeListing[];
   added: AddWorktreeRequest[];
   removed: { path: string; force: boolean }[];
+  resets: { path: string; revision: string }[];
   refs: Map<string, string>;
   dirty: Map<string, string[]>;
   revisions: Set<string>;
@@ -65,6 +66,7 @@ function fakeWorktreeGit(seed: Partial<FakeState> = {}): {
     worktrees: seed.worktrees ?? [],
     added: [],
     removed: [],
+    resets: [],
     refs: seed.refs ?? new Map<string, string>([['refs/heads/agentdev/main', BASE_OID]]),
     dirty: seed.dirty ?? new Map<string, string[]>(),
     revisions: seed.revisions ?? new Set<string>([BASE_OID]),
@@ -75,7 +77,10 @@ function fakeWorktreeGit(seed: Partial<FakeState> = {}): {
   const git: WorktreeGitPort = {
     isRepository: (path) => base.isRepository(path),
     resolveRoot: (path) => base.resolveRoot(path),
-    headRevision: (path) => base.headRevision(path),
+    headRevision: (path) => {
+      const linked = state.worktrees.find((entry) => entry.path === path);
+      return linked === undefined ? base.headRevision(path) : { ok: true, value: linked.head };
+    },
     statusPorcelain: (path) => {
       const lines = state.dirty.get(path);
       return lines === undefined ? { ok: true, value: [] } : { ok: true, value: lines };
@@ -107,6 +112,13 @@ function fakeWorktreeGit(seed: Partial<FakeState> = {}): {
     removeWorktree: (_repoRoot, path, force) => {
       state.removed.push({ path, force });
       state.worktrees = state.worktrees.filter((entry) => entry.path !== path);
+      return { ok: true, value: null };
+    },
+    resetHard: (worktreePath, revision) => {
+      state.resets.push({ path: worktreePath, revision });
+      state.worktrees = state.worktrees.map((entry) =>
+        entry.path === worktreePath ? { ...entry, head: revision } : entry,
+      );
       return { ok: true, value: null };
     },
     updateRef: (request: UpdateRefRequest) => {
@@ -224,6 +236,48 @@ describe('worktree manager', () => {
     expect(state.added).toHaveLength(1);
     expect(first.lease.ownerAttemptId).toBe('attempt-1');
     expect(manager.list()).toHaveLength(1);
+  });
+
+  it('rewinds a re-used worktree that is parked at another base (W8R2-01)', () => {
+    const parked = 'd'.repeat(40);
+    // The worktree directory exists on disk, so path matching resolves like the real
+    // `git worktree list` case does.
+    mkdirSync(join(WT_ROOT, 'task-a'), { recursive: true });
+    const { git, state } = fakeWorktreeGit({
+      worktrees: [
+        {
+          path: join(WT_ROOT, 'task-a'),
+          head: parked,
+          branchRef: null,
+          detached: true,
+          bare: false,
+        },
+      ],
+      revisions: new Set([BASE_OID, parked]),
+    });
+    const manager = createWorktreeManager({
+      git,
+      leases: createMemoryWorktreeLeaseStore(),
+      now: () => CLOCK,
+    });
+    const outcome = expectCreated(
+      manager.create({
+        taskId: 'task-a',
+        worktreeId: 'wt-a',
+        repoRoot: REPO_ROOT,
+        path: join(WT_ROOT, 'task-a'),
+        baseRevision: BASE_OID,
+        ownerAttemptId: 'attempt-1',
+        epoch: 1,
+      }),
+    );
+    expect(outcome.reused).toBe(true);
+    // FALSIFY (W8R2-01): the stale base is not silently continued; the worktree is
+    // rewound to the requested base before anything is built on it.
+    expect(state.resets).toEqual([{ path: join(WT_ROOT, 'task-a'), revision: BASE_OID }]);
+    expect(state.worktrees).toEqual([
+      expect.objectContaining({ path: join(WT_ROOT, 'task-a'), head: BASE_OID }),
+    ]);
   });
 
   it('renews the lease for the same attempt and replaces an expired lease', () => {

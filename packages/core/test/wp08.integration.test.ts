@@ -1403,6 +1403,7 @@ describe('WP-08 T4 end-to-end integration drill', () => {
         git: port,
         repoRoot: d.repo,
         cas: createCasService({ git: port, journal: d.journal, events: d.events }),
+        lock: d.lock,
         worktreePath: integrationWorktree,
         operationId: 'op-integrate-dependent',
         ref: DELIVERY_REF,
@@ -1619,7 +1620,11 @@ describe('WP-08 T4 end-to-end integration drill', () => {
       // Nothing was committed while the lock was held.
       expect(refHead(d.repo)).toBe(d.seedRevision);
 
-      // The delivery integrates a Task cut from the seed baseline, on the same lock.
+      // `W8R2-02`: the delivery integrates a Task cut from the seed baseline and takes
+      // the *same* Project lock, so while the lock is held the delivery path itself is
+      // refused before any worktree is touched. (The old expectation manually held the
+      // lock and still let the delivery integrate — exactly the half-implemented mutex
+      // the round-2 review found.)
       addWork(d, { id: workId, level: 'L2' });
       const candidate = candidateCommit(d, {
         name: 'delivery-under-lock',
@@ -1635,10 +1640,11 @@ describe('WP-08 T4 end-to-end integration drill', () => {
         }),
         'integration worktree',
       );
-      const integrated = runIntegration({
+      const deliveryRequest = {
         git: port,
         repoRoot: d.repo,
         cas: createCasService({ git: port, journal: d.journal, events: d.events }),
+        lock: d.lock,
         worktreePath: integrationWorktree,
         operationId: 'op-delivery-under-lock',
         ref: DELIVERY_REF,
@@ -1652,9 +1658,19 @@ describe('WP-08 T4 end-to-end integration drill', () => {
           },
         ],
         workId,
-      });
-      if (!integrated.ok) throw new Error(integrated.code);
+      };
+      const refusedDelivery = runIntegration({ ...deliveryRequest });
+      expect(refusedDelivery.ok).toBe(false);
+      if (refusedDelivery.ok) throw new Error('expected the held lock to refuse delivery');
+      expect(refusedDelivery.code).toBe('BUSY');
+      expect(refusedDelivery.branchUntouched).toBe(true);
+      expect(refHead(d.repo)).toBe(d.seedRevision);
+
+      // The release path: once the holder releases, the very same delivery takes the
+      // lock itself and integrates.
       expect(d.lock.release('delivery-attempt', 1)).toBe(true);
+      const integrated = runIntegration({ ...deliveryRequest });
+      if (!integrated.ok) throw new Error(integrated.code);
 
       // The save now proceeds on the new baseline; the requirement is not lost and
       // the code commit stays an ancestor (nothing was silently overwritten).
@@ -1964,6 +1980,7 @@ describe('WP-08 T4 end-to-end integration drill', () => {
         git: port,
         repoRoot: d.repo,
         cas: createCasService({ git: port, journal: d.journal, events: d.events }),
+        lock: d.lock,
         worktreePath: integrationWorktree,
         operationId: 'op-integrate-budget',
         ref: DELIVERY_REF,

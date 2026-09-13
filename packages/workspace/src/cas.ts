@@ -804,6 +804,77 @@ export function integrationConflictArtifact(input: { readonly repair: RepairPlan
   return input.repair.artifact;
 }
 
+/**
+ * The shared Project integration lock (`reliability.md` §4/§9, AC-091).
+ *
+ * A structural port: core's `ProjectIntegrationLock` satisfies it, and both sides
+ * contend for the same `lease.resource` (`integration:<projectId>`). Requirement
+ * saving and code delivery must therefore agree on this interface for the mutex to
+ * be mutual rather than merely two independent serializations (`W8R2-02`).
+ */
+export interface CasIntegrationLockHolder {
+  readonly ownerAttemptId: string;
+  readonly epoch: number;
+  readonly expiresAt: string;
+}
+
+export interface CasAcquireIntegrationLockRequest {
+  readonly ownerAttemptId: string;
+  readonly epoch: number;
+  readonly ttlMs?: number;
+  readonly at?: string;
+}
+
+export type CasIntegrationLockResult =
+  | { readonly acquired: true; readonly resource: string; readonly replacedExpired: boolean }
+  | {
+      readonly acquired: false;
+      readonly code: 'BUSY';
+      readonly heldBy: CasIntegrationLockHolder;
+    };
+
+export interface CasIntegrationLock {
+  readonly resource: string;
+  acquire(request: CasAcquireIntegrationLockRequest): CasIntegrationLockResult;
+  release(ownerAttemptId: string, epoch: number): boolean;
+}
+
+/** In-memory integration lock for tests and callers that own no database. */
+export function createMemoryIntegrationLock(projectId: string): CasIntegrationLock {
+  const resource = `integration:${projectId}`;
+  let holder: CasIntegrationLockHolder | null = null;
+  return {
+    resource,
+    acquire(request) {
+      const at = request.at ?? new Date().toISOString();
+      if (
+        holder !== null &&
+        holder.ownerAttemptId !== request.ownerAttemptId &&
+        Date.parse(holder.expiresAt) > Date.parse(at)
+      ) {
+        return { acquired: false, code: 'BUSY', heldBy: { ...holder } };
+      }
+      const replacedExpired =
+        holder !== null &&
+        Date.parse(holder.expiresAt) <= Date.parse(at) &&
+        holder.ownerAttemptId !== request.ownerAttemptId;
+      holder = {
+        ownerAttemptId: request.ownerAttemptId,
+        epoch: request.epoch,
+        expiresAt: new Date(Date.parse(at) + (request.ttlMs ?? 60_000)).toISOString(),
+      };
+      return { acquired: true, resource, replacedExpired };
+    },
+    release(ownerAttemptId, epoch) {
+      if (holder === null || holder.ownerAttemptId !== ownerAttemptId || holder.epoch !== epoch) {
+        return false;
+      }
+      holder = null;
+      return true;
+    },
+  };
+}
+
 export interface RunIntegrationOptions {
   readonly git: WorktreeGitPort;
   /** Repository the integration worktree is linked to. */
@@ -825,6 +896,17 @@ export interface RunIntegrationOptions {
   readonly requirementPool?: readonly RequirementPoolCommit[];
   readonly message?: string;
   readonly branch?: string;
+  /**
+   * The shared `integration:<projectId>` lock (`W8R2-02`). **Required**: the delivery
+   * path must take the same mutex requirement saving takes, or the two writers are
+   * only individually serialized and AC-091's "same lock" guarantee is not met.
+   */
+  readonly lock: CasIntegrationLock;
+  /** Lock owner; defaults to `operationId` (the CAS idempotency key). */
+  readonly ownerAttemptId?: string;
+  readonly epoch?: number;
+  readonly ttlMs?: number;
+  readonly leaseAt?: string;
 }
 
 export type RunIntegrationResult =
@@ -850,6 +932,16 @@ export type RunIntegrationResult =
       readonly applied: readonly AppliedIntegrationTask[];
     }
   | {
+      /** A requirement save (or another delivery) holds the shared Project lock. */
+      readonly ok: false;
+      readonly code: 'BUSY';
+      readonly message: string;
+      readonly heldBy: CasIntegrationLockHolder;
+      readonly branchUntouched: true;
+      readonly appliedTaskIds: readonly string[];
+      readonly applied: readonly AppliedIntegrationTask[];
+    }
+  | {
       readonly ok: false;
       readonly code: Exclude<CasFailureCode, 'VERSION_CONFLICT' | 'STALE_ARTIFACT'>;
       readonly message: string;
@@ -860,16 +952,47 @@ export type RunIntegrationResult =
   | Extract<CasOutcome, { ok: false }>;
 
 /**
- * Runs the whole final-integration step of `reliability.md` §4 on a real worktree.
+ * Runs the whole final-integration step of `reliability.md` §4 on a real worktree,
+ * under the shared Project integration lock (`AC-091`, `W8R2-02`).
  *
  * The integration worktree is checked out at the frozen target revision; each Task is
  * replayed from *its own* commits (`git cherry <dependencyRevision> <taskRevision>`),
  * already-merged ancestors are skipped, and a conflict between two already-passed
  * Tasks stops with the independent repair Task and a fresh-verification requirement.
  * The delivery ref is moved only by the CAS step, so a conflicting attempt can never
- * corrupt the branch.
+ * corrupt the branch. A held lock refuses with `BUSY` before any worktree is touched,
+ * and the lock is always released — the integration path owns the same mutex a
+ * requirement save takes.
  */
 export function runIntegration(options: RunIntegrationOptions): RunIntegrationResult {
+  const ownerAttemptId = options.ownerAttemptId ?? options.operationId;
+  const epoch = options.epoch ?? 1;
+  const taken = options.lock.acquire({
+    ownerAttemptId,
+    epoch,
+    ...(options.ttlMs === undefined ? {} : { ttlMs: options.ttlMs }),
+    ...(options.leaseAt === undefined ? {} : { at: options.leaseAt }),
+  });
+  if (!taken.acquired) {
+    return {
+      ok: false,
+      code: 'BUSY',
+      message: `Project 集成锁由 ${taken.heldBy.ownerAttemptId} 持有（epoch ${taken.heldBy.epoch}，到期 ${taken.heldBy.expiresAt}），代码交付未开始`,
+      heldBy: taken.heldBy,
+      branchUntouched: true,
+      appliedTaskIds: [],
+      applied: [],
+    };
+  }
+  try {
+    return integrateTasks(options);
+  } finally {
+    options.lock.release(ownerAttemptId, epoch);
+  }
+}
+
+/** The task replay itself; `runIntegration` owns the lock around it. */
+function integrateTasks(options: RunIntegrationOptions): RunIntegrationResult {
   const { git } = options;
   const appliedTaskIds: string[] = [];
   const applied: AppliedIntegrationTask[] = [];
@@ -1503,11 +1626,22 @@ export function createCasService(options: CasOptions): CasService {
         // The commit exists (state `committed`, or `pending` when the crash landed
         // between the commit and the status write). It is reused, never recreated.
         if (actual === existing.targetRevision) return complete(request, existing, false);
-        return refusal(
-          'STALE_ARTIFACT',
-          `提交 ${existing.targetRevision} 已存在但 ${request.ref} 为 ${actual ?? 'unborn'}；拒绝在其上重试`,
-          { expectedRevision: request.expectedRevision, actualRevision: actual },
-        );
+        // `W8R2-05`: a `pending` journal whose target the ref never received is the
+        // crash window between journaling the commit and the swap. A retry that names
+        // exactly that commit may install it — the swap below still carries the
+        // expected-old protection, so a competing move is refused, not absorbed.
+        const installable =
+          existing.state === 'pending' &&
+          actual !== null &&
+          actual === existing.expectedRevision &&
+          request.candidateRevision === existing.targetRevision;
+        if (!installable) {
+          return refusal(
+            'STALE_ARTIFACT',
+            `提交 ${existing.targetRevision} 已存在但 ${request.ref} 为 ${actual ?? 'unborn'}；拒绝在其上重试`,
+            { expectedRevision: request.expectedRevision, actualRevision: actual },
+          );
+        }
       }
       if (actual !== request.expectedRevision) {
         return refusal(
@@ -1526,6 +1660,32 @@ export function createCasService(options: CasOptions): CasService {
         actual === null
           ? `交付分支 ${request.ref} 不存在，期望 ${request.expectedRevision}`
           : `交付分支已移动：期望 ${request.expectedRevision}，实际 ${actual}`,
+        { expectedRevision: request.expectedRevision, actualRevision: actual },
+      );
+    }
+
+    // 2b. The candidate must *extend* the expected revision (`W8R2-01`). `update-ref`
+    //     with the expected old value only proves the ref has not moved; without this
+    //     check a crash-retry that reuses a worktree parked at an older base would
+    //     install a commit whose parent is not the expected revision, silently
+    //     discarding every commit integrated in between while still reporting success.
+    const targetRevision = request.candidateRevision;
+    const descends = git.isAncestor(repoRoot, request.expectedRevision, targetRevision);
+    if (!descends.ok) {
+      return refusal(
+        'INTERNAL_ERROR',
+        `无法校验候选 ${targetRevision} 是否为期望基线 ${request.expectedRevision} 的后代`,
+        {
+          expectedRevision: request.expectedRevision,
+          actualRevision: actual,
+          errors: descends.errors,
+        },
+      );
+    }
+    if (!descends.value) {
+      return refusal(
+        'STALE_ARTIFACT',
+        `候选 ${targetRevision} 不是期望基线 ${request.expectedRevision} 的后代；拒绝用陈旧候选移动 ${request.ref}`,
         { expectedRevision: request.expectedRevision, actualRevision: actual },
       );
     }
@@ -1557,12 +1717,22 @@ export function createCasService(options: CasOptions): CasService {
     //    here would move the delivery branch without the expected-old protection
     //    (silently absorbing a competing move), so the fallback was removed and the
     //    candidate revision is validated before the journal is touched.
-    const targetRevision = request.candidateRevision;
-
-    const targetTree =
-      options.candidateTree ??
-      requireGit(git.mergeTree(repoRoot, targetRevision), 'INTERNAL_ERROR', '读取候选 tree 失败');
-    if (targetTree === null) {
+    let targetTree = options.candidateTree;
+    if (targetTree === undefined) {
+      const measured = git.mergeTree(repoRoot, targetRevision);
+      if (!measured.ok) {
+        // `W8R2-04`: failing to read the candidate's tree is a structured refusal like
+        // every other failure of this function. Throwing here escaped the advertised
+        // `CasOutcome` union and made `settle()` an exception path.
+        return refusal('INTERNAL_ERROR', `读取候选 ${targetRevision} 的 tree 失败`, {
+          expectedRevision: request.expectedRevision,
+          actualRevision: actual,
+          errors: measured.errors,
+        });
+      }
+      targetTree = measured.value ?? undefined;
+    }
+    if (targetTree === undefined) {
       return refusal('INTERNAL_ERROR', `无法读取候选 ${targetRevision} 的 tree`, {
         expectedRevision: request.expectedRevision,
         actualRevision: actual,

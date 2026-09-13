@@ -29,6 +29,7 @@ import {
   type GitResult,
 } from '@agentdev/workspace';
 import {
+  ProjectIntegrationLock,
   SETTLEMENT_COMPLETED_EVENT,
   SettlementService,
   SnapshotWriter,
@@ -712,6 +713,66 @@ describe('Crash after the ref update: reuse the commit, complete once (AC-063)',
       const settledRow = h.store.requirements.find(REQUIREMENT_ID);
       expect(settledRow?.lifecycle).toBe('completed');
       expect(settledRow?.phase).toBeUndefined();
+    } finally {
+      h.store.close();
+    }
+  });
+
+  it('takes the shared integration lock and refuses while a requirement save holds it (W8R2-02)', () => {
+    const h = harness();
+    try {
+      addWork(h);
+      const candidate = candidateCommit(
+        h,
+        'settlement lock candidate',
+        'export const cancel = (): boolean => true;\n',
+      );
+      const tree = deliveredCodeTreeHash({ repoRoot: h.repo, revision: candidate });
+      const built = buildFinalManifest({
+        workId: WORK_ID,
+        verifiedManifests: [verifiedManifest({ codeRevision: candidate, codeTree: tree })],
+        finalRevision: candidate,
+        finalTree: tree,
+        knowledgeTree: HASH,
+        settlementResultRef: SETTLEMENT_RESULT_ID,
+      });
+      if (!built.ok) throw new Error(built.message);
+      const request = {
+        operationId: OPERATION_ID,
+        workId: WORK_ID,
+        ref: DELIVERY_REF,
+        expectedRevision: h.seedRevision,
+        candidateRevision: candidate,
+        candidateTree: tree,
+        manifest: built.manifest,
+      };
+
+      // A requirement save holds `integration:<projectId>`: the settlement path takes
+      // the same mutex, so it refuses before freezing anything or moving the ref.
+      // `W8R2-02`: the old settlement path never contended for the lock at all.
+      const holder = new ProjectIntegrationLock({
+        projectId: h.projectId,
+        leases: h.store.leases,
+        now: () => TIME,
+      });
+      expect(holder.acquire({ ownerAttemptId: 'save-op', epoch: 1 }).acquired).toBe(true);
+      const busy = h.settlement.settle(request);
+      expect(busy.ok).toBe(false);
+      if (busy.ok) throw new Error('expected the held lock to refuse the settlement');
+      expect(busy.code).toBe('BUSY');
+      expect(busy.branchUntouched).toBe(true);
+      expect(
+        requireValue<string | null>(port.resolveRevision(h.repo, DELIVERY_REF), 'resolve ref'),
+      ).toBe(h.seedRevision);
+      expect(scanEvents(h.store, { names: [SETTLEMENT_COMPLETED_EVENT] })).toHaveLength(0);
+
+      // The release path: after the holder releases, the same settle completes.
+      expect(holder.release('save-op', 1)).toBe(true);
+      const settled = h.settlement.settle(request);
+      expect(settled.ok).toBe(true);
+      if (!settled.ok) throw new Error(settled.message);
+      expect(settled.revision).toBe(candidate);
+      expect(scanEvents(h.store, { names: [SETTLEMENT_COMPLETED_EVENT] })).toHaveLength(1);
     } finally {
       h.store.close();
     }

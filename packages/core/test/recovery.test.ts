@@ -278,15 +278,17 @@ describe('Run recovery: leases, epochs and restart inspection (AC-057/058/061/08
       0,
     );
 
-    // An explicit recovery decision ("resume") recorded *after* the verdict is the
-    // auditable way to lift the block; nothing else is.
+    // An explicit recovery decision ("resume") recorded *after* the verdict and
+    // **bound to this Run** is the auditable way to lift the block; nothing else is.
+    // (`W8R2-03`: the old fixture targeted the Work id, which the round-2 review
+    // showed was too wide a binding — a Work-level decision lifted every Run.)
     advance(1_000);
     store.decisions.insert({
       id: DECISION_ID,
       projectId,
       workId: WORK_ID,
       kind: 'recovery',
-      targetRef: { id: WORK_ID, version: 1, hash: HASH },
+      targetRef: { id: RUN_ID, version: 1, hash: HASH },
       choices: ['resume', 'accept_cancel'],
       state: 'rejected',
       choice: 'resume',
@@ -314,6 +316,78 @@ describe('Run recovery: leases, epochs and restart inspection (AC-057/058/061/08
     expect(deadParked.inspection.newAttemptAllowed).toBe(true);
     const deadAttempt = lifecycle.beginAttempt(dead.id);
     expect(deadAttempt.number).toBe(2);
+  });
+
+  it('binds a resume decision to its own Run, not to the whole Work (W8R2-03)', () => {
+    const SIBLING_RUN_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e20';
+    const SIBLING_ATTEMPT_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e62';
+    const SIBLING_DECISION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e51';
+    // Two Runs of *one* Work, both parked with an unconfirmed live process: each
+    // verdict withholds a new Attempt for its own Run.
+    const sibling = addRun({ id: SIBLING_RUN_ID, status: 'starting' });
+    probe.setAlive('pid:2000', true);
+    addAttempt({
+      id: SIBLING_ATTEMPT_ID,
+      runId: sibling.id,
+      number: 1,
+      epoch: 0,
+      runnerId: 'pid:2000',
+      status: 'starting',
+    });
+    addRun({ status: 'starting' });
+    probe.setAlive('pid:1000', true);
+    addAttempt({
+      id: ATTEMPT_ID,
+      runId: RUN_ID,
+      number: 1,
+      epoch: 0,
+      runnerId: 'pid:1000',
+      status: 'starting',
+    });
+    expect(service.recoverRun(SIBLING_RUN_ID).to).toBe('interrupted');
+    expect(service.recoverRun(RUN_ID).to).toBe('interrupted');
+
+    // A resume decision written for the sibling Run only covers the sibling.
+    advance(1_000);
+    store.decisions.insert({
+      id: SIBLING_DECISION_ID,
+      projectId,
+      workId: WORK_ID,
+      kind: 'recovery',
+      targetRef: { id: SIBLING_RUN_ID, version: 1, hash: HASH },
+      choices: ['resume', 'accept_cancel'],
+      state: 'rejected',
+      choice: 'resume',
+      actor: 'user',
+      effectRefs: [],
+    });
+    const lifecycle = new RunLifecycle({ store });
+    const siblingAttempt = lifecycle.beginAttempt(SIBLING_RUN_ID);
+    expect(siblingAttempt.number).toBe(2);
+    // FALSIFY (W8R2-03): the sibling's decision must not lift this Run's block.
+    expect(() => lifecycle.beginAttempt(RUN_ID)).toThrowError(/RecoveryDecision|未确认终止/u);
+    expect(store.attempts.list({ where: 'run_id = ?', params: [RUN_ID] })).toHaveLength(1);
+
+    // Its *own* decision, recorded after its own verdict, is what lets it resume; a
+    // decision bound to the persisted verdict event id is accepted as well.
+    advance(1_000);
+    const verdict = scanEvents(store, { names: [RUN_RECOVERED_EVENT] }).find(
+      (event) => event.entityId === RUN_ID,
+    );
+    expect(verdict).toBeDefined();
+    store.decisions.insert({
+      id: DECISION_ID,
+      projectId,
+      workId: WORK_ID,
+      kind: 'recovery',
+      targetRef: { id: verdict?.eventId ?? RUN_ID, version: 1, hash: HASH },
+      choices: ['resume', 'accept_cancel'],
+      state: 'rejected',
+      choice: 'resume',
+      actor: 'user',
+      effectRefs: [],
+    });
+    expect(lifecycle.beginAttempt(RUN_ID).number).toBe(2);
   });
 
   it('parses only real process identities and reports the rest as unconfirmed', () => {

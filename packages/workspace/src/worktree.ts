@@ -92,6 +92,15 @@ export interface WorktreeGitPort extends GitPort {
   listWorktrees(repoRoot: string): GitResult<readonly WorktreeListing[]>;
   /** `git worktree remove [--force]`. */
   removeWorktree(repoRoot: string, path: string, force: boolean): GitResult<null>;
+  /**
+   * `git reset --hard <revision>` inside a linked worktree.
+   *
+   * A worktree that survived a crash may be parked at another base (the candidate a
+   * failed attempt committed, for example). Reusing it without rewinding would build
+   * the next commit on the wrong basis, so the base is re-established explicitly
+   * (`W8R2-01`) instead of being assumed from the path alone.
+   */
+  resetHard(worktreePath: string, revision: string): GitResult<null>;
   /** `git update-ref <ref> <new> <expected>`; never a force update. */
   updateRef(request: UpdateRefRequest): GitResult<null>;
   /** `git merge-base <a> <b>`; `null` when the histories are unrelated. */
@@ -369,6 +378,21 @@ export class NodeWorktreeGitPort implements WorktreeGitPort {
     const outcome = this.spawn(request.repoRoot, args);
     if (!outcome.ok) {
       return failure(gitDiagnostic(request.repoRoot, args, outcome, 'git update-ref 失败'));
+    }
+    return { ok: true, value: null };
+  }
+
+  resetHard(worktreePath: string, revision: string): GitResult<null> {
+    // Untracked leftovers from the failed attempt are removed too, so the rewound
+    // worktree is exactly the frozen base and nothing else (`W8R2-01`).
+    const args = ['reset', '--hard', revision];
+    const outcome = this.spawn(worktreePath, args);
+    if (!outcome.ok) {
+      return failure(gitDiagnostic(worktreePath, args, outcome, 'git reset --hard 失败'));
+    }
+    const cleaned = this.spawn(worktreePath, ['clean', '-fd']);
+    if (!cleaned.ok) {
+      return failure(gitDiagnostic(worktreePath, ['clean', '-fd'], cleaned, 'git clean 失败'));
     }
     return { ok: true, value: null };
   }
@@ -782,6 +806,29 @@ export function createWorktreeManager(options: WorktreeManagerOptions): Worktree
           `baseRevision 不是完整 Git OID：${request.baseRevision}`,
         );
       }
+      /**
+       * A re-used worktree is only valid at the *requested* base (`W8R2-01`): a
+       * crashed attempt can leave one parked on the candidate it committed, and
+       * continuing there would build the next result on the wrong basis. The base is
+       * re-established with a real `git reset --hard`, or the create is refused.
+       */
+      const rewindToBase = (
+        reusedWorktreeId: string,
+        reusedPath: string,
+        head: string | null,
+      ): CreateWorktreeOutcome | null => {
+        if (request.baseRevision === undefined || head === request.baseRevision) return null;
+        const reset = git.resetHard(reusedPath, request.baseRevision);
+        if (!reset.ok) {
+          leases.release(reusedWorktreeId, request.ownerAttemptId);
+          return createRefusal(
+            'INVALID_STATE',
+            `worktree ${reusedWorktreeId} 停在 ${head ?? 'unknown'}，不是要求的基点 ${request.baseRevision}，且无法复位`,
+            { errors: reset.errors },
+          );
+        }
+        return null;
+      };
       const existing = records.get(worktreeId);
       // An expired lease is not ownership (`reliability.md` §2 "过期先撤销旧执行"), so
       // only a live lease held by somebody else blocks this runner.
@@ -801,6 +848,15 @@ export function createWorktreeManager(options: WorktreeManagerOptions): Worktree
           at,
         });
         if (owned.acquired) {
+          const head = git.headRevision(existing.path);
+          if (!head.ok) {
+            leases.release(worktreeId, request.ownerAttemptId);
+            return createRefusal('INTERNAL_ERROR', `无法读取 worktree ${worktreeId} 的 HEAD`, {
+              errors: head.errors,
+            });
+          }
+          const rewound = rewindToBase(worktreeId, existing.path, head.value);
+          if (rewound !== null) return rewound;
           return { ok: true, record: { ...existing }, lease: owned.lease, reused: true };
         }
       }
@@ -853,6 +909,8 @@ export function createWorktreeManager(options: WorktreeManagerOptions): Worktree
       let worktree: WorktreeListing;
       let created = false;
       if (onDisk !== undefined) {
+        const rewound = rewindToBase(worktreeId, onDisk.path, onDisk.head);
+        if (rewound !== null) return rewound;
         worktree = onDisk;
       } else {
         if (request.baseRevision !== undefined) {

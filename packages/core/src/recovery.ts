@@ -270,8 +270,13 @@ export interface NewAttemptAdmission {
  * - no recovery verdict, or a verdict that allowed a new Attempt → **allowed** (a
  *   process confirmed gone is the documented "safe to resume" case);
  * - a verdict that withheld it → **refused** until an operator records a recovery
- *   decision with `choice: 'resume'` after that verdict — the explicit,
- *   auditable "the old execution is dealt with, proceed" act.
+ *   decision with `choice: 'resume'` **that covers this Run** and post-dates its own
+ *   verdict — the explicit, auditable "the old execution is dealt with, proceed" act.
+ *
+ * `W8R2-03`: the decision must be bound to the Run (or to the persisted verdict event
+ * id). A decision written for a *sibling* Run of the same Work used to lift this Run's
+ * block as well, because the lookup was Work-scoped; "every blocked Run needs its own
+ * decision" is the rule that keeps AC-057's no-double-writer guarantee.
  */
 export function newAttemptAdmission(store: ProjectStoreType, runId: string): NewAttemptAdmission {
   const verdicts = scanEvents(store, { names: [RUN_RECOVERED_EVENT] });
@@ -303,7 +308,8 @@ export function newAttemptAdmission(store: ProjectStoreType, runId: string): New
           .find(
             (decision) =>
               decision.choice === 'resume' &&
-              Date.parse(decision.createdAt) > Date.parse(verdict.occurredAt),
+              Date.parse(decision.createdAt) > Date.parse(verdict.occurredAt) &&
+              (decision.targetRef.id === runId || decision.targetRef.id === verdict.eventId),
           );
   if (resolved !== undefined) {
     return { ...allowed, requiresRecoveryDecision, resolvedByDecisionId: resolved.id };
@@ -315,8 +321,8 @@ export function newAttemptAdmission(store: ProjectStoreType, runId: string): New
     resolvedByDecisionId: null,
     code: 'RECOVERY_REQUIRED',
     message: requiresRecoveryDecision
-      ? `Run ${runId} 的旧执行未确认终止（或存在未确认副作用），恢复判定禁止开新 Attempt；先记录 RecoveryDecision（AC-057）`
-      : `Run ${runId} 的恢复判定未放行新 Attempt（旧工作区可能仍有写者）；先记录 RecoveryDecision（AC-057）`,
+      ? `Run ${runId} 的旧执行未确认终止（或存在未确认副作用），恢复判定禁止开新 Attempt；先记录针对本 Run（targetRef.id=${runId}）的 RecoveryDecision（AC-057）`
+      : `Run ${runId} 的恢复判定未放行新 Attempt（旧工作区可能仍有写者）；先记录针对本 Run（targetRef.id=${runId}）的 RecoveryDecision（AC-057）`,
   };
 }
 

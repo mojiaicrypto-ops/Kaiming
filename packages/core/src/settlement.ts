@@ -48,6 +48,7 @@ import { runGit } from '@agentdev/workspace';
 import type {
   CasEventPort,
   CasJournal,
+  CasOutcome,
   CasRequest,
   CasService,
   RequirementPoolCommit,
@@ -56,6 +57,7 @@ import type {
 import type { SnapshotWriter } from './snapshots.js';
 import { ProtocolError, type ProtocolErrorCode } from './errors.js';
 import { scanEvents } from './events.js';
+import { ProjectIntegrationLock, type IntegrationLeaseStore } from './requirement-save.js';
 
 /** `Event.name` of the one durable settlement completion event. */
 export const SETTLEMENT_COMPLETED_EVENT = 'settlement.completed';
@@ -745,6 +747,13 @@ export interface SettlementServiceOptions {
   readonly journal: CasJournal;
   readonly events: CasEventPort;
   readonly snapshots: SnapshotWriter;
+  /**
+   * The shared `integration:<projectId>` lock (`W8R2-02`). Requirement saving and
+   * code delivery must take the same mutex (`AC-091`); when omitted, one is built
+   * over the store's own `lease` rows, which is the same resource either way.
+   */
+  readonly lock?: ProjectIntegrationLock;
+  readonly leases?: IntegrationLeaseStore;
   /** Optionally injected so the completion event is durable in the store too. */
   readonly now?: () => string;
 }
@@ -769,6 +778,11 @@ export interface SettleRequest {
   readonly message?: string;
   readonly taskIds?: readonly string[];
   readonly requirementPool?: readonly RequirementPoolCommit[];
+  /** Lock owner; defaults to `settle:<operationId>`. */
+  readonly ownerAttemptId?: string;
+  readonly epoch?: number;
+  readonly ttlMs?: number;
+  readonly leaseAt?: string;
 }
 
 export interface PreparedSettlement {
@@ -875,6 +889,7 @@ export class SettlementService {
   private readonly cas: CasService;
   private readonly journal: CasJournal;
   private readonly snapshots: SnapshotWriter;
+  private readonly lock: ProjectIntegrationLock;
   private readonly now: () => string;
 
   constructor(options: SettlementServiceOptions) {
@@ -883,7 +898,19 @@ export class SettlementService {
     this.cas = options.cas;
     this.journal = options.journal;
     this.snapshots = options.snapshots;
+    this.lock =
+      options.lock ??
+      new ProjectIntegrationLock({
+        projectId: options.store.projectId,
+        leases: options.leases ?? options.store.leases,
+        ...(options.now === undefined ? {} : { now: options.now }),
+      });
     this.now = options.now ?? (() => new Date().toISOString());
+  }
+
+  /** The shared integration lock this service competes for (`AC-091`). */
+  get integrationLock(): ProjectIntegrationLock {
+    return this.lock;
   }
 
   /** The repo root of a Work's Project, or a typed refusal. */
@@ -1011,8 +1038,41 @@ export class SettlementService {
     };
   }
 
-  /** Prepares, installs the candidate through the CAS and completes the state. */
+  /**
+   * Prepares, installs the candidate through the CAS and completes the state.
+   *
+   * The whole step runs under the shared `integration:<projectId>` lock, so a
+   * requirement save and a code delivery can never interleave (`AC-091`, `W8R2-02`);
+   * a held lock is refused with `BUSY` before any manifest or ref is written, and the
+   * lock is always released.
+   */
   settle(request: SettleRequest): SettlementOutcome {
+    const ownerAttemptId = request.ownerAttemptId ?? `settle:${request.operationId}`;
+    const epoch = request.epoch ?? 1;
+    const taken = this.lock.acquire({
+      ownerAttemptId,
+      epoch,
+      ...(request.ttlMs === undefined ? {} : { ttlMs: request.ttlMs }),
+      ...(request.leaseAt === undefined ? {} : { at: request.leaseAt }),
+    });
+    if (!taken.acquired) {
+      return {
+        ok: false,
+        code: 'BUSY',
+        message: `Project 集成锁由 ${taken.heldBy.ownerAttemptId} 持有（epoch ${taken.heldBy.epoch}，到期 ${taken.heldBy.expiresAt}），结算未开始`,
+        reasons: ['另一个需求保存或代码交付正在集成；可退避后用同一 operationId 重发'],
+        branchUntouched: true,
+        operationId: request.operationId,
+      };
+    }
+    try {
+      return this.settleUnderLock(request);
+    } finally {
+      this.lock.release(ownerAttemptId, epoch);
+    }
+  }
+
+  private settleUnderLock(request: SettleRequest): SettlementOutcome {
     const prepared = this.prepareSettlement(request);
     if (!prepared.ok) {
       return {
@@ -1024,14 +1084,41 @@ export class SettlementService {
         operationId: request.operationId,
       };
     }
-    const cas = this.cas.integrate(prepared.prepared.casRequest);
+    let cas: CasOutcome;
+    try {
+      cas = this.cas.integrate(prepared.prepared.casRequest);
+    } catch (error) {
+      // `W8R2-04`: the settlement result is a union, so an escaping CAS/journal
+      // failure must still be reported as one instead of propagating.
+      const message = error instanceof Error ? error.message : String(error);
+      const journal = this.journal.load(request.operationId);
+      const current = this.refRevision(request.ref);
+      if (journal?.targetRevision !== undefined && current === journal.targetRevision) {
+        // The exception landed *after* the ref moved; only the state is behind, which
+        // the recovery path completes without a second commit.
+        return this.recoverUnderLock(request.operationId);
+      }
+      this.store.operations.update(
+        prepared.prepared.operationRowId,
+        { state: 'failed', error: { code: 'INTERNAL_ERROR', message } },
+        this.store.operations.find(prepared.prepared.operationRowId)?.version ?? 1,
+      );
+      return {
+        ok: false,
+        code: 'INTERNAL_ERROR',
+        message: `结算 CAS 步骤失败：${message}`,
+        reasons: [message],
+        branchUntouched: true,
+        operationId: request.operationId,
+      };
+    }
     if (!cas.ok) {
       // A CAS refusal may still be a recoverable partial: if the journal already
       // names a commit that is now the ref target, the operation only lacks state.
       const journal = this.journal.load(request.operationId);
       const current = this.refRevision(request.ref);
       if (journal?.targetRevision !== undefined && current === journal.targetRevision) {
-        return this.recover(request.operationId);
+        return this.recoverUnderLock(request.operationId);
       }
       this.store.operations.update(
         prepared.prepared.operationRowId,
@@ -1067,9 +1154,30 @@ export class SettlementService {
    *
    * Reuses the commit named by the operation/CAS journal — it never creates a new
    * one — completes the missing database state, and emits the settlement
-   * completion event exactly once.
+   * completion event exactly once. Runs under the shared Project integration lock
+   * (`W8R2-02`) like `settle`.
    */
   recover(operationId: string): SettlementOutcome {
+    const ownerAttemptId = `settle:${operationId}`;
+    const taken = this.lock.acquire({ ownerAttemptId, epoch: 1 });
+    if (!taken.acquired) {
+      return {
+        ok: false,
+        code: 'BUSY',
+        message: `Project 集成锁由 ${taken.heldBy.ownerAttemptId} 持有（epoch ${taken.heldBy.epoch}，到期 ${taken.heldBy.expiresAt}），结算恢复未开始`,
+        reasons: ['另一个需求保存或代码交付正在集成；可退避后用同一 operationId 重发'],
+        branchUntouched: true,
+        operationId,
+      };
+    }
+    try {
+      return this.recoverUnderLock(operationId);
+    } finally {
+      this.lock.release(ownerAttemptId, 1);
+    }
+  }
+
+  private recoverUnderLock(operationId: string): SettlementOutcome {
     const state = this.operationState(operationId);
     if (state === null) {
       return {

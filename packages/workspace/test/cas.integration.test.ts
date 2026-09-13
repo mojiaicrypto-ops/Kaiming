@@ -21,6 +21,7 @@ import type { GitResult } from '@agentdev/workspace';
 import {
   createCasService,
   createMemoryCasEvents,
+  createMemoryIntegrationLock,
   createMemoryWorktreeLeaseStore,
   createNodeWorktreeGitPort,
   createRepairTask,
@@ -66,6 +67,11 @@ afterEach(() => {
 
 const git: WorktreeGitPort = createNodeWorktreeGitPort();
 const DELIVERY_REF = 'refs/heads/agentdev/main';
+
+/** A fresh shared Project integration lock for one delivery (`W8R2-02`). */
+function integrationLock(): ReturnType<typeof createMemoryIntegrationLock> {
+  return createMemoryIntegrationLock('018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4000');
+}
 
 /** Unwraps a `GitResult`, failing the test loudly when Git refused. */
 function requireValue<T>(result: GitResult<T>, what: string): T {
@@ -775,6 +781,99 @@ describe('CAS integration against a real Git repository (AC-094)', () => {
     expect(refHead(repo, DELIVERY_REF)).toBe(competitor);
     expect(events.appended).toHaveLength(0);
   });
+
+  it('refuses a candidate that is not a descendant of the expected revision (W8R2-01)', () => {
+    const { repo, revision } = seedDeliveryRepo({ 'src/orders.ts': 'export const orders = [];\n' });
+    const { cas, events } = casFor({ file: join(makeTempDir(), 'journal.sqlite') });
+    // The commit a crash-retried save worktree parked at the *old* base produces: its
+    // parent is `revision`, not the revision the caller now expects.
+    const staleCandidate = commitThroughWorktree({
+      repo,
+      name: 'stale-basis',
+      baseRevision: revision,
+      message: 'doc(requirement): stale basis',
+      files: { 'src/stale.ts': 'export const stale = true;\n' },
+    });
+    // A code delivery integrated on the same base and already installed on the branch.
+    const integrated = commitThroughWorktree({
+      repo,
+      name: 'integrated-delivery',
+      baseRevision: revision,
+      message: 'feat: integrated delivery',
+      files: { 'src/orders.ts': 'export const orders = ["integrated"];\n' },
+    });
+    requireValue(
+      git.updateRef({
+        repoRoot: repo,
+        ref: DELIVERY_REF,
+        newRevision: integrated,
+        expectedOldRevision: revision,
+      }),
+      'move the delivery branch to the integrated commit',
+    );
+    const before = branchCommitCount(repo);
+
+    const refused = expectRefused(
+      cas.integrate({
+        operationId: 'op-stale-basis',
+        kind: 'requirement_save',
+        repoRoot: repo,
+        ref: DELIVERY_REF,
+        expectedRevision: integrated,
+        candidateRevision: staleCandidate,
+        message: 'doc(requirement): stale basis',
+      }),
+    );
+    expect(refused.code).toBe('STALE_ARTIFACT');
+    expect(refused.branchUntouched).toBe(true);
+    // The branch still holds the integrated commit: it was neither moved nor discarded.
+    expect(refHead(repo, DELIVERY_REF)).toBe(integrated);
+    expect(branchCommitCount(repo)).toBe(before);
+    expect(events.appended).toHaveLength(0);
+    expect(
+      requireValue<boolean>(git.isAncestor(repo, integrated, integrated), 'integrated ancestor'),
+    ).toBe(true);
+    expect(
+      requireValue<string | null>(git.readBlob(repo, integrated, 'src/orders.ts'), 'orders blob'),
+    ).toBe('export const orders = ["integrated"];\n');
+  });
+
+  it('returns a structured INTERNAL_ERROR when the candidate tree cannot be read (W8R2-04)', () => {
+    const { repo, revision } = seedDeliveryRepo({ 'src/orders.ts': 'export const orders = [];\n' });
+    const { events, journal } = casFor({ file: join(makeTempDir(), 'journal.sqlite') });
+    const candidate = commitThroughWorktree({
+      repo,
+      name: 'unreadable-tree',
+      baseRevision: revision,
+      message: 'feat: candidate',
+      files: { 'src/candidate.ts': 'export const candidate = 1;\n' },
+    });
+    // `integrate` advertises a `CasOutcome` union; a Git failure while reading the
+    // candidate's tree must be a refusal value, not an exception escaping the API.
+    const broken = Object.create(git) as WorktreeGitPort;
+    broken.mergeTree = (): GitResult<string | null> => ({
+      ok: false,
+      errors: [{ code: 'INTERNAL_ERROR', message: 'injected tree read failure', path: repo }],
+    });
+    const brokenCas = createCasService({ git: broken, journal, events });
+
+    const refused = expectRefused(
+      brokenCas.integrate({
+        operationId: 'op-unreadable-tree',
+        kind: 'integrate',
+        repoRoot: repo,
+        ref: DELIVERY_REF,
+        expectedRevision: revision,
+        candidateRevision: candidate,
+        message: 'feat: candidate',
+      }),
+    );
+    expect(refused.code).toBe('INTERNAL_ERROR');
+    expect(refused.branchUntouched).toBe(true);
+    expect(refused.message).toContain('tree');
+    expect(refHead(repo, DELIVERY_REF)).toBe(revision);
+    expect(events.appended).toHaveLength(0);
+  });
 });
 
 describe('dependency lineage with real revisions (AC-081)', () => {
@@ -983,6 +1082,7 @@ describe('dependency lineage with real revisions (AC-081)', () => {
       git,
       repoRoot: lineage.repo,
       cas,
+      lock: integrationLock(),
       worktreePath: taskWorktree({
         repo: lineage.repo,
         name: 'integration-a',
@@ -1011,6 +1111,7 @@ describe('dependency lineage with real revisions (AC-081)', () => {
       git,
       repoRoot: lineage.repo,
       cas,
+      lock: integrationLock(),
       worktreePath: taskWorktree({
         repo: lineage.repo,
         name: 'integration-b',
@@ -1080,6 +1181,7 @@ describe('dependency lineage with real revisions (AC-081)', () => {
       git,
       repoRoot: lineage.repo,
       cas,
+      lock: integrationLock(),
       worktreePath: taskWorktree({
         repo: lineage.repo,
         name: 'conflict-a',
@@ -1101,6 +1203,7 @@ describe('dependency lineage with real revisions (AC-081)', () => {
       git,
       repoRoot: lineage.repo,
       cas,
+      lock: integrationLock(),
       worktreePath: taskWorktree({
         repo: lineage.repo,
         name: 'conflict-integration',
@@ -1190,6 +1293,7 @@ describe('dependency lineage with real revisions (AC-081)', () => {
       git,
       repoRoot: lineage.repo,
       cas,
+      lock: integrationLock(),
       worktreePath: taskWorktree({
         repo: lineage.repo,
         name: 'conflict-integration-retry',
@@ -1242,6 +1346,7 @@ describe('dependency lineage with real revisions (AC-081)', () => {
       git,
       repoRoot: repo,
       cas,
+      lock: integrationLock(),
       worktreePath: taskWorktree({ repo, name: 'integration-two', baseRevision: revision }).path,
       operationId: 'op-integrate-two',
       ref: DELIVERY_REF,
@@ -1276,6 +1381,7 @@ describe('dependency lineage with real revisions (AC-081)', () => {
       git,
       repoRoot: repo,
       cas,
+      lock: integrationLock(),
       worktreePath: taskWorktree({
         repo,
         name: 'integration-two-replay',

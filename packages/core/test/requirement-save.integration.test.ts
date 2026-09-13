@@ -191,6 +191,9 @@ interface Harness {
   readonly projectId: string;
   readonly baseRevision: string;
   readonly dataDir: string;
+  readonly journal: CasJournal;
+  readonly events: ReturnType<typeof createMemoryCasEvents>;
+  readonly worktreeRoot: string;
 }
 
 /** A delivery repository, a Project database and a save service over both. */
@@ -252,6 +255,9 @@ function harness(options: { readonly keepWorktree?: boolean } = {}): Harness {
     projectId,
     baseRevision: seed.revision,
     dataDir,
+    journal,
+    events,
+    worktreeRoot: join(dataDir, 'save-worktrees'),
   };
 }
 
@@ -1216,6 +1222,7 @@ describe('requirement save versus code delivery (AC-091)', () => {
         journal: sqliteJournal(join(h.dataDir, 'integration.sqlite')),
         events: createMemoryCasEvents(),
       }),
+      lock: h.lock,
       worktreePath: integrationWorktree,
       operationId: 'op-integrate-concurrent',
       ref: DELIVERY_REF,
@@ -1327,7 +1334,7 @@ describe('requirement save versus code delivery (AC-091)', () => {
     h.store.close();
   });
 
-  it('serializes a save and a delivery through the same integration lock', () => {
+  it('serializes a save and a delivery through the same integration lock (W8R2-02)', () => {
     const h = harness();
     const taskWorktree = detachedWorktree(h.repo, 'task-serialized', h.baseRevision);
     writeFileAt(taskWorktree, 'src/orders.ts', 'export const orders = ["a"];\n');
@@ -1350,9 +1357,43 @@ describe('requirement save versus code delivery (AC-091)', () => {
     );
     expect(busy.code).toBe('BUSY');
 
-    // While the lock is held the delivery can still integrate, and it reads the
-    // pool from Git (nothing was saved, so there is nothing to lose).
+    // `W8R2-02`: the *delivery path itself* must contend for the same lock, so while
+    // the lock is held it is refused before it touches the integration worktree. The
+    // old expectation here asserted the opposite (the delivery integrated while the
+    // lock was held), which is exactly the half-implemented mutex the review found.
     const integrationWorktree = detachedWorktree(h.repo, 'integration-serialized', h.baseRevision);
+    const refusedDelivery = runIntegration({
+      git: port,
+      repoRoot: h.repo,
+      cas: createCasService({
+        git: port,
+        journal: sqliteJournal(join(h.dataDir, 'serialized.sqlite')),
+        events: createMemoryCasEvents(),
+      }),
+      lock: h.lock,
+      worktreePath: integrationWorktree,
+      operationId: 'op-integration-serialized',
+      ref: DELIVERY_REF,
+      targetRevision: h.baseRevision,
+      tasks: [
+        {
+          taskId: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e83',
+          dependsOn: [],
+          revision: taskRevision,
+          dependencyRevision: h.baseRevision,
+        },
+      ],
+      workId: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e84',
+    });
+    expect(refusedDelivery.ok).toBe(false);
+    if (refusedDelivery.ok) throw new Error('expected the held lock to refuse the delivery');
+    expect(refusedDelivery.code).toBe('BUSY');
+    expect(refusedDelivery.branchUntouched).toBe(true);
+    expect(refHead(h.repo)).toBe(h.baseRevision);
+
+    // The release path: once the holder releases, the very same delivery integrates
+    // and takes the lock itself.
+    expect(h.lock.release('delivery-1', 1)).toBe(true);
     const integrated = runIntegration({
       git: port,
       repoRoot: h.repo,
@@ -1361,6 +1402,7 @@ describe('requirement save versus code delivery (AC-091)', () => {
         journal: sqliteJournal(join(h.dataDir, 'serialized.sqlite')),
         events: createMemoryCasEvents(),
       }),
+      lock: h.lock,
       worktreePath: integrationWorktree,
       operationId: 'op-integration-serialized',
       ref: DELIVERY_REF,
@@ -1376,7 +1418,8 @@ describe('requirement save versus code delivery (AC-091)', () => {
       workId: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e84',
     });
     if (!integrated.ok) throw new Error(`integration failed: ${integrated.code}`);
-    expect(h.lock.release('delivery-1', 1)).toBe(true);
+    // The delivery released the lock on success, so the save can take it next.
+    expect(h.lock.release('delivery-1', 1)).toBe(false);
 
     // Now the save proceeds on the *new* baseline, so the requirement is not lost.
     const saved = requireSaved(
@@ -1401,6 +1444,274 @@ describe('requirement save versus code delivery (AC-091)', () => {
       'is-ancestor',
     );
     expect(ancestry).toBe(true);
+    h.store.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Crash recovery and the delivery working copy (W8R2-01/05/06)
+// ---------------------------------------------------------------------------
+
+/** A code-delivery commit for `files`, installed on the delivery ref. */
+function commitCodeDelivery(input: {
+  readonly repo: string;
+  readonly baseRevision: string;
+  readonly name: string;
+  readonly files: Readonly<Record<string, string>>;
+}): string {
+  const worktree = detachedWorktree(input.repo, input.name, input.baseRevision);
+  for (const [path, content] of Object.entries(input.files)) writeFileAt(worktree, path, content);
+  const committed = requireValue<{ revision: string }>(
+    port.commitPaths(worktree, `feat: ${input.name}`, Object.keys(input.files)),
+    `commit ${input.name}`,
+  );
+  requireValue(
+    port.updateRef({
+      repoRoot: input.repo,
+      ref: DELIVERY_REF,
+      newRevision: committed.revision,
+      expectedOldRevision: input.baseRevision,
+    }),
+    `update-ref ${input.name}`,
+  );
+  return committed.revision;
+}
+
+/**
+ * A port that fails the first `update-ref` for the delivery ref — the documented
+ * "crash between journaling the commit and swapping the ref" window
+ * (`reliability.md` §5, `W8R2-05`).
+ */
+function portCrashingBeforeSwap(repo: string): WorktreeGitPort {
+  const crashing = Object.create(port) as WorktreeGitPort;
+  let crashed = false;
+  crashing.updateRef = (request) => {
+    if (!crashed && request.ref === DELIVERY_REF) {
+      crashed = true;
+      return {
+        ok: false,
+        errors: [
+          { code: 'INTERNAL_ERROR', message: 'injected crash before the ref swap', path: repo },
+        ],
+      };
+    }
+    return port.updateRef(request);
+  };
+  return crashing;
+}
+
+describe('requirement save crash recovery and working copy (W8R2-01/05/06)', () => {
+  it('never reuses a save worktree parked at another base (W8R2-01)', () => {
+    const h = harness();
+    const operationId = 'op-crash-stale-worktree';
+    const saveWorktree = join(h.worktreeRoot, operationId);
+    // The residue a crashed attempt leaves behind: a detached worktree still parked at
+    // the *old* base. The old code reused it by path alone and committed from there.
+    requireValue(
+      port.addWorktree({ repoRoot: h.repo, path: saveWorktree, baseRevision: h.baseRevision }),
+      'leftover save worktree',
+    );
+    // Meanwhile a code delivery integrates on the branch.
+    const delivered = commitCodeDelivery({
+      repo: h.repo,
+      baseRevision: h.baseRevision,
+      name: 'delivery-advance',
+      files: { 'src/orders.ts': 'export const orders = ["delivery"];\n' },
+    });
+    expect(refHead(h.repo)).toBe(delivered);
+
+    const saved = requireSaved(
+      h.service.save({
+        operationId,
+        metadata: metadataDraft(),
+        contentMarkdown: body(),
+        expected: { expectedAbsent: true },
+        sourceRef: { kind: 'action', id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99' },
+      }),
+    );
+    // FALSIFY (W8R2-01): the delivery commit must still be an ancestor and its code
+    // must survive; the branch may not jump back to the old base.
+    expect(
+      requireValue<boolean>(port.isAncestor(h.repo, delivered, saved.git.commit), 'ancestry'),
+    ).toBe(true);
+    expect(refHead(h.repo)).toBe(saved.git.commit);
+    expect(
+      requireValue<string | null>(port.readBlob(h.repo, saved.git.commit, 'src/orders.ts'), 'code'),
+    ).toBe('export const orders = ["delivery"];\n');
+    // seed + delivery + save
+    expect(commitCount(h.repo)).toBe(3);
+    h.store.close();
+  });
+
+  it('installs the journaled commit exactly once after a crash before the ref swap (W8R2-05)', () => {
+    const h = harness();
+    const operationId = 'op-crash-before-swap';
+    const original = {
+      operationId,
+      metadata: metadataDraft(),
+      contentMarkdown: body('崩溃前写好的正文。'),
+      expected: { expectedAbsent: true },
+      sourceRef: { kind: 'action' as const, id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99' },
+    };
+    const crashingService = createRequirementSaveService({
+      store: h.store,
+      worktrees: portCrashingBeforeSwap(h.repo),
+      journal: h.journal,
+      events: h.events,
+      lock: h.lock,
+      worktreeRoot: h.worktreeRoot,
+      now: () => TIME,
+      keepWorktree: false,
+    });
+
+    const failed = requireRefused(crashingService.save(original));
+    expect(failed.code).toBe('INTERNAL_ERROR');
+    expect(failed.branchUntouched).toBe(true);
+    expect(refHead(h.repo)).toBe(h.baseRevision);
+    // The crash landed *after* the journal recorded the commit: the ref never moved.
+    const journal = h.journal.load(operationId);
+    expect(journal?.state).toBe('pending');
+    const recorded = journal?.targetRevision ?? '';
+    expect(recorded).not.toBe('');
+
+    // Same body, same operationId: the retry installs the *recorded* commit.
+    const retried = requireSaved(h.service.retry(original));
+    expect(retried.status).toBe('saved');
+    expect(refHead(h.repo)).toBe(recorded);
+    expect(commitCount(h.repo)).toBe(2);
+    expect(h.journal.load(operationId)?.state).toBe('completed');
+    expect(h.events.appended.filter((event) => event.operationId === operationId)).toHaveLength(1);
+    expect(retried.row.portableRef.revision).toBe(recorded);
+    // The installed commit carries exactly the bytes this body prepared.
+    const committedMetadata = requireValue<string | null>(
+      port.readBlob(h.repo, recorded, `${retried.recordPath}/requirement.json`),
+      'committed metadata',
+    );
+    expect(sha256Hex(committedMetadata ?? '')).toBe(retried.metadataHash);
+
+    // Replaying is projection repair only: no second commit and no second event.
+    const replay = requireSaved(
+      h.service.retry({
+        ...original,
+        expected: { recordVersion: retried.recordVersion, recordHash: retried.recordHash },
+      }),
+    );
+    expect(replay.status).toBe('projection_repaired');
+    expect(replay.git.commit).toBe(recorded);
+    expect(commitCount(h.repo)).toBe(2);
+    expect(h.events.appended.filter((event) => event.operationId === operationId)).toHaveLength(1);
+    h.store.close();
+  });
+
+  it('reports a precise conflict when the retried body differs from the journaled commit (W8R2-05)', () => {
+    const h = harness();
+    const operationId = 'op-crash-before-swap-changed';
+    const original = {
+      operationId,
+      metadata: metadataDraft(),
+      contentMarkdown: body('崩溃前写好的正文。'),
+      expected: { expectedAbsent: true },
+      sourceRef: { kind: 'action' as const, id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99' },
+    };
+    const crashingService = createRequirementSaveService({
+      store: h.store,
+      worktrees: portCrashingBeforeSwap(h.repo),
+      journal: h.journal,
+      events: h.events,
+      lock: h.lock,
+      worktreeRoot: h.worktreeRoot,
+      now: () => TIME,
+      keepWorktree: false,
+    });
+    expect(requireRefused(crashingService.save(original)).code).toBe('INTERNAL_ERROR');
+    const recorded = h.journal.load(operationId)?.targetRevision ?? '';
+
+    // A changed body cannot be installed under the same operationId, and the refusal
+    // names exactly why instead of leaving the operation permanently stuck.
+    const changed = requireRefused(
+      h.service.retry({ ...original, contentMarkdown: body('另一份正文。') }),
+    );
+    expect(changed.code).toBe('IDEMPOTENCY_CONFLICT');
+    expect(changed.message).toContain('recordHash');
+    expect(changed.message).toContain(recorded);
+    expect(changed.message).toContain('operationId');
+    expect(changed.branchUntouched).toBe(true);
+    expect(refHead(h.repo)).toBe(h.baseRevision);
+    expect(commitCount(h.repo)).toBe(1);
+
+    // The original body still installs the recorded commit, so the operation is not
+    // permanently stuck.
+    const recovered = requireSaved(h.service.retry(original));
+    expect(recovered.status).toBe('saved');
+    expect(refHead(h.repo)).toBe(recorded);
+    expect(commitCount(h.repo)).toBe(2);
+    h.store.close();
+  });
+
+  it('refuses to overwrite uncommitted local edits in the delivery working tree (W8R2-06)', () => {
+    const h = harness();
+    const first = requireSaved(
+      h.service.save({
+        operationId: 'op-dirty-v1',
+        metadata: metadataDraft(),
+        contentMarkdown: body('第一版。'),
+        expected: { expectedAbsent: true },
+        sourceRef: { kind: 'action', id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99' },
+      }),
+    );
+    const contentPath = join(h.repo, first.recordPath, 'content.md');
+    const edited = '# 本地未提交的正文（不得被静默覆盖）\n';
+    writeFileSync(contentPath, edited, 'utf8');
+
+    const second = requireRefused(
+      h.service.save({
+        operationId: 'op-dirty-v2',
+        metadata: metadataDraft({ version: 2, title: '第二版' }),
+        contentMarkdown: body('第二版。'),
+        expected: { recordVersion: 1, recordHash: first.recordHash },
+        sourceRef: { kind: 'action', id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99' },
+      }),
+    );
+    // FALSIFY (W8R2-06): the local edit must survive; the old code replaced it with
+    // the committed bytes and still reported `saved`.
+    expect(second.code).toBe('RECOVERY_REQUIRED');
+    expect(second.branchUntouched).toBe(false);
+    expect(second.operation?.repairOnly).toBe(true);
+    expect(second.message).toContain(`${first.recordPath}/content.md`);
+    expect(readFileSync(contentPath, 'utf8')).toBe(edited);
+    // Git did move: the committed bytes are the second version.
+    const moved = refHead(h.repo);
+    expect(moved).not.toBe(first.git.commit);
+    expect(
+      requireValue<string | null>(
+        port.readBlob(h.repo, moved ?? '', `${first.recordPath}/content.md`),
+        'committed',
+      ),
+    ).toContain('第二版');
+
+    // Once the caller resolves the local edit, the repair-only retry writes the
+    // committed bytes back.
+    const baselineBytes = requireValue<string | null>(
+      port.readBlob(h.repo, first.git.commit, `${first.recordPath}/content.md`),
+      'baseline content',
+    );
+    writeFileSync(contentPath, baselineBytes ?? '', 'utf8');
+    const repaired = requireSaved(
+      h.service.retry({
+        operationId: 'op-dirty-v2',
+        metadata: metadataDraft({ version: 2, title: '第二版' }),
+        contentMarkdown: body('第二版。'),
+        expected: { recordVersion: 1, recordHash: first.recordHash },
+        sourceRef: { kind: 'action', id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e99' },
+      }),
+    );
+    expect(repaired.status).toBe('projection_repaired');
+    expect(readFileSync(contentPath, 'utf8')).toBe(
+      requireValue<string | null>(
+        port.readBlob(h.repo, repaired.git.commit, `${first.recordPath}/content.md`),
+        'final content',
+      ),
+    );
     h.store.close();
   });
 });
