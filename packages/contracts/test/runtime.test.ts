@@ -48,6 +48,7 @@ describe('runtimePaths', () => {
       installationCredential: '/home/.agentdev/installation-token',
       runtime: '/home/.agentdev/runtime.json',
       lock: '/home/.agentdev/daemon.lock',
+      epoch: '/home/.agentdev/daemon.epoch',
       projects: '/home/.agentdev/projects.json',
       config: '/home/.agentdev/config.toml',
       logs: '/home/.agentdev/logs',

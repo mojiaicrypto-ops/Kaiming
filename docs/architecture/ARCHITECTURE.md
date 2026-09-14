@@ -33,7 +33,7 @@ agentdevd拥有全部业务状态。ProjectRuntime是进程内逻辑隔离，各
 | apps/runner | 单Attempt、Pi Adapter、IPC | pi-runtime/contracts |
 | apps/web | Fastify BFF、React UI | contracts/client |
 | packages/client | WebSocket连接、命令与订阅 | contracts/ws |
-| apps/cli | doctor/start/open/backup/restore/status | client |
+| apps/cli | doctor/start/open/backup/restore/relocate/secret/status；安装级凭证与备份维护 | client；core、storage（仅安装级操作 secret/backup/restore/relocate 按需懒加载） |
 
 规范中的路径是待实现路径；现有实现起点见[文档索引](../INDEX.md)。共享Schema一次定义，服务端与客户端共用，测试不复制另一套类型。
 

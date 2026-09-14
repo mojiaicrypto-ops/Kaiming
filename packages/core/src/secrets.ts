@@ -53,6 +53,15 @@ const MAX_VALUE_LENGTH = 64 * 1024;
 const MAX_ENV_NAME_LENGTH = 128;
 const PREVIEW_LENGTH = 160;
 
+/**
+ * Upper bound of the environment variable name a secret is injected as.
+ *
+ * Exported (WP-12 fix round 2, W12T1-03) so the durable repository can reject a ref whose
+ * derived name would not fit *before* it writes a record; otherwise `set` would report a
+ * validation failure after the credential was already on disk.
+ */
+export const MAX_SECRET_ENV_NAME_LENGTH = MAX_ENV_NAME_LENGTH;
+
 /** Printable ASCII without whitespace: a provider `secretRef` is an opaque name. */
 const REF_PATTERN = /^[!-~]+$/;
 /** Environment variable names a child process can carry. */
@@ -92,6 +101,16 @@ export interface SecretAccessContext {
   readonly inputHash?: string;
   /** Every Grant the caller holds for this Run. */
   readonly grants: readonly Grant[];
+  /**
+   * The one credential ref the Gateway is resolving for *this* call (WP-12 fix round 2).
+   *
+   * Honored **only** when `audience === 'gateway'` and the value comes from an immutable
+   * source — a Run's frozen provider snapshot, or the live configuration for an
+   * installation-level `provider.test` — never from a `runParams` layer the model could
+   * influence. `tool` and every other audience keep the pure `evaluateGrant` path, and the
+   * registration's own audience/purpose/role narrowing still applies.
+   */
+  readonly allowedRefs?: readonly string[];
 }
 
 /** What `put` registers; the value never leaves the store except via `resolve`. */
@@ -185,6 +204,19 @@ export function secretEnvName(ref: string): string {
 }
 
 /**
+ * Whether `ref` is a usable secret reference.
+ *
+ * This is the **ref shape only**: 1–128 printable characters without whitespace. It does
+ * *not* bound the environment variable name derived by {@link secretEnvName}, which
+ * `put` also validates; a caller that persists a ref before registering it (the durable
+ * repository, WP-12 T1.1) must check {@link MAX_SECRET_ENV_NAME_LENGTH} as well, or a
+ * rejected `put` would leave a record behind (W12T1-03).
+ */
+export function isValidSecretRef(ref: string): boolean {
+  return ref.length > 0 && ref.length <= MAX_REF_LENGTH && REF_PATTERN.test(ref);
+}
+
+/**
  * An in-memory `secretRef` → value store with Grant-checked resolution.
  *
  * Values are held in `#secrets`, which JavaScript's private-field semantics keep
@@ -246,6 +278,16 @@ export class SecretStore {
   /** Whether a ref is registered; reveals existence only, never a value. */
   has(ref: string): boolean {
     return this.#secrets.has(ref);
+  }
+
+  /**
+   * Removes one registration; `true` when it existed.
+   *
+   * The durable copy is deleted first by the caller (WP-12 T1.1), so a crash between
+   * the two leaves the repository as the authority and the next start loads it again.
+   */
+  remove(ref: string): boolean {
+    return this.#secrets.delete(ref);
   }
 
   /** Every registered ref, sorted; the query surface callers may log freely. */
@@ -352,6 +394,13 @@ export class SecretStore {
    * next step (`AUTH_EXPIRED` vs `NOT_AUTHORIZED`).
    */
   private admit(ref: string, context: SecretAccessContext): Admission | Refusal {
+    // The Gateway holds the Provider credential on the Run's behalf (`execution.md` §2):
+    // there is no per-run `secret` Grant to evaluate, and the ref it may use is exactly the
+    // one frozen for that Run. Everything else — the `tool` audience above all — still goes
+    // through `evaluateGrant` unchanged.
+    if (context.audience === 'gateway' && (context.allowedRefs ?? []).includes(ref)) {
+      return { ok: true };
+    }
     const request = this.grantRequest(ref, context);
     const decisions = context.grants.map((grant) => evaluateGrant(grant, request));
     if (decisions.some((decision) => decision.allowed)) return { ok: true };
@@ -447,8 +496,14 @@ export function gatewaySecretResolver(
   context: SecretAccessContext,
 ): SecretResolver {
   return {
-    resolve: (secretRef: string): string | undefined => {
-      const resolution = store.resolve(secretRef, context);
+    has: (secretRef: string): boolean => store.has(secretRef),
+    resolve: (secretRef: string, options?: { readonly allowRef?: string }): string | undefined => {
+      // The per-call allow-list is narrowed to the single ref the Gateway is about to use,
+      // and only for the `gateway` audience; the stored context's own identity is kept, so
+      // the registration's purpose/role restrictions still apply.
+      const scoped: SecretAccessContext =
+        options?.allowRef === undefined ? context : { ...context, allowedRefs: [options.allowRef] };
+      const resolution = store.resolve(secretRef, scoped);
       return resolution.ok ? resolution.value : undefined;
     },
   };

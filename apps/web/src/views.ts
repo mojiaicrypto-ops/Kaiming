@@ -42,6 +42,17 @@ function asBoolean(value: unknown, fallback = false): boolean {
   return typeof value === 'boolean' ? value : fallback;
 }
 
+/** Reads one optional string without turning a missing field into `''`. */
+function asOptionalString(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null;
+}
+
+/** Reads one string list, ignoring entries that are not strings. */
+function asStrings(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string');
+}
+
 // ---------------------------------------------------------------------------
 // Board (AC-068)
 // ---------------------------------------------------------------------------
@@ -79,6 +90,23 @@ export interface BoardCard {
   readonly canPause: boolean;
   /** An imported active record with no local Work: honestly "waiting to continue". */
   readonly waitingToContinue: boolean;
+  /**
+   * The Git facts the card can state (`requirements.md` §3, AC-090).
+   *
+   * `branch` is the Project's delivery branch (from `project.snapshot.get`) because
+   * neither `board` nor `requirement.get` repeats it; `commit` is the record's real
+   * `portableRef.revision`; `unpushed` is `null` unless the payload carried an
+   * explicit `git.unpushed`, so the UI never invents a push state.
+   */
+  readonly branch: string;
+  readonly commit: string | null;
+  readonly unpushed: boolean | null;
+  /** The Work's own version, so a `work.control` resume can send `expectedVersion`. */
+  readonly workVersion: number | null;
+  readonly canResume: boolean;
+  readonly canContinue: boolean;
+  readonly canComplete: boolean;
+  readonly canArchive: boolean;
 }
 
 export interface BoardModel {
@@ -94,25 +122,72 @@ export interface BoardModel {
   readonly duplicatedIdentities: readonly string[];
 }
 
-export function boardCardOf(raw: JsonObject): BoardCard {
+/**
+ * The commit the projection points at (`requirements.md` §6, AC-090).
+ *
+ * `portableRef.revision` is the Git revision of the record directory; a record that
+ * was never committed answers `working-tree`, which is not a commit. The source
+ * reference is only a fallback for a payload that carries no portable ref.
+ */
+function commitOf(raw: JsonObject): string | null {
+  const portable = asObject(field(raw, 'portableRef')) ?? {};
+  const source = asObject(field(raw, 'sourceRef')) ?? {};
+  for (const candidate of [field(portable, 'revision'), field(source, 'version')]) {
+    if (typeof candidate === 'string' && candidate !== '' && candidate !== 'working-tree') {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * The explicit push state a payload reports, or `null` when it reports none.
+ *
+ * `git.unpushed` is a Git-side fact the save command returns; the read surfaces
+ * (`board`, `requirement.get`, `project.snapshot.get`) do not carry it, so the UI
+ * renders "not reported" rather than inferring `unpushed` from a local branch
+ * (`requirements.md` §3).
+ */
+function unpushedOf(raw: JsonObject): boolean | null {
+  const git = asObject(field(raw, 'git'));
+  const value = git === undefined ? undefined : field(git, 'unpushed');
+  return typeof value === 'boolean' ? value : null;
+}
+
+/** The Work version when the payload carries one; `board` does not. */
+function workVersionOf(work: JsonObject | undefined): number | null {
+  if (work === undefined) return null;
+  const value = field(work, 'version');
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+export function boardCardOf(
+  raw: JsonObject,
+  options: { readonly branch?: string } = {},
+): BoardCard {
   const work = asObject(field(raw, 'work'));
   const tasks = asObject(field(raw, 'tasks')) ?? {};
+  const lifecycle = asString(field(raw, 'lifecycle'));
+  const workStatus = work === undefined ? null : asString(field(work, 'status'));
   const blockers = Array.isArray(field(work ?? {}, 'blockers'))
     ? (field(work ?? {}, 'blockers') as unknown[]).map((entry) => String(entry))
     : [];
+  const executionAvailability = asString(field(raw, 'executionAvailability'), 'unknown');
+  const waitingToContinue =
+    asBoolean(field(raw, 'waitingToContinue')) || (lifecycle === 'active' && work === undefined);
   return {
     requirementId: asString(field(raw, 'requirementId')),
     identity: asString(field(raw, 'identity'), asString(field(raw, 'requirementId'))),
     title: asString(field(raw, 'title')),
     goal: asString(field(raw, 'goal')),
-    lifecycle: asString(field(raw, 'lifecycle')),
+    lifecycle,
     previousLifecycle:
       typeof field(raw, 'previousLifecycle') === 'string'
         ? (field(raw, 'previousLifecycle') as string)
         : null,
     phase: typeof field(raw, 'phase') === 'string' ? (field(raw, 'phase') as string) : null,
     recordVersion: asNumber(field(raw, 'recordVersion')),
-    executionAvailability: asString(field(raw, 'executionAvailability'), 'unknown'),
+    executionAvailability,
     evidenceAvailability: asString(field(raw, 'evidenceAvailability'), 'unknown'),
     saveState: asString(field(raw, 'saveState'), 'saved'),
     work:
@@ -131,9 +206,16 @@ export function boardCardOf(raw: JsonObject): BoardCard {
     awaitingDecision: asNumber(field(raw, 'awaitingDecision')),
     canCancelWithoutWork: asBoolean(field(raw, 'canCancelWithoutWork')),
     canPause: asBoolean(field(raw, 'canPause')),
-    waitingToContinue:
-      asBoolean(field(raw, 'waitingToContinue')) ||
-      (asString(field(raw, 'lifecycle')) === 'active' && work === undefined),
+    waitingToContinue,
+    branch: options.branch ?? '',
+    commit: commitOf(raw),
+    unpushed: unpushedOf(raw),
+    workVersion: workVersionOf(work),
+    canResume: workStatus === 'paused',
+    canContinue:
+      lifecycle === 'active' && (waitingToContinue || executionAvailability === 'needs_replan'),
+    canComplete: lifecycle === 'active',
+    canArchive: lifecycle === 'queued' || lifecycle === 'completed',
   };
 }
 
@@ -144,7 +226,10 @@ export function boardCardOf(raw: JsonObject): BoardCard {
  * protocol break, not a fifth column, so it is reported through
  * `duplicatedIdentities`-style accounting rather than silently rendered.
  */
-export function boardModel(raw: JsonObject): BoardModel {
+export function boardModel(
+  raw: JsonObject,
+  options: { readonly branch?: string } = {},
+): BoardModel {
   const columns = asObject(field(raw, 'columns')) ?? {};
   const model: Record<BoardColumn, BoardCard[]> = {
     queued: [],
@@ -153,7 +238,7 @@ export function boardModel(raw: JsonObject): BoardModel {
     archived: [],
   };
   for (const column of BOARD_COLUMNS) {
-    model[column] = asArray(field(columns, column)).map((card) => boardCardOf(card));
+    model[column] = asArray(field(columns, column)).map((card) => boardCardOf(card, options));
   }
   const seen = new Map<string, number>();
   for (const column of BOARD_COLUMNS) {
@@ -185,6 +270,39 @@ export function boardModel(raw: JsonObject): BoardModel {
 // Inbox (AC-074)
 // ---------------------------------------------------------------------------
 
+/**
+ * One decision question, read from the `targetRef` Artifact (`protocol.md` §6).
+ *
+ * `text` is the Artifact's markdown body and is project content: it is rendered
+ * verbatim. `error` is the daemon's diagnostic for a body that could not be read, so
+ * the page can state the failure instead of showing an empty card.
+ */
+export interface InboxQuestion {
+  readonly text: string;
+  readonly error: string | null;
+}
+
+/** The Run parked on one pending permission request (`protocol.md` §4). */
+export interface InboxWaitingRun {
+  readonly runId: string;
+  readonly role: string;
+  readonly stage: string;
+  readonly status: string;
+}
+
+/**
+ * The exact tool call a `permission` decision binds.
+ *
+ * The daemon mints the Grant from the values recorded for this operation, so the
+ * fields shown here are what the user is really approving (`protocol.md` §4,
+ * AC-080). `targets` may be empty for a command operation such as `bash`.
+ */
+export interface InboxBinding {
+  readonly operation: string;
+  readonly targets: readonly string[];
+  readonly inputHash: string | null;
+}
+
 export interface InboxRow {
   readonly kind: 'decision' | 'finding' | 'recovery';
   readonly id: string;
@@ -202,6 +320,24 @@ export interface InboxRow {
   readonly expired: boolean;
   readonly runId: string | null;
   readonly createdAt: string | null;
+  /** `product` decisions carry a question; `permission` decisions bind a tool call. */
+  readonly entry: 'decision' | 'permission' | 'finding' | 'recovery';
+  readonly decisionKind: string;
+  /** The decision's raw `targetRef.id`: an Artifact id, a tool operation id, … */
+  readonly targetId: string;
+  /** The `targetRef` Artifact a `product` decision points at (`protocol.md` §6). */
+  readonly artifactId: string | null;
+  readonly artifactVersion: number | null;
+  readonly targetHash: string | null;
+  /** The resolved question, or `null` when this entry has no question contract. */
+  readonly question: InboxQuestion | null;
+  /** The bound operation/targets, when the daemon reported them. */
+  readonly binding: InboxBinding | null;
+  /** A permission row whose binding the daemon did not report can never be approved. */
+  readonly bindingMissing: boolean;
+  readonly role: string | null;
+  readonly stage: string | null;
+  readonly runStatus: string | null;
 }
 
 export interface InboxModel {
@@ -213,14 +349,35 @@ export interface InboxModel {
 }
 
 /**
+ * What one Inbox answer needs besides its own items.
+ *
+ * The question body lives in an Artifact and the parked Run lives in the Run table,
+ * so neither is part of the `inbox` result (`protocol.md` §4/§6); the caller that
+ * holds a daemon session resolves both and passes them in.
+ */
+export interface InboxContext {
+  /** Resolved question bodies keyed by `questionKey`. */
+  readonly questions?: Readonly<Record<string, InboxQuestion>>;
+  /** The Run parked on each pending permission request, keyed by Work id. */
+  readonly waitingRuns?: Readonly<Record<string, InboxWaitingRun>>;
+}
+
+/** The key one decision's question body is resolved under. */
+export function questionKey(artifactId: string, artifactVersion: number): string {
+  return `${artifactId}:${String(artifactVersion)}`;
+}
+
+/**
  * Normalises one Inbox answer.
  *
  * De-duplication is enforced here as well as in the daemon, because the rule is a
  * user-visible promise: the same decision arriving through many events is one row
  * per target version, and a decision whose state is no longer `pending` is rendered
- * disabled.
+ * disabled. Both request kinds are typed here: a `product` decision keeps the
+ * Artifact reference it must be read from, and a `permission` decision keeps the
+ * bound tool call (`protocol.md` §6 Inbox rendering contract).
  */
-export function inboxModel(raw: JsonObject): InboxModel {
+export function inboxModel(raw: JsonObject, context: InboxContext = {}): InboxModel {
   const rows: InboxRow[] = [];
   const seenDecisions = new Set<string>();
   const findings = new Map<string, InboxRow>();
@@ -237,15 +394,23 @@ export function inboxModel(raw: JsonObject): InboxModel {
       if (seenDecisions.has(key)) continue;
       seenDecisions.add(key);
       const state = asString(field(item, 'state'), 'pending');
+      const decisionKind = asString(field(item, 'decisionKind'), 'decision');
+      const workId = asString(field(item, 'workId'));
+      const permission = decisionKind === 'permission';
+      // `protocol.md` §6: the question is an Artifact the product decision points at.
+      // Any other kind has no question contract, so the card renders no body instead
+      // of guessing one.
+      const asksQuestion = decisionKind === 'product';
+      const operation = asString(field(item, 'operation'));
+      const run = context.waitingRuns?.[workId] ?? null;
+      const runId = asString(field(item, 'runId'), run?.runId ?? '');
       rows.push({
         kind: 'decision',
         id: asString(field(item, 'id')),
-        workId: asString(field(item, 'workId')),
-        label: asString(field(item, 'decisionKind'), 'decision'),
+        workId,
+        label: decisionKind,
         targetVersion,
-        choices: Array.isArray(field(item, 'choices'))
-          ? (field(item, 'choices') as unknown[]).map((entry) => String(entry))
-          : [],
+        choices: asStrings(field(item, 'choices')),
         state,
         count: 1,
         severity: null,
@@ -253,11 +418,35 @@ export function inboxModel(raw: JsonObject): InboxModel {
         actionable:
           state === 'pending' && asBoolean(field(item, 'actionable'), state === 'pending'),
         expired: state === 'expired',
-        runId: null,
+        runId: runId === '' ? null : runId,
         createdAt:
           typeof field(item, 'createdAt') === 'string'
             ? (field(item, 'createdAt') as string)
             : null,
+        entry: permission ? 'permission' : 'decision',
+        decisionKind,
+        targetId,
+        artifactId: asksQuestion ? targetId : null,
+        artifactVersion: asksQuestion ? targetVersion : null,
+        targetHash: asOptionalString(field(targetRef, 'hash')),
+        question: asksQuestion
+          ? (context.questions?.[questionKey(targetId, targetVersion)] ?? {
+              text: '',
+              error: null,
+            })
+          : null,
+        binding:
+          permission && operation !== ''
+            ? {
+                operation,
+                targets: asStrings(field(item, 'targets')),
+                inputHash: asOptionalString(field(item, 'inputHash')),
+              }
+            : null,
+        bindingMissing: permission && operation === '',
+        role: run?.role ?? null,
+        stage: run?.stage ?? null,
+        runStatus: run?.status ?? null,
       });
       continue;
     }
@@ -283,6 +472,18 @@ export function inboxModel(raw: JsonObject): InboxModel {
           expired: false,
           runId: null,
           createdAt: null,
+          entry: 'finding',
+          decisionKind: '',
+          targetId: '',
+          artifactId: null,
+          artifactVersion: null,
+          targetHash: null,
+          question: null,
+          binding: null,
+          bindingMissing: false,
+          role: null,
+          stage: null,
+          runStatus: null,
         });
       } else {
         findings.set(key, { ...existing, count: existing.count + count });
@@ -305,6 +506,18 @@ export function inboxModel(raw: JsonObject): InboxModel {
         expired: false,
         runId: typeof field(item, 'runId') === 'string' ? (field(item, 'runId') as string) : null,
         createdAt: null,
+        entry: 'recovery',
+        decisionKind: '',
+        targetId: '',
+        artifactId: null,
+        artifactVersion: null,
+        targetHash: null,
+        question: null,
+        binding: null,
+        bindingMissing: false,
+        role: null,
+        stage: null,
+        runStatus: null,
       });
     }
   }
@@ -414,6 +627,19 @@ export interface RequirementDetail {
   readonly waitingToContinue: boolean;
   readonly workId: string | null;
   readonly workStatus: string | null;
+  readonly workVersion: number | null;
+  /** The Project's delivery branch (`project.snapshot.get`); never guessed here. */
+  readonly branch: string;
+  /** The record's real commit revision, or `null` while it is only a working tree. */
+  readonly commit: string | null;
+  /** `null` unless the payload reported `git.unpushed` (AC-090). */
+  readonly unpushed: boolean | null;
+  readonly canPause: boolean;
+  readonly canResume: boolean;
+  readonly canCancel: boolean;
+  readonly canContinue: boolean;
+  readonly canComplete: boolean;
+  readonly canArchive: boolean;
   readonly scope: JsonObject | null;
   readonly acceptance: readonly string[];
   readonly openQuestions: readonly string[];
@@ -484,6 +710,8 @@ export function requirementDetail(input: {
   readonly artifacts: readonly JsonObject[];
   readonly runs: readonly JsonObject[];
   readonly plan?: JsonObject;
+  /** The delivery branch from `project.snapshot.get` (`AC-090`). */
+  readonly branch?: string;
 }): RequirementDetail {
   const requirement = input.requirement;
   const work = asObject(field(requirement, 'work'));
@@ -526,11 +754,17 @@ export function requirementDetail(input: {
       approvalEnabled,
     };
   }
+  const lifecycle = asString(field(requirement, 'lifecycle'));
+  const workStatus = work === undefined ? null : asString(field(work, 'status'));
+  const executionAvailability = asString(field(requirement, 'executionAvailability'), 'unknown');
+  const waitingToContinue =
+    asBoolean(field(requirement, 'waitingToContinue')) ||
+    (work === undefined && lifecycle === 'active');
   return {
     requirementId: asString(field(requirement, 'id')),
     title: asString(field(requirement, 'title')),
     goal: asString(field(requirement, 'goal')),
-    lifecycle: asString(field(requirement, 'lifecycle')),
+    lifecycle,
     phase:
       typeof field(requirement, 'phase') === 'string'
         ? (field(requirement, 'phase') as string)
@@ -541,13 +775,22 @@ export function requirementDetail(input: {
     ),
     portableRef: asString(field(requirement, 'portableRef')),
     saveState: asString(field(requirement, 'saveState'), 'saved'),
-    executionAvailability: asString(field(requirement, 'executionAvailability'), 'unknown'),
+    executionAvailability,
     evidenceAvailability: asString(field(requirement, 'evidenceAvailability'), 'unknown'),
-    waitingToContinue:
-      asBoolean(field(requirement, 'waitingToContinue')) ||
-      (work === undefined && asString(field(requirement, 'lifecycle')) === 'active'),
+    waitingToContinue,
     workId: work === undefined ? null : asString(field(work, 'id')),
-    workStatus: work === undefined ? null : asString(field(work, 'status')),
+    workStatus,
+    workVersion: workVersionOf(work),
+    branch: input.branch ?? '',
+    commit: commitOf(requirement),
+    unpushed: unpushedOf(requirement),
+    canPause: work !== undefined && lifecycle === 'active' && workStatus !== 'paused',
+    canResume: workStatus === 'paused',
+    canCancel: lifecycle === 'active' || lifecycle === 'queued',
+    canContinue:
+      lifecycle === 'active' && (waitingToContinue || executionAvailability === 'needs_replan'),
+    canComplete: lifecycle === 'active',
+    canArchive: lifecycle === 'queued' || lifecycle === 'completed',
     scope: asObject(field(requirement, 'scope')) ?? null,
     acceptance: Array.isArray(field(requirement, 'acceptance'))
       ? (field(requirement, 'acceptance') as unknown[]).map((entry) => String(entry))
@@ -882,6 +1125,34 @@ export function agentsModel(raw: JsonObject): AgentsModel {
   };
 }
 
+/**
+ * One model a provider declares (`ProviderInput.models`, `rules/agents.md` §5).
+ *
+ * The settings editor pre-fills the `models` field with these descriptors, so the
+ * projection copies exactly the documented keys and nothing else: a provider
+ * document that happens to carry an extra field (a legacy `apiKey`, a stray
+ * `secret`) can never reach the page model or the rendered form.
+ */
+export interface ProviderModelView {
+  readonly id: string;
+  readonly contextWindow: number;
+  readonly maxOutputTokens: number;
+  readonly reasoningLevels: readonly string[];
+  readonly vision: boolean;
+  readonly inputPricePerMTokens: number | null;
+  readonly outputPricePerMTokens: number | null;
+}
+
+export interface ProviderEditorView {
+  readonly providerId: string;
+  readonly type: string;
+  readonly baseUrl: string;
+  readonly enabled: boolean;
+  readonly secretConfigured: boolean;
+  /** The declared models, used for the editor and for the connection test. */
+  readonly models: readonly ProviderModelView[];
+}
+
 export interface SettingsModel {
   readonly scope: 'global' | 'project';
   readonly version: number;
@@ -891,13 +1162,55 @@ export interface SettingsModel {
   readonly limits: JsonObject;
   readonly effectiveLimits: JsonObject;
   readonly policy: JsonObject;
-  readonly providers: readonly {
-    readonly providerId: string;
-    readonly type: string;
-    readonly baseUrl: string;
-    readonly enabled: boolean;
-    readonly secretConfigured: boolean;
-  }[];
+  readonly providers: readonly ProviderEditorView[];
+}
+
+/** A non-negative price, or `null` when the provider did not declare one. */
+function asPrice(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/**
+ * The `ProviderInput.models` value an editor starts from (`rules/agents.md` §5).
+ *
+ * The optional prices are omitted rather than written as `null`: `provider.upsert`
+ * validates with `providerInputSchema`, where they are optional, not nullable.
+ */
+export function providerModelsInput(models: readonly ProviderModelView[]): JsonObject[] {
+  return models.map((model) => ({
+    id: model.id,
+    contextWindow: model.contextWindow,
+    maxOutputTokens: model.maxOutputTokens,
+    reasoningLevels: [...model.reasoningLevels],
+    vision: model.vision,
+    ...(model.inputPricePerMTokens === null
+      ? {}
+      : { inputPricePerMTokens: model.inputPricePerMTokens }),
+    ...(model.outputPricePerMTokens === null
+      ? {}
+      : { outputPricePerMTokens: model.outputPricePerMTokens }),
+  }));
+}
+
+/**
+ * Projects a provider's declared models (`rules/agents.md` §5 field names).
+ *
+ * A secret is never part of `ProviderInput` (`protocol.md` §5: `secretRef` is
+ * server-created and `provider.upsert` takes the value separately), so this
+ * whitelist is the model half of the "no secret in the page model" rule.
+ */
+function providerModelViews(value: unknown): ProviderModelView[] {
+  return asArray(value).map((model) => ({
+    id: asString(field(model, 'id')),
+    contextWindow: asNumber(field(model, 'contextWindow')),
+    maxOutputTokens: asNumber(field(model, 'maxOutputTokens')),
+    reasoningLevels: Array.isArray(field(model, 'reasoningLevels'))
+      ? (field(model, 'reasoningLevels') as unknown[]).map((level) => String(level))
+      : [],
+    vision: asBoolean(field(model, 'vision')),
+    inputPricePerMTokens: asPrice(field(model, 'inputPricePerMTokens')),
+    outputPricePerMTokens: asPrice(field(model, 'outputPricePerMTokens')),
+  }));
 }
 
 export function settingsModel(raw: JsonObject): SettingsModel {
@@ -916,7 +1229,10 @@ export function settingsModel(raw: JsonObject): SettingsModel {
       type: asString(field(provider, 'type')),
       baseUrl: asString(field(provider, 'baseUrl')),
       enabled: asBoolean(field(provider, 'enabled')),
+      // `protocol.md` §5 / `reliability.md` §6: the value never leaves the daemon —
+      // only whether one is really registered.
       secretConfigured: asBoolean(field(provider, 'secretConfigured')),
+      models: providerModelViews(field(provider, 'models')),
     })),
     // no-op placeholder removed
   };

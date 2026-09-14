@@ -1071,7 +1071,7 @@ export interface SaveRequirementInput {
   /** Explicit worktree path; defaults to `<dataDir>/save-worktrees/<operationId>`. */
   readonly worktreePath?: string;
   /** The command that produced the save, for the commit message and the event. */
-  readonly kind?: 'create' | 'update' | 'archive' | 'cancel' | 'restore' | 'start';
+  readonly kind?: 'create' | 'update' | 'archive' | 'cancel' | 'restore' | 'start' | 'complete';
 }
 
 /** The `requirement.save.retry` recovery operation a failure hands back. */

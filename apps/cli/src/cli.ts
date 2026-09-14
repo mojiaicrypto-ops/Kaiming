@@ -20,7 +20,10 @@ import {
   spawnDaemon,
   waitForRuntime,
   waitForStop,
+  type CliRuntimeRecord,
 } from './runtime.js';
+import { readStdinValue, runSecretCommand } from './secret.js';
+import { runOpsCommand } from './ops.js';
 
 const USAGE = [
   'usage: agentdev <command> [options]',
@@ -31,6 +34,13 @@ const USAGE = [
   '  stop              stop them gracefully',
   '  status            read-only: is the runtime up, and where',
   '  open <path>       register and open a project, printing its URL',
+  '  secret set <ref> [--stdin]  read the value from stdin and register it (never argv)',
+  '  secret list       print registered refs and metadata, never values',
+  '  secret delete <ref>  remove a registered credential',
+  '  secret rotate <ref>  replace an existing credential (new value from stdin)',
+  '  backup [<projectId>] --output <dir> [--replace]  snapshot one project (reliability §7/§8)',
+  '  restore <backupDir> --root <path> [--replace]    restore it into an empty target',
+  '  relocate <projectId> --root <path> [--move]      move a project to a new root',
   '  version           print the CLI and protocol version',
 ].join('\n');
 
@@ -38,6 +48,12 @@ export interface CliIo {
   readonly out: (text: string) => void;
   readonly err: (text: string) => void;
   readonly exit: (code: number) => void;
+  /**
+   * Reads a secret value from stdin. Optional so a caller that never runs
+   * `agentdev secret set` (and every test that does not) needs no stdin wiring; the
+   * shipped default reads `process.stdin`.
+   */
+  readonly readStdin?: () => Promise<string>;
 }
 
 export async function main(
@@ -46,6 +62,7 @@ export async function main(
     out: (text) => process.stdout.write(text),
     err: (text) => process.stderr.write(text),
     exit: (code) => process.exit(code),
+    readStdin: readStdinValue,
   },
 ): Promise<void> {
   const [command, ...rest] = argv;
@@ -78,6 +95,37 @@ export async function main(
     const home = cliHome();
     const repoRoot = repoRootOf(import.meta.url);
     io.exit(await runRuntimeCommand({ command, rest, home, repoRoot, io }));
+    return;
+  }
+
+  if (command === 'secret') {
+    // `reliability.md` §7 keeps every failure to one error code plus an operationId;
+    // `runSecretCommand` owns that shape and never echoes the value.
+    io.exit(
+      await runSecretCommand({
+        rest,
+        home: cliHome(),
+        io: {
+          out: io.out,
+          err: io.err,
+          readStdin: io.readStdin ?? readStdinValue,
+        },
+      }),
+    );
+    return;
+  }
+
+  if (command === 'backup' || command === 'restore' || command === 'relocate') {
+    // Installation maintenance (`reliability.md` §7/§8). These commands work without a
+    // running daemon on purpose: they are the recovery path after one crashed.
+    io.exit(
+      await runOpsCommand({
+        command,
+        rest,
+        home: cliHome(),
+        io: { out: io.out, err: io.err },
+      }),
+    );
     return;
   }
 
@@ -139,7 +187,16 @@ async function runRuntimeCommand(input: {
   }
 
   if (command === 'stop') {
-    const live = readLiveRecord(home);
+    let live;
+    try {
+      live = readLiveRecord(home);
+    } catch (error) {
+      // A record that cannot be read must not crash the command (`reliability.md` §7).
+      return failure(
+        'RUNTIME_RECORD_INVALID',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
     if (live === null) {
       print({ ok: true, stopped: true, already: true, home });
       return 0;
@@ -195,10 +252,18 @@ async function runRuntimeCommand(input: {
         error instanceof Error ? error.message : String(error),
       );
     }
-    if (live === null || (await waitForRuntime(home, { timeoutMs: 0 })) === null) {
+    const probe = await liveRuntimeOr(home, 0);
+    if (live === null || probe.live === null) {
       const started = await startDaemon({ home, repoRoot, io, roots: [], trust: false });
       if (started !== 0) return started;
-      live = readLiveRecord(home);
+      try {
+        live = readLiveRecord(home);
+      } catch (error) {
+        return failure(
+          'RUNTIME_RECORD_INVALID',
+          error instanceof Error ? error.message : String(error),
+        );
+      }
       if (live === null)
         return failure('START_FAILED', 'the daemon did not publish a runtime record');
     }
@@ -229,12 +294,32 @@ async function runRuntimeCommand(input: {
       return failure('VALIDATION_ERROR', `unknown option: ${arg}`);
     }
   }
-  const existing = await waitForRuntime(home, { timeoutMs: 0 });
-  if (existing !== null) {
-    print({ ok: true, started: false, already: true, home, runtime: existing.record });
+  const probe = await liveRuntimeOr(home, 0);
+  if (probe.live !== null) {
+    print({ ok: true, started: false, already: true, home, runtime: probe.live.record });
     return 0;
   }
+  // An unreadable record is not proof of a running daemon: a fresh daemon takes over the
+  // stale lock and rewrites the record, and one that cannot is reported by `startDaemon`
+  // as `RUNTIME_RECORD_INVALID` with an operationId (`reliability.md` §7).
   return startDaemon({ home, repoRoot, io, roots, trust });
+}
+
+/**
+ * Reads the live runtime, reporting an unreadable record instead of throwing.
+ *
+ * `reliability.md` §7 requires a failure to carry an error code and an operationId, so a
+ * malformed `runtime.json` must never escape as an uncaught exception.
+ */
+async function liveRuntimeOr(
+  home: string,
+  timeoutMs: number,
+): Promise<{ readonly live: CliRuntimeRecord | null; readonly error?: string }> {
+  try {
+    return { live: await waitForRuntime(home, { timeoutMs }) };
+  } catch (error) {
+    return { live: null, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 /** Spawns the daemon host and waits until it answers, or reports why it did not. */
@@ -254,7 +339,14 @@ async function startDaemon(input: {
     );
     return 1;
   }
-  const live = await waitForRuntime(home);
+  const probe = await liveRuntimeOr(home, 10_000);
+  if (probe.error !== undefined) {
+    io.err(
+      `${JSON.stringify({ ok: false, operationId: randomUUID(), error: { code: 'RUNTIME_RECORD_INVALID', message: probe.error } })}\n`,
+    );
+    return 1;
+  }
+  const live = probe.live;
   if (live === null) {
     io.err(
       `${JSON.stringify({

@@ -32,6 +32,7 @@
  *   projections: they run the same admission rules and return Grant rows, and a
  *   refusal never carries a secret value.
  */
+import { canonicalJson } from '@agentdev/contracts';
 import {
   existsSync,
   mkdirSync,
@@ -51,9 +52,11 @@ import {
   type GrantDenialCode,
   type GrantIssueRefusal,
   type GrantRequest,
+  type GrantUsage,
   type GrantWorkScope,
 } from '@agentdev/domain';
 import {
+  sha256,
   uuidv7,
   withTransaction,
   type EntityRepository,
@@ -108,6 +111,22 @@ export interface GrantConsumeRequest {
   readonly argsRef: string;
   readonly attemptId: string;
   readonly epoch: number;
+  /**
+   * Encoded byte size of this call's input, checked against the Grant's `maxBytes`.
+   *
+   * Optional so a caller that has no measured size (a library-level replay probe) is
+   * admitted rather than refused for an absent measurement; the Broker always supplies
+   * it, because it already canonicalises the input to compute the hash.
+   */
+  readonly inputBytes?: number;
+  /**
+   * The deadline this call asks for, in seconds, checked against `maxDurationSec`.
+   *
+   * The Broker supplies the effective tool deadline (its own `timeoutMs`, or the
+   * documented `LIMITS.shellTimeoutSec.default`), so a Grant that authorized a shorter
+   * operation cannot be used to run a longer one.
+   */
+  readonly durationSec?: number;
   /** Runs the real tool; called at most once per Grant. */
   readonly executor: () => unknown;
 }
@@ -478,12 +497,23 @@ export class GrantStore {
     }
     // `grant.decision_id` is a real foreign key, so a Grant without its
     // authorizing Decision would fail the insert instead of failing closed.
-    if (this.store.decisions.find(input.decisionId) === undefined) {
+    const decision = this.store.decisions.find(input.decisionId);
+    if (decision === undefined) {
       return {
         ok: false,
         code: 'VALIDATION_ERROR',
         reason: `Decision ${input.decisionId} does not exist; a Grant must cite its authorization`,
         fields: [],
+      };
+    }
+    // The cited Decision must belong to this Work: another Work's decision is not an
+    // authorization for this one, whatever its state (T3 round 4 negative case).
+    if (decision.workId !== work.id) {
+      return {
+        ok: false,
+        code: 'NOT_AUTHORIZED',
+        reason: `Decision ${decision.id} belongs to Work ${decision.workId}, not ${work.id}`,
+        fields: ['decisionId'],
       };
     }
     const run = input.runId === undefined ? undefined : this.store.runs.find(input.runId);
@@ -506,6 +536,10 @@ export class GrantStore {
     // A Grant is minted for a role the Work actually uses. The Task rows are the
     // record of that: a role the Work never dispatched has nothing to authorize.
     const roleStages = this.roleStages(work.id, input.role);
+    // The stage is the caller's own (the producer emits the canonical `develop-L{level}`;
+    // `protocol.ts` `queueApprovedRun`), and an unrecognised spelling fails closed in
+    // `roleStages`/`validateGrantIssueRequest` instead of being mapped here.
+    const stage = input.stage;
     if (roleStages.length === 0) {
       return {
         ok: false,
@@ -514,11 +548,36 @@ export class GrantStore {
         fields: [],
       };
     }
+    const scope = this.workScope(work.id, work.scope);
+    // An accepted `permission` Decision is the **user's** authorization for exactly the one
+    // operation it was requested for (`permission.request/respond` → Grant, AC-049/AC-080).
+    // A message-level authorization may never carry an environment operation
+    // (`assertGrantWithinMessage`) and a derived authorization may not either
+    // (`assertDerivableScope`), so without this the approval chain could not mint anything.
+    //
+    // The widening is deliberately minimal, and every clause is a refusal otherwise:
+    //  - only `kind='permission'`, `state='accepted'`, `choice='approve'`;
+    //  - only a `once` Grant (the user approved one occurrence);
+    //  - only an operation that is genuinely outside the Work envelope (a covered
+    //    operation keeps using the ordinary path);
+    //  - only when the Grant's `(operation, targets, toolOperationId, inputHash)` is exactly
+    //    the binding recorded in the Decision's `targetRef.hash`, so an accepted Decision
+    //    cannot be re-pointed at another operation, path or input;
+    //  - paths and every other envelope dimension stay governed by the Work scope.
+    const widening =
+      decision.kind === 'permission' &&
+      decision.state === 'accepted' &&
+      decision.choice === 'approve' &&
+      input.scope === 'once' &&
+      !scope.operations.includes(input.operation) &&
+      decision.targetRef.hash === permissionBindingHash(input)
+        ? [input.operation]
+        : [];
     const validation = validateGrantIssueRequest(
       {
         workId: work.id,
         role: input.role,
-        stage: input.stage,
+        stage,
         scope: input.scope,
         operation: input.operation,
         targets: input.targets,
@@ -527,8 +586,12 @@ export class GrantStore {
         ...(input.inputHash === undefined ? {} : { inputHash: input.inputHash }),
         expiresAt: input.expiresAt,
         roleStages,
+        // The `limits` envelope is validated here too (`domain/validateGrantLimits`):
+        // a malformed ceiling must be refused before the row exists, not silently
+        // dropped so that a "narrow" Grant is in fact unbounded.
+        limits: input.limits ?? {},
       },
-      this.workScope(work.id, work.scope),
+      { ...scope, operations: [...scope.operations, ...widening] },
     );
     if (!validation.ok) {
       return { ok: false, code: validation.code, reason: validation.reason, fields: [] };
@@ -539,7 +602,7 @@ export class GrantStore {
       ...(input.toolOperationId === undefined ? {} : { toolOperationId: input.toolOperationId }),
       scope: input.scope,
       role: input.role,
-      stage: input.stage,
+      stage,
       operation: input.operation,
       targets: [...input.targets],
       expiresAt: input.expiresAt,
@@ -567,13 +630,18 @@ export class GrantStore {
   /**
    * The Work's authorized envelope.
    *
-   * Authorization rows widen the Work's own scope with the paths the user
-   * explicitly authorized; a revoked authorization contributes nothing. Only
-   * paths are unioned — the operation envelope stays the Work's own declaration.
+   * Authorization rows widen the Work's own scope with the paths and **operations**
+   * the user explicitly authorized; a revoked authorization contributes nothing.
+   * Both halves have to be unioned (D-T3-5): `validateGrantIssueRequest` admits an
+   * operation only when it is inside this envelope (`domain/permission.ts`), so a
+   * `workScope` that carried only the Work's own `scope.operations` would make a
+   * user-approved `bash`/`network`/`secret` Grant impossible to mint — the user could
+   * approve an operation the system then refuses to issue.
    */
   private workScope(workId: string, declared: DeclaredWorkScope): GrantWorkScope {
     const read = [...declared.readPaths];
     const write = [...declared.writePaths];
+    const operations = [...declared.operations];
     for (const authorization of this.store.authorizations.list({
       where: 'work_id = ?',
       params: [workId],
@@ -581,10 +649,11 @@ export class GrantStore {
       if (authorization.revokedAt !== undefined) continue;
       read.push(...authorization.scope.readPaths);
       write.push(...authorization.scope.writePaths);
+      operations.push(...authorization.operations);
     }
     return {
       workId,
-      operations: declared.operations,
+      operations: dedupe(operations),
       readPaths: dedupe(read),
       writePaths: dedupe(write),
     };
@@ -689,6 +758,32 @@ export class GrantStore {
     };
   }
 
+  /**
+   * The spend a consumption asks of its Grant (`domain/GrantRequest.usage`).
+   *
+   * `priorCalls` counts the tool operations already recorded against the Grant,
+   * excluding this call's own row: a `prepared` row from this same tool operation is
+   * this call, not an earlier one, and counting it would make `maxCalls: 1` unusable.
+   * The byte and duration halves come from the request, which measured them.
+   */
+  private usageFor(grant: Grant, request: GrantConsumeRequest): GrantUsage {
+    const usage: {
+      priorCalls?: number;
+      requestedBytes?: number;
+      requestedDurationSec?: number;
+    } = {};
+    usage.priorCalls = this.toolOperations
+      .list({ where: 'grant_id = ?', params: [grant.id] })
+      .filter((operation) => operation.id !== request.toolOperationId).length;
+    if (request.inputBytes !== undefined) usage.requestedBytes = request.inputBytes;
+    if (request.durationSec !== undefined) usage.requestedDurationSec = request.durationSec;
+    return usage;
+  }
+
+  private consumeGrantRequest(grant: Grant, request: GrantConsumeRequest): GrantRequest {
+    return { ...this.asGrantRequest(request), usage: this.usageFor(grant, request) };
+  }
+
   // -------------------------------------------------------------------------
   // Consume (once)
   // -------------------------------------------------------------------------
@@ -786,9 +881,13 @@ export class GrantStore {
         outcome: refuse('NOT_AUTHORIZED', 'no Grant admits this tool call', []),
       };
     }
-    const decision = evaluateGrant(grant, this.asGrantRequest(request));
+    const decision = evaluateGrant(grant, this.consumeGrantRequest(grant, request));
     if (!decision.allowed) {
-      const field = grantDenialField(decision.reason, grant, this.asGrantRequest(request));
+      const field = grantDenialField(
+        decision.reason,
+        grant,
+        this.consumeGrantRequest(grant, request),
+      );
       return {
         kind: 'outcome',
         outcome: refuse(
@@ -938,6 +1037,9 @@ export class GrantStore {
         toolName: request.toolName,
         inputHash: request.inputHash,
         argsRef: request.argsRef,
+        // The targets are part of the operation's record: a later permission approval mints
+        // its Grant from these values instead of guessing (WP-12 T3 轮 2).
+        targets: [...request.targets],
         state: 'prepared',
         grantId: grant.id,
       });
@@ -1179,4 +1281,27 @@ function refuse(
 
 function dedupe(values: readonly string[]): string[] {
   return [...new Set(values)];
+}
+
+/**
+ * The binding a `permission` Decision records for exactly one requested operation.
+ *
+ * `ToolGrantService.requestPermission` stores this digest in `decision.targetRef.hash`; a
+ * mint that cites that Decision must reproduce it byte for byte, which is what stops an
+ * accepted approval from being re-pointed at another operation, target list or input hash.
+ */
+export function permissionBindingHash(input: {
+  readonly operation: string;
+  readonly targets: readonly string[];
+  readonly toolOperationId?: string;
+  readonly inputHash?: string;
+}): string {
+  return sha256(
+    canonicalJson({
+      operation: input.operation,
+      targets: [...input.targets],
+      toolOperationId: input.toolOperationId,
+      inputHash: input.inputHash,
+    }),
+  );
 }

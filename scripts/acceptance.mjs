@@ -58,16 +58,28 @@ import {
 } from './lib/drill-acs.mjs';
 
 const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const REPORT_DIR = join(repoRoot, '.agentdev', 'work', 'WP-10');
-const DEFAULT_REPORT = join(REPORT_DIR, 'acceptance.md');
-const DEFAULT_JSON = join(REPORT_DIR, 'acceptance-results.json');
+/**
+ * Where this run writes its records: the current work package, so a real acceptance run
+ * cannot overwrite another package's evidence (WP-12 fix). `--report-dir` (or
+ * `AGENTDEV_REPORT_DIR`) moves both files.
+ *
+ * The *drill* evidence is unaffected: `scripts/lib/acceptance-drills.mjs` spawns the
+ * drills with `--drill-out` inside a temporary directory and adopts a report only when it
+ * carries this run's nonce, so no repository file is ever read as evidence (W10R1-01).
+ */
+const DEFAULT_REPORT_DIR = process.env.AGENTDEV_REPORT_DIR
+  ? resolve(process.env.AGENTDEV_REPORT_DIR)
+  : join(repoRoot, '.agentdev', 'work', 'WP-12');
+const DEFAULT_REPORT = join(DEFAULT_REPORT_DIR, 'acceptance.md');
+const DEFAULT_JSON = join(DEFAULT_REPORT_DIR, 'acceptance-results.json');
 
 function usage() {
   return [
     'Usage: node scripts/acceptance.mjs [options]',
     '',
-    '  --report <path>          markdown output (default .agentdev/work/WP-10/acceptance.md)',
-    '  --json <path>            machine-readable sidecar (default …/acceptance-results.json)',
+    '  --report-dir <path>      where both records go (default .agentdev/work/WP-12)',
+    '  --report <path>          markdown output (default <report-dir>/acceptance.md)',
+    '  --json <path>            machine-readable sidecar (default <report-dir>/acceptance-results.json)',
     '  --projects <list>        vitest projects to run (default unit,integration)',
     '  --no-drills              do not run scripts/e2e.mjs / scripts/live.mjs in this run',
     '  --no-write               print only, do not write the reports',
@@ -95,7 +107,11 @@ function parseArgs(argv) {
       if (index >= argv.length) throw new Error(`${arg} requires a value`);
       return argv[index];
     };
-    if (arg === '--report') options.report = resolve(repoRoot, next());
+    if (arg === '--report-dir') {
+      const dir = resolve(repoRoot, next());
+      options.report = join(dir, 'acceptance.md');
+      options.json = join(dir, 'acceptance-results.json');
+    } else if (arg === '--report') options.report = resolve(repoRoot, next());
     else if (arg === '--json') options.json = resolve(repoRoot, next());
     else if (arg === '--projects')
       options.projects = next()

@@ -10,7 +10,7 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { type RunnerCommand, type RunnerMessage, runnerMessageSchema } from '@agentdev/contracts';
@@ -77,7 +77,9 @@ export interface AttemptCatalogInput {
  *
  * The Provider entry is deliberately the *only* model catalog the Runner sees: the
  * gateway refuses any other model id anyway, so the catalog and the frozen configuration
- * cannot disagree without a loud failure.
+ * cannot disagree without a loud failure. Its API key is the Attempt capability
+ * (`execution.md` §2), which is also why the Runner may read the capability from this file
+ * instead of taking it as an argument (`apps/runner/src/cli.ts`).
  *
  * @returns the catalog path to pass as `--models-path`.
  */
@@ -117,18 +119,155 @@ export interface ChildRunnerSpawnOptions {
   readonly env?: NodeJS.ProcessEnv;
 }
 
+/**
+ * Flags whose value is safe to print in a diagnostic line.
+ *
+ * `execution.md` §2 puts exactly one credential on a Runner's command line — none: the
+ * Attempt capability travels inside the 0600 per-Attempt catalog, not through `argv`
+ * (visible to every local process through `ps`). The allowlist keeps that property true
+ * even if a future flag is added: an unknown flag's value is redacted rather than logged.
+ */
+const OBSERVABLE_ARG_FLAGS: ReadonlySet<string> = new Set([
+  '--attempt-id',
+  '--epoch',
+  '--provider',
+  '--model',
+  '--cwd',
+  '--agent-dir',
+  '--models-path',
+  '--role',
+  '--work-id',
+  '--control-url',
+  '--tools',
+]);
+
+/** Longest value a diagnostic line prints before it is truncated. */
+const LOG_VALUE_LIMIT = 160;
+
+/** Truncates one diagnostic value; lengths stay visible so a blank value is obvious. */
+function truncateForLog(value: string): string {
+  return value.length <= LOG_VALUE_LIMIT
+    ? value
+    : `${value.slice(0, LOG_VALUE_LIMIT)}…(${value.length})`;
+}
+
+/**
+ * Renders one spawn's `argv` for a diagnostic line, redacting every non-allowlisted value.
+ *
+ * The system prompt is the reason this exists: it is long, it is model-visible content
+ * rather than configuration, and printing it verbatim would bury the flags that matter.
+ * It is summarised by length instead.
+ */
+export function redactRunnerArgv(args: readonly string[]): string[] {
+  const rendered: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? '';
+    if (!arg.startsWith('--')) {
+      // A bare positional is the entry script: a path, never a credential.
+      rendered.push(index === 0 ? arg : '<value>');
+      continue;
+    }
+    rendered.push(arg);
+    const value = args[index + 1];
+    if (value === undefined || value.startsWith('--')) continue;
+    index += 1;
+    rendered.push(
+      OBSERVABLE_ARG_FLAGS.has(arg) ? truncateForLog(value) : `<redacted:${String(value.length)}>`,
+    );
+  }
+  return rendered;
+}
+
+/**
+ * Summarises one `attempt.event` for a diagnostic line.
+ *
+ * The session's stream is dominated by per-token `raw` events (`text_delta`,
+ * `toolcall_delta`), so those are counted rather than printed; the structural events
+ * (which tool ran, whether a turn ended) are what a stuck Attempt needs to show.
+ */
+function eventDetail(event: Record<string, unknown>): string {
+  const kind = typeof event['type'] === 'string' ? event['type'] : 'unknown';
+  if (kind === 'raw' || kind === 'text_delta') {
+    const raw = typeof event['eventType'] === 'string' ? event['eventType'] : '';
+    return raw === '' || raw.endsWith('_delta') ? '' : ` event=raw(${raw})`;
+  }
+  const tool = typeof event['toolName'] === 'string' ? ` tool=${event['toolName']}` : '';
+  const failed = event['isError'] === true ? ' isError=true' : '';
+  return ` event=${kind}${tool}${failed}`;
+}
+
 /** One live child process, adapted to the supervisor's port. */
 class ChildRunnerProcess implements RunnerProcessPort {
   readonly pid: number;
   private readonly child: ChildProcessWithoutNullStreams;
+  private readonly log: (line: string) => void;
+  private readonly label: string;
+  private readonly startedAt: number;
+  private messages = 0;
 
-  constructor(child: ChildProcessWithoutNullStreams) {
+  constructor(
+    child: ChildProcessWithoutNullStreams,
+    diagnostics: {
+      readonly log: (line: string) => void;
+      readonly label: string;
+      readonly startedAt: number;
+    },
+  ) {
     this.child = child;
     this.pid = child.pid ?? 0;
+    this.log = diagnostics.log;
+    this.label = diagnostics.label;
+    this.startedAt = diagnostics.startedAt;
+    this.guardStream('stdin', child.stdin);
+    this.guardStream('stdout', child.stdout);
+    this.guardStream('stderr', child.stderr);
+  }
+
+  /**
+   * Records a stream error instead of letting it become an uncaught exception.
+   *
+   * A dead child reports `EPIPE` **asynchronously**, so the `try`/`catch` around `write` in
+   * `send()` cannot see it: during the shutdown sweep the supervisor writes to a Runner that
+   * has already exited, and without a listener the stream's `error` event crashes the daemon
+   * (WP-12 R5). Every write here is best-effort by contract — the shutdown path escalates to
+   * signals — so the code is logged and the error swallowed.
+   */
+  private guardStream(
+    name: 'stdin' | 'stdout' | 'stderr',
+    stream: NodeJS.ReadableStream | NodeJS.WritableStream,
+  ): void {
+    stream.on('error', (error: NodeJS.ErrnoException) => {
+      this.log(
+        `${this.label} ${name} error: ${error.code ?? error.message} (+${String(this.elapsed())}ms)`,
+      );
+    });
+  }
+
+  /** Milliseconds since spawn, the unit every diagnostic line carries. */
+  private elapsed(): number {
+    return Date.now() - this.startedAt;
   }
 
   send(command: RunnerCommand): void {
-    this.child.stdin.write(`${JSON.stringify(command)}\n`);
+    // A Runner that already exited (or was SIGKILLed) leaves its pipe closed: `write` then
+    // emits EPIPE, which would otherwise be an unhandled stream error during a shutdown
+    // sweep (WP-12 fix round 2). The supervisor already treats an unreachable child as
+    // "did not stop in time" and escalates to signals, so the write is simply dropped.
+    if (this.child.stdin.destroyed || this.child.stdin.writableEnded) {
+      this.log(
+        `${this.label} → ${command.type} dropped (+${String(this.elapsed())}ms): stdin closed`,
+      );
+      return;
+    }
+    try {
+      this.child.stdin.write(`${JSON.stringify(command)}\n`);
+      this.log(`${this.label} → ${command.type} (+${String(this.elapsed())}ms)`);
+    } catch {
+      // The pipe is gone; the shutdown path below still signals the process.
+      this.log(
+        `${this.label} → ${command.type} failed (+${String(this.elapsed())}ms): write threw`,
+      );
+    }
   }
 
   onMessage(listener: (message: RunnerMessage) => void): void {
@@ -140,18 +279,55 @@ class ChildRunnerProcess implements RunnerProcessPort {
       try {
         parsed = JSON.parse(trimmed);
       } catch {
+        // A Runner that prints a non-JSON line (a stray `console.log`, a crash banner) is
+        // otherwise invisible: the supervisor only ever sees "no message arrived".
+        this.log(`${this.label} ← non-JSON stdout: ${truncateForLog(trimmed)}`);
         return;
       }
       const result = runnerMessageSchema.safeParse(parsed);
-      if (result.success) listener(result.data);
+      if (!result.success) {
+        this.log(`${this.label} ← invalid message: ${truncateForLog(trimmed)}`);
+        return;
+      }
+      this.messages += 1;
+      const type = result.data.type;
+      const detail =
+        type === 'attempt.ready'
+          ? ` session=${result.data.sessionId} provider=${result.data.provider}/${result.data.modelId} tools=[${result.data.tools.join(',')}] dropped=[${result.data.droppedTools.join(',')}]`
+          : type === 'attempt.error'
+            ? ` code=${result.data.code} message=${truncateForLog(result.data.message)}`
+            : type === 'attempt.result'
+              ? ` status=${result.data.status} message=${truncateForLog(result.data.message)}`
+              : type === 'attempt.event'
+                ? eventDetail(result.data.event)
+                : '';
+      this.log(`${this.label} ← ${type} (+${String(this.elapsed())}ms)${detail}`);
+      listener(result.data);
+    });
+    lines.on('close', () => {
+      // EOF before a terminal message is the "silent child" signature: the process closed
+      // its stdout without ever answering.
+      this.log(
+        `${this.label} stdout EOF (+${String(this.elapsed())}ms) after ${String(this.messages)} message(s)`,
+      );
     });
   }
 
   onExit(
     listener: (exit: { readonly code: number | null; readonly signal: string | null }) => void,
   ): void {
-    this.child.on('exit', (code, signal) => listener({ code, signal }));
-    this.child.on('error', () => listener({ code: null, signal: null }));
+    this.child.on('exit', (code, signal) => {
+      this.log(
+        `${this.label} exit code=${String(code)} signal=${String(signal)} (+${String(this.elapsed())}ms) after ${String(this.messages)} message(s)`,
+      );
+      listener({ code, signal });
+    });
+    this.child.on('error', (error: Error) => {
+      // A spawn/host failure (ENOENT for the entry, a kill during startup). The supervisor
+      // treats it as "no exit", so the reason has to be logged here or it is lost.
+      this.log(`${this.label} process error: ${error.message}`);
+      listener({ code: null, signal: null });
+    });
   }
 
   terminate(signal: 'SIGTERM' | 'SIGKILL'): void {
@@ -199,16 +375,41 @@ export function createChildRunnerSpawnPort(options: ChildRunnerSpawnOptions): Ru
       if (input.invocation.catalogPath !== undefined) {
         args.push('--models-path', input.invocation.catalogPath);
       }
-      const child = spawn(options.nodePath ?? process.execPath, args, {
-        cwd: input.invocation.cwd,
-        env: runnerChildEnv(env),
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
+      args.push('--role', input.run.role);
+      args.push('--work-id', input.run.workId);
+      if (input.invocation.controlUrl !== undefined) {
+        // The capability is *not* passed as an argument: it would be visible in `ps` to
+        // every local process. The Runner reads it from the per-Attempt catalog's API key,
+        // which is already 0600 (`execution.md` §2).
+        args.push('--control-url', input.invocation.controlUrl);
+      }
+      const label = `runner[${input.attempt.id}]`;
+      const startedAt = Date.now();
+      if (!existsSync(script)) {
+        // The shipped entry is a build artifact. Naming the missing path here turns the
+        // otherwise mute "child never became ready" into a one-line diagnosis.
+        log(`${label} spawn refused: entry not found at ${script} (run pnpm build)`);
+      }
+      log(
+        `${label} spawn node=${options.nodePath ?? process.execPath} cwd=${truncateForLog(input.invocation.cwd)} argv=${redactRunnerArgv(args).join(' ')}`,
+      );
+      let child: ChildProcessWithoutNullStreams;
+      try {
+        child = spawn(options.nodePath ?? process.execPath, args, {
+          cwd: input.invocation.cwd,
+          env: runnerChildEnv(env),
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+      } catch (error) {
+        log(`${label} spawn threw: ${error instanceof Error ? error.message : String(error)}`);
+        throw error;
+      }
+      log(`${label} spawn pid=${String(child.pid ?? 0)} (+${String(Date.now() - startedAt)}ms)`);
       child.stderr.on('data', (chunk: Buffer) => {
         const text = chunk.toString('utf8').trim();
-        if (text.length > 0) log(`runner[${input.attempt.id}]: ${text}`);
+        if (text.length > 0) log(`${label} stderr: ${truncateForLog(text)}`);
       });
-      return new ChildRunnerProcess(child);
+      return new ChildRunnerProcess(child, { log, label, startedAt });
     },
   };
 }

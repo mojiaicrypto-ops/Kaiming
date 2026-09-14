@@ -99,6 +99,10 @@ export const UI_STRINGS: Readonly<Record<string, InterfaceString>> = {
   'state.processed': { en: 'Processed', zh: '已处理' },
   'state.failed': { en: 'Failed', zh: '失败' },
   'state.decision_required': { en: 'Decision required', zh: '需要决定' },
+  'state.pending': { en: 'Pending', zh: '待处理' },
+  'state.accepted': { en: 'Accepted', zh: '已接受' },
+  'state.rejected': { en: 'Rejected', zh: '已拒绝' },
+  'state.waiting_permission': { en: 'Waiting for permission', zh: '等待权限' },
   'state.queued': { en: 'Queued', zh: '排队中' },
   'state.active': { en: 'Active', zh: '进行中' },
   'state.completed': { en: 'Completed', zh: '已完成' },
@@ -129,10 +133,18 @@ export const UI_STRINGS: Readonly<Record<string, InterfaceString>> = {
   'board.card.evidence': { en: 'Evidence availability', zh: '证据可用性' },
   'board.card.previousState': { en: 'Previous state', zh: '先前状态' },
   'board.card.open': { en: 'Open detail', zh: '查看详情' },
+  // AC-090: the push state is only stated when the payload reported it; the read
+  // surfaces do not carry `git.unpushed`, so the UI says so instead of inventing it.
+  'board.card.unpushed': { en: 'Unpushed', zh: '未推送' },
+  'board.card.pushed': { en: 'Pushed', zh: '已推送' },
+  'board.card.pushUnknown': { en: 'Push state not reported', zh: '推送状态未上报' },
   'board.action.pause': { en: 'Pause', zh: '暂停' },
   'board.action.resume': { en: 'Resume', zh: '继续' },
+  'board.action.continue': { en: 'Continue', zh: '续做' },
+  'board.action.complete': { en: 'Complete', zh: '完成' },
   'board.action.cancel': { en: 'Cancel', zh: '取消' },
   'board.action.archive': { en: 'Archive', zh: '归档' },
+  'board.actions': { en: 'Requirement actions', zh: '需求操作' },
   'board.empty': { en: 'Nothing in this column.', zh: '此列为空。' },
   'board.l1Hidden': {
     en: 'Direct-collaboration and L1 work stay in Chief and Runs, not on the board.',
@@ -191,6 +203,11 @@ export const UI_STRINGS: Readonly<Record<string, InterfaceString>> = {
     zh: '当前无法批准：计划闸门不可读取。',
   },
   'detail.approvedAt': { en: 'Approved at', zh: '批准时间' },
+  // AC-090: the Git/projection agreement the detail surface must state.
+  'detail.delivery': { en: 'Delivery state', zh: '交付状态' },
+  'detail.branch': { en: 'Delivery branch', zh: '交付分支' },
+  'detail.commit': { en: 'Commit', zh: '提交' },
+  'detail.pushState': { en: 'Push state', zh: '推送状态' },
   'detail.tasks': { en: 'Tasks', zh: '任务' },
   'detail.runs': { en: 'Runs', zh: '运行' },
   'detail.settlement': { en: 'Settlement', zh: '结算' },
@@ -247,6 +264,42 @@ export const UI_STRINGS: Readonly<Record<string, InterfaceString>> = {
   'settings.unsaved': { en: 'Unsaved edits', zh: '未保存的修改' },
   'settings.secretConfigured': { en: 'Secret configured', zh: '已配置密钥' },
   'settings.secretMissing': { en: 'No secret configured', zh: '未配置密钥' },
+  'settings.newProvider': { en: 'New provider', zh: '新增 Provider' },
+  'settings.providerId': { en: 'Provider id', zh: 'Provider 标识' },
+  'settings.providerIdHint': {
+    en: 'Leave empty to create a new provider; the server creates the id otherwise.',
+    zh: '留空表示新建 Provider；否则使用已配置的标识。',
+  },
+  'settings.providerType': { en: 'Type', zh: '类型' },
+  'settings.providerTypeOpenai': { en: 'OpenAI-compatible', zh: 'OpenAI 兼容' },
+  'settings.providerTypeAnthropic': { en: 'Anthropic', zh: 'Anthropic' },
+  'settings.providerTypeGoogle': { en: 'Google', zh: 'Google' },
+  'settings.baseUrl': { en: 'Base URL', zh: 'Base URL' },
+  'settings.enabled': { en: 'Enabled', zh: '启用' },
+  'settings.models': { en: 'Models', zh: '模型' },
+  'settings.modelsHint': {
+    en: 'ModelDescriptor array: id, contextWindow, maxOutputTokens, reasoningLevels, vision, optional prices.',
+    zh: 'ModelDescriptor 数组：id、contextWindow、maxOutputTokens、reasoningLevels、vision、可选价格。',
+  },
+  'settings.apiKey': { en: 'API key', zh: 'API 密钥' },
+  'settings.apiKeyHint': {
+    en: 'Leave empty to keep the stored credential. The value is never echoed back.',
+    zh: '留空表示保留已保存的凭证。密钥值不会回显。',
+  },
+  'settings.providerSave': { en: 'Save provider', zh: '保存 Provider' },
+  'settings.providerTest': { en: 'Test connection', zh: '连接测试' },
+  'settings.testModel': { en: 'Model to test', zh: '测试模型' },
+  'settings.testNeedsModel': {
+    en: 'Save the provider before testing: it declares no model yet.',
+    zh: '保存 Provider 后再测试：该 Provider 还没有模型。',
+  },
+  'settings.providerSaved': { en: 'Provider saved', zh: 'Provider 已保存' },
+  'settings.testAccepted': { en: 'Connection test accepted.', zh: '连接测试已接受。' },
+  'settings.testPending': {
+    en: 'The result arrives later — check Runs or the Live event list.',
+    zh: '结果稍后到达/查看 Runs 或事件。',
+  },
+  'settings.testCompleted': { en: 'Connection test result', zh: '连接测试结果' },
   'inbox.decision': { en: 'Decision', zh: '决定' },
   'inbox.finding': { en: 'Blocking finding', zh: '阻断发现' },
   'inbox.recovery': { en: 'Recovery', zh: '恢复' },
@@ -260,6 +313,48 @@ export const UI_STRINGS: Readonly<Record<string, InterfaceString>> = {
   'inbox.options': { en: 'Saved options', zh: '已保存选项' },
   'inbox.targetVersion': { en: 'Target version', zh: '目标版本' },
   'inbox.empty': { en: 'Nothing needs your decision.', zh: '当前没有待处理事项。' },
+  'inbox.permission': { en: 'Tool permission request', zh: '工具权限请求' },
+  'inbox.permissionBinding': { en: 'What will be granted', zh: '将授予的内容' },
+  'inbox.operation': { en: 'Operation', zh: '操作' },
+  'inbox.targets': { en: 'Targets', zh: '目标' },
+  'inbox.noTargets': {
+    en: 'No targets recorded (a command operation).',
+    zh: '未记录目标（命令类操作）。',
+  },
+  'inbox.inputHash': { en: 'Input hash', zh: '输入哈希' },
+  'inbox.bindingHash': { en: 'Binding hash', zh: '绑定哈希' },
+  'inbox.grantScope': { en: 'Grant scope', zh: '授权范围' },
+  'inbox.grantScopeOnce': { en: 'once (this call only)', zh: '一次（仅本次调用）' },
+  'inbox.bindingMissing': {
+    en: 'This daemon did not report the bound operation and targets, so approving is disabled. Denying still records a reason.',
+    zh: '该 daemon 未报告绑定的操作与目标，因此批准已禁用；拒绝仍会记录原因。',
+  },
+  'inbox.approve': { en: 'Approve once', zh: '批准一次' },
+  'inbox.deny': { en: 'Deny', zh: '拒绝' },
+  'inbox.denyReason': { en: 'Reason for denial (required)', zh: '拒绝原因（必填）' },
+  'inbox.denyReasonRequired': { en: 'A denial must record a reason.', zh: '拒绝必须记录原因。' },
+  'inbox.decisionKind': { en: 'Kind', zh: '类型' },
+  'inbox.raisedBy': { en: 'Raised by', zh: '发起方' },
+  'inbox.raisedByChief': { en: 'Chief', zh: '主管' },
+  'inbox.raisedByRun': { en: 'the Run below', zh: '下方运行' },
+  'inbox.question': { en: 'Question', zh: '问题' },
+  'inbox.questionUnavailable': {
+    en: 'The question text could not be read from the decision artifact.',
+    zh: '无法从决定产物读取问题正文。',
+  },
+  'inbox.questionEmpty': {
+    en: 'The decision artifact carried no question text.',
+    zh: '决定产物没有携带问题正文。',
+  },
+  'inbox.artifact': { en: 'Artifact', zh: '产物' },
+  'inbox.work': { en: 'Work', zh: '工作' },
+  'inbox.run': { en: 'Run', zh: '运行' },
+  'inbox.resolved': { en: 'The decision was applied.', zh: '决定已应用。' },
+  'inbox.denied': { en: 'The request was denied.', zh: '请求已拒绝。' },
+  'inbox.refreshFailed': {
+    en: 'The Inbox could not be refreshed; reload to see the latest state.',
+    zh: '待处理列表刷新失败；请重新加载以查看最新状态。',
+  },
   'runs.work': { en: 'Work', zh: '工作' },
   'runs.run': { en: 'Run', zh: '运行' },
   'runs.attempt': { en: 'Attempt', zh: '尝试' },
@@ -302,8 +397,8 @@ export const UI_STRINGS: Readonly<Record<string, InterfaceString>> = {
     zh: '附件总量超过 50 MiB。',
   },
   'chief.attachmentMime': {
-    en: 'That file type cannot be sent.',
-    zh: '该文件类型不允许发送。',
+    en: 'That file type is not a supported attachment type.',
+    zh: '该文件类型不是受支持的附件类型。',
   },
   'chief.attachmentStaged': { en: 'Staged', zh: '已暂存' },
   'chief.attachmentBound': { en: 'Bound to the message', zh: '已绑定到消息' },
@@ -358,6 +453,26 @@ export const UI_STRINGS: Readonly<Record<string, InterfaceString>> = {
 /** Every key the dictionary defines, in a stable order. */
 export function translationKeys(): readonly string[] {
   return Object.keys(UI_STRINGS);
+}
+
+/**
+ * The whole interface dictionary, split by locale, for the browser.
+ *
+ * `public/app.js` switches language in the page, and the daemon's `ui.translate`
+ * catalogue (`apps/daemon/src/protocol.ts`) is deliberately smaller than this
+ * dictionary — it owns only the strings the daemon itself answers. Without its own
+ * copy the client would keep the server-rendered wording for every key the daemon
+ * does not know after a switch (the T7a gap: `aria.liveDock*`, `detail.*`,
+ * `settings.*`). The shell embeds this as the `#uiStrings` island, so the client
+ * falls back deterministically instead of reusing a stale label.
+ */
+export function clientDictionary(): Readonly<Record<Language, Readonly<Record<string, string>>>> {
+  const dictionary: Record<Language, Record<string, string>> = { en: {}, zh: {} };
+  for (const [key, entry] of Object.entries(UI_STRINGS)) {
+    dictionary.en[key] = entry.en;
+    dictionary.zh[key] = entry.zh;
+  }
+  return dictionary;
 }
 
 /** True for a supported interface locale. */

@@ -18,6 +18,7 @@ import { promisify } from 'node:util';
 import {
   NODE_MINIMUM,
   PACKAGE_MANAGER,
+  RUNTIME_FILES,
   runtimeHomePath,
   runtimeRecordSchema,
   satisfiesMinimum,
@@ -264,12 +265,16 @@ export interface DoctorOptions {
  * failure is attributable to the credential or a stale daemon instead of a mystery.
  */
 export function probeRuntime(home: string): RuntimeProbe {
-  const credentialPath = join(home, 'installation-token');
+  const credentialPath = join(home, RUNTIME_FILES.installationCredential);
   let installationToken: RuntimeProbe['installationToken'] = 'missing';
   if (existsSync(credentialPath)) {
-    installationToken = (statSync(credentialPath).mode & 0o777) === 0o600 ? 'ok' : 'insecure';
+    // A mode check alone called a 0600 *directory* an OK credential: a failed start can leave
+    // one behind (the daemon chmods whatever is at the path to 0600 before reading it), and
+    // doctor then contradicted the next `start`'s EISDIR (T8b P3-2).
+    const stat = statSync(credentialPath);
+    installationToken = stat.isFile() && (stat.mode & 0o777) === 0o600 ? 'ok' : 'insecure';
   }
-  const recordPath = join(home, 'runtime.json');
+  const recordPath = join(home, RUNTIME_FILES.runtime);
   if (!existsSync(recordPath)) return { home, installationToken, running: false, instances: 0 };
   try {
     const parsed = runtimeRecordSchema.parse(JSON.parse(readFileSync(recordPath, 'utf8')));
@@ -438,7 +443,7 @@ export function renderDoctorReport(report: DoctorReport): string {
       report.runtime.running
         ? `running pid ${String(report.runtime.pid ?? 0)} epoch ${String(report.runtime.epoch ?? 0)} with ${String(report.runtime.instances)} project(s)`
         : 'not running'
-    }`,
+    }${report.runtime.detail === undefined ? '' : ` — ${report.runtime.detail}`}`,
   );
   lines.push(
     report.executionReady

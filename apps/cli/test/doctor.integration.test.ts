@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:net';
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +14,7 @@ import {
   probePnpm,
   probePort,
   probeRuntime,
+  renderDoctorReport,
   repoRootFrom,
 } from '../src/doctor.js';
 
@@ -187,11 +188,24 @@ describe('doctor report', () => {
     const report = await buildDoctorReport({ startDir: repoRoot, dataDir: home, ports: [] });
     expect(report.blockers.some((entry) => entry.includes('readable by others'))).toBe(true);
 
+    // A 0600 *directory* is not a usable credential: a failed `start` leaves one behind
+    // (`enforcePrivateMode` chmods whatever is at the path to 0600 before reading it), and
+    // doctor used to call it `ok` while the next `start` failed with EISDIR (T8b P3-2).
+    await rm(join(home, 'installation-token'), { force: true });
+    await mkdir(join(home, 'installation-token'), { recursive: true, mode: 0o700 });
+    await chmod(join(home, 'installation-token'), 0o600);
+    expect(probeRuntime(home).installationToken).toBe('insecure');
+
     // A malformed record is reported instead of pretending the runtime is healthy.
     await writeFile(join(home, 'runtime.json'), '{"pid":1}\n', { mode: 0o600 });
     const broken = probeRuntime(home);
     expect(broken.running).toBe(false);
     expect(broken.detail).toContain('unreadable');
+    // The human-readable report carries the same detail as `--json` (T8b P3-2).
+    const rendered = renderDoctorReport(
+      await buildDoctorReport({ startDir: repoRoot, dataDir: home, ports: [] }),
+    );
+    expect(rendered).toContain('runtime.json is unreadable');
 
     await rm(home, { recursive: true, force: true });
   });

@@ -11,6 +11,8 @@
     "build": "tsc -p tsconfig.build.json --pretty false"
   },
   "dependencies": {
-    "@agentdev/contracts": "workspace:*"
+    "@agentdev/contracts": "workspace:*",
+    "@agentdev/core": "workspace:*",
+    "@agentdev/storage": "workspace:*"
   }
 }

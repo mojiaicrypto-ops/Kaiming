@@ -13,7 +13,9 @@ import {
   CONNECTION_QUEUE_LIMITS,
   ConnectionQueue,
   EventHub,
+  KNOWLEDGE_UPDATED_EVENT,
   ProtocolError,
+  RECOVERY_REPORT_READY_EVENT,
   matchesScope,
 } from '../src/index.js';
 
@@ -440,5 +442,53 @@ describe('scope matching', () => {
     };
     expect(matchesScope(event, { kind: 'conversation', id: 'nope' })).toBe(false);
     expect(new ProtocolError('BUSY', 'x')).toBeInstanceOf(ProtocolError);
+  });
+});
+
+describe('new persistent event names (WP-12 T9)', () => {
+  /**
+   * `protocol.md` §7 keeps adding persistent event names (`knowledge.updated`,
+   * `recovery.report_ready`). The hub must not need a code change per name: delivery
+   * is a cursor scan plus `matchesScope`, so a name introduced after this file was
+   * written is delivered exactly like `work.control_changed`.
+   */
+  it('delivers an unknown event name through the ordinary cursor path and scopes it by data', () => {
+    const RUN_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e77';
+    const subscription = hub.subscribe({ connectionId: 'c1', scope: { kind: 'summary' } });
+
+    const knowledgeCursor = append(KNOWLEDGE_UPDATED_EVENT, projectId, {
+      projectId,
+      revision: 'a'.repeat(40),
+      featureIds: ['F-0a1b2c3d'],
+      featureCount: 1,
+    });
+    const reportCursor = append(RECOVERY_REPORT_READY_EVENT, RUN_ID, {
+      runId: RUN_ID,
+      workId: WORK_ID,
+      reportRef: { id: RUN_ID, version: 1, hash: 'b'.repeat(64) },
+    });
+
+    const polled = hub.poll(subscription.subscriptionId);
+    expect(polled.events.map((event) => event.name)).toEqual([
+      KNOWLEDGE_UPDATED_EVENT,
+      RECOVERY_REPORT_READY_EVENT,
+    ]);
+    expect(polled.events.map((event) => event.cursor)).toEqual([knowledgeCursor, reportCursor]);
+    expect(polled.scannedThrough).toBe(reportCursor);
+    expect(hub.ack(subscription.subscriptionId, polled.scannedThrough)).toEqual({
+      acknowledged: reportCursor,
+    });
+
+    // Scope routing is data-driven, not name-driven: the project-level knowledge
+    // event reaches only the summary scope (there is no `knowledge` scope in §2),
+    // while the recovery report also reaches the Work and Run it names.
+    const knowledgeEvent = store.events.readAfter(knowledgeCursor - 1, { limit: 1 })[0];
+    const reportEvent = store.events.readAfter(reportCursor - 1, { limit: 1 })[0];
+    if (knowledgeEvent === undefined || reportEvent === undefined) {
+      throw new Error('expected both appended events');
+    }
+    expect(matchesScope(knowledgeEvent, { kind: 'work', id: WORK_ID })).toBe(false);
+    expect(matchesScope(reportEvent, { kind: 'work', id: WORK_ID })).toBe(true);
+    expect(matchesScope(reportEvent, { kind: 'run', id: RUN_ID })).toBe(true);
   });
 });

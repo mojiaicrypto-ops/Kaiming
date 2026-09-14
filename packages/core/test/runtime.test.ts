@@ -82,6 +82,29 @@ describe('single-instance lock', () => {
     expect(taken.lock.epoch).toBe(5);
   });
 
+  it('keeps the epoch strictly increasing across a clean stop and start', () => {
+    // `reliability.md` §7 fences a stale owner by epoch; a clean stop removes the lock, so
+    // the next owner used to restart at 1 and a previously released epoch could be replayed
+    // (WP-11 T-03). The high-water mark makes the fence monotonic for the installation.
+    const first = acquireDaemonLock(home, { pid: process.pid });
+    expect(first.acquired).toBe(true);
+    if (!first.acquired) throw new Error('unreachable');
+    expect(releaseDaemonLock(home, first.lock.epoch)).toBe(true);
+    expect(readDaemonLock(home)).toBeNull();
+
+    const second = acquireDaemonLock(home, { pid: process.pid });
+    expect(second.acquired).toBe(true);
+    if (!second.acquired) throw new Error('unreachable');
+    expect(second.lock.epoch).toBe(first.lock.epoch + 1);
+    expect(second.replacedStale).toBe(false);
+
+    // A third cycle keeps climbing, so the value is a high-water mark, not a counter reset.
+    expect(releaseDaemonLock(home, second.lock.epoch)).toBe(true);
+    const third = acquireDaemonLock(home, { pid: process.pid });
+    if (!third.acquired) throw new Error('unreachable');
+    expect(third.lock.epoch).toBe(second.lock.epoch + 1);
+  });
+
   it('only the owning epoch can release the lock', () => {
     const taken = acquireDaemonLock(home, { pid: process.pid });
     if (!taken.acquired) throw new Error('unreachable');

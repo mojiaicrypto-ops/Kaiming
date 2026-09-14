@@ -20,12 +20,15 @@ import { UI_STRINGS, type Translator } from './i18n.js';
 import {
   BOARD_COLUMNS,
   isSuccessfulRun,
+  providerModelsInput,
   type AgentsModel,
   type ArtifactView,
   type BoardModel,
   type ChiefModel,
   type FilesModel,
   type InboxModel,
+  type InboxRow,
+  type ProviderEditorView,
   type RequirementDetail,
   type RunDetail,
   type RunsModel,
@@ -84,6 +87,70 @@ function discussLink(projectId: string, t: Translator, target: string): string {
 
 function chip(label: string, value: string, tone = ''): string {
   return `<span class="chip${tone === '' ? '' : ` ${tone}`}">${escapeHtml(label)}: ${escapeHtml(value)}</span>`;
+}
+
+/**
+ * The Git facts a card or the detail header states (`requirements.md` §3, AC-090).
+ *
+ * The branch comes from `project.snapshot.get`, the commit from the record's real
+ * `portableRef.revision`, and the push state only from an explicit `git.unpushed`.
+ * A payload that reports no push state renders "not reported" — the UI never turns a
+ * local branch into an "unpushed" claim.
+ */
+function gitChips(input: {
+  readonly branch: string;
+  readonly commit: string | null;
+  readonly unpushed: boolean | null;
+  readonly t: Translator;
+}): string {
+  const t = input.t;
+  const commit = input.commit === null ? t('common.none') : input.commit.slice(0, 12);
+  const push =
+    input.unpushed === null
+      ? chip(t('detail.pushState'), t('board.card.pushUnknown'), 'warn')
+      : chip(
+          t('detail.pushState'),
+          t(input.unpushed ? 'board.card.unpushed' : 'board.card.pushed'),
+          input.unpushed ? 'warn' : 'ok',
+        );
+  return [
+    input.branch === '' ? '' : chip(t('detail.branch'), input.branch),
+    `<span class="chip"${input.commit === null ? '' : ` title="${escapeHtml(input.commit)}"`}>${escapeHtml(t('detail.commit'))}: ${escapeHtml(commit)}</span>`,
+    push,
+  ].join('');
+}
+
+/**
+ * The data attributes one requirement action button carries.
+ *
+ * `data-record-version` is the record version the user was looking at, and
+ * `data-work-version` the Work version a `resume` must send as `expectedVersion`
+ * (`protocol.md` §1). Both are omitted when the payload does not carry them.
+ */
+function actionButton(input: {
+  readonly action: string;
+  readonly labelKey: string;
+  readonly requirementId: string;
+  readonly recordVersion: number;
+  readonly workId: string | null;
+  readonly workVersion: number | null;
+  readonly t: Translator;
+  readonly className?: string;
+}): string {
+  const recordVersion =
+    input.recordVersion > 0 ? ` data-record-version="${String(input.recordVersion)}"` : '';
+  const workVersion =
+    input.workVersion === null ? '' : ` data-work-version="${String(input.workVersion)}"`;
+  return [
+    `<button type="button" class="${escapeHtml(input.className ?? 'requirement-action')}"`,
+    ` data-action="${escapeHtml(input.action)}"`,
+    ` data-requirement="${escapeHtml(input.requirementId)}"`,
+    input.workId === null ? '' : ` data-work="${escapeHtml(input.workId)}"`,
+    recordVersion,
+    workVersion,
+    ` data-i18n="${escapeHtml(input.labelKey)}"`,
+    `>${escapeHtml(input.t(input.labelKey))}</button>`,
+  ].join('');
 }
 
 // ---------------------------------------------------------------------------
@@ -234,6 +301,9 @@ function boardCard(input: {
   return [
     `<li class="board-card" data-requirement="${escapeHtml(card.requirementId)}" data-identity="${escapeHtml(card.identity)}"`,
     ` data-lifecycle="${escapeHtml(card.lifecycle)}" data-work="${escapeHtml(card.work?.workId ?? '')}"`,
+    ` data-record-version="${String(card.recordVersion)}"`,
+    ` data-git-branch="${escapeHtml(card.branch)}" data-git-commit="${escapeHtml(card.commit ?? '')}"`,
+    ` data-git-unpushed="${card.unpushed === null ? 'unreported' : String(card.unpushed)}"`,
     ` tabindex="0" role="listitem">`,
     `<div class="card-head">`,
     `<a class="card-title" href="/projects/${escapeHtml(input.projectId)}/requirements/${escapeHtml(card.requirementId)}" data-i18n-project>${escapeHtml(card.title)}</a>`,
@@ -255,16 +325,72 @@ function boardCard(input: {
       ? ''
       : chip(t('board.card.previousState'), card.previousLifecycle),
     workStatus === null ? '' : chip(t('runs.status'), stateLabel(t, workStatus)),
+    // AC-090: the record's delivery branch, commit and (when reported) push state.
+    gitChips({
+      branch: card.branch,
+      commit: card.commit,
+      unpushed: card.unpushed,
+      t,
+    }),
     '</div>',
     card.waitingToContinue
       ? `<p class="chip warn" data-i18n="board.card.waitingToContinue">${escapeHtml(t('board.card.waitingToContinue'))}</p>`
       : '',
-    `<div class="card-actions">`,
-    // A Queued requirement with no local Work can be cancelled directly and its
-    // Pause is refused with INVALID_STATE (`AC-068`); the UI states that up front.
+    `<div class="card-actions" role="group" data-i18n-aria="board.actions" aria-label="${escapeHtml(t('board.actions'))}">`,
+    // Every requirement action names the record version it was rendered from and the
+    // idempotency key the client adds, so a refusal carries the real protocol code
+    // and the card is left exactly as it was (`protocol.md` §1, AC-068).
     card.canPause
       ? `<button type="button" class="pause" data-action="pause" data-work="${escapeHtml(card.work?.workId ?? '')}" data-i18n="board.action.pause">${escapeHtml(t('board.action.pause'))}</button>`
       : `<button type="button" class="pause" data-action="pause" data-requirement="${escapeHtml(card.requirementId)}" data-refused="INVALID_STATE" aria-disabled="true" title="${escapeHtml(t('board.pauseQueuedRefused'))}" data-i18n="board.action.pause">${escapeHtml(t('board.action.pause'))}</button>`,
+    card.canResume
+      ? actionButton({
+          action: 'resume',
+          labelKey: 'board.action.resume',
+          requirementId: card.requirementId,
+          recordVersion: card.recordVersion,
+          workId: card.work?.workId ?? null,
+          workVersion: card.workVersion,
+          className: 'resume',
+          t,
+        })
+      : '',
+    card.canContinue
+      ? actionButton({
+          action: 'continue',
+          labelKey: 'board.action.continue',
+          requirementId: card.requirementId,
+          recordVersion: card.recordVersion,
+          workId: card.work?.workId ?? null,
+          workVersion: card.workVersion,
+          className: 'continue',
+          t,
+        })
+      : '',
+    card.canComplete
+      ? actionButton({
+          action: 'complete',
+          labelKey: 'board.action.complete',
+          requirementId: card.requirementId,
+          recordVersion: card.recordVersion,
+          workId: card.work?.workId ?? null,
+          workVersion: card.workVersion,
+          className: 'complete',
+          t,
+        })
+      : '',
+    card.canArchive
+      ? actionButton({
+          action: 'archive',
+          labelKey: 'board.action.archive',
+          requirementId: card.requirementId,
+          recordVersion: card.recordVersion,
+          workId: card.work?.workId ?? null,
+          workVersion: card.workVersion,
+          className: 'archive',
+          t,
+        })
+      : '',
     card.canCancelWithoutWork
       ? `<button type="button" class="cancel" data-action="cancel" data-requirement="${escapeHtml(card.requirementId)}" data-i18n="board.action.cancel">${escapeHtml(t('board.action.cancel'))}</button>`
       : card.work === null
@@ -407,6 +533,28 @@ export function renderRequirementPage(input: {
         `<tr data-run="${escapeHtml(run.runId)}" data-outcome="${escapeHtml(run.outcome ?? '')}"><td class="mono">${escapeHtml(run.runId)}</td><td>${escapeHtml(run.role)}</td><td>${escapeHtml(stateLabel(t, run.status))}</td><td>${escapeHtml(run.outcome ?? t('common.waiting'))}</td><td>${String(run.attemptCount)}</td><td class="mono">${escapeHtml(String(run.lastEpoch ?? ''))}</td></tr>`,
     )
     .join('');
+  // The requirement actions call the real commands with the record version they were
+  // rendered from; a refusal renders the protocol code plus message in
+  // `#detailError` and leaves every field of the card untouched (`AC-068`, `AC-089`).
+  const action = (key: string, action_: string, className: string): string =>
+    actionButton({
+      action: action_,
+      labelKey: key,
+      requirementId: detail.requirementId,
+      recordVersion: detail.recordVersion,
+      workId: detail.workId,
+      workVersion: detail.workVersion,
+      className,
+      t,
+    });
+  const actions = [
+    detail.canPause ? action('board.action.pause', 'pause', 'pause') : '',
+    detail.canResume ? action('board.action.resume', 'resume', 'resume') : '',
+    detail.canContinue ? action('board.action.continue', 'continue', 'continue') : '',
+    detail.canComplete ? action('board.action.complete', 'complete', 'complete') : '',
+    detail.canArchive ? action('board.action.archive', 'archive', 'archive') : '',
+    detail.canCancel ? action('board.action.cancel', 'cancel', 'cancel') : '',
+  ].join('');
   return [
     section(
       {
@@ -416,7 +564,7 @@ export function renderRequirementPage(input: {
       },
       [
         `<h2 class="requirement-title" id="requirementTitle" data-i18n-project>${escapeHtml(detail.title)}</h2>`,
-        `<div class="chips" id="requirementMeta" data-requirement="${escapeHtml(detail.requirementId)}" data-record-version="${String(detail.recordVersion)}">`,
+        `<div class="chips" id="requirementMeta" data-requirement="${escapeHtml(detail.requirementId)}" data-record-version="${String(detail.recordVersion)}" data-git-branch="${escapeHtml(detail.branch)}" data-git-commit="${escapeHtml(detail.commit ?? '')}" data-git-unpushed="${detail.unpushed === null ? 'unreported' : String(detail.unpushed)}">`,
         chip(t('common.version'), String(detail.recordVersion)),
         chip(
           t('board.card.saveState'),
@@ -429,11 +577,26 @@ export function renderRequirementPage(input: {
           t('runs.status'),
           detail.workStatus === null ? t('common.none') : stateLabel(t, detail.workStatus),
         ),
+        gitChips({
+          branch: detail.branch,
+          commit: detail.commit,
+          unpushed: detail.unpushed,
+          t,
+        }),
         '</div>',
         detail.waitingToContinue
           ? `<p class="chip warn" data-i18n="board.card.waitingToContinue">${escapeHtml(t('board.card.waitingToContinue'))}</p>`
           : '',
         discussLink(input.projectId, t, `requirement-${detail.requirementId}`),
+      ].join(''),
+    ),
+    section(
+      { id: 'requirementActions', titleKey: 'board.actions', ariaKey: 'board.actions', t },
+      [
+        actions === ''
+          ? emptyNote(t, 'common.none')
+          : `<div class="card-actions" id="detailActions" role="group" data-i18n-aria="board.actions" aria-label="${escapeHtml(t('board.actions'))}">${actions}</div>`,
+        `<p class="alert" id="detailError" role="alert" hidden></p>`,
       ].join(''),
     ),
     section(
@@ -651,6 +814,90 @@ export function renderAgentsPage(input: {
 // Settings (AC-075)
 // ---------------------------------------------------------------------------
 
+/** The provider types `providerInputSchema` accepts (`rules/agents.md` §5). */
+const PROVIDER_TYPES = ['openai-compatible', 'anthropic', 'google'] as const;
+
+const PROVIDER_TYPE_KEYS: Readonly<Record<string, string>> = {
+  'openai-compatible': 'settings.providerTypeOpenai',
+  anthropic: 'settings.providerTypeAnthropic',
+  google: 'settings.providerTypeGoogle',
+};
+
+/** One provider type's interface-string key, with a safe default for a fixture. */
+function providerTypeKey(type: string): string {
+  return PROVIDER_TYPE_KEYS[type] ?? 'settings.providerTypeOpenai';
+}
+
+/**
+ * One provider's real editor (`experience.md` §2 `/settings`: "连接测试、Secret配置").
+ *
+ * The API key is a `type="password"` field that is never pre-filled and never
+ * echoed: `protocol.md` §5 takes the value as a separate `secret` parameter and
+ * creates `secretRef` on the server, so this control posts exactly what the
+ * operator typed — or, when it is left empty, no `secret` at all, which means
+ * "keep the stored credential". The client script owns that rule; nothing here
+ * ever renders a value back.
+ */
+function renderProviderEditor(input: {
+  readonly provider: ProviderEditorView | null;
+  readonly key: string;
+  readonly t: Translator;
+}): string {
+  const t = input.t;
+  const provider = input.provider;
+  const key = input.key;
+  const providerId = provider === null ? '' : provider.providerId;
+  const id = (field: string): string => `provider-${field}-${key}`;
+  const type = provider === null ? PROVIDER_TYPES[0] : provider.type;
+  const models = provider === null ? [] : provider.models;
+  const hasModel = models.length > 0;
+  const typeOptions = PROVIDER_TYPES.map((value) => {
+    const labelKey = providerTypeKey(value);
+    return `<option value="${escapeHtml(value)}" data-i18n="${escapeHtml(labelKey)}"${value === type ? ' selected' : ''}>${escapeHtml(t(labelKey))}</option>`;
+  }).join('');
+  const modelOptions = models
+    .map((model) => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.id)}</option>`)
+    .join('');
+  return [
+    `<form class="provider-form" data-provider="${escapeHtml(providerId)}" data-new="${provider === null ? 'true' : 'false'}">`,
+    `<div class="field"><label for="${id('id')}" data-i18n="settings.providerId">${escapeHtml(t('settings.providerId'))}</label>`,
+    `<input id="${id('id')}" data-field="providerId" type="text" value="${escapeHtml(providerId)}" data-translatable="false" autocomplete="off" aria-describedby="${id('id-hint')}">`,
+    `<p class="hint" id="${id('id-hint')}" data-i18n="settings.providerIdHint">${escapeHtml(t('settings.providerIdHint'))}</p></div>`,
+    `<div class="field"><label for="${id('type')}" data-i18n="settings.providerType">${escapeHtml(t('settings.providerType'))}</label>`,
+    `<select id="${id('type')}" data-field="type">${typeOptions}</select></div>`,
+    `<div class="field"><label for="${id('baseUrl')}" data-i18n="settings.baseUrl">${escapeHtml(t('settings.baseUrl'))}</label>`,
+    `<input id="${id('baseUrl')}" data-field="baseUrl" type="url" value="${escapeHtml(provider === null ? '' : provider.baseUrl)}" data-translatable="false" autocomplete="off"></div>`,
+    `<div class="field"><label for="${id('enabled')}" data-i18n="settings.enabled"><input id="${id('enabled')}" data-field="enabled" type="checkbox"${provider === null || provider.enabled ? ' checked' : ''}> ${escapeHtml(t('settings.enabled'))}</label></div>`,
+    `<div class="field"><label for="${id('models')}" data-i18n="settings.models">${escapeHtml(t('settings.models'))}</label>`,
+    `<textarea id="${id('models')}" data-field="models" rows="6" data-translatable="false" aria-describedby="${id('models-hint')}">${escapeHtml(JSON.stringify(providerModelsInput(models), null, 2))}</textarea>`,
+    `<p class="hint" id="${id('models-hint')}" data-i18n="settings.modelsHint">${escapeHtml(t('settings.modelsHint'))}</p></div>`,
+    `<div class="field"><label for="${id('secret')}" data-i18n="settings.apiKey">${escapeHtml(t('settings.apiKey'))}</label>`,
+    `<input id="${id('secret')}" data-field="secret" type="password" value="" autocomplete="off" data-translatable="false" aria-describedby="${id('secret-hint')}">`,
+    `<p class="hint" id="${id('secret-hint')}" data-i18n="settings.apiKeyHint">${escapeHtml(t('settings.apiKeyHint'))}</p></div>`,
+    `<button type="submit" class="provider-save" data-i18n="settings.providerSave">${escapeHtml(t('settings.providerSave'))}</button>`,
+    `<div class="field"><label for="${id('test-model')}" data-i18n="settings.testModel">${escapeHtml(t('settings.testModel'))}</label>`,
+    `<select id="${id('test-model')}" class="provider-test-model" data-translatable="false"${hasModel ? '' : ' disabled aria-disabled="true"'}>${modelOptions}</select>`,
+    hasModel
+      ? ''
+      : `<p class="hint" data-i18n="settings.testNeedsModel">${escapeHtml(t('settings.testNeedsModel'))}</p>`,
+    '</div>',
+    `<button type="button" class="provider-test" data-provider="${escapeHtml(providerId)}" data-i18n="settings.providerTest"${hasModel ? '' : ' disabled aria-disabled="true"'}>${escapeHtml(t('settings.providerTest'))}</button>`,
+    // The result region is rendered up front and toggled by the client, so every
+    // sentence comes from the interface dictionary in the active language — the
+    // daemon's `ui.translate` catalogue is a separate list and does not know these
+    // keys (WP-12 T1.2b known gap).
+    '<div class="provider-result" hidden>',
+    `<p class="status" data-role="saved" role="status" aria-live="polite"><span data-i18n="settings.providerSaved">${escapeHtml(t('settings.providerSaved'))}</span> <span class="mono" data-role="saved-detail"></span></p>`,
+    `<p class="status" data-role="test-accepted" role="status" aria-live="polite"><span data-i18n="settings.testAccepted">${escapeHtml(t('settings.testAccepted'))}</span> <span data-i18n="settings.testPending">${escapeHtml(t('settings.testPending'))}</span></p>`,
+    `<p class="status" data-role="test-completed" role="status" aria-live="polite"><span data-i18n="settings.testCompleted">${escapeHtml(t('settings.testCompleted'))}</span> <span data-i18n="settings.testOk" data-role="test-ok" hidden>${escapeHtml(t('settings.testOk'))}</span><span data-i18n="settings.testFailed" data-role="test-failed" hidden>${escapeHtml(t('settings.testFailed'))}</span> <span class="mono" data-role="test-detail"></span></p>`,
+    '</div>',
+    // The error stays outside the result region: a refusal must be visible even
+    // before any result exists.
+    `<p class="alert" data-role="error" role="alert" hidden></p>`,
+    '</form>',
+  ].join('');
+}
+
 export function renderSettingsPage(input: {
   readonly model: SettingsModel;
   readonly settings: JsonObject;
@@ -660,8 +907,8 @@ export function renderSettingsPage(input: {
   const model = input.model;
   const providers = model.providers
     .map(
-      (provider) =>
-        `<li class="provider" data-provider="${escapeHtml(provider.providerId)}"><span class="mono">${escapeHtml(provider.providerId)}</span><span>${escapeHtml(provider.type)}</span><span class="chip">${escapeHtml(provider.enabled ? t('state.valid') : t('state.invalidated'))}</span><span class="chip">${escapeHtml(provider.secretConfigured ? t('settings.secretConfigured') : t('settings.secretMissing'))}</span><button type="button" class="test-provider" data-provider="${escapeHtml(provider.providerId)}" data-i18n="settings.test">${escapeHtml(t('settings.test'))}</button></li>`,
+      (provider, index) =>
+        `<li class="provider" data-provider="${escapeHtml(provider.providerId)}"><div class="row-head"><span class="mono">${escapeHtml(provider.providerId)}</span><span>${escapeHtml(provider.type)}</span><span class="chip">${escapeHtml(provider.enabled ? t('state.valid') : t('state.invalidated'))}</span><span class="chip">${escapeHtml(provider.secretConfigured ? t('settings.secretConfigured') : t('settings.secretMissing'))}</span></div>${renderProviderEditor({ provider, key: String(index), t })}</li>`,
     )
     .join('');
   const limits = Object.entries(model.effectiveLimits)
@@ -689,7 +936,13 @@ export function renderSettingsPage(input: {
     ),
     section(
       { id: 'settingsProviders', titleKey: 'settings.providers', t },
-      providers === '' ? emptyNote(t, 'common.none') : `<ul class="providers">${providers}</ul>`,
+      [
+        providers === '' ? emptyNote(t, 'common.none') : `<ul class="providers">${providers}</ul>`,
+        // A provider-less installation is exactly the broken state this entry point
+        // exists to fix, so the create form is always offered.
+        `<h3 data-i18n="settings.newProvider">${escapeHtml(t('settings.newProvider'))}</h3>`,
+        renderProviderEditor({ provider: null, key: 'new', t }),
+      ].join(''),
     ),
     section(
       { id: 'settingsDefaults', titleKey: 'settings.defaultProfile', t },
@@ -736,6 +989,117 @@ export function renderSettingsPage(input: {
 // Inbox (AC-074)
 // ---------------------------------------------------------------------------
 
+/**
+ * The question block for one `product` decision.
+ *
+ * `protocol.md` §6 fixes the rendering contract: the question is the markdown body
+ * of the Artifact in `targetRef`, and the choices are the rendered buttons. A body
+ * that could not be read, or that is empty, says so — an empty card would hide the
+ * one fact the user needs.
+ */
+function inboxQuestionBlock(row: InboxRow, t: Translator): string {
+  const question = row.question;
+  if (question === null) return '';
+  const artifact = row.artifactId ?? '';
+  const ref =
+    row.artifactVersion === null
+      ? artifact
+      : `${artifact} · ${t('common.version')} ${String(row.artifactVersion)}`;
+  const heading = `<h4 data-i18n="inbox.question">${escapeHtml(t('inbox.question'))}</h4>`;
+  const body =
+    question.error !== null
+      ? `<p class="alert" role="alert" data-question-error data-i18n="inbox.questionUnavailable" title="${escapeHtml(question.error)}">${escapeHtml(t('inbox.questionUnavailable'))}</p>`
+      : question.text.trim() === ''
+        ? `<p class="hint" data-question-empty data-i18n="inbox.questionEmpty">${escapeHtml(t('inbox.questionEmpty'))}</p>`
+        : `<blockquote class="inbox-question" data-question-body data-i18n-project data-translatable="false">${escapeHtml(question.text)}</blockquote>`;
+  return [
+    heading,
+    body,
+    `<p class="hint mono" data-artifact-ref="${escapeHtml(artifact)}" data-artifact-version="${String(row.artifactVersion ?? 0)}">${escapeHtml(ref)}</p>`,
+  ].join('');
+}
+
+/** One `product`/other decision card: choices resolve through `decision.resolve`. */
+function inboxDecisionRow(row: InboxRow, t: Translator): string {
+  const expired = row.expired || !row.actionable;
+  const options = row.choices
+    .map(
+      (choice) =>
+        `<button type="button" class="choice" data-decision="${escapeHtml(row.id)}" data-choice="${escapeHtml(choice)}" data-target-version="${String(row.targetVersion ?? 0)}"${expired ? ' disabled aria-disabled="true"' : ''}>${escapeHtml(choice)}</button>`,
+    )
+    .join('');
+  return [
+    `<li class="inbox-row" data-kind="decision" data-entry="decision" data-decision="${escapeHtml(row.id)}" data-state="${escapeHtml(row.state)}"`,
+    ` data-target-version="${String(row.targetVersion ?? 0)}" data-target-id="${escapeHtml(row.targetId)}"${expired ? ' aria-disabled="true"' : ''}>`,
+    `<div class="row-head"><span class="kind" data-i18n="inbox.decision">${escapeHtml(t('inbox.decision'))}</span><span class="mono">${escapeHtml(row.label)}</span>`,
+    `<span class="chip">${escapeHtml(t('inbox.targetVersion'))}: ${String(row.targetVersion ?? 0)}</span>`,
+    `<span class="chip${expired ? ' danger' : ' ok'}">${escapeHtml(expired ? t('inbox.expiredDisabled') : stateLabel(t, row.state))}</span></div>`,
+    // The choices stay next to the head so a disabled control is never buried under
+    // a long project question (the expired-control assertions read the row in order).
+    `<div class="choices" data-i18n-aria="inbox.options" aria-label="${escapeHtml(t('inbox.options'))}">${options}</div>`,
+    `<p class="hint" data-i18n="inbox.dedup">${escapeHtml(t('inbox.dedup'))}</p>`,
+    inboxQuestionBlock(row, t),
+    `<div class="chips">${chip(t('inbox.work'), row.workId)}${chip(t('inbox.raisedBy'), row.decisionKind === 'product' ? t('inbox.raisedByChief') : row.decisionKind)}</div>`,
+    '</li>',
+  ].join('');
+}
+
+/**
+ * One `permission` request card.
+ *
+ * The bound tool call is stated before the buttons (`protocol.md` §4 "show exactly
+ * what will be granted"): the operation, its targets, the input hash and the Run it
+ * parks. Approving is a deliberate click on a named control and is disabled while the
+ * binding is unknown, because a blind approval would authorize a call the user never
+ * saw. Denial carries a required reason.
+ */
+function inboxPermissionRow(row: InboxRow, t: Translator): string {
+  const expired = row.expired || !row.actionable;
+  const binding = row.binding;
+  const missing = row.bindingMissing || binding === null;
+  const approveDisabled = missing || expired;
+  const approve = `<button type="button" class="choice" data-permission="approve" data-decision="${escapeHtml(row.id)}" data-target-version="${String(row.targetVersion ?? 0)}" data-tool-operation="${escapeHtml(row.targetId)}"${approveDisabled ? ' disabled aria-disabled="true"' : ''}>${escapeHtml(t('inbox.approve'))}</button>`;
+  const deny = `<button type="button" class="choice" data-permission="deny" data-decision="${escapeHtml(row.id)}" data-target-version="${String(row.targetVersion ?? 0)}" data-tool-operation="${escapeHtml(row.targetId)}"${expired ? ' disabled aria-disabled="true"' : ''}>${escapeHtml(t('inbox.deny'))}</button>`;
+  const targets =
+    binding === null
+      ? ''
+      : binding.targets.length === 0
+        ? t('inbox.noTargets')
+        : binding.targets.join(', ');
+  const field_ = (labelKey: string, value: string, name: string): string =>
+    `<div class="pair"><dt data-i18n="${escapeHtml(labelKey)}">${escapeHtml(t(labelKey))}</dt><dd class="mono" data-binding-${escapeHtml(name)}>${escapeHtml(value)}</dd></div>`;
+  return [
+    `<li class="inbox-row" data-kind="decision" data-entry="permission" data-decision="${escapeHtml(row.id)}" data-state="${escapeHtml(row.state)}"`,
+    ` data-target-version="${String(row.targetVersion ?? 0)}" data-target-id="${escapeHtml(row.targetId)}" data-tool-operation="${escapeHtml(row.targetId)}"`,
+    ` data-work="${escapeHtml(row.workId)}" data-binding-missing="${missing ? 'true' : 'false'}"${expired ? ' aria-disabled="true"' : ''}>`,
+    `<div class="row-head"><span class="kind" data-i18n="inbox.permission">${escapeHtml(t('inbox.permission'))}</span>`,
+    `<span class="mono" data-binding-operation>${escapeHtml(binding?.operation ?? '')}</span>`,
+    `<span class="chip">${escapeHtml(t('inbox.targetVersion'))}: ${String(row.targetVersion ?? 0)}</span>`,
+    `<span class="chip${expired ? ' danger' : ' ok'}">${escapeHtml(expired ? t('inbox.expiredDisabled') : stateLabel(t, row.state))}</span></div>`,
+    `<div class="choices" data-i18n-aria="inbox.options" aria-label="${escapeHtml(t('inbox.options'))}">${approve}${deny}</div>`,
+    `<p class="alert" role="alert" data-binding-notice data-i18n="inbox.bindingMissing"${missing ? '' : ' hidden'}>${escapeHtml(t('inbox.bindingMissing'))}</p>`,
+    `<h4 data-i18n="inbox.permissionBinding">${escapeHtml(t('inbox.permissionBinding'))}</h4>`,
+    '<dl class="binding">',
+    field_('inbox.targets', targets, 'targets'),
+    field_('inbox.inputHash', binding?.inputHash ?? '', 'input-hash'),
+    field_('inbox.bindingHash', row.targetHash ?? '', 'hash'),
+    field_('inbox.grantScope', t('inbox.grantScopeOnce'), 'scope'),
+    field_('inbox.run', row.runId ?? '', 'run'),
+    field_('inbox.work', row.workId, 'work'),
+    field_(
+      'inbox.raisedBy',
+      row.role === null
+        ? t('inbox.raisedByRun')
+        : `${row.role}${row.stage === null ? '' : ` · ${row.stage}`}${row.runStatus === null ? '' : ` · ${stateLabel(t, row.runStatus)}`}`,
+      'raised-by',
+    ),
+    '</dl>',
+    `<label for="deny-reason-${escapeHtml(row.id)}" data-i18n="inbox.denyReason">${escapeHtml(t('inbox.denyReason'))}</label>`,
+    `<textarea id="deny-reason-${escapeHtml(row.id)}" data-permission-reason rows="2" data-translatable="false"></textarea>`,
+    '</li>',
+  ].join('');
+}
+
 export function renderInboxPage(input: {
   readonly model: InboxModel;
   readonly projectId: string;
@@ -743,25 +1107,9 @@ export function renderInboxPage(input: {
 }): string {
   const t = input.t;
   const decisionRows = input.model.decisions
-    .map((row) => {
-      const expired = row.expired || !row.actionable;
-      const options = row.choices
-        .map(
-          (choice) =>
-            `<button type="button" class="choice" data-decision="${escapeHtml(row.id)}" data-choice="${escapeHtml(choice)}" data-target-version="${String(row.targetVersion ?? 0)}"${expired ? ' disabled aria-disabled="true"' : ''}>${escapeHtml(choice)}</button>`,
-        )
-        .join('');
-      return [
-        `<li class="inbox-row" data-kind="decision" data-decision="${escapeHtml(row.id)}" data-state="${escapeHtml(row.state)}"`,
-        ` data-target-version="${String(row.targetVersion ?? 0)}"${expired ? ' aria-disabled="true"' : ''}>`,
-        `<div class="row-head"><span class="kind">${escapeHtml(t('inbox.decision'))}</span><span class="mono">${escapeHtml(row.label)}</span>`,
-        `<span class="chip">${escapeHtml(t('inbox.targetVersion'))}: ${String(row.targetVersion ?? 0)}</span>`,
-        `<span class="chip${expired ? ' danger' : ' ok'}">${escapeHtml(expired ? t('inbox.expiredDisabled') : stateLabel(t, row.state))}</span></div>`,
-        `<p class="hint" data-i18n="inbox.dedup">${escapeHtml(t('inbox.dedup'))}</p>`,
-        `<div class="choices" data-i18n-aria="inbox.options" aria-label="${escapeHtml(t('inbox.options'))}">${options}</div>`,
-        '</li>',
-      ].join('');
-    })
+    .map((row) =>
+      row.entry === 'permission' ? inboxPermissionRow(row, t) : inboxDecisionRow(row, t),
+    )
     .join('');
   const findingRows = input.model.findings
     .map(
@@ -781,9 +1129,11 @@ export function renderInboxPage(input: {
       { id: 'inbox', titleKey: 'nav.inbox', ariaKey: 'aria.inbox', t },
       [
         `<div class="chips">${chip(t('shell.liveCount'), String(input.model.unread))}</div>`,
-        `<ul class="inbox" id="inboxList" data-project="${escapeHtml(input.projectId)}">${body}</ul>`,
-        body === '' ? emptyNote(t, 'inbox.empty') : '',
+        `<ul class="inbox" id="inboxList" data-project="${escapeHtml(input.projectId)}" data-unread="${String(input.model.unread)}">${body}</ul>`,
+        `<p class="empty" id="inboxEmpty" data-i18n="inbox.empty"${body === '' ? '' : ' hidden'}>${escapeHtml(t('inbox.empty'))}</p>`,
         `<p class="alert" id="inboxError" role="alert" hidden></p>`,
+        `<p class="status" id="inboxStatus" role="status" aria-live="polite" hidden></p>`,
+        `<p class="alert" id="inboxRefreshError" role="alert" hidden></p>`,
       ].join(''),
     ),
   ].join('');

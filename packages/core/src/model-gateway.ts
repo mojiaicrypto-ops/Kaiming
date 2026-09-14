@@ -13,10 +13,33 @@
  * The transport is injected: WP-02 exercises the whole path with a stub, and the
  * real HTTP clients land in WP-10 with the Provider vertical run.
  */
-import type { Role, Run } from '@agentdev/contracts';
+import type { JsonValue, Role, Run } from '@agentdev/contracts';
 import { ProtocolError } from './errors.js';
 import type { ConfigError, ConfigStore, ProfileLayer, ProfileResolution } from './config.js';
 import type { SnapshotWriter } from './snapshots.js';
+
+/**
+ * One tool call an OpenAI-compatible Provider asked for.
+ *
+ * The Pi session executes these through its registered tools; the gateway must carry them
+ * end to end or a real model can never deliver `assessment_submit`/`stage_yield`
+ * (WP-12 fix round 3, R3-1).
+ */
+export interface GatewayToolCall {
+  readonly id: string;
+  readonly type: 'function';
+  readonly function: { readonly name: string; readonly arguments: string };
+}
+
+/** One message the Provider sees; a `tool` message carries its call's result. */
+export interface GatewayMessage {
+  readonly role: 'system' | 'user' | 'assistant' | 'tool';
+  readonly content: string;
+  /** Set on an assistant message that asked for tools. */
+  readonly toolCalls?: readonly GatewayToolCall[];
+  /** Set on a `tool` message: the call it answers. */
+  readonly toolCallId?: string;
+}
 
 /** One completion request, already resolved against a frozen profile. */
 export interface GatewayRequest {
@@ -25,19 +48,24 @@ export interface GatewayRequest {
   readonly reasoning: string;
   readonly baseUrl: string;
   readonly apiKey?: string;
-  readonly messages: readonly {
-    readonly role: 'system' | 'user' | 'assistant';
-    readonly content: string;
-  }[];
+  readonly messages: readonly GatewayMessage[];
   readonly maxOutputTokens: number;
   /** Effective context limit for this Run (`min(profile, window − output − reserved)`). */
   readonly contextLimit: number;
+  /**
+   * The tool schemas the model may call, passed through untouched.
+   *
+   * The Pi session decides which tools exist; dropping them here would leave a real model
+   * unable to call anything (WP-12 R3-2c, request direction of the tool round trip).
+   */
+  readonly tools?: readonly JsonValue[];
 }
 
 export type GatewayResponse =
   | {
       readonly ok: true;
       readonly text: string;
+      readonly toolCalls?: readonly GatewayToolCall[];
       readonly inputTokens: number;
       readonly outputTokens: number;
     }
@@ -54,7 +82,22 @@ export interface GatewayTransport {
 
 /** Resolves a `secretRef` to the secret value; the Secret store lands in WP-07. */
 export interface SecretResolver {
-  resolve(secretRef: string): string | undefined;
+  /**
+   * Whether the ref is registered at all, without reading its value.
+   *
+   * Admission (`availability`) only needs "a credential exists"; the value is read when a
+   * call is really made (WP-12 fix round 2). Optional so a test resolver may implement only
+   * `resolve`, in which case the gateway falls back to resolving.
+   */
+  has?(secretRef: string): boolean;
+  /**
+   * The value, or `undefined` when the Run may not use it.
+   *
+   * `options.allowRef` is the ref the caller is resolving *for this call*; the real resolver
+   * narrows the Run's secret access to exactly that one (frozen snapshot or role resolution),
+   * never to a model-supplied `runParams` layer.
+   */
+  resolve(secretRef: string, options?: { readonly allowRef?: string }): string | undefined;
 }
 
 export interface ModelGatewayOptions {
@@ -97,7 +140,14 @@ export class ModelGateway {
     // resolver the secret store is unknown (WP-07, DC-31), so the check is skipped.
     const secretRef = resolution.resolution.provider.secretRef;
     if (secretRef !== undefined && this.secrets !== undefined) {
-      if (this.secrets.resolve(secretRef) === undefined) {
+      // Registration only: reading the value here needed an authorization the admission
+      // step has no Run for yet, which is exactly what made a real installation unable to
+      // queue its first Chief Run (WP-12 fix round 2, G1).
+      const registered =
+        this.secrets.has !== undefined
+          ? this.secrets.has(secretRef)
+          : this.secrets.resolve(secretRef) !== undefined;
+      if (!registered) {
         return {
           ok: false,
           code: 'CONFIG_INVALID',
@@ -132,12 +182,18 @@ export class ModelGateway {
   async complete(
     run: Pick<Run, 'configSnapshotId' | 'role'>,
     messages: GatewayRequest['messages'],
+    tools?: readonly JsonValue[],
   ): Promise<GatewayResponse> {
     const frozen = this.frozenProfileOf(run);
     // `readFrozen` normalizes legacy `null` values, but a hand-written snapshot must
     // not be able to crash the gateway either (R18-02).
     const secretRef = frozen.provider.secretRef ?? undefined;
-    const apiKey = secretRef === undefined ? undefined : this.secrets?.resolve(secretRef);
+    // The ref must come from the Run's *frozen* snapshot; it is the only credential this
+    // call may read, and the resolver enforces exactly that.
+    const apiKey =
+      secretRef === undefined
+        ? undefined
+        : this.secrets?.resolve(secretRef, { allowRef: secretRef });
     if (secretRef !== undefined && apiKey === undefined) {
       return {
         ok: false,
@@ -159,6 +215,7 @@ export class ModelGateway {
       // Provider drill).
       maxOutputTokens: frozen.model.maxOutputTokens,
       contextLimit: frozen.effectiveContextLimit,
+      ...(tools === undefined || tools.length === 0 ? {} : { tools }),
     });
   }
 
@@ -193,8 +250,12 @@ export class ModelGateway {
     if (model === undefined) {
       return { ok: false, latencyMs: 0, error: `model ${modelId} is not configured` };
     }
+    // An installation-level probe of one named Provider: only that Provider's own ref is
+    // allowed, and it comes from the live configuration rather than any caller input.
     const apiKey =
-      provider.secretRef === undefined ? undefined : this.secrets?.resolve(provider.secretRef);
+      provider.secretRef === undefined
+        ? undefined
+        : this.secrets?.resolve(provider.secretRef, { allowRef: provider.secretRef });
     if (provider.secretRef !== undefined && apiKey === undefined) {
       return { ok: false, latencyMs: 0, error: `secret ${provider.secretRef} is not available` };
     }

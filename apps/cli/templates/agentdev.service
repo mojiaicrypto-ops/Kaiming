@@ -4,13 +4,20 @@
 # Install:
 #   mkdir -p ~/.config/systemd/user
 #   cp apps/cli/templates/agentdev.service ~/.config/systemd/user/
-#   # replace __AGENTDEV_REPO__, __NODE__ and __AGENTDEV_HOME__
+#   # replace __AGENTDEV_REPO__, __NODE__ and __AGENTDEV_HOME__ (__NODE__ must be an
+#   # absolute path: systemd refuses a relative ExecStart)
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now agentdev.service
 #   systemctl --user status agentdev.service
 #
+# Uninstall:
+#   systemctl --user disable --now agentdev.service
+#   rm -f ~/.config/systemd/user/agentdev.service
+#
 # The daemon holds `daemon.lock`; `Restart=on-failure` plus the startup outbox/Run scan
 # is the documented crash path ("收到SIGKILL或断电后按恢复流程核对").
+# This unit was not executed on the macOS development host (no systemd); the equivalent
+# launchd load/unload drill is `.agentdev/work/WP-12/T6-launchd-drill.sh`.
 [Unit]
 Description=AgentDev Workspace daemon
 After=default.target

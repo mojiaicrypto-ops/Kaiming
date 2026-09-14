@@ -19,7 +19,12 @@
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 
-import type { GatewayRequest, GatewayResponse, GatewayTransport } from './model-gateway.js';
+import type {
+  GatewayRequest,
+  GatewayResponse,
+  GatewayToolCall,
+  GatewayTransport,
+} from './model-gateway.js';
 
 /** Declared per-call timeout; a hung endpoint must not hold a Runner forever. */
 export const PROVIDER_TIMEOUT_MS = 300_000;
@@ -55,6 +60,35 @@ export function chatCompletionsUrl(baseUrl: string): string {
  * `content` wins; a reasoning model's `reasoning_content`/`reasoning` is the fallback
  * (WP-10 review found the drill failing on exactly that shape).
  */
+/**
+ * The tool calls of one completion body (`choices[0].message.tool_calls`).
+ *
+ * A model that only asks for tools has no text at all, so this is what makes such a
+ * completion a *success* rather than "no completion text" (WP-12 R3-1).
+ */
+export function extractToolCalls(payload: unknown): GatewayToolCall[] {
+  const choices = (payload as { choices?: unknown })?.choices;
+  if (!Array.isArray(choices) || choices.length === 0) return [];
+  const message = (choices[0] as { message?: Record<string, unknown> })?.message;
+  const calls = message?.['tool_calls'];
+  if (!Array.isArray(calls)) return [];
+  return calls.map((call, index) => {
+    const record = (call ?? {}) as Record<string, unknown>;
+    const fn = (record['function'] ?? {}) as Record<string, unknown>;
+    return {
+      id:
+        typeof record['id'] === 'string' && record['id'].length > 0
+          ? record['id']
+          : `call_${String(index)}`,
+      type: 'function' as const,
+      function: {
+        name: typeof fn['name'] === 'string' ? fn['name'] : '',
+        arguments: typeof fn['arguments'] === 'string' ? fn['arguments'] : '',
+      },
+    };
+  });
+}
+
 export function extractCompletionText(payload: unknown): string | null {
   const choices = (payload as { choices?: unknown })?.choices;
   if (!Array.isArray(choices) || choices.length === 0) return null;
@@ -112,11 +146,26 @@ export class OpenAiCompatibleTransport implements GatewayTransport {
     const url = new URL(chatCompletionsUrl(request.baseUrl));
     const body = JSON.stringify({
       model: request.modelId,
+      // A `tool` result and an assistant `tool_calls` message must round-trip: the Provider
+      // needs the call id to connect them (WP-12 R3-1).
       messages: request.messages.map((message) => ({
         role: message.role,
         content: message.content,
+        ...(message.toolCalls === undefined
+          ? {}
+          : {
+              tool_calls: message.toolCalls.map((call) => ({
+                id: call.id,
+                type: call.type,
+                function: { name: call.function.name, arguments: call.function.arguments },
+              })),
+            }),
+        ...(message.toolCallId === undefined ? {} : { tool_call_id: message.toolCallId }),
       })),
       max_tokens: request.maxOutputTokens,
+      // The tool schemas the session offered travel to the Provider unchanged; without them
+      // a real model can never answer with a tool call (WP-12 R3-2c).
+      ...(request.tools === undefined ? {} : { tools: request.tools }),
       stream: false,
     });
     const finish = (status: number | null, ok: boolean, error?: string): void => {
@@ -171,8 +220,9 @@ export class OpenAiCompatibleTransport implements GatewayTransport {
         message: 'the Provider returned a non-JSON body',
       };
     }
+    const toolCalls = extractToolCalls(parsed);
     const completion = extractCompletionText(parsed);
-    if (completion === null || completion.trim().length === 0) {
+    if ((completion === null || completion.trim().length === 0) && toolCalls.length === 0) {
       finish(status, false, 'no completion text');
       return {
         ok: false,
@@ -185,7 +235,8 @@ export class OpenAiCompatibleTransport implements GatewayTransport {
     finish(status, true);
     return {
       ok: true,
-      text: completion,
+      text: completion ?? '',
+      ...(toolCalls.length === 0 ? {} : { toolCalls }),
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
     };

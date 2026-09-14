@@ -688,6 +688,7 @@ describe('GrantStore (AC-049, AC-080)', () => {
         toolName: 'edit',
         inputHash: HASH,
         argsRef: uuid(0x901),
+        targets: ['src/a.ts'],
         state: 'started',
         grantId: store.grants.list()[0]?.id ?? '',
       });

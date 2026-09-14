@@ -134,6 +134,42 @@ export class CheckList {
     return record;
   }
 
+  /**
+   * Records a verdict another runner already produced (the real-browser suite).
+   *
+   * A check body cannot express "one outcome per AC" when a single Playwright run
+   * covers several of them, so `scripts/e2e.mjs` records the suite's own per-AC
+   * verdicts here. The rules stay identical to {@link check}: a `PASS` must carry
+   * evidence text, the caller stops the run on the first `FAIL`, and nothing is
+   * silently skipped.
+   *
+   * @param {'PASS'|'FAIL'|'UNVERIFIED'} status
+   */
+  record(name, acs, status, evidence) {
+    if (!['PASS', 'FAIL', 'UNVERIFIED'].includes(status)) {
+      throw new Error(`check ${name} has an unknown status ${String(status)}`);
+    }
+    const text = String(evidence ?? '').trim();
+    if (text.length === 0) {
+      throw new Error(
+        `check ${name} returned no evidence text; a check without evidence fails closed`,
+      );
+    }
+    const record = {
+      name,
+      acs: [...acs],
+      status,
+      evidence: text,
+      durationMs: 0,
+    };
+    this.records.push(record);
+    this.print(record);
+    // The runner stops at the first failure; remember it so the final report prints the
+    // same raw diagnostic a `check()` body would have produced.
+    if (status === 'FAIL' && this.failure === null) this.failure = record;
+    return record;
+  }
+
   print(record) {
     const ids = record.acs.join(',') || '-';
     this.log(
@@ -206,7 +242,7 @@ export function renderE2eRecord(checks, meta) {
   lines.push(`- 仓库：\`${meta.repoRoot}\``);
   lines.push(`- Git HEAD：\`${meta.gitHead}\``);
   lines.push(
-    '- 装载方式：Node 原生类型擦除 + 模块解析钩子直接执行 `packages/*/src`；无构建、无浏览器、无新依赖。',
+    '- 装载方式：Node 原生类型擦除 + 模块解析钩子直接执行 `packages/*/src`；无构建、无 `dist`。浏览器侧由 `tests/browser/**`（Playwright + 真实 Chromium，仅开发依赖）在同一真实栈上执行。',
   );
   lines.push(
     `- 真实栈：临时 Git 项目 \`${meta.projectRoot}\`、SQLite \`${meta.dataDir}/project.sqlite\`、真实 Core 服务、真实 \`createDaemon\`（HTTP+WS）与真实 \`createWebApp\` BFF，端口均为回环 0。`,

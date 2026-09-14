@@ -204,6 +204,14 @@ export const toolOperationSchema = z.strictObject({
   toolName: z.string().min(1),
   inputHash: hashSchema,
   argsRef: idRefSchema,
+  /**
+   * The repository-relative targets this call was admitted for (`T3 轮 2`).
+   *
+   * The Broker records them with the operation, so a permission approval can mint a Grant
+   * whose targets are the ones the refused call really named instead of an empty list; a
+   * `bash` call names none, which is what an empty array means here.
+   */
+  targets: list(z.string().min(1)),
   state: toolOperationStateSchema,
   grantId: idRefSchema.optional(),
   resultRef: idRefSchema.optional(),

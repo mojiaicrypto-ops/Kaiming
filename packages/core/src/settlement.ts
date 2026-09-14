@@ -24,7 +24,12 @@
  *   commit, completes the missing database state and emits the settlement
  *   completion event exactly once (`AC-063`).
  */
-import { type CompletionManifest, type ErrorCode, type JsonObject } from '@agentdev/contracts';
+import {
+  canonicalJson,
+  type CompletionManifest,
+  type ErrorCode,
+  type JsonObject,
+} from '@agentdev/contracts';
 import {
   buildProjection,
   contentHash,
@@ -38,6 +43,7 @@ import {
   type KnowledgeProjection,
   type LinkDiagnosticsContext,
   type ParsedFeature,
+  type ProjectedFeature,
   type ProjectionBuildResult,
   type ProjectionCache,
   type RelationKind,
@@ -57,10 +63,25 @@ import type {
 import type { SnapshotWriter } from './snapshots.js';
 import { ProtocolError, type ProtocolErrorCode } from './errors.js';
 import { scanEvents } from './events.js';
-import { ProjectIntegrationLock, type IntegrationLeaseStore } from './requirement-save.js';
+import {
+  ProjectIntegrationLock,
+  readRequirementPoolAtRevision,
+  type IntegrationLeaseStore,
+  type RequirementSaveService,
+} from './requirement-save.js';
 
 /** `Event.name` of the one durable settlement completion event. */
 export const SETTLEMENT_COMPLETED_EVENT = 'settlement.completed';
+
+/**
+ * `Event.name` of a published knowledge projection (`protocol.md` §7).
+ *
+ * The projection write (`feature_projection`) is where knowledge becomes visible
+ * to `knowledge.list`/`knowledge.get` and to every later cold start, so it is the
+ * one transition that emits this event. A rebuild that publishes exactly what is
+ * already stored is not an update and emits nothing.
+ */
+export const KNOWLEDGE_UPDATED_EVENT = 'knowledge.updated';
 
 /** `operation.kind` of a settlement (`data.md` §2). */
 export const SETTLEMENT_OPERATION_KIND = 'settle';
@@ -147,6 +168,33 @@ export function createSqliteProjectionCache(options: {
     }));
   };
 
+  /** The document hash a feature publishes under (`buildProjection`'s own fallback). */
+  const documentHashOf = (projection: KnowledgeProjection, feature: ProjectedFeature): string =>
+    projection.documentHashes[feature.documentPath] ?? contentHash(feature.documentPath);
+
+  /**
+   * Whether the stored rows of `revision` already are this projection.
+   *
+   * A cold rebuild of an unchanged document set produces byte-identical rows, so
+   * treating it as an update would emit a `knowledge.updated` for a transition that
+   * never happened. Only a real content difference (or a revision that was absent,
+   * or rows that are `stale` and are being republished) counts.
+   */
+  const unchanged = (revision: string, projection: KnowledgeProjection): boolean => {
+    const stored = rows().filter((row) => row.revision === revision);
+    if (stored.length !== projection.features.length) return false;
+    const byFeature = new Map(stored.map((row) => [row.featureId, row]));
+    for (const feature of projection.features) {
+      const row = byFeature.get(feature.featureId);
+      if (row === undefined || row.state !== 'valid') return false;
+      if (row.documentPath !== feature.documentPath) return false;
+      if (row.documentHash !== documentHashOf(projection, feature)) return false;
+      if (canonicalJson(row.fields) !== canonicalJson(fieldsOf(feature))) return false;
+      if (canonicalJson(row.relations) !== canonicalJson(relationsOf(feature))) return false;
+    }
+    return true;
+  };
+
   return {
     get(revision, featureId) {
       return rows().find(
@@ -157,23 +205,49 @@ export function createSqliteProjectionCache(options: {
       return rows().filter((row) => row.revision === revision);
     },
     put(revision, projection) {
+      if (unchanged(revision, projection)) {
+        // Nothing changed: no row is rewritten and no `knowledge.updated` is emitted.
+        last = projection;
+        return;
+      }
       withTransaction(store.db, () => {
         // The projection is keyed `(revision, featureId)` and is rebuildable, so a
         // publish replaces the whole revision's row set.
         store.db.prepare('DELETE FROM feature_projection WHERE revision = ?').run(revision);
+        const featureIds: string[] = [];
         for (const feature of projection.features) {
           store.featureProjections.insert({
             projectId: store.projectId,
             revision,
             featureId: feature.featureId,
             documentPath: feature.documentPath,
-            documentHash:
-              projection.documentHashes[feature.documentPath] ?? contentHash(feature.documentPath),
+            documentHash: documentHashOf(projection, feature),
             fields: fieldsOf(feature),
             relations: relationsOf(feature),
             state: 'valid',
           });
+          featureIds.push(feature.featureId);
         }
+        // `protocol.md` §7: the event is written in the *same* transaction as the
+        // state it announces, and its `data` is the changed projection's summary —
+        // the full bodies stay behind `knowledge.get`.
+        store.events.append({
+          name: KNOWLEDGE_UPDATED_EVENT,
+          // The knowledge set belongs to the Project; the Project row is the entity
+          // whose version the envelope carries (`provider.test_completed` uses the
+          // same convention for a config-owned event).
+          entityId: store.projectId,
+          entityVersion: store.projects.find(store.projectId)?.version ?? 1,
+          data: {
+            projectId: store.projectId,
+            revision,
+            codeTreeRevision: projection.codeTreeRevision,
+            state: projection.state,
+            featureIds: featureIds.sort(),
+            featureCount: featureIds.length,
+            documentHashes: { ...projection.documentHashes },
+          },
+        });
       });
       last = projection;
     },
@@ -754,8 +828,31 @@ export interface SettlementServiceOptions {
    */
   readonly lock?: ProjectIntegrationLock;
   readonly leases?: IntegrationLeaseStore;
+  /**
+   * The requirement-pool save path (`protocol.md` §8).
+   *
+   * When wired, a settlement that completes a Requirement writes the completed
+   * record through the **same** Git save path as `requirement.save` (Git commit +
+   * projection + `requirement.saved`) instead of flipping `lifecycle` in SQLite
+   * alone; the post-settlement save runs after the integration lock is released so
+   * the two services never nest the same mutex. Without it the legacy direct
+   * projection write is kept, which is what a stack predating the pool save needs.
+   */
+  readonly requirementSaves?: RequirementSaveService;
   /** Optionally injected so the completion event is durable in the store too. */
   readonly now?: () => string;
+}
+
+/**
+ * The completion facts a Settlement may supply for the Requirement record
+ * (`requirements.md` §2). `codeRevision`/`codeTree` are never caller-supplied: they
+ * come from the delivered revision the settlement really installed.
+ */
+export interface RequirementCompletionInput {
+  readonly summary: string;
+  readonly featureIds?: readonly string[];
+  readonly verificationSummary: string;
+  readonly remainingIssues?: readonly string[];
 }
 
 export interface SettleRequest {
@@ -778,6 +875,13 @@ export interface SettleRequest {
   readonly message?: string;
   readonly taskIds?: readonly string[];
   readonly requirementPool?: readonly RequirementPoolCommit[];
+  /**
+   * The completion summary facts written into the Requirement record
+   * (`requirements.md` §2). A settlement that completes a Requirement must name a
+   * real summary; when the caller omits one the settlement derives a mechanically
+   * true summary from the frozen manifest rather than inventing prose.
+   */
+  readonly completion?: RequirementCompletionInput;
   /** Lock owner; defaults to `settle:<operationId>`. */
   readonly ownerAttemptId?: string;
   readonly epoch?: number;
@@ -837,6 +941,21 @@ export type SettlementOutcome =
       readonly completionEventCursor: number;
       readonly workCompleted: boolean;
       readonly requirementCompleted: boolean;
+      /**
+       * `true` when the Requirement completion is owed to the requirement-pool Git
+       * save that runs after the integration lock is released (this outcome is
+       * returned before that save has happened, so the caller's `settle`/`recover`
+       * call performs it and fills the fields below).
+       */
+      readonly pendingRequirementCompletion?: boolean;
+      /** The committed `recordVersion` the pool save produced, when it ran. */
+      readonly requirementRecordVersion?: number;
+      /** The committed record hash the projection now carries. */
+      readonly requirementRecordHash?: string;
+      /** Why the pool save did not complete the Requirement, when it failed. */
+      readonly requirementCompletionError?: JsonObject;
+      /** The failed save's operation id, so `requirement.save.retry` can retry it. */
+      readonly requirementSaveOperationId?: string;
     }
   | {
       readonly ok: false;
@@ -890,6 +1009,7 @@ export class SettlementService {
   private readonly journal: CasJournal;
   private readonly snapshots: SnapshotWriter;
   private readonly lock: ProjectIntegrationLock;
+  private readonly requirementSaves: RequirementSaveService | undefined;
   private readonly now: () => string;
 
   constructor(options: SettlementServiceOptions) {
@@ -906,6 +1026,7 @@ export class SettlementService {
         ...(options.now === undefined ? {} : { now: options.now }),
       });
     this.now = options.now ?? (() => new Date().toISOString());
+    this.requirementSaves = options.requirementSaves;
   }
 
   /** The shared integration lock this service competes for (`AC-091`). */
@@ -1067,11 +1188,15 @@ export class SettlementService {
         operationId: request.operationId,
       };
     }
+    let outcome: SettlementOutcome;
     try {
-      return this.settleUnderLock(request);
+      outcome = this.settleUnderLock(request);
     } finally {
       this.lock.release(ownerAttemptId, epoch);
     }
+    // The pool save takes the same integration lock, so the Requirement completion is
+    // committed only after the release above (`protocol.md` §8).
+    return this.completeRequirementAfterSettlement(outcome, request.completion);
   }
 
   private settleUnderLock(request: SettleRequest): SettlementOutcome {
@@ -1172,11 +1297,14 @@ export class SettlementService {
         operationId,
       };
     }
+    let outcome: SettlementOutcome;
     try {
-      return this.recoverUnderLock(operationId);
+      outcome = this.recoverUnderLock(operationId);
     } finally {
       this.lock.release(ownerAttemptId, 1);
     }
+    // A recovered settlement may still owe the Requirement's pool completion.
+    return this.completeRequirementAfterSettlement(outcome, undefined);
   }
 
   private recoverUnderLock(operationId: string): SettlementOutcome {
@@ -1352,6 +1480,7 @@ export class SettlementService {
         workVersion = updated.version;
       }
       let requirementCompleted = false;
+      let pendingRequirementCompletion = false;
       const requirementId = input.manifest.requirementId;
       if (requirementId !== undefined) {
         const requirement = this.store.requirements.find(requirementId);
@@ -1359,22 +1488,30 @@ export class SettlementService {
           requirement !== undefined &&
           canTransitionRequirement(requirement.lifecycle, 'completed')
         ) {
-          this.store.requirements.update(
-            requirement.id,
-            {
-              lifecycle: 'completed',
-              // `workflow.md` §5.1: `phase` is only meaningful for an *active*
-              // Requirement, so completing it clears the phase in the same
-              // transaction instead of leaving `lifecycle='completed' phase='settle'`
-              // (W8R1-06). The repository turns an explicit `undefined` into SQL NULL.
-              phase: undefined,
-              // `finalManifestId` is an id, and the CompletionManifest is addressed
-              // by its settlement-result id (the manifest itself is frozen by hash).
-              finalManifestId: input.manifest.settlementResultRef,
-            },
-            requirement.version,
-          );
-          requirementCompleted = true;
+          if (this.requirementSaves !== undefined) {
+            // `protocol.md` §8: the completed record must be committed to the
+            // requirement pool, not flipped in SQLite alone. The pool save runs after
+            // the integration lock is released (the save service takes the same
+            // mutex), so this transaction only records that the completion is owed.
+            pendingRequirementCompletion = true;
+          } else {
+            this.store.requirements.update(
+              requirement.id,
+              {
+                lifecycle: 'completed',
+                // `workflow.md` §5.1: `phase` is only meaningful for an *active*
+                // Requirement, so completing it clears the phase in the same
+                // transaction instead of leaving `lifecycle='completed' phase='settle'`
+                // (W8R1-06). The repository turns an explicit `undefined` into SQL NULL.
+                phase: undefined,
+                // `finalManifestId` is an id, and the CompletionManifest is addressed
+                // by its settlement-result id (the manifest itself is frozen by hash).
+                finalManifestId: input.manifest.settlementResultRef,
+              },
+              requirement.version,
+            );
+            requirementCompleted = true;
+          }
         }
       }
       const existingEvent = this.completionEvent(input.operationId);
@@ -1440,8 +1577,149 @@ export class SettlementService {
         completionEventCursor: eventCursor,
         workCompleted,
         requirementCompleted,
+        ...(pendingRequirementCompletion ? { pendingRequirementCompletion: true } : {}),
       };
     });
+  }
+
+  /**
+   * Commits the Requirement's completed record through the pool save path
+   * (`protocol.md` §8).
+   *
+   * Runs **after** `settle`/`recover` released the integration lock, because the
+   * save service takes the same mutex. The completion facts are real settlement
+   * facts: the delivered revision and its SHA256 code tree come from the outcome,
+   * the feature ids from the committed record, and the summary from the caller's
+   * `completion` input or a mechanically true derivation of the frozen manifest.
+   * A failed save leaves the projection untouched (`requirementCompleted:false`)
+   * and reports the failed operation so `requirement.save.retry` can finish it.
+   */
+  private completeRequirementAfterSettlement(
+    outcome: SettlementOutcome,
+    completion: RequirementCompletionInput | undefined,
+  ): SettlementOutcome {
+    if (!outcome.ok || outcome.pendingRequirementCompletion !== true) return outcome;
+    if (this.requirementSaves === undefined) return outcome;
+    const manifest = readFrozenFinalManifest(this.store, outcome.manifestHash);
+    const requirementId = manifest?.requirementId;
+    if (requirementId === undefined) {
+      return { ...outcome, pendingRequirementCompletion: false };
+    }
+    const row = this.store.requirements.find(requirementId);
+    if (row === undefined) {
+      return {
+        ...outcome,
+        pendingRequirementCompletion: false,
+        requirementCompletionError: {
+          code: 'NOT_FOUND',
+          message: `Requirement ${requirementId} has no local projection`,
+        },
+      };
+    }
+    let record: { readonly metadataJson: string; readonly contentMarkdown: string } | undefined;
+    try {
+      const pool = readRequirementPoolAtRevision({
+        git: this.worktrees,
+        repoRoot: this.repoRoot(),
+        revision: row.portableRef.revision,
+      });
+      const found = pool.records.find((entry) => entry.id === requirementId);
+      if (found !== undefined) {
+        record = { metadataJson: found.metadataJson, contentMarkdown: found.contentMarkdown };
+      }
+    } catch {
+      record = undefined;
+    }
+    if (record === undefined) {
+      return {
+        ...outcome,
+        pendingRequirementCompletion: false,
+        requirementCompletionError: {
+          code: 'REQUIREMENT_CONFLICT',
+          message: `the committed record of Requirement ${requirementId} could not be read at ${row.portableRef.revision}`,
+        },
+      };
+    }
+    let metadata: Record<string, unknown>;
+    try {
+      metadata = JSON.parse(record.metadataJson) as Record<string, unknown>;
+    } catch {
+      metadata = {};
+    }
+    const summary =
+      completion?.summary ?? `Settlement ${outcome.manifestId} completed at ${outcome.revision}`;
+    const requirementCompletion = {
+      completedAt: this.now(),
+      summary: summary === '' ? `Settlement ${outcome.manifestId}` : summary,
+      codeRevision: outcome.revision,
+      codeTree: outcome.codeTreeHash,
+      featureIds: [...(completion?.featureIds ?? asStringArray(metadata['featureIds']))],
+      verificationSummary:
+        completion?.verificationSummary ??
+        `${String((manifest?.verifiedManifestIds ?? []).length)} verified Manifest(s) bound to the delivered code tree`,
+      remainingIssues: [...(completion?.remainingIssues ?? [])],
+    };
+    const operationId = `settle-requirement:${outcome.operationId}`;
+    const saveInput = {
+      operationId,
+      metadata: {
+        ...metadata,
+        version: row.recordVersion + 1,
+        updatedAt: this.now(),
+        lifecycle: 'completed' as const,
+        completion: requirementCompletion,
+      },
+      contentMarkdown: withCompletionSection(record.contentMarkdown, requirementCompletion.summary),
+      expected: { recordVersion: row.recordVersion, recordHash: row.portableRef.hash },
+      sourceRef: { kind: 'action' as const, id: outcome.operationId, version: '1' },
+      kind: 'complete' as const,
+      ...(row.workId === undefined ? {} : { workId: row.workId }),
+    };
+    const saved = this.requirementSaves.save(
+      saveInput as Parameters<RequirementSaveService['save']>[0],
+    );
+    if (!saved.ok) {
+      return {
+        ...outcome,
+        pendingRequirementCompletion: false,
+        requirementCompletionError: {
+          code: saved.code,
+          message: saved.message,
+          reasons: [...saved.reasons],
+          operationId,
+        },
+        requirementSaveOperationId: operationId,
+      };
+    }
+    // `finalManifestId` is local evidence (the manifest is frozen by hash, not in the
+    // pool), so it is set on the projection the save just committed.
+    const updated = this.store.requirements.find(requirementId);
+    if (updated !== undefined) {
+      this.store.requirements.update(
+        requirementId,
+        { phase: undefined, finalManifestId: outcome.manifestId },
+        updated.version,
+      );
+    }
+    this.store.operations.update(
+      outcome.operationRowId,
+      {
+        stepResults: {
+          ...(this.store.operations.find(outcome.operationRowId)?.stepResults ?? {}),
+          requirementCompleted: true,
+          requirementRecordVersion: saved.recordVersion,
+          requirementRecordHash: saved.recordHash,
+        },
+      },
+      this.store.operations.find(outcome.operationRowId)?.version ?? 1,
+    );
+    return {
+      ...outcome,
+      pendingRequirementCompletion: false,
+      requirementCompleted: true,
+      requirementRecordVersion: saved.recordVersion,
+      requirementRecordHash: saved.recordHash,
+    };
   }
 
   private completionEvent(operationId: string) {
@@ -1449,7 +1727,6 @@ export class SettlementService {
       (event) => event.data['operationId'] === operationId,
     );
   }
-
   private refRevision(ref: string): string | null {
     const result = this.worktrees.resolveRevision(this.repoRoot(), ref);
     return result.ok ? result.value : null;
@@ -1462,4 +1739,43 @@ export class SettlementService {
   ): Extract<PrepareSettlementResult, { ok: false }> {
     return { ok: false, code, message, reasons: reasons.length === 0 ? [message] : reasons };
   }
+}
+
+/** The `## 完成摘要` heading every portable body carries (`requirements.md` §6). */
+const COMPLETION_HEADING = '完成摘要';
+
+/**
+ * Replaces only the `## 完成摘要` section of a recorded body.
+ *
+ * A settlement keeps every recorded content section and rewrites the one that
+ * reports the outcome, exactly like a cancellation does (`W9R2-03`).
+ */
+function withCompletionSection(content: string, summary: string): string {
+  const lines = content.split('\n');
+  const headingIndex = lines.findIndex((line) =>
+    new RegExp(`^##\\s+${COMPLETION_HEADING}\\s*$`, 'u').test(line.trim()),
+  );
+  if (headingIndex === -1) {
+    return `${content.replace(/\s+$/u, '')}\n\n## ${COMPLETION_HEADING}\n\n${summary}\n`;
+  }
+  let nextHeading = lines.length;
+  for (let cursor = headingIndex + 1; cursor < lines.length; cursor += 1) {
+    if (/^##\s+/u.test((lines[cursor] ?? '').trim())) {
+      nextHeading = cursor;
+      break;
+    }
+  }
+  const head = lines
+    .slice(0, headingIndex + 1)
+    .join('\n')
+    .replace(/\s+$/u, '');
+  const tail = lines.slice(nextHeading).join('\n').replace(/^\s+/u, '');
+  return tail === '' ? `${head}\n\n${summary}\n` : `${head}\n\n${summary}\n\n${tail}\n`;
+}
+
+/** Reads a recorded metadata list of strings, ignoring malformed entries. */
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string' && entry !== '')
+    : [];
 }

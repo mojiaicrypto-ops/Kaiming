@@ -16,13 +16,24 @@
  * - the Pi session is started tool-free (`apps/runner`'s `BUILTIN_TOOLS` is still empty),
  *   so this slice proves the execution and model path, not tool bridging.
  */
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import type { JsonObject, Role } from '@agentdev/contracts';
+import { contextSelectionSchema } from '@agentdev/contracts';
 import type { ProjectStore } from '@agentdev/storage';
-import type { AttemptCapabilityStore, ConfigStore } from '@agentdev/core';
+import {
+  buildContext,
+  type ArtifactService,
+  type AttemptCapabilityStore,
+  type ConfigStore,
+  type ContextInputKey,
+  type ContextStage,
+  type SnapshotWriter,
+} from '@agentdev/core';
 import type { PrepareRun, PrepareRunInput, RunnerInvocation } from '@agentdev/core';
 
+import { createContextAssembly, type ContextGitReader } from './context-ports.js';
 import { writeAttemptCatalog } from './runner-spawn.js';
 
 export interface PrepareRunOptions {
@@ -31,14 +42,60 @@ export interface PrepareRunOptions {
   readonly capabilities: AttemptCapabilityStore;
   /** Base URL of the Core's model gateway (`createModelGatewayProxy`). */
   readonly gatewayUrl: string;
+  /**
+   * Base URL of the Core control endpoint (`protocol.md` §6).
+   *
+   * The Runner registers its role's control tools against this URL, so the Chief can submit
+   * an assessment and a professional Run can submit a stage result; without it the Attempt
+   * has no way to deliver anything but text.
+   */
+  readonly controlUrl?: string;
   /** Project root used as the working directory for this slice. */
   readonly projectRoot: string;
   /** Directory holding per-Attempt state (catalog, agent dir). */
   readonly attemptsDir: string;
   readonly log?: (line: string) => void;
+  /**
+   * The real Context ports (`context.md` §1).
+   *
+   * When all of them are present, the Attempt's prompt is built from a **real**
+   * `buildContext` assembly over the Project's policy, role contract, Git blobs and
+   * artifacts, and the frozen `ContextSnapshot` is persisted; when any is absent the
+   * goal+contract prompt is kept, so a stack that predates the Context plane still
+   * executes.
+   */
+  readonly artifacts?: ArtifactService;
+  readonly gitReader?: ContextGitReader;
+  readonly snapshots?: SnapshotWriter;
+  readonly readMessageBody?: (relativeBlobPath: string) => string | null;
+  /** Project data directory; snapshot directories land under `<snapshotRoot>/snapshots`. */
+  readonly snapshotRoot?: string;
+  readonly projectId?: string;
 }
 
-/** Builds the prompt for one Attempt from the Work the Run belongs to. */
+/**
+ * Builds the prompt for one Attempt from the Work the Run belongs to.
+ *
+ * The tool sentence is role-specific on purpose: a Chief Run delivers through
+ * `assessment_submit`/`agent_dispatch` and a professional Run through `stage_yield`
+ * (`execution.md` §7), and a model that does not know that ends its turn with plain text —
+ * which the two-strike rule then answers with a corrective prompt (WP-12 R3-2b).
+ */
+function roleContractSentence(role: Role): string {
+  return role === 'chief'
+    ? [
+        'Deliver through your tools: call `assessment_submit` with the routing assessment',
+        '(intent, goal, scope, level, semanticImpact, riskFlags, uncertainties, policyRevision,',
+        'reason), then call `agent_dispatch` with the professional Run you decide on.',
+        'Plain text does not change the domain state.',
+      ].join(' ')
+    : [
+        'Deliver through your tool: call `stage_yield` with the structured result of this',
+        'stage (status, summary, changedPaths, evidenceRefs, unknowns, requestedActions).',
+        'Plain text does not change the domain state.',
+      ].join(' ');
+}
+
 function promptFor(input: PrepareRunInput, store: ProjectStore): string {
   const work = store.works.find(input.run.workId);
   const goal = work?.goal ?? 'the assigned task';
@@ -46,8 +103,163 @@ function promptFor(input: PrepareRunInput, store: ProjectStore): string {
     `You are the AgentDev ${input.run.role} agent.`,
     `Stage: ${input.run.stage}. Purpose: ${input.run.purpose}.`,
     `Goal: ${goal}`,
-    'Answer with the result of this stage and nothing else. Tool use is not available in this run.',
+    roleContractSentence(input.run.role),
   ].join('\n');
+}
+
+interface AssembledContext {
+  readonly prompt: string;
+  readonly snapshotRef: string;
+  readonly directory: string;
+}
+
+/**
+ * Assembles the Attempt's real context (`context.md` §1) and turns it into a prompt.
+ *
+ * The selection comes from the Run's frozen context snapshot (`orchestrator` froze
+ * `{contextSelection, goal, workId}` at dispatch time); the sources come from the real
+ * Git tree, the artifact store and the Project policy through `createContextAssembly`;
+ * the frozen `ContextSnapshot` is persisted and its immutable directory reported. A
+ * refusal (missing required input, forbidden source, budget) is logged and `null` is
+ * returned, so the caller keeps the goal+contract prompt instead of failing a Run
+ * whose assessment predates the Context plane.
+ */
+function assembleContext(
+  input: PrepareRunInput,
+  options: PrepareRunOptions,
+  contract: string,
+): AssembledContext | null {
+  const { artifacts, gitReader, snapshots, projectId, snapshotRoot } = options;
+  if (
+    artifacts === undefined ||
+    gitReader === undefined ||
+    snapshots === undefined ||
+    projectId === undefined ||
+    snapshotRoot === undefined
+  ) {
+    return null;
+  }
+  const log = options.log ?? (() => undefined);
+  const store = options.store;
+  const work = store.works.find(input.run.workId);
+  if (work === undefined) return null;
+  const snapshotRow = store.snapshots.list({
+    where: "type = 'context' AND hash = ?",
+    params: [input.run.contextSnapshotId],
+  })[0];
+  const parsed = contextSelectionSchema.safeParse(snapshotRow?.payload['contextSelection']);
+  if (!parsed.success) {
+    log(
+      `prepare-run: Run ${input.run.id} has no readable contextSelection in ${input.run.contextSnapshotId}; using the goal prompt`,
+    );
+    return null;
+  }
+  const project = store.projects.find(projectId);
+  if (project === undefined) return null;
+  const baseRevision = work.baseRevision ?? project.head ?? '';
+  const assembly = createContextAssembly({
+    store,
+    artifacts,
+    config: options.config,
+    git: gitReader,
+    projectId,
+    workId: work.id,
+    role: input.run.role,
+    policyRevision: work.policyRevision,
+    stage: input.run.stage as ContextStage,
+    baseRevision,
+    snapshotRoot,
+    ...(options.readMessageBody === undefined ? {} : { readMessageBody: options.readMessageBody }),
+  });
+  const contextInputs: ContextInputKey[] = ['workGoal', 'policy'];
+  if (work.sourceRef.kind === 'message') contextInputs.push('userRequest');
+  if (work.authorizationRef !== undefined) contextInputs.push('authorization');
+  const built = buildContext({
+    selection: parsed.data,
+    role: input.run.role,
+    stage: input.run.stage,
+    project: assembly.project,
+    configHash: assembly.policyHash,
+    runId: input.run.id,
+    workId: work.id,
+    contextInputs,
+    resolver: assembly.resolver,
+    content: assembly.content,
+    gates: assembly.gates,
+    snapshotWriter: assembly.snapshotWriter,
+  });
+  if (!built.ok) {
+    log(
+      `prepare-run: Run ${input.run.id} context refused (${built.code}): ${built.errors
+        .map((error) => error.message)
+        .join('; ')}`,
+    );
+    return null;
+  }
+  const snapshot = built.snapshot;
+  // Persist the frozen snapshot so the assembled context is durable and addressable
+  // (`context.md` §1: 实际内容复制进不可变快照目录).
+  snapshots.freeze('context', jsonSafe(snapshot));
+  const sources = snapshot.resolvedSources.map(
+    (source) =>
+      `- ${source.kind}:${source.path ?? source.id}${
+        source.revision === undefined ? '' : `@${source.revision}`
+      } hash=${source.hash.slice(0, 12)} — ${source.reason}`,
+  );
+  const prompt = [
+    `You are the AgentDev ${input.run.role} agent.`,
+    `Stage: ${input.run.stage}. Purpose: ${input.run.purpose}.`,
+    `Goal: ${work.goal}`,
+    `Frozen context ${snapshot.snapshotRef} (${String(snapshot.resolvedSources.length)} sources, ${String(
+      snapshot.tokenAccounting.initial.used,
+    )} tokens) at ${built.directory}:`,
+    ...(sources.length === 0 ? ['- (no selected sources)'] : sources),
+    contract,
+  ].join('\n');
+  log(
+    `prepare-run: Run ${input.run.id} assembled context ${snapshot.snapshotRef} with ${String(
+      snapshot.resolvedSources.length,
+    )} sources`,
+  );
+  return { prompt, snapshotRef: snapshot.snapshotRef, directory: built.directory };
+}
+
+/** JSON-round-trips one value into the contract's JSON shape. */
+function jsonSafe(value: unknown): JsonObject {
+  return JSON.parse(JSON.stringify(value ?? null)) as JsonObject;
+}
+
+/**
+ * Why a per-Attempt catalog cannot be used, or `null` when it is fine.
+ *
+ * The Pi SDK reads `{providers: {<id>: {baseUrl, api, apiKey, models: [...]}}}`
+ * (`@earendil-works/pi-coding-agent` `dist/core/model-config.js`); a missing file, empty
+ * object or absent gateway entry all end as the same opaque `MODEL_UNAVAILABLE` inside the
+ * Runner, so the daemon reports the concrete reason instead (WP-12 R4).
+ */
+export function inspectCatalog(path: string): string | null {
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch {
+    return 'the file does not exist';
+  }
+  if (raw.trim().length === 0) return 'the file is empty';
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return 'the file is not valid JSON';
+  }
+  const providers = (parsed as { providers?: unknown }).providers;
+  if (typeof providers !== 'object' || providers === null) return 'it declares no providers';
+  const gateway = (providers as Record<string, unknown>)['agentdev-gateway'];
+  if (typeof gateway !== 'object' || gateway === null) {
+    return 'it declares no agentdev-gateway provider';
+  }
+  const models = (gateway as { models?: unknown }).models;
+  if (!Array.isArray(models) || models.length === 0) return 'its gateway provider lists no models';
+  return null;
 }
 
 export function createPrepareRun(options: PrepareRunOptions): PrepareRun {
@@ -76,6 +288,14 @@ export function createPrepareRun(options: PrepareRunOptions): PrepareRun {
       maxOutputTokens: frozen.model.maxOutputTokens,
       reasoning: frozen.profile.reasoning !== 'off',
     });
+    // Fail fast when the catalog the Runner will read is not usable: a missing or empty
+    // `models.json` makes a real Runner exit with `MODEL_UNAVAILABLE: model
+    // agentdev-gateway/<id> is not in the catalog` before `attempt.ready` (WP-12 R4). The
+    // check is on the file this call just wrote, so a bad path cannot reach the spawn.
+    const catalogProblem = inspectCatalog(catalogPath);
+    if (catalogProblem !== null) {
+      throw new Error(`the per-Attempt catalog at ${catalogPath} is not usable: ${catalogProblem}`);
+    }
     log(
       `prepare-run: ${input.run.id} attempt ${input.attempt.id} → ${frozen.provider.providerId}/${frozen.model.id}`,
     );
@@ -85,8 +305,12 @@ export function createPrepareRun(options: PrepareRunOptions): PrepareRun {
       provider: frozen.provider.providerId,
       modelId: frozen.model.id,
       tools: [...frozen.profile.toolSubset],
-      prompt: promptFor(input, options.store),
+      prompt:
+        assembleContext(input, options, roleContractSentence(input.run.role))?.prompt ??
+        promptFor(input, options.store),
       capability: capability.token,
+      workId: input.run.workId,
+      ...(options.controlUrl === undefined ? {} : { controlUrl: options.controlUrl }),
       catalogPath,
     };
   };

@@ -16,7 +16,7 @@
  *   well as colour (AC-073).
  */
 import { escapeHtml, jsonIsland } from './html.js';
-import { DEFAULT_LANGUAGE, type Language, type Translator } from './i18n.js';
+import { DEFAULT_LANGUAGE, clientDictionary, type Language, type Translator } from './i18n.js';
 
 export type PageKey =
   | 'projects'
@@ -156,6 +156,12 @@ function navItem(state: ShellState, entry: NavEntry, t: Translator): string {
   const active = state.page === entry.page;
   const href = entry.href(state.projectId);
   const count = entry.page === 'inbox' ? (state.inboxCount ?? 0) : 0;
+  // The Inbox badge is always present on its own entry so a request that arrives over
+  // the live subscription can update it without a reload (AC-074).
+  const badge =
+    entry.page === 'inbox'
+      ? `<span class="nav-badge attention" id="inboxBadge"${count > 0 ? '' : ' hidden'}>${String(count)}</span>`
+      : '';
   return [
     `<a class="nav-item${active ? ' active' : ''}"`,
     ` href="${escapeHtml(href)}"`,
@@ -166,7 +172,7 @@ function navItem(state: ShellState, entry: NavEntry, t: Translator): string {
     '>',
     `<span class="nav-icon" aria-hidden="true">${escapeHtml(entry.icon)}</span>`,
     `<span class="nav-text" data-i18n="${escapeHtml(entry.labelKey)}">${escapeHtml(t(entry.labelKey))}</span>`,
-    count > 0 ? `<span class="nav-badge attention">${String(count)}</span>` : '',
+    badge,
     '</a>',
   ].join('');
 }
@@ -195,6 +201,11 @@ export function renderShell(state: ShellState, body: string, t: Translator): str
     renderMain(state, body, t),
     renderLiveDock(state, t, panelMode),
     '</div>',
+    // The client's own copy of the interface dictionary, so a language switch inside
+    // the page can translate the keys the daemon's smaller catalogue does not know
+    // (`experience.md` §6; WP-12 T4). It carries interface strings only — never
+    // project content, a credential or a secret reference.
+    renderViewIsland('uiStrings', clientDictionary()),
   ].join('\n');
   return body_;
 }

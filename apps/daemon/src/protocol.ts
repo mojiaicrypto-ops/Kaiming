@@ -20,19 +20,25 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import {
   DEFAULT_PAGE_LIMIT,
+  LIMITS,
   MAX_PAGE_LIMIT,
   PROTOCOL_LIMITS,
   ROLES,
+  contextSelectionSchema,
   errorCodeSchema,
+  type ContextSelection,
   type ErrorCode,
   type FindingSeverity,
   type JsonObject,
   type Plan,
   type PortableRequirement,
+  type ProviderInput,
   type ProjectSummary,
   type Ref,
   type Requirement,
@@ -41,9 +47,18 @@ import {
   type SourceRef,
 } from '@agentdev/contracts';
 import {
+  CHIEF_RULES_PATH,
   ProtocolError,
+  ROLE_STAGES,
+  RunLifecycle,
   backupProject,
+  buildContext,
+  isValidSecretRef,
   createNodeBackupGitPort,
+  defaultBaseRevisionReader,
+  readRequirementPoolAtRevision,
+  RequirementProjection,
+  REQUIREMENT_CONTENT_FILE_NAME,
   restoreProject,
   sendMessage,
   userIdFromSubject,
@@ -58,10 +73,26 @@ import {
   type RequirementContinuation,
   type RequirementSaveService,
   newAttemptAdmission,
+  redact,
   type ArtifactService,
   type AttachmentService,
+  type ContentFetchPort,
+  type ContextGatesPort,
+  type ContextInputKey,
+  type ContextSourceRef,
+  type ContextStage,
+  type ModelGateway,
+  type ProjectScope,
+  type SnapshotWriterPort,
+  type SourceResolutionResult,
+  type SourceResolverPort,
+  type Orchestrator,
+  type SecretAudience,
+  type SecretRepository,
+  type SecretStore,
 } from '@agentdev/core';
 import { withTransaction, type BlobStore, type Event, type ProjectStore } from '@agentdev/storage';
+import { createNodeWorktreeGitPort } from '@agentdev/workspace';
 
 /** One authenticated caller, as the daemon resolved it from cookie or credential. */
 export interface WorkbenchCaller {
@@ -72,6 +103,18 @@ export interface WorkbenchCaller {
   /** Role this connection reads artifacts as. */
   readonly role: Role;
 }
+
+/** The audit subject of a Bearer installation-credential caller (`protocol.md` §2). */
+const INSTALLATION_SUBJECT = 'installation:local';
+
+/**
+ * Tokens the Chief's assessment Run is allocated from the Work budget.
+ *
+ * A routing assessment reads a bounded context and answers with a `DispatchSpec`, so it
+ * never needs the whole Work budget; the rest stays available for the professional Runs the
+ * Chief dispatches (`rules/agents.md` §6).
+ */
+const CHIEF_ASSESSMENT_TOKENS = 32_000;
 
 /** Everything the protocol layer reads or writes; all of it is real Core. */
 export interface WorkbenchServices {
@@ -90,6 +133,30 @@ export interface WorkbenchServices {
   readonly requirements?: RequirementContinuation;
   readonly requirementSaves?: RequirementSaveService;
   /**
+   * The durable credential repository and the in-memory store it feeds (WP-12 T1.1).
+   *
+   * `secret.set`/`secret.delete` write the repository and update the store so a running
+   * daemon resolves the new credential without a restart; `config.get` reports
+   * `secretConfigured` from the store, so "configured" means "registered", not
+   * "a `secretRef` string exists". A missing pair refuses the secret methods instead of
+   * inventing a success, like every other optional service here.
+   */
+  readonly secretRepository?: SecretRepository;
+  readonly secrets?: SecretStore;
+  /**
+   * The project's Chief orchestrator (WP-12 T2.1).
+   *
+   * Attached by the daemon once the execution stack exists, like `runRecovery`: a method
+   * that needs it refuses clearly when it is absent instead of pretending the Run exists.
+   */
+  orchestrator?: Orchestrator;
+  /**
+   * The project's model gateway, for the live `provider.test` probe (`protocol.md` §5).
+   *
+   * Also attached late, because the gateway is built with the execution stack.
+   */
+  gateway?: ModelGateway;
+  /**
    * Reads a Requirement record's committed files at a revision.
    *
    * The local projection row does not carry `scope`, `acceptance`, the open
@@ -100,6 +167,25 @@ export interface WorkbenchServices {
    * reads with the real `git` binary; a caller may inject its own.
    */
   readonly requirementRecords?: RequirementRecordPort;
+  /**
+   * Resolves the branch/commit/unpushed facts a requirement read surface reports
+   * (`AC-090`). Defaults to a real `git`-backed port, like `requirementRecords`.
+   */
+  readonly requirementGit?: RequirementGitFactsPort;
+  /**
+   * Reads a revision's committed requirement pool (`requirement.import`). Defaults
+   * to a real `git`-backed reader over `readRequirementPoolAtRevision`.
+   */
+  readonly requirementPool?: RequirementPoolReadPort;
+  /**
+   * Reads Git revisions for `file.list`/`file.read`; defaults to a real `git` port.
+   */
+  readonly workspaceFiles?: WorkspaceFilePort;
+  /**
+   * The shipped optional-extension whitelist (`protocol.md` §5). Defaults to the
+   * release's built-in list, which is empty this release; a caller may inject one.
+   */
+  readonly extensions?: readonly ExtensionSpec[];
   /** Backup/restore port; defaults to the real `git`-backed implementation. */
   readonly backupGit?: BackupGitPort;
   /**
@@ -108,7 +194,77 @@ export interface WorkbenchServices {
    * (`WP11R4-02`).
    */
   runRecovery?: RunRecoveryPort;
+  /**
+   * The tool bridge's permission chain and cancel cleanup (WP-12 T3).
+   *
+   * Attached late by the daemon, like `runRecovery`: the Grant service and the Broker are
+   * built with the execution stack. A method that needs it refuses with
+   * `PROVIDER_UNAVAILABLE` when it is absent, so a daemon whose tool bridge is not wired
+   * never answers a permission request it cannot honour.
+   */
+  toolBridge?: ToolBridgePort;
   readonly now?: () => number;
+  /** Diagnostic sink for background work (the `provider.test` probe). */
+  readonly log?: (line: string) => void;
+}
+
+/**
+ * The tool bridge as the workbench protocol needs it (`protocol.md` §4 `permission.*`).
+ *
+ * `permission.request` records a pending user decision for one environment operation and
+ * parks the Run; `permission.respond` applies the user's answer, mints the bound Grant and
+ * emits `permission.resolved`. `cleanupRun` reaps a cancelled Run's tool processes and
+ * Grants. All three are implemented by `ToolGrantService` + the execution stack, so the
+ * protocol layer contributes only parameter validation and the caller's identity.
+ */
+export interface ToolBridgePort {
+  requestPermission(input: {
+    readonly workId: string;
+    readonly runId: string;
+    readonly role: Role;
+    readonly stage: string;
+    readonly operation: string;
+    readonly targets: readonly string[];
+    readonly toolOperationId: string;
+    readonly inputHash: string;
+    readonly scope?: 'once' | 'run';
+    readonly expiresAt: string;
+    readonly limits?: Readonly<Record<string, unknown>>;
+  }): {
+    readonly decisionId: string;
+    readonly version: number;
+    readonly state: string;
+    readonly blockerAttached: boolean;
+    readonly runStatus?: string;
+  };
+  respondPermission(input: {
+    readonly decisionId: string;
+    readonly choice: 'approve' | 'deny';
+    readonly operation: string;
+    readonly runId: string;
+    readonly role: Role;
+    readonly stage: string;
+    readonly targets: readonly string[];
+    readonly toolOperationId: string;
+    readonly inputHash: string;
+    readonly expiresAt: string;
+    readonly scope?: 'once' | 'run';
+    readonly limits?: Readonly<Record<string, unknown>>;
+    /**
+     * The user's denial reason (`protocol.md` §4 `permission.respond` optional
+     * `reason`). Recorded on the durable `permission.resolved` event so a refusal is
+     * auditable; an approval carries none.
+     */
+    readonly reason?: string;
+  }): {
+    readonly decisionId: string;
+    readonly version: number;
+    readonly state: string;
+    readonly blockerAttached: boolean;
+    readonly grantId?: string;
+    readonly runStatus?: string;
+  };
+  cleanupRun(runId: string): { readonly killed: number; readonly revoked: number };
 }
 
 /** The executor's Run-recovery actions, as the workbench protocol needs them. */
@@ -131,6 +287,91 @@ export interface RunRecoveryPort {
 export interface RequirementRecordPort {
   /** The blob's text, or `null` when the revision or the path does not exist. */
   read(repoRoot: string, revision: string, path: string): string | null;
+}
+
+/**
+ * The Git-side facts a requirement read surface reports (AC-090).
+ *
+ * `requirements.md` §3 and `reliability.md` §87 require the UI to show the branch and
+ * revision a record lives on plus its synchronisation state with the remote. Those are
+ * Git facts, not projection fields, so the daemon resolves them through the same real
+ * `git` binary the rest of the deployment uses (the `WorktreeGitPort` subset below);
+ * a caller may inject another port.
+ */
+export interface RequirementGitFactsPort {
+  /** `git rev-parse --verify <revision>^{commit}`; `null` when the revision is unknown. */
+  resolveRevision(
+    repoRoot: string,
+    revision: string,
+  ): { readonly ok: true; readonly value: string | null } | { readonly ok: false };
+  /** `git merge-base --is-ancestor <ancestor> <descendant>`. */
+  isAncestor(
+    repoRoot: string,
+    ancestor: string,
+    descendant: string,
+  ): { readonly ok: true; readonly value: boolean } | { readonly ok: false };
+}
+
+/**
+ * Reads one revision's committed requirement pool (`protocol.md` §4
+ * `requirement.import`, §8 conflict removal).
+ *
+ * The pool reader itself lives in Core (`readRequirementPoolAtRevision`); this port
+ * keeps the daemon's protocol layer free of Git plumbing and lets a test inject its
+ * own reader. The daemon's default reads with the real `git` binary.
+ */
+export interface RequirementPoolReadPort {
+  read(
+    repoRoot: string,
+    revision: string,
+  ): {
+    readonly records: readonly {
+      readonly id: string;
+      readonly recordPath: string;
+      readonly metadataJson: string;
+      readonly contentMarkdown: string;
+      readonly recordHash: string;
+    }[];
+    readonly conflicts: readonly {
+      readonly recordPath: string;
+      readonly reason: string;
+      readonly message: string;
+    }[];
+  };
+}
+
+/**
+ * Reads one Git revision's tree and blobs for `file.list`/`file.read`
+ * (`protocol.md` §5).
+ *
+ * A revision-addressed read is the only honest one: a working tree can be stale, so
+ * the port resolves blobs at the named revision through the real `git` binary. A
+ * missing revision/path answers `null`, which the caller reports as `NOT_FOUND`.
+ */
+export interface WorkspaceFilePort {
+  list(
+    repoRoot: string,
+    revision: string,
+    path: string,
+  ):
+    | readonly {
+        readonly name: string;
+        readonly path: string;
+        readonly type: 'blob' | 'tree';
+        readonly bytes: number | null;
+      }[]
+    | null;
+  read(repoRoot: string, revision: string, path: string): { readonly content: Buffer } | null;
+}
+
+/** One entry of the built-in extension whitelist (`protocol.md` §5). */
+export interface ExtensionSpec {
+  readonly id: string;
+  readonly version: string;
+  readonly apiVersion: number;
+  readonly capabilities: readonly string[];
+  readonly critical: boolean;
+  readonly enabledByDefault: boolean;
 }
 
 /** The upgrade decision for one WebSocket request. */
@@ -218,6 +459,50 @@ export function statusForCode(code: string): number {
   }
 }
 
+/**
+ * Operations whose targets are real paths, so a Grant with no target authorizes nothing.
+ *
+ * `bash`/`git` carry a command rather than a path and legitimately record no targets
+ * (`core/tools.ts` `planToolCall`), which is why they are absent here.
+ */
+const PATH_TARGET_OPERATIONS: readonly string[] = [
+  'read',
+  'search',
+  'artifact_write',
+  'edit',
+  'write',
+  'delete_data',
+];
+
+/**
+ * Run states that never restart (`workflow.md` §5.3).
+ *
+ * A requirement with a Work whose Run is outside this set still has live execution,
+ * so archiving it would hide work in flight.
+ */
+const TERMINAL_RUN_STATES: readonly string[] = [
+  'completed',
+  'failed',
+  'cancelled',
+  'timed_out',
+  'contract_violation',
+];
+
+/**
+ * Requirement lifecycle transitions (`workflow.md` §5.1).
+ *
+ * `restore` is deliberately absent: an archived record returns to the state it was
+ * archived from, which is not a forward transition of this table and is handled by
+ * `requirement.restore` itself.
+ */
+const REQUIREMENT_LIFECYCLE_TRANSITIONS: Readonly<Record<string, readonly string[]>> = {
+  queued: ['active', 'archived', 'cancelled'],
+  active: ['completed', 'cancelled'],
+  completed: ['archived'],
+  cancelled: [],
+  archived: [],
+};
+
 /** Methods served without a Project scope (global configuration etc.). */
 const GLOBAL_METHODS: readonly string[] = [
   'connection.hello',
@@ -230,6 +515,13 @@ const GLOBAL_METHODS: readonly string[] = [
   'config.test',
   'backup.run',
   'restore.run',
+  'secret.set',
+  'secret.delete',
+  'secret.list',
+  // Provider configuration is installation-level: `config.get` exposes providers only in
+  // the global scope (`protocol.md` §5), so these two need no Project scope.
+  'provider.upsert',
+  'provider.test',
 ];
 
 /** Methods that change state and therefore accept an `idempotencyKey`. */
@@ -241,17 +533,41 @@ export const WRITE_METHODS: readonly string[] = [
   'requirement.save',
   'requirement.save.retry',
   'requirement.continue',
+  'requirement.create',
+  'requirement.update',
+  'requirement.import',
+  'requirement.start',
+  'requirement.archive',
+  'requirement.restore',
+  'run.pause',
+  'run.resume',
+  'run.cancel',
+  'work.retry',
+  'recovery.inspect',
+  'recovery.resolve',
+  'work.budget.update',
+  'extension.set',
   'plan.approve',
   'finding.submit',
   'decision.resolve',
+  'permission.request',
+  'permission.respond',
   'config.save',
   'config.test',
   'backup.run',
   'restore.run',
+  'secret.set',
+  'secret.delete',
+  'provider.upsert',
+  'provider.test',
 ];
 
 /**
  * Write methods whose idempotency ledger entry the generic wrapper owns.
+ *
+ * `provider.upsert` is deliberately absent, like `secret.set`: its payload carries the
+ * credential, and the ledger's `payload_hash` would persist a digest of it (WP-12 decision
+ * 2, `execution.md` §4). The write itself is replace-by-id, so no separate key is needed.
  *
  * `conversation.message.send` is deliberately absent: its effect owns its own
  * transaction and records its own ledger entry, so nesting the wrapper would
@@ -268,9 +584,25 @@ const LEDGER_WRAPPED_METHODS: readonly string[] = [
   'work.control',
   'requirement.save',
   'requirement.continue',
+  'requirement.create',
+  'requirement.update',
+  'requirement.import',
+  'requirement.start',
+  'requirement.archive',
+  'requirement.restore',
+  'run.pause',
+  'run.resume',
+  'run.cancel',
+  'work.retry',
+  'recovery.inspect',
+  'recovery.resolve',
+  'work.budget.update',
+  'extension.set',
   'plan.approve',
   'finding.submit',
   'decision.resolve',
+  'permission.request',
+  'permission.respond',
   'config.save',
   'config.test',
 ];
@@ -309,8 +641,8 @@ const UI_STRINGS: Record<string, { readonly en: string; readonly zh: string }> =
   'nav.projects': { en: 'Projects', zh: '项目' },
   'nav.chief': { en: 'Chief', zh: '主管' },
   'nav.requirements': { en: 'Requirements', zh: '需求' },
-  'nav.docs': { en: 'Docs', zh: '知识' },
-  'nav.files': { en: 'Files', zh: '文件' },
+  'nav.docs': { en: 'Docs & Context', zh: '知识与上下文' },
+  'nav.files': { en: 'Project Files', zh: '项目文件' },
   'nav.agents': { en: 'Agents', zh: '角色' },
   'nav.runs': { en: 'Runs', zh: '运行' },
   'nav.inbox': { en: 'Inbox', zh: '待处理' },
@@ -321,8 +653,8 @@ const UI_STRINGS: Record<string, { readonly en: string; readonly zh: string }> =
   'state.processed': { en: 'Processed', zh: '已处理' },
   'state.failed': { en: 'Failed', zh: '失败' },
   'state.decision_required': { en: 'Decision required', zh: '需要决定' },
-  'board.queued': { en: 'Queued', zh: '需求队列' },
-  'board.active': { en: 'Active', zh: '迭代中需求' },
+  'board.queued': { en: 'Requirement queue', zh: '需求队列' },
+  'board.active': { en: 'In iteration', zh: '迭代中需求' },
   'board.completed': { en: 'Completed', zh: '已完成' },
   'board.archived': { en: 'Archived', zh: '已归档' },
   'config.invalid': { en: 'The configuration was rejected', zh: '配置未通过校验' },
@@ -357,8 +689,244 @@ const UI_STRINGS: Record<string, { readonly en: string; readonly zh: string }> =
     en: 'Approval is unavailable: the Plan gate is not readable.',
     zh: '当前无法批准：计划闸门不可读取。',
   },
+  // The workbench catalogue, aligned with the keys the pages and the client script
+  // actually ask for (`experience.md` §6, WP-12 D7): a key the DOM renders must
+  // resolve remotely too, or every language switch logs one NOT_FOUND per key.
+  // Project content is never translated, so only interface keys appear here.
+  'agents.readOnly': { en: 'Role profiles are read-only here.', zh: '角色配置在此为只读。' },
+  'agents.role': { en: 'Role', zh: '角色' },
+  'agents.source': { en: 'Configuration source', zh: '配置来源' },
+  'agents.tools': { en: 'Tool subset', zh: '工具集' },
+  'agents.unavailable': { en: 'No usable model', zh: '无可用模型' },
+  'app.projectWorkspace': { en: 'Project workspace', zh: '项目工作区' },
+  'aria.composer': { en: 'Message composer', zh: '消息输入框' },
+  'aria.detail': { en: 'Requirement detail', zh: '需求详情' },
+  'aria.focusOrderNote': {
+    en: 'On narrow screens the Live panel is an overlay; closing it returns focus to its restore control.',
+    zh: '窄屏下实时面板为覆盖层，关闭后焦点回到恢复控件。',
+  },
+  'aria.liveDock': { en: 'Live panel', zh: '实时面板' },
+  'aria.liveStream': { en: 'Live event stream', zh: '实时事件流' },
+  'aria.messages': { en: 'Conversation messages', zh: '对话消息' },
+  'auth.login': { en: 'Sign in', zh: '登录' },
+  'auth.logout': { en: 'Sign out', zh: '退出' },
+  'auth.showedOnce': {
+    en: 'The installation token is shown once at install time and is never re-readable.',
+    zh: '安装令牌仅在安装时显示一次，之后不可再次读取。',
+  },
+  'auth.submit': { en: 'Sign in', zh: '登录' },
+  'auth.token': { en: 'Installation token', zh: '安装令牌' },
+  'board.action.cancel': { en: 'Cancel', zh: '取消' },
+  'board.action.pause': { en: 'Pause', zh: '暂停' },
+  'board.actions': { en: 'Requirement actions', zh: '需求操作' },
+  'board.card.blockers': { en: 'Blockers', zh: '阻断' },
+  'board.card.decisions': { en: 'Decisions', zh: '决定' },
+  'board.card.evidence': { en: 'Evidence availability', zh: '证据可用性' },
+  'board.card.open': { en: 'Open detail', zh: '查看详情' },
+  'board.card.phase': { en: 'Phase', zh: '阶段' },
+  'board.card.previousState': { en: 'Previous state', zh: '先前状态' },
+  'board.card.pushUnknown': { en: 'Push state not reported', zh: '推送状态未上报' },
+  'board.card.role': { en: 'Role', zh: '角色' },
+  'board.card.saveState': { en: 'Save state', zh: '保存状态' },
+  'board.card.tasks': { en: 'Tasks done / total', zh: '已完成/总任务' },
+  'board.card.waitingToContinue': { en: 'Waiting to continue', zh: '待继续' },
+  'board.l1Hidden': {
+    en: 'Direct-collaboration and L1 work stay in Chief and Runs, not on the board.',
+    zh: '直接协作与 L1 工作仅在主管与运行中显示，不入看板。',
+  },
+  'board.pauseQueuedRefused': {
+    en: 'A queued requirement without local work cannot be paused.',
+    zh: '无本地工作的排队需求不能暂停。',
+  },
+  'chief.attach': { en: 'Add attachment', zh: '添加附件' },
+  'chief.attachmentBound': { en: 'Bound to the message', zh: '已绑定到消息' },
+  'chief.attachmentLimits': {
+    en: 'Up to 5 attachments, 20 MiB each, 50 MiB total; PNG/JPEG/WebP and text/Markdown/HTML/PDF only.',
+    zh: '最多 5 个附件，单个 20 MiB，总 50 MiB；仅支持 PNG/JPEG/WebP 与文本/Markdown/HTML/PDF。',
+  },
+  'chief.composer': { en: 'Message the Chief', zh: '给主管发消息' },
+  'chief.newConversation': { en: 'New conversation', zh: '新建对话' },
+  'chief.providerMissing': {
+    en: 'No usable model is configured; the draft is kept.',
+    zh: '未配置可用模型，草稿已保留。',
+  },
+  'chief.send': { en: 'Send message', zh: '发送消息' },
+  'chief.switchConversation': { en: 'Switch conversation', zh: '切换对话' },
+  'common.error': { en: 'The server refused the request', zh: '服务端拒绝了请求' },
+  'common.none': { en: 'None', zh: '无' },
+  'common.open': { en: 'Open', zh: '打开' },
+  'common.refresh': { en: 'Refresh', zh: '刷新' },
+  'common.retry': { en: 'Retry', zh: '重试' },
+  'common.validity': { en: 'Validity', zh: '有效性' },
+  'common.version': { en: 'Version', zh: '版本' },
+  'common.waiting': { en: 'Waiting', zh: '等待中' },
+  'connection.state': { en: 'Connection', zh: '连接' },
+  'detail.approve': { en: 'Approve this plan version', zh: '批准此计划版本' },
+  'detail.approveExpired': {
+    en: 'This plan version is not current any more; refresh before approving.',
+    zh: '该计划版本已非当前版本，请刷新后再批准。',
+  },
+  'detail.approveUnavailable': {
+    en: 'Approval is unavailable: the Plan body or its local authorization cannot be read.',
+    zh: '当前无法批准：计划正文或其本地授权不可读取。',
+  },
+  'detail.approvedAt': { en: 'Approved at', zh: '批准时间' },
+  'detail.branch': { en: 'Delivery branch', zh: '交付分支' },
+  'detail.commit': { en: 'Commit', zh: '提交' },
+  'detail.download': { en: 'Download the full artifact', zh: '下载完整产物' },
+  'detail.goal': { en: 'Goal', zh: '目标' },
+  'detail.openQuestions': { en: 'Open questions', zh: '未决问题' },
+  'detail.planCurrent': { en: 'Current plan version', zh: '当前计划版本' },
+  'detail.planVersion': { en: 'Plan version', zh: '计划版本' },
+  'detail.previewFailed': {
+    en: 'The preview could not be rendered; the source download stays available.',
+    zh: '预览渲染失败，仍可下载源码。',
+  },
+  'detail.previewTruncated': {
+    en: 'Inline preview is truncated; download the full artifact.',
+    zh: '内联预览已截断，请下载完整产物。',
+  },
+  'detail.pushState': { en: 'Push state', zh: '推送状态' },
+  'detail.scope': { en: 'Scope', zh: '范围' },
+  'files.binary': { en: 'Binary file; size and hash shown.', zh: '二进制文件，仅显示大小与哈希。' },
+  'files.branch': { en: 'Delivery branch', zh: '交付分支' },
+  'files.revision': { en: 'Target revision', zh: '目标版本' },
+  'files.rootBoundary': {
+    en: 'Only paths inside the project root are readable.',
+    zh: '只能读取项目根目录内的路径。',
+  },
+  'files.search': { en: 'Search paths', zh: '搜索路径' },
+  'files.snapshotUntouched': {
+    en: 'Browsing does not change the Agent context snapshot.',
+    zh: '浏览文件不会改变 Agent 上下文快照。',
+  },
+  'files.tree': { en: 'Project file tree', zh: '项目文件树' },
+  'inbox.approve': { en: 'Approve once', zh: '批准一次' },
+  'inbox.bindingMissing': {
+    en: 'This daemon did not report the bound operation and targets, so approving is disabled. Denying still records a reason.',
+    zh: '该 daemon 未报告绑定的操作与目标，因此批准已禁用；拒绝仍会记录原因。',
+  },
+  'inbox.decision': { en: 'Decision', zh: '决定' },
+  'inbox.dedup': { en: 'One row per target version', zh: '每个目标版本一项' },
+  'inbox.deny': { en: 'Deny', zh: '拒绝' },
+  'inbox.denyReason': { en: 'Reason for denial (required)', zh: '拒绝原因（必填）' },
+  'inbox.empty': { en: 'Nothing needs your decision.', zh: '当前没有待处理事项。' },
+  'inbox.expiredDisabled': {
+    en: 'An expired decision can no longer be applied.',
+    zh: '过期决定不可再次应用。',
+  },
+  'inbox.finding': { en: 'Blocking finding', zh: '阻断发现' },
+  'inbox.grantScopeOnce': { en: 'once (this call only)', zh: '一次（仅本次调用）' },
+  'inbox.internalRepairs': { en: 'Internal repairs', zh: '内部修复' },
+  'inbox.noTargets': {
+    en: 'No targets recorded (a command operation).',
+    zh: '未记录目标（命令类操作）。',
+  },
+  'inbox.options': { en: 'Saved options', zh: '已保存选项' },
+  'inbox.permission': { en: 'Tool permission request', zh: '工具权限请求' },
+  'inbox.permissionBinding': { en: 'What will be granted', zh: '将授予的内容' },
+  'inbox.question': { en: 'Question', zh: '问题' },
+  'inbox.questionEmpty': {
+    en: 'The decision artifact carried no question text.',
+    zh: '决定产物没有携带问题正文。',
+  },
+  'inbox.questionUnavailable': {
+    en: 'The question text could not be read from the decision artifact.',
+    zh: '无法从决定产物读取问题正文。',
+  },
+  'inbox.raisedBy': { en: 'Raised by', zh: '发起方' },
+  'inbox.raisedByChief': { en: 'Chief', zh: '主管' },
+  'inbox.raisedByRun': { en: 'the Run below', zh: '下方运行' },
+  'inbox.recovery': { en: 'Recovery', zh: '恢复' },
+  'inbox.targetVersion': { en: 'Target version', zh: '目标版本' },
+  'inbox.work': { en: 'Work', zh: '工作' },
+  'language.label': { en: 'Interface language', zh: '界面语言' },
+  'live.reconnect': { en: 'Reconnecting from the watermark', zh: '按水位重连' },
+  'live.title': { en: 'Live events', zh: '实时事件' },
+  'live.watermark': { en: 'Watermark', zh: '水位' },
+  'nav.primary': { en: 'Project navigation', zh: '项目导航' },
+  'nav.project': { en: 'Project', zh: '项目' },
+  'nav.system': { en: 'System', zh: '系统' },
+  'nav.workspace': { en: 'Workspace', zh: '工作区' },
+  'run.topLive': { en: 'Live', zh: '实时' },
+  'runs.attempt': { en: 'Attempt', zh: '尝试' },
+  'runs.cancel': { en: 'Cancel run', zh: '取消运行' },
+  'runs.epoch': { en: 'Epoch', zh: '纪元' },
+  'runs.evidence': { en: 'Evidence', zh: '证据' },
+  'runs.l1': { en: 'Direct collaboration / L1', zh: '直接协作 / L1' },
+  'runs.outcome': { en: 'Outcome', zh: '结果' },
+  'runs.pause': { en: 'Pause run', zh: '暂停运行' },
+  'runs.resume': { en: 'Resume run', zh: '恢复运行' },
+  'runs.run': { en: 'Run', zh: '运行' },
+  'runs.status': { en: 'Status', zh: '状态' },
+  'runs.tokens': { en: 'Tokens', zh: 'Token' },
+  'settings.apiKey': { en: 'API key', zh: 'API 密钥' },
+  'settings.apiKeyHint': {
+    en: 'Leave empty to keep the stored credential. The value is never echoed back.',
+    zh: '留空表示保留已保存的凭证。密钥值不会回显。',
+  },
+  'settings.baseUrl': { en: 'Base URL', zh: 'Base URL' },
+  'settings.enabled': { en: 'Enabled', zh: '启用' },
+  'settings.models': { en: 'Models', zh: '模型' },
+  'settings.modelsHint': {
+    en: 'ModelDescriptor array: id, contextWindow, maxOutputTokens, reasoningLevels, vision, optional prices.',
+    zh: 'ModelDescriptor 数组：id、contextWindow、maxOutputTokens、reasoningLevels、vision、可选价格。',
+  },
+  'settings.newProvider': { en: 'New provider', zh: '新增 Provider' },
+  'settings.providerId': { en: 'Provider id', zh: 'Provider 标识' },
+  'settings.providerIdHint': {
+    en: 'Leave empty to create a new provider; the server creates the id otherwise.',
+    zh: '留空表示新建 Provider；否则使用已配置的标识。',
+  },
+  'settings.providerSave': { en: 'Save provider', zh: '保存 Provider' },
+  'settings.providerSaved': { en: 'Provider saved', zh: 'Provider 已保存' },
+  'settings.providerTest': { en: 'Test connection', zh: '连接测试' },
+  'settings.providerType': { en: 'Type', zh: '类型' },
+  'settings.rejected': { en: 'The configuration was rejected', zh: '配置未通过校验' },
+  'settings.revision': { en: 'Active revision', zh: '活动版本' },
+  'settings.save': { en: 'Save configuration', zh: '保存配置' },
+  'settings.secretConfigured': { en: 'Secret configured', zh: '已配置密钥' },
+  'settings.secretMissing': { en: 'No secret configured', zh: '未配置密钥' },
+  'settings.test': { en: 'Test provider', zh: '测试提供方' },
+  'settings.testAccepted': { en: 'Connection test accepted.', zh: '连接测试已接受。' },
+  'settings.testCompleted': { en: 'Connection test result', zh: '连接测试结果' },
+  'settings.testFailed': { en: 'The provider profile is not usable.', zh: '提供方配置不可用。' },
+  'settings.testModel': { en: 'Model to test', zh: '测试模型' },
+  'settings.testNeedsModel': {
+    en: 'Save the provider before testing: it declares no model yet.',
+    zh: '保存 Provider 后再测试：该 Provider 还没有模型。',
+  },
+  'settings.testOk': { en: 'The provider profile is usable.', zh: '提供方配置可用。' },
+  'settings.testPending': {
+    en: 'The result arrives later — check Runs or the Live event list.',
+    zh: '结果稍后到达/查看 Runs 或事件。',
+  },
+  'settings.unchanged': {
+    en: 'The active revision is unchanged and your input is preserved.',
+    zh: '活动版本未改变，输入已保留。',
+  },
+  'settings.unsaved': { en: 'Unsaved edits', zh: '未保存的修改' },
+  'shell.chiefOnlyControls': {
+    en: 'Conversation controls exist only on the Chief page.',
+    zh: '对话创建与切换仅在主管页面。',
+  },
+  'shell.discussInChief': { en: 'Discuss in Chief', zh: '在主管中讨论' },
+  'shell.liveCount': { en: 'Live events', zh: '实时事件' },
+  'shell.panelClose': { en: 'Close the Live panel', zh: '关闭实时面板' },
+  'shell.skipToMain': { en: 'Skip to main content', zh: '跳到主要内容' },
+  'state.active': { en: 'Active', zh: '进行中' },
+  'state.invalidated': { en: 'Superseded', zh: '已失效' },
+  'state.unknown': { en: 'Unknown', zh: '未知' },
+  'state.valid': { en: 'Valid', zh: '有效' },
+
   disconnected: { en: 'Connection lost; background state pending', zh: '连接中断，后台状态待同步' },
 };
+
+/**
+ * The daemon catalogue under its contract name, exported so a test can assert the
+ * WebUI's used-key set is fully covered (`api-gap-audit.md` §2.5, WP-12 D7).
+ */
+export const WorkbenchServicesStrings = UI_STRINGS;
 
 interface ParsedEnvelope {
   readonly id: string;
@@ -389,6 +957,9 @@ export class WorkbenchProtocol {
   private readonly now: () => number;
   private readonly backupGit: BackupGitPort;
   private readonly requirementRecords: RequirementRecordPort;
+  private readonly requirementGit: RequirementGitFactsPort;
+  private readonly requirementPool: RequirementPoolReadPort;
+  private readonly workspaceFiles: WorkspaceFilePort;
   private connectionSequence = 0;
   /** Live WebSocket connections, so a shutdown or failure can close them honestly. */
   private readonly sockets = new Set<ServerWebSocket>();
@@ -398,6 +969,9 @@ export class WorkbenchProtocol {
     this.now = services.now ?? (() => Date.now());
     this.backupGit = services.backupGit ?? createNodeBackupGitPort();
     this.requirementRecords = services.requirementRecords ?? createNodeRequirementRecordPort();
+    this.requirementGit = services.requirementGit ?? createNodeRequirementGitFactsPort();
+    this.requirementPool = services.requirementPool ?? createNodeRequirementPoolPort();
+    this.workspaceFiles = services.workspaceFiles ?? createNodeWorkspaceFilePort();
   }
 
   /** The Project this daemon serves; also the ACL boundary of every query. */
@@ -473,6 +1047,22 @@ export class WorkbenchProtocol {
     this.services.runRecovery = port;
   }
 
+  /**
+   * Attaches the execution stack's orchestrator (WP-12 T2.1).
+   *
+   * `conversation.message.send` queues the Chief assessment Run through it and
+   * `plan.approve` queues the next professional Run, so the protocol and the supervisor
+   * share one lifecycle and one budget ledger.
+   */
+  attachOrchestrator(orchestrator: Orchestrator): void {
+    this.services.orchestrator = orchestrator;
+  }
+
+  /** Attaches the stack's model gateway, which `provider.test` probes. */
+  attachGateway(gateway: ModelGateway): void {
+    this.services.gateway = gateway;
+  }
+
   /** Resolves the caller from the session cookie / installation credential. */
   authenticateRequest(
     request: IncomingMessage,
@@ -481,7 +1071,7 @@ export class WorkbenchProtocol {
   ): WorkbenchCaller {
     if (auth.bearerOk(request.headers.authorization)) {
       return {
-        subject: 'installation:local',
+        subject: INSTALLATION_SUBJECT,
         userId: userIdFromSubject('installation:local'),
         role: 'chief',
       };
@@ -530,7 +1120,7 @@ export class WorkbenchProtocol {
       return {
         ok: true,
         caller: {
-          subject: 'installation:local',
+          subject: INSTALLATION_SUBJECT,
           userId: userIdFromSubject('installation:local'),
           role: 'chief',
         },
@@ -801,6 +1391,8 @@ export class WorkbenchProtocol {
         return this.listKnowledge(params);
       case 'knowledge.get':
         return this.getKnowledge(params);
+      case 'context.preview':
+        return this.previewContext(params);
       // ----- work / requirement / run ---------------------------------------
       case 'board':
         return this.board();
@@ -820,10 +1412,51 @@ export class WorkbenchProtocol {
         return this.saveRequirement(params, options, true);
       case 'requirement.continue':
         return this.continueRequirement(params);
+      case 'requirement.create':
+        return this.createRequirement(params, options);
+      case 'requirement.update':
+        return this.updateRequirement(params, options);
+      case 'requirement.import':
+        return this.importRequirement(params);
+      case 'requirement.start':
+        return this.startRequirement(params, options);
+      case 'requirement.archive':
+        return this.archiveRequirement(params, options);
+      case 'requirement.restore':
+        return this.restoreRequirement(params, options);
       case 'run.list':
         return this.listRuns(params);
       case 'run.get':
         return this.getRun(params);
+      case 'run.pause':
+        return this.controlRun('pause', params, options);
+      case 'run.resume':
+        return this.controlRun('resume', params, options);
+      case 'run.cancel':
+        return this.controlRun('cancel', params, options);
+      case 'work.retry':
+        return this.retryWork(params, options);
+      case 'recovery.inspect':
+        return this.inspectRecovery(params, options);
+      case 'recovery.resolve':
+        return this.resolveRecovery(params, options);
+      case 'task.list':
+        return this.listTasks(params);
+      case 'task.get':
+        return this.getTask(params);
+      // ----- commands / files / extensions (`protocol.md` §4/§5) -------------
+      case 'command.get':
+        return this.getCommand(params, options);
+      case 'file.list':
+        return this.listFiles(params);
+      case 'file.read':
+        return this.readFile(params);
+      case 'extension.list':
+        return this.listExtensions();
+      case 'extension.set':
+        return this.setExtension(params);
+      case 'work.budget.update':
+        return this.updateWorkBudget(params);
       // ----- artifacts -------------------------------------------------------
       case 'artifact.list':
         return this.listArtifacts(params);
@@ -844,6 +1477,18 @@ export class WorkbenchProtocol {
         return this.saveConfig(params, options);
       case 'config.test':
         return this.testConfig(params);
+      // ----- credentials (installation-only, WP-12 T1.1) ---------------------
+      case 'secret.set':
+        return this.setSecret(params, options);
+      case 'secret.delete':
+        return this.deleteSecret(params, options);
+      case 'secret.list':
+        return this.listSecrets(options);
+      // ----- providers (WP-12 T2.0, `protocol.md` §5) -----------------------
+      case 'provider.upsert':
+        return this.upsertProvider(params);
+      case 'provider.test':
+        return this.testProvider(params);
       // ----- gates / findings / decisions -----------------------------------
       case 'plan.current':
         return this.currentPlan(params);
@@ -853,6 +1498,11 @@ export class WorkbenchProtocol {
         return this.submitFinding(params);
       case 'decision.resolve':
         return this.resolveDecision(params, options);
+      // ----- tool permissions (WP-12 T3, `protocol.md` §4) -------------------
+      case 'permission.request':
+        return this.requestPermission(params);
+      case 'permission.respond':
+        return this.respondPermission(params, options);
       // ----- backup / restore ------------------------------------------------
       case 'backup.run':
         return this.runBackup(params);
@@ -1096,6 +1746,287 @@ export class WorkbenchProtocol {
   }
 
   /**
+   * `context.preview` (`protocol.md` §5, `context.md` §1).
+   *
+   * Runs the **real** `buildContext` selection/ACL/gate/required-input/budget logic
+   * in dry-run mode over production ports: the Project's config policy, the
+   * `docs/rules/agents.md` role contract at the Work's base revision, Git blobs and
+   * the artifact store. No snapshot directory is written, and an out-of-scope source
+   * is refused by the same ACL that a real Run would hit — a preview can never widen
+   * a scope (`context.md` §1 "需要读更广范围由 context.request 返回 Chief 处理").
+   */
+  private previewContext(params: JsonObject): unknown {
+    const workId = requiredString(params, 'workId');
+    const role = requiredString(params, 'role');
+    if (!(ROLES as readonly string[]).includes(role)) {
+      throw new ProtocolError('VALIDATION_ERROR', `role ${role} is not a documented role`, {
+        details: { role },
+      });
+    }
+    const parsed = contextSelectionSchema.safeParse(params['selection'] ?? {});
+    if (!parsed.success) {
+      throw new ProtocolError(
+        'VALIDATION_ERROR',
+        `selection is not a documented ContextSelection: ${parsed.error.issues
+          .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+          .join('; ')}`,
+        { details: { issues: parsed.error.issues.map((issue) => issue.message) } },
+      );
+    }
+    const selection: ContextSelection = parsed.data;
+    const store = this.services.store;
+    const work = store.works.find(workId);
+    if (work === undefined) {
+      throw new ProtocolError('NOT_FOUND', `Work ${workId} does not exist`, {
+        details: { workId },
+      });
+    }
+    const project = store.projects.find(this.projectId);
+    if (project === undefined) {
+      throw new ProtocolError('INVALID_STATE', `Project ${this.projectId} is not registered`);
+    }
+    const config = this.requireConfig();
+    const root = project.gitRoot ?? project.root;
+    const baseRevision = work.baseRevision ?? project.head ?? '';
+    const stage = contextPreviewStage(role as Role, work.level);
+    const scope: ProjectScope = {
+      projectId: this.projectId,
+      codeRoot: project.codeRoot,
+      documentRoot: project.documentRoot,
+      deliveryBranch: project.deliveryBranch,
+      workId,
+    };
+    // The policy is the Project's own config policy (`config.ts` `policyConfigSchema`)
+    // and the role contract is the committed `docs/rules/agents.md`; both are real
+    // Project facts, never invented text.
+    const policyContent = canonicalJson(config.project().policy);
+    const policyHash = sha256Hex(Buffer.from(policyContent, 'utf8'));
+    const roleContractBody =
+      this.readGitText(root, baseRevision, CHIEF_RULES_PATH) ?? CHIEF_RULES_FALLBACK;
+    const gates: ContextGatesPort = {
+      current: () => ({
+        ok: true,
+        policyRevision: String(work.policyRevision),
+        policyContent,
+        roleContract: { id: CHIEF_RULES_PATH, body: roleContractBody },
+      }),
+    };
+    const resolver: SourceResolverPort = {
+      resolve: ({ ref }) =>
+        this.resolveContextSource(ref, {
+          root,
+          baseRevision,
+          policyContent,
+          policyHash,
+          policyRevision: String(work.policyRevision),
+          role: role as Role,
+          roleContractBody,
+        }),
+    };
+    const content: ContentFetchPort = {
+      fetch: (ref) => {
+        if (ref.kind === 'git') {
+          const blob = this.workspaceFiles.read(root, ref.revision, ref.path);
+          if (blob === null) {
+            return { ok: false, code: 'NOT_FOUND', message: `${ref.path}@${ref.revision} 不存在` };
+          }
+          return { ok: true, content: blob.content.toString('utf8') };
+        }
+        try {
+          const artifact = this.services.artifacts.get(ref.id, Number(ref.version));
+          return {
+            ok: true,
+            content: Buffer.from(this.services.artifacts.read(artifact)).toString('utf8'),
+          };
+        } catch {
+          return { ok: false, code: 'ARTIFACT_MISSING', message: `artifact ${ref.id} 不可读` };
+        }
+      },
+    };
+    // Never reached: a dry-run returns before freezing, so the port is a guard that
+    // turns an accidental write into a loud failure instead of a silent artifact.
+    const snapshotWriter: SnapshotWriterPort = {
+      write: () => {
+        throw new ProtocolError('INTERNAL_ERROR', 'context.preview must not write a snapshot');
+      },
+    };
+    // The logical inputs a preview may assert are the ones the store really holds:
+    // the Work goal, the Project policy, a user message when the Work came from one,
+    // and the Work's own authorization. Anything else stays missing, so the preview
+    // reports it instead of claiming a ProductDefinition it never read.
+    const contextInputs: ContextInputKey[] = ['workGoal', 'policy'];
+    if (work.sourceRef.kind === 'message') contextInputs.push('userRequest');
+    if (work.authorizationRef !== undefined) contextInputs.push('authorization');
+    const built = buildContext({
+      selection,
+      role: role as never,
+      stage,
+      project: scope,
+      configHash: policyHash,
+      runId: `preview:${workId}`,
+      workId,
+      contextInputs,
+      resolver,
+      content,
+      gates,
+      snapshotWriter,
+      preview: true,
+    });
+    if (!built.ok) {
+      throw new ProtocolError(built.code, built.errors.map((error) => error.message).join('; '), {
+        details: {
+          errors: built.errors.map((error) => ({
+            code: error.code,
+            message: error.message,
+            ref: error.ref === undefined ? null : jsonSafe(error.ref),
+          })),
+        },
+      });
+    }
+    const snapshot = built.snapshot;
+    return {
+      status: 'accepted',
+      workId,
+      role,
+      stage,
+      revision: baseRevision,
+      resolved: snapshot.resolvedSources.map((source) => ({ ...source })),
+      excluded: snapshot.excluded.map((entry) => ({
+        ref: jsonSafe(entry.ref),
+        reason: entry.reason,
+      })),
+      missing: snapshot.unknowns.map((entry) => ({
+        ref: jsonSafe(entry.ref),
+        reason: entry.reason,
+      })),
+      estimatedTokens: snapshot.tokenAccounting.initial.used,
+      initialLimit: snapshot.tokenAccounting.initial.limit,
+      expansionLimit: snapshot.tokenAccounting.expansion.limit,
+      policyHash: snapshot.policyHash,
+      configHash: snapshot.configHash,
+      readScopeDigest: snapshot.readScopeDigest,
+    };
+  }
+
+  /** Reads one committed text file at a revision; `null` when it is absent. */
+  private readGitText(root: string, revision: string, path: string): string | null {
+    if (root === '' || revision === '') return null;
+    const blob = this.workspaceFiles.read(root, revision, path);
+    return blob === null ? null : blob.content.toString('utf8');
+  }
+
+  /**
+   * Resolves one authorised context source into its frozen identity (`context.md` §1).
+   *
+   * The builder performs the ACL/scope checks before calling this; the resolver only
+   * answers "what bytes, at which revision, with which hash". A transcript is refused
+   * outright (`agents.md` §2), and a source kind this preview cannot read honestly is
+   * `CONTEXT_FORBIDDEN` rather than a fabricated hash.
+   */
+  private resolveContextSource(
+    ref: ContextSourceRef,
+    context: {
+      readonly root: string;
+      readonly baseRevision: string;
+      readonly policyContent: string;
+      readonly policyHash: string;
+      readonly policyRevision: string;
+      readonly role: Role;
+      readonly roleContractBody: string;
+    },
+  ): SourceResolutionResult {
+    switch (ref.kind) {
+      case 'git':
+      case 'knowledge': {
+        const revision = ref.version ?? context.baseRevision;
+        const path = ref.path ?? ref.id;
+        if (revision === '') {
+          return { ok: false, code: 'NOT_FOUND', message: `${path} 没有可用 revision` };
+        }
+        const blob = this.workspaceFiles.read(context.root, revision, path);
+        if (blob === null) {
+          return { ok: false, code: 'NOT_FOUND', message: `${path}@${revision} 不存在` };
+        }
+        return {
+          ok: true,
+          kind: 'git',
+          path,
+          revision,
+          hash: sha256Hex(blob.content),
+          fetch: { kind: 'git', revision },
+          fetchRef: { kind: 'git', path, revision },
+        };
+      }
+      case 'artifact': {
+        const version = ref.version ?? '1';
+        try {
+          const artifact = this.services.artifacts.get(ref.id, Number(version));
+          return {
+            ok: true,
+            kind: 'artifact',
+            version,
+            hash: artifact.contentHash,
+            fetch: { kind: 'artifact' },
+            fetchRef: { kind: 'artifact', id: ref.id, version },
+          };
+        } catch {
+          return { ok: false, code: 'NOT_FOUND', message: `artifact ${ref.id}@${version} 不存在` };
+        }
+      }
+      case 'policy':
+        return {
+          ok: true,
+          kind: 'policy',
+          revision: context.policyRevision,
+          hash: context.policyHash,
+          fetch: { kind: 'none' },
+          content: context.policyContent,
+        };
+      case 'role_contract':
+        return {
+          ok: true,
+          kind: 'role_contract',
+          role: context.role,
+          revision: context.policyRevision,
+          hash: sha256Hex(Buffer.from(context.roleContractBody, 'utf8')),
+          fetch: { kind: 'none' },
+          content: context.roleContractBody,
+        };
+      case 'message': {
+        const message = this.services.store.messages.find(ref.id);
+        const body =
+          message === undefined
+            ? undefined
+            : this.services.store.messageBodies.find(message.bodyRef);
+        const text = body === undefined ? null : this.readMessageBody(body.relativeBlobPath);
+        if (text === null) {
+          return { ok: false, code: 'NOT_FOUND', message: `message ${ref.id} has no body` };
+        }
+        return {
+          ok: true,
+          kind: 'policy',
+          revision: ref.version ?? '1',
+          hash: sha256Hex(Buffer.from(text, 'utf8')),
+          fetch: { kind: 'none' },
+          content: text,
+        };
+      }
+      case 'transcript':
+        return {
+          ok: false,
+          code: 'CONTEXT_FORBIDDEN',
+          message: `transcript ${ref.id} 禁止作为上下文输入（agents.md §2）`,
+        };
+      default:
+        return {
+          ok: false,
+          code: 'CONTEXT_FORBIDDEN',
+          message: `source kind ${String(ref.kind)} 不可作为 context.preview 的内容输入`,
+        };
+    }
+  }
+
+  /**
    * The board projection (`experience.md` §4, AC-068).
    *
    * Requirements are read by their own id — no copied object — L1/report-only work
@@ -1104,6 +2035,7 @@ export class WorkbenchProtocol {
    */
   private board(): unknown {
     const requirements = this.services.store.requirements.list({ orderBy: 'created_at ASC' });
+    const gitContext = this.gitContext();
     const columns: Record<string, unknown[]> = {
       queued: [],
       active: [],
@@ -1127,6 +2059,9 @@ export class WorkbenchProtocol {
         phase: requirement.phase ?? null,
         recordVersion: requirement.recordVersion,
         portableRef: requirement.portableRef,
+        // The Git-side facts the card's branch/commit/unpushed line renders
+        // (`requirements.md` §3, AC-090); `null` only when the Project has no root.
+        git: gitContext === null ? null : this.gitFactsOf(requirement, gitContext),
         executionAvailability: requirement.executionAvailability,
         evidenceAvailability: requirement.evidenceAvailability,
         saveState: this.saveStateOf(requirement.id),
@@ -1213,12 +2148,15 @@ export class WorkbenchProtocol {
     const limit = boundedLimit(params['limit']);
     const lifecycle = optionalString(params['lifecycle']);
     const rows = this.services.store.requirements.list({ orderBy: 'created_at DESC' });
+    const gitContext = this.gitContext();
     const items = rows
       .filter((row) => (lifecycle === undefined ? true : row.lifecycle === lifecycle))
       .slice(0, limit)
       // `protocol.md` §8: the list carries metadata and the portable ref, never the
-      // long Markdown body.
-      .map((row) => this.requirementSummary(row));
+      // long Markdown body. The Git facts are metadata, so they are part of the row.
+      .map((row) =>
+        this.requirementSummary(row, gitContext === null ? null : this.gitFactsOf(row, gitContext)),
+      );
     return { items, nextCursor: null };
   }
 
@@ -1229,15 +2167,52 @@ export class WorkbenchProtocol {
       throw new ProtocolError('NOT_FOUND', `Requirement ${requirementId} does not exist`);
     }
     const work = row.workId === undefined ? undefined : this.services.store.works.find(row.workId);
+    const gitContext = this.gitContext();
     return {
       ...row,
       work: work ?? null,
       saveState: this.saveStateOf(row.id),
+      // `protocol.md` §8: `get` returns the complete `contentMarkdown` so the detail
+      // page's body is the committed record, not an empty placeholder. A record whose
+      // revision cannot be read back answers `null` rather than an invented body.
+      contentMarkdown: this.contentMarkdownOf(row),
+      // The card/detail branch/commit/unpushed facts (`requirements.md` §3, AC-090).
+      git: gitContext === null ? null : this.gitFactsOf(row, gitContext),
       // An imported active record with no local site is honestly "waiting to
       // continue"; it has no Run (`experience.md` §4, `AC-089`).
       waitingToContinue: row.workId === undefined && row.lifecycle === 'active',
       continuationCandidates: this.continuableIds(),
     };
+  }
+
+  /**
+   * The full Markdown body of one requirement record (`protocol.md` §8).
+   *
+   * The body lives in `content.md` at the record's own revision, so it is read back
+   * through the same Git reader the save path uses. A record that was never committed
+   * (`working-tree`) falls back to the working-tree file, which is the only truthful
+   * source then; if neither exists the answer is `null`.
+   */
+  private contentMarkdownOf(row: Requirement): string | null {
+    const record = this.readRequirementRecord(row);
+    if (
+      record !== null &&
+      typeof record.contentMarkdown === 'string' &&
+      record.contentMarkdown !== ''
+    ) {
+      return record.contentMarkdown;
+    }
+    const project = this.services.store.projects.find(this.projectId);
+    const root = project?.gitRoot ?? project?.root;
+    const directory = row.portableRef.path;
+    if (root === undefined || root === '' || directory === undefined || directory === '') {
+      return null;
+    }
+    try {
+      return readFileSync(join(root, directory, REQUIREMENT_CONTENT_FILE_NAME), 'utf8');
+    } catch {
+      return null;
+    }
   }
 
   private listRuns(params: JsonObject): unknown {
@@ -1279,6 +2254,349 @@ export class WorkbenchProtocol {
         orderBy: 'created_at ASC',
       }),
       task: run.taskId === undefined ? null : (this.services.store.tasks.find(run.taskId) ?? null),
+    };
+  }
+
+  /**
+   * `command.get` (`protocol.md` §4): the recorded terminal answer of one write key.
+   *
+   * The lookup is scoped to the calling subject ("仅同调用主体可查"), so one browser
+   * session can never read another's recorded response. A key that was never used —
+   * or belongs to another subject — is `NOT_FOUND`, which is also the honest answer
+   * for a write that has not completed yet.
+   */
+  private getCommand(
+    params: JsonObject,
+    options: { readonly caller: WorkbenchCaller },
+  ): JsonObject {
+    const operation = requiredString(params, 'operation');
+    const key = requiredString(params, 'idempotencyKey');
+    const found = this.services.store.commands.lookup(options.caller.subject, operation, key);
+    if (found === undefined) {
+      throw new ProtocolError('NOT_FOUND', `no ${operation} command with that idempotency key`, {
+        details: { operation, idempotencyKey: key },
+      });
+    }
+    return { state: found.state, response: jsonSafe(found.response) };
+  }
+
+  /**
+   * `file.list` (`protocol.md` §5): the entries of one path at a named Git revision.
+   *
+   * A revision the repository does not hold, or a path outside it, is `NOT_FOUND`;
+   * the answer never falls back to the working tree, which can be stale.
+   */
+  private listFiles(params: JsonObject): JsonObject {
+    const revision = requiredString(params, 'revision');
+    const path = optionalString(params['path']) ?? '';
+    const limit = boundedLimit(params['limit']);
+    const root = this.projectGitRoot();
+    const entries = this.workspaceFiles.list(root, revision, path);
+    if (entries === null) {
+      throw new ProtocolError('NOT_FOUND', `revision ${revision} has no path ${path || '.'}`, {
+        details: { revision, path },
+      });
+    }
+    return {
+      revision,
+      path,
+      items: entries.slice(0, limit).map((entry) => ({ ...entry })),
+      nextCursor: entries.length > limit ? String(limit) : null,
+    };
+  }
+
+  /**
+   * `file.read` (`protocol.md` §5): one blob at a named revision.
+   *
+   * The content is bounded: a body over the caller's `limit` (KiB is not implied, the
+   * limit is a byte count with the documented default) is truncated and reported as
+   * such, so a preview can never pull an unbounded file into a response.
+   */
+  private readFile(params: JsonObject): JsonObject {
+    const revision = requiredString(params, 'revision');
+    const path = requiredString(params, 'path');
+    const limit = optionalInteger(params['limit']) ?? 1_048_576;
+    const root = this.projectGitRoot();
+    const blob = this.workspaceFiles.read(root, revision, path);
+    if (blob === null) {
+      throw new ProtocolError('NOT_FOUND', `revision ${revision} has no path ${path}`, {
+        details: { revision, path },
+      });
+    }
+    const truncated = blob.content.byteLength > limit;
+    const content = truncated ? blob.content.subarray(0, limit) : blob.content;
+    return {
+      revision,
+      path,
+      content: content.toString('utf8'),
+      mime:
+        FILE_MIME_TYPES[path.split('.').at(-1)?.toLowerCase() ?? ''] ?? 'application/octet-stream',
+      hash: createHash('sha256').update(blob.content).digest('hex'),
+      bytes: blob.content.byteLength,
+      truncated,
+    };
+  }
+
+  /** The Git root of the current Project, or `INVALID_STATE` when it has none. */
+  private projectGitRoot(): string {
+    const project = this.services.store.projects.find(this.projectId);
+    const root = project?.gitRoot ?? project?.root;
+    if (root === undefined || root === '') {
+      throw new ProtocolError('INVALID_STATE', 'this Project has no Git root', {
+        details: { projectId: this.projectId },
+      });
+    }
+    return root;
+  }
+
+  /**
+   * `extension.list` (`protocol.md` §5): the shipped whitelist with its state.
+   *
+   * `execution.md` §7 fixes this release's built-in list at empty, so the honest
+   * answer is an empty manifest — not a fabricated extension entry.
+   */
+  private listExtensions(): JsonObject {
+    const manifest = this.services.extensions ?? [];
+    return {
+      apiVersion: 1,
+      items: manifest.map((extension) => ({
+        id: extension.id,
+        version: extension.version,
+        apiVersion: extension.apiVersion,
+        capabilities: [...extension.capabilities],
+        critical: extension.critical,
+        enabled: extension.enabledByDefault,
+        health: 'ok',
+      })),
+    };
+  }
+
+  /**
+   * `extension.set` (`protocol.md` §5): enable/disable one shipped extension.
+   *
+   * An id outside the release whitelist is `NOT_FOUND`, and disabling a `critical`
+   * extension is refused as documented — the release that ships an entry says so.
+   */
+  private setExtension(params: JsonObject): JsonObject {
+    const id = requiredString(params, 'id');
+    const enabled = params['enabled'];
+    if (typeof enabled !== 'boolean') {
+      throw new ProtocolError('VALIDATION_ERROR', 'extension.set needs a boolean enabled', {
+        details: { id, enabled: params['enabled'] ?? null },
+      });
+    }
+    const extension = (this.services.extensions ?? []).find((entry) => entry.id === id);
+    if (extension === undefined) {
+      throw new ProtocolError('NOT_FOUND', `extension ${id} is not in this release's whitelist`, {
+        details: { id },
+      });
+    }
+    if (!enabled && extension.critical) {
+      throw new ProtocolError(
+        'INVALID_STATE',
+        `extension ${id} is critical and cannot be disabled`,
+        { details: { id, critical: true } },
+      );
+    }
+    return {
+      status: 'applied',
+      entityId: extension.id,
+      version: 1,
+      extension: {
+        id: extension.id,
+        enabled,
+        critical: extension.critical,
+        // This release has no runtime enable/disable store, so the answer states the
+        // requested state without claiming a persistence it does not have.
+        persisted: false,
+      },
+    };
+  }
+
+  /**
+   * `run.pause`/`run.resume`/`run.cancel` (`protocol.md` §4).
+   *
+   * A Run is a child of its Work, so these are thin views over the real
+   * `FindingService` Work controls: the Run names its Work and the same durable
+   * barrier/Gate semantics apply. A Run whose Work has a required child Run keeps the
+   * Gate blocked, so cancelling never silently unblocks a dependent.
+   */
+  private controlRun(
+    action: 'pause' | 'resume' | 'cancel',
+    params: JsonObject,
+    options: { readonly idempotencyKey?: string },
+  ): JsonObject {
+    const runId = requiredString(params, 'runId');
+    const reason = optionalString(params['reason']) ?? '';
+    const store = this.services.store;
+    const run = store.runs.find(runId);
+    if (run === undefined) {
+      throw new ProtocolError('NOT_FOUND', `Run ${runId} does not exist`, { details: { runId } });
+    }
+    const work = store.works.find(run.workId);
+    if (work === undefined) {
+      throw new ProtocolError('NOT_FOUND', `Work ${run.workId} does not exist`, {
+        details: { runId, workId: run.workId },
+      });
+    }
+    const operationId = options.idempotencyKey ?? store.newId();
+    const findings = this.requireFindings();
+    if (action === 'pause') {
+      const result = findings.pauseWork({ workId: work.id, ...(reason === '' ? {} : { reason }) });
+      if (!result.ok) {
+        throw new ProtocolError(result.code, result.message, {
+          details: { runId, workId: work.id },
+        });
+      }
+      return {
+        status: 'accepted',
+        operationId,
+        runId,
+        workId: work.id,
+        version: result.work.version,
+        pausedRunIds: result.pausedRuns.map((entry) => entry.runId),
+      };
+    }
+    if (action === 'resume') {
+      const result = findings.resumeWork({ workId: work.id, expectedWorkVersion: work.version });
+      if (!result.ok) {
+        throw new ProtocolError(result.code, result.message, {
+          details: { runId, workId: work.id, currentVersion: result.currentVersion },
+        });
+      }
+      return {
+        status: 'accepted',
+        operationId,
+        runId,
+        workId: work.id,
+        version: result.work.version,
+        attempts: result.attempts.map((attempt) => ({ ...attempt })),
+      };
+    }
+    const result = findings.cancelWork({
+      workId: work.id,
+      ...(reason === '' ? {} : { reason }),
+      ...(params['sideEffectsUnknown'] === true ? { sideEffectsUnknown: true } : {}),
+    });
+    if (!result.ok) {
+      throw new ProtocolError(result.code, result.message, { details: { runId, workId: work.id } });
+    }
+    for (const cancelled of result.cancelledRunIds) {
+      this.services.toolBridge?.cleanupRun(cancelled);
+    }
+    return {
+      status: 'accepted',
+      operationId,
+      runId,
+      workId: work.id,
+      version: result.work.version,
+      workStatus: result.status,
+      cancelledRunIds: [...result.cancelledRunIds],
+      preservedArtifactIds: [...result.preservedArtifactIds],
+      requirementStatus: result.requirementStatus,
+      // A required child that is still unsatisfied keeps the Gate blocked, so the
+      // caller sees the recovery obligation instead of a silent completion.
+      recoveryRequired: result.recoveryRequired,
+      recoveryDecisionId: result.recoveryDecisionId,
+    };
+  }
+
+  /**
+   * `work.budget.update` (`protocol.md` §4): the user raises a Work's budget.
+   *
+   * The limits are user decisions, so the new envelope is recorded as a `budget`
+   * Decision whose source is the user message the caller names. A limit below what is
+   * already spent or reserved is refused rather than making the ledger inconsistent
+   * (`BUDGET_EXCEEDED` is the documented "user adjusts" path).
+   */
+  private updateWorkBudget(params: JsonObject): JsonObject {
+    const workId = requiredString(params, 'workId');
+    const store = this.services.store;
+    const work = store.works.find(workId);
+    if (work === undefined) {
+      throw new ProtocolError('NOT_FOUND', `Work ${workId} does not exist`, {
+        details: { workId },
+      });
+    }
+    const budget = store.budgets.find(work.budgetId);
+    if (budget === undefined) {
+      throw new ProtocolError('INVALID_STATE', `Work ${workId} has no budget row`, {
+        details: { workId },
+      });
+    }
+    const sourceMessageId = requiredString(params, 'sourceMessageId');
+    const message = store.messages.find(sourceMessageId);
+    if (message === undefined) {
+      throw new ProtocolError('NOT_FOUND', `message ${sourceMessageId} does not exist`, {
+        details: { sourceMessageId },
+      });
+    }
+    const tokenLimit = requiredInteger(params, 'tokenLimit');
+    const timeLimit = requiredInteger(params, 'timeLimit');
+    const repairLimit = requiredInteger(params, 'repairLimit');
+    for (const [name, value] of [
+      ['tokenLimit', tokenLimit],
+      ['timeLimit', timeLimit],
+      ['repairLimit', repairLimit],
+    ] as const) {
+      if (value <= 0) {
+        throw new ProtocolError('VALIDATION_ERROR', `${name} must be positive`, {
+          details: { [name]: value },
+        });
+      }
+    }
+    if (tokenLimit < budget.tokensUsed + budget.tokensReserved) {
+      throw new ProtocolError(
+        'BUDGET_EXCEEDED',
+        `tokenLimit ${tokenLimit} is below the ${budget.tokensUsed + budget.tokensReserved} tokens already used or reserved`,
+        { details: { workId, tokenLimit, committed: budget.tokensUsed + budget.tokensReserved } },
+      );
+    }
+    const updated = store.budgets.update(
+      budget.id,
+      {
+        tokenLimit,
+        activeTimeLimit: timeLimit,
+        repairLimit,
+      },
+      budget.version,
+    );
+    const decision = store.decisions.insert({
+      workId,
+      kind: 'budget',
+      targetRef: {
+        id: workId,
+        version: updated.version,
+        hash: sha256Of({ workId, tokenLimit, timeLimit, repairLimit }),
+      },
+      choices: ['accepted'],
+      state: 'accepted',
+      choice: 'accepted',
+      actor: 'user',
+      effectRefs: [],
+    } as never);
+    store.events.append({
+      name: 'decision.created',
+      entityId: workId,
+      entityVersion: work.version,
+      data: {
+        workId,
+        decisionId: decision.id,
+        decisionKind: 'budget',
+        sourceMessageId,
+        tokenLimit,
+        timeLimit,
+        repairLimit,
+        budgetVersion: updated.version,
+      },
+    });
+    return {
+      status: 'applied',
+      entityId: workId,
+      version: updated.version,
+      workId,
+      decisionId: decision.id,
+      budget: jsonSafe(updated),
     };
   }
 
@@ -1371,6 +2689,15 @@ export class WorkbenchProtocol {
       const key = `decision:${decision.targetRef.id}:${decision.targetRef.version}`;
       if (seen.has(key)) continue;
       seen.add(key);
+      // A `permission` decision stays a decision row, but the Inbox must report the
+      // exact tool call it binds: without `operation`/`targets`/`runId`/`inputHash`
+      // the page cannot say what an approval would grant and disables approve
+      // (`protocol.md` §4/§6). The binding is read from the same `tool_operation` row
+      // `permission.request` and `tool.refused` report, never from a client payload.
+      const binding =
+        decision.kind === 'permission'
+          ? this.services.store.toolOperations.find(decision.targetRef.id)
+          : undefined;
       items.push({
         kind: 'decision',
         id: decision.id,
@@ -1384,6 +2711,14 @@ export class WorkbenchProtocol {
         // again (`experience.md` §5).
         actionable: decision.state === 'pending',
         createdAt: decision.createdAt,
+        ...(decision.kind !== 'permission'
+          ? {}
+          : {
+              operation: binding?.toolName ?? null,
+              targets: binding === undefined ? [] : [...binding.targets],
+              runId: binding?.runId ?? this.runAwaitingPermission(decision.workId) ?? null,
+              inputHash: binding?.inputHash ?? decision.targetRef.hash,
+            }),
       });
     }
     const findings = new Map<string, { count: number; workId: string; severity: string }>();
@@ -1462,8 +2797,8 @@ export class WorkbenchProtocol {
         type: provider.type,
         baseUrl: provider.baseUrl,
         enabled: provider.enabled,
-        // A secret value is never echoed; only whether one is configured.
-        secretConfigured: provider.secretRef !== undefined,
+        // A secret value is never echoed; only whether one is really registered.
+        secretConfigured: this.secretRegistered(provider.secretRef),
         models: provider.models.map((model) => model.id),
       })),
       activeRuns: this.runningRunCount(),
@@ -1480,13 +2815,13 @@ export class WorkbenchProtocol {
       version: document.version,
       revision: config.versionOf(scope),
       // `protocol.md` §5: providers exist only in the global scope, and a secret
-      // value is never echoed — only whether one is configured.
+      // value is never echoed — only whether one is really registered (WP-12 T1.1).
       providers:
         scope === 'global'
           ? document.providers.map((provider) => ({
               ...provider,
               secretRef: provider.secretRef ?? null,
-              secretConfigured: provider.secretRef !== undefined,
+              secretConfigured: this.secretRegistered(provider.secretRef),
             }))
           : undefined,
       defaultProfile: document.defaultProfile ?? null,
@@ -1564,6 +2899,10 @@ export class WorkbenchProtocol {
           artifacts: this.services.artifacts,
           blobs: this.services.blobs,
           now: this.now,
+          // `work.baseRevision` (Q-T3-4): a new Work is bound to the delivery ref the project
+          // currently points at, so an approved Plan's `requestCodeWrite` has a revision to
+          // compare against (AC-013).
+          readBaseRevision: defaultBaseRevisionReader,
         },
         {
           conversationId,
@@ -1595,9 +2934,116 @@ export class WorkbenchProtocol {
           artifactIds: [...sent.artifactIds],
         },
       });
-      if (commandId !== undefined) store.commands.complete(commandId, reply);
+      // The Chief assessment is a real queued Run, created inside this transaction and
+      // executed by the supervisor — the command itself stays synchronous (`WP-12 T2.4`).
+      const chiefRunId = this.queueChiefAssessment({
+        workId: sent.workId,
+        messageId: sent.messageId,
+        body,
+      });
+      if (commandId !== undefined) {
+        // The response shape is the documented one; the Chief Run is observable through
+        // `run.list`/`run.queued` rather than an undeclared response field.
+        store.commands.complete(commandId, reply);
+      }
+      void chiefRunId;
       return reply;
     });
+  }
+
+  /**
+   * Queues the Chief's assessment Run for one message (`WP-12 T2.4`).
+   *
+   * `data.md` §3: a `ChiefDispatchSpec` is built by Core from the user message and the Work
+   * it created, never by a model. The Run is a normal queued Run, so the supervisor's
+   * capability gateway, attempt/epoch fencing and budget accounting all apply.
+   *
+   * A Work whose role has no usable model is *not* an error for the message: the message is
+   * accepted (the user's words are never lost) and the missing Run is reported in the log.
+   * The `blocked(provider)` projection is WP-05 (DC-42).
+   *
+   * @returns the Chief Run id, or `null` when this stack cannot queue one.
+   */
+  private queueChiefAssessment(input: {
+    readonly workId: string;
+    readonly messageId: string;
+    readonly body: string;
+  }): string | null {
+    const orchestrator = this.services.orchestrator;
+    if (orchestrator === undefined) {
+      // A protocol served without an execution stack (the headless query tests) queues
+      // nothing; the message itself is still real.
+      return null;
+    }
+    const store = this.services.store;
+    const work = store.works.find(input.workId);
+    if (work === undefined) return null;
+    const budget = store.budgets.find(work.budgetId);
+    if (budget === undefined) return null;
+    const available = budget.tokenLimit - budget.tokensUsed - budget.tokensReserved;
+    if (available <= 0) {
+      this.logLine(`message.send: Work ${work.id} has no token budget left for a Chief Run`);
+      return null;
+    }
+    const goal = work.goal.slice(0, 2_000);
+    const codePaths = [...new Set([...work.scope.readPaths, ...work.scope.writePaths])];
+    const coordinating =
+      work.intent === 'delivery' || work.intent === 'document' || work.intent === 'operation';
+    try {
+      const { run } = orchestrator.dispatch({
+        spec: {
+          kind: 'chief',
+          workId: work.id,
+          role: 'chief',
+          purpose: 'analysis',
+          goal,
+          // The Chief Run's own envelope: it reads what the message named and writes only
+          // its own artifacts, so a `none`-level Work can carry it (R16-01).
+          scope: { readPaths: codePaths, writePaths: [], operations: [], networkTargets: [] },
+          stage: coordinating ? 'coordinate' : 'assist',
+          contextSelection: {
+            goal,
+            sourceRefs: [{ kind: 'message', id: input.messageId, version: '1' }],
+            reasonPerSource: {
+              [`message:${input.messageId}`]: 'the user message this work came from',
+            },
+            featureRefs: [],
+            codePaths,
+            artifactRefs: [],
+            excluded: [],
+            unknowns: [],
+            // `agents.md` §6 defaults: 24000 initial, 16000 expansion.
+            readBudget: { initialTokens: 24_000, expansionTokens: 16_000 },
+          },
+          profileRevision: orchestrator.currentProfileRevision('chief'),
+          requiredOutputs: ['assessment.submit'],
+          budgetAllocation: Math.min(CHIEF_ASSESSMENT_TOKENS, available),
+        },
+      });
+      return run.id;
+    } catch (error) {
+      // Most often `PROVIDER_UNAVAILABLE`. `experience.md` §22 requires the message to reach
+      // a terminal state instead of waiting in `received` forever (WP-12 fix round 2, P2-3):
+      // the turn failed, and the user sees exactly that.
+      const message = store.messages.find(input.messageId);
+      if (message !== undefined && message.state !== 'failed') {
+        const updated = store.messages.update(message.id, { state: 'failed' }, message.version);
+        store.events.append({
+          name: 'message.failed',
+          entityId: updated.id,
+          entityVersion: updated.version,
+          data: {
+            messageId: updated.id,
+            workId: work.id,
+            state: 'failed',
+            outcome: 'provider_unavailable',
+            reason: errorText(error),
+          },
+        });
+      }
+      this.logLine(`message.send: could not queue the Chief assessment: ${errorText(error)}`);
+      return null;
+    }
   }
 
   /**
@@ -1683,6 +3129,10 @@ export class WorkbenchProtocol {
           params: [workId],
         });
         if (parked.length > 0 && this.services.runRecovery !== undefined) {
+          // Two-phase resume (`WP11R5-01`): every parked Run must pass the durable
+          // admission gate **before** the first spawn, so a Run that cannot continue
+          // refuses the whole command instead of leaving the earlier Runs resumed and
+          // the later ones parked.
           for (const run of parked) {
             if (newAttemptAdmission(this.services.store, run.id).allowed) continue;
             const recorded = this.services.runRecovery.recordResumeDecision({ runId: run.id });
@@ -1694,8 +3144,22 @@ export class WorkbenchProtocol {
               );
             }
           }
+          for (const run of parked) {
+            const admission = newAttemptAdmission(this.services.store, run.id);
+            if (!admission.allowed) {
+              throw new ProtocolError(
+                'RECOVERY_REQUIRED',
+                admission.message ?? `Run ${run.id} 的恢复判定未放行新 Attempt`,
+                { details: { workId, runId: run.id, code: admission.code } },
+              );
+            }
+          }
           if (work.status !== 'paused') {
             // Nothing to un-pause: the parked Runs are resumed by the executor directly.
+            // Every admission check above already passed, so a failure here is a
+            // capacity/spawn race rather than a business refusal; the already-resumed
+            // Runs travel in `details` so the operation is resumable instead of opaque
+            // (`WP11R5-01`).
             const resumed: string[] = [];
             for (const run of parked) {
               const attempt = this.services.runRecovery.resumeParkedRun(run.id);
@@ -1707,13 +3171,37 @@ export class WorkbenchProtocol {
                       ? 'INVALID_STATE'
                       : 'RECOVERY_REQUIRED';
                 throw new ProtocolError(code, attempt.message ?? `Run ${run.id} 无法续跑`, {
-                  details: { workId, runId: run.id },
+                  details: {
+                    workId,
+                    runId: run.id,
+                    resumedRunIds: [...resumed],
+                    pendingRunIds: parked
+                      .filter((entry) => entry.id !== run.id && !resumed.includes(entry.id))
+                      .map((entry) => entry.id),
+                  },
                 });
               }
               resumed.push(run.id);
             }
+            // `protocol.md` §4/§7: resume answers `accepted` and emits a real
+            // `work.control_changed`, so a client driving its UI from the event stream
+            // sees the Runs leave the parked state (`WP11R5-02`).
+            this.services.store.events.append({
+              name: 'work.control_changed',
+              entityId: work.id,
+              entityVersion: work.version,
+              data: {
+                workId: work.id,
+                control: 'resume',
+                previousStatus: work.status,
+                status: work.status,
+                reason,
+                resumedRunIds: [...resumed],
+                parkedRunIds: parked.map((entry) => entry.id),
+              },
+            });
             return {
-              status: 'applied',
+              status: 'accepted',
               operationId,
               workId,
               version: work.version,
@@ -1751,6 +3239,12 @@ export class WorkbenchProtocol {
         });
         if (!result.ok) {
           throw new ProtocolError(result.code, result.message, { details: { workId } });
+        }
+        // `reliability.md` §6: a cancel stops the tools too. The findings service stops
+        // the attempt rows; the daemon-side tool process groups and the Grants those
+        // Runs held are reaped here, before the response reports the cancel as applied.
+        for (const cancelled of result.cancelledRunIds) {
+          this.services.toolBridge?.cleanupRun(cancelled);
         }
         return {
           status: 'accepted',
@@ -1890,6 +3384,976 @@ export class WorkbenchProtocol {
   }
 
   /**
+   * `requirement.archive` (`protocol.md` §4, `workflow.md` §5.1).
+   *
+   * Archiving keeps the file as history (`workflow.md` §8): the committed body and
+   * every metadata field survive, and only `lifecycle`/`previousLifecycle` change.
+   * The transition table allows `queued → archived` and `completed → archived`; an
+   * `active` requirement must be cancelled or completed first, and a requirement
+   * whose Work still has a live Run is refused rather than archived underneath it.
+   */
+  private archiveRequirement(
+    params: JsonObject,
+    options: { readonly idempotencyKey?: string },
+  ): JsonObject {
+    const requirementId = requiredString(params, 'requirementId');
+    const requirement = this.requireRequirement(requirementId);
+    const live = this.liveRunOf(requirement);
+    if (live !== null) {
+      throw new ProtocolError(
+        'INVALID_STATE',
+        `Requirement ${requirementId} still has a live Run ${live}; cancel or complete it before archiving`,
+        { details: { requirementId, runId: live, lifecycle: requirement.lifecycle } },
+      );
+    }
+    if (requirement.lifecycle !== 'queued' && requirement.lifecycle !== 'completed') {
+      throw new ProtocolError(
+        'INVALID_STATE',
+        `Requirement ${requirementId} is ${requirement.lifecycle}; only a Queued or Completed requirement archives (workflow.md §5.1)`,
+        { details: { requirementId, lifecycle: requirement.lifecycle } },
+      );
+    }
+    return this.writeRequirementLifecycle(params, options, {
+      lifecycle: 'archived',
+      previousLifecycle: requirement.lifecycle,
+      kind: 'archive',
+    });
+  }
+
+  /**
+   * `requirement.restore` (`protocol.md` §4, `workflow.md` §5.1).
+   *
+   * Only an archived record restores, and only to the state it was archived from
+   * (`previousLifecycle`: queued or completed). An archived record without that fact
+   * cannot be restored, and restoring a non-archived requirement is refused.
+   */
+  private restoreRequirement(
+    params: JsonObject,
+    options: { readonly idempotencyKey?: string },
+  ): JsonObject {
+    const requirementId = requiredString(params, 'requirementId');
+    const requirement = this.requireRequirement(requirementId);
+    if (requirement.lifecycle !== 'archived') {
+      throw new ProtocolError(
+        'INVALID_STATE',
+        `Requirement ${requirementId} is ${requirement.lifecycle}; only an archived requirement restores`,
+        { details: { requirementId, lifecycle: requirement.lifecycle } },
+      );
+    }
+    const previous = requirement.previousLifecycle;
+    if (previous !== 'queued' && previous !== 'completed') {
+      throw new ProtocolError(
+        'INVALID_STATE',
+        `Requirement ${requirementId} records no restorable previous lifecycle (workflow.md §5.1)`,
+        { details: { requirementId, previousLifecycle: previous ?? null } },
+      );
+    }
+    return this.writeRequirementLifecycle(params, options, {
+      lifecycle: previous,
+      kind: 'restore',
+      clearPreviousLifecycle: true,
+    });
+  }
+
+  private requireRequirement(requirementId: string): Requirement {
+    const requirement = this.services.store.requirements.find(requirementId);
+    if (requirement === undefined) {
+      throw new ProtocolError('NOT_FOUND', `Requirement ${requirementId} does not exist`, {
+        details: { requirementId },
+      });
+    }
+    return requirement;
+  }
+
+  /** The id of one non-terminal Run of a requirement's Work, or `null` (`workflow.md` §5.3). */
+  private liveRunOf(requirement: Requirement): string | null {
+    if (requirement.workId === undefined) return null;
+    const runs = this.services.store.runs.list({
+      where: 'work_id = ?',
+      params: [requirement.workId],
+    });
+    const live = runs.find((run) => !TERMINAL_RUN_STATES.includes(run.status));
+    return live?.id ?? null;
+  }
+
+  /**
+   * Writes one lifecycle change to the Git record and the projection
+   * (`protocol.md` §4/§8).
+   *
+   * The committed record is read back first so the archive keeps every metadata
+   * field and content section (`workflow.md` §8 "归档/取消保留文件作为历史记录"); only
+   * the lifecycle facts change. A save always answers `accepted` after the real
+   * service reports the commit, and `requirement.saved` is the service's own event.
+   */
+  private writeRequirementLifecycle(
+    params: JsonObject,
+    options: { readonly idempotencyKey?: string },
+    change: {
+      readonly lifecycle: 'queued' | 'completed' | 'archived';
+      readonly previousLifecycle?: 'queued' | 'completed';
+      readonly kind: 'archive' | 'restore';
+      readonly clearPreviousLifecycle?: boolean;
+    },
+  ): JsonObject {
+    const requirementId = requiredString(params, 'requirementId');
+    const requirement = this.requireRequirement(requirementId);
+    const saves = this.services.requirementSaves;
+    if (saves === undefined) {
+      throw new ProtocolError(
+        'INVALID_STATE',
+        'requirement lifecycle changes need the Git record service, which is not wired on this daemon',
+        { details: { requirementId } },
+      );
+    }
+    const operationId =
+      options.idempotencyKey ??
+      optionalString(params['operationId']) ??
+      this.services.store.newId();
+    const now = this.services.store.now();
+    const record = this.readRequirementRecord(requirement);
+    const base =
+      record === null
+        ? {
+            schemaVersion: 1 as const,
+            id: requirement.id,
+            contentFile: 'content.md' as const,
+            createdAt: requirement.createdAt,
+            title: requirement.title,
+            goal: requirement.goal,
+            scope: emptyScope(),
+            featureIds: [],
+            acceptance: [],
+            openQuestions: [],
+            confirmedDecisions: [],
+            relatedRequirementIds: [],
+          }
+        : stripRecordBody(record);
+    const { previousLifecycle: _previous, ...baseWithoutPrevious } = base;
+    const metadata = {
+      ...(change.clearPreviousLifecycle === true ? baseWithoutPrevious : base),
+      version: requirement.recordVersion + 1,
+      updatedAt: now,
+      lifecycle: change.lifecycle,
+      ...(change.previousLifecycle === undefined
+        ? {}
+        : { previousLifecycle: change.previousLifecycle }),
+    } as Parameters<RequirementSaveService['save']>[0]['metadata'];
+    const contentMarkdown =
+      record?.contentMarkdown ??
+      canonicalRequirementContent({
+        title: requirement.title,
+        goal: requirement.goal,
+        completion: REQUIREMENT_EMPTY_SECTION,
+      });
+    const outcome = saves.save({
+      operationId,
+      metadata,
+      contentMarkdown,
+      expected: {
+        recordVersion: requirement.recordVersion,
+        recordHash: requirement.portableRef.hash,
+      },
+      sourceRef: this.sourceRefOf(params, 'action'),
+      kind: change.kind,
+    });
+    if (!outcome.ok) {
+      throw new ProtocolError(outcome.code, outcome.message, {
+        details: {
+          requirementId,
+          reasons: [...outcome.reasons],
+          branchUntouched: outcome.branchUntouched,
+          recovery: jsonSafe(outcome.operation ?? null),
+        },
+      });
+    }
+    return {
+      status: 'accepted',
+      operationId,
+      version: outcome.row.version,
+      requirementId: outcome.requirementId,
+      lifecycle: outcome.row.lifecycle,
+      previousLifecycle: outcome.row.previousLifecycle ?? null,
+      git: jsonSafe(outcome.git),
+    };
+  }
+
+  /**
+   * `requirement.create` (`protocol.md` §4).
+   *
+   * The documented create shape is the same write as `requirement.save` without a
+   * `requirementId`, so it delegates to the real save service and answers the
+   * documented `accepted` envelope. `requirement.saved` is emitted by the service
+   * after Git committed (`protocol.md` §8).
+   */
+  private createRequirement(
+    params: JsonObject,
+    options: { readonly idempotencyKey?: string },
+  ): JsonObject {
+    const saveParams: JsonObject = {
+      patch: {
+        title: requiredString(params, 'title'),
+        goal: requiredString(params, 'goal'),
+        scope: objectField(params, 'scope'),
+        contentMarkdown: requiredString(params, 'contentMarkdown'),
+      },
+      ...(optionalString(params['sourceMessageId']) === undefined
+        ? {}
+        : { sourceMessageId: params['sourceMessageId'] as string }),
+    };
+    return this.documentedRequirementSave(saveParams, options);
+  }
+
+  /**
+   * `requirement.update` (`protocol.md` §4).
+   *
+   * The patch keeps the documented `PortableRequirement` field types; every field the
+   * request omits keeps its committed value because the save reads the record back
+   * first (`protocol.md` §8, W9R2-02).
+   */
+  private updateRequirement(
+    params: JsonObject,
+    options: { readonly idempotencyKey?: string },
+  ): JsonObject {
+    const saveParams: JsonObject = {
+      requirementId: requiredString(params, 'requirementId'),
+      patch: objectField(params, 'patch'),
+      ...(optionalString(params['sourceMessageId']) === undefined
+        ? {}
+        : { sourceMessageId: params['sourceMessageId'] as string }),
+    };
+    return this.documentedRequirementSave(saveParams, options);
+  }
+
+  /** Runs the real save and rewrites its `applied` answer as the documented `accepted`. */
+  private documentedRequirementSave(
+    saveParams: JsonObject,
+    options: { readonly idempotencyKey?: string },
+  ): JsonObject {
+    const result = this.saveRequirement(saveParams, options, false);
+    return { ...result, status: 'accepted' };
+  }
+
+  /**
+   * `requirement.import` (`protocol.md` §4/§8, AC-092).
+   *
+   * The current delivery revision's committed pool is re-read and applied through the
+   * same `RequirementProjection` the save path uses, so conflict detection and the
+   * `requirement.imported` event are the shared ones. A per-record conflict does not
+   * abort the rest: the valid records are imported and the conflicting ones are
+   * reported (`protocol.md` §8 "其他有效条仍可查询").
+   */
+  private importRequirement(params: JsonObject): JsonObject {
+    const revision = requiredString(params, 'revision');
+    const project = this.services.store.projects.find(this.projectId);
+    const root = project?.gitRoot ?? project?.root;
+    if (root === undefined || root === '') {
+      throw new ProtocolError('INVALID_STATE', 'this Project has no Git root to import from', {
+        details: { projectId: this.projectId },
+      });
+    }
+    const pool = this.requirementPool.read(root, revision);
+    const projection = new RequirementProjection({ store: this.services.store });
+    const imported: JsonObject[] = [];
+    const conflicts: JsonObject[] = pool.conflicts.map((conflict) => ({
+      recordPath: conflict.recordPath,
+      reason: conflict.reason,
+      message: conflict.message,
+    }));
+    for (const record of pool.records) {
+      let metadata: unknown;
+      try {
+        metadata = JSON.parse(record.metadataJson);
+      } catch (error) {
+        conflicts.push({
+          recordPath: record.recordPath,
+          reason: 'invalid-metadata',
+          message: errorText(error),
+        });
+        continue;
+      }
+      if (typeof metadata !== 'object' || metadata === null || Array.isArray(metadata)) {
+        conflicts.push({
+          recordPath: record.recordPath,
+          reason: 'invalid-metadata',
+          message: 'requirement.json is not an object',
+        });
+        continue;
+      }
+      const outcome = projection.import({
+        record: { ...(metadata as JsonObject), contentMarkdown: record.contentMarkdown },
+        rawMetadata: record.metadataJson,
+        portableRef: { path: record.recordPath, revision },
+        recordCommitted: true,
+      });
+      if (outcome.verdict === 'conflict') {
+        conflicts.push({
+          recordPath: record.recordPath,
+          reason: 'REQUIREMENT_CONFLICT',
+          message: outcome.conflict.reason,
+          requirementId: outcome.conflict.requirementId,
+        });
+        continue;
+      }
+      imported.push({
+        requirementId: outcome.requirementId,
+        recordVersion: outcome.recordVersion,
+        recordHash: outcome.recordHash,
+        verdict: outcome.verdict,
+        lifecycle: outcome.row?.lifecycle ?? null,
+      });
+    }
+    return {
+      status: 'accepted',
+      revision,
+      imported,
+      conflicts,
+      // `protocol.md` §8: an unresolved conflict blocks writes to that record only,
+      // and the caller sees that fact instead of a silent partial success.
+      writeBlocked: conflicts.length > 0,
+      total: pool.records.length,
+    };
+  }
+
+  /**
+   * `requirement.start` (`protocol.md` §4, `workflow.md` §8).
+   *
+   * The documented order is load-bearing: the `workId` is pre-allocated, the record is
+   * committed as `active` **with** that binding, the Work row exists, and only then is
+   * a Run admitted. A Queued record with a Work already, or one that is not Queued, is
+   * the documented `INVALID_STATE`.
+   */
+  private startRequirement(
+    params: JsonObject,
+    options: { readonly idempotencyKey?: string },
+  ): JsonObject {
+    const requirementId = requiredString(params, 'requirementId');
+    const requirement = this.requireRequirement(requirementId);
+    if (requirement.workId !== undefined) {
+      throw new ProtocolError(
+        'INVALID_STATE',
+        `Requirement ${requirementId} already has Work ${requirement.workId}`,
+        { details: { requirementId, workId: requirement.workId } },
+      );
+    }
+    if (requirement.lifecycle !== 'queued') {
+      throw new ProtocolError(
+        'INVALID_STATE',
+        `Requirement ${requirementId} is ${requirement.lifecycle}; only a Queued requirement starts`,
+        { details: { requirementId, lifecycle: requirement.lifecycle } },
+      );
+    }
+    const saves = this.services.requirementSaves;
+    if (saves === undefined) {
+      throw new ProtocolError(
+        'INVALID_STATE',
+        'requirement.start needs the Git record service, which is not wired on this daemon',
+        { details: { requirementId } },
+      );
+    }
+    const store = this.services.store;
+    const operationId =
+      options.idempotencyKey ?? optionalString(params['operationId']) ?? store.newId();
+    const workId = store.newId();
+    const budgetPatch = objectField(params, 'budget');
+    const now = store.now();
+    const record = this.readRequirementRecord(requirement);
+    const base =
+      record === null
+        ? {
+            schemaVersion: 1 as const,
+            id: requirement.id,
+            contentFile: 'content.md' as const,
+            createdAt: requirement.createdAt,
+            title: requirement.title,
+            goal: requirement.goal,
+            scope: emptyScope(),
+            featureIds: [],
+            acceptance: [],
+            openQuestions: [],
+            confirmedDecisions: [],
+            relatedRequirementIds: [],
+          }
+        : stripRecordBody(record);
+    const metadata = {
+      ...base,
+      version: requirement.recordVersion + 1,
+      updatedAt: now,
+      lifecycle: 'active' as const,
+    } as Parameters<RequirementSaveService['save']>[0]['metadata'];
+    const contentMarkdown =
+      record?.contentMarkdown ??
+      canonicalRequirementContent({
+        title: requirement.title,
+        goal: requirement.goal,
+        completion: REQUIREMENT_EMPTY_SECTION,
+      });
+    // The Work exists before the requirement row is re-projected, because the
+    // projection's `work_id` is a foreign key into `work` (`data.md` §2).
+    const budget = store.budgets.insert({
+      projectId: this.projectId,
+      workId,
+      tokenLimit:
+        optionalInteger(budgetPatch['tokenLimit']) ?? LIMITS.workInputOutputTokens.default,
+      tokensUsed: 0,
+      tokensReserved: 0,
+      activeTimeLimit:
+        optionalInteger(budgetPatch['timeLimit']) ?? LIMITS.workActiveTimeSec.default,
+      activeTimeUsed: 0,
+      repairLimit: optionalInteger(budgetPatch['repairLimit']) ?? LIMITS.reviewRepairRounds.default,
+      repairUsed: 0,
+      costKnown: true,
+    });
+    const project = store.projects.find(this.projectId);
+    const baseRevision = project === undefined ? undefined : defaultBaseRevisionReader(project);
+    store.works.insert({
+      id: workId,
+      projectId: this.projectId,
+      requirementId,
+      intent: 'delivery',
+      purpose: requirement.title.slice(0, 200),
+      level: 'L2',
+      goal: requirement.goal.slice(0, 2_000),
+      scope: record?.scope ?? emptyScope(),
+      sourceRef: this.sourceRefOf(params, 'action'),
+      status: 'queued',
+      blockerIds: [],
+      ...(baseRevision === undefined ? {} : { baseRevision }),
+      budgetId: budget.id,
+      policyRevision: 1,
+    } as never);
+    const outcome = saves.save({
+      operationId,
+      metadata,
+      contentMarkdown,
+      expected: {
+        recordVersion: requirement.recordVersion,
+        recordHash: requirement.portableRef.hash,
+      },
+      sourceRef: this.sourceRefOf(params, 'action'),
+      kind: 'start',
+      workId,
+    });
+    if (!outcome.ok) {
+      throw new ProtocolError(outcome.code, outcome.message, {
+        details: {
+          requirementId,
+          workId,
+          reasons: [...outcome.reasons],
+          branchUntouched: outcome.branchUntouched,
+          recovery: jsonSafe(outcome.operation ?? null),
+        },
+      });
+    }
+    // Only after the Git record is `active` and the Work exists may a Run be admitted
+    // (`workflow.md` §8). The Chief's Run is the real queued Run; a stack without a
+    // model gateway still answers `accepted` and reports the missing Run honestly.
+    const runId = this.queueRequirementStartRun({ workId, goal: requirement.goal });
+    return {
+      status: 'accepted',
+      operationId,
+      version: outcome.row.version,
+      requirementId,
+      lifecycle: outcome.row.lifecycle,
+      workId,
+      runId,
+      git: jsonSafe(outcome.git),
+      portableRef: outcome.row.portableRef,
+    };
+  }
+
+  /** Queues the Chief's Run for a started requirement (same path as a message's assessment). */
+  private queueRequirementStartRun(input: {
+    readonly workId: string;
+    readonly goal: string;
+  }): string | null {
+    return this.queueChiefRun({
+      workId: input.workId,
+      goal: input.goal,
+      sourceRefId: this.services.store.works.find(input.workId)?.sourceRef.id ?? input.workId,
+      reason: '需求启动的用户动作',
+      label: 'requirement.start',
+    });
+  }
+
+  /**
+   * Queues one new Chief Run for a Work (`protocol.md` §4 `work.retry`, §6).
+   *
+   * A Chief Run is the generic "work on this Work again" entry: it carries the user's
+   * source reference, reads the Work's own envelope and answers with the next
+   * Assessment or dispatch, so a retry never fabricates a professional spec. The
+   * caller decides whether a retry is admissible; this only produces the Run.
+   */
+  private queueChiefRun(input: {
+    readonly workId: string;
+    readonly goal: string;
+    readonly sourceRefId: string;
+    readonly reason: string;
+    readonly label: string;
+    readonly authorizationRef?: string;
+  }): string | null {
+    const orchestrator = this.services.orchestrator;
+    if (orchestrator === undefined) return null;
+    const store = this.services.store;
+    const work = store.works.find(input.workId);
+    if (work === undefined) return null;
+    const budget = store.budgets.find(work.budgetId);
+    if (budget === undefined) return null;
+    const available = budget.tokenLimit - budget.tokensUsed - budget.tokensReserved;
+    if (available <= 0) return null;
+    const goal = input.goal.slice(0, 2_000);
+    const codePaths = [...new Set([...work.scope.readPaths, ...work.scope.writePaths])];
+    const coordinating =
+      work.intent === 'delivery' || work.intent === 'document' || work.intent === 'operation';
+    try {
+      const { run } = orchestrator.dispatch({
+        ...(input.authorizationRef === undefined
+          ? {}
+          : { authorizationRef: input.authorizationRef }),
+        spec: {
+          kind: 'chief',
+          workId: work.id,
+          role: 'chief',
+          purpose: 'analysis',
+          goal,
+          scope: { readPaths: codePaths, writePaths: [], operations: [], networkTargets: [] },
+          stage: coordinating ? 'coordinate' : 'assist',
+          contextSelection: {
+            goal,
+            sourceRefs: [{ kind: 'action', id: input.sourceRefId, version: '1' }],
+            reasonPerSource: {
+              [`action:${input.sourceRefId}`]: input.reason,
+            },
+            featureRefs: [],
+            codePaths,
+            artifactRefs: [],
+            excluded: [],
+            unknowns: [],
+            readBudget: { initialTokens: 24_000, expansionTokens: 16_000 },
+          },
+          profileRevision: orchestrator.currentProfileRevision('chief'),
+          requiredOutputs: ['assessment.submit'],
+          budgetAllocation: Math.min(CHIEF_ASSESSMENT_TOKENS, available),
+        },
+      });
+      return run.id;
+    } catch (error) {
+      this.logLine(
+        `${input.label}: could not queue the Chief Run for Work ${work.id}: ${errorText(error)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * `work.retry` (`protocol.md` §4): starts a new Run for a finished Work.
+   *
+   * `workflow.md` §5.1 allows a failed Work to continue with a new Run attempt while
+   * keeping the original failure evidence, and `reliability.md` §6 requires the
+   * unknown-side-effect precondition: while any Run is parked with an unresolved
+   * recovery verdict, or any Run is still live/parked, the retry is refused with a
+   * typed error instead of opening a second writer.
+   */
+  private retryWork(params: JsonObject, options: { readonly idempotencyKey?: string }): JsonObject {
+    const workId = requiredString(params, 'workId');
+    const reason = optionalString(params['reason']) ?? '';
+    const store = this.services.store;
+    const work = store.works.find(workId);
+    if (work === undefined) {
+      throw new ProtocolError('NOT_FOUND', `Work ${workId} does not exist`, {
+        details: { workId },
+      });
+    }
+    const orchestrator = this.services.orchestrator;
+    if (orchestrator === undefined) {
+      throw new ProtocolError(
+        'PROVIDER_UNAVAILABLE',
+        'work.retry needs the execution stack to queue a new Run',
+        { details: { workId } },
+      );
+    }
+    const runs = store.runs.list({ where: 'work_id = ?', params: [workId] });
+    const recovery = runs.find((run) => run.status === 'recovery_required');
+    if (recovery !== undefined) {
+      // The documented precondition: a Run whose side effects are not confirmed must
+      // be resolved (`recovery.resolve`) before any retry may write again.
+      throw new ProtocolError(
+        'RECOVERY_REQUIRED',
+        `Work ${workId} still has an unresolved recovery Run ${recovery.id}`,
+        { details: { workId, runId: recovery.id } },
+      );
+    }
+    const live = runs.find((run) => !TERMINAL_RUN_STATES.includes(run.status));
+    if (live !== undefined) {
+      throw new ProtocolError(
+        'INVALID_STATE',
+        `Work ${workId} still has Run ${live.id} in ${live.status}; resolve it before retrying`,
+        { details: { workId, runId: live.id, status: live.status } },
+      );
+    }
+    const budget = store.budgets.find(work.budgetId);
+    if (budget === undefined) {
+      throw new ProtocolError('INVALID_STATE', `Work ${workId} has no budget row`, {
+        details: { workId },
+      });
+    }
+    if (budget.tokenLimit - budget.tokensUsed - budget.tokensReserved <= 0) {
+      throw new ProtocolError('BUDGET_EXCEEDED', `Work ${workId} has no token budget left`, {
+        details: { workId, tokenLimit: budget.tokenLimit, tokensUsed: budget.tokensUsed },
+      });
+    }
+    const operationId = options.idempotencyKey ?? store.newId();
+    const action = this.recordUserAction('work.retry', workId, {
+      workId,
+      reason,
+      previousRunIds: runs.map((run) => run.id),
+    });
+    // A retry is a user decision, so it carries its own authorization for the Work's
+    // own scope (`rules/agents.md` §1: the Chief Run runs under a declared authority).
+    const authorization = store.authorizations.insert({
+      projectId: this.projectId,
+      sourceRef: { kind: 'action', id: action.id, version: '1' },
+      workId,
+      goal: reason === '' ? `重试工作：${work.goal}` : reason,
+      scope: work.scope,
+      operations: [...work.scope.operations],
+      acceptedAt: store.now(),
+    });
+    const resumed = this.queueChiefRun({
+      workId,
+      goal: work.goal,
+      sourceRefId: action.id,
+      reason: reason === '' ? '用户要求重试该工作' : reason,
+      label: 'work.retry',
+      authorizationRef: authorization.id,
+    });
+    if (resumed === null) {
+      throw new ProtocolError(
+        'PROVIDER_UNAVAILABLE',
+        `Work ${workId} could not queue a retry Run (no usable model or budget)`,
+        { details: { workId } },
+      );
+    }
+    return {
+      status: 'accepted',
+      operationId,
+      workId,
+      runId: resumed,
+      authorizationId: authorization.id,
+      reason,
+      previousRunIds: runs.map((run) => run.id),
+      reusedEvidence: false,
+    };
+  }
+
+  /**
+   * `recovery.inspect` (`protocol.md` §4, `reliability.md` §6).
+   *
+   * The report is produced exactly once, by the restart recovery that parks the Run
+   * (`RunRecoveryService.recordRestart`), which freezes the addresses in one
+   * `recover` operation row and emits `recovery.report_ready` in the same
+   * transaction. `inspect` therefore **returns the existing reports** — it never
+   * builds a second report and never emits a second event — so a client sees one
+   * `recovery.report_ready` per report (`protocol.md` §7 "恰好一次").
+   */
+  private inspectRecovery(
+    params: JsonObject,
+    options: { readonly idempotencyKey?: string },
+  ): JsonObject {
+    const workId = requiredString(params, 'workId');
+    const store = this.services.store;
+    const work = store.works.find(workId);
+    if (work === undefined) {
+      throw new ProtocolError('NOT_FOUND', `Work ${workId} does not exist`, {
+        details: { workId },
+      });
+    }
+    const reports: JsonObject[] = [];
+    const operations = store.operations.list({
+      where: 'kind = ?',
+      params: ['recover'],
+      orderBy: 'created_at DESC',
+    });
+    for (const operation of operations) {
+      const addresses = operation.stepResults['reports'];
+      if (!Array.isArray(addresses)) continue;
+      for (const raw of addresses) {
+        const address = recordOf(raw);
+        if (address?.['workId'] !== workId) continue;
+        reports.push(
+          jsonSafe({
+            runId: typeof address['runId'] === 'string' ? address['runId'] : null,
+            workId,
+            reportRef: recordOf(address['reportRef']) ?? null,
+            reportHash: typeof address['hash'] === 'string' ? address['hash'] : null,
+          }),
+        );
+      }
+    }
+    if (reports.length === 0) {
+      throw new ProtocolError(
+        'INVALID_STATE',
+        `Work ${workId} has no frozen recovery report; the report is produced by restart recovery`,
+        { details: { workId } },
+      );
+    }
+    const operationId = options.idempotencyKey ?? store.newId();
+    return { status: 'accepted', operationId, workId, reports };
+  }
+
+  /**
+   * `recovery.resolve` (`protocol.md` §4, `reliability.md` §6).
+   *
+   * The named report is read back and its `expectedVersions` are compared with the
+   * live Run/Attempt/Work before anything is applied; a moved target is the
+   * documented `STALE_ARTIFACT` rather than a resolution against stale evidence. The
+   * three documented choices are: `resume` (record the resume decision and open the
+   * next Attempt), `accept_cancel` (cancel through the pending recovery Decision) and
+   * `abandon` (stop the work while keeping the unresolved external effects on record).
+   */
+  private resolveRecovery(
+    params: JsonObject,
+    options: { readonly idempotencyKey?: string },
+  ): JsonObject {
+    const workId = requiredString(params, 'workId');
+    const choice = requiredString(params, 'choice');
+    if (choice !== 'resume' && choice !== 'accept_cancel' && choice !== 'abandon') {
+      throw new ProtocolError(
+        'VALIDATION_ERROR',
+        `choice ${choice} must be resume, accept_cancel or abandon`,
+        { details: { choice } },
+      );
+    }
+    const reportRef = objectField(params, 'reportRef');
+    const reportId = requiredString(reportRef, 'id');
+    const reportHash = requiredString(reportRef, 'hash');
+    const store = this.services.store;
+    const work = store.works.find(workId);
+    if (work === undefined) {
+      throw new ProtocolError('NOT_FOUND', `Work ${workId} does not exist`, {
+        details: { workId },
+      });
+    }
+    // The report is addressed by the `recover` operation row that froze it
+    // (`RunRecoveryService.recordRestart`); the row's `stepResults.reports[]` holds
+    // the address, and the `recovery.report_ready` event of the same transaction
+    // holds the report's `expectedVersions`. Reading both is what lets this command
+    // verify the target before applying anything — and it never re-emits the event.
+    const reportOperation = store.operations.find(reportId);
+    if (reportOperation === undefined || reportOperation.kind !== 'recover') {
+      throw new ProtocolError('NOT_FOUND', `recovery report ${reportId} does not exist`, {
+        details: { workId, reportRef },
+      });
+    }
+    const addresses = reportOperation.stepResults['reports'];
+    const address = Array.isArray(addresses)
+      ? addresses
+          .map((entry) => recordOf(entry))
+          .find((entry) => entry?.['hash'] === reportHash && entry['workId'] === workId)
+      : undefined;
+    if (address === undefined) {
+      throw new ProtocolError(
+        'NOT_FOUND',
+        `recovery report ${reportHash} is not recorded for Work ${workId}`,
+        { details: { workId, reportRef } },
+      );
+    }
+    const runId = typeof address['runId'] === 'string' ? address['runId'] : null;
+    const ready = store.events
+      .readAfter(0, { limit: 2_000 })
+      .filter((event) => event.name === 'recovery.report_ready')
+      .find(
+        (event) =>
+          event.data['reportHash'] === reportHash &&
+          event.data['workId'] === workId &&
+          event.data['runId'] === runId,
+      );
+    if (ready === undefined) {
+      throw new ProtocolError(
+        'STALE_ARTIFACT',
+        `recovery report ${reportHash} has no durable report_ready record`,
+        { details: { workId, runId, reportRef } },
+      );
+    }
+    // `reliability.md` §6: the report carries the versions it was built from, so the
+    // resolution is applied only while the target still matches them.
+    const expected = recordOf(ready.data['expectedVersions']) as JsonObject | undefined;
+    const currentRun = runId === null ? undefined : store.runs.find(runId);
+    const latestAttempt =
+      runId === null
+        ? undefined
+        : store.attempts
+            .list({ where: 'run_id = ?', params: [runId], orderBy: 'number ASC' })
+            .at(-1);
+    const drift: JsonObject = {};
+    if (expected !== undefined) {
+      if (
+        expected['run'] !== undefined &&
+        currentRun !== undefined &&
+        expected['run'] !== currentRun.version
+      ) {
+        drift['run'] = { expected: expected['run'], current: currentRun.version };
+      }
+      if (
+        expected['attempt'] !== null &&
+        expected['attempt'] !== undefined &&
+        (latestAttempt?.version ?? null) !== expected['attempt']
+      ) {
+        drift['attempt'] = {
+          expected: expected['attempt'],
+          current: latestAttempt?.version ?? null,
+        };
+      }
+      if (
+        expected['work'] !== null &&
+        expected['work'] !== undefined &&
+        expected['work'] !== work.version
+      ) {
+        drift['work'] = { expected: expected['work'], current: work.version };
+      }
+    }
+    if (Object.keys(drift).length > 0) {
+      throw new ProtocolError(
+        'STALE_ARTIFACT',
+        `recovery report ${reportId} was built for a different target version`,
+        { details: { workId, runId, drifted: drift } },
+      );
+    }
+    const operationId = options.idempotencyKey ?? store.newId();
+    // A pending `recovery` Decision is the Work-level disposition path
+    // (`FindingService.resolveCancellation`); `resume` also works for a parked Run.
+    const pending = store.decisions
+      .list({
+        where: 'work_id = ? AND kind = ?',
+        params: [workId, 'recovery'],
+        orderBy: 'created_at ASC',
+      })
+      .filter((decision) => decision.state === 'pending')
+      .at(-1);
+    if (pending !== undefined) {
+      const resolved = this.requireFindings().resolveCancellation({
+        workId,
+        decisionId: pending.id,
+        disposition: choice,
+      });
+      if (!resolved.ok) {
+        throw new ProtocolError(resolved.code, resolved.message, {
+          details: { workId, runId, decisionId: pending.id, choice },
+        });
+      }
+      return {
+        status: 'accepted',
+        operationId,
+        workId,
+        runId,
+        choice,
+        reportRef,
+        decisionId: pending.id,
+        workStatus: resolved.status,
+        cancelledRunIds: [...resolved.cancelledRunIds],
+        preservedArtifactIds: [...resolved.preservedArtifactIds],
+        requirementStatus: resolved.requirementStatus,
+      };
+    }
+    if (choice !== 'resume') {
+      throw new ProtocolError(
+        'INVALID_STATE',
+        `Work ${workId} has no pending recovery decision to ${choice}`,
+        { details: { workId, runId, choice } },
+      );
+    }
+    const port = this.services.runRecovery;
+    if (port === undefined || runId === null) {
+      throw new ProtocolError(
+        'PROVIDER_UNAVAILABLE',
+        'recovery.resolve resume needs the execution stack and a Run',
+        { details: { workId, runId } },
+      );
+    }
+    if (!newAttemptAdmission(store, runId).allowed) {
+      const recorded = port.recordResumeDecision({ runId });
+      if (!recorded.ok) {
+        throw new ProtocolError(
+          recorded.code === 'NOT_FOUND' ? 'NOT_FOUND' : 'RECOVERY_REQUIRED',
+          recorded.message ?? `Run ${runId} 需要恢复决定`,
+          { details: { workId, runId } },
+        );
+      }
+    }
+    const attempt = port.resumeParkedRun(runId);
+    if (!attempt.ok) {
+      throw new ProtocolError(
+        attempt.code === 'BUSY' ? 'BUSY' : 'RECOVERY_REQUIRED',
+        attempt.message ?? `Run ${runId} 无法续跑`,
+        { details: { workId, runId } },
+      );
+    }
+    store.events.append({
+      name: 'work.control_changed',
+      entityId: workId,
+      entityVersion: work.version,
+      data: { workId, control: 'recovery_resolve', choice, runId, reportRef },
+    });
+    return {
+      status: 'accepted',
+      operationId,
+      workId,
+      runId,
+      choice,
+      reportRef,
+      resumedRunIds: [runId],
+    };
+  }
+
+  /**
+   * `task.list` (`protocol.md` §4): the Task DAG of one Work.
+   *
+   * The tasks are the rows `plan.approve` materialised from the approved Plan
+   * (`data.md` §2), so the list is the Plan's executable units with their live stage.
+   */
+  private listTasks(params: JsonObject): unknown {
+    const workId = requiredString(params, 'workId');
+    const store = this.services.store;
+    if (store.works.find(workId) === undefined) {
+      throw new ProtocolError('NOT_FOUND', `Work ${workId} does not exist`, {
+        details: { workId },
+      });
+    }
+    const tasks = store.tasks.list({
+      where: 'work_id = ?',
+      params: [workId],
+      orderBy: 'created_at ASC',
+    });
+    return {
+      items: tasks.map((task) => ({
+        ...task,
+        runCount: store.runs.count('task_id = ?', [task.id]),
+      })),
+      nextCursor: null,
+    };
+  }
+
+  /** `task.get` (`protocol.md` §4): one Task and its Runs. */
+  private getTask(params: JsonObject): unknown {
+    const taskId = requiredString(params, 'taskId');
+    const store = this.services.store;
+    const task = store.tasks.find(taskId);
+    if (task === undefined) {
+      throw new ProtocolError('NOT_FOUND', `Task ${taskId} does not exist`, {
+        details: { taskId },
+      });
+    }
+    return {
+      task,
+      work: store.works.find(task.workId) ?? null,
+      runs: store.runs.list({
+        where: 'task_id = ?',
+        params: [taskId],
+        orderBy: 'created_at ASC',
+      }),
+    };
+  }
+
+  /**
    * Reads the committed record behind a projection row (W9R2-02/W9R2-03).
    *
    * The projection carries the record identity and version but not the portable
@@ -2017,10 +4481,59 @@ export class WorkbenchProtocol {
     // field, so it must never be filled from `sourceRef`, which is a source
     // reference and not a `Scope` (T4 §4.2, W9R1-05).
     const requestedScope = patch['scope'] ?? record?.scope ?? emptyScope();
-    const lifecycle = (optionalString(patch['lifecycle']) ??
+    const requestedLifecycle = optionalString(patch['lifecycle']);
+    const lifecycle = (requestedLifecycle ??
       record?.lifecycle ??
       existing?.lifecycle ??
       'queued') as 'queued' | 'active' | 'completed' | 'cancelled' | 'archived';
+    // The committed state machine is enforced on the write, not discovered later in
+    // Git: `workflow.md` §5.1 fixes the legal transitions, and a request outside it
+    // is the documented INVALID_STATE rather than a record that cannot be replayed.
+    if (
+      requestedLifecycle !== undefined &&
+      existing !== undefined &&
+      requestedLifecycle !== existing.lifecycle &&
+      !(REQUIREMENT_LIFECYCLE_TRANSITIONS[existing.lifecycle] ?? []).includes(requestedLifecycle)
+    ) {
+      throw new ProtocolError(
+        'INVALID_STATE',
+        `Requirement ${existing.id} cannot move ${existing.lifecycle} → ${requestedLifecycle} (workflow.md §5.1)`,
+        {
+          details: {
+            requirementId: existing.id,
+            lifecycle: existing.lifecycle,
+            requestedLifecycle,
+            preservedInput: params,
+          },
+        },
+      );
+    }
+    // A completion write needs the real completion fact (`requirements.md` §2: a
+    // completed record always carries its summary/revision/tree). The daemon does not
+    // invent one, so a request that reaches for `completed` without it is refused with
+    // the documented "gate not ready" code the UI can render (`protocol.md` §7).
+    const requestedCompletion = patch['completion'] ?? record?.completion;
+    const previousLifecycle =
+      optionalString(patch['previousLifecycle']) ??
+      record?.previousLifecycle ??
+      (lifecycle === 'archived' &&
+      (existing?.lifecycle === 'queued' || existing?.lifecycle === 'completed')
+        ? existing.lifecycle
+        : undefined);
+    if (lifecycle === 'completed' && requestedCompletion === undefined) {
+      throw new ProtocolError(
+        'GATE_NOT_READY',
+        `Requirement ${id} cannot be completed without its completion fact (requirements.md §2, workflow.md §7)`,
+        {
+          details: {
+            requirementId: id,
+            lifecycle: existing?.lifecycle ?? 'queued',
+            required: 'patch.completion',
+            preservedInput: params,
+          },
+        },
+      );
+    }
     const metadata = {
       schemaVersion: 1 as const,
       id,
@@ -2037,10 +4550,8 @@ export class WorkbenchProtocol {
       // Lifecycle facts recorded on the committed record survive an unrelated
       // update; dropping them would make a later archive of a completed record
       // structurally invalid.
-      ...(record?.previousLifecycle === undefined
-        ? {}
-        : { previousLifecycle: record.previousLifecycle }),
-      ...(record?.completion === undefined ? {} : { completion: record.completion }),
+      ...(previousLifecycle === undefined ? {} : { previousLifecycle }),
+      ...(requestedCompletion === undefined ? {} : { completion: requestedCompletion }),
       ...(record?.cancellation === undefined ? {} : { cancellation: record.cancellation }),
       featureIds: stringArrayOr(patch['featureIds'], record?.featureIds ?? []),
       acceptance: arrayOr(patch, 'acceptance', record?.acceptance ?? []),
@@ -2189,7 +4700,13 @@ export class WorkbenchProtocol {
       gateStatus: approval.status,
       approvedVersion: current?.planRef.version ?? null,
       approvedAt: current?.approval.at ?? null,
-      runId: this.planningRunIdOf(current?.planRef.id),
+      // The Run that implements the approved Plan, when this Core queued one (WP-12 Q3=A);
+      // a legacy approval that produced no Run still reports the Planning Run below.
+      runId:
+        current === undefined
+          ? null
+          : (this.approvedRunIdOf(workId, current.planRef.id) ??
+            this.planningRunIdOf(current.planRef.id)),
       authorizationId: null,
       plan: null,
       approval: {
@@ -2276,6 +4793,39 @@ export class WorkbenchProtocol {
    * `submitPlan` re-reads the Run and refuses a Plan whose producer belongs to
    * another Work, so the card must name this real run instead of a placeholder.
    */
+  /**
+   * The professional Run queued for an approved Plan (`plan.current.runId`, WP-12 Q3=A/R3-3).
+   *
+   * The UI's plan card needs "the Run that is implementing this Plan", not the Planning Run
+   * that produced it. The link is the frozen dispatch snapshot's context selection, which
+   * names the Plan artifact as its source; a Run without a matching snapshot is ignored.
+   */
+  private approvedRunIdOf(workId: string, planArtifactId: string): string | null {
+    const runs = this.services.store.runs
+      .list({ where: 'work_id = ?', params: [workId], orderBy: 'created_at DESC' })
+      .filter((run) => run.role !== 'chief');
+    for (const run of runs) {
+      const frozen = this.services.store.snapshots.list({
+        where: "type = 'dispatch' AND hash = ?",
+        params: [run.dispatchSnapshotId],
+      })[0];
+      if (frozen === undefined) continue;
+      const payload = frozen.payload as {
+        dispatchSpec?: { contextSelection?: { sourceRefs?: { kind?: unknown; id?: unknown }[] } };
+      };
+      const refs = payload.dispatchSpec?.contextSelection?.sourceRefs ?? [];
+      if (
+        refs.some(
+          (ref) =>
+            ref.kind === 'artifact' && typeof ref.id === 'string' && ref.id === planArtifactId,
+        )
+      ) {
+        return run.id;
+      }
+    }
+    return null;
+  }
+
   private planningRunIdOf(artifactId: string | undefined): string | null {
     if (artifactId === undefined) return null;
     const artifact = this.services.store.artifacts.find(artifactId);
@@ -2302,6 +4852,75 @@ export class WorkbenchProtocol {
     if (!Array.isArray(plan['tasks']) || plan['tasks'].length === 0) return null;
     if (typeof plan['goal'] !== 'string' || plan['goal'] === '') return null;
     return plan;
+  }
+
+  /**
+   * Materialises an approved Plan's Task DAG (`WP-12 T2.8`).
+   *
+   * `data.md` §2 defines `task` as the Plan's executable unit: role, dependencies, write
+   * scope and acceptance mapping. Without these rows a professional Run could not bind a
+   * `taskId` and no surface could show the DAG. The insert is keyed on the Plan's `planRef`
+   * so a replay of the same approval never duplicates them.
+   *
+   * @returns the new Task id per Plan task id.
+   */
+  private materializePlanTasks(input: {
+    readonly workId: string;
+    readonly plan: PlanDraft;
+    readonly planRef: { readonly id: string; readonly version: number; readonly hash: string };
+  }): Map<string, string> {
+    const store = this.services.store;
+    const existing = store.tasks.list({ where: 'work_id = ?', params: [input.workId] });
+    const already = existing.filter(
+      (row) => row.planRef.id === input.planRef.id && row.planRef.version === input.planRef.version,
+    );
+    if (already.length > 0) {
+      return new Map(
+        input.plan.tasks
+          .map((task) => {
+            const match = already.find(
+              (row) =>
+                row.role === task.role && row.acceptanceIds.join() === task.acceptanceIds.join(),
+            );
+            return match === undefined ? undefined : ([task.id, match.id] as const);
+          })
+          .filter((entry): entry is readonly [string, string] => entry !== undefined),
+      );
+    }
+    const ids = new Map(input.plan.tasks.map((task) => [task.id, store.newId()] as const));
+    const planRef = {
+      id: input.planRef.id,
+      version: input.planRef.version,
+      hash: input.planRef.hash,
+    };
+    for (const task of input.plan.tasks) {
+      if (task.role === 'chief') continue;
+      const taskId = ids.get(task.id);
+      if (taskId === undefined) continue;
+      store.tasks.insert({
+        id: taskId,
+        projectId: this.projectId,
+        workId: input.workId,
+        planRef,
+        role: task.role,
+        dependsOn: task.dependsOn
+          .map((dependency) => ids.get(dependency))
+          .filter((value): value is string => value !== undefined),
+        dependencyManifestRefs: [],
+        // The Task's write envelope is the union of the Plan's read scope and its own paths;
+        // the real authority stays with the approved Plan's authorization (verified again
+        // when the Run is frozen).
+        scope: {
+          readPaths: [...new Set([...input.plan.scope.readPaths, ...task.paths])],
+          writePaths: [...task.paths],
+          operations: [],
+          networkTargets: [],
+        },
+        stage: 'ready',
+        acceptanceIds: [...task.acceptanceIds],
+      } as never);
+    }
+    return ids;
   }
 
   /**
@@ -2340,13 +4959,14 @@ export class WorkbenchProtocol {
     }
     const plan = parsePlanDraft(params['plan']);
     const approval = objectField(params, 'approval');
+    const authorizationRef = requiredString(approval, 'authorizationRef');
     const requestedTokens = optionalInteger(approval['requestedTokens']);
     const result = gates.submitPlan({
       workId,
       revision,
       plan,
       approval: {
-        authorizationRef: requiredString(approval, 'authorizationRef'),
+        authorizationRef,
         runId: requiredString(approval, 'runId'),
         productChanged: approval['productChanged'] === true,
         at: optionalString(approval['at']) ?? this.services.store.now(),
@@ -2363,6 +4983,14 @@ export class WorkbenchProtocol {
         },
       });
     }
+    // `WP-12` Q3=A: the dispatch decision is already persisted in the approved Plan, so
+    // Core queues the next professional Run directly instead of asking a model to repeat it.
+    const runId = this.queueApprovedRun({
+      workId,
+      plan,
+      authorizationRef,
+      planRef: result.planRef,
+    });
     return {
       status: 'applied',
       entityId: result.planRef.id,
@@ -2371,7 +4999,113 @@ export class WorkbenchProtocol {
       approvalRecordHash: result.approvalRecordHash,
       revision: result.revision,
       currentVersion: result.planRef.version,
+      runId,
     };
+  }
+
+  /**
+   * Queues the professional Run an approved Plan authorizes (`WP-12` Q3=A).
+   *
+   * The Plan's own tasks name the role, the goal and the write paths, so no model runs in
+   * between: `plan.approve` is the user's decision, and `agent.dispatch` would only restate
+   * it. The Run is an ordinary professional Run — a direct child of the Work's Chief Run,
+   * with `profileRevision` and the budget injected by Core (`orchestrator`).
+   *
+   * A Work with no live Chief Run cannot parent a professional Run at all (`rules/agents.md`
+   * §3: every professional Run is a Chief child). The approval is not lost: it returns
+   * `runId: null` and the reason is logged, so the operator can retry once the Chief Run
+   * exists (the Plan stays approved).
+   */
+  private queueApprovedRun(input: {
+    readonly workId: string;
+    readonly plan: PlanDraft;
+    readonly authorizationRef: string;
+    readonly planRef: { readonly id: string; readonly version: number; readonly hash: string };
+  }): string | null {
+    const orchestrator = this.services.orchestrator;
+    if (orchestrator === undefined) return null;
+    const task = input.plan.tasks.find((entry) => entry.role !== 'chief');
+    if (task === undefined) {
+      this.logLine(`plan.approve: Work ${input.workId} has no professional task to dispatch`);
+      return null;
+    }
+    const chief = this.services.store.runs
+      .list({ where: "work_id = ? AND role = 'chief'", params: [input.workId] })
+      .filter((run) => RunLifecycle.canParentDispatch(run.status))
+      .at(-1);
+    if (chief === undefined) {
+      this.logLine(`plan.approve: Work ${input.workId} has no live Chief Run to parent the Run`);
+      return null;
+    }
+    const goal = task.goal.slice(0, 2_000);
+    // `rules/workflow.md` §2: the Work's level fixes the develop stage, and the
+    // context ACL / Grant envelope are keyed by `develop-L1|L2|L3`. Emitting the bare
+    // `develop` here left the professional Run with no run-scope file Grant and a
+    // degraded read ledger (T3 finding), so the canonical stage is computed at the
+    // producer instead of being mapped downstream.
+    const work = this.services.store.works.find(input.workId);
+    const stage =
+      task.role === 'backend' || task.role === 'frontend'
+        ? work?.level === 'L1'
+          ? 'develop-L1'
+          : work?.level === 'L3'
+            ? 'develop-L3'
+            : 'develop-L2'
+        : 'develop';
+    try {
+      // `WP-12 T2.8`: the approved Plan's Task DAG becomes real `task` rows, so a Run binds
+      // to a Task and the board/detail can read the dependency and acceptance mapping
+      // (`data.md` §2 `task`). Tasks are created once per Plan version.
+      const taskRefs = this.materializePlanTasks({
+        workId: input.workId,
+        plan: input.plan,
+        planRef: input.planRef,
+      });
+      const { run } = orchestrator.dispatchProfessional({
+        parentRunId: chief.id,
+        authorizationRef: input.authorizationRef,
+        spec: {
+          taskId: taskRefs.get(task.id),
+          role: task.role,
+          purpose: 'implementation',
+          goal,
+          scope: {
+            readPaths: [...new Set([...input.plan.scope.readPaths, ...task.paths])],
+            writePaths: [...task.paths],
+            operations: [],
+            networkTargets: [],
+          },
+          stage,
+          contextSelection: {
+            goal,
+            sourceRefs: [
+              {
+                kind: 'artifact',
+                id: input.planRef.id,
+                version: String(input.planRef.version),
+              },
+            ],
+            reasonPerSource: {
+              [`artifact:${input.planRef.id}`]: 'the approved Plan this Run implements',
+            },
+            featureRefs: [],
+            codePaths: [...task.paths],
+            artifactRefs: [],
+            excluded: [],
+            unknowns: [],
+            readBudget: { initialTokens: 24_000, expansionTokens: 16_000 },
+          },
+          requiredOutputs: ['stage_result'],
+          requiredChild: false,
+          joinPolicy: 'none',
+          budgetAllocation: chief.budgetAllocation,
+        },
+      });
+      return run.id;
+    } catch (error) {
+      this.logLine(`plan.approve: could not queue the professional Run: ${errorText(error)}`);
+      return null;
+    }
   }
 
   /** `finding.submit` — records a Review/Test finding through the real service. */
@@ -2489,6 +5223,21 @@ export class WorkbenchProtocol {
         { details: { decisionId, state: decision.state, choice: decision.choice ?? null } },
       );
     }
+    // A permission decision is the existing Inbox flow for `permission.respond`: the web
+    // UI's approve/deny buttons submit `decision.resolve`, and routing it here is what
+    // makes that button mint the bound Grant instead of only flipping the row (WP-12 T3).
+    if (decision.kind === 'permission') {
+      return this.respondPermission(
+        {
+          decisionId: decision.id,
+          choice:
+            choice === 'deny' || choice === 'reject' || choice === 'decline' ? 'deny' : 'approve',
+          targetVersion: decision.targetRef.version,
+          ...(params['targets'] === undefined ? {} : { targets: params['targets'] }),
+        },
+        {},
+      );
+    }
     // A product decision resolves through the behaviour branch, so the choice's real
     // effect (evidence invalidation, a queued Requirement) is applied by Core.
     if (
@@ -2543,6 +5292,283 @@ export class WorkbenchProtocol {
         effectRefs: [...effectRefs],
       };
     });
+  }
+
+  /**
+   * `permission.request` — records a pending user decision for one tool operation.
+   *
+   * `protocol.md` §4 gives the method's shape, and the plan's §6.3 makes the **server**
+   * resolve the real binding instead of trusting the caller: when the request names a
+   * `toolOperationId`, that row must exist, belong to the named Run/Work, and its recorded
+   * `inputHash` is what the eventual `once` Grant is bound to. A caller therefore cannot
+   * ask for authority over an operation it never attempted, nor substitute a hash that
+   * would let a different tool call use the approval.
+   */
+  private requestPermission(params: JsonObject): JsonObject {
+    const bridge = this.requireToolBridge('permission.request');
+    const workId = requiredString(params, 'workId');
+    const work = this.services.store.works.find(workId);
+    if (work === undefined) {
+      throw new ProtocolError('NOT_FOUND', `Work ${workId} does not exist`, {
+        details: { workId },
+      });
+    }
+    const operation = requiredString(params, 'operation');
+    const role = requiredString(params, 'role');
+    if (!(ROLES as readonly string[]).includes(role)) {
+      throw new ProtocolError('VALIDATION_ERROR', `role ${role} is not a documented role`);
+    }
+    const stage = requiredString(params, 'stage');
+    const targets = stringArray(params['targets']);
+    const scope = optionalString(params['scope']) ?? 'once';
+    if (scope !== 'once' && scope !== 'run' && scope !== 'work' && scope !== 'project') {
+      throw new ProtocolError('VALIDATION_ERROR', `scope ${scope} is not a documented Grant scope`);
+    }
+    const runId = requiredString(params, 'runId');
+    const run = this.services.store.runs.find(runId);
+    if (run === undefined) {
+      throw new ProtocolError('NOT_FOUND', `Run ${runId} does not exist`, { details: { runId } });
+    }
+    if (run.workId !== work.id) {
+      throw new ProtocolError('NOT_AUTHORIZED', `Run ${runId} belongs to another Work`, {
+        details: { runId, workId: run.workId },
+      });
+    }
+    const toolOperationId = requiredString(params, 'toolOperationId');
+    const recorded = this.services.store.toolOperations.find(toolOperationId);
+    if (recorded === undefined) {
+      throw new ProtocolError(
+        'NOT_FOUND',
+        `tool operation ${toolOperationId} has not been attempted; a permission request must name a real call`,
+        { details: { toolOperationId } },
+      );
+    }
+    if (recorded.runId !== run.id || recorded.workId !== work.id) {
+      throw new ProtocolError(
+        'NOT_AUTHORIZED',
+        `tool operation ${toolOperationId} belongs to Run ${recorded.runId}`,
+        { details: { toolOperationId, runId: recorded.runId } },
+      );
+    }
+    // The recorded hash wins over anything the caller sent: it is what the ledger keyed the
+    // operation on, so the approval can only ever admit *that* call.
+    const inputHash = recorded.inputHash;
+    const requested = optionalString(params['inputHash']);
+    if (requested !== undefined && requested !== inputHash) {
+      throw new ProtocolError(
+        'VALIDATION_ERROR',
+        `inputHash ${requested} is not the hash recorded for tool operation ${toolOperationId}`,
+        { details: { toolOperationId, recorded: inputHash } },
+      );
+    }
+    const expiresAt = optionalString(params['expiry']) ?? this.defaultGrantExpiry();
+    const limits = recordOf(params['limits']);
+    // The recorded targets win: the row is what the Broker admitted the call for, so an
+    // approval cannot be minted against a target list the caller invented (T3 轮 2).
+    const recordedTargets = recorded.targets;
+    const decided = bridge.requestPermission({
+      workId: work.id,
+      runId: run.id,
+      role: role as Role,
+      stage,
+      operation,
+      targets: recordedTargets.length > 0 ? recordedTargets : targets,
+      toolOperationId,
+      inputHash,
+      ...(scope === 'once' || scope === 'run' ? { scope } : {}),
+      expiresAt,
+      ...(limits === undefined ? {} : { limits }),
+    });
+    return {
+      status: 'accepted',
+      decisionId: decided.decisionId,
+      version: decided.version,
+      state: decided.state,
+      workId: work.id,
+      runId: run.id,
+      operation,
+      blockerAttached: decided.blockerAttached,
+      runStatus: decided.runStatus ?? run.status,
+    };
+  }
+
+  /**
+   * `permission.respond` — applies the user's answer and emits `permission.resolved`.
+   *
+   * Only a pending `permission` Decision can be answered. An approval mints the bound
+   * Grant (or a `run` Grant when the user chose "allow for this run"); a denial mints
+   * nothing and returns the Run to `running` so the model can take another route
+   * (`workflow.md` §57 keeps a refusal out of the transient-retry path).
+   */
+  private respondPermission(
+    params: JsonObject,
+    options: { readonly expectedVersion?: number },
+  ): JsonObject {
+    const bridge = this.requireToolBridge('permission.respond');
+    const decisionId = requiredString(params, 'decisionId');
+    const choice = requiredString(params, 'choice');
+    if (choice !== 'approve' && choice !== 'deny') {
+      throw new ProtocolError('VALIDATION_ERROR', `choice ${choice} must be approve or deny`, {
+        details: { decisionId, choice },
+      });
+    }
+    const decision = this.services.store.decisions.find(decisionId);
+    if (decision === undefined) {
+      throw new ProtocolError('NOT_FOUND', `Decision ${decisionId} does not exist`, {
+        details: { decisionId },
+      });
+    }
+    if (decision.kind !== 'permission') {
+      throw new ProtocolError(
+        'VALIDATION_ERROR',
+        `Decision ${decisionId} is a ${decision.kind} decision; use decision.resolve for it`,
+        { details: { decisionId, kind: decision.kind } },
+      );
+    }
+    const expectedVersion = optionalInteger(params['targetVersion']) ?? options.expectedVersion;
+    if (expectedVersion !== undefined && expectedVersion !== decision.targetRef.version) {
+      throw new ProtocolError(
+        'VERSION_CONFLICT',
+        `Decision ${decisionId} targets version ${decision.targetRef.version}, not ${expectedVersion}`,
+        {
+          details: {
+            decisionId,
+            currentVersion: decision.targetRef.version,
+            requestedVersion: expectedVersion,
+          },
+        },
+      );
+    }
+    if (decision.state !== 'pending') {
+      // Answering twice with the same choice is idempotent; a different one is a conflict.
+      const answered =
+        decision.choice === choice ||
+        (decision.state === 'accepted' && choice === 'approve') ||
+        (decision.state === 'rejected' && choice === 'deny');
+      if (answered) {
+        return {
+          status: 'applied',
+          decisionId: decision.id,
+          version: decision.version,
+          state: decision.state,
+          choice,
+          reason: optionalString(params['reason']) ?? null,
+          idempotent: true,
+        };
+      }
+      throw new ProtocolError(
+        'INVALID_STATE',
+        `Decision ${decisionId} is already ${decision.state}`,
+        { details: { decisionId, state: decision.state } },
+      );
+    }
+    // The approval's binding comes from the recorded tool operation, never from the body:
+    // the caller answers "yes" to the operation the Decision was created for.
+    const recorded = this.services.store.toolOperations.find(decision.targetRef.id);
+    const runId = recorded?.runId ?? this.runAwaitingPermission(decision.workId);
+    const run = runId === undefined ? undefined : this.services.store.runs.find(runId);
+    if (choice === 'deny') {
+      // The user's denial reason is part of the answer (`protocol.md` §4): it is
+      // recorded on the durable `permission.resolved` event, so a refusal is
+      // auditable instead of only visible in the transient response. An empty reason
+      // is the same as none.
+      const reason = optionalString(params['reason']);
+      const denied = bridge.respondPermission({
+        decisionId: decision.id,
+        choice: 'deny',
+        operation: recorded?.toolName ?? '',
+        runId: runId ?? '',
+        role: run?.role ?? 'backend',
+        stage: run?.stage ?? '',
+        targets: [],
+        toolOperationId: decision.targetRef.id,
+        inputHash: decision.targetRef.hash,
+        expiresAt: this.defaultGrantExpiry(),
+        ...(reason === undefined ? {} : { reason }),
+      });
+      return {
+        status: 'applied',
+        decisionId: denied.decisionId,
+        version: denied.version,
+        state: denied.state,
+        choice,
+        reason: reason ?? null,
+        runStatus: denied.runStatus ?? run?.status ?? null,
+      };
+    }
+    if (recorded === undefined || run === undefined) {
+      throw new ProtocolError(
+        'MISSING_CONTEXT',
+        `Decision ${decisionId} cannot be approved: its tool operation or Run is gone`,
+        { details: { decisionId, toolOperationId: decision.targetRef.id } },
+      );
+    }
+    const limits = recordOf(params['limits']);
+    // The Grant's targets are the ones the `tool_operation` row recorded — the call the
+    // Broker really admitted — falling back to the answered request for an operation with no
+    // recorded targets. A path-shaped operation with neither is refused instead of minting a
+    // Grant that authorizes nothing (or, worse, a target list nobody authorized).
+    const answerTargets = stringArray(params['targets']);
+    const grantTargets = recorded.targets.length > 0 ? recorded.targets : answerTargets;
+    if (PATH_TARGET_OPERATIONS.includes(recorded.toolName) && grantTargets.length === 0) {
+      throw new ProtocolError(
+        'MISSING_CONTEXT',
+        `tool operation ${recorded.id} recorded no targets; approving ${recorded.toolName} would mint a Grant that authorizes nothing`,
+        { details: { decisionId, toolOperationId: recorded.id } },
+      );
+    }
+    const approved = bridge.respondPermission({
+      decisionId: decision.id,
+      choice: 'approve',
+      operation: recorded.toolName,
+      runId: run.id,
+      role: run.role,
+      stage: run.stage,
+      targets: grantTargets,
+      toolOperationId: recorded.id,
+      inputHash: recorded.inputHash,
+      expiresAt: this.defaultGrantExpiry(),
+      scope: optionalString(params['scope']) === 'run' ? 'run' : 'once',
+      ...(limits === undefined ? {} : { limits }),
+    });
+    return {
+      status: 'applied',
+      decisionId: approved.decisionId,
+      version: approved.version,
+      state: approved.state,
+      choice,
+      grantId: approved.grantId ?? null,
+      runStatus: approved.runStatus ?? run.status,
+    };
+  }
+
+  /** The Run a Work's pending permission decision is about, when one exists. */
+  private runAwaitingPermission(workId: string): string | undefined {
+    return this.services.store.runs
+      .list({ where: 'work_id = ?', params: [workId], orderBy: 'created_at DESC' })
+      .find((run) => run.status === 'waiting_permission')?.id;
+  }
+
+  /** The expiry a permission Grant gets when the caller named none (`ARCHITECTURE.md` §5). */
+  private defaultGrantExpiry(): string {
+    return new Date(Date.now() + LIMITS.workActiveTimeSec.default * 1000).toISOString();
+  }
+
+  private requireToolBridge(method: string): ToolBridgePort {
+    const bridge = this.services.toolBridge;
+    if (bridge === undefined) {
+      throw new ProtocolError(
+        'PROVIDER_UNAVAILABLE',
+        `${method} needs the tool bridge, which this daemon has not attached`,
+        { details: { method } },
+      );
+    }
+    return bridge;
+  }
+
+  /** Attaches the tool bridge once the execution stack exists (`permission.*`, cleanup). */
+  attachToolBridge(port: ToolBridgePort): void {
+    this.services.toolBridge = port;
   }
 
   /**
@@ -2628,6 +5654,281 @@ export class WorkbenchProtocol {
       probe: 'capabilities-only',
       checkedAt,
     };
+  }
+
+  /**
+   * `secret.set` (WP-12 T1.1).
+   *
+   * The installation master registers or replaces one credential. The value goes
+   * straight into the durable repository and the in-memory store the Gateway resolves
+   * against, so a running daemon honours the new credential on the next call without a
+   * restart. Only metadata comes back; no branch here — including a validation error —
+   * echoes the value (`execution.md` §4).
+   *
+   * **No command-ledger row is recorded.** Replacing a value on the same ref is
+   * naturally idempotent, and the ledger's `payload_hash` would persist a digest of a
+   * credential (WP-12 decision 2). An `idempotencyKey` is still accepted and validated
+   * like any write, but the write simply runs and is not de-duplicated.
+   */
+  private setSecret(params: JsonObject, options: { readonly caller: WorkbenchCaller }): JsonObject {
+    requireInstallationCaller(options.caller, 'secret.set');
+    const { repository, store } = this.requireSecrets();
+    const ref = requiredString(params, 'ref');
+    const value = requiredString(params, 'value');
+    const audience = secretAudience(params['audience']);
+    try {
+      const summary = repository.set(ref, value, { audience });
+      // `put` re-validates ref/value/audience; an invalid one throws before the Gateway
+      // could ever resolve the half-written registration.
+      store.put({ ref, value, audience });
+      return {
+        status: 'applied',
+        entityId: ref,
+        version: 1,
+        ref,
+        configured: true,
+        updatedAt: summary.updatedAt,
+        backend: summary.backend,
+      };
+    } catch (error) {
+      // Defence in depth (`execution.md` §4): even a future error path that embedded the
+      // value is masked with the store's own redaction helper before it reaches the wire.
+      const code = error instanceof ProtocolError ? error.code : 'VALIDATION_ERROR';
+      throw new ProtocolError(code, redact(errorText(error), [value]));
+    }
+  }
+
+  /**
+   * `secret.delete` — removes the durable copy and the in-memory registration.
+   *
+   * Like `secret.set`, it records no command-ledger row (WP-12 decision 2): the
+   * operation is naturally idempotent and no digest of a credential may be persisted.
+   */
+  private deleteSecret(
+    params: JsonObject,
+    options: { readonly caller: WorkbenchCaller },
+  ): JsonObject {
+    requireInstallationCaller(options.caller, 'secret.delete');
+    const { repository, store } = this.requireSecrets();
+    const ref = requiredString(params, 'ref');
+    const deleted = repository.delete(ref);
+    store.remove(ref);
+    return { status: 'applied', entityId: ref, version: 1, ref, deleted };
+  }
+
+  /**
+   * `secret.list` — metadata only: ref, configured, updatedAt, backend and health.
+   *
+   * An existing but undecryptable record is listed with `configured:false` and
+   * `health:'unreadable'` plus the typed reason, and a file the backend could not treat as
+   * a record at all is reported under `problems` (W12T1-01). Neither case throws, so this
+   * query stays usable on a store that also makes the daemon log a warning.
+   */
+  private listSecrets(options: { readonly caller: WorkbenchCaller }): JsonObject {
+    requireInstallationCaller(options.caller, 'secret.list');
+    const { repository } = this.requireSecrets();
+    return {
+      backend: repository.backend,
+      items: repository.list().map((entry) => ({
+        ref: entry.ref,
+        configured: entry.configured,
+        updatedAt: entry.updatedAt,
+        backend: entry.backend,
+        health: entry.health,
+        ...(entry.issue === undefined ? {} : { issue: { ...entry.issue } }),
+      })),
+      problems: repository.problems().map((problem) => ({ ...problem })),
+    };
+  }
+
+  /** The credential services, or an honest refusal when this host wired none. */
+  private requireSecrets(): { repository: SecretRepository; store: SecretStore } {
+    const repository = this.services.secretRepository;
+    const store = this.services.secrets;
+    if (repository === undefined || store === undefined) {
+      throw new ProtocolError('INVALID_STATE', 'this daemon has no credential store wired');
+    }
+    return { repository, store };
+  }
+
+  /**
+   * `provider.upsert` (WP-12 T2.0, `protocol.md` §5).
+   *
+   * The command is the settings page's only way to register a Provider together with its
+   * API key: `providerInputSchema` carries no secret (`secretRef` is server-created), so the
+   * value arrives in the separate `secret` member and is written straight into the durable
+   * repository the Gateway resolves against. Only metadata comes back — no branch here,
+   * including a validation error, echoes the value (`execution.md` §4).
+   *
+   * A blank `secret` means "keep the stored credential": the provider keeps its
+   * `secretRef`, exactly as the shipped editor documents.
+   */
+  private upsertProvider(params: JsonObject): JsonObject {
+    const config = this.requireConfig();
+    const providerInput = objectField(params, 'provider');
+    const secret = optionalString(params['secret']);
+    // The provider id is server-created (`protocol.md` §5); generating it here rather than
+    // inside `upsertProvider` is what lets one config write carry the matching `secretRef`.
+    const providerId = optionalString(providerInput['providerId']) ?? this.services.store.newId();
+    // A blank `secret` means "keep the stored credential": the editor never round-trips the
+    // value or the reference, so the existing provider's `secretRef` is preserved here
+    // (`protocol.md` §5).
+    let secretRef =
+      optionalString(providerInput['secretRef']) ?? config.provider(providerId)?.secretRef;
+    if (secret !== undefined) {
+      const { repository, store } = this.requireSecrets();
+      secretRef = secretRef ?? providerSecretRef(providerId);
+      if (!isValidSecretRef(secretRef)) {
+        throw new ProtocolError('VALIDATION_ERROR', 'the provider secret reference is invalid');
+      }
+      try {
+        repository.set(secretRef, secret, { audience: 'gateway' });
+        // `put` re-validates ref/value/audience before the Gateway could resolve a
+        // half-written registration.
+        store.put({ ref: secretRef, value: secret, audience: 'gateway' });
+      } catch (error) {
+        const code = error instanceof ProtocolError ? error.code : 'VALIDATION_ERROR';
+        throw new ProtocolError(code, redact(errorText(error), [secret]));
+      }
+    }
+    const effectiveRef = secretRef ?? optionalString(providerInput['secretRef']);
+    try {
+      const saved = config.upsertProvider({
+        ...(providerInput as unknown as ProviderInput),
+        providerId,
+        ...(effectiveRef === undefined ? {} : { secretRef: effectiveRef }),
+      });
+      return {
+        status: 'applied',
+        entityId: saved.providerId,
+        providerId: saved.providerId,
+        version: saved.version,
+        // "configured" means the store can really resolve it, not that a string exists.
+        secretConfigured: this.secretRegistered(effectiveRef),
+      };
+    } catch (error) {
+      if (error instanceof Error && error.name === 'ConfigError') {
+        throw new ProtocolError('VALIDATION_ERROR', error.message, {
+          details: { preservedInput: withoutSecret(params) },
+        });
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * `provider.test` (WP-12 T2.0, `protocol.md` §5).
+   *
+   * The command answers `accepted` synchronously — a real probe is a model round trip, and
+   * `dispatchEnvelope` must never wait for one — and the outcome lands as the persistent
+   * `provider.test_completed` event (`protocol.md` §7). A target that cannot even be
+   * attempted (unknown provider or model, missing credential) is refused in the answer, so
+   * the UI never shows "testing" for something that will not run.
+   */
+  private testProvider(params: JsonObject): JsonObject {
+    const config = this.requireConfig();
+    const gateway = this.services.gateway;
+    if (gateway === undefined) {
+      throw new ProtocolError('INVALID_STATE', 'this daemon has no model gateway wired');
+    }
+    const providerId = requiredString(params, 'providerId');
+    const modelId = requiredString(params, 'modelId');
+    const provider = config.provider(providerId);
+    if (provider === undefined) {
+      throw new ProtocolError('NOT_FOUND', `provider ${providerId} is not configured`, {
+        details: { providerId },
+      });
+    }
+    if (!provider.enabled) {
+      return {
+        status: 'accepted',
+        accepted: false,
+        providerId,
+        modelId,
+        reason: 'the provider is disabled',
+      };
+    }
+    if (!provider.models.some((model) => model.id === modelId)) {
+      throw new ProtocolError('NOT_FOUND', `model ${modelId} is not configured`, {
+        details: { providerId, modelId },
+      });
+    }
+    const checkedAt = this.services.store.now();
+    const operationId = this.services.store.newId();
+    // The probe runs after the answer; the event is the documented outcome channel.
+    void this.probeProvider(gateway, { providerId, modelId, operationId, checkedAt });
+    return { status: 'accepted', accepted: true, providerId, modelId, operationId, checkedAt };
+  }
+
+  /**
+   * Runs one `provider.test` probe and appends its persistent outcome.
+   *
+   * Failures are reported as the event's `error`, never as an unhandled rejection: the
+   * command already answered `accepted`, and an accepted test whose result never arrives
+   * would be exactly the silent success `protocol.md` §7 forbids.
+   */
+  private async probeProvider(
+    gateway: ModelGateway,
+    input: {
+      readonly providerId: string;
+      readonly modelId: string;
+      readonly operationId: string;
+      readonly checkedAt: string;
+    },
+  ): Promise<void> {
+    let outcome: { ok: boolean; latencyMs: number; error?: string };
+    try {
+      outcome = await gateway.testConnection(input.providerId, input.modelId);
+    } catch (error) {
+      outcome = { ok: false, latencyMs: 0, error: errorText(error) };
+    }
+    try {
+      this.services.store.events.append({
+        name: 'provider.test_completed',
+        entityId: input.providerId,
+        entityVersion: this.services.config?.versionOf('global') ?? 0,
+        data: {
+          providerId: input.providerId,
+          modelId: input.modelId,
+          operationId: input.operationId,
+          accepted: outcome.ok,
+          ok: outcome.ok,
+          latencyMs: outcome.latencyMs,
+          checkedAt: input.checkedAt,
+          ...(outcome.error === undefined ? {} : { error: outcome.error }),
+        },
+      });
+    } catch (error) {
+      // The outcome could not be persisted; there is no honest client to tell, so this is
+      // the only place a log line is the right answer.
+      this.logLine(
+        `provider.test: could not record the outcome for ${input.providerId}: ${errorText(error)}`,
+      );
+    }
+  }
+
+  /** Optional diagnostic sink; the daemon passes none in tests. */
+  private logLine(line: string): void {
+    this.services.log?.(line);
+  }
+
+  /**
+   * Whether one Provider's `secretRef` is really registered (WP-12 T1.1).
+   *
+   * `protocol.md` §5 promises the browser only "whether one is configured"; the honest
+   * answer is "a ref exists **and** the store can resolve it", which is what the
+   * Gateway itself requires before it will attempt a call.
+   */
+  private secretRegistered(ref: string | undefined): boolean {
+    if (ref === undefined) return false;
+    if (this.services.secrets !== undefined) return this.services.secrets.has(ref);
+    // `list()` never throws now (W12T1-01), so this fallback cannot turn a bad record
+    // into a 500 on `config.get`/`agents`.
+    return (
+      this.services.secretRepository
+        ?.list()
+        .some((entry) => entry.ref === ref && entry.health === 'ok') ?? false
+    );
   }
 
   /** `backup.run` — a complete backup or an honest refusal. */
@@ -2935,6 +6236,83 @@ export class WorkbenchProtocol {
     };
   }
 
+  /**
+   * The branch/commit/unpushed facts of one requirement record (AC-090).
+   *
+   * `requirements.md` §3: the UI shows the branch and commit the record lives on and
+   * whether that commit is on the remote yet. `portableRef.revision` is the record's
+   * own Git revision, so it is the commit; `working-tree` means the record has no
+   * commit yet and is therefore reported as not pushed. `unpushed` is only `false`
+   * when Git proves the commit is contained in the tracked upstream revision.
+   */
+  private gitFactsOf(
+    row: { readonly portableRef: { readonly revision: string } },
+    context: {
+      readonly root: string;
+      readonly branch: string;
+      readonly upstreamRevision: string | null;
+    },
+  ): JsonObject {
+    const revision = row.portableRef.revision;
+    const commit = revision === '' || revision === 'working-tree' ? null : revision;
+    if (commit === null) {
+      return {
+        branch: context.branch,
+        commit: null,
+        unpushed: true,
+        upstreamRevision: context.upstreamRevision,
+      };
+    }
+    if (context.upstreamRevision === null) {
+      return {
+        branch: context.branch,
+        commit,
+        // No upstream ref holds the branch, so nothing about it is pushed yet.
+        unpushed: true,
+        upstreamRevision: null,
+      };
+    }
+    const contained = this.requirementGit.isAncestor(
+      context.root,
+      commit,
+      context.upstreamRevision,
+    );
+    return {
+      branch: context.branch,
+      commit,
+      // An unresolvable comparison is reported as "not pushed" rather than as a
+      // false "in sync" (`reliability.md` §87 keeps the state honest).
+      unpushed: !contained.ok || !contained.value,
+      upstreamRevision: context.upstreamRevision,
+    };
+  }
+
+  /**
+   * The Git context of the current Project, or `null` when it carries no root/branch.
+   *
+   * Resolved once per read so a board of N requirements costs one upstream lookup
+   * instead of N; the per-record cost is one `is-ancestor` probe.
+   */
+  private gitContext(): {
+    readonly root: string;
+    readonly branch: string;
+    readonly upstreamRevision: string | null;
+  } | null {
+    const project = this.services.store.projects.find(this.projectId);
+    const root = project?.gitRoot ?? project?.root;
+    const branch = project?.deliveryBranch;
+    if (root === undefined || root === '' || branch === undefined || branch === '') return null;
+    let upstreamRevision: string | null = null;
+    for (const name of [`refs/remotes/origin/${branch}`, `${branch}@{u}`]) {
+      const found = this.requirementGit.resolveRevision(root, name);
+      if (found.ok && found.value !== null) {
+        upstreamRevision = found.value;
+        break;
+      }
+    }
+    return { root, branch, upstreamRevision };
+  }
+
   private taskCounts(workId: string): JsonObject {
     const tasks = this.services.store.tasks.list({ where: 'work_id = ?', params: [workId] });
     return {
@@ -2953,25 +6331,28 @@ export class WorkbenchProtocol {
       .filter((decision) => decision.state === 'pending').length;
   }
 
-  private requirementSummary(row: {
-    readonly id: string;
-    readonly title: string;
-    readonly goal: string;
-    readonly lifecycle: string;
-    readonly phase?: string | undefined;
-    readonly workId?: string | undefined;
-    readonly recordVersion: number;
-    readonly portableRef: {
-      readonly path: string;
-      readonly revision: string;
-      readonly hash: string;
-    };
-    readonly executionAvailability: string;
-    readonly evidenceAvailability: string;
-    readonly version: number;
-    readonly createdAt: string;
-    readonly updatedAt: string;
-  }): JsonObject {
+  private requirementSummary(
+    row: {
+      readonly id: string;
+      readonly title: string;
+      readonly goal: string;
+      readonly lifecycle: string;
+      readonly phase?: string | undefined;
+      readonly workId?: string | undefined;
+      readonly recordVersion: number;
+      readonly portableRef: {
+        readonly path: string;
+        readonly revision: string;
+        readonly hash: string;
+      };
+      readonly executionAvailability: string;
+      readonly evidenceAvailability: string;
+      readonly version: number;
+      readonly createdAt: string;
+      readonly updatedAt: string;
+    },
+    git: JsonObject | null,
+  ): JsonObject {
     return {
       id: row.id,
       title: row.title,
@@ -2981,6 +6362,7 @@ export class WorkbenchProtocol {
       workId: row.workId ?? null,
       recordVersion: row.recordVersion,
       portableRef: row.portableRef,
+      git,
       executionAvailability: row.executionAvailability,
       evidenceAvailability: row.evidenceAvailability,
       waitingToContinue: row.workId === undefined && row.lifecycle === 'active',
@@ -3542,12 +6924,77 @@ function requiredString(params: JsonObject, key: string): string {
   return value;
 }
 
+/**
+ * The `secret.*` audience, defaulting to `gateway` (`execution.md` §4).
+ *
+ * A Provider credential is `gateway`-audience; a project-command credential is `tool`
+ * and still needs an explicit Grant at use time. An unknown value is refused instead of
+ * being coerced, so a typo cannot silently widen a credential's channel.
+ */
+/**
+ * The server-created `secretRef` of one Provider (`protocol.md` §5).
+ *
+ * Provider credentials live under the `gateway` audience and the ref is derived from the
+ * provider id, so re-saving a provider replaces its own credential instead of leaking a new
+ * registration per editor submit.
+ */
+function providerSecretRef(providerId: string): string {
+  return `provider:${providerId}`;
+}
+
+/** The caller's input with the credential removed, for error details. */
+function withoutSecret(params: JsonObject): JsonObject {
+  const rest: JsonObject = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (key === 'secret') continue;
+    rest[key] = value;
+  }
+  return rest;
+}
+
+function secretAudience(value: unknown): SecretAudience {
+  if (value === undefined || value === null || value === '') return 'gateway';
+  if (value === 'gateway' || value === 'tool') return value;
+  throw new ProtocolError('VALIDATION_ERROR', 'audience must be "gateway" or "tool"', {
+    details: { field: 'audience' },
+  });
+}
+
+/**
+ * `secret.*` is an installation operation (WP-12 T1.1).
+ *
+ * `protocol.md` §2 authenticates the CLI/BFF with the 0600 installation credential, and
+ * that is the only subject allowed to write a durable credential; a browser session —
+ * even the single installation user's — must go through the admin surface or the CLI.
+ */
+function requireInstallationCaller(caller: WorkbenchCaller, method: string): void {
+  if (caller.subject !== INSTALLATION_SUBJECT) {
+    throw new ProtocolError('NOT_AUTHORIZED', `${method} is an installation operation`, {
+      details: { subject: caller.subject },
+    });
+  }
+}
+
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
+/** Error text for a refusal; never a value, and never an empty string. */
+function errorText(error: unknown): string {
+  return error instanceof Error && error.message !== '' ? error.message : 'the command failed';
+}
+
 function optionalInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) ? value : undefined;
+}
+
+/** One required integer parameter (`protocol.md` §1: a missing field is VALIDATION_ERROR). */
+function requiredInteger(params: JsonObject, key: string): number {
+  const value = params[key];
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    throw new ProtocolError('VALIDATION_ERROR', `${key} must be an integer`, { details: { key } });
+  }
+  return value;
 }
 
 function stringOr(source: JsonObject, key: string, fallback: string): string {
@@ -3557,6 +7004,12 @@ function stringOr(source: JsonObject, key: string, fallback: string): string {
     throw new ProtocolError('VALIDATION_ERROR', `${key} must be a non-empty string`);
   }
   return value;
+}
+
+/** A JSON object member, or `undefined` when the caller sent something else. */
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
 }
 
 function stringArray(value: unknown): string[] {
@@ -3801,6 +7254,177 @@ function createNodeRequirementRecordPort(): RequirementRecordPort {
   };
 }
 
+/**
+ * The daemon's own Git fact reader (AC-090): real `git rev-parse` and
+ * `git merge-base --is-ancestor` through the deployment's `git` binary.
+ *
+ * A revision Git cannot resolve answers `ok:false`, which the caller reports as
+ * "not pushed" instead of pretending the commit is in sync.
+ */
+function createNodeRequirementGitFactsPort(): RequirementGitFactsPort {
+  const execute = (
+    args: readonly string[],
+  ): { readonly status: number; readonly stdout: string } => {
+    try {
+      const stdout = execFileSync('git', [...args], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      return { status: 0, stdout };
+    } catch (error) {
+      const status =
+        typeof (error as { status?: unknown }).status === 'number'
+          ? (error as { status: number }).status
+          : 1;
+      return { status, stdout: '' };
+    }
+  };
+  return {
+    resolveRevision: (repoRoot, revision) => {
+      const result = execute([
+        '-C',
+        repoRoot,
+        'rev-parse',
+        '--verify',
+        '--quiet',
+        `${revision}^{commit}`,
+      ]);
+      const value = result.stdout.trim();
+      if (result.status !== 0 || value === '') return { ok: true, value: null };
+      return { ok: true, value };
+    },
+    isAncestor: (repoRoot, ancestor, descendant) => {
+      const result = execute(['-C', repoRoot, 'merge-base', '--is-ancestor', ancestor, descendant]);
+      // `git merge-base --is-ancestor` exits 1 for "not an ancestor" and 128 for an
+      // unresolvable revision; only 0 is a positive proof.
+      if (result.status === 0) return { ok: true, value: true };
+      if (result.status === 1) return { ok: true, value: false };
+      return { ok: false };
+    },
+  };
+}
+
+/**
+ * The daemon's real committed-pool reader (`requirement.import`, `protocol.md` §4).
+ *
+ * Core owns the pool semantics (`readRequirementPoolAtRevision`); this only supplies
+ * the real `git` port, so a `requirement.import` and a clone both apply the same
+ * conflict rules.
+ */
+function createNodeRequirementPoolPort(): RequirementPoolReadPort {
+  const git = createNodeWorktreeGitPort();
+  return {
+    read: (repoRoot, revision) => {
+      const pool = readRequirementPoolAtRevision({ git, repoRoot, revision });
+      return {
+        records: pool.records.map((record) => ({
+          id: record.id,
+          recordPath: record.recordPath,
+          metadataJson: record.metadataJson,
+          contentMarkdown: record.contentMarkdown,
+          recordHash: record.recordHash,
+        })),
+        conflicts: pool.conflicts.map((conflict) => ({
+          recordPath: conflict.recordPath,
+          reason: conflict.reason,
+          message: conflict.message,
+        })),
+      };
+    },
+  };
+}
+
+/**
+ * The daemon's real revision-addressed file reader (`protocol.md` §5
+ * `file.list`/`file.read`).
+ *
+ * `git ls-tree` and `git show` are the only sanctioned readers: a working tree can be
+ * stale, so a read that must answer for a named revision resolves the blob in Git. A
+ * missing revision or path answers `null` rather than an empty directory.
+ */
+function createNodeWorkspaceFilePort(): WorkspaceFilePort {
+  const run = (args: readonly string[]): { readonly status: number; readonly stdout: Buffer } => {
+    try {
+      const stdout = execFileSync('git', [...args], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        maxBuffer: 64 * 1024 * 1024,
+      });
+      return { status: 0, stdout };
+    } catch (error) {
+      const status =
+        typeof (error as { status?: unknown }).status === 'number'
+          ? (error as { status: number }).status
+          : 1;
+      return { status, stdout: Buffer.alloc(0) };
+    }
+  };
+  return {
+    list: (repoRoot, revision, path) => {
+      // A non-empty path names a directory whose *children* are the listing; Git's
+      // pathspec would otherwise match the tree entry itself, so the child pathspec
+      // (`<path>/`) is tried first and the exact path is the fallback for a blob.
+      const attempts =
+        path === ''
+          ? [[]]
+          : [
+              ['--', `${path.replace(/\/+$/u, '')}/`],
+              ['--', path],
+            ];
+      const parse = (
+        stdout: Buffer,
+      ): { name: string; path: string; type: 'blob' | 'tree'; bytes: number | null }[] => {
+        const entries: {
+          name: string;
+          path: string;
+          type: 'blob' | 'tree';
+          bytes: number | null;
+        }[] = [];
+        for (const record of stdout.toString('utf8').split('\0')) {
+          if (record === '') continue;
+          // `<mode> <type> <object>\t<path>`; `-l` adds the blob size column.
+          const match = /^(\d+)\s+(blob|tree)\s+([0-9a-f]+)\s+(-|\d+)\t(.+)$/u.exec(record);
+          if (match === null) continue;
+          entries.push({
+            name: basename(match[5] ?? ''),
+            path: match[5] ?? '',
+            type: match[2] === 'tree' ? 'tree' : 'blob',
+            bytes: match[4] === '-' ? null : Number(match[4]),
+          });
+        }
+        return entries;
+      };
+      for (const pathspec of attempts) {
+        const result = run(['-C', repoRoot, 'ls-tree', '-z', '-l', revision, ...pathspec]);
+        if (result.status !== 0) return null;
+        const entries = parse(result.stdout);
+        if (entries.length > 0) return entries;
+      }
+      return [];
+    },
+    read: (repoRoot, revision, path) => {
+      const result = run(['-C', repoRoot, 'show', `${revision}:${path}`]);
+      if (result.status !== 0) return null;
+      return { content: result.stdout };
+    },
+  };
+}
+
+/** The interface media types `file.read` reports (`protocol.md` §5). */
+const FILE_MIME_TYPES: Readonly<Record<string, string>> = {
+  md: 'text/markdown',
+  json: 'application/json',
+  ts: 'text/plain',
+  tsx: 'text/plain',
+  js: 'text/plain',
+  mjs: 'text/plain',
+  css: 'text/css',
+  html: 'text/html',
+  txt: 'text/plain',
+  yml: 'text/yaml',
+  yaml: 'text/yaml',
+  toml: 'text/plain',
+};
+
 /** Whether a JSON value is a `Scope` envelope rather than some other object. */
 function isScope(value: unknown): value is Scope {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
@@ -3873,6 +7497,32 @@ function basename(path: string): string {
   const parts = path.split('/').filter((part) => part !== '');
   return parts.at(-1) ?? path;
 }
+
+/** SHA256 hex of raw bytes (`data.md` §4 content identity). */
+function sha256Hex(value: Uint8Array): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+/**
+ * The stage a role's preview is evaluated at (`rules/workflow.md` §2).
+ *
+ * A modifying role's stage is level-derived (`develop-L1/L2/L3`); every other role
+ * uses its own first registered stage. The ACL then decides what that stage may read,
+ * so a preview of a wider selection is refused exactly like a real Run's.
+ */
+function contextPreviewStage(role: Role, level: string | undefined): ContextStage {
+  const stages = (ROLE_STAGES as Record<string, readonly ContextStage[]>)[role] ?? [];
+  if (role === 'backend' || role === 'frontend') {
+    const candidate: ContextStage =
+      level === 'L1' ? 'develop-L1' : level === 'L3' ? 'develop-L3' : 'develop-L2';
+    if (stages.includes(candidate)) return candidate;
+  }
+  return stages[0] ?? 'assist';
+}
+
+/** The fixed rules a preview falls back to when `docs/rules/agents.md` is absent. */
+const CHIEF_RULES_FALLBACK =
+  '# Agent 固定规则\n\nChief 决定上下文；Builder 只校验并冻结；开发聊天不可输入。\n';
 
 /** Normalizes a root for identity comparison without inventing a second id. */
 function normalizeRoot(root: string): string {

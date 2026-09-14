@@ -22,6 +22,7 @@ import {
   inboxModel,
   isSuccessfulRun,
   liveEventOf,
+  providerModelsInput,
   requirementDetail,
   runDetail,
   runsModel,
@@ -139,6 +140,97 @@ describe('board projection (AC-068)', () => {
     expect(card?.awaitingDecision).toBe(1);
     expect(card?.saveState).toBe('saving');
   });
+
+  it('states the record branch, commit and push state from the real payload (AC-090)', () => {
+    const model = boardModel(
+      {
+        columns: {
+          active: [
+            {
+              requirementId: 'req-git',
+              identity: 'req-git',
+              lifecycle: 'active',
+              recordVersion: 3,
+              saveState: 'saved',
+              portableRef: { path: '.agentdev/requirements/req-git', revision: 'b'.repeat(40) },
+              git: { unpushed: true },
+              work: { id: 'work-1', status: 'running', version: 9 },
+              canPause: true,
+            },
+          ],
+        },
+      },
+      { branch: 'agentdev/main' },
+    );
+    const card = model.columns.active[0];
+    expect(card?.branch).toBe('agentdev/main');
+    expect(card?.commit).toBe('b'.repeat(40));
+    expect(card?.unpushed).toBe(true);
+    expect(card?.workVersion).toBe(9);
+    expect(card?.canComplete).toBe(true);
+    expect(card?.canPause).toBe(true);
+    expect(card?.canResume).toBe(false);
+  });
+
+  it('never invents a commit or a push state the payload did not report (AC-090)', () => {
+    const card = boardModel(boardPayload).columns.queued[0];
+    expect(card?.commit).toBe(null);
+    expect(card?.unpushed).toBe(null);
+    expect(card?.branch).toBe('');
+    // A record that only names a working tree is not a commit.
+    const uncommitted = boardModel({
+      columns: {
+        queued: [
+          {
+            requirementId: 'r',
+            identity: 'r',
+            lifecycle: 'queued',
+            portableRef: { revision: 'working-tree' },
+          },
+        ],
+      },
+    }).columns.queued[0];
+    expect(uncommitted?.commit).toBe(null);
+  });
+
+  it('exposes exactly the lifecycle actions the daemon commands can express', () => {
+    const queued = boardModel(boardPayload).columns.queued[0];
+    expect(queued?.canCancelWithoutWork).toBe(true);
+    expect(queued?.canArchive).toBe(true);
+    expect(queued?.canComplete).toBe(false);
+    const active = boardModel(boardPayload).columns.active[0];
+    expect(active?.canComplete).toBe(true);
+    expect(active?.canContinue).toBe(false);
+    const paused = boardModel({
+      columns: {
+        active: [
+          {
+            requirementId: 'r',
+            identity: 'r',
+            lifecycle: 'active',
+            canPause: true,
+            work: { id: 'w', status: 'paused' },
+          },
+        ],
+      },
+    }).columns.active[0];
+    expect(paused?.canResume).toBe(true);
+    // An imported active record with no local Work waits to continue (`AC-089`).
+    const imported = boardModel({
+      columns: {
+        active: [
+          {
+            requirementId: 'r',
+            identity: 'r',
+            lifecycle: 'active',
+            executionAvailability: 'needs_replan',
+          },
+        ],
+      },
+    }).columns.active[0];
+    expect(imported?.waitingToContinue).toBe(true);
+    expect(imported?.canContinue).toBe(true);
+  });
 });
 
 describe('inbox projection (AC-074)', () => {
@@ -210,6 +302,156 @@ describe('inbox projection (AC-074)', () => {
     const model = inboxModel(inbox);
     expect(model.recoveries).toHaveLength(1);
     expect(model.recoveries[0]?.runId).toBe('run-9');
+  });
+});
+
+describe('inbox request kinds (WP-12 T4c, AC-074)', () => {
+  const requests: JsonObject = {
+    items: [
+      {
+        kind: 'decision',
+        id: 'd-product',
+        workId: 'w1',
+        decisionKind: 'product',
+        targetRef: { id: 'artifact-1', version: 2, hash: 'hash-1' },
+        targetVersion: 2,
+        choices: ['accept', 'decline'],
+        state: 'pending',
+        actionable: true,
+      },
+      {
+        kind: 'decision',
+        id: 'd-permission',
+        workId: 'w2',
+        decisionKind: 'permission',
+        targetRef: { id: 'tool-op-1', version: 1, hash: 'binding-1' },
+        targetVersion: 1,
+        choices: ['approve', 'deny'],
+        state: 'pending',
+        actionable: true,
+        operation: 'bash',
+        targets: ['/tmp/repo'],
+        inputHash: 'input-1',
+      },
+      {
+        kind: 'decision',
+        id: 'd-permission-blind',
+        workId: 'w3',
+        decisionKind: 'permission',
+        targetRef: { id: 'tool-op-2', version: 1, hash: 'binding-2' },
+        targetVersion: 1,
+        choices: ['approve', 'deny'],
+        state: 'pending',
+        actionable: true,
+      },
+    ],
+    unread: 3,
+  };
+
+  it('resolves a product question from the targetRef Artifact and keeps its choices', () => {
+    const model = inboxModel(requests, {
+      questions: { 'artifact-1:2': { text: 'Ship the smaller change?', error: null } },
+    });
+    const row = model.decisions.find((entry) => entry.id === 'd-product');
+    expect(row?.entry).toBe('decision');
+    expect(row?.artifactId).toBe('artifact-1');
+    expect(row?.artifactVersion).toBe(2);
+    expect(row?.question).toEqual({ text: 'Ship the smaller change?', error: null });
+    expect(row?.choices).toEqual(['accept', 'decline']);
+  });
+
+  it('keeps the read failure as the reason instead of an empty question', () => {
+    const model = inboxModel(requests, {
+      questions: { 'artifact-1:2': { text: '', error: 'ARTIFACT_MISSING: the body is gone' } },
+    });
+    const row = model.decisions.find((entry) => entry.id === 'd-product');
+    expect(row?.question?.error).toBe('ARTIFACT_MISSING: the body is gone');
+  });
+
+  it('falls back to an explicit empty question when no body was resolved', () => {
+    const model = inboxModel(requests);
+    expect(model.decisions.find((entry) => entry.id === 'd-product')?.question).toEqual({
+      text: '',
+      error: null,
+    });
+  });
+
+  it('types a permission request with its binding and the Run it parks', () => {
+    const model = inboxModel(requests, {
+      waitingRuns: {
+        w2: { runId: 'run-2', role: 'backend', stage: 'execute', status: 'waiting_permission' },
+      },
+    });
+    const row = model.decisions.find((entry) => entry.id === 'd-permission');
+    expect(row?.entry).toBe('permission');
+    expect(row?.targetId).toBe('tool-op-1');
+    expect(row?.binding).toEqual({
+      operation: 'bash',
+      targets: ['/tmp/repo'],
+      inputHash: 'input-1',
+    });
+    expect(row?.bindingMissing).toBe(false);
+    expect(row?.runId).toBe('run-2');
+    expect(row?.role).toBe('backend');
+    expect(row?.runStatus).toBe('waiting_permission');
+    // A permission request is not a question: nothing is read from an Artifact.
+    expect(row?.question).toBeNull();
+    expect(row?.artifactId).toBeNull();
+  });
+
+  it('flags a permission request whose binding the daemon did not report', () => {
+    const row = inboxModel(requests).decisions.find((entry) => entry.id === 'd-permission-blind');
+    expect(row?.bindingMissing).toBe(true);
+    expect(row?.binding).toBeNull();
+    expect(row?.targetId).toBe('tool-op-2');
+  });
+
+  it('gives a non-product, non-permission decision no question contract', () => {
+    const model = inboxModel({
+      items: [
+        {
+          kind: 'decision',
+          id: 'd-start',
+          workId: 'w1',
+          decisionKind: 'start',
+          targetRef: { id: 'w1', version: 1 },
+          targetVersion: 1,
+          choices: ['authorized'],
+          state: 'pending',
+          actionable: true,
+        },
+      ],
+      unread: 1,
+    });
+    expect(model.decisions[0]?.entry).toBe('decision');
+    expect(model.decisions[0]?.question).toBeNull();
+    expect(model.decisions[0]?.bindingMissing).toBe(false);
+  });
+
+  it('never copies a secret value or a secretRef out of an inbox payload', () => {
+    const secret = 'sk-live-DO-NOT-LEAK-12345';
+    const model = inboxModel({
+      items: [
+        {
+          kind: 'decision',
+          id: 'd1',
+          workId: 'w1',
+          decisionKind: 'permission',
+          targetRef: { id: 'op-1', version: 1, hash: 'h', secretRef: 'provider/p1' },
+          targetVersion: 1,
+          choices: ['approve', 'deny'],
+          state: 'pending',
+          actionable: true,
+          operation: 'bash',
+          secret,
+          secretRef: 'provider/p1',
+        },
+      ],
+      unread: 1,
+    });
+    const serialized = JSON.stringify(model);
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain('secretRef');
   });
 });
 
@@ -302,6 +544,49 @@ describe('requirement detail (AC-070)', () => {
     });
     expect(detail.waitingToContinue).toBe(true);
     expect(detail.workId).toBeNull();
+  });
+
+  it('states the delivery branch, the commit and the actions it can offer (AC-090)', () => {
+    const detail = requirementDetail({
+      requirement: {
+        ...requirement,
+        portableRef: { path: '.agentdev/requirements/req-1', revision: 'c'.repeat(40) },
+        work: { id: 'work-1', status: 'running', version: 9 },
+      },
+      artifacts: [],
+      runs: [],
+      branch: 'agentdev/main',
+    });
+    expect(detail.branch).toBe('agentdev/main');
+    expect(detail.commit).toBe('c'.repeat(40));
+    // The read surface carries no push state: the UI must not invent one.
+    expect(detail.unpushed).toBe(null);
+    expect(detail.workVersion).toBe(9);
+    expect(detail.canPause).toBe(true);
+    expect(detail.canResume).toBe(false);
+    expect(detail.canCancel).toBe(true);
+    expect(detail.canComplete).toBe(true);
+    expect(detail.canArchive).toBe(false);
+    expect(detail.canContinue).toBe(false);
+  });
+
+  it('reads an explicit unpushed result and treats a working tree as no commit (AC-090)', () => {
+    const detail = requirementDetail({
+      requirement: {
+        ...requirement,
+        lifecycle: 'queued',
+        portableRef: { path: '.agentdev/requirements/req-1', revision: 'working-tree' },
+        git: { unpushed: true },
+        work: null,
+      },
+      artifacts: [],
+      runs: [],
+    });
+    expect(detail.commit).toBe(null);
+    expect(detail.unpushed).toBe(true);
+    expect(detail.canArchive).toBe(true);
+    expect(detail.canComplete).toBe(false);
+    expect(detail.canResume).toBe(false);
   });
 
   it('surfaces attempts, epoch and evidence in a Run detail', () => {
@@ -499,6 +784,84 @@ describe('chief, agents, settings and live projections', () => {
     expect(model.revision).toBe('3');
     expect(model.providers[0]?.secretConfigured).toBe(false);
     expect(model.effectiveLimits['roleConcurrency']).toBe(2);
+  });
+
+  it('projects declared models with the documented keys and no secret-ish field (WP-12 T1.2B)', () => {
+    // A post-save `config.get`: the credential is registered, and a stray legacy
+    // field sits next to the real ones. The model must carry neither the value nor
+    // the `secretRef` string (`protocol.md` §5, `reliability.md` §6).
+    const raw: JsonObject = {
+      scope: 'global',
+      version: 5,
+      revision: '5',
+      providers: [
+        {
+          providerId: 'p',
+          type: 'openai-compatible',
+          baseUrl: 'https://api.example/v1',
+          enabled: true,
+          secretRef: 'provider/p',
+          secretConfigured: true,
+          apiKey: 'sk-live-LEAK',
+          secret: 'sk-live-LEAK',
+          models: [
+            {
+              id: 'm',
+              contextWindow: 100000,
+              maxOutputTokens: 4096,
+              reasoningLevels: ['off', 'high'],
+              vision: true,
+              inputPricePerMTokens: 1,
+              outputPricePerMTokens: 2,
+              apiKey: 'sk-model-LEAK',
+            },
+          ],
+        },
+      ],
+      roleProfiles: {},
+      limits: {},
+      effectiveLimits: {},
+      policy: {},
+    };
+    const model = settingsModel(raw);
+    expect(model.providers[0]?.secretConfigured).toBe(true);
+    expect(model.providers[0]?.models).toEqual([
+      {
+        id: 'm',
+        contextWindow: 100000,
+        maxOutputTokens: 4096,
+        reasoningLevels: ['off', 'high'],
+        vision: true,
+        inputPricePerMTokens: 1,
+        outputPricePerMTokens: 2,
+      },
+    ]);
+    const serialized = JSON.stringify(model);
+    expect(serialized).not.toContain('sk-live-LEAK');
+    expect(serialized).not.toContain('sk-model-LEAK');
+    expect(serialized).not.toContain('secretRef');
+  });
+
+  it('omits undeclared optional prices so provider.upsert never receives null (WP-12 T1.2B)', () => {
+    const input = providerModelsInput([
+      {
+        id: 'm',
+        contextWindow: 1000,
+        maxOutputTokens: 100,
+        reasoningLevels: ['off'],
+        vision: false,
+        inputPricePerMTokens: null,
+        outputPricePerMTokens: null,
+      },
+    ]);
+    expect(Object.keys(input[0] ?? {})).toEqual([
+      'id',
+      'contextWindow',
+      'maxOutputTokens',
+      'reasoningLevels',
+      'vision',
+    ]);
+    expect(JSON.stringify(input)).not.toContain('null');
   });
 
   it('keeps the revision label on a file listing', () => {

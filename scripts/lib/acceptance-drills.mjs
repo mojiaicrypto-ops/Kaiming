@@ -38,7 +38,12 @@ export const DRILL_COMMANDS = Object.freeze([
     tool: 'pnpm test:e2e',
     script: 'scripts/e2e.mjs',
     args: [],
-    allowedExitCodes: [0],
+    // Exit 1 is the drill's own "one or more checks failed" code, and the report it
+    // still writes carries exactly those failures as per-AC `FAIL` rows — a legitimate
+    // acceptance result, not an untrustworthy one (WP-12 T7a: the real-browser ACs can
+    // genuinely fail). A missing, unparsable or internally inconsistent report is still
+    // an infrastructure problem below, and the AC-level FAIL still fails the run.
+    allowedExitCodes: [0, 1],
     timeoutMs: 1_800_000,
   },
   {
@@ -136,6 +141,14 @@ export function runDrills(options) {
       if (record.nonce !== nonce) {
         problems.push(
           `${drill.tool}: 演练报告的 nonce 与本次运行不一致（报告不是本次运行产生的，拒绝作为验收证据）`,
+        );
+        continue;
+      }
+      // The report must agree with the process it came from: a drill that reports a
+      // different exit code did not finish writing its own verdicts.
+      if (typeof record.exitCode === 'number' && record.exitCode !== exitCode) {
+        problems.push(
+          `${drill.tool}: 演练报告记录 exitCode=${String(record.exitCode)}，但进程退出 ${String(exitCode)}（证据不可信）`,
         );
         continue;
       }

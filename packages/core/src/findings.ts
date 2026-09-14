@@ -1693,12 +1693,19 @@ export class FindingService {
     const resumedRuns = this.store.runs.list({ where: 'work_id = ?', params: [work.id] });
     const unresolved = resumedRuns.filter((run) => {
       if (isTerminalRunStatus(run.status)) return false;
-      // The persisted admission is the single authority (`W8R1-04`): a Run parked as
-      // `recovery_required` is unresumable until an accepted, Run-scoped recovery decision
-      // covers it — and then it resumes exactly like an `interrupted` Run. Hard-coding
-      // `recovery_required` here made that decision unable to ever take effect
-      // (WP11R3-01).
-      return !newAttemptAdmission(this.store, run.id).allowed;
+      const admission = newAttemptAdmission(this.store, run.id);
+      // `workflow.md` §5.3 is explicit: "不确定副作用为recovery_required，只有
+      // RecoveryDecision关闭后创建新Attempt". The *state* is the rule, so a Run parked
+      // `recovery_required` is unresolved until an accepted, Run-scoped decision covers
+      // it — never merely because no `run.recovered` verdict happens to exist
+      // (WP11R4-04 fail-open). For every other resumable state the persisted admission is
+      // the authority: an `interrupted` Run whose old process was confirmed terminated, or
+      // whose withholding verdict a decision already lifted, is resumable
+      // (`WP11R3-01`/`W8R1-04`).
+      if (run.status === 'recovery_required') {
+        return !(admission.allowed && admission.resolvedByDecisionId !== null);
+      }
+      return !admission.allowed;
     });
     if (unresolved.length > 0) {
       return {

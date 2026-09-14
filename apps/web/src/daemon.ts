@@ -112,6 +112,60 @@ export async function daemonRead<T = JsonObject>(
   );
 }
 
+/**
+ * Reads one artifact body through the daemon's preview endpoint (`protocol.md` §5).
+ *
+ * `artifact.get` answers the Artifact's metadata, and the body is served by
+ * `GET /artifacts/:id/preview`; the BFF uses this to resolve the question text a
+ * `product` decision points at (`protocol.md` §6) without handing the daemon session
+ * cookie to the browser. Refusals come back as data so the page can state the real
+ * code instead of rendering an empty question.
+ */
+export async function daemonPreview(
+  target: DaemonTarget,
+  session: { readonly cookie: string },
+  artifactId: string,
+): Promise<PreviewRead> {
+  const fetchImpl = target.fetchImpl ?? globalThis.fetch;
+  let response: Awaited<ReturnType<typeof fetchImpl>>;
+  try {
+    response = await fetchImpl(
+      `${target.baseUrl.replace(/\/+$/u, '')}/artifacts/${encodeURIComponent(artifactId)}/preview`,
+      {
+        method: 'GET',
+        headers: {
+          accept: 'text/plain',
+          origin: target.origin,
+          cookie: `agentdev_session=${session.cookie}`,
+        },
+        ...(target.requestTimeoutMs === undefined
+          ? {}
+          : { signal: AbortSignal.timeout(target.requestTimeoutMs) }),
+      },
+    );
+  } catch (error) {
+    return { ok: false, code: 'PROVIDER_UNAVAILABLE', message: messageOf(error) };
+  }
+  const text = await response.text();
+  if (!response.ok) {
+    const error = asObject(asObject(safeJson(text))['error']);
+    return {
+      ok: false,
+      code: typeof error['code'] === 'string' ? error['code'] : 'INTERNAL_ERROR',
+      message:
+        typeof error['message'] === 'string'
+          ? error['message']
+          : `the daemon answered ${String(response.status)}`,
+    };
+  }
+  return { ok: true, text };
+}
+
+/** One artifact body, or the reason it could not be read. */
+export type PreviewRead =
+  | { readonly ok: true; readonly text: string }
+  | { readonly ok: false; readonly code: string; readonly message: string };
+
 /** Signs the browser's installation token in through a real daemon session. */
 export async function daemonLogin(
   target: DaemonTarget,

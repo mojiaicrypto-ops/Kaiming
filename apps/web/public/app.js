@@ -51,6 +51,33 @@
     maxDelayMs: 30000,
     maxAttempts: 6,
   };
+
+  /**
+   * The interface dictionary the server embedded in `#uiStrings`.
+   *
+   * The daemon's `ui.translate` catalogue is smaller than the workbench dictionary,
+   * so the client keeps its own copy for both locales. A language switch inside the
+   * page then translates every string the client owns — including the `aria.*` labels
+   * and the dynamic Live-panel state text — instead of leaving the server-rendered
+   * wording in place (WP-12 T4, T7a gap). It carries interface strings only.
+   */
+  function readClientDictionary() {
+    const island = document.getElementById('uiStrings');
+    if (!island) return { en: {}, zh: {} };
+    try {
+      const parsed = JSON.parse(island.textContent || '{}');
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return {
+          en: parsed.en && typeof parsed.en === 'object' ? parsed.en : {},
+          zh: parsed.zh && typeof parsed.zh === 'object' ? parsed.zh : {},
+        };
+      }
+    } catch {
+      // A malformed island falls back to the daemon catalogue and the server text.
+    }
+    return { en: {}, zh: {} };
+  }
+
   const state = {
     language: shell ? shell.dataset.language || 'en' : 'en',
     csrfToken: null,
@@ -61,7 +88,146 @@
     reconnectTimer: null,
     reconnectAttempt: 0,
     strings: {},
+    dictionary: readClientDictionary(),
   };
+
+  /**
+   * One interface string from the client dictionary.
+   *
+   * The result is deterministic: the key itself is the last resort, never a stale
+   * label that was read back from the DOM (the T7a AC-071 regression).
+   */
+  function translateClient(key) {
+    const dictionary = state.dictionary[state.language] || state.dictionary.en || {};
+    const value = dictionary[key];
+    return typeof value === 'string' && value !== '' ? value : key;
+  }
+
+  /**
+   * The cookie the server reads to render the first paint in the chosen language
+   * (`experience.md` §6: the interface language is a device-local choice that must
+   * survive a reload). `SameSite=Lax` matches the BFF's own browser session cookie.
+   */
+  function languageCookie(language) {
+    return `agentdev_language=${language}; path=/; max-age=31536000; SameSite=Lax`;
+  }
+
+  /**
+   * The `aria-label` for one Live-panel mode.
+   *
+   * It is computed from the dictionaries alone; reading the element's current label
+   * back would keep the previous mode's name after a switch (`data-mode="compact"`
+   * with `aria-label="Live panel, open"`), which is the accessible-name lie the real
+   * browser suite caught.
+   */
+  function panelAriaLabel(key, language, strings, dictionary) {
+    const fromDictionary = (dictionary[language] || {})[key];
+    if (typeof fromDictionary === 'string' && fromDictionary !== '') return fromDictionary;
+    const fromStrings = strings[key];
+    if (typeof fromStrings === 'string' && fromStrings !== '') return fromStrings;
+    return key;
+  }
+
+  /**
+   * The request one requirement action issues (`protocol.md` §4/§5).
+   *
+   * `complete` and `archive` are lifecycle writes: `complete` goes through
+   * `requirement.save` and `archive` through the documented `requirement.archive`
+   * command, while `pause`/`resume`/`cancel` are `work.control` actions. Every
+   * outcome is the server's: the caller only renames the command, never the state.
+   */
+  function boardActionRequest(action, data) {
+    const requirementId = typeof data.requirement === 'string' ? data.requirement : '';
+    const workId = typeof data.work === 'string' ? data.work : '';
+    const reason =
+      typeof data.reason === 'string' && data.reason !== '' ? data.reason : 'workbench';
+    switch (action) {
+      case 'continue':
+        return { ok: true, method: 'requirement.continue', params: { requirementId } };
+      case 'complete':
+        return {
+          ok: true,
+          method: 'requirement.save',
+          params: { requirementId, patch: { lifecycle: 'completed' } },
+        };
+      case 'archive':
+        return { ok: true, method: 'requirement.archive', params: { requirementId } };
+      case 'pause':
+      case 'resume':
+      case 'cancel':
+        return {
+          ok: true,
+          method: 'work.control',
+          params: {
+            action,
+            reason,
+            // A Queued requirement with no local Work cancels by requirement id; a
+            // Work-scoped action names the Work (`AC-068`).
+            ...(workId === '' ? { requirementId } : { workId }),
+          },
+        };
+      default:
+        return {
+          ok: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `unknown requirement action ${String(action)}`,
+          },
+        };
+    }
+  }
+
+  /**
+   * The command one Inbox action issues (`protocol.md` §4).
+   *
+   * A `product` decision's choice is `decision.resolve` with the saved option. A
+   * `permission` row's approve/deny pair goes through `permission.respond`, which is
+   * what mints the bound Grant; the daemon resolves the real binding from the
+   * recorded tool operation, so the client never restates an operation it was not
+   * shown. A denial must record a reason and is refused locally before any request
+   * when the operator left it empty.
+   */
+  function inboxActionRequest(action, data) {
+    const decisionId = typeof data.decision === 'string' ? data.decision : '';
+    const choice = typeof data.choice === 'string' ? data.choice : '';
+    const reason = typeof data.reason === 'string' ? data.reason.trim() : '';
+    if (decisionId === '') {
+      return {
+        ok: false,
+        error: { code: 'VALIDATION_ERROR', message: 'the decision id is missing' },
+      };
+    }
+    if (data.permission === true) {
+      if (choice !== 'approve' && choice !== 'deny') {
+        return {
+          ok: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `unknown permission action ${String(action)}`,
+          },
+        };
+      }
+      if (choice === 'deny' && reason === '') {
+        return {
+          ok: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'a denial must record a reason',
+            reasonRequired: true,
+          },
+        };
+      }
+      return {
+        ok: true,
+        method: 'permission.respond',
+        params: { decisionId, choice, ...(reason === '' ? {} : { reason }) },
+      };
+    }
+    if (choice === '') {
+      return { ok: false, error: { code: 'VALIDATION_ERROR', message: 'the choice is missing' } };
+    }
+    return { ok: true, method: 'decision.resolve', params: { decisionId, choice } };
+  }
 
   /** Exponential backoff with the policy's ceiling; never below the base delay. */
   function reconnectDelay(attempt) {
@@ -107,6 +273,14 @@
     document.documentElement.lang = language === 'zh' ? 'zh-CN' : 'en';
     state.language = language;
     if (shell) shell.dataset.language = language;
+    // The choice must survive a reload: the BFF renders the first paint from this
+    // cookie, so the whole page — not only the strings the server catalogue knows —
+    // comes back in the chosen language (`experience.md` §6).
+    try {
+      document.cookie = languageCookie(language);
+    } catch {
+      // A document with cookies blocked still switches in memory for this page.
+    }
   }
 
   async function loadStrings(language) {
@@ -145,9 +319,11 @@
         }
       }),
     );
-    // The daemon's catalogue covers the interface keys it owns; a key it does not
-    // know keeps the server-rendered text, which is already in the right language.
-    state.strings = resolved;
+    // The daemon's catalogue is the remote contract, but the workbench dictionary is
+    // the UI's own wording; where both know a key the dictionary wins, so a switch
+    // cannot quietly replace the server-rendered word with a different one. The
+    // daemon answer still fills any key the local dictionary does not carry.
+    state.strings = { ...resolved, ...(state.dictionary[language] || {}) };
   }
 
   // ---------------------------------------------------------------------------
@@ -249,12 +425,13 @@
   function showConnection(next) {
     state.connection = next;
     const labels = {
-      open: state.strings['connection.open'] || 'Connected',
-      connecting: state.strings['connection.connecting'] || 'Connecting',
+      open: state.strings['connection.open'] || translateClient('connection.open'),
+      connecting:
+        state.strings['connection.connecting'] || translateClient('connection.connecting'),
       reconnecting:
-        state.strings['connection.reconnecting'] || 'Connection lost; background state pending',
-      closed: state.strings['connection.closed'] || 'Disconnected',
-      expired: state.strings['connection.expired'] || 'Session expired; sign in again',
+        state.strings['connection.reconnecting'] || translateClient('connection.reconnecting'),
+      closed: state.strings['connection.closed'] || translateClient('connection.closed'),
+      expired: state.strings['connection.expired'] || translateClient('connection.expired'),
     };
     const element = document.getElementById('connectionState');
     if (element) {
@@ -283,7 +460,7 @@
       toggle.setAttribute('data-i18n-aria', key);
       toggle.setAttribute(
         'aria-label',
-        state.strings[key] || toggle.getAttribute('aria-label') || mode,
+        panelAriaLabel(key, state.language, state.strings, state.dictionary),
       );
     }
     const store = storage();
@@ -312,7 +489,15 @@
       });
     }
     const close = document.getElementById('liveDockClose');
-    if (close) close.addEventListener('click', () => setPanelMode('compact'));
+    if (close) {
+      close.addEventListener('click', () => {
+        setPanelMode('compact');
+        // `experience.md` §6: closing the narrow-screen overlay returns focus to the
+        // top-bar control that opened it; doing it on every viewport keeps the
+        // keyboard path identical (AC-071).
+        if (toggle) toggle.focus();
+      });
+    }
   }
 
   function appendLive(event) {
@@ -405,11 +590,13 @@
       }
       if (!frame || typeof frame !== 'object') return;
       if (frame.type === 'event') {
+        showProviderTestEvent(frame);
         appendLive({
           cursor: typeof frame.cursor === 'number' ? frame.cursor : 0,
           name: typeof frame.name === 'string' ? frame.name : 'event',
           entityId: typeof frame.entityId === 'string' ? frame.entityId : '',
         });
+        handleInboxEvent(frame);
         return;
       }
       if (frame.type === 'batch_end' && typeof frame.scannedThrough === 'number') {
@@ -461,6 +648,282 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Provider editor (WP-12 T1.2b, `protocol.md` §5)
+  // ---------------------------------------------------------------------------
+
+  /** Provider ids with a connection test in flight, so its event finds the form. */
+  const pendingProviderTests = new Map();
+
+  /**
+   * Builds the `provider.upsert` parameters from one editor's values.
+   *
+   * `protocol.md` §5: the command takes `provider: ProviderInput` plus the secret
+   * value separately, and `secretRef` is server-created. A blank secret therefore
+   * omits the key entirely — it means "keep the stored credential", never "write an
+   * empty credential". The returned object is the only place the typed value goes;
+   * it is never written back to the DOM, a `data-*` attribute or a status line.
+   *
+   * Pure on purpose: no DOM, no globals, so the shipped source can be executed by
+   * the client-script test exactly as it runs in the browser.
+   */
+  function providerUpsertParams(input) {
+    const providerId = typeof input.providerId === 'string' ? input.providerId.trim() : '';
+    const type = typeof input.type === 'string' ? input.type : '';
+    const baseUrl = typeof input.baseUrl === 'string' ? input.baseUrl.trim() : '';
+    const modelsText = typeof input.models === 'string' ? input.models : '';
+    if (['openai-compatible', 'anthropic', 'google'].indexOf(type) === -1) {
+      return {
+        ok: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'the provider type must be openai-compatible, anthropic or google',
+        },
+      };
+    }
+    if (baseUrl === '') {
+      return {
+        ok: false,
+        error: { code: 'VALIDATION_ERROR', message: 'the provider needs a base URL' },
+      };
+    }
+    let models;
+    try {
+      models = JSON.parse(modelsText === '' ? '[]' : modelsText);
+    } catch {
+      return {
+        ok: false,
+        error: { code: 'VALIDATION_ERROR', message: 'the models field is not valid JSON' },
+      };
+    }
+    if (!Array.isArray(models)) {
+      return {
+        ok: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'the models field must be a JSON array of ModelDescriptor objects',
+        },
+      };
+    }
+    const provider = { type, baseUrl, enabled: input.enabled === true, models };
+    // An absent `providerId` asks the server to create one (`ProviderInput`).
+    if (providerId !== '') provider.providerId = providerId;
+    const params = { provider };
+    if (typeof input.secret === 'string' && input.secret.length > 0) params.secret = input.secret;
+    return { ok: true, params };
+  }
+
+  /**
+   * Reads a `provider.test_completed` event's summary (`protocol.md` §5/§7).
+   *
+   * The event shape is the daemon's; every field is read defensively and an
+   * outcome the UI cannot classify stays `null` — it is never rendered as success.
+   */
+  function providerTestOutcome(data) {
+    const accepted =
+      typeof data.accepted === 'boolean'
+        ? data.accepted
+        : typeof data.ok === 'boolean'
+          ? data.ok
+          : null;
+    const detail = [];
+    if (typeof data.modelId === 'string' && data.modelId !== '')
+      detail.push(`modelId: ${data.modelId}`);
+    if (typeof data.latencyMs === 'number') detail.push(`latencyMs: ${String(data.latencyMs)}`);
+    if (typeof data.error === 'string' && data.error !== '') detail.push(data.error);
+    return { accepted, detail: detail.join(' · ') };
+  }
+
+  function showProviderError(editor, failure, preserve) {
+    const element = editor.querySelector('[data-role="error"]');
+    if (!element) return;
+    if (!failure) {
+      element.hidden = true;
+      element.textContent = '';
+      return;
+    }
+    const code = failure.code || 'INTERNAL_ERROR';
+    element.hidden = false;
+    element.dataset.code = code;
+    // The refusal never quotes the typed value: only the code, the server's message
+    // and the fact that the input was kept.
+    element.textContent = `${code}: ${failure.message || ''}${preserve ? ' — input preserved' : ''}`;
+  }
+
+  /** Shows one of the editor's pre-rendered result lines in the active language. */
+  function showProviderResult(editor, role) {
+    const result = editor.querySelector('.provider-result');
+    if (result) result.hidden = false;
+    for (const name of ['saved', 'test-accepted', 'test-completed']) {
+      const line = editor.querySelector(`[data-role="${name}"]`);
+      if (line) line.hidden = name !== role;
+    }
+  }
+
+  /** The editor for one provider id, or `null` when the page has no such row. */
+  function providerEditorFor(providerId) {
+    for (const editor of document.querySelectorAll('form.provider-form')) {
+      if (editor.dataset.provider === providerId) return editor;
+    }
+    return null;
+  }
+
+  /** Renders a completed connection test into its editor. */
+  function showProviderTestEvent(frame) {
+    if (frame.name !== 'provider.test_completed') return;
+    const data = frame.data && typeof frame.data === 'object' ? frame.data : {};
+    const providerId =
+      typeof data.providerId === 'string'
+        ? data.providerId
+        : typeof frame.entityId === 'string'
+          ? frame.entityId
+          : '';
+    if (providerId === '') return;
+    const pending = pendingProviderTests.get(providerId);
+    const editor = pending ? pending.form : providerEditorFor(providerId);
+    if (!editor) return;
+    pendingProviderTests.delete(providerId);
+    const outcome = providerTestOutcome(data);
+    showProviderResult(editor, 'test-completed');
+    const ok = editor.querySelector('[data-role="test-ok"]');
+    const failed = editor.querySelector('[data-role="test-failed"]');
+    if (ok) ok.hidden = outcome.accepted !== true;
+    if (failed) failed.hidden = outcome.accepted !== false;
+    const detail = editor.querySelector('[data-role="test-detail"]');
+    if (detail) detail.textContent = outcome.detail;
+  }
+
+  /** Re-points the model-to-test select at the models just saved. */
+  function fillProviderTestModels(editor, models) {
+    const select = editor.querySelector('.provider-test-model');
+    if (!select) return;
+    const ids = models
+      .map((model) => (model && typeof model.id === 'string' ? model.id : ''))
+      .filter((id) => id !== '');
+    select.replaceChildren(
+      ...ids.map((id) => {
+        const option = document.createElement('option');
+        option.value = id;
+        option.textContent = id;
+        return option;
+      }),
+    );
+    const hasModel = ids.length > 0;
+    select.disabled = !hasModel;
+    select.setAttribute('aria-disabled', String(!hasModel));
+    const button = editor.querySelector('button.provider-test');
+    if (button) {
+      button.disabled = !hasModel;
+      button.setAttribute('aria-disabled', String(!hasModel));
+    }
+  }
+
+  /**
+   * Wires one provider editor to `provider.upsert` / `provider.test`.
+   *
+   * Hard rules (WP-12 T1.2b): no local success path, a rejection keeps every typed
+   * input, and a successful save reports only `secretConfigured` and the new
+   * version before clearing the password field.
+   */
+  function initProviderEditor(editor) {
+    const field = (name) => {
+      const element = editor.querySelector(`[data-field="${name}"]`);
+      return element && typeof element.value === 'string' ? element.value : '';
+    };
+    const secretField = editor.querySelector('[data-field="secret"]');
+    editor.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      showProviderError(editor, null);
+      const enabledField = editor.querySelector('[data-field="enabled"]');
+      const built = providerUpsertParams({
+        providerId: field('providerId'),
+        type: field('type'),
+        baseUrl: field('baseUrl'),
+        enabled: enabledField ? enabledField.checked === true : false,
+        models: field('models'),
+        secret: secretField ? secretField.value : '',
+      });
+      if (!built.ok) {
+        showProviderError(editor, built.error, true);
+        return;
+      }
+      const answer = await rpc('provider.upsert', built.params, {
+        idempotencyKey: newIdempotencyKey('provider-upsert'),
+      });
+      if (!answer.ok) {
+        // Every field — the API key included — keeps exactly what the operator typed.
+        showProviderError(editor, answer.error, true);
+        return;
+      }
+      const result = answer.result && typeof answer.result === 'object' ? answer.result : {};
+      const configured = result.secretConfigured === true;
+      const version = typeof result.version === 'number' ? String(result.version) : '?';
+      showProviderResult(editor, 'saved');
+      const detail = editor.querySelector('[data-role="saved-detail"]');
+      // Only the boolean and the version are shown; the value itself has no place
+      // in a status line (`reliability.md` §6).
+      if (detail)
+        detail.textContent = `secretConfigured: ${String(configured)} · version ${version}`;
+      // A successful write is the one moment the typed key is no longer needed, so
+      // it is cleared rather than kept in the page.
+      if (secretField) secretField.value = '';
+      if (Array.isArray(built.params.provider.models)) {
+        fillProviderTestModels(editor, built.params.provider.models);
+      }
+      if (typeof result.providerId === 'string' && result.providerId !== '') {
+        editor.dataset.provider = result.providerId;
+        const idField = editor.querySelector('[data-field="providerId"]');
+        if (idField && idField.value === '') idField.value = result.providerId;
+      }
+    });
+
+    const testButton = editor.querySelector('button.provider-test');
+    if (testButton) {
+      testButton.addEventListener('click', async () => {
+        showProviderError(editor, null);
+        const select = editor.querySelector('.provider-test-model');
+        const modelId = select ? select.value : '';
+        const providerId = editor.dataset.provider || '';
+        if (providerId === '' || modelId === '') {
+          showProviderError(
+            editor,
+            {
+              code: 'VALIDATION_ERROR',
+              message: 'a provider id and a model id are needed to test the connection',
+            },
+            true,
+          );
+          return;
+        }
+        testButton.disabled = true;
+        const answer = await rpc(
+          'provider.test',
+          { providerId, modelId },
+          { idempotencyKey: newIdempotencyKey('provider-test') },
+        );
+        testButton.disabled = false;
+        if (!answer.ok) {
+          showProviderError(editor, answer.error, true);
+          return;
+        }
+        if (answer.result && answer.result.accepted === false) {
+          // `provider.test` answers `accepted` (`protocol.md` §5): a refusal is a
+          // result, never rendered as "the test is running".
+          showProviderResult(editor, 'test-completed');
+          const ok = editor.querySelector('[data-role="test-ok"]');
+          const failed = editor.querySelector('[data-role="test-failed"]');
+          if (ok) ok.hidden = true;
+          if (failed) failed.hidden = false;
+          return;
+        }
+        pendingProviderTests.set(providerId, { form: editor, modelId });
+        // `accepted` is the command's whole answer; the outcome is a persistent
+        // event, so the UI states both instead of pretending the result is in.
+        showProviderResult(editor, 'test-accepted');
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Chief composer (AC-069, AC-084)
   // ---------------------------------------------------------------------------
 
@@ -473,9 +936,12 @@
   }
 
   function rejectAttachment(reasonKey) {
+    // The client owns these limit messages (`chief.attachment*`), and the daemon's
+    // `ui.translate` catalogue does not carry them, so the local dictionary is the
+    // deterministic source — the T7a gap showed the raw key here.
     showError('composerError', {
       code: 'VALIDATION_ERROR',
-      message: state.strings[reasonKey] || reasonKey,
+      message: state.strings[reasonKey] || translateClient(reasonKey),
     });
   }
 
@@ -529,7 +995,7 @@
     item.dataset.attachment = attachment.attachmentId;
     item.dataset.name = name;
     item.dataset.bytes = String(attachment.bytes || 0);
-    item.textContent = `${name} · ${state.strings['chief.attachmentStaged'] || 'staged'}`;
+    item.textContent = `${name} · ${state.strings['chief.attachmentStaged'] || translateClient('chief.attachmentStaged')}`;
     list.append(item);
   }
 
@@ -668,7 +1134,8 @@
         item.dataset.state = 'received';
         const stateLabel = document.createElement('span');
         stateLabel.className = 'state';
-        stateLabel.textContent = state.strings['state.received'] || 'Received';
+        stateLabel.textContent =
+          state.strings['state.received'] || translateClient('state.received');
         const text_ = document.createElement('div');
         text_.className = 'message-body';
         text_.setAttribute('data-i18n-project', '');
@@ -691,40 +1158,72 @@
       .catch(() => undefined);
   }
 
+  /**
+   * Runs one requirement action through its real command (`protocol.md` §4/§5).
+   *
+   * The handler never writes a state of its own: a refusal renders the protocol code
+   * and message beside the card, the button returns to its rendered state, and the
+   * card keeps the values it was rendered from. Only an accepted answer reloads, so
+   * the new state is read back from the server rather than assumed.
+   */
+  async function runRequirementAction(button, errorId) {
+    const action = button.dataset.action || '';
+    if (button.dataset.refused) {
+      // Pausing a Queued requirement with no local Work is the documented refusal;
+      // it is shown from the server's own rule flag, without a request (AC-068).
+      showError(errorId, {
+        code: button.dataset.refused,
+        message:
+          state.strings['board.pauseQueuedRefused'] || translateClient('board.pauseQueuedRefused'),
+      });
+      return;
+    }
+    const built = boardActionRequest(action, {
+      requirement: button.dataset.requirement,
+      work: button.dataset.work,
+      reason: 'workbench',
+    });
+    if (!built.ok) {
+      showError(errorId, built.error);
+      return;
+    }
+    const options = { idempotencyKey: newIdempotencyKey(`requirement-${action}`) };
+    // `work.control` compares `expectedVersion` with the target Work (`protocol.md`
+    // §1), so the version the card was rendered from travels with the request.
+    if (built.method === 'work.control' && button.dataset.workVersion) {
+      const version = Number(button.dataset.workVersion);
+      if (Number.isInteger(version)) options.expectedVersion = version;
+    }
+    button.disabled = true;
+    const answer = await rpc(built.method, built.params, options);
+    button.disabled = false;
+    if (!answer.ok) {
+      showError(errorId, answer.error);
+      return;
+    }
+    showError(errorId, null);
+    window.location.reload();
+  }
+
   async function initBoard() {
     const board = document.getElementById('board');
     if (!board) return;
     board.addEventListener('click', async (event) => {
       const button = event.target.closest('button[data-action]');
       if (!button) return;
-      const action = button.dataset.action;
-      if (button.dataset.refused) {
-        // Pausing a Queued requirement with no local Work is the documented refusal;
-        // it is shown without a request, from the server's own rule flag (AC-068).
-        showError('boardError', {
-          code: button.dataset.refused,
-          message: state.strings['board.pauseQueuedRefused'] || 'pause is not allowed here',
-        });
-        return;
-      }
-      const params = { action, reason: 'workbench' };
-      if (button.dataset.work) params.workId = button.dataset.work;
-      if (button.dataset.requirement) params.requirementId = button.dataset.requirement;
-      button.disabled = true;
-      const answer = await rpc('work.control', params, {
-        idempotencyKey: newIdempotencyKey(`work-${action}`),
-      });
-      button.disabled = false;
-      if (!answer.ok) {
-        showError('boardError', answer.error);
-        return;
-      }
-      showError('boardError', null);
-      window.location.reload();
+      await runRequirementAction(button, 'boardError');
     });
   }
 
   async function initDetail() {
+    const actions = document.getElementById('detailActions');
+    if (actions) {
+      actions.addEventListener('click', async (event) => {
+        const button = event.target.closest('button[data-action]');
+        if (!button) return;
+        await runRequirementAction(button, 'detailError');
+      });
+    }
     const approve = document.getElementById('approvePlan');
     if (approve) {
       approve.addEventListener('click', async () => {
@@ -759,8 +1258,9 @@
             // The interface string wins over the daemon's English diagnostic, which
             // is only a fallback for a code the catalogue does not know (W9R2-05).
             message:
-              (reasonKey && state.strings[reasonKey]) ||
+              (reasonKey && (state.strings[reasonKey] || translateClient(reasonKey))) ||
               state.strings['detail.approveExpired'] ||
+              translateClient('detail.approveExpired') ||
               approval.reason ||
               'approval unavailable',
           });
@@ -774,7 +1274,9 @@
           approve.setAttribute('aria-disabled', 'true');
           showError('approveError', {
             code: 'INVALID_STATE',
-            message: state.strings['detail.approveUnavailable'] || 'approval unavailable',
+            message:
+              state.strings['detail.approveUnavailable'] ||
+              translateClient('detail.approveUnavailable'),
           });
           return;
         }
@@ -830,7 +1332,10 @@
             plan.dataset.currentVersion = String(answer.result.version);
           }
         }
-        showStatus('approveStatus', state.strings['settings.saved'] || 'applied');
+        showStatus(
+          'approveStatus',
+          state.strings['settings.saved'] || translateClient('settings.saved'),
+        );
       });
     }
 
@@ -889,85 +1394,255 @@
     }
   }
 
-  async function initInbox() {
+  // ---------------------------------------------------------------------------
+  // Inbox: decisions, tool permissions and their live updates (AC-074)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * The permission bindings learned from the live event stream, keyed by tool
+   * operation id.
+   *
+   * `protocol.md` §7: a refused call emits `tool.refused` whose `entityId` is the
+   * `toolOperationId` and whose change summary carries the operation, targets, input
+   * hash and Run; a `permission` decision's `targetRef.id` is that same operation id
+   * (`protocol.md` §4). The map therefore lets a request that arrives while the page
+   * is open say exactly what will be granted. A pending request the page never saw an
+   * event for keeps its "binding not reported" notice instead of guessing.
+   */
+  const permissionBindings = new Map();
+
+  /** The Inbox-relevant persistent events (`protocol.md` §7). */
+  const inboxEvents = [
+    'decision.created',
+    'decision.resolved',
+    'permission.resolved',
+    'state.decision_required',
+  ];
+
+  function rememberToolRefusal(frame) {
+    const data = frame.data && typeof frame.data === 'object' ? frame.data : {};
+    if (typeof frame.entityId !== 'string' || frame.entityId === '') return;
+    permissionBindings.set(frame.entityId, {
+      operation: typeof data.operation === 'string' ? data.operation : '',
+      targets: Array.isArray(data.targets) ? data.targets.map(String) : [],
+      inputHash: typeof data.inputHash === 'string' ? data.inputHash : '',
+      runId: typeof data.runId === 'string' ? data.runId : '',
+    });
+    applyPermissionBindings();
+  }
+
+  function setBindingText(row, name, text) {
+    for (const element of row.querySelectorAll(`[data-binding-${name}]`)) {
+      element.textContent = text;
+    }
+  }
+
+  /** Fills the reported binding into its row and enables the deliberate approval. */
+  function applyPermissionBindings() {
     const list = document.getElementById('inboxList');
     if (!list) return;
-    list.addEventListener('click', async (event) => {
-      const button = event.target.closest('button[data-choice]');
+    for (const row of list.querySelectorAll('[data-entry="permission"]')) {
+      const binding = permissionBindings.get(row.dataset.toolOperation || '');
+      if (!binding || binding.operation === '') continue;
+      setBindingText(row, 'operation', binding.operation);
+      setBindingText(
+        row,
+        'targets',
+        binding.targets.length === 0
+          ? translateClient('inbox.noTargets')
+          : binding.targets.join(', '),
+      );
+      setBindingText(row, 'input-hash', binding.inputHash);
+      setBindingText(row, 'run', binding.runId);
+      row.dataset.bindingMissing = 'false';
+      const notice = row.querySelector('[data-binding-notice]');
+      if (notice) notice.hidden = true;
+      // An expired decision stays disabled even with a known binding.
+      if (row.getAttribute('aria-disabled') !== 'true') {
+        for (const button of row.querySelectorAll('button[data-permission="approve"]')) {
+          button.disabled = false;
+          button.removeAttribute('aria-disabled');
+        }
+      }
+    }
+  }
+
+  /**
+   * Re-reads the Inbox list from the server and re-applies the live bindings.
+   *
+   * The server render stays the single source of truth (`experience.md` §7): the page
+   * is fetched again — a GET, so a running Run is untouched — and only the list region
+   * is replaced, which keeps the Live dock, the scroll position and the learned
+   * bindings without a manual reload.
+   */
+  async function refreshInbox() {
+    const list = document.getElementById('inboxList');
+    if (!list) return false;
+    let response;
+    try {
+      response = await fetch(window.location.pathname, { headers: { accept: 'text/html' } });
+    } catch (error) {
+      showError('inboxRefreshError', {
+        code: 'TRANSPORT_LOST',
+        message: `${translateClient('inbox.refreshFailed')} ${String(error)}`,
+      });
+      return false;
+    }
+    if (!response.ok) {
+      showError('inboxRefreshError', {
+        code: 'INTERNAL_ERROR',
+        message: translateClient('inbox.refreshFailed'),
+      });
+      return false;
+    }
+    // The fetched document is parsed into a detached element: no script runs, and the
+    // server's own markup is the only thing read back out of it.
+    const parsed = document.createElement('div');
+    parsed.innerHTML = await response.text();
+    const fresh = parsed.querySelector('#inboxList');
+    if (!fresh) return false;
+    list.innerHTML = fresh.innerHTML;
+    list.dataset.unread = fresh.dataset.unread || '0';
+    const empty = document.getElementById('inboxEmpty');
+    if (empty) empty.hidden = list.children.length > 0;
+    const badge = document.getElementById('inboxBadge');
+    if (badge) {
+      const unread = Number(list.dataset.unread || '0');
+      badge.textContent = String(unread);
+      badge.hidden = unread <= 0;
+    }
+    showError('inboxRefreshError', null);
+    applyPermissionBindings();
+    return true;
+  }
+
+  /** Routes one live event to the Inbox's own state (`protocol.md` §7). */
+  function handleInboxEvent(frame) {
+    if (!document.getElementById('inboxList')) return;
+    if (frame.name === 'tool.refused') {
+      rememberToolRefusal(frame);
+      return;
+    }
+    if (inboxEvents.indexOf(frame.name) < 0) return;
+    bestEffort(refreshInbox);
+  }
+
+  function disableInboxRow(list, decisionId) {
+    for (const sibling of list.querySelectorAll('button[data-choice], button[data-permission]')) {
+      if (sibling.dataset.decision === decisionId) {
+        sibling.disabled = true;
+        sibling.setAttribute('aria-disabled', 'true');
+      }
+    }
+  }
+
+  async function initInbox() {
+    const inbox = document.getElementById('inbox');
+    const list = document.getElementById('inboxList');
+    if (!inbox || !list) return;
+    applyPermissionBindings();
+    inbox.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-choice], button[data-permission]');
       if (!button || button.disabled) return;
+      const permission = typeof button.dataset.permission === 'string';
+      const choice = permission ? button.dataset.permission : button.dataset.choice;
+      const row = button.closest('.inbox-row');
+      const reasonField = row ? row.querySelector('[data-permission-reason]') : null;
+      const built = inboxActionRequest(choice, {
+        decision: button.dataset.decision,
+        choice,
+        permission,
+        reason: reasonField ? reasonField.value : '',
+      });
+      if (!built.ok) {
+        // A denial without a reason never reaches the server: the entry keeps its
+        // text and the operator is told what the command needs.
+        showError('inboxError', {
+          code: built.error.code,
+          message: built.error.reasonRequired
+            ? translateClient('inbox.denyReasonRequired')
+            : built.error.message,
+        });
+        return;
+      }
+      showError('inboxError', null);
+      showStatus('inboxStatus', '');
       button.disabled = true;
+      const targetVersion = Number(button.dataset.targetVersion || '0');
       const answer = await rpc(
-        'decision.resolve',
+        built.method,
+        { ...built.params, targetVersion },
         {
-          decisionId: button.dataset.decision,
-          choice: button.dataset.choice,
-          targetVersion: Number(button.dataset.targetVersion || '0'),
-        },
-        {
-          idempotencyKey: newIdempotencyKey('decision'),
-          expectedVersion: Number(button.dataset.targetVersion || '0'),
+          idempotencyKey: newIdempotencyKey(
+            built.method === 'permission.respond' ? `permission-${choice}` : 'decision',
+          ),
+          expectedVersion: targetVersion,
         },
       );
       button.disabled = false;
       if (!answer.ok) {
+        // The refusal is the server's: its code and message are rendered and the
+        // entry keeps exactly the state it was rendered from (`experience.md` §7).
         showError('inboxError', answer.error);
-        // An expired decision is disabled rather than retried (`AC-074`).
         if (answer.error.code === 'INVALID_STATE' || answer.error.code === 'VERSION_CONFLICT') {
-          for (const sibling of list.querySelectorAll('button[data-choice]')) {
-            if (sibling.dataset.decision === button.dataset.decision) {
-              sibling.disabled = true;
-              sibling.setAttribute('aria-disabled', 'true');
-            }
-          }
+          disableInboxRow(list, button.dataset.decision);
         }
         return;
       }
-      showError('inboxError', null);
-      window.location.reload();
+      const denied = built.method === 'permission.respond' && choice === 'deny';
+      const key = denied ? 'inbox.denied' : 'inbox.resolved';
+      showStatus('inboxStatus', state.strings[key] || translateClient(key));
+      // The entry leaves the Inbox because the server says so: the list is read
+      // back, and a failed refresh falls back to an honest reload.
+      if (!(await refreshInbox())) window.location.reload();
     });
   }
 
   async function initSettings() {
     const form = document.getElementById('configForm');
-    if (!form) return;
-    const patch = document.getElementById('configPatch');
-    form.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      showError('configError', null);
-      showStatus('configStatus', '');
-      let parsed;
-      try {
-        parsed = JSON.parse(patch ? patch.value : '{}');
-      } catch {
-        showError('configError', {
-          code: 'VALIDATION_ERROR',
-          message: 'the patch is not valid JSON — input preserved',
-        });
-        return;
-      }
-      const answer = await rpc(
-        'config.save',
-        { scope: form.dataset.scope, patch: parsed },
-        {
-          idempotencyKey: newIdempotencyKey('config'),
-          expectedVersion: Number(form.dataset.revision || '0'),
-        },
-      );
-      if (!answer.ok) {
-        // The textarea keeps the user's text; only the reason is added (AC-075).
-        showError('configError', answer.error, true);
-        return;
-      }
-      showStatus('configStatus', state.strings['settings.saved'] || 'saved');
-      if (answer.result && typeof answer.result.revision === 'number') {
-        form.dataset.revision = String(answer.result.revision);
-        const meta = document.getElementById('settingsMeta');
-        if (meta) {
-          meta.dataset.revision = String(answer.result.revision);
-          meta.dataset.version = String(answer.result.revision);
+    if (form) {
+      const patch = document.getElementById('configPatch');
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        showError('configError', null);
+        showStatus('configStatus', '');
+        let parsed;
+        try {
+          parsed = JSON.parse(patch ? patch.value : '{}');
+        } catch {
+          showError('configError', {
+            code: 'VALIDATION_ERROR',
+            message: 'the patch is not valid JSON — input preserved',
+          });
+          return;
         }
-      }
-    });
+        const answer = await rpc(
+          'config.save',
+          { scope: form.dataset.scope, patch: parsed },
+          {
+            idempotencyKey: newIdempotencyKey('config'),
+            expectedVersion: Number(form.dataset.revision || '0'),
+          },
+        );
+        if (!answer.ok) {
+          // The textarea keeps the user's text; only the reason is added (AC-075).
+          showError('configError', answer.error, true);
+          return;
+        }
+        showStatus(
+          'configStatus',
+          state.strings['settings.saved'] || translateClient('settings.saved'),
+        );
+        if (answer.result && typeof answer.result.revision === 'number') {
+          form.dataset.revision = String(answer.result.revision);
+          const meta = document.getElementById('settingsMeta');
+          if (meta) {
+            meta.dataset.revision = String(answer.result.revision);
+            meta.dataset.version = String(answer.result.revision);
+          }
+        }
+      });
+    }
     const test = document.getElementById('configTest');
     if (test) {
       test.addEventListener('click', async () => {
@@ -981,7 +1656,10 @@
           showError('configError', answer.error, true);
           return;
         }
-        showStatus('configStatus', state.strings['settings.testOk'] || 'usable');
+        showStatus(
+          'configStatus',
+          state.strings['settings.testOk'] || translateClient('settings.testOk'),
+        );
       });
     }
     for (const button of document.querySelectorAll('button.test-provider')) {
@@ -995,8 +1673,14 @@
           showError('configError', answer.error, true);
           return;
         }
-        showStatus('configStatus', state.strings['settings.testOk'] || 'usable');
+        showStatus(
+          'configStatus',
+          state.strings['settings.testOk'] || translateClient('settings.testOk'),
+        );
       });
+    }
+    for (const editor of document.querySelectorAll('form.provider-form')) {
+      initProviderEditor(editor);
     }
   }
 
@@ -1112,7 +1796,15 @@
     await initSettings();
     await initRuns();
 
-    if (page === 'chief' || page === 'runs' || page === 'inbox' || page === 'requirement') {
+    if (
+      page === 'chief' ||
+      page === 'runs' ||
+      page === 'inbox' ||
+      page === 'requirement' ||
+      // The settings page needs the same summary subscription so the persistent
+      // `provider.test_completed` event reaches the editor that started the test.
+      page === 'settings'
+    ) {
       openSocket();
     } else {
       showConnection('open');

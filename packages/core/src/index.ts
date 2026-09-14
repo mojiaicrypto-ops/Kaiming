@@ -16,6 +16,7 @@ export * from './recovery.js';
 export * from './runtime.js';
 export * from './capabilities.js';
 export * from './gateway-http.js';
+export * from './control-http.js';
 export * from './transport-http.js';
 export * from './execution.js';
 export * from './supervisor.js';
@@ -40,5 +41,16 @@ export * from './requirement-continue.js';
 export * from './requirement-save.js';
 export * from './grants.js';
 export * from './secrets.js';
+export * from './secret-repository.js';
 export * from './broker.js';
 export * from './test-environment.js';
+// T3 (WP-12): the tool bridge. `process-async`/`tool-processes` are the async,
+// cancellable process port the Broker's shell path uses; `tools` is the Core tool
+// catalog the daemon plans calls with; `tool-http` is the `tool.execute` endpoint
+// handler the control endpoint mounts; `permissions` is the Grant/permission service.
+export * from './process-async.js';
+export * from './tool-processes.js';
+export * from './tools.js';
+export * from './tool-http.js';
+export * from './permissions.js';
+export * from './read-ledger.js';

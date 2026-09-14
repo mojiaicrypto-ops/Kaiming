@@ -296,6 +296,17 @@ export interface BuildContextInput {
   readonly tokenCounter?: TokenCounter;
   /** Injectable clock; defaults to `nowIso()`. */
   readonly now?: () => Time;
+  /**
+   * Dry-run (`context.preview`): run the **same** selection, gate, resolution,
+   * required-input and budget logic, but do not write a snapshot directory.
+   *
+   * The returned `snapshot` carries the identity it *would* have frozen (resolved
+   * sources, excluded, unknowns, token accounting), so a caller can report
+   * `resolved/excluded/missing/estimatedTokens` with no side effect. The flag never
+   * relaxes a check: every error path above the freeze is reached unchanged, and a
+   * dry-run cannot reach the `snapshotWriter` port at all.
+   */
+  readonly preview?: boolean;
 }
 
 /** One source the budget forced out of the package (`AC-036`). */
@@ -1306,6 +1317,13 @@ export function buildContext(input: BuildContextInput): BuildContextResult {
     } satisfies TokenAccounting,
   };
   const snapshotRef = contextSnapshotRef(identity);
+  if (input.preview === true) {
+    // Dry-run (`context.preview`): the identity above is exactly what a real build
+    // would freeze, and nothing has been written. Returning here is the only
+    // difference from the frozen path — no gate, ACL, required-input or budget check
+    // was skipped to get here.
+    return { ok: true, snapshot: { snapshotRef, createdAt, ...identity }, usage, directory: '' };
+  }
   let directory: ContextSnapshotDirectory;
   try {
     directory = input.snapshotWriter.write({

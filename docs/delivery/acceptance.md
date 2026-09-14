@@ -586,8 +586,8 @@
 
 - 单元：Schema、状态、Gate、等级、授权和预算；采用确定性测试，不调用真实模型。
 - 集成：实际SQLite、临时Git、容器、Pi适配器、WebSocket；故障点可控。
-- E2E：真实Core+BFF+真实HTTP/WS的无头端到端（`pnpm test:e2e`，用Provider桩确定结果且断言桩零调用）；真实模型的问答HTML、L1修改、L2跨功能交付由 `pnpm test:live` 对用户配置的Provider执行。
-  - 已批准偏差（WP-10 plan.md §2 D1，用户确认）：本版本不引入浏览器/无头浏览器，因此 AC-002、AC-052、AC-071、AC-073、AC-076 的浏览器侧子句（隔离/攻击样例、viewport与焦点、键盘与ARIA、客户端上传提示）登记为 UNVERIFIED，服务端与协议侧行为仍由套件与演练执行；发布记录逐条列出该缺口，不计入 PASS。
+- E2E：真实Core+BFF+真实HTTP/WS的无头端到端（`pnpm test:e2e`，用Provider桩确定结果且断言桩零调用），并在同一命令内运行 `tests/browser/**` 的真实Chromium浏览器演练；真实模型的问答HTML、L1修改、L2跨功能交付由 `pnpm test:live` 对用户配置的Provider执行。
+  - 已撤销偏差（原 WP-10 plan.md §2 D1，用户已确认撤销）：WP-12 T7a 起引入仅开发依赖的 Playwright 与 Chromium，AC-002、AC-052、AC-071、AC-073、AC-076 的浏览器侧子句（隔离/攻击样例、viewport与焦点、键盘与ARIA、客户端上传提示）在真实浏览器中执行并逐项取证；仅当本环境没有可运行的 Playwright/Chromium 时才登记 UNVERIFIED，且该豁免条件由 `scripts/lib/drill-acs.mjs` 现场判定。
 - 冷启动：新Session独立查找知识；记录期望事实集合和实际来源，必须全部找到样例关键约束。
 - 故障：在接受命令、写文件、产物落盘、Git提交、CAS、完成事务前后注入进程退出。
 

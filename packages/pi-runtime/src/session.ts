@@ -26,6 +26,25 @@ import { PiRuntimeError } from './errors.js';
 import { type PiSessionListener, toPiSessionEvent } from './events.js';
 import type { ResourceLoader } from '@earendil-works/pi-coding-agent';
 
+/** What a tool body is told about the call it is serving. */
+export interface PiToolExecuteContext {
+  /** The SDK's abort signal for this turn; a cancelled turn aborts it. */
+  readonly signal: AbortSignal | undefined;
+  /**
+   * The Pi tool-call id for this invocation.
+   *
+   * The SDK supplies it and previously threw it away. It is the natural stable key for
+   * a tool call: a transport retry of the same call keeps the same id, so the Runner
+   * can derive one `toolOperationId` and let the Core answer a repeated call with the
+   * recorded result instead of running it twice (`protocol.md` §6, `AC-080`).
+   *
+   * Optional so a direct library call (a test driving one tool spec) need not invent an
+   * id; a real session always provides one, and a tool that needs a stable key must
+   * fall back deterministically when it is absent.
+   */
+  readonly toolCallId?: string;
+}
+
 /** A tool the Runner exposes to the model, described without SDK types. */
 export interface PiToolSpec {
   readonly name: string;
@@ -34,7 +53,7 @@ export interface PiToolSpec {
   readonly parameters: TSchema;
   execute(
     params: Record<string, unknown>,
-    context: { readonly signal: AbortSignal | undefined },
+    context: PiToolExecuteContext,
   ): Promise<{ text: string; isError?: boolean }>;
 }
 
@@ -109,8 +128,8 @@ function toToolDefinition(spec: PiToolSpec): ToolDefinition {
     label: spec.label,
     description: spec.description,
     parameters: spec.parameters,
-    execute: async (_toolCallId, params, signal) => {
-      const result = await spec.execute(params as Record<string, unknown>, { signal });
+    execute: async (toolCallId, params, signal) => {
+      const result = await spec.execute(params as Record<string, unknown>, { signal, toolCallId });
       const content = [{ type: 'text' as const, text: result.text }];
       return result.isError === true
         ? { content, details: undefined, isError: true }
@@ -172,10 +191,31 @@ export class PiSessionFactory {
   async createSession(options: CreatePiSessionOptions): Promise<PiSessionHandle> {
     const model = this.runtime.getModel(options.provider, options.modelId);
     if (model === undefined) {
+      // An opaque `MODEL_UNAVAILABLE` cost real debugging time (WP-12 T3b): the catalog the
+      // Runner was handed had not loaded, and the error said nothing about which file or
+      // why. The SDK exposes the loader's own diagnostic (`ModelRuntime.getError()`), so it
+      // is part of the refusal now.
+      const catalog = this.config.modelsPath ?? null;
+      const catalogError = this.runtime.getError();
+      const known = [...new Set(this.runtime.getModels().map((entry) => entry.provider))]
+        .sort()
+        .join(', ');
       throw new PiRuntimeError(
         'MODEL_UNAVAILABLE',
-        `model ${options.provider}/${options.modelId} is not in the catalog`,
-        { provider: options.provider, modelId: options.modelId },
+        [
+          `model ${options.provider}/${options.modelId} is not in the catalog`,
+          catalog === null
+            ? 'catalog: the bundled models (no --models-path was given)'
+            : `catalog: ${catalog}`,
+          catalogError === undefined
+            ? `catalog loaded; known providers: ${known === '' ? '(none)' : known}`
+            : `the catalog could not be loaded: ${catalogError}`,
+        ].join('; '),
+        {
+          provider: options.provider,
+          modelId: options.modelId,
+          ...(catalog === null ? {} : { modelsPath: catalog }),
+        },
       );
     }
 

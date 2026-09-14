@@ -9,7 +9,7 @@
  * `reliability.md` §7: "CLI命令契约：… start/stop/status；open <path>；… 失败退出非零并
  * 输出error code和operationId；status只读".
  */
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -175,4 +175,82 @@ describe('agentdev runtime commands', () => {
       'VALIDATION_ERROR',
     );
   });
+
+  it('reports an unreadable runtime record with an operationId instead of crashing', async () => {
+    // The daemon publishes `runtime.json` before its admin listener binds, so a record
+    // whose `admin.port` is still 0 is a real intermediate state. Neither `status`, `stop`
+    // nor `start` may die with a raw stack trace (WP-11 leftover; `reliability.md` §7).
+    writeFileSync(
+      join(home, 'runtime.json'),
+      `${JSON.stringify({
+        v: 1,
+        pid: 1,
+        epoch: 1,
+        startedAt: '2026-09-14T00:00:00.000Z',
+        version: '0.0.0',
+        home,
+        admin: { host: '127.0.0.1', port: 0 },
+        instances: [],
+      })}\n`,
+    );
+
+    for (const command of [['status'], ['stop']] as const) {
+      const result = await runCli([...command]);
+      expect(result.code).toBe(1);
+      const body = JSON.parse(result.err.trim()) as {
+        error: { code: string };
+        operationId: string;
+      };
+      expect(body.error.code).toBe('RUNTIME_RECORD_INVALID');
+      expect(body.operationId).toMatch(/^[0-9a-f-]{36}$/u);
+    }
+
+    // `start` takes over the stale record and publishes a valid one.
+    const started = await runCli(['start']);
+    expect(started.code).toBe(0);
+    expect(JSON.parse(started.out)).toMatchObject({ started: true });
+    const status = await runCli(['status']);
+    expect(JSON.parse(status.out)).toMatchObject({ running: true });
+  }, 60_000);
+
+  it('keeps the daemon epoch strictly increasing across a clean stop and start', async () => {
+    // `reliability.md` §7 fences an old writer by epoch. A clean `stop` removes the lock,
+    // so the next start used to reuse epoch 1 (WP-11 T-03); the installation's high-water
+    // mark makes the fence monotonic across real process lifecycles.
+    const first = await runCli(['start']);
+    expect(first.code).toBe(0);
+    const firstEpoch = (JSON.parse(first.out) as { epoch: number }).epoch;
+    expect(firstEpoch).toBeGreaterThan(0);
+
+    const stopped = await runCli(['stop']);
+    expect(stopped.code).toBe(0);
+
+    const second = await runCli(['start']);
+    expect(second.code).toBe(0);
+    const secondEpoch = (JSON.parse(second.out) as { epoch: number }).epoch;
+    expect(secondEpoch).toBeGreaterThan(firstEpoch);
+  }, 60_000);
+
+  it('fails a damaged record with a code and operationId and leaves no stale lock', async () => {
+    // A previous daemon died after publishing a half-written `runtime.json`, and its
+    // credential file is unusable (a directory where the token should be), so the next
+    // daemon refuses to start after taking the lock. Every failure must still carry the
+    // established error code and an operationId, and the lock the failing daemon took must
+    // not be left behind (WP-11 T-04; `reliability.md` §7).
+    writeFileSync(join(home, 'runtime.json'), '{ "v": 1, "pid": 1');
+    mkdirSync(join(home, 'installation-token'), { recursive: true });
+
+    const started = await runCli(['start']);
+    expect(started.code).toBe(1);
+    const body = JSON.parse(started.err.trim()) as {
+      error: { code: string };
+      operationId: string;
+    };
+    expect(body.operationId).toMatch(/^[0-9a-f-]{36}$/u);
+    // Deterministic: the failing daemon never rewrites the truncated record, so the probe
+    // stays unreadable for the whole deadline. A tolerant match would let a regression back
+    // to `START_TIMEOUT` slip through (T8b P3-3).
+    expect(body.error.code).toBe('RUNTIME_RECORD_INVALID');
+    expect(existsSync(join(home, 'daemon.lock'))).toBe(false);
+  }, 60_000);
 });

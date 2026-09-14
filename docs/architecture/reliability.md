@@ -62,7 +62,9 @@ agentdev start启动daemon和web；Linux提供systemd单用户服务，macOS提�
 
 优雅停止：停止准入→持久化mailbox/outbox→请求Runner安全停→保存Checkpoint→回收容器/进程→关闭数据库。收到SIGKILL或断电后按恢复流程核对，旧Running不可直接显示继续运行。
 
-CLI命令契约：doctor输出依赖版本/Docker/目录权限/端口状态；start/stop/status；open <path>；backup <projectId> --output <dir>；restore <backupDir> --root <path>；relocate <projectId> --root <path>。失败退出非零并输出error code和operationId；status只读。
+CLI命令契约：doctor输出依赖版本/Docker/目录权限/端口状态；start/stop/status；open <path>；secret set <ref> [--stdin]（值只从stdin读、不回显、不经argv）/secret list（只回元数据）/secret delete <ref>（daemon在运行则走其回环admin面，否则直连安装级仓库）；backup <projectId> --output <dir>；restore <backupDir> --root <path>；relocate <projectId> --root <path>。失败退出非零并输出error code和operationId；status只读。
+
+Provider Secret持久化在安装家目录的`~/.agentdev/secrets/`：默认`file`后端（0600 AES-256-GCM记录+0600独立主密钥），`AGENTDEV_SECRET_BACKEND=keychain`才使用macOS Keychain（`security`以`-w <value>`经argv传值，故不设为默认）。缺少主密钥而记录仍存在时拒绝静默重建并报错；后端不识别或损坏的文件只逐条上报、不阻断启动。
 
 远程使用反向代理TLS到BFF，daemon loopback不公开。健康检查/healthz只暴露ready与版本。日志按Project/Work/Run/Attempt/operationId关联，隐藏Secret和敏感用户内容；完整Artifact由受权路径查看。
 

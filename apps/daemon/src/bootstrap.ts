@@ -30,6 +30,9 @@ import {
   SnapshotWriter,
   createRequirementSaveService,
   resolveProjectIdentity,
+  type RequirementSaveService,
+  type SecretRepository,
+  type SecretStore,
 } from '@agentdev/core';
 import type { RuntimeHost, TrustState } from '@agentdev/contracts';
 import { BlobStore, ProjectStore } from '@agentdev/storage';
@@ -38,6 +41,7 @@ import {
   createMemoryCasEvents,
   createMemoryCasJournal,
   createNodeWorktreeGitPort,
+  type WorktreeGitPort,
 } from '@agentdev/workspace';
 import { createWebApp, WebSessionStore, NodeFilePort, type WebApp } from '@agentdev/web';
 import type { Server } from 'node:http';
@@ -59,6 +63,12 @@ export interface OpenProjectOptions {
   /** Origins allowed to talk to the BFF; defaults to the loopback web origin. */
   readonly allowedOrigins?: readonly string[];
   readonly trust?: TrustState;
+  /**
+   * The installation credential repository and the in-memory store it feeds
+   * (WP-12 T1.1). Omitted by the headless drills, which register their own secrets.
+   */
+  readonly secrets?: SecretStore;
+  readonly secretRepository?: SecretRepository;
   /** 0 asks the OS for a free port, which is what tests use. */
   readonly daemonPort?: number;
   readonly webPort?: number;
@@ -77,6 +87,19 @@ export interface OpenedProject {
   readonly protocol: WorkbenchProtocol;
   readonly config: ConfigStore;
   readonly snapshots: SnapshotWriter;
+  /** The Project's blob store, for message bodies and artifact bytes. */
+  readonly blobs: BlobStore;
+  /** The same real `git` port the save/settlement paths use. */
+  readonly git: WorktreeGitPort;
+  /**
+   * The real services the control handler needs (`protocol.md` §6).
+   *
+   * The execution stack is built by `main.ts` *after* this module returns, so the handler
+   * cannot be assembled here; exposing the services keeps one instance of each (the
+   * Requirement save service and the artifact store must be the same ones the protocol
+   * writes through).
+   */
+  readonly services: ControlHandlerServices;
   readonly daemon: Server;
   readonly web: WebApp | null;
   readonly ports: {
@@ -85,6 +108,13 @@ export interface OpenedProject {
   };
   /** Stops both listeners; the store is closed by the caller. */
   close(): Promise<void>;
+}
+
+/** The subset of Core services the Runner control channel needs. */
+export interface ControlHandlerServices {
+  readonly events: EventHub;
+  readonly artifacts: ArtifactService;
+  readonly requirementSaves: RequirementSaveService;
 }
 
 /** A project that cannot be opened, with the reason the CLI prints. */
@@ -188,16 +218,6 @@ export async function openProject(options: OpenProjectOptions): Promise<OpenedPr
   const casEvents = createMemoryCasEvents();
   const cas = createCasService({ git: gitPort, journal, events: casEvents });
   const lock = new ProjectIntegrationLock({ projectId: identity.projectId, leases: store.leases });
-  // Settlement is part of the protocol surface's real services; it is constructed here
-  // so a later stage (the supervisor) can settle through the same instance.
-  new SettlementService({
-    store,
-    worktrees: gitPort,
-    cas,
-    journal,
-    events: casEvents,
-    snapshots,
-  });
   const requirementSaves = createRequirementSaveService({
     store,
     worktrees: gitPort,
@@ -207,6 +227,20 @@ export async function openProject(options: OpenProjectOptions): Promise<OpenedPr
     lock,
     worktreeRoot: join(dataDir, 'save-worktrees'),
     keepWorktree: false,
+  });
+  // Settlement is part of the protocol surface's real services; it is constructed here
+  // so a later stage (the supervisor) can settle through the same instance. The
+  // requirement-pool save path is injected so a settled completion is committed to
+  // Git instead of only flipping the SQLite projection (`protocol.md` §8).
+  new SettlementService({
+    store,
+    worktrees: gitPort,
+    cas,
+    journal,
+    events: casEvents,
+    snapshots,
+    lock,
+    requirementSaves,
   });
 
   const protocol = new WorkbenchProtocol({
@@ -223,6 +257,13 @@ export async function openProject(options: OpenProjectOptions): Promise<OpenedPr
     findings,
     requirements,
     requirementSaves,
+    // The same real `git` port the save path uses, so the board's branch/commit/
+    // unpushed facts come from Git rather than from a second reader (AC-090).
+    requirementGit: gitPort,
+    ...(options.secrets === undefined ? {} : { secrets: options.secrets }),
+    ...(options.secretRepository === undefined
+      ? {}
+      : { secretRepository: options.secretRepository }),
   });
 
   const daemonOptions: DaemonOptions = {
@@ -267,6 +308,9 @@ export async function openProject(options: OpenProjectOptions): Promise<OpenedPr
     protocol,
     config,
     snapshots,
+    blobs,
+    git: gitPort,
+    services: { events, artifacts, requirementSaves },
     daemon,
     web,
     ports: { daemon: daemonPort, web: webPort },

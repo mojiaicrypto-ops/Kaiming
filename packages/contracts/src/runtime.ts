@@ -33,6 +33,14 @@ export const RUNTIME_FILES = {
   runtime: 'runtime.json',
   /** 0600 single-instance lock, written before the daemon binds anything. */
   lock: 'daemon.lock',
+  /**
+   * 0600 epoch high-water mark, kept across a clean stop (`reliability.md` §7).
+   *
+   * A clean stop removes the lock, so the fence value must outlive it; the next owner takes
+   * `max(installed lock, this) + 1` (WP-11 T-03). `stop` never deletes it, and tools that
+   * enumerate the home for cleanup therefore see the same name the daemon writes.
+   */
+  epoch: 'daemon.epoch',
   /** Registry of the Git roots this installation serves. */
   projects: 'projects.json',
   /** Global configuration (`ARCHITECTURE.md` §5). */
@@ -143,6 +151,8 @@ export interface RuntimePaths {
   readonly installationCredential: string;
   readonly runtime: string;
   readonly lock: string;
+  /** Epoch high-water mark that survives a clean stop (`RUNTIME_FILES.epoch`). */
+  readonly epoch: string;
   readonly projects: string;
   readonly config: string;
   readonly logs: string;
@@ -158,6 +168,7 @@ export function runtimePaths(home: string): RuntimePaths {
     installationCredential: join(RUNTIME_FILES.installationCredential),
     runtime: join(RUNTIME_FILES.runtime),
     lock: join(RUNTIME_FILES.lock),
+    epoch: join(RUNTIME_FILES.epoch),
     projects: join(RUNTIME_FILES.projects),
     config: join(RUNTIME_FILES.config),
     logs: join(RUNTIME_FILES.logs),

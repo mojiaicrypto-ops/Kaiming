@@ -79,6 +79,21 @@ export default tseslint.config(
     },
   },
   {
+    // The real-browser suite runs in Node but evaluates snippets inside the page, so
+    // both global sets apply (WP-12 T7a).
+    files: ['tests/browser/**/*.mjs'],
+    extends: [tseslint.configs.disableTypeChecked],
+    languageOptions: {
+      globals: {
+        ...nodeGlobals,
+        ...browserGlobals,
+        getComputedStyle: 'readonly',
+        XMLHttpRequest: 'readonly',
+        Image: 'readonly',
+      },
+    },
+  },
+  {
     // CommonJS preloads must use `require`.
     files: ['**/*.cjs'],
     rules: {

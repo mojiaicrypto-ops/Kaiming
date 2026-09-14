@@ -42,6 +42,7 @@
  * mutate the ledger through the returned objects.
  */
 import {
+  READ_LEDGER_SEAL_GENESIS as CONTRACTS_READ_LEDGER_SEAL_GENESIS,
   sourceRefKindSchema,
   type ErrorCode,
   type Hash,
@@ -79,7 +80,7 @@ const HASH_PATTERN = /^[0-9a-f]{64}$/u;
 const SOURCE_REF_KINDS: readonly string[] = sourceRefKindSchema.options;
 
 /** Genesis constant of the seal chain; part of the documented hash input. */
-export const READ_LEDGER_SEAL_GENESIS = 'agentdev.read-ledger.seal.v1';
+export const READ_LEDGER_SEAL_GENESIS = CONTRACTS_READ_LEDGER_SEAL_GENESIS;
 
 /** One appended read (`context.md` §1: seq、path、revision/hash、reason、size). */
 export interface ReadLedgerEntry {

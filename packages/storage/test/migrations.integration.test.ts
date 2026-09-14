@@ -130,8 +130,10 @@ function migrate(options: Parameters<typeof runMigrations>[2] = {}): MigrationRe
 describe('migrations', () => {
   it('applies the core schema and records a checksum', () => {
     const result = migrate();
-    expect(result.applied).toEqual([1]);
-    expect(result.currentVersion).toBe(1);
+    // Two migrations ship today: the core schema and the tool_operation targets column
+    // (WP-12 T3 轮 2).
+    expect(result.applied).toEqual([1, 2]);
+    expect(result.currentVersion).toBe(2);
 
     const tables = db
       .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`)
@@ -141,8 +143,10 @@ describe('migrations', () => {
     expect(names).toContain(MIGRATION_TABLE);
 
     const applied = readAppliedMigrations(db);
-    expect(applied).toHaveLength(1);
-    expect(applied[0]?.name).toBe('0001-core-schema');
+    expect(applied.map((row) => row.name)).toEqual([
+      '0001-core-schema',
+      '0002-tool-operation-targets',
+    ]);
     expect(applied[0]?.checksum).toMatch(/^[0-9a-f]{64}$/);
   });
 
@@ -150,7 +154,7 @@ describe('migrations', () => {
     migrate();
     const second = migrate();
     expect(second.applied).toEqual([]);
-    expect(second.currentVersion).toBe(1);
+    expect(second.currentVersion).toBe(2);
   });
 
   it('applies the documented pragmas', () => {

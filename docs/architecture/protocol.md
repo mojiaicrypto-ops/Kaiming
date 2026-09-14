@@ -69,7 +69,7 @@ BFF不转发也不校验浏览器的x-csrf-token（WP-09 登记偏差）：BFF�
 | requirement.archive/restore* | requirementId | accepted；Git保存后requirement.saved，状态规则见workflow |
 | decision.submit* | decisionId,targetVersion:int,choice:string,sourceMessageId?:ID | applied；decision.resolved和effectRefs |
 | permission.request* | workId,runId?:ID,toolOperationId?:ID,inputHash?:Hash,operation,targets:string[],scope:once/run/work/project,role,stage,expiry:Time,limits:{maxCalls?:int,maxBytes?:int,maxDurationSec?:int} | {decisionId,version} |
-| permission.respond* | decisionId,choice:approve/deny | applied；permission.resolved |
+| permission.respond* | decisionId,choice:approve/deny,reason?（deny 可选，记录在permission.resolved） | applied；permission.resolved |
 | recovery.inspect* | workId | accepted；recovery.report_ready |
 | recovery.resolve* | workId,reportRef:Ref,choice:resume/accept_cancel/abandon,sourceMessageId?:ID | accepted；核对报告目标版本后应用 |
 | task.list/get | workId（list）；taskId（get） | items<Task>或Task |
@@ -98,10 +98,15 @@ Decision choice必须属于该决定保存的选项；UI用户可直接提交，
 | config.update* | scope,patch:ConfigPatch | applied；变更后续Run生效 |
 | provider.upsert* | provider:ProviderInput,secret?:string | {providerId,version,secretConfigured} |
 | provider.test* | providerId,modelId | accepted；provider.test_completed |
+| secret.set* | ref,value:string,audience?:gateway/tool（默认gateway） | applied，{ref,configured,updatedAt,backend}；值不回显 |
+| secret.delete* | ref | applied，{ref,deleted} |
+| secret.list | {} | {backend,items<{ref,configured,updatedAt,backend,health,issue?}>,problems<{path,code,message}>}；仅元数据 |
 | extension.list | {} | 内置清单含id/version/enabled/health |
 | extension.set* | id,enabled:bool | applied；critical关闭拒绝 |
 
 ConfigPatch仅允许roleOverrides、limits、permissionMode、l3Paths、l3Keywords、testCommands；所有值按角色/默认值Schema校验，不允许任意键扩大权限。ProviderInput字段见agents规则，secretRef由服务端创建，secret本体不回显。禁用被活动Run引用Provider只影响新Run，显式撤销Secret立即阻断相关调用并记录原因。
+
+`secret.*`是**安装级**方法（省略projectId）：只接受安装凭证Bearer的调用主体（`installation:local`），浏览器会话调用返回NOT_AUTHORIZED；`secret.set/delete`是写方法但不进幂等账本（同ref替换天然幂等，且不得持久化值的摘要），`secret.list`是只读查询。写入按用途落入持久仓库（macOS Keychain或0600加密文件，`AGENTDEV_SECRET_BACKEND`选择，默认file），Provider凭证用`gateway`用途，`tool`用途仍需显式Grant。值绝不出现在任何响应、事件、日志或错误消息中；`health:unreadable`表示记录存在但当前主密钥无法解开（`issue`给出错误码），`problems`列出后端无法识别的文件，二者都不影响daemon启动与其他credential的装载。
 
 POST /artifacts/upload multipart(projectId,conversationId,file)使用认证/CSRF，创建用户所有的staged Attachment，返回{attachmentId,hash,mime,bytes,expiresAt}；24h到期无绑定即清理。上传不要求Work或Run。message.send事务校验同用户/Conversation、数量/总大小、有效期，创建Work后原子绑定附件和消息，并创建origin=user的Artifact（runId为空）。同幂等发送返回原绑定；同附件另一个消息使用拒绝ATTACHMENT_ALREADY_BOUND，需显式重新上传。发送事务失败保持staged，可重试。DELETE /artifacts/uploads/:attachmentId仅删除用户自己的staged附件，已绑定返回INVALID_STATE。遵守附件限制。GET /artifacts/download/:token只一次消费，过期403。只读预览通过受权GET /artifacts/:id/preview，按HTML隔离策略响应。健康GET /healthz返回版本与ready，不返回路径和Secret。
 
@@ -117,15 +122,27 @@ POST /artifacts/upload multipart(projectId,conversationId,file)使用认证/CSRF
 | context.request* | runId,requestedRefs,reason | 在授权内返回内容/ledger项；超范围请求Chief |
 | runner.ready* | attemptId,epoch,runnerId,environmentRef | {leaseUntil}并产生run.started |
 | runner.heartbeat | attemptId,epoch,lastToolOperationId? | {leaseUntil,control} |
-| tool.execute* | attemptId,epoch,toolName,args,expectedInputHash? | accepted或工具结果Ref |
+| tool.execute* | attemptId,epoch,toolName,args,toolOperationId?,expectedInputHash?,timeoutMs? | 内联工具结果，或超限时截断预览+resultRef（见下） |
+| decision.request*（chief） | workId,question,choices? | {status:pending,decisionId,version,artifactId,artifactVersion,choices}；decision.created |
 | stage.submit* | attemptId,epoch,result:StageResult | accepted；验证后stage.completed/failed |
 | runner.stopped* | attemptId,epoch,reason,checkpointRef?,toolOutcomes | 更新Attempt并保留恢复依据 |
 
 Pi工具stage_yield映射stage.submit；普通文本结束没有该结果时Run等待提交提示，连续两次不合规为contract_violation。
 
+Chief的decision_request把提问正文写成`kind=decision`的Artifact（`mime=text/markdown`），Decision行的`targetRef`指向该Artifact的id/version/contentHash，并发出`decision.created`（event.data仅带摘要：artifactId/artifactVersion/choices）；`choices`缺省`['accept','decline']`。用户答案仍走既有`decision.resolve`：`accept`落`state=accepted`并发`decision.resolved`；`decline`按既有product-behaviour分支记录follow-up决定（AC-015/016），两条路径都不新增解析入口。**Inbox渲染契约**：`kind=product`且`targetRef`指向Artifact的决定，界面用`artifact.get`（或预览端点）读取`targetRef.id`的正文作为问题文本，`decision.resolve`按钮按`choices`渲染；这是UI切片的工作，协议侧只保证Artifact、targetRef、choices与事件四者一致。
+
+tool.execute是请求/应答语义：工具集内的每个操作都是有界同步调用，结果在应答前已知，因此**不返回accepted**。`expectedInputHash=sha256(canonicalJson(args))`；`toolOperationId`缺省由服务端生成并在结果中回传，调用方重传同一`toolOperationId`与同一Hash时返回原结果（`status=replayed`），同id异Hash返回IDEMPOTENCY_CONFLICT；Hash与服务端计算不一致同样返回IDEMPOTENCY_CONFLICT。`timeoutMs`缺省120秒（`LIMITS.shellTimeoutSec.default`），上限1800秒，且不得超过该次Grant的`limits.maxDurationSec`（超出返回BUDGET_EXCEEDED）。
+
+结果有两种文档化形状，二选一由结果大小决定（内联上限64KiB）：
+
+- **内联**（结果不超过上限）：`{v:1,status:executed|replayed,mode:container|host,operation,toolName,toolOperationId,inputHash,grantId,result,resultRef:null,truncated:false,durationMs}`，`result`即工具结果本体；
+- **超限**：同样的字段，但`result`是截断预览、`resultRef`非空指向已持久化的完整结果（deferred result，`reliability.md` §2），`truncated:true`；模型侧文本必须注明完整结果在`resultRef`下，完整值不再重复读取即已可重放。
+
+拒绝沿用§7错误封套`{error:{code,message,details?}}`与`statusForControlCode`的状态码：未认证/未授权Grant/角色工具面外/根外路径/保护路径/私网目标/NOT_AUTHORIZED，未知工具或字段、args不合schema、超时越界/VALIDATION_ERROR，once已消费或Hash冲突/IDEMPOTENCY_CONFLICT，结果不可解析/RECOVERY_REQUIRED，无Docker或容器无代理/PROVIDER_UNAVAILABLE，Grant限额超出/BUDGET_EXCEEDED。`read`/`search`在**准入前**还要过该Attempt的`readScope`（`context.md` §1）：越出范围返回`CONTEXT_FORBIDDEN`，此时不读文件、不落`tool_operation`、不进read ledger，越权请求记入同一ledger的expansion并由Chief经`context.request`处理——「读了但不入账」不是允许的降级。**端点层自身的拒绝也要写一条`tool.refused`审计**（operation/targets/code；不含args原文）。
+
 ## 7. 事件与错误
 
-Event={v:1,type:event,eventId,projectId,cursor,name,entityId,entityVersion,data}。持久事件包括project.created、message.received/processed/failed、assessment.saved、requirement.changed、requirement.saved、requirement.save_failed、requirement.imported、work.control_changed、run.queued/started/ended、stage.completed/failed、artifact.created/invalidated、decision.created/resolved、permission.resolved、initialization.progress/completed、recovery.report_ready、knowledge.updated、provider.test_completed、operation.failed、chief_action_required。data包含变更后实体摘要及产物/错误引用；完整内容由get获取。
+Event={v:1,type:event,eventId,projectId,cursor,name,entityId,entityVersion,data}。持久事件包括project.created、message.received/processed/failed、assessment.saved、requirement.changed、requirement.saved、requirement.save_failed、requirement.imported、work.control_changed、run.queued/started/ended、stage.completed/failed、artifact.created/invalidated、decision.created/resolved、permission.resolved、tool.invoked/tool.refused、initialization.progress/completed、recovery.report_ready、knowledge.updated、provider.test_completed、operation.failed、chief_action_required。data包含变更后实体摘要及产物/错误引用；完整内容由get获取。tool.invoked在工具准入通过、`tool_operation`落库后发出（operation/inputHash/grantId/mode/outcome）；tool.refused在Broker任一拒绝分支或端点层拒绝时发出（operation/targets/code/reason/mode），两者都不含args原文或Secret值。
 
 token.delta、log.delta、heartbeat为临时流，包含runId、seq和内容，不占持久cursor；最终消息与日志Artifact补全。每个终态事件携带真实outcome，客户端不能将run.ended统一渲染为成功。
 
@@ -142,5 +159,7 @@ requirement.save.retry* params={operationId:ID}：仅真实用户或有对应授
 冲突解除：用户在Git保留并合并双方内容、恢复缺失记录后，调用requirement.import指定当前交付HEAD Revision。有效且无重复ID的记录以该Git版本重建投影，标resolved并解除写阻断；相同version异内容的首次发现保持冲突，后续明确用户导入动作确认修复后的当前Revision才可解除。自动导入不能自动解除冲突。旧失败操作的预期Hash不因此改变；用户基于新投影重新提交变更，旧操作标superseded并关联新操作，不能重放旧payload。归档/取消须在记录恢复且冲突解除后执行，不提供绕过冲突的写入口。
 
 需求create必须提供contentMarkdown；update可修改正文或元数据，未提供字段保持原值，Core重新计算contentHash和组合recordHash。daemon在update/取消前按投影的portableRef.revision读回Git中的requirement.json与content.md，用记录值补齐请求未命名的字段，因此部分patch不会把scope清零或把acceptance/openQuestions/confirmedDecisions/featureIds重置为空（W9R2-02）。version、contentFile及Hash由Core维护，客户端不可覆盖。requirement.saved包含recordVersion、portableRef与本机version；get返回完整contentMarkdown，list返回元数据及portableRef，不携带长正文。目录格式错误使用REQUIREMENT_CONFLICT并带reason；Git忽略为REQUIREMENT_PATH_IGNORED；旧格式为LEGACY_REQUIREMENT_FORMAT。
+
+需求完成写入口：`requirement.save`/`requirement.update` 的 `patch` 可带 `lifecycle:'completed'` 与 `completion`（{completedAt,summary,codeRevision,codeTree,featureIds,verificationSummary,remainingIssues}，类型同PortableRequirement的completion）。两者必须同时提供：只给`lifecycle`而缺`completion`返回GATE_NOT_READY；非法lifecycle迁移返回INVALID_STATE；gate未通过的完成记录由结算路径（SettlementService）通过同一需求池Git保存写入，完成记录与最终知识一起提交。
 
 requirement.save遵循§1的通用写幂等账本：同键同载荷重放返回首次记录的结果（同requirementId/version，不新建投影行，也不再产生commit），同键异载荷返回IDEMPOTENCY_CONFLICT；被拒绝的调用不占用键，修正载荷后可用同键重试（W9R2-01）。requirement.save.retry仍按本节走「新请求键指向原operation」的独立语义，不入通用账本。

@@ -76,6 +76,18 @@ export const RECOVERY_OPERATION_KIND = 'recover';
 /** Event emitted when a Run is parked for recovery. */
 export const RUN_RECOVERED_EVENT = 'run.recovered';
 
+/**
+ * `Event.name` of a `RecoveryReport` that has become ready (`protocol.md` §4
+ * `recovery.inspect`, §7).
+ *
+ * A report is "ready" once it is durable: `recoverAfterRestart` records every
+ * report it built in the `recover` operation row, and this event is appended in
+ * the *same* transaction with the report's reference (`reportRef`), so a reader
+ * can resolve the exact report version a later `recovery.resolve` must honour.
+ * An ad-hoc `buildReport` never emits: it persists nothing to resolve against.
+ */
+export const RECOVERY_REPORT_READY_EVENT = 'recovery.report_ready';
+
 /** Event that carries the diagnostics of a refused late result (`AC-058`). */
 export const LATE_RESULT_REJECTED_EVENT = 'stage.result_rejected';
 
@@ -972,6 +984,17 @@ export class RunRecoveryService {
     applied: readonly RunRecoveryApplyResult[],
     reports: readonly RecoveryReport[],
   ): void {
+    const operationRowId = this.store.newId();
+    // `reportRef` is the addressable handle `recovery.resolve` checks a decision
+    // against: the `recover` operation row that records the reports, plus the
+    // report's own content hash (a report is content-addressed, `reliability.md` §6).
+    const addresses = reports.map((report) => ({
+      runId: report.operationId,
+      workId: report.workId,
+      hash: report.hash,
+      reportRef: { id: operationRowId, version: 1, hash: report.hash },
+    }));
+    const byRun = new Map(applied.map((entry) => [entry.runId, entry]));
     const body: JsonObject = {
       hostEpoch,
       recovered: applied.map((entry) => ({
@@ -983,16 +1006,48 @@ export class RunRecoveryService {
         newAttemptAllowed: entry.inspection.newAttemptAllowed,
       })),
       reportHashes: reports.map((report) => report.hash),
+      reports: addresses,
     };
-    this.store.operations.insert({
-      id: this.store.newId(),
-      projectId: this.store.projectId,
-      sourceRef: { kind: 'action', id: `daemon-restart:${hostEpoch}`, version: '1' },
-      kind: RECOVERY_OPERATION_KIND,
-      state: 'completed',
-      stepResults: body,
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
+    withTransaction(this.store.db, () => {
+      this.store.operations.insert({
+        id: operationRowId,
+        projectId: this.store.projectId,
+        sourceRef: { kind: 'action', id: `daemon-restart:${hostEpoch}`, version: '1' },
+        kind: RECOVERY_OPERATION_KIND,
+        state: 'completed',
+        stepResults: body,
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      });
+      // `protocol.md` §7: the report is ready in the same transaction that records
+      // it. `data` carries the summary and the report reference; the full report is
+      // fetched through its address, never copied into the event.
+      reports.forEach((report, index) => {
+        const address = addresses[index];
+        const entry = byRun.get(report.operationId);
+        if (address === undefined) return;
+        this.store.events.append({
+          name: RECOVERY_REPORT_READY_EVENT,
+          // The report is about one Run; the envelope reports that Run's version at
+          // the moment the restart found it (the report's own `expectedVersions.run`).
+          entityId: report.operationId,
+          entityVersion: report.expectedVersions.run,
+          data: {
+            runId: report.operationId,
+            workId: report.workId,
+            hostEpoch,
+            reportRef: { ...address.reportRef },
+            reportHash: report.hash,
+            expectedVersions: { ...report.expectedVersions },
+            runnerState: { ...report.runnerState },
+            recommendedActions: [...report.recommendedActions],
+            requiresRecoveryDecision: entry?.inspection.requiresRecoveryDecision ?? false,
+            newAttemptAllowed: entry?.inspection.newAttemptAllowed ?? false,
+            unknownCount: report.unknowns.length,
+            externalEffectCount: report.externalEffects.length,
+          },
+        });
+      });
     });
   }
 

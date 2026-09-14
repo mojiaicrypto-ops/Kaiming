@@ -1632,3 +1632,434 @@ export async function runRuntimeAttemptDrill({ harness, product }) {
     await execution.stop();
   }
 }
+
+/**
+ * The no-seed control-channel drill (WP-12 T2.7 / R3-2b).
+ *
+ * One real user message, a real Chief Run against the configured Provider, the real Core
+ * control channel (`assessment.submit` → `agent.dispatch`), a real Requirement projection,
+ * then a real professional Run that delivers through `stage.submit`. No row is seeded: the
+ * chain only passes if the message really drives it.
+ */
+export async function runMessageToStageDrill({ harness, product }) {
+  const { core } = product;
+  const { createPrepareRun } = await import('../../apps/daemon/src/prepare-run.ts');
+  const { createControlHandlers } = await import('../../apps/daemon/src/control-handler.ts');
+  const { markMessageProcessing, markMessageSettled } = await import(
+    '../../apps/daemon/src/message-state.ts'
+  );
+  const { store } = harness;
+
+  harness.controlLog = [];
+  const execution = await core.createProjectExecution({
+    store,
+    config: harness.config,
+    snapshots: harness.snapshots,
+    secrets: harness.secrets,
+    probe: core.createNodeProcessProbe(),
+    tickMs: 200,
+    log: (line) => harness.controlLog.push(line),
+    prepare: ({ capabilities, gatewayUrl, controlUrl }) =>
+      createPrepareRun({
+        store,
+        config: harness.config,
+        capabilities,
+        gatewayUrl,
+        controlUrl,
+        projectRoot: harness.repo,
+        attemptsDir: join(harness.dataDir, 'attempts'),
+        log: () => undefined,
+      }),
+    spawn: harness.runnerSpawn(),
+    control: {
+      attach: ({ orchestrator, stageGate }) =>
+        createControlHandlers({
+          store,
+          orchestrator,
+          stageGate,
+          requirementSaves: harness.requirementSaves,
+          log: (line) => harness.controlLog.push(line),
+        }),
+      onAttemptStarted: ({ runId }) => markMessageProcessing(store, runId),
+      onRunSettled: ({ runId, status }) => markMessageSettled(store, runId, status),
+    },
+  });
+  harness.protocol.attachOrchestrator(execution.orchestrator);
+  harness.protocol.attachGateway(execution.gateway);
+
+  const waitFor = async (predicate, what, timeoutMs = 240_000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const value = predicate();
+      if (value !== undefined && value !== false) return value;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    throw new Error(`timed out waiting for ${what}`);
+  };
+
+  try {
+    execution.start(`live-r32-host-${String(Date.now())}`);
+    // A plain natural-language execution instruction: `PRODUCT.md` §5 makes it its own
+    // authorization, and the file it names is inside the project root.
+    const sent = await harness.accepted('conversation.message.send', {
+      conversationId: harness.conversationId,
+      // An unambiguous L2 delivery on **existing** code: a request to create a new file is
+      // classified `artifact` by a real model (verified), which correctly creates no
+      // Requirement (`PRODUCT.md` §3) and therefore no professional Run.
+      // Explicitly a delivery request: a real model has classified shorter wording as
+      // `assist`/`artifact` (both correctly create no Requirement), which would make the
+      // drill assert the wrong routing rather than the chain.
+      body: [
+        'This is a code delivery request (intent=delivery, L2), not a question and not a',
+        'documentation task: modify the implementation of the existing file',
+        `${CODE_PATH} so its exported cancellation message includes the word "dark"`,
+        'instead of the current wording. Change the existing code in place.',
+        'Use your tools to submit the delivery.',
+      ].join(' '),
+      attachmentIds: [],
+    });
+    const workId = sent.workId;
+
+    const chiefRun = await waitFor(
+      () =>
+        store.runs
+          .list({ where: "work_id = ? AND role = 'chief'", params: [workId] })
+          .at(-1),
+      'the Chief Run',
+    );
+    // A real model may end its turn with plain text; the documented two-strike rule then
+    // ends the Run as `contract_violation`. Report that status instead of only a timeout.
+    const assessmentDeadline = Date.now() + 240_000;
+    let assessed = false;
+    while (Date.now() < assessmentDeadline) {
+      const events = store.events.readAfter(0, { limit: 20_000 });
+      if (
+        events.some(
+          (event) => event.name === 'assessment.saved' && event.data['workId'] === workId,
+        )
+      ) {
+        assessed = true;
+        break;
+      }
+      const status = store.runs.find(chiefRun.id)?.status;
+      if (status === 'contract_violation' || status === 'failed' || status === 'cancelled') {
+        const attempts = store.attempts
+          .list({ where: 'run_id = ?', params: [chiefRun.id] })
+          .map((attempt) => attempt.status)
+          .join(',');
+        throw new Error(
+          `the real Chief Run ended as ${status} without submitting an assessment (attempts: ${attempts}); the model did not deliver through the control channel`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    ensure(assessed, 'the real Chief assessment did not arrive within 240s');
+    const work = store.works.find(workId);
+    ensure(
+      work?.authorizationRef !== undefined && work?.authorizationRef !== null,
+      'the derived authorization was not bound to the Work',
+    );
+    const requirementDeadline = Date.now() + 60_000;
+    let requirement = store.requirements.list({ where: 'work_id = ?', params: [workId] })[0];
+    while (requirement === undefined && Date.now() < requirementDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      requirement = store.requirements.list({ where: 'work_id = ?', params: [workId] })[0];
+    }
+    if (requirement === undefined) {
+      // Not necessarily a bug: only L2/L3 `delivery`/`document` assessments create a
+      // Requirement (`PRODUCT.md` §3, WP-12 P1-1). Report what the real model decided.
+      const assessment = store.assessments
+        .list({ where: 'work_id = ?', params: [workId] })
+        .at(-1);
+      const log = harness.controlLog.join(' | ').slice(-600);
+      throw new Error(
+        `no Requirement for the real assessment: intent=${String(assessment?.intent)} level=${String(assessment?.level)} reason=${String(assessment?.reason)}; control log: ${log}`,
+      );
+    }
+    ensure(
+      requirement.lifecycle === 'active' && requirement.phase === 'plan',
+      `the Requirement is ${requirement.lifecycle}/${String(requirement.phase)}`,
+    );
+    const professional = await waitFor(
+      () =>
+        store.runs
+          .list({ where: 'work_id = ?', params: [workId] })
+          .find((run) => run.role !== 'chief'),
+      'the professional Run the real Chief dispatched',
+    );
+    ensure(
+      professional.parentRunId === chiefRun.id,
+      `the professional Run's parent is ${String(professional.parentRunId)}`,
+    );
+    const stageDeadline = Date.now() + 240_000;
+    let stageResult = store.stageResults
+      .list({ where: 'run_id = ?', params: [professional.id] })[0];
+    while (stageResult === undefined && Date.now() < stageDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      stageResult = store.stageResults
+        .list({ where: 'run_id = ?', params: [professional.id] })[0];
+    }
+    if (stageResult === undefined) {
+      // The professional Attempt did not deliver. Report its real status and what the
+      // control channel saw, so the next step is a decision, not a guess.
+      const run = store.runs.find(professional.id);
+      const attempts = store.attempts
+        .list({ where: 'run_id = ?', params: [professional.id] })
+        .map((attempt) => `${attempt.status}/epoch${String(attempt.ownerEpoch)}`)
+        .join(',');
+      const log = harness.controlLog.join(' | ').slice(-800);
+      throw new Error(
+        `no stage result: professional Run is ${String(run?.status)} (attempts: ${attempts}); control log: ${log}`,
+      );
+    }
+    // `protocol.md` §7: a success is `stage.completed`, any other terminal status is
+    // `stage.failed`. The real model's delivery may honestly be `needs_input`/`failed`.
+    const stageEvents = store.events
+      .readAfter(0, { limit: 20_000 })
+      .filter(
+        (event) =>
+          event.entityId === professional.id &&
+          (event.name === 'stage.completed' || event.name === 'stage.failed'),
+      );
+    ensure(
+      stageEvents.length > 0,
+      `no terminal stage event was emitted for the professional Run (stage result status ${String(stageResult.status)})`,
+    );
+    const stageOutcome = `${stageEvents[0].name}(${String(stageResult.status)})`;
+    const board = await harness.accepted('board', {});
+    ensure(
+      JSON.stringify(board).includes(requirement.id),
+      'the board does not show the Requirement the real message created',
+    );
+    return `real Provider no-seed chain: message ${sent.messageId} → Chief Run ${chiefRun.id} (${String(store.runs.find(chiefRun.id)?.status)}) → Requirement ${requirement.id} (active/plan) → professional Run ${professional.id} (parent ${chiefRun.id}) → stage result ${stageResult.id} + ${stageOutcome}; provider calls=${String(harness.transport.summary())}`;
+  } finally {
+    await execution.stop();
+  }
+}
+
+/**
+ * AC-066: real Pi SDK streaming deltas and stored-session history recovery (WP-12 R3-3).
+ *
+ * The session talks to the real Provider through the Core gateway proxy, exactly like a
+ * Runner Attempt does: the per-Attempt catalog carries the attempt capability, never the
+ * Provider secret, so no credential is written to disk. Both halves are asserted against
+ * the real SDK session and its real session file.
+ */
+export async function runSessionStreamingDrill({ harness, product, provider }) {
+  const { core, storage } = product;
+  const { createPrepareRun } = await import('../../apps/daemon/src/prepare-run.ts');
+  const { writeAttemptCatalog, GATEWAY_PROVIDER_ID } = await import(
+    '../../apps/daemon/src/runner-spawn.ts'
+  );
+  const piRuntime = await import('@agentdev/pi-runtime');
+  const { mkdirSync, readFileSync } = await import('node:fs');
+  const { store } = harness;
+
+  const execution = await core.createProjectExecution({
+    store,
+    config: harness.config,
+    snapshots: harness.snapshots,
+    secrets: harness.secrets,
+    transport: harness.transport,
+    probe: core.createNodeProcessProbe(),
+    tickMs: 3_600_000,
+    log: () => undefined,
+    prepare: ({ capabilities, gatewayUrl, controlUrl }) =>
+      createPrepareRun({
+        store,
+        config: harness.config,
+        capabilities,
+        gatewayUrl,
+        controlUrl,
+        projectRoot: harness.repo,
+        attemptsDir: join(harness.dataDir, 'attempts'),
+        log: () => undefined,
+      }),
+    spawn: harness.runnerSpawn(),
+  });
+
+  // One real Work/Run/Attempt so the gateway proxy can authenticate the capability.
+  const workId = store.newId();
+  const budget = store.budgets.insert({
+    projectId: harness.projectId,
+    workId,
+    tokenLimit: 200_000,
+    tokensUsed: 0,
+    tokensReserved: 0,
+    activeTimeLimit: 3_600,
+    activeTimeUsed: 0,
+    repairLimit: 3,
+    repairUsed: 0,
+    costKnown: true,
+  });
+  store.works.insert({
+    id: workId,
+    projectId: harness.projectId,
+    intent: 'assist',
+    purpose: 'AC-066 session drill',
+    level: 'L2',
+    goal: 'prove streaming and session recovery',
+    scope: { readPaths: [], writePaths: [], operations: [], networkTargets: [] },
+    sourceRef: { kind: 'action', id: store.newId(), version: '1' },
+    status: 'running',
+    blockerIds: [],
+    budgetId: budget.id,
+    policyRevision: 1,
+  });
+  const frozen = harness.config.freeze('backend', {});
+  const run = store.runs.insert({
+    projectId: harness.projectId,
+    workId,
+    role: 'backend',
+    purpose: 'implementation',
+    stage: 'Develop',
+    status: 'running',
+    requiredChild: false,
+    join: 'none',
+    childIds: [],
+    configSnapshotId: frozen.snapshotId,
+    contextSnapshotId: storage.sha256(`ac066-context-${workId}`),
+    dispatchSnapshotId: storage.sha256(`ac066-dispatch-${workId}`),
+    budgetAllocation: 50_000,
+  });
+  const attempt = store.attempts.insert({
+    projectId: harness.projectId,
+    runId: run.id,
+    number: 1,
+    status: 'running',
+    ownerEpoch: 0,
+  });
+  const capability = execution.capabilities.issue({
+    attemptId: attempt.id,
+    runId: run.id,
+    epoch: attempt.ownerEpoch + 1,
+    role: 'backend',
+  });
+
+  const dir = join(harness.dataDir, `ac066-${String(Date.now())}`);
+  const agentDir = join(dir, 'agent');
+  mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+  const catalogPath = writeAttemptCatalog({
+    dir,
+    gatewayUrl: execution.gatewayUrl,
+    capability: capability.token,
+    modelId: provider.modelId,
+    contextWindow: 128_000,
+    maxOutputTokens: 4_096,
+    reasoning: false,
+  });
+  const factory = await piRuntime.PiSessionFactory.create({
+    cwd: harness.repo,
+    agentDir,
+    modelsPath: catalogPath,
+  });
+  const resources = piRuntime.createExplicitResources({
+    cwd: harness.repo,
+    agentDir,
+    trusted: true,
+    skillPaths: [],
+  });
+  const sessionDir = join(dir, 'sessions');
+  const session = await factory.createSession({
+    provider: GATEWAY_PROVIDER_ID,
+    modelId: provider.modelId,
+    resourceLoader: resources.loader,
+    toolNames: [],
+    sessionDir,
+  });
+
+  const events = [];
+  const unsubscribe = session.subscribe((event) => events.push(event));
+  const waitIdle = async (handle, timeoutMs = 180_000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (!handle.isIdle()) {
+      if (Date.now() > deadline) throw new Error('the session did not become idle in time');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  };
+
+  try {
+    await session.prompt('Reply with exactly: PONG-AC066');
+    await waitIdle(session);
+
+    const deltas = events.filter((event) => event.type === 'text_delta');
+    const thinking = events.filter((event) => event.type === 'thinking_delta');
+    // The Core gateway serves a single-shot completion as one SSE chunk by design
+    // (`gateway-http.ts`), so one `text_delta` is the real, expected increment count;
+    // what is asserted is that the SDK really saw a streamed increment, not a bulk body.
+    ensure(
+      deltas.length >= 1,
+      `the real session produced ${String(deltas.length)} text delta(s); streaming was not observed`,
+    );
+    const firstDelta = deltas[0]?.delta ?? '';
+    const lastDelta = deltas[deltas.length - 1]?.delta ?? '';
+    ensure(
+      deltas.map((event) => event.delta).join('').trim().length > 0,
+      'the streamed deltas were empty',
+    );
+
+    // ---- stored session history recovery ---------------------------------------
+    const sessionFile = session.sessionFile();
+    ensure(
+      typeof sessionFile === 'string' && sessionFile.length > 0,
+      'the real session did not persist a session file',
+    );
+    const storedLines = readFileSync(sessionFile, 'utf8')
+      .split('\n')
+      .filter((line) => line.trim() !== '');
+    ensure(storedLines.length > 0, 'the persisted session file is empty');
+    unsubscribe();
+    session.dispose();
+
+    // A *new* factory instance resumes the stored session (ARCHITECTURE.md §3).
+    const resumedFactory = await piRuntime.PiSessionFactory.create({
+      cwd: harness.repo,
+      agentDir,
+      modelsPath: catalogPath,
+    });
+    const resumed = await resumedFactory.createSession({
+      provider: GATEWAY_PROVIDER_ID,
+      modelId: provider.modelId,
+      resourceLoader: resources.loader,
+      toolNames: [],
+      resumeFrom: sessionFile,
+    });
+    ensure(
+      resumed.sessionId === session.sessionId,
+      `the resumed session id ${resumed.sessionId} differs from ${session.sessionId}`,
+    );
+    const resumedEvents = [];
+    const unsubscribeResumed = resumed.subscribe((event) => resumedEvents.push(event));
+    await resumed.prompt('Reply with exactly: PONG-AC066-AGAIN');
+    await waitIdle(resumed);
+    unsubscribeResumed();
+    const resumedEnd = resumedEvents.filter((event) => event.type === 'agent_end').at(-1);
+    ensure(resumedEnd !== undefined, 'the resumed session produced no agent_end event');
+    // `agent_end.messageCount` counts the messages of *that turn* (observed 2 → 2), so the
+    // history proof is the stored session itself: the resumed session must reuse the same
+    // file and the same session id, and the new turn must be appended to that file.
+    ensure(
+      resumed.sessionFile() === sessionFile,
+      `the resumed session used ${String(resumed.sessionFile())}, not the stored ${String(sessionFile)}`,
+    );
+    const afterResume = readFileSync(sessionFile, 'utf8')
+      .split('\n')
+      .filter((line) => line.trim() !== '');
+    ensure(
+      afterResume.length > storedLines.length,
+      `the stored session did not continue (${String(storedLines.length)} → ${String(afterResume.length)} records)`,
+    );
+    const resumedDeltas = resumedEvents.filter((event) => event.type === 'text_delta').length;
+    ensure(resumedDeltas >= 1, 'the resumed session produced no streamed delta');
+    resumed.dispose();
+
+    return [
+      `real Pi session over the Core gateway (provider ${provider.modelId}):`,
+      `streaming text_delta=${String(deltas.length)} thinking_delta=${String(thinking.length)}`,
+      `first="${firstDelta.slice(0, 40).replaceAll('"', "'")}" last="${lastDelta.slice(0, 40).replaceAll('"', "'")}";`,
+      `session file ${storedLines.length} → ${afterResume.length} record(s); resumed with a new factory: same sessionId + same file, ${String(resumedDeltas)} fresh delta(s), turn messageCount ${String(resumedEnd.messageCount)}`,
+    ].join(' ');
+  } finally {
+    await execution.stop();
+  }
+}

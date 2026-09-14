@@ -151,7 +151,7 @@
 | pnpm lint | TypeScript与格式 | 退出0 |
 | pnpm test:unit | Vitest领域/Schema | 全通过 |
 | pnpm test:integration | SQLite/Git/Pi/WS/容器 | 全通过，失败无残留工具进程 |
-| pnpm test:e2e | 真实Core+BFF+真实HTTP/WS的无头端到端（已批准偏差：不引入Playwright，见`.agentdev/work/WP-10/plan.md` §2 D1） | UI与协议一致；服务端行为全部执行，浏览器像素/焦点/脚本隔离等客户端证据登记UNVERIFIED并带原因 |
+| pnpm test:e2e | 真实Core+BFF+真实HTTP/WS的无头端到端，并运行`tests/browser/**`的真实Chromium浏览器演练（Playwright为仅开发依赖，见WP-12 T7a） | UI与协议一致；服务端行为全部执行，浏览器侧子句（隔离预览与攻击样例、面板三态与窄屏焦点、键盘遍历/ARIA/语言切换、客户端附件限制提示）在真实Chromium中执行并逐项取证；仅当本环境没有可运行的Playwright/Chromium时，这些AC才登记UNVERIFIED并带原因 |
 | pnpm test:acceptance | fixture及AC证据汇总；本次运行内真实执行`test:e2e`/`test:live`并校验证据绑定 | 必需AC全有结果；PASS、已登记豁免与FAIL/MISSING分明；任何未登记或条件失效的UNVERIFIED按FAIL处置 |
 | pnpm test:live | 用户已配置的真实Provider纵向演练（未配置时显式UNVERIFIED且零网络调用） | HTML、L1、L2+结算三路径成功；未配置Provider时不伪造成通过 |
 | pnpm docs:check | Markdown链接、Schema引用和需求映射 | 无断链或未定义引用 |

@@ -1,0 +1,84 @@
+# launchd drill: label=com.agentdev.daemon.t6drill home=/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-launchd-home-IVF18Q
+$ lsof -nP -iTCP:4318 -sTCP:LISTEN
+(free)
+$ sed -e 's|__NODE__|…|' -e 's|__AGENTDEV_REPO__|…|' -e 's|__AGENTDEV_HOME__|…|' /Users/huyaohua/huyh/work/aigrouptool/apps/cli/templates/com.agentdev.daemon.plist > /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-launchd-home-IVF18Q/com.agentdev.daemon.t6drill.plist
+$ launchctl bootstrap gui/501 /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-launchd-home-IVF18Q/com.agentdev.daemon.t6drill.plist
+[bootstrap exit 0]
+
+$ AGENTDEV_HOME=/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-launchd-home-IVF18Q node apps/cli/dist/cli.js status
+{
+  "ok": true,
+  "running": true,
+  "home": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-launchd-home-IVF18Q",
+  "runtime": {
+    "v": 1,
+    "pid": 33473,
+    "epoch": 1,
+    "startedAt": "2026-09-14T10:27:09.263Z",
+    "version": "0.1.0",
+    "home": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-launchd-home-IVF18Q",
+    "admin": {
+      "host": "127.0.0.1",
+      "port": 61891
+    },
+    "instances": []
+  },
+  "health": {
+    "ok": true,
+    "ready": true,
+    "version": "0.1.0",
+    "epoch": 1,
+    "pid": 33473,
+    "projects": 0,
+    "execution": {
+      "enabled": true,
+      "live": 0
+    }
+  }
+}
+[exit 0]
+
+$ launchctl print gui/501/com.agentdev.daemon.t6drill | head -20
+gui/501/com.agentdev.daemon.t6drill = {
+	active count = 1
+	path = /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-launchd-home-IVF18Q/com.agentdev.daemon.t6drill.plist
+	type = LaunchAgent
+	state = running
+
+	program = /opt/homebrew/bin/node
+	arguments = {
+		/opt/homebrew/bin/node
+		/Users/huyaohua/huyh/work/aigrouptool/apps/daemon/dist/main.js
+		--home
+		/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-launchd-home-IVF18Q
+	}
+
+	stdout path = /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-launchd-home-IVF18Q/logs/launchd.out.log
+	stderr path = /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-launchd-home-IVF18Q/logs/launchd.err.log
+	inherited environment = {
+		SSH_AUTH_SOCK => /var/run/com.apple.launchd.HAZZYahGuV/Listeners
+	}
+
+
+daemon pid from runtime.json: 33473
+ok   the launchd service started the daemon (pid 33473)
+ok   the daemon holds daemon.lock while running
+ok   agentdev status exited 0 while the service runs
+
+$ launchctl bootout gui/501/com.agentdev.daemon.t6drill
+[bootout exit 0]
+
+$ AGENTDEV_HOME=/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-launchd-home-IVF18Q node apps/cli/dist/cli.js status
+{
+  "ok": true,
+  "running": false,
+  "home": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-launchd-home-IVF18Q"
+}
+[exit 0]
+
+ok   no daemon process left after the unload
+ok   no leftover daemon.lock
+ok   the launchd job is unloaded
+ok   agentdev status reports the runtime stopped
+
+drill home kept for inspection: /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-launchd-home-IVF18Q

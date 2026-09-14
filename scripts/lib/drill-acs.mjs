@@ -12,13 +12,21 @@
  * (a real browser), an input this environment does not have (a real Provider, a
  * distinct Review/Test model) or a recorded product shortfall, it names the missing
  * input. `closedBy` names the drill that can close the gap (its per-AC row must be
- * `PASS`); a gap without `closedBy` is a product/browser shortfall no drill can close.
- * The aggregator downgrades a registered AC to UNVERIFIED until its gap is closed, and
+ * `PASS`); a gap without `closedBy` is a product shortfall no drill can close. The
+ * aggregator downgrades a registered AC to UNVERIFIED until its gap is closed, and
  * only accepts that UNVERIFIED while the named condition still holds — see
- * `scripts/acceptance.mjs`.
+ * `scripts/acceptance.mjs`. WP-12 T7a gave the five browser ACs `closedBy:
+ * 'pnpm test:e2e'`, because `pnpm test:e2e` now runs the real Chromium suite: its
+ * per-AC `PASS` closes the gap, while `FAIL` still fails the AC and an `UNVERIFIED`
+ * row (no browser on this machine) remains the only acceptable gap.
+ *
+ * WP-12 T7a reversed WP-10's "no browser" decision: Playwright is a dev-only root
+ * dependency now, so `browser-absent` is evaluated against the machine
+ * (`scripts/lib/browser-suite.mjs`) instead of being permanently true.
  */
+import { browserAvailable, browserUnavailableReason } from './browser-suite.mjs';
 
-/** Isolation attack samples a real browser would have to run (AC-002/AC-052). */
+/** Isolation attack samples a real browser has to run (AC-002/AC-052). */
 export const E2E_BROWSER_ISOLATION_ACS = Object.freeze(['AC-002', 'AC-052']);
 
 /** Viewport/keyboard evidence only a real browser can produce (AC-071/AC-073). */
@@ -27,7 +35,13 @@ export const E2E_BROWSER_VIEWPORT_ACS = Object.freeze(['AC-071', 'AC-073']);
 /** Client-side upload hints only a browser can show (AC-076). */
 export const E2E_BROWSER_UPLOAD_ACS = Object.freeze(['AC-076']);
 
-/** The ACs `pnpm test:e2e` can never close because it ships no browser. */
+/**
+ * The ACs whose browser-side clauses `pnpm test:e2e` executes in Chromium.
+ *
+ * Since WP-12 T7a these are run by `tests/browser/**` through Playwright whenever the
+ * browser is installed; only an environment that genuinely has no browser may report
+ * them `UNVERIFIED` (`browser-absent`).
+ */
 export const E2E_BROWSER_ACS = Object.freeze([
   ...E2E_BROWSER_ISOLATION_ACS,
   ...E2E_BROWSER_VIEWPORT_ACS,
@@ -37,11 +51,28 @@ export const E2E_BROWSER_ACS = Object.freeze([
 /** The AC `pnpm test:e2e` records as UNVERIFIED because it needs a real model. */
 export const E2E_PROVIDER_ACS = Object.freeze(['AC-001']);
 
+/**
+ * The AC the operations drill (`scripts/lib/e2e-ops-drill.mjs`) executes with the real
+ * `agentdev` CLI on a temporary `AGENTDEV_HOME` (WP-12 G11).
+ *
+ * AC-064's evidence shape is "真 CLI backup → 损坏 → restore → 比对"; the drill runs the
+ * installed binary as a child process, so the evidence is the product path rather than a
+ * library call. AC-065 (migration) and AC-094's cross-root clause stay at the library
+ * layer by the hardening plan §3.1 (destructive storage injection / unimplemented
+ * identity migration) — they are deliberately *not* listed here and must not be registered
+ * as `recorded-gap`, which would downgrade an otherwise passing AC.
+ */
+export const E2E_OPS_ACS = Object.freeze(['AC-064']);
+
 /** The ACs each `pnpm test:live` drill closes when the real Provider answers. */
 export const LIVE_DRILL_ACS = Object.freeze({
   html: ['AC-001'],
   l1: ['AC-007'],
   l2: ['AC-010', 'AC-037', 'AC-041'],
+  // The no-seed message→Chief→dispatch→stage chain (WP-12 T2.7 / R3-2b).
+  messageToStage: ['AC-003', 'AC-005', 'AC-069'],
+  // Real Pi session streaming + stored-session recovery (AC-066).
+  session: ['AC-066'],
 });
 
 /** The AC a distinct Review/Test model would close. */
@@ -60,7 +91,8 @@ export const LIVE_REPORTED_ACS = Object.freeze([
  *
  * - `provider-absent`      — only valid while `AGENTDEV_PROVIDER_*` is incomplete.
  * - `review-model-absent`  — only valid while `AGENTDEV_PROVIDER_REVIEW_MODEL` is unset.
- * - `browser-absent`       — permanent: product decision D1 (WP-10) ships no browser.
+ * - `browser-absent`       — only valid while Playwright/Chromium is not runnable here
+ *                            (WP-12 T7a reversed WP-10's "no browser" decision).
  * - `recorded-gap`         — a product/environment shortfall recorded with a residual id
  *                            and accepted by a user decision; permanent until the
  *                            residual is implemented.
@@ -107,30 +139,39 @@ export const RESIDUAL_GAPS = Object.freeze({
   },
   'AC-002': {
     condition: 'browser-absent',
-    decision: 'WP-10 plan.md §2 D1（用户确认不引入 Playwright / 浏览器下载）',
+    closedBy: 'pnpm test:e2e',
+    decision:
+      'WP-10 plan.md §2 D1 已被 WP-12 T7a 撤销：Playwright 与 Chromium 安装后该豁免条件不再成立，浏览器证据必须真实执行；仅当本环境确实没有浏览器时，本登记项才继续有效',
     gap: '真实浏览器中的隔离预览与脚本隔离未执行；提交用例与演练只证明 CSP/sandbox/credentials 预览头、一次性下载 token 与截断。',
   },
   'AC-052': {
     condition: 'browser-absent',
-    decision: 'WP-10 plan.md §2 D1',
+    closedBy: 'pnpm test:e2e',
+    decision: 'WP-10 plan.md §2 D1 已被 WP-12 T7a 撤销（同上）',
     gap: '真实浏览器中的攻击样例（读 cookie/网络/父页）未执行；提交用例只证明预览隔离策略与无 cookie。',
   },
   'AC-071': {
     condition: 'browser-absent',
-    decision: 'WP-10 plan.md §2 D1',
+    closedBy: 'pnpm test:e2e',
+    decision: 'WP-10 plan.md §2 D1 已被 WP-12 T7a 撤销（同上）',
     gap: '真实 viewport 截图与焦点切换未执行；演练与提交用例只证明面板三态、共享宽度标记与不干扰 Run。',
   },
   'AC-073': {
     condition: 'browser-absent',
-    decision: 'WP-10 plan.md §2 D1',
+    closedBy: 'pnpm test:e2e',
+    decision: 'WP-10 plan.md §2 D1 已被 WP-12 T7a 撤销（同上）',
     gap: '真实浏览器键盘遍历与 ARIA 朗读未执行；提交用例只证明字典级语言切换与项目内容不被翻译。',
   },
   'AC-066': {
-    condition: 'recorded-gap',
-    residual: 'WP-10-D4/AC-066',
+    // Closed by the real-Provider drill `drill.session-streaming` (WP-12 R3-3): a real Pi
+    // session over the Core gateway produced a streamed `text_delta`, and a **new** factory
+    // resumed the stored session file with the same session id and continued appending.
+    // The gap is therefore only "no Provider configured here" — no longer a recorded gap.
+    condition: 'provider-absent',
+    closedBy: 'pnpm test:live',
     decision:
-      'WP-10 plan.md §2 D4（用户确认）：接受为已登记缺口，真实模型的一轮 Pi SDK 会话（流式增量与会话历史恢复）未在发布验收中执行',
-    gap: 'AC-066 的 SDK 契约由锁定版本 0.85.1 的真实适配测试逐用例证明（事件映射含 assistant 文本/thinking 增量、工具边界、压缩、订阅、abort、资源释放、resume 路径接线）；但“真实模型经 Pi SDK 产生流式增量并从存储会话恢复历史”需要 Runner 侧真实驱动 Pi SDK 的生产级 models.json 与凭证注入，本包未执行，登记为已登记缺口。',
+      'WP-12 R3-3：`drill.session-streaming` 用真实 Provider 关闭该缺口（真实 Pi 会话经 Core gateway 产出流式 text_delta；新 factory 复用同一 session 文件与会话 id 并继续追加记录）。仅在未配置 AGENTDEV_PROVIDER_* 时保持 UNVERIFIED。',
+    gap: '真实 Provider 下的一轮 Pi SDK 会话（流式增量与会话历史恢复）尚未执行；配置 AGENTDEV_PROVIDER_* 后由 `pnpm test:live` 的 `drill.session-streaming` 关闭。',
   },
   'AC-090': {
     condition: 'recorded-gap',
@@ -141,7 +182,8 @@ export const RESIDUAL_GAPS = Object.freeze({
   },
   'AC-076': {
     condition: 'browser-absent',
-    decision: 'WP-10 plan.md §2 D1',
+    closedBy: 'pnpm test:e2e',
+    decision: 'WP-10 plan.md §2 D1 已被 WP-12 T7a 撤销（同上）',
     gap: '客户端的超数量/大小/类型提示需要浏览器执行；服务端拒绝（无残留引用）已由提交用例与 e2e 演练执行。',
   },
 });
@@ -178,9 +220,15 @@ export function conditionHolds(condition, env = process.env) {
     };
   }
   if (condition === 'browser-absent') {
+    // WP-12 T7a: the gap is only tolerable while the environment genuinely has no
+    // browser. Once Playwright and its Chromium binary are installed, an unexecuted
+    // browser AC is a FAIL, not an accepted gap.
+    const holds = !browserAvailable();
     return {
-      holds: true,
-      why: '本发布不提供浏览器运行时（产品决定 D1），该缺口在本次发布内不可关闭',
+      holds,
+      why: holds
+        ? `本环境确实没有可运行的浏览器：${browserUnavailableReason()}`
+        : `Playwright 与 Chromium 已安装（${browserUnavailableReason()}），因此“没有浏览器”不再是有效理由：pnpm test:e2e 必须真实执行并报告这些 AC`,
     };
   }
   if (condition === 'provider-absent') {

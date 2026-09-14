@@ -27,9 +27,11 @@ import {
   type DispatchSpec,
   type JsonObject,
   type Level,
+  type OperationName,
   type ProfessionalDispatchSpec,
   type Run,
   type Scope,
+  type SourceRef,
   type Work,
 } from '@agentdev/contracts';
 import {
@@ -73,6 +75,65 @@ export interface OrchestratorOptions {
 export interface AssessInput {
   readonly workId: string;
   readonly payload: AssessmentPayload;
+  /**
+   * Set by `assessAndDispatch` when Core derived this very authorization from the
+   * assessment (WP-12 Q1=B), so the work-row check is deferred to `assertDeclaredAuthority`
+   * on the declared level instead of being skipped.
+   */
+  readonly derivedAuthorization?: boolean;
+}
+
+/**
+ * One Chief assessment that also freezes the professional Run it decided on.
+ *
+ * `protocol.md` §6 has the Chief submit through `assessment.submit` and then
+ * `agent.dispatch`; this input is exactly that pair, with the server-owned fields (the
+ * Work, the profile revision, the authorization) left to Core so a Runner cannot name
+ * them.
+ */
+/**
+ * The `ProfessionalDispatchSpec` draft an `agent.dispatch` caller may submit.
+ *
+ * `kind`, `workId` and `profileRevision` are Core's (`data.md` §3 "ProfessionalDispatchSpec
+ * 仅由Core根据…构建"), so the draft cannot name them; `parentRunId` is still part of the
+ * draft because the Chief must declare the intent, but Core verifies it against the
+ * capability's own Run before freezing it.
+ */
+export type ProfessionalSpecDraft = Omit<
+  ProfessionalDispatchSpec,
+  'kind' | 'workId' | 'profileRevision'
+>;
+
+export interface AssessAndDispatchInput {
+  readonly workId: string;
+  readonly payload: AssessmentPayload;
+  /** The `ProfessionalDispatchSpec` draft the model submitted, minus Core-owned fields. */
+  readonly spec: ProfessionalSpecDraft;
+  /**
+   * The Chief Run the capability belongs to.
+   *
+   * The parent comes from the caller's own Attempt binding, never from the model: a draft
+   * that names another Run is refused rather than followed (`rules/agents.md` §3 "所有子Run为
+   * ChiefRun的直接子级").
+   */
+  readonly parentRunId: string;
+  /**
+   * The source Core derives the authorization from when the Work has none.
+   *
+   * `PRODUCT.md` §5: "明确的自然语言执行指令与按钮授权等价", so the message that carried
+   * the instruction is the authorization's source (`workflow.md` §1). Absent means the
+   * caller already bound the Work's authority and no derivation is attempted.
+   */
+  readonly sourceRef?: SourceRef;
+  readonly contextPayload?: JsonObject;
+  readonly requiredOutputSchemas?: readonly { readonly kind: string; readonly schemaVersion: 1 }[];
+}
+
+export interface AssessAndDispatchResult {
+  readonly assessment: Assessment;
+  /** The authorization Core derived or verified, when the Run needed one. */
+  readonly authorizationRef: string | undefined;
+  readonly dispatch: DispatchResult;
 }
 
 export interface DispatchInput {
@@ -193,6 +254,139 @@ function levelRank(level: string): number {
   return level === 'none' ? 0 : level === 'L1' ? 1 : level === 'L2' ? 2 : 3;
 }
 
+/**
+ * Operations a derived authorization may contain (`WP-12` user decision Q1=B).
+ *
+ * A natural-language execution instruction authorizes *file* work: reading, searching and
+ * editing the project. `bash`, `network`, `secret`, `push`, `deploy` and `delete_data` are
+ * environment operations; they still require the explicit path (`workflow.md` §2.2/§2.3,
+ * AC-011/AC-080), so derivation never produces them.
+ */
+export const DERIVABLE_OPERATIONS: readonly OperationName[] = [
+  'read',
+  'search',
+  'edit',
+  'write',
+  'git',
+];
+
+/** Operations that always need an explicit authorization, never a derived one. */
+export const ENVIRONMENT_OPERATIONS: readonly OperationName[] = [
+  'bash',
+  'network',
+  'secret',
+  'push',
+  'deploy',
+  'delete_data',
+];
+
+/**
+ * Rejects a scope that a derived authorization may not carry.
+ *
+ * Fails closed: an assessment that reaches for an environment operation, a network target or
+ * a path outside the project root is refused with a typed error instead of being silently
+ * narrowed (a narrower grant the model did not ask for would hide a real escalation).
+ */
+export function assertDerivableScope(
+  workId: string,
+  scope: Scope,
+  allowed: readonly OperationName[],
+): readonly OperationName[] {
+  const environment = scope.operations.filter((operation) =>
+    (ENVIRONMENT_OPERATIONS as readonly string[]).includes(operation),
+  );
+  if (environment.length > 0) {
+    fail(
+      'NOT_AUTHORIZED',
+      `a derived authorization never grants environment operations: ${environment.join(', ')}`,
+      { workId, operations: [...environment], explicit: [...ENVIRONMENT_OPERATIONS] },
+    );
+  }
+  if (scope.networkTargets.length > 0) {
+    fail('NOT_AUTHORIZED', 'a derived authorization never grants network targets', {
+      workId,
+      networkTargets: [...scope.networkTargets],
+    });
+  }
+  const undecided = scope.operations.filter(
+    (operation) => !(allowed as readonly string[]).includes(operation),
+  );
+  if (undecided.length > 0) {
+    fail('NOT_AUTHORIZED', `a derived authorization does not cover: ${undecided.join(', ')}`, {
+      workId,
+      operations: [...undecided],
+    });
+  }
+  const outside = [...scope.readPaths, ...scope.writePaths].filter(
+    (path) => !isProjectRelativePath(path),
+  );
+  if (outside.length > 0) {
+    fail('VALIDATION_ERROR', 'a derived authorization must stay inside the project root', {
+      workId,
+      outsideProjectRoot: outside,
+    });
+  }
+  return scope.operations;
+}
+
+/**
+ * True for a repository-relative path that cannot leave the project root.
+ *
+ * `repoPathSchema` already refuses absolute paths; this is the second, explicit check the
+ * derivation makes before it writes authority, so a `..` segment or a Windows drive letter
+ * cannot slip through a future schema change.
+ */
+export function isProjectRelativePath(path: string): boolean {
+  if (path.length === 0 || path.startsWith('/') || path.startsWith('~')) return false;
+  if (/^[A-Za-z]:/u.test(path)) return false;
+  const segments = path.split(/[\\/]+/u);
+  return !segments.includes('..');
+}
+
+/**
+ * The authorization Core derives from an assessment (`WP-12` Q1=B).
+ *
+ * The evidence is the assessment's own scope: the paths the Chief says the work touches.
+ * A scope with no write path derives nothing — authority is only written when there is
+ * something to authorize — and the caller keeps the existing explicit-grant path for
+ * messages that name paths.
+ */
+function derivedAuthorization(
+  scope: Scope,
+  declared: readonly OperationName[],
+  allowed: readonly OperationName[],
+): { readonly scope: Scope; readonly operations: readonly OperationName[] } | undefined {
+  if (scope.writePaths.length === 0) return undefined;
+  // A write path is also readable: the derived envelope must cover the read the Run will
+  // actually perform, or `verifyAuthorization` refuses its own grant.
+  const readPaths = [...new Set([...scope.readPaths, ...scope.writePaths])];
+  // The declared scope may name only paths (`workflow.md` §1 has the Chief submit a scope,
+  // not a capability list), so the derived envelope also carries the operations its own
+  // paths require; `verifyAuthorization` would otherwise refuse the grant Core just wrote
+  // ("writePaths without a write operation").
+  const operations = [...new Set([...declared, ...operationsForPaths(scope, allowed)])];
+  return {
+    scope: { readPaths, writePaths: [...scope.writePaths], operations, networkTargets: [] },
+    operations,
+  };
+}
+
+/** The deriable operations a scope's own paths imply, restricted to the allowlist. */
+function operationsForPaths(scope: Scope, allowed: readonly OperationName[]): OperationName[] {
+  const wants = (operation: OperationName): boolean =>
+    (allowed as readonly string[]).includes(operation);
+  const operations: OperationName[] = [];
+  if ((scope.readPaths.length > 0 || scope.writePaths.length > 0) && wants('read')) {
+    operations.push('read');
+  }
+  if (scope.writePaths.length > 0) {
+    for (const operation of ['edit', 'write'] as const) {
+      if (wants(operation)) operations.push(operation);
+    }
+  }
+  return operations;
+}
+
 function fail(code: ProtocolErrorCode, message: string, details?: JsonObject): never {
   throw new ProtocolError(code, message, details === undefined ? {} : { details });
 }
@@ -252,24 +446,17 @@ export class Orchestrator {
       'assessment.submit',
     );
     const work = this.requireWork(workId);
-    // The same authority invariant as `dispatch`: a `none` Work cannot declare a
-    // scope that writes or acts on an environment, so `assess` and `dispatch` cannot
+    // The same authority invariant as `dispatch`: a Work that grants nothing cannot declare
+    // a scope that writes or acts on an environment, so `assess` and `dispatch` cannot
     // disagree about the same scope (R16-01/M-2).
-    if (
-      !grantsModificationAuthority(work.level) &&
-      (declaresWorkspaceWrite(payload.scope) || touchesRunningEnvironment(payload.scope))
-    ) {
-      fail(
-        'VALIDATION_ERROR',
-        `Work ${work.id} is ${work.level} and cannot declare a write or environment scope`,
-        {
-          workId: work.id,
-          workLevel: work.level,
-          writePaths: [...payload.scope.writePaths],
-          operations: [...payload.scope.operations],
-          environmentScope: touchesRunningEnvironment(payload.scope),
-        },
-      );
+    //
+    // The exception is a *derived* authorization (`WP-12` Q1=B): Core creates it from this
+    // very assessment, inside the transaction below, so the Work row has not caught up yet.
+    // The declared level is checked instead — a write scope is only reachable when the
+    // assessment itself routes L1/L2/L3 — and `deriveAuthorization` never grants an
+    // environment operation, so an environment scope still needs a real grant.
+    if (input.derivedAuthorization !== true && !grantsModificationAuthority(work.level)) {
+      assertDeclaredAuthority(work, payload.authorizationRef, work.level, payload.scope);
     }
     // The documented routing order is re-applied here (`workflow.md` §2) so a Chief
     // cannot record a lower level than the lockdown/operation rules demand. Only
@@ -309,6 +496,10 @@ export class Orchestrator {
         { workId: work.id, decidedLevel: decided.level, floor, submittedLevel: payload.level },
       );
     }
+    // The reported level is the level the write scope is admitted under, so it must carry
+    // the authority the scope claims whatever the Work row currently says (`workflow.md`
+    // §2 「自动降级不支持」 + DC-62).
+    assertDeclaredAuthority(work, payload.authorizationRef, payload.level, payload.scope);
     this.verifyAuthorization(payload.authorizationRef, work.id, payload.level, payload.scope);
     return withTransaction(this.store.db, () => {
       const row = this.store.assessments.insert({
@@ -324,6 +515,12 @@ export class Orchestrator {
         policyRevision: payload.policyRevision,
         reason: payload.reason,
       });
+      // The assessment is the Work's routing decision, so the Work must carry it: a Chief
+      // that routes L2 must not leave `work.level` at `none`, or the very next dispatch is
+      // refused as `NOT_AUTHORIZED` (WP-12 T2.2 / T2-plan E11). This records the decision
+      // the rules already validated — it never downgrades, and the L3 floor above still
+      // governs.
+      this.applyAssessmentToWork(work, payload);
       this.store.events.append({
         name: 'assessment.saved',
         entityId: row.id,
@@ -342,6 +539,336 @@ export class Orchestrator {
       });
       return row;
     });
+  }
+
+  /**
+   * Applies one assessment to its Work row, in the assessment's transaction.
+   *
+   * The level is a floor, not an assignment: an existing higher level stays
+   * (`workflow.md` §2 「自动降级不支持」). The scope is written on the same decision, so the
+   * Work's declared envelope and the Run's frozen `effectiveScope` cannot drift.
+   */
+  private applyAssessmentToWork(work: Work, payload: AssessmentPayload): void {
+    const nextLevel: Level =
+      levelRank(payload.level) > levelRank(work.level) ? payload.level : work.level;
+    const declaresScope =
+      payload.scope.readPaths.length > 0 ||
+      payload.scope.writePaths.length > 0 ||
+      payload.scope.operations.length > 0 ||
+      payload.scope.networkTargets.length > 0;
+    // A derived authorization is bound to the Work here, so a later `dispatch` with no
+    // explicit reference still finds the authority the assessment was admitted under.
+    const bindsAuthorization =
+      payload.authorizationRef !== undefined && payload.authorizationRef !== work.authorizationRef;
+    // The assessment is also the Work's routing decision for `intent` (`workflow.md` §1):
+    // the Work row must carry it, or every later reader falls back to the message router's
+    // guess (`WP-12` fix round 3).
+    const writesIntent = work.intent !== payload.intent;
+    if (nextLevel === work.level && !declaresScope && !bindsAuthorization && !writesIntent) return;
+    this.store.works.update(
+      work.id,
+      {
+        level: nextLevel,
+        ...(writesIntent ? { intent: payload.intent } : {}),
+        ...(declaresScope ? { scope: payload.scope } : {}),
+        ...(bindsAuthorization ? { authorizationRef: payload.authorizationRef } : {}),
+      },
+      work.version,
+    );
+  }
+
+  /**
+   * One Chief assessment plus the professional Run it decided on (WP-12 Q1=B).
+   *
+   * `PRODUCT.md` §5 makes an explicit natural-language execution instruction equivalent to a
+   * button grant, so when the Work holds no authorization yet Core derives one from the
+   * assessment's own scope and records it with the message as its source. The derivation is
+   * deliberately narrow (`assertDerivableScope`): file operations only, inside the project
+   * root, plus the test commands the project already configured. Everything else still needs
+   * the explicit path and the L3 gate stays authoritative.
+   *
+   * The professional spec is a *draft*: `workId`, `profileRevision` and `budgetAllocation`
+   * are Core's (`data.md` §3 "ProfessionalDispatchSpec仅由Core根据…构建"), so they are
+   * overwritten here and the frozen snapshot records what Core actually authorized.
+   */
+  assessAndDispatch(input: AssessAndDispatchInput): AssessAndDispatchResult {
+    // One transaction for the whole command (`protocol.md` §6 `agent.dispatch`): the
+    // derived authorization, the assessment, the level/scope update and the frozen Run
+    // either all land or none of them do (nested `withTransaction` is a savepoint, so
+    // `assess`/`dispatch` keep their own transactional guarantees inside this one).
+    return withTransaction(this.store.db, () => {
+      const chief = this.requireChiefFor(input.parentRunId, input.workId);
+      const draft = this.parseDraft(chief, input.spec);
+      const { assessment, authorizationRef } = this.assessWithin({
+        workId: chief.workId,
+        payload: input.payload,
+        ...(input.sourceRef === undefined ? {} : { sourceRef: input.sourceRef }),
+      });
+      const dispatch = this.dispatch({
+        spec: this.freezeDraft(chief, draft),
+        ...(authorizationRef === undefined ? {} : { authorizationRef }),
+        ...(input.contextPayload === undefined ? {} : { contextPayload: input.contextPayload }),
+        ...(input.requiredOutputSchemas === undefined
+          ? {}
+          : { requiredOutputSchemas: input.requiredOutputSchemas }),
+      });
+      return { assessment, authorizationRef, dispatch };
+    });
+  }
+
+  /**
+   * Records one assessment, deriving its authority when the Work has none (Q1=B).
+   *
+   * This is the `assessment.submit` path: the Chief submits the routing decision, and Core
+   * — not the model — decides whether a derived authorization is written. It is the same
+   * guard the dispatch path uses, so the two can never disagree about the same scope.
+   */
+  assessWithDerivation(input: {
+    readonly workId: string;
+    readonly payload: AssessmentPayload;
+    readonly sourceRef?: SourceRef;
+  }): { readonly assessment: Assessment; readonly authorizationRef: string | undefined } {
+    return withTransaction(this.store.db, () => this.assessWithin(input));
+  }
+
+  /**
+   * Freezes and queues one professional Run for a Chief Run (`protocol.md` §6
+   * `agent.dispatch`).
+   *
+   * The scope is verified by `dispatch` against the Work's authorization — the *same*
+   * `verifyAuthorization` guard the assessment path uses, so a derived authorization and an
+   * explicit grant are both accepted and an out-of-envelope scope is refused with a typed
+   * error before anything is written.
+   */
+  dispatchProfessional(input: {
+    readonly parentRunId: string;
+    readonly spec: unknown;
+    /** The authority the Run freezes; the Work's own reference is used when absent. */
+    readonly authorizationRef?: string;
+    readonly contextPayload?: JsonObject;
+    readonly requiredOutputSchemas?: readonly {
+      readonly kind: string;
+      readonly schemaVersion: 1;
+    }[];
+  }): DispatchResult {
+    return withTransaction(this.store.db, () => {
+      const chief = this.requireChiefFor(input.parentRunId, undefined);
+      const draft = this.parseDraft(chief, input.spec);
+      return this.dispatch({
+        spec: this.freezeDraft(chief, draft),
+        ...(input.authorizationRef === undefined
+          ? {}
+          : { authorizationRef: input.authorizationRef }),
+        ...(input.contextPayload === undefined ? {} : { contextPayload: input.contextPayload }),
+        ...(input.requiredOutputSchemas === undefined
+          ? {}
+          : { requiredOutputSchemas: input.requiredOutputSchemas }),
+      });
+    });
+  }
+
+  /**
+   * The Work-row authority check plus the derived authorization, without a transaction.
+   *
+   * A modification-level assessment with no authority at all is refused: a delivery whose
+   * message named no path derives no scope (`workflow.md` §2), and queueing a Run on an
+   * empty envelope would be worse than the typed refusal.
+   */
+  private assessWithin(input: {
+    readonly workId: string;
+    readonly payload: AssessmentPayload;
+    readonly sourceRef?: SourceRef;
+  }): { readonly assessment: Assessment; readonly authorizationRef: string | undefined } {
+    const parsed = parseOrFail(
+      assessRequestSchema,
+      { workId: input.workId, assessment: input.payload },
+      'assessment.submit',
+    );
+    const work = this.requireWork(parsed.workId);
+    const authorizationRef = this.ensureDerivedAuthorization(
+      work,
+      parsed.assessment,
+      input.sourceRef,
+      this.derivableOperations(),
+    );
+    if (authorizationRef === undefined && parsed.assessment.intent === 'operation') {
+      // An operation routes L3 (`workflow.md` §2.2) and L3 always needs the explicit path;
+      // there is no derived authority this Core is willing to invent.
+      fail('NOT_AUTHORIZED', `${work.id} declares an operation but holds no explicit grant`, {
+        workId: work.id,
+        intent: parsed.assessment.intent,
+      });
+    }
+    if (authorizationRef === undefined && grantsModificationAuthority(parsed.assessment.level)) {
+      fail(
+        'NOT_AUTHORIZED',
+        `${work.id} routes ${parsed.assessment.level} but has no authorization to derive or reuse`,
+        {
+          workId: work.id,
+          level: parsed.assessment.level,
+          writePaths: [...parsed.assessment.scope.writePaths],
+        },
+      );
+    }
+    const assessment = this.assess({
+      workId: work.id,
+      payload: {
+        ...parsed.assessment,
+        ...(authorizationRef === undefined ? {} : { authorizationRef }),
+      },
+      ...(authorizationRef === undefined ? {} : { derivedAuthorization: true }),
+    });
+    return { assessment, authorizationRef };
+  }
+
+  /** The Chief Run a control-channel call is bound to (`protocol.md` §6). */
+  private requireChiefFor(parentRunId: string, workId: string | undefined): Run {
+    const chief = this.store.runs.find(parentRunId);
+    if (chief === undefined) {
+      fail('NOT_FOUND', `Chief Run ${parentRunId} does not exist`, {
+        ...(workId === undefined ? {} : { workId }),
+      });
+    }
+    if (chief.role !== 'chief' || (workId !== undefined && chief.workId !== workId)) {
+      fail(
+        'NOT_AUTHORIZED',
+        `Run ${chief.id} is not the Chief Run of Work ${workId ?? chief.workId}; only the Work's own Chief may call this method`,
+        { workId: workId ?? chief.workId, parentRunId: chief.id, parentRole: chief.role },
+      );
+    }
+    return chief;
+  }
+
+  /** Parses one model-submitted draft against the Chief Run it claims to come from. */
+  private parseDraft(chief: Run, spec: unknown): ProfessionalDispatchSpec {
+    const raw = (
+      typeof spec === 'object' && spec !== null && !Array.isArray(spec) ? spec : {}
+    ) as Record<string, unknown>;
+    const claimedParent = raw['parentRunId'];
+    const draft = parseOrFail(
+      professionalDispatchSpecSchema,
+      {
+        ...raw,
+        kind: 'professional',
+        workId: chief.workId,
+        // Core owns the revision (injected at freeze time) and the parent binding: the
+        // caller's own Run is the default, and naming another one is a refusal below.
+        profileRevision: 0,
+        parentRunId: claimedParent ?? chief.id,
+      },
+      'agent.dispatch spec',
+    );
+    // A draft naming another Work is refused explicitly: the value is injected above, so a
+    // check *after* parsing could never fire (WP-12 fix round 2, review P3-4).
+    const claimedWork = raw['workId'];
+    if (claimedWork !== undefined && claimedWork !== chief.workId) {
+      fail(
+        'VALIDATION_ERROR',
+        `the dispatch spec names Work ${typeof claimedWork === 'string' ? claimedWork : 'an object'}, not ${chief.workId}`,
+        { workId: chief.workId, specWorkId: typeof claimedWork === 'string' ? claimedWork : null },
+      );
+    }
+    if (draft.parentRunId !== chief.id) {
+      fail(
+        'NOT_AUTHORIZED',
+        `the dispatch spec names parent Run ${draft.parentRunId}, not the calling Chief Run ${chief.id}`,
+        { workId: chief.workId, parentRunId: chief.id, specParentRunId: draft.parentRunId },
+      );
+    }
+    return draft;
+  }
+
+  /**
+   * Applies the Core-owned fields to a draft before it is frozen.
+   *
+   * `profileRevision` is the current one for the role, and `budgetAllocation` is capped at
+   * what the parent Chief Run can still fund: the model's number is a request, not the
+   * authority (`data.md` §3, `rules/agents.md` §5).
+   */
+  private freezeDraft(chief: Run, draft: ProfessionalDispatchSpec): ProfessionalDispatchSpec {
+    const allocation = this.effectiveBudget(chief, draft.budgetAllocation);
+    if (draft.budgetAllocation > 0 && allocation === 0) {
+      // A Chief Run with no unallocated budget cannot fund a child: refusing is honest,
+      // whereas queueing a 0-token Run would look accepted and do nothing (WP-12 fix round
+      // 2, review P3).
+      fail(
+        'BUDGET_EXCEEDED',
+        `Chief Run ${chief.id} has no unallocated budget left for another Run`,
+        { parentRunId: chief.id, requested: draft.budgetAllocation, remaining: 0 },
+      );
+    }
+    return professionalSpec({
+      ...draft,
+      workId: chief.workId,
+      parentRunId: chief.id,
+      profileRevision: this.currentProfileRevision(draft.role),
+      budgetAllocation: allocation,
+    });
+  }
+
+  /** How much of one Chief Run's allocation is still unallocated. */
+  private liveChildAllocation(chiefRunId: string): number {
+    return this.store.runs
+      .list({ where: 'parent_run_id = ?', params: [chiefRunId] })
+      .filter((sibling) => !isTerminalRunStatus(sibling.status))
+      .reduce((total, sibling) => total + sibling.budgetAllocation, 0);
+  }
+
+  /** The allocation a child Run actually gets: the request, capped by the parent's hold. */
+  private effectiveBudget(chief: Run, requested: number): number {
+    const remaining = Math.max(0, chief.budgetAllocation - this.liveChildAllocation(chief.id));
+    return Math.min(requested, remaining);
+  }
+
+  /**
+   * The operations a derived authorization may carry for this project.
+   *
+   * File work only. The project's configured test commands
+   * (`config.ts` `policy.testCommands`) are deliberately *not* turned into an operation
+   * here: running a command is the `bash` operation, which this derivation never grants
+   * (`workflow.md` §2.2/§2.3). A test command is exercised by the Test role under its own
+   * grant, which is the explicit path the user decision preserves.
+   */
+  derivableOperations(): readonly OperationName[] {
+    return [...DERIVABLE_OPERATIONS];
+  }
+
+  /**
+   * Writes the derived authorization when the Work has none.
+   *
+   * A Work that already carries authority (an explicit path message, or a resumed
+   * Requirement) keeps it: derivation never widens or replaces a real grant. Returns the
+   * reference the Run must freeze; the caller's `assess` binds it to the Work in its own
+   * transaction, so the Work row is never updated twice from a stale version.
+   */
+  private ensureDerivedAuthorization(
+    work: Work,
+    payload: AssessmentPayload,
+    sourceRef: AssessAndDispatchInput['sourceRef'],
+    allowed: readonly OperationName[],
+  ): string | undefined {
+    if (payload.authorizationRef !== undefined) return payload.authorizationRef;
+    if (work.authorizationRef !== undefined) return work.authorizationRef;
+    if (sourceRef === undefined) return undefined;
+    const operations = assertDerivableScope(work.id, payload.scope, allowed);
+    const derived = derivedAuthorization(payload.scope, operations, allowed);
+    if (derived === undefined) return undefined;
+    if (!grantsModificationAuthority(payload.level)) {
+      fail('VALIDATION_ERROR', `Work ${work.id} declares write paths but routes ${payload.level}`, {
+        workId: work.id,
+        level: payload.level,
+        writePaths: [...payload.scope.writePaths],
+      });
+    }
+    const row = this.store.authorizations.insert({
+      sourceRef: sourceRef,
+      workId: work.id,
+      goal: payload.goal.slice(0, 2_000),
+      scope: derived.scope,
+      operations: [...derived.operations],
+      acceptedAt: new Date().toISOString(),
+    });
+    return row.id;
   }
 
   /**
@@ -414,6 +941,16 @@ export class Orchestrator {
       runLevel,
       spec.scope,
     );
+    // Authorized Run parameters are the strongest configuration layer (`agents.md` §5), but
+    // they can name another Provider/Model — so they must come with authority, or a model
+    // could select the credential its Run resolves (WP-12 fix round 2, G1 precondition).
+    if (extras.runParams !== undefined && authorizationRef === undefined) {
+      fail(
+        'VALIDATION_ERROR',
+        `Run for Work ${work.id} passes runParams without an authorizationRef`,
+        { workId: work.id, runParams: Object.keys(extras.runParams) },
+      );
+    }
 
     if (spec.kind === 'professional') {
       enforce(validateRolePurpose(spec.role, spec.purpose), 'dispatch spec');
@@ -976,6 +1513,37 @@ function isInsideScope(path: string, roots: readonly string[]): boolean {
     const candidate = root.replace(/\/+$/u, '');
     return normalized === candidate || normalized.startsWith(`${candidate}/`);
   });
+}
+
+/**
+ * Refuses a declared scope the given level may not carry.
+ *
+ * `dispatch` reads the *Work's* level, so the two must agree: an assessment that says
+ * `none` (or an L3 Work without a grant) may not declare a write, and nothing below L3 may
+ * declare an environment operation (`workflow.md` §2.2/§2.4, DC-62/R16-01).
+ */
+function assertDeclaredAuthority(
+  work: Work,
+  authorizationRef: string | undefined,
+  level: Level,
+  scope: Scope,
+): void {
+  const environment = touchesRunningEnvironment(scope);
+  const write = declaresWorkspaceWrite(scope);
+  if ((!write && !environment) || grantsModificationAuthority(level)) return;
+  fail(
+    'VALIDATION_ERROR',
+    `Work ${work.id} is ${level} and cannot declare a write or environment scope`,
+    {
+      workId: work.id,
+      workLevel: work.level,
+      declaredLevel: level,
+      authorizationRef: authorizationRef ?? null,
+      writePaths: [...scope.writePaths],
+      operations: [...scope.operations],
+      environmentScope: environment,
+    },
+  );
 }
 
 /**

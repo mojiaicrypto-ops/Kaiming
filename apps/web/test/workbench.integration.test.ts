@@ -2193,6 +2193,21 @@ describe('WP-09 T4: the workbench end to end over the real stack', () => {
     expect(detail.html).toContain('让未付款订单可取消');
     expect(detail.html).toContain('Save state: saved');
     expect(detail.html).toContain('data-i18n-project');
+    // AC-090: the branch and the commit the projection really points at, plus the
+    // Git-side push state the read surfaces now report (`git.unpushed`); this
+    // repository has no upstream, so the honest answer is "unpushed".
+    for (const html of [board.html, detail.html]) {
+      expect(html).toContain('data-git-branch="agentdev/main"');
+      expect(html).toContain(`data-git-commit="${commit}"`);
+      expect(html).toContain(`Commit: ${commit.slice(0, 12)}`);
+      expect(html).toContain('data-git-unpushed="true"');
+      expect(html).toContain('Push state: Unpushed');
+    }
+    // The created record is Queued, so the detail offers exactly the transitions
+    // that record can make; a claim it cannot perform is never rendered.
+    expect(detail.html).toContain('data-action="archive"');
+    expect(detail.html).toContain('data-action="cancel"');
+    expect(detail.html).not.toContain('data-action="complete"');
 
     // A second save increments the version and the pair stays consistent.
     const updated = await accepted(
@@ -2271,6 +2286,94 @@ describe('WP-09 T4: the workbench end to end over the real stack', () => {
     const afterConflict = await page(`/projects/${harness.projectId}/requirements`);
     expect(afterConflict.html).toContain(`data-requirement="${newId}"`);
     expect(afterConflict.html).toContain(`Save state: ${expectedState}`);
+  });
+
+  it('answers the card actions with the real protocol codes the UI renders (AC-068/AC-089)', async () => {
+    const store = harness.daemon.store;
+    const queued = seedRequirement(harness, 'queued', undefined, 'action queued');
+    const work = seedWork(harness, { status: 'running', goal: 'action active' });
+    const active = seedRequirement(harness, 'active', work.id, 'action active');
+    const completed = seedRequirement(harness, 'completed', undefined, 'action done');
+
+    // Pause on a Queued requirement with no local Work: the documented INVALID_STATE
+    // the board renders from the server's own rule flag (AC-068).
+    const paused = await rpc(
+      'work.control',
+      { action: 'pause', requirementId: queued.id, reason: 'workbench' },
+      { idempotencyKey: `t4-pause-${queued.id}` },
+    );
+    expect(paused.frame.ok).toBe(false);
+    expect(paused.frame.error?.code).toBe('INVALID_STATE');
+    expect(store.requirements.find(queued.id)?.lifecycle).toBe('queued');
+
+    // Cancel is only a Queued transition: a Completed record is refused and stays put.
+    const cancelled = await rpc(
+      'work.control',
+      { action: 'cancel', requirementId: completed.id, reason: 'workbench' },
+      { idempotencyKey: `t4-cancel-${completed.id}` },
+    );
+    expect(cancelled.frame.ok).toBe(false);
+    expect(cancelled.frame.error?.code).toBe('INVALID_STATE');
+    expect(store.requirements.find(completed.id)?.lifecycle).toBe('completed');
+
+    // `archive` is the documented command (`protocol.md` §4) the board calls. The
+    // record has to exist in Git, so this creates a real Queued record first; the
+    // archive then moves the committed record to `archived` and `restore` returns it
+    // to the state it was archived from (`workflow.md` §5.1).
+    const archivable = await rpc(
+      'requirement.save',
+      {
+        patch: {
+          title: 'archive me in Git',
+          goal: 'archive a Queued requirement',
+          scope: { readPaths: [], writePaths: [], operations: [], networkTargets: [] },
+          lifecycle: 'queued',
+          contentMarkdown: requirementBody('archive me'),
+        },
+      },
+      { idempotencyKey: 't4-archive-create', expectedVersion: 0 },
+    );
+    expect(archivable.frame.ok, JSON.stringify(archivable.frame.error)).toBe(true);
+    const archivableId = text(archivable.frame.result ?? {}, 'requirementId');
+    const archived = await rpc(
+      'requirement.archive',
+      { requirementId: archivableId },
+      { idempotencyKey: `t4-archive-${archivableId}` },
+    );
+    expect(archived.frame.ok, JSON.stringify(archived.frame.error)).toBe(true);
+    expect(archived.frame.result?.['status']).toBe('accepted');
+    expect(archived.frame.result?.['lifecycle']).toBe('archived');
+    expect(store.requirements.find(archivableId)?.lifecycle).toBe('archived');
+
+    const restored = await rpc(
+      'requirement.restore',
+      { requirementId: archivableId },
+      { idempotencyKey: `t4-restore-${archivableId}` },
+    );
+    expect(restored.frame.ok, JSON.stringify(restored.frame.error)).toBe(true);
+    expect(restored.frame.result?.['lifecycle']).toBe('queued');
+    expect(store.requirements.find(archivableId)?.lifecycle).toBe('queued');
+
+    // `complete` goes through `requirement.save`; without the real completion fact
+    // (`requirements.md` §2) the daemon refuses with the documented gate code, and
+    // the projection keeps the Active lifecycle.
+    const completedAttempt = await rpc(
+      'requirement.save',
+      { requirementId: active.id, patch: { lifecycle: 'completed' } },
+      { idempotencyKey: `t4-complete-${active.id}` },
+    );
+    expect(completedAttempt.frame.ok).toBe(false);
+    expect(completedAttempt.frame.error?.code).toBe('GATE_NOT_READY');
+    expect(store.requirements.find(active.id)?.lifecycle).toBe('active');
+
+    // The unknown-action guard is a validation error, not a silent no-op.
+    const unknown = await rpc(
+      'work.control',
+      { action: 'complete', workId: work.id, reason: 'workbench' },
+      { idempotencyKey: `t4-unknown-${active.id}` },
+    );
+    expect(unknown.frame.ok).toBe(false);
+    expect(unknown.frame.error?.code).toBe('VALIDATION_ERROR');
   });
 });
 

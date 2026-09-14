@@ -23,13 +23,20 @@ import {
   type GatewayResponse,
   type GatewayTransport,
   type ModelGatewayProxy,
+  type GatewayToolCall,
 } from '../src/index.js';
 
 /** Records every request and answers with deterministic text. */
 class StubTransport implements GatewayTransport {
   readonly requests: GatewayRequest[] = [];
   reply:
-    | { ok: true; text: string; inputTokens: number; outputTokens: number }
+    | {
+        ok: true;
+        text: string;
+        toolCalls?: readonly GatewayToolCall[];
+        inputTokens: number;
+        outputTokens: number;
+      }
     | { ok: false; code: 'PROVIDER_UNAVAILABLE'; retryable: boolean; message: string } = {
     ok: true,
     text: 'pong',
@@ -372,6 +379,101 @@ describe('model gateway proxy', () => {
     const text = await response.text();
     expect(text).toContain('"content":"pong"');
     expect(text).toContain('data: [DONE]');
+  });
+
+  it('forwards a Provider tool call in both the JSON and the SSE shape (WP-12 R3-1)', async () => {
+    await start();
+    const { token } = seedRun(snapshots);
+    const toolCalls = [
+      {
+        id: 'call_1',
+        type: 'function' as const,
+        function: { name: 'assessment_submit', arguments: '{"intent":"delivery"}' },
+      },
+    ];
+    transport.reply = { ok: true, text: '', toolCalls, inputTokens: 3, outputTokens: 2 };
+    const json = await fetch(`${proxy.url}/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'ping' }] }),
+    });
+    const body = (await json.json()) as {
+      choices: { message: { tool_calls?: unknown[] }; finish_reason: string }[];
+    };
+    expect(body.choices[0]?.message.tool_calls).toEqual(toolCalls);
+    expect(body.choices[0]?.finish_reason).toBe('tool_calls');
+
+    const stream = await fetch(`${proxy.url}/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'ping' }], stream: true }),
+    });
+    const text = await stream.text();
+    expect(text).toContain('"tool_calls"');
+    expect(text).toContain('assessment_submit');
+    expect(text).toContain('"finish_reason":"tool_calls"');
+  });
+
+  it('forwards the request-side tools array to the Provider (WP-12 R3-2c)', async () => {
+    await start();
+    const { token } = seedRun(snapshots);
+    transport.requests.length = 0;
+    const tools = [
+      {
+        type: 'function',
+        function: { name: 'assessment_submit', description: 'submit the assessment', parameters: {} },
+      },
+    ];
+    const response = await fetch(`${proxy.url}/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'ping' }], tools }),
+    });
+    expect(response.status).toBe(200);
+    expect(transport.requests[0]?.tools).toEqual(tools);
+
+    // A malformed `tools` is refused instead of silently dropped.
+    const bad = await fetch(`${proxy.url}/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'ping' }], tools: 'nope' }),
+    });
+    expect(bad.status).toBe(400);
+  });
+
+  it('accepts an assistant tool-call message and a tool result on the next call', async () => {
+    await start();
+    const { token } = seedRun(snapshots);
+    transport.requests.length = 0;
+    const response = await fetch(`${proxy.url}/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        messages: [
+          { role: 'user', content: 'ping' },
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'assessment_submit', arguments: '{}' },
+              },
+            ],
+          },
+          { role: 'tool', content: 'saved', tool_call_id: 'call_1' },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    // The Provider saw the same three messages, call id included.
+    expect(transport.requests).toHaveLength(1);
+    expect(transport.requests[0]?.messages).toMatchObject([
+      { role: 'user' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'call_1' }] },
+      { role: 'tool', content: 'saved', toolCallId: 'call_1' },
+    ]);
   });
 
   it('lists only the frozen model, and refuses a terminal Run', async () => {

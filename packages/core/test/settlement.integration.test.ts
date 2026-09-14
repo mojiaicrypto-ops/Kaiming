@@ -29,6 +29,7 @@ import {
   type GitResult,
 } from '@agentdev/workspace';
 import {
+  KNOWLEDGE_UPDATED_EVENT,
   ProjectIntegrationLock,
   SETTLEMENT_COMPLETED_EVENT,
   SettlementService,
@@ -36,10 +37,13 @@ import {
   applyKnowledgePatch,
   buildFinalManifest,
   buildKnowledgePatch,
+  createRequirementSaveService,
   createSqliteProjectionCache,
   deliveredCodeTreeHash,
   freezeFinalManifest,
   readFrozenFinalManifest,
+  readRequirementPoolAtRevision,
+  type RequirementSaveService,
   type VerifiedManifestInput,
 } from '../src/index.js';
 import { scanEvents } from '../src/events.js';
@@ -153,9 +157,11 @@ interface Harness {
   readonly settlement: SettlementService;
   readonly journal: CasJournal;
   readonly events: ReturnType<typeof createMemoryCasEvents>;
+  /** Present only when the harness was built with the requirement-pool save path. */
+  readonly requirementSaves?: RequirementSaveService;
 }
 
-function harness(): Harness {
+function harness(options: { readonly requirementSaves?: boolean } = {}): Harness {
   const repo = makeTempDir();
   requireValue(port.initRepository(repo, { branch: 'agentdev/main' }), 'git init');
   const seedRevision = 'a'.repeat(40);
@@ -216,6 +222,23 @@ function harness(): Harness {
   const journal = createMemoryCasJournal();
   const events = createMemoryCasEvents();
   const snapshots = new SnapshotWriter({ store });
+  const lock = new ProjectIntegrationLock({
+    projectId,
+    leases: store.leases,
+    now: () => TIME,
+  });
+  const requirementSaves =
+    options.requirementSaves === true
+      ? createRequirementSaveService({
+          store,
+          worktrees: port,
+          journal,
+          events,
+          lock,
+          worktreeRoot: join(dataDir, 'save-worktrees'),
+          now: () => TIME,
+        })
+      : undefined;
   const settlement = new SettlementService({
     store,
     worktrees: port,
@@ -224,6 +247,7 @@ function harness(): Harness {
     events,
     snapshots,
     now: () => TIME,
+    ...(requirementSaves === undefined ? {} : { requirementSaves, lock }),
   });
   return {
     repo,
@@ -234,6 +258,7 @@ function harness(): Harness {
     settlement,
     journal,
     events,
+    ...(requirementSaves === undefined ? {} : { requirementSaves }),
   };
 }
 
@@ -497,6 +522,79 @@ describe('Knowledge patch through the projection rules (AC-041)', () => {
       },
     ],
     invalidationNotes: ['原实现入口 src/orders/cancel-old.ts 已失效（AC-041 失效说明）'],
+  });
+
+  it('emits knowledge.updated once on the real projection write and never without a change', () => {
+    const h = harness();
+    try {
+      expect(scanEvents(h.store, { names: [KNOWLEDGE_UPDATED_EVENT] })).toHaveLength(0);
+
+      const built = buildKnowledgePatch(patchInput(h));
+      expect(built.ok).toBe(true);
+      if (!built.ok) throw new Error(JSON.stringify(built.errors));
+      const cache = createSqliteProjectionCache({ store: h.store });
+      const apply = () =>
+        applyKnowledgePatch({
+          patch: built.patch,
+          documents: documents(h),
+          revision: h.seedRevision,
+          codeTreeRevision: h.seedRevision,
+          documentRoot: 'docs/agentdev',
+          knownIds: [DECISION_ID],
+          cache,
+        });
+
+      const applied = apply();
+      expect(applied.ok).toBe(true);
+
+      // The event is durable in the real `event` table and carries the changed
+      // projection's summary plus the entity the envelope names.
+      const emitted = scanEvents(h.store, { names: [KNOWLEDGE_UPDATED_EVENT] });
+      expect(emitted).toHaveLength(1);
+      const event = emitted[0];
+      if (event === undefined) throw new Error('expected one knowledge.updated');
+      expect(event.entityId).toBe(h.projectId);
+      expect(event.entityVersion).toBe(h.store.projects.find(h.projectId)?.version);
+      expect(event.data['revision']).toBe(h.seedRevision);
+      expect(event.data['codeTreeRevision']).toBe(h.seedRevision);
+      expect(event.data['state']).toBe('valid');
+      expect(event.data['featureCount']).toBe(2);
+      expect(event.data['featureIds']).toEqual([FEATURE_ID, OTHER_FEATURE_ID].sort());
+      const documentHashes = event.data['documentHashes'] as Record<string, string>;
+      expect(documentHashes[FEATURE_PATH]).toMatch(/^[0-9a-f]{64}$/u);
+      // The summary is the same hash the projection cache stored for that document.
+      expect(documentHashes[FEATURE_PATH]).toBe(
+        cache.get(h.seedRevision, FEATURE_ID)?.documentHash,
+      );
+
+      // A rebuild that publishes exactly what is already stored is not an update.
+      const again = apply();
+      expect(again.ok).toBe(true);
+      expect(scanEvents(h.store, { names: [KNOWLEDGE_UPDATED_EVENT] })).toHaveLength(1);
+
+      // Refused knowledge publishes nothing, so it announces nothing either.
+      const corrupted = {
+        ...built.patch,
+        sha256: 'f'.repeat(64),
+        markdown: built.patch.markdown.replace(
+          '| implementation | implemented |',
+          '| implementation | shipped |',
+        ),
+      };
+      const refused = applyKnowledgePatch({
+        patch: corrupted,
+        documents: documents(h),
+        revision: 'f'.repeat(40),
+        codeTreeRevision: h.seedRevision,
+        documentRoot: 'docs/agentdev',
+        knownIds: [DECISION_ID],
+        cache,
+      });
+      expect(refused.ok).toBe(false);
+      expect(scanEvents(h.store, { names: [KNOWLEDGE_UPDATED_EVENT] })).toHaveLength(1);
+    } finally {
+      h.store.close();
+    }
   });
 
   it('updates the body, relations and entries and is found by a cold-start query', () => {
@@ -982,6 +1080,213 @@ describe('Crash after the ref update: reuse the commit, complete once (AC-063)',
         requireValue<string | null>(port.resolveRevision(h.repo, DELIVERY_REF), 'resolve ref'),
       ).toBe(stranger);
       expect(scanEvents(h.store, { names: [SETTLEMENT_COMPLETED_EVENT] })).toHaveLength(0);
+    } finally {
+      h.store.close();
+    }
+  });
+});
+
+/**
+ * `protocol.md` §8: a settled completion is a **requirement-pool Git record**, not a
+ * SQLite-only lifecycle flip.
+ *
+ * The harness here wires the real `RequirementSaveService` into the settlement, so
+ * these tests exercise the production path: the settlement installs the delivery
+ * revision, then the completed record is committed through the same save service
+ * `requirement.save` uses, and the projection follows Git. The failure case dirties
+ * the committed record so the real Git write refuses: the projection must stay
+ * `active` and the outcome must report the failed save.
+ */
+describe('settlement completes the Requirement through the pool Git save (protocol.md §8)', () => {
+  /** The six documented headings (`requirements.md` §6). */
+  function requirementBody(text: string): string {
+    return [
+      '## 目标与背景',
+      '',
+      text,
+      '',
+      '## 范围与行为',
+      '',
+      '仅订单模块。',
+      '',
+      '## 验收说明',
+      '',
+      'AC-041。',
+      '',
+      '## 已确认决定',
+      '',
+      '无',
+      '',
+      '## 未决问题',
+      '',
+      '无',
+      '',
+      '## 完成摘要',
+      '',
+      '待明确',
+      '',
+    ].join('\n');
+  }
+
+  /** Creates the active Requirement through the real save service and returns its head. */
+  function createRequirement(h: Harness): string {
+    const saves = h.requirementSaves;
+    if (saves === undefined) throw new Error('harness has no requirement save service');
+    const outcome = saves.save({
+      operationId: OPERATION_ID,
+      metadata: {
+        schemaVersion: 1,
+        id: REQUIREMENT_ID,
+        version: 1,
+        contentFile: 'content.md',
+        createdAt: TIME,
+        updatedAt: TIME,
+        title: '未付款订单可取消',
+        goal: '让未付款订单可取消',
+        scope: { readPaths: [], writePaths: [], operations: ['edit'], networkTargets: [] },
+        lifecycle: 'active',
+        featureIds: [],
+        acceptance: [{ id: 'AC-041', given: 'g', when: 'w', then: 't' }],
+        openQuestions: [],
+        confirmedDecisions: [],
+        relatedRequirementIds: [],
+      },
+      contentMarkdown: requirementBody('未付款订单可取消。'),
+      expected: { expectedAbsent: true },
+      sourceRef: { kind: 'action', id: OPERATION_ID, version: '1' },
+      kind: 'create',
+      workId: WORK_ID,
+    });
+    if (!outcome.ok) throw new Error(`requirement create failed: ${outcome.message}`);
+    const head = requireValue<string | null>(port.resolveRevision(h.repo, DELIVERY_REF), 'resolve');
+    if (head === null) throw new Error('delivery ref moved nowhere');
+    return head;
+  }
+
+  function settleWithRequirement(h: Harness, base: string) {
+    const path = makeTempDir('agentdev-settle-req-wt-');
+    requireValue(
+      port.addWorktree({ repoRoot: h.repo, path, baseRevision: base }),
+      'git worktree add',
+    );
+    writeFileAt(path, 'src/orders/cancel.ts', 'export const cancel = (): boolean => true;\n');
+    const candidate = requireValue<{ revision: string }>(
+      port.commitPaths(path, 'feat: settle with requirement', ['src/orders/cancel.ts']),
+      'candidate',
+    ).revision;
+    const tree = deliveredCodeTreeHash({ repoRoot: h.repo, revision: candidate });
+    const built = buildFinalManifest({
+      workId: WORK_ID,
+      requirementId: REQUIREMENT_ID,
+      verifiedManifests: [
+        verifiedManifest({ codeRevision: candidate, codeTree: tree, acceptanceIds: ['AC-041'] }),
+      ],
+      finalRevision: candidate,
+      finalTree: tree,
+      knowledgeTree: HASH,
+      settlementResultRef: SETTLEMENT_RESULT_ID,
+      changedPaths: [{ path: 'src/orders/cancel.ts', change: 'modified' }],
+      codeStartRevision: base,
+    });
+    if (!built.ok) throw new Error(built.message);
+    return h.settlement.settle({
+      operationId: OPERATION_ID,
+      workId: WORK_ID,
+      requirementId: REQUIREMENT_ID,
+      ref: DELIVERY_REF,
+      expectedRevision: base,
+      candidateRevision: candidate,
+      candidateTree: tree,
+      manifest: built.manifest,
+      completion: {
+        summary: '已完成未付款订单取消',
+        verificationSummary: '独立 Test 覆盖 AC-041',
+      },
+    });
+  }
+
+  it('commits the completed record to Git and keeps the projection consistent', () => {
+    const h = harness({ requirementSaves: true });
+    try {
+      addWork(h);
+      const base = createRequirement(h);
+      const outcome = settleWithRequirement(h, base);
+      if (!outcome.ok)
+        throw new Error(`settle failed: ${outcome.message} :: ${outcome.reasons.join('; ')}`);
+      expect(outcome.ok).toBe(true);
+      expect(outcome.requirementCompleted).toBe(true);
+      expect(outcome.requirementRecordVersion).toBe(2);
+
+      const row = h.store.requirements.find(REQUIREMENT_ID);
+      expect(row?.lifecycle).toBe('completed');
+      expect(row?.phase).toBeUndefined();
+      expect(row?.recordVersion).toBe(outcome.requirementRecordVersion);
+      expect(row?.portableRef.hash).toBe(outcome.requirementRecordHash);
+
+      // Git really holds the completed record at the revision the projection names.
+      const head = requireValue<string | null>(
+        port.resolveRevision(h.repo, DELIVERY_REF),
+        'resolve head',
+      );
+      // The pool save commits the completed record on top of the settlement commit,
+      // so the branch head is the save's revision and the settlement revision is its
+      // ancestor.
+      expect(head).toBe(row?.portableRef.revision);
+      expect(
+        requireValue<boolean>(
+          port.isAncestor(h.repo, outcome.revision, head as string),
+          'is ancestor',
+        ),
+      ).toBe(true);
+      const pool = readRequirementPoolAtRevision({
+        git: port,
+        repoRoot: h.repo,
+        revision: head,
+      });
+      const record = pool.records.find((entry) => entry.id === REQUIREMENT_ID);
+      expect(record).toBeDefined();
+      const metadata = JSON.parse(record?.metadataJson ?? '{}') as {
+        lifecycle?: string;
+        version?: number;
+        completion?: { codeRevision?: string; codeTree?: string };
+      };
+      expect(metadata.lifecycle).toBe('completed');
+      expect(metadata.version).toBe(row?.recordVersion);
+      expect(metadata.completion?.codeRevision).toBe(outcome.revision);
+      expect(metadata.completion?.codeTree).toBe(outcome.codeTreeHash);
+      expect(record?.recordHash).toBe(row?.portableRef.hash);
+      expect(record?.contentMarkdown).toContain('已完成未付款订单取消');
+
+      // The pool save emitted its own documented event (one for the create, one for
+      // the settled completion).
+      const savedEvents = scanEvents(h.store, { names: ['requirement.saved'] });
+      expect(savedEvents).toHaveLength(2);
+      expect(savedEvents.at(-1)?.data['operationId']).toBe(`settle-requirement:${OPERATION_ID}`);
+    } finally {
+      h.store.close();
+    }
+  });
+
+  it('never flips the projection when the Git write refuses', () => {
+    const h = harness({ requirementSaves: true });
+    try {
+      addWork(h);
+      const base = createRequirement(h);
+      // A real local edit to the committed record: the save path refuses to overwrite
+      // it, so the Requirement must stay `active`.
+      writeFileAt(
+        h.repo,
+        `.agentdev/requirements/${REQUIREMENT_ID}/content.md`,
+        `${requirementBody('本机未提交修改。')}\n`,
+      );
+      const outcome = settleWithRequirement(h, base);
+      if (!outcome.ok)
+        throw new Error(`settle failed: ${outcome.message} :: ${outcome.reasons.join('; ')}`);
+      expect(outcome.ok).toBe(true);
+      expect(outcome.requirementCompleted).toBe(false);
+      expect(outcome.requirementCompletionError).toBeDefined();
+      expect(h.store.requirements.find(REQUIREMENT_ID)?.lifecycle).toBe('active');
+      expect(outcome.requirementSaveOperationId).toBeTruthy();
     } finally {
       h.store.close();
     }

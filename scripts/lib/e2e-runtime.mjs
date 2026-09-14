@@ -568,3 +568,14 @@ export function sleep(ms) {
     setTimeout(resolvePromise, ms);
   });
 }
+
+/**
+ * Fails loudly when a drill invariant does not hold.
+ *
+ * Shared by the drill (`scripts/e2e.mjs`) and the stack bootstrap
+ * (`scripts/lib/e2e-stack.mjs`) so a broken precondition is one named error instead of
+ * an obscure `undefined` further down.
+ */
+export function ensure(condition, message) {
+  if (!condition) throw new Error(message);
+}

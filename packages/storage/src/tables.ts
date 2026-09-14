@@ -240,7 +240,7 @@ export const TABLES = {
   toolOperation: spec<ToolOperation>({
     table: 'tool_operation',
     schema: toolOperationSchema,
-    json: [],
+    json: ['targets'],
     boolean: [],
   }),
   lease: spec<Lease>({

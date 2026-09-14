@@ -17,6 +17,7 @@ import { withTransaction, type ProjectStore } from '@agentdev/storage';
 import { ProtocolError } from './errors.js';
 import { scanEvents } from './events.js';
 import { RunLifecycle } from './run-lifecycle.js';
+import type { ReadLedgerRegistry } from './read-ledger.js';
 
 /** Server-owned fields a client must never set on `stage.submit`. */
 export const OWNERSHIP_FIELDS = [
@@ -95,10 +96,18 @@ function issuesOf(error: {
 export class StageGate {
   private readonly store: ProjectStore;
   private readonly lifecycle: RunLifecycle;
+  /** The Attempt read ledgers, when the stack has the tool bridge (`AC-085`). */
+  private readonly readLedgers: ReadLedgerRegistry | undefined;
 
-  constructor(options: { readonly store: ProjectStore; readonly lifecycle?: RunLifecycle }) {
+  constructor(options: {
+    readonly store: ProjectStore;
+    readonly lifecycle?: RunLifecycle;
+    /** Supplied by the execution stack so `stage.submit` can verify the read seal. */
+    readonly readLedgers?: ReadLedgerRegistry;
+  }) {
     this.store = options.store;
     this.lifecycle = options.lifecycle ?? new RunLifecycle({ store: options.store });
+    this.readLedgers = options.readLedgers;
   }
 
   /**
@@ -193,6 +202,29 @@ export class StageGate {
     ).safeParse(payload);
     if (!parsed.success) {
       return this.reject(run.id, attempt.id, issuesOf(parsed.error));
+    }
+    // `AC-085`: the reported `readLedgerSeq`/`readLedgerHash` must be the binding of the
+    // reads this Attempt really made. Core recomputes it (`ReadLedgerRegistry.verify`) and
+    // refuses a disagreement instead of storing a claim it cannot confirm. A stack without
+    // the tool bridge has no ledger and therefore nothing to verify (registered gap).
+    if (this.readLedgers !== undefined) {
+      const verdict = this.readLedgers.verify({
+        attemptId: attempt.id,
+        seq: parsed.data.readLedgerSeq,
+        hash: parsed.data.readLedgerHash,
+      });
+      if (!verdict.ok) {
+        throw new ProtocolError(verdict.code, verdict.message, {
+          details: {
+            attemptId: attempt.id,
+            readLedgerSeq: parsed.data.readLedgerSeq,
+            readLedgerHash: parsed.data.readLedgerHash,
+          },
+        });
+      }
+      // The delivery is sealed against exactly these reads; a later read cannot change what
+      // it was verified against (`AC-085`).
+      this.readLedgers.seal(attempt.id);
     }
 
     return withTransaction(this.store.db, () => {

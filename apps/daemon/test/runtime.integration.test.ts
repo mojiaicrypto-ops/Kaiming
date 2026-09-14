@@ -92,26 +92,40 @@ describe('startRuntime', () => {
     expect(unauthorized.status).toBe(401);
     const health = await adminFetch(runtime, '/health');
     expect(health.status).toBe(200);
-    const body = (await health.json()) as {
+    const healthText = await health.text();
+    const body = JSON.parse(healthText) as {
       ready: boolean;
-      instances: unknown[];
+      projects: number;
       execution: { enabled: boolean; live: number };
     };
     expect(body.ready).toBe(true);
-    expect(body.instances).toHaveLength(1);
+    expect(body.projects).toBe(1);
     // The daemon really owns an executor: one stack per opened project, supervisor
     // running, no Attempt live yet (WP-11 A2-T6).
     expect(body.execution).toEqual({ enabled: true, live: 0 });
     expect(runtime.executions).toHaveLength(1);
     expect(runtime.executions[0]?.liveCount()).toBe(0);
 
-    // The daemon's own health route reports Core readiness (`protocol.md` §7).
+    // R2-03: health carries no filesystem path — no installation home, no project root —
+    // at any depth of the response body.
+    for (const path of [home, repo, realpathSync(repo)]) {
+      expect(healthText).not.toContain(path);
+    }
+    expect(healthText).not.toContain('"root"');
+
+    // The daemon's own health route reports Core readiness (`protocol.md` §7) and is
+    // likewise path-free.
     const daemonHealth = await fetch(
       `http://127.0.0.1:${String(instance?.daemon.port ?? 0)}/healthz`,
     );
     expect(daemonHealth.status).toBe(200);
-    const daemonBody = (await daemonHealth.json()) as { ready?: boolean; version?: string };
-    expect(daemonBody.ready === true || daemonBody.version !== undefined).toBe(true);
+    const daemonHealthText = await daemonHealth.text();
+    const daemonBody = JSON.parse(daemonHealthText) as { ready?: boolean; version?: string };
+    expect(daemonBody.ready).toBe(true);
+    expect(daemonBody.version).toBeDefined();
+    for (const path of [home, repo, realpathSync(repo)]) {
+      expect(daemonHealthText).not.toContain(path);
+    }
 
     // A real protocol call answers over the real HTTP surface with the credential.
     const rpc = await fetch(`http://127.0.0.1:${String(instance?.daemon.port ?? 0)}/rpc`, {
@@ -228,8 +242,8 @@ describe('startRuntime', () => {
     expect(runtime.instances).toHaveLength(1);
     expect(runtime.instances[0]?.root).toBe(realpathSync(repo));
     const health = await adminFetch(runtime, '/health');
-    const body = (await health.json()) as { instances: unknown[] };
-    expect(body.instances).toHaveLength(1);
+    const body = (await health.json()) as { projects: number };
+    expect(body.projects).toBe(1);
   });
 
   it('rejects a root that is not a Git repository', async () => {

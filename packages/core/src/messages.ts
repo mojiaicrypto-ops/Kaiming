@@ -7,11 +7,13 @@
  * attachment staged so the client can retry with the same uploads, and a repeated
  * idempotency key returns the original binding instead of duplicating the message.
  */
+import { execFileSync } from 'node:child_process';
 import {
   LIMITS,
   PROTOCOL_LIMITS,
   type JsonObject,
   type OperationName,
+  type Project,
   type Role,
   type Scope,
   type Message,
@@ -52,7 +54,53 @@ export interface MessageOperationsOptions {
   readonly blobs: BlobStore;
   /** Injectable clock, milliseconds. */
   readonly now?: () => number;
+  /**
+   * Reads the revision a new Work's code writes are bound to (`work.baseRevision`).
+   *
+   * `docs/architecture/data.md` §2 gives a Work a `baseRevision`, and
+   * `core/gates.ts` `requestCodeWrite` refuses every source write with `GATE_NOT_READY`
+   * while that field is empty (W6R3-04). Nothing wrote it, so AC-013 could not pass even
+   * with an approved Plan. This port is that writer's input: a message that creates a Work
+   * binds it to the revision the delivery branch really points at today
+   * (`AC-030` `ResolvedSource.revision`), and a project whose delivery ref does not exist
+   * yet yields `undefined` — the same `GATE_NOT_READY` a write would have hit before, so
+   * nothing is invented.
+   */
+  readonly readBaseRevision?: BaseRevisionReader;
 }
+
+/**
+ * Reads the delivery revision a Work should be created against.
+ *
+ * `undefined` means "this project has no delivery revision yet" (a fresh project before
+ * `Initialize`), never "unknown but probably fine".
+ */
+export type BaseRevisionReader = (project: Project) => string | undefined;
+
+/**
+ * The default reader: `git rev-parse --verify --quiet refs/heads/<deliveryBranch>`.
+ *
+ * The delivery ref is the only revision a Work may be based on (`reliability.md` §4), so
+ * the reader asks Git for exactly that ref instead of trusting a cached column. A repo
+ * that cannot be read, or a branch that does not exist yet, yields `undefined`; a
+ * malformed answer is treated the same way because a Work must not be bound to a value
+ * that is not a revision.
+ */
+export const defaultBaseRevisionReader: BaseRevisionReader = (project) => {
+  const ref = `refs/heads/${project.deliveryBranch}`;
+  try {
+    const stdout = execFileSync('git', ['rev-parse', '--verify', '--quiet', ref], {
+      cwd: project.gitRoot ?? project.root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5_000,
+    });
+    const revision = stdout.trim();
+    return /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(revision) ? revision : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 export interface MessageTransactionInput {
   readonly conversationId: string;
@@ -86,6 +134,8 @@ export function sendMessage(
     readonly artifacts: ArtifactService;
     readonly blobs: BlobStore;
     readonly now: () => number;
+    /** See {@link MessageOperationsOptions.readBaseRevision}. */
+    readonly readBaseRevision?: BaseRevisionReader;
   },
   input: MessageTransactionInput,
 ): MessageSendResult {
@@ -289,6 +339,9 @@ export function createMessageOperations(
             artifacts: options.artifacts,
             blobs: options.blobs,
             now,
+            ...(options.readBaseRevision === undefined
+              ? {}
+              : { readBaseRevision: options.readBaseRevision }),
           },
           {
             conversationId: context.params.conversationId,
@@ -388,6 +441,7 @@ function createAssistWork(
   context: {
     readonly projectId: string;
     readonly store: OperationContext['store'];
+    readonly readBaseRevision?: BaseRevisionReader;
   },
   input: {
     readonly messageId: string;
@@ -410,6 +464,10 @@ function createAssistWork(
     repairUsed: 0,
     costKnown: true,
   });
+  // `work.baseRevision` is what the Plan gate compares a write against; a project with no
+  // delivery ref yet binds nothing, exactly as before this port existed.
+  const project = context.store.projects.find(context.projectId);
+  const baseRevision = project === undefined ? undefined : context.readBaseRevision?.(project);
   return context.store.works.insert({
     id: workId,
     projectId: context.projectId,
@@ -423,6 +481,7 @@ function createAssistWork(
     sourceRef: { kind: 'message', id: input.messageId, version: '1' },
     status: 'queued',
     blockerIds: [],
+    ...(baseRevision === undefined ? {} : { baseRevision }),
     budgetId: budget.id,
     policyRevision: 1,
   } as never);

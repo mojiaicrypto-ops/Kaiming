@@ -23,10 +23,12 @@ import {
   BrowserSocket,
   daemonLogin,
   daemonLogout,
+  daemonPreview,
   daemonRead,
   forwardRpc,
   handleUpgrade,
   type DaemonTarget,
+  type PreviewRead,
 } from './daemon.js';
 import { FileBoundaryError, NodeFilePort, type FilePort } from './files.js';
 import { escapeHtml, renderDocument } from './html.js';
@@ -66,10 +68,14 @@ import {
   chiefModel,
   filesModel,
   inboxModel,
+  questionKey,
   requirementDetail,
   runDetail,
   runsModel,
   settingsModel,
+  type InboxContext,
+  type InboxQuestion,
+  type InboxWaitingRun,
 } from './views.js';
 
 /** The BFF's configuration: where the daemon is, who may talk to the BFF, and how. */
@@ -87,6 +93,8 @@ export interface WebAppOptions {
   readonly read?: typeof daemonRead;
   readonly login?: typeof daemonLogin;
   readonly logout?: typeof daemonLogout;
+  /** Reads one Artifact body; overridable so a page test needs no daemon. */
+  readonly preview?: typeof daemonPreview;
 }
 
 export interface WebApp {
@@ -135,6 +143,14 @@ const READ_ONLY = new Set([
   'subscription.remove',
   'project.events.ack',
 ]);
+/**
+ * `provider.upsert` / `provider.test` (`protocol.md` §5) are deliberately **absent**
+ * from `READ_ONLY`: writing a Provider — and its `secret` — is a state change, so
+ * `/rpc` must apply the same exact-`Origin` gate as every other write before the
+ * envelope is forwarded (WP-12 T1.2b). An unknown method is a write too, because
+ * `isWrite` defaults to `true`; adding either name here would silently drop that
+ * gate.
+ */
 
 /** Resolves the package's `public/` directory for both `src` and `dist` runs. */
 export function defaultPublicDir(): string {
@@ -191,6 +207,7 @@ export function createWebApp(options: WebAppOptions): WebApp {
   const read = options.read ?? daemonRead;
   const login = options.login ?? daemonLogin;
   const logout = options.logout ?? daemonLogout;
+  const preview = options.preview ?? daemonPreview;
   const allowed =
     options.allowedOrigins === undefined || options.allowedOrigins.length === 0
       ? [options.daemon.origin]
@@ -576,7 +593,7 @@ export function createWebApp(options: WebAppOptions): WebApp {
           body = renderErrorPage(t, board.code, board.message);
           break;
         }
-        const model = boardModel(board.value);
+        const model = boardModel(board.value, { branch });
         body = renderBoardPage({ model, projectId, t });
         view = board.value;
         break;
@@ -629,6 +646,7 @@ export function createWebApp(options: WebAppOptions): WebApp {
           },
           artifacts: artifacts.ok ? objectsOf(artifacts.value, 'items') : [],
           runs: runs.ok ? objectsOf(runs.value, 'items') : [],
+          branch,
           ...(plan === undefined ? {} : { plan }),
         });
         body = renderRequirementPage({ detail, projectId, t });
@@ -748,7 +766,7 @@ export function createWebApp(options: WebAppOptions): WebApp {
           body = renderErrorPage(t, inbox.code, inbox.message);
           break;
         }
-        const model = inboxModel(inbox.value);
+        const model = inboxModel(inbox.value, await inboxContext(session, inbox.value));
         inboxCount = model.unread;
         body = renderInboxPage({ model, projectId, t });
         view = inbox.value;
@@ -828,6 +846,63 @@ export function createWebApp(options: WebAppOptions): WebApp {
         code: codeOfFailure(error, 'INTERNAL_ERROR'),
         message: messageOf(error),
       };
+    }
+  }
+
+  /**
+   * Resolves what the `inbox` answer itself does not carry (`protocol.md` §4/§6).
+   *
+   * A `product` decision's question is the markdown body of the Artifact its
+   * `targetRef` points at, so it is read through the documented preview endpoint; a
+   * failure becomes the explicit reason the card renders instead of an empty
+   * question. A `permission` decision parks a Run, and the Inbox must name that Run,
+   * so each Work with a pending permission request is read once. Both reads are
+   * bounded by the rows actually on the page.
+   */
+  async function inboxContext(session: WebSession, raw: JsonObject): Promise<InboxContext> {
+    const questions: Record<string, InboxQuestion> = {};
+    const waitingRuns: Record<string, InboxWaitingRun> = {};
+    const workIds = new Set<string>();
+    for (const item of objectsOf(raw, 'items')) {
+      if (item['kind'] !== 'decision') continue;
+      const workId = typeof item['workId'] === 'string' ? item['workId'] : '';
+      const decisionKind = typeof item['decisionKind'] === 'string' ? item['decisionKind'] : '';
+      if (decisionKind === 'permission' && workId !== '') workIds.add(workId);
+      if (decisionKind !== 'product') continue;
+      const targetRef = asObject(item['targetRef']);
+      const artifactId = typeof targetRef['id'] === 'string' ? targetRef['id'] : '';
+      const artifactVersion = typeof targetRef['version'] === 'number' ? targetRef['version'] : 0;
+      if (artifactId === '') continue;
+      const key = questionKey(artifactId, artifactVersion);
+      if (questions[key] !== undefined) continue;
+      const answer = await readPreview(session, artifactId);
+      questions[key] = answer.ok
+        ? { text: answer.text, error: null }
+        : { text: '', error: `${answer.code}: ${answer.message}` };
+    }
+    for (const workId of workIds) {
+      const runs = await safeRead(session, 'run.list', { workId });
+      if (!runs.ok) continue;
+      const waiting = objectsOf(runs.value, 'items').find(
+        (run) => run['status'] === 'waiting_permission',
+      );
+      if (waiting === undefined) continue;
+      waitingRuns[workId] = {
+        runId: typeof waiting['id'] === 'string' ? waiting['id'] : '',
+        role: typeof waiting['role'] === 'string' ? waiting['role'] : '',
+        stage: typeof waiting['stage'] === 'string' ? waiting['stage'] : '',
+        status: 'waiting_permission',
+      };
+    }
+    return { questions, waitingRuns };
+  }
+
+  /** One Artifact body as the daemon serves it, with the refusal kept as data. */
+  async function readPreview(session: WebSession, artifactId: string): Promise<PreviewRead> {
+    try {
+      return await preview(options.daemon, sessionOfDaemon(session), artifactId);
+    } catch (error) {
+      return { ok: false, code: codeOfFailure(error, 'INTERNAL_ERROR'), message: messageOf(error) };
     }
   }
 

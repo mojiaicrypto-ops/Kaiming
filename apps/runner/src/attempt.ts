@@ -25,7 +25,9 @@ import {
   type ExplicitResources,
   type PiToolSpec,
 } from '@agentdev/pi-runtime';
-import { LIMITS } from '@agentdev/contracts';
+import { LIMITS, type Role } from '@agentdev/contracts';
+import { controlTools, createControlClient, type ControlClient } from './control-client.js';
+import { createReadLedger } from './read-ledger.js';
 import {
   parseCommand,
   writeMessage,
@@ -56,6 +58,37 @@ export interface AttemptRunnerOptions {
   readonly trusted: boolean;
   readonly systemPrompt?: string;
   readonly modelsPath?: string | null;
+  /** Short-lived attempt capability the control endpoint authenticates (`protocol.md` §6). */
+  readonly capability: string;
+  /**
+   * The role this Attempt runs as (`rules/agents.md` §1).
+   *
+   * It decides which control tools are registered: the Chief submits its assessment and
+   * dispatches through `assessment_submit`/`agent_dispatch`, a professional Run delivers
+   * through `stage_yield` (`execution.md` §7, `protocol.md` §6).
+   */
+  readonly role?: Role;
+  /** Base URL of the Core control endpoint; absent means no control tools are registered. */
+  readonly controlUrl?: string;
+  /** The Work a Chief assessment must name. */
+  readonly workId?: string;
+  /**
+   * How long the Runner waits for a control submission to land after a turn ends.
+   *
+   * This is a grace period, not a gate: a turn whose tool call is still in flight reports
+   * its result anyway, and the supervisor's corrective prompt
+   * (`protocol.md` §6) is the authority on compliance.
+   */
+  readonly submissionGraceMs?: number;
+  /** Test seam: replaces the control client (a real loopback client by default). */
+  readonly controlClient?: ControlClient;
+  /**
+   * The Attempt's read-ledger binding (`AC-085`), injected into `stage_yield`.
+   *
+   * Supplied by the process entry point from the tool bridge, which learned the binding
+   * from Core's own `tool.execute` answers. Absent means the Runner has no ledger to report.
+   */
+  readonly readLedgerBinding?: () => { readonly seq: number; readonly hash: string };
   /** Extension ids configured for this Attempt; unknown ids are rejected. */
   readonly extensionRequests?: readonly ExtensionRequest[];
   /** Test seam: replaces the shipped whitelist. */
@@ -107,9 +140,66 @@ export class AttemptRunner {
   private terminal = false;
   private heartbeat: NodeJS.Timeout | undefined;
   private readonly startedAt = Date.now();
+  /**
+   * The reads this Attempt really performed (`AC-085`); T2 runs no file tools, so the seal
+   * is the empty-ledger value until the T3 tool bridge records a read.
+   */
+  private readonly readLedger = createReadLedger();
+  /** What this Attempt delivered through the Core control channel (`protocol.md` §6). */
+  private readonly submission = {
+    assessment: false,
+    dispatch: false,
+    stage: false,
+  };
 
   constructor(options: AttemptRunnerOptions, deps: AttemptRunnerDeps) {
-    this.options = options;
+    const control =
+      options.controlClient ??
+      (options.controlUrl === undefined
+        ? undefined
+        : createControlClient({
+            url: options.controlUrl,
+            capability: options.capability,
+            attemptId: options.attemptId,
+            epoch: options.epoch,
+          }));
+    const submission = this.submission;
+    const customTools = [
+      ...(options.customTools ?? []),
+      ...(control === undefined
+        ? []
+        : controlTools({
+            client: control,
+            role: options.role ?? 'backend',
+            ...(options.workId === undefined ? {} : { workId: options.workId }),
+            ...(options.readLedgerBinding === undefined
+              ? {}
+              : { readLedgerBinding: options.readLedgerBinding }),
+            readLedger: this.readLedger,
+            onStageSubmitted: () => {
+              submission.stage = true;
+            },
+            onAssessmentSubmitted: () => {
+              submission.assessment = true;
+            },
+            onDispatchSubmitted: () => {
+              submission.dispatch = true;
+            },
+          })),
+    ];
+    // Pi SDK 0.85.1: `tools` is BOTH the allowlist and the initial active set
+    // (`dist/core/sdk.js:141` `allowedToolNames = options.tools`, `:144`
+    // `initialActiveToolNames = options.tools ?? …`), and `_refreshToolRegistry` filters
+    // `customTools` through that allowlist (`dist/core/agent-session.js:2112-2118`). A custom
+    // tool that is not named in `tools` is therefore discarded, so the role's registry — not
+    // the (possibly empty) `frozen.profile.toolSubset` — must be the session's allowlist
+    // (T3.1 handoff).
+    const registeredNames = customTools.map((tool) => tool.name);
+    this.options = {
+      ...options,
+      customTools,
+      toolNames: [...new Set([...options.toolNames, ...registeredNames])],
+    };
     this.deps = deps;
   }
 
@@ -176,8 +266,10 @@ export class AttemptRunner {
         provider: session.provider,
         modelId: session.modelId,
         tools: active,
-        // A requested tool the session did not activate is a configuration
-        // error; it is reported instead of being dropped silently.
+        // A requested tool the session did not activate is a configuration error; it is
+        // reported instead of being dropped silently. The list is the union of the profile's
+        // subset and the role's control tools, so a control tool the SDK refused to activate
+        // fails the Attempt loudly rather than leaving the model unable to deliver.
         droppedTools: this.options.toolNames.filter((name) => !active.includes(name)),
       });
       return 0;
@@ -214,6 +306,10 @@ export class AttemptRunner {
           // complete once the session is idle again: exiting earlier would abandon the
           // model call (`reliability.md` §5 requires a real stage outcome).
           await this.awaitIdle(session);
+          // The turn is done; give a control submission still in flight a moment to land
+          // before reporting. The supervisor's corrective prompt (`protocol.md` §6) is the
+          // authority on compliance, so this wait never blocks the result forever.
+          await this.awaitSubmission();
           this.finish('completed', 'prompt completed');
         } catch (error) {
           this.finish('failed', error instanceof Error ? error.message : String(error));
@@ -248,6 +344,37 @@ export class AttemptRunner {
     const deadline = Date.now() + timeoutMs;
     while (!session.isIdle()) {
       if (Date.now() > deadline) throw new Error('the session did not become idle in time');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  /**
+   * True when this Attempt delivered the structured result its role owes Core.
+   *
+   * A Chief Run submits an assessment and/or a dispatch; a professional Run submits a
+   * stage result (`execution.md` §7). This is the Runner's own view; the supervisor
+   * re-checks the same fact independently, because a real control call can still be in
+   * flight when the turn ends.
+   */
+  private delivered(): boolean {
+    return this.options.role === 'chief'
+      ? this.submission.assessment || this.submission.dispatch
+      : this.submission.stage;
+  }
+
+  /**
+   * Waits `submissionGraceMs` for the control call of this turn to be accepted.
+   *
+   * Returns as soon as anything was delivered, so a compliant Run exits immediately; a
+   * plain-text answer costs the grace period once and is then answered with the
+   * supervisor's corrective prompt.
+   */
+  private async awaitSubmission(): Promise<void> {
+    const graceMs = this.options.submissionGraceMs ?? 5_000;
+    if (graceMs <= 0 || this.delivered()) return;
+    const deadline = Date.now() + graceMs;
+    while (Date.now() < deadline) {
+      if (this.delivered()) return;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }

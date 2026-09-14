@@ -22,20 +22,18 @@
  *   node scripts/live.mjs --release [--no-write] [--help]
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { computeBinding } from './lib/acceptance-binding.mjs';
-import {
-  E2E_BROWSER_ISOLATION_ACS,
-  INDEPENDENT_MODEL_AC,
-  LIVE_DRILL_ACS,
-} from './lib/drill-acs.mjs';
+import { INDEPENDENT_MODEL_AC, LIVE_DRILL_ACS } from './lib/drill-acs.mjs';
 import { CheckFailure } from './lib/e2e-checks.mjs';
 import {
   runHtmlDrill,
   runL1Drill,
   runL2Drill,
+  runMessageToStageDrill,
   runRuntimeAttemptDrill,
+  runSessionStreamingDrill,
 } from './lib/live-drills.mjs';
 import { bootLiveStack, shutdownLiveStack } from './lib/live-harness.mjs';
 import { renderLiveRecord, liveDrillReport, CheckList } from './lib/live-report.mjs';
@@ -46,7 +44,15 @@ import {
 } from './lib/live-transport.mjs';
 import { REPO_ROOT, loadProduct, revisionOf } from './lib/e2e-runtime.mjs';
 
-const REPORT_DIR = join(REPO_ROOT, '.agentdev', 'work', 'WP-10');
+/**
+ * Where this run writes its records (WP-12 fix: the current work package, never a
+ * hard-coded older one, so a real run cannot overwrite another package's history).
+ * `--report-dir` / `AGENTDEV_REPORT_DIR` point it elsewhere.
+ */
+const DEFAULT_REPORT_DIR = join(REPO_ROOT, '.agentdev', 'work', 'WP-12');
+const REPORT_DIR = process.env.AGENTDEV_REPORT_DIR
+  ? resolve(process.env.AGENTDEV_REPORT_DIR)
+  : DEFAULT_REPORT_DIR;
 
 /** Exit code used when the environment cannot supply the real Provider. */
 const EXIT_UNVERIFIED = 3;
@@ -58,12 +64,13 @@ const EXIT_UNVERIFIED = 3;
  * real model answer, AC-007's L1 lane needs a real execution, and AC-010/AC-037/AC-041
  * need the real Review/Test/settlement/knowledge path.
  *
- * AC-002/AC-052 stay UNVERIFIED even here: the drill proves the server-side isolation
- * policy (`default-src 'none'`, `allow-scripts`, credential omission) and a real
- * one-shot download, but "浏览器渲染与脚本隔离" needs a browser this release
- * deliberately does not ship. AC-043 is only claimed when the environment names a
- * distinct Review/Test model; otherwise the drill still proves independent Runs and
- * distinct frozen snapshots and the AC is recorded UNVERIFIED.
+ * AC-002/AC-052 are no longer recorded here as UNVERIFIED: since WP-12 T7a the browser
+ * clauses run in a real Chromium inside `pnpm test:e2e` (`tests/browser/**`), and this
+ * drill keeps proving the server-side isolation policy (`default-src 'none'`,
+ * `allow-scripts`, credential omission) and a real one-shot download for the model's own
+ * HTML artifact. AC-043 is only claimed when the environment names a distinct
+ * Review/Test model; otherwise the drill still proves independent Runs and distinct
+ * frozen snapshots and the AC is recorded UNVERIFIED.
  */
 const DRILL_ACS = LIVE_DRILL_ACS;
 
@@ -73,9 +80,11 @@ function usage() {
     '',
     '  --release    run the release drill (every documented engineering command,',
     '               the acceptance aggregation, the readiness gate and release.md)',
-    '  --no-write        print the run only; do not write the WP-10 reports',
+    '  --no-write        print the run only; do not write the package records',
     '  --keep-temp       keep the temporary project/state directories for forensics',
-    '  --drill-out <p>   write the drill JSON to <p> instead of the WP-10 records',
+    '  --report-dir <p>  write the package records to <p>',
+    '                    (default .agentdev/work/WP-12; also AGENTDEV_REPORT_DIR)',
+    '  --drill-out <p>   write the drill JSON to <p> instead of the package records',
     '                    (used by scripts/acceptance.mjs, which runs this drill itself)',
     '  --help       show this help',
     '',
@@ -86,7 +95,14 @@ function usage() {
 }
 
 function parseArgs(argv) {
-  const options = { release: false, write: true, keepTemp: false, drillOut: null, help: false };
+  const options = {
+    release: false,
+    write: true,
+    keepTemp: false,
+    drillOut: null,
+    reportDir: null,
+    help: false,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--release') options.release = true;
@@ -96,6 +112,10 @@ function parseArgs(argv) {
       index += 1;
       if (index >= argv.length) throw new Error('--drill-out requires a path');
       options.drillOut = argv[index];
+    } else if (arg === '--report-dir') {
+      index += 1;
+      if (index >= argv.length) throw new Error('--report-dir requires a path');
+      options.reportDir = resolve(argv[index]);
     } else if (arg === '--help' || arg === '-h') options.help = true;
     else throw new Error(`unknown option: ${arg}`);
   }
@@ -106,9 +126,9 @@ function parseArgs(argv) {
  * Writes `live-results.json` and `live.md` from the executed check list.
  *
  * With `--drill-out` (the aggregator's in-run mode) only the nonce JSON file is
- * written; the WP-10 records stay as the standalone `pnpm test:live` run left them.
+ * written; the package records stay as the standalone `pnpm test:live` run left them.
  */
-function writeLiveReports(checks, meta, write, drillOut = null) {
+function writeLiveReports(checks, meta, write, drillOut = null, reportDir = REPORT_DIR) {
   const report = liveDrillReport(checks, meta);
   if (drillOut !== null) {
     mkdirSync(dirname(drillOut), { recursive: true });
@@ -120,10 +140,10 @@ function writeLiveReports(checks, meta, write, drillOut = null) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return;
   }
-  mkdirSync(REPORT_DIR, { recursive: true });
-  writeFileSync(join(REPORT_DIR, 'live-results.json'), `${JSON.stringify(report, null, 2)}\n`);
-  writeFileSync(join(REPORT_DIR, 'live.md'), renderLiveRecord(checks, meta));
-  process.stdout.write('live: wrote .agentdev/work/WP-10/live-results.json and live.md\n');
+  mkdirSync(reportDir, { recursive: true });
+  writeFileSync(join(reportDir, 'live-results.json'), `${JSON.stringify(report, null, 2)}\n`);
+  writeFileSync(join(reportDir, 'live.md'), renderLiveRecord(checks, meta));
+  process.stdout.write(`live: wrote ${join(reportDir, 'live-results.json')} and live.md\n`);
 }
 
 /** The residual register the live record always carries. */
@@ -164,7 +184,15 @@ async function runProviderDrill(options) {
     checks.unverified('drill.html-explanation', DRILL_ACS.html, provider.message);
     checks.unverified('drill.l1-typo', DRILL_ACS.l1, provider.message);
     checks.unverified('drill.l2-delivery', DRILL_ACS.l2, provider.message);
-    writeLiveReports(checks, meta, options.write, options.drillOut);
+    checks.unverified('drill.message-to-stage', DRILL_ACS.messageToStage, provider.message);
+    checks.unverified('drill.session-streaming', DRILL_ACS.session, provider.message);
+    writeLiveReports(
+      checks,
+      meta,
+      options.write,
+      options.drillOut,
+      options.reportDir ?? REPORT_DIR,
+    );
     process.stdout.write(
       `\nlive: UNVERIFIED — 0 real Provider calls were made; set ${Object.values(PROVIDER_ENV).join(', ')} to run the drill\n`,
     );
@@ -196,10 +224,13 @@ async function runProviderDrill(options) {
     await checks.check('drill.runtime-attempt', ['AC-057'], () =>
       runRuntimeAttemptDrill({ harness, product }),
     );
-    checks.unverified(
-      'browser.html-rendering',
-      E2E_BROWSER_ISOLATION_ACS,
-      'AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境；本仓库按产品决定不引入 Playwright 或浏览器下载。本演练已执行服务端部分：真实 Provider 产出的 HTML Artifact、预览 CSP/sandbox/credentials 头与一次性下载，浏览器侧仍未验证',
+    // The whole WP-12 T2 main chain, driven by one real message and a real model.
+    await checks.check('drill.message-to-stage', DRILL_ACS.messageToStage, () =>
+      runMessageToStageDrill({ harness, product }),
+    );
+    // AC-066: real Pi SDK streaming deltas + stored-session history recovery.
+    await checks.check('drill.session-streaming', DRILL_ACS.session, () =>
+      runSessionStreamingDrill({ harness, product, provider }),
     );
     if (provider.reviewModelId === null) {
       checks.unverified(
@@ -216,7 +247,7 @@ async function runProviderDrill(options) {
     await shutdownLiveStack(harness, options.keepTemp);
   }
 
-  writeLiveReports(checks, meta, options.write, options.drillOut);
+  writeLiveReports(checks, meta, options.write, options.drillOut, options.reportDir ?? REPORT_DIR);
   process.stdout.write(
     `\nlive: ${checks.passed} passed / ${checks.failed} failed / ${checks.unverifiedCount} unverified; ${transport.summary()}\n`,
   );

@@ -4,10 +4,19 @@
   "macOS提供launchd用户服务").
 
   Install:
-    cp apps/cli/templates/com.agentdev.daemon.plist ~/Library/LaunchAgents/
-    # replace __AGENTDEV_REPO__ with the checkout path and __NODE__ with the node binary
-    launchctl load -w ~/Library/LaunchAgents/com.agentdev.daemon.plist
-    launchctl list | grep agentdev
+    mkdir -p __AGENTDEV_HOME__/logs   # launchd opens StandardOutPath before the daemon runs
+    # replace __AGENTDEV_REPO__ with the checkout path, __NODE__ with the node binary and
+    # __AGENTDEV_HOME__ with the installation home (default ~/.agentdev)
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.agentdev.daemon.plist
+    launchctl print gui/$(id -u)/com.agentdev.daemon | head -20
+    agentdev status
+
+  Uninstall:
+    launchctl bootout gui/$(id -u)/com.agentdev.daemon
+    # then confirm: no daemon process, no leftover daemon.lock, `agentdev status` running:false
+
+  A real load/unload drill under a temporary label and a temporary AGENTDEV_HOME is
+  `.agentdev/work/WP-12/T6-launchd-drill.sh`.
 
   The daemon is a single-instance process (`daemon.lock`); `KeepAlive` restarts it after
   a crash, and the recovery scan runs against the databases it left behind.

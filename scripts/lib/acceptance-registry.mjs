@@ -536,7 +536,7 @@ export const CURATED_EVIDENCE = Object.freeze({
 /** Reason prefixes used when an AC cannot be executed in this environment. */
 export const ENVIRONMENT_REASONS = Object.freeze({
   browser:
-    '需要真实浏览器/无头浏览器演练（pnpm test:e2e）。本仓库按产品决定不引入 Playwright 或浏览器下载，因此浏览器级检查未执行',
+    '需要真实浏览器/无头浏览器演练（pnpm test:e2e 的 tests/browser/**）。本环境未提供可运行的 Chromium，浏览器级检查未执行',
   provider:
     '需要真实 Provider 纵向演练（pnpm test:live 及 AGENTDEV_PROVIDER_BASE_URL/MODEL/SECRET）。本环境未配置 Provider，演练未执行',
   generic: '没有任何已提交测试或已运行演练覆盖该 AC；需要相应发布演练或人工环境',

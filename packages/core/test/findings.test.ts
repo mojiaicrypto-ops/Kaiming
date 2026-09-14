@@ -18,6 +18,7 @@ import {
   PlanGateService,
   StageGate,
   StoreSourceHashPort,
+  newAttemptAdmission,
 } from '../src/index.js';
 
 /**
@@ -1406,6 +1407,30 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     });
     expect(afterDecision.ok).toBe(true);
     expect(store.runs.find(PAUSE_RUN_ID)?.status).toBe('running');
+  });
+
+  it('refuses to resume a recovery_required Run that has no persisted verdict (WP11R4-04)', () => {
+    const paused = service.pauseWork({ workId: WORK_ID, reason: 'user paused' });
+    expect(paused.ok).toBe(true);
+    if (!paused.ok) throw new Error('unreachable');
+
+    // `workflow.md` §5.3 makes the *state* the rule: a `recovery_required` Run continues
+    // only after a RecoveryDecision. A missing `run.recovered` verdict is not permission —
+    // the old evidence-only guard let `newAttemptAdmission` fail open here (`WP11R4-04`).
+    const current = store.runs.find(PAUSE_RUN_ID);
+    if (current === undefined) throw new Error('unreachable');
+    store.runs.update(PAUSE_RUN_ID, { status: 'recovery_required' }, current.version);
+    expect(newAttemptAdmission(store, PAUSE_RUN_ID).allowed).toBe(true);
+
+    const resumed = service.resumeWork({
+      workId: WORK_ID,
+      expectedWorkVersion: paused.work.version,
+    });
+    expect(resumed.ok).toBe(false);
+    if (resumed.ok) throw new Error('unreachable');
+    expect(resumed.code).toBe('RECOVERY_REQUIRED');
+    expect(store.works.find(WORK_ID)?.status).toBe('paused');
+    expect(store.attempts.count('run_id = ?', [PAUSE_RUN_ID])).toBe(1);
   });
 
   it('refuses to pause a blocked Work, which recovers through its own path (AC-020)', () => {

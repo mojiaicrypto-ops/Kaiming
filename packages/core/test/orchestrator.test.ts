@@ -9,6 +9,7 @@ import type {
   Profile,
   ProviderInput,
   Run,
+  Scope,
 } from '@agentdev/contracts';
 import { ProjectStore as Store, projectIdFromRoot, type ProjectStore } from '@agentdev/storage';
 import {
@@ -17,8 +18,10 @@ import {
   Orchestrator,
   ProtocolError,
   SnapshotWriter,
+  assertDerivableScope,
   professionalSpec,
   type GatewayTransport,
+  type ProfessionalSpecDraft,
 } from '../src/index.js';
 
 const ROOT = '/tmp/agentdev-orchestrator-root';
@@ -1223,7 +1226,10 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
 
   it('applies the authorized Run parameter layer when freezing a profile', () => {
     const run = orchestrator.dispatch({
-      spec: chiefSpec(),
+      spec: chiefSpec({ scope: emptyScope }),
+      // `runParams` can name another Provider/Model, so it must come with authority
+      // (WP-12 fix round 2, G1 precondition).
+      authorizationRef: AUTHORIZATION_ID,
       runParams: { reasoning: 'low', contextLimit: 10_000 },
     }).run;
     const frozen = config.readFrozen(run.configSnapshotId);
@@ -1933,5 +1939,402 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
         stage: 'develop',
       }),
     ).toThrowError(/dispatches directly/);
+  });
+
+  /**
+   * WP-12 T2.2: the assessment is the Work's routing decision, and a plain natural-language
+   * instruction is its own authorization (`PRODUCT.md` §5, user decision Q1=B). The derived
+   * envelope stays inside the project root and never carries an environment operation.
+   */
+  describe('assessment persistence and derived authorization (WP-12 T2.2)', () => {
+    /** A Work with no authorization, as `conversation.message.send` creates it. */
+    function freshWork(): string {
+      const workId = store.newId();
+      const budget = store.budgets.insert({
+        projectId,
+        workId,
+        tokenLimit: 100_000,
+        tokensUsed: 0,
+        tokensReserved: 0,
+        activeTimeLimit: 600,
+        activeTimeUsed: 0,
+        repairLimit: 3,
+        repairUsed: 0,
+        costKnown: true,
+      });
+      store.works.insert({
+        id: workId,
+        projectId,
+        intent: 'delivery',
+        purpose: 'implement the dark theme',
+        level: 'none',
+        goal: 'implement the dark theme',
+        scope: emptyScope,
+        sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+        status: 'running',
+        blockerIds: [],
+        budgetId: budget.id,
+        policyRevision: 1,
+      });
+      return workId;
+    }
+
+    /** A real Chief Run of an unseeded Work, created through the normal dispatch path. */
+    function chiefParent(workId: string): Run {
+      return orchestrator.dispatch({
+        spec: chiefSpec({ workId, scope: { ...emptyScope, readPaths: ['src'] } }),
+      }).run;
+    }
+
+    /**
+     * The `agent.dispatch` draft, minus the Core-owned fields.
+     *
+     * `overrides` is spread *first* so the literal defaults keep their narrow types
+     * (`role`/`purpose` are unions in the contract) while a test can still replace a field.
+     */
+    function derivedSpec(
+      workId: string,
+      parentRunId: string,
+      overrides: Partial<ProfessionalSpecDraft> = {},
+    ): ProfessionalSpecDraft {
+      return {
+        role: 'backend',
+        purpose: 'implementation',
+        goal: 'implement the dark theme',
+        scope: { ...emptyScope, writePaths: ['src/theme'] },
+        stage: 'develop',
+        contextSelection: selection,
+        requiredOutputs: ['stage.submit'],
+        requiredChild: false,
+        joinPolicy: 'none',
+        budgetAllocation: 4_000,
+        parentRunId,
+        ...overrides,
+      };
+    }
+    function derivedPayload(overrides: Partial<AssessmentPayload> = {}): AssessmentPayload {
+      return {
+        intent: 'delivery',
+        goal: 'implement the dark theme',
+        scope: { ...emptyScope, readPaths: ['src'], writePaths: ['src/theme'] },
+        level: 'L2',
+        semanticImpact: false,
+        riskFlags: [],
+        uncertainties: [],
+        policyRevision: 1,
+        reason: 'a plain delivery instruction from the user',
+        ...overrides,
+      };
+    }
+
+    it('persists the assessed level on the Work so the next dispatch is authorized', () => {
+      const workId = freshWork();
+      orchestrator.assess({ workId, payload: derivedPayload({ scope: emptyScope }) });
+      const work = store.works.find(workId);
+      expect(work?.level).toBe('L2');
+      // A re-assessment that says L1 must not downgrade the Work (`workflow.md` §2).
+      orchestrator.assess({
+        workId,
+        payload: derivedPayload({ scope: emptyScope, level: 'L1' }),
+      });
+      expect(store.works.find(workId)?.level).toBe('L2');
+    });
+
+    it('derives the authorization from the assessment and freezes a real Run (Q1=B)', () => {
+      const workId = freshWork();
+      const chief = chiefParent(workId);
+      const { assessment, authorizationRef, dispatch } = orchestrator.assessAndDispatch({
+        workId,
+        payload: derivedPayload(),
+        parentRunId: chief.id,
+        spec: derivedSpec(workId, chief.id),
+        sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      });
+      expect(assessment.level).toBe('L2');
+      expect(authorizationRef).toBeDefined();
+      expect(dispatch.run.status).toBe('queued');
+      const authorization = store.authorizations.find(authorizationRef ?? '');
+      expect(authorization).toMatchObject({
+        workId,
+        sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      });
+      expect(authorization?.scope.writePaths).toEqual(['src/theme']);
+      // The derived envelope never reaches an environment operation.
+      expect(authorization?.operations).not.toContain('bash');
+      expect(authorization?.operations).not.toContain('network');
+      const work = store.works.find(workId);
+      expect(work?.level).toBe('L2');
+      expect(work?.authorizationRef).toBe(authorizationRef);
+      expect(work?.scope.writePaths).toEqual(['src/theme']);
+      // The frozen dispatch snapshot names the derived authority, not a model claim.
+      expect(dispatch.dispatchSnapshot.authorizationRef).toBe(authorizationRef);
+    });
+
+    it('injects the profile revision instead of trusting the draft (data.md §3)', () => {
+      const workId = freshWork();
+      const chief = chiefParent(workId);
+      const { dispatch } = orchestrator.assessAndDispatch({
+        workId,
+        payload: derivedPayload(),
+        parentRunId: chief.id,
+        // The draft cannot even name a revision; Core freezes the current one.
+        spec: derivedSpec(workId, chief.id, { budgetAllocation: 1_234 }),
+        sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      });
+      expect(dispatch.dispatchSnapshot.profileRevision).toBe(
+        orchestrator.currentProfileRevision('backend'),
+      );
+      // The budget the Chief asked for is the budget that is frozen and reserved.
+      expect(dispatch.dispatchSnapshot.dispatchSpec.budgetAllocation).toBe(1_234);
+      expect(dispatch.run.budgetAllocation).toBe(1_234);
+    });
+
+    it('caps the allocation at what the parent Chief Run can still fund (N-10)', () => {
+      const workId = freshWork();
+      // `derivedSpec` asks for 4_000 of the parent's 10_000; a second child asking for
+      // 20_000 cannot exceed the parent's own hold, so Core freezes what is available.
+      const chief = chiefParent(workId);
+      const first = orchestrator.assessAndDispatch({
+        workId,
+        payload: derivedPayload(),
+        parentRunId: chief.id,
+        spec: derivedSpec(workId, chief.id, { budgetAllocation: 4_000 }),
+        sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      });
+      expect(first.dispatch.run.budgetAllocation).toBe(4_000);
+      const second = orchestrator.assessAndDispatch({
+        workId,
+        payload: derivedPayload(),
+        parentRunId: chief.id,
+        spec: derivedSpec(workId, chief.id, { budgetAllocation: 20_000 }),
+        sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      });
+      // 10_000 − 4_000 live = 6_000, whatever the draft asked for.
+      expect(second.dispatch.run.budgetAllocation).toBe(6_000);
+      expect(second.dispatch.dispatchSnapshot.dispatchSpec.budgetAllocation).toBe(6_000);
+    });
+
+    it('fails closed on an empty scope: nothing is derived and the dispatch is refused', () => {
+      const workId = freshWork();
+      const chief = chiefParent(workId);
+      expect(() =>
+        orchestrator.assessAndDispatch({
+          workId,
+          payload: derivedPayload({ scope: emptyScope }),
+          parentRunId: chief.id,
+          spec: derivedSpec(workId, chief.id),
+          sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+        }),
+      ).toThrowError(/NOT_AUTHORIZED|no authorization/);
+      expect(store.authorizations.list({ where: 'work_id = ?', params: [workId] })).toHaveLength(0);
+      // Nothing was derived, so the only Run of this Work is the Chief Run that called in.
+      expect(store.runs.list({ where: 'work_id = ?', params: [workId] })).toHaveLength(1);
+    });
+
+    it('refuses a path that would leave the project root before writing authority', () => {
+      // `repoPathSchema` already refuses `..`/absolute paths at the protocol edge, so the
+      // derivation's own guard is asserted directly: it is the second, explicit check.
+      expect(() =>
+        assertDerivableScope(
+          'work',
+          { ...emptyScope, readPaths: ['~/secrets'], writePaths: ['~/.ssh'] },
+          ['read', 'edit', 'write'],
+        ),
+      ).toThrowError(/inside the project root/);
+    });
+
+    it('fails closed on an environment operation', () => {
+      const environment = freshWork();
+      const environmentChief = chiefParent(environment);
+      expect(() =>
+        orchestrator.assessAndDispatch({
+          workId: environment,
+          payload: derivedPayload({
+            intent: 'operation',
+            level: 'L3',
+            scope: { ...emptyScope, operations: ['deploy'] },
+          }),
+          parentRunId: environmentChief.id,
+          spec: derivedSpec(environment, environmentChief.id, {
+            scope: { ...emptyScope, operations: ['deploy'] },
+          }),
+          sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+        }),
+      ).toThrowError(/never grants environment operations/);
+      expect(
+        store.authorizations.list({ where: 'work_id = ?', params: [environment] }),
+      ).toHaveLength(0);
+    });
+
+    it('keeps an existing authorization instead of deriving a second one', () => {
+      const chief = chiefParent(WORK_ID);
+      const { authorizationRef } = orchestrator.assessAndDispatch({
+        workId: WORK_ID,
+        payload: derivedPayload({
+          authorizationRef: WRITE_AUTHORIZATION_ID,
+          scope: {
+            readPaths: [],
+            writePaths: ['packages/storage/src'],
+            operations: ['write'],
+            networkTargets: [],
+          },
+        }),
+        parentRunId: chief.id,
+        spec: derivedSpec(WORK_ID, chief.id, {
+          scope: { ...emptyScope, writePaths: ['packages/storage/src'] },
+        }),
+        sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      });
+      expect(authorizationRef).toBe(WRITE_AUTHORIZATION_ID);
+    });
+
+    it('assessWithDerivation writes the authority the assessment path will reuse', () => {
+      const workId = freshWork();
+      const { assessment, authorizationRef } = orchestrator.assessWithDerivation({
+        workId,
+        payload: derivedPayload(),
+        sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      });
+      expect(assessment.level).toBe('L2');
+      expect(authorizationRef).toBeDefined();
+      expect(store.works.find(workId)?.authorizationRef).toBe(authorizationRef);
+      // A second assessment reuses the same grant instead of deriving another one.
+      const again = orchestrator.assessWithDerivation({
+        workId,
+        payload: derivedPayload(),
+        sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      });
+      expect(again.authorizationRef).toBe(authorizationRef);
+    });
+
+    it('refuses an out-of-envelope agent.dispatch with zero residue (WP-12 T2.5)', () => {
+      const workId = freshWork();
+      const chief = chiefParent(workId);
+      orchestrator.assessWithDerivation({
+        workId,
+        payload: derivedPayload(),
+        sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      });
+      const before = {
+        work: store.works.find(workId),
+        runs: store.runs.list({ where: 'work_id = ?', params: [workId] }).length,
+        authorizations: store.authorizations.list().length,
+        snapshots: store.snapshots.list().length,
+      };
+      // The derived envelope covers `src/theme`; a spec reaching for another path, or for
+      // an environment operation, is refused by the same guard the assessment path uses.
+      const scopes: Scope[] = [
+        { ...emptyScope, writePaths: ['src/elsewhere'] },
+        { ...emptyScope, writePaths: ['src/theme'], operations: ['bash'] },
+        { ...emptyScope, writePaths: ['src/theme'], networkTargets: ['https://example.test'] },
+      ];
+      for (const scope of scopes) {
+        try {
+          orchestrator.dispatchProfessional({
+            parentRunId: chief.id,
+            spec: derivedSpec(workId, chief.id, { scope }),
+          });
+          throw new Error('expected a NOT_AUTHORIZED refusal');
+        } catch (error) {
+          expect(error).toMatchObject({ code: 'NOT_AUTHORIZED' });
+        }
+      }
+      const after = store.works.find(workId);
+      expect(after?.level).toBe(before.work?.level);
+      expect(after?.authorizationRef).toBe(before.work?.authorizationRef);
+      expect(after?.scope).toEqual(before.work?.scope);
+      expect(store.runs.list({ where: 'work_id = ?', params: [workId] })).toHaveLength(before.runs);
+      expect(store.authorizations.list()).toHaveLength(before.authorizations);
+      expect(store.snapshots.list()).toHaveLength(before.snapshots);
+    });
+
+    it('refuses to queue a child Run the Chief Run cannot fund (review P3)', () => {
+      const workId = freshWork();
+      const chief = chiefParent(workId);
+      orchestrator.assessWithDerivation({
+        workId,
+        payload: derivedPayload(),
+        sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      });
+      // Exhaust the parent's allocation with one legitimate child, then ask for another.
+      orchestrator.dispatchProfessional({
+        parentRunId: chief.id,
+        spec: derivedSpec(workId, chief.id, { budgetAllocation: 10_000 }),
+      });
+      try {
+        orchestrator.dispatchProfessional({
+          parentRunId: chief.id,
+          spec: derivedSpec(workId, chief.id, { budgetAllocation: 1_000 }),
+        });
+        throw new Error('expected BUDGET_EXCEEDED');
+      } catch (error) {
+        expect(error).toMatchObject({ code: 'BUDGET_EXCEEDED' });
+      }
+      expect(
+        store.runs
+          .list({ where: 'work_id = ?', params: [workId] })
+          .filter((run) => run.role !== 'chief'),
+      ).toHaveLength(1);
+    });
+
+    it('refuses an agent.dispatch write scope with no authorization (review P2-1)', () => {
+      const workId = freshWork();
+      const chief = chiefParent(workId);
+      // The Work never obtained authority: a write spec must be refused outright rather
+      // than frozen with `authorizationRef: null`.
+      try {
+        orchestrator.dispatchProfessional({
+          parentRunId: chief.id,
+          spec: derivedSpec(workId, chief.id),
+        });
+        throw new Error('expected a NOT_AUTHORIZED refusal');
+      } catch (error) {
+        expect(error).toMatchObject({ code: 'NOT_AUTHORIZED' });
+      }
+      expect(store.runs.list({ where: 'work_id = ?', params: [workId] })).toHaveLength(1);
+      expect(store.authorizations.list({ where: 'work_id = ?', params: [workId] })).toHaveLength(0);
+    });
+
+    it('refuses agent.dispatch from a Run that is not the Work’s Chief', () => {
+      const workId = freshWork();
+      const chief = chiefParent(workId);
+      orchestrator.assessWithDerivation({
+        workId,
+        payload: derivedPayload(),
+        sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      });
+      const child = orchestrator.dispatchProfessional({
+        parentRunId: chief.id,
+        spec: derivedSpec(workId, chief.id),
+      }).run;
+      expect(() =>
+        orchestrator.dispatchProfessional({
+          parentRunId: child.id,
+          spec: derivedSpec(workId, chief.id),
+        }),
+      ).toThrowError(/not the Chief Run/);
+    });
+
+    it('leaves no Run or snapshot behind when the draft spec is invalid', () => {
+      const workId = freshWork();
+      const chief = chiefParent(workId);
+      const runsBefore = store.runs.list().length;
+      const snapshotsBefore = store.snapshots.list().length;
+      expect(() =>
+        orchestrator.assessAndDispatch({
+          workId,
+          payload: derivedPayload(),
+          parentRunId: chief.id,
+          // `role` is a closed union in the contract; the cast is what a hostile or
+          // hallucinating Runner would send over the wire.
+          spec: derivedSpec(workId, chief.id, {
+            role: 'nobody',
+          } as unknown as Partial<ProfessionalSpecDraft>),
+          sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+        }),
+      ).toThrowError(/VALIDATION_ERROR|agent.dispatch spec/);
+      expect(store.runs.list().length).toBe(runsBefore);
+      expect(store.snapshots.list().length).toBe(snapshotsBefore);
+    });
   });
 });

@@ -94,12 +94,18 @@ button[aria-disabled='true'] {
 
 /* Layout ------------------------------------------------------------------ */
 
+/*
+ * AC-071: the top bar is one grid row spanning the whole workspace, and its three
+ * groups are flex items inside it. Naming only `brand`/`tools` as grid areas put the
+ * whole `header.topbar` in the 220×54 `brand` cell instead, which pushed the Live
+ * restore control outside the viewport.
+ */
 .shell {
   display: grid;
   grid-template-columns: var(--sidebar) minmax(0, 1fr) 0;
   grid-template-rows: var(--header) minmax(0, 1fr);
   grid-template-areas:
-    'brand topbar tools'
+    'topbar topbar topbar'
     'sidebar main dock';
   height: 100dvh;
   min-width: 320px;
@@ -107,9 +113,6 @@ button[aria-disabled='true'] {
 
 .shell[data-panel-mode='open'] {
   grid-template-columns: var(--sidebar) minmax(0, 1fr) var(--dock);
-  grid-template-areas:
-    'brand topbar tools'
-    'sidebar main dock';
 }
 
 .shell[data-panel-mode='compact'] {
@@ -120,8 +123,15 @@ button[aria-disabled='true'] {
   grid-template-columns: var(--sidebar) minmax(0, 1fr) 0;
 }
 
+.topbar {
+  grid-area: topbar;
+  display: flex;
+  min-width: 0;
+}
+
 .brand {
-  grid-area: brand;
+  /* The brand keeps the sidebar's width so the two left edges line up (AC-071). */
+  flex: 0 0 var(--sidebar);
   display: flex;
   gap: 8px;
   align-items: center;
@@ -129,6 +139,7 @@ button[aria-disabled='true'] {
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   font-weight: 650;
+  min-width: 0;
 }
 
 .brand-mark {
@@ -139,28 +150,24 @@ button[aria-disabled='true'] {
 }
 
 .project-area {
-  grid-column: 2 / span 2;
-  grid-row: 1;
+  flex: 1 1 auto;
   display: flex;
   gap: 8px;
   align-items: center;
   padding: 0 12px;
   border-bottom: 1px solid var(--line);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .topbar-tools {
-  grid-column: 3;
-  grid-row: 1;
+  flex: 0 1 auto;
   display: flex;
   gap: 8px;
   align-items: center;
   justify-content: flex-end;
   padding: 0 12px;
   border-bottom: 1px solid var(--line);
-}
-
-.shell[data-panel-mode='open'] .topbar-tools {
-  grid-column: 3;
 }
 
 .connection-state {
@@ -394,17 +401,26 @@ pre {
   .shell[data-panel-mode='hidden'] {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
-      'brand'
       'topbar'
       'main';
   }
 
-  .project-area,
-  .topbar-tools {
-    grid-column: 1;
+  .sidebar {
+    display: none;
   }
 
-  .sidebar {
+  /* One top-bar row: the brand and the tools keep their width, the project area
+     absorbs the remainder, and the visible language label is redundant with the
+     select's own accessible name. */
+  .brand {
+    flex: 0 0 auto;
+  }
+
+  .topbar-tools {
+    flex: 0 0 auto;
+  }
+
+  .language-label {
     display: none;
   }
 

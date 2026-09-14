@@ -299,6 +299,44 @@ describe('BFF HTTP surface (AC-078)', () => {
     expect(body.error.code).toBe('NOT_AUTHORIZED');
   });
 
+  it('gates provider.upsert and provider.test as writes and forwards them with the daemon session (WP-12 T1.2B)', async () => {
+    // Neither method is in the BFF's `READ_ONLY` list: writing a Provider — and its
+    // secret — must take the same exact-Origin path as every other write
+    // (`protocol.md` §2/§5).
+    for (const method of ['provider.upsert', 'provider.test']) {
+      const refused = await rpc({ origin: 'http://evil.example', method, params: {} });
+      expect(refused.status).toBe(403);
+      expect(((await refused.json()) as { error: { code: string } }).error.code).toBe(
+        'NOT_AUTHORIZED',
+      );
+    }
+    const secret = 'sk-live-forwarded-123';
+    const forwarded = await rpc({
+      method: 'provider.upsert',
+      params: {
+        provider: {
+          type: 'openai-compatible',
+          baseUrl: 'https://api.example/v1',
+          enabled: true,
+          models: [],
+        },
+        secret,
+      },
+    });
+    expect(forwarded.status).toBe(200);
+    const body = (await forwarded.json()) as { ok: boolean; result: { echoed: string } };
+    expect(body.result.echoed).toBe('provider.upsert');
+    const call = upstream.calls.at(-1);
+    // The daemon call carries the BFF's own session credential and Origin, never
+    // anything the browser could set.
+    expect(call?.origin).toBe(WEB_ORIGIN);
+    expect(call?.csrf).toBe(csrfToken);
+    expect(call?.cookie).toContain('agentdev_session=');
+    // The envelope reaches the daemon intact; nothing echoes it back into a page.
+    expect(call?.body).toContain(secret);
+    expect(JSON.stringify(body)).not.toContain(secret);
+  });
+
   it('refuses a write with no Origin at all', async () => {
     const response = await fetch(`${baseUrl}/rpc`, {
       method: 'POST',
@@ -332,6 +370,29 @@ describe('BFF HTTP surface (AC-078)', () => {
     expect(body['authenticated']).toBe(true);
     expect(body['csrfToken']).toBe(csrfToken);
     expect(JSON.stringify(body)).not.toContain(webCookie);
+  });
+
+  it('renders the first paint in the agentdev_language cookie and embeds the client dictionary (WP-12 T4)', async () => {
+    const zh = await fetch(`${baseUrl}/projects/proj-1/requirements`, {
+      headers: { accept: 'text/html', cookie: `${webCookie}; agentdev_language=zh` },
+    });
+    expect(zh.status).toBe(200);
+    const zhHtml = await zh.text();
+    expect(zhHtml).toContain('<html lang="zh-CN">');
+    expect(zhHtml).toContain('data-language="zh"');
+    // The client's own dictionary travels with the page, in both locales, so the
+    // in-page switch (and the reload the cookie survives) covers every key —
+    // including the ones the daemon's smaller `ui.translate` catalogue omits.
+    expect(zhHtml).toContain('id="uiStrings"');
+    expect(zhHtml).toContain('"aria.liveDockCompact":"实时面板，紧凑"');
+    // The island carries interface strings only: no credential or secret reference.
+    expect(zhHtml).not.toContain('secretRef');
+    const en = await fetch(`${baseUrl}/projects/proj-1/requirements`, {
+      headers: { accept: 'text/html', cookie: webCookie },
+    });
+    const enHtml = await en.text();
+    expect(enHtml).toContain('<html lang="en">');
+    expect(enHtml).toContain('data-language="en"');
   });
 
   it('clears the browser session on logout and refuses the old cookie afterwards', async () => {

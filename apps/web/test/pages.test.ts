@@ -29,6 +29,7 @@ import {
 } from '../src/pages.js';
 import { UI_STRINGS, translator, translationKeys, type Language } from '../src/i18n.js';
 import { escapeHtml, renderDocument } from '../src/html.js';
+import type { JsonObject, JsonValue } from '@agentdev/contracts';
 import { planCard, planVersionOf } from '../src/app.js';
 import {
   agentsModel,
@@ -343,6 +344,91 @@ describe('board page', () => {
     expect(html).toContain('data-i18n="board.l1Hidden"');
     expect(html).toContain('data-excluded="l1-work"');
   });
+
+  it('renders the branch, commit and push state and offers the lifecycle actions (AC-090)', () => {
+    const gitModel = boardModel(
+      {
+        columns: {
+          queued: [
+            {
+              requirementId: 'req-q',
+              identity: 'req-q',
+              lifecycle: 'queued',
+              recordVersion: 2,
+              saveState: 'saved',
+              portableRef: { path: 'p', revision: 'd'.repeat(40) },
+              canCancelWithoutWork: true,
+            },
+          ],
+          active: [
+            {
+              requirementId: 'req-a',
+              identity: 'req-a',
+              lifecycle: 'active',
+              recordVersion: 4,
+              saveState: 'saved',
+              portableRef: { path: 'p', revision: 'e'.repeat(40) },
+              git: { unpushed: true },
+              canPause: true,
+              work: { id: 'work-1', status: 'running', version: 6 },
+            },
+          ],
+          completed: [
+            {
+              requirementId: 'req-c',
+              identity: 'req-c',
+              lifecycle: 'completed',
+              recordVersion: 3,
+              saveState: 'saved',
+            },
+          ],
+          archived: [],
+        },
+      },
+      { branch: 'agentdev/main' },
+    );
+    const html = renderBoardPage({ model: gitModel, projectId: 'proj-1', t });
+    // The real payload values reach the card, full commit and all.
+    expect(html).toContain('data-git-branch="agentdev/main"');
+    expect(html).toContain(`data-git-commit="${'e'.repeat(40)}"`);
+    expect(html).toContain('data-git-unpushed="true"');
+    expect(html).toContain('Delivery branch: agentdev/main');
+    expect(html).toContain(`Commit: ${'e'.repeat(12)}`);
+    expect(html).toContain('Push state: Unpushed');
+    // A payload with no push state says so instead of claiming unpushed.
+    expect(html).toContain('data-git-unpushed="unreported"');
+    expect(html).toContain('Push state: Push state not reported');
+    // The card actions carry the requirement id the command needs.
+    expect(html).toContain('data-action="pause" data-work="work-1"');
+    expect(html).toContain('data-action="complete" data-requirement="req-a"');
+    expect(html).toContain('data-record-version="4"');
+    expect(html).toContain('data-work-version="6"');
+    expect(html).toContain('data-action="archive" data-requirement="req-q"');
+    expect(html).toContain('data-action="archive" data-requirement="req-c"');
+    expect(html).toContain('data-i18n-aria="board.actions"');
+  });
+
+  it('offers Continue only for a record that waits to continue (AC-089)', () => {
+    const imported = boardModel({
+      columns: {
+        active: [
+          {
+            requirementId: 'req-i',
+            identity: 'req-i',
+            lifecycle: 'active',
+            recordVersion: 1,
+            executionAvailability: 'needs_replan',
+          },
+        ],
+      },
+    });
+    const html = renderBoardPage({ model: imported, projectId: 'proj-1', t });
+    expect(html).toContain('data-action="continue" data-requirement="req-i"');
+    // The ordinary active card from the fixture never shows Continue.
+    expect(renderBoardPage({ model, projectId: 'proj-1', t })).not.toContain(
+      'data-action="continue"',
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -470,6 +556,56 @@ describe('requirement detail page', () => {
     const html = renderRequirementPage({ detail: baseDetail, projectId: 'proj-1', t });
     expect(html).toContain('Ship &lt;it&gt;');
     expect(html).not.toContain('Ship <it>');
+  });
+
+  it('renders the delivery branch, commit, push state and the card actions (AC-090)', () => {
+    const detail = requirementDetail({
+      requirement: {
+        id: 'req-1',
+        title: 'x',
+        goal: 'g',
+        lifecycle: 'active',
+        recordVersion: 7,
+        saveState: 'saved',
+        portableRef: { path: 'p', revision: 'f'.repeat(40) },
+        git: { unpushed: true },
+        work: { id: 'work-1', status: 'running', version: 5 },
+      },
+      artifacts: [],
+      runs: [],
+      branch: 'agentdev/main',
+    });
+    const html = renderRequirementPage({ detail, projectId: 'proj-1', t });
+    expect(html).toContain('data-git-branch="agentdev/main"');
+    expect(html).toContain(`data-git-commit="${'f'.repeat(40)}"`);
+    expect(html).toContain('data-git-unpushed="true"');
+    expect(html).toContain(`Commit: ${'f'.repeat(12)}`);
+    expect(html).toContain('Push state: Unpushed');
+    expect(html).toContain('id="detailActions"');
+    expect(html).toContain('data-action="complete" data-requirement="req-1"');
+    expect(html).toContain('data-action="pause" data-requirement="req-1" data-work="work-1"');
+    expect(html).toContain('data-work-version="5"');
+    expect(html).toContain('id="detailError"');
+  });
+
+  it('says the push state is unreported when the read payload carries none (AC-090)', () => {
+    const detail = requirementDetail({
+      requirement: {
+        id: 'req-1',
+        title: 'x',
+        goal: 'g',
+        lifecycle: 'queued',
+        recordVersion: 1,
+        work: null,
+      },
+      artifacts: [],
+      runs: [],
+      branch: 'agentdev/main',
+    });
+    const html = renderRequirementPage({ detail, projectId: 'proj-1', t });
+    expect(html).toContain('data-git-unpushed="unreported"');
+    expect(html).toContain('Push state: Push state not reported');
+    expect(html).toContain('data-action="archive" data-requirement="req-1"');
   });
 
   it('renders an attempt/epoch table and evidence for a Run detail', () => {
@@ -824,6 +960,139 @@ describe('settings page (AC-075)', () => {
     expect(html).toContain('id="configTest"');
     expect(html).toContain('data-i18n="settings.unchanged"');
   });
+
+  /** One provider, as `config.get` answers it after a successful save. */
+  const providerModel = (secretConfigured: boolean) =>
+    settingsModel({
+      scope: 'global',
+      version: 4,
+      revision: '4',
+      providers: [
+        {
+          providerId: 'p1',
+          type: 'anthropic',
+          baseUrl: 'https://api.anthropic.com',
+          enabled: true,
+          secretConfigured,
+          models: [
+            {
+              id: 'claude-sonnet',
+              contextWindow: 200000,
+              maxOutputTokens: 8192,
+              reasoningLevels: ['off', 'low'],
+              vision: true,
+            },
+          ],
+        },
+      ],
+      roleProfiles: {},
+      limits: {},
+      effectiveLimits: {},
+      policy: {},
+    });
+
+  it('gives every provider row a real editor with a never-pre-filled password field (WP-12 T1.2B)', () => {
+    const html = renderSettingsPage({
+      model: providerModel(true),
+      settings: { projectId: 'proj-1' },
+      t,
+    });
+    expect(html).toContain('data-provider="p1"');
+    expect(html).toContain('class="provider-form"');
+    // The four `ProviderInput` fields the operator can edit, plus the secret.
+    for (const field of ['providerId', 'type', 'baseUrl', 'enabled', 'models', 'secret']) {
+      expect(html).toContain(`data-field="${field}"`);
+    }
+    // The key control is a password field that never carries a value and is never
+    // translated or autocompleted.
+    expect(html).toMatch(
+      /data-field="secret"[^>]*type="password"[^>]*value=""[^>]*autocomplete="off"[^>]*data-translatable="false"/u,
+    );
+    expect(html).not.toMatch(/data-field="secret"[^>]*value="[^"]+"/u);
+    expect(html).toContain('data-i18n="settings.providerSave"');
+    expect(html).toContain('data-i18n="settings.providerTest"');
+    expect(html).toContain('data-i18n="settings.apiKeyHint"');
+    expect(html).toContain('data-i18n="settings.newProvider"');
+    expect(html).toContain('data-i18n="settings.providerTypeAnthropic" selected');
+    // The declared model is the choice for the connection test.
+    expect(html).toContain('class="provider-test-model"');
+    expect(html).toContain('<option value="claude-sonnet">claude-sonnet</option>');
+    // A provider-less installation still gets the create form.
+    expect(html).toContain('data-new="true"');
+    for (const key of usedKeys(html)) expect(UI_STRINGS[key], key).toBeDefined();
+  });
+
+  it('never renders a provider secret value, even for post-save state (WP-12 T1.2B)', () => {
+    const secret = 'sk-live-DO-NOT-LEAK-12345';
+    // After `provider.upsert` the page re-renders from `config.get` with the new
+    // version and `secretConfigured:true` — and the daemon may still carry a stray
+    // legacy field. Neither may reach the HTML or the serialized model.
+    const raw = {
+      scope: 'global',
+      version: 6,
+      revision: '6',
+      providers: [
+        {
+          providerId: 'p1',
+          type: 'openai-compatible',
+          baseUrl: 'https://api.example/v1',
+          enabled: true,
+          secretRef: 'provider/p1',
+          secretConfigured: true,
+          secret,
+          apiKey: secret,
+          models: [
+            {
+              id: 'm',
+              contextWindow: 1000,
+              maxOutputTokens: 100,
+              reasoningLevels: ['off'],
+              vision: false,
+              apiKey: secret,
+            },
+          ],
+        },
+      ],
+      roleProfiles: {},
+      limits: {},
+      effectiveLimits: {},
+      policy: {},
+    };
+    const model = settingsModel(raw);
+    const html = renderSettingsPage({ model, settings: { projectId: 'proj-1' }, t });
+    for (const rendered of [html, JSON.stringify(model)]) {
+      expect(rendered).not.toContain(secret);
+      expect(rendered).not.toContain('sk-live');
+      expect(rendered).not.toContain('secretRef');
+    }
+    // Only the boolean state is rendered.
+    expect(html).toContain('Secret configured');
+  });
+
+  it('disables the connection test until a provider declares a model', () => {
+    const model = settingsModel({
+      scope: 'global',
+      version: 1,
+      revision: '1',
+      providers: [
+        {
+          providerId: 'p1',
+          type: 'google',
+          baseUrl: 'https://generativelanguage.googleapis.com',
+          enabled: true,
+          secretConfigured: false,
+          models: [],
+        },
+      ],
+      roleProfiles: {},
+      limits: {},
+      effectiveLimits: {},
+      policy: {},
+    });
+    const html = renderSettingsPage({ model, settings: {}, t });
+    expect(html).toContain('data-i18n="settings.testNeedsModel"');
+    expect(html).toMatch(/class="provider-test"[^>]*disabled/u);
+  });
 });
 
 describe('inbox page (AC-074)', () => {
@@ -867,6 +1136,159 @@ describe('inbox page (AC-074)', () => {
     // The three blocking findings are summarised as one row with the true count.
     expect(html.match(/data-kind="finding"/gu) ?? []).toHaveLength(1);
     expect(html).toContain('>3<');
+  });
+});
+
+describe('inbox request cards (WP-12 T4c, AC-074)', () => {
+  const productItem: JsonObject = {
+    kind: 'decision',
+    id: 'd-product',
+    workId: 'w1',
+    decisionKind: 'product',
+    targetRef: { id: 'artifact-1', version: 2, hash: 'hash-1' },
+    targetVersion: 2,
+    choices: ['accept', 'decline'],
+    state: 'pending',
+    actionable: true,
+  };
+  const permissionItem: JsonObject = {
+    kind: 'decision',
+    id: 'd-permission',
+    workId: 'w2',
+    decisionKind: 'permission',
+    targetRef: { id: 'tool-op-1', version: 1, hash: 'binding-1' },
+    targetVersion: 1,
+    choices: ['approve', 'deny'],
+    state: 'pending',
+    actionable: true,
+    operation: 'bash',
+    targets: ['/tmp/repo'],
+    inputHash: 'input-1',
+  };
+  const waitingRun = {
+    runId: 'run-2',
+    role: 'backend',
+    stage: 'execute',
+    status: 'waiting_permission',
+  };
+  const render = (items: readonly JsonValue[], context = {}): string =>
+    renderInboxPage({
+      model: inboxModel({ items: [...items], unread: items.length }, context),
+      projectId: 'proj-1',
+      t,
+    });
+
+  it('renders a product decision with its question, choices, target and raiser', () => {
+    const html = render([productItem], {
+      questions: { 'artifact-1:2': { text: 'Ship the smaller change?', error: null } },
+    });
+    expect(html).toContain('data-entry="decision"');
+    expect(html).toContain('data-question-body');
+    expect(html).toContain('Ship the smaller change?');
+    // The question is project content: marked as never translated (AC-073).
+    expect(html).toMatch(/data-question-body data-i18n-project/u);
+    expect(html).toContain('data-i18n="inbox.question"');
+    expect(html).toContain('data-artifact-ref="artifact-1"');
+    expect(html).toContain('data-choice="accept"');
+    expect(html).toContain('data-target-version="2"');
+    // `protocol.md` §6: a product decision is raised by the Chief.
+    expect(html).toContain('Chief');
+    for (const key of usedKeys(html)) expect(UI_STRINGS[key], key).toBeDefined();
+  });
+
+  it('states an unreadable question and an empty question instead of an empty card', () => {
+    const failed = render([productItem], {
+      questions: { 'artifact-1:2': { text: '', error: 'ARTIFACT_MISSING: gone' } },
+    });
+    expect(failed).toContain('data-question-error');
+    expect(failed).toContain('The question text could not be read from the decision artifact.');
+    // The daemon's diagnostic is a title, never the visible sentence (W9R2-05).
+    expect(failed).toContain('title="ARTIFACT_MISSING: gone"');
+
+    const empty = render([productItem], {
+      questions: { 'artifact-1:2': { text: '   ', error: null } },
+    });
+    expect(empty).toContain('data-question-empty');
+    expect(empty).toContain('The decision artifact carried no question text.');
+    expect(empty).not.toContain('data-question-body');
+  });
+
+  it('shows what an approval grants before the click, with a required denial reason', () => {
+    const html = render([permissionItem], { waitingRuns: { w2: waitingRun } });
+    expect(html).toContain('data-entry="permission"');
+    expect(html).toContain('data-tool-operation="tool-op-1"');
+    expect(html).toContain('data-binding-operation>bash<');
+    expect(html).toContain('data-binding-targets>/tmp/repo<');
+    expect(html).toContain('data-binding-input-hash>input-1<');
+    expect(html).toContain('data-binding-hash>binding-1<');
+    expect(html).toContain('data-binding-run>run-2<');
+    expect(html).toContain('data-binding-raised-by>backend · execute · Waiting for permission<');
+    expect(html).toContain('data-binding-missing="false"');
+    // The approval is offered, not taken: a named button, no auto-approval.
+    const approve = html.slice(html.indexOf('data-permission="approve"'));
+    expect(approve.slice(0, approve.indexOf('</button>'))).not.toContain('disabled');
+    expect(html).toContain('data-permission="deny"');
+    expect(html).toContain('data-permission-reason');
+    expect(html).toContain('data-i18n="inbox.denyReason"');
+    expect(html).toContain('data-i18n="inbox.permissionBinding"');
+    for (const key of usedKeys(html)) expect(UI_STRINGS[key], key).toBeDefined();
+  });
+
+  it('disables a blind approval and still offers a recorded denial', () => {
+    const html = render([
+      {
+        kind: 'decision',
+        id: 'd-blind',
+        workId: 'w3',
+        decisionKind: 'permission',
+        targetRef: { id: 'tool-op-2', version: 1, hash: 'binding-2' },
+        targetVersion: 1,
+        choices: ['approve', 'deny'],
+        state: 'pending',
+        actionable: true,
+      },
+    ]);
+    expect(html).toContain('data-binding-missing="true"');
+    expect(html).toMatch(/data-permission="approve"[^>]*disabled/u);
+    expect(html).toContain('data-i18n="inbox.bindingMissing"');
+    const deny = html.slice(html.indexOf('data-permission="deny"'));
+    expect(deny.slice(0, deny.indexOf('</button>'))).not.toContain('disabled');
+  });
+
+  it('renders a resolved permission request inert and a legacy decision as before', () => {
+    const html = render([
+      {
+        ...permissionItem,
+        id: 'd-done',
+        state: 'accepted',
+        actionable: false,
+        operation: 'bash',
+        targets: [],
+        inputHash: 'input-1',
+      },
+      { ...productItem, id: 'd-expired', state: 'expired', actionable: false },
+    ]);
+    expect(html).toMatch(/data-decision="d-done"[^>]*aria-disabled="true"/u);
+    expect(html).toMatch(/data-permission="approve"[^>]*disabled/u);
+    expect(html).toMatch(/data-decision="d-expired"[^>]*aria-disabled="true"/u);
+    // An empty target list is stated, not rendered as a blank value.
+    expect(html).toContain('No targets recorded (a command operation).');
+  });
+
+  it('never renders a secret value or a secretRef in either entry kind', () => {
+    const secret = 'sk-live-DO-NOT-LEAK-12345';
+    const html = render([
+      {
+        ...permissionItem,
+        secret,
+        secretRef: 'provider/p1',
+        targetRef: { id: 'op-1', version: 1, hash: 'h', secretRef: 'provider/p1' },
+      },
+      { ...productItem, secret, secretRef: 'provider/p1' },
+    ]);
+    expect(html).not.toContain(secret);
+    expect(html).not.toContain('secretRef');
+    expect(html).not.toContain('sk-live');
   });
 });
 

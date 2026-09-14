@@ -1,0 +1,183 @@
+{
+  "tool": "pnpm test:live",
+  "generatedAt": "2026-09-14T13:06:34.428Z",
+  "repoRoot": "/Users/huyaohua/huyh/work/aigrouptool",
+  "gitHead": "7c723ecd351b0037e821e2448989694b6e83ff7d",
+  "binding": {
+    "gitHead": "7c723ecd351b0037e821e2448989694b6e83ff7d",
+    "gitTree": "532bcad9d3c9d2064506be939b9cc56a48e9bfb1",
+    "codeDigest": "sha256:e6621687410a9677dbc488f5ceceb3219e320984509971a8361c727e1992cf6b",
+    "codeFiles": 320,
+    "dirty": true,
+    "generatedAt": "2026-09-14T13:04:51.229Z",
+    "nodeVersion": "v24.8.0"
+  },
+  "nonce": null,
+  "exitCode": 0,
+  "provider": {
+    "configured": true,
+    "baseUrl": "https://api.deepseek.com/",
+    "modelId": "deepseek-flash",
+    "reviewModelId": "deepseek-chat",
+    "secretConfigured": true,
+    "unavailableReason": null
+  },
+  "results": [
+    {
+      "ac": "AC-001",
+      "status": "PASS",
+      "evidence": "drill.html-explanation: message 01a0a005-3c86-744c-9fbd-2249b95c7c31 -> Work 01a0a005-3c86-7afc-975c-f3924ecce106 (intent=assist level=none, no Requirement); completion through run 01a0a005-3cfa-7ed0-ba5b-f8f0baf2721f (config snapshot a7ab6cbfe2d6, 17200 chars) citing src/orders/cancel.ts and separating UNKNOWN; artifact 01a0a005-90f1-7d3e-92d3-3246f508e50d v1 sha256 020e96513579 origin=agent kind=explanation; preview 200 CSP \"default-src 'none'\" sandbox allow-scripts credentials omit mode=inline; download token 5iJkbqBq… matched the artifact bytes; the second GET answered 403; delivery branch unchanged at bbb82e800ced; 2 call(s), HTTP 200/200, 22626ms total, 0 failed",
+      "checks": [
+        "drill.html-explanation"
+      ]
+    },
+    {
+      "ac": "AC-003",
+      "status": "PASS",
+      "evidence": "drill.message-to-stage: real Provider no-seed chain: message 01a0a006-16ee-7dd2-b104-123ab015c7ea → Chief Run 01a0a006-1795-72d7-b384-bdbec9ba2165 (completed) → Requirement 01a0a006-4fdf-7b73-ac2c-1a7fc9a9e6a9 (active/plan) → professional Run 01a0a006-72ad-77e1-a520-3a129ce5776f (parent 01a0a006-1795-72d7-b384-bdbec9ba2165) → stage result 01a0a006-a8c1-7899-8f85-db884f076c12 + stage.failed(failed); provider calls=11 call(s), HTTP 200/200/200/200/200/200/200/200/200/200/200, 39520ms total, 0 failed",
+      "checks": [
+        "drill.message-to-stage"
+      ]
+    },
+    {
+      "ac": "AC-005",
+      "status": "PASS",
+      "evidence": "drill.message-to-stage: real Provider no-seed chain: message 01a0a006-16ee-7dd2-b104-123ab015c7ea → Chief Run 01a0a006-1795-72d7-b384-bdbec9ba2165 (completed) → Requirement 01a0a006-4fdf-7b73-ac2c-1a7fc9a9e6a9 (active/plan) → professional Run 01a0a006-72ad-77e1-a520-3a129ce5776f (parent 01a0a006-1795-72d7-b384-bdbec9ba2165) → stage result 01a0a006-a8c1-7899-8f85-db884f076c12 + stage.failed(failed); provider calls=11 call(s), HTTP 200/200/200/200/200/200/200/200/200/200/200, 39520ms total, 0 failed",
+      "checks": [
+        "drill.message-to-stage"
+      ]
+    },
+    {
+      "ac": "AC-007",
+      "status": "PASS",
+      "evidence": "drill.l1-typo: Work 01a0a005-9137-71c3-8d05-8d4b495a1d23 (level=L1, base bbb82e800ced) one-task Plan 01a0a005-953 approved by the real gate; write admitted for src/orders/messages.ts; real exec Run 01a0a005-9565-70cd-b440-dbbbb6f8beea produced candidate 81cba852db7c tree ae0358dc0c97 (numstat: 1 1 src/orders/messages.ts); independent Review Run 01a0a005-9a40-7f91-955c-b1dc9b304068 -> stage 01a0a005-9dda-7bd9-8925-30f3d51595f5; Settlement Run 01a0a005-9dde-71d6-9163-923241348200; L1 chain [\"Develop\",\"Review\",\"Settlement\"]; runs planning:L1-Plan, backend:L1-Develop, review:L1-Review, settlement:L1-Settlement (no Planning/Test Run); CompletionManifest 8c4c9713db47 frozen; CAS moved agentdev/main bbb82e800ced -> 81cba852db7c; Work completed with no Requirement; artifacts on the Work: 1 (the Plan)",
+      "checks": [
+        "drill.l1-typo"
+      ]
+    },
+    {
+      "ac": "AC-010",
+      "status": "PASS",
+      "evidence": "drill.l2-delivery: Work 01a0a005-a3f8-7eb3-b368-c91828690c21 (L2, base 81cba852db7c) + Requirement 01a0a005-a419-75a1-b8a9-40ad83fccefc; model Plan 01a0a005-abb approved, Task 01a0a005-abb3-7a71-afef-1172b34f13f6; independent Runs planning:01a0a005-a41b-74e3-a555-210da5953c18, backend:01a0a005-abd6-7853-b8d0-85cbba6c2fd1, review:01a0a005-c7f4-706b-b3fb-5543176bf88e, test:01a0a005-ce21-7f65-8558-0a9e840a864b with distinct config snapshots (648edbca, 8877dcbb, fc4832ce, 879539e5); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-chat, test=deepseek-chat; candidate c2ad6314e8ab codeTree a8686a828fee; Develop 01a0a005-c7f3-75d1-b5ba-4b12a929e0a5, Review 01a0a005-cd42-7642-bda7-662c9cc00e24, Test 01a0a005-d37d-74f4-8879-c22bcf8eceb8 accepted (executed probe exit 0); L2 chain [\"Plan\",\"Develop\",\"Review\",\"Test\",\"Settlement\"]; a chain without Test is refused; Comple…",
+      "checks": [
+        "drill.l2-delivery"
+      ]
+    },
+    {
+      "ac": "AC-037",
+      "status": "PASS",
+      "evidence": "drill.l2-delivery: Work 01a0a005-a3f8-7eb3-b368-c91828690c21 (L2, base 81cba852db7c) + Requirement 01a0a005-a419-75a1-b8a9-40ad83fccefc; model Plan 01a0a005-abb approved, Task 01a0a005-abb3-7a71-afef-1172b34f13f6; independent Runs planning:01a0a005-a41b-74e3-a555-210da5953c18, backend:01a0a005-abd6-7853-b8d0-85cbba6c2fd1, review:01a0a005-c7f4-706b-b3fb-5543176bf88e, test:01a0a005-ce21-7f65-8558-0a9e840a864b with distinct config snapshots (648edbca, 8877dcbb, fc4832ce, 879539e5); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-chat, test=deepseek-chat; candidate c2ad6314e8ab codeTree a8686a828fee; Develop 01a0a005-c7f3-75d1-b5ba-4b12a929e0a5, Review 01a0a005-cd42-7642-bda7-662c9cc00e24, Test 01a0a005-d37d-74f4-8879-c22bcf8eceb8 accepted (executed probe exit 0); L2 chain [\"Plan\",\"Develop\",\"Review\",\"Test\",\"Settlement\"]; a chain without Test is refused; Comple…",
+      "checks": [
+        "drill.l2-delivery"
+      ]
+    },
+    {
+      "ac": "AC-041",
+      "status": "PASS",
+      "evidence": "drill.l2-delivery: Work 01a0a005-a3f8-7eb3-b368-c91828690c21 (L2, base 81cba852db7c) + Requirement 01a0a005-a419-75a1-b8a9-40ad83fccefc; model Plan 01a0a005-abb approved, Task 01a0a005-abb3-7a71-afef-1172b34f13f6; independent Runs planning:01a0a005-a41b-74e3-a555-210da5953c18, backend:01a0a005-abd6-7853-b8d0-85cbba6c2fd1, review:01a0a005-c7f4-706b-b3fb-5543176bf88e, test:01a0a005-ce21-7f65-8558-0a9e840a864b with distinct config snapshots (648edbca, 8877dcbb, fc4832ce, 879539e5); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-chat, test=deepseek-chat; candidate c2ad6314e8ab codeTree a8686a828fee; Develop 01a0a005-c7f3-75d1-b5ba-4b12a929e0a5, Review 01a0a005-cd42-7642-bda7-662c9cc00e24, Test 01a0a005-d37d-74f4-8879-c22bcf8eceb8 accepted (executed probe exit 0); L2 chain [\"Plan\",\"Develop\",\"Review\",\"Test\",\"Settlement\"]; a chain without Test is refused; Comple…",
+      "checks": [
+        "drill.l2-delivery"
+      ]
+    },
+    {
+      "ac": "AC-043",
+      "status": "PASS",
+      "evidence": "drill.l2-delivery: Work 01a0a005-a3f8-7eb3-b368-c91828690c21 (L2, base 81cba852db7c) + Requirement 01a0a005-a419-75a1-b8a9-40ad83fccefc; model Plan 01a0a005-abb approved, Task 01a0a005-abb3-7a71-afef-1172b34f13f6; independent Runs planning:01a0a005-a41b-74e3-a555-210da5953c18, backend:01a0a005-abd6-7853-b8d0-85cbba6c2fd1, review:01a0a005-c7f4-706b-b3fb-5543176bf88e, test:01a0a005-ce21-7f65-8558-0a9e840a864b with distinct config snapshots (648edbca, 8877dcbb, fc4832ce, 879539e5); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-chat, test=deepseek-chat; candidate c2ad6314e8ab codeTree a8686a828fee; Develop 01a0a005-c7f3-75d1-b5ba-4b12a929e0a5, Review 01a0a005-cd42-7642-bda7-662c9cc00e24, Test 01a0a005-d37d-74f4-8879-c22bcf8eceb8 accepted (executed probe exit 0); L2 chain [\"Plan\",\"Develop\",\"Review\",\"Test\",\"Settlement\"]; a chain without Test is refused; Comple…",
+      "checks": [
+        "drill.l2-delivery"
+      ]
+    },
+    {
+      "ac": "AC-057",
+      "status": "PASS",
+      "evidence": "drill.runtime-attempt: the runtime executed Run 01a0a005-e558-7b5b-8b93-2ffccef84a12 through a real apps/runner child process (Attempt 01a0a005-e62a-78b3-8f89-88ca242ede98, runnerId pid:37657) against the real Provider; 830 tokens booked from the Provider usage; killing the live Runner (pid 48207) of Run 01a0a006-14a9-770e-b26e-c7f01260655c parked it as interrupted with Attempt 01a0a006-14b2-7fb2-9322-f6810f7340c9 lost (new Attempt allowed=true)",
+      "checks": [
+        "drill.runtime-attempt"
+      ]
+    },
+    {
+      "ac": "AC-066",
+      "status": "PASS",
+      "evidence": "drill.session-streaming: real Pi session over the Core gateway (provider deepseek-flash): streaming text_delta=1 thinking_delta=0 first=\"PONG-AC066\" last=\"PONG-AC066\"; session file 5 → 7 record(s); resumed with a new factory: same sessionId + same file, 1 fresh delta(s), turn messageCount 2",
+      "checks": [
+        "drill.session-streaming"
+      ]
+    },
+    {
+      "ac": "AC-069",
+      "status": "PASS",
+      "evidence": "drill.message-to-stage: real Provider no-seed chain: message 01a0a006-16ee-7dd2-b104-123ab015c7ea → Chief Run 01a0a006-1795-72d7-b384-bdbec9ba2165 (completed) → Requirement 01a0a006-4fdf-7b73-ac2c-1a7fc9a9e6a9 (active/plan) → professional Run 01a0a006-72ad-77e1-a520-3a129ce5776f (parent 01a0a006-1795-72d7-b384-bdbec9ba2165) → stage result 01a0a006-a8c1-7899-8f85-db884f076c12 + stage.failed(failed); provider calls=11 call(s), HTTP 200/200/200/200/200/200/200/200/200/200/200, 39520ms total, 0 failed",
+      "checks": [
+        "drill.message-to-stage"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "provider.connectivity",
+      "acs": [],
+      "status": "PASS",
+      "evidence": "provider.test completed in 1143ms against https://api.deepseek.com with model deepseek-flash; 1 call(s), HTTP 200, 1142ms total, 0 failed",
+      "durationMs": 1143
+    },
+    {
+      "name": "drill.html-explanation",
+      "acs": [
+        "AC-001"
+      ],
+      "status": "PASS",
+      "evidence": "message 01a0a005-3c86-744c-9fbd-2249b95c7c31 -> Work 01a0a005-3c86-7afc-975c-f3924ecce106 (intent=assist level=none, no Requirement); completion through run 01a0a005-3cfa-7ed0-ba5b-f8f0baf2721f (config snapshot a7ab6cbfe2d6, 17200 chars) citing src/orders/cancel.ts and separating UNKNOWN; artifact 01a0a005-90f1-7d3e-92d3-3246f508e50d v1 sha256 020e96513579 origin=agent kind=explanation; preview 200 CSP \"default-src 'none'\" sandbox allow-scripts credentials omit mode=inline; download token 5iJkbqBq… matched the artifact bytes; the second GET answered 403; delivery branch unchanged at bbb82e800ced; 2 call(s), HTTP 200/200, 22626ms total, 0 failed",
+      "durationMs": 21728
+    },
+    {
+      "name": "drill.l1-typo",
+      "acs": [
+        "AC-007"
+      ],
+      "status": "PASS",
+      "evidence": "Work 01a0a005-9137-71c3-8d05-8d4b495a1d23 (level=L1, base bbb82e800ced) one-task Plan 01a0a005-953 approved by the real gate; write admitted for src/orders/messages.ts; real exec Run 01a0a005-9565-70cd-b440-dbbbb6f8beea produced candidate 81cba852db7c tree ae0358dc0c97 (numstat: 1 1 src/orders/messages.ts); independent Review Run 01a0a005-9a40-7f91-955c-b1dc9b304068 -> stage 01a0a005-9dda-7bd9-8925-30f3d51595f5; Settlement Run 01a0a005-9dde-71d6-9163-923241348200; L1 chain [\"Develop\",\"Review\",\"Settlement\"]; runs planning:L1-Plan, backend:L1-Develop, review:L1-Review, settlement:L1-Settlement (no Planning/Test Run); CompletionManifest 8c4c9713db47 frozen; CAS moved agentdev/main bbb82e800ced -> 81cba852db7c; Work completed with no Requirement; artifacts on the Work: 1 (the Plan)",
+      "durationMs": 4802
+    },
+    {
+      "name": "drill.l2-delivery",
+      "acs": [
+        "AC-010",
+        "AC-037",
+        "AC-041",
+        "AC-043"
+      ],
+      "status": "PASS",
+      "evidence": "Work 01a0a005-a3f8-7eb3-b368-c91828690c21 (L2, base 81cba852db7c) + Requirement 01a0a005-a419-75a1-b8a9-40ad83fccefc; model Plan 01a0a005-abb approved, Task 01a0a005-abb3-7a71-afef-1172b34f13f6; independent Runs planning:01a0a005-a41b-74e3-a555-210da5953c18, backend:01a0a005-abd6-7853-b8d0-85cbba6c2fd1, review:01a0a005-c7f4-706b-b3fb-5543176bf88e, test:01a0a005-ce21-7f65-8558-0a9e840a864b with distinct config snapshots (648edbca, 8877dcbb, fc4832ce, 879539e5); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-chat, test=deepseek-chat; candidate c2ad6314e8ab codeTree a8686a828fee; Develop 01a0a005-c7f3-75d1-b5ba-4b12a929e0a5, Review 01a0a005-cd42-7642-bda7-662c9cc00e24, Test 01a0a005-d37d-74f4-8879-c22bcf8eceb8 accepted (executed probe exit 0); L2 chain [\"Plan\",\"Develop\",\"Review\",\"Test\",\"Settlement\"]; a chain without Test is refused; CompletionManifest e0c09df721d7; settlement moved the ref to c2ad6314e8ab with exactly one settlement.completed event; Requirement completed; knowledge commit df038e674fad (document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes); cold start selected [\"F-0f0f0f0f\",\"F-0a1b2c3d\"] with \"未付款订单可取消；已付款订单返回已确认的拒绝结果。\" and code+test entries; 11 call(s), HTTP 200/200/200/200/200/200/200/200/200/200/200, 39520ms total, 0 failed",
+      "durationMs": 15660
+    },
+    {
+      "name": "drill.runtime-attempt",
+      "acs": [
+        "AC-057"
+      ],
+      "status": "PASS",
+      "evidence": "the runtime executed Run 01a0a005-e558-7b5b-8b93-2ffccef84a12 through a real apps/runner child process (Attempt 01a0a005-e62a-78b3-8f89-88ca242ede98, runnerId pid:37657) against the real Provider; 830 tokens booked from the Provider usage; killing the live Runner (pid 48207) of Run 01a0a006-14a9-770e-b26e-c7f01260655c parked it as interrupted with Attempt 01a0a006-14b2-7fb2-9322-f6810f7340c9 lost (new Attempt allowed=true)",
+      "durationMs": 13653
+    },
+    {
+      "name": "drill.message-to-stage",
+      "acs": [
+        "AC-003",
+        "AC-005",
+        "AC-069"
+      ],
+      "status": "PASS",
+      "evidence": "real Provider no-seed chain: message 01a0a006-16ee-7dd2-b104-123ab015c7ea → Chief Run 01a0a006-1795-72d7-b384-bdbec9ba2165 (completed) → Requirement 01a0a006-4fdf-7b73-ac2c-1a7fc9a9e6a9 (active/plan) → professional Run 01a0a006-72ad-77e1-a520-3a129ce5776f (parent 01a0a006-1795-72d7-b384-bdbec9ba2165) → stage result 01a0a006-a8c1-7899-8f85-db884f076c12 + stage.failed(failed); provider calls=11 call(s), HTTP 200/200/200/200/200/200/200/200/200/200/200, 39520ms total, 0 failed",
+      "durationMs": 39823
+    },
+    {
+      "name": "drill.session-streaming",
+      "acs": [
+        "AC-066"
+      ],
+      "status": "PASS",
+      "evidence": "real Pi session over the Core gateway (provider deepseek-flash): streaming text_delta=1 thinking_delta=0 first=\"PONG-AC066\" last=\"PONG-AC066\"; session file 5 → 7 record(s); resumed with a new factory: same sessionId + same file, 1 fresh delta(s), turn messageCount 2",
+      "durationMs": 5888
+    }
+  ]
+}

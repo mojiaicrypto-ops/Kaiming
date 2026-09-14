@@ -22,6 +22,7 @@ import { ProjectStore, projectIdFromRoot } from '@agentdev/storage';
 import { createNodeWorktreeGitPort } from '@agentdev/workspace';
 import {
   AttemptCapabilityStore,
+  createControlEndpoint,
   ConfigStore,
   ModelGateway,
   OpenAiCompatibleTransport,
@@ -32,6 +33,7 @@ import {
   createMemoryProcessProbe,
   createMemoryUsageLedger,
   createModelGatewayProxy,
+  type ControlEndpoint,
   type ModelGatewayProxy,
 } from '@agentdev/core';
 
@@ -47,10 +49,13 @@ let repo: string;
 let store: ProjectStore;
 let providerStub: Server;
 let proxy: ModelGatewayProxy | undefined;
+let controlEndpoint: ControlEndpoint | undefined;
 let providerPort = 0;
 let supervisor: RunnerSupervisor | undefined;
 const projectId = projectIdFromRoot('/placeholder');
 let providerCalls = 0;
+/** Every completion body the stub provider received, for the tool round-trip assertion. */
+let providerRequests: { messages?: { role?: string; tool_call_id?: string }[] }[] = [];
 
 async function listen(server: Server): Promise<number> {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
@@ -59,7 +64,7 @@ async function listen(server: Server): Promise<number> {
 }
 
 /** Seeds the Project/Work/Budget/Run rows the dispatcher will own in a later slice. */
-function seedRun(config: ConfigStore): string {
+function seedRun(config: ConfigStore, role: 'chief' | 'backend' = 'backend'): string {
   const workId = store.newId();
   const budget = store.budgets.insert({
     projectId: store.projectId,
@@ -88,13 +93,13 @@ function seedRun(config: ConfigStore): string {
     budgetId: budget.id,
     policyRevision: 1,
   });
-  const frozen = config.freeze('backend', {});
+  const frozen = config.freeze(role, {});
   const run = store.runs.insert({
     projectId: store.projectId,
     workId,
-    role: 'backend',
-    purpose: 'implementation',
-    stage: 'Develop',
+    role,
+    purpose: role === 'chief' ? 'analysis' : 'implementation',
+    stage: role === 'chief' ? 'coordinate' : 'Develop',
     status: 'queued',
     requiredChild: false,
     join: 'none',
@@ -117,28 +122,79 @@ beforeEach(async () => {
   const commit = gitPort.commitPaths(repo, 'chore: seed', ['README.md']);
   if (!commit.ok) throw new Error('git commit failed');
   providerCalls = 0;
-  // The Provider stub: a real OpenAI-compatible endpoint on loopback.
+  providerRequests = [];
+  // The Provider stub: a real OpenAI-compatible endpoint on loopback. When
+  // `AGENTDEV_STUB_TOOL_CALLS` is set it answers the first call with a tool call and plain
+  // text afterwards, so a real Pi session must execute the tool and send its result back.
   providerStub = createServer((request, response) => {
     providerCalls += 1;
     const chunks: Buffer[] = [];
     request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+        messages?: { role?: string; tool_call_id?: string }[];
+      };
+      providerRequests.push(body);
+      const callId = 'call_drill_1';
+      const withTool = process.env.AGENTDEV_STUB_TOOL_CALLS === '1';
+      const payload =
+        withTool && providerCalls === 1
+          ? {
+              id: 'stub-completion',
+              object: 'chat.completion',
+              model: 'stub-provider-model',
+              choices: [
+                {
+                  index: 0,
+                  message: {
+                    role: 'assistant',
+                    content: '',
+                    tool_calls: [
+                      {
+                        id: callId,
+                        type: 'function',
+                        function: {
+                          name: 'assessment_submit',
+                          arguments: JSON.stringify({
+                            intent: 'delivery',
+                            goal: 'the stub goal',
+                            scope: {
+                              readPaths: [],
+                              writePaths: [],
+                              operations: [],
+                              networkTargets: [],
+                            },
+                            level: 'L2',
+                            semanticImpact: false,
+                            riskFlags: [],
+                            uncertainties: [],
+                            policyRevision: 1,
+                            reason: 'the stub provider asked for it',
+                          }),
+                        },
+                      },
+                    ],
+                  },
+                  finish_reason: 'tool_calls',
+                },
+              ],
+              usage: { prompt_tokens: 11, completion_tokens: 5, total_tokens: 16 },
+            }
+          : {
+              id: 'stub-completion',
+              object: 'chat.completion',
+              model: 'stub-provider-model',
+              choices: [
+                {
+                  index: 0,
+                  message: { role: 'assistant', content: 'STUB-ANSWER: the stage result' },
+                  finish_reason: 'stop',
+                },
+              ],
+              usage: { prompt_tokens: 11, completion_tokens: 5, total_tokens: 16 },
+            };
       response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(
-        JSON.stringify({
-          id: 'stub-completion',
-          object: 'chat.completion',
-          model: 'stub-provider-model',
-          choices: [
-            {
-              index: 0,
-              message: { role: 'assistant', content: 'STUB-ANSWER: the stage result' },
-              finish_reason: 'stop',
-            },
-          ],
-          usage: { prompt_tokens: 11, completion_tokens: 5, total_tokens: 16 },
-        }),
-      );
+      response.end(JSON.stringify(payload));
     });
   });
   providerPort = await listen(providerStub);
@@ -165,6 +221,8 @@ beforeEach(async () => {
 afterEach(async () => {
   await supervisor?.stop();
   await proxy?.close();
+  await controlEndpoint?.close();
+  controlEndpoint = undefined;
   await new Promise<void>((resolve) => providerStub.close(() => resolve()));
   rmSync(home, { recursive: true, force: true });
   rmSync(dataDir, { recursive: true, force: true });
@@ -172,6 +230,121 @@ afterEach(async () => {
 });
 
 describe('a real Attempt through the daemon-side execution path', () => {
+  it('forwards a Provider tool call to a real Pi session and round-trips its result (AC-003)', async () => {
+    process.env.AGENTDEV_STUB_TOOL_CALLS = '1';
+    const snapshots = new SnapshotWriter({ store });
+    const config = ConfigStore.open({ globalDir: home, projectRoot: dataDir, snapshots });
+    const provider = config.upsertProvider({
+      type: 'openai-compatible',
+      baseUrl: `http://127.0.0.1:${String(providerPort)}`,
+      enabled: true,
+      secretRef: 'stub-provider-secret',
+      models: [
+        {
+          id: 'stub-provider-model',
+          contextWindow: 128_000,
+          maxOutputTokens: 8_192,
+          reasoningLevels: ['off'],
+          vision: false,
+        },
+      ],
+    });
+    config.update('global', {
+      roleOverrides: {
+        chief: {
+          providerId: provider.providerId,
+          modelId: 'stub-provider-model',
+          reasoning: 'off',
+          skills: [],
+          toolSubset: [],
+          contextLimit: 32_000,
+        },
+      },
+    });
+
+    const capabilities = new AttemptCapabilityStore();
+    const gateway = new ModelGateway({
+      config,
+      snapshots,
+      transport: new OpenAiCompatibleTransport(),
+      secrets: { resolve: () => 'stub-secret-value' },
+    });
+    proxy = await createModelGatewayProxy({ gateway, store, capabilities, port: 0 });
+
+    // The daemon's control channel: the tool call the model makes must land here.
+    const submitted: { workId: string; assessment: unknown }[] = [];
+    const control = await createControlEndpoint({
+      store,
+      capabilities,
+      handler: {
+        assessmentSubmit: (input) => {
+          submitted.push({ workId: input.workId, assessment: input.assessment });
+          return { saved: true, workId: input.workId };
+        },
+        agentDispatch: () => ({ runId: 'unused', status: 'queued' }),
+        stageSubmit: () => ({ accepted: true }),
+      },
+    });
+    controlEndpoint = control;
+
+    const prepare = createPrepareRun({
+      store,
+      config,
+      capabilities,
+      gatewayUrl: proxy.url,
+      controlUrl: control.url,
+      projectRoot: repo,
+      attemptsDir: join(dataDir, 'attempts'),
+    });
+    const runnerEntry = join(home, 'runner-entry.mjs');
+    writeFileSync(
+      runnerEntry,
+      [
+        `import { installSourceResolver } from ${JSON.stringify(join(repoRoot, 'scripts/lib/e2e-runtime.mjs'))};`,
+        'installSourceResolver();',
+        `const { main } = await import(${JSON.stringify(join(repoRoot, 'apps/runner/src/cli.ts'))});`,
+        'await main(process.argv.slice(2), {',
+        '  output: { write: (line) => process.stdout.write(line) },',
+        '  exit: (code) => process.exit(code),',
+        '});',
+        '',
+      ].join('\n'),
+    );
+    supervisor = new RunnerSupervisor({
+      store,
+      recovery: new RunRecoveryService({ store, probe: createMemoryProcessProbe() }),
+      lifecycle: new RunLifecycle({ store }),
+      spawn: createChildRunnerSpawnPort({
+        repoRoot,
+        env: { ...process.env, AGENTDEV_RUNNER_ENTRY: runnerEntry },
+      }),
+      prepare,
+      tickMs: 60_000,
+      log: () => undefined,
+    });
+
+    const runId = seedRun(config, 'chief');
+    supervisor.tick();
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      const run = store.runs.find(runId);
+      if (run !== undefined && (run.status === 'completed' || run.status === 'failed')) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    // 1. The tool call reached the real Pi session and executed: the control endpoint
+    //    received the assessment the stub Provider asked for.
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0]?.workId).toBe(store.runs.find(runId)?.workId);
+    expect((submitted[0]?.assessment as { goal?: string }).goal).toBe('the stub goal');
+    // 2. The second Provider call carried the tool result back (`tool` role + call id).
+    expect(providerCalls).toBeGreaterThanOrEqual(2);
+    const second = providerRequests.at(-1);
+    const toolMessage = second?.messages?.find((message) => message.role === 'tool');
+    expect(toolMessage?.tool_call_id).toBe('call_drill_1');
+    delete process.env.AGENTDEV_STUB_TOOL_CALLS;
+  });
+
   it('starts apps/runner, calls the Provider through the Core gateway and settles the Run', async () => {
     const snapshots = new SnapshotWriter({ store });
     const config = ConfigStore.open({ globalDir: home, projectRoot: dataDir, snapshots });

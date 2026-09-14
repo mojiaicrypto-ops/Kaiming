@@ -74,8 +74,12 @@ export function ensureRuntimeHome(home: string): RuntimePaths {
  *
  * `exclusive` uses `O_CREAT|O_EXCL` directly instead of write-then-rename, which is what
  * makes the single-instance lock a real compare-and-set (WP11R1-10).
+ *
+ * Exported (WP-12 T1.1) so the durable secret repository reuses the same 0600/atomic
+ * guarantee for its master key and ciphertext records instead of reimplementing it
+ * (`execution.md` §4: the master key is a 0600 file owned by the installer).
  */
-function writePrivateFile(
+export function writePrivateFile(
   path: string,
   contents: string,
   options: { exclusive?: boolean } = {},
@@ -166,11 +170,36 @@ export type AcquireLockResult =
   | { readonly acquired: false; readonly lock: DaemonLock };
 
 /**
+ * Reads the epoch high-water mark; a missing or damaged file is treated as "never issued".
+ *
+ * The file is `RUNTIME_FILES.epoch` (`reliability.md` §7, WP-11 T-03), written atomically
+ * with `0600`, so damage means an external edit. Ignoring it cannot lower the epoch below the
+ * installed lock, and `writeEpochHighWater` re-establishes the mark from the epoch about to
+ * be issued.
+ */
+function readEpochHighWater(home: string): number {
+  const path = runtimePaths(home).epoch;
+  if (!existsSync(path)) return 0;
+  const parsed = Number.parseInt(readFileSync(path, 'utf8').trim(), 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
+/** Persists the newest issued epoch so the next owner cannot replay it. */
+function writeEpochHighWater(home: string, epoch: number): void {
+  writePrivateFile(runtimePaths(home).epoch, `${String(epoch)}\n`);
+}
+
+/**
  * Acquires the single-instance daemon lock.
  *
  * A lock whose process is gone is replaced with the next epoch and reported through
  * `replacedStale`, so the caller can log that a previous daemon died without stopping
  * cleanly (the recovery scan then runs against the databases it left behind).
+ *
+ * The next epoch is `max(installed lock, high-water mark) + 1` (`WP-11 T-03`): a clean stop
+ * removes the lock, so the lock alone cannot keep the fence monotonic across restarts. The
+ * mark is persisted before the exclusive create, so a crash can never leave a lock whose
+ * epoch is ahead of the recorded high-water.
  */
 export function acquireDaemonLock(home: string, options: AcquireLockOptions): AcquireLockResult {
   const paths = ensureRuntimeHome(home);
@@ -182,9 +211,10 @@ export function acquireDaemonLock(home: string, options: AcquireLockOptions): Ac
   const lock: DaemonLock = {
     v: 1,
     pid: options.pid,
-    epoch: (existing?.epoch ?? 0) + 1,
+    epoch: Math.max(existing?.epoch ?? 0, readEpochHighWater(home)) + 1,
     startedAt: now,
   };
+  writeEpochHighWater(home, lock.epoch);
   if (existing !== null) {
     // A stale lock holder may still be finishing a signal handler; its epoch is lower,
     // so its release (which checks the epoch) cannot remove this record.

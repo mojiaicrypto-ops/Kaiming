@@ -145,6 +145,8 @@ export function createDaemon(options: DaemonOptions): Server {
     const method = request.method ?? 'GET';
 
     if (path === '/healthz' && method === 'GET') {
+      // `protocol.md` §5: health carries the version and readiness only. It never names a
+      // filesystem path (no project root, no installation home) or a secret (R2-03).
       json(response, 200, { version: options.version, ready: true });
       return;
     }

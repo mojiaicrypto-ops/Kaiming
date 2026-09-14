@@ -17,16 +17,20 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 
-import type { RuntimeHost } from '@agentdev/contracts';
+import type { JsonValue, RuntimeHost } from '@agentdev/contracts';
 import type { ProjectStore } from '@agentdev/storage';
 
 import type { AttemptCapabilityStore } from './capabilities.js';
-import type { ModelGateway } from './model-gateway.js';
+import type { GatewayToolCall, ModelGateway } from './model-gateway.js';
 
-/** Minimal message shape the proxy accepts from a Runner. */
+/** Minimal message shape the proxy accepts from a Runner (including tool round-trips). */
 export interface ProxyMessage {
-  readonly role: 'system' | 'user' | 'assistant';
+  readonly role: 'system' | 'user' | 'assistant' | 'tool';
   readonly content: string;
+  /** Assistant messages that asked for tools. */
+  readonly toolCalls?: readonly GatewayToolCall[];
+  /** `tool` messages: the call they answer. */
+  readonly toolCallId?: string;
 }
 
 export interface ModelGatewayProxyOptions {
@@ -148,19 +152,59 @@ function textOf(content: unknown): string | null {
   return parts.join('');
 }
 
-/** Parses the OpenAI `messages` array; unknown fields are ignored like the SDK's peers. */
+/**
+ * Parses the OpenAI `messages` array; unknown fields are ignored like the SDK's peers.
+ *
+ * `tool` messages and assistant `tool_calls` are part of the round trip a tool-using model
+ * needs (WP-12 R3-1): the second call carries the result of the first.
+ */
 function parseMessages(value: unknown): ProxyMessage[] | null {
   if (!Array.isArray(value)) return null;
   const messages: ProxyMessage[] = [];
   for (const entry of value) {
     if (entry === null || typeof entry !== 'object') return null;
     const role = (entry as { role?: unknown }).role;
-    if (role !== 'system' && role !== 'user' && role !== 'assistant') return null;
-    const content = textOf((entry as { content?: unknown }).content);
+    if (role !== 'system' && role !== 'user' && role !== 'assistant' && role !== 'tool') {
+      return null;
+    }
+    const toolCalls = toolCallsOf((entry as { tool_calls?: unknown }).tool_calls);
+    const toolCallId = (entry as { tool_call_id?: unknown }).tool_call_id;
+    // An assistant message that only asked for tools has `content: null` in the
+    // OpenAI-compatible shape; its text is empty, not malformed (WP-12 R3-1).
+    const content =
+      textOf((entry as { content?: unknown }).content) ??
+      (role === 'assistant' && toolCalls.length > 0 ? '' : null);
     if (content === null) return null;
-    messages.push({ role, content });
+    if (role === 'tool' && typeof toolCallId !== 'string') return null;
+    messages.push({
+      role,
+      content,
+      ...(toolCalls.length === 0 ? {} : { toolCalls }),
+      ...(typeof toolCallId === 'string' ? { toolCallId } : {}),
+    });
   }
   return messages.length === 0 ? null : messages;
+}
+
+/** Normalises the OpenAI `tool_calls` member of an inbound assistant message. */
+function toolCallsOf(value: unknown): GatewayToolCall[] {
+  if (!Array.isArray(value)) return [];
+  const calls: GatewayToolCall[] = [];
+  for (const entry of value) {
+    if (entry === null || typeof entry !== 'object') continue;
+    const record = entry as Record<string, unknown>;
+    const fn = (record['function'] ?? {}) as Record<string, unknown>;
+    const name = fn['name'];
+    if (typeof name !== 'string' || name.length === 0) continue;
+    const id = record['id'];
+    const args = fn['arguments'];
+    calls.push({
+      id: typeof id === 'string' && id.length > 0 ? id : `call_${String(calls.length)}`,
+      type: 'function',
+      function: { name, arguments: typeof args === 'string' ? args : '' },
+    });
+  }
+  return calls;
 }
 
 /**
@@ -274,7 +318,7 @@ export async function createModelGatewayProxy(
       return;
     }
 
-    let body: { messages?: unknown; model?: unknown; stream?: unknown };
+    let body: { messages?: unknown; model?: unknown; stream?: unknown; tools?: unknown };
     try {
       body = JSON.parse(await readBody(request, maxBodyBytes)) as typeof body;
     } catch (error) {
@@ -328,7 +372,18 @@ export async function createModelGatewayProxy(
       );
       return;
     }
-    const completion = await options.gateway.complete(run, messages);
+    // The request-side tool schemas are forwarded as-is: R3-1 taught the proxy to return
+    // `tool_calls`, but a Provider that never received `tools` cannot produce any
+    // (WP-12 R3-2c). An unexpected shape is refused rather than silently dropped.
+    let tools: readonly JsonValue[] | undefined;
+    if (body.tools !== undefined) {
+      if (!Array.isArray(body.tools)) {
+        refuse(response, log, 400, 'VALIDATION_ERROR', 'tools must be an array');
+        return;
+      }
+      tools = body.tools as readonly JsonValue[];
+    }
+    const completion = await options.gateway.complete(run, messages, tools);
     if (!completion.ok) {
       refuse(response, log, statusFor(completion.code), completion.code, completion.message);
       return;
@@ -352,7 +407,11 @@ export async function createModelGatewayProxy(
 
     const created = Math.floor(Date.now() / 1000);
     log(
-      `gateway-proxy: ${run.id} attempt ${capability.attemptId} ${body.stream === true ? 'stream' : 'json'} ${frozen.model.id} → ${String(completion.text.length)} chars`,
+      `gateway-proxy: ${run.id} attempt ${capability.attemptId} ${body.stream === true ? 'stream' : 'json'} ${frozen.model.id} → ${String(completion.text.length)} chars${
+        completion.toolCalls === undefined
+          ? ''
+          : `, ${String(completion.toolCalls.length)} tool call(s)`
+      }`,
     );
     if (body.stream === true) {
       // One SSE chunk carrying the whole answer, then the terminator: the SDK's stream
@@ -369,14 +428,45 @@ export async function createModelGatewayProxy(
         created,
         model: frozen.model.id,
         choices: [
-          { index: 0, delta: { role: 'assistant', content: completion.text }, finish_reason: null },
+          {
+            index: 0,
+            delta: {
+              role: 'assistant',
+              content: completion.text,
+              ...(completion.toolCalls === undefined
+                ? {}
+                : {
+                    // One delta per call carrying the complete arguments: the SDK concatenates
+                    // by `index`, so a single delta is a valid stream (WP-12 R3-1).
+                    tool_calls: completion.toolCalls.map((call, index) => ({
+                      index,
+                      id: call.id,
+                      type: call.type,
+                      function: {
+                        name: call.function.name,
+                        arguments: call.function.arguments,
+                      },
+                    })),
+                  }),
+            },
+            finish_reason: null,
+          },
         ],
       };
       response.write(`data: ${JSON.stringify(chunk)}\n\n`);
       response.write(
         `data: ${JSON.stringify({
           ...chunk,
-          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          choices: [
+            {
+              index: 0,
+              delta: {},
+              finish_reason:
+                completion.toolCalls === undefined || completion.toolCalls.length === 0
+                  ? 'stop'
+                  : 'tool_calls',
+            },
+          ],
         })}\n\n`,
       );
       response.write('data: [DONE]\n\n');
@@ -391,8 +481,28 @@ export async function createModelGatewayProxy(
       choices: [
         {
           index: 0,
-          message: { role: 'assistant', content: completion.text },
-          finish_reason: 'stop',
+          message: {
+            role: 'assistant',
+            content: completion.text,
+            ...(completion.toolCalls === undefined
+              ? {}
+              : {
+                  tool_calls: completion.toolCalls.map((call) => ({
+                    id: call.id,
+                    type: call.type,
+                    function: {
+                      name: call.function.name,
+                      arguments: call.function.arguments,
+                    },
+                  })),
+                }),
+          },
+          // A completion that only asked for tools ends the turn with `tool_calls`, exactly
+          // as the OpenAI-compatible API does.
+          finish_reason:
+            completion.toolCalls === undefined || completion.toolCalls.length === 0
+              ? 'stop'
+              : 'tool_calls',
         },
       ],
       usage: {

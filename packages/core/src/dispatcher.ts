@@ -7,7 +7,7 @@
  * Every one of those steps happens inside a single mailbox command, so a crash can
  * never leave a recorded response without its effects — or the reverse.
  */
-import type { JsonObject } from '@agentdev/contracts';
+import { canonicalJson, type JsonObject } from '@agentdev/contracts';
 import type { ContractSchema, EntityRepository, ProjectStore } from '@agentdev/storage';
 import { StorageError, sha256, withTransaction } from '@agentdev/storage';
 import {
@@ -84,15 +84,16 @@ interface WriteOutcome {
   readonly response: unknown;
 }
 
-/** Deterministic JSON so the same params always hash to the same payload. */
-export function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(',')}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, entry]) => entry !== undefined)
-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
-  return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(',')}}`;
-}
+/**
+ * Deterministic JSON so the same params always hash to the same payload.
+ *
+ * The implementation moved to `@agentdev/contracts` (`canonical.ts`) when the Runner
+ * needed the identical rule for `expectedInputHash` (T3, `protocol.md` §6): two copies
+ * of "canonical JSON" would let the Runner and Core disagree about whether a retried
+ * tool call is a replay. It stays exported here so every existing core caller and test
+ * keeps importing it from its historical location.
+ */
+export { canonicalJson };
 
 /** SHA256 over method + params: the "same payload" test of AC-055. */
 export function payloadHashOf(method: string, params: unknown): string {

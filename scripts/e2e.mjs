@@ -9,8 +9,13 @@
  *   the real Core services, the real `createDaemon` (HTTP `/rpc` + `/ws`) and the
  *   real `createWebApp` BFF, every listener on loopback port 0;
  * - a real browser-shaped client over HTTP, the BFF `/ws` bridge and multipart
- *   upload — Node built-ins only (no Playwright, no browser download, no new
- *   dependency, no `fetch`);
+ *   upload — Node built-ins only (no `fetch`);
+ * - a **real Chromium run** for the client-side clauses: `tests/browser/**` (Playwright,
+ *   a dev-only root dependency since WP-12 T7a) boots its own instance of the same real
+ *   stack and drives the actual login form, DOM, panel state machine, keyboard traversal
+ *   and upload limits. Its per-AC verdicts are reported as checks named
+ *   `browser.*`; only an environment without a Chromium binary may report them
+ *   `UNVERIFIED` (`scripts/lib/browser-suite.mjs`, `scripts/lib/drill-acs.mjs`);
  * - the product's own TypeScript sources loaded through Node's native type
  *   stripping plus a module-resolution hook (`scripts/lib/e2e-runtime.mjs`), so the
  *   drill exercises the same code `pnpm typecheck`, `pnpm lint` and `pnpm test:unit`
@@ -28,12 +33,16 @@
  *
  * Usage: node scripts/e2e.mjs [--no-write] [--keep-temp] [--drill-out <path>] [--help]
  */
-import { createServer } from 'node:http';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { computeBinding } from './lib/acceptance-binding.mjs';
 import {
+  BROWSER_AC_CHECK_NAMES,
+  browserAvailability,
+  runBrowserSuite,
+} from './lib/browser-suite.mjs';
+import {
+  E2E_BROWSER_ACS,
   E2E_BROWSER_ISOLATION_ACS,
   E2E_BROWSER_UPLOAD_ACS,
   E2E_BROWSER_VIEWPORT_ACS,
@@ -41,10 +50,25 @@ import {
 } from './lib/drill-acs.mjs';
 import { CheckFailure, CheckList, drillReport, renderE2eRecord } from './lib/e2e-checks.mjs';
 import {
+  CODE_PATH,
+  CODE_PATH_V2,
+  DELIVERY_REF,
+  DOCUMENT_ROOT,
+  FEATURE_ID,
+  FEATURE_PATH,
+  OTHER_FEATURE_ID,
+  OTHER_FEATURE_PATH,
+  WEB_ORIGIN,
+  bootStack,
+  seedWork,
+} from './lib/e2e-stack.mjs';
+import { runOpsDrill } from './lib/e2e-ops-drill.mjs';
+import {
   REPO_ROOT,
   WsClient,
   cleanupTempDirs,
   cookiePair,
+  ensure,
   git,
   httpRequest,
   jsonOf,
@@ -55,43 +79,44 @@ import {
   writeFileAt,
 } from './lib/e2e-runtime.mjs';
 
-/** The exact `Origin` both the daemon and the BFF allow (`protocol.md` §2). */
-const WEB_ORIGIN = 'http://127.0.0.1:4317';
-const REPORT_DIR = join(REPO_ROOT, '.agentdev', 'work', 'WP-10');
-const DELIVERY_REF = 'refs/heads/agentdev/main';
-const DOCUMENT_ROOT = 'docs/agentdev';
-const FEATURE_ID = 'F-0a1b2c3d';
-const OTHER_FEATURE_ID = 'F-0f0f0f0f';
-const FEATURE_PATH = `${DOCUMENT_ROOT}/features/${FEATURE_ID}/README.md`;
-const OTHER_FEATURE_PATH = `${DOCUMENT_ROOT}/features/${OTHER_FEATURE_ID}/README.md`;
-const CODE_PATH = 'src/orders/cancel.ts';
-const CODE_PATH_V2 = 'tests/orders/cancel.test.ts';
+/**
+ * Where this run writes its records.
+ *
+ * The default is the *current* work package: a drill run is evidence for the package
+ * being developed, and hard-coding an older package silently overwrote its history
+ * (WP-12 fix). `--report-dir` (or `AGENTDEV_REPORT_DIR`) points it elsewhere.
+ */
+const DEFAULT_REPORT_DIR = join(REPO_ROOT, '.agentdev', 'work', 'WP-12');
+const REPORT_DIR = process.env.AGENTDEV_REPORT_DIR
+  ? resolve(process.env.AGENTDEV_REPORT_DIR)
+  : DEFAULT_REPORT_DIR;
 
 // ---------------------------------------------------------------------------
 // Small assertion helpers (raw evidence, never a silent skip)
 // ---------------------------------------------------------------------------
-
-function ensure(condition, message) {
-  if (!condition) throw new Error(message);
-}
+// `ensure` comes from `./lib/e2e-runtime.mjs`, shared with the stack bootstrap.
 
 function usage() {
   return [
     'Usage: node scripts/e2e.mjs [options]',
     '',
-    '  --no-write        print the checks only; do not write the WP-10 reports',
+    '  --no-write        print the checks only; do not write the package records',
     '  --keep-temp       keep the temporary project/state directories for forensics',
-    '  --drill-out <p>   write the drill JSON to <p> instead of the WP-10 records',
+    '  --report-dir <p>  write the package records to <p>',
+    '                    (default .agentdev/work/WP-12; also AGENTDEV_REPORT_DIR)',
+    '  --drill-out <p>   write the drill JSON to <p> instead of the package records',
     '                    (used by scripts/acceptance.mjs, which runs this drill itself)',
     '  --help            show this help',
     '',
-    'Environment: none. The drill is offline by design; the real Provider drill is',
-    '`pnpm test:live` with AGENTDEV_PROVIDER_BASE_URL/MODEL/SECRET.',
+    'Environment: none for the product; the browser suite needs the repo dev dependency',
+    '`@playwright/test` plus its Chromium binary (`pnpm exec playwright install chromium`).',
+    'The drill is otherwise offline by design; the real Provider drill is `pnpm test:live`',
+    'with AGENTDEV_PROVIDER_BASE_URL/MODEL/SECRET.',
   ].join('\n');
 }
 
 function parseArgs(argv) {
-  const options = { write: true, keepTemp: false, drillOut: null, help: false };
+  const options = { write: true, keepTemp: false, drillOut: null, reportDir: null, help: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--no-write') options.write = false;
@@ -100,63 +125,14 @@ function parseArgs(argv) {
       index += 1;
       if (index >= argv.length) throw new Error('--drill-out requires a path');
       options.drillOut = argv[index];
+    } else if (arg === '--report-dir') {
+      index += 1;
+      if (index >= argv.length) throw new Error('--report-dir requires a path');
+      options.reportDir = resolve(argv[index]);
     } else if (arg === '--help' || arg === '-h') options.help = true;
     else throw new Error(`unknown option: ${arg}`);
   }
   return options;
-}
-
-// ---------------------------------------------------------------------------
-// Knowledge documents (the product's own Feature document format)
-// ---------------------------------------------------------------------------
-
-/** A valid Feature document (`context.md` §2) for the temporary project. */
-function featureMarkdown(input) {
-  return [
-    `# ${input.name}`,
-    '',
-    '| 字段 | 值 |',
-    '|---|---|',
-    `| feature_id | ${input.featureId} |`,
-    `| name | ${input.name} |`,
-    '| module | orders |',
-    `| owner_document | ${input.path} |`,
-    '| design | unconfirmed |',
-    '| design_decision_refs | 无 |',
-    `| implementation | ${input.implementation ?? 'partial'} |`,
-    `| verification | ${input.verification ?? 'unverified'} |`,
-    `| verification_evidence_refs | ${input.verificationEvidenceRefs ?? '无'} |`,
-    `| verification_coverage | ${input.verificationCoverage ?? '无'} |`,
-    '| investigation | investigated |',
-    '| investigation_scope | 订单取消路由与状态转换 |',
-    `| source_refs | git:${input.revision}:${CODE_PATH} |`,
-    `| revision | ${input.revision} |`,
-    '',
-    '## 用途',
-    '',
-    `${input.name}的能力说明。`,
-    '',
-    '## 当前行为',
-    '',
-    input.behaviour,
-    '',
-    '## 关系',
-    '',
-    input.relations ?? '无',
-    '',
-    '## 实现入口',
-    '',
-    ...input.entries.map((entry) => `- ${entry}`),
-    '',
-    '## 已知差距',
-    '',
-    ...(input.gaps === undefined ? ['无已登记差距。'] : input.gaps.map((gap) => `- ${gap}`)),
-    '',
-    '## 关键决定',
-    '',
-    `- 按需求确认的行为处理（seed ${input.decisionRef}）。`,
-    '',
-  ].join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -174,7 +150,7 @@ async function main(options) {
     providerConfigured: false,
     exitCode: 1,
     residuals: [
-      '真实浏览器未执行（焦点遍历、像素级布局、脚本隔离攻击样例）：产品决定不引入 Playwright 或浏览器下载；浏览器级 AC-002/AC-052/AC-071/AC-073/AC-076 在演练报告中标为 UNVERIFIED。',
+      '真实浏览器（Chromium）由 WP-12 T7a 引入：`tests/browser/**` 在本演练内运行并对每个浏览器 AC 逐项取证；本环境下 Chromium 不可用时这些 AC 才标为 UNVERIFIED（条件由 scripts/lib/browser-suite.mjs 现场判定）。',
       '真实 Provider 未执行：本演练断言 Provider 桩零调用；AC-001/AC-043/AC-066 的真实模型纵向演练归 `pnpm test:live`（本环境未配置 AGENTDEV_PROVIDER_*）。',
       '需求→Work 绑定：产品当前没有“把已保存 Requirement 绑定到 Work”的协议方法（WP-06 车道），演练按 WP-06/WP-08 集成测试的既有做法直接更新真实 row 的 workId/requirementId。',
       'L2 链的 Task 行由演练直接插入（产品当前没有 Task 创建服务）；Plan 审批、StageGate 阶段结果、Git 候选提交、结算 CAS、知识补丁与冷启动均为真实服务。',
@@ -187,7 +163,7 @@ async function main(options) {
 
   try {
     harness = await bootStack({ product, meta });
-    await runChecks({ checks, harness, product });
+    await runChecks({ checks, harness, product, meta });
     meta.exitCode = 0;
   } catch (error) {
     if (!(error instanceof CheckFailure)) throw error;
@@ -213,12 +189,11 @@ async function main(options) {
     writeFileSync(options.drillOut, `${JSON.stringify(report, null, 2)}\n`);
     process.stdout.write(`e2e: wrote drill report to ${options.drillOut}\n`);
   } else if (options.write) {
-    mkdirSync(REPORT_DIR, { recursive: true });
-    writeFileSync(join(REPORT_DIR, 'e2e-results.json'), `${JSON.stringify(report, null, 2)}\n`);
-    writeFileSync(join(REPORT_DIR, 'e2e.md'), renderE2eRecord(checks, meta));
-    process.stdout.write(
-      `e2e: wrote .agentdev/work/WP-10/e2e-results.json and .agentdev/work/WP-10/e2e.md\n`,
-    );
+    const reportDir = options.reportDir ?? REPORT_DIR;
+    mkdirSync(reportDir, { recursive: true });
+    writeFileSync(join(reportDir, 'e2e-results.json'), `${JSON.stringify(report, null, 2)}\n`);
+    writeFileSync(join(reportDir, 'e2e.md'), renderE2eRecord(checks, meta));
+    process.stdout.write(`e2e: wrote ${join(reportDir, 'e2e-results.json')} and e2e.md\n`);
   } else {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   }
@@ -238,443 +213,10 @@ async function main(options) {
 }
 
 // ---------------------------------------------------------------------------
-// Boot: the real stack over a real temporary project
-// ---------------------------------------------------------------------------
-
-async function bootStack({ product, meta }) {
-  const {
-    core,
-    storage,
-    workspace,
-    knowledge,
-    daemon: daemonModule,
-    daemonProtocol,
-    web: webModule,
-  } = product;
-
-  const repo = makeTempDir('agentdev-e2e-repo-');
-  const dataDir = makeTempDir('agentdev-e2e-state-');
-  const stateDir = makeTempDir('agentdev-e2e-auth-');
-
-  const gitPort = workspace.createNodeWorktreeGitPort();
-  const unwrap = (result, what) => {
-    if (!result.ok) throw new Error(`${what}: ${result.errors[0]?.message ?? 'git failed'}`);
-    return result.value;
-  };
-
-  // 1. A real Git project: knowledge documents and code committed together on the
-  //    Product's delivery branch.
-  writeFileAt(repo, CODE_PATH, 'export const cancel = (): boolean => false;\n');
-  writeFileAt(repo, CODE_PATH_V2, "import { cancel } from '../../src/orders/cancel';\n");
-  writeFileAt(
-    repo,
-    FEATURE_PATH,
-    featureMarkdown({
-      featureId: FEATURE_ID,
-      name: '订单取消',
-      path: FEATURE_PATH,
-      revision: '0'.repeat(40),
-      behaviour: '未付款订单不可取消。',
-      entries: [CODE_PATH],
-      decisionRef: 'decision:e2e-seed',
-    }),
-  );
-  writeFileAt(
-    repo,
-    OTHER_FEATURE_PATH,
-    featureMarkdown({
-      featureId: OTHER_FEATURE_ID,
-      name: '支付状态',
-      path: OTHER_FEATURE_PATH,
-      revision: '0'.repeat(40),
-      behaviour: '付款状态决定可取消范围。',
-      entries: ['src/payments/status.ts'],
-      decisionRef: 'decision:e2e-seed',
-    }),
-  );
-  unwrap(gitPort.initRepository(repo, { branch: 'agentdev/main' }), 'git init');
-  writeFileAt(repo, '.gitignore', 'node_modules/\n.agentdev/work/\n');
-  const seed = unwrap(
-    gitPort.commitPaths(repo, 'chore: seed the e2e delivery branch', [
-      CODE_PATH,
-      CODE_PATH_V2,
-      FEATURE_PATH,
-      OTHER_FEATURE_PATH,
-      '.gitignore',
-    ]),
-    'seed commit',
-  );
-  const seedRevision = seed.revision;
-
-  // 2. The real Project database and the real Core services.
-  const store = storage.ProjectStore.open({
-    dataDir,
-    canonicalRoot: repo,
-    migrations: { backup: () => undefined, backupPath: join(dataDir, 'pre.sqlite') },
-    repository: { now: () => new Date().toISOString() },
-  });
-  const projectId = storage.projectIdFromRoot(repo);
-  const blobs = new storage.BlobStore({ root: dataDir });
-
-  // The auth clock is injectable so "expired cookie" is a deterministic fact, not
-  // a sleep. Every other clock stays real.
-  let authClockMs = Date.now();
-  const auth = core.AuthService.loadOrCreate({
-    stateDir,
-    config: {
-      deployment: 'loopback',
-      allowedOrigins: [WEB_ORIGIN],
-      sessionTtlMs: 60 * 60 * 1000,
-      now: () => authClockMs,
-    },
-  });
-  const installationToken = auth.createdToken ?? '';
-  if (installationToken === '') throw new Error('the auth service created no installation token');
-
-  const attachments = new core.AttachmentService({ store, blobs });
-  const artifacts = new core.ArtifactService({ store, blobs });
-  const tokens = new core.DownloadTokenStore();
-  const events = new core.EventHub({ store });
-
-  // The offline Provider stub: a real provider entry pointing at a loopback server
-  // that records every request and refuses. No model call may reach it.
-  const providerCalls = [];
-  const providerStub = createServer((request, response) => {
-    providerCalls.push(`${request.method ?? 'GET'} ${request.url ?? '/'}`);
-    response.writeHead(501, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ error: 'the e2e provider stub never answers a model call' }));
-  });
-  await new Promise((resolve) => providerStub.listen(0, '127.0.0.1', resolve));
-  const providerAddress = providerStub.address();
-  const providerBaseUrl = `http://127.0.0.1:${String(typeof providerAddress === 'object' && providerAddress !== null ? providerAddress.port : 0)}/v1`;
-
-  // A *working* loopback model, used only by the runtime-execution check (C17): it proves
-  // the daemon can execute a real Attempt without making the offline drill depend on a
-  // Provider. It answers OpenAI-compatible JSON, and a prompt containing `SLOW` keeps the
-  // answer back so the check can kill a live Runner.
-  const localModelCalls = [];
-  const localModel = createServer((request, response) => {
-    const chunks = [];
-    request.on('data', (chunk) => chunks.push(chunk));
-    request.on('end', () => {
-      const body = Buffer.concat(chunks).toString('utf8');
-      localModelCalls.push(body);
-      const slow = body.includes('SLOW');
-      const answer = () => {
-        response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(
-          JSON.stringify({
-            id: 'e2e-local-completion',
-            object: 'chat.completion',
-            model: 'e2e-local-model',
-            choices: [
-              {
-                index: 0,
-                message: { role: 'assistant', content: 'E2E-LOCAL-ANSWER' },
-                finish_reason: 'stop',
-              },
-            ],
-            usage: { prompt_tokens: 9, completion_tokens: 4, total_tokens: 13 },
-          }),
-        );
-      };
-      if (slow) setTimeout(answer, 30_000);
-      else answer();
-    });
-  });
-  await new Promise((resolve) => localModel.listen(0, '127.0.0.1', resolve));
-  const localModelAddress = localModel.address();
-  const localModelUrl = `http://127.0.0.1:${String(typeof localModelAddress === 'object' && localModelAddress !== null ? localModelAddress.port : 0)}`;
-
-  // The snapshot writer must exist before anything freezes a configuration: the runtime
-  // execution check (C17) freezes a role profile exactly like the daemon host does.
-  const snapshots = new core.SnapshotWriter({ store });
-  const config = core.ConfigStore.open({ globalDir: stateDir, projectRoot: dataDir, snapshots });
-  const provider = config.upsertProvider({
-    type: 'openai-compatible',
-    baseUrl: providerBaseUrl,
-    enabled: true,
-    models: [
-      {
-        id: 'e2e-offline-model',
-        contextWindow: 128_000,
-        maxOutputTokens: 8_192,
-        reasoningLevels: ['off', 'low'],
-        vision: false,
-      },
-    ],
-  });
-  config.update('global', {
-    roleOverrides: {
-      chief: {
-        providerId: provider.providerId,
-        modelId: 'e2e-offline-model',
-        reasoning: 'off',
-        skills: [],
-        toolSubset: [],
-        contextLimit: 32_000,
-      },
-    },
-  });
-
-  const gates = new core.PlanGateService({ store, artifacts, blobs });
-  const findings = new core.FindingService({ store, artifacts });
-  const decisions = new core.DecisionService({ store, artifacts });
-  const requirements = new core.RequirementContinuation({ store });
-  const journal = workspace.createMemoryCasJournal();
-  const casEvents = workspace.createMemoryCasEvents();
-  const cas = workspace.createCasService({ git: gitPort, journal, events: casEvents });
-  const lock = new core.ProjectIntegrationLock({ projectId, leases: store.leases });
-  const settlement = new core.SettlementService({
-    store,
-    worktrees: gitPort,
-    cas,
-    journal,
-    events: casEvents,
-    snapshots,
-  });
-  const requirementSaves = core.createRequirementSaveService({
-    store,
-    worktrees: gitPort,
-    journal,
-    events: casEvents,
-    cas,
-    lock,
-    worktreeRoot: join(dataDir, 'save-worktrees'),
-    keepWorktree: false,
-  });
-
-  const protocol = new daemonProtocol.WorkbenchProtocol({
-    store,
-    blobs,
-    events,
-    attachments,
-    artifacts,
-    tokens,
-    version: '0.0.0-e2e',
-    config,
-    gates,
-    decisions,
-    findings,
-    requirements,
-    requirementSaves,
-  });
-
-  store.projects.insert({
-    id: projectId,
-    root: repo,
-    gitRoot: repo,
-    codeRoot: 'src',
-    documentRoot: DOCUMENT_ROOT,
-    deliveryBranch: 'agentdev/main',
-    trust: 'trusted',
-    state: 'open',
-    head: seedRevision,
-  });
-  const conversationId = store.newId();
-  store.conversations.insert({
-    id: conversationId,
-    projectId,
-    title: 'chief conversation',
-    archived: false,
-  });
-
-  // 3. The real daemon (HTTP + WS) and the real BFF, both on loopback port 0.
-  const daemonServer = daemonModule.createDaemon({
-    projectId,
-    store,
-    blobs,
-    auth,
-    attachments,
-    artifacts,
-    tokens,
-    version: '0.0.0-e2e',
-    workbench: protocol,
-  });
-  await new Promise((resolve) => daemonServer.listen(0, '127.0.0.1', resolve));
-  const daemonAddress = daemonServer.address();
-  const daemonPort =
-    typeof daemonAddress === 'object' && daemonAddress !== null ? daemonAddress.port : 0;
-  const daemonUrl = `http://127.0.0.1:${String(daemonPort)}`;
-
-  const app = webModule.createWebApp({
-    daemon: { baseUrl: daemonUrl, origin: WEB_ORIGIN, bearer: installationToken },
-    auth,
-    allowedOrigins: [WEB_ORIGIN],
-    sessions: new webModule.WebSessionStore(),
-    files: new webModule.NodeFilePort(),
-    version: '0.0.0-e2e',
-  });
-  await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
-  const webAddress = app.server.address();
-  const webPort = typeof webAddress === 'object' && webAddress !== null ? webAddress.port : 0;
-  const webUrl = `http://127.0.0.1:${String(webPort)}`;
-
-  // 4. Publish the initial knowledge projection, so the Docs surface reads real rows.
-  const initialDocuments = readFeatureDocuments(repo);
-  const initialProjection = knowledge.buildProjection({
-    documents: initialDocuments,
-    revision: seedRevision,
-    codeTreeRevision: seedRevision,
-    knownIds: [],
-    documentRoot: DOCUMENT_ROOT,
-    cache: core.createSqliteProjectionCache({ store }),
-  });
-  if (!initialProjection.published) {
-    throw new Error(
-      `the seeded Feature documents are invalid: ${JSON.stringify(initialProjection.diagnostics)}`,
-    );
-  }
-
-  Object.assign(meta, {
-    projectRoot: repo,
-    dataDir,
-    daemonUrl,
-    webUrl,
-    webOrigin: WEB_ORIGIN,
-    providerBaseUrl,
-    seedRevision,
-  });
-
-  let cookie = '';
-  let csrfToken = '';
-
-  const harness = {
-    product,
-    repo,
-    dataDir,
-    stateDir,
-    providerStub,
-    seedRevision,
-    store,
-    blobs,
-    auth,
-    attachments,
-    artifacts,
-    tokens,
-    events,
-    config,
-    providerId: provider.providerId,
-    providerBaseUrl,
-    gates,
-    findings,
-    decisions,
-    requirements,
-    requirementSaves,
-    settlement,
-    snapshots,
-    gitPort,
-    protocol,
-    daemonServer,
-    app,
-    daemonUrl,
-    webUrl,
-    projectId,
-    conversationId,
-    installationToken,
-    providerCalls,
-    provider,
-    localModel,
-    localModelUrl,
-    localModelCalls,
-    advanceAuthClock(ms) {
-      authClockMs += ms;
-    },
-    setSession(value) {
-      cookie = value.cookie;
-      csrfToken = value.csrfToken;
-    },
-    get cookie() {
-      return cookie;
-    },
-    get csrfToken() {
-      return csrfToken;
-    },
-    async close() {
-      protocol.closeAll(1001, 'the e2e drill finished');
-      await new Promise((resolve) => app.server.close(() => resolve()));
-      await new Promise((resolve) => daemonServer.close(() => resolve()));
-      await new Promise((resolve) => providerStub.close(() => resolve()));
-      await new Promise((resolve) => localModel.close(() => resolve()));
-      store.close();
-    },
-    roots: [repo, dataDir, stateDir],
-  };
-
-  // Real client helpers bound to the running stack.
-  harness.login = async (token = installationToken, origin = WEB_ORIGIN) =>
-    httpRequest(`${webUrl}/auth/login`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', origin },
-      body: JSON.stringify({ token }),
-    });
-
-  let requestSequence = 0;
-  harness.rpc = async (method, params = {}, rpcOptions = {}) => {
-    requestSequence += 1;
-    const headers = {
-      'content-type': 'application/json',
-      accept: 'application/json',
-      origin: rpcOptions.origin ?? WEB_ORIGIN,
-    };
-    if (rpcOptions.cookie !== null) headers.cookie = rpcOptions.cookie ?? cookie;
-    if (rpcOptions.csrfToken !== null && (rpcOptions.csrfToken ?? csrfToken) !== '') {
-      headers['x-csrf-token'] = rpcOptions.csrfToken ?? csrfToken;
-    }
-    const response = await httpRequest(`${webUrl}/rpc`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        v: 1,
-        type: 'request',
-        id: `e2e-${String(requestSequence)}`,
-        method,
-        projectId: rpcOptions.projectId ?? projectId,
-        params,
-        ...(rpcOptions.idempotencyKey === undefined
-          ? {}
-          : { idempotencyKey: rpcOptions.idempotencyKey }),
-        ...(rpcOptions.expectedVersion === undefined
-          ? {}
-          : { expectedVersion: rpcOptions.expectedVersion }),
-      }),
-    });
-    return { status: response.status, headers: response.headers, frame: jsonOf(response) };
-  };
-
-  harness.accepted = async (method, params = {}, rpcOptions = {}) => {
-    const answer = await harness.rpc(method, params, rpcOptions);
-    ensure(
-      answer.frame.ok === true,
-      `${method} was refused with ${String(answer.frame.error?.code)}: ${String(answer.frame.error?.message)}`,
-    );
-    return answer.frame.result ?? {};
-  };
-
-  harness.page = async (path, pageOptions = {}) => {
-    const headers = { accept: 'text/html' };
-    if (pageOptions.cookie !== null) headers.cookie = pageOptions.cookie ?? cookie;
-    const response = await httpRequest(`${webUrl}${path}`, { headers });
-    return { status: response.status, html: response.text };
-  };
-
-  return harness;
-}
-
-/** Reads the two seeded Feature documents at `HEAD` (no commit has happened yet). */
-function readFeatureDocuments(repo) {
-  const read = (path) => ({
-    relativePath: path,
-    markdown: git(['show', `HEAD:${path}`], repo),
-  });
-  return [read(FEATURE_PATH), read(OTHER_FEATURE_PATH)];
-}
-
-// ---------------------------------------------------------------------------
 // The checks
 // ---------------------------------------------------------------------------
 
-async function runChecks({ checks, harness, product }) {
+async function runChecks({ checks, harness, product, meta }) {
   const { core, storage, knowledge, domain } = product;
   const { store, gitPort } = harness;
   const unwrap = (result, what) => {
@@ -2273,6 +1815,219 @@ async function runChecks({ checks, harness, product }) {
     return `provider stub at ${harness.providerBaseUrl} received 0 requests across the whole drill; config.test resolved chief to ${String(probe.providerId)}/${String(probe.modelId)} with probe=capabilities-only`;
   });
 
+  // ---- C18: no-seed message → Chief → dispatch → stage result (WP-12 T2.7) ---
+  //
+  // The acceptance-level proof of the WP-12 T2 slice: one real user message drives the real
+  // path with **no seeded row** — Chief assessment Run → `assessment.submit` →
+  // `agent.dispatch` → professional Run → `stage.submit` → `stage_result`/board. The
+  // loopback model answers each turn with the tool call the Run owes Core, so the chain only
+  // passes if the control channel, the orchestrator guards and the requirement projection
+  // all really work.
+
+  await checks.check(
+    'chief.message-to-stage',
+    ['AC-003', 'AC-005', 'AC-068', 'AC-069'],
+    async () => {
+      const { createProjectExecution, SecretStore, createNodeProcessProbe } = core;
+      const { createPrepareRun } = await import('../apps/daemon/src/prepare-run.ts');
+      const { createChildRunnerSpawnPort } = await import('../apps/daemon/src/runner-spawn.ts');
+      const { createControlHandlers } = await import('../apps/daemon/src/control-handler.ts');
+      const { markMessageProcessing, markMessageSettled } =
+        await import('../apps/daemon/src/message-state.ts');
+
+      const provider = harness.config.upsertProvider({
+        type: 'openai-compatible',
+        baseUrl: harness.localModelUrl,
+        enabled: true,
+        models: [
+          {
+            id: 'e2e-local-model',
+            contextWindow: 128_000,
+            maxOutputTokens: 8_192,
+            reasoningLevels: ['off'],
+            vision: false,
+          },
+        ],
+      });
+      const role = {
+        providerId: provider.providerId,
+        modelId: 'e2e-local-model',
+        reasoning: 'off',
+        skills: [],
+        toolSubset: [],
+        contextLimit: 32_000,
+      };
+      harness.config.update('global', { roleOverrides: { chief: role, backend: role } });
+
+      const runnerEntry = join(makeTempDir('agentdev-e2e-r32-runner-'), 'runner-entry.mjs');
+      writeFileSync(
+        runnerEntry,
+        [
+          `import { installSourceResolver } from ${JSON.stringify(join(REPO_ROOT, 'scripts', 'lib', 'e2e-runtime.mjs'))};`,
+          'installSourceResolver();',
+          `const { main } = await import(${JSON.stringify(join(REPO_ROOT, 'apps', 'runner', 'src', 'cli.ts'))});`,
+          'await main(process.argv.slice(2), {',
+          '  output: { write: (line) => process.stdout.write(line) },',
+          '  exit: (code) => process.exit(code),',
+          '});',
+          '',
+        ].join('\n'),
+      );
+
+      const execution = await createProjectExecution({
+        store: harness.store,
+        config: harness.config,
+        snapshots: harness.snapshots,
+        secrets: new SecretStore(),
+        probe: createNodeProcessProbe(),
+        tickMs: 200,
+        log: () => undefined,
+        prepare: ({ capabilities, gatewayUrl, controlUrl }) =>
+          createPrepareRun({
+            store: harness.store,
+            config: harness.config,
+            capabilities,
+            gatewayUrl,
+            controlUrl,
+            projectRoot: harness.repo,
+            attemptsDir: join(harness.dataDir, 'attempts'),
+            log: () => undefined,
+          }),
+        spawn: createChildRunnerSpawnPort({
+          repoRoot: REPO_ROOT,
+          env: { ...process.env, AGENTDEV_RUNNER_ENTRY: runnerEntry },
+          log: () => undefined,
+        }),
+        control: {
+          attach: ({ orchestrator, stageGate }) =>
+            createControlHandlers({
+              store: harness.store,
+              orchestrator,
+              stageGate,
+              requirementSaves: harness.requirementSaves,
+              log: () => undefined,
+            }),
+          onAttemptStarted: ({ runId }) => markMessageProcessing(harness.store, runId),
+          onRunSettled: ({ runId, status }) => markMessageSettled(harness.store, runId, status),
+        },
+      });
+      harness.protocol.attachOrchestrator(execution.orchestrator);
+      harness.protocol.attachGateway(execution.gateway);
+
+      const waitFor = async (predicate, what, timeoutMs = 120_000) => {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+          const value = predicate();
+          if (value !== undefined && value !== false) return value;
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        throw new Error(`timed out waiting for ${what}`);
+      };
+
+      try {
+        // The host epoch is compared *lexicographically* by `recoverAfterRestart`, and the
+        // later AC-057 check uses `e2e-host-…`; this one therefore has to sort before it.
+        execution.start(`e2e-0-r32-${String(Date.now())}`);
+        const sent = await harness.accepted(
+          'conversation.message.send',
+          {
+            conversationId: harness.conversationId,
+            body: 'AGENTDEV-R32-TOOLCALL please write src/theme.txt',
+            attachmentIds: [],
+          },
+          { idempotencyKey: `e2e-r32-${String(Date.now())}` },
+        );
+        const workId = sent.workId;
+
+        // 1. The message queued a real Chief Run and the assessment landed.
+        const chiefRun = await waitFor(
+          () =>
+            harness.store.runs
+              .list({ where: "work_id = ? AND role = 'chief'", params: [workId] })
+              .at(-1),
+          'the Chief Run',
+        );
+        await waitFor(
+          () =>
+            harness.store.events
+              .readAfter(0, { limit: 5_000 })
+              .some(
+                (event) => event.name === 'assessment.saved' && event.data['workId'] === workId,
+              ),
+          'assessment.saved',
+        );
+        const work = harness.store.works.find(workId);
+        ensure(
+          work?.level === 'L2',
+          `the Chief assessment did not route the Work to L2 (${String(work?.level)})`,
+        );
+        ensure(
+          work?.authorizationRef !== undefined && work?.authorizationRef !== null,
+          'the derived authorization was not bound to the Work',
+        );
+        const authorization = harness.store.authorizations.find(String(work?.authorizationRef));
+        ensure(
+          authorization?.sourceRef?.id === sent.messageId,
+          `the authorization does not come from the message (${String(authorization?.sourceRef?.id)})`,
+        );
+
+        // 2. A real Requirement (Git-backed projection) is on the Work, `active`/`plan`.
+        const requirement = await waitFor(
+          () => harness.store.requirements.list({ where: 'work_id = ?', params: [workId] })[0],
+          'the Requirement',
+        );
+        ensure(
+          requirement.lifecycle === 'active' && requirement.phase === 'plan',
+          `the Requirement is ${requirement.lifecycle}/${String(requirement.phase)}`,
+        );
+
+        // 3. `agent.dispatch` queued a professional Run as the Chief's child.
+        const professional = await waitFor(
+          () =>
+            harness.store.runs
+              .list({ where: 'work_id = ?', params: [workId] })
+              .find((run) => run.role !== 'chief'),
+          'the professional Run',
+        );
+        ensure(
+          professional.parentRunId === chiefRun.id,
+          `the professional Run's parent is ${String(professional.parentRunId)}`,
+        );
+
+        // 4. The professional Attempt delivered through `stage.submit`.
+        const stageResult = await waitFor(
+          () =>
+            harness.store.stageResults.list({ where: 'run_id = ?', params: [professional.id] })[0],
+          'the stage result',
+        );
+        ensure(
+          harness.store.events
+            .readAfter(0, { limit: 5_000 })
+            .some(
+              (event) => event.name === 'stage.completed' && event.entityId === professional.id,
+            ),
+          'stage.completed was not emitted for the professional Run',
+        );
+
+        // 5. The board shows the Requirement, and the message reached a terminal state.
+        const board = await harness.accepted('board', {});
+        ensure(
+          JSON.stringify(board).includes(requirement.id),
+          'the board does not show the Requirement the message created',
+        );
+        const message = harness.store.messages.find(sent.messageId);
+        ensure(
+          message?.state === 'processed',
+          `the message state is ${String(message?.state)} after the Chief Run settled`,
+        );
+
+        return `no-seed chain: message ${sent.messageId} → Chief Run ${chiefRun.id} → Requirement ${requirement.id} (active/plan) → professional Run ${professional.id} (parent ${chiefRun.id}) → stage result ${stageResult.id} + stage.completed, message state processed, board shows the Requirement`;
+      } finally {
+        await execution.stop();
+      }
+    },
+  );
+
   // ---- C17: the *runtime* executes an Attempt (WP-11 A2) -------------------
   //
   // Everything above drives the product through its protocol; this check drives the
@@ -2461,23 +2216,16 @@ async function runChecks({ checks, harness, product }) {
     }
   });
 
-  // ---- Honest UNVERIFIED rows: what a headless runner cannot prove ----------
+  // ---- The real-browser drill (WP-12 T7a) -----------------------------------
 
-  checks.unverified(
-    'browser.rendering-and-isolation',
-    E2E_BROWSER_ISOLATION_ACS,
-    'AC-002/AC-052 的真实浏览器渲染、脚本隔离与攻击样例需要浏览器环境（无头或真实）；本仓库按产品决定不引入 Playwright 或浏览器下载，因此这两项在本演练中未执行（已提交用例覆盖 CSP/sandbox 预览头、一次性下载 token 与截断）',
-  );
-  checks.unverified(
-    'browser.viewport-and-keyboard',
-    E2E_BROWSER_VIEWPORT_ACS,
-    'AC-071 的 viewport 布局/焦点恢复与 AC-073 的键盘遍历/ARIA 实机朗读需要真实浏览器；本演练验证了三态面板标记与语言字典，未执行像素级与实机键盘检查',
-  );
-  checks.unverified(
-    'browser.upload-client-hints',
-    E2E_BROWSER_UPLOAD_ACS,
-    'AC-076 的服务端拒绝（超类型 mime 无残留引用）已在本演练中执行并作为 attachment.upload-first-message 的证据；客户端提示文案需要浏览器执行，未验证',
-  );
+  await runBrowserChecks({ checks, meta });
+
+  // ---- The operations drill: the real CLI on a temporary AGENTDEV_HOME (WP-12 G11) --
+
+  await runOpsDrill({ checks, meta });
+
+  // ---- Honest UNVERIFIED rows: what this headless runner cannot prove -------
+
   checks.unverified(
     'provider.fact-and-unknown',
     E2E_PROVIDER_ACS,
@@ -2485,46 +2233,61 @@ async function runChecks({ checks, harness, product }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Deterministic seed helpers (the shapes the Core services produce)
-// ---------------------------------------------------------------------------
+/**
+ * Runs `tests/browser/**` through Playwright and records one check per browser AC.
+ *
+ * The browser is now a real, dev-only dependency (WP-12 T7a reversed WP-10's "no
+ * browser" decision), so the browser ACs are executed and reported per AC; the
+ * `UNVERIFIED` route survives only for an environment that genuinely has no Chromium
+ * (and `scripts/lib/drill-acs.mjs` only accepts the gap while that is true). A failing
+ * or skipped spec is recorded before the runner stops, so the drill report never
+ * silently drops the ACs that did not pass.
+ */
+async function runBrowserChecks({ checks, meta }) {
+  const availability = browserAvailability();
+  if (!availability.available) {
+    const reason = `真实浏览器不可用：${availability.reason}；浏览器侧子句（AC-002/AC-052 的隔离与攻击样例、AC-071 的 viewport/焦点、AC-073 的键盘/ARIA、AC-076 的客户端提示）在本演练中未执行`;
+    checks.unverified('browser.rendering-and-isolation', E2E_BROWSER_ISOLATION_ACS, reason);
+    checks.unverified('browser.viewport-and-keyboard', E2E_BROWSER_VIEWPORT_ACS, reason);
+    checks.unverified('browser.upload-client-hints', E2E_BROWSER_UPLOAD_ACS, reason);
+    return;
+  }
 
-/** Seeds one Work with a real budget row, as the routing path does. */
-function seedWork(harness, options = {}) {
-  const { store } = harness;
-  const id = store.newId();
-  const budget = store.budgets.insert({
-    projectId: harness.projectId,
-    workId: id,
-    tokenLimit: 500_000,
-    tokensUsed: 0,
-    tokensReserved: 0,
-    activeTimeLimit: 7_200,
-    activeTimeUsed: 0,
-    repairLimit: 3,
-    repairUsed: 0,
-    costKnown: true,
-  });
-  return store.works.insert({
-    id,
-    projectId: harness.projectId,
-    intent: options.intent ?? 'delivery',
-    purpose: 'seed',
-    level: options.level ?? 'L2',
-    goal: options.goal ?? 'seed a work item',
-    scope: {
-      readPaths: ['src'],
-      writePaths: ['src'],
-      operations: ['read', 'edit'],
-      networkTargets: [],
-    },
-    sourceRef: { kind: 'action', id: store.newId(), version: '1' },
-    status: options.status ?? 'queued',
-    blockerIds: [],
-    baseRevision: harness.seedRevision,
-    budgetId: budget.id,
-    policyRevision: 1,
-  });
+  const suite = runBrowserSuite({ acs: E2E_BROWSER_ACS, env: process.env });
+  for (const line of suite.output.split('\n')) {
+    if (line.trim() !== '') process.stdout.write(`browser: ${line}\n`);
+  }
+  // Skipped specs that recorded a known UI gap: printed next to the verdicts so the
+  // gap travels with the run instead of hiding behind a green suite.
+  for (const entry of suite.gaps) {
+    process.stdout.write(`browser: GAP ${entry.title}\n           ${entry.gap}\n`);
+  }
+  if (Array.isArray(meta.residuals)) {
+    for (const entry of suite.gaps) meta.residuals.push(`浏览器已登记缺口：${entry.gap}`);
+  }
+
+  let firstFailure = null;
+  for (const ac of E2E_BROWSER_ACS) {
+    const result = suite.results.get(ac) ?? {
+      status: 'FAIL',
+      evidence: `浏览器套件没有返回 ${ac} 的结论`,
+    };
+    const record = checks.record(
+      BROWSER_AC_CHECK_NAMES[ac] ?? `browser.${ac}`,
+      [ac],
+      result.status,
+      `${result.evidence}（Playwright ${availability.version}，${String(suite.specs.length)} 个 spec，用时 ${String(suite.durationMs)}ms，exit ${String(suite.exitCode)}）`,
+    );
+    if (record.status === 'FAIL' && firstFailure === null) firstFailure = record;
+  }
+  meta.browser = {
+    version: availability.version,
+    executablePath: availability.executablePath,
+    exitCode: suite.exitCode,
+    specs: suite.specs.length,
+    durationMs: suite.durationMs,
+  };
+  if (firstFailure !== null) throw new CheckFailure(firstFailure);
 }
 
 const options = parseArgs(process.argv.slice(2));

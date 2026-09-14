@@ -332,6 +332,7 @@ const rows = {
     toolName: 'edit',
     inputHash: HASH,
     argsRef: ID2,
+    targets: ['src/theme.ts'],
     state: 'prepared',
   },
   lease: { ...BASE, resource: 'integration:proj', ownerAttemptId: ID2, epoch: 1, expiresAt: TIME },

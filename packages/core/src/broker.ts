@@ -79,11 +79,25 @@ import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { isIPv4, isIPv6 } from 'node:net';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import type { ErrorCode, Grant, JsonObject, Role, ToolOperation } from '@agentdev/contracts';
+import {
+  LIMITS,
+  type ErrorCode,
+  type Grant,
+  type JsonObject,
+  type Role,
+  type ToolOperation,
+} from '@agentdev/contracts';
 import { sha256, uuidv7, type ProjectStore } from '@agentdev/storage';
 import { canonicalJson } from './dispatcher.js';
 import { ProtocolError } from './errors.js';
 import type { GrantStore } from './grants.js';
+import {
+  defaultAsyncProcessRunner,
+  type AsyncProcessHandle,
+  type AsyncProcessResult,
+  type AsyncProcessRunner,
+} from './process-async.js';
+import { ToolProcessRegistry } from './tool-processes.js';
 
 /** The two execution modes the product supports (`execution.md` §1). */
 export type ExecutionMode = 'container' | 'host';
@@ -105,6 +119,7 @@ export type BrokerErrorCode = Extract<
   | 'IDEMPOTENCY_CONFLICT'
   | 'RECOVERY_REQUIRED'
   | 'PROVIDER_UNAVAILABLE'
+  | 'BUDGET_EXCEEDED'
   | 'INTERNAL_ERROR'
 >;
 
@@ -125,6 +140,7 @@ const BROKER_ERROR_CODES: readonly string[] = [
   'IDEMPOTENCY_CONFLICT',
   'RECOVERY_REQUIRED',
   'PROVIDER_UNAVAILABLE',
+  'BUDGET_EXCEEDED',
   'INTERNAL_ERROR',
 ];
 
@@ -132,6 +148,16 @@ const BROKER_ERROR_CODES: readonly string[] = [
 export function asBrokerErrorCode(code: ErrorCode): BrokerErrorCode {
   return BROKER_ERROR_CODES.includes(code) ? (code as BrokerErrorCode) : 'INTERNAL_ERROR';
 }
+
+/**
+ * The deadline a tool call gets when it names none.
+ *
+ * `ARCHITECTURE.md` §5 / `LIMITS.shellTimeoutSec` fix 120s as the default and 1800s as
+ * the ceiling a Grant may authorize; the Broker derives an operator call's deadline
+ * from this constant so a Grant's `maxDurationSec` is checked against the **effective**
+ * deadline rather than an absent one.
+ */
+export const DEFAULT_TOOL_TIMEOUT_MS = LIMITS.shellTimeoutSec.default * 1000;
 
 /** The digest the tool operation and a `once` Grant are bound to. */
 export function hashToolInput(input: unknown): string {
@@ -196,7 +222,18 @@ function toProcessResult(result: {
       };
 }
 
-/** The default runner: a real, synchronous child process. */
+/**
+ * The legacy synchronous runner: a real child process, but blocking.
+ *
+ * It stays for the two bounded primitives that must complete inside a synchronous
+ * context — a container `cat` for a read and a container `base64 -d` for a write
+ * (`readFile`/`writeFile` are synchronous members of {@link ToolContext}) — and as the
+ * default of the injectable `process` seam the Broker's tests stub. The **tool shell
+ * path** deliberately does not use it: `spawnSync` blocks the daemon's event loop for
+ * the whole command, cannot be cancelled and signals only the direct child, which
+ * contradicts `reliability.md` §5/§6. {@link defaultAsyncProcessRunner} is the port
+ * the `bash`/`git` tools execute through.
+ */
 export const defaultProcessRunner: ProcessRunner = {
   run(command, args, options = {}) {
     const result = spawnSync(command, [...args], {
@@ -1575,6 +1612,13 @@ export interface ToolInvocation {
   readonly toolName?: string;
   /** Absolute roots a file target must resolve inside. */
   readonly roots?: readonly string[];
+  /**
+   * Absolute working directory for a shell call.
+   *
+   * Validated against `roots` exactly like a target, so a `bash`/`git` invocation
+   * cannot walk out of the authorized tree through its `cwd`.
+   */
+  readonly cwd?: string;
   /** Roots that may be written; everything else is read-only (container mode). */
   readonly writableRoots?: readonly string[];
   readonly access?: 'read' | 'write';
@@ -1585,6 +1629,43 @@ export interface ToolInvocation {
   /** The tool body; when omitted the Broker performs the built-in operation. */
   readonly run?: (context: ToolContext) => unknown;
   readonly timeoutMs?: number;
+  /**
+   * Aborted when the caller went away (the Runner's socket closed, the turn was
+   * cancelled). A shell call's whole process group is terminated on abort, which is what
+   * lets a cancel reach a tool the daemon itself started (`reliability.md` §6).
+   */
+  readonly signal?: AbortSignal;
+  /**
+   * Tool-audience secret values injected into the child process environment (`AC-051`).
+   *
+   * Only the daemon sets this: it resolves the refs from the Run's `secret` Grant through
+   * `SecretStore.environmentFor`, so the values reach exactly one child process and never
+   * the audit rows, the tool result body or the model's context beyond what the command
+   * itself prints. A Runner cannot inject anything, because the endpoint builds the
+   * invocation from server-side facts plus the tool name and arguments.
+   */
+  readonly secretEnv?: Readonly<Record<string, string>>;
+}
+
+/**
+ * A shell input: either a command line handed to `/bin/sh -lc`, or an argv vector.
+ *
+ * The argv form exists so `git` is never assembled into a shell string: the tool's
+ * arguments come from the model, and a `;` in a path would otherwise become command
+ * syntax. `bash` keeps the string form because a shell command *is* its contract.
+ */
+export type ToolCommandInput =
+  string | { readonly program: string; readonly args: readonly string[] };
+
+export interface ToolAsyncRunOptions {
+  /** Overrides the invocation's own deadline (already clamped by the Grant). */
+  readonly timeoutMs?: number;
+  /** Grace between the terminating `SIGTERM` and the `SIGKILL`. */
+  readonly cancelGraceMs?: number;
+  /** Aborting cancels the process group; the Pi tool signal is threaded here. */
+  readonly signal?: AbortSignal | undefined;
+  /** Bytes written to the child's stdin (container writes use the sync path instead). */
+  readonly stdin?: string;
 }
 
 /** What a tool body receives: the mode plus boundary-checked primitives. */
@@ -1601,6 +1682,16 @@ export interface ToolContext {
   readFile(path: string): string;
   writeFile(path: string, content: string): void;
   run(command: string): ProcessResult;
+  /**
+   * Runs a command **asynchronously** in its own process group.
+   *
+   * This is the tool execution path (`reliability.md` §5/§6): it does not block the
+   * daemon, it can be cancelled through {@link ToolAsyncRunOptions.signal} or by the
+   * Attempt-scoped `ToolProcessRegistry`, and cancellation escalates from `SIGTERM` to
+   * `SIGKILL` over the whole process tree. A read-only role receives a rejecting body
+   * instead of a shell, exactly like {@link ToolContext.run}.
+   */
+  runAsync(input: ToolCommandInput, options?: ToolAsyncRunOptions): Promise<AsyncProcessResult>;
   request(
     url: string,
     init?: { readonly method?: string; readonly headers?: Readonly<Record<string, string>> },
@@ -1618,6 +1709,14 @@ export interface ToolSuccess {
   readonly result: unknown;
   readonly toolOperation: ToolOperation;
   readonly grant: Grant;
+  /**
+   * The Attempt's read-ledger binding after this call (`AC-085`).
+   *
+   * Set by the daemon handler, which owns the ledger; the Broker neither reads nor writes
+   * the ledger and simply carries the value back to the endpoint, which returns it to the
+   * Runner so `stage_yield` can report the real binding instead of a placeholder.
+   */
+  readonly ledger?: { readonly seq: number; readonly hash: string };
 }
 
 export interface ToolRefusal {
@@ -1682,7 +1781,28 @@ export interface BrokerOptions {
   readonly execImage?: string;
   /** Injectable Docker probe; the default runs `docker version`. */
   readonly docker?: DockerProbe;
+  /**
+   * The **synchronous** process seam (bounded container file primitives and tests).
+   *
+   * Tool shells do not use it; see `asyncProcess`.
+   */
   readonly process?: ProcessRunner;
+  /**
+   * The asynchronous process port every `bash`/`git` call runs through.
+   *
+   * Defaults to the real {@link defaultAsyncProcessRunner}: a detached process group
+   * with a `SIGTERM`→`SIGKILL` escalation (`reliability.md` §5/§6).
+   */
+  readonly asyncProcess?: AsyncProcessRunner;
+  /**
+   * The live tool processes of every Attempt, so a cancel can reach them.
+   *
+   * A daemon normally constructs one registry and passes it in, because the same
+   * object is what `onAttemptEnded`, `attempt.abort` and shutdown call
+   * (`reliability.md` §6/§7). A Broker built without one owns a private registry,
+   * reachable through {@link Broker.processes}.
+   */
+  readonly toolProcesses?: ToolProcessRegistry;
   /** Extra exact network targets the user authorized globally. */
   readonly allowedNetworkTargets?: readonly string[];
   /**
@@ -1737,6 +1857,8 @@ export class Broker {
   private readonly execImage: string;
   private readonly docker: DockerProbe;
   private readonly process: ProcessRunner;
+  private readonly asyncProcess: AsyncProcessRunner;
+  private readonly toolProcesses: ToolProcessRegistry;
   private readonly allowedNetworkTargets: readonly string[];
   private readonly protectedPaths: readonly string[];
   private readonly writableReportRoots: readonly string[];
@@ -1754,6 +1876,8 @@ export class Broker {
     this.execImage = options.execImage ?? EXEC_IMAGE;
     this.docker = options.docker ?? probeDockerAvailability;
     this.process = options.process ?? defaultProcessRunner;
+    this.asyncProcess = options.asyncProcess ?? defaultAsyncProcessRunner;
+    this.toolProcesses = options.toolProcesses ?? new ToolProcessRegistry();
     this.allowedNetworkTargets = options.allowedNetworkTargets ?? [];
     // W7R1-04: the run database is protected structurally, not by caller input.
     this.protectedPaths = deriveProtectedPaths(
@@ -1777,6 +1901,11 @@ export class Broker {
   /** The report/scratch roots Review and Test may write inside. */
   get reportRoots(): readonly string[] {
     return this.writableReportRoots;
+  }
+
+  /** The live tool processes, so the supervisor can cancel an Attempt's tree. */
+  get processes(): ToolProcessRegistry {
+    return this.toolProcesses;
   }
 
   /** The policy a call's network targets are evaluated against. */
@@ -1909,6 +2038,27 @@ export class Broker {
         ['roots'],
       );
     }
+    // A shell call's working directory is a boundary too: without this check a `bash`
+    // could `cd` out of the authorized tree (or read the run database) before running
+    // its command, which no `targets` rule would see.
+    if (invocation.cwd !== undefined) {
+      if (roots.length === 0) {
+        return refuse(
+          'VALIDATION_ERROR',
+          `operation ${operation} declared a cwd but no allowed roots to verify it`,
+          ['cwd'],
+        );
+      }
+      const decision = resolveWithinRoots({
+        path: invocation.cwd,
+        access: 'read',
+        roots,
+        protectedPaths: this.protectedPaths,
+      });
+      if (!decision.ok) {
+        return refuse(decision.code, `cwd refused: ${decision.reason}`, ['cwd']);
+      }
+    }
 
     // 4. Network boundary, before anything leaves the process. The decision is
     //    awaited, so a name resolving into private space (or not resolving at all)
@@ -1968,6 +2118,12 @@ export class Broker {
       argsRef,
       attemptId: invocation.attemptId,
       epoch: invocation.epoch,
+      // The two spends the Grant's `limits` can cap (`domain/evaluateGrant`): the
+      // encoded input size and the effective deadline. They are measured here because
+      // this is where the canonical input already exists and where the mode/limits
+      // decide the deadline; `GrantStore` adds the recorded call count.
+      inputBytes: Buffer.byteLength(canonicalJson(invocation.input ?? {}), 'utf8'),
+      durationSec: Math.ceil((invocation.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS) / 1000),
       executor: () => this.execute(invocation, context),
     };
     let consumed;
@@ -2020,7 +2176,7 @@ export class Broker {
   // Execution
   // -------------------------------------------------------------------------
 
-  private execute(invocation: ToolInvocation, context: ToolContext): unknown {
+  private async execute(invocation: ToolInvocation, context: ToolContext): Promise<unknown> {
     if (invocation.run !== undefined) return invocation.run(context);
     switch (invocation.operation) {
       case 'read':
@@ -2040,8 +2196,21 @@ export class Broker {
       }
       case 'bash':
       case 'git': {
+        // An `argv` input is spawned directly (`git`), so a model-supplied argument
+        // that contains shell syntax stays an argument; a plain `command` keeps the
+        // `/bin/sh -lc` semantics `bash` promises.
+        const argv = readInputArgv(invocation.input);
         const command = readInputString(invocation.input, 'command');
-        return context.run(command);
+        // The asynchronous, cancellable port (`reliability.md` §5/§6): the tool shell
+        // never blocks the daemon's event loop and its whole process tree can be
+        // reaped on timeout, abort or cancel.
+        return context.runAsync(
+          argv === undefined ? command : { program: argv[0] ?? '', args: argv.slice(1) },
+          {
+            ...(invocation.timeoutMs === undefined ? {} : { timeoutMs: invocation.timeoutMs }),
+            ...(invocation.signal === undefined ? {} : { signal: invocation.signal }),
+          },
+        );
       }
       default:
         // No built-in executor exists for network/secret/push/deploy. Inventing a
@@ -2134,6 +2303,16 @@ export class Broker {
         readOnly
           ? refuseReadOnlyCommand(invocation.role, operation)
           : this.runCommand(command, invocation, mode),
+      runAsync: (input, options) =>
+        readOnly
+          ? Promise.reject(
+              new ProtocolError(
+                'NOT_AUTHORIZED',
+                `${invocation.role} runs are read-only; the ${operation} tool body cannot execute shell commands`,
+                { details: { role: invocation.role, operation } },
+              ),
+            )
+          : this.runCommandAsync(input, invocation, mode, options ?? {}),
       request: (url, init) => requester.request(url, init ?? {}),
     };
   }
@@ -2152,11 +2331,69 @@ export class Broker {
   ): ProcessResult {
     if (mode === 'container') {
       const plan = this.containerPlan(command, invocation);
-      return this.process.run('docker', plan.args, { timeoutMs: invocation.timeoutMs ?? 120_000 });
+      return this.process.run('docker', plan.args, {
+        timeoutMs: invocation.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
+      });
     }
     return this.process.run('/bin/sh', ['-lc', command], {
-      timeoutMs: invocation.timeoutMs ?? 120_000,
+      timeoutMs: invocation.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
     });
+  }
+
+  /**
+   * The asynchronous, cancellable form of {@link runCommand} (`reliability.md` §5/§6).
+   *
+   * The command runs in its own process group through the injected
+   * {@link AsyncProcessRunner}, registered under the Attempt so a cancel, a lost
+   * heartbeat or a graceful shutdown can reap the whole tree. An argv input is spawned
+   * directly rather than assembled into a shell string, so a `git` argument can never
+   * become shell syntax; a string input keeps `/bin/sh -lc` semantics because that *is*
+   * the `bash` contract. Container mode wraps either form in the same hardened
+   * `docker run` plan the synchronous path used.
+   */
+  private async runCommandAsync(
+    input: ToolCommandInput,
+    invocation: ToolInvocation,
+    mode: ExecutionMode,
+    options: ToolAsyncRunOptions,
+  ): Promise<AsyncProcessResult> {
+    const timeoutMs = options.timeoutMs ?? invocation.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS;
+    const { command, args } = this.commandVector(input, invocation, mode);
+    const handle: AsyncProcessHandle = this.asyncProcess.start(command, args, {
+      timeoutMs,
+      ...(options.cancelGraceMs === undefined ? {} : { cancelGraceMs: options.cancelGraceMs }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.stdin === undefined ? {} : { stdin: options.stdin }),
+      ...(mode === 'container' || invocation.cwd === undefined ? {} : { cwd: invocation.cwd }),
+      // Tool-audience secrets reach the child environment only (`AC-051`).
+      ...(invocation.secretEnv === undefined ? {} : { env: { ...invocation.secretEnv } }),
+    });
+    const unregister = this.toolProcesses.register(invocation.attemptId, handle);
+    try {
+      return await handle.done;
+    } finally {
+      unregister();
+    }
+  }
+
+  /** The `{command, args}` a shell input becomes in the requested mode. */
+  private commandVector(
+    input: ToolCommandInput,
+    invocation: ToolInvocation,
+    mode: ExecutionMode,
+  ): { command: string; args: readonly string[] } {
+    if (mode === 'container') {
+      // The container entrypoint is `-lc`, so either form is expressed as one command
+      // string; every argv token is shell-quoted because the model supplied it.
+      const command =
+        typeof input === 'string'
+          ? input
+          : [input.program, ...input.args.map(shellQuote)].join(' ');
+      return { command: 'docker', args: this.containerPlan(command, invocation).args };
+    }
+    return typeof input === 'string'
+      ? { command: '/bin/sh', args: ['-lc', input] }
+      : { command: input.program, args: input.args };
   }
 
   private containerPlan(command: string, invocation: ToolInvocation): ContainerPlan {
@@ -2213,7 +2450,7 @@ export class Broker {
     const target = this.containerPath(realPath, invocation);
     const plan = this.containerPlan(`base64 -d > ${shellQuote(target)}`, invocation);
     const result = this.process.run('docker', plan.args, {
-      timeoutMs: invocation.timeoutMs ?? 120_000,
+      timeoutMs: invocation.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
       stdin: Buffer.from(content, 'utf8').toString('base64'),
     });
     if (result.status !== 0) {
@@ -2334,6 +2571,14 @@ function validateInvocation(
     return refuse('VALIDATION_ERROR', 'epoch must be a non-negative integer', ['epoch']);
   }
   return undefined;
+}
+
+/** The optional `argv` a shell input carries; see the `git` tool's plan. */
+function readInputArgv(input: unknown): string[] | undefined {
+  if (typeof input !== 'object' || input === null) return undefined;
+  const argv = (input as Record<string, unknown>)['argv'];
+  if (!Array.isArray(argv) || argv.length === 0) return undefined;
+  return argv.map((token) => String(token));
 }
 
 function readInputString(input: unknown, field: string): string {

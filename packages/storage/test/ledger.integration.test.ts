@@ -328,7 +328,7 @@ describe('project store wiring', () => {
     const freshDir = mkdtempSync(join(tmpdir(), 'agentdev-backup-'));
     const fresh = Store.open({ dataDir: freshDir, canonicalRoot: ROOT });
     try {
-      expect(fresh.migration.applied).toEqual([1]);
+      expect(fresh.migration.applied).toEqual([1, 2]);
       expect(fresh.migration.backupPath).toBe(join(freshDir, 'backups', 'pre-migration-v0.sqlite'));
       expect(existsSync(fresh.migration.backupPath as string)).toBe(true);
     } finally {
@@ -338,7 +338,7 @@ describe('project store wiring', () => {
   });
 
   it('runs migrations on open and exposes repositories', () => {
-    expect(store.migration.applied).toEqual([1]);
+    expect(store.migration.applied).toEqual([1, 2]);
     expect(store.projects.get(projectId).root).toBe(ROOT);
     expect(existsSync(join(dataDir, 'project.sqlite'))).toBe(true);
   });

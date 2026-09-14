@@ -1,3 +1,8 @@
+/**
+ * T3 轮 3 改动人：T3（父代理 session-2bf56aa1）——`controlTools` 现在按 `execution.md` §7
+ * 注册完整角色工具集（专业角色 +`request_dispatch`，Chief +`decision_request`，全角色
+ * +`context_request`），因此本文件两处「控制工具集合」断言随之更新；行为本身未改。
+ */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -70,6 +75,8 @@ function build(
       toolNames: ['agentdev_probe'],
       customTools: [probeTool],
       trusted: true,
+      capability: 'cap-1',
+      controlUrl: 'http://127.0.0.1:1',
       ...overrides,
     },
     {
@@ -121,6 +128,34 @@ function fakeSession(activeTools: string[] = ['agentdev_probe']) {
 }
 
 describe('AttemptRunner', () => {
+  it('activates the role control tools in a real Pi session (chief)', async () => {
+    // Real Pi SDK session (offline catalog, no provider call). Pi 0.85.1 treats `tools` as
+    // the allowlist *and* the initial active set and filters `customTools` through it, so a
+    // runner that passed only the frozen `toolSubset` would silently drop these.
+    const runner = build({ role: 'chief', toolNames: [] });
+    await expect(runner.start()).resolves.toBe(0);
+    const ready = messages().find((message) => message.type === 'attempt.ready');
+    if (ready?.type !== 'attempt.ready') throw new Error('no ready message');
+    expect(ready.tools).toContain('assessment_submit');
+    expect(ready.tools).toContain('agent_dispatch');
+    expect(ready.tools).not.toContain('stage_yield');
+    // Nothing the role owes Core was dropped.
+    expect(ready.droppedTools).toEqual([]);
+    runner.dispose();
+  });
+
+  it('activates only stage_yield for a professional role', async () => {
+    const runner = build({ role: 'backend', toolNames: [] });
+    await expect(runner.start()).resolves.toBe(0);
+    const ready = messages().find((message) => message.type === 'attempt.ready');
+    if (ready?.type !== 'attempt.ready') throw new Error('no ready message');
+    expect(ready.tools).toContain('stage_yield');
+    expect(ready.tools).not.toContain('assessment_submit');
+    expect(ready.tools).not.toContain('agent_dispatch');
+    expect(ready.droppedTools).toEqual([]);
+    runner.dispose();
+  });
+
   it('reports ready with the enforced tool set', async () => {
     const runner = build();
     await expect(runner.start()).resolves.toBe(0);
@@ -129,7 +164,16 @@ describe('AttemptRunner', () => {
     if (ready?.type === 'attempt.ready') {
       expect(ready.attemptId).toBe('attempt-1');
       expect(ready.epoch).toBe(7);
-      expect(ready.tools).toEqual(['agentdev_probe']);
+      // The session's allowlist is the profile subset plus the role's documented control
+      // tools (default role = backend → `stage_yield`, `request_dispatch`,
+      // `context_request`; `execution.md` §7 / T3 轮 3).
+      expect(ready.tools).toEqual([
+        'agentdev_probe',
+        'stage_yield',
+        'request_dispatch',
+        'context_request',
+      ]);
+      expect(ready.droppedTools).toEqual([]);
       expect(ready.modelId).toBe(modelId);
     }
     runner.dispose();
@@ -261,17 +305,25 @@ describe('AttemptRunner', () => {
     expect(error?.type === 'attempt.error' ? error.code : undefined).toBe('UNKNOWN_EXTENSION');
   });
 
-  it('reports requested tools the session did not activate', async () => {
+  it('reports requested tools the session did not activate, including a control tool', async () => {
+    // The scripted session activates only `read`, so both the profile's probe and the role's
+    // control tool count as dropped and the Attempt will be refused by the supervisor.
     const fake = fakeSession(['read']);
     const runner = build(
-      { toolNames: ['agentdev_probe', 'read'] },
+      { toolNames: ['agentdev_probe', 'read'], role: 'chief' },
       { buildSession: () => Promise.resolve(fake.handle) },
     );
     await runner.start();
 
     const ready = messages().find((message) => message.type === 'attempt.ready');
     expect(ready?.type === 'attempt.ready' ? ready.tools : []).toEqual(['read']);
-    expect(ready?.type === 'attempt.ready' ? ready.droppedTools : []).toEqual(['agentdev_probe']);
+    expect(ready?.type === 'attempt.ready' ? ready.droppedTools : []).toEqual([
+      'agentdev_probe',
+      'assessment_submit',
+      'agent_dispatch',
+      'decision_request',
+      'context_request',
+    ]);
     runner.dispose();
   });
 });

@@ -1,0 +1,693 @@
+# WP-12 T6 operations drill
+
+AGENTDEV_HOME=/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3
+project root=/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-repo-u4dou7
+backup dir=/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/backup
+
+seed revision=64a38f66104222ef28613a4dcb7024e131ad8eff
+
+$ agentdev start --root /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-repo-u4dou7
+{
+  "ok": true,
+  "started": true,
+  "home": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3",
+  "pid": 16117,
+  "epoch": 1,
+  "instances": [
+    {
+      "projectId": "4fdf5214606a6c34ce2a6e77a5da096f",
+      "root": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-repo-u4dou7",
+      "daemon": {
+        "host": "127.0.0.1",
+        "port": 4318
+      },
+      "web": {
+        "host": "127.0.0.1",
+        "port": 4317
+      }
+    }
+  ]
+}
+[exit 0]
+
+provider.upsert -> providerId=01a09f74-9ad1-740e-a19f-4b56e67c17ad secretConfigured=false
+config.save -> revision=2
+conversation.message.send -> messageId=01a09f74-9ade-70e2-9a91-f8bbd9bea509 workId=01a09f74-9ade-779f-bc65-f44f47e994e7
+runs -> [{"id":"01a09f74-9b07-71fe-8f18-7a24f3b99b7e","role":"chief","status":"running"}]
+model calls received so far: 0
+
+ok   a real Run is running through the product path — 01a09f74-9b07-71fe-8f18-7a24f3b99b7e
+provider.upsert (with credential) -> providerId=01a09f74-9efd-7fd8-9535-ee44d78fa8ad secretConfigured=true
+
+$ agentdev backup --output /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/backup
+WARNING [PAUSE_NOT_IMPLEMENTED] reliability.md §8 的「暂停 Project / 暂停新集成」在当前 daemon 没有入口；本次备份用 SQLite 在线一致快照（VACUUM INTO）+ 当前知识树 + 交付 ref 的 Git bundle
+WARNING [SECRETS_NOT_BACKED_UP] 凭证值不随备份迁移（仅记录 1 个 secretRef 标识）；恢复后请用 agentdev secret set <ref> 重新录入
+WARNING [PROJECT_OPEN_WHILE_BACKUP] 备份期间 daemon 仍打开着该 Project（pid 16117）；快照一致但知识树取自当时工作树
+{
+  "ok": true,
+  "command": "backup",
+  "operationId": "01a09f74-a0e9-7cca-8a94-e1edeb34a8d6",
+  "backupId": "01a09f74-a048-77e1-bb44-2e8202751d76",
+  "projectId": "4fdf5214606a6c34ce2a6e77a5da096f",
+  "directory": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/backup",
+  "manifestPath": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/backup/backup.json",
+  "repoRoot": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-repo-u4dou7",
+  "deliveryBranch": "agentdev/main",
+  "ref": "refs/heads/agentdev/main",
+  "revision": "64a38f66104222ef28613a4dcb7024e131ad8eff",
+  "tree": "c1a9852eb4d6f8afdd83ca9f916741c2e0617f54",
+  "complete": true,
+  "gitIncluded": true,
+  "files": 4,
+  "knowledgeFiles": 1,
+  "knowledgeTreeHash": "5d283a0a40c113bfb083a0c20a90efbc66ddaecc72cd185cdb845be8c729b51e",
+  "evidence": 0,
+  "secretRefs": [
+    "provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad"
+  ],
+  "installation": {
+    "directory": "installation/",
+    "recordPath": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/backup/installation/installation.json",
+    "configCopied": true,
+    "configPath": "installation/config.toml",
+    "configSha256": "0731244ab293b153e2d93b896983c61af60540e45c57692a70820954067b7d9e",
+    "providers": 1,
+    "containsSecretValues": false
+  },
+  "paused": false,
+  "warnings": [
+    {
+      "code": "PAUSE_NOT_IMPLEMENTED",
+      "message": "reliability.md §8 的「暂停 Project / 暂停新集成」在当前 daemon 没有入口；本次备份用 SQLite 在线一致快照（VACUUM INTO）+ 当前知识树 + 交付 ref 的 Git bundle"
+    },
+    {
+      "code": "SECRETS_NOT_BACKED_UP",
+      "message": "凭证值不随备份迁移（仅记录 1 个 secretRef 标识）；恢复后请用 agentdev secret set <ref> 重新录入"
+    },
+    {
+      "code": "PROJECT_OPEN_WHILE_BACKUP",
+      "message": "备份期间 daemon 仍打开着该 Project（pid 16117）；快照一致但知识树取自当时工作树"
+    }
+  ]
+}
+[exit 0]
+
+ok   backup exited 0
+ok   backup manifest is complete
+ok   backup recorded the delivery revision
+ok   backup recorded the Provider secret identifier, never a value — ["provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad"]
+$ agentdev stop
+{
+  "ok": true,
+  "stopped": true,
+  "home": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3",
+  "pid": 16117
+}
+[exit 0]
+
+ok   stop exited 0
+damaged: removed /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/projects/4fdf5214606a6c34ce2a6e77a5da096f and /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-repo-u4dou7
+ok   installation state is gone
+ok   project data is gone
+$ agentdev restore /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/backup --root /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-repo-u4dou7
+WARNING [TARGET_CONFIG_PRESENT] 目标安装已有 /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/config.toml，未覆盖：安装级 Provider/Profile 定义保持目标现有配置
+{
+  "ok": true,
+  "command": "restore",
+  "operationId": "5abecc3c-bf98-4e48-80c0-4cfdbb5157f7",
+  "backupId": "01a09f74-a048-77e1-bb44-2e8202751d76",
+  "backup": {
+    "directory": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/backup",
+    "createdAt": "2026-09-14T10:26:55.848Z",
+    "revision": "64a38f66104222ef28613a4dcb7024e131ad8eff",
+    "tree": "c1a9852eb4d6f8afdd83ca9f916741c2e0617f54"
+  },
+  "projectId": "4fdf5214606a6c34ce2a6e77a5da096f",
+  "repoRoot": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-repo-u4dou7",
+  "dataDir": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/projects/4fdf5214606a6c34ce2a6e77a5da096f",
+  "revision": "64a38f66104222ef28613a4dcb7024e131ad8eff",
+  "tree": "c1a9852eb4d6f8afdd83ca9f916741c2e0617f54",
+  "status": "ready",
+  "consistency": {
+    "filesVerified": 4,
+    "blobsVerified": 1,
+    "knowledgeVerified": 1,
+    "evidenceVerified": 0,
+    "treeMatches": true,
+    "knowledgeMatchesTree": true
+  },
+  "recovery": {
+    "parked": [
+      {
+        "runId": "01a09f74-9b07-71fe-8f18-7a24f3b99b7e",
+        "from": "running",
+        "to": "interrupted",
+        "path": [
+          "running",
+          "interrupted"
+        ]
+      }
+    ],
+    "interruptedRunIds": [
+      "01a09f74-9b07-71fe-8f18-7a24f3b99b7e"
+    ],
+    "revokedLeases": 0,
+    "revokedGrants": 0
+  },
+  "doctor": {
+    "ok": true,
+    "checks": [
+      {
+        "name": "project-row",
+        "ok": true,
+        "detail": "project 4fdf5214606a6c34ce2a6e77a5da096f"
+      },
+      {
+        "name": "state-directory",
+        "ok": true,
+        "detail": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/projects/4fdf5214606a6c34ce2a6e77a5da096f"
+      },
+      {
+        "name": "sqlite-integrity",
+        "ok": true,
+        "detail": "ok"
+      },
+      {
+        "name": "delivery-ref",
+        "ok": true,
+        "detail": "64a38f66104222ef28613a4dcb7024e131ad8eff"
+      },
+      {
+        "name": "tree-binding",
+        "ok": true,
+        "detail": "64a38f66104222ef28613a4dcb7024e131ad8eff tree c1a9852eb4d6f8afdd83ca9f916741c2e0617f54"
+      },
+      {
+        "name": "knowledge-clean",
+        "ok": true,
+        "detail": "知识文件与提交树一致"
+      },
+      {
+        "name": "evidence",
+        "ok": true,
+        "detail": "0/0 证据 blob 校验通过"
+      },
+      {
+        "name": "leases-revoked",
+        "ok": true,
+        "detail": "无残留租约"
+      },
+      {
+        "name": "capabilities-revoked",
+        "ok": true,
+        "detail": "无未消费 Grant"
+      }
+    ],
+    "executionReady": true
+  },
+  "provider": {
+    "blocked": false,
+    "missingSecretRefs": []
+  },
+  "installation": {
+    "configRestored": false,
+    "configPath": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/config.toml",
+    "providers": [
+      {
+        "providerId": "01a09f74-9ad1-740e-a19f-4b56e67c17ad",
+        "enabled": true,
+        "models": [
+          "t6-drill-model"
+        ]
+      },
+      {
+        "providerId": "01a09f74-9efd-7fd8-9535-ee44d78fa8ad",
+        "enabled": true,
+        "models": [
+          "t6-drill-model-2"
+        ],
+        "secretRef": "provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad"
+      }
+    ],
+    "secretRefs": [
+      "provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad"
+    ],
+    "resolvableSecretRefs": [
+      "provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad"
+    ],
+    "containsSecretValues": false,
+    "notes": [
+      "TARGET_CONFIG_PRESENT"
+    ]
+  },
+  "registryUpdated": true,
+  "daemonOpenable": true,
+  "nextSteps": [],
+  "warnings": [
+    {
+      "code": "TARGET_CONFIG_PRESENT",
+      "message": "目标安装已有 /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/config.toml，未覆盖：安装级 Provider/Profile 定义保持目标现有配置"
+    }
+  ]
+}
+[exit 0]
+
+ok   restore exited 0
+ok   restore reports ready
+ok   restore marks the previously active Run interrupted — ["01a09f74-9b07-71fe-8f18-7a24f3b99b7e"]
+ok   restore passed its doctor
+ok   restore verified the tree against the manifest
+ok   restore rewrote the installation root mapping
+restore recovery: interrupted=["01a09f74-9b07-71fe-8f18-7a24f3b99b7e"] revokedLeases=0 revokedGrants=0
+ok   restored Git revision matches the backup — 64a38f66104222ef28613a4dcb7024e131ad8eff
+ok   restored Run row is interrupted — interrupted
+ok   restored installation keeps its Work row
+ok   restored installation has no live lease
+ok   restored installation has no unconsumed Grant
+ok   restored installation carries the original rows (project, work, message) — projects=1 works=1 messages=1
+$ agentdev start
+{
+  "ok": true,
+  "started": true,
+  "home": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3",
+  "pid": 22699,
+  "epoch": 1,
+  "instances": [
+    {
+      "projectId": "4fdf5214606a6c34ce2a6e77a5da096f",
+      "root": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-repo-u4dou7",
+      "daemon": {
+        "host": "127.0.0.1",
+        "port": 4318
+      },
+      "web": {
+        "host": "127.0.0.1",
+        "port": 4317
+      }
+    }
+  ]
+}
+[exit 0]
+
+ok   daemon starts on the restored installation
+$ agentdev status
+{
+  "ok": true,
+  "running": true,
+  "home": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3",
+  "runtime": {
+    "v": 1,
+    "pid": 22699,
+    "epoch": 1,
+    "startedAt": "2026-09-14T10:26:58.249Z",
+    "version": "0.1.0",
+    "home": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3",
+    "admin": {
+      "host": "127.0.0.1",
+      "port": 61693
+    },
+    "instances": [
+      {
+        "projectId": "4fdf5214606a6c34ce2a6e77a5da096f",
+        "root": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-repo-u4dou7",
+        "daemon": {
+          "host": "127.0.0.1",
+          "port": 4318
+        },
+        "web": {
+          "host": "127.0.0.1",
+          "port": 4317
+        }
+      }
+    ]
+  },
+  "health": {
+    "ok": true,
+    "ready": true,
+    "version": "0.1.0",
+    "epoch": 1,
+    "pid": 22699,
+    "projects": 1,
+    "execution": {
+      "enabled": true,
+      "live": 0
+    }
+  }
+}
+[exit 0]
+
+ok   status reports the restored Project open
+$ agentdev doctor
+agentdev doctor
+ok   node       24.8.0 (expected >= 24.0.0)
+ok   pnpm       12.3.4 (expected 12.3.4) [/Users/huyaohua/.local/bin/pnpm]
+ok   git        git version 2.39.3 (Apple Git-146)
+ok   pi-sdk     0.85.1 (expected 0.85.1) [/Users/huyaohua/huyh/work/aigrouptool/packages/pi-runtime/node_modules/@earendil-works/pi-coding-agent/package.json]
+ok   docker     28.4.0 (expected docker daemon reachable) [image agentdev/exec:0.0.0 sha256:edd3aa5051c7 digest agentdev/exec@sha256:edd3aa5051c78b213fda3115b701110e109d857b6ff3d2e20ae23f4f4a685676]
+ok   dir        /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3
+ok   dir        /Users/huyaohua/huyh/work/aigrouptool
+info port       4317 in use
+info port       4318 in use
+ok   runtime      /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3 — credential ok, running pid 22699 epoch 1 with 1 project(s)
+execution ready: yes
+[exit 0]
+
+doctor exit 0 (env probe)
+
+$ agentdev stop
+{
+  "ok": true,
+  "stopped": true,
+  "home": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3",
+  "pid": 22699
+}
+[exit 0]
+
+$ agentdev restore /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/backup --root /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-fresh-repo-NzBlQX/repo
+WARNING [PROVIDER_BLOCKED] 缺少 Provider Secret：provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad；恢复已完成（status=blocked），凭证不在备份中（reliability.md §8），Provider 保持阻断，请重新录入：agentdev secret set provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad（值从 stdin 读入）
+WARNING [ROOT_DIFFERS_FROM_BACKUP] 目标 root 与备份记录的 canonical root 不同：projectId 由 canonical root 派生（ARCHITECTURE.md §4），daemon 在 --root 处会派生新的 projectId 与状态目录，本次恢复因此未写安装级 root 映射（跨 root 迁移由「项目身份持久化」切片关闭）
+{
+  "ok": true,
+  "command": "restore",
+  "operationId": "e18359f2-d9ad-41d0-b75c-1dbf5cb4a013",
+  "backupId": "01a09f74-a048-77e1-bb44-2e8202751d76",
+  "backup": {
+    "directory": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/backup",
+    "createdAt": "2026-09-14T10:26:55.848Z",
+    "revision": "64a38f66104222ef28613a4dcb7024e131ad8eff",
+    "tree": "c1a9852eb4d6f8afdd83ca9f916741c2e0617f54"
+  },
+  "projectId": "4fdf5214606a6c34ce2a6e77a5da096f",
+  "repoRoot": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-fresh-repo-NzBlQX/repo",
+  "dataDir": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-fresh-home-nYAT7d/projects/4fdf5214606a6c34ce2a6e77a5da096f",
+  "revision": "64a38f66104222ef28613a4dcb7024e131ad8eff",
+  "tree": "c1a9852eb4d6f8afdd83ca9f916741c2e0617f54",
+  "status": "blocked",
+  "consistency": {
+    "filesVerified": 4,
+    "blobsVerified": 1,
+    "knowledgeVerified": 1,
+    "evidenceVerified": 0,
+    "treeMatches": true,
+    "knowledgeMatchesTree": true
+  },
+  "recovery": {
+    "parked": [
+      {
+        "runId": "01a09f74-9b07-71fe-8f18-7a24f3b99b7e",
+        "from": "running",
+        "to": "interrupted",
+        "path": [
+          "running",
+          "interrupted"
+        ]
+      }
+    ],
+    "interruptedRunIds": [
+      "01a09f74-9b07-71fe-8f18-7a24f3b99b7e"
+    ],
+    "revokedLeases": 0,
+    "revokedGrants": 0
+  },
+  "doctor": {
+    "ok": true,
+    "checks": [
+      {
+        "name": "project-row",
+        "ok": true,
+        "detail": "project 4fdf5214606a6c34ce2a6e77a5da096f"
+      },
+      {
+        "name": "state-directory",
+        "ok": true,
+        "detail": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-fresh-home-nYAT7d/projects/4fdf5214606a6c34ce2a6e77a5da096f"
+      },
+      {
+        "name": "sqlite-integrity",
+        "ok": true,
+        "detail": "ok"
+      },
+      {
+        "name": "delivery-ref",
+        "ok": true,
+        "detail": "64a38f66104222ef28613a4dcb7024e131ad8eff"
+      },
+      {
+        "name": "tree-binding",
+        "ok": true,
+        "detail": "64a38f66104222ef28613a4dcb7024e131ad8eff tree c1a9852eb4d6f8afdd83ca9f916741c2e0617f54"
+      },
+      {
+        "name": "knowledge-clean",
+        "ok": true,
+        "detail": "知识文件与提交树一致"
+      },
+      {
+        "name": "evidence",
+        "ok": true,
+        "detail": "0/0 证据 blob 校验通过"
+      },
+      {
+        "name": "leases-revoked",
+        "ok": true,
+        "detail": "无残留租约"
+      },
+      {
+        "name": "capabilities-revoked",
+        "ok": true,
+        "detail": "无未消费 Grant"
+      }
+    ],
+    "executionReady": false
+  },
+  "provider": {
+    "blocked": true,
+    "missingSecretRefs": [
+      "provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad"
+    ]
+  },
+  "installation": {
+    "configRestored": true,
+    "configPath": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-fresh-home-nYAT7d/config.toml",
+    "providers": [
+      {
+        "providerId": "01a09f74-9ad1-740e-a19f-4b56e67c17ad",
+        "enabled": true,
+        "models": [
+          "t6-drill-model"
+        ]
+      },
+      {
+        "providerId": "01a09f74-9efd-7fd8-9535-ee44d78fa8ad",
+        "enabled": true,
+        "models": [
+          "t6-drill-model-2"
+        ],
+        "secretRef": "provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad"
+      }
+    ],
+    "secretRefs": [
+      "provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad"
+    ],
+    "resolvableSecretRefs": [],
+    "containsSecretValues": false,
+    "notes": []
+  },
+  "registryUpdated": false,
+  "daemonOpenable": false,
+  "nextSteps": [
+    "agentdev secret set provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad   # 值从 stdin 读入"
+  ],
+  "warnings": [
+    {
+      "code": "PROVIDER_BLOCKED",
+      "message": "缺少 Provider Secret：provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad；恢复已完成（status=blocked），凭证不在备份中（reliability.md §8），Provider 保持阻断，请重新录入：agentdev secret set provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad（值从 stdin 读入）"
+    },
+    {
+      "code": "ROOT_DIFFERS_FROM_BACKUP",
+      "message": "目标 root 与备份记录的 canonical root 不同：projectId 由 canonical root 派生（ARCHITECTURE.md §4），daemon 在 --root 处会派生新的 projectId 与状态目录，本次恢复因此未写安装级 root 映射（跨 root 迁移由「项目身份持久化」切片关闭）"
+    }
+  ]
+}
+[exit 0]
+
+ok   a restore without the credential is blocked, not failed
+ok   the blocked restore reports the Provider blocked
+ok   the blocked restore names the ref the operator must re-enter — ["agentdev secret set provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad   # 值从 stdin 读入"]
+ok   the blocked Provider is a leading stdout warning line — WARNING [PROVIDER_BLOCKED] 缺少 Provider Secret：provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad；恢复已完成（status=blocked），凭证不在备份中（reliability.md §8），Provider 保持阻断，请重新录入：agentdev secret set provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad（值从 stdin 读入）
+ok   the backup carries the Provider definition into the fresh installation — [{"providerId":"01a09f74-9ad1-740e-a19f-4b56e67c17ad","enabled":true,"models":["t6-drill-model"]},{"providerId":"01a09f74-9efd-7fd8-9535-ee44d78fa8ad","enabled":true,"models":["t6-drill-model-2"],"secretRef":"provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad"}]
+ok   no credential value reached the backup or the fresh installation
+$ agentdev secret set provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad
+{
+  "ok": true,
+  "path": "repository",
+  "backend": "file",
+  "ref": "provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad",
+  "configured": true,
+  "updatedAt": "2026-09-14T10:27:02.354Z"
+}
+[exit 0]
+
+ok   the credential can be re-entered from stdin
+$ agentdev secret rotate provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad
+{
+  "ok": true,
+  "command": "secret rotate",
+  "path": "repository",
+  "ref": "provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad",
+  "backend": "file",
+  "rotated": true,
+  "previousUpdatedAt": "2026-09-14T10:27:02.354Z",
+  "updatedAt": "2026-09-14T10:27:02.700Z",
+  "atomicSwap": true,
+  "affected": {
+    "secretRef": "provider:01a09f74-9efd-7fd8-9535-ee44d78fa8ad",
+    "providers": [
+      {
+        "providerId": "01a09f74-9efd-7fd8-9535-ee44d78fa8ad",
+        "models": [
+          "t6-drill-model-2"
+        ]
+      }
+    ]
+  },
+  "capabilities": {
+    "revoked": 0,
+    "note": "rotate 只替换凭证值：下一次 gateway 调用即解析到新值（daemon 运行时经 POST /secret 立即生效，否则下次 start 装载）。已签发的短期 attempt capability 与冻结的 ConfigSnapshot 不会被撤销，也不会改指其它 ref；需要立即阻断请禁用 Provider 或 agentdev secret delete <ref>"
+  }
+}
+[exit 0]
+
+ok   the credential can be rotated in place — {"revoked":0,"note":"rotate 只替换凭证值：下一次 gateway 调用即解析到新值（daemon 运行时经 POST /secret 立即生效，否则下次 start 装载）。已签发的短期 attempt capability 与冻结的 ConfigSnapshot 不会被撤销，也不会改指其它 ref；需要立即阻断请禁用 Provider 或 agentdev secret delete <ref>"}
+ok   rotation never prints either value
+$ agentdev stop
+{
+  "ok": true,
+  "stopped": true,
+  "already": true,
+  "home": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3"
+}
+[exit 0]
+
+$ agentdev relocate 4fdf5214606a6c34ce2a6e77a5da096f --root /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-repo-u4dou7-moved --move
+{"ok":false,"error":{"code":"PROJECT_IDENTITY_MOVE_UNSUPPORTED","message":"拒绝跨 root 迁移：projectId 由 canonical root 派生（ARCHITECTURE.md §4），目标 /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-repo-u4dou7-moved 会派生 5c1f91bd9f538e222feb5c245dd1742c ≠ 当前 4fdf5214606a6c34ce2a6e77a5da096f；当前 runtime 尚不支持迁移 Project 身份，daemon 会把迁移后的根当成一个新安装打开而让 /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/projects/4fdf5214606a6c34ce2a6e77a5da096f 成为孤儿。relocate 只接受派生同一 projectId 的目标（例如指向同一 canonical root 的别名路径）","details":{"projectId":"4fdf5214606a6c34ce2a6e77a5da096f","previousRoot":"/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-repo-u4dou7","newRoot":"/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-repo-u4dou7-moved","derivedProjectId":"5c1f91bd9f538e222feb5c245dd1742c","hint":"把仓库保持在原 canonical root、把状态目录保留在 ~/.agentdev/projects/<projectId>；跨 root 迁移由「项目身份持久化」切片关闭"}},"operationId":"931bff79-dd6c-45fb-a13b-8dfc67cb9818"}
+[exit 1]
+
+ok   relocate fails closed on a cross-root move (typed refusal) — PROJECT_IDENTITY_MOVE_UNSUPPORTED
+ok   the refused relocate moved nothing and rewrote no mapping
+ok   the installation registry still points at the original root — ["/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-repo-u4dou7"]
+$ agentdev relocate 4fdf5214606a6c34ce2a6e77a5da096f --root /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-alias-X32ni3/repo-alias
+{
+  "ok": true,
+  "command": "relocate",
+  "operationId": "39973ebc-2d2a-4a11-8b7a-76e5db4da903",
+  "projectId": "4fdf5214606a6c34ce2a6e77a5da096f",
+  "previousRoot": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-repo-u4dou7",
+  "repoRoot": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-alias-X32ni3/repo-alias",
+  "dataDir": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/projects/4fdf5214606a6c34ce2a6e77a5da096f",
+  "derivedProjectId": "4fdf5214606a6c34ce2a6e77a5da096f",
+  "identityPreserved": true,
+  "daemonOpenable": true,
+  "registryUpdated": true,
+  "registryPath": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/projects.json",
+  "recovery": {
+    "parked": [],
+    "interruptedRunIds": [],
+    "revokedLeases": 0,
+    "revokedGrants": 0
+  },
+  "doctor": {
+    "ok": true,
+    "checks": [
+      {
+        "name": "project-row",
+        "ok": true,
+        "detail": "project 4fdf5214606a6c34ce2a6e77a5da096f"
+      },
+      {
+        "name": "state-directory",
+        "ok": true,
+        "detail": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3/projects/4fdf5214606a6c34ce2a6e77a5da096f"
+      },
+      {
+        "name": "sqlite-integrity",
+        "ok": true,
+        "detail": "ok"
+      },
+      {
+        "name": "delivery-ref",
+        "ok": true,
+        "detail": "64a38f66104222ef28613a4dcb7024e131ad8eff"
+      },
+      {
+        "name": "tree-binding",
+        "ok": true,
+        "detail": "64a38f66104222ef28613a4dcb7024e131ad8eff tree c1a9852eb4d6f8afdd83ca9f916741c2e0617f54"
+      },
+      {
+        "name": "knowledge-clean",
+        "ok": true,
+        "detail": "知识文件与提交树一致"
+      },
+      {
+        "name": "evidence",
+        "ok": true,
+        "detail": "0/0 证据 blob 校验通过"
+      },
+      {
+        "name": "leases-revoked",
+        "ok": true,
+        "detail": "无残留租约"
+      },
+      {
+        "name": "capabilities-revoked",
+        "ok": true,
+        "detail": "无未消费 Grant"
+      }
+    ],
+    "executionReady": true
+  },
+  "warnings": []
+}
+[exit 0]
+
+ok   relocate accepts a target that resolves to the same canonical root
+$ agentdev start
+{
+  "ok": true,
+  "started": true,
+  "home": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3",
+  "pid": 29117,
+  "epoch": 1,
+  "instances": [
+    {
+      "projectId": "4fdf5214606a6c34ce2a6e77a5da096f",
+      "root": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-repo-u4dou7",
+      "daemon": {
+        "host": "127.0.0.1",
+        "port": 4318
+      },
+      "web": {
+        "host": "127.0.0.1",
+        "port": 4317
+      }
+    }
+  ]
+}
+[exit 0]
+
+ok   the daemon starts on the identity-preserving installation
+ok   the migrated state still carries its rows (works=1, Run interrupted) — works=1 run=interrupted
+$ agentdev stop
+{
+  "ok": true,
+  "stopped": true,
+  "home": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t6-home-spmpE3",
+  "pid": 29117
+}
+[exit 0]
+
+
+model calls total: 0
+
+DRILL PASS

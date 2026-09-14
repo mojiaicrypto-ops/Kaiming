@@ -22,12 +22,14 @@ import {
   type RunnerMessage,
 } from '@agentdev/contracts';
 import { ProjectStore, projectIdFromRoot } from '@agentdev/storage';
+import { scanEvents } from '../src/events.js';
 import {
   RunnerSupervisor,
   RunLifecycle,
   RunRecoveryService,
   createMemoryProcessProbe,
   newAttemptAdmission,
+  type AttemptResultInput,
   type PrepareRunInput,
   type RunnerProcessPort,
   type RunnerSpawnInput,
@@ -127,7 +129,9 @@ function spawnPort(): { spawn(input: RunnerSpawnInput): RunnerProcessPort } {
 }
 
 /** Seeds a queued Run directly, as the dispatcher would have. */
-function queueRun(options: { role?: 'chief' | 'backend'; workId?: string } = {}): string {
+function queueRun(
+  options: { role?: 'chief' | 'backend'; workId?: string; workStatus?: 'queued' | 'running' } = {},
+): string {
   const workId = options.workId ?? store.newId();
   const budget = store.budgets.insert({
     projectId,
@@ -150,7 +154,7 @@ function queueRun(options: { role?: 'chief' | 'backend'; workId?: string } = {})
     goal: 'seed',
     scope: { readPaths: [], writePaths: [], operations: [], networkTargets: [] },
     sourceRef: { kind: 'action', id: store.newId(), version: '1' },
-    status: 'running',
+    status: options.workStatus ?? 'running',
     blockerIds: [],
     baseRevision: 'a'.repeat(40),
     budgetId: budget.id,
@@ -240,7 +244,9 @@ describe('RunnerSupervisor claiming', () => {
     expect(runner.input.invocation.capability).toBe(`cap-${runner.input.attempt.id}`);
 
     const run = store.runs.find(runId);
-    expect(run?.status).toBe('running');
+    // The Run is persisted as `starting`; `ready` is what confirms it is Running
+    // (`reliability.md` §2, WP-12 T8a).
+    expect(run?.status).toBe('starting');
     const attempt = store.attempts.find(runner.input.attempt.id);
     expect(attempt?.status).toBe('starting');
     // The identity is rewritten with the *child* pid after the spawn, in the `pid:<n>`
@@ -263,6 +269,214 @@ describe('RunnerSupervisor claiming', () => {
     expect(runner.lastCommand).toMatchObject({ type: 'attempt.prompt', text: `goal for ${runId}` });
   });
 
+  it('reports the Run as starting until the Runner confirms ready (reliability.md §2)', () => {
+    const runId = queueRun();
+    expect(supervisor.tick().claimed).toEqual([runId]);
+    const runner = FakeRunner.spawned[0];
+    if (runner === undefined) throw new Error('unreachable');
+
+    // The state is persisted before the process starts, but the Run is not Running yet:
+    // `ready` confirms epoch/process/environment first, and until then the Run must not
+    // claim more than what happened (WP-12 T8a; `reliability.md` §2).
+    expect(store.runs.find(runId)?.status).toBe('starting');
+    expect(store.attempts.find(runner.input.attempt.id)?.status).toBe('starting');
+    expect(scanEvents(store, { names: ['run.started'] })).toHaveLength(0);
+
+    probe.setAlive(`pid:${String(runner.pid)}`, true);
+    runner.emit({
+      type: 'attempt.ready',
+      sessionId: 'session-1',
+      provider: 'stub',
+      modelId: 'stub-model',
+      tools: ['read', 'edit'],
+      droppedTools: [],
+    });
+    expect(store.runs.find(runId)?.status).toBe('running');
+    expect(scanEvents(store, { names: ['run.started'] })).toHaveLength(1);
+  });
+
+  it('moves its Work queued → running when the first Run really runs (workflow.md §5.1)', () => {
+    const runId = queueRun({ workStatus: 'queued' });
+    const run = store.runs.find(runId);
+    if (run === undefined) throw new Error('unreachable');
+    expect(supervisor.tick().claimed).toEqual([runId]);
+    const runner = FakeRunner.spawned[0];
+    if (runner === undefined) throw new Error('unreachable');
+
+    // A process exists but has confirmed nothing, so the Work is not being executed yet.
+    expect(store.works.find(run.workId)?.status).toBe('queued');
+
+    probe.setAlive(`pid:${String(runner.pid)}`, true);
+    runner.emit({
+      type: 'attempt.ready',
+      sessionId: 'session-1',
+      provider: 'stub',
+      modelId: 'stub-model',
+      tools: ['read', 'edit'],
+      droppedTools: [],
+    });
+    // Without this edge the Work would stay `queued` for the whole execution — the board
+    // would show finished work as still waiting — and jump straight to `completed` at
+    // settlement.
+    expect(store.works.find(run.workId)?.status).toBe('running');
+    const published = scanEvents(store, { names: ['work.control_changed'] });
+    expect(published).toHaveLength(1);
+    expect(published[0]?.data).toMatchObject({
+      workId: run.workId,
+      control: 'start',
+      previousStatus: 'queued',
+      status: 'running',
+    });
+  });
+
+  it('publishes no work.control_changed for a Work that is already running', () => {
+    const runId = queueRun();
+    const run = store.runs.find(runId);
+    if (run === undefined) throw new Error('unreachable');
+    expect(store.works.find(run.workId)?.status).toBe('running');
+    expect(supervisor.tick().claimed).toEqual([runId]);
+    const runner = FakeRunner.spawned[0];
+    if (runner === undefined) throw new Error('unreachable');
+
+    probe.setAlive(`pid:${String(runner.pid)}`, true);
+    runner.emit({
+      type: 'attempt.ready',
+      sessionId: 'session-1',
+      provider: 'stub',
+      modelId: 'stub-model',
+      tools: ['read', 'edit'],
+      droppedTools: [],
+    });
+    expect(store.works.find(run.workId)?.status).toBe('running');
+    expect(scanEvents(store, { names: ['work.control_changed'] })).toHaveLength(0);
+  });
+
+  it('parks a spawn failure as a resumable Run instead of a dead end (WP11R5-03)', () => {
+    let failing = true;
+    const flaky = new RunnerSupervisor({
+      store,
+      spawn: {
+        spawn: (input) => {
+          // The real failure modes: `spawn` ENOENT/EAGAIN, or a prepare that throws before
+          // any process exists (the Runner binary is missing, the attempt directory cannot
+          // be written).
+          if (failing) throw new Error('spawn ENOENT');
+          return spawnPort().spawn(input);
+        },
+      },
+      prepare: invocation,
+      recovery: new RunRecoveryService({ store, probe, now: () => new Date(clock).toISOString() }),
+      lifecycle: new RunLifecycle({ store }),
+      now,
+      tickMs: 60_000,
+      log: () => undefined,
+    });
+    const runId = queueRun();
+    expect(flaky.tick().claimed).toEqual([]);
+    // No Runner ever existed, so there is no unconfirmed side effect: the honest park is
+    // the documented resumable `interrupted`, never a `recovery_required` that no operator
+    // action can lift (the failed Attempt is the preserved evidence).
+    expect(store.runs.find(runId)?.status).toBe('interrupted');
+    const attempts = store.attempts.list({ where: 'run_id = ?', params: [runId] });
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]?.status).toBe('failed');
+    expect(newAttemptAdmission(store, runId)).toMatchObject({ allowed: true });
+
+    // The operator's resume opens the next Attempt and the real spawn adopts it.
+    failing = false;
+    const resumed = flaky.resumeParkedRun(runId);
+    expect(resumed.ok).toBe(true);
+    expect(store.attempts.list({ where: 'run_id = ?', params: [runId] })).toHaveLength(2);
+    // The reopened Run is `starting` until its Runner reports ready (`reliability.md` §2).
+    expect(store.runs.find(runId)?.status).toBe('starting');
+  });
+
+  it('parks a prepare failure as a resumable Run', () => {
+    let failing = true;
+    const flaky = new RunnerSupervisor({
+      store,
+      spawn: spawnPort(),
+      prepare: (input) => {
+        if (failing) throw new Error('attempt directory is not writable');
+        return invocation(input);
+      },
+      recovery: new RunRecoveryService({ store, probe, now: () => new Date(clock).toISOString() }),
+      lifecycle: new RunLifecycle({ store }),
+      now,
+      tickMs: 60_000,
+      log: () => undefined,
+    });
+    const runId = queueRun();
+    expect(flaky.tick().claimed).toEqual([]);
+    expect(store.runs.find(runId)?.status).toBe('interrupted');
+    expect(store.attempts.list({ where: 'run_id = ?', params: [runId] })[0]?.status).toBe('failed');
+
+    failing = false;
+    expect(flaky.resumeParkedRun(runId).ok).toBe(true);
+    expect(store.attempts.list({ where: 'run_id = ?', params: [runId] })).toHaveLength(2);
+  });
+
+  it('never claims "no process" when the failure happens after the spawn', () => {
+    const runId = queueRun();
+    const broken = new RunnerSupervisor({
+      store,
+      spawn: {
+        spawn: (input) => {
+          const runner = new FakeRunner(input, 40_000);
+          // The process exists but its message channel cannot be registered.
+          runner.onMessage = () => {
+            throw new Error('broken pipe');
+          };
+          FakeRunner.spawned.push(runner);
+          return runner;
+        },
+      },
+      prepare: invocation,
+      recovery: new RunRecoveryService({ store, probe, now: () => new Date(clock).toISOString() }),
+      lifecycle: new RunLifecycle({ store }),
+      now,
+      tickMs: 60_000,
+      log: () => undefined,
+    });
+    broken.tick();
+    const runner = FakeRunner.spawned[0];
+    if (runner === undefined) throw new Error('unreachable');
+    // A real child was created, so the park must be the ordinary recovery one: the probe
+    // reports it unknown, the verdict withholds a new Attempt, and no `neverStarted` fact
+    // is recorded (`WP-12 T8a`).
+    expect(runner.signals).toContain('SIGTERM');
+    expect(store.runs.find(runId)?.status).toBe('interrupted');
+    const verdicts = scanEvents(store, { names: ['run.recovered'] });
+    expect(verdicts).toHaveLength(1);
+    expect(verdicts[0]?.data['neverStarted']).toBeUndefined();
+    expect(newAttemptAdmission(store, runId).allowed).toBe(false);
+  });
+
+  it('parks a Run whose Runner reports a completed result before `ready` (T8b P2-1)', () => {
+    const runId = queueRun();
+    supervisor.tick();
+    const runner = FakeRunner.spawned[0];
+    if (runner === undefined) throw new Error('unreachable');
+    // A non-compliant Runner — or the `attempt.ready` line being dropped by the IPC framing
+    // layer — delivers `completed` while the Run is still `starting`. Settling that is
+    // refused by `RUN_TRANSITIONS` (`starting` has no `completed` edge) and the refusal used
+    // to be swallowed by `guarded`, leaving the Run stranded in `starting` with no live
+    // Attempt and no action that could pick it up again (T8b P2-1).
+    runner.emit({ type: 'attempt.result', status: 'completed', message: 'done too early' });
+
+    expect(store.runs.find(runId)?.status).toBe('interrupted');
+    expect(store.attempts.find(runner.input.attempt.id)?.status).toBe('failed');
+    expect(supervisor.liveAttempts()).toHaveLength(0);
+    // Not stranded: once the old process is confirmed gone, the operator's decision lets the
+    // Run open the next Attempt (`newAttemptAdmission` requires the decision to post-date the
+    // park verdict, so the injected clock moves one tick).
+    probe.setAlive(`pid:${String(runner.pid)}`, false);
+    clock += 1_000;
+    expect(supervisor.recordResumeDecision(runId).ok).toBe(true);
+    expect(supervisor.resumeParkedRun(runId).ok).toBe(true);
+    expect(store.attempts.list({ where: 'run_id = ?', params: [runId] })).toHaveLength(2);
+  });
+
   it('parks the Run when the Attempt cannot start (dropped tools)', () => {
     const runId = queueRun();
     supervisor.tick();
@@ -278,8 +492,14 @@ describe('RunnerSupervisor claiming', () => {
     });
     expect(store.attempts.find(runner.input.attempt.id)?.status).toBe('failed');
     // The Attempt never reported a result, so the Run is parked from its real state
-    // (`WP11R1-04`); a fake pid cannot be confirmed dead, so a decision is required.
-    expect(store.runs.find(runId)?.status).toBe('recovery_required');
+    // (`WP11R1-04`); a fake pid cannot be confirmed dead, so a decision is required. The
+    // Run never left `starting`, and `RUN_TRANSITIONS` has no `starting → recovery_required`
+    // edge, so the park is `interrupted` with the withheld verdict (`recovery.ts`).
+    expect(store.runs.find(runId)?.status).toBe('interrupted');
+    expect(newAttemptAdmission(store, runId)).toMatchObject({
+      allowed: false,
+      requiresRecoveryDecision: true,
+    });
     expect(supervisor.liveAttempts()).toHaveLength(0);
   });
 
@@ -300,6 +520,180 @@ describe('RunnerSupervisor claiming', () => {
     expect(store.attempts.find(runner.input.attempt.id)?.status).toBe('completed');
     expect(store.runs.find(runId)?.status).toBe('completed');
     expect(supervisor.liveAttempts()).toHaveLength(0);
+  });
+
+  it('accumulates the assistant text and hands it to the result handler', () => {
+    const seen: AttemptResultInput[] = [];
+    const withHandler = new RunnerSupervisor({
+      store,
+      spawn: spawnPort(),
+      prepare: invocation,
+      recovery: new RunRecoveryService({ store, probe, now: () => new Date(clock).toISOString() }),
+      lifecycle: new RunLifecycle({ store }),
+      now,
+      tickMs: 60_000,
+      onAttemptResult: (input) => {
+        seen.push(input);
+        return undefined;
+      },
+      log: () => undefined,
+    });
+    const runId = queueRun({ role: 'chief' });
+    withHandler.tick();
+    const runner = FakeRunner.spawned[0];
+    if (runner === undefined) throw new Error('unreachable');
+    runner.emit({
+      type: 'attempt.ready',
+      sessionId: 'session-1',
+      provider: 'stub',
+      modelId: 'stub-model',
+      tools: [],
+      droppedTools: [],
+    });
+    runner.emit({
+      type: 'attempt.event',
+      seq: 0,
+      event: { type: 'text_delta', delta: '{"intent":' },
+    });
+    runner.emit({
+      type: 'attempt.event',
+      seq: 1,
+      event: { type: 'text_delta', delta: '"delivery"}' },
+    });
+    runner.emit({ type: 'attempt.event', seq: 2, event: { type: 'tool_start', toolName: 'read' } });
+    runner.emit({ type: 'attempt.result', status: 'completed', message: 'done' });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      runId,
+      role: 'chief',
+      status: 'completed',
+      text: '{"intent":"delivery"}',
+      submitted: false,
+      corrections: 0,
+    });
+    expect(store.runs.find(runId)?.status).toBe('completed');
+  });
+
+  it('asks for one corrective prompt, then settles the second result', () => {
+    const seen: AttemptResultInput[] = [];
+    const withHandler = new RunnerSupervisor({
+      store,
+      spawn: spawnPort(),
+      prepare: invocation,
+      recovery: new RunRecoveryService({ store, probe, now: () => new Date(clock).toISOString() }),
+      lifecycle: new RunLifecycle({ store }),
+      now,
+      tickMs: 60_000,
+      onAttemptResult: (input) => {
+        seen.push(input);
+        return 'Submit through stage_yield; plain text does not deliver.';
+      },
+      log: () => undefined,
+    });
+    const runId = queueRun({ role: 'backend' });
+    withHandler.tick();
+    const runner = FakeRunner.spawned[0];
+    if (runner === undefined) throw new Error('unreachable');
+    runner.emit({
+      type: 'attempt.ready',
+      sessionId: 'session-1',
+      provider: 'stub',
+      modelId: 'stub-model',
+      tools: [],
+      droppedTools: [],
+    });
+    runner.emit({
+      type: 'attempt.event',
+      seq: 0,
+      event: { type: 'text_delta', delta: 'first answer' },
+    });
+    runner.emit({ type: 'attempt.result', status: 'completed', message: 'done' });
+    // The Attempt stays live and is steered instead of settling the Run.
+    expect(store.runs.find(runId)?.status).toBe('running');
+    expect(withHandler.liveAttempts()).toHaveLength(1);
+    expect(runner.lastCommand).toMatchObject({
+      type: 'attempt.steer',
+      text: 'Submit through stage_yield; plain text does not deliver.',
+    });
+    // The second answer is what the verdict reads: the first text must not leak into it.
+    runner.emit({
+      type: 'attempt.event',
+      seq: 1,
+      event: { type: 'text_delta', delta: 'second answer' },
+    });
+    runner.emit({ type: 'attempt.result', status: 'completed', message: 'done again' });
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toMatchObject({ text: 'second answer', submitted: false, corrections: 1 });
+    expect(store.runs.find(runId)?.status).toBe('completed');
+  });
+
+  it('treats an accepted control submission as compliant and never corrects it', () => {
+    const seen: AttemptResultInput[] = [];
+    const withHandler = new RunnerSupervisor({
+      store,
+      spawn: spawnPort(),
+      prepare: invocation,
+      recovery: new RunRecoveryService({ store, probe, now: () => new Date(clock).toISOString() }),
+      lifecycle: new RunLifecycle({ store }),
+      now,
+      tickMs: 60_000,
+      onAttemptResult: (input) => {
+        seen.push(input);
+        return 'should never be needed';
+      },
+      log: () => undefined,
+    });
+    const runId = queueRun({ role: 'backend' });
+    withHandler.tick();
+    const runner = FakeRunner.spawned[0];
+    if (runner === undefined) throw new Error('unreachable');
+    runner.emit({
+      type: 'attempt.ready',
+      sessionId: 'session-1',
+      provider: 'stub',
+      modelId: 'stub-model',
+      tools: [],
+      droppedTools: [],
+    });
+    // The control endpoint records the accepted `stage.submit` on the live Attempt.
+    withHandler.noteSubmitted(runId, runner.input.attempt.id);
+    expect(withHandler.hasSubmitted(runner.input.attempt.id)).toBe(true);
+    runner.emit({ type: 'attempt.result', status: 'completed', message: 'done' });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.submitted).toBe(true);
+    expect(runner.commands.some((command) => command.type === 'attempt.steer')).toBe(false);
+    expect(store.runs.find(runId)?.status).toBe('completed');
+  });
+
+  it('settles normally when the result handler throws', () => {
+    const withHandler = new RunnerSupervisor({
+      store,
+      spawn: spawnPort(),
+      prepare: invocation,
+      recovery: new RunRecoveryService({ store, probe, now: () => new Date(clock).toISOString() }),
+      lifecycle: new RunLifecycle({ store }),
+      now,
+      tickMs: 60_000,
+      onAttemptResult: () => {
+        throw new Error('handler bug');
+      },
+      log: () => undefined,
+    });
+    const runId = queueRun({ role: 'backend' });
+    withHandler.tick();
+    const runner = FakeRunner.spawned[0];
+    if (runner === undefined) throw new Error('unreachable');
+    runner.emit({
+      type: 'attempt.ready',
+      sessionId: 'session-1',
+      provider: 'stub',
+      modelId: 'stub-model',
+      tools: [],
+      droppedTools: [],
+    });
+    runner.emit({ type: 'attempt.result', status: 'completed', message: 'done' });
+    expect(store.runs.find(runId)?.status).toBe('completed');
+    expect(withHandler.liveAttempts()).toHaveLength(0);
   });
 
   it('ignores a late result carrying another epoch', () => {
@@ -382,7 +776,10 @@ describe('RunnerSupervisor heartbeat and recovery', () => {
     clock += LIMITS.leaseSec.default * 1000 + 1;
     const tick = supervisor.tick();
     expect(tick.parked).toEqual([runId]);
-    expect(store.runs.find(runId)?.status).toBe('recovery_required');
+    // The Run was still `starting` (the Runner never confirmed ready), so the documented
+    // park is `interrupted` with a withheld verdict — the decision requirement below is
+    // what keeps the workspace from a second writer.
+    expect(store.runs.find(runId)?.status).toBe('interrupted');
     const admission = newAttemptAdmission(store, runId);
     expect(admission.allowed).toBe(false);
     expect(admission.requiresRecoveryDecision).toBe(true);
@@ -487,7 +884,8 @@ describe('RunnerSupervisor heartbeat and recovery', () => {
     const resumed = supervisor.resumeParkedRun(runId);
     expect(resumed.ok).toBe(true);
     expect(store.attempts.list({ where: 'run_id = ?', params: [runId] })).toHaveLength(2);
-    expect(store.runs.find(runId)?.status).toBe('running');
+    // The Run only reaches `running` once the new Runner reports ready (`reliability.md` §2).
+    expect(store.runs.find(runId)?.status).toBe('starting');
   });
 
   it('adopts an Attempt that resumeWork opened instead of failing the Run', () => {
@@ -515,16 +913,21 @@ describe('RunnerSupervisor heartbeat and recovery', () => {
     void running;
   });
 
-  it('refuses to resume a recovery_required Run until the decision covers it', () => {
+  it('refuses to resume a Run whose park withheld a new Attempt until the decision covers it', () => {
     const runId = queueRun();
     supervisor.tick();
     const runner = FakeRunner.spawned[0];
     if (runner === undefined) throw new Error('unreachable');
-    // An unconfirmable process parks the Run behind a recovery decision.
+    // An unconfirmable process parks the Run behind a recovery decision. The Run was still
+    // `starting`, so the park is `interrupted` with the verdict withholding a new Attempt.
     probe.setAlive(`pid:${String(runner.pid)}`, null);
     clock += LIMITS.leaseSec.default * 1000 + 1;
     expect(supervisor.tick().parked).toEqual([runId]);
-    expect(store.runs.find(runId)?.status).toBe('recovery_required');
+    expect(store.runs.find(runId)?.status).toBe('interrupted');
+    expect(newAttemptAdmission(store, runId)).toMatchObject({
+      allowed: false,
+      requiresRecoveryDecision: true,
+    });
     const refused = supervisor.resumeParkedRun(runId);
     expect(refused).toMatchObject({ ok: false, code: 'RECOVERY_REQUIRED' });
     // Recording the decision re-checks the process state: still unconfirmable → refused.

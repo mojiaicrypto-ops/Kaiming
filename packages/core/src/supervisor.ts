@@ -15,17 +15,22 @@
  * - Chief slots are served before professional slots, with `projectConcurrentRunners`
  *   and `roleConcurrency` as the ceilings.
  *
- * The supervisor deliberately owns **no** state transitions of its own: it claims and
- * spawns, then hands every verdict to `RunLifecycle` and `RunRecoveryService`, which are
- * the reviewed implementations of those rules. Spawning is an injected port so Core
+ * The supervisor owns no *domain verdict* of its own: it hands settlement, cancellation and
+ * recovery verdicts to `RunLifecycle` and `RunRecoveryService`, which are the reviewed
+ * implementations of those rules. The two transitions it does own are the mechanical start
+ * sequence `queued → starting → running` (`reliability.md` §2) and the `interrupted` park of
+ * a start that never produced a process. Spawning is an injected port so Core
  * never depends on `apps/runner` and the tests can drive a scripted process.
  */
 import { LIMITS, type Attempt, type Run, type RunStatus } from '@agentdev/contracts';
-import { isTerminalRunStatus } from '@agentdev/domain';
-import type { ProjectStore } from '@agentdev/storage';
+import { canTransitionRun, isTerminalRunStatus } from '@agentdev/domain';
+import { withTransaction, type ProjectStore } from '@agentdev/storage';
 
+import { ProtocolError } from './errors.js';
+import { scanEvents } from './events.js';
 import { RunLifecycle, type RunUsage } from './run-lifecycle.js';
 import {
+  RUN_RECOVERED_EVENT,
   RunRecoveryService,
   createNodeProcessProbe,
   newAttemptAdmission,
@@ -46,6 +51,15 @@ export interface RunnerInvocation {
   readonly systemPrompt?: string;
   /** Short-lived attempt capability the Runner presents to the model gateway. */
   readonly capability: string;
+  /**
+   * Base URL of the Core control endpoint (`protocol.md` §6).
+   *
+   * Absent means the Runner registers no control tools; a Run without the channel cannot
+   * deliver a structured result and is refused by the corrective/`contract_violation` path.
+   */
+  readonly controlUrl?: string;
+  /** The Work this Run belongs to; a Chief assessment must name it. */
+  readonly workId?: string;
   /** Per-Attempt `models.json` the Runner passes as `--models-path`. */
   readonly catalogPath?: string;
 }
@@ -155,7 +169,64 @@ export interface RunnerSupervisorOptions {
     readonly attemptId: string;
     readonly reason: 'result' | 'error' | 'exit' | 'timeout' | 'shutdown';
   }) => void;
+  /**
+   * Called when a Runner reports a result, before the Run is settled.
+   *
+   * This is where the Core learns what the model actually produced: the Attempt's
+   * accumulated assistant text plus whether the Attempt delivered through the control
+   * channel (`protocol.md` §6 `assessment.submit`/`agent.dispatch`/`stage.submit`).
+   * Returning a corrective prompt keeps the Attempt alive and asks the model again; the
+   * supervisor re-arms the same Attempt, which is what makes the documented two-strike rule
+   * ("普通文本结束没有该结果时Run等待提交提示，连续两次不合规为contract_violation")
+   * implementable without a second process.
+   *
+   * A callback that throws is logged and the result finishes normally, so a handler bug can
+   * never strand a Run in `running` (`guarded` semantics).
+   */
+  readonly onAttemptResult?: (input: AttemptResultInput) => string | undefined;
+  /**
+   * Called when an Attempt is opened for a Run, before the Runner is prompted.
+   *
+   * `experience.md` §22 needs the message behind a Run to move `received → processing`
+   * when the work actually starts, and only the daemon knows which message a Work came
+   * from.
+   */
+  readonly onAttemptStarted?: (input: {
+    readonly runId: string;
+    readonly attemptId: string;
+  }) => void;
+  /**
+   * Called after a Run reaches a terminal state, with the status it settled into.
+   *
+   * The counterpart of `onAttemptStarted`: the message moves to `processed`/`failed` here.
+   * A parked Run is not terminal and is deliberately not reported.
+   */
+  readonly onRunSettled?: (input: { readonly runId: string; readonly status: RunStatus }) => void;
   readonly log?: (line: string) => void;
+}
+
+/** What one Attempt result delivered, as the daemon's result handler needs it. */
+export interface AttemptResultInput {
+  readonly runId: string;
+  readonly attemptId: string;
+  readonly epoch: number;
+  readonly role: Run['role'];
+  readonly purpose: Run['purpose'];
+  readonly stage: string;
+  readonly reason: 'result' | 'exit';
+  readonly status: 'completed' | 'failed' | 'cancelled';
+  readonly message: string;
+  /** Assistant text accumulated from `text_delta` events, in order. */
+  readonly text: string;
+  /**
+   * Whether this Attempt delivered through the control channel.
+   *
+   * The semantic question ("was *this* method the compliant one for *this* role") belongs to
+   * the handler; the supervisor only reports the mechanical fact.
+   */
+  readonly submitted: boolean;
+  /** 1 on the second result of an Attempt, after one corrective prompt. */
+  readonly corrections: number;
 }
 
 /** What one `tick()` did; the tests and the daemon's log both read this. */
@@ -173,6 +244,12 @@ interface LiveAttempt {
   readonly process: RunnerProcessPort;
   readonly runnerId: string;
   prompt: string;
+  /**
+   * Set by `attempt.ready`; `reliability.md` §2 makes it the gate for delivery.
+   *
+   * The Run only becomes Running here, and a `completed` result that arrives earlier is
+   * parked instead of settled (T8b P2-1).
+   */
   ready: boolean;
   lastSeenAt: number;
   lastHeartbeatWritten: number;
@@ -180,6 +257,25 @@ interface LiveAttempt {
   result: { status: 'completed' | 'failed' | 'cancelled'; message: string } | undefined;
   /** Set as soon as the child process is observed to have exited (WP11R2-01). */
   exited: boolean;
+  /**
+   * Assistant text the Runner streamed, in arrival order.
+   *
+   * `protocol.md` §7 keeps `token.delta` a transient stream; the final text is what a
+   * contract-checked submission is derived from, so the supervisor keeps it for the Run's
+   * result handler instead of dropping every `attempt.event` on the floor (WP11/§6-M4).
+   */
+  text: string;
+  /** How many corrective prompts this Attempt has already been sent. */
+  corrections: number;
+  /** True once a control-channel submission was accepted for this Attempt. */
+  submitted: boolean;
+  /**
+   * Set while the supervisor waits for another result after a corrective prompt.
+   *
+   * The Attempt stays live in that window (the Runner is doing a second turn), so the entry
+   * must not be finished twice by a late duplicate message.
+   */
+  correctionPending: boolean;
 }
 
 function messageOf(error: unknown): string {
@@ -197,6 +293,9 @@ export class RunnerSupervisor {
   private readonly tickMs: number;
   private readonly usage: RunUsageLedger | undefined;
   private readonly onAttemptEnded: RunnerSupervisorOptions['onAttemptEnded'];
+  private readonly onAttemptResult: RunnerSupervisorOptions['onAttemptResult'];
+  private readonly onAttemptStarted: RunnerSupervisorOptions['onAttemptStarted'];
+  private readonly onRunSettled: RunnerSupervisorOptions['onRunSettled'];
   private readonly log: (line: string) => void;
   private readonly live = new Map<string, LiveAttempt>();
   private timer: NodeJS.Timeout | undefined;
@@ -223,6 +322,9 @@ export class RunnerSupervisor {
     this.tickMs = options.tickMs ?? 1_000;
     this.usage = options.usage;
     this.onAttemptEnded = options.onAttemptEnded;
+    this.onAttemptResult = options.onAttemptResult;
+    this.onAttemptStarted = options.onAttemptStarted;
+    this.onRunSettled = options.onRunSettled;
     this.log = options.log ?? (() => undefined);
   }
 
@@ -360,7 +462,9 @@ export class RunnerSupervisor {
    * - an `interrupted` Run whose old process was confirmed terminated may continue with a
    *   new Attempt;
    * - a `recovery_required` Run is refused until `recordResumeDecision` recorded the
-   *   accepted decision covering it (which itself re-checks the real process state).
+   *   accepted decision covering it (which itself re-checks the real process state);
+   * - a Run parked by `abandonUnstarted` (a `prepare`/`spawn` failure before any process
+   *   existed) needs no process probe: its verdict records that no writer was ever created.
    */
   resumeParkedRun(
     runId: string,
@@ -381,14 +485,19 @@ export class RunnerSupervisor {
       return { ok: false, code: 'INVALID_STATE', message: `Run ${runId} still has a live Attempt` };
     }
     // Re-inspect the *real* state instead of trusting the persisted park: a pid can be
-    // reused, and an unconfirmable process must never be replaced (WP11R3-03).
-    const inspection = this.recovery.inspect(runId);
-    if (inspection.ok && inspection.inspection.processAlive !== false) {
-      return {
-        ok: false,
-        code: 'RECOVERY_REQUIRED',
-        message: `Run ${runId} 的旧执行状态为 ${String(inspection.inspection.processAlive)}；确认终止后才能续跑`,
-      };
+    // reused, and an unconfirmable process must never be replaced (WP11R3-03). The one
+    // exception is a park the supervisor itself wrote for a start that never produced a
+    // process (`abandonUnstarted`): there is no old writer to confirm, and re-probing the
+    // provisional identity would refuse the resume forever (WP11R5-03).
+    if (!this.neverStartedVerdict(runId)) {
+      const inspection = this.recovery.inspect(runId);
+      if (inspection.ok && inspection.inspection.processAlive !== false) {
+        return {
+          ok: false,
+          code: 'RECOVERY_REQUIRED',
+          message: `Run ${runId} 的旧执行状态为 ${String(inspection.inspection.processAlive)}；确认终止后才能续跑`,
+        };
+      }
     }
     if (
       !this.capacityFor(
@@ -430,6 +539,25 @@ export class RunnerSupervisor {
       attemptId: entry.attemptId,
       pid: entry.process.pid,
     }));
+  }
+
+  /**
+   * Records that an Attempt delivered through the control channel.
+   *
+   * The control endpoint (`control-http.ts`) calls this after an accepted
+   * `assessment.submit`/`agent.dispatch`/`stage.submit`, so the two-strike rule is decided
+   * from a real accepted submission rather than from model text. An attempt the supervisor
+   * does not know (a late call from a finished Attempt) is ignored.
+   */
+  noteSubmitted(runId: string, attemptId: string): void {
+    const entry = this.live.get(attemptId);
+    if (entry === undefined || entry.runId !== runId) return;
+    entry.submitted = true;
+  }
+
+  /** Whether an Attempt has delivered through the control channel (`protocol.md` §6). */
+  hasSubmitted(attemptId: string): boolean {
+    return this.live.get(attemptId)?.submitted === true;
   }
 
   get startedCount(): number {
@@ -575,22 +703,15 @@ export class RunnerSupervisor {
         claimed.push(run.id);
       } catch (error) {
         // A Run the admission gate refused stays queued (retrying next tick is the honest
-        // behaviour). A Run whose spawn/prepare failed never got a process: its dangling
-        // Attempt is marked failed and the Run is parked, so an operator can retry instead
-        // of the engine destroying the work (WP11R4-01).
+        // behaviour). Anything else reaching here threw before a process existed
+        // (`registerLiveAttempt` owns every post-spawn failure): its dangling Attempt is
+        // marked failed and the Run is parked in the resumable `interrupted` state, so an
+        // operator can retry instead of the engine destroying the work
+        // (WP11R4-01/WP11R5-03).
         this.log(`supervisor: cannot start ${run.id}: ${messageOf(error)}`);
         const current = this.store.runs.find(run.id);
         if (current !== undefined && current.status !== 'queued') {
-          const dangling = this.store.attempts
-            .list({ where: 'run_id = ?', params: [run.id] })
-            .at(-1);
-          if (
-            dangling !== undefined &&
-            (dangling.status === 'starting' || dangling.status === 'running')
-          ) {
-            this.store.attempts.update(dangling.id, { status: 'failed' }, dangling.version);
-          }
-          this.park(run.id);
+          this.abandonUnstarted(run.id, error);
         }
       }
     }
@@ -603,23 +724,129 @@ export class RunnerSupervisor {
    *
    * The Attempt row is created before the process exists, so the identity is written
    * provisionally and replaced with the child's pid right after the spawn. A daemon that
-   * dies in that window leaves `pid:pending`, which the probe cannot resolve — the honest
-   * `recovery_required` outcome, never a confident "the old writer is gone".
+   * dies in that window leaves `pid:pending`, which the probe cannot resolve — a recovery
+   * park that withholds a new Attempt, never a confident "the old writer is gone". A
+   * *synchronous* start failure is different: `abandonUnstarted` records that no process was
+   * ever created.
    */
   private static runnerIdFor(pid: number | null): string {
     return pid === null ? 'pid:pending' : `pid:${String(pid)}`;
   }
 
+  /**
+   * Opens the Attempt for a Run about to be spawned and persists `queued → starting`.
+   *
+   * `reliability.md` §2 is explicit about the order: "持久Starting后启动Runner；ready确认
+   * epoch/进程标识/环境后Running". `RunLifecycle.beginAttempt` writes `starting` and
+   * `running` in the same transaction, so using it here published a Run as Running before
+   * the Runner had confirmed anything (WP-12 T8a residual). The supervisor owns this
+   * narrower transition and `attempt.ready` is what completes it; the resume paths still use
+   * `beginAttempt`, because `RUN_TRANSITIONS` has no `paused → starting` edge.
+   *
+   * The admission gate and the transition legality are checked exactly like
+   * `beginAttempt` does, so a Run that may not open an Attempt is refused before any row is
+   * written.
+   */
+  private openAttemptForSpawn(run: Run, runnerId: string): Attempt {
+    const admission = newAttemptAdmission(this.store, run.id);
+    if (!admission.allowed) {
+      throw new ProtocolError(
+        admission.code ?? 'RECOVERY_REQUIRED',
+        admission.message ?? `Run ${run.id} 不能开新 Attempt`,
+        { details: { runId: run.id, verdictEventId: admission.verdictEventId } },
+      );
+    }
+    if (!canTransitionRun(run.status, 'starting')) {
+      throw new ProtocolError('VALIDATION_ERROR', `Run ${run.id} cannot start from ${run.status}`, {
+        details: { runId: run.id, status: run.status },
+      });
+    }
+    return withTransaction(this.store.db, () => {
+      const previous = this.store.attempts.list({ where: 'run_id = ?', params: [run.id] });
+      const attempt = this.store.attempts.insert({
+        runId: run.id,
+        number: previous.length + 1,
+        status: 'starting',
+        ownerEpoch: previous.length,
+        runnerId,
+      });
+      this.store.runs.update(run.id, { status: 'starting' }, run.version);
+      return attempt;
+    });
+  }
+
+  /**
+   * Parks a Run whose Attempt never reached a process (`WP11R5-03`).
+   *
+   * A `prepare`/`spawn` failure has **no** unconfirmed side effect — nothing was ever
+   * started — so `recovery_required` (which only a Run-scoped RecoveryDecision can lift) is
+   * not the honest state. With the provisional `pid:pending` identity the real process probe
+   * can never confirm a termination either, so the Run used to be unrecoverable. The
+   * documented outcome is the resumable `interrupted` (`workflow.md` §5.3: "interrupted可
+   * 检查后创建新Attempt；不确定副作用为recovery_required") plus a verdict recording that no
+   * process was ever created, which `resumeParkedRun` reads instead of probing.
+   */
+  private abandonUnstarted(runId: string, error: unknown): void {
+    const reason = messageOf(error);
+    withTransaction(this.store.db, () => {
+      const run = this.store.runs.find(runId);
+      if (run === undefined || isTerminalRunStatus(run.status)) return;
+      const latest = this.store.attempts.list({ where: 'run_id = ?', params: [runId] }).at(-1);
+      if (latest !== undefined && (latest.status === 'starting' || latest.status === 'running')) {
+        this.store.attempts.update(latest.id, { status: 'failed' }, latest.version);
+      }
+      if (!canTransitionRun(run.status, 'interrupted')) return;
+      const parked = this.store.runs.update(run.id, { status: 'interrupted' }, run.version);
+      this.store.events.append({
+        name: RUN_RECOVERED_EVENT,
+        entityId: parked.id,
+        entityVersion: parked.version,
+        data: {
+          runId: parked.id,
+          workId: parked.workId,
+          from: run.status,
+          to: parked.status,
+          path: [run.status, parked.status],
+          attemptId: latest?.id ?? null,
+          epoch: latest?.ownerEpoch ?? null,
+          processAlive: null,
+          unknownToolOperations: [],
+          requiresRecoveryDecision: false,
+          // No process was ever created, so a new Attempt cannot race an old writer.
+          newAttemptAllowed: true,
+          neverStarted: true,
+          releasedLeases: [],
+          reason,
+        },
+      });
+      this.log(`supervisor: ${runId} parked interrupted after a failed start: ${reason}`);
+    });
+  }
+
+  /**
+   * Whether the newest recovery verdict for a Run records that no process was ever started.
+   *
+   * `abandonUnstarted` writes it for a `prepare`/`spawn` failure, where the provisional
+   * `pid:pending` identity can never be resolved by the real probe; it is the durable fact
+   * that lets the operator resume the Run instead of hitting the WP11R5-03 dead end.
+   */
+  private neverStartedVerdict(runId: string): boolean {
+    const verdicts = scanEvents(this.store, { names: [RUN_RECOVERED_EVENT] });
+    let latest: (typeof verdicts)[number] | undefined;
+    for (const event of verdicts) if (event.entityId === runId) latest = event;
+    return latest?.data['neverStarted'] === true;
+  }
+
   private spawnRun(run: Run): void {
     const runnerId = RunnerSupervisor.runnerIdFor(null);
     // 1. Adopt an Attempt that exists but has no process yet — `FindingsService.resumeWork`
-    //    opens one for a resumed Run, and calling `beginAttempt` again would be refused
+    //    opens one for a resumed Run, and opening a second one would be refused
     //    (`cannot start from running`) and fail the Run (WP11R4-01). Otherwise open a new
-    //    Attempt for a queued/parked Run, which is what `beginAttempt` is for.
+    //    Attempt for a queued/parked Run, which persists the documented `starting` state.
     const latest = this.store.attempts.list({ where: 'run_id = ?', params: [run.id] }).at(-1);
     const adopt =
       latest !== undefined && latest.status === 'starting' && latest.runnerId === undefined;
-    const attempt = adopt ? latest : this.lifecycle.beginAttempt(run.id, { runnerId });
+    const attempt = adopt ? latest : this.openAttemptForSpawn(run, runnerId);
     const epoch = attempt.ownerEpoch + 1;
     const invocation = this.prepare({ run, attempt, epoch });
     this.runsStarted += 1;
@@ -631,6 +858,34 @@ export class RunnerSupervisor {
       runnerId,
       invocation,
     });
+    // From here a process exists, so a bookkeeping failure is a *lost execution* rather than
+    // the `neverStarted` case: the child is terminated and the Run goes through the ordinary
+    // recovery park with the child's real identity.
+    try {
+      this.registerLiveAttempt(run, attempt, epoch, child, invocation);
+    } catch (error) {
+      this.log(
+        `supervisor: ${run.id} attempt ${attempt.id} could not be registered after spawn: ${messageOf(error)}`,
+      );
+      this.live.delete(attempt.id);
+      try {
+        child.terminate('SIGTERM');
+      } catch {
+        // Already gone; `park` still records the recovery verdict.
+      }
+      this.markAttemptFailed(attempt.id);
+      this.park(run.id);
+    }
+  }
+
+  /** Registers a spawned Runner as live; `spawnRun` owns the failure handling. */
+  private registerLiveAttempt(
+    run: Run,
+    attempt: Attempt,
+    epoch: number,
+    child: RunnerProcessPort,
+    invocation: RunnerInvocation,
+  ): void {
     const realRunnerId = RunnerSupervisor.runnerIdFor(child.pid);
     const stored = this.store.attempts.find(attempt.id);
     if (stored !== undefined) {
@@ -650,14 +905,58 @@ export class RunnerSupervisor {
       killTimer: undefined,
       result: undefined,
       exited: false,
+      text: '',
+      corrections: 0,
+      submitted: false,
+      correctionPending: false,
     };
     this.live.set(attempt.id, entry);
     this.writeHeartbeat(attempt, entry);
     child.onMessage((message) => this.onMessage(entry, message));
     child.onExit((exit) => this.onExit(entry, exit));
+    this.attemptStarted(entry);
     this.log(
       `supervisor: ${run.id} attempt ${attempt.id} started (pid ${String(child.pid)}, epoch ${String(epoch)})`,
     );
+  }
+
+  /** Marks a live Attempt failed without letting a terminal status be rewritten. */
+  private markAttemptFailed(attemptId: string): void {
+    const attempt = this.store.attempts.find(attemptId);
+    if (attempt !== undefined && (attempt.status === 'starting' || attempt.status === 'running')) {
+      this.store.attempts.update(attempt.id, { status: 'failed' }, attempt.version);
+    }
+  }
+
+  /**
+   * `workflow.md` §5.1 "Work.status：queued→running".
+   *
+   * A Work is *being executed* as soon as one of its Runs really runs, and the Chief Run is
+   * a Run of the Work like any other (`workflow.md` §3: the Chief is one of the Work's
+   * agents). Nothing else writes this edge: without it the Work stays `queued` for the whole
+   * execution and only jumps to `completed` through the settlement path, so the board (and
+   * the acceptance checks that read the row) would show finished work as still queued.
+   *
+   * Only `queued` is handled here: `blocked`/`paused → running` belong to the resume path
+   * (`FindingsService.walkWorkTo`), which owns the blocker bookkeeping that must come with
+   * them. The event mirrors that method's shape so the board consumes one message kind.
+   */
+  private markWorkRunning(run: Run): void {
+    const work = this.store.works.find(run.workId);
+    if (work === undefined || work.status !== 'queued') return;
+    const running = this.store.works.update(work.id, { status: 'running' }, work.version);
+    this.store.events.append({
+      name: 'work.control_changed',
+      entityId: running.id,
+      entityVersion: running.version,
+      data: {
+        workId: running.id,
+        control: 'start',
+        previousStatus: work.status,
+        status: running.status,
+        reason: `Run ${run.id} is running`,
+      },
+    });
   }
 
   private writeHeartbeat(attempt: Attempt, entry: LiveAttempt): void {
@@ -710,15 +1009,58 @@ export class RunnerSupervisor {
         if (attempt !== undefined && attempt.status === 'starting') {
           this.store.attempts.update(attempt.id, { status: 'running' }, attempt.version);
         }
+        // Only now does the Run claim to be executing. A Run the resume path already put
+        // into `running` (there is no `paused → starting` edge) keeps its `run.started`
+        // event from that path; a freshly claimed Run publishes it here.
+        const run = this.store.runs.find(entry.runId);
+        if (run !== undefined && run.status === 'starting') {
+          const running = this.store.runs.update(run.id, { status: 'running' }, run.version);
+          this.store.events.append({
+            name: 'run.started',
+            entityId: running.id,
+            entityVersion: running.version,
+            data: {
+              attemptId: entry.attemptId,
+              number: attempt?.number ?? null,
+              runnerId: entry.runnerId,
+              resumed: false,
+            },
+          });
+        }
+        if (run !== undefined) this.markWorkRunning(run);
         this.send(entry, { type: 'attempt.prompt', text: entry.prompt });
         return;
       }
       case 'attempt.event': {
-        // Event forwarding is the daemon's job (EventHub/token.delta); the supervisor
-        // only keeps liveness here, so nothing is dropped silently on the floor.
+        // Event forwarding is the daemon's job (EventHub/token.delta); the supervisor only
+        // keeps liveness and the assistant text a contract check must see, so nothing the
+        // model produced is dropped silently on the floor (`protocol.md` §6/§7).
+        const event = message.event;
+        if (event['type'] === 'text_delta' && typeof event['delta'] === 'string') {
+          entry.text += event['delta'];
+        }
         return;
       }
       case 'attempt.result': {
+        if (!entry.ready && message.status === 'completed') {
+          // `reliability.md` §2: the Runner confirms epoch/process/environment with
+          // `attempt.ready` before it may deliver. A `completed` result before that can
+          // never settle — the Run is still `starting` and `RUN_TRANSITIONS` has no
+          // `starting → completed` edge — and the refusal used to be swallowed by `guarded`,
+          // stranding the Run with no live Attempt and no action able to pick it up again
+          // (T8b P2-1). Park it from the real process state instead. A `failed`/`cancelled`
+          // result before ready is a legal transition (and graceful shutdown relies on it),
+          // so those keep their documented handling.
+          this.failAttempt(entry, 'the Runner reported a completed result before attempt.ready');
+          return;
+        }
+        if (entry.correctionPending) {
+          // The second answer of a corrective turn: re-arm the finish path for it.
+          entry.correctionPending = false;
+        } else if (entry.result !== undefined) {
+          // A duplicate result for the same Attempt: the first one was already applied.
+          return;
+        }
         entry.result = { status: message.status, message: message.message };
         this.finishFromResult(entry);
         return;
@@ -745,6 +1087,21 @@ export class RunnerSupervisor {
   private finishFromResult(entry: LiveAttempt): void {
     const result = entry.result;
     if (result === undefined) return;
+    // Every result reaches the handler, compliant or not: the daemon uses a compliant
+    // delivery to act on what the model produced (validate the DispatchSpec, file the stage
+    // result) and a non-compliant one to answer with the documented corrective prompt
+    // (`protocol.md` §6). A handler that returns no correction — or one that throws — lets
+    // the result settle normally, so a handler bug never strands a Run.
+    const corrective =
+      !entry.submitted && result.status === 'completed' ? this.correctivePrompt(entry) : undefined;
+    if (corrective !== undefined && entry.corrections < 1 && this.correct(entry, corrective)) {
+      return;
+    }
+    if (this.onAttemptResult !== undefined && (entry.submitted || result.status !== 'completed')) {
+      // A compliant or failed result still has to reach the daemon: a Chief Run's
+      // assessment must be validated and dispatched *after* the model submitted it.
+      this.correctivePrompt(entry);
+    }
     this.live.delete(entry.attemptId);
     this.ended(entry, 'result');
     if (this.isTerminal(entry.runId)) {
@@ -758,6 +1115,9 @@ export class RunnerSupervisor {
       // new outcome (`reliability.md` §2), and settling it again would throw (WP11R1-01).
       this.log(`supervisor: ignoring the late result of ${entry.runId} (Run already ended)`);
       this.clearKillTimer(entry);
+      // A Run the daemon's own handler ended (a `contract_violation`) still has to be
+      // reported: the message behind it must not stay `processing` forever.
+      this.reportSettled(entry.runId);
       return;
     }
     const attempt = this.store.attempts.find(entry.attemptId);
@@ -788,6 +1148,86 @@ export class RunnerSupervisor {
       }
     });
     this.clearKillTimer(entry);
+    this.reportSettled(entry.runId);
+  }
+
+  /** Reports an Attempt opening, never letting a callback throw into the spawn path. */
+  private attemptStarted(entry: LiveAttempt): void {
+    if (this.onAttemptStarted === undefined) return;
+    try {
+      this.onAttemptStarted({ runId: entry.runId, attemptId: entry.attemptId });
+    } catch (error) {
+      this.log(`supervisor: onAttemptStarted failed for ${entry.attemptId}: ${messageOf(error)}`);
+    }
+  }
+
+  /**
+   * Reports a terminal Run once, from its persisted status.
+   *
+   * A Run the daemon's own result handler already ended (a `contract_violation`) is
+   * reported here too, so the message state never depends on which layer ended it.
+   */
+  private reportSettled(runId: string): void {
+    if (this.onRunSettled === undefined) return;
+    const run = this.store.runs.find(runId);
+    if (run === undefined || !isTerminalRunStatus(run.status)) return;
+    try {
+      this.onRunSettled({ runId, status: run.status });
+    } catch (error) {
+      this.log(`supervisor: onRunSettled failed for ${runId}: ${messageOf(error)}`);
+    }
+  }
+
+  /**
+   * Asks the Attempt to deliver again instead of settling the Run.
+   *
+   * `protocol.md` §6: a Run that ends with plain text and no submitted result gets one
+   * corrective prompt, and a second non-compliant end is a `contract_violation`. The
+   * supervisor implements the mechanical half — keep the Attempt alive, steer it, wait for
+   * another result — while the daemon's `onAttemptResult` handler decides what counts as
+   * compliant for the Run's role and records the violation through `RunLifecycle`.
+   *
+   * @returns `true` when the correction was sent and the Run must not be settled.
+   */
+  private correct(entry: LiveAttempt, corrective: string): boolean {
+    entry.corrections += 1;
+    entry.correctionPending = true;
+    entry.result = undefined;
+    // The text buffer restarts: the second answer is what the two-strike verdict and the
+    // Core-side parse must read, and keeping the first answer's JSON would make the
+    // retry look compliant by accident.
+    entry.text = '';
+    this.send(entry, { type: 'attempt.steer', text: corrective });
+    this.log(
+      `supervisor: ${entry.runId} attempt ${entry.attemptId} delivered no structured result; corrective prompt sent`,
+    );
+    return true;
+  }
+
+  /** Calls the result handler with the Attempt's own facts, never letting it throw. */
+  private correctivePrompt(entry: LiveAttempt): string | undefined {
+    if (this.onAttemptResult === undefined) return undefined;
+    const run = this.store.runs.find(entry.runId);
+    const input: AttemptResultInput = {
+      runId: entry.runId,
+      attemptId: entry.attemptId,
+      epoch: entry.epoch,
+      role: entry.role,
+      purpose: run?.purpose ?? 'implementation',
+      stage: run?.stage ?? '',
+      reason: 'result',
+      status: entry.result?.status ?? 'completed',
+      message: entry.result?.message ?? '',
+      text: entry.text,
+      submitted: entry.submitted,
+      corrections: entry.corrections,
+    };
+    try {
+      return this.onAttemptResult(input);
+    } catch (error) {
+      this.log(`supervisor: onAttemptResult failed for ${input.attemptId}: ${messageOf(error)}`);
+      return undefined;
+    }
   }
 
   /** Marks an Attempt the daemon asked to stop (a shutdown, not a failure). */

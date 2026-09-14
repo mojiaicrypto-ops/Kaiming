@@ -22,7 +22,10 @@ import {
   type ProjectStore,
 } from '@agentdev/storage';
 import {
+  EventHub,
   LATE_RESULT_REJECTED_EVENT,
+  RECOVERY_OPERATION_KIND,
+  RECOVERY_REPORT_READY_EVENT,
   RUN_RECOVERED_EVENT,
   createMemoryProcessProbe,
   newAttemptAdmission,
@@ -230,6 +233,7 @@ describe('Run recovery: leases, epochs and restart inspection (AC-057/058/061/08
       toolName: 'bash',
       inputHash: HASH,
       argsRef: ARGS_REF_ID,
+      targets: [],
       state,
     });
   }
@@ -790,6 +794,88 @@ describe('Run recovery: leases, epochs and restart inspection (AC-057/058/061/08
     // Already parked, so the second restart has nothing live to recover.
     expect(second.applied).toEqual([]);
     expect(store.runs.find(RUN_ID)?.status).toBe('interrupted');
+  });
+
+  it('announces each restart report once with a resolvable report reference (AC-061)', () => {
+    // A live old process is the case a human must decide on, so the report is what
+    // `recovery.resolve` later checks its `reportRef` against.
+    addRun({});
+    probe.setAlive('pid:1000', true);
+    addAttempt({
+      id: ATTEMPT_ID,
+      runId: RUN_ID,
+      number: 1,
+      epoch: 0,
+      runnerId: 'pid:1000',
+      heartbeatAt: at(),
+    });
+
+    // The real hub subscribes *before* the restart: persistent delivery is a cursor
+    // scan with no name allow-list, so a brand-new event name flows through it.
+    const hub = new EventHub({ store });
+    const runSubscription = hub.subscribe({
+      connectionId: 'conn-1',
+      scope: { kind: 'run', id: RUN_ID },
+    });
+    const workSubscription = hub.subscribe({
+      connectionId: 'conn-1',
+      scope: { kind: 'work', id: WORK_ID },
+    });
+
+    const first = service.recoverAfterRestart('2026-09-11T00:00:01.000Z');
+    expect(first.reports).toHaveLength(1);
+    const report = first.reports[0];
+    if (report === undefined) throw new Error('expected one recovery report');
+    const inspection = first.applied[0]?.inspection;
+    expect(inspection?.requiresRecoveryDecision).toBe(true);
+
+    const emitted = scanEvents(store, { names: [RECOVERY_REPORT_READY_EVENT] });
+    expect(emitted).toHaveLength(1);
+    const event = emitted[0];
+    if (event === undefined) throw new Error('expected one recovery.report_ready');
+    expect(event.entityId).toBe(RUN_ID);
+    expect(event.entityVersion).toBe(report.expectedVersions.run);
+    expect(event.data['runId']).toBe(RUN_ID);
+    expect(event.data['workId']).toBe(WORK_ID);
+    expect(event.data['hostEpoch']).toBe('2026-09-11T00:00:01.000Z');
+    expect(event.data['reportHash']).toBe(report.hash);
+    expect(event.data['requiresRecoveryDecision']).toBe(true);
+    expect(event.data['newAttemptAllowed']).toBe(false);
+    // `data` is a summary of the report, not a copy: the body stays addressable.
+    expect(event.data['runnerState']).toEqual(report.runnerState);
+    expect(event.data['recommendedActions']).toEqual(report.recommendedActions);
+    expect(event.data['unknownCount']).toBe(report.unknowns.length);
+
+    // `reportRef` is a real address in the same transaction: the durable `recover`
+    // operation row records the identical hash.
+    const reportRef = event.data['reportRef'] as {
+      readonly id: string;
+      readonly version: number;
+      readonly hash: string;
+    };
+    expect(reportRef.hash).toBe(report.hash);
+    expect(reportRef.version).toBe(1);
+    expect(reportRef.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+    );
+    const operation = store.operations.find(reportRef.id);
+    expect(operation?.kind).toBe(RECOVERY_OPERATION_KIND);
+    expect(operation?.stepResults['reports']).toEqual([
+      expect.objectContaining({ runId: RUN_ID, workId: WORK_ID, hash: report.hash }),
+    ]);
+
+    // The ordinary cursor path delivers the new persistent event to both the Run
+    // and its Work subscriber.
+    expect(hub.poll(runSubscription.subscriptionId).events.map((entry) => entry.name)).toContain(
+      RECOVERY_REPORT_READY_EVENT,
+    );
+    expect(hub.poll(workSubscription.subscriptionId).events.map((entry) => entry.name)).toContain(
+      RECOVERY_REPORT_READY_EVENT,
+    );
+
+    // A second restart has nothing live to report: no second event.
+    service.recoverAfterRestart('2026-09-11T00:00:02.000Z');
+    expect(scanEvents(store, { names: [RECOVERY_REPORT_READY_EVENT] })).toHaveLength(1);
   });
 
   it('builds a RecoveryReport from real runner, lease and tool facts', () => {

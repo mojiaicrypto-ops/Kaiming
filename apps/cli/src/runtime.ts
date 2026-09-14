@@ -9,8 +9,10 @@
  * The CLI never links the daemon: it reads the 0600 installation credential and the
  * live `runtime.json`, spawns the daemon host as a separate process (the documented
  * `agentdev start` starts daemon and web) and talks to its loopback admin surface with
- * the credential as Bearer (`protocol.md` §2). Keeping the CLI on `@agentdev/contracts`
- * only is also what `ARCHITECTURE.md` §2's dependency table requires.
+ * the credential as Bearer (`protocol.md` §2). The runtime-control half stays on
+ * `@agentdev/contracts` only; the installation-level `agentdev secret` command
+ * additionally loads `@agentdev/core` lazily for the durable repository
+ * (`ARCHITECTURE.md` §2 permits `core` for installation-level operations).
  */
 import { spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync } from 'node:fs';
@@ -19,12 +21,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import {
-  RUNTIME_FILES,
-  runtimePaths,
-  runtimeRecordSchema,
-  type RuntimeRecord,
-} from '@agentdev/contracts';
+import { runtimePaths, runtimeRecordSchema, type RuntimeRecord } from '@agentdev/contracts';
 
 /** Where the daemon host entry lives, relative to the repository root. */
 export const DAEMON_ENTRY = 'apps/daemon/dist/main.js';
@@ -84,7 +81,7 @@ export interface AdminResponse {
 export function adminRequest(
   home: string,
   target: { readonly host: string; readonly port: number },
-  method: 'GET' | 'POST',
+  method: 'GET' | 'POST' | 'DELETE',
   path: string,
   payload?: unknown,
 ): Promise<AdminResponse> {
@@ -169,15 +166,31 @@ export function spawnDaemon(options: SpawnDaemonOptions): { readonly pid: number
   return { pid: child.pid };
 }
 
-/** Polls the live record until the daemon answers or the deadline passes. */
+/**
+ * Polls the live record until the daemon answers or the deadline passes.
+ *
+ * A record that does not match the contract is treated as "not ready yet" while there is
+ * still time: the daemon publishes `runtime.json` before its admin listener is bound, so a
+ * record whose `admin.port` is still `0` is a real intermediate state. Only a record that is
+ * *still* unreadable at the deadline is reported, as the thrown contract error the caller
+ * turns into an `RUNTIME_RECORD_INVALID` failure with an operationId (`reliability.md` §7;
+ * WP-11 leftover "损坏 runtime.json 使 agentdev start 无 operationId 崩溃").
+ */
 export async function waitForRuntime(
   home: string,
   options: { readonly timeoutMs?: number; readonly intervalMs?: number } = {},
 ): Promise<CliRuntimeRecord | null> {
   const deadline = Date.now() + (options.timeoutMs ?? 10_000);
   const interval = options.intervalMs ?? 100;
+  const probe = (): { readonly live: CliRuntimeRecord | null; readonly error: unknown } => {
+    try {
+      return { live: readLiveRecord(home), error: null };
+    } catch (error) {
+      return { live: null, error };
+    }
+  };
   for (;;) {
-    const live = readLiveRecord(home);
+    const { live, error } = probe();
     if (live !== null) {
       try {
         const health = await adminRequest(home, live.record.admin, 'GET', '/health');
@@ -186,7 +199,12 @@ export async function waitForRuntime(
         // Not answering yet; keep waiting.
       }
     }
-    if (Date.now() >= deadline) return null;
+    if (Date.now() >= deadline) {
+      if (error !== null && error !== undefined) {
+        throw error instanceof Error ? error : new Error('the runtime record is unreadable');
+      }
+      return null;
+    }
     await new Promise((resolvePromise) => setTimeout(resolvePromise, interval));
   }
 }
@@ -199,7 +217,12 @@ export async function waitForStop(
   const deadline = Date.now() + (options.timeoutMs ?? 15_000);
   const interval = options.intervalMs ?? 100;
   for (;;) {
-    if (readLiveRecord(home) === null) return true;
+    try {
+      if (readLiveRecord(home) === null) return true;
+    } catch {
+      // An unreadable record cannot prove the daemon is gone; keep waiting for the
+      // deadline, exactly like a record that is still there.
+    }
     if (Date.now() >= deadline) return false;
     await new Promise((resolvePromise) => setTimeout(resolvePromise, interval));
   }
@@ -214,6 +237,3 @@ export function daemonLogTail(home: string, lines = 12): string {
     .filter((line) => line.trim().length > 0);
   return text.slice(Math.max(0, text.length - lines)).join('\n');
 }
-
-/** Files the CLI needs to describe the installation without exposing the credential. */
-export const RUNTIME_FILENAMES = RUNTIME_FILES;

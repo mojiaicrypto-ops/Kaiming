@@ -33,6 +33,35 @@ export interface GrantRequest {
   readonly runId?: string;
   readonly toolOperationId?: string;
   readonly inputHash?: string;
+  /**
+   * What this call asks the Grant to spend (`data.md` §2 `limits`).
+   *
+   * A Grant's `limits` are only meaningful if something measures against them, and the
+   * pure admission function is the one place the rules live. The three documented
+   * limits are checked as follows:
+   *
+   * - `maxCalls` — the tool operations already recorded for this Grant, supplied as
+   *   `priorCalls` by `core/grants.ts` (which can count them), plus this one;
+   * - `maxBytes` — the encoded size of **this** call's input (`requestedBytes`); the
+   *   ledger does not persist per-call result sizes, so a cumulative reading would be
+   *   invented, and the honest rule is "one call may not exceed the byte budget";
+   * - `maxDurationSec` — the duration this call asks for (`requestedDurationSec`), so a
+   *   Grant that authorized a 30s operation cannot be used to run a 1800s one.
+   *
+   * A request that supplies no usage is admitted: absence of a measurement is not a
+   * measured overspend, and the Broker always supplies the two it knows.
+   */
+  readonly usage?: GrantUsage;
+}
+
+/** The spend a request asks a Grant to authorize; see {@link GrantRequest.usage}. */
+export interface GrantUsage {
+  /** Tool operations already recorded for the Grant, this call excluded. */
+  readonly priorCalls?: number;
+  /** Encoded byte size of this call's input. */
+  readonly requestedBytes?: number;
+  /** Duration this call requests, in seconds. */
+  readonly requestedDurationSec?: number;
 }
 
 /** Codes a grant decision can carry; a subset of the contracts error set. */
@@ -44,6 +73,7 @@ export type GrantDenialCode = Extract<
   | 'VALIDATION_ERROR'
   | 'NOT_FOUND'
   | 'MISSING_CONTEXT'
+  | 'BUDGET_EXCEEDED'
 >;
 
 /** Codes a mint request can be refused with; wider than a use-time denial. */
@@ -67,6 +97,7 @@ export function grantDenialCode(reason: string): GrantDenialCode {
     return 'AUTH_EXPIRED';
   }
   if (reason.startsWith('grant already consumed')) return 'IDEMPOTENCY_CONFLICT';
+  if (reason.startsWith('grant limit')) return 'BUDGET_EXCEEDED';
   if (reason.endsWith('is not a repository-relative path')) return 'VALIDATION_ERROR';
   return 'NOT_AUTHORIZED';
 }
@@ -225,6 +256,8 @@ export function evaluateGrant(grant: Grant, request: GrantRequest): GrantDecisio
       // Bound by the row's project; nothing further to compare.
       break;
   }
+  const limits = limitsDecision(grant, request);
+  if (limits !== undefined) return limits;
   for (const target of request.targets) {
     if (!isSafeTarget(target)) {
       return deny(`target ${target} is not a repository-relative path`);
@@ -238,6 +271,90 @@ export function evaluateGrant(grant: Grant, request: GrantRequest): GrantDecisio
 
 function deny(reason: string): GrantDecision {
   return { allowed: false, reason };
+}
+
+/** The `limits` keys {@link limitsDecision} understands; see `GrantRequest.usage`. */
+const LIMIT_KEYS = ['maxCalls', 'maxBytes', 'maxDurationSec'] as const;
+
+/**
+ * Validates the `limits` envelope at mint time.
+ *
+ * A limit that is not a non-negative finite number is refused with `VALIDATION_ERROR`
+ * before the row exists, so {@link evaluateGrant} never has to choose between ignoring
+ * a malformed ceiling and refusing every later use of an otherwise valid Grant.
+ */
+export function validateGrantLimits(
+  limits: Readonly<Record<string, unknown>> | undefined,
+): GrantIssueRefusal | { readonly ok: true } {
+  for (const key of LIMIT_KEYS) {
+    const read = readLimit(limits ?? {}, key);
+    if (!read.ok) {
+      return issueDeny(
+        'VALIDATION_ERROR',
+        `grant limit ${key} must be a non-negative finite number`,
+      );
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * Reads one numeric limit, distinguishing "absent" from "malformed".
+ *
+ * A malformed value is refused rather than ignored: silently dropping a limit the
+ * issuing service wrote would turn a narrow Grant into an unbounded one. A `boolean`
+ * or `string` is never a number, and a negative or non-finite value is not a spend
+ * ceiling.
+ */
+function readLimit(
+  limits: Readonly<Record<string, unknown>>,
+  key: string,
+): { readonly ok: true; readonly value: number | undefined } | { readonly ok: false } {
+  const raw = limits[key];
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) return { ok: false };
+  return { ok: true, value: raw };
+}
+
+/**
+ * Whether a Grant's `limits` admit this call.
+ *
+ * Returns a decision only when a limit is exceeded or malformed; `undefined` means the
+ * call may proceed. The limits are checked *after* the identity bindings, so a call
+ * that is not this Grant's business is refused for the binding reason rather than
+ * being reported as a budget problem.
+ */
+function limitsDecision(grant: Grant, request: GrantRequest): GrantDecision | undefined {
+  const limits = grant.limits;
+  const usage = request.usage ?? {};
+  const calls = readLimit(limits, 'maxCalls');
+  if (!calls.ok) return deny(`grant limit maxCalls is not a non-negative number`);
+  if (calls.value !== undefined && usage.priorCalls !== undefined) {
+    if (usage.priorCalls + 1 > calls.value) {
+      return deny(
+        `grant limit maxCalls ${String(calls.value)} reached (${String(usage.priorCalls)} recorded)`,
+      );
+    }
+  }
+  const bytes = readLimit(limits, 'maxBytes');
+  if (!bytes.ok) return deny(`grant limit maxBytes is not a non-negative number`);
+  if (bytes.value !== undefined && usage.requestedBytes !== undefined) {
+    if (usage.requestedBytes > bytes.value) {
+      return deny(
+        `grant limit maxBytes ${String(bytes.value)} is smaller than this call's ${String(usage.requestedBytes)} bytes`,
+      );
+    }
+  }
+  const duration = readLimit(limits, 'maxDurationSec');
+  if (!duration.ok) return deny(`grant limit maxDurationSec is not a non-negative number`);
+  if (duration.value !== undefined && usage.requestedDurationSec !== undefined) {
+    if (usage.requestedDurationSec > duration.value) {
+      return deny(
+        `grant limit maxDurationSec ${String(duration.value)} is smaller than this call's ${String(usage.requestedDurationSec)}s`,
+      );
+    }
+  }
+  return undefined;
 }
 
 /** Whether a scope may be satisfied by the request's identity fields. */
@@ -314,8 +431,7 @@ export interface GrantIssueRefusal {
   readonly reason: string;
 }
 
-/**
- * Validates a mint request against the Work envelope and the role/stage table.
+/** Validates a mint request against the Work envelope and the role/stage table.
  *
  * Nothing is written here: the caller runs this inside its own transaction before
  * inserting the row, so an out-of-scope request cannot leave a Grant behind.
@@ -324,6 +440,8 @@ export function validateGrantIssueRequest(
   request: GrantIssueRequest,
   work: GrantWorkScope,
 ): GrantIssueRefusal | { readonly ok: true } {
+  const limits = validateGrantLimits(request.limits);
+  if (!limits.ok) return limits;
   if (request.workId !== work.workId) {
     return issueDeny(
       'NOT_AUTHORIZED',

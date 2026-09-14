@@ -49,6 +49,14 @@ export const MIGRATIONS: readonly Migration[] = [
     name: '0001-core-schema',
     sql: `${CORE_SCHEMA_SQL}\n${IMMUTABILITY_SQL}\n`,
   },
+  {
+    version: 2,
+    name: '0002-tool-operation-targets',
+    // `tool_operation` gains the targets the call was admitted for, so a permission
+    // approval can mint a Grant bound to the recorded targets (WP-12 T3 轮 2). Existing
+    // rows default to `[]`, which is exactly what a shell call carries.
+    sql: `ALTER TABLE tool_operation ADD COLUMN targets TEXT NOT NULL DEFAULT '[]';\n`,
+  },
 ];
 
 export const MIGRATION_TABLE = 'schema_migrations';
