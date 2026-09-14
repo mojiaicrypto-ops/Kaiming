@@ -1066,6 +1066,19 @@ export class GrantStore {
         [],
       );
     }
+    if (existing.state === 'prepared' && existing.grantId === undefined) {
+      // A `prepared` row with no Grant is **not** an operation in flight: it is the refusal
+      // record the permission request wrote so an approval has a binding to read (G8). The
+      // user has now approved exactly this operation + input hash, so this retry is the same
+      // call being admitted for the first time: attach the approving Grant to the record and
+      // let the executor's `finishOperation` update it in place.
+      this.toolOperations.update(
+        operationId,
+        { grantId: grant.id, state: 'prepared' },
+        existing.version,
+      );
+      return undefined;
+    }
     if (grant.scope === 'once') {
       return refuse(
         'RECOVERY_REQUIRED',

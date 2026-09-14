@@ -306,23 +306,29 @@ export class AttemptRunner {
             return false;
           }
           await session.prompt(command.text);
-          // `prompt()` resolves when the turn is accepted, so the Attempt is only
-          // complete once the session is idle again: exiting earlier would abandon the
-          // model call (`reliability.md` §5 requires a real stage outcome).
-          await this.awaitIdle(session);
-          // The turn is done; give a control submission still in flight a moment to land
-          // before reporting. The supervisor's corrective prompt (`protocol.md` §6) is the
-          // authority on compliance, so this wait never blocks the result forever.
-          await this.awaitSubmission();
-          this.finish('completed', 'prompt completed');
+          await this.settleTurn(session);
         } catch (error) {
           this.finish('failed', error instanceof Error ? error.message : String(error));
         }
-        return false;
+        return !this.terminal;
       }
       case 'attempt.steer': {
-        await this.session?.steer(command.text);
-        return true;
+        // `protocol.md` §6: after a turn that delivered nothing the Run **waits for the
+        // submission prompt** rather than ending, and this is that prompt. It arrives after
+        // the previous turn already ended, so a plain `steer()` would only queue a message
+        // for a run that will never start again (the SDK drains its steering queue inside
+        // the prompt loop, `pi-agent-core` `Agent.continue`): an idle session therefore gets
+        // a real new turn with the correction as its input.
+        const session = this.session;
+        if (session === undefined) return !this.terminal;
+        try {
+          if (session.isIdle()) await session.prompt(command.text);
+          else await session.steer(command.text);
+          await this.settleTurn(session);
+        } catch (error) {
+          this.finish('failed', error instanceof Error ? error.message : String(error));
+        }
+        return !this.terminal;
       }
       case 'attempt.abort': {
         await this.session?.abort();
@@ -350,6 +356,34 @@ export class AttemptRunner {
       if (Date.now() > deadline) throw new Error('the session did not become idle in time');
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
+  }
+
+  /**
+   * Waits out one turn and reports what it produced.
+   *
+   * `prompt()` resolves when the turn is *accepted*, so the Attempt is only complete once the
+   * session is idle again: exiting earlier would abandon the model call (`reliability.md` §5).
+   * A turn that delivered nothing does **not** end the Attempt — `protocol.md` §6 makes the
+   * Run wait for the one correction, and Core turns a second empty turn into a
+   * `contract_violation`. Exiting here is what made that correction undeliverable: the
+   * supervisor's `attempt.steer` reached a process that had already reported and left
+   * (WP-12 R7, `drill.message-to-stage` under acceptance load).
+   */
+  private async settleTurn(session: PiSessionHandle): Promise<void> {
+    await this.awaitIdle(session);
+    // The turn is done; give a control submission still in flight a moment to land before
+    // reporting. The supervisor's corrective prompt (`protocol.md` §6) is the authority on
+    // compliance, so this wait never blocks the result forever.
+    await this.awaitSubmission();
+    if (this.delivered()) {
+      this.finish('completed', 'prompt completed');
+      return;
+    }
+    this.send({ type: 'attempt.result', status: 'completed', message: 'prompt completed' });
+    // stderr, never stdout: the IPC channel carries framed JSON only.
+    process.stderr.write(
+      `runner: ${this.options.attemptId} delivered nothing; waiting for the correction or a shutdown\n`,
+    );
   }
 
   /**

@@ -1798,11 +1798,32 @@ export async function runMessageToStageDrill({ harness, product }) {
       const run = store.runs.find(professional.id);
       const attempts = store.attempts
         .list({ where: 'run_id = ?', params: [professional.id] })
-        .map((attempt) => `${attempt.status}/epoch${String(attempt.ownerEpoch)}`)
+        .map(
+          (attempt) =>
+            `${attempt.status}/epoch${String(attempt.ownerEpoch)}/runner=${String(attempt.runnerId ?? '-')}/beat=${String(attempt.heartbeatAt ?? '-')}`,
+        )
         .join(',');
-      const log = harness.controlLog.join(' | ').slice(-800);
+      // The acceptance aggregation prints only the last 12 lines of a drill's output, so the
+      // whole daemon-side story (`supervisor:`/`control-endpoint:`/`gateway-proxy:`) can also
+      // be written to a file. Without it a timing failure (a submit that landed after the Run
+      // went terminal) is indistinguishable from a model that never submitted — the exact
+      // ambiguity this drill exists to remove (WP-12 R7).
+      const full = harness.controlLog.join('\n');
+      let dump = '';
+      if (process.env['AGENTDEV_LIVE_DUMP'] === '1') {
+        const relative = join('.agentdev', 'work', 'WP-12', 'live-message-to-stage-failure.log');
+        try {
+          // `writeFileAt(root, relativePath, content)`: the root is the repo this drill runs in.
+          writeFileAt(process.cwd(), relative, `${full}\n`);
+          dump = `; full log: ${join(process.cwd(), relative)}`;
+        } catch (error) {
+          dump = `; full log could not be written: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      }
       throw new Error(
-        `no stage result: professional Run is ${String(run?.status)} (attempts: ${attempts}); control log: ${log}`,
+        `no stage result: professional Run is ${String(run?.status)} (attempts: ${attempts}); stage results=${String(
+          store.stageResults.list({ where: 'run_id = ?', params: [professional.id] }).length,
+        )}; control log tail: ${full.slice(-4000)}${dump}`,
       );
     }
     // `protocol.md` §7: a success is `stage.completed`, any other terminal status is
@@ -1819,12 +1840,33 @@ export async function runMessageToStageDrill({ harness, product }) {
       `no terminal stage event was emitted for the professional Run (stage result status ${String(stageResult.status)})`,
     );
     const stageOutcome = `${stageEvents[0].name}(${String(stageResult.status)})`;
+    // Say what was proven and what was not: a `stage.failed` delivery is a real delivery — the
+    // chain (message → Chief → dispatch → stage result) is what this drill asserts, and the
+    // stage's own success is the model's judgement, not a precondition. Without this sentence a
+    // green row reads as "the stage succeeded", which the evidence does not show.
+    const stageVerdict =
+      stageEvents[0].name === 'stage.completed'
+        ? 'a successful stage was delivered'
+        : `a NON-successful stage (${String(stageResult.status)}) was delivered — this proves the chain, not a passing stage`;
+    if (process.env['AGENTDEV_LIVE_DUMP'] === '1') {
+      // The turn-by-turn story of a *passing* run matters as much as a failing one: whether the
+      // one corrective prompt had to be delivered is only visible here (WP-12 R7).
+      try {
+        writeFileAt(
+          process.cwd(),
+          join('.agentdev', 'work', 'WP-12', 'live-message-to-stage-control.log'),
+          `${harness.controlLog.join('\n')}\n`,
+        );
+      } catch {
+        // A diagnostic that cannot be written must not fail a passing drill.
+      }
+    }
     const board = await harness.accepted('board', {});
     ensure(
       JSON.stringify(board).includes(requirement.id),
       'the board does not show the Requirement the real message created',
     );
-    return `real Provider no-seed chain: message ${sent.messageId} → Chief Run ${chiefRun.id} (${String(store.runs.find(chiefRun.id)?.status)}) → Requirement ${requirement.id} (active/plan) → professional Run ${professional.id} (parent ${chiefRun.id}) → stage result ${stageResult.id} + ${stageOutcome}; provider calls=${String(harness.transport.summary())}`;
+    return `real Provider no-seed chain: message ${sent.messageId} → Chief Run ${chiefRun.id} (${String(store.runs.find(chiefRun.id)?.status)}) → Requirement ${requirement.id} (active/plan) → professional Run ${professional.id} (parent ${chiefRun.id}) → stage result ${stageResult.id} + ${stageOutcome} (${stageVerdict}); provider calls=${String(harness.transport.summary())}`;
   } finally {
     await execution.stop();
   }

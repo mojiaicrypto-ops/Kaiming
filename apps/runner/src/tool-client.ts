@@ -228,6 +228,38 @@ export function createToolClient(options: ToolClientOptions): ToolClient {
     };
   }
 
+  /**
+   * Operation ids of calls this Attempt was **refused** for, keyed by their semantics.
+   *
+   * `protocol.md` §4: the user approves *this* call and the model then **retries the same
+   * call** — but a retry is a new SDK tool call with a new call id, so a `toolOperationId`
+   * derived from the call id would name a different operation and the approved `once` Grant
+   * (bound to the first id and its `inputHash`) could never admit it. Reusing the refused
+   * call's identity makes the approval mean what the user clicked, without weakening the
+   * binding: different arguments hash differently, get a new id and stay refused (WP-12 R7).
+   */
+  const refusedOperations = new Map<string, { toolOperationId: string; inputHash: string }>();
+
+  /** The semantics key that survives a retry: the tool plus the exact arguments. */
+  function refusedKey(toolName: string, inputHash: string): string {
+    return `${toolName}|${inputHash}`;
+  }
+
+  /**
+   * The identity a call is executed under: the remembered refused one when this exact call
+   * was refused before, its own derivation otherwise.
+   */
+  function identityFor(input: {
+    readonly toolName: string;
+    readonly args: unknown;
+    readonly toolCallId: string;
+  }): { toolOperationId: string; inputHash: string; key: string } {
+    const derived = derive(input);
+    const key = refusedKey(input.toolName, derived.inputHash);
+    const remembered = refusedOperations.get(key);
+    return remembered === undefined ? { ...derived, key } : { ...remembered, key };
+  }
+
   async function post(
     body: Record<string, unknown>,
     timeoutMs: number,
@@ -270,7 +302,7 @@ export function createToolClient(options: ToolClientOptions): ToolClient {
     readonly signal?: AbortSignal | undefined;
     readonly timeoutMs?: number;
   }): Promise<ToolCallResult> {
-    const { toolOperationId, inputHash } = derive(input);
+    const { toolOperationId, inputHash, key } = identityFor(input);
     const timeoutMs = input.timeoutMs ?? defaultTimeoutMs;
     const body = {
       toolName: input.toolName,
@@ -307,6 +339,11 @@ export function createToolClient(options: ToolClientOptions): ToolClient {
         code: 'INTERNAL_ERROR',
         message: `HTTP ${String(answer.status)}`,
       };
+      if (error.code === 'NOT_AUTHORIZED') {
+        // Remember the identity the user will be asked to approve, so the retry after the
+        // approval lands on the same operation (`protocol.md` §4).
+        refusedOperations.set(key, { toolOperationId, inputHash });
+      }
       return {
         text: `${error.code}: ${error.message}`,
         isError: true,
@@ -316,6 +353,9 @@ export function createToolClient(options: ToolClientOptions): ToolClient {
         durationMs,
       };
     }
+    // The call was admitted (or replayed): the refusal, if any, is settled, and a *later*
+    // identical call is its own operation again rather than a replay of this one.
+    refusedOperations.delete(key);
     const parsed = (answer.body ?? {}) as {
       status?: unknown;
       result?: unknown;
@@ -356,7 +396,9 @@ export function createToolClient(options: ToolClientOptions): ToolClient {
     readonly toolCallId: string;
     readonly timeoutMs?: number;
   }): Promise<PermissionRequestResult | undefined> {
-    const { toolOperationId, inputHash } = derive(input);
+    // The same identity the refused `call()` used, so the Decision and the Grant bind the
+    // operation the model will retry (`identityFor`, not a fresh derivation).
+    const { toolOperationId, inputHash } = identityFor(input);
     try {
       const response = await doFetch(`${options.url}/control/permission.request`, {
         method: 'POST',

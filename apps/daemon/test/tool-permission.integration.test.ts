@@ -28,6 +28,7 @@ import {
 import {
   ArtifactService,
   AttachmentService,
+  Broker,
   DownloadTokenStore,
   EventHub,
   GrantStore,
@@ -36,6 +37,8 @@ import {
 } from '@agentdev/core';
 import { scanEvents } from '../../../packages/core/src/events.js';
 import { WorkbenchProtocol } from '../src/protocol.js';
+import { createToolHandler } from '../src/tool-handler.js';
+import { toolInputHash } from '../../runner/src/tool-client.js';
 
 const WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3dc000';
 const RUN_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3dc010';
@@ -569,5 +572,86 @@ describe('permission.request / permission.respond over the workbench protocol', 
     expect(() => bare.dispatch('permission.request', { workId: WORK_ID }, { caller })).toThrowError(
       /tool bridge/,
     );
+  });
+
+  it('closes the environment-operation loop: refuse → approve (protocol) → retry executes (AC-049/AC-080)', async () => {
+    // The real Broker the tool handler calls, over the same store and Grant store.
+    const broker = new Broker({
+      store,
+      grants,
+      now: () => new Date(clock).toISOString(),
+      docker: () => ({ available: true, version: '28.4.0' }),
+      resolver: { resolve: () => Promise.resolve({ ok: false, reason: 'no network in tests' }) },
+    });
+    const handler = createToolHandler({
+      store,
+      broker,
+      artifacts: new ArtifactService({ store, blobs: new BlobStore({ root: dataDir }) }),
+      grantService,
+      mode: 'host',
+      now: () => new Date(clock).toISOString(),
+    });
+    const caller = { runId: RUN_ID, attemptId: ATTEMPT_ID, epoch: 0, role: 'backend' as const };
+    const operationId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3dc070';
+    const args = { command: 'echo approved-by-the-user' };
+    const inputHash = toolInputHash(args);
+    const call = {
+      toolName: 'bash',
+      args,
+      toolOperationId: operationId,
+      timeoutMs: 120_000,
+    };
+
+    // 1. No Grant: the real Broker refuses and writes nothing.
+    await expect(handler.execute({ caller, request: call })).rejects.toMatchObject({
+      code: 'NOT_AUTHORIZED',
+    });
+    expect(store.toolOperations.find(operationId)).toBeUndefined();
+
+    // 2. The request side persists the binding **from the request itself**: an environment
+    //    operation the Broker refused has no `tool_operation` row, so without this the
+    //    approval would have nothing to mint from.
+    const asked = handler.request({
+      caller,
+      toolName: 'bash',
+      args,
+      toolOperationId: operationId,
+      inputHash,
+    });
+    const recorded = store.toolOperations.find(operationId);
+    expect(recorded?.state).toBe('prepared');
+    expect(recorded?.grantId).toBeUndefined();
+    expect(recorded?.inputHash).toBe(inputHash);
+    expect(recorded?.targets).toEqual([]);
+
+    // 3. The user approves through the **workbench protocol** (not the service directly).
+    const approved = dispatch('permission.respond', {
+      decisionId: textOf(asked['decisionId']),
+      choice: 'approve',
+    });
+    expect(approved['status']).toBe('applied');
+    expect(typeof approved['grantId']).toBe('string');
+
+    // 4. The very same call is now admitted and really runs.
+    const outcome = await handler.execute({ caller, request: call });
+    expect(outcome.operation).toBe('bash');
+    expect(outcome.toolOperation.state).toBe('finished');
+    expect(JSON.stringify(outcome.result)).toContain('approved-by-the-user');
+
+    // 5. The binding is exact: another input on the same operation id, and another operation
+    //    id, are both refused and never reuse the `once` Grant.
+    await expect(
+      handler.execute({ caller, request: { ...call, args: { command: 'echo something-else' } } }),
+    ).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+    // A *different* operation id cannot reuse the consumed `once` Grant either: the Broker
+    // refuses it (the Grant is already consumed by the approved operation) and writes no row.
+    const otherId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3dc071';
+    await expect(
+      handler.execute({
+        caller,
+        request: { toolName: 'bash', args, toolOperationId: otherId, timeoutMs: 120_000 },
+      }),
+    ).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+    expect(store.toolOperations.find(otherId)).toBeUndefined();
   });
 });

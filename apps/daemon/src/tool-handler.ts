@@ -574,15 +574,45 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
       if (!planned.ok) {
         throw new ProtocolError(planned.code, planned.reason, { details: { toolName } });
       }
+      // The binding an approval later mints from must be **durable before the user sees the
+      // request**. For an environment operation the Broker refused, no `tool_operation` row
+      // was ever written — a refusal is not an execution — so the request itself records one.
+      // Priority is explicit: a row that already exists is the operation the Broker really
+      // keyed and wins; only when there is none does the request's own binding (the Runner
+      // just attempted exactly this call) become the record.
+      const recorded = store.toolOperations.find(toolOperationId);
+      if (recorded !== undefined && recorded.inputHash !== inputHash) {
+        throw new ProtocolError(
+          'IDEMPOTENCY_CONFLICT',
+          `tool operation ${toolOperationId} is recorded with a different input hash`,
+          { details: { toolOperationId, operation: recorded.toolName } },
+        );
+      }
+      if (recorded === undefined) {
+        store.toolOperations.insert({
+          id: toolOperationId,
+          workId: work.id,
+          runId: run.id,
+          attemptId: caller.attemptId,
+          epoch: caller.epoch,
+          toolName: planned.plan.toolName,
+          inputHash,
+          argsRef: toolOperationId,
+          targets: [...planned.plan.targets],
+          state: 'prepared',
+          // No `grantId`: this row is a refusal record kept for the approval, not an
+          // operation that was prepared for execution (`GrantStore.prepareOperation`).
+        });
+      }
       const decided = grantService.requestPermission({
         workId: work.id,
         runId: run.id,
         role: run.role,
         stage: run.stage,
-        operation: planned.plan.operation,
-        targets: planned.plan.targets,
+        operation: recorded?.toolName ?? planned.plan.operation,
+        targets: recorded === undefined ? [...planned.plan.targets] : [...recorded.targets],
         toolOperationId,
-        inputHash,
+        inputHash: recorded?.inputHash ?? inputHash,
         expiresAt: new Date(
           Date.parse(now()) + LIMITS.workActiveTimeSec.default * 1000,
         ).toISOString(),

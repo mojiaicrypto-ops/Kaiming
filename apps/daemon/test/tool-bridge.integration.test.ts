@@ -432,7 +432,14 @@ describe('tool bridge vertical drill (T3b)', () => {
               `${attempt.status}:${attempt.runnerId ?? '-'}:${attempt.heartbeatAt ?? '-'}`,
           )
           .join(',')}`,
-        `logs=${logs.slice(-12).join(' || ')}`,
+        `decisions=${opened.store.decisions
+          .list({ where: 'work_id = ?', params: [workId] })
+          .map((decision) => `${decision.kind}:${decision.state}`)
+          .join(',')}`,
+        `logs=${logs
+          .filter((line) => /tool|permission|attempt\.result|interrupt|parked/.test(line))
+          .slice(-14)
+          .join(' || ')}`,
       ].join('\n');
 
     function chiefRunId(): string {

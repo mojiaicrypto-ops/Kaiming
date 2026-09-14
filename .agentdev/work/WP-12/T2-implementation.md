@@ -1041,3 +1041,104 @@ runs=chief:completed, backend:interrupted   attempts=lost:1
 | `scripts/e2e.mjs` | `tool.broker-admission` 超时诊断改为紧凑且可归因（`runsAll`/`invoked`/`decisions`/`grantLogs`/`modelTurns`），失败的检查自己说清根因 | e2e 仍 FAIL（域阻断未修），但证据可读 |
 
 一次性探针（`zz-t2sse.mjs`、`zz-t2cv*`、`zz-t2g8*`、`scripts/lib/e2e-checks.mjs` 的 `E2E_ONLY`）**已全部删除/回滚**，树不留红。
+
+---
+
+# 修复轮 7 · R7（验收内 `pnpm test:live` 的 `drill.message-to-stage` 失败：纠正提示送不到 + 结算后不回收子进程）
+
+## 定性：不是「Attempt 被误判 lost」，而是**模型有一回合没提交**，而纠正提示结构上永远送不到
+
+`no stage result: professional Run is contract_violation (attempts: lost/epoch0); control log: …; only a running Run accepts stage results`
+两条线索说明的是**因果顺序**，不是两个并列死因：
+
+1. `lost` 是本轮 R6 的路径写下的（纠正后子进程**干净退出** = 模型那一回合没交付 → 记 `contract_violation`，Attempt → `lost`）；
+   心跳/租约（`leaseSec=20s`）没有参与：Runner 每 5s 心跳，且真子进程在 6s 内就退出了（单独 live 实测 7 passed/0 failed，`stage.failed(failed)` 正是这种「交付了但阶段不成功」的正常路径）。
+2. `only a running Run accepts stage results` 是**同一个 Attempt 迟到的 `stage.submit`** 被 `stage.ts:135` 拒绝的原文——Run 已经因第 1 步进入终态。
+
+根因（R6 已定位、本轮修复）：`apps/runner/src/attempt.ts` 在 `attempt.prompt` 的回合结束后**先报 `attempt.result` 再 `process.exit(0)`**，
+所以 supervisor 的 `attempt.steer`（`protocol.md` §6 的纠正提示）写进的是**已经关闭的管道**：纠正永远送不到 →
+模型没有第二次机会 → 只能 `contract_violation` → 没有 stage result → drill 失败。这在验收负载/真实模型偶发「先说话不调工具」时必现。
+
+## 修的内容（都在本车道）
+
+1. **`apps/runner/src/attempt.ts`：非交付回合不再退出**。新增 `settleTurn()`：等 idle → 等提交宽限 → 交付了就 `finish`（照旧退出），
+   没交付就**只报 `attempt.result` 并继续读 stdin**，等 Core 的纠正或 shutdown。`attempt.steer` 在**空闲会话**上用 `session.prompt()`
+   开一个真回合（`steer()` 只是入队，`pi-agent-core` 的 `Agent.continue` 才排空该队列；回合结束后没人再排空它——这就是「送不到」的另一半），
+   忙时才用 `steer()`。新增 2 例 Runner 集成测试（不退出 / 纠正按真回合跑）。
+2. **`packages/core/src/supervisor.ts`：结算后主动回收子进程**。Runner 常驻后必须由 Core 决定何时收尸：新增 `endSettledChild()`
+   （先 `attempt.shutdown`，再走既有的 SIGTERM→SIGKILL 升级），在两条结算出口调用；新增单测 1 例。
+3. **纠正提示指明契约**。`correct()` 现在发 `${daemon 的纠正}\n${contractReminder(role)}`：professional 点名
+   `stage_yield` 与 `status/summary/changedPaths/evidenceRefs/unknowns/requestedActions`，chief 点名
+   `assessment_submit`+`agent_dispatch` 及字段，并写明「纯文本不交付、阶段只看这次工具调用」。
+4. **`scripts/lib/live-drills.mjs`：失败诊断 + 诚实措辞**。失败时打印完整控制日志（可选落盘
+   `.agentdev/work/WP-12/live-message-to-stage-failure.log`，`AGENTDEV_LIVE_DUMP=1`）以及 attempt 的
+   `status/epoch/runner/heartbeatAt`；成功证据里补一句**「交付了但阶段不成功（stage.failed）时，本行只证明链路成立，不证明阶段通过」**。
+
+## 未采用（按要求）
+
+不给 drill 加重试、不把 `contract_violation` 当通过、不放宽 `leaseSec`/超时；`stage.failed` 仍是 PASS（链路断言），但证据文本已经自己说清它证明了什么。
+
+---
+
+# 修复轮 8 · R8（环境操作「拒绝 → 申请 → 批准 → 重试真的执行」：真 Runner 子进程闭环）
+
+## 定性：子进程**没有**在 `permission.request` 那里停住；真正断的是「重试的 operation 身份变了」
+
+用真 daemon 栈 + 真 `apps/runner/dist/cli.js` 子进程 + 真 Broker/控制端点/账本跑同一条链（首席 assessment →
+`plan.approve`（造出 Task，权限请求才可绑定）→ 专业 Run；脚本第一回合 `bash echo approved-by-the-user`），
+R5 的 spawn 观测给出的真实 IPC 序列（节选）：
+
+```
+gateway-proxy: … stream t3b-model → 0 chars, 1 tool call(s)
+runner[…] ← attempt.event (+777ms) event=tool_start tool=bash
+tool-endpoint: refused NOT_AUTHORIZED: no Grant admits this tool call
+control-endpoint: … permission.request bash
+runner[…] ← attempt.event (+791ms) event=tool_end tool=bash        ← 工具调用**结束**了
+runner[…] ← attempt.event (+791ms) event=raw(message_start) … turn_end, turn_start   ← 会话进入下一轮
+```
+
+即：**`tool_end` 有、下一轮也有**。所以「停在原地、没有 `tool_end`」的真实含义是：
+**每一次重试都被再次拒绝，Run 被送进 `waiting_permission` 后永远无法交付**，于是 daemon 侧看不到任何后续进展
+（R6/R7 之前子进程还会在回合结束后退出，看起来就更像「卡死」）。
+
+根因：`tool-client.ts` 用 **Pi 的 tool-call id** 派生 `toolOperationId`。模型「重试同一次调用」是**一次新的
+tool call（新 id）**，于是派生出一个**新的 operation**；用户批准的那个 `once` Grant 绑定在**旧 id + inputHash** 上，
+永远无法准入新 operation → 再拒 → 再申请 → Run 停在 `waiting_permission` → `stage.submit` 永远被拒
+（`stage.ts:135 only a running Run accepts stage results`）→ 演练超时。
+
+## 修的内容
+
+1. **`apps/runner/src/tool-client.ts`：被拒调用的身份在「批准→重试」之间保持稳定**。新增
+   `refusedOperations`（键 = `toolName|inputHash`）：一次 `NOT_AUTHORIZED` 之后记住该调用的
+   `{toolOperationId, inputHash}`，**同工具同参数的后续调用复用它**（`identityFor()`，`call()` 与
+   `permission.request` 共用一个身份）；一旦某次调用被准入（含 replay）就删除记忆——之后的同类调用又是它自己的新
+   operation，不会被当成 replay。**换参数 → 不同 key → 自己的新 id → 仍被拒**，`once` Grant 也不会被改指。
+2. 与 R7 的两处修复合起来才闭环：Runner 结束后回合**不再退出**（等纠正/shutdown）、结算后 supervisor **回收子进程**，
+   否则重试轮次/纠正轮次没有承载者。
+3. 新增证据（真子进程）：`apps/daemon/test/tool-permission-runner.integration.test.ts`
+   （`refuses, records the request, and really executes the model retry after the user approves (AC-049/AC-080)`）：
+   ① 无 Grant 的 `bash` → `NOT_AUTHORIZED` + 工具调用**正常收尾**（断言 IPC 里有 `tool_end tool=bash`）；
+   ② 端点记录了绑定（`prepared`、无 `grantId`）；③ 真实批准（`state: accepted`、`scope: once`、Run 回到 `running`）；
+   ④ **同一次调用重试后真实执行**：唯一 `tool_operation` 行 `finished`，`grantId` = 批准的那个 Grant，`resultRef`/`finishedAt` 齐备；
+   ⑤ 阶段结果 `success`（链路交付）；⑥ 精确绑定：同 operation id 换参数 → `IDEMPOTENCY_CONFLICT` 且不新增行。
+   另有单测 `apps/runner/test/tool-client.test.ts`（重试复用被拒身份、换参数另起身份）。
+
+## R8 真实证据（真实退出码）
+
+```
+$ pnpm typecheck                                   → exit 0
+$ pnpm build                                       → exit 0
+$ pnpm test:unit                                   → 77 files / 1422 tests passed（exit 0）
+$ pnpm test:integration                            → 54 files /  518 tests passed（exit 0，含本轮新增的真子进程闭环用例）
+$ node scripts/e2e.mjs                             → 26 checks — PASS 25 / FAIL 0 / UNVERIFIED 1；exit 0
+$ node scripts/live.mjs --no-write（真实 Provider）   → exit 0；7 passed / 0 failed / 0 unverified
+$ node scripts/acceptance.mjs --no-write（真实 Provider）→ exit 0
+    acceptance: pnpm test:e2e  exit=0 (60837ms)
+    acceptance: pnpm test:live exit=0 (85551ms)
+    acceptance: 94/94 ACs accounted — PASS 94 / ACCEPTED 0 / FAIL 0 / MISSING 0
+```
+
+live 里 `drill.message-to-stage` 本次以 `stage.failed(failed)` 通过，证据文本已自带那句诚实说明：
+「a NON-successful stage (failed) was delivered — **this proves the chain, not a passing stage**」
+——即它证明的是 message→Chief→dispatch→Requirement→professional Run→stage result 的**链路**成立，
+不证明那次真实交付的阶段判定是成功（真实模型自己判了失败，这是它的判断，不是断言放水）。

@@ -290,6 +290,21 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * The one corrective prompt's contract line, per role (`protocol.md` §6).
+ *
+ * The daemon's own correction states the rule ("a spoken success does not change the domain
+ * state"); this states the exact tool and field list, so a model that answered with prose gets
+ * an unambiguous instruction rather than a restatement of the same request. `execution.md` §7
+ * fixes the two tool sets, and `docs/rules/agents.md` §4 makes the structured submission the
+ * only delivery.
+ */
+function contractReminder(role: string): string {
+  return role === 'chief'
+    ? 'Contract: deliver by calling `assessment_submit` (intent, goal, scope, level, semanticImpact, riskFlags, uncertainties, policyRevision, reason) and then `agent_dispatch` (role, purpose, goal, scope, stage, contextSelection, requiredOutputs, requiredChild, joinPolicy, budgetAllocation). Plain text delivers nothing and the Work does not move.'
+    : 'Contract: deliver by calling `stage_yield` with status, summary, changedPaths, evidenceRefs, unknowns and requestedActions (add artifactRefs/findingIds when they apply). Plain text delivers nothing: the stage is judged on that tool call alone.';
+}
+
 export class RunnerSupervisor {
   private readonly store: ProjectStore;
   private readonly lifecycle: RunLifecycle;
@@ -1139,6 +1154,7 @@ export class RunnerSupervisor {
       // A Run the daemon's own handler ended (a `contract_violation`) still has to be
       // reported: the message behind it must not stay `processing` forever.
       this.reportSettled(entry.runId);
+      this.endSettledChild(entry);
       return;
     }
     const attempt = this.store.attempts.find(entry.attemptId);
@@ -1170,6 +1186,22 @@ export class RunnerSupervisor {
     });
     this.clearKillTimer(entry);
     this.reportSettled(entry.runId);
+    this.endSettledChild(entry);
+  }
+
+  /**
+   * Ends the Runner of a Run that is already settled.
+   *
+   * `protocol.md` §6 keeps a Runner alive after a turn that delivered nothing so the one
+   * corrective prompt can be answered, which means Core — not the child — decides when a
+   * settled Attempt's process goes away. `attempt.shutdown` is the documented first step, and
+   * a child that ignores it is signalled on the same escalation the stop path uses. A child
+   * that already exited is unaffected (`send` drops a closed pipe, `terminate` tolerates a
+   * gone process).
+   */
+  private endSettledChild(entry: LiveAttempt): void {
+    this.send(entry, { type: 'attempt.shutdown' });
+    this.terminate(entry, 'SIGTERM');
   }
 
   /** Reports an Attempt opening, never letting a callback throw into the spawn path. */
@@ -1218,7 +1250,13 @@ export class RunnerSupervisor {
     // Core-side parse must read, and keeping the first answer's JSON would make the
     // retry look compliant by accident.
     entry.text = '';
-    this.send(entry, { type: 'attempt.steer', text: corrective });
+    this.send(entry, {
+      type: 'attempt.steer',
+      // The daemon's correction names the rule; the contract line names the exact tool and
+      // fields, because a model that answered with prose has already shown it did not read
+      // the first prompt's contract (WP-12 R7).
+      text: `${corrective}\n${contractReminder(entry.role)}`,
+    });
     this.log(
       `supervisor: ${entry.runId} attempt ${entry.attemptId} delivered no structured result; corrective prompt sent`,
     );

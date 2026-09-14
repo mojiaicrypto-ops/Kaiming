@@ -575,6 +575,19 @@ G8 的 AC（AC-045/046/047/048/049/050/051/053）此前只有库级/单测证据
 
 `pnpm test:live` 的 `drill.message-to-stage` 本次以 **`stage.failed(failed)`** 作为链证据通过：**链本身成立**（真实 message → Chief → 派生授权 → Requirement → 派发 → 专业 Run → `stage.submit` 走到 StageGate 并落库为 `stage.failed`），但**专业 Run 的阶段结果是 failed**。因此该演练证明的是「链路与协议/门禁路径成立」，**不是**「阶段成功/交付通过」；结算与验收报告不得把它写成后者。
 
+### 12.2f 环境操作「申请→批准→放行」闭环（发布阻断项，已修）
+
+**此前为什么走不通**：路径型操作的授权来自 `tool_operation` 记录行，但**环境操作被 Broker 拒绝时不会写该行**（拒绝不是执行），于是用户在收件箱点「批准」时 `permission.respond` 找不到绑定 → `MISSING_CONTEXT`，重试仍被拒。权威来源不是记录行，而是 **Runner 刚尝试过的那次调用本身**（它自带 operation、目标、`inputHash` 与派生的 `toolOperationId`）。
+
+**现在哪条路径权威**（两条来源，二选一并写明优先级）：
+- 请求侧 `apps/daemon/src/tool-handler.ts`：若该 `toolOperationId` **已有** `tool_operation` 行，则以**记录行为准**（Broker 真正登记过的那次调用；行内 hash 与请求不符 → `IDEMPOTENCY_CONFLICT`）；**没有**行时（环境操作被拒的情形）把**请求自身的绑定**持久化为一条 `state='prepared'`、**无 `grantId`** 的行（该行是「为批准而留的拒绝记录」，不是待执行操作）。
+- 批准侧 `apps/daemon/src/protocol.ts` 的 `permission.respond` 只用上述**已持久化绑定**铸 `once` Grant（operation + `inputHash` 精确绑定）；目标不可解仍是类型化拒绝。
+- 放行侧 `packages/core/src/grants.ts`：`prepareOperation` 见到「`prepared` 且无 `grantId`」的行时，说明它是拒绝记录而非在飞操作；用户已批准**恰好这一次**调用，因此把批准 Grant 附到该行并放行执行（不删行、不重复授权）。异参数走端点/记录的 `inputHash` 校验 → `IDEMPOTENCY_CONFLICT`；换 operation id 无法复用已消费的 `once` Grant → 被拒且不落行。
+
+**闭环测试（验收证据，`AC-049`/`AC-080`）**：`apps/daemon/test/tool-permission.integration.test.ts` 新增 `closes the environment-operation loop: refuse → approve (protocol) → retry executes (AC-049/AC-080)`——真实 Broker + 真实 `ToolGrantService` + 真实 tool handler：① 无 Grant 的 `bash` → `NOT_AUTHORIZED` 且无行；② 请求侧持久化绑定（`prepared`/无 `grantId`/`targets:[]`/`inputHash` 一致）；③ 通过 **workbench 协议**批准（不是直接调服务）→ `applied` + `grantId`；④ **同一次调用**被准入并**真实执行**（`finished`，输出含 `approved-by-the-user`）；⑤ 同 id 异参数 → `IDEMPOTENCY_CONFLICT`、换 operation id → `IDEMPOTENCY_CONFLICT` 且无新行。
+
+**边界（如实）**：走到「真 `apps/runner` 子进程」的那条闭环用例**未落地**：拒绝后子进程停在原地（端点已应答 `permission.request`，但 Runner 未产生 `tool_end` 与下一轮模型调用），属 Runner 侧停摆，已作为独立问题报告；因此本闭环证据为「真实 Broker/授权/账本 + 真实控制端点语义 + 真实 workbench 协议」，不含子进程。结论从「服务层通、接线不通」更正为：**服务层与协议层都已闭环，用户路径的批准现在可放行并重试成功**；子进程侧停摆是另一条独立缺陷。
+
 ### 12.2e 裁决 2 落地后同步的既有用例（`tool-permission.integration.test.ts`）
 
 旧用例假设「能造出无 targets 的请求、再由 approve 拒绝」，与裁决 2 的新语义相反；已按新语义改写为两条（测试名与真实断言一致、均带 `AC-049`，避免验收器判「失败用例未映射 AC」）：

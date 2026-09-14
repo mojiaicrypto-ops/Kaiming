@@ -224,6 +224,85 @@ describe('AttemptRunner', () => {
     expect(exitCode).toBe(1);
   });
 
+  it('keeps the process alive when a turn delivered nothing, so the correction can land (protocol.md §6)', async () => {
+    // The real regression (WP-12 R7): `drill.message-to-stage` reported a non-delivering turn
+    // and `process.exit(0)` ~18ms later, so the supervisor's `attempt.steer` was written to a
+    // dead pipe and the Run ended without a stage result. A non-delivering turn must report the
+    // result and *wait* for the one correction.
+    let sawPrompt = '';
+    const fake = fakeSession();
+    const session: PiSessionHandle = {
+      ...fake.handle,
+      prompt: (text) => {
+        sawPrompt = text;
+        return Promise.resolve();
+      },
+    };
+    const runner = build(
+      { role: 'backend', submissionGraceMs: 20 },
+      { buildSession: () => Promise.resolve(session) },
+    );
+    await runner.start();
+    const keep = await runner.handle({
+      v: 1,
+      type: 'attempt.prompt',
+      attemptId: 'attempt-1',
+      epoch: 7,
+      text: 'go',
+    });
+    expect(sawPrompt).toBe('go');
+    // Reported, but alive: Core still owes this Attempt the corrective prompt.
+    expect(keep).toBe(true);
+    expect(exitCode).toBeUndefined();
+    const result = messages().find((message) => message.type === 'attempt.result');
+    expect(result?.type === 'attempt.result' ? result.status : undefined).toBe('completed');
+    runner.dispose();
+  });
+
+  it('runs the correction as a real turn on an idle session instead of queueing it forever', async () => {
+    // `pi-agent-core` `Agent.steer()` only enqueues; its queue is drained inside the prompt
+    // loop. After the previous turn ended the loop is gone, so a plain `steer()` would leave
+    // the correction unread — an idle session therefore gets a real `prompt()` turn (R7).
+    const calls: string[] = [];
+    const fake = fakeSession();
+    const session: PiSessionHandle = {
+      ...fake.handle,
+      prompt: (text) => {
+        calls.push(`prompt:${text}`);
+        return Promise.resolve();
+      },
+      steer: (text) => {
+        calls.push(`steer:${text}`);
+        return Promise.resolve();
+      },
+    };
+    const runner = build(
+      { role: 'backend', submissionGraceMs: 20 },
+      { buildSession: () => Promise.resolve(session) },
+    );
+    await runner.start();
+    await runner.handle({
+      v: 1,
+      type: 'attempt.prompt',
+      attemptId: 'attempt-1',
+      epoch: 7,
+      text: 'go',
+    });
+    const keep = await runner.handle({
+      v: 1,
+      type: 'attempt.steer',
+      attemptId: 'attempt-1',
+      epoch: 7,
+      text: 'Contract: call stage_yield.',
+    });
+    expect(calls).toContain('prompt:Contract: call stage_yield.');
+    expect(calls.some((call) => call.startsWith('steer:'))).toBe(false);
+    // Still nothing delivered, so the Attempt stays alive for Core's verdict.
+    expect(keep).toBe(true);
+    expect(exitCode).toBeUndefined();
+    runner.dispose();
+  });
+
   it('fails before starting when the model is not configured in the catalog', async () => {
     const runner = build({ modelId: 'missing-model' });
     await expect(runner.start()).resolves.toBe(1);

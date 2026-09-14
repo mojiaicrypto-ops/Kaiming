@@ -259,6 +259,50 @@ describe('tool call transport', () => {
     expect(result.text).toBe('NOT_AUTHORIZED: no Grant admits this call');
   });
 
+  it('reuses the refused identity for the retry after the approval, and only for the same call', async () => {
+    // `protocol.md` §4: the user approves *this* call, the model retries it. A retry is a new
+    // SDK tool call with a new call id, so an id derived from the call id would name a second
+    // operation and the approved `once` Grant could never admit it (WP-12 R7).
+    const stub = stubFetch([
+      {
+        status: 401,
+        body: { error: { code: 'NOT_AUTHORIZED', message: 'no Grant admits this call' } },
+      },
+      { status: 200, body: { status: 'waiting_permission', decisionId: 'decision-1' } },
+      { status: 200, body: { status: 'executed', result: { inline: 'approved-by-the-user' } } },
+    ]);
+    const instance = client(stub.fetchImpl);
+    const refused = await instance.execute({
+      toolName: 'bash',
+      args: { command: 'make test' },
+      toolCallId: 'call-1',
+      signal: undefined,
+    });
+    expect(refused.isError).toBe(true);
+    // The retry is a *different* Pi tool call (new call id) with the same arguments.
+    const retried = await instance.call({
+      toolName: 'bash',
+      args: { command: 'make test' },
+      toolCallId: 'call-2',
+    });
+    expect(retried.isError).toBeUndefined();
+    expect(stub.requests[2]?.body['toolOperationId']).toBe(
+      stub.requests[1]?.body['toolOperationId'],
+    );
+    // Different arguments are their own operation: the approved call cannot be re-pointed.
+    await instance.call({
+      toolName: 'bash',
+      args: { command: 'make other' },
+      toolCallId: 'call-3',
+    });
+    expect(stub.requests[3]?.body['toolOperationId']).not.toBe(
+      stub.requests[1]?.body['toolOperationId'],
+    );
+    expect(stub.requests[3]?.body['expectedInputHash']).not.toBe(
+      stub.requests[1]?.body['inputHash'],
+    );
+  });
+
   it('does not ask for permission on a correctable refusal', async () => {
     const stub = stubFetch([
       { status: 400, body: { error: { code: 'VALIDATION_ERROR', message: 'args are invalid' } } },

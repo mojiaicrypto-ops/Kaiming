@@ -529,6 +529,31 @@ describe('RunnerSupervisor claiming', () => {
     expect(supervisor.liveAttempts()).toHaveLength(0);
   });
 
+  it('ends the Runner of a settled Run instead of leaving it running', () => {
+    // `protocol.md` §6 keeps a Runner alive after a turn that delivered nothing so the one
+    // corrective prompt can be answered (WP-12 R7). Once the Run is settled Core owns the
+    // process: it sends `attempt.shutdown` and escalates to SIGTERM rather than leaking a
+    // Runner per settled Run.
+    const runId = queueRun();
+    supervisor.tick();
+    const runner = FakeRunner.spawned[0];
+    if (runner === undefined) throw new Error('unreachable');
+    probe.setAlive(`pid:${String(runner.pid)}`, true);
+    runner.emit({
+      type: 'attempt.ready',
+      sessionId: 'session-1',
+      provider: 'stub',
+      modelId: 'stub-model',
+      tools: [],
+      droppedTools: [],
+      environmentRef: 'host:test/test/node-0',
+    });
+    runner.emit({ type: 'attempt.result', status: 'completed', message: 'done' });
+    expect(store.runs.find(runId)?.status).toBe('completed');
+    expect(runner.commands.some((command) => command.type === 'attempt.shutdown')).toBe(true);
+    expect(runner.signals).toContain('SIGTERM');
+  });
+
   it('accumulates the assistant text and hands it to the result handler', () => {
     const seen: AttemptResultInput[] = [];
     const withHandler = new RunnerSupervisor({
@@ -620,10 +645,16 @@ describe('RunnerSupervisor claiming', () => {
     // The Attempt stays live and is steered instead of settling the Run.
     expect(store.runs.find(runId)?.status).toBe('running');
     expect(withHandler.liveAttempts()).toHaveLength(1);
-    expect(runner.lastCommand).toMatchObject({
-      type: 'attempt.steer',
-      text: 'Submit through stage_yield; plain text does not deliver.',
-    });
+    const steer = runner.lastCommand;
+    expect(steer?.type).toBe('attempt.steer');
+    // The daemon's rule plus an explicit contract line: the tool and its fields are named,
+    // because a model that answered with prose has already shown it read neither (R7).
+    expect(steer?.type === 'attempt.steer' ? steer.text : '').toContain(
+      'Submit through stage_yield; plain text does not deliver.',
+    );
+    expect(steer?.type === 'attempt.steer' ? steer.text : '').toContain(
+      '`stage_yield` with status, summary, changedPaths, evidenceRefs, unknowns and requestedActions',
+    );
     // The second answer is what the verdict reads: the first text must not leak into it.
     runner.emit({
       type: 'attempt.event',
