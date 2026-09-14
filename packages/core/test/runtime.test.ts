@@ -106,9 +106,15 @@ describe('live runtime record', () => {
     startedAt: '2026-09-14T00:00:00.000Z',
     version: '0.0.0',
     home: runtimeHome,
-    daemon: { host: '127.0.0.1', port: 4318 },
-    web: { host: '127.0.0.1', port: 4317 },
-    projects: [projectId],
+    admin: { host: '127.0.0.1', port: 4319 },
+    instances: [
+      {
+        projectId,
+        root: '/repo',
+        daemon: { host: '127.0.0.1', port: 4318 },
+        web: { host: '127.0.0.1', port: 4317 },
+      },
+    ],
   });
 
   it('round-trips as a 0600 file and clears to null', () => {

@@ -1,0 +1,29 @@
+# Linux systemd user service for AgentDev (`docs/architecture/reliability.md` §7:
+# "Linux提供systemd单用户服务").
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp apps/cli/templates/agentdev.service ~/.config/systemd/user/
+#   # replace __AGENTDEV_REPO__, __NODE__ and __AGENTDEV_HOME__
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now agentdev.service
+#   systemctl --user status agentdev.service
+#
+# The daemon holds `daemon.lock`; `Restart=on-failure` plus the startup outbox/Run scan
+# is the documented crash path ("收到SIGKILL或断电后按恢复流程核对").
+[Unit]
+Description=AgentDev Workspace daemon
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=__NODE__ __AGENTDEV_REPO__/apps/daemon/dist/main.js --home __AGENTDEV_HOME__
+Environment=AGENTDEV_HOME=__AGENTDEV_HOME__
+Restart=on-failure
+RestartSec=2
+# The daemon only listens on loopback; never expose it directly (reliability.md §7).
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

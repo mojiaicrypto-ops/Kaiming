@@ -68,9 +68,15 @@ describe('runtime record schemas', () => {
     startedAt: '2026-09-14T00:00:00.000Z',
     version: '0.0.0',
     home: '/home/.agentdev',
-    daemon: { host: '127.0.0.1', port: DEFAULT_LISTENERS.daemon.port },
-    web: { host: '127.0.0.1', port: DEFAULT_LISTENERS.web.port },
-    projects: [hexId],
+    admin: { host: '127.0.0.1', port: 4319 },
+    instances: [
+      {
+        projectId: hexId,
+        root: '/repo',
+        daemon: { host: '127.0.0.1', port: DEFAULT_LISTENERS.daemon.port },
+        web: { host: '127.0.0.1', port: DEFAULT_LISTENERS.web.port },
+      },
+    ],
   };
 
   it('accepts the documented record and refuses unknown keys', () => {
@@ -79,11 +85,13 @@ describe('runtime record schemas', () => {
   });
 
   it('refuses a non-loopback listener and an out-of-range port', () => {
+    const withDaemon = (daemon: { host: string; port: number }) => ({
+      ...record,
+      instances: [{ ...record.instances[0], daemon }],
+    });
+    expect(() => runtimeRecordSchema.parse(withDaemon({ host: '0.0.0.0', port: 4318 }))).toThrow();
     expect(() =>
-      runtimeRecordSchema.parse({ ...record, daemon: { host: '0.0.0.0', port: 4318 } }),
-    ).toThrow();
-    expect(() =>
-      runtimeRecordSchema.parse({ ...record, daemon: { host: '127.0.0.1', port: 70_000 } }),
+      runtimeRecordSchema.parse(withDaemon({ host: '127.0.0.1', port: 70_000 })),
     ).toThrow();
   });
 
@@ -95,7 +103,22 @@ describe('runtime record schemas', () => {
   });
 
   it('accepts a headless runtime without the BFF', () => {
-    expect(runtimeRecordSchema.parse({ ...record, web: null }).web).toBeNull();
+    const headless = {
+      ...record,
+      instances: [{ ...record.instances[0], web: null }],
+    };
+    expect(runtimeRecordSchema.parse(headless).instances[0]?.web).toBeNull();
+  });
+
+  it('accepts several opened projects in one process', () => {
+    const two = {
+      ...record,
+      instances: [
+        record.instances[0],
+        { ...record.instances[0], projectId: 'c'.repeat(32), root: '/other' },
+      ],
+    };
+    expect(runtimeRecordSchema.parse(two).instances).toHaveLength(2);
   });
 
   it('requires a positive pid and epoch in the lock', () => {

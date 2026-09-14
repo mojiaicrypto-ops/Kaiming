@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:net';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +13,7 @@ import {
   probeImageCapability,
   probePnpm,
   probePort,
+  probeRuntime,
   repoRootFrom,
 } from '../src/doctor.js';
 
@@ -147,5 +148,51 @@ describe('doctor report', () => {
     });
     expect(report.executionReady).toBe(false);
     expect(report.blockers.some((entry) => entry.includes('not writable'))).toBe(true);
+  });
+
+  it('reports the runtime home: missing credential, live daemon and an insecure mode', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agentdev-doctor-runtime-'));
+
+    // A fresh home has no credential yet; the daemon creates it on first start.
+    const fresh = probeRuntime(home);
+    expect(fresh).toMatchObject({ home, installationToken: 'missing', running: false });
+
+    // A 0600 credential plus a live record naming this process.
+    await writeFile(join(home, 'installation-token'), 'token\n', { mode: 0o600 });
+    await writeFile(
+      join(home, 'runtime.json'),
+      JSON.stringify({
+        v: 1,
+        pid: process.pid,
+        epoch: 3,
+        startedAt: '2026-09-14T00:00:00.000Z',
+        version: '0.0.0',
+        home,
+        admin: { host: '127.0.0.1', port: 4319 },
+        instances: [],
+      }),
+      { mode: 0o600 },
+    );
+    expect(probeRuntime(home)).toMatchObject({
+      installationToken: 'ok',
+      running: true,
+      epoch: 3,
+      instances: 0,
+    });
+
+    // A world-readable credential is a compromised installation, not a warning.
+    await chmod(join(home, 'installation-token'), 0o644);
+    const insecure = probeRuntime(home);
+    expect(insecure.installationToken).toBe('insecure');
+    const report = await buildDoctorReport({ startDir: repoRoot, dataDir: home, ports: [] });
+    expect(report.blockers.some((entry) => entry.includes('readable by others'))).toBe(true);
+
+    // A malformed record is reported instead of pretending the runtime is healthy.
+    await writeFile(join(home, 'runtime.json'), '{"pid":1}\n', { mode: 0o600 });
+    const broken = probeRuntime(home);
+    expect(broken.running).toBe(false);
+    expect(broken.detail).toContain('unreadable');
+
+    await rm(home, { recursive: true, force: true });
   });
 });

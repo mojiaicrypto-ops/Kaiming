@@ -29,6 +29,7 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 
+import { enforcePrivateMode } from './auth.js';
 import {
   daemonLockSchema,
   emptyProjectRegistry,
@@ -271,6 +272,29 @@ export function unregisterProject(home: string, root: string): ProjectRegistry {
   };
   writePrivateFile(runtimePaths(home).projects, `${JSON.stringify(next, null, 2)}\n`);
   return next;
+}
+
+/**
+ * Reads the 0600 installation credential.
+ *
+ * `protocol.md` §2 makes this the Bearer both the BFF and the local CLI present to the
+ * daemon. The daemon reads it once at start (and refuses a file others can read), so
+ * the token never has to be copied into `runtime.json`.
+ */
+export function readInstallationCredential(home: string): string {
+  const path = runtimePaths(home).installationCredential;
+  if (!existsSync(path)) {
+    throw new RuntimeHomeError(
+      'CREDENTIAL_MISSING',
+      `installation credential ${path} is missing; start the daemon once to create it`,
+    );
+  }
+  enforcePrivateMode(path);
+  const token = readFileSync(path, 'utf8').trim();
+  if (token.length === 0) {
+    throw new RuntimeHomeError('CREDENTIAL_EMPTY', `installation credential ${path} is empty`);
+  }
+  return token;
 }
 
 /** Path of one project's log file (correlated per project, never per Run). */

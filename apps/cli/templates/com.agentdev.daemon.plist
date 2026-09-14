@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  macOS launchd user service for AgentDev (`docs/architecture/reliability.md` §7:
+  "macOS提供launchd用户服务").
+
+  Install:
+    cp apps/cli/templates/com.agentdev.daemon.plist ~/Library/LaunchAgents/
+    # replace __AGENTDEV_REPO__ with the checkout path and __NODE__ with the node binary
+    launchctl load -w ~/Library/LaunchAgents/com.agentdev.daemon.plist
+    launchctl list | grep agentdev
+
+  The daemon is a single-instance process (`daemon.lock`); `KeepAlive` restarts it after
+  a crash, and the recovery scan runs against the databases it left behind.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.agentdev.daemon</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__AGENTDEV_REPO__/apps/daemon/dist/main.js</string>
+    <string>--home</string>
+    <string>__AGENTDEV_HOME__</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__AGENTDEV_HOME__/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__AGENTDEV_HOME__/logs/launchd.err.log</string>
+</dict>
+</plist>

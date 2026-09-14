@@ -8,13 +8,19 @@
  */
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { NODE_MINIMUM, PACKAGE_MANAGER, satisfiesMinimum } from '@agentdev/contracts';
+import {
+  NODE_MINIMUM,
+  PACKAGE_MANAGER,
+  runtimeRecordSchema,
+  satisfiesMinimum,
+} from '@agentdev/contracts';
 
 const run = promisify(execFile);
 
@@ -45,6 +51,18 @@ export interface PortProbe {
   readonly inUse: boolean;
 }
 
+/** The runtime home's own state: credential mode and whether a daemon is live. */
+export interface RuntimeProbe {
+  readonly home: string;
+  readonly installationToken: 'ok' | 'missing' | 'insecure';
+  readonly running: boolean;
+  readonly pid?: number;
+  readonly epoch?: number;
+  /** Number of opened projects reported by the live record. */
+  readonly instances: number;
+  readonly detail?: string;
+}
+
 export interface DoctorReport {
   readonly node: VersionProbe;
   readonly pnpm: VersionProbe & { readonly path?: string | undefined };
@@ -53,6 +71,8 @@ export interface DoctorReport {
   readonly docker: DockerProbe;
   readonly directories: readonly DirectoryProbe[];
   readonly ports: readonly PortProbe[];
+  /** `agentdev start/stop/status` state (`reliability.md` §7). */
+  readonly runtime: RuntimeProbe;
   /** `true` only when every capability an Attempt needs is really present. */
   readonly executionReady: boolean;
   readonly blockers: readonly string[];
@@ -236,6 +256,41 @@ export interface DoctorOptions {
   readonly imageTag?: string;
 }
 
+/**
+ * Reads the runtime home without starting anything.
+ *
+ * `status` is the read-only view of the same facts; doctor reports them so a first-run
+ * failure is attributable to the credential or a stale daemon instead of a mystery.
+ */
+export function probeRuntime(home: string): RuntimeProbe {
+  const credentialPath = join(home, 'installation-token');
+  let installationToken: RuntimeProbe['installationToken'] = 'missing';
+  if (existsSync(credentialPath)) {
+    installationToken = (statSync(credentialPath).mode & 0o777) === 0o600 ? 'ok' : 'insecure';
+  }
+  const recordPath = join(home, 'runtime.json');
+  if (!existsSync(recordPath)) return { home, installationToken, running: false, instances: 0 };
+  try {
+    const parsed = runtimeRecordSchema.parse(JSON.parse(readFileSync(recordPath, 'utf8')));
+    return {
+      home,
+      installationToken,
+      running: isProcessAlive(parsed.pid),
+      pid: parsed.pid,
+      epoch: parsed.epoch,
+      instances: parsed.instances.length,
+    };
+  } catch (error) {
+    return {
+      home,
+      installationToken,
+      running: false,
+      instances: 0,
+      detail: `runtime.json is unreadable: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
 /** Runs every probe and derives the readiness verdict. */
 export async function buildDoctorReport(options: DoctorOptions = {}): Promise<DoctorReport> {
   const startDir = options.startDir ?? process.cwd();
@@ -266,6 +321,7 @@ export async function buildDoctorReport(options: DoctorOptions = {}): Promise<Do
         };
 
   const docker = await probeDocker(options.imageTag ?? EXEC_IMAGE);
+  const runtime = probeRuntime(dataDir);
   // The product's own data directory is created on first use; the workspace
   // directory must already exist and be writable.
   const directories = [
@@ -287,6 +343,11 @@ export async function buildDoctorReport(options: DoctorOptions = {}): Promise<Do
   for (const dir of directories) {
     if (!dir.writable) blockers.push(`directory not writable: ${dir.path}`);
   }
+  if (runtime.installationToken === 'insecure') {
+    blockers.push(
+      `installation credential ${runtime.home}/installation-token is readable by others`,
+    );
+  }
 
   return {
     node: nodeProbe,
@@ -296,6 +357,7 @@ export async function buildDoctorReport(options: DoctorOptions = {}): Promise<Do
     docker,
     directories,
     ports: portProbes,
+    runtime,
     executionReady: blockers.length === 0,
     blockers,
   };
@@ -367,11 +429,30 @@ export function renderDoctorReport(report: DoctorReport): string {
     lines.push(`info port       ${port.port} ${port.inUse ? 'in use' : 'free'}`);
   }
   lines.push(
+    `${
+      report.runtime.installationToken === 'insecure' ? 'FAIL' : 'ok  '
+    } runtime      ${report.runtime.home} — credential ${report.runtime.installationToken}, ${
+      report.runtime.running
+        ? `running pid ${String(report.runtime.pid ?? 0)} epoch ${String(report.runtime.epoch ?? 0)} with ${String(report.runtime.instances)} project(s)`
+        : 'not running'
+    }`,
+  );
+  lines.push(
     report.executionReady
       ? 'execution ready: yes'
       : `execution ready: no\nblockers:\n${report.blockers.map((entry) => `  - ${entry}`).join('\n')}`,
   );
   return lines.join('\n');
+}
+
+/** True when the pid exists and this user may signal it (mirrors the daemon's view). */
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
 }
 
 /** Absolute path of the repository root, derived from this module's location. */

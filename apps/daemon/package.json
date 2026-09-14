@@ -10,6 +10,8 @@
   "dependencies": {
     "@agentdev/contracts": "workspace:*",
     "@agentdev/core": "workspace:*",
-    "@agentdev/storage": "workspace:*"
+    "@agentdev/storage": "workspace:*",
+    "@agentdev/workspace": "workspace:*",
+    "@agentdev/web": "workspace:*"
   }
 }

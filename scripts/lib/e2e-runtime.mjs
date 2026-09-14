@@ -46,6 +46,15 @@ const SOURCE_PACKAGES = [
   'client',
 ];
 
+/**
+ * Applications that publish a bare specifier as well.
+ *
+ * `apps/daemon` imports `@agentdev/web` to assemble the BFF (WP-11 A1's
+ * `bootstrap.ts`), so source-mode loading has to resolve the app too; without it the
+ * daemon host could only run from a `dist` build.
+ */
+const SOURCE_APPS = { web: 'apps/web/src/index.ts' };
+
 let resolverInstalled = false;
 
 /**
@@ -66,6 +75,10 @@ export function installSourceResolver() {
         if (SOURCE_PACKAGES.includes(name)) {
           const entry = join(REPO_ROOT, 'packages', name, 'src', 'index.ts');
           return { url: pathToFileURL(entry).href, shortCircuit: true };
+        }
+        const app = SOURCE_APPS[name];
+        if (app !== undefined) {
+          return { url: pathToFileURL(join(REPO_ROOT, app)).href, shortCircuit: true };
         }
       }
       const parent = context.parentURL ?? '';

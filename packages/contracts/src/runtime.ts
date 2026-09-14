@@ -51,12 +51,11 @@ export const DEFAULT_WEB_PORT = 4317;
 export const DEFAULT_DAEMON_PORT = 4318;
 
 const portSchema = z.number().int().min(1).max(65_535);
-const hostSchema = z
-  .string()
-  .min(1)
-  .refine((value) => value === '127.0.0.1' || value === '::1' || value === 'localhost', {
-    message: 'the runtime only listens on a loopback host',
-  });
+
+/** Hosts the runtime may bind: loopback only (`reliability.md` §7). */
+export const RUNTIME_HOSTS = ['127.0.0.1', '::1', 'localhost'] as const;
+export type RuntimeHost = (typeof RUNTIME_HOSTS)[number];
+const hostSchema = z.enum(RUNTIME_HOSTS);
 const hexIdSchema = z.string().regex(/^[0-9a-f]{32}$/u, 'projectId is 32 lowercase hex chars');
 
 /** One served Git root. `root` is canonical (realpath + `git rev-parse --show-toplevel`). */
@@ -79,6 +78,17 @@ export const projectRegistrySchema = z
   .strict();
 export type ProjectRegistry = z.infer<typeof projectRegistrySchema>;
 
+/** One opened project's listeners. `web` is null when the BFF is not started. */
+export const runtimeInstanceSchema = z
+  .object({
+    projectId: hexIdSchema,
+    root: z.string().min(1),
+    daemon: z.object({ host: hostSchema, port: portSchema }).strict(),
+    web: z.object({ host: hostSchema, port: portSchema }).strict().nullable(),
+  })
+  .strict();
+export type RuntimeInstance = z.infer<typeof runtimeInstanceSchema>;
+
 /** The live daemon record, written after the listeners bind and removed on stop. */
 export const runtimeRecordSchema = z
   .object({
@@ -88,9 +98,9 @@ export const runtimeRecordSchema = z
     startedAt: z.string().min(1),
     version: z.string().min(1),
     home: z.string().min(1),
-    daemon: z.object({ host: hostSchema, port: portSchema }).strict(),
-    web: z.object({ host: hostSchema, port: portSchema }).strict().nullable(),
-    projects: z.array(z.string().min(1)),
+    /** Loopback admin surface the CLI uses to open/close projects (`open <path>`). */
+    admin: z.object({ host: hostSchema, port: portSchema }).strict(),
+    instances: z.array(runtimeInstanceSchema),
   })
   .strict();
 export type RuntimeRecord = z.infer<typeof runtimeRecordSchema>;
