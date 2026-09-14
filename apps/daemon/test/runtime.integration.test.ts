@@ -92,9 +92,18 @@ describe('startRuntime', () => {
     expect(unauthorized.status).toBe(401);
     const health = await adminFetch(runtime, '/health');
     expect(health.status).toBe(200);
-    const body = (await health.json()) as { ready: boolean; instances: unknown[] };
+    const body = (await health.json()) as {
+      ready: boolean;
+      instances: unknown[];
+      execution: { enabled: boolean; live: number };
+    };
     expect(body.ready).toBe(true);
     expect(body.instances).toHaveLength(1);
+    // The daemon really owns an executor: one stack per opened project, supervisor
+    // running, no Attempt live yet (WP-11 A2-T6).
+    expect(body.execution).toEqual({ enabled: true, live: 0 });
+    expect(runtime.executions).toHaveLength(1);
+    expect(runtime.executions[0]?.liveCount()).toBe(0);
 
     // The daemon's own health route reports Core readiness (`protocol.md` §7).
     const daemonHealth = await fetch(

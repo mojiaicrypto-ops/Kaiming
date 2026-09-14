@@ -37,6 +37,20 @@ export interface ModelGatewayProxyOptions {
   /** 0 asks the OS for a free port (tests use this). */
   readonly port?: number;
   readonly maxBodyBytes?: number;
+  /**
+   * Called before the completion, so the daemon can authorize the secret access of
+   * *this* Run (the Gateway resolves the Provider credential itself).
+   */
+  readonly authorize?: (input: {
+    readonly run: {
+      readonly id: string;
+      readonly workId: string;
+      readonly role: string;
+      readonly stage: string;
+      readonly purpose: string;
+    };
+    readonly attemptId: string;
+  }) => void;
   /** Called after a successful completion so the daemon can reconcile the budget. */
   readonly onUsage?: (usage: {
     readonly runId: string;
@@ -265,6 +279,18 @@ export async function createModelGatewayProxy(
       return;
     }
 
+    try {
+      options.authorize?.({ run, attemptId: capability.attemptId });
+    } catch (error) {
+      refuse(
+        response,
+        log,
+        403,
+        'NOT_AUTHORIZED',
+        error instanceof Error ? error.message : 'the Run may not use this Provider',
+      );
+      return;
+    }
     const completion = await options.gateway.complete(run, messages);
     if (!completion.ok) {
       refuse(response, log, statusFor(completion.code), completion.code, completion.message);

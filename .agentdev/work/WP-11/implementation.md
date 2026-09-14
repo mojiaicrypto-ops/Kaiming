@@ -55,9 +55,19 @@
 - **首次真实 Attempt 证据**：`apps/daemon/test/attempt.integration.test.ts`——RunnerSupervisor → 真实 `apps/runner` 子进程（源码模式，经验证后的装载器解析 `@agentdev/*` 与 `@earendil-works/*`）→ 真实 Pi 会话 → 网关端点 → 真实 `ModelGateway` → 真实 HTTP 传输 → 回环 Provider 桩；断言 Run/Attempt 完成、**Provider 恰好被调用 1 次**、usage 结算进预算（16 tokens）、catalog 只含 capability 不含 Provider secret。
 - 测试增量：capability+网关 9 例、真实 Attempt 1 例、runner 假会话 1 处契约更新；单元 **59 文件 / 1147 用例**、集成 **29 文件 / 322 用例**全绿，typecheck/lint 干净。
 
+## A2-T6 接线：daemon 自己执行 Run
+
+- `packages/core/src/execution.ts`（`createProjectExecution`）：为一个 Project 组装执行栈——capability 存储、usage 账本、`ModelGateway`（真实 HTTP 传输 + **按 Run 的 grants 授权**的 Secret 解析器）、回环网关端点（`authorize` 钩子在每次调用前写入该 Run 的 role/stage/work/grants）、`RunnerSupervisor`（真实进程端口由调用方注入）；`start(hostEpoch)` 先核对上一进程遗留 Run 再开始调度，`stop()` 先停调度再关网关。
+- `apps/daemon/src/main.ts`：每个打开的项目都建一个执行栈并在监听就绪后 `start()`；`/health` 返回 `execution:{enabled,live}`；优雅停止时先停执行栈（不再派发、Runner 收到 shutdown、网关关闭）再关监听与数据库；`StartRuntimeOptions` 新增 `repoRoot`/`execute`/`runnerEnv`（测试注入 Runner 入口）。
+- `apps/daemon/src/bootstrap.ts`：`SnapshotWriter` 提前创建并注入 `ConfigStore`（否则 `freeze` 不可用），并向宿主暴露 `config`/`snapshots`。
+- 测试：`apps/daemon/test/runtime.integration.test.ts` 现在断言 `/health.execution = {enabled:true, live:0}` 且每个项目恰好一个执行栈；`apps/cli/test/runtime.integration.test.ts` 仍全绿（CLI start/status/open/stop 在真实子进程上通过）。**源码模式下 Node 类型擦除不支持参数属性（`constructor(private x)`）**，`SecretContext` 已改为显式字段赋值——这是真实启动路径暴露的又一处细节。
+- 单元 59 文件 / 1147 用例、集成 29 文件 / 322 用例全绿。
+
 ## A2 剩余
 
-把 capability/网关/`RunnerSpawnPort`/`prepareRun`/Supervisor 接入 `startRuntime`（daemon 启动即执行排队 Run、退出即优雅停止并撤销 capability、`status` 暴露执行态），并补 e2e（桩 Provider，断言真实调用）与 live（真实 Provider，一次无播种行 Attempt）证据；随后按 Plan §6 进入独立 Review/Test/结算。
+1. **Provider Secret 的持久化与注册路径**：`SecretStore` 目前只在进程内（WP-07 的实现），`agentdev start` 下没有 CLI/UI 途径注册 Provider 凭据，因此真实 Provider 的 Attempt 只能由测试注入解析器；`execution.md` §4 要求的 Keychain/0600 加密文件与备份单独导出仍是缺口。
+2. **证据并入既有命令**（Plan D1）：`pnpm test:e2e` 增加「真实 daemon + supervisor + 真实 Runner 子进程 + 桩 Provider」检查，`pnpm test:live` 增加「真实 Provider 的一次无播种行 Attempt」。
+3. 随后按 Plan §6 进入独立 Review/Test/结算。
 
 ## 与既有记录的说明
 

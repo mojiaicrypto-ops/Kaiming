@@ -75,6 +75,8 @@ export interface OpenedProject {
   readonly dataDir: string;
   readonly store: ProjectStore;
   readonly protocol: WorkbenchProtocol;
+  readonly config: ConfigStore;
+  readonly snapshots: SnapshotWriter;
   readonly daemon: Server;
   readonly web: WebApp | null;
   readonly ports: {
@@ -171,7 +173,9 @@ export async function openProject(options: OpenProjectOptions): Promise<OpenedPr
     store.projects.update(existing.id, { state: 'open' }, existing.version);
   }
 
-  const config = ConfigStore.open({ globalDir: options.home, projectRoot: dataDir });
+  const snapshots = new SnapshotWriter({ store });
+  // `snapshots` must be wired before anything freezes a configuration (WP-11 A2-T6).
+  const config = ConfigStore.open({ globalDir: options.home, projectRoot: dataDir, snapshots });
   const attachments = new AttachmentService({ store, blobs });
   const artifacts = new ArtifactService({ store, blobs });
   const tokens = new DownloadTokenStore();
@@ -183,7 +187,6 @@ export async function openProject(options: OpenProjectOptions): Promise<OpenedPr
   const journal = createMemoryCasJournal();
   const casEvents = createMemoryCasEvents();
   const cas = createCasService({ git: gitPort, journal, events: casEvents });
-  const snapshots = new SnapshotWriter({ store });
   const lock = new ProjectIntegrationLock({ projectId: identity.projectId, leases: store.leases });
   // Settlement is part of the protocol surface's real services; it is constructed here
   // so a later stage (the supervisor) can settle through the same instance.
@@ -262,6 +265,8 @@ export async function openProject(options: OpenProjectOptions): Promise<OpenedPr
     dataDir,
     store,
     protocol,
+    config,
+    snapshots,
     daemon,
     web,
     ports: { daemon: daemonPort, web: webPort },

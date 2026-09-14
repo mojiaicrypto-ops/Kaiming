@@ -17,6 +17,7 @@ export * from './runtime.js';
 export * from './capabilities.js';
 export * from './gateway-http.js';
 export * from './transport-http.js';
+export * from './execution.js';
 export * from './supervisor.js';
 export * from './settlement.js';
 export * from './snapshots.js';

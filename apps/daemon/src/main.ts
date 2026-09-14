@@ -19,7 +19,8 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
 
 import {
   RUNTIME_PROTOCOL_VERSION,
@@ -31,6 +32,9 @@ import {
 import {
   AuthService,
   RuntimeHomeError,
+  SecretStore,
+  createProjectExecution,
+  type ProjectExecution,
   acquireDaemonLock,
   clearRuntimeRecord,
   ensureRuntimeHome,
@@ -43,6 +47,8 @@ import {
 } from '@agentdev/core';
 
 import { DEFAULT_WEB_ORIGIN, openProject, type OpenedProject } from './bootstrap.js';
+import { createPrepareRun } from './prepare-run.js';
+import { createChildRunnerSpawnPort } from './runner-spawn.js';
 
 /** Version reported by `/healthz`, the runtime record and the admin surface. */
 export const RUNTIME_VERSION = '0.1.0';
@@ -50,6 +56,12 @@ export const RUNTIME_VERSION = '0.1.0';
 export interface StartRuntimeOptions {
   readonly home: string;
   readonly version?: string;
+  /** Repository checkout holding `apps/runner` (the child process entry). */
+  readonly repoRoot?: string;
+  /** Run the executor (default true); `false` serves the UI without executing Runs. */
+  readonly execute?: boolean;
+  /** Test seams for the Runner process. */
+  readonly runnerEnv?: NodeJS.ProcessEnv;
   readonly host?: RuntimeHost;
   /** Primary project ports; defaults are `protocol.md` §2's 4318 / 4317. */
   readonly daemonPort?: number;
@@ -66,6 +78,8 @@ export interface StartRuntimeOptions {
 export interface RunningRuntime {
   readonly home: string;
   readonly epoch: number;
+  /** Execution stacks of the opened projects (`A2-T6`). */
+  readonly executions: readonly ProjectExecution[];
   /** Set once the admin listener is bound; `status` reads it from `runtime.json`. */
   admin: { readonly host: RuntimeHost; readonly port: number };
   readonly instances: readonly RuntimeInstance[];
@@ -138,6 +152,10 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
 
   const opened: OpenedProject[] = [];
   const instances: RuntimeInstance[] = [];
+  const executions: ProjectExecution[] = [];
+  const secrets = new SecretStore();
+  const repoRoot =
+    options.repoRoot ?? resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
   let record: RuntimeRecord | null = null;
   let adminServer: Server | null = null;
   let stopping = false;
@@ -146,6 +164,9 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
     home,
     epoch: lock.lock.epoch,
     admin: { host, port: 0 },
+    get executions() {
+      return executions;
+    },
     get instances() {
       return instances;
     },
@@ -166,13 +187,18 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
         await new Promise<void>((resolve) => adminServer?.close(() => resolve()));
         adminServer = null;
       }
-      // 2. Close every project's listeners and databases.
+      // 2. Stop executing: no new Attempts, runners asked to shut down, gateway closed.
+      for (const execution of executions) {
+        await execution.stop();
+      }
+      executions.length = 0;
+      // 3. Close every project's listeners and databases.
       for (const project of opened) {
         await project.close();
       }
       opened.length = 0;
       instances.length = 0;
-      // 3. Remove the live record, then release the lock for this epoch only.
+      // 4. Remove the live record, then release the lock for this epoch only.
       clearRuntimeRecord(home);
       releaseDaemonLock(home, lock.lock.epoch);
       log('agentdevd: stopped');
@@ -228,6 +254,34 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
       trust: trust ? 'trusted' : 'untrusted',
     });
     opened.push(project);
+    if (options.execute !== false) {
+      const execution = await createProjectExecution({
+        store: project.store,
+        config: project.config,
+        snapshots: project.snapshots,
+        secrets,
+        prepare: ({ capabilities, gatewayUrl }) =>
+          createPrepareRun({
+            store: project.store,
+            config: project.config,
+            capabilities,
+            gatewayUrl,
+            projectRoot: project.root,
+            attemptsDir: join(project.dataDir, 'attempts'),
+            log,
+          }),
+        spawn: createChildRunnerSpawnPort({
+          repoRoot,
+          log,
+          ...(options.runnerEnv === undefined ? {} : { env: options.runnerEnv }),
+        }),
+        log,
+      });
+      executions.push(execution);
+      // The previous daemon may have died mid-Attempt: reconcile before scheduling
+      // (`reliability.md` §7), then start ticking.
+      execution.start(`host-${String(process.pid)}-${String(lock.lock.epoch)}`);
+    }
     const instance: RuntimeInstance = {
       projectId: project.projectId,
       root: project.root,
@@ -304,6 +358,10 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
         pid: process.pid,
         home,
         instances,
+        execution: {
+          enabled: options.execute !== false,
+          live: executions.reduce((total, entry) => total + entry.liveCount(), 0),
+        },
       });
       return;
     }
