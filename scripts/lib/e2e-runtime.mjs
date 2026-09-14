@@ -26,6 +26,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { request as httpRequestBase } from 'node:http';
+import { createRequire } from 'node:module';
 import { registerHooks } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -55,6 +56,15 @@ const SOURCE_PACKAGES = [
  */
 const SOURCE_APPS = { web: 'apps/web/src/index.ts' };
 
+/**
+ * Resolves the Pi SDK from the package that actually depends on it.
+ *
+ * `@earendil-works/*` is installed under `packages/pi-runtime/node_modules` (pnpm keeps it
+ * out of the root), so a source-mode Runner started from the repository root cannot
+ * resolve it by name; this makes `apps/runner` runnable without a `dist` build.
+ */
+const piRuntimeRequire = createRequire(join(REPO_ROOT, 'packages', 'pi-runtime', 'package.json'));
+
 let resolverInstalled = false;
 
 /**
@@ -79,6 +89,16 @@ export function installSourceResolver() {
         const app = SOURCE_APPS[name];
         if (app !== undefined) {
           return { url: pathToFileURL(join(REPO_ROOT, app)).href, shortCircuit: true };
+        }
+      }
+      if (specifier.startsWith('@earendil-works/')) {
+        try {
+          return {
+            url: pathToFileURL(piRuntimeRequire.resolve(specifier)).href,
+            shortCircuit: true,
+          };
+        } catch {
+          return nextResolve(specifier, context);
         }
       }
       const parent = context.parentURL ?? '';

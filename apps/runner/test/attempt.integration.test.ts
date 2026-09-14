@@ -97,7 +97,11 @@ function fakeSession(activeTools: string[] = ['agentdev_probe']) {
         if (index >= 0) listeners.splice(index, 1);
       };
     },
+    // A scripted session is idle as soon as the prompt is accepted; the real session's
+    // `prompt()` also resolves early, which is why the Runner waits for `isIdle()`
+    // (WP-11 A2-T6).
     prompt: () => Promise.resolve(),
+    isIdle: () => true,
     steer: () => Promise.resolve(),
     followUp: () => Promise.resolve(),
     abort: () => Promise.resolve(),

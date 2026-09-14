@@ -42,9 +42,22 @@
   - **重启核对**：`start(hostEpoch)` 调用 `RunRecoveryService.recoverAfterRestart`，先停靠上一进程遗留的 Run 再开始调度；`stop()` 先发 `attempt.shutdown`，再 SIGTERM。
 - 测试：`packages/core/test/supervisor.test.ts`（10 例，真实 `ProjectStore` + 真实 `RunLifecycle`/`RunRecoveryService`，脚本化 spawn 端口）：认领与 `ready` 后发 prompt、工具未激活即失败、结果结算与槽位释放、迟到 epoch 结果被丢弃、Chief 优先与项目/角色上限、静默转 `lost`（进程已死 → `interrupted` 可重试）、进程不可确认 → `recovery_required` 且拒绝新 Attempt、心跳保活、优雅停止。单元套件 **58 文件 / 1138 用例**全绿。
 
+## A2-T6 真实模型通路与第一次真实 Attempt
+
+- **Attempt capability**：`packages/core/src/capabilities.ts`——每次 Attempt 一枚短期 token（绑定 attempt/epoch/run/role/过期），重新签发即作废旧 token，可按 Attempt 或 Run 撤销。
+- **Core 侧模型网关**：`packages/core/src/gateway-http.ts`——回环 OpenAI 兼容端点（`POST /chat/completions` 支持 JSON 与 SSE、`GET /models`、`GET /healthz`）：Bearer capability 校验 → 取 Run → **用冻结快照**调真实 `ModelGateway.complete`（请求里的 `model` 与冻结模型不一致直接 409 拒绝，绝不替换）→ 失败按 OpenAI 形状映射状态码，**每次拒绝都记日志**；usage 通过 `onUsage` 回报；`/models` 只返回冻结模型。
+- **真实 Provider 传输**：`packages/core/src/transport-http.ts`——`node:http`/`node:https` 直连（无新依赖），凭证只经 `Authorization` 且在失败信息中遮蔽，reasoning 模型的 `reasoning_content` 回退，429/5xx/网络错误标记 retryable。
+- **Runner 侧**：`apps/daemon/src/runner-spawn.ts`（真实 `RunnerSpawnPort`：子进程 + NDJSON IPC + 每 Attempt `models.json`）+ `apps/daemon/src/prepare-run.ts`（`PrepareRun`：冻结 profile → provider/model/tools/cwd/prompt + capability + catalog）。**SDK `models.json` 的 provider 条目支持内联 `apiKey`/`baseUrl`，因此 Provider Secret 从不进入 Runner**，Runner 只拿到 capability。
+- **修掉三处真实缺陷**（都是这次真实 Attempt 暴露的）：
+  1. `PiSessionHandle` 新增 `isIdle()`，`AttemptRunner` 在 `prompt()` 之后等待会话空闲才结束 Attempt——SDK 的 `prompt()` 只表示「回合已受理」，原先会在模型调用发生前就退出并报 completed；
+  2. 网关端点原先只接受 `content: string`，而 Pi SDK 发的是多模态数组（`content: [{type:'text',text}]`）——现在展平文本，并对所有拒绝记录日志（原先拒绝是静默的）；
+  3. usage 不能在一次调用里 `reconcile`（`RunLifecycle` 只允许终态结算）——新增 `RunUsageLedger`（累加→`settle` 时一并结算），网关端点内的记账失败不再把已完成的回答变成 500（否则 SDK 重试会让 Provider 被重复计费）。
+- **首次真实 Attempt 证据**：`apps/daemon/test/attempt.integration.test.ts`——RunnerSupervisor → 真实 `apps/runner` 子进程（源码模式，经验证后的装载器解析 `@agentdev/*` 与 `@earendil-works/*`）→ 真实 Pi 会话 → 网关端点 → 真实 `ModelGateway` → 真实 HTTP 传输 → 回环 Provider 桩；断言 Run/Attempt 完成、**Provider 恰好被调用 1 次**、usage 结算进预算（16 tokens）、catalog 只含 capability 不含 Provider secret。
+- 测试增量：capability+网关 9 例、真实 Attempt 1 例、runner 假会话 1 处契约更新；单元 **59 文件 / 1147 用例**、集成 **29 文件 / 322 用例**全绿，typecheck/lint 干净。
+
 ## A2 剩余
 
-A2-T6：capability 鉴权的 Core 侧模型网关（OpenAI 兼容、Secret 不出 Core）+ daemon 注入真实 `RunnerSpawnPort`/`prepareRun`（冻结 profile → provider/model/tools/cwd/prompt），以及 e2e（桩 Provider，断言真实调用）与 live（真实 Provider，一次无播种的真实 Attempt）证据。完成后本文件续写，并按 Plan §6 进入独立 Review/Test。
+把 capability/网关/`RunnerSpawnPort`/`prepareRun`/Supervisor 接入 `startRuntime`（daemon 启动即执行排队 Run、退出即优雅停止并撤销 capability、`status` 暴露执行态），并补 e2e（桩 Provider，断言真实调用）与 live（真实 Provider，一次无播种行 Attempt）证据；随后按 Plan §6 进入独立 Review/Test/结算。
 
 ## 与既有记录的说明
 

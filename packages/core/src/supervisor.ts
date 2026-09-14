@@ -23,7 +23,7 @@
 import { LIMITS, type Attempt, type Run, type RunStatus } from '@agentdev/contracts';
 import type { ProjectStore } from '@agentdev/storage';
 
-import { RunLifecycle } from './run-lifecycle.js';
+import { RunLifecycle, type RunUsage } from './run-lifecycle.js';
 import { RunRecoveryService, createNodeProcessProbe, type ProcessProbe } from './recovery.js';
 import type { DistributiveOmit, RunnerCommand, RunnerMessage } from '@agentdev/contracts';
 
@@ -40,6 +40,8 @@ export interface RunnerInvocation {
   readonly systemPrompt?: string;
   /** Short-lived attempt capability the Runner presents to the model gateway. */
   readonly capability: string;
+  /** Per-Attempt `models.json` the Runner passes as `--models-path`. */
+  readonly catalogPath?: string;
 }
 
 export interface RunnerSpawnInput {
@@ -65,6 +67,41 @@ export interface RunnerProcessPort {
 /** Starts one Runner process. The daemon injects the real `child_process` version. */
 export interface RunnerSpawnPort {
   spawn(input: RunnerSpawnInput): RunnerProcessPort;
+}
+
+/**
+ * Accumulates the token usage a Run's Attempts reported during execution.
+ *
+ * `reliability.md` §3 books usage at settlement (`RunLifecycle.reconcile` refuses a
+ * non-terminal Run), so the supervisor records what the gateway endpoint observed and
+ * hands the total to `settle`.
+ */
+export interface RunUsageLedger {
+  record(runId: string, usage: { readonly tokensUsed: number; readonly cost?: number }): void;
+  /** Returns and clears the accumulated usage of one Run, shaped for `settle`. */
+  take(runId: string): RunUsage | undefined;
+}
+
+/** The in-process ledger the daemon uses; a crash loses only unbooked usage. */
+export function createMemoryUsageLedger(): RunUsageLedger {
+  const byRun = new Map<string, { tokensUsed: number; cost: number }>();
+  return {
+    record: (runId, usage) => {
+      const current = byRun.get(runId) ?? { tokensUsed: 0, cost: 0 };
+      current.tokensUsed += usage.tokensUsed;
+      current.cost += usage.cost ?? 0;
+      byRun.set(runId, current);
+    },
+    take: (runId) => {
+      const current = byRun.get(runId);
+      if (current === undefined) return undefined;
+      byRun.delete(runId);
+      // `measured: true`: the numbers come from real Provider usage, not an estimate.
+      return current.cost > 0
+        ? { tokensUsed: current.tokensUsed, cost: current.cost, measured: true }
+        : { tokensUsed: current.tokensUsed, measured: true };
+    },
+  };
 }
 
 export interface PrepareRunInput {
@@ -99,6 +136,8 @@ export interface RunnerSupervisorOptions {
   readonly concurrency?: Partial<SupervisorConcurrency>;
   /** How often `tick()` runs while the supervisor is started. */
   readonly tickMs?: number;
+  /** Usage reported by the model gateway endpoint, settled with the Run. */
+  readonly usage?: RunUsageLedger;
   readonly log?: (line: string) => void;
 }
 
@@ -137,6 +176,7 @@ export class RunnerSupervisor {
   private readonly now: () => number;
   private readonly concurrency: SupervisorConcurrency;
   private readonly tickMs: number;
+  private readonly usage: RunUsageLedger | undefined;
   private readonly log: (line: string) => void;
   private readonly live = new Map<string, LiveAttempt>();
   private timer: NodeJS.Timeout | undefined;
@@ -161,6 +201,7 @@ export class RunnerSupervisor {
       chiefReserve: options.concurrency?.chiefReserve ?? 1,
     };
     this.tickMs = options.tickMs ?? 1_000;
+    this.usage = options.usage;
     this.log = options.log ?? (() => undefined);
   }
 
@@ -456,12 +497,13 @@ export class RunnerSupervisor {
     }
     this.live.delete(entry.attemptId);
     this.clearKillTimer(entry);
+    const usage = this.usage?.take(entry.runId);
     if (result.status === 'cancelled') {
-      this.lifecycle.settle(entry.runId, 'cancelled');
+      this.lifecycle.settle(entry.runId, 'cancelled', usage);
     } else if (result.status === 'completed') {
-      this.lifecycle.settle(entry.runId, 'completed');
+      this.lifecycle.settle(entry.runId, 'completed', usage);
     } else {
-      this.lifecycle.settle(entry.runId, 'failed');
+      this.lifecycle.settle(entry.runId, 'failed', usage);
     }
   }
 
@@ -472,7 +514,7 @@ export class RunnerSupervisor {
     }
     this.live.delete(entry.attemptId);
     this.terminate(entry, 'SIGTERM');
-    this.lifecycle.settle(entry.runId, 'failed');
+    this.lifecycle.settle(entry.runId, 'failed', this.usage?.take(entry.runId));
     this.log(`supervisor: ${entry.runId} attempt ${entry.attemptId} failed: ${message}`);
   }
 

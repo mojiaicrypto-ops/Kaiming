@@ -163,6 +163,17 @@ export class ModelGateway {
   }
 
   /**
+   * The frozen configuration a Run must run under (`execution.md` §2).
+   *
+   * Exposed so the Core-side model gateway endpoint (WP-11) can enforce the frozen
+   * provider/model pair without reaching into private state: the Runner may name a
+   * model, but only this snapshot decides which one actually runs.
+   */
+  frozenFor(run: Pick<Run, 'configSnapshotId'>): ReturnType<ConfigStore['readFrozen']> {
+    return this.config.readFrozen(run.configSnapshotId);
+  }
+
+  /**
    * Minimal request used by `provider.test` (`protocol.md` §5).
    *
    * It runs against the live configuration because no Run exists yet, and reports

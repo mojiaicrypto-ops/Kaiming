@@ -204,7 +204,16 @@ export class AttemptRunner {
     switch (command.type) {
       case 'attempt.prompt': {
         try {
-          await this.session?.prompt(command.text);
+          const session = this.session;
+          if (session === undefined) {
+            this.finish('failed', 'the Attempt has no session');
+            return false;
+          }
+          await session.prompt(command.text);
+          // `prompt()` resolves when the turn is accepted, so the Attempt is only
+          // complete once the session is idle again: exiting earlier would abandon the
+          // model call (`reliability.md` §5 requires a real stage outcome).
+          await this.awaitIdle(session);
           this.finish('completed', 'prompt completed');
         } catch (error) {
           this.finish('failed', error instanceof Error ? error.message : String(error));
@@ -232,6 +241,15 @@ export class AttemptRunner {
     const command = parseCommand(line);
     if (command === undefined) return !this.terminal;
     return this.handle(command);
+  }
+
+  /** Waits for the session to finish its turn, bounded so a hung turn cannot hang the Run. */
+  private async awaitIdle(session: PiSessionHandle, timeoutMs = 600_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!session.isIdle()) {
+      if (Date.now() > deadline) throw new Error('the session did not become idle in time');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }
 
   /** Releases the session and stops the heartbeat; safe to call more than once. */

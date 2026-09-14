@@ -92,6 +92,14 @@ export interface PiSessionHandle {
   abort(): Promise<void>;
   compact(instructions?: string): Promise<void>;
   disposed(): boolean;
+  /**
+   * Whether a turn is currently running.
+   *
+   * `prompt()` resolves when the turn has been *accepted*, not when the model answered
+   * (WP-11 A2-T6: a Runner that exited on `prompt()` returning never made its model call).
+   * A caller that must report a finished stage therefore waits for `isIdle()`.
+   */
+  isIdle(): boolean;
   dispose(): void;
 }
 
@@ -259,6 +267,10 @@ class PiSessionHandleImpl implements PiSessionHandle {
 
   disposed(): boolean {
     return this.isDisposed;
+  }
+
+  isIdle(): boolean {
+    return this.session.isIdle;
   }
 
   dispose(): void {
