@@ -31,7 +31,12 @@ import {
   LIVE_DRILL_ACS,
 } from './lib/drill-acs.mjs';
 import { CheckFailure } from './lib/e2e-checks.mjs';
-import { runHtmlDrill, runL1Drill, runL2Drill } from './lib/live-drills.mjs';
+import {
+  runHtmlDrill,
+  runL1Drill,
+  runL2Drill,
+  runRuntimeAttemptDrill,
+} from './lib/live-drills.mjs';
 import { bootLiveStack, shutdownLiveStack } from './lib/live-harness.mjs';
 import { renderLiveRecord, liveDrillReport, CheckList } from './lib/live-report.mjs';
 import {
@@ -186,6 +191,10 @@ async function runProviderDrill(options) {
       'drill.l2-delivery',
       provider.reviewModelId === null ? DRILL_ACS.l2 : [...DRILL_ACS.l2, INDEPENDENT_MODEL_AC],
       () => runL2Drill({ harness, product }),
+    );
+    // The daemon's own executor: supervisor → real Runner child → gateway → real Provider.
+    await checks.check('drill.runtime-attempt', ['AC-057'], () =>
+      runRuntimeAttemptDrill({ harness, product }),
     );
     checks.unverified(
       'browser.html-rendering',

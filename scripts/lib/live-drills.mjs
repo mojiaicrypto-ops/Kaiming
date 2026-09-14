@@ -1459,3 +1459,183 @@ export async function runL2Drill({ harness, product }) {
 
 /** The two seeded Feature documents, re-exported for callers that need the paths. */
 export const LIVE_FEATURE_PATHS = Object.freeze({ FEATURE_PATH, OTHER_FEATURE_PATH });
+
+/**
+ * A real-Provider Attempt through the daemon's own executor (WP-11 A2-T7).
+ *
+ * The other live drills drive the model through `harness.callModel` (the drill submits the
+ * stage results itself). This one lets the *runtime* do it: the supervisor claims a queued
+ * Run, spawns a real `apps/runner` child process, the Pi session calls the Core gateway
+ * endpoint with its Attempt capability, and the frozen configuration reaches the real
+ * Provider through the product's own HTTP transport. The Run is only completed by the
+ * Attempt's own result, so a passing check means the daemon — not the drill — executed the
+ * Agent. It also kills a live Runner to prove the lost-Runner path (`AC-057`) with a real
+ * Provider in the loop.
+ */
+export async function runRuntimeAttemptDrill({ harness, product }) {
+  const { core, storage } = product;
+  const { store } = harness;
+  const execution = await core.createProjectExecution({
+    store,
+    config: harness.config,
+    snapshots: harness.snapshots,
+    secrets: harness.secrets,
+    probe: core.createNodeProcessProbe(),
+    tickMs: 200,
+    log: () => undefined,
+    prepare: ({ capabilities, gatewayUrl }) => harness.prepareRun({ capabilities, gatewayUrl }),
+    spawn: harness.runnerSpawn(),
+  });
+
+  const waitFor = async (predicate, what, timeoutMs = 120_000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const value = predicate();
+      if (value !== undefined && value !== false) return value;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    throw new Error(`timed out waiting for ${what}`);
+  };
+
+  /** One real Work with its budget, as the routing path creates it. */
+  const seedWork = (goal) => {
+    const workId = store.newId();
+    const budget = store.budgets.insert({
+      projectId: harness.projectId,
+      workId,
+      tokenLimit: 200_000,
+      tokensUsed: 0,
+      tokensReserved: 0,
+      activeTimeLimit: 3_600,
+      activeTimeUsed: 0,
+      repairLimit: 3,
+      repairUsed: 0,
+      costKnown: true,
+    });
+    return store.works.insert({
+      id: workId,
+      projectId: harness.projectId,
+      intent: 'delivery',
+      purpose: 'runtime attempt',
+      level: 'L2',
+      goal,
+      scope: { readPaths: [CODE_PATH], writePaths: [], operations: ['read'], networkTargets: [] },
+      sourceRef: { kind: 'action', id: store.newId(), version: '1' },
+      status: 'running',
+      blockerIds: [],
+      baseRevision: harness.seedRevision,
+      budgetId: budget.id,
+      policyRevision: 1,
+    });
+  };
+
+  /** One queued Run on its own Work, with the secret Grant the Gateway needs. */
+  const queueRun = (goal, stage = 'Develop') => {
+    const work = seedWork(goal);
+    const frozen = harness.config.freeze('backend', {});
+    const run = store.runs.insert({
+      projectId: harness.projectId,
+      workId: work.id,
+      role: 'backend',
+      purpose: 'implementation',
+      stage,
+      status: 'queued',
+      requiredChild: false,
+      join: 'none',
+      childIds: [],
+      configSnapshotId: frozen.snapshotId,
+      contextSnapshotId: storage.sha256(`live-runtime-context-${work.id}`),
+      dispatchSnapshotId: storage.sha256(`live-runtime-dispatch-${work.id}`),
+      budgetAllocation: 50_000,
+    });
+    // The Provider credential is resolved by the Gateway under the Run's own grants
+    // (`execution.md` §4), so the drill records the Grant the user's configuration stands
+    // for — a real `decision` row plus the `grant` row that points at it, not a closure.
+    const decision = store.decisions.insert({
+      workId: work.id,
+      kind: 'permission',
+      targetRef: {
+        id: store.newId(),
+        version: 1,
+        hash: storage.sha256(`live-runtime-grant-${work.id}`),
+      },
+      choices: ['grant', 'deny'],
+      state: 'accepted',
+      choice: 'grant',
+      actor: 'user',
+      effectRefs: [],
+    });
+    store.grants.insert({
+      projectId: harness.projectId,
+      workId: work.id,
+      runId: run.id,
+      scope: 'work',
+      role: 'backend',
+      stage,
+      operation: 'secret',
+      targets: [harness.liveSecretRef],
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      limits: {},
+      decisionId: decision.id,
+    });
+    return { work, run };
+  };
+
+  try {
+    execution.start(`live-host-${String(Date.now())}`);
+
+    const { work, run } = queueRun('answer the runtime attempt drill');
+    await waitFor(
+      () => store.runs.find(run.id)?.status === 'completed',
+      `Run ${run.id} to complete through the runtime`,
+    );
+    const attempt = store.attempts.list({ where: 'run_id = ?', params: [run.id] }).at(0);
+    ensure(attempt?.status === 'completed', `the Attempt is ${String(attempt?.status)}`);
+    ensure(
+      typeof attempt?.runnerId === 'string' && attempt.runnerId.startsWith('runner-'),
+      `the Attempt recorded runnerId ${String(attempt?.runnerId)}`,
+    );
+    const budget = store.budgets.find(work.budgetId);
+    ensure(
+      (budget?.tokensUsed ?? 0) > 0,
+      `the runtime Attempt booked ${String(budget?.tokensUsed)} tokens; the Provider reported none`,
+    );
+    ensure(
+      typeof attempt?.sessionRef === 'undefined' || attempt.sessionRef === undefined,
+      'the Attempt unexpectedly recorded a session reference',
+    );
+
+    // The lost-Runner half: a real Provider call is in flight when the Runner dies.
+    const slow = queueRun('SLOW: keep the provider call in flight');
+    const live = await waitFor(
+      () => execution.supervisor.liveAttempts().find((entry) => entry.runId === slow.run.id),
+      `the slow Run ${slow.run.id} to start`,
+    );
+    process.kill(live.pid, 'SIGKILL');
+    const parked = await waitFor(() => {
+      const status = store.runs.find(slow.run.id)?.status;
+      return status === 'interrupted' || status === 'recovery_required' ? status : undefined;
+    }, `Run ${slow.run.id} to be parked after its Runner died`);
+    const slowAttempt = store.attempts.list({ where: 'run_id = ?', params: [slow.run.id] }).at(0);
+    ensure(slowAttempt?.status === 'lost', `the killed Attempt is ${String(slowAttempt?.status)}`);
+    const admission = core.newAttemptAdmission(store, slow.run.id);
+    if (parked === 'interrupted') {
+      ensure(
+        admission.allowed === true && admission.requiresRecoveryDecision === false,
+        'a confirmed-dead Runner must allow a later Attempt and need no recovery decision',
+      );
+    } else {
+      ensure(
+        admission.allowed === false && admission.requiresRecoveryDecision === true,
+        'an unconfirmed Runner must withhold a new Attempt behind a recovery decision',
+      );
+    }
+
+    return [
+      `the runtime executed Run ${run.id} through a real apps/runner child process (Attempt ${String(attempt?.id)}, runnerId ${String(attempt?.runnerId)}) against the real Provider; ${String(budget?.tokensUsed)} tokens booked from the Provider usage`,
+      `killing the live Runner (pid ${String(live.pid)}) of Run ${slow.run.id} parked it as ${parked} with Attempt ${String(slowAttempt?.id)} lost (new Attempt allowed=${String(admission.allowed)})`,
+    ].join('; ');
+  } finally {
+    await execution.stop();
+  }
+}

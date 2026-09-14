@@ -492,6 +492,26 @@ export async function bootLiveStack({ product, provider, transport, meta }) {
     return grant;
   };
 
+  // The Runner child process loads the repository sources (no build needed), through the
+  // same loader this harness uses for the product.
+  const runnerEntry = join(dataDir, 'runner-entry.mjs');
+  writeFileAt(
+    dataDir,
+    'runner-entry.mjs',
+    [
+      `import { installSourceResolver } from ${JSON.stringify(join(REPO_ROOT, 'scripts', 'lib', 'e2e-runtime.mjs'))};`,
+      'installSourceResolver();',
+      `const { main } = await import(${JSON.stringify(join(REPO_ROOT, 'apps', 'runner', 'src', 'cli.ts'))});`,
+      'await main(process.argv.slice(2), {',
+      '  output: { write: (line) => process.stdout.write(line) },',
+      '  exit: (code) => process.exit(code),',
+      '});',
+      '',
+    ].join('\n'),
+  );
+  const { createPrepareRun } = await import('../../apps/daemon/src/prepare-run.ts');
+  const { createChildRunnerSpawnPort } = await import('../../apps/daemon/src/runner-spawn.ts');
+
   const harness = {
     product,
     repo,
@@ -508,6 +528,25 @@ export async function bootLiveStack({ product, provider, transport, meta }) {
     snapshots,
     config,
     secrets,
+    liveSecretRef: LIVE_SECRET_REF,
+    /** Builds the Runner invocation for one Attempt (WP-11 A2-T7). */
+    prepareRun: ({ capabilities, gatewayUrl }) =>
+      createPrepareRun({
+        store,
+        config,
+        capabilities,
+        gatewayUrl,
+        projectRoot: repo,
+        attemptsDir: join(dataDir, 'attempts'),
+        log: () => undefined,
+      }),
+    /** Starts a real `apps/runner` child process over the repository sources. */
+    runnerSpawn: () =>
+      createChildRunnerSpawnPort({
+        repoRoot: REPO_ROOT,
+        env: { ...process.env, AGENTDEV_RUNNER_ENTRY: runnerEntry },
+        log: () => undefined,
+      }),
     gateway,
     transport,
     gates,

@@ -75,10 +75,19 @@
 
 顺带修掉两处真实缺陷：Attempt 的 `runnerId` 原先记录的是**daemon 自身的 pid**（`runner-<daemon pid>-<runId>`），恢复探测因此永远看到「进程存活」；现在 spawn 之后改写为**子进程 pid**（`runner-<child pid>-<runId>`），这正是崩溃检测的依据。e2e harness 的 `ConfigStore` 也补上了 `SnapshotWriter`，与 daemon 宿主一致（否则 `freeze` 不可用）。
 
+## A2-T8 live 证据（真实 Provider 经运行时执行）
+
+`pnpm test:live` 新增检查 `drill.runtime-attempt`（映射 AC-057，live 从 4 项增至 **5 项检查**）：在真实 Provider 演练内用 daemon 自己的模块组装执行栈并启动真实 `apps/runner` 子进程——
+
+- **阶段 A**：supervisor 认领 queued Run → 真实子进程 → 真实 Pi 会话 → 网关端点（capability）→ **产品自有 HTTP 传输** → 用户配置的真实 Provider；Run 仅由 Attempt 自身的 result 完成，预算记账来自 Provider 的真实 usage（实测 >0 tokens，runnerId 记录子进程 pid）；
+- **阶段 B（AC-057）**：对正在进行真实 Provider 调用的活跃 Runner 发 `SIGKILL`，断言 Run 停靠为 `interrupted`/`recovery_required`、Attempt `lost`，且 `newAttemptAdmission` 与进程确认状态一致；
+- Provider 凭据通过 **真实的 `grant` 行 + `decision` 行**授权（`execution.md` §4），不是演练闭包：这是「用户配置即授权」的可审计记录。
+- 本轮实测（用户 DeepSeek 凭证）：`live: 5 passed / 0 failed / 2 unverified`，11 次真实 HTTP 200，退出 0。
+
 ## A2 剩余
 
 1. **Provider Secret 的持久化与注册路径**：`SecretStore` 目前只在进程内（WP-07 的实现），`agentdev start` 下没有 CLI/UI 途径注册 Provider 凭据，因此真实 Provider 的 Attempt 只能由测试注入解析器；`execution.md` §4 要求的 Keychain/0600 加密文件与备份单独导出仍是缺口。
-2. **live 证据**（Plan D1 的另一半）：`pnpm test:live` 增加「真实 Provider 的一次无播种行 Attempt」（e2e 侧已完成）。
+2. **证据已就绪**：`pnpm test:e2e` 21 项检查（PASS 17/FAIL 0/UNVERIFIED 4，24 AC）与 `pnpm test:live` 5 项检查（真实 Provider，5 PASS、退出 0）都包含运行时执行证据。
 3. 随后按 Plan §6 进入独立 Review/Test/结算。
 
 ## 与既有记录的说明
