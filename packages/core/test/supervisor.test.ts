@@ -490,6 +490,31 @@ describe('RunnerSupervisor heartbeat and recovery', () => {
     expect(store.runs.find(runId)?.status).toBe('running');
   });
 
+  it('adopts an Attempt that resumeWork opened instead of failing the Run', () => {
+    // `FindingsService.resumeWork` moves the Run to `running` and appends an Attempt with
+    // no process; the executor must adopt it (WP11R4-01).
+    const runId = queueRun();
+    const run = store.runs.find(runId);
+    if (run === undefined) throw new Error('unreachable');
+    const running = store.runs.update(runId, { status: 'running' }, run.version);
+    const opened = store.attempts.insert({
+      runId,
+      projectId,
+      number: 1,
+      status: 'starting',
+      ownerEpoch: 0,
+    });
+    const tick = supervisor.tick();
+    expect(tick.claimed).toEqual([runId]);
+    expect(FakeRunner.spawned).toHaveLength(1);
+    const adopted = store.attempts.find(opened.id);
+    expect(adopted?.id).toBe(opened.id);
+    expect(adopted?.runnerId).toMatch(/^pid:[0-9]+$/u);
+    expect(store.attempts.list({ where: 'run_id = ?', params: [runId] })).toHaveLength(1);
+    expect(store.runs.find(runId)?.status).toBe('running');
+    void running;
+  });
+
   it('refuses to resume a recovery_required Run until the decision covers it', () => {
     const runId = queueRun();
     supervisor.tick();

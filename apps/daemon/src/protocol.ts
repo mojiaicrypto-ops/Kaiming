@@ -57,6 +57,7 @@ import {
   type PlanGateService,
   type RequirementContinuation,
   type RequirementSaveService,
+  newAttemptAdmission,
   type ArtifactService,
   type AttachmentService,
 } from '@agentdev/core';
@@ -101,7 +102,29 @@ export interface WorkbenchServices {
   readonly requirementRecords?: RequirementRecordPort;
   /** Backup/restore port; defaults to the real `git`-backed implementation. */
   readonly backupGit?: BackupGitPort;
+  /**
+   * The executor's recovery actions (WP11) — set by the daemon bootstrap once the
+   * supervisor exists. Without it a `recovery_required` Run has no product action at all
+   * (`WP11R4-02`).
+   */
+  runRecovery?: RunRecoveryPort;
   readonly now?: () => number;
+}
+
+/** The executor's Run-recovery actions, as the workbench protocol needs them. */
+export interface RunRecoveryPort {
+  /** Records the operator's resume decision after a park; refuses while unsafe. */
+  recordResumeDecision(input: { readonly runId: string; readonly sourceMessageId?: string }): {
+    readonly ok: boolean;
+    readonly code?: string;
+    readonly message?: string;
+  };
+  /** Opens the next Attempt for a parked Run whose admission allows it. */
+  resumeParkedRun(runId: string): {
+    readonly ok: boolean;
+    readonly code?: string;
+    readonly message?: string;
+  };
 }
 
 /** One Requirement record file's committed content at a Git revision. */
@@ -437,6 +460,17 @@ export class WorkbenchProtocol {
     // The result is the documented `result` member of the response envelope; the
     // protocol layer does not reshape domain rows.
     return JSON.parse(JSON.stringify(result ?? null)) as JsonObject;
+  }
+
+  /**
+   * Attaches the executor's recovery actions once the supervisor exists.
+   *
+   * The protocol is constructed by `bootstrap.ts` before the daemon host builds the
+   * execution stack, so the port arrives late; it is optional and its absence leaves the
+   * `resume` behaviour exactly as before (a clearer refusal, never a silent success).
+   */
+  attachRunRecovery(port: RunRecoveryPort): void {
+    this.services.runRecovery = port;
   }
 
   /** Resolves the caller from the session cookie / installation credential. */
@@ -1638,6 +1672,54 @@ export class WorkbenchProtocol {
             `Work ${workId} is at version ${work.version}, not ${expected}`,
             { details: { workId, currentVersion: work.version, requestedVersion: expected } },
           );
+        }
+        // A Run parked by the executor (`interrupted`/`recovery_required`) has no action
+        // anywhere else: `pauseWork` refuses it and `resumeWork` needs a paused Work
+        // (`WP11R4-02`). The operator's resume therefore records the Run-scoped recovery
+        // decision first — which re-checks the real process state and refuses while the old
+        // Runner may still be alive — and then lets the normal path resume the Work.
+        const parked = this.services.store.runs.list({
+          where: "work_id = ? AND status IN ('interrupted','recovery_required')",
+          params: [workId],
+        });
+        if (parked.length > 0 && this.services.runRecovery !== undefined) {
+          for (const run of parked) {
+            if (newAttemptAdmission(this.services.store, run.id).allowed) continue;
+            const recorded = this.services.runRecovery.recordResumeDecision({ runId: run.id });
+            if (!recorded.ok) {
+              throw new ProtocolError(
+                recorded.code === 'NOT_FOUND' ? 'NOT_FOUND' : 'RECOVERY_REQUIRED',
+                recorded.message ?? `Run ${run.id} 需要恢复决定`,
+                { details: { workId, runId: run.id } },
+              );
+            }
+          }
+          if (work.status !== 'paused') {
+            // Nothing to un-pause: the parked Runs are resumed by the executor directly.
+            const resumed: string[] = [];
+            for (const run of parked) {
+              const attempt = this.services.runRecovery.resumeParkedRun(run.id);
+              if (!attempt.ok) {
+                const code =
+                  attempt.code === 'BUSY'
+                    ? 'BUSY'
+                    : attempt.code === 'INVALID_STATE'
+                      ? 'INVALID_STATE'
+                      : 'RECOVERY_REQUIRED';
+                throw new ProtocolError(code, attempt.message ?? `Run ${run.id} 无法续跑`, {
+                  details: { workId, runId: run.id },
+                });
+              }
+              resumed.push(run.id);
+            }
+            return {
+              status: 'applied',
+              operationId,
+              workId,
+              version: work.version,
+              resumedRunIds: resumed,
+            };
+          }
         }
         const result = this.requireFindings().resumeWork({
           workId,

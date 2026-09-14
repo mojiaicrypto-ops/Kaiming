@@ -140,6 +140,19 @@
 
 **第 2/3 轮记录口径更正**：T9/T10 曾把「4 个 P2 全部关闭」写成既成事实，其中「无产品恢复路径」「e2e 断言已收严」「两条 start 失败均有 operationId」在当时并不成立；本轮已把这三项做到与文字一致。
 
+## T12 独立 Review 第 4 轮（FAIL，1×P1 / 1×P2 / 2×P3）后的修复
+
+第 4 轮指出 T11 的「认领无进程 Attempt」实现有真实回归：`spawnRun` 对已是 `running` 的 Run 再次调用 `beginAttempt`（`cannot start from running`），异常被 `claim()` 的 catch 变成 `settle('failed')`，于是**普通 pause→resume 路径也会把 Run 判死且不 spawn**。本轮修复：
+
+| 发现 | 处置 |
+|---|---|
+| WP11R4-01（P1）采纳分支从未 spawn，反而把续跑的 Run 判 failed | `spawnRun` 先读最新 Attempt：若它是 `starting` 且无 `runnerId`（即 `resumeWork` 打开、尚无进程），**采纳它**而不是再开一个；否则才 `beginAttempt`。`claim()` 的失败分支不再 `settle('failed')`：把悬空 Attempt 标 `failed` 并**停靠 Run**，保留可重试路径。新增回归测试「running Run + 无进程 Attempt → tick 采纳并 spawn，Attempt 只有一个且记录 `pid:<n>`，Run 保持 running」 |
+| WP11R4-02（P2）`recovery_required` 仍无产品动作 | `WorkbenchProtocol` 新增可选 `runRecovery` 端口（`attachRunRecovery()`，宿主在执行栈建立后挂载），`work.control resume` 现在：对本 Work 的 `interrupted`/`recovery_required` Run，先按持久准入判断，需要决定时调用 `recordResumeDecision`（其内部**重核真实进程状态**，旧 Runner 可能存活则拒绝并保持原状）；Work 已 `paused` 时继续走 `resumeWork`（打开 Attempt，由执行器采纳并 spawn），Work 非 paused 时直接 `resumeParkedRun` 续跑并返回 `resumedRunIds` |
+| WP11R4-03（P3）重写的 AC-020 用例名与断言不符、不驱动执行器 | 该用例改名为「refuses to resume while a Run still needs recovery」，并补上监督器采纳路径的独立回归测试（见上），使 1155 个单测能真正覆盖本轮 P1 场景 |
+| WP11R4-04（P3）`resumeTx` 变成纯证据依赖（无 verdict 的 `recovery_required` 可续跑） | 保持现状并登记：`RunRecoveryService.apply()` 总会写 `run.recovered` verdict，因此当前不可达；作为纵深防御项记录在案 |
+
+修复后实测：单元 **59 文件 / 1155 用例**、集成 **29 文件 / 323 用例**、`pnpm test:e2e` 21 项检查（PASS 17 / FAIL 0 / UNVERIFIED 4，exit 0）、`pnpm test:live` 5 项检查（真实 Provider，exit 0）、typecheck/lint 干净。
+
 ## A2 剩余
 
 1. **Provider Secret 的持久化与注册路径**：`SecretStore` 目前只在进程内（WP-07 的实现），`agentdev start` 下没有 CLI/UI 途径注册 Provider 凭据，因此真实 Provider 的 Attempt 只能由测试注入解析器；`execution.md` §4 要求的 Keychain/0600 加密文件与备份单独导出仍是缺口。

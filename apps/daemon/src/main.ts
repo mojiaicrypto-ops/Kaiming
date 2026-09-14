@@ -283,6 +283,12 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
         log,
       });
       executions.push(execution);
+      // The workbench's `work.control resume` needs the executor to resolve a parked Run
+      // (`WP11R4-02`); the protocol is built before the stack exists, so it is attached now.
+      project.protocol.attachRunRecovery({
+        recordResumeDecision: ({ runId }) => execution.supervisor.recordResumeDecision(runId),
+        resumeParkedRun: (runId) => execution.supervisor.resumeParkedRun(runId),
+      });
       // The previous daemon may have died mid-Attempt: reconcile before scheduling
       // (`reliability.md` §7), then start ticking.
       // The host epoch must be strictly newer than the one the previous daemon recorded,

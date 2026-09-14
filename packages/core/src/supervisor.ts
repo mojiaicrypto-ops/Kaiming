@@ -574,13 +574,23 @@ export class RunnerSupervisor {
         this.spawnRun(run);
         claimed.push(run.id);
       } catch (error) {
-        // A Run that was admitted and then failed to prepare fails closed; a Run the
-        // admission gate refused stays queued (retrying next tick is the honest
-        // behaviour, and the refusal is logged).
+        // A Run the admission gate refused stays queued (retrying next tick is the honest
+        // behaviour). A Run whose spawn/prepare failed never got a process: its dangling
+        // Attempt is marked failed and the Run is parked, so an operator can retry instead
+        // of the engine destroying the work (WP11R4-01).
         this.log(`supervisor: cannot start ${run.id}: ${messageOf(error)}`);
         const current = this.store.runs.find(run.id);
         if (current !== undefined && current.status !== 'queued') {
-          this.lifecycle.settle(run.id, 'failed');
+          const dangling = this.store.attempts
+            .list({ where: 'run_id = ?', params: [run.id] })
+            .at(-1);
+          if (
+            dangling !== undefined &&
+            (dangling.status === 'starting' || dangling.status === 'running')
+          ) {
+            this.store.attempts.update(dangling.id, { status: 'failed' }, dangling.version);
+          }
+          this.park(run.id);
         }
       }
     }
@@ -602,8 +612,14 @@ export class RunnerSupervisor {
 
   private spawnRun(run: Run): void {
     const runnerId = RunnerSupervisor.runnerIdFor(null);
-    // 1. Persist Starting + the Attempt (epoch, runner identity) before any process runs.
-    const attempt = this.lifecycle.beginAttempt(run.id, { runnerId });
+    // 1. Adopt an Attempt that exists but has no process yet — `FindingsService.resumeWork`
+    //    opens one for a resumed Run, and calling `beginAttempt` again would be refused
+    //    (`cannot start from running`) and fail the Run (WP11R4-01). Otherwise open a new
+    //    Attempt for a queued/parked Run, which is what `beginAttempt` is for.
+    const latest = this.store.attempts.list({ where: 'run_id = ?', params: [run.id] }).at(-1);
+    const adopt =
+      latest !== undefined && latest.status === 'starting' && latest.runnerId === undefined;
+    const attempt = adopt ? latest : this.lifecycle.beginAttempt(run.id, { runnerId });
     const epoch = attempt.ownerEpoch + 1;
     const invocation = this.prepare({ run, attempt, epoch });
     this.runsStarted += 1;
