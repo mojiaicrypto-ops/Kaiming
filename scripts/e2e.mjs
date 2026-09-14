@@ -2442,20 +2442,18 @@ async function runChecks({ checks, harness, product }) {
         slowAttempt?.status === 'lost',
         `the killed Attempt is ${String(slowAttempt?.status)}`,
       );
-      // `AC-057`: a confirmed-dead Runner releases the write barrier for a later Attempt;
-      // an unconfirmable one parks the Run and withholds it behind a decision.
+      // `AC-057`: a SIGKILLed child pid is *confirmed* dead, so the Run must park as
+      // `interrupted` and a later Attempt must be allowed with no recovery decision
+      // (WP11R1-16/WP11R2-04: no relaxed branch here).
+      ensure(
+        parked === 'interrupted',
+        `a confirmed-dead Runner must park the Run as interrupted, got ${parked}`,
+      );
       const admission = newAttemptAdmission(harness.store, slowRun.id);
-      if (parked === 'interrupted') {
-        ensure(
-          admission.allowed === true && admission.requiresRecoveryDecision === false,
-          'a confirmed-dead Runner must allow a later Attempt and need no recovery decision',
-        );
-      } else {
-        ensure(
-          admission.allowed === false && admission.requiresRecoveryDecision === true,
-          'an unconfirmed Runner must withhold a new Attempt behind a recovery decision',
-        );
-      }
+      ensure(
+        admission.allowed === true && admission.requiresRecoveryDecision === false,
+        'a confirmed-dead Runner must allow a later Attempt and need no recovery decision',
+      );
 
       return `runtime executed a real Attempt: Run ${run.id} completed with Attempt ${String(attempt?.id)} through the supervisor, a real apps/runner child process and the loopback model (${String(harness.localModelCalls.length - callsBefore)} Provider call(s), ${String(budget?.tokensUsed ?? 0)} tokens booked); killing the live Runner of Run ${slowRun.id} (pid ${String(live.pid)}) parked it as ${parked} with Attempt ${String(slowAttempt?.id)} lost (new Attempt allowed=${String(admission.allowed)})`;
     } finally {

@@ -357,6 +357,74 @@ export class RunRecoveryService {
     return { ok: true, inspection: this.inspectRun(run) };
   }
 
+  /**
+   * Records the operator's "resume this Run" decision after a park (`AC-057`).
+   *
+   * A Run parked as `recovery_required` had **no** product path forward: the durable
+   * admission refuses a new Attempt, `pauseWork` refuses a Work with unresolved side
+   * effects, and `resume` only applies to a paused Work (`WP11R2-02`). This is that path,
+   * and it is deliberately guarded:
+   *
+   * - the Run must currently be parked (`interrupted`/`recovery_required`);
+   * - the *real* process state is re-checked: while the old Runner is alive or
+   *   unconfirmable, or while a tool operation's result is unknown, the decision is refused
+   *   (recording it would lift the write barrier over a possible second writer);
+   * - only then is an accepted `kind='recovery'`, `choice='resume'` decision written for
+   *   this Run, which is what `newAttemptAdmission` reads.
+   *
+   * The caller (the daemon's protocol surface) may then let the supervisor open the next
+   * Attempt; the supervisor picks a parked Run up on its next tick once this decision
+   * exists.
+   */
+  recordResumeDecision(input: {
+    readonly runId: string;
+    readonly sourceMessageId?: string;
+  }):
+    | { readonly ok: true; readonly decisionId: string; readonly inspection: RunRecoveryInspection }
+    | { readonly ok: false; readonly code: ProtocolErrorCode; readonly message: string } {
+    const run = this.store.runs.find(input.runId);
+    if (run === undefined) {
+      return { ok: false, code: 'NOT_FOUND', message: `Run ${input.runId} does not exist` };
+    }
+    if (run.status !== 'interrupted' && run.status !== 'recovery_required') {
+      return {
+        ok: false,
+        code: 'INVALID_STATE',
+        message: `Run ${run.id} is ${run.status}; only a parked Run needs a resume decision`,
+      };
+    }
+    const inspection = this.inspectRun(run);
+    if (!inspection.processChecked || inspection.processAlive !== false) {
+      return {
+        ok: false,
+        code: 'RECOVERY_REQUIRED',
+        message: `Run ${run.id} 的旧执行（${inspection.runnerId ?? '未知进程'}）未确认终止；先终止该进程再记录恢复决定`,
+      };
+    }
+    if (inspection.unknownToolOperations.length > 0) {
+      return {
+        ok: false,
+        code: 'RECOVERY_REQUIRED',
+        message: `Run ${run.id} 有 ${String(inspection.unknownToolOperations.length)} 个工具操作结果未知；需先处置这些副作用`,
+      };
+    }
+    const at = this.now();
+    const decision = this.store.decisions.insert({
+      workId: run.workId,
+      kind: RECOVERY_DECISION_KIND,
+      targetRef: { id: run.id, version: 1, hash: sha256(`recovery:${run.id}`) },
+      choices: ['resume', 'abandon'],
+      state: 'accepted',
+      choice: 'resume',
+      actor: 'user',
+      effectRefs: [],
+      ...(input.sourceMessageId === undefined ? {} : { sourceMessageId: input.sourceMessageId }),
+      createdAt: at,
+      updatedAt: at,
+    });
+    return { ok: true, decisionId: decision.id, inspection };
+  }
+
   /** Every Run that may still be live, in creation order. */
   inspectActive(): readonly RunRecoveryInspection[] {
     return this.store.runs

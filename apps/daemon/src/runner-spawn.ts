@@ -39,7 +39,8 @@ export const RUNNER_ENV_ALLOWLIST: readonly string[] = [
   'USER',
   'LOGNAME',
   'TERM',
-  'NODE_OPTIONS',
+  // `NODE_OPTIONS` is deliberately absent: it is a code-injection channel into the Runner
+  // (`--require` runs before any product code) and nothing here needs it (WP11R2-05).
   'NODE_EXTRA_CA_CERTS',
   'SYSTEMROOT',
   RUNNER_ENTRY_ENV,

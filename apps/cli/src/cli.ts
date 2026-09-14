@@ -259,6 +259,7 @@ async function startDaemon(input: {
     io.err(
       `${JSON.stringify({
         ok: false,
+        operationId: randomUUID(),
         error: {
           code: 'START_TIMEOUT',
           message: 'the daemon did not become ready; see the log tail',

@@ -57,6 +57,12 @@ class FakeRunner implements RunnerProcessPort {
 
   send(command: RunnerCommand): void {
     this.commands.push(command);
+    if (command.type === 'attempt.shutdown') {
+      // A real Runner answers shutdown with a cancelled result and exits; the fake does
+      // the same so the graceful path is exercised instead of the escalation.
+      this.emit({ type: 'attempt.result', status: 'cancelled', message: 'shutdown requested' });
+      setTimeout(() => this.exit(0, null), 0);
+    }
   }
 
   onMessage(listener: (message: RunnerMessage) => void): void {
@@ -338,6 +344,13 @@ describe('RunnerSupervisor claiming', () => {
   });
 });
 
+/** A Runner that ignores both the shutdown command and SIGTERM. */
+class StubbornRunner extends FakeRunner {
+  override send(command: RunnerCommand): void {
+    this.commands.push(command);
+  }
+}
+
 describe('RunnerSupervisor heartbeat and recovery', () => {
   it('parks a silent Attempt as lost; a dead process still allows a new Attempt', () => {
     const runId = queueRun();
@@ -415,9 +428,11 @@ describe('RunnerSupervisor heartbeat and recovery', () => {
     supervisor.tick();
     const runner = FakeRunner.spawned[0];
     if (runner === undefined) throw new Error('unreachable');
-    await supervisor.stop({ graceMs: 50 });
+    await supervisor.stop({ graceMs: 500 });
+    // A cooperative Runner ends its Attempt on the shutdown command, so no signal is sent
+    // (`reliability.md` §7 "请求 Runner 安全停").
     expect(runner.commands.some((command) => command.type === 'attempt.shutdown')).toBe(true);
-    expect(runner.signals).toContain('SIGTERM');
+    expect(runner.signals).toEqual([]);
     // Graceful shutdown is not a cancellation (`reliability.md` §7): the Run is parked for
     // a later Attempt and the Attempt is `stopped`, never settled as cancelled.
     expect(store.attempts.find(runner.input.attempt.id)?.status).toBe('stopped');
@@ -425,6 +440,79 @@ describe('RunnerSupervisor heartbeat and recovery', () => {
     expect(['interrupted', 'recovery_required']).toContain(parked);
     // A stopped supervisor claims nothing further.
     expect(supervisor.tick().claimed).toEqual([]);
+  });
+
+  it('escalates to SIGKILL when a Runner ignores SIGTERM', async () => {
+    const stubborn = new RunnerSupervisor({
+      store,
+      spawn: {
+        spawn: (input) => {
+          const runner = new StubbornRunner(input, 20_000);
+          FakeRunner.spawned.push(runner);
+          return runner;
+        },
+      },
+      prepare: invocation,
+      recovery: new RunRecoveryService({ store, probe, now: () => new Date(clock).toISOString() }),
+      lifecycle: new RunLifecycle({ store }),
+      now,
+      tickMs: 60_000,
+      log: () => undefined,
+    });
+    queueRun();
+    stubborn.tick();
+    const runner = FakeRunner.spawned[0];
+    if (runner === undefined) throw new Error('unreachable');
+    // The stubborn fake never reports exit, so only the escalation can end it.
+    await stubborn.stop({ graceMs: 10, killAfterMs: 20 });
+    expect(runner.signals).toEqual(['SIGTERM', 'SIGKILL']);
+  });
+
+  it('retries a parked Run once a resume decision exists', () => {
+    const runId = queueRun();
+    supervisor.tick();
+    const first = FakeRunner.spawned[0];
+    if (first === undefined) throw new Error('unreachable');
+    // The Runner dies and its pid is confirmed gone: the Run parks as interrupted.
+    probe.setAlive(`pid:${String(first.pid)}`, false);
+    clock += LIMITS.leaseSec.default * 1000 + 1;
+    expect(supervisor.tick().parked).toEqual([runId]);
+    expect(store.runs.find(runId)?.status).toBe('interrupted');
+    // A crash alone never silently retries (`reliability.md` §6 resumes at a human act):
+    // ticks keep finding nothing until the operator resumes.
+    supervisor.tick();
+    expect(store.attempts.list({ where: 'run_id = ?', params: [runId] })).toHaveLength(1);
+    // A confirmed-dead interruption is safe to continue, so the explicit resume opens the
+    // second Attempt.
+    const resumed = supervisor.resumeParkedRun(runId);
+    expect(resumed.ok).toBe(true);
+    expect(store.attempts.list({ where: 'run_id = ?', params: [runId] })).toHaveLength(2);
+    expect(store.runs.find(runId)?.status).toBe('running');
+  });
+
+  it('refuses to resume a recovery_required Run until the decision covers it', () => {
+    const runId = queueRun();
+    supervisor.tick();
+    const runner = FakeRunner.spawned[0];
+    if (runner === undefined) throw new Error('unreachable');
+    // An unconfirmable process parks the Run behind a recovery decision.
+    probe.setAlive(`pid:${String(runner.pid)}`, null);
+    clock += LIMITS.leaseSec.default * 1000 + 1;
+    expect(supervisor.tick().parked).toEqual([runId]);
+    expect(store.runs.find(runId)?.status).toBe('recovery_required');
+    const refused = supervisor.resumeParkedRun(runId);
+    expect(refused).toMatchObject({ ok: false, code: 'RECOVERY_REQUIRED' });
+    // Recording the decision re-checks the process state: still unconfirmable → refused.
+    expect(supervisor.recordResumeDecision(runId)).toMatchObject({
+      ok: false,
+      code: 'RECOVERY_REQUIRED',
+    });
+    // Once the process is confirmed gone, the decision is recorded and the resume works.
+    probe.setAlive(`pid:${String(runner.pid)}`, false);
+    clock += 1_000;
+    expect(supervisor.recordResumeDecision(runId).ok).toBe(true);
+    expect(supervisor.resumeParkedRun(runId).ok).toBe(true);
+    expect(store.attempts.list({ where: 'run_id = ?', params: [runId] })).toHaveLength(2);
   });
 
   it('revokes the Attempt capability whenever the Attempt stops being live', () => {

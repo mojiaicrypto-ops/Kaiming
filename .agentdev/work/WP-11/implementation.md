@@ -108,6 +108,22 @@
 
 修复后实测：单元 **59 文件 / 1151 用例**、集成 **29 文件 / 323 用例**、`pnpm test:e2e` 21 项检查（PASS 17/FAIL 0/UNVERIFIED 4，24 AC，exit 0）、`pnpm test:live` 5 项检查（真实 Provider，5 passed/0 failed，exit 0）、typecheck/lint 干净。
 
+## T10 独立 Review 第 2 轮（PASS，4×P2 / 3×P3）后的修复
+
+第 2 轮判定 **PASS**（0 P1，不阻断 Test），登记 4 个 P2 与 3 个 P3；本轮把 4 个 P2 与 2 个可修 P3 全部关闭：
+
+| 发现 | 处置 |
+|---|---|
+| WP11R2-01 优雅停止仍可能留下忽略 SIGTERM 的孤儿 Runner | `stop()` 现在按真实退出信号推进：等协作退出（`graceMs`）→ SIGTERM → 等 `cancelGraceSec` → SIGKILL → 再确认；只有子进程确认退出（`entry.exited`）才继续关闭流程，未确认的 pid 会被逐条记录而不是谎称已停止。新增「stubborn Runner 必须被 SIGKILL」与「协作 Runner 不应收到信号」两个测试 |
+| WP11R2-02 `recovery_required` 的 Run 在产品内没有恢复路径 | 新增 `RunRecoveryService.recordResumeDecision()`（先**重新核对真实进程状态**：旧进程未确认终止或存在未知副作用则拒绝；通过后写入 accepted 的 `kind='recovery'`/`choice='resume'` 决定行）与 `RunnerSupervisor.resumeParkedRun()`（读持久准入：`interrupted` 且已确认终止 → 开新 Attempt；`recovery_required` 必须先有覆盖本 Run 的决定）。自动认领仍然只针对 `queued`，崩溃后不会静默重试（`reliability.md` §6「恢复由人触发」）。新增两个测试（未确认 → 拒绝；确认 + 决定 → attempt 1→2） |
+| WP11R2-03 用户取消后迟到的 result 把 `stopped` 的 Attempt 改写成 `completed` | `finishFromResult` 先判 Run 是否终态：迟到结果不再改写 Attempt（`stopped`/`lost` 为终态）；只有 `starting`/`running` 才可迁移 |
+| WP11R2-04 `START_FAILED`/`START_TIMEOUT` 缺 `operationId`；记录误称 e2e 已收严 | 两条真实失败路径补上 `operationId`；`scripts/e2e.mjs` 的 AC-057 断言**真正**改为严格（`interrupted` + `allowed`），记录同步更正 |
+| WP11R2-05 白名单仍含 `NODE_OPTIONS`（可注入 `--require`） | 从子进程环境白名单移除 `NODE_OPTIONS` |
+| WP11R2-07 `attempt.error` 记 Attempt `failed` 而记录称 `lost` | 以代码为准更正记录措辞（`attempt.error` → Attempt `failed` + Run 停靠） |
+| WP11R2-06 结果正文无持久证据（`stage_result`） | 保持已登记残余（阶段结果由 Capability 鉴权的提交路径写入） |
+
+修复后实测：单元 **59 文件 / 1154 用例**、集成 **29 文件 / 323 用例**、`pnpm test:e2e` 21 项检查（PASS 17 / FAIL 0 / UNVERIFIED 4，exit 0）、`pnpm test:live` 5 项检查（真实 Provider，exit 0）、typecheck/lint 干净。
+
 ## A2 剩余
 
 1. **Provider Secret 的持久化与注册路径**：`SecretStore` 目前只在进程内（WP-07 的实现），`agentdev start` 下没有 CLI/UI 途径注册 Provider 凭据，因此真实 Provider 的 Attempt 只能由测试注入解析器；`execution.md` §4 要求的 Keychain/0600 加密文件与备份单独导出仍是缺口。
