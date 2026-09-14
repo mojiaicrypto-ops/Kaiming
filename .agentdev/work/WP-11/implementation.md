@@ -124,6 +124,22 @@
 
 修复后实测：单元 **59 文件 / 1154 用例**、集成 **29 文件 / 323 用例**、`pnpm test:e2e` 21 项检查（PASS 17 / FAIL 0 / UNVERIFIED 4，exit 0）、`pnpm test:live` 5 项检查（真实 Provider，exit 0）、typecheck/lint 干净。
 
+## T11 独立 Review 第 3 轮（FAIL，1×P1 / 1×P2 / 3×P3）后的修复
+
+第 2 轮的 4 个可修 P2 中 2 个确认关闭（孤儿 Runner、迟到结果改写）、2 个未真正关闭；本轮修正并补齐第 3 轮新发现：
+
+| 发现 | 处置 |
+|---|---|
+| WP11R3-01（P1）`recovery_required` 仍无产品路径：守卫本身正确但无人调用，且 `resumeWork` 对 `recovery_required` 硬拒绝 | 两条都改：`FindingsService.resumeTx` 现在**只以持久准入为权威**（去掉 `recovery_required` 的硬分支）——accepted、可核对的 Run 级 recovery/resume 决定即可解除拒绝；`RunnerSupervisor.claim()` 增加**认领「有 Attempt 但无进程」的 Run**（`latest.status='starting'` 且无 `runnerId`），因此 `resumeWork` 打开的 Attempt 会被真实执行器接手并 spawn，恢复路径端到端可用。测试更新为「持久 verdict 拒绝 → 兄弟 Run 的决定不解除 → 本 Run 的决定解除并回到 running」 |
+| WP11R3-02（P2）`START_FAILED` 仍无 `operationId` | 该失败路径补 `operationId`（此前只补了 `START_TIMEOUT`）；记录措辞同步更正 |
+| WP11R3-03（P3）`resumeParkedRun` 不复核真实进程状态 | 续跑前先 `recovery.inspect()`，`processAlive !== false` 一律拒绝（防 pid 复用 TOCTOU） |
+| WP11R3-04（P3）`resumeParkedRun` 绕过并发上限 | 续跑前走 `capacityFor()`，超限返回 `BUSY` |
+| WP11R3-05（P3）决定行 `targetRef.version`/`hash` 合成 | 改为 `version = run.version`，hash 取决定所依据事实（runId/status/runnerId/heartbeatAt）的 canonical hash |
+
+修复后实测：单元 **59 文件 / 1154 用例**、集成 **29 文件 / 323 用例**、`pnpm test:e2e` 21 项检查（PASS 17 / FAIL 0 / UNVERIFIED 4，exit 0）、`pnpm test:live` 5 项检查（真实 Provider，exit 0）、typecheck/lint 干净。
+
+**第 2/3 轮记录口径更正**：T9/T10 曾把「4 个 P2 全部关闭」写成既成事实，其中「无产品恢复路径」「e2e 断言已收严」「两条 start 失败均有 operationId」在当时并不成立；本轮已把这三项做到与文字一致。
+
 ## A2 剩余
 
 1. **Provider Secret 的持久化与注册路径**：`SecretStore` 目前只在进程内（WP-07 的实现），`agentdev start` 下没有 CLI/UI 途径注册 Provider 凭据，因此真实 Provider 的 Attempt 只能由测试注入解析器；`execution.md` §4 要求的 Keychain/0600 加密文件与备份单独导出仍是缺口。

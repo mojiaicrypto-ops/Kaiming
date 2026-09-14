@@ -1333,10 +1333,27 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     expect(paused.ok).toBe(true);
     if (!paused.ok) throw new Error('unreachable');
 
-    // While the Work is paused the Run's side effects turn out to be unresolved.
+    // While the Work is paused the Run's side effects turn out to be unresolved. The
+    // durable verdict is what withholds a new Attempt (`W8R1-04`): a bare status change
+    // would be a fact nothing persists, so the park is recorded exactly like
+    // `RunRecoveryService.apply` records it.
     const current = store.runs.find(PAUSE_RUN_ID);
     if (current === undefined) throw new Error('unreachable');
-    store.runs.update(PAUSE_RUN_ID, { status: 'recovery_required' }, current.version);
+    const parked = store.runs.update(
+      PAUSE_RUN_ID,
+      { status: 'recovery_required' },
+      current.version,
+    );
+    store.events.append({
+      name: 'run.recovered',
+      entityId: PAUSE_RUN_ID,
+      entityVersion: parked.version,
+      data: {
+        newAttemptAllowed: false,
+        requiresRecoveryDecision: true,
+        action: 'park_recovery_required',
+      },
+    });
 
     const resumed = service.resumeWork({
       workId: WORK_ID,
@@ -1346,6 +1363,49 @@ describe('Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-08
     if (resumed.ok) throw new Error('unreachable');
     expect(resumed.code).toBe('RECOVERY_REQUIRED');
     expect(store.works.find(WORK_ID)?.status).toBe('paused');
+
+    // The operator's resume act records the recovery decision for this Run; the persisted
+    // admission is the authority, so the same resume then succeeds (`WP11R3-01`). A
+    // decision for another Run must not lift this block (it is Run-scoped).
+    const work = store.works.find(WORK_ID);
+    if (work === undefined) throw new Error('unreachable');
+    const later = new Date(Date.now() + 60_000).toISOString();
+    store.decisions.insert({
+      workId: WORK_ID,
+      kind: 'recovery',
+      targetRef: { id: '01a09e00-0000-7000-8000-000000000000', version: 1, hash: 'a'.repeat(64) },
+      choices: ['resume', 'abandon'],
+      state: 'accepted',
+      choice: 'resume',
+      actor: 'user',
+      effectRefs: [],
+      createdAt: later,
+      updatedAt: later,
+    });
+    const stillBlocked = service.resumeWork({ workId: WORK_ID, expectedWorkVersion: work.version });
+    expect(stillBlocked.ok).toBe(false);
+    if (stillBlocked.ok) throw new Error('unreachable');
+    expect(stillBlocked.code).toBe('RECOVERY_REQUIRED');
+
+    const decision = store.decisions.insert({
+      workId: WORK_ID,
+      kind: 'recovery',
+      targetRef: { id: PAUSE_RUN_ID, version: parked.version, hash: 'b'.repeat(64) },
+      choices: ['resume', 'abandon'],
+      state: 'accepted',
+      choice: 'resume',
+      actor: 'user',
+      effectRefs: [],
+      createdAt: later,
+      updatedAt: later,
+    });
+    expect(decision.id).toBeDefined();
+    const afterDecision = service.resumeWork({
+      workId: WORK_ID,
+      expectedWorkVersion: store.works.find(WORK_ID)?.version ?? 0,
+    });
+    expect(afterDecision.ok).toBe(true);
+    expect(store.runs.find(PAUSE_RUN_ID)?.status).toBe('running');
   });
 
   it('refuses to pause a blocked Work, which recovers through its own path (AC-020)', () => {

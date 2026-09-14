@@ -250,7 +250,7 @@ async function startDaemon(input: {
     spawnDaemon({ home, repoRoot, roots, trust });
   } catch (error) {
     io.err(
-      `${JSON.stringify({ ok: false, error: { code: 'START_FAILED', message: String(error) } })}\n`,
+      `${JSON.stringify({ ok: false, operationId: randomUUID(), error: { code: 'START_FAILED', message: String(error) } })}\n`,
     );
     return 1;
   }

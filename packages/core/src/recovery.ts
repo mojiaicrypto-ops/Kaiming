@@ -409,10 +409,23 @@ export class RunRecoveryService {
       };
     }
     const at = this.now();
+    // The reference names the Run *and* the version it was decided against, with a hash of
+    // the facts the decision rests on (WP11R3-05).
     const decision = this.store.decisions.insert({
       workId: run.workId,
       kind: RECOVERY_DECISION_KIND,
-      targetRef: { id: run.id, version: 1, hash: sha256(`recovery:${run.id}`) },
+      targetRef: {
+        id: run.id,
+        version: run.version,
+        hash: sha256(
+          canonicalJson({
+            runId: run.id,
+            status: run.status,
+            runnerId: inspection.runnerId,
+            heartbeatAt: inspection.heartbeatAt,
+          }),
+        ),
+      },
       choices: ['resume', 'abandon'],
       state: 'accepted',
       choice: 'resume',

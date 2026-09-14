@@ -1693,7 +1693,11 @@ export class FindingService {
     const resumedRuns = this.store.runs.list({ where: 'work_id = ?', params: [work.id] });
     const unresolved = resumedRuns.filter((run) => {
       if (isTerminalRunStatus(run.status)) return false;
-      if (run.status === 'recovery_required') return true;
+      // The persisted admission is the single authority (`W8R1-04`): a Run parked as
+      // `recovery_required` is unresumable until an accepted, Run-scoped recovery decision
+      // covers it — and then it resumes exactly like an `interrupted` Run. Hard-coding
+      // `recovery_required` here made that decision unable to ever take effect
+      // (WP11R3-01).
       return !newAttemptAdmission(this.store, run.id).allowed;
     });
     if (unresolved.length > 0) {

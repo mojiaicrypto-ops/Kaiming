@@ -380,6 +380,28 @@ export class RunnerSupervisor {
     if ([...this.live.values()].some((entry) => entry.runId === runId)) {
       return { ok: false, code: 'INVALID_STATE', message: `Run ${runId} still has a live Attempt` };
     }
+    // Re-inspect the *real* state instead of trusting the persisted park: a pid can be
+    // reused, and an unconfirmable process must never be replaced (WP11R3-03).
+    const inspection = this.recovery.inspect(runId);
+    if (inspection.ok && inspection.inspection.processAlive !== false) {
+      return {
+        ok: false,
+        code: 'RECOVERY_REQUIRED',
+        message: `Run ${runId} 的旧执行状态为 ${String(inspection.inspection.processAlive)}；确认终止后才能续跑`,
+      };
+    }
+    if (
+      !this.capacityFor(
+        run.role,
+        this.queued().some((entry) => entry.role === 'chief'),
+      )
+    ) {
+      return {
+        ok: false,
+        code: 'BUSY',
+        message: `Run ${runId} 无法续跑：项目/角色并发上限已满`,
+      };
+    }
     const admission = newAttemptAdmission(this.store, runId);
     if (!admission.allowed) {
       return {
@@ -497,10 +519,18 @@ export class RunnerSupervisor {
    * `resumeParkedRun` action (`WP11R2-02`).
    */
   private queued(): readonly Run[] {
-    // Only `queued` Runs are claimed automatically: a parked Run is resumed by an explicit
-    // act (`resumeParkedRun`), never silently retried after a crash (`reliability.md` §6).
-    const runs = this.store.runs.list({ where: "status = 'queued'" });
-    return [...runs].sort((left, right) => {
+    // Two kinds of work: freshly queued Runs, and Runs whose Attempt exists but has no
+    // process yet — the latter is how `FindingsService.resumeWork` hands a resumed Run to
+    // the executor (WP11R3-01). A crash never retries by itself: an Attempt that recorded
+    // a process identity (`runnerId`) is not adopted again.
+    const runs = this.store.runs.list({ where: "status IN ('queued', 'running')" });
+    const claimable = runs.filter((run) => {
+      if ([...this.live.values()].some((entry) => entry.runId === run.id)) return false;
+      if (run.status === 'queued') return true;
+      const latest = this.store.attempts.list({ where: 'run_id = ?', params: [run.id] }).at(-1);
+      return latest !== undefined && latest.status === 'starting' && latest.runnerId === undefined;
+    });
+    return [...claimable].sort((left, right) => {
       if (left.createdAt !== right.createdAt) return left.createdAt < right.createdAt ? -1 : 1;
       return left.id < right.id ? -1 : 1;
     });
