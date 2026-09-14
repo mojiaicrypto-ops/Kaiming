@@ -84,6 +84,30 @@
 - Provider 凭据通过 **真实的 `grant` 行 + `decision` 行**授权（`execution.md` §4），不是演练闭包：这是「用户配置即授权」的可审计记录。
 - 本轮实测（用户 DeepSeek 凭证）：`live: 5 passed / 0 failed / 2 unverified`，11 次真实 HTTP 200，退出 0。
 
+## T9 独立 Review 第 1 轮（FAIL：3×P1 / 8×P2 / 6×P3）后的修复
+
+| 发现 | 严重度 | 处置 |
+|---|---|---|
+| WP11R1-01 Runner 结果/退出回调无错误隔离，迟到结果使 daemon 崩溃 | P1 | 子进程监听器里的每一次状态转换都经 `guarded()` 包裹并记录拒绝原因；Run 已终态时迟到结果只记日志、不再结算（新增「用户取消后迟到结果」测试） |
+| WP11R1-02 进程探针无法解析 supervisor 写的 runnerId，`interrupted` 不可达 | P1 | runnerId 改为探针能解析的 `pid:<n>`（spawn 前为 `pid:pending`，此时不可确认 → `recovery_required`，fail-closed）；e2e/live 的 AC-057 断言改为**严格**要求 `interrupted`，不再接受「任一状态」 |
+| WP11R1-03 capability 门禁 fail-open（停靠后旧 token 仍可用） | P1 | 网关端点在每次调用时**重新校验 Attempt**：存在、状态为 `starting`/`running`、`epoch` 与 `ownerEpoch+1` 一致，否则撤销并拒绝；supervisor 通过 `onAttemptEnded` 钩子在结果/错误/退出/超时/停止时撤销；新增「Attempt 已停靠」「epoch 不匹配」两个测试 |
+| WP11R1-04 `attempt.error` 直接判 failed、未走恢复 | P2 | 无结果的 Attempt 一律按 lost 处理并停靠 Run（`interrupted`/`recovery_required`）；测试期望同步更新 |
+| WP11R1-05 优雅 stop 把在跑 Run 结算为终态 cancelled | P2 | 停止期间到达的 cancelled 结果改为「Attempt `stopped` + Run 停靠」，符合「优雅停止→可恢复」；测试断言 Run 处于 interrupted/recovery_required |
+| WP11R1-06 忽略 SIGTERM 的 Runner 变孤儿 | P2 | `stop()` 等待子进程自行结束（默认 3s）、随后 SIGTERM 并**保留** `cancelGraceSec` 后的 SIGKILL 升级；不再清除升级计时器 |
+| WP11R1-07 doctor 忽略 `AGENTDEV_HOME` | P2 | doctor 默认数据目录改用 `runtimeHomePath(process.env, homedir())` |
+| WP11R1-08 `projects.json` 注册表被忽略 | P2 | 空 `--root` 时回落到注册表；显式 `--root` 的项目也会登记（新增「无 root 重启后重新打开已登记项目」测试）；顺带修正 host epoch 需严格递增（带启动时间戳） |
+| WP11R1-09 CLI 失败无 `operationId` | P2 | 所有 `start/stop/open/status` 失败输出带 `operationId` |
+| WP11R1-10 单实例锁非原子、失败回滚删他人记录 | P2 | 锁文件用 `O_CREAT|O_EXCL` 原子创建（陈旧锁先删除再独占重建）；失败启动只清除**属于自己**的 `runtime.json` |
+| WP11R1-11 Runner 子进程继承 daemon 全量 env（含 Provider secret） | P2 | 子进程只拿显式白名单（PATH/HOME/TMPDIR/NODE_OPTIONS 等 + `AGENTDEV_RUNNER_ENTRY`），Provider 变量不传递 |
+| WP11R1-12 `claim()` 死代码 | P3 | 删除，改为按 runId 检查活跃 Attempt |
+| WP11R1-14 陈旧锁接管日志打印新持有者 | P3 | `acquireDaemonLock` 返回 `replacedStaleFrom`，日志打印被替换者 |
+| WP11R1-16 drill 空转断言 | P3 | 删除恒真断言（`sessionRef`、`startsWith('runner-')`），runnerId 断言改为 `^pid:[0-9]+$`，AC-057 断言改为严格 |
+| WP11R1-17 capability TTL 注释不符、终态后仍写心跳 | P3 | 注释改为实际 1 小时并说明「状态每次调用重校验，TTL 是兜底」；心跳只在 Attempt 处于 starting/running 时落库 |
+| WP11R1-13 Run 在 `beginAttempt` 即 running，`ready` 只作用于 Attempt | P3 | **未修复，登记残余**：需要 `RunLifecycle` 新增 `confirmRunning`（Run 侧 queued→starting→ready→running），属下一轮 |
+| WP11R1-15 `attempt.result` 正文不落 `stage_result` | P3 | **未修复，登记残余**：真正写入 `stage_result` 的仍是 Capability 鉴权的阶段提交路径；Runner 的结果正文用于日志与 Run 终态 |
+
+修复后实测：单元 **59 文件 / 1151 用例**、集成 **29 文件 / 323 用例**、`pnpm test:e2e` 21 项检查（PASS 17/FAIL 0/UNVERIFIED 4，24 AC，exit 0）、`pnpm test:live` 5 项检查（真实 Provider，5 passed/0 failed，exit 0）、typecheck/lint 干净。
+
 ## A2 剩余
 
 1. **Provider Secret 的持久化与注册路径**：`SecretStore` 目前只在进程内（WP-07 的实现），`agentdev start` 下没有 CLI/UI 途径注册 Provider 凭据，因此真实 Provider 的 Attempt 只能由测试注入解析器；`execution.md` §4 要求的 Keychain/0600 加密文件与备份单独导出仍是缺口。

@@ -325,6 +325,41 @@ describe('model gateway proxy', () => {
     });
   });
 
+  it('refuses a capability whose Attempt is no longer live', async () => {
+    await start();
+    const { token, attemptId } = seedRun(snapshots);
+    // The supervisor parks an Attempt as `lost` when its Runner dies and revokes the
+    // capability; a process still holding the token must not keep calling (WP11R1-03).
+    const attempt = store.attempts.find(attemptId);
+    if (attempt === undefined) throw new Error('unreachable');
+    store.attempts.update(attempt.id, { status: 'lost' }, attempt.version);
+    const response = await fetch(`${proxy.url}/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'ping' }] }),
+    });
+    expect(response.status).toBe(401);
+    expect(transport.requests).toHaveLength(0);
+    // …and the revocation is durable: the token is gone from the store.
+    expect(capabilities.find(attemptId)).toBeUndefined();
+  });
+
+  it('refuses a capability minted for another epoch', async () => {
+    await start();
+    const { token, attemptId } = seedRun(snapshots);
+    const attempt = store.attempts.find(attemptId);
+    if (attempt === undefined) throw new Error('unreachable');
+    // A newer Attempt owns the Run now; the old epoch's token must be inert.
+    store.attempts.update(attempt.id, { ownerEpoch: 5 }, attempt.version);
+    const response = await fetch(`${proxy.url}/chat/completions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'ping' }] }),
+    });
+    expect(response.status).toBe(401);
+    expect(transport.requests).toHaveLength(0);
+  });
+
   it('streams a valid SSE sequence when the Runner asks for one', async () => {
     await start();
     const { token } = seedRun(snapshots);

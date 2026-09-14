@@ -21,6 +21,7 @@
  * never depends on `apps/runner` and the tests can drive a scripted process.
  */
 import { LIMITS, type Attempt, type Run, type RunStatus } from '@agentdev/contracts';
+import { isTerminalRunStatus } from '@agentdev/domain';
 import type { ProjectStore } from '@agentdev/storage';
 
 import { RunLifecycle, type RunUsage } from './run-lifecycle.js';
@@ -138,6 +139,17 @@ export interface RunnerSupervisorOptions {
   readonly tickMs?: number;
   /** Usage reported by the model gateway endpoint, settled with the Run. */
   readonly usage?: RunUsageLedger;
+  /**
+   * Called whenever an Attempt stops being live, whatever the reason.
+   *
+   * The daemon revokes the Attempt's capability here (`reliability.md` §2 "撤销Capability"),
+   * so a parked or finished Attempt can never call the model gateway again.
+   */
+  readonly onAttemptEnded?: (input: {
+    readonly runId: string;
+    readonly attemptId: string;
+    readonly reason: 'result' | 'error' | 'exit' | 'timeout' | 'shutdown';
+  }) => void;
   readonly log?: (line: string) => void;
 }
 
@@ -177,6 +189,7 @@ export class RunnerSupervisor {
   private readonly concurrency: SupervisorConcurrency;
   private readonly tickMs: number;
   private readonly usage: RunUsageLedger | undefined;
+  private readonly onAttemptEnded: RunnerSupervisorOptions['onAttemptEnded'];
   private readonly log: (line: string) => void;
   private readonly live = new Map<string, LiveAttempt>();
   private timer: NodeJS.Timeout | undefined;
@@ -202,6 +215,7 @@ export class RunnerSupervisor {
     };
     this.tickMs = options.tickMs ?? 1_000;
     this.usage = options.usage;
+    this.onAttemptEnded = options.onAttemptEnded;
     this.log = options.log ?? (() => undefined);
   }
 
@@ -235,14 +249,21 @@ export class RunnerSupervisor {
     return { claimed, parked, live: this.live.size };
   }
 
-  /** Stops accepting work and asks every Runner to shut down, then terminates. */
+  /**
+   * Stops accepting work and asks every Runner to shut down.
+   *
+   * `reliability.md` §7's graceful stop is "请求 Runner 安全停 → 保存 Checkpoint": a Run
+   * that is mid-Attempt is therefore parked for recovery, not settled as a terminal
+   * cancellation (the daemon is going away, the work is not). A Runner that ignores the
+   * request is SIGTERMed and, after `cancelGraceSec`, SIGKILLed — the escalation timer is
+   * *kept*, so no orphan is left behind.
+   */
   async stop(options: { readonly graceMs?: number } = {}): Promise<void> {
     this.stopping = true;
     if (this.timer !== undefined) {
       clearInterval(this.timer);
       this.timer = undefined;
     }
-    const graceMs = options.graceMs ?? LIMITS.cancelGraceSec.default * 1000;
     const entries = [...this.live.values()];
     for (const entry of entries) {
       try {
@@ -253,14 +274,26 @@ export class RunnerSupervisor {
           type: 'attempt.shutdown',
         });
       } catch {
-        // The pipe may already be gone; the signal below still covers it.
+        // The pipe may already be gone; the signals below still cover it.
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, Math.min(graceMs, 200)));
+    // Give a cooperative Runner a moment to end its Attempt by itself.
+    // Real wall-clock wait: the injected clock is for domain timestamps, not for waiting.
+    const deadline = Date.now() + (options.graceMs ?? 3_000);
     for (const entry of entries) {
-      if (this.live.has(entry.attemptId)) this.terminate(entry, 'SIGTERM');
+      while (this.live.has(entry.attemptId) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
     }
-    for (const entry of entries) this.clearKillTimer(entry);
+    for (const entry of entries) {
+      if (!this.live.has(entry.attemptId)) continue;
+      this.log(`supervisor: ${entry.runId} did not stop in time; terminating`);
+      this.terminate(entry, 'SIGTERM');
+      this.live.delete(entry.attemptId);
+      this.markAttemptStopped(entry);
+      this.park(entry.runId);
+      this.ended(entry, 'shutdown');
+    }
   }
 
   /** Live Attempts, for the daemon's status view and the tests. */
@@ -297,9 +330,38 @@ export class RunnerSupervisor {
       this.live.delete(entry.attemptId);
       this.markAttemptLost(entry);
       this.park(entry.runId);
+      this.ended(entry, 'timeout');
       parked.push(entry.runId);
     }
     return parked;
+  }
+
+  /** Reports an Attempt that is no longer live, so its capability can be revoked. */
+  private ended(
+    entry: LiveAttempt,
+    reason: 'result' | 'error' | 'exit' | 'timeout' | 'shutdown',
+  ): void {
+    try {
+      this.onAttemptEnded?.({ runId: entry.runId, attemptId: entry.attemptId, reason });
+    } catch (error) {
+      this.log(`supervisor: onAttemptEnded failed for ${entry.attemptId}: ${messageOf(error)}`);
+    }
+  }
+
+  /**
+   * Runs one state transition without letting a callback throw into the child process
+   * listeners.
+   *
+   * A late `attempt.result` for a Run the user already cancelled is normal (`reliability.md`
+   * §2: late events are checked against the current state), and the daemon must stay up:
+   * the transition is logged and dropped instead.
+   */
+  private guarded(what: string, runId: string, action: () => void): void {
+    try {
+      action();
+    } catch (error) {
+      this.log(`supervisor: ${what} refused for ${runId}: ${messageOf(error)}`);
+    }
   }
 
   private markAttemptLost(entry: LiveAttempt): void {
@@ -311,8 +373,16 @@ export class RunnerSupervisor {
   }
 
   private park(runId: string): void {
-    const outcome = this.recovery.recoverRun(runId);
-    if (outcome.changed) this.log(`supervisor: parked ${runId} as ${outcome.to}`);
+    this.guarded('recovery', runId, () => {
+      const outcome = this.recovery.recoverRun(runId);
+      if (outcome.changed) this.log(`supervisor: parked ${runId} as ${outcome.to}`);
+    });
+  }
+
+  /** True when the Run has already ended, so a late result must not settle it again. */
+  private isTerminal(runId: string): boolean {
+    const run = this.store.runs.find(runId);
+    return run === undefined || isTerminalRunStatus(run.status);
   }
 
   // -------------------------------------------------------------------------
@@ -359,7 +429,7 @@ export class RunnerSupervisor {
     ];
     for (const run of ordered) {
       if (this.stopping) break;
-      if (this.live.has(run.id)) continue;
+      if ([...this.live.values()].some((entry) => entry.runId === run.id)) continue;
       if (!this.capacityFor(run.role, chiefQueued)) continue;
       try {
         this.spawnRun(run);
@@ -378,16 +448,21 @@ export class RunnerSupervisor {
     return claimed;
   }
 
-  /** Runner identity that encodes the child pid, so recovery can probe that process. */
-  private static runnerIdFor(pid: number, runId: string): string {
-    return `runner-${String(pid)}-${runId}`;
+  /**
+   * Runner identity in the form the recovery probe parses (`recovery.ts`: `pid:<n>` or a
+   * bare pid).
+   *
+   * The Attempt row is created before the process exists, so the identity is written
+   * provisionally and replaced with the child's pid right after the spawn. A daemon that
+   * dies in that window leaves `pid:pending`, which the probe cannot resolve — the honest
+   * `recovery_required` outcome, never a confident "the old writer is gone".
+   */
+  private static runnerIdFor(pid: number | null): string {
+    return pid === null ? 'pid:pending' : `pid:${String(pid)}`;
   }
 
   private spawnRun(run: Run): void {
-    // The Attempt row is created before the process exists, so the identity is provisional;
-    // it is replaced with the child's pid right after the spawn, which is what
-    // `RunRecoveryService` probes after a restart or a heartbeat timeout.
-    const runnerId = RunnerSupervisor.runnerIdFor(process.pid, run.id);
+    const runnerId = RunnerSupervisor.runnerIdFor(null);
     // 1. Persist Starting + the Attempt (epoch, runner identity) before any process runs.
     const attempt = this.lifecycle.beginAttempt(run.id, { runnerId });
     const epoch = attempt.ownerEpoch + 1;
@@ -401,7 +476,7 @@ export class RunnerSupervisor {
       runnerId,
       invocation,
     });
-    const realRunnerId = RunnerSupervisor.runnerIdFor(child.pid, run.id);
+    const realRunnerId = RunnerSupervisor.runnerIdFor(child.pid);
     const stored = this.store.attempts.find(attempt.id);
     if (stored !== undefined) {
       this.store.attempts.update(stored.id, { runnerId: realRunnerId }, stored.version);
@@ -441,10 +516,26 @@ export class RunnerSupervisor {
     // Late/foreign messages never steer a newer Attempt (`reliability.md` §2).
     if (message.attemptId !== entry.attemptId || message.epoch !== entry.epoch) return;
     entry.lastSeenAt = this.now();
+    try {
+      this.applyMessage(entry, message);
+    } catch (error) {
+      // A listener must never throw: the daemon would die with the Runner's pipe still
+      // open (`WP11R1-01`). The refusal is logged and the Attempt is parked instead.
+      this.log(`supervisor: ${entry.runId} message ${message.type} failed: ${messageOf(error)}`);
+    }
+  }
+
+  private applyMessage(entry: LiveAttempt, message: RunnerMessage): void {
+    if (!this.live.has(entry.attemptId)) return;
     switch (message.type) {
       case 'attempt.heartbeat': {
         const attempt = this.store.attempts.find(entry.attemptId);
-        if (attempt !== undefined && this.now() - entry.lastHeartbeatWritten >= 1_000) {
+        // A terminal Attempt's `heartbeat_at` is history, not liveness.
+        if (
+          attempt !== undefined &&
+          (attempt.status === 'starting' || attempt.status === 'running') &&
+          this.now() - entry.lastHeartbeatWritten >= 1_000
+        ) {
           this.writeHeartbeat(attempt, entry);
         }
         return;
@@ -509,14 +600,40 @@ export class RunnerSupervisor {
       this.store.attempts.update(attempt.id, { status }, attempt.version);
     }
     this.live.delete(entry.attemptId);
-    this.clearKillTimer(entry);
+    this.ended(entry, 'result');
+    if (this.isTerminal(entry.runId)) {
+      // The user (or a cancel) already ended this Run: the result is late evidence, not a
+      // new outcome (`reliability.md` §2), and settling it again would throw (WP11R1-01).
+      this.log(`supervisor: ignoring the late result of ${entry.runId} (Run already ended)`);
+      this.clearKillTimer(entry);
+      return;
+    }
+    if (this.stopping && result.status === 'cancelled') {
+      // Graceful daemon shutdown parks the Run for a later Attempt instead of ending it.
+      this.markAttemptStopped(entry);
+      this.park(entry.runId);
+      this.clearKillTimer(entry);
+      return;
+    }
     const usage = this.usage?.take(entry.runId);
-    if (result.status === 'cancelled') {
-      this.lifecycle.settle(entry.runId, 'cancelled', usage);
-    } else if (result.status === 'completed') {
-      this.lifecycle.settle(entry.runId, 'completed', usage);
-    } else {
-      this.lifecycle.settle(entry.runId, 'failed', usage);
+    this.guarded('settlement', entry.runId, () => {
+      if (result.status === 'cancelled') {
+        this.lifecycle.settle(entry.runId, 'cancelled', usage);
+      } else if (result.status === 'completed') {
+        this.lifecycle.settle(entry.runId, 'completed', usage);
+      } else {
+        this.lifecycle.settle(entry.runId, 'failed', usage);
+      }
+    });
+    this.clearKillTimer(entry);
+  }
+
+  /** Marks an Attempt the daemon asked to stop (a shutdown, not a failure). */
+  private markAttemptStopped(entry: LiveAttempt): void {
+    const attempt = this.store.attempts.find(entry.attemptId);
+    if (attempt === undefined) return;
+    if (attempt.status === 'starting' || attempt.status === 'running') {
+      this.store.attempts.update(attempt.id, { status: 'stopped' }, attempt.version);
     }
   }
 
@@ -527,11 +644,26 @@ export class RunnerSupervisor {
     }
     this.live.delete(entry.attemptId);
     this.terminate(entry, 'SIGTERM');
-    this.lifecycle.settle(entry.runId, 'failed', this.usage?.take(entry.runId));
+    this.ended(entry, 'error');
+    // An Attempt that could not report a result is a *lost* Attempt: the Run is parked
+    // from its real state (`interrupted` / `recovery_required`) instead of being settled
+    // as a product failure (`WP11R1-04`).
+    this.park(entry.runId);
     this.log(`supervisor: ${entry.runId} attempt ${entry.attemptId} failed: ${message}`);
   }
 
   private onExit(
+    entry: LiveAttempt,
+    exit: { readonly code: number | null; readonly signal: string | null },
+  ): void {
+    try {
+      this.handleExit(entry, exit);
+    } catch (error) {
+      this.log(`supervisor: exit handling failed for ${entry.runId}: ${messageOf(error)}`);
+    }
+  }
+
+  private handleExit(
     entry: LiveAttempt,
     exit: { readonly code: number | null; readonly signal: string | null },
   ): void {
@@ -543,11 +675,12 @@ export class RunnerSupervisor {
     // The process died without a result: park the Run from its real state instead of
     // guessing an outcome (`reliability.md` §7).
     this.live.delete(entry.attemptId);
-    this.clearKillTimer(entry);
     const attempt = this.store.attempts.find(entry.attemptId);
     if (attempt !== undefined && attempt.status !== 'completed' && attempt.status !== 'failed') {
       this.store.attempts.update(attempt.id, { status: 'lost' }, attempt.version);
     }
+    this.ended(entry, 'exit');
+    this.clearKillTimer(entry);
     this.park(entry.runId);
     this.log(
       `supervisor: ${entry.runId} runner exited (code ${String(exit.code)}, signal ${String(exit.signal)}) without a result`,

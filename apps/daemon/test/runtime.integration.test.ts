@@ -205,6 +205,33 @@ describe('startRuntime', () => {
     runtime = undefined;
   });
 
+  it('reopens the projects recorded in the registry when no root is given', async () => {
+    // `agentdev start` with no `--root` must serve what this installation already knows
+    // (`WP11R1-08`): stop, drop the in-memory state, start again.
+    const first = await startRuntime({
+      home,
+      roots: [repo],
+      trust: true,
+      daemonPort: 0,
+      webPort: 0,
+      adminPort: 0,
+      log: () => undefined,
+    });
+    await first.stop();
+    runtime = await startRuntime({
+      home,
+      daemonPort: 0,
+      webPort: 0,
+      adminPort: 0,
+      log: () => undefined,
+    });
+    expect(runtime.instances).toHaveLength(1);
+    expect(runtime.instances[0]?.root).toBe(realpathSync(repo));
+    const health = await adminFetch(runtime, '/health');
+    const body = (await health.json()) as { instances: unknown[] };
+    expect(body.instances).toHaveLength(1);
+  });
+
   it('rejects a root that is not a Git repository', async () => {
     const plain = mkdtempSync(join(tmpdir(), 'agentdev-plain-'));
     try {

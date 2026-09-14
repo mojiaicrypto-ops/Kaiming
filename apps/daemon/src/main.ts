@@ -40,6 +40,7 @@ import {
   ensureRuntimeHome,
   readInstallationCredential,
   readProjectRegistry,
+  readRuntimeRecord,
   registerProject,
   releaseDaemonLock,
   resolveProjectIdentity,
@@ -140,7 +141,7 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
   }
   if (lock.replacedStale) {
     log(
-      `agentdevd: took over a stale lock (pid ${String(lock.lock.pid)}, epoch ${String(lock.lock.epoch)}); the previous daemon did not stop cleanly`,
+      `agentdevd: took over a stale lock from pid ${String(lock.replacedStaleFrom?.pid ?? 'unknown')} (epoch ${String(lock.replacedStaleFrom?.epoch ?? 'unknown')}); this daemon now holds epoch ${String(lock.lock.epoch)}`,
     );
   }
 
@@ -198,8 +199,12 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
       }
       opened.length = 0;
       instances.length = 0;
-      // 4. Remove the live record, then release the lock for this epoch only.
-      clearRuntimeRecord(home);
+      // 4. Remove the live record only when it is still ours, then release the lock for
+      // this epoch only — a peer that took over must not lose its record (WP11R1-10).
+      const live = readRuntimeRecord(home);
+      if (live === null || (live.pid === process.pid && live.epoch === lock.lock.epoch)) {
+        clearRuntimeRecord(home);
+      }
       releaseDaemonLock(home, lock.lock.epoch);
       log('agentdevd: stopped');
     },
@@ -280,7 +285,11 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
       executions.push(execution);
       // The previous daemon may have died mid-Attempt: reconcile before scheduling
       // (`reliability.md` §7), then start ticking.
-      execution.start(`host-${String(process.pid)}-${String(lock.lock.epoch)}`);
+      // The host epoch must be strictly newer than the one the previous daemon recorded,
+      // so it carries the start time as well as the pid and the lock epoch.
+      execution.start(
+        `host-${String(process.pid)}-${String(lock.lock.epoch)}-${new Date().toISOString()}`,
+      );
     }
     const instance: RuntimeInstance = {
       projectId: project.projectId,
@@ -312,9 +321,16 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
 
   try {
     const registry = readProjectRegistry(home);
-    const roots = options.roots ?? registry.projects.map((entry) => entry.root);
+    // An *empty* `--root` list means "whatever this installation has registered": `??`
+    // alone ignored the registry (WP11R1-08).
+    const roots =
+      options.roots !== undefined && options.roots.length > 0
+        ? options.roots
+        : registry.projects.map((entry) => entry.root);
     for (const root of roots) {
-      await openRoot(root, options.trust ?? false);
+      // Registered like any other open, so `agentdev start --root <path>` is remembered for
+      // the next start (WP11R1-08).
+      await openImpl(root, { trust: options.trust ?? false });
     }
 
     // The admin surface is what `agentdev open/status/stop` talk to. It carries the

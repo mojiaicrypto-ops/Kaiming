@@ -7,6 +7,7 @@
  * packages are not present here: an unimplemented command must fail loudly
  * rather than pretend, which is what the root `test:*` scripts do.
  */
+import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { PROTOCOL_VERSION } from '@agentdev/contracts';
 import { buildDoctorReport, renderDoctorReport, repoRootFrom } from './doctor.js';
@@ -97,7 +98,10 @@ async function runRuntimeCommand(input: {
     io.out(`${JSON.stringify(value, null, 2)}\n`);
   };
   const failure = (code: string, message: string): number => {
-    io.err(`${JSON.stringify({ ok: false, error: { code, message } })}\n`);
+    // `reliability.md` §7: a failing command reports an error code *and* an operationId.
+    io.err(
+      `${JSON.stringify({ ok: false, error: { code, message }, operationId: randomUUID() })}\n`,
+    );
     return 1;
   };
 

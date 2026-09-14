@@ -208,6 +208,43 @@ export async function createModelGatewayProxy(
       refuse(response, log, 409, 'INVALID_STATE', `Run ${run.id} is ${run.status}`);
       return;
     }
+    // The capability is re-checked against the *current* Attempt on every call
+    // (`execution.md` §2: capability binding is attempt/epoch/role/expiry). A parked or
+    // finished Attempt must not keep calling, whatever token an old process still holds.
+    const attempt = options.store.attempts.find(capability.attemptId);
+    if (attempt === undefined) {
+      options.capabilities.revoke(capability.attemptId);
+      refuse(
+        response,
+        log,
+        401,
+        'NOT_AUTHORIZED',
+        `Attempt ${capability.attemptId} does not exist`,
+      );
+      return;
+    }
+    if (attempt.status !== 'starting' && attempt.status !== 'running') {
+      options.capabilities.revoke(capability.attemptId);
+      refuse(
+        response,
+        log,
+        401,
+        'NOT_AUTHORIZED',
+        `Attempt ${capability.attemptId} is ${attempt.status}; its capability is no longer valid`,
+      );
+      return;
+    }
+    if (attempt.ownerEpoch + 1 !== capability.epoch) {
+      options.capabilities.revoke(capability.attemptId);
+      refuse(
+        response,
+        log,
+        401,
+        'NOT_AUTHORIZED',
+        `the capability epoch ${String(capability.epoch)} does not match Attempt ${capability.attemptId} (${String(attempt.ownerEpoch + 1)})`,
+      );
+      return;
+    }
 
     if (request.method === 'GET' && url.pathname === '/models') {
       // The SDK asks for the catalog when a provider is registered; answer with the

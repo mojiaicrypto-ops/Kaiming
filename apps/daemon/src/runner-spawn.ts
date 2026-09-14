@@ -19,6 +19,42 @@ import type { RunnerProcessPort, RunnerSpawnInput, RunnerSpawnPort } from '@agen
 /** Env var a development/test run uses to point at a source entry for the Runner. */
 export const RUNNER_ENTRY_ENV = 'AGENTDEV_RUNNER_ENTRY';
 
+/**
+ * Environment variables a Runner child may see.
+ *
+ * `execution.md` §2 keeps the Provider Secret in the Core: the Runner holds only its
+ * Attempt capability (inside `models.json`). Inheriting the daemon's whole environment
+ * leaked every `AGENTDEV_*` value, including the credential the operator started the
+ * daemon with (WP11R1-11), so the child gets an explicit allowlist instead.
+ */
+export const RUNNER_ENV_ALLOWLIST: readonly string[] = [
+  'PATH',
+  'HOME',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'LANG',
+  'LC_ALL',
+  'SHELL',
+  'USER',
+  'LOGNAME',
+  'TERM',
+  'NODE_OPTIONS',
+  'NODE_EXTRA_CA_CERTS',
+  'SYSTEMROOT',
+  RUNNER_ENTRY_ENV,
+];
+
+/** Builds the child environment from the allowlist, never the provider variables. */
+export function runnerChildEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const name of RUNNER_ENV_ALLOWLIST) {
+    const value = source[name];
+    if (value !== undefined) env[name] = value;
+  }
+  return env;
+}
+
 /** Provider id the per-Attempt catalog uses for the Core gateway. */
 export const GATEWAY_PROVIDER_ID = 'agentdev-gateway';
 
@@ -164,7 +200,7 @@ export function createChildRunnerSpawnPort(options: ChildRunnerSpawnOptions): Ru
       }
       const child = spawn(options.nodePath ?? process.execPath, args, {
         cwd: input.invocation.cwd,
-        env: { ...env },
+        env: runnerChildEnv(env),
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       child.stderr.on('data', (chunk: Buffer) => {

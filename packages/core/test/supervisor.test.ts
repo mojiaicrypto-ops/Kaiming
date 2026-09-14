@@ -237,13 +237,14 @@ describe('RunnerSupervisor claiming', () => {
     expect(run?.status).toBe('running');
     const attempt = store.attempts.find(runner.input.attempt.id);
     expect(attempt?.status).toBe('starting');
-    // The identity is rewritten with the *child* pid after the spawn.
-    expect(attempt?.runnerId).toBe(`runner-${String(runner.pid)}-${runId}`);
+    // The identity is rewritten with the *child* pid after the spawn, in the `pid:<n>`
+    // form the recovery probe parses (`WP11R1-02`).
+    expect(attempt?.runnerId).toBe(`pid:${String(runner.pid)}`);
     expect(attempt?.heartbeatAt).toBeDefined();
     // The prompt waits for `ready`: the epoch/process/environment is confirmed first.
     expect(runner.commands).toHaveLength(0);
 
-    probe.setAlive(`runner-${String(runner.pid)}-${runId}`, true);
+    probe.setAlive(`pid:${String(runner.pid)}`, true);
     runner.emit({
       type: 'attempt.ready',
       sessionId: 'session-1',
@@ -256,7 +257,7 @@ describe('RunnerSupervisor claiming', () => {
     expect(runner.lastCommand).toMatchObject({ type: 'attempt.prompt', text: `goal for ${runId}` });
   });
 
-  it('fails an Attempt whose requested tools were not activated', () => {
+  it('parks the Run when the Attempt cannot start (dropped tools)', () => {
     const runId = queueRun();
     supervisor.tick();
     const runner = FakeRunner.spawned[0];
@@ -270,7 +271,9 @@ describe('RunnerSupervisor claiming', () => {
       droppedTools: ['edit'],
     });
     expect(store.attempts.find(runner.input.attempt.id)?.status).toBe('failed');
-    expect(store.runs.find(runId)?.status).toBe('failed');
+    // The Attempt never reported a result, so the Run is parked from its real state
+    // (`WP11R1-04`); a fake pid cannot be confirmed dead, so a decision is required.
+    expect(store.runs.find(runId)?.status).toBe('recovery_required');
     expect(supervisor.liveAttempts()).toHaveLength(0);
   });
 
@@ -343,7 +346,7 @@ describe('RunnerSupervisor heartbeat and recovery', () => {
     if (runner === undefined) throw new Error('unreachable');
     // The process is confirmed gone, so the Run is parked `interrupted` and may be
     // retried (`reliability.md` §6).
-    probe.setAlive(`runner-${String(runner.pid)}-${runId}`, false);
+    probe.setAlive(`pid:${String(runner.pid)}`, false);
     clock += LIMITS.leaseSec.default * 1000 + 1;
     const tick = supervisor.tick();
     expect(tick.parked).toEqual([runId]);
@@ -362,7 +365,7 @@ describe('RunnerSupervisor heartbeat and recovery', () => {
     if (runner === undefined) throw new Error('unreachable');
     // `null` means "cannot tell": the workspace must not be handed to a new writer
     // (`reliability.md` §2), so the Run needs an explicit recovery decision.
-    probe.setAlive(`runner-${String(runner.pid)}-${runId}`, null);
+    probe.setAlive(`pid:${String(runner.pid)}`, null);
     clock += LIMITS.leaseSec.default * 1000 + 1;
     const tick = supervisor.tick();
     expect(tick.parked).toEqual([runId]);
@@ -377,7 +380,7 @@ describe('RunnerSupervisor heartbeat and recovery', () => {
     supervisor.tick();
     const runner = FakeRunner.spawned[0];
     if (runner === undefined) throw new Error('unreachable');
-    probe.setAlive(`runner-${String(runner.pid)}-${runId}`, false);
+    probe.setAlive(`pid:${String(runner.pid)}`, false);
     runner.exit(1);
     expect(store.attempts.find(runner.input.attempt.id)?.status).toBe('lost');
     expect(store.runs.find(runId)?.status).toBe('interrupted');
@@ -407,15 +410,78 @@ describe('RunnerSupervisor heartbeat and recovery', () => {
     expect(store.attempts.find(runner.input.attempt.id)?.heartbeatAt).toBeDefined();
   });
 
-  it('stops gracefully: shutdown first, then SIGTERM', async () => {
-    queueRun();
+  it('stops gracefully: shutdown first, then SIGTERM, and parks the Run', async () => {
+    const runId = queueRun();
     supervisor.tick();
     const runner = FakeRunner.spawned[0];
     if (runner === undefined) throw new Error('unreachable');
-    await supervisor.stop();
+    await supervisor.stop({ graceMs: 50 });
     expect(runner.commands.some((command) => command.type === 'attempt.shutdown')).toBe(true);
     expect(runner.signals).toContain('SIGTERM');
+    // Graceful shutdown is not a cancellation (`reliability.md` §7): the Run is parked for
+    // a later Attempt and the Attempt is `stopped`, never settled as cancelled.
+    expect(store.attempts.find(runner.input.attempt.id)?.status).toBe('stopped');
+    const parked = store.runs.find(runId)?.status;
+    expect(['interrupted', 'recovery_required']).toContain(parked);
     // A stopped supervisor claims nothing further.
     expect(supervisor.tick().claimed).toEqual([]);
+  });
+
+  it('revokes the Attempt capability whenever the Attempt stops being live', () => {
+    const runId = queueRun();
+    const ended: { attemptId: string; reason: string }[] = [];
+    const withHook = new RunnerSupervisor({
+      store,
+      spawn: spawnPort(),
+      prepare: invocation,
+      recovery: new RunRecoveryService({ store, probe, now: () => new Date(clock).toISOString() }),
+      lifecycle: new RunLifecycle({ store }),
+      now,
+      tickMs: 60_000,
+      log: () => undefined,
+      onAttemptEnded: (input) => ended.push({ attemptId: input.attemptId, reason: input.reason }),
+    });
+    withHook.tick();
+    const runner = FakeRunner.spawned[0];
+    if (runner === undefined) throw new Error('unreachable');
+    probe.setAlive(`pid:${String(runner.pid)}`, true);
+    runner.emit({
+      type: 'attempt.ready',
+      sessionId: 'session-1',
+      provider: 'stub',
+      modelId: 'stub-model',
+      tools: [],
+      droppedTools: [],
+    });
+    runner.emit({ type: 'attempt.result', status: 'completed', message: 'done' });
+    expect(store.runs.find(runId)?.status).toBe('completed');
+    expect(ended).toEqual([{ attemptId: runner.input.attempt.id, reason: 'result' }]);
+  });
+
+  it('survives a late result for a Run the user already cancelled', () => {
+    const runId = queueRun();
+    supervisor.tick();
+    const runner = FakeRunner.spawned[0];
+    if (runner === undefined) throw new Error('unreachable');
+    probe.setAlive(`pid:${String(runner.pid)}`, true);
+    runner.emit({
+      type: 'attempt.ready',
+      sessionId: 'session-1',
+      provider: 'stub',
+      modelId: 'stub-model',
+      tools: [],
+      droppedTools: [],
+    });
+    // The user cancels while the Runner is still working…
+    const run = store.runs.find(runId);
+    if (run === undefined) throw new Error('unreachable');
+    new RunLifecycle({ store }).cancel(runId);
+    expect(store.runs.find(runId)?.status).toBe('cancelled');
+    // …and the late result must neither throw into the listener nor change the outcome.
+    expect(() =>
+      runner.emit({ type: 'attempt.result', status: 'completed', message: 'too late' }),
+    ).not.toThrow();
+    expect(store.runs.find(runId)?.status).toBe('cancelled');
+    expect(supervisor.liveAttempts()).toHaveLength(0);
   });
 });

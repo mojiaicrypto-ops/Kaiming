@@ -295,7 +295,7 @@ describe('a real Attempt through the daemon-side execution path', () => {
     expect(budget?.tokensUsed).toBe(16);
     // The Attempt records the *Runner* pid (not the daemon's), which is what recovery
     // probes after a restart or a heartbeat timeout.
-    expect(attempt?.runnerId).toMatch(new RegExp(`^runner-[0-9]+-${runId}$`, 'u'));
+    expect(attempt?.runnerId).toMatch(/^pid:[0-9]+$/u);
     // The Runner's catalog carried the capability, never the Provider secret.
     const attemptId = attempt?.id ?? '';
     const catalog = readFileSync(join(dataDir, 'attempts', attemptId, 'models.json'), 'utf8');

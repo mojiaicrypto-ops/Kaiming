@@ -20,8 +20,10 @@
  */
 import {
   chmodSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -67,9 +69,28 @@ export function ensureRuntimeHome(home: string): RuntimePaths {
   return paths;
 }
 
-/** Writes one file atomically with `0600`. */
-function writePrivateFile(path: string, contents: string): void {
+/**
+ * Writes one file atomically with `0600`.
+ *
+ * `exclusive` uses `O_CREAT|O_EXCL` directly instead of write-then-rename, which is what
+ * makes the single-instance lock a real compare-and-set (WP11R1-10).
+ */
+function writePrivateFile(
+  path: string,
+  contents: string,
+  options: { exclusive?: boolean } = {},
+): void {
   mkdirSync(dirname(path), { recursive: true, mode: DIR_MODE });
+  if (options.exclusive === true) {
+    const fd = openSync(path, 'wx', FILE_MODE);
+    try {
+      writeFileSync(fd, contents);
+    } finally {
+      closeSync(fd);
+    }
+    chmodSync(path, FILE_MODE);
+    return;
+  }
   const temporary = `${path}.${String(process.pid)}.tmp`;
   writeFileSync(temporary, contents, { mode: FILE_MODE });
   chmodSync(temporary, FILE_MODE);
@@ -135,7 +156,13 @@ export interface AcquireLockOptions {
 }
 
 export type AcquireLockResult =
-  | { readonly acquired: true; readonly lock: DaemonLock; readonly replacedStale: boolean }
+  | {
+      readonly acquired: true;
+      readonly lock: DaemonLock;
+      readonly replacedStale: boolean;
+      /** The holder this daemon displaced, for an honest start log (WP11R1-14). */
+      readonly replacedStaleFrom?: DaemonLock;
+    }
   | { readonly acquired: false; readonly lock: DaemonLock };
 
 /**
@@ -163,8 +190,35 @@ export function acquireDaemonLock(home: string, options: AcquireLockOptions): Ac
     // so its release (which checks the epoch) cannot remove this record.
     chmodSync(paths.lock, FILE_MODE);
   }
-  writePrivateFile(paths.lock, `${JSON.stringify(lock, null, 2)}\n`);
-  return { acquired: true, lock, replacedStale: existing !== null };
+  // `wx` is O_CREAT|O_EXCL: the create is atomic, so two daemons racing on a fresh home
+  // cannot both believe they won (WP11R1-10). A stale lock (dead pid) is replaced by
+  // removing it first and retrying the exclusive create.
+  try {
+    writePrivateFile(paths.lock, `${JSON.stringify(lock, null, 2)}\n`, { exclusive: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    const current = readDaemonLock(home);
+    if (current !== null && isProcessAlive(current.pid)) {
+      return { acquired: false, lock: current };
+    }
+    rmSync(paths.lock, { force: true });
+    try {
+      writePrivateFile(paths.lock, `${JSON.stringify(lock, null, 2)}\n`, { exclusive: true });
+    } catch (retryError) {
+      if ((retryError as NodeJS.ErrnoException).code !== 'EEXIST') throw retryError;
+      const winner = readDaemonLock(home);
+      if (winner === null) {
+        throw new RuntimeHomeError('LOCK_FAILED', 'the daemon lock could not be created');
+      }
+      return { acquired: false, lock: winner };
+    }
+  }
+  return {
+    acquired: true,
+    lock,
+    replacedStale: existing !== null,
+    ...(existing === null ? {} : { replacedStaleFrom: existing }),
+  };
 }
 
 /** Reads the lock record; `null` when absent, throws when malformed. */

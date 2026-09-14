@@ -191,6 +191,11 @@ export async function createProjectExecution(
     }),
     ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
     usage,
+    // `reliability.md` §2: revoking the capability is part of ending an Attempt, and the
+    // endpoint re-checks the Attempt anyway (defence in depth).
+    onAttemptEnded: ({ attemptId }) => {
+      capabilities.revoke(attemptId);
+    },
     log,
   });
 

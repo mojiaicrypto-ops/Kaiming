@@ -18,6 +18,7 @@ import { promisify } from 'node:util';
 import {
   NODE_MINIMUM,
   PACKAGE_MANAGER,
+  runtimeHomePath,
   runtimeRecordSchema,
   satisfiesMinimum,
 } from '@agentdev/contracts';
@@ -294,7 +295,9 @@ export function probeRuntime(home: string): RuntimeProbe {
 /** Runs every probe and derives the readiness verdict. */
 export async function buildDoctorReport(options: DoctorOptions = {}): Promise<DoctorReport> {
   const startDir = options.startDir ?? process.cwd();
-  const dataDir = options.dataDir ?? join(homedir(), '.agentdev');
+  // `AGENTDEV_HOME` is the installation switch the runtime itself honours; a doctor that
+  // ignored it checked the wrong directory (WP11R1-07).
+  const dataDir = options.dataDir ?? runtimeHomePath(process.env, homedir());
   const ports = options.ports ?? DEFAULT_PORTS;
 
   const nodeProbe: VersionProbe = {

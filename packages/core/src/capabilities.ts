@@ -43,7 +43,11 @@ export interface IssueCapabilityInput {
   readonly runId: string;
   readonly epoch: number;
   readonly role: Role;
-  /** Defaults to `idleSessionTtlSec` territory: a model call must fit, nothing longer. */
+  /**
+   * Defaults to one hour: long enough for a slow reasoning call, short enough that a
+   * forgotten token dies on its own. The Attempt's own state is re-checked on every call,
+   * so the TTL is the backstop rather than the primary gate (WP11R1-17).
+   */
   readonly ttlMs?: number;
   readonly now?: () => number;
 }

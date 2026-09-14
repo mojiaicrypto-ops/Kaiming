@@ -1592,17 +1592,13 @@ export async function runRuntimeAttemptDrill({ harness, product }) {
     const attempt = store.attempts.list({ where: 'run_id = ?', params: [run.id] }).at(0);
     ensure(attempt?.status === 'completed', `the Attempt is ${String(attempt?.status)}`);
     ensure(
-      typeof attempt?.runnerId === 'string' && attempt.runnerId.startsWith('runner-'),
-      `the Attempt recorded runnerId ${String(attempt?.runnerId)}`,
+      typeof attempt?.runnerId === 'string' && /^pid:[0-9]+$/u.test(attempt.runnerId),
+      `the Attempt recorded runnerId ${String(attempt?.runnerId)} (expected pid:<n>)`,
     );
     const budget = store.budgets.find(work.budgetId);
     ensure(
       (budget?.tokensUsed ?? 0) > 0,
       `the runtime Attempt booked ${String(budget?.tokensUsed)} tokens; the Provider reported none`,
-    );
-    ensure(
-      typeof attempt?.sessionRef === 'undefined' || attempt.sessionRef === undefined,
-      'the Attempt unexpectedly recorded a session reference',
     );
 
     // The lost-Runner half: a real Provider call is in flight when the Runner dies.
@@ -1618,18 +1614,15 @@ export async function runRuntimeAttemptDrill({ harness, product }) {
     }, `Run ${slow.run.id} to be parked after its Runner died`);
     const slowAttempt = store.attempts.list({ where: 'run_id = ?', params: [slow.run.id] }).at(0);
     ensure(slowAttempt?.status === 'lost', `the killed Attempt is ${String(slowAttempt?.status)}`);
+    ensure(
+      parked === 'interrupted',
+      `a SIGKILLed Runner is confirmed dead, so the Run must park as interrupted (got ${parked})`,
+    );
     const admission = core.newAttemptAdmission(store, slow.run.id);
-    if (parked === 'interrupted') {
-      ensure(
-        admission.allowed === true && admission.requiresRecoveryDecision === false,
-        'a confirmed-dead Runner must allow a later Attempt and need no recovery decision',
-      );
-    } else {
-      ensure(
-        admission.allowed === false && admission.requiresRecoveryDecision === true,
-        'an unconfirmed Runner must withhold a new Attempt behind a recovery decision',
-      );
-    }
+    ensure(
+      admission.allowed === true && admission.requiresRecoveryDecision === false,
+      'a confirmed-dead Runner must allow a later Attempt and need no recovery decision',
+    );
 
     return [
       `the runtime executed Run ${run.id} through a real apps/runner child process (Attempt ${String(attempt?.id)}, runnerId ${String(attempt?.runnerId)}) against the real Provider; ${String(budget?.tokensUsed)} tokens booked from the Provider usage`,
