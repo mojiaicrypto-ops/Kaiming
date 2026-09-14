@@ -141,6 +141,13 @@ describe('AttemptRunner', () => {
     expect(ready.tools).not.toContain('stage_yield');
     // Nothing the role owes Core was dropped.
     expect(ready.droppedTools).toEqual([]);
+    // The environment is this process's own observation, not a placeholder: the drill runs
+    // the real Runner on the host, so the value names the real host/arch/Node major.
+    expect(ready.environmentRef).toMatch(
+      new RegExp(
+        `^host:${process.platform}/${process.arch}/node-${String(process.versions.node.split('.')[0])}$`,
+      ),
+    );
     runner.dispose();
   });
 

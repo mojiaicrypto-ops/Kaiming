@@ -29,15 +29,18 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 
 import { enforcePrivateMode } from './auth.js';
 import {
   daemonLockSchema,
   emptyProjectRegistry,
-  projectRegistrySchema,
+  projectLockFileName,
+  projectRegistryEntrySchema,
   runtimePaths,
   runtimeRecordSchema,
+  RUNTIME_PROTOCOL_VERSION,
   type DaemonLock,
   type ProjectRegistry,
   type ProjectRegistryEntry,
@@ -59,10 +62,10 @@ export class RuntimeHomeError extends Error {
   }
 }
 
-/** Creates the runtime home (and its log/project directories) if it does not exist. */
+/** Creates the runtime home (and its log/project/lock directories) if it does not exist. */
 export function ensureRuntimeHome(home: string): RuntimePaths {
   const paths = runtimePaths(home);
-  for (const dir of [paths.home, paths.logs, paths.projectsDir]) {
+  for (const dir of [paths.home, paths.logs, paths.projectsDir, paths.locks]) {
     mkdirSync(dir, { recursive: true, mode: DIR_MODE });
     chmodSync(dir, DIR_MODE);
   }
@@ -288,10 +291,36 @@ export function releaseDaemonLock(home: string, epoch: number): boolean {
   return true;
 }
 
-/** Reads the project registry; a missing file is an empty installation. */
-export function readProjectRegistry(home: string): ProjectRegistry {
+/** One registry entry that could not be used, and why (WP-12 T5, Q2). */
+export interface ProjectRegistryProblem {
+  /** Zero-based position in the file, so the operator can find the entry. */
+  readonly index: number;
+  /** The `root` the entry claimed, when the entry was an object with a readable root. */
+  readonly root: string | null;
+  readonly code: 'PROJECT_ENTRY_INVALID' | 'PROJECT_ENTRY_DUPLICATE';
+  readonly message: string;
+}
+
+export interface ProjectRegistryReport {
+  /** Every usable entry, in file order. */
+  readonly registry: ProjectRegistry;
+  /** The entries that were skipped; never fatal (WP-12 T5, Q2). */
+  readonly problems: readonly ProjectRegistryProblem[];
+}
+
+/**
+ * Reads the project registry, tolerating damaged entries (WP-12 T5, Q2).
+ *
+ * A container-level problem (unreadable/not JSON/not the documented object) is still
+ * an error: the file as a whole carries no trustworthy navigation index. A single
+ * entry that does not match the contract, or that duplicates an already accepted
+ * root/projectId, is skipped and **reported** instead — one bad record must never
+ * keep the whole installation from starting (same policy as the secret repository,
+ * WP-12 T1.1).
+ */
+export function readProjectRegistryReport(home: string): ProjectRegistryReport {
   const path = runtimePaths(home).projects;
-  if (!existsSync(path)) return emptyProjectRegistry();
+  if (!existsSync(path)) return { registry: emptyProjectRegistry(), problems: [] };
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(path, 'utf8'));
@@ -301,16 +330,62 @@ export function readProjectRegistry(home: string): ProjectRegistry {
       `project registry ${path} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const result = projectRegistrySchema.safeParse(parsed);
-  if (!result.success) {
+  const container = parsed as { readonly v?: unknown; readonly projects?: unknown };
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    Array.isArray(parsed) ||
+    container.v !== RUNTIME_PROTOCOL_VERSION ||
+    !Array.isArray(container.projects)
+  ) {
     throw new RuntimeHomeError(
       'PROJECT_REGISTRY_INVALID',
-      `project registry ${path} does not match the contract: ${result.error.issues
-        .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
-        .join('; ')}`,
+      `project registry ${path} does not match the contract: expected {v:1,projects:[]}`,
     );
   }
-  return result.data;
+  const projects: ProjectRegistryEntry[] = [];
+  const problems: ProjectRegistryProblem[] = [];
+  const seenRoots = new Set<string>();
+  const seenIds = new Set<string>();
+  for (const [index, raw] of container.projects.entries()) {
+    const result = projectRegistryEntrySchema.safeParse(raw);
+    const claimedRoot =
+      typeof raw === 'object' &&
+      raw !== null &&
+      typeof (raw as { root?: unknown }).root === 'string'
+        ? (raw as { root: string }).root
+        : null;
+    if (!result.success) {
+      problems.push({
+        index,
+        root: claimedRoot,
+        code: 'PROJECT_ENTRY_INVALID',
+        message: result.error.issues
+          .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+          .join('; '),
+      });
+      continue;
+    }
+    const entry = result.data;
+    if (seenRoots.has(entry.root) || seenIds.has(entry.projectId)) {
+      problems.push({
+        index,
+        root: entry.root,
+        code: 'PROJECT_ENTRY_DUPLICATE',
+        message: `root ${entry.root} / projectId ${entry.projectId} is already registered`,
+      });
+      continue;
+    }
+    seenRoots.add(entry.root);
+    seenIds.add(entry.projectId);
+    projects.push(entry);
+  }
+  return { registry: { v: RUNTIME_PROTOCOL_VERSION, projects }, problems };
+}
+
+/** Reads the project registry, skipping (and reporting) damaged entries (WP-12 T5). */
+export function readProjectRegistry(home: string): ProjectRegistry {
+  return readProjectRegistryReport(home).registry;
 }
 
 /**
@@ -318,11 +393,17 @@ export function readProjectRegistry(home: string): ProjectRegistry {
  *
  * The registry is keyed by canonical root: registering the same root twice updates
  * `lastOpenedAt` and keeps the original `addedAt`, which is what makes `project.open`
- * idempotent (`protocol.md` §5).
+ * idempotent (`protocol.md` §5). `name` is the `project.create` label (WP-12 T5, Q1):
+ * omitted keeps the stored one, so reopening a named project never erases its name.
  */
 export function registerProject(
   home: string,
-  entry: { readonly root: string; readonly projectId: string; readonly at: string },
+  entry: {
+    readonly root: string;
+    readonly projectId: string;
+    readonly at: string;
+    readonly name?: string;
+  },
 ): ProjectRegistry {
   const registry = readProjectRegistry(home);
   const existing = registry.projects.find((candidate) => candidate.root === entry.root);
@@ -333,13 +414,19 @@ export function registerProject(
           {
             root: entry.root,
             projectId: entry.projectId,
+            ...(entry.name === undefined ? {} : { name: entry.name }),
             addedAt: entry.at,
             lastOpenedAt: entry.at,
           },
         ]
       : registry.projects.map((candidate) =>
           candidate.root === entry.root
-            ? { ...candidate, projectId: entry.projectId, lastOpenedAt: entry.at }
+            ? {
+                ...candidate,
+                projectId: entry.projectId,
+                ...(entry.name === undefined ? {} : { name: entry.name }),
+                lastOpenedAt: entry.at,
+              }
             : candidate,
         );
   const next: ProjectRegistry = { v: 1, projects };
@@ -384,4 +471,332 @@ export function readInstallationCredential(home: string): string {
 /** Path of one project's log file (correlated per project, never per Run). */
 export function projectLogPath(home: string, projectId: string): string {
   return join(runtimePaths(home).logs, `${projectId}.log`);
+}
+
+// ---------------------------------------------------------------------------
+// Per-Git-root lock (WP-12 T5, `reliability.md` §7)
+// ---------------------------------------------------------------------------
+
+/**
+ * The per-Git-root lock record.
+ *
+ * `reliability.md` §7 makes the daemon take "每 Project 文件锁" before it loads a
+ * database. The home-level `daemon.lock` only fences one installation; this record
+ * fences one *repository* against a second project entry inside the same host (the
+ * same root opened twice through different path spellings, or a root already served
+ * under a different home — the latter is reported as a registered limitation,
+ * WP-12 T5 Q5, because two homes cannot see each other's lock directory).
+ */
+export interface ProjectRootLock {
+  readonly v: 1;
+  readonly root: string;
+  readonly pid: number;
+  readonly home: string;
+  readonly epoch: number;
+  readonly acquiredAt: string;
+}
+
+export type AcquireProjectRootLockResult =
+  | { readonly acquired: true; readonly lock: ProjectRootLock }
+  | { readonly acquired: false; readonly holder: ProjectRootLock | null; readonly message: string };
+
+/** Path of the lock file for one canonical Git root. */
+export function projectRootLockPath(home: string, canonicalRoot: string): string {
+  return join(runtimePaths(home).locks, projectLockFileName(canonicalRoot));
+}
+
+/** Reads one root lock; a missing or damaged file reads as absent. */
+export function readProjectRootLock(home: string, canonicalRoot: string): ProjectRootLock | null {
+  const path = projectRootLockPath(home, canonicalRoot);
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<ProjectRootLock>;
+    if (
+      typeof parsed.root !== 'string' ||
+      typeof parsed.pid !== 'number' ||
+      typeof parsed.epoch !== 'number'
+    ) {
+      return null;
+    }
+    return {
+      v: 1,
+      root: parsed.root,
+      pid: parsed.pid,
+      home: typeof parsed.home === 'string' ? parsed.home : '',
+      epoch: parsed.epoch,
+      acquiredAt: typeof parsed.acquiredAt === 'string' ? parsed.acquiredAt : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Takes the per-root lock with an exclusive create, replacing a dead owner.
+ *
+ * @returns `acquired:false` with the live holder when another process serves the
+ * same root; callers report that as `PROJECT_ALREADY_OPEN` naming the holder.
+ */
+export function acquireProjectRootLock(
+  home: string,
+  canonicalRoot: string,
+  options: { readonly pid: number; readonly epoch: number; readonly now?: () => Date },
+): AcquireProjectRootLockResult {
+  ensureRuntimeHome(home);
+  const path = projectRootLockPath(home, canonicalRoot);
+  const existing = readProjectRootLock(home, canonicalRoot);
+  if (existing !== null && isProcessAlive(existing.pid)) {
+    return {
+      acquired: false,
+      holder: existing,
+      message: `${canonicalRoot} is already served by pid ${String(existing.pid)} (home ${existing.home || 'unknown'})`,
+    };
+  }
+  const lock: ProjectRootLock = {
+    v: 1,
+    root: canonicalRoot,
+    pid: options.pid,
+    home,
+    epoch: options.epoch,
+    acquiredAt: (options.now ?? (() => new Date()))().toISOString(),
+  };
+  try {
+    writePrivateFile(path, `${JSON.stringify(lock, null, 2)}\n`, { exclusive: true });
+    return { acquired: true, lock };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    // The file appeared between the read and the create: re-read and judge the winner.
+    const current = readProjectRootLock(home, canonicalRoot);
+    if (current !== null && isProcessAlive(current.pid)) {
+      return {
+        acquired: false,
+        holder: current,
+        message: `${canonicalRoot} is already served by pid ${String(current.pid)} (home ${current.home || 'unknown'})`,
+      };
+    }
+    rmSync(path, { force: true });
+    try {
+      writePrivateFile(path, `${JSON.stringify(lock, null, 2)}\n`, { exclusive: true });
+      return { acquired: true, lock };
+    } catch (retryError) {
+      if ((retryError as NodeJS.ErrnoException).code !== 'EEXIST') throw retryError;
+      return {
+        acquired: false,
+        holder: readProjectRootLock(home, canonicalRoot),
+        message: `${canonicalRoot} is already served by another process`,
+      };
+    }
+  }
+}
+
+/** Releases one root lock, but only for the epoch that owns it. */
+export function releaseProjectRootLock(
+  home: string,
+  canonicalRoot: string,
+  epoch: number,
+): boolean {
+  const existing = readProjectRootLock(home, canonicalRoot);
+  if (existing === null || existing.epoch !== epoch) return false;
+  rmSync(projectRootLockPath(home, canonicalRoot), { force: true });
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Installation-level once-Grant (WP-12 T5 Q4)
+// ---------------------------------------------------------------------------
+
+/**
+ * One installation-level `once` Grant.
+ *
+ * The field names and semantics mirror the T3 `grant` entity's `once` scope
+ * (`contracts/entities/run.ts` §grant): the authority is bound to **one operation**,
+ * an explicit target list and an input hash, and it is consumed exactly once. A
+ * `project.clone` happens *before* any project database exists, so the T3
+ * `GrantStore` (which is keyed by a running Work inside a project) cannot hold it;
+ * the row therefore lives in the installation home under the same model rather than
+ * introducing a second authorization concept (WP-12 T5 Q4).
+ */
+export interface InstallationGrant {
+  readonly id: string;
+  readonly scope: 'once';
+  /** The operation the authority is for, e.g. `project.clone`. */
+  readonly operation: string;
+  /** The bound targets: the destination root and the remote URL. */
+  readonly targets: readonly string[];
+  readonly inputHash: string;
+  readonly issuedAt: string;
+  readonly expiresAt: string;
+  readonly consumedAt?: string;
+  readonly consumedByOperationId?: string;
+}
+
+interface InstallationGrantFile {
+  readonly v: 1;
+  readonly grants: readonly InstallationGrant[];
+}
+
+/** Path of the installation-level grant ledger. */
+export function installationGrantPath(home: string): string {
+  return join(runtimePaths(home).home, 'grants.json');
+}
+
+/** Reads every installation-level Grant; a damaged file is reported, never guessed at. */
+export function readInstallationGrants(home: string): readonly InstallationGrant[] {
+  const path = installationGrantPath(home);
+  if (!existsSync(path)) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    throw new RuntimeHomeError(
+      'INSTALLATION_GRANT_INVALID',
+      `installation grant ledger ${path} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const grants = (parsed as { readonly grants?: unknown }).grants;
+  if (!Array.isArray(grants)) {
+    throw new RuntimeHomeError(
+      'INSTALLATION_GRANT_INVALID',
+      `installation grant ledger ${path} does not match the contract: expected {v:1,grants:[]}`,
+    );
+  }
+  return grants.filter(
+    (grant): grant is InstallationGrant =>
+      typeof grant === 'object' &&
+      grant !== null &&
+      typeof (grant as InstallationGrant).id === 'string' &&
+      typeof (grant as InstallationGrant).operation === 'string' &&
+      Array.isArray((grant as InstallationGrant).targets),
+  );
+}
+
+/** Writes the ledger atomically with `0600`. */
+export function writeInstallationGrants(home: string, grants: readonly InstallationGrant[]): void {
+  const payload: InstallationGrantFile = { v: 1, grants };
+  writePrivateFile(installationGrantPath(home), `${JSON.stringify(payload, null, 2)}\n`);
+}
+
+/**
+ * Mints one installation-level `once` Grant for an explicit user act.
+ *
+ * @returns the stored row, so the caller can hand its `id` to `project.clone`.
+ */
+export function mintInstallationGrant(
+  home: string,
+  input: {
+    readonly id: string;
+    readonly operation: string;
+    readonly targets: readonly string[];
+    readonly inputHash: string;
+    readonly ttlMs?: number;
+    readonly now?: () => Date;
+  },
+): InstallationGrant {
+  const now = (input.now ?? (() => new Date()))();
+  const grant: InstallationGrant = {
+    id: input.id,
+    scope: 'once',
+    operation: input.operation,
+    targets: [...input.targets],
+    inputHash: input.inputHash,
+    issuedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + (input.ttlMs ?? 15 * 60 * 1000)).toISOString(),
+  };
+  writeInstallationGrants(home, [...readInstallationGrants(home), grant]);
+  return grant;
+}
+
+export type ConsumeInstallationGrantResult =
+  | { readonly ok: true; readonly grant: InstallationGrant }
+  | {
+      readonly ok: false;
+      readonly code: 'NOT_FOUND' | 'NOT_AUTHORIZED' | 'INVALID_STATE';
+      readonly message: string;
+    };
+
+/**
+ * Consumes one installation-level Grant exactly once.
+ *
+ * A missing id is `NOT_FOUND`; a mismatched operation/target/input hash or an expired
+ * row is `NOT_AUTHORIZED`; an already consumed row is `INVALID_STATE` (a replay is
+ * never silently admitted). The consume writes the row's `consumedAt` before the
+ * caller's effect runs, so a crash cannot leave a reusable authority behind.
+ */
+export function consumeInstallationGrant(
+  home: string,
+  input: {
+    readonly id: string;
+    readonly operation: string;
+    readonly targets: readonly string[];
+    readonly inputHash: string;
+    readonly byOperationId: string;
+    readonly now?: () => Date;
+  },
+): ConsumeInstallationGrantResult {
+  const grants = readInstallationGrants(home);
+  const grant = grants.find((candidate) => candidate.id === input.id);
+  if (grant === undefined) {
+    return {
+      ok: false,
+      code: 'NOT_FOUND',
+      message: `installation grant ${input.id} does not exist`,
+    };
+  }
+  const now = (input.now ?? (() => new Date()))();
+  if (grant.consumedAt !== undefined) {
+    return {
+      ok: false,
+      code: 'INVALID_STATE',
+      message: `installation grant ${input.id} was already consumed at ${grant.consumedAt}`,
+    };
+  }
+  if (new Date(grant.expiresAt).getTime() <= now.getTime()) {
+    return {
+      ok: false,
+      code: 'NOT_AUTHORIZED',
+      message: `installation grant ${input.id} expired at ${grant.expiresAt}`,
+    };
+  }
+  if (
+    grant.operation !== input.operation ||
+    grant.inputHash !== input.inputHash ||
+    !sameTargets(grant.targets, input.targets)
+  ) {
+    return {
+      ok: false,
+      code: 'NOT_AUTHORIZED',
+      message: `installation grant ${input.id} is not bound to ${input.operation} on the requested inputs`,
+    };
+  }
+  const consumed: InstallationGrant = {
+    ...grant,
+    consumedAt: now.toISOString(),
+    consumedByOperationId: input.byOperationId,
+  };
+  writeInstallationGrants(
+    home,
+    grants.map((candidate) => (candidate.id === grant.id ? consumed : candidate)),
+  );
+  return { ok: true, grant: consumed };
+}
+
+function sameTargets(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every((value, index) => value === sortedRight[index]);
+}
+
+/**
+ * The hash an installation-level Grant binds: `sha256` of the canonical JSON of the
+ * operation + targets, so the same user act always produces the same binding
+ * (`requirements.md`-style input hashing, mirroring T3's `inputHash`).
+ */
+export function installationGrantInputHash(input: {
+  readonly operation: string;
+  readonly targets: readonly string[];
+}): string {
+  return createHash('sha256')
+    .update(JSON.stringify({ operation: input.operation, targets: [...input.targets].sort() }))
+    .digest('hex');
 }

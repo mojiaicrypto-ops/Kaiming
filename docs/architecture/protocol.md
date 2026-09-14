@@ -37,17 +37,21 @@ BFF不转发也不校验浏览器的x-csrf-token（WP-09 登记偏差）：BFF�
 | 方法 | params | result/异步结果 |
 |---|---|---|
 | project.list | filter:recent/running/all,limit?,cursor? | items<ProjectSummary> |
-| project.open* | root:string | {projectId,version,trust,gitState}，expectedVersion=0 |
+| project.open* | root:string | 已打开：{projectId,version,trust,gitState}，expectedVersion=0；冷开：accepted {operationId,projectId,root} |
 | project.create* | root:string,name:string | accepted；project.created |
 | project.clone* | remoteUrl:string,root:string,grantId:ID | accepted；project.created/operation.failed |
 | project.trust* | trusted:bool | applied；撤销信任停止新准入 |
 | project.close* | {} | applied；只移出打开导航，有Run继续 |
-| project.initialize* | mode:new/legacy,sourceMessageId:ID,budget?:{files:int,bytes:int} | accepted；initialization.progress/completed |
+| project.initialize* | mode?:new/legacy（提示兼授权，见下）,sourceMessageId:ID,budget?:{files:int,bytes:int} | accepted；initialization.progress/completed |
 | project.snapshot.get | scope:{kind,id?} | {snapshot,cursor} |
 | conversation.list | limit?,cursor? | items<Conversation> |
 | conversation.create* | title?:string,focusWorkId?:ID | {conversationId,version} |
 | conversation.get | conversationId,limit?,cursor? | {conversation,messages,nextCursor?} |
 | conversation.message.send* | conversationId,body:string,attachmentIds:ID[],targetWorkId?:ID,targetRole?:Role | {messageId,workId,state:received,version} |
+
+**project.open的冷开就绪规则**（WP-12 T5）：命令面必须同步，而绑定监听端口在Node里是异步的，所以只有「已经打开」的root按上表同步返回{projectId,version,trust,gitState}；**未打开过的root返回长操作封套accepted {operationId,projectId,root}**，装配在后台完成。就绪事实只有两个来源，调用方不得凭时间猜测：①`project.list`中该条`lifecycleState`变为`open`（`runningRuns`/`executionReady`同时可用）；②该项目的`project.snapshot.get`/任何Project读方法从`NOT_FOUND`变为可读。失败不落任何项目流，而以`operation.failed`发到发起方所在项目的流，并在admin/CLI面以error code + operationId直接返回。两条调用路径：CLI `agentdev open`走回环admin `POST /projects`，宿主同步完成装配后返回instance及其BFF地址，**无需轮询**；浏览器/`/rpc`调用方在收到`accepted`后以`project.list`轮询到`lifecycleState==='open'`再导航。
+
+**project.initialize的mode与Git初始化授权**（WP-12 T5 Q8）：`mode`不是用户必须选择的模式，最终模式**由Core依据root真实状态推导**（无Git且空目录=new，其余=legacy），与推导结果矛盾的显式`mode:'new'`（目标已是Git仓库）返回INVALID_STATE并附真实扫描事实。`mode:'new'`同时是**用户对在目标目录初始化Git的显式授权**；缺省`mode`或`legacy`时，无Git目录一律返回`git-initialization` blocker，**不得静默执行`git init`**。`project.create`/`project.clone`本身就是显式动作，可授权同一初始化流程。`budget.files/bytes`映射到扫描预算的`maxBodyFiles/maxBodyBytes`。
 
 消息send以Conversation为expectedVersion目标，接受后分配seq并增加version。新消息创建Work，针对活动Work的意见产生关联assist Work并在路由后引用目标，不覆盖原目标。body最大64000字符。project.open在已经打开时返回同Project并且幂等。
 
@@ -108,7 +112,8 @@ ConfigPatch仅允许roleOverrides、limits、permissionMode、l3Paths、l3Keywor
 
 `secret.*`是**安装级**方法（省略projectId）：只接受安装凭证Bearer的调用主体（`installation:local`），浏览器会话调用返回NOT_AUTHORIZED；`secret.set/delete`是写方法但不进幂等账本（同ref替换天然幂等，且不得持久化值的摘要），`secret.list`是只读查询。写入按用途落入持久仓库（macOS Keychain或0600加密文件，`AGENTDEV_SECRET_BACKEND`选择，默认file），Provider凭证用`gateway`用途，`tool`用途仍需显式Grant。值绝不出现在任何响应、事件、日志或错误消息中；`health:unreadable`表示记录存在但当前主密钥无法解开（`issue`给出错误码），`problems`列出后端无法识别的文件，二者都不影响daemon启动与其他credential的装载。
 
-POST /artifacts/upload multipart(projectId,conversationId,file)使用认证/CSRF，创建用户所有的staged Attachment，返回{attachmentId,hash,mime,bytes,expiresAt}；24h到期无绑定即清理。上传不要求Work或Run。message.send事务校验同用户/Conversation、数量/总大小、有效期，创建Work后原子绑定附件和消息，并创建origin=user的Artifact（runId为空）。同幂等发送返回原绑定；同附件另一个消息使用拒绝ATTACHMENT_ALREADY_BOUND，需显式重新上传。发送事务失败保持staged，可重试。DELETE /artifacts/uploads/:attachmentId仅删除用户自己的staged附件，已绑定返回INVALID_STATE。遵守附件限制。GET /artifacts/download/:token只一次消费，过期403。只读预览通过受权GET /artifacts/:id/preview，按HTML隔离策略响应。健康GET /healthz返回版本与ready，不返回路径和Secret。
+**产物端点一律显式携带Project**（WP-12 T5 Q6）：BFF对外只暴露一个origin，因此路径是`/artifacts/:projectId/…`，BFF按该段选择Project并向该项目daemon转发；缺少该段或该段是保留字（`download`/`download.prepare`/`upload`/`uploads`）的路径返回NOT_FOUND，不回退到「当前选中项目」。预览与下载在BFF侧同时校验会话与该项目ACL，一个Project的artifactId或一次性downloadToken经另一个Project的路由必须被拒（AC-034）。
+POST /artifacts/:projectId/upload multipart(conversationId,file)使用认证/CSRF，创建用户所有的staged Attachment，返回{attachmentId,hash,mime,bytes,expiresAt}；24h到期无绑定即清理。上传不要求Work或Run。message.send事务校验同用户/Conversation、数量/总大小、有效期，创建Work后原子绑定附件和消息，并创建origin=user的Artifact（runId为空）。同幂等发送返回原绑定；同附件另一个消息使用拒绝ATTACHMENT_ALREADY_BOUND，需显式重新上传。发送事务失败保持staged，可重试。DELETE /artifacts/:projectId/uploads/:attachmentId仅删除用户自己的staged附件，已绑定返回INVALID_STATE。遵守附件限制。POST /artifacts/:projectId/download.prepare与`artifact.download.prepare`等价，返回{downloadToken,expiresAt}；GET /artifacts/:projectId/download/:token只一次消费，过期403。只读预览通过受权GET /artifacts/:projectId/:artifactId/preview，按HTML隔离策略响应。健康GET /healthz返回版本与ready，不返回路径和Secret。
 
 ## 6. Chief与Runner内部方法
 

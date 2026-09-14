@@ -99,6 +99,18 @@ export {
   type WebSessionOptions,
 } from './sessions.js';
 export {
+  projectNameOf,
+  type ProjectAppliedResult,
+  type ProjectCommandResult,
+  type ProjectDirectoryPort,
+  type ProjectEntry,
+  type ProjectEntryState,
+  type ProjectImportFact,
+  type ProjectInitializationFact,
+  type ProjectRegistryProblem,
+  type ProjectTarget,
+} from './projects.js';
+export {
   ATTACHMENT_LIMITS,
   BOARD_COLUMNS,
   agentsModel,

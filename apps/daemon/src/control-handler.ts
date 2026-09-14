@@ -21,8 +21,12 @@
 import {
   ProtocolError,
   REQUIREMENT_CONTENT_HEADINGS,
+  createTaskCandidateService,
   deriveProtectedPaths,
   type ArtifactService,
+  type IntegrateService,
+  type SettlementService,
+  type SnapshotWriter,
   REQUIREMENT_EMPTY_SECTION,
   resolveWithinRoots,
   type ControlCaller,
@@ -40,6 +44,7 @@ import {
   type SourceRef,
 } from '@agentdev/contracts';
 import { sha256, withTransaction, type ProjectStore } from '@agentdev/storage';
+import type { WorktreeGitPort } from '@agentdev/workspace';
 
 /** What the daemon supplies to build the control handlers. */
 export interface ControlHandlerOptions {
@@ -62,6 +67,34 @@ export interface ControlHandlerOptions {
    * storage path exists.
    */
   readonly artifacts?: ArtifactService;
+  /**
+   * The per-Task candidate commit path (`reliability.md` §4, `workflow.md` §3 L2).
+   *
+   * A professional Run's accepted stage result is turned into a real per-Task
+   * candidate commit + frozen `VerificationManifest` + `Task.latestManifestId`
+   * (`createTaskCandidateService`). All of it is optional: a stack without the git
+   * port or the snapshot writer simply records the stage result, and the missing
+   * manifest then fails the integration closed instead of being faked.
+   */
+  readonly worktrees?: WorktreeGitPort;
+  readonly snapshots?: SnapshotWriter;
+  readonly worktreeRoot?: string;
+  readonly repoRoot?: string;
+  /** The Project policy hash the `VerificationManifest` binds. */
+  readonly policyHash?: string;
+  /** The environment the live Attempt reported (`attempt.ready`). */
+  readonly environmentRefOf?: (attemptId: string) => string | undefined;
+  /**
+   * The Accept/Integrate + Settlement chain of the L2 route (`reliability.md` §4/§9,
+   * `workflow.md` §3/§7).
+   *
+   * The documented trigger point is the Settle stage: when a `purpose='settlement'` Run's
+   * accepted `stage.submit` arrives, Core integrates the verified Task candidates and then
+   * settles the candidate it installed. Both are optional, so a stack assembled without
+   * them records the stage result alone (no candidate is ever faked).
+   */
+  readonly integrate?: IntegrateService;
+  readonly settlement?: SettlementService;
   /** Injectable clock, ISO-8601; defaults to the store's own. */
   readonly now?: () => string;
   readonly log?: (line: string) => void;
@@ -111,6 +144,151 @@ export function createControlHandlers(options: ControlHandlerOptions): ControlHa
    * A mismatch is the documented `VERSION_CONFLICT` with the live version, so a stale Runner
    * re-reads instead of writing against a Work the Chief already moved on.
    */
+  /**
+   * Turns one accepted professional stage into a real per-Task candidate commit.
+   *
+   * `reliability.md` §4: the delivery route integrates verified Task commits, so the
+   * stage result is not enough on its own. The candidate (worktree + commit + frozen
+   * `VerificationManifest` + `Task.latestManifestId`) is produced here, where the
+   * accepted result and the live Attempt's `environmentRef` are both available. A
+   * missing git port, snapshot writer, policy hash or environment leaves the Task
+   * without a manifest — the integration then fails closed instead of trusting a
+   * fabricated one.
+   */
+  function commitTaskCandidate(input: {
+    readonly run: {
+      readonly id: string;
+      readonly workId: string;
+      readonly taskId?: string;
+      readonly role: string;
+      readonly configSnapshotId: string;
+      readonly contextSnapshotId: string;
+    };
+    readonly attemptId: string;
+    readonly result: {
+      readonly changedPaths: readonly string[];
+      readonly readLedgerSeq: number;
+      readonly readLedgerHash: string;
+    };
+  }): void {
+    const { worktrees, snapshots, worktreeRoot, repoRoot, policyHash } = options;
+    if (
+      worktrees === undefined ||
+      snapshots === undefined ||
+      worktreeRoot === undefined ||
+      repoRoot === undefined ||
+      policyHash === undefined ||
+      input.run.taskId === undefined
+    ) {
+      return;
+    }
+    const work = store.works.find(input.run.workId);
+    const task = store.tasks.find(input.run.taskId);
+    if (work === undefined || task === undefined) return;
+    const service = createTaskCandidateService({
+      store,
+      worktrees,
+      snapshots,
+      repoRoot,
+      worktreeRoot,
+      log,
+    });
+    const committed = service.commit({
+      workId: work.id,
+      taskId: task.id,
+      runId: input.run.id,
+      role: input.run.role as never,
+      level: work.level,
+      route: work.level,
+      planRef: task.planRef,
+      dependencyRevision: task.dependencyRevision ?? work.baseRevision ?? '',
+      dependencyManifestRefs: task.dependencyManifestRefs,
+      acceptanceIds: task.acceptanceIds,
+      policyHash,
+      configHash: input.run.configSnapshotId,
+      contextSnapshotId: input.run.contextSnapshotId,
+      readLedgerSeq: input.result.readLedgerSeq,
+      readLedgerHash: input.result.readLedgerHash,
+      environmentRef: options.environmentRefOf?.(input.attemptId) ?? '',
+      changedPaths: input.result.changedPaths,
+      sourceRoot: repoRoot,
+      message: `feat(task): ${task.id} 的候选提交`,
+    });
+    if (!committed.ok) {
+      log(
+        `control: Task ${task.id} candidate not committed (${committed.code}): ${committed.message}`,
+      );
+      return;
+    }
+    log(
+      `control: Task ${task.id} candidate ${committed.revision} manifest ${committed.manifestId}`,
+    );
+  }
+
+  /**
+   * The Accept/Integrate → Settlement chain of the L2 route (`workflow.md` §3/§7).
+   *
+   * `protocol.md` §6 puts the Settle stage's result on this channel, so an accepted
+   * `stage.submit` from a `purpose='settlement'` Run is the documented point at which Core
+   * must (1) integrate the verified Task candidates onto the delivery branch through the
+   * Workspace/CAS path (`AC-012`) and (2) settle the candidate it installed
+   * (`reliability.md` §4 steps 6–9). A failure of either half is returned to the Runner as
+   * typed data instead of being swallowed — the stage result itself stays accepted, which is
+   * what makes the failure visible and retriable rather than silent.
+   */
+  function integrateAndSettle(input: {
+    readonly workId: string;
+    readonly operationId: string;
+  }): JsonObject | undefined {
+    const { integrate, settlement } = options;
+    if (integrate === undefined || settlement === undefined) return undefined;
+    const integrationOperationId = `integrate:${input.operationId}`;
+    const integrated = integrate.integrate({
+      workId: input.workId,
+      operationId: integrationOperationId,
+    });
+    if (!integrated.ok) {
+      log(
+        `control: Work ${input.workId} integration refused (${integrated.code}): ${integrated.message}`,
+      );
+      return {
+        status: 'refused',
+        step: 'integrate',
+        code: integrated.code,
+        message: integrated.message,
+        branchUntouched: true,
+      };
+    }
+    const settled = settlement.settleFromIntegration({
+      operationId: integrationOperationId,
+    });
+    if (!settled.ok) {
+      log(`control: Work ${input.workId} settlement refused (${settled.code}): ${settled.message}`);
+      return {
+        status: 'refused',
+        step: 'settle',
+        code: settled.code,
+        message: settled.message,
+        revision: integrated.revision,
+      };
+    }
+    log(
+      `control: Work ${input.workId} settled at ${settled.revision} (requirement ${settled.requirementCompleted ? 'completed' : 'not completed'})`,
+    );
+    return {
+      status: 'settled',
+      revision: settled.revision,
+      manifestId: settled.manifestId,
+      requirementCompleted: settled.requirementCompleted,
+      ...(settled.requirementRecordVersion === undefined
+        ? {}
+        : { requirementRecordVersion: settled.requirementRecordVersion }),
+      ...(settled.requirementCompletionError === undefined
+        ? {}
+        : { requirementCompletionError: settled.requirementCompletionError }),
+    };
+  }
+
   function requireWorkVersion(workId: string, expectedVersion: number | undefined): void {
     if (expectedVersion === undefined) return;
     const work = store.works.find(workId);
@@ -702,11 +880,48 @@ export function createControlHandlers(options: ControlHandlerOptions): ControlHa
             payload: result,
           });
           if (outcome.accepted) {
+            // The stage is recorded; the Task's candidate commit follows so the
+            // integration has a verified revision to cherry-pick (`reliability.md` §4).
+            commitTaskCandidate({
+              run: {
+                id: run.id,
+                workId: run.workId,
+                ...(run.taskId === undefined ? {} : { taskId: run.taskId }),
+                role: run.role,
+                configSnapshotId: run.configSnapshotId,
+                contextSnapshotId: run.contextSnapshotId,
+              },
+              attemptId: caller.attemptId,
+              result: {
+                // `stageGate.submit` already validated the payload against
+                // `stageResultSchema`; these guards only satisfy the JSON type.
+                changedPaths: Array.isArray(result['changedPaths'])
+                  ? result['changedPaths'].filter(
+                      (path): path is string => typeof path === 'string',
+                    )
+                  : [],
+                readLedgerSeq:
+                  typeof result['readLedgerSeq'] === 'number' ? result['readLedgerSeq'] : 0,
+                readLedgerHash:
+                  typeof result['readLedgerHash'] === 'string' ? result['readLedgerHash'] : '',
+              },
+            });
+            // The L2/L3 Settle stage: this accepted result is the route's Accept/Integrate
+            // point, so the verified Task candidates are integrated and then settled
+            // (`workflow.md` §3/§7). Any refusal is surfaced in the response.
+            const delivery =
+              run.purpose === 'settlement'
+                ? integrateAndSettle({
+                    workId: run.workId,
+                    operationId: operationId ?? `${run.id}:${caller.attemptId}`,
+                  })
+                : undefined;
             return {
               accepted: true,
               stageResultId: outcome.row.id,
               status: outcome.row.status,
               outcome: outcome.row.status,
+              ...(delivery === undefined ? {} : { delivery }),
             };
           }
           // A Schema rejection is the documented `stage.submit` result, not a transport

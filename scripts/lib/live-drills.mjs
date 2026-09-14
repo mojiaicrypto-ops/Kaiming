@@ -1645,9 +1645,8 @@ export async function runMessageToStageDrill({ harness, product }) {
   const { core } = product;
   const { createPrepareRun } = await import('../../apps/daemon/src/prepare-run.ts');
   const { createControlHandlers } = await import('../../apps/daemon/src/control-handler.ts');
-  const { markMessageProcessing, markMessageSettled } = await import(
-    '../../apps/daemon/src/message-state.ts'
-  );
+  const { markMessageProcessing, markMessageSettled } =
+    await import('../../apps/daemon/src/message-state.ts');
   const { store } = harness;
 
   harness.controlLog = [];
@@ -1721,10 +1720,7 @@ export async function runMessageToStageDrill({ harness, product }) {
     const workId = sent.workId;
 
     const chiefRun = await waitFor(
-      () =>
-        store.runs
-          .list({ where: "work_id = ? AND role = 'chief'", params: [workId] })
-          .at(-1),
+      () => store.runs.list({ where: "work_id = ? AND role = 'chief'", params: [workId] }).at(-1),
       'the Chief Run',
     );
     // A real model may end its turn with plain text; the documented two-strike rule then
@@ -1734,9 +1730,7 @@ export async function runMessageToStageDrill({ harness, product }) {
     while (Date.now() < assessmentDeadline) {
       const events = store.events.readAfter(0, { limit: 20_000 });
       if (
-        events.some(
-          (event) => event.name === 'assessment.saved' && event.data['workId'] === workId,
-        )
+        events.some((event) => event.name === 'assessment.saved' && event.data['workId'] === workId)
       ) {
         assessed = true;
         break;
@@ -1768,9 +1762,7 @@ export async function runMessageToStageDrill({ harness, product }) {
     if (requirement === undefined) {
       // Not necessarily a bug: only L2/L3 `delivery`/`document` assessments create a
       // Requirement (`PRODUCT.md` §3, WP-12 P1-1). Report what the real model decided.
-      const assessment = store.assessments
-        .list({ where: 'work_id = ?', params: [workId] })
-        .at(-1);
+      const assessment = store.assessments.list({ where: 'work_id = ?', params: [workId] }).at(-1);
       const log = harness.controlLog.join(' | ').slice(-600);
       throw new Error(
         `no Requirement for the real assessment: intent=${String(assessment?.intent)} level=${String(assessment?.level)} reason=${String(assessment?.reason)}; control log: ${log}`,
@@ -1792,12 +1784,13 @@ export async function runMessageToStageDrill({ harness, product }) {
       `the professional Run's parent is ${String(professional.parentRunId)}`,
     );
     const stageDeadline = Date.now() + 240_000;
-    let stageResult = store.stageResults
-      .list({ where: 'run_id = ?', params: [professional.id] })[0];
+    let stageResult = store.stageResults.list({
+      where: 'run_id = ?',
+      params: [professional.id],
+    })[0];
     while (stageResult === undefined && Date.now() < stageDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 250));
-      stageResult = store.stageResults
-        .list({ where: 'run_id = ?', params: [professional.id] })[0];
+      stageResult = store.stageResults.list({ where: 'run_id = ?', params: [professional.id] })[0];
     }
     if (stageResult === undefined) {
       // The professional Attempt did not deliver. Report its real status and what the
@@ -1848,9 +1841,8 @@ export async function runMessageToStageDrill({ harness, product }) {
 export async function runSessionStreamingDrill({ harness, product, provider }) {
   const { core, storage } = product;
   const { createPrepareRun } = await import('../../apps/daemon/src/prepare-run.ts');
-  const { writeAttemptCatalog, GATEWAY_PROVIDER_ID } = await import(
-    '../../apps/daemon/src/runner-spawn.ts'
-  );
+  const { writeAttemptCatalog, GATEWAY_PROVIDER_ID } =
+    await import('../../apps/daemon/src/runner-spawn.ts');
   const piRuntime = await import('@agentdev/pi-runtime');
   const { mkdirSync, readFileSync } = await import('node:fs');
   const { store } = harness;
@@ -1994,7 +1986,10 @@ export async function runSessionStreamingDrill({ harness, product, provider }) {
     const firstDelta = deltas[0]?.delta ?? '';
     const lastDelta = deltas[deltas.length - 1]?.delta ?? '';
     ensure(
-      deltas.map((event) => event.delta).join('').trim().length > 0,
+      deltas
+        .map((event) => event.delta)
+        .join('')
+        .trim().length > 0,
       'the streamed deltas were empty',
     );
 

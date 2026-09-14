@@ -139,6 +139,23 @@ export interface ShellState {
   readonly connectionState?: 'connecting' | 'open' | 'reconnecting' | 'closed' | 'expired';
   readonly statusText?: string;
   readonly title?: string;
+  /**
+   * Every project this installation serves, for the top-bar switcher (WP-12 T5).
+   *
+   * `experience.md` §1: switching changes what the browser observes; it never
+   * changes background work. Omitted leaves the shell exactly as a single-project
+   * installation rendered it.
+   */
+  readonly projects?: readonly ProjectSwitchEntry[];
+}
+
+/** One entry of the shared project switcher. */
+export interface ProjectSwitchEntry {
+  readonly projectId: string | null;
+  readonly name: string;
+  readonly root: string;
+  readonly state: string;
+  readonly problem: string | null;
 }
 
 /**
@@ -180,6 +197,51 @@ function navItem(state: ShellState, entry: NavEntry, t: Translator): string {
 function languageOption(value: Language, current: Language, t: Translator): string {
   const label = t(`language.${value}`);
   return `<option value="${value}"${value === current ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+}
+
+/**
+ * The shared project switcher (WP-12 T5).
+ *
+ * Every project is a plain link to its own Chief page, so switching is an ordinary
+ * same-origin navigation: one BFF, one origin, one session, and a fresh snapshot and
+ * WebSocket bound to the project that was chosen (`experience.md` §1 — switching
+ * changes the observed scope, never the background work). A project that cannot be
+ * navigated to is rendered disabled with its typed reason instead of a dead link.
+ */
+function renderProjectSwitcher(state: ShellState, t: Translator): string {
+  const entries = state.projects ?? [];
+  if (entries.length === 0) return '';
+  const items = entries
+    .map((entry) => {
+      const label = `${entry.name}${entry.state === 'open' ? '' : ` (${entry.state})`}`;
+      if (
+        entry.projectId === null ||
+        entry.problem !== null ||
+        entry.state === 'missing' ||
+        entry.state === 'unreadable'
+      ) {
+        return [
+          `<li><span class="switcher-item unavailable" data-project="${escapeHtml(entry.projectId ?? entry.root)}" data-state="${escapeHtml(entry.state)}"`,
+          ` title="${escapeHtml(entry.problem ?? entry.state)}" aria-disabled="true">`,
+          `${escapeHtml(label)}</span></li>`,
+        ].join('');
+      }
+      const current = entry.projectId === state.projectId;
+      return [
+        `<li><a class="switcher-item${current ? ' current' : ''}" href="/projects/${escapeHtml(entry.projectId)}/chief"`,
+        ` data-project="${escapeHtml(entry.projectId)}" data-state="${escapeHtml(entry.state)}"`,
+        current ? ' aria-current="page"' : '',
+        `>${escapeHtml(label)}</a></li>`,
+      ].join('');
+    })
+    .join('');
+  return [
+    `<nav class="project-switcher" id="projectSwitcher" data-i18n-aria="nav.projects" aria-label="${escapeHtml(t('nav.projects'))}">`,
+    `<span class="switcher-label" data-i18n="nav.projects">${escapeHtml(t('nav.projects'))}</span>`,
+    `<ul class="switcher-list">${items}</ul>`,
+    `<a class="switcher-manage" href="/projects" data-i18n="nav.projects">${escapeHtml(t('nav.projects'))}</a>`,
+    '</nav>',
+  ].join('');
 }
 
 /**
@@ -238,6 +300,7 @@ function renderTopbar(
     '</div>',
     '<div class="project-area">',
     `<a class="project-name" href="/projects/${escapeHtml(state.projectId)}/chief" data-i18n-project="${escapeHtml(state.projectId)}">${escapeHtml(state.projectName)}</a>`,
+    renderProjectSwitcher(state, t),
     chief
       ? `<button class="conversation-control" id="newConversation" type="button" data-i18n="chief.newConversation">${escapeHtml(t('chief.newConversation'))}</button>` +
         `<button class="conversation-control" id="switchConversation" type="button" data-i18n="chief.switchConversation" aria-expanded="false">${escapeHtml(t('chief.switchConversation'))}</button>`

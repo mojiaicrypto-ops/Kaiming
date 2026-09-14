@@ -339,7 +339,7 @@ describe('workbench BFF over the real daemon (WP-09 T3)', () => {
     const form = new FormData();
     form.append('conversationId', conversationId);
     form.append('file', new Blob(['# notes\n'], { type: 'text/markdown' }), 'notes.md');
-    const uploaded = await fetch(`${baseUrl}/artifacts/upload`, {
+    const uploaded = await fetch(`${baseUrl}/artifacts/${daemon.projectId}/upload`, {
       method: 'POST',
       headers: { origin: WEB_ORIGIN, cookie, 'x-csrf-token': csrfToken },
       body: form,
@@ -371,7 +371,7 @@ describe('workbench BFF over the real daemon (WP-09 T3)', () => {
     const bad = new FormData();
     bad.append('conversationId', conversationId);
     bad.append('file', new Blob(['MZ'], { type: 'application/zip' }), 'x.zip');
-    const refused = await fetch(`${baseUrl}/artifacts/upload`, {
+    const refused = await fetch(`${baseUrl}/artifacts/${daemon.projectId}/upload`, {
       method: 'POST',
       headers: { origin: WEB_ORIGIN, cookie, 'x-csrf-token': csrfToken },
       body: bad,

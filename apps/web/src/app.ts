@@ -33,6 +33,7 @@ import {
 import { FileBoundaryError, NodeFilePort, type FilePort } from './files.js';
 import { escapeHtml, renderDocument } from './html.js';
 import { normaliseLanguage, translator } from './i18n.js';
+import type { ProjectDirectoryPort } from './projects.js';
 import {
   renderAgentsPage,
   renderBoardPage,
@@ -80,6 +81,10 @@ import {
 
 /** The BFF's configuration: where the daemon is, who may talk to the BFF, and how. */
 export interface WebAppOptions {
+  /**
+   * The target a single-project installation serves, and the fallback for the
+   * installation-level methods under `projects` (WP-12 T5).
+   */
   readonly daemon: DaemonTarget;
   readonly auth: AuthService;
   /** Exact origins a browser write may come from; defaults to the daemon origin. */
@@ -88,6 +93,17 @@ export interface WebAppOptions {
   readonly files?: FilePort;
   readonly version?: string;
   readonly publicDir?: string;
+  /**
+   * The installation's project directory (WP-12 T5).
+   *
+   * With it the BFF is the **single entry point** for every project: each request is
+   * routed to the daemon that serves the `projectId` it names (page path, envelope,
+   * `/ws?projectId=` or artifact URL), and a request naming a project this
+   * installation does not serve fails closed (`NOT_FOUND`) instead of silently
+   * answering from another project. Without it the BFF keeps its original
+   * single-project behaviour.
+   */
+  readonly projects?: ProjectDirectoryPort;
   /** Overridable for tests; all four default to the real daemon transport. */
   readonly rpc?: typeof forwardRpc;
   readonly read?: typeof daemonRead;
@@ -112,7 +128,13 @@ const ASSET_TYPES: Readonly<Record<string, string>> = {
   '.woff2': 'font/woff2',
 };
 
-/** Methods that do not change state; everything else needs an Origin check. */
+/**
+ * Methods that do not change state; everything else needs an Origin check.
+ *
+ * The lifecycle commands are absent on purpose: `project.create/clone/trust/close/
+ * initialize` change installation state, so `/rpc` must apply the exact-`Origin`
+ * gate before forwarding them. `project.list`/`project.snapshot.get` are reads.
+ */
 const READ_ONLY = new Set([
   'connection.hello',
   'command.get',
@@ -193,6 +215,54 @@ export function pageOf(pathname: string): PageKey | undefined {
 }
 
 /**
+ * Methods the whole installation answers, so any open project's daemon may serve
+ * them (WP-12 T5). Everything else is a Project method and must be routed to the
+ * daemon that holds that project.
+ */
+const INSTALLATION_METHODS = new Set([
+  'connection.hello',
+  'projects',
+  'project.list',
+  'project.open',
+  'project.create',
+  'project.clone',
+  'project.trust',
+  'project.close',
+  'project.initialize',
+  'settings',
+  'agents',
+  'ui.translate',
+  'config.get',
+  'config.save',
+  'config.test',
+  'backup.run',
+  'restore.run',
+  'secret.set',
+  'secret.delete',
+  'secret.list',
+  'provider.upsert',
+  'provider.test',
+]);
+
+/** True when a method is installation-level and carries no Project scope. */
+export function isInstallationMethod(method: string): boolean {
+  return INSTALLATION_METHODS.has(method);
+}
+
+/** The `projectId` a `/projects/<id>/...` page path names, when it names one. */
+export function projectIdOfPath(pathname: string): string | undefined {
+  const segments = pathname.split('/').filter((part) => part !== '');
+  if (segments[0] !== 'projects' || segments[1] === undefined) return undefined;
+  return segments[1];
+}
+
+/** Where one browser request is routed: one project's daemon, or the fallback. */
+interface Route {
+  readonly target: DaemonTarget;
+  readonly projectId: string | undefined;
+}
+
+/**
  * Builds the BFF server.
  *
  * Pages call the daemon on the caller's own session cookie, so authorization is
@@ -213,6 +283,52 @@ export function createWebApp(options: WebAppOptions): WebApp {
       ? [options.daemon.origin]
       : options.allowedOrigins;
   const secureCookies = options.daemon.origin.startsWith('https:');
+  const projects = options.projects;
+
+  /**
+   * Resolves the daemon that serves one project (WP-12 T5's per-request routing).
+   *
+   * `projectId === undefined` means "no project named": installation-level methods and
+   * a single-project installation use the fallback target, and a multi-project
+   * installation prefers its default project so `/projects` itself still renders.
+   * `undefined` as the *result* means the named project is not served here.
+   */
+  function routeOf(projectId: string | undefined): Route | undefined {
+    if (projects === undefined) return { target: options.daemon, projectId };
+    if (projectId !== undefined) {
+      const target = projects.targetOf(projectId);
+      return target === undefined ? undefined : { target, projectId };
+    }
+    const fallback = projects.defaultProjectId();
+    if (fallback !== undefined) {
+      const target = projects.targetOf(fallback);
+      if (target !== undefined) return { target, projectId: fallback };
+    }
+    return { target: options.daemon, projectId: undefined };
+  }
+
+  /**
+   * The daemon the BFF signs a browser session in through (WP-12 T5).
+   *
+   * The session is created on a real daemon, so the target has to be resolved **now**,
+   * not at construction: the host creates the BFF before it knows which projects will
+   * be opened, and a `project.create`/`project.open` that arrives later makes the
+   * installation's first daemon reachable. Without this the BFF would keep pointing at
+   * the construction-time fallback and refuse every login on a freshly created
+   * installation.
+   */
+  function loginTarget(): DaemonTarget {
+    return routeOf(undefined)?.target ?? options.daemon;
+  }
+
+  /** Fails closed when a request names a project this installation does not serve. */
+  function refuseUnknownProject(response: ServerResponse, projectId: string | undefined): void {
+    json(
+      response,
+      404,
+      errorBody('NOT_FOUND', `this installation does not serve project ${projectId ?? ''}`),
+    );
+  }
 
   const server = createServer((request, response) => {
     void handle(request, response).catch((error: unknown) => {
@@ -229,17 +345,26 @@ export function createWebApp(options: WebAppOptions): WebApp {
       originOk &&
       authenticateDaemon(options.auth, session, { isWrite: false, origin: options.daemon.origin })
         .ok;
+    // `protocol.md` §2 + WP-12 T5 D-T5-5: the connection is bound to exactly one
+    // project at handshake time, so a cursor can never be replayed against a different
+    // project's event stream. A connection naming an unserved project is refused
+    // before the upgrade completes.
+    const requested = urlOf(request).searchParams.get('projectId') ?? undefined;
+    const route = authorized ? routeOf(requested) : undefined;
     handleUpgrade({
       request,
       socket,
-      target: options.daemon,
-      authorized,
+      target: route?.target ?? options.daemon,
+      ...(route?.projectId === undefined ? {} : { projectId: route.projectId }),
+      authorized: authorized && route !== undefined,
       refusalReason:
         session === undefined
           ? 'no valid session cookie'
-          : originOk
-            ? 'the daemon session is not valid any more'
-            : 'the Origin header is not allowed',
+          : !originOk
+            ? 'the Origin header is not allowed'
+            : route === undefined
+              ? `this installation does not serve project ${requested ?? ''}`
+              : 'the daemon session is not valid any more',
     });
   });
 
@@ -355,7 +480,7 @@ export function createWebApp(options: WebAppOptions): WebApp {
     }
     let created;
     try {
-      created = await login(options.daemon, token);
+      created = await login(loginTarget(), token);
     } catch (error) {
       // A wrong token is 401 from the daemon; the BFF never guesses a success.
       json(
@@ -386,7 +511,7 @@ export function createWebApp(options: WebAppOptions): WebApp {
     if (session !== undefined) {
       // Best effort: the browser session is already gone even if the daemon is down,
       // and the daemon session expires on its own.
-      await logout(options.daemon).catch(() => undefined);
+      await logout(loginTarget()).catch(() => undefined);
     }
     response.setHeader('set-cookie', [sessionClearCookie({ secure: secureCookies })]);
     if (wantsHtml(request)) {
@@ -403,7 +528,8 @@ export function createWebApp(options: WebAppOptions): WebApp {
     session: WebSession,
   ): Promise<void> {
     const raw = (await readBody(request)).toString('utf8');
-    const method = methodOfEnvelope(raw);
+    const envelope = envelopeOf(raw);
+    const method = envelope.method;
     const isWrite = method === undefined ? true : !READ_ONLY.has(method);
     /**
      * CSRF: deliberate BFF deviation, registered (W9R1-09).
@@ -437,9 +563,32 @@ export function createWebApp(options: WebAppOptions): WebApp {
       json(response, check.status, errorBody(check.code, check.message));
       return;
     }
+    /**
+     * WP-12 T5 per-request routing (D-T5-6).
+     *
+     * The route is chosen from the envelope's own `projectId`. An installation-level
+     * method (or a request that names none) goes to the default project; a request
+     * naming a project this installation does not serve fails closed with
+     * `NOT_FOUND` rather than being answered by another project's daemon. When the
+     * method is a Project method and the browser omitted the id, the BFF **injects**
+     * the routed project's id, so the daemon's own
+     * `projectId !== this.projectId` check is the second line of defence.
+     */
+    const route =
+      method !== undefined && isInstallationMethod(method) && envelope.projectId === undefined
+        ? routeOf(undefined)
+        : routeOf(envelope.projectId);
+    if (route === undefined) {
+      refuseUnknownProject(response, envelope.projectId);
+      return;
+    }
+    const forwarded =
+      method !== undefined && !isInstallationMethod(method) && route.projectId !== undefined
+        ? withProjectId(raw, route.projectId)
+        : raw;
     let answer;
     try {
-      answer = await rpc(options.daemon, { raw, session: sessionOfDaemon(session) });
+      answer = await rpc(route.target, { raw: forwarded, session: sessionOfDaemon(session) });
     } catch (error) {
       json(response, 503, errorBody('PROVIDER_UNAVAILABLE', messageOf(error)));
       return;
@@ -455,6 +604,28 @@ export function createWebApp(options: WebAppOptions): WebApp {
     path: string,
     method: string,
   ): Promise<void> {
+    // Q6: the artifact URL carries the projectId explicitly
+    // (`/artifacts/<projectId>/...`); the unprefixed form stays for a single-project
+    // installation and for links a page already rendered. Either way the *routed*
+    // project's daemon resolves and authorizes the token, so a token minted by one
+    // project can never be redeemed through another project's route.
+    const resolved = splitArtifactPath(path);
+    if (resolved === undefined) {
+      // Fail closed: an artifact URL without an explicit project is not a route any
+      // more (WP-12 T5 Q6), so no request can fall back to "whatever project is
+      // selected" and redeem another project's token.
+      json(
+        response,
+        404,
+        errorBody('NOT_FOUND', 'an artifact URL must name its project: /artifacts/<projectId>/…'),
+      );
+      return;
+    }
+    const route = routeOf(resolved.projectId);
+    if (route === undefined) {
+      refuseUnknownProject(response, resolved.projectId);
+      return;
+    }
     const isWrite = method !== 'GET' && method !== 'HEAD';
     if (isWrite && !originAllowed(headerOf(request, 'origin'), allowed)) {
       json(
@@ -474,19 +645,22 @@ export function createWebApp(options: WebAppOptions): WebApp {
       return;
     }
     const body = method === 'GET' || method === 'HEAD' ? undefined : await readBody(request);
-    const upstream = await fetch(`${options.daemon.baseUrl.replace(/\/+$/u, '')}${path}`, {
-      method,
-      headers: {
-        cookie: `agentdev_session=${session.daemonCookie}`,
-        origin: options.daemon.origin,
-        accept: String(request.headers.accept ?? '*/*'),
-        'x-csrf-token': session.csrfToken,
-        ...(request.headers['content-type'] === undefined
-          ? {}
-          : { 'content-type': String(request.headers['content-type']) }),
+    const upstream = await fetch(
+      `${route.target.baseUrl.replace(/\/+$/u, '')}${resolved.upstreamPath}`,
+      {
+        method,
+        headers: {
+          cookie: `agentdev_session=${session.daemonCookie}`,
+          origin: route.target.origin,
+          accept: String(request.headers.accept ?? '*/*'),
+          'x-csrf-token': session.csrfToken,
+          ...(request.headers['content-type'] === undefined
+            ? {}
+            : { 'content-type': String(request.headers['content-type']) }),
+        },
+        ...(body === undefined ? {} : { body }),
       },
-      ...(body === undefined ? {} : { body }),
-    });
+    );
     const headers: Record<string, string> = {};
     for (const [key, value] of upstream.headers) {
       if (key === 'set-cookie' || key === 'connection' || key === 'transfer-encoding') continue;
@@ -518,8 +692,19 @@ export function createWebApp(options: WebAppOptions): WebApp {
       json(response, 404, errorBody('NOT_FOUND', `no page for ${url.pathname}`));
       return;
     }
+    // WP-12 T5: the page path names the project, and every read below runs against
+    // that project's daemon. A path naming an unserved project fails closed.
+    const route = routeOf(projectIdOfPath(url.pathname));
+    if (route === undefined) {
+      json(
+        response,
+        404,
+        errorBody('NOT_FOUND', `this installation does not serve ${url.pathname}`),
+      );
+      return;
+    }
 
-    const snapshot = await safeRead(session, 'project.snapshot.get');
+    const snapshot = await safeRead(route, session, 'project.snapshot.get');
     const project = snapshot.ok ? asObject(snapshot.value['project']) : {};
     const projectId = typeof project['id'] === 'string' ? project['id'] : 'project';
     const projectName =
@@ -540,10 +725,35 @@ export function createWebApp(options: WebAppOptions): WebApp {
 
     switch (page) {
       case 'projects': {
+        // WP-12 T5: the page lists what the *installation* serves — open, closed and
+        // discoverable — not only the project this page happens to be routed to.
+        const directory = projects?.list() ?? [];
         body = renderProjectsPage({
-          projects: Object.keys(project).length === 0 ? [] : [project],
+          projects:
+            directory.length > 0
+              ? directory.map((entry) => ({
+                  id: entry.projectId ?? entry.root,
+                  name: entry.name,
+                  root: entry.root,
+                  head: entry.head ?? '',
+                  state: entry.state === 'open' ? 'open' : 'closed',
+                  lifecycleState: entry.state,
+                  trust: entry.trust,
+                  runningRuns: entry.runningRuns,
+                  initialization: entry.initialization === null ? '' : entry.initialization.phase,
+                  problem:
+                    entry.problem === null ? '' : `${entry.problem.code}: ${entry.problem.message}`,
+                }))
+              : Object.keys(project).length === 0
+                ? []
+                : [project],
           currentProjectId: projectId,
           counts: snapshot.ok ? numberRecord(snapshot.value['counts']) : {},
+          problems:
+            projects?.problems.map(
+              (problem) =>
+                `#${String(problem.index)} ${problem.root ?? '<unknown>'}: ${problem.code} — ${problem.message}`,
+            ) ?? [],
           t,
           language,
           panelMode,
@@ -553,7 +763,7 @@ export function createWebApp(options: WebAppOptions): WebApp {
       }
       case 'chief': {
         pageTitle = t('nav.chief');
-        const conversations = await safeRead(session, 'conversation.list', { limit: 20 });
+        const conversations = await safeRead(route, session, 'conversation.list', { limit: 20 });
         const conversationId =
           url.searchParams.get('conversationId') ??
           (conversations.ok ? firstId(conversations.value, 'items') : undefined);
@@ -561,7 +771,7 @@ export function createWebApp(options: WebAppOptions): WebApp {
           body = renderNoticePage(t, 'chief', 'common.waiting');
           break;
         }
-        const conversation = await safeRead(session, 'conversation.get', {
+        const conversation = await safeRead(route, session, 'conversation.get', {
           conversationId,
           limit: 100,
         });
@@ -569,7 +779,7 @@ export function createWebApp(options: WebAppOptions): WebApp {
           body = renderErrorPage(t, conversation.code, conversation.message);
           break;
         }
-        const providers = await safeRead(session, 'agents');
+        const providers = await safeRead(route, session, 'agents');
         const providerReady = providers.ok
           ? objectsOf(providers.value, 'roles').some((role) => role['usable'] === true)
           : null;
@@ -588,7 +798,7 @@ export function createWebApp(options: WebAppOptions): WebApp {
       }
       case 'requirements': {
         pageTitle = t('nav.requirements');
-        const board = await safeRead(session, 'board');
+        const board = await safeRead(route, session, 'board');
         if (!board.ok) {
           body = renderErrorPage(t, board.code, board.message);
           break;
@@ -601,7 +811,7 @@ export function createWebApp(options: WebAppOptions): WebApp {
       case 'requirement': {
         pageTitle = t('aria.detail');
         const requirementId = segments[3] ?? '';
-        const requirement = await safeRead(session, 'requirement.get', { requirementId });
+        const requirement = await safeRead(route, session, 'requirement.get', { requirementId });
         if (!requirement.ok) {
           body = renderErrorPage(t, requirement.code, requirement.message, requirementId);
           break;
@@ -609,9 +819,11 @@ export function createWebApp(options: WebAppOptions): WebApp {
         const workIdRaw = asObject(requirement.value['work'])?.['id'];
         const workId = typeof workIdRaw === 'string' ? workIdRaw : '';
         const artifacts =
-          workId === '' ? empty() : await safeRead(session, 'artifact.list', { workId });
-        const runs = workId === '' ? empty() : await safeRead(session, 'run.list', { workId });
-        const work = workId === '' ? empty() : await safeRead(session, 'work.get', { workId });
+          workId === '' ? empty() : await safeRead(route, session, 'artifact.list', { workId });
+        const runs =
+          workId === '' ? empty() : await safeRead(route, session, 'run.list', { workId });
+        const work =
+          workId === '' ? empty() : await safeRead(route, session, 'work.get', { workId });
         // The version the user asked for comes from the URL (a historical card keeps
         // its own version); without one the card shows the gate's current version
         // (W9R1-02). The request carries `planVersion` only when the URL named one:
@@ -623,7 +835,7 @@ export function createWebApp(options: WebAppOptions): WebApp {
         const planCurrent =
           workId === ''
             ? undefined
-            : await safeRead(session, 'plan.current', {
+            : await safeRead(route, session, 'plan.current', {
                 workId,
                 ...requestedPlanParams,
               });
@@ -647,6 +859,7 @@ export function createWebApp(options: WebAppOptions): WebApp {
           artifacts: artifacts.ok ? objectsOf(artifacts.value, 'items') : [],
           runs: runs.ok ? objectsOf(runs.value, 'items') : [],
           branch,
+          projectId,
           ...(plan === undefined ? {} : { plan }),
         });
         body = renderRequirementPage({ detail, projectId, t });
@@ -657,7 +870,7 @@ export function createWebApp(options: WebAppOptions): WebApp {
         pageTitle = t('nav.docs');
         const activeView = docsViewOf(url.searchParams.get('view'));
         const query = url.searchParams.get('query') ?? '';
-        const docs = await safeRead(session, 'knowledge.list', {
+        const docs = await safeRead(route, session, 'knowledge.list', {
           view: activeView,
           ...(query === '' ? {} : { query }),
         });
@@ -719,7 +932,7 @@ export function createWebApp(options: WebAppOptions): WebApp {
                   truncated: preview.truncated,
                   hash: preview.hash,
                   mime: preview.mime,
-                  downloadHref: '/artifacts/download.prepare',
+                  downloadHref: `/artifacts/${encodeURIComponent(projectId)}/download.prepare`,
                 },
           error: fileError,
           projectId,
@@ -729,7 +942,7 @@ export function createWebApp(options: WebAppOptions): WebApp {
       }
       case 'agents': {
         pageTitle = t('nav.agents');
-        const agents = await safeRead(session, 'agents');
+        const agents = await safeRead(route, session, 'agents');
         if (!agents.ok) {
           body = renderErrorPage(t, agents.code, agents.message);
           break;
@@ -740,9 +953,10 @@ export function createWebApp(options: WebAppOptions): WebApp {
       }
       case 'runs': {
         pageTitle = t('nav.runs');
-        const works = await safeRead(session, 'work.list', { limit: 200 });
+        const works = await safeRead(route, session, 'work.list', { limit: 200 });
         const runId = url.searchParams.get('runId');
-        const detail = runId === null ? undefined : await safeRead(session, 'run.get', { runId });
+        const detail =
+          runId === null ? undefined : await safeRead(route, session, 'run.get', { runId });
         body = renderRunsPage({
           model: runsModel(works.ok ? objectsOf(works.value, 'items') : []),
           detail:
@@ -761,12 +975,12 @@ export function createWebApp(options: WebAppOptions): WebApp {
       }
       case 'inbox': {
         pageTitle = t('nav.inbox');
-        const inbox = await safeRead(session, 'inbox');
+        const inbox = await safeRead(route, session, 'inbox');
         if (!inbox.ok) {
           body = renderErrorPage(t, inbox.code, inbox.message);
           break;
         }
-        const model = inboxModel(inbox.value, await inboxContext(session, inbox.value));
+        const model = inboxModel(inbox.value, await inboxContext(route, session, inbox.value));
         inboxCount = model.unread;
         body = renderInboxPage({ model, projectId, t });
         view = inbox.value;
@@ -774,8 +988,8 @@ export function createWebApp(options: WebAppOptions): WebApp {
       }
       case 'settings': {
         pageTitle = t('nav.settings');
-        const settings = await safeRead(session, 'settings');
-        const config = await safeRead(session, 'config.get', { scope: 'global' });
+        const settings = await safeRead(route, session, 'settings');
+        const config = await safeRead(route, session, 'config.get', { scope: 'global' });
         if (!config.ok) {
           body = renderErrorPage(t, config.code, config.message);
           break;
@@ -801,6 +1015,19 @@ export function createWebApp(options: WebAppOptions): WebApp {
       panelMode,
       inboxCount,
       connectionState: 'connecting',
+      // WP-12 T5: one switcher for every page, fed by the installation directory so
+      // the browser can move between projects with an ordinary same-origin link.
+      ...(projects === undefined
+        ? {}
+        : {
+            projects: projects.list().map((entry) => ({
+              projectId: entry.projectId,
+              name: entry.name,
+              root: entry.root,
+              state: entry.state,
+              problem: entry.problem === null ? null : entry.problem.message,
+            })),
+          }),
     };
     const html = renderDocument({
       lang: language === 'zh' ? 'zh-CN' : 'en',
@@ -828,16 +1055,18 @@ export function createWebApp(options: WebAppOptions): WebApp {
    * of guessing an empty state.
    */
   async function safeRead(
+    route: Route,
     session: WebSession,
     method: string,
     params: JsonObject = {},
   ): Promise<ReadResult> {
     try {
       const value = await read<JsonObject>(
-        options.daemon,
+        route.target,
         sessionOfDaemon(session),
         method,
         params,
+        route.projectId,
       );
       return { ok: true, value: value ?? {} };
     } catch (error) {
@@ -859,7 +1088,11 @@ export function createWebApp(options: WebAppOptions): WebApp {
    * so each Work with a pending permission request is read once. Both reads are
    * bounded by the rows actually on the page.
    */
-  async function inboxContext(session: WebSession, raw: JsonObject): Promise<InboxContext> {
+  async function inboxContext(
+    route: Route,
+    session: WebSession,
+    raw: JsonObject,
+  ): Promise<InboxContext> {
     const questions: Record<string, InboxQuestion> = {};
     const waitingRuns: Record<string, InboxWaitingRun> = {};
     const workIds = new Set<string>();
@@ -875,13 +1108,13 @@ export function createWebApp(options: WebAppOptions): WebApp {
       if (artifactId === '') continue;
       const key = questionKey(artifactId, artifactVersion);
       if (questions[key] !== undefined) continue;
-      const answer = await readPreview(session, artifactId);
+      const answer = await readPreview(route, session, artifactId);
       questions[key] = answer.ok
         ? { text: answer.text, error: null }
         : { text: '', error: `${answer.code}: ${answer.message}` };
     }
     for (const workId of workIds) {
-      const runs = await safeRead(session, 'run.list', { workId });
+      const runs = await safeRead(route, session, 'run.list', { workId });
       if (!runs.ok) continue;
       const waiting = objectsOf(runs.value, 'items').find(
         (run) => run['status'] === 'waiting_permission',
@@ -898,9 +1131,13 @@ export function createWebApp(options: WebAppOptions): WebApp {
   }
 
   /** One Artifact body as the daemon serves it, with the refusal kept as data. */
-  async function readPreview(session: WebSession, artifactId: string): Promise<PreviewRead> {
+  async function readPreview(
+    route: Route,
+    session: WebSession,
+    artifactId: string,
+  ): Promise<PreviewRead> {
     try {
-      return await preview(options.daemon, sessionOfDaemon(session), artifactId);
+      return await preview(route.target, sessionOfDaemon(session), artifactId);
     } catch (error) {
       return { ok: false, code: codeOfFailure(error, 'INTERNAL_ERROR'), message: messageOf(error) };
     }
@@ -1104,14 +1341,71 @@ function numberRecord(value: unknown): Readonly<Record<string, number>> {
   return result;
 }
 
-function methodOfEnvelope(raw: string): string | undefined {
+function envelopeOf(raw: string): { method?: string; projectId?: string } {
   try {
     const parsed: unknown = JSON.parse(raw);
     const method = (parsed as { method?: unknown }).method;
-    return typeof method === 'string' ? method : undefined;
+    const projectId = (parsed as { projectId?: unknown }).projectId;
+    return {
+      ...(typeof method === 'string' ? { method } : {}),
+      ...(typeof projectId === 'string' ? { projectId } : {}),
+    };
   } catch {
-    return undefined;
+    return {};
   }
+}
+
+/**
+ * Injects the routed `projectId` into an envelope that named none (WP-12 T5 D-T5-6).
+ *
+ * The daemon still validates `projectId === this.projectId`, so this is a
+ * convenience that makes the routing explicit on the wire, never a bypass: a
+ * mis-routed request becomes a `NOT_FOUND` at the daemon instead of silently
+ * answering from another project. A malformed body is forwarded unchanged so the
+ * daemon answers its own `VALIDATION_ERROR`.
+ */
+export function withProjectId(raw: string, projectId: string): string {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return raw;
+    const envelope = parsed as Record<string, unknown>;
+    if (typeof envelope['projectId'] === 'string' && envelope['projectId'] !== '') return raw;
+    return JSON.stringify({ ...envelope, projectId });
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * Splits a BFF artifact path into its project context and the daemon path (Q6).
+ *
+ * The **only** accepted shape is `/artifacts/<projectId>/<rest>`: under one BFF origin
+ * a bare `/artifacts/<id>/preview` or `/artifacts/download/<token>` would have to be
+ * resolved from implicit "current project" state, which the ruling forbids and which
+ * would make the project-scope check meaningless (a token minted by one project could
+ * be redeemed through another project's route). An unprefixed or reserved path returns
+ * `undefined`, and the caller fails closed with `NOT_FOUND`.
+ *
+ * @returns the project and the daemon-relative path, or `undefined` for a path that is
+ * not explicitly project-scoped.
+ */
+export function splitArtifactPath(
+  path: string,
+): { readonly projectId: string; readonly upstreamPath: string } | undefined {
+  const segments = path.split('/').filter((part) => part !== '');
+  // Reserved words can never be a project id: they are the daemon's own route names.
+  const reserved = new Set(['download', 'download.prepare', 'upload', 'uploads']);
+  if (segments[0] !== 'artifacts' || segments.length < 3) return undefined;
+  const projectId = segments[1] ?? '';
+  if (projectId === '' || reserved.has(projectId)) return undefined;
+  return {
+    projectId,
+    upstreamPath: `/artifacts/${segments.slice(2).join('/')}`,
+  };
+}
+
+function urlOf(request: IncomingMessage): URL {
+  return new URL(request.url ?? '/', 'http://127.0.0.1');
 }
 
 function serveAsset(response: ServerResponse, publicDir: string, relative: string): void {

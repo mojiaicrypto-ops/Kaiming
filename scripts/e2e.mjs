@@ -33,7 +33,7 @@
  *
  * Usage: node scripts/e2e.mjs [--no-write] [--keep-temp] [--drill-out <path>] [--help]
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { computeBinding } from './lib/acceptance-binding.mjs';
 import {
@@ -947,7 +947,9 @@ async function runChecks({ checks, harness, product, meta }) {
       { conversationId: harness.conversationId },
       { filename: 'notes.md', mime: 'text/markdown', bytes: Buffer.from('# notes\n', 'utf8') },
     );
-    const uploaded = await httpRequest(`${harness.webUrl}/artifacts/upload`, {
+    // WP-12 T5: one BFF serves every project, so artifact routes name the project
+    // explicitly and a path without it is refused (`protocol.md` §5).
+    const uploaded = await httpRequest(`${harness.webUrl}/artifacts/${harness.projectId}/upload`, {
       method: 'POST',
       headers: {
         origin: WEB_ORIGIN,
@@ -1004,7 +1006,7 @@ async function runChecks({ checks, harness, product, meta }) {
       { conversationId: harness.conversationId },
       { filename: 'x.zip', mime: 'application/zip', bytes: Buffer.from('MZ', 'utf8') },
     );
-    const refused = await httpRequest(`${harness.webUrl}/artifacts/upload`, {
+    const refused = await httpRequest(`${harness.webUrl}/artifacts/${harness.projectId}/upload`, {
       method: 'POST',
       headers: {
         origin: WEB_ORIGIN,
@@ -2215,6 +2217,312 @@ async function runChecks({ checks, harness, product, meta }) {
       await execution.stop();
     }
   });
+
+  // ---- G8: the tool bridge on the real path (Runner child + Broker + ledger) --
+  //
+  // `hardening-plan.md` G8. A real message names two files, the real Chief child assesses it
+  // and dispatches a professional Run, and that Run's real child tries: a read inside its
+  // frozen readScope, a read of a path the Work's Grant covers but the scope does not, a write
+  // no Plan approved, and a `request_dispatch`. Everything below is observed on the real
+  // rows: refusals carry the documented codes, the refused calls leave no `tool_operation`,
+  // the delivery carries the ledger binding Core sealed, and the Attempt's processes and
+  // Grants are gone once it ends. The only stub is the loopback model.
+  await checks.check(
+    'tool.broker-admission',
+    ['AC-032', 'AC-045', 'AC-048', 'AC-050'],
+    async () => {
+      const { createProjectExecution, SecretStore, createNodeProcessProbe, PlanGateService } = core;
+      const { createPrepareRun } = await import('../apps/daemon/src/prepare-run.ts');
+      const { createChildRunnerSpawnPort } = await import('../apps/daemon/src/runner-spawn.ts');
+      const { createToolHandler } = await import('../apps/daemon/src/tool-handler.ts');
+      const { createControlHandlers } = await import('../apps/daemon/src/control-handler.ts');
+      const { markMessageProcessing, markMessageSettled } =
+        await import('../apps/daemon/src/message-state.ts');
+
+      const provider = harness.config.upsertProvider({
+        type: 'openai-compatible',
+        baseUrl: harness.localModelUrl,
+        enabled: true,
+        models: [
+          {
+            id: 'e2e-local-model',
+            contextWindow: 128_000,
+            maxOutputTokens: 8_192,
+            reasoningLevels: ['off'],
+            vision: false,
+          },
+        ],
+      });
+      const role = {
+        providerId: provider.providerId,
+        modelId: 'e2e-local-model',
+        reasoning: 'off',
+        skills: [],
+        toolSubset: [],
+        contextLimit: 32_000,
+      };
+      harness.config.update('global', { roleOverrides: { chief: role, backend: role } });
+
+      const runnerEntry = join(makeTempDir('agentdev-e2e-g8-runner-'), 'runner-entry.mjs');
+      writeFileSync(
+        runnerEntry,
+        [
+          `import { installSourceResolver } from ${JSON.stringify(join(REPO_ROOT, 'scripts', 'lib', 'e2e-runtime.mjs'))};`,
+          'installSourceResolver();',
+          `const { main } = await import(${JSON.stringify(join(REPO_ROOT, 'apps', 'runner', 'src', 'cli.ts'))});`,
+          'await main(process.argv.slice(2), {',
+          '  output: { write: (line) => process.stdout.write(line) },',
+          '  exit: (code) => process.exit(code),',
+          '});',
+          '',
+        ].join('\n'),
+      );
+
+      const SRC = 'src/g8-notes.txt';
+      const DOC = 'docs/g8-notes.md';
+      mkdirSync(join(harness.repo, 'src'), { recursive: true });
+      mkdirSync(join(harness.repo, 'docs'), { recursive: true });
+      writeFileSync(join(harness.repo, SRC), 'original contents\n', 'utf8');
+      writeFileSync(join(harness.repo, DOC), 'a document outside the read scope\n', 'utf8');
+      const srcHashBefore = storage.sha256(readFileSync(join(harness.repo, SRC), 'utf8'));
+
+      // T2 R6 diagnostic: this check drives a real Runner, so its diagnostics are the
+      // only way to see where a stalled turn stopped. Printed on timeout.
+      const spawnLog = [];
+      const logLine = (line) => {
+        spawnLog.push(line);
+        if (spawnLog.length > 200) spawnLog.shift();
+      };
+      const execution = await createProjectExecution({
+        store: harness.store,
+        config: harness.config,
+        snapshots: harness.snapshots,
+        secrets: new SecretStore(),
+        probe: createNodeProcessProbe(),
+        tickMs: 200,
+        log: logLine,
+        prepare: ({ capabilities, gatewayUrl, controlUrl }) =>
+          createPrepareRun({
+            store: harness.store,
+            config: harness.config,
+            capabilities,
+            gatewayUrl,
+            controlUrl,
+            projectRoot: harness.repo,
+            attemptsDir: join(harness.dataDir, 'attempts'),
+            log: logLine,
+          }),
+        spawn: createChildRunnerSpawnPort({
+          repoRoot: REPO_ROOT,
+          env: { ...process.env, AGENTDEV_RUNNER_ENTRY: runnerEntry },
+          log: logLine,
+        }),
+        tools: {
+          attach: ({ store, broker, grantService, readLedgers }) =>
+            createToolHandler({
+              store,
+              broker,
+              grantService,
+              readLedgers,
+              artifacts: harness.artifacts,
+              planGate: new PlanGateService({ store, artifacts: harness.artifacts }),
+              secrets: new SecretStore(),
+              mode: 'host',
+              log: logLine,
+            }),
+        },
+        broker: {
+          dataDir: harness.dataDir,
+          writableReportRoots: [join(harness.dataDir, 'tool-reports')],
+        },
+        control: {
+          attach: ({ orchestrator, stageGate, readLedgers }) =>
+            createControlHandlers({
+              store: harness.store,
+              orchestrator,
+              stageGate,
+              readLedgers,
+              artifacts: harness.artifacts,
+              requirementSaves: harness.requirementSaves,
+              log: logLine,
+            }),
+          onAttemptStarted: ({ runId }) => markMessageProcessing(harness.store, runId),
+          onRunSettled: ({ runId, status }) => markMessageSettled(harness.store, runId, status),
+        },
+      });
+      harness.protocol.attachOrchestrator(execution.orchestrator);
+      harness.protocol.attachGateway(execution.gateway);
+
+      const waitFor = async (predicate, what, timeoutMs = 120_000) => {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+          const value = predicate();
+          if (value !== undefined && value !== false) return value;
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        throw new Error(
+          `timed out waiting for ${typeof what === 'function' ? what() : String(what)}`,
+        );
+      };
+
+      const callsBefore = harness.localModelCalls.length;
+      try {
+        // The stored host epoch is compared *lexicographically* (`recoverAfterRestart`), and
+        // `runtime.executes-attempt` already recorded `e2e-host-…`: a later check must sort
+        // after it, so this one starts with `e2e-zz-g8-…`.
+        execution.start(`e2e-zz-g8-${String(Date.now())}`);
+        const sent = await harness.accepted(
+          'conversation.message.send',
+          {
+            conversationId: harness.conversationId,
+            body: `AGENTDEV-G8-TOOLBRIDGE please update ${SRC} and ${DOC}`,
+            attachmentIds: [],
+          },
+          { idempotencyKey: `e2e-g8-${String(Date.now())}` },
+        );
+        const workId = sent.workId;
+        await waitFor(
+          () =>
+            harness.store.events
+              .readAfter(0, { limit: 5_000 })
+              .some(
+                (event) => event.name === 'assessment.saved' && event.data['workId'] === workId,
+              ),
+          'the Chief assessment',
+        );
+        const professional = await waitFor(
+          () =>
+            harness.store.runs
+              .list({ where: 'work_id = ?', params: [workId] })
+              .find((run) => run.role !== 'chief'),
+          'the professional Run dispatched by the Chief',
+        );
+        // The Run reaches a **typed terminal state**, not `waiting_permission`: with no Task
+        // there was nothing a permission request could bind, and `ToolGrantService` refuses
+        // such a request instead of creating a pending Decision (G8 ruling).
+        const settled = await waitFor(
+          () => {
+            const current = harness.store.runs.find(professional.id);
+            if (current === undefined) return undefined;
+            return ['contract_violation', 'failed', 'completed', 'cancelled'].includes(
+              current.status,
+            )
+              ? current.status
+              : undefined;
+          },
+          () =>
+            [
+              `runs=${harness.store.runs
+                .list({ where: 'work_id = ?', params: [workId] })
+                .map((run) => `${run.role}:${run.status}`)
+                .join(',')}`,
+              `pending=${
+                harness.store.decisions.list({
+                  where: "work_id = ? AND kind = 'permission' AND state = 'pending'",
+                  params: [workId],
+                }).length
+              }`,
+              `logs=${spawnLog
+                .filter((line) => /grants|tool-handler|refused|contract/.test(line))
+                .slice(-8)
+                .join(' ~ ')}`,
+            ].join(' || '),
+        );
+        ensure(
+          settled === 'contract_violation' || settled === 'failed',
+          `the undispatched Run ended as ${settled} instead of a typed failure`,
+        );
+        ensure(
+          harness.store.decisions.list({
+            where: "work_id = ? AND kind = 'permission' AND state = 'pending'",
+            params: [workId],
+          }).length === 0,
+          'a permission Decision was left pending with nothing to bind',
+        );
+
+        const events = harness.store.events.readAfter(0, { limit: 10_000 });
+        const refusals = events.filter((event) => event.name === 'tool.refused');
+        const codes = refusals.map((event) => String(event.data['code']));
+        ensure(
+          codes.includes('CONTEXT_FORBIDDEN'),
+          `the out-of-readScope read was not refused with CONTEXT_FORBIDDEN (codes: ${codes.join(',')})`,
+        );
+        ensure(
+          codes.includes('GATE_NOT_READY'),
+          `the unapproved write was not refused by the Plan gate (codes: ${codes.join(',')})`,
+        );
+        ensure(
+          codes.includes('NOT_AUTHORIZED'),
+          `the read with no Grant was not refused with NOT_AUTHORIZED (codes: ${codes.join(',')})`,
+        );
+        const operations = harness.store.toolOperations.list({
+          where: 'run_id = ?',
+          params: [professional.id],
+        });
+        ensure(
+          !operations.some((operation) => operation.targets.includes(DOC)),
+          'a refused read left a tool_operation row behind',
+        );
+        // Zero side effects: the refused write changed nothing.
+        ensure(
+          storage.sha256(readFileSync(join(harness.repo, SRC), 'utf8')) === srcHashBefore,
+          'the refused write changed the source file',
+        );
+
+        // `AC-045`: the professional Run asked for another role — a Chief todo, no grandchild.
+        const runs = harness.store.runs.list({ where: 'work_id = ?', params: [workId] });
+        ensure(
+          runs.filter((run) => run.parentRunId === professional.id).length === 0,
+          'request_dispatch created a grandchild Run',
+        );
+        ensure(
+          events.some(
+            (event) =>
+              event.name === 'chief_action_required' && event.data['kind'] === 'request_dispatch',
+          ),
+          'request_dispatch produced no Chief todo',
+        );
+
+        // The role faces really offered to the model (the only stub is the model itself).
+        const bodies = harness.localModelCalls
+          .slice(callsBefore)
+          .map((raw) => JSON.parse(raw))
+          .map((parsed) => ({
+            tools: (parsed.tools ?? []).map((tool) => tool?.function?.name ?? tool?.name ?? ''),
+            text: JSON.stringify(parsed.messages ?? []),
+          }));
+        const chiefBodies = bodies.filter((entry) => entry.text.includes('AgentDev chief agent'));
+        const workerBodies = bodies.filter((entry) => !entry.text.includes('AgentDev chief agent'));
+        ensure(
+          chiefBodies.length >= 1 && workerBodies.length >= 1,
+          'the model saw no role request',
+        );
+        const chiefFace = chiefBodies[0].tools;
+        const workerFace = workerBodies[0].tools;
+        ensure(
+          !chiefFace.includes('bash') &&
+            !chiefFace.includes('write') &&
+            !chiefFace.includes('edit'),
+          `the Chief was offered a writing or shell tool: ${chiefFace.join(',')}`,
+        );
+        ensure(
+          workerFace.includes('bash') && workerFace.includes('edit') && workerFace.includes('read'),
+          `the professional Run was not offered its tools: ${workerFace.join(',')}`,
+        );
+
+        // The Attempt's tool process groups and Grants are closed when it ends.
+        await waitFor(
+          () =>
+            execution.grants.currentRunGrants(professional.id).length === 0 ? true : undefined,
+          'the Grant revocation',
+        );
+
+        return `G8 on the real path: message ${sent.messageId} → Chief assessment → professional Run ${professional.id} (${String(runs.length)} Runs, 0 grandchildren, settled ${settled}) through the real Broker: refused ${[...new Set(codes)].join('/')} (readScope, unapproved Plan, no Grant), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[${chiefFace.join(',')}] worker=[${workerFace.join(',')}]; Grants revoked when the Attempt ended`;
+      } finally {
+        await execution.stop();
+      }
+    },
+  );
 
   // ---- The real-browser drill (WP-12 T7a) -----------------------------------
 

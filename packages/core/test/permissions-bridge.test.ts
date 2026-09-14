@@ -160,6 +160,56 @@ describe('ToolGrantService', () => {
     return new Date(clock + seconds * 1_000).toISOString();
   }
 
+  it('refuses a permission request that could never be bound (G8)', () => {
+    const decisionsBefore = store.decisions.count();
+    // A path operation with no targets can never be matched by a Grant, so recording a
+    // pending Decision would park the Run in `waiting_permission` forever.
+    expect(() =>
+      service.requestPermission({
+        workId: WORK_ID,
+        runId: RUN_ID,
+        role: 'backend',
+        stage: 'develop-L2',
+        operation: 'read',
+        targets: [],
+        toolOperationId: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3dc001',
+        inputHash: 'a'.repeat(64),
+        expiresAt: new Date(clock + 600_000).toISOString(),
+      }),
+    ).toThrowError(ProtocolError);
+    expect(store.decisions.count()).toBe(decisionsBefore);
+    expect(store.runs.find(RUN_ID)?.status).toBe('running');
+  });
+
+  it('refuses a permission request for a Run whose role has no Task (G8)', () => {
+    const decisionsBefore = store.decisions.count();
+    // No Task means the role was never dispatched through an approved Plan, so no Grant can
+    // ever be minted: the request must be a typed refusal and the Run must keep running
+    // instead of stopping in `waiting_permission` with nothing a user could approve.
+    const refusal = (() => {
+      try {
+        service.requestPermission({
+          workId: WORK_ID,
+          runId: RUN_ID,
+          role: 'frontend',
+          stage: 'develop-L2',
+          operation: 'bash',
+          targets: [],
+          toolOperationId: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3dc002',
+          inputHash: 'a'.repeat(64),
+          expiresAt: new Date(clock + 600_000).toISOString(),
+        });
+        return null;
+      } catch (error) {
+        return error;
+      }
+    })();
+    expect(refusal).toBeInstanceOf(ProtocolError);
+    expect((refusal as ProtocolError).code).toBe('MISSING_CONTEXT');
+    expect(store.decisions.count()).toBe(decisionsBefore);
+    expect(store.runs.find(RUN_ID)?.status).toBe('running');
+  });
+
   it('mints the run file-scope Grants and cites a real Decision', () => {
     const result = service.ensureRunGrants({
       workId: WORK_ID,

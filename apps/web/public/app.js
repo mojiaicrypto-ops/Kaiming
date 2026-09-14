@@ -549,7 +549,12 @@
     const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     let socket;
     try {
-      socket = new WebSocket(`${scheme}//${window.location.host}/ws`);
+      // WP-12 T5 D-T5-5: the socket is bound to the page's project at handshake
+      // time, so a cursor can never be replayed against another project's stream.
+      const bound = shell.dataset.project
+        ? `?projectId=${encodeURIComponent(shell.dataset.project)}`
+        : '';
+      socket = new WebSocket(`${scheme}//${window.location.host}/ws${bound}`);
     } catch {
       showConnection('reconnecting');
       return;
@@ -970,7 +975,17 @@
     form.append('file', file, file.name);
     let response;
     try {
-      response = await fetch('/artifacts/upload', {
+      // Q6: artifact URLs carry the project explicitly under the single BFF origin.
+      // There is no fallback: without a project id the request is refused rather than
+      // routed from implicit "current project" state.
+      if (!shell || !shell.dataset.project) {
+        return {
+          ok: false,
+          error: { code: 'VALIDATION_ERROR', message: 'no project is bound to this page' },
+        };
+      }
+      const prefix = `/artifacts/${encodeURIComponent(shell.dataset.project)}`;
+      response = await fetch(`${prefix}/upload`, {
         method: 'POST',
         headers: { 'x-csrf-token': state.csrfToken || '' },
         body: form,
@@ -1358,7 +1373,15 @@
           );
           return;
         }
-        window.location.assign(`/artifacts/download/${answer.result.downloadToken}`);
+        if (!shell || !shell.dataset.project) {
+          showError('approveError', {
+            code: 'VALIDATION_ERROR',
+            message: 'no project is bound to this page',
+          });
+          return;
+        }
+        const prefix = `/artifacts/${encodeURIComponent(shell.dataset.project)}`;
+        window.location.assign(`${prefix}/download/${answer.result.downloadToken}`);
       });
     }
 

@@ -31,24 +31,26 @@ describe('Runner read ledger seal (AC-085, WP-12 R3-2d)', () => {
     const seal = ledger.seal();
     expect(seal.seq).toBe(2);
     expect(seal.hash).toMatch(/^[0-9a-f]{64}$/u);
-    expect(seal.hash).toBe(sealReadLedger([
-      {
-        seq: 1,
-        path: 'src/a.ts',
-        revision: 'a'.repeat(40),
-        hash: 'b'.repeat(64),
-        reason: 'the task named it',
-        bytes: 12,
-      },
-      {
-        seq: 2,
-        path: 'src/b.ts',
-        revision: 'a'.repeat(40),
-        hash: 'c'.repeat(64),
-        reason: 'followed the import',
-        bytes: 34,
-      },
-    ]).hash);
+    expect(seal.hash).toBe(
+      sealReadLedger([
+        {
+          seq: 1,
+          path: 'src/a.ts',
+          revision: 'a'.repeat(40),
+          hash: 'b'.repeat(64),
+          reason: 'the task named it',
+          bytes: 12,
+        },
+        {
+          seq: 2,
+          path: 'src/b.ts',
+          revision: 'a'.repeat(40),
+          hash: 'c'.repeat(64),
+          reason: 'followed the import',
+          bytes: 34,
+        },
+      ]).hash,
+    );
     // Idempotent, and a later read cannot rewrite a sealed Attempt.
     expect(ledger.seal()).toEqual(seal);
     ledger.record({

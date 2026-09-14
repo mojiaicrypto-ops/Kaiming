@@ -890,3 +890,154 @@ $ pnpm exec prettier --check <3 个文件> → All matched files use Prettier co
   其它切片并发修改（会整份报告拒收）；且真实密钥只存在于运行环境，本轮不把它写进命令/落盘。
   该路径与 T3b 用的是同一 `spawn`/`supervisor`/控制通道代码，已由上面的单测 + 整仓 integration + T3b 真实子进程验证覆盖；
   树稳定后应由持有密钥的一方重跑（README §环境变量）。
+
+---
+
+# 修复轮 6 · R6（G8「子进程回合内停摆」：定位结论 + 一条真实阻断的修复 + Runner 侧交接）
+
+## 结论一：流式转发（`gateway-http`/`model-gateway`/`transport-http`）**不是**触发点（有证据的否定）
+
+用**真实 Pi session**（`packages/pi-runtime/dist` 的 `PiSessionFactory`，即 Runner 走的同一条
+`createAgentSession` 路径）对着一个写出**逐字节等同** `gateway-http.ts` SSE 的桩网关，逐项变更一次：
+
+| 变体 | 观测 |
+|---|---|
+| `exact`（当前字节） | ~110ms 内 `toolcall_start/delta/end` → `tool_start` → `tool_end` |
+| `cjk` / `newline` / `emoji` / lone surrogate / U+2028 | 同上，全部正常 |
+| `badargs`（`{"path":` 非法 JSON）/ `emptyargs`（`{}`） | 同上，SDK 仍启动工具 |
+| `noindex` / `noid`（缺 `index`/`id`） | 同上 |
+| `notool`（工具名不在 allowlist） | 同上（工具启动后返回错误结果） |
+| `notext`（无 content，只有 tool_calls）/ `stopreason`（finish_reason=stop） | 同上 |
+| `nofinish`（缺 finish_reason chunk） | 无 `tool_start`，SDK 判 `Stream ended without finish_reason` 后**自愈重试**并完成 |
+| `nodone`（缺 `data: [DONE]`） | 同上，正常完成 |
+| `bigargs`（200KB 参数）、`calls=2`（多工具回合）、连续 4 个工具回合 | 全部正常，无停摆 |
+
+即：**工具调用增量、`[DONE]` 收尾、content 与 tool_calls 同块、多字节/代理对、坏参数、缺 id/index，
+都不是停摆原因**；我们这一侧的 SSE 形状与 SDK 的解析器完全兼容。
+
+一个重要的**观测盲区**（本轮补上）：daemon 侧从来不记录 Runner 的 `attempt.event` 消息，
+所以「日志里没有 `tool_start`/`tool_end`」**不能**证明子进程没发这些消息——只能证明 daemon 没记。
+R5 加的 spawn 侧可观测性正是为此；G8 复现时必须把 `createChildRunnerSpawnPort({ log })` 接到 stdout，
+否则「停摆」与「父进程没在读 stdout」无法区分。
+
+## 结论二（真实、可复现的阻断，已修）：纠正提示永远送不到 → Run 挂到超时
+
+### 复现（真 daemon + 真 `apps/runner` 子进程 + 真 Broker/控制通道，无播种；脚本把专业 Run 的第一回合改成纯文本）
+
+```
+runner[...] ← attempt.result (+5760ms) status=completed message=prompt completed
+runner[...] → attempt.steer (+5760ms)                      ← 修正提示写进去了
+supervisor: ... attempt ... delivered no structured result; corrective prompt sent
+runner[...] stdout EOF (+5778ms) after 15 message(s)       ← 子进程此时已经退出（18ms 之差）
+runner[...] exit code=0 signal=null (+5778ms)
+supervisor: parked ... as interrupted
+supervisor: ... runner exited (code 0, signal null) without a result
+→ 等待终态的 drill 超时（Run 永远不是 contract_violation）
+```
+
+### 机制
+
+1. `apps/runner` 的 `handle('attempt.prompt')`：`awaitIdle` → `awaitSubmission`（5s 宽限）→
+   `finish('completed','prompt completed')` → 先发 `attempt.result`，紧接着 `deps.exit(0)` =
+   `process.exit(0)`（`attempt.ts:317`/`406-412`）。
+2. supervisor 收到 `attempt.result` 才发 `attempt.steer`（`supervisor.ts` `correct()`），此时管道已随
+   进程退出关闭 → 写入被我的 R5 EPIPE 守卫吞掉，**没有任何人处理这次纠正**。
+3. `correct()` 清掉了 `entry.result`，于是子进程退出时 `handleExit` 走「无结果」分支 →
+   `park()`，Run 变成 `interrupted`（不可确认死亡时是 `recovery_required`），
+   **`protocol.md` §6 的「连续两次不合规 = contract_violation」永远不会发生**。
+4. 因为 `protocol.md` §6 要求「Run 等待提交提示」，而真实子进程在第一回合结束就退出，
+   这条产品路径在真 Runner 上**结构性不可达**：单测能过只是因为 `FakeRunner` 一直活着。
+
+### 本车道修复（`packages/core/src/supervisor.ts`）
+
+`handleExit` 增加一条**判据明确**的分支：`entry.correctionPending === true` **且** `exit.code === 0`
+（干净自退 = Runner 自己走完 `finish()`，不是崩溃）且 `reportContractViolation(entry)` 成功 →
+按第二次不合规处理（handler 记录 `contract_violation`，Attempt → `lost`，`reportSettled`），
+**不再 park**；非零退出码/信号仍走原来的 recovery park（不可确认死亡的丢失执行不能被伪造成产品裁决）。
+`reportContractViolation` 只上报事实并询问，返回「Run 真的进了终态」才认账，避免「没人记录的裁决看起来已结算」。
+
+真实复算：同一复现脚本，修复后 `T2-CV terminal=contract_violation`（6.8s，而非超时）。
+新增单测 2 例（`packages/core/test/supervisor.test.ts`）：干净退出 → `contract_violation` 且不重复纠正；
+退出码 1 → 仍 park（`SUPERVISOR_PARKED_STATUSES`）。
+
+### 交接 T3（`apps/runner/**`）：让纠正提示真的能落地（成对改动，别只做一半）
+
+- `apps/runner/src/attempt.ts`：非交付回合结束后**不要 `process.exit`**。`protocol.md` §6 的
+  「Run 等待提交提示」要求进程继续读 stdin；收到 `attempt.steer` 时 `session.steer(text)` 会开新回合，
+  第二次仍不合规时由 supervisor 侧记录 `contract_violation`。建议：`finish` 只发 `attempt.result`，
+  仅在 `this.delivered()` 为真、或收到 `attempt.abort`/`attempt.shutdown` 时退出。
+- 配套（本车道，随 T3 改动一起做）：supervisor 目前在结算后只 `live.delete`，
+  **不发 `attempt.shutdown`/不 terminate**；子进程若改为常驻，结算后必须由 supervisor 主动结束
+  （建议先发 `attempt.shutdown`、宽限后 SIGTERM），否则每次结算都会留下一个常驻 Runner 进程。
+  这条在今天的树下是 no-op（子进程已自行退出），所以可以和 T3 的改动一起落，避免半成品协议。
+
+## R6 回归（真实退出码）
+
+```
+$ pnpm typecheck          → exit 0（无诊断）
+$ pnpm test:unit          → 76 files / 1413 tests passed（exit 0）
+$ pnpm test:integration   → 见下（串行）
+$ node scripts/e2e.mjs    → 见下
+```
+
+## 结论三（**已定位到「卡在哪一步」**，域/Grant 车道，非流式转发）：第一个专业工具调用因「没有 Grant」被 NOT_AUTHORIZED 拒 → 权限请求 → Run 进 `waiting_permission` → 全程不可交付
+
+### 最小复现（3 秒，真 daemon 栈 + 真 Runner 子进程 + 真 Broker/控制通道；把 G8 的 loopback 脚本改成 `agent.dispatch` 版本即可）
+
+复现脚本（一次性探针，验完已删）在 T3b 的进程内栈上只改三件事：首席 turn1 改为 `agent_dispatch`（不调 `plan.approve`）、
+专业 turn 依次为 `read src/g8-notes.txt` / `read docs/g8-notes.md` / `write src/g8-notes.txt` / `request_dispatch` / `stage_yield`、
+fixture 用 `src/g8-notes.txt` + `docs/g8-notes.md`。观测（真实输出）：
+
+```
+execution: <professionalRunId> run grants created=0 existing=0
+  (MISSING_CONTEXT: Work <workId> has no Task for role backend; the role was never dispatched)
+refused=NOT_AUTHORIZED[backend:read:["src/g8-notes.txt"]], NOT_AUTHORIZED[backend:read:[]],
+        CONTEXT_FORBIDDEN[backend:read:[]], GATE_NOT_READY[backend:write:[]]
+invoked=(空)   ops=(空)   decisions=start:accepted, permission:pending
+runs=chief:completed, backend:interrupted   attempts=lost:1
+```
+
+`pnpm test:e2e` 的 `tool.broker-admission` 失败与此**逐条一致**（该检查的真实证据）：
+`refused=NOT_AUTHORIZED,NOT_AUTHORIZED,CONTEXT_FORBIDDEN,GATE_NOT_READY || runs=chief:completed,backend:interrupted || attempts=lost || ops=`
+（本轮给该检查补的 `runsAll/invoked/decisions/grantLogs/modelTurns` 诊断就是为此，见下）。
+
+### 因果链（每一步都有上面的日志/事件为证）
+
+1. 首席用**控制通道** `agent.dispatch` 派出专业 Run（这一步不经过 `plan.approve`）。
+2. `GrantService.ensureRunGrants` 的 Grant 是**按 Work 的 Task 行**发的（`packages/core/src/grants.ts:536-548`：
+   "A Grant is minted for a role the Work actually uses. The Task rows are the record of that"）。
+   没有批准的 Plan ⇒ `materializePlanTasks` 从未运行 ⇒ **没有 backend 的 Task** ⇒ `created=0`。
+3. 于是专业 Run 的**第一个工具调用**（范围内的 `read src/g8-notes.txt`）没有 read Grant → Broker 拒
+   **NOT_AUTHORIZED** → `tool-client.execute` 记一条权限请求 → `PermissionService.requestPermission` 把 Run 移入
+   **`waiting_permission`**（`packages/core/src/permissions.ts:364-374`）。
+4. 从 `waiting_permission` 起，后续每次调用都被拒且 `targets=[]`，`tool.invoked` 为空（Broker 一次都没真跑）、
+   `tool_operation` 无行、`stage.submit` 永远不可能被接受 ⇒ 检查「等专业阶段结果」超时。最后一轮 loopback 给纯文本 ⇒
+   非交付回合 ⇒ 子进程退出 ⇒ R6 的裁决分支如实拒绝伪造 `contract_violation`（`waiting_permission → contract_violation`
+   不是合法迁移），于是 Run 停在 `interrupted`。
+
+**所以「卡在哪一步」的确定结论：不是 SSE 未收尾、不是 tool_call 增量未闭合、不是工具结果未回传、也不是 SDK 在等事件——
+是专业 Run 没有 Grant，第一次 read 就被 NOT_AUTHORIZED 拒，随后被权限请求带入 `waiting_permission` 而永久无法交付。**
+（这一条也解释了 T3 说的「模型返回 1 个 tool_call 后什么都没有」：`tool_start`/`tool_end` 确实发生了，但 daemon 侧从不记录
+`attempt.event`，能看到的只有「控制通道没有 `tool.execute` / `stage.submit`」+ Run 卡在 `waiting_permission`。）
+
+### 修复建议（需 owner 裁决，属域/Grant 车道，不在本轮改动范围）
+
+- 若「控制通道派发的专业 Run（无批准 Plan）**可以读**授权范围内的文件」是产品意图：让 `ensureRunGrants` 在没有 Task 时
+  用 Run 冻结的 DispatchSpec/授权范围铸 read Grant（`grants.ts`），或给控制通道派发补一条 Task 行。
+- 后者今天被数据模型挡住：`taskSchema.planRef` 是**必填**（`packages/contracts/src/entities/work.ts:100`），
+  而控制通道派发没有 Plan 可引用 ⇒ 需要 `data.md` 的裁决（Task 是否必须有 Plan）。
+- 若产品意图是「没有批准 Plan 就不能读」，那么拒绝必须是**干净的终态**：不能既拒又记权限请求把 Run 送进
+  `waiting_permission`——没有用户的演练里那等于永久挂起（本次观测到的正是这个）。
+- G8 检查的 fixture 也可以像 T3b 那样先走一次 `plan.approve`（Task 自然生成），但那是产品口径问题，不是绕过。
+
+## 本轮改动（清理后）
+
+| 文件 | 改动 | 状态 |
+|---|---|---|
+| `packages/core/src/supervisor.ts` | R6：纠正提示后子进程**干净退出**（code 0）→ 记 `contract_violation`，非零/信号仍走 recovery park | typecheck/lint 干净，单测 29/29 |
+| `packages/core/test/supervisor.test.ts` | 上述两条单测（干净退出 vs 崩溃） | 同上 |
+| `apps/daemon/src/runner-spawn.ts` | `RUNNER_ENV_ALLOWLIST` 增加 `AGENTDEV_EXEC_IMAGE`（T3 请求：容器模式 `environmentRef` 报真实镜像） | 新增单测 5/5 |
+| `apps/daemon/test/runner-spawn.test.ts` | 新增：allowlist 不含凭据/`NODE_OPTIONS`、`redactRunnerArgv` 脱敏与空值可见 | 5/5 |
+| `scripts/e2e.mjs` | `tool.broker-admission` 超时诊断改为紧凑且可归因（`runsAll`/`invoked`/`decisions`/`grantLogs`/`modelTurns`），失败的检查自己说清根因 | e2e 仍 FAIL（域阻断未修），但证据可读 |
+
+一次性探针（`zz-t2sse.mjs`、`zz-t2cv*`、`zz-t2g8*`、`scripts/lib/e2e-checks.mjs` 的 `E2E_ONLY`）**已全部删除/回滚**，树不留红。

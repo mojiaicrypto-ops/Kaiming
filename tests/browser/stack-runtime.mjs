@@ -10,8 +10,10 @@
  * can never touch the operator's real `~/.agentdev`.
  */
 import { createServer } from 'node:http';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { createServer as createNetServer } from 'node:net';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 import { loadProduct } from '../../scripts/lib/e2e-runtime.mjs';
 import { WEB_ORIGIN, bootStack, seedWork } from '../../scripts/lib/e2e-stack.mjs';
@@ -212,6 +214,226 @@ function seedBrowserFixtures(harness, probeUrl) {
   };
 }
 
+/**
+ * A free loopback port, chosen by asking the OS and releasing it immediately.
+ *
+ * The single BFF has to be addressable by an exact origin (`protocol.md` §2), and the
+ * host learns its own origin only after it binds, so this fixture pins the port and
+ * tells the host which origin the browser will send (`webOrigins`). A tiny race with
+ * another process exists and is retried by {@link openSwitcherStack}.
+ */
+async function freePort() {
+  const server = createNetServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const port = typeof address === 'object' && address !== null ? address.port : 0;
+  await new Promise((resolve) => server.close(() => resolve()));
+  return port;
+}
+
+/** The six level-2 headings every `content.md` carries (`requirements.md` §6). */
+function requirementContent(title) {
+  return [
+    '<!-- record-version: 1 -->',
+    `# ${title}`,
+    '',
+    '## 目标与背景',
+    '浏览器切换演练：证明两个项目的页面、事件流与产物互不串。',
+    '',
+    '## 范围与行为',
+    '只经由真实协议命令写入；不插入任何数据库行。',
+    '',
+    '## 验收说明',
+    'AC-023 / AC-024 / AC-034：一个安装、一个入口、可切换、强隔离。',
+    '',
+    '## 已确认决定',
+    '无',
+    '',
+    '## 未决问题',
+    '无',
+    '',
+    '## 完成摘要',
+    '无',
+    '',
+  ].join('\n');
+}
+
+/**
+ * The two-project stack the G5 switcher spec drives (WP-12 T5.5).
+ *
+ * It is the **real host** (`startRuntime`): one installation home, one BFF, real
+ * per-project daemons and real SQLite. Both projects are created through the real
+ * `project.create` product path (real `git init`, initial commit and `agentdev/main`),
+ * and each receives a real Git-backed Requirement and a real user Artifact through the
+ * real `/rpc` and upload endpoints — **no seeded row is involved**, which is what the
+ * G5 spec needs to tell A and B apart.
+ */
+export async function openSwitcherStack() {
+  const { startRuntime } = await import('../../apps/daemon/src/main.ts');
+  const core = await import('@agentdev/core');
+  const base = mkdtempSync(join(tmpdir(), 'agentdev-browser-switch-'));
+  const home = join(base, 'home');
+  const port = await freePort();
+  const origin = `http://127.0.0.1:${String(port)}`;
+  const runtime = await startRuntime({
+    home,
+    roots: [],
+    execute: false,
+    daemonPort: 0,
+    webPort: port,
+    adminPort: 0,
+    webOrigins: [origin],
+    secretBackend: 'file',
+    trust: true,
+    log: () => undefined,
+  });
+  const webUrl = `http://${runtime.web.host}:${String(runtime.web.port)}`;
+  const adminUrl = `http://${runtime.admin.host}:${String(runtime.admin.port)}`;
+  const installationToken = core.readInstallationCredential(home);
+
+  const admin = async (body) => {
+    const response = await fetch(`${adminUrl}/projects`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${installationToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+
+  // Two brand-new projects, one per name, through `project.create`.
+  const definitions = [
+    { name: 'Alpha 项目', title: 'ALPHA-SWITCH-REQUIREMENT', file: 'alpha.md' },
+    { name: 'Beta 项目', title: 'BETA-SWITCH-REQUIREMENT', file: 'beta.md' },
+  ];
+  const created = [];
+  for (const definition of definitions) {
+    const root = join(base, `repo-${definition.file.replace('.md', '')}`);
+    mkdirSync(root, { recursive: true });
+    const answer = await admin({ action: 'create', root, name: definition.name });
+    if (answer.status !== 200 || answer.body.ok !== true) {
+      throw new Error(`project.create failed: ${JSON.stringify(answer.body)}`);
+    }
+    created.push({ definition, root, project: answer.body.project });
+  }
+
+  // One login for the whole installation (the spec asserts there is never a second).
+  const login = await fetch(`${webUrl}/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin },
+    body: JSON.stringify({ token: installationToken }),
+  });
+  if (!login.ok) throw new Error(`the switcher stack login failed with ${String(login.status)}`);
+  const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
+  const csrfToken = (await login.json()).csrfToken ?? '';
+
+  const rpc = async (projectId, method, params, idempotencyKey) => {
+    const response = await fetch(`${webUrl}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin, cookie },
+      body: JSON.stringify({
+        v: 1,
+        type: 'request',
+        id: `switch-${method}-${String(Date.now())}-${Math.random().toString(36).slice(2, 8)}`,
+        method,
+        projectId,
+        params,
+        ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+      }),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+
+  const projects = [];
+  for (const entry of created) {
+    const projectId = entry.project.projectId;
+    // A real Git-backed Requirement through `requirement.create`.
+    const requirementAnswer = await rpc(
+      projectId,
+      'requirement.create',
+      {
+        title: entry.definition.title,
+        goal: `${entry.definition.name} 的浏览器切换证据`,
+        scope: { readPaths: [], writePaths: [], operations: [], networkTargets: [] },
+        contentMarkdown: requirementContent(entry.definition.title),
+      },
+      `switch-requirement-${projectId}`,
+    );
+    if (requirementAnswer.body.ok !== true) {
+      throw new Error(`requirement.create failed: ${JSON.stringify(requirementAnswer.body)}`);
+    }
+    // A real user Artifact through the real upload + first-message path (AC-084).
+    const conversation = await rpc(projectId, 'conversation.create', {
+      title: `${entry.definition.name} 会话`,
+    });
+    if (conversation.body.ok !== true) {
+      throw new Error(`conversation.create failed: ${JSON.stringify(conversation.body)}`);
+    }
+    const conversationId = conversation.body.result.conversation.id;
+    const form = new FormData();
+    form.append('conversationId', conversationId);
+    form.append(
+      'file',
+      new Blob([`# ${entry.definition.title}\n`], { type: 'text/markdown' }),
+      entry.definition.file,
+    );
+    const uploaded = await fetch(`${webUrl}/artifacts/${projectId}/upload`, {
+      method: 'POST',
+      headers: { origin, cookie, 'x-csrf-token': csrfToken },
+      body: form,
+    });
+    if (uploaded.status !== 201) {
+      throw new Error(`upload answered ${String(uploaded.status)}: ${await uploaded.text()}`);
+    }
+    const attachment = await uploaded.json();
+    const sent = await rpc(
+      projectId,
+      'conversation.message.send',
+      { conversationId, body: entry.definition.title, attachmentIds: [attachment.attachmentId] },
+      `switch-message-${projectId}`,
+    );
+    if (sent.body.ok !== true) {
+      throw new Error(`conversation.message.send failed: ${JSON.stringify(sent.body)}`);
+    }
+    const workId = sent.body.result.workId;
+    const artifacts = await rpc(projectId, 'artifact.list', { workId });
+    const artifact = (artifacts.body.result?.items ?? []).find((item) => item.origin === 'user');
+    if (artifact === undefined) throw new Error('the message produced no user Artifact');
+    const prepared = await rpc(projectId, 'artifact.download.prepare', {
+      artifactId: artifact.id,
+    });
+    const downloadToken = prepared.body.result?.downloadToken;
+    if (typeof downloadToken !== 'string') {
+      throw new Error(`artifact.download.prepare failed: ${JSON.stringify(prepared.body)}`);
+    }
+    // The real Requirement id, read back from the real projection.
+    const listed = await rpc(projectId, 'requirement.list', {});
+    const requirement = (listed.body.result?.items ?? []).find(
+      (item) => item.title === entry.definition.title,
+    );
+    if (requirement === undefined) throw new Error('requirement.create produced no row');
+    projects.push({
+      projectId,
+      name: entry.definition.name,
+      root: entry.root,
+      requirementId: requirement.id,
+      requirementTitle: entry.definition.title,
+      artifactId: artifact.id,
+      downloadToken,
+      workId,
+      conversationId,
+    });
+  }
+
+  return {
+    webUrl,
+    webOrigin: origin,
+    installationToken,
+    stateDir: home,
+    projects,
+    close: () => runtime.stop(),
+  };
+}
+
 let state = null;
 
 /** Boots the real stack once and writes the fixture file the specs read. */
@@ -232,6 +454,9 @@ export async function openBrowserStack() {
   process.env.AGENTDEV_HOME = harness.stateDir;
   const probe = await startAttackProbe();
   const seeded = seedBrowserFixtures(harness, probe.url);
+  // The G5 switcher spec drives its own real host (two projects, one BFF); it boots
+  // here so the browser suite pays for it once and closes it in teardown.
+  const switcher = await openSwitcherStack();
   const fixture = {
     webUrl: harness.webUrl,
     webOrigin: WEB_ORIGIN,
@@ -245,10 +470,17 @@ export async function openBrowserStack() {
     probeUrl: probe.url,
     playwrightVersion: process.env.AGENTDEV_BROWSER_VERSION ?? 'unknown',
     ...seeded,
+    switcher: {
+      webUrl: switcher.webUrl,
+      webOrigin: switcher.webOrigin,
+      installationToken: switcher.installationToken,
+      stateDir: switcher.stateDir,
+      projects: switcher.projects,
+    },
   };
   mkdirSync(dirname(FIXTURE_PATH), { recursive: true });
   writeFileSync(FIXTURE_PATH, `${JSON.stringify(fixture, null, 2)}\n`, 'utf8');
-  state = { harness, probe, fixture };
+  state = { harness, probe, switcher, fixture };
   return state;
 }
 
@@ -258,5 +490,6 @@ export async function closeBrowserStack() {
   const current = state;
   state = null;
   await current.probe.close();
+  await current.switcher.close();
   await current.harness.close();
 }

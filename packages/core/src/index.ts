@@ -21,6 +21,8 @@ export * from './transport-http.js';
 export * from './execution.js';
 export * from './supervisor.js';
 export * from './settlement.js';
+export * from './task-candidate.js';
+export * from './integrate.js';
 export * from './snapshots.js';
 export * from './toml.js';
 export * from './config.js';

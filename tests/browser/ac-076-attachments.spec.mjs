@@ -24,8 +24,11 @@ async function composerHarness(page, fixture) {
   await openPage(page, fixture, `/projects/${fixture.projectId}/chief`);
   await expect(page.locator('#composerAttachments')).toBeAttached();
   const uploads = [];
+  // Q6: the upload URL is project-scoped; an unscoped `/artifacts/upload` no longer
+  // exists, so the exact scoped path is what this recorder must observe.
+  const uploadPath = `/artifacts/${fixture.projectId}/upload`;
   page.on('request', (request) => {
-    if (request.url().includes('/artifacts/upload')) uploads.push(request.url());
+    if (new URL(request.url()).pathname === uploadPath) uploads.push(request.url());
   });
   return uploads;
 }

@@ -33,6 +33,7 @@ import {
   workWriterLeaseResource,
 } from '../src/tool-handler.js';
 import { ProjectStore as Store, projectIdFromRoot, type ProjectStore } from '@agentdev/storage';
+import { toolInputHash } from '../../runner/src/tool-client.js';
 
 const WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3da000';
 const RUN_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3da010';
@@ -63,6 +64,7 @@ describe('daemon tool handler', () => {
   let grants: GrantStore;
   let broker: Broker;
   let readLedgers: ReadLedgerRegistry;
+  let grantService: ToolGrantService;
   let handler: ReturnType<typeof createToolHandler>;
   let clock: number;
 
@@ -160,7 +162,7 @@ describe('daemon tool handler', () => {
       docker: () => ({ available: true, version: '28.4.0' }),
       resolver: { resolve: () => Promise.resolve({ ok: false, reason: 'no network in tests' }) },
     });
-    const grantService = new ToolGrantService({
+    grantService = new ToolGrantService({
       store,
       grants,
       now: () => new Date(clock).toISOString(),
@@ -256,7 +258,7 @@ describe('daemon tool handler', () => {
     ).rejects.toMatchObject({ code: 'NOT_AUTHORIZED' });
   });
 
-  it('refuses a tool the role does not hold before consulting the Grant', async () => {
+  it('refuses a tool the role does not hold before consulting the Grant (AC-048)', async () => {
     await expect(
       handler.execute({
         caller: { runId: RUN_REVIEW, attemptId: ATTEMPT_REVIEW, epoch: 1, role: 'review' },
@@ -437,7 +439,7 @@ describe('daemon tool handler', () => {
     ).toThrowError(/review runs do not hold the bash tool/);
   });
 
-  it('pins Review calls to the container even under a host policy (execution.md §1)', async () => {
+  it('pins Review calls to the container even under a host policy (AC-050)', async () => {
     // No Docker: the documented outcome is a refusal, never a host-side fallback for an
     // independent verification role.
     const noDocker = createToolHandler({
@@ -494,7 +496,7 @@ describe('daemon tool handler', () => {
     expect(again.ledger?.seq).toBe(2);
   });
 
-  it('refuses a read outside the Attempt readScope at admission, leaking nothing', async () => {
+  it('refuses a read outside the Attempt readScope at admission, leaking nothing (AC-032/AC-048)', async () => {
     // `README.md` sits outside the Run's frozen `(role, stage)` read scope (the Project's
     // `codeRoot` is `src`, `documentRoot` is `docs`) even though the Work's own Grant covers
     // it. `context.md` §1: such a read is refused and travels to Chief as
@@ -523,6 +525,129 @@ describe('daemon tool handler', () => {
     expect(readLedgers.entries(ATTEMPT_A)).toHaveLength(0);
     expect(readLedgers.binding(ATTEMPT_A)).toEqual(emptyReadLedgerBinding());
     expect(readLedgers.degradedReason(ATTEMPT_A)).toBeUndefined();
+  });
+
+  it('admits an environment operation only after its exact approval (AC-049)', async () => {
+    const opId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3da700';
+    const args = { command: 'echo approved-by-the-user' };
+    const inputHash = toolInputHash(args);
+    const bashCall = { toolName: 'bash', args, toolOperationId: opId, timeoutMs: 120_000 };
+
+    // 1. No Grant yet: the real Broker refuses and nothing is executed or recorded.
+    await expect(
+      handler.execute({ caller: backendCaller, request: bashCall }),
+    ).rejects.toMatchObject({ code: 'NOT_AUTHORIZED' });
+    expect(store.toolOperations.count()).toBe(0);
+
+    // 2. The Runner's own refusal path asks for permission; the Run parks. The binding is the
+    //    exact operation/hash the refused call used, never a caller-supplied one.
+    const asked = grantService.requestPermission({
+      workId: WORK_ID,
+      runId: RUN_ID,
+      role: 'backend',
+      stage: 'develop-L2',
+      operation: 'bash',
+      targets: [],
+      toolOperationId: opId,
+      inputHash,
+      expiresAt: new Date(clock + 600_000).toISOString(),
+    });
+    expect(asked.state).toBe('pending');
+    expect(asked.runStatus).toBe('waiting_permission');
+    expect(store.decisions.find(asked.decisionId)?.targetRef.id).toBe(opId);
+
+    // 3. The user approves **this** operation with one call allowed.
+    const approved = grantService.approvePermission({
+      decisionId: asked.decisionId,
+      operation: 'bash',
+      runId: RUN_ID,
+      role: 'backend',
+      stage: 'develop-L2',
+      targets: [],
+      toolOperationId: opId,
+      inputHash,
+      expiresAt: new Date(clock + 600_000).toISOString(),
+      scope: 'once',
+      limits: { maxCalls: 1 },
+    });
+    expect(approved.state).toBe('accepted');
+    expect(approved.grant).toBeDefined();
+    expect(store.runs.find(RUN_ID)?.status).toBe('running');
+
+    // 4. The bound retry really runs through the Broker.
+    const outcome = await handler.execute({ caller: backendCaller, request: bashCall });
+    expect(outcome.operation).toBe('bash');
+    expect(outcome.mode).toBe('host');
+    expect(outcome.toolOperation.state).toBe('finished');
+    expect(JSON.stringify(outcome.result)).toContain('approved-by-the-user');
+
+    // 5. The same operation id and hash replays its recorded result instead of running again.
+    const replay = await handler.execute({ caller: backendCaller, request: bashCall });
+    expect(replay.toolOperation.id).toBe(outcome.toolOperation.id);
+    expect(store.toolOperations.list({ where: 'run_id = ?', params: [RUN_ID] })).toHaveLength(1);
+
+    // 6. The binding is exact: another input on the same id and another operation id are both
+    //    refused (`once` binds one operation, `inputHash` binds one input).
+    await expect(
+      handler.execute({
+        caller: backendCaller,
+        request: { ...bashCall, args: { command: 'echo something-else' } },
+      }),
+    ).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+    // The consumed `once` Grant cannot be reused by another operation either: the Broker
+    // reports the consumption instead of running the new call, and writes no operation row.
+    const otherOp = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3da702';
+    await expect(
+      handler.execute({
+        caller: backendCaller,
+        request: { toolName: 'bash', args, toolOperationId: otherOp, timeoutMs: 120_000 },
+      }),
+    ).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
+    expect(store.toolOperations.find(otherOp)).toBeUndefined();
+  });
+
+  it('enforces an approved Grant limit with BUDGET_EXCEEDED (AC-049)', async () => {
+    // The **only** Grant for `bash` is the approved one below, and it allows no calls: the
+    // call is admitted by the Grant's operation but refused by its `limits`, so the tool
+    // never runs.
+    const opId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3da710';
+    const args = { command: 'echo must-not-run' };
+    const decision = store.decisions.insert({
+      id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3da711',
+      projectId: projectIdFromRoot(workspace),
+      workId: WORK_ID,
+      kind: 'permission',
+      targetRef: { id: opId, version: 1, hash: toolInputHash(args) },
+      choices: ['approve', 'deny'],
+      state: 'pending',
+      actor: 'user',
+      effectRefs: [],
+    });
+    const approved = grantService.approvePermission({
+      decisionId: decision.id,
+      operation: 'bash',
+      runId: RUN_ID,
+      role: 'backend',
+      stage: 'develop-L2',
+      targets: [],
+      toolOperationId: opId,
+      inputHash: toolInputHash(args),
+      expiresAt: new Date(clock + 600_000).toISOString(),
+      scope: 'run',
+      limits: { maxCalls: 0 },
+    });
+    expect(approved.grant).toBeDefined();
+    await expect(
+      handler.execute({
+        caller: backendCaller,
+        request: { toolName: 'bash', args, toolOperationId: opId, timeoutMs: 120_000 },
+      }),
+    ).rejects.toMatchObject({ code: 'BUDGET_EXCEEDED' });
+    expect(
+      store.toolOperations
+        .list({ where: 'run_id = ?', params: [RUN_ID] })
+        .filter((operation) => operation.targets.includes('must-not-run')),
+    ).toHaveLength(0);
   });
 
   it('records a refused read as an out-of-scope request instead of dropping it', async () => {

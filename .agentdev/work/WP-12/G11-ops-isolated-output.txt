@@ -1,0 +1,9 @@
+ops: credentialed Chief Run reached attempt.ready
+ops: backup (run live)
+ops: stop + damage + restore
+ops: restart + protocol query
+ops: fresh installation (blocked -> set -> rotate)
+ops: relocate (fail-closed + alias)
+ops: doctor
+ops: launchd unit
+PASS       ops.backup-restore                             [AC-064] credentialed Provider provider:01a0a079-64b4-7a60-9376-ef0c28169c10 -> Chief Run 01a0a079-64ef-7a75-b82a-56e0b5193914 reached attempt.ready (Attempt 01a0a079-6846-7044-a4b2-93cbc367e884 running) and …

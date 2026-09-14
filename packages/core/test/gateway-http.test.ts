@@ -421,7 +421,11 @@ describe('model gateway proxy', () => {
     const tools = [
       {
         type: 'function',
-        function: { name: 'assessment_submit', description: 'submit the assessment', parameters: {} },
+        function: {
+          name: 'assessment_submit',
+          description: 'submit the assessment',
+          parameters: {},
+        },
       },
     ];
     const response = await fetch(`${proxy.url}/chat/completions`, {

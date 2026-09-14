@@ -14,6 +14,7 @@
  * `packages/core/src/runtime.ts` (daemon side) and `apps/cli/src/runtime.ts` (CLI
  * side); this module stays pure.
  */
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 /** Environment variable that relocates the whole installation state directory. */
@@ -43,6 +44,14 @@ export const RUNTIME_FILES = {
   epoch: 'daemon.epoch',
   /** Registry of the Git roots this installation serves. */
   projects: 'projects.json',
+  /**
+   * Per-Git-root lock files (`reliability.md` §7, WP-12 T5).
+   *
+   * The lock lives under the installation home, never inside the user's repository:
+   * a second installation serving the same root is refused with the holder recorded
+   * here rather than by writing a marker into someone else's working tree.
+   */
+  locks: 'locks',
   /** Global configuration (`ARCHITECTURE.md` §5). */
   config: 'config.toml',
   /** Log directory; one file per project plus `daemon.log`. */
@@ -71,6 +80,15 @@ export const projectRegistryEntrySchema = z
   .object({
     root: z.string().min(1),
     projectId: hexIdSchema,
+    /**
+     * The user-facing name `project.create` supplied (WP-12 T5, Q1).
+     *
+     * It lives here rather than in the `project` table: the registry is the
+     * installation-level navigation index, the name is a navigation fact, and adding a
+     * column to every Project's database would need a migration for a label. Absent
+     * means "no explicit name", which the summary renders as the root's basename.
+     */
+    name: z.string().min(1).optional(),
     addedAt: z.string().min(1),
     lastOpenedAt: z.string().min(1),
   })
@@ -157,6 +175,8 @@ export interface RuntimePaths {
   readonly config: string;
   readonly logs: string;
   readonly projectsDir: string;
+  /** Directory holding one `PROJECT_LOCK`-named file per served Git root (WP-12 T5). */
+  readonly locks: string;
 }
 
 /** Builds the path set of one runtime home. */
@@ -173,7 +193,19 @@ export function runtimePaths(home: string): RuntimePaths {
     config: join(RUNTIME_FILES.config),
     logs: join(RUNTIME_FILES.logs),
     projectsDir: join(RUNTIME_FILES.projectsDir),
+    locks: join(RUNTIME_FILES.locks),
   };
+}
+
+/**
+ * File name of the per-Git-root lock (`reliability.md` §7, WP-12 T5).
+ *
+ * The name is `sha256(canonicalRoot)` so two installations derive the same name from
+ * the same repository without a shared registry, and no path spelling (trailing
+ * separator, symlink, subdirectory) can produce a second lock for one repository.
+ */
+export function projectLockFileName(canonicalRoot: string): string {
+  return `${createHash('sha256').update(canonicalRoot).digest('hex')}.lock`;
 }
 
 /** State directory of one project (`project.sqlite`, blobs and worktrees live here). */

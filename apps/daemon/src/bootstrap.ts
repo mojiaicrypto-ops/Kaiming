@@ -28,13 +28,16 @@ import {
   RequirementContinuation,
   SettlementService,
   SnapshotWriter,
+  createIntegrateService,
   createRequirementSaveService,
   resolveProjectIdentity,
+  type IntegrateService,
   type RequirementSaveService,
   type SecretRepository,
   type SecretStore,
 } from '@agentdev/core';
 import type { RuntimeHost, TrustState } from '@agentdev/contracts';
+import type { ProjectDirectoryPort } from '@agentdev/web';
 import { BlobStore, ProjectStore } from '@agentdev/storage';
 import {
   createCasService,
@@ -69,6 +72,24 @@ export interface OpenProjectOptions {
    */
   readonly secrets?: SecretStore;
   readonly secretRepository?: SecretRepository;
+  /**
+   * The installation project directory (WP-12 T5).
+   *
+   * The host owns it, so the protocol's `project.*` commands answer for the whole
+   * installation instead of inventing a second runtime inside this project
+   * (`ARCHITECTURE.md` §4). Omitted by the headless drills, which open exactly one
+   * project and never call a lifecycle command.
+   */
+  readonly projectDirectory?: ProjectDirectoryPort;
+  /**
+   * Diagnostic sink for background protocol work.
+   *
+   * Without it a refused background hand-off (a `plan.approve` that cannot queue
+   * its professional Run, a `provider.test` probe) is silent; the host passes its
+   * own log so the fact is at least visible. Visibility is not a fix: the semantic
+   * end state is guaranteed by the command itself (a typed error or a real Run).
+   */
+  readonly log?: (line: string) => void;
   /** 0 asks the OS for a free port, which is what tests use. */
   readonly daemonPort?: number;
   readonly webPort?: number;
@@ -115,6 +136,13 @@ export interface ControlHandlerServices {
   readonly events: EventHub;
   readonly artifacts: ArtifactService;
   readonly requirementSaves: RequirementSaveService;
+  /**
+   * The two halves of the L2 delivery chain the settle trigger drives
+   * (`reliability.md` §4/§9): the integration that installs the candidate and the
+   * settlement that binds it and commits the completed Requirement.
+   */
+  readonly integrate: IntegrateService;
+  readonly settlement: SettlementService;
 }
 
 /** A project that cannot be opened, with the reason the CLI prints. */
@@ -232,7 +260,7 @@ export async function openProject(options: OpenProjectOptions): Promise<OpenedPr
   // so a later stage (the supervisor) can settle through the same instance. The
   // requirement-pool save path is injected so a settled completion is committed to
   // Git instead of only flipping the SQLite projection (`protocol.md` §8).
-  new SettlementService({
+  const settlement = new SettlementService({
     store,
     worktrees: gitPort,
     cas,
@@ -241,6 +269,20 @@ export async function openProject(options: OpenProjectOptions): Promise<OpenedPr
     snapshots,
     lock,
     requirementSaves,
+  });
+  // The Accept/Integrate step (`reliability.md` §4) over the *same* Git port, CAS and
+  // shared integration lock the settlement and the requirement save use, so the delivery
+  // ref has exactly one writer path (`AC-012`).
+  const integrate = createIntegrateService({
+    store,
+    worktrees: gitPort,
+    cas,
+    lock,
+    projectId: identity.projectId,
+    repoRoot: identity.canonicalRoot,
+    worktreeRoot: join(dataDir, 'task-worktrees'),
+    snapshots,
+    ...(options.log === undefined ? {} : { log: options.log }),
   });
 
   const protocol = new WorkbenchProtocol({
@@ -260,11 +302,16 @@ export async function openProject(options: OpenProjectOptions): Promise<OpenedPr
     // The same real `git` port the save path uses, so the board's branch/commit/
     // unpushed facts come from Git rather than from a second reader (AC-090).
     requirementGit: gitPort,
+    ...(options.log === undefined ? {} : { log: options.log }),
     ...(options.secrets === undefined ? {} : { secrets: options.secrets }),
     ...(options.secretRepository === undefined
       ? {}
       : { secretRepository: options.secretRepository }),
   });
+
+  if (options.projectDirectory !== undefined) {
+    protocol.attachProjectDirectory(options.projectDirectory);
+  }
 
   const daemonOptions: DaemonOptions = {
     projectId: identity.projectId,
@@ -310,7 +357,7 @@ export async function openProject(options: OpenProjectOptions): Promise<OpenedPr
     snapshots,
     blobs,
     git: gitPort,
-    services: { events, artifacts, requirementSaves },
+    services: { events, artifacts, requirementSaves, integrate, settlement },
     daemon,
     web,
     ports: { daemon: daemonPort, web: webPort },

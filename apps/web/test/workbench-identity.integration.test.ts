@@ -192,7 +192,7 @@ async function startIdentityHarness(): Promise<IdentityHarness> {
       const form = new FormData();
       form.append('conversationId', CONVERSATION_ID);
       form.append('file', new Blob([body], { type: 'text/markdown' }), 'notes.md');
-      return fetch(`${baseUrl}/artifacts/upload`, {
+      return fetch(`${baseUrl}/artifacts/${projectId}/upload`, {
         method: 'POST',
         headers: { origin: WEB_ORIGIN, cookie },
         body: form,

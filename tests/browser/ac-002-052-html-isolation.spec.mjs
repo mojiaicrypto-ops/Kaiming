@@ -78,7 +78,10 @@ test.describe('AC-002 / AC-052 HTML 产物隔离预览', () => {
     const downloaded = readFileSync(downloadPath, 'utf8');
     expect(downloaded).toContain(PREVIEW_MARKER);
     expect(downloaded).toContain('attack-results');
-    expect(download.url()).toContain('/artifacts/download/');
+    // Q6: the download URL names the project explicitly and carries the one-time token.
+    expect(new URL(download.url()).pathname).toMatch(
+      new RegExp(`^/artifacts/${fixture.projectId}/download/[^/]+$`, 'u'),
+    );
     // …and the token is consumed exactly once: replaying the same URL is refused.
     const replay = await context.request.get(download.url());
     expect(replay.status()).toBe(403);
@@ -94,7 +97,7 @@ test.describe('AC-002 / AC-052 HTML 产物隔离预览', () => {
     const evidence = [
       `artifact ${fixture.htmlArtifactId} 在 ${fixture.requirementPath} 渲染于 sandbox="${sandbox}" 的 iframe`,
       `预览响应 200 CSP[default-src 'none'; connect-src 'none'] x-agentdev-preview-sandbox=allow-scripts x-agentdev-preview-credentials=omit content-type=${String(headers['content-type'])}`,
-      `下载下载字节含 ${PREVIEW_MARKER}，URL ${new URL(download.url()).pathname.replace(/\/[^/]+$/u, '/<token>')}，重放同 token 被拒绝 403`,
+      `下载字节含 ${PREVIEW_MARKER}，URL ${new URL(download.url()).pathname.replace(/\/[^/]+$/u, '/<token>')}（项目范围显式），重放同 token 被拒绝 403`,
       `临时项目 HEAD=${gitRevision(fixture.repoRoot).slice(0, 12)}（未变）且 git status 为空`,
     ].join('；');
     await testInfo.attach('evidence', { body: evidence, contentType: 'text/plain' });

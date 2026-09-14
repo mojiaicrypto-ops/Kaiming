@@ -406,6 +406,29 @@ export interface BridgeDependencies {
   readonly timers?: Timers;
   readonly backoff?: BackoffPolicy;
   readonly maxReconnectAttempts?: number;
+  /**
+   * The project this connection is bound to (WP-12 T5 D-T5-5).
+   *
+   * Every resume (`project.subscribe`) and every Project method without an explicit
+   * `projectId` is sent with this id, so the subscription cursor can never be
+   * interpreted against another project's event stream.
+   */
+  readonly projectId?: string;
+}
+
+/** Installation-level methods a bridge never scopes with its bound project. */
+function isInstallationMethodForBridge(method: string): boolean {
+  return (
+    method === 'connection.hello' ||
+    method === 'project.list' ||
+    method === 'projects' ||
+    method === 'project.open' ||
+    method === 'project.create' ||
+    method === 'project.clone' ||
+    method === 'project.trust' ||
+    method === 'project.close' ||
+    method === 'project.initialize'
+  );
 }
 
 const DEFAULT_BRIDGE_BACKOFF: BackoffPolicy = {
@@ -430,6 +453,7 @@ export class BridgeConnection {
   private readonly timers: Timers;
   private readonly backoff: BackoffPolicy;
   private readonly maxAttempts: number;
+  private readonly defaultProjectId: string | undefined;
   private halted = false;
   private started = false;
   private attempt = 0;
@@ -444,6 +468,7 @@ export class BridgeConnection {
     this.socket = socket;
     this.target = target;
     this.dependencies = dependencies;
+    this.defaultProjectId = dependencies.projectId;
     this.transport =
       dependencies.transport ??
       new WebSocketTransport({
@@ -520,7 +545,13 @@ export class BridgeConnection {
       return;
     }
     const params = asObject(envelope.params);
-    const projectId = typeof envelope.projectId === 'string' ? envelope.projectId : undefined;
+    // WP-12 T5 D-T5-5/D-T5-6: the connection is bound to one project at handshake
+    // time, and a Project method that named none is completed with that binding. The
+    // daemon still validates `projectId === this.projectId`, so this makes the
+    // routing explicit on the wire; it never widens what the connection may observe.
+    const named = typeof envelope.projectId === 'string' ? envelope.projectId : undefined;
+    const projectId =
+      named ?? (isInstallationMethodForBridge(method) ? undefined : this.defaultProjectId);
     // The bridge is a transport, not a translation layer: the browser's write
     // semantics travel with its frame, so a write over `/ws` reaches the daemon
     // with the same idempotency key and expected version as one over `/rpc`
@@ -570,13 +601,14 @@ export class BridgeConnection {
       const resumeFrom = Math.max(tracked.watermark, tracked.browserCursor);
       tracked.awaitingId = localId;
       try {
+        const projectId = tracked.projectId ?? this.defaultProjectId;
         this.transport.send(
           JSON.stringify({
             v: 1,
             type: 'request',
             id: localId,
             method: 'project.subscribe',
-            ...(tracked.projectId === undefined ? {} : { projectId: tracked.projectId }),
+            ...(projectId === undefined ? {} : { projectId }),
             params: {
               scope: tracked.scope,
               ...(resumeFrom > 0 ? { afterCursor: resumeFrom } : {}),
@@ -794,6 +826,8 @@ export function handleUpgrade(input: {
   readonly socket: Duplex;
   readonly target: DaemonTarget;
   readonly authorized: boolean;
+  /** The project this connection is bound to (WP-12 T5). */
+  readonly projectId?: string;
   readonly refusalReason?: string;
   readonly dependencies?: BridgeDependencies;
 }): boolean {
@@ -820,7 +854,10 @@ export function handleUpgrade(input: {
     onMessage: (text) => holder.current?.accept(text),
     onClose: () => holder.current?.stop(),
   });
-  const connection = new BridgeConnection(socket, input.target, input.dependencies ?? {});
+  const connection = new BridgeConnection(socket, input.target, {
+    ...(input.dependencies ?? {}),
+    ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+  });
   holder.current = connection;
   connection.start();
   return true;

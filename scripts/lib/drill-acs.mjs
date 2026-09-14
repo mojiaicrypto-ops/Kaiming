@@ -131,6 +131,33 @@ export const RESIDUAL_GAPS = Object.freeze({
     decision: 'WP-10 plan.md §2 D2',
     gap: '真实模型结算后的知识更新与冷启动由 `pnpm test:live` 的 L2 演练覆盖；未配置 Provider 时为 UNVERIFIED，提交测试只证明投影与冷启动规则。',
   },
+  // WP-12 G4 (`chief.message-to-stage`): the no-seed message→Chief→dispatch→stage chain is
+  // executed offline by `pnpm test:e2e` (application layer, loopback model) *and* by
+  // `pnpm test:live` with the real model. Without a configured Provider the live half is
+  // UNVERIFIED, so these ACs carry the same accepted gap shape as AC-001/007/010/037/041;
+  // the offline drill is already a per-AC PASS row and is named here so the gap cannot hide
+  // a drill that failed.
+  'AC-003': {
+    condition: 'provider-absent',
+    closedBy: 'pnpm test:live',
+    decision:
+      'WP-10 plan.md §2 D2（真实 Provider 由用户提供；未提供时该 AC 的真实模型那一半保持 UNVERIFIED）；离线产品路径由 pnpm test:e2e 的 chief.message-to-stage（真 daemon + 真 Runner 子进程 + 回环桩）与 apps/daemon/test/assessment-dispatch.integration.test.ts 覆盖',
+    gap: '真实模型下的“一句话 → Chief 评估 → 派发”未执行；离线演练与提交用例只证明真实协议/控制端点/监督器链与派生授权。',
+  },
+  'AC-005': {
+    condition: 'provider-absent',
+    closedBy: 'pnpm test:live',
+    decision:
+      'WP-10 plan.md §2 D2；离线产品路径由 pnpm test:e2e 的 chief.message-to-stage（真实 message→Work→授权→Requirement）覆盖',
+    gap: '真实模型下“用户明确指令才派生授权”的判断未执行；离线演练证明授权确实来自消息且未授权不建交付。',
+  },
+  'AC-069': {
+    condition: 'provider-absent',
+    closedBy: 'pnpm test:live',
+    decision:
+      'WP-10 plan.md §2 D2；离线产品路径由 pnpm test:e2e 的 chief.message-to-stage 与 chief.routes-message 覆盖',
+    gap: '真实模型下的消息路由（只读询问 vs 交付）未执行；离线演练与提交用例证明路由规则与真实协议行。',
+  },
   'AC-043': {
     condition: 'review-model-absent',
     closedBy: 'pnpm test:live',
@@ -172,13 +199,6 @@ export const RESIDUAL_GAPS = Object.freeze({
     decision:
       'WP-12 R3-3：`drill.session-streaming` 用真实 Provider 关闭该缺口（真实 Pi 会话经 Core gateway 产出流式 text_delta；新 factory 复用同一 session 文件与会话 id 并继续追加记录）。仅在未配置 AGENTDEV_PROVIDER_* 时保持 UNVERIFIED。',
     gap: '真实 Provider 下的一轮 Pi SDK 会话（流式增量与会话历史恢复）尚未执行；配置 AGENTDEV_PROVIDER_* 后由 `pnpm test:live` 的 `drill.session-streaming` 关闭。',
-  },
-  'AC-090': {
-    condition: 'recorded-gap',
-    residual: 'WP-10-D4/AC-090',
-    decision:
-      'WP-10 plan.md §2 D4（用户确认）：接受为已登记缺口，界面侧的“分支/提交/未推送状态”展示未实现',
-    gap: 'AC-090 的 Git 侧与投影侧已由真实临时仓库、真实 SQLite 与 e2e 演练证明（原子提交两文件、recordVersion/recordHash、saveState 仅在与投影一致后为 saved、retry 恢复原操作、e2e 断言 git.unpushed=true）；但 Web 界面尚未渲染“分支、提交与未推送状态”（`apps/web/src` 无对应视图字段），该 Then 子句未实现，登记为已登记缺口。',
   },
   'AC-076': {
     condition: 'browser-absent',

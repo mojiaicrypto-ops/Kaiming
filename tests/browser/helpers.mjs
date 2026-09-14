@@ -57,7 +57,7 @@ export async function openPage(page, fixture, path) {
 export async function previewFrame(page) {
   await expect
     .poll(() => page.frames().filter((frame) => frame.url().includes('/preview')).length, {
-      message: 'the isolated preview frame never navigated to /artifacts/<id>/preview',
+      message: 'the isolated preview frame never navigated to /artifacts/<projectId>/<id>/preview',
     })
     .toBeGreaterThan(0);
   const frame = page.frames().find((candidate) => candidate.url().includes('/preview'));
@@ -70,8 +70,11 @@ export async function previewFrame(page) {
  *
  * Used when a spec needs the server's answer as a value (for example a Run row before
  * and after a UI-only interaction) without going through the page's rendering.
+ *
+ * `options.projectId` overrides the fixture's project, which is what the switcher
+ * spec uses to prove that the BFF routes by the envelope's `projectId` (WP-12 T5).
  */
-export async function rpcInBrowser(page, fixture, method, params = {}) {
+export async function rpcInBrowser(page, fixture, method, params = {}, options = {}) {
   return page.evaluate(
     async (input) => {
       const session = await (await fetch('/api/session')).json();
@@ -93,7 +96,7 @@ export async function rpcInBrowser(page, fixture, method, params = {}) {
       });
       return response.json();
     },
-    { method, params, projectId: fixture.projectId },
+    { method, params, projectId: options.projectId ?? fixture.projectId },
   );
 }
 
@@ -115,7 +118,7 @@ export function gitStatus(repoRoot) {
 
 /** The URL path of the preview the page will load, for header assertions. */
 export function previewPath(fixture) {
-  return `/artifacts/${fixture.htmlArtifactId}/preview`;
+  return `/artifacts/${fixture.projectId}/${fixture.htmlArtifactId}/preview`;
 }
 
 /** The absolute `/rpc` requests the page issued, as `{method, params}` objects. */

@@ -333,6 +333,26 @@ export class ToolGrantService {
         'a permission request must name the tool operation and input hash it is about',
       );
     }
+    // A request that could never be approved must be **refused**, never recorded: creating a
+    // pending Decision parks the Run in `waiting_permission`, and with nothing to bind no
+    // approval can ever resolve it — in a headless run that is a silent deadlock (G8).
+    if (RUN_FILE_OPERATIONS.includes(input.operation) && input.targets.length === 0) {
+      throw new ProtocolError(
+        'VALIDATION_ERROR',
+        `a ${input.operation} permission request with no targets can never be bound to a Grant`,
+        { details: { workId: work.id, runId: input.runId, operation: input.operation } },
+      );
+    }
+    if (
+      this.store.tasks.list({ where: 'work_id = ? AND role = ?', params: [work.id, input.role] })
+        .length === 0
+    ) {
+      throw new ProtocolError(
+        'MISSING_CONTEXT',
+        `Work ${work.id} has no Task for role ${input.role}; the Run was never dispatched through an approved Plan, so no Grant can be minted for it`,
+        { details: { workId: work.id, runId: input.runId, role: input.role } },
+      );
+    }
     const decision = this.decisions.insert({
       projectId: work.projectId,
       workId: work.id,

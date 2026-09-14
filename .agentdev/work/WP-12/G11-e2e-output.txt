@@ -1,0 +1,539 @@
+PASS       stack.boot                                     [AC-078] daemon 200/BFF 200 healthz; anonymous page 401; /rpc without cookie 401 UNAUTHENTICATED; wrong Origin login 403 NOT_AUTHORIZED; wrong token 401; login 200 with agentdev_web cookie (HttpOnly) + csrfTo…
+PASS       auth.lifecycle                                 [AC-078] foreign-Origin write 403; logout 200 then cookie 401; daemon session expired (+2h) -> /rpc 401 with the cookie cleared, /api/session 401, Work 01a0a06d-c489-7664-9bfc-400882632ce0 still running; re-l…
+PASS       requirement.save-git                           [AC-090,AC-093] requirement 01a0a06d-c58b-7e41-9e27-2fca766cf5a7 created at 22e3efeb9f8125d6f95630d451e764d277d2bacb (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at 3b3d5634a0c3 with …
+PASS       board.rules                                    [AC-068] board identity shared (01a0a06d-da5c-76ef-8097-bdeb9ed935a0); L1 Work 01a0a06d-e213-7572-9a2c-77e0e041a600 excluded and never a card; Queued pause -> 409 INVALID_STATE; Queued cancel -> cancelled at …
+PASS       chief.routes-message                           [AC-069] message 01a0a06d-ebe5-7ab5-87a2-fe9de0c5b46e routed to Work 01a0a06d-ebe5-7449-8753-6744bdb62d46 (intent=delivery level=L2 authorization=01a0a06d-ec25-7674-b8ca-aa65ce7e3a4a); Work.sourceRef is the m…
+PASS       plan.approval-expired-card                     [AC-070] no-plan refusal (enabled=false reasonCode=no_plan); plan.approve v1 planRef=01a0a06d-ec57-78ba-ac9c-cb749fb61d0e; plan.current enabled=true with 1 task(s), authorization=01a0a06d-ec25-7674-b8ca-aa65c…
+PASS       inbox.decision-dedup                           [AC-074] two same-target decisions collapsed to 1 Inbox row (ids 01a0a06d-ec6c-7d86-9fc0-d42034c94cfa/01a0a06d-ec6d-7d05-a519-783db28e7175); expired row actionable=false; resolve -> accepted + idempotent repl…
+PASS       config.validation-preserves-input              [AC-075] unknownKey -> 422 VALIDATION_ERROR with preservedInput, revision unchanged at 2; reasoning=high saved (rev 3) then config.test -> PROVIDER_UNAVAILABLE with preservedInput; restored to off (rev 4), Se…
+PASS       attachment.upload-first-message                [AC-084] upload 201 attachmentId=01a0a06d-ecb2-7447-9991-d102b0399d6f (staged, installation owner); first message 01a0a06d-ecc1-7c11-85d5-ebae45a03155 bound it to Work 01a0a06d-ecc1-703e-93e3-466e2936639c ato…
+PASS       files.branch-preview-boundaries                [AC-077] revision=98bfaea4951f branch=agentdev/main, real file content; search found src/orders/cancel.ts; absolute+traversal -> data-code=NOT_FOUND with no leak; snapshots unchanged (1); head advanced to 9ac…
+PASS       surfaces.nine-real-state                       [AC-068,AC-069,AC-072,AC-074,AC-075,AC-077,AC-038] 10 surfaces read real state (/projects ok; /projects/77d6fbe8daa603507284133aedb179dd/chief ok; /projects/77d6fbe8daa603507284133aedb179dd/requirements ok; /projects/77d6fbe8daa603507284133aedb179dd/…
+PASS       events.watermark-reconnect                     [AC-054,AC-060] hello/subscribe over the BFF /ws; first cursor 16 acked; daemon dropped -> bridge.reconnecting -> bridge.open; the during-break event replayed above the watermark with no duplicate; a fresh socket re…
+PASS       delivery.l2-chain                              [AC-010] Work 01a0a06d-ebe5-7449-8753-6744bdb62d46 + Requirement 01a0a06d-c58b-7e41-9e27-2fca766cf5a7 bound; Task 01a0a06d-f514-78c2-b36e-2d5c2c26086e; candidate a9e9174428f4 tree 28a1cadcde79 codeTree de2397…
+PASS       delivery.settlement                            [AC-010] CompletionManifest 07ac0768e78e frozen; settle moved refs/heads/agentdev/main 9ac7a11fc335 -> a9e9174428f4; refUpdated=true commitTree=28a1cadcde79 codeTree=de239704f686; Requirement completed with p…
+PASS       knowledge.patch-cold-start                     [AC-041,AC-037] knowledge commit 443e3e9c90c4: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection 443e3e9c90c…
+PASS       offline.no-model-call                          [-] provider stub at http://127.0.0.1:64440/v1 received 0 requests across the whole drill; config.test resolved chief to 01a0a06d-c271-7a06-a6ae-1205f1c78adb/e2e-offline-model with probe=capabilities-only
+PASS       chief.message-to-stage                         [AC-003,AC-005,AC-068,AC-069] no-seed chain: message 01a0a06d-fac0-787f-aa6e-4e534da9e6b1 → Chief Run 01a0a06d-faf0-7f92-80e9-1090f57d0e39 → Requirement 01a0a06e-00e0-7b5f-a7d6-e10f48080d2c (active/plan) → professional Run 01a0a0…
+PASS       runtime.executes-attempt                       [AC-057] runtime executed a real Attempt: Run 01a0a06e-16a8-7634-9211-bb259b61534a completed with Attempt 01a0a06e-1772-7324-be93-115f1d410e26 through the supervisor, a real apps/runner child process and the …
+browser: browser: real stack at http://127.0.0.1:64516 (AGENTDEV_HOME=/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-e2e-auth-hMWOWk) with the offline Provider stub; seeded HTML artifact 01a0a06e-3c27-790b-abfc-89f73fdc022e
+browser: Running 16 tests using 1 worker
+browser: [1/16] [chromium] › tests/browser/ac-002-052-html-isolation.spec.mjs:30:3 › AC-002 / AC-052 HTML 产物隔离预览 › AC-002 · HTML 说明在隔离 iframe 内渲染且一次性下载可用，不写入源码
+browser: [2/16] [chromium] › tests/browser/ac-002-052-html-isolation.spec.mjs:103:3 › AC-002 / AC-052 HTML 产物隔离预览 › AC-052 · 预览内脚本读取 cookie／网络／父页全部被隔离阻止
+browser: [3/16] [chromium] › tests/browser/ac-002-052-html-isolation.spec.mjs:197:3 › AC-002 / AC-052 HTML 产物隔离预览 › AC-002 · 预览路由只暴露受权 Artifact（未登录会话被 BFF 拒绝）
+browser: [4/16] [chromium] › tests/browser/ac-071-live-layout.spec.mjs:33:3 › AC-071 Live 布局 › AC-071 · Open/Compact/Hidden 三态与 clamp 共享宽度
+browser: [5/16] [chromium] › tests/browser/ac-071-live-layout.spec.mjs:119:3 › AC-071 Live 布局 › AC-071 · 顶栏恢复入口位于视口内且可用指针点击
+browser: [6/16] [chromium] › tests/browser/ac-071-live-layout.spec.mjs:174:3 › AC-071 Live 布局 › AC-071 · 跨页保持面板状态且切换不发出任何协议请求（不打扰 Run）
+browser: [7/16] [chromium] › tests/browser/ac-071-live-layout.spec.mjs:230:3 › AC-071 Live 布局 › AC-071 · 窄屏 Open 为可关闭覆盖层
+browser: [8/16] [chromium] › tests/browser/ac-071-live-layout.spec.mjs:280:3 › AC-071 Live 布局 › AC-071 · 顶栏入口的 aria-label 随面板状态更新
+browser: [9/16] [chromium] › tests/browser/ac-073-a11y-i18n.spec.mjs:41:3 › AC-073 键盘与可访问性 › AC-073 · 键盘可达、ARIA 名称与 aria-live 状态
+browser: [10/16] [chromium] › tests/browser/ac-073-a11y-i18n.spec.mjs:111:3 › AC-073 键盘与可访问性 › AC-073 · 界面语言切换生效且不翻译项目内容
+browser: [11/16] [chromium] › tests/browser/ac-076-attachments.spec.mjs:55:3 › AC-076 附件限制（浏览器侧提示） › AC-076 · 超过 5 个附件：客户端提示且不上传
+browser: [12/16] [chromium] › tests/browser/ac-076-attachments.spec.mjs:69:3 › AC-076 附件限制（浏览器侧提示） › AC-076 · 单文件超过 20 MiB：客户端提示且不上传
+browser: [13/16] [chromium] › tests/browser/ac-076-attachments.spec.mjs:82:3 › AC-076 附件限制（浏览器侧提示） › AC-076 · 类型不支持：客户端提示且不上传
+browser: [14/16] [chromium] › tests/browser/ac-076-attachments.spec.mjs:99:3 › AC-076 附件限制（浏览器侧提示） › AC-076 · 合计超过 50 MiB：客户端提示且不上传
+browser: [15/16] [chromium] › tests/browser/ac-076-attachments.spec.mjs:121:3 › AC-076 附件限制（浏览器侧提示） › AC-076 · 切换语言后客户端提示使用所选语言
+browser: [16/16] [chromium] › tests/browser/ac-076-attachments.spec.mjs:140:3 › AC-076 附件限制（浏览器侧提示） › AC-076 · 对照：单个合法附件通过客户端校验并真实上传暂存
+browser:   16 passed (18.2s)
+browser: (node:68980) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+browser: (Use `node --trace-warnings ...` to show where the warning was created)
+PASS       browser.html-preview-and-download              [AC-002] artifact 01a0a06e-3c27-790b-abfc-89f73fdc022e 在 /projects/26078f18b37a266dd1cec5e51ee248a7/requirements/01a0a06e-3c2a-7e49-9a78-f9a6b8834903 渲染于 sandbox="allow-scripts" 的 iframe；预览响应 200 CSP[default-…
+PASS       browser.html-attack-samples                    [AC-052] frame origin=null cookie=null cookieError=SecurityError（会话 cookie agentdev_web 确实存在）；parent.document=SecurityError top.title=SecurityError topNavigation=null（父页 URL 未变）；fetch(probe)=rejected:TypeErro…
+PASS       browser.live-layout                            [AC-071] open: grid=220.0px 573.6px 486.4px, --dock=clamp(360px, 38%, 560px) ⇒ dock 486.4px (38% of 1280px), main 右缘=793.6 dock 左缘=793.6；compact: 第三轨=44px, dock display=none, aria-expanded=false；hidden: 第三轨=0…
+PASS       browser.keyboard-aria-i18n                     [AC-073] Tab #1 → a#(skip-link) name="Skip to main content"；Enter → 焦点 #main；遍历 22 个可聚焦控件（含 #languageSelect=true），无未命名控件，无不可聚焦元素进入顺序；ARIA: #liveDock="Live panel" #liveDockToggle="Live panel, open" #languageSe…
+PASS       browser.attachment-client-hints                [AC-076] 选择 6 个 text/markdown → #composerError="VALIDATION_ERROR: At most 5 attachments per message."；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 21 MiB 的 text/plain → #composerError="VALIDATION_ERROR:…
+ops: credentialed Chief Run reached attempt.ready
+ops: backup (run live)
+ops: stop + damage + restore
+ops: restart + protocol query
+ops: fresh installation (blocked -> set -> rotate)
+ops: relocate (fail-closed + alias)
+ops: doctor
+ops: launchd unit
+PASS       ops.backup-restore                             [AC-064] credentialed Provider provider:01a0a06e-8206-725c-a25c-6e46aef1e3df -> Chief Run 01a0a06e-8284-765a-81f8-f1c8d4bf0c43 reached attempt.ready (Attempt 01a0a06e-859d-7a1d-ba0b-9855083fef2d running) and …
+UNVERIFIED provider.fact-and-unknown                      [AC-001] AC-001 的“区分事实/未知”需要真实 Provider 纵向演练（pnpm test:live 与 AGENTDEV_PROVIDER_*）；本演练离线运行，Provider 桩被断言零调用
+{
+  "tool": "pnpm test:e2e",
+  "generatedAt": "2026-09-14T15:00:03.781Z",
+  "repoRoot": "/Users/huyaohua/huyh/work/aigrouptool",
+  "gitHead": "934cfa7ca9124a0de03b392f62076e931dc121b1",
+  "binding": {
+    "gitHead": "934cfa7ca9124a0de03b392f62076e931dc121b1",
+    "gitTree": "85e869192e5600b1c3db3ade421cb53fbcc96f84",
+    "codeDigest": "sha256:74633c0607483ef0f0626795aa77737857e64833e8d1cfc356c8e280924f7073",
+    "codeFiles": 338,
+    "dirty": true,
+    "generatedAt": "2026-09-14T14:59:02.183Z",
+    "nodeVersion": "v24.8.0"
+  },
+  "nonce": null,
+  "providerConfigured": false,
+  "exitCode": 0,
+  "results": [
+    {
+      "ac": "AC-001",
+      "status": "UNVERIFIED",
+      "evidence": "provider.fact-and-unknown: AC-001 的“区分事实/未知”需要真实 Provider 纵向演练（pnpm test:live 与 AGENTDEV_PROVIDER_*）；本演练离线运行，Provider 桩被断言零调用",
+      "checks": [
+        "provider.fact-and-unknown"
+      ]
+    },
+    {
+      "ac": "AC-002",
+      "status": "PASS",
+      "evidence": "browser.html-preview-and-download: artifact 01a0a06e-3c27-790b-abfc-89f73fdc022e 在 /projects/26078f18b37a266dd1cec5e51ee248a7/requirements/01a0a06e-3c2a-7e49-9a78-f9a6b8834903 渲染于 sandbox=\"allow-scripts\" 的 iframe；预览响应 200 CSP[default-src 'none'; connect-src 'none'] x-agentdev-preview-sandbox=allow-scripts x-agentdev-preview-credentials=omit content-type=text/html；下载下载字节含 AGENTDEV-PREVIEW-MARKER，URL /artifacts/download/<token>，重放同 token 被拒绝 403；临时项目 HEAD=1410d1c314e3（未变）且 git status 为空 | 匿名上下文请求 /artifacts/01a0a06e-3c27-790b-abfc-89f73fdc022e/preview → 401 {\"ok\":false,\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"sign in to use the work（Playwright 1.63.0，16 个 spec，用时 18979ms，exit 0）",
+      "checks": [
+        "browser.html-preview-and-download"
+      ]
+    },
+    {
+      "ac": "AC-003",
+      "status": "PASS",
+      "evidence": "chief.message-to-stage: no-seed chain: message 01a0a06d-fac0-787f-aa6e-4e534da9e6b1 → Chief Run 01a0a06d-faf0-7f92-80e9-1090f57d0e39 → Requirement 01a0a06e-00e0-7b5f-a7d6-e10f48080d2c (active/plan) → professional Run 01a0a06e-09cc-7f1b-949e-530ee43e4a3e (parent 01a0a06d-faf0-7f92-80e9-1090f57d0e39) → stage result 01a0a06e-15b9-7351-bacb-fe749e1e42fc + stage.completed, message state processed, board shows the Requirement",
+      "checks": [
+        "chief.message-to-stage"
+      ]
+    },
+    {
+      "ac": "AC-005",
+      "status": "PASS",
+      "evidence": "chief.message-to-stage: no-seed chain: message 01a0a06d-fac0-787f-aa6e-4e534da9e6b1 → Chief Run 01a0a06d-faf0-7f92-80e9-1090f57d0e39 → Requirement 01a0a06e-00e0-7b5f-a7d6-e10f48080d2c (active/plan) → professional Run 01a0a06e-09cc-7f1b-949e-530ee43e4a3e (parent 01a0a06d-faf0-7f92-80e9-1090f57d0e39) → stage result 01a0a06e-15b9-7351-bacb-fe749e1e42fc + stage.completed, message state processed, board shows the Requirement",
+      "checks": [
+        "chief.message-to-stage"
+      ]
+    },
+    {
+      "ac": "AC-010",
+      "status": "PASS",
+      "evidence": "delivery.l2-chain: Work 01a0a06d-ebe5-7449-8753-6744bdb62d46 + Requirement 01a0a06d-c58b-7e41-9e27-2fca766cf5a7 bound; Task 01a0a06d-f514-78c2-b36e-2d5c2c26086e; candidate a9e9174428f4 tree 28a1cadcde79 codeTree de239704f686; 5 real stage results (Plan/Develop/Review/Test/Settlement) accepted by StageGate; evaluateStageChain(route=code, level=L2) ok with the documented order and refuses a missing Test",
+      "checks": [
+        "delivery.l2-chain",
+        "delivery.settlement"
+      ]
+    },
+    {
+      "ac": "AC-037",
+      "status": "PASS",
+      "evidence": "knowledge.patch-cold-start: knowledge commit 443e3e9c90c4: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection 443e3e9c90c4 state=valid (durable SQLite row valid); cold start selected [\"F-0f0f0f0f\",\"F-0a1b2c3d\"] with \"未付款订单可取消；已付款订单返回已确认的拒绝结果。\", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid",
+      "checks": [
+        "knowledge.patch-cold-start"
+      ]
+    },
+    {
+      "ac": "AC-038",
+      "status": "PASS",
+      "evidence": "surfaces.nine-real-state: 10 surfaces read real state (/projects ok; /projects/77d6fbe8daa603507284133aedb179dd/chief ok; /projects/77d6fbe8daa603507284133aedb179dd/requirements ok; /projects/77d6fbe8daa603507284133aedb179dd/requirements/01a0a06d-c58b-7e41-9e27-2fca766cf5a7 ok; /projects/77d6fbe8daa603507284133aedb179dd/docs ok; /projects/77d6fbe8daa603507284133aedb179dd/files ok; /projects/77d6fbe8daa603507284133aedb179dd/agents ok; /projects/77d6fbe8daa603507284133aedb179dd/runs ok; /projects/77d6fbe8daa603507284133aedb179dd/inbox ok; /settings ok); Live panel modes open/compact/hidden; create/switch control only on the Chief page with the deep link elsewhere; docs delivered/design/work views all real answers",
+      "checks": [
+        "surfaces.nine-real-state"
+      ]
+    },
+    {
+      "ac": "AC-041",
+      "status": "PASS",
+      "evidence": "knowledge.patch-cold-start: knowledge commit 443e3e9c90c4: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection 443e3e9c90c4 state=valid (durable SQLite row valid); cold start selected [\"F-0f0f0f0f\",\"F-0a1b2c3d\"] with \"未付款订单可取消；已付款订单返回已确认的拒绝结果。\", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid",
+      "checks": [
+        "knowledge.patch-cold-start"
+      ]
+    },
+    {
+      "ac": "AC-052",
+      "status": "PASS",
+      "evidence": "browser.html-attack-samples: frame origin=null cookie=null cookieError=SecurityError（会话 cookie agentdev_web 确实存在）；parent.document=SecurityError top.title=SecurityError topNavigation=null（父页 URL 未变）；fetch(probe)=rejected:TypeError fetch(/api/session)=rejected:TypeError xhr=error img=error；探针自计数 attacks=0；探针 URL 的浏览器响应数=0；被 CSP 拒绝的探针请求=2（errorText=csp）；localStorage=SecurityError（Playwright 1.63.0，16 个 spec，用时 18979ms，exit 0）",
+      "checks": [
+        "browser.html-attack-samples"
+      ]
+    },
+    {
+      "ac": "AC-054",
+      "status": "PASS",
+      "evidence": "events.watermark-reconnect: hello/subscribe over the BFF /ws; first cursor 16 acked; daemon dropped -> bridge.reconnecting -> bridge.open; the during-break event replayed above the watermark with no duplicate; a fresh socket resumed in mode=replay with nothing at or below 16; Work stayed running",
+      "checks": [
+        "events.watermark-reconnect"
+      ]
+    },
+    {
+      "ac": "AC-057",
+      "status": "PASS",
+      "evidence": "runtime.executes-attempt: runtime executed a real Attempt: Run 01a0a06e-16a8-7634-9211-bb259b61534a completed with Attempt 01a0a06e-1772-7324-be93-115f1d410e26 through the supervisor, a real apps/runner child process and the loopback model (1 Provider call(s), 13 tokens booked); killing the live Runner of Run 01a0a06e-333a-7790-8cc0-b102dd923976 (pid 68716) parked it as interrupted with Attempt 01a0a06e-3343-7d44-ac26-6d44d78baba6 lost (new Attempt allowed=true)",
+      "checks": [
+        "runtime.executes-attempt"
+      ]
+    },
+    {
+      "ac": "AC-060",
+      "status": "PASS",
+      "evidence": "events.watermark-reconnect: hello/subscribe over the BFF /ws; first cursor 16 acked; daemon dropped -> bridge.reconnecting -> bridge.open; the during-break event replayed above the watermark with no duplicate; a fresh socket resumed in mode=replay with nothing at or below 16; Work stayed running",
+      "checks": [
+        "events.watermark-reconnect"
+      ]
+    },
+    {
+      "ac": "AC-064",
+      "status": "PASS",
+      "evidence": "ops.backup-restore: credentialed Provider provider:01a0a06e-8206-725c-a25c-6e46aef1e3df -> Chief Run 01a0a06e-8284-765a-81f8-f1c8d4bf0c43 reached attempt.ready (Attempt 01a0a06e-859d-7a1d-ba0b-9855083fef2d running) and the loopback model received 1 credentialed call(s); agentdev backup exit 0: revision c7974c9fbf0b, complete, secretRefs [\"provider:01a0a06e-8206-725c-a25c-6e46aef1e3df\"], installation config copied, no credential value in the backup directory; deleted /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-e2e-ops-home-dMiJ2A/projects/32bb3003ae5c715d5ba2917dc19b0843 and the project; agentdev restore exit 0 (status ready, tree 1ed076140947, evidence 1/1, doctor ok, Run 01a0a06e-8284-765a-81f8-f1c8d4bf0c43 interrupted); restarted daemon reported it interrupted through its own protocol; fresh installation restore: status blocked + first stdout line WARNING [PROVID…",
+      "checks": [
+        "ops.backup-restore"
+      ]
+    },
+    {
+      "ac": "AC-068",
+      "status": "PASS",
+      "evidence": "board.rules: board identity shared (01a0a06d-da5c-76ef-8097-bdeb9ed935a0); L1 Work 01a0a06d-e213-7572-9a2c-77e0e041a600 excluded and never a card; Queued pause -> 409 INVALID_STATE; Queued cancel -> cancelled at a12ee5e22a85469305f821024804939502cbe39c; branch tip moved",
+      "checks": [
+        "board.rules",
+        "surfaces.nine-real-state",
+        "chief.message-to-stage"
+      ]
+    },
+    {
+      "ac": "AC-069",
+      "status": "PASS",
+      "evidence": "chief.routes-message: message 01a0a06d-ebe5-7ab5-87a2-fe9de0c5b46e routed to Work 01a0a06d-ebe5-7449-8753-6744bdb62d46 (intent=delivery level=L2 authorization=01a0a06d-ec25-7674-b8ca-aa65ce7e3a4a); Work.sourceRef is the message; message.received emitted",
+      "checks": [
+        "chief.routes-message",
+        "surfaces.nine-real-state",
+        "chief.message-to-stage"
+      ]
+    },
+    {
+      "ac": "AC-070",
+      "status": "PASS",
+      "evidence": "plan.approval-expired-card: no-plan refusal (enabled=false reasonCode=no_plan); plan.approve v1 planRef=01a0a06d-ec57-78ba-ac9c-cb749fb61d0e; plan.current enabled=true with 1 task(s), authorization=01a0a06d-ec25-7674-b8ca-aa65ce7e3a4a; superseded v0 -> VERSION_CONFLICT currentVersion=1",
+      "checks": [
+        "plan.approval-expired-card"
+      ]
+    },
+    {
+      "ac": "AC-071",
+      "status": "PASS",
+      "evidence": "browser.live-layout: open: grid=220.0px 573.6px 486.4px, --dock=clamp(360px, 38%, 560px) ⇒ dock 486.4px (38% of 1280px), main 右缘=793.6 dock 左缘=793.6；compact: 第三轨=44px, dock display=none, aria-expanded=false；hidden: 第三轨=0px, main=1060.0px > compact=1016.0px；三态由真实键盘操作（focus + Enter）驱动 | { \"viewport\": { \"width\": 1280, \"height\": 720 }, \"header\": { \"x\": 0, \"y\": 0, \"width\": 1280, \"height\": 54, \"right\": 1280, \"bottom\": 54 }, \"headerDisplay\": \"flex\", \"brand\": { \"x\": 0, \"y\": 0, \"width\": 220, \"height\": 54, \"right\": 220, \"bottom\": 54 }, \"projectArea\": { \"x\": 220, \"y\": 0, \"width\": 696.515625, \"height\": 54, \"right\": 916.515625, \"bottom\": 54 }, \"tools\": { \"x\": 916.515625, \"y\": 0, \"width\": 363.484375, \"height\": 54, \"right\": 1280, \"bottom\": 54 }, \"toggle\": { \"x\": 998.390625, \"y\": 3.5, \"width\": 44.125, \"height\": 46, \"right\": 1042.515625, \"bottom\": 49.5 } } | 面板状态写入 localStorage(agentdev.panel=compact) 并…",
+      "checks": [
+        "browser.live-layout"
+      ]
+    },
+    {
+      "ac": "AC-072",
+      "status": "PASS",
+      "evidence": "surfaces.nine-real-state: 10 surfaces read real state (/projects ok; /projects/77d6fbe8daa603507284133aedb179dd/chief ok; /projects/77d6fbe8daa603507284133aedb179dd/requirements ok; /projects/77d6fbe8daa603507284133aedb179dd/requirements/01a0a06d-c58b-7e41-9e27-2fca766cf5a7 ok; /projects/77d6fbe8daa603507284133aedb179dd/docs ok; /projects/77d6fbe8daa603507284133aedb179dd/files ok; /projects/77d6fbe8daa603507284133aedb179dd/agents ok; /projects/77d6fbe8daa603507284133aedb179dd/runs ok; /projects/77d6fbe8daa603507284133aedb179dd/inbox ok; /settings ok); Live panel modes open/compact/hidden; create/switch control only on the Chief page with the deep link elsewhere; docs delivered/design/work views all real answers",
+      "checks": [
+        "surfaces.nine-real-state"
+      ]
+    },
+    {
+      "ac": "AC-073",
+      "status": "PASS",
+      "evidence": "browser.keyboard-aria-i18n: Tab #1 → a#(skip-link) name=\"Skip to main content\"；Enter → 焦点 #main；遍历 22 个可聚焦控件（含 #languageSelect=true），无未命名控件，无不可聚焦元素进入顺序；ARIA: #liveDock=\"Live panel\" #liveDockToggle=\"Live panel, open\" #languageSelect=\"Interface language\" #composerBody=\"Message the Chief\"；aria-live 区域 #connectionState/#messages/#liveEvents/#stagedAttachments | 切换到 zh：html[lang]=zh-CN，nav Chief→主管，cookie agentdev_language=zh，localStorage(agentdev.language)=zh；客户端自有字符串随切换生效：#liveDock aria-label=实时面板、#liveDockToggle=实时面板，已展开、下载按钮=下载完整产物；项目内容未翻译：#requirementTitle=\"HTML 说明产物隔离预览\" 保持不变且 data-translatable=\"false\"；project-name=\"/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-e2e-repo-bsMxG4\" 不变；ui.translate 调用 63 次，未包含任何项目内容（标题/项目名泄漏=0）；reload 后整页仍为 zh；未在客户端打开过的 /settings 也由服务端按 cookie 渲染为「保存配置」（Playwright 1.63.0，16 个 spec，用时 18979ms，exit 0）",
+      "checks": [
+        "browser.keyboard-aria-i18n"
+      ]
+    },
+    {
+      "ac": "AC-074",
+      "status": "PASS",
+      "evidence": "inbox.decision-dedup: two same-target decisions collapsed to 1 Inbox row (ids 01a0a06d-ec6c-7d86-9fc0-d42034c94cfa/01a0a06d-ec6d-7d05-a519-783db28e7175); expired row actionable=false; resolve -> accepted + idempotent replay; duplicate row untouched",
+      "checks": [
+        "inbox.decision-dedup",
+        "surfaces.nine-real-state"
+      ]
+    },
+    {
+      "ac": "AC-075",
+      "status": "PASS",
+      "evidence": "config.validation-preserves-input: unknownKey -> 422 VALIDATION_ERROR with preservedInput, revision unchanged at 2; reasoning=high saved (rev 3) then config.test -> PROVIDER_UNAVAILABLE with preservedInput; restored to off (rev 4), Settings revision matches",
+      "checks": [
+        "config.validation-preserves-input",
+        "surfaces.nine-real-state"
+      ]
+    },
+    {
+      "ac": "AC-076",
+      "status": "PASS",
+      "evidence": "browser.attachment-client-hints: 选择 6 个 text/markdown → #composerError=\"VALIDATION_ERROR: At most 5 attachments per message.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 21 MiB 的 text/plain → #composerError=\"VALIDATION_ERROR: The attachment exceeds 20 MiB.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 application/zip → #composerError=\"VALIDATION_ERROR: That file type is not a supported attachment type.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 3 个 17 MiB 文件（合计 51 MiB，逐个 <20 MiB）→ #composerError=\"VALIDATION_ERROR: Attachments exceed 50 MiB in total.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 语言切到 zh 并等待客户端字典生效后选择 6 个附件 → #composerError=\"VALIDATION_ERROR: 每条消息最多 5 个附件。\"（本地化文案而非原始 key）；/artifacts/upload 请求数=0 | 选择 1 个 text/markdown → 上传请求 1 次，暂存项 attachmentId=01a0a06e-7e60-7708-aa05-4ee45789fa9a，#composerError 隐藏（证明上一条拒绝针对具体限制而非一律拒绝）（Playwright 1.63.0，16 个 spec…",
+      "checks": [
+        "browser.attachment-client-hints"
+      ]
+    },
+    {
+      "ac": "AC-077",
+      "status": "PASS",
+      "evidence": "files.branch-preview-boundaries: revision=98bfaea4951f branch=agentdev/main, real file content; search found src/orders/cancel.ts; absolute+traversal -> data-code=NOT_FOUND with no leak; snapshots unchanged (1); head advanced to 9ac7a11fc335 and the page followed",
+      "checks": [
+        "files.branch-preview-boundaries",
+        "surfaces.nine-real-state"
+      ]
+    },
+    {
+      "ac": "AC-078",
+      "status": "PASS",
+      "evidence": "stack.boot: daemon 200/BFF 200 healthz; anonymous page 401; /rpc without cookie 401 UNAUTHENTICATED; wrong Origin login 403 NOT_AUTHORIZED; wrong token 401; login 200 with agentdev_web cookie (HttpOnly) + csrfToken; snapshot projectId=77d6fbe8daa603507284133aedb179dd",
+      "checks": [
+        "stack.boot",
+        "auth.lifecycle"
+      ]
+    },
+    {
+      "ac": "AC-084",
+      "status": "PASS",
+      "evidence": "attachment.upload-first-message: upload 201 attachmentId=01a0a06d-ecb2-7447-9991-d102b0399d6f (staged, installation owner); first message 01a0a06d-ecc1-7c11-85d5-ebae45a03155 bound it to Work 01a0a06d-ecc1-703e-93e3-466e2936639c atomically with 1 user artifact; unsupported mime refused (400) with no residue; duplicate bind -> ATTACHMENT_ALREADY_BOUND",
+      "checks": [
+        "attachment.upload-first-message"
+      ]
+    },
+    {
+      "ac": "AC-090",
+      "status": "PASS",
+      "evidence": "requirement.save-git: requirement 01a0a06d-c58b-7e41-9e27-2fca766cf5a7 created at 22e3efeb9f8125d6f95630d451e764d277d2bacb (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at 3b3d5634a0c3 with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed",
+      "checks": [
+        "requirement.save-git"
+      ]
+    },
+    {
+      "ac": "AC-093",
+      "status": "PASS",
+      "evidence": "requirement.save-git: requirement 01a0a06d-c58b-7e41-9e27-2fca766cf5a7 created at 22e3efeb9f8125d6f95630d451e764d277d2bacb (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at 3b3d5634a0c3 with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed",
+      "checks": [
+        "requirement.save-git"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "name": "stack.boot",
+      "acs": [
+        "AC-078"
+      ],
+      "status": "PASS",
+      "evidence": "daemon 200/BFF 200 healthz; anonymous page 401; /rpc without cookie 401 UNAUTHENTICATED; wrong Origin login 403 NOT_AUTHORIZED; wrong token 401; login 200 with agentdev_web cookie (HttpOnly) + csrfToken; snapshot projectId=77d6fbe8daa603507284133aedb179dd",
+      "durationMs": 272
+    },
+    {
+      "name": "auth.lifecycle",
+      "acs": [
+        "AC-078"
+      ],
+      "status": "PASS",
+      "evidence": "foreign-Origin write 403; logout 200 then cookie 401; daemon session expired (+2h) -> /rpc 401 with the cookie cleared, /api/session 401, Work 01a0a06d-c489-7664-9bfc-400882632ce0 still running; re-login restored the Chief page",
+      "durationMs": 256
+    },
+    {
+      "name": "requirement.save-git",
+      "acs": [
+        "AC-090",
+        "AC-093"
+      ],
+      "status": "PASS",
+      "evidence": "requirement 01a0a06d-c58b-7e41-9e27-2fca766cf5a7 created at 22e3efeb9f8125d6f95630d451e764d277d2bacb (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at 3b3d5634a0c3 with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed",
+      "durationMs": 5331
+    },
+    {
+      "name": "board.rules",
+      "acs": [
+        "AC-068"
+      ],
+      "status": "PASS",
+      "evidence": "board identity shared (01a0a06d-da5c-76ef-8097-bdeb9ed935a0); L1 Work 01a0a06d-e213-7572-9a2c-77e0e041a600 excluded and never a card; Queued pause -> 409 INVALID_STATE; Queued cancel -> cancelled at a12ee5e22a85469305f821024804939502cbe39c; branch tip moved",
+      "durationMs": 4486
+    },
+    {
+      "name": "chief.routes-message",
+      "acs": [
+        "AC-069"
+      ],
+      "status": "PASS",
+      "evidence": "message 01a0a06d-ebe5-7ab5-87a2-fe9de0c5b46e routed to Work 01a0a06d-ebe5-7449-8753-6744bdb62d46 (intent=delivery level=L2 authorization=01a0a06d-ec25-7674-b8ca-aa65ce7e3a4a); Work.sourceRef is the message; message.received emitted",
+      "durationMs": 91
+    },
+    {
+      "name": "plan.approval-expired-card",
+      "acs": [
+        "AC-070"
+      ],
+      "status": "PASS",
+      "evidence": "no-plan refusal (enabled=false reasonCode=no_plan); plan.approve v1 planRef=01a0a06d-ec57-78ba-ac9c-cb749fb61d0e; plan.current enabled=true with 1 task(s), authorization=01a0a06d-ec25-7674-b8ca-aa65ce7e3a4a; superseded v0 -> VERSION_CONFLICT currentVersion=1",
+      "durationMs": 48
+    },
+    {
+      "name": "inbox.decision-dedup",
+      "acs": [
+        "AC-074"
+      ],
+      "status": "PASS",
+      "evidence": "two same-target decisions collapsed to 1 Inbox row (ids 01a0a06d-ec6c-7d86-9fc0-d42034c94cfa/01a0a06d-ec6d-7d05-a519-783db28e7175); expired row actionable=false; resolve -> accepted + idempotent replay; duplicate row untouched",
+      "durationMs": 27
+    },
+    {
+      "name": "config.validation-preserves-input",
+      "acs": [
+        "AC-075"
+      ],
+      "status": "PASS",
+      "evidence": "unknownKey -> 422 VALIDATION_ERROR with preservedInput, revision unchanged at 2; reasoning=high saved (rev 3) then config.test -> PROVIDER_UNAVAILABLE with preservedInput; restored to off (rev 4), Settings revision matches",
+      "durationMs": 36
+    },
+    {
+      "name": "attachment.upload-first-message",
+      "acs": [
+        "AC-084"
+      ],
+      "status": "PASS",
+      "evidence": "upload 201 attachmentId=01a0a06d-ecb2-7447-9991-d102b0399d6f (staged, installation owner); first message 01a0a06d-ecc1-7c11-85d5-ebae45a03155 bound it to Work 01a0a06d-ecc1-703e-93e3-466e2936639c atomically with 1 user artifact; unsupported mime refused (400) with no residue; duplicate bind -> ATTACHMENT_ALREADY_BOUND",
+      "durationMs": 162
+    },
+    {
+      "name": "files.branch-preview-boundaries",
+      "acs": [
+        "AC-077"
+      ],
+      "status": "PASS",
+      "evidence": "revision=98bfaea4951f branch=agentdev/main, real file content; search found src/orders/cancel.ts; absolute+traversal -> data-code=NOT_FOUND with no leak; snapshots unchanged (1); head advanced to 9ac7a11fc335 and the page followed",
+      "durationMs": 289
+    },
+    {
+      "name": "surfaces.nine-real-state",
+      "acs": [
+        "AC-068",
+        "AC-069",
+        "AC-072",
+        "AC-074",
+        "AC-075",
+        "AC-077",
+        "AC-038"
+      ],
+      "status": "PASS",
+      "evidence": "10 surfaces read real state (/projects ok; /projects/77d6fbe8daa603507284133aedb179dd/chief ok; /projects/77d6fbe8daa603507284133aedb179dd/requirements ok; /projects/77d6fbe8daa603507284133aedb179dd/requirements/01a0a06d-c58b-7e41-9e27-2fca766cf5a7 ok; /projects/77d6fbe8daa603507284133aedb179dd/docs ok; /projects/77d6fbe8daa603507284133aedb179dd/files ok; /projects/77d6fbe8daa603507284133aedb179dd/agents ok; /projects/77d6fbe8daa603507284133aedb179dd/runs ok; /projects/77d6fbe8daa603507284133aedb179dd/inbox ok; /settings ok); Live panel modes open/compact/hidden; create/switch control only on the Chief page with the deep link elsewhere; docs delivered/design/work views all real answers",
+      "durationMs": 579
+    },
+    {
+      "name": "events.watermark-reconnect",
+      "acs": [
+        "AC-054",
+        "AC-060"
+      ],
+      "status": "PASS",
+      "evidence": "hello/subscribe over the BFF /ws; first cursor 16 acked; daemon dropped -> bridge.reconnecting -> bridge.open; the during-break event replayed above the watermark with no duplicate; a fresh socket resumed in mode=replay with nothing at or below 16; Work stayed running",
+      "durationMs": 1117
+    },
+    {
+      "name": "delivery.l2-chain",
+      "acs": [
+        "AC-010"
+      ],
+      "status": "PASS",
+      "evidence": "Work 01a0a06d-ebe5-7449-8753-6744bdb62d46 + Requirement 01a0a06d-c58b-7e41-9e27-2fca766cf5a7 bound; Task 01a0a06d-f514-78c2-b36e-2d5c2c26086e; candidate a9e9174428f4 tree 28a1cadcde79 codeTree de239704f686; 5 real stage results (Plan/Develop/Review/Test/Settlement) accepted by StageGate; evaluateStageChain(route=code, level=L2) ok with the documented order and refuses a missing Test",
+      "durationMs": 511
+    },
+    {
+      "name": "delivery.settlement",
+      "acs": [
+        "AC-010"
+      ],
+      "status": "PASS",
+      "evidence": "CompletionManifest 07ac0768e78e frozen; settle moved refs/heads/agentdev/main 9ac7a11fc335 -> a9e9174428f4; refUpdated=true commitTree=28a1cadcde79 codeTree=de239704f686; Requirement completed with phase cleared; exactly one settlement.completed event",
+      "durationMs": 364
+    },
+    {
+      "name": "knowledge.patch-cold-start",
+      "acs": [
+        "AC-041",
+        "AC-037"
+      ],
+      "status": "PASS",
+      "evidence": "knowledge commit 443e3e9c90c4: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection 443e3e9c90c4 state=valid (durable SQLite row valid); cold start selected [\"F-0f0f0f0f\",\"F-0a1b2c3d\"] with \"未付款订单可取消；已付款订单返回已确认的拒绝结果。\", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid",
+      "durationMs": 365
+    },
+    {
+      "name": "offline.no-model-call",
+      "acs": [],
+      "status": "PASS",
+      "evidence": "provider stub at http://127.0.0.1:64440/v1 received 0 requests across the whole drill; config.test resolved chief to 01a0a06d-c271-7a06-a6ae-1205f1c78adb/e2e-offline-model with probe=capabilities-only",
+      "durationMs": 3
+    },
+    {
+      "name": "chief.message-to-stage",
+      "acs": [
+        "AC-003",
+        "AC-005",
+        "AC-068",
+        "AC-069"
+      ],
+      "status": "PASS",
+      "evidence": "no-seed chain: message 01a0a06d-fac0-787f-aa6e-4e534da9e6b1 → Chief Run 01a0a06d-faf0-7f92-80e9-1090f57d0e39 → Requirement 01a0a06e-00e0-7b5f-a7d6-e10f48080d2c (active/plan) → professional Run 01a0a06e-09cc-7f1b-949e-530ee43e4a3e (parent 01a0a06d-faf0-7f92-80e9-1090f57d0e39) → stage result 01a0a06e-15b9-7351-bacb-fe749e1e42fc + stage.completed, message state processed, board shows the Requirement",
+      "durationMs": 7346
+    },
+    {
+      "name": "runtime.executes-attempt",
+      "acs": [
+        "AC-057"
+      ],
+      "status": "PASS",
+      "evidence": "runtime executed a real Attempt: Run 01a0a06e-16a8-7634-9211-bb259b61534a completed with Attempt 01a0a06e-1772-7324-be93-115f1d410e26 through the supervisor, a real apps/runner child process and the loopback model (1 Provider call(s), 13 tokens booked); killing the live Runner of Run 01a0a06e-333a-7790-8cc0-b102dd923976 (pid 68716) parked it as interrupted with Attempt 01a0a06e-3343-7d44-ac26-6d44d78baba6 lost (new Attempt allowed=true)",
+      "durationMs": 7531
+    },
+    {
+      "name": "browser.html-preview-and-download",
+      "acs": [
+        "AC-002"
+      ],
+      "status": "PASS",
+      "evidence": "artifact 01a0a06e-3c27-790b-abfc-89f73fdc022e 在 /projects/26078f18b37a266dd1cec5e51ee248a7/requirements/01a0a06e-3c2a-7e49-9a78-f9a6b8834903 渲染于 sandbox=\"allow-scripts\" 的 iframe；预览响应 200 CSP[default-src 'none'; connect-src 'none'] x-agentdev-preview-sandbox=allow-scripts x-agentdev-preview-credentials=omit content-type=text/html；下载下载字节含 AGENTDEV-PREVIEW-MARKER，URL /artifacts/download/<token>，重放同 token 被拒绝 403；临时项目 HEAD=1410d1c314e3（未变）且 git status 为空 | 匿名上下文请求 /artifacts/01a0a06e-3c27-790b-abfc-89f73fdc022e/preview → 401 {\"ok\":false,\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"sign in to use the work（Playwright 1.63.0，16 个 spec，用时 18979ms，exit 0）",
+      "durationMs": 0
+    },
+    {
+      "name": "browser.html-attack-samples",
+      "acs": [
+        "AC-052"
+      ],
+      "status": "PASS",
+      "evidence": "frame origin=null cookie=null cookieError=SecurityError（会话 cookie agentdev_web 确实存在）；parent.document=SecurityError top.title=SecurityError topNavigation=null（父页 URL 未变）；fetch(probe)=rejected:TypeError fetch(/api/session)=rejected:TypeError xhr=error img=error；探针自计数 attacks=0；探针 URL 的浏览器响应数=0；被 CSP 拒绝的探针请求=2（errorText=csp）；localStorage=SecurityError（Playwright 1.63.0，16 个 spec，用时 18979ms，exit 0）",
+      "durationMs": 0
+    },
+    {
+      "name": "browser.live-layout",
+      "acs": [
+        "AC-071"
+      ],
+      "status": "PASS",
+      "evidence": "open: grid=220.0px 573.6px 486.4px, --dock=clamp(360px, 38%, 560px) ⇒ dock 486.4px (38% of 1280px), main 右缘=793.6 dock 左缘=793.6；compact: 第三轨=44px, dock display=none, aria-expanded=false；hidden: 第三轨=0px, main=1060.0px > compact=1016.0px；三态由真实键盘操作（focus + Enter）驱动 | {\n  \"viewport\": {\n    \"width\": 1280,\n    \"height\": 720\n  },\n  \"header\": {\n    \"x\": 0,\n    \"y\": 0,\n    \"width\": 1280,\n    \"height\": 54,\n    \"right\": 1280,\n    \"bottom\": 54\n  },\n  \"headerDisplay\": \"flex\",\n  \"brand\": {\n    \"x\": 0,\n    \"y\": 0,\n    \"width\": 220,\n    \"height\": 54,\n    \"right\": 220,\n    \"bottom\": 54\n  },\n  \"projectArea\": {\n    \"x\": 220,\n    \"y\": 0,\n    \"width\": 696.515625,\n    \"height\": 54,\n    \"right\": 916.515625,\n    \"bottom\": 54\n  },\n  \"tools\": {\n    \"x\": 916.515625,\n    \"y\": 0,\n    \"width\": 363.484375,\n    \"height\": 54,\n    \"right\": 1280,\n    \"bottom\": 54\n  },\n  \"toggle\": {\n    \"x\": 998.390625,\n    \"y\": 3.5,\n    \"width\": 44.125,\n    \"height\": 46,\n    \"right\": 1042.515625,\n    \"bottom\": 49.5\n  }\n} | 面板状态写入 localStorage(agentdev.panel=compact) 并在导航到 /requirements 后仍为 compact（dock display=none）；三态切换期间 /rpc 请求数=0；run.get(01a0a06e-3c2c-7faa-8c4a-250fe2d201b8) 切换前后完全一致，status=running | 600px viewport：dock position=fixed width=420.0px 右缘=600.0 mainLeft=0.0 mainRight=600.0；#liveDockClose 关闭 → data-panel-mode=compact，dock display=none，关闭后 activeElement=liveDockToggle | open → compact 后 data-mode=compact、data-i18n-aria=aria.liveDockCompact、aria-label=\"Live panel, compact\"（Playwright 1.63.0，16 个 spec，用时 18979ms，exit 0）",
+      "durationMs": 0
+    },
+    {
+      "name": "browser.keyboard-aria-i18n",
+      "acs": [
+        "AC-073"
+      ],
+      "status": "PASS",
+      "evidence": "Tab #1 → a#(skip-link) name=\"Skip to main content\"；Enter → 焦点 #main；遍历 22 个可聚焦控件（含 #languageSelect=true），无未命名控件，无不可聚焦元素进入顺序；ARIA: #liveDock=\"Live panel\" #liveDockToggle=\"Live panel, open\" #languageSelect=\"Interface language\" #composerBody=\"Message the Chief\"；aria-live 区域 #connectionState/#messages/#liveEvents/#stagedAttachments | 切换到 zh：html[lang]=zh-CN，nav Chief→主管，cookie agentdev_language=zh，localStorage(agentdev.language)=zh；客户端自有字符串随切换生效：#liveDock aria-label=实时面板、#liveDockToggle=实时面板，已展开、下载按钮=下载完整产物；项目内容未翻译：#requirementTitle=\"HTML 说明产物隔离预览\" 保持不变且 data-translatable=\"false\"；project-name=\"/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-e2e-repo-bsMxG4\" 不变；ui.translate 调用 63 次，未包含任何项目内容（标题/项目名泄漏=0）；reload 后整页仍为 zh；未在客户端打开过的 /settings 也由服务端按 cookie 渲染为「保存配置」（Playwright 1.63.0，16 个 spec，用时 18979ms，exit 0）",
+      "durationMs": 0
+    },
+    {
+      "name": "browser.attachment-client-hints",
+      "acs": [
+        "AC-076"
+      ],
+      "status": "PASS",
+      "evidence": "选择 6 个 text/markdown → #composerError=\"VALIDATION_ERROR: At most 5 attachments per message.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 21 MiB 的 text/plain → #composerError=\"VALIDATION_ERROR: The attachment exceeds 20 MiB.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 application/zip → #composerError=\"VALIDATION_ERROR: That file type is not a supported attachment type.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 3 个 17 MiB 文件（合计 51 MiB，逐个 <20 MiB）→ #composerError=\"VALIDATION_ERROR: Attachments exceed 50 MiB in total.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 语言切到 zh 并等待客户端字典生效后选择 6 个附件 → #composerError=\"VALIDATION_ERROR: 每条消息最多 5 个附件。\"（本地化文案而非原始 key）；/artifacts/upload 请求数=0 | 选择 1 个 text/markdown → 上传请求 1 次，暂存项 attachmentId=01a0a06e-7e60-7708-aa05-4ee45789fa9a，#composerError 隐藏（证明上一条拒绝针对具体限制而非一律拒绝）（Playwright 1.63.0，16 个 spec，用时 18979ms，exit 0）",
+      "durationMs": 0
+    },
+    {
+      "name": "ops.backup-restore",
+      "acs": [
+        "AC-064"
+      ],
+      "status": "PASS",
+      "evidence": "credentialed Provider provider:01a0a06e-8206-725c-a25c-6e46aef1e3df -> Chief Run 01a0a06e-8284-765a-81f8-f1c8d4bf0c43 reached attempt.ready (Attempt 01a0a06e-859d-7a1d-ba0b-9855083fef2d running) and the loopback model received 1 credentialed call(s); agentdev backup exit 0: revision c7974c9fbf0b, complete, secretRefs [\"provider:01a0a06e-8206-725c-a25c-6e46aef1e3df\"], installation config copied, no credential value in the backup directory; deleted /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-e2e-ops-home-dMiJ2A/projects/32bb3003ae5c715d5ba2917dc19b0843 and the project; agentdev restore exit 0 (status ready, tree 1ed076140947, evidence 1/1, doctor ok, Run 01a0a06e-8284-765a-81f8-f1c8d4bf0c43 interrupted); restarted daemon reported it interrupted through its own protocol; fresh installation restore: status blocked + first stdout line WARNING [PROVIDER_BLOCKED], Provider definitions carried (1), no credential value in the fresh home; after stdin secret set the restore is ready; secret rotate exit 0 (capabilities.revoked=0, no value printed); relocate --move to a different root refused with PROJECT_IDENTITY_MOVE_UNSUPPORTED and left the repository and registry untouched; relocate to an alias of the same canonical root accepted (identityPreserved); agentdev doctor exit 0 with execution ready; launchd 单元 load/unload：bootstrap gui/501 exit 0, daemon pid 71142 published runtime.json and held daemon.lock, agentdev status running:true, bootout removed the record and the lock",
+      "durationMs": 12451
+    },
+    {
+      "name": "provider.fact-and-unknown",
+      "acs": [
+        "AC-001"
+      ],
+      "status": "UNVERIFIED",
+      "evidence": "AC-001 的“区分事实/未知”需要真实 Provider 纵向演练（pnpm test:live 与 AGENTDEV_PROVIDER_*）；本演练离线运行，Provider 桩被断言零调用",
+      "durationMs": 0
+    }
+  ]
+}
+
+e2e: 25 checks — PASS 24 / FAIL 0 / UNVERIFIED 1
+e2e: 27 ACs accounted for by the drill; exit 0

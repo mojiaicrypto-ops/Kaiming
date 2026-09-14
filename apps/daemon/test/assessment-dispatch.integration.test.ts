@@ -270,6 +270,7 @@ out({
   modelId: 'drill-model',
   tools: role === 'chief' ? ['assessment_submit', 'agent_dispatch'] : ['stage_yield'],
   droppedTools: [],
+  environmentRef: 'host:test/test/node-0',
 });
 
 let buffer = '';

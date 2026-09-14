@@ -216,6 +216,12 @@ export async function bootStack({ product, meta, options = {} }) {
   // The marker one drill message carries so the stub knows to answer with tool calls
   // (R3-2 / T2.7). It travels in the Work goal, which is what the Runner prompt carries.
   const MESSAGE_DRILL_MARKER = 'AGENTDEV-R32-TOOLCALL';
+  // The tool-bridge permission drill (`G8`): the same one-turn-at-a-time trick with a script
+  // that exercises the role faces, the readScope admission refusal, the unapproved write and
+  // a professional `request_dispatch`.
+  const TOOL_BRIDGE_DRILL_MARKER = 'AGENTDEV-G8-TOOLBRIDGE';
+  const G8_SRC = 'src/g8-notes.txt';
+  const G8_DOC = 'docs/g8-notes.md';
   const localModel = createServer((request, response) => {
     const chunks = [];
     request.on('data', (chunk) => chunks.push(chunk));
@@ -227,15 +233,111 @@ export async function bootStack({ product, meta, options = {} }) {
       // with the tool calls a Chief/professional Run must make, one turn at a time. The
       // number of `tool` messages already in the request says which turn this is.
       const drill = body.includes(MESSAGE_DRILL_MARKER);
-      const toolTurns = drill
-        ? (JSON.parse(body).messages ?? []).filter((message) => message.role === 'tool').length
-        : -1;
-      const chiefTurn = drill && body.includes('AgentDev chief agent');
+      const bridgeDrill = body.includes(TOOL_BRIDGE_DRILL_MARKER);
+      const toolTurns =
+        drill || bridgeDrill
+          ? (JSON.parse(body).messages ?? []).filter((message) => message.role === 'tool').length
+          : -1;
+      const chiefTurn = (drill || bridgeDrill) && body.includes('AgentDev chief agent');
       const toolCall = (name, args) => ({
         id: `call_${name}`,
         type: 'function',
         function: { name, arguments: JSON.stringify(args) },
       });
+      const toolCallMessage = (calls) => ({ role: 'assistant', content: '', tool_calls: calls });
+      const bridgeMessage = (() => {
+        if (!bridgeDrill) return undefined;
+        if (chiefTurn && toolTurns === 0) {
+          return {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              toolCall('assessment_submit', {
+                intent: 'delivery',
+                goal: `update ${G8_SRC} and ${G8_DOC}`,
+                scope: {
+                  readPaths: [G8_SRC, G8_DOC],
+                  writePaths: [G8_SRC, G8_DOC],
+                  // The Work envelope must carry the file operations, or no run-scope file
+                  // Grant is minted and every read is `NOT_AUTHORIZED` before the readScope
+                  // check this drill is about can even run.
+                  operations: ['read', 'edit'],
+                  networkTargets: [],
+                },
+                level: 'L2',
+                semanticImpact: false,
+                riskFlags: [],
+                uncertainties: [],
+                policyRevision: 1,
+                reason: 'the user named the notes to update',
+              }),
+            ],
+          };
+        }
+        if (chiefTurn && toolTurns === 1) {
+          return {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              toolCall('agent_dispatch', {
+                role: 'backend',
+                purpose: 'implementation',
+                goal: `update ${G8_SRC}`,
+                scope: {
+                  readPaths: [G8_SRC],
+                  writePaths: [G8_SRC],
+                  operations: ['read', 'edit'],
+                  networkTargets: [],
+                },
+                // The canonical develop stage (`rules/workflow.md` §2): the bare `develop`
+                // has no context ACL row, which would degrade the Attempt's read ledger.
+                stage: 'develop-L2',
+                contextSelection: {
+                  goal: `update ${G8_SRC}`,
+                  sourceRefs: [],
+                  reasonPerSource: {},
+                  featureRefs: [],
+                  codePaths: [G8_SRC],
+                  artifactRefs: [],
+                  excluded: [],
+                  unknowns: [],
+                  readBudget: { initialTokens: 24_000, expansionTokens: 16_000 },
+                },
+                requiredOutputs: ['stage_result'],
+                requiredChild: false,
+                joinPolicy: 'none',
+                budgetAllocation: 20_000,
+              }),
+            ],
+          };
+        }
+        if (chiefTurn) return undefined;
+        // The professional Run, one tool turn at a time.
+        if (toolTurns === 0) return toolCallMessage([toolCall('read', { path: G8_SRC })]);
+        // A path the Work's Grant covers (the message named it) but the Run's readScope does
+        // not: the bridge must refuse it at admission.
+        if (toolTurns === 1) return toolCallMessage([toolCall('read', { path: G8_DOC })]);
+        // A write the Plan gate has not approved: refused without touching the source.
+        if (toolTurns === 2) {
+          return toolCallMessage([
+            toolCall('write', { path: G8_SRC, content: 'unapproved write\n' }),
+          ]);
+        }
+        // A professional Agent asking for another role: a Chief todo, never a grandchild Run.
+        if (toolTurns === 3) {
+          return toolCallMessage([
+            toolCall('request_dispatch', {
+              reason: 'the notes change also needs an independent review',
+              requestedRole: 'review',
+              goal: 'review the notes change',
+            }),
+          ]);
+        }
+        // Deliberately no `stage_yield`: a Run that was never dispatched through an approved
+        // Plan must end in a typed terminal state (`contract_violation`) instead of parking
+        // in `waiting_permission`, which is what this drill asserts.
+        return undefined;
+      })();
       const drillMessage = (() => {
         if (!drill) return undefined;
         if (chiefTurn && toolTurns === 0) {
@@ -321,7 +423,8 @@ export async function bootStack({ product, meta, options = {} }) {
       })();
       const answer = () => {
         response.writeHead(200, { 'content-type': 'application/json' });
-        const message = drillMessage ?? { role: 'assistant', content: 'E2E-LOCAL-ANSWER' };
+        const message = bridgeMessage ??
+          drillMessage ?? { role: 'assistant', content: 'E2E-LOCAL-ANSWER' };
         response.end(
           JSON.stringify({
             id: 'e2e-local-completion',

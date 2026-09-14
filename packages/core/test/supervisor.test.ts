@@ -25,6 +25,7 @@ import { ProjectStore, projectIdFromRoot } from '@agentdev/storage';
 import { scanEvents } from '../src/events.js';
 import {
   RunnerSupervisor,
+  SUPERVISOR_PARKED_STATUSES,
   RunLifecycle,
   RunRecoveryService,
   createMemoryProcessProbe,
@@ -264,6 +265,7 @@ describe('RunnerSupervisor claiming', () => {
       modelId: 'stub-model',
       tools: ['read', 'edit'],
       droppedTools: [],
+      environmentRef: 'host:test/test/node-0',
     });
     expect(store.attempts.find(runner.input.attempt.id)?.status).toBe('running');
     expect(runner.lastCommand).toMatchObject({ type: 'attempt.prompt', text: `goal for ${runId}` });
@@ -290,6 +292,7 @@ describe('RunnerSupervisor claiming', () => {
       modelId: 'stub-model',
       tools: ['read', 'edit'],
       droppedTools: [],
+      environmentRef: 'host:test/test/node-0',
     });
     expect(store.runs.find(runId)?.status).toBe('running');
     expect(scanEvents(store, { names: ['run.started'] })).toHaveLength(1);
@@ -314,6 +317,7 @@ describe('RunnerSupervisor claiming', () => {
       modelId: 'stub-model',
       tools: ['read', 'edit'],
       droppedTools: [],
+      environmentRef: 'host:test/test/node-0',
     });
     // Without this edge the Work would stay `queued` for the whole execution — the board
     // would show finished work as still waiting — and jump straight to `completed` at
@@ -346,6 +350,7 @@ describe('RunnerSupervisor claiming', () => {
       modelId: 'stub-model',
       tools: ['read', 'edit'],
       droppedTools: [],
+      environmentRef: 'host:test/test/node-0',
     });
     expect(store.works.find(run.workId)?.status).toBe('running');
     expect(scanEvents(store, { names: ['work.control_changed'] })).toHaveLength(0);
@@ -489,6 +494,7 @@ describe('RunnerSupervisor claiming', () => {
       modelId: 'stub-model',
       tools: ['read'],
       droppedTools: ['edit'],
+      environmentRef: 'host:test/test/node-0',
     });
     expect(store.attempts.find(runner.input.attempt.id)?.status).toBe('failed');
     // The Attempt never reported a result, so the Run is parked from its real state
@@ -515,6 +521,7 @@ describe('RunnerSupervisor claiming', () => {
       modelId: 'stub-model',
       tools: [],
       droppedTools: [],
+      environmentRef: 'host:test/test/node-0',
     });
     runner.emit({ type: 'attempt.result', status: 'completed', message: 'done' });
     expect(store.attempts.find(runner.input.attempt.id)?.status).toBe('completed');
@@ -549,6 +556,7 @@ describe('RunnerSupervisor claiming', () => {
       modelId: 'stub-model',
       tools: [],
       droppedTools: [],
+      environmentRef: 'host:test/test/node-0',
     });
     runner.emit({
       type: 'attempt.event',
@@ -601,6 +609,7 @@ describe('RunnerSupervisor claiming', () => {
       modelId: 'stub-model',
       tools: [],
       droppedTools: [],
+      environmentRef: 'host:test/test/node-0',
     });
     runner.emit({
       type: 'attempt.event',
@@ -625,6 +634,112 @@ describe('RunnerSupervisor claiming', () => {
     expect(seen).toHaveLength(2);
     expect(seen[1]).toMatchObject({ text: 'second answer', submitted: false, corrections: 1 });
     expect(store.runs.find(runId)?.status).toBe('completed');
+  });
+
+  it('records a contract violation when a corrected Runner exits cleanly instead of answering', () => {
+    // The real `apps/runner` reports `attempt.result` and then `process.exit(0)` at the end
+    // of a non-delivering turn, so the corrective prompt reaches a dead pipe. The Run must
+    // still reach the documented verdict (`protocol.md` §6) instead of parking as
+    // `interrupted`, which no drill or board can act on (WP-12 R6).
+    const seen: AttemptResultInput[] = [];
+    const lifecycle = new RunLifecycle({ store });
+    const withHandler = new RunnerSupervisor({
+      store,
+      spawn: spawnPort(),
+      prepare: invocation,
+      recovery: new RunRecoveryService({ store, probe, now: () => new Date(clock).toISOString() }),
+      lifecycle,
+      now,
+      tickMs: 60_000,
+      onAttemptResult: (input) => {
+        seen.push(input);
+        // The daemon's own rule (`control-handler.ts`): one correction, then the verdict.
+        if (input.corrections === 0) return 'Submit through stage_yield.';
+        lifecycle.contractViolation(input.runId, {
+          attemptId: input.attemptId,
+          reason: 'the Attempt ended twice without a structured submission',
+          rejections: input.corrections + 1,
+        });
+        return undefined;
+      },
+      log: () => undefined,
+    });
+    const runId = queueRun({ role: 'backend' });
+    withHandler.tick();
+    const runner = FakeRunner.spawned[0];
+    if (runner === undefined) throw new Error('unreachable');
+    probe.setAlive(`pid:${String(runner.pid)}`, true);
+    runner.emit({
+      type: 'attempt.ready',
+      sessionId: 'session-1',
+      provider: 'stub',
+      modelId: 'stub-model',
+      tools: [],
+      droppedTools: [],
+      environmentRef: 'host:test/test/node-0',
+    });
+    runner.emit({
+      type: 'attempt.event',
+      seq: 0,
+      event: { type: 'text_delta', delta: 'I updated the file.' },
+    });
+    runner.emit({ type: 'attempt.result', status: 'completed', message: 'prompt completed' });
+    expect(runner.lastCommand).toMatchObject({ type: 'attempt.steer' });
+    expect(store.runs.find(runId)?.status).toBe('running');
+
+    // `apps/runner`'s `finish()` exits the process right after reporting.
+    runner.exit(0, null);
+    expect(store.runs.find(runId)?.status).toBe('contract_violation');
+    expect(withHandler.liveAttempts()).toHaveLength(0);
+    expect(seen).toHaveLength(2);
+    // The verdict reads the (empty) second answer, not the first turn's text: `correct()`
+    // clears the buffer so an earlier stray JSON block cannot make the retry look compliant.
+    expect(seen[1]).toMatchObject({ corrections: 1, submitted: false, text: '' });
+  });
+
+  it('still parks a Runner that dies uncleanly after a correction (no false verdict)', () => {
+    const lifecycle = new RunLifecycle({ store });
+    const withHandler = new RunnerSupervisor({
+      store,
+      spawn: spawnPort(),
+      prepare: invocation,
+      recovery: new RunRecoveryService({ store, probe, now: () => new Date(clock).toISOString() }),
+      lifecycle,
+      now,
+      tickMs: 60_000,
+      onAttemptResult: (input) => {
+        if (input.corrections === 0) return 'Submit through stage_yield.';
+        lifecycle.contractViolation(input.runId, {
+          attemptId: input.attemptId,
+          reason: 'twice',
+          rejections: input.corrections + 1,
+        });
+        return undefined;
+      },
+      log: () => undefined,
+    });
+    const runId = queueRun({ role: 'backend' });
+    withHandler.tick();
+    const runner = FakeRunner.spawned[0];
+    if (runner === undefined) throw new Error('unreachable');
+    probe.setAlive(`pid:${String(runner.pid)}`, true);
+    runner.emit({
+      type: 'attempt.ready',
+      sessionId: 'session-1',
+      provider: 'stub',
+      modelId: 'stub-model',
+      tools: [],
+      droppedTools: [],
+      environmentRef: 'host:test/test/node-0',
+    });
+    runner.emit({ type: 'attempt.result', status: 'completed', message: 'prompt completed' });
+    expect(runner.lastCommand).toMatchObject({ type: 'attempt.steer' });
+
+    // A crash after the correction is a *lost* execution, not model non-compliance: the
+    // Run parks (resumable `interrupted`, or `recovery_required` while the process cannot be
+    // confirmed dead) and never gets a fabricated verdict.
+    runner.exit(1, null);
+    expect(SUPERVISOR_PARKED_STATUSES).toContain(store.runs.find(runId)?.status);
   });
 
   it('treats an accepted control submission as compliant and never corrects it', () => {
@@ -654,6 +769,7 @@ describe('RunnerSupervisor claiming', () => {
       modelId: 'stub-model',
       tools: [],
       droppedTools: [],
+      environmentRef: 'host:test/test/node-0',
     });
     // The control endpoint records the accepted `stage.submit` on the live Attempt.
     withHandler.noteSubmitted(runId, runner.input.attempt.id);
@@ -690,6 +806,7 @@ describe('RunnerSupervisor claiming', () => {
       modelId: 'stub-model',
       tools: [],
       droppedTools: [],
+      environmentRef: 'host:test/test/node-0',
     });
     runner.emit({ type: 'attempt.result', status: 'completed', message: 'done' });
     expect(store.runs.find(runId)?.status).toBe('completed');
@@ -708,6 +825,7 @@ describe('RunnerSupervisor claiming', () => {
       modelId: 'stub-model',
       tools: [],
       droppedTools: [],
+      environmentRef: 'host:test/test/node-0',
     });
     runner.emitWithEpoch(99, { type: 'attempt.result', status: 'failed', message: 'stale' });
     expect(store.runs.find(runId)?.status).toBe('running');
@@ -809,6 +927,7 @@ describe('RunnerSupervisor heartbeat and recovery', () => {
       modelId: 'stub-model',
       tools: [],
       droppedTools: [],
+      environmentRef: 'host:test/test/node-0',
     });
     // Two lease windows pass, but the Runner keeps beating.
     for (let index = 0; index < 3; index += 1) {
@@ -968,6 +1087,7 @@ describe('RunnerSupervisor heartbeat and recovery', () => {
       modelId: 'stub-model',
       tools: [],
       droppedTools: [],
+      environmentRef: 'host:test/test/node-0',
     });
     runner.emit({ type: 'attempt.result', status: 'completed', message: 'done' });
     expect(store.runs.find(runId)?.status).toBe('completed');
@@ -987,6 +1107,7 @@ describe('RunnerSupervisor heartbeat and recovery', () => {
       modelId: 'stub-model',
       tools: [],
       droppedTools: [],
+      environmentRef: 'host:test/test/node-0',
     });
     // The user cancels while the Runner is still working…
     const run = store.runs.find(runId);

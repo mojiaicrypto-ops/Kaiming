@@ -185,6 +185,14 @@ export interface ProjectExecutionControl {
     readonly stageGate: StageGate;
     /** The Attempt read ledgers, for `context.request` (`AC-032`/`AC-085`). */
     readonly readLedgers: ReadLedgerRegistry;
+    /**
+     * The execution environment the live Attempt reported in `attempt.ready`.
+     *
+     * The supervisor owns the live map and is built after the control handler, so this
+     * is a lazy lookup rather than the instance itself; `undefined` means the Attempt
+     * has not reported ready (a delivery that freezes a manifest must then fail closed).
+     */
+    readonly environmentRefOf?: (attemptId: string) => string | undefined;
   }) => {
     readonly handler: ControlHandler;
     /**
@@ -292,7 +300,13 @@ export async function createProjectExecution(
   // binding a stage result reports (`AC-085`).
   const readLedgers = new ReadLedgerRegistry({ store: options.store });
   const stageGate = new StageGate({ store: options.store, lifecycle, readLedgers });
-  const attached = options.control?.attach({ orchestrator, stageGate, readLedgers });
+  const supervisorHolder: { current?: RunnerSupervisor } = {};
+  const attached = options.control?.attach({
+    orchestrator,
+    stageGate,
+    readLedgers,
+    environmentRefOf: (attemptId) => supervisorHolder.current?.environmentRefOf(attemptId),
+  });
   // The tool bridge shares this stack's lifecycle and its `GrantStore`: the same rows the
   // permission chain mints are the ones the Broker consumes and `onAttemptEnded` revokes.
   const toolGrants = new GrantStore({ store: options.store });
@@ -415,6 +429,7 @@ export async function createProjectExecution(
     },
     log,
   });
+  supervisorHolder.current = supervisor;
 
   /** The Run's `(work, role, stage)` facts, or `undefined` when the Run is gone. */
   function ensureRunGrants(runId: string): EnsureRunGrantsResult {

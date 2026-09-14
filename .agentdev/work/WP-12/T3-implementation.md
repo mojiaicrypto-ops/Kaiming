@@ -521,3 +521,72 @@ control-endpoint: ... stage.submit success
 - **两个授权系统的口径不一致（产品层，仍未裁决）**：Work 授权（用户消息 → Assessment scope）可以覆盖 Run 的 `(role, stage)` readScope 之外的路径。现在的处置是**在准入层拒绝**（`CONTEXT_FORBIDDEN`，由 Chief 经 `context.request` 走加宽流程），因此「用户明确要求改 `docs/notes.md`」的交付需要一次 context 加宽才拿得到内容，而不是被静默放行。口径是否统一（是否让授权自动成为 readScope 的一部分）属于 context 侧（`context.md` §1 / `acl.scopeFor`）的裁决——归属 T4b/上下文切片。
 - `recordOutOfScope` 仍把请求拼成 `artifact` ref（`read-ledger.ts`），对 code/doc 路径可能被 `requestExpansion` 的 artifact 类规则拒绝（该失败只被容忍、不伪装成功）。是否改为按路径归属 `git` 来源属 context 切片。
 - 其余缺口同 §9.3（容器内 Unix-socket 代理、容器化 Runner、per-Task worktree、secret 触发面、`bash`/`git` 读不入账本、Inbox 渲染、`permission.respond` run 级放宽、验收登记）。
+
+## 12. G8 硬化（工具桥权限隔离）
+
+### 12.1 本轮交付（真实证据层级）
+
+G8 的 AC（AC-045/046/047/048/049/050/051/053）此前只有库级/单测证据。本轮把其中**能在真实 Broker/Grant/账本上判定的部分**提升为应用层产品路径证据，全部落在**真实 SQLite + 真实 `Broker` + 真实 `GrantStore` + 真实 `ReadLedgerRegistry`** 上（`apps/daemon/test/tool-handler.integration.test.ts`，22 例）：
+
+| 行为 | 用例（标题含 AC） | 断言 |
+|---|---|---|
+| 只读角色/无 shell 角色不能执行工具 | `refuses a tool the role does not hold before consulting the Grant (AC-048)` | review 调 `bash` → `NOT_AUTHORIZED`，未落 `tool_operation` |
+| 越范围读取**准入层拒绝** | `refuses a read outside the Attempt readScope at admission, leaking nothing (AC-032/AC-048)` | `CONTEXT_FORBIDDEN`；错误文本不含文件内容；`toolOperations.count()===0`（Broker 未被调用）；账本 0 条且未 degraded |
+| 环境操作未批准被拒 → 批准后放行 | `admits an environment operation only after its exact approval (AC-049)` | 无 Grant 时 `NOT_AUTHORIZED` 且无行；`requestPermission` 记 pending 并把 Run 移入 `waiting_permission`；批准（真实 `approvePermission`，`scope:'once'`, `limits:{maxCalls:1}`）后同一 operation 的调用**真实执行**（`echo approved-by-the-user`），Run 回到 `running` |
+| once + inputHash 绑定/重放 | 同上 | 同 id+同 hash 重放 → 复用同一 `tool_operation`（全 Run 仅 1 行）；同 id 异 args → `IDEMPOTENCY_CONFLICT`；异 id（已消费的 once Grant）→ `IDEMPOTENCY_CONFLICT` 且**不落**新行 |
+| Grant `limits` → BUDGET_EXCEEDED | `enforces an approved Grant limit with BUDGET_EXCEEDED (AC-049)` | 唯一 Grant 允许 0 次调用 → `BUDGET_EXCEEDED`，工具未执行、无行 |
+| Full Access 下 Review/Test 仍隔离 | `pins Review calls to the container even under a host policy (AC-050)` | Review 在 host 策略下仍被钉到 container（缺 Docker 即 `PROVIDER_UNAVAILABLE`，不降级宿主） |
+| Secret 隔离（诱饵扫描） | `injects the tool-audience secret a Grant covers, and only then (AC-051)` | 仅持 `secret` Grant 时注入；无 Grant 不注入 |
+| 读账本绑定 | `records the read in the Attempt ledger and returns its binding (AC-085)` | binding = 真实账本 `{seq,hash}`，条目含 path/revision/reason |
+| 容器模式真实隔离 | `packages/core/test/tool-http.integration.test.ts`（既有，真 Docker） | 真容器内 `NO_NET`、只挂载工作区、非 root |
+
+以上即 `pnpm test:integration` 的 suite 层逐 AC 行（标题带 AC 名，聚合器按标题映射；`scripts/lib/drill-acs.mjs` 按 §6.1 **不**新增 `recorded-gap`，因为这些 AC 不是「本环境做不到」）。
+
+### 12.2 G8 的 drill（`pnpm test:e2e`）行已落地：`tool.broker-admission`
+
+按 T2 的 G8 裁决（fixture 必须走产品路径；无可用绑定不得静默挂起；不改契约）实现并跑通：
+
+- 新增 e2e 检查 `tool.broker-admission`（`scripts/e2e.mjs`，AC 列表 `AC-032/AC-045/AC-048/AC-050`），复用 `scripts/lib/e2e-stack.mjs` 的**回环模型桩**：真实 message → 真 Chief **Runner 子进程** → 真 `agent.dispatch` → 专业 Runner 子进程 → 真 Broker/Grant/账本。断言全部落在真实行/事件上：`CONTEXT_FORBIDDEN`（越 readScope 的读取在准入层被拒）、`GATE_NOT_READY`（未批准 Plan 的写）、`NOT_AUTHORIZED`（无 Grant）、被拒路径**无** `tool_operation` 残留、源文件 hash 不变、`request_dispatch` → `chief_action_required` 且**0 孙 Run**、role faces（Chief 无 `bash/write/edit`；专业 Run 有）、Attempt 结束后 Grant 全部撤销。桩只在模型输出层（`scripts/lib/e2e-stack.mjs` 新增 `AGENTDEV-G8-TOOLBRIDGE` 分支，逐轮脚本化 tool_calls）。
+- 该检查的 AC 列表即逐 AC 映射（进 `e2e-results.json` 的逐 AC 行）；按 hardening-plan §6.1 **不**新增 `recorded-gap`（这些 AC 不是环境受限）。
+
+### 12.2b 裁决 2（产品面必修，已实现 + 两条测试）
+
+`ToolGrantService.requestPermission`（`packages/core/src/permissions.ts`）现在**拒绝**无法绑定的请求，不再造 pending Decision 把 Run 永久停在 `waiting_permission`：
+
+- 路径类操作（`RUN_FILE_OPERATIONS`）`targets` 为空 → `VALIDATION_ERROR`；
+- Work 对该 role **没有 Task**（Run 从未经批准 Plan 派发）→ `MISSING_CONTEXT`。
+
+测试（`packages/core/test/permissions-bridge.test.ts`）：① 空 targets 的批准链请求被拒（`VALIDATION_ERROR`，Decision 数不变，Run 仍 `running`）；② 无 Task 的 role 请求被拒（`MISSING_CONTEXT`，Decision 数不变，Run **不**进 `waiting_permission`）。drill 侧证实：无 Task 的 Run 首次越权调用后以 **`contract_violation`** 终结（可诊断终态），`pending` permission Decision 为 0。
+
+裁决 3：`taskSchema.planRef` 未改（不为绕过 Plan 的派发补 Task 行）。
+
+### 12.2c 已关闭的原阻断（记录在案）
+
+原计划 S10 另三个检查（`dispatch.no-grandchild`/`join.sibling-failure`/`stage.contract-violation`）仍未落地；`tool.broker-admission` 已覆盖其中的孙 Run 与准入部分。此前用「绕过 Plan 门的控制通道派发」当正例时命中的两个缺陷如下（T2 已裁决：那是 fixture 错误，不是产品路径）：
+
+1. **`plan.approve` 队列化静默失败（`runId: null`）**：真实链上 Chief Run 处于 `running`、Plan 门禁返回 `status:'applied'`、`store.tasks` 已 materialize（`tasks=1`）、Work 授权与预算正常，但 `queueApprovedRun` 返回 `null` → 无 professional Run → 后续所有等待永不满足。`queueApprovedRun` 把原因写进 `services.log`（`protocol.ts:5336/5344/5426`），而 `openProject` 不装配 `log`，因此失败不可诊断（我尝试给 `opened.services.log` 赋值未生效）。**归属 T4b/T2**：需要把 `plan.approve` 的入队失败原因 surfaced（或在 `openProject` 装配诊断 sink）；本切片只报告。
+2. **子进程回合内停摆**：同一次尝试里出现「模型返回 1 个 tool_call → 子进程不再发 `tool_start`/`tool_end`/`attempt.error`，回合挂住」的现象（`gateway-proxy: stream … 1 tool call(s)` 之后无事件）。**已排除**的假设（真实 bisect）：多工具回合、连续第二次 `read`（T3b drill 把 turn 1 由 `edit` 改成第二次 `read` 后**整链跑完**，仅文件内容断言失败）、host epoch 字串、Chief 的未知工具 `bash` 回合。真正的触发条件未定位。**归属**：`apps/runner`/Pi SDK 与 `packages/core/src/model-gateway.ts` 的流式转发（T2 车道），需要一次独立的「两个连续工具回合」最小复现。
+
+**T2 定位的真实根因**（与上面 1/2 一致）：绕过 `plan.approve` 派发的专业 Run 没有 backend 的 Task 行 → `grants created=0 (MISSING_CONTEXT: Work … has no Task for role backend)` → 首次 `read` 无 Grant → `NOT_AUTHORIZED` → Runner 记权限请求（空 targets）→ Run 被移入 `waiting_permission` → `targets=[]`、无 `tool_operation`、`stage.submit` 永不可接受 ⇒ 超时。裁决 2 的守卫与裁决 1 的负例断言（`contract_violation`）就是按此闭合的。
+
+临时/探针文件（`tool-bridge-permissions.integration.test.ts`、`probe-g8turn1`、`zz-probe-b`）已全部移除并清掉 index 残留，`pnpm test:integration` 与聚合器不再遇到「文件已删除/未映射」。
+
+### 12.3 本轮实测（串行，最终树）
+
+| 命令 | 退出码 | 结果 |
+|---|---|---|
+| `pnpm typecheck` | 0 | 无诊断 |
+| `pnpm test:unit` | 0 | `Test Files 76 passed`、`Tests 1411 passed (1411)` |
+| `pnpm test:integration` | 0 | `Test Files 51 passed`、`Tests 506 passed`（验收器内复跑；期间一次单独全量跑出现 T5 车道 `project-initialization.integration.test.ts` 的 `InitializeRefused`(AC-027) 单例失败，随后未复现） |
+| `node scripts/e2e.mjs --no-write` | 0 | `25 checks — PASS 24 / FAIL 0 / UNVERIFIED 1`、`27 ACs accounted for by the drill` |
+| `node scripts/acceptance.mjs --no-write` | 0 | `94/94 ACs accounted — PASS 83 / ACCEPTED 11 / FAIL 0 / MISSING 0` |
+| `pnpm docs:check` | 0 | 16 documents / 65 links / 94 AC / 9 requirements / 11 WP |
+| `pnpm exec prettier --check <本切片 7 个文件>` | 0 | 全部符合 |
+| `pnpm lint` | 1 | 4 处**全部非本切片**（T5 车道）：`apps/daemon/src/project-directory.ts:717`、`apps/daemon/test/project-host.integration.test.ts:125,133`、`tests/browser/stack-runtime.mjs:274` |
+
+`scripts/lib/drill-acs.mjs` 只**追加**：AC-003/005/069 的 `provider-absent` 登记（此前缺失导致 `node scripts/acceptance.mjs` 以 3 条「未登记的 UNVERIFIED」失败）。它们与既有 AC-001/007/010/037/041/043/066 同形：`condition: provider-absent`、`closedBy: pnpm test:live`，`decision`/`gap` 里注明离线产品路径已由 `pnpm test:e2e` 的 `chief.message-to-stage`（真 daemon + 真 Runner 子进程 + 回环桩）与提交套件覆盖。未改 T6 的任何行。
+
+### 12.4 追加发现（供 T4b/T2）
+
+- `plan.approve` 的 `queueApprovedRun` 失败原因只进 `services.log`，`openProject` 不装配 → 真实链上「Plan 批准了但没有 Run」不可诊断（§12.2-1）。
+- 已消费的 `once` Grant 被**另一个 operation id** 复用时，Broker 返回 `IDEMPOTENCY_CONFLICT`（`grant already consumed by …`）而不是 `NOT_AUTHORIZED`；行为安全（未执行、未落行），但错误码语义值得在 `protocol.md` §7 明确（本切片测试按实际行为断言）。

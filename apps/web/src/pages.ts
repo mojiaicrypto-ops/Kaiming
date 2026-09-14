@@ -157,10 +157,21 @@ function actionButton(input: {
 // Projects
 // ---------------------------------------------------------------------------
 
+/**
+ * `/projects` — the installation's project list and switcher (WP-12 T5).
+ *
+ * `experience.md` §1: the page lists what this installation serves and lets the user
+ * move between projects; `protocol.md` §3 `project.list` is the data source. A
+ * project that cannot be navigated to (a missing root, a damaged registry entry)
+ * renders its typed reason instead of a dead link, and the lifecycle/init facts the
+ * daemon reports are shown as chips so "initializing" is never implicit.
+ */
 export function renderProjectsPage(input: {
   readonly projects: readonly JsonObject[];
   readonly currentProjectId: string;
   readonly counts: Readonly<Record<string, number>>;
+  /** Damaged registry entries the installation skipped (WP-12 T5 Q2). */
+  readonly problems?: readonly string[];
   readonly t: Translator;
   readonly language: string;
   readonly panelMode: string;
@@ -169,17 +180,35 @@ export function renderProjectsPage(input: {
   const rows = input.projects
     .map((project) => {
       const id = text(project['id']);
+      const name = text(project['name'], text(project['root']));
       const root = text(project['root']);
       const head = text(project['head']);
       const state = text(project['state'], 'open');
+      const lifecycle = text(project['lifecycleState'], state);
       const trust = text(project['trust'], 'untrusted');
+      const problem = text(project['problem']);
+      const initialization = text(project['initialization']);
+      const runningRuns = project['runningRuns'];
+      const current = id === input.currentProjectId;
+      // A project that is not navigable is not a link: the switcher must never offer a
+      // destination the installation cannot serve.
+      const navigable = problem === '' && lifecycle !== 'missing' && lifecycle !== 'unreadable';
       return [
-        `<li class="project-row" data-project="${escapeHtml(id)}" data-i18n-project="${escapeHtml(id)}">`,
-        `<a class="project-link" href="/projects/${escapeHtml(id)}/chief">${escapeHtml(root)}</a>`,
+        `<li class="project-row${current ? ' current' : ''}" data-project="${escapeHtml(id)}" data-state="${escapeHtml(lifecycle)}" data-i18n-project="${escapeHtml(id)}">`,
+        navigable
+          ? `<a class="project-link" href="/projects/${escapeHtml(id)}/chief"${current ? ' aria-current="page"' : ''}>${escapeHtml(name)}</a>`
+          : `<span class="project-link unavailable" aria-disabled="true" title="${escapeHtml(problem)}">${escapeHtml(name)}</span>`,
+        `<span class="project-meta mono">${escapeHtml(root)}</span>`,
         `<span class="project-meta mono">${escapeHtml(head.slice(0, 12))}</span>`,
-        chip('state', state),
+        chip('state', lifecycle),
         chip('trust', trust),
-        stateLabel(t, state) === state ? '' : '',
+        typeof runningRuns === 'number' && runningRuns > 0
+          ? chip('runs', String(runningRuns), 'attention')
+          : '',
+        initialization === '' ? '' : chip('init', initialization),
+        problem === ''
+          ? ''
+          : `<span class="project-problem" role="status">${escapeHtml(problem)}</span>`,
         '</li>',
       ].join('');
     })
@@ -187,11 +216,15 @@ export function renderProjectsPage(input: {
   const counts = Object.entries(input.counts)
     .map(([key, value]) => chip(key, String(value)))
     .join('');
+  const problems = (input.problems ?? [])
+    .map((problem) => `<li class="registry-problem" role="status">${escapeHtml(problem)}</li>`)
+    .join('');
   return [
     section(
       { id: 'projects', titleKey: 'nav.projects', t },
       [
         rows === '' ? emptyNote(t, 'board.empty') : `<ul class="project-list">${rows}</ul>`,
+        problems === '' ? '' : `<ul class="registry-problems">${problems}</ul>`,
         `<p class="hint" id="currentProject" data-project="${escapeHtml(input.currentProjectId)}">${escapeHtml(input.currentProjectId)}</p>`,
         `<div class="chips">${counts}</div>`,
         `<p class="hint" data-i18n="board.l1Hidden">${escapeHtml(t('board.l1Hidden'))}</p>`,

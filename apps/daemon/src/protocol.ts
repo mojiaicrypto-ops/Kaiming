@@ -36,6 +36,7 @@ import {
   type ErrorCode,
   type FindingSeverity,
   type JsonObject,
+  type JsonValue,
   type Plan,
   type PortableRequirement,
   type ProviderInput,
@@ -93,6 +94,7 @@ import {
 } from '@agentdev/core';
 import { withTransaction, type BlobStore, type Event, type ProjectStore } from '@agentdev/storage';
 import { createNodeWorktreeGitPort } from '@agentdev/workspace';
+import type { ProjectDirectoryPort, ProjectEntry } from '@agentdev/web';
 
 /** One authenticated caller, as the daemon resolved it from cookie or credential. */
 export interface WorkbenchCaller {
@@ -203,6 +205,16 @@ export interface WorkbenchServices {
    * never answers a permission request it cannot honour.
    */
   toolBridge?: ToolBridgePort;
+  /**
+   * The installation-level project directory (WP-12 T5).
+   *
+   * Attached by the host like `orchestrator`: the directory owns the registry, the
+   * per-root locks and the open instances, so `project.*` commands delegate to it
+   * instead of inventing a second runtime inside one project's daemon
+   * (`ARCHITECTURE.md` §4: one `ProjectRuntime` per Git root). Without it the
+   * lifecycle commands refuse with `INVALID_STATE` rather than fabricating a success.
+   */
+  projectDirectory?: ProjectDirectoryPort;
   readonly now?: () => number;
   /** Diagnostic sink for background work (the `provider.test` probe). */
   readonly log?: (line: string) => void;
@@ -506,7 +518,18 @@ const REQUIREMENT_LIFECYCLE_TRANSITIONS: Readonly<Record<string, readonly string
 /** Methods served without a Project scope (global configuration etc.). */
 const GLOBAL_METHODS: readonly string[] = [
   'connection.hello',
+  // `project.*` is installation-level by construction (WP-12 T5): the directory serves
+  // the whole installation, so these carry no `projectId` requirement and a caller's
+  // `projectId` is never compared against this daemon's own project
+  // (`protocol.md` §1: "全局方法省略projectId").
   'projects',
+  'project.list',
+  'project.open',
+  'project.create',
+  'project.clone',
+  'project.trust',
+  'project.close',
+  'project.initialize',
   'settings',
   'agents',
   'ui.translate',
@@ -527,6 +550,11 @@ const GLOBAL_METHODS: readonly string[] = [
 /** Methods that change state and therefore accept an `idempotencyKey`. */
 export const WRITE_METHODS: readonly string[] = [
   'project.open',
+  'project.create',
+  'project.clone',
+  'project.trust',
+  'project.close',
+  'project.initialize',
   'conversation.create',
   'conversation.message.send',
   'work.control',
@@ -581,6 +609,11 @@ export const WRITE_METHODS: readonly string[] = [
 const LEDGER_WRAPPED_METHODS: readonly string[] = [
   'conversation.create',
   'project.open',
+  'project.create',
+  'project.clone',
+  'project.trust',
+  'project.close',
+  'project.initialize',
   'work.control',
   'requirement.save',
   'requirement.continue',
@@ -1063,6 +1096,20 @@ export class WorkbenchProtocol {
     this.services.gateway = gateway;
   }
 
+  /**
+   * Attaches the installation-level project directory (WP-12 T5).
+   *
+   * `project.list/open/create/clone/trust/close/initialize` are installation-level:
+   * they must answer for every project the installation serves, not only this
+   * daemon's own. The directory is the one owner of that truth (`main.ts` builds it),
+   * and this method is the same late-attachment seam `attachOrchestrator` uses.
+   * Without it those commands refuse with `INVALID_STATE` instead of fabricating a
+   * navigation fact.
+   */
+  attachProjectDirectory(directory: ProjectDirectoryPort): void {
+    this.services.projectDirectory = directory;
+  }
+
   /** Resolves the caller from the session cookie / installation credential. */
   authenticateRequest(
     request: IncomingMessage,
@@ -1375,7 +1422,17 @@ export class WorkbenchProtocol {
       case 'project.list':
         return this.listProjects(params);
       case 'project.open':
-        return this.openProject(params);
+        return this.openProject(params, options);
+      case 'project.create':
+        return this.createProject(params, options);
+      case 'project.clone':
+        return this.cloneProject(params, options);
+      case 'project.trust':
+        return this.trustProject(params, options);
+      case 'project.close':
+        return this.closeProject(params, options);
+      case 'project.initialize':
+        return this.initializeProject(params, options);
       case 'project.snapshot.get':
         return this.projectSnapshot();
       case 'conversation.list':
@@ -1522,9 +1579,27 @@ export class WorkbenchProtocol {
   // Queries
   // -------------------------------------------------------------------------
 
+  /**
+   * `project.list` — the installation-wide navigation list (`protocol.md` §3, T5).
+   *
+   * With the directory attached the answer covers every project the installation
+   * knows (open, closed and discoverable), which is what the single-entry switcher
+   * renders; damaged registry entries are reported as typed `unreadable` items rather
+   * than aborting the list (Q2). Without it this daemon can only answer for the one
+   * Project it serves, which is the honest fallback for an older host.
+   */
   private listProjects(params: JsonObject): unknown {
     const limit = boundedLimit(params['limit']);
     const filter = optionalString(params['filter']) ?? 'all';
+    const directory = this.services.projectDirectory;
+    if (directory !== undefined) {
+      const items = directory
+        .list()
+        .filter((entry) => (filter === 'running' ? entry.runningRuns > 0 : true))
+        .slice(0, limit)
+        .map((entry) => this.projectSummaryOfEntry(entry));
+      return { items, nextCursor: null, problems: directory.problems };
+    }
     const rows = this.services.store.projects.list({ orderBy: 'updated_at DESC' });
     // `filter` narrows the navigation list; `recent`/`all` keep every open Project.
     const openOnly = filter === 'recent' || filter === 'all' ? false : true;
@@ -1533,43 +1608,190 @@ export class WorkbenchProtocol {
       .filter((row) => (openOnly ? row.state === 'open' : true))
       .slice(0, limit)
       .map((row) => this.projectSummaryOf(row.id));
-    return { items, nextCursor: null };
+    return { items, nextCursor: null, problems: [] };
   }
 
-  private openProject(params: JsonObject): unknown {
+  /**
+   * `project.open` (`protocol.md` §3).
+   *
+   * An already-open root answers the documented `{projectId,version,trust,gitState}`
+   * synchronously and idempotently; a root this installation does not serve yet is
+   * assembled by the directory. Assembly binds listeners, so that case answers the
+   * long-operation envelope `accepted` + `operationId` — `project.list` reports the
+   * project `open` once it is serving, and a failure emits `operation.failed` into
+   * this daemon's own stream (Q9).
+   */
+  private openProject(params: JsonObject, options: { readonly idempotencyKey?: string }): unknown {
     const root = requiredString(params, 'root');
-    const project = this.services.store.projects.find(this.projectId);
-    if (project === undefined) {
-      throw new ProtocolError('NOT_FOUND', `Project ${this.projectId} is not registered`);
-    }
-    // Identity normalisation is a real fact (`ARCHITECTURE.md` §4): a subdirectory
-    // resolves to the repository root, and any other root belongs to a
-    // ProjectRuntime this daemon does not hold, so it is NOT_FOUND rather than a
-    // second Project invented on the wire.
-    const normalized = normalizeRoot(root);
-    const known = [project.root, project.gitRoot].filter(
-      (candidate): candidate is string => candidate !== undefined,
-    );
-    if (!known.some((candidate) => normalizeRoot(candidate) === normalized)) {
-      throw new ProtocolError(
-        'NOT_FOUND',
-        `root ${root} is not the Project this daemon has open (${project.root})`,
-        { details: { root, projectId: this.projectId, openRoot: project.root } },
+    const directory = this.services.projectDirectory;
+    if (directory === undefined) {
+      const project = this.services.store.projects.find(this.projectId);
+      if (project === undefined) {
+        throw new ProtocolError('NOT_FOUND', `Project ${this.projectId} is not registered`);
+      }
+      // Identity normalisation is a real fact (`ARCHITECTURE.md` §4): a subdirectory
+      // resolves to the repository root, and any other root belongs to a
+      // ProjectRuntime this daemon does not hold, so it is NOT_FOUND rather than a
+      // second Project invented on the wire.
+      const normalized = normalizeRoot(root);
+      const known = [project.root, project.gitRoot].filter(
+        (candidate): candidate is string => candidate !== undefined,
       );
+      if (!known.some((candidate) => normalizeRoot(candidate) === normalized)) {
+        throw new ProtocolError(
+          'NOT_FOUND',
+          `root ${root} is not the Project this daemon has open (${project.root})`,
+          { details: { root, projectId: this.projectId, openRoot: project.root } },
+        );
+      }
+      return {
+        status: 'applied',
+        entityId: project.id,
+        version: project.version,
+        projectId: project.id,
+        project,
+        gitState: { gitRoot: project.gitRoot ?? null, head: project.head ?? null },
+        trust: project.trust,
+      };
     }
+    const known = directory.findByRoot(root);
+    if (known !== undefined && known.state === 'open' && known.projectId !== null) {
+      return {
+        status: 'applied',
+        entityId: known.projectId,
+        version: 0,
+        projectId: known.projectId,
+        project: known,
+        gitState: { gitRoot: known.gitRoot, head: known.head },
+        trust: known.trust,
+      };
+    }
+    // The identity resolution below also rejects a missing path before the answer, so
+    // "accepted" is never returned for a root that cannot exist.
+    const projectId = directory.projectIdFor(root);
+    const operationId = options.idempotencyKey ?? this.services.store.newId();
+    void directory.open(root, { trust: true }).catch((error: unknown) => {
+      this.emitOperationFailed(operationId, 'project.open', root, error);
+    });
+    return {
+      status: 'accepted',
+      operationId,
+      projectId,
+      root,
+      version: 0,
+      trust: 'trusted',
+      gitState: { gitRoot: null, head: null },
+    };
+  }
+
+  /** `project.create` (`protocol.md` §3, AC-025). */
+  private createProject(
+    params: JsonObject,
+    options: { readonly idempotencyKey?: string },
+  ): unknown {
+    const directory = this.projectDirectoryOrThrow('project.create');
+    const root = requiredString(params, 'root');
+    const name = requiredString(params, 'name');
+    const operationId = options.idempotencyKey ?? this.services.store.newId();
+    void directory.create(root, name).catch((error: unknown) => {
+      this.emitOperationFailed(operationId, 'project.create', root, error);
+    });
+    return { status: 'accepted', operationId, projectId: null, root, name };
+  }
+
+  /** `project.clone` (`protocol.md` §3, AC-087; Q4's installation-level Grant). */
+  private cloneProject(params: JsonObject, options: { readonly idempotencyKey?: string }): unknown {
+    const directory = this.projectDirectoryOrThrow('project.clone');
+    const remoteUrl = requiredString(params, 'remoteUrl');
+    const root = requiredString(params, 'root');
+    const grantId = requiredString(params, 'grantId');
+    const operationId = options.idempotencyKey ?? this.services.store.newId();
+    void directory.clone(remoteUrl, root, grantId).catch((error: unknown) => {
+      this.emitOperationFailed(operationId, 'project.clone', root, error);
+    });
+    return { status: 'accepted', operationId, projectId: null, root, remoteUrl };
+  }
+
+  /** `project.trust` (`protocol.md` §3: revoking trust stops new admission). */
+  private trustProject(params: JsonObject, options: { readonly projectId?: string }): unknown {
+    const directory = this.projectDirectoryOrThrow('project.trust');
+    const projectId = this.lifecycleTarget(options, 'project.trust');
+    const trusted = params['trusted'];
+    if (typeof trusted !== 'boolean') {
+      throw new ProtocolError('VALIDATION_ERROR', 'trusted must be a boolean');
+    }
+    const entry = directory.trust(projectId, trusted);
     return {
       status: 'applied',
-      entityId: project.id,
-      version: project.version,
-      projectId: project.id,
-      project,
-      gitState: { gitRoot: project.gitRoot ?? null, head: project.head ?? null },
-      trust: project.trust,
+      entityId: projectId,
+      version: 0,
+      projectId,
+      trust: entry.trust,
+      // `protocol.md` §3: the revocation is what matters, so the answer names it.
+      admission: entry.trust === 'trusted' ? 'open' : 'stopped',
     };
+  }
+
+  /** `project.close` (`protocol.md` §3; navigation-level per Q3). */
+  private closeProject(params: JsonObject, options: { readonly projectId?: string }): unknown {
+    const directory = this.projectDirectoryOrThrow('project.close');
+    const projectId = this.lifecycleTarget(options, 'project.close');
+    const entry = directory.close(projectId);
+    return {
+      status: 'applied',
+      entityId: projectId,
+      version: 0,
+      projectId,
+      state: entry.state,
+    };
+  }
+
+  /** `project.initialize` (`protocol.md` §3, T5.3). */
+  private initializeProject(
+    params: JsonObject,
+    options: { readonly idempotencyKey?: string; readonly projectId?: string },
+  ): unknown {
+    const directory = this.projectDirectoryOrThrow('project.initialize');
+    const projectId = this.lifecycleTarget(options, 'project.initialize');
+    const sourceMessageId = requiredString(params, 'sourceMessageId');
+    const mode = params['mode'];
+    if (mode !== undefined && mode !== 'new' && mode !== 'legacy') {
+      throw new ProtocolError('VALIDATION_ERROR', 'mode must be new or legacy');
+    }
+    const budget: { files?: number; bytes?: number } = {};
+    const rawBudget = params['budget'];
+    if (rawBudget !== undefined) {
+      if (typeof rawBudget !== 'object' || rawBudget === null || Array.isArray(rawBudget)) {
+        throw new ProtocolError('VALIDATION_ERROR', 'budget must be an object');
+      }
+      const record = rawBudget as JsonObject;
+      for (const key of ['files', 'bytes'] as const) {
+        const value = record[key];
+        if (value === undefined) continue;
+        if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+          throw new ProtocolError('VALIDATION_ERROR', `budget.${key} must be a positive integer`);
+        }
+        if (key === 'files') budget.files = value;
+        else budget.bytes = value;
+      }
+    }
+    const operationId = options.idempotencyKey ?? this.services.store.newId();
+    void directory
+      .initialize(projectId, {
+        sourceMessageId,
+        ...(mode === undefined ? {} : { mode }),
+        ...(Object.keys(budget).length === 0 ? {} : { budget }),
+      })
+      .catch((error: unknown) => {
+        this.emitOperationFailed(operationId, 'project.initialize', projectId, error);
+      });
+    return { status: 'accepted', operationId, projectId };
   }
 
   private projectSnapshot(): unknown {
     const project = this.services.store.projects.find(this.projectId) ?? null;
+    const entry = this.services.projectDirectory?.entryOf(this.projectId);
+    const initialization = entry?.initialization ?? null;
     return {
       projectId: this.projectId,
       project,
@@ -1580,7 +1802,92 @@ export class WorkbenchProtocol {
         requirements: this.services.store.requirements.count(),
         runs: this.services.store.runs.count(),
       },
+      // WP-12 T5: the facts `/projects` and the ADM read without a second round trip.
+      trust: project?.trust ?? entry?.trust ?? 'untrusted',
+      initialization,
+      // The same state the Run gate (T2/T8) consumes: T5 only produces the facts
+      // (WP-12 T5 Q7).
+      deliveryReadiness:
+        initialization === null
+          ? null
+          : initialization.done
+            ? { ok: true, blockerKind: null, message: null, dirtyPaths: [] }
+            : {
+                ok: initialization.blockerKind === null,
+                blockerKind: initialization.blockerKind,
+                message: initialization.blockerMessage,
+                dirtyPaths: initialization.dirtyPaths,
+              },
+      requirementImport: entry?.import ?? null,
     };
+  }
+
+  /** The directory, or the typed refusal of a daemon whose host did not attach one. */
+  private projectDirectoryOrThrow(method: string): ProjectDirectoryPort {
+    const directory = this.services.projectDirectory;
+    if (directory === undefined) {
+      throw new ProtocolError(
+        'INVALID_STATE',
+        `${method} needs the installation project directory, which this daemon does not have`,
+        { details: { method } },
+      );
+    }
+    return directory;
+  }
+
+  /**
+   * The project a lifecycle command targets.
+   *
+   * `project.trust/close/initialize` are global methods whose params carry no
+   * `projectId` (`protocol.md` §1/§3), so the envelope's `projectId` is the target; a
+   * missing one is a validation error rather than a guess.
+   */
+  private lifecycleTarget(options: { readonly projectId?: string }, method: string): string {
+    const projectId = options.projectId;
+    if (projectId === undefined || projectId === '') {
+      throw new ProtocolError('VALIDATION_ERROR', `${method} requires the envelope's projectId`, {
+        details: { method },
+      });
+    }
+    return projectId;
+  }
+
+  /**
+   * Emits `operation.failed` for a lifecycle command that failed after it answered
+   * `accepted` (`protocol.md` §7, Q9).
+   *
+   * The event lands in the stream of the project the caller was talking to — never in
+   * an installation-level stream, which does not exist (Q9). The command envelope
+   * already said `accepted`, so this event is the honest follow-up; the admin/CLI
+   * surfaces get the error code and the same `operationId` directly.
+   */
+  private emitOperationFailed(
+    operationId: string,
+    method: string,
+    subject: string,
+    error: unknown,
+  ): void {
+    const code =
+      error instanceof Error && 'code' in error
+        ? String((error as { code: unknown }).code)
+        : 'INTERNAL_ERROR';
+    const message = error instanceof Error ? error.message : String(error);
+    this.services.log?.(`agentdevd: ${method} failed (${code}) for ${subject}: ${message}`);
+    try {
+      this.services.store.events.append({
+        name: 'operation.failed',
+        entityId: operationId,
+        entityVersion: 1,
+        data: { operationId, method, subject, code, message },
+      });
+    } catch (appendError) {
+      // A diagnostic must never replace the real failure.
+      this.services.log?.(
+        `agentdevd: operation.failed for ${operationId} could not be recorded: ${
+          appendError instanceof Error ? appendError.message : String(appendError)
+        }`,
+      );
+    }
   }
 
   private listConversations(params: JsonObject): unknown {
@@ -4985,12 +5292,49 @@ export class WorkbenchProtocol {
     }
     // `WP-12` Q3=A: the dispatch decision is already persisted in the approved Plan, so
     // Core queues the next professional Run directly instead of asking a model to repeat it.
-    const runId = this.queueApprovedRun({
+    const queued = this.queueApprovedRun({
       workId,
       plan,
       authorizationRef,
       planRef: result.planRef,
     });
+    if (queued.runId === null) {
+      // The approval is persisted, but the delivery hand-off did not happen. Returning
+      // `applied` with a null `runId` used to leave the caller waiting forever (the
+      // reason only reached an unwired log sink), so the command now fails with the
+      // machine-readable reason; the Chief-settle hook (`resumeApprovedPlan`) retries
+      // the hand-off once a live Chief Run exists again.
+      this.logLine(
+        `plan.approve: could not queue the professional Run: ${queued.reason ?? 'unknown'}`,
+      );
+      if (this.services.orchestrator === undefined) {
+        // A daemon deliberately started without the execution stack (`execute:false`,
+        // the headless query/drill surface) has no Run to queue by construction. The
+        // approval is still real and `resumeApprovedPlan` hands it off once a stack is
+        // attached, so this is not the silent `applied + null` defect: the reason is
+        // explicit in the response and the log.
+        return {
+          status: 'applied',
+          entityId: result.planRef.id,
+          version: result.planRef.version,
+          planRef: result.planRef,
+          approvalRecordHash: result.approvalRecordHash,
+          revision: result.revision,
+          currentVersion: result.planRef.version,
+          runId: null,
+          pendingRun: true,
+          reason: queued.reason,
+        };
+      }
+      // With a live stack the hand-off must not fail silently: the caller gets the
+      // machine-readable reason and the Chief-settle hook (`resumeApprovedPlan`)
+      // retries once a live Chief Run exists again.
+      throw new ProtocolError(
+        'GATE_NOT_READY',
+        `the Plan is approved but no professional Run could be queued: ${queued.reason ?? 'unknown'}`,
+        { details: { workId, planRef: result.planRef, reason: queued.reason ?? null } },
+      );
+    }
     return {
       status: 'applied',
       entityId: result.planRef.id,
@@ -4999,8 +5343,45 @@ export class WorkbenchProtocol {
       approvalRecordHash: result.approvalRecordHash,
       revision: result.revision,
       currentVersion: result.planRef.version,
-      runId,
+      runId: queued.runId,
     };
+  }
+
+  /**
+   * Re-runs the professional-Run hand-off for a Work whose Plan is already approved.
+   *
+   * `plan.approve` can race a Chief Run's end: the approval is durable in the gate, but
+   * the dispatch needs a live Chief parent. The daemon calls this when a Chief Run
+   * settles, so the hand-off is retried exactly then instead of leaving an approved Plan
+   * with no Run (G8 drill finding). A Work with no approved Plan, or one whose
+   * professional Run already exists, is a no-op.
+   */
+  resumeApprovedPlan(workId: string): {
+    readonly runId: string | null;
+    readonly reason: string | null;
+  } {
+    const work = this.services.store.works.find(workId);
+    if (work === undefined) return { runId: null, reason: `Work ${workId} does not exist` };
+    const gates = this.services.gates;
+    if (gates === undefined) return { runId: null, reason: 'this daemon has no Plan gate' };
+    const revision = work.baseRevision ?? 'working-tree';
+    const approval = gates.getCurrentPlanApproval(workId, revision);
+    const current = approval.current;
+    if (current === undefined) return { runId: null, reason: 'the gate holds no approved Plan' };
+    const already = this.approvedRunIdOf(workId, current.planRef.id);
+    if (already !== null) return { runId: already, reason: null };
+    const plan = this.readPlanBody(workId, current.planRef.id);
+    if (plan === null) return { runId: null, reason: 'the approved Plan body is unreadable' };
+    const authorizationRef = current.approval.authorizationRef;
+    if (authorizationRef === undefined || authorizationRef === '') {
+      return { runId: null, reason: 'the approved Plan records no authorizationRef' };
+    }
+    return this.queueApprovedRun({
+      workId,
+      plan: plan as unknown as PlanDraft,
+      authorizationRef,
+      planRef: current.planRef,
+    });
   }
 
   /**
@@ -5021,21 +5402,21 @@ export class WorkbenchProtocol {
     readonly plan: PlanDraft;
     readonly authorizationRef: string;
     readonly planRef: { readonly id: string; readonly version: number; readonly hash: string };
-  }): string | null {
+  }): { readonly runId: string | null; readonly reason: string | null } {
     const orchestrator = this.services.orchestrator;
-    if (orchestrator === undefined) return null;
+    if (orchestrator === undefined) {
+      return { runId: null, reason: 'the execution stack is not attached' };
+    }
     const task = input.plan.tasks.find((entry) => entry.role !== 'chief');
     if (task === undefined) {
-      this.logLine(`plan.approve: Work ${input.workId} has no professional task to dispatch`);
-      return null;
+      return { runId: null, reason: 'the approved Plan has no professional task to dispatch' };
     }
     const chief = this.services.store.runs
       .list({ where: "work_id = ? AND role = 'chief'", params: [input.workId] })
       .filter((run) => RunLifecycle.canParentDispatch(run.status))
       .at(-1);
     if (chief === undefined) {
-      this.logLine(`plan.approve: Work ${input.workId} has no live Chief Run to parent the Run`);
-      return null;
+      return { runId: null, reason: 'no live Chief Run can parent the professional Run' };
     }
     const goal = task.goal.slice(0, 2_000);
     // `rules/workflow.md` §2: the Work's level fixes the develop stage, and the
@@ -5101,10 +5482,9 @@ export class WorkbenchProtocol {
           budgetAllocation: chief.budgetAllocation,
         },
       });
-      return run.id;
+      return { runId: run.id, reason: null };
     } catch (error) {
-      this.logLine(`plan.approve: could not queue the professional Run: ${errorText(error)}`);
-      return null;
+      return { runId: null, reason: errorText(error) };
     }
   }
 
@@ -6217,6 +6597,36 @@ export class WorkbenchProtocol {
     );
   }
 
+  /**
+   * One `project.list` item from the installation directory (WP-12 T5).
+   *
+   * The first nine fields are `ProjectSummary` (`protocol.md` §3); the rest are the
+   * T5 additions the switcher needs — the real lifecycle state (`missing`/
+   * `unreadable` cannot be expressed by `ProjectState`), the typed problem, the
+   * initialization facts and the requirement-import summary. A `version` of `0` means
+   * "no local row was read for this entry" rather than "version zero", which is a
+   * fact the caller can act on.
+   */
+  private projectSummaryOfEntry(entry: ProjectEntry): JsonObject {
+    return {
+      projectId: entry.projectId ?? entry.root,
+      name: entry.name,
+      root: entry.root,
+      trust: entry.trust,
+      state: entry.state === 'open' ? 'open' : 'closed',
+      version: 0,
+      updatedAt: entry.updatedAt === '' ? new Date(0).toISOString() : entry.updatedAt,
+      runningRuns: entry.runningRuns,
+      executionReady: entry.executionReady,
+      lifecycleState: entry.state,
+      gitRoot: entry.gitRoot,
+      head: entry.head,
+      problem: entry.problem,
+      initialization: asJsonValue(entry.initialization),
+      requirementImport: asJsonValue(entry.import),
+    };
+  }
+
   private projectSummaryOf(projectId: string): ProjectSummary {
     const project = this.services.store.projects.find(projectId);
     if (project === undefined) {
@@ -7144,6 +7554,11 @@ function describeValue(value: unknown): string {
 }
 
 /** Re-serialises a value into the contract's JSON shape (drops `undefined`). */
+/** Any serialisable value as the contract's `JsonValue`, for an opaque pass-through. */
+function asJsonValue(value: unknown): JsonValue {
+  return JSON.parse(JSON.stringify(value ?? null)) as JsonValue;
+}
+
 function jsonSafe(value: unknown): JsonObject {
   return JSON.parse(JSON.stringify(value ?? null)) as JsonObject;
 }

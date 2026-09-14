@@ -1497,7 +1497,7 @@ describe('WP-09 T4: the workbench end to end over the real stack', () => {
     const form = new FormData();
     form.append('conversationId', conversationId);
     form.append('file', new Blob(['# notes\n'], { type: 'text/markdown' }), 'notes.md');
-    const uploaded = await fetch(`${harness.baseUrl}/artifacts/upload`, {
+    const uploaded = await fetch(`${harness.baseUrl}/artifacts/${harness.projectId}/upload`, {
       method: 'POST',
       headers: { origin: WEB_ORIGIN, cookie, 'x-csrf-token': csrfToken },
       body: form,
@@ -1540,7 +1540,7 @@ describe('WP-09 T4: the workbench end to end over the real stack', () => {
     const bad = new FormData();
     bad.append('conversationId', conversationId);
     bad.append('file', new Blob(['MZ'], { type: 'application/zip' }), 'x.zip');
-    const refused = await fetch(`${harness.baseUrl}/artifacts/upload`, {
+    const refused = await fetch(`${harness.baseUrl}/artifacts/${harness.projectId}/upload`, {
       method: 'POST',
       headers: { origin: WEB_ORIGIN, cookie, 'x-csrf-token': csrfToken },
       body: bad,
@@ -1852,7 +1852,7 @@ describe('WP-09 T4: the workbench end to end over the real stack', () => {
     // while the one-shot download below returns the whole body: truncation is real,
     // and its repair path exists.
     const preview = await fetch(
-      `${harness.baseUrl}/artifacts/${encodeURIComponent(artifact.id)}/preview`,
+      `${harness.baseUrl}/artifacts/${harness.projectId}/${encodeURIComponent(artifact.id)}/preview`,
       { headers: { cookie } },
     );
     expect(preview.status).toBe(200);
@@ -1871,13 +1871,13 @@ describe('WP-09 T4: the workbench end to end over the real stack', () => {
     const token = text(prepared, 'downloadToken');
     expect(token).not.toBe('');
     const download = await fetch(
-      `${harness.baseUrl}/artifacts/download/${encodeURIComponent(token)}`,
+      `${harness.baseUrl}/artifacts/${harness.projectId}/download/${encodeURIComponent(token)}`,
       { headers: { cookie } },
     );
     expect(download.status).toBe(200);
     expect((await download.text()).length).toBe(big.length);
     const second = await fetch(
-      `${harness.baseUrl}/artifacts/download/${encodeURIComponent(token)}`,
+      `${harness.baseUrl}/artifacts/${harness.projectId}/download/${encodeURIComponent(token)}`,
       { headers: { cookie } },
     );
     expect(second.status).toBeGreaterThanOrEqual(400);

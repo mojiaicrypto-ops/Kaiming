@@ -675,8 +675,19 @@ function runSummaryOf(raw: JsonObject): RunSummary {
   };
 }
 
-export function artifactViewOf(raw: JsonObject): ArtifactView {
+/**
+ * One artifact as a page renders it.
+ *
+ * `projectId` makes the preview URL carry the project explicitly (WP-12 T5 Q6):
+ * under one BFF origin a bare `/artifacts/<id>/preview` would otherwise have to be
+ * resolved from implicit "current project" state, which the ruling forbids. An
+ * omitted id keeps the legacy link for a single-project installation.
+ */
+export function artifactViewOf(raw: JsonObject, projectId?: string): ArtifactView {
   const preview = asObject(field(raw, 'preview')) ?? {};
+  const artifactId = asString(field(raw, 'id'));
+  const prefix =
+    projectId === undefined || projectId === '' ? '' : `${encodeURIComponent(projectId)}/`;
   return {
     artifactId: asString(field(raw, 'id'), asString(field(raw, 'artifactId'))),
     kind: asString(field(raw, 'kind')),
@@ -692,8 +703,8 @@ export function artifactViewOf(raw: JsonObject): ArtifactView {
     previewHref:
       typeof field(preview, 'href') === 'string'
         ? (field(preview, 'href') as string)
-        : `/artifacts/${asString(field(raw, 'id'))}/preview`,
-    downloadPreparePath: '/artifacts/download.prepare',
+        : `/artifacts/${prefix}${artifactId}/preview`,
+    downloadPreparePath: `/artifacts/${prefix}download.prepare`,
     maxInlineBytes: asNumber(field(preview, 'maxInlineBytes'), 1024 * 1024),
   };
 }
@@ -712,6 +723,8 @@ export function requirementDetail(input: {
   readonly plan?: JsonObject;
   /** The delivery branch from `project.snapshot.get` (`AC-090`). */
   readonly branch?: string;
+  /** The page's project, so artifact URLs carry it explicitly (WP-12 T5 Q6). */
+  readonly projectId?: string;
 }): RequirementDetail {
   const requirement = input.requirement;
   const work = asObject(field(requirement, 'work'));
@@ -813,7 +826,7 @@ export function requirementDetail(input: {
         : [],
     })),
     runs: input.runs.map((run) => runSummaryOf(run)),
-    artifacts: input.artifacts.map((artifact) => artifactViewOf(artifact)),
+    artifacts: input.artifacts.map((artifact) => artifactViewOf(artifact, input.projectId)),
   };
 }
 

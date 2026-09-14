@@ -265,3 +265,164 @@
 - 定向 `apps/daemon/test/prepare-run-context.integration.test.ts`：2 passed。
 - `pnpm lint`：本片文件 0 error；其余为其它车道在制文件的 prettier 警告（`apps/runner/test/read-ledger.test.ts`、`packages/core/test/gateway-http.test.ts`、`scripts/lib/live-drills.mjs`）。
 - `pnpm test:integration` 全量串行：`Test Files 45 passed (45)` / `Tests 474 passed (474)`，exit 0。
+
+---
+
+# 轮 3（续 3）：第 2 步开工前的字段裁决请求（未写代码）
+
+第 2 步要求「冻结 VerificationManifest（用既有字段）」。逐字段核对 `verificationManifestSchema`（`packages/contracts/src/entities/structures.ts:421-437`）后，**除 `environmentRef` 外全部有真实来源**：
+
+| 字段 | 真实来源 |
+|---|---|
+| workId / taskId | Work / Task 行 |
+| level / route | `Work.level`（route 用同一等级语义） |
+| planRef | `Task.planRef` |
+| dependencyRevision | `Task.dependencyRevision`（回退集成基线） |
+| dependencyManifestRefs | `Task.dependencyManifestRefs` |
+| codeRevision / codeTree | per-Task 候选提交 + `deliveredCodeTreeHash` |
+| policyHash | Project config policy 的 sha256（`config.project().policy`） |
+| contextSnapshotId | `Run.contextSnapshotId`（prepare-run 已冻结真实快照） |
+| readLedgerSeq / readLedgerHash | 已接受的 `StageResult`（`result.readLedgerSeq/Hash`） |
+| configHash | `Run.configSnapshotId` |
+| acceptanceIds | `Task.acceptanceIds` |
+| **environmentRef** | **无生产来源**：`attemptSchema`（`contracts/src/entities/run.ts:61-72`）无该字段；`runner-ipc.ts` 的 `attempt.ready`（`:38-45`）只有 sessionId/provider/modelId/tools/droppedTools；`protocol.md:123` 文档化的 `runner.ready | …,environmentRef` 在生产 IPC 里根本不存在；只有 Test Run 的 `StageResult.checkResult.checks[].environmentRef`（`findings.ts:2263`）能提供该值，实现类 Task 没有 checkResult。 |
+
+按约定「字段不够先停下报我」，**本轮未写第 2 步代码**，未用编造的环境 id 冻结合同要求的 manifest。请裁决：
+- (a) 接 `protocol.md:123` 的 `runner.ready.environmentRef`：需要改 `packages/contracts`（Attempt 或 IPC 增字段）+ `apps/runner/**`（T3 在制）——与你的边界冲突，需你放行；
+- (b) 用 Tool Broker 的容器/宿主环境描述作为 `environmentRef`（`apps/daemon/src/tool-handler.ts`/`packages/core/src/broker.ts`，T3 在制），需要一个只读端口与 id 形状定义；
+- (c) 在 core 的 dispatch 处冻结一个 `environment` 快照（不改 contracts，只是新增 snapshot type 用法），用其 hash/id 作为 `environmentRef`——属于新载体，需你确认；
+- (d) 只对 Test Run（有 `checkResult.checks[].environmentRef`）冻结 VerificationManifest，实现类 Task 暂不落 `Task.latestManifestId`——则第 2 步退出条件（实现 Task 的 manifest 绑定）无法按原文满足。
+
+**`protocol.ts` 是否可交还**：可交还。第 2 步剩余工作（Task 候选、集成、结算绑定）计划只落在 `packages/workspace/**`、`packages/core/src/settlement.ts`、`apps/daemon/src/{prepare-run,control-handler,main}.ts`，不再需要改 `protocol.ts`；它当前只含本轮已完成的 `context.preview` 注册与私有实现。
+
+本轮无代码改动，故沿用 (i) 的证据：`pnpm typecheck` exit 0；`pnpm test:unit` 75/1407 exit 0；`pnpm test:integration` 全量串行 45 files/474 tests exit 0；`pnpm docs:check` exit 0；本片 scoped lint 0 error。
+
+---
+
+# 轮 3（续 4）：第 2 步第一部分——per-Task 候选提交 + VerificationManifest + `Task.latestManifestId`
+
+## 已实现
+
+| 项 | 文件 | 说明 |
+|---|---|---|
+| Task 候选服务 | `packages/core/src/task-candidate.ts`（新，从 `core/index.ts` 导出） | `createTaskCandidateService.commit()`：在 Task 的 `dependencyRevision` 上建独立 worktree → 把 Run 的 `changedPaths` 从工作副本复制进去 → 真实提交 → 用 `refs/agentdev/tasks/<taskId>/<runId>` 保住对象 → 量出 `commitTree`（Git OID）与 `codeTree`（`deliveredCodeTreeHash`，SHA256）→ 冻结 `VerificationManifest`（`snapshot type='verification'`，payload 含 `manifestId`/`workId`/`taskId`/`manifest`，**用既有字段**）→ 写 `Task.latestManifestId`；无改动则复用 base（`reusedBase:true`）。worktree 用完即删（提交由 ref 保活）。 |
+| `environmentRef` 消费端（部分） | 同上 | 服务把 `environmentRef` 作为**调用方输入**，为空 → `MISSING_CONTEXT` 且不冻结、不写 Task（fail-closed）。T3 的 `attempt.ready.environmentRef` 生产者已落地（见下），supervisor→stage.submit 的透传待接。 |
+
+## 测试
+
+`packages/core/test/task-candidate.integration.test.ts`（新，2 例，真实临时 Git 仓库 + 真实 SQLite）：
+1. Task A 候选为真实 40-hex、`commitTree ≠ codeTree`、`codeTree == deliveredCodeTreeHash`、ref 可 `resolveRevision`、`Task.latestManifestId` 已写、冻结 manifest 的 `codeRevision/codeTree/environmentRef` 正确；Task B 以 A 的候选为 base 提交，`isAncestor(A,B)===true`（祖先关系为去重前提）；无改动 Run 复用 base。
+2. `environmentRef` 为空 → `MISSING_CONTEXT`，未冻结任何 manifest、Task 无 `latestManifestId`。
+
+## 状态与下一步（未做部分）
+
+- **T3 生产者已到位**：本轮 typecheck 报错显示 `packages/contracts/src/runner-ipc.ts` 的 `attempt.ready` 现已有必填 `environmentRef`（T3 的 `packages/core/test/supervisor.test.ts` 尚未更新 fixture，故其测试文件当前 tsc 报缺字段——非本片文件）。消费端下一步：supervisor/live attempt 保留该值并暴露，`control-handler.ts` 的 `stage.submit` 成功分支调用 `createTaskCandidateService`。
+- **`main.ts` 需要一行改动（先报备）**：`createControlHandlers({...})` 目前只收 `store/orchestrator/stageGate/readLedgers/artifacts/requirementSaves/log`。要触发候选提交，需由 `main.ts` 的 `createProjectExecution` 的 `control:` 段再传 `worktrees: project.git`、`snapshots: project.snapshots`、`worktreeRoot: join(project.dataDir,'task-worktrees')`（约 3 行，位于 `control: { attach: ... }` 内），以及把 live attempt 的 `environmentRef` 从 supervisor 暴露给 handler。请确认这段改动的时机（T5 也在 main.ts）。
+- **未做**：`stage.submit`→候选触发接线；第 3 步 Integrate/Accept（`runIntegration` + AC-081 祖先去重 + AC-012 CAS，产出 40-hex 集成候选）；第 4 步 Settlement 从 `kind='integrate'` operation 读 `candidateRevision` 并绑 `CompletionManifest` + 需求池同次提交；第 5 步候选缺失 fail-closed 负例；第 6 步两 Task 端到端真实 Git 测试。
+
+## 本轮证据
+
+- `pnpm typecheck`：本片文件 0 error；当前全仓报错来自其它车道在制文件（`packages/core/test/supervisor.test.ts` 缺 `environmentRef` fixture、`packages/contracts/src/runtime.ts:185` 缺 `RuntimePaths.locks`），非本片。
+- 定向 `packages/core/test/task-candidate.integration.test.ts`：2 passed（真实 Git 关键断言见上）。
+- `pnpm lint`：本片文件 0 error（`task-candidate.ts` 已修 unnecessary assertion）；其余为 T3/T6 在制文件（`apps/daemon/test/tool-bridge-permissions.integration.test.ts:547`、`scripts/lib/e2e-ops-drill.mjs:566`）。
+- `pnpm test:unit`：`76 passed (76)` / `1411 passed (1411)`，exit 0。
+- `pnpm test:integration` 全量串行：`2 failed | 45 passed (47)` / `2 failed | 475 passed (477)`，exit 1——**两个失败均非本片**：`packages/core/test/broker.integration.test.ts` 依赖 `pnpm build`，而 `pnpm -r build` 当前在 T5 在制文件 `apps/daemon/src/initialize-driver.ts`（TS2540/TS2339/TS7006）、`apps/daemon/src/project-directory.ts`（TS2416/TS2322）失败；另有 T3 的 `packages/core/test/supervisor.test.ts` fixture 缺 `environmentRef` 与 `packages/contracts/src/runtime.ts:185` 缺 `RuntimePaths.locks`。本片文件 tsc/lint 均 0 error。等这些在制文件转绿后需补跑全量 integration。
+
+---
+
+# 轮 3（续 5）：stage.submit → Task 候选触发接线（main.ts 获批 3 行已改）
+
+## 已实现
+
+| 项 | 文件 | 说明 |
+|---|---|---|
+| 候选服务导出 | `packages/core/src/index.ts` | 已导出 `task-candidate.ts`（续 4）。 |
+| Attempt 环境透传 | `packages/core/src/execution.ts` | `ProjectExecutionControl.attach` 上下文新增可选 `environmentRefOf(attemptId)`；用 `supervisorHolder.current` 懒取（supervisor 在 handler 之后构造）。T3 已在 supervisor 侧落地 `environmentRefOf`/live `environmentRef`（`attempt.ready`）。 |
+| stage.submit 触发 | `apps/daemon/src/control-handler.ts` | 新增可选依赖 `worktrees`/`snapshots`/`worktreeRoot`/`repoRoot`/`policyHash`/`environmentRefOf`；`stage.submit` 被 `StageGate` 接受后调用 `commitTaskCandidate()`：有 `taskId` 时以 Work.level 为 route、Task 的 planRef/dependencyRevision/dependencyManifestRefs/acceptanceIds、Run 的 config/context 快照、StageResult 的 readLedgerSeq/Hash、live attempt 的 `environmentRef` 调 `createTaskCandidateService.commit()`；失败只记日志不改变 stage 结果（缺 manifest 会让集成 fail-closed）。 |
+| main.ts（获批段） | `apps/daemon/src/main.ts` | 仅在 `control: { attach: … }` 段：解构 `environmentRefOf` 并条件透传；传 `worktrees: project.git`、`snapshots: project.snapshots`、`worktreeRoot: join(project.dataDir,'task-worktrees')`、`repoRoot: project.root`、`policyHash: projectPolicyHash(project.config)`。 |
+| 策略 Hash | `apps/daemon/src/context-ports.ts` | 新增 `projectPolicyHash(config)`（与 `context.preview` 同一 canonical policy 的 sha256）。 |
+
+## 测试
+
+定向 `npx vitest run packages/core/test/task-candidate.integration.test.ts apps/daemon/test/prepare-run-context.integration.test.ts apps/daemon/test/control-requests.integration.test.ts`：**3 files / 12 tests passed**（含 control-requests 8 例，确认新增触发未破坏既有 control 面）。
+
+## 证据与在制阻塞（非本片）
+
+- `pnpm typecheck`：本片文件 0 error。全仓 7 个 error 全部在其它车道在制文件：`packages/core/test/supervisor.test.ts`（T3 fixture 缺 `environmentRef`）、`packages/contracts/src/runtime.ts:185`（T5 `RuntimePaths.locks`）、`apps/daemon/src/{initialize-driver,project-directory}.ts`（T5）、`apps/daemon/src/protocol.ts`（T5 多项目，`createProject`/`projectSummaryOfEntry`/`projectIdFor` 等半成品）。
+- `pnpm lint`：本片文件 0 error；全仓 71 problems 来自 T5 在制 `main.ts`/`protocol.ts` 的半成品（typed-lint 连带）与 T3/T6 在制文件。
+- `pnpm test:unit`（本片改 execution.ts/control-handler.ts 之前）：76 files/1411 tests exit 0；改后未重跑（见下）。
+- **待补跑**：等 T5/T3 在制文件转绿后重跑 `pnpm typecheck`/`test:unit`/`test:integration` 全量串行。
+
+## 未做（后续）
+
+1. 第 3 步 Integrate/Accept：把 `runIntegration` 接进路由（用 Task 的 `latestManifestId` → VerificationManifest → `codeRevision` 作为 `IntegrationTask.revision`），AC-081 祖先去重（`cherryPickSkip`/`isAncestor`），AC-012 CAS（交付 ref 只由 Workspace 改），产出 `kind='integrate'` operation + 40-hex `candidateRevision`。
+2. 第 4 步 Settlement 绑定：从该 operation 读 `candidateRevision`，写 `CompletionManifest.finalRevision/verifiedCodeTree/knowledgeTree`，需求池 `completion`+`lifecycle=completed` 与最终知识同次提交。
+3. 第 5/6 步：候选缺失/Review 未过的 fail-closed 负例；两 Task（B 依赖 A）端到端真实 Git 测试。
+
+---
+
+# 轮 3（续 6）：G8 缺陷——`plan.approve` 的 `applied + runId:null` 停摆
+
+## 语义修复（不是只加日志）
+
+1. `approvePlan`（`apps/daemon/src/protocol.ts`）：`queueApprovedRun` 现在返回 `{runId, reason}`，把「orchestrator 未装配 / 无专业 Task / 无可用 Chief 父 Run / dispatch 抛错」四个原因显式带回。**有执行栈**时排不出 Run → 抛 `GATE_NOT_READY`（details 带 `workId/planRef/reason`），不再返回 `applied + runId:null`；**无执行栈**的 headless 查询面（`execute:false`）本就没有 Run 可排，返回 `applied + runId:null + pendingRun:true + reason`（原因显式、可恢复，不是静默停摆）。审批本身已在 gate 持久化，因此不是「白批」。
+2. 新增公开恢复点 `WorkbenchProtocol.resumeApprovedPlan(workId)`：读 gate 当前已批准 Plan → 已存在专业 Run 则幂等返回其 id → 否则读回 Plan 正文与 `authorizationRef` 再 `queueApprovedRun`；每一步失败都返回类型化 `reason`。
+3. **真实路径调用点**（不是只有测试）：`apps/daemon/src/main.ts` 的 `control.onRunSettled` 在 `markMessageSettled` 之后，若结束的 Run `role === 'chief'`，调用 `project.protocol.resumeApprovedPlan(settled.workId)`，并把「已排队 runId」或「仍失败 reason」写日志。这样「审批时 Chief 还活着 → 立即排队」与「审批与 Chief 结束竞争 → Chief settle 时补排」两条路径都会收敛到「真实 Run 或类型化失败」。
+4. `services.log` sink 接入生产装配：`OpenProjectOptions.log?` → `new WorkbenchProtocol({ ..., log: options.log })`（`apps/daemon/src/bootstrap.ts`），`main.ts` 的 `openProject({...})` 传 `log`。**可见 ≠ 已修**：日志只是诊断，语义由上面 1–3 保证。
+
+## 测试（`apps/daemon/test/provider-config.integration.test.ts`，6 passed）
+
+- Chief Run 仍活着时批准：既有用例断言 `runId` 为字符串、`parentRunId === seeded.chiefRunId`、绑定 Task（仍绿）。
+- Chief 已结束才批准：`plan.approve` 抛 `GATE_NOT_READY` 且 `details.reason` 含「Chief」（string 断言，无 `String()` 兜底）；随后 `resumeApprovedPlan` 在无可用 Chief 时返回类型化 reason；插入一个新的 live Chief Run 后再调 → 真排出 `role:'backend'、status:'queued'、parentRunId===新 Chief` 的专业 Run；再次调用幂等（同 runId，不重复排队）。
+
+## 证据
+
+- `pnpm typecheck` exit 0（全仓）。`pnpm lint` exit 0（全仓，含格式；此前唯一错误 provider-config:446 已按建议改为 `typeof reason === 'string'` 断言）。
+- `pnpm test:unit`：`76 passed (76)` / `1411 passed (1411)`，exit 0。
+- `pnpm docs:check` exit 0。
+- 定向 `apps/daemon/test/provider-config.integration.test.ts`：6 passed。
+- `pnpm test:integration` 全量串行：`51 passed (51)` / `506 passed (506)`，exit 0（含 `apps/web/test/workbench.integration.test.ts` 的 plan 门用例）。
+
+## 未做
+
+- 无播种真链的「消息→Chief 评估→plan.approve→专业 Run→stage_result」端到端（G8 drill 行）未由本片跑；本片以真实 Orchestrator 的两分支用例证明排队语义与恢复点。
+- 第 3/4 步（Integrate/Accept、Settlement 绑定）仍待做。
+
+---
+
+# 轮 3（续 7）：第 3/4/5/6 步——本轮未实现，交接计划与已核实的契约
+
+**状态**：本轮预算已耗尽，第 3/4/5/6 步**未开工**，无未验证代码落地。全仓门禁当前为绿（见文末证据）。以下为下一轮可直接执行的计划，包含本轮现场核实的 `runIntegration` 契约，避免重复勘察。
+
+## 已核实的契约（`packages/workspace/src/cas.ts`）
+
+- `runIntegration(options)`（`:1026`）先断言 `options.lock.resource === integrationLockResourceName(projectId)`，取锁后调 `integrateTasks()`（`:1069`）。
+- **调用方必须先建好集成 worktree**：`integrateTasks` 直接用 `git.cherry(options.worktreePath, …)`，不做 `worktree add`。故 Integrate 步骤要 `worktrees.addWorktree({repoRoot, path, baseRevision: targetRevision})`。
+- `options.tasks: IntegrationTask[]` 逐项需要 `taskId/revision/dependsOn/dependencyRevision/supersedes`；`planIntegration`（`:652`）用 `contains(revision)`（对 target 的 `isAncestor`）+ `orderTasks` 排序；祖先去重靠 `git cherry` 的 patch identity（`cherryPickSkip`）。
+- 成功路径由 CAS 写 `kind:'integrate'` operation 且 `candidateRevision = 集成 worktree 的 head`，并**由 Workspace/CAS 移动交付 ref**（AC-012）；失败码：`TASK_MERGE_CONFLICT`（附 RepairPlan，ref 未动）、`GATE_NOT_READY`（Task 的 frozen revision 不在仓库）、`BUSY`（共享集成锁被占用）。
+- 因此 `Task.latestManifestId` → snapshot(`type='verification'`, `payload.manifest.codeRevision`) 即 `IntegrationTask.revision`，这条链路已在续 4 的 `task-candidate` 测试中落地可读。
+
+## 第 3 步实现计划（`packages/core/src/integrate.ts` 新文件）
+
+1. `createIntegrateService({store, worktrees, cas, lock, projectId, repoRoot, worktreeRoot, now?})`。
+2. `integrate({workId, operationId, targetRevision?, message?})`：
+   - Work/Project 解析；`ref = refs/heads/<deliveryBranch>`；`targetRevision` 缺省取当前 head，再回退 `Work.baseRevision`；
+   - 列出 Task，逐个读 `latestManifestId` → `verification_manifest` → `codeRevision`；**任一 Task 无 manifest → `MISSING_CONTEXT`（fail-closed，不产生候选、不写 manifest）**（第 5 步负例之一）；
+   - 组 `IntegrationTask[]`（`dependsOn = task.dependsOn`，`dependencyRevision = task.dependencyRevision ?? targetRevision`）；
+   - 建集成 worktree → `runIntegration(...)`（同一 `ProjectIntegrationLock`，AC-012/CAS）→ 成功返回 `{revision, appliedTaskIds, skippedTaskIds, operationId}`，失败原样返回类型化 code/message；
+   - 用完删 worktree（提交由交付 ref/操作行保活）。
+
+## 第 4 步实现计划（`packages/core/src/settlement.ts` 扩展）
+
+- `SettlementService` 新增 `settleFromIntegration(operationId)`：读 `kind='integrate'` operation 的 `candidateRevision` → `deliveredCodeTreeHash` → 用该 Work 的 `latestManifestId` 集合组 `CompletionManifest`（`finalRevision/verifiedCodeTree/knowledgeTree`）→ 调既有 `settle()`（`expectedRevision = 该 candidateRevision`，CAS 复用不新建 commit）→ 需求池 `completion`+`lifecycle=completed` 与最终知识同次候选提交（`SettleRequest.requirementPool`）。
+- fail-closed：无 integrate operation / 无已验证 manifest / candidateRevision 缺失 → 类型化拒绝，不写 manifest、不翻 lifecycle（保留 `requirementCompletionError`）。
+
+## 第 5/6 步测试计划（真实 Git）
+
+- 两 Task（B 依赖 A）：各自 `createTaskCandidateService.commit()` → Integrate → 断言 `candidateRevision` 40-hex、A 未被重复应用（`planIntegration` 的 skipped 或 `git cherry` 结果）、operation `kind='integrate'` 存在且 `candidateRevision` 可 resolve；Settlement 绑定后需求池 Git 记录为 completed 且 `recordVersion/hash` 与 SQLite 投影一致。
+- 负例：删掉一个 Task 的 `latestManifestId` → Integrate `MISSING_CONTEXT` 且 ref 未动、无 manifest；构造两个冲突候选 → `TASK_MERGE_CONFLICT` 且无候选。
+
+## 本轮证据（未改代码，门禁全绿）
+
+- `pnpm typecheck` exit 0；`pnpm lint` exit 0（全仓，含格式）；`pnpm docs:check` exit 0。
+- `pnpm test:unit` 76 files/1411 tests exit 0；`pnpm test:integration` 全量串行 51 files/506 tests exit 0（含 G8 修复后的 `provider-config` 两分支与 `apps/web` plan 门用例）。

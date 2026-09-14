@@ -51,6 +51,7 @@ import {
   initRepository,
   jsonOf,
   makeTempDir,
+  multipartBody,
 } from './e2e-runtime.mjs';
 
 /** Default loopback ports the CLI's first Project binds (`reliability.md` §7). */
@@ -164,20 +165,36 @@ export async function bootCredentialedInstallation() {
   const modelUrl = `http://127.0.0.1:${String(model.address().port)}/v1`;
 
   const rpc = async (method, params) => {
-    const response = await httpRequest(
-      `http://${instance.daemon.host}:${String(instance.daemon.port)}/rpc`,
-      {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          v: 1,
-          type: 'request',
-          id: `${method}-${String(Date.now())}`,
-          method,
-          params,
-        }),
-      },
-    );
+    // Resolve the endpoint from the *live* record on every call: a restarted daemon can
+    // publish a different project port, and a stale handle would talk to a dead listener.
+    const live = JSON.parse(readFileSync(join(home, 'runtime.json'), 'utf8'));
+    const target =
+      live.instances.find((entry) => entry.projectId === instance.projectId) ?? live.instances[0];
+    if (target === undefined) {
+      throw new Error(`rpc ${method}: the daemon has no open instance for ${instance.projectId}`);
+    }
+    let response;
+    try {
+      response = await httpRequest(
+        `http://${target.daemon.host}:${String(target.daemon.port)}/rpc`,
+        {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({
+            v: 1,
+            type: 'request',
+            id: `${method}-${String(Date.now())}`,
+            method,
+            params,
+          }),
+        },
+      );
+    } catch (error) {
+      throw new Error(
+        `rpc ${method} to ${target.daemon.host}:${String(target.daemon.port)} could not be sent`,
+        { cause: error },
+      );
+    }
     const body = jsonOf(response);
     if (body.ok !== true) throw new Error(`${method} refused: ${JSON.stringify(body.error)}`);
     return body.result;
@@ -224,10 +241,42 @@ export async function bootCredentialedInstallation() {
   });
 
   const conversation = await rpc('conversation.create', { title: 'operations drill' });
+  // A real user artifact through the product path (`POST /artifacts/upload` with the
+  // installation Bearer + the message binding): the backup then carries real evidence
+  // bytes, so the restore's hash/blob verification is a non-zero comparison.
+  const multipart = multipartBody(
+    { conversationId: conversation.conversationId },
+    {
+      filename: 'drill-evidence.txt',
+      mime: 'text/plain',
+      bytes: Buffer.from('operations drill evidence\n', 'utf8'),
+    },
+  );
+  let uploaded;
+  try {
+    uploaded = await httpRequest(
+      `http://${instance.daemon.host}:${String(instance.daemon.port)}/artifacts/upload`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': multipart.contentType,
+        },
+        body: multipart.body,
+      },
+    );
+  } catch (error) {
+    throw new Error('artifacts/upload could not be sent', { cause: error });
+  }
+  ensure(
+    uploaded.status === 201,
+    `artifacts/upload answered ${String(uploaded.status)}: ${uploaded.text.slice(0, 200)}`,
+  );
+  const attachment = jsonOf(uploaded);
   const sent = await rpc('conversation.message.send', {
     conversationId: conversation.conversationId,
     body: '解释 src/orders/cancel.ts 的取消逻辑',
-    attachmentIds: [],
+    attachmentIds: [attachment.attachmentId],
   });
 
   // `attempt.ready` is what turns the Attempt `starting → running` (`supervisor.ts` §998),
@@ -255,6 +304,7 @@ export async function bootCredentialedInstallation() {
     projectId: instance.projectId,
     secretRef: `provider:${String(provider.providerId)}`,
     credentialValue,
+    attachmentId: attachment.attachmentId,
     workId: sent.workId,
     runId: chiefRun.run.id,
     attemptId: chiefRun.attempt.id,
@@ -274,14 +324,17 @@ export async function bootCredentialedInstallation() {
  * @param {{ checks: import('./e2e-checks.mjs').CheckList, meta: Record<string, unknown> }} input
  */
 export async function runOpsDrill({ checks, meta }) {
+  const note = (step) => process.stdout.write(`ops: ${step}\n`);
   await checks.check('ops.backup-restore', E2E_OPS_ACS, async () => {
     const facts = [];
     const install = await bootCredentialedInstallation();
     try {
+      note('credentialed Chief Run reached attempt.ready');
       facts.push(
         `credentialed Provider ${install.secretRef} -> Chief Run ${install.runId} reached attempt.ready (Attempt ${install.attemptId} running) and the loopback model received ${String(install.modelCalls.length)} credentialed call(s)`,
       );
 
+      note('backup (run live)');
       // ---- backup while the Run is live ------------------------------------
       const backupDir = join(makeTempDir('agentdev-e2e-ops-backup-'), 'backup');
       const backup = runCli(install.cliEntry, ['backup', '--output', backupDir], {
@@ -310,10 +363,15 @@ export async function runOpsDrill({ checks, meta }) {
         !containsText(backupDir, install.credentialValue),
         'the credential value reached the backup directory',
       );
+      ensure(
+        (backupBody.evidence ?? 0) >= 1,
+        `the backup carries no evidence blob (attachment ${String(install.attachmentId)})`,
+      );
       facts.push(
         `agentdev backup exit 0: revision ${head.slice(0, 12)}, complete, secretRefs ${JSON.stringify(backupBody.secretRefs)}, installation config copied, no credential value in the backup directory`,
       );
 
+      note('stop + damage + restore');
       // ---- stop, destroy the state and the project, restore -----------------
       const stopped = runCli(install.cliEntry, ['stop'], { env: install.env });
       ensure(stopped.code === 0, `agentdev stop exited ${String(stopped.code)}`);
@@ -342,19 +400,46 @@ export async function runOpsDrill({ checks, meta }) {
         restoreBody.consistency?.treeMatches === true,
         'the restored tree does not match the manifest',
       );
+      ensure(
+        (restoreBody.consistency?.evidenceVerified ?? 0) >= 1 &&
+          (restoreBody.consistency?.blobsVerified ?? 0) >= 1,
+        `the restore verified no evidence blob: ${JSON.stringify(restoreBody.consistency)}`,
+      );
       ensure(restoreBody.doctor?.ok === true, 'the restore doctor did not pass');
       ensure(
         (restoreBody.recovery?.interruptedRunIds ?? []).includes(install.runId),
         `the previously active Run was not parked interrupted: ${JSON.stringify(restoreBody.recovery)}`,
       );
 
+      note('restart + protocol query');
       // ---- restart the daemon and ask the product about that Run ------------
       const restarted = runCli(install.cliEntry, ['start'], { env: install.env });
       ensure(
         restarted.code === 0,
         `agentdev start on the restored installation exited ${String(restarted.code)}:\n${restarted.stderr || restarted.stdout}`,
       );
-      const restoredRuns = await install.rpc('run.list', { workId: install.workId });
+      const restartedRecord = JSON.parse(readFileSync(join(install.home, 'runtime.json'), 'utf8'));
+      ensure(
+        (restartedRecord.instances ?? []).some(
+          (entry) => entry.projectId === install.projectId && entry.root === install.repo,
+        ),
+        `the restarted daemon did not reopen the restored project: ${JSON.stringify(restartedRecord.instances)}`,
+      );
+      // The restarted project listener can refuse the first connection while the previous
+      // process finishes closing (the port is reused immediately); wait for the protocol to
+      // answer instead of failing the AC on that kernel-level race.
+      const restoredRuns = await waitFor(
+        async () => {
+          try {
+            return await install.rpc('run.list', { workId: install.workId });
+          } catch {
+            return undefined;
+          }
+        },
+        'the restarted daemon to answer run.list',
+        30_000,
+        500,
+      );
       const parkedRun = (restoredRuns.items ?? []).find((entry) => entry.id === install.runId);
       ensure(
         parkedRun?.status === 'interrupted',
@@ -365,9 +450,10 @@ export async function runOpsDrill({ checks, meta }) {
         'stop after the restart failed',
       );
       facts.push(
-        `deleted ${stateDir} and the project; agentdev restore exit 0 (status ready, tree ${String(restoreBody.tree).slice(0, 12)}, doctor ok, Run ${install.runId} interrupted); restarted daemon reported it interrupted through its own protocol`,
+        `deleted ${stateDir} and the project; agentdev restore exit 0 (status ready, tree ${String(restoreBody.tree).slice(0, 12)}, evidence ${String(restoreBody.consistency.evidenceVerified)}/${String(restoreBody.consistency.evidenceVerified)}, doctor ok, Run ${install.runId} interrupted); restarted daemon reported it interrupted through its own protocol`,
       );
 
+      note('fresh installation (blocked -> set -> rotate)');
       // ---- a credential-less installation: blocked, then re-entered ---------
       const freshHome = makeTempDir('agentdev-e2e-ops-fresh-home-');
       const freshRepo = join(makeTempDir('agentdev-e2e-ops-fresh-repo-'), 'repo');
@@ -433,6 +519,7 @@ export async function runOpsDrill({ checks, meta }) {
         `fresh installation restore: status blocked + first stdout line WARNING [PROVIDER_BLOCKED], Provider definitions carried (${String(freshProviders.length)}), no credential value in the fresh home; after stdin secret set the restore is ready; secret rotate exit 0 (capabilities.revoked=0, no value printed)`,
       );
 
+      note('relocate (fail-closed + alias)');
       // ---- relocate: fail closed on identity, accept the same canonical root --
       const newRoot = `${install.repo}-moved`;
       const refused = runCli(
@@ -468,6 +555,7 @@ export async function runOpsDrill({ checks, meta }) {
         `relocate --move to a different root refused with PROJECT_IDENTITY_MOVE_UNSUPPORTED and left the repository and registry untouched; relocate to an alias of the same canonical root accepted (identityPreserved)`,
       );
 
+      note('doctor');
       // ---- doctor -----------------------------------------------------------
       const doctor = runCli(install.cliEntry, ['doctor'], { env: install.env });
       ensure(doctor.code === 0, `agentdev doctor exited ${String(doctor.code)}:\n${doctor.stdout}`);
@@ -478,6 +566,7 @@ export async function runOpsDrill({ checks, meta }) {
       facts.push('agentdev doctor exit 0 with execution ready');
 
       // ---- the user service (macOS launchd; honest exclusion elsewhere) -----
+      note('launchd unit');
       const service = await runLaunchdDrill(install.cliEntry);
       facts.push(service);
       if (service.includes('load/unload')) meta.opsService = 'launchd';
@@ -525,8 +614,7 @@ async function runLaunchdDrill(cliEntry) {
     'utf8',
   );
   const uid = String(process.getuid?.() ?? 501);
-  let pid = null;
-  let recorded = false;
+  let evidence;
   try {
     const bootstrap = spawnSync('launchctl', ['bootstrap', `gui/${uid}`, plist], {
       encoding: 'utf8',
@@ -543,29 +631,27 @@ async function runLaunchdDrill(cliEntry) {
       'the launchd service to publish a runtime record',
       30_000,
     );
-    pid = launched.pid;
     const status = runCli(cliEntry, ['status'], { env: { ...process.env, AGENTDEV_HOME: home } });
     ensure(
       status.code === 0 && cliJson(status.stdout).running === true,
       `agentdev status against the launchd home is ${status.stdout.trim()}`,
     );
     ensure(existsSync(join(home, 'daemon.lock')), 'the launchd daemon does not hold daemon.lock');
-    recorded = true;
+    evidence = `launchd 单元 load：bootstrap gui/${uid} exit 0, daemon pid ${String(launched.pid)} published runtime.json and held daemon.lock, agentdev status running:true`;
   } finally {
     spawnSync('launchctl', ['bootout', `gui/${uid}/${label}`], { encoding: 'utf8' });
     await sleep(500);
-    if (recorded) {
-      const gone = await waitFor(
-        () => (!existsSync(join(home, 'runtime.json')) ? true : undefined),
-        'the launchd service to stop',
-        30_000,
-      ).catch(() => false);
-      ensure(gone === true, 'the launchd service left a runtime record behind after bootout');
-      ensure(
-        !existsSync(join(home, 'daemon.lock')),
-        'the launchd service left daemon.lock behind after bootout',
-      );
-    }
   }
-  return `launchd 单元 load/unload：bootstrap gui/${uid} exit 0, daemon pid ${String(pid)} published runtime.json and held daemon.lock, agentdev status running:true, bootout removed the record and the lock`;
+  if (evidence === undefined) throw new Error('the launchd drill produced no evidence');
+  const gone = await waitFor(
+    () => (!existsSync(join(home, 'runtime.json')) ? true : undefined),
+    'the launchd service to stop',
+    30_000,
+  ).catch(() => false);
+  ensure(gone === true, 'the launchd service left a runtime record behind after bootout');
+  ensure(
+    !existsSync(join(home, 'daemon.lock')),
+    'the launchd service left daemon.lock behind after bootout',
+  );
+  return `${evidence}, bootout removed the record and the lock`;
 }

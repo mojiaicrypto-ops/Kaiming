@@ -253,10 +253,51 @@ process.stdout.write(
 process.stdout.write(`config.save -> revision=${String(config.revision)}\n`);
 
 const conversation = await rpc('conversation.create', { title: 'T6 drill' });
+// A real user artifact through the product path (`POST /artifacts/upload` with the
+// installation Bearer, then bound by the message) so the backup really contains evidence
+// bytes and the restore's blob/hash verification is a non-zero comparison.
+const evidenceBytes = Buffer.from('t6 operations drill evidence\n', 'utf8');
+const boundary = `----t6drill${String(Date.now())}`;
+const multipart = Buffer.concat([
+  Buffer.from(
+    `--${boundary}\r\ncontent-disposition: form-data; name="conversationId"\r\n\r\n${conversation.conversationId}\r\n`,
+    'utf8',
+  ),
+  Buffer.from(
+    `--${boundary}\r\ncontent-disposition: form-data; name="file"; filename="drill-evidence.txt"\r\ncontent-type: text/plain\r\n\r\n`,
+    'utf8',
+  ),
+  evidenceBytes,
+  Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'),
+]);
+const uploaded = await new Promise((resolve, reject) => {
+  const req = httpRequest(
+    {
+      host: instance.daemon.host,
+      port: instance.daemon.port,
+      method: 'POST',
+      path: '/artifacts/upload',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': `multipart/form-data; boundary=${boundary}`,
+        'content-length': multipart.byteLength,
+      },
+    },
+    (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: json(Buffer.concat(chunks).toString('utf8')) }));
+    },
+  );
+  req.on('error', reject);
+  req.write(multipart);
+  req.end();
+});
+check('a real user artifact was uploaded through the product path', uploaded.status === 201, String(uploaded.status));
 const sent = await rpc('conversation.message.send', {
   conversationId: conversation.conversationId,
   body: '实现 src/orders/cancel.ts 的取消逻辑',
-  attachmentIds: [],
+  attachmentIds: [uploaded.body.attachmentId],
 });
 process.stdout.write(
   `conversation.message.send -> messageId=${sent.messageId} workId=${sent.workId}\n`,
@@ -311,6 +352,11 @@ check('backup exited 0', backup.code === 0);
 check('backup manifest is complete', backupBody.complete === true);
 check('backup recorded the delivery revision', backupBody.revision === seedRevision);
 check(
+  'backup carries the real evidence blob',
+  (backupBody.evidence ?? 0) >= 1,
+  String(backupBody.evidence),
+);
+check(
   'backup recorded the Provider secret identifier, never a value',
   Array.isArray(backupBody.secretRefs) && backupBody.secretRefs.length === 1,
   JSON.stringify(backupBody.secretRefs),
@@ -346,6 +392,12 @@ check(
 );
 check('restore passed its doctor', restoreBody.doctor?.ok === true);
 check('restore verified the tree against the manifest', restoreBody.consistency?.treeMatches === true);
+check(
+  'restore verified the real evidence blob (non-zero)',
+  (restoreBody.consistency?.evidenceVerified ?? 0) >= 1 &&
+    (restoreBody.consistency?.blobsVerified ?? 0) >= 1,
+  `${String(restoreBody.consistency?.evidenceVerified)}/${String(restoreBody.consistency?.blobsVerified)}`,
+);
 check('restore rewrote the installation root mapping', restoreBody.registryUpdated === true);
 process.stdout.write(
   `restore recovery: interrupted=${JSON.stringify(restoreBody.recovery?.interruptedRunIds ?? [])} revokedLeases=${String(

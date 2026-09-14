@@ -27,6 +27,7 @@ import {
 } from '@agentdev/pi-runtime';
 import { LIMITS, type Role } from '@agentdev/contracts';
 import { controlTools, createControlClient, type ControlClient } from './control-client.js';
+import { environmentRef } from './environment.js';
 import { createReadLedger } from './read-ledger.js';
 import {
   parseCommand,
@@ -271,6 +272,9 @@ export class AttemptRunner {
         // subset and the role's control tools, so a control tool the SDK refused to activate
         // fails the Attempt loudly rather than leaving the model unable to deliver.
         droppedTools: this.options.toolNames.filter((name) => !active.includes(name)),
+        // The environment this Attempt really runs in, so `stage.submit` can freeze a
+        // manifest that names it instead of a placeholder (`protocol.md:123`).
+        environmentRef: environmentRef(),
       });
       return 0;
     } catch (error) {

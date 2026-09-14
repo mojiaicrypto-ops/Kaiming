@@ -42,6 +42,15 @@ export const runnerMessageSchema = z.discriminatedUnion('type', [
       tools: z.array(z.string()),
       /** Requested tools the session did not activate; non-empty is a config error. */
       droppedTools: z.array(z.string()),
+      /**
+       * The real environment this Attempt executed in.
+       *
+       * The Runner reports what it actually runs in — `host:<platform>/<arch>/node-<major>`
+       * or `container:<image>` — so a `VerificationManifest` can name the environment it
+       * verified instead of a placeholder. It is the Runner's own process observation; the
+       * model and any caller cannot supply it.
+       */
+      environmentRef: z.string().min(1),
     })
     .strict(),
   z

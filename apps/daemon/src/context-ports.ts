@@ -108,6 +108,14 @@ export function stageForRole(role: Role, level: string | undefined): ContextStag
 export const CHIEF_RULES_FALLBACK =
   '# Agent 固定规则\n\nChief 决定上下文；Builder 只校验并冻结；开发聊天不可输入。\n';
 
+/**
+ * The SHA256 the `VerificationManifest.policyHash` binds: the Project's config
+ * policy serialized deterministically (the same value `context.preview` reports).
+ */
+export function projectPolicyHash(config: ConfigStore): string {
+  return sha256Hex(Buffer.from(canonicalJson(config.project().policy), 'utf8'));
+}
+
 /** Binds the Context ports to this Project's real policy, Git tree and artifacts. */
 export function createContextAssembly(options: ContextAssemblyOptions): ContextAssembly {
   const project = options.store.projects.find(options.projectId);

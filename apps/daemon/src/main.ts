@@ -49,13 +49,18 @@ import {
   readInstallationCredential,
   readProjectRegistry,
   readRuntimeRecord,
-  registerProject,
   releaseDaemonLock,
-  resolveProjectIdentity,
   writeRuntimeRecord,
 } from '@agentdev/core';
 
 import { DEFAULT_WEB_ORIGIN, openProject, type OpenedProject } from './bootstrap.js';
+import {
+  ProjectDirectory,
+  ProjectDirectoryError,
+  type AssembledProject,
+} from './project-directory.js';
+import { createWebApp, NodeFilePort, WebSessionStore } from '@agentdev/web';
+import { projectPolicyHash } from './context-ports.js';
 import { createControlHandlers } from './control-handler.js';
 import { markMessageProcessing, markMessageSettled } from './message-state.js';
 import { createPrepareRun } from './prepare-run.js';
@@ -78,6 +83,14 @@ export interface StartRuntimeOptions {
   readonly daemonPort?: number;
   readonly webPort?: number;
   readonly adminPort?: number;
+  /**
+   * Extra exact origins the single BFF and the shared `AuthService` allow (WP-12 T5).
+   *
+   * The deployed BFF's origin already is `DEFAULT_WEB_ORIGIN`; a caller that binds an
+   * ephemeral port (`webPort: 0`, or a fixed port chosen at runtime) has to say which
+   * origin the browser will send, or the exact-Origin check refuses its own writes.
+   */
+  readonly webOrigins?: readonly string[];
   /** Roots to open. When omitted, the registry decides. */
   readonly roots?: readonly string[];
   /** Trust newly registered roots (the CLI's explicit `open` acts as the trust act). */
@@ -106,7 +119,16 @@ export interface RunningRuntime {
   readonly secretRepository: SecretRepository;
   /** Set once the admin listener is bound; `status` reads it from `runtime.json`. */
   admin: { readonly host: RuntimeHost; readonly port: number };
+  /**
+   * The single BFF every project is reached through (WP-12 T5, D-T5-3).
+   *
+   * `null` for a headless start (`--no-web`); the CLI reads the port from
+   * `runtime.json`'s `web` field so `agentdev open` can still print one URL.
+   */
+  web: { readonly host: RuntimeHost; readonly port: number } | null;
   readonly instances: readonly RuntimeInstance[];
+  /** The installation project directory (WP-12 T5); the writer of the registry. */
+  readonly directory: ProjectDirectory;
   readonly record: RuntimeRecord;
   /** Opens one more project (idempotent per canonical root) and returns its instance. */
   open(root: string, options?: { readonly trust?: boolean }): Promise<RuntimeInstance>;
@@ -205,15 +227,20 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
   try {
     // `auth` and the credential are read first: a home with a broken credential file must
     // fail before any listener is bound, and the lock taken above must not be left behind.
+    const allowedOrigins = [DEFAULT_WEB_ORIGIN, ...(options.webOrigins ?? [])];
     const auth = AuthService.loadOrCreate({
       stateDir: home,
-      config: { deployment: 'loopback', allowedOrigins: [DEFAULT_WEB_ORIGIN] },
+      config: { deployment: 'loopback', allowedOrigins },
     });
     const installationToken = readInstallationCredential(home);
 
     const opened: OpenedProject[] = [];
     const instances: RuntimeInstance[] = [];
     const executions: ProjectExecution[] = [];
+    // WP-12 T5: `project.close` must release exactly one project's stack, so every
+    // open project is tracked by id alongside the arrays `stop()` walks.
+    const openedById = new Map<string, OpenedProject>();
+    const executionById = new Map<string, ProjectExecution>();
     // WP-12 T1.1: the durable repository (AES-256-GCM file or macOS Keychain) is loaded
     // into the in-memory store *before* any project execution stack is built, so a
     // registered Provider credential works for `gateway` audience resolution from the
@@ -256,12 +283,21 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
       options.repoRoot ?? resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
     let record: RuntimeRecord | null = null;
     let adminServer: Server | null = null;
+    let webInfo: { readonly host: RuntimeHost; readonly port: number } | null = null;
     let stopping = false;
+
+    let webListener: Server | null = null;
 
     const runtime: RunningRuntime = {
       home,
       epoch: lock.lock.epoch,
       admin: { host, port: 0 },
+      get web() {
+        return webInfo;
+      },
+      get directory() {
+        return directory;
+      },
       secrets,
       secretRepository,
       get executions() {
@@ -287,16 +323,25 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
           await new Promise<void>((resolve) => adminServer?.close(() => resolve()));
           adminServer = null;
         }
+        if (webListener !== null) {
+          await new Promise<void>((resolve) => webListener?.close(() => resolve()));
+          webListener = null;
+          webInfo = null;
+        }
         // 2. Stop executing: no new Attempts, runners asked to shut down, gateway closed.
         for (const execution of executions) {
           await execution.stop();
         }
         executions.length = 0;
-        // 3. Close every project's listeners and databases.
+        // 3. Close every project's listeners and databases, then release the per-root
+        // locks this daemon took (WP-12 T5 Q5): a real stop leaves no lock behind.
         for (const project of opened) {
           await project.close();
         }
         opened.length = 0;
+        openedById.clear();
+        executionById.clear();
+        directory.deactivateAll();
         instances.length = 0;
         // 4. Remove the live record only when it is still ours, then release the lock for
         // this epoch only — a peer that took over must not lose its record (WP11R1-10).
@@ -310,65 +355,94 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
     };
 
     /**
-     * Opens one project and publishes it in the registry and the live record.
+     * The installation project directory (WP-12 T5).
      *
-     * Declared as a hoisted function so `runtime.open` can hand it out before the object
-     * exists; `project.open` is idempotent for an already-open root (`protocol.md` §5), so
-     * the canonical identity decides and a subdirectory resolves to the same instance.
+     * It is the only writer of the project registry and the per-root locks, and the
+     * single owner of the open-instance table. `assemble` is the host half (real
+     * SQLite, services and listeners); `teardown` releases exactly one project for
+     * `project.close` (Q3) without touching the others.
      */
-    async function openImpl(
-      root: string,
-      openOptions?: { readonly trust?: boolean },
-    ): Promise<RuntimeInstance> {
-      const canonicalRoot = resolveProjectIdentity(root).canonicalRoot;
-      const existing = instances.find((candidate) => candidate.root === canonicalRoot);
-      if (existing !== undefined) {
-        registerProject(home, {
-          root: existing.root,
-          projectId: existing.projectId,
-          at: new Date().toISOString(),
-        });
-        return existing;
-      }
-      const instance = await openRoot(root, openOptions?.trust ?? options.trust ?? false);
-      registerProject(home, {
-        root: instance.root,
-        projectId: instance.projectId,
-        at: new Date().toISOString(),
-      });
-      writeRecord();
-      return instance;
-    }
+    const directory = new ProjectDirectory({
+      home,
+      host,
+      version,
+      bearer: () => installationToken,
+      epoch: () => lock.lock.epoch,
+      assemble: (input) => assembleProject(input.root, input.trust, input.name),
+      teardown: async (projectId) => {
+        const execution = executionById.get(projectId);
+        if (execution !== undefined) {
+          await execution.stop();
+          executionById.delete(projectId);
+          const index = executions.indexOf(execution);
+          if (index >= 0) executions.splice(index, 1);
+        }
+        const project = openedById.get(projectId);
+        if (project !== undefined) {
+          await project.close();
+          openedById.delete(projectId);
+          const index = opened.indexOf(project);
+          if (index >= 0) opened.splice(index, 1);
+        }
+        const instanceIndex = instances.findIndex((item) => item.projectId === projectId);
+        if (instanceIndex >= 0) instances.splice(instanceIndex, 1);
+        writeRecord();
+      },
+      runningRuns: (projectId) => executionById.get(projectId)?.liveCount() ?? 0,
+      executionReady: (projectId) => {
+        const project = openedById.get(projectId);
+        if (project === undefined) return false;
+        const resolution = project.config.resolve('chief');
+        return resolution === undefined ? true : resolution.ok;
+      },
+      now: () => new Date(),
+      log,
+    });
 
-    const openRoot = async (root: string, trust: boolean): Promise<RuntimeInstance> => {
+    /**
+     * The host half of `project.open`: assembles one project's runtime stack.
+     *
+     * The BFF is **not** per project any more (WP-12 T5 D-T5-3): every project is
+     * opened with `withWeb:false` and the host serves one BFF that routes by
+     * `projectId`. The primary project keeps the documented daemon port
+     * (`protocol.md` §2) so a single-project installation is unchanged.
+     */
+    const assembleProject = async (
+      root: string,
+      trust: 'trusted' | 'untrusted',
+      name: string | undefined,
+    ): Promise<AssembledProject> => {
       const project = await openProject({
         root,
         home,
         auth,
         installationToken,
         version,
-        ...(options.withWeb === undefined ? {} : { withWeb: options.withWeb }),
+        withWeb: false,
         ...(instances.length === 0
           ? {
               daemonPort: options.daemonPort ?? DEFAULT_LISTENERS.daemon.port,
-              webPort: options.webPort ?? DEFAULT_LISTENERS.web.port,
+              webPort: 0,
             }
           : {}),
         host,
-        trust: trust ? 'trusted' : 'untrusted',
+        trust,
         secrets,
         secretRepository,
+        projectDirectory: directory,
+        log,
       });
       opened.push(project);
+      let execution: ProjectExecution | undefined;
       if (options.execute !== false) {
-        // `execution.md` §1 fixes the execution mode per permission policy: Workspace and
+        // `stack.md` §1 fixes the execution mode per permission policy: Workspace and
         // Autonomous run the tools in Linux containers and refuse admission when Docker is
         // unavailable; Full Access is the explicit, non-root host process. The Broker
         // refuses container mode without Docker and **never** falls back (`broker.ts`), so
         // the mapping is the documented one rather than a silent downgrade.
         const permissionMode = project.config.project().policy.permissionMode;
         const toolMode = executionModeForPermissionMode(permissionMode);
-        const execution = await createProjectExecution({
+        const stack = await createProjectExecution({
           store: project.store,
           config: project.config,
           snapshots: project.snapshots,
@@ -397,7 +471,7 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
             log,
             ...(options.runnerEnv === undefined ? {} : { env: options.runnerEnv }),
           }),
-          // `execution.md` §3: Review/Test may write only their own report/scratch root.
+          // `stack.md` §3: Review/Test may write only their own report/scratch root.
           // `permissionMode` has no runtime consumer yet (T3 F13/D-T3-7), so the tool
           // shells run in the documented default mode (`host` in the handler) and the
           // container mode stays an explicit, registered gap.
@@ -432,37 +506,70 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
           // message behind each Run moves `received → processing → processed/failed`
           // (`experience.md` §22) as the supervisor observes it.
           control: {
-            attach: ({ orchestrator, stageGate, readLedgers }) =>
+            attach: ({ orchestrator, stageGate, readLedgers, environmentRefOf }) =>
               createControlHandlers({
                 store: project.store,
                 orchestrator,
                 stageGate,
                 readLedgers,
+                ...(environmentRefOf === undefined ? {} : { environmentRefOf }),
                 artifacts: project.services.artifacts,
                 requirementSaves: project.services.requirementSaves,
+                // The per-Task candidate commit needs the real git port and the
+                // snapshot writer; `policyHash` is the Project policy the
+                // VerificationManifest binds (`context-ports.ts`).
+                worktrees: project.git,
+                snapshots: project.snapshots,
+                worktreeRoot: join(project.dataDir, 'task-worktrees'),
+                repoRoot: project.root,
+                policyHash: projectPolicyHash(project.config),
+                // The Settle stage's accepted result is the route's Accept/Integrate point
+                // (`workflow.md` §3/§7): the same instances the save/settlement paths use,
+                // so the delivery ref keeps exactly one writer (`AC-012`).
+                integrate: project.services.integrate,
+                settlement: project.services.settlement,
                 log,
               }),
             onAttemptStarted: ({ runId }) => markMessageProcessing(project.store, runId),
-            onRunSettled: ({ runId, status }) => markMessageSettled(project.store, runId, status),
+            onRunSettled: ({ runId, status }) => {
+              markMessageSettled(project.store, runId, status);
+              // A `plan.approve` can race the Chief Run's end: the approval is durable
+              // but the professional Run needs a live Chief parent. When a Chief Run
+              // settles, retry that hand-off so an approved Plan never stays Run-less
+              // (G8 drill finding).
+              const settled = project.store.runs.find(runId);
+              if (settled?.role !== 'chief') return;
+              const resumed = project.protocol.resumeApprovedPlan(settled.workId);
+              if (resumed.reason !== null) {
+                log(
+                  `plan.approve recovery: Work ${settled.workId} still has no professional Run (${resumed.reason})`,
+                );
+              } else if (resumed.runId !== null) {
+                log(
+                  `plan.approve recovery: Work ${settled.workId} queued professional Run ${resumed.runId}`,
+                );
+              }
+            },
           },
           log,
         });
-        executions.push(execution);
+        execution = stack;
+        executions.push(stack);
         // The workbench's `work.control resume` needs the executor to resolve a parked Run
         // (`WP11R4-02`); the protocol is built before the stack exists, so it is attached now.
         project.protocol.attachRunRecovery({
-          recordResumeDecision: ({ runId }) => execution.supervisor.recordResumeDecision(runId),
-          resumeParkedRun: (runId) => execution.supervisor.resumeParkedRun(runId),
+          recordResumeDecision: ({ runId }) => stack.supervisor.recordResumeDecision(runId),
+          resumeParkedRun: (runId) => stack.supervisor.resumeParkedRun(runId),
         });
         // `conversation.message.send` queues the Chief assessment Run and `plan.approve`
         // queues the next professional Run through this same orchestrator (WP-12 T2.1).
-        project.protocol.attachOrchestrator(execution.orchestrator);
-        project.protocol.attachGateway(execution.gateway);
+        project.protocol.attachOrchestrator(stack.orchestrator);
+        project.protocol.attachGateway(stack.gateway);
         // `protocol.md` §4 `permission.request`/`permission.respond` and the cancel
         // cleanup (`reliability.md` §6) come from the stack's own Grant service and Broker.
         project.protocol.attachToolBridge({
           requestPermission: (input) => {
-            const decided = execution.grantService.requestPermission(input);
+            const decided = stack.grantService.requestPermission(input);
             return {
               decisionId: decided.decisionId,
               version: decided.version,
@@ -473,7 +580,7 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
           },
           respondPermission: (input) => {
             if (input.choice === 'deny') {
-              const denied = execution.grantService.denyPermission(
+              const denied = stack.grantService.denyPermission(
                 input.decisionId,
                 input.runId,
                 input.reason,
@@ -486,7 +593,7 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
                 ...(denied.runStatus === undefined ? {} : { runStatus: denied.runStatus }),
               };
             }
-            const approved = execution.grantService.approvePermission({
+            const approved = stack.grantService.approvePermission({
               decisionId: input.decisionId,
               operation: input.operation,
               runId: input.runId,
@@ -508,13 +615,13 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
               ...(approved.runStatus === undefined ? {} : { runStatus: approved.runStatus }),
             };
           },
-          cleanupRun: (runId) => execution.cleanupRun(runId),
+          cleanupRun: (runId) => stack.cleanupRun(runId),
         });
         // The previous daemon may have died mid-Attempt: reconcile before scheduling
         // (`reliability.md` §7), then start ticking.
         // The host epoch must be strictly newer than the one the previous daemon recorded,
         // so it carries the start time as well as the pid and the lock epoch.
-        execution.start(
+        stack.start(
           `host-${String(process.pid)}-${String(lock.lock.epoch)}-${new Date().toISOString()}`,
         );
       }
@@ -522,14 +629,66 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
         projectId: project.projectId,
         root: project.root,
         daemon: { host, port: project.ports.daemon },
-        web: project.ports.web === null ? null : { host, port: project.ports.web },
+        web: null,
       };
       instances.push(instance);
+      openedById.set(project.projectId, project);
+      if (execution !== undefined) executionById.set(project.projectId, execution);
+      writeRecord();
       log(
-        `agentdevd: opened ${project.root} (project ${project.projectId}) daemon=${String(project.ports.daemon)} web=${String(project.ports.web ?? '-')}`,
+        `agentdevd: opened ${project.root} (project ${project.projectId}${
+          name === undefined ? '' : `, name ${name}`
+        }) daemon=${String(project.ports.daemon)}`,
       );
+      return {
+        projectId: project.projectId,
+        root: project.root,
+        gitRoot: project.gitRoot,
+        dataDir: project.dataDir,
+        instance,
+        store: project.store,
+        protocol: project.protocol,
+        deliveryBranch:
+          project.store.projects.find(project.projectId)?.deliveryBranch ?? 'agentdev/main',
+        documentRoot:
+          project.store.projects.find(project.projectId)?.documentRoot ?? 'docs/agentdev',
+      };
+    };
+
+    /**
+     * Opens one project through the directory and returns its instance.
+     *
+     * Kept for `runtime.open`, the CLI's `agentdev open` path: the directory owns the
+     * registry and idempotency (`protocol.md` §5) and the admin surface reports the
+     * same instance `runtime.json` lists.
+     */
+    const openImpl = async (
+      root: string,
+      openOptions?: { readonly trust?: boolean },
+    ): Promise<RuntimeInstance> => {
+      const entry = await directory.open(root, {
+        trust: openOptions?.trust ?? options.trust ?? false,
+      });
+      const instance = instances.find((candidate) => candidate.projectId === entry.projectId);
+      if (instance === undefined) {
+        throw new RuntimeHomeError(
+          'OPEN_FAILED',
+          `project ${entry.projectId ?? entry.root} was registered but not published`,
+        );
+      }
       return instance;
     };
+
+    /**
+     * The instances as they are published.
+     *
+     * Under the single-entry model every project is reached through the one BFF
+     * (WP-12 T5 D-T5-3), so each instance reports that BFF as its `web` address —
+     * `null` only for a headless start. `agentdev status` and `agentdev open`
+     * therefore keep printing a usable URL, and it is the same URL for every project.
+     */
+    const publishedInstances = (): RuntimeInstance[] =>
+      instances.map((instance) => ({ ...instance, web: webInfo }));
 
     const writeRecord = (): void => {
       const next: RuntimeRecord = {
@@ -540,7 +699,7 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
         version,
         home,
         admin: { host, port: runtime.admin.port },
-        instances: [...instances],
+        instances: publishedInstances(),
       };
       record = next;
       writeRuntimeRecord(home, next);
@@ -583,6 +742,37 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
         });
       });
       runtime.admin = { host, port: await listenAdmin(adminServer, options.adminPort ?? 0, host) };
+      // WP-12 T5 D-T5-3: the host owns **one** BFF for the whole installation. Every
+      // project is opened with `withWeb:false` above; the browser logs in once, keeps
+      // one origin and one session, and the BFF routes each request to the project it
+      // names.
+      if (options.withWeb !== false) {
+        const primary = instances[0];
+        const fallbackTarget = {
+          baseUrl: `http://${host}:${String(
+            primary?.daemon.port ?? options.daemonPort ?? DEFAULT_LISTENERS.daemon.port,
+          )}`,
+          origin: DEFAULT_WEB_ORIGIN,
+          bearer: installationToken,
+        };
+        const web = createWebApp({
+          daemon: fallbackTarget,
+          projects: directory,
+          auth,
+          allowedOrigins: [...allowedOrigins],
+          sessions: new WebSessionStore(),
+          files: new NodeFilePort(),
+          version,
+        });
+        webListener = web.server;
+        webInfo = {
+          host,
+          port: await listenAdmin(web.server, options.webPort ?? DEFAULT_LISTENERS.web.port, host),
+        };
+        log(
+          `agentdevd: BFF listening on http://${host}:${String(webInfo.port)} (${String(instances.length)} project(s))`,
+        );
+      }
       writeRecord();
     } catch (error) {
       // A failed start must not leave a lock or a live record behind.
@@ -622,7 +812,15 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
         return;
       }
       if (request.method === 'GET' && url.pathname === '/projects') {
-        sendJson(response, 200, { ok: true, registry: readProjectRegistry(home), instances });
+        sendJson(response, 200, {
+          ok: true,
+          registry: readProjectRegistry(home),
+          instances: publishedInstances(),
+          // WP-12 T5 Q2: the registry entries this installation skipped, reported
+          // here for the operator exactly as `project.list` reports them to the BFF.
+          problems: directory.problems,
+          bff: webInfo,
+        });
         return;
       }
       if (request.method === 'POST' && url.pathname === '/projects') {
@@ -642,6 +840,74 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
           return;
         }
         const root = (body as { root?: unknown }).root;
+        const action = (body as { action?: unknown }).action;
+        /**
+         * The admin surface is the CLI/operator path (Q9: a create/clone/open failure
+         * is reported here as an error code plus the `operationId` that identifies the
+         * attempt, never as an installation-level event). `POST /projects` with only a
+         * root keeps its original "register and open" meaning.
+         */
+        if (action === 'grant') {
+          const remoteUrl = (body as { remoteUrl?: unknown }).remoteUrl;
+          if (typeof root !== 'string' || root.trim() === '' || typeof remoteUrl !== 'string') {
+            sendJson(response, 400, {
+              ok: false,
+              error: { code: 'VALIDATION_ERROR', message: 'root and remoteUrl are required' },
+            });
+            return;
+          }
+          try {
+            const grant = directory.grantClone({ remoteUrl, root });
+            sendJson(response, 200, { ok: true, ...grant });
+          } catch (error) {
+            sendJson(response, 422, {
+              ok: false,
+              error: {
+                code: codeOfAdminError(error, 'GRANT_FAILED'),
+                message: error instanceof Error ? error.message : String(error),
+              },
+            });
+          }
+          return;
+        }
+        if (action === 'create' || action === 'clone') {
+          if (typeof root !== 'string' || root.trim().length === 0) {
+            sendJson(response, 400, {
+              ok: false,
+              error: { code: 'VALIDATION_ERROR', message: 'root is required' },
+            });
+            return;
+          }
+          const operationId = `admin-${action}-${new Date().toISOString()}`;
+          try {
+            const entry =
+              action === 'create'
+                ? await directory.create(root, stringField(body, 'name') ?? root)
+                : await directory.clone(
+                    stringField(body, 'remoteUrl') ?? '',
+                    root,
+                    stringField(body, 'grantId') ?? '',
+                  );
+            const instance = instances.find((item) => item.projectId === entry.projectId);
+            sendJson(response, 200, {
+              ok: true,
+              operationId,
+              project: entry,
+              ...(instance === undefined ? {} : { instance: { ...instance, web: webInfo } }),
+              web: webInfo,
+            });
+          } catch (error) {
+            sendJson(response, 422, {
+              ok: false,
+              error: {
+                code: codeOfAdminError(error, `${action.toUpperCase()}_FAILED`),
+                message: error instanceof Error ? error.message : String(error),
+                operationId,
+              },
+            });
+          }
+          return;
+        }
         if (typeof root !== 'string' || root.trim().length === 0) {
           sendJson(response, 400, {
             ok: false,
@@ -650,19 +916,22 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
           return;
         }
         const trust = (body as { trust?: unknown }).trust;
+        const name = stringField(body, 'name');
         try {
           const instance = await runtime.open(root, {
             trust: trust === undefined ? true : trust === true,
           });
-          sendJson(response, 200, { ok: true, instance });
+          sendJson(response, 200, {
+            ok: true,
+            instance: { ...instance, web: webInfo },
+            web: webInfo,
+            ...(name === undefined ? {} : { name }),
+          });
         } catch (error) {
           sendJson(response, 422, {
             ok: false,
             error: {
-              code:
-                error instanceof Error && 'code' in error
-                  ? String(error.code)
-                  : 'PROJECT_OPEN_FAILED',
+              code: codeOfAdminError(error, 'PROJECT_OPEN_FAILED'),
               message: error instanceof Error ? error.message : String(error),
             },
           });
@@ -793,6 +1062,19 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
     releaseDaemonLock(home, lock.lock.epoch);
     throw error;
   }
+}
+
+/** A typed code for an admin refusal, defaulting to the operation's own name. */
+function codeOfAdminError(error: unknown, fallback: string): string {
+  if (error instanceof ProjectDirectoryError) return error.code;
+  const code = (error as { readonly code?: unknown }).code;
+  return typeof code === 'string' && code !== '' ? code : fallback;
+}
+
+/** A non-empty string field of an admin body, or `undefined`. */
+function stringField(body: unknown, key: string): string | undefined {
+  const value = (body as Record<string, unknown>)[key];
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
 }
 
 async function listenAdmin(server: Server, port: number, host: string): Promise<number> {

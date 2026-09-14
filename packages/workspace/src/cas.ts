@@ -1243,6 +1243,9 @@ function integrateTasks(options: RunIntegrationOptions): RunIntegrationResult {
           conflictingTaskIds: [...new Set([...applied.map((entry) => entry.taskId), taskId])],
         });
       }
+      // The replay commits the picked change and then records the Task integration as its
+      // own commit, so `applied.commit` names the integration commit the CAS installs
+      // (`packages/workspace/test/cas.integration.test.ts` "repair convergence").
       const committed = git.commitPaths(
         options.worktreePath,
         `feat: integrate ${taskId} (${revision.slice(0, 12)})`,

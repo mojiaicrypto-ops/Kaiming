@@ -44,6 +44,11 @@ export const RUNNER_ENV_ALLOWLIST: readonly string[] = [
   'NODE_EXTRA_CA_CERTS',
   'SYSTEMROOT',
   RUNNER_ENTRY_ENV,
+  // The image reference a container launcher exports. The Runner reports it as its
+  // `environmentRef` (`apps/runner/src/environment.ts`), so a verification manifest names the
+  // image the verification really ran in instead of `container:undeclared`. It is a name, not
+  // a credential: the loopback `AGENTDEV_PROVIDER_*` values stay excluded (T3 request).
+  'AGENTDEV_EXEC_IMAGE',
 ];
 
 /** Builds the child environment from the allowlist, never the provider variables. */

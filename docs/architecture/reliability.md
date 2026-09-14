@@ -58,11 +58,13 @@ RecoveryReport={workId,operationId,expectedVersions,runnerState,leases,gitHeads,
 
 ## 7. 启停与部署
 
-agentdev start启动daemon和web；Linux提供systemd单用户服务，macOS提供launchd用户服务。daemon获取每Project文件锁和epoch后加载数据库、迁移、检查outbox/Run；Core存储/Git/迁移检查成功即可提供需求读取；Docker、项目依赖和Provider探测分别影响executionReady，不阻断需求池查看。/healthz.ready表示Core可服务，执行能力由Project快照executionReady和blockers展示。启动BFF不会自己恢复Runner。
+agentdev start启动daemon和web；Linux提供systemd单用户服务，macOS提供launchd用户服务。daemon获取每Project文件锁和epoch后加载数据库；每Git-root锁文件在`~/.agentdev/locks/<sha256(canonicalRoot)>.lock`（0600、独占创建、死pid接管、按epoch释放），**不往用户仓库或工作树里写任何锁文件**；同一安装内第二个入口打开同一root返回PROJECT_ALREADY_OPEN并附持有pid/home。不同`AGENTDEV_HOME`的两个安装互不可见对方的锁目录，此跨安装限制为已登记缺口。安装级项目注册表`~/.agentdev/projects.json`逐条容错：单条schema非法或root/projectId重复的记录被跳过并在`project.list`/doctor以typed状态上报，容器级损坏（非JSON/非文档形状）仍拒绝启动、迁移、检查outbox/Run；Core存储/Git/迁移检查成功即可提供需求读取；Docker、项目依赖和Provider探测分别影响executionReady，不阻断需求池查看。/healthz.ready表示Core可服务，执行能力由Project快照executionReady和blockers展示。启动BFF不会自己恢复Runner。
 
 优雅停止：停止准入→持久化mailbox/outbox→请求Runner安全停→保存Checkpoint→回收容器/进程→关闭数据库。收到SIGKILL或断电后按恢复流程核对，旧Running不可直接显示继续运行。
 
 CLI命令契约：doctor输出依赖版本/Docker/目录权限/端口状态；start/stop/status；open <path>；secret set <ref> [--stdin]（值只从stdin读、不回显、不经argv）/secret list（只回元数据）/secret delete <ref>（daemon在运行则走其回环admin面，否则直连安装级仓库）；backup <projectId> --output <dir>；restore <backupDir> --root <path>；relocate <projectId> --root <path>。失败退出非零并输出error code和operationId；status只读。
+
+**安装级Grant（WP-12 T5 Q4）**：`project.clone`这类「环境操作」发生在任何项目之外（网络访问 + 在项目根之外写目录），因此它的授权不能放在项目库里的Grant表（那里按运行中的Work绑定）。安装级once-Grant持久化在安装家目录的`~/.agentdev/grants.json`（0600、原子写），语义与项目级`grant`的`once`作用域一致：绑定operation + targets + inputHash，带`issuedAt/expiresAt`，只能消费一次，消费时写入`consumedAt/consumedByOperationId`。拒绝未知、过期、operation/targets/inputHash不匹配的引用；已消费的引用返回INVALID_STATE而不是重放。与项目级Grant的区别：项目级Grant跟随Work/Run生命周期并被准入路径消费；安装级Grant只服务安装级环境操作，不参与Run准入。授权由用户的显式动作铸造（回环admin面），`grantId`即该行id。
 
 Provider Secret持久化在安装家目录的`~/.agentdev/secrets/`：默认`file`后端（0600 AES-256-GCM记录+0600独立主密钥），`AGENTDEV_SECRET_BACKEND=keychain`才使用macOS Keychain（`security`以`-w <value>`经argv传值，故不设为默认）。缺少主密钥而记录仍存在时拒绝静默重建并报错；后端不识别或损坏的文件只逐条上报、不阻断启动。
 

@@ -418,25 +418,70 @@ describe('plan.approve queues the next Run (WP-12 T2.6, Q3=A)', () => {
     expect(queued?.taskId).toBe(task?.id);
   });
 
-  it('keeps the approval when no Chief Run exists to parent the Run', () => {
+  it('fails typed when no live Chief Run can parent the Run, then the Chief-settle hook queues it', () => {
     const seeded = seedApprovalPreconditions();
     // Park the only Chief Run: it can no longer accept a new dispatch.
     const chief = store.runs.find(seeded.chiefRunId);
     if (chief === undefined) throw new Error('unreachable');
     store.runs.update(chief.id, { status: 'completed' }, chief.version);
-    const approved = call('plan.approve', {
+    // The approval is persisted, but the hand-off cannot happen: the command must say
+    // so with a typed error instead of `applied` with a null `runId` (G8 drill finding).
+    let failure: { code?: string; details?: JsonObject } | undefined;
+    try {
+      call('plan.approve', {
+        workId: seeded.workId,
+        planVersion: 0,
+        plan: plan as unknown as JsonObject,
+        approval: {
+          authorizationRef: seeded.authorizationId,
+          runId: seeded.planningRunId,
+          productChanged: false,
+        },
+        revision: GIT_HEAD,
+      });
+    } catch (error) {
+      failure = error as { code?: string; details?: JsonObject };
+    }
+    expect(failure?.code).toBe('GATE_NOT_READY');
+    const reason = failure?.details?.['reason'];
+    expect(typeof reason).toBe('string');
+    expect(reason).toContain('Chief');
+    // The approval itself survived, so the recovery hook can finish the hand-off.
+    const pending = protocol.resumeApprovedPlan(seeded.workId);
+    expect(pending.runId).toBeNull();
+    expect(pending.reason).toContain('Chief');
+    // A new live Chief Run makes the retry succeed with a real, parented Run.
+    const replacement = store.runs.insert({
+      projectId: store.projectId,
       workId: seeded.workId,
-      planVersion: 0,
-      plan: plan as unknown as JsonObject,
-      approval: {
-        authorizationRef: seeded.authorizationId,
-        runId: seeded.planningRunId,
-        productChanged: false,
-      },
-      revision: GIT_HEAD,
+      role: 'chief',
+      purpose: 'analysis',
+      stage: 'coordinate',
+      status: 'running',
+      requiredChild: false,
+      join: 'none',
+      childIds: [],
+      configSnapshotId: 'c'.repeat(64),
+      contextSnapshotId: 'd'.repeat(64),
+      dispatchSnapshotId: 'e'.repeat(64),
+      budgetAllocation: 10_000,
     });
-    expect(approved['planRef']).toMatchObject({ version: 1 });
-    expect(approved['runId']).toBeNull();
-    expect(store.runs.list({ where: 'work_id = ?', params: [seeded.workId] })).toHaveLength(2);
+    const resumed = protocol.resumeApprovedPlan(seeded.workId);
+    expect(resumed.reason).toBeNull();
+    const queued = store.runs.find(resumed.runId ?? '');
+    expect(queued).toMatchObject({
+      role: 'backend',
+      status: 'queued',
+      parentRunId: replacement.id,
+      workId: seeded.workId,
+    });
+    // The hook is idempotent: a second call finds the Run and queues nothing new.
+    const again = protocol.resumeApprovedPlan(seeded.workId);
+    expect(again.runId).toBe(resumed.runId);
+    expect(
+      store.runs
+        .list({ where: 'work_id = ?', params: [seeded.workId] })
+        .filter((run) => run.role === 'backend' && run.status === 'queued'),
+    ).toHaveLength(1);
   });
 });

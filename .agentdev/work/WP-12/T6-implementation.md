@@ -237,3 +237,102 @@ DRILL PASS
 - G8（安装级配置随备份）：**已关闭**（实现 + 测试 + 演练证据）；残余：项目级 `.agentdev/config.toml` 覆盖不在副本内。
 - G9（演练 `evidence: 0/0`）：未变，带证据 blob 的恢复由 CLI 集成测试覆盖。
 - 本轮新增残余：`installation.json` 侧车是 CLI 自有格式（`schemaVersion:1`），旧格式备份无该目录时给 `NO_INSTALLATION_RECORD` 警告并只恢复 Project 状态。
+
+---
+
+# G11 硬化（运维原语的真实 CLI 产品路径证据）
+
+依据：`.agentdev/work/WP-12/hardening-plan.md` §2 G11、§3.1（诚实排除）、§7-Q8（主管裁决：先验证两条 T6 残留再开 G11）；
+主管批准：`drill-acs.mjs` 只新增 `E2E_OPS_ACS`、不动 `RESIDUAL_GAPS`；AC-091 的 `requirement-save.cas-race` 不在本刀。
+
+## 1. 先验证两条 T6 残留
+
+**(a) G1（Provider 带 `secretRef` 时 Chief Run 不入队）— 已被 T2 修复，真实复验通过。**
+`node .agentdev/work/WP-12/G11-verify-g1.mjs`（退出码 0，原始输出见 `G11-verify-g1-output.txt`）：临时 `AGENTDEV_HOME` + 临时 Git 项目 → 真实 CLI `agentdev start`
+（真实 daemon）→ `/rpc provider.upsert` **带真实凭证**（`secretConfigured=true`）→ `config.save` 设 chief Profile →
+`conversation.message.send` → Chief Run 入队。实测：
+
+```
+secretRef=provider:01a0a068-e8a9-72d4-8efc-7a1069c34881 secretConfigured=true
+runId=01a0a068-e8e4-72ee-97a3-227b8bc87319 role=chief status=running
+attemptId=01a0a068-ec47-7ef2-93c4-ffb128c0c34a status=running runnerId=pid:68823
+loopback model calls=1
+G1 VERIFIED: Chief Run reached attempt.ready and the credentialed Provider was called
+```
+
+`attempt.ready` 的直接证据是 Attempt 由 `starting → running`（`supervisor.ts:998-1011`），再加回环模型真的收到 1 次带凭证调用。
+该断言同时内建在新 e2e 检查 `ops.backup-restore` 里（它创建真实数据的唯一通道就是产品路径，无播种行）。
+
+**(b) restore 演练重跑并归档非 0/0 证据。**
+`T6-drill.mjs` 新增：经产品路径 `POST /artifacts/upload`（安装 Bearer）+ 消息绑定，产生**真实用户产物**；随后 backup/损坏/restore。
+`node .agentdev/work/WP-12/T6-drill.mjs` → `DRILL PASS`（退出码 0，完整输出见 `T6-drill-output.txt`）：
+
+```
+ok   a real user artifact was uploaded through the product path — 201
+ok   backup carries the real evidence blob — 1
+ok   restore verified the real evidence blob (non-zero) — 1/2
+ok   restore marks the previously active Run interrupted — ["01a0a069-3afa-…"]
+ok   restore rewrote the installation root mapping
+DRILL PASS
+```
+
+（`1/2` = manifest 的 `evidence` 校验 1/1 通过、blobs 2 个全部校验通过；此前记录里的 `0/0` 已消除。）
+
+## 2. G11 实现（真 CLI + 真文件系统）
+
+| 文件 | 变更 |
+|---|---|
+| `scripts/lib/e2e-cli.mjs`（新增） | 真实 `agentdev` 子进程：生成 source-mode bootstrap（`installSourceResolver` + `apps/cli/src/cli.ts` / `apps/daemon/src/main.ts`）、`runCli()` 返回原始 stdout/stderr/退出码、`cliJson()` 跳过前置 `WARNING` 行解析 JSON |
+| `scripts/lib/e2e-ops-drill.mjs`（新增） | 检查 `ops.backup-restore`：`bootCredentialedInstallation()`（真 CLI start + 真凭证 Provider + 真实附件产物 + 消息→Work→Chief Run→`attempt.ready`），备份（活 Run）→ 停止 → 删除状态目录与项目 → restore → 重启 daemon 并用其自身协议确认 Run `interrupted` → 无凭证新 home restore（blocked + 首行 `WARNING [PROVIDER_BLOCKED]` + Provider 定义随包 + 无明文）→ stdin `secret set` 后 ready → `secret rotate` → relocate 跨 root `PROJECT_IDENTITY_MOVE_UNSUPPORTED`（零改动）+ 同 canonical root 别名成功 → `doctor` → launchd 临时 label/home load/unload |
+| `scripts/lib/drill-acs.mjs` | **只新增** `E2E_OPS_ACS = Object.freeze(['AC-064'])`（含注释：真实 CLI + 真实文件系统的运维原语证据）；`RESIDUAL_GAPS` 未动 |
+| `scripts/e2e.mjs` | **只新增** 1 行 import + 1 行 `await runOpsDrill({ checks, meta })`（置于浏览器检查之后、`provider.fact-and-unknown` 行之前；未重排/未删任何既有检查） |
+
+`ops.backup-restore` 的逐条断言（全部为真实子进程/真实文件）：start exit 0；`secretConfigured=true`；Chief Run `running` 且模型被调用；backup exit 0、`complete`、revision == `git rev-parse HEAD`、`secretRefs` 含该 ref、`installation.configCopied`、备份目录无凭证明文、`evidence ≥ 1`；损坏后 restore exit 0、`status:ready`、`treeMatches`、`evidenceVerified ≥ 1`/`blobsVerified ≥ 1`、doctor ok、`interruptedRunIds` 含该 Run；重启后 daemon 记录里同一 projectId/root，协议回报 `interrupted`；新 home restore `blocked` 且首行告警、Provider 定义在、无明文，`secret set` 后 `ready`，`secret rotate` 报 `rotated:true`/`capabilities.revoked:0` 且不打印值；relocate 拒绝时仓库/注册表零改动、别名成功 `identityPreserved:true`；`doctor` exit 0；launchd bootstrap/bootout 后无 runtime.json 与 `daemon.lock`。
+
+## 3. 本轮真实退出码
+
+| 命令 | 结果 | 退出码 |
+|---|---|---|
+| `node .agentdev/work/WP-12/G11-verify-g1.mjs` | `G1 VERIFIED` | **0** |
+| `node .agentdev/work/WP-12/T6-drill.mjs` | `DRILL PASS`（非 0/0 证据） | **0** |
+| `node scripts/e2e.mjs --no-write`（22:00，整刀完成时） | **25 checks — PASS 24 / FAIL 0 / UNVERIFIED 1**（AC-001 provider）；`27 ACs`；`ops.backup-restore [AC-064] PASS`；其余既有检查（含 T3 的）全部仍执行（原始输出 `G11-e2e-output.txt`） | **0** |
+| `node /tmp/…`（等价：单跑本检查的 CheckList 驱动，lint 修复后 22:13） | `ops: …` 八个阶段全过；`ops.backup-restore [AC-064] PASS`（`G11-ops-isolated-output.txt`） | **0** |
+| `node scripts/e2e.mjs --no-write`（22:15 复跑） | 在**原生浏览器检查** `browser.html-preview-and-download` 处 FAIL（期望子串 `/artifacts/download/`，实际 `http://127.0.0.1:…/artifacts/<id>/download/<token>`），该检查在 `ops.backup-restore` **之前**，故本检查未执行（`G11-e2e-rerun-browser-fail.txt`）；归因他方在飞改动 | 1（归因他方） |
+| `node scripts/acceptance.mjs` | 见 §4（本轮采纳结果） | 见下 |
+
+`ops.backup-restore` 证据串（e2e 实测，节选）：
+
+```
+credentialed Provider provider:01a0a06e-… -> Chief Run 01a0a06e-… reached attempt.ready (Attempt 01a0a06e-… running) and the loopback model received 1 credentialed call(s);
+agentdev backup exit 0: revision c7974c9fbf0b, complete, secretRefs ["provider:01a0a06e-…"], installation config copied, no credential value in the backup directory;
+agentdev restore exit 0 (status ready, tree 1ed076140947, evidence 1/1, doctor ok, Run 01a0a06e-… interrupted); restarted daemon reported it interrupted through its own protocol;
+fresh installation restore: status blocked + first stdout line WARNING [PROVIDER_BLOCKED], Provider definitions carried (1), no credential value in the fresh home;
+after stdin secret set the restore is ready; secret rotate exit 0 (capabilities.revoked=0, no value printed);
+relocate --move to a different root refused with PROJECT_IDENTITY_MOVE_UNSUPPORTED and left the repository and registry untouched; relocate to an alias of the same canonical root accepted (identityPreserved);
+agentdev doctor exit 0 with execution ready; launchd 单元 load/unload：bootstrap gui/501 exit 0, daemon pid 71142 published runtime.json and held daemon.lock, agentdev status running:true, bootout removed the record and the lock
+```
+
+## 4. 验收聚合采纳
+
+采纳通路已接通：`scripts/lib/acceptance-drills.mjs` 以本次运行 nonce + 代码绑定采纳 `pnpm test:e2e` 的逐 AC 行，而本刀新增的
+`ops.backup-restore` 在 e2e 报告中产出 `{ac: "AC-064", status: "PASS", checks: ["ops.backup-restore"]}`（见 `G11-e2e-output.txt`），
+正是聚合器消费的行形状；AC-065/AC-094 仍由库级 curated/test-name 证据覆盖（不登记 `recorded-gap`，避免把 PASS 降级为 ACCEPTED）。
+
+`node scripts/acceptance.mjs` 本刀实跑 **两次，均 exit 2（infrastructure problem）**，归因如下（均为他方在飞编辑，非本刀）：
+
+| 运行 | 结果 | 归因证据 |
+|---|---|---|
+| #1 22:03 | exit 2 | `pnpm test:live` 报告 `codeDigest` 与当前代码树不一致（运行期间工作树被他方改写）；某个 Vitest project 未产出 JSON 报告；`apps/daemon/test/{runtime,secret,tool-bridge-permissions}.integration.test.ts` 多条失败 |
+| #2 22:06 | exit 2 | `pnpm test:e2e` 在 **browser** 检查处失败（`browser.html-preview-and-download`、`browser.attachment-client-hints`，均在 `ops.backup-restore` 之前，故我的检查未执行）；integration 479 用例 6 失败，含 22:04 新出现的 `apps/daemon/test/probe-g8epoch.integration.test.ts` 与之争用默认端口；`pnpm test:live` 再次因移动的工作树拒绝绑定 |
+
+独立复验：`apps/daemon/test/runtime.integration.test.ts` 单跑 **6/6 PASS**、`apps/daemon/test/tool-bridge-permissions.integration.test.ts` 单跑 **FAIL 1**（T3 在飞文件）、
+`apps/cli/test/runtime.integration.test.ts` 单跑 **7/7 PASS**（它在 #2 中的失败是与外来 probe 文件并行争用默认端口 4317/4318 所致）。
+结论：本刀的 e2e 检查自身 `exit 0`（见 §3），聚合采纳只等树稳定；在树稳定前 `pnpm test:acceptance` 的 exit 2 不能归给本刀，也不改变 AC-064 的既有 PASS。
+
+## 5. 诚实排除与登记（不伪装）
+
+- **AC-065（Migration）**：按 hardening-plan §3.1 #7 整条留在库级（`packages/storage/test/migrations.integration.test.ts`，6 条 curated）——「checksum 错误 → 停止启动」需要篡改真实数据库文件，属破坏性注入且污染安装，产品路径不增加判别力。**不登记 `recorded-gap`**。
+- **AC-094（跨 root relocate 子句）**：按 §3.1 #20 留库级（`packages/workspace/test/cas.integration.test.ts`、`packages/core/test/requirement-save.integration.test.ts`）；同根分支的真实执行在 `apps/cli/test/ops.integration.test.ts` 与本刀的 relocate 断言里。
+- **systemd 单元**：本机是 macOS，`agentdev.service` 仍未在 Linux 执行（静态核对 + `installation.md` §11 未验证清单）；已执行的是 launchd 真机 load/unload，不以它代替 systemd。
+- **AC-091 的 `requirement-save.cas-race`**：主管裁决**不在本刀**（留给后续并发/竞争硬化批），本刀不声称它已提升。
+- **观察（非缺口声明）**：`agentdev stop` 后立即 `agentdev start` 会复用 4318 端口，重启后的**第一次** `/rpc` 连接可能被 reset（内核 socket 竞态）；`ops.backup-restore` 对重启后的协议查询做了有界等待（30s，500ms 间隔）并在证据里保留该事实，不把它当成失败。

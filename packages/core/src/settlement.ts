@@ -29,6 +29,8 @@ import {
   type CompletionManifest,
   type ErrorCode,
   type JsonObject,
+  type Operation,
+  type VerificationManifest,
 } from '@agentdev/contracts';
 import {
   buildProjection,
@@ -85,6 +87,9 @@ export const KNOWLEDGE_UPDATED_EVENT = 'knowledge.updated';
 
 /** `operation.kind` of a settlement (`data.md` §2). */
 export const SETTLEMENT_OPERATION_KIND = 'settle';
+
+/** `operation.kind` of the integration whose candidate a settlement binds (`data.md` §2). */
+export const INTEGRATION_OPERATION_KIND = 'integrate';
 
 /** Snapshot payload `kind` of a frozen `CompletionManifest`. */
 export const COMPLETION_MANIFEST_KIND = 'completion_manifest';
@@ -810,6 +815,60 @@ export function readFrozenFinalManifest(
   return (record.manifest as CompletionManifest | undefined) ?? null;
 }
 
+/**
+ * Reads a frozen `VerificationManifest` by the id its payload declares.
+ *
+ * The real key space is the payload's `manifestId` (a UUIDv7), not `snapshot.hash`: a
+ * `Task.latestManifestId` is an id, and the immutable table is content-addressed by
+ * digest, so the two cannot be matched by pretending one is the other (`W6R2-05`).
+ * `findings.ts` applies the same rule for `stage_result.manifest_id`; this reader is the
+ * shared one the integration and the settlement use.
+ */
+export function readFrozenVerificationManifest(
+  store: ProjectStore,
+  manifestId: string,
+): VerificationManifest | null {
+  if (manifestId === '') return null;
+  const rows = store.db
+    .prepare("SELECT payload FROM snapshot WHERE type = 'verification' ORDER BY rowid ASC")
+    .all() as { readonly payload?: unknown }[];
+  for (const row of rows) {
+    const payload = parseJson(row.payload, 'snapshot.payload');
+    if (typeof payload !== 'object' || payload === null) continue;
+    const record = payload as { readonly kind?: unknown; readonly manifestId?: unknown };
+    if (record.kind !== VERIFICATION_MANIFEST_KIND) continue;
+    if (record.manifestId !== manifestId) continue;
+    const manifest = (payload as { readonly manifest?: unknown }).manifest;
+    if (manifest !== undefined) return manifest as VerificationManifest;
+  }
+  return null;
+}
+
+/**
+ * The `knowledgeTree` hash of a delivered revision (`data.md` §3).
+ *
+ * `reliability.md` §4 step 7 persists the "文档树Hash" of the delivered revision, so it is
+ * derived from the revision itself — the recursive listing of the Project's
+ * `documentRoot` — and never from the on-disk working tree, which may hold uncommitted
+ * edits. A revision that does not carry the document root yields the hash of an empty
+ * listing rather than an error: "no knowledge in this revision" is a fact.
+ */
+export function deliveredKnowledgeTreeHash(input: {
+  readonly repoRoot: string;
+  readonly revision: string;
+  readonly documentRoot?: string;
+}): string {
+  const pathspec =
+    input.documentRoot === undefined || input.documentRoot === '' ? [] : ['--', input.documentRoot];
+  const result = runGit(['ls-tree', '-r', '-z', '--full-tree', input.revision, ...pathspec], {
+    cwd: input.repoRoot,
+  });
+  if (!result.ok) {
+    fail('STALE_ARTIFACT', `无法读取 ${input.revision} 的文档树`, { revision: input.revision });
+  }
+  return sha256(result.stdout);
+}
+
 // ---------------------------------------------------------------------------
 // Settlement + crash-after-ref recovery (AC-063)
 // ---------------------------------------------------------------------------
@@ -884,6 +943,25 @@ export interface SettleRequest {
   readonly completion?: RequirementCompletionInput;
   /** Lock owner; defaults to `settle:<operationId>`. */
   readonly ownerAttemptId?: string;
+  readonly epoch?: number;
+  readonly ttlMs?: number;
+  readonly leaseAt?: string;
+}
+
+/**
+ * Settles the candidate an earlier `kind='integrate'` operation installed
+ * (`reliability.md` §4 steps 6–9, `workflow.md` §7).
+ *
+ * The integration is the only producer of a real delivery candidate, so Settlement reads
+ * its result instead of trusting a caller-supplied revision: the candidate revision, the
+ * Work/Requirement and the frozen integration `VerificationManifest` all come from the
+ * persisted operation row.
+ */
+export interface SettleFromIntegrationRequest {
+  /** The `kind='integrate'` operation whose candidate is settled. */
+  readonly operationId: string;
+  readonly completion?: RequirementCompletionInput;
+  readonly message?: string;
   readonly epoch?: number;
   readonly ttlMs?: number;
   readonly leaseAt?: string;
@@ -1274,6 +1352,241 @@ export class SettlementService {
       reusedCommit: cas.reused,
       refUpdated: cas.refUpdated,
     });
+  }
+
+  /**
+   * Settles the candidate a `kind='integrate'` operation installed
+   * (`reliability.md` §4 steps 6–9, `workflow.md` §7, AC-010/AC-041/AC-081).
+   *
+   * The candidate, its Work/Requirement and the frozen integration
+   * `VerificationManifest` are read from the persisted operation — never from the
+   * caller — so the CompletionManifest binds exactly the revision the CAS installed.
+   * The method refuses **before any write** when
+   *
+   * - the integration operation or its `candidateRevision` is missing
+   *   (`MISSING_CONTEXT`/`NOT_FOUND`),
+   * - any Task has lost its frozen `VerificationManifest` (`MISSING_CONTEXT`),
+   * - the integrated revision carries no verification manifest for its tree
+   *   (`GATE_NOT_READY`): the combination was never verified, and reusing another
+   *   tree's evidence is refused rather than recorded (`reliability.md` §4 step 4).
+   *
+   * The settlement itself then runs the existing `settle()` path, so the delivery ref
+   * still moves only through the CAS and the completed Requirement record is committed
+   * through the same pool save path `requirement.save` uses (`protocol.md` §8).
+   */
+  settleFromIntegration(request: SettleFromIntegrationRequest): SettlementOutcome {
+    const operationId = `settle:${request.operationId}`;
+    const integration = this.integrationOperation(request.operationId);
+    if (integration === null) {
+      return this.outcomeRefusal(
+        'NOT_FOUND',
+        `找不到 operationId ${request.operationId} 的集成记录，不能结算`,
+        operationId,
+        ['没有可结算的集成候选'],
+      );
+    }
+    if (integration.candidateRevision === '' || !FULL_OID.test(integration.candidateRevision)) {
+      return this.outcomeRefusal(
+        'MISSING_CONTEXT',
+        `集成操作 ${request.operationId} 没有候选提交，不能结算`,
+        operationId,
+        ['缺少 candidateRevision'],
+      );
+    }
+    const work = this.store.works.find(integration.workId);
+    if (work === undefined) {
+      return this.outcomeRefusal(
+        'NOT_FOUND',
+        `集成操作 ${request.operationId} 的 Work ${integration.workId} 不存在`,
+        operationId,
+      );
+    }
+    const repoRoot = this.repoRoot();
+    const finalRevision = integration.candidateRevision;
+    let finalTree: string;
+    try {
+      finalTree = deliveredCodeTreeHash({ repoRoot, revision: finalRevision });
+    } catch (error) {
+      return this.outcomeRefusal(
+        'STALE_ARTIFACT',
+        `无法读取集成候选 ${finalRevision} 的代码树：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        operationId,
+      );
+    }
+
+    // A Task whose frozen result vanished means the verified work is no longer there;
+    // completing the Work would claim evidence that does not exist.
+    const tasks = this.store.tasks.list({ where: 'work_id = ?', params: [work.id] });
+    if (tasks.length === 0) {
+      return this.outcomeRefusal(
+        'GATE_NOT_READY',
+        `Work ${work.id} 没有可结算的 Task`,
+        operationId,
+      );
+    }
+    for (const task of tasks) {
+      if (task.latestManifestId === undefined) {
+        return this.outcomeRefusal(
+          'MISSING_CONTEXT',
+          `Task ${task.id} 没有 VerificationManifest，未验证的 Task 不能完成`,
+          operationId,
+          [`Task ${task.id} latestManifestId 为空`],
+        );
+      }
+      const taskManifest = readFrozenVerificationManifest(this.store, task.latestManifestId);
+      if (taskManifest === null) {
+        return this.outcomeRefusal(
+          'MISSING_CONTEXT',
+          `Task ${task.id} 的 VerificationManifest ${task.latestManifestId} 不存在`,
+          operationId,
+        );
+      }
+      if (taskManifest.workId !== work.id) {
+        return this.outcomeRefusal(
+          'STALE_ARTIFACT',
+          `Task ${task.id} 的 VerificationManifest 属于其他 Work ${taskManifest.workId}`,
+          operationId,
+        );
+      }
+    }
+
+    // `reliability.md` §4 step 4: the integrated combination is verified as a whole. The
+    // integration freezes that manifest only when the code tree is identical to a
+    // verified Task tree; without it the combination has no evidence and settlement
+    // refuses (`AC-010`, `AC-081`).
+    const integrationManifestId = integration.verificationManifestId;
+    if (integrationManifestId === null) {
+      return this.outcomeRefusal(
+        'GATE_NOT_READY',
+        `集成候选 ${finalRevision} 没有验证 Manifest，组合尚未通过验证，不能结算`,
+        operationId,
+        ['集成组合缺少验证证据'],
+      );
+    }
+    const integrationManifest = readFrozenVerificationManifest(this.store, integrationManifestId);
+    if (integrationManifest === null) {
+      return this.outcomeRefusal(
+        'STALE_ARTIFACT',
+        `集成验证 Manifest ${integrationManifestId} 不存在`,
+        operationId,
+      );
+    }
+    if (
+      integrationManifest.workId !== work.id ||
+      integrationManifest.codeRevision !== finalRevision ||
+      integrationManifest.codeTree !== finalTree
+    ) {
+      return this.outcomeRefusal(
+        'STALE_ARTIFACT',
+        `集成验证 Manifest ${integrationManifestId} 验证的不是本次候选 ${finalRevision}`,
+        operationId,
+        ['集成验证 Manifest 与候选不一致'],
+      );
+    }
+
+    const project = this.store.projects.find(this.store.projectId);
+    const knowledgeTree = deliveredKnowledgeTreeHash({
+      repoRoot,
+      revision: finalRevision,
+      ...(project?.documentRoot === undefined ? {} : { documentRoot: project.documentRoot }),
+    });
+    const requirementId = integration.requirementId ?? work.requirementId;
+    const built = buildFinalManifest({
+      workId: work.id,
+      ...(requirementId === undefined ? {} : { requirementId }),
+      verifiedManifests: [
+        {
+          manifestId: integrationManifestId,
+          workId: work.id,
+          kind: 'integration',
+          codeRevision: finalRevision,
+          codeTree: finalTree,
+          acceptanceIds: [...integrationManifest.acceptanceIds],
+          valid: true,
+          // The reused Task manifests are the provenance of this evidence
+          // (`reliability.md` §4 step 4 "记录reuse来源").
+          evidenceRefs: [...integrationManifest.dependencyManifestRefs],
+        },
+      ],
+      finalRevision,
+      finalTree,
+      knowledgeTree,
+      settlementResultRef: settlementResultId(request.operationId),
+      changedPaths: [],
+    });
+    if (!built.ok) {
+      return this.outcomeRefusal(built.code, built.message, operationId, built.reasons);
+    }
+    const ref =
+      integration.ref !== ''
+        ? integration.ref
+        : `refs/heads/${project?.deliveryBranch ?? 'agentdev/main'}`;
+    return this.settle({
+      operationId,
+      workId: work.id,
+      ...(requirementId === undefined ? {} : { requirementId }),
+      ref,
+      // The integration already installed the candidate through the CAS (`AC-012`); the
+      // settlement installs the *same* commit, so it creates no second commit.
+      expectedRevision: finalRevision,
+      candidateRevision: finalRevision,
+      candidateTree: finalTree,
+      manifest: built.manifest,
+      ...(request.message === undefined ? {} : { message: request.message }),
+      taskIds: [...integration.taskIds],
+      ...(request.completion === undefined ? {} : { completion: request.completion }),
+      ...(request.epoch === undefined ? {} : { epoch: request.epoch }),
+      ...(request.ttlMs === undefined ? {} : { ttlMs: request.ttlMs }),
+      ...(request.leaseAt === undefined ? {} : { leaseAt: request.leaseAt }),
+    });
+  }
+
+  /**
+   * The persisted `kind='integrate'` operation a settlement can bind, or `null`.
+   *
+   * `integrate.ts` writes the row after the CAS installed the candidate, so the row's
+   * `candidateRevision` is the revision the delivery ref really points at — the fact the
+   * CompletionManifest must bind (`reliability.md` §4 step 7).
+   */
+  integrationOperation(operationId: string): {
+    readonly row: Operation;
+    readonly workId: string;
+    readonly requirementId: string | null;
+    readonly ref: string;
+    readonly targetRevision: string;
+    readonly candidateRevision: string;
+    readonly taskIds: readonly string[];
+    readonly verificationManifestId: string | null;
+  } | null {
+    const rows = this.store.operations.list({
+      where: 'kind = ?',
+      params: [INTEGRATION_OPERATION_KIND],
+      orderBy: 'created_at DESC',
+      limit: 100,
+    });
+    for (const row of rows) {
+      if (row.stepResults['operationId'] !== operationId) continue;
+      const step = (key: string): string | null => {
+        const value = row.stepResults[key];
+        return typeof value === 'string' ? value : null;
+      };
+      const applied = row.stepResults['appliedTaskIds'];
+      return {
+        row,
+        workId: row.workId ?? step('workId') ?? '',
+        requirementId: row.requirementId ?? null,
+        ref: step('ref') ?? '',
+        targetRevision: step('targetRevision') ?? row.expectedHead ?? '',
+        candidateRevision: row.candidateRevision ?? step('candidateRevision') ?? '',
+        taskIds: Array.isArray(applied)
+          ? applied.filter((entry): entry is string => typeof entry === 'string')
+          : [],
+        verificationManifestId: step('verificationManifestId'),
+      };
+    }
+    return null;
   }
 
   /**
@@ -1739,6 +2052,45 @@ export class SettlementService {
   ): Extract<PrepareSettlementResult, { ok: false }> {
     return { ok: false, code, message, reasons: reasons.length === 0 ? [message] : reasons };
   }
+
+  /** A settled refusal; `branchUntouched` is always true because nothing was written. */
+  private outcomeRefusal(
+    code: ProtocolErrorCode,
+    message: string,
+    operationId: string,
+    reasons: readonly string[] = [],
+  ): Extract<SettlementOutcome, { ok: false }> {
+    return {
+      ok: false,
+      code,
+      message,
+      reasons: reasons.length === 0 ? [message] : reasons,
+      branchUntouched: true,
+      operationId,
+    };
+  }
+}
+
+/**
+ * The stable `settlementResultRef` of one integration operation.
+ *
+ * A `CompletionManifest` is addressed by a UUIDv7 id (`data.md` §3), but the id must be
+ * reproducible: a retried `settleFromIntegration` has to rebuild the *same* manifest, or
+ * the frozen snapshot and the projection's `finalManifestId` would point at two
+ * different ids for one settlement. Deriving it from the integration's operation id keeps
+ * it stable without storing a second mapping.
+ */
+export function settlementResultId(operationId: string): string {
+  const digest = sha256(`settlement-result\u0000${operationId}`);
+  const version = `7${digest.slice(8, 11)}`;
+  const variant = (Number.parseInt(digest[15] ?? '8', 16) & 0x3) | 0x8;
+  return [
+    digest.slice(0, 8),
+    digest.slice(4, 8),
+    version,
+    `${variant.toString(16)}${digest.slice(16, 19)}`,
+    digest.slice(20, 32),
+  ].join('-');
 }
 
 /** The `## 完成摘要` heading every portable body carries (`requirements.md` §6). */

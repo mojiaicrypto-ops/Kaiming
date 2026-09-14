@@ -251,6 +251,14 @@ interface LiveAttempt {
    * parked instead of settled (T8b P2-1).
    */
   ready: boolean;
+  /**
+   * The environment the Runner reported in `attempt.ready`.
+   *
+   * It is the Runner's own process observation, retained so a delivery can freeze a
+   * `VerificationManifest.environmentRef` for the Attempt it came from instead of a
+   * placeholder (`protocol.md:123`).
+   */
+  environmentRef: string | undefined;
   lastSeenAt: number;
   lastHeartbeatWritten: number;
   killTimer: NodeJS.Timeout | undefined;
@@ -539,6 +547,17 @@ export class RunnerSupervisor {
       attemptId: entry.attemptId,
       pid: entry.process.pid,
     }));
+  }
+
+  /**
+   * The environment one live Attempt reported in `attempt.ready`, when it is still live.
+   *
+   * `stage.submit` reads it to freeze the delivery's `VerificationManifest.environmentRef`
+   * (`protocol.md:123`). An Attempt that is gone has no environment this process can name,
+   * so the caller reports the absence instead of inventing one.
+   */
+  environmentRefOf(attemptId: string): string | undefined {
+    return this.live.get(attemptId)?.environmentRef;
   }
 
   /**
@@ -900,6 +919,7 @@ export class RunnerSupervisor {
       runnerId: realRunnerId,
       prompt: invocation.prompt,
       ready: false,
+      environmentRef: undefined,
       lastSeenAt: this.now(),
       lastHeartbeatWritten: 0,
       killTimer: undefined,
@@ -1005,6 +1025,7 @@ export class RunnerSupervisor {
           return;
         }
         entry.ready = true;
+        entry.environmentRef = message.environmentRef;
         const attempt = this.store.attempts.find(entry.attemptId);
         if (attempt !== undefined && attempt.status === 'starting') {
           this.store.attempts.update(attempt.id, { status: 'running' }, attempt.version);
@@ -1276,6 +1297,31 @@ export class RunnerSupervisor {
       this.finishFromResult(entry);
       return;
     }
+    // A Runner that exits **cleanly** after the one corrective prompt was sent ended the
+    // conversation without delivering: the model was asked to submit and the process left
+    // instead. `protocol.md` §6 makes two consecutive non-compliant ends a
+    // `contract_violation`, and there is no interrupted work to recover, so parking the Run
+    // as `interrupted` hid the real verdict behind a state no drill or board can act on
+    // (WP-12 R6). A non-zero code or a signal is a real loss — the correction never got its
+    // answer for reasons that are not the model's — so that keeps the recovery park below.
+    if (entry.correctionPending && exit.code === 0 && this.reportContractViolation(entry)) {
+      this.live.delete(entry.attemptId);
+      const nonCompliant = this.store.attempts.find(entry.attemptId);
+      if (
+        nonCompliant !== undefined &&
+        nonCompliant.status !== 'completed' &&
+        nonCompliant.status !== 'failed'
+      ) {
+        this.store.attempts.update(nonCompliant.id, { status: 'lost' }, nonCompliant.version);
+      }
+      this.ended(entry, 'exit');
+      this.clearKillTimer(entry);
+      this.reportSettled(entry.runId);
+      this.log(
+        `supervisor: ${entry.runId} runner exited (code 0) after the corrective prompt without a structured result: contract violation`,
+      );
+      return;
+    }
     // The process died without a result: park the Run from its real state instead of
     // guessing an outcome (`reliability.md` §7).
     this.live.delete(entry.attemptId);
@@ -1289,6 +1335,21 @@ export class RunnerSupervisor {
     this.log(
       `supervisor: ${entry.runId} runner exited (code ${String(exit.code)}, signal ${String(exit.signal)}) without a result`,
     );
+  }
+
+  /**
+   * Records the second non-compliance through the daemon's result handler.
+   *
+   * The handler is the layer that owns the verdict (`control-handler.ts` calls
+   * `lifecycle.contractViolation` for `corrections >= 1`), so this only reports the facts and
+   * asks. `true` means the Run really reached a terminal state; anything else — no handler, a
+   * handler that declined, a rejected write — leaves the caller on the recovery park, because
+   * a verdict nobody recorded must not look settled.
+   */
+  private reportContractViolation(entry: LiveAttempt): boolean {
+    if (this.onAttemptResult === undefined) return false;
+    this.correctivePrompt(entry);
+    return this.isTerminal(entry.runId);
   }
 
   private terminate(entry: LiveAttempt, signal: 'SIGTERM' | 'SIGKILL'): void {

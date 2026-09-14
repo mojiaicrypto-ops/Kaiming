@@ -59,6 +59,8 @@ export interface TestDaemon {
   readonly attachments: AttachmentService;
   readonly gates: PlanGateService;
   readonly findings: FindingService;
+  /** The Project's one-time download tokens (`protocol.md` §5, AC-034 evidence). */
+  readonly tokens: DownloadTokenStore;
   /** The repository root the Project row names. */
   readonly projectRoot: string;
   readonly server: Server;
@@ -78,6 +80,13 @@ export interface TestDaemon {
 export interface TestDaemonOptions {
   /** Origin the BFF uses for its own public URL and for daemon calls. */
   readonly webOrigin?: string;
+  /**
+   * The installation `AuthService`, shared so a single BFF session is valid on every
+   * project's daemon (WP-12 T5's single-entry multi-project harness).
+   */
+  readonly auth?: AuthService;
+  /** The installation credential, required when `auth` is supplied (it is not new). */
+  readonly installationToken?: string;
   /** Repository root the Project row names; a real directory for the files page. */
   readonly projectRoot?: string;
   /** Shortens the session TTL so an expired cookie is testable. */
@@ -103,21 +112,24 @@ export async function startTestDaemon(options: TestDaemonOptions = {}): Promise<
   });
   const projectId = projectIdFromRoot(projectRoot);
   const blobs = new BlobStore({ root: dataDir });
-  const auth = AuthService.loadOrCreate({
-    stateDir,
-    config: {
-      deployment: 'loopback',
-      allowedOrigins: [webOrigin],
-      ...(options.sessionTtlMs === undefined ? {} : { sessionTtlMs: options.sessionTtlMs }),
-      ...(options.now === undefined ? {} : { now: options.now }),
-    },
-  });
-  const installationToken = auth.createdToken ?? '';
+  const auth =
+    options.auth ??
+    AuthService.loadOrCreate({
+      stateDir,
+      config: {
+        deployment: 'loopback',
+        allowedOrigins: [webOrigin],
+        ...(options.sessionTtlMs === undefined ? {} : { sessionTtlMs: options.sessionTtlMs }),
+        ...(options.now === undefined ? {} : { now: options.now }),
+      },
+    });
+  const installationToken = options.installationToken ?? auth.createdToken ?? '';
   if (installationToken === '')
     throw new Error('the test daemon did not create an installation token');
 
   const attachments = new AttachmentService({ store, blobs });
   const artifacts = new ArtifactService({ store, blobs });
+  const tokens = new DownloadTokenStore();
   const config = ConfigStore.open({ globalDir: stateDir, projectRoot: dataDir });
   const gates = new PlanGateService({ store, artifacts, blobs });
   const findings = new FindingService({ store, artifacts });
@@ -127,7 +139,7 @@ export async function startTestDaemon(options: TestDaemonOptions = {}): Promise<
     events: new EventHub({ store }),
     attachments,
     artifacts,
-    tokens: new DownloadTokenStore(),
+    tokens,
     version: '0.0.0-test',
     config,
     gates,
@@ -275,6 +287,25 @@ export async function startTestDaemon(options: TestDaemonOptions = {}): Promise<
         }
         return;
       }
+      if (url.pathname.startsWith('/artifacts/download/')) {
+        // The one-time token is the credential (`protocol.md` §5): this route is served
+        // before session authentication, exactly like the production daemon.
+        const token = decodeURIComponent(url.pathname.split('/')[3] ?? '');
+        const grant = tokens.consume(token);
+        if (grant === undefined) {
+          response.writeHead(403, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ ok: false, error: { code: 'NOT_AUTHORIZED' } }));
+          return;
+        }
+        const artifact = artifacts.get(grant.artifactId, grant.artifactVersion);
+        const bytes = artifacts.read(artifact);
+        response.writeHead(200, {
+          'content-type': artifact.mime,
+          'content-disposition': 'attachment',
+        });
+        response.end(Buffer.from(bytes));
+        return;
+      }
       if (url.pathname.startsWith('/artifacts/') && url.pathname.endsWith('/preview')) {
         const artifactId = url.pathname.split('/')[2] ?? '';
         try {
@@ -379,6 +410,7 @@ export async function startTestDaemon(options: TestDaemonOptions = {}): Promise<
     attachments,
     gates,
     findings,
+    tokens,
     projectRoot,
     server,
     projectId,
