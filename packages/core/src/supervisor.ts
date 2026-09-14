@@ -378,8 +378,16 @@ export class RunnerSupervisor {
     return claimed;
   }
 
+  /** Runner identity that encodes the child pid, so recovery can probe that process. */
+  private static runnerIdFor(pid: number, runId: string): string {
+    return `runner-${String(pid)}-${runId}`;
+  }
+
   private spawnRun(run: Run): void {
-    const runnerId = `runner-${String(process.pid)}-${run.id}`;
+    // The Attempt row is created before the process exists, so the identity is provisional;
+    // it is replaced with the child's pid right after the spawn, which is what
+    // `RunRecoveryService` probes after a restart or a heartbeat timeout.
+    const runnerId = RunnerSupervisor.runnerIdFor(process.pid, run.id);
     // 1. Persist Starting + the Attempt (epoch, runner identity) before any process runs.
     const attempt = this.lifecycle.beginAttempt(run.id, { runnerId });
     const epoch = attempt.ownerEpoch + 1;
@@ -393,13 +401,18 @@ export class RunnerSupervisor {
       runnerId,
       invocation,
     });
+    const realRunnerId = RunnerSupervisor.runnerIdFor(child.pid, run.id);
+    const stored = this.store.attempts.find(attempt.id);
+    if (stored !== undefined) {
+      this.store.attempts.update(stored.id, { runnerId: realRunnerId }, stored.version);
+    }
     const entry: LiveAttempt = {
       runId: run.id,
       attemptId: attempt.id,
       epoch,
       role: run.role,
       process: child,
-      runnerId,
+      runnerId: realRunnerId,
       prompt: invocation.prompt,
       ready: false,
       lastSeenAt: this.now(),

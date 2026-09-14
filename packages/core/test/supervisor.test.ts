@@ -237,12 +237,13 @@ describe('RunnerSupervisor claiming', () => {
     expect(run?.status).toBe('running');
     const attempt = store.attempts.find(runner.input.attempt.id);
     expect(attempt?.status).toBe('starting');
-    expect(attempt?.runnerId).toBe(runner.input.runnerId);
+    // The identity is rewritten with the *child* pid after the spawn.
+    expect(attempt?.runnerId).toBe(`runner-${String(runner.pid)}-${runId}`);
     expect(attempt?.heartbeatAt).toBeDefined();
     // The prompt waits for `ready`: the epoch/process/environment is confirmed first.
     expect(runner.commands).toHaveLength(0);
 
-    probe.setAlive(runner.input.runnerId, true);
+    probe.setAlive(`runner-${String(runner.pid)}-${runId}`, true);
     runner.emit({
       type: 'attempt.ready',
       sessionId: 'session-1',
@@ -342,7 +343,7 @@ describe('RunnerSupervisor heartbeat and recovery', () => {
     if (runner === undefined) throw new Error('unreachable');
     // The process is confirmed gone, so the Run is parked `interrupted` and may be
     // retried (`reliability.md` §6).
-    probe.setAlive(runner.input.runnerId, false);
+    probe.setAlive(`runner-${String(runner.pid)}-${runId}`, false);
     clock += LIMITS.leaseSec.default * 1000 + 1;
     const tick = supervisor.tick();
     expect(tick.parked).toEqual([runId]);
@@ -361,7 +362,7 @@ describe('RunnerSupervisor heartbeat and recovery', () => {
     if (runner === undefined) throw new Error('unreachable');
     // `null` means "cannot tell": the workspace must not be handed to a new writer
     // (`reliability.md` §2), so the Run needs an explicit recovery decision.
-    probe.setAlive(runner.input.runnerId, null);
+    probe.setAlive(`runner-${String(runner.pid)}-${runId}`, null);
     clock += LIMITS.leaseSec.default * 1000 + 1;
     const tick = supervisor.tick();
     expect(tick.parked).toEqual([runId]);
@@ -376,7 +377,7 @@ describe('RunnerSupervisor heartbeat and recovery', () => {
     supervisor.tick();
     const runner = FakeRunner.spawned[0];
     if (runner === undefined) throw new Error('unreachable');
-    probe.setAlive(runner.input.runnerId, false);
+    probe.setAlive(`runner-${String(runner.pid)}-${runId}`, false);
     runner.exit(1);
     expect(store.attempts.find(runner.input.attempt.id)?.status).toBe('lost');
     expect(store.runs.find(runId)?.status).toBe('interrupted');

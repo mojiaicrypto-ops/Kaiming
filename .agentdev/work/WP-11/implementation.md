@@ -63,10 +63,22 @@
 - 测试：`apps/daemon/test/runtime.integration.test.ts` 现在断言 `/health.execution = {enabled:true, live:0}` 且每个项目恰好一个执行栈；`apps/cli/test/runtime.integration.test.ts` 仍全绿（CLI start/status/open/stop 在真实子进程上通过）。**源码模式下 Node 类型擦除不支持参数属性（`constructor(private x)`）**，`SecretContext` 已改为显式字段赋值——这是真实启动路径暴露的又一处细节。
 - 单元 59 文件 / 1147 用例、集成 29 文件 / 322 用例全绿。
 
+## A2-T7 发布命令里的执行证据（Plan D1）
+
+`pnpm test:e2e` 新增检查 `runtime.executes-attempt`（映射 **AC-057**，drill 从 20 项检查增至 21 项，覆盖 AC 从 23 增至 24）：
+
+- 在既有真实栈内新增一个**会应答**的回环模型（原 Provider 桩保持「零调用」断言不变），并用匿名 Provider 配置（无 secret）走**真实 HTTP 传输**；
+- 用 daemon 自己的模块组装执行栈（`createProjectExecution` + `apps/daemon/src/prepare-run.ts` + `runner-spawn.ts`），源码模式启动真实 `apps/runner` 子进程；
+- **阶段 A**：真实 Attempt 全链完成——断言 Run/Attempt `completed`、回环模型确实被调用、usage（13 tokens）结算进预算；
+- **阶段 B（AC-057）**：对慢回合（prompt 含 `SLOW`）的活跃 Runner 发 `SIGKILL`，断言 Run 被停靠为 `interrupted` 或 `recovery_required`、Attempt 为 `lost`，且 `newAttemptAdmission` 与停靠状态一致（确认已死 → 允许新 Attempt 且无需决定；不可确认 → 拒绝并要求 RecoveryDecision）。
+- 本轮实测：`e2e: 21 checks — PASS 17 / FAIL 0 / UNVERIFIED 4`，退出 0。
+
+顺带修掉两处真实缺陷：Attempt 的 `runnerId` 原先记录的是**daemon 自身的 pid**（`runner-<daemon pid>-<runId>`），恢复探测因此永远看到「进程存活」；现在 spawn 之后改写为**子进程 pid**（`runner-<child pid>-<runId>`），这正是崩溃检测的依据。e2e harness 的 `ConfigStore` 也补上了 `SnapshotWriter`，与 daemon 宿主一致（否则 `freeze` 不可用）。
+
 ## A2 剩余
 
 1. **Provider Secret 的持久化与注册路径**：`SecretStore` 目前只在进程内（WP-07 的实现），`agentdev start` 下没有 CLI/UI 途径注册 Provider 凭据，因此真实 Provider 的 Attempt 只能由测试注入解析器；`execution.md` §4 要求的 Keychain/0600 加密文件与备份单独导出仍是缺口。
-2. **证据并入既有命令**（Plan D1）：`pnpm test:e2e` 增加「真实 daemon + supervisor + 真实 Runner 子进程 + 桩 Provider」检查，`pnpm test:live` 增加「真实 Provider 的一次无播种行 Attempt」。
+2. **live 证据**（Plan D1 的另一半）：`pnpm test:live` 增加「真实 Provider 的一次无播种行 Attempt」（e2e 侧已完成）。
 3. 随后按 Plan §6 进入独立 Review/Test/结算。
 
 ## 与既有记录的说明

@@ -293,6 +293,9 @@ describe('a real Attempt through the daemon-side execution path', () => {
     expect(usages).toEqual([{ runId, inputTokens: 11, outputTokens: 5 }]);
     const budget = store.budgets.list({ where: 'work_id = ?', params: [run?.workId ?? ''] }).at(0);
     expect(budget?.tokensUsed).toBe(16);
+    // The Attempt records the *Runner* pid (not the daemon's), which is what recovery
+    // probes after a restart or a heartbeat timeout.
+    expect(attempt?.runnerId).toMatch(new RegExp(`^runner-[0-9]+-${runId}$`, 'u'));
     // The Runner's catalog carried the capability, never the Provider secret.
     const attemptId = attempt?.id ?? '';
     const catalog = readFileSync(join(dataDir, 'attempts', attemptId, 'models.json'), 'utf8');

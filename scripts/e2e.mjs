@@ -348,7 +348,48 @@ async function bootStack({ product, meta }) {
   const providerAddress = providerStub.address();
   const providerBaseUrl = `http://127.0.0.1:${String(typeof providerAddress === 'object' && providerAddress !== null ? providerAddress.port : 0)}/v1`;
 
-  const config = core.ConfigStore.open({ globalDir: stateDir, projectRoot: dataDir });
+  // A *working* loopback model, used only by the runtime-execution check (C17): it proves
+  // the daemon can execute a real Attempt without making the offline drill depend on a
+  // Provider. It answers OpenAI-compatible JSON, and a prompt containing `SLOW` keeps the
+  // answer back so the check can kill a live Runner.
+  const localModelCalls = [];
+  const localModel = createServer((request, response) => {
+    const chunks = [];
+    request.on('data', (chunk) => chunks.push(chunk));
+    request.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf8');
+      localModelCalls.push(body);
+      const slow = body.includes('SLOW');
+      const answer = () => {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(
+          JSON.stringify({
+            id: 'e2e-local-completion',
+            object: 'chat.completion',
+            model: 'e2e-local-model',
+            choices: [
+              {
+                index: 0,
+                message: { role: 'assistant', content: 'E2E-LOCAL-ANSWER' },
+                finish_reason: 'stop',
+              },
+            ],
+            usage: { prompt_tokens: 9, completion_tokens: 4, total_tokens: 13 },
+          }),
+        );
+      };
+      if (slow) setTimeout(answer, 30_000);
+      else answer();
+    });
+  });
+  await new Promise((resolve) => localModel.listen(0, '127.0.0.1', resolve));
+  const localModelAddress = localModel.address();
+  const localModelUrl = `http://127.0.0.1:${String(typeof localModelAddress === 'object' && localModelAddress !== null ? localModelAddress.port : 0)}`;
+
+  // The snapshot writer must exist before anything freezes a configuration: the runtime
+  // execution check (C17) freezes a role profile exactly like the daemon host does.
+  const snapshots = new core.SnapshotWriter({ store });
+  const config = core.ConfigStore.open({ globalDir: stateDir, projectRoot: dataDir, snapshots });
   const provider = config.upsertProvider({
     type: 'openai-compatible',
     baseUrl: providerBaseUrl,
@@ -383,7 +424,6 @@ async function bootStack({ product, meta }) {
   const journal = workspace.createMemoryCasJournal();
   const casEvents = workspace.createMemoryCasEvents();
   const cas = workspace.createCasService({ git: gitPort, journal, events: casEvents });
-  const snapshots = new core.SnapshotWriter({ store });
   const lock = new core.ProjectIntegrationLock({ projectId, leases: store.leases });
   const settlement = new core.SettlementService({
     store,
@@ -534,6 +574,9 @@ async function bootStack({ product, meta }) {
     installationToken,
     providerCalls,
     provider,
+    localModel,
+    localModelUrl,
+    localModelCalls,
     advanceAuthClock(ms) {
       authClockMs += ms;
     },
@@ -552,6 +595,7 @@ async function bootStack({ product, meta }) {
       await new Promise((resolve) => app.server.close(() => resolve()));
       await new Promise((resolve) => daemonServer.close(() => resolve()));
       await new Promise((resolve) => providerStub.close(() => resolve()));
+      await new Promise((resolve) => localModel.close(() => resolve()));
       store.close();
     },
     roots: [repo, dataDir, stateDir],
@@ -2227,6 +2271,196 @@ async function runChecks({ checks, harness, product }) {
       `config.test called the Provider: ${harness.providerCalls.join(', ')}`,
     );
     return `provider stub at ${harness.providerBaseUrl} received 0 requests across the whole drill; config.test resolved chief to ${String(probe.providerId)}/${String(probe.modelId)} with probe=capabilities-only`;
+  });
+
+  // ---- C17: the *runtime* executes an Attempt (WP-11 A2) -------------------
+  //
+  // Everything above drives the product through its protocol; this check drives the
+  // daemon's own executor: RunnerSupervisor → real `apps/runner` child process → real Pi
+  // session → the Core gateway endpoint → the real ModelGateway → the loopback model.
+  // It then kills a live Runner to prove `AC-057`'s lost-Runner path through the same
+  // stack. Nothing here builds messages for the Runner or calls the gateway directly.
+
+  await checks.check('runtime.executes-attempt', ['AC-057'], async () => {
+    const { createProjectExecution } = core;
+    const { createPrepareRun } = await import('../apps/daemon/src/prepare-run.ts');
+    const { createChildRunnerSpawnPort } = await import('../apps/daemon/src/runner-spawn.ts');
+    const { newAttemptAdmission } = core;
+
+    // A working (anonymous) Provider: the real HTTP transport reaches it, so no secret is
+    // involved in this check.
+    const localProvider = harness.config.upsertProvider({
+      type: 'openai-compatible',
+      baseUrl: harness.localModelUrl,
+      enabled: true,
+      models: [
+        {
+          id: 'e2e-local-model',
+          contextWindow: 128_000,
+          maxOutputTokens: 8_192,
+          reasoningLevels: ['off'],
+          vision: false,
+        },
+      ],
+    });
+    harness.config.update('global', {
+      roleOverrides: {
+        backend: {
+          providerId: localProvider.providerId,
+          modelId: 'e2e-local-model',
+          reasoning: 'off',
+          skills: [],
+          toolSubset: [],
+          contextLimit: 32_000,
+        },
+      },
+    });
+
+    // The Runner entry loads the repository sources (no build needed), the same loader the
+    // rest of this drill uses.
+    const runnerEntry = join(makeTempDir('agentdev-e2e-runner-'), 'runner-entry.mjs');
+    writeFileSync(
+      runnerEntry,
+      [
+        `import { installSourceResolver } from ${JSON.stringify(join(REPO_ROOT, 'scripts', 'lib', 'e2e-runtime.mjs'))};`,
+        'installSourceResolver();',
+        `const { main } = await import(${JSON.stringify(join(REPO_ROOT, 'apps', 'runner', 'src', 'cli.ts'))});`,
+        'await main(process.argv.slice(2), {',
+        '  output: { write: (line) => process.stdout.write(line) },',
+        '  exit: (code) => process.exit(code),',
+        '});',
+        '',
+      ].join('\n'),
+    );
+
+    const execution = await createProjectExecution({
+      store: harness.store,
+      config: harness.config,
+      snapshots: harness.snapshots,
+      secrets: new core.SecretStore(),
+      // The production probe: a killed Runner pid must be *confirmed* dead, which is what
+      // lets the Run be retried instead of demanding a recovery decision.
+      probe: core.createNodeProcessProbe(),
+      tickMs: 200,
+      log: () => undefined,
+      prepare: ({ capabilities, gatewayUrl }) =>
+        createPrepareRun({
+          store: harness.store,
+          config: harness.config,
+          capabilities,
+          gatewayUrl,
+          projectRoot: harness.repo,
+          attemptsDir: join(harness.dataDir, 'attempts'),
+          log: () => undefined,
+        }),
+      spawn: createChildRunnerSpawnPort({
+        repoRoot: REPO_ROOT,
+        env: { ...process.env, AGENTDEV_RUNNER_ENTRY: runnerEntry },
+        log: () => undefined,
+      }),
+    });
+
+    const waitFor = async (predicate, what, timeoutMs = 60_000) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const value = predicate();
+        if (value !== undefined && value !== false) return value;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error(`timed out waiting for ${what}`);
+    };
+
+    try {
+      execution.start(`e2e-host-${String(Date.now())}`);
+
+      // Phase A: a real Attempt runs to completion through the whole stack.
+      const work = seedWork(harness, { goal: 'answer the runtime execution check' });
+      const frozen = harness.config.freeze('backend', {});
+      const run = harness.store.runs.insert({
+        projectId: harness.projectId,
+        workId: work.id,
+        role: 'backend',
+        purpose: 'implementation',
+        stage: 'Develop',
+        status: 'queued',
+        requiredChild: false,
+        join: 'none',
+        childIds: [],
+        configSnapshotId: frozen.snapshotId,
+        contextSnapshotId: storage.sha256('e2e-runtime-context'),
+        dispatchSnapshotId: storage.sha256('e2e-runtime-dispatch'),
+        budgetAllocation: 1_000,
+      });
+      const callsBefore = harness.localModelCalls.length;
+      await waitFor(
+        () => harness.store.runs.find(run.id)?.status === 'completed',
+        `Run ${run.id} to complete`,
+      );
+      const attempt = harness.store.attempts.list({ where: 'run_id = ?', params: [run.id] }).at(0);
+      ensure(attempt?.status === 'completed', `the Attempt is ${String(attempt?.status)}`);
+      ensure(
+        harness.localModelCalls.length > callsBefore,
+        'the loopback model was never called by the real Provider transport',
+      );
+      const budget = harness.store.budgets.find(work.budgetId);
+      ensure(
+        (budget?.tokensUsed ?? 0) >= 13,
+        `the Attempt booked ${String(budget?.tokensUsed)} tokens, expected the Provider usage`,
+      );
+
+      // Phase B: kill a live Runner and prove the lost-Runner path (`AC-057`).
+      const slowWork = seedWork(harness, { goal: 'SLOW: keep this Attempt alive' });
+      const slowFrozen = harness.config.freeze('backend', {});
+      const slowRun = harness.store.runs.insert({
+        projectId: harness.projectId,
+        workId: slowWork.id,
+        role: 'backend',
+        purpose: 'implementation',
+        stage: 'Develop',
+        status: 'queued',
+        requiredChild: false,
+        join: 'none',
+        childIds: [],
+        configSnapshotId: slowFrozen.snapshotId,
+        contextSnapshotId: storage.sha256('e2e-runtime-slow-context'),
+        dispatchSnapshotId: storage.sha256('e2e-runtime-slow-dispatch'),
+        budgetAllocation: 1_000,
+      });
+      const live = await waitFor(
+        () => execution.supervisor.liveAttempts().find((entry) => entry.runId === slowRun.id),
+        `the slow Run ${slowRun.id} to start`,
+      );
+      process.kill(live.pid, 'SIGKILL');
+      const parked = await waitFor(() => {
+        const status = harness.store.runs.find(slowRun.id)?.status;
+        return status === 'interrupted' || status === 'recovery_required' ? status : undefined;
+      }, `Run ${slowRun.id} to be parked after its Runner died`);
+      const slowAttempt = harness.store.attempts
+        .list({ where: 'run_id = ?', params: [slowRun.id] })
+        .at(0);
+      ensure(
+        slowAttempt?.status === 'lost',
+        `the killed Attempt is ${String(slowAttempt?.status)}`,
+      );
+      // `AC-057`: a confirmed-dead Runner releases the write barrier for a later Attempt;
+      // an unconfirmable one parks the Run and withholds it behind a decision.
+      const admission = newAttemptAdmission(harness.store, slowRun.id);
+      if (parked === 'interrupted') {
+        ensure(
+          admission.allowed === true && admission.requiresRecoveryDecision === false,
+          'a confirmed-dead Runner must allow a later Attempt and need no recovery decision',
+        );
+      } else {
+        ensure(
+          admission.allowed === false && admission.requiresRecoveryDecision === true,
+          'an unconfirmed Runner must withhold a new Attempt behind a recovery decision',
+        );
+      }
+
+      return `runtime executed a real Attempt: Run ${run.id} completed with Attempt ${String(attempt?.id)} through the supervisor, a real apps/runner child process and the loopback model (${String(harness.localModelCalls.length - callsBefore)} Provider call(s), ${String(budget?.tokensUsed ?? 0)} tokens booked); killing the live Runner of Run ${slowRun.id} (pid ${String(live.pid)}) parked it as ${parked} with Attempt ${String(slowAttempt?.id)} lost (new Attempt allowed=${String(admission.allowed)})`;
+    } finally {
+      await execution.stop();
+    }
   });
 
   // ---- Honest UNVERIFIED rows: what a headless runner cannot prove ----------
