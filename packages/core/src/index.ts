@@ -13,6 +13,7 @@ export * from './auth.js';
 export * from './identity.js';
 export * from './requirements.js';
 export * from './recovery.js';
+export * from './runtime.js';
 export * from './settlement.js';
 export * from './snapshots.js';
 export * from './toml.js';

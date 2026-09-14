@@ -11,3 +11,4 @@ export * from './errors.js';
 export * from './protocol.js';
 export * from './entities/index.js';
 export * from './toolchain.js';
+export * from './runtime.js';
