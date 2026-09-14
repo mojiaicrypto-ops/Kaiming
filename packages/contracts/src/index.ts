@@ -12,3 +12,4 @@ export * from './protocol.js';
 export * from './entities/index.js';
 export * from './toolchain.js';
 export * from './runtime.js';
+export * from './runner-ipc.js';

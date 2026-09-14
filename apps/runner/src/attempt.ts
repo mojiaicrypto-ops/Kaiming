@@ -25,6 +25,7 @@ import {
   type ExplicitResources,
   type PiToolSpec,
 } from '@agentdev/pi-runtime';
+import { LIMITS } from '@agentdev/contracts';
 import {
   parseCommand,
   writeMessage,
@@ -104,6 +105,8 @@ export class AttemptRunner {
   private unsubscribe: (() => void) | undefined;
   private seq = 0;
   private terminal = false;
+  private heartbeat: NodeJS.Timeout | undefined;
+  private readonly startedAt = Date.now();
 
   constructor(options: AttemptRunnerOptions, deps: AttemptRunnerDeps) {
     this.options = options;
@@ -158,6 +161,13 @@ export class AttemptRunner {
       });
       this.session = session;
       this.unsubscribe = session.subscribe((event) => this.emit(event));
+      // `reliability.md` §2: "心跳每5秒，20秒无心跳标interrupted". A model call can run
+      // far longer than that, so the Runner proves liveness independently of the work.
+      this.heartbeat = setInterval(() => {
+        if (this.terminal) return;
+        this.send({ type: 'attempt.heartbeat', uptimeMs: Date.now() - this.startedAt });
+      }, LIMITS.heartbeatSec.default * 1000);
+      this.heartbeat.unref();
 
       const active = session.activeToolNames();
       this.send({
@@ -224,8 +234,12 @@ export class AttemptRunner {
     return this.handle(command);
   }
 
-  /** Releases the session; safe to call more than once. */
+  /** Releases the session and stops the heartbeat; safe to call more than once. */
   dispose(): void {
+    if (this.heartbeat !== undefined) {
+      clearInterval(this.heartbeat);
+      this.heartbeat = undefined;
+    }
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     if (this.session !== undefined && !this.session.disposed()) this.session.dispose();

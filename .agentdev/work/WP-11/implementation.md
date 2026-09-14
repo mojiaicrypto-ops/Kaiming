@@ -29,9 +29,22 @@
 - `pnpm build` 后 `node apps/daemon/dist/main.js --home <tmp> --root <git> --trust`：真实启动、写出 `runtime.json`、`/health` 带凭证返回实例、`SIGTERM` 优雅停止后 `runtime.json`/`daemon.lock` 均消失。
 - 新增测试：contracts runtime 11、core runtime 9、daemon runtime integration 5、cli runtime integration 4、doctor integration 9（含新增运行时探针）。
 
-## A2 进行中
+## A2-T4/T5 Runner 执行器（Supervisor、心跳与恢复）
 
-A2-T4（Supervisor：认领/epoch/capability/spawn/事件/结果/并发）、A2-T5（心跳、interrupted、终止与重启核对）、A2-T6（capability 鉴权的 Core 侧模型网关 + Runner 真实模型通路）尚未实现；完成后本文件续写，并按 Plan §6 进入独立 Review/Test。
+- **IPC 上移到契约**：`packages/contracts/src/runner-ipc.ts` 现在是 Runner⇄Core 的唯一契约（`ARCHITECTURE.md` §2「共享Schema一次定义」），并新增 `attempt.heartbeat` 消息（`reliability.md` §2「心跳每5秒」）；`apps/runner/src/ipc.ts` 保留为 Runner 侧的再导出点（`runnerCommandSchema`/`runnerMessageSchema` 以避免与持久实体 `command`/`message` 同名冲突），因此 `attempt.ts`/`cli.ts` 与其测试无需改动。`apps/runner/src/attempt.ts` 现在按 `LIMITS.heartbeatSec` 周期发送心跳（`unref`，终结时清除）。
+- **`packages/core/src/supervisor.ts`**（`RunnerSupervisor`）：supervisor 自己不发明状态转换，全部交给已复核的服务——
+  - **认领**：按 `createdAt`/id 稳定排序取 `status='queued'` 的 Run，Chief 优先；容量按 `projectConcurrentRunners`（默认 4，保留 1 个 Chief 槽，Chief 已在跑时保留解除）与 `roleConcurrency`（默认 2）计算；
+  - **启动**：先 `RunLifecycle.beginAttempt`（持久 Starting + Attempt + `ownerEpoch` + `runnerId`）再 `spawn`（epoch = `ownerEpoch + 1`，1 基）；`prepare` 端口（daemon 注入：冻结 profile、cwd、prompt、tools、capability）构造调用参数；
+  - **握手**：`attempt.ready` 校验 attemptId/epoch → 写入 `heartbeatAt`、Attempt 转 `running`，然后才发送 `attempt.prompt`；`droppedTools` 非空按配置错误失败；
+  - **围栏**：任何 attemptId/epoch 不匹配的迟到消息一律丢弃（`reliability.md` §2），测试覆盖「迟到结果不改变 Run 状态」；
+  - **结果**：`attempt.result` → Attempt 终态 + `RunLifecycle.settle`（completed/failed/cancelled）；`attempt.error` 与「进程退出但无结果」→ Attempt `lost` 并调用 `RunRecoveryService.recoverRun` 按真实进程状态停靠；
+  - **心跳/静默**：20 秒无任何消息 → 终止（SIGTERM，`cancelGraceSec` 后 SIGKILL）并停靠 Run；确认进程已死 → `interrupted`（允许重试），进程状态无法确认 → `recovery_required` 且 `newAttemptAdmission.allowed=false`（旧写者未确认终止前不换写者）；
+  - **重启核对**：`start(hostEpoch)` 调用 `RunRecoveryService.recoverAfterRestart`，先停靠上一进程遗留的 Run 再开始调度；`stop()` 先发 `attempt.shutdown`，再 SIGTERM。
+- 测试：`packages/core/test/supervisor.test.ts`（10 例，真实 `ProjectStore` + 真实 `RunLifecycle`/`RunRecoveryService`，脚本化 spawn 端口）：认领与 `ready` 后发 prompt、工具未激活即失败、结果结算与槽位释放、迟到 epoch 结果被丢弃、Chief 优先与项目/角色上限、静默转 `lost`（进程已死 → `interrupted` 可重试）、进程不可确认 → `recovery_required` 且拒绝新 Attempt、心跳保活、优雅停止。单元套件 **58 文件 / 1138 用例**全绿。
+
+## A2 剩余
+
+A2-T6：capability 鉴权的 Core 侧模型网关（OpenAI 兼容、Secret 不出 Core）+ daemon 注入真实 `RunnerSpawnPort`/`prepareRun`（冻结 profile → provider/model/tools/cwd/prompt），以及 e2e（桩 Provider，断言真实调用）与 live（真实 Provider，一次无播种的真实 Attempt）证据。完成后本文件续写，并按 Plan §6 进入独立 Review/Test。
 
 ## 与既有记录的说明
 
