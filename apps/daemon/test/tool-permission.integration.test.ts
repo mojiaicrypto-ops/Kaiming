@@ -439,38 +439,105 @@ describe('permission.request / permission.respond over the workbench protocol', 
     expect(granted[0]?.targets).toEqual([A]);
   });
 
-  it('refuses to approve a path-shaped operation with no recorded targets', () => {
+  it('refuses a path-shaped permission.request with no targets before any decision exists (AC-049)', () => {
+    // A path operation with no targets can never be matched by a Grant, so the request must
+    // be refused **before** a Decision exists: recording one would park the Run in
+    // `waiting_permission` with nothing any approval could bind (G8 ruling).
+    const decisionsBefore = store.decisions.count();
+    const operationId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3dc062';
+    // The call was attempted (the protocol requires a real `tool_operation`), but the
+    // recorded row carries no targets, which is exactly the unusable binding.
     store.toolOperations.insert({
-      id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3dc062',
+      id: operationId,
       workId: WORK_ID,
       runId: RUN_ID,
       attemptId: ATTEMPT_ID,
       epoch: 0,
       toolName: 'edit',
       inputHash: HASH,
-      argsRef: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3dc062',
+      argsRef: operationId,
       targets: [],
       state: 'finished',
     });
-    const requested = dispatch('permission.request', {
+    const operationsBefore = store.toolOperations.count();
+    const refusal = (() => {
+      try {
+        dispatch('permission.request', {
+          workId: WORK_ID,
+          runId: RUN_ID,
+          role: 'backend',
+          stage: 'develop-L2',
+          operation: 'edit',
+          targets: [],
+          toolOperationId: operationId,
+          inputHash: HASH,
+          scope: 'once',
+          expiry: new Date(clock + 3_600_000).toISOString(),
+        });
+        return null;
+      } catch (error) {
+        return error;
+      }
+    })();
+    expect(refusal).toBeDefined();
+    expect((refusal as { code?: string }).code).toBe('VALIDATION_ERROR');
+    expect(String((refusal as Error).message)).toContain('no targets');
+    // No pending Decision, no moved Run, and no `tool_operation` row for the refused call.
+    expect(store.decisions.count()).toBe(decisionsBefore);
+    expect(
+      store.decisions.list({
+        where: "work_id = ? AND kind = 'permission' AND state = 'pending'",
+        params: [WORK_ID],
+      }),
+    ).toHaveLength(0);
+    expect(store.runs.find(RUN_ID)?.status).not.toBe('waiting_permission');
+    // The refusal writes no row of its own: the recorded operation count does not grow.
+    expect(store.toolOperations.count()).toBe(operationsBefore);
+    expect(grants.currentRunGrants(RUN_ID)).toHaveLength(0);
+  });
+
+  it('refuses to approve a path-shaped operation whose recorded binding has no targets (AC-049)', () => {
+    // The other half: the Decision exists, but the recorded operation cannot supply the
+    // targets a path-shaped Grant needs, so the approval is refused with a typed error
+    // instead of minting a Grant that authorizes nothing.
+    const operationId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3dc063';
+    store.toolOperations.insert({
+      id: operationId,
       workId: WORK_ID,
       runId: RUN_ID,
-      role: 'backend',
-      stage: 'develop-L2',
-      operation: 'edit',
-      targets: [],
-      toolOperationId: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3dc062',
+      attemptId: ATTEMPT_ID,
+      epoch: 0,
+      toolName: 'edit',
       inputHash: HASH,
-      scope: 'once',
-      expiry: new Date(clock + 3_600_000).toISOString(),
+      argsRef: operationId,
+      targets: [],
+      state: 'finished',
     });
-    expect(() =>
-      dispatch('permission.respond', {
-        decisionId: textOf(requested['decisionId']),
-        choice: 'approve',
-      }),
-    ).toThrowError(/recorded no targets/);
+    const decision = store.decisions.insert({
+      id: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3dc064',
+      projectId: projectIdFromRoot(dataDir),
+      workId: WORK_ID,
+      kind: 'permission',
+      targetRef: { id: operationId, version: 1, hash: HASH },
+      choices: ['approve', 'deny'],
+      state: 'pending',
+      actor: 'user',
+      effectRefs: [],
+    });
+    const refusal = (() => {
+      try {
+        dispatch('permission.respond', { decisionId: decision.id, choice: 'approve' });
+        return null;
+      } catch (error) {
+        return error;
+      }
+    })();
+    expect(refusal).toBeDefined();
+    expect((refusal as { code?: string }).code).toBe('MISSING_CONTEXT');
+    expect(String((refusal as Error).message)).toMatch(/recorded no targets/);
     expect(grants.currentRunGrants(RUN_ID)).toHaveLength(0);
+    // The Decision is untouched: a refused approval resolves nothing.
+    expect(store.decisions.find(decision.id)?.state).toBe('pending');
   });
 
   it('refuses a decision that is not a permission decision', () => {

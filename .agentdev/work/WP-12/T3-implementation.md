@@ -571,6 +571,17 @@ G8 的 AC（AC-045/046/047/048/049/050/051/053）此前只有库级/单测证据
 
 临时/探针文件（`tool-bridge-permissions.integration.test.ts`、`probe-g8turn1`、`zz-probe-b`）已全部移除并清掉 index 残留，`pnpm test:integration` 与聚合器不再遇到「文件已删除/未映射」。
 
+### 12.2d 记录（live 演练的口径，供结算如实转述）
+
+`pnpm test:live` 的 `drill.message-to-stage` 本次以 **`stage.failed(failed)`** 作为链证据通过：**链本身成立**（真实 message → Chief → 派生授权 → Requirement → 派发 → 专业 Run → `stage.submit` 走到 StageGate 并落库为 `stage.failed`），但**专业 Run 的阶段结果是 failed**。因此该演练证明的是「链路与协议/门禁路径成立」，**不是**「阶段成功/交付通过」；结算与验收报告不得把它写成后者。
+
+### 12.2e 裁决 2 落地后同步的既有用例（`tool-permission.integration.test.ts`）
+
+旧用例假设「能造出无 targets 的请求、再由 approve 拒绝」，与裁决 2 的新语义相反；已按新语义改写为两条（测试名与真实断言一致、均带 `AC-049`，避免验收器判「失败用例未映射 AC」）：
+
+- `refuses a path-shaped permission.request with no targets before any decision exists (AC-049)`：真实 `tool_operation`（路径型 `edit`，`targets: []`）+ 空 targets 请求 → `permission.request` 抛类型化 `VALIDATION_ERROR`（含 `no targets`）；**Decision 数不变**、无 pending permission Decision、Run 不进 `waiting_permission`、`tool_operation` 行数不增（拒绝自身不写行）、无 Grant。
+- `refuses to approve a path-shaped operation whose recorded binding has no targets (AC-049)`：Decision 存在但记录的绑定给不出路径型 Grant 所需的 targets → `permission.respond` 的 approve 抛类型化 `MISSING_CONTEXT`（含 `recorded no targets`），Decision 保持 `pending`、不铸 Grant。
+
 ### 12.3 本轮实测（串行，最终树）
 
 | 命令 | 退出码 | 结果 |
