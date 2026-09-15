@@ -315,7 +315,12 @@ export async function handleToolExecute(
       log(`tool-endpoint: refused ${error.code}: ${error.message}`);
       return {
         status: statusForControlCode(error.code),
-        body: errorBody(error.code, error.message),
+        // The refusal's `details` travel with it: the Runner reads `approvable` to decide
+        // whether a user decision could admit the call (`T3-implementation.md` 附录 A.1),
+        // and the model is told which frozen pattern, address or path refused it. An audit
+        // row never carries the decoded arguments, but the *caller* must be able to tell a
+        // hard block from a correctable request.
+        body: errorBody(error.code, error.message, error.details),
       };
     }
     const message = error instanceof Error ? error.message : String(error);

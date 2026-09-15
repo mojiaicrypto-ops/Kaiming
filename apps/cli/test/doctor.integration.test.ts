@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { ConfigStore } from '@agentdev/core';
 import {
   DEFAULT_PORTS,
   EXEC_IMAGE,
@@ -12,6 +13,7 @@ import {
   probeDirectory,
   probeImageCapability,
   probePnpm,
+  probePolicy,
   probePort,
   probeRuntime,
   renderDoctorReport,
@@ -208,5 +210,70 @@ describe('doctor report', () => {
     expect(rendered).toContain('runtime.json is unreadable');
 
     await rm(home, { recursive: true, force: true });
+  });
+});
+
+/**
+ * AC-048 / 附录 A.7 — the doctor must make a non-`strict` sensitive-file tier visible.
+ *
+ * "不得静默开启": a project whose `.agentdev/config.toml` allows the application-config
+ * subset is reported as such, and the absence of an override reads as the documented global
+ * default rather than as an error.
+ */
+describe('doctor policy probe', () => {
+  it('reports strict as the default when the project has no override', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentdev-doctor-policy-'));
+    try {
+      const probe = probePolicy(root);
+      expect(probe.configPolicy).toBe('strict');
+      expect(probe.source).toBe('global');
+      expect(probe.allowsApplicationConfig).toBe(false);
+      const rendered = renderDoctorReport(
+        await buildDoctorReport({ startDir: root, dataDir, ports: [] }),
+      );
+      expect(rendered).toContain('configPolicy strict');
+      expect(rendered).not.toContain('本项目允许读取应用配置');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('marks a project that allows the application-config subset', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentdev-doctor-policy-test-'));
+    try {
+      // The fixture is written by the real `ConfigStore`, so its shape is the one the
+      // product writes rather than a hand-rolled TOML the doctor might accept by accident.
+      const store = ConfigStore.open({ globalDir: root, projectRoot: root });
+      store.update('project', {
+        permissionMode: 'autonomous',
+        configPolicy: 'test',
+      });
+      const probe = probePolicy(root);
+      expect(probe.configPolicy).toBe('test');
+      expect(probe.source).toBe('project');
+      expect(probe.permissionMode).toBe('autonomous');
+      expect(probe.allowsApplicationConfig).toBe(true);
+      const rendered = renderDoctorReport(
+        await buildDoctorReport({ startDir: root, dataDir, ports: [] }),
+      );
+      expect(rendered).toContain('WARN policy');
+      expect(rendered).toContain('configPolicy test (project)');
+      expect(rendered).toContain('本项目允许读取应用配置');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('names an unreadable project policy instead of silently defaulting', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentdev-doctor-policy-bad-'));
+    try {
+      await mkdir(join(root, '.agentdev'), { recursive: true });
+      await writeFile(join(root, '.agentdev', 'config.toml'), 'policy = "not a table"\n', 'utf8');
+      const probe = probePolicy(root);
+      expect(probe.configPolicy).toBe('strict');
+      expect(probe.detail).toContain('config.toml');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

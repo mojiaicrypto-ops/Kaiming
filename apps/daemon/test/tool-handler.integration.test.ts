@@ -26,6 +26,10 @@ import {
   SecretStore,
   ToolGrantService,
   emptyReadLedgerBinding,
+  EXEC_IMAGE,
+  handleToolExecute,
+  planContainerRun,
+  probeDockerAvailability,
 } from '@agentdev/core';
 import {
   createToolHandler,
@@ -730,4 +734,469 @@ describe('daemon tool handler', () => {
       }),
     ).rejects.toBeInstanceOf(ProtocolError);
   });
+});
+
+/**
+ * W1 — the first-phase permission model (`T3-implementation.md` 附录 A).
+ *
+ * Real SQLite, real workspace on disk, real `Broker`/`GrantStore`/`ToolGrantService`, and
+ * the real endpoint (`handleToolExecute`), so every assertion below is about the row a
+ * production daemon would write:
+ *
+ * - the frozen sensitive-file table refuses `read`, `search` and `edit` with a typed
+ *   refusal, files the existing `chief_action_required` todo, and audits the refusal;
+ * - a loopback/metadata URL the shell names literally is refused by the network policy;
+ * - a delete outside the Run workspace is refused;
+ * - an in-envelope write runs with **no** permission prompt (the retired
+ *   `permission.request` path is not entered);
+ * - in `test` tier the application-config subset is read and the allowance is audited
+ *   with the path, the policy revision and the tier.
+ */
+describe('first-phase permission model (附录 A)', () => {
+  const APP_CONFIG = 'src/application.yml';
+  let dataDir: string;
+  let workspace: string;
+  let store: ProjectStore;
+  let grants: GrantStore;
+  let broker: Broker;
+  let grantService: ToolGrantService;
+  let clock: number;
+  let operationSeq = 0;
+
+  beforeEach(() => {
+    clock = Date.parse('2026-09-11T00:00:00.000Z');
+    dataDir = mkdtempSync(join(tmpdir(), 'agentdev-w1-data-'));
+    workspace = mkdtempSync(join(tmpdir(), 'agentdev-w1-ws-'));
+    mkdirSync(join(workspace, 'src'), { recursive: true });
+    writeFileSync(join(workspace, A), 'export const a = 1;\n', 'utf8');
+    writeFileSync(join(workspace, APP_CONFIG), 'server:\n  port: 8080\n', 'utf8');
+    writeFileSync(join(workspace, '.env'), 'API_KEY=super-secret\n', 'utf8');
+    store = Store.open({
+      dataDir,
+      canonicalRoot: workspace,
+      migrations: { backup: () => undefined, backupPath: join(dataDir, 'pre.sqlite') },
+    });
+    const projectId = projectIdFromRoot(workspace);
+    store.projects.insert({
+      id: projectId,
+      root: workspace,
+      codeRoot: 'src',
+      documentRoot: 'docs',
+      deliveryBranch: 'agentdev/main',
+      trust: 'trusted',
+      state: 'open',
+    });
+    grants = new GrantStore({ store, now: () => new Date(clock).toISOString() });
+    const budget = store.budgets.insert({
+      projectId,
+      workId: WORK_ID,
+      tokenLimit: 100_000,
+      tokensUsed: 0,
+      tokensReserved: 0,
+      activeTimeLimit: 600,
+      activeTimeUsed: 0,
+      repairLimit: 3,
+      repairUsed: 0,
+      costKnown: true,
+    });
+    const scope: Scope = {
+      readPaths: [A, APP_CONFIG],
+      writePaths: [A, APP_CONFIG],
+      // The Plan-approved envelope: the file operations plus the shell the Run may use.
+      operations: ['read', 'search', 'edit', 'write', 'artifact_write', 'bash'],
+      networkTargets: [],
+    };
+    store.works.insert({
+      id: WORK_ID,
+      projectId,
+      intent: 'delivery',
+      purpose: 'prove the first-phase permission model',
+      level: 'L2',
+      goal: 'run inside the envelope without prompts and refuse the hard blocks',
+      scope,
+      sourceRef: { kind: 'message', id: WORK_ID, version: '1' },
+      status: 'running',
+      blockerIds: [],
+      baseRevision: REVISION,
+      budgetId: budget.id,
+      policyRevision: 1,
+    });
+    store.tasks.insert({
+      id: TASK_ID,
+      projectId,
+      workId: WORK_ID,
+      planRef: { id: TASK_ID, version: 1, hash: HASH },
+      role: 'backend',
+      dependsOn: [],
+      dependencyManifestRefs: [],
+      scope,
+      stage: 'develop',
+      acceptanceIds: ['AC-048', 'AC-049'],
+    });
+    store.runs.insert({
+      id: RUN_ID,
+      projectId,
+      workId: WORK_ID,
+      taskId: TASK_ID,
+      role: 'backend',
+      purpose: 'implementation',
+      stage: 'develop-L2',
+      status: 'running',
+      requiredChild: false,
+      join: 'none',
+      childIds: [],
+      configSnapshotId: '1'.repeat(64),
+      contextSnapshotId: '2'.repeat(64),
+      dispatchSnapshotId: '3'.repeat(64),
+      budgetAllocation: 1_000,
+    });
+    store.attempts.insert({
+      id: ATTEMPT_A,
+      projectId,
+      runId: RUN_ID,
+      number: 1,
+      status: 'running',
+      ownerEpoch: 1,
+    });
+    store.decisions.insert({
+      id: DECISION_ID,
+      projectId,
+      workId: WORK_ID,
+      kind: 'permission',
+      targetRef: { id: WORK_ID, version: 1, hash: HASH },
+      choices: ['approve', 'deny'],
+      state: 'accepted',
+      choice: 'approve',
+      actor: 'user',
+      effectRefs: [],
+    });
+    broker = new Broker({
+      store,
+      grants,
+      now: () => new Date(clock).toISOString(),
+      docker: () => ({ available: true, version: '28.4.0' }),
+      resolver: { resolve: () => Promise.resolve({ ok: false, reason: 'no network in tests' }) },
+    });
+    grantService = new ToolGrantService({
+      store,
+      grants,
+      now: () => new Date(clock).toISOString(),
+    });
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  const caller = { runId: RUN_ID, attemptId: ATTEMPT_A, epoch: 1, role: 'backend' as const };
+
+  function handlerWith(configPolicy: 'strict' | 'test') {
+    return createToolHandler({
+      store,
+      broker,
+      artifacts: new ArtifactService({ store, blobs: store.blobs }),
+      grantService,
+      readLedgers: new ReadLedgerRegistry({ store }),
+      configPolicy,
+      policyRevision: 7,
+      now: () => new Date(clock).toISOString(),
+    });
+  }
+
+  /** The real endpoint in front of the handler, so the refusal audit row is produced. */
+  function endpointFor(configPolicy: 'strict' | 'test') {
+    const handler = handlerWith(configPolicy);
+    return {
+      handler,
+      execute: (toolName: string, args: JsonObject) => {
+        operationSeq += 1;
+        return handleToolExecute(
+          {
+            store,
+            handler,
+            newToolOperationId: () =>
+              `018f2c1e-9a4b-7c3d-8e5f-0a1b2c3db6${String(operationSeq).padStart(2, '0')}`,
+          },
+          caller,
+          {
+            attemptId: ATTEMPT_A,
+            epoch: 1,
+            toolName,
+            args,
+            toolOperationId: `018f2c1e-9a4b-7c3d-8e5f-0a1b2c3db6${String(operationSeq).padStart(2, '0')}`,
+            timeoutMs: 120_000,
+          },
+        );
+      },
+    };
+  }
+
+  function issue(operation: string, targets: readonly string[]): void {
+    const outcome = grants.issue({
+      workId: WORK_ID,
+      role: 'backend',
+      stage: 'develop-L2',
+      scope: 'run',
+      operation,
+      targets: [...targets],
+      runId: RUN_ID,
+      decisionId: DECISION_ID,
+      expiresAt: new Date(clock + 3_600_000).toISOString(),
+    });
+    if (!outcome.ok) throw new Error(`grant refused: ${outcome.code} ${outcome.reason}`);
+  }
+
+  function events() {
+    return store.events.readAfter(0, { limit: 500 });
+  }
+
+  it('refuses a sensitive-file read with a typed refusal, a todo and an audit row (AC-048)', async () => {
+    const { execute } = endpointFor('strict');
+    const answer = await execute('read', { path: '.env' });
+    expect(answer.status).toBe(403);
+    const body = answer.body as { error: { code: string; message: string; details: JsonObject } };
+    expect(body.error.code).toBe('CONTEXT_FORBIDDEN');
+    // 附录 A.5-4: the model is told not to retry and that the file is the user's; the
+    // refusal is terminal, so the Runner opens no permission request for it.
+    expect(body.error.message).toContain('do not retry');
+    expect(body.error.details['approvable']).toBe(false);
+    expect(body.error.details['pattern']).toBe('.env*');
+    expect(body.error.details['path']).toBe('.env');
+
+    // The user-facing todo reuses the existing Chief todo mechanism (`rules/agents.md` §3).
+    const todo = events().find(
+      (event) => event.name === 'chief_action_required' && event.data['kind'] === 'sensitive_file',
+    );
+    expect(todo).toBeDefined();
+    expect(todo?.data['path']).toBe('.env');
+    expect(todo?.data['pattern']).toBe('.env*');
+    expect(todo?.data['action']).toBe('read');
+    expect(todo?.data['configPolicy']).toBe('strict');
+    expect(todo?.data['policyRevision']).toBe(7);
+    const reason = todo?.data['reason'];
+    expect(typeof reason === 'string' ? reason : '').toContain('请你本人处理');
+
+    // The endpoint records the refusal (operation/targets/code, never the file content).
+    const refusal = events().find(
+      (event) => event.name === 'tool.refused' && event.data['code'] === 'CONTEXT_FORBIDDEN',
+    );
+    expect(refusal).toBeDefined();
+    expect(refusal?.data['operation']).toBe('read');
+    expect(refusal?.data['layer']).toBe('endpoint');
+    expect(JSON.stringify(refusal?.data)).not.toContain('super-secret');
+
+    // Nothing executed and nothing was read.
+    expect(store.toolOperations.list({ where: 'work_id = ?', params: [WORK_ID] })).toHaveLength(0);
+  });
+
+  it('refuses a sensitive-file search and a sensitive-file edit through the same table (AC-048)', async () => {
+    const { execute } = endpointFor('strict');
+
+    const search = await execute('search', { query: 'API_KEY', path: '.env' });
+    expect(search.status).toBe(403);
+    const searchBody = search.body as {
+      error: { code: string; message: string; details: JsonObject };
+    };
+    expect(searchBody.error.code).toBe('CONTEXT_FORBIDDEN');
+    expect(searchBody.error.details['action']).toBe('search');
+    expect(searchBody.error.details['pattern']).toBe('.env*');
+
+    // `edit` is refused by the same gate, **before** the AC-013 Plan gate: the file cannot
+    // be seen, so it cannot be rewritten (附录 A.3). No Grant is issued for `.env` — it is
+    // outside the Work envelope, which is exactly why the gate must answer first.
+    const edit = await execute('edit', { path: '.env', content: 'API_KEY=rotated\n' });
+    expect(edit.status).toBe(403);
+    const editBody = edit.body as { error: { code: string; message: string; details: JsonObject } };
+    expect(editBody.error.code).toBe('CONTEXT_FORBIDDEN');
+    expect(editBody.error.details['action']).toBe('edit');
+    expect(readFileSync(join(workspace, '.env'), 'utf8')).toBe('API_KEY=super-secret\n');
+
+    // One todo per (work, path, pattern): three refusals do not accumulate three rows for
+    // the same file.
+    const todos = events().filter(
+      (event) => event.name === 'chief_action_required' && event.data['kind'] === 'sensitive_file',
+    );
+    expect(todos).toHaveLength(1);
+  });
+
+  it('refuses a loopback/metadata URL the shell names, with an audit row (AC-048)', async () => {
+    const { execute } = endpointFor('strict');
+    const answer = await execute('bash', {
+      command: 'curl -s http://127.0.0.1:51234/control/health',
+    });
+    expect(answer.status).toBe(403);
+    const body = answer.body as { error: { code: string; message: string; details: JsonObject } };
+    expect(body.error.code).toBe('CONTEXT_FORBIDDEN');
+    expect(body.error.details['approvable']).toBe(false);
+    expect(body.error.details['network']).toBe('http://127.0.0.1:51234/control/health');
+    expect(body.error.message.toLowerCase()).toContain('loopback');
+
+    // The metadata endpoint is refused by the same policy, and no shell ever ran.
+    const metadata = await execute('bash', {
+      command: 'curl http://169.254.169.254/latest/meta-data/',
+    });
+    expect(metadata.status).toBe(403);
+    expect((metadata.body as { error: { code: string } }).error.code).toBe('CONTEXT_FORBIDDEN');
+
+    const refusals = events().filter((event) => event.name === 'tool.refused');
+    expect(refusals.map((event) => event.data['code'])).toEqual([
+      'CONTEXT_FORBIDDEN',
+      'CONTEXT_FORBIDDEN',
+    ]);
+    expect(store.toolOperations.list({ where: 'work_id = ?', params: [WORK_ID] })).toHaveLength(0);
+  });
+
+  it('refuses a delete outside the workspace and allows one inside it (AC-048)', async () => {
+    const { execute } = endpointFor('strict');
+    const target = join(tmpdir(), 'agentdev-w1-outside-not-ours.txt');
+    const answer = await execute('bash', { command: `rm -f ${target}` });
+    expect(answer.status).toBe(401);
+    const body = answer.body as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('NOT_AUTHORIZED');
+    expect(body.error.message).toContain('do not retry');
+    expect(body.error.message).toContain(target);
+
+    // 附录 A.1-2: deleting inside the workspace is allowed — Git and the delivery CAS are
+    // the backstop, and the shell really runs.
+    issue('bash', []);
+    const inside = await execute('bash', { command: 'rm -rf build && echo removed' });
+    expect(inside.status).toBe(200);
+    expect((inside.body as { result: { stdout: string } }).result.stdout).toContain('removed');
+  });
+
+  it('runs in-envelope reads and shells with zero permission prompts (AC-049)', async () => {
+    const { execute } = endpointFor('strict');
+    // (a) A read inside the approved Plan envelope executes directly.
+    issue('read', [A]);
+    const read = await execute('read', { path: A });
+    expect(read.status).toBe(200);
+    expect((read.body as { status: string }).status).toBe('executed');
+    expect((read.body as { result: { content: string } }).result.content).toContain(
+      'export const a = 1;',
+    );
+
+    // (b) The shell runs for real, with no per-call approval: 附录 A.1-2's "container +
+    // filesystem boundary + shell" is the execution model, and the retired
+    // `permission.request` path is simply not reached.
+    issue('bash', []);
+    const shell = await execute('bash', { command: 'echo in-envelope-ok' });
+    expect(shell.status).toBe(200);
+    expect((shell.body as { result: { stdout: string } }).result.stdout).toContain(
+      'in-envelope-ok',
+    );
+
+    // The observable proof of "zero prompts": no permission Decision was opened and the Run
+    // never entered `waiting_permission`.
+    expect(store.decisions.list({ where: 'work_id = ?', params: [WORK_ID] })).toHaveLength(1);
+    expect(store.runs.find(RUN_ID)?.status).toBe('running');
+    const names = events().map((event) => event.name);
+    expect(names).toContain('tool.invoked');
+    expect(names).not.toContain('decision.created');
+    expect(names).not.toContain('permission.resolved');
+  });
+
+  it('refuses an out-of-envelope write fail-closed instead of prompting (AC-049)', async () => {
+    const { execute } = endpointFor('strict');
+    issue('write', [A]);
+    // The daemon has no Plan gate in this fixture, so the AC-013 write gate refuses with
+    // `GATE_NOT_READY`. What matters for W1 is that the refusal is **terminal**: nothing
+    // parked the Run and no user decision was recorded for it (附录 A.4).
+    const answer = await execute('write', { path: A, content: 'export const a = 2;\n' });
+    expect(answer.status).toBe(409);
+    expect((answer.body as { error: { code: string } }).error.code).toBe('GATE_NOT_READY');
+    expect(readFileSync(join(workspace, A), 'utf8')).toBe('export const a = 1;\n');
+    expect(store.decisions.list({ where: 'work_id = ?', params: [WORK_ID] })).toHaveLength(1);
+    expect(store.runs.find(RUN_ID)?.status).toBe('running');
+  });
+
+  it('admits the application-config subset in test tier and audits the allowance (AC-049)', async () => {
+    // `strict` refuses the same file, so the pair is a real before/after rather than a
+    // single positive case.
+    const strict = endpointFor('strict');
+    const refused = await strict.execute('read', { path: APP_CONFIG });
+    expect(refused.status).toBe(403);
+
+    const { handler } = endpointFor('test');
+    issue('read', [APP_CONFIG]);
+    const allowed = await handler.execute({
+      caller,
+      request: {
+        toolName: 'read',
+        args: { path: APP_CONFIG },
+        toolOperationId: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3db700',
+        timeoutMs: 120_000,
+      },
+    });
+    expect((allowed.result as { content: string }).content).toContain('port: 8080');
+
+    // 附录 A.7 配套三条-3: the allowance is audited with path + policy revision + tier, so a
+    // test-environment relaxation cannot hide a real leak.
+    const allowance = events().find((event) => event.name === 'tool.listed_file_allowed');
+    expect(allowance).toBeDefined();
+    expect(allowance?.data['path']).toBe(APP_CONFIG);
+    expect(allowance?.data['pattern']).toBe('application*.yml');
+    expect(allowance?.data['configPolicy']).toBe('test');
+    expect(allowance?.data['policyRevision']).toBe(7);
+  });
+
+  // 附录 A.4's prerequisite: the tool boundary is only trustworthy when the tools really run
+  // in the container, with the workspace mounted and nothing else. The daemon used to omit
+  // `writableRoots`, so the workspace mounted `ro` and a Developer Run's `write`/`edit`
+  // failed against a read-only mount; this proves the fix, and proves the reviewed roles
+  // still cannot gain source access through it.
+  const docker = probeDockerAvailability(EXEC_IMAGE);
+  it.skipIf(!docker.available)(
+    'runs an in-envelope shell write inside the real container with the workspace mounted rw (AC-049)',
+    async () => {
+      // The daemon passes `mode` from `policy.permissionMode` (workspace/autonomous →
+      // container) and, since W1, `writableRoots: [root]` for a mutating role. Without that
+      // second half the mount was `ro` and every in-container write failed — the drill that
+      // proves the fix must therefore go through the broker's real container path.
+      //
+      // `bash` rather than `write` on purpose: the AC-013 Plan gate stands in front of
+      // `write`/`edit` and would answer `GATE_NOT_READY` here, which is correct but is not
+      // what this case is measuring (the container mount, not the Plan gate).
+      const container = createToolHandler({
+        store,
+        broker,
+        artifacts: new ArtifactService({ store, blobs: store.blobs }),
+        grantService,
+        readLedgers: new ReadLedgerRegistry({ store }),
+        configPolicy: 'strict',
+        mode: 'container',
+        now: () => new Date(clock).toISOString(),
+      });
+      issue('bash', []);
+      const outcome = await container.execute({
+        caller,
+        request: {
+          toolName: 'bash',
+          args: {
+            command: 'printf in-container > src/from-container.txt && cat src/from-container.txt',
+          },
+          toolOperationId: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3db800',
+          timeoutMs: 120_000,
+        },
+      });
+      expect(outcome.mode).toBe('container');
+      const result = outcome.result as { stdout: string; status: number };
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe('in-container');
+      // The workspace was mounted rw, so the container really wrote through the mount.
+      expect(readFileSync(join(workspace, 'src/from-container.txt'), 'utf8')).toBe('in-container');
+      // The mount plan is the isolation: the workspace and nothing else — no host home, no
+      // docker socket and no daemon data directory (`planContainerRun`).
+      const plan = planContainerRun({
+        roots: [workspace],
+        writableRoots: [workspace],
+        command: 'true',
+      });
+      expect(plan.mounts).toEqual([{ path: workspace, target: '/workspace', mode: 'rw' }]);
+      expect(plan.args.join(' ')).toContain('--network none');
+      expect(plan.args.join(' ')).toContain('--user 10001:10001');
+      expect(plan.args.join(' ')).toContain('--read-only');
+    },
+  );
 });

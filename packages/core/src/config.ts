@@ -91,6 +91,13 @@ export type ConfigResolution =
 
 const DEFAULT_POLICY: PolicyConfig = {
   permissionMode: 'workspace',
+  /**
+   * The sensitive-file tier defaults to `strict` (`T3-implementation.md` 附录 A.7).
+   *
+   * Only a human writes the other value, through the same `config.update` patch that
+   * carries `permissionMode`; an agent has no entry, and `open` does not exist.
+   */
+  configPolicy: 'strict',
   l3Paths: [],
   l3Keywords: [],
   testCommands: [],
@@ -171,12 +178,30 @@ function toToml(document: ConfigDocument): TomlTable {
     limits: { ...document.limits } as TomlTable,
     policy: {
       permissionMode: document.policy.permissionMode,
+      configPolicy: document.policy.configPolicy,
       l3Paths: [...document.policy.l3Paths],
       l3Keywords: [...document.policy.l3Keywords],
       testCommands: [...document.policy.testCommands],
     },
     providers: providerTables,
   };
+}
+
+/**
+ * Backfills the sensitive-file tier on a document written before it existed.
+ *
+ * The schema keeps `configPolicy` optional so an older `config.toml` still loads; the
+ * resolver then reads an absent value as `strict`. Normalising here rather than at every
+ * read site means the effective policy a caller sees is always explicit — `strict` is
+ * named, not inferred from `undefined` — and the file itself is never rewritten behind
+ * the operator's back; the next `update` persists the value.
+ */
+function normalizePolicyTier(table: TomlTable): TomlTable {
+  const policy = table['policy'];
+  if (policy === undefined || typeof policy !== 'object' || policy === null) return table;
+  const record = policy as Record<string, TomlValue>;
+  if (typeof record['configPolicy'] === 'string') return table;
+  return { ...table, policy: { ...record, configPolicy: DEFAULT_POLICY.configPolicy } };
 }
 
 /** Reads and validates one scope's file; a missing file is the empty document. */
@@ -195,7 +220,7 @@ function readDocument(file: string): ConfigDocument {
     const detail = error instanceof TomlError ? error.message : String(error);
     throw new ConfigError('CONFIG_INVALID', `${file} is not readable TOML: ${detail}`);
   }
-  return parseWith(configDocumentSchema, table, file);
+  return parseWith(configDocumentSchema, normalizePolicyTier(table), file);
 }
 
 function writeDocument(file: string, document: ConfigDocument): void {
@@ -298,6 +323,7 @@ export class ConfigStore {
         ...(validated.permissionMode === undefined
           ? {}
           : { permissionMode: validated.permissionMode }),
+        ...(validated.configPolicy === undefined ? {} : { configPolicy: validated.configPolicy }),
         ...(validated.l3Paths === undefined ? {} : { l3Paths: validated.l3Paths }),
         ...(validated.l3Keywords === undefined ? {} : { l3Keywords: validated.l3Keywords }),
         ...(validated.testCommands === undefined ? {} : { testCommands: validated.testCommands }),

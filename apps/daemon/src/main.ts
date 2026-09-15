@@ -442,6 +442,14 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
         // the mapping is the documented one rather than a silent downgrade.
         const permissionMode = project.config.project().policy.permissionMode;
         const toolMode = executionModeForPermissionMode(permissionMode);
+        // `T3-implementation.md` 附录 A.7: the sensitive-file tier is read from the Project's
+        // own policy — the same document `permissionMode` comes from, global default
+        // `strict` with a project override. It is the value `policyHash` covers and the
+        // `policy` context freezes into a Run's dispatch snapshot, so an edit after this
+        // point affects only Runs dispatched afterwards. The revision is recorded on every
+        // allowed-but-listed read.
+        const configPolicy = project.config.project().policy.configPolicy;
+        const policyRevision = project.config.versionOf('project');
         const stack = await createProjectExecution({
           store: project.store,
           config: project.config,
@@ -499,6 +507,10 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
                   artifacts: project.services.artifacts,
                 }),
                 mode: toolMode,
+                // 附录 A.7: the tier the frozen sensitive-file table is read with, and the
+                // policy revision an allowed-but-listed read is audited against.
+                configPolicy,
+                policyRevision,
                 log,
               }),
           },

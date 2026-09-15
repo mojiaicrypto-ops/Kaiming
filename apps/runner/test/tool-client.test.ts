@@ -259,6 +259,39 @@ describe('tool call transport', () => {
     expect(result.text).toBe('NOT_AUTHORIZED: no Grant admits this call');
   });
 
+  it('does not open a permission request for a phase-1 hard block (AC-048/AC-049)', async () => {
+    // `T3-implementation.md` 附录 A.1/A.4: a sensitive file, a loopback/metadata target, an
+    // outside-workspace delete or a Git-ref change is refused by policy, not by a missing
+    // Grant. Recording a decision for it would park the Run on something no approval could
+    // admit, so the endpoint marks it `approvable: false` and the client hands the typed
+    // refusal straight to the model — the "zero prompts during a run" half of W1.
+    const stub = stubFetch([
+      {
+        status: 403,
+        body: {
+          error: {
+            code: 'CONTEXT_FORBIDDEN',
+            message: 'refused: .env matches the frozen sensitive-file pattern',
+            details: { approvable: false, pattern: '.env*', path: '.env', configPolicy: 'strict' },
+          },
+        },
+      },
+    ]);
+    const result = await client(stub.fetchImpl).execute({
+      toolName: 'read',
+      args: { path: '.env' },
+      toolCallId: 'call-1',
+      signal: undefined,
+    });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('CONTEXT_FORBIDDEN');
+    expect(result.text).toContain('frozen sensitive-file pattern');
+    // Exactly one request, and it is not a permission request: the stub would answer any
+    // second request from the same entry, so a permission attempt is visible here.
+    expect(stub.requests).toHaveLength(1);
+    expect(stub.requests[0]?.url).toBe('http://127.0.0.1:51234/control/tool.execute');
+  });
+
   it('reuses the refused identity for the retry after the approval, and only for the same call', async () => {
     // `protocol.md` §4: the user approves *this* call, the model retries it. A retry is a new
     // SDK tool call with a new call id, so an id derived from the call id would name a second

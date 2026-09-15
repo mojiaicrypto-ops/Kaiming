@@ -32,7 +32,13 @@
  * request against the Work scope, so a permission approval cannot authorize an operation
  * or path the Work (plus its authorizations) never had.
  */
-import { canonicalJson, type Decision, type Grant, type Role } from '@agentdev/contracts';
+import {
+  canonicalJson,
+  type ConfigPolicy,
+  type Decision,
+  type Grant,
+  type Role,
+} from '@agentdev/contracts';
 import { canTransitionRun } from '@agentdev/domain';
 import {
   sha256,
@@ -617,3 +623,198 @@ export class ToolGrantService {
     return true;
   }
 }
+
+// ---------------------------------------------------------------------------
+// 第一期权限：敏感文件表、档位与拒绝（T3-implementation.md 附录 A）
+// ---------------------------------------------------------------------------
+
+/**
+ * The frozen sensitive-file table (`T3-implementation.md` 附录 A.2).
+ *
+ * This table is the **single** authority the admission layer consults for `read`,
+ * `search` and `edit` — one implementation, three call sites, because a table that
+ * covers only one of them is equivalent to no table at all.
+ *
+ * ```text
+ * strict — every listed entry is refused;
+ * test   — 附录 A.7 additionally allows the application-configuration subset while
+ *          still refusing the credential and key-material entries.
+ * ```
+ *
+ * A pattern with no `/` matches the basename of any path component, so `.env` refuses
+ * `a/b/.env` as well as `./.env`; a pattern with a `/` (`.aws/**`, `.docker/config.json`)
+ * matches the repository-relative path. `*` never crosses `/`.
+ */
+export const SENSITIVE_FILE_PATTERNS: readonly string[] = [
+  // 最常见：环境文件（`.env`、`.env.local`、`.env.production` …）
+  '.env*',
+  // 凭据 / 工具级
+  '.netrc',
+  '.npmrc',
+  '.pypirc',
+  '.pgpass',
+  '.my.cnf',
+  '.docker/config.json',
+  'kubeconfig',
+  '.aws/**',
+  '.ssh/**',
+  '.vault-token',
+  '.terraformrc',
+  '*.tfvars',
+  // 系统 / 服务配置
+  '*.conf',
+  // 应用配置
+  'application*.yml',
+  'application*.properties',
+  'bootstrap*.yml',
+  'bootstrap*.properties',
+  '*.properties',
+  // 纯密钥材料（持钥者确认保留，零成本）
+  '*.pem',
+  '*.key',
+  '*.p12',
+  '*.pfx',
+  '*.jks',
+  'id_rsa*',
+  'id_ed25519*',
+];
+
+/**
+ * The application-configuration subset `test` allows (`T3-implementation.md` 附录 A.7).
+ *
+ * These are the entries a Java/Spring project cannot work without: the `application`
+ * and `bootstrap` configuration files (yml or properties) and the properties/conf
+ * family. Everything else — the env files, the credential files and the pure key
+ * material — stays refused in both tiers.
+ */
+export const APPLICATION_CONFIG_PATTERNS: readonly string[] = [
+  'application*.yml',
+  'application*.properties',
+  'bootstrap*.yml',
+  'bootstrap*.properties',
+  '*.properties',
+  '*.conf',
+];
+
+/** The actions the sensitive-file table gated; the refusal names which one it refused. */
+export type SensitiveFileAction = 'read' | 'search' | 'edit';
+
+/** The outcome of testing one repository-relative path against the frozen table. */
+export interface SensitiveFileMatch {
+  readonly path: string;
+  /** The pattern that matched. */
+  readonly pattern: string;
+  /**
+   * `true` when the match is only refused by `strict` — i.e. the application-config
+   * subset `test` allows. `false` when the entry is refused in both tiers.
+   */
+  readonly applicationConfig: boolean;
+}
+
+/** The characters that are not literal when a `RegExp` is built from a string. */
+const REGEXP_SPECIALS = new Set(['.', '+', '?', '^', '$', '{', '}', '(', ')', '|', '[', ']', '*']);
+
+/**
+ * Converts one frozen pattern into an anchored regular expression.
+ *
+ * `**` is a cross-directory wildcard and `*` never crosses `/`; the two are handled by an
+ * explicit scan, so a pattern cannot smuggle a regex metacharacter into the authority that
+ * decides whether a file is readable.
+ */
+function patternToRegExp(pattern: string): RegExp {
+  let body = '';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index] ?? '';
+    if (char === '*' && pattern[index + 1] === '*') {
+      body += '.*';
+      index += 1;
+      continue;
+    }
+    if (char === '*') {
+      body += '[^/]*';
+      continue;
+    }
+    if (char === '\\') {
+      body += '\\\\';
+      continue;
+    }
+    body += REGEXP_SPECIALS.has(char) ? `\\${char}` : char;
+  }
+  return new RegExp(`^${body}$`);
+}
+
+const COMPILED_PATTERNS: readonly { pattern: string; regex: RegExp }[] =
+  SENSITIVE_FILE_PATTERNS.map((pattern) => ({ pattern, regex: patternToRegExp(pattern) }));
+
+const COMPILED_APPLICATION_PATTERNS: readonly RegExp[] =
+  APPLICATION_CONFIG_PATTERNS.map(patternToRegExp);
+
+/**
+ * Whether a repository-relative path is refused by the frozen table.
+ *
+ * The check is deliberately **name-based**, not access-based: 附录 A.3 records that a
+ * refused file also cannot be edited, because a model that cannot see the content
+ * cannot safely rewrite it.
+ */
+export function matchSensitiveFile(path: string): SensitiveFileMatch | undefined {
+  const normalized = path.replaceAll('\\', '/').replace(/^\.\//, '');
+  if (normalized === '') return undefined;
+  const segments = normalized.split('/');
+  const base = segments[segments.length - 1] ?? '';
+  for (const entry of COMPILED_PATTERNS) {
+    const scoped = entry.pattern.includes('/');
+    const subject = scoped ? normalized : base;
+    if (!entry.regex.test(subject)) continue;
+    return {
+      path: normalized,
+      pattern: entry.pattern,
+      applicationConfig: COMPILED_APPLICATION_PATTERNS.some((regex) => regex.test(subject)),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * The phase-1 decision for one path: refused, or allowed (and, in `test`, audited).
+ *
+ * `strict` refuses the whole table. `test` allows the application-configuration subset
+ * and still refuses the credential and key-material entries; the caller audits every
+ * allowed-but-listed read with the path, the policy revision and the tier
+ * (附录 A.7 配套三条-3).
+ */
+export function decideSensitiveAccess(
+  path: string,
+  tier: ConfigPolicy,
+):
+  | { readonly allowed: false; readonly match: SensitiveFileMatch }
+  | { readonly allowed: true; readonly match?: SensitiveFileMatch } {
+  const match = matchSensitiveFile(path);
+  if (match === undefined) return { allowed: true };
+  if (tier === 'test' && match.applicationConfig) return { allowed: true, match };
+  return { allowed: false, match };
+}
+
+/**
+ * The refusal text a refused sensitive file produces.
+ *
+ * 附录 A.5-4 requires the text to say **do not retry**: the file is the operator's to
+ * handle, the agent continues with other work, and a retry only produces another
+ * refusal. The model is told to hand the file to the user rather than to ask again.
+ */
+export function sensitiveFileRefusalMessage(match: SensitiveFileMatch, action: string): string {
+  return [
+    `refused: ${match.path} matches the frozen sensitive-file pattern "${match.pattern}" and may not be ${action} by an agent`,
+    "do not retry this call and do not try another spelling of the same file; it is the user's to handle",
+    'a todo was filed for the user to handle this file themselves; continue with other work in the meantime',
+  ].join('; ');
+}
+
+/**
+ * The user-facing todo one refused sensitive file files.
+ *
+ * 附录 A.1-3 requires the refusal to be **non-blocking**: 需要密钥时不阻塞, 转用户待办, agent
+ * continues. `chief_action_required` is the existing Chief todo mechanism the Inbox
+ * already renders (`rules/agents.md` §3, `control-handler.ts`), so a second mechanism is
+ * deliberately not invented; `kind: 'sensitive_file'` is what distinguishes the rows.
+ */
+export const SENSITIVE_FILE_TODO_KIND = 'sensitive_file';

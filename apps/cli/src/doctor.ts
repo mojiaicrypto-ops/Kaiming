@@ -15,9 +15,12 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { ConfigStore, PROJECT_CONFIG_RELATIVE_PATH, type ConfigError } from '@agentdev/core';
 import {
   NODE_MINIMUM,
   PACKAGE_MANAGER,
+  type ConfigPolicy,
+  type PermissionMode,
   RUNTIME_FILES,
   runtimeHomePath,
   runtimeRecordSchema,
@@ -65,6 +68,26 @@ export interface RuntimeProbe {
   readonly detail?: string;
 }
 
+/**
+ * The effective permission policy of the workspace (not) at `startDir`.
+ *
+ * `T3-implementation.md` 附录 A.7 配套三条-2 requires a non-`strict` tier to be **visible**
+ * rather than silently on: "本项目允许读取应用配置" is reported here, and a project override
+ * is named as an override so an operator can tell it apart from the global default.
+ */
+export interface PolicyProbe {
+  /** `strict` (the global default) or `test`. */
+  readonly configPolicy: ConfigPolicy;
+  /** Where the effective value came from. */
+  readonly source: 'project' | 'global' | 'default';
+  /** The project config file that carried the override, when one did. */
+  readonly projectFile?: string;
+  readonly permissionMode: PermissionMode;
+  /** `true` when the project lets the agent read the application-config subset. */
+  readonly allowsApplicationConfig: boolean;
+  readonly detail?: string;
+}
+
 export interface DoctorReport {
   readonly node: VersionProbe;
   readonly pnpm: VersionProbe & { readonly path?: string | undefined };
@@ -75,6 +98,8 @@ export interface DoctorReport {
   readonly ports: readonly PortProbe[];
   /** `agentdev start/stop/status` state (`reliability.md` §7). */
   readonly runtime: RuntimeProbe;
+  /** The project/global permission policy, including the sensitive-file tier. */
+  readonly policy: PolicyProbe;
   /** `true` only when every capability an Attempt needs is really present. */
   readonly executionReady: boolean;
   readonly blockers: readonly string[];
@@ -259,6 +284,53 @@ export interface DoctorOptions {
 }
 
 /**
+ * Reads the permission policy that applies to `startDir`'s workspace.
+ *
+ * `permissionMode` and the sensitive-file tier share one model
+ * (`T3-implementation.md` 附录 A.7): a global default plus a project override in
+ * `<git-root>/.agentdev/config.toml`. Only the tier is marked here, because 附录 A.7
+ * 配套三条-2 requires a non-`strict` value to be **visible** — "不得静默开启".
+ *
+ * The project file is read directly rather than opening the whole `ConfigStore`: doctor
+ * probes the environment before a runtime home exists, and a missing file must mean the
+ * documented global default (`strict`) rather than an error. A file that exists but
+ * cannot be read or validated is reported as `detail` instead of being silently treated
+ * as the default — a doctor that hid an unreadable policy would defeat the point.
+ */
+export function probePolicy(startDir: string): PolicyProbe {
+  const fallback: PolicyProbe = {
+    configPolicy: 'strict',
+    source: 'default',
+    permissionMode: 'workspace',
+    allowsApplicationConfig: false,
+  };
+  const projectFile = join(startDir, PROJECT_CONFIG_RELATIVE_PATH);
+  if (!existsSync(projectFile)) {
+    // No project override: the effective value is the documented global default. The
+    // global file itself is not read here, because `probeRuntime` already reports whether
+    // the runtime home is usable and one policy answer must not depend on two files.
+    return { ...fallback, source: 'global' };
+  }
+  try {
+    const store = ConfigStore.open({ globalDir: startDir, projectRoot: startDir });
+    const { configPolicy, permissionMode } = store.project().policy;
+    return {
+      configPolicy,
+      source: 'project',
+      projectFile,
+      permissionMode,
+      allowsApplicationConfig: configPolicy !== 'strict',
+    };
+  } catch (error) {
+    const configError = error as ConfigError;
+    return {
+      ...fallback,
+      detail: `${projectFile}: ${configError.message}`,
+    };
+  }
+}
+
+/**
  * Reads the runtime home without starting anything.
  *
  * `status` is the read-only view of the same facts; doctor reports them so a first-run
@@ -330,6 +402,9 @@ export async function buildDoctorReport(options: DoctorOptions = {}): Promise<Do
 
   const docker = await probeDocker(options.imageTag ?? EXEC_IMAGE);
   const runtime = probeRuntime(dataDir);
+  // 附录 A.7 配套三条-2: the sensitive-file tier is part of the report, so a project that
+  // allows the application-config subset is visibly marked rather than silently on.
+  const policy = probePolicy(startDir);
   // The product's own data directory is created on first use; the workspace
   // directory must already exist and be writable.
   const directories = [
@@ -366,6 +441,7 @@ export async function buildDoctorReport(options: DoctorOptions = {}): Promise<Do
     directories,
     ports: portProbes,
     runtime,
+    policy,
     executionReady: blockers.length === 0,
     blockers,
   };
@@ -444,6 +520,20 @@ export function renderDoctorReport(report: DoctorReport): string {
         ? `running pid ${String(report.runtime.pid ?? 0)} epoch ${String(report.runtime.epoch ?? 0)} with ${String(report.runtime.instances)} project(s)`
         : 'not running'
     }${report.runtime.detail === undefined ? '' : ` — ${report.runtime.detail}`}`,
+  );
+  // 附录 A.7 配套三条-2: a non-`strict` tier is stated in full, never as a silent default.
+  lines.push(
+    `${
+      report.policy.allowsApplicationConfig ? 'WARN' : 'ok  '
+    } policy       permissionMode ${report.policy.permissionMode}, configPolicy ${
+      report.policy.configPolicy
+    } (${report.policy.source})${
+      report.policy.allowsApplicationConfig
+        ? ' — 本项目允许读取应用配置（application*/bootstrap*/*.properties/*.conf），凭据与密钥材料仍拒读'
+        : ''
+    }${report.policy.projectFile === undefined ? '' : ` [${report.policy.projectFile}]`}${
+      report.policy.detail === undefined ? '' : ` — ${report.policy.detail}`
+    }`,
   );
   lines.push(
     report.executionReady

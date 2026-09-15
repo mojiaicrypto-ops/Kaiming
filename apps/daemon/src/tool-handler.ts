@@ -38,14 +38,18 @@
 import {
   LIMITS,
   type ArtifactKind,
+  type ConfigPolicy,
   type JsonObject,
   type Purpose,
   type Role,
 } from '@agentdev/contracts';
 import {
   ProtocolError,
+  SENSITIVE_FILE_TODO_KIND,
   isReadOnlyRole as callIsReadOnly,
+  matchSensitiveFile,
   planToolCall,
+  requiresPerOccurrenceApproval,
   hashToolInput,
   type ReadLedgerRegistry,
   type SecretStore,
@@ -162,6 +166,21 @@ export interface ToolHandlerOptions {
    * never falls back to the host (`broker.ts`).
    */
   readonly mode?: 'host' | 'container';
+  /**
+   * The effective sensitive-file tier for this project (`T3-implementation.md` 附录 A.7).
+   *
+   * It is read from the Project's own policy at assembly, exactly like `permissionMode`, so
+   * one project's `test` tier cannot loosen another's. Absent means the global default
+   * `strict`: a daemon that never resolved a tier refuses the whole frozen list rather
+   * than opening it.
+   */
+  readonly configPolicy?: ConfigPolicy;
+  /**
+   * The Project policy revision the tier was resolved from (`context.preview` reports the
+   * same value). Recorded on every allowed-but-listed read so the audit says which policy
+   * the allowance belonged to (附录 A.7 配套三条-3).
+   */
+  readonly policyRevision?: number;
   /** The single-writer lease TTL; every call renews it (`LIMITS.leaseSec`). */
   readonly leaseTtlMs?: number;
   readonly now?: () => string;
@@ -223,10 +242,74 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
   const { store, broker, artifacts, planGate, grantService, readLedgers, secrets } = options;
   const now = options.now ?? (() => store.now());
   const policyMode = options.mode ?? 'host';
+  const configPolicy: ConfigPolicy = options.configPolicy ?? 'strict';
+  const policyRevision = options.policyRevision ?? 0;
   const leaseTtlMs = options.leaseTtlMs ?? LIMITS.leaseSec.default * 1000;
   const workspace = options.workspace ?? createProjectRootWorkspaceResolver(store);
   const log = options.log ?? ((): void => undefined);
   let reportedGap = false;
+
+  /**
+   * Files the user-facing todo one refused sensitive file produces (附录 A.1-3).
+   *
+   * `chief_action_required` is the Chief todo mechanism the Inbox already renders
+   * (`rules/agents.md` §3), so no second mechanism is invented; `kind` distinguishes
+   * these rows from a context expansion or a dispatch request. Idempotent per
+   * `(work, path, pattern)`: a model that retries the same refusal does not accumulate
+   * todos, and the refusal text tells it not to retry anyway.
+   */
+  function fileSensitiveTodo(input: {
+    readonly workId: string;
+    readonly runId: string;
+    readonly role: Role;
+    readonly path: string;
+    readonly pattern: string;
+    readonly action: string;
+  }): number {
+    const operationId = `sensitive:${input.path}:${input.pattern}`;
+    // Idempotency is read from the durable log itself. `EventStore` exposes `readAfter`
+    // rather than a filtered query, so the one event name is selected with SQL and the
+    // two data fields are compared here; a retried refusal therefore cannot accumulate
+    // duplicate todos (the refusal text tells the model not to retry anyway).
+    const rows = store.db
+      .prepare(
+        "SELECT data FROM event WHERE name = 'chief_action_required' AND entity_id = ? ORDER BY cursor DESC LIMIT 200",
+      )
+      .all(input.workId) as { data: string }[];
+    const duplicate = rows.some((row) => {
+      try {
+        const data = JSON.parse(row.data) as Record<string, unknown>;
+        return data['kind'] === SENSITIVE_FILE_TODO_KIND && data['operationId'] === operationId;
+      } catch {
+        return false;
+      }
+    });
+    if (duplicate) return 0;
+    const work = store.works.find(input.workId);
+    if (work === undefined) return 0;
+    const event = store.events.append({
+      name: 'chief_action_required',
+      entityId: work.id,
+      entityVersion: work.version,
+      data: {
+        workId: work.id,
+        runId: input.runId,
+        role: input.role,
+        kind: SENSITIVE_FILE_TODO_KIND,
+        operationId,
+        path: input.path,
+        pattern: input.pattern,
+        action: input.action,
+        configPolicy,
+        policyRevision,
+        // 附录 A.1-3: the todo does not block the Run; it asks the user to handle the file.
+        reason:
+          '该文件在敏感文件表内，Agent 不会读/搜/改它；请你本人处理（填写/更新/提供替代值），Agent 会继续做其他工作',
+      },
+    });
+    log(`tool-handler: sensitive-file todo filed for ${input.path} (${input.pattern})`);
+    return event.cursor;
+  }
 
   /** Asserts this Attempt is the Work's single writer, renewing the lease it holds. */
   function assertWriter(caller: ToolExecuteCaller, workId: string, projectId: string): void {
@@ -323,6 +406,7 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
       assertWriter(caller, work.id, work.projectId);
 
       const root = workspace.resolve({ workId: work.id, runId: run.id });
+      const runRef = { id: run.id, workId: run.workId, role: run.role };
       if (!root.taskWorktree && !reportedGap) {
         reportedGap = true;
         log(
@@ -335,10 +419,34 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
         args: request.args,
         cwdRoot: root.root,
         role: caller.role,
+        configPolicy,
       });
       if (!planned.ok) {
+        // 附录 A.1-3/A.2: a refused sensitive file becomes a **todo**, not a blocker. The
+        // typed refusal is returned to the model (which is told not to retry) while the
+        // user is asked to handle the file, and the Run keeps working on everything else.
+        if (planned.sensitive !== undefined) {
+          fileSensitiveTodo({
+            workId: work.id,
+            runId: run.id,
+            role: runRef.role,
+            path: planned.sensitive.path,
+            pattern: planned.sensitive.pattern,
+            action: planned.sensitiveAction ?? 'read',
+          });
+        }
         throw new ProtocolError(planned.code, planned.reason, {
-          details: { toolName: request.toolName },
+          details: {
+            toolName: request.toolName,
+            ...(planned.sensitiveAction === undefined ? {} : { action: planned.sensitiveAction }),
+            ...(planned.sensitive === undefined
+              ? {}
+              : { pattern: planned.sensitive.pattern, path: planned.sensitive.path }),
+            configPolicy,
+            policyRevision,
+            approvable: planned.approvable,
+            ...(planned.refusalPaths === undefined ? {} : { paths: [...planned.refusalPaths] }),
+          },
         });
       }
       const plan = planned.plan;
@@ -346,6 +454,27 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
       // A model-supplied JSON member read as text; a non-string is the empty string, never
       // an object stringified as "[object Object]".
       const text = (value: unknown): string => (typeof value === 'string' ? value : '');
+
+      // 附录 A.1-1: an address the call names literally is decided by the same policy the
+      // Broker uses for an explicit `network` operation — loopback, private, link-local,
+      // CGNAT, metadata space and the daemon's own ports are refused before execution, so
+      // the model gets the typed refusal instead of a transport error the broker never saw.
+      if (plan.network !== undefined) {
+        const policy = broker.networkPolicy({});
+        for (const url of plan.network) {
+          const decision = await policy.decide({ url });
+          if (decision.ok) continue;
+          throw new ProtocolError('CONTEXT_FORBIDDEN', decision.reason, {
+            details: {
+              toolName: plan.toolName,
+              network: url,
+              approvable: false,
+              configPolicy,
+              policyRevision,
+            },
+          });
+        }
+      }
 
       // AC-013: a source write passes the Plan gate before anything runs. The gate is the
       // authority on "there is an approved Plan for the tree this write targets"; the
@@ -369,7 +498,6 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
           });
         }
       }
-      const runRef = { id: run.id, workId: run.workId, role: run.role };
 
       // `context.md` §1: an appended read may only happen inside the Run's frozen
       // `readScope`; a wider read "由 context.request 返回 Chief 处理，授权未完成不读取". The
@@ -474,6 +602,16 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
         toolOperationId: request.toolOperationId,
         mode: callMode,
         roots: [root.root],
+        // 附录 A.1-2: deleting inside the workspace is allowed and Git / the per-Task
+        // workspace / the delivery CAS are the backstop. A container mount is `rw` only for
+        // a path in `writableRoots`, and the daemon never passed one, so a Developer Run's
+        // write tools used to fail against a read-only mount (`INTERNAL_ERROR`). A mutating
+        // role's own workspace root is the writable one; Review/Test keep their separate
+        // report/scratch roots and are never handed the source tree as writable.
+        ...(callIsReadOnly(caller.role) ? {} : { writableRoots: [root.root] }),
+        // 附录 A.7: the tier travels with the call so a directory search skips the frozen
+        // list at the point of reading.
+        configPolicy,
         ...(plan.cwd === undefined ? {} : { cwd: plan.cwd }),
         ...(body === undefined ? {} : { run: body }),
         timeoutMs: request.timeoutMs,
@@ -502,8 +640,44 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
           details: {
             toolOperationId: outcome.toolOperationId,
             fields: [...outcome.fields],
+            // The phase-1 boundary refusals are final: a loopback/metadata target, an
+            // outside-workspace delete or a Git-ref change is **not** something a user
+            // decision could admit, so the Runner must not open a permission request for
+            // it (`T3-implementation.md` 附录 A.1). Only the environment operations the
+            // approval chain exists for carry `approvable: true`.
+            approvable: requiresPerOccurrenceApproval(plan.operation),
+            configPolicy,
+            policyRevision,
           },
         });
+      }
+      // 附录 A.7 配套三条-3: an allowance is not a silence. In `test` tier a read/search/edit
+      // of a listed application-config file is admitted, and this is where that allowance is
+      // audited — path, the policy revision it was granted under, and the tier itself — so a
+      // test-environment relaxation cannot hide a real leak. The row is written **before**
+      // the read-ledger branch below returns, so a ledgered read and an unledgered one are
+      // audited alike.
+      if (configPolicy !== 'strict' && plan.targets.length > 0) {
+        for (const target of plan.targets) {
+          const match = matchSensitiveFile(target);
+          if (match === undefined) continue;
+          store.events.append({
+            name: 'tool.listed_file_allowed',
+            entityId: outcome.toolOperation.id,
+            entityVersion: outcome.toolOperation.version,
+            data: {
+              workId: work.id,
+              runId: run.id,
+              role: runRef.role,
+              operation: plan.operation,
+              path: match.path,
+              pattern: match.pattern,
+              configPolicy,
+              policyRevision,
+              allowedBy: 'application_config',
+            },
+          });
+        }
       }
       // `AC-085`: record what this call really read, then carry the Attempt's binding back
       // so the Runner can report it in `stage_yield`.
@@ -570,9 +744,21 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
         args,
         cwdRoot: workspace.resolve({ workId: work.id, runId: run.id }).root,
         role: caller.role,
+        configPolicy,
       });
       if (!planned.ok) {
-        throw new ProtocolError(planned.code, planned.reason, { details: { toolName } });
+        throw new ProtocolError(planned.code, planned.reason, {
+          details: {
+            toolName,
+            approvable: planned.approvable,
+            ...(planned.sensitiveAction === undefined ? {} : { action: planned.sensitiveAction }),
+            ...(planned.sensitive === undefined
+              ? {}
+              : { pattern: planned.sensitive.pattern, path: planned.sensitive.path }),
+            configPolicy,
+            policyRevision,
+          },
+        });
       }
       // The binding an approval later mints from must be **durable before the user sees the
       // request**. For an environment operation the Broker refused, no `tool_operation` row

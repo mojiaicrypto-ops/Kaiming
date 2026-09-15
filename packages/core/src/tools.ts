@@ -30,7 +30,7 @@
  * out of this pure module.
  */
 import { readdirSync, lstatSync } from 'node:fs';
-import { relative, resolve, sep } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import {
   BROKER_TOOLS,
   brokerOperationOf,
@@ -38,14 +38,28 @@ import {
   roleHasBrokerTool,
   toolArgsSchemas,
   type BrokerToolName,
+  type ConfigPolicy,
+  type ErrorCode,
   type Role,
 } from '@agentdev/contracts';
-import type { BrokerErrorCode, ToolContext } from './broker.js';
+import {
+  decideSensitiveAccess,
+  sensitiveFileRefusalMessage,
+  type SensitiveFileAction,
+  type SensitiveFileMatch,
+} from './permissions.js';
+import type { ToolContext } from './broker.js';
 
-/** The error codes planning can refuse with; the Broker's own subset. */
+/**
+ * The error codes planning can refuse with.
+ *
+ * Wider than the Broker's own subset because the admission layer owns two refusals the
+ * Broker never sees: `CONTEXT_FORBIDDEN` for a frozen sensitive-file entry (附录 A.2) and
+ * for a loopback/private/metadata address the call named literally (附录 A.1-1).
+ */
 export type ToolPlanCode = Extract<
-  BrokerErrorCode,
-  'VALIDATION_ERROR' | 'NOT_AUTHORIZED' | 'PROVIDER_UNAVAILABLE'
+  ErrorCode,
+  'VALIDATION_ERROR' | 'NOT_AUTHORIZED' | 'PROVIDER_UNAVAILABLE' | 'CONTEXT_FORBIDDEN'
 >;
 
 /**
@@ -62,16 +76,45 @@ export interface ToolCallPlan {
   readonly targets: readonly string[];
   readonly input: Record<string, unknown>;
   readonly cwd?: string;
+  /**
+   * Network targets the call literally names, handed to the Broker's `NetworkPolicy`.
+   *
+   * Only a `bash` command that contains URL literals sets this: the policy then resolves
+   * each host and refuses loopback/private/link-local/CGNAT/metadata space and the
+   * daemon's own ports (`execution.md` §4) with its own typed refusal, which is the same
+   * authority an explicit `network` operation goes through.
+   */
+  readonly network?: readonly string[];
   /** The tool body, when Core implements the operation itself (read/search/edit/artifact). */
   readonly run?: (context: ToolContext) => unknown;
 }
 
-export type ToolPlanResult =
-  | { readonly ok: true; readonly plan: ToolCallPlan }
-  | { readonly ok: false; readonly code: ToolPlanCode; readonly reason: string };
+/**
+ * Why a plan was refused, and whether a user decision could change it.
+ *
+ * `approvable: true` is reserved for the operations `permission.request` exists for
+ * (`permissions.ts` `PERMISSION_OPERATIONS`). A phase-1 hard block — a sensitive file, a
+ * loopback/metadata target, an outside-workspace delete, a Git-ref change — is
+ * `approvable: false`: the Runner must hand the model the typed refusal instead of
+ * parking the Run on a decision that could never admit the call
+ * (`T3-implementation.md` 附录 A.4: the ask-then-wait path is retired).
+ */
+export interface ToolPlanRefusal {
+  readonly ok: false;
+  readonly code: ToolPlanCode;
+  readonly reason: string;
+  readonly approvable: boolean;
+  /** The frozen sensitive-file entry that matched, when that is the cause. */
+  readonly sensitive?: SensitiveFileMatch;
+  readonly sensitiveAction?: SensitiveFileAction;
+  /** Paths the refusal was about (the sensitive file, the network target, the delete target). */
+  readonly refusalPaths?: readonly string[];
+}
 
-function refuse(code: ToolPlanCode, reason: string): ToolPlanResult {
-  return { ok: false, code, reason };
+export type ToolPlanResult = { readonly ok: true; readonly plan: ToolCallPlan } | ToolPlanRefusal;
+
+function refuse(code: ToolPlanCode, reason: string, approvable = false): ToolPlanRefusal {
+  return { ok: false, code, reason, approvable };
 }
 
 /**
@@ -112,6 +155,72 @@ export function shellProgramOf(command: string): { program: string; args: string
   return { program, args: tokens.slice(index + 1) };
 }
 
+/** The URL literals one shell command contains, if any.
+ *
+ * Deliberately a **literal scan**, not a shell parser: the point is to give the model a
+ * typed refusal for the addresses the product hard-blocks (loopback, private,
+ * link-local, metadata and the daemon's own ports) instead of letting the call fail
+ * deep in the transport. A construction the scan cannot see is still bounded by the
+ * container's network mode (`--network none` unless a Grant covers network and a
+ * Core-controlled proxy exists, `broker.ts`), so the scan is the extra layer, not the
+ * only one. It is applied to `bash` only: `git` never receives a command line, and the
+ * file tools carry paths rather than URLs.
+ */
+export function shellUrlLiterals(command: string): string[] {
+  return [...command.matchAll(/\b(?:https?|ftp|ws|wss):\/\/[^\s'"`()<>|;&]+/gi)].map(
+    (match) => match[0],
+  );
+}
+
+/** The first token a `rm`/`unlink`/`rmdir` style command operates on, skipping flags. */
+export function shellDeleteTarget(command: string): string | undefined {
+  const { args } = shellProgramOf(command);
+  return args.find((token) => !token.startsWith('-') && token !== '--');
+}
+
+/**
+ * Whether one absolute path stays inside the Run's workspace root.
+ *
+ * A host-mode `full_access` shell is the only place where "delete outside the workspace"
+ * is physically possible at all — the container mounts the workspace alone — so this is
+ * where 附录 A.1-2's hard block is enforced in front of execution instead of relying on
+ * `rm` exiting non-zero against a read-only mount.
+ */
+export function isInsideWorkspace(target: string, workspaceRoot: string): boolean {
+  const resolvedTarget = resolve(target);
+  const resolvedRoot = resolve(workspaceRoot);
+  if (resolvedTarget === resolvedRoot) return true;
+  return resolvedTarget.startsWith(
+    resolvedRoot.endsWith(sep) ? resolvedRoot : `${resolvedRoot}${sep}`,
+  );
+}
+
+/**
+ * Rejects a call that names a path the frozen sensitive-file table refuses (附录 A.2).
+ *
+ * One implementation, three call sites (`read`, `search`, `edit`) — plus `write`, because
+ * 附录 A.3 records that a file the agent may not read is a file it may not rewrite
+ * either. The refusal carries the matched pattern so the daemon handler can file the
+ * user-facing todo without recomputing it.
+ */
+function sensitiveGate(
+  path: string,
+  action: SensitiveFileAction,
+  tier: ConfigPolicy,
+): ToolPlanRefusal | undefined {
+  const decision = decideSensitiveAccess(path, tier);
+  if (decision.allowed) return undefined;
+  return {
+    ok: false,
+    code: 'CONTEXT_FORBIDDEN',
+    reason: sensitiveFileRefusalMessage(decision.match, action),
+    approvable: false,
+    sensitive: decision.match,
+    sensitiveAction: action,
+    refusalPaths: [decision.match.path],
+  };
+}
+
 /** Whether a shell command invokes `git` with a ref-mutating (or unlisted) subcommand. */
 export function isRefMutatingGitShellCommand(command: string): boolean {
   const { program, args } = shellProgramOf(command);
@@ -129,12 +238,17 @@ export function isRefMutatingGitShellCommand(command: string): boolean {
  * checked **before** the arguments: a Review Run asking for `bash` is refused as
  * unauthorized rather than being told how to spell the arguments, and no Grant is
  * consulted (`execution.md` §7, `rules/agents.md` §1).
+ *
+ * `configPolicy` is the effective sensitive-file tier; it defaults to `strict`, which is
+ * the global default (附录 A.7), so a caller that forgets to pass one gets the closed
+ * reading rather than an open one.
  */
 export function planToolCall(input: {
   readonly toolName: string;
   readonly args: unknown;
   readonly cwdRoot: string;
   readonly role: Role;
+  readonly configPolicy?: ConfigPolicy;
 }): ToolPlanResult {
   if (!Object.hasOwn(BROKER_TOOLS, input.toolName)) {
     return refuse(
@@ -172,6 +286,18 @@ export function planToolCall(input: {
     if (bad !== undefined) return bad;
   }
   const cwd = cwdArg === undefined ? undefined : resolve(input.cwdRoot, cwdArg);
+
+  // 附录 A.2/A.3: the frozen table is consulted for every path the tool would read,
+  // search or rewrite, before any Grant or file boundary is reached. `write` is included
+  // on purpose — a file whose content the agent may not see is a file it must not
+  // overwrite either — and the action the refusal reports differs per tool.
+  const tier = input.configPolicy ?? 'strict';
+  if (pathArg !== undefined) {
+    const action: SensitiveFileAction =
+      toolName === 'search' ? 'search' : toolName === 'read' ? 'read' : 'edit';
+    const blocked = sensitiveGate(pathArg, action, tier);
+    if (blocked !== undefined) return blocked;
+  }
 
   switch (toolName) {
     case 'read':
@@ -240,11 +366,50 @@ export function planToolCall(input: {
       };
     case 'bash': {
       const command = String(args['command']);
+      // 附录 A.1-2: a Git ref change is the release path's alone (`execution.md` §4,
+      // `git` ref 修改只由 Workspace 服务完成), so the shell spelling is refused too.
       if (isRefMutatingGitShellCommand(command)) {
         return refuse(
           'NOT_AUTHORIZED',
-          'bash may not run a ref-mutating git command; delivery refs change only through the Workspace service CAS',
+          'bash may not run a ref-mutating git command (push/reset/update-ref …); delivery refs change only through the Workspace service CAS, and this refusal is final — do not retry it',
         );
+      }
+      // 附录 A.1-2: a delete may only touch the workspace. The container mounts nothing
+      // else, but a native `rm` of the operator's home or of `/etc` is exactly what the
+      // hard block is for, so it is refused in front of execution and named as such.
+      const deleteTarget = shellDeleteTarget(command);
+      if (
+        deleteTarget !== undefined &&
+        isAbsolute(deleteTarget) &&
+        !isInsideWorkspace(deleteTarget, input.cwdRoot)
+      ) {
+        return {
+          ok: false,
+          code: 'NOT_AUTHORIZED',
+          reason: `bash may not delete outside the Run workspace: ${deleteTarget} is not inside ${input.cwdRoot}; only files inside the workspace (backed by Git, the per-Task workspace and the delivery CAS) may be removed, and this refusal is final — do not retry it`,
+          approvable: false,
+          refusalPaths: [deleteTarget],
+        };
+      }
+      // 附录 A.1-1: the network is open, but loopback / private / link-local / CGNAT /
+      // metadata space and the daemon's own ports are not. The addresses the call names
+      // literally are refused here so the model gets a typed refusal instead of a
+      // transport error; `broker.ts`'s `NetworkPolicy` remains the authority for a call
+      // that declares `network`, resolving names and re-checking every redirect hop.
+      const urls = shellUrlLiterals(command);
+      if (urls.length > 0) {
+        return {
+          ok: true,
+          plan: {
+            toolName,
+            operation,
+            access,
+            targets: [],
+            input: { command },
+            ...(cwd === undefined ? {} : { cwd }),
+            network: urls,
+          },
+        };
       }
       return {
         ok: true,
@@ -263,7 +428,7 @@ export function planToolCall(input: {
       if (!isReadOnlyGitInvocation(argv)) {
         return refuse(
           'NOT_AUTHORIZED',
-          `git ${argv[0] ?? ''} is not a read-only subcommand; git ref changes are performed only by the Workspace service`,
+          `git ${argv[0] ?? ''} is not a read-only subcommand; git ref changes are performed only by the Workspace service, and this refusal is final — do not retry it`,
         );
       }
       return {
@@ -389,6 +554,16 @@ export function runSearchTool(
       return;
     }
     if (!stats.isFile()) return;
+    // 附录 A.2: "search 不同表生效等于没拦". A directory search that reaches a sensitive
+    // file must not return its matching lines, so the walk skips it exactly like `.git`.
+    // The refusal the model sees is the search call that named the file itself, which the
+    // admission layer answered before the walk started.
+    if (
+      !decideSensitiveAccess(relative(root, path).split(sep).join('/'), context.sensitiveTier)
+        .allowed
+    ) {
+      return;
+    }
     let content: string;
     try {
       content = context.readFile(path);

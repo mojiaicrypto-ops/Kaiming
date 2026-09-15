@@ -24,11 +24,15 @@
  *
  * A refusal is reported to the model as an error result carrying the protocol code, so a
  * correctable `VALIDATION_ERROR` lets it fix the call while a terminal `NOT_AUTHORIZED`
- * tells it to ask for authorization instead. That second half is real here: on
- * `NOT_AUTHORIZED` the client posts `permission.request` (`protocol.md` §4) with the very
- * operation id and hash it just used, so Core records a user decision whose eventual
- * approval can only admit *this* call. The model's error text then says a decision is
- * pending instead of leaving it to guess.
+ * tells it to ask for authorization instead. That second half is deliberately narrow
+ * after the first-phase permission model (`T3-implementation.md` 附录 A): a call the user
+ * decision could admit (`details.approvable === true`, i.e. an environment operation) still
+ * posts `permission.request` with the very operation id and hash it just used, so Core
+ * records a decision whose approval can only admit *this* call. A **phase-1 hard block**
+ * (`details.approvable === false` — a sensitive file, a loopback/metadata target, an
+ * outside-workspace delete, a Git-ref change) is final: the typed refusal goes straight to
+ * the model, no decision is recorded, and the Run is never parked on a call no approval
+ * could admit.
  */
 import { createHash } from 'node:crypto';
 import { LIMITS, READ_LEDGER_SEAL_GENESIS, canonicalJson } from '@agentdev/contracts';
@@ -50,6 +54,15 @@ export interface ToolCallResult {
   readonly status?: 'executed' | 'replayed';
   /** The protocol error code on a refusal (`protocol.md` §7). */
   readonly code?: string;
+  /**
+   * Whether a user decision could admit this refused call (`tool-handler.ts`).
+   *
+   * `false` marks a phase-1 hard block — a sensitive file, a loopback/metadata target, an
+   * outside-workspace delete, a Git-ref change. The refusal text already tells the model
+   * not to retry, and `execute` must not open a `permission.request` for it, because no
+   * approval could ever admit the call (附录 A.1/A.4).
+   */
+  readonly approvable?: boolean;
   readonly toolOperationId: string;
   readonly inputHash: string;
   readonly resultRef?: string;
@@ -175,15 +188,26 @@ interface WireAnswer {
   readonly body: unknown;
 }
 
-function errorOf(body: unknown): { code: string; message: string } | undefined {
+function errorOf(
+  body: unknown,
+): { code: string; message: string; approvable?: boolean } | undefined {
   if (typeof body !== 'object' || body === null) return undefined;
   const error = (body as { error?: unknown }).error;
   if (typeof error !== 'object' || error === null) return undefined;
   const code = (error as { code?: unknown }).code;
   const message = (error as { message?: unknown }).message;
+  // The endpoint says whether a user decision could change this refusal
+  // (`tool-handler.ts`). Absent means "the server did not say", which is read as
+  // approvable so a version skew cannot silently drop the approval chain.
+  const details = (error as { details?: unknown }).details;
+  const approvable =
+    typeof details === 'object' && details !== null
+      ? (details as { approvable?: unknown }).approvable
+      : undefined;
   return {
     code: typeof code === 'string' ? code : 'INTERNAL_ERROR',
     message: typeof message === 'string' ? message : 'the tool endpoint refused the call',
+    ...(typeof approvable === 'boolean' ? { approvable } : {}),
   };
 }
 
@@ -351,6 +375,7 @@ export function createToolClient(options: ToolClientOptions): ToolClient {
         toolOperationId,
         inputHash,
         durationMs,
+        ...(error.approvable === undefined ? {} : { approvable: error.approvable }),
       };
     }
     // The call was admitted (or replayed): the refusal, if any, is settled, and a *later*
@@ -444,11 +469,21 @@ export function createToolClient(options: ToolClientOptions): ToolClient {
     execute: async (input) => {
       const result = await call(input);
       log(`tool: ${input.toolName} -> ${result.status ?? result.code ?? 'error'}`);
-      if (result.isError === true && result.code === 'NOT_AUTHORIZED') {
+      if (
+        result.isError === true &&
+        result.code === 'NOT_AUTHORIZED' &&
+        result.approvable !== false
+      ) {
         // `protocol.md` §4: the refused call becomes a pending user decision, and the model
         // is told to wait rather than retry blindly. A permission request Core did not
         // record leaves the plain refusal: promising a decision that does not exist would
         // strand the Run.
+        //
+        // `approvable === false` is the phase-1 hard block (`T3-implementation.md` 附录 A.1):
+        // a sensitive file, a loopback/metadata address, an outside-workspace delete or a
+        // Git-ref change is refused by policy, not by a missing Grant, so the typed refusal
+        // goes to the model **without** parking the Run on a decision that could never admit
+        // it. That is the "zero prompts during a run" half of W1.
         const asked = await requestPermission(input);
         if (asked === undefined) return { text: result.text, isError: true };
         const decision = asked.decisionId === undefined ? '' : ` (decision ${asked.decisionId})`;

@@ -81,6 +81,7 @@ import { isIPv4, isIPv6 } from 'node:net';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   LIMITS,
+  type ConfigPolicy,
   type ErrorCode,
   type Grant,
   type JsonObject,
@@ -1645,6 +1646,17 @@ export interface ToolInvocation {
    * invocation from server-side facts plus the tool name and arguments.
    */
   readonly secretEnv?: Readonly<Record<string, string>>;
+  /**
+   * The effective sensitive-file tier this call was planned under (`T3-implementation.md`
+   * 附录 A.7).
+   *
+   * The admission layer has already refused a target the frozen table covers; the Broker
+   * forwards the tier so a **directory search** can skip the listed files during its walk
+   * instead of reading them and filtering afterwards — "search 不同表生效等于没拦". It
+   * travels on the invocation rather than in a global so two projects with different
+   * tiers cannot influence each other's tools.
+   */
+  readonly configPolicy?: ConfigPolicy;
 }
 
 /**
@@ -1679,6 +1691,14 @@ export interface ToolContext {
   readonly paths: readonly string[];
   readonly roots: readonly string[];
   readonly env: Readonly<Record<string, string>>;
+  /**
+   * The sensitive-file tier this call runs under (`T3-implementation.md` 附录 A.7).
+   *
+   * A tool body that walks a directory (the literal search) reads it so the walk skips
+   * the frozen list at the point of reading rather than after the content already
+   * entered a result. Defaults to `strict` when the caller declared nothing.
+   */
+  readonly sensitiveTier: ConfigPolicy;
   readFile(path: string): string;
   writeFile(path: string, content: string): void;
   run(command: string): ProcessResult;
@@ -2283,6 +2303,7 @@ export class Broker {
       paths,
       roots,
       env: {},
+      sensitiveTier: invocation.configPolicy ?? 'strict',
       readFile: (path) => {
         const real = check(path, 'read');
         if (mode === 'container') return this.containerRead(real, invocation);

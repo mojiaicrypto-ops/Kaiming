@@ -24,6 +24,14 @@ import { ProjectStore as Store, projectIdFromRoot, type ProjectStore } from '@ag
 import { GrantStore } from '../src/grants.js';
 import { ProtocolError } from '../src/errors.js';
 import { ToolGrantService, requiresPerOccurrenceApproval } from '../src/permissions.js';
+import {
+  APPLICATION_CONFIG_PATTERNS,
+  SENSITIVE_FILE_PATTERNS,
+  SENSITIVE_FILE_TODO_KIND,
+  decideSensitiveAccess,
+  matchSensitiveFile,
+  sensitiveFileRefusalMessage,
+} from '../src/permissions.js';
 
 const WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d9e00';
 const RUN_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d9e10';
@@ -611,5 +619,96 @@ describe('ToolGrantService', () => {
         expiresAt: expiresAt(),
       }),
     ).toThrowError(ProtocolError);
+  });
+});
+
+/**
+ * The frozen sensitive-file table (`T3-implementation.md` 附录 A.2/A.7).
+ *
+ * Pure cases: they fix the table itself, the two tiers and the refusal text, so the
+ * integration drill only has to prove the wiring rather than re-derive the policy.
+ */
+describe('sensitive-file table (附录 A.2/A.7)', () => {
+  it('covers the frozen list and nothing else', () => {
+    // Every entry the specification froze is present; the list is an allow/deny authority,
+    // so a missing entry is a silent hole.
+    for (const pattern of [
+      '.env*',
+      '.netrc',
+      '.npmrc',
+      '.pypirc',
+      '.pgpass',
+      '.my.cnf',
+      '.docker/config.json',
+      'kubeconfig',
+      '.aws/**',
+      '.ssh/**',
+      '.vault-token',
+      '.terraformrc',
+      '*.tfvars',
+      '*.conf',
+      'application*.yml',
+      'application*.properties',
+      'bootstrap*.yml',
+      'bootstrap*.properties',
+      '*.properties',
+      '*.pem',
+      '*.key',
+      '*.p12',
+      '*.pfx',
+      '*.jks',
+      'id_rsa*',
+      'id_ed25519*',
+    ]) {
+      expect(SENSITIVE_FILE_PATTERNS).toContain(pattern);
+    }
+    expect(SENSITIVE_FILE_TODO_KIND).toBe('sensitive_file');
+  });
+
+  it('matches by basename for bare names and by path for scoped ones', () => {
+    // `.env` is refused in a subdirectory too; `.aws/**` only at the repository root; `*`
+    // never crosses `/`.
+    expect(matchSensitiveFile('config/.env')?.pattern).toBe('.env*');
+    expect(matchSensitiveFile('.env.local')?.pattern).toBe('.env*');
+    expect(matchSensitiveFile('.aws/credentials')?.pattern).toBe('.aws/**');
+    expect(matchSensitiveFile('nested/.aws/credentials')).toBeUndefined();
+    expect(matchSensitiveFile('src/main.ts')).toBeUndefined();
+    expect(matchSensitiveFile('docs/environment.md')).toBeUndefined();
+  });
+
+  it('splits strict from test exactly at the application-config subset', () => {
+    for (const pattern of APPLICATION_CONFIG_PATTERNS) {
+      // A representative name per pattern is enough: the matcher itself is exercised above.
+      const sample =
+        pattern === '*.conf'
+          ? 'etc/agent.conf'
+          : pattern.startsWith('application')
+            ? `src/main/resources/${pattern.replace('*', '-prod')}`
+            : pattern.replace('*', '');
+      const match = matchSensitiveFile(sample);
+      expect(match?.applicationConfig).toBe(true);
+      expect(decideSensitiveAccess(sample, 'strict').allowed).toBe(false);
+      expect(decideSensitiveAccess(sample, 'test').allowed).toBe(true);
+    }
+  });
+
+  it('refuses credentials and key material in both tiers', () => {
+    for (const path of ['.env', '.npmrc', 'kubeconfig', 'secrets/prod.tfvars', 'keys/id_rsa']) {
+      expect(decideSensitiveAccess(path, 'strict').allowed).toBe(false);
+      const test = decideSensitiveAccess(path, 'test');
+      expect(test.allowed).toBe(false);
+      if (!test.allowed) expect(test.match.applicationConfig).toBe(false);
+    }
+  });
+
+  it('writes a refusal the model cannot mistake for a retryable error', () => {
+    const match = matchSensitiveFile('.env');
+    expect(match).toBeDefined();
+    if (match === undefined) return;
+    const text = sensitiveFileRefusalMessage(match, 'read');
+    expect(text).toContain('.env');
+    expect(text).toContain('.env*');
+    expect(text).toContain('do not retry');
+    expect(text).toContain('todo');
   });
 });

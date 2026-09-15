@@ -14,6 +14,14 @@ Capability绑定attempt/epoch/role/allowed methods/expiry；Broker重新校验�
 
 Workspace允许读取授权源码快照、写Task工作区和产物目录；网络、依赖安装、外部写入、Secret、push/deploy均需Grant。Autonomous在启动前保存范围Grant，范围内自动执行。Full Access工具宿主进程继承授权执行账户，但仍经Broker控制工具准入和领域Gate。软件规则和权限模式分别校验。
 
+第一期权限模型（`.agentdev/work/WP-12/T3-implementation.md` 附录 A）把"范围内"具体化为**Plan时信封**：Plan/授权批准时信封（路径 + 操作）即已授予，运行中**范围内操作直接执行、不再逐次询问**（read/search/edit/write/artifact_write/bash/git，含构建、测试、公网出网）。三条硬拦不因信封而放松，且返回**类型化拒绝**（`details.approvable=false`，模型被告知"不要重试"）：
+
+1. **敏感文件**（附录 A.2 冻结表）：`read`/`search`/`edit`/`write` 四处共用同一张表，命中即拒（`CONTEXT_FORBIDDEN`），同时按现有 `chief_action_required` 机制落一条用户待办（`kind='sensitive_file'`，不阻塞Run，agent继续别的工作）。搜索时该表在遍历中即跳过命中文件（"search不同表生效等于没拦"）。
+2. **网络边界**：公网出网允许；环回/私网/链路本地/CGNAT/云元数据地址与守护进程自身端口仍由 `NetworkPolicy` 硬拦（`bash` 字面URL亦在准入层拒绝）。
+3. **删除与Git引用**：工作区内删除允许（兜底=Git + 每任务工作区 + 交付CAS）；工作区外路径删除、`git push`/强制重置/`update-ref` 等引用变更拒绝。
+
+`configPolicy: 'strict' | 'test'`（附录 A.7）只改**查表前的分支**，不改上表：`strict`（全局默认）拒绝全表；`test` 额外放行应用配置子集（`application*.yml`、`application*.properties`、`bootstrap.yml`、`bootstrap.properties`、`*.properties`、`*.conf`），凭据档与纯密钥材料仍拒。非 `strict` 必须在 `doctor`、项目页与验收报告显著可见，且每次放行读取都写审计（路径 + 策略版本 + 档位）。逐次 `permission.request`/`permission.respond`、`waiting_permission` 挂起与 `once`+`inputHash` 绑定**退掉**（代码保留、正常流程不再触发）。
+
 ## 3. 挂载与角色ACL
 
 | 运行 | 读 | 写 |
@@ -51,6 +59,8 @@ Artifact下载由Core校验Project/Artifact ACL，返回短期60秒单次下载t
 固定@earendil-works/pi-coding-agent 0.85.1。Factory显式提供内存Settings、ResourceLoader、SessionManager、ModelRuntime/适配网关及自定义工具。禁用默认环境资源自动发现；角色工具完全由注册表构造。
 
 工具：read/search/context_request/artifact_write；修改角色另有edit/write/bash/git；Chief有assessment_submit/agent_dispatch/decision_request；专业角色有stage_yield/request_dispatch。Shell和Git均走Broker；Git ref修改只由Workspace服务完成。
+
+工具/权限边界的落点是**准入层**（`core/tools.ts` `planToolCall`，daemon `tool-handler.ts` 调用），在Grant与文件边界之前：角色门 → 参数Schema → `~`/绝对路径入口 → 敏感文件表（附录 A.2，read/search/edit/write 共用）→ `bash` 的Git引用守卫与工作区外删除守卫 → `bash` 字面URL交 `NetworkPolicy`。因此拒绝发生在"没有文件内容、没有进程、没有Grant被消费"之前，端点再写一条 `tool.refused`（operation/targets/code，不含args原文）。`tool.invoked` 仅在准入通过、`tool_operation` 落库后发出。敏感文件待办与 `test` 档放行审计分别是 `chief_action_required(kind='sensitive_file')` 与 `tool.listed_file_allowed`（含path/pattern/configPolicy/policyRevision）。
 
 Core Critical能力：policy/context/artifact/events/dispatch；初始化失败停止Run。可选内置Extension为发布包白名单清单，字段id/version/apiVersion/capabilities/enabled/critical；P0内置可选清单默认为空，配置未知ID拒绝。支持的内置扩展必须有契约测试，失败只禁用自身。Project可引用Skill Markdown，需信任且由Chief选择，Skill不能扩大工具权限。
 

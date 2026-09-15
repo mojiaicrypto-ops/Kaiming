@@ -21,6 +21,7 @@ import {
 import {
   artifactKindSchema,
   checkStatusSchema,
+  configPolicySchema,
   levelSchema,
   permissionModeSchema,
   providerTypeSchema,
@@ -125,6 +126,14 @@ export const configPatchSchema = z.strictObject({
   roleOverrides: partialRecord(roleSchema, profileSchema.partial()).optional(),
   limits: configLimitsSchema.optional(),
   permissionMode: permissionModeSchema.optional(),
+  /**
+   * The sensitive-file tier a human sets (`T3-implementation.md` 附录 A.7).
+   *
+   * Deliberately part of the ordinary config patch and **not** a protocol method of its
+   * own: it shares `permissionMode`'s model (global default, project override), and an
+   * agent has no entry to either (`protocol.md` §5).
+   */
+  configPolicy: configPolicySchema.optional(),
   l3Paths: list(repoPathSchema).optional(),
   l3Keywords: list(z.string().min(1)).optional(),
   testCommands: list(z.string().min(1)).optional(),
@@ -163,6 +172,19 @@ export type ProviderConfig = z.infer<typeof providerConfigSchema>;
 /** Deployment policy that `config.update` may patch (`protocol.md` §5). */
 export const policyConfigSchema = z.strictObject({
   permissionMode: permissionModeSchema,
+  /**
+   * The sensitive-file tier (`T3-implementation.md` 附录 A.7).
+   *
+   * It lives in the policy document rather than in a Run column, so it travels with the
+   * same global-default/project-override resolution as `permissionMode`, is part of
+   * `policyHash` (what a `VerificationManifest` binds), and is part of the `policy`
+   * context a Run is dispatched with — no migration and no new protocol method.
+   *
+   * A file written before the tier existed is normalised to the documented default
+   * `strict` when it is read (`config.ts` `normalizePolicyTier`), so the effective policy
+   * a caller sees always names its value instead of leaving it to be inferred.
+   */
+  configPolicy: configPolicySchema,
   l3Paths: list(repoPathSchema),
   l3Keywords: list(z.string().min(1)),
   testCommands: list(z.string().min(1)),

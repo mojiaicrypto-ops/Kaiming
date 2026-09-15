@@ -430,6 +430,7 @@ describe('tool execution through the real Broker', () => {
         paths: [join(workspace, 'src')],
         roots: [workspace],
         env: {},
+        sensitiveTier: 'strict' as const,
         readFile: (path: string) => readFileSync(path, 'utf8'),
         writeFile: () => undefined,
         run: () => {
@@ -455,5 +456,162 @@ describe('tool execution through the real Broker', () => {
     // real output, so only the process's success is asserted.
     expect(result.status).toBe(0);
     expect(typeof result.stdout).toBe('string');
+  });
+});
+
+describe('sensitive-file table and the phase-1 entry guards (AC-048/AC-049)', () => {
+  /** Plans one call against a fixed workspace root, with an explicit tier. */
+  function plan(toolName: string, args: Record<string, unknown>, configPolicy?: 'strict' | 'test') {
+    return planToolCall({
+      toolName,
+      args,
+      cwdRoot: '/tmp/workspace',
+      role: 'backend',
+      ...(configPolicy === undefined ? {} : { configPolicy }),
+    });
+  }
+
+  it('refuses the whole frozen list in strict, for read/search/edit alike (AC-048)', () => {
+    // The three tools share one table: a list that covered only `read` would be no list at
+    // all, because `search` would return the same content (附录 A.2).
+    const calls = [
+      { toolName: 'read' as const, args: { path: '.env' } },
+      { toolName: 'search' as const, args: { query: 'KEY', path: '.env' } },
+      { toolName: 'edit' as const, args: { path: '.env', content: 'x' } },
+    ];
+    for (const { toolName, args } of calls) {
+      const result = plan(toolName, args);
+      expect(result.ok).toBe(false);
+      if (result.ok) continue;
+      expect(result.code).toBe('CONTEXT_FORBIDDEN');
+      expect(result.approvable).toBe(false);
+      expect(result.sensitive?.pattern).toBe('.env*');
+      expect(result.sensitiveAction).toBe(toolName);
+      // 附录 A.5-4: the text must tell the model not to retry and to hand the file over.
+      expect(result.reason).toContain('do not retry');
+      expect(result.reason).toContain('todo');
+    }
+  });
+
+  it('refuses a credential or key-material entry in both tiers (AC-049)', () => {
+    for (const path of ['.npmrc', 'deploy/prod.tfvars', 'config/id_rsa_work', 'tls/server.pem']) {
+      const strict = plan('read', { path }, 'strict');
+      const test = plan('read', { path }, 'test');
+      expect(strict.ok).toBe(false);
+      expect(test.ok).toBe(false);
+      if (!test.ok) expect(test.code).toBe('CONTEXT_FORBIDDEN');
+    }
+  });
+
+  it('lets test tier through for the application-config subset only (AC-049)', () => {
+    for (const path of [
+      'src/main/resources/application.yml',
+      'application-test.properties',
+      'bootstrap.yml',
+      'etc/service.conf',
+    ]) {
+      const blocked = plan('read', { path }, 'strict');
+      expect(blocked.ok).toBe(false);
+      const allowed = plan('read', { path }, 'test');
+      // The entry is admitted in `test`; the daemon then audits it with path + revision +
+      // tier (`tool-handler.ts`), which the integration drill proves.
+      if (allowed.ok) expect(allowed.plan.targets).toEqual([path]);
+      else expect(allowed.code).not.toBe('CONTEXT_FORBIDDEN');
+    }
+  });
+
+  it('defaults to strict when no tier is supplied', () => {
+    const result = planToolCall({
+      toolName: 'read',
+      args: { path: '.env' },
+      cwdRoot: '/tmp/workspace',
+      role: 'backend',
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it('refuses a delete outside the workspace and allows one inside it (AC-048)', () => {
+    const outside = plan('bash', { command: 'rm -rf /tmp/somebody-elses-work' });
+    expect(outside.ok).toBe(false);
+    if (!outside.ok) {
+      expect(outside.code).toBe('NOT_AUTHORIZED');
+      expect(outside.approvable).toBe(false);
+      expect(outside.refusalPaths).toEqual(['/tmp/somebody-elses-work']);
+      expect(outside.reason).toContain('do not retry');
+    }
+    // 附录 A.1-2: deleting inside the workspace is allowed; Git and the CAS are the backstop.
+    const inside = plan('bash', { command: 'rm -rf build/output' });
+    expect(inside.ok).toBe(true);
+  });
+
+  it('refuses a git-ref change through the shell and through the git tool (AC-048)', () => {
+    for (const command of [
+      'git push origin main',
+      'git reset --hard HEAD~1',
+      'git update-ref refs/heads/x HEAD',
+    ]) {
+      const result = plan('bash', { command });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.code).toBe('NOT_AUTHORIZED');
+        expect(result.approvable).toBe(false);
+        expect(result.reason).toContain('do not retry');
+      }
+    }
+    const viaTool = plan('git', { args: ['update-ref', 'refs/heads/x', 'HEAD'] });
+    expect(viaTool.ok).toBe(false);
+  });
+
+  it('hands a literal URL to the network policy so loopback/metadata is decided by it (AC-048)', () => {
+    const result = plan('bash', { command: 'curl -s http://127.0.0.1:51234/health' });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.plan.network).toEqual(['http://127.0.0.1:51234/health']);
+    const metadata = plan('bash', { command: 'curl http://169.254.169.254/latest/meta-data/' });
+    expect(metadata.ok).toBe(true);
+    if (metadata.ok)
+      expect(metadata.plan.network).toEqual(['http://169.254.169.254/latest/meta-data/']);
+    // A command with no URL literal carries no network declaration, so the container's
+    // network mode remains the authority for it.
+    const plain = plan('bash', { command: 'pnpm test:unit' });
+    expect(plain.ok).toBe(true);
+    if (plain.ok) expect(plain.plan.network).toBeUndefined();
+  });
+
+  it('never returns a listed file from a directory search (AC-048)', () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'agentdev-search-sensitive-'));
+    try {
+      mkdirSync(join(workspace, 'src'), { recursive: true });
+      writeFileSync(join(workspace, 'src/a.ts'), 'const needle = 1;\n');
+      writeFileSync(join(workspace, '.env'), 'NEEDLE=secret\n');
+      // A second authorized file so the walk is proven to have run at all: the count is
+      // "files scanned", and a walk that scanned nothing would satisfy a bare
+      // "no matches" assertion for the wrong reason.
+      writeFileSync(join(workspace, 'src/b.ts'), 'const other = 2;\n');
+      const context = {
+        mode: 'host' as const,
+        operation: 'search',
+        inputHash: HASH,
+        toolOperationId: DECISION_ID,
+        targets: ['.'],
+        paths: [workspace],
+        roots: [workspace],
+        env: {},
+        sensitiveTier: 'strict' as const,
+        readFile: (path: string) => readFileSync(path, 'utf8'),
+        writeFile: () => undefined,
+        run: () => {
+          throw new Error('not used');
+        },
+        runAsync: () => Promise.reject(new Error('not used')),
+        request: () => Promise.reject(new Error('not used')),
+      };
+      const result = runSearchTool(context, { query: 'NEEDLE', path: '.' });
+      expect(result.matches).toEqual([]);
+      // The two authorized files were scanned; the frozen `.env` was skipped by name, not
+      // read and filtered afterwards.
+      expect(result.filesScanned).toBe(2);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 });

@@ -17,6 +17,8 @@ node apps/cli/dist/cli.js doctor
 
 `doctor` 输出依赖版本、Docker、目录权限与端口占用；`execution ready: yes` 时退出码 0。`pnpm doctor` 与上一条等价。
 
+`doctor` 同时输出一行 `policy`：`permissionMode` 与**敏感文件档位** `configPolicy`（全局默认 `strict`；项目级覆盖写在 `<git-root>/.agentdev/config.toml` 的 `[policy] configPolicy`）。档位为 `test` 时该行以 `WARN` 开头并写明「本项目允许读取应用配置（application*/bootstrap*/*.properties/*.conf），凭据与密钥材料仍拒读」——非 `strict` 必须显著可见、不得静默开启（`.agentdev/work/WP-12/T3-implementation.md` 附录 A.7）。项目配置无法读取时该行给出文件名与原因，而不是退回默认值。`config.get` 的 `policy` 字段与项目设置页展示同一个值。
+
 ## 2. 安装目录
 
 安装状态目录默认 `~/.agentdev`，可用 `AGENTDEV_HOME` 整体重定位（测试、第二个安装、演练都用它，避免碰真实目录）：

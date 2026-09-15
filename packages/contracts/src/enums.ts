@@ -202,6 +202,18 @@ export type CheckStatus = z.infer<typeof checkStatusSchema>;
 export const permissionModeSchema = z.enum(['workspace', 'autonomous', 'full_access']);
 export type PermissionMode = z.infer<typeof permissionModeSchema>;
 
+/**
+ * How the frozen sensitive-file table is read (`T3-implementation.md` 附录 A.7).
+ *
+ * `strict` (the global default) refuses the whole frozen list for read/search/edit;
+ * `test` additionally allows the application-configuration subset while still refusing
+ * the credential and key-material entries. There is deliberately no `open` tier: the
+ * switch is a human declaration, and "the repository may leave the machine" must not
+ * exist as a one-click setting.
+ */
+export const configPolicySchema = z.enum(['strict', 'test']);
+export type ConfigPolicy = z.infer<typeof configPolicySchema>;
+
 export const projectStateSchema = z.enum(['open', 'closed']);
 export type ProjectState = z.infer<typeof projectStateSchema>;
 
