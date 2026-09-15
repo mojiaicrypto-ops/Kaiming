@@ -7,3 +7,11 @@
 
 /** The marker the seeded HTML preview renders, so the frame's real body is checkable. */
 export const PREVIEW_MARKER = 'AGENTDEV-PREVIEW-MARKER';
+
+/**
+ * A secret-looking marker written into the seeded project's refused `.env` (WP-12 W2).
+ *
+ * The sensitive-file todo must never carry or render the refused file's content, so the
+ * Inbox spec asserts this string appears nowhere on the page.
+ */
+export const SENSITIVE_FILE_MARKER = 'AGENTDEV-BROWSER-SECRET-MARKER';

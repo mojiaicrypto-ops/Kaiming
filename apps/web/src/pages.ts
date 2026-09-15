@@ -15,6 +15,7 @@
  *   hidden.
  */
 import type { JsonObject } from '@agentdev/contracts';
+import { SENSITIVE_FILE_TODO_KIND } from '@agentdev/core';
 import { attrs, badge, escapeHtml, isoUtc, pair, stateLabel } from './html.js';
 import { UI_STRINGS, type Translator } from './i18n.js';
 import {
@@ -1133,6 +1134,82 @@ function inboxPermissionRow(row: InboxRow, t: Translator): string {
   ].join('');
 }
 
+/**
+ * One user-facing Chief todo card (`protocol.md` §7).
+ *
+ * The frozen permission spec (`T3-implementation.md` 附录 A.1-3) files a
+ * `chief_action_required(kind='sensitive_file')` when the agent is refused a file on
+ * the sensitive-file table and names the reader: the user handles that file themselves.
+ * The card therefore states exactly what was refused, which file and rule matched,
+ * which Work/Run asked for it and when — every value the daemon reported, with an
+ * explicit "not reported" where a field is absent, and never the file's content.
+ *
+ * There is deliberately no resolution control: the documentation defines the user's
+ * action (handle the file outside the agent) but no way to clear the todo, so the page
+ * does not invent one. The "discuss in Chief" link carries the Work reference, which is
+ * the documented way to bring an object back to the Chief.
+ */
+function inboxTodoRow(row: InboxRow, t: Translator, projectId: string): string {
+  const todo = row.todo;
+  const kind = todo?.kind ?? '';
+  const sensitive = kind === SENSITIVE_FILE_TODO_KIND;
+  const unavailable = t('inbox.todoFieldUnavailable');
+  const value = (text: string | null): string =>
+    text === null || text.trim() === '' ? unavailable : text;
+  const field_ = (labelKey: string, fieldValue: string, name: string): string =>
+    `<div class="pair"><dt data-i18n="${escapeHtml(labelKey)}">${escapeHtml(t(labelKey))}</dt><dd class="mono" data-todo-${escapeHtml(name)}>${escapeHtml(fieldValue)}</dd></div>`;
+  const work = row.workId === '' ? unavailable : row.workId;
+  const raisedAt = row.createdAt === null ? unavailable : isoUtc(row.createdAt);
+  const detail = sensitive
+    ? [
+        `<p data-i18n="inbox.todoSensitiveWhat">${escapeHtml(t('inbox.todoSensitiveWhat'))}</p>`,
+        '<dl class="binding">',
+        field_('inbox.todoAction', value(todo?.action ?? null), 'action'),
+        field_('inbox.todoPath', value(todo?.path ?? null), 'path'),
+        field_('inbox.todoPattern', value(todo?.pattern ?? null), 'pattern'),
+        field_('inbox.todoConfigPolicy', value(todo?.configPolicy ?? null), 'config-policy'),
+        field_('inbox.work', work, 'work'),
+        field_('inbox.run', value(row.runId), 'run'),
+        field_('inbox.raisedBy', value(row.role), 'raised-by'),
+        field_('inbox.raisedAt', raisedAt, 'raised-at'),
+        '</dl>',
+        // The documented resolution: the user handles the file, the agent does not.
+        `<p class="hint" data-i18n="inbox.todoHandling">${escapeHtml(t('inbox.todoHandling'))}</p>`,
+      ].join('')
+    : [
+        `<p class="hint" data-i18n="inbox.todoOtherHint">${escapeHtml(t('inbox.todoOtherHint'))}</p>`,
+        '<dl class="binding">',
+        field_('inbox.todoKind', kind === '' ? unavailable : kind, 'kind'),
+        field_('inbox.work', work, 'work'),
+        field_('inbox.run', value(row.runId), 'run'),
+        field_('inbox.raisedAt', raisedAt, 'raised-at'),
+        '</dl>',
+      ].join('');
+  const diagnostic =
+    todo === null || todo.reason === null ? '' : ` title="${escapeHtml(todo.reason)}"`;
+  const headingKey = sensitive ? 'inbox.todoSensitiveFile' : 'inbox.todo';
+  return [
+    `<li class="inbox-row" data-kind="todo" data-entry="todo" data-todo="${escapeHtml(row.id)}" data-todo-kind="${escapeHtml(kind)}"`,
+    ` data-work="${escapeHtml(row.workId)}" data-run="${escapeHtml(row.runId ?? '')}"${diagnostic}`,
+    `${row.actionable ? '' : ' aria-disabled="true"'}>`,
+    `<div class="row-head"><span class="kind" data-i18n="${escapeHtml(headingKey)}">${escapeHtml(t(headingKey))}</span>`,
+    `<span class="chip warn">${escapeHtml(kind === '' ? t('inbox.todoKindUnknown') : kind)}</span>`,
+    `<span class="chip">${escapeHtml(t('inbox.raisedAt'))}: ${escapeHtml(raisedAt)}</span></div>`,
+    detail,
+    // The two closing actions (`protocol.md` §4 `chief.todo.resolve`). They are an
+    // acknowledgement, not an authorization: closing the todo neither admits the
+    // refused call nor changes the sensitive-file tier.
+    `<div class="choices" data-i18n-aria="inbox.todoActions" aria-label="${escapeHtml(t('inbox.todoActions'))}">`,
+    `<button type="button" class="choice" data-todo-disposition="handled" data-todo="${escapeHtml(row.id)}" data-work="${escapeHtml(row.workId)}"${row.actionable ? '' : ' disabled aria-disabled="true"'}>${escapeHtml(t('inbox.todoHandled'))}</button>`,
+    `<button type="button" class="choice" data-todo-disposition="dismissed" data-todo="${escapeHtml(row.id)}" data-work="${escapeHtml(row.workId)}"${row.actionable ? '' : ' disabled aria-disabled="true"'}>${escapeHtml(t('inbox.todoDismissed'))}</button>`,
+    '</div>',
+    `<label for="todo-reason-${escapeHtml(row.id)}" data-i18n="inbox.todoReason">${escapeHtml(t('inbox.todoReason'))}</label>`,
+    `<textarea id="todo-reason-${escapeHtml(row.id)}" data-todo-reason rows="2" data-translatable="false"></textarea>`,
+    row.workId === '' ? '' : discussLink(projectId, t, `work-${row.workId}`),
+    '</li>',
+  ].join('');
+}
+
 export function renderInboxPage(input: {
   readonly model: InboxModel;
   readonly projectId: string;
@@ -1144,6 +1221,7 @@ export function renderInboxPage(input: {
       row.entry === 'permission' ? inboxPermissionRow(row, t) : inboxDecisionRow(row, t),
     )
     .join('');
+  const todoRows = input.model.todos.map((row) => inboxTodoRow(row, t, input.projectId)).join('');
   const findingRows = input.model.findings
     .map(
       (row) =>
@@ -1156,7 +1234,7 @@ export function renderInboxPage(input: {
         `<li class="inbox-row" data-kind="recovery" data-run="${escapeHtml(row.runId ?? '')}"><div class="row-head"><span class="kind">${escapeHtml(t('inbox.recovery'))}</span><span class="chip danger">${escapeHtml(row.state)}</span></div></li>`,
     )
     .join('');
-  const body = [decisionRows, findingRows, recoveryRows].join('');
+  const body = [decisionRows, todoRows, findingRows, recoveryRows].join('');
   return [
     section(
       { id: 'inbox', titleKey: 'nav.inbox', ariaKey: 'aria.inbox', t },

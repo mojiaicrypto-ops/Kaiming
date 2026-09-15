@@ -185,9 +185,39 @@
    * what mints the bound Grant; the daemon resolves the real binding from the
    * recorded tool operation, so the client never restates an operation it was not
    * shown. A denial must record a reason and is refused locally before any request
-   * when the operator left it empty.
+   * when the operator left it empty. A user todo closes through `chief.todo.resolve`,
+   * which only acknowledges the item — it authorizes no tool call.
    */
   function inboxActionRequest(action, data) {
+    const disposition = typeof data.disposition === 'string' ? data.disposition : '';
+    if (disposition !== '') {
+      const todoId = typeof data.todo === 'string' ? data.todo : '';
+      const workId = typeof data.work === 'string' ? data.work : '';
+      if (
+        (disposition !== 'handled' && disposition !== 'dismissed') ||
+        todoId === '' ||
+        workId === ''
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `unknown todo action ${String(action)}`,
+          },
+        };
+      }
+      const note = typeof data.reason === 'string' ? data.reason.trim() : '';
+      return {
+        ok: true,
+        method: 'chief.todo.resolve',
+        params: {
+          workId,
+          todoId,
+          disposition,
+          ...(note === '' ? {} : { reason: note }),
+        },
+      };
+    }
     const decisionId = typeof data.decision === 'string' ? data.decision : '';
     const choice = typeof data.choice === 'string' ? data.choice : '';
     const reason = typeof data.reason === 'string' ? data.reason.trim() : '';
@@ -1440,6 +1470,11 @@
     'decision.resolved',
     'permission.resolved',
     'state.decision_required',
+    // A refused sensitive file files a user todo; the row must appear without a
+    // manual reload (`protocol.md` §7 `chief_action_required`). Its closing event is
+    // mirrored too, so a second tab drops the row as well.
+    'chief_action_required',
+    'chief.todo_resolved',
   ];
 
   function rememberToolRefusal(frame) {
@@ -1559,22 +1594,47 @@
     }
   }
 
+  /** Disables both closing actions of one todo row after a state refusal (AC-074). */
+  function disableTodoRow(list, todoId) {
+    for (const sibling of list.querySelectorAll('button[data-todo-disposition]')) {
+      if (sibling.dataset.todo === todoId) {
+        sibling.disabled = true;
+        sibling.setAttribute('aria-disabled', 'true');
+      }
+    }
+  }
+
   async function initInbox() {
     const inbox = document.getElementById('inbox');
     const list = document.getElementById('inboxList');
     if (!inbox || !list) return;
     applyPermissionBindings();
     inbox.addEventListener('click', async (event) => {
-      const button = event.target.closest('button[data-choice], button[data-permission]');
+      const todoButton = event.target.closest('button[data-todo-disposition]');
+      const button =
+        todoButton ?? event.target.closest('button[data-choice], button[data-permission]');
       if (!button || button.disabled) return;
+      const todoAction = todoButton ? todoButton.dataset.todoDisposition : undefined;
       const permission = typeof button.dataset.permission === 'string';
-      const choice = permission ? button.dataset.permission : button.dataset.choice;
+      const choice =
+        todoAction !== undefined
+          ? todoAction
+          : permission
+            ? button.dataset.permission
+            : button.dataset.choice;
       const row = button.closest('.inbox-row');
-      const reasonField = row ? row.querySelector('[data-permission-reason]') : null;
+      const reasonField = row
+        ? row.querySelector(
+            todoAction === undefined ? '[data-permission-reason]' : '[data-todo-reason]',
+          )
+        : null;
       const built = inboxActionRequest(choice, {
         decision: button.dataset.decision,
         choice,
         permission,
+        disposition: todoAction,
+        todo: button.dataset.todo,
+        work: button.dataset.work,
         reason: reasonField ? reasonField.value : '',
       });
       if (!built.ok) {
@@ -1591,13 +1651,22 @@
       showError('inboxError', null);
       showStatus('inboxStatus', '');
       button.disabled = true;
-      const targetVersion = Number(button.dataset.targetVersion || '0');
+      // A todo card carries no target version: `expectedVersion` is the Work's, which
+      // the page does not hold, so the write is keyed by its idempotency key alone.
+      const targetVersion =
+        button.dataset.targetVersion === undefined
+          ? undefined
+          : Number(button.dataset.targetVersion);
       const answer = await rpc(
         built.method,
-        { ...built.params, targetVersion },
+        { ...built.params, ...(targetVersion === undefined ? {} : { targetVersion }) },
         {
           idempotencyKey: newIdempotencyKey(
-            built.method === 'permission.respond' ? `permission-${choice}` : 'decision',
+            built.method === 'permission.respond'
+              ? `permission-${choice}`
+              : built.method === 'chief.todo.resolve'
+                ? `todo-${choice}`
+                : 'decision',
           ),
           expectedVersion: targetVersion,
         },
@@ -1608,12 +1677,18 @@
         // entry keeps exactly the state it was rendered from (`experience.md` §7).
         showError('inboxError', answer.error);
         if (answer.error.code === 'INVALID_STATE' || answer.error.code === 'VERSION_CONFLICT') {
-          disableInboxRow(list, button.dataset.decision);
+          if (todoAction === undefined) disableInboxRow(list, button.dataset.decision);
+          else disableTodoRow(list, button.dataset.todo);
         }
         return;
       }
       const denied = built.method === 'permission.respond' && choice === 'deny';
-      const key = denied ? 'inbox.denied' : 'inbox.resolved';
+      const key =
+        built.method === 'chief.todo.resolve'
+          ? 'inbox.todoResolved'
+          : denied
+            ? 'inbox.denied'
+            : 'inbox.resolved';
       showStatus('inboxStatus', state.strings[key] || translateClient(key));
       // The entry leaves the Inbox because the server says so: the list is read
       // back, and a failed refresh falls back to an honest reload.

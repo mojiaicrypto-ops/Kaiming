@@ -11,7 +11,7 @@
  */
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -19,7 +19,7 @@ import { loadProduct } from '../../scripts/lib/e2e-runtime.mjs';
 import { WEB_ORIGIN, bootStack, seedWork } from '../../scripts/lib/e2e-stack.mjs';
 
 import { FIXTURE_PATH } from './fixture-path.mjs';
-import { PREVIEW_MARKER } from './constants.mjs';
+import { PREVIEW_MARKER, SENSITIVE_FILE_MARKER } from './constants.mjs';
 
 /**
  * The preview artifact: a normal HTML explanation whose script also runs the three
@@ -203,6 +203,48 @@ function seedBrowserFixtures(harness, probeUrl) {
     status: 'running',
   });
 
+  // A real user-facing sensitive-file todo for the Inbox spec (WP-12 W2): the exact
+  // `chief_action_required` payload `apps/daemon/src/tool-handler.ts` files when the
+  // frozen sensitive-file table refuses a read (附录 A.2), hung off a real running Work
+  // so the card names a real Run.
+  const inboxWork = seedWork(harness, {
+    level: 'L2',
+    status: 'running',
+    goal: 'AC-074 夹具：敏感文件用户待办',
+  });
+  const inboxRun = insertRun(harness, {
+    workId: inboxWork.id,
+    role: 'backend',
+    purpose: 'implementation',
+    stage: 'Develop',
+    status: 'running',
+  });
+  // The refused file really exists at the repo root (with a secret-looking marker):
+  // the spec asserts the marker never reaches the page, so this is a real negative
+  // test and not a tautology. `.git/info/exclude` keeps it out of `git status`, so the
+  // AC-002 spec's "no source change" assertion still reads a clean tree.
+  mkdirSync(join(harness.repo, '.git', 'info'), { recursive: true });
+  appendFileSync(join(harness.repo, '.git', 'info', 'exclude'), '\n.env\n', 'utf8');
+  writeFileSync(join(harness.repo, '.env'), `${SENSITIVE_FILE_MARKER}=hunter2\n`, 'utf8');
+  store.events.append({
+    name: 'chief_action_required',
+    entityId: inboxWork.id,
+    entityVersion: 1,
+    data: {
+      workId: inboxWork.id,
+      runId: inboxRun.id,
+      role: 'backend',
+      kind: 'sensitive_file',
+      operationId: 'sensitive:.env:.env*',
+      path: '.env',
+      pattern: '.env*',
+      action: 'read',
+      configPolicy: 'strict',
+      policyRevision: 1,
+      reason: '该文件在敏感文件表内，请你本人处理（填写/更新/提供替代值）',
+    },
+  });
+
   return {
     htmlArtifactId: artifact.id,
     htmlWorkId: work.id,
@@ -211,6 +253,9 @@ function seedBrowserFixtures(harness, probeUrl) {
     requirementPath: `/projects/${harness.projectId}/requirements/${requirementId}`,
     runningRunId: runningRun.id,
     runningWorkId: runningWork.id,
+    inboxWorkId: inboxWork.id,
+    inboxRunId: inboxRun.id,
+    inboxTodoId: `${inboxWork.id}:.env:.env*`,
   };
 }
 

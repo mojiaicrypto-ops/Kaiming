@@ -455,6 +455,99 @@ describe('inbox request kinds (WP-12 T4c, AC-074)', () => {
   });
 });
 
+describe('inbox user todos (WP-12 W2, AC-074)', () => {
+  const reason =
+    '该文件在敏感文件表内，Agent 不会读/搜/改它；请你本人处理（填写/更新/提供替代值），Agent 会继续做其他工作';
+  const sensitive: JsonObject = {
+    kind: 'todo',
+    id: 'w1:.env:.env*',
+    workId: 'w1',
+    runId: 'run-1',
+    role: 'backend',
+    todoKind: 'sensitive_file',
+    action: 'read',
+    path: '.env',
+    pattern: '.env*',
+    configPolicy: 'strict',
+    reason,
+    createdAt: '2026-09-11T00:00:00.000Z',
+    actionable: true,
+  };
+
+  it('types a sensitive-file todo from exactly the fields the daemon reported', () => {
+    const model = inboxModel({ items: [sensitive], unread: 1 });
+    expect(model.todos).toHaveLength(1);
+    const row = model.todos[0];
+    expect(row?.kind).toBe('todo');
+    expect(row?.entry).toBe('todo');
+    expect(row?.todo).toEqual({
+      kind: 'sensitive_file',
+      action: 'read',
+      path: '.env',
+      pattern: '.env*',
+      configPolicy: 'strict',
+      reason,
+    });
+    expect(row?.workId).toBe('w1');
+    expect(row?.runId).toBe('run-1');
+    expect(row?.role).toBe('backend');
+    expect(row?.createdAt).toBe('2026-09-11T00:00:00.000Z');
+    // A todo is neither a question nor a permission binding.
+    expect(row?.question).toBeNull();
+    expect(row?.binding).toBeNull();
+    expect(row?.bindingMissing).toBe(false);
+    expect(model.decisions).toHaveLength(0);
+  });
+
+  it('keeps every absent todo field null instead of inventing a value', () => {
+    const model = inboxModel({
+      items: [
+        { kind: 'todo', id: 't', workId: 'w1', todoKind: 'sensitive_file', actionable: true },
+      ],
+      unread: 1,
+    });
+    const row = model.todos[0];
+    expect(row?.todo).toEqual({
+      kind: 'sensitive_file',
+      action: null,
+      path: null,
+      pattern: null,
+      configPolicy: null,
+      reason: null,
+    });
+    expect(row?.runId).toBeNull();
+    expect(row?.role).toBeNull();
+    expect(row?.createdAt).toBeNull();
+  });
+
+  it('keeps an unknown todo kind as a readable row', () => {
+    const model = inboxModel({
+      items: [{ kind: 'todo', id: 't2', workId: 'w2', todoKind: 'unknown_kind', actionable: true }],
+      unread: 1,
+    });
+    expect(model.todos[0]?.todo?.kind).toBe('unknown_kind');
+    expect(model.todos[0]?.entry).toBe('todo');
+  });
+
+  it('collapses a todo id the daemon repeated', () => {
+    const model = inboxModel({ items: [sensitive, { ...sensitive }], unread: 1 });
+    expect(model.todos).toHaveLength(1);
+  });
+
+  it('never copies a secret, a secret ref or a refused file body out of a todo payload', () => {
+    const secret = 'sk-live-DO-NOT-LEAK-98765';
+    const body = 'DB_PASSWORD=hunter2';
+    const model = inboxModel({
+      items: [{ ...sensitive, secret, secretRef: 'provider/p1', content: body, fileContent: body }],
+      unread: 1,
+    });
+    const serialized = JSON.stringify(model);
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain('secretRef');
+    expect(serialized).not.toContain('hunter2');
+  });
+});
+
 describe('requirement detail (AC-070)', () => {
   const requirement: JsonObject = {
     id: 'req-1',

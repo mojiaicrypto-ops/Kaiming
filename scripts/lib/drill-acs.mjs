@@ -32,6 +32,9 @@ export const E2E_BROWSER_ISOLATION_ACS = Object.freeze(['AC-002', 'AC-052']);
 /** Viewport/keyboard evidence only a real browser can produce (AC-071/AC-073). */
 export const E2E_BROWSER_VIEWPORT_ACS = Object.freeze(['AC-071', 'AC-073']);
 
+/** The Inbox "appear → handled → gone" closure only a real browser can drive (AC-074). */
+export const E2E_BROWSER_INBOX_ACS = Object.freeze(['AC-074']);
+
 /** Client-side upload hints only a browser can show (AC-076). */
 export const E2E_BROWSER_UPLOAD_ACS = Object.freeze(['AC-076']);
 
@@ -45,6 +48,7 @@ export const E2E_BROWSER_UPLOAD_ACS = Object.freeze(['AC-076']);
 export const E2E_BROWSER_ACS = Object.freeze([
   ...E2E_BROWSER_ISOLATION_ACS,
   ...E2E_BROWSER_VIEWPORT_ACS,
+  ...E2E_BROWSER_INBOX_ACS,
   ...E2E_BROWSER_UPLOAD_ACS,
 ]);
 

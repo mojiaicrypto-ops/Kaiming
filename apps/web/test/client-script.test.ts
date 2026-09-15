@@ -361,6 +361,39 @@ describe('inbox actions (WP-12 T4c, AC-074)', () => {
     expect(denied.method).toBeUndefined();
   });
 
+  it('routes a todo closing action through chief.todo.resolve', () => {
+    expect(build('handled', { disposition: 'handled', todo: 'w1:.env:.env*', work: 'w1' })).toEqual(
+      {
+        ok: true,
+        method: 'chief.todo.resolve',
+        params: { workId: 'w1', todoId: 'w1:.env:.env*', disposition: 'handled' },
+      },
+    );
+    expect(
+      build('dismissed', {
+        disposition: 'dismissed',
+        todo: 'w1:.env:.env*',
+        work: 'w1',
+        reason: '  later  ',
+      }),
+    ).toEqual({
+      ok: true,
+      method: 'chief.todo.resolve',
+      params: {
+        workId: 'w1',
+        todoId: 'w1:.env:.env*',
+        disposition: 'dismissed',
+        reason: 'later',
+      },
+    });
+    // An unknown action, a missing todo id or a missing Work never becomes a request.
+    expect(build('maybe', { disposition: 'maybe', todo: 't', work: 'w' }).error?.code).toBe(
+      'VALIDATION_ERROR',
+    );
+    expect(build('handled', { disposition: 'handled', todo: '', work: 'w' }).ok).toBe(false);
+    expect(build('handled', { disposition: 'handled', todo: 't', work: '' }).ok).toBe(false);
+  });
+
   it('wires the handler with an idempotency key, the target version and no reload on refusal', () => {
     const handler = script.slice(
       script.indexOf('async function initInbox'),
@@ -368,6 +401,11 @@ describe('inbox actions (WP-12 T4c, AC-074)', () => {
     );
     expect(handler).toContain('newIdempotencyKey(');
     expect(handler).toContain("built.method === 'permission.respond'");
+    expect(handler).toContain("built.method === 'chief.todo.resolve'");
+    expect(handler).toContain('`todo-${choice}`');
+    expect(handler).toContain('disableTodoRow');
+    // A todo carries no target version; decisions and permissions still do.
+    expect(handler).toContain('button.dataset.targetVersion === undefined');
     expect(handler).toContain('expectedVersion: targetVersion');
     expect(handler).toContain("translateClient('inbox.denyReasonRequired')");
     // The refusal branch renders the protocol code and message and returns before any
@@ -401,7 +439,15 @@ describe('inbox actions (WP-12 T4c, AC-074)', () => {
 
   it('refreshes the Inbox from the server on the documented live events', () => {
     expect(script).toMatch(/inboxEvents = \[/u);
-    for (const name of ['decision.created', 'decision.resolved', 'permission.resolved']) {
+    for (const name of [
+      'decision.created',
+      'decision.resolved',
+      'permission.resolved',
+      // A refused sensitive file files a user todo; the row must appear live, and its
+      // closing event must drop it in every open tab.
+      'chief_action_required',
+      'chief.todo_resolved',
+    ]) {
       expect(script).toContain(`'${name}'`);
     }
     expect(script).toContain('bestEffort(refreshInbox)');

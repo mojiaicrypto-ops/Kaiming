@@ -60,6 +60,7 @@ import {
   readRequirementPoolAtRevision,
   RequirementProjection,
   REQUIREMENT_CONTENT_FILE_NAME,
+  SENSITIVE_FILE_TODO_KIND,
   restoreProject,
   sendMessage,
   userIdFromSubject,
@@ -580,6 +581,7 @@ export const WRITE_METHODS: readonly string[] = [
   'decision.resolve',
   'permission.request',
   'permission.respond',
+  'chief.todo.resolve',
   'config.save',
   'config.test',
   'backup.run',
@@ -636,6 +638,7 @@ const LEDGER_WRAPPED_METHODS: readonly string[] = [
   'decision.resolve',
   'permission.request',
   'permission.respond',
+  'chief.todo.resolve',
   'config.save',
   'config.test',
 ];
@@ -870,8 +873,38 @@ const UI_STRINGS: Record<string, { readonly en: string; readonly zh: string }> =
   'inbox.raisedBy': { en: 'Raised by', zh: '发起方' },
   'inbox.raisedByChief': { en: 'Chief', zh: '主管' },
   'inbox.raisedByRun': { en: 'the Run below', zh: '下方运行' },
+  'inbox.raisedAt': { en: 'Raised at', zh: '提出时间' },
   'inbox.recovery': { en: 'Recovery', zh: '恢复' },
   'inbox.targetVersion': { en: 'Target version', zh: '目标版本' },
+  'inbox.todo': { en: 'Chief todo', zh: '主管待办' },
+  'inbox.todoAction': { en: 'Refused operation', zh: '被拒操作' },
+  'inbox.todoConfigPolicy': { en: 'Config policy at refusal', zh: '拒绝时的配置档位' },
+  'inbox.todoFieldUnavailable': {
+    en: 'Not reported by the daemon',
+    zh: '守护进程未上报',
+  },
+  'inbox.todoActions': { en: 'Close this todo', zh: '关闭该待办' },
+  'inbox.todoHandled': { en: 'Handled', zh: '已处理' },
+  'inbox.todoDismissed': { en: 'Ignore', zh: '忽略' },
+  'inbox.todoReason': { en: 'Note (optional)', zh: '备注（可选）' },
+  'inbox.todoResolved': { en: 'The todo was closed.', zh: '该待办已关闭。' },
+  'inbox.todoHandling': {
+    en: 'Handle this file yourself (fill it in, update it or provide the value another way). The agent continues with other work and does not need a decision from you here.',
+    zh: '请你本人处理该文件（填写、更新或改用其他方式提供该值）。Agent 会继续做其他工作，这里不需要你提交决定。',
+  },
+  'inbox.todoKind': { en: 'Todo kind', zh: '待办类型' },
+  'inbox.todoKindUnknown': { en: 'kind not reported', zh: '未上报类型' },
+  'inbox.todoOtherHint': {
+    en: 'This Chief todo was reported without a documented user action; its reported fields are below.',
+    zh: '该主管待办没有对应文档化的用户动作；下方是它上报的字段。',
+  },
+  'inbox.todoPath': { en: 'File', zh: '文件' },
+  'inbox.todoPattern': { en: 'Matched rule', zh: '命中规则' },
+  'inbox.todoSensitiveFile': { en: 'Sensitive file needs you', zh: '敏感文件需你本人处理' },
+  'inbox.todoSensitiveWhat': {
+    en: 'The agent was refused this file because it is on the sensitive-file list. Its content was never read, and the agent will not read, search or edit it.',
+    zh: '该文件在敏感文件清单内，Agent 的访问已被拒绝；文件内容从未被读取，Agent 也不会读取、搜索或修改它。',
+  },
   'inbox.work': { en: 'Work', zh: '工作' },
   'language.label': { en: 'Interface language', zh: '界面语言' },
   'live.reconnect': { en: 'Reconnecting from the watermark', zh: '按水位重连' },
@@ -976,6 +1009,26 @@ interface SubscriptionRecord {
   scope: { readonly kind: string; readonly id?: string };
   /** Highest cursor handed to the client (the delivery watermark). */
   cursor: number;
+}
+
+/**
+ * One user-facing Chief todo as the durable event log records it.
+ *
+ * `todoId` is the identity the Inbox reports and `chief.todo.resolve` accepts:
+ * `workId:path:pattern`, exactly the key the tool handler de-duplicates a refusal on
+ * (`protocol.md` §7).
+ */
+interface UserTodoRecord {
+  readonly todoId: string;
+  readonly workId: string;
+  readonly action: string | null;
+  readonly path: string | null;
+  readonly pattern: string | null;
+  readonly configPolicy: string | null;
+  readonly runId: string | null;
+  readonly role: string | null;
+  readonly reason: string | null;
+  readonly createdAt: string;
 }
 
 /**
@@ -1560,6 +1613,9 @@ export class WorkbenchProtocol {
         return this.requestPermission(params);
       case 'permission.respond':
         return this.respondPermission(params, options);
+      // ----- user-facing Chief todos (WP-12 W2, `protocol.md` §4) -------------
+      case 'chief.todo.resolve':
+        return this.resolveChiefTodo(params, options);
       // ----- backup / restore ------------------------------------------------
       case 'backup.run':
         return this.runBackup(params);
@@ -3062,10 +3118,120 @@ export class WorkbenchProtocol {
         actionable: true,
       });
     }
+    for (const todo of this.inboxUserTodos()) items.push(todo);
     const actionable = items.filter(
       (item) => (item as { actionable?: boolean }).actionable === true,
     ).length;
     return { items, unread: actionable };
+  }
+
+  /**
+   * The user-facing Chief todos the Inbox renders (`protocol.md` §7).
+   *
+   * The permission phase files `chief_action_required(kind='sensitive_file')` when a
+   * sensitive file (附录 A.2) is refused, and the frozen spec names the todo's reader:
+   * the user must handle the file themselves (`T3-implementation.md` 附录 A.1-3). The
+   * Inbox surfaces exactly those filings, one row per `(work, path, pattern)`, and drops
+   * the ones the user closed through `chief.todo.resolve` (`chief.todo_resolved`).
+   *
+   * The todo carries refusal metadata only (path/pattern/action/configPolicy); the
+   * refused file's content is never part of the event and therefore cannot reach a page.
+   */
+  private inboxUserTodos(): unknown[] {
+    const resolved = this.resolvedTodoIds();
+    return this.readUserTodos()
+      .filter((todo) => !resolved.has(todo.todoId))
+      .map((todo) => ({
+        kind: 'todo',
+        id: todo.todoId,
+        workId: todo.workId,
+        todoKind: SENSITIVE_FILE_TODO_KIND,
+        action: todo.action,
+        path: todo.path,
+        pattern: todo.pattern,
+        configPolicy: todo.configPolicy,
+        runId: todo.runId,
+        role: todo.role,
+        // The daemon's own sentence is a diagnostic: the page renders its translated
+        // instruction and keeps this as the row's title.
+        reason: todo.reason,
+        createdAt: todo.createdAt,
+        // The user handles the file themselves (附录 A.1-3); the row stays actionable
+        // until `chief.todo.resolve` closes it.
+        actionable: true,
+      }));
+  }
+
+  /**
+   * Every `chief_action_required(kind='sensitive_file')` filing, oldest first.
+   *
+   * De-duplicated on `(work, path, pattern)` — the tool handler's own idempotency key —
+   * so an older build that wrote the same todo twice still shows one row.
+   */
+  private readUserTodos(): UserTodoRecord[] {
+    const todos: UserTodoRecord[] = [];
+    const seen = new Set<string>();
+    for (const event of this.scanEvents(['chief_action_required'])) {
+      const data = event.data;
+      if (data['kind'] !== SENSITIVE_FILE_TODO_KIND) continue;
+      const workId = typeof data['workId'] === 'string' ? data['workId'] : event.entityId;
+      const path = typeof data['path'] === 'string' ? data['path'] : '';
+      const pattern = typeof data['pattern'] === 'string' ? data['pattern'] : '';
+      const todoId = `${workId}:${path}:${pattern}`;
+      if (seen.has(todoId)) continue;
+      seen.add(todoId);
+      todos.push({
+        todoId,
+        workId,
+        action: typeof data['action'] === 'string' ? data['action'] : null,
+        path: path === '' ? null : path,
+        pattern: pattern === '' ? null : pattern,
+        configPolicy: typeof data['configPolicy'] === 'string' ? data['configPolicy'] : null,
+        runId: typeof data['runId'] === 'string' ? data['runId'] : null,
+        role: typeof data['role'] === 'string' ? data['role'] : null,
+        reason: typeof data['reason'] === 'string' ? data['reason'] : null,
+        createdAt: event.occurredAt,
+      });
+    }
+    return todos;
+  }
+
+  /** The `todoId`s the user has already closed; any disposition closes the row. */
+  private resolvedTodoIds(): Set<string> {
+    const resolved = new Set<string>();
+    for (const event of this.scanEvents(['chief.todo_resolved'])) {
+      const todoId = event.data['todoId'];
+      if (typeof todoId === 'string' && todoId !== '') resolved.add(todoId);
+    }
+    return resolved;
+  }
+
+  /** The disposition already recorded for one todo, if the user closed it. */
+  private todoResolution(todoId: string): string | undefined {
+    for (const event of this.scanEvents(['chief.todo_resolved'])) {
+      if (event.data['todoId'] !== todoId) continue;
+      const disposition = event.data['disposition'];
+      return typeof disposition === 'string' ? disposition : 'handled';
+    }
+    return undefined;
+  }
+
+  /**
+   * One event name, oldest first, over the whole retained log.
+   *
+   * The scan starts at the oldest retained cursor: an `after` older than retention
+   * throws `RESYNC_REQUIRED`, which must not fail an Inbox read or a resolution.
+   */
+  private scanEvents(names: readonly string[]): Event[] {
+    const events = this.services.store.events;
+    const found: Event[] = [];
+    let cursor = Math.max(0, events.oldestCursor() - 1);
+    for (;;) {
+      const page = events.readAfter(cursor, { limit: 1_000, names: [...names] });
+      if (page.length === 0) return found;
+      found.push(...page);
+      cursor = page[page.length - 1]?.cursor ?? cursor;
+    }
   }
 
   /** The eight roles with their effective configuration and its provenance. */
@@ -5812,6 +5978,105 @@ export class WorkbenchProtocol {
    * nothing and returns the Run to `running` so the model can take another route
    * (`workflow.md` §57 keeps a refusal out of the transient-retry path).
    */
+  /**
+   * `protocol.md` §4 `chief.todo.resolve`: the user closes one user-facing Chief todo.
+   *
+   * The call is an acknowledgement, never an authorization: it records a user Action
+   * plus a durable `chief.todo_resolved` event and nothing else — no Grant is minted, no
+   * `configPolicy` changes and no tool call is admitted. Whether the refused file was
+   * really handled stays the user's own action (`T3-implementation.md` 附录 A.1-3). The
+   * Inbox drops the `(work, path, pattern)` this names.
+   *
+   * Unknown `todoId`s and a todo that belongs to another Work are both the same typed
+   * `NOT_FOUND`: nothing outside the named Work can be closed through this method. A
+   * second call is idempotent and reports the disposition already recorded.
+   */
+  private resolveChiefTodo(
+    params: JsonObject,
+    options: { readonly expectedVersion?: number },
+  ): JsonObject {
+    const workId = requiredString(params, 'workId');
+    const todoId = requiredString(params, 'todoId');
+    const disposition = requiredString(params, 'disposition');
+    if (disposition !== 'handled' && disposition !== 'dismissed') {
+      throw new ProtocolError(
+        'VALIDATION_ERROR',
+        `disposition ${disposition} must be handled or dismissed`,
+        { details: { workId, todoId, disposition } },
+      );
+    }
+    const work = this.services.store.works.find(workId);
+    if (work === undefined) {
+      throw new ProtocolError('NOT_FOUND', `Work ${workId} does not exist`, {
+        details: { workId },
+      });
+    }
+    if (options.expectedVersion !== undefined && options.expectedVersion !== work.version) {
+      throw new ProtocolError(
+        'VERSION_CONFLICT',
+        `Work ${workId} is at version ${work.version}, not ${options.expectedVersion}`,
+        {
+          details: {
+            workId,
+            currentVersion: work.version,
+            requestedVersion: options.expectedVersion,
+          },
+        },
+      );
+    }
+    const todo = this.readUserTodos().find((entry) => entry.todoId === todoId);
+    if (todo === undefined || todo.workId !== workId) {
+      throw new ProtocolError('NOT_FOUND', `Work ${workId} has no user todo ${todoId}`, {
+        details: { workId, todoId },
+      });
+    }
+    const reason = optionalString(params['reason']);
+    const recorded = this.todoResolution(todoId);
+    if (recorded !== undefined) {
+      // Closing a todo twice is a no-op that reports the disposition already recorded:
+      // the first answer is the one that took effect, and no second effect is applied.
+      return {
+        status: 'applied',
+        entityId: todoId,
+        workId,
+        todoId,
+        disposition: recorded,
+        state: 'resolved',
+        idempotent: true,
+      };
+    }
+    return withTransaction(this.services.store.db, () => {
+      // The Action's target is the Work (a real entity id); the todo itself travels in
+      // the payload, because a `(work, path, pattern)` key is not an entity id.
+      const action = this.recordUserAction('chief.todo.resolve', workId, {
+        workId,
+        todoId,
+        disposition,
+        ...(reason === undefined ? {} : { reason }),
+      });
+      this.services.store.events.append({
+        name: 'chief.todo_resolved',
+        entityId: work.id,
+        entityVersion: work.version,
+        data: {
+          workId,
+          todoId,
+          disposition,
+          ...(reason === undefined ? {} : { reason }),
+          actionId: action.id,
+        },
+      });
+      return {
+        status: 'applied',
+        entityId: todoId,
+        workId,
+        todoId,
+        disposition,
+        state: 'resolved',
+      };
+    });
+  }
+
   private respondPermission(
     params: JsonObject,
     options: { readonly expectedVersion?: number },

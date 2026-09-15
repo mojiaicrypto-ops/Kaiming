@@ -1292,6 +1292,101 @@ describe('inbox request cards (WP-12 T4c, AC-074)', () => {
   });
 });
 
+describe('inbox sensitive-file todo card (WP-12 W2, AC-074)', () => {
+  const todoItem: JsonObject = {
+    kind: 'todo',
+    id: 'w1:.env:.env*',
+    workId: 'w1',
+    runId: 'run-1',
+    role: 'backend',
+    todoKind: 'sensitive_file',
+    action: 'read',
+    path: '.env',
+    pattern: '.env*',
+    configPolicy: 'strict',
+    reason: '该文件在敏感文件表内，请你本人处理',
+    createdAt: '2026-09-11T00:00:00.000Z',
+    actionable: true,
+  };
+  const render = (items: readonly JsonValue[]): string =>
+    renderInboxPage({
+      model: inboxModel({ items: [...items], unread: items.length }),
+      projectId: 'proj-1',
+      t,
+    });
+
+  it('states what was refused, the file, the rule, the Work/Run and the user action', () => {
+    const html = render([todoItem]);
+    expect(html).toContain('data-entry="todo"');
+    expect(html).toContain('data-todo-kind="sensitive_file"');
+    expect(html).toContain('data-todo-action>read<');
+    expect(html).toContain('data-todo-path>.env<');
+    expect(html).toContain('data-todo-pattern>.env*<');
+    expect(html).toContain('data-todo-config-policy>strict<');
+    expect(html).toContain('data-todo-work>w1<');
+    expect(html).toContain('data-todo-run>run-1<');
+    expect(html).toContain('data-todo-raised-by>backend<');
+    expect(html).toContain('data-todo-raised-at>2026-09-11T00:00:00.000Z<');
+    // The documented user action is stated as its own sentence.
+    expect(html).toContain('data-i18n="inbox.todoHandling"');
+    expect(html).toContain('Handle this file yourself');
+    // The daemon's own sentence is a diagnostic title, never the visible instruction.
+    expect(html).toContain('title="该文件在敏感文件表内，请你本人处理"');
+    // Both closing actions are named controls carrying the todo id (`protocol.md` §4
+    // `chief.todo.resolve`); closing acknowledges the todo and authorizes nothing.
+    expect(html).toContain('data-todo-disposition="handled"');
+    expect(html).toContain('data-todo-disposition="dismissed"');
+    expect(html).toContain('data-todo="w1:.env:.env*"');
+    expect(html).toContain('data-i18n="inbox.todoReason"');
+    expect(html).toContain('data-todo-reason');
+    // The Work reference is carried back to the Chief, the documented next step.
+    const row = html.slice(html.indexOf('data-entry="todo"'));
+    expect(row).toContain('/projects/proj-1/chief#work-w1');
+    for (const key of usedKeys(html)) expect(UI_STRINGS[key], key).toBeDefined();
+  });
+
+  it('renders explicit "not reported" values instead of blank fields', () => {
+    const html = render([
+      { kind: 'todo', id: 't', workId: 'w1', todoKind: 'sensitive_file', actionable: true },
+    ]);
+    for (const field of ['action', 'path', 'pattern', 'config-policy', 'run', 'raised-by']) {
+      expect(html, field).toContain(`data-todo-${field}>Not reported by the daemon<`);
+    }
+    expect(html).toContain('data-todo-raised-at>Not reported by the daemon<');
+  });
+
+  it('degrades an unknown todo kind honestly', () => {
+    const html = render([
+      { kind: 'todo', id: 't2', workId: 'w2', todoKind: 'weird_kind', actionable: true },
+    ]);
+    expect(html).toContain('data-i18n="inbox.todo"');
+    expect(html).toContain('data-todo-kind>weird_kind<');
+    expect(html).toContain('data-i18n="inbox.todoOtherHint"');
+  });
+
+  it('names a todo with no reported kind instead of leaving the card blank', () => {
+    const html = render([{ kind: 'todo', id: 't3', workId: 'w3', actionable: true }]);
+    expect(html).toContain('data-todo-kind=""');
+    expect(html).toContain('kind not reported');
+    expect(html).toContain('data-i18n="inbox.todoOtherHint"');
+  });
+
+  it('never renders a secret, a secret ref or a refused file body in a todo card', () => {
+    const secret = 'sk-live-DO-NOT-LEAK-12345';
+    const html = render([
+      { ...todoItem, secret, secretRef: 'provider/p1', content: 'DB_PASSWORD=hunter2' },
+    ]);
+    expect(html).not.toContain(secret);
+    expect(html).not.toContain('secretRef');
+    expect(html).not.toContain('hunter2');
+  });
+
+  it('disables both closing actions when the row is not actionable', () => {
+    const html = render([{ ...todoItem, actionable: false }]);
+    expect(html.match(/data-todo-disposition="[a-z]+"[^>]*disabled/gu) ?? []).toHaveLength(2);
+  });
+});
+
 describe('runs page', () => {
   it('separates board work from direct/L1 work', () => {
     const model = runsModel([

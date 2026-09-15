@@ -303,8 +303,30 @@ export interface InboxBinding {
   readonly inputHash: string | null;
 }
 
+/**
+ * One user-facing `chief_action_required` todo (`protocol.md` §7).
+ *
+ * The permission phase files `kind='sensitive_file'` when the agent is refused a file
+ * on the frozen sensitive-file list; the user must handle that file themselves
+ * (`T3-implementation.md` 附录 A.1-3). Only refusal metadata crosses this boundary —
+ * `path`/`pattern`/`action` describe the attempt, and the file's content never existed
+ * in the event, so there is nothing here to leak (AC-073's "no secret" rule).
+ */
+export interface InboxTodo {
+  /** The daemon's todo kind; `sensitive_file` is the user-facing one today. */
+  readonly kind: string;
+  /** The refused operation (`read`/`search`/`edit`/`write`), or `null` if absent. */
+  readonly action: string | null;
+  readonly path: string | null;
+  readonly pattern: string | null;
+  /** The sensitive-file tier in force when the refusal happened. */
+  readonly configPolicy: string | null;
+  /** The daemon's own sentence. Rendered as a diagnostic title, never as the label. */
+  readonly reason: string | null;
+}
+
 export interface InboxRow {
-  readonly kind: 'decision' | 'finding' | 'recovery';
+  readonly kind: 'decision' | 'finding' | 'recovery' | 'todo';
   readonly id: string;
   readonly workId: string;
   readonly label: string;
@@ -321,8 +343,10 @@ export interface InboxRow {
   readonly runId: string | null;
   readonly createdAt: string | null;
   /** `product` decisions carry a question; `permission` decisions bind a tool call. */
-  readonly entry: 'decision' | 'permission' | 'finding' | 'recovery';
+  readonly entry: 'decision' | 'permission' | 'finding' | 'recovery' | 'todo';
   readonly decisionKind: string;
+  /** The `chief_action_required` payload, when this row is a user todo. */
+  readonly todo: InboxTodo | null;
   /** The decision's raw `targetRef.id`: an Artifact id, a tool operation id, … */
   readonly targetId: string;
   /** The `targetRef` Artifact a `product` decision points at (`protocol.md` §6). */
@@ -345,6 +369,7 @@ export interface InboxModel {
   readonly decisions: readonly InboxRow[];
   readonly findings: readonly InboxRow[];
   readonly recoveries: readonly InboxRow[];
+  readonly todos: readonly InboxRow[];
   readonly unread: number;
 }
 
@@ -380,6 +405,7 @@ export function questionKey(artifactId: string, artifactVersion: number): string
 export function inboxModel(raw: JsonObject, context: InboxContext = {}): InboxModel {
   const rows: InboxRow[] = [];
   const seenDecisions = new Set<string>();
+  const seenTodos = new Set<string>();
   const findings = new Map<string, InboxRow>();
   for (const item of asArray(field(raw, 'items'))) {
     const kind = asString(field(item, 'kind'));
@@ -444,6 +470,7 @@ export function inboxModel(raw: JsonObject, context: InboxContext = {}): InboxMo
               }
             : null,
         bindingMissing: permission && operation === '',
+        todo: null,
         role: run?.role ?? null,
         stage: run?.stage ?? null,
         runStatus: run?.status ?? null,
@@ -481,6 +508,7 @@ export function inboxModel(raw: JsonObject, context: InboxContext = {}): InboxMo
           question: null,
           binding: null,
           bindingMissing: false,
+          todo: null,
           role: null,
           stage: null,
           runStatus: null,
@@ -515,7 +543,60 @@ export function inboxModel(raw: JsonObject, context: InboxContext = {}): InboxMo
         question: null,
         binding: null,
         bindingMissing: false,
+        todo: null,
         role: null,
+        stage: null,
+        runStatus: null,
+      });
+    }
+    if (kind === 'todo') {
+      const workId = asString(field(item, 'workId'));
+      const runId = asOptionalString(field(item, 'runId'));
+      const todoKind = asString(field(item, 'todoKind'));
+      // Only fields the `chief_action_required` payload really carries are read; an
+      // absent field stays `null` so the card can say "not reported" instead of
+      // rendering a blank value (and an unknown todo kind is still distinguishable).
+      const todo: InboxTodo = {
+        kind: todoKind,
+        action: asOptionalString(field(item, 'action')),
+        path: asOptionalString(field(item, 'path')),
+        pattern: asOptionalString(field(item, 'pattern')),
+        configPolicy: asOptionalString(field(item, 'configPolicy')),
+        reason: asOptionalString(field(item, 'reason')),
+      };
+      const id = asString(field(item, 'id'), `${workId}:${todoKind}`);
+      const key = `todo:${id}`;
+      if (seenTodos.has(key)) continue;
+      seenTodos.add(key);
+      rows.push({
+        kind: 'todo',
+        id,
+        workId,
+        label: todoKind,
+        targetVersion: null,
+        choices: [],
+        state: 'pending',
+        count: 1,
+        severity: null,
+        internalRepair: false,
+        actionable: asBoolean(field(item, 'actionable'), true),
+        expired: false,
+        runId,
+        createdAt:
+          typeof field(item, 'createdAt') === 'string'
+            ? (field(item, 'createdAt') as string)
+            : null,
+        entry: 'todo',
+        decisionKind: '',
+        targetId: '',
+        artifactId: null,
+        artifactVersion: null,
+        targetHash: null,
+        question: null,
+        binding: null,
+        bindingMissing: false,
+        todo,
+        role: asOptionalString(field(item, 'role')),
         stage: null,
         runStatus: null,
       });
@@ -528,6 +609,7 @@ export function inboxModel(raw: JsonObject, context: InboxContext = {}): InboxMo
     decisions: all.filter((row) => row.kind === 'decision'),
     findings: findingRows,
     recoveries: all.filter((row) => row.kind === 'recovery'),
+    todos: all.filter((row) => row.kind === 'todo'),
     unread: asNumber(field(raw, 'unread'), all.filter((row) => row.actionable).length),
   };
 }

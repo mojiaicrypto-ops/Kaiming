@@ -46,6 +46,7 @@ export const BROWSER_AC_CHECK_NAMES = Object.freeze({
   'AC-052': 'browser.html-attack-samples',
   'AC-071': 'browser.live-layout',
   'AC-073': 'browser.keyboard-aria-i18n',
+  'AC-074': 'browser.inbox-todo-resolution',
   'AC-076': 'browser.attachment-client-hints',
 });
 
