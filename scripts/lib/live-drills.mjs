@@ -754,9 +754,10 @@ export async function runL1Drill({ harness, product }) {
 // ---------------------------------------------------------------------------
 
 export async function runL2Drill({ harness, product }) {
+  const { core } = product;
   const { store, gates, settlement, gitPort, config, transport } = harness;
-  const head = deliveryRevision(harness.repo);
-  ensure(head !== '', 'the delivery branch has no revision');
+  const branchSeed = deliveryRevision(harness.repo);
+  ensure(branchSeed !== '', 'the delivery branch has no revision');
 
   // 1. A real L2 Work through the real BFF: the named write target is the user's own
   //    authorization (`workflow.md` §1), and the router records the L2 level.
@@ -776,32 +777,85 @@ export async function runL2Drill({ harness, product }) {
     typeof work.authorizationRef === 'string' && work.authorizationRef.length > 0,
     'the delivery message recorded no authorization',
   );
-  store.works.update(work.id, { baseRevision: head }, work.version);
-
-  // The Requirement the L2 lane must bind. The projection is seeded directly, the way
-  // the e2e L2 drill binds its saved Requirement; the Requirement itself was exercised
-  // by `requirement.save-git` in that drill.
-  const requirementId = store.newId();
-  store.requirements.insert({
-    id: requirementId,
-    workId: work.id,
-    title: '未付款订单可取消',
-    goal: '未付款订单的取消返回可取消结果',
-    lifecycle: 'active',
-    phase: 'execute',
-    sourceRef: { kind: 'message', id: sent.messageId, version: '1' },
-    recordVersion: 1,
-    portableRef: {
-      path: `.agentdev/requirements/${requirementId}`,
-      revision: head,
-      hash: product.storage.sha256(requirementId),
+  // The Requirement the L2 lane must bind is **committed to the pool** through the real
+  // save path (`protocol.md` §8), the way the daemon's own assessment creates it: the
+  // harness now wires `requirementSaves` into the settlement exactly like production does,
+  // so a settlement of a projection whose `portableRef` names bytes that were never
+  // committed correctly refuses to publish a completion — and the drill must not depend on
+  // a hand-seeded row that no server could have produced (WP-12 W4c).
+  const saves = harness.requirementSaves;
+  ensure(saves !== undefined, 'the harness has no requirement save service');
+  const requirementDraftId = store.newId();
+  const savedRequirement = saves.save({
+    operationId: `live-l2-requirement:${work.id}`,
+    metadata: {
+      schemaVersion: 1,
+      id: requirementDraftId,
+      version: 1,
+      contentFile: 'content.md',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      title: '未付款订单可取消',
+      goal: '未付款订单的取消返回可取消结果',
+      scope: {
+        readPaths: [CODE_PATH],
+        writePaths: [CODE_PATH],
+        operations: ['read', 'edit'],
+        networkTargets: [],
+      },
+      lifecycle: 'active',
+      featureIds: [],
+      acceptance: [],
+      openQuestions: [],
+      confirmedDecisions: [],
+      relatedRequirementIds: [],
     },
-    executionAvailability: 'local',
-    evidenceAvailability: 'full',
+    contentMarkdown: [
+      `## ${core.REQUIREMENT_CONTENT_HEADINGS[0]}`,
+      '',
+      '未付款订单可取消。',
+      '',
+      `## ${core.REQUIREMENT_CONTENT_HEADINGS[1]}`,
+      '',
+      `- \`${CODE_PATH}\``,
+      '',
+      `## ${core.REQUIREMENT_CONTENT_HEADINGS[2]}`,
+      '',
+      core.REQUIREMENT_EMPTY_SECTION,
+      '',
+      `## ${core.REQUIREMENT_CONTENT_HEADINGS[3]}`,
+      '',
+      core.REQUIREMENT_EMPTY_SECTION,
+      '',
+      `## ${core.REQUIREMENT_CONTENT_HEADINGS[4]}`,
+      '',
+      core.REQUIREMENT_EMPTY_SECTION,
+      '',
+      `## ${core.REQUIREMENT_CONTENT_HEADINGS[5]}`,
+      '',
+      core.REQUIREMENT_EMPTY_SECTION,
+      '',
+    ].join('\n'),
+    expected: { expectedAbsent: true },
+    sourceRef: { kind: 'message', id: sent.messageId, version: '1' },
+    kind: 'create',
+    workId: work.id,
   });
+  ensure(
+    savedRequirement.ok === true,
+    `the L2 Requirement save failed: ${String(savedRequirement.code)}: ${String(savedRequirement.message)}`,
+  );
+  const requirementId = savedRequirement.requirementId;
+  // The Requirement's create commit moved the delivery ref, so the Plan/Develop/Test work
+  // starts from the revision that commit produced, not from the pre-Requirement seed.
+  const head = deliveryRevision(harness.repo);
+  ensure(
+    head !== branchSeed && head !== '',
+    `the Requirement create commit did not move the delivery branch (still ${head.slice(0, 12)})`,
+  );
   const boundWork = store.works.update(
     work.id,
-    { requirementId },
+    { baseRevision: head, requirementId },
     store.works.find(work.id)?.version ?? work.version,
   );
 
@@ -1663,11 +1717,26 @@ export async function runMessageToStageDrill({ harness, product }) {
   const { createPrepareRun } = await import('../../apps/daemon/src/prepare-run.ts');
   const { createControlHandlers } = await import('../../apps/daemon/src/control-handler.ts');
   const { createToolHandler } = await import('../../apps/daemon/src/tool-handler.ts');
+  const { projectPolicyHash } = await import('../../apps/daemon/src/context-ports.ts');
   const { markMessageProcessing, markMessageSettled } =
     await import('../../apps/daemon/src/message-state.ts');
   const { store } = harness;
 
   harness.controlLog = [];
+  let diagnosticWorkId = '';
+  // One per-Task worktree resolver for the whole stack: the tool handler resolves through it
+  // and the control handler releases the lease through it (`execution.ts` shares the port the
+  // same way in production).
+  const taskWorkspace = core.createTaskWorktreeWorkspaceResolver({
+    store,
+    git: harness.gitPort,
+    worktreeRoot: join(harness.worktreeDir, 'task-worktrees'),
+    repoRoot: harness.repo,
+    log: (line) => harness.controlLog.push(line),
+  });
+  // The drill drives the real BFF, so it needs a real session (`protocol.md` §2). The
+  // earlier drills happened to open one; a drill must not depend on another drill's session.
+  await openSession(harness);
   const execution = await core.createProjectExecution({
     store,
     config: harness.config,
@@ -1705,17 +1774,67 @@ export async function runMessageToStageDrill({ harness, product }) {
           planGate: new core.PlanGateService({ store: toolStore, artifacts: harness.artifacts }),
           secrets: harness.secrets,
           mode: 'host',
+          // Production roots every professional Run at its own per-Task worktree
+          // (`main.ts` W6 wiring). Without it the develop Run edits the *project* root and
+          // the candidate commit has no Task (the pre-W6 fallback), which also means the
+          // frozen manifest the Accept/Integrate step needs is never produced.
+          workspace: taskWorkspace,
           log: (line) => harness.controlLog.push(line),
         }),
     },
     control: {
-      attach: ({ orchestrator, stageGate, readLedgers }) =>
+      attach: ({ orchestrator, stageGate, readLedgers, environmentRefOf, releaseWorkspaceLease }) =>
         createControlHandlers({
           store,
           orchestrator,
           stageGate,
           readLedgers,
+          // The Attempt's real `environmentRef` (production wiring): the accepted develop
+          // result freezes it into the `VerificationManifest`, and without it the candidate
+          // is never committed — the route then sends Review to unfrozen source (WP-12 W4b).
+          ...(environmentRefOf === undefined ? {} : { environmentRefOf }),
+          releaseWorkspaceLease: releaseWorkspaceLease ?? ((input) => taskWorkspace.release(input)),
+          // `context.request` reads the Run's real worktree, not the project root.
+          workspace: taskWorkspace,
           requirementSaves: harness.requirementSaves,
+          // The Accepted stage result is where the documented L2/L3 route continues
+          // (`workflow.md` §3): the Planning Run's delivered Plan is what the real gate
+          // approves, and each later stage is queued by `protocol.continueDeliveryRoute`
+          // (WP-12 W4b). The drill uses the production port, not a private path.
+          routeContinuation: (input) => {
+            const continued = harness.protocol.continueDeliveryRoute(input);
+            harness.controlLog.push(
+              `drill: route continuation after ${input.completedRole}/${input.completedStage} → stage=${String(continued.stage)} run=${String(continued.runId)} reason=${String(continued.reason)}`,
+            );
+            return continued;
+          },
+          // The Settle stage's accepted result is the route's Accept/Integrate point
+          // (`workflow.md` §3/§7); the production instances are the same ones the harness
+          // built, so one integration lock guards the delivery ref (AC-012).
+          integrate: core.createIntegrateService({
+            store,
+            worktrees: harness.gitPort,
+            cas: harness.cas,
+            lock: harness.lock,
+            // The Plan gate decides which Tasks are the approved Plan's DAG.
+            planGate: harness.gates,
+            projectId: harness.projectId,
+            repoRoot: harness.repo,
+            worktreeRoot: join(harness.worktreeDir, 'integration-worktrees'),
+            snapshots: harness.snapshots,
+            log: (line) => harness.controlLog.push(line),
+          }),
+          settlement: harness.settlement,
+          // The per-Task candidate commit needs the real git port and the snapshot writer
+          // (`reliability.md` §4); without it no VerificationManifest exists and the
+          // integration fails closed.
+          worktrees: harness.gitPort,
+          snapshots: harness.snapshots,
+          worktreeRoot: join(harness.worktreeDir, 'task-worktrees'),
+          taskWorkspaceRoot: join(harness.worktreeDir, 'task-worktrees'),
+          repoRoot: harness.repo,
+          policyHash: projectPolicyHash(harness.config),
+          policyRevision: harness.config.versionOf('project'),
           log: (line) => harness.controlLog.push(line),
         }),
       onAttemptStarted: ({ runId }) => markMessageProcessing(store, runId),
@@ -1827,6 +1946,7 @@ export async function runMessageToStageDrill({ harness, product }) {
       attachmentIds: [],
     });
     const workId = sent.workId;
+    diagnosticWorkId = workId;
 
     const chiefRun = await waitFor(
       () => store.runs.list({ where: "work_id = ? AND role = 'chief'", params: [workId] }).at(-1),
@@ -2053,77 +2173,37 @@ export async function runMessageToStageDrill({ harness, product }) {
       `the Plan Run ${planRun.id} to settle before the user decides`,
     );
 
-    // The user's Plan gate. The Plan body is the planning stage's own delivered
-    // conclusion; the write path is the one the user's message named. `planVersion: 0` is
-    // the first Plan of the Work (`plan.current` reports no approved Plan yet).
-    const workRow = store.works.find(workId);
-    const planGoal = String(
-      planStage.summary ?? workRow?.goal ?? 'plan the requested change',
-    ).slice(0, 500);
-    const planDraft = {
-      goal: planGoal,
-      scope: {
-        readPaths: [CODE_PATH],
-        writePaths: [CODE_PATH],
-        operations: ['read', 'edit'],
-        networkTargets: [],
-      },
-      tasks: [
-        {
-          id: store.newId(),
-          role: 'backend',
-          goal: planGoal,
-          paths: [CODE_PATH],
-          dependsOn: [],
-          acceptanceIds: [],
-          checks: [],
-        },
-      ],
-      interfaceChanges: [],
-      dataChanges: [],
-      risks: [],
-      rollback: [],
-    };
-    const approval = await harness.rpc('plan.approve', {
-      workId,
-      planVersion: 0,
-      plan: planDraft,
-      approval: {
-        authorizationRef: String(workRow?.authorizationRef ?? ''),
-        runId: planRun.id,
-        productChanged: false,
-      },
-    });
-    if (approval.frame.ok !== true) {
-      harness.controlLog.push(
-        `drill: plan.approve refused with ${String(approval.frame.error?.code)}: ${String(approval.frame.error?.message)}`,
-      );
-    }
-    const queuedRunId =
-      approval.frame.ok === true ? (approval.frame.result?.['runId'] ?? null) : null;
-    harness.controlLog.push(
-      `drill: the user approved Plan v0 for Work ${workId}; Core queued develop Run ${String(queuedRunId)}`,
+    // ---- the user's Plan gate is no longer the drill's job ------------------------
+    //
+    // `workflow.md` §4 makes a Plan inside the Work's authority with no new product choice
+    // `AutoApproved`, and `docs/rules/agents.md` §1 makes the Planning Agent its author. The
+    // Plan document is therefore delivered by the real Planning Run as its own
+    // `artifact_write` artifact, and Core reads it back, validates it and submits it to the
+    // real Plan gate (`protocol.ts` `approveDeliveredPlan`). The drill used to construct the
+    // PlanDraft itself "as the user" — that was the recorded L2 gap, so the assertions below
+    // check the provenance of the approved Plan instead of fabricating one.
+    const approvedPlan = store.artifacts
+      .list({ where: 'work_id = ?', params: [workId] })
+      .filter((artifact) => artifact.kind === 'plan');
+    ensure(
+      approvedPlan.length >= 1,
+      `the Plan gate holds no approved Plan for Work ${workId}: the real Planning Run did not deliver one (artifacts: ${JSON.stringify(
+        store.artifacts.list({ where: 'work_id = ?', params: [workId] }).map((a) => a.kind),
+      )})`,
     );
-    let developRunId = queuedRunId;
-    if (developRunId === null) {
-      // `plan.approve` needs a live Chief parent; when the Chief Run ended first, the
-      // production recovery hook (`main.ts` `resumeApprovedPlan`) is what hands the
-      // approved Plan off. The drill calls the same method rather than inventing a path.
-      const resumed = harness.protocol.resumeApprovedPlan(workId);
-      harness.controlLog.push(
-        `drill: resumeApprovedPlan after approval → ${JSON.stringify(resumed)}`,
-      );
-      ensure(
-        typeof resumed.runId === 'string' && resumed.runId !== '',
-        `the L2 route stopped at the Plan gate: ${String(approval.frame.error?.message ?? 'no runId')}; resumeApprovedPlan=${JSON.stringify(resumed)}; route=${JSON.stringify(
-          professionalRuns().map((run) => `${run.role}/${run.stage}:${String(run.status)}`),
-        )}; chief=${String(store.runs.find(chiefRun.id)?.status)}; control log tail: ${harness.controlLog.join(' | ').slice(-1500)}`,
-      );
-      developRunId = resumed.runId;
-    }
+    ensure(
+      approvedPlan.some((artifact) => artifact.runId === planRun.id),
+      `no approved Plan artifact was produced by the Planning Run ${planRun.id} (producers: ${approvedPlan
+        .map((artifact) => String(artifact.runId))
+        .join(', ')})`,
+    );
+    chainRoles.push('plan-approved:auto');
+    harness.controlLog.push(
+      `drill: the real Plan gate approved ${approvedPlan.map((artifact) => `${artifact.id}@${String(artifact.artifactVersion)}`).join(', ')} without any user-constructed PlanDraft`,
+    );
 
     const developRun = await waitFor(
-      () => professionalRuns().find((run) => run.id === developRunId),
+      () => professionalRuns().find((run) => run.role === 'backend' || run.role === 'frontend'),
       'the develop Run the approved Plan queued',
     );
     // The route order itself: the Plan stage must precede the implementer.
@@ -2138,9 +2218,191 @@ export async function runMessageToStageDrill({ harness, product }) {
     );
     const developStage = await awaitSuccessfulStage(developRun);
     chainRoles.push(`${developRun.role}:${developStage.status}`);
+
+    // ---- the route continues by itself -------------------------------------------
+    //
+    // `workflow.md` §3: `Develop → Review → Test → Accept → Settle`, every stage in its own
+    // Run and triggered by Core once the previous stage's result reached it
+    // (`control-handler.ts` `continueRoute` → `protocol.continueDeliveryRoute`). The drill
+    // only *observes*: it approves nothing, queues nothing and dispatches nothing here.
+    const routeOutcomes = [
+      `planning:${planStage.status}`,
+      `develop(${developRun.role}):${developStage.status}`,
+    ];
+    const routeRuns = [developRun];
+    const expectNextStage = async (role, purpose, timeoutMs = 300_000) => {
+      const run = await waitFor(
+        () =>
+          professionalRuns().find(
+            (candidate) =>
+              candidate.role === role &&
+              candidate.purpose === purpose &&
+              !routeRuns.some((seen) => seen.id === candidate.id),
+          ),
+        `the ${role}/${purpose} Run the route queued after ${routeRuns.at(-1)?.role}`,
+        timeoutMs,
+      );
+      const stage = await awaitSuccessfulStage(run);
+      routeOutcomes.push(`${role}:${stage.status}`);
+      routeRuns.push(run);
+      return { run, stage };
+    };
+    await expectNextStage('review', 'review');
+    await expectNextStage('test', 'test');
+    await expectNextStage('settlement', 'settlement');
+
+    // Accept/Integrate + Settlement: the accepted Settle stage is the route's Accept point
+    // (`workflow.md` §3/§7), so the Requirement must reach `completed` with the final
+    // `CompletionManifest` bound to the delivery ref and the pool record committed.
+    const settleDeadline = Date.now() + 180_000;
+    while (
+      store.requirements.find(requirement.id)?.lifecycle !== 'completed' &&
+      Date.now() < settleDeadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    const completedRequirement = store.requirements.find(requirement.id);
+    ensure(
+      completedRequirement?.lifecycle === 'completed',
+      `the L2 route did not complete the Requirement: it is ${String(completedRequirement?.lifecycle)}/${String(completedRequirement?.phase)} recordVersion=${String(completedRequirement?.recordVersion)} portableRef=${JSON.stringify(completedRequirement?.portableRef ?? null)} work=${String(store.works.find(workId)?.status)}; settle ops=${JSON.stringify(
+        store.operations
+          .list({ where: 'work_id = ?', params: [workId] })
+          .filter(
+            (operation) => operation.kind === 'settle' || operation.kind === 'requirement_save',
+          )
+          .map(
+            (operation) =>
+              `${operation.kind}:${operation.state}:requirementCompleted=${String(operation.stepResults['requirementCompleted'])}:error=${JSON.stringify(operation.stepResults['requirementCompletionError'] ?? null)}`,
+          ),
+      )}; control log tail: ${harness.controlLog.join(' | ').slice(-1500)}`,
+    );
+    ensure(
+      typeof completedRequirement.portableRef?.revision === 'string' &&
+        completedRequirement.portableRef.revision !== '' &&
+        typeof completedRequirement.portableRef.hash === 'string' &&
+        completedRequirement.portableRef.hash.length === 64,
+      `the completed Requirement has no committed pool record: ${JSON.stringify(completedRequirement.portableRef)}`,
+    );
+    const settlementEvents = store.events
+      .readAfter(0, { limit: 20_000 })
+      .filter(
+        (event) =>
+          event.name === 'settlement.completed' &&
+          event.data !== null &&
+          typeof event.data === 'object' &&
+          event.data.workId === workId,
+      );
+    ensure(
+      settlementEvents.length >= 1,
+      `the Work has no settlement.completed event (Requirement ${String(completedRequirement.lifecycle)})`,
+    );
+    // `reliability.md` §4 step 8/9: every settlement of one Work installs one candidate, so a
+    // second `settlement.completed` (a legitimate retry of the same operation) must name the
+    // same delivered revision — two different revisions would mean two deliveries.
+    const settlementRevisions = [
+      ...new Set(settlementEvents.map((event) => String(event.data['revision'] ?? ''))),
+    ];
+    ensure(
+      settlementRevisions.length === 1,
+      `the settlement events name ${String(settlementRevisions.length)} different revisions: ${settlementRevisions.join(', ')}`,
+    );
+    // The event carries the manifest's **hash** (`protocol.md` §7: the event carries the
+    // reference and the full content is read by get); the drill reads the frozen
+    // `CompletionManifest` back and checks what it binds.
+    const completionManifestHash = String(settlementEvents.at(-1)?.data?.['manifestHash'] ?? '');
+    ensure(
+      /^[0-9a-f]{64}$/u.test(completionManifestHash),
+      `the settlement event carries no CompletionManifest hash: ${JSON.stringify(settlementEvents.at(-1)?.data ?? null)}`,
+    );
+    const completionManifest = core.readFrozenFinalManifest(store, completionManifestHash);
+    ensure(
+      completionManifest !== null,
+      `CompletionManifest ${completionManifestHash} does not read back`,
+    );
+    ensure(
+      completionManifest?.workId === workId && completionManifest?.requirementId === requirement.id,
+      `the CompletionManifest binds work=${String(completionManifest?.workId)} requirement=${String(completionManifest?.requirementId)}`,
+    );
+    ensure(
+      (completionManifest?.verifiedManifestIds ?? []).length >= 1,
+      'the CompletionManifest binds no verified Manifest',
+    );
+    ensure(
+      /^[0-9a-f]{64}$/u.test(String(completionManifest?.verifiedCodeTree)),
+      `the CompletionManifest carries no verified code tree: ${String(completionManifest?.verifiedCodeTree)}`,
+    );
+    // `protocol.md` §8 / `reliability.md` §9: the completed record must be **committed** to the
+    // pool (not flipped in SQLite alone), and "记录中的 codeRevision 使用已验证候选代码提交".
+    const committedPool = product.core.readRequirementPoolAtRevision({
+      git: harness.gitPort,
+      repoRoot: harness.repo,
+      revision: String(completedRequirement.portableRef.revision),
+    });
+    const committedRecord = committedPool.records.find((entry) => entry.id === requirement.id);
+    ensure(
+      committedRecord !== undefined,
+      `the completed Requirement record is not committed at ${String(completedRequirement.portableRef.revision)} (records: ${committedPool.records.map((entry) => entry.id).join(', ')})`,
+    );
+    const committedMetadata = JSON.parse(committedRecord.metadataJson);
+    ensure(
+      committedMetadata['lifecycle'] === 'completed',
+      `the committed pool record is ${String(committedMetadata['lifecycle'])}, not completed`,
+    );
+    const committedCompletion = committedMetadata['completion'];
+    ensure(
+      committedCompletion !== undefined && committedCompletion !== null,
+      'the committed pool record carries no completion',
+    );
+    ensure(
+      committedCompletion['codeRevision'] === completionManifest?.finalRevision &&
+        /^[0-9a-f]{64}$/u.test(String(committedCompletion['codeTree'])),
+      `the completion record names codeRevision ${String(committedCompletion['codeRevision']).slice(0, 12)}/codeTree ${String(committedCompletion['codeTree']).slice(0, 12)}, while the manifest binds ${String(completionManifest?.finalRevision).slice(0, 12)}`,
+    );
+    const deliveredWork = store.works.find(workId);
+    ensure(
+      deliveredWork?.status === 'completed',
+      `the Work is ${String(deliveredWork?.status)} after settlement`,
+    );
+    ensure(
+      deliveryRevision(harness.repo) === String(completedRequirement.portableRef.revision),
+      `the delivery ref ${deliveryRevision(harness.repo).slice(0, 12)} is not the completed Requirement revision ${String(completedRequirement.portableRef.revision).slice(0, 12)}`,
+    );
+    // Every stage ran in its own Run, with its own frozen configuration: the route is not a
+    // single Run replaying stages (AC-043's independence, on the real chain).
+    const independentStages = professionalRuns().filter(
+      (run) => run.id === planRun.id || routeRuns.some((seen) => seen.id === run.id),
+    );
+    const stageRunIds = new Set(independentStages.map((run) => run.id));
+    ensure(
+      stageRunIds.size === independentStages.length,
+      `two route stages shared a Run: ${independentStages.map((run) => `${run.role}/${run.stage}#${run.id}`).join(', ')}`,
+    );
+    // `workflow.md` §3 fixes the order Product?→Plan→Develop→Review→Test→Settle, and
+    // `context/acl.ts` `ROLE_STAGES` fixes the legal spelling per role: Planning acts at
+    // `planning` **or** `document` (both canonical), the implementer's develop stage is
+    // level-suffixed, and Review/Test/Settlement have exactly one spelling each. Asserting
+    // one literal Planning spelling made a real model's `planning/document` look like a
+    // routing failure when the route was in fact correct (WP-12 W4c).
+    const spellings = independentStages.map((run) => `${run.role}/${run.stage}`);
+    const roles = independentStages.map((run) => run.role);
+    ensure(
+      roles.slice(-4).join(' → ') === `${developRun.role} → review → test → settlement` &&
+        spellings.slice(-4).join(' → ') ===
+          `${developRun.role}/develop-${work.level} → review/review → test/test → settlement/settlement`,
+      `the documented route order/spelling was not observed: ${spellings.join(' → ')}`,
+    );
+    ensure(
+      roles.slice(0, -4).includes('planning') &&
+        roles.slice(0, -4).every((role) => role === 'planning' || role === 'product') &&
+        independentStages
+          .slice(0, -4)
+          .every(
+            (run) =>
+              run.stage === 'planning' || run.stage === 'document' || run.stage === 'product',
+          ),
+      `the Plan stage must run before Develop, in a canonical Planning spelling: ${spellings.join(' → ')}`,
+    );
     const stageResult = developStage;
-    const professional = developRun;
-    const stageOutcome = `stage.completed(${String(stageResult.status)})`;
     if (process.env['AGENTDEV_LIVE_DUMP'] === '1') {
       // The turn-by-turn story of a *passing* run matters as much as a failing one: whether the
       // one corrective prompt had to be delivered is only visible here (WP-12 R7).
@@ -2159,11 +2421,93 @@ export async function runMessageToStageDrill({ harness, product }) {
       JSON.stringify(board).includes(requirement.id),
       'the board does not show the Requirement the real message created',
     );
-    return `real Provider no-seed chain: message ${sent.messageId} → Chief Run ${chiefRun.id} (${String(store.runs.find(chiefRun.id)?.status)}) → Requirement ${requirement.id} (active/plan) → route ${chainRoles.join(' → ')} (developer Run ${professional.id} parent ${String(professional.parentRunId)}) → the user approved Plan v0 → stage result ${stageResult.id} + ${stageOutcome}; provider calls=${String(harness.transport.summary())}`;
+    return `real Provider one-message chain: message ${sent.messageId} → Chief Run ${chiefRun.id} (${String(store.runs.find(chiefRun.id)?.status)}) → Requirement ${requirement.id} (active/plan) → route ${chainRoles.join(' → ')} → auto-approved Plan ${approvedPlan.map((artifact) => `#${artifact.id.slice(0, 8)}`).join(',')} (producer ${planRun.id.slice(0, 8)}) → stage outcomes ${routeOutcomes.join(' → ')} → stages ${independentStages.map((entry) => `${entry.role}/${entry.stage}#${entry.id.slice(0, 8)}`).join(', ')} (each its own Run) → Requirement completed at ${String(completedRequirement.portableRef.revision).slice(0, 12)} (pool ${String(completedRequirement.portableRef.path)}, recordVersion ${String(completedRequirement.recordVersion)}) → CompletionManifest ${completionManifestHash.slice(0, 12)} → the develop stage result ${stageResult.id} completed; provider calls=${String(harness.transport.summary())}`;
   } finally {
     // A failed run's turn-by-turn story is the evidence the next fix needs, so the dump is
     // written on the way out either way (the success path already wrote it above).
     if (process.env['AGENTDEV_LIVE_DUMP'] === '1') {
+      try {
+        const { writeFileSync } = await import('node:fs');
+        // The route's own record: which Run delivered which stage, which Task each Run was
+        // bound to, and what the stage outcomes were. It is written on success *and* failure
+        // because "the chain stopped" is only answerable from this projection.
+        const runs = store.runs
+          .list({
+            where: 'work_id = ?',
+            params: [diagnosticWorkId],
+            orderBy: 'created_at ASC, id ASC',
+          })
+          .map(
+            (run) =>
+              `${run.role}/${run.stage} ${run.status} task=${String(run.taskId ?? '-')} parent=${String(run.parentRunId ?? '-').slice(0, 8)} run=${run.id}`,
+          );
+        writeFileSync(
+          join(process.cwd(), '.agentdev', 'work', 'WP-12', 'w4b-route-diagnostic.txt'),
+          [
+            `work: ${diagnosticWorkId}`,
+            `runs:`,
+            ...runs.map((line) => `  ${line}`),
+            `tasks: ${JSON.stringify(
+              store.tasks
+                .list({ where: 'work_id = ?', params: [diagnosticWorkId] })
+                .map(
+                  (task) =>
+                    `${task.role}:planRef=${task.planRef.id.slice(0, 8)}@${String(task.planRef.version)}:latestManifest=${String(task.latestManifestId ?? '-')}`,
+                ),
+            )}`,
+            `manifests: ${JSON.stringify(
+              store.tasks.list({ where: 'work_id = ?', params: [diagnosticWorkId] }).map((task) => {
+                if (task.latestManifestId === undefined) {
+                  return `${task.role}: none`;
+                }
+                try {
+                  const frozen = core.readFrozenVerificationManifest(store, task.latestManifestId);
+                  return `${task.role}: ${String(frozen?.codeTree)} rev=${String(frozen?.codeRevision?.slice(0, 12))}`;
+                } catch (error) {
+                  return `${task.role}: unreadable ${String(error)}`;
+                }
+              }),
+            )}`,
+            // The Accept/Integrate rows: `candidateRevision`/`codeTree` are what the
+            // settlement refuses against when no `VerificationManifest` was frozen, so they
+            // belong in the forensic record next to the Tasks' frozen manifests.
+            `integrations: ${JSON.stringify(
+              store.operations
+                .list({ where: 'work_id = ?', params: [diagnosticWorkId] })
+                .filter((operation) => operation.kind === 'integrate')
+                .map(
+                  (operation) =>
+                    `${operation.state} target=${String(operation.expectedHead).slice(0, 12)} candidate=${String(operation.candidateRevision).slice(0, 12)} codeTree=${String(operation.stepResults['codeTree']).slice(0, 12)} verificationManifest=${String(operation.stepResults['verificationManifestId'])} applied=${JSON.stringify(operation.stepResults['appliedTaskIds'])} skipped=${JSON.stringify(operation.stepResults['skippedTaskIds'])}`,
+                ),
+            )}`,
+            `requirements: ${JSON.stringify(
+              store.requirements
+                .list({ where: 'work_id = ?', params: [diagnosticWorkId] })
+                .map(
+                  (requirement) =>
+                    `${requirement.id} ${requirement.lifecycle}/${String(requirement.phase)} rv=${String(requirement.recordVersion)} rev=${String(requirement.portableRef?.revision).slice(0, 12)} final=${String(requirement.finalManifestId)}`,
+                ),
+            )}`,
+            // The pool-save rows carry their own `requirementId` but no `workId` (the save
+            // path is requirement-scoped, `protocol.md` §8), so this lists them unfiltered.
+            `requirement saves: ${JSON.stringify(
+              store.operations
+                .list()
+                .filter((operation) => operation.kind === 'requirement_save')
+                .map(
+                  (operation) =>
+                    `${operation.state} head=${String(operation.expectedHead).slice(0, 12)} candidate=${String(operation.candidateRevision).slice(0, 12)} rv=${String(operation.stepResults['recordVersion'])} updated=${String(operation.stepResults['refUpdated'])}`,
+                ),
+            )}`,
+            `continuations:`,
+            ...harness.controlLog
+              .filter((line) => line.includes('route continuation'))
+              .map((line) => `  ${line}`),
+          ].join('\n'),
+        );
+      } catch {
+        // A diagnostic that cannot be written must not mask the drill's real result.
+      }
       try {
         writeFileAt(
           process.cwd(),

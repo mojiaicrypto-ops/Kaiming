@@ -1337,9 +1337,17 @@ export class PlanGateService {
     if (requirement === undefined) {
       fail('NOT_FOUND', `Requirement ${requirementId} does not exist`, { requirementId });
     }
+    // `data.md` §3: "PortableRequirement.version 映射为 requirement.recordVersion；本机行
+    // version 独立用于协议 expectedVersion". `recordVersion` is therefore the **committed**
+    // pool record's version, and it may only change together with a published
+    // `requirement.json`/`content.md` pair — the next pool save's Git precondition is exactly
+    // `expected.recordVersion = <committed version>`. Bumping it here (the link is a local
+    // projection write: the row's own `version` already advances) made the settlement's
+    // completion save fail its precondition, so the L2 route finished the Work while the
+    // Requirement stayed `active` with no committed completion (WP-12 W4c).
     const updated = this.store.requirements.update(
       requirement.id,
-      { planRef, recordVersion: requirement.recordVersion + 1, phase: 'plan' },
+      { planRef, phase: 'plan' },
       requirement.version,
     );
     this.store.events.append({

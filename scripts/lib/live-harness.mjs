@@ -137,6 +137,12 @@ export async function bootLiveStack({ product, provider, transport, meta }) {
   const repo = makeTempDir('agentdev-live-repo-');
   const dataDir = makeTempDir('agentdev-live-state-');
   const stateDir = makeTempDir('agentdev-live-auth-');
+  // The per-Task worktrees live **outside** the state directory, exactly like production
+  // (`main.ts`: `join(home, 'task-worktrees', projectId)`, while the state directory is
+  // `~/.agentdev/projects/<id>/data`). `Broker.deriveProtectedPaths` protects the state
+  // directory structurally (`W7R1-04`), so a worktree placed inside it is refused as
+  // "inside protected root" — the harness must mirror the production layout, not fight it.
+  const worktreeDir = makeTempDir('agentdev-live-worktrees-');
   const gitPort = workspace.createNodeWorktreeGitPort();
 
   // 1. A real project: code, a presentation-only copy file (the L1 drill's target) and
@@ -359,14 +365,12 @@ export async function bootLiveStack({ product, provider, transport, meta }) {
   const casEvents = workspace.createMemoryCasEvents();
   const cas = workspace.createCasService({ git: gitPort, journal, events: casEvents });
   const lock = new core.ProjectIntegrationLock({ projectId, leases: store.leases });
-  const settlement = new core.SettlementService({
-    store,
-    worktrees: gitPort,
-    cas,
-    journal,
-    events: casEvents,
-    snapshots,
-  });
+  // The requirement-pool save path is built **before** the settlement because the settlement
+  // takes it as a dependency: production does the same (`bootstrap.ts` passes
+  // `requirementSaves` into `SettlementService`), and without it a settled completion flipped
+  // the SQLite projection alone — `protocol.md` §8 / `reliability.md` §9 require the completed
+  // record to be committed to the pool, so the L2 route reported `Work completed` while the
+  // committed record stayed `active` with no completion (WP-12 W4c).
   const requirementSaves = core.createRequirementSaveService({
     store,
     worktrees: gitPort,
@@ -376,6 +380,20 @@ export async function bootLiveStack({ product, provider, transport, meta }) {
     lock,
     worktreeRoot: join(dataDir, 'save-worktrees'),
     keepWorktree: false,
+  });
+  const settlement = new core.SettlementService({
+    store,
+    // The Plan gate scopes settlement to the approved Plan's Tasks (WP-12 W4b).
+    planGate: gates,
+    worktrees: gitPort,
+    cas,
+    journal,
+    events: casEvents,
+    snapshots,
+    // The same integration lock and pool save path production uses (`AC-091`, `protocol.md`
+    // §8): the completion commit and the code delivery share one mutex.
+    lock,
+    requirementSaves,
   });
   const protocol = new daemonProtocol.WorkbenchProtocol({
     store,
@@ -573,6 +591,8 @@ export async function bootLiveStack({ product, provider, transport, meta }) {
     settlement,
     cas,
     gitPort,
+    lock,
+    journal,
     protocol,
     daemonServer,
     app,
@@ -608,7 +628,8 @@ export async function bootLiveStack({ product, provider, transport, meta }) {
       await new Promise((resolve) => daemonServer.close(() => resolve()));
       store.close();
     },
-    roots: [repo, dataDir, stateDir],
+    worktreeDir,
+    roots: [repo, dataDir, stateDir, worktreeDir],
   };
 
   harness.login = async (token = installationToken, origin = WEB_ORIGIN) =>

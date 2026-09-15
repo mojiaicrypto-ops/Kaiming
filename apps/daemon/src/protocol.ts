@@ -57,6 +57,11 @@ import {
   isValidSecretRef,
   createNodeBackupGitPort,
   defaultBaseRevisionReader,
+  assertPlanWithinAuthority,
+  deliveryRoute,
+  developStageFor,
+  nextDeliveryStage,
+  parseDeliveredPlanDocument,
   readRequirementPoolAtRevision,
   RequirementProjection,
   REQUIREMENT_CONTENT_FILE_NAME,
@@ -93,7 +98,13 @@ import {
   type SecretRepository,
   type SecretStore,
 } from '@agentdev/core';
-import { withTransaction, type BlobStore, type Event, type ProjectStore } from '@agentdev/storage';
+import {
+  uuidv7,
+  withTransaction,
+  type BlobStore,
+  type Event,
+  type ProjectStore,
+} from '@agentdev/storage';
 import { createNodeWorktreeGitPort } from '@agentdev/workspace';
 import type { ProjectDirectoryPort, ProjectEntry } from '@agentdev/web';
 
@@ -118,6 +129,43 @@ const INSTALLATION_SUBJECT = 'installation:local';
  * Chief dispatches (`rules/agents.md` §6).
  */
 const CHIEF_ASSESSMENT_TOKENS = 32_000;
+
+/**
+ * The Chief hold for a *coordinating* Run (`workflow.md` §3 L2/L3 route).
+ *
+ * A delivery Chief Run parents every stage of the route, and `orchestrator.effectiveBudget`
+ * caps each child by the parent's *unallocated* hold (`allocated + requested <=
+ * parent.budgetAllocation`). A one-turn 32k hold stopped an L2 delivery at its first stage;
+ * reserving the whole Work (`available`) was the opposite mistake. This value funds a Plan,
+ * a Develop, an independent Review, a Test and a Settlement Run in sequence, while the Work's
+ * own `LIMITS.workInputOutputTokens` stays the authority and each stage's own request stays a
+ * request (`STAGE_ROUTE_TOKENS`).
+ */
+const CHIEF_ROUTE_TOKENS = 120_000;
+
+/**
+ * What one continuation stage Run asks the Chief hold for (`protocol.continueDeliveryRoute`).
+ *
+ * Small enough that several stages can be reserved inside `CHIEF_ROUTE_TOKENS` while a
+ * sibling is still live, large enough for a real planning/develop/review/test/settlement
+ * turn. A stage the *Chief itself* dispatches keeps the model's own number: this is the
+ * Core-queued continuation's request, not a new cap on the Chief.
+ */
+const STAGE_ROUTE_TOKENS = 20_000;
+
+/**
+ * Run statuses that are terminal (`workflow.md` §5.3).
+ *
+ * Restated here because the protocol layer only needs "is this Run still live" for the route
+ * projection, and importing the whole lifecycle service for one predicate would hide that.
+ */
+const TERMINAL_RUN_STATUSES: readonly string[] = [
+  'completed',
+  'failed',
+  'cancelled',
+  'timed_out',
+  'contract_violation',
+];
 
 /** Everything the protocol layer reads or writes; all of it is real Core. */
 export interface WorkbenchServices {
@@ -3490,7 +3538,16 @@ export class WorkbenchProtocol {
           },
           profileRevision: orchestrator.currentProfileRevision('chief'),
           requiredOutputs: ['assessment.submit'],
-          budgetAllocation: Math.min(CHIEF_ASSESSMENT_TOKENS, available),
+          // A coordinating Chief Run is the parent of the whole delivery route, and
+          // `orchestrator.effectiveBudget` caps every stage Run by this Run's *unallocated*
+          // hold (`allocated + requested <= parent.budgetAllocation`). Its hold is therefore
+          // the route envelope (`CHIEF_ROUTE_TOKENS`) rather than a one-turn slice, while the
+          // Work's own budget stays the authority; an assist/artifact Chief keeps the
+          // one-turn slice.
+          budgetAllocation: Math.min(
+            coordinating ? CHIEF_ROUTE_TOKENS : CHIEF_ASSESSMENT_TOKENS,
+            available,
+          ),
         },
       });
       return run.id;
@@ -5375,37 +5432,75 @@ export class WorkbenchProtocol {
     readonly planRef: { readonly id: string; readonly version: number; readonly hash: string };
   }): Map<string, string> {
     const store = this.services.store;
-    const existing = store.tasks.list({ where: 'work_id = ?', params: [input.workId] });
-    const already = existing.filter(
-      (row) => row.planRef.id === input.planRef.id && row.planRef.version === input.planRef.version,
-    );
-    if (already.length > 0) {
-      return new Map(
-        input.plan.tasks
-          .map((task) => {
-            const match = already.find(
-              (row) =>
-                row.role === task.role && row.acceptanceIds.join() === task.acceptanceIds.join(),
-            );
-            return match === undefined ? undefined : ([task.id, match.id] as const);
-          })
-          .filter((entry): entry is readonly [string, string] => entry !== undefined),
-      );
-    }
-    const ids = new Map(input.plan.tasks.map((task) => [task.id, store.newId()] as const));
     const planRef = {
       id: input.planRef.id,
       version: input.planRef.version,
       hash: input.planRef.hash,
     };
+    const describe = (task: {
+      readonly role: string;
+      readonly acceptanceIds: readonly string[];
+      readonly paths?: readonly string[];
+    }): string => `${task.role}\u0000${[...task.acceptanceIds].sort().join(',')}`;
+    const existing = store.tasks.list({ where: 'work_id = ?', params: [input.workId] });
+    // A Task this Plan already materialised names the approved Plan; anything else is either
+    // the pre-Plan Task a route stage needed (`orchestrator.ensureStageTask`) or a Task of an
+    // earlier Plan version, and is reused by (role, acceptance mapping) instead of being
+    // duplicated — a duplicate would leave two Tasks for one role, and the later stages
+    // would pick the one whose worktree never received the delivery (WP-12 W4b).
+    const byPlanRef = existing.filter(
+      (row) => row.planRef.id === planRef.id && row.planRef.version === planRef.version,
+    );
+    const reused = new Set<string>();
+    const available = existing.filter((row) => !byPlanRef.includes(row));
+    const ids = new Map<string, string>();
     for (const task of input.plan.tasks) {
       if (task.role === 'chief') continue;
-      const taskId = ids.get(task.id);
-      if (taskId === undefined) continue;
+      const already = byPlanRef.find((row) => describe(row) === describe(task));
+      if (already !== undefined) {
+        ids.set(task.id, already.id);
+        reused.add(already.id);
+        continue;
+      }
+      const candidate =
+        available.find(
+          (row) =>
+            !reused.has(row.id) &&
+            row.role === task.role &&
+            row.acceptanceIds.join(',') === [...task.acceptanceIds].join(','),
+        ) ?? available.find((row) => !reused.has(row.id) && row.role === task.role);
+      if (candidate !== undefined) {
+        reused.add(candidate.id);
+        ids.set(task.id, candidate.id);
+        // The Task the route already used becomes the Plan's Task: same row, so the worktree
+        // and the candidate the develop Run froze stay addressable by the later stages.
+        store.tasks.update(
+          candidate.id,
+          {
+            planRef,
+            scope: {
+              readPaths: [...new Set([...input.plan.scope.readPaths, ...task.paths])],
+              writePaths: [...task.paths],
+              operations: [],
+              networkTargets: [],
+            },
+            acceptanceIds: [...task.acceptanceIds],
+          },
+          candidate.version,
+        );
+        continue;
+      }
+      const taskId = store.newId();
+      ids.set(task.id, taskId);
       store.tasks.insert({
         id: taskId,
         projectId: this.projectId,
         workId: input.workId,
+        // `data.md` §2 `task.requirementId`: a Task of a Work that has a Requirement carries
+        // it, like `orchestrator.ensureStageTask` already does.
+        ...(this.services.store.works.find(input.workId)?.requirementId === undefined
+          ? {}
+          : { requirementId: this.services.store.works.find(input.workId)?.requirementId }),
         planRef,
         role: task.role,
         dependsOn: task.dependsOn
@@ -5583,6 +5678,433 @@ export class WorkbenchProtocol {
   }
 
   /**
+   * The Plan gate's approval of the Plan a Planning Run *delivered* (WP-12 W4b).
+   *
+   * `workflow.md` §4 makes a Plan inside the effective authorization with no new product
+   * choice `AutoApproved`; `docs/rules/agents.md` §1 makes the Planning Agent the author of
+   * the Plan and `protocol.md` §6 makes the Run's delivered `artifactRefs` the transport
+   * for its content (a `stage.submit` payload has no Plan field, by construction). This
+   * method is the missing half of that contract: it reads the delivered Plan document,
+   * validates it, asks the **Gate** to approve it (so `evaluatePlanApproval` — not this
+   * code — decides auto-approval vs. `DecisionRequired`), and hands the approved Plan to
+   * the same `queueApprovedRun` the user-facing approval uses. Nothing is approved here
+   * that the Gate would refuse for a user-supplied draft.
+   *
+   * @returns the queued develop Run and the Plan artifact that carried the document.
+   */
+  approveDeliveredPlan(input: {
+    readonly workId: string;
+    readonly runId: string;
+    readonly artifactRefs: readonly { readonly id: string; readonly version: number }[];
+  }): {
+    readonly runId: string | null;
+    readonly planRef: Ref | null;
+    readonly reason: string | null;
+  } {
+    const gates = this.services.gates;
+    if (gates === undefined) return { runId: null, planRef: null, reason: 'no Plan gate' };
+    const store = this.services.store;
+    const work = store.works.find(input.workId);
+    if (work === undefined) return { runId: null, planRef: null, reason: 'no such Work' };
+    const approval = gates.getCurrentPlanApproval(
+      input.workId,
+      work.baseRevision ?? 'working-tree',
+    );
+    if (approval.current !== undefined) {
+      // The Gate already approved a Plan for this revision (a replay, or a user who
+      // approved a card first): the route continues from that record instead of approving
+      // a second one.
+      const queued = this.queueApprovedRun({
+        workId: input.workId,
+        plan: this.readPlanBody(input.workId, approval.current.planRef.id) as unknown as PlanDraft,
+        authorizationRef: approval.current.approval.authorizationRef ?? '',
+        planRef: approval.current.planRef,
+      });
+      return { runId: queued.runId, planRef: approval.current.planRef, reason: queued.reason };
+    }
+    const artifact = input.artifactRefs
+      .map((ref) => store.artifacts.find(ref.id))
+      .find(
+        (row) =>
+          row !== undefined &&
+          row.workId === input.workId &&
+          row.mime.includes('json') &&
+          row.runId === input.runId,
+      );
+    if (artifact === undefined) {
+      return {
+        runId: null,
+        planRef: null,
+        reason:
+          'the Plan stage delivered no JSON artifact of its own; a Plan must arrive as the Run’s artifact (docs/rules/agents.md §1, workflow.md §4)',
+      };
+    }
+    const document = parseDeliveredPlanDocument(this.services.artifacts.read(artifact));
+    if (document === null) {
+      return {
+        runId: null,
+        planRef: null,
+        reason: `artifact ${artifact.id} is not a Plan document (workflow.md §4 requires goal, scope and a task DAG)`,
+      };
+    }
+    const authorizationRef = work.authorizationRef ?? '';
+    const authorization = store.authorizations.find(authorizationRef);
+    if (authorization === undefined) {
+      return { runId: null, planRef: null, reason: 'the Work records no readable authorization' };
+    }
+    try {
+      assertPlanWithinAuthority({
+        plan: document,
+        writePaths: authorization.scope.writePaths,
+        operations: authorization.operations,
+      });
+    } catch (error) {
+      return {
+        runId: null,
+        planRef: null,
+        reason: `the delivered Plan is not authorized: ${errorText(error)}`,
+      };
+    }
+    const draft: PlanDraft = {
+      goal: document.goal.slice(0, 2_000),
+      scope: {
+        readPaths: [...document.scope.readPaths],
+        writePaths: [...document.scope.writePaths],
+        operations: [...document.scope.operations],
+        networkTargets: [...document.scope.networkTargets],
+      },
+      tasks: document.tasks.map((task) => ({
+        // `PlanTask.id` is an `idSchema`, i.e. a lowercase UUIDv7, so the Plan the delivered
+        // document becomes must name its tasks the same way Core does (`data.md` §1). A
+        // synthetic `…-task-1` id read back as "not a valid Plan" and blocked the first
+        // write of the develop Run (WP-12 W4b).
+        id: uuidv7(),
+        role: task.role as PlanDraft['tasks'][number]['role'],
+        goal: task.goal.slice(0, 2_000),
+        paths: [...task.paths],
+        dependsOn: [],
+        acceptanceIds: [...task.acceptanceIds],
+        checks: [...task.checks],
+      })),
+      // `Plan` requires non-empty entries when a list is present (`planSchema`:
+      // `list(z.string().min(1))` and `normalizePlan` defaults the absent case to `[]`), so
+      // an empty list is *omitted* rather than sent — exactly what `parsePlanDraft` does for
+      // the user-facing draft.
+      ...(document.interfaceChanges === undefined || document.interfaceChanges.length === 0
+        ? {}
+        : { interfaceChanges: [...document.interfaceChanges] }),
+      ...(document.dataChanges === undefined || document.dataChanges.length === 0
+        ? {}
+        : { dataChanges: [...document.dataChanges] }),
+      ...(document.risks === undefined || document.risks.length === 0
+        ? {}
+        : { risks: [...document.risks] }),
+      ...(document.rollback === undefined || document.rollback.length === 0
+        ? {}
+        : { rollback: [...document.rollback] }),
+    };
+    // `productChanged` is the *user's* semantic decision, not something this path may
+    // claim: a Plan that needs a new product choice must be refused as `DecisionRequired`
+    // by the Gate and surface as a card. `false` here is therefore the honest declaration
+    // "the Plan implements what the user's message authorized", and the Gate still refuses
+    // it if the scope leaves the authorization (W4b).
+    const result = gates.submitPlan({
+      workId: input.workId,
+      revision: work.baseRevision ?? 'working-tree',
+      plan: draft,
+      ...(work.requirementId === undefined ? {} : { requirementId: work.requirementId }),
+      approval: {
+        authorizationRef,
+        runId: input.runId,
+        productChanged: false,
+        at: store.now(),
+      },
+    });
+    if (!result.approved) {
+      return {
+        runId: null,
+        planRef: null,
+        reason: `${result.code}: ${result.message}${result.decisionRequired ? ' (a product Decision is required)' : ''}`,
+      };
+    }
+    const queued = this.queueApprovedRun({
+      workId: input.workId,
+      plan: draft,
+      authorizationRef,
+      planRef: result.planRef,
+    });
+    return { runId: queued.runId, planRef: result.planRef, reason: queued.reason };
+  }
+
+  /**
+   * Advances the documented L2/L3 route after one stage delivered (WP-12 W4b).
+   *
+   * The daemon calls this from the accepted `stage.submit` of a route stage
+   * (`control-handler.ts`). `workflow.md` §3 fixes the order `Plan → Develop → Review →
+   * Test → Accept → Settle` and `docs/rules/agents.md` §4 makes the Chief trigger the next
+   * professional Run once a result reaches Core; `product-completion-plan.md` 判据③ makes
+   * that continuation the difference between "a stage succeeded" and "one sentence reaches
+   * a delivered Requirement". So this is deliberately **one** place that reads the route
+   * from real records (`deliveryRoute`), refuses to queue what the Gate has not authorized,
+   * and reuses `queueApprovedRun` for every stage — no drill-specific path exists.
+   */
+  continueDeliveryRoute(input: {
+    readonly workId: string;
+    readonly runId: string;
+    readonly completedRole: string;
+    readonly completedStage: string;
+    readonly artifactRefs?: readonly { readonly id: string; readonly version: number }[];
+  }): {
+    readonly runId: string | null;
+    readonly stage: string | null;
+    readonly reason: string | null;
+  } {
+    const store = this.services.store;
+    const gates = this.services.gates;
+    const work = store.works.find(input.workId);
+    if (work === undefined) return { runId: null, stage: null, reason: 'no such Work' };
+    if (gates === undefined) return { runId: null, stage: null, reason: 'no Plan gate' };
+    // The Plan stage is the one stage whose *delivery* is the approval: the Planning Run's
+    // Plan document is read back, validated and submitted to the real gate (AC-014's
+    // auto-approval included), which then queues the develop Run. Doing it here, before the
+    // route projection is read, is what makes the projection see `Plan delivered` and move
+    // on to Develop.
+    //
+    // The stage spelling is not the signal: `planning/planning` and `planning/document` are
+    // both canonical Planning stages (`context/acl.ts` ROLE_STAGES), and a real model picks
+    // either. What matters is that the Work has no approved Plan yet, so the delivered Plan
+    // document is read back then.
+    const approvedBefore = gates.getCurrentPlanApproval(
+      input.workId,
+      work.baseRevision ?? 'working-tree',
+    );
+    if (input.completedRole === 'planning' && approvedBefore.current === undefined) {
+      const approval = this.approveDeliveredPlan({
+        workId: input.workId,
+        runId: input.runId,
+        artifactRefs: input.artifactRefs ?? [],
+      });
+      if (approval.runId === null) {
+        return { runId: null, stage: 'Plan', reason: approval.reason };
+      }
+      return { runId: approval.runId, stage: 'Develop', reason: null };
+    }
+    const approval = gates.getCurrentPlanApproval(
+      input.workId,
+      work.baseRevision ?? 'working-tree',
+    );
+    const route = deliveryRoute({
+      store,
+      work,
+      planApproved: approval.status === 'approved' && approval.current !== undefined,
+    });
+    const next = nextDeliveryStage(route);
+    if (next === undefined) {
+      return { runId: null, stage: null, reason: null };
+    }
+    // The Develop stage is queued by the Plan approval itself (`plan.approve` / the
+    // delivered-Plan path), so the route only *observes* it here; when the develop Run is
+    // already queued and still running this is a no-op rather than a duplicate.
+    if (next.stage === 'Develop') {
+      const alreadyRunning = store.runs
+        .list({ where: 'work_id = ?', params: [input.workId] })
+        .some(
+          (run) =>
+            run.role === next.role &&
+            (run.stage === developStageFor(work.level) ||
+              run.stage === 'develop' ||
+              run.stage.startsWith('develop-')),
+        );
+      if (alreadyRunning) return { runId: null, stage: 'Develop', reason: null };
+    }
+    if (next.stage === 'Plan') {
+      return {
+        runId: null,
+        stage: 'Plan',
+        reason: 'the Work has no approved Plan yet; the planning Run must deliver one first',
+      };
+    }
+    const current = approval.current;
+    if (current === undefined) {
+      return {
+        runId: null,
+        stage: next.stage,
+        reason: 'the route cannot advance without an approved Plan',
+      };
+    }
+    const plan = this.readPlanBody(input.workId, current.planRef.id) as unknown as PlanDraft;
+    if (plan === null || plan === undefined) {
+      return { runId: null, stage: next.stage, reason: 'the approved Plan body is unreadable' };
+    }
+    // A stage the Chief already dispatched (it is awake and follows the same route) must not
+    // be queued a second time: two live Runs for one stage are two deliveries of the same
+    // step, and the second one can settle the Work again after the first completed it.
+    // `workflow.md` §3 makes the route the *same* sequence for both triggers, so one live Run
+    // per role is the invariant this projection can enforce.
+    const liveForRole = store.runs
+      .list({ where: 'work_id = ?', params: [input.workId] })
+      .some((run) => run.role === next.role && !TERMINAL_RUN_STATUSES.includes(run.status));
+    if (liveForRole) {
+      return { runId: null, stage: next.stage, reason: null };
+    }
+    if (next.stage !== 'Develop') {
+      if (next.role !== 'review' && next.role !== 'test' && next.role !== 'settlement') {
+        return {
+          runId: null,
+          stage: next.stage,
+          reason: `the route stage ${next.stage} has no professional role this path may queue (${next.role})`,
+        };
+      }
+      const queued = this.queueRouteStage({
+        workId: input.workId,
+        plan,
+        planRef: current.planRef,
+        authorizationRef: current.approval.authorizationRef ?? '',
+        role: next.role,
+        purpose: next.purpose,
+        runStage: next.runStage,
+        goal: `${next.stage} the delivery for Work ${input.workId}: ${plan.goal}`.slice(0, 2_000),
+        // The verification stages inspect the very Task the approved Plan tasked: the
+        // develop Run froze its candidate in **that** Task's worktree
+        // (`task-workspace.ts`), so Review/Test must bind to the same Task or they read a
+        // different tree and honestly report that the change never landed (WP-12 W4b).
+        ...(this.planTaskId(input.workId) === undefined
+          ? {}
+          : { taskId: this.planTaskId(input.workId) as string }),
+      });
+      return { runId: queued.runId, stage: next.stage, reason: queued.reason };
+    }
+    const queued = this.queueApprovedRun({
+      workId: input.workId,
+      plan,
+      authorizationRef: current.approval.authorizationRef ?? '',
+      planRef: current.planRef,
+    });
+    return { runId: queued.runId, stage: 'Develop', reason: queued.reason };
+  }
+
+  /**
+   * Queues one continuation stage of an approved Plan's route (Review/Test/Settle).
+   *
+   * It shares `queueApprovedRun`'s shape — Core-owned `profileRevision`, budget injected by
+   * the orchestrator, the approved Plan pinned in the context selection — and binds the
+   * Run to the Plan's own Task so the verification roles read the same frozen candidate the
+   * developer produced (`reliability.md` §4). The write envelope stays the Plan's; the
+   * verification roles hold no file-write Grant by construction (`agents.md` §1).
+   */
+  /**
+   * The Task the approved Plan materialised, which the route's Runs bind to.
+   *
+   * `plan.approve` writes the Plan's Task DAG with the approved `planRef`
+   * (`materializePlanTasks`), while a pre-Plan stage's Task carries the placeholder
+   * `planRef` `orchestrator.ensureStageTask` records (`version: 1`, a non-Plan hash). The
+   * graded `planRef.version` of the real Plan is 1 too, so the discriminator is the Plan
+   * artifact they name: the develop Run's Task is the one whose `planRef.id` is the
+   * approved Plan's artifact.
+   */
+  private planTaskId(workId: string): string | undefined {
+    const gates = this.services.gates;
+    if (gates === undefined) return undefined;
+    const work = this.services.store.works.find(workId);
+    if (work === undefined) return undefined;
+    const current = gates.getCurrentPlanApproval(
+      workId,
+      work.baseRevision ?? 'working-tree',
+    ).current;
+    if (current === undefined) return undefined;
+    return this.services.store.tasks
+      .list({ where: 'work_id = ?', params: [workId] })
+      .find((task) => task.planRef.id === current.planRef.id)?.id;
+  }
+
+  private queueRouteStage(input: {
+    readonly workId: string;
+    readonly plan: PlanDraft;
+    readonly planRef: { readonly id: string; readonly version: number; readonly hash: string };
+    readonly authorizationRef: string;
+    readonly role: 'review' | 'test' | 'settlement';
+    readonly purpose: string;
+    readonly runStage: string;
+    readonly goal: string;
+    readonly taskId?: string;
+  }): { readonly runId: string | null; readonly reason: string | null } {
+    const orchestrator = this.services.orchestrator;
+    if (orchestrator === undefined) {
+      return { runId: null, reason: 'the execution stack is not attached' };
+    }
+    const store = this.services.store;
+    const chief = store.runs
+      .list({ where: "work_id = ? AND role = 'chief'", params: [input.workId] })
+      .filter((run) => RunLifecycle.canParentDispatch(run.status))
+      .at(-1);
+    if (chief === undefined) {
+      return { runId: null, reason: 'no live Chief Run can parent the next stage' };
+    }
+    const task =
+      (input.taskId === undefined ? undefined : store.tasks.find(input.taskId)) ??
+      store.tasks
+        .list({ where: 'work_id = ?', params: [input.workId] })
+        .find((row) => row.role === (input.role === 'settlement' ? 'backend' : input.role)) ??
+      store.tasks.list({ where: 'work_id = ?', params: [input.workId] }).at(0);
+    const paths = [
+      ...new Set([
+        ...input.plan.scope.readPaths,
+        ...input.plan.tasks.flatMap((entry) => entry.paths),
+      ]),
+    ];
+    try {
+      const { run } = orchestrator.dispatchProfessional({
+        parentRunId: chief.id,
+        authorizationRef: input.authorizationRef,
+        spec: {
+          ...(task === undefined ? {} : { taskId: task.id }),
+          role: input.role,
+          purpose: input.purpose as never,
+          goal: input.goal,
+          // A verification stage reads the frozen candidate and writes only its own report
+          // (`execution.md` §1/§7): the scope carries the paths, never a write envelope.
+          scope: {
+            readPaths: paths,
+            writePaths: [],
+            operations: [],
+            networkTargets: [],
+          },
+          stage: input.runStage,
+          contextSelection: {
+            goal: input.goal,
+            sourceRefs: [
+              {
+                kind: 'artifact',
+                id: input.planRef.id,
+                version: String(input.planRef.version),
+              },
+            ],
+            reasonPerSource: {
+              [`artifact:${input.planRef.id}`]: 'the approved Plan this stage verifies',
+            },
+            featureRefs: [],
+            codePaths: paths,
+            artifactRefs: [],
+            excluded: [],
+            unknowns: [],
+            readBudget: { initialTokens: 24_000, expansionTokens: 16_000 },
+          },
+          requiredOutputs: ['stage_result'],
+          requiredChild: false,
+          // `none`: the Chief is not waiting for this child, it is *driving* the route
+          // (`continueDeliveryRoute` runs on the child's own delivery). The Chief Run stays
+          // alive because an *earlier* stage used `join=all` (`supervisor.ts`).
+          joinPolicy: 'none',
+          budgetAllocation: STAGE_ROUTE_TOKENS,
+        },
+      });
+      return { runId: run.id, reason: null };
+    } catch (error) {
+      return { runId: null, reason: errorText(error) };
+    }
+  }
+
+  /**
    * Queues the professional Run an approved Plan authorizes (`WP-12` Q3=A).
    *
    * The Plan's own tasks name the role, the goal and the write paths, so no model runs in
@@ -5623,6 +6145,11 @@ export class WorkbenchProtocol {
     // degraded read ledger (T3 finding), so the canonical stage is computed at the
     // producer instead of being mapped downstream.
     const work = this.services.store.works.find(input.workId);
+    const requirementId =
+      work?.requirementId ??
+      this.services.store.requirements
+        .list({ where: 'work_id = ?', params: [input.workId] })
+        .find((requirement) => requirement.lifecycle === 'active')?.id;
     const stage =
       task.role === 'backend' || task.role === 'frontend'
         ? work?.level === 'L1'
@@ -5644,7 +6171,19 @@ export class WorkbenchProtocol {
         parentRunId: chief.id,
         authorizationRef: input.authorizationRef,
         spec: {
-          taskId: taskRefs.get(task.id),
+          // The Task the approved Plan materialised for this role: `materializePlanTasks`
+          // reuses the route's pre-Plan Task when it exists, so this is the same row the
+          // verification stages bind to (and the same worktree the candidate lives in).
+          taskId:
+            taskRefs.get(task.id) ??
+            orchestrator.claimStageTask({
+              workId: input.workId,
+              ...(requirementId === undefined ? {} : { requirementId }),
+              role: task.role,
+              planRef: input.planRef,
+              readPaths: [...input.plan.scope.readPaths, ...task.paths],
+              writePaths: task.paths,
+            }),
           role: task.role,
           purpose: 'implementation',
           goal,

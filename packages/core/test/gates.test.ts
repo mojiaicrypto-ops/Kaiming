@@ -307,9 +307,15 @@ describe('Plan gate persistence (AC-009, AC-013, AC-014)', () => {
     expect(stored.version).toBe(1);
     expect(stored.tasks.map((entry) => entry.id)).toEqual([TASK_ID]);
 
-    // The Requirement is re-associated with the approved Plan.
+    // The Requirement is re-associated with the approved Plan. `recordVersion` is the
+    // *committed* pool record's version (`data.md` §3 maps it to `PortableRequirement.version`
+    // and keeps the local row `version` separate), so a local plan link must not advance it:
+    // doing so broke the next pool save's `expected.recordVersion` precondition, which is how
+    // the L2 route ended with `Work completed` and an `active` Requirement (WP-12 W4c). The
+    // local row `version` advances instead, and the approved `planRef` travels with the next
+    // published record.
     expect(store.requirements.find(REQUIREMENT_ID)?.planRef?.hash).toBe(planRef.hash);
-    expect(store.requirements.find(REQUIREMENT_ID)?.recordVersion).toBe(2);
+    expect(store.requirements.find(REQUIREMENT_ID)?.recordVersion).toBe(1);
 
     const write = gates.requestCodeWrite({
       workId: WORK_ID,

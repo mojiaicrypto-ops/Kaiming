@@ -30,6 +30,7 @@ import {
   type ErrorCode,
   type JsonObject,
   type Operation,
+  type Task as TaskRow,
   type VerificationManifest,
 } from '@agentdev/contracts';
 import {
@@ -62,6 +63,7 @@ import type {
   RequirementPoolCommit,
   WorktreeGitPort,
 } from '@agentdev/workspace';
+import type { PlanGateService } from './gates.js';
 import type { SnapshotWriter } from './snapshots.js';
 import { ProtocolError, type ProtocolErrorCode } from './errors.js';
 import { scanEvents } from './events.js';
@@ -875,6 +877,15 @@ export function deliveredKnowledgeTreeHash(input: {
 
 export interface SettlementServiceOptions {
   readonly store: ProjectStore;
+  /**
+   * The Plan gate, when the stack has one.
+   *
+   * It answers which Tasks belong to the approved Plan: a Work also carries the pre-Plan
+   * Task a route stage needed for its Grants, and that row has no `VerificationManifest` by
+   * construction — demanding one from it refused every L2 settlement with `Task … 没有
+   * VerificationManifest，未验证的 Task 不能完成` (WP-12 W4b).
+   */
+  readonly planGate?: PlanGateService;
   readonly worktrees: WorktreeGitPort;
   readonly cas: CasService;
   readonly journal: CasJournal;
@@ -1082,6 +1093,7 @@ interface SettlementFinishInput {
  */
 export class SettlementService {
   private readonly store: ProjectStore;
+  private readonly planGate: PlanGateService | undefined;
   private readonly worktrees: WorktreeGitPort;
   private readonly cas: CasService;
   private readonly journal: CasJournal;
@@ -1092,6 +1104,7 @@ export class SettlementService {
 
   constructor(options: SettlementServiceOptions) {
     this.store = options.store;
+    this.planGate = options.planGate;
     this.worktrees = options.worktrees;
     this.cas = options.cas;
     this.journal = options.journal;
@@ -1418,7 +1431,7 @@ export class SettlementService {
 
     // A Task whose frozen result vanished means the verified work is no longer there;
     // completing the Work would claim evidence that does not exist.
-    const tasks = this.store.tasks.list({ where: 'work_id = ?', params: [work.id] });
+    const tasks = this.tasksInSettlementScope(work.id);
     if (tasks.length === 0) {
       return this.outcomeRefusal(
         'GATE_NOT_READY',
@@ -2054,6 +2067,28 @@ export class SettlementService {
   }
 
   /** A settled refusal; `branchUntouched` is always true because nothing was written. */
+  /**
+   * The Work's Tasks that belong to the approved Plan (`workflow.md` §3/§7).
+   *
+   * A Work also carries the pre-Plan Task a route stage needed so `GrantStore.roleStages`
+   * could mint its Run-scope Grants; that row never produced a `VerificationManifest`, so it
+   * is outside the settled DAG rather than an unverified Task. Every Task that *is* in the
+   * approved Plan keeps the strict check (`latestManifestId` must exist).
+   */
+  private tasksInSettlementScope(workId: string): readonly TaskRow[] {
+    const rows = this.store.tasks.list({ where: 'work_id = ?', params: [workId] });
+    const work = this.store.works.find(workId);
+    const planRef =
+      work === undefined
+        ? undefined
+        : this.planGate?.getCurrentPlanApproval(work.id, work.baseRevision ?? 'working-tree')
+            .current?.planRef;
+    if (planRef === undefined) return rows;
+    return rows.filter(
+      (task) => task.planRef.id === planRef.id && task.planRef.version === planRef.version,
+    );
+  }
+
   private outcomeRefusal(
     code: ProtocolErrorCode,
     message: string,

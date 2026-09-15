@@ -63,6 +63,19 @@ export interface RunWorkspaceResolver {
     readonly attemptId: string;
     readonly epoch: number;
   }): RunWorkspace;
+  /**
+   * Releases the Task worktree the Attempt was writing in (WP-12 W4b).
+   *
+   * `reliability.md` §3 keeps one writer per Task worktree, and the lease is bound to
+   * `(attemptId, epoch)` with a one-hour TTL. A delivery ends the Attempt's *writing* while
+   * its process is still finishing the turn, so the next stage of the route (Review, on the
+   * same Task) resolved the tree and got `BUSY` — it then had to fall back to the project
+   * root and honestly rejected the delivery because the change was not in that tree. The
+   * caller releases the lease at exactly the point it released the Work-level writer lease
+   * (`control-handler.ts`, after the candidate commit read the files), so no authority moves
+   * to another writer: the released lease is the caller's own.
+   */
+  release(input: { readonly taskId: string; readonly attemptId: string }): boolean;
 }
 
 export interface TaskWorktreeWorkspaceOptions {
@@ -92,9 +105,10 @@ export interface TaskWorktreeWorkspaceOptions {
 export function createTaskWorktreeWorkspaceResolver(
   options: TaskWorktreeWorkspaceOptions,
 ): RunWorkspaceResolver {
+  const leases = options.leases ?? createMemoryWorktreeLeaseStore();
   const manager = createWorktreeManager({
     git: options.git,
-    leases: options.leases ?? createMemoryWorktreeLeaseStore(),
+    leases,
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.leaseTtlMs === undefined ? {} : { leaseTtlMs: options.leaseTtlMs }),
   });
@@ -154,6 +168,15 @@ export function createTaskWorktreeWorkspaceResolver(
         `task-workspace: Run ${run.id} → Task ${task.id} worktree ${outcome.record.path}${outcome.reused ? ' (reused)' : ''}`,
       );
       return { root: outcome.record.path, taskWorktree: true, taskId: task.id };
+    },
+    release: ({ taskId, attemptId }) => {
+      // The worktree id is the Task id here (`create` is called with `worktreeId: task.id`),
+      // and the lease store releases only the caller's own lease.
+      const released = leases.release(taskId, attemptId);
+      if (released) {
+        log(`task-workspace: Task ${taskId} worktree lease released by attempt ${attemptId}`);
+      }
+      return released;
     },
   };
 }

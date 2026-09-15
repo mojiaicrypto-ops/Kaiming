@@ -634,7 +634,11 @@ describe('message → Chief → DispatchSpec → Requirement → Run → stage r
     expect(store.assessments.list({ where: 'work_id = ?', params: [sent.workId] }).length).toBe(1);
     const authorization = store.authorizations.find(work.authorizationRef ?? '');
     expect(authorization?.sourceRef.id).toBe(sent.messageId);
-    expect(authorization?.operations).toEqual(['read', 'edit', 'write']);
+    // `artifact_write` joins the derived envelope because the Plan/Product stages deliver
+    // their documents through `artifact_write` (Core's `ArtifactService`, not the source
+    // tree): without it the L2 route could not store a Plan at all (WP-12 W4b). It is not an
+    // environment operation, so the assertions that matter are unchanged.
+    expect(authorization?.operations).toEqual(['read', 'edit', 'write', 'artifact_write']);
     expect(authorization?.operations).not.toContain('bash');
 
     const requirement = await waitFor(

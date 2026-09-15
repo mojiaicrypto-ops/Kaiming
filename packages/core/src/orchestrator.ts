@@ -29,6 +29,7 @@ import {
   type Level,
   type OperationName,
   type ProfessionalDispatchSpec,
+  type Role,
   type Run,
   type Scope,
   type SourceRef,
@@ -268,6 +269,12 @@ export const DERIVABLE_OPERATIONS: readonly OperationName[] = [
   'edit',
   'write',
   'git',
+  // `artifact_write` is not a source change: it stores the Run's own report/Plan artifact
+  // through Core's `ArtifactService` (`execution.md` §2), which every role holds
+  // (`agents.md` §1). Without it a derived authorization could not carry the Plan document
+  // the Planning Agent authors (`workflow.md` §4), so the L2 route dead-ended at Plan with
+  // `a derived authorization does not cover: artifact_write` (WP-12 W4b).
+  'artifact_write',
 ];
 
 /** Operations that always need an explicit authorization, never a derived one. */
@@ -383,6 +390,15 @@ function operationsForPaths(scope: Scope, allowed: readonly OperationName[]): Op
     for (const operation of ['edit', 'write'] as const) {
       if (wants(operation)) operations.push(operation);
     }
+  }
+  // `artifact_write` stores the Run's own report/Plan artifact through Core's
+  // `ArtifactService`; it is not a source change (`execution.md` §2) and every role holds it
+  // (`agents.md` §1). Without it in the derived envelope the Planning Run could not deliver
+  // the Plan document the L2 route is defined by (`workflow.md` §4), and Core could not mint
+  // the matching Grant (`GrantStore`): the route stopped at Plan with
+  // `operation artifact_write is outside the Work scope` (WP-12 W4b).
+  if ((scope.readPaths.length > 0 || scope.writePaths.length > 0) && wants('artifact_write')) {
+    operations.push('artifact_write');
   }
   return operations;
 }
@@ -654,8 +670,28 @@ export class Orchestrator {
     return withTransaction(this.store.db, () => {
       const chief = this.requireChiefFor(input.parentRunId, undefined);
       const draft = this.parseDraft(chief, input.spec);
+      // The route-order admission runs **before** the Task exists: materialising the Task
+      // first would satisfy `enforceRouteOrder`'s own precondition and turn the documented
+      // L2 refusal into a silent admission.
+      const spec = this.routableDraft(chief, draft);
+      // Then the Task, but only for a dispatch that is **not** already bound to one: a Run
+      // the approved Plan or the route queued carries the Plan's `taskId`
+      // (`protocol.ts` `queueApprovedRun`/`queueRouteStage`), and `workflow.md` §3 makes that
+      // Plan Task the unit of execution — Review/Test/Settle inspect the very Task the
+      // implementer produced its candidate in. Materialising a second row per role would put
+      // bookkeeping Tasks (`planning`/`review`/`test`/`settlement`) beside the Plan's DAG and
+      // give the stages a Task whose worktree never received the delivery (WP-12 W4c).
+      //
+      // A dispatch with no Task needs one all the same: `GrantStore.roleStages` refuses to
+      // mint any Grant for a role the Work has no Task or Run for, and a Planning stage runs
+      // *before* the Plan gate materialises the Plan's DAG — without this the first stage of
+      // the L2 route had zero Grants and could not store the Plan document
+      // (`artifact_write` → `NOT_AUTHORIZED`) — the recorded W4b gap.
+      if (draft.taskId === undefined) {
+        this.ensureStageTask(this.requireWork(chief.workId), draft);
+      }
       return this.dispatch({
-        spec: this.routableDraft(chief, draft),
+        spec,
         ...(input.authorizationRef === undefined
           ? {}
           : { authorizationRef: input.authorizationRef }),
@@ -820,6 +856,108 @@ export class Orchestrator {
     return frozen;
   }
 
+  /**
+   * The Task a Core-queued stage may bind to, claimed for that role (WP-12 W4b).
+   *
+   * `plan.approve` materialises the approved Plan's Task DAG, and the continuation stages
+   * (Review/Test/Settle) must inspect the very Task the implementer produced its candidate
+   * in. This returns the Task whose `planRef` names the approved Plan when there is one, and
+   * otherwise claims (or creates) a Task for the role. Because the Develop stage is queued by
+   * the same approval, its Task already exists by the time the later stages run.
+   */
+  claimStageTask(input: {
+    readonly workId: string;
+    readonly requirementId?: string;
+    readonly role: Role;
+    readonly planRef?: { readonly id: string; readonly version: number; readonly hash: string };
+    readonly readPaths: readonly string[];
+    readonly writePaths: readonly string[];
+    readonly taskId?: string;
+  }): string | undefined {
+    const work = this.requireWork(input.workId);
+    const tasks = this.store.tasks.list({ where: 'work_id = ?', params: [work.id] });
+    if (input.taskId !== undefined) {
+      const explicit = tasks.find((task) => task.id === input.taskId);
+      if (explicit !== undefined) return explicit.id;
+    }
+    if (input.planRef !== undefined) {
+      const planned = tasks.find(
+        (task) =>
+          task.planRef.id === input.planRef?.id &&
+          task.planRef.version === input.planRef?.version &&
+          task.role === input.role,
+      );
+      if (planned !== undefined) return planned.id;
+    }
+    const anyPlanned =
+      input.planRef === undefined
+        ? undefined
+        : tasks.find(
+            (task) =>
+              task.planRef.id === input.planRef?.id &&
+              task.planRef.version === input.planRef?.version,
+          );
+    if (anyPlanned !== undefined) return anyPlanned.id;
+    const existing = tasks.find((task) => task.role === input.role);
+    if (existing !== undefined) return existing.id;
+    return this.ensureStageTask(work, {
+      role: input.role,
+      scope: {
+        readPaths: [...input.readPaths],
+        writePaths: [...input.writePaths],
+        operations: [],
+        networkTargets: [],
+      },
+    });
+  }
+
+  /**
+   * Materialises the Task a professional dispatch needs, when the Work has none for it.
+   *
+   * `data.md` §2 makes a Task the Plan's executable unit, and `plan.approve` materialises
+   * the Plan's whole DAG. The route's *pre-Plan* stages (Product/Plan) have no Plan yet, so
+   * the Task that records "this Work dispatched this role" is created here from the Work
+   * scope. A later Plan approval reuses the same row (`protocol.ts` `materializePlanTasks`
+   * keys on `planRef`), so nothing is duplicated and no authority is widened: the Task's
+   * scope is a subset of the Work's own envelope.
+   */
+  private ensureStageTask(
+    work: Work,
+    draft: { readonly role: Role; readonly scope: Scope },
+  ): string | undefined {
+    const existing = this.store.tasks
+      .list({ where: 'work_id = ?', params: [work.id] })
+      .find((task) => task.role === draft.role);
+    if (existing !== undefined) return existing.id;
+    const readPaths = [
+      ...new Set([...draft.scope.readPaths, ...draft.scope.writePaths, ...work.scope.readPaths]),
+    ];
+    const taskId = this.store.newId();
+    this.store.tasks.insert({
+      id: taskId,
+      projectId: work.projectId,
+      workId: work.id,
+      ...(work.requirementId === undefined ? {} : { requirementId: work.requirementId }),
+      // No Plan approved this Task yet; `plan.approve` writes the real `planRef` when it
+      // materialises the approved Plan's DAG (and reuses this row, see `protocol.ts`
+      // `materializePlanTasks`).
+      planRef: { id: this.store.newId(), version: 1, hash: sha256(`${work.id}:${draft.role}`) },
+      role: draft.role,
+      dependsOn: [],
+      dependencyRevision: work.baseRevision,
+      dependencyManifestRefs: [],
+      scope: {
+        readPaths,
+        writePaths: [...new Set([...draft.scope.writePaths, ...work.scope.writePaths])],
+        operations: [],
+        networkTargets: [],
+      },
+      stage: 'ready',
+      acceptanceIds: [],
+    } as never);
+    return taskId;
+  }
+
   /** Whether a stage is a develop stage (`develop`, `develop-L1|L2|L3`). */
   private static isDevelopStage(stage: string): boolean {
     return stage === 'develop' || stage.startsWith('develop-');
@@ -961,6 +1099,19 @@ export class Orchestrator {
     );
     enforce(validateDispatchSpec(spec), 'dispatch spec');
     const work = this.requireWork(spec.workId);
+    // `workflow.md` §5.1: "failed 只能启动同Work的新Run尝试" and a completed Work continues with
+    // a new, related Work — so a terminal Work admits no new Run at all. Without this guard a
+    // Chief Run kept alive for the route could re-dispatch a stage after the delivery was
+    // completed and produce a second settlement/`settlement.completed` for the same Work
+    // (observed on the real L2 route, WP-12 W4c). Parked states (`blocked`/`paused`) are not
+    // terminal and stay admissible, as their own resume paths require.
+    if (work.status === 'completed' || work.status === 'cancelled' || work.status === 'failed') {
+      fail(
+        'INVALID_STATE',
+        `Work ${work.id} is ${work.status}; a terminal Work admits no new Run (it continues with a new, related Work)`,
+        { workId: work.id, status: work.status },
+      );
+    }
     // The Run's own scope joins the Work level in deciding what authority is
     // needed: a spec that declares environment operations, network writes or data
     // operations is an L3 Run even when its Work row says otherwise, and a Work
@@ -1524,6 +1675,319 @@ export class Orchestrator {
       fail('VALIDATION_ERROR', `Task ${taskId} does not belong to Work ${workId}`);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// The documented delivery route, read from real records (WP-12 W4b)
+// ---------------------------------------------------------------------------
+
+/**
+ * One stage of the L2/L3 code route (`workflow.md` §3).
+ *
+ * The order is the documented one — `Plan → Develop → Review → Test → Accept →
+ * Settle` — where *Accept* is the integration `StageGate` performs when the Settle
+ * stage's result is accepted (`control-handler.ts` `integrateAndSettle`) and
+ * *Settle* is the professional Run whose accepted stage result triggers it.
+ */
+export interface DeliveryRoutePosition {
+  /** The stage name the route uses in prose (`Plan`…`Settle`). */
+  readonly stage: 'Plan' | 'Develop' | 'Review' | 'Test' | 'Settle';
+  readonly role: Role;
+  readonly purpose: string;
+  /** The role's canonical Run stage (`context/acl.ts` `ROLE_STAGES`). */
+  readonly runStage: string;
+  /** `true` once a successful delivery for this stage is recorded in the Work. */
+  readonly delivered: boolean;
+}
+
+/** The professional develop stage name, per Work level. */
+export function developStageFor(level: Level): string {
+  return level === 'L1' ? 'develop-L1' : level === 'L3' ? 'develop-L3' : 'develop-L2';
+}
+
+/** Whether a `(role, stage)` Run of the Work delivered a successful stage result. */
+function routeStageDelivered(input: {
+  readonly store: ProjectStore;
+  readonly workId: string;
+  readonly role: Role;
+  readonly stage: string;
+}): boolean {
+  return input.store.runs
+    .list({
+      where: 'work_id = ? AND role = ?',
+      params: [input.workId, input.role],
+      orderBy: 'created_at ASC, id ASC',
+    })
+    .some(
+      (run) =>
+        run.stage === input.stage &&
+        input.store.stageResults
+          .list({ where: 'run_id = ?', params: [run.id] })
+          .some((row) => row.status === 'success'),
+    );
+}
+
+/**
+ * Where an L2/L3 code delivery stands, from real records only.
+ *
+ * `workflow.md` §3 fixes the route and `docs/rules/agents.md` §4 makes the Chief
+ * trigger the next professional Run once a stage's result reaches Core. Both the
+ * wake-up prompt (`prepare-run.ts` `routeContinuationSentence`) and the queueing step
+ * (`protocol.ts` `continueDeliveryRoute`) read this projection, so the two cannot
+ * disagree about which stage comes next and no model has to restate the route.
+ */
+export function deliveryRoute(input: {
+  readonly store: ProjectStore;
+  readonly work: Work;
+  readonly planApproved: boolean;
+}): readonly DeliveryRoutePosition[] {
+  const { store, work } = input;
+  const develop = developStageFor(work.level);
+  return [
+    {
+      stage: 'Plan',
+      role: 'planning',
+      purpose: 'artifact',
+      runStage: 'planning',
+      // A Plan is "delivered" when the Plan gate approved one for this Work; the draft
+      // and the gate record are read back by `plan.current`/`getCurrentPlanApproval`,
+      // so this flag is the gate's own verdict rather than a second copy.
+      delivered: input.planApproved,
+    },
+    {
+      stage: 'Develop',
+      role: 'backend',
+      purpose: 'implementation',
+      runStage: develop,
+      delivered:
+        input.planApproved &&
+        routeStageDelivered({ store, workId: work.id, role: 'backend', stage: develop }),
+    },
+    {
+      stage: 'Review',
+      role: 'review',
+      purpose: 'review',
+      runStage: 'review',
+      delivered: routeStageDelivered({
+        store,
+        workId: work.id,
+        role: 'review',
+        stage: 'review',
+      }),
+    },
+    {
+      stage: 'Test',
+      role: 'test',
+      purpose: 'test',
+      runStage: 'test',
+      delivered: routeStageDelivered({ store, workId: work.id, role: 'test', stage: 'test' }),
+    },
+    {
+      stage: 'Settle',
+      role: 'settlement',
+      purpose: 'settlement',
+      runStage: 'settlement',
+      delivered: routeStageDelivered({
+        store,
+        workId: work.id,
+        role: 'settlement',
+        stage: 'settlement',
+      }),
+    },
+  ];
+}
+
+/** The first route stage that has not delivered yet, or `undefined` when complete. */
+export function nextDeliveryStage(
+  route: readonly DeliveryRoutePosition[],
+): DeliveryRoutePosition | undefined {
+  return route.find((step) => !step.delivered);
+}
+
+/** The operation names a Plan document may ask for (`primitives.ts` `operationNameSchema`). */
+const OPERATION_NAMES: readonly OperationName[] = [
+  'read',
+  'search',
+  'edit',
+  'write',
+  'bash',
+  'git',
+  'artifact_write',
+  'network',
+  'secret',
+  'push',
+  'deploy',
+  'delete_data',
+];
+
+/** The Plan JSON a planning Run must deliver through `artifact_write`. */
+export interface DeliveredPlanDocument {
+  readonly goal: string;
+  readonly scope: {
+    readonly readPaths: readonly string[];
+    readonly writePaths: readonly string[];
+    readonly operations: readonly OperationName[];
+    readonly networkTargets: readonly string[];
+  };
+  readonly tasks: readonly {
+    readonly role: string;
+    readonly goal: string;
+    readonly paths: readonly string[];
+    readonly dependsOn: readonly string[];
+    readonly acceptanceIds: readonly string[];
+    readonly checks: readonly string[];
+  }[];
+  readonly interfaceChanges?: readonly string[];
+  readonly dataChanges?: readonly string[];
+  readonly risks?: readonly string[];
+  readonly rollback?: readonly string[];
+}
+
+/**
+ * Parses the Plan document a Planning Run delivered (`workflow.md` §4).
+ *
+ * `workflow.md` §4 requires a Plan to carry a task DAG, roles, write scope, interface
+ * and data impact, acceptance mapping, verification strategy and (for L3) risk and
+ * rollback. The document is delivered as the Run's own artifact — the `artifact_write`
+ * tool every role holds (`execution.md` §7) — and this is where Core reads it back and
+ * validates its shape before the Plan gate ever sees it. Nothing here approves
+ * anything: the Gate is still the only authority (`gates.ts` `submitPlan`).
+ */
+export function parseDeliveredPlanDocument(bytes: Uint8Array): DeliveredPlanDocument | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const document = parsed as Record<string, unknown>;
+  const goal = document['goal'];
+  if (typeof goal !== 'string' || goal.trim() === '') return null;
+  const scope = document['scope'];
+  if (typeof scope !== 'object' || scope === null || Array.isArray(scope)) return null;
+  const scopeRecord = scope as Record<string, unknown>;
+  const paths = (value: unknown): string[] | null =>
+    Array.isArray(value) && value.every((entry) => typeof entry === 'string') ? [...value] : null;
+  const readPaths = paths(scopeRecord['readPaths']);
+  const writePaths = paths(scopeRecord['writePaths']) ?? [];
+  const operations: OperationName[] = (paths(scopeRecord['operations']) ?? ['read', 'edit']).filter(
+    (operation): operation is OperationName => OPERATION_NAMES.includes(operation as OperationName),
+  );
+  const networkTargets = paths(scopeRecord['networkTargets']) ?? [];
+  if (readPaths === null) return null;
+  const tasks = document['tasks'];
+  if (!Array.isArray(tasks) || tasks.length === 0) return null;
+  const parsedTasks: Array<DeliveredPlanDocument['tasks'][number]> = [];
+  for (const entry of tasks) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return null;
+    const task = entry as Record<string, unknown>;
+    const role = task['role'];
+    const taskGoal = task['goal'];
+    const taskPaths = paths(task['paths']);
+    if (typeof role !== 'string' || role === '') return null;
+    if (typeof taskGoal !== 'string' || taskGoal.trim() === '') return null;
+    if (taskPaths === null || taskPaths.length === 0) return null;
+    // `Plan` requires every entry of a present list to be a non-empty string
+    // (`planSchema` `list(z.string().min(1))`), so an empty string or an empty list is
+    // omitted rather than sent — the same normalisation `parsePlanDraft` applies to the
+    // user-facing draft.
+    const nonEmpty = (value: unknown): string[] =>
+      (paths(value) ?? []).filter((entry) => entry.trim() !== '');
+    parsedTasks.push({
+      role,
+      goal: taskGoal,
+      paths: taskPaths.filter((entry) => entry.trim() !== ''),
+      dependsOn: nonEmpty(task['dependsOn']),
+      acceptanceIds: nonEmpty(task['acceptanceIds']),
+      checks: nonEmpty(task['checks']),
+    });
+  }
+  const optional = (value: unknown): readonly string[] | undefined => {
+    const list = paths(value);
+    return list === null ? undefined : list;
+  };
+  const cleaned = (value: unknown): readonly string[] | undefined => {
+    const list = optional(value);
+    if (list === undefined) return undefined;
+    const kept = list.filter((entry) => entry.trim() !== '');
+    return kept.length === 0 ? undefined : kept;
+  };
+  const interfaceChanges = cleaned(document['interfaceChanges']);
+  const dataChanges = cleaned(document['dataChanges']);
+  const risks = cleaned(document['risks']);
+  const rollback = cleaned(document['rollback']);
+  return {
+    goal,
+    scope: {
+      readPaths,
+      writePaths: writePaths.length === 0 ? readPaths : writePaths,
+      operations,
+      networkTargets,
+    },
+    tasks: parsedTasks,
+    ...(interfaceChanges === undefined ? {} : { interfaceChanges }),
+    ...(dataChanges === undefined ? {} : { dataChanges }),
+    ...(risks === undefined ? {} : { risks }),
+    ...(rollback === undefined ? {} : { rollback }),
+  };
+}
+
+/**
+ * Refuses a delivered Plan whose write scope leaves the Work's own authority.
+ *
+ * `evaluatePlanApproval` makes the same decision for the Paths/operations it is given;
+ * checking here as well means a Plan that names the operator's `~/.ssh` is refused as
+ * `NOT_AUTHORIZED` before the Gate records anything, which is the honest error for a
+ * document that tried to widen the envelope.
+ */
+export function assertPlanWithinAuthority(input: {
+  readonly plan: DeliveredPlanDocument;
+  readonly writePaths: readonly string[];
+  readonly operations: readonly string[];
+}): void {
+  const outside = input.plan.scope.writePaths.filter(
+    (path) => !isInsideScope(path, input.writePaths),
+  );
+  if (outside.length > 0) {
+    fail(
+      'NOT_AUTHORIZED',
+      `the delivered Plan writes outside the Work's authorization: ${outside.join(', ')}`,
+      { outside, authorized: [...input.writePaths] },
+    );
+  }
+  const ungranted = input.plan.scope.operations.filter(
+    (operation) => !input.operations.includes(operation),
+  );
+  if (ungranted.length > 0) {
+    fail(
+      'NOT_AUTHORIZED',
+      `the delivered Plan asks for operations the Work is not authorized for: ${ungranted.join(', ')}`,
+      { ungranted, authorized: [...input.operations] },
+    );
+  }
+  for (const task of input.plan.tasks) {
+    if (task.role === 'chief') continue;
+    const outsideTask = task.paths.filter((path) => !isInsideScope(path, input.writePaths));
+    if (outsideTask.length > 0) {
+      fail(
+        'NOT_AUTHORIZED',
+        `Plan task for ${task.role} writes outside the Work's authorization: ${outsideTask.join(', ')}`,
+        { taskRole: task.role, outside: outsideTask, authorized: [...input.writePaths] },
+      );
+    }
+  }
+}
+
+/** The first non-chief task of a Plan, which is the Task the route binds its Runs to. */
+export function planTaskFor(
+  plan: DeliveredPlanDocument,
+  role: Role,
+): DeliveredPlanDocument['tasks'][number] | undefined {
+  return (
+    plan.tasks.find((task) => task.role === role) ??
+    plan.tasks.find((task) => task.role !== 'chief')
+  );
 }
 
 /** Builds the professional spec a Chief Run dispatches from real records. */

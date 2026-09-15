@@ -11,7 +11,12 @@ import type {
   Run,
   Scope,
 } from '@agentdev/contracts';
-import { ProjectStore as Store, projectIdFromRoot, type ProjectStore } from '@agentdev/storage';
+import {
+  ProjectStore as Store,
+  projectIdFromRoot,
+  withTransaction,
+  type ProjectStore,
+} from '@agentdev/storage';
 import {
   ConfigStore,
   ModelGateway,
@@ -19,6 +24,10 @@ import {
   ProtocolError,
   SnapshotWriter,
   assertDerivableScope,
+  assertPlanWithinAuthority,
+  deliveryRoute,
+  nextDeliveryStage,
+  parseDeliveredPlanDocument,
   professionalSpec,
   type GatewayTransport,
   type ProfessionalSpecDraft,
@@ -2408,5 +2417,217 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
       expect(store.runs.list().length).toBe(runsBefore);
       expect(store.snapshots.list().length).toBe(snapshotsBefore);
     });
+  });
+});
+
+describe('the L2/L3 delivery route and a delivered Plan (WP-12 W4b)', () => {
+  let dataDir: string;
+  let store: ProjectStore;
+  let projectId: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'agentdev-route-'));
+    store = Store.open({
+      dataDir,
+      canonicalRoot: ROOT,
+      migrations: { backup: () => undefined, backupPath: join(dataDir, 'pre.sqlite') },
+      now: () => new Date().toISOString(),
+    } as never);
+    // The Work and its budget reference a registered Project (`data.md` §2), so the row
+    // exists before any budget insert — the same order the daemon's project open uses.
+    projectId = projectIdFromRoot(ROOT);
+    store.projects.insert({
+      id: projectId,
+      root: ROOT,
+      gitRoot: ROOT,
+      codeRoot: 'src',
+      documentRoot: 'docs',
+      deliveryBranch: 'agentdev/main',
+      trust: 'trusted',
+      state: 'open',
+      head: 'a'.repeat(40),
+    } as never);
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  function routedWork(level: 'L2' | 'L3' = 'L2'): string {
+    const workId = store.newId();
+    // The Work references its budget, so both rows commit in one transaction (`data.md` §2:
+    // the foreign key is deferred inside it), exactly like the daemon's own message path.
+    return withTransaction(store.db, () => {
+      const budget = store.budgets.insert({
+        projectId,
+        workId,
+        tokenLimit: 100_000,
+        tokensUsed: 0,
+        tokensReserved: 0,
+        activeTimeLimit: 600,
+        activeTimeUsed: 0,
+        repairLimit: 3,
+        repairUsed: 0,
+        costKnown: true,
+      });
+      store.works.insert({
+        id: workId,
+        projectId,
+        intent: 'delivery',
+        purpose: 'deliver the cancellation change',
+        level,
+        goal: 'deliver the cancellation change',
+        scope: {
+          readPaths: ['src/a.ts'],
+          writePaths: ['src/a.ts'],
+          operations: ['read', 'edit'],
+          networkTargets: [],
+        },
+        sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+        status: 'running',
+        blockerIds: [],
+        budgetId: budget.id,
+        policyRevision: 1,
+      });
+      return workId;
+    });
+  }
+
+  /** One professional Run of the Work that delivered a successful stage result. */
+  function deliveredStage(workId: string, role: string, stage: string): void {
+    const chief = store.runs.insert({
+      workId,
+      role: 'chief',
+      purpose: 'analysis',
+      stage: 'coordinate',
+      status: 'running',
+      requiredChild: false,
+      join: 'none',
+      childIds: [],
+      configSnapshotId: 'a'.repeat(64),
+      contextSnapshotId: 'b'.repeat(64),
+      dispatchSnapshotId: 'c'.repeat(64),
+      budgetAllocation: 0,
+    } as never);
+    const run = store.runs.insert({
+      workId,
+      role,
+      purpose: 'artifact',
+      parentRunId: chief.id,
+      stage,
+      status: 'completed',
+      requiredChild: true,
+      join: 'all',
+      childIds: [],
+      configSnapshotId: 'd'.repeat(64),
+      contextSnapshotId: 'e'.repeat(64),
+      dispatchSnapshotId: 'f'.repeat(64),
+      budgetAllocation: 0,
+    } as never);
+    const attempt = store.attempts.insert({
+      runId: run.id,
+      number: 1,
+      status: 'completed',
+      ownerEpoch: 0,
+    });
+    store.stageResults.insert({
+      runId: run.id,
+      attemptId: attempt.id,
+      status: 'success',
+      summary: `${role} delivered`,
+      artifactRefs: [],
+      evidenceRefs: [],
+      changedPaths: [],
+      findingIds: [],
+      unknowns: [],
+      requestedActions: [],
+      readLedgerSeq: 0,
+      readLedgerHash: '0'.repeat(64),
+    });
+  }
+
+  const planDocument = JSON.stringify({
+    goal: 'make unpaid orders cancellable',
+    scope: {
+      readPaths: ['src/a.ts'],
+      writePaths: ['src/a.ts'],
+      operations: ['read', 'edit'],
+      networkTargets: [],
+    },
+    tasks: [
+      {
+        role: 'backend',
+        goal: 'change src/a.ts',
+        paths: ['src/a.ts'],
+        dependsOn: [],
+        acceptanceIds: ['AC-010'],
+        checks: ['node --check'],
+      },
+    ],
+    risks: ['the paid path must not change'],
+  });
+
+  it('projects the documented route from real records only', () => {
+    const workId = routedWork();
+    const work = store.works.find(workId)!;
+    const before = deliveryRoute({ store, work, planApproved: false });
+    expect(before.map((step) => step.stage)).toEqual([
+      'Plan',
+      'Develop',
+      'Review',
+      'Test',
+      'Settle',
+    ]);
+    expect(before.every((step) => !step.delivered)).toBe(true);
+    expect(nextDeliveryStage(before)?.stage).toBe('Plan');
+
+    deliveredStage(workId, 'planning', 'planning');
+    deliveredStage(workId, 'backend', 'develop-L2');
+    const after = deliveryRoute({ store, work, planApproved: true });
+    expect(after.map((step) => step.delivered)).toEqual([true, true, false, false, false]);
+    expect(nextDeliveryStage(after)?.stage).toBe('Review');
+    // The develop stage name follows the Work's level (`context/acl.ts` ROLE_STAGES).
+    expect(after[1]?.runStage).toBe('develop-L2');
+  });
+
+  it('reads a delivered Plan document and refuses a non-Plan artifact body', () => {
+    const document = parseDeliveredPlanDocument(Buffer.from(planDocument, 'utf8'));
+    expect(document).not.toBeNull();
+    expect(document?.goal).toBe('make unpaid orders cancellable');
+    expect(document?.tasks).toHaveLength(1);
+    expect(document?.tasks[0]?.acceptanceIds).toEqual(['AC-010']);
+    expect(parseDeliveredPlanDocument(Buffer.from('not json', 'utf8'))).toBeNull();
+    expect(parseDeliveredPlanDocument(Buffer.from('{"goal":"x"}', 'utf8'))).toBeNull();
+    expect(
+      parseDeliveredPlanDocument(
+        Buffer.from('{"goal":"x","scope":{"readPaths":[]},"tasks":[]}', 'utf8'),
+      ),
+    ).toBeNull();
+  });
+
+  it('refuses a delivered Plan that writes outside the Work authorization', () => {
+    const document = parseDeliveredPlanDocument(Buffer.from(planDocument, 'utf8'))!;
+    expect(() =>
+      assertPlanWithinAuthority({
+        plan: document,
+        writePaths: ['src/a.ts'],
+        operations: ['read', 'edit'],
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertPlanWithinAuthority({
+        plan: document,
+        writePaths: ['other/'],
+        operations: ['read', 'edit'],
+      }),
+    ).toThrowError(/outside the Work's authorization/);
+    expect(() =>
+      assertPlanWithinAuthority({
+        plan: document,
+        writePaths: ['src/a.ts'],
+        operations: ['read'],
+      }),
+    ).toThrowError(/operations the Work is not authorized for/);
   });
 });

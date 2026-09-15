@@ -43,6 +43,7 @@ import type { PermissionRequestHandler } from './control-http.js';
 import type { ToolExecuteHandler } from './tool-http.js';
 import { Orchestrator } from './orchestrator.js';
 import { StageGate } from './stage.js';
+import type { RunWorkspaceResolver } from './task-workspace.js';
 import { createModelGatewayProxy, type ModelGatewayProxy } from './gateway-http.js';
 import { ModelGateway, type GatewayTransport } from './model-gateway.js';
 import { RunLifecycle } from './run-lifecycle.js';
@@ -208,6 +209,16 @@ export interface ProjectExecutionControl {
      * has not reported ready (a delivery that freezes a manifest must then fail closed).
      */
     readonly environmentRefOf?: (attemptId: string) => string | undefined;
+    /**
+     * Releases the per-Task worktree lease of one delivered Attempt (WP-12 W4b).
+     *
+     * The stack owns the resolver, so the control handler receives this port rather than
+     * building one: the release must go to the same manager whose lease the Attempt took.
+     */
+    readonly releaseWorkspaceLease?: (input: {
+      readonly taskId: string;
+      readonly attemptId: string;
+    }) => boolean;
   }) => {
     readonly handler: ControlHandler;
     /**
@@ -221,6 +232,12 @@ export interface ProjectExecutionControl {
   readonly onAttemptStarted?: RunnerSupervisorOptions['onAttemptStarted'];
   /** Message `processing → processed/failed`; needs no stack state. */
   readonly onRunSettled?: RunnerSupervisorOptions['onRunSettled'];
+  /**
+   * The per-Task worktree resolver this stack's tools resolve through
+   * (`task-workspace.ts`). Optional: a stack without one runs its tools at the project root,
+   * and `context.request` then reads the project root as well.
+   */
+  readonly workspace?: RunWorkspaceResolver;
   readonly port?: number;
   readonly maxBodyBytes?: number;
 }
@@ -320,10 +337,17 @@ export async function createProjectExecution(
   // `waiting_children` (and back, or to a `chief_action_required` todo) in the daemon path.
   const joins = new JoinCoordinator({ store: options.store });
   const supervisorHolder: { current?: RunnerSupervisor } = {};
+  // The per-Task worktree manager the tools resolve through; the control handler needs its
+  // lease release, so the resolver is built here and shared by both (`main.ts` passes its
+  // own through `tools`/`control` today, which is why both are optional).
   const attached = options.control?.attach({
     orchestrator,
     stageGate,
     readLedgers,
+    // The environment the live Attempt reported (`attempt.ready`), which the accepted
+    // stage result freezes into its `VerificationManifest` (`control-handler.ts`
+    // `commitTaskCandidate`). `supervisorHolder` is filled in below, before any Attempt can
+    // start, so the value is always the real one.
     environmentRefOf: (attemptId) => supervisorHolder.current?.environmentRefOf(attemptId),
   });
   // The tool bridge shares this stack's lifecycle and its `GrantStore`: the same rows the

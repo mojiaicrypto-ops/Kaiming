@@ -573,6 +573,24 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
                 // so the delivery ref keeps exactly one writer (`AC-012`).
                 integrate: project.services.integrate,
                 settlement: project.services.settlement,
+                // `workflow.md` §3 / `docs/rules/agents.md` §4: the accepted stage result is
+                // where the documented route continues, and the Planning Run's delivered Plan
+                // is what the real Plan gate approves (AC-014 auto-approval included). The
+                // decision lives in Core (`protocol.continueDeliveryRoute`); this is only the
+                // production trigger point (WP-12 W4b).
+                routeContinuation: (input) => {
+                  const continued = project.protocol.continueDeliveryRoute(input);
+                  if (continued.reason !== null) {
+                    log(
+                      `route continuation after ${input.completedStage} of Work ${input.workId}: ${continued.reason}`,
+                    );
+                  } else if (continued.runId !== null) {
+                    log(
+                      `route continuation after ${input.completedStage}: queued ${String(continued.stage)} Run ${continued.runId}`,
+                    );
+                  }
+                  return continued;
+                },
                 log,
               }),
             onAttemptStarted: ({ runId }) => markMessageProcessing(project.store, runId),

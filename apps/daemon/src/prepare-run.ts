@@ -24,6 +24,8 @@ import { contextSelectionSchema } from '@agentdev/contracts';
 import type { ProjectStore } from '@agentdev/storage';
 import {
   buildContext,
+  deliveryRoute,
+  nextDeliveryStage,
   type ArtifactService,
   type AttemptCapabilityStore,
   type ConfigStore,
@@ -134,6 +136,23 @@ export function roleContractSentence(role: Role): string {
         'deliverable is the Product definition or the Plan, not the code change itself — the',
         'develop stages implement it, so not being able to write source files is not a blocker',
         'for planning.',
+        // `workflow.md` §4 makes the Plan a real document (version, task DAG, roles, write
+        // scope, interface/data impact, acceptance mapping, verification strategy, risk and
+        // rollback); `docs/rules/agents.md` §1 makes the Planning Agent its author, and a
+        // `stage.submit` payload has no Plan field by construction, so the document travels
+        // as the Run's own artifact and is pinned in `artifactRefs` (`data.md` §2 `Ref`).
+        // Core then validates it and submits it to the real Plan gate, which auto-approves a
+        // Plan that stays inside the Work's authorization with no new product choice.
+        'In the Plan stage, write the Plan as one JSON artifact with `artifact_write`',
+        '(mime `application/json`) and return it in `artifactRefs` as `{id,version,hash}` from',
+        'the tool result; the JSON is `{"goal":string,"scope":{"readPaths":string[],"writePaths":',
+        'string[],"operations":["read","edit"],"networkTargets":[]},"tasks":[{"role":"backend",',
+        '"goal":string,"paths":string[],"dependsOn":[],"acceptanceIds":string[],"checks":string[]}],',
+        '"interfaceChanges":string[],"dataChanges":string[],"risks":string[],"rollback":string[]}`',
+        'with at least one task and `writePaths` inside the paths the user named. Core reads that',
+        'artifact back, validates it and submits it to the Plan gate; a Plan delivered only as',
+        'prose, or one that asks for authority the Work does not have, is refused and the route',
+        'stops instead of guessing.',
       ].join(' ');
 }
 
@@ -156,15 +175,65 @@ function stageGoalOf(input: PrepareRunInput, store: ProjectStore): string | unde
   return typeof goal === 'string' && goal.trim() !== '' ? goal : undefined;
 }
 
+/**
+ * The route-continuation block for a Chief Run that is driving an L2/L3 delivery.
+ *
+ * `workflow.md` §3 fixes the route and `docs/rules/agents.md` §4 makes the Chief trigger
+ * the next professional Run once a stage's result reaches Core. A Chief Run is woken for
+ * that purpose (it stayed alive in `waiting_children`, `supervisor.ts`), and its new
+ * Attempt gets this sentence so the route is *Core's* projection of real records rather
+ * than something the model has to remember or re-derive — the same projection
+ * `protocol.continueDeliveryRoute` uses to queue the Run, so the two cannot disagree.
+ *
+ * Returns `undefined` for every Run that is not mid-route (an assist/artifact Chief turn,
+ * a professional Run, or a Work whose route already completed), so no prompt grows a
+ * sentence that does not apply to it.
+ */
+function routeContinuationSentence(
+  input: PrepareRunInput,
+  store: ProjectStore,
+): string | undefined {
+  if (input.run.role !== 'chief') return undefined;
+  const work = store.works.find(input.run.workId);
+  if (work === undefined) return undefined;
+  if (work.intent !== 'delivery' && work.intent !== 'document' && work.intent !== 'operation') {
+    return undefined;
+  }
+  if (work.status === 'completed' || work.status === 'cancelled' || work.status === 'failed') {
+    return undefined;
+  }
+  const planApproved = store.artifacts
+    .list({ where: 'work_id = ?', params: [work.id] })
+    .some((artifact) => artifact.kind === 'plan');
+  const route = deliveryRoute({ store, work, planApproved });
+  // Only a Run whose route has already started is continued: the first turn is the normal
+  // assessment+dispatch contract, and a completed route is not re-dispatched.
+  const delivered = route.filter((step) => step.delivered).length;
+  const next = nextDeliveryStage(route);
+  if (delivered === 0 || next === undefined) return undefined;
+  return [
+    `Route continuation (Core): the ${work.level} ${work.intent} route is ${route
+      .map((step) => `${step.stage}${step.delivered ? '✓' : ''}`)
+      .join(' → ')}.`,
+    `The next stage is ${next.stage}: submit a fresh assessment and then dispatch exactly one`,
+    `professional Run with role=${next.role}, purpose=${next.purpose}, stage=${next.runStage},`,
+    "requiredChild=true and joinPolicy='all', binding the Run to the approved Plan's Task and",
+    'naming the approved Plan artifact in your context selection. Do not dispatch a stage that',
+    'already delivered, and do not dispatch anything else.',
+  ].join(' ');
+}
+
 function promptFor(input: PrepareRunInput, store: ProjectStore): string {
   const work = store.works.find(input.run.workId);
   const goal = work?.goal ?? 'the assigned task';
   const stageGoal = stageGoalOf(input, store);
+  const continuation = routeContinuationSentence(input, store);
   return [
     `You are the AgentDev ${input.run.role} agent.`,
     `Stage: ${input.run.stage}. Purpose: ${input.run.purpose}.`,
     `Work goal: ${goal}`,
     ...(stageGoal === undefined || stageGoal === goal ? [] : [`Your stage goal: ${stageGoal}`]),
+    ...(continuation === undefined ? [] : [continuation]),
     roleContractSentence(input.run.role),
   ].join('\n');
 }
@@ -269,6 +338,7 @@ function assembleContext(
       } hash=${source.hash.slice(0, 12)} — ${source.reason}`,
   );
   const stageGoal = stageGoalOf(input, options.store);
+  const continuation = routeContinuationSentence(input, options.store);
   const prompt = [
     `You are the AgentDev ${input.run.role} agent.`,
     `Stage: ${input.run.stage}. Purpose: ${input.run.purpose}.`,
@@ -276,6 +346,7 @@ function assembleContext(
     ...(stageGoal === undefined || stageGoal === work.goal
       ? []
       : [`Your stage goal: ${stageGoal}`]),
+    ...(continuation === undefined ? [] : [continuation]),
     `Frozen context ${snapshot.snapshotRef} (${String(snapshot.resolvedSources.length)} sources, ${String(
       snapshot.tokenAccounting.initial.used,
     )} tokens) at ${built.directory}:`,

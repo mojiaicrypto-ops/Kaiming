@@ -37,6 +37,7 @@
  */
 import {
   LIMITS,
+  roleHasBrokerTool,
   type ArtifactKind,
   type ConfigPolicy,
   type JsonObject,
@@ -96,6 +97,9 @@ export function createProjectRootWorkspaceResolver(
       }
       return { root: project.root, taskWorktree: false };
     },
+    // The project-root fallback owns no worktree, so there is no lease to release: saying
+    // `false` is the honest answer rather than pretending one was handed back.
+    release: () => false,
   };
 }
 
@@ -388,7 +392,18 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
       if (work === undefined) {
         throw new ProtocolError('NOT_FOUND', `Work ${run.workId} does not exist`);
       }
-      assertWriter(caller, work.id, work.projectId);
+      // `reliability.md` §3 keeps one **writer** per Work: the lease belongs to an Attempt
+      // whose role may modify the workspace (`agents.md` §1 gives `edit` to
+      // backend/frontend/settlement only). A read-only role — the Chief, and the
+      // Product/Plan/Review/Test stages — does not write the tree, and taking the lease for
+      // it made the Chief's own turn block the child Run it had just dispatched: the
+      // Planning Run's first `artifact_write` was refused `BUSY … this Attempt holds no
+      // writer lease` while the Chief was still streaming and renewing the lease with every
+      // read, and a real model then reported `needs_input` instead of retrying (WP-12 W4c).
+      // Every role that can write still serialises through the same row.
+      if (roleHasBrokerTool(caller.role, 'edit')) {
+        assertWriter(caller, work.id, work.projectId);
+      }
 
       const root = workspace.resolve({
         workId: work.id,
@@ -585,7 +600,15 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
         role: runRef.role,
         stage: run.stage,
         operation: plan.operation,
-        targets: plan.targets,
+        // An `artifact_write` is content-addressed in Core's `ArtifactService` and never
+        // touches the filesystem (`execution.md` §2: Core handles that domain tool
+        // directly), so the logical `path` it carries is a label, not a boundary. Sending
+        // it as a target made the tool subject to the *source* write envelope — a Planning
+        // Run whose Work authorizes only `src/orders/cancel.ts` could not store a Plan
+        // artifact under `plan.json` (`NOT_AUTHORIZED: target plan.json is outside the
+        // grant`), which is the dead end the L2 route hit (WP-12 W4b). Every other
+        // operation still passes its real targets through unchanged.
+        targets: plan.toolName === 'artifact_write' ? [] : plan.targets,
         input: plan.input,
         // The endpoint's operation id is the ledger key: the Broker records the
         // `tool_operation` under it and replays the recorded result when the Runner retries

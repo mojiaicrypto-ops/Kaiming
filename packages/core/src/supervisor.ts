@@ -664,6 +664,36 @@ export class RunnerSupervisor {
     });
   }
 
+  /**
+   * Parks a Chief Run whose Attempt ended while its `join=all` children are live.
+   *
+   * `workflow.md` §5.3 and `rules/agents.md` §3: a `join=all` dispatch suspends the Chief
+   * Run until the child settles, and `JoinCoordinator.onChildSettled` moves it back to
+   * `running` once the last one is terminal. Without this branch the Attempt's
+   * `completed` result tried to settle the Run, `RunLifecycle.end` refused it (it
+   * refuses a graceful completion with live join children), and the Run was left in
+   * `running` with a live Attempt and no process — the state in which nothing could ever
+   * continue the L2 route (WP-12 W4b). Parking it explicitly is what makes the Chief
+   * available to trigger the next stage.
+   *
+   * @returns `true` when the Run was parked and must not be settled.
+   */
+  private waitForLiveChildren(run: Run): boolean {
+    const live = this.store.runs
+      .list({ where: 'parent_run_id = ?', params: [run.id] })
+      .filter((child) => child.join === 'all' && !isTerminalRunStatus(child.status));
+    if (live.length === 0) return false;
+    if (run.status === 'running') {
+      this.store.runs.update(run.id, { status: 'waiting_children' }, run.version);
+      this.log(`supervisor: ${run.id} waits for ${String(live.length)} live join=all child(ren)`);
+    }
+    const attempt = this.store.attempts.list({ where: 'run_id = ?', params: [run.id] }).at(-1);
+    if (attempt !== undefined && (attempt.status === 'starting' || attempt.status === 'running')) {
+      this.store.attempts.update(attempt.id, { status: 'completed' }, attempt.version);
+    }
+    return true;
+  }
+
   /** True when the Run has already ended, so a late result must not settle it again. */
   private isTerminal(runId: string): boolean {
     const run = this.store.runs.find(runId);
@@ -685,12 +715,38 @@ export class RunnerSupervisor {
     // process yet — the latter is how `FindingsService.resumeWork` hands a resumed Run to
     // the executor (WP11R3-01). A crash never retries by itself: an Attempt that recorded
     // a process identity (`runnerId`) is not adopted again.
+    //
+    // A third kind is the *resumed Chief*: `JoinCoordinator.onChildSettled` moves a
+    // `waiting_children` Chief Run back to `running` when the last `join=all` child of its
+    // route stage settled, and `protocol.md` §6 makes that Run the trigger for the next
+    // professional Run. Its previous Attempt closed with a result (one turn), so it is
+    // claimable exactly while it has no live Attempt and no live `join=all` child — never
+    // for a Run whose process merely died (recovery owns that case).
     const runs = this.store.runs.list({ where: "status IN ('queued', 'running')" });
     const claimable = runs.filter((run) => {
       if ([...this.live.values()].some((entry) => entry.runId === run.id)) return false;
       if (run.status === 'queued') return true;
       const latest = this.store.attempts.list({ where: 'run_id = ?', params: [run.id] }).at(-1);
-      return latest !== undefined && latest.status === 'starting' && latest.runnerId === undefined;
+      if (latest !== undefined && latest.status === 'starting' && latest.runnerId === undefined) {
+        return true;
+      }
+      if (run.role !== 'chief') return false;
+      // A Work that already reached a terminal status has no next stage: its Chief Run is
+      // leftover bookkeeping (the delivery is complete, and `workflow.md` §5.1 continues it
+      // with a new related Work), so it is never claimed for another turn.
+      const work = this.store.works.find(run.workId);
+      if (
+        work !== undefined &&
+        (work.status === 'completed' || work.status === 'cancelled' || work.status === 'failed')
+      ) {
+        return false;
+      }
+      if (latest === undefined || (latest.status !== 'completed' && latest.status !== 'failed')) {
+        return false;
+      }
+      return this.store.runs
+        .list({ where: 'parent_run_id = ?', params: [run.id] })
+        .every((child) => child.join !== 'all' || isTerminalRunStatus(child.status));
     });
     return [...claimable].sort((left, right) => {
       if (left.createdAt !== right.createdAt) return left.createdAt < right.createdAt ? -1 : 1;
@@ -790,7 +846,13 @@ export class RunnerSupervisor {
         { details: { runId: run.id, verdictEventId: admission.verdictEventId } },
       );
     }
-    if (!canTransitionRun(run.status, 'starting')) {
+    // A Chief Run continued by its route is already `running` (its previous Attempt closed
+    // with a result and `JoinCoordinator.onChildSettled` moved it back), and
+    // `RUN_TRANSITIONS` has no `running → starting` edge: the Run is not resuming a parked
+    // execution, it is taking its next turn. Only that documented case is admitted; every
+    // other Run still has to satisfy the transition table.
+    const continuedChief = run.role === 'chief' && run.status === 'running';
+    if (!continuedChief && !canTransitionRun(run.status, 'starting')) {
       throw new ProtocolError('VALIDATION_ERROR', `Run ${run.id} cannot start from ${run.status}`, {
         details: { runId: run.id, status: run.status },
       });
@@ -801,10 +863,12 @@ export class RunnerSupervisor {
         runId: run.id,
         number: previous.length + 1,
         status: 'starting',
+        // The epoch is the Attempt's position in the Run's history, so it is strictly
+        // increasing and a stale capability (`protocol.md` §6) still fails the epoch check.
         ownerEpoch: previous.length,
         runnerId,
       });
-      this.store.runs.update(run.id, { status: 'starting' }, run.version);
+      if (!continuedChief) this.store.runs.update(run.id, { status: 'starting' }, run.version);
       return attempt;
     });
   }
@@ -1041,6 +1105,18 @@ export class RunnerSupervisor {
         }
         entry.ready = true;
         entry.environmentRef = message.environmentRef;
+        // `workflow.md` §5.1 "Work.status：queued→running", before the daemon's attempt hook
+        // runs: that hook mints the run-scope Grants (`execution.ts` `ensureRunGrants`), and
+        // a Grant can only be minted for a **running** Work
+        // (`GrantStore.issueInTransaction`). Minting first left the first Run of every Work
+        // with zero Grants (`Work … is queued; only a running Work may mint a Grant`) — the
+        // state in which an L2 route's Planning Run could not store its Plan artifact
+        // (WP-12 W4b).
+        const readyRun = this.store.runs.find(entry.runId);
+        if (readyRun !== undefined) {
+          this.markWorkRunning(readyRun);
+          this.attemptStarted(entry);
+        }
         const attempt = this.store.attempts.find(entry.attemptId);
         if (attempt !== undefined && attempt.status === 'starting') {
           this.store.attempts.update(attempt.id, { status: 'running' }, attempt.version);
@@ -1063,7 +1139,6 @@ export class RunnerSupervisor {
             },
           });
         }
-        if (run !== undefined) this.markWorkRunning(run);
         this.send(entry, { type: 'attempt.prompt', text: entry.prompt });
         return;
       }
@@ -1190,15 +1265,27 @@ export class RunnerSupervisor {
       return;
     }
     const usage = this.usage?.take(entry.runId);
+    // A Chief Run that still has `join=all` children outstanding is not finished: no
+    // other stage exists, so it waits instead of ending (`run-lifecycle.ts` `end`
+    // already refuses the graceful completion). `protocol.md` §6 makes the Chief the
+    // trigger for the next professional Run, which means it must stay alive until every
+    // stage of the route has settled (WP-12 W4b).
+    let waitingForChildren = false;
     this.guarded('settlement', entry.runId, () => {
       if (result.status === 'cancelled') {
         this.lifecycle.settle(entry.runId, 'cancelled', usage);
       } else if (result.status === 'completed') {
+        const run = this.store.runs.find(entry.runId);
+        if (run !== undefined && run.role === 'chief' && this.waitForLiveChildren(run)) {
+          waitingForChildren = true;
+          return;
+        }
         this.lifecycle.settle(entry.runId, 'completed', usage);
       } else {
         this.lifecycle.settle(entry.runId, 'failed', usage);
       }
     });
+    if (waitingForChildren) return;
     this.clearKillTimer(entry);
     this.reportSettled(entry.runId);
     this.endSettledChild(entry);

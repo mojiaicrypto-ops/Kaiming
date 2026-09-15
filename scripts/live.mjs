@@ -201,6 +201,11 @@ async function runProviderDrill(options) {
 
   const product = await loadProduct();
   const transport = createOpenAiCompatibleTransport({ secret: provider.secret });
+  // `--drill <name>` narrows an iteration to one drill (still with the real Provider and the
+  // connectivity probe). It exists because a single real drill is the unit of debugging for
+  // the L2 route; the release run never passes it, so the recorded suite is unchanged.
+  const only = process.env['AGENTDEV_LIVE_DRILL'] ?? null;
+  const selected = (name) => only === null || only === name;
   let harness;
   try {
     harness = await bootLiveStack({ product, provider, transport, meta });
@@ -211,27 +216,39 @@ async function runProviderDrill(options) {
       }
       return `provider.test completed in ${String(probe.latencyMs)}ms against ${provider.baseUrl} with model ${provider.modelId}; ${transport.summary()}`;
     });
-    await checks.check('drill.html-explanation', DRILL_ACS.html, () =>
-      runHtmlDrill({ harness, product }),
-    );
-    await checks.check('drill.l1-typo', DRILL_ACS.l1, () => runL1Drill({ harness, product }));
-    await checks.check(
-      'drill.l2-delivery',
-      provider.reviewModelId === null ? DRILL_ACS.l2 : [...DRILL_ACS.l2, INDEPENDENT_MODEL_AC],
-      () => runL2Drill({ harness, product }),
-    );
+    if (selected('html-explanation')) {
+      await checks.check('drill.html-explanation', DRILL_ACS.html, () =>
+        runHtmlDrill({ harness, product }),
+      );
+    }
+    if (selected('l1-typo')) {
+      await checks.check('drill.l1-typo', DRILL_ACS.l1, () => runL1Drill({ harness, product }));
+    }
+    if (selected('l2-delivery')) {
+      await checks.check(
+        'drill.l2-delivery',
+        provider.reviewModelId === null ? DRILL_ACS.l2 : [...DRILL_ACS.l2, INDEPENDENT_MODEL_AC],
+        () => runL2Drill({ harness, product }),
+      );
+    }
     // The daemon's own executor: supervisor → real Runner child → gateway → real Provider.
-    await checks.check('drill.runtime-attempt', ['AC-057'], () =>
-      runRuntimeAttemptDrill({ harness, product }),
-    );
+    if (selected('runtime-attempt')) {
+      await checks.check('drill.runtime-attempt', ['AC-057'], () =>
+        runRuntimeAttemptDrill({ harness, product }),
+      );
+    }
     // The whole WP-12 T2 main chain, driven by one real message and a real model.
-    await checks.check('drill.message-to-stage', DRILL_ACS.messageToStage, () =>
-      runMessageToStageDrill({ harness, product }),
-    );
+    if (selected('message-to-stage')) {
+      await checks.check('drill.message-to-stage', DRILL_ACS.messageToStage, () =>
+        runMessageToStageDrill({ harness, product }),
+      );
+    }
     // AC-066: real Pi SDK streaming deltas + stored-session history recovery.
-    await checks.check('drill.session-streaming', DRILL_ACS.session, () =>
-      runSessionStreamingDrill({ harness, product, provider }),
-    );
+    if (selected('session-streaming')) {
+      await checks.check('drill.session-streaming', DRILL_ACS.session, () =>
+        runSessionStreamingDrill({ harness, product, provider }),
+      );
+    }
     if (provider.reviewModelId === null) {
       checks.unverified(
         'provider.independent-models',

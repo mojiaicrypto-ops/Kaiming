@@ -22,6 +22,7 @@ import {
   ProtocolError,
   REQUIREMENT_CONTENT_HEADINGS,
   createTaskCandidateService,
+  type RunWorkspaceResolver,
   deriveProtectedPaths,
   type ArtifactService,
   type IntegrateService,
@@ -106,6 +107,59 @@ export interface ControlHandlerOptions {
    */
   readonly integrate?: IntegrateService;
   readonly settlement?: SettlementService;
+  /**
+   * The route-continuation port (`workflow.md` §3, WP-12 W4b).
+   *
+   * After a stage's delivery is accepted, the documented L2/L3 route continues with the
+   * next professional Run (`Plan → Develop → Review → Test → Accept → Settle`) and
+   * `docs/rules/agents.md` §4 makes the Chief trigger it once the result reaches Core. The
+   * decision lives in Core (`protocol.ts` `continueDeliveryRoute`, which reads the route
+   * from real records and reuses `queueApprovedRun`), and this handler is only the
+   * documented trigger point: the accepted `stage.submit`.
+   *
+   * Plan provenance rides the same hook: the Planning Run's delivered Plan artifact is what
+   * `approveDeliveredPlan` validates and submits to the real Plan gate, including AC-014's
+   * auto-approval when the Plan is in scope with no new product choice.
+   */
+  /**
+   * Releases the per-Task worktree lease the accepted Attempt was writing in (WP-12 W4b).
+   *
+   * `reliability.md` §3 keeps one writer per Task worktree with a one-hour TTL. A delivery
+   * ends the Attempt's *writing* while its process is still finishing the turn, so the next
+   * route stage — Review, on the same Task — resolved that worktree and got `BUSY`, fell
+   * back to the project root, and honestly rejected a delivery whose change was not there.
+   * Called after the candidate commit has read the files, so the released lease is the
+   * caller's own and the single-writer guarantee is unchanged.
+   */
+  readonly releaseWorkspaceLease?: (input: {
+    readonly taskId: string;
+    readonly attemptId: string;
+  }) => boolean;
+  /**
+   * The per-Task worktree resolver the tool bridge uses (WP-12 W4b).
+   *
+   * `context.request` used to read every requested path from `project.root` while the file
+   * tools read the Run's own Task worktree, so an independent Review Run that asked for the
+   * delivered file through the only channel the Product/Plan stages are given
+   * (`prepare-run.ts`) was served the **unmodified** project root: it then honestly rejected
+   * a delivery that had landed. Reading through the same resolver keeps one answer to
+   * "where is this Run's workspace", and the path boundary is unchanged (the resolver owns
+   * the root and the ledger still records the read).
+   */
+  readonly workspace?: RunWorkspaceResolver;
+  readonly routeContinuation?: (input: {
+    readonly workId: string;
+    readonly runId: string;
+    readonly completedRole: string;
+    readonly completedStage: string;
+    readonly artifactRefs: readonly { readonly id: string; readonly version: number }[];
+  }) =>
+    | {
+        readonly runId: string | null;
+        readonly stage: string | null;
+        readonly reason: string | null;
+      }
+    | undefined;
   /** Injectable clock, ISO-8601; defaults to the store's own. */
   readonly now?: () => string;
   readonly log?: (line: string) => void;
@@ -273,6 +327,20 @@ export function createControlHandlers(options: ControlHandlerOptions): ControlHa
   }): JsonObject | undefined {
     const { integrate, settlement } = options;
     if (integrate === undefined || settlement === undefined) return undefined;
+    // `workflow.md` §5.1 + `reliability.md` §4 steps 6–9: integration and settlement install
+    // one delivery for an **open** Work, which is the same barrier the Plan gate applies to
+    // writes. A second Settle stage result arriving after the Work was completed — a Chief
+    // that re-dispatched the stage while Core had already queued it — must therefore be
+    // recorded as a stage result and do nothing else: integrating again would publish a
+    // second `settlement.completed` at a new revision for a Work that is already delivered
+    // (observed on the real L2 route, WP-12 W4c).
+    const currentWork = store.works.find(input.workId);
+    if (currentWork !== undefined && currentWork.status !== 'running') {
+      log(
+        `control: Work ${input.workId} is ${currentWork.status}; the Settle stage result is recorded without a second integration`,
+      );
+      return { status: 'skipped', reason: `Work ${input.workId} is ${currentWork.status}` };
+    }
     const integrationOperationId = `integrate:${input.operationId}`;
     const integrated = integrate.integrate({
       workId: input.workId,
@@ -304,7 +372,13 @@ export function createControlHandlers(options: ControlHandlerOptions): ControlHa
       };
     }
     log(
-      `control: Work ${input.workId} settled at ${settled.revision} (requirement ${settled.requirementCompleted ? 'completed' : 'not completed'})`,
+      `control: Work ${input.workId} settled at ${settled.revision} (requirement ${
+        settled.requirementCompleted ? 'completed' : 'not completed'
+      }${
+        settled.requirementCompletionError === undefined
+          ? ''
+          : `: ${JSON.stringify(settled.requirementCompletionError)}`
+      })`,
     );
     return {
       status: 'settled',
@@ -318,6 +392,63 @@ export function createControlHandlers(options: ControlHandlerOptions): ControlHa
         ? {}
         : { requirementCompletionError: settled.requirementCompletionError }),
     };
+  }
+
+  /**
+   * The route continuation after one accepted stage (`workflow.md` §3, WP-12 W4b).
+   *
+   * The decision itself is Core's (`protocol.ts` `continueDeliveryRoute` reads the route
+   * from real records and reuses `queueApprovedRun`); this helper only forwards the facts of
+   * the accepted delivery — the Run, the stage and the artifacts it pinned — and reports the
+   * outcome. A port that throws or names its own reason is logged rather than failing the
+   * `stage.submit`: the delivery really was accepted, and a continuation problem is a
+   * delivery problem for the operator, not a reason to make the model resubmit.
+   */
+  function continueRoute(
+    run: {
+      readonly id: string;
+      readonly workId: string;
+      readonly role: string;
+      readonly stage: string;
+    },
+    row: {
+      readonly id: string;
+      readonly status: string;
+      readonly artifactRefs: readonly unknown[];
+    },
+    operationId: string | undefined,
+  ): JsonObject | undefined {
+    const port = options.routeContinuation;
+    if (port === undefined) return undefined;
+    const artifactRefs = row.artifactRefs.flatMap((entry) => {
+      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return [];
+      const ref = entry as Record<string, unknown>;
+      const id = ref['id'];
+      const version = ref['version'];
+      if (typeof id !== 'string' || id === '') return [];
+      return [{ id, version: typeof version === 'number' ? version : Number(version ?? 1) }];
+    });
+    try {
+      const result = port({
+        workId: run.workId,
+        runId: run.id,
+        completedRole: run.role,
+        completedStage: run.stage,
+        artifactRefs,
+      });
+      if (result === undefined || result === null) return undefined;
+      return {
+        stage: result.stage,
+        runId: result.runId,
+        reason: result.reason,
+        operationId: operationId ?? null,
+      };
+    } catch (error) {
+      log(
+        `control: route continuation after ${run.stage} of ${run.workId} refused: ${errorText(error)}`,
+      );
+      return undefined;
+    }
   }
 
   function requireWorkVersion(workId: string, expectedVersion: number | undefined): void {
@@ -458,6 +589,17 @@ export function createControlHandlers(options: ControlHandlerOptions): ControlHa
       // `requirements.md` §5.1: an active Requirement is in its planning phase — written in
       // the same transaction as the Git-backed save.
       store.requirements.update(saved.row.id, { phase: 'plan' }, saved.row.version);
+      // `data.md` §2 `work.requirementId` and `PRODUCT.md` §3 ("L2/L3 交付均关联
+      // Requirement"): the association is a *Work* field, and `workflow.md` §7 completes the
+      // Requirement only "存在 requirementId 时". Binding it here — in the same transaction
+      // as the save — is what lets the settlement's completion path resolve the Requirement:
+      // without it the L2 route reached `Work completed` and left the Requirement at
+      // `active/plan` (`integration.requirementId ?? work.requirementId` was undefined), so
+      // the pool record was never completed (WP-12 W4c).
+      const current = store.works.find(input.workId);
+      if (current !== undefined && current.requirementId === undefined) {
+        store.works.update(current.id, { requirementId: saved.requirementId }, current.version);
+      }
       return saved;
     });
     if (!outcome.ok) {
@@ -576,10 +718,21 @@ export function createControlHandlers(options: ControlHandlerOptions): ControlHa
         throw new ProtocolError('VALIDATION_ERROR', 'each requestedRef needs a path');
       }
       const refReason = typeof ref['reason'] === 'string' ? ref['reason'] : reason;
+      // The Run's own workspace (its per-Task worktree when the stack has one), never the
+      // project root blindly: see the `workspace` option.
+      const workspaceRoot =
+        options.workspace === undefined
+          ? project.root
+          : options.workspace.resolve({
+              workId: work.id,
+              runId: run.id,
+              attemptId: caller.attemptId,
+              epoch: caller.epoch,
+            }).root;
       const decision = resolveWithinRoots({
         path,
         access: 'read',
-        roots: [project.root],
+        roots: [workspaceRoot],
         protectedPaths,
       });
       if (!decision.ok) {
@@ -929,32 +1082,53 @@ export function createControlHandlers(options: ControlHandlerOptions): ControlHa
                 `control: could not release the writer lease of Work ${run.workId}: ${errorText(error)}`,
               );
             }
-            // The stage is recorded; the Task's candidate commit follows so the
-            // integration has a verified revision to cherry-pick (`reliability.md` §4).
-            commitTaskCandidate({
-              run: {
-                id: run.id,
-                workId: run.workId,
-                ...(run.taskId === undefined ? {} : { taskId: run.taskId }),
-                role: run.role,
-                configSnapshotId: run.configSnapshotId,
-                contextSnapshotId: run.contextSnapshotId,
-              },
-              attemptId: caller.attemptId,
-              result: {
-                // `stageGate.submit` already validated the payload against
-                // `stageResultSchema`; these guards only satisfy the JSON type.
-                changedPaths: Array.isArray(result['changedPaths'])
-                  ? result['changedPaths'].filter(
-                      (path): path is string => typeof path === 'string',
-                    )
-                  : [],
-                readLedgerSeq:
-                  typeof result['readLedgerSeq'] === 'number' ? result['readLedgerSeq'] : 0,
-                readLedgerHash:
-                  typeof result['readLedgerHash'] === 'string' ? result['readLedgerHash'] : '',
-              },
-            });
+            // The stage is recorded; the **implementer's** Task candidate commit follows so
+            // the integration has a verified revision to cherry-pick (`reliability.md` §4).
+            // Only a role that may write source produces a candidate: Review/Test read the
+            // frozen copy and Settlement edits authorized documentation, so a candidate
+            // committed from their (unchanged) worktree would overwrite the implementer's
+            // candidate with the base tree — the integration then had a Task whose latest
+            // manifest came from a read-only stage (WP-12 W4b).
+            const implementer = run.role === 'backend' || run.role === 'frontend';
+            if (implementer) {
+              commitTaskCandidate({
+                run: {
+                  id: run.id,
+                  workId: run.workId,
+                  ...(run.taskId === undefined ? {} : { taskId: run.taskId }),
+                  role: run.role,
+                  configSnapshotId: run.configSnapshotId,
+                  contextSnapshotId: run.contextSnapshotId,
+                },
+                attemptId: caller.attemptId,
+                result: {
+                  // `stageGate.submit` already validated the payload against
+                  // `stageResultSchema`; these guards only satisfy the JSON type.
+                  changedPaths: Array.isArray(result['changedPaths'])
+                    ? result['changedPaths'].filter(
+                        (path): path is string => typeof path === 'string',
+                      )
+                    : [],
+                  readLedgerSeq:
+                    typeof result['readLedgerSeq'] === 'number' ? result['readLedgerSeq'] : 0,
+                  readLedgerHash:
+                    typeof result['readLedgerHash'] === 'string' ? result['readLedgerHash'] : '',
+                },
+              });
+            }
+            // The candidate commit above has already read the Task's files, so the
+            // worktree lease can go back now: the next stage of the route runs on the same
+            // Task and must be able to resolve that tree instead of `BUSY`.
+            if (run.taskId !== undefined && options.releaseWorkspaceLease !== undefined) {
+              try {
+                options.releaseWorkspaceLease({
+                  taskId: run.taskId,
+                  attemptId: caller.attemptId,
+                });
+              } catch (error) {
+                log(`control: could not release the Task worktree lease: ${errorText(error)}`);
+              }
+            }
             // The L2/L3 Settle stage: this accepted result is the route's Accept/Integrate
             // point, so the verified Task candidates are integrated and then settled
             // (`workflow.md` §3/§7). Any refusal is surfaced in the response.
@@ -965,12 +1139,22 @@ export function createControlHandlers(options: ControlHandlerOptions): ControlHa
                     operationId: operationId ?? `${run.id}:${caller.attemptId}`,
                   })
                 : undefined;
+            // `workflow.md` §3 / `docs/rules/agents.md` §4: the next stage of the route is
+            // triggered once a stage result reaches Core. Plan provenance rides the same
+            // hook (`protocol.ts` `approveDeliveredPlan` reads the Planning Run's delivered
+            // Plan artifact, validates it and submits it to the real Plan gate, including
+            // AC-014's auto-approval), and after Accept/Settle the route is complete.
+            const continuation =
+              outcome.row.status === 'success'
+                ? continueRoute(run, outcome.row, operationId)
+                : undefined;
             return {
               accepted: true,
               stageResultId: outcome.row.id,
               status: outcome.row.status,
               outcome: outcome.row.status,
               ...(delivery === undefined ? {} : { delivery }),
+              ...(continuation === undefined ? {} : { continuation }),
             };
           }
           // A Schema rejection is the documented `stage.submit` result, not a transport

@@ -665,11 +665,23 @@ export class GrantStore {
    * The role's authorized stages come from the domain Context ACL
    * (`context/acl.ts` `ROLE_STAGES`): `review` may only act at `review`, `test`
    * only at `test`, and so on. The Work must also have dispatched that role.
+   *
+   * "Dispatched" is a **Run of this Work with that role** — the Run row is the record
+   * `agent.dispatch` writes (`data.md` §2). A Task is a Plan's executable unit and exists
+   * only after the Plan gate approved a Plan, so requiring one here made the route's
+   * pre-Plan stages unmintable: a Chief Run and its Planning child both got **zero** Grants
+   * (`Work … has no Task for role planning; the role was never dispatched`) and the Planning
+   * Run could not store the Plan document at all (WP-12 W4b). The Task is still the binding
+   * for a Task-scoped Grant (`issueInTransaction` keeps `run.taskId` and the Task checks).
    */
   private roleStages(workId: string, role: Role): readonly string[] {
-    const dispatched = this.store.tasks
-      .list({ where: 'work_id = ?', params: [workId] })
-      .some((task) => task.role === role);
+    const dispatched =
+      this.store.tasks
+        .list({ where: 'work_id = ?', params: [workId] })
+        .some((task) => task.role === role) ||
+      this.store.runs
+        .list({ where: 'work_id = ? AND role = ?', params: [workId, role] })
+        .some((run) => run.workId === workId);
     return dispatched ? ROLE_STAGES[role] : [];
   }
 

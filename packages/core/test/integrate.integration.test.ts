@@ -556,6 +556,97 @@ describe('Accept/Integrate and Settlement over real Git (AC-010, AC-012, AC-041,
     }
   });
 
+  it('reuses the verified Task evidence when only the Core-maintained pool was added (WP-12 W4c)', () => {
+    const h = harness();
+    try {
+      const specA: TaskSpec = {
+        taskId: TASK_A,
+        dependsOn: [],
+        dependencyRevision: h.requirementHead,
+      };
+      addTask(h, specA);
+      const candidate = commitCandidate(h, specA, ['src/orders.ts'], {
+        path: 'src/orders.ts',
+        content: 'export const orders = ["A"];\n',
+      });
+      // `reliability.md` §9: the requirement pool is maintained by Core, so a Core commit
+      // lands on the delivery branch that the Task's own candidate commit never carries.
+      // Comparing the two *whole* delivered trees could therefore never be equal once a
+      // Requirement existed, and the integration froze no manifest for a combination whose
+      // code was in fact identical (WP-12 W4c).
+      writeFileAt(h.repo, `.agentdev/requirements/${REQUIREMENT_ID}/README.md`, '# pool\n');
+      requireValue(
+        port.commitPaths(h.repo, 'doc(requirement): core pool note', [
+          `.agentdev/requirements/${REQUIREMENT_ID}/README.md`,
+        ]),
+        'pool commit',
+      );
+      expect(deliveryHead(h)).not.toBe(candidate);
+
+      const integrated = h.integrate.integrate({ workId: WORK_ID, operationId: INTEGRATE_OP });
+      expect(integrated.ok, integrated.ok ? '' : integrated.message).toBe(true);
+      if (!integrated.ok) throw new Error(integrated.message);
+      // The combination carries the same code, so the Task's route evidence is reused and an
+      // integration manifest is frozen against the integrated revision.
+      expect(integrated.verificationManifestId).not.toBeNull();
+      const frozen = readFrozenVerificationManifest(
+        h.store,
+        integrated.verificationManifestId ?? '',
+      );
+      expect(frozen?.codeRevision).toBe(integrated.revision);
+      expect(frozen?.codeTree).toBe(
+        deliveredCodeTreeHash({ repoRoot: h.repo, revision: integrated.revision }),
+      );
+      expect(frozen?.dependencyManifestRefs).toEqual([
+        h.store.tasks.find(TASK_A)?.latestManifestId,
+      ]);
+
+      const settled = h.settlement.settleFromIntegration({ operationId: INTEGRATE_OP });
+      expect(settled.ok, settled.ok ? '' : settled.message).toBe(true);
+      if (!settled.ok) throw new Error(settled.message);
+      expect(settled.requirementCompleted).toBe(true);
+      expect(h.store.requirements.find(REQUIREMENT_ID)?.lifecycle).toBe('completed');
+    } finally {
+      h.store.close();
+    }
+  });
+
+  it('freezes no integration manifest when the combination really is unverified code', () => {
+    const h = harness();
+    try {
+      const specA: TaskSpec = {
+        taskId: TASK_A,
+        dependsOn: [],
+        dependencyRevision: h.requirementHead,
+      };
+      addTask(h, specA);
+      commitCandidate(h, specA, ['src/orders.ts'], {
+        path: 'src/orders.ts',
+        content: 'export const orders = ["A"];\n',
+      });
+      // A *code* commit from elsewhere lands on the delivery branch: the combination contains
+      // code no Review/Test ever saw, so nothing may be frozen for it and settlement must
+      // refuse (the fail-closed half of `reliability.md` §4 step 4).
+      writeFileAt(h.repo, 'src/other.ts', 'export const other = 1;\n');
+      requireValue(
+        port.commitPaths(h.repo, 'feat: unrelated code', ['src/other.ts']),
+        'code commit',
+      );
+
+      const integrated = h.integrate.integrate({ workId: WORK_ID, operationId: INTEGRATE_OP });
+      expect(integrated.ok, integrated.ok ? '' : integrated.message).toBe(true);
+      if (!integrated.ok) throw new Error(integrated.message);
+      expect(integrated.verificationManifestId).toBeNull();
+      const settled = h.settlement.settleFromIntegration({ operationId: INTEGRATE_OP });
+      expect(settled.ok).toBe(false);
+      if (settled.ok) throw new Error('unreachable');
+      expect(settled.code).toBe('GATE_NOT_READY');
+      expect(h.store.requirements.find(REQUIREMENT_ID)?.lifecycle).toBe('active');
+    } finally {
+      h.store.close();
+    }
+  });
+
   it('refuses a Task without a frozen manifest and writes nothing', () => {
     const h = harness();
     try {

@@ -1,0 +1,21 @@
+work: 01a0a721-1345-77c6-8d04-071637f96266
+runs:
+  chief/coordinate running task=- parent=- run=01a0a721-136b-735a-b7db-45a55cedac06
+  planning/planning completed task=- parent=01a0a721 run=01a0a721-7e4b-74c7-84f0-b586740e9ae5
+  backend/develop-L2 completed task=01a0a721-acc1-79ba-81e3-3314bb9820f7 parent=01a0a721 run=01a0a721-acc3-782b-afca-0a23b6894961
+  review/review completed task=01a0a721-acc1-79ba-81e3-3314bb9820f7 parent=01a0a721 run=01a0a721-e0db-7145-a6cd-cc6a93db13aa
+  test/test completed task=01a0a721-acc1-79ba-81e3-3314bb9820f7 parent=01a0a721 run=01a0a722-0009-7912-821d-2e6d4060b206
+  backend/develop-L2 completed task=- parent=01a0a721 run=01a0a722-06ad-7ffc-bee9-ba2fb10d5615
+  settlement/settlement running task=01a0a721-acc1-79ba-81e3-3314bb9820f7 parent=01a0a721 run=01a0a722-27b9-7935-983b-4eea1c1b0621
+tasks: ["planning:planRef=01a0a721@1:latestManifest=-","backend:planRef=01a0a721@1:latestManifest=01a0a721-e0c1-741f-9729-5423bf92d67c"]
+manifests: ["planning: none","backend: 29104db4ba7d9e3c61cee59de7f2d6097738f8c45f3db571de52bcd2022017fe rev=d9615009e3b2"]
+integrations: ["completed target=b077f6673eaa candidate=96d411782c84 codeTree=b8e6b42a134d verificationManifest=01a0a722-8bad-7a06-be76-7e3c36e88922 applied=[\"01a0a721-acc1-79ba-81e3-3314bb9820f7\"] skipped=[]"]
+requirements: ["01a0a721-50c4-7506-b3d8-f09ac5137981 completed/undefined rv=2 rev=29942da476d4 final=2b025e85-5e85-7b99-b76e-3d6800577818"]
+requirement saves: ["completed head=a885a997f5c1 candidate=b077f6673eaa rv=1 updated=true","completed head=96d411782c84 candidate=29942da476d4 rv=2 updated=true","failed head=29942da476d4 candidate=b077f6673eaa rv=1 updated=undefined"]
+continuations:
+  drill: route continuation after planning/planning → stage=Develop run=01a0a721-acc3-782b-afca-0a23b6894961 reason=null
+  drill: route continuation after backend/develop-L2 → stage=Review run=01a0a721-e0db-7145-a6cd-cc6a93db13aa reason=null
+  drill: route continuation after review/review → stage=Test run=01a0a722-0009-7912-821d-2e6d4060b206 reason=null
+  drill: route continuation after test/test → stage=Settle run=01a0a722-27b9-7935-983b-4eea1c1b0621 reason=null
+  drill: route continuation after backend/develop-L2 → stage=Settle run=null reason=null
+  drill: route continuation after settlement/settlement → stage=null run=null reason=null

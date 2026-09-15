@@ -30,9 +30,10 @@
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type { VerificationManifest } from '@agentdev/contracts';
+import { RUNTIME_HOME_DIR, type VerificationManifest } from '@agentdev/contracts';
 import { sha256, type ProjectStore } from '@agentdev/storage';
 import {
+  runGit,
   runIntegration,
   type AppliedIntegrationTask,
   type CasService,
@@ -45,10 +46,70 @@ import {
   INTEGRATION_OPERATION_KIND,
   readFrozenVerificationManifest,
 } from './settlement.js';
+import type { PlanGateService } from './gates.js';
 import type { ProjectIntegrationLock } from './requirement-save.js';
 import type { SnapshotWriter } from './snapshots.js';
 
 const FULL_OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u;
+
+/**
+ * The Core-maintained trees a delivered revision carries in addition to the code.
+ *
+ * `reliability.md` §4 freezes "完整代码树（含测试、配置、锁文件；**排除正式知识和过程目录**）",
+ * and §9 adds that "代码集成只从 Task 增量取授权源码，**需求文件由 Core 当前事实维护**": the
+ * process directory (`RUNTIME_HOME_DIR` = `.agentdev`, which holds the requirement pool and
+ * the Work's process records) and the Project's formal knowledge tree
+ * (`project.documentRoot`) are written by Core's own commits, not by the Task.
+ */
+function coreMaintainedPrefixes(documentRoot: string | undefined): readonly string[] {
+  const prefixes: string[] = [RUNTIME_HOME_DIR];
+  if (documentRoot !== undefined && documentRoot !== '') {
+    prefixes.push(documentRoot.replace(/\/+$/u, ''));
+  }
+  return prefixes;
+}
+
+/**
+ * Whether one integrated revision carries the same **code** as a verified Task candidate.
+ *
+ * `reliability.md` §4 step 4 reuses the route's evidence when "单 Task **代码树**及语义依据完全
+ * 一致"; the delivery branch, however, advances with Core-owned commits (the requirement pool,
+ * the knowledge documents) that the Task's own candidate commit never contains. Comparing the
+ * two revisions' **whole** trees therefore could never be equal once a Requirement existed —
+ * the reuse condition was unsatisfiable in exactly the case it exists for, and settlement then
+ * refused the combination with `集成候选 … 没有验证 Manifest` (WP-12 W4c).
+ *
+ * This compares the two tree listings with the Core-maintained prefixes removed. A genuine
+ * code difference still fails the comparison, so the caller keeps its fail-closed refusal:
+ * no manifest is frozen for a combination whose code no Review/Test ever saw.
+ */
+function sameDeliveredCode(input: {
+  readonly repoRoot: string;
+  readonly verifiedRevision: string;
+  readonly candidateRevision: string;
+  readonly documentRoot: string | undefined;
+}): boolean {
+  const prefixes = coreMaintainedPrefixes(input.documentRoot);
+  const entriesOf = (revision: string): string | null => {
+    const result = runGit(['ls-tree', '-r', '-z', '--full-tree', revision], {
+      cwd: input.repoRoot,
+    });
+    if (!result.ok) return null;
+    return result.stdout
+      .split('\u0000')
+      .filter((line) => line !== '')
+      .filter((line) => {
+        const tab = line.indexOf('\t');
+        const path = tab === -1 ? '' : line.slice(tab + 1);
+        return !prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+      })
+      .join('\u0000');
+  };
+  const verified = entriesOf(input.verifiedRevision);
+  const candidate = entriesOf(input.candidateRevision);
+  if (verified === null || candidate === null) return false;
+  return verified === candidate;
+}
 
 /** Snapshot payload `kind` of a frozen integration `VerificationManifest`. */
 export const INTEGRATION_MANIFEST_KIND = 'verification_manifest';
@@ -109,6 +170,14 @@ export type IntegrateOutcome =
 
 export interface IntegrateServiceOptions {
   readonly store: ProjectStore;
+  /**
+   * The Plan gate, when the stack has one.
+   *
+   * It answers which Tasks belong to the approved Plan (`workflow.md` §3/§7); a Work also
+   * carries the pre-Plan Task a route stage needed for its Grants, and that row must not be
+   * demanded a `VerificationManifest` (WP-12 W4b).
+   */
+  readonly planGate?: PlanGateService;
   readonly worktrees: WorktreeGitPort;
   readonly cas: CasService;
   /** The shared `integration:<projectId>` lock (`AC-091`, `W8R2-02`). */
@@ -203,7 +272,28 @@ export function createIntegrateService(options: IntegrateServiceOptions): Integr
         return refusal('GATE_NOT_READY', `无法确定 ${ref} 的集成基线，不能集成`, { ref });
       }
 
-      const taskRows = store.tasks.list({ where: 'work_id = ?', params: [work.id] });
+      // The Tasks in scope are the approved Plan's own DAG (`data.md` §2 `task` names the
+      // Plan as its unit). A Work also carries the pre-Plan Task a route stage needed so
+      // `GrantStore.roleStages` could mint its Run-scope Grants
+      // (`orchestrator.ensureStageTask`); that row is bookkeeping for a role the Plan does
+      // not implement, so demanding a `VerificationManifest` from it refused every L2
+      // integration with `Task … 没有 VerificationManifest` (WP-12 W4b). The Plan's Tasks
+      // keep the strict rule below: a Task *inside* the DAG with no frozen result still
+      // fails closed.
+      const gates = options.planGate;
+      const approvedPlanRef =
+        gates === undefined
+          ? undefined
+          : gates.getCurrentPlanApproval(work.id, work.baseRevision ?? 'working-tree').current
+              ?.planRef;
+      const taskRows = store.tasks
+        .list({ where: 'work_id = ?', params: [work.id] })
+        .filter(
+          (task) =>
+            approvedPlanRef === undefined ||
+            (task.planRef.id === approvedPlanRef.id &&
+              task.planRef.version === approvedPlanRef.version),
+        );
       if (taskRows.length === 0) {
         return refusal('GATE_NOT_READY', `Work ${work.id} 没有可集成的 Task`, { workId: work.id });
       }
@@ -321,11 +411,21 @@ export function createIntegrateService(options: IntegrateServiceOptions): Integr
           repoRoot: options.repoRoot,
           revision: result.revision,
         });
-        // `reliability.md` §4 step 4: evidence may be reused only when the code tree is
-        // *identical*. The integration manifest records the reused manifest ids so the
-        // reuse source is auditable; with no identical tree nothing is frozen and
-        // settlement will refuse the unverified combination.
-        const reused = results.filter((entry) => entry.manifest.codeTree === codeTree);
+        // `reliability.md` §4 step 4: evidence may be reused only when the single Task's
+        // **code** (and its semantic basis) is identical. The comparison is deliberately the
+        // code content rather than the two whole delivered trees, because the delivery
+        // branch also carries the Core-maintained requirement pool and knowledge documents
+        // (§9) — see `sameDeliveredCode`. The integration manifest records the reused
+        // manifest ids so the reuse source is auditable; with different code nothing is
+        // frozen and settlement refuses the unverified combination.
+        const reused = results.filter((entry) =>
+          sameDeliveredCode({
+            repoRoot: options.repoRoot,
+            verifiedRevision: entry.manifest.codeRevision,
+            candidateRevision: result.revision,
+            documentRoot: project.documentRoot,
+          }),
+        );
         let verificationManifestId: string | null = null;
         const manifestRefs: string[] = [];
         if (reused.length > 0) {

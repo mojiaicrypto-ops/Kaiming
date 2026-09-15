@@ -262,6 +262,8 @@ export async function openProject(options: OpenProjectOptions): Promise<OpenedPr
   // Git instead of only flipping the SQLite projection (`protocol.md` §8).
   const settlement = new SettlementService({
     store,
+    // The Plan gate scopes settlement to the approved Plan's Tasks (WP-12 W4b).
+    planGate: gates,
     worktrees: gitPort,
     cas,
     journal,
@@ -280,6 +282,9 @@ export async function openProject(options: OpenProjectOptions): Promise<OpenedPr
     lock,
     projectId: identity.projectId,
     repoRoot: identity.canonicalRoot,
+    // The Plan gate answers which Tasks belong to the approved Plan (`workflow.md` §3/§7),
+    // so a Work's pre-Plan Task is not demanded a `VerificationManifest` (WP-12 W4b).
+    planGate: gates,
     worktreeRoot: join(dataDir, 'task-worktrees'),
     snapshots,
     ...(options.log === undefined ? {} : { log: options.log }),
