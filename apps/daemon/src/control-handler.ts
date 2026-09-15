@@ -36,7 +36,7 @@ import {
   type RequirementSaveService,
   type StageGate,
 } from '@agentdev/core';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   ROLES,
   type AssessmentPayload,
@@ -44,7 +44,7 @@ import {
   type SourceRef,
 } from '@agentdev/contracts';
 import { sha256, withTransaction, type ProjectStore } from '@agentdev/storage';
-import type { WorktreeGitPort } from '@agentdev/workspace';
+import { taskWorktreePath, type WorktreeGitPort } from '@agentdev/workspace';
 
 import { workWriterLeaseResource } from './tool-handler.js';
 
@@ -82,6 +82,15 @@ export interface ControlHandlerOptions {
   readonly snapshots?: SnapshotWriter;
   readonly worktreeRoot?: string;
   readonly repoRoot?: string;
+  /**
+   * The root of the **persistent** per-Task workspaces (W6).
+   *
+   * The Run's writes live in `<taskWorkspaceRoot>/tasks/<taskId>` rather than in the
+   * project root, so the candidate commit must read the changed files from there. Absent
+   * means the stack predates the per-Task workspace and the project root is used, which is
+   * what the candidate path did before W6.
+   */
+  readonly taskWorkspaceRoot?: string;
   /** The Project policy hash the `VerificationManifest` binds. */
   readonly policyHash?: string;
   /** The environment the live Attempt reported (`attempt.ready`). */
@@ -128,6 +137,22 @@ export const CORRECTIVE_PROMPT = [
   'contract violation and ends this Run.',
 ].join(' ');
 
+/**
+ * Where the Run's working copy really is (W6).
+ *
+ * A wired per-Task workspace exists on disk after the Run's first tool call, so its
+ * presence is the signal; the project root is only the pre-W6 fallback.
+ */
+function taskSourceRoot(
+  taskWorkspaceRoot: string | undefined,
+  taskId: string,
+  repoRoot: string,
+): string {
+  if (taskWorkspaceRoot === undefined) return repoRoot;
+  const path = taskWorktreePath(taskWorkspaceRoot, taskId);
+  return existsSync(path) ? path : repoRoot;
+}
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -173,7 +198,7 @@ export function createControlHandlers(options: ControlHandlerOptions): ControlHa
       readonly readLedgerHash: string;
     };
   }): void {
-    const { worktrees, snapshots, worktreeRoot, repoRoot, policyHash } = options;
+    const { worktrees, snapshots, worktreeRoot, repoRoot, policyHash, taskWorkspaceRoot } = options;
     if (
       worktrees === undefined ||
       snapshots === undefined ||
@@ -213,7 +238,11 @@ export function createControlHandlers(options: ControlHandlerOptions): ControlHa
       readLedgerHash: input.result.readLedgerHash,
       environmentRef: options.environmentRefOf?.(input.attemptId) ?? '',
       changedPaths: input.result.changedPaths,
-      sourceRoot: repoRoot,
+      // W6: the Run's files are in its own Task worktree. Reading them from the project
+      // root would commit whatever the *project* happens to hold — the stale base — so the
+      // candidate would silently drop the Task's work. The project root stays the fallback
+      // only for a stack that never wired the per-Task workspace.
+      sourceRoot: taskSourceRoot(taskWorkspaceRoot, task.id, repoRoot),
       message: `feat(task): ${task.id} 的候选提交`,
     });
     if (!committed.ok) {

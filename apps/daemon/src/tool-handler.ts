@@ -25,15 +25,15 @@
  *   and the network policy, and records the `tool_operation` plus `tool.invoked`/
  *   `tool.refused` audit events.
  *
- * ## Per-Task worktree (Q-T3-8)
+ * ## Per-Task worktree (W6)
  *
- * `reliability.md` §4 gives each Task an external worktree created from the Work's
- * `baseRevision`, but no production path writes the Task rows that would carry
- * `dependencyRevision`/`worktreeId` yet (`api-gap-audit.md` §2.2). This handler therefore
- * uses {@link createProjectRootWorkspaceResolver}, which returns the project root for every
- * Run and reports `taskWorktree: false`. The single-writer lease and the Broker's path
- * boundary keep concurrent writers honest in the meantime; **wiring the real
- * `worktreeManager` is a registered gap**, not something this resolver pretends to do.
+ * The workspace resolver is injected. Production passes
+ * `core`'s `createTaskWorktreeWorkspaceResolver`, so a professional Run is rooted at its
+ * Task's own external Git worktree (`reliability.md` §4) under the worktree manager's
+ * `(attempt, epoch)` lease, and a delete inside that root cannot name another Task's file.
+ * {@link createProjectRootWorkspaceResolver} remains as the documented fallback for a
+ * caller that has no worktree manager (tests, a stack assembled without Git); it reports
+ * `taskWorktree: false` rather than pretending.
  */
 import {
   LIMITS,
@@ -60,6 +60,7 @@ import {
   type ArtifactService,
   type Broker,
   type PlanGateService,
+  type RunWorkspaceResolver,
   type ToolSuccess,
 } from '@agentdev/core';
 import type { ProjectStore } from '@agentdev/storage';
@@ -69,29 +70,13 @@ import type {
   ToolExecuteHandler,
 } from '@agentdev/core';
 
-/** The workspace root one Run may write to. */
-export interface RunWorkspace {
-  /** Absolute path handed to the Broker as the only allowed root. */
-  readonly root: string;
-  /** `false` while the per-Task worktree gap is open (Q-T3-8). */
-  readonly taskWorktree: boolean;
-}
-
-/**
- * Chooses the root a Run's tools operate in.
- *
- * Replaced by a resolver backed by `packages/workspace`'s worktree manager once the Task
- * rows exist (T10); today every Run uses the project root.
- */
-export interface RunWorkspaceResolver {
-  resolve(input: { readonly workId: string; readonly runId: string }): RunWorkspace;
-}
-
 /**
  * The documented fallback: the project root, with the gap reported rather than hidden.
  *
  * The resolver refuses a Run whose project is not open, because a tool call must never
- * fall back to a path nobody authorized.
+ * fall back to a path nobody authorized. Production wires the per-Task worktree resolver
+ * instead (`main.ts`), so this one is only what a stack assembled without a worktree
+ * manager gets — and it says `taskWorktree: false` so the log can report it.
  */
 export function createProjectRootWorkspaceResolver(
   store: Pick<ProjectStore, 'runs' | 'works' | 'projects'>,
@@ -405,12 +390,19 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
       }
       assertWriter(caller, work.id, work.projectId);
 
-      const root = workspace.resolve({ workId: work.id, runId: run.id });
+      const root = workspace.resolve({
+        workId: work.id,
+        runId: run.id,
+        attemptId: caller.attemptId,
+        epoch: caller.epoch,
+      });
       const runRef = { id: run.id, workId: run.workId, role: run.role };
-      if (!root.taskWorktree && !reportedGap) {
+      if (!root.taskWorktree && run.taskId !== undefined && !reportedGap) {
+        // A Task Run without a worktree means the resolver is the fallback: say so once,
+        // because that is the difference between "isolated per Task" and "shared root".
         reportedGap = true;
         log(
-          `tool-handler: Work ${work.id} uses the project root; the per-Task worktree is not wired yet (T3 Q-T3-8)`,
+          `tool-handler: Run ${run.id} (Task ${run.taskId}) is using the project root; no per-Task worktree resolver is wired into this stack`,
         );
       }
 
@@ -460,7 +452,7 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
       // CGNAT, metadata space and the daemon's own ports are refused before execution, so
       // the model gets the typed refusal instead of a transport error the broker never saw.
       if (plan.network !== undefined) {
-        const policy = broker.networkPolicy({});
+        const policy = broker.egressPolicy();
         for (const url of plan.network) {
           const decision = await policy.decide({ url });
           if (decision.ok) continue;
@@ -742,7 +734,12 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
       const planned = planToolCall({
         toolName,
         args,
-        cwdRoot: workspace.resolve({ workId: work.id, runId: run.id }).root,
+        cwdRoot: workspace.resolve({
+          workId: work.id,
+          runId: run.id,
+          attemptId: caller.attemptId,
+          epoch: caller.epoch,
+        }).root,
         role: caller.role,
         configPolicy,
       });

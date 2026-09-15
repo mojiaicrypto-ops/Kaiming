@@ -412,13 +412,20 @@ describe('Broker integration (AC-048, AC-050)', () => {
     }
   });
 
-  it('refuses a private network target before any request (required failure test)', () => {
-    const policy = new NetworkPolicy();
-    const decision = policy.checkUrl('http://10.0.0.5/private');
-    expect(decision.ok).toBe(false);
-    if (decision.ok) throw new Error('unreachable');
-    expect(decision.code).toBe('NOT_AUTHORIZED');
-    expect(decision.reason).toContain('10.0.0.5');
+  it('refuses the two fixed network denials before any request (required failure test, W6)', () => {
+    const policy = new NetworkPolicy({ daemonPorts: () => [4318] });
+    // §7.1: a private address is ordinary development and is admitted.
+    expect(policy.checkUrl('http://10.0.0.5/private').ok).toBe(true);
+    // The fixed denials are the metadata space and the daemon's own bound ports.
+    const metadata = policy.checkUrl('http://169.254.169.254/latest/meta-data/');
+    expect(metadata.ok).toBe(false);
+    if (metadata.ok) throw new Error('unreachable');
+    expect(metadata.code).toBe('NOT_AUTHORIZED');
+    expect(metadata.reason).toContain('metadata');
+    const daemonPort = policy.checkUrl('http://127.0.0.1:4318/control');
+    expect(daemonPort.ok).toBe(false);
+    if (daemonPort.ok) throw new Error('unreachable');
+    expect(daemonPort.reason).toContain('daemon itself is listening on');
   });
 
   it('runs a command inside a real isolated test environment and cleans it up', async () => {

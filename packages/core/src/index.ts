@@ -45,6 +45,14 @@ export * from './grants.js';
 export * from './secrets.js';
 export * from './secret-repository.js';
 export * from './broker.js';
+// W6 (WP-12): the controlled network egress. `egress-channel` is the contract the Broker
+// mounts (the named volume, the in-container bridge, the `HTTP(S)_PROXY` wrapper) and
+// `egress` is the Core-side HTTP proxy plus the policy glue the daemon starts.
+export * from './egress-channel.js';
+// W6 (WP-12): the per-Task workspace resolver — a Task's tools run in the Task's own
+// external Git worktree under the documented single-writer lease.
+export * from './task-workspace.js';
+export * from './egress.js';
 export * from './test-environment.js';
 // T3 (WP-12): the tool bridge. `process-async`/`tool-processes` are the async,
 // cancellable process port the Broker's shell path uses; `tools` is the Core tool

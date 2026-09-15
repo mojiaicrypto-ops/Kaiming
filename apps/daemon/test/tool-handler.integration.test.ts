@@ -328,7 +328,7 @@ describe('daemon tool handler', () => {
     expect(readFileSync(join(workspace, A), 'utf8')).toBe('export const a = 1;\n');
   });
 
-  it('reports the per-Task worktree gap once, without pretending it is wired', async () => {
+  it('reports the missing per-Task worktree resolver once, without pretending it is wired', async () => {
     const lines: string[] = [];
     const logging = createToolHandler({
       store,
@@ -345,7 +345,11 @@ describe('daemon tool handler', () => {
     issue('read');
     await logging.execute({ caller: backendCaller, request: request('read', { path: A }) });
     await logging.execute({ caller: backendCaller, request: request('read', { path: A }) });
-    expect(lines.filter((line) => line.includes('Q-T3-8'))).toHaveLength(1);
+    // W6: the message now says exactly what is missing — this stack was assembled without
+    // the per-Task worktree resolver, so the Run is using the project root.
+    expect(
+      lines.filter((line) => line.includes('no per-Task worktree resolver is wired')),
+    ).toHaveLength(1);
   });
 
   it('refuses a source write when no Plan gate is wired (AC-013, fail-closed)', async () => {
@@ -1021,17 +1025,54 @@ describe('first-phase permission model (附录 A)', () => {
     expect(todos).toHaveLength(1);
   });
 
-  it('refuses a loopback/metadata URL the shell names, with an audit row (AC-048)', async () => {
+  it('refuses the two fixed network denials a shell names, with an audit row (AC-048, W6)', async () => {
     const { execute } = endpointFor('strict');
-    const answer = await execute('bash', {
-      command: 'curl -s http://127.0.0.1:51234/control/health',
+    // W6 §7.1: a plain loopback URL is ordinary development now. The denials are metadata
+    // and the ports the daemon **actually bound**; the second needs a broker that knows
+    // them, so this case uses its own broker with the bound-port registry.
+    const boundPort = 51234;
+    const boundBroker = new Broker({
+      store,
+      grants,
+      now: () => new Date(clock).toISOString(),
+      docker: () => ({ available: true, version: '28.4.0' }),
+      daemonPorts: () => [boundPort],
+      resolver: { resolve: () => Promise.resolve({ ok: false, reason: 'no network in tests' }) },
     });
-    expect(answer.status).toBe(403);
-    const body = answer.body as { error: { code: string; message: string; details: JsonObject } };
+    const boundHandler = createToolHandler({
+      store,
+      broker: boundBroker,
+      artifacts: new ArtifactService({ store, blobs: store.blobs }),
+      grantService,
+      readLedgers: new ReadLedgerRegistry({ store }),
+      configPolicy: 'strict',
+      policyRevision: 7,
+      now: () => new Date(clock).toISOString(),
+    });
+    operationSeq += 1;
+    const boundOperation = `018f2c1e-9a4b-7c3d-8e5f-0a1b2c3db6${String(operationSeq).padStart(2, '0')}`;
+    const boundAnswer = await handleToolExecute(
+      { store, handler: boundHandler, newToolOperationId: () => boundOperation },
+      caller,
+      {
+        attemptId: ATTEMPT_A,
+        epoch: 1,
+        toolName: 'bash',
+        args: { command: `curl -s http://127.0.0.1:${String(boundPort)}/control/health` },
+        toolOperationId: boundOperation,
+        timeoutMs: 120_000,
+      },
+    );
+    expect(boundAnswer.status).toBe(403);
+    const body = boundAnswer.body as {
+      error: { code: string; message: string; details: JsonObject };
+    };
     expect(body.error.code).toBe('CONTEXT_FORBIDDEN');
     expect(body.error.details['approvable']).toBe(false);
-    expect(body.error.details['network']).toBe('http://127.0.0.1:51234/control/health');
-    expect(body.error.message.toLowerCase()).toContain('loopback');
+    expect(body.error.details['network']).toBe(
+      `http://127.0.0.1:${String(boundPort)}/control/health`,
+    );
+    expect(body.error.message).toContain('daemon itself is listening on');
 
     // The metadata endpoint is refused by the same policy, and no shell ever ran.
     const metadata = await execute('bash', {

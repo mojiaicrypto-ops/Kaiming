@@ -4,11 +4,13 @@
 
 Core支持Linux x86_64/arm64和macOS arm64/x86_64，Node24。Workspace与Autonomous使用Docker Engine/Desktop的Linux容器执行专业Agent及工具，要求Docker API可用；doctor检测失败时这两种模式拒绝准入并展示安装/切换入口。Full Access由用户显式选择后以非Root宿主进程执行开发/一般任务。Review与Test在所有模式仍使用隔离容器，确保源码只读和聊天不可访问；缺Docker即阻断独立验证，不能自审替代。
 
-镜像由项目Dockerfile固定构建：Node24+Git+基础构建工具，使用非Root uid，read-only root filesystem、cap-drop=ALL、no-new-privileges、pid限制256、内存2GiB、CPU2。网络默认none。构建镜像和安装依赖属于用户一次性配置授权，记录镜像digest；每次Attempt冻结digest。
+镜像由项目Dockerfile固定构建：Node24+Git+基础构建工具，使用非Root uid，read-only root filesystem、cap-drop=ALL、no-new-privileges、pid限制256、内存2GiB、CPU2。**容器的 IP 网络恒为 `--network none`**（W6）：出网只有受控出口（见 §2/§4），这样容器对宿主、`host.docker.internal`、docker 桥网关、内网与公网都没有路由。构建镜像和安装依赖属于用户一次性配置授权，记录镜像digest；每次Attempt冻结digest。
 
 ## 2. 执行拓扑与Secret
 
-Runner内Pi通过OpenAI-compatible Model Gateway或对应Provider适配器调用模型。Gateway在Core受信侧持有Provider Secret，Runner只持有短期attempt capability；工具容器与Runner控制连接分离。容器经仅挂载的Unix Socket代理访问Gateway/Tool Broker，未挂载宿主网络和Docker Socket。
+Runner内Pi通过OpenAI-compatible Model Gateway或对应Provider适配器调用模型。Gateway在Core受信侧持有Provider Secret，Runner只持有短期attempt capability；工具容器与Runner控制连接分离。工具容器未挂载宿主网络和Docker Socket。
+
+**受控出口（W6 实装，取代"仅挂载宿主 Unix Socket"的早期表述）**：容器内工具的网络出口是一条**命名卷里的 Unix Socket**——`docker run --network none` 挂载只读卷 + 容器内 `127.0.0.1:3128` 桥（`HTTP(S)_PROXY` 指向它）→ 同一命名卷的 **egress sidecar** 容器（`--network bridge`、无宿主挂载、无 Docker Socket、cap-drop=ALL、非特权 root）→ 宿主回环上的 **Core egress 代理**（`packages/core/src/egress.ts`）。最后一跳才是策略执行点：代理按 `NetworkPolicy` 决定是否建连，并在建连前完成 DNS 解析与地址固定。之所以不是"直接挂载宿主 Unix Socket"：Docker Desktop for macOS 的 VirtioFS 只能呈现 socket inode、`connect(2)` 不能到达宿主进程（实测见 `.agentdev/work/WP-12/w6-implementation.md` §4.1），命名卷位于 Docker VM 内，容器↔容器共享 socket 在 macOS 与 Linux 都成立。sidecar 转发到宿主用 `host.docker.internal`（Linux 上回退到自身默认网关），Core 代理对两种拼写一视同仁。
 
 Capability绑定attempt/epoch/role/allowed methods/expiry；Broker重新校验，Runner不能声明自己是Chief。Core直接处理文件和领域工具；Shell请求由Supervisor另起工具容器，工具容器没有model capability或控制socket。
 
@@ -17,7 +19,7 @@ Workspace允许读取授权源码快照、写Task工作区和产物目录；网�
 第一期权限模型（`.agentdev/work/WP-12/T3-implementation.md` 附录 A）把"范围内"具体化为**Plan时信封**：Plan/授权批准时信封（路径 + 操作）即已授予，运行中**范围内操作直接执行、不再逐次询问**（read/search/edit/write/artifact_write/bash/git，含构建、测试、公网出网）。三条硬拦不因信封而放松，且返回**类型化拒绝**（`details.approvable=false`，模型被告知"不要重试"）：
 
 1. **敏感文件**（附录 A.2 冻结表）：`read`/`search`/`edit`/`write` 四处共用同一张表，命中即拒（`CONTEXT_FORBIDDEN`），同时按现有 `chief_action_required` 机制落一条用户待办（`kind='sensitive_file'`，不阻塞Run，agent继续别的工作）。搜索时该表在遍历中即跳过命中文件（"search不同表生效等于没拦"）。
-2. **网络边界**：**默认通** —— 公网、`127.0.0.1:3000`/`:5432` 等本地服务、内网依赖私服都开箱即通，不需要作者配白名单，也不恢复运行期逐次审批（A.4）。**只保留两个固定拒绝项，且永不可授权**：① 运行时**实际绑定**的守护自身端口（daemon 控制端点/BFF/admin，`listenAdmin` 实际绑定的端口）；② 云元数据地址（`169.254.169.254` 等）——这两项是"自己机器的钥匙"，不是网络功能，被拦不损失正常开发能力。除这两项**没有第三项**。**当前状态（诚实表述）**：受控出口尚未装配（`networkProxy` 只是配置字符串，代理服务不存在），因此**容器出口目前保持关闭**，宿主模式（`full_access`）实际全通；不得写成"网络已开"。`host.docker.internal`、docker 桥网关与 `bash` 内任意程序直连等绕过路径，必须由出口策略而非准入层字面判定覆盖，属 W6（与容器化 Runner、每任务工作区同批）。（口径来源：`w1-implementation.md` §7。）
+2. **网络边界**：**默认通** —— 公网、`127.0.0.1:3000`/`:5432` 等本地服务、内网依赖私服都开箱即通，不需要作者配白名单，也不恢复运行期逐次审批（A.4）。**只保留两个固定拒绝项，且永不可授权**：① 运行时**实际绑定**的守护自身端口（daemon 控制端点、模型 Gateway 代理、项目协议端口、BFF、admin 面，以及 Core 出口代理自己的端口——全部由监听器绑定时登记进 `EgressPortRegistry`，不是常量）；② 云元数据地址（`169.254.0.0/16` 链路本地整段、`100.100.100.200`、`192.0.0.192`、`fd00:ec2::254` 与 `metadata*` 主机名，含 IPv4-mapped 与 NAT64 拼写）——这两项是"自己机器的钥匙"，不是网络功能，被拦不损失正常开发能力。除这两项**没有第三项**。**实现（W6，已完成）**：容器出口经 §2 的受控出口，**两个拒绝项在出口处执行**（`EgressProxy` + `NetworkPolicy`），准入层（`tool-handler.ts` 对 `bash` 字面 URL 的预检）与出口共用同一 `NetworkPolicy` 实例来源，不会互相矛盾。绕过路径的覆盖：`host.docker.internal` 作为**名字别名**在解析前即被拒绝；docker 桥网关在 Linux 上是宿主 `docker0` 地址（命中本机地址判定）而在 macOS 上不是宿主地址、代理无法建连（502），两条路都不放行；DNS 解析到拒绝地址在**每个解析答案**上判定；重定向每一跳都是新请求（HTTPS 是新的 CONNECT），因此在落点那一跳被拒。**未被代理覆盖的部分要如实说明**：容器内任意程序（`node net`/`nc`/自编译二进制）的裸 socket 拿不到任何 IP 路由（`--network none`），这是边界成立的原因；宿主模式（`full_access`）下 agent 用执行账户的真实网络，准入层的字面/DNS 判定只是识别能力而不是出口控制，裸 socket 仍可绕过——该残余风险在附录 A.5 与 `w6-implementation.md` §7 登记。`http:` 公网目标仍需显式 `allowInsecureHttp` 授权（W7R1-07），本地/私网 `http:` 属于日常开发默认放行。（口径来源：`w1-implementation.md` §7；实现与实测见 `w6-implementation.md`。）
 3. **删除与Git引用**：工作区内删除允许（兜底=Git + 每任务工作区 + 交付CAS）；工作区外路径删除、`git push`/强制重置/`update-ref` 等引用变更拒绝。
 
 `configPolicy: 'strict' | 'test'`（附录 A.7）只改**查表前的分支**，不改上表：`strict`（全局默认）拒绝全表；`test` 额外放行应用配置子集（`application*.yml`、`application*.properties`、`bootstrap.yml`、`bootstrap.properties`、`*.properties`、`*.conf`），凭据档与纯密钥材料仍拒。非 `strict` 必须在 `doctor`、项目页与验收报告显著可见，且每次放行读取都写审计（路径 + 策略版本 + 档位）。逐次 `permission.request`/`permission.respond`、`waiting_permission` 挂起与 `once`+`inputHash` 绑定**退掉**（代码保留、正常流程不再触发）。
@@ -27,18 +29,20 @@ Workspace允许读取授权源码快照、写Task工作区和产物目录；网�
 | 运行 | 读 | 写 |
 |---|---|---|
 | Chief/只读调查 | 选择的文档、授权冻结源码、允许的结构化Artifact | 自己的Artifact |
-| Developer | 授权Task源码及所选资料 | 唯一Task工作区、构建临时目录、自己Artifact |
+| Developer | 授权Task源码及所选资料 | 唯一Task工作区（该 Task 自己的外部 Git worktree）、构建临时目录、自己Artifact |
 | Review | 冻结代码、产品/Plan/验收、客观测试证据 | 自己报告与检查临时目录 |
 | Test | 冻结源码、有效Review、验收 | 隔离构建目录、测试数据和报告 |
 | Settlement | 最终Diff及阶段证据、正式文档 | 授权文档候选Worktree、过程报告 |
 
 运行数据库、其他Session/Transcript、全局SecretStore不挂载到Agent或工具。文件工具拒绝相对路径逃逸、符号链接逃逸、嵌套仓库逃逸；通过open时再校验真实路径与快照避免仅检查字符串。Review的Shell即使运行cat/find也只能看到其挂载集合。
 
+**每任务工作区（W6 实装）**：专业 Run 的 `read/search/edit/write/bash` 根目录是该 Task 自己的外部 Git worktree（`<AGENTDEV_HOME>/task-worktrees/<projectId>/tasks/<taskId>`，由 `packages/core/src/task-workspace.ts` 按 `dependencyRevision ?? Work.baseRevision` 创建），因此"工作区内删除允许"的兜底第二层成立：删除只能落在本 Task 的树里，另一个 Task 的 worktree 与项目根都不在该根路径内，Broker 的文件边界直接拒绝。单写者由两层保证：worktree 租约绑定 `(attemptId, epoch)`（第二个 Attempt 得到 `BUSY`），以及每次工具调用都续期的 Work 级写租约（`data.md` §2 `lease`，进程重启后仍有效）。Chief Run（无 taskId）仍以项目根为根。
+
 ## 4. 网络与操作授权
 
 Grant字段：scope=once/run/work/project、runId、workId、toolOperationId、operation、targets、role、stage、expiry、limits、decisionId。project范围只对声明role/stage有效；兄弟Run仅在Grant明确覆盖Work/Project和角色时可用。once必须绑定准确toolOperationId和runId；run绑定准确runId，work绑定workId；缺失对应绑定拒绝。once在准入时消耗，结果不确定不重新消费再执行。
 
-网络工具使用Core受控代理，校验scheme=https、DNS解析后的目标IP、重定向每跳重验、禁止默认访问loopback/私网/metadata；用户可按精确目标显式授权内网。Shell需要网络时分配仅能到代理的网络沙箱，由代理域名/方法/端口白名单控制；任意外网模式需单独Full Access授权。发布/Push/数据删除须保存操作清单和确认来源。
+网络工具使用Core受控代理：解析后的每个目标IP都过 `NetworkPolicy`，重定向每跳重验，`metadata` 与守护实际绑定端口**永不可授权**；公网、本地服务与内网默认放行（§2-2）。Shell 的网络出口是 §2 的受控出口：容器 `--network none` + 命名卷 socket + sidecar + Core 代理，所以"仅能到代理"是结构性的而不是策略性的。发布/Push/数据删除须保存操作清单和确认来源。
 
 Secret按用途使用，模型Secret仅在Gateway；项目命令Secret按Grant短时注入目标工具，不注入所有Agent。日志做敏感字段和已知值遮蔽；输出不含认证Header。Store在macOS使用Keychain，Linux使用0600加密文件，密钥由安装时生成的0600独立主密钥文件或系统credential提供；备份中单独加密导出。
 

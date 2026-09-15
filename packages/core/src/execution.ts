@@ -164,6 +164,14 @@ export interface ProjectExecutionOptions {
    */
   readonly tools?: ProjectExecutionTools;
   readonly host?: '127.0.0.1' | '::1' | 'localhost';
+  /**
+   * Registers the ports this stack binds (WP-12 W6, `w1-implementation.md` §7.2).
+   *
+   * The control endpoint and the model-gateway proxy take ephemeral ports, so the daemon
+   * cannot hard-code them: this stack reports each bound port to the daemon's egress
+   * registry, which the network policy reads live as the first fixed denial.
+   */
+  readonly egressPorts?: EgressPortRegistryPort;
   /** Overridable for tests; defaults to the real OpenAI-compatible transport. */
   readonly transport?: GatewayTransport;
   /** Overridable for tests; defaults to a node process probe. */
@@ -179,6 +187,12 @@ export interface ProjectExecutionOptions {
  * channel and the daemon's `conversation.message.send` path share one lifecycle, one
  * budget ledger and one set of guards.
  */
+/** The narrow registry seam: the daemon owns the set, this stack only appends to it. */
+export interface EgressPortRegistryPort {
+  add(port: number): void;
+  list(): readonly number[];
+}
+
 export interface ProjectExecutionControl {
   /** Builds the three documented internal methods plus the result hook. */
   readonly attach: (context: {
@@ -383,6 +397,8 @@ export async function createProjectExecution(
     log,
   });
   controlUrl.value = control.url;
+  registerBoundPort(options.egressPorts, control.port);
+  registerBoundPort(options.egressPorts, proxy.port);
 
   const supervisor: RunnerSupervisor = new RunnerSupervisor({
     store: options.store,
@@ -527,6 +543,12 @@ export async function createProjectExecution(
     },
     liveCount: () => supervisor.liveAttempts().length,
   };
+}
+
+/** Reports one bound listener port to the daemon's egress registry, when it has one. */
+function registerBoundPort(registry: EgressPortRegistryPort | undefined, port: number): void {
+  if (registry === undefined) return;
+  registry.add(port);
 }
 
 /**

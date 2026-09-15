@@ -37,6 +37,7 @@ import {
   SecretStore,
   createProjectExecution,
   createSecretRepository,
+  createTaskWorktreeWorkspaceResolver,
   loadSecretsIntoStore,
   redact,
   type ProjectExecution,
@@ -64,6 +65,7 @@ import { projectPolicyHash } from './context-ports.js';
 import { createControlHandlers } from './control-handler.js';
 import { markMessageProcessing, markMessageSettled } from './message-state.js';
 import { createPrepareRun } from './prepare-run.js';
+import { EgressService, createEgressPortRegistry } from './egress.js';
 import { createChildRunnerSpawnPort } from './runner-spawn.js';
 
 /** Version reported by `/healthz`, the runtime record and the admin surface. */
@@ -281,6 +283,13 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
     }
     const repoRoot =
       options.repoRoot ?? resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+    // WP-12 W6: the controlled egress. One registry for the whole daemon — every listener
+    // this process binds reports its **actual** port here, because `w1-implementation.md`
+    // §7.2 denies the real values rather than the documented constants. One service for the
+    // whole daemon, because the boundary is "the agent may not reach this daemon" and a
+    // single policy holding every project's ports is stricter than sibling-blind ones.
+    const egressPorts = createEgressPortRegistry();
+    const egress = new EgressService({ scope: home, ports: egressPorts, log });
     let record: RuntimeRecord | null = null;
     let adminServer: Server | null = null;
     let webInfo: { readonly host: RuntimeHost; readonly port: number } | null = null;
@@ -333,6 +342,10 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
           await execution.stop();
         }
         executions.length = 0;
+        // 2b. The controlled egress outlives no tool: its sidecar container and its
+        // volume are removed and the proxy is closed, so a stopped daemon leaves no
+        // container behind (`reliability.md` §7 "回收容器/进程").
+        await egress.stop();
         // 3. Close every project's listeners and databases, then release the per-root
         // locks this daemon took (WP-12 T5 Q5): a real stop leaves no lock behind.
         for (const project of opened) {
@@ -433,6 +446,9 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
         log,
       });
       opened.push(project);
+      // Before the stack is assembled: the network policy must already deny this project's
+      // protocol port when the first tool call arrives.
+      egressPorts.add(project.ports.daemon);
       let execution: ProjectExecution | undefined;
       if (options.execute !== false) {
         // `stack.md` §1 fixes the execution mode per permission policy: Workspace and
@@ -455,6 +471,9 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
           config: project.config,
           snapshots: project.snapshots,
           secrets,
+          // The stack's ephemeral listeners (control endpoint, gateway proxy) are part of
+          // the first fixed denial, so they report their real ports here.
+          egressPorts,
           prepare: ({ capabilities, gatewayUrl, controlUrl }) =>
             createPrepareRun({
               store: project.store,
@@ -480,12 +499,14 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
             ...(options.runnerEnv === undefined ? {} : { env: options.runnerEnv }),
           }),
           // `stack.md` §3: Review/Test may write only their own report/scratch root.
-          // `permissionMode` has no runtime consumer yet (T3 F13/D-T3-7), so the tool
-          // shells run in the documented default mode (`host` in the handler) and the
-          // container mode stays an explicit, registered gap.
+          // WP-12 W6: the container's only egress is the controlled channel, and the
+          // network policy reads the daemon's **actually bound** ports from the registry
+          // `main.ts` fills as listeners bind (`w1-implementation.md` §7.2).
           broker: {
             dataDir: project.dataDir,
             writableReportRoots: [join(project.dataDir, 'tool-reports')],
+            daemonPorts: () => egressPorts.list(),
+            egress,
           },
           // The daemon adds the services only the application has: the artifact service,
           // the Plan gate (AC-013) and the workspace resolver (`tool-handler.ts`).
@@ -507,6 +528,17 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
                   artifacts: project.services.artifacts,
                 }),
                 mode: toolMode,
+                // W6: a professional Run's tools are rooted at its own Task worktree
+                // (`reliability.md` §4) under the worktree manager's `(attempt, epoch)`
+                // lease, so one Task's writes and deletes cannot reach another Task's
+                // work. A Chief Run (no taskId) still resolves to the project root.
+                workspace: createTaskWorktreeWorkspaceResolver({
+                  store: project.store,
+                  git: project.git,
+                  worktreeRoot: join(home, 'task-worktrees', project.projectId),
+                  repoRoot: project.gitRoot,
+                  log,
+                }),
                 // 附录 A.7: the tier the frozen sensitive-file table is read with, and the
                 // policy revision an allowed-but-listed read is audited against.
                 configPolicy,
@@ -531,6 +563,7 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
                 // snapshot writer; `policyHash` is the Project policy the
                 // VerificationManifest binds (`context-ports.ts`).
                 worktrees: project.git,
+                taskWorkspaceRoot: join(home, 'task-worktrees', project.projectId),
                 snapshots: project.snapshots,
                 worktreeRoot: join(project.dataDir, 'task-worktrees'),
                 repoRoot: project.root,
@@ -647,6 +680,7 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
       openedById.set(project.projectId, project);
       if (execution !== undefined) executionById.set(project.projectId, execution);
       writeRecord();
+      egressPorts.add(project.ports.daemon);
       log(
         `agentdevd: opened ${project.root} (project ${project.projectId}${
           name === undefined ? '' : `, name ${name}`
@@ -718,6 +752,21 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
     };
 
     try {
+      // WP-12 W6: the controlled egress comes up **first**, before any project stack
+      // exists. The proxies and listeners that follow only add their real ports to the
+      // registry the policy reads live, so a project assembled below can never observe a
+      // half-built egress. A failure to bind is logged, not fatal: the channel then stays
+      // unavailable and a network-covered container call is refused `PROVIDER_UNAVAILABLE`
+      // rather than opened.
+      if (options.execute !== false) {
+        try {
+          await egress.start();
+        } catch (error) {
+          log(
+            `agentdevd: egress proxy did not start: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
       const registry = readProjectRegistry(home);
       // An *empty* `--root` list means "whatever this installation has registered": `??`
       // alone ignored the registry (WP11R1-08).
@@ -754,6 +803,8 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
         });
       });
       runtime.admin = { host, port: await listenAdmin(adminServer, options.adminPort ?? 0, host) };
+      // The admin surface is part of the first fixed denial: register its **actual** port.
+      egressPorts.add(runtime.admin.port);
       // WP-12 T5 D-T5-3: the host owns **one** BFF for the whole installation. Every
       // project is opened with `withWeb:false` above; the browser logs in once, keeps
       // one origin and one session, and the BFF routes each request to the project it
@@ -781,6 +832,7 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
           host,
           port: await listenAdmin(web.server, options.webPort ?? DEFAULT_LISTENERS.web.port, host),
         };
+        egressPorts.add(webInfo.port);
         log(
           `agentdevd: BFF listening on http://${host}:${String(webInfo.port)} (${String(instances.length)} project(s))`,
         );

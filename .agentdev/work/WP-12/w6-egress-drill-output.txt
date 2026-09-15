@@ -1,0 +1,66 @@
+drill: daemon stand-in on 127.0.0.1:52901, local dev on 127.0.0.1:52902, redirector on 52903
+  core egress: proxy listening on 127.0.0.1:52904
+drill: core proxy on 127.0.0.1:52904 (denied ports: [52901,52904])
+
+[PASS] sidecar channel is live
+agentdev egress sidecar ready on /run/agentdev/egress.sock -> host.docker.internal:52904
+drill: docker bridge gateway is 172.17.0.1
+
+[PASS] public fetch through the egress (npm view over HTTPS/CONNECT)
+exit=0
+7.0.0
+
+[PASS] real npm install through the egress
+npm-exit=0
+-rw-r--r-- 1 agentdev agentdev 1599 Sep 15 18:09 /tmp/proj/node_modules/is-number/package.json
+
+added 1 package in 1s
+
+[PASS] loopback target allowed by default
+STATUS 200
+BODY LOCAL-DEV-SERVER-OK
+
+[PASS] a DNS name resolving to loopback is allowed by default
+STATUS 200
+BODY LOCAL-DEV-SERVER-OK
+  core egress: refused — network target 127.0.0.1:52901 is a port the daemon itself is listening on and is refused permanently; it is the control plane, not a development target, and no configuration or authorization can admit it — do not retry it
+
+[PASS] daemon-bound port refused at the egress
+STATUS 403
+BODY AGENTDEV_EGRESS_REFUSED: network target 127.0.0.1:52901 is a port the daemon itself is listening on and is refused permanently; it is the control plane, not a development target, and no configuration or authorization can admit it — do not retry it
+  core egress: refused — network target host.docker.internal:52901 is a port the daemon itself is listening on and is refused permanently; it is the control plane, not a development target, and no configuration or authorization can admit it — do not retry it
+
+[PASS] daemon-bound port refused via host.docker.internal
+STATUS 403
+BODY AGENTDEV_EGRESS_REFUSED: network target host.docker.internal:52901 is a port the daemon itself is listening on and is refused permanently; it is the control plane, not a development target, and no configuration or authorization can admit it — do not retry it
+  core egress: forward to 172.17.0.1:52901 failed (connect timeout)
+
+[PASS] daemon-bound port via the docker bridge gateway is not admitted
+STATUS 502
+BODY AGENTDEV_EGRESS_REFUSED: no validated address for 172.17.0.1
+  core egress: refused — network target 169.254.169.254:80 is a cloud metadata address and is refused permanently; it is not a development target and no configuration or authorization can admit it — do not retry it
+
+[PASS] metadata address refused
+STATUS 403
+BODY AGENTDEV_EGRESS_REFUSED: network target 169.254.169.254:80 is a cloud metadata address and is refused permanently; it is not a development target and no configuration or authorization can admit it — do not retry it
+  core egress: refused — network target 169.254.169.254.nip.io:80 is a cloud metadata address and is refused permanently; it is not a development target and no configuration or authorization can admit it — do not retry it
+
+[PASS] DNS name resolving to metadata refused
+STATUS 403
+BODY AGENTDEV_EGRESS_REFUSED: network target 169.254.169.254.nip.io:80 is a cloud metadata address and is refused permanently; it is not a development target and no configuration or authorization can admit it — do not retry it
+  core egress: refused — network target 169.254.169.254:80 is a cloud metadata address and is refused permanently; it is not a development target and no configuration or authorization can admit it — do not retry it
+
+[PASS] redirect landing on metadata refused at the second hop
+hop1 302 -> http://169.254.169.254/latest/meta-data/
+hop2 403
+STATUS 403
+BODY AGENTDEV_EGRESS_REFUSED: network target 169.254.169.254:80 is a cloud metadata address and is refused permanently; it is not a development target and no configuration or authorization can admit it — do not retry it
+
+[PASS] raw socket from the container to host.docker.internal fails (no IP network)
+DIRECT ERROR host.docker.internal:52901 EAI_AGAIN
+
+[PASS] raw socket from the container to the bridge gateway fails
+DIRECT ERROR 172.17.0.1:52901 ENETUNREACH
+
+=== W6 egress drill: 13/13 checks passed ===
+exit=0

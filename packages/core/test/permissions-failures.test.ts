@@ -28,6 +28,7 @@ import {
   Broker,
   GrantStore,
   NetworkPolicy,
+  isMetadataAddress,
   SECRET_MASK,
   SecretStore,
   TestEnvironmentManager,
@@ -67,6 +68,7 @@ const OUTSIDE_BODY = 'outside-the-workspace\n';
 const PUBLIC_URL = 'https://api.example.test/v1/data';
 const REDIRECT_URL = 'https://decoy.example.test/r';
 const PRIVATE_URL = 'http://10.0.0.5/private';
+const METADATA_URL = 'http://169.254.169.254/latest/meta-data/';
 const LINK_LOCAL_URL = 'http://169.254.169.254/latest/meta-data/';
 
 const DECOY_REF = 'project/decoy-token';
@@ -342,7 +344,7 @@ describe('WP-07 required failure tests', () => {
   // 符号链接/私网/重定向
   // -------------------------------------------------------------------------
 
-  it('符号链接/私网/重定向: a symlink escape, a private-address request and a redirect to a private address are all refused with no read and no request', async () => {
+  it('符号链接/元数据/重定向: a symlink escape, a metadata request and a redirect into metadata are all refused with no read and no request', async () => {
     // 1. Symlink escape: the Grant names `escape/secret.txt`, so only the resolved
     //    real path can refuse it. The tool body must never run, and nothing may be
     //    read out of the workspace.
@@ -398,21 +400,23 @@ describe('WP-07 required failure tests', () => {
     });
     expect(inside.ok).toBe(true);
 
-    // 2. A private-address request. The Broker refuses it before admission, so the
-    //    real transport is never called.
-    harness.issue({ operation: 'network', targets: [PRIVATE_URL] });
+    // 2. A metadata-address request (the first of W6's two fixed denials). The Broker
+    //    refuses it before admission, so the real transport is never called. A plain
+    //    private address is *not* refused any more (`w1-implementation.md` §7.1): it is
+    //    ordinary development, which the assertion below records explicitly.
+    harness.issue({ operation: 'network', targets: [METADATA_URL] });
     const privateCalls = stubFetch([{ status: 200, body: 'never fetched' }]);
-    const privateCall = await harness
+    const metadataCall = await harness
       .broker()
       .networkRequester({ allowedNetworkTargets: [] })
-      .request(PRIVATE_URL);
-    expect(privateCall.ok).toBe(false);
-    if (privateCall.ok) throw new Error('unreachable');
-    expect(privateCall.code).toBe('NOT_AUTHORIZED');
-    expect(privateCall.blockedUrl).toBe(PRIVATE_URL);
-    expect(privateCall.reason).toContain('10.0.0.5');
+      .request(METADATA_URL);
+    expect(metadataCall.ok).toBe(false);
+    if (metadataCall.ok) throw new Error('unreachable');
+    expect(metadataCall.code).toBe('NOT_AUTHORIZED');
+    expect(metadataCall.blockedUrl).toBe(METADATA_URL);
+    expect(metadataCall.reason).toContain('metadata');
     // The refused hop is recorded as refused, and the transport was never called.
-    expect(privateCall.hops).toEqual([{ url: PRIVATE_URL, allowed: false }]);
+    expect(metadataCall.hops).toEqual([{ url: METADATA_URL, allowed: false }]);
     expect(privateCalls).toEqual([]);
 
     // 3. A redirect to a private address: the public origin is fetched once, the
@@ -436,12 +440,14 @@ describe('WP-07 required failure tests', () => {
     // The policy itself classifies the refused targets as internal, so the
     // refusals are about the boundary rather than about a broken URL.
     const policy = new NetworkPolicy();
-    expect(policy.checkUrl(PRIVATE_URL).ok).toBe(false);
+    expect(policy.checkUrl(PRIVATE_URL).ok).toBe(true);
     expect(policy.checkUrl(LINK_LOCAL_URL).ok).toBe(false);
     expect(policy.checkUrl(PUBLIC_URL).ok).toBe(true);
     expect(isPrivateAddress('127.0.0.1')).toBe(true);
     expect(isPrivateAddress('169.254.169.254')).toBe(true);
     expect(isPrivateAddress('10.0.0.5')).toBe(true);
+    expect(isMetadataAddress('169.254.169.254')).toBe(true);
+    expect(isMetadataAddress('10.0.0.5')).toBe(false);
   });
 
   // -------------------------------------------------------------------------

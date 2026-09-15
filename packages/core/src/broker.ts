@@ -78,6 +78,7 @@ import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { isIPv4, isIPv6 } from 'node:net';
+import { networkInterfaces } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   LIMITS,
@@ -90,6 +91,12 @@ import {
 } from '@agentdev/contracts';
 import { sha256, uuidv7, type ProjectStore } from '@agentdev/storage';
 import { canonicalJson } from './dispatcher.js';
+import {
+  EGRESS_COMMAND_ENV,
+  egressToolEnv,
+  egressWrapperCommand,
+  type ContainerEgressChannel,
+} from './egress-channel.js';
 import { ProtocolError } from './errors.js';
 import type { GrantStore } from './grants.js';
 import {
@@ -535,6 +542,15 @@ export type NetworkPolicyDecision =
        * lookup carries none.
        */
       readonly addresses?: readonly string[];
+      /**
+       * Whether the target is loopback/private/link-local/CGNAT.
+       *
+       * `w1-implementation.md` §7.1 opens these by default; the flag survives because
+       * the plaintext-`http:` rule is scoped to them (a local dev server is `http:`,
+       * a public origin is `https:`), and the Egress proxy uses it for the same
+       * decision on an absolute-URI request.
+       */
+      readonly internal?: boolean;
     }
   | { readonly ok: false; readonly code: BrokerErrorCode; readonly reason: string };
 
@@ -575,6 +591,138 @@ function isAlwaysInternalHost(host: string): boolean {
 /** `.local`/`.internal` names: internal unless exactly authorized. */
 function isResolverInternalName(host: string): boolean {
   return host.endsWith('.local') || host.endsWith('.internal');
+}
+
+/**
+ * The cloud metadata endpoints the egress refuses forever (`w1-implementation.md` §7.2).
+ *
+ * These are the addresses behind the instance-credential services of the major clouds;
+ * `w1-implementation.md` §7.2 makes them one of the **two** fixed denials that no
+ * configuration, Grant or authorization may ever admit. The whole `169.254.0.0/16`
+ * link-local range is refused with them rather than only the handful of well-known
+ * spellings, because an address in that range is never a development target and the
+ * metadata services live inside it.
+ */
+export const METADATA_ADDRESSES: readonly string[] = [
+  '100.100.100.200', // Alibaba Cloud ECS
+  '192.0.0.192', // Oracle Cloud
+  'fd00:ec2::254', // AWS IMDS over IPv6
+];
+
+/** The metadata *names*: DNS aliases of the same service (`w1-implementation.md` §7.2). */
+export function isMetadataHostname(host: string): boolean {
+  const normalized = normalizeHost(host);
+  return (
+    normalized === 'metadata' ||
+    normalized.startsWith('metadata.') ||
+    normalized === 'instance-data' ||
+    normalized.endsWith('.instance-data') ||
+    normalized === 'instance-data.ec2.internal' ||
+    METADATA_HOSTS.includes(normalized) ||
+    normalized.endsWith('.metadata.google.internal')
+  );
+}
+
+/** The four octets of an IPv4 literal, or `undefined` when it is not one. */
+function ipv4Octets(address: string): number[] | undefined {
+  const normalized = normalizeHost(address);
+  if (!isIPv4(normalized)) return undefined;
+  const parts = normalized.split('.').map((part) => Number.parseInt(part, 10));
+  if (
+    parts.length !== 4 ||
+    parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
+  ) {
+    return undefined;
+  }
+  return parts;
+}
+
+/**
+ * Whether an address is a cloud metadata endpoint or link-local (the first fixed denial).
+ *
+ * An IPv4-mapped IPv6 literal (`::ffff:169.254.169.254`) is decoded and inherits the
+ * IPv4 rule, exactly like the private-address classifier, so the metadata denial cannot
+ * be spelled around (`W7R1-02`).
+ */
+export function isMetadataAddress(
+  address: string,
+  nat64Prefixes: readonly string[] = DEFAULT_NAT64_PREFIXES,
+): boolean {
+  const normalized = normalizeHost(address);
+  const octets = ipv4Octets(normalized);
+  if (octets !== undefined) {
+    // 169.254.0.0/16 is link-local and holds every IPv4 IMDS endpoint.
+    if (octets[0] === 169 && octets[1] === 254) return true;
+    return METADATA_ADDRESSES.includes(normalized);
+  }
+  const bytes = ipv6Bytes(normalized);
+  if (bytes === undefined) return false;
+  if (METADATA_ADDRESSES.includes(normalized)) return true;
+  const asIpv4 = (parts: readonly number[]): string => parts.map((part) => String(part)).join('.');
+  const mapped =
+    bytes.slice(0, 10).every((byte) => byte === 0) && bytes[10] === 0xff && bytes[11] === 0xff;
+  const compatible = bytes.slice(0, 12).every((byte) => byte === 0);
+  if (mapped || compatible) {
+    return isMetadataAddress(asIpv4(bytes.slice(12, 16)), nat64Prefixes);
+  }
+  // A NAT64 prefix embeds an IPv4 address; decoding it is what keeps
+  // `https://[64:ff9b::a9fe:a9fe]/` from being an opaque IPv6 string (W7R2-06).
+  for (const text of nat64Prefixes) {
+    const prefix = parseIpv6Prefix(text);
+    if (prefix === undefined || !matchesIpv6Prefix(bytes, prefix)) continue;
+    const embedded = nat64EmbeddedIpv4(bytes, prefix, asIpv4);
+    return embedded === undefined ? false : isMetadataAddress(embedded, nat64Prefixes);
+  }
+  return false;
+}
+
+/** Whether an address literal is loopback (`127.0.0.0/8`, `::1`, `0.0.0.0`). */
+export function isLoopbackAddress(address: string): boolean {
+  const normalized = normalizeHost(address);
+  const octets = ipv4Octets(normalized);
+  if (octets !== undefined) return octets[0] === 127 || octets[0] === 0;
+  const bytes = ipv6Bytes(normalized);
+  if (bytes === undefined) return false;
+  if (bytes.every((byte) => byte === 0)) return true;
+  return bytes.slice(0, 15).every((byte) => byte === 0) && bytes[15] === 1;
+}
+
+/**
+ * The host names that always mean "the machine this daemon runs on".
+ *
+ * The docker/containerd aliases are the ones `w1-implementation.md` §7.4 requires the
+ * egress to cover explicitly: `host.docker.internal` (and the containerd spelling) is the
+ * documented way a container reaches its host, so a request that names it *through the
+ * proxy* is a request for this machine and must meet the same refusal as `127.0.0.1`.
+ */
+export const LOCAL_HOST_ALIASES: readonly string[] = [
+  'localhost',
+  'localhost.localdomain',
+  'host.docker.internal',
+  'gateway.docker.internal',
+  'host.containers.internal',
+  'kubernetes.docker.internal',
+];
+
+/**
+ * The host's own interface addresses — the second half of "this machine" for the fixed
+ * daemon-port denial.
+ *
+ * `os.networkInterfaces()` does not report `127.0.0.1` on every platform, so loopback is
+ * checked separately ({@link isLoopbackAddress}); the list covers a daemon bound to a
+ * concrete LAN address (a deployment that sets `AGENTDEV_HOST`). The docker bridge gateway
+ * is *not* in this list — the gateway is an interface inside the Docker VM, not on the host
+ * — which is why a container naming it is caught by the name alias (`host.docker.internal`,
+ * `gateway.docker.internal`) or, when it names the raw gateway address, by the fact that the
+ * daemon's own listeners are loopback-only and the address is therefore not local at all:
+ * the container has no route to it in the first place.
+ */
+export function hostInterfaceAddresses(): readonly string[] {
+  const addresses: string[] = [];
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) addresses.push(entry.address);
+  }
+  return addresses;
 }
 
 /**
@@ -955,27 +1103,50 @@ export async function resolvesToPrivateAddress(
 }
 
 /**
- * The allow-by-default-public policy with an exact-target allowlist.
+ * The network admission policy (`w1-implementation.md` §7, superseding the earlier
+ * allowlist idea).
  *
- * An authorized target is written exactly as the user authorized it: `host`
- * covers every port of that host, `host:port` only that port. Nothing else about
- * a private address is relaxed.
+ * §7.1 fixes the first-phase semantics: **the network is open by default** — public
+ * hosts, local dev servers (`127.0.0.1:3000`), local databases (`:5432`) and an
+ * internal dependency mirror need no configured allowlist and no per-call approval.
+ * Exactly **two** targets are refused, forever and for every caller:
  *
- * W7R1-07 makes `https:` the only scheme a *private* target may use unless the
- * caller explicitly opted into plaintext for an authorized local test endpoint
- * (`allowInsecureHttp`), so a redirect to `http://…` cannot silently downgrade
- * the transport.
+ * 1. the ports the daemon **actually bound** ({@link daemonPorts}): the control
+ *    endpoint, the model-gateway proxy, the project protocol port, the BFF and the
+ *    admin surface. The agent's own context carries a live attempt capability, so
+ *    reaching the control plane would turn a supervised tool into a control client;
+ * 2. cloud metadata endpoints ({@link isMetadataAddress}) — link-local
+ *    `169.254.0.0/16`, the well-known IMDS addresses and the `metadata.*` names —
+ *    which hand out instance credentials and contradict "密钥永不进入agent环境".
+ *
+ * Nothing else is a network refusal. Classification still happens — every name is
+ * resolved through the injected {@link HostResolver}, every answer is checked, and the
+ * validated answers travel with the decision so the transport can pin its connection to
+ * them (W7R1-01/W7R2-03/W7R2-06) — but the *verdict* is `deny metadata / deny bound
+ * port / otherwise allow`. The one scheme rule that survives is the documented
+ * plaintext rule: an `http:` public target needs the explicit `allowInsecureHttp` opt-in,
+ * while a loopback/private `http:` target is ordinary local development.
  */
 export class NetworkPolicy {
   private readonly allowed: readonly string[];
   private readonly allowInsecureHttp: boolean;
   private readonly resolver: HostResolver | undefined;
   private readonly nat64Prefixes: readonly string[];
+  private readonly daemonPorts: () => readonly number[];
+  private readonly localAliases: readonly string[];
+  private readonly localAddresses: () => readonly string[];
 
   constructor(
     options: {
+      /**
+       * Targets the user explicitly authorized.
+       *
+       * Under §7.1 an exact authorization is no longer *required* for a private target;
+       * the list is kept as advisory input (it still permits plaintext `http:` for the
+       * exact endpoint) and so a caller that records authorizations keeps reporting them.
+       */
       readonly allowedTargets?: readonly string[];
-      /** Explicit opt-in for a plaintext local test endpoint. Default `false`. */
+      /** Explicit opt-in for a plaintext target. Default `false`. */
       readonly allowInsecureHttp?: boolean;
       /** Injected DNS port; the default is a real `dns.lookup`. */
       readonly resolver?: HostResolver;
@@ -986,6 +1157,18 @@ export class NetworkPolicy {
        * site-specific translator prefix adds it here (W7R2-06).
        */
       readonly nat64Prefixes?: readonly string[];
+      /**
+       * The ports the daemon actually bound, read live (first fixed denial).
+       *
+       * A function rather than a list because the listeners bind at runtime — the
+       * control endpoint and the gateway proxy take ephemeral ports — so a snapshot
+       * taken at construction would be stale immediately.
+       */
+      readonly daemonPorts?: () => readonly number[];
+      /** Extra host names that mean this machine (the docker/containerd aliases). */
+      readonly localAliases?: readonly string[];
+      /** The host's own interface addresses, read live. */
+      readonly localAddresses?: () => readonly string[];
     } = {},
   ) {
     // An authorized target may be written `host`, `host:port`, `http(s)://host…`;
@@ -1000,6 +1183,9 @@ export class NetworkPolicy {
     this.allowInsecureHttp = options.allowInsecureHttp ?? false;
     this.resolver = options.resolver;
     this.nat64Prefixes = options.nat64Prefixes ?? DEFAULT_NAT64_PREFIXES;
+    this.daemonPorts = options.daemonPorts ?? (() => []);
+    this.localAliases = options.localAliases ?? LOCAL_HOST_ALIASES;
+    this.localAddresses = options.localAddresses ?? (() => []);
   }
 
   /** The NAT64 prefixes this policy decodes. */
@@ -1012,7 +1198,7 @@ export class NetworkPolicy {
     return this.resolver;
   }
 
-  /** Whether plaintext `http:` is explicitly permitted for authorized targets. */
+  /** Whether plaintext `http:` is explicitly permitted. */
   get insecureHttpAllowed(): boolean {
     return this.allowInsecureHttp;
   }
@@ -1020,6 +1206,11 @@ export class NetworkPolicy {
   /** The exact targets the user explicitly authorized. */
   get allowedTargets(): readonly string[] {
     return this.allowed;
+  }
+
+  /** The ports the daemon actually bound (first fixed denial). */
+  get boundPorts(): readonly number[] {
+    return [...this.daemonPorts()];
   }
 
   /** Whether an exact authorized target covers this host/port. */
@@ -1039,12 +1230,10 @@ export class NetworkPolicy {
   }
 
   /**
-   * The synchronous target decision: scheme, then the literal/internal host rule.
+   * The synchronous target decision: the two fixed denials, then the scheme.
    *
-   * It cannot resolve DNS, so it is only a fast path and a helper for callers that
-   * need a synchronous answer (for example `checkUrl` documentation and the
-   * container proxy pre-check). Admission itself now awaits {@link decide}, so a
-   * name resolving privately is refused **before** a Grant is consumed (W7R2-02).
+   * It cannot resolve DNS, so it is a fast path and the helper the Egress proxy uses for a
+   * host it has already resolved; admission itself awaits {@link decide}.
    */
   checkTarget(target: NetworkTargetSpec): NetworkPolicyDecision {
     if (target.url !== undefined) return this.checkUrl(target.url);
@@ -1059,26 +1248,25 @@ export class NetworkPolicy {
     return this.decideSync(host, target.port);
   }
 
-  /** Decides one URL: the address, then the scheme (no DNS). */
+  /** Decides one URL: address, then the plaintext rule (no DNS). */
   checkUrl(input: string | URL): NetworkPolicyDecision {
     const parsed = this.parseUrl(input);
     if (!parsed.ok) return parsed;
     const address = this.decideSync(parsed.url.hostname, parsed.port);
     if (!address.ok) return address;
-    return this.checkScheme(parsed.url);
+    return this.checkScheme(parsed.url, address.internal === true);
   }
 
   /**
-   * The authoritative decision: address, scheme, then DNS.
+   * The authoritative decision: the two fixed denials, then the scheme.
    *
-   * Every question a hostname raises is answered before the transport is asked to
-   * make a request: an internal-by-construction name or an exactly authorized
-   * target is decided by name, anything else is resolved through the injected
-   * {@link HostResolver} and refused when **any** answer is internal or when the
-   * name cannot be resolved (W7R1-01). The scheme is checked after the address so
-   * a private target reports *why* it is private, and plaintext is refused unless
-   * the exact target was authorized and plaintext was explicitly enabled
-   * (W7R1-07).
+   * Every question a hostname raises is answered before the transport is asked to make a
+   * request: a metadata name or an address is refused by name, every DNS answer is checked
+   * for metadata space and for a daemon-bound port on this machine, and only then is the
+   * target admitted. The validated answers are returned so the transport pins its
+   * connection to them (W7R2-03); a name that does not resolve is admitted with no
+   * addresses, because an unresolvable target is a transport failure rather than a policy
+   * decision.
    */
   async decide(input: {
     readonly url?: string;
@@ -1090,13 +1278,11 @@ export class NetworkPolicy {
       if (!parsed.ok) return parsed;
       const decision = await this.decideHost(parsed.url.hostname, parsed.port);
       if (!decision.ok) return decision;
-      const scheme = this.checkScheme(parsed.url);
+      const scheme = this.checkScheme(parsed.url, decision.internal === true);
       if (!scheme.ok) return scheme;
-      // The scheme check adds no address information, so the validated answers
-      // survive into the transport's pinning seam (W7R2-03).
       return decision.addresses === undefined
-        ? { ok: true }
-        : { ok: true, addresses: decision.addresses };
+        ? { ok: true, internal: decision.internal === true }
+        : { ok: true, addresses: decision.addresses, internal: decision.internal === true };
     }
     const host = input.host;
     if (host === undefined || host.trim() === '') {
@@ -1110,55 +1296,119 @@ export class NetworkPolicy {
   }
 
   /**
-   * W7R1-07: `https:` is the transport unless plaintext was explicitly enabled for
-   * an exactly authorized local test endpoint.
+   * The plaintext rule.
+   *
+   * A loopback/private target may speak plaintext `http:` — that is how a local dev
+   * server or a local database is reached, and §7.1 names `127.0.0.1:3000` explicitly. A
+   * **public** target needs `https:` unless plaintext was explicitly enabled, which keeps
+   * W7R1-07's "a redirect cannot silently downgrade a public origin" promise. The rule is
+   * enforced on an absolute-URI request; `CONNECT` carries TLS the proxy must not
+   * reinterpret.
    */
-  private checkScheme(parsed: URL): NetworkPolicyDecision {
-    if (parsed.protocol === 'https:') return { ok: true };
+  private checkScheme(parsed: URL, internal: boolean): NetworkPolicyDecision {
+    if (parsed.protocol === 'https:') return { ok: true, internal };
     if (parsed.protocol !== 'http:') {
       return {
         ok: false,
         code: 'NOT_AUTHORIZED',
-        reason: `network scheme ${parsed.protocol} is refused; only https is supported`,
+        reason: `network scheme ${parsed.protocol} is refused; only http and https are supported`,
       };
     }
+    if (internal) return { ok: true, internal: true };
     const port = parsed.port === '' ? 80 : Number.parseInt(parsed.port, 10);
-    if (this.allowInsecureHttp && this.allows(parsed.hostname, port)) return { ok: true };
+    if (this.allowInsecureHttp && this.allows(parsed.hostname, port)) return { ok: true, internal };
     return {
       ok: false,
       code: 'NOT_AUTHORIZED',
       reason:
-        'network scheme http: is refused; https is required unless plaintext is explicitly authorized for an authorized local test endpoint',
+        'network scheme http: to a public target is refused; https is required unless plaintext is explicitly authorized for this endpoint',
     };
   }
 
   /**
    * Decides a host name, resolving it when the name itself is not conclusive.
    *
-   * A literal address is classified from its bytes, an internal-by-construction
-   * name is refused unless exactly authorized, and every other name is resolved
-   * through {@link HostResolver}. The validated answers travel with the decision
-   * so the transport pins its connection to them (W7R2-03); an authorized name is
-   * still resolved when it can be, for the same pinning reason.
+   * The two fixed denials are applied to the name and then to **every** DNS answer, so a
+   * name that resolves to a metadata address or to this machine's bound ports is refused
+   * exactly like the literal spelling would be. Everything else is admitted.
    */
   private async decideHost(host: string, port: number | undefined): Promise<NetworkPolicyDecision> {
     const normalized = normalizeHost(host);
+    const byName = this.denyHostname(normalized, port);
+    if (byName !== undefined) return byName;
     const resolved = await classifyHostResolution(
       normalized,
       this.resolver ?? defaultHostResolver,
       this.nat64Prefixes,
     );
-    const addresses = resolved.addresses === undefined ? {} : { addresses: resolved.addresses };
-    if (resolved.classification === false) return { ok: true, ...addresses };
-    if (this.allows(normalized, port)) return { ok: true, ...addresses };
-    if (resolved.classification === true) return this.refuse(normalized, port);
-    // A name that could not be resolved (or whose resolver threw, or whose answer
-    // is not an address) is not a public target: an unverifiable destination is
-    // refused (W7R2-05).
+    const addresses = resolved.addresses === undefined ? [] : [...resolved.addresses];
+    for (const address of addresses) {
+      const denial = this.denyAddress(address, port, normalized);
+      if (denial !== undefined) return denial;
+    }
+    // `classification === true` is the loopback/private/link-local/CGNAT projection the
+    // plaintext rule is scoped to; an unclassifiable or unresolvable name is not internal
+    // (the connection will simply fail).
+    const internal = resolved.classification === true;
+    return addresses.length === 0 ? { ok: true, internal } : { ok: true, addresses, internal };
+  }
+
+  private decideSync(host: string, port?: number): NetworkPolicyDecision {
+    const normalized = normalizeHost(host);
+    const byName = this.denyHostname(normalized, port);
+    if (byName !== undefined) return byName;
+    const byAddress = this.denyAddress(normalized, port, normalized);
+    if (byAddress !== undefined) return byAddress;
+    const internal = isPrivateAddress(normalized, undefined, this.nat64Prefixes);
+    return { ok: true, internal, addresses: [normalized] };
+  }
+
+  /** The first fixed denial applied to a host name (before DNS). */
+  private denyHostname(host: string, port?: number): NetworkPolicyDecision | undefined {
+    if (isMetadataHostname(host)) return this.refuseMetadata(host, port);
+    if (port !== undefined && this.daemonPorts().includes(port) && this.isLocalHostname(host)) {
+      return this.refuseDaemonPort(host, port);
+    }
+    return undefined;
+  }
+
+  /** The two fixed denials applied to one address (a DNS answer or a literal). */
+  private denyAddress(
+    address: string,
+    port: number | undefined,
+    host: string,
+  ): NetworkPolicyDecision | undefined {
+    if (isMetadataAddress(address, this.nat64Prefixes)) return this.refuseMetadata(host, port);
+    if (port !== undefined && this.daemonPorts().includes(port) && this.isLocalAddress(address)) {
+      return this.refuseDaemonPort(host, port);
+    }
+    return undefined;
+  }
+
+  private isLocalHostname(host: string): boolean {
+    if (this.localAliases.includes(host)) return true;
+    return isAlwaysInternalHost(host) || isLoopbackAddress(host);
+  }
+
+  private isLocalAddress(address: string): boolean {
+    if (isLoopbackAddress(address)) return true;
+    const normalized = normalizeHost(address);
+    return this.localAddresses().some((local) => normalizeHost(local) === normalized);
+  }
+
+  private refuseMetadata(host: string, port?: number): NetworkPolicyDecision {
     return {
       ok: false,
       code: 'NOT_AUTHORIZED',
-      reason: `network target ${normalized} is refused: ${resolved.classification}`,
+      reason: `network target ${host}${port === undefined ? '' : `:${String(port)}`} is a cloud metadata address and is refused permanently; it is not a development target and no configuration or authorization can admit it — do not retry it`,
+    };
+  }
+
+  private refuseDaemonPort(host: string, port: number): NetworkPolicyDecision {
+    return {
+      ok: false,
+      code: 'NOT_AUTHORIZED',
+      reason: `network target ${host}:${String(port)} is a port the daemon itself is listening on and is refused permanently; it is the control plane, not a development target, and no configuration or authorization can admit it — do not retry it`,
     };
   }
 
@@ -1181,7 +1431,7 @@ export class NetworkPolicy {
       return {
         ok: false,
         code: 'NOT_AUTHORIZED',
-        reason: `network scheme ${parsed.protocol} is refused; only https is supported`,
+        reason: `network scheme ${parsed.protocol} is refused; only http and https are supported`,
       };
     }
     const port =
@@ -1191,20 +1441,6 @@ export class NetworkPolicy {
           : 80
         : Number.parseInt(parsed.port, 10);
     return { ok: true, url: parsed, port };
-  }
-
-  private decideSync(host: string, port?: number): NetworkPolicyDecision {
-    if (!isPrivateAddress(host, undefined, this.nat64Prefixes)) return { ok: true };
-    if (this.allows(host, port)) return { ok: true };
-    return this.refuse(host, port);
-  }
-
-  private refuse(host: string, port?: number): NetworkPolicyDecision {
-    return {
-      ok: false,
-      code: 'NOT_AUTHORIZED',
-      reason: `network target ${host}${port === undefined ? '' : `:${String(port)}`} is loopback/private/link-local and is not explicitly authorized`,
-    };
   }
 }
 
@@ -1513,8 +1749,17 @@ export interface ContainerPlanInput {
   /** Source roots; read-only unless listed in `writableRoots`. */
   readonly roots?: readonly string[];
   readonly writableRoots?: readonly string[];
-  /** `none` unless the Grant explicitly covers network and a proxy exists. */
+  /**
+   * Whether the controlled egress channel is mounted.
+   *
+   * `none` (the default) is a container with no egress channel at all. `proxy` mounts the
+   * channel's named volume read-only and starts the in-container bridge; the container's
+   * **IP network stays `none` in both cases**, so the mounted socket is the only path out
+   * (`w1-implementation.md` §7, `execution.md` §2).
+   */
   readonly network?: 'none' | 'proxy';
+  /** The live controlled channel; required when `network` is `proxy`. */
+  readonly egress?: ContainerEgressChannel;
   readonly workdir?: string;
   readonly env?: Readonly<Record<string, string>>;
 }
@@ -1539,9 +1784,12 @@ export function containerMountTarget(index: number): string {
  * Builds the exact `docker run` invocation for one tool call.
  *
  * The hardening flags are the ones `docker/run-agentdev.sh` documents and
- * `execution.md` §1 fixes. `--network` is `none` unless the caller passed
- * `proxy`, which only happens when the Grant explicitly covers network (and a
- * Core-controlled proxy exists, see `Broker`).
+ * `execution.md` §1 fixes. `--network none` is **always** used: the controlled egress is a
+ * Unix socket in a named volume, not an IP path, so the container keeps zero network
+ * reachability — no route to the daemon, to `host.docker.internal`, to the docker bridge
+ * gateway, to the LAN or to the internet — while still being able to install dependencies
+ * through the proxy. `proxy` only decides whether that volume is mounted and the bridge
+ * started.
  */
 export function planContainerRun(input: ContainerPlanInput): ContainerPlan {
   const image = input.image ?? EXEC_IMAGE;
@@ -1552,7 +1800,12 @@ export function planContainerRun(input: ContainerPlanInput): ContainerPlan {
     target: containerMountTarget(index),
     mode: writable.has(path) ? 'rw' : 'ro',
   }));
+  // An egress request without a live channel is not silently downgraded to "no network":
+  // the Broker refuses such a call before it gets here (`PROVIDER_UNAVAILABLE`), so this
+  // only decides whether the channel is attached for a call that does not need it.
   const network = input.network ?? 'none';
+  const egress =
+    network === 'proxy' && input.egress?.available() === true ? input.egress : undefined;
   const workdir = input.workdir ?? containerMountTarget(0);
   const args: string[] = [
     'run',
@@ -1570,20 +1823,47 @@ export function planContainerRun(input: ContainerPlanInput): ContainerPlan {
     '--cpus',
     '2',
     '--network',
-    // The Core proxy is the only sanctioned network path (`execution.md` §4);
-    // `bridge` is used only when that proxy has been configured.
-    network === 'proxy' ? 'bridge' : 'none',
+    'none',
     '--user',
     '10001:10001',
   ];
   for (const mount of mounts) {
     args.push('--volume', `${mount.path}:${mount.target}:${mount.mode}`);
   }
+  if (egress !== undefined) {
+    // A named volume, mounted read-only: the tool can `connect(2)` the socket but cannot
+    // unlink it (the mount is read-only), and the volume is invisible to the host, so a
+    // container cannot use it to smuggle a file into the daemon.
+    args.push('--mount', `type=volume,source=${egress.volume},target=${egress.mountPath},readonly`);
+  }
   for (const [key, value] of Object.entries(input.env ?? {})) {
     args.push('--env', `${key}=${value}`);
   }
-  args.push('--workdir', workdir, image, '-lc', input.command);
-  return { image, command: input.command, args, mounts, network, user: '10001:10001', workdir };
+  for (const [key, value] of Object.entries(
+    egress === undefined ? {} : egressToolEnv(egress.mountPath),
+  )) {
+    args.push('--env', `${key}=${value}`);
+  }
+  // The bridge starts before the tool command; the command itself travels through the
+  // environment so a model-supplied shell string is never concatenated into a wrapper.
+  args.push(
+    '--env',
+    `${EGRESS_COMMAND_ENV}=${input.command}`,
+    '--workdir',
+    workdir,
+    image,
+    '-lc',
+    egress === undefined ? input.command : egressWrapperCommand(),
+  );
+  return {
+    image,
+    command: input.command,
+    args,
+    mounts,
+    network: egress === undefined ? 'none' : 'proxy',
+    user: '10001:10001',
+    workdir,
+  };
 }
 
 /** The default execution image tag (`apps/cli doctor` reports its digest). */
@@ -1862,11 +2142,22 @@ export interface BrokerOptions {
   /** Explicit opt-in for plaintext `http:` on an authorized local test endpoint. */
   readonly allowInsecureHttp?: boolean;
   /**
-   * The Core-controlled network proxy the Grant-covered container mode uses
-   * (`execution.md` §4). When it is absent, a container network request is
-   * refused rather than opened.
+   * The ports the daemon **actually** bound, read live (first fixed denial).
+   *
+   * A function, because the control endpoint and the model-gateway proxy bind ephemeral
+   * ports at runtime; `w1-implementation.md` §7.2 requires the real values, not constants.
    */
-  readonly networkProxy?: string;
+  readonly daemonPorts?: () => readonly number[];
+  /**
+   * The controlled channel the containers use to reach the network
+   * (`execution.md` §2/§4, `w1-implementation.md` §7).
+   *
+   * When it is present and live, a tool shell is given the mounted socket and its
+   * `HTTP(S)_PROXY` environment; the container itself stays on `--network none`, so the
+   * Channel is its only egress. When it is absent, a call whose Grant covers network is
+   * refused rather than opened (`PROVIDER_UNAVAILABLE`).
+   */
+  readonly egress?: ContainerEgressChannel;
 }
 
 export class Broker {
@@ -1886,7 +2177,8 @@ export class Broker {
   private readonly nat64Prefixes: readonly string[];
   private readonly fetcher: NetworkFetcher;
   private readonly allowInsecureHttp: boolean;
-  private readonly networkProxy: string | undefined;
+  private readonly daemonPorts: () => readonly number[];
+  private readonly egressChannel: ContainerEgressChannel | undefined;
 
   constructor(options: BrokerOptions) {
     this.store = options.store;
@@ -1910,7 +2202,8 @@ export class Broker {
     this.nat64Prefixes = options.nat64Prefixes ?? DEFAULT_NAT64_PREFIXES;
     this.fetcher = options.fetcher ?? defaultNetworkFetcher;
     this.allowInsecureHttp = options.allowInsecureHttp ?? false;
-    this.networkProxy = options.networkProxy;
+    this.daemonPorts = options.daemonPorts ?? (() => []);
+    this.egressChannel = options.egress;
   }
 
   /** The roots no role may read or write; the derived run-data roots included. */
@@ -1930,11 +2223,33 @@ export class Broker {
 
   /** The policy a call's network targets are evaluated against. */
   networkPolicy(invocation: Pick<ToolInvocation, 'allowedNetworkTargets'>): NetworkPolicy {
+    return this.buildNetworkPolicy(invocation.allowedNetworkTargets ?? []);
+  }
+
+  /**
+   * The policy an admission-layer caller evaluates a *literal* target with.
+   *
+   * `tool-handler.ts` uses this for the URLs a shell command spells out; it is the same
+   * object — same two fixed denials, same live bound-port registry — the Egress proxy and
+   * the Broker's own admission use, so the pre-check cannot disagree with the egress.
+   */
+  egressPolicy(): NetworkPolicy {
+    return this.buildNetworkPolicy([]);
+  }
+
+  /** The live controlled channel, when this daemon started one. */
+  get egress(): ContainerEgressChannel | undefined {
+    return this.egressChannel;
+  }
+
+  private buildNetworkPolicy(extraTargets: readonly string[]): NetworkPolicy {
     return new NetworkPolicy({
-      allowedTargets: [...this.allowedNetworkTargets, ...(invocation.allowedNetworkTargets ?? [])],
+      allowedTargets: [...this.allowedNetworkTargets, ...extraTargets],
       resolver: this.resolver,
       nat64Prefixes: this.nat64Prefixes,
       allowInsecureHttp: this.allowInsecureHttp,
+      daemonPorts: this.daemonPorts,
+      localAddresses: () => hostInterfaceAddresses(),
     });
   }
 
@@ -2099,15 +2414,26 @@ export class Broker {
           ['mode'],
         );
       }
+      // Bring the controlled egress up **before** the container exists, so the first tool
+      // call already has a live channel. A channel that cannot start is not fatal: the
+      // container simply has no network, and the network-covered branch below says so.
+      if (this.egressChannel !== undefined) {
+        // `ensure` is a container lifecycle call; a throwing implementation must leave the
+        // channel unavailable rather than break admission, which is exactly what the
+        // network-covered branch below turns into a typed refusal.
+        await this.egressChannel.ensure().catch(() => false);
+      }
     }
     // A container may only reach the network through the Core-controlled proxy.
-    // With no proxy configured, a call whose Grant covers network is refused
-    // outright rather than being given an open `--network bridge`.
+    // With no live egress channel, a call whose Grant covers network is refused outright
+    // rather than being given an open network path. The container *never* gets an IP
+    // network: when the channel is missing the network is simply absent, and saying so is
+    // louder than letting the tool fail with a connection error.
     if (mode === 'container' && this.networkCovered(invocation, at)) {
-      if (this.networkProxy === undefined) {
+      if (this.egressChannel === undefined || !this.egressChannel.available()) {
         return refuse(
           'PROVIDER_UNAVAILABLE',
-          'container network is refused: no Core-controlled proxy is configured; the Broker does not open a direct network path',
+          'container network is refused: no Core-controlled egress channel is live; the Broker does not open a direct network path',
           ['network'],
         );
       }
@@ -2351,7 +2677,7 @@ export class Broker {
     mode: ExecutionMode,
   ): ProcessResult {
     if (mode === 'container') {
-      const plan = this.containerPlan(command, invocation);
+      const plan = this.containerPlan(command, invocation, { egress: true });
       return this.process.run('docker', plan.args, {
         timeoutMs: invocation.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS,
       });
@@ -2410,20 +2736,28 @@ export class Broker {
         typeof input === 'string'
           ? input
           : [input.program, ...input.args.map(shellQuote)].join(' ');
-      return { command: 'docker', args: this.containerPlan(command, invocation).args };
+      return {
+        command: 'docker',
+        args: this.containerPlan(command, invocation, { egress: true }).args,
+      };
     }
     return typeof input === 'string'
       ? { command: '/bin/sh', args: ['-lc', input] }
       : { command: input.program, args: input.args };
   }
 
-  private containerPlan(command: string, invocation: ToolInvocation): ContainerPlan {
-    // `proxy` is only used once a proxy actually exists; the caller was already
-    // refused otherwise, so the default stays `none`.
+  private containerPlan(
+    command: string,
+    invocation: ToolInvocation,
+    options: { readonly egress?: boolean } = {},
+  ): ContainerPlan {
+    // The egress channel is attached to a call that runs an arbitrary command — the shell
+    // is the only thing that can start `npm`/`pip`/`curl` — and only while the channel is
+    // live. `read`/`write` use dedicated container primitives and stay channel-less, so a
+    // file read does not pay for a bridge it cannot use.
+    const channel = this.egressChannel;
     const network =
-      this.networkProxy !== undefined && this.networkCovered(invocation, this.now())
-        ? 'proxy'
-        : 'none';
+      options.egress === true && channel !== undefined && channel.available() ? 'proxy' : 'none';
     const reportRoots = reportWriteRootsFor(
       invocation,
       declaredAccess(invocation.operation, invocation.access),
@@ -2441,9 +2775,7 @@ export class Broker {
       roots: [...(invocation.roots ?? []), ...reportRoots],
       writableRoots: [...callerWritable, ...reportRoots],
       network,
-      ...(this.networkProxy === undefined
-        ? {}
-        : { env: { AGENTDEV_NETWORK_PROXY: this.networkProxy } }),
+      ...(network === 'proxy' && channel !== undefined ? { egress: channel } : {}),
     });
   }
 

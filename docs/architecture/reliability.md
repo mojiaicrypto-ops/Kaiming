@@ -18,13 +18,13 @@ Late事件检查attempt/epoch/expected版本，不覆盖取消、更新后的Pla
 
 ## 3. 预算与公平调度
 
-Chief槽优先于专业槽，防止子Agent满载时主管无法接收意见。ProjectFIFO按ready_at排队，同优先级轮转；依赖未满足的Task不占Runner槽。默认专业Agent roleConcurrency=2；写入另受Worktree单writer锁。
+Chief槽优先于专业槽，防止子Agent满载时主管无法接收意见。ProjectFIFO按ready_at排队，同优先级轮转；依赖未满足的Task不占Runner槽。默认专业Agent roleConcurrency=2；写入另受Worktree单writer锁。**W6 实装**：专业 Run 的工具根目录是该 Task 自己的外部 worktree（`<AGENTDEV_HOME>/task-worktrees/<projectId>/tasks/<taskId>`），worktree 租约绑定 `(attemptId, epoch)`（第二个 Attempt 得 `BUSY`），并且每次工具调用都续期 Work 级写租约，因此"多任务并发不互写"与"工作区内删除不触及其他 Task"同时成立（`execution.md` §3）。
 
 模型调用前预留input估算+maxOutputTokens，扣除实际usage并释放剩余；未知usage保持预留并标costKnown=false，不能按零收费释放额度。结果最终可查usage再核销。并行调用共享Work预算事务，防止双花。repairUsed达到限制后在下一次返工前Blocked(budget)。预算提高必须用户来源，低于used+reserved的调整拒绝。
 
 ## 4. 工作区与集成
 
-无依赖Task从Work baseRevision创建外置Worktree。有依赖Task只有全部前置Done才能启动：Workspace服务在临时树按拓扑顺序纳入祖先Task提交（同层按ID），生成dependencyRevision；Task从该Revision创建，Task、Snapshot和VerificationManifest均记录dependencyRevision及dependencyManifestRefs（已验收祖先的验证Manifest ID）。祖先结果变化使后继Snapshot/结果失效并重建。依赖汇合有冲突时Chief创建独立冲突修复Task，后继保持Blocked(dependency)。正式集成对已经包含祖先的提交只应用各Task相对dependencyRevision的自身Diff，按拓扑顺序，避免重复cherry-pick祖先。写入前确认Plan/租约。开发结束冻结commit和完整代码树（含测试、配置、锁文件；排除正式知识和过程目录），Reviewer/Test读取冻结副本。
+无依赖Task从Work baseRevision创建外置Worktree（W6 起这是专业 Run 工具的实际根目录，不再只是候选提交时的临时树）。有依赖Task只有全部前置Done才能启动：Workspace服务在临时树按拓扑顺序纳入祖先Task提交（同层按ID），生成dependencyRevision；Task从该Revision创建，Task、Snapshot和VerificationManifest均记录dependencyRevision及dependencyManifestRefs（已验收祖先的验证Manifest ID）。祖先结果变化使后继Snapshot/结果失效并重建。依赖汇合有冲突时Chief创建独立冲突修复Task，后继保持Blocked(dependency)。正式集成对已经包含祖先的提交只应用各Task相对dependencyRevision的自身Diff，按拓扑顺序，避免重复cherry-pick祖先。写入前确认Plan/租约。开发结束冻结commit和完整代码树（含测试、配置、锁文件；排除正式知识和过程目录），Reviewer/Test读取冻结副本。
 
 单Project集成资源integration:<projectId>互斥。集成步骤：
 

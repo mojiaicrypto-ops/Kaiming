@@ -24,7 +24,7 @@
  * `lease` table (`data.md` §2), tests can use the in-memory store.
  */
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { JsonObject } from '@agentdev/contracts';
 import {
   NodeGitPort,
@@ -1028,6 +1028,22 @@ export function createWorktreeManager(options: WorktreeManagerOptions): Worktree
       return null;
     },
   };
+}
+
+/**
+ * The directory one Task's **persistent** worktree lives in (`WP-12` W6).
+ *
+ * `reliability.md` §4 gives every dependency-free Task its own external worktree, and a
+ * Task's tools must run *there* rather than in the project root: the Run's writes then
+ * cannot touch another Task's work, and "in-workspace delete is allowed" is scoped to a
+ * tree that belongs to that Task alone.
+ *
+ * The path is deliberately distinct from the *temporary* candidate worktrees
+ * `task-candidate.ts` creates (`<worktreeRoot>/<taskId>/<runId>`): a persistent worktree
+ * that contained a candidate worktree would nest one Git worktree inside another.
+ */
+export function taskWorktreePath(worktreeRoot: string, taskId: string): string {
+  return join(worktreeRoot, 'tasks', taskId);
 }
 
 /**

@@ -56,6 +56,7 @@ import {
   classifyAddressLiteral,
   defaultTestEnvironmentPorts,
   hashToolInput,
+  isMetadataAddress,
   isPrivateAddress,
   planContainerRun,
   resolveWithinRoots,
@@ -122,6 +123,11 @@ const FIXTURE_RESOLVER: HostResolver = {
     }
     if (host === 'public.example') {
       return Promise.resolve({ ok: true, addresses: ['93.184.216.34'] });
+    }
+    if (host === 'metadata.example') {
+      // WP-12 W6: a name whose answer is a metadata address. The egress denies it by
+      // answer, not by spelling — this is the DNS half of the first fixed denial.
+      return Promise.resolve({ ok: true, addresses: ['169.254.169.254'] });
     }
     return Promise.resolve({ ok: false, reason: `${host} is not in the local fixture` });
   },
@@ -736,37 +742,45 @@ describe('Broker (AC-048, AC-050)', () => {
       expect(isPrivateAddress('example.com')).toBe(false);
     });
 
-    it('refuses a private target by default and passes an exact authorized target', () => {
-      const policy = new NetworkPolicy();
-      const refused = policy.checkUrl('http://10.0.0.5/private');
-      expect(refused.ok).toBe(false);
-      if (refused.ok) throw new Error('unreachable');
-      expect(refused.code).toBe('NOT_AUTHORIZED');
+    it('opens public, loopback and private targets by default and keeps only the two fixed denials (W6)', () => {
+      // `w1-implementation.md` §7.1 replaces the earlier allowlist: a local dev server and
+      // an internal mirror are ordinary development, so they pass with no configuration.
+      const policy = new NetworkPolicy({ daemonPorts: () => [4318] });
+      expect(policy.checkUrl('http://10.0.0.5/private').ok).toBe(true);
+      expect(policy.checkUrl('http://127.0.0.1:8080/').ok).toBe(true);
+      expect(policy.checkUrl('https://public.example/').ok).toBe(true);
+      // A scheme that is not http(s) is still not a network target.
+      expect(policy.checkUrl('ftp://example.com/file').ok).toBe(false);
 
-      const loopback = policy.checkUrl('http://127.0.0.1:8080/');
-      expect(loopback.ok).toBe(false);
+      // W7R1-07 survives for a *public* plaintext target: it needs the explicit opt-in.
+      const publicHttp = policy.checkUrl('http://public.example/');
+      expect(publicHttp.ok).toBe(false);
+      if (publicHttp.ok) throw new Error('unreachable');
+      expect(publicHttp.reason).toContain('https is required');
+      expect(
+        new NetworkPolicy({ allowedTargets: ['public.example'], allowInsecureHttp: true }).checkUrl(
+          'http://public.example/',
+        ).ok,
+      ).toBe(true);
 
-      const scheme = policy.checkUrl('ftp://example.com/file');
-      expect(scheme.ok).toBe(false);
+      // The first fixed denial: a port the daemon actually bound.
+      const daemonPort = policy.checkUrl('http://127.0.0.1:4318/control');
+      expect(daemonPort.ok).toBe(false);
+      if (daemonPort.ok) throw new Error('unreachable');
+      expect(daemonPort.code).toBe('NOT_AUTHORIZED');
+      expect(daemonPort.reason).toContain('daemon itself is listening on');
+      // The same port on a target that is not this machine is not the daemon's port.
+      expect(policy.checkUrl('https://93.184.216.34:4318/').ok).toBe(true);
 
-      // W7R1-07: plain http is refused even for a private target the caller
-      // authorized, unless plaintext was explicitly enabled for that endpoint.
-      const insecure = new NetworkPolicy({ allowedTargets: ['127.0.0.1:8080'] });
-      const insecureDecision = insecure.checkUrl('http://127.0.0.1:8080/ok');
-      expect(insecureDecision.ok).toBe(false);
-      if (insecureDecision.ok) throw new Error('unreachable');
-      expect(insecureDecision.reason).toContain('http: is refused');
-
-      const authorized = new NetworkPolicy({
-        allowedTargets: ['127.0.0.1:8080'],
-        allowInsecureHttp: true,
-      });
-      expect(authorized.checkUrl('http://127.0.0.1:8080/ok').ok).toBe(true);
-      // The authorization is exact: another port of the same host stays refused.
-      expect(authorized.checkUrl('http://127.0.0.1:8081/other').ok).toBe(false);
+      // The second fixed denial: cloud metadata, by literal and by name.
+      const metadata = policy.checkUrl('http://169.254.169.254/latest/meta-data/');
+      expect(metadata.ok).toBe(false);
+      if (metadata.ok) throw new Error('unreachable');
+      expect(metadata.reason).toContain('metadata');
+      expect(policy.checkUrl('http://metadata.google.internal/').ok).toBe(false);
     });
 
-    it('refuses a private network target before any tool runs (AC-048)', async () => {
+    it('refuses a metadata network target before any tool runs (AC-048)', async () => {
       let executions = 0;
       const outcome = await invoke({
         operation: 'network',
@@ -796,7 +810,7 @@ describe('Broker (AC-048, AC-050)', () => {
       expect(outcome.ok).toBe(false);
       if (outcome.ok) throw new Error('unreachable');
       expect(outcome.code).toBe('PROVIDER_UNAVAILABLE');
-      expect(outcome.reason).toContain('no Core-controlled proxy');
+      expect(outcome.reason).toContain('no Core-controlled egress channel');
       expect(store.toolOperations.count()).toBe(0);
     });
 
@@ -840,8 +854,36 @@ describe('Broker (AC-048, AC-050)', () => {
       expect(plan.args.join(' ')).toContain('--volume /tmp/ws:/workspace:ro');
       expect(plan.mounts).toEqual([{ path: '/tmp/ws', target: '/workspace', mode: 'ro' }]);
 
-      const proxied = planContainerRun({ command: 'id -u', roots: ['/tmp/ws'], network: 'proxy' });
-      expect(proxied.args.join(' ')).toContain('--network bridge');
+      // W6: `proxy` never opens an IP network. The controlled channel is a named volume
+      // mounted read-only plus the in-container bridge, so `--network none` stays.
+      const channel = {
+        ensure: () => Promise.resolve(true),
+        available: () => true,
+        volume: 'agentdev-egress-test',
+        mountPath: '/run/agentdev',
+      };
+      const proxied = planContainerRun({
+        command: 'id -u',
+        roots: ['/tmp/ws'],
+        network: 'proxy',
+        egress: channel,
+      });
+      expect(proxied.args.join(' ')).toContain('--network none');
+      expect(proxied.args.join(' ')).toContain(
+        '--mount type=volume,source=agentdev-egress-test,target=/run/agentdev,readonly',
+      );
+      expect(proxied.args.join(' ')).toContain('AGENTDEV_EGRESS_SOCKET=/run/agentdev/egress.sock');
+      expect(proxied.args.join(' ')).toContain('AGENTDEV_TOOL_COMMAND=id -u');
+      expect(proxied.network).toBe('proxy');
+      // A channel that is not live is not mounted, and the plan stays a plain container.
+      const dead = planContainerRun({
+        command: 'id -u',
+        roots: ['/tmp/ws'],
+        network: 'proxy',
+        egress: { ...channel, available: () => false },
+      });
+      expect(dead.network).toBe('none');
+      expect(dead.args.join(' ')).not.toContain('agentdev-egress-test');
 
       const writable = planContainerRun({
         command: 'id -u',
@@ -857,15 +899,18 @@ describe('Broker (AC-048, AC-050)', () => {
   // ---------------------------------------------------------------------------
 
   describe('review round 1 regressions (W7R1)', () => {
-    it('refuses a hostname that DNS resolves into loopback, with no transport call (W7R1-01)', async () => {
+    it('denies a name that DNS resolves into metadata, and re-checks every redirect hop (W7R1-01, W6)', async () => {
+      // The literal check cannot see this name; only the resolver can. Under W6 a name
+      // resolving to *plain* loopback is ordinary (a local service), but an answer in
+      // metadata space is the fixed denial whatever spelling produced it.
+      expect(isPrivateAddress('metadata.example')).toBe(false);
       const policy = new NetworkPolicy({ resolver: FIXTURE_RESOLVER });
-      // The literal check cannot see this name; only the resolver can.
-      expect(isPrivateAddress('localtest.example')).toBe(false);
-      const decision = await policy.decide({ url: 'https://localtest.example/private' });
+      expect((await policy.decide({ url: 'https://localtest.example/private' })).ok).toBe(true);
+      const decision = await policy.decide({ url: 'https://metadata.example/creds' });
       expect(decision.ok).toBe(false);
       if (decision.ok) throw new Error('unreachable');
       expect(decision.code).toBe('NOT_AUTHORIZED');
-      expect(decision.reason).toContain('loopback/private/link-local');
+      expect(decision.reason).toContain('metadata');
 
       // The guarded transport refuses the same name before the transport runs.
       const fetched: string[] = [];
@@ -881,15 +926,15 @@ describe('Broker (AC-048, AC-050)', () => {
           });
         },
       });
-      const refused = await requester.request('https://localtest.example/private');
+      const refused = await requester.request('https://metadata.example/creds');
       expect(refused.ok).toBe(false);
       if (refused.ok) throw new Error('unreachable');
       expect(refused.code).toBe('NOT_AUTHORIZED');
-      expect(refused.hops).toEqual([{ url: 'https://localtest.example/private', allowed: false }]);
+      expect(refused.hops).toEqual([{ url: 'https://metadata.example/creds', allowed: false }]);
       expect(fetched).toEqual([]);
 
-      // A redirect to that name is refused at the second hop, not followed: the
-      // public origin is fetched exactly once.
+      // A redirect into metadata is refused at the second hop, not followed: the public
+      // origin is fetched exactly once.
       const publicFetched: string[] = [];
       const redirecting = new GuardedRequester({
         policy,
@@ -900,7 +945,7 @@ describe('Broker (AC-048, AC-050)', () => {
             status: 302,
             headers: {
               get: (name) =>
-                name.toLowerCase() === 'location' ? 'https://localtest.example/private' : null,
+                name.toLowerCase() === 'location' ? 'https://metadata.example/creds' : null,
             },
             text: () => Promise.resolve(''),
           });
@@ -910,11 +955,11 @@ describe('Broker (AC-048, AC-050)', () => {
       expect(redirect.ok).toBe(false);
       if (redirect.ok) throw new Error('unreachable');
       expect(publicFetched).toEqual(['https://public.example/start']);
-      expect(redirect.blockedUrl).toBe('https://localtest.example/private');
+      expect(redirect.blockedUrl).toBe('https://metadata.example/creds');
       expect(redirect.hops.map((hop) => hop.allowed)).toEqual([true, false]);
     });
 
-    it('refuses an authorized private literal over plain http unless plaintext was enabled (W7R1-07)', () => {
+    it('needs the plaintext opt-in for a public http target but not for a local one (W7R1-07, W6)', () => {
       const secure = new NetworkPolicy({ resolver: FIXTURE_RESOLVER });
       expect(secure.checkUrl('https://public.example/').ok).toBe(true);
       const http = secure.checkUrl('http://public.example/');
@@ -922,15 +967,16 @@ describe('Broker (AC-048, AC-050)', () => {
       if (http.ok) throw new Error('unreachable');
       expect(http.reason).toContain('https is required');
 
-      // An explicit local test endpoint: https passes, http needs the opt-in too.
-      const local = new NetworkPolicy({ allowedTargets: ['127.0.0.1:8080'] });
+      // §7.1: `http://127.0.0.1:3000` is the documented local-dev case and needs nothing.
+      const local = new NetworkPolicy();
       expect(local.checkUrl('https://127.0.0.1:8080/ok').ok).toBe(true);
-      expect(local.checkUrl('http://127.0.0.1:8080/ok').ok).toBe(false);
+      expect(local.checkUrl('http://127.0.0.1:8080/ok').ok).toBe(true);
+      // A public plaintext target still needs the explicit opt-in.
       const optedIn = new NetworkPolicy({
-        allowedTargets: ['127.0.0.1:8080'],
+        allowedTargets: ['public.example'],
         allowInsecureHttp: true,
       });
-      expect(optedIn.checkUrl('http://127.0.0.1:8080/ok').ok).toBe(true);
+      expect(optedIn.checkUrl('http://public.example/ok').ok).toBe(true);
     });
 
     it('classifies the hexadecimal IPv4-mapped IPv6 forms the URL parser produces (W7R1-02)', () => {
@@ -954,9 +1000,15 @@ describe('Broker (AC-048, AC-050)', () => {
       expect(isPrivateAddress('::ffff:8.8.8.8')).toBe(false);
       expect(isPrivateAddress('::ffff:808:808')).toBe(false);
 
+      // W6: a mapped loopback literal is ordinary local development; a mapped *metadata*
+      // literal is the fixed denial and must be decoded, not read as an opaque IPv6 string.
       const policy = new NetworkPolicy();
-      expect(policy.checkUrl('http://[::ffff:7f00:1]/').ok).toBe(false);
-      expect(policy.checkUrl('https://[::ffff:7f00:1]/').ok).toBe(false);
+      expect(policy.checkUrl('http://[::ffff:7f00:1]/').ok).toBe(true);
+      expect(policy.checkUrl('https://[::ffff:7f00:1]/').ok).toBe(true);
+      expect(policy.checkUrl('http://[::ffff:a9fe:a9fe]/latest/').ok).toBe(false);
+      expect(isMetadataAddress('::ffff:a9fe:a9fe')).toBe(true);
+      expect(isMetadataAddress('[::ffff:169.254.169.254]')).toBe(true);
+      expect(isMetadataAddress('::ffff:8.8.8.8')).toBe(false);
     });
 
     it('protects the run database without any caller-declared protected path (W7R1-04)', async () => {
@@ -1530,10 +1582,10 @@ describe('Broker (AC-048, AC-050)', () => {
       const outcome = await broker.invoke(
         invocation({
           operation: 'network',
-          targets: ['localtest.example'],
+          targets: ['metadata.example'],
           input,
           toolOperationId: operationId,
-          network: { url: 'https://localtest.example/private' },
+          network: { url: 'https://metadata.example/creds' },
         }),
       );
       expect(outcome.ok).toBe(false);
@@ -1658,34 +1710,25 @@ describe('Broker (AC-048, AC-050)', () => {
       }
     });
 
-    it('turns a throwing resolver into a refusal instead of an exception (W7R2-05)', async () => {
+    it('turns a throwing resolver into a decision, never an escaped exception (W7R2-05, W6)', async () => {
       const resolver: HostResolver = {
         resolve() {
           throw new Error('resolver exploded');
         },
       };
       const policy = new NetworkPolicy({ resolver });
+      // A resolver that throws is treated as a name that did not resolve: admitted with no
+      // pinned address (so the connection simply fails) rather than crashing the caller.
+      // W6 keeps the "no escaped exception" half of W7R2-05; the "refusal" half is now
+      // reserved for the two fixed denials, which do not need DNS at all.
       const decision = await policy.decide({ url: 'https://public.example/' });
-      expect(decision.ok).toBe(false);
-      if (decision.ok) throw new Error('unreachable');
-      expect(decision.code).toBe('NOT_AUTHORIZED');
-      expect(decision.reason).toContain('resolver exploded');
-
-      const requester = new GuardedRequester({
-        policy,
-        resolver,
-        fetcher: () =>
-          Promise.resolve({
-            status: 200,
-            headers: { get: () => null },
-            text: () => Promise.resolve('never'),
-          }),
-      });
-      const outcome = await requester.request('https://public.example/');
-      expect(outcome.ok).toBe(false);
-      if (outcome.ok) throw new Error('unreachable');
-      expect(outcome.code).toBe('NOT_AUTHORIZED');
-      expect(outcome.blockedUrl).toBe('https://public.example/');
+      expect(decision.ok).toBe(true);
+      expect(decision.ok && decision.addresses).toBeUndefined();
+      // A resolver cannot talk the policy out of a fixed denial.
+      const metadata = await policy.decide({ url: 'https://169.254.169.254/latest/' });
+      expect(metadata.ok).toBe(false);
+      if (metadata.ok) throw new Error('unreachable');
+      expect(metadata.code).toBe('NOT_AUTHORIZED');
     });
 
     it('decodes local-use NAT64 prefixes and treats undecodable ones as private (W7R2-06)', async () => {
@@ -1697,10 +1740,18 @@ describe('Broker (AC-048, AC-050)', () => {
       // A matching NAT64 address whose embedded IPv4 cannot be decoded is private,
       // never public.
       expect(classifyAddressLiteral('64:ff9b:1:1:0:0:7f00:1')).toBe(true);
-      // The policy applies the same decoding to literals.
+      // W6 keeps the decoding for the *fixed denial*: a NAT64 address whose embedded IPv4
+      // is a metadata endpoint is refused, while one that embeds plain loopback is local
+      // development and admitted.
+      expect(isMetadataAddress('64:ff9b::a9fe:a9fe')).toBe(true);
+      expect(isMetadataAddress('2001:db8:64::a9fe:a9fe', ['2001:db8:64::/96'])).toBe(true);
+      expect(isMetadataAddress('2001:db8:64::a9fe:a9fe')).toBe(false);
       const policy = new NetworkPolicy({ nat64Prefixes: ['2001:db8:64::/96'] });
-      const decision = await policy.decide({ url: 'https://[2001:db8:64::7f00:1]/' });
+      expect((await policy.decide({ url: 'https://[2001:db8:64::7f00:1]/' })).ok).toBe(true);
+      const decision = await policy.decide({ url: 'https://[2001:db8:64::a9fe:a9fe]/' });
       expect(decision.ok).toBe(false);
+      if (decision.ok) throw new Error('unreachable');
+      expect(decision.reason).toContain('metadata');
     });
 
     it('refuses readiness when the port is owned by an external listener (W7R2-07)', async () => {
