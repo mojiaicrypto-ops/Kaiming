@@ -18,6 +18,7 @@ import {
 } from '@agentdev/pi-runtime';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AttemptRunner, type AttemptRunnerDeps } from '../src/attempt.js';
+import type { ControlClient } from '../src/control-client.js';
 import { messageSchema, type RunnerMessage } from '../src/ipc.js';
 
 /**
@@ -183,6 +184,54 @@ describe('AttemptRunner', () => {
       expect(ready.droppedTools).toEqual([]);
       expect(ready.modelId).toBe(modelId);
     }
+    runner.dispose();
+  });
+
+  it('seals stage_yield with the read-ledger binding the control channel reached (AC-085)', async () => {
+    // `context.request` expands the ledger over the control channel and the tool bridge never
+    // sees it. Reporting the bridge's stale binding was refused with `STALE_ARTIFACT: the
+    // stage result is bound to read 0 but the ledger ends at 6`, which made delivery
+    // impossible (WP-12 T2-fix-delivery). The Runner takes the higher `seq` of the two.
+    const submitted: Record<string, unknown>[] = [];
+    const controlBinding = { seq: 6, hash: 'b'.repeat(64) };
+    const client = {
+      url: 'http://127.0.0.1:1',
+      capability: 'cap-1',
+      attemptId: 'attempt-1',
+      epoch: 7,
+      assessmentSubmit: () => Promise.resolve(),
+      agentDispatch: () => Promise.resolve(),
+      stageSubmit: ({ result }: { result: unknown }) => {
+        submitted.push(result as Record<string, unknown>);
+        return Promise.resolve();
+      },
+      ledgerBinding: () => controlBinding,
+    } satisfies ControlClient;
+    let captured: readonly PiToolSpec[] = [];
+    const runner = build(
+      {
+        role: 'backend',
+        toolNames: [],
+        controlClient: client,
+        readLedgerBinding: () => ({ seq: 2, hash: 'a'.repeat(64) }),
+      },
+      {
+        buildSession: (request) => {
+          captured = request.options.customTools ?? [];
+          return Promise.resolve(fakeSession().handle);
+        },
+      },
+    );
+    await expect(runner.start()).resolves.toBe(0);
+    const stage = captured.find((tool) => tool.name === 'stage_yield');
+    if (stage === undefined) throw new Error('the professional session has no stage_yield');
+    expect(
+      await stage.execute({ status: 'failed', summary: 'blocked' }, { signal: undefined }),
+    ).toEqual({ text: 'stage result submitted' });
+    expect(submitted[0]).toMatchObject({
+      readLedgerSeq: 6,
+      readLedgerHash: 'b'.repeat(64),
+    });
     runner.dispose();
   });
 

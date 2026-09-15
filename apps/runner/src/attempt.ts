@@ -167,6 +167,23 @@ export class AttemptRunner {
             epoch: options.epoch,
           }));
     const submission = this.submission;
+    // The seal a `stage_yield` reports (`AC-085`). Reads reach the Attempt's ledger through
+    // two channels — the tool bridge (`tool.execute`) and the control channel
+    // (`context.request`) — and each reports the binding it saw. The ledger only grows, so the
+    // highest `seq` is the current end; reporting a stale one is refused with `STALE_ARTIFACT`
+    // and made the delivery impossible when the model read only through `context.request`
+    // (WP-12 T2-fix-delivery). The local seal is the genesis value until either channel
+    // reports one.
+    const stageSeal = (): { readonly seq: number; readonly hash: string } => {
+      const candidates = [
+        control?.ledgerBinding?.(),
+        options.readLedgerBinding?.(),
+        this.readLedger.seal(),
+      ].filter(
+        (entry): entry is { readonly seq: number; readonly hash: string } => entry !== undefined,
+      );
+      return candidates.reduce((best, entry) => (entry.seq >= best.seq ? entry : best));
+    };
     const customTools = [
       ...(options.customTools ?? []),
       ...(control === undefined
@@ -175,9 +192,7 @@ export class AttemptRunner {
             client: control,
             role: options.role ?? 'backend',
             ...(options.workId === undefined ? {} : { workId: options.workId }),
-            ...(options.readLedgerBinding === undefined
-              ? {}
-              : { readLedgerBinding: options.readLedgerBinding }),
+            readLedgerBinding: stageSeal,
             readLedger: this.readLedger,
             onStageSubmitted: () => {
               submission.stage = true;

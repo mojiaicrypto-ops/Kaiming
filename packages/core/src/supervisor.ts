@@ -301,8 +301,8 @@ function messageOf(error: unknown): string {
  */
 function contractReminder(role: string): string {
   return role === 'chief'
-    ? 'Contract: deliver by calling `assessment_submit` (intent, goal, scope, level, semanticImpact, riskFlags, uncertainties, policyRevision, reason) and then `agent_dispatch` (role, purpose, goal, scope, stage, contextSelection, requiredOutputs, requiredChild, joinPolicy, budgetAllocation). Plain text delivers nothing and the Work does not move.'
-    : 'Contract: deliver by calling `stage_yield` with status, summary, changedPaths, evidenceRefs, unknowns and requestedActions (add artifactRefs/findingIds when they apply). Plain text delivers nothing: the stage is judged on that tool call alone.';
+    ? 'Contract: deliver by calling `assessment_submit` (intent, goal, scope, level, semanticImpact, riskFlags, uncertainties, policyRevision, reason) and then `agent_dispatch` (role, purpose, goal, scope, stage, contextSelection, requiredOutputs, requiredChild, joinPolicy, budgetAllocation). Use the canonical stage of the role you dispatch (product→product/document/document_check; planning→planning/document; backend|frontend→develop-L1/develop-L2/develop-L3; review→review/document_check; test→test; settlement→settlement): any other stage leaves the Run with no readable context, so it can never deliver. Plain text delivers nothing and the Work does not move.'
+    : 'Contract: deliver by calling `stage_yield` exactly once with status (success/needs_input/failed), summary, changedPaths, evidenceRefs, unknowns and requestedActions (add artifactRefs/findingIds when they apply). artifactRefs are {id,version,hash} pins and evidenceRefs/findingIds are ids of existing rows, never paths or prose; omit a list when it is empty. Plain text delivers nothing: the stage is judged on that tool call alone, and a `request_dispatch` call does not deliver for you.';
 }
 
 export class RunnerSupervisor {

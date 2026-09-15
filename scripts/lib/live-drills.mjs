@@ -1894,6 +1894,21 @@ export async function runMessageToStageDrill({ harness, product }) {
         .slice(-12)
         .map((event) => `${event.name}@${event.entityId.slice(0, 8)}`)
         .join(',');
+      // A Run can also reach `contract_violation` because `stage.submit` refused the model's
+      // payload twice (`rules/agents.md` §4: the first Schema failure is correctable, the
+      // second is the violation). That refusal carries the exact Zod issues in the
+      // `stage.failed` event, and without them a real delivery failure looks like a model
+      // that never called the tool at all (WP-12 T2-fix-delivery).
+      const stageRejections = store.events
+        .readAfter(0, { limit: 20_000 })
+        .filter(
+          (event) =>
+            event.name === 'stage.failed' &&
+            event.entityId === professional.id &&
+            event.data['outcome'] === 'schema_invalid',
+        )
+        .map((event) => `#${String(event.data['rejection'])}: ${String(event.data['reason'])}`)
+        .join(' | ');
       // The acceptance aggregation prints only the last 12 lines of a drill's output, so the
       // whole daemon-side story (`supervisor:`/`control-endpoint:`/`gateway-proxy:`) is also
       // written to a file next to the drill results. Without it a timing failure (a submit that
@@ -1915,7 +1930,7 @@ export async function runMessageToStageDrill({ harness, product }) {
         ? 'the lease sweep declared the Attempt lost while silent'
         : 'no lease sweep fired; the Attempt status is closing bookkeeping after a terminal Run';
       throw new Error(
-        `no stage result: professional Run ${professional.id.slice(0, 8)} is ${String(run?.status)} (attempts: ${attempts}); lost=${lost}; runs=[${runs}]; stages=[${stageSummary}]; attempts=[${attemptSummary}]; events=[${events}]; control log tail: ${full.slice(-2500)}${dump}`,
+        `no stage result: professional Run ${professional.id.slice(0, 8)} is ${String(run?.status)} (attempts: ${attempts}); lost=${lost}; runs=[${runs}]; stages=[${stageSummary}]; attempts=[${attemptSummary}]; stageRejections=[${stageRejections === '' ? 'none' : stageRejections}]; events=[${events}]; control log tail: ${full.slice(-2500)}${dump}`,
       );
     }
     // `protocol.md` §7: a success is `stage.completed`, any other terminal status is

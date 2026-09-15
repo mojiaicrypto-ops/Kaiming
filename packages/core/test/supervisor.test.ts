@@ -653,7 +653,12 @@ describe('RunnerSupervisor claiming', () => {
       'Submit through stage_yield; plain text does not deliver.',
     );
     expect(steer?.type === 'attempt.steer' ? steer.text : '').toContain(
-      '`stage_yield` with status, summary, changedPaths, evidenceRefs, unknowns and requestedActions',
+      '`stage_yield` exactly once with status (success/needs_input/failed), summary, changedPaths, evidenceRefs, unknowns and requestedActions',
+    );
+    // A dispatch request is not a delivery: the reminder must say so, because a professional
+    // Run that asks for another role still owes its own stage result (WP-12 T2-fix-delivery).
+    expect(steer?.type === 'attempt.steer' ? steer.text : '').toContain(
+      'a `request_dispatch` call does not deliver for you',
     );
     // The second answer is what the verdict reads: the first text must not leak into it.
     runner.emit({

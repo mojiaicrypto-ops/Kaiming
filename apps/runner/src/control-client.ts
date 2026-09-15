@@ -12,7 +12,12 @@
  * an error result (so it can correct and submit again) while the protocol code is preserved
  * for the Runner's own log.
  */
-import type { Role } from '@agentdev/contracts';
+import {
+  missingSelectionReasons,
+  professionalDispatchSpecSchema,
+  stageResultContentSchema,
+  type Role,
+} from '@agentdev/contracts';
 import type { ReadLedger } from './read-ledger.js';
 import type { PiToolSpec } from '@agentdev/pi-runtime';
 import { Type } from 'typebox';
@@ -66,6 +71,18 @@ export interface ControlClient {
     readonly question: string;
     readonly choices: readonly string[];
   }): Promise<unknown>;
+  /**
+   * The Attempt's read-ledger binding as the **control channel** last reported it.
+   *
+   * `context.request` expands the ledger over this channel, not over the tool bridge, and Core
+   * answers with the new binding (`control-handler` `context.request` → `ledger:{seq,hash}`).
+   * A `stage_yield` that reported the tool bridge's stale value was refused
+   * `STALE_ARTIFACT: the stage result is bound to read 0 but the ledger ends at 6 (AC-085)`
+   * for the rest of the Run — the delivery was impossible, not merely wrong (WP-12
+   * T2-fix-delivery). `attempt.ts` composes this with the bridge's binding by the higher
+   * `seq`, so whichever channel read last is what the seal reports.
+   */
+  ledgerBinding?(): { readonly seq: number; readonly hash: string } | undefined;
 }
 
 /** A control refusal, with the protocol code the endpoint answered (`protocol.md` §7). */
@@ -101,6 +118,16 @@ interface ControlResponse {
   readonly body: unknown;
 }
 
+/** Reads a `ledger:{seq,hash}` member off the wire, ignoring anything malformed. */
+function readLedgerOf(value: unknown): { readonly seq: number; readonly hash: string } | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const seq = (value as { seq?: unknown }).seq;
+  const hash = (value as { hash?: unknown }).hash;
+  if (typeof seq !== 'number' || !Number.isInteger(seq) || seq < 0) return undefined;
+  if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/u.test(hash)) return undefined;
+  return { seq, hash };
+}
+
 async function readJson(response: Response): Promise<unknown> {
   const text = await response.text();
   if (text.trim().length === 0) return null;
@@ -122,6 +149,8 @@ export function createControlClient(options: ControlClientOptions): ControlClien
   const doFetch = options.fetchImpl ?? fetch;
   const log = options.log ?? (() => undefined);
   const timeoutMs = options.timeoutMs ?? CONTROL_TIMEOUT_MS;
+  /** The binding the control channel last reported; `undefined` until an expansion answer. */
+  let currentLedger: { readonly seq: number; readonly hash: string } | undefined;
 
   async function call(path: string, body: Record<string, unknown>): Promise<unknown> {
     const controller = new AbortController();
@@ -158,6 +187,9 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     capability: options.capability,
     attemptId: options.attemptId,
     epoch: options.epoch,
+    // The last binding the control channel reported (`context.request`); `undefined` until an
+    // answer carries one, so the caller can tell "no control read yet" from "read nothing".
+    ledgerBinding: () => currentLedger,
     assessmentSubmit: async ({ workId, assessment }) => {
       log(`control: assessment.submit for Work ${workId}`);
       await call('/control/assessment.submit', { workId, assessment });
@@ -169,7 +201,16 @@ export function createControlClient(options: ControlClientOptions): ControlClien
     ...{
       contextRequest: async ({ workId, requestedRefs, reason }) => {
         log(`control: context.request for Work ${workId} (${String(requestedRefs.length)} refs)`);
-        return call('/control/context.request', { workId, requestedRefs, reason });
+        const answer = await call('/control/context.request', { workId, requestedRefs, reason });
+        // Core answers with the Attempt's binding *after* the expansion; keeping it is what
+        // lets a later `stage_yield` report the ledger Core actually holds (AC-085).
+        const ledger = readLedgerOf(
+          typeof answer === 'object' && answer !== null
+            ? (answer as { ledger?: unknown }).ledger
+            : undefined,
+        );
+        if (ledger !== undefined) currentLedger = ledger;
+        return answer;
       },
       agentRequestDispatch: async ({ workId, reason, requestedRole, goal, sourceRefs }) => {
         log(`control: agent.request_dispatch ${requestedRole}`);
@@ -315,30 +356,243 @@ export interface ControlToolOptions {
  * `StageResult`), which is what makes a submission checkable instead of parsed out of an
  * answer.
  */
+/**
+ * Entity ids inside a StageResult are ids of **existing rows** (`data.md` §1), not paths.
+ *
+ * A model naturally writes the evidence it has — a file path, a revision, a sentence — into
+ * `evidenceRefs`, and Core's `stageResultContentSchema` refuses anything that is not a
+ * lowercase UUIDv7 (or the 32-hex Project id). That refusal used to be the model's first
+ * sight of the rule, and a second one ended the Run as `contract_violation`
+ * (`docs/rules/agents.md` §4), so the tool states the shape and checks it first.
+ */
+const ENTITY_ID_DESCRIPTION =
+  'the id of an existing row (lowercase UUIDv7, or the 32-hex Project id) — never a path, ' +
+  'a file name, a revision or prose';
+
+/** The fields `stage_yield` accepts; `readLedgerSeq`/`readLedgerHash` are Runner-owned. */
+const STAGE_YIELD_FIELDS = [
+  'status',
+  'summary',
+  'artifactRefs',
+  'evidenceRefs',
+  'changedPaths',
+  'findingIds',
+  'unknowns',
+  'requestedActions',
+  'readLedgerSeq',
+  'readLedgerHash',
+] as const;
+
+/** The list fields Core requires on every StageResult, as empty arrays when unset. */
+const STAGE_RESULT_LISTS = [
+  'artifactRefs',
+  'evidenceRefs',
+  'changedPaths',
+  'findingIds',
+  'unknowns',
+  'requestedActions',
+] as const;
+
+/** One Zod issue as `<path>: <message>`, the same rendering `StageGate` uses. */
+function stageIssue(issue: { readonly path: PropertyKey[]; readonly message: string }): string {
+  return `${issue.path.map(String).join('.') || '(root)'}: ${issue.message}`;
+}
+
+/**
+ * Builds the payload Core will receive, or the exact reason it would be refused.
+ *
+ * The check uses the **same** `stageResultContentSchema` Core validates against, so the
+ * tool can never accept a payload Core would reject, and Core still re-validates
+ * independently (`packages/core/src/stage.ts`). Nothing about the two-strike rule changes:
+ * the tool simply refuses to spend a strike on a shape the model can be told to fix.
+ */
+function buildStagePayload(
+  params: Record<string, unknown>,
+  seal: { readonly seq: number; readonly hash: string } | undefined,
+):
+  | { readonly ok: true; readonly payload: Record<string, unknown> }
+  | { readonly ok: false; readonly message: string } {
+  const unknown = Object.keys(params).filter(
+    (key) => !(STAGE_YIELD_FIELDS as readonly string[]).includes(key),
+  );
+  if (unknown.length > 0) {
+    return {
+      ok: false,
+      message: `unknown field(s) ${unknown.join(', ')}; stage_yield accepts ${STAGE_YIELD_FIELDS.join(', ')}`,
+    };
+  }
+  if (seal === undefined) {
+    return {
+      ok: false,
+      message:
+        'this Attempt has no read-ledger seal, so stage_yield cannot submit; readLedgerSeq/readLedgerHash are Runner-owned and must not be invented',
+    };
+  }
+  const payload: Record<string, unknown> = {
+    status: params['status'],
+    summary: params['summary'],
+    readLedgerSeq: seal.seq,
+    readLedgerHash: seal.hash,
+  };
+  for (const field of STAGE_RESULT_LISTS) payload[field] = params[field] ?? [];
+  const parsed = stageResultContentSchema.safeParse(payload);
+  if (!parsed.success) {
+    return { ok: false, message: parsed.error.issues.map(stageIssue).join('; ') };
+  }
+  return { ok: true, payload: { ...parsed.data } };
+}
+
+/**
+ * The professional roles `agent.dispatch` accepts, and the purposes Core documents.
+ *
+ * `rules/agents.md` §1 fixes the roles and §3 the purposes. The tool used to declare both as
+ * free strings, so a real Chief model sent `role: "planner"` and Core refused the whole
+ * dispatch with a Zod dump (WP-12 T2-fix-delivery); naming the vocabulary here lets the model
+ * choose correctly and lets the tool refuse a typo before it reaches Core.
+ */
+const PROFESSIONAL_ROLES = [
+  'product',
+  'planning',
+  'backend',
+  'frontend',
+  'review',
+  'test',
+  'settlement',
+] as const;
+
+const DISPATCH_PURPOSES = [
+  'analysis',
+  'artifact',
+  'implementation',
+  'review',
+  'test',
+  'settlement',
+  'initialize',
+  'document',
+  'document_check',
+  'operation',
+] as const;
+
+/**
+ * Core-owned spec fields, injected by `Orchestrator.parseDraft` before it parses the draft
+ * (`packages/core/src/orchestrator.ts`). The local draft check fills them with a valid
+ * placeholder and ignores issues that name them.
+ */
+const PLACEHOLDER_ID = '00000000-0000-7000-8000-000000000000';
+
+const INJECTED_DISPATCH_FIELDS: ReadonlySet<string> = new Set([
+  'kind',
+  'workId',
+  'profileRevision',
+  'parentRunId',
+]);
+
+/**
+ * Every canonical stage a professional Run may carry, per role.
+ *
+ * Mirrors `ROLE_STAGES` (`packages/core/src/context/acl.ts`), and the test in
+ * `control-client.test.ts` pins it to that vocabulary. It matters because the read ledger
+ * opens a Run's scope from `(role, stage)` (`packages/core/src/read-ledger.ts` `scopeFor`):
+ * a stage outside this table leaves the Attempt **degraded**, and then *every* `stage.submit`
+ * is refused with `MISSING_CONTEXT` for the rest of the Run — which is exactly what a real
+ * Chief produced by dispatching `stage: "implement"` (WP-12 T2-fix-delivery).
+ */
+const ROLE_STAGES: Readonly<Record<string, readonly string[]>> = {
+  product: ['product', 'document', 'document_check'],
+  planning: ['planning', 'document'],
+  backend: ['develop-L1', 'develop-L2', 'develop-L3'],
+  frontend: ['develop-L1', 'develop-L2', 'develop-L3'],
+  review: ['document_check', 'review'],
+  test: ['test'],
+  settlement: ['settlement'],
+};
+
+/** The stage spelling per role, for the tool description and its local refusal. */
+const STAGE_MAP_FOR_DESCRIPTION =
+  'product → product/document/document_check; planning → planning/document; ' +
+  'backend and frontend → develop-L1/develop-L2/develop-L3; review → review/document_check; ' +
+  'test → test; settlement → settlement';
+
+/**
+ * The runtime spellings Core's own context layer normalizes (`normalizeContextStage`).
+ *
+ * Accepted here so a scripted caller that still says `develop` keeps working **and** gets a
+ * canonical Run (`develop` used to leave the same degraded ledger as `implement`).
+ */
+const STAGE_ALIASES: Readonly<Record<string, string>> = {
+  plan: 'planning',
+  develop: 'develop-L2',
+  develop_l1: 'develop-L1',
+  develop_l2: 'develop-L2',
+  develop_l3: 'develop-L3',
+  implementation: 'develop-L2',
+  code_review: 'review',
+  document_review: 'document_check',
+};
+
+/**
+ * Canonicalizes a dispatch's `stage` for its role, or explains the legal values.
+ *
+ * `scopeFor` looks the pair up verbatim, so the canonical spelling is what makes the Run's
+ * read ledger openable. Core stays the authority on the dispatch itself.
+ */
+function canonicalStageFor(
+  role: string,
+  stage: unknown,
+):
+  { readonly ok: true; readonly stage: string } | { readonly ok: false; readonly message: string } {
+  const legal = ROLE_STAGES[role] ?? [];
+  const raw = typeof stage === 'string' ? stage.trim() : '';
+  const lowered = raw.toLowerCase();
+  const canonical =
+    legal.find((entry) => entry.toLowerCase() === lowered) ?? STAGE_ALIASES[lowered] ?? '';
+  if (canonical === '' || !legal.includes(canonical)) {
+    return {
+      ok: false,
+      message: `stage "${raw}" is not a legal stage for a ${role} Run; use one of ${legal.join(', ')}`,
+    };
+  }
+  return { ok: true, stage: canonical };
+}
+
 export function controlTools(options: ControlToolOptions): readonly PiToolSpec[] {
   const { client } = options;
   const stageResult: PiToolSpec = {
     name: 'stage_yield',
     label: 'Submit stage result',
     description:
-      'Submit the structured result of this stage. Required: status (success/needs_input/failed), summary. ' +
-      'Optional: artifactRefs, evidenceRefs, changedPaths, findingIds, unknowns, requestedActions. ' +
-      'The Runner adds readLedgerSeq/readLedgerHash from the reads this Attempt actually ' +
-      'performed (AC-085), so do not invent them. ' +
-      'A stage is not complete until this tool is called; plain text does not deliver.',
+      'Deliver the result of this stage. Call it exactly once, after you have done the work ' +
+      'with your other tools. Required: status (success/needs_input/failed) and a non-empty ' +
+      'summary of what you did, or of why you could not do it. Optional: artifactRefs ' +
+      '({id, version, hash} pins of existing artifacts), evidenceRefs (ids of the existing ' +
+      'rows you relied on), changedPaths (repository-relative paths you changed), findingIds ' +
+      '(ids of existing Findings), unknowns, requestedActions. Every id field takes ' +
+      `${ENTITY_ID_DESCRIPTION}; omit a list (or pass []) when you have nothing to put in it. ` +
+      'The Runner adds readLedgerSeq/readLedgerHash from the reads this Attempt really ' +
+      'performed (AC-085), so do not invent them. A stage is not delivered until this call ' +
+      'is accepted: plain text does not deliver, and `request_dispatch` does not deliver for ' +
+      'you — if you ask the Chief for another role you must still call this tool.',
     parameters: Type.Object({
       status: Type.Union([
         Type.Literal('success'),
         Type.Literal('needs_input'),
         Type.Literal('failed'),
       ]),
-      summary: Type.String(),
-      artifactRefs: Type.Optional(Type.Array(Type.String())),
-      evidenceRefs: Type.Optional(Type.Array(Type.String())),
-      changedPaths: Type.Optional(Type.Array(Type.String())),
-      findingIds: Type.Optional(Type.Array(Type.String())),
-      unknowns: Type.Optional(Type.Array(Type.String())),
-      requestedActions: Type.Optional(Type.Array(Type.String())),
+      summary: Type.String({ minLength: 1 }),
+      artifactRefs: Type.Optional(
+        Type.Array(
+          Type.Object({
+            id: Type.String({ minLength: 1 }),
+            version: Type.Integer({ minimum: 1 }),
+            hash: Type.String({ minLength: 1 }),
+          }),
+        ),
+      ),
+      evidenceRefs: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      changedPaths: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      findingIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      unknowns: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+      requestedActions: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
     }),
     execute: async (params) => {
       // The ledger binding is Runner/Core-owned: it overwrites anything the model sent, so
@@ -346,13 +600,17 @@ export function controlTools(options: ControlToolOptions): readonly PiToolSpec[]
       // per-call binding wins; the local seal (the empty genesis value until the tool
       // bridge records a read) is the initial value.
       const seal = options.readLedgerBinding?.() ?? options.readLedger?.seal();
+      const built = buildStagePayload(params, seal);
+      if (!built.ok) {
+        // A local refusal keeps the protocol code the model already knows and never reaches
+        // Core, so it consumes no Schema strike (`protocol.md` §6, `rules/agents.md` §4).
+        return {
+          text: `VALIDATION_ERROR: the stage result does not match the documented StageResult schema — ${built.message}`,
+          isError: true,
+        };
+      }
       const result = await runControlTool(async () => {
-        await client.stageSubmit({
-          result: {
-            ...params,
-            ...(seal === undefined ? {} : { readLedgerSeq: seal.seq, readLedgerHash: seal.hash }),
-          },
-        });
+        await client.stageSubmit({ result: built.payload });
       }, 'stage result submitted');
       if (result.isError !== true) options.onStageSubmitted?.();
       return result;
@@ -367,6 +625,12 @@ export function controlTools(options: ControlToolOptions): readonly PiToolSpec[]
       'Required: intent (assist/artifact/document/delivery/operation), goal, scope ' +
       '({readPaths,writePaths,operations,networkTargets}), level (none/L1/L2/L3), ' +
       'semanticImpact, riskFlags, uncertainties, policyRevision, reason. ' +
+      'scope.operations may only name the documented operations ' +
+      '(read/search/artifact_write/edit/write/bash/git/network/secret/push/deploy/delete_data); ' +
+      'riskFlags may only name the documented terms ' +
+      '(identityOrPermission, secrets, securityBoundary, dataDeletionOrMigration, payment, ' +
+      'publicProtocolBreak, deployOrRelease, gateRuleChange) — an unrecognized flag is read as ' +
+      '"no risk" and refused by Core. ' +
       'Operations bash/network/secret/push/deploy/delete_data are never part of a routed ' +
       'assessment; they require an explicit user grant.',
     parameters: Type.Object({
@@ -415,27 +679,93 @@ export function controlTools(options: ControlToolOptions): readonly PiToolSpec[]
     description:
       'Dispatch one professional Run (`ProfessionalDispatchSpec`). Required: role, purpose, goal, ' +
       'scope, stage, contextSelection, requiredOutputs, requiredChild, joinPolicy, budgetAllocation. ' +
-      'workId is taken from this Run; profileRevision and the parent Run are set by Core.',
+      'workId is taken from this Run; profileRevision and the parent Run are set by Core. ' +
+      `role must be one of ${PROFESSIONAL_ROLES.join('/')}; purpose must be one of ` +
+      `${DISPATCH_PURPOSES.join('/')}. stage must be the canonical stage of that role ` +
+      `(${STAGE_MAP_FOR_DESCRIPTION}) — a stage outside the role's list leaves the Run with no ` +
+      'readable context, so it can never deliver a stage result.',
     parameters: Type.Object({
-      role: Type.String(),
-      purpose: Type.String(),
+      role: Type.Union([
+        Type.Literal('product'),
+        Type.Literal('planning'),
+        Type.Literal('backend'),
+        Type.Literal('frontend'),
+        Type.Literal('review'),
+        Type.Literal('test'),
+        Type.Literal('settlement'),
+      ]),
+      purpose: Type.Union([
+        Type.Literal('analysis'),
+        Type.Literal('artifact'),
+        Type.Literal('implementation'),
+        Type.Literal('review'),
+        Type.Literal('test'),
+        Type.Literal('settlement'),
+        Type.Literal('initialize'),
+        Type.Literal('document'),
+        Type.Literal('document_check'),
+        Type.Literal('operation'),
+      ]),
       goal: Type.String(),
       scope: Type.Object({
         readPaths: Type.Array(Type.String()),
         writePaths: Type.Array(Type.String()),
-        operations: Type.Array(Type.String()),
+        operations: Type.Array(
+          Type.Union([
+            Type.Literal('read'),
+            Type.Literal('search'),
+            Type.Literal('artifact_write'),
+            Type.Literal('edit'),
+            Type.Literal('write'),
+            Type.Literal('bash'),
+            Type.Literal('git'),
+            Type.Literal('network'),
+            Type.Literal('secret'),
+            Type.Literal('push'),
+            Type.Literal('deploy'),
+            Type.Literal('delete_data'),
+          ]),
+        ),
         networkTargets: Type.Array(Type.String()),
       }),
+      // A plain string, not a literal union: the Pi runtime validates arguments against this
+      // schema *before* `execute`, so an enum would reject the documented runtime spellings
+      // (`develop`) that `canonicalStageFor` normalizes — the offline model stub drives
+      // `scripts/e2e.mjs` with exactly that value. The canonical vocabulary is stated in the
+      // description and enforced (with the alias table) by `canonicalStageFor`.
       stage: Type.String(),
       contextSelection: Type.Object({
         goal: Type.String(),
-        sourceRefs: Type.Array(Type.Object({ kind: Type.String(), id: Type.String() })),
+        // Every `sourceRefs` entry needs a reason, keyed `"<kind>:<id>"` in
+        // `reasonPerSource`, and `version` is part of the pin (`data.md` §3).
+        sourceRefs: Type.Array(
+          Type.Object({
+            kind: Type.Union([
+              Type.Literal('git'),
+              Type.Literal('artifact'),
+              Type.Literal('message'),
+              Type.Literal('action'),
+              Type.Literal('decision'),
+              Type.Literal('policy'),
+            ]),
+            id: Type.String(),
+            version: Type.String(),
+            path: Type.Optional(Type.String()),
+            hash: Type.Optional(Type.String()),
+          }),
+        ),
         reasonPerSource: Type.Record(Type.String(), Type.String()),
-        featureRefs: Type.Optional(Type.Array(Type.String())),
-        codePaths: Type.Optional(Type.Array(Type.String())),
-        artifactRefs: Type.Optional(Type.Array(Type.String())),
-        excluded: Type.Optional(Type.Array(Type.String())),
-        unknowns: Type.Optional(Type.Array(Type.String())),
+        featureRefs: Type.Array(Type.String()),
+        codePaths: Type.Array(Type.String()),
+        artifactRefs: Type.Array(
+          Type.Object({
+            id: Type.String(),
+            version: Type.Integer({ minimum: 1 }),
+            hash: Type.String(),
+          }),
+        ),
+        excluded: Type.Array(Type.String()),
+        unknowns: Type.Array(Type.String()),
         readBudget: Type.Object({
           initialTokens: Type.Number(),
           expansionTokens: Type.Number(),
@@ -447,8 +777,64 @@ export function controlTools(options: ControlToolOptions): readonly PiToolSpec[]
       budgetAllocation: Type.Number(),
     }),
     execute: async (params) => {
+      // The vocabulary is checked before Core sees the spec: a typo used to produce either a
+      // verbose Zod dump (`role: "planner"`) or — for a legal role with a non-canonical stage
+      // (`stage: "implement"`) — a Run that accepts no reads and can never deliver. Both are
+      // correctable locally, so the model is told the legal values instead of guessing.
+      const role = textOf(params['role']);
+      if (!(PROFESSIONAL_ROLES as readonly string[]).includes(role)) {
+        return {
+          text: `VALIDATION_ERROR: ${role === '' ? 'role is missing' : `role "${role}" is not a professional role`}; use one of ${PROFESSIONAL_ROLES.join(', ')}`,
+          isError: true,
+        };
+      }
+      const purpose = textOf(params['purpose']);
+      if (!(DISPATCH_PURPOSES as readonly string[]).includes(purpose)) {
+        return {
+          text: `VALIDATION_ERROR: ${purpose === '' ? 'purpose is missing' : `purpose "${purpose}" is not documented`}; use one of ${DISPATCH_PURPOSES.join(', ')}`,
+          isError: true,
+        };
+      }
+      const stage = canonicalStageFor(role, params['stage']);
+      if (!stage.ok) {
+        return { text: `VALIDATION_ERROR: ${stage.message}`, isError: true };
+      }
+      const spec = { ...params, role, purpose, stage: stage.stage };
+      // The rest of the draft is checked with Core's own schema, exactly as
+      // `Orchestrator.parseDraft` injects the Core-owned fields and parses it
+      // (`packages/core/src/orchestrator.ts`). Core re-validates the real call; this only
+      // turns its Zod dump into a precise, correctable tool error.
+      const draft = professionalDispatchSpecSchema.safeParse({
+        ...spec,
+        kind: 'professional',
+        workId: PLACEHOLDER_ID,
+        profileRevision: 0,
+        parentRunId: PLACEHOLDER_ID,
+      });
+      if (!draft.success) {
+        const issues = draft.error.issues
+          .filter((issue) => !INJECTED_DISPATCH_FIELDS.has(String(issue.path[0])))
+          .map((issue) => stageIssue(issue));
+        if (issues.length > 0) {
+          return {
+            text: `VALIDATION_ERROR: the dispatch spec is invalid — ${issues.join('; ')}`,
+            isError: true,
+          };
+        }
+      } else {
+        // `data.md` §3: every selected source needs its written reason, keyed
+        // `"<kind>:<id>"`. Core refuses a draft without one (`MISSING_CONTEXT`) and the schema
+        // cannot express it, so the tool checks it here too.
+        const missing = missingSelectionReasons(draft.data.contextSelection);
+        if (missing.length > 0) {
+          return {
+            text: `VALIDATION_ERROR: every sourceRef needs a reasonPerSource entry; missing: ${missing.join(', ')}`,
+            isError: true,
+          };
+        }
+      }
       const result = await runControlTool(async () => {
-        await client.agentDispatch({ spec: params });
+        await client.agentDispatch({ spec });
       }, 'professional Run dispatched');
       if (result.isError !== true) options.onDispatchSubmitted?.();
       return result;
@@ -511,8 +897,11 @@ export function controlTools(options: ControlToolOptions): readonly PiToolSpec[]
           label: 'Request another role',
           description:
             'Ask the Chief to dispatch another role (for example a review or a backend fix). ' +
-            'Required: reason, requestedRole, goal. Optional: sourceRefs. This creates a pending ' +
-            'Chief action; it does not create the Run itself.',
+            'Required: reason, requestedRole (one of product/planning/backend/frontend/review/' +
+            'test/settlement), goal. Optional: sourceRefs. This creates a pending Chief action; ' +
+            'it does not create the Run itself. Use it only when the work genuinely needs a ' +
+            'different role: it does not deliver your stage and does not end your Run — after ' +
+            'requesting a dispatch you must still call `stage_yield` for the stage you own.',
           parameters: Type.Object({
             reason: Type.String(),
             requestedRole: Type.String(),

@@ -80,19 +80,35 @@ export interface PrepareRunOptions {
  * `assessment_submit`/`agent_dispatch` and a professional Run through `stage_yield`
  * (`execution.md` §7), and a model that does not know that ends its turn with plain text —
  * which the two-strike rule then answers with a corrective prompt (WP-12 R3-2b).
+ *
+ * The professional sentence names the three duties in order, because getting any one of them
+ * wrong ends the Run as `contract_violation` rather than delivering: do the work with the
+ * role's tools, deliver through `stage_yield` with the documented fields, and ask for another
+ * role only when the work really needs one — a `request_dispatch` does not discharge the
+ * delivery itself (WP-12 T2-fix-delivery).
  */
-function roleContractSentence(role: Role): string {
+export function roleContractSentence(role: Role): string {
   return role === 'chief'
     ? [
         'Deliver through your tools: call `assessment_submit` with the routing assessment',
         '(intent, goal, scope, level, semanticImpact, riskFlags, uncertainties, policyRevision,',
         'reason), then call `agent_dispatch` with the professional Run you decide on.',
-        'Plain text does not change the domain state.',
+        'Use only the documented role, purpose and risk-flag terms; a dispatch whose `stage` is',
+        'not the canonical stage of that role (product→product/document/document_check;',
+        'planning→planning/document; backend|frontend→develop-L1/develop-L2/develop-L3;',
+        'review→review/document_check; test→test; settlement→settlement) leaves the Run with no',
+        'readable context and it can never deliver. Plain text does not change the domain state.',
       ].join(' ')
     : [
-        'Deliver through your tool: call `stage_yield` with the structured result of this',
-        'stage (status, summary, changedPaths, evidenceRefs, unknowns, requestedActions).',
-        'Plain text does not change the domain state.',
+        'Do this stage yourself with your tools, then deliver it by calling `stage_yield`',
+        'exactly once. Required: status (success/needs_input/failed) and a non-empty summary;',
+        'artifactRefs are {id,version,hash} pins, evidenceRefs/findingIds are ids of existing',
+        'rows, changedPaths are repository-relative paths, plus unknowns and requestedActions.',
+        'Omit a list (or pass []) when you have nothing to put in it. `stage_yield` is the only',
+        'delivery: a prose summary and a `request_dispatch` call do not discharge this stage —',
+        'use `request_dispatch` only when the work genuinely needs a different role, and call',
+        '`stage_yield` yourself afterwards even then. `status=failed` or `needs_input` with the',
+        'reason is an honest, valid delivery when the work is blocked.',
       ].join(' ');
 }
 
