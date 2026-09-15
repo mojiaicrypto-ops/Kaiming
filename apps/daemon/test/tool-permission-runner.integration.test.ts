@@ -23,7 +23,7 @@
  * shipped `apps/runner/dist/cli.js`.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -44,6 +44,18 @@ import { createControlHandlers } from '../src/control-handler.js';
 import { markMessageProcessing, markMessageSettled } from '../src/message-state.js';
 import { createPrepareRun } from '../src/prepare-run.js';
 import { createChildRunnerSpawnPort } from '../src/runner-spawn.js';
+
+/**
+ * Renders one event `data` member for the failure message.
+ *
+ * `event.data` is untyped JSON, so `String()` would print `[object Object]` for anything that is
+ * not a primitive; the message is a debugging aid, so it must stay truthful for both shapes.
+ */
+function textOf(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number'
+    ? String(value)
+    : JSON.stringify(value);
+}
 import { createToolHandler } from '../src/tool-handler.js';
 
 const VERSION = '0.0.0-test';
@@ -160,8 +172,6 @@ describe('environment-operation approval with a real Runner child (AC-049/AC-080
   let chiefGate: Promise<void>;
   let resolveApprovalGate: () => void;
   let approvalGate: Promise<void>;
-  let resolveBackendGate: () => void;
-  let backendGate: Promise<void>;
 
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), 'agentdev-t3b-home-'));
@@ -182,9 +192,6 @@ describe('environment-operation approval with a real Runner child (AC-049/AC-080
     });
     approvalGate = new Promise<void>((resolve) => {
       resolveApprovalGate = resolve;
-    });
-    backendGate = new Promise<void>((resolve) => {
-      resolveBackendGate = resolve;
     });
   });
 
@@ -596,7 +603,7 @@ describe('environment-operation approval with a real Runner child (AC-049/AC-080
           `refused=${opened.store.events
             .readAfter(0, { limit: 10_000 })
             .filter((event) => event.name === 'tool.refused')
-            .map((event) => `${String(event.data['code'])}/${String(event.data['operation'])}`)
+            .map((event) => `${textOf(event.data['code'])}/${textOf(event.data['operation'])}`)
             .join(',')}`,
           `provider=${providerStub.seen.join('|')}`,
           `logs=${logs.slice(-22).join(' || ')}`,
