@@ -1645,6 +1645,7 @@ export async function runMessageToStageDrill({ harness, product }) {
   const { core } = product;
   const { createPrepareRun } = await import('../../apps/daemon/src/prepare-run.ts');
   const { createControlHandlers } = await import('../../apps/daemon/src/control-handler.ts');
+  const { createToolHandler } = await import('../../apps/daemon/src/tool-handler.ts');
   const { markMessageProcessing, markMessageSettled } =
     await import('../../apps/daemon/src/message-state.ts');
   const { store } = harness;
@@ -1670,12 +1671,33 @@ export async function runMessageToStageDrill({ harness, product }) {
         log: () => undefined,
       }),
     spawn: harness.runnerSpawn(),
+    // The production assembly (`apps/daemon/src/main.ts`) always attaches the tool bridge and
+    // the read ledger. Without them every professional tool call answered `503 this daemon has
+    // no tool handler configured` / `context.request needs the read ledger`, so a real model
+    // that tried to do the work could only ever fail and — twice in a row, under load — ended
+    // its turn with prose and was judged a `contract_violation` (WP-12 R9). A drill must not
+    // test a daemon that production never runs.
+    tools: {
+      attach: ({ store: toolStore, broker, grantService, readLedgers }) =>
+        createToolHandler({
+          store: toolStore,
+          broker,
+          grantService,
+          readLedgers,
+          artifacts: harness.artifacts,
+          planGate: new core.PlanGateService({ store: toolStore, artifacts: harness.artifacts }),
+          secrets: harness.secrets,
+          mode: 'host',
+          log: (line) => harness.controlLog.push(line),
+        }),
+    },
     control: {
-      attach: ({ orchestrator, stageGate }) =>
+      attach: ({ orchestrator, stageGate, readLedgers }) =>
         createControlHandlers({
           store,
           orchestrator,
           stageGate,
+          readLedgers,
           requirementSaves: harness.requirementSaves,
           log: (line) => harness.controlLog.push(line),
         }),
@@ -1788,42 +1810,112 @@ export async function runMessageToStageDrill({ harness, product }) {
       where: 'run_id = ?',
       params: [professional.id],
     })[0];
+    // The drill is the user for the one thing a real user is asked to decide: an operation the
+    // Run is not authorized for yet. It answers through the real workbench protocol, at most
+    // five times, and every answer is logged — so the evidence shows what the user was asked
+    // and what they chose. A `once` Grant admits exactly the call it was approved for, so this
+    // cannot widen the Run's authorization (`workflow.md` §1, `protocol.md` §4).
+    const answeredPermissions = new Set();
+    const approvePendingPermissions = async () => {
+      if (answeredPermissions.size >= 5) return;
+      const pending = store.decisions
+        .list({ where: 'work_id = ?', params: [workId] })
+        .filter((row) => row.kind === 'permission' && row.state === 'pending');
+      for (const decision of pending) {
+        if (answeredPermissions.size >= 5) return;
+        if (answeredPermissions.has(decision.id)) continue;
+        answeredPermissions.add(decision.id);
+        const answer = await harness.accepted('permission.respond', {
+          decisionId: decision.id,
+          choice: 'approve',
+        });
+        harness.controlLog.push(
+          `drill: the user approved permission decision ${decision.id} (status ${String(answer['status'])})`,
+        );
+      }
+    };
     while (stageResult === undefined && Date.now() < stageDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 250));
+      await approvePendingPermissions();
       stageResult = store.stageResults.list({ where: 'run_id = ?', params: [professional.id] })[0];
     }
     if (stageResult === undefined) {
       // The professional Attempt did not deliver. Report its real status and what the
       // control channel saw, so the next step is a decision, not a guess.
       const run = store.runs.find(professional.id);
+      const describeAttempt = (attempt) =>
+        `${attempt.status}/epoch${String(attempt.ownerEpoch)}/runner=${String(attempt.runnerId ?? '-')}/beat=${String(attempt.heartbeatAt ?? '-')}/finished=${String(attempt.finishedAt ?? '-')}`;
       const attempts = store.attempts
         .list({ where: 'run_id = ?', params: [professional.id] })
+        .map(describeAttempt)
+        .join(',');
+      // The workbench may hold **more than one** professional Run (a real model can dispatch
+      // twice): the picked Run's verdict is not the whole story, so every Run of the Work and
+      // every stage result is reported. A stage result on a sibling Run means the chain really
+      // delivered and the drill's choice of Run is what needs explaining (WP-12 R9).
+      const allRuns = store.runs.list({ where: 'work_id = ?', params: [workId] });
+      const runs = allRuns
         .map(
-          (attempt) =>
-            `${attempt.status}/epoch${String(attempt.ownerEpoch)}/runner=${String(attempt.runnerId ?? '-')}/beat=${String(attempt.heartbeatAt ?? '-')}`,
+          (entry) =>
+            `${entry.role}#${entry.id.slice(0, 8)}:${entry.status}:parent=${String(entry.parentRunId ?? '-').slice(0, 8)}`,
         )
         .join(',');
+      const stageSummary = allRuns
+        .map(
+          (entry) =>
+            `${entry.id.slice(0, 8)}=${
+              store.stageResults
+                .list({ where: 'run_id = ?', params: [entry.id] })
+                .map((row) => `${row.status}/${row.id.slice(0, 8)}`)
+                .join('+') || 'none'
+            }`,
+        )
+        .join(',');
+      const attemptSummary = allRuns
+        .map(
+          (entry) =>
+            `${entry.id.slice(0, 8)}:[${store.attempts
+              .list({ where: 'run_id = ?', params: [entry.id] })
+              .map(describeAttempt)
+              .join(' ')}]`,
+        )
+        .join(' ');
+      const events = store.events
+        .readAfter(0, { limit: 20_000 })
+        .filter(
+          (event) =>
+            event.entityId === professional.id ||
+            event.name === 'run.queued' ||
+            event.name === 'run.started' ||
+            event.name === 'run.recovered' ||
+            event.name.startsWith('stage.') ||
+            event.name === 'contract_violation',
+        )
+        .slice(-12)
+        .map((event) => `${event.name}@${event.entityId.slice(0, 8)}`)
+        .join(',');
       // The acceptance aggregation prints only the last 12 lines of a drill's output, so the
-      // whole daemon-side story (`supervisor:`/`control-endpoint:`/`gateway-proxy:`) can also
-      // be written to a file. Without it a timing failure (a submit that landed after the Run
-      // went terminal) is indistinguishable from a model that never submitted — the exact
-      // ambiguity this drill exists to remove (WP-12 R7).
+      // whole daemon-side story (`supervisor:`/`control-endpoint:`/`gateway-proxy:`) is also
+      // written to a file next to the drill results. Without it a timing failure (a submit that
+      // landed after the Run went terminal) is indistinguishable from a model that never
+      // submitted — the exact ambiguity this drill exists to remove (WP-12 R7).
       const full = harness.controlLog.join('\n');
       let dump = '';
-      if (process.env['AGENTDEV_LIVE_DUMP'] === '1') {
-        const relative = join('.agentdev', 'work', 'WP-12', 'live-message-to-stage-failure.log');
-        try {
-          // `writeFileAt(root, relativePath, content)`: the root is the repo this drill runs in.
-          writeFileAt(process.cwd(), relative, `${full}\n`);
-          dump = `; full log: ${join(process.cwd(), relative)}`;
-        } catch (error) {
-          dump = `; full log could not be written: ${error instanceof Error ? error.message : String(error)}`;
-        }
+      const relative = join('.agentdev', 'work', 'WP-12', 'live-message-to-stage-failure.log');
+      try {
+        // `writeFileAt(root, relativePath, content)`: the root is the repo this drill runs in.
+        writeFileAt(process.cwd(), relative, `${full}\n`);
+        dump = `; full log: ${join(process.cwd(), relative)}`;
+      } catch (error) {
+        dump = `; full log could not be written: ${error instanceof Error ? error.message : String(error)}`;
       }
+      // Tell a real lease loss apart from the closing bookkeeping of a verdict: the sweep
+      // logs `silent for over <lease>ms` and nothing else marks an Attempt lost (WP-12 R9).
+      const lost = /silent for over \d+ms/u.test(full)
+        ? 'the lease sweep declared the Attempt lost while silent'
+        : 'no lease sweep fired; the Attempt status is closing bookkeeping after a terminal Run';
       throw new Error(
-        `no stage result: professional Run is ${String(run?.status)} (attempts: ${attempts}); stage results=${String(
-          store.stageResults.list({ where: 'run_id = ?', params: [professional.id] }).length,
-        )}; control log tail: ${full.slice(-4000)}${dump}`,
+        `no stage result: professional Run ${professional.id.slice(0, 8)} is ${String(run?.status)} (attempts: ${attempts}); lost=${lost}; runs=[${runs}]; stages=[${stageSummary}]; attempts=[${attemptSummary}]; events=[${events}]; control log tail: ${full.slice(-2500)}${dump}`,
       );
     }
     // `protocol.md` §7: a success is `stage.completed`, any other terminal status is

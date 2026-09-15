@@ -146,6 +146,8 @@ export class AttemptRunner {
    * is the empty-ledger value until the T3 tool bridge records a read.
    */
   private readonly readLedger = createReadLedger();
+  /** The assistant text of the current turn, kept only to explain a non-delivering turn. */
+  private assistantText = '';
   /** What this Attempt delivered through the Core control channel (`protocol.md` §6). */
   private readonly submission = {
     assessment: false,
@@ -380,10 +382,13 @@ export class AttemptRunner {
       return;
     }
     this.send({ type: 'attempt.result', status: 'completed', message: 'prompt completed' });
-    // stderr, never stdout: the IPC channel carries framed JSON only.
+    // stderr, never stdout: the IPC channel carries framed JSON only. The model's own words are
+    // the evidence a reader needs to judge a non-delivery, so they travel with the line.
+    const said = this.assistantText.replace(/\s+/gu, ' ').trim().slice(-600);
     process.stderr.write(
-      `runner: ${this.options.attemptId} delivered nothing; waiting for the correction or a shutdown\n`,
+      `runner: ${this.options.attemptId} delivered nothing; waiting for the correction or a shutdown; model said: ${said === '' ? '(no text)' : said}\n`,
     );
+    this.assistantText = '';
   }
 
   /**
@@ -430,6 +435,13 @@ export class AttemptRunner {
 
   /** Emits one already-mapped session event with the next sequence number. */
   private emit(event: PiSessionEvent): void {
+    // The assistant text is kept for diagnosis only: a turn that delivers nothing is the one
+    // case where "what did the model say instead" is the whole question, and the IPC carries
+    // the deltas as they stream (WP-12 R9).
+    if (event.type === 'text_delta' && typeof event.delta === 'string') {
+      this.assistantText += event.delta;
+      if (this.assistantText.length > 4_000) this.assistantText = this.assistantText.slice(-4_000);
+    }
     this.send({
       type: 'attempt.event',
       seq: this.seq++,

@@ -1128,6 +1128,14 @@ export class RunnerSupervisor {
     // result) and a non-compliant one to answer with the documented corrective prompt
     // (`protocol.md` §6). A handler that returns no correction — or one that throws — lets
     // the result settle normally, so a handler bug never strands a Run.
+    if (!entry.submitted && result.status === 'completed') {
+      // The one case where "what did the model say instead of submitting" is the whole
+      // question: the text is bounded and lives only in the daemon log (WP-12 R9).
+      const said = entry.text.replace(/\s+/gu, ' ').trim().slice(0, 400);
+      this.log(
+        `supervisor: ${entry.runId} attempt ${entry.attemptId} ended without a structured result; model text: ${said === '' ? '(none)' : said}`,
+      );
+    }
     const corrective =
       !entry.submitted && result.status === 'completed' ? this.correctivePrompt(entry) : undefined;
     if (corrective !== undefined && entry.corrections < 1 && this.correct(entry, corrective)) {
@@ -1145,7 +1153,14 @@ export class RunnerSupervisor {
       // `stopped`/`lost`/`completed`/`failed` absorbing (`WP11R2-03`).
       const late = this.store.attempts.find(entry.attemptId);
       if (late !== undefined && (late.status === 'starting' || late.status === 'running')) {
+        // `lost` here is closing bookkeeping, not a liveness verdict: the Run ended (by the
+        // daemon's own handler or a cancel) before this Attempt's result was applied, so the
+        // Attempt has no outcome to record. The lease sweep logs its own, different reason
+        // (`silent for over …ms`), which is what a reader must look for (WP-12 R9).
         this.store.attempts.update(late.id, { status: 'lost' }, late.version);
+        this.log(
+          `supervisor: ${entry.runId} attempt ${entry.attemptId} marked lost as closing bookkeeping (Run already ended)`,
+        );
       }
       // The user (or a cancel) already ended this Run: the result is late evidence, not a
       // new outcome (`reliability.md` §2), and settling it again would throw (WP11R1-01).

@@ -166,11 +166,13 @@ function runProject(project) {
     };
   }
   const reportPath = join(tmpdir(), `agentdev-acceptance-${project}-${process.pid}.json`);
+  const startedAt = Date.now();
   const result = spawnSync(
     vitest,
     ['run', '--project', project, '--reporter=json', `--outputFile=${reportPath}`],
     { cwd: repoRoot, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024 },
   );
+  const durationMs = Date.now() - startedAt;
   let output = [result.stdout ?? '', result.stderr ?? ''].join('\n');
   let report = null;
   if (existsSync(reportPath)) {
@@ -186,6 +188,13 @@ function runProject(project) {
     project,
     exitCode: result.status ?? 1,
     signal: result.signal ?? null,
+    // `spawnSync` reports its own failures (a signal, `ENOBUFS` from `maxBuffer`, a missing
+    // executable) here rather than in `status`: without it "no JSON report" has no cause.
+    spawnError:
+      result.error === undefined
+        ? null
+        : `${result.error.name}: ${result.error.message}${'code' in result.error ? ` (${String(result.error.code)})` : ''}`,
+    durationMs,
     output,
     report,
     reportPath,
@@ -241,6 +250,7 @@ function main() {
     .map((file) => ({ file: toRepoPath(file), text: readFileSync(file, 'utf8') }));
 
   const runs = [];
+  const noReportProblems = [];
   let infraFailure = false;
   for (const project of options.projects) {
     process.stdout.write(`acceptance: running vitest project "${project}" ...\n`);
@@ -255,8 +265,18 @@ function main() {
     );
     if (run.report === null) {
       infraFailure = true;
+      // Name the project and the *cause*: a vitest run that writes no report was killed
+      // (`signal`), killed by the output cap (`spawnError`), or crashed on its own
+      // (`exitCode`). Without these three fields "no JSON report" is unattributable
+      // (WP-12 R9).
+      const cause = `${run.signal === null ? '' : `signal=${String(run.signal)} `}${
+        run.spawnError === null ? '' : `spawnError=${run.spawnError} `
+      }duration=${String(run.durationMs)}ms`;
       process.stderr.write(
-        `acceptance: project "${project}" produced no JSON report (exit ${run.exitCode})\n${run.output.slice(-2000)}\n`,
+        `acceptance: project "${project}" produced no JSON report (exit ${String(run.exitCode)} ${cause})\n${run.output.slice(-4000)}\n`,
+      );
+      noReportProblems.push(
+        `Vitest 项目「${project}」没有产出 JSON 报告：exit=${String(run.exitCode)} ${cause}`,
       );
     } else if (run.exitCode !== 0) {
       // A Vitest project that exits non-zero is not a clean pass even when its JSON
@@ -333,7 +353,7 @@ function main() {
   // Fail closed on infrastructure problems: they mean the evidence is not trustworthy.
   const infraProblems = [
     ...runProblems,
-    ...(infraFailure ? ['某个 Vitest 项目没有产出 JSON 报告'] : []),
+    ...(infraFailure ? ['某个 Vitest 项目没有产出 JSON 报告', ...noReportProblems] : []),
     ...diagnostics.unexecuted.map(
       (file) => `含 AC 证据的测试文件没有执行任何用例：${file}（文件消失/未被收集）`,
     ),
