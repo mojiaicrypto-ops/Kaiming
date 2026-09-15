@@ -1722,6 +1722,11 @@ export async function runMessageToStageDrill({ harness, product }) {
     await import('../../apps/daemon/src/message-state.ts');
   const { store } = harness;
 
+  // WP-12 W5: the project's declared acceptance command. Core executes exactly this
+  // (nothing else, and not the model) in the isolated test container on the frozen Task
+  // worktree, and the Test stage's `success` then rests on its real exit code.
+  const TEST_COMMAND = `node --input-type=module -e "const {cancel}=await import('./src/orders/cancel.ts');const u=cancel('O-1'),p=cancel('O-2'),x=cancel('O-missing');if(u!==true||p!==false||x!==false){console.error('cancel '+u+'/'+p+'/'+x);process.exit(1)}console.log('cancel ok')"`;
+
   harness.controlLog = [];
   let diagnosticWorkId = '';
   // One per-Task worktree resolver for the whole stack: the tool handler resolves through it
@@ -1734,6 +1739,10 @@ export async function runMessageToStageDrill({ harness, product }) {
     repoRoot: harness.repo,
     log: (line) => harness.controlLog.push(line),
   });
+  // The project scope is where `policy.testCommands` lives (`protocol.md` §1 `ConfigPatch`).
+  // Configured before the first Run is dispatched, so every Run of this Work freezes the
+  // same declared command set.
+  harness.config.update('project', { testCommands: [TEST_COMMAND] });
   // The drill drives the real BFF, so it needs a real session (`protocol.md` §2). The
   // earlier drills happened to open one; a drill must not depend on another drill's session.
   await openSession(harness);
@@ -1745,6 +1754,17 @@ export async function runMessageToStageDrill({ harness, product }) {
     probe: core.createNodeProcessProbe(),
     tickMs: 200,
     log: (line) => harness.controlLog.push(line),
+    // The production assembly passes both (`main.ts`): the artifact service stores each
+    // executed command's bounded output, and the workspace resolver is the frozen Task
+    // worktree the commands are mounted read-only.
+    artifacts: harness.artifacts,
+    workspace: taskWorkspace,
+    // WP-12 W5: the same Broker option production passes (`main.ts`). Without it the Test
+    // Run's declared command has no execution path at all and the stage honestly records
+    // `blocked` — which is exactly what the first run of this drill observed.
+    broker: {
+      declaredTestCommands: () => harness.config.project().policy.testCommands,
+    },
     prepare: ({ capabilities, gatewayUrl, controlUrl }) =>
       createPrepareRun({
         store,
@@ -2248,7 +2268,50 @@ export async function runMessageToStageDrill({ harness, product }) {
       return { run, stage };
     };
     await expectNextStage('review', 'review');
-    await expectNextStage('test', 'test');
+    const testStage = await expectNextStage('test', 'test');
+    // WP-12 W5, criterion ④: the Test stage's evidence is a real executed command. The
+    // model cannot send a `checkResult` (the Runner's `stage_yield` has no such field), so
+    // whatever is recorded here was produced by Core from the container's real exit code.
+    const executedCheck = testStage.stage.checkResult?.checks?.[0];
+    ensure(
+      testStage.stage.checkResult?.status === 'passed' &&
+        executedCheck?.command === TEST_COMMAND &&
+        executedCheck?.exitCode === 0,
+      `the Test stage carries no real executed check: ${JSON.stringify(testStage.stage.checkResult ?? null)}`,
+    );
+    ensure(
+      typeof executedCheck?.outputRef === 'string' &&
+        store.artifacts.find(executedCheck.outputRef) !== undefined,
+      `the Test check's outputRef ${String(executedCheck?.outputRef)} is not a stored artifact`,
+    );
+    ensure(
+      typeof executedCheck?.environmentRef === 'string' && executedCheck.environmentRef !== '',
+      'the Test check names no execution environment',
+    );
+    ensure(
+      typeof executedCheck?.result === 'string' && executedCheck.result.includes('image='),
+      `the Test check does not record the image the command ran in: ${String(executedCheck?.result)}`,
+    );
+    const executedEvents = store.events
+      .readAfter(0, { limit: 20_000 })
+      .filter(
+        (event) =>
+          event.name === 'test.command_executed' &&
+          event.data !== null &&
+          typeof event.data === 'object' &&
+          event.data.runId === testStage.run.id,
+      );
+    ensure(
+      executedEvents.some(
+        (event) => event.data['command'] === TEST_COMMAND && event.data['exitCode'] === 0,
+      ),
+      `the Test Run has no test.command_executed audit row with exit 0: ${JSON.stringify(
+        executedEvents.map((event) => event.data),
+      )}`,
+    );
+    harness.controlLog.push(
+      `drill: Test Run ${testStage.run.id} recorded executed evidence ${JSON.stringify(executedCheck)}`,
+    );
     await expectNextStage('settlement', 'settlement');
 
     // Accept/Integrate + Settlement: the accepted Settle stage is the route's Accept point
@@ -2421,7 +2484,7 @@ export async function runMessageToStageDrill({ harness, product }) {
       JSON.stringify(board).includes(requirement.id),
       'the board does not show the Requirement the real message created',
     );
-    return `real Provider one-message chain: message ${sent.messageId} → Chief Run ${chiefRun.id} (${String(store.runs.find(chiefRun.id)?.status)}) → Requirement ${requirement.id} (active/plan) → route ${chainRoles.join(' → ')} → auto-approved Plan ${approvedPlan.map((artifact) => `#${artifact.id.slice(0, 8)}`).join(',')} (producer ${planRun.id.slice(0, 8)}) → stage outcomes ${routeOutcomes.join(' → ')} → stages ${independentStages.map((entry) => `${entry.role}/${entry.stage}#${entry.id.slice(0, 8)}`).join(', ')} (each its own Run) → Requirement completed at ${String(completedRequirement.portableRef.revision).slice(0, 12)} (pool ${String(completedRequirement.portableRef.path)}, recordVersion ${String(completedRequirement.recordVersion)}) → CompletionManifest ${completionManifestHash.slice(0, 12)} → the develop stage result ${stageResult.id} completed; provider calls=${String(harness.transport.summary())}`;
+    return `real Provider one-message chain: message ${sent.messageId} → Chief Run ${chiefRun.id} (${String(store.runs.find(chiefRun.id)?.status)}) → Requirement ${requirement.id} (active/plan) → route ${chainRoles.join(' → ')} → auto-approved Plan ${approvedPlan.map((artifact) => `#${artifact.id.slice(0, 8)}`).join(',')} (producer ${planRun.id.slice(0, 8)}) → stage outcomes ${routeOutcomes.join(' → ')} → stages ${independentStages.map((entry) => `${entry.role}/${entry.stage}#${entry.id.slice(0, 8)}`).join(', ')} (each its own Run) → Test evidence ${JSON.stringify(testStage.stage.checkResult)} → Requirement completed at ${String(completedRequirement.portableRef.revision).slice(0, 12)} (pool ${String(completedRequirement.portableRef.path)}, recordVersion ${String(completedRequirement.recordVersion)}) → CompletionManifest ${completionManifestHash.slice(0, 12)} → the develop stage result ${stageResult.id} completed; provider calls=${String(harness.transport.summary())}`;
   } finally {
     // A failed run's turn-by-turn story is the evidence the next fix needs, so the dump is
     // written on the way out either way (the success path already wrote it above).

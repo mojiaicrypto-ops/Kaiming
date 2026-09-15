@@ -26,6 +26,7 @@ import { LIMITS, type Grant, type Purpose, type Role } from '@agentdev/contracts
 import type { ProjectStore } from '@agentdev/storage';
 
 import { Broker, type BrokerOptions } from './broker.js';
+import type { ArtifactService } from './artifacts.js';
 import { AttemptCapabilityStore } from './capabilities.js';
 import type { AttemptResultInput } from './supervisor.js';
 import type { ConfigStore } from './config.js';
@@ -48,9 +49,17 @@ import { createModelGatewayProxy, type ModelGatewayProxy } from './gateway-http.
 import { ModelGateway, type GatewayTransport } from './model-gateway.js';
 import { RunLifecycle } from './run-lifecycle.js';
 import { RunRecoveryService, type ProcessProbe } from './recovery.js';
+import { readFrozenVerificationManifest } from './settlement.js';
 import { gatewaySecretResolver } from './secrets.js';
 import type { SecretStore } from './secrets.js';
 import type { SnapshotWriter } from './snapshots.js';
+import {
+  TestEvidenceRegistry,
+  boundTestOutput,
+  buildBlockedTestCheckResult,
+  buildTestCheckResult,
+  type DeclaredCommandExecution,
+} from './test-environment.js';
 import { OpenAiCompatibleTransport } from './transport-http.js';
 import {
   RunnerSupervisor,
@@ -124,6 +133,24 @@ export interface ProjectExecutionOptions {
   readonly config: ConfigStore;
   readonly snapshots: SnapshotWriter;
   readonly secrets: SecretStore;
+  /**
+   * The artifact service a Test Run's executed evidence is stored through (WP-12 W5).
+   *
+   * Every executed acceptance command's bounded output becomes a real `evidence`
+   * artifact, whose id is the `CheckResult` check's `outputRef` (`data.md` §3). A stack
+   * without one cannot produce the evidence and the Test stage then records `blocked`
+   * rather than a fabricated reference.
+   */
+  readonly artifacts?: ArtifactService;
+  /**
+   * The per-Task workspace resolver the declared test commands run against (WP-12 W5).
+   *
+   * A Test Run executes the project's commands on its own frozen Task worktree, so the
+   * evidence binds the tree the Test read; the production daemon and the live drill both
+   * pass the same resolver the tool bridge uses. Without it the commands have no root to
+   * mount and the Test stage records `blocked`.
+   */
+  readonly workspace?: RunWorkspaceResolver;
   /**
    * Builds the Runner invocation (the daemon supplies `createPrepareRun`).
    *
@@ -331,7 +358,10 @@ export async function createProjectExecution(
   // One ledger registry per stack: the handler appends to it and `StageGate` verifies the
   // binding a stage result reports (`AC-085`).
   const readLedgers = new ReadLedgerRegistry({ store: options.store });
-  const stageGate = new StageGate({ store: options.store, lifecycle, readLedgers });
+  // One executed-evidence registry per stack (WP-12 W5): a Test Attempt's declared
+  // commands are executed once and the result is bound to that Attempt's stage result.
+  const testEvidence = new TestEvidenceRegistry();
+  const stageGate = new StageGate({ store: options.store, lifecycle, readLedgers, testEvidence });
   // One JoinCoordinator per stack: the production caller of `onChildSettled` is the
   // supervisor's settled hook below, so an `agents.md` §3 `join=all` parent really moves to
   // `waiting_children` (and back, or to a `chief_action_required` todo) in the daemon path.
@@ -454,6 +484,30 @@ export async function createProjectExecution(
           `execution: ${input.runId} run grants failed: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
+      // WP-12 W5: a Test Run's own stage result must rest on executed evidence, so Core
+      // runs the project's declared acceptance commands as soon as the Attempt is ready.
+      // The work happens in the background — the model's turn starts immediately — and the
+      // registry holds `pending` until the real exit codes are in, which is what makes a
+      // `success` claim before then a typed refusal rather than a recorded victory.
+      //
+      // `onAttemptStarted` fires twice per Attempt (`supervisor.registerLiveAttempt` at
+      // spawn, then again on `attempt.ready`); the environment identity the evidence binds
+      // only exists after readiness, so the spawn-time call is skipped and the ready-time
+      // call starts the execution.
+      const started = options.store.runs.find(input.runId);
+      if (started?.role === 'test') {
+        if (supervisorHolder.current?.environmentRefOf(input.attemptId) === undefined) {
+          log(
+            `execution: ${input.runId} attempt ${input.attemptId} has no reported environment yet; the declared test commands wait for attempt.ready`,
+          );
+        } else {
+          void executeTestEvidence(input.runId, input.attemptId).catch((error: unknown) => {
+            log(
+              `execution: ${input.runId} test evidence failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          });
+        }
+      }
       options.control?.onAttemptStarted?.(input);
     },
     // `agents.md` §3 / `join.ts`: a settled child Run updates its parent Chief Run
@@ -491,6 +545,7 @@ export async function createProjectExecution(
       broker.processes.kill(attemptId);
       grantService.revokeRun(runId, 'attempt ended');
       readLedgers.release(attemptId);
+      testEvidence.release(attemptId);
     },
     log,
   });
@@ -516,6 +571,181 @@ export async function createProjectExecution(
       stage: run.stage,
       expiresAt: new Date(Date.now() + LIMITS.workActiveTimeSec.default * 1000).toISOString(),
     });
+  }
+
+  /** How long one declared acceptance command may run (`LIMITS.shellTimeoutSec`). */
+  const TEST_COMMAND_TIMEOUT_MS = LIMITS.shellTimeoutSec.default * 1000;
+
+  /**
+   * The code-tree hash of the frozen candidate a Test Run verifies (`data.md` §3).
+   *
+   * The evidence must be bound to the tree the commands actually ran against, so the
+   * hash comes from the Task's frozen `VerificationManifest` — the exact candidate the
+   * develop stage committed. `''` means no frozen tree exists; the caller then records
+   * `blocked` rather than binding the evidence to an invented hash.
+   */
+  function frozenInputTree(taskId: string | undefined): string {
+    if (taskId === undefined) return '';
+    const task = options.store.tasks.find(taskId);
+    if (task?.latestManifestId === undefined) return '';
+    return readFrozenVerificationManifest(options.store, task.latestManifestId)?.codeTree ?? '';
+  }
+
+  /**
+   * Executes the project's declared acceptance commands for one Test Attempt
+   * (`execution.md` §5, `workflow.md` §3/§6, WP-12 W5).
+   *
+   * The commands come from the **project configuration** (`policy.testCommands`, the
+   * documented `ConfigPatch` field) — never from the model or the dispatch — and run
+   * through {@link Broker.runDeclaredTestCommand}, which pins them to the isolated
+   * container, the read-only workspace mount, the `--network none` boundary and the
+   * controlled egress channel. Every real exit code is captured with bounded
+   * stdout/stderr, one `evidence` artifact is stored per command, and the resulting
+   * `CheckResult` is what `StageGate` binds to the stage result: an unconfigured
+   * project is `not_covered`, a failed command is `failed`, a refused/blocked execution
+   * is `blocked`, and only every-command-exited-0 is `passed`.
+   */
+  async function executeTestEvidence(runId: string, attemptId: string): Promise<void> {
+    const run = options.store.runs.find(runId);
+    if (run === undefined || run.role !== 'test') return;
+    const acceptanceIds =
+      run.taskId === undefined ? [] : (options.store.tasks.find(run.taskId)?.acceptanceIds ?? []);
+    testEvidence.begin(attemptId);
+    const commands = options.config.project().policy.testCommands;
+    // `data.md` §3 types the check's `environmentRef` as an `ID`; the Attempt is the
+    // id-shaped identity of the execution environment, while the two descriptive facts —
+    // the image the command ran in and the Runner's own `attempt.ready` environment —
+    // travel in the check's `result` instead of being forced into an id.
+    const environmentRef = attemptId;
+    const runnerEnvironment = supervisorHolder.current?.environmentRefOf(attemptId);
+    const executionImage = broker.execImageTag;
+    const inputTree = frozenInputTree(run.taskId);
+    const workspace = options.workspace;
+    const artifacts = options.artifacts;
+    try {
+      if (commands.length === 0) {
+        // The honest empty default (`w4b-implementation.md` §9.8): no command means no
+        // executed check, so the stage can only record `not_covered`.
+        testEvidence.record(
+          attemptId,
+          buildTestCheckResult({
+            executions: [],
+            environmentRef,
+            executionImage,
+            ...(runnerEnvironment === undefined ? {} : { runnerEnvironment }),
+            inputTree,
+            acceptanceIds,
+            outputRefs: [],
+          }),
+        );
+        log(
+          `execution: Run ${runId} declares no policy.testCommands; the Test stage records not_covered`,
+        );
+        return;
+      }
+      if (workspace === undefined || artifacts === undefined) {
+        testEvidence.record(
+          attemptId,
+          buildBlockedTestCheckResult({
+            reason:
+              'this stack has no workspace resolver or artifact service, so the declared acceptance commands cannot be executed',
+            acceptanceIds,
+          }),
+        );
+        return;
+      }
+      if (inputTree === '') {
+        testEvidence.record(
+          attemptId,
+          buildBlockedTestCheckResult({
+            reason:
+              'the frozen candidate tree hash is unknown, so executed evidence cannot be bound to a tree',
+            acceptanceIds,
+          }),
+        );
+        return;
+      }
+      const epoch = options.store.attempts.find(attemptId)?.ownerEpoch ?? 1;
+      const root = workspace.resolve({
+        workId: run.workId,
+        runId: run.id,
+        attemptId,
+        epoch,
+      }).root;
+      const executions: DeclaredCommandExecution[] = [];
+      const outputRefs: string[] = [];
+      for (const command of commands) {
+        const outcome = await broker.runDeclaredTestCommand({
+          workId: run.workId,
+          runId: run.id,
+          attemptId,
+          epoch,
+          role: 'test',
+          stage: run.stage,
+          command,
+          roots: [root],
+          timeoutMs: TEST_COMMAND_TIMEOUT_MS,
+        });
+        if (!outcome.ok) {
+          testEvidence.record(
+            attemptId,
+            buildBlockedTestCheckResult({
+              reason: `${outcome.code}: ${outcome.reason}`,
+              acceptanceIds,
+            }),
+          );
+          log(
+            `execution: Run ${runId} declared command refused (${outcome.code}): ${outcome.reason}`,
+          );
+          return;
+        }
+        executions.push({
+          command,
+          exitCode: outcome.result.status,
+          stdout: outcome.result.stdout,
+          stderr: outcome.result.stderr,
+          signal: outcome.result.signal,
+          durationMs: outcome.durationMs,
+          ...(outcome.result.error === undefined ? {} : { error: outcome.result.error }),
+        });
+        const artifact = artifacts.createAgent({
+          run: { id: run.id, workId: run.workId, role: 'test' },
+          kind: 'evidence',
+          mime: 'text/plain',
+          bytes: Buffer.from(
+            [
+              `$ ${command}`,
+              `image ${executionImage}`,
+              ...(runnerEnvironment === undefined ? [] : [`runner ${runnerEnvironment}`]),
+              `exit ${String(outcome.result.status)}${outcome.result.signal === null ? '' : ` signal=${outcome.result.signal}`} in ${String(outcome.durationMs)}ms`,
+              boundTestOutput(outcome.result.stdout),
+              boundTestOutput(outcome.result.stderr),
+            ].join('\n'),
+            'utf8',
+          ),
+        });
+        outputRefs.push(artifact.id);
+      }
+      const checkResult = buildTestCheckResult({
+        executions,
+        environmentRef,
+        executionImage,
+        ...(runnerEnvironment === undefined ? {} : { runnerEnvironment }),
+        inputTree,
+        acceptanceIds,
+        outputRefs,
+      });
+      testEvidence.record(attemptId, checkResult);
+      log(
+        `execution: Run ${runId} executed ${String(commands.length)} declared test command(s) → ${checkResult.status} (${executions
+          .map((execution) => `exit ${String(execution.exitCode)}`)
+          .join(', ')})`,
+      );
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      testEvidence.record(attemptId, buildBlockedTestCheckResult({ reason, acceptanceIds }));
+      log(`execution: Run ${runId} test evidence failed: ${reason}`);
+    }
   }
 
   return {

@@ -9,6 +9,7 @@
  */
 import {
   stageResultContentSchema,
+  type CheckResult,
   type StageResultContent,
   type StageResultRow,
 } from '@agentdev/contracts';
@@ -18,6 +19,7 @@ import { ProtocolError } from './errors.js';
 import { scanEvents } from './events.js';
 import { RunLifecycle } from './run-lifecycle.js';
 import type { ReadLedgerRegistry } from './read-ledger.js';
+import type { TestEvidenceReader } from './test-environment.js';
 
 /** Server-owned fields a client must never set on `stage.submit`. */
 export const OWNERSHIP_FIELDS = [
@@ -93,21 +95,54 @@ function issuesOf(error: {
     .join('; ');
 }
 
+/**
+ * A one-line summary of executed Test evidence for a refusal message.
+ *
+ * The model that claimed success needs the real commands and exit codes to correct
+ * itself honestly; the summary is therefore the evidence itself, not a re-description.
+ */
+function describeExecutedCheck(checkResult: CheckResult): string {
+  if (checkResult.checks.length === 0) {
+    const uncovered = checkResult.uncovered.map((entry) => entry.reason).join('; ');
+    return uncovered === '' ? 'no executed check was recorded' : uncovered;
+  }
+  return checkResult.checks
+    .map(
+      (check) =>
+        `${check.command ?? check.procedure ?? 'check'} → exit ${String(check.exitCode ?? 'n/a')}`,
+    )
+    .join('; ');
+}
+
 export class StageGate {
   private readonly store: ProjectStore;
   private readonly lifecycle: RunLifecycle;
   /** The Attempt read ledgers, when the stack has the tool bridge (`AC-085`). */
   private readonly readLedgers: ReadLedgerRegistry | undefined;
+  /**
+   * The executed Test evidence of the live Attempts (WP-12 W5).
+   *
+   * When it is wired, a `test` Run's stage result can only be recorded with the
+   * `CheckResult` Core really produced by executing the project's declared commands
+   * (`execution.md` §5, `workflow.md` §3): the model's own `checkResult` is replaced,
+   * and a `success` claim without a `passed` executed result is refused. Absent means
+   * the stack has no executor — the library-level stage gate stays usable, and the
+   * production stack always wires it (`execution.ts`).
+   */
+  private readonly testEvidence: TestEvidenceReader | undefined;
 
   constructor(options: {
     readonly store: ProjectStore;
     readonly lifecycle?: RunLifecycle;
     /** Supplied by the execution stack so `stage.submit` can verify the read seal. */
     readonly readLedgers?: ReadLedgerRegistry;
+    /** Supplied by the execution stack; see {@link StageGate.testEvidence}. */
+    readonly testEvidence?: TestEvidenceReader;
   }) {
     this.store = options.store;
     this.lifecycle = options.lifecycle ?? new RunLifecycle({ store: options.store });
     this.readLedgers = options.readLedgers;
+    this.testEvidence = options.testEvidence;
   }
 
   /**
@@ -197,9 +232,15 @@ export class StageGate {
       return this.reject(run.id, attempt.id, `unexpected fields: ${unexpected.join(', ')}`);
     }
 
+    // `workflow.md` §3/§6 makes the Test stage the route's executed evidence, and
+    // `execution.md` §7 keeps the Test model shell-less, so the `CheckResult` cannot come
+    // from the model. When the stack wired an executor, Core's own result is the only one
+    // that may be recorded and a `success` claim must be supported by it (WP-12 W5).
+    const effectivePayload = this.effectiveTestPayload(run, attempt, payload);
+
     const parsed = (
       stageResultContentSchema as unknown as ContractSchema<StageResultContent>
-    ).safeParse(payload);
+    ).safeParse(effectivePayload);
     if (!parsed.success) {
       return this.reject(run.id, attempt.id, issuesOf(parsed.error));
     }
@@ -251,6 +292,55 @@ export class StageGate {
       });
       return { accepted: true as const, row };
     });
+  }
+
+  /**
+   * The payload a Test Attempt may actually record, with Core's executed evidence bound.
+   *
+   * `workflow.md` §6: "报告不能以'应该通过'代替执行" — a Test result whose success rests on
+   * the model's own judgement is exactly that. When the stack wired an executor
+   * (`execution.ts`), this method
+   *
+   * - refuses while the declared commands are still running (`GATE_NOT_READY`: retry the
+   *   tool call) rather than recording an unverifiable result,
+   * - refuses a `success` that the executed evidence does not support, naming the real
+   *   exit codes so the model can deliver an honest `failed`/`needs_input`, and
+   * - replaces whatever `checkResult` the payload carried with Core's executed one, so the
+   *   persisted evidence is the command's real command/exit code/output, never a claim.
+   *
+   * A stack without an executor keeps the previous behaviour; the production stack always
+   * supplies one.
+   */
+  private effectiveTestPayload(
+    run: { readonly id: string; readonly role: string },
+    attempt: { readonly id: string },
+    payload: object,
+  ): object {
+    if (run.role !== 'test' || this.testEvidence === undefined) return payload;
+    const evidence = this.testEvidence.get(attempt.id);
+    if (evidence === undefined || evidence.state === 'pending') {
+      throw new ProtocolError(
+        'GATE_NOT_READY',
+        `Run ${run.id} is still executing the project's declared acceptance commands; the executed evidence is not ready, so no stage result is recorded yet. Call stage_yield again when the commands finish.`,
+        { details: { runId: run.id, attemptId: attempt.id } },
+      );
+    }
+    const checkResult = evidence.checkResult;
+    const claimed = (payload as Record<string, unknown>)['status'];
+    if (claimed === 'success' && checkResult.status !== 'passed') {
+      throw new ProtocolError(
+        'GATE_NOT_READY',
+        `Run ${run.id} claims success, but the executed acceptance evidence is ${checkResult.status}: ${describeExecutedCheck(checkResult)}. A Test stage records success only when the real commands passed; report needs_input/failed with the observed outcome instead.`,
+        {
+          details: {
+            runId: run.id,
+            attemptId: attempt.id,
+            evidence: checkResult.status,
+          },
+        },
+      );
+    }
+    return { ...payload, checkResult };
   }
 
   /**

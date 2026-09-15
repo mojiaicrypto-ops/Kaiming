@@ -157,6 +157,38 @@ export function roleContractSentence(role: Role): string {
 }
 
 /**
+ * The Test stage's declared acceptance commands, as the Run must receive them.
+ *
+ * `protocol.md` §1 documents `policy.testCommands` as project configuration and
+ * `workflow.md` §3/§6 make the Test stage the route's executed evidence, but
+ * `execution.md` §7 keeps the Test role shell-less: Core runs the declared commands in
+ * the isolated container and records their real exit codes as the stage's
+ * `CheckResult` (`execution.ts`). The Run is told **exactly** which commands those are,
+ * so it cannot mistake its own opinion for an executed check, and the empty default is
+ * stated as the honest blocker it is rather than being silently treated as green.
+ */
+export function testCommandSentence(commands: readonly string[]): string {
+  if (commands.length === 0) {
+    return [
+      'This project declares no acceptance command (`policy.testCommands` is empty), so Core',
+      'has no executed check to record for this stage. Do not report `success`: deliver',
+      '`needs_input` (or `failed`) and say that no acceptance command is configured, so a user',
+      'can add one to the project configuration. A Test success without an executed check is',
+      'refused by Core.',
+    ].join(' ');
+  }
+  return [
+    'The project declares these acceptance commands (`policy.testCommands`):',
+    `${commands.map((command) => `\`${command}\``).join('; ')}.`,
+    'Core executes exactly these commands in the isolated test container on your frozen',
+    'workspace and records their real exit codes as this stage’s check evidence; you cannot',
+    'run commands yourself and must not invent a command, an exit code or a result. Core',
+    'records `success` only when every declared command exited 0; if one failed, deliver',
+    '`failed` (or `needs_input`) with the observed outcome.',
+  ].join(' ');
+}
+
+/**
  * The stage goal the Chief dispatched this Run for (`data.md` §3 `DispatchSpec.goal`).
  *
  * The Work goal is the user's whole request; a professional Run still needs to know
@@ -223,7 +255,7 @@ function routeContinuationSentence(
   ].join(' ');
 }
 
-function promptFor(input: PrepareRunInput, store: ProjectStore): string {
+function promptFor(input: PrepareRunInput, store: ProjectStore, contract: string): string {
   const work = store.works.find(input.run.workId);
   const goal = work?.goal ?? 'the assigned task';
   const stageGoal = stageGoalOf(input, store);
@@ -234,7 +266,7 @@ function promptFor(input: PrepareRunInput, store: ProjectStore): string {
     `Work goal: ${goal}`,
     ...(stageGoal === undefined || stageGoal === goal ? [] : [`Your stage goal: ${stageGoal}`]),
     ...(continuation === undefined ? [] : [continuation]),
-    roleContractSentence(input.run.role),
+    contract,
   ].join('\n');
 }
 
@@ -436,6 +468,14 @@ export function createPrepareRun(options: PrepareRunOptions): PrepareRun {
     log(
       `prepare-run: ${input.run.id} attempt ${input.attempt.id} → ${frozen.provider.providerId}/${frozen.model.id}`,
     );
+    // `workflow.md` §3/§6 + `execution.md` §5 (WP-12 W5): a Test Run is told exactly which
+    // commands Core will execute as its acceptance evidence, so the declared set is part of
+    // the Run's input rather than something the model has to guess.
+    const commands = options.config.project().policy.testCommands;
+    const contract =
+      input.run.role === 'test'
+        ? `${roleContractSentence('test')} ${testCommandSentence(commands)}`
+        : roleContractSentence(input.run.role);
     return {
       cwd: options.projectRoot,
       agentDir: join(attemptDir, 'agent'),
@@ -443,8 +483,8 @@ export function createPrepareRun(options: PrepareRunOptions): PrepareRun {
       modelId: frozen.model.id,
       tools: [...frozen.profile.toolSubset],
       prompt:
-        assembleContext(input, options, roleContractSentence(input.run.role))?.prompt ??
-        promptFor(input, options.store),
+        assembleContext(input, options, contract)?.prompt ??
+        promptFor(input, options.store, contract),
       capability: capability.token,
       workId: input.run.workId,
       ...(options.controlUrl === undefined ? {} : { controlUrl: options.controlUrl }),

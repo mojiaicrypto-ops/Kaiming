@@ -466,11 +466,27 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
         // allowed-but-listed read.
         const configPolicy = project.config.project().policy.configPolicy;
         const policyRevision = project.config.versionOf('project');
+        // One per-Task workspace resolver for the whole stack: the tool bridge resolves
+        // through it, and the Test stage's declared commands run on the same Task worktree
+        // (`execution.ts` WP-12 W5). Building it twice would be two lease holders for one
+        // tree with the same attempt/epoch, which is exactly the ambiguity to avoid.
+        const taskWorkspace = createTaskWorktreeWorkspaceResolver({
+          store: project.store,
+          git: project.git,
+          worktreeRoot: join(home, 'task-worktrees', project.projectId),
+          repoRoot: project.gitRoot,
+          log,
+        });
         const stack = await createProjectExecution({
           store: project.store,
           config: project.config,
           snapshots: project.snapshots,
           secrets,
+          // WP-12 W5: the Test stage's executed evidence needs the artifact service (one
+          // `evidence` artifact per command output) and the Run's workspace root (the frozen
+          // per-Task worktree the commands are mounted read-only).
+          artifacts: project.services.artifacts,
+          workspace: taskWorkspace,
           // The stack's ephemeral listeners (control endpoint, gateway proxy) are part of
           // the first fixed denial, so they report their real ports here.
           egressPorts,
@@ -507,6 +523,10 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
             writableReportRoots: [join(project.dataDir, 'tool-reports')],
             daemonPorts: () => egressPorts.list(),
             egress,
+            // `protocol.md` §1 `ConfigPatch.testCommands`: the human-authored acceptance
+            // commands Core executes for a Test Run. Read live, so a configuration edit is
+            // never bypassed by a stale copy (`execution.md` §5, WP-12 W5).
+            declaredTestCommands: () => project.config.project().policy.testCommands,
           },
           // The daemon adds the services only the application has: the artifact service,
           // the Plan gate (AC-013) and the workspace resolver (`tool-handler.ts`).
@@ -531,14 +551,9 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
                 // W6: a professional Run's tools are rooted at its own Task worktree
                 // (`reliability.md` §4) under the worktree manager's `(attempt, epoch)`
                 // lease, so one Task's writes and deletes cannot reach another Task's
-                // work. A Chief Run (no taskId) still resolves to the project root.
-                workspace: createTaskWorktreeWorkspaceResolver({
-                  store: project.store,
-                  git: project.git,
-                  worktreeRoot: join(home, 'task-worktrees', project.projectId),
-                  repoRoot: project.gitRoot,
-                  log,
-                }),
+                // work. A Chief Run (no taskId) still resolves to the project root. The
+                // same resolver instance the stack's Test execution uses (`taskWorkspace`).
+                workspace: taskWorkspace,
                 // 附录 A.7: the tier the frozen sensitive-file table is read with, and the
                 // policy revision an allowed-but-listed read is audited against.
                 configPolicy,

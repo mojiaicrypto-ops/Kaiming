@@ -34,6 +34,7 @@ import {
 import { createConnection, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import type { CheckResult } from '@agentdev/contracts';
 import { uuidv7 } from '@agentdev/storage';
 import type { BrokerErrorCode, ProcessResult } from './broker.js';
 
@@ -931,4 +932,220 @@ function messageOf(error: unknown): string {
 function clearPid(environment: TestEnvironment): TestEnvironment {
   const { pid: _pid, ...rest } = environment;
   return rest;
+}
+
+// ---------------------------------------------------------------------------
+// Declared acceptance commands → executed `CheckResult` evidence
+// ---------------------------------------------------------------------------
+
+/**
+ * How much of a command's stdout/stderr is kept as evidence, per stream.
+ *
+ * `execution.md` §5 requires the output to be captured but bounded: a suite that
+ * prints a megabyte must not turn a `check_result` row into a log store. The full
+ * output is not lost either — the bounded text is the evidence `result`, and the
+ * truncation marker says what was dropped.
+ */
+export const TEST_OUTPUT_LIMIT_BYTES = 8 * 1024;
+
+/** Truncates one stream to {@link TEST_OUTPUT_LIMIT_BYTES}, marking the cut. */
+export function boundTestOutput(text: string, limit = TEST_OUTPUT_LIMIT_BYTES): string {
+  if (text.length <= limit) return text;
+  const dropped = text.length - limit;
+  return `${text.slice(0, limit)}\n… [${String(dropped)} characters truncated]`;
+}
+
+/**
+ * One real execution of one project-declared acceptance command.
+ *
+ * `exitCode` is the process's own status (`null` when it was signalled or could not
+ * start); the caller turns it into the contract's integer `exitCode` with
+ * {@link buildTestCheckResult}.
+ */
+export interface DeclaredCommandExecution {
+  readonly command: string;
+  readonly exitCode: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly signal: NodeJS.Signals | null;
+  readonly durationMs: number;
+  /** Why the command never produced a status, when it could not start at all. */
+  readonly error?: string;
+}
+
+/** The contract's integer exit code for one execution, or a documented substitute. */
+export function recordedExitCode(execution: DeclaredCommandExecution): number {
+  if (execution.exitCode !== null) return execution.exitCode;
+  // A process killed by a signal has no exit status. `checkEntry` requires an
+  // integer whenever a `command` is present, so the documented shell convention
+  // (128 + signal) is recorded instead; `result` still names the real signal, so
+  // the evidence is explicit rather than a guessed success.
+  const signalNumber = execution.signal === null ? undefined : SIGNAL_NUMBERS[execution.signal];
+  return signalNumber === undefined ? -1 : 128 + signalNumber;
+}
+
+const SIGNAL_NUMBERS: Readonly<Record<string, number>> = {
+  SIGHUP: 1,
+  SIGINT: 2,
+  SIGQUIT: 3,
+  SIGKILL: 9,
+  SIGTERM: 15,
+};
+
+/** The bounded, human-readable result the evidence row records. */
+export function describeExecution(execution: DeclaredCommandExecution): string {
+  const parts = [
+    `exit=${String(execution.exitCode)}${execution.signal === null ? '' : ` signal=${execution.signal}`}`,
+    `${String(execution.durationMs)}ms`,
+  ];
+  if (execution.error !== undefined) parts.push(`error=${execution.error}`);
+  const out = boundTestOutput(execution.stdout).trim();
+  const err = boundTestOutput(execution.stderr).trim();
+  if (out !== '') parts.push(`stdout: ${out}`);
+  if (err !== '') parts.push(`stderr: ${err}`);
+  return parts.join(' | ');
+}
+
+/** What the gate needs to know about the executed evidence of one Attempt. */
+export type TestEvidenceState =
+  { readonly state: 'pending' } | { readonly state: 'ready'; readonly checkResult: CheckResult };
+
+/** The read-only half `StageGate` consults; a registry, a stub or a double. */
+export interface TestEvidenceReader {
+  get(attemptId: string): TestEvidenceState | undefined;
+}
+
+/**
+ * The executed evidence of every live Test Attempt (`data.md` §3 `CheckResult`).
+ *
+ * The evidence is produced by **Core** when the Test Attempt becomes ready (the
+ * declared commands are executed through the Broker's isolated container) and is
+ * read back when that Attempt submits its stage result. It is deliberately
+ * in-memory: it belongs to one Attempt of one live Run. A daemon restart loses it,
+ * and the gate then refuses a `success` the evidence can no longer support — the
+ * fail-closed direction, never a remembered claim.
+ */
+export class TestEvidenceRegistry implements TestEvidenceReader {
+  private readonly entries = new Map<string, TestEvidenceState>();
+
+  /** Marks the Attempt's evidence as being executed; a memory of "not yet". */
+  begin(attemptId: string): void {
+    this.entries.set(attemptId, { state: 'pending' });
+  }
+
+  /** Records the executed evidence of one Attempt. */
+  record(attemptId: string, checkResult: CheckResult): void {
+    this.entries.set(attemptId, { state: 'ready', checkResult });
+  }
+
+  get(attemptId: string): TestEvidenceState | undefined {
+    return this.entries.get(attemptId);
+  }
+
+  /** Drops one Attempt's evidence once its Run is gone. */
+  release(attemptId: string): void {
+    this.entries.delete(attemptId);
+  }
+
+  /** Every Attempt this registry still tracks (diagnostics/tests). */
+  attempts(): readonly string[] {
+    return [...this.entries.keys()];
+  }
+}
+
+export interface TestCheckResultInput {
+  readonly executions: readonly DeclaredCommandExecution[];
+  /**
+   * The id of the environment the commands ran in.
+   *
+   * `data.md` §3 types the check's `environmentRef` as an `ID`, so this is the
+   * **id-shaped** identity of the execution environment — the Attempt, which is what the
+   * Control plane names an execution by. The Runner's descriptive
+   * `host:<platform>/<arch>/node-<major>` / `container:<image>` string travels as
+   * {@link TestCheckResultInput.environmentLabel} instead of being forced into an id.
+   */
+  readonly environmentRef: string;
+  /**
+   * The image the command really executed in (`Broker` `EXEC_IMAGE`), when it ran in one.
+   *
+   * The `environmentRef` is the id-shaped identity of the stage's execution environment,
+   * so the *facts* the check needs — the container image the command ran in and the
+   * environment the Runner itself reported in `attempt.ready` — are recorded in the
+   * human-readable `result` instead of being forced into an id.
+   */
+  readonly executionImage?: string;
+  /** The Runner's descriptive environment string (`attempt.ready`), when it reported one. */
+  readonly runnerEnvironment?: string;
+  /** The frozen candidate's code-tree hash the commands ran against. */
+  readonly inputTree: string;
+  /** The acceptance ids this evidence covers (`Task.acceptanceIds`). */
+  readonly acceptanceIds: readonly string[];
+  /** One artifact id per execution, in the same order. */
+  readonly outputRefs: readonly string[];
+}
+
+/**
+ * The `CheckResult` an executed command set produces (`data.md` §3).
+ *
+ * The status is derived **only** from the real exit codes: every command exiting 0
+ * is `passed`, any other outcome is `failed`, and no command at all is
+ * `not_covered` — never `passed`. The uncovered list names the acceptance ids an
+ * unconfigured project left unverified, so "no commands" is visible in the evidence
+ * rather than being silently equivalent to a green run.
+ */
+export function buildTestCheckResult(input: TestCheckResultInput): CheckResult {
+  const { executions, environmentRef, inputTree, acceptanceIds, outputRefs } = input;
+  if (executions.length === 0) {
+    return {
+      status: 'not_covered',
+      checks: [],
+      uncovered: acceptanceIds.map((acceptanceId) => ({
+        acceptanceId,
+        reason:
+          'no acceptance command is configured for this project (policy.testCommands is empty), so no executed check exists',
+      })),
+    };
+  }
+  const facts = [
+    ...(input.executionImage === undefined ? [] : [`image=${input.executionImage}`]),
+    ...(input.runnerEnvironment === undefined ? [] : [`runner=${input.runnerEnvironment}`]),
+  ].join(' | ');
+  const checks = executions.map((execution, index) => ({
+    acceptanceIds: [...acceptanceIds],
+    command: execution.command,
+    exitCode: recordedExitCode(execution),
+    environmentRef,
+    inputTree,
+    outputRef: outputRefs[index] ?? environmentRef,
+    result:
+      facts === '' ? describeExecution(execution) : `${facts} | ${describeExecution(execution)}`,
+  }));
+  const passed = executions.every(
+    (execution) => execution.exitCode === 0 && execution.error === undefined,
+  );
+  return { status: passed ? 'passed' : 'failed', checks, uncovered: [] };
+}
+
+/**
+ * The evidence of a command set that could not be executed at all.
+ *
+ * A missing container runtime, a refused workspace or a vanished frozen tree means
+ * there is no exit code to record. The result says exactly that in `uncovered` and
+ * carries **no** check entry (a check entry with a `command` must record an exit
+ * code, so inventing a `command` here would fabricate evidence). The status is
+ * `blocked`, which the gate treats like any other non-`passed` evidence: a `success`
+ * claim is refused with the reason.
+ */
+export function buildBlockedTestCheckResult(input: {
+  readonly reason: string;
+  readonly acceptanceIds: readonly string[];
+}): CheckResult {
+  return {
+    status: 'blocked',
+    checks: [],
+    uncovered: input.acceptanceIds.map((acceptanceId) => ({
+      acceptanceId,
+      reason: input.reason,
+    })),
+  };
 }

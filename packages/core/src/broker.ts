@@ -2072,6 +2072,40 @@ function reportWriteRootsFor(
   return reportRoots;
 }
 
+/**
+ * One project-declared acceptance command a Test Run asks the Broker to execute.
+ *
+ * `stage` is the Run's own stage (always `test` in the documented route) and
+ * `roots` is the Run's workspace root. There is no `targets`, no model input and no
+ * tool operation id: the command is the whole contract and it must be declared.
+ */
+export interface DeclaredTestCommandInvocation {
+  readonly workId: string;
+  readonly runId: string;
+  readonly attemptId: string;
+  readonly epoch: number;
+  readonly role: 'test';
+  readonly stage: string;
+  readonly command: string;
+  /** Absolute workspace roots to mount; the first becomes the container workdir. */
+  readonly roots: readonly string[];
+  readonly timeoutMs?: number;
+}
+
+/** The result of one declared test command: the real process result, or a refusal. */
+export type DeclaredTestCommandOutcome =
+  | {
+      readonly ok: true;
+      readonly mode: 'container';
+      readonly result: ProcessResult;
+      readonly durationMs: number;
+    }
+  | {
+      readonly ok: false;
+      readonly code: BrokerErrorCode;
+      readonly reason: string;
+    };
+
 export interface BrokerOptions {
   readonly store: ProjectStore;
   readonly grants: GrantStore;
@@ -2158,6 +2192,17 @@ export interface BrokerOptions {
    * refused rather than opened (`PROVIDER_UNAVAILABLE`).
    */
   readonly egress?: ContainerEgressChannel;
+  /**
+   * The commands the project declares as its acceptance commands
+   * (`policy.testCommands`, `protocol.md` §1 `ConfigPatch`).
+   *
+   * This is the **only** authority under which {@link Broker.runDeclaredTestCommand}
+   * executes a shell for a Test Run. The set is human-authored project configuration,
+   * never model output, and it is read live so a configuration edit cannot be
+   * bypassed by a stale copy. Absent means no declared-command path exists at all
+   * (the method refuses), which is the fail-closed default.
+   */
+  readonly declaredTestCommands?: () => readonly string[];
 }
 
 export class Broker {
@@ -2179,6 +2224,7 @@ export class Broker {
   private readonly allowInsecureHttp: boolean;
   private readonly daemonPorts: () => readonly number[];
   private readonly egressChannel: ContainerEgressChannel | undefined;
+  private readonly declaredTestCommands: (() => readonly string[]) | undefined;
 
   constructor(options: BrokerOptions) {
     this.store = options.store;
@@ -2204,6 +2250,7 @@ export class Broker {
     this.allowInsecureHttp = options.allowInsecureHttp ?? false;
     this.daemonPorts = options.daemonPorts ?? (() => []);
     this.egressChannel = options.egress;
+    this.declaredTestCommands = options.declaredTestCommands;
   }
 
   /** The roots no role may read or write; the derived run-data roots included. */
@@ -2219,6 +2266,11 @@ export class Broker {
   /** The live tool processes, so the supervisor can cancel an Attempt's tree. */
   get processes(): ToolProcessRegistry {
     return this.toolProcesses;
+  }
+
+  /** The execution image every container call (and declared test command) runs in. */
+  get execImageTag(): string {
+    return this.execImage;
   }
 
   /** The policy a call's network targets are evaluated against. */
@@ -2240,6 +2292,143 @@ export class Broker {
   /** The live controlled channel, when this daemon started one. */
   get egress(): ContainerEgressChannel | undefined {
     return this.egressChannel;
+  }
+
+  /**
+   * Runs one **project-declared** acceptance command for a Test Run.
+   *
+   * `execution.md` §5 gives the Test stage a real execution environment and
+   * `workflow.md` §3 makes the Test stage the route's evidence point, but
+   * `execution.md` §7 keeps the Test role shell-less: the model cannot run commands.
+   * Core therefore runs the commands the **project** declares (`policy.testCommands`,
+   * the documented `ConfigPatch` field) on the Test Run's behalf, and this method is
+   * that path. Its guarantees, all of which are refusals otherwise:
+   *
+   * - **The command is declared.** It must be one of {@link BrokerOptions.declaredTestCommands};
+   *   anything else is `NOT_AUTHORIZED`, so a model that somehow reached this method
+   *   still cannot run an undeclared program.
+   * - **The role is Test.** Only a `test` Run may use the path, so it can never widen
+   *   a Developer or Chief Run's toolset.
+   * - **The mode is the container.** The call is pinned to `mode: 'container'`; there
+   *   is no host fallback. Docker being unavailable is `PROVIDER_UNAVAILABLE`, exactly
+   *   like every other container call ("缺Docker即阻断独立验证", `execution.md` §1).
+   * - **The same boundary as a tool shell.** It goes through
+   *   {@link Broker.commandVector}/`containerPlan`, so the container keeps
+   *   `--network none`, the read-only mounts, the hardening flags and the controlled
+   *   egress channel; nothing new is opened.
+   *
+   * The invocation is deliberately **not** a `tool.execute`: the model's tool bridge never
+   * sees it, so no capability and no model-supplied argument is involved. It is recorded
+   * as a `test.command_executed` audit event with the real command and exit code
+   * (`reliability.md` §2's audit intent) and is registered in the Attempt's process
+   * registry, so a cancel or an Attempt end reaps the group like any other shell.
+   */
+  async runDeclaredTestCommand(
+    input: DeclaredTestCommandInvocation,
+  ): Promise<DeclaredTestCommandOutcome> {
+    const declared = this.declaredTestCommands;
+    if (declared === undefined) {
+      return {
+        ok: false,
+        code: 'PROVIDER_UNAVAILABLE',
+        reason:
+          'this daemon has no declared test commands wired; a Test Run cannot execute an acceptance command',
+      };
+    }
+    if (input.role !== 'test') {
+      // `input.role` is typed as the `test` literal; this is the runtime guard for a
+      // caller outside the type system, and a fixed message keeps it honest.
+      return {
+        ok: false,
+        code: 'NOT_AUTHORIZED',
+        reason: 'declared test commands run only for the test role',
+      };
+    }
+    const command = input.command;
+    if (command.trim() === '') {
+      return { ok: false, code: 'VALIDATION_ERROR', reason: 'a test command must not be empty' };
+    }
+    const available = declared();
+    if (!available.includes(command)) {
+      return {
+        ok: false,
+        code: 'NOT_AUTHORIZED',
+        reason: `command ${JSON.stringify(command)} is not one of the project's declared testCommands`,
+      };
+    }
+    if (input.roots.length === 0) {
+      return {
+        ok: false,
+        code: 'VALIDATION_ERROR',
+        reason: 'a test command needs the Run workspace root to mount',
+      };
+    }
+    const availability = this.docker(this.execImage);
+    if (!availability.available) {
+      return {
+        ok: false,
+        code: 'PROVIDER_UNAVAILABLE',
+        reason: `declared test command refused: ${availability.reason}; the Broker does not fall back to host execution`,
+      };
+    }
+    if (this.egressChannel !== undefined) {
+      await this.egressChannel.ensure().catch(() => false);
+    }
+    const timeoutMs = input.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS;
+    const invocation: ToolInvocation = {
+      workId: input.workId,
+      runId: input.runId,
+      attemptId: input.attemptId,
+      epoch: input.epoch,
+      role: 'test',
+      stage: input.stage,
+      operation: 'bash',
+      targets: [],
+      input: { command },
+      roots: [...input.roots],
+      mode: 'container',
+      timeoutMs,
+    };
+    const started = Date.now();
+    let result: ProcessResult;
+    try {
+      result = await this.runCommandAsync(command, invocation, 'container', { timeoutMs });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.recordTestCommand(input, command, null, null, Date.now() - started, reason);
+      return { ok: false, code: asBrokerErrorCode('INTERNAL_ERROR'), reason };
+    }
+    const durationMs = Date.now() - started;
+    this.recordTestCommand(input, command, result.status, result.signal, durationMs);
+    return { ok: true, mode: 'container', result, durationMs };
+  }
+
+  /** Appends the audit event for one declared test command (`reliability.md` §2). */
+  private recordTestCommand(
+    input: DeclaredTestCommandInvocation,
+    command: string,
+    exitCode: number | null,
+    signal: NodeJS.Signals | null,
+    durationMs: number,
+    error?: string,
+  ): void {
+    const run = this.store.runs.find(input.runId);
+    this.store.events.append({
+      name: 'test.command_executed',
+      entityId: input.runId,
+      entityVersion: run?.version ?? 0,
+      data: {
+        workId: input.workId,
+        runId: input.runId,
+        attemptId: input.attemptId,
+        stage: input.stage,
+        command,
+        exitCode,
+        signal,
+        durationMs,
+        ...(error === undefined ? {} : { error }),
+      },
+    });
   }
 
   private buildNetworkPolicy(extraTargets: readonly string[]): NetworkPolicy {

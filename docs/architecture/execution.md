@@ -50,6 +50,10 @@ Secret按用途使用，模型Secret仅在Gateway；项目命令Secret按Grant�
 
 Review源码只读，执行lint/build等需要写输出时先复制到隔离临时目录，并校验输入代码树Hash；任何测试产生的临时文件不回写候选。Test使用同样冻结输入，镜像digest、依赖锁Hash、命令、环境键名、退出码、输出Hash写证据。
 
+**Test 阶段执行验收命令（WP-12 W5 实装）**：Test 角色仍无 shell（§7），验收命令来自**项目配置** `policy.testCommands`（`protocol.md` §1 `ConfigPatch` 字段），由 Core 代表 Test Run 执行：`prepare-run.ts` 把该命令集写进 Test Attempt 的 prompt（"只这些、且模型不能自己跑或编造"），Attempt ready 时 `execution.ts` 经 `Broker.runDeclaredTestCommand` 在**同一隔离容器路径**（`--network none` + 命名卷出口 + 只读工作区挂载 + 加固参数）逐条执行，命令必须命中声明集否则 `NOT_AUTHORIZED`；每条的真实退出码与有界 stdout/stderr 落一条 `evidence` Artifact 与 `test.command_executed` 审计事件，合成 `CheckResult`（全 0 = `passed`，任一非 0 = `failed`，无命令 = `not_covered`，无法执行 = `blocked`）。`StageGate` 在 Test stage 提交时用这份 Core 证据**替换**模型可能声称的 `checkResult`，并在证据未就绪或非 `passed` 时拒绝 `success`（`GATE_NOT_READY`，回传真实命令与退出码），因此"模型自称成功"不能通过门禁；**空 `testCommands` 的默认是诚实缺口**：Test 只能记录 `not_covered` 并交 `needs_input`/`failed`，不能以自述成功放行。
+
+**`TestEnvironmentManager` 与本执行风格的关系**：该管理器负责宿主侧 OS 端口认领（含就绪归属证明）、attempt 命名测试 DB 与 `RECOVERY_REQUIRED` 清理。本执行风格是"每条命令一个 `--network none` 容器"：容器不绑定宿主端口、测试 DB 由项目自身在容器内管理，隔离边界是容器本身，生命周期由 `--rm` 与 Broker 的 Attempt 进程注册表（取消/结束时杀掉整个进程组）承担，因此管理器提供的宿主端口/DB 认领在此风格下**不适用**（它不是被绕过，而是没有宿主侧资源可认领）；它仍适用于将来"先起长驻服务再跑命令"的声明式风格（需要先有文档化的服务命令字段）。
+
 服务端口由Supervisor动态分配，测试DB以attempt命名，跨Task数据库不共享。Shell超时终止进程组，清理端口/容器/临时DB；清理失败记录recovery。Fixture/测试脚本改变须经Developer→Review，Test不能修改验收以获得通过。
 
 ## 6. HTML与附件
