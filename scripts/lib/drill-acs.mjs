@@ -271,3 +271,23 @@ export function conditionHolds(condition, env = process.env) {
   }
   return { holds: false, why: `未知的豁免条件 ${String(condition)}` };
 }
+
+/*
+ * AC-046 / AC-047 are proven at the **integration layer** by committed Vitest cases, not
+ * by a release drill in `scripts/e2e.mjs`:
+ *
+ * - AC-046 `packages/core/test/join.integration.test.ts` — one real Chief dispatch creates
+ *   two parallel child Runs; the required child fails through the real two-strike StageGate,
+ *   the sibling's `stage_result` survives, the parent stays `waiting_children`, the join
+ *   files exactly one `chief_action_required` carrying every child, and a new Chief
+ *   instruction is still processed.
+ * - AC-047 `apps/daemon/test/stage-contract-runner.integration.test.ts` — a real message →
+ *   real Chief child → real `agent.dispatch` → a real `apps/runner` child whose model only
+ *   *says* it finished: the first spoken end receives the corrective prompt, the second is
+ *   recorded as `contract_violation` with no stage result.
+ *
+ * `scripts/acceptance.mjs` adopts both **by test name** (each executed case's name carries
+ * its AC id; verified as `mapping: 'test-name'`), so they must NOT be added to
+ * `RESIDUAL_GAPS`: a `recorded-gap` entry would downgrade an already passing,
+ * application-layer AC to UNVERIFIED.
+ */

@@ -432,6 +432,34 @@ describe('workbench protocol over the real Core (WP-09 T2)', () => {
     return client;
   }
 
+  /**
+   * Attributes event cursors to the subscription whose `batch_end` closes them.
+   *
+   * The `Event` frame (`protocol.md` §7) carries no subscriptionId, and §2 makes the batch
+   * the unit a client applies before ACK, so the trailing `batch_end {subscriptionId}` is
+   * the only attribution the wire offers. A stream replaced mid-flight by a same-scope
+   * `project.subscribe` keeps the cursors it already delivered, so "no duplicate, no gap"
+   * is a per-stream property; summing cursors across a connection conflated two streams.
+   */
+  function cursorsByBatch(frames: readonly Envelope[]): Map<string, number[]> {
+    const batches = new Map<string, number[]>();
+    let pending: number[] = [];
+    for (const frame of frames) {
+      if (frame.type === 'event' && frame.cursor !== undefined) {
+        pending.push(frame.cursor);
+        continue;
+      }
+      if (frame.type === 'batch_end' && frame.subscriptionId !== undefined) {
+        batches.set(frame.subscriptionId, [
+          ...(batches.get(frame.subscriptionId) ?? []),
+          ...pending,
+        ]);
+        pending = [];
+      }
+    }
+    return batches;
+  }
+
   // -------------------------------------------------------------------------
   // Queries
   // -------------------------------------------------------------------------
@@ -1001,11 +1029,36 @@ describe('workbench protocol over the real Core (WP-09 T2)', () => {
     });
     expect(resumed.ok).toBe(true);
     expect(resumed.result?.['mode']).toBe('replay');
-    await client.waitFor((frame) => frame.type === 'event' && frame.cursor === missed);
+    const resumedId = resumed.result?.['subscriptionId'] as string;
+    // `protocol.md` §2 keeps **one live subscription per (kind, id)**: the resume replaces
+    // the previous stream rather than adding a second reader, so it gets a new id and the
+    // old one stops receiving batches. The replaced stream may still have delivered the new
+    // event on its 50 ms poll before the resume handler ran — that is its own cursor
+    // advancing, not a replay. Event frames carry no subscriptionId, so uniqueness must be
+    // read the way a client reads it (`protocol.md` §2, "客户端应用整个批次后ACK"): a batch
+    // is closed by `batch_end {subscriptionId}`, and the cursor guarantee is **per stream**
+    // (`packages/client/src/subscriptions.ts` drops `cursor <= watermark` and counts it as a
+    // duplicate). Reading the whole connection as one stream is what made this case flip.
+    expect(resumedId).not.toBe(subscriptionId);
+    await client.waitFor(
+      (frame) =>
+        frame.type === 'batch_end' &&
+        frame.subscriptionId === resumedId &&
+        (frame.scannedThrough ?? 0) >= missed,
+    );
+    const batches = cursorsByBatch(client.frames);
+    // The resumed stream replays exactly what was missed and nothing else.
+    expect(batches.get(resumedId)).toEqual([missed]);
+    for (const [id, cursors] of batches) {
+      expect(cursors, `subscription ${id} delivered a cursor twice`).toEqual([...new Set(cursors)]);
+    }
     const afterResume = client.frames
       .filter((frame) => frame.type === 'event' && frame.cursor !== undefined)
       .map((frame) => frame.cursor as number);
-    expect(afterResume).toEqual([1, 2, 3, missed]);
+    // The connection saw every cursor once in order, and the replay closed the gap.
+    expect(afterResume.slice(0, 3)).toEqual([1, 2, 3]);
+    expect(afterResume.at(-1)).toBe(missed);
+    expect([...new Set(afterResume)]).toEqual([1, 2, 3, missed]);
 
     const acked = await client.call('project.events.ack', {
       subscriptionId: resumed.result?.['subscriptionId'] ?? subscriptionId,
