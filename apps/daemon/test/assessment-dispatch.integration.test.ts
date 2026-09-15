@@ -178,6 +178,69 @@ const deliver = async () => {
     out({ type: 'attempt.result', status: 'completed', message: 'replay drill complete' });
     process.exit(0);
   }
+  if (mode === 'join' && role === 'chief') {
+    // Two real parallel children of one Chief Run with joinPolicy=all: the backend delivers,
+    // the review child ends twice without a structured submission (contract_violation). The
+    // daemon's production join trigger must move the parent to \`waiting_children\` and file
+    // the documented \`chief_action_required\` todo — no test calls the coordinator.
+    const assessment = await post('/control/assessment.submit', {
+      workId,
+      assessment: {
+        intent: 'delivery',
+        goal: 'implement the dark theme',
+        scope: assessmentScope,
+        level: 'L2',
+        semanticImpact: false,
+        riskFlags: [],
+        uncertainties: [],
+        policyRevision: 1,
+        reason: 'the user asked for the dark theme in plain language',
+      },
+    });
+    if (assessment.status !== 200) {
+      process.stderr.write('DRILL_JOIN_ASSESSMENT_REFUSED ' + JSON.stringify(assessment.body) + String.fromCharCode(10));
+      out({ type: 'attempt.error', code: 'DRILL_JOIN_ASSESSMENT_REFUSED', message: JSON.stringify(assessment.body) });
+      return;
+    }
+    const childSpec = (childRole, stage, goal) => ({
+      role: childRole,
+      purpose: childRole === 'review' ? 'review' : 'implementation',
+      goal,
+      scope: assessmentScope,
+      stage,
+      contextSelection: {
+        goal,
+        sourceRefs: [{ kind: 'message', id: workId, version: '1' }],
+        reasonPerSource: { ['message:' + workId]: 'the user message' },
+        featureRefs: [],
+        codePaths: ['src/theme'],
+        artifactRefs: [],
+        excluded: [],
+        unknowns: [],
+        readBudget: { initialTokens: 24000, expansionTokens: 16000 },
+      },
+      requiredOutputs: ['stage_result'],
+      requiredChild: true,
+      joinPolicy: 'all',
+      budgetAllocation: 3000,
+    });
+    const backend = await post('/control/agent.dispatch', {
+      spec: childSpec('backend', 'develop', 'implement the dark theme'),
+      operationId: op('dispatch-backend'),
+    });
+    const review = await post('/control/agent.dispatch', {
+      spec: childSpec('review', 'review', 'review the dark theme'),
+      operationId: op('dispatch-review'),
+    });
+    if (backend.status !== 200 || review.status !== 200) {
+      process.stderr.write('DRILL_JOIN_DISPATCH_REFUSED ' + JSON.stringify([backend, review]) + String.fromCharCode(10));
+      out({ type: 'attempt.error', code: 'DRILL_JOIN_DISPATCH_REFUSED', message: JSON.stringify([backend.body, review.body]) });
+      return;
+    }
+    replied = true;
+    out({ type: 'attempt.result', status: 'completed', message: 'join dispatch submitted' });
+    process.exit(0);
+  }
   if (role === 'chief') {
     const assessment = await post('/control/assessment.submit', {
       workId,
@@ -228,6 +291,13 @@ const deliver = async () => {
       return;
     }
   } else {
+    if (mode === 'join' && role === 'review') {
+      // The required child fails through the documented two-strike path: plain text earns one
+      // corrective prompt, the second non-compliant end is the contract_violation.
+      replied = true;
+      out({ type: 'attempt.result', status: 'completed', message: 'plain text, no submission' });
+      process.exit(0);
+    }
     const stageBody = {
       status: 'success',
         summary: 'the dark theme is implemented',
@@ -288,7 +358,7 @@ process.stdin.on('data', (chunk) => {
       }
       void deliver();
     }
-    if (command.type === 'attempt.steer' && mode === 'silent') {
+    if (command.type === 'attempt.steer' && (mode === 'silent' || (mode === 'join' && role === 'review'))) {
       out({ type: 'attempt.result', status: 'completed', message: 'still plain text' });
       process.exit(0);
     }
@@ -384,6 +454,16 @@ async function bootStack(mode: string): Promise<void> {
         contextLimit: 32_000,
       },
       backend: {
+        providerId: provider.providerId,
+        modelId: 'drill-model',
+        reasoning: 'off',
+        skills: [],
+        toolSubset: [],
+        contextLimit: 32_000,
+      },
+      // The `join` drill dispatches a review child as the required failing sibling, so the
+      // role needs a complete profile like any other professional role.
+      review: {
         providerId: provider.providerId,
         modelId: 'drill-model',
         reasoning: 'off',
@@ -747,5 +827,84 @@ describe('message → Chief → DispatchSpec → Requirement → Run → stage r
         .list({ where: 'work_id = ?', params: [sent.workId] })
         .filter((run) => run.role !== 'chief'),
     ).toHaveLength(0);
+  });
+
+  it('wakes the parent Chief Run when a join=all child settles, through the daemon trigger (AC-046)', async () => {
+    await bootStack('join');
+    const opened = project;
+    const running = execution;
+    if (opened === undefined || running === undefined) throw new Error('unreachable');
+    const store = opened.store;
+    const sent = sendMessage('please implement the dark theme in src/theme');
+
+    const chiefRun = await waitFor(() =>
+      store.runs.list({ where: "work_id = ? AND role = 'chief'", params: [sent.workId] }).at(-1),
+    );
+    // Two real children of the Chief Run, both `join=all` and required — dispatched by the
+    // scripted Runner through the real control channel, not seeded.
+    const children = await waitFor(() => {
+      const rows = store.runs.list({ where: 'parent_run_id = ?', params: [chiefRun.id] });
+      return rows.length === 2 ? rows : undefined;
+    });
+    const backend = children.find((run) => run.role === 'backend');
+    const review = children.find((run) => run.role === 'review');
+    if (backend === undefined || review === undefined) throw new Error('unreachable');
+    for (const child of [backend, review]) {
+      expect(child.join).toBe('all');
+      expect(child.requiredChild).toBe(true);
+      expect(child.budgetAllocation).toBeGreaterThan(0);
+    }
+
+    // The sibling delivers through a real `stage.submit` and settles `completed`.
+    const sibling = await waitFor(() => {
+      const row = store.runs.find(backend.id);
+      return row?.status === 'completed' ? row : undefined;
+    });
+    expect(sibling.status).toBe('completed');
+    // The required child ends twice without a structured submission: `contract_violation`.
+    const violated = await waitFor(() => {
+      const row = store.runs.find(review.id);
+      return row?.status === 'contract_violation' ? row : undefined;
+    });
+    expect(violated.status).toBe('contract_violation');
+
+    // The *production* trigger (the supervisor's settled hook wired in `execution.ts`) moved
+    // the parent: with a live `join=all` child it must leave `running` for `waiting_children`,
+    // and it stays there because a required child failed. No test calls the coordinator.
+    const waiting = await waitFor(() => {
+      const row = store.runs.find(chiefRun.id);
+      return row?.status === 'waiting_children' ? row : undefined;
+    });
+    expect(waiting.status).toBe('waiting_children');
+    expect(
+      store.events
+        .readAfter(0, { limit: 5_000 })
+        .filter((event) => event.name === 'run.ended' && event.entityId === chiefRun.id),
+    ).toHaveLength(0);
+
+    // `protocol.md` §7 `chief_action_required`: filed exactly once, carrying the failing set
+    // and every child's delivery, so the sibling's result survives the failure.
+    const todos = store.events
+      .readAfter(0, { limit: 5_000 })
+      .filter((event) => event.name === 'chief_action_required');
+    expect(todos).toHaveLength(1);
+    expect(todos[0]?.entityId).toBe(chiefRun.id);
+    expect(todos[0]?.data).toMatchObject({
+      reason: 'required_child_failed',
+      failed: [review.id],
+      failedRequired: [review.id],
+    });
+    const reported = todos[0]?.data['children'] as unknown as readonly Record<string, unknown>[];
+    expect(reported.map((entry) => entry['runId']).sort()).toEqual([backend.id, review.id].sort());
+    expect(reported.find((entry) => entry['runId'] === backend.id)).toMatchObject({
+      role: 'backend',
+      status: 'completed',
+      join: 'all',
+      requiredChild: true,
+      stageResult: { status: 'success', summary: 'the dark theme is implemented' },
+    });
+    // The sibling's stage result is untouched in the database too.
+    expect(store.stageResults.list({ where: 'run_id = ?', params: [backend.id] })).toHaveLength(1);
+    expect(store.runs.find(review.id)?.status).toBe('contract_violation');
   });
 });

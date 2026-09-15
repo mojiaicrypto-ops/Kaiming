@@ -12,12 +12,15 @@
  * child fails through the documented two-invalid-submissions path (no `settleRun(…,'failed')`
  * shortcut), and the sibling delivers through a real accepted `stage.submit`.
  *
- * Honest scope note: the *trigger* is still missing in the daemon — no production caller
- * invokes `JoinCoordinator.onChildSettled` when a child Run reaches a terminal status — so
- * this is the strongest honest integration layer today; `docs/rules/agents.md` §3's
- * `waiting_children`/todo side is driven here by the service the supervisor is supposed to
- * call. The production guard that *is* wired (`RunLifecycle.end` refusing `completed` while a
- * live `join=all` child exists) is asserted below.
+ * Honest scope note: this file drives the coordinator's verdicts directly over the real
+ * services (one layer below the wire), and it asserts the production guard that is wired in
+ * the same place (`RunLifecycle.end` refusing `completed` while a live `join=all` child
+ * exists). The production *trigger* is no longer missing: `createProjectExecution` builds a
+ * `JoinCoordinator` and calls `onChildSettled` from the supervisor's settled hook
+ * (`packages/core/src/execution.ts`), so a settled child updates its parent Chief Run in the
+ * real daemon path. That path is proven end to end — scripted Runner child, real control
+ * channel, no direct coordinator call — by the `join` drill in
+ * `apps/daemon/test/assessment-dispatch.integration.test.ts`.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

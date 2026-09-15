@@ -48,9 +48,11 @@ import {
   SecretStore,
   TOOL_EVENTS,
   hashToolInput,
+  probeDockerAvailability,
   redactValue,
   scanForLeaks,
   secretEnvName,
+  type DockerAvailability,
   type GrantIssueInput,
   type ProcessResult,
   type ToolInvocation,
@@ -281,7 +283,17 @@ function makeHarness(): Harness {
     purposes: ['implementation'],
   });
   const executed: string[] = [];
-  const broker = new Broker({ store, grants, now: NOW });
+  // The file measures real availability once with a bounded wait (`measureDocker`); the
+  // Broker's per-call re-probe is the timing assumption that flipped the same class of case
+  // in `broker.integration.test.ts:505` under load — a probe slower than its 15 s budget
+  // refuses the call as PROVIDER_UNAVAILABLE before the container ever runs. Execution stays
+  // real: the container cases still run `docker run` (nothing here fakes the container).
+  const broker = new Broker({
+    store,
+    grants,
+    now: NOW,
+    docker: () => DOCKER.availability,
+  });
 
   const harness: Harness = {
     workspace,
@@ -347,22 +359,65 @@ function makeHarness(): Harness {
   return harness;
 }
 
-function dockerStatus(): { readonly ready: boolean; readonly reason: string } {
-  const version = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], {
-    encoding: 'utf8',
-  });
-  if (version.status !== 0) {
-    return { ready: false, reason: 'the docker daemon is not reachable on this host' };
+interface DockerState {
+  readonly ready: boolean;
+  readonly reason: string;
+  /** The measured availability the harness hands to the Broker's injectable probe. */
+  readonly availability: DockerAvailability;
+}
+
+/** How long the file waits for a real `docker version` answer before skipping. */
+const DOCKER_PROBE_DEADLINE_MS = 60_000;
+/** Interval between real probes while the daemon is slow; never a substitute for one. */
+const DOCKER_PROBE_INTERVAL_MS = 1_000;
+
+/** Blocks the calling thread; module scope cannot await. */
+function waitMs(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Measures real Docker availability **once**, with a bounded wait on the real probe.
+ *
+ * The Broker re-probes `docker version` on *every* container call through
+ * `probeDockerAvailability`, with its own 15 s budget, and refuses the call with
+ * `PROVIDER_UNAVAILABLE` **before** executing anything when that probe does not answer in
+ * time. A Docker VM under load can answer later than 15 s: that is the same test-side timing
+ * assumption `broker.integration.test.ts` fixed after `:505` failed with
+ * `spawnSync docker ETIMEDOUT`. Availability is therefore measured here with the product's
+ * own probe (retried only on a real ETIMEDOUT, until the deadline) and handed to the Broker
+ * through its injectable `docker` seam, so the container path still executes for real.
+ *
+ * The refusal path keeps deterministic coverage in `permissions-failures.test.ts`, and the
+ * probe itself in the `apps/cli` doctor integration.
+ */
+function measureDocker(): DockerState {
+  const imagePresent = (): boolean =>
+    spawnSync('docker', ['image', 'inspect', EXEC_IMAGE], { encoding: 'utf8' }).status === 0;
+  const deadline = Date.now() + DOCKER_PROBE_DEADLINE_MS;
+  for (;;) {
+    const last = probeDockerAvailability(EXEC_IMAGE);
+    if (last.available) {
+      return imagePresent()
+        ? { ready: true, reason: '', availability: last }
+        : {
+            ready: false,
+            reason: `the execution image ${EXEC_IMAGE} is not built locally`,
+            availability: last,
+          };
+    }
+    // A daemon that is *down* fails fast and must not hold the suite for a minute; only a
+    // probe that timed out is worth waiting on (that is the load condition).
+    const timedOut = last.reason.includes('ETIMEDOUT');
+    if (!timedOut || Date.now() >= deadline) {
+      return { ready: false, reason: last.reason, availability: last };
+    }
+    waitMs(DOCKER_PROBE_INTERVAL_MS);
   }
-  const image = spawnSync('docker', ['image', 'inspect', EXEC_IMAGE], { encoding: 'utf8' });
-  if (image.status !== 0) {
-    return { ready: false, reason: `the execution image ${EXEC_IMAGE} is not built locally` };
-  }
-  return { ready: true, reason: '' };
 }
 
 /** Probed once, so Docker-backed cases `skipIf` instead of failing the suite. */
-const DOCKER = dockerStatus();
+const DOCKER = measureDocker();
 if (!DOCKER.ready) {
   console.warn(`[permissions.integration] container cases skipped: ${DOCKER.reason}`);
 }

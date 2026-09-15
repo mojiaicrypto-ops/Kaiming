@@ -36,6 +36,7 @@ import {
 } from './control-http.js';
 import { ProtocolError } from './errors.js';
 import { GrantStore } from './grants.js';
+import { JoinCoordinator } from './join.js';
 import { ToolGrantService, type EnsureRunGrantsResult } from './permissions.js';
 import { ReadLedgerRegistry } from './read-ledger.js';
 import type { PermissionRequestHandler } from './control-http.js';
@@ -300,6 +301,10 @@ export async function createProjectExecution(
   // binding a stage result reports (`AC-085`).
   const readLedgers = new ReadLedgerRegistry({ store: options.store });
   const stageGate = new StageGate({ store: options.store, lifecycle, readLedgers });
+  // One JoinCoordinator per stack: the production caller of `onChildSettled` is the
+  // supervisor's settled hook below, so an `agents.md` §3 `join=all` parent really moves to
+  // `waiting_children` (and back, or to a `chief_action_required` todo) in the daemon path.
+  const joins = new JoinCoordinator({ store: options.store });
   const supervisorHolder: { current?: RunnerSupervisor } = {};
   const attached = options.control?.attach({
     orchestrator,
@@ -411,9 +416,29 @@ export async function createProjectExecution(
       }
       options.control?.onAttemptStarted?.(input);
     },
-    ...(options.control?.onRunSettled === undefined
-      ? {}
-      : { onRunSettled: options.control.onRunSettled }),
+    // `agents.md` §3 / `join.ts`: a settled child Run updates its parent Chief Run
+    // (`running → waiting_children` while a `join=all` sibling is outstanding, back to
+    // `running` once every child is terminal, and a `chief_action_required` event when a
+    // required child failed) — the `waiting_children`/join semantics `protocol.md` §6 and
+    // `reliability.md` name. The supervisor is the only place the production path observes a
+    // child's terminal status, so the trigger is wired here: `JoinCoordinator.onChildSettled`
+    // had no production caller. A root Run (or a non-Chief parent) is not a join, so its
+    // verdict is reported and never thrown into the settle path.
+    onRunSettled: (input) => {
+      try {
+        const outcome = joins.onChildSettled(input.runId);
+        if (outcome.kind !== 'orphan') {
+          log(
+            `execution: join after ${input.runId} settled → ${outcome.kind} (parent ${outcome.parentRunId})`,
+          );
+        }
+      } catch (error) {
+        log(
+          `execution: join update failed for ${input.runId}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      options.control?.onRunSettled?.(input);
+    },
     usage,
     // `reliability.md` §2: revoking the capability is part of ending an Attempt, and the
     // endpoint re-checks the Attempt anyway (defence in depth).
