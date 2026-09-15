@@ -58,6 +58,9 @@ describe('role contract sentence (WP-12 T2-fix-delivery)', () => {
     expect(sentence).toContain('use `request_dispatch` only when the work genuinely needs');
     // The honest blocked delivery is named, so a role that cannot act still delivers.
     expect(sentence).toContain('`status=failed` or `needs_input`');
+    // The Product/Plan stages run before any Task exists, so their file tools have no
+    // Grant yet; the context channel is the documented way to read there (WP-12 W4).
+    expect(sentence).toContain('read the sources you need through `context.request`');
   });
 
   it('keeps the Chief contract on assessment_submit plus agent_dispatch', () => {
@@ -69,5 +72,13 @@ describe('role contract sentence (WP-12 T2-fix-delivery)', () => {
     expect(sentence).toContain('canonical stage of that role');
     expect(sentence).toContain('backend|frontend→develop-L1/develop-L2/develop-L3');
     expect(sentence).toContain('readable context and it can never deliver');
+    // `workflow.md` §3: the L2/L3 code route is Product→Plan→Develop, and the develop Run's
+    // Task/Grant come from the approved Plan — so the Chief may not dispatch it first.
+    expect(sentence).toContain('Route order is not optional for an L2/L3 code delivery');
+    expect(sentence).toContain('dispatch `planning` first');
+    expect(sentence).toContain('before an approved Plan exists');
+    // The Chief must survive each stage to trigger the next one, and a 'none' dispatch lets
+    // its Run end before an approved Plan can reach its develop Run.
+    expect(sentence).toContain("joinPolicy: 'all'");
   });
 });

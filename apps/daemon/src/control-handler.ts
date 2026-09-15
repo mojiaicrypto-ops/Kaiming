@@ -46,6 +46,8 @@ import {
 import { sha256, withTransaction, type ProjectStore } from '@agentdev/storage';
 import type { WorktreeGitPort } from '@agentdev/workspace';
 
+import { workWriterLeaseResource } from './tool-handler.js';
+
 /** What the daemon supplies to build the control handlers. */
 export interface ControlHandlerOptions {
   readonly store: ProjectStore;
@@ -880,6 +882,24 @@ export function createControlHandlers(options: ControlHandlerOptions): ControlHa
             payload: result,
           });
           if (outcome.accepted) {
+            // The delivery is accepted, so this Attempt is done writing: release the Work's
+            // single-writer lease now. Under the L2 route the next stage's Run (Core queues
+            // the develop Run from the approved Plan) starts immediately, and a lease held
+            // for the rest of its TTL would make that Run spend its first turns on `BUSY`
+            // refusals — a real delivery would then depend on the model out-retrying the
+            // lease, which it does not reliably do under load (WP-12 W4). Releasing a lease
+            // this Attempt holds takes no authority away from anyone else.
+            try {
+              store.leases.release(
+                workWriterLeaseResource(run.projectId, run.workId),
+                caller.attemptId,
+                caller.epoch,
+              );
+            } catch (error) {
+              log(
+                `control: could not release the writer lease of Work ${run.workId}: ${errorText(error)}`,
+              );
+            }
             // The stage is recorded; the Task's candidate commit follows so the
             // integration has a verified revision to cherry-pick (`reliability.md` §4).
             commitTaskCandidate({

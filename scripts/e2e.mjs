@@ -1860,7 +1860,12 @@ async function runChecks({ checks, harness, product, meta }) {
         toolSubset: [],
         contextLimit: 32_000,
       };
-      harness.config.update('global', { roleOverrides: { chief: role, backend: role } });
+      // `workflow.md` §3: the Chief's first professional dispatch for an L2 code delivery is
+      // the Plan stage, so the planning role needs a model profile too (previously only
+      // chief+backend were configured because the stub dispatched the implementer directly).
+      harness.config.update('global', {
+        roleOverrides: { chief: role, planning: role, backend: role },
+      });
 
       const runnerEntry = join(makeTempDir('agentdev-e2e-r32-runner-'), 'runner-entry.mjs');
       writeFileSync(
@@ -1995,6 +2000,14 @@ async function runChecks({ checks, harness, product, meta }) {
         ensure(
           professional.parentRunId === chiefRun.id,
           `the professional Run's parent is ${String(professional.parentRunId)}`,
+        );
+        // `workflow.md` §3: an L2 code delivery runs Product→Plan→Develop, so the Chief's
+        // first professional dispatch is the Plan stage, never the implementer. Core
+        // refuses a develop dispatch with no Plan Task (`orchestrator.enforceRouteOrder`),
+        // so a stub that dispatched backend here would leave the chain with no Run at all.
+        ensure(
+          professional.role === 'planning' && professional.stage === 'planning',
+          `the Chief's first professional dispatch is ${professional.role}/${professional.stage}, not the L2 route's Plan stage`,
         );
 
         // 4. The professional Attempt delivered through `stage.submit`.
@@ -2382,6 +2395,25 @@ async function runChecks({ checks, harness, product, meta }) {
           { idempotencyKey: `e2e-g8-${String(Date.now())}` },
         );
         const workId = sent.workId;
+        // `workflow.md` §3: the develop Run's Task is the approved Plan's output, and
+        // `orchestrator.enforceRouteOrder` refuses a develop dispatch without it (the
+        // routing fix WP-12 W4). This drill needs a Tasked implementer Run to exercise the
+        // Broker, so the Plan's Task is seeded before the Chief's dispatch lands.
+        const g8Work = harness.store.works.find(workId);
+        if (g8Work !== undefined) {
+          harness.store.tasks.insert({
+            id: harness.store.newId(),
+            projectId: g8Work.projectId,
+            workId,
+            planRef: { id: harness.store.newId(), version: 1, hash: 'c'.repeat(64) },
+            role: 'backend',
+            dependsOn: [],
+            dependencyManifestRefs: [],
+            scope: { readPaths: [DOC], writePaths: [DOC], operations: [], networkTargets: [] },
+            stage: 'develop',
+            acceptanceIds: ['AC-032'],
+          });
+        }
         await waitFor(
           () =>
             harness.store.events
@@ -2398,9 +2430,9 @@ async function runChecks({ checks, harness, product, meta }) {
               .find((run) => run.role !== 'chief'),
           'the professional Run dispatched by the Chief',
         );
-        // The Run reaches a **typed terminal state**, not `waiting_permission`: with no Task
-        // there was nothing a permission request could bind, and `ToolGrantService` refuses
-        // such a request instead of creating a pending Decision (G8 ruling).
+        // The Run reaches a **typed terminal state**, not `waiting_permission`: the write
+        // was never approved by the Plan gate, so the only honest delivery is a typed
+        // failure, and no pending permission Decision is left with nothing to bind.
         const settled = await waitFor(
           () => {
             const current = harness.store.runs.find(professional.id);
@@ -2431,7 +2463,7 @@ async function runChecks({ checks, harness, product, meta }) {
         );
         ensure(
           settled === 'contract_violation' || settled === 'failed',
-          `the undispatched Run ended as ${settled} instead of a typed failure`,
+          `the Run with an approved-Plan Task ended as ${settled} instead of a typed failure`,
         );
         ensure(
           harness.store.decisions.list({
@@ -2518,7 +2550,7 @@ async function runChecks({ checks, harness, product, meta }) {
           'the Grant revocation',
         );
 
-        return `G8 on the real path: message ${sent.messageId} → Chief assessment → professional Run ${professional.id} (${String(runs.length)} Runs, 0 grandchildren, settled ${settled}) through the real Broker: refused ${[...new Set(codes)].join('/')} (readScope, unapproved Plan, no Grant), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[${chiefFace.join(',')}] worker=[${workerFace.join(',')}]; Grants revoked when the Attempt ended`;
+        return `G8 on the real path: message ${sent.messageId} → Chief assessment → professional Run ${professional.id} (Plan-Tasked, ${String(runs.length)} Runs, 0 grandchildren, settled ${settled}) through the real Broker: refused ${[...new Set(codes)].join('/')} (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[${chiefFace.join(',')}] worker=[${workerFace.join(',')}]; Grants revoked when the Attempt ended`;
       } finally {
         await execution.stop();
       }

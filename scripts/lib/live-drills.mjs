@@ -702,7 +702,24 @@ export async function runL1Drill({ harness, product }) {
     `the delivery branch is at ${deliveryRevision(harness.repo)}`,
   );
 
-  // 5. No Planning/Test Run exists anywhere in this Work: the L1 lane is one internal
+  // 5. The lane really ended in *successful* stages, not merely in a settled ref:
+  //    `submitStage` already refuses a non-success payload, and this names the three
+  //    `stage.completed` events so the record cannot read "settled" as "a stage failed
+  //    along the way" (WP-12 W4).
+  const completedStageIds = new Set([developRow.id, reviewRow.id, settlementRow.id]);
+  const completedEvents = store.events
+    .readAfter(0, { limit: 20_000 })
+    .filter(
+      (event) =>
+        event.name === 'stage.completed' &&
+        completedStageIds.has(String(event.data['stageResultId'])),
+    );
+  ensure(
+    completedEvents.length === 3,
+    `the L1 lane emitted ${String(completedEvents.length)}/3 stage.completed events for Develop/Review/Settlement`,
+  );
+
+  // 6. No Planning/Test Run exists anywhere in this Work: the L1 lane is one internal
   //    exec Run, one independent Review and one Settlement.
   const runs = runsOfWork(store, workId);
   const stages = runs.map((run) => `${run.role}:${run.stage}`);
@@ -1702,11 +1719,76 @@ export async function runMessageToStageDrill({ harness, product }) {
           log: (line) => harness.controlLog.push(line),
         }),
       onAttemptStarted: ({ runId }) => markMessageProcessing(store, runId),
-      onRunSettled: ({ runId, status }) => markMessageSettled(store, runId, status),
+      // The production wiring (`main.ts`): a `plan.approve` can race the Chief Run's end,
+      // and the approved Plan must still reach its develop Run. The drill reproduces it so
+      // it tests the daemon production actually runs (WP-12 W4).
+      onRunSettled: ({ runId, status }) => {
+        markMessageSettled(store, runId, status);
+        const settled = store.runs.find(runId);
+        if (settled?.role !== 'chief') return;
+        const resumed = harness.protocol.resumeApprovedPlan(settled.workId);
+        harness.controlLog.push(
+          `drill: Chief Run ${runId} settled; resumeApprovedPlan=${JSON.stringify(resumed)}`,
+        );
+      },
     },
   });
   harness.protocol.attachOrchestrator(execution.orchestrator);
   harness.protocol.attachGateway(execution.gateway);
+  // The production wiring (`main.ts`): the workbench's `permission.respond` is what turns
+  // the user's approval into the `once` Grant that admits the refused call. The drill is
+  // the user for exactly this decision, so without the bridge a real Run that honestly
+  // asks permission can only park and the drill cannot answer it (WP-12 W4).
+  harness.protocol.attachToolBridge({
+    requestPermission: (input) => {
+      const decided = execution.grantService.requestPermission(input);
+      return {
+        decisionId: decided.decisionId,
+        version: decided.version,
+        state: decided.state,
+        blockerAttached: decided.blockerAttached,
+        ...(decided.runStatus === undefined ? {} : { runStatus: decided.runStatus }),
+      };
+    },
+    respondPermission: (input) => {
+      if (input.choice === 'deny') {
+        const denied = execution.grantService.denyPermission(
+          input.decisionId,
+          input.runId,
+          input.reason,
+        );
+        return {
+          decisionId: denied.decisionId,
+          version: denied.version,
+          state: denied.state,
+          blockerAttached: denied.blockerAttached,
+          ...(denied.runStatus === undefined ? {} : { runStatus: denied.runStatus }),
+        };
+      }
+      const approved = execution.grantService.approvePermission({
+        decisionId: input.decisionId,
+        operation: input.operation,
+        runId: input.runId,
+        role: input.role,
+        stage: input.stage,
+        targets: input.targets,
+        toolOperationId: input.toolOperationId,
+        inputHash: input.inputHash,
+        expiresAt: input.expiresAt,
+        ...(input.scope === undefined ? {} : { scope: input.scope }),
+        ...(input.limits === undefined ? {} : { limits: input.limits }),
+      });
+      return {
+        decisionId: approved.decisionId,
+        version: approved.version,
+        state: approved.state,
+        blockerAttached: approved.blockerAttached,
+        ...(approved.grant === undefined ? {} : { grantId: approved.grant.id }),
+        ...(approved.runStatus === undefined ? {} : { runStatus: approved.runStatus }),
+      };
+    },
+    cleanupRun: (runId) => execution.cleanupRun(runId),
+  });
 
   const waitFor = async (predicate, what, timeoutMs = 240_000) => {
     const deadline = Date.now() + timeoutMs;
@@ -1730,11 +1812,16 @@ export async function runMessageToStageDrill({ harness, product }) {
       // Explicitly a delivery request: a real model has classified shorter wording as
       // `assist`/`artifact` (both correctly create no Requirement), which would make the
       // drill assert the wrong routing rather than the chain.
+      // The request must also be *true of the seeded tree*: the Planning/Backend model reads
+      // the file before it plans, and a premise the file does not support earns an honest
+      // `needs_input` (observed: "there is no exported cancellation message"), which is a
+      // failed stage rather than a passing chain.
       body: [
         'This is a code delivery request (intent=delivery, L2), not a question and not a',
-        'documentation task: modify the implementation of the existing file',
-        `${CODE_PATH} so its exported cancellation message includes the word "dark"`,
-        'instead of the current wording. Change the existing code in place.',
+        `documentation task: change the implementation of the existing file ${CODE_PATH} so`,
+        'the exported cancel(orderId) function returns true when the order with that id is',
+        'unpaid (status "unpaid"), and false when the order is paid or the id is unknown.',
+        'Change the existing code in place.',
         'Use your tools to submit the delivery.',
       ].join(' '),
       attachmentIds: [],
@@ -1794,22 +1881,103 @@ export async function runMessageToStageDrill({ harness, product }) {
       requirement.lifecycle === 'active' && requirement.phase === 'plan',
       `the Requirement is ${requirement.lifecycle}/${String(requirement.phase)}`,
     );
-    const professional = await waitFor(
-      () =>
-        store.runs
-          .list({ where: 'work_id = ?', params: [workId] })
-          .find((run) => run.role !== 'chief'),
+    // ---- the L2 route as the real Chief actually walks it --------------------------
+    //
+    // `workflow.md` §3: an L2 code delivery runs Product→Plan→Develop→…, and a develop
+    // Run's Task and file Grants are materialised by `plan.approve` — Core queues that Run
+    // itself once the Plan gate approved the Plan (`protocol.md` `plan.approve`, Q3=A).
+    // So this drill requires, in order: the Chief's first professional dispatch is a
+    // pre-development stage; the Plan stage delivers `success`; the drill acts as the
+    // *user* at the Plan gate (the one decision the route asks a user for); and the
+    // develop Run Core queues delivers `stage.completed`. A `stage.failed`/`needs_input`
+    // anywhere in that chain fails the drill instead of being counted as chain success.
+    const professionalRuns = () =>
+      store.runs
+        .list({
+          where: 'work_id = ?',
+          params: [workId],
+          // Creation order: the repository applies no ORDER BY by default, and the route
+          // assertion below is about *which stage came first*.
+          orderBy: 'created_at ASC, id ASC',
+        })
+        .filter((run) => run.role !== 'chief');
+    const stageResultOf = (runId) =>
+      store.stageResults.list({ where: 'run_id = ?', params: [runId] })[0];
+    const stageEventOf = (runId) =>
+      store.events
+        .readAfter(0, { limit: 20_000 })
+        .find(
+          (event) =>
+            event.entityId === runId &&
+            (event.name === 'stage.completed' || event.name === 'stage.failed'),
+        );
+    /** The full daemon-side story of a Run that delivered nothing (WP-12 R7 diagnostics). */
+    const describeNoStage = (run) => {
+      const describeAttempt = (attempt) =>
+        `${attempt.status}/epoch${String(attempt.ownerEpoch)}/runner=${String(attempt.runnerId ?? '-')}/beat=${String(attempt.heartbeatAt ?? '-')}/finished=${String(attempt.finishedAt ?? '-')}`;
+      const allRuns = store.runs.list({ where: 'work_id = ?', params: [workId] });
+      const runs = allRuns
+        .map(
+          (entry) =>
+            `${entry.role}/${entry.stage}/${entry.purpose}#${entry.id.slice(0, 8)}:${entry.status}:parent=${String(entry.parentRunId ?? '-').slice(0, 8)}`,
+        )
+        .join(',');
+      const stageSummary = allRuns
+        .map(
+          (entry) =>
+            `${entry.id.slice(0, 8)}=${
+              store.stageResults
+                .list({ where: 'run_id = ?', params: [entry.id] })
+                .map((row) => `${row.status}/${row.id.slice(0, 8)}`)
+                .join('+') || 'none'
+            }`,
+        )
+        .join(',');
+      const stageRejections = store.events
+        .readAfter(0, { limit: 20_000 })
+        .filter(
+          (event) =>
+            event.name === 'stage.failed' &&
+            event.entityId === run.id &&
+            event.data['outcome'] === 'schema_invalid',
+        )
+        .map((event) => `#${String(event.data['rejection'])}: ${String(event.data['reason'])}`)
+        .join(' | ');
+      const full = harness.controlLog.join('\n');
+      let dump;
+      const relative = join('.agentdev', 'work', 'WP-12', 'live-message-to-stage-failure.log');
+      try {
+        writeFileAt(process.cwd(), relative, `${full}\n`);
+        dump = `; full log: ${join(process.cwd(), relative)}`;
+      } catch (error) {
+        dump = `; full log could not be written: ${error instanceof Error ? error.message : String(error)}`;
+      }
+      const lost = /silent for over \d+ms/u.test(full)
+        ? 'the lease sweep declared the Attempt lost while silent'
+        : 'no lease sweep fired; the Attempt status is closing bookkeeping after a terminal Run';
+      return `no stage result: ${run.role} Run ${run.id.slice(0, 8)} is ${String(store.runs.find(run.id)?.status)} (attempts: ${store.attempts
+        .list({ where: 'run_id = ?', params: [run.id] })
+        .map(describeAttempt)
+        .join(
+          ',',
+        )}); lost=${lost}; runs=[${runs}]; stages=[${stageSummary}]; stageRejections=[${stageRejections === '' ? 'none' : stageRejections}]; control log tail: ${full.slice(-2500)}${dump}`;
+    };
+
+    const first = await waitFor(
+      () => professionalRuns()[0],
       'the professional Run the real Chief dispatched',
     );
     ensure(
-      professional.parentRunId === chiefRun.id,
-      `the professional Run's parent is ${String(professional.parentRunId)}`,
+      first.parentRunId === chiefRun.id,
+      `the professional Run's parent is ${String(first.parentRunId)}`,
     );
-    const stageDeadline = Date.now() + 240_000;
-    let stageResult = store.stageResults.list({
-      where: 'run_id = ?',
-      params: [professional.id],
-    })[0];
+    // The routing gap this drill exists to close: the real Chief used to dispatch the
+    // implementer first, which left the Work with no Plan, no Task and no Grant.
+    ensure(
+      first.role === 'planning' || first.role === 'product',
+      `the real Chief's first professional dispatch is ${first.role}/${first.stage}: workflow.md §3 routes an L2 code delivery through Product→Plan→Develop, and a develop Run has no Task or file Grant before the Plan gate approves a Plan`,
+    );
+
     // The drill is the user for the one thing a real user is asked to decide: an operation the
     // Run is not authorized for yet. It answers through the real workbench protocol, at most
     // five times, and every answer is logged — so the evidence shows what the user was asked
@@ -1834,127 +2002,145 @@ export async function runMessageToStageDrill({ harness, product }) {
         );
       }
     };
-    while (stageResult === undefined && Date.now() < stageDeadline) {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      await approvePendingPermissions();
-      stageResult = store.stageResults.list({ where: 'run_id = ?', params: [professional.id] })[0];
-    }
-    if (stageResult === undefined) {
-      // The professional Attempt did not deliver. Report its real status and what the
-      // control channel saw, so the next step is a decision, not a guess.
-      const run = store.runs.find(professional.id);
-      const describeAttempt = (attempt) =>
-        `${attempt.status}/epoch${String(attempt.ownerEpoch)}/runner=${String(attempt.runnerId ?? '-')}/beat=${String(attempt.heartbeatAt ?? '-')}/finished=${String(attempt.finishedAt ?? '-')}`;
-      const attempts = store.attempts
-        .list({ where: 'run_id = ?', params: [professional.id] })
-        .map(describeAttempt)
-        .join(',');
-      // The workbench may hold **more than one** professional Run (a real model can dispatch
-      // twice): the picked Run's verdict is not the whole story, so every Run of the Work and
-      // every stage result is reported. A stage result on a sibling Run means the chain really
-      // delivered and the drill's choice of Run is what needs explaining (WP-12 R9).
-      const allRuns = store.runs.list({ where: 'work_id = ?', params: [workId] });
-      const runs = allRuns
-        .map(
-          (entry) =>
-            `${entry.role}#${entry.id.slice(0, 8)}:${entry.status}:parent=${String(entry.parentRunId ?? '-').slice(0, 8)}`,
-        )
-        .join(',');
-      const stageSummary = allRuns
-        .map(
-          (entry) =>
-            `${entry.id.slice(0, 8)}=${
-              store.stageResults
-                .list({ where: 'run_id = ?', params: [entry.id] })
-                .map((row) => `${row.status}/${row.id.slice(0, 8)}`)
-                .join('+') || 'none'
-            }`,
-        )
-        .join(',');
-      const attemptSummary = allRuns
-        .map(
-          (entry) =>
-            `${entry.id.slice(0, 8)}:[${store.attempts
-              .list({ where: 'run_id = ?', params: [entry.id] })
-              .map(describeAttempt)
-              .join(' ')}]`,
-        )
-        .join(' ');
-      const events = store.events
-        .readAfter(0, { limit: 20_000 })
-        .filter(
-          (event) =>
-            event.entityId === professional.id ||
-            event.name === 'run.queued' ||
-            event.name === 'run.started' ||
-            event.name === 'run.recovered' ||
-            event.name.startsWith('stage.') ||
-            event.name === 'contract_violation',
-        )
-        .slice(-12)
-        .map((event) => `${event.name}@${event.entityId.slice(0, 8)}`)
-        .join(',');
-      // A Run can also reach `contract_violation` because `stage.submit` refused the model's
-      // payload twice (`rules/agents.md` §4: the first Schema failure is correctable, the
-      // second is the violation). That refusal carries the exact Zod issues in the
-      // `stage.failed` event, and without them a real delivery failure looks like a model
-      // that never called the tool at all (WP-12 T2-fix-delivery).
-      const stageRejections = store.events
-        .readAfter(0, { limit: 20_000 })
-        .filter(
-          (event) =>
-            event.name === 'stage.failed' &&
-            event.entityId === professional.id &&
-            event.data['outcome'] === 'schema_invalid',
-        )
-        .map((event) => `#${String(event.data['rejection'])}: ${String(event.data['reason'])}`)
-        .join(' | ');
-      // The acceptance aggregation prints only the last 12 lines of a drill's output, so the
-      // whole daemon-side story (`supervisor:`/`control-endpoint:`/`gateway-proxy:`) is also
-      // written to a file next to the drill results. Without it a timing failure (a submit that
-      // landed after the Run went terminal) is indistinguishable from a model that never
-      // submitted — the exact ambiguity this drill exists to remove (WP-12 R7).
-      const full = harness.controlLog.join('\n');
-      let dump = '';
-      const relative = join('.agentdev', 'work', 'WP-12', 'live-message-to-stage-failure.log');
-      try {
-        // `writeFileAt(root, relativePath, content)`: the root is the repo this drill runs in.
-        writeFileAt(process.cwd(), relative, `${full}\n`);
-        dump = `; full log: ${join(process.cwd(), relative)}`;
-      } catch (error) {
-        dump = `; full log could not be written: ${error instanceof Error ? error.message : String(error)}`;
+
+    /**
+     * Waits for one Run's stage result and refuses anything but a real success.
+     *
+     * `protocol.md` §7: `stage.completed` is a success, any other terminal status is
+     * `stage.failed`. This drill is the L2 delivery's evidence, so a `needs_input`/`failed`
+     * delivery is a failed chain — the earlier version accepted it as "a real delivery".
+     */
+    const awaitSuccessfulStage = async (run, timeoutMs = 300_000) => {
+      const deadline = Date.now() + timeoutMs;
+      let row = stageResultOf(run.id);
+      while (row === undefined && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        await approvePendingPermissions();
+        row = stageResultOf(run.id);
       }
-      // Tell a real lease loss apart from the closing bookkeeping of a verdict: the sweep
-      // logs `silent for over <lease>ms` and nothing else marks an Attempt lost (WP-12 R9).
-      const lost = /silent for over \d+ms/u.test(full)
-        ? 'the lease sweep declared the Attempt lost while silent'
-        : 'no lease sweep fired; the Attempt status is closing bookkeeping after a terminal Run';
-      throw new Error(
-        `no stage result: professional Run ${professional.id.slice(0, 8)} is ${String(run?.status)} (attempts: ${attempts}); lost=${lost}; runs=[${runs}]; stages=[${stageSummary}]; attempts=[${attemptSummary}]; stageRejections=[${stageRejections === '' ? 'none' : stageRejections}]; events=[${events}]; control log tail: ${full.slice(-2500)}${dump}`,
+      if (row === undefined) throw new Error(describeNoStage(run));
+      ensure(
+        row.status === 'success',
+        `${run.role}/${run.stage} delivered stage.${row.status === 'success' ? 'completed' : 'failed'}(${String(row.status)}), not a successful stage: ${String(row.summary)}`,
+      );
+      const event = stageEventOf(run.id);
+      ensure(
+        event?.name === 'stage.completed',
+        `${run.role}/${run.stage} has no stage.completed event (got ${String(event?.name)})`,
+      );
+      return row;
+    };
+
+    // The Plan stage: a `product` stage may come first; both must succeed.
+    const chainRoles = [];
+    let planRun = first.role === 'planning' ? first : undefined;
+    if (planRun === undefined) {
+      await awaitSuccessfulStage(first);
+      chainRoles.push(`${first.role}:success`);
+      planRun = await waitFor(
+        () => professionalRuns().find((run) => run.role === 'planning'),
+        'the Plan stage Run after the Product stage',
       );
     }
-    // `protocol.md` §7: a success is `stage.completed`, any other terminal status is
-    // `stage.failed`. The real model's delivery may honestly be `needs_input`/`failed`.
-    const stageEvents = store.events
-      .readAfter(0, { limit: 20_000 })
-      .filter(
-        (event) =>
-          event.entityId === professional.id &&
-          (event.name === 'stage.completed' || event.name === 'stage.failed'),
-      );
-    ensure(
-      stageEvents.length > 0,
-      `no terminal stage event was emitted for the professional Run (stage result status ${String(stageResult.status)})`,
+    const planStage = await awaitSuccessfulStage(planRun);
+    chainRoles.push(`planning:${planStage.status}`);
+    // A real user decides the Plan after the Plan stage has finished, and `plan.approve`
+    // needs the Chief Run's *unallocated* budget — which the still-live planning child
+    // holds until it settles. Approving the instant the stage result lands made the
+    // hand-off depend on that race (`BUDGET_EXCEEDED: … no unallocated budget left`).
+    await waitFor(
+      () => (store.runs.find(planRun.id)?.status === 'completed' ? true : undefined),
+      `the Plan Run ${planRun.id} to settle before the user decides`,
     );
-    const stageOutcome = `${stageEvents[0].name}(${String(stageResult.status)})`;
-    // Say what was proven and what was not: a `stage.failed` delivery is a real delivery — the
-    // chain (message → Chief → dispatch → stage result) is what this drill asserts, and the
-    // stage's own success is the model's judgement, not a precondition. Without this sentence a
-    // green row reads as "the stage succeeded", which the evidence does not show.
-    const stageVerdict =
-      stageEvents[0].name === 'stage.completed'
-        ? 'a successful stage was delivered'
-        : `a NON-successful stage (${String(stageResult.status)}) was delivered — this proves the chain, not a passing stage`;
+
+    // The user's Plan gate. The Plan body is the planning stage's own delivered
+    // conclusion; the write path is the one the user's message named. `planVersion: 0` is
+    // the first Plan of the Work (`plan.current` reports no approved Plan yet).
+    const workRow = store.works.find(workId);
+    const planGoal = String(
+      planStage.summary ?? workRow?.goal ?? 'plan the requested change',
+    ).slice(0, 500);
+    const planDraft = {
+      goal: planGoal,
+      scope: {
+        readPaths: [CODE_PATH],
+        writePaths: [CODE_PATH],
+        operations: ['read', 'edit'],
+        networkTargets: [],
+      },
+      tasks: [
+        {
+          id: store.newId(),
+          role: 'backend',
+          goal: planGoal,
+          paths: [CODE_PATH],
+          dependsOn: [],
+          acceptanceIds: [],
+          checks: [],
+        },
+      ],
+      interfaceChanges: [],
+      dataChanges: [],
+      risks: [],
+      rollback: [],
+    };
+    const approval = await harness.rpc('plan.approve', {
+      workId,
+      planVersion: 0,
+      plan: planDraft,
+      approval: {
+        authorizationRef: String(workRow?.authorizationRef ?? ''),
+        runId: planRun.id,
+        productChanged: false,
+      },
+    });
+    if (approval.frame.ok !== true) {
+      harness.controlLog.push(
+        `drill: plan.approve refused with ${String(approval.frame.error?.code)}: ${String(approval.frame.error?.message)}`,
+      );
+    }
+    const queuedRunId =
+      approval.frame.ok === true ? (approval.frame.result?.['runId'] ?? null) : null;
+    harness.controlLog.push(
+      `drill: the user approved Plan v0 for Work ${workId}; Core queued develop Run ${String(queuedRunId)}`,
+    );
+    let developRunId = queuedRunId;
+    if (developRunId === null) {
+      // `plan.approve` needs a live Chief parent; when the Chief Run ended first, the
+      // production recovery hook (`main.ts` `resumeApprovedPlan`) is what hands the
+      // approved Plan off. The drill calls the same method rather than inventing a path.
+      const resumed = harness.protocol.resumeApprovedPlan(workId);
+      harness.controlLog.push(
+        `drill: resumeApprovedPlan after approval → ${JSON.stringify(resumed)}`,
+      );
+      ensure(
+        typeof resumed.runId === 'string' && resumed.runId !== '',
+        `the L2 route stopped at the Plan gate: ${String(approval.frame.error?.message ?? 'no runId')}; resumeApprovedPlan=${JSON.stringify(resumed)}; route=${JSON.stringify(
+          professionalRuns().map((run) => `${run.role}/${run.stage}:${String(run.status)}`),
+        )}; chief=${String(store.runs.find(chiefRun.id)?.status)}; control log tail: ${harness.controlLog.join(' | ').slice(-1500)}`,
+      );
+      developRunId = resumed.runId;
+    }
+
+    const developRun = await waitFor(
+      () => professionalRuns().find((run) => run.id === developRunId),
+      'the develop Run the approved Plan queued',
+    );
+    // The route order itself: the Plan stage must precede the implementer.
+    ensure(
+      professionalRuns()
+        .map((run) => run.role)
+        .indexOf('planning') <
+        professionalRuns()
+          .map((run) => run.role)
+          .findIndex((role) => role === 'backend' || role === 'frontend'),
+      `the observed route is ${JSON.stringify(professionalRuns().map((run) => `${run.role}/${run.stage}`))}`,
+    );
+    const developStage = await awaitSuccessfulStage(developRun);
+    chainRoles.push(`${developRun.role}:${developStage.status}`);
+    const stageResult = developStage;
+    const professional = developRun;
+    const stageOutcome = `stage.completed(${String(stageResult.status)})`;
     if (process.env['AGENTDEV_LIVE_DUMP'] === '1') {
       // The turn-by-turn story of a *passing* run matters as much as a failing one: whether the
       // one corrective prompt had to be delivered is only visible here (WP-12 R7).
@@ -1973,8 +2159,21 @@ export async function runMessageToStageDrill({ harness, product }) {
       JSON.stringify(board).includes(requirement.id),
       'the board does not show the Requirement the real message created',
     );
-    return `real Provider no-seed chain: message ${sent.messageId} → Chief Run ${chiefRun.id} (${String(store.runs.find(chiefRun.id)?.status)}) → Requirement ${requirement.id} (active/plan) → professional Run ${professional.id} (parent ${chiefRun.id}) → stage result ${stageResult.id} + ${stageOutcome} (${stageVerdict}); provider calls=${String(harness.transport.summary())}`;
+    return `real Provider no-seed chain: message ${sent.messageId} → Chief Run ${chiefRun.id} (${String(store.runs.find(chiefRun.id)?.status)}) → Requirement ${requirement.id} (active/plan) → route ${chainRoles.join(' → ')} (developer Run ${professional.id} parent ${String(professional.parentRunId)}) → the user approved Plan v0 → stage result ${stageResult.id} + ${stageOutcome}; provider calls=${String(harness.transport.summary())}`;
   } finally {
+    // A failed run's turn-by-turn story is the evidence the next fix needs, so the dump is
+    // written on the way out either way (the success path already wrote it above).
+    if (process.env['AGENTDEV_LIVE_DUMP'] === '1') {
+      try {
+        writeFileAt(
+          process.cwd(),
+          join('.agentdev', 'work', 'WP-12', 'live-message-to-stage-control.log'),
+          `${harness.controlLog.join('\n')}\n`,
+        );
+      } catch {
+        // A diagnostic that cannot be written must not mask the drill's real result.
+      }
+    }
     await execution.stop();
   }
 }

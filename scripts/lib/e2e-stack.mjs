@@ -256,8 +256,11 @@ export async function bootStack({ product, meta, options = {} }) {
                 intent: 'delivery',
                 goal: `update ${G8_SRC} and ${G8_DOC}`,
                 scope: {
-                  readPaths: [G8_SRC, G8_DOC],
-                  writePaths: [G8_SRC, G8_DOC],
+                  // The envelope authorizes only the document; the Run's readScope still
+                  // asks for the source file, so the source read has no Grant and is
+                  // refused `NOT_AUTHORIZED` at the Broker (G8).
+                  readPaths: [G8_DOC],
+                  writePaths: [G8_DOC],
                   // The Work envelope must carry the file operations, or no run-scope file
                   // Grant is minted and every read is `NOT_AUTHORIZED` before the readScope
                   // check this drill is about can even run.
@@ -284,8 +287,8 @@ export async function bootStack({ product, meta, options = {} }) {
                 purpose: 'implementation',
                 goal: `update ${G8_SRC}`,
                 scope: {
-                  readPaths: [G8_SRC],
-                  writePaths: [G8_SRC],
+                  readPaths: [G8_DOC],
+                  writePaths: [G8_DOC],
                   operations: ['read', 'edit'],
                   networkTargets: [],
                 },
@@ -313,9 +316,11 @@ export async function bootStack({ product, meta, options = {} }) {
         }
         if (chiefTurn) return undefined;
         // The professional Run, one tool turn at a time.
+        // A path inside the Run's readScope but outside the Work's authorization: no Grant
+        // admits it, so the Broker refuses `NOT_AUTHORIZED`.
         if (toolTurns === 0) return toolCallMessage([toolCall('read', { path: G8_SRC })]);
-        // A path the Work's Grant covers (the message named it) but the Run's readScope does
-        // not: the bridge must refuse it at admission.
+        // A path the Work's Grant covers (the assessment authorized it) but the Run's
+        // readScope does not: the bridge must refuse it at admission.
         if (toolTurns === 1) return toolCallMessage([toolCall('read', { path: G8_DOC })]);
         // A write the Plan gate has not approved: refused without touching the source.
         if (toolTurns === 2) {
@@ -333,9 +338,11 @@ export async function bootStack({ product, meta, options = {} }) {
             }),
           ]);
         }
-        // Deliberately no `stage_yield`: a Run that was never dispatched through an approved
-        // Plan must end in a typed terminal state (`contract_violation`) instead of parking
-        // in `waiting_permission`, which is what this drill asserts.
+        // Deliberately no `stage_yield`: a Run whose Task comes from an approved Plan but
+        // whose write was never approved must end in a typed terminal state
+        // (`contract_violation`) instead of parking in `waiting_permission`, which is what
+        // this drill asserts (`orchestrator.enforceRouteOrder` now refuses the
+        // never-dispatched Run at the dispatch, so the drill seeds the Plan's Task).
         return undefined;
       })();
       const drillMessage = (() => {
@@ -365,23 +372,27 @@ export async function bootStack({ product, meta, options = {} }) {
           };
         }
         if (chiefTurn && toolTurns === 1) {
+          // `workflow.md` §3: an L2 code delivery runs Product→Plan→Develop, so the Chief's
+          // first professional dispatch is the planning stage. Dispatching the implementer
+          // here is refused by Core (`orchestrator.enforceRouteOrder`) because the develop
+          // Run's Task/Grant only exist after the Plan gate approved a Plan.
           return {
             role: 'assistant',
             content: '',
             tool_calls: [
               toolCall('agent_dispatch', {
-                role: 'backend',
-                purpose: 'implementation',
-                goal: 'write the dark theme file',
+                role: 'planning',
+                purpose: 'artifact',
+                goal: 'plan the dark theme file',
                 scope: {
                   readPaths: ['src'],
-                  writePaths: ['src/theme.txt'],
+                  writePaths: [],
                   operations: [],
                   networkTargets: [],
                 },
-                stage: 'develop',
+                stage: 'planning',
                 contextSelection: {
-                  goal: 'write the dark theme file',
+                  goal: 'plan the dark theme file',
                   sourceRefs: [],
                   reasonPerSource: {},
                   featureRefs: [],

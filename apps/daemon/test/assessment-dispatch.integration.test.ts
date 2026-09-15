@@ -544,6 +544,26 @@ function sendMessage(body: string): { messageId: string; workId: string } {
     { conversationId: conversation.entityId, body, attachmentIds: [] },
     { caller },
   ) as { messageId: string; workId: string };
+  // `workflow.md` §3: the scripted Runner in these drills jumps straight to the develop
+  // dispatch, so the Task an approved Plan would have materialised is seeded here — it is
+  // the Grant/route precondition Core checks (`orchestrator.enforceRouteOrder`). The route
+  // refusal itself is covered by `packages/core/test/orchestrator.test.ts`, and the drills
+  // that reach for it keep asserting their own refusal.
+  const work = opened.store.works.find(sent.workId);
+  if (work !== undefined) {
+    opened.store.tasks.insert({
+      id: opened.store.newId(),
+      projectId: work.projectId,
+      workId: work.id,
+      planRef: { id: opened.store.newId(), version: 1, hash: 'c'.repeat(64) },
+      role: 'backend',
+      dependsOn: [],
+      dependencyManifestRefs: [],
+      scope: { readPaths: [], writePaths: [], operations: [], networkTargets: [] },
+      stage: 'develop',
+      acceptanceIds: ['AC-003'],
+    });
+  }
   return sent;
 }
 

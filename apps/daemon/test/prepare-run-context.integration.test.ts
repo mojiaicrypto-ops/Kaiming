@@ -18,7 +18,7 @@ import {
   type AttemptCapabilityStore,
   type ConfigStore,
 } from '@agentdev/core';
-import { BlobStore, ProjectStore, projectIdFromRoot, sha256 } from '@agentdev/storage';
+import { BlobStore, ProjectStore, projectIdFromRoot } from '@agentdev/storage';
 import { createNodeWorktreeGitPort } from '@agentdev/workspace';
 import { createContextAssembly, sha256Hex } from '../src/context-ports.js';
 import { createPrepareRun } from '../src/prepare-run.js';
@@ -128,6 +128,11 @@ describe('a real Run assembles its context through the Context plane (context.md
       workId,
     });
     const configSnapshot = snapshots.freeze('config', { profile: 'stub' });
+    // The frozen DispatchSpec the Run was created for (`data.md` §3): its `goal` is the
+    // stage's own deliverable, which the prompt carries next to the Work goal (WP-12 W4).
+    const dispatchSnapshot = snapshots.freeze('dispatch', {
+      dispatchSpec: { kind: 'professional', goal: 'plan the orders change' },
+    });
     // A Chief assist Run: its documented required inputs (roleContract, userRequest,
     // workGoal) are exactly the ones the store really holds, so the assembly is
     // exercised end to end instead of stopping at MISSING_CONTEXT.
@@ -143,7 +148,7 @@ describe('a real Run assembles its context through the Context plane (context.md
       childIds: [],
       configSnapshotId: configSnapshot.hash,
       contextSnapshotId: contextSnapshot.hash,
-      dispatchSnapshotId: sha256('dispatch'),
+      dispatchSnapshotId: dispatchSnapshot.hash,
       budgetAllocation: 100,
     });
     const attempt = store.attempts.insert({
@@ -187,6 +192,10 @@ describe('a real Run assembles its context through the Context plane (context.md
     // The prompt is the real assembly, not the goal+contract shell.
     expect(invocation.prompt).toContain('Frozen context');
     expect(invocation.prompt).toContain('src/orders.ts');
+    // The Work goal and the Run's own stage goal are both stated: a professional Run that
+    // only sees the Work goal reads the whole change as its own job (WP-12 W4).
+    expect(invocation.prompt).toContain('Work goal: implement the orders change');
+    expect(invocation.prompt).toContain('Your stage goal: plan the orders change');
     expect(invocation.prompt).toContain(
       sha256Hex(Buffer.from('export const orders = [];\n')).slice(0, 12),
     );

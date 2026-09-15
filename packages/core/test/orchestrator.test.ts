@@ -344,7 +344,7 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     snapshots = new SnapshotWriter({ store });
     config = ConfigStore.open({ globalDir, projectRoot, snapshots });
     config.upsertProvider(provider());
-    for (const role of ['chief', 'backend', 'review'] as const) {
+    for (const role of ['chief', 'backend', 'review', 'planning'] as const) {
       config.update('global', { roleOverrides: { [role]: profile() } });
     }
     const gateway = new ModelGateway({ config, snapshots, transport: offlineTransport });
@@ -1948,7 +1948,7 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
    */
   describe('assessment persistence and derived authorization (WP-12 T2.2)', () => {
     /** A Work with no authorization, as `conversation.message.send` creates it. */
-    function freshWork(): string {
+    function freshWork(options: { readonly task?: boolean } = {}): string {
       const workId = store.newId();
       const budget = store.budgets.insert({
         projectId,
@@ -1976,6 +1976,24 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
         budgetId: budget.id,
         policyRevision: 1,
       });
+      // `workflow.md` §3: a develop-stage dispatch needs the Task the approved Plan
+      // materialises (`orchestrator.enforceRouteOrder`). These cases exercise the
+      // authorization/budget guards *after* that admission, so the Plan's output is
+      // seeded directly; the route refusal itself is covered separately.
+      if (options.task !== false) {
+        store.tasks.insert({
+          id: store.newId(),
+          projectId,
+          workId,
+          planRef: { id: store.newId(), version: 1, hash: 'c'.repeat(64) },
+          role: 'backend',
+          dependsOn: [],
+          dependencyManifestRefs: [],
+          scope: emptyScope,
+          stage: 'develop',
+          acceptanceIds: ['AC-003'],
+        });
+      }
       return workId;
     }
 
@@ -2246,6 +2264,60 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
       expect(store.runs.list({ where: 'work_id = ?', params: [workId] })).toHaveLength(before.runs);
       expect(store.authorizations.list()).toHaveLength(before.authorizations);
       expect(store.snapshots.list()).toHaveLength(before.snapshots);
+    });
+
+    it('refuses a develop dispatch before the Plan tasked the role (WP-12 W4)', () => {
+      // `workflow.md` §3: Product→Plan→Develop. Without the Plan there is no Task, so the
+      // develop Run could never obtain a file Grant and could only report a blocker; the
+      // dispatch is refused with the remedy instead of being queued.
+      const workId = freshWork({ task: false });
+      const chief = chiefParent(workId);
+      orchestrator.assessWithDerivation({
+        workId,
+        payload: derivedPayload(),
+        sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
+      });
+      const runsBefore = store.runs.list({ where: 'work_id = ?', params: [workId] }).length;
+      try {
+        orchestrator.dispatchProfessional({
+          parentRunId: chief.id,
+          spec: derivedSpec(workId, chief.id),
+        });
+        throw new Error('expected a GATE_NOT_READY refusal');
+      } catch (error) {
+        expect(error).toMatchObject({ code: 'GATE_NOT_READY' });
+        expect((error as Error).message).toMatch(/Product→Plan→Develop/u);
+      }
+      expect(store.runs.list({ where: 'work_id = ?', params: [workId] })).toHaveLength(runsBefore);
+      // The documented remedy is admitted: the planning stage is not a develop stage.
+      const planning = orchestrator.dispatchProfessional({
+        parentRunId: chief.id,
+        spec: derivedSpec(workId, chief.id, {
+          role: 'planning',
+          purpose: 'artifact',
+          stage: 'planning',
+        }),
+      });
+      expect(planning.run.role).toBe('planning');
+      // `plan.approve` binds the Plan's Task to the develop Run (`queueApprovedRun`), which
+      // is what makes the same dispatch admissible afterwards.
+      store.tasks.insert({
+        id: store.newId(),
+        projectId,
+        workId,
+        planRef: { id: store.newId(), version: 1, hash: 'c'.repeat(64) },
+        role: 'backend',
+        dependsOn: [],
+        dependencyManifestRefs: [],
+        scope: emptyScope,
+        stage: 'develop',
+        acceptanceIds: ['AC-003'],
+      });
+      const develop = orchestrator.dispatchProfessional({
+        parentRunId: chief.id,
+        spec: derivedSpec(workId, chief.id),
+      });
+      expect(develop.run.role).toBe('backend');
     });
 
     it('refuses to queue a child Run the Chief Run cannot fund (review P3)', () => {

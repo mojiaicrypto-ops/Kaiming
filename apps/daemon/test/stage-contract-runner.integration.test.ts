@@ -326,6 +326,27 @@ describe('structured delivery with a real Runner child (AC-047)', () => {
     ) as { workId: string; messageId: string };
     const workId = sent.workId;
 
+    // `workflow.md` §3: this drill scripts the Chief's develop dispatch directly, so the
+    // Task an approved Plan materialises is seeded — it is what admits the develop Run
+    // (`orchestrator.enforceRouteOrder`) and what the contract-violation path under test
+    // is really about. The route refusal itself is covered by
+    // `packages/core/test/orchestrator.test.ts`.
+    const work = opened.store.works.find(workId);
+    if (work !== undefined) {
+      opened.store.tasks.insert({
+        id: opened.store.newId(),
+        projectId: work.projectId,
+        workId,
+        planRef: { id: opened.store.newId(), version: 1, hash: 'c'.repeat(64) },
+        role: 'backend',
+        dependsOn: [],
+        dependencyManifestRefs: [],
+        scope: { readPaths: [NOTE], writePaths: [NOTE], operations: [], networkTargets: [] },
+        stage: 'develop',
+        acceptanceIds: ['AC-047'],
+      });
+    }
+
     const professional = await waitFor(
       () => {
         execution.supervisor.tick();

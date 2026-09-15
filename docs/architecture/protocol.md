@@ -85,7 +85,7 @@ BFF不转发也不校验浏览器的x-csrf-token（WP-09 登记偏差）：BFF�
 
 permission.request的scope=once时必须runId/toolOperationId/inputHash，scope=run必须runId，scope=work必须workId；服务端从请求引用解析真实绑定并拒绝跨项目。
 
-**第一期权限语义**（`.agentdev/work/WP-12/T3-implementation.md` 附录 A，已冻结）：Plan/授权在**批准时**授予信封（路径 + 操作），运行中**信封内操作直接执行、不再逐次询问**（AC-049 的"范围内继续"按此解释）；AC-048 的"目录/网络越权"证据相应改为"信外/私网/环回/敏感文件被拒"。两个方法**保留但正常流程不再触发**：`permission.request` 只为逐次审批类环境操作（`bash`/`network`/`secret`/`push`/`deploy`/`delete_data`）而存在，`waiting_permission` 挂起与 `once`+`inputHash` 绑定不再出现在常规路径上；第二期再评估删除（附录 A.8 未采纳项）。硬拦不走本方法：敏感文件（附录 A.2 冻结表，read/search/edit/write 共用）、环回/私网/元数据地址与守护自身端口、工作区外删除、Git引用变更（push/强制重置/`update-ref`）一律返回类型化拒绝，`details.approvable=false` 表示"任何用户决定都不能放行，不要重试"，敏感文件另落 `chief_action_required(kind='sensitive_file')` 用户待办（不阻塞Run）。`configPolicy` 档位只影响敏感文件表的读法，不改协议方法集合。
+**第一期权限语义**（`.agentdev/work/WP-12/T3-implementation.md` 附录 A，已冻结；网络口径见 `w1-implementation.md` §7）：Plan/授权在**批准时**授予信封（路径 + 操作），运行中**信封内操作直接执行、不再逐次询问**（AC-049 的"范围内继续"按此解释）；AC-048 的"目录/网络越权"证据相应改为"信外/敏感文件被拒/两个固定拒绝项被拒"。两个方法**保留但正常流程不再触发**：`permission.request` 只为逐次审批类环境操作（`bash`/`network`/`secret`/`push`/`deploy`/`delete_data`）而存在，`waiting_permission` 挂起与 `once`+`inputHash` 绑定不再出现在常规路径上；第二期再评估删除（附录 A.8 未采纳项）。硬拦不走本方法：敏感文件（附录 A.2 冻结表，read/search/edit/write 共用）、**两个固定拒绝项（守护运行时实际绑定的自身端口、云元数据地址；永不可授权，任何配置都不得放行）**、工作区外删除、Git引用变更（push/强制重置/`update-ref`）一律返回类型化拒绝，`details.approvable=false` 表示"任何用户决定都不能放行，不要重试"，敏感文件另落 `chief_action_required(kind='sensitive_file')` 用户待办（不阻塞Run）。**网络默认通**：公网、本地服务（`127.0.0.1:3000`/`:5432`）与内网私服开箱即通，**不需要作者配白名单**，除上述两个固定拒绝项外没有第三项；受控出口尚未装配期间**容器出口保持关闭**（宿主模式实际全通），实现归 W6。`configPolicy` 档位只影响敏感文件表的读法，不改协议方法集合。
 
 审批链以plan.current为唯一权威：UI不得自行拼装plan正文或authorizationRef；approval.enabled=false时批准控件必须禁用并显示reason。approval.reasonCode为机器可读原因码（no_plan/stale_version/gate_not_approved/plan_unreadable/no_authorization/authorization_unreadable），界面必须用自身i18n目录按该码渲染可见原因，approval.reason仅作英文诊断（如元素的title），保证界面语言一致（W9R2-05）。Queued且无Work的需求取消由daemon先读回Git中现有记录，仅替换「完成摘要」写入取消原因并追加lifecycle/cancellation事实，其余正文段落与scope/acceptance/featureIds/openQuestions/confirmedDecisions原样保留，再由RequirementSaveService提交Git（W9R2-03）。
 
@@ -99,6 +99,7 @@ Decision choice必须属于该决定保存的选项；UI用户可直接提交，
 |---|---|---|
 | knowledge.list | view:delivered/design/work,workId?,query?:string,limit?,cursor? | items<FeatureSummary>、sourceRevision、projectionState |
 | knowledge.get | featureId,view,workId? | Feature、sourceRefs、unknowns |
+| inbox | {} | {items,unread}；待处理事项按目标+版本去重，每项含kind（decision/permission/finding/recovery/todo）、id、workId与actionable；主管待办在`chief.todo.resolve`关闭后不再列出 |
 | context.preview | workId,role,selection:ContextSelection | resolved/excluded/missing/estimatedTokens |
 | file.list/read | revision:string,path:Path,limit?,cursor?（list） | entries或{content,mime,hash,truncated} |
 | artifact.list/get | workId（list）；artifactId,artifactVersion?（get） | items或Artifact及preview |
@@ -156,7 +157,7 @@ Event={v:1,type:event,eventId,projectId,cursor,name,entityId,entityVersion,data}
 
 token.delta、log.delta、heartbeat为临时流，包含runId、seq和内容，不占持久cursor；最终消息与日志Artifact补全。每个终态事件携带真实outcome，客户端不能将run.ended统一渲染为成功。
 
-错误表：VALIDATION_ERROR（修正输入）、INVALID_STATE（当前实体状态不允许该操作）、UNAUTHENTICATED/AUTH_EXPIRED（重新认证）、NOT_FOUND、NOT_AUTHORIZED（有效Grant；第一期硬拦如工作区外删除/Git引用变更也用此码但`details.approvable=false`，表示任何决定都不能放行、不要重试）、VERSION_CONFLICT/IDEMPOTENCY_CONFLICT（读取并重评）、GATE_NOT_READY/MISSING_CONTEXT/CONTEXT_FORBIDDEN（Chief处理；敏感文件命中与环回/私网/元数据地址用`CONTEXT_FORBIDDEN`且`details.approvable=false`，拒绝文案写明"不要重试、交用户处理"）、STALE_ARTIFACT（重建证据）、BUDGET_EXCEEDED（用户调整）、BUSY（未接受，可退避重发同键）、RECOVERY_REQUIRED（检查后决定）、ATTACHMENT_ALREADY_BOUND（重新上传）、ARTIFACT_MISSING/KNOWLEDGE_INVALID（修复来源）、PROVIDER_UNAVAILABLE（配置/恢复）、PROTOCOL_MISMATCH（升级客户端）、RESYNC_REQUIRED（重新快照）、INTERNAL_ERROR（保存operationId诊断）。仅BUSY和已知无副作用的Provider瞬时错误retryable=true；应答丢失先查同幂等键结果。
+错误表：VALIDATION_ERROR（修正输入）、INVALID_STATE（当前实体状态不允许该操作）、UNAUTHENTICATED/AUTH_EXPIRED（重新认证）、NOT_FOUND、NOT_AUTHORIZED（有效Grant；第一期硬拦如工作区外删除/Git引用变更也用此码但`details.approvable=false`，表示任何决定都不能放行、不要重试）、VERSION_CONFLICT/IDEMPOTENCY_CONFLICT（读取并重评）、GATE_NOT_READY/MISSING_CONTEXT/CONTEXT_FORBIDDEN（Chief处理；敏感文件命中用`CONTEXT_FORBIDDEN`且`details.approvable=false`，拒绝文案写明"不要重试、交用户处理"）、STALE_ARTIFACT（重建证据）、BUDGET_EXCEEDED（用户调整）、BUSY（未接受，可退避重发同键）、RECOVERY_REQUIRED（检查后决定）、ATTACHMENT_ALREADY_BOUND（重新上传）、ARTIFACT_MISSING/KNOWLEDGE_INVALID（修复来源）、PROVIDER_UNAVAILABLE（配置/恢复）、PROTOCOL_MISMATCH（升级客户端）、RESYNC_REQUIRED（重新快照）、INTERNAL_ERROR（保存operationId诊断）。仅BUSY和已知无副作用的Provider瞬时错误retryable=true；应答丢失先查同幂等键结果。网络默认通，只有两个固定拒绝项（守护自身实际端口、云元数据地址）与之冲突，均以类型化拒绝 + `details.approvable=false` 返回。
 
 `tool.execute` 的错误体除`{code,message}`外可带`details`（`approvable`、敏感文件命中的`pattern`/`path`/`action`、`network`、`configPolicy`、`policyRevision`）：Runner据此区分"可被用户决定放行的环境操作"与"策略终局拒绝"，前者才走`permission.request`，后者直接把类型化拒绝交给模型。
 

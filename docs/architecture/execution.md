@@ -17,7 +17,7 @@ Workspace允许读取授权源码快照、写Task工作区和产物目录；网�
 第一期权限模型（`.agentdev/work/WP-12/T3-implementation.md` 附录 A）把"范围内"具体化为**Plan时信封**：Plan/授权批准时信封（路径 + 操作）即已授予，运行中**范围内操作直接执行、不再逐次询问**（read/search/edit/write/artifact_write/bash/git，含构建、测试、公网出网）。三条硬拦不因信封而放松，且返回**类型化拒绝**（`details.approvable=false`，模型被告知"不要重试"）：
 
 1. **敏感文件**（附录 A.2 冻结表）：`read`/`search`/`edit`/`write` 四处共用同一张表，命中即拒（`CONTEXT_FORBIDDEN`），同时按现有 `chief_action_required` 机制落一条用户待办（`kind='sensitive_file'`，不阻塞Run，agent继续别的工作）。搜索时该表在遍历中即跳过命中文件（"search不同表生效等于没拦"）。
-2. **网络边界**：公网出网允许；环回/私网/链路本地/CGNAT/云元数据地址与守护进程自身端口仍由 `NetworkPolicy` 硬拦（`bash` 字面URL亦在准入层拒绝）。
+2. **网络边界**：**默认通** —— 公网、`127.0.0.1:3000`/`:5432` 等本地服务、内网依赖私服都开箱即通，不需要作者配白名单，也不恢复运行期逐次审批（A.4）。**只保留两个固定拒绝项，且永不可授权**：① 运行时**实际绑定**的守护自身端口（daemon 控制端点/BFF/admin，`listenAdmin` 实际绑定的端口）；② 云元数据地址（`169.254.169.254` 等）——这两项是"自己机器的钥匙"，不是网络功能，被拦不损失正常开发能力。除这两项**没有第三项**。**当前状态（诚实表述）**：受控出口尚未装配（`networkProxy` 只是配置字符串，代理服务不存在），因此**容器出口目前保持关闭**，宿主模式（`full_access`）实际全通；不得写成"网络已开"。`host.docker.internal`、docker 桥网关与 `bash` 内任意程序直连等绕过路径，必须由出口策略而非准入层字面判定覆盖，属 W6（与容器化 Runner、每任务工作区同批）。（口径来源：`w1-implementation.md` §7。）
 3. **删除与Git引用**：工作区内删除允许（兜底=Git + 每任务工作区 + 交付CAS）；工作区外路径删除、`git push`/强制重置/`update-ref` 等引用变更拒绝。
 
 `configPolicy: 'strict' | 'test'`（附录 A.7）只改**查表前的分支**，不改上表：`strict`（全局默认）拒绝全表；`test` 额外放行应用配置子集（`application*.yml`、`application*.properties`、`bootstrap.yml`、`bootstrap.properties`、`*.properties`、`*.conf`），凭据档与纯密钥材料仍拒。非 `strict` 必须在 `doctor`、项目页与验收报告显著可见，且每次放行读取都写审计（路径 + 策略版本 + 档位）。逐次 `permission.request`/`permission.respond`、`waiting_permission` 挂起与 `once`+`inputHash` 绑定**退掉**（代码保留、正常流程不再触发）。

@@ -605,7 +605,7 @@ export class Orchestrator {
         ...(input.sourceRef === undefined ? {} : { sourceRef: input.sourceRef }),
       });
       const dispatch = this.dispatch({
-        spec: this.freezeDraft(chief, draft),
+        spec: this.routableDraft(chief, draft),
         ...(authorizationRef === undefined ? {} : { authorizationRef }),
         ...(input.contextPayload === undefined ? {} : { contextPayload: input.contextPayload }),
         ...(input.requiredOutputSchemas === undefined
@@ -655,7 +655,7 @@ export class Orchestrator {
       const chief = this.requireChiefFor(input.parentRunId, undefined);
       const draft = this.parseDraft(chief, input.spec);
       return this.dispatch({
-        spec: this.freezeDraft(chief, draft),
+        spec: this.routableDraft(chief, draft),
         ...(input.authorizationRef === undefined
           ? {}
           : { authorizationRef: input.authorizationRef }),
@@ -804,6 +804,62 @@ export class Orchestrator {
       profileRevision: this.currentProfileRevision(draft.role),
       budgetAllocation: allocation,
     });
+  }
+
+  /**
+   * The Core-owned fields plus the route-order admission for a model-submitted draft.
+   *
+   * The route check runs on the frozen draft (the Work it names is Core's, not the
+   * caller's) and before `dispatch` writes anything, so a Chief that skipped
+   * Product/Plan is refused with the documented remedy instead of queueing a Run
+   * that cannot deliver.
+   */
+  private routableDraft(chief: Run, draft: ProfessionalDispatchSpec): ProfessionalDispatchSpec {
+    const frozen = this.freezeDraft(chief, draft);
+    this.enforceRouteOrder(frozen);
+    return frozen;
+  }
+
+  /** Whether a stage is a develop stage (`develop`, `develop-L1|L2|L3`). */
+  private static isDevelopStage(stage: string): boolean {
+    return stage === 'develop' || stage.startsWith('develop-');
+  }
+
+  /**
+   * `workflow.md` §3: an L2/L3 code delivery runs Product→Plan→Develop→…
+   *
+   * A develop-stage dispatch before the Plan gate approved a Plan cannot work: the
+   * `task` rows — and therefore the Run's file Grants (`grants.ts`
+   * `roleStages`/`permissions.ts` `ensureRunGrants`) — are materialised by
+   * `plan.approve`. Refusing the dispatch with the remedy is honest; queueing it
+   * would accept work whose only possible outcome is a blocker report.
+   *
+   * The check is keyed on the Task, not on the Plan record, because the Task is
+   * exactly what the Grant layer requires; `plan.approve` always binds one
+   * (`protocol.ts` `queueApprovedRun`), so the sanctioned path is unaffected.
+   */
+  private enforceRouteOrder(spec: ProfessionalDispatchSpec): void {
+    if (spec.role !== 'backend' && spec.role !== 'frontend') return;
+    if (!Orchestrator.isDevelopStage(spec.stage)) return;
+    const work = this.requireWork(spec.workId);
+    if (!grantsModificationAuthority(work.level)) return;
+    const bound = spec.taskId === undefined ? undefined : this.store.tasks.find(spec.taskId);
+    if (bound !== undefined && bound.workId === work.id && bound.role === spec.role) return;
+    const tasked = this.store.tasks
+      .list({ where: 'work_id = ? AND role = ?', params: [work.id, spec.role] })
+      .at(0);
+    if (tasked !== undefined) return;
+    fail(
+      'GATE_NOT_READY',
+      `Work ${work.id} routes ${work.level} and has no Task for role ${spec.role}: the L2/L3 route is Product→Plan→Develop→Review→Test (workflow.md §3), and a develop Run's Task and file Grants come from the approved Plan. Dispatch the planning role (stage planning) first; Core queues the develop Run itself when the Plan gate approves the Plan.`,
+      {
+        workId: work.id,
+        role: spec.role,
+        stage: spec.stage,
+        level: work.level,
+        remedy: 'agent_dispatch planning/planning, then plan.approve',
+      },
+    );
   }
 
   /** How much of one Chief Run's allocation is still unallocated. */

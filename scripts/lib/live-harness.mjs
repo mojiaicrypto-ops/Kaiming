@@ -300,7 +300,23 @@ export async function bootLiveStack({ product, provider, transport, meta }) {
     ref: LIVE_SECRET_REF,
     value: provider.secret,
     audience: 'gateway',
-    purposes: ['analysis', 'artifact', 'implementation', 'review', 'test', 'settlement'],
+    // Every documented purpose (`contracts` `purposeSchema`): the registration must not
+    // invent a narrower rule than the product. Registering only the first six made a real
+    // Chief that dispatched the Plan stage with purpose `document` unable to reach the
+    // Provider at all (`CONFIG_INVALID: secret … is not available`), which the drill then
+    // saw as a `contract_violation` with no model text (WP-12 W4).
+    purposes: [
+      'analysis',
+      'artifact',
+      'implementation',
+      'review',
+      'test',
+      'settlement',
+      'initialize',
+      'document',
+      'document_check',
+      'operation',
+    ],
   });
   // The Gateway resolves the Provider credential through the real SecretStore
   // admission path (`gatewaySecretResolver`): the resolver closes over the Grant the

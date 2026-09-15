@@ -56,6 +56,8 @@ Decision显示当前/建议行为、原因、受影响工作、选项、授权�
 
 Automatic：范围内执行、返工、Context扩展；Notify：阶段摘要和非阻断发现；DecisionRequired：产品选择、超权限、超预算及恢复处置。Inbox按目标+版本去重，过期决定不可再次应用。浏览器内展示与未读计数为本版通知渠道。
 
+Inbox中的主管待办（含敏感文件待办）由用户处理并确认后立即从列表消失：`chief.todo.resolve`只记录该待办的处置（已处理/忽略），同一路径与规则的后续拒绝不重新出现；它不授予任何工具权限，文件本身是否已处理仍是用户在产品外的动作。
+
 ## 6. Live与可访问性
 
 Project Shell共享Live Dock，状态Open/Compact/Hidden。Open宽度clamp(360px,38%,560px)，Compact为44px，Hidden释放宽度；顶栏固定Live计数入口恢复。页面切换保持状态。窄屏小于768px时Open为可关闭覆盖层，关闭后焦点回到触发按钮。

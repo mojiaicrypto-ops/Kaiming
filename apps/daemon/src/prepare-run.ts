@@ -97,7 +97,21 @@ export function roleContractSentence(role: Role): string {
         'not the canonical stage of that role (product→product/document/document_check;',
         'planning→planning/document; backend|frontend→develop-L1/develop-L2/develop-L3;',
         'review→review/document_check; test→test; settlement→settlement) leaves the Run with no',
-        'readable context and it can never deliver. Plain text does not change the domain state.',
+        'readable context and it can never deliver.',
+        // `workflow.md` §3: the L2/L3 code route is Product→Plan→Develop→…, and the develop
+        // Run's Task/Grant only exist after the Plan gate approved a Plan (`plan.approve`
+        // materialises the Task rows and queues the develop Run). A Chief that dispatches
+        // the implementer first therefore buys a Run that can only report a blocker, so the
+        // route order is stated here and enforced by Core (`orchestrator.enforceRouteOrder`).
+        'Route order is not optional for an L2/L3 code delivery: dispatch `planning` first',
+        '(and `product` before it when the requested behaviour is not yet defined), and never',
+        'dispatch backend|frontend at a develop stage before an approved Plan exists — the',
+        'develop Run obtains its Task and file Grants from the approved Plan, and Core queues',
+        'that Run itself when the Plan gate approves the Plan. Dispatch each stage with',
+        "`requiredChild: true` and `joinPolicy: 'all'` so your Run is woken when the stage",
+        "settles and can trigger the next one; a `joinPolicy: 'none'` dispatch lets your Run",
+        'end and leaves an approved Plan with no Chief left to hand the develop Run to.',
+        'Plain text does not change the domain state.',
       ].join(' ')
     : [
         'Do this stage yourself with your tools, then deliver it by calling `stage_yield`',
@@ -109,16 +123,48 @@ export function roleContractSentence(role: Role): string {
         'use `request_dispatch` only when the work genuinely needs a different role, and call',
         '`stage_yield` yourself afterwards even then. `status=failed` or `needs_input` with the',
         'reason is an honest, valid delivery when the work is blocked.',
+        // The Product/Plan stages run before any Task exists, so their file tools carry no
+        // Grant yet (`grants.ts` mints run-scope Grants only for a role the Plan already
+        // tasked). The context channel is the documented way to read in those stages
+        // (`context.md` §1), and without this sentence a planning Run reports a blocker
+        // instead of planning.
+        'Your file tools only carry a Grant after an approved Plan tasked your role; in the',
+        'Product and Plan stages read the sources you need through `context.request` instead,',
+        'and still deliver the stage result with your real conclusion. In those stages your',
+        'deliverable is the Product definition or the Plan, not the code change itself — the',
+        'develop stages implement it, so not being able to write source files is not a blocker',
+        'for planning.',
       ].join(' ');
+}
+
+/**
+ * The stage goal the Chief dispatched this Run for (`data.md` §3 `DispatchSpec.goal`).
+ *
+ * The Work goal is the user's whole request; a professional Run still needs to know
+ * *its own* stage's deliverable. Without it a real Planning model reads the Work goal
+ * ("change `cancel()`…") as its own job, tries to write the source file, and reports a
+ * blocker because the Product/Plan stages hold no file Grant (WP-12 W4).
+ */
+function stageGoalOf(input: PrepareRunInput, store: ProjectStore): string | undefined {
+  const snapshot = store.snapshots.list({
+    where: "type = 'dispatch' AND hash = ?",
+    params: [input.run.dispatchSnapshotId],
+  })[0];
+  const spec = snapshot?.payload['dispatchSpec'];
+  if (typeof spec !== 'object' || spec === null || Array.isArray(spec)) return undefined;
+  const goal = (spec as Record<string, unknown>)['goal'];
+  return typeof goal === 'string' && goal.trim() !== '' ? goal : undefined;
 }
 
 function promptFor(input: PrepareRunInput, store: ProjectStore): string {
   const work = store.works.find(input.run.workId);
   const goal = work?.goal ?? 'the assigned task';
+  const stageGoal = stageGoalOf(input, store);
   return [
     `You are the AgentDev ${input.run.role} agent.`,
     `Stage: ${input.run.stage}. Purpose: ${input.run.purpose}.`,
-    `Goal: ${goal}`,
+    `Work goal: ${goal}`,
+    ...(stageGoal === undefined || stageGoal === goal ? [] : [`Your stage goal: ${stageGoal}`]),
     roleContractSentence(input.run.role),
   ].join('\n');
 }
@@ -222,10 +268,14 @@ function assembleContext(
         source.revision === undefined ? '' : `@${source.revision}`
       } hash=${source.hash.slice(0, 12)} — ${source.reason}`,
   );
+  const stageGoal = stageGoalOf(input, options.store);
   const prompt = [
     `You are the AgentDev ${input.run.role} agent.`,
     `Stage: ${input.run.stage}. Purpose: ${input.run.purpose}.`,
-    `Goal: ${work.goal}`,
+    `Work goal: ${work.goal}`,
+    ...(stageGoal === undefined || stageGoal === work.goal
+      ? []
+      : [`Your stage goal: ${stageGoal}`]),
     `Frozen context ${snapshot.snapshotRef} (${String(snapshot.resolvedSources.length)} sources, ${String(
       snapshot.tokenAccounting.initial.used,
     )} tokens) at ${built.directory}:`,
