@@ -567,6 +567,25 @@ describe('environment-operation approval with a real Runner child (AC-049/AC-080
       params: [backendRun.id],
     })[0];
     // The refusal must not stall the child: the tool call finished and the session moved on.
+    //
+    // The pending Decision is *not* the signal that the refused call finished: Core
+    // records it inside `permission.request` (`permissions.ts` `requestPermission`), which
+    // the Runner posts from `tool-client.ts` **before** its `execute` promise resolves —
+    // only after that does the SDK emit `tool_end` (`attempt.ts` `emit`), and the line
+    // still has to travel through the child's stdout into this process. The daemon row
+    // therefore always exists first, and asserting the IPC line here without waiting is a
+    // race that this file lost under load (WP-12 Test `test.md` §4.6). Wait for the event
+    // itself, bounded, and keep the assertion: a genuinely stalled child never emits it.
+    await waitFor(
+      () =>
+        runnerIpc.some((line) => line.includes('event=tool_end tool=bash')) ? true : undefined,
+      () =>
+        `the refused bash call's tool_end on the Runner IPC stream\n${runnerIpc
+          .filter((line) => /attempt\.event|tool/.test(line))
+          .slice(-12)
+          .join('\n')}`,
+      30_000,
+    );
     expect(runnerIpc.some((line) => line.includes('event=tool_end tool=bash'))).toBe(true);
     expect(operation?.state).toBe('prepared');
     expect(operation?.grantId).toBeUndefined();

@@ -3701,10 +3701,11 @@ export class WorkbenchProtocol {
    */
   private archiveRequirement(
     params: JsonObject,
-    options: { readonly idempotencyKey?: string },
+    options: { readonly idempotencyKey?: string; readonly expectedVersion?: number },
   ): JsonObject {
     const requirementId = requiredString(params, 'requirementId');
     const requirement = this.requireRequirement(requirementId);
+    this.assertRequirementVersion(requirement, options.expectedVersion);
     const live = this.liveRunOf(requirement);
     if (live !== null) {
       throw new ProtocolError(
@@ -3736,10 +3737,11 @@ export class WorkbenchProtocol {
    */
   private restoreRequirement(
     params: JsonObject,
-    options: { readonly idempotencyKey?: string },
+    options: { readonly idempotencyKey?: string; readonly expectedVersion?: number },
   ): JsonObject {
     const requirementId = requiredString(params, 'requirementId');
     const requirement = this.requireRequirement(requirementId);
+    this.assertRequirementVersion(requirement, options.expectedVersion);
     if (requirement.lifecycle !== 'archived') {
       throw new ProtocolError(
         'INVALID_STATE',
@@ -3770,6 +3772,35 @@ export class WorkbenchProtocol {
       });
     }
     return requirement;
+  }
+
+  /**
+   * Enforces the documented `expectedVersion` precondition for one Requirement write
+   * (`protocol.md` §1, `data.md` §2).
+   *
+   * `data.md` §2 fixes *which* version this is: "本机行version独立用于协议
+   * expectedVersion并随本机字段变化递增" — the local projection row's `version`
+   * (the same number `requirement.get` returns and every lifecycle answer reports),
+   * never the cross-server `recordVersion`, which the Git CAS already checks
+   * separately. A stale value is the documented `VERSION_CONFLICT` carrying the live
+   * version, so the client re-reads instead of blindly overwriting (WP-12 G-T3).
+   */
+  private assertRequirementVersion(
+    requirement: Requirement,
+    expectedVersion: number | undefined,
+  ): void {
+    if (expectedVersion === undefined || expectedVersion === requirement.version) return;
+    throw new ProtocolError(
+      'VERSION_CONFLICT',
+      `Requirement ${requirement.id} is at version ${requirement.version}, not ${expectedVersion}`,
+      {
+        details: {
+          requirementId: requirement.id,
+          currentVersion: requirement.version,
+          requestedVersion: expectedVersion,
+        },
+      },
+    );
   }
 
   /** The id of one non-terminal Run of a requirement's Work, or `null` (`workflow.md` §5.3). */
@@ -4031,10 +4062,11 @@ export class WorkbenchProtocol {
    */
   private startRequirement(
     params: JsonObject,
-    options: { readonly idempotencyKey?: string },
+    options: { readonly idempotencyKey?: string; readonly expectedVersion?: number },
   ): JsonObject {
     const requirementId = requiredString(params, 'requirementId');
     const requirement = this.requireRequirement(requirementId);
+    this.assertRequirementVersion(requirement, options.expectedVersion);
     if (requirement.workId !== undefined) {
       throw new ProtocolError(
         'INVALID_STATE',

@@ -250,8 +250,7 @@ function main() {
     .map((file) => ({ file: toRepoPath(file), text: readFileSync(file, 'utf8') }));
 
   const runs = [];
-  const noReportProblems = [];
-  let infraFailure = false;
+  const runInfraProblems = [];
   for (const project of options.projects) {
     process.stdout.write(`acceptance: running vitest project "${project}" ...\n`);
     const run = runProject(project);
@@ -264,7 +263,6 @@ function main() {
       }\n`,
     );
     if (run.report === null) {
-      infraFailure = true;
       // Name the project and the *cause*: a vitest run that writes no report was killed
       // (`signal`), killed by the output cap (`spawnError`), or crashed on its own
       // (`exitCode`). Without these three fields "no JSON report" is unattributable
@@ -275,16 +273,34 @@ function main() {
       process.stderr.write(
         `acceptance: project "${project}" produced no JSON report (exit ${String(run.exitCode)} ${cause})\n${run.output.slice(-4000)}\n`,
       );
-      noReportProblems.push(
+      runInfraProblems.push(
         `Vitest 项目「${project}」没有产出 JSON 报告：exit=${String(run.exitCode)} ${cause}`,
       );
     } else if (run.exitCode !== 0) {
       // A Vitest project that exits non-zero is not a clean pass even when its JSON
       // report happens to list no failing case (collection errors, unhandled rejections,
       // a worker crash). Never treat that as acceptable evidence.
-      infraFailure = true;
+      //
+      // This branch has a *report*: the problem is the non-zero exit, never a missing
+      // JSON file. Reporting it as "no JSON report" sent readers after the report
+      // mechanism while the real failure sat in the report's `failureMessage`
+      // (`test.md` §4.5). Both the sidecar problem and the stderr line now name the exit
+      // code, the report's own test counts and its first failure, so the next reader
+      // goes straight to the failing case.
+      const failed = (run.report.testResults ?? [])
+        .flatMap((file) =>
+          (file.assertionResults ?? [])
+            .filter((test) => test.status === 'failed')
+            .map((test) => `${file.name ?? '?'} :: ${test.fullName ?? test.title ?? '<unnamed>'}`),
+        )
+        .slice(0, 5);
       process.stderr.write(
-        `acceptance: project "${project}" exited ${String(run.exitCode)} although it produced a JSON report\n${run.output.slice(-2000)}\n`,
+        `acceptance: project "${project}" exited ${String(run.exitCode)} although it produced a JSON report (${String(run.report.numTotalTests)} tests, ${String(run.report.numFailedTests)} failed)\n${failed.length === 0 ? '' : `${failed.join('\n')}\n`}${run.output.slice(-2000)}\n`,
+      );
+      runInfraProblems.push(
+        `Vitest 项目「${project}」exit=${String(run.exitCode)}，但产出了 JSON 报告（${String(run.report.numTotalTests)} 个用例、${String(run.report.numFailedTests)} 个失败）：问题是非零退出，不是缺少报告${
+          failed.length === 0 ? '' : `；失败用例：${failed.join('；')}`
+        }`,
       );
     }
   }
@@ -353,7 +369,7 @@ function main() {
   // Fail closed on infrastructure problems: they mean the evidence is not trustworthy.
   const infraProblems = [
     ...runProblems,
-    ...(infraFailure ? ['某个 Vitest 项目没有产出 JSON 报告', ...noReportProblems] : []),
+    ...runInfraProblems,
     ...diagnostics.unexecuted.map(
       (file) => `含 AC 证据的测试文件没有执行任何用例：${file}（文件消失/未被收集）`,
     ),

@@ -490,6 +490,59 @@ describe('documented requirement commands over real Git (WP-12 T4b)', () => {
     expect(imported[0]?.['verdict']).toBe('unchanged');
   });
 
+  it('refuses a stale expectedVersion on archive/restore/start with VERSION_CONFLICT (protocol.md §1)', () => {
+    const h = harness();
+    const requirementId = createRequirement(h)['requirementId'] as string;
+    // `data.md` §2: the local row `version` (the number `requirement.get` returns) is the
+    // documented `expectedVersion` target, not the cross-server `recordVersion`.
+    const live = call(h, 'requirement.get', { requirementId })['version'] as number;
+    expect(live).toBeGreaterThan(0);
+
+    // The fresh version is accepted and really moves the record.
+    const archived = call(h, 'requirement.archive', { requirementId }, { expectedVersion: live });
+    expect(archived['status']).toBe('accepted');
+    expect(archived['lifecycle']).toBe('archived');
+    const archivedVersion = call(h, 'requirement.get', { requirementId })['version'] as number;
+    expect(archivedVersion).not.toBe(live);
+
+    // The now-stale version is refused with the live revision, and nothing moves.
+    const staleRestore = refusal(() =>
+      call(h, 'requirement.restore', { requirementId }, { expectedVersion: live }),
+    );
+    expect(staleRestore.code).toBe('VERSION_CONFLICT');
+    expect(staleRestore.details?.['currentVersion']).toBe(archivedVersion);
+    expect(staleRestore.details?.['requestedVersion']).toBe(live);
+    expect(call(h, 'requirement.get', { requirementId })['lifecycle']).toBe('archived');
+
+    // The live version restores it, so the precondition is a real gate, not a blanket refusal.
+    const restored = call(
+      h,
+      'requirement.restore',
+      { requirementId },
+      { expectedVersion: archivedVersion },
+    );
+    expect(restored['status']).toBe('accepted');
+    expect(restored['lifecycle']).toBe('queued');
+
+    // `requirement.start` enforces the same precondition before it pre-allocates a Work.
+    const queuedVersion = call(h, 'requirement.get', { requirementId })['version'] as number;
+    const staleStart = refusal(() =>
+      call(h, 'requirement.start', { requirementId }, { expectedVersion: queuedVersion - 1 }),
+    );
+    expect(staleStart.code).toBe('VERSION_CONFLICT');
+    expect(staleStart.details?.['currentVersion']).toBe(queuedVersion);
+    expect(call(h, 'requirement.get', { requirementId })['workId']).toBeUndefined();
+
+    const started = call(
+      h,
+      'requirement.start',
+      { requirementId },
+      { expectedVersion: queuedVersion },
+    );
+    expect(started['status']).toBe('accepted');
+    expect(started['workId']).toBeTruthy();
+  });
+
   it('starts a queued requirement: pre-allocated Work, active Git record, then Work (protocol.md §4)', () => {
     const h = harness();
     const requirementId = createRequirement(h)['requirementId'] as string;
