@@ -8,7 +8,8 @@
  */
 import { relative } from 'node:path';
 
-import { RESIDUAL_GAPS } from './drill-acs.mjs';
+import { EVIDENCE_LEVEL_LABELS } from './acceptance-levels.mjs';
+import { KNOWN_PRODUCT_GAPS, RESIDUAL_GAPS } from './drill-acs.mjs';
 
 /** Escapes a value for a Markdown table cell. */
 function cell(value) {
@@ -63,6 +64,7 @@ export function renderAcceptanceReport(input) {
     cases,
     results,
     counts,
+    levelCounts,
     runs,
     drillRuns,
     drillSources,
@@ -113,6 +115,16 @@ export function renderAcceptanceReport(input) {
   lines.push(
     '- ACCEPTED = 该 AC 的完整 Given/When/Then 未全部执行，但缺口已在 `scripts/lib/drill-acs.mjs` 登记，且豁免条件在本次运行中依然成立（逐条见 §3）。PASS 只表示该 AC 的全部已映射证据通过且没有未验证的登记缺口。',
   );
+  // WP-12 W9: a PASS count alone over-states the evidence; the level behind every AC is
+  // stated here and per row in §2, derived from this run's evidence (`test.md` §3.7).
+  const levels = levelCounts ?? {};
+  lines.push('');
+  lines.push(
+    `- **证据层级（W9）：product-path ${String(levels['product-path'] ?? 0)} / library-level ${String(levels['library-level'] ?? 0)} / environment-limited ${String(levels['environment-limited'] ?? 0)}${(levels.unclassified ?? 0) > 0 ? ` / unclassified ${String(levels.unclassified)}` : ''}**`,
+  );
+  lines.push(
+    '- 层级定义与推导规则见 §2.1；`product-path` 表示真实 daemon/CLI/浏览器/真 Provider 演练或 `apps/*` 应用层已执行证据，`library-level` 表示只有库级（或播种行）证据——库级是该规则的正确层级，但不等于产品路径证明，`environment-limited` 表示本环境缺少该 AC 所需的一半输入。',
+  );
   lines.push(
     `- 已执行提交用例：${diagnostics.testCounts} 个，覆盖 ${diagnostics.executedFiles}/${diagnostics.scannedFiles} 个测试文件`,
   );
@@ -147,8 +159,10 @@ export function renderAcceptanceReport(input) {
 
   lines.push('## 2. 每 AC 结果');
   lines.push('');
-  lines.push('| AC | 标题 | 状态 | 映射 | 已执行证据（文件 :: 用例） | 备注 / 未验证原因 |');
-  lines.push('|---|---|---|---|---|---|');
+  lines.push(
+    '| AC | 标题 | 状态 | 证据层级（W9） | 映射 | 已执行证据（文件 :: 用例） | 备注 / 未验证原因 |',
+  );
+  lines.push('|---|---|---|---|---|---|---|');
   for (const result of results) {
     const acceptanceCase = byId.get(result.id);
     const evidence = result.evidence.map(evidenceLabel);
@@ -158,10 +172,46 @@ export function renderAcceptanceReport(input) {
     else if (result.status === 'MISSING') note.push(result.reason ?? '无证据');
     if (result.status === 'FAIL') note.push('映射用例失败或缺口未登记，原始输出见 §5');
     for (const drill of result.drills) note.push(`演练 ${drill.tool}：${drill.status}`);
+    const level = result.evidenceLevel ?? 'unclassified';
+    const levelCell = `${EVIDENCE_LEVEL_LABELS[level] ?? level}${result.evidenceLevelArguable === true ? '（可争议）' : ''}`;
+    if (result.evidenceLevelReason !== undefined && result.evidenceLevelReason !== null) {
+      note.push(`层级依据：${result.evidenceLevelReason}`);
+    }
+    for (const extra of result.evidenceLevelNotes ?? []) note.push(`层级说明：${extra}`);
     lines.push(
-      `| ${result.id} | ${cell(acceptanceCase?.title ?? '')} | **${cell(statusLabel(result))}** | ${result.mapping} | ${cell(brief(evidence, 3)) || '—'} | ${cell(note.filter((part) => part.length > 0).join('；')) || '—'} |`,
+      `| ${result.id} | ${cell(acceptanceCase?.title ?? '')} | **${cell(statusLabel(result))}** | ${cell(levelCell)} | ${result.mapping} | ${cell(brief(evidence, 3)) || '—'} | ${cell(note.filter((part) => part.length > 0).join('；')) || '—'} |`,
     );
   }
+  lines.push('');
+  lines.push('### 2.1 证据层级分类方法（W9，不改变任何 PASS/FAIL 判定）');
+  lines.push('');
+  lines.push(
+    '层级由 `scripts/lib/acceptance-levels.mjs` 从**本次运行实际产生的证据**推导（`result.evidence[].file`、`result.drills[]` 与 `drill-acs.mjs` 的登记条件），没有逐 AC 人工指定：',
+  );
+  lines.push('');
+  lines.push('| 层级 | 判定规则 | AC 数 |');
+  lines.push('|---|---|---|');
+  lines.push(
+    `| product-path | 有真实发布演练（\`pnpm test:e2e\` / \`pnpm test:live\`）的 PASS 行，或提交套件里有已执行的 \`apps/*/test/**\` 应用层用例（排除播种行 \`AC-087/088/089\`） | ${String(levels['product-path'] ?? 0)} |`,
+  );
+  lines.push(
+    `| library-level | 只有 \`packages/*/test/**\`（或 \`apps\` 非集成用例 / 播种行）证据；库级是该规则的正确层级，但不是产品路径证明 | ${String(levels['library-level'] ?? 0)} |`,
+  );
+  lines.push(
+    `| environment-limited | 该 AC 在本次运行以环境条件豁免（未配置 Provider / 无独立 Review-Test 模型 / 无浏览器），所需的一半输入无法执行 | ${String(levels['environment-limited'] ?? 0)} |`,
+  );
+  lines.push(
+    `| unclassified | 既无已执行套件证据也无已执行演练行，无法从证据推导层级 | ${String(levels.unclassified ?? 0)} |`,
+  );
+  lines.push('');
+  lines.push(
+    `- 标记「可争议」的 AC：${
+      results
+        .filter((result) => result.evidenceLevelArguable === true)
+        .map((result) => result.id)
+        .join('、') || '无'
+    }。逐条理由在 §2 的「层级说明」中，登记依据主要是 \`api-gap-audit-2.md\` §4/§5。`,
+  );
   lines.push('');
 
   lines.push('## 3. 已登记豁免（ACCEPTED）明细');
@@ -327,12 +377,16 @@ export function renderAcceptanceReport(input) {
         drillsExecuted: meta.drillsExecuted,
         exitCode,
         counts,
+        evidenceLevels: levelCounts ?? null,
         problems,
         results: results.map((result) => ({
           id: result.id,
           status: result.status,
           accepted: result.accepted === true,
           mapping: result.mapping,
+          evidenceLevel: result.evidenceLevel ?? null,
+          evidenceLevelReason: result.evidenceLevelReason ?? null,
+          evidenceLevelArguable: result.evidenceLevelArguable === true,
           evidence: result.evidence.map(evidenceLabel),
           drills: result.drills.map((drill) => ({ tool: drill.tool, status: drill.status })),
           reason: result.reason,
@@ -343,6 +397,28 @@ export function renderAcceptanceReport(input) {
     ),
   );
   lines.push('```');
+  lines.push('');
+
+  // WP-12 W8-4: known product gaps are stated in the release report without touching the
+  // PASS/FAIL verdict (they are deliberately not `RESIDUAL_GAPS`, which would downgrade).
+  const knownGaps = Object.entries(KNOWN_PRODUCT_GAPS);
+  lines.push('## 8. 已知产品缺口（W8-4，不改变任何 AC 判定）');
+  lines.push('');
+  if (knownGaps.length === 0) {
+    lines.push('无。');
+  } else {
+    lines.push(
+      '这些缺口是"产品缺一条交互/能力"，不是"证据不足"：AC 的已映射证据仍按 §2 判定，本登记只把缺口写进发布记录（登记表在 `scripts/lib/drill-acs.mjs` 的 `KNOWN_PRODUCT_GAPS`）。',
+    );
+    lines.push('');
+    lines.push('| AC | 缺口 | 现状 | 实现它需要什么 | 决定记录 | 残余编号 |');
+    lines.push('|---|---|---|---|---|---|');
+    for (const [id, gap] of knownGaps) {
+      lines.push(
+        `| ${id} | ${cell(gap.title)}${gap.status === 'open' ? '（未关闭）' : ''} | ${cell(gap.gap)} | ${cell(gap.whatItWouldTake)} | ${cell(gap.decision)} | ${cell(gap.residual ?? '—')} |`,
+      );
+    }
+  }
   lines.push('');
 
   return `${lines.join('\n')}\n`;
@@ -364,6 +440,7 @@ export function renderConsoleTable(results, repoRoot) {
       [
         result.id.padEnd(width),
         (result.accepted === true ? `${result.status}*` : result.status).padEnd(12),
+        String(result.evidenceLevel ?? 'unclassified').padEnd(20),
         result.mapping.padEnd(10),
         brief(evidence, 2) || '—',
         note.length > 0 ? note : drillNote,

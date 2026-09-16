@@ -612,12 +612,20 @@ export async function createProjectExecution(
       run.taskId === undefined ? [] : (options.store.tasks.find(run.taskId)?.acceptanceIds ?? []);
     testEvidence.begin(attemptId);
     const commands = options.config.project().policy.testCommands;
-    // `data.md` §3 types the check's `environmentRef` as an `ID`; the Attempt is the
-    // id-shaped identity of the execution environment, while the two descriptive facts —
-    // the image the command ran in and the Runner's own `attempt.ready` environment —
-    // travel in the check's `result` instead of being forced into an id.
-    const environmentRef = attemptId;
     const runnerEnvironment = supervisorHolder.current?.environmentRefOf(attemptId);
+    // W8-1 (`data.md` §3): the executed check binds the **same** real environment
+    // descriptor the frozen `VerificationManifest` names — the Runner's own
+    // `attempt.ready` observation `host:<platform>/<arch>/node-<major>` /
+    // `container:<image>` — instead of the Attempt id the check used to carry. That is
+    // what makes `checkResult.checks[].environmentRef` and
+    // `VerificationManifest.environmentRef` one comparable descriptor; the container
+    // image and the Runner descriptor are also kept in the human-readable `result`.
+    // `executeTestEvidence` only runs after readiness (`onAttemptStarted` skips the
+    // spawn-time call until `environmentRefOf` answers), so the descriptor is present on
+    // every production path; an id is kept only as a fail-closed fallback for a stack
+    // whose supervisor reports nothing (the candidate commit then refuses to freeze a
+    // manifest, so the check cannot silently stand in for a verification environment).
+    const environmentRef = runnerEnvironment ?? attemptId;
     const executionImage = broker.execImageTag;
     const inputTree = frozenInputTree(run.taskId);
     const workspace = options.workspace;

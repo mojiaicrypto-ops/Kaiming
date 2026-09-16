@@ -295,3 +295,43 @@ export function conditionHolds(condition, env = process.env) {
  * `RESIDUAL_GAPS`: a `recorded-gap` entry would downgrade an already passing,
  * application-layer AC to UNVERIFIED.
  */
+
+/*
+ * KNOWN PRODUCT GAPS (WP-12 W8-4) — appended register, deliberately separate from
+ * `RESIDUAL_GAPS`.
+ *
+ * A `RESIDUAL_GAPS` entry describes a part of an AC that a *drill* could execute but
+ * this environment could not, and the aggregator downgrades the AC to UNVERIFIED while
+ * the condition holds. A known product gap is different: the AC's mapped evidence still
+ * passes at its own layer, but the product is missing a behaviour the AC's user-facing
+ * reading implies. Registering it here makes the gap visible in the release report
+ * **without** weakening the PASS/FAIL verdict, which is what W8-4 required (the AC text
+ * in `docs/delivery/acceptance.md` is not touched).
+ *
+ * `whatItWouldTake` is the implementation sketch an owner needs before starting; no
+ * entry here authorises an implementation by itself.
+ */
+export const KNOWN_PRODUCT_GAPS = Object.freeze({
+  'AC-011': {
+    title: 'L3 高风险交付缺少显式确认交互',
+    /**
+     * The behaviour the current product does **not** have.
+     *
+     * `AC-011` is sealed at the library layer by
+     * `packages/core/test/delivery.integration.test.ts` (the L3 gate refuses the
+     * implementation until authorization / rollback / per-item audit / recovery drill
+     * exist). What is missing is the *interaction*: nothing asks the user to confirm an
+     * L3 delivery in the Inbox, and no `decision` row is minted for that confirmation.
+     * The product currently authorizes through the Plan gate plus the Work envelope, so
+     * an L3 migration can proceed without an explicit L3 confirmation step.
+     */
+    gap: 'L3（高风险：迁移/依赖升级/schema 变更等）交付当前只经 Plan 门禁 + Work 信封授权，产品没有"请你确认这是一次 L3 高风险交付"的显式用户交互（Inbox 无该待办、无对应 decision、无拒绝后停下的路径）。库级 Gate 规则已实现并有证据，缺的是这条交互面。',
+    /** What implementing it would require, in order. */
+    whatItWouldTake:
+      '① Core 在 L3 路由判定后铸一条 `kind=decision`（`targetRef` 指向 Plan/风险说明 Artifact，`choices=[confirm, decline, revise]`）并发 `decision.created`，`approve` 之前 Run 不得 `running`；② daemon 面把它包成 Inbox 待办（复用现有 `decision.resolve`，不新增解析入口）；③ decline/revise 走既有 product-behaviour 分支（AC-015/016）而不是新状态；④ 一条真机 e2e 演练覆盖"出现 → 处理 → 消失"，以及"未确认时不得实施 L3"的负例；⑤ 更新 `protocol.md`/`experience.md` 与 AC-011 的证据映射。',
+    decision:
+      'WP-12 W8 裁决 4（2026-09，持钥者）：登记为已知产品缺口，本切片不实现；验收状态仍按已映射证据判定，不由本登记降级。',
+    status: 'open',
+    residual: 'WP-12-D-W8-4',
+  },
+});

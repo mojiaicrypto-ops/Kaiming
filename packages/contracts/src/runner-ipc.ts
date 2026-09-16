@@ -13,6 +13,8 @@
  */
 import { z } from 'zod';
 
+import { environmentRefSchema } from './primitives.js';
+
 export const RUNNER_PROTOCOL_VERSION = 1;
 
 const envelope = {
@@ -50,7 +52,7 @@ export const runnerMessageSchema = z.discriminatedUnion('type', [
        * verified instead of a placeholder. It is the Runner's own process observation; the
        * model and any caller cannot supply it.
        */
-      environmentRef: z.string().min(1),
+      environmentRef: environmentRefSchema,
     })
     .strict(),
   z

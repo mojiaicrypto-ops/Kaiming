@@ -3,6 +3,7 @@ import {
   ABSENT_VERSION,
   MAX_ARRAY_ITEMS,
   emptyScope,
+  environmentRefSchema,
   featureIdSchema,
   gitRevisionSchema,
   hashSchema,
@@ -118,5 +119,17 @@ describe('refs and scopes', () => {
     const tooMany = Array.from({ length: MAX_ARRAY_ITEMS + 1 }, () => 'a.md');
     expect(scopeSchema.safeParse(emptyScope()).success).toBe(true);
     expect(scopeSchema.safeParse({ ...emptyScope(), readPaths: tooMany }).success).toBe(false);
+  });
+
+  it('accepts an execution environment descriptor, not only an id (W8-1)', () => {
+    // The descriptor the Runner reports in `attempt.ready`; the check and the manifest
+    // both bind it verbatim (`data.md` §3 `Env`).
+    expect(environmentRefSchema.safeParse('host:darwin/arm64/node-24').success).toBe(true);
+    expect(environmentRefSchema.safeParse('container:agentdev/exec:0.0.0').success).toBe(true);
+    expect(environmentRefSchema.safeParse('container:undeclared').success).toBe(true);
+    // The library-level fixtures that still use an id keep parsing...
+    expect(environmentRefSchema.safeParse(VALID_ID).success).toBe(true);
+    // ...but an empty environment is never a valid descriptor.
+    expect(environmentRefSchema.safeParse('').success).toBe(false);
   });
 });

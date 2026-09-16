@@ -4,11 +4,11 @@
 
 ## 0. 运行元数据
 
-- 生成时间：2026-09-15T23:44:12.014Z
+- 生成时间：2026-09-16T00:05:12.146Z
 - 命令：`pnpm test:acceptance`（实际执行 `node scripts/acceptance.mjs`）
 - 仓库：`/Users/huyaohua/huyh/work/aigrouptool`
-- Git HEAD：`02b89bfc5541d810d4c7670e13599496ddccd70b`（工作区有未提交改动）
-- 证据绑定：`codeDigest sha256:596c717acb46fd0d0effdeadce7cf660f64a7094bb1612b9106250c0bdec3a47`（gitTree `9021abd0fff8ef04a7e59c82183a94cc41b9c990`，357 个代码文件的内容哈希）；演练报告必须携带同一绑定才会被采用
+- Git HEAD：`76fb642439f435089b9cd7390906d1196512483a`（工作区有未提交改动）
+- 证据绑定：`codeDigest sha256:2dec5b700c3fc5085ab4ea37352ff978f88a36c0bf659b8bb8a4a636e417815d`（gitTree `20936cec0ada52418fe827464dcbacefaf7a1ea6`，358 个代码文件的内容哈希）；演练报告必须携带同一绑定才会被采用
 - Node：`v24.8.0`；Docker：可用
 - 真实 Provider 环境变量：已配置；Review/Test 独立模型：已配置
 - 发布演练：本次运行内执行了 `scripts/e2e.mjs` 与 `scripts/live.mjs`（非读取仓库文件）
@@ -16,117 +16,133 @@
 
 - AC 统计：**共 94**（期望 94） → **PASS 94 / ACCEPTED 0 / FAIL 0 / MISSING 0**
 - ACCEPTED = 该 AC 的完整 Given/When/Then 未全部执行，但缺口已在 `scripts/lib/drill-acs.mjs` 登记，且豁免条件在本次运行中依然成立（逐条见 §3）。PASS 只表示该 AC 的全部已映射证据通过且没有未验证的登记缺口。
-- 已执行提交用例：2020 个，覆盖 136/136 个测试文件
+
+- **证据层级（W9）：product-path 53 / library-level 41 / environment-limited 0**
+- 层级定义与推导规则见 §2.1；`product-path` 表示真实 daemon/CLI/浏览器/真 Provider 演练或 `apps/*` 应用层已执行证据，`library-level` 表示只有库级（或播种行）证据——库级是该规则的正确层级，但不等于产品路径证明，`environment-limited` 表示本环境缺少该 AC 所需的一半输入。
+- 已执行提交用例：2022 个，覆盖 136/136 个测试文件
 
 ## 1. 自动检查原始结果
 
 | 命令 | 退出码 | 结果摘要 | 原始输出尾部 |
 |---|---|---|---|
-| `vitest run --project unit` | 0 | 1479 tests / 1479 passed / 0 failed | JSON report written to /var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-acceptance-unit-53707.json |
-| `vitest run --project integration` | 0 | 541 tests / 541 passed / 0 failed | done. Cloning into '/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t5-nopool-dn7E09/clone'... done. runner: attempt-1 delivered nothing; waiting for the correction or a shutdown; model said: (no text) runner: attempt-1 delivered nothing; waiting for the correction or a shutdown; model said: (no text) runner: attempt-1 delivered nothing; waiting for the correction or a shutdown; model said: (no text) |
-| `pnpm test:e2e`（本次运行内执行） | 0 | 真实演练（见 §6.6） | ops: relocate (fail-closed + alias) ops: doctor ops: launchd unit PASS       ops.backup-restore                             [AC-064] credentialed Provider provider:01a0a771-dd24-73bd-ab33-c20b6676139f -> Chief Run 01a0a771-dd65-7c1f-8ead-5e3e0a56a501 reached attempt.ready (Attempt 01a0a771-e0b3-7724-8de8-edf6eb160b39 running) and … UNVERIFIED provider.fact-and-unknown                      [AC-001] AC-001 的“区分事实/未知”需要真实 Provider 纵向演练（pnpm test:live 与 AGENTDEV_PROVIDER_*）；本演练离线运行，Provider 桩被断言零调用 e2e: wrote drill report to /var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-acceptance-drills-TG7Z3m/e2e.mjs.json e2e: 27 checks — PASS 26 / FAIL 0 / UNVERIFIED 1 e2e: 31 ACs accounted for by the drill; exit 0 |
-| `pnpm test:live`（本次运行内执行） | 0 | 真实演练（见 §6.6） | PASS       drill.html-explanation                         [AC-001] message 01a0a772-17f1-74c2-9354-ace61a8dba8a -> Work 01a0a772-17f1-704d-8b9c-31470aef2773 (intent=assist level=none, no Requirement); completion through run 01a0a772-1890-79c8-99fa-7fd4f6c91acc (conf… PASS       drill.l1-typo                                  [AC-007] Work 01a0a772-7398-7045-b314-fa0f3ca9b595 (level=L1, base 46e1638ed187) one-task Plan 01a0a772-77f approved by the real gate; write admitted for src/orders/messages.ts; real exec Run 01a0a772-781c-72… PASS       drill.l2-delivery                              [AC-010,AC-037,AC-041,AC-043] Work 01a0a772-86ad-7cc0-be71-8d28d3d3b6ce (L2, base d7038544523b) + Requirement 01a0a772-86cd-7c73-897e-58b2fd5c19fa; model Plan 01a0a772-8f5 approved, Task 01a0a772-8f4e-7a6e-be04-616cdb6de011; inde… PASS       drill.runtime-attempt                          [AC-057] the runtime executed Run 01a0a772-a758-76d4-b3bc-ffd2b946885a through a real apps/runner child process (Attempt 01a0a772-a825-740b-a13a-6d1d33b9b739, runnerId pid:54614) against the real Provider; 11… PASS       drill.message-to-stage                         [AC-003,AC-005,AC-069] real Provider one-message chain: message 01a0a772-c561-7cb0-bab6-2f679a2bd5e8 → Chief Run 01a0a772-c583-7fef-a4de-bc58930adaff (running) → Requirement 01a0a772-e483-7d3d-8ffb-fc9372a2b21a (active/pla… PASS       drill.session-streaming                        [AC-066] real Pi session over the Core gateway (provider deepseek-flash): streaming text_delta=1 thinking_delta=0 first="PONG-AC066" last="PONG-AC066"; session file 5 → 7 record(s); resumed with a new factory… live: wrote drill report to /var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-acceptance-drills-TG7Z3m/live.mjs.json live: 7 passed / 0 failed / 0 unverified; 13 call(s), HTTP 200/200/200/200/200/200/200/200/200/200/200/200/200, 36837ms total, 0 failed |
-| 演练报告 `pnpm test:e2e（本次运行，nonce b9046038…，绑定 sha256:596c717acb46…）` | - | 已并入聚合（绑定已校验） | - |
-| 演练报告 `pnpm test:live（本次运行，nonce b9046038…，绑定 sha256:596c717acb46…）` | - | 已并入聚合（绑定已校验） | - |
+| `vitest run --project unit` | 0 | 1480 tests / 1480 passed / 0 failed | JSON report written to /var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-acceptance-unit-95893.json |
+| `vitest run --project integration` | 0 | 542 tests / 542 passed / 0 failed | done. Cloning into '/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-t5-nopool-fNNifu/clone'... done. runner: attempt-1 delivered nothing; waiting for the correction or a shutdown; model said: (no text) runner: attempt-1 delivered nothing; waiting for the correction or a shutdown; model said: (no text) runner: attempt-1 delivered nothing; waiting for the correction or a shutdown; model said: (no text) |
+| `pnpm test:e2e`（本次运行内执行） | 0 | 真实演练（见 §6.6） | ops: relocate (fail-closed + alias) ops: doctor ops: launchd unit PASS       ops.backup-restore                             [AC-064] credentialed Provider provider:01a0a785-c0fc-791c-82c0-7d8375d74f75 -> Chief Run 01a0a785-c143-73ff-bd7a-6dd079c2ffa8 reached attempt.ready (Attempt 01a0a785-c44d-7be3-b4c4-f7864f1069a7 running) and … UNVERIFIED provider.fact-and-unknown                      [AC-001] AC-001 的“区分事实/未知”需要真实 Provider 纵向演练（pnpm test:live 与 AGENTDEV_PROVIDER_*）；本演练离线运行，Provider 桩被断言零调用 e2e: wrote drill report to /var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-acceptance-drills-lxZcaT/e2e.mjs.json e2e: 27 checks — PASS 26 / FAIL 0 / UNVERIFIED 1 e2e: 31 ACs accounted for by the drill; exit 0 |
+| `pnpm test:live`（本次运行内执行） | 0 | 真实演练（见 §6.6） | PASS       drill.html-explanation                         [AC-001] message 01a0a785-ff57-7431-8ac1-a04bfb38d0fb -> Work 01a0a785-ff57-70ff-a765-122a4502493e (intent=assist level=none, no Requirement); completion through run 01a0a786-0002-728a-bfc7-f47b437be774 (conf… PASS       drill.l1-typo                                  [AC-007] Work 01a0a786-61f1-7105-a700-d281ebdeb5da (level=L1, base 1aac8fdcb584) one-task Plan 01a0a786-65b approved by the real gate; write admitted for src/orders/messages.ts; real exec Run 01a0a786-65d0-75… PASS       drill.l2-delivery                              [AC-010,AC-037,AC-041,AC-043] Work 01a0a786-72fb-79f1-83d8-e5ce7ac6d0ec (L2, base 458adbcff6c3) + Requirement 01a0a786-731a-7d2d-9925-6bb7a34f85b4; model Plan 01a0a786-7dc approved, Task 01a0a786-7db5-7d3b-bd48-64899ae0d17f; inde… PASS       drill.runtime-attempt                          [AC-057] the runtime executed Run 01a0a786-9ec2-76e3-9eed-e7e708aac2e4 through a real apps/runner child process (Attempt 01a0a786-9f90-7659-8e82-749106bb0bef, runnerId pid:97189) against the real Provider; 11… PASS       drill.message-to-stage                         [AC-003,AC-005,AC-069] real Provider one-message chain: message 01a0a786-bcee-741f-8f3b-90010db840b2 → Chief Run 01a0a786-bd0f-7ba3-9d09-e7cddbe9185d (running) → Requirement 01a0a786-d4e9-71f3-8c86-4e0de65bed69 (active/pla… PASS       drill.session-streaming                        [AC-066] real Pi session over the Core gateway (provider deepseek-flash): streaming text_delta=1 thinking_delta=0 first="PONG-AC066" last="PONG-AC066"; session file 5 → 7 record(s); resumed with a new factory… live: wrote drill report to /var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-acceptance-drills-lxZcaT/live.mjs.json live: 7 passed / 0 failed / 0 unverified; 13 call(s), HTTP 200/200/200/200/200/200/200/200/200/200/200/200/200, 40328ms total, 0 failed |
+| 演练报告 `pnpm test:e2e（本次运行，nonce a12a1439…，绑定 sha256:2dec5b700c3f…）` | - | 已并入聚合（绑定已校验） | - |
+| 演练报告 `pnpm test:live（本次运行，nonce a12a1439…，绑定 sha256:2dec5b700c3f…）` | - | 已并入聚合（绑定已校验） | - |
 
 ## 2. 每 AC 结果
 
-| AC | 标题 | 状态 | 映射 | 已执行证据（文件 :: 用例） | 备注 / 未验证原因 |
-|---|---|---|---|---|---|
-| AC-001 | 自由问答 | **PASS** | none | — | 演练 pnpm test:e2e：UNVERIFIED；演练 pnpm test:live：PASS |
-| AC-002 | HTML说明 | **PASS** | test-name | apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) uploads, binds and previews an HTML explanation end to end (AC-002/AC-084), apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) consumes a download token once and then refuses it (AC-002), apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) truncates a preview past the inline limit and keeps it downloadable (AC-002) …(+4) | 演练 pnpm test:e2e：PASS |
-| AC-003 | 按需委派 | **PASS** | test-name | packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) produces an agent explanation artifact for a delegated analysis Run (AC-003), apps/daemon/test/assessment-dispatch.integration.test.ts :: message → Chief → DispatchSpec → Requirement → Run → stage result (WP-12 T2) runs the whole path from one message with no seeded row (AC-003/AC-005/AC-069), apps/daemon/test/attempt.integration.test.ts :: a real Attempt through the daemon-side execution path forwards a Provider tool call to a real Pi session and round-trips its result (AC-003) | 演练 pnpm test:e2e：PASS；演练 pnpm test:live：PASS |
-| AC-004 | 执行授权边界 | **PASS** | curated | packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes assist and artifact to none, apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) keeps questions, advice and statements read-only end to end | — |
-| AC-005 | 明确启动 | **PASS** | test-name | packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes a message into independent work items (AC-005/AC-006), packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) records the authority an explicit message grants (AC-005), apps/daemon/test/assessment-dispatch.integration.test.ts :: message → Chief → DispatchSpec → Requirement → Run → stage result (WP-12 T2) runs the whole path from one message with no seeded row (AC-003/AC-005/AC-069) …(+1) | 演练 pnpm test:e2e：PASS；演练 pnpm test:live：PASS |
-| AC-006 | 混合意图 | **PASS** | test-name | packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes a message into independent work items (AC-005/AC-006), packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) splits one mixed message into the work items it names (AC-006) | — |
-| AC-007 | L1错字 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) is L2 when the diff exceeds the L1 bounds or changes logic (AC-009) …(+18) | 演练 pnpm test:live：PASS |
-| AC-008 | 一字语义 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) is L2 when the diff exceeds the L1 bounds or changes logic (AC-009) …(+6) | — |
-| AC-009 | L1升级 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) is L2 when the diff exceeds the L1 bounds or changes logic (AC-009) …(+21) | — |
-| AC-010 | 标准交付 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) requires each stage to depend on the previous one (AC-010) …(+11) | 演练 pnpm test:e2e：PASS；演练 pnpm test:live：PASS |
-| AC-011 | 高风险交付 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) requires each stage to depend on the previous one (AC-010) …(+6) | — |
-| AC-012 | 正式结论 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) requires each stage to depend on the previous one (AC-010) …(+13) | — |
-| AC-013 | 无效Plan | **PASS** | test-name | packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a write without an approved Plan and leaves the source hash unchanged (AC-013), packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a Plan for another revision and a changed Plan hash (AC-013 required failure test), packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) admits the write when the Plan is approved for the current revision (AC-014) …(+26) | — |
-| AC-014 | 范围内自动Plan | **PASS** | test-name | packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a write without an approved Plan and leaves the source hash unchanged (AC-013), packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a Plan for another revision and a changed Plan hash (AC-013 required failure test), packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) admits the write when the Plan is approved for the current revision (AC-014) …(+20) | — |
-| AC-015 | 产品变化 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) handling now needs a new Product/Plan and invalidates affected evidence (AC-015), packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) queues a Requirement for later and leaves the acceptance alone (AC-016), packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) declining records a reason and changes nothing (AC-016) …(+7) | — |
-| AC-016 | 以后或拒绝 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) handling now needs a new Product/Plan and invalidates affected evidence (AC-015), packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) queues a Requirement for later and leaves the acceptance alone (AC-016), packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) declining records a reason and changes nothing (AC-016) …(+7) | — |
-| AC-017 | 自动返工 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08) …(+48) | — |
-| AC-018 | Finding关闭 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08) …(+11) | — |
-| AC-019 | 未覆盖验证 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08) …(+23) | — |
-| AC-020 | 暂停恢复 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) admits writes only while the Work is running, packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) never lets a caller expectation replace the approved source hash (W6R2-02), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) pauses at a safe point, admits no write, and resumes into a new Attempt after the version check (AC-020) …(+11) | — |
-| AC-021 | 取消需求 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) admits writes only while the Work is running, packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) never lets a caller expectation replace the approved source hash (W6R2-02), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) binds a task-less integration Finding and sends it straight back to development (AC-083, AC-017) …(+47) | — |
-| AC-022 | 预算止损 | **PASS** | test-name | packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses an over-used budget instead of assuming a zero usage (AC-022, W6R1-03), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) closes through evaluateFindingClosure and stops at the rework allowance (AC-017/AC-022), packages/domain/test/delivery.test.ts :: budget reservation (AC-022) refuses an over-limit reservation atomically with no partial charge (AC-022) …(+6) | — |
-| AC-023 | 无注册多项目 | **PASS** | test-name | apps/daemon/test/project-lifecycle.integration.test.ts :: installation project directory (WP-12 T5.1/T5.2) opens two real roots with independent ids, databases and registries (AC-023), apps/web/test/multi-project.integration.test.ts :: single-entry multi-project BFF (WP-12 T5.5) renders each project page from its own daemon and never from the other (AC-023/AC-034), packages/core/test/identity.integration.test.ts :: independent projects (AC-023) gives two real roots distinct ids and independent databases | — |
-| AC-024 | 路径识别 | **PASS** | test-name | packages/core/test/identity.integration.test.ts :: canonical roots (AC-024) normalizes a subdirectory to the repository root, packages/core/test/identity.integration.test.ts :: canonical roots (AC-024) normalizes a trailing separator and a symlinked path, packages/core/test/identity.integration.test.ts :: canonical roots (AC-024) finds the git root from a deep directory and reports no git root outside one …(+5) | — |
-| AC-025 | 空项目 | **PASS** | test-name | packages/workspace/test/initialize.test.ts :: empty project (AC-025) creates the initial Git and delivery branch, then confirms an unimplemented project, apps/daemon/test/project-lifecycle.integration.test.ts :: installation project directory (WP-12 T5.1/T5.2) creates a project in an empty directory with Git, the delivery branch and the events (AC-025) | — |
-| AC-026 | 旧项目初始化 | **PASS** | test-name | apps/daemon/test/project-initialization.integration.test.ts :: project.initialize over the real state machine (WP-12 T5.3) investigates a legacy project and reaches Ready without moving the code (AC-026), packages/workspace/test/scan.test.ts :: scanProject budgets stops at 40 body files and reports a partial map with explicit unknowns, packages/workspace/test/scan.test.ts :: scanProject budgets stops before exceeding 512 KiB of body content …(+4) | — |
-| AC-027 | 目录项目 | **PASS** | test-name | apps/daemon/test/project-initialization.integration.test.ts :: project.initialize over the real state machine (WP-12 T5.3) never silently re-initializes an existing repository from a bare new-mode request (AC-027), apps/daemon/test/project-initialization.integration.test.ts :: initialize driver blockers (WP-12 T5.3) refuses to run git init without the explicit mode and reports the request (AC-027), packages/workspace/test/initialize.test.ts :: no-Git directory returns Blocked with the Git-initialization authorization request …(+1) | — |
-| AC-028 | 脏工作区 | **PASS** | test-name | apps/daemon/test/project-initialization.integration.test.ts :: project.initialize over the real state machine (WP-12 T5.3) blocks a dirty workspace with a per-path hash report and keeps investigation working (AC-028), packages/workspace/test/initialize.test.ts :: dirty workspace blocks delivery start with a hash report while read-only investigation still works | — |
-| AC-029 | 初始化冲突中断 | **PASS** | test-name | apps/daemon/test/project-initialization.integration.test.ts :: project.initialize over the real state machine (WP-12 T5.3) stops on a workspace it must not overwrite and reports the real per-path hashes (AC-029), packages/core/test/wp08.integration.test.ts :: WP-08 T4 end-to-end integration drill runs the initialization route: interrupted writing resumes by hash and a conflict is never overwritten (AC-029) | — |
-| AC-030 | Chief选上下文 | **PASS** | test-name | packages/core/test/context-builder.test.ts :: buildContext — happy path (AC-030) freezes the documented fields and copies the content into the snapshot directory, packages/core/test/context-builder.test.ts :: buildContext — happy path (AC-030) accounts tokens with the documented character/4 estimator by default, packages/core/test/context-builder.test.ts :: buildContext — happy path (AC-030) resolves an artifact id@version through the fetch port …(+8) | — |
-| AC-031 | 缺上下文 | **PASS** | test-name | packages/core/test/context-builder.test.ts :: buildContext — required inputs (AC-031, AC-079) returns MISSING_CONTEXT with the precise gap and no frozen snapshot, packages/core/test/context-builder.test.ts :: buildContext — required inputs (AC-031, AC-079) does not expand a module to satisfy a gap, packages/core/test/context-builder.test.ts :: buildContext — required inputs (AC-031, AC-079) does not let an asserted artifact-backed input satisfy the table (W5R2-04) …(+5) | — |
-| AC-032 | 追加读取 | **PASS** | test-name | packages/core/test/context-ledger.test.ts :: read ledger — append inside readScope (AC-032) appends a reasoned read with its full identity and accounts its tokens, packages/core/test/context-ledger.test.ts :: read ledger — append inside readScope (AC-032) allocates seq 1..n in append order and never reuses a number, packages/core/test/context-ledger.test.ts :: read ledger — append inside readScope (AC-032) inherits the Run revision and lets one read override it …(+22) | 演练 pnpm test:e2e：PASS |
-| AC-033 | 独立审核 | **PASS** | test-name | packages/core/test/context-acl.test.ts :: context ACL — transcript isolation (AC-033) denies the transcript kind to every role and stage, packages/core/test/context-acl.test.ts :: context ACL — transcript isolation (AC-033) denies Review and Test every message body, packages/core/test/context-acl.test.ts :: context ACL — transcript isolation (AC-033) denies a chat/transcript path marker to every role by path …(+20) | — |
-| AC-034 | 跨项目隔离 | **PASS** | test-name | packages/core/test/context-acl.test.ts :: context ACL — cross-project isolation (AC-034) denies a source that belongs to another Project, packages/core/test/context-acl.test.ts :: context ACL — cross-project isolation (AC-034) denies another Project source whatever the source class, packages/core/test/context-acl.test.ts :: context ACL — cross-project isolation (AC-034) accepts a source of the same Project …(+14) | — |
-| AC-035 | 会话轮换 | **PASS** | test-name | packages/core/test/context-checkpoint.test.ts :: checkpoint: session rotation (AC-035) recovers role/task/permissions/sources and keeps the approval state, packages/core/test/context-checkpoint.test.ts :: checkpoint: session rotation (AC-035) leaves the stored session unchanged when there is no checkpoint to rotate (W5R1-08), packages/core/test/context-checkpoint.test.ts :: checkpoint: session rotation (AC-035) does not let a staleness/rotation of the message list touch the approval …(+2) | — |
-| AC-036 | 预算不足 | **PASS** | test-name | packages/core/test/context-builder.test.ts :: buildContext — selection validation (AC-030) refuses a budget outside the documented 4096–2000000 range (AC-036), packages/core/test/context-builder.test.ts :: buildContext — budget (AC-036) reports BUDGET_EXCEEDED with the dropped ref and the missing tokens, packages/core/test/context-builder.test.ts :: buildContext — budget (AC-036) drops an optional source instead of the whole package and names it …(+16) | — |
-| AC-037 | 当前功能 | **PASS** | test-name | packages/knowledge/test/projection.test.ts :: projection build renders a feature body that parses back to the same facts (AC-037), packages/knowledge/test/projection.test.ts :: projection build never injects an unrelated document into the feature body or index (AC-037), packages/knowledge/test/views.test.ts :: knowledge views separates confirmed intent from delivered reality (AC-038, AC-037) …(+11) | 演练 pnpm test:e2e：PASS；演练 pnpm test:live：PASS |
-| AC-038 | 状态分离 | **PASS** | test-name | packages/knowledge/test/views.test.ts :: knowledge views separates confirmed intent from delivered reality (AC-038, AC-037), packages/knowledge/test/views.test.ts :: knowledge views keeps a Work overlay out of the delivered answer and out of another Work (AC-038) | 演练 pnpm test:e2e：PASS |
-| AC-039 | 语义关系 | **PASS** | test-name | packages/core/test/context-cold-start.test.ts :: cold start: selection order and reasons (AC-039) follows overview → current work → navigation → constraints → bodies, with a reason each, packages/core/test/context-cold-start.test.ts :: cold start: selection order and reasons (AC-039) is deterministic: the same query selects the same entries in the same order | — |
-| AC-040 | 非法知识 | **PASS** | test-name | packages/knowledge/test/projection.test.ts :: projection build keeps the last valid projection, marks it stale and reports KNOWLEDGE_INVALID (AC-040), packages/knowledge/test/projection.test.ts :: projection build republishes and clears stale after a valid document follows an invalid one (AC-040), packages/knowledge/test/projection.test.ts :: broken-link diagnostics in a projection (AC-040) gates delivery for the current requirement only when the requirement touches the feature …(+1) | — |
-| AC-041 | 知识结算 | **PASS** | test-name | packages/core/test/integrate.integration.test.ts :: Accept/Integrate and Settlement over real Git (AC-010, AC-012, AC-041, AC-081) integrates B-on-A without re-applying the ancestor and settles the Requirement, packages/core/test/integrate.integration.test.ts :: Accept/Integrate and Settlement over real Git (AC-010, AC-012, AC-041, AC-081) reuses the verified Task evidence when only the Core-maintained pool was added (WP-12 W4c), packages/core/test/integrate.integration.test.ts :: Accept/Integrate and Settlement over real Git (AC-010, AC-012, AC-041, AC-081) freezes no integration manifest when the combination really is unverified code …(+11) | 演练 pnpm test:e2e：PASS；演练 pnpm test:live：PASS |
-| AC-042 | 观察与意图 | **PASS** | test-name | packages/knowledge/test/views.test.ts :: knowledge views lists observed-versus-confirmed gaps without accepting observed behaviour (AC-042), packages/workspace/test/initialize.test.ts :: design/code conflict (AC-042) blocks Confirming, never confirms the existing document and keeps candidates observed, packages/workspace/test/scan.test.ts :: candidate knowledge reports an existing document that disagrees with the observed tree (AC-042) | — |
-| AC-043 | 独立模型 | **PASS** | test-name | packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) inherits run → project → global role → global default in order, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) blocks a role whose model is missing or unsupported instead of downgrading, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) freezes a profile into an immutable snapshot and keeps it stable …(+15) | 演练 pnpm test:live：PASS |
-| AC-044 | 配置冻结 | **PASS** | test-name | packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) inherits run → project → global role → global default in order, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) blocks a role whose model is missing or unsupported instead of downgrading, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) freezes a profile into an immutable snapshot and keeps it stable …(+75) | — |
-| AC-045 | 主控分派 | **PASS** | test-name | packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) runs through the frozen profile of the Run, packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) runs against a Provider that needs no secret (T-01), packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) refuses to admit a Run whose secret cannot be resolved (R18-05) …(+69) | 演练 pnpm test:e2e：PASS |
-| AC-046 | Join和失败 | **PASS** | test-name | packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) holds the parent in waiting_children and keeps every sibling result, packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) refuses a new child once the parent Chief Run has ended (N-04, N-05), packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) does not hold the parent for joinPolicy=none, but still pages the Chief …(+13) | — |
-| AC-047 | 结构化交付 | **PASS** | test-name | packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) holds the parent in waiting_children and keeps every sibling result, packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) refuses a new child once the parent Chief Run has ended (N-04, N-05), packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) does not hold the parent for joinPolicy=none, but still pages the Chief …(+12) | — |
-| AC-048 | Workspace边界 | **PASS** | test-name | packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) admits a read and records the tool operation and the audit event (AC-048), packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) refuses an out-of-scope target with no execution and records the refusal (AC-048), packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) refuses an operation the Grant does not cover (AC-048) …(+85) | 演练 pnpm test:e2e：PASS |
-| AC-049 | Autonomous范围 | **PASS** | test-name | packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) admits the exact once binding and reports no replay for a first use, packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) replays a consumed once grant for the same operation and input (AC-080), packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) binds a replay to the full operation/role/stage triple, not just the run (W7R1-06) …(+85) | — |
-| AC-050 | Full Access门禁 | **PASS** | test-name | packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) admits a read and records the tool operation and the audit event (AC-048), packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) refuses an out-of-scope target with no execution and records the refusal (AC-048), packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) refuses an operation the Grant does not cover (AC-048) …(+71) | 演练 pnpm test:e2e：PASS |
-| AC-051 | Secret隔离 | **PASS** | test-name | packages/core/test/secrets.test.ts :: SecretStore resolution (AC-051) resolves a registered ref for the authorized Grantholder (AC-051), packages/core/test/secrets.test.ts :: SecretStore resolution (AC-051) refuses an unknown ref with NOT_FOUND for an authorized ref shape (AC-051), packages/core/test/secrets.test.ts :: SecretStore resolution (AC-051) refuses an unauthorized caller without disclosing whether the ref exists (AC-051) …(+39) | — |
-| AC-052 | HTML安全 | **PASS** | test-name | apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) serves a preview of a hostile document under the same isolation (AC-052), packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) carries the isolation policy on every preview (AC-052) | 演练 pnpm test:e2e：PASS |
-| AC-053 | 信任与资源 | **PASS** | test-name | packages/pi-runtime/test/trust.test.ts :: untrusted repository (AC-053) never imports, reads or activates a repository resource and reports every skip, packages/pi-runtime/test/trust.test.ts :: untrusted repository (AC-053) still activates the shipped release whitelist, which is not repository content, packages/pi-runtime/test/trust.test.ts :: trusted repository (AC-053) imports a selected, whitelisted repository extension only after trust …(+22) | — |
-| AC-054 | UI断开 | **PASS** | test-name | packages/client/test/commands.test.ts :: AC-054 reconnect and bounded backoff reconnects on the documented schedule and replays the hello, packages/client/test/commands.test.ts :: AC-054 reconnect and bounded backoff applies bounded exponential backoff while every reconnect fails, packages/client/test/commands.test.ts :: AC-054 reconnect and bounded backoff reports the attempt number while reconnecting and ends at the limit …(+2) | 演练 pnpm test:e2e：PASS |
-| AC-055 | 幂等接受 | **PASS** | test-name | packages/client/test/commands.test.ts :: AC-055 write retry with the same idempotency key replays a write whose answer was lost and reports the replay, packages/client/test/commands.test.ts :: AC-055 write retry with the same idempotency key queues a write that never reached the wire and replays it after reconnect, packages/client/test/commands.test.ts :: AC-055 write retry with the same idempotency key retries a BUSY write with backoff and the same key …(+10) | — |
-| AC-056 | Mailbox非阻塞 | **PASS** | test-name | packages/core/test/mailbox.test.ts :: ProjectMailbox answers a new command while a long effect is still running (AC-056), packages/core/test/dispatcher.integration.test.ts :: long operations do not block commands (AC-056) answers a command within a second while a model call is in flight | — |
-| AC-057 | Runner失联 | **PASS** | test-name | packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) withholds a new Attempt while the old execution is unconfirmed (W8R1-04), packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) binds a resume decision to its own Run, not to the whole Work (W8R2-03), packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) keeps a Run-bound resume decision past a window of unrelated decisions (W8R3-04) …(+18) | 演练 pnpm test:e2e：PASS；演练 pnpm test:live：PASS |
-| AC-058 | 过期结果 | **PASS** | test-name | packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) withholds a new Attempt while the old execution is unconfirmed (W8R1-04), packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) binds a resume decision to its own Run, not to the whole Work (W8R2-03), packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) keeps a Run-bound resume decision past a window of unrelated decisions (W8R3-04) …(+18) | — |
-| AC-059 | 背压 | **PASS** | test-name | packages/core/test/events-hub.integration.test.ts :: connection back-pressure (AC-059) coalesces transient frames once the soft limit is crossed, packages/core/test/events-hub.integration.test.ts :: connection back-pressure (AC-059) closes the connection at the hard limit without dropping durable events, packages/core/test/events-hub.integration.test.ts :: connection back-pressure (AC-059) keeps default limits at the documented 2 MiB / 8 MiB | — |
-| AC-060 | 范围订阅 | **PASS** | test-name | apps/web/test/multi-project.integration.test.ts :: single-entry multi-project BFF (WP-12 T5.5) binds the event socket to one project and never replays another project cursor (AC-034/AC-060), packages/core/test/events-hub.integration.test.ts :: scope change (AC-060) answers a fresh snapshot at a new watermark and covers later events, packages/core/test/events-hub.integration.test.ts :: scope change (AC-060) reports an empty batch with its scan watermark …(+5) | 演练 pnpm test:e2e：PASS |
-| AC-061 | 启动恢复 | **PASS** | test-name | packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) withholds a new Attempt while the old execution is unconfirmed (W8R1-04), packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) binds a resume decision to its own Run, not to the whole Work (W8R2-03), packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) keeps a Run-bound resume decision past a window of unrelated decisions (W8R3-04) …(+18) | — |
-| AC-062 | 集成冲突 | **PASS** | test-name | packages/core/test/wp08-failures.test.ts :: required WP-08 failure tests Task 合并冲突: two passed Tasks conflict, the repair Task is independent and CAS protects HEAD (AC-062), packages/core/test/wp08-failures.test.ts :: required WP-08 failure tests T-01: the repair revision converges and is what the final manifest records (AC-062), packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) produces an independent repair task when two passed Tasks conflict (AC-062) …(+3) | — |
-| AC-063 | 部分结算 | **PASS** | test-name | packages/core/test/wp08-failures.test.ts :: required WP-08 failure tests ref 后崩溃: the restart reuses the commit, completes the state and emits one event (AC-063), packages/core/test/settlement.integration.test.ts :: Crash after the ref update: reuse the commit, complete once (AC-063) runs the whole settlement path: freeze, CAS and complete once, packages/core/test/settlement.integration.test.ts :: Crash after the ref update: reuse the commit, complete once (AC-063) takes the shared integration lock and refuses while a requirement save holds it (W8R2-02) …(+3) | — |
-| AC-064 | 备份恢复 | **PASS** | test-name | packages/core/test/wp08-failures.test.ts :: required WP-08 failure tests 备份演练: backup → restore keeps hashes/knowledge/evidence and blocks a missing Secret (AC-064), apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) backs up and restores the real database through the protocol (AC-064 surface), packages/core/test/backup.integration.test.ts :: Backup, restore and relocate (AC-064) restores a backup into a new directory with consistent hashes, knowledge and evidence …(+5) | 演练 pnpm test:e2e：PASS |
-| AC-065 | Migration | **PASS** | curated | packages/storage/test/migrations.integration.test.ts :: migrations backs up before pending work and writes a usable copy, packages/storage/test/migrations.integration.test.ts :: migrations rolls a failed migration back and reports its version, packages/storage/test/migrations.integration.test.ts :: migrations stops on a checksum mismatch instead of starting …(+3) | — |
-| AC-066 | SDK契约 | **PASS** | curated | packages/pi-runtime/test/session.integration.test.ts :: Pi session lifecycle creates a session with the configured model and no network, packages/pi-runtime/test/events.test.ts :: SDK event mapping maps assistant text and thinking deltas, packages/pi-runtime/test/events.test.ts :: SDK event mapping maps tool execution boundaries …(+4) | 演练 pnpm test:live：PASS |
-| AC-067 | 扩展故障 | **PASS** | curated | packages/pi-runtime/test/extensions.test.ts :: extension activation rejects an id the release does not ship, packages/pi-runtime/test/extensions.test.ts :: extension activation blocks startup when a critical capability fails, packages/pi-runtime/test/extensions.test.ts :: extension activation disables only the failing optional extension …(+2) | — |
-| AC-068 | 看板身份 | **PASS** | test-name | apps/web/test/pages.test.ts :: board page offers a direct cancel and a refused pause for Queued without Work (AC-068), apps/web/test/views.test.ts :: board projection (AC-068) keeps one identity per requirement, in the documented four columns, apps/web/test/views.test.ts :: board projection (AC-068) reports the pause refusal for a Queued requirement without local Work …(+15) | 演练 pnpm test:e2e：PASS |
-| AC-069 | 持续对话 | **PASS** | test-name | apps/web/test/views.test.ts :: run status honesty (AC-069/AC-070) treats only a completed Run as a success, apps/web/test/views.test.ts :: run status honesty (AC-069/AC-070) separates direct/L1 work from board work in the Runs page, apps/daemon/test/assessment-dispatch.integration.test.ts :: message → Chief → DispatchSpec → Requirement → Run → stage result (WP-12 T2) runs the whole path from one message with no seeded row (AC-003/AC-005/AC-069) …(+6) | 演练 pnpm test:e2e：PASS；演练 pnpm test:live：PASS |
-| AC-070 | 产物版本 | **PASS** | test-name | apps/web/test/views.test.ts :: requirement detail (AC-070) marks the plan card expired when the shown version is not the current one, apps/web/test/views.test.ts :: requirement detail (AC-070) keeps a current plan card approvable, apps/web/test/views.test.ts :: requirement detail (AC-070) carries artifact version and validity without presenting history as current …(+14) | 演练 pnpm test:e2e：PASS |
-| AC-071 | Live布局 | **PASS** | test-name | apps/web/test/client-script.test.ts :: interface language switching (WP-12 T4) returns focus to the Live restore control when the overlay closes (AC-071), apps/web/test/pages.test.ts :: shared shell carries the panel mode on the shell so the top bar restores it (AC-071), apps/web/test/pages.test.ts :: shared shell keeps the restore control before the panel contents in the tab order (AC-071) …(+2) | 演练 pnpm test:e2e：PASS |
-| AC-072 | Conversation归属 | **PASS** | test-name | apps/web/test/pages.test.ts :: shared shell offers no conversation create/switch control outside Chief (AC-072), apps/web/test/server.integration.test.ts :: workbench BFF over the real daemon (WP-09 T3) shares the panel mode across pages and keeps Chief-only controls off other pages (AC-071/AC-072), apps/web/test/server.integration.test.ts :: workbench BFF over the real daemon (WP-09 T3) walks login → board → detail → approve → event in one headless flow (AC-068–AC-072) …(+1) | 演练 pnpm test:e2e：PASS |
-| AC-073 | 语言可访问 | **PASS** | test-name | apps/web/test/pages.test.ts :: shared shell exposes a language switch that only touches the interface dictionary (AC-073), apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) translates only the interface strings and leaves project content untouched (AC-073), apps/web/test/server.integration.test.ts :: workbench BFF over the real daemon (WP-09 T3) answers a page request with the language the browser asked for (AC-073) …(+1) | 演练 pnpm test:e2e：PASS |
-| AC-074 | Inbox去重 | **PASS** | test-name | apps/web/test/client-script.test.ts :: inbox actions (WP-12 T4c, AC-074) routes a saved decision choice through decision.resolve, apps/web/test/client-script.test.ts :: inbox actions (WP-12 T4c, AC-074) routes approve and deny through permission.respond, apps/web/test/client-script.test.ts :: inbox actions (WP-12 T4c, AC-074) refuses a denial with no recorded reason before any request …(+43) | 演练 pnpm test:e2e：PASS |
-| AC-075 | 配置错误 | **PASS** | test-name | apps/web/test/pages.test.ts :: settings page (AC-075) renders the active revision, the editor and the test control, apps/web/test/pages.test.ts :: settings page (AC-075) gives every provider row a real editor with a never-pre-filled password field (WP-12 T1.2B), apps/web/test/pages.test.ts :: settings page (AC-075) never renders a provider secret value, even for post-save state (WP-12 T1.2B) …(+7) | 演练 pnpm test:e2e：PASS |
-| AC-076 | 附件限制 | **PASS** | test-name | apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) rejects unsupported and oversized uploads server-side (AC-076), packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) enforces the upload limits before anything is stored (AC-076), apps/web/test/views.test.ts :: attachment limits (AC-076) accepts a documented set …(+6) | 演练 pnpm test:e2e：PASS |
-| AC-077 | 文件只读 | **PASS** | test-name | apps/web/test/pages.test.ts :: files page (AC-077) shows the branch, the target revision and the read-only boundary, apps/web/test/pages.test.ts :: files page (AC-077) renders a refused path as an error with its code, not an empty tree, apps/web/test/views.test.ts :: file boundary (AC-077) resolves a nested relative path inside the root …(+6) | 演练 pnpm test:e2e：PASS |
-| AC-078 | 认证生命周期 | **PASS** | test-name | packages/client/test/commands.test.ts :: AC-078 authentication lifecycle surfaces an expired session as a typed error without retrying, packages/client/test/commands.test.ts :: AC-078 authentication lifecycle never retries a NOT_AUTHORIZED write, packages/client/test/commands.test.ts :: AC-078 authentication lifecycle does not reconnect when the handshake itself is refused …(+29) | 演练 pnpm test:e2e：PASS |
-| AC-079 | 初始阶段上下文 | **PASS** | test-name | packages/core/test/context-acl.test.ts :: context ACL — future artifacts (AC-079) denies a future artifact class to an earlier stage, packages/core/test/context-acl.test.ts :: context ACL — future artifacts (AC-079) denies review/test artifacts to a Developer, packages/core/test/context-acl.test.ts :: context ACL — future artifacts (AC-079) keeps a plan readable to Review and Test but not a settlement report …(+28) | — |
-| AC-080 | 授权精确绑定 | **PASS** | test-name | packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) admits the exact once binding and reports no replay for a first use, packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) replays a consumed once grant for the same operation and input (AC-080), packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) binds a replay to the full operation/role/stage triple, not just the run (W7R1-06) …(+71) | — |
-| AC-081 | Task依赖输入 | **PASS** | test-name | packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) orders the DAG deterministically and rejects a cycle, packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) records dependencyRevision and dependencyManifestRefs, then starts B from A, packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) invalidates B when its ancestor revision moves …(+11) | — |
-| AC-082 | 重启保留窄范围 | **PASS** | test-name | packages/core/test/orchestrator.test.ts :: chief orchestration (AC-045, AC-044, AC-082) records an immutable assessment with the routing evidence, packages/core/test/orchestrator.test.ts :: chief orchestration (AC-045, AC-044, AC-082) applies the documented routing floor from the payload alone (R9-01, DC-62), packages/core/test/orchestrator.test.ts :: chief orchestration (AC-045, AC-044, AC-082) fails closed on unknown risk flags and on authorization provenance (R10-01/R10-02) …(+79) | — |
-| AC-083 | 组合及文档Finding | **PASS** | test-name | packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08) …(+50) | — |
-| AC-084 | 首条消息附件 | **PASS** | test-name | apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) refuses unauthenticated requests (AC-084), apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) uploads, binds and previews an HTML explanation end to end (AC-002/AC-084), apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) deletes only staged uploads and refuses bound ones (AC-084) …(+6) | 演练 pnpm test:e2e：PASS |
-| AC-085 | 证据读取封口 | **PASS** | test-name | packages/core/test/context-ledger.test.ts :: read ledger — seal and stale binding (AC-085) seals the ordered entries and refuses every later append, packages/core/test/context-ledger.test.ts :: read ledger — seal and stale binding (AC-085) re-sealing is idempotent, packages/core/test/context-ledger.test.ts :: read ledger — seal and stale binding (AC-085) verifies the correct binding and rejects an older seq or a different hash …(+19) | — |
-| AC-086 | 功能状态证据 | **PASS** | curated | packages/knowledge/test/feature-format.test.ts :: parseFeatureDocument parses a complete document with real-valued fields, packages/knowledge/test/feature-format.test.ts :: parseFeatureDocument rejects design=confirmed without one resolvable decision reference, packages/knowledge/test/feature-format.test.ts :: parseFeatureDocument rejects verification=passed without evidence references …(+4) | — |
-| AC-087 | 需求池随Git迁移 | **PASS** | test-name | apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) keeps an imported requirement identity and its evidence availability honest (AC-087/AC-088/AC-089), apps/daemon/test/requirement-import.integration.test.ts :: first-open requirement import from the delivery revision (WP-12 T5.4) restores every lifecycle from a real clone with an empty database (AC-087/AC-088/AC-089), apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack reads all nine surfaces from real state in one drill (AC-068–AC-078, AC-084, AC-087–AC-090, AC-093) …(+1) | — |
-| AC-088 | 历史需求展示 | **PASS** | test-name | packages/knowledge/test/requirements-pool.test.ts :: imported history (AC-088) keeps completion, cancellation and pre-archive state without migrating evidence, apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) keeps an imported requirement identity and its evidence availability honest (AC-087/AC-088/AC-089), apps/daemon/test/requirement-import.integration.test.ts :: first-open requirement import from the delivery revision (WP-12 T5.4) restores every lifecycle from a real clone with an empty database (AC-087/AC-088/AC-089) | — |
-| AC-089 | 进行中需求继续 | **PASS** | test-name | packages/core/test/requirement-continue.test.ts :: Requirement continuation (AC-089) lists an imported active Requirement as waiting to continue without starting a Run (AC-089), packages/core/test/requirement-continue.test.ts :: Requirement continuation (AC-089) continues into a new local Work with a recorded authorization and the unmet Gates (AC-089), packages/core/test/requirement-continue.test.ts :: Requirement continuation (AC-089) refuses a Requirement that is not active or already has a local Work (AC-089) …(+14) | — |
-| AC-090 | 需求保存时机 | **PASS** | test-name | apps/web/test/pages.test.ts :: board page renders the branch, commit and push state and offers the lifecycle actions (AC-090), apps/web/test/pages.test.ts :: requirement detail page renders the delivery branch, commit, push state and the card actions (AC-090), apps/web/test/pages.test.ts :: requirement detail page says the push state is unreported when the read payload carries none (AC-090) …(+15) | 演练 pnpm test:e2e：PASS |
-| AC-091 | 需求保存崩溃与交付竞争 | **PASS** | test-name | packages/core/test/requirement-save.test.ts :: completion/settlement consistency (AC-091) accepts a completion record that binds the Settlement revision, tree and manifests, packages/core/test/requirement-save.test.ts :: completion/settlement consistency (AC-091) refuses a completion record whose code revision is not the final revision, packages/core/test/requirement-save.test.ts :: completion/settlement consistency (AC-091) refuses a Settlement that verified a different code tree …(+12) | — |
-| AC-092 | 需求导入冲突与幂等 | **PASS** | test-name | apps/daemon/test/requirement-import.integration.test.ts :: first-open requirement import from the delivery revision (WP-12 T5.4) keeps valid records visible next to a broken one and reports the conflict (AC-092 surface), packages/knowledge/test/requirements-pool.test.ts :: importRequirementPool imports a pool, is idempotent, and keeps local and record versions apart, packages/knowledge/test/requirements-pool.test.ts :: parseRequirementPool keeps valid records visible next to a broken one and never rewrites the files …(+5) | — |
-| AC-093 | 需求目录与正文一致性 | **PASS** | test-name | packages/core/test/context-builder.test.ts :: buildContext — excluded and unknown refs (AC-093) records a reference that does not exist and never expands it, packages/core/test/context-builder.test.ts :: buildContext — excluded and unknown refs (AC-093) keeps the selection’s own excluded and unknowns verbatim, packages/core/test/requirement-save.test.ts :: prepareRequirementSave (AC-093) builds both files with one version and the documented combined record hash …(+18) | 演练 pnpm test:e2e：PASS |
-| AC-094 | 需求正文保存与并发 | **PASS** | test-name | packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) creates the commit with the requirement pool files and moves the branch once, packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) refuses a stale writer with VERSION_CONFLICT and leaves the branch untouched, packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) re-uses the commit after a crash between the commit and the status write …(+12) | — |
+| AC | 标题 | 状态 | 证据层级（W9） | 映射 | 已执行证据（文件 :: 用例） | 备注 / 未验证原因 |
+|---|---|---|---|---|---|---|
+| AC-001 | 自由问答 | **PASS** | product-path（产品路径）（可争议） | none | — | 演练 pnpm test:e2e：UNVERIFIED；演练 pnpm test:live：PASS；层级依据：真实演练 pnpm test:live PASS；层级说明：唯一产品路径证据来自演练：该演练不在提交套件内，回归时不会自动重放（api-gap-audit-2 §5-C） |
+| AC-002 | HTML说明 | **PASS** | product-path（产品路径） | test-name | apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) uploads, binds and previews an HTML explanation end to end (AC-002/AC-084), apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) consumes a download token once and then refuses it (AC-002), apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) truncates a preview past the inline limit and keeps it downloadable (AC-002) …(+4) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 3 条；真实演练 pnpm test:e2e PASS |
+| AC-003 | 按需委派 | **PASS** | product-path（产品路径） | test-name | packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) produces an agent explanation artifact for a delegated analysis Run (AC-003), apps/daemon/test/assessment-dispatch.integration.test.ts :: message → Chief → DispatchSpec → Requirement → Run → stage result (WP-12 T2) runs the whole path from one message with no seeded row (AC-003/AC-005/AC-069), apps/daemon/test/attempt.integration.test.ts :: a real Attempt through the daemon-side execution path forwards a Provider tool call to a real Pi session and round-trips its result (AC-003) | 演练 pnpm test:e2e：PASS；演练 pnpm test:live：PASS；层级依据：apps 层已执行证据 2 条；真实演练 pnpm test:e2e/pnpm test:live PASS |
+| AC-004 | 执行授权边界 | **PASS** | product-path（产品路径） | curated | packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes assist and artifact to none, apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) keeps questions, advice and statements read-only end to end | 层级依据：apps 层已执行证据 1 条 |
+| AC-005 | 明确启动 | **PASS** | product-path（产品路径） | test-name | packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes a message into independent work items (AC-005/AC-006), packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) records the authority an explicit message grants (AC-005), apps/daemon/test/assessment-dispatch.integration.test.ts :: message → Chief → DispatchSpec → Requirement → Run → stage result (WP-12 T2) runs the whole path from one message with no seeded row (AC-003/AC-005/AC-069) …(+1) | 演练 pnpm test:e2e：PASS；演练 pnpm test:live：PASS；层级依据：apps 层已执行证据 2 条；真实演练 pnpm test:e2e/pnpm test:live PASS |
+| AC-006 | 混合意图 | **PASS** | library-level（库级） | test-name | packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes a message into independent work items (AC-005/AC-006), packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) splits one mixed message into the work items it names (AC-006) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 2 条）；该规则的正确验证层级即为库级 |
+| AC-007 | L1错字 | **PASS** | product-path（产品路径） | test-name | packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) is L2 when the diff exceeds the L1 bounds or changes logic (AC-009) …(+18) | 演练 pnpm test:live：PASS；层级依据：apps 层已执行证据 1 条；真实演练 pnpm test:live PASS |
+| AC-008 | 一字语义 | **PASS** | library-level（库级） | test-name | packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) is L2 when the diff exceeds the L1 bounds or changes logic (AC-009) …(+6) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 9 条）；该规则的正确验证层级即为库级 |
+| AC-009 | L1升级 | **PASS** | library-level（库级） | test-name | packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008), packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) is L2 when the diff exceeds the L1 bounds or changes logic (AC-009) …(+21) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 24 条）；该规则的正确验证层级即为库级 |
+| AC-010 | 标准交付 | **PASS** | product-path（产品路径）（可争议） | test-name | packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) requires each stage to depend on the previous one (AC-010) …(+11) | 演练 pnpm test:e2e：PASS；演练 pnpm test:live：PASS；层级依据：真实演练 pnpm test:e2e/pnpm test:live PASS；层级说明：唯一产品路径证据来自演练：该演练不在提交套件内，回归时不会自动重放（api-gap-audit-2 §5-C） |
+| AC-011 | 高风险交付 | **PASS** | library-level（库级） | test-name | packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) requires each stage to depend on the previous one (AC-010) …(+6) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 9 条）；该规则的正确验证层级即为库级 |
+| AC-012 | 正式结论 | **PASS** | library-level（库级） | test-name | packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010), packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) requires each stage to depend on the previous one (AC-010) …(+13) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 16 条）；该规则的正确验证层级即为库级 |
+| AC-013 | 无效Plan | **PASS** | product-path（产品路径） | test-name | packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a write without an approved Plan and leaves the source hash unchanged (AC-013), packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a Plan for another revision and a changed Plan hash (AC-013 required failure test), packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) admits the write when the Plan is approved for the current revision (AC-014) …(+26) | 层级依据：apps 层已执行证据 2 条 |
+| AC-014 | 范围内自动Plan | **PASS** | product-path（产品路径） | test-name | packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a write without an approved Plan and leaves the source hash unchanged (AC-013), packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a Plan for another revision and a changed Plan hash (AC-013 required failure test), packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) admits the write when the Plan is approved for the current revision (AC-014) …(+20) | 层级依据：apps 层已执行证据 1 条 |
+| AC-015 | 产品变化 | **PASS** | library-level（库级） | test-name | packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) handling now needs a new Product/Plan and invalidates affected evidence (AC-015), packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) queues a Requirement for later and leaves the acceptance alone (AC-016), packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) declining records a reason and changes nothing (AC-016) …(+7) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 10 条）；该规则的正确验证层级即为库级 |
+| AC-016 | 以后或拒绝 | **PASS** | library-level（库级） | test-name | packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) handling now needs a new Product/Plan and invalidates affected evidence (AC-015), packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) queues a Requirement for later and leaves the acceptance alone (AC-016), packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) declining records a reason and changes nothing (AC-016) …(+7) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 10 条）；该规则的正确验证层级即为库级 |
+| AC-017 | 自动返工 | **PASS** | library-level（库级） | test-name | packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08) …(+48) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 51 条）；该规则的正确验证层级即为库级 |
+| AC-018 | Finding关闭 | **PASS** | library-level（库级） | test-name | packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08) …(+11) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 14 条）；该规则的正确验证层级即为库级 |
+| AC-019 | 未覆盖验证 | **PASS** | library-level（库级） | test-name | packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08) …(+23) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 26 条）；该规则的正确验证层级即为库级 |
+| AC-020 | 暂停恢复 | **PASS** | product-path（产品路径） | test-name | packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) admits writes only while the Work is running, packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) never lets a caller expectation replace the approved source hash (W6R2-02), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) pauses at a safe point, admits no write, and resumes into a new Attempt after the version check (AC-020) …(+11) | 层级依据：apps 层已执行证据 1 条 |
+| AC-021 | 取消需求 | **PASS** | library-level（库级） | test-name | packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) admits writes only while the Work is running, packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) never lets a caller expectation replace the approved source hash (W6R2-02), packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) binds a task-less integration Finding and sends it straight back to development (AC-083, AC-017) …(+47) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 50 条）；该规则的正确验证层级即为库级 |
+| AC-022 | 预算止损 | **PASS** | library-level（库级） | test-name | packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses an over-used budget instead of assuming a zero usage (AC-022, W6R1-03), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) closes through evaluateFindingClosure and stops at the rework allowance (AC-017/AC-022), packages/domain/test/delivery.test.ts :: budget reservation (AC-022) refuses an over-limit reservation atomically with no partial charge (AC-022) …(+6) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 9 条）；该规则的正确验证层级即为库级 |
+| AC-023 | 无注册多项目 | **PASS** | product-path（产品路径） | test-name | packages/core/test/identity.integration.test.ts :: independent projects (AC-023) gives two real roots distinct ids and independent databases, apps/daemon/test/project-lifecycle.integration.test.ts :: installation project directory (WP-12 T5.1/T5.2) opens two real roots with independent ids, databases and registries (AC-023), apps/web/test/multi-project.integration.test.ts :: single-entry multi-project BFF (WP-12 T5.5) renders each project page from its own daemon and never from the other (AC-023/AC-034) | 层级依据：apps 层已执行证据 2 条 |
+| AC-024 | 路径识别 | **PASS** | library-level（库级） | test-name | packages/core/test/identity.integration.test.ts :: canonical roots (AC-024) normalizes a subdirectory to the repository root, packages/core/test/identity.integration.test.ts :: canonical roots (AC-024) normalizes a trailing separator and a symlinked path, packages/core/test/identity.integration.test.ts :: canonical roots (AC-024) finds the git root from a deep directory and reports no git root outside one …(+5) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 8 条）；该规则的正确验证层级即为库级 |
+| AC-025 | 空项目 | **PASS** | product-path（产品路径） | test-name | packages/workspace/test/initialize.test.ts :: empty project (AC-025) creates the initial Git and delivery branch, then confirms an unimplemented project, apps/daemon/test/project-lifecycle.integration.test.ts :: installation project directory (WP-12 T5.1/T5.2) creates a project in an empty directory with Git, the delivery branch and the events (AC-025) | 层级依据：apps 层已执行证据 1 条 |
+| AC-026 | 旧项目初始化 | **PASS** | product-path（产品路径） | test-name | apps/daemon/test/project-initialization.integration.test.ts :: project.initialize over the real state machine (WP-12 T5.3) investigates a legacy project and reaches Ready without moving the code (AC-026), packages/workspace/test/scan.test.ts :: scanProject budgets stops at 40 body files and reports a partial map with explicit unknowns, packages/workspace/test/scan.test.ts :: scanProject budgets stops before exceeding 512 KiB of body content …(+4) | 层级依据：apps 层已执行证据 1 条 |
+| AC-027 | 目录项目 | **PASS** | product-path（产品路径） | test-name | apps/daemon/test/project-initialization.integration.test.ts :: project.initialize over the real state machine (WP-12 T5.3) never silently re-initializes an existing repository from a bare new-mode request (AC-027), apps/daemon/test/project-initialization.integration.test.ts :: initialize driver blockers (WP-12 T5.3) refuses to run git init without the explicit mode and reports the request (AC-027), packages/workspace/test/initialize.test.ts :: no-Git directory returns Blocked with the Git-initialization authorization request …(+1) | 层级依据：apps 层已执行证据 2 条 |
+| AC-028 | 脏工作区 | **PASS** | product-path（产品路径） | test-name | apps/daemon/test/project-initialization.integration.test.ts :: project.initialize over the real state machine (WP-12 T5.3) blocks a dirty workspace with a per-path hash report and keeps investigation working (AC-028), packages/workspace/test/initialize.test.ts :: dirty workspace blocks delivery start with a hash report while read-only investigation still works | 层级依据：apps 层已执行证据 1 条 |
+| AC-029 | 初始化冲突中断 | **PASS** | product-path（产品路径） | test-name | packages/core/test/wp08.integration.test.ts :: WP-08 T4 end-to-end integration drill runs the initialization route: interrupted writing resumes by hash and a conflict is never overwritten (AC-029), apps/daemon/test/project-initialization.integration.test.ts :: project.initialize over the real state machine (WP-12 T5.3) stops on a workspace it must not overwrite and reports the real per-path hashes (AC-029) | 层级依据：apps 层已执行证据 1 条 |
+| AC-030 | Chief选上下文 | **PASS** | library-level（库级） | test-name | packages/core/test/context-builder.test.ts :: buildContext — happy path (AC-030) freezes the documented fields and copies the content into the snapshot directory, packages/core/test/context-builder.test.ts :: buildContext — happy path (AC-030) accounts tokens with the documented character/4 estimator by default, packages/core/test/context-builder.test.ts :: buildContext — happy path (AC-030) resolves an artifact id@version through the fetch port …(+8) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 11 条）；该规则的正确验证层级即为库级 |
+| AC-031 | 缺上下文 | **PASS** | library-level（库级） | test-name | packages/core/test/context-builder.test.ts :: buildContext — required inputs (AC-031, AC-079) returns MISSING_CONTEXT with the precise gap and no frozen snapshot, packages/core/test/context-builder.test.ts :: buildContext — required inputs (AC-031, AC-079) does not expand a module to satisfy a gap, packages/core/test/context-builder.test.ts :: buildContext — required inputs (AC-031, AC-079) does not let an asserted artifact-backed input satisfy the table (W5R2-04) …(+5) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 8 条）；该规则的正确验证层级即为库级 |
+| AC-032 | 追加读取 | **PASS** | product-path（产品路径） | test-name | packages/core/test/context-ledger.test.ts :: read ledger — append inside readScope (AC-032) appends a reasoned read with its full identity and accounts its tokens, packages/core/test/context-ledger.test.ts :: read ledger — append inside readScope (AC-032) allocates seq 1..n in append order and never reuses a number, packages/core/test/context-ledger.test.ts :: read ledger — append inside readScope (AC-032) inherits the Run revision and lets one read override it …(+22) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 1 条；真实演练 pnpm test:e2e PASS |
+| AC-033 | 独立审核 | **PASS** | library-level（库级） | test-name | packages/core/test/context-acl.test.ts :: context ACL — transcript isolation (AC-033) denies the transcript kind to every role and stage, packages/core/test/context-acl.test.ts :: context ACL — transcript isolation (AC-033) denies Review and Test every message body, packages/core/test/context-acl.test.ts :: context ACL — transcript isolation (AC-033) denies a chat/transcript path marker to every role by path …(+20) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 23 条）；该规则的正确验证层级即为库级 |
+| AC-034 | 跨项目隔离 | **PASS** | product-path（产品路径） | test-name | packages/core/test/context-acl.test.ts :: context ACL — cross-project isolation (AC-034) denies a source that belongs to another Project, packages/core/test/context-acl.test.ts :: context ACL — cross-project isolation (AC-034) denies another Project source whatever the source class, packages/core/test/context-acl.test.ts :: context ACL — cross-project isolation (AC-034) accepts a source of the same Project …(+14) | 层级依据：apps 层已执行证据 5 条 |
+| AC-035 | 会话轮换 | **PASS** | library-level（库级） | test-name | packages/core/test/context-checkpoint.test.ts :: checkpoint: session rotation (AC-035) recovers role/task/permissions/sources and keeps the approval state, packages/core/test/context-checkpoint.test.ts :: checkpoint: session rotation (AC-035) leaves the stored session unchanged when there is no checkpoint to rotate (W5R1-08), packages/core/test/context-checkpoint.test.ts :: checkpoint: session rotation (AC-035) does not let a staleness/rotation of the message list touch the approval …(+2) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 5 条）；该规则的正确验证层级即为库级 |
+| AC-036 | 预算不足 | **PASS** | library-level（库级） | test-name | packages/core/test/context-builder.test.ts :: buildContext — selection validation (AC-030) refuses a budget outside the documented 4096–2000000 range (AC-036), packages/core/test/context-builder.test.ts :: buildContext — budget (AC-036) reports BUDGET_EXCEEDED with the dropped ref and the missing tokens, packages/core/test/context-builder.test.ts :: buildContext — budget (AC-036) drops an optional source instead of the whole package and names it …(+16) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 19 条）；该规则的正确验证层级即为库级 |
+| AC-037 | 当前功能 | **PASS** | product-path（产品路径）（可争议） | test-name | packages/knowledge/test/projection.test.ts :: projection build renders a feature body that parses back to the same facts (AC-037), packages/knowledge/test/projection.test.ts :: projection build never injects an unrelated document into the feature body or index (AC-037), packages/knowledge/test/views.test.ts :: knowledge views separates confirmed intent from delivered reality (AC-038, AC-037) …(+11) | 演练 pnpm test:e2e：PASS；演练 pnpm test:live：PASS；层级依据：真实演练 pnpm test:e2e/pnpm test:live PASS；层级说明：唯一产品路径证据来自演练：该演练不在提交套件内，回归时不会自动重放（api-gap-audit-2 §5-C） |
+| AC-038 | 状态分离 | **PASS** | product-path（产品路径）（可争议） | test-name | packages/knowledge/test/views.test.ts :: knowledge views separates confirmed intent from delivered reality (AC-038, AC-037), packages/knowledge/test/views.test.ts :: knowledge views keeps a Work overlay out of the delivered answer and out of another Work (AC-038) | 演练 pnpm test:e2e：PASS；层级依据：真实演练 pnpm test:e2e PASS；层级说明：唯一产品路径证据来自演练：该演练不在提交套件内，回归时不会自动重放（api-gap-audit-2 §5-C） |
+| AC-039 | 语义关系 | **PASS** | library-level（库级） | test-name | packages/core/test/context-cold-start.test.ts :: cold start: selection order and reasons (AC-039) follows overview → current work → navigation → constraints → bodies, with a reason each, packages/core/test/context-cold-start.test.ts :: cold start: selection order and reasons (AC-039) is deterministic: the same query selects the same entries in the same order | 层级依据：只有库级/页面级已执行证据（packages/* 库级 2 条）；该规则的正确验证层级即为库级 |
+| AC-040 | 非法知识 | **PASS** | library-level（库级） | test-name | packages/knowledge/test/projection.test.ts :: projection build keeps the last valid projection, marks it stale and reports KNOWLEDGE_INVALID (AC-040), packages/knowledge/test/projection.test.ts :: projection build republishes and clears stale after a valid document follows an invalid one (AC-040), packages/knowledge/test/projection.test.ts :: broken-link diagnostics in a projection (AC-040) gates delivery for the current requirement only when the requirement touches the feature …(+1) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 4 条）；该规则的正确验证层级即为库级 |
+| AC-041 | 知识结算 | **PASS** | product-path（产品路径）（可争议） | test-name | packages/core/test/integrate.integration.test.ts :: Accept/Integrate and Settlement over real Git (AC-010, AC-012, AC-041, AC-081) integrates B-on-A without re-applying the ancestor and settles the Requirement, packages/core/test/integrate.integration.test.ts :: Accept/Integrate and Settlement over real Git (AC-010, AC-012, AC-041, AC-081) reuses the verified Task evidence when only the Core-maintained pool was added (WP-12 W4c), packages/core/test/integrate.integration.test.ts :: Accept/Integrate and Settlement over real Git (AC-010, AC-012, AC-041, AC-081) freezes no integration manifest when the combination really is unverified code …(+11) | 演练 pnpm test:e2e：PASS；演练 pnpm test:live：PASS；层级依据：真实演练 pnpm test:e2e/pnpm test:live PASS；层级说明：唯一产品路径证据来自演练：该演练不在提交套件内，回归时不会自动重放（api-gap-audit-2 §5-C） |
+| AC-042 | 观察与意图 | **PASS** | library-level（库级） | test-name | packages/knowledge/test/views.test.ts :: knowledge views lists observed-versus-confirmed gaps without accepting observed behaviour (AC-042), packages/workspace/test/initialize.test.ts :: design/code conflict (AC-042) blocks Confirming, never confirms the existing document and keeps candidates observed, packages/workspace/test/scan.test.ts :: candidate knowledge reports an existing document that disagrees with the observed tree (AC-042) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 3 条）；该规则的正确验证层级即为库级 |
+| AC-043 | 独立模型 | **PASS** | product-path（产品路径）（可争议） | test-name | packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) inherits run → project → global role → global default in order, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) blocks a role whose model is missing or unsupported instead of downgrading, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) freezes a profile into an immutable snapshot and keeps it stable …(+15) | 演练 pnpm test:live：PASS；层级依据：真实演练 pnpm test:live PASS；层级说明：唯一产品路径证据来自演练：该演练不在提交套件内，回归时不会自动重放（api-gap-audit-2 §5-C） |
+| AC-044 | 配置冻结 | **PASS** | library-level（库级） | test-name | packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) inherits run → project → global role → global default in order, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) blocks a role whose model is missing or unsupported instead of downgrading, packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) freezes a profile into an immutable snapshot and keeps it stable …(+75) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 78 条）；该规则的正确验证层级即为库级 |
+| AC-045 | 主控分派 | **PASS** | product-path（产品路径）（可争议） | test-name | packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) runs through the frozen profile of the Run, packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) runs against a Provider that needs no secret (T-01), packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) refuses to admit a Run whose secret cannot be resolved (R18-05) …(+69) | 演练 pnpm test:e2e：PASS；层级依据：真实演练 pnpm test:e2e PASS；层级说明：唯一产品路径证据来自演练：该演练不在提交套件内，回归时不会自动重放（api-gap-audit-2 §5-C） |
+| AC-046 | Join和失败 | **PASS** | product-path（产品路径） | test-name | packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) holds the parent in waiting_children and keeps every sibling result, packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) refuses a new child once the parent Chief Run has ended (N-04, N-05), packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) does not hold the parent for joinPolicy=none, but still pages the Chief …(+13) | 层级依据：apps 层已执行证据 1 条 |
+| AC-047 | 结构化交付 | **PASS** | product-path（产品路径） | test-name | packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) holds the parent in waiting_children and keeps every sibling result, packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) refuses a new child once the parent Chief Run has ended (N-04, N-05), packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) does not hold the parent for joinPolicy=none, but still pages the Chief …(+12) | 层级依据：apps 层已执行证据 1 条 |
+| AC-048 | Workspace边界 | **PASS** | product-path（产品路径） | test-name | apps/runner/test/tool-client.test.ts :: tool call transport does not open a permission request for a phase-1 hard block (AC-048/AC-049), packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) admits a read and records the tool operation and the audit event (AC-048), packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) refuses an out-of-scope target with no execution and records the refusal (AC-048) …(+85) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 7 条；真实演练 pnpm test:e2e PASS |
+| AC-049 | Autonomous范围 | **PASS** | product-path（产品路径） | test-name | apps/runner/test/tool-client.test.ts :: tool call transport does not open a permission request for a phase-1 hard block (AC-048/AC-049), packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) admits the exact once binding and reports no replay for a first use, packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) replays a consumed once grant for the same operation and input (AC-080) …(+85) | 层级依据：apps 层已执行证据 11 条 |
+| AC-050 | Full Access门禁 | **PASS** | product-path（产品路径） | test-name | packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) admits a read and records the tool operation and the audit event (AC-048), packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) refuses an out-of-scope target with no execution and records the refusal (AC-048), packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) refuses an operation the Grant does not cover (AC-048) …(+71) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 1 条；真实演练 pnpm test:e2e PASS |
+| AC-051 | Secret隔离 | **PASS** | product-path（产品路径） | test-name | packages/core/test/secrets.test.ts :: SecretStore resolution (AC-051) resolves a registered ref for the authorized Grantholder (AC-051), packages/core/test/secrets.test.ts :: SecretStore resolution (AC-051) refuses an unknown ref with NOT_FOUND for an authorized ref shape (AC-051), packages/core/test/secrets.test.ts :: SecretStore resolution (AC-051) refuses an unauthorized caller without disclosing whether the ref exists (AC-051) …(+39) | 层级依据：apps 层已执行证据 1 条 |
+| AC-052 | HTML安全 | **PASS** | product-path（产品路径） | test-name | apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) serves a preview of a hostile document under the same isolation (AC-052), packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) carries the isolation policy on every preview (AC-052) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 1 条；真实演练 pnpm test:e2e PASS |
+| AC-053 | 信任与资源 | **PASS** | library-level（库级） | test-name | packages/pi-runtime/test/trust.test.ts :: untrusted repository (AC-053) never imports, reads or activates a repository resource and reports every skip, packages/pi-runtime/test/trust.test.ts :: untrusted repository (AC-053) still activates the shipped release whitelist, which is not repository content, packages/pi-runtime/test/trust.test.ts :: trusted repository (AC-053) imports a selected, whitelisted repository extension only after trust …(+22) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 25 条）；该规则的正确验证层级即为库级 |
+| AC-054 | UI断开 | **PASS** | product-path（产品路径） | test-name | packages/client/test/commands.test.ts :: AC-054 reconnect and bounded backoff reconnects on the documented schedule and replays the hello, packages/client/test/commands.test.ts :: AC-054 reconnect and bounded backoff applies bounded exponential backoff while every reconnect fails, packages/client/test/commands.test.ts :: AC-054 reconnect and bounded backoff reports the attempt number while reconnecting and ends at the limit …(+2) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 2 条；真实演练 pnpm test:e2e PASS |
+| AC-055 | 幂等接受 | **PASS** | library-level（库级） | test-name | packages/client/test/commands.test.ts :: AC-055 write retry with the same idempotency key replays a write whose answer was lost and reports the replay, packages/client/test/commands.test.ts :: AC-055 write retry with the same idempotency key queues a write that never reached the wire and replays it after reconnect, packages/client/test/commands.test.ts :: AC-055 write retry with the same idempotency key retries a BUSY write with backoff and the same key …(+10) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 13 条）；该规则的正确验证层级即为库级 |
+| AC-056 | Mailbox非阻塞 | **PASS** | library-level（库级） | test-name | packages/core/test/mailbox.test.ts :: ProjectMailbox answers a new command while a long effect is still running (AC-056), packages/core/test/dispatcher.integration.test.ts :: long operations do not block commands (AC-056) answers a command within a second while a model call is in flight | 层级依据：只有库级/页面级已执行证据（packages/* 库级 2 条）；该规则的正确验证层级即为库级 |
+| AC-057 | Runner失联 | **PASS** | product-path（产品路径）（可争议） | test-name | packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) withholds a new Attempt while the old execution is unconfirmed (W8R1-04), packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) binds a resume decision to its own Run, not to the whole Work (W8R2-03), packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) keeps a Run-bound resume decision past a window of unrelated decisions (W8R3-04) …(+18) | 演练 pnpm test:e2e：PASS；演练 pnpm test:live：PASS；层级依据：真实演练 pnpm test:e2e/pnpm test:live PASS；层级说明：唯一产品路径证据来自演练：该演练不在提交套件内，回归时不会自动重放（api-gap-audit-2 §5-C） |
+| AC-058 | 过期结果 | **PASS** | library-level（库级） | test-name | packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) withholds a new Attempt while the old execution is unconfirmed (W8R1-04), packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) binds a resume decision to its own Run, not to the whole Work (W8R2-03), packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) keeps a Run-bound resume decision past a window of unrelated decisions (W8R3-04) …(+18) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 21 条）；该规则的正确验证层级即为库级 |
+| AC-059 | 背压 | **PASS** | library-level（库级） | test-name | packages/core/test/events-hub.integration.test.ts :: connection back-pressure (AC-059) coalesces transient frames once the soft limit is crossed, packages/core/test/events-hub.integration.test.ts :: connection back-pressure (AC-059) closes the connection at the hard limit without dropping durable events, packages/core/test/events-hub.integration.test.ts :: connection back-pressure (AC-059) keeps default limits at the documented 2 MiB / 8 MiB | 层级依据：只有库级/页面级已执行证据（packages/* 库级 3 条）；该规则的正确验证层级即为库级 |
+| AC-060 | 范围订阅 | **PASS** | product-path（产品路径） | test-name | packages/core/test/events-hub.integration.test.ts :: scope change (AC-060) answers a fresh snapshot at a new watermark and covers later events, packages/core/test/events-hub.integration.test.ts :: scope change (AC-060) reports an empty batch with its scan watermark, packages/core/test/events-hub.integration.test.ts :: scope change (AC-060) refuses a backward ack and clamps to the watermark …(+5) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 1 条；真实演练 pnpm test:e2e PASS |
+| AC-061 | 启动恢复 | **PASS** | library-level（库级） | test-name | packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) withholds a new Attempt while the old execution is unconfirmed (W8R1-04), packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) binds a resume decision to its own Run, not to the whole Work (W8R2-03), packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) keeps a Run-bound resume decision past a window of unrelated decisions (W8R3-04) …(+18) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 21 条）；该规则的正确验证层级即为库级 |
+| AC-062 | 集成冲突 | **PASS** | library-level（库级） | test-name | packages/core/test/wp08-failures.test.ts :: required WP-08 failure tests Task 合并冲突: two passed Tasks conflict, the repair Task is independent and CAS protects HEAD (AC-062), packages/core/test/wp08-failures.test.ts :: required WP-08 failure tests T-01: the repair revision converges and is what the final manifest records (AC-062), packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) produces an independent repair task when two passed Tasks conflict (AC-062) …(+3) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 6 条）；该规则的正确验证层级即为库级 |
+| AC-063 | 部分结算 | **PASS** | library-level（库级） | test-name | packages/core/test/wp08-failures.test.ts :: required WP-08 failure tests ref 后崩溃: the restart reuses the commit, completes the state and emits one event (AC-063), packages/core/test/settlement.integration.test.ts :: Crash after the ref update: reuse the commit, complete once (AC-063) runs the whole settlement path: freeze, CAS and complete once, packages/core/test/settlement.integration.test.ts :: Crash after the ref update: reuse the commit, complete once (AC-063) takes the shared integration lock and refuses while a requirement save holds it (W8R2-02) …(+3) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 6 条）；该规则的正确验证层级即为库级 |
+| AC-064 | 备份恢复 | **PASS** | product-path（产品路径） | test-name | packages/core/test/wp08-failures.test.ts :: required WP-08 failure tests 备份演练: backup → restore keeps hashes/knowledge/evidence and blocks a missing Secret (AC-064), packages/core/test/backup.integration.test.ts :: Backup, restore and relocate (AC-064) restores a backup into a new directory with consistent hashes, knowledge and evidence, packages/core/test/backup.integration.test.ts :: Backup, restore and relocate (AC-064) requires recovery for the active Run and revokes every old lease and grant …(+5) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 1 条；真实演练 pnpm test:e2e PASS |
+| AC-065 | Migration | **PASS** | library-level（库级） | curated | packages/storage/test/migrations.integration.test.ts :: migrations backs up before pending work and writes a usable copy, packages/storage/test/migrations.integration.test.ts :: migrations rolls a failed migration back and reports its version, packages/storage/test/migrations.integration.test.ts :: migrations stops on a checksum mismatch instead of starting …(+3) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 6 条）；该规则的正确验证层级即为库级 |
+| AC-066 | SDK契约 | **PASS** | product-path（产品路径）（可争议） | curated | packages/pi-runtime/test/session.integration.test.ts :: Pi session lifecycle creates a session with the configured model and no network, packages/pi-runtime/test/events.test.ts :: SDK event mapping maps assistant text and thinking deltas, packages/pi-runtime/test/events.test.ts :: SDK event mapping maps tool execution boundaries …(+4) | 演练 pnpm test:live：PASS；层级依据：真实演练 pnpm test:live PASS；层级说明：唯一产品路径证据来自演练：该演练不在提交套件内，回归时不会自动重放（api-gap-audit-2 §5-C） |
+| AC-067 | 扩展故障 | **PASS** | product-path（产品路径） | curated | packages/pi-runtime/test/extensions.test.ts :: extension activation rejects an id the release does not ship, packages/pi-runtime/test/extensions.test.ts :: extension activation blocks startup when a critical capability fails, packages/pi-runtime/test/extensions.test.ts :: extension activation disables only the failing optional extension …(+2) | 层级依据：apps 层已执行证据 2 条 |
+| AC-068 | 看板身份 | **PASS** | product-path（产品路径） | test-name | apps/web/test/pages.test.ts :: board page offers a direct cancel and a refused pause for Queued without Work (AC-068), apps/web/test/views.test.ts :: board projection (AC-068) keeps one identity per requirement, in the documented four columns, apps/web/test/views.test.ts :: board projection (AC-068) reports the pause refusal for a Queued requirement without local Work …(+15) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 18 条；真实演练 pnpm test:e2e PASS |
+| AC-069 | 持续对话 | **PASS** | product-path（产品路径） | test-name | apps/web/test/views.test.ts :: run status honesty (AC-069/AC-070) treats only a completed Run as a success, apps/web/test/views.test.ts :: run status honesty (AC-069/AC-070) separates direct/L1 work from board work in the Runs page, apps/daemon/test/assessment-dispatch.integration.test.ts :: message → Chief → DispatchSpec → Requirement → Run → stage result (WP-12 T2) runs the whole path from one message with no seeded row (AC-003/AC-005/AC-069) …(+6) | 演练 pnpm test:e2e：PASS；演练 pnpm test:live：PASS；层级依据：apps 层已执行证据 9 条；真实演练 pnpm test:e2e/pnpm test:live PASS |
+| AC-070 | 产物版本 | **PASS** | product-path（产品路径） | test-name | apps/web/test/views.test.ts :: requirement detail (AC-070) marks the plan card expired when the shown version is not the current one, apps/web/test/views.test.ts :: requirement detail (AC-070) keeps a current plan card approvable, apps/web/test/views.test.ts :: requirement detail (AC-070) carries artifact version and validity without presenting history as current …(+14) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 17 条；真实演练 pnpm test:e2e PASS |
+| AC-071 | Live布局 | **PASS** | product-path（产品路径） | test-name | apps/web/test/client-script.test.ts :: interface language switching (WP-12 T4) returns focus to the Live restore control when the overlay closes (AC-071), apps/web/test/pages.test.ts :: shared shell carries the panel mode on the shell so the top bar restores it (AC-071), apps/web/test/pages.test.ts :: shared shell keeps the restore control before the panel contents in the tab order (AC-071) …(+2) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 5 条；真实演练 pnpm test:e2e PASS |
+| AC-072 | Conversation归属 | **PASS** | product-path（产品路径） | test-name | apps/web/test/pages.test.ts :: shared shell offers no conversation create/switch control outside Chief (AC-072), apps/web/test/server.integration.test.ts :: workbench BFF over the real daemon (WP-09 T3) shares the panel mode across pages and keeps Chief-only controls off other pages (AC-071/AC-072), apps/web/test/server.integration.test.ts :: workbench BFF over the real daemon (WP-09 T3) walks login → board → detail → approve → event in one headless flow (AC-068–AC-072) …(+1) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 4 条；真实演练 pnpm test:e2e PASS |
+| AC-073 | 语言可访问 | **PASS** | product-path（产品路径） | test-name | apps/web/test/pages.test.ts :: shared shell exposes a language switch that only touches the interface dictionary (AC-073), apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) translates only the interface strings and leaves project content untouched (AC-073), apps/web/test/server.integration.test.ts :: workbench BFF over the real daemon (WP-09 T3) answers a page request with the language the browser asked for (AC-073) …(+1) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 4 条；真实演练 pnpm test:e2e PASS |
+| AC-074 | Inbox去重 | **PASS** | product-path（产品路径） | test-name | apps/web/test/client-script.test.ts :: inbox actions (WP-12 T4c, AC-074) routes a saved decision choice through decision.resolve, apps/web/test/client-script.test.ts :: inbox actions (WP-12 T4c, AC-074) routes approve and deny through permission.respond, apps/web/test/client-script.test.ts :: inbox actions (WP-12 T4c, AC-074) refuses a denial with no recorded reason before any request …(+43) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 46 条；真实演练 pnpm test:e2e PASS |
+| AC-075 | 配置错误 | **PASS** | product-path（产品路径） | test-name | apps/web/test/pages.test.ts :: settings page (AC-075) renders the active revision, the editor and the test control, apps/web/test/pages.test.ts :: settings page (AC-075) gives every provider row a real editor with a never-pre-filled password field (WP-12 T1.2B), apps/web/test/pages.test.ts :: settings page (AC-075) never renders a provider secret value, even for post-save state (WP-12 T1.2B) …(+7) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 10 条；真实演练 pnpm test:e2e PASS |
+| AC-076 | 附件限制 | **PASS** | product-path（产品路径） | test-name | apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) rejects unsupported and oversized uploads server-side (AC-076), apps/web/test/views.test.ts :: attachment limits (AC-076) accepts a documented set, apps/web/test/views.test.ts :: attachment limits (AC-076) refuses more than five attachments …(+6) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 8 条；真实演练 pnpm test:e2e PASS |
+| AC-077 | 文件只读 | **PASS** | product-path（产品路径） | test-name | apps/web/test/pages.test.ts :: files page (AC-077) shows the branch, the target revision and the read-only boundary, apps/web/test/pages.test.ts :: files page (AC-077) renders a refused path as an error with its code, not an empty tree, apps/web/test/views.test.ts :: file boundary (AC-077) resolves a nested relative path inside the root …(+6) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 9 条；真实演练 pnpm test:e2e PASS |
+| AC-078 | 认证生命周期 | **PASS** | product-path（产品路径） | test-name | packages/client/test/commands.test.ts :: AC-078 authentication lifecycle surfaces an expired session as a typed error without retrying, packages/client/test/commands.test.ts :: AC-078 authentication lifecycle never retries a NOT_AUTHORIZED write, packages/client/test/commands.test.ts :: AC-078 authentication lifecycle does not reconnect when the handshake itself is refused …(+29) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 25 条；真实演练 pnpm test:e2e PASS |
+| AC-079 | 初始阶段上下文 | **PASS** | library-level（库级） | test-name | packages/core/test/context-acl.test.ts :: context ACL — future artifacts (AC-079) denies a future artifact class to an earlier stage, packages/core/test/context-acl.test.ts :: context ACL — future artifacts (AC-079) denies review/test artifacts to a Developer, packages/core/test/context-acl.test.ts :: context ACL — future artifacts (AC-079) keeps a plan readable to Review and Test but not a settlement report …(+28) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 31 条）；该规则的正确验证层级即为库级 |
+| AC-080 | 授权精确绑定 | **PASS** | product-path（产品路径） | test-name | packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) admits the exact once binding and reports no replay for a first use, packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) replays a consumed once grant for the same operation and input (AC-080), packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) binds a replay to the full operation/role/stage triple, not just the run (W7R1-06) …(+71) | 层级依据：apps 层已执行证据 2 条 |
+| AC-081 | Task依赖输入 | **PASS** | library-level（库级） | test-name | packages/core/test/integrate.integration.test.ts :: Accept/Integrate and Settlement over real Git (AC-010, AC-012, AC-041, AC-081) integrates B-on-A without re-applying the ancestor and settles the Requirement, packages/core/test/integrate.integration.test.ts :: Accept/Integrate and Settlement over real Git (AC-010, AC-012, AC-041, AC-081) reuses the verified Task evidence when only the Core-maintained pool was added (WP-12 W4c), packages/core/test/integrate.integration.test.ts :: Accept/Integrate and Settlement over real Git (AC-010, AC-012, AC-041, AC-081) freezes no integration manifest when the combination really is unverified code …(+11) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 14 条）；该规则的正确验证层级即为库级 |
+| AC-082 | 重启保留窄范围 | **PASS** | library-level（库级） | test-name | packages/core/test/orchestrator.test.ts :: chief orchestration (AC-045, AC-044, AC-082) records an immutable assessment with the routing evidence, packages/core/test/orchestrator.test.ts :: chief orchestration (AC-045, AC-044, AC-082) applies the documented routing floor from the payload alone (R9-01, DC-62), packages/core/test/orchestrator.test.ts :: chief orchestration (AC-045, AC-044, AC-082) fails closed on unknown risk flags and on authorization provenance (R10-01/R10-02) …(+79) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 82 条）；该规则的正确验证层级即为库级 |
+| AC-083 | 组合及文档Finding | **PASS** | library-level（库级） | test-name | packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018), packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) binds the verification to the fixing revision and the real Test conclusion (AC-018, W6R1-01/W6R1-08) …(+50) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 53 条）；该规则的正确验证层级即为库级 |
+| AC-084 | 首条消息附件 | **PASS** | product-path（产品路径） | test-name | apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) refuses unauthenticated requests (AC-084), apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) uploads, binds and previews an HTML explanation end to end (AC-002/AC-084), apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) deletes only staged uploads and refuses bound ones (AC-084) …(+6) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 7 条；真实演练 pnpm test:e2e PASS |
+| AC-085 | 证据读取封口 | **PASS** | product-path（产品路径） | test-name | apps/runner/test/control-client.test.ts :: runner control client (protocol.md §6) remembers the read-ledger binding a context.request expansion answered with (AC-085), apps/runner/test/read-ledger.test.ts :: Runner read ledger seal (AC-085, WP-12 R3-2d) seals an empty ledger to the genesis value, not a placeholder, apps/runner/test/read-ledger.test.ts :: Runner read ledger seal (AC-085, WP-12 R3-2d) chains each read into the accumulator and reports the last seq …(+19) | 层级依据：apps 层已执行证据 6 条 |
+| AC-086 | 功能状态证据 | **PASS** | library-level（库级） | curated | packages/knowledge/test/feature-format.test.ts :: parseFeatureDocument parses a complete document with real-valued fields, packages/knowledge/test/feature-format.test.ts :: parseFeatureDocument rejects design=confirmed without one resolvable decision reference, packages/knowledge/test/feature-format.test.ts :: parseFeatureDocument rejects verification=passed without evidence references …(+4) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 7 条）；该规则的正确验证层级即为库级 |
+| AC-087 | 需求池随Git迁移 | **PASS** | library-level（库级）（可争议） | test-name | apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) keeps an imported requirement identity and its evidence availability honest (AC-087/AC-088/AC-089), apps/daemon/test/requirement-import.integration.test.ts :: first-open requirement import from the delivery revision (WP-12 T5.4) restores every lifecycle from a real clone with an empty database (AC-087/AC-088/AC-089), apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack reads all nine surfaces from real state in one drill (AC-068–AC-078, AC-084, AC-087–AC-090, AC-093) …(+1) | 层级依据：apps 层用例的关键断言读自播种行（seedRequirement 等直插行），不是真实 import/clone 产品路径；层级说明：登记于 api-gap-audit-2 §4/§5-B 与 T5-plan §E12（"应用层证据只有播种行"） |
+| AC-088 | 历史需求展示 | **PASS** | library-level（库级）（可争议） | test-name | packages/knowledge/test/requirements-pool.test.ts :: imported history (AC-088) keeps completion, cancellation and pre-archive state without migrating evidence, apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) keeps an imported requirement identity and its evidence availability honest (AC-087/AC-088/AC-089), apps/daemon/test/requirement-import.integration.test.ts :: first-open requirement import from the delivery revision (WP-12 T5.4) restores every lifecycle from a real clone with an empty database (AC-087/AC-088/AC-089) | 层级依据：apps 层用例的关键断言读自播种行（seedRequirement 等直插行），不是真实 import/clone 产品路径；层级说明：登记于 api-gap-audit-2 §4/§5-B 与 T5-plan §E12（"应用层证据只有播种行"） |
+| AC-089 | 进行中需求继续 | **PASS** | library-level（库级）（可争议） | test-name | apps/web/test/pages.test.ts :: board page offers Continue only for a record that waits to continue (AC-089), packages/core/test/requirement-continue.test.ts :: Requirement continuation (AC-089) lists an imported active Requirement as waiting to continue without starting a Run (AC-089), packages/core/test/requirement-continue.test.ts :: Requirement continuation (AC-089) continues into a new local Work with a recorded authorization and the unmet Gates (AC-089) …(+14) | 层级依据：apps 层用例的关键断言读自播种行（seedRequirement 等直插行），不是真实 import/clone 产品路径；层级说明：登记于 api-gap-audit-2 §4/§5-B 与 T5-plan §E12（"应用层证据只有播种行"） |
+| AC-090 | 需求保存时机 | **PASS** | product-path（产品路径） | test-name | apps/web/test/pages.test.ts :: board page renders the branch, commit and push state and offers the lifecycle actions (AC-090), apps/web/test/pages.test.ts :: requirement detail page renders the delivery branch, commit, push state and the card actions (AC-090), apps/web/test/pages.test.ts :: requirement detail page says the push state is unreported when the read payload carries none (AC-090) …(+15) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 11 条；真实演练 pnpm test:e2e PASS |
+| AC-091 | 需求保存崩溃与交付竞争 | **PASS** | library-level（库级） | test-name | packages/core/test/requirement-save.test.ts :: completion/settlement consistency (AC-091) accepts a completion record that binds the Settlement revision, tree and manifests, packages/core/test/requirement-save.test.ts :: completion/settlement consistency (AC-091) refuses a completion record whose code revision is not the final revision, packages/core/test/requirement-save.test.ts :: completion/settlement consistency (AC-091) refuses a Settlement that verified a different code tree …(+12) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 15 条）；该规则的正确验证层级即为库级 |
+| AC-092 | 需求导入冲突与幂等 | **PASS** | product-path（产品路径） | test-name | apps/daemon/test/requirement-import.integration.test.ts :: first-open requirement import from the delivery revision (WP-12 T5.4) keeps valid records visible next to a broken one and reports the conflict (AC-092 surface), packages/knowledge/test/requirements-pool.test.ts :: importRequirementPool imports a pool, is idempotent, and keeps local and record versions apart, packages/knowledge/test/requirements-pool.test.ts :: parseRequirementPool keeps valid records visible next to a broken one and never rewrites the files …(+5) | 层级依据：apps 层已执行证据 1 条 |
+| AC-093 | 需求目录与正文一致性 | **PASS** | product-path（产品路径） | test-name | packages/core/test/context-builder.test.ts :: buildContext — excluded and unknown refs (AC-093) records a reference that does not exist and never expands it, packages/core/test/context-builder.test.ts :: buildContext — excluded and unknown refs (AC-093) keeps the selection’s own excluded and unknowns verbatim, packages/core/test/requirement-save.test.ts :: prepareRequirementSave (AC-093) builds both files with one version and the documented combined record hash …(+18) | 演练 pnpm test:e2e：PASS；层级依据：apps 层已执行证据 3 条；真实演练 pnpm test:e2e PASS |
+| AC-094 | 需求正文保存与并发 | **PASS** | library-level（库级） | test-name | packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) creates the commit with the requirement pool files and moves the branch once, packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) refuses a stale writer with VERSION_CONFLICT and leaves the branch untouched, packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) re-uses the commit after a crash between the commit and the status write …(+12) | 层级依据：只有库级/页面级已执行证据（packages/* 库级 15 条）；该规则的正确验证层级即为库级 |
+
+### 2.1 证据层级分类方法（W9，不改变任何 PASS/FAIL 判定）
+
+层级由 `scripts/lib/acceptance-levels.mjs` 从**本次运行实际产生的证据**推导（`result.evidence[].file`、`result.drills[]` 与 `drill-acs.mjs` 的登记条件），没有逐 AC 人工指定：
+
+| 层级 | 判定规则 | AC 数 |
+|---|---|---|
+| product-path | 有真实发布演练（`pnpm test:e2e` / `pnpm test:live`）的 PASS 行，或提交套件里有已执行的 `apps/*/test/**` 应用层用例（排除播种行 `AC-087/088/089`） | 53 |
+| library-level | 只有 `packages/*/test/**`（或 `apps` 非集成用例 / 播种行）证据；库级是该规则的正确层级，但不是产品路径证明 | 41 |
+| environment-limited | 该 AC 在本次运行以环境条件豁免（未配置 Provider / 无独立 Review-Test 模型 / 无浏览器），所需的一半输入无法执行 | 0 |
+| unclassified | 既无已执行套件证据也无已执行演练行，无法从证据推导层级 | 0 |
+
+- 标记「可争议」的 AC：AC-001、AC-010、AC-037、AC-038、AC-041、AC-043、AC-045、AC-057、AC-066、AC-087、AC-088、AC-089。逐条理由在 §2 的「层级说明」中，登记依据主要是 `api-gap-audit-2.md` §4/§5。
 
 ## 3. 已登记豁免（ACCEPTED）明细
 
@@ -185,47 +201,47 @@
 | AC | 演练来源 | 状态 | 证据 |
 |---|---|---|---|
 | AC-001 | `pnpm test:e2e` | UNVERIFIED | provider.fact-and-unknown: AC-001 的“区分事实/未知”需要真实 Provider 纵向演练（pnpm test:live 与 AGENTDEV_PROVIDER_*）；本演练离线运行，Provider 桩被断言零调用 |
-| AC-001 | `pnpm test:live` | PASS | drill.html-explanation: message 01a0a772-17f1-74c2-9354-ace61a8dba8a -> Work 01a0a772-17f1-704d-8b9c-31470aef2773 (intent=assist level=none, no Requirement); completion through run 01a0a772-1890-79c8-99fa-7fd4f6c91acc (config snapshot 3a1db5ee73fb, 13816 chars) citing src/orders/cancel.ts and separating UNKNOWN; artifact 01a0a772-7362-7fab-b371-c1db380f230f v1 sha256 3788acff8e3d origin=agent kind=explanation; preview 200 CSP "default-src 'none'" sandbox allow-scripts credentials omit mode=inline; download token 6m7Y8Vk4… matched the artifact bytes; the second GET answered 403; delivery branch unchanged at 46e1638ed187; 2 call(s), HTTP 200/200, 24239ms total, 0 failed |
-| AC-002 | `pnpm test:e2e` | PASS | browser.html-preview-and-download: artifact 01a0a771-78d9-7846-abc5-463e7cbaf1e4 在 /projects/759e2a57f53542dbf57a124f88904ef0/requirements/01a0a771-78da-7ec2-9ec0-29fcc7e211b8 渲染于 sandbox="allow-scripts" 的 iframe；预览响应 200 CSP[default-src 'none'; connect-src 'none'] x-agentdev-preview-sandbox=allow-scripts x-agentdev-preview-credentials=omit content-type=text/html；下载字节含 AGENTDEV-PREVIEW-MARKER，URL /artifacts/759e2a57f53542dbf57a124f88904ef0/download/<token>（项目范围显式），重放同 token 被拒绝 403；临时项目 HEAD=4ce473d55a85（未变）且 git status 为空 \| 匿名上下文请求 /artifacts/759e2a57f53542dbf57a124f88904ef0/01a0a771-78d9-7846-abc5-463e7cbaf1e4/preview → 401 {"ok":false,"error":{"code":"UNAUTHENTICATED","message":"sign in to use the work（Playwright 1.63.0，18 个 spec，用时 26032ms，exit 0） |
-| AC-003 | `pnpm test:e2e` | PASS | chief.message-to-stage: no-seed chain: message 01a0a771-044b-7efa-9751-a8da78fa746a → Chief Run 01a0a771-0496-793e-8035-d34a408e4584 → Requirement 01a0a771-0ab3-79d8-846b-eed317e93ddd (active/plan) → professional Run 01a0a771-12f0-7f7a-8c59-69e1bbabb6eb (parent 01a0a771-0496-793e-8035-d34a408e4584) → stage result 01a0a771-190a-7c4d-ac01-975ab10b2d04 + stage.completed, message state processed, board shows the Requirement |
-| AC-003 | `pnpm test:live` | PASS | drill.message-to-stage: real Provider one-message chain: message 01a0a772-c561-7cb0-bab6-2f679a2bd5e8 → Chief Run 01a0a772-c583-7fef-a4de-bc58930adaff (running) → Requirement 01a0a772-e483-7d3d-8ffb-fc9372a2b21a (active/plan) → route planning:success → plan-approved:auto → backend:success → auto-approved Plan #01a0a773 (producer 01a0a773) → stage outcomes planning:success → develop(backend):success → review:success → test:success → settlement:success → stages planning/planning#01a0a773, backend/develop-L2#01a0a773, review/review#01a0a773, test/test#01a0a773, settlement/settlement#01a0a774 (each its own Run) → Test evidence {"status":"passed","checks":[{"acceptanceIds":[],"command":"node --input-type=module -e \"const {cancel}=await import('./src/orders/cancel.ts');const u=cancel('O-1'),p=cancel('O-2'),x=cancel('O-missing');if(u!==true\|\|p!==false\|\|x!==false){console.error('cancel '+u+'/'… |
-| AC-005 | `pnpm test:e2e` | PASS | chief.message-to-stage: no-seed chain: message 01a0a771-044b-7efa-9751-a8da78fa746a → Chief Run 01a0a771-0496-793e-8035-d34a408e4584 → Requirement 01a0a771-0ab3-79d8-846b-eed317e93ddd (active/plan) → professional Run 01a0a771-12f0-7f7a-8c59-69e1bbabb6eb (parent 01a0a771-0496-793e-8035-d34a408e4584) → stage result 01a0a771-190a-7c4d-ac01-975ab10b2d04 + stage.completed, message state processed, board shows the Requirement |
-| AC-005 | `pnpm test:live` | PASS | drill.message-to-stage: real Provider one-message chain: message 01a0a772-c561-7cb0-bab6-2f679a2bd5e8 → Chief Run 01a0a772-c583-7fef-a4de-bc58930adaff (running) → Requirement 01a0a772-e483-7d3d-8ffb-fc9372a2b21a (active/plan) → route planning:success → plan-approved:auto → backend:success → auto-approved Plan #01a0a773 (producer 01a0a773) → stage outcomes planning:success → develop(backend):success → review:success → test:success → settlement:success → stages planning/planning#01a0a773, backend/develop-L2#01a0a773, review/review#01a0a773, test/test#01a0a773, settlement/settlement#01a0a774 (each its own Run) → Test evidence {"status":"passed","checks":[{"acceptanceIds":[],"command":"node --input-type=module -e \"const {cancel}=await import('./src/orders/cancel.ts');const u=cancel('O-1'),p=cancel('O-2'),x=cancel('O-missing');if(u!==true\|\|p!==false\|\|x!==false){console.error('cancel '+u+'/'… |
-| AC-007 | `pnpm test:live` | PASS | drill.l1-typo: Work 01a0a772-7398-7045-b314-fa0f3ca9b595 (level=L1, base 46e1638ed187) one-task Plan 01a0a772-77f approved by the real gate; write admitted for src/orders/messages.ts; real exec Run 01a0a772-781c-726d-b8c5-fd27b2c90d92 produced candidate 448a8dcf5148 tree ae0358dc0c97 (numstat: 1 1 src/orders/messages.ts); independent Review Run 01a0a772-7ca9-7fd2-a438-c20a70d93f23 -> stage 01a0a772-8078-7abf-acca-d5ebf54a8b93; Settlement Run 01a0a772-8079-78a6-8278-a9030c4622ac; L1 chain ["Develop","Review","Settlement"]; runs planning:L1-Plan, backend:L1-Develop, review:L1-Review, settlement:L1-Settlement (no Planning/Test Run); CompletionManifest b38c1c636544 frozen; CAS moved agentdev/main 46e1638ed187 -> 448a8dcf5148; Work completed with no Requirement; artifacts on the Work: 1 (the Plan) |
-| AC-010 | `pnpm test:e2e` | PASS | delivery.l2-chain: Work 01a0a770-f50a-7416-bddc-f7295eac86ed + Requirement 01a0a770-d6ac-706e-9b43-3a048c5db241 bound; Task 01a0a770-fdd3-758e-9f5a-e0910854da5f; candidate 005e83a5bde4 tree 5289358c5669 codeTree 1c223ce1be5b; 5 real stage results (Plan/Develop/Review/Test/Settlement) accepted by StageGate; evaluateStageChain(route=code, level=L2) ok with the documented order and refuses a missing Test |
-| AC-010 | `pnpm test:live` | PASS | drill.l2-delivery: Work 01a0a772-86ad-7cc0-be71-8d28d3d3b6ce (L2, base d7038544523b) + Requirement 01a0a772-86cd-7c73-897e-58b2fd5c19fa; model Plan 01a0a772-8f5 approved, Task 01a0a772-8f4e-7a6e-be04-616cdb6de011; independent Runs planning:01a0a772-88ec-7a41-9506-127b54b50cba, backend:01a0a772-8f74-7efe-ba8b-08bbda4ad153, review:01a0a772-983c-747d-a381-12630fc7e351, test:01a0a772-9a92-7b85-a9f3-5e48664b407b with distinct config snapshots (bb120e89, a619951c, 3f7152b3, 4eaa7fc2); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-chat, test=deepseek-chat; candidate 7cce191472d1 codeTree 14680375a923; Develop 01a0a772-983b-7e69-b884-62da625e6c7d, Review 01a0a772-9a3c-74e7-910e-2477a365f5a0, Test 01a0a772-9dd7-713a-b5f6-5ad78828a1c4 accepted (executed probe exit 0); L2 chain ["Plan","Develop","Review","Test","Settlement"]; a chain without Test is refused; Comple… |
-| AC-032 | `pnpm test:e2e` | PASS | tool.broker-admission: G8 on the real path: message 01a0a771-34c4-720a-8ed4-a72c71027b1f → Chief assessment → professional Run 01a0a771-447c-7f66-85d1-87338dec3f18 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended |
-| AC-037 | `pnpm test:e2e` | PASS | knowledge.patch-cold-start: knowledge commit 7b6ae18ca0cd: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection 7b6ae18ca0cd state=valid (durable SQLite row valid); cold start selected ["F-0f0f0f0f","F-0a1b2c3d"] with "未付款订单可取消；已付款订单返回已确认的拒绝结果。", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid |
-| AC-037 | `pnpm test:live` | PASS | drill.l2-delivery: Work 01a0a772-86ad-7cc0-be71-8d28d3d3b6ce (L2, base d7038544523b) + Requirement 01a0a772-86cd-7c73-897e-58b2fd5c19fa; model Plan 01a0a772-8f5 approved, Task 01a0a772-8f4e-7a6e-be04-616cdb6de011; independent Runs planning:01a0a772-88ec-7a41-9506-127b54b50cba, backend:01a0a772-8f74-7efe-ba8b-08bbda4ad153, review:01a0a772-983c-747d-a381-12630fc7e351, test:01a0a772-9a92-7b85-a9f3-5e48664b407b with distinct config snapshots (bb120e89, a619951c, 3f7152b3, 4eaa7fc2); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-chat, test=deepseek-chat; candidate 7cce191472d1 codeTree 14680375a923; Develop 01a0a772-983b-7e69-b884-62da625e6c7d, Review 01a0a772-9a3c-74e7-910e-2477a365f5a0, Test 01a0a772-9dd7-713a-b5f6-5ad78828a1c4 accepted (executed probe exit 0); L2 chain ["Plan","Develop","Review","Test","Settlement"]; a chain without Test is refused; Comple… |
-| AC-038 | `pnpm test:e2e` | PASS | surfaces.nine-real-state: 10 surfaces read real state (/projects ok; /projects/9ef170406574d8d9d68358989a8956f3/chief ok; /projects/9ef170406574d8d9d68358989a8956f3/requirements ok; /projects/9ef170406574d8d9d68358989a8956f3/requirements/01a0a770-d6ac-706e-9b43-3a048c5db241 ok; /projects/9ef170406574d8d9d68358989a8956f3/docs ok; /projects/9ef170406574d8d9d68358989a8956f3/files ok; /projects/9ef170406574d8d9d68358989a8956f3/agents ok; /projects/9ef170406574d8d9d68358989a8956f3/runs ok; /projects/9ef170406574d8d9d68358989a8956f3/inbox ok; /settings ok); Live panel modes open/compact/hidden; create/switch control only on the Chief page with the deep link elsewhere; docs delivered/design/work views all real answers |
-| AC-041 | `pnpm test:e2e` | PASS | knowledge.patch-cold-start: knowledge commit 7b6ae18ca0cd: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection 7b6ae18ca0cd state=valid (durable SQLite row valid); cold start selected ["F-0f0f0f0f","F-0a1b2c3d"] with "未付款订单可取消；已付款订单返回已确认的拒绝结果。", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid |
-| AC-041 | `pnpm test:live` | PASS | drill.l2-delivery: Work 01a0a772-86ad-7cc0-be71-8d28d3d3b6ce (L2, base d7038544523b) + Requirement 01a0a772-86cd-7c73-897e-58b2fd5c19fa; model Plan 01a0a772-8f5 approved, Task 01a0a772-8f4e-7a6e-be04-616cdb6de011; independent Runs planning:01a0a772-88ec-7a41-9506-127b54b50cba, backend:01a0a772-8f74-7efe-ba8b-08bbda4ad153, review:01a0a772-983c-747d-a381-12630fc7e351, test:01a0a772-9a92-7b85-a9f3-5e48664b407b with distinct config snapshots (bb120e89, a619951c, 3f7152b3, 4eaa7fc2); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-chat, test=deepseek-chat; candidate 7cce191472d1 codeTree 14680375a923; Develop 01a0a772-983b-7e69-b884-62da625e6c7d, Review 01a0a772-9a3c-74e7-910e-2477a365f5a0, Test 01a0a772-9dd7-713a-b5f6-5ad78828a1c4 accepted (executed probe exit 0); L2 chain ["Plan","Develop","Review","Test","Settlement"]; a chain without Test is refused; Comple… |
-| AC-043 | `pnpm test:live` | PASS | drill.l2-delivery: Work 01a0a772-86ad-7cc0-be71-8d28d3d3b6ce (L2, base d7038544523b) + Requirement 01a0a772-86cd-7c73-897e-58b2fd5c19fa; model Plan 01a0a772-8f5 approved, Task 01a0a772-8f4e-7a6e-be04-616cdb6de011; independent Runs planning:01a0a772-88ec-7a41-9506-127b54b50cba, backend:01a0a772-8f74-7efe-ba8b-08bbda4ad153, review:01a0a772-983c-747d-a381-12630fc7e351, test:01a0a772-9a92-7b85-a9f3-5e48664b407b with distinct config snapshots (bb120e89, a619951c, 3f7152b3, 4eaa7fc2); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-chat, test=deepseek-chat; candidate 7cce191472d1 codeTree 14680375a923; Develop 01a0a772-983b-7e69-b884-62da625e6c7d, Review 01a0a772-9a3c-74e7-910e-2477a365f5a0, Test 01a0a772-9dd7-713a-b5f6-5ad78828a1c4 accepted (executed probe exit 0); L2 chain ["Plan","Develop","Review","Test","Settlement"]; a chain without Test is refused; Comple… |
-| AC-045 | `pnpm test:e2e` | PASS | tool.broker-admission: G8 on the real path: message 01a0a771-34c4-720a-8ed4-a72c71027b1f → Chief assessment → professional Run 01a0a771-447c-7f66-85d1-87338dec3f18 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended |
-| AC-048 | `pnpm test:e2e` | PASS | tool.broker-admission: G8 on the real path: message 01a0a771-34c4-720a-8ed4-a72c71027b1f → Chief assessment → professional Run 01a0a771-447c-7f66-85d1-87338dec3f18 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended |
-| AC-050 | `pnpm test:e2e` | PASS | tool.broker-admission: G8 on the real path: message 01a0a771-34c4-720a-8ed4-a72c71027b1f → Chief assessment → professional Run 01a0a771-447c-7f66-85d1-87338dec3f18 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended |
-| AC-052 | `pnpm test:e2e` | PASS | browser.html-attack-samples: frame origin=null cookie=null cookieError=SecurityError（会话 cookie agentdev_web 确实存在）；parent.document=SecurityError top.title=SecurityError topNavigation=null（父页 URL 未变）；fetch(probe)=rejected:TypeError fetch(/api/session)=rejected:TypeError xhr=error img=error；探针自计数 attacks=0；探针 URL 的浏览器响应数=0；被 CSP 拒绝的探针请求=2（errorText=csp）；localStorage=SecurityError（Playwright 1.63.0，18 个 spec，用时 26032ms，exit 0） |
+| AC-001 | `pnpm test:live` | PASS | drill.html-explanation: message 01a0a785-ff57-7431-8ac1-a04bfb38d0fb -> Work 01a0a785-ff57-70ff-a765-122a4502493e (intent=assist level=none, no Requirement); completion through run 01a0a786-0002-728a-bfc7-f47b437be774 (config snapshot 951fcd2d03b2, 14828 chars) citing src/orders/cancel.ts and separating UNKNOWN; artifact 01a0a786-61bc-7007-8177-dbb5b1c7a332 v1 sha256 39829827b55f origin=agent kind=explanation; preview 200 CSP "default-src 'none'" sandbox allow-scripts credentials omit mode=inline; download token _t0-FKpJ… matched the artifact bytes; the second GET answered 403; delivery branch unchanged at 1aac8fdcb584; 2 call(s), HTTP 200/200, 26311ms total, 0 failed |
+| AC-002 | `pnpm test:e2e` | PASS | browser.html-preview-and-download: artifact 01a0a785-5dcf-73a2-a329-cb1538c6ee32 在 /projects/463e6f4de8f077602653f1f4e12a2184/requirements/01a0a785-5dd2-7a94-93da-e1091b66d10b 渲染于 sandbox="allow-scripts" 的 iframe；预览响应 200 CSP[default-src 'none'; connect-src 'none'] x-agentdev-preview-sandbox=allow-scripts x-agentdev-preview-credentials=omit content-type=text/html；下载字节含 AGENTDEV-PREVIEW-MARKER，URL /artifacts/463e6f4de8f077602653f1f4e12a2184/download/<token>（项目范围显式），重放同 token 被拒绝 403；临时项目 HEAD=8a7bc14178b8（未变）且 git status 为空 \| 匿名上下文请求 /artifacts/463e6f4de8f077602653f1f4e12a2184/01a0a785-5dcf-73a2-a329-cb1538c6ee32/preview → 401 {"ok":false,"error":{"code":"UNAUTHENTICATED","message":"sign in to use the work（Playwright 1.63.0，18 个 spec，用时 25936ms，exit 0） |
+| AC-003 | `pnpm test:e2e` | PASS | chief.message-to-stage: no-seed chain: message 01a0a784-e9a6-7d46-a4b8-4d857c00b6b1 → Chief Run 01a0a784-e9e1-71c0-95ec-206e95a8ada3 → Requirement 01a0a784-efe6-727c-91a9-1124133e1fcd (active/plan) → professional Run 01a0a784-f7f4-7d99-8309-ececf0cf547c (parent 01a0a784-e9e1-71c0-95ec-206e95a8ada3) → stage result 01a0a784-fddd-7efc-a00a-e89fa198c3ef + stage.completed, message state processed, board shows the Requirement |
+| AC-003 | `pnpm test:live` | PASS | drill.message-to-stage: real Provider one-message chain: message 01a0a786-bcee-741f-8f3b-90010db840b2 → Chief Run 01a0a786-bd0f-7ba3-9d09-e7cddbe9185d (running) → Requirement 01a0a786-d4e9-71f3-8c86-4e0de65bed69 (active/plan) → route planning:success → plan-approved:auto → backend:success → auto-approved Plan #01a0a787 (producer 01a0a786) → stage outcomes planning:success → develop(backend):success → review:success → test:success → settlement:success → stages planning/planning#01a0a786, backend/develop-L2#01a0a787, review/review#01a0a787, test/test#01a0a787, settlement/settlement#01a0a787 (each its own Run) → Test evidence {"status":"passed","checks":[{"acceptanceIds":[],"command":"node --input-type=module -e \"const {cancel}=await import('./src/orders/cancel.ts');const u=cancel('O-1'),p=cancel('O-2'),x=cancel('O-missing');if(u!==true\|\|p!==false\|\|x!==false){console.error('cancel '+u+'/'… |
+| AC-005 | `pnpm test:e2e` | PASS | chief.message-to-stage: no-seed chain: message 01a0a784-e9a6-7d46-a4b8-4d857c00b6b1 → Chief Run 01a0a784-e9e1-71c0-95ec-206e95a8ada3 → Requirement 01a0a784-efe6-727c-91a9-1124133e1fcd (active/plan) → professional Run 01a0a784-f7f4-7d99-8309-ececf0cf547c (parent 01a0a784-e9e1-71c0-95ec-206e95a8ada3) → stage result 01a0a784-fddd-7efc-a00a-e89fa198c3ef + stage.completed, message state processed, board shows the Requirement |
+| AC-005 | `pnpm test:live` | PASS | drill.message-to-stage: real Provider one-message chain: message 01a0a786-bcee-741f-8f3b-90010db840b2 → Chief Run 01a0a786-bd0f-7ba3-9d09-e7cddbe9185d (running) → Requirement 01a0a786-d4e9-71f3-8c86-4e0de65bed69 (active/plan) → route planning:success → plan-approved:auto → backend:success → auto-approved Plan #01a0a787 (producer 01a0a786) → stage outcomes planning:success → develop(backend):success → review:success → test:success → settlement:success → stages planning/planning#01a0a786, backend/develop-L2#01a0a787, review/review#01a0a787, test/test#01a0a787, settlement/settlement#01a0a787 (each its own Run) → Test evidence {"status":"passed","checks":[{"acceptanceIds":[],"command":"node --input-type=module -e \"const {cancel}=await import('./src/orders/cancel.ts');const u=cancel('O-1'),p=cancel('O-2'),x=cancel('O-missing');if(u!==true\|\|p!==false\|\|x!==false){console.error('cancel '+u+'/'… |
+| AC-007 | `pnpm test:live` | PASS | drill.l1-typo: Work 01a0a786-61f1-7105-a700-d281ebdeb5da (level=L1, base 1aac8fdcb584) one-task Plan 01a0a786-65b approved by the real gate; write admitted for src/orders/messages.ts; real exec Run 01a0a786-65d0-751d-b03c-11bc01dac5f2 produced candidate a0e187b78f86 tree ae0358dc0c97 (numstat: 1 1 src/orders/messages.ts); independent Review Run 01a0a786-6a48-7d29-a5a4-a0eb3df34377 -> stage 01a0a786-6da9-71d4-913a-861491b8f72e; Settlement Run 01a0a786-6daa-78f9-9985-361591af8b0f; L1 chain ["Develop","Review","Settlement"]; runs planning:L1-Plan, backend:L1-Develop, review:L1-Review, settlement:L1-Settlement (no Planning/Test Run); CompletionManifest b0131b872385 frozen; CAS moved agentdev/main 1aac8fdcb584 -> a0e187b78f86; Work completed with no Requirement; artifacts on the Work: 1 (the Plan) |
+| AC-010 | `pnpm test:e2e` | PASS | delivery.l2-chain: Work 01a0a784-db22-7bfe-a335-d36ec9e0a1ce + Requirement 01a0a784-bd66-752f-9385-57c4b1bb30bf bound; Task 01a0a784-e393-7c88-8f72-3c3bc4bb06ea; candidate 1c1a0bffa14a tree ae127b32c849 codeTree e4564a0e6746; 5 real stage results (Plan/Develop/Review/Test/Settlement) accepted by StageGate; evaluateStageChain(route=code, level=L2) ok with the documented order and refuses a missing Test |
+| AC-010 | `pnpm test:live` | PASS | drill.l2-delivery: Work 01a0a786-72fb-79f1-83d8-e5ce7ac6d0ec (L2, base 458adbcff6c3) + Requirement 01a0a786-731a-7d2d-9925-6bb7a34f85b4; model Plan 01a0a786-7dc approved, Task 01a0a786-7db5-7d3b-bd48-64899ae0d17f; independent Runs planning:01a0a786-7534-724a-ad37-d42fa36a6932, backend:01a0a786-7ddb-7053-b256-82b59039199c, review:01a0a786-8b89-7c1e-9d4c-3724cf23b42d, test:01a0a786-8f8c-7dd9-b36c-22debefb0269 with distinct config snapshots (9aa40e70, 7a450ec3, d3d60929, e0cdae86); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-chat, test=deepseek-chat; candidate 7d942fe53e86 codeTree 130fc79405f7; Develop 01a0a786-8b88-793e-b7c8-d5be9d06fc5c, Review 01a0a786-8f42-79aa-b1e8-ccdc93de4a93, Test 01a0a786-92df-7868-9cee-5531474bd249 accepted (executed probe exit 0); L2 chain ["Plan","Develop","Review","Test","Settlement"]; a chain without Test is refused; Comple… |
+| AC-032 | `pnpm test:e2e` | PASS | tool.broker-admission: G8 on the real path: message 01a0a785-1986-7b3c-b99d-be430d4ad3bc → Chief assessment → professional Run 01a0a785-291d-724f-9808-63aeb5163682 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended |
+| AC-037 | `pnpm test:e2e` | PASS | knowledge.patch-cold-start: knowledge commit e9bb325b42fe: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection e9bb325b42fe state=valid (durable SQLite row valid); cold start selected ["F-0f0f0f0f","F-0a1b2c3d"] with "未付款订单可取消；已付款订单返回已确认的拒绝结果。", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid |
+| AC-037 | `pnpm test:live` | PASS | drill.l2-delivery: Work 01a0a786-72fb-79f1-83d8-e5ce7ac6d0ec (L2, base 458adbcff6c3) + Requirement 01a0a786-731a-7d2d-9925-6bb7a34f85b4; model Plan 01a0a786-7dc approved, Task 01a0a786-7db5-7d3b-bd48-64899ae0d17f; independent Runs planning:01a0a786-7534-724a-ad37-d42fa36a6932, backend:01a0a786-7ddb-7053-b256-82b59039199c, review:01a0a786-8b89-7c1e-9d4c-3724cf23b42d, test:01a0a786-8f8c-7dd9-b36c-22debefb0269 with distinct config snapshots (9aa40e70, 7a450ec3, d3d60929, e0cdae86); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-chat, test=deepseek-chat; candidate 7d942fe53e86 codeTree 130fc79405f7; Develop 01a0a786-8b88-793e-b7c8-d5be9d06fc5c, Review 01a0a786-8f42-79aa-b1e8-ccdc93de4a93, Test 01a0a786-92df-7868-9cee-5531474bd249 accepted (executed probe exit 0); L2 chain ["Plan","Develop","Review","Test","Settlement"]; a chain without Test is refused; Comple… |
+| AC-038 | `pnpm test:e2e` | PASS | surfaces.nine-real-state: 10 surfaces read real state (/projects ok; /projects/2a1fe8096616ef5a3e3be6201ca80087/chief ok; /projects/2a1fe8096616ef5a3e3be6201ca80087/requirements ok; /projects/2a1fe8096616ef5a3e3be6201ca80087/requirements/01a0a784-bd66-752f-9385-57c4b1bb30bf ok; /projects/2a1fe8096616ef5a3e3be6201ca80087/docs ok; /projects/2a1fe8096616ef5a3e3be6201ca80087/files ok; /projects/2a1fe8096616ef5a3e3be6201ca80087/agents ok; /projects/2a1fe8096616ef5a3e3be6201ca80087/runs ok; /projects/2a1fe8096616ef5a3e3be6201ca80087/inbox ok; /settings ok); Live panel modes open/compact/hidden; create/switch control only on the Chief page with the deep link elsewhere; docs delivered/design/work views all real answers |
+| AC-041 | `pnpm test:e2e` | PASS | knowledge.patch-cold-start: knowledge commit e9bb325b42fe: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection e9bb325b42fe state=valid (durable SQLite row valid); cold start selected ["F-0f0f0f0f","F-0a1b2c3d"] with "未付款订单可取消；已付款订单返回已确认的拒绝结果。", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid |
+| AC-041 | `pnpm test:live` | PASS | drill.l2-delivery: Work 01a0a786-72fb-79f1-83d8-e5ce7ac6d0ec (L2, base 458adbcff6c3) + Requirement 01a0a786-731a-7d2d-9925-6bb7a34f85b4; model Plan 01a0a786-7dc approved, Task 01a0a786-7db5-7d3b-bd48-64899ae0d17f; independent Runs planning:01a0a786-7534-724a-ad37-d42fa36a6932, backend:01a0a786-7ddb-7053-b256-82b59039199c, review:01a0a786-8b89-7c1e-9d4c-3724cf23b42d, test:01a0a786-8f8c-7dd9-b36c-22debefb0269 with distinct config snapshots (9aa40e70, 7a450ec3, d3d60929, e0cdae86); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-chat, test=deepseek-chat; candidate 7d942fe53e86 codeTree 130fc79405f7; Develop 01a0a786-8b88-793e-b7c8-d5be9d06fc5c, Review 01a0a786-8f42-79aa-b1e8-ccdc93de4a93, Test 01a0a786-92df-7868-9cee-5531474bd249 accepted (executed probe exit 0); L2 chain ["Plan","Develop","Review","Test","Settlement"]; a chain without Test is refused; Comple… |
+| AC-043 | `pnpm test:live` | PASS | drill.l2-delivery: Work 01a0a786-72fb-79f1-83d8-e5ce7ac6d0ec (L2, base 458adbcff6c3) + Requirement 01a0a786-731a-7d2d-9925-6bb7a34f85b4; model Plan 01a0a786-7dc approved, Task 01a0a786-7db5-7d3b-bd48-64899ae0d17f; independent Runs planning:01a0a786-7534-724a-ad37-d42fa36a6932, backend:01a0a786-7ddb-7053-b256-82b59039199c, review:01a0a786-8b89-7c1e-9d4c-3724cf23b42d, test:01a0a786-8f8c-7dd9-b36c-22debefb0269 with distinct config snapshots (9aa40e70, 7a450ec3, d3d60929, e0cdae86); frozen models planning=deepseek-flash, backend=deepseek-flash, review=deepseek-chat, test=deepseek-chat; candidate 7d942fe53e86 codeTree 130fc79405f7; Develop 01a0a786-8b88-793e-b7c8-d5be9d06fc5c, Review 01a0a786-8f42-79aa-b1e8-ccdc93de4a93, Test 01a0a786-92df-7868-9cee-5531474bd249 accepted (executed probe exit 0); L2 chain ["Plan","Develop","Review","Test","Settlement"]; a chain without Test is refused; Comple… |
+| AC-045 | `pnpm test:e2e` | PASS | tool.broker-admission: G8 on the real path: message 01a0a785-1986-7b3c-b99d-be430d4ad3bc → Chief assessment → professional Run 01a0a785-291d-724f-9808-63aeb5163682 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended |
+| AC-048 | `pnpm test:e2e` | PASS | tool.broker-admission: G8 on the real path: message 01a0a785-1986-7b3c-b99d-be430d4ad3bc → Chief assessment → professional Run 01a0a785-291d-724f-9808-63aeb5163682 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended |
+| AC-050 | `pnpm test:e2e` | PASS | tool.broker-admission: G8 on the real path: message 01a0a785-1986-7b3c-b99d-be430d4ad3bc → Chief assessment → professional Run 01a0a785-291d-724f-9808-63aeb5163682 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended |
+| AC-052 | `pnpm test:e2e` | PASS | browser.html-attack-samples: frame origin=null cookie=null cookieError=SecurityError（会话 cookie agentdev_web 确实存在）；parent.document=SecurityError top.title=SecurityError topNavigation=null（父页 URL 未变）；fetch(probe)=rejected:TypeError fetch(/api/session)=rejected:TypeError xhr=error img=error；探针自计数 attacks=0；探针 URL 的浏览器响应数=0；被 CSP 拒绝的探针请求=2（errorText=csp）；localStorage=SecurityError（Playwright 1.63.0，18 个 spec，用时 25936ms，exit 0） |
 | AC-054 | `pnpm test:e2e` | PASS | events.watermark-reconnect: hello/subscribe over the BFF /ws; first cursor 16 acked; daemon dropped -> bridge.reconnecting -> bridge.open; the during-break event replayed above the watermark with no duplicate; a fresh socket resumed in mode=replay with nothing at or below 16; Work stayed running |
-| AC-057 | `pnpm test:e2e` | PASS | runtime.executes-attempt: runtime executed a real Attempt: Run 01a0a771-19ea-7b8f-a661-87afe5c804ce completed with Attempt 01a0a771-1ab3-7976-91f5-014a25e194f7 through the supervisor, a real apps/runner child process and the loopback model (1 Provider call(s), 13 tokens booked); killing the live Runner of Run 01a0a771-33e5-736c-9911-1faa46e216c5 (pid 45998) parked it as interrupted with Attempt 01a0a771-33fc-7c5d-b573-3191f438da65 lost (new Attempt allowed=true) |
-| AC-057 | `pnpm test:live` | PASS | drill.runtime-attempt: the runtime executed Run 01a0a772-a758-76d4-b3bc-ffd2b946885a through a real apps/runner child process (Attempt 01a0a772-a825-740b-a13a-6d1d33b9b739, runnerId pid:54614) against the real Provider; 1197 tokens booked from the Provider usage; killing the live Runner (pid 54616) of Run 01a0a772-c3b1-765a-b03d-d0eb1bcd8b29 parked it as interrupted with Attempt 01a0a772-c47b-7044-ab19-c63670d08674 lost (new Attempt allowed=true) |
+| AC-057 | `pnpm test:e2e` | PASS | runtime.executes-attempt: runtime executed a real Attempt: Run 01a0a784-fe9e-79ab-b7c5-1ba0d8e90a5d completed with Attempt 01a0a784-ff67-7c66-b830-d5a47a40839f through the supervisor, a real apps/runner child process and the loopback model (1 Provider call(s), 13 tokens booked); killing the live Runner of Run 01a0a785-18a8-7462-bcf8-64b5678b26fa (pid 88494) parked it as interrupted with Attempt 01a0a785-18a9-7b90-9116-6966a2527b08 lost (new Attempt allowed=true) |
+| AC-057 | `pnpm test:live` | PASS | drill.runtime-attempt: the runtime executed Run 01a0a786-9ec2-76e3-9eed-e7e708aac2e4 through a real apps/runner child process (Attempt 01a0a786-9f90-7659-8e82-749106bb0bef, runnerId pid:97189) against the real Provider; 1182 tokens booked from the Provider usage; killing the live Runner (pid 97190) of Run 01a0a786-bb43-7097-acc5-e7cc8c01edac parked it as interrupted with Attempt 01a0a786-bbeb-732e-984e-897dd130508a lost (new Attempt allowed=true) |
 | AC-060 | `pnpm test:e2e` | PASS | events.watermark-reconnect: hello/subscribe over the BFF /ws; first cursor 16 acked; daemon dropped -> bridge.reconnecting -> bridge.open; the during-break event replayed above the watermark with no duplicate; a fresh socket resumed in mode=replay with nothing at or below 16; Work stayed running |
-| AC-064 | `pnpm test:e2e` | PASS | ops.backup-restore: credentialed Provider provider:01a0a771-dd24-73bd-ab33-c20b6676139f -> Chief Run 01a0a771-dd65-7c1f-8ead-5e3e0a56a501 reached attempt.ready (Attempt 01a0a771-e0b3-7724-8de8-edf6eb160b39 running) and the loopback model received 1 credentialed call(s); agentdev backup exit 0: revision 562d7f78435a, complete, secretRefs ["provider:01a0a771-dd24-73bd-ab33-c20b6676139f"], installation config copied, no credential value in the backup directory; deleted /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-e2e-ops-home-LNLFo4/projects/8e64e0326986f3c83017a190baf45e2c and the project; agentdev restore exit 0 (status ready, tree 1ed076140947, evidence 1/1, doctor ok, Run 01a0a771-dd65-7c1f-8ead-5e3e0a56a501 interrupted); restarted daemon reported it interrupted through its own protocol; fresh installation restore: status blocked + first stdout line WARNING [PROVID… |
+| AC-064 | `pnpm test:e2e` | PASS | ops.backup-restore: credentialed Provider provider:01a0a785-c0fc-791c-82c0-7d8375d74f75 -> Chief Run 01a0a785-c143-73ff-bd7a-6dd079c2ffa8 reached attempt.ready (Attempt 01a0a785-c44d-7be3-b4c4-f7864f1069a7 running) and the loopback model received 1 credentialed call(s); agentdev backup exit 0: revision 2e65b443edd8, complete, secretRefs ["provider:01a0a785-c0fc-791c-82c0-7d8375d74f75"], installation config copied, no credential value in the backup directory; deleted /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-e2e-ops-home-dUG2rR/projects/26eb83d4fa8fc11b4790d9e3eaaec916 and the project; agentdev restore exit 0 (status ready, tree 1ed076140947, evidence 1/1, doctor ok, Run 01a0a785-c143-73ff-bd7a-6dd079c2ffa8 interrupted); restarted daemon reported it interrupted through its own protocol; fresh installation restore: status blocked + first stdout line WARNING [PROVID… |
 | AC-066 | `pnpm test:live` | PASS | drill.session-streaming: real Pi session over the Core gateway (provider deepseek-flash): streaming text_delta=1 thinking_delta=0 first="PONG-AC066" last="PONG-AC066"; session file 5 → 7 record(s); resumed with a new factory: same sessionId + same file, 1 fresh delta(s), turn messageCount 2 |
-| AC-068 | `pnpm test:e2e` | PASS | board.rules: board identity shared (01a0a770-e4ee-7322-8195-9b76a288b8e7); L1 Work 01a0a770-ebe4-7f90-99ca-23e93d4e4603 excluded and never a card; Queued pause -> 409 INVALID_STATE; Queued cancel -> cancelled at 4e19328c7ebada3f77c8351b18526e055dec6e9c; branch tip moved |
-| AC-069 | `pnpm test:e2e` | PASS | chief.routes-message: message 01a0a770-f50a-7048-ac11-2d615777e814 routed to Work 01a0a770-f50a-7416-bddc-f7295eac86ed (intent=delivery level=L2 authorization=01a0a770-f566-7144-8588-c81c60275e40); Work.sourceRef is the message; message.received emitted |
-| AC-069 | `pnpm test:live` | PASS | drill.message-to-stage: real Provider one-message chain: message 01a0a772-c561-7cb0-bab6-2f679a2bd5e8 → Chief Run 01a0a772-c583-7fef-a4de-bc58930adaff (running) → Requirement 01a0a772-e483-7d3d-8ffb-fc9372a2b21a (active/plan) → route planning:success → plan-approved:auto → backend:success → auto-approved Plan #01a0a773 (producer 01a0a773) → stage outcomes planning:success → develop(backend):success → review:success → test:success → settlement:success → stages planning/planning#01a0a773, backend/develop-L2#01a0a773, review/review#01a0a773, test/test#01a0a773, settlement/settlement#01a0a774 (each its own Run) → Test evidence {"status":"passed","checks":[{"acceptanceIds":[],"command":"node --input-type=module -e \"const {cancel}=await import('./src/orders/cancel.ts');const u=cancel('O-1'),p=cancel('O-2'),x=cancel('O-missing');if(u!==true\|\|p!==false\|\|x!==false){console.error('cancel '+u+'/'… |
-| AC-070 | `pnpm test:e2e` | PASS | plan.approval-expired-card: no-plan refusal (enabled=false reasonCode=no_plan); plan.approve v1 planRef=01a0a770-f58b-794b-8a3d-706beef22676; plan.current enabled=true with 1 task(s), authorization=01a0a770-f566-7144-8588-c81c60275e40; superseded v0 -> VERSION_CONFLICT currentVersion=1 |
-| AC-071 | `pnpm test:e2e` | PASS | browser.live-layout: open: grid=220.0px 573.6px 486.4px, --dock=clamp(360px, 38%, 560px) ⇒ dock 486.4px (38% of 1280px), main 右缘=793.6 dock 左缘=793.6；compact: 第三轨=44px, dock display=none, aria-expanded=false；hidden: 第三轨=0px, main=1060.0px > compact=1016.0px；三态由真实键盘操作（focus + Enter）驱动 \| { "viewport": { "width": 1280, "height": 720 }, "header": { "x": 0, "y": 0, "width": 1280, "height": 54, "right": 1280, "bottom": 54 }, "headerDisplay": "flex", "brand": { "x": 0, "y": 0, "width": 220, "height": 54, "right": 220, "bottom": 54 }, "projectArea": { "x": 220, "y": 0, "width": 696.671875, "height": 54, "right": 916.671875, "bottom": 54 }, "tools": { "x": 916.671875, "y": 0, "width": 363.328125, "height": 54, "right": 1280, "bottom": 54 }, "toggle": { "x": 998.546875, "y": 3.5, "width": 44.125, "height": 46, "right": 1042.671875, "bottom": 49.5 } } \| 面板状态写入 localStorage(agentdev.panel=compact) 并… |
-| AC-072 | `pnpm test:e2e` | PASS | surfaces.nine-real-state: 10 surfaces read real state (/projects ok; /projects/9ef170406574d8d9d68358989a8956f3/chief ok; /projects/9ef170406574d8d9d68358989a8956f3/requirements ok; /projects/9ef170406574d8d9d68358989a8956f3/requirements/01a0a770-d6ac-706e-9b43-3a048c5db241 ok; /projects/9ef170406574d8d9d68358989a8956f3/docs ok; /projects/9ef170406574d8d9d68358989a8956f3/files ok; /projects/9ef170406574d8d9d68358989a8956f3/agents ok; /projects/9ef170406574d8d9d68358989a8956f3/runs ok; /projects/9ef170406574d8d9d68358989a8956f3/inbox ok; /settings ok); Live panel modes open/compact/hidden; create/switch control only on the Chief page with the deep link elsewhere; docs delivered/design/work views all real answers |
-| AC-073 | `pnpm test:e2e` | PASS | browser.keyboard-aria-i18n: Tab #1 → a#(skip-link) name="Skip to main content"；Enter → 焦点 #main；遍历 22 个可聚焦控件（含 #languageSelect=true），无未命名控件，无不可聚焦元素进入顺序；ARIA: #liveDock="Live panel" #liveDockToggle="Live panel, open" #languageSelect="Interface language" #composerBody="Message the Chief"；aria-live 区域 #connectionState/#messages/#liveEvents/#stagedAttachments \| 切换到 zh：html[lang]=zh-CN，nav Chief→主管，cookie agentdev_language=zh，localStorage(agentdev.language)=zh；客户端自有字符串随切换生效：#liveDock aria-label=实时面板、#liveDockToggle=实时面板，已展开、下载按钮=下载完整产物；项目内容未翻译：#requirementTitle="HTML 说明产物隔离预览" 保持不变且 data-translatable="false"；project-name="/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-e2e-repo-zoEQMb" 不变；ui.translate 调用 63 次，未包含任何项目内容（标题/项目名泄漏=0）；reload 后整页仍为 zh；未在客户端打开过的 /settings 也由服务端按 cookie 渲染为「保存配置」（Playwright 1.63.0，18 个 spec，用时 26032ms，exit 0） |
-| AC-074 | `pnpm test:e2e` | PASS | inbox.decision-dedup: two same-target decisions collapsed to 1 Inbox row (ids 01a0a770-f598-757d-9613-3c96f25327f0/01a0a770-f599-7166-bf99-50577c35176e); expired row actionable=false; resolve -> accepted + idempotent replay; duplicate row untouched |
+| AC-068 | `pnpm test:e2e` | PASS | board.rules: board identity shared (01a0a784-cb14-75a2-810f-8eccdb70c543); L1 Work 01a0a784-d1fd-7d62-a70d-3566f4a42937 excluded and never a card; Queued pause -> 409 INVALID_STATE; Queued cancel -> cancelled at fe378e14fface069c4cd6a96772e65b67a30b999; branch tip moved |
+| AC-069 | `pnpm test:e2e` | PASS | chief.routes-message: message 01a0a784-db22-7581-80fd-79fdb742259c routed to Work 01a0a784-db22-7bfe-a335-d36ec9e0a1ce (intent=delivery level=L2 authorization=01a0a784-db74-73be-a1f1-b5aaa19e2c94); Work.sourceRef is the message; message.received emitted |
+| AC-069 | `pnpm test:live` | PASS | drill.message-to-stage: real Provider one-message chain: message 01a0a786-bcee-741f-8f3b-90010db840b2 → Chief Run 01a0a786-bd0f-7ba3-9d09-e7cddbe9185d (running) → Requirement 01a0a786-d4e9-71f3-8c86-4e0de65bed69 (active/plan) → route planning:success → plan-approved:auto → backend:success → auto-approved Plan #01a0a787 (producer 01a0a786) → stage outcomes planning:success → develop(backend):success → review:success → test:success → settlement:success → stages planning/planning#01a0a786, backend/develop-L2#01a0a787, review/review#01a0a787, test/test#01a0a787, settlement/settlement#01a0a787 (each its own Run) → Test evidence {"status":"passed","checks":[{"acceptanceIds":[],"command":"node --input-type=module -e \"const {cancel}=await import('./src/orders/cancel.ts');const u=cancel('O-1'),p=cancel('O-2'),x=cancel('O-missing');if(u!==true\|\|p!==false\|\|x!==false){console.error('cancel '+u+'/'… |
+| AC-070 | `pnpm test:e2e` | PASS | plan.approval-expired-card: no-plan refusal (enabled=false reasonCode=no_plan); plan.approve v1 planRef=01a0a784-db9a-7a19-bb49-f240277ef4fa; plan.current enabled=true with 1 task(s), authorization=01a0a784-db74-73be-a1f1-b5aaa19e2c94; superseded v0 -> VERSION_CONFLICT currentVersion=1 |
+| AC-071 | `pnpm test:e2e` | PASS | browser.live-layout: open: grid=220.0px 573.6px 486.4px, --dock=clamp(360px, 38%, 560px) ⇒ dock 486.4px (38% of 1280px), main 右缘=793.6 dock 左缘=793.6；compact: 第三轨=44px, dock display=none, aria-expanded=false；hidden: 第三轨=0px, main=1060.0px > compact=1016.0px；三态由真实键盘操作（focus + Enter）驱动 \| { "viewport": { "width": 1280, "height": 720 }, "header": { "x": 0, "y": 0, "width": 1280, "height": 54, "right": 1280, "bottom": 54 }, "headerDisplay": "flex", "brand": { "x": 0, "y": 0, "width": 220, "height": 54, "right": 220, "bottom": 54 }, "projectArea": { "x": 220, "y": 0, "width": 694.984375, "height": 54, "right": 914.984375, "bottom": 54 }, "tools": { "x": 914.984375, "y": 0, "width": 365.015625, "height": 54, "right": 1280, "bottom": 54 }, "toggle": { "x": 996.859375, "y": 3.5, "width": 44.125, "height": 46, "right": 1040.984375, "bottom": 49.5 } } \| 面板状态写入 localStorage(agentdev.panel=compact) 并… |
+| AC-072 | `pnpm test:e2e` | PASS | surfaces.nine-real-state: 10 surfaces read real state (/projects ok; /projects/2a1fe8096616ef5a3e3be6201ca80087/chief ok; /projects/2a1fe8096616ef5a3e3be6201ca80087/requirements ok; /projects/2a1fe8096616ef5a3e3be6201ca80087/requirements/01a0a784-bd66-752f-9385-57c4b1bb30bf ok; /projects/2a1fe8096616ef5a3e3be6201ca80087/docs ok; /projects/2a1fe8096616ef5a3e3be6201ca80087/files ok; /projects/2a1fe8096616ef5a3e3be6201ca80087/agents ok; /projects/2a1fe8096616ef5a3e3be6201ca80087/runs ok; /projects/2a1fe8096616ef5a3e3be6201ca80087/inbox ok; /settings ok); Live panel modes open/compact/hidden; create/switch control only on the Chief page with the deep link elsewhere; docs delivered/design/work views all real answers |
+| AC-073 | `pnpm test:e2e` | PASS | browser.keyboard-aria-i18n: Tab #1 → a#(skip-link) name="Skip to main content"；Enter → 焦点 #main；遍历 22 个可聚焦控件（含 #languageSelect=true），无未命名控件，无不可聚焦元素进入顺序；ARIA: #liveDock="Live panel" #liveDockToggle="Live panel, open" #languageSelect="Interface language" #composerBody="Message the Chief"；aria-live 区域 #connectionState/#messages/#liveEvents/#stagedAttachments \| 切换到 zh：html[lang]=zh-CN，nav Chief→主管，cookie agentdev_language=zh，localStorage(agentdev.language)=zh；客户端自有字符串随切换生效：#liveDock aria-label=实时面板、#liveDockToggle=实时面板，已展开、下载按钮=下载完整产物；项目内容未翻译：#requirementTitle="HTML 说明产物隔离预览" 保持不变且 data-translatable="false"；project-name="/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-e2e-repo-RXys74" 不变；ui.translate 调用 63 次，未包含任何项目内容（标题/项目名泄漏=0）；reload 后整页仍为 zh；未在客户端打开过的 /settings 也由服务端按 cookie 渲染为「保存配置」（Playwright 1.63.0，18 个 spec，用时 25936ms，exit 0） |
+| AC-074 | `pnpm test:e2e` | PASS | inbox.decision-dedup: two same-target decisions collapsed to 1 Inbox row (ids 01a0a784-dba8-7fc0-b2ea-161b75ae4268/01a0a784-dba9-7394-82d2-f102fd290ed3); expired row actionable=false; resolve -> accepted + idempotent replay; duplicate row untouched |
 | AC-075 | `pnpm test:e2e` | PASS | config.validation-preserves-input: unknownKey -> 422 VALIDATION_ERROR with preservedInput, revision unchanged at 2; reasoning=high saved (rev 3) then config.test -> PROVIDER_UNAVAILABLE with preservedInput; restored to off (rev 4), Settings revision matches |
-| AC-076 | `pnpm test:e2e` | PASS | browser.attachment-client-hints: 选择 6 个 text/markdown → #composerError="VALIDATION_ERROR: At most 5 attachments per message."；#stagedAttachments 为空；/artifacts/upload 请求数=0 \| 选择 21 MiB 的 text/plain → #composerError="VALIDATION_ERROR: The attachment exceeds 20 MiB."；#stagedAttachments 为空；/artifacts/upload 请求数=0 \| 选择 application/zip → #composerError="VALIDATION_ERROR: That file type is not a supported attachment type."；#stagedAttachments 为空；/artifacts/upload 请求数=0 \| 选择 3 个 17 MiB 文件（合计 51 MiB，逐个 <20 MiB）→ #composerError="VALIDATION_ERROR: Attachments exceed 50 MiB in total."；#stagedAttachments 为空；/artifacts/upload 请求数=0 \| 语言切到 zh 并等待客户端字典生效后选择 6 个附件 → #composerError="VALIDATION_ERROR: 每条消息最多 5 个附件。"（本地化文案而非原始 key）；/artifacts/upload 请求数=0 \| 选择 1 个 text/markdown → 上传请求 1 次，暂存项 attachmentId=01a0a771-cf36-786d-9481-277a8febcbe9，#composerError 隐藏（证明上一条拒绝针对具体限制而非一律拒绝）（Playwright 1.63.0，18 个 spec… |
-| AC-077 | `pnpm test:e2e` | PASS | files.branch-preview-boundaries: revision=e30c3af7c9d6 branch=agentdev/main, real file content; search found src/orders/cancel.ts; absolute+traversal -> data-code=NOT_FOUND with no leak; snapshots unchanged (1); head advanced to d59ca135b3ec and the page followed |
-| AC-078 | `pnpm test:e2e` | PASS | stack.boot: daemon 200/BFF 200 healthz; anonymous page 401; /rpc without cookie 401 UNAUTHENTICATED; wrong Origin login 403 NOT_AUTHORIZED; wrong token 401; login 200 with agentdev_web cookie (HttpOnly) + csrfToken; snapshot projectId=9ef170406574d8d9d68358989a8956f3 |
-| AC-084 | `pnpm test:e2e` | PASS | attachment.upload-first-message: upload 201 attachmentId=01a0a770-f5d2-79c0-abcf-dfeb8734f9a2 (staged, installation owner); first message 01a0a770-f5e1-7093-abb6-ab1c97c892ab bound it to Work 01a0a770-f5e1-78fb-8e06-c6a9e86ae008 atomically with 1 user artifact; unsupported mime refused (400) with no residue; duplicate bind -> ATTACHMENT_ALREADY_BOUND |
-| AC-090 | `pnpm test:e2e` | PASS | requirement.save-git: requirement 01a0a770-d6ac-706e-9b43-3a048c5db241 created at ad5d67f247c6addabcaa224539309182f8f838b9 (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at f348202e3405 with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed |
-| AC-093 | `pnpm test:e2e` | PASS | requirement.save-git: requirement 01a0a770-d6ac-706e-9b43-3a048c5db241 created at ad5d67f247c6addabcaa224539309182f8f838b9 (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at f348202e3405 with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed |
+| AC-076 | `pnpm test:e2e` | PASS | browser.attachment-client-hints: 选择 6 个 text/markdown → #composerError="VALIDATION_ERROR: At most 5 attachments per message."；#stagedAttachments 为空；/artifacts/upload 请求数=0 \| 选择 21 MiB 的 text/plain → #composerError="VALIDATION_ERROR: The attachment exceeds 20 MiB."；#stagedAttachments 为空；/artifacts/upload 请求数=0 \| 选择 application/zip → #composerError="VALIDATION_ERROR: That file type is not a supported attachment type."；#stagedAttachments 为空；/artifacts/upload 请求数=0 \| 选择 3 个 17 MiB 文件（合计 51 MiB，逐个 <20 MiB）→ #composerError="VALIDATION_ERROR: Attachments exceed 50 MiB in total."；#stagedAttachments 为空；/artifacts/upload 请求数=0 \| 语言切到 zh 并等待客户端字典生效后选择 6 个附件 → #composerError="VALIDATION_ERROR: 每条消息最多 5 个附件。"（本地化文案而非原始 key）；/artifacts/upload 请求数=0 \| 选择 1 个 text/markdown → 上传请求 1 次，暂存项 attachmentId=01a0a785-b845-7bb9-a183-c059d3e75c98，#composerError 隐藏（证明上一条拒绝针对具体限制而非一律拒绝）（Playwright 1.63.0，18 个 spec… |
+| AC-077 | `pnpm test:e2e` | PASS | files.branch-preview-boundaries: revision=fb792fa116dd branch=agentdev/main, real file content; search found src/orders/cancel.ts; absolute+traversal -> data-code=NOT_FOUND with no leak; snapshots unchanged (1); head advanced to 258ae61e09fb and the page followed |
+| AC-078 | `pnpm test:e2e` | PASS | stack.boot: daemon 200/BFF 200 healthz; anonymous page 401; /rpc without cookie 401 UNAUTHENTICATED; wrong Origin login 403 NOT_AUTHORIZED; wrong token 401; login 200 with agentdev_web cookie (HttpOnly) + csrfToken; snapshot projectId=2a1fe8096616ef5a3e3be6201ca80087 |
+| AC-084 | `pnpm test:e2e` | PASS | attachment.upload-first-message: upload 201 attachmentId=01a0a784-dbdd-7e72-ab17-e83f8157f43f (staged, installation owner); first message 01a0a784-dbea-77d6-82ba-1aa33c550166 bound it to Work 01a0a784-dbea-7acb-9865-8711b8ea318d atomically with 1 user artifact; unsupported mime refused (400) with no residue; duplicate bind -> ATTACHMENT_ALREADY_BOUND |
+| AC-090 | `pnpm test:e2e` | PASS | requirement.save-git: requirement 01a0a784-bd66-752f-9385-57c4b1bb30bf created at f003096a6776e1f3564c4822d3b37ecab317d511 (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at 7f927b18c288 with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed |
+| AC-093 | `pnpm test:e2e` | PASS | requirement.save-git: requirement 01a0a784-bd66-752f-9385-57c4b1bb30bf created at f003096a6776e1f3564c4822d3b37ecab317d511 (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at 7f927b18c288 with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed |
 
 合并规则：**最弱一环胜出**（FAIL > UNVERIFIED > PASS）。演练 UNVERIFIED 会把同一 AC 的套件 PASS 降级，因为该 AC 的完整 Given/When/Then 并未全部执行。
 
@@ -233,9 +249,9 @@
 
 ```json
 {
-  "generatedAt": "2026-09-15T23:44:12.014Z",
-  "gitHead": "02b89bfc5541d810d4c7670e13599496ddccd70b",
-  "codeDigest": "sha256:596c717acb46fd0d0effdeadce7cf660f64a7094bb1612b9106250c0bdec3a47",
+  "generatedAt": "2026-09-16T00:05:12.146Z",
+  "gitHead": "76fb642439f435089b9cd7390906d1196512483a",
+  "codeDigest": "sha256:2dec5b700c3fc5085ab4ea37352ff978f88a36c0bf659b8bb8a4a636e417815d",
   "drillsExecuted": true,
   "exitCode": 0,
   "counts": {
@@ -244,6 +260,12 @@
     "FAIL": 0,
     "MISSING": 0
   },
+  "evidenceLevels": {
+    "product-path": 53,
+    "library-level": 41,
+    "environment-limited": 0,
+    "unclassified": 0
+  },
   "problems": [],
   "results": [
     {
@@ -251,6 +273,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "none",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "真实演练 pnpm test:live PASS",
+      "evidenceLevelArguable": true,
       "evidence": [],
       "drills": [
         {
@@ -269,6 +294,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 3 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) uploads, binds and previews an HTML explanation end to end (AC-002/AC-084)",
         "apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) consumes a download token once and then refuses it (AC-002)",
@@ -291,6 +319,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 2 条；真实演练 pnpm test:e2e/pnpm test:live PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) produces an agent explanation artifact for a delegated analysis Run (AC-003)",
         "apps/daemon/test/assessment-dispatch.integration.test.ts :: message → Chief → DispatchSpec → Requirement → Run → stage result (WP-12 T2) runs the whole path from one message with no seeded row (AC-003/AC-005/AC-069)",
@@ -313,6 +344,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "curated",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 1 条",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes assist and artifact to none",
         "apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) keeps questions, advice and statements read-only end to end"
@@ -325,6 +359,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 2 条；真实演练 pnpm test:e2e/pnpm test:live PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes a message into independent work items (AC-005/AC-006)",
         "packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) records the authority an explicit message grants (AC-005)",
@@ -348,6 +385,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 2 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/domain.test.ts :: level routing (workflow.md §2) routes a message into independent work items (AC-005/AC-006)",
         "packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) splits one mixed message into the work items it names (AC-006)"
@@ -360,6 +400,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 1 条；真实演练 pnpm test:live PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007)",
         "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008)",
@@ -373,7 +416,6 @@
         "packages/domain/test/delivery.test.ts :: route-aware completion evidence (AC-007/AC-012/AC-019, W6R2-09) requires an independent Review in addition to the Test for code L2/L3 (W6R4-01)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) completes an L1 Work without a Test Run, through its Review and a frozen CompletionManifest (AC-007/AC-019, W6R2-09)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) reports review evidence under review fields and no test status on an L1 completion (AC-007, W6R4-02)",
-        "apps/daemon/test/assessment-dispatch.integration.test.ts :: message → Chief → DispatchSpec → Requirement → Run → stage result (WP-12 T2) never puts an L1 assessment on the board (AC-007/AC-068)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) runs the L1 typo chain to a CompletionManifest and CAS with no Planning/Test Run and no board entry (AC-007)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) drives a validated ProductDefinition through Plan/Develop/Review/Test/Settlement in order (AC-010)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) saves a confirmed design as Product/Planning candidate diffs with an independent Review and Settlement only (AC-012)",
@@ -381,7 +423,8 @@
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) closes a task-less Review Finding through a fix and a new independent Review/Test, refusing self-verification (AC-017, AC-018, AC-083)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) pauses at a safe point, resumes into a new Attempt, and cancels the Run tree while keeping the artifacts (AC-020, AC-021)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) shows an imported active Requirement as waiting to continue and re-plans it in a new Work without reusing old verification (AC-089)",
-        "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) refuses the superseded Plan after an upgrade and leaves the source hash unchanged (AC-009, AC-013)"
+        "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) refuses the superseded Plan after an upgrade and leaves the source hash unchanged (AC-009, AC-013)",
+        "apps/daemon/test/assessment-dispatch.integration.test.ts :: message → Chief → DispatchSpec → Requirement → Run → stage result (WP-12 T2) never puts an L1 assessment on the board (AC-007/AC-068)"
       ],
       "drills": [
         {
@@ -396,6 +439,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 9 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007)",
         "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008)",
@@ -415,6 +461,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 24 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) accepts an explicit typo change inside the L1 bounds (AC-007)",
         "packages/domain/test/delivery.test.ts :: L1 eligibility and bounds (AC-007/AC-008/AC-009) never downgrades a one-character permission change by its line count (AC-008)",
@@ -449,6 +498,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "真实演练 pnpm test:e2e/pnpm test:live PASS",
+      "evidenceLevelArguable": true,
       "evidence": [
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012)",
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010)",
@@ -482,6 +534,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 9 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012)",
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010)",
@@ -501,6 +556,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 16 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) fixes the stage order per route and level (AC-010/AC-012)",
         "packages/domain/test/delivery.test.ts :: stage manifests and routes (AC-010/AC-011/AC-012) accepts a complete L2 chain and rejects a missing stage (AC-010)",
@@ -527,6 +585,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 2 条",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a write without an approved Plan and leaves the source hash unchanged (AC-013)",
         "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a Plan for another revision and a changed Plan hash (AC-013 required failure test)",
@@ -551,12 +612,12 @@
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) reserves the approved tokens so a second Plan cannot exceed the limit (AC-022, W6R2-06)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) admits a code write only while the Work is running (AC-020/AC-021, W6R2-07/W6R3-02)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) fails closed on an unbound Work and supersedes its previous Plan on an upgrade (W6R3-04)",
-        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler refuses a source write when no Plan gate is wired (AC-013, fail-closed)",
-        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler refuses a source write with no approved Plan for the Work revision (AC-013)",
         "packages/core/test/base-revision.integration.test.ts :: work.baseRevision writer (Q-T3-4, AC-013) reads the delivery ref the project really points at",
         "packages/core/test/base-revision.integration.test.ts :: work.baseRevision writer (Q-T3-4, AC-013) binds a new Work to that revision and lets requestCodeWrite pass",
         "packages/core/test/base-revision.integration.test.ts :: work.baseRevision writer (Q-T3-4, AC-013) binds nothing when the project has no delivery ref yet",
-        "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) refuses the superseded Plan after an upgrade and leaves the source hash unchanged (AC-009, AC-013)"
+        "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) refuses the superseded Plan after an upgrade and leaves the source hash unchanged (AC-009, AC-013)",
+        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler refuses a source write when no Plan gate is wired (AC-013, fail-closed)",
+        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler refuses a source write with no approved Plan for the Work revision (AC-013)"
       ],
       "drills": [],
       "reason": null
@@ -566,6 +627,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 1 条",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a write without an approved Plan and leaves the source hash unchanged (AC-013)",
         "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses a Plan for another revision and a changed Plan hash (AC-013 required failure test)",
@@ -599,6 +663,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 10 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) handling now needs a new Product/Plan and invalidates affected evidence (AC-015)",
         "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) queues a Requirement for later and leaves the acceptance alone (AC-016)",
@@ -619,6 +686,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 10 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) handling now needs a new Product/Plan and invalidates affected evidence (AC-015)",
         "packages/domain/test/delivery.test.ts :: behaviour choices (AC-015/AC-016) queues a Requirement for later and leaves the acceptance alone (AC-016)",
@@ -639,6 +709,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 51 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017)",
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018)",
@@ -700,6 +773,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 14 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017)",
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018)",
@@ -724,6 +800,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 26 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017)",
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018)",
@@ -760,6 +839,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 1 条",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) admits writes only while the Work is running",
         "packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) never lets a caller expectation replace the approved source hash (W6R2-02)",
@@ -772,9 +854,9 @@
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) admits a write only when the newest Attempt is ready (AC-020, W6R2-08)",
         "packages/core/test/findings.test.ts :: Finding lifecycle, completion and pause/cancel (AC-017…AC-021, AC-083) refuses every write once the Work is completed or failed, with zero write events (AC-013/AC-020, W6R3-02)",
         "packages/core/test/gates.test.ts :: Plan gate persistence (AC-009, AC-013, AC-014) admits a code write only while the Work is running (AC-020/AC-021, W6R2-07/W6R3-02)",
-        "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) pauses and resumes a real Work through the finding service (AC-020 surface)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) pauses at a safe point, resumes into a new Attempt, and cancels the Run tree while keeping the artifacts (AC-020, AC-021)",
-        "packages/core/test/wp08.integration.test.ts :: WP-08 T4 end-to-end integration drill still holds pause/resume and unknown-side-effect cancel after an integrated delivery (AC-020, AC-021)"
+        "packages/core/test/wp08.integration.test.ts :: WP-08 T4 end-to-end integration drill still holds pause/resume and unknown-side-effect cancel after an integrated delivery (AC-020, AC-021)",
+        "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) pauses and resumes a real Work through the finding service (AC-020 surface)"
       ],
       "drills": [],
       "reason": null
@@ -784,6 +866,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 50 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) admits writes only while the Work is running",
         "packages/domain/test/delivery.test.ts :: the shared write barrier (AC-020/AC-021, W6R2-07/W6R3-02) never lets a caller expectation replace the approved source hash (W6R2-02)",
@@ -844,6 +929,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 9 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/delivery.test.ts :: gate readiness (AC-013/AC-014) refuses an over-used budget instead of assuming a zero usage (AC-022, W6R1-03)",
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) closes through evaluateFindingClosure and stops at the rework allowance (AC-017/AC-022)",
@@ -863,10 +951,13 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 2 条",
+      "evidenceLevelArguable": false,
       "evidence": [
+        "packages/core/test/identity.integration.test.ts :: independent projects (AC-023) gives two real roots distinct ids and independent databases",
         "apps/daemon/test/project-lifecycle.integration.test.ts :: installation project directory (WP-12 T5.1/T5.2) opens two real roots with independent ids, databases and registries (AC-023)",
-        "apps/web/test/multi-project.integration.test.ts :: single-entry multi-project BFF (WP-12 T5.5) renders each project page from its own daemon and never from the other (AC-023/AC-034)",
-        "packages/core/test/identity.integration.test.ts :: independent projects (AC-023) gives two real roots distinct ids and independent databases"
+        "apps/web/test/multi-project.integration.test.ts :: single-entry multi-project BFF (WP-12 T5.5) renders each project page from its own daemon and never from the other (AC-023/AC-034)"
       ],
       "drills": [],
       "reason": null
@@ -876,6 +967,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 8 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/identity.integration.test.ts :: canonical roots (AC-024) normalizes a subdirectory to the repository root",
         "packages/core/test/identity.integration.test.ts :: canonical roots (AC-024) normalizes a trailing separator and a symlinked path",
@@ -894,6 +988,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 1 条",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/workspace/test/initialize.test.ts :: empty project (AC-025) creates the initial Git and delivery branch, then confirms an unimplemented project",
         "apps/daemon/test/project-lifecycle.integration.test.ts :: installation project directory (WP-12 T5.1/T5.2) creates a project in an empty directory with Git, the delivery branch and the events (AC-025)"
@@ -906,6 +1003,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 1 条",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/daemon/test/project-initialization.integration.test.ts :: project.initialize over the real state machine (WP-12 T5.3) investigates a legacy project and reaches Ready without moving the code (AC-026)",
         "packages/workspace/test/scan.test.ts :: scanProject budgets stops at 40 body files and reports a partial map with explicit unknowns",
@@ -923,6 +1023,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 2 条",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/daemon/test/project-initialization.integration.test.ts :: project.initialize over the real state machine (WP-12 T5.3) never silently re-initializes an existing repository from a bare new-mode request (AC-027)",
         "apps/daemon/test/project-initialization.integration.test.ts :: initialize driver blockers (WP-12 T5.3) refuses to run git init without the explicit mode and reports the request (AC-027)",
@@ -937,6 +1040,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 1 条",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/daemon/test/project-initialization.integration.test.ts :: project.initialize over the real state machine (WP-12 T5.3) blocks a dirty workspace with a per-path hash report and keeps investigation working (AC-028)",
         "packages/workspace/test/initialize.test.ts :: dirty workspace blocks delivery start with a hash report while read-only investigation still works"
@@ -949,9 +1055,12 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 1 条",
+      "evidenceLevelArguable": false,
       "evidence": [
-        "apps/daemon/test/project-initialization.integration.test.ts :: project.initialize over the real state machine (WP-12 T5.3) stops on a workspace it must not overwrite and reports the real per-path hashes (AC-029)",
-        "packages/core/test/wp08.integration.test.ts :: WP-08 T4 end-to-end integration drill runs the initialization route: interrupted writing resumes by hash and a conflict is never overwritten (AC-029)"
+        "packages/core/test/wp08.integration.test.ts :: WP-08 T4 end-to-end integration drill runs the initialization route: interrupted writing resumes by hash and a conflict is never overwritten (AC-029)",
+        "apps/daemon/test/project-initialization.integration.test.ts :: project.initialize over the real state machine (WP-12 T5.3) stops on a workspace it must not overwrite and reports the real per-path hashes (AC-029)"
       ],
       "drills": [],
       "reason": null
@@ -961,6 +1070,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 11 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/context-builder.test.ts :: buildContext — happy path (AC-030) freezes the documented fields and copies the content into the snapshot directory",
         "packages/core/test/context-builder.test.ts :: buildContext — happy path (AC-030) accounts tokens with the documented character/4 estimator by default",
@@ -982,6 +1094,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 8 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/context-builder.test.ts :: buildContext — required inputs (AC-031, AC-079) returns MISSING_CONTEXT with the precise gap and no frozen snapshot",
         "packages/core/test/context-builder.test.ts :: buildContext — required inputs (AC-031, AC-079) does not expand a module to satisfy a gap",
@@ -1000,6 +1115,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 1 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/context-ledger.test.ts :: read ledger — append inside readScope (AC-032) appends a reasoned read with its full identity and accounts its tokens",
         "packages/core/test/context-ledger.test.ts :: read ledger — append inside readScope (AC-032) allocates seq 1..n in append order and never reuses a number",
@@ -1023,9 +1141,9 @@
         "packages/core/test/context-ledger.test.ts :: read ledger — reasoned expansion (AC-032, AC-036) refuses a grant that drops the permanent denials (W5R1-04)",
         "packages/core/test/context-ledger.test.ts :: read ledger — reasoned expansion (AC-032, AC-036) refuses a Transcript, an escaping path or a reasonless expansion request",
         "packages/core/test/context-ledger.test.ts :: read ledger — reasoned expansion (AC-032, AC-036) refuses a duplicate pending request for the same source",
-        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler refuses a read outside the Attempt readScope at admission, leaking nothing (AC-032/AC-048)",
         "packages/core/test/read-ledger-seal.integration.test.ts :: read ledger seal (AC-085) records an out-of-scope read request in the same ledger (AC-032)",
-        "packages/core/test/read-ledger-seal.integration.test.ts :: read ledger seal (AC-085) admits only paths inside the readScope, before anything is read (AC-032)"
+        "packages/core/test/read-ledger-seal.integration.test.ts :: read ledger seal (AC-085) admits only paths inside the readScope, before anything is read (AC-032)",
+        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler refuses a read outside the Attempt readScope at admission, leaking nothing (AC-032/AC-048)"
       ],
       "drills": [
         {
@@ -1040,6 +1158,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 23 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/context-acl.test.ts :: context ACL — transcript isolation (AC-033) denies the transcript kind to every role and stage",
         "packages/core/test/context-acl.test.ts :: context ACL — transcript isolation (AC-033) denies Review and Test every message body",
@@ -1073,6 +1194,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 5 条",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/context-acl.test.ts :: context ACL — cross-project isolation (AC-034) denies a source that belongs to another Project",
         "packages/core/test/context-acl.test.ts :: context ACL — cross-project isolation (AC-034) denies another Project source whatever the source class",
@@ -1100,6 +1224,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 5 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/context-checkpoint.test.ts :: checkpoint: session rotation (AC-035) recovers role/task/permissions/sources and keeps the approval state",
         "packages/core/test/context-checkpoint.test.ts :: checkpoint: session rotation (AC-035) leaves the stored session unchanged when there is no checkpoint to rotate (W5R1-08)",
@@ -1115,6 +1242,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 19 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/context-builder.test.ts :: buildContext — selection validation (AC-030) refuses a budget outside the documented 4096–2000000 range (AC-036)",
         "packages/core/test/context-builder.test.ts :: buildContext — budget (AC-036) reports BUDGET_EXCEEDED with the dropped ref and the missing tokens",
@@ -1144,6 +1274,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "真实演练 pnpm test:e2e/pnpm test:live PASS",
+      "evidenceLevelArguable": true,
       "evidence": [
         "packages/knowledge/test/projection.test.ts :: projection build renders a feature body that parses back to the same facts (AC-037)",
         "packages/knowledge/test/projection.test.ts :: projection build never injects an unrelated document into the feature body or index (AC-037)",
@@ -1177,6 +1310,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": true,
       "evidence": [
         "packages/knowledge/test/views.test.ts :: knowledge views separates confirmed intent from delivered reality (AC-038, AC-037)",
         "packages/knowledge/test/views.test.ts :: knowledge views keeps a Work overlay out of the delivered answer and out of another Work (AC-038)"
@@ -1194,6 +1330,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 2 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/context-cold-start.test.ts :: cold start: selection order and reasons (AC-039) follows overview → current work → navigation → constraints → bodies, with a reason each",
         "packages/core/test/context-cold-start.test.ts :: cold start: selection order and reasons (AC-039) is deterministic: the same query selects the same entries in the same order"
@@ -1206,6 +1345,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 4 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/knowledge/test/projection.test.ts :: projection build keeps the last valid projection, marks it stale and reports KNOWLEDGE_INVALID (AC-040)",
         "packages/knowledge/test/projection.test.ts :: projection build republishes and clears stale after a valid document follows an invalid one (AC-040)",
@@ -1220,6 +1362,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "真实演练 pnpm test:e2e/pnpm test:live PASS",
+      "evidenceLevelArguable": true,
       "evidence": [
         "packages/core/test/integrate.integration.test.ts :: Accept/Integrate and Settlement over real Git (AC-010, AC-012, AC-041, AC-081) integrates B-on-A without re-applying the ancestor and settles the Requirement",
         "packages/core/test/integrate.integration.test.ts :: Accept/Integrate and Settlement over real Git (AC-010, AC-012, AC-041, AC-081) reuses the verified Task evidence when only the Core-maintained pool was added (WP-12 W4c)",
@@ -1253,6 +1398,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 3 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/knowledge/test/views.test.ts :: knowledge views lists observed-versus-confirmed gaps without accepting observed behaviour (AC-042)",
         "packages/workspace/test/initialize.test.ts :: design/code conflict (AC-042) blocks Confirming, never confirms the existing document and keeps candidates observed",
@@ -1266,6 +1414,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "真实演练 pnpm test:live PASS",
+      "evidenceLevelArguable": true,
       "evidence": [
         "packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) inherits run → project → global role → global default in order",
         "packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) blocks a role whose model is missing or unsupported instead of downgrading",
@@ -1299,6 +1450,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 78 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) inherits run → project → global role → global default in order",
         "packages/core/test/config.test.ts :: role configuration (AC-043, AC-044) blocks a role whose model is missing or unsupported instead of downgrading",
@@ -1387,6 +1541,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": true,
       "evidence": [
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) runs through the frozen profile of the Run",
         "packages/core/test/model-gateway.test.ts :: model gateway (AC-043, AC-044, AC-045) runs against a Provider that needs no secret (T-01)",
@@ -1474,6 +1631,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 1 条",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) holds the parent in waiting_children and keeps every sibling result",
         "packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) refuses a new child once the parent Chief Run has ended (N-04, N-05)",
@@ -1489,8 +1649,8 @@
         "packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) files the todo for a paused parent so it survives the resume (R9-06)",
         "packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) pages the Chief once for one failure set (N-06) and carries every result",
         "packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) records a valid stage result without letting a client claim another Run",
-        "apps/daemon/test/assessment-dispatch.integration.test.ts :: message → Chief → DispatchSpec → Requirement → Run → stage result (WP-12 T2) wakes the parent Chief Run when a join=all child settles, through the daemon trigger (AC-046)",
-        "packages/core/test/join.integration.test.ts :: join: parallel sibling failure on the real stack (AC-046) keeps the sibling result, blocks the gate and still processes a new Chief instruction (AC-046)"
+        "packages/core/test/join.integration.test.ts :: join: parallel sibling failure on the real stack (AC-046) keeps the sibling result, blocks the gate and still processes a new Chief instruction (AC-046)",
+        "apps/daemon/test/assessment-dispatch.integration.test.ts :: message → Chief → DispatchSpec → Requirement → Run → stage result (WP-12 T2) wakes the parent Chief Run when a join=all child settles, through the daemon trigger (AC-046)"
       ],
       "drills": [],
       "reason": null
@@ -1500,6 +1660,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 1 条",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) holds the parent in waiting_children and keeps every sibling result",
         "packages/core/test/join.test.ts :: join and structured delivery (AC-046, AC-047) refuses a new child once the parent Chief Run has ended (N-04, N-05)",
@@ -1525,7 +1688,11 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 7 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
+        "apps/runner/test/tool-client.test.ts :: tool call transport does not open a permission request for a phase-1 hard block (AC-048/AC-049)",
         "packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) admits a read and records the tool operation and the audit event (AC-048)",
         "packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) refuses an out-of-scope target with no execution and records the refusal (AC-048)",
         "packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) refuses an operation the Grant does not cover (AC-048)",
@@ -1589,13 +1756,6 @@
         "packages/core/test/tools.test.ts :: sensitive-file table and the phase-1 entry guards (AC-048/AC-049) refuses a git-ref change through the shell and through the git tool (AC-048)",
         "packages/core/test/tools.test.ts :: sensitive-file table and the phase-1 entry guards (AC-048/AC-049) hands a literal URL to the network policy so loopback/metadata is decided by it (AC-048)",
         "packages/core/test/tools.test.ts :: sensitive-file table and the phase-1 entry guards (AC-048/AC-049) never returns a listed file from a directory search (AC-048)",
-        "apps/runner/test/tool-client.test.ts :: tool call transport does not open a permission request for a phase-1 hard block (AC-048/AC-049)",
-        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler refuses a tool the role does not hold before consulting the Grant (AC-048)",
-        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler refuses a read outside the Attempt readScope at admission, leaking nothing (AC-032/AC-048)",
-        "apps/daemon/test/tool-handler.integration.test.ts :: first-phase permission model (附录 A) refuses a sensitive-file read with a typed refusal, a todo and an audit row (AC-048)",
-        "apps/daemon/test/tool-handler.integration.test.ts :: first-phase permission model (附录 A) refuses a sensitive-file search and a sensitive-file edit through the same table (AC-048)",
-        "apps/daemon/test/tool-handler.integration.test.ts :: first-phase permission model (附录 A) refuses the two fixed network denials a shell names, with an audit row (AC-048, W6)",
-        "apps/daemon/test/tool-handler.integration.test.ts :: first-phase permission model (附录 A) refuses a delete outside the workspace and allows one inside it (AC-048)",
         "packages/core/test/broker.integration.test.ts :: Broker integration (AC-048, AC-050) runs a real host child process through an admitted Grant (AC-048)",
         "packages/core/test/broker.integration.test.ts :: Broker integration (AC-048, AC-050) refuses a redirect to a link-local address without following it (required failure test)",
         "packages/core/test/broker.integration.test.ts :: Broker integration (AC-048, AC-050) refuses the two fixed network denials before any request (required failure test, W6)",
@@ -1613,7 +1773,13 @@
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) refuses the run database to a verifier without any caller-declared protected path (W7R1-04)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) keeps the frozen source read-only inside the real container (AC-048, AC-050)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) injects the decoy into the authorised child and never into a log, Artifact, UI payload, audit row or the host environment (AC-051)",
-        "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) gives the unauthorised sibling Run no credential at all, on every channel (AC-051)"
+        "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) gives the unauthorised sibling Run no credential at all, on every channel (AC-051)",
+        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler refuses a tool the role does not hold before consulting the Grant (AC-048)",
+        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler refuses a read outside the Attempt readScope at admission, leaking nothing (AC-032/AC-048)",
+        "apps/daemon/test/tool-handler.integration.test.ts :: first-phase permission model (附录 A) refuses a sensitive-file read with a typed refusal, a todo and an audit row (AC-048)",
+        "apps/daemon/test/tool-handler.integration.test.ts :: first-phase permission model (附录 A) refuses a sensitive-file search and a sensitive-file edit through the same table (AC-048)",
+        "apps/daemon/test/tool-handler.integration.test.ts :: first-phase permission model (附录 A) refuses the two fixed network denials a shell names, with an audit row (AC-048, W6)",
+        "apps/daemon/test/tool-handler.integration.test.ts :: first-phase permission model (附录 A) refuses a delete outside the workspace and allows one inside it (AC-048)"
       ],
       "drills": [
         {
@@ -1628,7 +1794,11 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 11 条",
+      "evidenceLevelArguable": false,
       "evidence": [
+        "apps/runner/test/tool-client.test.ts :: tool call transport does not open a permission request for a phase-1 hard block (AC-048/AC-049)",
         "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) admits the exact once binding and reports no replay for a first use",
         "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) replays a consumed once grant for the same operation and input (AC-080)",
         "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) binds a replay to the full operation/role/stage triple, not just the run (W7R1-06)",
@@ -1696,17 +1866,6 @@
         "packages/core/test/tools.test.ts :: sensitive-file table and the phase-1 entry guards (AC-048/AC-049) refuses a git-ref change through the shell and through the git tool (AC-048)",
         "packages/core/test/tools.test.ts :: sensitive-file table and the phase-1 entry guards (AC-048/AC-049) hands a literal URL to the network policy so loopback/metadata is decided by it (AC-048)",
         "packages/core/test/tools.test.ts :: sensitive-file table and the phase-1 entry guards (AC-048/AC-049) never returns a listed file from a directory search (AC-048)",
-        "apps/runner/test/tool-client.test.ts :: tool call transport does not open a permission request for a phase-1 hard block (AC-048/AC-049)",
-        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler admits an environment operation only after its exact approval (AC-049)",
-        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler enforces an approved Grant limit with BUDGET_EXCEEDED (AC-049)",
-        "apps/daemon/test/tool-handler.integration.test.ts :: first-phase permission model (附录 A) runs in-envelope reads and shells with zero permission prompts (AC-049)",
-        "apps/daemon/test/tool-handler.integration.test.ts :: first-phase permission model (附录 A) refuses an out-of-envelope write fail-closed instead of prompting (AC-049)",
-        "apps/daemon/test/tool-handler.integration.test.ts :: first-phase permission model (附录 A) admits the application-config subset in test tier and audits the allowance (AC-049)",
-        "apps/daemon/test/tool-handler.integration.test.ts :: first-phase permission model (附录 A) runs an in-envelope shell write inside the real container with the workspace mounted rw (AC-049)",
-        "apps/daemon/test/tool-permission-runner.integration.test.ts :: environment-operation approval with a real Runner child (AC-049/AC-080) refuses, records the request, and really executes the model retry after the user approves (AC-049/AC-080)",
-        "apps/daemon/test/tool-permission.integration.test.ts :: permission.request / permission.respond over the workbench protocol refuses a path-shaped permission.request with no targets before any decision exists (AC-049)",
-        "apps/daemon/test/tool-permission.integration.test.ts :: permission.request / permission.respond over the workbench protocol refuses to approve a path-shaped operation whose recorded binding has no targets (AC-049)",
-        "apps/daemon/test/tool-permission.integration.test.ts :: permission.request / permission.respond over the workbench protocol closes the environment-operation loop: refuse → approve (protocol) → retry executes (AC-049/AC-080)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) executes an in-scope granted call and audits it, and refuses out-of-scope/expired/sibling calls with no side effect (AC-049, AC-080)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) replays the original once result for the same input and refuses a different input (AC-080)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) refuses an out-of-scope read by the same role with no executor call and no row (AC-049)",
@@ -1716,7 +1875,17 @@
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) keeps the frozen source read-only inside the real container (AC-048, AC-050)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) injects the decoy into the authorised child and never into a log, Artifact, UI payload, audit row or the host environment (AC-051)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) gives the unauthorised sibling Run no credential at all, on every channel (AC-051)",
-        "packages/core/test/tool-http.integration.test.ts :: tool.execute over the real control endpoint (T3.2) admits an environment operation only after the real approval chain (AC-049/AC-080)"
+        "packages/core/test/tool-http.integration.test.ts :: tool.execute over the real control endpoint (T3.2) admits an environment operation only after the real approval chain (AC-049/AC-080)",
+        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler admits an environment operation only after its exact approval (AC-049)",
+        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler enforces an approved Grant limit with BUDGET_EXCEEDED (AC-049)",
+        "apps/daemon/test/tool-handler.integration.test.ts :: first-phase permission model (附录 A) runs in-envelope reads and shells with zero permission prompts (AC-049)",
+        "apps/daemon/test/tool-handler.integration.test.ts :: first-phase permission model (附录 A) refuses an out-of-envelope write fail-closed instead of prompting (AC-049)",
+        "apps/daemon/test/tool-handler.integration.test.ts :: first-phase permission model (附录 A) admits the application-config subset in test tier and audits the allowance (AC-049)",
+        "apps/daemon/test/tool-handler.integration.test.ts :: first-phase permission model (附录 A) runs an in-envelope shell write inside the real container with the workspace mounted rw (AC-049)",
+        "apps/daemon/test/tool-permission-runner.integration.test.ts :: environment-operation approval with a real Runner child (AC-049/AC-080) refuses, records the request, and really executes the model retry after the user approves (AC-049/AC-080)",
+        "apps/daemon/test/tool-permission.integration.test.ts :: permission.request / permission.respond over the workbench protocol refuses a path-shaped permission.request with no targets before any decision exists (AC-049)",
+        "apps/daemon/test/tool-permission.integration.test.ts :: permission.request / permission.respond over the workbench protocol refuses to approve a path-shaped operation whose recorded binding has no targets (AC-049)",
+        "apps/daemon/test/tool-permission.integration.test.ts :: permission.request / permission.respond over the workbench protocol closes the environment-operation loop: refuse → approve (protocol) → retry executes (AC-049/AC-080)"
       ],
       "drills": [],
       "reason": null
@@ -1726,6 +1895,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 1 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) admits a read and records the tool operation and the audit event (AC-048)",
         "packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) admission through the Grant service (AC-048) refuses an out-of-scope target with no execution and records the refusal (AC-048)",
@@ -1782,7 +1954,6 @@
         "packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) review round 3 regressions (W7R3) turns a transport error into a structured refusal (W7R3-03)",
         "packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) review round 3 regressions (W7R3) returns a PROVIDER_UNAVAILABLE result when the port probe throws (W7R3-04)",
         "packages/core/test/broker.test.ts :: Broker (AC-048, AC-050) review round 3 regressions (W7R3) carries a literal target its own address, pinning the transport (W7R3-05)",
-        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler pins Review calls to the container even under a host policy (AC-050)",
         "packages/core/test/broker.integration.test.ts :: Broker integration (AC-048, AC-050) runs a real host child process through an admitted Grant (AC-048)",
         "packages/core/test/broker.integration.test.ts :: Broker integration (AC-048, AC-050) refuses a redirect to a link-local address without following it (required failure test)",
         "packages/core/test/broker.integration.test.ts :: Broker integration (AC-048, AC-050) refuses the two fixed network denials before any request (required failure test, W6)",
@@ -1800,7 +1971,8 @@
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) refuses the run database to a verifier without any caller-declared protected path (W7R1-04)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) keeps the frozen source read-only inside the real container (AC-048, AC-050)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) injects the decoy into the authorised child and never into a log, Artifact, UI payload, audit row or the host environment (AC-051)",
-        "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) gives the unauthorised sibling Run no credential at all, on every channel (AC-051)"
+        "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) gives the unauthorised sibling Run no credential at all, on every channel (AC-051)",
+        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler pins Review calls to the container even under a host policy (AC-050)"
       ],
       "drills": [
         {
@@ -1815,6 +1987,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 1 条",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/secrets.test.ts :: SecretStore resolution (AC-051) resolves a registered ref for the authorized Grantholder (AC-051)",
         "packages/core/test/secrets.test.ts :: SecretStore resolution (AC-051) refuses an unknown ref with NOT_FOUND for an authorized ref shape (AC-051)",
@@ -1843,7 +2018,6 @@
         "packages/core/test/secrets.test.ts :: leak scanning (AC-051) finds the decoy in a log line and an array item (AC-051)",
         "packages/core/test/secrets.test.ts :: leak scanning (AC-051) reports which known value matched and stays silent on clean input",
         "packages/core/test/secrets.test.ts :: leak scanning (AC-051) finds a decoy used as an object key without echoing it in the path",
-        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler injects the tool-audience secret a Grant covers, and only then (AC-051)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) executes an in-scope granted call and audits it, and refuses out-of-scope/expired/sibling calls with no side effect (AC-049, AC-080)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) replays the original once result for the same input and refuses a different input (AC-080)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) refuses an out-of-scope read by the same role with no executor call and no row (AC-049)",
@@ -1857,7 +2031,8 @@
         "packages/core/test/secrets.integration.test.ts :: SecretStore isolation with a real child process (AC-051) keeps the decoy out of the unauthorised sibling Run and its child (AC-051)",
         "packages/core/test/secrets.integration.test.ts :: SecretStore isolation with a real child process (AC-051) never serialises the decoy into a grant row, log, Artifact or UI payload (AC-051)",
         "packages/core/test/secrets.integration.test.ts :: SecretStore isolation with a real child process (AC-051) refuses an expired secret Grant at use time (AC-051)",
-        "packages/core/test/secrets.integration.test.ts :: SecretStore isolation with a real child process (AC-051) resolves the decoy for the credentialed Run through the real Grant row (AC-051)"
+        "packages/core/test/secrets.integration.test.ts :: SecretStore isolation with a real child process (AC-051) resolves the decoy for the credentialed Run through the real Grant row (AC-051)",
+        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler injects the tool-audience secret a Grant covers, and only then (AC-051)"
       ],
       "drills": [],
       "reason": null
@@ -1867,6 +2042,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 1 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) serves a preview of a hostile document under the same isolation (AC-052)",
         "packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) carries the isolation policy on every preview (AC-052)"
@@ -1884,6 +2062,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 25 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/pi-runtime/test/trust.test.ts :: untrusted repository (AC-053) never imports, reads or activates a repository resource and reports every skip",
         "packages/pi-runtime/test/trust.test.ts :: untrusted repository (AC-053) still activates the shipped release whitelist, which is not repository content",
@@ -1919,6 +2100,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 2 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/client/test/commands.test.ts :: AC-054 reconnect and bounded backoff reconnects on the documented schedule and replays the hello",
         "packages/client/test/commands.test.ts :: AC-054 reconnect and bounded backoff applies bounded exponential backoff while every reconnect fails",
@@ -1939,6 +2123,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 13 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/client/test/commands.test.ts :: AC-055 write retry with the same idempotency key replays a write whose answer was lost and reports the replay",
         "packages/client/test/commands.test.ts :: AC-055 write retry with the same idempotency key queues a write that never reached the wire and replays it after reconnect",
@@ -1962,6 +2149,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 2 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/mailbox.test.ts :: ProjectMailbox answers a new command while a long effect is still running (AC-056)",
         "packages/core/test/dispatcher.integration.test.ts :: long operations do not block commands (AC-056) answers a command within a second while a model call is in flight"
@@ -1974,6 +2164,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "真实演练 pnpm test:e2e/pnpm test:live PASS",
+      "evidenceLevelArguable": true,
       "evidence": [
         "packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) withholds a new Attempt while the old execution is unconfirmed (W8R1-04)",
         "packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) binds a resume decision to its own Run, not to the whole Work (W8R2-03)",
@@ -2014,6 +2207,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 21 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) withholds a new Attempt while the old execution is unconfirmed (W8R1-04)",
         "packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) binds a resume decision to its own Run, not to the whole Work (W8R2-03)",
@@ -2045,6 +2241,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 3 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/events-hub.integration.test.ts :: connection back-pressure (AC-059) coalesces transient frames once the soft limit is crossed",
         "packages/core/test/events-hub.integration.test.ts :: connection back-pressure (AC-059) closes the connection at the hard limit without dropping durable events",
@@ -2058,15 +2257,18 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 1 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
-        "apps/web/test/multi-project.integration.test.ts :: single-entry multi-project BFF (WP-12 T5.5) binds the event socket to one project and never replays another project cursor (AC-034/AC-060)",
         "packages/core/test/events-hub.integration.test.ts :: scope change (AC-060) answers a fresh snapshot at a new watermark and covers later events",
         "packages/core/test/events-hub.integration.test.ts :: scope change (AC-060) reports an empty batch with its scan watermark",
         "packages/core/test/events-hub.integration.test.ts :: scope change (AC-060) refuses a backward ack and clamps to the watermark",
         "packages/core/test/events-hub.integration.test.ts :: scope change (AC-060) does not disguise a storage failure as a resync request",
         "packages/core/test/events-hub.integration.test.ts :: scope change (AC-060) classifies errors of a cursor-based subscribe the same way",
         "packages/core/test/events-hub.integration.test.ts :: scope change (AC-060) validates scope shape and removes subscriptions",
-        "packages/core/test/events-hub.integration.test.ts :: scope change (AC-060) drops the subscriptions of a closed connection"
+        "packages/core/test/events-hub.integration.test.ts :: scope change (AC-060) drops the subscriptions of a closed connection",
+        "apps/web/test/multi-project.integration.test.ts :: single-entry multi-project BFF (WP-12 T5.5) binds the event socket to one project and never replays another project cursor (AC-034/AC-060)"
       ],
       "drills": [
         {
@@ -2081,6 +2283,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 21 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) withholds a new Attempt while the old execution is unconfirmed (W8R1-04)",
         "packages/core/test/recovery.test.ts :: Run recovery: leases, epochs and restart inspection (AC-057/058/061/082) binds a resume decision to its own Run, not to the whole Work (W8R2-03)",
@@ -2112,6 +2317,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 6 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/wp08-failures.test.ts :: required WP-08 failure tests Task 合并冲突: two passed Tasks conflict, the repair Task is independent and CAS protects HEAD (AC-062)",
         "packages/core/test/wp08-failures.test.ts :: required WP-08 failure tests T-01: the repair revision converges and is what the final manifest records (AC-062)",
@@ -2128,6 +2336,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 6 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/wp08-failures.test.ts :: required WP-08 failure tests ref 后崩溃: the restart reuses the commit, completes the state and emits one event (AC-063)",
         "packages/core/test/settlement.integration.test.ts :: Crash after the ref update: reuse the commit, complete once (AC-063) runs the whole settlement path: freeze, CAS and complete once",
@@ -2144,15 +2355,18 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 1 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/wp08-failures.test.ts :: required WP-08 failure tests 备份演练: backup → restore keeps hashes/knowledge/evidence and blocks a missing Secret (AC-064)",
-        "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) backs up and restores the real database through the protocol (AC-064 surface)",
         "packages/core/test/backup.integration.test.ts :: Backup, restore and relocate (AC-064) restores a backup into a new directory with consistent hashes, knowledge and evidence",
         "packages/core/test/backup.integration.test.ts :: Backup, restore and relocate (AC-064) requires recovery for the active Run and revokes every old lease and grant",
         "packages/core/test/backup.integration.test.ts :: Backup, restore and relocate (AC-064) blocks a restored project whose required Secret is missing",
         "packages/core/test/backup.integration.test.ts :: Backup, restore and relocate (AC-064) refuses an incomplete or tampered backup",
         "packages/core/test/backup.integration.test.ts :: Backup, restore and relocate (AC-064) relocates a restored project to a new root and re-checks the doctor",
-        "packages/core/test/backup.integration.test.ts :: Backup, restore and relocate (AC-064) refuses a relocate onto a directory that is not this repository, leaving the mapping (W8R1-05)"
+        "packages/core/test/backup.integration.test.ts :: Backup, restore and relocate (AC-064) refuses a relocate onto a directory that is not this repository, leaving the mapping (W8R1-05)",
+        "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) backs up and restores the real database through the protocol (AC-064 surface)"
       ],
       "drills": [
         {
@@ -2167,6 +2381,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "curated",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 6 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/storage/test/migrations.integration.test.ts :: migrations backs up before pending work and writes a usable copy",
         "packages/storage/test/migrations.integration.test.ts :: migrations rolls a failed migration back and reports its version",
@@ -2183,6 +2400,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "curated",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "真实演练 pnpm test:live PASS",
+      "evidenceLevelArguable": true,
       "evidence": [
         "packages/pi-runtime/test/session.integration.test.ts :: Pi session lifecycle creates a session with the configured model and no network",
         "packages/pi-runtime/test/events.test.ts :: SDK event mapping maps assistant text and thinking deltas",
@@ -2205,6 +2425,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "curated",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 2 条",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/pi-runtime/test/extensions.test.ts :: extension activation rejects an id the release does not ship",
         "packages/pi-runtime/test/extensions.test.ts :: extension activation blocks startup when a critical capability fails",
@@ -2220,6 +2443,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 18 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/web/test/pages.test.ts :: board page offers a direct cancel and a refused pause for Queued without Work (AC-068)",
         "apps/web/test/views.test.ts :: board projection (AC-068) keeps one identity per requirement, in the documented four columns",
@@ -2253,6 +2479,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 9 条；真实演练 pnpm test:e2e/pnpm test:live PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/web/test/views.test.ts :: run status honesty (AC-069/AC-070) treats only a completed Run as a success",
         "apps/web/test/views.test.ts :: run status honesty (AC-069/AC-070) separates direct/L1 work from board work in the Runs page",
@@ -2281,6 +2510,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 17 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/web/test/views.test.ts :: requirement detail (AC-070) marks the plan card expired when the shown version is not the current one",
         "apps/web/test/views.test.ts :: requirement detail (AC-070) keeps a current plan card approvable",
@@ -2313,6 +2545,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 5 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/web/test/client-script.test.ts :: interface language switching (WP-12 T4) returns focus to the Live restore control when the overlay closes (AC-071)",
         "apps/web/test/pages.test.ts :: shared shell carries the panel mode on the shell so the top bar restores it (AC-071)",
@@ -2333,6 +2568,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 4 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/web/test/pages.test.ts :: shared shell offers no conversation create/switch control outside Chief (AC-072)",
         "apps/web/test/server.integration.test.ts :: workbench BFF over the real daemon (WP-09 T3) shares the panel mode across pages and keeps Chief-only controls off other pages (AC-071/AC-072)",
@@ -2352,6 +2590,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 4 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/web/test/pages.test.ts :: shared shell exposes a language switch that only touches the interface dictionary (AC-073)",
         "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) translates only the interface strings and leaves project content untouched (AC-073)",
@@ -2371,6 +2612,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 46 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/web/test/client-script.test.ts :: inbox actions (WP-12 T4c, AC-074) routes a saved decision choice through decision.resolve",
         "apps/web/test/client-script.test.ts :: inbox actions (WP-12 T4c, AC-074) routes approve and deny through permission.respond",
@@ -2432,6 +2676,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 10 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/web/test/pages.test.ts :: settings page (AC-075) renders the active revision, the editor and the test control",
         "apps/web/test/pages.test.ts :: settings page (AC-075) gives every provider row a real editor with a never-pre-filled password field (WP-12 T1.2B)",
@@ -2457,14 +2704,17 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 8 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) rejects unsupported and oversized uploads server-side (AC-076)",
-        "packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) enforces the upload limits before anything is stored (AC-076)",
         "apps/web/test/views.test.ts :: attachment limits (AC-076) accepts a documented set",
         "apps/web/test/views.test.ts :: attachment limits (AC-076) refuses more than five attachments",
         "apps/web/test/views.test.ts :: attachment limits (AC-076) refuses one file over 20 MiB and a total over 50 MiB",
         "apps/web/test/views.test.ts :: attachment limits (AC-076) refuses an unsupported mime type",
         "apps/web/test/views.test.ts :: attachment limits (AC-076) treats a mime parameter as the same type",
+        "packages/core/test/artifacts.test.ts :: attachments, artifacts and previews (WP-03) enforces the upload limits before anything is stored (AC-076)",
         "apps/web/test/server.integration.test.ts :: workbench BFF over the real daemon (WP-09 T3) binds an uploaded attachment to the first message and refuses a bad upload (AC-084/AC-076)",
         "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack binds an uploaded attachment to the first message and refuses a bad one (AC-084/AC-076)"
       ],
@@ -2481,6 +2731,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 9 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/web/test/pages.test.ts :: files page (AC-077) shows the branch, the target revision and the read-only boundary",
         "apps/web/test/pages.test.ts :: files page (AC-077) renders a refused path as an error with its code, not an empty tree",
@@ -2505,6 +2758,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 25 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/client/test/commands.test.ts :: AC-078 authentication lifecycle surfaces an expired session as a typed error without retrying",
         "packages/client/test/commands.test.ts :: AC-078 authentication lifecycle never retries a NOT_AUTHORIZED write",
@@ -2552,6 +2808,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 31 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/context-acl.test.ts :: context ACL — future artifacts (AC-079) denies a future artifact class to an earlier stage",
         "packages/core/test/context-acl.test.ts :: context ACL — future artifacts (AC-079) denies review/test artifacts to a Developer",
@@ -2593,6 +2852,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 2 条",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) admits the exact once binding and reports no replay for a first use",
         "packages/domain/test/permission-delivery.test.ts :: grant admission (AC-049, AC-080) replays a consumed once grant for the same operation and input (AC-080)",
@@ -2655,8 +2917,6 @@
         "packages/core/test/grants.test.ts :: GrantStore (AC-049, AC-080) multi-writer deferred results (W7R2-04/09/10) replays a recorded undefined result as present (W7R2-09)",
         "packages/core/test/grants.test.ts :: GrantStore (AC-049, AC-080) multi-writer deferred results (W7R2-04/09/10) keeps a recorded result alive through an offline blob GC (W7R2-10)",
         "packages/core/test/grants.test.ts :: GrantStore (AC-049, AC-080) multi-writer deferred results (W7R2-04/09/10) registers the deferred-result records and legacy blobs as GC roots (W7R2-10)",
-        "apps/daemon/test/tool-permission-runner.integration.test.ts :: environment-operation approval with a real Runner child (AC-049/AC-080) refuses, records the request, and really executes the model retry after the user approves (AC-049/AC-080)",
-        "apps/daemon/test/tool-permission.integration.test.ts :: permission.request / permission.respond over the workbench protocol closes the environment-operation loop: refuse → approve (protocol) → retry executes (AC-049/AC-080)",
         "packages/core/test/broker.integration.test.ts :: Broker integration (AC-048, AC-050) keeps the once result replayable across a real execution (AC-080)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) executes an in-scope granted call and audits it, and refuses out-of-scope/expired/sibling calls with no side effect (AC-049, AC-080)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) replays the original once result for the same input and refuses a different input (AC-080)",
@@ -2667,7 +2927,9 @@
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) keeps the frozen source read-only inside the real container (AC-048, AC-050)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) injects the decoy into the authorised child and never into a log, Artifact, UI payload, audit row or the host environment (AC-051)",
         "packages/core/test/permissions.integration.test.ts :: end-to-end permission chain (AC-048, AC-049, AC-050, AC-051, AC-053, AC-080) gives the unauthorised sibling Run no credential at all, on every channel (AC-051)",
-        "packages/core/test/tool-http.integration.test.ts :: tool.execute over the real control endpoint (T3.2) admits an environment operation only after the real approval chain (AC-049/AC-080)"
+        "packages/core/test/tool-http.integration.test.ts :: tool.execute over the real control endpoint (T3.2) admits an environment operation only after the real approval chain (AC-049/AC-080)",
+        "apps/daemon/test/tool-permission-runner.integration.test.ts :: environment-operation approval with a real Runner child (AC-049/AC-080) refuses, records the request, and really executes the model retry after the user approves (AC-049/AC-080)",
+        "apps/daemon/test/tool-permission.integration.test.ts :: permission.request / permission.respond over the workbench protocol closes the environment-operation loop: refuse → approve (protocol) → retry executes (AC-049/AC-080)"
       ],
       "drills": [],
       "reason": null
@@ -2677,13 +2939,10 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 14 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
-        "packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) orders the DAG deterministically and rejects a cycle",
-        "packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) records dependencyRevision and dependencyManifestRefs, then starts B from A",
-        "packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) invalidates B when its ancestor revision moves",
-        "packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) does not re-apply an already-merged ancestor in the final integration",
-        "packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) produces an independent repair task when two passed Tasks conflict (AC-062)",
-        "packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) integrates two non-conflicting passed Tasks in dependency order and CASes once",
         "packages/core/test/integrate.integration.test.ts :: Accept/Integrate and Settlement over real Git (AC-010, AC-012, AC-041, AC-081) integrates B-on-A without re-applying the ancestor and settles the Requirement",
         "packages/core/test/integrate.integration.test.ts :: Accept/Integrate and Settlement over real Git (AC-010, AC-012, AC-041, AC-081) reuses the verified Task evidence when only the Core-maintained pool was added (WP-12 W4c)",
         "packages/core/test/integrate.integration.test.ts :: Accept/Integrate and Settlement over real Git (AC-010, AC-012, AC-041, AC-081) freezes no integration manifest when the combination really is unverified code",
@@ -2691,7 +2950,13 @@
         "packages/core/test/integrate.integration.test.ts :: Accept/Integrate and Settlement over real Git (AC-010, AC-012, AC-041, AC-081) refuses a real merge conflict and leaves the delivery ref and the manifest untouched",
         "packages/core/test/integrate.integration.test.ts :: Accept/Integrate and Settlement over real Git (AC-010, AC-012, AC-041, AC-081) settlement refuses a Task whose manifest vanished before any write",
         "packages/core/test/wp08.integration.test.ts :: WP-08 T4 end-to-end integration drill runs the L2 route Plan/Develop/Review/Test/Settlement and settles the Requirement (AC-081)",
-        "packages/core/test/wp08.integration.test.ts :: WP-08 T4 end-to-end integration drill chains dependent Tasks, invalidates on ancestor change and skips a merged ancestor (AC-081)"
+        "packages/core/test/wp08.integration.test.ts :: WP-08 T4 end-to-end integration drill chains dependent Tasks, invalidates on ancestor change and skips a merged ancestor (AC-081)",
+        "packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) orders the DAG deterministically and rejects a cycle",
+        "packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) records dependencyRevision and dependencyManifestRefs, then starts B from A",
+        "packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) invalidates B when its ancestor revision moves",
+        "packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) does not re-apply an already-merged ancestor in the final integration",
+        "packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) produces an independent repair task when two passed Tasks conflict (AC-062)",
+        "packages/workspace/test/cas.integration.test.ts :: dependency lineage with real revisions (AC-081) integrates two non-conflicting passed Tasks in dependency order and CASes once"
       ],
       "drills": [],
       "reason": null
@@ -2701,6 +2966,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 82 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/orchestrator.test.ts :: chief orchestration (AC-045, AC-044, AC-082) records an immutable assessment with the routing evidence",
         "packages/core/test/orchestrator.test.ts :: chief orchestration (AC-045, AC-044, AC-082) applies the documented routing floor from the payload alone (R9-01, DC-62)",
@@ -2793,6 +3061,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 53 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) returns work to development without a human forwarding step (AC-017)",
         "packages/domain/test/delivery.test.ts :: findings (AC-017/AC-018/AC-019/AC-083) invalidates the old Review/Test after a fix and refuses self-verification (AC-017/AC-018)",
@@ -2856,6 +3127,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 7 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) refuses unauthenticated requests (AC-084)",
         "apps/daemon/test/server.test.ts :: daemon HTTP surface (WP-03) uploads, binds and previews an HTML explanation end to end (AC-002/AC-084)",
@@ -2880,7 +3154,14 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 6 条",
+      "evidenceLevelArguable": false,
       "evidence": [
+        "apps/runner/test/control-client.test.ts :: runner control client (protocol.md §6) remembers the read-ledger binding a context.request expansion answered with (AC-085)",
+        "apps/runner/test/read-ledger.test.ts :: Runner read ledger seal (AC-085, WP-12 R3-2d) seals an empty ledger to the genesis value, not a placeholder",
+        "apps/runner/test/read-ledger.test.ts :: Runner read ledger seal (AC-085, WP-12 R3-2d) chains each read into the accumulator and reports the last seq",
+        "apps/runner/test/tool-client.test.ts :: tool call transport starts at the derived empty read-ledger binding, not a placeholder (AC-085)",
         "packages/core/test/context-ledger.test.ts :: read ledger — seal and stale binding (AC-085) seals the ordered entries and refuses every later append",
         "packages/core/test/context-ledger.test.ts :: read ledger — seal and stale binding (AC-085) re-sealing is idempotent",
         "packages/core/test/context-ledger.test.ts :: read ledger — seal and stale binding (AC-085) verifies the correct binding and rejects an older seq or a different hash",
@@ -2888,12 +3169,6 @@
         "packages/core/test/context-ledger.test.ts :: read ledger — seal and stale binding (AC-085) seals an empty ledger to seq 0 so a no-read stage result still binds",
         "packages/core/test/context-ledger.test.ts :: read ledger — seal and stale binding (AC-085) is a stable chain over the documented entry fields",
         "packages/core/test/tool-http.test.ts :: tool.execute endpoint handler carries the Attempt read-ledger binding when the handler supplies one (AC-085)",
-        "apps/runner/test/control-client.test.ts :: runner control client (protocol.md §6) remembers the read-ledger binding a context.request expansion answered with (AC-085)",
-        "apps/runner/test/read-ledger.test.ts :: Runner read ledger seal (AC-085, WP-12 R3-2d) seals an empty ledger to the genesis value, not a placeholder",
-        "apps/runner/test/read-ledger.test.ts :: Runner read ledger seal (AC-085, WP-12 R3-2d) chains each read into the accumulator and reports the last seq",
-        "apps/runner/test/tool-client.test.ts :: tool call transport starts at the derived empty read-ledger binding, not a placeholder (AC-085)",
-        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler records the read in the Attempt ledger and returns its binding (AC-085)",
-        "apps/runner/test/attempt.integration.test.ts :: AttemptRunner seals stage_yield with the read-ledger binding the control channel reached (AC-085)",
         "packages/core/test/read-ledger-seal.integration.test.ts :: read ledger seal (AC-085) appends every read in order and derives the binding from the entries",
         "packages/core/test/read-ledger-seal.integration.test.ts :: read ledger seal (AC-085) verifies the exact binding and refuses placeholders or stale values",
         "packages/core/test/read-ledger-seal.integration.test.ts :: read ledger seal (AC-085) records an out-of-scope read request in the same ledger (AC-032)",
@@ -2902,7 +3177,9 @@
         "packages/core/test/read-ledger-seal.integration.test.ts :: read ledger seal (AC-085) accepts a stage result whose binding matches, then seals the ledger",
         "packages/core/test/read-ledger-seal.integration.test.ts :: read ledger seal (AC-085) refuses a stage result that reports a placeholder instead of the real reads",
         "packages/core/test/read-ledger-seal.integration.test.ts :: read ledger seal (AC-085) refuses to certify an Attempt whose admitted read could not be recorded",
-        "packages/core/test/read-ledger-seal.integration.test.ts :: read ledger seal (AC-085) accepts the derived empty binding for an Attempt that read nothing"
+        "packages/core/test/read-ledger-seal.integration.test.ts :: read ledger seal (AC-085) accepts the derived empty binding for an Attempt that read nothing",
+        "apps/daemon/test/tool-handler.integration.test.ts :: daemon tool handler records the read in the Attempt ledger and returns its binding (AC-085)",
+        "apps/runner/test/attempt.integration.test.ts :: AttemptRunner seals stage_yield with the read-ledger binding the control channel reached (AC-085)"
       ],
       "drills": [],
       "reason": null
@@ -2912,6 +3189,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "curated",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 7 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/knowledge/test/feature-format.test.ts :: parseFeatureDocument parses a complete document with real-valued fields",
         "packages/knowledge/test/feature-format.test.ts :: parseFeatureDocument rejects design=confirmed without one resolvable decision reference",
@@ -2929,6 +3209,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "apps 层用例的关键断言读自播种行（seedRequirement 等直插行），不是真实 import/clone 产品路径",
+      "evidenceLevelArguable": true,
       "evidence": [
         "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) keeps an imported requirement identity and its evidence availability honest (AC-087/AC-088/AC-089)",
         "apps/daemon/test/requirement-import.integration.test.ts :: first-open requirement import from the delivery revision (WP-12 T5.4) restores every lifecycle from a real clone with an empty database (AC-087/AC-088/AC-089)",
@@ -2943,6 +3226,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "apps 层用例的关键断言读自播种行（seedRequirement 等直插行），不是真实 import/clone 产品路径",
+      "evidenceLevelArguable": true,
       "evidence": [
         "packages/knowledge/test/requirements-pool.test.ts :: imported history (AC-088) keeps completion, cancellation and pre-archive state without migrating evidence",
         "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) keeps an imported requirement identity and its evidence availability honest (AC-087/AC-088/AC-089)",
@@ -2956,16 +3242,15 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "apps 层用例的关键断言读自播种行（seedRequirement 等直插行），不是真实 import/clone 产品路径",
+      "evidenceLevelArguable": true,
       "evidence": [
+        "apps/web/test/pages.test.ts :: board page offers Continue only for a record that waits to continue (AC-089)",
         "packages/core/test/requirement-continue.test.ts :: Requirement continuation (AC-089) lists an imported active Requirement as waiting to continue without starting a Run (AC-089)",
         "packages/core/test/requirement-continue.test.ts :: Requirement continuation (AC-089) continues into a new local Work with a recorded authorization and the unmet Gates (AC-089)",
         "packages/core/test/requirement-continue.test.ts :: Requirement continuation (AC-089) refuses a Requirement that is not active or already has a local Work (AC-089)",
         "packages/core/test/requirement-continue.test.ts :: Requirement continuation (AC-089) reports the L3 stages plus the rollback/audit/drill evidence the continuation still owes (AC-089)",
-        "apps/web/test/pages.test.ts :: board page offers Continue only for a record that waits to continue (AC-089)",
-        "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) keeps an imported requirement identity and its evidence availability honest (AC-087/AC-088/AC-089)",
-        "apps/daemon/test/requirement-import.integration.test.ts :: first-open requirement import from the delivery revision (WP-12 T5.4) restores every lifecycle from a real clone with an empty database (AC-087/AC-088/AC-089)",
-        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack shows an imported active requirement as waiting to continue with no Run (AC-087/AC-089)",
-        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack answers the card actions with the real protocol codes the UI renders (AC-068/AC-089)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) runs the L1 typo chain to a CompletionManifest and CAS with no Planning/Test Run and no board entry (AC-007)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) drives a validated ProductDefinition through Plan/Develop/Review/Test/Settlement in order (AC-010)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) saves a confirmed design as Product/Planning candidate diffs with an independent Review and Settlement only (AC-012)",
@@ -2973,7 +3258,11 @@
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) closes a task-less Review Finding through a fix and a new independent Review/Test, refusing self-verification (AC-017, AC-018, AC-083)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) pauses at a safe point, resumes into a new Attempt, and cancels the Run tree while keeping the artifacts (AC-020, AC-021)",
         "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) shows an imported active Requirement as waiting to continue and re-plans it in a new Work without reusing old verification (AC-089)",
-        "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) refuses the superseded Plan after an upgrade and leaves the source hash unchanged (AC-009, AC-013)"
+        "packages/core/test/delivery.integration.test.ts :: graded delivery chains (WP-06 T4, AC-007…AC-021/AC-083/AC-089) refuses the superseded Plan after an upgrade and leaves the source hash unchanged (AC-009, AC-013)",
+        "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) keeps an imported requirement identity and its evidence availability honest (AC-087/AC-088/AC-089)",
+        "apps/daemon/test/requirement-import.integration.test.ts :: first-open requirement import from the delivery revision (WP-12 T5.4) restores every lifecycle from a real clone with an empty database (AC-087/AC-088/AC-089)",
+        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack shows an imported active requirement as waiting to continue with no Run (AC-087/AC-089)",
+        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack answers the card actions with the real protocol codes the UI renders (AC-068/AC-089)"
       ],
       "drills": [],
       "reason": null
@@ -2983,6 +3272,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 11 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/web/test/pages.test.ts :: board page renders the branch, commit and push state and offers the lifecycle actions (AC-090)",
         "apps/web/test/pages.test.ts :: requirement detail page renders the delivery branch, commit, push state and the card actions (AC-090)",
@@ -2991,17 +3283,17 @@
         "apps/web/test/views.test.ts :: board projection (AC-068) never invents a commit or a push state the payload did not report (AC-090)",
         "apps/web/test/views.test.ts :: requirement detail (AC-070) states the delivery branch, the commit and the actions it can offer (AC-090)",
         "apps/web/test/views.test.ts :: requirement detail (AC-070) reads an explicit unpushed result and treats a working tree as no commit (AC-090)",
-        "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) refuses requirement.save without the Git record service instead of faking a save (AC-090/AC-093)",
-        "apps/daemon/test/requirement-commands.integration.test.ts :: documented requirement commands over real Git (WP-12 T4b) exposes branch/commit/unpushed on board, get and list, and flips after a real push (AC-090)",
-        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack reads all nine surfaces from real state in one drill (AC-068–AC-078, AC-084, AC-087–AC-090, AC-093)",
-        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack shows a requirement in the UI only after Git and the projection agree (AC-090/AC-093)",
         "packages/core/test/requirement-save.integration.test.ts :: requirement instant save (AC-090) commits requirement.json, content.md and the rebuilt README in one commit",
         "packages/core/test/requirement-save.integration.test.ts :: requirement instant save (AC-090) reports the unpushed state against a configured remote (`AC-090`)",
         "packages/core/test/requirement-save.integration.test.ts :: requirement instant save (AC-090) leaves the branch untouched when the integration lock is held by a delivery",
         "packages/core/test/requirement-save.integration.test.ts :: requirement instant save (AC-090) refuses a second create for the same id and writes nothing",
         "packages/core/test/requirement-save.integration.test.ts :: requirement instant save (AC-090) updates an existing record with a new version and includes both records in the pool",
         "packages/core/test/requirement-save.integration.test.ts :: requirement save failure and retry (AC-090) hands back the original operation when the baseline moved, and retries onto it",
-        "packages/core/test/requirement-save.integration.test.ts :: requirement save failure and retry (AC-090) reports RECOVERY_REQUIRED with a repair-only retry when the projection fails after the commit"
+        "packages/core/test/requirement-save.integration.test.ts :: requirement save failure and retry (AC-090) reports RECOVERY_REQUIRED with a repair-only retry when the projection fails after the commit",
+        "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) refuses requirement.save without the Git record service instead of faking a save (AC-090/AC-093)",
+        "apps/daemon/test/requirement-commands.integration.test.ts :: documented requirement commands over real Git (WP-12 T4b) exposes branch/commit/unpushed on board, get and list, and flips after a real push (AC-090)",
+        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack reads all nine surfaces from real state in one drill (AC-068–AC-078, AC-084, AC-087–AC-090, AC-093)",
+        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack shows a requirement in the UI only after Git and the projection agree (AC-090/AC-093)"
       ],
       "drills": [
         {
@@ -3016,6 +3308,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 15 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/requirement-save.test.ts :: completion/settlement consistency (AC-091) accepts a completion record that binds the Settlement revision, tree and manifests",
         "packages/core/test/requirement-save.test.ts :: completion/settlement consistency (AC-091) refuses a completion record whose code revision is not the final revision",
@@ -3041,6 +3336,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 1 条",
+      "evidenceLevelArguable": false,
       "evidence": [
         "apps/daemon/test/requirement-import.integration.test.ts :: first-open requirement import from the delivery revision (WP-12 T5.4) keeps valid records visible next to a broken one and reports the conflict (AC-092 surface)",
         "packages/knowledge/test/requirements-pool.test.ts :: importRequirementPool imports a pool, is idempotent, and keeps local and record versions apart",
@@ -3059,6 +3357,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "product-path",
+      "evidenceLevelReason": "apps 层已执行证据 3 条；真实演练 pnpm test:e2e PASS",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/core/test/context-builder.test.ts :: buildContext — excluded and unknown refs (AC-093) records a reference that does not exist and never expands it",
         "packages/core/test/context-builder.test.ts :: buildContext — excluded and unknown refs (AC-093) keeps the selection’s own excluded and unknowns verbatim",
@@ -3072,15 +3373,15 @@
         "packages/core/test/requirement-save.test.ts :: prepareRequirementSave (AC-093) produces metadata that its own schema accepts",
         "packages/core/test/requirement-save.test.ts :: pool records and README (AC-093) rebuilds the README from the records and commits both files of each",
         "packages/core/test/requirement-save.test.ts :: pool records and README (AC-093) sorts the index by id so a rebuild is deterministic",
-        "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) refuses requirement.save without the Git record service instead of faking a save (AC-090/AC-093)",
-        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack reads all nine surfaces from real state in one drill (AC-068–AC-078, AC-084, AC-087–AC-090, AC-093)",
-        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack shows a requirement in the UI only after Git and the projection agree (AC-090/AC-093)",
         "packages/core/test/requirement-save.integration.test.ts :: stale projection refuses to overwrite (AC-093) refuses a same-version record whose body another server changed",
         "packages/core/test/requirement-save.integration.test.ts :: stale projection refuses to overwrite (AC-093) refuses a create when Git already holds a record the projection does not know",
         "packages/core/test/requirement-save.integration.test.ts :: stale projection refuses to overwrite (AC-093) refuses a stale local expectation when it cannot satisfy the projection version",
         "packages/core/test/requirement-save.integration.test.ts :: stale projection refuses to overwrite (AC-093) reads the pool at the delivery ref, never the stale working tree (W8R1-02)",
         "packages/core/test/requirement-save.integration.test.ts :: stale projection refuses to overwrite (AC-093) reports a HEAD-only record as a per-record conflict instead of an ENOENT (W8R1-03)",
-        "packages/core/test/requirement-save.integration.test.ts :: stale projection refuses to overwrite (AC-093) returns a structured INTERNAL_ERROR when the committed blob cannot be read (W8R1-03)"
+        "packages/core/test/requirement-save.integration.test.ts :: stale projection refuses to overwrite (AC-093) returns a structured INTERNAL_ERROR when the committed blob cannot be read (W8R1-03)",
+        "apps/daemon/test/protocol.integration.test.ts :: workbench protocol over the real Core (WP-09 T2) refuses requirement.save without the Git record service instead of faking a save (AC-090/AC-093)",
+        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack reads all nine surfaces from real state in one drill (AC-068–AC-078, AC-084, AC-087–AC-090, AC-093)",
+        "apps/web/test/workbench.integration.test.ts :: WP-09 T4: the workbench end to end over the real stack shows a requirement in the UI only after Git and the projection agree (AC-090/AC-093)"
       ],
       "drills": [
         {
@@ -3095,6 +3396,9 @@
       "status": "PASS",
       "accepted": false,
       "mapping": "test-name",
+      "evidenceLevel": "library-level",
+      "evidenceLevelReason": "只有库级/页面级已执行证据（packages/* 库级 15 条）；该规则的正确验证层级即为库级",
+      "evidenceLevelArguable": false,
       "evidence": [
         "packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) creates the commit with the requirement pool files and moves the branch once",
         "packages/workspace/test/cas.integration.test.ts :: CAS integration against a real Git repository (AC-094) refuses a stale writer with VERSION_CONFLICT and leaves the branch untouched",
@@ -3118,4 +3422,12 @@
   ]
 }
 ```
+
+## 8. 已知产品缺口（W8-4，不改变任何 AC 判定）
+
+这些缺口是"产品缺一条交互/能力"，不是"证据不足"：AC 的已映射证据仍按 §2 判定，本登记只把缺口写进发布记录（登记表在 `scripts/lib/drill-acs.mjs` 的 `KNOWN_PRODUCT_GAPS`）。
+
+| AC | 缺口 | 现状 | 实现它需要什么 | 决定记录 | 残余编号 |
+|---|---|---|---|---|---|
+| AC-011 | L3 高风险交付缺少显式确认交互（未关闭） | L3（高风险：迁移/依赖升级/schema 变更等）交付当前只经 Plan 门禁 + Work 信封授权，产品没有"请你确认这是一次 L3 高风险交付"的显式用户交互（Inbox 无该待办、无对应 decision、无拒绝后停下的路径）。库级 Gate 规则已实现并有证据，缺的是这条交互面。 | ① Core 在 L3 路由判定后铸一条 `kind=decision`（`targetRef` 指向 Plan/风险说明 Artifact，`choices=[confirm, decline, revise]`）并发 `decision.created`，`approve` 之前 Run 不得 `running`；② daemon 面把它包成 Inbox 待办（复用现有 `decision.resolve`，不新增解析入口）；③ decline/revise 走既有 product-behaviour 分支（AC-015/016）而不是新状态；④ 一条真机 e2e 演练覆盖"出现 → 处理 → 消失"，以及"未确认时不得实施 L3"的负例；⑤ 更新 `protocol.md`/`experience.md` 与 AC-011 的证据映射。 | WP-12 W8 裁决 4（2026-09，持钥者）：登记为已知产品缺口，本切片不实现；验收状态仍按已映射证据判定，不由本登记降级。 | WP-12-D-W8-4 |
 

@@ -34,6 +34,23 @@ export const projectIdSchema = z
  * this wider form; `project_id` columns stay strictly 32 hex.
  */
 export const entityIdSchema = z.union([z.string().regex(UUID_V7), projectIdSchema]);
+/**
+ * The execution-environment descriptor one Attempt reports in `attempt.ready`.
+ *
+ * `protocol.md` §6 (`runner.ready`) and `execution.md` §5 make the Runner's own
+ * process observation the only source: `host:<platform>/<arch>/node-<major>` for a
+ * host process, `container:<image>` for a container (or `container:undeclared` when
+ * the launcher exported no image). W8-1 ruled that the executed `CheckResult` check and
+ * the frozen `VerificationManifest` must bind the **same** descriptor, so a reader can
+ * compare the two directly instead of mapping an Attempt id to a description after the
+ * fact; the schema is therefore a non-empty string rather than the UUIDv7 `idSchema`
+ * the value was mis-typed as (the library-level fixtures that still use an id keep
+ * parsing, but production always writes the descriptor).
+ */
+export const environmentRefSchema = z.string().min(1, {
+  message: 'expected a non-empty execution environment descriptor',
+});
+export type EnvironmentRef = z.infer<typeof environmentRefSchema>;
 export const hashSchema = z
   .string()
   .regex(SHA256, { message: 'expected a lowercase SHA256 hex digest' });

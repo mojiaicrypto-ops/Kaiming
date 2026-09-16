@@ -12,10 +12,12 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { checkResultSchema, verificationManifestSchema } from '@agentdev/contracts';
 import { ProjectStore as Store, projectIdFromRoot, type ProjectStore } from '@agentdev/storage';
 import { createNodeWorktreeGitPort } from '@agentdev/workspace';
 import {
   SnapshotWriter,
+  buildTestCheckResult,
   createTaskCandidateService,
   deliveredCodeTreeHash,
   taskCandidateRef,
@@ -162,7 +164,10 @@ function candidateInput(h: Harness, taskId: string, dependencyRevision: string) 
     acceptanceIds: ['AC-081'],
     policyHash: 'b'.repeat(64),
     configHash: 'c'.repeat(64),
-    contextSnapshotId: 'd'.repeat(64),
+    // A real `contextSnapshotId` is a row id (`idSchema`), not a hash: the W8-1 case
+    // parses the frozen manifest through `verificationManifestSchema`, which the old
+    // `'d'.repeat(64)` fixture would fail before W8-1 was even reached.
+    contextSnapshotId: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d8e30',
     readLedgerSeq: 3,
     readLedgerHash: 'e'.repeat(64),
     environmentRef: 'container:agentdev-exec:latest',
@@ -268,6 +273,68 @@ describe('per-Task candidate commit and VerificationManifest (step 2)', () => {
       // Nothing was frozen and the Task still has no manifest.
       expect(h.store.tasks.find(TASK_A)?.latestManifestId).toBeUndefined();
       expect(h.store.snapshots.list({ where: "type = 'verification'" })).toHaveLength(0);
+    } finally {
+      h.store.close();
+    }
+  });
+
+  /**
+   * W8-1: the executed Test check and the frozen manifest carry **one** environment
+   * descriptor.
+   *
+   * The single source in production is `Supervisor.environmentRefOf(attemptId)`: the
+   * execution stack passes it to the executed `CheckResult` (`execution.ts`) and the
+   * control handler passes it to the candidate commit (`control-handler.ts`). This case
+   * models that one value and asserts both persisted structures bind it verbatim, and
+   * that both parse through the shared contracts (`environmentRefSchema`, widened from
+   * `idSchema` by W8-1). The real end-to-end descriptor is produced by the Runner's own
+   * `attempt.ready` and is covered by `pnpm test:live` (`drill.message-to-stage`).
+   */
+  it('binds one environment descriptor in the executed Test check and the frozen manifest (W8-1)', () => {
+    const h = harness();
+    try {
+      seedTask(h, TASK_A, h.baseRevision);
+      writeFileAt(h.edits, 'src/orders.ts', 'export const orders = ["A"];\n');
+      const attemptEnvironment = 'container:agentdev-exec:latest';
+      const checkResult = checkResultSchema.parse(
+        buildTestCheckResult({
+          executions: [
+            {
+              command: 'pnpm test:unit',
+              exitCode: 0,
+              stdout: 'ok\n',
+              stderr: '',
+              signal: null,
+              durationMs: 5,
+            },
+          ],
+          environmentRef: attemptEnvironment,
+          executionImage: 'agentdev/exec:0.0.0',
+          runnerEnvironment: attemptEnvironment,
+          inputTree: 'f'.repeat(64),
+          acceptanceIds: ['AC-081'],
+          outputRefs: [h.store.newId()],
+        }),
+      );
+      const committed = h.service.commit({
+        ...candidateInput(h, TASK_A, h.baseRevision),
+        environmentRef: attemptEnvironment,
+        changedPaths: ['src/orders.ts'],
+      });
+      expect(committed.ok, committed.ok ? '' : committed.message).toBe(true);
+      if (!committed.ok) throw new Error(committed.message);
+      const frozen = h.store.snapshots
+        .list({ where: "type = 'verification'" })
+        .find(
+          (row) => (row.payload as { manifestId?: string }).manifestId === committed.manifestId,
+        );
+      const manifest = verificationManifestSchema.parse(
+        (frozen?.payload as { manifest?: unknown }).manifest,
+      );
+      // The descriptor, not an Attempt id: a reader compares the two directly.
+      expect(checkResult.checks[0]?.environmentRef).toBe(attemptEnvironment);
+      expect(manifest.environmentRef).toBe(attemptEnvironment);
+      expect(manifest.environmentRef).toBe(checkResult.checks[0]?.environmentRef);
     } finally {
       h.store.close();
     }

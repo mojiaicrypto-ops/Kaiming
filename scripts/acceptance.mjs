@@ -48,6 +48,11 @@ import { fileURLToPath } from 'node:url';
 import { computeBinding } from './lib/acceptance-binding.mjs';
 import { runDrills } from './lib/acceptance-drills.mjs';
 import { aggregateAcceptance } from './lib/acceptance-evidence.mjs';
+import {
+  classifyEvidenceLevel,
+  formatEvidenceLevels,
+  summarizeEvidenceLevels,
+} from './lib/acceptance-levels.mjs';
 import { ACCEPTANCE_DOC, EXPECTED_AC_IDS, parseAcceptanceDoc } from './lib/acceptance-registry.mjs';
 import { renderAcceptanceReport, renderConsoleTable } from './lib/acceptance-report.mjs';
 import {
@@ -354,6 +359,17 @@ function main() {
   }
 
   const acceptedCount = results.filter((result) => result.accepted === true).length;
+  // WP-12 W9: classify every AC's evidence level from the evidence this run produced.
+  // The classification never changes a verdict — it only makes the layer behind a PASS
+  // (or an accepted gap) visible, which is what `test.md` §3.7 found missing.
+  for (const result of results) {
+    const classification = classifyEvidenceLevel(result);
+    result.evidenceLevel = classification.level;
+    result.evidenceLevelReason = classification.reason;
+    result.evidenceLevelArguable = classification.arguable;
+    result.evidenceLevelNotes = classification.notes;
+  }
+  const levelCounts = summarizeEvidenceLevels(results);
   const finalCounts = {
     PASS: results.filter((result) => result.status === 'PASS').length,
     ACCEPTED: acceptedCount,
@@ -403,6 +419,7 @@ function main() {
     cases,
     results,
     counts: finalCounts,
+    levelCounts,
     runs,
     drillRuns: drills.runs,
     drillSources: drills.sources,
@@ -428,6 +445,7 @@ function main() {
     drillsExecuted: meta.drillsExecuted,
     exitCode,
     counts: finalCounts,
+    evidenceLevels: levelCounts,
     problems: infraProblems,
     unaccepted,
     results: results.map((result) => ({
@@ -439,6 +457,10 @@ function main() {
       mapping: result.mapping,
       gap: result.gap,
       reason: result.reason,
+      evidenceLevel: result.evidenceLevel,
+      evidenceLevelReason: result.evidenceLevelReason,
+      evidenceLevelArguable: result.evidenceLevelArguable === true,
+      evidenceLevelNotes: result.evidenceLevelNotes,
       evidence: result.evidence.map((test) => `${toRepoPath(test.file)} :: ${test.fullName}`),
       drills: result.drills.map((drill) => ({
         tool: drill.tool,
@@ -462,6 +484,9 @@ function main() {
   process.stdout.write('\n\n');
   process.stdout.write(
     `acceptance: ${String(results.length)}/${String(EXPECTED_AC_IDS.length)} ACs accounted — PASS ${String(finalCounts.PASS)} / ACCEPTED ${String(finalCounts.ACCEPTED)} / FAIL ${String(finalCounts.FAIL)} / MISSING ${String(finalCounts.MISSING)}\n`,
+  );
+  process.stdout.write(
+    `acceptance: evidence levels — ${formatEvidenceLevels(levelCounts)}（product-path = 真实 daemon/CLI/浏览器/真 Provider 演练或 apps 层已执行证据；library-level = 仅库级/播种行证据；environment-limited = 本环境缺少所需输入）\n`,
   );
   if (finalCounts.ACCEPTED > 0) {
     process.stdout.write(

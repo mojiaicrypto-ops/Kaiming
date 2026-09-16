@@ -1056,25 +1056,24 @@ export class TestEvidenceRegistry implements TestEvidenceReader {
 export interface TestCheckResultInput {
   readonly executions: readonly DeclaredCommandExecution[];
   /**
-   * The id of the environment the commands ran in.
+   * The execution environment descriptor the check binds (`W8-1`).
    *
-   * `data.md` §3 types the check's `environmentRef` as an `ID`, so this is the
-   * **id-shaped** identity of the execution environment — the Attempt, which is what the
-   * Control plane names an execution by. The Runner's descriptive
-   * `host:<platform>/<arch>/node-<major>` / `container:<image>` string travels as
-   * {@link TestCheckResultInput.environmentLabel} instead of being forced into an id.
+   * Production passes the Attempt's real `attempt.ready` observation — the same
+   * `host:<platform>/<arch>/node-<major>` / `container:<image>` string the frozen
+   * `VerificationManifest` records — so the executed check and the manifest carry one
+   * comparable descriptor. The container image and the Runner descriptor are still
+   * written into the human-readable `result` as well.
    */
   readonly environmentRef: string;
   /**
    * The image the command really executed in (`Broker` `EXEC_IMAGE`), when it ran in one.
    *
-   * The `environmentRef` is the id-shaped identity of the stage's execution environment,
-   * so the *facts* the check needs — the container image the command ran in and the
-   * environment the Runner itself reported in `attempt.ready` — are recorded in the
-   * human-readable `result` instead of being forced into an id.
+   * It is recorded in the human-readable `result` (`image=… | runner=…`) alongside
+   * {@link TestCheckResultInput.environmentRef}, so a reader sees the concrete command
+   * facts next to the environment descriptor the manifest binds.
    */
   readonly executionImage?: string;
-  /** The Runner's descriptive environment string (`attempt.ready`), when it reported one. */
+  /** The Runner's environment descriptor (`attempt.ready`), when it reported one. */
   readonly runnerEnvironment?: string;
   /** The frozen candidate's code-tree hash the commands ran against. */
   readonly inputTree: string;

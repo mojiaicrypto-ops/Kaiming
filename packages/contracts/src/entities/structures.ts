@@ -9,6 +9,7 @@
 import { partialRecord, z } from 'zod';
 import { LIMITS } from '../limits.js';
 import {
+  environmentRefSchema,
   gitRevisionSchema,
   hashSchema,
   idSchema,
@@ -389,7 +390,7 @@ const checkEntrySchema = z
     acceptanceIds: list(z.string().min(1)),
     command: z.string().min(1).optional(),
     procedure: z.string().min(1).optional(),
-    environmentRef: idSchema,
+    environmentRef: environmentRefSchema,
     inputTree: hashSchema,
     exitCode: z.number().int().optional(),
     outputRef: idSchema,
@@ -457,7 +458,7 @@ export const verificationManifestSchema = z.strictObject({
   readLedgerSeq: nonNegativeIntSchema,
   readLedgerHash: hashSchema,
   configHash: hashSchema,
-  environmentRef: idSchema,
+  environmentRef: environmentRefSchema,
   acceptanceIds: list(z.string().min(1)),
 });
 export type VerificationManifest = z.infer<typeof verificationManifestSchema>;
