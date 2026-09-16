@@ -25,9 +25,10 @@ const exec = promisify(execFile);
 /**
  * AC-048 evidence: the doctor probe must report the real environment.
  *
- * These assertions run against this machine, so they intentionally fail when a
- * required capability is missing — that failure is the product behaviour the
- * acceptance case asks for ("缺环境拒绝").
+ * Host-first revision: Docker is an optional capability, so its absence is *reported* and
+ * never denies readiness. The blockers that still fail readiness are the ones an Attempt
+ * really needs — node/pnpm/git/Pi SDK, writable directories, a private installation
+ * credential — and they are asserted here against this machine.
  */
 const repoRoot = repoRootFrom(import.meta.url);
 let dataDir: string;
@@ -104,18 +105,22 @@ describe('doctor report', () => {
     expect(report.executionReady).toBe(true);
   });
 
-  it('refuses readiness when the execution image is absent', async () => {
+  it('reports a missing execution image without failing readiness (Docker is optional)', async () => {
+    // Host-first model (`docs/architecture/execution.md` §1): the coding path runs on the
+    // host, so an absent image is a *reported capability*, not a blocker.
     const report = await buildDoctorReport({
       startDir: repoRoot,
       dataDir,
       ports: [],
       imageTag: `${EXEC_IMAGE}-definitely-missing`,
     });
-    expect(report.executionReady).toBe(false);
-    expect(report.blockers.some((entry) => entry.includes('definitely-missing'))).toBe(true);
+    expect(report.docker.status).not.toBe('ok');
+    expect(report.docker.imageTag).toContain('definitely-missing');
+    expect(report.blockers.some((entry) => entry.includes('definitely-missing'))).toBe(false);
+    expect(report.executionReady).toBe(true);
   });
 
-  it('refuses an image that carries the tag but not the execution contract', async () => {
+  it('reports an image that carries the tag but not the execution contract without blocking readiness', async () => {
     const tag = 'agentdev/exec:doctor-negative';
     // `docker import` produces a runnable image with no node, no bash and no
     // non-root user: exactly the case a tag-only check would accept.
@@ -133,8 +138,12 @@ describe('doctor report', () => {
         imageTag: tag,
       });
       expect(report.docker.imageId).toBeDefined();
+      // The real capability gap is still reported honestly; it just does not deny the host
+      // coding path its readiness.
       expect(report.docker.status).toBe('mismatch');
-      expect(report.executionReady).toBe(false);
+      expect(report.docker.detail).toContain('execution probe');
+      expect(report.blockers.some((entry) => entry.includes(tag))).toBe(false);
+      expect(report.executionReady).toBe(true);
     } finally {
       await exec('docker', ['rmi', '--force', tag], { timeout: 60_000 }).catch(() => undefined);
     }

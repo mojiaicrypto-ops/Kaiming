@@ -1,22 +1,16 @@
 /**
- * The environment-operation approval loop **with a real `apps/runner` child** (`AC-049`, `AC-080`).
+ * In-envelope shell execution **with a real `apps/runner` child** (`AC-049`, `AC-080`).
  *
- * `protocol.md` §4: an operation the user must authorize is refused (`NOT_AUTHORIZED`), the
- * Runner records a permission request, the user approves it in the Inbox, and the model
- * **retries the same call**, which then really executes. The protocol layer covered that loop
- * (`tool-permission.integration.test.ts`) but the child-process half could not land: the
- * retry was refused again, the Run parked in `waiting_permission`, and the Runner then ended
- * its turn without delivering — so the daemon side saw no further `tool_end` and the drill
- * timed out (WP-12 R7).
+ * Host-first model (`docs/architecture/execution.md` §1/§2): the Chief's derived
+ * authorization carries `bash`, so the Attempt start mints a run-scope shell Grant and the
+ * model's shell calls run **unprompted** — no permission Decision is recorded, the Run never
+ * parks in `waiting_permission`, and the real child still records its `tool_end`. The drill
+ * also keeps the ledger binding exact: replaying a recorded operation id with different
+ * arguments is `IDEMPOTENCY_CONFLICT` (`AC-080`).
  *
- * Two real defects were behind that, both fixed in this round:
- *
- * - the Runner derived `toolOperationId` from the SDK **tool-call id**, and a retry is a new
- *   tool call with a new id: the approved `once` Grant (bound to the first id and its
- *   `inputHash`) could never admit it (`apps/runner/src/tool-client.ts`);
- * - a Runner that ended a turn without delivering exited, so Core's one corrective prompt
- *   (`protocol.md` §6) reached a dead pipe (`apps/runner/src/attempt.ts` +
- *   `packages/core/src/supervisor.ts`).
+ * `permission.request`/`permission.respond` remain available for the irreversible operations
+ * and are covered at the protocol layer (`tool-permission.integration.test.ts`); this drill
+ * is the child-process half of the ordinary coding path.
  *
  * The only stub is the Provider (scripted `tool_calls`); the Runner, endpoint, Broker, Grant
  * store, tool handler and Task rows are real. Requires `pnpm build` first: the child runs the
@@ -161,7 +155,7 @@ async function waitFor<T>(
   }
 }
 
-describe('environment-operation approval with a real Runner child (AC-049/AC-080)', () => {
+describe('in-envelope shell execution with a real Runner child (AC-049/AC-080)', () => {
   let home: string;
   let repo: string;
   let opened: OpenedProject;
@@ -206,7 +200,7 @@ describe('environment-operation approval with a real Runner child (AC-049/AC-080
     rmSync(repo, { recursive: true, force: true });
   });
 
-  it('refuses, records the request, and really executes the model retry after the user approves (AC-049/AC-080)', async () => {
+  it('runs the envelope shell unprompted with a real child and keeps the ledger binding exact (AC-049/AC-080)', async () => {
     opened = await openProject({
       root: repo,
       home,
@@ -282,24 +276,21 @@ describe('environment-operation approval with a real Runner child (AC-049/AC-080
         const command = 'echo approved-by-the-user';
         if (turn === 0) return { toolCalls: [{ name: 'bash', args: { command } }] };
         if (turn === 1) {
-          // The retry the model makes after Core told it a decision was recorded. It waits for
-          // the drill's approval so the ordering is deterministic.
+          // A second, deliberately different call. It waits for the drill so the ordering is
+          // deterministic: the drill checks the first call's unprompted execution first.
           return {
             await: () => approvalGate,
-            then: { toolCalls: [{ name: 'bash', args: { command } }] },
+            then: { toolCalls: [{ name: 'bash', args: { command: 'echo something-else' } }] },
           };
         }
         if (turn === 2) {
-          return { toolCalls: [{ name: 'bash', args: { command: 'echo something-else' } }] };
-        }
-        if (turn === 3) {
           return {
             toolCalls: [
               {
                 name: 'stage_yield',
                 args: {
                   status: 'success',
-                  summary: 'the approved environment operation ran',
+                  summary: 'the envelope shell operations ran without a permission prompt',
                   artifactRefs: [],
                   evidenceRefs: [],
                   changedPaths: [],
@@ -463,8 +454,14 @@ describe('environment-operation approval with a real Runner child (AC-049/AC-080
           .list({ where: 'work_id = ?', params: [workId] })
           .map((decision) => `${decision.kind}:${decision.state}`)
           .join(',')}`,
+        `auths=${opened.store.authorizations
+          .list({ where: 'work_id = ?', params: [workId] })
+          .map((entry) => entry.operations.join('+'))
+          .join(',')}`,
         `logs=${logs
-          .filter((line) => /tool|permission|attempt\.result|interrupt|parked/.test(line))
+          .filter((line) =>
+            /tool|permission|attempt\.result|interrupt|parked|grant|run grants|starting/.test(line),
+          )
           .slice(-14)
           .join(' || ')}`,
       ].join('\n');
@@ -552,59 +549,49 @@ describe('environment-operation approval with a real Runner child (AC-049/AC-080
         .find((run) => run.status !== 'cancelled');
     }, `the professional Run\n${diagnose()}`);
 
-    // The environment operation was refused and a decision was recorded: approve it with the
-    // real service, then let the model retry the same call.
-    const decision = await waitFor(
-      () =>
-        opened.store.decisions
-          .list({ where: 'work_id = ?', params: [workId] })
-          .find((row) => row.kind === 'permission' && row.state === 'pending'),
-      'the pending permission Decision',
+    // Host-first model (`execution.md` §1/§2): the derived envelope carries `bash`, so the
+    // Attempt start mints a run-scope shell Grant and the model's shell call runs
+    // **unprompted**. There is no pending permission Decision and the Run never parks.
+    const shellGrant = await waitFor(
+      () => {
+        // The supervisor's own interval is `unref()`ed; this test process has no other
+        // handles, so one nudge per poll keeps the real scheduler running.
+        execution.supervisor.tick();
+        return opened.store.grants
+          .list({ where: 'run_id = ?', params: [backendRun.id] })
+          .find((grant) => grant.operation === 'bash' && grant.scope === 'run');
+      },
+      `the run-scope shell Grant\n${diagnose()}`,
       20_000,
     );
-    const operation = opened.store.toolOperations.list({
-      where: 'run_id = ?',
-      params: [backendRun.id],
-    })[0];
-    // The refusal must not stall the child: the tool call finished and the session moved on.
-    //
-    // The pending Decision is *not* the signal that the refused call finished: Core
-    // records it inside `permission.request` (`permissions.ts` `requestPermission`), which
-    // the Runner posts from `tool-client.ts` **before** its `execute` promise resolves —
-    // only after that does the SDK emit `tool_end` (`attempt.ts` `emit`), and the line
-    // still has to travel through the child's stdout into this process. The daemon row
-    // therefore always exists first, and asserting the IPC line here without waiting is a
-    // race that this file lost under load (WP-12 Test `test.md` §4.6). Wait for the event
-    // itself, bounded, and keep the assertion: a genuinely stalled child never emits it.
+    expect(shellGrant.decisionId).toBeDefined();
+
+    // The first call really executed through the real child, with no user decision anywhere.
     await waitFor(
       () =>
         runnerIpc.some((line) => line.includes('event=tool_end tool=bash')) ? true : undefined,
       () =>
-        `the refused bash call's tool_end on the Runner IPC stream\n${runnerIpc
+        `the unprompted bash call's tool_end on the Runner IPC stream\n${runnerIpc
           .filter((line) => /attempt\.event|tool/.test(line))
           .slice(-12)
           .join('\n')}`,
       30_000,
     );
     expect(runnerIpc.some((line) => line.includes('event=tool_end tool=bash'))).toBe(true);
-    expect(operation?.state).toBe('prepared');
-    expect(operation?.grantId).toBeUndefined();
-    const approvedEnv = execution.grantService.approvePermission({
-      decisionId: decision.id,
-      operation: 'bash',
-      runId: backendRun.id,
-      role: 'backend',
-      stage: backendRun.stage,
-      targets: [],
-      toolOperationId: operation?.id ?? '',
-      inputHash: operation?.inputHash ?? '',
-      expiresAt: new Date(Date.now() + 600_000).toISOString(),
-      scope: 'once',
-      limits: { maxCalls: 1 },
-    });
-    expect(approvedEnv.state).toBe('accepted');
-    expect(approvedEnv.grant?.scope).toBe('once');
-    expect(approvedEnv.runStatus).toBe('running');
+    expect(
+      opened.store.decisions
+        .list({ where: 'work_id = ?', params: [workId] })
+        .filter((row) => row.kind === 'permission'),
+    ).toHaveLength(0);
+    expect(backendRun.status).not.toBe('waiting_permission');
+    // The refusal that used to record the request is gone too: the call was admitted.
+    expect(
+      opened.store.events
+        .readAfter(0, { limit: 10_000 })
+        .filter((event) => event.name === 'tool.refused').length,
+    ).toBe(0);
+
+    // Let the second envelope call run.
     resolveApprovalGate();
 
     const stageRow = await waitFor(
@@ -633,21 +620,24 @@ describe('environment-operation approval with a real Runner child (AC-049/AC-080
       return undefined;
     });
     expect(stageRow?.status).toBe('success');
-    // The approved retry really ran: one finished operation carrying the approved Grant.
+    // Both envelope calls really ran, each through the run-scope shell Grant and with its own
+    // real output reference — no user decision was involved at any point.
     const executed = opened.store.toolOperations.list({
       where: 'run_id = ?',
       params: [backendRun.id],
     });
-    expect(executed).toHaveLength(1);
-    expect(executed[0]?.state).toBe('finished');
-    expect(executed[0]?.grantId).toBe(approvedEnv.grant?.id);
-    // The Broker recorded the run's own output reference and the finish time, i.e. the
-    // command really ran (the row never carries the stdout itself).
-    expect(executed[0]?.resultRef).toBeDefined();
-    expect(executed[0]?.finishedAt).toBeDefined();
+    expect(executed).toHaveLength(2);
+    for (const row of executed) {
+      expect(row.state).toBe('finished');
+      expect(row.grantId).toBe(shellGrant.id);
+      expect(row.resultRef).toBeDefined();
+      expect(row.finishedAt).toBeDefined();
+    }
+    expect(opened.store.grants.find(shellGrant.id)?.consumedAt).toBeUndefined();
 
-    // The binding is exact on the same endpoint, store and Broker: the same operation id
-    // with different arguments is refused and never reuses the consumed `once` Grant.
+    // The ledger binding is still exact on the same endpoint, store and Broker: the same
+    // operation id with different arguments is refused, so a recorded call cannot be
+    // re-pointed at another command (`reliability.md` §2).
     const direct = createToolHandler({
       store: opened.store,
       broker: execution.broker,
@@ -680,6 +670,6 @@ describe('environment-operation approval with a real Runner child (AC-049/AC-080
     ).rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
     expect(
       opened.store.toolOperations.list({ where: 'run_id = ?', params: [backendRun.id] }),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
   }, 120_000);
 });

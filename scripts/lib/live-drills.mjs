@@ -2289,8 +2289,14 @@ export async function runMessageToStageDrill({ harness, product }) {
       'the Test check names no execution environment',
     );
     ensure(
-      typeof executedCheck?.result === 'string' && executedCheck.result.includes('image='),
-      `the Test check does not record the image the command ran in: ${String(executedCheck?.result)}`,
+      // Host-first model (`execution.md` §1/§5, `data.md` §3 `Env`): the check records the
+      // **environment** the command really ran in. The default path is the host, so the
+      // container-image fact only appears when the optional container environment is used;
+      // the mode fact and the Runner descriptor are what identify the environment.
+      typeof executedCheck?.result === 'string' &&
+        executedCheck.result.includes('mode=') &&
+        executedCheck.result.includes('runner='),
+      `the Test check does not record the environment the command ran in: ${String(executedCheck?.result)}`,
     );
     const executedEvents = store.events
       .readAfter(0, { limit: 20_000 })

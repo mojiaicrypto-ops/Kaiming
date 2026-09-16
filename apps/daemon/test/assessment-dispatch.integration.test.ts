@@ -636,10 +636,16 @@ describe('message → Chief → DispatchSpec → Requirement → Run → stage r
     expect(authorization?.sourceRef.id).toBe(sent.messageId);
     // `artifact_write` joins the derived envelope because the Plan/Product stages deliver
     // their documents through `artifact_write` (Core's `ArtifactService`, not the source
-    // tree): without it the L2 route could not store a Plan at all (WP-12 W4b). It is not an
-    // environment operation, so the assertions that matter are unchanged.
-    expect(authorization?.operations).toEqual(['read', 'edit', 'write', 'artifact_write']);
-    expect(authorization?.operations).not.toContain('bash');
+    // tree): without it the L2 route could not store a Plan at all (WP-12 W4b). `bash`,
+    // `network` and `secret` join it too: they are the envelope's ordinary execution surface
+    // under the host-first model (`execution.md` §2), so a Run builds/tests without a fresh
+    // user decision. The irreversible operations stay out.
+    expect([...(authorization?.operations ?? [])].sort()).toEqual(
+      ['read', 'edit', 'write', 'artifact_write', 'git', 'bash', 'network', 'secret'].sort(),
+    );
+    for (const irreversible of ['push', 'deploy', 'delete_data']) {
+      expect(authorization?.operations).not.toContain(irreversible);
+    }
 
     const requirement = await waitFor(
       () => store.requirements.list({ where: 'work_id = ?', params: [sent.workId] })[0],

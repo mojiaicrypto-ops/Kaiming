@@ -447,15 +447,18 @@ describe('daemon tool handler', () => {
     ).toThrowError(/review runs do not hold the bash tool/);
   });
 
-  it('pins Review calls to the container even under a host policy (AC-050)', async () => {
-    // No Docker: the documented outcome is a refusal, never a host-side fallback for an
-    // independent verification role.
+  it('runs Review on the host under a host policy — independence is the toolset and the path boundary (AC-050)', async () => {
+    // `agents.md` §1 / `execution.md` §1: Review independence comes from a distinct Run,
+    // Session, frozen input and tool set, not from a container mount. Docker being
+    // unavailable must not deny the independent role its read path.
     const noDocker = createToolHandler({
       store,
       broker: new Broker({
         store,
         grants,
+        now: () => new Date(clock).toISOString(),
         docker: () => ({ available: false, reason: 'docker daemon is not reachable' }),
+        resolver: { resolve: () => Promise.resolve({ ok: false, reason: 'no network in tests' }) },
       }),
       artifacts: new ArtifactService({ store, blobs: store.blobs }),
       grantService: new ToolGrantService({
@@ -466,14 +469,40 @@ describe('daemon tool handler', () => {
       mode: 'host',
       now: () => new Date(clock).toISOString(),
     });
+    const reviewCaller = {
+      runId: RUN_REVIEW,
+      attemptId: ATTEMPT_REVIEW,
+      epoch: 1,
+      role: 'review' as const,
+    };
+    const granted = grants.issue({
+      workId: WORK_ID,
+      role: 'review',
+      stage: 'review',
+      scope: 'run',
+      operation: 'read',
+      targets: [A],
+      runId: RUN_REVIEW,
+      decisionId: DECISION_ID,
+      expiresAt: new Date(clock + 3_600_000).toISOString(),
+    });
+    expect(granted.ok).toBe(true);
+    const read = await noDocker.execute({
+      caller: reviewCaller,
+      request: request('read', { path: A }),
+    });
+    // Host execution, exactly like a developer role, with no Docker in the picture.
+    expect(read.mode).toBe('host');
+    expect(read.operation).toBe('read');
+
+    // The independent role still cannot modify the source tree: its tool set refuses the
+    // write before any Grant is consulted.
     await expect(
       noDocker.execute({
-        caller: { runId: RUN_REVIEW, attemptId: ATTEMPT_REVIEW, epoch: 1, role: 'review' },
-        request: request('read', { path: A }),
+        caller: reviewCaller,
+        request: request('write', { path: A, content: 'review must not write\n' }),
       }),
-    ).rejects.toMatchObject({ code: 'PROVIDER_UNAVAILABLE' });
-    // The host-mode path for a developer role is covered by the first case of this suite
-    // (`mode` is reported as `host` there); this case is about the Review pinning only.
+    ).rejects.toMatchObject({ code: 'NOT_AUTHORIZED' });
   });
 
   it('records the read in the Attempt ledger and returns its binding (AC-085)', async () => {
@@ -724,9 +753,11 @@ describe('daemon tool handler', () => {
     expect(refusals).not.toContain('s3cr3t-value');
   });
 
-  it('maps eachpermission policy onto the documented execution mode (execution.md §1)', () => {
-    expect(executionModeForPermissionMode('workspace')).toBe('container');
-    expect(executionModeForPermissionMode('autonomous')).toBe('container');
+  it('maps every permission policy onto host execution (execution.md §1)', () => {
+    // Host-first model: no permission mode selects the container. The container is an
+    // optional project run environment selected by an explicit stack mode, not by policy.
+    expect(executionModeForPermissionMode('workspace')).toBe('host');
+    expect(executionModeForPermissionMode('autonomous')).toBe('host');
     expect(executionModeForPermissionMode('full_access')).toBe('host');
   });
 

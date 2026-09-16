@@ -149,25 +149,43 @@ export function isKnownLockdownRiskTerm(flag: string): boolean {
 }
 
 /**
- * Operations with a side effect on a running environment, the network or data
- * (`workflow.md` §2.2).
+ * Operations whose effect on a running environment is **irreversible**
+ * (`workflow.md` §2.2/§2.3, `docs/architecture/execution.md` §2).
  *
  * The set lives here, next to the routing decision and the risk vocabulary, and is
  * derived from the contract's `operationNameSchema` so a new operation name is a
- * compile-time reminder to classify it. `git`, `edit` and `write` stay out because
- * they act on the local workspace (the `push` operation covers a remote write, which
- * is the environment-touching half of git); `artifact_write` stays out because it
- * only produces the Run's own Artifact (`execution.md` §21/§53); `read`/`search` are
- * read-only. Every one of the twelve contract operations is classified exactly once
- * (R17-05, guarded by the domain test).
+ * compile-time reminder to classify it. Under the host-first model `bash`, `git` and
+ * the network are ordinary development capabilities inside an approved envelope: a
+ * build, a test run, a dependency install or a request to a local service must not be
+ * forced onto the L3 route or onto a per-occurrence user decision. Only an effect that
+ * cannot be undone from the workspace — a remote push, a deployment/publish, a data
+ * deletion — is an environment operation here, and it is the same set
+ * `permissions.ts` `PERMISSION_OPERATIONS` approves per occurrence.
+ *
+ * `read`/`search` are read-only; `edit`/`write`/`artifact_write` act on the local
+ * workspace; `bash`/`network`/`secret` are the envelope's ordinary execution surface
+ * ({@link ENVELOPE_OPERATIONS}). Every one of the twelve contract operations is
+ * classified exactly once (R17-05, guarded by the domain test).
  */
 export const ENVIRONMENT_OPERATIONS = [
-  'bash',
-  'network',
-  'secret',
   'push',
   'deploy',
   'delete_data',
+] as const satisfies readonly OperationName[];
+
+/**
+ * The shell/network/secret operations an approved envelope grants directly.
+ *
+ * `execution.md` §2 names `bash` (builds, tests, dependency installs, local and public
+ * network access) as part of the Plan-time envelope, so these run unprompted inside
+ * the path boundary; the two fixed network denials and the hard-refusal list stay.
+ * The set is explicit (rather than "everything the environment set does not name") so
+ * a new operation name still forces a deliberate classification.
+ */
+export const ENVELOPE_OPERATIONS = [
+  'bash',
+  'network',
+  'secret',
 ] as const satisfies readonly OperationName[];
 
 const ENVIRONMENT_OPERATION_SET: ReadonlySet<string> = new Set(ENVIRONMENT_OPERATIONS);

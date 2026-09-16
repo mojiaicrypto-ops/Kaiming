@@ -597,13 +597,14 @@ export async function createProjectExecution(
    *
    * The commands come from the **project configuration** (`policy.testCommands`, the
    * documented `ConfigPatch` field) — never from the model or the dispatch — and run
-   * through {@link Broker.runDeclaredTestCommand}, which pins them to the isolated
-   * container, the read-only workspace mount, the `--network none` boundary and the
-   * controlled egress channel. Every real exit code is captured with bounded
-   * stdout/stderr, one `evidence` artifact is stored per command, and the resulting
-   * `CheckResult` is what `StageGate` binds to the stage result: an unconfigured
-   * project is `not_covered`, a failed command is `failed`, a refused/blocked execution
-   * is `blocked`, and only every-command-exited-0 is `passed`.
+   * through {@link Broker.runDeclaredTestCommand} in the frozen work directory. Under the
+   * host-first model (`execution.md` §1/§5) that is the **host** by default; a stack
+   * explicitly assembled with the optional container run environment runs them in it, with
+   * the container hardening and the controlled egress channel. Every real exit code is
+   * captured with bounded stdout/stderr, one `evidence` artifact is stored per command, and
+   * the resulting `CheckResult` is what `StageGate` binds to the stage result: an
+   * unconfigured project is `not_covered`, a failed command is `failed`, a refused/blocked
+   * execution is `blocked`, and only every-command-exited-0 is `passed`.
    */
   async function executeTestEvidence(runId: string, attemptId: string): Promise<void> {
     const run = options.store.runs.find(runId);
@@ -626,7 +627,12 @@ export async function createProjectExecution(
     // whose supervisor reports nothing (the candidate commit then refuses to freeze a
     // manifest, so the check cannot silently stand in for a verification environment).
     const environmentRef = runnerEnvironment ?? attemptId;
-    const executionImage = broker.execImageTag;
+    // `data.md` §3 `Env`: the evidence records the environment the command **really ran in**.
+    // Default host execution has no container image, so the image is only a fact of the
+    // explicit container run environment; the host path carries the host descriptor and the
+    // mode instead.
+    const testCommandMode = options.broker?.mode ?? 'host';
+    const executionImage = testCommandMode === 'container' ? broker.execImageTag : undefined;
     const inputTree = frozenInputTree(run.taskId);
     const workspace = options.workspace;
     const artifacts = options.artifacts;
@@ -639,7 +645,8 @@ export async function createProjectExecution(
           buildTestCheckResult({
             executions: [],
             environmentRef,
-            executionImage,
+            executionMode: testCommandMode,
+            ...(executionImage === undefined ? {} : { executionImage }),
             ...(runnerEnvironment === undefined ? {} : { runnerEnvironment }),
             inputTree,
             acceptanceIds,
@@ -692,6 +699,10 @@ export async function createProjectExecution(
           stage: run.stage,
           command,
           roots: [root],
+          // `execution.md` §5: the commands run in the frozen work directory on the host by
+          // default; a stack explicitly assembled with the optional container run environment
+          // runs them there (`mode: 'container'`). No Docker never blocks the default path.
+          mode: options.broker?.mode ?? 'host',
           timeoutMs: TEST_COMMAND_TIMEOUT_MS,
         });
         if (!outcome.ok) {
@@ -723,8 +734,11 @@ export async function createProjectExecution(
           bytes: Buffer.from(
             [
               `$ ${command}`,
-              `image ${executionImage}`,
+              // `data.md` §3 `Env`: the environment the command really ran in. The host path
+              // names the host descriptor; only the container path names an image.
               ...(runnerEnvironment === undefined ? [] : [`runner ${runnerEnvironment}`]),
+              ...(executionImage === undefined ? [] : [`image ${executionImage}`]),
+              `mode ${testCommandMode}`,
               `exit ${String(outcome.result.status)}${outcome.result.signal === null ? '' : ` signal=${outcome.result.signal}`} in ${String(outcome.durationMs)}ms`,
               boundTestOutput(outcome.result.stdout),
               boundTestOutput(outcome.result.stderr),
@@ -737,7 +751,8 @@ export async function createProjectExecution(
       const checkResult = buildTestCheckResult({
         executions,
         environmentRef,
-        executionImage,
+        executionMode: testCommandMode,
+        ...(executionImage === undefined ? {} : { executionImage }),
         ...(runnerEnvironment === undefined ? {} : { runnerEnvironment }),
         inputTree,
         acceptanceIds,

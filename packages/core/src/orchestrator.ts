@@ -258,10 +258,13 @@ function levelRank(level: string): number {
 /**
  * Operations a derived authorization may contain (`WP-12` user decision Q1=B).
  *
- * A natural-language execution instruction authorizes *file* work: reading, searching and
- * editing the project. `bash`, `network`, `secret`, `push`, `deploy` and `delete_data` are
- * environment operations; they still require the explicit path (`workflow.md` §2.2/§2.3,
- * AC-011/AC-080), so derivation never produces them.
+ * A natural-language execution instruction authorizes a **coding envelope**: reading,
+ * searching and editing the project, running the shell/git the work needs (builds, tests,
+ * dependency installs) and reaching the network from inside the path boundary. Under the
+ * host-first model (`docs/architecture/execution.md` §1/§2) those are ordinary
+ * capabilities, not environment operations that need a fresh user decision; only the
+ * irreversible operations (`push`, `deploy`, `delete_data`) still require the explicit
+ * path (`workflow.md` §2.2/§2.3, AC-011/AC-080), so derivation never produces them.
  */
 export const DERIVABLE_OPERATIONS: readonly OperationName[] = [
   'read',
@@ -269,6 +272,9 @@ export const DERIVABLE_OPERATIONS: readonly OperationName[] = [
   'edit',
   'write',
   'git',
+  'bash',
+  'network',
+  'secret',
   // `artifact_write` is not a source change: it stores the Run's own report/Plan artifact
   // through Core's `ArtifactService` (`execution.md` §2), which every role holds
   // (`agents.md` §1). Without it a derived authorization could not carry the Plan document
@@ -277,15 +283,14 @@ export const DERIVABLE_OPERATIONS: readonly OperationName[] = [
   'artifact_write',
 ];
 
-/** Operations that always need an explicit authorization, never a derived one. */
-export const ENVIRONMENT_OPERATIONS: readonly OperationName[] = [
-  'bash',
-  'network',
-  'secret',
-  'push',
-  'deploy',
-  'delete_data',
-];
+/**
+ * Operations that always need an explicit authorization, never a derived one.
+ *
+ * `docs/architecture/execution.md` §2: exactly the irreversible ones. A derived envelope
+ * may carry `bash`/`network`/`secret` inside the project root; it may never carry a remote
+ * push, a deployment or a data deletion.
+ */
+export const ENVIRONMENT_OPERATIONS: readonly OperationName[] = ['push', 'deploy', 'delete_data'];
 
 /**
  * Rejects a scope that a derived authorization may not carry.
@@ -399,6 +404,17 @@ function operationsForPaths(scope: Scope, allowed: readonly OperationName[]): Op
   // `operation artifact_write is outside the Work scope` (WP-12 W4b).
   if ((scope.readPaths.length > 0 || scope.writePaths.length > 0) && wants('artifact_write')) {
     operations.push('artifact_write');
+  }
+  // The envelope's execution surface (`execution.md` §2): a coding Work builds, tests and
+  // installs dependencies, which is the `bash`/`git` operation, and may reach public or
+  // local network targets. Without these in the derived envelope `ensureRunGrants` could not
+  // mint the matching run Grant, so the Developer Run would be refused the first `bash` and
+  // the host-first coding path would still dead-end (the over-engineered isolation this
+  // revision removes).
+  if (scope.writePaths.length > 0) {
+    for (const operation of ['git', 'bash', 'network', 'secret'] as const) {
+      if (wants(operation)) operations.push(operation);
+    }
   }
   return operations;
 }
@@ -599,9 +615,10 @@ export class Orchestrator {
    * `PRODUCT.md` §5 makes an explicit natural-language execution instruction equivalent to a
    * button grant, so when the Work holds no authorization yet Core derives one from the
    * assessment's own scope and records it with the message as its source. The derivation is
-   * deliberately narrow (`assertDerivableScope`): file operations only, inside the project
-   * root, plus the test commands the project already configured. Everything else still needs
-   * the explicit path and the L3 gate stays authoritative.
+   * bounded (`assertDerivableScope`): a coding envelope inside the project root — file work
+   * plus the shell/network/secret operations that work needs — while the irreversible
+   * operations (`push`/`deploy`/`delete_data`) and explicit network targets still need the
+   * explicit path, and the L3 gate stays authoritative.
    *
    * The professional spec is a *draft*: `workId`, `profileRevision` and `budgetAllocation`
    * are Core's (`data.md` §3 "ProfessionalDispatchSpec仅由Core根据…构建"), so they are
@@ -1017,11 +1034,10 @@ export class Orchestrator {
   /**
    * The operations a derived authorization may carry for this project.
    *
-   * File work only. The project's configured test commands
-   * (`config.ts` `policy.testCommands`) are deliberately *not* turned into an operation
-   * here: running a command is the `bash` operation, which this derivation never grants
-   * (`workflow.md` §2.2/§2.3). A test command is exercised by the Test role under its own
-   * grant, which is the explicit path the user decision preserves.
+   * The coding envelope (`docs/architecture/execution.md` §2): file work plus the
+   * shell/git/network/secret operations the work needs. The irreversible operations
+   * (`push`/`deploy`/`delete_data`) are never derived, and an explicit network target is
+   * still refused (`assertDerivableScope`).
    */
   derivableOperations(): readonly OperationName[] {
     return [...DERIVABLE_OPERATIONS];

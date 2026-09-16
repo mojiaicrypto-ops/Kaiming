@@ -64,27 +64,31 @@ export const RUN_FILE_OPERATIONS: readonly string[] = [
 ];
 
 /**
- * Operations that always require a per-occurrence user decision (T3 Q-T3-3).
+ * The shell/git/network/secret operations an approved envelope grants directly
+ * (`docs/architecture/execution.md` §2).
  *
+ * Under the host-first model a coding Run builds, tests, installs dependencies and reaches
+ * public or local network targets inside its path boundary without a fresh user decision.
+ * `ensureRunGrants` therefore mints a run-scope Grant for each of these the Work's envelope
+ * carries, exactly as it does for the file operations; the path boundary, the hard-refusal
+ * list and the audit remain the guardrails, not a per-occurrence prompt.
+ */
+export const RUN_ENVELOPE_OPERATIONS: readonly string[] = ['bash', 'git', 'network', 'secret'];
+
+/**
+ * Operations that always require a per-occurrence user decision.
+ *
+ * Only the **irreversible** effects reach a user: pushing the delivery branch to a remote,
+ * deploying/publishing, deleting data (`docs/architecture/execution.md` §2,
+ * `workflow.md` §1). `bash`, `network` and `secret` used to be listed here; they are now
+ * part of the approved envelope (`RUN_ENVELOPE_OPERATIONS`) and run unprompted inside it.
  * File read/write is covered by the Run's Grant, which is derived from the approved
- * Plan/authorization; these operations reach outside the repository (a shell, a network
- * target, a secret, a publish, a deployment, a data deletion), so each occurrence needs
- * its own approval. `git` is absent because the tool exposes read-only subcommands only
+ * Plan/authorization. `git` is absent because the tool exposes read-only subcommands only
  * (`execution.md` §7) and its delivery-ref half belongs to the Workspace service.
  *
- * The set mirrors `orchestrator.ts`'s derived-authorization `ENVIRONMENT_OPERATIONS`
- * exactly. It is restated here rather than imported so this module's policy does not
- * depend on a file another lane holds open; consolidating the two constants is a
- * follow-up for the assembly step.
+ * The set mirrors `orchestrator.ts`/`domain/routing.ts`'s `ENVIRONMENT_OPERATIONS` exactly.
  */
-export const PERMISSION_OPERATIONS: readonly string[] = [
-  'bash',
-  'network',
-  'secret',
-  'push',
-  'deploy',
-  'delete_data',
-];
+export const PERMISSION_OPERATIONS: readonly string[] = ['push', 'deploy', 'delete_data'];
 
 /** Whether an operation must be approved per occurrence rather than by the run Grant. */
 export function requiresPerOccurrenceApproval(operation: string): boolean {
@@ -201,17 +205,50 @@ export class ToolGrantService {
       };
     }
     const current = this.grants.currentRunGrants(input.runId);
+    const envelope = this.authorizedOperations(work.id, work.scope.operations);
     const minted: Grant[] = [];
     let created = 0;
     let existing = 0;
     let reason: string | undefined;
     for (const operation of RUN_FILE_OPERATIONS) {
+      if (!envelope.has(operation)) continue;
       const targets = operation === 'read' || operation === 'search' ? paths.all : paths.write;
       if (targets.length === 0) continue;
       if (current.some((grant) => grant.operation === operation && grant.role === input.role)) {
         existing += 1;
         continue;
       }
+      const outcome = this.grants.issue({
+        workId: work.id,
+        role: input.role,
+        stage: input.stage,
+        scope: 'run',
+        operation,
+        targets,
+        runId: input.runId,
+        decisionId,
+        expiresAt: input.expiresAt,
+        limits: input.limits ?? {},
+      });
+      if (outcome.ok) {
+        minted.push(outcome.grant);
+        created += 1;
+      } else if (reason === undefined) {
+        reason = `${outcome.code}: ${outcome.reason}`;
+      }
+    }
+    // `execution.md` §2: the approved envelope's execution surface is granted directly.
+    // A `bash`/`git` call carries no path targets of its own, so the Grant is scoped to the
+    // Work's authorized paths (which the path boundary and the audit still name); the
+    // network/secret halves are non-path operations and carry none.
+    for (const operation of RUN_ENVELOPE_OPERATIONS) {
+      if (!envelope.has(operation)) continue;
+      if (current.some((grant) => grant.operation === operation && grant.role === input.role)) {
+        existing += 1;
+        continue;
+      }
+      const targets =
+        operation === 'bash' || operation === 'git' ? [...paths.all] : ([] as readonly string[]);
       const outcome = this.grants.issue({
         workId: work.id,
         role: input.role,
@@ -268,6 +305,26 @@ export class ToolGrantService {
       for (const path of authorization.scope.writePaths) write.add(path);
     }
     return { all: [...new Set([...read, ...write])], write: [...write] };
+  }
+
+  /**
+   * The operations the Work's envelope carries: its own scope plus every non-revoked
+   * authorization row (the same union `GrantStore.workScope` validates issuance against).
+   *
+   * The run-scope Grant loop reads it so a Grant is only attempted for an operation the
+   * envelope really holds — attempting the others would report a refusal reason for an
+   * operation nobody asked for.
+   */
+  private authorizedOperations(workId: string, declared: readonly string[]): ReadonlySet<string> {
+    const operations = new Set<string>(declared);
+    for (const authorization of this.store.authorizations.list({
+      where: 'work_id = ?',
+      params: [workId],
+    })) {
+      if (authorization.revokedAt !== undefined) continue;
+      for (const operation of authorization.operations) operations.add(operation);
+    }
+    return operations;
   }
 
   /**

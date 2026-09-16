@@ -398,14 +398,31 @@ function grantedByMessage(
   if (!routing.explicitAuthorization) return undefined;
   const writes = routing.items.flatMap((item) => item.writePaths);
   if (writes.length === 0) return undefined;
+  // `execution.md` §2: the approved envelope is "paths + operations", and the operations are
+  // the coding surface — file work plus the shell/git/network/secret such work needs. A
+  // message that names a target therefore grants the same envelope the Chief's derived
+  // authorization does; a read/edit-only envelope would leave the host-first coding path
+  // refused its first `bash` (the over-engineered isolation this revision removes). The
+  // irreversible operations (`push`/`deploy`/`delete_data`) are never part of it.
+  const operations: readonly OperationName[] = [
+    'read',
+    'search',
+    'edit',
+    'write',
+    'git',
+    'bash',
+    'network',
+    'secret',
+    'artifact_write',
+  ];
   return {
     scope: {
       readPaths: [...new Set(writes)],
       writePaths: writes,
-      operations: ['read', 'edit'],
+      operations: [...operations],
       networkTargets: [],
     },
-    operations: ['read', 'edit'],
+    operations: [...operations],
   };
 }
 
@@ -419,17 +436,20 @@ function assertGrantWithinMessage(
     ...granted.scope.writePaths.filter((path) => !named.has(path)),
     ...granted.scope.readPaths.filter((path) => !named.has(path)),
   ];
-  const environment = granted.scope.operations.some((operation) =>
-    ['bash', 'network', 'secret', 'push', 'deploy', 'delete_data'].includes(operation),
+  // Host-first revision: only the **irreversible** operations are outside what a message can
+  // grant. The shell/network/secret surface is the ordinary coding envelope
+  // (`execution.md` §2), bounded by the path boundary, the hard-refusal list and the audit.
+  const irreversible = granted.scope.operations.filter((operation) =>
+    ['push', 'deploy', 'delete_data'].includes(operation),
   );
-  if (outside.length > 0 || environment || granted.scope.networkTargets.length > 0) {
+  if (outside.length > 0 || irreversible.length > 0 || granted.scope.networkTargets.length > 0) {
     throw new ProtocolError(
       'NOT_AUTHORIZED',
       'the supplied authorization exceeds what the message named',
       {
         details: {
           outsideWritePaths: outside,
-          operations: [...granted.operations],
+          operations: [...irreversible],
         },
       },
     );

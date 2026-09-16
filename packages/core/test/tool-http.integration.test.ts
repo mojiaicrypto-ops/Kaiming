@@ -49,9 +49,10 @@ const A = 'src/a.ts';
 const SCOPE: Scope = {
   readPaths: [A],
   writePaths: [A],
-  // `bash` is deliberately **absent**: an environment operation may only be admitted after
-  // a user approval (`permission.request` → `respond`), which is what these cases prove.
-  operations: ['read', 'search', 'edit', 'write', 'artifact_write'],
+  // The approved coding envelope (`docs/architecture/execution.md` §2): the shell/git/network
+  // surface runs unprompted inside it. The irreversible operations (`push`/`deploy`/
+  // `delete_data`) stay outside and are the only ones `permission.request` still serves.
+  operations: ['read', 'search', 'edit', 'write', 'artifact_write', 'bash', 'git', 'network'],
   networkTargets: [],
 };
 
@@ -646,8 +647,12 @@ describe('tool.execute over the real control endpoint (T3.2)', () => {
     }
   });
 
-  it('admits an environment operation only after the real approval chain (AC-049/AC-080)', async () => {
-    // No approval: the Work envelope has no `bash`, so the Broker refuses and nothing runs.
+  it('runs an in-envelope shell with no permission prompt and keeps the once binding exact (AC-049/AC-080)', async () => {
+    // Host-first model (`execution.md` §1/§2): `bash` is part of the approved envelope, so
+    // the envelope's own run Grant admits it and no new `permission` Decision is created.
+    // Before the envelope Grant exists the call is refused, which is the boundary that
+    // remains.
+    const permissionDecisionsBefore = store.decisions.list({ where: "kind = 'permission'" }).length;
     const refused = await post(tokenFor('backend'), {
       toolName: 'bash',
       args: { command: 'printf hi' },
@@ -655,9 +660,11 @@ describe('tool.execute over the real control endpoint (T3.2)', () => {
     });
     expect(refused.status).toBe(401);
     expect(refused.body).toMatchObject({ error: { code: 'NOT_AUTHORIZED' } });
+    expect(store.decisions.list({ where: "kind = 'permission'" })).toHaveLength(
+      permissionDecisionsBefore,
+    );
 
-    // The user approves exactly this call through the real service, and the same call now runs.
-    approveBash();
+    issue('bash');
     const admitted = await post(tokenFor('backend'), {
       toolName: 'bash',
       args: { command: 'printf hi' },
@@ -666,18 +673,21 @@ describe('tool.execute over the real control endpoint (T3.2)', () => {
     });
     expect(admitted.status).toBe(200);
     expect((admitted.body['result'] as { stdout: string }).stdout).toBe('hi');
+    // Unprompted: no new decision, and the Run never parked in `waiting_permission`.
+    expect(store.decisions.list({ where: "kind = 'permission'" })).toHaveLength(
+      permissionDecisionsBefore,
+    );
+    expect(store.runs.find(RUN_ID)?.status).not.toBe('waiting_permission');
 
-    // The approval was for exactly this call: the same `once` Grant cannot admit a second,
-    // different `bash` invocation (its tool operation and input hash differ), so nothing runs.
+    // AC-080's binding still holds for the ledger: the same tool operation with a
+    // different input hash is a conflict, so an admitted call cannot be re-pointed.
     const second = await post(tokenFor('backend'), {
       toolName: 'bash',
       args: { command: 'printf different' },
-      toolOperationId: '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3db061',
+      toolOperationId: OP_ID,
     });
     expect(second.status).toBe(409);
     expect(second.body).toMatchObject({ error: { code: 'IDEMPOTENCY_CONFLICT' } });
-    // The refused call wrote no operation row: only the admitted call is in the ledger.
-    expect(store.toolOperations.list({ where: 'run_id = ?', params: [RUN_ID] })).toHaveLength(1);
   });
 
   it('rejects an oversized body without running anything', async () => {

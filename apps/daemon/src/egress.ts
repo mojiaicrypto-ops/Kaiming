@@ -1,6 +1,12 @@
 /**
  * The daemon's controlled-egress channel (WP-12 W6).
  *
+ * **Host-first revision**: this service is part of the **optional container run
+ * environment**, not of the default path. The default host execution uses the host network
+ * with the admission-layer guard and audit (`tool-handler.ts` literal-URL `NetworkPolicy`),
+ * and nothing here is started for it — {@link ensure} is the only entry point that binds the
+ * proxy or creates a container.
+ *
  * Two pieces, one policy:
  *
  * 1. {@link EgressProxy} — the Core-side HTTP proxy. It listens on loopback, applies
@@ -19,9 +25,10 @@
  * on macOS and Linux alike, and the sidecar reaches the daemon's loopback listener through
  * `host.docker.internal` — the documented container→host route.
  *
- * Failure is fail-closed in the direction that matters: if the sidecar cannot be started,
- * {@link available} stays `false`, the Broker refuses a network-covered call with
- * `PROVIDER_UNAVAILABLE`, and **no container is ever given an IP network**.
+ * Failure is fail-closed in the direction that matters: if the proxy cannot bind or the
+ * sidecar cannot be started, {@link available} stays `false`, the Broker refuses a
+ * network-covered container call with `PROVIDER_UNAVAILABLE`, and **no container is ever
+ * given an IP network**.
  */
 import { createHash } from 'node:crypto';
 
@@ -147,13 +154,26 @@ export class EgressService implements ContainerEgressChannel {
   }
 
   /**
-   * Starts the sidecar if it is not running, and reports whether the channel is usable.
+   * Starts the channel if it is not running, and reports whether it is usable.
    *
-   * Serialised: concurrent tool calls share one start attempt, so a burst of calls cannot
-   * race two `docker run` invocations for the same container name.
+   * Host-first revision: this is the **only** entry point that creates anything. The daemon
+   * no longer starts the proxy at boot, so the default host path opens no listener and no
+   * container; the Core proxy binds on the first call that asks for the optional container
+   * environment, and the sidecar follows. Serialised: concurrent tool calls share one start
+   * attempt, so a burst of calls cannot race two `docker run` invocations for the same
+   * container name. A proxy that cannot bind leaves the channel unavailable, which the
+   * Broker turns into a typed refusal instead of an open network path.
    */
   async ensure(): Promise<boolean> {
     if (this.available()) return true;
+    if (this.proxyAddress === null) {
+      await this.start().catch((error: unknown) => {
+        this.failure = `egress proxy failed to bind: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+        this.log(`egress: ${this.failure}`);
+      });
+    }
     if (this.proxyAddress === null) return false;
     this.ensuring ??= this.startSidecar().finally(() => {
       this.ensuring = null;

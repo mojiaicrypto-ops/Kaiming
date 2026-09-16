@@ -1066,11 +1066,21 @@ export interface TestCheckResultInput {
    */
   readonly environmentRef: string;
   /**
+   * The execution base the command ran on (`docs/architecture/execution.md` §1/§5).
+   *
+   * Recorded as a human-readable `mode=host|container` fact next to
+   * {@link TestCheckResultInput.environmentRef}: the host is the default, the container is
+   * the optional run environment, and a reader must be able to tell which one produced the
+   * exit code.
+   */
+  readonly executionMode?: 'host' | 'container';
+  /**
    * The image the command really executed in (`Broker` `EXEC_IMAGE`), when it ran in one.
    *
    * It is recorded in the human-readable `result` (`image=… | runner=…`) alongside
    * {@link TestCheckResultInput.environmentRef}, so a reader sees the concrete command
-   * facts next to the environment descriptor the manifest binds.
+   * facts next to the environment descriptor the manifest binds. A host run passes none:
+   * there is no image to name (`data.md` §3 `Env`).
    */
   readonly executionImage?: string;
   /** The Runner's environment descriptor (`attempt.ready`), when it reported one. */
@@ -1106,6 +1116,7 @@ export function buildTestCheckResult(input: TestCheckResultInput): CheckResult {
     };
   }
   const facts = [
+    ...(input.executionMode === undefined ? [] : [`mode=${input.executionMode}`]),
     ...(input.executionImage === undefined ? [] : [`image=${input.executionImage}`]),
     ...(input.runnerEnvironment === undefined ? [] : [`runner=${input.runnerEnvironment}`]),
   ].join(' | ');

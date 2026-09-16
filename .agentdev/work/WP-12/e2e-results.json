@@ -1,15 +1,15 @@
 {
   "tool": "pnpm test:e2e",
-  "generatedAt": "2026-09-15T23:58:17.965Z",
+  "generatedAt": "2026-09-16T05:12:48.610Z",
   "repoRoot": "/Users/huyaohua/huyh/work/aigrouptool",
-  "gitHead": "76fb642439f435089b9cd7390906d1196512483a",
+  "gitHead": "9c10d93a2be8f00a499d136a1523edfd5c1361cb",
   "binding": {
-    "gitHead": "76fb642439f435089b9cd7390906d1196512483a",
-    "gitTree": "20936cec0ada52418fe827464dcbacefaf7a1ea6",
-    "codeDigest": "sha256:2dec5b700c3fc5085ab4ea37352ff978f88a36c0bf659b8bb8a4a636e417815d",
+    "gitHead": "9c10d93a2be8f00a499d136a1523edfd5c1361cb",
+    "gitTree": "5cfa7f1d562587e535a398b02c9804f36bd27269",
+    "codeDigest": "sha256:3a57b35f42783f8505605c13d55c9cffe845c6745aad1cc53df7fcde8a54b538",
     "codeFiles": 358,
     "dirty": true,
-    "generatedAt": "2026-09-15T23:57:04.183Z",
+    "generatedAt": "2026-09-16T05:11:14.220Z",
     "nodeVersion": "v24.8.0"
   },
   "nonce": null,
@@ -27,7 +27,7 @@
     {
       "ac": "AC-002",
       "status": "PASS",
-      "evidence": "browser.html-preview-and-download: artifact 01a0a781-5483-72c8-82b4-50bf56e0b00b 在 /projects/123672ee57bea3877eaef2f26bdb388f/requirements/01a0a781-5486-7908-add8-e24f1a5ae5b2 渲染于 sandbox=\"allow-scripts\" 的 iframe；预览响应 200 CSP[default-src 'none'; connect-src 'none'] x-agentdev-preview-sandbox=allow-scripts x-agentdev-preview-credentials=omit content-type=text/html；下载字节含 AGENTDEV-PREVIEW-MARKER，URL /artifacts/123672ee57bea3877eaef2f26bdb388f/download/<token>（项目范围显式），重放同 token 被拒绝 403；临时项目 HEAD=94e70ed9c821（未变）且 git status 为空 | 匿名上下文请求 /artifacts/123672ee57bea3877eaef2f26bdb388f/01a0a781-5483-72c8-82b4-50bf56e0b00b/preview → 401 {\"ok\":false,\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"sign in to use the work（Playwright 1.63.0，18 个 spec，用时 19709ms，exit 0）",
+      "evidence": "browser.html-preview-and-download: artifact 01a0a8a0-fee2-73d8-b7be-2c5b7896b7db 在 /projects/775c37312df789fa389db4c3439269e2/requirements/01a0a8a0-fee5-7e25-8c4d-92e23e5e43ca 渲染于 sandbox=\"allow-scripts\" 的 iframe；预览响应 200 CSP[default-src 'none'; connect-src 'none'] x-agentdev-preview-sandbox=allow-scripts x-agentdev-preview-credentials=omit content-type=text/html；下载字节含 AGENTDEV-PREVIEW-MARKER，URL /artifacts/775c37312df789fa389db4c3439269e2/download/<token>（项目范围显式），重放同 token 被拒绝 403；临时项目 HEAD=9c7e6355f525（未变）且 git status 为空 | 匿名上下文请求 /artifacts/775c37312df789fa389db4c3439269e2/01a0a8a0-fee2-73d8-b7be-2c5b7896b7db/preview → 401 {\"ok\":false,\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"sign in to use the work（Playwright 1.63.0，18 个 spec，用时 36607ms，exit 0）",
       "checks": [
         "browser.html-preview-and-download"
       ]
@@ -35,7 +35,7 @@
     {
       "ac": "AC-003",
       "status": "PASS",
-      "evidence": "chief.message-to-stage: no-seed chain: message 01a0a780-e0de-7c88-abe2-fb0d693b001e → Chief Run 01a0a780-e11a-7e04-bdac-b0d523528510 → Requirement 01a0a780-e6a2-7336-8c97-6bbb8f9e9395 (active/plan) → professional Run 01a0a780-ef2f-7d5e-a499-db315e4c8667 (parent 01a0a780-e11a-7e04-bdac-b0d523528510) → stage result 01a0a780-f455-7ed9-ab2d-9b10f63d2945 + stage.completed, message state processed, board shows the Requirement",
+      "evidence": "chief.message-to-stage: no-seed chain: message 01a0a8a0-836a-7dc7-a2fe-cc5aeb3d0d70 → Chief Run 01a0a8a0-83b4-70d5-874f-0c9b3cf1e653 → Requirement 01a0a8a0-8955-7ee3-ac03-e92fb25e5b6a (active/plan) → professional Run 01a0a8a0-9205-788f-aaa6-80b8ce04ba16 (parent 01a0a8a0-83b4-70d5-874f-0c9b3cf1e653) → stage result 01a0a8a0-97ac-7852-90f6-a2f855e39c2f + stage.completed, message state processed, board shows the Requirement",
       "checks": [
         "chief.message-to-stage"
       ]
@@ -43,7 +43,7 @@
     {
       "ac": "AC-005",
       "status": "PASS",
-      "evidence": "chief.message-to-stage: no-seed chain: message 01a0a780-e0de-7c88-abe2-fb0d693b001e → Chief Run 01a0a780-e11a-7e04-bdac-b0d523528510 → Requirement 01a0a780-e6a2-7336-8c97-6bbb8f9e9395 (active/plan) → professional Run 01a0a780-ef2f-7d5e-a499-db315e4c8667 (parent 01a0a780-e11a-7e04-bdac-b0d523528510) → stage result 01a0a780-f455-7ed9-ab2d-9b10f63d2945 + stage.completed, message state processed, board shows the Requirement",
+      "evidence": "chief.message-to-stage: no-seed chain: message 01a0a8a0-836a-7dc7-a2fe-cc5aeb3d0d70 → Chief Run 01a0a8a0-83b4-70d5-874f-0c9b3cf1e653 → Requirement 01a0a8a0-8955-7ee3-ac03-e92fb25e5b6a (active/plan) → professional Run 01a0a8a0-9205-788f-aaa6-80b8ce04ba16 (parent 01a0a8a0-83b4-70d5-874f-0c9b3cf1e653) → stage result 01a0a8a0-97ac-7852-90f6-a2f855e39c2f + stage.completed, message state processed, board shows the Requirement",
       "checks": [
         "chief.message-to-stage"
       ]
@@ -51,7 +51,7 @@
     {
       "ac": "AC-010",
       "status": "PASS",
-      "evidence": "delivery.l2-chain: Work 01a0a780-d1d7-7c86-a639-2395c7ad3f09 + Requirement 01a0a780-b349-7f40-8f4f-1865d952755c bound; Task 01a0a780-da62-75de-8cbb-bffea537899b; candidate 8b8800a224b9 tree 1a889662ddab codeTree 26ea159574cc; 5 real stage results (Plan/Develop/Review/Test/Settlement) accepted by StageGate; evaluateStageChain(route=code, level=L2) ok with the documented order and refuses a missing Test",
+      "evidence": "delivery.l2-chain: Work 01a0a8a0-73ca-7f7b-8153-6af0ad2d21c4 + Requirement 01a0a8a0-5474-7245-be43-70b75c114d1c bound; Task 01a0a8a0-7ca0-7617-b047-af4420e4a102; candidate c552048a1c3c tree 42512a791b8b codeTree 695ad12e4269; 5 real stage results (Plan/Develop/Review/Test/Settlement) accepted by StageGate; evaluateStageChain(route=code, level=L2) ok with the documented order and refuses a missing Test",
       "checks": [
         "delivery.l2-chain",
         "delivery.settlement"
@@ -60,7 +60,7 @@
     {
       "ac": "AC-032",
       "status": "PASS",
-      "evidence": "tool.broker-admission: G8 on the real path: message 01a0a781-0f33-7b69-b7b0-3004d2c74ae6 → Chief assessment → professional Run 01a0a781-1f00-7f23-b518-adc493fe5d19 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended",
+      "evidence": "tool.broker-admission: G8 on the real path: message 01a0a8a0-b30f-71b1-b37e-10c92a901b62 → Chief assessment → professional Run 01a0a8a0-c4a6-786e-8ee4-1c3027685a12 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended",
       "checks": [
         "tool.broker-admission"
       ]
@@ -68,7 +68,7 @@
     {
       "ac": "AC-037",
       "status": "PASS",
-      "evidence": "knowledge.patch-cold-start: knowledge commit c2e3866c1eb9: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection c2e3866c1eb9 state=valid (durable SQLite row valid); cold start selected [\"F-0f0f0f0f\",\"F-0a1b2c3d\"] with \"未付款订单可取消；已付款订单返回已确认的拒绝结果。\", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid",
+      "evidence": "knowledge.patch-cold-start: knowledge commit 67c6cebd6f7f: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection 67c6cebd6f7f state=valid (durable SQLite row valid); cold start selected [\"F-0f0f0f0f\",\"F-0a1b2c3d\"] with \"未付款订单可取消；已付款订单返回已确认的拒绝结果。\", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid",
       "checks": [
         "knowledge.patch-cold-start"
       ]
@@ -76,7 +76,7 @@
     {
       "ac": "AC-038",
       "status": "PASS",
-      "evidence": "surfaces.nine-real-state: 10 surfaces read real state (/projects ok; /projects/3b025c611768b9708a7c11c738470d16/chief ok; /projects/3b025c611768b9708a7c11c738470d16/requirements ok; /projects/3b025c611768b9708a7c11c738470d16/requirements/01a0a780-b349-7f40-8f4f-1865d952755c ok; /projects/3b025c611768b9708a7c11c738470d16/docs ok; /projects/3b025c611768b9708a7c11c738470d16/files ok; /projects/3b025c611768b9708a7c11c738470d16/agents ok; /projects/3b025c611768b9708a7c11c738470d16/runs ok; /projects/3b025c611768b9708a7c11c738470d16/inbox ok; /settings ok); Live panel modes open/compact/hidden; create/switch control only on the Chief page with the deep link elsewhere; docs delivered/design/work views all real answers",
+      "evidence": "surfaces.nine-real-state: 10 surfaces read real state (/projects ok; /projects/06f446e62306c152faf33d8ac0e94118/chief ok; /projects/06f446e62306c152faf33d8ac0e94118/requirements ok; /projects/06f446e62306c152faf33d8ac0e94118/requirements/01a0a8a0-5474-7245-be43-70b75c114d1c ok; /projects/06f446e62306c152faf33d8ac0e94118/docs ok; /projects/06f446e62306c152faf33d8ac0e94118/files ok; /projects/06f446e62306c152faf33d8ac0e94118/agents ok; /projects/06f446e62306c152faf33d8ac0e94118/runs ok; /projects/06f446e62306c152faf33d8ac0e94118/inbox ok; /settings ok); Live panel modes open/compact/hidden; create/switch control only on the Chief page with the deep link elsewhere; docs delivered/design/work views all real answers",
       "checks": [
         "surfaces.nine-real-state"
       ]
@@ -84,7 +84,7 @@
     {
       "ac": "AC-041",
       "status": "PASS",
-      "evidence": "knowledge.patch-cold-start: knowledge commit c2e3866c1eb9: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection c2e3866c1eb9 state=valid (durable SQLite row valid); cold start selected [\"F-0f0f0f0f\",\"F-0a1b2c3d\"] with \"未付款订单可取消；已付款订单返回已确认的拒绝结果。\", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid",
+      "evidence": "knowledge.patch-cold-start: knowledge commit 67c6cebd6f7f: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection 67c6cebd6f7f state=valid (durable SQLite row valid); cold start selected [\"F-0f0f0f0f\",\"F-0a1b2c3d\"] with \"未付款订单可取消；已付款订单返回已确认的拒绝结果。\", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid",
       "checks": [
         "knowledge.patch-cold-start"
       ]
@@ -92,7 +92,7 @@
     {
       "ac": "AC-045",
       "status": "PASS",
-      "evidence": "tool.broker-admission: G8 on the real path: message 01a0a781-0f33-7b69-b7b0-3004d2c74ae6 → Chief assessment → professional Run 01a0a781-1f00-7f23-b518-adc493fe5d19 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended",
+      "evidence": "tool.broker-admission: G8 on the real path: message 01a0a8a0-b30f-71b1-b37e-10c92a901b62 → Chief assessment → professional Run 01a0a8a0-c4a6-786e-8ee4-1c3027685a12 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended",
       "checks": [
         "tool.broker-admission"
       ]
@@ -100,7 +100,7 @@
     {
       "ac": "AC-048",
       "status": "PASS",
-      "evidence": "tool.broker-admission: G8 on the real path: message 01a0a781-0f33-7b69-b7b0-3004d2c74ae6 → Chief assessment → professional Run 01a0a781-1f00-7f23-b518-adc493fe5d19 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended",
+      "evidence": "tool.broker-admission: G8 on the real path: message 01a0a8a0-b30f-71b1-b37e-10c92a901b62 → Chief assessment → professional Run 01a0a8a0-c4a6-786e-8ee4-1c3027685a12 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended",
       "checks": [
         "tool.broker-admission"
       ]
@@ -108,7 +108,7 @@
     {
       "ac": "AC-050",
       "status": "PASS",
-      "evidence": "tool.broker-admission: G8 on the real path: message 01a0a781-0f33-7b69-b7b0-3004d2c74ae6 → Chief assessment → professional Run 01a0a781-1f00-7f23-b518-adc493fe5d19 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended",
+      "evidence": "tool.broker-admission: G8 on the real path: message 01a0a8a0-b30f-71b1-b37e-10c92a901b62 → Chief assessment → professional Run 01a0a8a0-c4a6-786e-8ee4-1c3027685a12 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended",
       "checks": [
         "tool.broker-admission"
       ]
@@ -116,7 +116,7 @@
     {
       "ac": "AC-052",
       "status": "PASS",
-      "evidence": "browser.html-attack-samples: frame origin=null cookie=null cookieError=SecurityError（会话 cookie agentdev_web 确实存在）；parent.document=SecurityError top.title=SecurityError topNavigation=null（父页 URL 未变）；fetch(probe)=rejected:TypeError fetch(/api/session)=rejected:TypeError xhr=error img=error；探针自计数 attacks=0；探针 URL 的浏览器响应数=0；被 CSP 拒绝的探针请求=2（errorText=csp）；localStorage=SecurityError（Playwright 1.63.0，18 个 spec，用时 19709ms，exit 0）",
+      "evidence": "browser.html-attack-samples: frame origin=null cookie=null cookieError=SecurityError（会话 cookie agentdev_web 确实存在）；parent.document=SecurityError top.title=SecurityError topNavigation=null（父页 URL 未变）；fetch(probe)=rejected:TypeError fetch(/api/session)=rejected:TypeError xhr=error img=error；探针自计数 attacks=0；探针 URL 的浏览器响应数=0；被 CSP 拒绝的探针请求=2（errorText=csp）；localStorage=SecurityError（Playwright 1.63.0，18 个 spec，用时 36607ms，exit 0）",
       "checks": [
         "browser.html-attack-samples"
       ]
@@ -132,7 +132,7 @@
     {
       "ac": "AC-057",
       "status": "PASS",
-      "evidence": "runtime.executes-attempt: runtime executed a real Attempt: Run 01a0a780-f531-78ed-8886-4ef04fcf8cbc completed with Attempt 01a0a780-f5fb-7263-919a-3399d79bdd68 through the supervisor, a real apps/runner child process and the loopback model (1 Provider call(s), 13 tokens booked); killing the live Runner of Run 01a0a781-0e59-7f47-a661-5ea9a05d94b3 (pid 90007) parked it as interrupted with Attempt 01a0a781-0e74-7e4b-92a5-f44bd72c91ec lost (new Attempt allowed=true)",
+      "evidence": "runtime.executes-attempt: runtime executed a real Attempt: Run 01a0a8a0-98a2-7d74-b5b5-4781c4ce0012 completed with Attempt 01a0a8a0-996b-72a9-8b03-e1655bab3493 through the supervisor, a real apps/runner child process and the loopback model (1 Provider call(s), 13 tokens booked); killing the live Runner of Run 01a0a8a0-b227-7cee-b742-ebe1cf16b67c (pid 54925) parked it as interrupted with Attempt 01a0a8a0-b28c-7ca8-92c0-894626bdc508 lost (new Attempt allowed=true)",
       "checks": [
         "runtime.executes-attempt"
       ]
@@ -148,7 +148,7 @@
     {
       "ac": "AC-064",
       "status": "PASS",
-      "evidence": "ops.backup-restore: credentialed Provider provider:01a0a781-9d7f-7adc-9029-3de011430b30 -> Chief Run 01a0a781-9dc0-7def-a7b8-70610f575d5f reached attempt.ready (Attempt 01a0a781-a122-73a1-b8d1-01ded10561bd running) and the loopback model received 1 credentialed call(s); agentdev backup exit 0: revision e48b33e47dfc, complete, secretRefs [\"provider:01a0a781-9d7f-7adc-9029-3de011430b30\"], installation config copied, no credential value in the backup directory; deleted /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-e2e-ops-home-i3n8ro/projects/b9dd51435bf7cc829051935c58a42ebd and the project; agentdev restore exit 0 (status ready, tree 1ed076140947, evidence 1/1, doctor ok, Run 01a0a781-9dc0-7def-a7b8-70610f575d5f interrupted); restarted daemon reported it interrupted through its own protocol; fresh installation restore: status blocked + first stdout line WARNING [PROVID…",
+      "evidence": "ops.backup-restore: credentialed Provider provider:01a0a8a1-88d8-7179-904b-e0b37c9c10f2 -> Chief Run 01a0a8a1-8967-7668-9c64-249c3e95d536 reached attempt.ready (Attempt 01a0a8a1-8c21-7be7-963f-00185fedbe1a running) and the loopback model received 1 credentialed call(s); agentdev backup exit 0: revision fac0ff61f973, complete, secretRefs [\"provider:01a0a8a1-88d8-7179-904b-e0b37c9c10f2\"], installation config copied, no credential value in the backup directory; deleted /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-e2e-ops-home-U4NV2D/projects/3cb11fb5bbe19e7ddbf7f550f2222cbe and the project; agentdev restore exit 0 (status ready, tree 1ed076140947, evidence 1/1, doctor ok, Run 01a0a8a1-8967-7668-9c64-249c3e95d536 interrupted); restarted daemon reported it interrupted through its own protocol; fresh installation restore: status blocked + first stdout line WARNING [PROVID…",
       "checks": [
         "ops.backup-restore"
       ]
@@ -156,7 +156,7 @@
     {
       "ac": "AC-068",
       "status": "PASS",
-      "evidence": "board.rules: board identity shared (01a0a780-c0de-7155-af15-eb057d6675f3); L1 Work 01a0a780-c833-7b5f-8e88-8ad3f17794aa excluded and never a card; Queued pause -> 409 INVALID_STATE; Queued cancel -> cancelled at 93d47a93e23b8debd196a99c4eb740b285f4f7aa; branch tip moved",
+      "evidence": "board.rules: board identity shared (01a0a8a0-62c1-75fa-87e6-fd6b0760d9c2); L1 Work 01a0a8a0-69d5-7741-b827-28a1e0547e63 excluded and never a card; Queued pause -> 409 INVALID_STATE; Queued cancel -> cancelled at 94a78886047f4d8d47a15325b1f393e62fd40f89; branch tip moved",
       "checks": [
         "board.rules",
         "surfaces.nine-real-state",
@@ -166,7 +166,7 @@
     {
       "ac": "AC-069",
       "status": "PASS",
-      "evidence": "chief.routes-message: message 01a0a780-d1d7-7710-b072-42caf6664832 routed to Work 01a0a780-d1d7-7c86-a639-2395c7ad3f09 (intent=delivery level=L2 authorization=01a0a780-d205-7c05-b813-b340c626c669); Work.sourceRef is the message; message.received emitted",
+      "evidence": "chief.routes-message: message 01a0a8a0-73ca-7c91-9e2d-6b316ebad3ef routed to Work 01a0a8a0-73ca-7f7b-8153-6af0ad2d21c4 (intent=delivery level=L2 authorization=01a0a8a0-7412-7704-8ab0-19536a41117a); Work.sourceRef is the message; message.received emitted",
       "checks": [
         "chief.routes-message",
         "surfaces.nine-real-state",
@@ -176,7 +176,7 @@
     {
       "ac": "AC-070",
       "status": "PASS",
-      "evidence": "plan.approval-expired-card: no-plan refusal (enabled=false reasonCode=no_plan); plan.approve v1 planRef=01a0a780-d229-70c6-acaf-5059dae67090; plan.current enabled=true with 1 task(s), authorization=01a0a780-d205-7c05-b813-b340c626c669; superseded v0 -> VERSION_CONFLICT currentVersion=1",
+      "evidence": "plan.approval-expired-card: no-plan refusal (enabled=false reasonCode=no_plan); plan.approve v1 planRef=01a0a8a0-7436-7aa5-843b-4c5758cd8e23; plan.current enabled=true with 1 task(s), authorization=01a0a8a0-7412-7704-8ab0-19536a41117a; superseded v0 -> VERSION_CONFLICT currentVersion=1",
       "checks": [
         "plan.approval-expired-card"
       ]
@@ -184,7 +184,7 @@
     {
       "ac": "AC-071",
       "status": "PASS",
-      "evidence": "browser.live-layout: open: grid=220.0px 573.6px 486.4px, --dock=clamp(360px, 38%, 560px) ⇒ dock 486.4px (38% of 1280px), main 右缘=793.6 dock 左缘=793.6；compact: 第三轨=44px, dock display=none, aria-expanded=false；hidden: 第三轨=0px, main=1060.0px > compact=1016.0px；三态由真实键盘操作（focus + Enter）驱动 | { \"viewport\": { \"width\": 1280, \"height\": 720 }, \"header\": { \"x\": 0, \"y\": 0, \"width\": 1280, \"height\": 54, \"right\": 1280, \"bottom\": 54 }, \"headerDisplay\": \"flex\", \"brand\": { \"x\": 0, \"y\": 0, \"width\": 220, \"height\": 54, \"right\": 220, \"bottom\": 54 }, \"projectArea\": { \"x\": 220, \"y\": 0, \"width\": 695.890625, \"height\": 54, \"right\": 915.890625, \"bottom\": 54 }, \"tools\": { \"x\": 915.890625, \"y\": 0, \"width\": 364.109375, \"height\": 54, \"right\": 1280, \"bottom\": 54 }, \"toggle\": { \"x\": 997.765625, \"y\": 3.5, \"width\": 44.125, \"height\": 46, \"right\": 1041.890625, \"bottom\": 49.5 } } | 面板状态写入 localStorage(agentdev.panel=compact) 并…",
+      "evidence": "browser.live-layout: open: grid=220.0px 573.6px 486.4px, --dock=clamp(360px, 38%, 560px) ⇒ dock 486.4px (38% of 1280px), main 右缘=793.6 dock 左缘=793.6；compact: 第三轨=44px, dock display=none, aria-expanded=false；hidden: 第三轨=0px, main=1060.0px > compact=1016.0px；三态由真实键盘操作（focus + Enter）驱动 | { \"viewport\": { \"width\": 1280, \"height\": 720 }, \"header\": { \"x\": 0, \"y\": 0, \"width\": 1280, \"height\": 54, \"right\": 1280, \"bottom\": 54 }, \"headerDisplay\": \"flex\", \"brand\": { \"x\": 0, \"y\": 0, \"width\": 220, \"height\": 54, \"right\": 220, \"bottom\": 54 }, \"projectArea\": { \"x\": 220, \"y\": 0, \"width\": 694.6875, \"height\": 54, \"right\": 914.6875, \"bottom\": 54 }, \"tools\": { \"x\": 914.6875, \"y\": 0, \"width\": 365.3125, \"height\": 54, \"right\": 1280, \"bottom\": 54 }, \"toggle\": { \"x\": 996.5625, \"y\": 3.5, \"width\": 44.125, \"height\": 46, \"right\": 1040.6875, \"bottom\": 49.5 } } | 面板状态写入 localStorage(agentdev.panel=compact) 并在导航到 /requir…",
       "checks": [
         "browser.live-layout"
       ]
@@ -192,7 +192,7 @@
     {
       "ac": "AC-072",
       "status": "PASS",
-      "evidence": "surfaces.nine-real-state: 10 surfaces read real state (/projects ok; /projects/3b025c611768b9708a7c11c738470d16/chief ok; /projects/3b025c611768b9708a7c11c738470d16/requirements ok; /projects/3b025c611768b9708a7c11c738470d16/requirements/01a0a780-b349-7f40-8f4f-1865d952755c ok; /projects/3b025c611768b9708a7c11c738470d16/docs ok; /projects/3b025c611768b9708a7c11c738470d16/files ok; /projects/3b025c611768b9708a7c11c738470d16/agents ok; /projects/3b025c611768b9708a7c11c738470d16/runs ok; /projects/3b025c611768b9708a7c11c738470d16/inbox ok; /settings ok); Live panel modes open/compact/hidden; create/switch control only on the Chief page with the deep link elsewhere; docs delivered/design/work views all real answers",
+      "evidence": "surfaces.nine-real-state: 10 surfaces read real state (/projects ok; /projects/06f446e62306c152faf33d8ac0e94118/chief ok; /projects/06f446e62306c152faf33d8ac0e94118/requirements ok; /projects/06f446e62306c152faf33d8ac0e94118/requirements/01a0a8a0-5474-7245-be43-70b75c114d1c ok; /projects/06f446e62306c152faf33d8ac0e94118/docs ok; /projects/06f446e62306c152faf33d8ac0e94118/files ok; /projects/06f446e62306c152faf33d8ac0e94118/agents ok; /projects/06f446e62306c152faf33d8ac0e94118/runs ok; /projects/06f446e62306c152faf33d8ac0e94118/inbox ok; /settings ok); Live panel modes open/compact/hidden; create/switch control only on the Chief page with the deep link elsewhere; docs delivered/design/work views all real answers",
       "checks": [
         "surfaces.nine-real-state"
       ]
@@ -200,7 +200,7 @@
     {
       "ac": "AC-073",
       "status": "PASS",
-      "evidence": "browser.keyboard-aria-i18n: Tab #1 → a#(skip-link) name=\"Skip to main content\"；Enter → 焦点 #main；遍历 22 个可聚焦控件（含 #languageSelect=true），无未命名控件，无不可聚焦元素进入顺序；ARIA: #liveDock=\"Live panel\" #liveDockToggle=\"Live panel, open\" #languageSelect=\"Interface language\" #composerBody=\"Message the Chief\"；aria-live 区域 #connectionState/#messages/#liveEvents/#stagedAttachments | 切换到 zh：html[lang]=zh-CN，nav Chief→主管，cookie agentdev_language=zh，localStorage(agentdev.language)=zh；客户端自有字符串随切换生效：#liveDock aria-label=实时面板、#liveDockToggle=实时面板，已展开、下载按钮=下载完整产物；项目内容未翻译：#requirementTitle=\"HTML 说明产物隔离预览\" 保持不变且 data-translatable=\"false\"；project-name=\"/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-e2e-repo-1EFAND\" 不变；ui.translate 调用 63 次，未包含任何项目内容（标题/项目名泄漏=0）；reload 后整页仍为 zh；未在客户端打开过的 /settings 也由服务端按 cookie 渲染为「保存配置」（Playwright 1.63.0，18 个 spec，用时 19709ms，exit 0）",
+      "evidence": "browser.keyboard-aria-i18n: Tab #1 → a#(skip-link) name=\"Skip to main content\"；Enter → 焦点 #main；遍历 22 个可聚焦控件（含 #languageSelect=true），无未命名控件，无不可聚焦元素进入顺序；ARIA: #liveDock=\"Live panel\" #liveDockToggle=\"Live panel, open\" #languageSelect=\"Interface language\" #composerBody=\"Message the Chief\"；aria-live 区域 #connectionState/#messages/#liveEvents/#stagedAttachments | 切换到 zh：html[lang]=zh-CN，nav Chief→主管，cookie agentdev_language=zh，localStorage(agentdev.language)=zh；客户端自有字符串随切换生效：#liveDock aria-label=实时面板、#liveDockToggle=实时面板，已展开、下载按钮=下载完整产物；项目内容未翻译：#requirementTitle=\"HTML 说明产物隔离预览\" 保持不变且 data-translatable=\"false\"；project-name=\"/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-e2e-repo-NoVgxt\" 不变；ui.translate 调用 63 次，未包含任何项目内容（标题/项目名泄漏=0）；reload 后整页仍为 zh；未在客户端打开过的 /settings 也由服务端按 cookie 渲染为「保存配置」（Playwright 1.63.0，18 个 spec，用时 36607ms，exit 0）",
       "checks": [
         "browser.keyboard-aria-i18n"
       ]
@@ -208,7 +208,7 @@
     {
       "ac": "AC-074",
       "status": "PASS",
-      "evidence": "inbox.decision-dedup: two same-target decisions collapsed to 1 Inbox row (ids 01a0a780-d236-7315-a9dd-f56da029e6ba/01a0a780-d237-7e0a-b369-2af78af7dfc7); expired row actionable=false; resolve -> accepted + idempotent replay; duplicate row untouched",
+      "evidence": "inbox.decision-dedup: two same-target decisions collapsed to 1 Inbox row (ids 01a0a8a0-7445-74b9-89fd-70a633fa56ef/01a0a8a0-7447-73e4-a1ea-540e1b2452c7); expired row actionable=false; resolve -> accepted + idempotent replay; duplicate row untouched",
       "checks": [
         "inbox.decision-dedup",
         "surfaces.nine-real-state",
@@ -227,7 +227,7 @@
     {
       "ac": "AC-076",
       "status": "PASS",
-      "evidence": "browser.attachment-client-hints: 选择 6 个 text/markdown → #composerError=\"VALIDATION_ERROR: At most 5 attachments per message.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 21 MiB 的 text/plain → #composerError=\"VALIDATION_ERROR: The attachment exceeds 20 MiB.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 application/zip → #composerError=\"VALIDATION_ERROR: That file type is not a supported attachment type.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 3 个 17 MiB 文件（合计 51 MiB，逐个 <20 MiB）→ #composerError=\"VALIDATION_ERROR: Attachments exceed 50 MiB in total.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 语言切到 zh 并等待客户端字典生效后选择 6 个附件 → #composerError=\"VALIDATION_ERROR: 每条消息最多 5 个附件。\"（本地化文案而非原始 key）；/artifacts/upload 请求数=0 | 选择 1 个 text/markdown → 上传请求 1 次，暂存项 attachmentId=01a0a781-95ab-79a2-a041-315f0db9dcf4，#composerError 隐藏（证明上一条拒绝针对具体限制而非一律拒绝）（Playwright 1.63.0，18 个 spec…",
+      "evidence": "browser.attachment-client-hints: 选择 6 个 text/markdown → #composerError=\"VALIDATION_ERROR: At most 5 attachments per message.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 21 MiB 的 text/plain → #composerError=\"VALIDATION_ERROR: The attachment exceeds 20 MiB.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 application/zip → #composerError=\"VALIDATION_ERROR: That file type is not a supported attachment type.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 3 个 17 MiB 文件（合计 51 MiB，逐个 <20 MiB）→ #composerError=\"VALIDATION_ERROR: Attachments exceed 50 MiB in total.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 语言切到 zh 并等待客户端字典生效后选择 6 个附件 → #composerError=\"VALIDATION_ERROR: 每条消息最多 5 个附件。\"（本地化文案而非原始 key）；/artifacts/upload 请求数=0 | 选择 1 个 text/markdown → 上传请求 1 次，暂存项 attachmentId=01a0a8a1-77be-7c28-acd3-1cbd580ff9d1，#composerError 隐藏（证明上一条拒绝针对具体限制而非一律拒绝）（Playwright 1.63.0，18 个 spec…",
       "checks": [
         "browser.attachment-client-hints"
       ]
@@ -235,7 +235,7 @@
     {
       "ac": "AC-077",
       "status": "PASS",
-      "evidence": "files.branch-preview-boundaries: revision=434b001fec2b branch=agentdev/main, real file content; search found src/orders/cancel.ts; absolute+traversal -> data-code=NOT_FOUND with no leak; snapshots unchanged (1); head advanced to 02c782d15b85 and the page followed",
+      "evidence": "files.branch-preview-boundaries: revision=3f64b88c4103 branch=agentdev/main, real file content; search found src/orders/cancel.ts; absolute+traversal -> data-code=NOT_FOUND with no leak; snapshots unchanged (1); head advanced to 9ddbd5d26058 and the page followed",
       "checks": [
         "files.branch-preview-boundaries",
         "surfaces.nine-real-state"
@@ -244,7 +244,7 @@
     {
       "ac": "AC-078",
       "status": "PASS",
-      "evidence": "stack.boot: daemon 200/BFF 200 healthz; anonymous page 401; /rpc without cookie 401 UNAUTHENTICATED; wrong Origin login 403 NOT_AUTHORIZED; wrong token 401; login 200 with agentdev_web cookie (HttpOnly) + csrfToken; snapshot projectId=3b025c611768b9708a7c11c738470d16",
+      "evidence": "stack.boot: daemon 200/BFF 200 healthz; anonymous page 401; /rpc without cookie 401 UNAUTHENTICATED; wrong Origin login 403 NOT_AUTHORIZED; wrong token 401; login 200 with agentdev_web cookie (HttpOnly) + csrfToken; snapshot projectId=06f446e62306c152faf33d8ac0e94118",
       "checks": [
         "stack.boot",
         "auth.lifecycle"
@@ -253,7 +253,7 @@
     {
       "ac": "AC-084",
       "status": "PASS",
-      "evidence": "attachment.upload-first-message: upload 201 attachmentId=01a0a780-d271-747f-be4d-e4064c3e8bef (staged, installation owner); first message 01a0a780-d280-7b12-9e7c-db04f2b92db6 bound it to Work 01a0a780-d280-7441-bbc6-47a059da9944 atomically with 1 user artifact; unsupported mime refused (400) with no residue; duplicate bind -> ATTACHMENT_ALREADY_BOUND",
+      "evidence": "attachment.upload-first-message: upload 201 attachmentId=01a0a8a0-747a-7a1a-9dad-bf818b62a2b3 (staged, installation owner); first message 01a0a8a0-7487-7de9-8bdc-40222a697734 bound it to Work 01a0a8a0-7487-7225-ab71-74a379a9d5c8 atomically with 1 user artifact; unsupported mime refused (400) with no residue; duplicate bind -> ATTACHMENT_ALREADY_BOUND",
       "checks": [
         "attachment.upload-first-message"
       ]
@@ -261,7 +261,7 @@
     {
       "ac": "AC-090",
       "status": "PASS",
-      "evidence": "requirement.save-git: requirement 01a0a780-b349-7f40-8f4f-1865d952755c created at d8709d4120e6fedf6051cb17c1c1039f66d4000a (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at 3f05013e74ab with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed",
+      "evidence": "requirement.save-git: requirement 01a0a8a0-5474-7245-be43-70b75c114d1c created at 622d2b6c82be3d49da4a3203c2985c1ab42d332e (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at be6dcc47bcb6 with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed",
       "checks": [
         "requirement.save-git"
       ]
@@ -269,7 +269,7 @@
     {
       "ac": "AC-093",
       "status": "PASS",
-      "evidence": "requirement.save-git: requirement 01a0a780-b349-7f40-8f4f-1865d952755c created at d8709d4120e6fedf6051cb17c1c1039f66d4000a (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at 3f05013e74ab with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed",
+      "evidence": "requirement.save-git: requirement 01a0a8a0-5474-7245-be43-70b75c114d1c created at 622d2b6c82be3d49da4a3203c2985c1ab42d332e (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at be6dcc47bcb6 with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed",
       "checks": [
         "requirement.save-git"
       ]
@@ -282,8 +282,8 @@
         "AC-078"
       ],
       "status": "PASS",
-      "evidence": "daemon 200/BFF 200 healthz; anonymous page 401; /rpc without cookie 401 UNAUTHENTICATED; wrong Origin login 403 NOT_AUTHORIZED; wrong token 401; login 200 with agentdev_web cookie (HttpOnly) + csrfToken; snapshot projectId=3b025c611768b9708a7c11c738470d16",
-      "durationMs": 55
+      "evidence": "daemon 200/BFF 200 healthz; anonymous page 401; /rpc without cookie 401 UNAUTHENTICATED; wrong Origin login 403 NOT_AUTHORIZED; wrong token 401; login 200 with agentdev_web cookie (HttpOnly) + csrfToken; snapshot projectId=06f446e62306c152faf33d8ac0e94118",
+      "durationMs": 75
     },
     {
       "name": "auth.lifecycle",
@@ -291,8 +291,8 @@
         "AC-078"
       ],
       "status": "PASS",
-      "evidence": "foreign-Origin write 403; logout 200 then cookie 401; daemon session expired (+2h) -> /rpc 401 with the cookie cleared, /api/session 401, Work 01a0a780-b30c-7e0b-9ff4-c3aa06e69eb7 still running; re-login restored the Chief page",
-      "durationMs": 66
+      "evidence": "foreign-Origin write 403; logout 200 then cookie 401; daemon session expired (+2h) -> /rpc 401 with the cookie cleared, /api/session 401, Work 01a0a8a0-5447-7fd7-b8f0-2cf2e18ddde6 still running; re-login restored the Chief page",
+      "durationMs": 44
     },
     {
       "name": "requirement.save-git",
@@ -301,8 +301,8 @@
         "AC-093"
       ],
       "status": "PASS",
-      "evidence": "requirement 01a0a780-b349-7f40-8f4f-1865d952755c created at d8709d4120e6fedf6051cb17c1c1039f66d4000a (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at 3f05013e74ab with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed",
-      "durationMs": 3476
+      "evidence": "requirement 01a0a8a0-5474-7245-be43-70b75c114d1c created at 622d2b6c82be3d49da4a3203c2985c1ab42d332e (branch agentdev/main, unpushed, refUpdated) then updated to recordVersion 2 at be6dcc47bcb6 with a changed recordHash; requirement.json+content.md committed atomically; board identity == requirement id; observation: partial update preserved every body line (true) and re-emitted the record-version marker, contentHash changed",
+      "durationMs": 3662
     },
     {
       "name": "board.rules",
@@ -310,8 +310,8 @@
         "AC-068"
       ],
       "status": "PASS",
-      "evidence": "board identity shared (01a0a780-c0de-7155-af15-eb057d6675f3); L1 Work 01a0a780-c833-7b5f-8e88-8ad3f17794aa excluded and never a card; Queued pause -> 409 INVALID_STATE; Queued cancel -> cancelled at 93d47a93e23b8debd196a99c4eb740b285f4f7aa; branch tip moved",
-      "durationMs": 4344
+      "evidence": "board identity shared (01a0a8a0-62c1-75fa-87e6-fd6b0760d9c2); L1 Work 01a0a8a0-69d5-7741-b827-28a1e0547e63 excluded and never a card; Queued pause -> 409 INVALID_STATE; Queued cancel -> cancelled at 94a78886047f4d8d47a15325b1f393e62fd40f89; branch tip moved",
+      "durationMs": 4359
     },
     {
       "name": "chief.routes-message",
@@ -319,8 +319,8 @@
         "AC-069"
       ],
       "status": "PASS",
-      "evidence": "message 01a0a780-d1d7-7710-b072-42caf6664832 routed to Work 01a0a780-d1d7-7c86-a639-2395c7ad3f09 (intent=delivery level=L2 authorization=01a0a780-d205-7c05-b813-b340c626c669); Work.sourceRef is the message; message.received emitted",
-      "durationMs": 69
+      "evidence": "message 01a0a8a0-73ca-7c91-9e2d-6b316ebad3ef routed to Work 01a0a8a0-73ca-7f7b-8153-6af0ad2d21c4 (intent=delivery level=L2 authorization=01a0a8a0-7412-7704-8ab0-19536a41117a); Work.sourceRef is the message; message.received emitted",
+      "durationMs": 99
     },
     {
       "name": "plan.approval-expired-card",
@@ -328,8 +328,8 @@
         "AC-070"
       ],
       "status": "PASS",
-      "evidence": "no-plan refusal (enabled=false reasonCode=no_plan); plan.approve v1 planRef=01a0a780-d229-70c6-acaf-5059dae67090; plan.current enabled=true with 1 task(s), authorization=01a0a780-d205-7c05-b813-b340c626c669; superseded v0 -> VERSION_CONFLICT currentVersion=1",
-      "durationMs": 29
+      "evidence": "no-plan refusal (enabled=false reasonCode=no_plan); plan.approve v1 planRef=01a0a8a0-7436-7aa5-843b-4c5758cd8e23; plan.current enabled=true with 1 task(s), authorization=01a0a8a0-7412-7704-8ab0-19536a41117a; superseded v0 -> VERSION_CONFLICT currentVersion=1",
+      "durationMs": 28
     },
     {
       "name": "inbox.decision-dedup",
@@ -337,8 +337,8 @@
         "AC-074"
       ],
       "status": "PASS",
-      "evidence": "two same-target decisions collapsed to 1 Inbox row (ids 01a0a780-d236-7315-a9dd-f56da029e6ba/01a0a780-d237-7e0a-b369-2af78af7dfc7); expired row actionable=false; resolve -> accepted + idempotent replay; duplicate row untouched",
-      "durationMs": 25
+      "evidence": "two same-target decisions collapsed to 1 Inbox row (ids 01a0a8a0-7445-74b9-89fd-70a633fa56ef/01a0a8a0-7447-73e4-a1ea-540e1b2452c7); expired row actionable=false; resolve -> accepted + idempotent replay; duplicate row untouched",
+      "durationMs": 26
     },
     {
       "name": "config.validation-preserves-input",
@@ -347,7 +347,7 @@
       ],
       "status": "PASS",
       "evidence": "unknownKey -> 422 VALIDATION_ERROR with preservedInput, revision unchanged at 2; reasoning=high saved (rev 3) then config.test -> PROVIDER_UNAVAILABLE with preservedInput; restored to off (rev 4), Settings revision matches",
-      "durationMs": 30
+      "durationMs": 21
     },
     {
       "name": "attachment.upload-first-message",
@@ -355,8 +355,8 @@
         "AC-084"
       ],
       "status": "PASS",
-      "evidence": "upload 201 attachmentId=01a0a780-d271-747f-be4d-e4064c3e8bef (staged, installation owner); first message 01a0a780-d280-7b12-9e7c-db04f2b92db6 bound it to Work 01a0a780-d280-7441-bbc6-47a059da9944 atomically with 1 user artifact; unsupported mime refused (400) with no residue; duplicate bind -> ATTACHMENT_ALREADY_BOUND",
-      "durationMs": 149
+      "evidence": "upload 201 attachmentId=01a0a8a0-747a-7a1a-9dad-bf818b62a2b3 (staged, installation owner); first message 01a0a8a0-7487-7de9-8bdc-40222a697734 bound it to Work 01a0a8a0-7487-7225-ab71-74a379a9d5c8 atomically with 1 user artifact; unsupported mime refused (400) with no residue; duplicate bind -> ATTACHMENT_ALREADY_BOUND",
+      "durationMs": 125
     },
     {
       "name": "files.branch-preview-boundaries",
@@ -364,8 +364,8 @@
         "AC-077"
       ],
       "status": "PASS",
-      "evidence": "revision=434b001fec2b branch=agentdev/main, real file content; search found src/orders/cancel.ts; absolute+traversal -> data-code=NOT_FOUND with no leak; snapshots unchanged (1); head advanced to 02c782d15b85 and the page followed",
-      "durationMs": 278
+      "evidence": "revision=3f64b88c4103 branch=agentdev/main, real file content; search found src/orders/cancel.ts; absolute+traversal -> data-code=NOT_FOUND with no leak; snapshots unchanged (1); head advanced to 9ddbd5d26058 and the page followed",
+      "durationMs": 284
     },
     {
       "name": "surfaces.nine-real-state",
@@ -379,8 +379,8 @@
         "AC-038"
       ],
       "status": "PASS",
-      "evidence": "10 surfaces read real state (/projects ok; /projects/3b025c611768b9708a7c11c738470d16/chief ok; /projects/3b025c611768b9708a7c11c738470d16/requirements ok; /projects/3b025c611768b9708a7c11c738470d16/requirements/01a0a780-b349-7f40-8f4f-1865d952755c ok; /projects/3b025c611768b9708a7c11c738470d16/docs ok; /projects/3b025c611768b9708a7c11c738470d16/files ok; /projects/3b025c611768b9708a7c11c738470d16/agents ok; /projects/3b025c611768b9708a7c11c738470d16/runs ok; /projects/3b025c611768b9708a7c11c738470d16/inbox ok; /settings ok); Live panel modes open/compact/hidden; create/switch control only on the Chief page with the deep link elsewhere; docs delivered/design/work views all real answers",
-      "durationMs": 512
+      "evidence": "10 surfaces read real state (/projects ok; /projects/06f446e62306c152faf33d8ac0e94118/chief ok; /projects/06f446e62306c152faf33d8ac0e94118/requirements ok; /projects/06f446e62306c152faf33d8ac0e94118/requirements/01a0a8a0-5474-7245-be43-70b75c114d1c ok; /projects/06f446e62306c152faf33d8ac0e94118/docs ok; /projects/06f446e62306c152faf33d8ac0e94118/files ok; /projects/06f446e62306c152faf33d8ac0e94118/agents ok; /projects/06f446e62306c152faf33d8ac0e94118/runs ok; /projects/06f446e62306c152faf33d8ac0e94118/inbox ok; /settings ok); Live panel modes open/compact/hidden; create/switch control only on the Chief page with the deep link elsewhere; docs delivered/design/work views all real answers",
+      "durationMs": 576
     },
     {
       "name": "events.watermark-reconnect",
@@ -390,7 +390,7 @@
       ],
       "status": "PASS",
       "evidence": "hello/subscribe over the BFF /ws; first cursor 16 acked; daemon dropped -> bridge.reconnecting -> bridge.open; the during-break event replayed above the watermark with no duplicate; a fresh socket resumed in mode=replay with nothing at or below 16; Work stayed running",
-      "durationMs": 1094
+      "durationMs": 1105
     },
     {
       "name": "delivery.l2-chain",
@@ -398,8 +398,8 @@
         "AC-010"
       ],
       "status": "PASS",
-      "evidence": "Work 01a0a780-d1d7-7c86-a639-2395c7ad3f09 + Requirement 01a0a780-b349-7f40-8f4f-1865d952755c bound; Task 01a0a780-da62-75de-8cbb-bffea537899b; candidate 8b8800a224b9 tree 1a889662ddab codeTree 26ea159574cc; 5 real stage results (Plan/Develop/Review/Test/Settlement) accepted by StageGate; evaluateStageChain(route=code, level=L2) ok with the documented order and refuses a missing Test",
-      "durationMs": 689
+      "evidence": "Work 01a0a8a0-73ca-7f7b-8153-6af0ad2d21c4 + Requirement 01a0a8a0-5474-7245-be43-70b75c114d1c bound; Task 01a0a8a0-7ca0-7617-b047-af4420e4a102; candidate c552048a1c3c tree 42512a791b8b codeTree 695ad12e4269; 5 real stage results (Plan/Develop/Review/Test/Settlement) accepted by StageGate; evaluateStageChain(route=code, level=L2) ok with the documented order and refuses a missing Test",
+      "durationMs": 608
     },
     {
       "name": "delivery.settlement",
@@ -407,8 +407,8 @@
         "AC-010"
       ],
       "status": "PASS",
-      "evidence": "CompletionManifest 42a5c401d0a7 frozen; settle moved refs/heads/agentdev/main 02c782d15b85 -> 8b8800a224b9; refUpdated=true commitTree=1a889662ddab codeTree=26ea159574cc; Requirement completed with phase cleared; exactly one settlement.completed event",
-      "durationMs": 357
+      "evidence": "CompletionManifest 86ab53cc2d38 frozen; settle moved refs/heads/agentdev/main 9ddbd5d26058 -> c552048a1c3c; refUpdated=true commitTree=42512a791b8b codeTree=695ad12e4269; Requirement completed with phase cleared; exactly one settlement.completed event",
+      "durationMs": 434
     },
     {
       "name": "knowledge.patch-cold-start",
@@ -417,15 +417,15 @@
         "AC-037"
       ],
       "status": "PASS",
-      "evidence": "knowledge commit c2e3866c1eb9: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection c2e3866c1eb9 state=valid (durable SQLite row valid); cold start selected [\"F-0f0f0f0f\",\"F-0a1b2c3d\"] with \"未付款订单可取消；已付款订单返回已确认的拒绝结果。\", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid",
-      "durationMs": 360
+      "evidence": "knowledge commit 67c6cebd6f7f: document,implementation,verification,verificationEvidenceRefs,verificationCoverage,revision,currentBehaviour,entries,relations,invalidationNotes; projection 67c6cebd6f7f state=valid (durable SQLite row valid); cold start selected [\"F-0f0f0f0f\",\"F-0a1b2c3d\"] with \"未付款订单可取消；已付款订单返回已确认的拒绝结果。\", code+test entries, the constrained_by constraint and the invalidation gap; knowledge.list state=valid",
+      "durationMs": 423
     },
     {
       "name": "offline.no-model-call",
       "acs": [],
       "status": "PASS",
-      "evidence": "provider stub at http://127.0.0.1:59464/v1 received 0 requests across the whole drill; config.test resolved chief to 01a0a780-b275-70d4-bf0f-b5b869c00140/e2e-offline-model with probe=capabilities-only",
-      "durationMs": 2
+      "evidence": "provider stub at http://127.0.0.1:55259/v1 received 0 requests across the whole drill; config.test resolved chief to 01a0a8a0-538b-71ad-aab8-23d5acb33312/e2e-offline-model with probe=capabilities-only",
+      "durationMs": 3
     },
     {
       "name": "chief.message-to-stage",
@@ -436,8 +436,8 @@
         "AC-069"
       ],
       "status": "PASS",
-      "evidence": "no-seed chain: message 01a0a780-e0de-7c88-abe2-fb0d693b001e → Chief Run 01a0a780-e11a-7e04-bdac-b0d523528510 → Requirement 01a0a780-e6a2-7336-8c97-6bbb8f9e9395 (active/plan) → professional Run 01a0a780-ef2f-7d5e-a499-db315e4c8667 (parent 01a0a780-e11a-7e04-bdac-b0d523528510) → stage result 01a0a780-f455-7ed9-ab2d-9b10f63d2945 + stage.completed, message state processed, board shows the Requirement",
-      "durationMs": 5453
+      "evidence": "no-seed chain: message 01a0a8a0-836a-7dc7-a2fe-cc5aeb3d0d70 → Chief Run 01a0a8a0-83b4-70d5-874f-0c9b3cf1e653 → Requirement 01a0a8a0-8955-7ee3-ac03-e92fb25e5b6a (active/plan) → professional Run 01a0a8a0-9205-788f-aaa6-80b8ce04ba16 (parent 01a0a8a0-83b4-70d5-874f-0c9b3cf1e653) → stage result 01a0a8a0-97ac-7852-90f6-a2f855e39c2f + stage.completed, message state processed, board shows the Requirement",
+      "durationMs": 5697
     },
     {
       "name": "runtime.executes-attempt",
@@ -445,8 +445,8 @@
         "AC-057"
       ],
       "status": "PASS",
-      "evidence": "runtime executed a real Attempt: Run 01a0a780-f531-78ed-8886-4ef04fcf8cbc completed with Attempt 01a0a780-f5fb-7263-919a-3399d79bdd68 through the supervisor, a real apps/runner child process and the loopback model (1 Provider call(s), 13 tokens booked); killing the live Runner of Run 01a0a781-0e59-7f47-a661-5ea9a05d94b3 (pid 90007) parked it as interrupted with Attempt 01a0a781-0e74-7e4b-92a5-f44bd72c91ec lost (new Attempt allowed=true)",
-      "durationMs": 6649
+      "evidence": "runtime executed a real Attempt: Run 01a0a8a0-98a2-7d74-b5b5-4781c4ce0012 completed with Attempt 01a0a8a0-996b-72a9-8b03-e1655bab3493 through the supervisor, a real apps/runner child process and the loopback model (1 Provider call(s), 13 tokens booked); killing the live Runner of Run 01a0a8a0-b227-7cee-b742-ebe1cf16b67c (pid 54925) parked it as interrupted with Attempt 01a0a8a0-b28c-7ca8-92c0-894626bdc508 lost (new Attempt allowed=true)",
+      "durationMs": 6754
     },
     {
       "name": "tool.broker-admission",
@@ -457,8 +457,8 @@
         "AC-050"
       ],
       "status": "PASS",
-      "evidence": "G8 on the real path: message 01a0a781-0f33-7b69-b7b0-3004d2c74ae6 → Chief assessment → professional Run 01a0a781-1f00-7f23-b518-adc493fe5d19 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended",
-      "durationMs": 15650
+      "evidence": "G8 on the real path: message 01a0a8a0-b30f-71b1-b37e-10c92a901b62 → Chief assessment → professional Run 01a0a8a0-c4a6-786e-8ee4-1c3027685a12 (Plan-Tasked, 2 Runs, 0 grandchildren, settled contract_violation) through the real Broker: refused NOT_AUTHORIZED/CONTEXT_FORBIDDEN/GATE_NOT_READY (source read outside the Grant, readScope, unapproved Plan), no tool_operation for the refused path, source hash unchanged, pending permission Decisions 0 after the typed refusal; role faces chief=[read,search,artifact_write,assessment_submit,agent_dispatch,decision_request,context_request] worker=[read,search,edit,write,bash,git,artifact_write,stage_yield,request_dispatch,context_request]; Grants revoked when the Attempt ended",
+      "durationMs": 16378
     },
     {
       "name": "browser.html-preview-and-download",
@@ -466,7 +466,7 @@
         "AC-002"
       ],
       "status": "PASS",
-      "evidence": "artifact 01a0a781-5483-72c8-82b4-50bf56e0b00b 在 /projects/123672ee57bea3877eaef2f26bdb388f/requirements/01a0a781-5486-7908-add8-e24f1a5ae5b2 渲染于 sandbox=\"allow-scripts\" 的 iframe；预览响应 200 CSP[default-src 'none'; connect-src 'none'] x-agentdev-preview-sandbox=allow-scripts x-agentdev-preview-credentials=omit content-type=text/html；下载字节含 AGENTDEV-PREVIEW-MARKER，URL /artifacts/123672ee57bea3877eaef2f26bdb388f/download/<token>（项目范围显式），重放同 token 被拒绝 403；临时项目 HEAD=94e70ed9c821（未变）且 git status 为空 | 匿名上下文请求 /artifacts/123672ee57bea3877eaef2f26bdb388f/01a0a781-5483-72c8-82b4-50bf56e0b00b/preview → 401 {\"ok\":false,\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"sign in to use the work（Playwright 1.63.0，18 个 spec，用时 19709ms，exit 0）",
+      "evidence": "artifact 01a0a8a0-fee2-73d8-b7be-2c5b7896b7db 在 /projects/775c37312df789fa389db4c3439269e2/requirements/01a0a8a0-fee5-7e25-8c4d-92e23e5e43ca 渲染于 sandbox=\"allow-scripts\" 的 iframe；预览响应 200 CSP[default-src 'none'; connect-src 'none'] x-agentdev-preview-sandbox=allow-scripts x-agentdev-preview-credentials=omit content-type=text/html；下载字节含 AGENTDEV-PREVIEW-MARKER，URL /artifacts/775c37312df789fa389db4c3439269e2/download/<token>（项目范围显式），重放同 token 被拒绝 403；临时项目 HEAD=9c7e6355f525（未变）且 git status 为空 | 匿名上下文请求 /artifacts/775c37312df789fa389db4c3439269e2/01a0a8a0-fee2-73d8-b7be-2c5b7896b7db/preview → 401 {\"ok\":false,\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"sign in to use the work（Playwright 1.63.0，18 个 spec，用时 36607ms，exit 0）",
       "durationMs": 0
     },
     {
@@ -475,7 +475,7 @@
         "AC-052"
       ],
       "status": "PASS",
-      "evidence": "frame origin=null cookie=null cookieError=SecurityError（会话 cookie agentdev_web 确实存在）；parent.document=SecurityError top.title=SecurityError topNavigation=null（父页 URL 未变）；fetch(probe)=rejected:TypeError fetch(/api/session)=rejected:TypeError xhr=error img=error；探针自计数 attacks=0；探针 URL 的浏览器响应数=0；被 CSP 拒绝的探针请求=2（errorText=csp）；localStorage=SecurityError（Playwright 1.63.0，18 个 spec，用时 19709ms，exit 0）",
+      "evidence": "frame origin=null cookie=null cookieError=SecurityError（会话 cookie agentdev_web 确实存在）；parent.document=SecurityError top.title=SecurityError topNavigation=null（父页 URL 未变）；fetch(probe)=rejected:TypeError fetch(/api/session)=rejected:TypeError xhr=error img=error；探针自计数 attacks=0；探针 URL 的浏览器响应数=0；被 CSP 拒绝的探针请求=2（errorText=csp）；localStorage=SecurityError（Playwright 1.63.0，18 个 spec，用时 36607ms，exit 0）",
       "durationMs": 0
     },
     {
@@ -484,7 +484,7 @@
         "AC-071"
       ],
       "status": "PASS",
-      "evidence": "open: grid=220.0px 573.6px 486.4px, --dock=clamp(360px, 38%, 560px) ⇒ dock 486.4px (38% of 1280px), main 右缘=793.6 dock 左缘=793.6；compact: 第三轨=44px, dock display=none, aria-expanded=false；hidden: 第三轨=0px, main=1060.0px > compact=1016.0px；三态由真实键盘操作（focus + Enter）驱动 | {\n  \"viewport\": {\n    \"width\": 1280,\n    \"height\": 720\n  },\n  \"header\": {\n    \"x\": 0,\n    \"y\": 0,\n    \"width\": 1280,\n    \"height\": 54,\n    \"right\": 1280,\n    \"bottom\": 54\n  },\n  \"headerDisplay\": \"flex\",\n  \"brand\": {\n    \"x\": 0,\n    \"y\": 0,\n    \"width\": 220,\n    \"height\": 54,\n    \"right\": 220,\n    \"bottom\": 54\n  },\n  \"projectArea\": {\n    \"x\": 220,\n    \"y\": 0,\n    \"width\": 695.890625,\n    \"height\": 54,\n    \"right\": 915.890625,\n    \"bottom\": 54\n  },\n  \"tools\": {\n    \"x\": 915.890625,\n    \"y\": 0,\n    \"width\": 364.109375,\n    \"height\": 54,\n    \"right\": 1280,\n    \"bottom\": 54\n  },\n  \"toggle\": {\n    \"x\": 997.765625,\n    \"y\": 3.5,\n    \"width\": 44.125,\n    \"height\": 46,\n    \"right\": 1041.890625,\n    \"bottom\": 49.5\n  }\n} | 面板状态写入 localStorage(agentdev.panel=compact) 并在导航到 /requirements 后仍为 compact（dock display=none）；三态切换期间 /rpc 请求数=0；run.get(01a0a781-5488-710c-bd03-b890c9e32ae2) 切换前后完全一致，status=running | 600px viewport：dock position=fixed width=420.0px 右缘=600.0 mainLeft=0.0 mainRight=600.0；#liveDockClose 关闭 → data-panel-mode=compact，dock display=none，关闭后 activeElement=liveDockToggle | open → compact 后 data-mode=compact、data-i18n-aria=aria.liveDockCompact、aria-label=\"Live panel, compact\"（Playwright 1.63.0，18 个 spec，用时 19709ms，exit 0）",
+      "evidence": "open: grid=220.0px 573.6px 486.4px, --dock=clamp(360px, 38%, 560px) ⇒ dock 486.4px (38% of 1280px), main 右缘=793.6 dock 左缘=793.6；compact: 第三轨=44px, dock display=none, aria-expanded=false；hidden: 第三轨=0px, main=1060.0px > compact=1016.0px；三态由真实键盘操作（focus + Enter）驱动 | {\n  \"viewport\": {\n    \"width\": 1280,\n    \"height\": 720\n  },\n  \"header\": {\n    \"x\": 0,\n    \"y\": 0,\n    \"width\": 1280,\n    \"height\": 54,\n    \"right\": 1280,\n    \"bottom\": 54\n  },\n  \"headerDisplay\": \"flex\",\n  \"brand\": {\n    \"x\": 0,\n    \"y\": 0,\n    \"width\": 220,\n    \"height\": 54,\n    \"right\": 220,\n    \"bottom\": 54\n  },\n  \"projectArea\": {\n    \"x\": 220,\n    \"y\": 0,\n    \"width\": 694.6875,\n    \"height\": 54,\n    \"right\": 914.6875,\n    \"bottom\": 54\n  },\n  \"tools\": {\n    \"x\": 914.6875,\n    \"y\": 0,\n    \"width\": 365.3125,\n    \"height\": 54,\n    \"right\": 1280,\n    \"bottom\": 54\n  },\n  \"toggle\": {\n    \"x\": 996.5625,\n    \"y\": 3.5,\n    \"width\": 44.125,\n    \"height\": 46,\n    \"right\": 1040.6875,\n    \"bottom\": 49.5\n  }\n} | 面板状态写入 localStorage(agentdev.panel=compact) 并在导航到 /requirements 后仍为 compact（dock display=none）；三态切换期间 /rpc 请求数=0；run.get(01a0a8a0-fee7-7b9c-951b-d4dcf92e5808) 切换前后完全一致，status=running | 600px viewport：dock position=fixed width=420.0px 右缘=600.0 mainLeft=0.0 mainRight=600.0；#liveDockClose 关闭 → data-panel-mode=compact，dock display=none，关闭后 activeElement=liveDockToggle | open → compact 后 data-mode=compact、data-i18n-aria=aria.liveDockCompact、aria-label=\"Live panel, compact\"（Playwright 1.63.0，18 个 spec，用时 36607ms，exit 0）",
       "durationMs": 0
     },
     {
@@ -493,7 +493,7 @@
         "AC-073"
       ],
       "status": "PASS",
-      "evidence": "Tab #1 → a#(skip-link) name=\"Skip to main content\"；Enter → 焦点 #main；遍历 22 个可聚焦控件（含 #languageSelect=true），无未命名控件，无不可聚焦元素进入顺序；ARIA: #liveDock=\"Live panel\" #liveDockToggle=\"Live panel, open\" #languageSelect=\"Interface language\" #composerBody=\"Message the Chief\"；aria-live 区域 #connectionState/#messages/#liveEvents/#stagedAttachments | 切换到 zh：html[lang]=zh-CN，nav Chief→主管，cookie agentdev_language=zh，localStorage(agentdev.language)=zh；客户端自有字符串随切换生效：#liveDock aria-label=实时面板、#liveDockToggle=实时面板，已展开、下载按钮=下载完整产物；项目内容未翻译：#requirementTitle=\"HTML 说明产物隔离预览\" 保持不变且 data-translatable=\"false\"；project-name=\"/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-e2e-repo-1EFAND\" 不变；ui.translate 调用 63 次，未包含任何项目内容（标题/项目名泄漏=0）；reload 后整页仍为 zh；未在客户端打开过的 /settings 也由服务端按 cookie 渲染为「保存配置」（Playwright 1.63.0，18 个 spec，用时 19709ms，exit 0）",
+      "evidence": "Tab #1 → a#(skip-link) name=\"Skip to main content\"；Enter → 焦点 #main；遍历 22 个可聚焦控件（含 #languageSelect=true），无未命名控件，无不可聚焦元素进入顺序；ARIA: #liveDock=\"Live panel\" #liveDockToggle=\"Live panel, open\" #languageSelect=\"Interface language\" #composerBody=\"Message the Chief\"；aria-live 区域 #connectionState/#messages/#liveEvents/#stagedAttachments | 切换到 zh：html[lang]=zh-CN，nav Chief→主管，cookie agentdev_language=zh，localStorage(agentdev.language)=zh；客户端自有字符串随切换生效：#liveDock aria-label=实时面板、#liveDockToggle=实时面板，已展开、下载按钮=下载完整产物；项目内容未翻译：#requirementTitle=\"HTML 说明产物隔离预览\" 保持不变且 data-translatable=\"false\"；project-name=\"/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-e2e-repo-NoVgxt\" 不变；ui.translate 调用 63 次，未包含任何项目内容（标题/项目名泄漏=0）；reload 后整页仍为 zh；未在客户端打开过的 /settings 也由服务端按 cookie 渲染为「保存配置」（Playwright 1.63.0，18 个 spec，用时 36607ms，exit 0）",
       "durationMs": 0
     },
     {
@@ -502,7 +502,7 @@
         "AC-074"
       ],
       "status": "PASS",
-      "evidence": "Inbox 出现待办（action=read path=.env pattern=.env* work=01a0a781-5488-7d9b-a212-651f3f1da6b7 run=01a0a781-5489-7d23-9458-4b35630a30fd）→ 点击「Handled」→ 行从 #inboxList 消失且 #inboxStatus 可见 → 重新 GET 页面后仍 0 行；页面不含被拒文件内容（AGENTDEV-BROWSER-SECRET-MARKER/hunter2）（Playwright 1.63.0，18 个 spec，用时 19709ms，exit 0）",
+      "evidence": "Inbox 出现待办（action=read path=.env pattern=.env* work=01a0a8a0-fee7-7073-a040-17b40c243be7 run=01a0a8a0-fee8-7737-b8b0-9bb1ee5ed524）→ 点击「Handled」→ 行从 #inboxList 消失且 #inboxStatus 可见 → 重新 GET 页面后仍 0 行；页面不含被拒文件内容（AGENTDEV-BROWSER-SECRET-MARKER/hunter2）（Playwright 1.63.0，18 个 spec，用时 36607ms，exit 0）",
       "durationMs": 0
     },
     {
@@ -511,7 +511,7 @@
         "AC-076"
       ],
       "status": "PASS",
-      "evidence": "选择 6 个 text/markdown → #composerError=\"VALIDATION_ERROR: At most 5 attachments per message.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 21 MiB 的 text/plain → #composerError=\"VALIDATION_ERROR: The attachment exceeds 20 MiB.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 application/zip → #composerError=\"VALIDATION_ERROR: That file type is not a supported attachment type.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 3 个 17 MiB 文件（合计 51 MiB，逐个 <20 MiB）→ #composerError=\"VALIDATION_ERROR: Attachments exceed 50 MiB in total.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 语言切到 zh 并等待客户端字典生效后选择 6 个附件 → #composerError=\"VALIDATION_ERROR: 每条消息最多 5 个附件。\"（本地化文案而非原始 key）；/artifacts/upload 请求数=0 | 选择 1 个 text/markdown → 上传请求 1 次，暂存项 attachmentId=01a0a781-95ab-79a2-a041-315f0db9dcf4，#composerError 隐藏（证明上一条拒绝针对具体限制而非一律拒绝）（Playwright 1.63.0，18 个 spec，用时 19709ms，exit 0）",
+      "evidence": "选择 6 个 text/markdown → #composerError=\"VALIDATION_ERROR: At most 5 attachments per message.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 21 MiB 的 text/plain → #composerError=\"VALIDATION_ERROR: The attachment exceeds 20 MiB.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 application/zip → #composerError=\"VALIDATION_ERROR: That file type is not a supported attachment type.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 选择 3 个 17 MiB 文件（合计 51 MiB，逐个 <20 MiB）→ #composerError=\"VALIDATION_ERROR: Attachments exceed 50 MiB in total.\"；#stagedAttachments 为空；/artifacts/upload 请求数=0 | 语言切到 zh 并等待客户端字典生效后选择 6 个附件 → #composerError=\"VALIDATION_ERROR: 每条消息最多 5 个附件。\"（本地化文案而非原始 key）；/artifacts/upload 请求数=0 | 选择 1 个 text/markdown → 上传请求 1 次，暂存项 attachmentId=01a0a8a1-77be-7c28-acd3-1cbd580ff9d1，#composerError 隐藏（证明上一条拒绝针对具体限制而非一律拒绝）（Playwright 1.63.0，18 个 spec，用时 36607ms，exit 0）",
       "durationMs": 0
     },
     {
@@ -520,8 +520,8 @@
         "AC-064"
       ],
       "status": "PASS",
-      "evidence": "credentialed Provider provider:01a0a781-9d7f-7adc-9029-3de011430b30 -> Chief Run 01a0a781-9dc0-7def-a7b8-70610f575d5f reached attempt.ready (Attempt 01a0a781-a122-73a1-b8d1-01ded10561bd running) and the loopback model received 1 credentialed call(s); agentdev backup exit 0: revision e48b33e47dfc, complete, secretRefs [\"provider:01a0a781-9d7f-7adc-9029-3de011430b30\"], installation config copied, no credential value in the backup directory; deleted /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-e2e-ops-home-i3n8ro/projects/b9dd51435bf7cc829051935c58a42ebd and the project; agentdev restore exit 0 (status ready, tree 1ed076140947, evidence 1/1, doctor ok, Run 01a0a781-9dc0-7def-a7b8-70610f575d5f interrupted); restarted daemon reported it interrupted through its own protocol; fresh installation restore: status blocked + first stdout line WARNING [PROVIDER_BLOCKED], Provider definitions carried (1), no credential value in the fresh home; after stdin secret set the restore is ready; secret rotate exit 0 (capabilities.revoked=0, no value printed); relocate --move to a different root refused with PROJECT_IDENTITY_MOVE_UNSUPPORTED and left the repository and registry untouched; relocate to an alias of the same canonical root accepted (identityPreserved); agentdev doctor exit 0 with execution ready; launchd 单元 load：bootstrap gui/501 exit 0, daemon pid 95832 published runtime.json and held daemon.lock, agentdev status running:true, bootout removed the record and the lock",
-      "durationMs": 14053
+      "evidence": "credentialed Provider provider:01a0a8a1-88d8-7179-904b-e0b37c9c10f2 -> Chief Run 01a0a8a1-8967-7668-9c64-249c3e95d536 reached attempt.ready (Attempt 01a0a8a1-8c21-7be7-963f-00185fedbe1a running) and the loopback model received 1 credentialed call(s); agentdev backup exit 0: revision fac0ff61f973, complete, secretRefs [\"provider:01a0a8a1-88d8-7179-904b-e0b37c9c10f2\"], installation config copied, no credential value in the backup directory; deleted /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-e2e-ops-home-U4NV2D/projects/3cb11fb5bbe19e7ddbf7f550f2222cbe and the project; agentdev restore exit 0 (status ready, tree 1ed076140947, evidence 1/1, doctor ok, Run 01a0a8a1-8967-7668-9c64-249c3e95d536 interrupted); restarted daemon reported it interrupted through its own protocol; fresh installation restore: status blocked + first stdout line WARNING [PROVIDER_BLOCKED], Provider definitions carried (1), no credential value in the fresh home; after stdin secret set the restore is ready; secret rotate exit 0 (capabilities.revoked=0, no value printed); relocate --move to a different root refused with PROJECT_IDENTITY_MOVE_UNSUPPORTED and left the repository and registry untouched; relocate to an alias of the same canonical root accepted (identityPreserved); agentdev doctor exit 0 with execution ready; launchd 单元 load：bootstrap gui/501 exit 0, daemon pid 60710 published runtime.json and held daemon.lock, agentdev status running:true, bootout removed the record and the lock",
+      "durationMs": 16275
     },
     {
       "name": "provider.fact-and-unknown",

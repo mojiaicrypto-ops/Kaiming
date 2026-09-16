@@ -2086,9 +2086,17 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
         sourceRef: { kind: 'message', id: MESSAGE_ID, version: '1' },
       });
       expect(authorization?.scope.writePaths).toEqual(['src/theme']);
-      // The derived envelope never reaches an environment operation.
-      expect(authorization?.operations).not.toContain('bash');
-      expect(authorization?.operations).not.toContain('network');
+      // The derived envelope now carries the coding surface (`execution.md` §2): the
+      // shell/git/network operations a build or test needs, so the Run is not blocked on a
+      // per-occurrence decision — but never the irreversible operations.
+      expect(authorization?.operations).toEqual(
+        expect.arrayContaining(['read', 'edit', 'write', 'bash', 'network', 'secret']),
+      );
+      for (const irreversible of ['push', 'deploy', 'delete_data']) {
+        expect(authorization?.operations).not.toContain(irreversible);
+      }
+      // An explicit network target is still not derivable.
+      expect(authorization?.scope.networkTargets).toEqual([]);
       const work = store.works.find(workId);
       expect(work?.level).toBe('L2');
       expect(work?.authorizationRef).toBe(authorizationRef);
@@ -2248,11 +2256,13 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
         authorizations: store.authorizations.list().length,
         snapshots: store.snapshots.list().length,
       };
-      // The derived envelope covers `src/theme`; a spec reaching for another path, or for
-      // an environment operation, is refused by the same guard the assessment path uses.
+      // The derived envelope covers `src/theme`; a spec reaching for another path, for an
+      // **irreversible** operation, or for an explicit network target is refused by the same
+      // guard the assessment path uses. `bash` is deliberately no longer in this list: it is
+      // part of the derived coding envelope now (`execution.md` §2).
       const scopes: Scope[] = [
         { ...emptyScope, writePaths: ['src/elsewhere'] },
-        { ...emptyScope, writePaths: ['src/theme'], operations: ['bash'] },
+        { ...emptyScope, writePaths: ['src/theme'], operations: ['deploy'] },
         { ...emptyScope, writePaths: ['src/theme'], networkTargets: ['https://example.test'] },
       ];
       for (const scope of scopes) {

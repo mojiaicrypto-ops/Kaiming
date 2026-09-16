@@ -7,15 +7,16 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { EXEC_IMAGE } from '../src/doctor.js';
 
 /**
- * AC-048 container evidence: the fixed execution image must actually enforce
- * the boundary `docs/architecture/execution.md` §1 fixes — read-only root
- * filesystem, read-only source mounts, non-root uid, dropped capabilities, no
- * network, pid/memory limits.
+ * Optional-container-environment evidence: the execution image must really enforce the
+ * boundary the container path relies on — read-only root filesystem, read-only source
+ * mounts, non-root uid, dropped capabilities, no network, pid/memory limits.
  *
- * These are negative tests: each one asserts a write or a connection FAILS, with
- * a positive control next to it so a broken invocation cannot pass vacuously. If
- * Docker or the image is missing the suite fails — the product refuses to run
- * without them.
+ * Host-first revision: this is the **optional project run environment**
+ * (`docs/architecture/execution.md` §1), no longer the default execution base, so a machine
+ * without Docker or without the image skips the suite instead of failing the release. The
+ * guardrails that always hold are proven elsewhere (path boundary, hard-refusal list, audit);
+ * these are negative tests for the container path when it is enabled, each with a positive
+ * control next to it so a broken invocation cannot pass vacuously.
  */
 const run = promisify(execFile);
 const IMAGE = process.env.AGENTDEV_EXEC_IMAGE ?? EXEC_IMAGE;
@@ -66,10 +67,12 @@ function inContainer(command: string, extra: readonly string[] = []): Promise<Re
 let shared: string;
 let readOnly: string;
 
+// Docker is an optional capability now, so its absence (or a missing image) skips the
+// suite rather than failing readiness. Probed once at module load.
+const dockerReachable = (await docker(['version', '--format', '{{.Server.Version}}'])).code === 0;
+const imagePresent = dockerReachable && (await docker(['image', 'inspect', IMAGE])).code === 0;
+
 beforeAll(async () => {
-  if ((await docker(['version', '--format', '{{.Server.Version}}'])).code !== 0) {
-    throw new Error('the docker daemon is not reachable: AC-048 requires it');
-  }
   shared = await mkdtemp(join(tmpdir(), 'agentdev-image-'));
   await chmod(shared, 0o777);
   readOnly = await mkdtemp(join(tmpdir(), 'agentdev-image-ro-'));
@@ -81,7 +84,7 @@ afterAll(async () => {
   await rm(readOnly, { recursive: true, force: true });
 });
 
-describe('execution image', () => {
+describe.skipIf(!imagePresent)('execution image (optional container run environment)', () => {
   it('runs as the non-root execution account', async () => {
     const result = await inContainer('id -u');
     expect(result.stderr).toBe('');

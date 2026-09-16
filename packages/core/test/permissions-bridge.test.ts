@@ -596,11 +596,23 @@ describe('ToolGrantService', () => {
     ).toBeUndefined();
   });
 
-  it('names the operations that are approved per occurrence (Q-T3-3)', () => {
-    for (const operation of ['bash', 'network', 'secret', 'push', 'deploy', 'delete_data']) {
+  it('names the irreversible operations that are approved per occurrence', () => {
+    // Host-first model (`docs/architecture/execution.md` §2): only the irreversible effects
+    // still interrupt the user; the shell/network/secret surface is part of the envelope.
+    for (const operation of ['push', 'deploy', 'delete_data']) {
       expect(requiresPerOccurrenceApproval(operation)).toBe(true);
     }
-    for (const operation of ['read', 'search', 'edit', 'write', 'artifact_write', 'git']) {
+    for (const operation of [
+      'read',
+      'search',
+      'edit',
+      'write',
+      'artifact_write',
+      'git',
+      'bash',
+      'network',
+      'secret',
+    ]) {
       expect(requiresPerOccurrenceApproval(operation)).toBe(false);
     }
   });

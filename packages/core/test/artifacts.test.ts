@@ -423,7 +423,19 @@ describe('attachments, artifacts and previews (WP-03)', () => {
       workId: sent.workId,
       sourceRef: { kind: 'message', id: sent.messageId },
       scope: { writePaths: ['docs/INDEX.md'], readPaths: ['docs/INDEX.md'] },
-      operations: ['read', 'edit'],
+      // `execution.md` §2: the approved envelope carries the coding surface (shell/git/net),
+      // not only the file operations, so a message-authorized Run can build and test.
+      operations: [
+        'read',
+        'search',
+        'edit',
+        'write',
+        'git',
+        'bash',
+        'network',
+        'secret',
+        'artifact_write',
+      ],
     });
     // The Assessment records the routing evidence for that authorization.
     const assessment = store.assessments.list({ where: 'work_id = ?', params: [sent.workId] })[0];

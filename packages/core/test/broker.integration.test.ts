@@ -549,12 +549,154 @@ describe('Broker integration (AC-048, AC-050)', () => {
     }
   });
 
+  it('executes a declared acceptance command on the host by default and refuses an undeclared one (WP-12 W5)', async () => {
+    const declared = 'node -e "process.exit(7)"';
+    const testRunId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d6e20';
+    const testAttemptId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d6e60';
+    harness.store.runs.insert({
+      id: testRunId,
+      projectId: projectIdFromRoot(harness.workspace),
+      workId: WORK_ID,
+      taskId: TASK_ID,
+      role: 'test',
+      purpose: 'test',
+      stage: 'test',
+      status: 'running',
+      requiredChild: false,
+      join: 'none',
+      childIds: [],
+      configSnapshotId: '4'.repeat(64),
+      contextSnapshotId: '5'.repeat(64),
+      dispatchSnapshotId: '6'.repeat(64),
+      budgetAllocation: 1_000,
+    });
+    harness.store.attempts.insert({
+      id: testAttemptId,
+      projectId: projectIdFromRoot(harness.workspace),
+      runId: testRunId,
+      number: 1,
+      status: 'running',
+      ownerEpoch: 4,
+    });
+    const broker = new Broker({
+      store: harness.store,
+      grants: harness.grants,
+      docker: () => DOCKER.availability,
+      declaredTestCommands: () => [declared],
+    });
+    const run = (command: string) =>
+      broker.runDeclaredTestCommand({
+        workId: WORK_ID,
+        runId: testRunId,
+        attemptId: testAttemptId,
+        epoch: 4,
+        role: 'test',
+        stage: 'test',
+        command,
+        roots: [harness.workspace],
+      });
+
+    const executed = await run(declared);
+    expect(executed.ok).toBe(true);
+    if (!executed.ok) throw new Error(executed.reason);
+    // The host reported the command's own exit status, not a wrapper's, and Docker being
+    // unavailable would not have changed the answer (`execution.md` §1/§5).
+    expect(executed.result.status).toBe(7);
+    expect(executed.mode).toBe('host');
+
+    // A command the project did not declare is refused before any container starts.
+    const undeclared = await run('node -e "process.exit(0)"');
+    expect(undeclared.ok).toBe(false);
+    if (undeclared.ok) throw new Error('unreachable');
+    expect(undeclared.code).toBe('NOT_AUTHORIZED');
+    expect(undeclared.reason).toContain('declared testCommands');
+
+    // A daemon with no declared set has no such path at all (fail closed).
+    const bare = new Broker({
+      store: harness.store,
+      grants: harness.grants,
+      docker: () => DOCKER.availability,
+    });
+    const refused = await bare.runDeclaredTestCommand({
+      workId: WORK_ID,
+      runId: testRunId,
+      attemptId: testAttemptId,
+      epoch: 4,
+      role: 'test',
+      stage: 'test',
+      command: declared,
+      roots: [harness.workspace],
+    });
+    expect(refused.ok).toBe(false);
+
+    // The real command, its exit code and the environment it ran in are auditable
+    // (`data.md` §3 `Env`).
+    const events = harness.store.events
+      .readAfter(0, { limit: 10_000 })
+      .filter((event) => event.name === 'test.command_executed');
+    expect(
+      events.some(
+        (event) =>
+          event.data['command'] === declared &&
+          event.data['exitCode'] === 7 &&
+          event.data['mode'] === 'host',
+      ),
+    ).toBe(true);
+
+    // The negative proof, end to end at the library layer: the real exit code becomes a
+    // `failed` CheckResult and the stage gate then refuses a `success` claim that the
+    // executed evidence does not support (WP-12 W5, `workflow.md` §6).
+    const checkResult = buildTestCheckResult({
+      executions: [
+        {
+          command: declared,
+          exitCode: executed.result.status,
+          stdout: executed.result.stdout,
+          stderr: executed.result.stderr,
+          signal: executed.result.signal,
+          durationMs: executed.durationMs,
+        },
+      ],
+      environmentRef: ATTEMPT_A,
+      inputTree: HASH,
+      acceptanceIds: ['AC-048'],
+      outputRefs: [ATTEMPT_A],
+    });
+    expect(checkResult.status).toBe('failed');
+    expect(checkResult.checks[0]?.exitCode).toBe(7);
+    const registry = new TestEvidenceRegistry();
+    registry.record(testAttemptId, checkResult);
+    const gate = new StageGate({ store: harness.store, testEvidence: registry });
+    expect(() =>
+      gate.submit({
+        runId: testRunId,
+        attemptId: testAttemptId,
+        epoch: 4,
+        payload: {
+          status: 'success',
+          summary: 'the declared command passed',
+          artifactRefs: [],
+          evidenceRefs: [],
+          changedPaths: [],
+          findingIds: [],
+          unknowns: [],
+          requestedActions: [],
+          readLedgerSeq: 0,
+          readLedgerHash: '0'.repeat(64),
+        },
+      }),
+    ).toThrowError(/exit 7/);
+    expect(harness.store.stageResults.list({ where: 'run_id = ?', params: [testRunId] })).toEqual(
+      [],
+    );
+  });
+
   it.skipIf(!DOCKER.ready)(
-    'executes a declared acceptance command in the container and refuses an undeclared one (WP-12 W5)',
+    'runs a declared acceptance command inside the explicit container environment (WP-12 W5)',
     async () => {
       const declared = 'node -e "process.exit(7)"';
-      const testRunId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d6e20';
-      const testAttemptId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d6e60';
+      const testRunId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d6e21';
+      const testAttemptId = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d6e61';
       harness.store.runs.insert({
         id: testRunId,
         projectId: projectIdFromRoot(harness.workspace),
@@ -586,39 +728,7 @@ describe('Broker integration (AC-048, AC-050)', () => {
         docker: () => DOCKER.availability,
         declaredTestCommands: () => [declared],
       });
-      const run = (command: string) =>
-        broker.runDeclaredTestCommand({
-          workId: WORK_ID,
-          runId: testRunId,
-          attemptId: testAttemptId,
-          epoch: 4,
-          role: 'test',
-          stage: 'test',
-          command,
-          roots: [harness.workspace],
-        });
-
-      const executed = await run(declared);
-      expect(executed.ok).toBe(true);
-      if (!executed.ok) throw new Error(executed.reason);
-      // The container reported the command's own exit status, not a wrapper's.
-      expect(executed.result.status).toBe(7);
-      expect(executed.mode).toBe('container');
-
-      // A command the project did not declare is refused before any container starts.
-      const undeclared = await run('node -e "process.exit(0)"');
-      expect(undeclared.ok).toBe(false);
-      if (undeclared.ok) throw new Error('unreachable');
-      expect(undeclared.code).toBe('NOT_AUTHORIZED');
-      expect(undeclared.reason).toContain('declared testCommands');
-
-      // A daemon with no declared set has no such path at all (fail closed).
-      const bare = new Broker({
-        store: harness.store,
-        grants: harness.grants,
-        docker: () => DOCKER.availability,
-      });
-      const refused = await bare.runDeclaredTestCommand({
+      const executed = await broker.runDeclaredTestCommand({
         workId: WORK_ID,
         runId: testRunId,
         attemptId: testAttemptId,
@@ -627,63 +737,21 @@ describe('Broker integration (AC-048, AC-050)', () => {
         stage: 'test',
         command: declared,
         roots: [harness.workspace],
+        // The explicit opt-in is the only thing that selects the container now.
+        mode: 'container',
       });
-      expect(refused.ok).toBe(false);
-
-      // The real command and exit code are auditable.
+      expect(executed.ok).toBe(true);
+      if (!executed.ok) throw new Error(executed.reason);
+      expect(executed.result.status).toBe(7);
+      expect(executed.mode).toBe('container');
       const events = harness.store.events
         .readAfter(0, { limit: 10_000 })
         .filter((event) => event.name === 'test.command_executed');
       expect(
-        events.some((event) => event.data['command'] === declared && event.data['exitCode'] === 7),
+        events.some(
+          (event) => event.data['command'] === declared && event.data['mode'] === 'container',
+        ),
       ).toBe(true);
-
-      // The negative proof, end to end at the library layer: the real exit code becomes a
-      // `failed` CheckResult and the stage gate then refuses a `success` claim that the
-      // executed evidence does not support (WP-12 W5, `workflow.md` §6).
-      const checkResult = buildTestCheckResult({
-        executions: [
-          {
-            command: declared,
-            exitCode: executed.result.status,
-            stdout: executed.result.stdout,
-            stderr: executed.result.stderr,
-            signal: executed.result.signal,
-            durationMs: executed.durationMs,
-          },
-        ],
-        environmentRef: ATTEMPT_A,
-        inputTree: HASH,
-        acceptanceIds: ['AC-048'],
-        outputRefs: [ATTEMPT_A],
-      });
-      expect(checkResult.status).toBe('failed');
-      expect(checkResult.checks[0]?.exitCode).toBe(7);
-      const registry = new TestEvidenceRegistry();
-      registry.record(testAttemptId, checkResult);
-      const gate = new StageGate({ store: harness.store, testEvidence: registry });
-      expect(() =>
-        gate.submit({
-          runId: testRunId,
-          attemptId: testAttemptId,
-          epoch: 4,
-          payload: {
-            status: 'success',
-            summary: 'the declared command passed',
-            artifactRefs: [],
-            evidenceRefs: [],
-            changedPaths: [],
-            findingIds: [],
-            unknowns: [],
-            requestedActions: [],
-            readLedgerSeq: 0,
-            readLedgerHash: '0'.repeat(64),
-          },
-        }),
-      ).toThrowError(/exit 7/);
-      expect(harness.store.stageResults.list({ where: 'run_id = ?', params: [testRunId] })).toEqual(
-        [],
-      );
     },
   );
 

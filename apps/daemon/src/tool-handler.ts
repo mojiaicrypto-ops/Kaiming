@@ -146,13 +146,13 @@ export interface ToolHandlerOptions {
   readonly planGate?: PlanGateService;
   readonly workspace?: RunWorkspaceResolver;
   /**
-   * The execution mode for tool shells (plan D-T3-7).
+   * The execution base for tool shells.
    *
-   * `docs/architecture/execution.md` §1 selects the mode from the configured
-   * `policy.permissionMode`; this slice takes an explicit value and defaults to `host`,
-   * because `permissionMode` has no runtime consumer yet (plan F13) and inventing one here
-   * would be a product decision. The Broker refuses container mode without Docker and
-   * never falls back to the host (`broker.ts`).
+   * `docs/architecture/execution.md` §1 makes the **host** the default for every permission
+   * mode, and `executionModeForPermissionMode` is what the daemon resolves; this option
+   * exists so a stack can explicitly opt into the optional container run environment. The
+   * default is `host`, and the Broker's container branch still refuses without Docker rather
+   * than silently downgrading an explicit container request.
    */
   readonly mode?: 'host' | 'container';
   /**
@@ -185,17 +185,23 @@ function readContentOf(result: unknown): string {
 }
 
 /**
- * The execution mode a permission policy selects (`execution.md` §1).
+ * The execution base a permission policy selects (`execution.md` §1).
  *
- * Workspace and Autonomous run professional Agents and their tools in Linux containers and
- * refuse admission when Docker is unavailable; Full Access is the explicit, non-root host
- * process. The Broker implements the refusal and never falls back, so this mapping is the
- * whole policy decision — it is a pure function so it can be asserted directly.
+ * **Every permission mode runs on the host.** Workspace, Autonomous and Full Access all run
+ * professional Agents and their tools directly in the user's repository (or the Task's own
+ * worktree); a missing Docker install costs the coding path nothing, and no permission mode
+ * maps to a container. The container is an optional *project run environment* — reached only
+ * by an explicit `mode: 'container'` on a call (or a stack assembled with that explicit
+ * default), never by a policy — so this function is the whole documented default and is a
+ * pure function so it can be asserted directly.
  */
 export function executionModeForPermissionMode(
-  mode: 'workspace' | 'autonomous' | 'full_access',
-): 'host' | 'container' {
-  return mode === 'full_access' ? 'host' : 'container';
+  _mode: 'workspace' | 'autonomous' | 'full_access',
+): 'host' {
+  // The parameter is kept because the documented mapping is stated per permission mode and
+  // asserting it is what proves no mode selects the container; the host is the answer for
+  // all three.
+  return 'host';
 }
 
 /** The resource name of one Work's single-writer lease (`reliability.md` §3). */
@@ -586,11 +592,11 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
         operation: plan.operation,
       });
 
-      // `execution.md` §1: Review and Test use the isolated container in **every** mode, so
-      // their calls are pinned to container execution even under Full Access. The Broker
-      // then refuses the call outright when Docker is missing ("缺Docker即阻断独立验证"),
-      // which is the documented outcome rather than a host-side fallback.
-      const callMode = callIsReadOnly(caller.role) ? 'container' : policyMode;
+      // `execution.md` §1 / `agents.md` §1: **every** role runs on the host by default,
+      // Review and Test included. Their independence comes from a distinct Run, Session,
+      // frozen input and tool set, not from a container mount; the container is an optional
+      // project run environment reached only through the explicit stack mode.
+      const callMode = policyMode;
 
       const outcome = await broker.invoke({
         workId: work.id,

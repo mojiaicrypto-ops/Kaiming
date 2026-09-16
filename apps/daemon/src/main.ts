@@ -451,11 +451,12 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
       egressPorts.add(project.ports.daemon);
       let execution: ProjectExecution | undefined;
       if (options.execute !== false) {
-        // `stack.md` §1 fixes the execution mode per permission policy: Workspace and
-        // Autonomous run the tools in Linux containers and refuse admission when Docker is
-        // unavailable; Full Access is the explicit, non-root host process. The Broker
-        // refuses container mode without Docker and **never** falls back (`broker.ts`), so
-        // the mapping is the documented one rather than a silent downgrade.
+        // `execution.md` §1: the host is the default for **every** permission mode — the
+        // tools work directly in the user's repository (or the Task's own worktree) and a
+        // missing Docker install costs the coding path nothing. The container is an optional
+        // project run environment; a stack that wants it passes `mode: 'container'`
+        // explicitly (the container integration tests and the egress drill do), and the
+        // Broker then refuses without Docker instead of silently downgrading.
         const permissionMode = project.config.project().policy.permissionMode;
         const toolMode = executionModeForPermissionMode(permissionMode);
         // `T3-implementation.md` 附录 A.7: the sensitive-file tier is read from the Project's
@@ -515,13 +516,20 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
             ...(options.runnerEnv === undefined ? {} : { env: options.runnerEnv }),
           }),
           // `stack.md` §3: Review/Test may write only their own report/scratch root.
-          // WP-12 W6: the container's only egress is the controlled channel, and the
-          // network policy reads the daemon's **actually bound** ports from the registry
-          // `main.ts` fills as listeners bind (`w1-implementation.md` §7.2).
+          // WP-12 W6 / host-first revision: the controlled egress belongs to the **optional
+          // container run environment**. The default host path uses the host network plus the
+          // admission-layer guard and audit (`tool-handler.ts` literal-URL `NetworkPolicy`)
+          // and needs no channel at all; the policy reads the daemon's **actually bound**
+          // ports from the registry `main.ts` fills as listeners bind
+          // (`w1-implementation.md` §7.2) on both paths.
           broker: {
             dataDir: project.dataDir,
             writableReportRoots: [join(project.dataDir, 'tool-reports')],
             daemonPorts: () => egressPorts.list(),
+            // The same execution base the tool bridge uses, so an explicit container stack
+            // reaches the Core-side declared test commands too, while the documented default
+            // keeps every role on the host.
+            mode: toolMode,
             egress,
             // `protocol.md` §1 `ConfigPatch.testCommands`: the human-authored acceptance
             // commands Core executes for a Test Run. Read live, so a configuration edit is
@@ -785,21 +793,12 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
     };
 
     try {
-      // WP-12 W6: the controlled egress comes up **first**, before any project stack
-      // exists. The proxies and listeners that follow only add their real ports to the
-      // registry the policy reads live, so a project assembled below can never observe a
-      // half-built egress. A failure to bind is logged, not fatal: the channel then stays
-      // unavailable and a network-covered container call is refused `PROVIDER_UNAVAILABLE`
-      // rather than opened.
-      if (options.execute !== false) {
-        try {
-          await egress.start();
-        } catch (error) {
-          log(
-            `agentdevd: egress proxy did not start: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
+      // Host-first revision: the controlled egress is part of the **optional container run
+      // environment**, so the daemon no longer starts it on the default path. The proxy binds
+      // lazily on the first container call's `ensure()`, and the sidecar after it; a daemon
+      // that never runs a container call never opens a listener or creates a container. A
+      // failure to bind is still fail-closed: the channel stays unavailable and a
+      // network-covered container call is refused `PROVIDER_UNAVAILABLE` rather than opened.
       const registry = readProjectRegistry(home);
       // An *empty* `--root` list means "whatever this installation has registered": `??`
       // alone ignored the registry (WP11R1-08).

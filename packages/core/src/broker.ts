@@ -2087,16 +2087,25 @@ export interface DeclaredTestCommandInvocation {
   readonly role: 'test';
   readonly stage: string;
   readonly command: string;
-  /** Absolute workspace roots to mount; the first becomes the container workdir. */
+  /** Absolute workspace root the command runs in (its working directory). */
   readonly roots: readonly string[];
   readonly timeoutMs?: number;
+  /**
+   * The execution base for this command.
+   *
+   * Absent means the Broker's own default (host, the documented default for every role,
+   * `execution.md` §5). An explicit `'container'` runs the command inside the optional
+   * project container environment — the same hardened plan a container tool call uses —
+   * and is then refused when Docker is unavailable instead of silently downgrading.
+   */
+  readonly mode?: ExecutionMode;
 }
 
 /** The result of one declared test command: the real process result, or a refusal. */
 export type DeclaredTestCommandOutcome =
   | {
       readonly ok: true;
-      readonly mode: 'container';
+      readonly mode: ExecutionMode;
       readonly result: ProcessResult;
       readonly durationMs: number;
     }
@@ -2309,13 +2318,17 @@ export class Broker {
    *   still cannot run an undeclared program.
    * - **The role is Test.** Only a `test` Run may use the path, so it can never widen
    *   a Developer or Chief Run's toolset.
-   * - **The mode is the container.** The call is pinned to `mode: 'container'`; there
-   *   is no host fallback. Docker being unavailable is `PROVIDER_UNAVAILABLE`, exactly
-   *   like every other container call ("缺Docker即阻断独立验证", `execution.md` §1).
-   * - **The same boundary as a tool shell.** It goes through
-   *   {@link Broker.commandVector}/`containerPlan`, so the container keeps
-   *   `--network none`, the read-only mounts, the hardening flags and the controlled
-   *   egress channel; nothing new is opened.
+   * - **The mode is host by default.** Every role runs on the host
+   *   (`execution.md` §1/§5), so the command runs in the frozen work directory itself
+   *   unless the caller explicitly asks for the optional container run environment
+   *   (`mode: 'container'`), which is then refused without Docker rather than silently
+   *   downgraded. Docker being unavailable costs the coding path and the declared test
+   *   commands nothing.
+   * - **The same boundary as a tool shell.** A container run goes through
+   *   {@link Broker.commandVector}/`containerPlan`, so it keeps the read-only mounts, the
+   *   hardening flags and the controlled egress channel when one is live; nothing new is
+   *   opened. A host run is an ordinary child process in the granted root, and the process
+   *   registry reaps its group on cancel.
    *
    * The invocation is deliberately **not** a `tool.execute`: the model's tool bridge never
    * sees it, so no capability and no model-supplied argument is involved. It is recorded
@@ -2360,19 +2373,24 @@ export class Broker {
       return {
         ok: false,
         code: 'VALIDATION_ERROR',
-        reason: 'a test command needs the Run workspace root to mount',
+        reason: 'a test command needs the Run workspace root to run in',
       };
     }
-    const availability = this.docker(this.execImage);
-    if (!availability.available) {
-      return {
-        ok: false,
-        code: 'PROVIDER_UNAVAILABLE',
-        reason: `declared test command refused: ${availability.reason}; the Broker does not fall back to host execution`,
-      };
-    }
-    if (this.egressChannel !== undefined) {
-      await this.egressChannel.ensure().catch(() => false);
+    const mode = input.mode ?? this.defaultMode;
+    if (mode === 'container') {
+      // Only the explicit container opt-in is refused without Docker; a missing Docker
+      // never blocks the default host path (`execution.md` §1).
+      const availability = this.docker(this.execImage);
+      if (!availability.available) {
+        return {
+          ok: false,
+          code: 'PROVIDER_UNAVAILABLE',
+          reason: `declared test command refused: ${availability.reason}; the explicit container mode does not fall back to host execution`,
+        };
+      }
+      if (this.egressChannel !== undefined) {
+        await this.egressChannel.ensure().catch(() => false);
+      }
     }
     const timeoutMs = input.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS;
     const invocation: ToolInvocation = {
@@ -2386,21 +2404,23 @@ export class Broker {
       targets: [],
       input: { command },
       roots: [...input.roots],
-      mode: 'container',
+      // The command runs in the frozen work directory itself (its first root).
+      ...(input.roots[0] === undefined ? {} : { cwd: input.roots[0] }),
+      mode,
       timeoutMs,
     };
     const started = Date.now();
     let result: ProcessResult;
     try {
-      result = await this.runCommandAsync(command, invocation, 'container', { timeoutMs });
+      result = await this.runCommandAsync(command, invocation, mode, { timeoutMs });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      this.recordTestCommand(input, command, null, null, Date.now() - started, reason);
+      this.recordTestCommand(input, command, null, null, Date.now() - started, mode, reason);
       return { ok: false, code: asBrokerErrorCode('INTERNAL_ERROR'), reason };
     }
     const durationMs = Date.now() - started;
-    this.recordTestCommand(input, command, result.status, result.signal, durationMs);
-    return { ok: true, mode: 'container', result, durationMs };
+    this.recordTestCommand(input, command, result.status, result.signal, durationMs, mode);
+    return { ok: true, mode, result, durationMs };
   }
 
   /** Appends the audit event for one declared test command (`reliability.md` §2). */
@@ -2410,6 +2430,7 @@ export class Broker {
     exitCode: number | null,
     signal: NodeJS.Signals | null,
     durationMs: number,
+    mode: ExecutionMode,
     error?: string,
   ): void {
     const run = this.store.runs.find(input.runId);
@@ -2423,6 +2444,9 @@ export class Broker {
         attemptId: input.attemptId,
         stage: input.stage,
         command,
+        // `data.md` §3 `Env`: the environment the command really ran in is part of the
+        // evidence, not an inference — the host by default, or the explicit container.
+        mode,
         exitCode,
         signal,
         durationMs,
@@ -2592,8 +2616,10 @@ export class Broker {
       if (!decision.ok) return refuse(decision.code, decision.reason, ['network']);
     }
 
-    // 5. Execution environment. A container call without Docker is refused with
-    //    its reason; it is never downgraded to the host.
+    // 5. Execution environment. This branch is reached only for an **explicit** container
+    //    call: the documented default is the host (`execution.md` §1), so a missing Docker
+    //    costs the coding path nothing, and an explicit container request is refused with its
+    //    reason instead of being downgraded to the host.
     if (mode === 'container') {
       const availability = this.docker(this.execImage);
       if (!availability.available) {

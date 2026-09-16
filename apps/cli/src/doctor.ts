@@ -100,7 +100,7 @@ export interface DoctorReport {
   readonly runtime: RuntimeProbe;
   /** The project/global permission policy, including the sensitive-file tier. */
   readonly policy: PolicyProbe;
-  /** `true` only when every capability an Attempt needs is really present. */
+  /** `true` only when every capability an Attempt really needs is present (Docker is not one). */
   readonly executionReady: boolean;
   readonly blockers: readonly string[];
 }
@@ -420,9 +420,13 @@ export async function buildDoctorReport(options: DoctorOptions = {}): Promise<Do
   }
   if (gitProbe.status !== 'ok') blockers.push('git is unavailable');
   if (piProbe.status !== 'ok') blockers.push(`Pi SDK ${piProbe.version ?? 'missing'} != 0.85.1`);
-  if (docker.status !== 'ok') blockers.push(`docker: ${docker.detail ?? 'daemon unavailable'}`);
-  else if (docker.imageId === undefined)
-    blockers.push(`docker image ${docker.imageTag} is missing`);
+  // Host-first revision: Docker is an **optional capability**. The coding path
+  // (`read`/`search`/`edit`/`write`/`bash`/`git`, builds, tests, dependency installs) runs on
+  // the host, so a missing daemon or execution image is reported by `report.docker` and never
+  // blocks readiness. The container is an optional project run environment
+  // (`docs/architecture/execution.md` §1); only a project that opts into it needs Docker, and
+  // the Broker then refuses that explicit request with its reason instead of blocking
+  // admission.
   for (const dir of directories) {
     if (!dir.writable) blockers.push(`directory not writable: ${dir.path}`);
   }
@@ -496,13 +500,15 @@ export function renderDoctorReport(report: DoctorReport): string {
     line('pnpm', report.pnpm, report.pnpm.path === undefined ? '' : ` [${report.pnpm.path}]`),
     line('git', report.git),
     line('pi-sdk', report.pi, report.pi.path === undefined ? '' : ` [${report.pi.path}]`),
-    line(
-      'docker',
-      report.docker,
-      ` [image ${report.docker.imageTag}${
-        report.docker.imageId === undefined ? '' : ` ${report.docker.imageId.slice(0, 19)}`
-      }${report.docker.imageDigest === undefined ? '' : ` digest ${report.docker.imageDigest}`}]`,
-    ),
+    // Docker is an optional capability (`execution.md` §1): report its real state without
+    // rendering a missing daemon/image as a readiness failure.
+    `${report.docker.status === 'ok' ? 'ok  ' : 'info'} docker     ${report.docker.version ?? '-'}${
+      report.docker.expected === undefined ? '' : ` (expected ${report.docker.expected})`
+    } [image ${report.docker.imageTag}${
+      report.docker.imageId === undefined ? '' : ` ${report.docker.imageId.slice(0, 19)}`
+    }${report.docker.imageDigest === undefined ? '' : ` digest ${report.docker.imageDigest}`}]${
+      report.docker.status === 'ok' ? '' : ' — optional: the host coding path needs no container'
+    }${report.docker.detail === undefined ? '' : ` — ${report.docker.detail}`}`,
   ];
   for (const dir of report.directories) {
     lines.push(

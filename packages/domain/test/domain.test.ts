@@ -4,6 +4,7 @@ import {
   ARTIFACT_WRITE_OPERATIONS,
   ATTEMPT_TRANSITIONS,
   ENVIRONMENT_OPERATIONS,
+  ENVELOPE_OPERATIONS,
   L1_BOUNDS,
   NO_LOCKDOWN_RISK,
   REQUIRED_CONTENT_SECTIONS,
@@ -601,12 +602,14 @@ describe('level routing (workflow.md §2)', () => {
     }
   });
 
-  it('classifies every contract operation as read-only, workspace write or environment', () => {
-    // A new operation name must be classified deliberately: the two sets below are
-    // what the L3 gate and the write-authority gate consult (R14-01).
+  it('classifies every contract operation as read-only, workspace write, envelope or environment', () => {
+    // A new operation name must be classified deliberately: the sets below are what
+    // the L3 gate, the write-authority gate and the envelope-grant table consult
+    // (R14-01, host-first model).
     const classified = new Set<string>([
       ...WORKSPACE_WRITE_OPERATIONS,
       ...ENVIRONMENT_OPERATIONS,
+      ...ENVELOPE_OPERATIONS,
       ...ARTIFACT_WRITE_OPERATIONS,
       ...READ_OPERATIONS,
     ]);
@@ -614,6 +617,21 @@ describe('level routing (workflow.md §2)', () => {
       expect(classified.has(operation)).toBe(true);
     }
     expect(classified.size).toBe(operationNameSchema.options.length);
+  });
+
+  it('keeps shell and network operations out of the irreversible environment set', () => {
+    // `docs/architecture/execution.md` §2: bash/network/secret run inside the approved
+    // envelope; only push/deploy/delete_data stay on the explicit L3 path.
+    expect([...ENVIRONMENT_OPERATIONS]).toEqual(['push', 'deploy', 'delete_data']);
+    expect([...ENVELOPE_OPERATIONS]).toEqual(['bash', 'network', 'secret']);
+    for (const operation of ENVELOPE_OPERATIONS) {
+      expect(touchesRunningEnvironment({ operations: [operation], networkTargets: [] })).toBe(
+        false,
+      );
+    }
+    for (const operation of ENVIRONMENT_OPERATIONS) {
+      expect(touchesRunningEnvironment({ operations: [operation], networkTargets: [] })).toBe(true);
+    }
   });
 
   it('routes any lockdown risk to L3 before considering L1', () => {

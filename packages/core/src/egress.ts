@@ -1,7 +1,16 @@
 /**
  * The controlled network egress (`w1-implementation.md` §7, `execution.md` §2/§4).
  *
- * The container has **no IP network**: `planContainerRun` keeps `--network none` even when
+ * **Host-first revision**: this module serves the **optional container run environment**.
+ * The default execution is the host, whose network is the host's: the admission layer
+ * (`tool-handler.ts` literal-URL `NetworkPolicy`) and the audit are the guardrails there,
+ * and a raw socket can bypass them (residual risk registered in `execution.md` 附录 A.5).
+ * Nothing here is required for the default path. What is kept for both paths is
+ * {@link NetworkPolicy}: the two fixed denials (the daemon's own bound ports and the cloud
+ * metadata addresses) and nothing else.
+ *
+ * When a project does opt into the container environment, the container has **no IP
+ * network**: `planContainerRun` keeps `--network none` even when
  * the call may reach the network. Its whole network path is a Unix socket in a named volume
  * mounted read-only, which a small dumb forwarder inside a sidecar container relays to this
  * Core-side proxy. Every byte of egress therefore crosses {@link EgressProxy}, which applies
