@@ -245,8 +245,88 @@ function seedBrowserFixtures(harness, probeUrl) {
     },
   });
 
+  // The explicit L3 confirmation interaction (AC-011). The real Orchestrator owns the
+  // confirmation service, and the protocol answers `decision.resolve` through the same
+  // instance (`attachOrchestrator`), so the page's confirm/decline button drives the
+  // real gate rather than a fixture row. Two L3 Works are seeded: one for the confirm
+  // path and one for the decline path, each with the Chief Run its question Artifact is
+  // attributed to.
+  const gateway = new harness.product.core.ModelGateway({
+    config: harness.config,
+    snapshots: harness.snapshots,
+    // The page never runs a model here: the confirmation is a real Decision, and the
+    // transport exists only because the gateway is part of the Orchestrator's contract.
+    transport: {
+      complete: () => Promise.resolve({ ok: true, text: 'ok', inputTokens: 1, outputTokens: 1 }),
+    },
+  });
+  const orchestrator = new harness.product.core.Orchestrator({
+    store,
+    config: harness.config,
+    snapshots: harness.snapshots,
+    gateway,
+  });
+  harness.protocol.attachOrchestrator(orchestrator);
+  harness.protocol.attachGateway(gateway);
+
+  const l3Scope = {
+    readPaths: ['src'],
+    writePaths: ['src/db'],
+    operations: ['read', 'edit'],
+    networkTargets: [],
+  };
+  const l3Work = seedWork(harness, {
+    level: 'L3',
+    status: 'running',
+    goal: 'AC-011 夹具：需确认的 L3 高风险交付',
+  });
+  const l3ChiefRun = insertRun(harness, {
+    workId: l3Work.id,
+    role: 'chief',
+    purpose: 'analysis',
+    stage: 'assess',
+    status: 'running',
+  });
+  const l3Confirmation = orchestrator.confirmations.raise({
+    workId: l3Work.id,
+    runId: l3ChiefRun.id,
+    goal: l3Work.goal,
+    riskFlags: ['数据删除/迁移'],
+    reason: 'the migration rewrites stored delivery rows and is not reversible in place',
+    revision: harness.seedRevision,
+    scope: l3Scope,
+  });
+
+  const declinedWork = seedWork(harness, {
+    level: 'L3',
+    status: 'running',
+    goal: 'AC-011 夹具：将被拒绝的 L3 高风险交付',
+  });
+  const declinedChiefRun = insertRun(harness, {
+    workId: declinedWork.id,
+    role: 'chief',
+    purpose: 'analysis',
+    stage: 'assess',
+    status: 'running',
+  });
+  const declinedConfirmation = orchestrator.confirmations.raise({
+    workId: declinedWork.id,
+    runId: declinedChiefRun.id,
+    goal: declinedWork.goal,
+    riskFlags: ['Secret'],
+    reason: 'the change rewrites a stored credential',
+    revision: harness.seedRevision,
+    scope: l3Scope,
+  });
+
   return {
     htmlArtifactId: artifact.id,
+    l3WorkId: l3Work.id,
+    l3RunId: l3ChiefRun.id,
+    l3DecisionId: l3Confirmation.decisionId,
+    l3DeclinedWorkId: declinedWork.id,
+    l3DeclinedRunId: declinedChiefRun.id,
+    l3DeclinedDecisionId: declinedConfirmation.decisionId,
     htmlWorkId: work.id,
     htmlRunId: artifactRun.id,
     htmlRequirementId: requirementId,

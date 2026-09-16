@@ -189,6 +189,27 @@ export const CURATED_EVIDENCE = Object.freeze({
   ],
   'AC-011': [
     {
+      file: 'apps/web/test/l3-confirmation.integration.test.ts',
+      title: 'raises one visible confirmation when the routing assessment routes L3',
+      rationale:
+        'the real daemon raises the explicit L3 confirmation and admits no professional Run of the Work until it is answered',
+      wpRecord: '.agentdev/work/WP-12/l3-confirmation.md',
+    },
+    {
+      file: 'apps/web/test/l3-confirmation.integration.test.ts',
+      title: 'resumes the route after the user confirms',
+      rationale:
+        'the confirmed interaction really executes the high-risk step and the audit shows user → decision → execution in that order',
+      wpRecord: '.agentdev/work/WP-12/l3-confirmation.md',
+    },
+    {
+      file: 'apps/web/test/l3-confirmation.integration.test.ts',
+      title: 'blocks the high-risk step when the user declines',
+      rationale:
+        'a declined confirmation records its reason and leaves the Work blocked instead of implementing the high-risk step',
+      wpRecord: '.agentdev/work/WP-12/l3-confirmation.md',
+    },
+    {
       file: 'packages/core/test/delivery.integration.test.ts',
       title:
         'requires explicit authorization, rollback, per-item audit and a recovery drill before an L3 migration is implemented (AC-011)',

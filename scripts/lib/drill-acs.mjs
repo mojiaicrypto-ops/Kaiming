@@ -39,6 +39,17 @@ export const E2E_BROWSER_INBOX_ACS = Object.freeze(['AC-074']);
 export const E2E_BROWSER_UPLOAD_ACS = Object.freeze(['AC-076']);
 
 /**
+ * The L3 confirmation Inbox card, which only a real browser can drive (AC-011).
+ *
+ * `apps/web/test/l3-confirmation.integration.test.ts` proves the interaction through
+ * the real daemon (raise → answer → admit/refuse, with the audit order); the browser
+ * half is the user-visible card: it renders the routing's risk flags/scope and its
+ * named confirm/decline controls really answer the Decision through the documented
+ * `decision.resolve`.
+ */
+export const E2E_BROWSER_L3_ACS = Object.freeze(['AC-011']);
+
+/**
  * The ACs whose browser-side clauses `pnpm test:e2e` executes in Chromium.
  *
  * Since WP-12 T7a these are run by `tests/browser/**` through Playwright whenever the
@@ -50,6 +61,7 @@ export const E2E_BROWSER_ACS = Object.freeze([
   ...E2E_BROWSER_VIEWPORT_ACS,
   ...E2E_BROWSER_INBOX_ACS,
   ...E2E_BROWSER_UPLOAD_ACS,
+  ...E2E_BROWSER_L3_ACS,
 ]);
 
 /** The AC `pnpm test:e2e` records as UNVERIFIED because it needs a real model. */
@@ -204,6 +216,13 @@ export const RESIDUAL_GAPS = Object.freeze({
       'WP-12 R3-3：`drill.session-streaming` 用真实 Provider 关闭该缺口（真实 Pi 会话经 Core gateway 产出流式 text_delta；新 factory 复用同一 session 文件与会话 id 并继续追加记录）。仅在未配置 AGENTDEV_PROVIDER_* 时保持 UNVERIFIED。',
     gap: '真实 Provider 下的一轮 Pi SDK 会话（流式增量与会话历史恢复）尚未执行；配置 AGENTDEV_PROVIDER_* 后由 `pnpm test:live` 的 `drill.session-streaming` 关闭。',
   },
+  'AC-011': {
+    condition: 'browser-absent',
+    closedBy: 'pnpm test:e2e',
+    decision:
+      'WP-12 W8-4 缺口关闭：显式 L3 确认交互已实现（路由评估铸确认决定 → Inbox 复用 `decision.resolve` 回答 → Orchestrator 在确认被接受前不放行任何专业 Run）。库级/整机证据由 `apps/web/test/l3-confirmation.integration.test.ts` 与 `packages/core/test/delivery.integration.test.ts` 提供，浏览器侧由 `tests/browser/ac-011-l3-confirmation.spec.mjs` 执行；仅当本环境确实没有 Chromium 时，浏览器那一半才保持 UNVERIFIED。记录见 `.agentdev/work/WP-12/l3-confirmation.md`。',
+    gap: '真实浏览器中的 L3 确认卡（风险标记/范围渲染、confirm/decline 按钮真正回答决定、拒绝必填原因）未执行；协议与 Gate 侧由整机用例与移动端无关的库级用例证明。',
+  },
   'AC-076': {
     condition: 'browser-absent',
     closedBy: 'pnpm test:e2e',
@@ -310,28 +329,18 @@ export function conditionHolds(condition, env = process.env) {
  *
  * `whatItWouldTake` is the implementation sketch an owner needs before starting; no
  * entry here authorises an implementation by itself.
+ *
+ * ## The register is append-only, and one entry has been removed
+ *
+ * W8-4 registered its single entry here: `AC-011` ("L3 高风险交付缺少显式确认交互",
+ * residual `WP-12-D-W8-4`). That interaction is now implemented — the routing
+ * assessment raises the confirmation Decision, the Inbox answers it through
+ * `decision.resolve`, and the Orchestrator admits no professional Run of an L3 Work
+ * until the confirmation is accepted — so the entry is deleted rather than left as a
+ * stale "open" status. The deletion is deliberate and recorded in
+ * `.agentdev/work/WP-12/l3-confirmation.md` (how it is detected, raised, answered and
+ * resumed; the real evidence for the positive and negative paths; and the AC-011
+ * evidence shape). The file stays append-only for every *other* purpose: nothing else
+ * was removed, and the register is empty only because the last entry was closed.
  */
-export const KNOWN_PRODUCT_GAPS = Object.freeze({
-  'AC-011': {
-    title: 'L3 高风险交付缺少显式确认交互',
-    /**
-     * The behaviour the current product does **not** have.
-     *
-     * `AC-011` is sealed at the library layer by
-     * `packages/core/test/delivery.integration.test.ts` (the L3 gate refuses the
-     * implementation until authorization / rollback / per-item audit / recovery drill
-     * exist). What is missing is the *interaction*: nothing asks the user to confirm an
-     * L3 delivery in the Inbox, and no `decision` row is minted for that confirmation.
-     * The product currently authorizes through the Plan gate plus the Work envelope, so
-     * an L3 migration can proceed without an explicit L3 confirmation step.
-     */
-    gap: 'L3（高风险：迁移/依赖升级/schema 变更等）交付当前只经 Plan 门禁 + Work 信封授权，产品没有"请你确认这是一次 L3 高风险交付"的显式用户交互（Inbox 无该待办、无对应 decision、无拒绝后停下的路径）。库级 Gate 规则已实现并有证据，缺的是这条交互面。',
-    /** What implementing it would require, in order. */
-    whatItWouldTake:
-      '① Core 在 L3 路由判定后铸一条 `kind=decision`（`targetRef` 指向 Plan/风险说明 Artifact，`choices=[confirm, decline, revise]`）并发 `decision.created`，`approve` 之前 Run 不得 `running`；② daemon 面把它包成 Inbox 待办（复用现有 `decision.resolve`，不新增解析入口）；③ decline/revise 走既有 product-behaviour 分支（AC-015/016）而不是新状态；④ 一条真机 e2e 演练覆盖"出现 → 处理 → 消失"，以及"未确认时不得实施 L3"的负例；⑤ 更新 `protocol.md`/`experience.md` 与 AC-011 的证据映射。',
-    decision:
-      'WP-12 W8 裁决 4（2026-09，持钥者）：登记为已知产品缺口，本切片不实现；验收状态仍按已映射证据判定，不由本登记降级。',
-    status: 'open',
-    residual: 'WP-12-D-W8-4',
-  },
-});
+export const KNOWN_PRODUCT_GAPS = Object.freeze({});

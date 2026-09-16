@@ -72,6 +72,7 @@ import {
   type BackupGitPort,
   type ConfigStore,
   type DecisionService,
+  type L3ConfirmationService,
   type DownloadTokenStore,
   type EventHub,
   type FindingService,
@@ -180,6 +181,16 @@ export interface WorkbenchServices {
   readonly config?: ConfigStore;
   readonly gates?: PlanGateService;
   readonly decisions?: DecisionService;
+  /**
+   * The explicit L3 confirmation interaction (AC-011).
+   *
+   * Attached with the orchestrator (`attachOrchestrator`), because the routing
+   * assessment is what raises the question and the dispatch guard is what holds the
+   * route. `decision.resolve` reads it here so an L3 confirmation is answered through
+   * the documented entry point instead of the product-behaviour branch, and the Inbox
+   * names the risk flags the routing actually produced.
+   */
+  confirmations?: L3ConfirmationService;
   readonly findings?: FindingService;
   readonly requirements?: RequirementContinuation;
   readonly requirementSaves?: RequirementSaveService;
@@ -901,6 +912,43 @@ const UI_STRINGS: Record<string, { readonly en: string; readonly zh: string }> =
   },
   'inbox.finding': { en: 'Blocking finding', zh: '阻断发现' },
   'inbox.grantScopeOnce': { en: 'once (this call only)', zh: '一次（仅本次调用）' },
+  'inbox.l3': { en: 'L3 high-risk confirmation', zh: 'L3 高风险确认' },
+  'inbox.l3RiskFlags': { en: 'Risk flags the routing produced', zh: '路由给出的风险标记' },
+  'inbox.l3NoRiskFlags': {
+    en: 'The routing raised the level to L3 without naming a risk flag.',
+    zh: '路由把等级提到 L3，但没有给出风险标记。',
+  },
+  'inbox.l3What': { en: 'What you are confirming', zh: '你要确认的内容' },
+  'inbox.l3Work': { en: 'Work', zh: 'Work' },
+  'inbox.l3Requirement': { en: 'Requirement', zh: '需求' },
+  'inbox.l3Revision': { en: 'Revision', zh: '修订' },
+  'inbox.l3Reason': { en: 'Why the routing says high risk', zh: '路由给出的高风险原因' },
+  'inbox.l3WritePaths': { en: 'Write paths', zh: '写路径' },
+  'inbox.l3ReadPaths': { en: 'Read paths', zh: '读路径' },
+  'inbox.l3Operations': { en: 'Operations', zh: '操作' },
+  'inbox.l3NetworkTargets': { en: 'Network targets', zh: '网络目标' },
+  'inbox.l3NoPaths': { en: 'None declared', zh: '未声明' },
+  'inbox.l3NoOperations': { en: 'None declared', zh: '未声明' },
+  'inbox.l3NoTargets': { en: 'None declared', zh: '未声明' },
+  'inbox.l3NoRequirement': { en: 'No Requirement yet', zh: '尚无需求' },
+  'inbox.l3FieldUnavailable': { en: 'Not reported', zh: '未报告' },
+  'inbox.l3DeclineReason': { en: 'Reason for declining (required)', zh: '拒绝原因（必填）' },
+  'inbox.l3DeclineReasonRequired': {
+    en: 'Declining an L3 confirmation must record a reason.',
+    zh: '拒绝 L3 确认必须记录原因。',
+  },
+  'inbox.l3HoldNote': {
+    en: 'Until this is confirmed, the Work does not execute: no Plan, Develop or verification stage is dispatched.',
+    zh: '在确认之前，该 Work 不会执行：Plan、Develop 及后续验证阶段都不会被派发。',
+  },
+  'inbox.l3Confirmed': {
+    en: 'Confirmed: the L3 delivery may proceed.',
+    zh: '已确认：该 L3 交付可以继续。',
+  },
+  'inbox.l3Declined': {
+    en: 'Declined: the Work stays blocked and the high-risk step is not implemented.',
+    zh: '已拒绝：Work 保持 blocked，不会实施高风险步骤。',
+  },
   'inbox.internalRepairs': { en: 'Internal repairs', zh: '内部修复' },
   'inbox.noTargets': {
     en: 'No targets recorded (a command operation).',
@@ -1190,6 +1238,11 @@ export class WorkbenchProtocol {
    */
   attachOrchestrator(orchestrator: Orchestrator): void {
     this.services.orchestrator = orchestrator;
+    // The orchestrator owns the one L3 confirmation service an execution stack has
+    // (`Orchestrator.confirmations`): the routing assessment raises the question
+    // through it and `decision.resolve` answers through the same instance, so the
+    // admission gate and the Inbox can never disagree about which confirmation stands.
+    this.services.confirmations = orchestrator.confirmations;
   }
 
   /** Attaches the stack's model gateway, which `provider.test` probes. */
@@ -3109,6 +3162,10 @@ export class WorkbenchProtocol {
         decision.kind === 'permission'
           ? this.services.store.toolOperations.find(decision.targetRef.id)
           : undefined;
+      // AC-011: an L3 confirmation is a `product` Decision whose question, risk flags and
+      // held route the Inbox must state. The record is the one the dispatch guard reads,
+      // so the card and the gate can never describe different confirmations.
+      const confirmation = this.services.confirmations?.find(decision.id);
       items.push({
         kind: 'decision',
         id: decision.id,
@@ -3122,6 +3179,26 @@ export class WorkbenchProtocol {
         // again (`experience.md` §5).
         actionable: decision.state === 'pending',
         createdAt: decision.createdAt,
+        ...(confirmation === undefined
+          ? {}
+          : {
+              l3Confirmation: {
+                workId: confirmation.workId,
+                level: 'L3',
+                riskFlags: [...confirmation.riskFlags],
+                reason: confirmation.reason,
+                revision: confirmation.revision,
+                requirementId: confirmation.requirementId,
+                scope: {
+                  readPaths: [...confirmation.scope.readPaths],
+                  writePaths: [...confirmation.scope.writePaths],
+                  operations: [...confirmation.scope.operations],
+                  networkTargets: [...confirmation.scope.networkTargets],
+                },
+                outcome: confirmation.state,
+                declineReason: confirmation.declineReason,
+              },
+            }),
         ...(decision.kind !== 'permission'
           ? {}
           : {
@@ -6354,6 +6431,46 @@ export class WorkbenchProtocol {
         },
         {},
       );
+    }
+    // An L3 confirmation is also a `product` Decision, but its answer is not a
+    // behaviour choice: `confirm` admits the high-risk delivery and `decline` records
+    // the reason and leaves the Work blocked (`workflow.md` §2.3/§5.1, AC-011). It is
+    // routed through the confirmation service before the `now/later/decline` branch
+    // below, so the question's own choices are what is applied.
+    const confirmation = this.services.confirmations?.find(decision.id);
+    if (confirmation !== undefined) {
+      const resolved = this.services.confirmations?.resolve({
+        decisionId: decision.id,
+        choice,
+        ...(optionalString(params['reason']) === undefined
+          ? {}
+          : { reason: optionalString(params['reason']) as string }),
+        ...(optionalString(params['decidedAt']) === undefined
+          ? {}
+          : { at: optionalString(params['decidedAt']) as string }),
+      });
+      if (resolved === undefined) {
+        throw new ProtocolError('INTERNAL_ERROR', 'the L3 confirmation service disappeared');
+      }
+      // A confirmation the user accepted lifts the hold on a Work the routing had
+      // parked before its route began; if any Run was already queued behind the hold
+      // the ordinary supervisor pickup continues it, so `confirm` resumes the route
+      // with no manual restart (`experience.md` §5, AC-011 item 2).
+      return {
+        status: 'applied',
+        entityId: decision.id,
+        version: resolved.confirmation.decisionVersion,
+        state: resolved.confirmation.state,
+        choice,
+        effectRefs: [...decision.effectRefs],
+        l3Confirmation: {
+          workId: resolved.confirmation.workId,
+          riskFlags: [...resolved.confirmation.riskFlags],
+          accepted: resolved.accepted,
+          workStatus: resolved.work.status,
+          reason: resolved.confirmation.declineReason,
+        },
+      };
     }
     // A product decision resolves through the behaviour branch, so the choice's real
     // effect (evidence invalidation, a queued Requirement) is applied by Core.

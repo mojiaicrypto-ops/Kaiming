@@ -256,7 +256,13 @@ interface ActionRequest {
   readonly ok: boolean;
   readonly method?: string;
   readonly params?: Record<string, unknown>;
-  readonly error?: { readonly code: string; readonly message: string };
+  readonly error?: {
+    readonly code: string;
+    readonly message: string;
+    /** A required-reason refusal names the sentence the entry should show. */
+    readonly reasonRequired?: boolean;
+    readonly reasonKey?: string;
+  };
 }
 
 describe('requirement actions (WP-12 T4)', () => {
@@ -361,6 +367,40 @@ describe('inbox actions (WP-12 T4c, AC-074)', () => {
     expect(denied.method).toBeUndefined();
   });
 
+  it('routes an L3 confirmation answer through decision.resolve with its own reason rule', () => {
+    // Confirming is an ordinary resolution of the decision the routing raised (AC-011).
+    expect(
+      build('', { decision: 'd1', choice: 'confirm', l3Confirmation: true, reason: '' }),
+    ).toEqual({
+      ok: true,
+      method: 'decision.resolve',
+      params: { decisionId: 'd1', choice: 'confirm' },
+    });
+    // Declining a high-risk delivery must record why, and the sentence it shows is the
+    // L3 one, not the permission denial's.
+    const declined = build('', {
+      decision: 'd1',
+      choice: 'decline',
+      l3Confirmation: true,
+      reason: '   ',
+    });
+    expect(declined.ok).toBe(false);
+    expect(declined.error?.reasonRequired).toBe(true);
+    expect(declined.error?.reasonKey).toBe('inbox.l3DeclineReasonRequired');
+    expect(
+      build('', {
+        decision: 'd1',
+        choice: 'decline',
+        l3Confirmation: true,
+        reason: '  the migration is not acceptable  ',
+      }),
+    ).toEqual({
+      ok: true,
+      method: 'decision.resolve',
+      params: { decisionId: 'd1', choice: 'decline', reason: 'the migration is not acceptable' },
+    });
+  });
+
   it('routes a todo closing action through chief.todo.resolve', () => {
     expect(build('handled', { disposition: 'handled', todo: 'w1:.env:.env*', work: 'w1' })).toEqual(
       {
@@ -407,7 +447,11 @@ describe('inbox actions (WP-12 T4c, AC-074)', () => {
     // A todo carries no target version; decisions and permissions still do.
     expect(handler).toContain('button.dataset.targetVersion === undefined');
     expect(handler).toContain('expectedVersion: targetVersion');
-    expect(handler).toContain("translateClient('inbox.denyReasonRequired')");
+    // The required-reason rule is stated by the i18n key the command itself selected, so a
+    // permission denial and an L3 confirmation decline each name their own sentence
+    // (AC-011); the denial key stays the fallback for a command that names none.
+    expect(handler).toContain('translateClient(built.error.reasonKey ||');
+    expect(handler).toContain("'inbox.denyReasonRequired'");
     // The refusal branch renders the protocol code and message and returns before any
     // refresh: the entry keeps exactly the state it was rendered from.
     const refusal = handler.slice(

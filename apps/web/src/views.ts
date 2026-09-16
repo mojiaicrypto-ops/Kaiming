@@ -53,6 +53,35 @@ function asStrings(value: unknown): readonly string[] {
   return value.filter((entry): entry is string => typeof entry === 'string');
 }
 
+/**
+ * Reads the L3 confirmation the daemon reported on one Inbox decision (AC-011).
+ *
+ * Every field the card states is read from the daemon's own record; an absent or
+ * malformed block yields `null`, so a row the daemon never described as a
+ * confirmation is never rendered as one.
+ */
+function l3ConfirmationOf(value: unknown): InboxL3Confirmation | null {
+  const raw = asObject(value);
+  if (raw === undefined) return null;
+  const scope = asObject(field(raw, 'scope')) ?? {};
+  return {
+    workId: asString(field(raw, 'workId')),
+    level: asString(field(raw, 'level'), 'L3'),
+    riskFlags: asStrings(field(raw, 'riskFlags')),
+    reason: asOptionalString(field(raw, 'reason')),
+    revision: asOptionalString(field(raw, 'revision')),
+    requirementId: asOptionalString(field(raw, 'requirementId')),
+    scope: {
+      readPaths: asStrings(field(scope, 'readPaths')),
+      writePaths: asStrings(field(scope, 'writePaths')),
+      operations: asStrings(field(scope, 'operations')),
+      networkTargets: asStrings(field(scope, 'networkTargets')),
+    },
+    outcome: asString(field(raw, 'outcome'), 'pending'),
+    declineReason: asOptionalString(field(raw, 'declineReason')),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Board (AC-068)
 // ---------------------------------------------------------------------------
@@ -325,6 +354,32 @@ export interface InboxTodo {
   readonly reason: string | null;
 }
 
+/**
+ * One L3 confirmation request (`AC-011`).
+ *
+ * The daemon attaches this to the `product` decision the routing assessment raised
+ * for a high-risk delivery: the risk flags are the ones the routing actually produced,
+ * the scope is the envelope the implementation would run under, and `outcome` is what
+ * the answer did (`pending` while the route is held). The card states all of it, so the
+ * user is confirming a described operation rather than a bare "L3" label.
+ */
+export interface InboxL3Confirmation {
+  readonly workId: string;
+  readonly level: string;
+  readonly riskFlags: readonly string[];
+  readonly reason: string | null;
+  readonly revision: string | null;
+  readonly requirementId: string | null;
+  readonly scope: {
+    readonly readPaths: readonly string[];
+    readonly writePaths: readonly string[];
+    readonly operations: readonly string[];
+    readonly networkTargets: readonly string[];
+  };
+  readonly outcome: string;
+  readonly declineReason: string | null;
+}
+
 export interface InboxRow {
   readonly kind: 'decision' | 'finding' | 'recovery' | 'todo';
   readonly id: string;
@@ -359,6 +414,8 @@ export interface InboxRow {
   readonly binding: InboxBinding | null;
   /** A permission row whose binding the daemon did not report can never be approved. */
   readonly bindingMissing: boolean;
+  /** The explicit L3 confirmation request, when this row is one (AC-011). */
+  readonly l3Confirmation: InboxL3Confirmation | null;
   readonly role: string | null;
   readonly stage: string | null;
   readonly runStatus: string | null;
@@ -470,6 +527,7 @@ export function inboxModel(raw: JsonObject, context: InboxContext = {}): InboxMo
               }
             : null,
         bindingMissing: permission && operation === '',
+        l3Confirmation: l3ConfirmationOf(field(item, 'l3Confirmation')),
         todo: null,
         role: run?.role ?? null,
         stage: run?.stage ?? null,
@@ -508,6 +566,7 @@ export function inboxModel(raw: JsonObject, context: InboxContext = {}): InboxMo
           question: null,
           binding: null,
           bindingMissing: false,
+          l3Confirmation: null,
           todo: null,
           role: null,
           stage: null,
@@ -543,6 +602,7 @@ export function inboxModel(raw: JsonObject, context: InboxContext = {}): InboxMo
         question: null,
         binding: null,
         bindingMissing: false,
+        l3Confirmation: null,
         todo: null,
         role: null,
         stage: null,
@@ -595,6 +655,7 @@ export function inboxModel(raw: JsonObject, context: InboxContext = {}): InboxMo
         question: null,
         binding: null,
         bindingMissing: false,
+        l3Confirmation: null,
         todo,
         role: asOptionalString(field(item, 'role')),
         stage: null,

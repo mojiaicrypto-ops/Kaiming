@@ -963,6 +963,7 @@ export function createControlHandlers(options: ControlHandlerOptions): ControlHa
           const { assessment: saved, authorizationRef } = orchestrator.assessWithDerivation({
             workId,
             payload,
+            runId: caller.runId,
             ...(source === undefined ? {} : { sourceRef: source }),
           });
           // A delivery/document route enters the requirement pool; assist/artifact does not

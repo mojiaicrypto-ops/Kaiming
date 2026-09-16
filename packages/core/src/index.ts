@@ -38,6 +38,7 @@ export * from './messages.js';
 export * from './context/index.js';
 export * from './gates.js';
 export * from './decisions.js';
+export * from './l3-confirmation.js';
 export * from './findings.js';
 export * from './requirement-continue.js';
 export * from './requirement-save.js';

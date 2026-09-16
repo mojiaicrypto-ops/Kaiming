@@ -1178,6 +1178,81 @@ describe('inbox request cards (WP-12 T4c, AC-074)', () => {
       t,
     });
 
+  const l3Item: JsonObject = {
+    kind: 'decision',
+    id: 'd-l3',
+    workId: 'w9',
+    decisionKind: 'product',
+    targetRef: { id: 'artifact-l3', version: 1, hash: 'hash-l3' },
+    targetVersion: 1,
+    choices: ['confirm', 'decline'],
+    state: 'pending',
+    actionable: true,
+    l3Confirmation: {
+      workId: 'w9',
+      level: 'L3',
+      riskFlags: ['数据删除/迁移'],
+      reason: 'the migration rewrites stored delivery rows',
+      revision: 'a'.repeat(40),
+      requirementId: 'req-9',
+      scope: {
+        readPaths: ['src'],
+        writePaths: ['src/db'],
+        operations: ['edit'],
+        networkTargets: [],
+      },
+      outcome: 'pending',
+      declineReason: null,
+    },
+  };
+
+  it('renders the L3 confirmation with the risk flags, scope and both answers (AC-011)', () => {
+    const html = render([l3Item], {
+      questions: { 'artifact-l3:1': { text: '请确认这次 L3 高风险交付', error: null } },
+    });
+    expect(html).toContain('data-entry="l3-confirmation"');
+    expect(html).toContain('data-l3-confirmation="true"');
+    expect(html).toContain('data-l3-outcome="pending"');
+    // The risk flags the routing produced are stated, not summarised as "L3".
+    expect(html).toContain('data-l3-risk-flag="数据删除/迁移"');
+    expect(html).toContain('data-l3-work-id');
+    expect(html).toContain('w9');
+    expect(html).toContain('data-l3-revision');
+    expect(html).toContain('data-l3-write-paths');
+    expect(html).toContain('src/db');
+    expect(html).toContain('data-l3-operations');
+    expect(html).toContain('data-l3-reason');
+    // Confirm and decline are the decision's own saved choices, and declining has its
+    // own required-reason field.
+    expect(html).toContain('data-choice="confirm"');
+    expect(html).toContain('data-choice="decline"');
+    expect(html).toContain('data-l3-reason');
+    expect(html).toContain('data-i18n="inbox.l3HoldNote"');
+    // The frozen question body is the same contract a product decision uses.
+    expect(html).toContain('data-question-body');
+    for (const key of usedKeys(html)) expect(UI_STRINGS[key], key).toBeDefined();
+  });
+
+  it('shows the recorded decline reason and never a control for a settled confirmation', () => {
+    const declined: JsonObject = {
+      ...l3Item,
+      state: 'rejected',
+      actionable: false,
+      l3Confirmation: {
+        ...(l3Item['l3Confirmation'] as JsonObject),
+        outcome: 'rejected',
+        declineReason: 'the migration is not acceptable yet',
+      },
+    };
+    const html = render([declined]);
+    expect(html).toContain('data-state="rejected"');
+    expect(html).toContain('data-l3-decline-reason');
+    expect(html).toContain('the migration is not acceptable yet');
+    expect(html).toMatch(/data-choice="confirm"[^>]*disabled/u);
+    expect(html).toMatch(/data-choice="decline"[^>]*disabled/u);
+    for (const key of usedKeys(html)) expect(UI_STRINGS[key], key).toBeDefined();
+  });
+
   it('renders a product decision with its question, choices, target and raiser', () => {
     const html = render([productItem], {
       questions: { 'artifact-1:2': { text: 'Ship the smaller change?', error: null } },

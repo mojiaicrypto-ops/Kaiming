@@ -256,7 +256,29 @@
     if (choice === '') {
       return { ok: false, error: { code: 'VALIDATION_ERROR', message: 'the choice is missing' } };
     }
-    return { ok: true, method: 'decision.resolve', params: { decisionId, choice } };
+    // An L3 confirmation (AC-011) answers through the same `decision.resolve`, but
+    // declining it is a real refusal of a high-risk delivery, so it carries the same
+    // required-reason rule as a denial (`experience.md` §5).
+    if (data.l3Confirmation === true && choice === 'decline' && reason === '') {
+      return {
+        ok: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'declining an L3 confirmation must record a reason',
+          reasonRequired: true,
+          reasonKey: 'inbox.l3DeclineReasonRequired',
+        },
+      };
+    }
+    return {
+      ok: true,
+      method: 'decision.resolve',
+      params: {
+        decisionId,
+        choice,
+        ...(data.l3Confirmation === true && reason !== '' ? { reason } : {}),
+      },
+    };
   }
 
   /** Exponential backoff with the policy's ceiling; never below the base delay. */
@@ -1625,13 +1647,16 @@
       const row = button.closest('.inbox-row');
       const reasonField = row
         ? row.querySelector(
-            todoAction === undefined ? '[data-permission-reason]' : '[data-todo-reason]',
+            todoAction === undefined
+              ? '[data-permission-reason], [data-l3-reason]'
+              : '[data-todo-reason]',
           )
         : null;
       const built = inboxActionRequest(choice, {
         decision: button.dataset.decision,
         choice,
         permission,
+        l3Confirmation: row !== null && row.dataset.l3Confirmation === 'true',
         disposition: todoAction,
         todo: button.dataset.todo,
         work: button.dataset.work,
@@ -1643,7 +1668,7 @@
         showError('inboxError', {
           code: built.error.code,
           message: built.error.reasonRequired
-            ? translateClient('inbox.denyReasonRequired')
+            ? translateClient(built.error.reasonKey || 'inbox.denyReasonRequired')
             : built.error.message,
         });
         return;
@@ -1686,9 +1711,15 @@
       const key =
         built.method === 'chief.todo.resolve'
           ? 'inbox.todoResolved'
-          : denied
-            ? 'inbox.denied'
-            : 'inbox.resolved';
+          : built.method === 'decision.resolve' &&
+              row !== null &&
+              row.dataset.l3Confirmation === 'true'
+            ? choice === 'decline'
+              ? 'inbox.l3Declined'
+              : 'inbox.l3Confirmed'
+            : denied
+              ? 'inbox.denied'
+              : 'inbox.resolved';
       showStatus('inboxStatus', state.strings[key] || translateClient(key));
       // The entry leaves the Inbox because the server says so: the list is read
       // back, and a failed refresh falls back to an honest reload.

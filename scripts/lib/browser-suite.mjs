@@ -48,6 +48,7 @@ export const BROWSER_AC_CHECK_NAMES = Object.freeze({
   'AC-073': 'browser.keyboard-aria-i18n',
   'AC-074': 'browser.inbox-todo-resolution',
   'AC-076': 'browser.attachment-client-hints',
+  'AC-011': 'browser.l3-confirmation',
 });
 
 /** The statuses the browser report may carry. */

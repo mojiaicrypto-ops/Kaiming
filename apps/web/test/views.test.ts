@@ -399,6 +399,54 @@ describe('inbox request kinds (WP-12 T4c, AC-074)', () => {
     expect(row?.artifactId).toBeNull();
   });
 
+  it('types an L3 confirmation with the risk flags and scope the routing produced', () => {
+    const row = inboxModel({
+      items: [
+        {
+          kind: 'decision',
+          id: 'd-l3',
+          workId: 'w9',
+          decisionKind: 'product',
+          targetRef: { id: 'artifact-l3', version: 1, hash: 'hash-l3' },
+          targetVersion: 1,
+          choices: ['confirm', 'decline'],
+          state: 'pending',
+          actionable: true,
+          l3Confirmation: {
+            workId: 'w9',
+            level: 'L3',
+            riskFlags: ['数据删除/迁移'],
+            reason: 'the migration rewrites stored rows',
+            revision: 'a'.repeat(40),
+            requirementId: 'req-9',
+            scope: {
+              readPaths: ['src'],
+              writePaths: ['src/db'],
+              operations: ['edit'],
+              networkTargets: [],
+            },
+            outcome: 'pending',
+            declineReason: null,
+          },
+        },
+      ],
+      unread: 1,
+    }).decisions[0];
+    // The card follows the documented question contract, so the body is still read from
+    // the targetRef Artifact (`protocol.md` §6).
+    expect(row?.artifactId).toBe('artifact-l3');
+    expect(row?.l3Confirmation?.level).toBe('L3');
+    expect(row?.l3Confirmation?.riskFlags).toEqual(['数据删除/迁移']);
+    expect(row?.l3Confirmation?.scope.writePaths).toEqual(['src/db']);
+    expect(row?.l3Confirmation?.outcome).toBe('pending');
+    expect(row?.choices).toEqual(['confirm', 'decline']);
+  });
+
+  it('reads no confirmation from a decision the daemon did not describe as one', () => {
+    const row = inboxModel(requests).decisions.find((entry) => entry.id === 'd-product');
+    expect(row?.l3Confirmation).toBeNull();
+  });
+
   it('flags a permission request whose binding the daemon did not report', () => {
     const row = inboxModel(requests).decisions.find((entry) => entry.id === 'd-permission-blind');
     expect(row?.bindingMissing).toBe(true);

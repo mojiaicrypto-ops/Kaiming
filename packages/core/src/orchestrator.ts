@@ -63,6 +63,7 @@ import type { ModelGateway } from './model-gateway.js';
 import { canonicalJson } from './dispatcher.js';
 import { sha256 } from '@agentdev/storage';
 import type { SnapshotWriter } from './snapshots.js';
+import { L3ConfirmationService } from './l3-confirmation.js';
 
 export interface OrchestratorOptions {
   readonly store: ProjectStore;
@@ -82,6 +83,14 @@ export interface AssessInput {
    * on the declared level instead of being skipped.
    */
   readonly derivedAuthorization?: boolean;
+  /**
+   * The Chief Run that submitted the assessment.
+   *
+   * An L3 assessment raises the explicit confirmation question (AC-011), and that
+   * question is an Artifact produced by the Run that made the routing decision, so
+   * the producing Run is part of what gets recorded.
+   */
+  readonly runId?: string;
 }
 
 /**
@@ -444,6 +453,15 @@ export class Orchestrator {
   private readonly gateway: ModelGateway;
   /** Shared terminal path: Run status plus budget reservation (N-01). */
   readonly lifecycle: RunLifecycle;
+  /**
+   * The explicit L3 confirmation interaction (`l3-confirmation.ts`, AC-011).
+   *
+   * Built here so every execution stack has it: the routing assessment raises the
+   * question in its own transaction, and the dispatch guard refuses a high-risk
+   * step whose confirmation is not accepted yet. A caller may inject its own so the
+   * daemon's protocol surface resolves through the same instance.
+   */
+  readonly confirmations: L3ConfirmationService;
 
   constructor(options: OrchestratorOptions) {
     this.store = options.store;
@@ -451,6 +469,10 @@ export class Orchestrator {
     this.snapshots = options.snapshots;
     this.gateway = options.gateway;
     this.lifecycle = options.lifecycle ?? new RunLifecycle({ store: options.store });
+    this.confirmations = new L3ConfirmationService({
+      store: options.store,
+      snapshots: options.snapshots,
+    });
   }
 
   /** The revision a DispatchSpec must name to be accepted (`profileRevision`). */
@@ -553,6 +575,26 @@ export class Orchestrator {
       // the rules already validated — it never downgrades, and the L3 floor above still
       // governs.
       this.applyAssessmentToWork(work, payload);
+      // `workflow.md` §2.3 / AC-011: an L3 routing decision is a high-risk delivery, so
+      // the user has to confirm it explicitly before any high-risk step may run. The
+      // question is raised in this very transaction — the routing decision and the
+      // confirmation the user answers are one fact — and the dispatch guard below is
+      // what holds the route until it is accepted. A re-assessment reuses the pending
+      // question rather than minting a second one.
+      this.confirmations.sync({
+        workId: work.id,
+        ...(input.runId === undefined ? {} : { runId: input.runId }),
+        goal: payload.goal,
+        riskFlags: [...payload.riskFlags],
+        reason: payload.reason,
+        ...(work.baseRevision === undefined ? {} : { revision: work.baseRevision }),
+        scope: {
+          readPaths: [...payload.scope.readPaths],
+          writePaths: [...payload.scope.writePaths],
+          operations: [...payload.scope.operations],
+          networkTargets: [...payload.scope.networkTargets],
+        },
+      });
       this.store.events.append({
         name: 'assessment.saved',
         entityId: row.id,
@@ -635,6 +677,7 @@ export class Orchestrator {
       const { assessment, authorizationRef } = this.assessWithin({
         workId: chief.workId,
         payload: input.payload,
+        runId: chief.id,
         ...(input.sourceRef === undefined ? {} : { sourceRef: input.sourceRef }),
       });
       const dispatch = this.dispatch({
@@ -660,6 +703,8 @@ export class Orchestrator {
     readonly workId: string;
     readonly payload: AssessmentPayload;
     readonly sourceRef?: SourceRef;
+    /** The Chief Run submitting the assessment (it produces the L3 question Artifact). */
+    readonly runId?: string;
   }): { readonly assessment: Assessment; readonly authorizationRef: string | undefined } {
     return withTransaction(this.store.db, () => this.assessWithin(input));
   }
@@ -731,6 +776,7 @@ export class Orchestrator {
     readonly workId: string;
     readonly payload: AssessmentPayload;
     readonly sourceRef?: SourceRef;
+    readonly runId?: string;
   }): { readonly assessment: Assessment; readonly authorizationRef: string | undefined } {
     const parsed = parseOrFail(
       assessRequestSchema,
@@ -770,6 +816,7 @@ export class Orchestrator {
         ...(authorizationRef === undefined ? {} : { authorizationRef }),
       },
       ...(authorizationRef === undefined ? {} : { derivedAuthorization: true }),
+      ...(input.runId === undefined ? {} : { runId: input.runId }),
     });
     return { assessment, authorizationRef };
   }
@@ -1134,6 +1181,22 @@ export class Orchestrator {
     // without modification authority cannot hand out a write scope (R12-01).
     const environmentScope = touchesRunningEnvironment(spec.scope);
     const runLevel: Level = environmentScope ? 'L3' : work.level;
+    // `workflow.md` §2.3 / §3 / AC-011: an L3 Work is a high-risk delivery, and the
+    // explicit confirmation the user answers in the Inbox is what admits it. Until an
+    // accepted confirmation exists, no professional Run of the Work is admitted — so
+    // the Plan stage is not dispatched, the Plan gate never approves, the develop Run
+    // is never queued and the high-risk step cannot execute. This runs before any
+    // snapshot is written, so a refused dispatch leaves no residue.
+    const confirmation = this.confirmations.admitDispatch(work.id);
+    if (!confirmation.allowed) {
+      fail('GATE_NOT_READY', confirmation.message, {
+        workId: work.id,
+        level: work.level,
+        l3Confirmation: confirmation.state,
+        decisionId: confirmation.decisionId,
+        remedy: 'resolve the L3 confirmation Decision in the Inbox (confirm/decline)',
+      });
+    }
     // Modification authority is the *Work's* level: a spec cannot upgrade it by
     // declaring an authorized environment operation (R13-02), and a local write
     // operation counts even when the path list is empty (R13-01 adversarial).

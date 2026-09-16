@@ -1210,6 +1210,97 @@ function inboxTodoRow(row: InboxRow, t: Translator, projectId: string): string {
   ].join('');
 }
 
+/**
+ * One explicit L3 confirmation card (`AC-011`).
+ *
+ * The routing decision already decided this delivery is high risk, so the card states
+ * everything the user is being asked to accept before any high-risk step runs: the
+ * Work and Requirement, the revision, the risk flags the routing actually produced,
+ * the operation and write/read scope the implementation would run under, and why the
+ * routing called it high risk. Confirm and decline are the decision's own saved
+ * choices; declining carries a required reason, exactly like a permission denial.
+ *
+ * The frozen question body (the `inbox.question` block) stays part of the card: it is
+ * the same `protocol.md` §6 contract a Chief question uses, so the long-form rationale
+ * and the structured facts are both visible.
+ */
+function inboxL3ConfirmationRow(row: InboxRow, t: Translator): string {
+  const confirmation = row.l3Confirmation;
+  if (confirmation === null) return inboxDecisionRow(row, t);
+  const expired = row.expired || !row.actionable;
+  const list = (values: readonly string[], emptyKey: string): string =>
+    values.length === 0
+      ? `<span class="hint" data-i18n="${escapeHtml(emptyKey)}">${escapeHtml(t(emptyKey))}</span>`
+      : `<span class="mono" data-l3-scope-list>${values.map((entry) => escapeHtml(entry)).join(', ')}</span>`;
+  /** A value the daemon may not have reported renders its own "not reported" text. */
+  const optional = (text: string | null): string =>
+    text === null || text.trim() === ''
+      ? `<span class="hint" data-i18n="inbox.l3FieldUnavailable">${escapeHtml(t('inbox.l3FieldUnavailable'))}</span>`
+      : `<span class="mono">${escapeHtml(text)}</span>`;
+  const options = row.choices
+    .map(
+      (choice) =>
+        `<button type="button" class="choice" data-decision="${escapeHtml(row.id)}" data-choice="${escapeHtml(choice)}" data-target-version="${String(row.targetVersion ?? 0)}"${expired ? ' disabled aria-disabled="true"' : ''}>${escapeHtml(choice)}</button>`,
+    )
+    .join('');
+  const riskFlags =
+    confirmation.riskFlags.length === 0
+      ? `<span class="hint" data-i18n="inbox.l3NoRiskFlags">${escapeHtml(t('inbox.l3NoRiskFlags'))}</span>`
+      : confirmation.riskFlags
+          .map(
+            (flag) =>
+              `<span class="chip danger" data-l3-risk-flag="${escapeHtml(flag)}">${escapeHtml(flag)}</span>`,
+          )
+          .join('');
+  const pair = (labelKey: string, content: string, name: string): string =>
+    `<div class="pair"><dt data-i18n="${escapeHtml(labelKey)}">${escapeHtml(t(labelKey))}</dt><dd data-l3-${escapeHtml(name)}>${content}</dd></div>`;
+  return [
+    `<li class="inbox-row" data-kind="decision" data-entry="l3-confirmation" data-decision="${escapeHtml(row.id)}" data-state="${escapeHtml(row.state)}"`,
+    ` data-target-version="${String(row.targetVersion ?? 0)}" data-target-id="${escapeHtml(row.targetId)}"`,
+    ` data-work="${escapeHtml(confirmation.workId)}" data-l3-outcome="${escapeHtml(confirmation.outcome)}"`,
+    ` data-l3-confirmation="true"${expired ? ' aria-disabled="true"' : ''}>`,
+    `<div class="row-head"><span class="kind" data-i18n="inbox.l3">${escapeHtml(t('inbox.l3'))}</span>`,
+    `<span class="mono" data-l3-level>${escapeHtml(confirmation.level)}</span>`,
+    `<span class="chip">${escapeHtml(t('inbox.targetVersion'))}: ${String(row.targetVersion ?? 0)}</span>`,
+    `<span class="chip${expired ? ' danger' : ' ok'}">${escapeHtml(expired ? t('inbox.expiredDisabled') : stateLabel(t, row.state))}</span></div>`,
+    `<div class="choices" data-i18n-aria="inbox.options" aria-label="${escapeHtml(t('inbox.options'))}">${options}</div>`,
+    `<h4 data-i18n="inbox.l3RiskFlags">${escapeHtml(t('inbox.l3RiskFlags'))}</h4>`,
+    `<div class="chips" data-l3-risk-flags>${riskFlags}</div>`,
+    `<h4 data-i18n="inbox.l3What">${escapeHtml(t('inbox.l3What'))}</h4>`,
+    '<dl class="binding">',
+    pair('inbox.l3Work', `<span class="mono">${escapeHtml(confirmation.workId)}</span>`, 'work-id'),
+    pair('inbox.l3Requirement', optional(confirmation.requirementId), 'requirement'),
+    pair('inbox.l3Revision', optional(confirmation.revision), 'revision'),
+    pair('inbox.l3Reason', optional(confirmation.reason), 'reason-text'),
+    pair(
+      'inbox.l3WritePaths',
+      list(confirmation.scope.writePaths, 'inbox.l3NoPaths'),
+      'write-paths',
+    ),
+    pair('inbox.l3ReadPaths', list(confirmation.scope.readPaths, 'inbox.l3NoPaths'), 'read-paths'),
+    pair(
+      'inbox.l3Operations',
+      list(confirmation.scope.operations, 'inbox.l3NoOperations'),
+      'operations',
+    ),
+    pair(
+      'inbox.l3NetworkTargets',
+      list(confirmation.scope.networkTargets, 'inbox.l3NoTargets'),
+      'network-targets',
+    ),
+    '</dl>',
+    inboxQuestionBlock(row, t),
+    `<p class="hint" data-i18n="inbox.l3HoldNote">${escapeHtml(t('inbox.l3HoldNote'))}</p>`,
+    `<label for="l3-reason-${escapeHtml(row.id)}" data-i18n="inbox.l3DeclineReason">${escapeHtml(t('inbox.l3DeclineReason'))}</label>`,
+    `<textarea id="l3-reason-${escapeHtml(row.id)}" data-l3-reason rows="2" data-translatable="false"></textarea>`,
+    confirmation.declineReason === null
+      ? ''
+      : `<p class="hint" data-l3-decline-reason data-i18n-project data-translatable="false">${escapeHtml(confirmation.declineReason)}</p>`,
+    `<div class="chips">${chip(t('inbox.work'), confirmation.workId)}${chip(t('inbox.raisedBy'), t('inbox.raisedByChief'))}</div>`,
+    '</li>',
+  ].join('');
+}
+
 export function renderInboxPage(input: {
   readonly model: InboxModel;
   readonly projectId: string;
@@ -1218,7 +1309,11 @@ export function renderInboxPage(input: {
   const t = input.t;
   const decisionRows = input.model.decisions
     .map((row) =>
-      row.entry === 'permission' ? inboxPermissionRow(row, t) : inboxDecisionRow(row, t),
+      row.entry === 'permission'
+        ? inboxPermissionRow(row, t)
+        : row.l3Confirmation === null
+          ? inboxDecisionRow(row, t)
+          : inboxL3ConfirmationRow(row, t),
     )
     .join('');
   const todoRows = input.model.todos.map((row) => inboxTodoRow(row, t, input.projectId)).join('');

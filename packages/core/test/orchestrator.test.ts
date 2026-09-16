@@ -14,6 +14,7 @@ import type {
 import {
   ProjectStore as Store,
   projectIdFromRoot,
+  sha256,
   withTransaction,
   type ProjectStore,
 } from '@agentdev/storage';
@@ -44,6 +45,8 @@ const AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e81';
 const FOREIGN_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e82';
 const REVOKED_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e83';
 const L3_WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e52';
+/** The Chief Run `WORK_ID`'s L3 assessments are submitted from (AC-011). */
+const WORK_CHIEF_RUN_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e91';
 const L3_UNAUTHORIZED_WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e53';
 const L3_AUTHORIZATION_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e84';
 const NONE_WORK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3d4e54';
@@ -358,6 +361,61 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     }
     const gateway = new ModelGateway({ config, snapshots, transport: offlineTransport });
     orchestrator = new Orchestrator({ store, config, snapshots, gateway });
+
+    // `WORK_ID` also carries the Chief Run an L3 assessment is submitted from, so the
+    // confirmation question has a real producing Run to attribute its Artifact to.
+    store.runs.insert({
+      id: WORK_CHIEF_RUN_ID,
+      projectId,
+      workId: WORK_ID,
+      role: 'chief',
+      purpose: 'analysis',
+      stage: 'assess',
+      status: 'running',
+      requiredChild: false,
+      join: 'none',
+      childIds: [],
+      configSnapshotId: sha256(`l3-config:${WORK_ID}`),
+      contextSnapshotId: sha256(`l3-context:${WORK_ID}`),
+      dispatchSnapshotId: sha256(`l3-dispatch:${WORK_ID}`),
+      budgetAllocation: 10_000,
+    });
+
+    // `workflow.md` §2.3 / AC-011: an L3 Work admits no professional Run until the
+    // explicit confirmation is accepted. The L3 fixtures below are the state *after*
+    // that interaction (the user confirmed the high-risk delivery), so the
+    // authorization tests they exist for still exercise their own rule; the
+    // confirmation interaction itself is covered by
+    // `apps/web/test/l3-confirmation.integration.test.ts`.
+    for (const workId of [L3_WORK_ID, L3_UNAUTHORIZED_WORK_ID]) {
+      store.runs.insert({
+        id: store.newId(),
+        projectId,
+        workId,
+        role: 'chief',
+        purpose: 'analysis',
+        stage: 'assess',
+        status: 'running',
+        requiredChild: false,
+        join: 'none',
+        childIds: [],
+        configSnapshotId: sha256(`l3-config:${workId}`),
+        contextSnapshotId: sha256(`l3-context:${workId}`),
+        dispatchSnapshotId: sha256(`l3-dispatch:${workId}`),
+        budgetAllocation: 10_000,
+      });
+      const confirmation = orchestrator.confirmations.raise({
+        workId,
+        goal: 'confirmed L3 fixture',
+        riskFlags: ['securityBoundary'],
+        reason: 'the fixture represents an L3 delivery the user already confirmed',
+        scope: emptyScope,
+      });
+      orchestrator.confirmations.resolve({
+        decisionId: confirmation.decisionId,
+        choice: 'confirm',
+      });
+    }
   });
 
   afterEach(() => {
@@ -499,8 +557,11 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     );
 
     // The documented Chinese criterion routes to L3 and is accepted with authority.
+    // The assessment arrives from the Work's Chief Run, which is what raises the
+    // explicit L3 confirmation (AC-011).
     const accepted = orchestrator.assess({
       workId: WORK_ID,
+      runId: WORK_CHIEF_RUN_ID,
       payload: {
         ...assessmentPayloadFixture(),
         level: 'L3',
@@ -1289,6 +1350,7 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
 
     const row = orchestrator.assess({
       workId: WORK_ID,
+      runId: WORK_CHIEF_RUN_ID,
       payload: {
         intent: 'delivery',
         goal: 'ship WP-02',
