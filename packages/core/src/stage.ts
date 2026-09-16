@@ -318,11 +318,27 @@ export class StageGate {
   ): object {
     if (run.role !== 'test' || this.testEvidence === undefined) return payload;
     const evidence = this.testEvidence.get(attempt.id);
-    if (evidence === undefined || evidence.state === 'pending') {
+    if (evidence === undefined) {
+      // `execution.md` §5 / `data.md` §3 W5: the executed evidence is produced by Core for one
+      // live Attempt and read back when that Attempt delivers. It is deliberately
+      // **Attempt-scoped and in-memory** (`test-environment.ts` `TestEvidenceRegistry`): a
+      // daemon restart loses it, and the durable half of the evidence is the `evidence`
+      // Artifact, the `test.command_executed` audit event and the `stage_result` that is only
+      // written once this gate accepts. Persisting the verdict across a restart would let a
+      // dead Attempt's evidence stand in for a new one, which `reliability.md` §2 (late
+      // events) and §6 (recovery opens a new Attempt) forbid. The refusal therefore says
+      // exactly that instead of reporting a command that is not running.
+      throw new ProtocolError(
+        'GATE_NOT_READY',
+        `Run ${run.id} has no executed acceptance evidence registered for Attempt ${attempt.id} in this daemon process: either the declared commands have not started yet (the Attempt has not reported ready) or the daemon that executed them restarted. The evidence is Attempt-scoped and not persisted, so it does not survive a restart; this Attempt can only be re-run (a new Attempt re-executes policy.testCommands) or deliver needs_input/failed. A success cannot be recorded without it (execution.md §5).`,
+        { details: { runId: run.id, attemptId: attempt.id, evidence: 'missing' } },
+      );
+    }
+    if (evidence.state === 'pending') {
       throw new ProtocolError(
         'GATE_NOT_READY',
         `Run ${run.id} is still executing the project's declared acceptance commands; the executed evidence is not ready, so no stage result is recorded yet. Call stage_yield again when the commands finish.`,
-        { details: { runId: run.id, attemptId: attempt.id } },
+        { details: { runId: run.id, attemptId: attempt.id, evidence: 'pending' } },
       );
     }
     const checkResult = evidence.checkResult;

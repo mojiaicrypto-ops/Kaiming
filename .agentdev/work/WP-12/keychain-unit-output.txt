@@ -1,0 +1,161 @@
+$ vitest run --project unit
+
+ RUN  v5.0.0 /Users/huyaohua/huyh/work/aigrouptool
+
+ ✓ |unit| packages/workspace/test/scan.test.ts (16 tests) 3570ms
+   ✓ resolveProject (3)
+     ✓ reduces subdirectories and symlinked paths of one repository to one Project 455ms
+     ✓ resolves a nested repository to itself, not to its parent 533ms
+   ✓ nested repositories (1)
+     ✓ excludes nested repository files from the parent and scans them independently 733ms
+   ✓ candidate knowledge (3)
+     ✓ generates observed candidate features and documents without touching a delivery ref 582ms
+     ✓ reports an existing document that disagrees with the observed tree (AC-042) 360ms
+   ✓ Git ports (2)
+     ✓ NodeGitPort runs real git with explicit arguments 802ms
+ ✓ |unit| packages/core/test/findings.test.ts (37 tests) 2690ms
+ ✓ |unit| packages/core/test/supervisor.test.ts (30 tests) 3462ms
+   ✓ RunnerSupervisor heartbeat and recovery (11)
+     ✓ escalates to SIGKILL when a Runner ignores SIGTERM 2105ms
+ ✓ |unit| packages/core/test/broker.test.ts (55 tests) 3910ms
+   ✓ Broker (AC-048, AC-050) (55)
+     ✓ review round 2 regressions (W7R2) (15)
+       ✓ refuses readiness when the port is owned by an external listener (W7R2-07) 603ms
+ ✓ |unit| packages/core/test/tools.test.ts (24 tests) 2768ms
+   ✓ tool execution through the real Broker (5)
+     ✓ reads a real file, honouring an offset/limit window 591ms
+     ✓ writes only when the expected pre-image matches 413ms
+     ✓ searches authorized files and refuses an out-of-grant path 633ms
+     ✓ walks a directory without following symlinks or descending into ignored trees 519ms
+     ✓ runs a real read-only git command in the repository 581ms
+ ✓ |unit| packages/core/test/grants.test.ts (39 tests) 2142ms
+ ✓ |unit| packages/core/test/tool-broker.test.ts (15 tests) 1582ms
+   ✓ Broker asynchronous tool processes (T3.2/T3.6) (12)
+     ✓ does not block the daemon event loop while the shell runs 569ms
+     ✓ reports a timeout instead of a successful run 350ms
+ ✓ |unit| packages/core/test/join.test.ts (14 tests) 2405ms
+   ✓ join and structured delivery (AC-046, AC-047) (14)
+     ✓ counts rejections and dedupes todos across more than one event page (D3) 1087ms
+ ✓ |unit| packages/core/test/orchestrator.test.ts (64 tests) 6955ms
+ ✓ |unit| packages/knowledge/test/requirements-pool.test.ts (25 tests) 1115ms
+   ✓ Git ignore and legacy layout (4)
+     ✓ reports REQUIREMENT_PATH_IGNORED when .agentdev is ignored wholesale 473ms
+     ✓ treats an un-ignored pool in the same repository as tracked 435ms
+ ✓ |unit| packages/workspace/test/worktree.test.ts (11 tests) 1199ms
+   ✓ worktree manager (11)
+     ✓ creates and removes a real worktree through NodeWorktreeGitPort 1143ms
+ ✓ |unit| packages/core/test/artifacts.test.ts (16 tests) 981ms
+ ✓ |unit| apps/daemon/test/server.test.ts (17 tests) 1772ms
+ ✓ |unit| packages/core/test/gates.test.ts (15 tests) 1335ms
+ ✓ |unit| packages/core/test/permissions-failures.test.ts (4 tests) 780ms
+   ✓ WP-07 required failure tests (4)
+     ✓ 进程清理失败: a cleanup failure is detected and reported as recoverable, never swallowed 632ms
+ ✓ |unit| packages/core/test/delivery-failures.test.ts (5 tests) 706ms
+ ✓ |unit| packages/core/test/permissions-bridge.test.ts (20 tests) 922ms
+ ✓ |unit| packages/core/test/recovery.test.ts (21 tests) 1018ms
+ ✓ |unit| apps/web/test/server.test.ts (17 tests) 536ms
+ ✓ |unit| packages/core/test/process-async.test.ts (10 tests) 460ms
+ ✓ |unit| packages/core/test/gateway-http.test.ts (14 tests) 542ms
+ ✓ |unit| packages/core/test/decisions.test.ts (5 tests) 301ms
+ ✓ |unit| packages/core/test/control-http.test.ts (13 tests) 487ms
+ ✓ |unit| packages/core/test/l3-confirmation.test.ts (5 tests) 217ms
+ ✓ |unit| packages/core/test/model-gateway.test.ts (12 tests) 182ms
+ ✓ |unit| packages/core/test/context-cold-start.test.ts (24 tests) 384ms
+ ✓ |unit| packages/client/test/http.test.ts (11 tests) 184ms
+ ✓ |unit| packages/core/test/context-builder.test.ts (47 tests) 154ms
+ ✓ |unit| packages/core/test/egress.test.ts (5 tests) 145ms
+ ✓ |unit| packages/core/test/test-evidence.test.ts (13 tests) 186ms
+ ✓ |unit| packages/core/test/tool-http.test.ts (10 tests) 248ms
+ ✓ |unit| packages/pi-runtime/test/resources.test.ts (8 tests) 70ms
+ ✓ |unit| packages/knowledge/test/feature-format.test.ts (47 tests) 28ms
+ ✓ |unit| packages/contracts/test/protocol.test.ts (10 tests) 8ms
+ ✓ |unit| packages/pi-runtime/test/trust.test.ts (14 tests) 324ms
+ ✓ |unit| packages/core/test/config.test.ts (8 tests) 89ms
+ ✓ |unit| packages/knowledge/test/views.test.ts (9 tests) 21ms
+ ✓ |unit| packages/core/test/wp08-failures.test.ts (6 tests) 15170ms
+   ✓ required WP-08 failure tests (6)
+     ✓ Task 合并冲突: two passed Tasks conflict, the repair Task is independent and CAS protects HEAD (AC-062) 3919ms
+     ✓ T-01: the repair revision converges and is what the final manifest records (AC-062) 4808ms
+     ✓ CAS 失败: a moved baseline refuses the writer and leaves the branch untouched 2189ms
+     ✓ ref 后崩溃: the restart reuses the commit, completes the state and emits one event (AC-063) 1528ms
+     ✓ 取消未知副作用: cancel stops at blocked(recovery), keeps the Requirement active and integrates nothing (AC-021) 946ms
+     ✓ 备份演练: backup → restore keeps hashes/knowledge/evidence and blocks a missing Secret (AC-064) 1780ms
+ ✓ |unit| packages/core/test/requirement-save.test.ts (22 tests) 44ms
+ ✓ |unit| packages/core/test/requirement-continue.test.ts (4 tests) 56ms
+ ✓ |unit| packages/contracts/test/enums.test.ts (35 tests) 10ms
+ ✓ |unit| apps/web/test/pages.test.ts (58 tests) 153ms
+ ✓ |unit| packages/contracts/test/entities.test.ts (13 tests) 68ms
+ ✓ |unit| apps/runner/test/tools.test.ts (19 tests) 134ms
+ ✓ |unit| apps/runner/test/tool-client.test.ts (17 tests) 46ms
+ ✓ |unit| packages/core/test/context-acl.test.ts (50 tests) 114ms
+ ✓ |unit| packages/domain/test/domain.test.ts (33 tests) 107ms
+ ✓ |unit| packages/client/test/commands.test.ts (18 tests) 121ms
+ ✓ |unit| apps/runner/test/control-client.test.ts (14 tests) 144ms
+ ✓ |unit| packages/contracts/test/limits.test.ts (9 tests) 8ms
+ ✓ |unit| packages/contracts/test/tool-protocol.test.ts (15 tests) 25ms
+ ✓ |unit| packages/core/test/secret-repository.test.ts (30 tests) 182ms
+ ✓ |unit| packages/core/test/context-requirements.test.ts (37 tests) 37ms
+ ✓ |unit| packages/client/test/subscriptions.test.ts (14 tests) 66ms
+ ✓ |unit| packages/knowledge/test/projection.test.ts (13 tests) 38ms
+ ✓ |unit| apps/web/test/views.test.ts (52 tests) 19ms
+ ✓ |unit| packages/workspace/test/initialize.test.ts (21 tests) 18133ms
+   ✓ initialization phase sequence (3)
+     ✓ advances Identifying → Mapping → Confirming → Writing → Ready with evidence and a clean gate 664ms
+     ✓ fails the Ready gate when a candidate document is tampered with after Ready 583ms
+     ✓ is idempotent for the same id and refuses to rebind it to another root 341ms
+   ✓ interruption recovery in Writing (2)
+     ✓ resumes from a JSON-file state store without rewriting already-written documents 1106ms
+     ✓ records an interrupted write and resumes without duplicating writes 1057ms
+   ✓ write conflicts (2)
+     ✓ never overwrites an existing file with different content and requires explicit recovery 1728ms
+   ✓ dirty workspace (1)
+     ✓ blocks delivery start with a hash report while read-only investigation still works 1766ms
+   ✓ no-Git directory (1)
+     ✓ returns Blocked with the Git-initialization authorization request 1450ms
+   ✓ empty project (AC-025) (1)
+     ✓ creates the initial Git and delivery branch, then confirms an unimplemented project 1180ms
+   ✓ design/code conflict (AC-042) (1)
+     ✓ blocks Confirming, never confirms the existing document and keeps candidates observed 912ms
+   ✓ root-only projects reach Ready (W4R1-01 regression) (3)
+     ✓ reaches Ready for a root README and one root source file 1015ms
+     ✓ reaches Ready for a root README plus a root python module and test 691ms
+     ✓ treats a README-only project as an explicit no-capability project 933ms
+   ✓ budget exhaustion without capability (W4R2-01 regression) (2)
+     ✓ never reaches Ready by claiming an unconfirmed empty project 943ms
+     ✓ finds the capability once the investigation batch is enlarged 1024ms
+   ✓ budget-grant APIs reject bad input without bricking the record (W4R3-01..04) (3)
+     ✓ rejects a smaller batch, a wrong phase and a missing id without persisting failure 650ms
+     ✓ refuses to degrade a Ready record through investigateMore 715ms
+   ✓ rejections never brick a record (T-01 regression) (1)
+     ✓ keeps a Ready record Ready after a repeated confirm 695ms
+   ✓ input errors never downgrade a Ready record (W4R4-01 regression) (1)
+     ✓ keeps done and Ready after resolveBlocker/resolveConflict misuse 672ms
+ ✓ |unit| packages/domain/test/delivery.test.ts (48 tests) 39ms
+ ✓ |unit| packages/core/test/auth.test.ts (19 tests) 23ms
+ ✓ |unit| packages/core/test/context-ledger.test.ts (36 tests) 37ms
+ ✓ |unit| packages/core/test/context-checkpoint.test.ts (19 tests) 34ms
+ ✓ |unit| packages/contracts/test/errors.test.ts (9 tests) 12ms
+ ✓ |unit| apps/daemon/test/ui-catalogue.test.ts (3 tests) 17ms
+ ✓ |unit| packages/core/test/runtime.test.ts (10 tests) 29ms
+ ✓ |unit| packages/knowledge/test/relations.test.ts (11 tests) 6ms
+ ✓ |unit| packages/core/test/mailbox.test.ts (8 tests) 49ms
+ ✓ |unit| packages/contracts/test/primitives.test.ts (14 tests) 18ms
+ ✓ |unit| packages/contracts/test/toolchain.test.ts (5 tests) 21ms
+ ✓ |unit| apps/web/test/client-script.test.ts (24 tests) 8ms
+ ✓ |unit| apps/runner/test/read-ledger.test.ts (2 tests) 59ms
+ ✓ |unit| packages/pi-runtime/test/events.test.ts (7 tests) 3ms
+ ✓ |unit| packages/domain/test/permission-delivery.test.ts (20 tests) 45ms
+ ✓ |unit| packages/contracts/test/runtime.test.ts (12 tests) 63ms
+ ✓ |unit| packages/core/test/secrets.test.ts (27 tests) 91ms
+ ✓ |unit| apps/runner/test/environment.test.ts (4 tests) 2ms
+ ✓ |unit| apps/daemon/test/runner-spawn.test.ts (5 tests) 3ms
+ ✓ |unit| packages/core/test/gateway-secret-scope.test.ts (3 tests) 4ms
+ ✓ |unit| apps/daemon/test/prepare-run.test.ts (4 tests) 10ms
+ ✓ |unit| packages/pi-runtime/test/extensions.test.ts (11 tests) 12ms
+ ✓ |unit| apps/runner/test/cli.test.ts (3 tests) 7ms
+
+ Test Files  80 passed (80)
+      Tests  1494 passed (1494)
+   Start at  17:02:14
+   Duration  21.57s (tests 61%, import 27%, transform 11%)
+

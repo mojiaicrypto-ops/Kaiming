@@ -503,6 +503,65 @@ describe('keychain adapter (injected command runner)', () => {
     expect(repository.get('provider/main')).toBeNull();
   });
 
+  it('decodes the hex form `security -w` uses for non-ASCII values (real macOS behaviour)', () => {
+    // A fake that reproduces `/usr/bin/security` exactly as observed on this macOS host:
+    // `-w` prints printable ASCII verbatim but hex-encodes anything else, and `-g` quotes
+    // the former while printing `0x…` for the latter. The Keychain stores raw bytes, so
+    // reading the `-w` hex answer as the value is what corrupted non-ASCII credentials.
+    const items = new Map<string, string>();
+    const run: SecretCommandRunner = (_command, args) => {
+      const rest = args.slice(1);
+      const flag = (name: string): string | undefined => {
+        const index = rest.indexOf(name);
+        return index === -1 ? undefined : rest[index + 1];
+      };
+      const account = flag('-a') as string;
+      if (args[0] === 'add-generic-password') {
+        items.set(account, flag('-w') as string);
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      const stored = items.get(account);
+      if (stored === undefined) return { status: 44, stdout: '', stderr: 'could not be found' };
+      const bytes = Buffer.from(stored, 'utf8');
+      const printable = bytes.every((byte) => byte >= 0x20 && byte < 0x7f);
+      if (args.includes('-w')) {
+        return {
+          status: 0,
+          stdout: `${printable ? stored : bytes.toString('hex')}\n`,
+          stderr: '',
+        };
+      }
+      if (args.includes('-g')) {
+        return {
+          status: 0,
+          stdout: '',
+          stderr: printable
+            ? `password: "${stored}"\n`
+            : `password: 0x${bytes.toString('hex').toUpperCase()}\n`,
+        };
+      }
+      return { status: 1, stdout: '', stderr: 'unsupported' };
+    };
+    const repository = createSecretRepository({
+      home,
+      backend: 'keychain',
+      commandRunner: run,
+      now,
+    });
+
+    // Non-ASCII and control bytes both come back as the bytes that were stored.
+    for (const [ref, value] of [
+      ['provider/unicode', '值é🔑-token'],
+      ['provider/multiline', 'line1\nline2'],
+    ] as const) {
+      repository.set(ref, value, { audience: 'gateway' });
+      expect(repository.get(ref)?.value).toBe(value);
+    }
+    // A printable ASCII value that merely *looks* like hex stays itself.
+    repository.set('provider/hexlike', 'c3a9', { audience: 'gateway' });
+    expect(repository.get('provider/hexlike')?.value).toBe('c3a9');
+  });
+
   it('keeps the index metadata-only, namespaced and 0600', () => {
     const { repository } = keychainRepository();
     repository.set('provider/main', DECOY, { audience: 'gateway' });

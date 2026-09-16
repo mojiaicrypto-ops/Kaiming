@@ -49,6 +49,9 @@ export const BROWSER_AC_CHECK_NAMES = Object.freeze({
   'AC-074': 'browser.inbox-todo-resolution',
   'AC-076': 'browser.attachment-client-hints',
   'AC-011': 'browser.l3-confirmation',
+  'AC-087': 'browser.clone-pool',
+  'AC-088': 'browser.clone-pool-completion',
+  'AC-089': 'browser.clone-pool-continue',
 });
 
 /** The statuses the browser report may carry. */

@@ -1171,6 +1171,35 @@ describe('chief orchestration (AC-045, AC-044, AC-082)', () => {
     expect(store.runs.list({ where: 'parent_run_id = ?', params: [chief.id] })).toHaveLength(0);
   });
 
+  it('queues exactly one Run when two triggers dispatch the same route step (WP-12 debt 1)', () => {
+    const chief = chiefRun();
+    // `workflow.md` §3: Core continues the route from the accepted stage result, and the
+    // Chief follows the same route through `agent.dispatch`. When the Chief dispatches a step
+    // Core has already queued, the second Run used to be created and ran to completion
+    // (`w4b-implementation.md` §9.8-1: the Test stage accumulated five Runs).
+    const first = orchestrator.dispatch({
+      spec: backendSpec(chief.id, { role: 'review', purpose: 'review', stage: 'review' }),
+    });
+    expect(first.run).toMatchObject({ role: 'review', stage: 'review', status: 'queued' });
+    expect(() =>
+      orchestrator.dispatch({
+        spec: backendSpec(chief.id, { role: 'review', purpose: 'review', stage: 'review' }),
+      }),
+    ).toThrowError(/one stage transition queues exactly one Run/);
+    expect(
+      store.runs.list({ where: "work_id = ? AND role = 'review'", params: [WORK_ID] }),
+    ).toHaveLength(1);
+    // A terminal Run is history (`workflow.md` §5.3), so it releases the step for a retry.
+    store.runs.update(first.run.id, { status: 'failed' }, first.run.version);
+    const retry = orchestrator.dispatch({
+      spec: backendSpec(chief.id, { role: 'review', purpose: 'review', stage: 'review' }),
+    });
+    expect(retry.run.id).not.toBe(first.run.id);
+    expect(
+      store.runs.list({ where: "work_id = ? AND role = 'review'", params: [WORK_ID] }),
+    ).toHaveLength(2);
+  });
+
   it('refuses a stale profileRevision instead of running an unexpected model', () => {
     const chief = chiefRun();
     const spec = backendSpec(chief.id, { profileRevision: 0 });

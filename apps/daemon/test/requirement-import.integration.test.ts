@@ -3,26 +3,31 @@
  *
  * A repository is committed on the `agentdev/main` delivery branch, then **really
  * cloned** with `git` into a second installation whose SQLite is empty; the project is
- * opened and the committed pool appears. Nothing is seeded: every requirement row in
- * these assertions comes from `RequirementProjection.import` reading a record out of
- * Git, which is what AC-087/AC-088/AC-089 mean by the product path.
+ * opened and the committed pool appears. Every requirement row in these assertions comes
+ * from `RequirementProjection.import` reading a record out of Git, and no Run starts.
+ * `store.requirements.insert` must not appear in this file.
  *
- * `store.requirements.insert` must not appear in this file, and no Run may start.
+ * **What this test does not prove** (WP-12 clone-portability round): the pool records
+ * are written here with `node:fs` (`writeRecord`/`makeSourceRepository`), so the
+ * *producer* side — the documented save path that commits a record to the delivery
+ * branch — is not exercised. It proves the clone → open → per-record import half
+ * (all five lifecycles, a broken record, an absent pool). The no-seed drill that
+ * produces the pool through the real protocol commands and then clones it is
+ * `requirement-portability-drill.integration.test.ts`.
  */
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { AuthService, readInstallationCredential } from '@agentdev/core';
+import {
+  DELIVERY_BRANCH,
+  git,
+  startInstallation,
+  type Installation,
+} from './requirement-clone-helpers.js';
 
-import { openProject } from '../src/bootstrap.js';
-import { ProjectDirectory, type AssembledProject } from '../src/project-directory.js';
-
-const WEB_ORIGIN = 'http://127.0.0.1:4317';
-const DELIVERY_BRANCH = 'agentdev/main';
 const FEATURE_ID = 'F-1a2b3c4d';
 
 const IDS = {
@@ -34,20 +39,6 @@ const IDS = {
 } as const;
 
 type Lifecycle = 'queued' | 'active' | 'completed' | 'cancelled' | 'archived';
-
-function git(cwd: string, args: readonly string[]): string {
-  return execFileSync('git', [...args], {
-    cwd,
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      GIT_AUTHOR_NAME: 'AgentDev Test',
-      GIT_AUTHOR_EMAIL: 'test@localhost',
-      GIT_COMMITTER_NAME: 'AgentDev Test',
-      GIT_COMMITTER_EMAIL: 'test@localhost',
-    },
-  }).toString();
-}
 
 function sha256Hex(text: string): string {
   return createHash('sha256').update(text).digest('hex');
@@ -155,72 +146,13 @@ function makeSourceRepository(root: string, options: { omitContentFor?: string }
   return root;
 }
 
-interface Harness {
-  readonly home: string;
-  readonly directory: ProjectDirectory;
-  close(): void;
-}
-
-function startDirectory(): Harness {
-  const home = mkdtempSync(join(tmpdir(), 'agentdev-t5-import-home-'));
-  const auth = AuthService.loadOrCreate({
-    stateDir: home,
-    config: { deployment: 'loopback', allowedOrigins: [WEB_ORIGIN] },
-  });
-  const token = readInstallationCredential(home);
-  const ref: { current?: ProjectDirectory } = {};
-  const directory = new ProjectDirectory({
-    home,
-    host: '127.0.0.1',
-    version: '0.0.0-test',
-    bearer: () => token,
-    epoch: () => 1,
-    webOrigin: WEB_ORIGIN,
-    assemble: async (input): Promise<AssembledProject> => {
-      const project = await openProject({
-        root: input.root,
-        home,
-        auth,
-        installationToken: token,
-        version: '0.0.0-test',
-        withWeb: false,
-        daemonPort: 0,
-        host: '127.0.0.1',
-        trust: input.trust,
-        ...(ref.current === undefined ? {} : { projectDirectory: ref.current }),
-      });
-      return {
-        projectId: project.projectId,
-        root: project.root,
-        gitRoot: project.gitRoot,
-        dataDir: project.dataDir,
-        instance: {
-          projectId: project.projectId,
-          root: project.root,
-          daemon: { host: '127.0.0.1' as const, port: project.ports.daemon },
-          web: null,
-        },
-        store: project.store,
-        protocol: project.protocol,
-        deliveryBranch: 'agentdev/main',
-        documentRoot: 'docs/agentdev',
-      };
-    },
-    teardown: () => Promise.resolve(),
-    runningRuns: () => 0,
-    executionReady: () => true,
-  });
-  ref.current = directory;
-  return { home, directory, close: () => rmSync(home, { recursive: true, force: true }) };
-}
-
 describe('first-open requirement import from the delivery revision (WP-12 T5.4)', () => {
-  let harness: Harness;
+  let harness: Installation;
   let source: string;
   const temporaries: string[] = [];
 
   beforeEach(() => {
-    harness = startDirectory();
+    harness = startInstallation();
     const base = mkdtempSync(join(tmpdir(), 'agentdev-t5-pool-'));
     temporaries.push(base);
     source = makeSourceRepository(join(base, 'source'));

@@ -1,0 +1,303 @@
+# WP-12 macOS Keychain real drill
+host: macOS 26.5.1
+run prefix: wp12verify-569ad64c60
+security: /usr/bin/security (present)
+repo: /Users/huyaohua/huyh/work/aigrouptool
+
+## A. Repository-level real verification (built @agentdev/core, real `security`)
+
+ok   A1 set uses the keychain backend and reports metadata only — {"ref":"wp12verify-569ad64c60/provider-main","configured":true,"updatedAt":"2026-09-16T10:00:19.214Z","backend":"keychain","health":"ok"}
+ok   A1 get resolves exactly the stored value
+
+ok   A2 list reports one metadata row with health=ok — [{"ref":"wp12verify-569ad64c60/provider-main","configured":true,"updatedAt":"2026-09-16T10:00:19.214Z","backend":"keychain","health":"ok"}]
+ok   A2 list carries no value
+    list() = [{"ref":"wp12verify-569ad64c60/provider-main","configured":true,"updatedAt":"2026-09-16T10:00:19.214Z","backend":"keychain","health":"ok"}]
+    index file = /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-wp12-kc-hQG73Y/secrets/keychain/index.json
+    index bytes = "{\n  \"v\": 1,\n  \"entries\": [\n    {\n      \"ref\": \"wp12verify-569ad64c60/provider-main\",\n      \"audience\": \"gateway\",\n      \"updatedAt\": \"2026-09-16T10:00:19.214Z\"\n    }\n  ]\n}"
+
+ok   A3 a non-ASCII value round-trips through the real Keychain — expected-length=21 read-length=21
+
+ok   A4 overwriting an existing ref keeps one row and the newest value
+ok   A4 the raw Keychain item holds the newest value
+
+ok   A5 delete removes the Keychain item and its index row
+ok   A5 deleting an absent ref is an honest false
+
+ok   A6 get of an absent ref returns null (documented)
+
+ok   A7 a stale index row is reported health=missing with SECRET_NOT_FOUND — {"ref":"wp12verify-569ad64c60/stale","configured":false,"updatedAt":"2026-09-16T10:00:19.611Z","backend":"keychain","health":"missing","issue":{"code":"SECRET_NOT_FOUND","message":"the Keychain secret index lists wp12verify-569ad64c60/stale but the Keychain has no such item"}}
+ok   A7 the stale row is also reported through problems() — [{"path":"/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-wp12-kc-hQG73Y/secrets/keychain/index.json","code":"SECRET_NOT_FOUND","message":"the Keychain secret index lists wp12verify-569ad64c60/stale but the Keychain has no such item"}]
+ok   A7 startup load counts the stale ref as failed, not as loaded — {"loaded":1,"failed":[{"ref":"wp12verify-569ad64c60/stale","code":"SECRET_NOT_FOUND","message":"the Keychain secret index lists wp12verify-569ad64c60/stale but the Keychain has no such item"}],"problems":[{"path":"/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-wp12-kc-hQG73Y/secrets/keychain/index.json","code":"SECRET_NOT_FOUND","message":"the Keychain secret index lists wp12verify-569ad64c60/stale but the Keychain has no such item"}]}
+ok   A7 delete converges the stale row instead of hiding the ref forever
+
+ok   A8 a corrupt index is reported as a problem, list() stays non-throwing — [{"path":"/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-wp12-kc-hQG73Y/secrets/keychain/index.json","code":"SECRET_RECORD_INVALID","message":"the Keychain secret index /private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-wp12-kc-hQG73Y/secrets/keychain/index.json is not valid JSON"}]
+
+ok   A9 no value appears in any file under the installation home
+ok   A9 no value appears in the repository working tree
+
+## B. CLI drill (`agentdev secret set/list/rotate/delete`, built binary)
+
+$ agentdev secret set wp12verify-569ad64c60/provider-cli <standard input>
+{
+  "ok": true,
+  "path": "repository",
+  "backend": "keychain",
+  "ref": "wp12verify-569ad64c60/provider-cli",
+  "configured": true,
+  "updatedAt": "2026-09-16T10:00:20.430Z"
+}
+[exit 0]
+ok   B1 set exits 0 and reports the repository path on the keychain backend — {
+  "ok": true,
+  "path": "repository",
+  "backend": "keychain",
+  "ref": "wp12verify-569ad64c60/provider-cli",
+  "configured": true,
+  "updatedAt": "2026-09-16T10:00:20.430Z"
+}
+ok   B1 the value is absent from stdout and stderr
+ok   B1 the raw Keychain item holds the value
+
+$ agentdev secret set wp12verify-569ad64c60/provider-cli --audience tool <standard input>
+{
+  "ok": true,
+  "path": "repository",
+  "backend": "keychain",
+  "ref": "wp12verify-569ad64c60/provider-cli",
+  "configured": true,
+  "updatedAt": "2026-09-16T10:00:20.628Z"
+}
+[exit 0]
+ok   B2 a non-ASCII CLI value is stored and read back unchanged by the repository — expected-length=17 read-length=17
+
+$ agentdev secret list <standard input>
+{
+  "ok": true,
+  "path": "repository",
+  "backend": "keychain",
+  "items": [
+    {
+      "ref": "wp12verify-569ad64c60/provider-cli",
+      "configured": true,
+      "updatedAt": "2026-09-16T10:00:20.628Z",
+      "backend": "keychain",
+      "health": "ok"
+    }
+  ],
+  "problems": []
+}
+[exit 0]
+ok   B3 list reports metadata only and names the ref
+ok   B3 list never carries the value
+
+$ agentdev secret rotate wp12verify-569ad64c60/provider-cli <standard input>
+{
+  "ok": true,
+  "command": "secret rotate",
+  "path": "repository",
+  "ref": "wp12verify-569ad64c60/provider-cli",
+  "backend": "keychain",
+  "rotated": true,
+  "previousUpdatedAt": "2026-09-16T10:00:20.628Z",
+  "updatedAt": "2026-09-16T10:00:21.094Z",
+  "atomicSwap": true,
+  "affected": {
+    "secretRef": "wp12verify-569ad64c60/provider-cli",
+    "providers": []
+  },
+  "capabilities": {
+    "revoked": 0,
+    "note": "rotate 只替换凭证值：下一次 gateway 调用即解析到新值（daemon 运行时经 POST /secret 立即生效，否则下次 start 装载）。已签发的短期 attempt capability 与冻结的 ConfigSnapshot 不会被撤销，也不会改指其它 ref；需要立即阻断请禁用 Provider 或 agentdev secret delete <ref>"
+  }
+}
+[exit 0]
+ok   B4 rotate replaces an existing ref atomically — {
+  "ok": true,
+  "command": "secret rotate",
+  "path": "repository",
+  "ref": "wp12verify-569ad64c60/provider-cli",
+  "backend": "keychain",
+  "rotated": true,
+  "previousUpdatedAt": "2026-09-16T10:00:20.628Z",
+  "updatedAt": "2026-09-16T10:00:21.094Z",
+  "atomicSwap": true,
+  "affected": {
+    "secretRef": "wp12verify-569ad64c60/provider-cli",
+    "providers": []
+  },
+  "capabilities": {
+    "revoked": 0,
+    "note": "rotate 只替换凭证值：下一次 gateway 调用即解析到新值（daemon 运行时经 POST /secret 立即生效，否则下次 start 装载）。已签发的短期 attempt capability 与冻结的 ConfigSnapshot 不会被撤销，也不会改指其它 ref；需要立即阻断请禁用 Provider 或 agentdev secret delete <ref>"
+  }
+}
+ok   B4 rotate output never carries the value
+
+$ agentdev secret set wp12verify-569ad64c60/provider-cli2 <standard input>
+{
+  "ok": true,
+  "path": "repository",
+  "backend": "keychain",
+  "ref": "wp12verify-569ad64c60/provider-cli2",
+  "configured": true,
+  "updatedAt": "2026-09-16T10:00:21.294Z"
+}
+[exit 0]
+$ agentdev secret set wp12verify-569ad64c60/provider-cli2 <standard input>
+{
+  "ok": true,
+  "path": "repository",
+  "backend": "keychain",
+  "ref": "wp12verify-569ad64c60/provider-cli2",
+  "configured": true,
+  "updatedAt": "2026-09-16T10:00:21.476Z"
+}
+[exit 0]
+ok   B5 set over an existing ref overwrites it
+
+$ agentdev secret rotate wp12verify-569ad64c60/never-registered <standard input>
+{"ok":false,"error":{"code":"SECRET_NOT_FOUND","message":"没有已注册的凭证 wp12verify-569ad64c60/never-registered；首次录入请用 agentdev secret set wp12verify-569ad64c60/never-registered"},"operationId":"b62ae363-4f21-4b58-b9c4-29c809bcecac"}
+[exit 1]
+ok   B6 rotate of an unregistered ref reports the documented SECRET_NOT_FOUND — {"ok":false,"error":{"code":"SECRET_NOT_FOUND","message":"没有已注册的凭证 wp12verify-569ad64c60/never-registered；首次录入请用 agentdev secret set wp12verify-569ad64c60/never-registered"},"operationId":"b62ae363-4f21-4b58-b9c4-29c809bcecac"}
+ok   B6 the refused rotate never echoes the value
+
+$ agentdev secret delete wp12verify-569ad64c60/provider-cli <standard input>
+{
+  "ok": true,
+  "path": "repository",
+  "ref": "wp12verify-569ad64c60/provider-cli",
+  "deleted": true
+}
+[exit 0]
+ok   B7 delete removes the Keychain item — {
+  "ok": true,
+  "path": "repository",
+  "ref": "wp12verify-569ad64c60/provider-cli",
+  "deleted": true
+}
+$ agentdev secret delete wp12verify-569ad64c60/provider-cli <standard input>
+{
+  "ok": true,
+  "path": "repository",
+  "ref": "wp12verify-569ad64c60/provider-cli",
+  "deleted": false
+}
+[exit 0]
+ok   B7 deleting again reports deleted=false
+
+ok   B8 the CLI process argv never contains the value (value comes from stdin) — 45419 /opt/homebrew/Cellar/node/24.8.0/bin/node /Users/huyaohua/huyh/work/aigrouptool/apps/cli/dist/cli.js secret set wp12verify-569ad64c60/provider-argv
+ok   B8 the blocked CLI finished and stored the value
+
+ok   B9 the platform limitation is real: `security` argv carries the value (documented, opt-in only) — /usr/bin/security add-generic-password -a wp12verify-569ad64c60/provider-ps -s agentdev-secret -w <MASKED> -U
+
+## C. Daemon path (real daemon + loopback stub Provider)
+
+loopback stub Provider: http://127.0.0.1:52502/v1
+{
+  "ok": true,
+  "started": true,
+  "home": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-wp12-kcdaemon-QhaTAy",
+  "pid": 48014,
+  "epoch": 1,
+  "instances": [
+    {
+      "projectId": "403e4d018467cbe005d23010f1d57764",
+      "root": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-wp12-kcrepo-dsuxWz",
+      "daemon": {
+        "host": "127.0.0.1",
+        "port": 4318
+      },
+      "web": {
+        "host": "127.0.0.1",
+        "port": 4317
+      }
+    }
+  ]
+}
+[agentdev start exit 0]
+provider.upsert -> {"status":"applied","entityId":"01a0a9a9-1a7d-7a3d-a083-420db383373d","providerId":"01a0a9a9-1a7d-7a3d-a083-420db383373d","version":1,"secretConfigured":true}
+secretRef=provider:01a0a9a9-1a7d-7a3d-a083-420db383373d
+ok   C1 provider.upsert reports the credential as configured — {"status":"applied","entityId":"01a0a9a9-1a7d-7a3d-a083-420db383373d","providerId":"01a0a9a9-1a7d-7a3d-a083-420db383373d","version":1,"secretConfigured":true}
+ok   C1 the daemon wrote the credential to the real Keychain
+ok   C1 the live gateway resolves the keychain credential for the probe — stub saw ["Bearer <MASKED>"]
+{
+  "ok": true,
+  "stopped": true,
+  "home": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-wp12-kcdaemon-QhaTAy",
+  "pid": 48014
+}
+[agentdev stop exit 0]
+{
+  "ok": true,
+  "started": true,
+  "home": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-wp12-kcdaemon-QhaTAy",
+  "pid": 48152,
+  "epoch": 2,
+  "instances": [
+    {
+      "projectId": "403e4d018467cbe005d23010f1d57764",
+      "root": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-wp12-kcrepo-dsuxWz",
+      "daemon": {
+        "host": "127.0.0.1",
+        "port": 4318
+      },
+      "web": {
+        "host": "127.0.0.1",
+        "port": 4317
+      }
+    }
+  ]
+}
+[agentdev start exit 0]
+ok   C2 after a restart the gateway resolves the credential loaded from the real Keychain — stub saw ["Bearer <MASKED>"]
+{
+  "ok": true,
+  "path": "daemon",
+  "backend": "keychain",
+  "ref": "provider:01a0a9a9-1a7d-7a3d-a083-420db383373d",
+  "configured": true,
+  "updatedAt": "2026-09-16T10:00:28.567Z"
+}
+[exit 0]
+ok   C3 the CLI registers against the live daemon through its admin surface — {
+  "ok": true,
+  "path": "daemon",
+  "backend": "keychain",
+  "ref": "provider:01a0a9a9-1a7d-7a3d-a083-420db383373d",
+  "configured": true,
+  "updatedAt": "2026-09-16T10:00:28.567Z"
+}
+ok   C3 the real Keychain holds the rotated value
+ok   C3 the live gateway resolves the rotated credential immediately — stub saw ["Bearer <MASKED>"]
+{
+  "ok": true,
+  "stopped": true,
+  "home": "/private/var/folders/zs/p0l9stg552j3vgvzwmf0gnp80000gn/T/agentdev-wp12-kcdaemon-QhaTAy",
+  "pid": 48152
+}
+[agentdev stop exit 0]
+ok   C4 the credential never appears in the daemon log or the installation home
+
+ok   C5 deleting the keychain credential removes the real Keychain item — {
+  "ok": true,
+  "path": "repository",
+  "ref": "provider:01a0a9a9-1a7d-7a3d-a083-420db383373d",
+  "deleted": true
+}
+
+## D. Cleanup
+
+deleted 4 created Keychain item(s) with `security delete-generic-password`
+  provider:01a0a9a9-1a7d-7a3d-a083-420db383373d -> security find-generic-password exit 44 (44 = not found)
+  wp12verify-569ad64c60/provider-argv -> security find-generic-password exit 44 (44 = not found)
+  wp12verify-569ad64c60/provider-cli -> security find-generic-password exit 44 (44 = not found)
+  wp12verify-569ad64c60/provider-cli2 -> security find-generic-password exit 44 (44 = not found)
+  wp12verify-569ad64c60/provider-main -> security find-generic-password exit 44 (44 = not found)
+  wp12verify-569ad64c60/provider-ps -> security find-generic-password exit 44 (44 = not found)
+  wp12verify-569ad64c60/stale -> security find-generic-password exit 44 (44 = not found)
+  wp12verify-569ad64c60/unicode -> security find-generic-password exit 44 (44 = not found)
+ok   D every created Keychain item is gone from the login keychain — 0 leftover(s)
+ok   D no value appears anywhere under the temp installation homes
+removed temp dirs: agentdev-wp12-kc-hQG73Y, agentdev-wp12-kccli-ufFK0O, agentdev-wp12-kcdaemon-QhaTAy, agentdev-wp12-kcrepo-dsuxWz
+ok   D the temp installation dirs are gone
+
+# Result: ALL CHECKS PASSED

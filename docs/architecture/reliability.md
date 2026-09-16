@@ -66,7 +66,7 @@ CLI命令契约：doctor输出依赖版本/Docker/目录权限/端口状态；st
 
 **安装级Grant（WP-12 T5 Q4）**：`project.clone`这类「环境操作」发生在任何项目之外（网络访问 + 在项目根之外写目录），因此它的授权不能放在项目库里的Grant表（那里按运行中的Work绑定）。安装级once-Grant持久化在安装家目录的`~/.agentdev/grants.json`（0600、原子写），语义与项目级`grant`的`once`作用域一致：绑定operation + targets + inputHash，带`issuedAt/expiresAt`，只能消费一次，消费时写入`consumedAt/consumedByOperationId`。拒绝未知、过期、operation/targets/inputHash不匹配的引用；已消费的引用返回INVALID_STATE而不是重放。与项目级Grant的区别：项目级Grant跟随Work/Run生命周期并被准入路径消费；安装级Grant只服务安装级环境操作，不参与Run准入。授权由用户的显式动作铸造（回环admin面），`grantId`即该行id。
 
-Provider Secret持久化在安装家目录的`~/.agentdev/secrets/`：默认`file`后端（0600 AES-256-GCM记录+0600独立主密钥），`AGENTDEV_SECRET_BACKEND=keychain`才使用macOS Keychain（`security`以`-w <value>`经argv传值，故不设为默认）。缺少主密钥而记录仍存在时拒绝静默重建并报错；后端不识别或损坏的文件只逐条上报、不阻断启动。
+Provider Secret持久化在安装家目录的`~/.agentdev/secrets/`：默认`file`后端（0600 AES-256-GCM记录+0600独立主密钥），`AGENTDEV_SECRET_BACKEND=keychain`才使用macOS Keychain（`security`以`-w <value>`经argv传值，故不设为默认）；Keychain条目按用户存于登录钥匙串（`service=agentdev-secret`、`account=<ref>`），家目录下的`secrets/keychain/index.json`只是0600元数据索引，同一用户的不同安装因此共享同一条目。缺少主密钥而记录仍存在时拒绝静默重建并报错；后端不识别或损坏的文件只逐条上报、不阻断启动。
 
 远程使用反向代理TLS到BFF，daemon loopback不公开。健康检查/healthz只暴露ready与版本。日志按Project/Work/Run/Attempt/operationId关联，隐藏Secret和敏感用户内容；完整Artifact由受权路径查看。
 

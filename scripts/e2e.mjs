@@ -43,6 +43,7 @@ import {
 } from './lib/browser-suite.mjs';
 import {
   E2E_BROWSER_ACS,
+  E2E_BROWSER_CLONE_ACS,
   E2E_BROWSER_L3_ACS,
   E2E_BROWSER_INBOX_ACS,
   E2E_BROWSER_ISOLATION_ACS,
@@ -2588,12 +2589,13 @@ async function runChecks({ checks, harness, product, meta }) {
 async function runBrowserChecks({ checks, meta }) {
   const availability = browserAvailability();
   if (!availability.available) {
-    const reason = `真实浏览器不可用：${availability.reason}；浏览器侧子句（AC-002/AC-052 的隔离与攻击样例、AC-071 的 viewport/焦点、AC-073 的键盘/ARIA、AC-074 的 Inbox 待办"出现→处理→消失"、AC-076 的客户端提示、AC-011 的 L3 确认卡）在本演练中未执行`;
+    const reason = `真实浏览器不可用：${availability.reason}；浏览器侧子句（AC-002/AC-052 的隔离与攻击样例、AC-071 的 viewport/焦点、AC-073 的键盘/ARIA、AC-074 的 Inbox 待办"出现→处理→消失"、AC-076 的客户端提示、AC-011 的 L3 确认卡、AC-087/AC-088/AC-089 的克隆项目需求池）在本演练中未执行`;
     checks.unverified('browser.rendering-and-isolation', E2E_BROWSER_ISOLATION_ACS, reason);
     checks.unverified('browser.viewport-and-keyboard', E2E_BROWSER_VIEWPORT_ACS, reason);
     checks.unverified('browser.inbox-todo-resolution', E2E_BROWSER_INBOX_ACS, reason);
     checks.unverified('browser.upload-client-hints', E2E_BROWSER_UPLOAD_ACS, reason);
     checks.unverified('browser.l3-confirmation', E2E_BROWSER_L3_ACS, reason);
+    checks.unverified('browser.clone-pool', E2E_BROWSER_CLONE_ACS, reason);
     return;
   }
 

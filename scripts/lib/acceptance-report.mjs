@@ -192,7 +192,7 @@ export function renderAcceptanceReport(input) {
   lines.push('| 层级 | 判定规则 | AC 数 |');
   lines.push('|---|---|---|');
   lines.push(
-    `| product-path | 有真实发布演练（\`pnpm test:e2e\` / \`pnpm test:live\`）的 PASS 行，或提交套件里有已执行的 \`apps/*/test/**\` 应用层用例（排除播种行 \`AC-087/088/089\`） | ${String(levels['product-path'] ?? 0)} |`,
+    `| product-path | 有真实发布演练（\`pnpm test:e2e\` / \`pnpm test:live\`）的 PASS 行，或提交套件里有已执行的 \`apps/*/test/**\` 应用层用例（\`acceptance-levels.mjs\` 的播种行豁免集当前为空：AC-087/088/089 已由无播种 clone 演练证明） | ${String(levels['product-path'] ?? 0)} |`,
   );
   lines.push(
     `| library-level | 只有 \`packages/*/test/**\`（或 \`apps\` 非集成用例 / 播种行）证据；库级是该规则的正确层级，但不是产品路径证明 | ${String(levels['library-level'] ?? 0)} |`,

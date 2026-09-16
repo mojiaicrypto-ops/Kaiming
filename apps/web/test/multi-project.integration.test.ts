@@ -77,6 +77,10 @@ describe('single-entry multi-project BFF (WP-12 T5.5)', () => {
     beta = await startTestDaemon({ projectRoot: betaRoot, auth, installationToken: token });
 
     // Distinguishing rows, so "A's content is not on B's page" is a real observation.
+    // These seeded rows exist **only** to tell the two projects apart for routing and
+    // isolation (AC-023/AC-034); they are not evidence for AC-087/AC-088/AC-089. The
+    // portability evidence is the no-seed clone drill
+    // (`apps/daemon/test/requirement-portability-drill.integration.test.ts`).
     seedRequirement(alpha, 'queued', undefined, 'ALPHA-ONLY-REQUIREMENT');
     seedRequirement(beta, 'queued', undefined, 'BETA-ONLY-REQUIREMENT');
 

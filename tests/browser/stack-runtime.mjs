@@ -9,6 +9,7 @@
  * `scripts/e2e.mjs`. `AGENTDEV_HOME` points at the temp state directory, so the drill
  * can never touch the operator's real `~/.agentdev`.
  */
+import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
@@ -357,7 +358,7 @@ async function freePort() {
 }
 
 /** The six level-2 headings every `content.md` carries (`requirements.md` §6). */
-function requirementContent(title) {
+function requirementContent(title, completion = '无') {
   return [
     '<!-- record-version: 1 -->',
     `# ${title}`,
@@ -378,7 +379,7 @@ function requirementContent(title) {
     '无',
     '',
     '## 完成摘要',
-    '无',
+    completion,
     '',
   ].join('\n');
 }
@@ -549,12 +550,144 @@ export async function openSwitcherStack() {
     });
   }
 
+  // ---- The clone drill's source records (AC-087/AC-088/AC-089) -------------------
+  //
+  // Alpha is the producer. Its two extra records are created through the same real
+  // `/rpc` commands every other row in this stack uses: one reaches `completed` through
+  // the documented completion write entrance, one reaches `active` through
+  // `requirement.start` and therefore really has a local Work on this installation.
+  const alpha = projects[0];
+  if (alpha === undefined) throw new Error('the switcher stack has no Alpha project');
+  const completionSummary = '浏览器 clone 演练：需求池已交付。';
+  const cloneTitles = {
+    completed: 'CLONE-COMPLETED-REQUIREMENT',
+    active: 'CLONE-ACTIVE-REQUIREMENT',
+  };
+
+  const completedCreate = await rpc(
+    alpha.projectId,
+    'requirement.create',
+    {
+      title: cloneTitles.completed,
+      goal: 'clone 后仍可读完成摘要与代码引用',
+      scope: { readPaths: [], writePaths: [], operations: [], networkTargets: [] },
+      contentMarkdown: requirementContent(cloneTitles.completed, completionSummary),
+    },
+    `clone-completed-create-${alpha.projectId}`,
+  );
+  if (completedCreate.body.ok !== true) {
+    throw new Error(
+      `requirement.create (completed) failed: ${JSON.stringify(completedCreate.body)}`,
+    );
+  }
+  const completedId = completedCreate.body.result.requirementId;
+  const activate = await rpc(
+    alpha.projectId,
+    'requirement.save',
+    { requirementId: completedId, patch: { lifecycle: 'active' } },
+    `clone-completed-activate-${completedId}`,
+  );
+  if (activate.body.ok !== true) {
+    throw new Error(`requirement.save (active) failed: ${JSON.stringify(activate.body)}`);
+  }
+  const complete = await rpc(
+    alpha.projectId,
+    'requirement.save',
+    {
+      requirementId: completedId,
+      patch: {
+        lifecycle: 'completed',
+        completion: {
+          completedAt: new Date().toISOString(),
+          summary: completionSummary,
+          codeRevision: 'a'.repeat(40),
+          codeTree: 'b'.repeat(64),
+          featureIds: [],
+          verificationSummary: '浏览器 clone 演练；旧报告未迁移。',
+          remainingIssues: [],
+        },
+      },
+    },
+    `clone-completed-finish-${completedId}`,
+  );
+  if (complete.body.ok !== true) {
+    throw new Error(`requirement.save (completed) failed: ${JSON.stringify(complete.body)}`);
+  }
+
+  const activeCreate = await rpc(
+    alpha.projectId,
+    'requirement.create',
+    {
+      title: cloneTitles.active,
+      goal: 'clone 后显示待继续并在用户继续前不启动 Run',
+      scope: { readPaths: [], writePaths: [], operations: [], networkTargets: [] },
+      contentMarkdown: requirementContent(cloneTitles.active),
+    },
+    `clone-active-create-${alpha.projectId}`,
+  );
+  if (activeCreate.body.ok !== true) {
+    throw new Error(`requirement.create (active) failed: ${JSON.stringify(activeCreate.body)}`);
+  }
+  const activeId = activeCreate.body.result.requirementId;
+  const start = await rpc(
+    alpha.projectId,
+    'requirement.start',
+    { requirementId: activeId },
+    `clone-active-start-${activeId}`,
+  );
+  if (start.body.ok !== true) {
+    throw new Error(`requirement.start failed: ${JSON.stringify(start.body)}`);
+  }
+
+  // The real clone: Alpha's delivery branch is the default branch, so the clone checks
+  // it out with the pool inside the commits — nothing is copied from disk state.
+  const cloneRoot = join(base, 'repo-clone');
+  execFileSync('git', ['clone', '--no-tags', '--', alpha.root, cloneRoot], { encoding: 'utf8' });
+  const opened = await admin({ root: cloneRoot, trust: true });
+  if (opened.status !== 200 || opened.body.ok !== true) {
+    throw new Error(`opening the clone failed: ${JSON.stringify(opened.body)}`);
+  }
+  const cloneProjectId = opened.body.instance.projectId;
+  const cloneListed = await rpc(cloneProjectId, 'requirement.list', {});
+  if (cloneListed.body.ok !== true) {
+    throw new Error(
+      `the clone project did not answer requirement.list: ${JSON.stringify(cloneListed.body)}`,
+    );
+  }
+  const cloneItems = cloneListed.body.result?.items ?? [];
+  const findClone = (title) => cloneItems.find((item) => item.title === title);
+  const clonedQueued = findClone(alpha.requirementTitle);
+  const clonedCompleted = findClone(cloneTitles.completed);
+  const clonedActive = findClone(cloneTitles.active);
+  if (clonedQueued === undefined || clonedCompleted === undefined || clonedActive === undefined) {
+    throw new Error(
+      `the clone imported ${String(cloneItems.length)} records but not all three expected ones`,
+    );
+  }
+  const cloneDrill = {
+    projectId: cloneProjectId,
+    root: cloneRoot,
+    completionSummary,
+    queued: { id: clonedQueued.id, title: clonedQueued.title },
+    completed: { id: clonedCompleted.id, title: clonedCompleted.title },
+    active: {
+      id: clonedActive.id,
+      title: clonedActive.title,
+      executionAvailability: clonedActive.executionAvailability,
+    },
+  };
+
   return {
     webUrl,
     webOrigin: origin,
     installationToken,
     stateDir: home,
     projects,
+    // The clone drill's project (AC-087/AC-088/AC-089). Alpha's two extra records were
+    // produced through the real commands above, Alpha's repository was really cloned,
+    // and the clone was opened through the admin project path into this same
+    // installation; its per-project SQLite therefore starts empty.
+    clone: cloneDrill,
     close: () => runtime.stop(),
   };
 }
@@ -601,6 +734,8 @@ export async function openBrowserStack() {
       installationToken: switcher.installationToken,
       stateDir: switcher.stateDir,
       projects: switcher.projects,
+      // The clone project the portability spec drives (AC-087/AC-088/AC-089).
+      clone: switcher.clone,
     },
   };
   mkdirSync(dirname(FIXTURE_PATH), { recursive: true });

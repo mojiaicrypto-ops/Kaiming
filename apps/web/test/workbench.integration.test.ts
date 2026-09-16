@@ -881,7 +881,7 @@ describe('WP-09 T4: the workbench end to end over the real stack', () => {
   // The nine surfaces over real state
   // -------------------------------------------------------------------------
 
-  it('reads all nine surfaces from real state in one drill (AC-068–AC-078, AC-084, AC-087–AC-090, AC-093)', async () => {
+  it('reads all nine surfaces from real state in one drill (AC-068–AC-078, AC-084, AC-090, AC-093)', async () => {
     const projectId = harness.projectId;
     const store = harness.daemon.store;
 
@@ -2089,10 +2089,16 @@ describe('WP-09 T4: the workbench end to end over the real stack', () => {
   });
 
   // -------------------------------------------------------------------------
-  // AC-087–AC-090, AC-093: the requirement pool and the UI
+  // AC-090, AC-093: the requirement pool and the UI
   // -------------------------------------------------------------------------
 
-  it('shows an imported active requirement as waiting to continue with no Run (AC-087/AC-089)', async () => {
+  // A UI check over a **seeded** projection row (`seedRequirement` inserts straight into
+  // SQLite): it proves the board/detail render the "待继续" state and that continuing
+  // creates a Work without a Run. It is not the portability evidence for AC-087/AC-089 —
+  // that is the no-seed clone drill
+  // (`apps/daemon/test/requirement-portability-drill.integration.test.ts`) plus its
+  // real-browser half (`tests/browser/ac-087-clone-pool.spec.mjs`).
+  it('shows an imported active requirement as waiting to continue with no Run', async () => {
     const imported = seedRequirement(harness, 'active', undefined, 'imported from Git');
     const board = await page(`/projects/${harness.projectId}/requirements`);
     expect(board.html).toContain('data-i18n="board.card.waitingToContinue"');
@@ -2288,7 +2294,7 @@ describe('WP-09 T4: the workbench end to end over the real stack', () => {
     expect(afterConflict.html).toContain(`Save state: ${expectedState}`);
   });
 
-  it('answers the card actions with the real protocol codes the UI renders (AC-068/AC-089)', async () => {
+  it('answers the card actions with the real protocol codes the UI renders (AC-068)', async () => {
     const store = harness.daemon.store;
     const queued = seedRequirement(harness, 'queued', undefined, 'action queued');
     const work = seedWork(harness, { status: 'running', goal: 'action active' });

@@ -329,6 +329,31 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
   }
 
   /**
+   * Hands the Work's writer lease back when the call that took it did not write.
+   *
+   * `assertWriter` runs immediately before the invocation, so an invocation the Broker
+   * then refuses (`NOT_AUTHORIZED`, `CONTEXT_FORBIDDEN`, a timeout, …) has taken the lease
+   * without leaving anything in the tree. Leaving it held would make a sibling Task's
+   * legitimate write fail `BUSY` for the lease TTL (WP-12 reliability debt); releasing the
+   * caller's own lease takes no authority from anyone else.
+   */
+  function releaseWriter(caller: ToolExecuteCaller, workId: string, projectId: string): void {
+    try {
+      store.leases.release(
+        workWriterLeaseResource(projectId, workId),
+        caller.attemptId,
+        caller.epoch,
+      );
+    } catch (error) {
+      log(
+        `tool-handler: could not release the writer lease of Work ${workId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
    * Resolves the tool-audience environment for one shell call (`AC-051`).
    *
    * The refs come from the Run's live `secret` Grants — the user-approved authorization —
@@ -406,10 +431,13 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
       // Planning Run's first `artifact_write` was refused `BUSY … this Attempt holds no
       // writer lease` while the Chief was still streaming and renewing the lease with every
       // read, and a real model then reported `needs_input` instead of retrying (WP-12 W4c).
-      // Every role that can write still serialises through the same row.
-      if (roleHasBrokerTool(caller.role, 'edit')) {
-        assertWriter(caller, work.id, work.projectId);
-      }
+      // Every role that can write still serialises through the same row — but only a call
+      // that is actually about to execute may take it. The assertion itself runs further
+      // down, after every admission refusal and immediately before the invocation: a call
+      // the Plan gate, the read scope, the sensitive-file table or the network policy
+      // refuses never reached the tree, so it must not hold the Work's writer lease for
+      // its TTL and block a sibling Task's legitimate write (WP-12 reliability debt).
+      const writesWorkspace = roleHasBrokerTool(caller.role, 'edit');
 
       const root = workspace.resolve({
         workId: work.id,
@@ -598,6 +626,12 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
       // project run environment reached only through the explicit stack mode.
       const callMode = policyMode;
 
+      // `reliability.md` §3: the Work's single-writer lease is taken here, after every
+      // admission refusal and immediately before the only call that can really write, so a
+      // refused call never takes it (WP-12 reliability debt). A role that may not write
+      // (`roleHasBrokerTool(..., 'edit')` false) never holds the row at all.
+      if (writesWorkspace) assertWriter(caller, work.id, work.projectId);
+
       const outcome = await broker.invoke({
         workId: work.id,
         runId: run.id,
@@ -640,6 +674,10 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
         ...(signal === undefined ? {} : { signal }),
       });
       if (!outcome.ok) {
+        // The Broker refused the invocation, so nothing was written: hand the single-writer
+        // lease straight back rather than leaving it held for its whole TTL (WP-12
+        // reliability debt).
+        if (writesWorkspace) releaseWriter(caller, work.id, work.projectId);
         // `AC-032`/`AC-085`: a refused read is recorded in the ledger too, so a delivery
         // cannot hide that it asked for material outside its scope.
         if (

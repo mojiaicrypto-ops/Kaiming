@@ -680,7 +680,13 @@ describe('workbench protocol over the real Core (WP-09 T2)', () => {
     expect(store.requirements.list()).toHaveLength(0);
   });
 
-  it('keeps an imported requirement identity and its evidence availability honest (AC-087/AC-088/AC-089)', () => {
+  // A projection read-model check over a **seeded** row (`seedRequirement` inserts
+  // straight into SQLite). It proves the protocol read shape for an imported active
+  // record, but it is not the portability evidence for AC-087/AC-088/AC-089: the
+  // no-seed path is `requirement-portability-drill.integration.test.ts`, which produces
+  // the pool through the documented commands, commits it to the delivery branch and
+  // really clones it.
+  it('keeps an imported requirement identity and its evidence availability honest', () => {
     const requirement = seedRequirement('active');
     const listed = call('requirement.list') as {
       items: {

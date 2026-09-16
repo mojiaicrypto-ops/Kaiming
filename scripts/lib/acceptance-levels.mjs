@@ -14,10 +14,9 @@
  *   `api-gap-audit-2.md` §4 and `test.md` §3.7 both use) or a per-AC `PASS` row from a
  *   real release drill (`pnpm test:e2e` = real daemon + real Runner child + real
  *   Chromium; `pnpm test:live` = real Provider).
- * - `library-level` — only library/page-level cases (or a planted-seed application row,
- *   see `SEEDED_EVIDENCE_ACS`). `test.md` §3.7's own reading: this is the *correct*
- *   level for a rule whose truth is a Core/domain rule, but it must not be reported as
- *   a product-path proof.
+ * - `library-level` — only library/page-level cases. `test.md` §3.7's own reading: this
+ *   is the *correct* level for a rule whose truth is a Core/domain rule, but it must not
+ *   be reported as a product-path proof.
  * - `environment-limited` — the AC is UNVERIFIED under a registered accepted gap whose
  *   condition is an environment input this machine cannot supply (no Provider, no
  *   distinct Review/Test model, no browser). Only reachable while that condition holds.
@@ -27,15 +26,23 @@
  * ## Deliberately derived, not guessed
  *
  * The classification reads `result.evidence[].file`, `result.drills[]` and
- * `RESIDUAL_GAPS[].condition` from the same run that produced the verdict. The two
- * hard-coded sets below are *recorded facts from repository documents*, not opinions:
+ * `RESIDUAL_GAPS[].condition` from the same run that produced the verdict. There is no
+ * hand-listed per-AC level: a level is whatever the executed evidence of this run shows.
  *
- * - `SEEDED_EVIDENCE_ACS` — `api-gap-audit-2.md` §5-B and `T5-plan.md` §E12 record that
- *   AC-087/088/089's only application-level evidence reads from `seedRequirement(...)`
- *   rows written directly into the database, not from the real `import`/`clone` product
- *   path. Counting that row as `product-path` would recreate the over-claim W9 removes.
- * - `argumentative` notes name where a classification could reasonably be read the other
- *   way, so the record is auditable instead of authoritative-sounding.
+ * ## AC-087/AC-088/AC-089 are no longer force-downgraded
+ *
+ * W9 recorded `SEEDED_EVIDENCE_ACS = {AC-087, AC-088, AC-089}` because those ACs' only
+ * application-level evidence was a planted `seedRequirement(...)` row (or a pool whose
+ * files the test wrote with `node:fs`), which cannot prove the portable *pool* travels.
+ * The WP-12 clone-portability round replaced that with a real no-seed drill:
+ * `apps/daemon/test/requirement-portability-drill.integration.test.ts` produces every
+ * lifecycle through the documented protocol commands (the real `RequirementSaveService`
+ * commits to `agentdev/main`), really clones the repository into a second installation
+ * with an empty database, and continues the imported `active` record without starting a
+ * Run. The drill carries the AC ids in its executed test name, so the ordinary derivation
+ * above now reports these three as `product-path`; the seeded application cases that used
+ * to excuse the downgrade no longer declare those AC ids. Keep this paragraph when moving
+ * the drill, because without it a reader cannot tell why the guard disappeared.
  */
 import { RESIDUAL_GAPS } from './drill-acs.mjs';
 
@@ -67,11 +74,13 @@ const PACKAGE_TEST = /^packages\/[^/]+\/test\//u;
 /**
  * ACs whose only application-level evidence is a planted-seed row.
  *
- * Recorded in `api-gap-audit-2.md` §4/§5-B ("应用层(播种行)") and T5-plan §E12; the
- * commands and gates under test are real, the *inputs* are inserted directly rather
- * than produced by the documented `clone → open → import` path.
+ * Empty since the WP-12 clone-portability round: AC-087/AC-088/AC-089 now have a real
+ * no-seed drill (`requirement-portability-drill.integration.test.ts`), so nothing is
+ * force-downgraded to `library-level` any more. The constant is kept (instead of being
+ * deleted) so the next seeded-only AC has one documented place to register, and so a
+ * reviewer can see at a glance that the W9 guard was retired for a reason, not lost.
  */
-const SEEDED_EVIDENCE_ACS = new Set(['AC-087', 'AC-088', 'AC-089']);
+const SEEDED_EVIDENCE_ACS = new Set([]);
 
 /** Short description of an environment condition. */
 function conditionLabel(condition) {

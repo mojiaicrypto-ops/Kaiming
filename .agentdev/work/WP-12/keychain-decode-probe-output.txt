@@ -1,0 +1,26 @@
+# macOS security -w / -g decode probe (real /usr/bin/security, 26.5.1)
+# throwaway accounts, deleted at the end; no credential is involved
+# prefix=wp12decodeprobe-1789552944
+in=[sk-abc123]
+  -w -> [sk-abc123]
+  -g -> [password: "sk-abc123"]
+in=[abcdef0123456789]
+  -w -> [abcdef0123456789]
+  -g -> [password: "abcdef0123456789"]
+in=[abc]
+  -w -> [abc]
+  -g -> [password: "abc"]
+in=[é]
+  -w -> [c3a9]
+  -g -> [password: 0xC3A9 ]
+in=[🔑]
+  -w -> [f09f9491]
+  -g -> [password: 0xF09F9491 ]
+in=[a
+b]
+  -w -> [610a62]
+  -g -> [password: 0x610A62  "a\012b"]
+in=[a	b]
+  -w -> [610962]
+  -g -> [password: 0x610962  "a\011b"]
+# cleanup: all probe accounts deleted -> find exit = 44 (44 = not found)

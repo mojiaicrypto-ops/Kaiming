@@ -335,6 +335,10 @@ export async function createProjectExecution(
   options: ProjectExecutionOptions,
 ): Promise<ProjectExecution> {
   const log = options.log ?? (() => undefined);
+  // The stack's per-Task worktree resolver, captured once so the control handler's release
+  // port and the Test evidence executor resolve through the *same* manager whose lease the
+  // Attempt took (WP-12 reliability debt 3b).
+  const workspaceResolver = options.workspace;
   const capabilities = new AttemptCapabilityStore();
   const usage = createMemoryUsageLedger();
   const lifecycle = new RunLifecycle({ store: options.store });
@@ -379,6 +383,18 @@ export async function createProjectExecution(
     // `commitTaskCandidate`). `supervisorHolder` is filled in below, before any Attempt can
     // start, so the value is always the real one.
     environmentRefOf: (attemptId) => supervisorHolder.current?.environmentRefOf(attemptId),
+    // `reliability.md` §3: the per-Task worktree lease is released at the point the delivery
+    // is accepted (`control-handler.ts`, after the candidate commit read the files), not
+    // when the Attempt ends. The stack owns the resolver, so it hands its `release` to the
+    // daemon's handler; without this the production daemon left the lease held for its
+    // one-hour TTL and the next stage of the route resolved the same tree to `BUSY`
+    // (WP-12 reliability debt 3b).
+    ...(workspaceResolver === undefined
+      ? {}
+      : {
+          releaseWorkspaceLease: (input: { readonly taskId: string; readonly attemptId: string }) =>
+            workspaceResolver.release(input),
+        }),
   });
   // The tool bridge shares this stack's lifecycle and its `GrantStore`: the same rows the
   // permission chain mints are the ones the Broker consumes and `onAttemptEnded` revokes.

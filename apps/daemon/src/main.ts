@@ -573,13 +573,23 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
           // message behind each Run moves `received → processing → processed/failed`
           // (`experience.md` §22) as the supervisor observes it.
           control: {
-            attach: ({ orchestrator, stageGate, readLedgers, environmentRefOf }) =>
+            attach: ({
+              orchestrator,
+              stageGate,
+              readLedgers,
+              environmentRefOf,
+              releaseWorkspaceLease,
+            }) =>
               createControlHandlers({
                 store: project.store,
                 orchestrator,
                 stageGate,
                 readLedgers,
                 ...(environmentRefOf === undefined ? {} : { environmentRefOf }),
+                // `reliability.md` §3 / WP-12 reliability debt 3b: the accepted delivery
+                // releases the per-Task worktree lease the stack's resolver holds, so the
+                // next stage of the route resolves the same tree instead of `BUSY`.
+                ...(releaseWorkspaceLease === undefined ? {} : { releaseWorkspaceLease }),
                 artifacts: project.services.artifacts,
                 requirementSaves: project.services.requirementSaves,
                 // The per-Task candidate commit needs the real git port and the

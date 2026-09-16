@@ -44,7 +44,7 @@ Grant字段：scope=once/run/work/project、runId、workId、toolOperationId、o
 
 网络工具使用Core的 `NetworkPolicy` 守卫：解析后的每个目标IP都过策略，重定向每跳重验，放行与拒绝都写审计；公网、本地服务与内网默认放行，只有守护实际绑定端口与云元数据地址两项**永不可授权**（§2-2）。宿主模式下这是准入层守卫而不是出口控制，裸socket可绕过，残余风险如实登记。发布/Push/数据删除属不可逆操作，须保存操作清单和确认来源（§2 审批）。
 
-Secret按用途使用，模型Secret仅在Gateway；项目命令Secret按Grant短时注入目标工具，不注入所有Agent。日志做敏感字段和已知值遮蔽；输出不含认证Header。Store在macOS使用Keychain，Linux使用0600加密文件，密钥由安装时生成的0600独立主密钥文件或系统credential提供；备份中单独加密导出。
+Secret按用途使用，模型Secret仅在Gateway；项目命令Secret按Grant短时注入目标工具，不注入所有Agent。日志做敏感字段和已知值遮蔽；输出不含认证Header。Store默认全平台使用0600加密文件（密钥由安装时生成的0600独立主密钥文件提供），macOS可显式选用Keychain（`AGENTDEV_SECRET_BACKEND=keychain`；`security`以`-w <value>`经argv传值，故不做默认）；备份中单独加密导出。
 
 ## 5. 真实验证环境
 
@@ -53,6 +53,8 @@ Review源码只读，执行lint/build等需要写输出时先复制到临时目�
 **Test 阶段执行验收命令（WP-12 W5 实装）**：Test 角色仍无 shell（§7），验收命令来自**项目配置** `policy.testCommands`（`protocol.md` §1 `ConfigPatch` 字段），由 Core 代表 Test Run 执行：`prepare-run.ts` 把该命令集写进 Test Attempt 的 prompt（"只这些、且模型不能自己跑或编造"），Attempt ready 时 `execution.ts` 经 `Broker.runDeclaredTestCommand` 在**冻结输入的工作目录**逐条执行（默认宿主；项目声明容器运行环境时在该环境内），命令必须命中声明集否则 `NOT_AUTHORIZED`；每条的真实退出码与有界 stdout/stderr 落一条 `evidence` Artifact 与 `test.command_executed` 审计事件，合成 `CheckResult`（全 0 = `passed`，任一非 0 = `failed`，无命令 = `not_covered`，无法执行 = `blocked`）。`StageGate` 在 Test stage 提交时用这份 Core 证据**替换**模型可能声称的 `checkResult`，并在证据未就绪或非 `passed` 时拒绝 `success`（`GATE_NOT_READY`，回传真实命令与退出码），因此"模型自称成功"不能通过门禁；**空 `testCommands` 的默认是诚实缺口**：Test 只能记录 `not_covered` 并交 `needs_input`/`failed`，不能以自述成功放行。
 
 **执行环境描述串（W8-1）**：合成 `CheckResult` 的每个 check 取该 Attempt 在 `attempt.ready` 自报的 `host:<platform>/<arch>/node-<major>` / `container:<image>` 描述串作为 `environmentRef`（不再用 Attempt id），与同一 Test Run 冻结的 `VerificationManifest.environmentRef` 是同一个值（`data.md` §3 `Env`），两处可直接比对；命令实际运行的环境与 Runner 描述串同时写入 `result` 的 `image=`/`runner=`。`environmentRef` 的契约类型因此是"非空描述串"而非 UUIDv7（`packages/contracts` `environmentRefSchema`），库级夹具沿用 id 仍可解析，但生产只写描述串。
+
+**在途证据的生命周期（WP-12 可靠性欠账 2）**：Core 为一次 Test Attempt 合成的 `CheckResult` 只在该 Attempt 存活期间保存在 daemon 进程内（`TestEvidenceRegistry`），**不持久化**。这由证据的归属方式决定：证据绑定具体 Attempt（`data.md` §3 `CheckResult` 的 `environmentRef`/`inputTree`），而 `reliability.md` §2/§6 要求重启后旧 Attempt 的证据不得覆盖或顶替新 Attempt——持久化在途判定会让一个已死 Attempt 的证据冒充新 Attempt。持久化的是**证据本身**：每条命令的 `evidence` Artifact（输出 Hash）、`test.command_executed` 审计事件，以及门禁接受后写入的 `stage_result`（`reliability.md` §8/§9：证据随 Work 保留、随备份与恢复核对）。因此 daemon 重启后对旧 Attempt 的 `stage_yield` 以 `GATE_NOT_READY` 拒绝，并在错误文本里写明"证据是 Attempt 级、未持久化、重启即丢失，只能由新 Attempt 重跑 `policy.testCommands`"，而不是谎称命令仍在执行。
 
 **`TestEnvironmentManager` 与本执行风格的关系**：该管理器负责宿主侧 OS 端口认领（含就绪归属证明）、attempt 命名测试 DB 与 `RECOVERY_REQUIRED` 清理，适用于"先起长驻服务再跑命令"的项目。**默认宿主执行**下它直接适用；项目选择在容器内运行服务/数据库时，端口与 DB 由项目自身管理，宿主侧没有可认领的资源，该管理器不适用（这不是被绕过，而是没有宿主侧资源）。
 

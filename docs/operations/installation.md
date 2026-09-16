@@ -72,11 +72,35 @@ agentdev secret delete provider/<id> # 撤销
 范围要说清：rotate 只改变**下一次 gateway 调用**解析到的值（daemon 运行时立即生效，否则下次 `start` 装载）；它**不会**撤销已经签发的短期
 attempt capability，也不会让已冻结的 ConfigSnapshot 改指其它 ref。需要立即阻断某个 Provider，请禁用它或 `agentdev secret delete <ref>`。
 
-- 值只从 stdin 读取，**从不经 argv**，因此不出现在 `ps`、shell 历史或进程标题里。
+- 值只从 stdin 读取，**CLI 自身从不把值放进 argv**，因此不出现在 CLI 进程的 `ps`、shell 历史或进程标题里。
 - 登录 WebUI 后也可在设置页填写 API Key；浏览器只提交一次，服务端回写仓库，页面不回显。
 - 后端默认 `file`：`~/.agentdev/secrets/file/` 下 0600 的 AES-256-GCM 记录 + 0600 主密钥，跨平台且可单测。
-- macOS Keychain 为**显式选用**：`AGENTDEV_SECRET_BACKEND=keychain agentdev start`（`security -w <value>` 会把值放进 argv，因此不做默认）。
-- Provider 的 `secretRef` 命名约定是 `provider:<providerId>`；`backup` 只记录这些标识，不记录值。
+- Provider 的 `secretRef` 命名约定是 `provider:<providerId>`；`backup` 只记录这些标识，不记录值。`secretRef` 由「设置页保存 Provider（连同 API Key）」或 `provider.upsert` 服务端生成：只跑 `agentdev secret set <ref>` 不会把该 ref 接到某个 Provider 上，Provider 侧仍显示未配置。
+
+### macOS Keychain（显式选用，已在真机验证）
+
+```sh
+AGENTDEV_SECRET_BACKEND=keychain agentdev start              # daemon 的后端
+printf '%s' "$API_KEY" | AGENTDEV_SECRET_BACKEND=keychain agentdev secret set provider/<id>
+AGENTDEV_SECRET_BACKEND=keychain agentdev secret list
+```
+
+后端选择只由 `AGENTDEV_SECRET_BACKEND` 决定，未设置时**所有平台（含 macOS）都是 `file`**；`keychain` 仅在显式设置时使用。daemon 与 CLI 必须用同一个值，否则 CLI 写进 Keychain、daemon 却按文件后端装载。
+
+条目位置与人工查看/删除（macOS 26.5.1 实测）：
+
+- 值存在**登录钥匙串**（`~/Library/Keychains/login.keychain-db`）的 generic password 条目里：`service = agentdev-secret`，`account = <ref>`。`~/.agentdev/secrets/keychain/index.json`（0600）只是元数据索引（ref/audience/updatedAt），不含值。
+- 人工查看与删除（值为可打印 ASCII 时 `-w` 原样输出；含非 ASCII 或控制字符时 `security` 以十六进制输出，仓库读取时会还原）：
+
+```sh
+security find-generic-password -a 'provider/<id>' -s agentdev-secret -w
+security delete-generic-password -a 'provider/<id>' -s agentdev-secret   # 等价于 agentdev secret delete
+```
+
+- **argv 暴露（平台限制，已实测复现，不隐藏）**：`security add-generic-password -w <value>` 把值放进子进程 argv，在该子进程存活的极短窗口里 `ps -axww` 可见（实测捕捉到 `security add-generic-password -a <ref> -s agentdev-secret -w <value> -U`）。CLI 自身进程的 argv 不含值（值只从 stdin 读）。这正是不把 `keychain` 设为默认后端的原因，且在不引入原生依赖的前提下无法消除。
+- **跨安装共享（已登记缺口）**：Keychain 条目按**用户**而非 `AGENTDEV_HOME` 隔离，所以同一用户的两个安装若使用相同 ref 会读写同一条目（`file` 后端按 home 隔离）。需要安装级隔离时给 ref 加安装专属前缀，或改用 `file` 后端。
+- 装载逐条容错：索引行存在而条目缺失或读不到时，该 ref 记为 `health: missing`/`unreadable` 并进入 `problems`，daemon 仍启动；`agentdev secret list` 输出 `health`/`issue` 与 `problems`。
+- 真机 opt-in 集成测试（默认跳过，不写操作者钥匙串）：`AGENTDEV_KEYCHAIN_IT=1 pnpm vitest run --project integration packages/core/test/secret-repository.keychain.integration.test.ts`。
 
 ## 5. 备份
 
@@ -213,7 +237,11 @@ rm -rf <checkout>                                          # 代码与构建产�
 | 跨 root 迁移身份（原 G2/G4） | **已登记缺口** | 见 §7；由「项目身份持久化」切片关闭 |
 | backup 的「暂停 Project」语义 | **已登记缺口** | [可靠性与部署](../architecture/reliability.md) §8 的暂停在当前 daemon 无入口；备份用 SQLite 在线一致快照 + 工作树知识树，输出 `paused:false` |
 | 带 `secretRef` 的 Provider 可用性 | **daemon/core 侧待修** | Gateway 可用性检查在无 Grant 上下文中解析 Provider 凭证会失败，导致 `conversation.message.send` 不入队 Chief Run（路由给 T1/T2 切片） |
+| Keychain 条目跨安装共享 | **已登记缺口** | 条目按用户（登录钥匙串）而非 `AGENTDEV_HOME` 隔离；同用户两个安装用相同 ref 会读写同一条目。需安装级隔离时给 ref 加安装前缀或改用 `file` 后端（见 §4） |
+| `security -w <value>` 的 argv 暴露 | **平台限制（已实测）** | 值在 `security` 子进程 argv 中短暂可见（`ps` 可捕捉）；CLI 自身 argv 不含值。故 `keychain` 严格 opt-in、默认 `file`（见 §4） |
 
 ## 12. 演练记录
 
 真实演练（临时 `AGENTDEV_HOME` + 临时 Git 项目，含真实 daemon、真实 Run、备份→损坏→恢复→doctor、凭证缺失阻断、relocate、launchd 加载/卸载）见 `.agentdev/work/WP-12/T6-implementation.md`；可复跑脚本：`.agentdev/work/WP-12/T6-drill.mjs` 与 `.agentdev/work/WP-12/T6-launchd-drill.sh`。
+
+macOS Keychain 后端的真机演练（真 `/usr/bin/security`、随机 item 前缀、真 daemon + 回环桩 Provider、含值掩码与清理证据）见 `.agentdev/work/WP-12/keychain-verification.md`；可复跑脚本：`.agentdev/work/WP-12/wp12-keychain-drill.mjs`，原始输出 `.agentdev/work/WP-12/keychain-drill-output.txt`。

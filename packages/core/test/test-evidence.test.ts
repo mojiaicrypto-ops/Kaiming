@@ -286,6 +286,35 @@ describe('StageGate refuses an asserted Test success (WP-12 W5)', () => {
     expect(store.stageResults.list({ where: 'run_id = ?', params: [TEST_RUN_ID] })).toEqual([]);
   });
 
+  it('states precisely that a daemon restart loses the Attempt evidence (WP-12 debt 2)', () => {
+    // A restart is exactly this: a fresh registry with no entry for the Attempt that was live
+    // before. The durable evidence (the `evidence` artifacts, `test.command_executed`, the
+    // submitted `stage_result`) is untouched; only the in-flight verdict is gone, and the
+    // refusal must say so rather than claim a command is "still executing".
+    const afterRestart = new TestEvidenceRegistry();
+    const restartedGate = new StageGate({ store, testEvidence: afterRestart });
+    expect(afterRestart.get(ATTEMPT_ID)).toBeUndefined();
+    let refusal: unknown;
+    try {
+      restartedGate.submit({
+        runId: TEST_RUN_ID,
+        attemptId: ATTEMPT_ID,
+        epoch: 3,
+        payload: successPayload(),
+      });
+      throw new Error('expected a GATE_NOT_READY refusal');
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toMatchObject({ code: 'GATE_NOT_READY' });
+    const message = (refusal as Error).message;
+    expect(message).toMatch(/restart/u);
+    expect(message).toMatch(/Attempt-scoped and not persisted/u);
+    expect(message).not.toMatch(/still executing/u);
+    // Nothing is recorded: the lost verdict cannot become a passing stage result.
+    expect(store.stageResults.list({ where: 'run_id = ?', params: [TEST_RUN_ID] })).toEqual([]);
+  });
+
   it('refuses a success claim when an executed command failed, naming the exit code', () => {
     registry.record(
       ATTEMPT_ID,

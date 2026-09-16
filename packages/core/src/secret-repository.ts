@@ -727,6 +727,35 @@ class KeychainSecretRepository implements SecretRepository {
 
   get(ref: string): StoredSecretRecord | null {
     assertRef(ref);
+    const value = this.readKeychainValue(ref);
+    if (value === null) return null;
+    const entry = this.readIndex().entries.find((candidate) => candidate.ref === ref);
+    return {
+      ref,
+      value,
+      metadata: {
+        audience: entry?.audience ?? 'gateway',
+        ...(entry?.envName === undefined ? {} : { envName: entry.envName }),
+        ...(entry?.purposes === undefined
+          ? {}
+          : { purposes: entry.purposes as readonly Purpose[] }),
+        ...(entry?.roles === undefined ? {} : { roles: entry.roles as readonly Role[] }),
+      },
+      updatedAt: entry?.updatedAt ?? new Date(0).toISOString(),
+      backend: this.backend,
+    };
+  }
+
+  /**
+   * Reads one Keychain value, decoding the two forms `security` can print.
+   *
+   * `security find-generic-password -w` prints the stored bytes verbatim only while they
+   * are printable ASCII; as soon as the value holds any other byte (a non-ASCII character
+   * or a control byte) it prints the value **hex-encoded**. Treating that hex answer as
+   * the value corrupts such credentials, so an all-hex `-w` answer is disambiguated with
+   * `-g`, whose `password:` line quotes printable data and prints `0x…` for the rest.
+   */
+  private readKeychainValue(ref: string): string | null {
     const result = this.run(SECURITY_BINARY, [
       'find-generic-password',
       '-a',
@@ -742,24 +771,38 @@ class KeychainSecretRepository implements SecretRepository {
         `the Keychain could not read secret ${ref} (status ${String(result.status)})`,
       );
     }
-    const entry = this.readIndex().entries.find((candidate) => candidate.ref === ref);
     // `security -w` prints the value plus one newline; strip exactly that newline so a
     // value that legitimately ends in whitespace is preserved.
-    const value = result.stdout.endsWith('\n') ? result.stdout.slice(0, -1) : result.stdout;
-    return {
+    const text = stripOneTrailingNewline(result.stdout);
+    return isHexEncodedLooking(text) ? this.decodeHexValue(ref, text) : text;
+  }
+
+  /**
+   * Decides whether an all-hex `-w` answer is the value itself or its hex encoding.
+   *
+   * Only a value whose bytes are all printable ASCII and all in `[0-9a-f]` can produce an
+   * ambiguous `-w` answer; for those `security -g` prints `password: "…"`, while a real
+   * hex encoding prints `password: 0x…`. Either way the bytes were already proven readable
+   * by the `-w` call above, so a `-g` failure here is a real read failure, not a "missing
+   * item" and must not be turned into a silently wrong value.
+   */
+  private decodeHexValue(ref: string, text: string): string {
+    const probe = this.run(SECURITY_BINARY, [
+      'find-generic-password',
+      '-a',
       ref,
-      value,
-      metadata: {
-        audience: entry?.audience ?? 'gateway',
-        ...(entry?.envName === undefined ? {} : { envName: entry.envName }),
-        ...(entry?.purposes === undefined
-          ? {}
-          : { purposes: entry.purposes as readonly Purpose[] }),
-        ...(entry?.roles === undefined ? {} : { roles: entry.roles as readonly Role[] }),
-      },
-      updatedAt: entry?.updatedAt ?? new Date(0).toISOString(),
-      backend: this.backend,
-    };
+      '-s',
+      KEYCHAIN_SERVICE,
+      '-g',
+    ]);
+    if (probe.status !== 0) {
+      throw new SecretRepositoryError(
+        'SECRET_KEYCHAIN_FAILED',
+        `the Keychain could not disambiguate secret ${ref} (status ${String(probe.status)})`,
+      );
+    }
+    const match = KEYCHAIN_PASSWORD_HEX_LINE.exec(`${probe.stdout}\n${probe.stderr}`);
+    return match === null ? text : Buffer.from(match[1]!.slice(2), 'hex').toString('utf8');
   }
 
   /**
@@ -1012,6 +1055,25 @@ function readRecord(path: string): string {
   }
   enforcePrivateMode(path);
   return readPrivateFile(path, 'secret record');
+}
+
+/** `security -g` prints a non-printable value as `password: 0x<hex>`; printable data is quoted. */
+const KEYCHAIN_PASSWORD_HEX_LINE = /^password: (0x[0-9A-Fa-f]+)/m;
+
+/**
+ * Whether a `security -w` answer could be either the value or the hex encoding of the value.
+ *
+ * `security` only hex-encodes data holding a byte outside printable ASCII, and such an
+ * encoding is always an even-length run of hex digits — the same shape a printable ASCII
+ * value made only of `[0-9a-f]` produces, which is why `-g` decides the ambiguous case.
+ */
+function isHexEncodedLooking(text: string): boolean {
+  return text.length > 0 && text.length % 2 === 0 && /^[0-9a-fA-F]+$/.test(text);
+}
+
+/** Strips the one trailing newline `security -w` appends; keeps every other byte. */
+function stripOneTrailingNewline(text: string): string {
+  return text.endsWith('\n') ? text.slice(0, -1) : text;
 }
 
 /** Parses one ciphertext record; a corrupt record is typed, never silently skipped. */

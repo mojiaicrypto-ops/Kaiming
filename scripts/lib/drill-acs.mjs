@@ -50,6 +50,20 @@ export const E2E_BROWSER_UPLOAD_ACS = Object.freeze(['AC-076']);
 export const E2E_BROWSER_L3_ACS = Object.freeze(['AC-011']);
 
 /**
+ * The imported requirement pool on a cloned project's page (AC-087/088/089).
+ *
+ * Added by the WP-12 clone-portability round. The application-layer half is
+ * `apps/daemon/test/requirement-portability-drill.integration.test.ts` (real protocol
+ * production → real `git clone` → empty database → continue); the browser half is
+ * `tests/browser/ac-087-clone-pool.spec.mjs`, which opens the cloned project's page in
+ * real Chromium and reads the imported list, the completion summary and the
+ * "waiting to continue" state, and observes that the clone has no Run. The browser is a
+ * dev-only dependency here, so these three carry the same `browser-absent` accepted gap
+ * as the other browser ACs.
+ */
+export const E2E_BROWSER_CLONE_ACS = Object.freeze(['AC-087', 'AC-088', 'AC-089']);
+
+/**
  * The ACs whose browser-side clauses `pnpm test:e2e` executes in Chromium.
  *
  * Since WP-12 T7a these are run by `tests/browser/**` through Playwright whenever the
@@ -62,6 +76,7 @@ export const E2E_BROWSER_ACS = Object.freeze([
   ...E2E_BROWSER_INBOX_ACS,
   ...E2E_BROWSER_UPLOAD_ACS,
   ...E2E_BROWSER_L3_ACS,
+  ...E2E_BROWSER_CLONE_ACS,
 ]);
 
 /** The AC `pnpm test:e2e` records as UNVERIFIED because it needs a real model. */
@@ -228,6 +243,32 @@ export const RESIDUAL_GAPS = Object.freeze({
     closedBy: 'pnpm test:e2e',
     decision: 'WP-10 plan.md §2 D1 已被 WP-12 T7a 撤销（同上）',
     gap: '客户端的超数量/大小/类型提示需要浏览器执行；服务端拒绝（无残留引用）已由提交用例与 e2e 演练执行。',
+  },
+  // WP-12 clone-portability round: the application half is now a real no-seed drill, and
+  // the browser half (`tests/browser/ac-087-clone-pool.spec.mjs`) is the only part that
+  // still needs an environment input — the same `browser-absent` shape as the ACs above.
+  // Registering it here keeps a browser-less environment honest (UNVERIFIED, not a FAIL)
+  // without downgrading the AC when Chromium is present: the e2e PASS row closes it.
+  'AC-087': {
+    condition: 'browser-absent',
+    closedBy: 'pnpm test:e2e',
+    decision:
+      'WP-12 clone-portability：应用层由 `apps/daemon/test/requirement-portability-drill.integration.test.ts` 以真实协议命令产出需求池、真实 `git clone` 到空数据库并按记录导入；浏览器侧由 `tests/browser/ac-087-clone-pool.spec.mjs` 执行。仅当本环境确实没有 Chromium 时，浏览器那一半才保持 UNVERIFIED。记录见 `.agentdev/work/WP-12/clone-portability.md`。',
+    gap: '真实浏览器中的克隆项目需求页面（导入列表、稳定 id、目标）未执行；无播种的整机导入链已由提交用例执行。',
+  },
+  'AC-088': {
+    condition: 'browser-absent',
+    closedBy: 'pnpm test:e2e',
+    decision:
+      'WP-12 clone-portability：completed/cancelled/archived 记录由真实保存路径提交到 `agentdev/main`，克隆后详情页由 `tests/browser/ac-087-clone-pool.spec.mjs` 在真 Chromium 中读取完成摘要与 `summary_only`。记录见 `.agentdev/work/WP-12/clone-portability.md`。',
+    gap: '真实浏览器中的完成摘要与「详细证据未迁移」展示未执行；Git 记录中的 completion/cancellation/previousLifecycle 已由整机用例与导入投影断言。',
+  },
+  'AC-089': {
+    condition: 'browser-absent',
+    closedBy: 'pnpm test:e2e',
+    decision:
+      'WP-12 clone-portability：导入的 active 记录显示待继续且不启动 Run，由 `tests/browser/ac-087-clone-pool.spec.mjs` 在真 Chromium 中断言；用户继续后的新 Work/授权/未满足 Gate 由 `apps/daemon/test/requirement-portability-drill.integration.test.ts` 执行。记录见 `.agentdev/work/WP-12/clone-portability.md`。',
+    gap: '真实浏览器中的「待继续」与 Continue 控件未执行；导入与继续的协议语义、无 Run 事实已由整机用例执行。',
   },
 });
 

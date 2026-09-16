@@ -1064,6 +1064,49 @@ export class Orchestrator {
     );
   }
 
+  /**
+   * `workflow.md` §3: one stage transition queues exactly one Run.
+   *
+   * Core advances the documented route from an accepted stage result (`protocol.ts`
+   * `continueDeliveryRoute`) and the Chief independently follows the same route through
+   * `agent.dispatch`. `continueDeliveryRoute` already skips a stage that is live, but a Chief
+   * dispatch arriving *after* Core queued the step still added a second Run for it, which ran
+   * to completion and burned budget (`w4b-implementation.md` §9.8-1, where the Test stage
+   * accumulated five Runs). Every professional Run is inserted through this one method, so
+   * the invariant lives here — the real single dispatcher point — and refuses the duplicate
+   * before any snapshot is frozen.
+   *
+   * The route's Plan/Review/Test/Settle stages are single steps: the route projection has
+   * exactly one position per role (`deliveryRoute`), so a second live Run for the same
+   * `(work, role, stage)` is always the duplicate. The develop stages are **not** covered
+   * here because one approved Plan may materialise several Tasks with the same role and the
+   * same `develop-Lx` stage — that is the documented multi-Task DAG, not a duplicate — and
+   * the develop dispatch already has its own idempotency (`protocol.ts` `approvedRunIdOf`,
+   * which binds the Run to the approved Plan artifact).
+   */
+  private enforceSingleLiveStep(spec: ProfessionalDispatchSpec): void {
+    if (spec.role === 'backend' || spec.role === 'frontend') return;
+    const existing = this.store.runs
+      .list({ where: 'work_id = ?', params: [spec.workId] })
+      .find(
+        (run) =>
+          !isTerminalRunStatus(run.status) && run.role === spec.role && run.stage === spec.stage,
+      );
+    if (existing === undefined) return;
+    fail(
+      'GATE_NOT_READY',
+      `Work ${spec.workId} already has a live ${spec.role} Run for stage ${spec.stage} (${existing.id}, ${existing.status}); one stage transition queues exactly one Run (workflow.md §3), and the route continuation carries this step.`,
+      {
+        workId: spec.workId,
+        role: spec.role,
+        stage: spec.stage,
+        existingRunId: existing.id,
+        existingStatus: existing.status,
+        remedy: 'wait for the live Run; a retry after it ends opens a new Run',
+      },
+    );
+  }
+
   /** How much of one Chief Run's allocation is still unallocated. */
   private liveChildAllocation(chiefRunId: string): number {
     return this.store.runs
@@ -1265,6 +1308,11 @@ export class Orchestrator {
       }
       this.requireTask(spec.taskId, work.id);
       this.requireBudget(spec, parent);
+      // `workflow.md` §3: one stage transition queues exactly one Run. The duplicate guard
+      // runs after the budget admission so a doubly-funded dispatch still reports
+      // `BUDGET_EXCEEDED`, and before any snapshot is frozen (below) so a refused duplicate
+      // leaves no residue.
+      this.enforceSingleLiveStep(spec);
     }
     // A Chief spec's purpose/stage pair is already narrowed by the shared Schema
     // and re-checked by `validateDispatchSpec`, so no extra branch is needed.
@@ -1814,6 +1862,18 @@ function routeStageDelivered(input: {
  * wake-up prompt (`prepare-run.ts` `routeContinuationSentence`) and the queueing step
  * (`protocol.ts` `continueDeliveryRoute`) read this projection, so the two cannot
  * disagree about which stage comes next and no model has to restate the route.
+ *
+ * **Why `Recovery` is not a position here** (WP-12 L3 leftover 4b): the L3 code *Manifest
+ * chain* is `Plan → Develop → Review → Test → Recovery → Settlement`
+ * (`packages/domain/src/delivery.ts` `STAGE_ORDER.code.L3`, AC-011), but the L2/L3 code
+ * **route** in `workflow.md` §3 is `Product → Plan → Develop → Review → Test → Accept →
+ * Settle` — `Recovery` is not a professional Run that "runs next". It is the migration /
+ * rollback / per-item-audit / recovery-drill **evidence** an L3 delivery's manifests must
+ * carry, and that evidence is checked by the delivery/recovery gates and produced by the
+ * real migration and restore drills (`packages/core/test/delivery.integration.test.ts`,
+ * `migrations.integration.test.ts`, `backup.integration.test.ts`), not by queueing another
+ * stage. Adding a queueable Recovery step would invent a route position the rules do not
+ * define; the projection therefore stays as it is.
  */
 export function deliveryRoute(input: {
   readonly store: ProjectStore;

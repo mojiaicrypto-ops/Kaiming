@@ -1,0 +1,24 @@
+### default (portable skip, no AGENTDEV_KEYCHAIN_IT)
+
+ ↓ |integration| packages/core/test/secret-repository.keychain.integration.test.ts (6 tests | 6 skipped)
+
+ Test Files  1 skipped (1)
+      Tests  6 skipped (6)
+   Start at  17:04:40
+   Duration  1.39s (transform 81%, import 19%)
+
+
+### AGENTDEV_KEYCHAIN_IT=1 (real login keychain)
+
+ RUN  v5.0.0 /Users/huyaohua/huyh/work/aigrouptool
+
+ ✓ |integration| packages/core/test/secret-repository.keychain.integration.test.ts (6 tests) 1989ms
+   ✓ macOS Keychain backend against the real security client (6)
+     ✓ lists metadata only, with health ok 329ms
+     ✓ reports a stale index row as missing instead of silently skipping it 926ms
+
+ Test Files  1 passed (1)
+      Tests  6 passed (6)
+   Start at  17:04:42
+   Duration  3.15s (tests 66%, transform 27%, import 7%)
+

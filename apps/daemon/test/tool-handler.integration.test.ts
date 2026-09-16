@@ -309,6 +309,51 @@ describe('daemon tool handler', () => {
     ).rejects.toMatchObject({ code: 'BUSY' });
   });
 
+  it('does not take the Work writer lease for a call that is refused (WP-12 reliability debt)', async () => {
+    // Attempt A asks for a source write while no Plan gate is wired: the call is refused at
+    // admission, before anything executes. Before the fix the writer lease was asserted
+    // first, so the *refused* call held it and a sibling Attempt's legitimate call was
+    // refused `BUSY` for the lease TTL.
+    issue('write');
+    await expect(
+      handler.execute({
+        caller: backendCaller,
+        request: request('write', { path: A, content: 'export const a = 2;\n' }),
+      }),
+    ).rejects.toMatchObject({ code: 'GATE_NOT_READY' });
+    const resource = workWriterLeaseResource(projectIdFromRoot(workspace), WORK_ID);
+    expect(store.leases.find(resource)).toBeUndefined();
+
+    // The second Attempt of the same Work therefore proceeds: no `BUSY` from a call that
+    // never wrote anything.
+    store.attempts.insert({
+      id: ATTEMPT_B,
+      projectId: projectIdFromRoot(workspace),
+      runId: RUN_ID,
+      number: 2,
+      status: 'running',
+      ownerEpoch: 2,
+    });
+    issue('read');
+    const outcome = await handler.execute({
+      caller: { runId: RUN_ID, attemptId: ATTEMPT_B, epoch: 2, role: 'backend' },
+      request: request('read', { path: A }),
+    });
+    expect(outcome.operation).toBe('read');
+    expect(store.leases.find(resource)?.ownerAttemptId).toBe(ATTEMPT_B);
+  });
+
+  it('hands the writer lease back when the Broker refuses the invocation (WP-12 reliability debt)', async () => {
+    // A `bash` call is inside the role's tool set but the Work holds no `bash` Grant, so the
+    // Broker refuses it *after* the lease was asserted. The refusal wrote nothing, so the
+    // lease must not stay with this Attempt.
+    await expect(
+      handler.execute({ caller: backendCaller, request: request('bash', { command: 'echo hi' }) }),
+    ).rejects.toMatchObject({ code: 'NOT_AUTHORIZED' });
+    const resource = workWriterLeaseResource(projectIdFromRoot(workspace), WORK_ID);
+    expect(store.leases.find(resource)).toBeUndefined();
+  });
+
   it('creates a real artifact row for artifact_write instead of writing a file', async () => {
     issue('artifact_write');
     const outcome = await handler.execute({
