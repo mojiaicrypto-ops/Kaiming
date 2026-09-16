@@ -37,7 +37,7 @@ BFF不转发也不校验浏览器的x-csrf-token（WP-09 登记偏差）：BFF�
 | 方法 | params | result/异步结果 |
 |---|---|---|
 | project.list | filter:recent/running/all,limit?,cursor? | items<ProjectSummary> |
-| project.open* | root:string | 已打开：{projectId,version,trust,gitState}，expectedVersion=0；冷开：accepted {operationId,projectId,root} |
+| project.open* | root:string,trust?:bool | 已打开：{projectId,version,trust,gitState}，expectedVersion=0；冷开：accepted {operationId,projectId,root} |
 | project.create* | root:string,name:string | accepted；project.created |
 | project.clone* | remoteUrl:string,root:string,grantId:ID | accepted；project.created/operation.failed |
 | project.trust* | trusted:bool | applied；撤销信任停止新准入 |
@@ -50,6 +50,8 @@ BFF不转发也不校验浏览器的x-csrf-token（WP-09 登记偏差）：BFF�
 | conversation.message.send* | conversationId,body:string,attachmentIds:ID[],targetWorkId?:ID,targetRole?:Role | {messageId,workId,state:received,version} |
 
 **project.open的冷开就绪规则**（WP-12 T5）：命令面必须同步，而绑定监听端口在Node里是异步的，所以只有「已经打开」的root按上表同步返回{projectId,version,trust,gitState}；**未打开过的root返回长操作封套accepted {operationId,projectId,root}**，装配在后台完成。就绪事实只有两个来源，调用方不得凭时间猜测：①`project.list`中该条`lifecycleState`变为`open`（`runningRuns`/`executionReady`同时可用）；②该项目的`project.snapshot.get`/任何Project读方法从`NOT_FOUND`变为可读。失败不落任何项目流，而以`operation.failed`发到发起方所在项目的流，并在admin/CLI面以error code + operationId直接返回。两条调用路径：CLI `agentdev open`走回环admin `POST /projects`，宿主同步完成装配后返回instance及其BFF地址，**无需轮询**；浏览器/`/rpc`调用方在收到`accepted`后以`project.list`轮询到`lifecycleState==='open'`再导航。
+
+**project.open的`trust`参数与只读准入**（WP-12 project UX）：`trust`是可选布尔，缺省`false`（只看不改）；它对**一个尚未打开过的root**生效，`project.trust`是之后改变它的唯一入口。已打开的项目幂等忽略该参数，因此反复`project.open`不会把已撤销的信任洗回`trusted`。未信任（`untrusted`）的语义是可执行的：项目自带的指令/扩展资源不被加载，且任何会改变状态的工具调用（`write`/`edit`/`bash`/`git`/`artifact_write`等）在**产生副作用之前**以`NOT_AUTHORIZED`拒绝，`details`含`trust:'untrusted'`与`howToChange:'project.trust {trusted:true}'`且`approvable:false`（不可由任何用户决定放行，不要重试）；`read`/`search`与分析不受影响。`project.trust`的撤销对新准入立即生效，因此`trust`只影响项目自带的指令与扩展资源在下一次Run启动时的加载，不改变上面这条每次调用都生效的准入规则。
 
 **project.initialize的mode与Git初始化授权**（WP-12 T5 Q8）：`mode`不是用户必须选择的模式，最终模式**由Core依据root真实状态推导**（无Git且空目录=new，其余=legacy），与推导结果矛盾的显式`mode:'new'`（目标已是Git仓库）返回INVALID_STATE并附真实扫描事实。`mode:'new'`同时是**用户对在目标目录初始化Git的显式授权**；缺省`mode`或`legacy`时，无Git目录一律返回`git-initialization` blocker，**不得静默执行`git init`**。`project.create`/`project.clone`本身就是显式动作，可授权同一初始化流程。`budget.files/bytes`映射到扫描预算的`maxBodyFiles/maxBodyBytes`。
 

@@ -208,6 +208,9 @@ describe('in-envelope shell execution with a real Runner child (AC-049/AC-080)',
       installationToken: TOKEN,
       version: VERSION,
       withWeb: false,
+      // WP-12 trust: the envelope shell drill exercises a trusted (writable) project; the
+      // untrusted read-only direction is `trust-enforcement.integration.test.ts`.
+      trust: 'trusted',
     });
     const secrets = new SecretStore();
     secrets.put({ ref: PROVIDER_SECRET_REF, value: PROVIDER_SECRET_VALUE, audience: 'gateway' });

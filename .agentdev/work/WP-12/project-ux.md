@@ -60,7 +60,7 @@ agentdev start（无 --root，空安装）
 - **只问一次**：项目打开后如果还不是 `trusted`，`/projects` 弹出一次二选一：「信任并开始工作」（`project.trust{trusted:true}`）/「暂时只读」（`project.trust{trusted:false}`）。选择写库（`projects.trust` + 注册表），并在本浏览器记一个标记避免重复打扰；换浏览器会再确认一次（选择本身仍在服务端）。
 - **随时可改**：项目行上始终有「信任 / 改为只读」按钮，状态以 `data-trust` 与文案（`trusted` / `read-only (untrusted)`）如实展示。
 - **不洗白**：`ProjectDirectory.open` 对已打开项目幂等、忽略 `trust` 参数，因此反复 `project.open` 不会把已撤销的信任变回 trusted（`apps/daemon/test/project-bootstrap.integration.test.ts` 有正反两向断言）。
-- **未重实现准入**：本切片只产出/展示/切换信任事实。既有实现中 `loadTrustedExtensions`（`packages/pi-runtime`）确实把未信任项目的仓库配置/扩展/技能一律跳过并给 `NOT_AUTHORIZED`（未信任 = 不加载项目自带指令与扩展资源）；但当前生产路径不向 Runner 传 `--trusted`（`apps/daemon/src/runner-spawn.ts` 无该参数），所以「未信任 ⇒ 项目只读」在**写准入**上今天并没有一条独立闸门。
+- **准入已接通（WP-12 trust-enforcement，本切片补）**：本切片原先只产出/展示/切换信任事实，未把它接进写准入。已补齐：`prepare-run.ts` 从项目行读取信任并写入每 Attempt 的 `trust.json`（记录该 Run 以何信任状态运行），`runner-spawn.ts` 仅在 trusted 时向 Runner 传 `--trusted`（未信任 ⇒ `createExplicitResources` 不加载项目自带的指令/扩展资源），`tool-handler.ts` 在**任何副作用之前**（早于 workspace resolve / Plan gate / 单写者 lease / Broker）用 `permissions.ts` 的 `decideTrustAdmission` 拒绝 untrusted 项目的 mutating 工具（`write`/`edit`/`bash`/`git`/`artifact_write`），`Broker.invoke` 与 `runDeclaredTestCommand` 各自复检同一规则，拒绝写一条带 `trust` 的 `tool.refused` 审计。真实双向演练见 `.agentdev/work/WP-12/trust-enforcement.md`。
 
 ## 4. 真实证据
 
@@ -87,12 +87,12 @@ agentdev start（无 --root，空安装）
 
 ## 5. 未决与已登记偏离
 
-1. **选择器拒绝清单（请产品裁决，未实现）**：按负责人指示只做「必须已存在目录」+「不读内容」，不自行发明策略。可考虑排除的示例（未实现，仅提案）：安装自身 `~/.agentdev/secrets/`、`~/.ssh`、`~/.aws` 等凭据目录，或给选择器加一个可配置根范围。选择器是全局的（可从 `/` 看整机目录树，只列名称），若产品认为「人登录即可看全机目录名」不可接受，这是必须补的策略位。
-2. **BFF 在「空安装窗口」代答项目生命周期命令**（与 `protocol.md` §3 的登记偏差）：`project.list/open/create/clone/trust/close` 正常由某个项目的 daemon 委托给宿主的 `ProjectDirectory`；空安装**没有** daemon 监听，首个文件夹永远打不开。因此当 `projects.list()` 里没有任何 `open` 条目时，BFF 用同一个 `ProjectDirectoryPort` 就地完成同样的委托，并按 `protocol.md` §1 的响应封套回答（成功 `{ok:true,result:…}`）。第一个项目打开后，命令重新转发给 daemon，宿主目录始终是唯一写者。代价：该窗口内没有项目库可记录 `project.open` 的幂等键（每条命令自身幂等：`open` 幂等、`create` 拒绝非空目录、`trust/close` 是状态写入）。
+1. **选择器不加拒绝清单（产品负责人已裁决：不加，本切片不改）**：选择器保持「必须已存在目录」+「只列名称不读内容」+ 逐次审计，**不加**任何凭据目录排除清单，也不加可配置根范围。裁决理由：它是一次只读、只由登录的人触发、逐次落审计的目录名列举，不是 Agent 可达面（不是协议方法、不是工具、需要浏览器会话、无内容可读，见 §2.1）；诚实边界是**宿主 shell 与用户共享同一文件系统**——能开宿主 shell 的人本来就能 `ls` 这些目录，因此加清单只制造安全错觉而不改变真实暴露面（容器运行环境另论）。若产品日后仍要求最小暴露面，应作为独立策略位（可配置根范围）另行裁决，而不是在 UI 切片里悄悄加一张清单。
+2. **BFF 在「空安装窗口」代答项目生命周期命令是有意为之（产品负责人已确认，保留）**：`project.list/open/create/clone/trust/close` 正常由某个项目的 daemon 委托给宿主的 `ProjectDirectory`；空安装**没有** daemon 监听，首个文件夹永远打不开，首跑流程会死在这里。因此当 `projects.list()` 里没有任何 `open` 条目时，BFF 用同一个 `ProjectDirectoryPort` 就地完成同样的委托，并按 `protocol.md` §1 的响应封套回答（成功 `{ok:true,result:…}`）。约束（都是现状，不是新策略）：**同一个 `AuthService`**（同一凭证常量时间比较、同一 5 次/分钟限流）、**同一 Origin/CSRF 规则**（精确 Origin 的同源写，HttpOnly `agentdev_web` 会话）、**只代答安装级方法**（`GLOBAL_METHODS`/`INSTALLATION_METHODS`，不是任意 `/rpc` 方法）、**宿主目录始终是唯一写者**（第一个项目打开后命令立即转发给 daemon）。代价：该窗口内没有项目库可记录 `project.open` 的幂等键（每条命令自身幂等：`open` 幂等、`create` 拒绝非空目录、`trust/close` 是状态写入）。
 3. **空安装窗口的登录**（登记偏差）：`agentdev start` 无项目时没有 `/auth/login` 可达，BFF 会用宿主已共享的同一 `AuthService` 受理登录（同一凭证常量时间比较、同一 5 次/分钟限流、同一精确 Origin 规则），产出的会话就是之后每个项目 daemon 都认的会话。有任一项目打开后，只有 daemon 登录这一条路径（daemon 坏了不会被掩盖）。
 4. **`project.clone` 的 Grant 铸造**（Q4 的落地方式）：CLI 经回环 admin 面铸 Grant；浏览器没有 CLI，因此 BFF 在收到**这次**已认证、精确 Origin 的显式提交时用 `directory.grantClone({remoteUrl, root})` 铸一次安装级 once-Grant 并立即消费。调用方自带 `grantId` 时仍原样转发给 daemon（协议面语义不变）。
 5. **`project.initialize` 的 `sourceMessageId`**：协议要求必填。项目行的「初始化」按钮以 `web-project-initialize-<ts>` 记录这次用户动作（`authorizationRef`）。若产品要求「必须是真实用户消息」，需要给该项目级动作补一条 user Action 记录。
-6. **`project.open` 新增可选 `trust` 参数**：文档 `protocol.md` §3 只写 `root:string`。本切片加了可选 `trust?:boolean`（缺省 false），未改文档（`docs/architecture/protocol.md` 不在本切片范围）——需在协议文档同步时补一句。
+6. **`project.open` 新增可选 `trust` 参数（已补文档）**：`protocol.md` §3 的 `project.open` 行现为 `root:string,trust?:bool`，并在同节补了「`trust` 参数与只读准入」一段（缺省 false、对未打开的 root 生效、已打开幂等忽略、未信任的 mutating 工具拒绝形状）。
 7. **未做的相邻项**：`project.initialize` 在空安装窗口下返回 `INVALID_STATE`（没有可初始化的项目）；`project.clone`/`create` 的进度仍是一次性结果（不流式）；选择器无键盘快捷键/无「显示隐藏文件」开关（隐藏项默认列出并标注）。
 
 ## 6. 改动文件
@@ -106,3 +106,7 @@ agentdev start（无 --root，空安装）
 - `apps/daemon/src/protocol.ts`：`project.open` 可选 `trust`、缺省未信任（与 daemon 的 `UI_STRINGS` 同步新键）。
 - `apps/web/test/picker.integration.test.ts`（新，9 例）、`apps/daemon/test/project-bootstrap.integration.test.ts`（新，5 例）、`tests/browser/ac-project-ux.spec.mjs`（新，2 例真实 Chromium）、`tests/browser/stack-runtime.mjs`（新增 `openEmptyStack` 零项目夹具）。
 - `docs/product/experience.md`、`docs/operations/installation.md`：按上面交付的流程同步。
+
+### 6.1 后续切片（trust-enforcement）追加的文件
+
+详见 `.agentdev/work/WP-12/trust-enforcement.md`：`packages/core/src/{permissions,broker}.ts`、`apps/daemon/src/{prepare-run,runner-spawn,tool-handler,main,protocol}.ts`、`apps/web/src/{i18n,pages}.ts`、`docs/architecture/protocol.md`，以及新增/更新的测试（`apps/daemon/test/trust-enforcement.integration.test.ts`、`packages/core/test/trust-admission.test.ts`、`apps/daemon/test/runner-spawn.test.ts`、`apps/web/test/pages.test.ts`、`apps/daemon/test/{tool-bridge,tool-permission-runner}.integration.test.ts`）。

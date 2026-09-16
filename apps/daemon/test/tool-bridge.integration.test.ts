@@ -192,6 +192,9 @@ describe('tool bridge vertical drill (T3b)', () => {
       installationToken: TOKEN,
       version: VERSION,
       withWeb: false,
+      // WP-12 trust: this drill exercises the ordinary writable project (the read/edit the
+      // user asked for). The read-only half is `trust-enforcement.integration.test.ts`.
+      trust: 'trusted',
     });
     const secrets = new SecretStore();
     secrets.put({ ref: PROVIDER_SECRET_REF, value: PROVIDER_SECRET_VALUE, audience: 'gateway' });

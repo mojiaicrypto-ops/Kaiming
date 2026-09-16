@@ -19,7 +19,7 @@
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type { JsonObject, Role } from '@agentdev/contracts';
+import type { JsonObject, Role, TrustState } from '@agentdev/contracts';
 import { contextSelectionSchema } from '@agentdev/contracts';
 import type { ProjectStore } from '@agentdev/storage';
 import {
@@ -36,7 +36,7 @@ import {
 import type { PrepareRun, PrepareRunInput, RunnerInvocation } from '@agentdev/core';
 
 import { createContextAssembly, type ContextGitReader } from './context-ports.js';
-import { writeAttemptCatalog } from './runner-spawn.js';
+import { writeAttemptCatalog, writeAttemptTrust } from './runner-spawn.js';
 
 export interface PrepareRunOptions {
   readonly store: ProjectStore;
@@ -431,6 +431,37 @@ export function inspectCatalog(path: string): string | null {
   return null;
 }
 
+/**
+ * The Project's trust state for one Attempt (WP-12 trust).
+ *
+ * The state is read from the durable Project row — the same fact the project page shows
+ * and `project.trust` writes — so the Runner's resource boundary and the tool admission
+ * gate cannot disagree. A Run whose Project row cannot be resolved is treated as
+ * untrusted, the fail-closed direction (`createExplicitResources` then loads no
+ * repository resource).
+ */
+function trustOf(input: PrepareRunInput, options: PrepareRunOptions): TrustState {
+  const projectId = options.projectId ?? options.store.works.find(input.run.workId)?.projectId;
+  if (projectId === undefined) return 'untrusted';
+  return options.store.projects.find(projectId)?.trust ?? 'untrusted';
+}
+
+/**
+ * The read-only notice an untrusted Attempt's prompt carries.
+ *
+ * The enforcement is server-side (`tool-handler.ts`/`Broker`); this sentence exists so the
+ * model reads the state instead of discovering it through a refusal, and so a Run's own
+ * transcript says which state it was prepared under.
+ */
+export function trustSentence(): string {
+  return [
+    'This project is read-only (只看不改 / untrusted): mutating tools (write, edit, bash,',
+    'git, artifact_write) are refused before any side effect, while read, search and',
+    'analysis keep working. The user marks the project trusted on the project row',
+    '(`project.trust {trusted:true}`) to change it.',
+  ].join(' ');
+}
+
 export function createPrepareRun(options: PrepareRunOptions): PrepareRun {
   const log = options.log ?? (() => undefined);
   return (input: PrepareRunInput): RunnerInvocation => {
@@ -448,6 +479,17 @@ export function createPrepareRun(options: PrepareRunOptions): PrepareRun {
     });
     const attemptDir = join(options.attemptsDir, input.attempt.id);
     mkdirSync(attemptDir, { recursive: true, mode: 0o700 });
+    // WP-12 trust: the same durable state is recorded for the Attempt and handed to the
+    // Runner, so "which trust state did this Run start under?" is answerable from the
+    // per-Attempt record and from the spawn diagnostic.
+    const trust = trustOf(input, options);
+    const trustPath = writeAttemptTrust({
+      dir: attemptDir,
+      runId: input.run.id,
+      attemptId: input.attempt.id,
+      trust,
+      at: options.store.now(),
+    });
     const catalogPath = writeAttemptCatalog({
       dir: attemptDir,
       gatewayUrl: options.gatewayUrl,
@@ -466,16 +508,20 @@ export function createPrepareRun(options: PrepareRunOptions): PrepareRun {
       throw new Error(`the per-Attempt catalog at ${catalogPath} is not usable: ${catalogProblem}`);
     }
     log(
-      `prepare-run: ${input.run.id} attempt ${input.attempt.id} → ${frozen.provider.providerId}/${frozen.model.id}`,
+      `prepare-run: ${input.run.id} attempt ${input.attempt.id} → ${frozen.provider.providerId}/${frozen.model.id} trust=${trust} record=${trustPath}`,
     );
     // `workflow.md` §3/§6 + `execution.md` §5 (WP-12 W5): a Test Run is told exactly which
     // commands Core will execute as its acceptance evidence, so the declared set is part of
     // the Run's input rather than something the model has to guess.
     const commands = options.config.project().policy.testCommands;
-    const contract =
+    const roleContract =
       input.run.role === 'test'
         ? `${roleContractSentence('test')} ${testCommandSentence(commands)}`
         : roleContractSentence(input.run.role);
+    // WP-12 trust: an untrusted Attempt is told it is read-only, and the frozen record in
+    // `trust.json` says the same thing. A trusted Run carries no extra sentence, because
+    // "trusted" is the ordinary case.
+    const contract = trust === 'trusted' ? roleContract : `${trustSentence()} ${roleContract}`;
     return {
       cwd: options.projectRoot,
       agentDir: join(attemptDir, 'agent'),

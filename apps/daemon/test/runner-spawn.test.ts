@@ -12,7 +12,12 @@
  *   `environmentRef` names the real image instead of `container:undeclared`.
  */
 import { describe, expect, it } from 'vitest';
-import { RUNNER_ENV_ALLOWLIST, redactRunnerArgv, runnerChildEnv } from '../src/runner-spawn.js';
+import {
+  RUNNER_ENV_ALLOWLIST,
+  redactRunnerArgv,
+  runnerChildEnv,
+  runnerSpawnArgs,
+} from '../src/runner-spawn.js';
 
 describe('runner-spawn environment', () => {
   it('keeps the process basics and the container image, and drops every credential', () => {
@@ -92,5 +97,37 @@ describe('redactRunnerArgv', () => {
       '--role',
       'chief',
     ]);
+  });
+});
+
+describe('runnerSpawnArgs trust flag (WP-12)', () => {
+  const input = {
+    run: { role: 'backend', workId: 'work-1' },
+    attempt: { id: 'attempt-1' },
+    epoch: 2,
+    runnerId: 'runner-1',
+    invocation: {
+      cwd: '/repo',
+      agentDir: '/repo/agent',
+      provider: 'agentdev-gateway',
+      modelId: 'model-1',
+      tools: ['read'],
+      prompt: 'prompt text',
+      capability: 'capability-must-stay-out-of-argv',
+      catalogPath: '/tmp/models.json',
+      controlUrl: 'http://127.0.0.1:1234',
+    },
+  } as unknown as Parameters<typeof runnerSpawnArgs>[1];
+
+  it('tells the Runner the project is trusted, and never the capability', () => {
+    const trusted = runnerSpawnArgs('/runner/cli.js', input, 'trusted');
+    const untrusted = runnerSpawnArgs('/runner/cli.js', input, 'untrusted');
+    // `apps/runner` loads repository instruction/extension resources only with `--trusted`
+    // (`execution.md` §7); an untrusted folder must not get it.
+    expect(trusted).toContain('--trusted');
+    expect(untrusted).not.toContain('--trusted');
+    // The Attempt capability travels in the 0600 catalog, never in `argv` (`ps` is public).
+    expect(trusted.join(' ')).not.toContain('capability-must-stay-out-of-argv');
+    expect(untrusted.join(' ')).not.toContain('capability-must-stay-out-of-argv');
   });
 });

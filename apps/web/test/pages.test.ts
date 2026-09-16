@@ -1491,6 +1491,32 @@ describe('projects page', () => {
     expect(html).toContain('/projects/proj-1/chief');
     expect(html).toContain('data-i18n="shell.chiefOnlyControls"');
   });
+
+  it('shows the read-only state in words and says what changing it affects (WP-12 trust)', () => {
+    const untrusted = renderProjectsPage({
+      projects: [{ id: 'proj-2', root: '/repo', head: '', state: 'open', trust: 'untrusted' }],
+      currentProjectId: 'proj-2',
+      counts: {},
+      t: tzh,
+      language: 'zh-CN',
+      panelMode: 'open',
+    });
+    // The state is stated honestly (只看不改) and the effect of changing it is visible.
+    expect(untrusted).toContain('data-trust="untrusted"');
+    expect(untrusted).toContain('只看不改');
+    expect(untrusted).toContain('data-i18n="projects.trustEffect"');
+
+    const trusted = renderProjectsPage({
+      projects: [{ id: 'proj-2', root: '/repo', head: '', state: 'open', trust: 'trusted' }],
+      currentProjectId: 'proj-2',
+      counts: {},
+      t,
+      language: 'en',
+      panelMode: 'open',
+    });
+    expect(trusted).toContain('data-trust="trusted"');
+    expect(trusted).toContain('data-i18n="projects.trustEffect"');
+  });
 });
 
 // ---------------------------------------------------------------------------

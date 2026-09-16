@@ -38,6 +38,7 @@ import {
   type Decision,
   type Grant,
   type Role,
+  type TrustState,
 } from '@agentdev/contracts';
 import { canTransitionRun } from '@agentdev/domain';
 import {
@@ -875,3 +876,72 @@ export function sensitiveFileRefusalMessage(match: SensitiveFileMatch, action: s
  * deliberately not invented; `kind: 'sensitive_file'` is what distinguishes the rows.
  */
 export const SENSITIVE_FILE_TODO_KIND = 'sensitive_file';
+
+/* -------------------------------------------------------------------------- */
+/* Project trust: an untrusted project is read-only (WP-12)                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Operations that cannot change project state, so an untrusted project admits them.
+ *
+ * The list mirrors the Broker's read-only capability classification
+ * (`broker.ts` `READ_ONLY_OPERATIONS`) on purpose: "reads, search and analysis keep
+ * working" is the promise the trust prompt makes, and everything else — `write`,
+ * `edit`, `bash`, `git`, `artifact_write`, a candidate commit, an unknown name — fails
+ * closed as mutating.
+ */
+export const TRUST_READ_ONLY_OPERATIONS: readonly string[] = [
+  'read',
+  'search',
+  'network',
+  'secret',
+];
+
+/** Whether an operation may run while the project is untrusted. */
+export function trustReadOnlyOperation(operation: string): boolean {
+  return TRUST_READ_ONLY_OPERATIONS.includes(operation);
+}
+
+/** The typed decision one tool call gets under a project's trust state. */
+export type TrustAdmissionDecision =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly code: 'NOT_AUTHORIZED';
+      readonly reason: string;
+      /** The exact act that changes the state, so the model can tell the user. */
+      readonly howToChange: string;
+    };
+
+/**
+ * The single trust-admission rule (`docs/product/experience.md` §1/§2, `project-ux.md` §3).
+ *
+ * The product keeps the one-time trust prompt, so "untrusted" has to mean something:
+ * while the project row says `untrusted`, a tool call that can change state is refused
+ * **before** any side effect, with a typed refusal that names the trust state and the
+ * act that changes it. Reads, search and analysis are unaffected.
+ *
+ * The rule is a pure function of the durable trust state and the planned operation, so
+ * the daemon admission layer (`tool-handler.ts`), the Broker and the declared
+ * test-command path all decide it the same way instead of each inventing a list.
+ */
+export function decideTrustAdmission(input: {
+  readonly trust: TrustState;
+  readonly operation: string;
+  readonly toolName?: string;
+}): TrustAdmissionDecision {
+  if (input.trust !== 'untrusted') return { ok: true };
+  if (trustReadOnlyOperation(input.operation)) return { ok: true };
+  const tool = input.toolName ?? input.operation;
+  const howToChange = 'project.trust {trusted:true}';
+  return {
+    ok: false,
+    code: 'NOT_AUTHORIZED',
+    reason: [
+      `the project is read-only (只看不改 / untrusted): ${tool} can change project state and is refused while the folder is untrusted`,
+      'reads, search and analysis still work',
+      `to change this, the user marks the project trusted (\`${howToChange}\` on the project row, or the CLI/admin open with trust); this refusal is final — do not retry it`,
+    ].join('; '),
+    howToChange,
+  };
+}

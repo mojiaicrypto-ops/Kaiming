@@ -515,6 +515,10 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
           spawn: createChildRunnerSpawnPort({
             repoRoot,
             log,
+            // WP-12 trust: the Runner is told the Project's real trust state, so an
+            // untrusted folder's own instruction/extension resources are never loaded
+            // (`execution.md` §7). Read live from the Project row the project page shows.
+            trust: () => project.store.projects.find(project.projectId)?.trust ?? 'untrusted',
             ...(options.runnerEnv === undefined ? {} : { env: options.runnerEnv }),
           }),
           // `stack.md` §3: Review/Test may write only their own report/scratch root.

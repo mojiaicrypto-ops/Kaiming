@@ -13,7 +13,12 @@ import { createInterface } from 'node:readline';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { type RunnerCommand, type RunnerMessage, runnerMessageSchema } from '@agentdev/contracts';
+import {
+  type RunnerCommand,
+  type RunnerMessage,
+  runnerMessageSchema,
+  type TrustState,
+} from '@agentdev/contracts';
 import type { RunnerProcessPort, RunnerSpawnInput, RunnerSpawnPort } from '@agentdev/core';
 
 /** Env var a development/test run uses to point at a source entry for the Runner. */
@@ -122,6 +127,48 @@ export interface ChildRunnerSpawnOptions {
   readonly nodePath?: string;
   readonly log?: (line: string) => void;
   readonly env?: NodeJS.ProcessEnv;
+  /**
+   * Reads the Project's trust state for each spawn (WP-12 trust).
+   *
+   * Absent means `untrusted`: the Runner then starts with `apps/runner`'s own
+   * `--trusted` default (false), so the fail-closed direction is "no repository
+   * instruction or extension resource is loaded". The production daemon passes a live
+   * reader over the Project row, so the flag always reflects durable state and never a
+   * value the Runner supplied.
+   */
+  readonly trust?: () => TrustState;
+}
+
+/**
+ * Records the trust state one Attempt was prepared under (WP-12 trust).
+ *
+ * `execution.md` §7 makes the resource boundary a property of the Attempt, so the fact
+ * belongs next to the per-Attempt catalog the Runner reads. It is a separate 0600 file
+ * rather than a key in `models.json`: the catalog is the Pi SDK's own document, and a
+ * foreign top-level member there would be parsed by the SDK rather than by us.
+ */
+export interface AttemptTrustRecord {
+  readonly dir: string;
+  readonly runId: string;
+  readonly attemptId: string;
+  readonly trust: TrustState;
+  readonly at: string;
+}
+
+/** Writes `<attemptDir>/trust.json` and returns its path. */
+export function writeAttemptTrust(input: AttemptTrustRecord): string {
+  const path = join(input.dir, 'trust.json');
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(
+    path,
+    `${JSON.stringify(
+      { runId: input.runId, attemptId: input.attemptId, trust: input.trust, at: input.at },
+      null,
+      2,
+    )}\n`,
+    { mode: 0o600 },
+  );
+  return path;
 }
 
 /**
@@ -341,6 +388,54 @@ class ChildRunnerProcess implements RunnerProcessPort {
 }
 
 /**
+ * The child's arguments (after the node executable) for one Attempt under one trust state.
+ *
+ * Exported so the trust decision is asserted directly rather than through a spawned
+ * process: `--trusted` is present exactly when the Project is trusted, which is what makes
+ * `apps/runner`'s `createExplicitResources` refuse to load a repository's own instruction
+ * and extension resources for an untrusted folder (`execution.md` §7).
+ */
+export function runnerSpawnArgs(
+  script: string,
+  input: RunnerSpawnInput,
+  trust: TrustState,
+): string[] {
+  const args = [
+    script,
+    '--attempt-id',
+    input.attempt.id,
+    '--epoch',
+    String(input.epoch),
+    '--provider',
+    GATEWAY_PROVIDER_ID,
+    '--model',
+    input.invocation.modelId,
+    '--cwd',
+    input.invocation.cwd,
+    '--agent-dir',
+    input.invocation.agentDir,
+    '--tools',
+    input.invocation.tools.join(','),
+  ];
+  if (input.invocation.systemPrompt !== undefined) {
+    args.push('--system-prompt', input.invocation.systemPrompt);
+  }
+  if (input.invocation.catalogPath !== undefined) {
+    args.push('--models-path', input.invocation.catalogPath);
+  }
+  args.push('--role', input.run.role);
+  args.push('--work-id', input.run.workId);
+  if (trust === 'trusted') args.push('--trusted');
+  if (input.invocation.controlUrl !== undefined) {
+    // The capability is *not* passed as an argument: it would be visible in `ps` to
+    // every local process. The Runner reads it from the per-Attempt catalog's API key,
+    // which is already 0600 (`execution.md` §2).
+    args.push('--control-url', input.invocation.controlUrl);
+  }
+  return args;
+}
+
+/**
  * The real spawn port.
  *
  * The Runner entry defaults to the built `apps/runner/dist/cli.js` (the shipped path) and
@@ -357,37 +452,12 @@ export function createChildRunnerSpawnPort(options: ChildRunnerSpawnOptions): Ru
         typeof entry === 'string' && entry.length > 0
           ? entry
           : join(options.repoRoot, 'apps', 'runner', 'dist', 'cli.js');
-      const args = [
-        script,
-        '--attempt-id',
-        input.attempt.id,
-        '--epoch',
-        String(input.epoch),
-        '--provider',
-        GATEWAY_PROVIDER_ID,
-        '--model',
-        input.invocation.modelId,
-        '--cwd',
-        input.invocation.cwd,
-        '--agent-dir',
-        input.invocation.agentDir,
-        '--tools',
-        input.invocation.tools.join(','),
-      ];
-      if (input.invocation.systemPrompt !== undefined) {
-        args.push('--system-prompt', input.invocation.systemPrompt);
-      }
-      if (input.invocation.catalogPath !== undefined) {
-        args.push('--models-path', input.invocation.catalogPath);
-      }
-      args.push('--role', input.run.role);
-      args.push('--work-id', input.run.workId);
-      if (input.invocation.controlUrl !== undefined) {
-        // The capability is *not* passed as an argument: it would be visible in `ps` to
-        // every local process. The Runner reads it from the per-Attempt catalog's API key,
-        // which is already 0600 (`execution.md` §2).
-        args.push('--control-url', input.invocation.controlUrl);
-      }
+      // WP-12 trust: the real trust state of the Project the Run belongs to. Absent or
+      // `untrusted` leaves the Runner's own default (false), so an untrusted folder's
+      // repository instruction/extension resources are never loaded (`execution.md` §7,
+      // `createExplicitResources`'s `UNTRUSTED_RESOURCE` boundary).
+      const trust: TrustState = options.trust?.() ?? 'untrusted';
+      const args = runnerSpawnArgs(script, input, trust);
       const label = `runner[${input.attempt.id}]`;
       const startedAt = Date.now();
       if (!existsSync(script)) {
@@ -396,7 +466,7 @@ export function createChildRunnerSpawnPort(options: ChildRunnerSpawnOptions): Ru
         log(`${label} spawn refused: entry not found at ${script} (run pnpm build)`);
       }
       log(
-        `${label} spawn node=${options.nodePath ?? process.execPath} cwd=${truncateForLog(input.invocation.cwd)} argv=${redactRunnerArgv(args).join(' ')}`,
+        `${label} spawn node=${options.nodePath ?? process.execPath} cwd=${truncateForLog(input.invocation.cwd)} trust=${trust} argv=${redactRunnerArgv(args).join(' ')}`,
       );
       let child: ChildProcessWithoutNullStreams;
       try {

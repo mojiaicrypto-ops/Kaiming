@@ -256,6 +256,9 @@ export function renderProjectsPage(input: {
             ].join('')
           : '',
         rows === '' ? '' : `<ul class="project-list">${rows}</ul>`,
+        rows === ''
+          ? ''
+          : `<p class="hint project-trust-effect" data-i18n="projects.trustEffect">${escapeHtml(t('projects.trustEffect'))}</p>`,
         problems === '' ? '' : `<ul class="registry-problems">${problems}</ul>`,
         `<p class="hint" id="currentProject" data-project="${escapeHtml(input.currentProjectId)}">${escapeHtml(input.currentProjectId)}</p>`,
         `<div class="chips">${counts}</div>`,

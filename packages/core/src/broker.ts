@@ -88,6 +88,7 @@ import {
   type JsonObject,
   type Role,
   type ToolOperation,
+  type TrustState,
 } from '@agentdev/contracts';
 import { sha256, uuidv7, type ProjectStore } from '@agentdev/storage';
 import { canonicalJson } from './dispatcher.js';
@@ -99,6 +100,7 @@ import {
 } from './egress-channel.js';
 import { ProtocolError } from './errors.js';
 import type { GrantStore } from './grants.js';
+import { decideTrustAdmission } from './permissions.js';
 import {
   defaultAsyncProcessRunner,
   type AsyncProcessHandle,
@@ -1937,6 +1939,16 @@ export interface ToolInvocation {
    * tiers cannot influence each other's tools.
    */
   readonly configPolicy?: ConfigPolicy;
+  /**
+   * The trust state the Project was in when this call was admitted (WP-12 trust).
+   *
+   * `permissions.ts` `decideTrustAdmission` is the rule; the Broker re-checks it before
+   * the Grant is consulted, so a mutating call that reached the Broker from an untrusted
+   * project is refused with a `tool.refused` audit row naming the trust state and never
+   * consumes a Grant or starts a process. The daemon admission layer refuses earlier
+   * still, which is where the writer lease and the Plan gate are skipped.
+   */
+  readonly trust?: TrustState;
 }
 
 /**
@@ -2357,6 +2369,37 @@ export class Broker {
         reason: 'declared test commands run only for the test role',
       };
     }
+    // WP-12 trust: a declared acceptance command is a real process that can change the
+    // tree, so an untrusted project does not run it. This path never passes through
+    // `tool.execute`, so the trust gate is applied here from the durable Project row.
+    if (this.projectTrust(input.workId) === 'untrusted') {
+      const decision = decideTrustAdmission({
+        trust: 'untrusted',
+        operation: 'bash',
+        toolName: 'declared acceptance command',
+      });
+      const message =
+        decision.ok === false
+          ? decision.reason
+          : 'the project is read-only (只看不改 / untrusted); the declared acceptance command was not run';
+      this.store.events.append({
+        name: TOOL_EVENTS.refused,
+        entityId: input.runId,
+        entityVersion: 1,
+        data: {
+          workId: input.workId,
+          runId: input.runId,
+          operation: 'bash',
+          code: 'NOT_AUTHORIZED',
+          reason: message,
+          targets: [],
+          mode: input.mode ?? this.defaultMode,
+          trust: 'untrusted',
+          layer: 'declared-test-command',
+        },
+      });
+      return { ok: false, code: 'NOT_AUTHORIZED', reason: message };
+    }
     const command = input.command;
     if (command.trim() === '') {
       return { ok: false, code: 'VALIDATION_ERROR', reason: 'a test command must not be empty' };
@@ -2496,19 +2539,47 @@ export class Broker {
     const toolOperationId = invocation.toolOperationId ?? uuidv7();
     const argsRef = invocation.argsRef ?? uuidv7();
     const toolName = invocation.toolName ?? operation;
+    // The trust state the refusal is audited with: the caller's declared value, or the
+    // project's durable row behind the Work. `undefined` means the store carries no
+    // project for this Work (a bare Broker a test assembled), which keeps the previous
+    // behaviour instead of inventing a state; the production daemon always declares it.
+    const effectiveTrust = invocation.trust ?? this.projectTrust(invocation.workId);
 
     const refuse = (
       code: BrokerErrorCode,
       reason: string,
       fields: readonly string[] = [],
     ): ToolRefusal => {
-      this.recordRefusal({ invocation, mode, operation, inputHash, toolOperationId, code, reason });
+      this.recordRefusal({
+        invocation,
+        mode,
+        operation,
+        inputHash,
+        toolOperationId,
+        code,
+        reason,
+        ...(effectiveTrust === undefined ? {} : { trust: effectiveTrust }),
+      });
       return { ok: false, code, reason, fields, mode, operation, inputHash, toolOperationId };
     };
 
     // 1. Shape. A malformed call must not reach the Grant or a process.
     const shape = validateInvocation(invocation);
     if (shape !== undefined) return refuse(shape.code, shape.reason, shape.fields);
+
+    // 1b. Project trust (WP-12). An untrusted project is read-only, so a mutating call is
+    //     refused here — before the Grant, the file boundary and any process — and the
+    //     refusal is audited with the trust state. The daemon admission layer already
+    //     refuses earlier (it must, so no writer lease is taken and no Plan gate runs);
+    //     this is the same rule at the last gate before a side effect.
+    const trustAdmission = decideTrustAdmission({
+      trust: effectiveTrust ?? 'trusted',
+      operation,
+      toolName,
+    });
+    if (!trustAdmission.ok) {
+      return refuse(trustAdmission.code, trustAdmission.reason, ['trust']);
+    }
 
     // 2. Role gate (AC-050). Review/Test never gain a write to source or
     //    verification input, in any mode. The question is a tool's **capability**,
@@ -2717,6 +2788,9 @@ export class Broker {
         toolOperationId: consumed.toolOperation.id,
         outcome: consumed.outcome,
         mode,
+        // WP-12 trust: the state the admitted call ran under, so a Run's tool history
+        // records the trust fact next to the operation it admitted.
+        ...(effectiveTrust === undefined ? {} : { trust: effectiveTrust }),
       },
     });
     return {
@@ -3078,6 +3152,7 @@ export class Broker {
     toolOperationId: string;
     code: BrokerErrorCode;
     reason: string;
+    trust?: TrustState;
   }): void {
     const data: JsonObject = {
       workId: input.invocation.workId,
@@ -3090,6 +3165,9 @@ export class Broker {
       // Targets are paths/hosts, never the decoded input: the audit row records
       // what was asked for without persisting a secret value.
       targets: [...input.invocation.targets],
+      // The project trust state the call was refused under, so "this was refused because
+      // the folder is read-only" is answerable from the audit alone (WP-12 trust).
+      ...(input.trust === undefined ? {} : { trust: input.trust }),
     };
     this.store.events.append({
       name: TOOL_EVENTS.refused,
@@ -3097,6 +3175,19 @@ export class Broker {
       entityVersion: 1,
       data,
     });
+  }
+
+  /**
+   * The durable trust state behind one Work, or `undefined` when the store carries none.
+   *
+   * The trust gate is decided from the Project row rather than from a caller-supplied
+   * flag whenever the row exists, so the rule cannot disagree with the state the
+   * project page shows.
+   */
+  private projectTrust(workId: string): TrustState | undefined {
+    const work = this.store.works.find(workId);
+    if (work === undefined) return undefined;
+    return this.store.projects.find(work.projectId)?.trust;
   }
 }
 

@@ -37,16 +37,20 @@
  */
 import {
   LIMITS,
+  brokerOperationOf,
+  isBrokerToolName,
   roleHasBrokerTool,
   type ArtifactKind,
   type ConfigPolicy,
   type JsonObject,
   type Purpose,
   type Role,
+  type TrustState,
 } from '@agentdev/contracts';
 import {
   ProtocolError,
   SENSITIVE_FILE_TODO_KIND,
+  decideTrustAdmission,
   isReadOnlyRole as callIsReadOnly,
   matchSensitiveFile,
   planToolCall,
@@ -354,6 +358,73 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
   }
 
   /**
+   * The Project's durable trust state.
+   *
+   * `untrusted` when the row cannot be read, which is the fail-closed direction: a
+   * mutating call whose project state is unknown must not be admitted.
+   */
+  function projectTrustOf(projectId: string): TrustState {
+    return store.projects.find(projectId)?.trust ?? 'untrusted';
+  }
+
+  /**
+   * The WP-12 trust gate: an untrusted project is read-only, so a mutating tool call is
+   * refused **here**, before the network pre-check, the Plan gate, the writer lease and
+   * the Broker — nothing is written, no lease is taken and no Grant is consumed.
+   *
+   * The refusal is the shared typed decision (`decideTrustAdmission`): it names the trust
+   * state, says that reads/search/analysis still work and names the act that changes it.
+   * The admission layer writes its own `tool.refused` row carrying `trust`, so the audit
+   * alone answers "was this refused because the folder was untrusted?"; the endpoint adds
+   * the generic row `protocol.md` §6 documents.
+   */
+  function assertTrustAdmits(input: {
+    readonly trust: TrustState;
+    readonly operation: string;
+    readonly toolName: string;
+    readonly targets: readonly string[];
+    readonly workId: string;
+    readonly runId: string;
+    readonly role: Role;
+  }): void {
+    const admission = decideTrustAdmission({
+      trust: input.trust,
+      operation: input.operation,
+      toolName: input.toolName,
+    });
+    if (admission.ok) return;
+    store.events.append({
+      name: 'tool.refused',
+      entityId: input.runId,
+      entityVersion: store.runs.find(input.runId)?.version ?? 0,
+      data: {
+        workId: input.workId,
+        runId: input.runId,
+        role: input.role,
+        operation: input.operation,
+        code: admission.code,
+        reason: admission.reason,
+        targets: [...input.targets],
+        mode: policyMode,
+        trust: input.trust,
+        layer: 'admission',
+      },
+    });
+    throw new ProtocolError(admission.code, admission.reason, {
+      details: {
+        toolName: input.toolName,
+        trust: input.trust,
+        // A trust refusal is not a user decision about one operation: the user must change
+        // the project's state, so the model must not open a permission request for it.
+        approvable: false,
+        howToChange: admission.howToChange,
+        configPolicy,
+        policyRevision,
+      },
+    });
+  }
+
+  /**
    * Resolves the tool-audience environment for one shell call (`AC-051`).
    *
    * The refs come from the Run's live `secret` Grants — the user-approved authorization —
@@ -438,6 +509,25 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
       // refuses never reached the tree, so it must not hold the Work's writer lease for
       // its TTL and block a sibling Task's legitimate write (WP-12 reliability debt).
       const writesWorkspace = roleHasBrokerTool(caller.role, 'edit');
+
+      // WP-12 trust: an untrusted project is read-only. The gate is decided from the
+      // durable Project row and runs **before the workspace resolver** — resolving a Task
+      // worktree takes its own lease — so a refused mutating call leaves nothing behind:
+      // no worktree lease, no writer lease, no Plan-gate evaluation, no Broker call and no
+      // file content. The rule is the shared `decideTrustAdmission`, so reads/search keep
+      // working and the refusal names the trust state and the act that changes it.
+      const trust = projectTrustOf(work.projectId);
+      if (isBrokerToolName(request.toolName)) {
+        assertTrustAdmits({
+          trust,
+          operation: brokerOperationOf(request.toolName),
+          toolName: request.toolName,
+          targets: [],
+          workId: work.id,
+          runId: run.id,
+          role: run.role,
+        });
+      }
 
       const root = workspace.resolve({
         workId: work.id,
@@ -667,6 +757,9 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
         // 附录 A.7: the tier travels with the call so a directory search skips the frozen
         // list at the point of reading.
         configPolicy,
+        // WP-12 trust: the same durable state the admission gate above read, so the
+        // Broker's last gate before a side effect decides it identically.
+        trust,
         ...(plan.cwd === undefined ? {} : { cwd: plan.cwd }),
         ...(body === undefined ? {} : { run: body }),
         timeoutMs: request.timeoutMs,
@@ -797,6 +890,21 @@ export function createToolHandler(options: ToolHandlerOptions): ToolHandler {
       const work = store.works.find(run.workId);
       if (work === undefined) {
         throw new ProtocolError('NOT_FOUND', `Work ${run.workId} does not exist`);
+      }
+      // WP-12 trust: an untrusted project has no approvable mutating call. Refusing here —
+      // before the workspace resolver and before any `tool_operation` row or decision —
+      // keeps the permission chain from minting a Grant the admission gate would refuse
+      // anyway, so the model is told to ask the user to trust the folder instead.
+      if (isBrokerToolName(toolName)) {
+        assertTrustAdmits({
+          trust: projectTrustOf(work.projectId),
+          operation: brokerOperationOf(toolName),
+          toolName,
+          targets: [],
+          workId: work.id,
+          runId: run.id,
+          role: run.role,
+        });
       }
       const planned = planToolCall({
         toolName,
