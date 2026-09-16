@@ -882,24 +882,34 @@ export const SENSITIVE_FILE_TODO_KIND = 'sensitive_file';
 /* -------------------------------------------------------------------------- */
 
 /**
- * Operations that cannot change project state, so an untrusted project admits them.
+ * Operations an untrusted project still admits.
  *
- * The list mirrors the Broker's read-only capability classification
- * (`broker.ts` `READ_ONLY_OPERATIONS`) on purpose: "reads, search and analysis keep
- * working" is the promise the trust prompt makes, and everything else — `write`,
- * `edit`, `bash`, `git`, `artifact_write`, a candidate commit, an unknown name — fails
- * closed as mutating.
+ * "Untrusted = read-only" is about **the project's own files**, not about the workbench's
+ * own stores. `read`/`search`/`network`/`secret` are investigation, and `artifact_write`
+ * is the workbench artifact store: Core's `ArtifactService` writes an immutable blob under
+ * the project's *data* directory (never the repository), so a read-only investigation can
+ * still produce and keep its report — the product owner's ruling (2026-09, WP-12
+ * trust-enforcement §8). Everything that can change the repository — `write`, `edit`,
+ * `bash`, `git`, a candidate commit, an unknown name — fails closed as mutating.
  */
-export const TRUST_READ_ONLY_OPERATIONS: readonly string[] = [
+export const TRUST_ALLOWED_OPERATIONS: readonly string[] = [
   'read',
   'search',
   'network',
   'secret',
+  'artifact_write',
 ];
 
-/** Whether an operation may run while the project is untrusted. */
-export function trustReadOnlyOperation(operation: string): boolean {
-  return TRUST_READ_ONLY_OPERATIONS.includes(operation);
+/**
+ * Whether an operation may run while the project is untrusted.
+ *
+ * `artifact_write` is admitted on the promise that its body is the artifact store rather
+ * than a file write; the Broker keeps that promise explicit (a body-less
+ * `artifact_write`, which its built-in executor would write as a file, is still refused
+ * for an untrusted project).
+ */
+export function trustAllowsOperation(operation: string): boolean {
+  return TRUST_ALLOWED_OPERATIONS.includes(operation);
 }
 
 /** The typed decision one tool call gets under a project's trust state. */
@@ -917,9 +927,10 @@ export type TrustAdmissionDecision =
  * The single trust-admission rule (`docs/product/experience.md` §1/§2, `project-ux.md` §3).
  *
  * The product keeps the one-time trust prompt, so "untrusted" has to mean something:
- * while the project row says `untrusted`, a tool call that can change state is refused
- * **before** any side effect, with a typed refusal that names the trust state and the
- * act that changes it. Reads, search and analysis are unaffected.
+ * while the project row says `untrusted`, a tool call that can change the project's files
+ * is refused **before** any side effect, with a typed refusal that names the trust state
+ * and the act that changes it. Reads, search, analysis and the workbench's own artifact
+ * store (`artifact_write`) are unaffected.
  *
  * The rule is a pure function of the durable trust state and the planned operation, so
  * the daemon admission layer (`tool-handler.ts`), the Broker and the declared
@@ -931,15 +942,15 @@ export function decideTrustAdmission(input: {
   readonly toolName?: string;
 }): TrustAdmissionDecision {
   if (input.trust !== 'untrusted') return { ok: true };
-  if (trustReadOnlyOperation(input.operation)) return { ok: true };
+  if (trustAllowsOperation(input.operation)) return { ok: true };
   const tool = input.toolName ?? input.operation;
   const howToChange = 'project.trust {trusted:true}';
   return {
     ok: false,
     code: 'NOT_AUTHORIZED',
     reason: [
-      `the project is read-only (只看不改 / untrusted): ${tool} can change project state and is refused while the folder is untrusted`,
-      'reads, search and analysis still work',
+      `the project is read-only (只看不改 / untrusted): ${tool} can change the project's files and is refused while the folder is untrusted`,
+      'reads, search, analysis and artifact_write (your own report in the workbench artifact store) still work',
       `to change this, the user marks the project trusted (\`${howToChange}\` on the project row, or the CLI/admin open with trust); this refusal is final — do not retry it`,
     ].join('; '),
     howToChange,

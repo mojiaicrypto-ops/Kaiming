@@ -60,7 +60,7 @@ agentdev start（无 --root，空安装）
 - **只问一次**：项目打开后如果还不是 `trusted`，`/projects` 弹出一次二选一：「信任并开始工作」（`project.trust{trusted:true}`）/「暂时只读」（`project.trust{trusted:false}`）。选择写库（`projects.trust` + 注册表），并在本浏览器记一个标记避免重复打扰；换浏览器会再确认一次（选择本身仍在服务端）。
 - **随时可改**：项目行上始终有「信任 / 改为只读」按钮，状态以 `data-trust` 与文案（`trusted` / `read-only (untrusted)`）如实展示。
 - **不洗白**：`ProjectDirectory.open` 对已打开项目幂等、忽略 `trust` 参数，因此反复 `project.open` 不会把已撤销的信任变回 trusted（`apps/daemon/test/project-bootstrap.integration.test.ts` 有正反两向断言）。
-- **准入已接通（WP-12 trust-enforcement，本切片补）**：本切片原先只产出/展示/切换信任事实，未把它接进写准入。已补齐：`prepare-run.ts` 从项目行读取信任并写入每 Attempt 的 `trust.json`（记录该 Run 以何信任状态运行），`runner-spawn.ts` 仅在 trusted 时向 Runner 传 `--trusted`（未信任 ⇒ `createExplicitResources` 不加载项目自带的指令/扩展资源），`tool-handler.ts` 在**任何副作用之前**（早于 workspace resolve / Plan gate / 单写者 lease / Broker）用 `permissions.ts` 的 `decideTrustAdmission` 拒绝 untrusted 项目的 mutating 工具（`write`/`edit`/`bash`/`git`/`artifact_write`），`Broker.invoke` 与 `runDeclaredTestCommand` 各自复检同一规则，拒绝写一条带 `trust` 的 `tool.refused` 审计。真实双向演练见 `.agentdev/work/WP-12/trust-enforcement.md`。
+- **准入已接通（WP-12 trust-enforcement，本切片补）**：本切片原先只产出/展示/切换信任事实，未把它接进写准入。已补齐：`prepare-run.ts` 从项目行读取信任并写入每 Attempt 的 `trust.json`（记录该 Run 以何信任状态运行），`runner-spawn.ts` 仅在 trusted 时向 Runner 传 `--trusted`（未信任 ⇒ `createExplicitResources` 不加载项目自带的指令/扩展资源），`tool-handler.ts` 在**任何副作用之前**（早于 workspace resolve / Plan gate / 单写者 lease / Broker）用 `permissions.ts` 的 `decideTrustAdmission` 拒绝 untrusted 项目会改动项目文件的工具（`write`/`edit`/`bash`/`git`），`Broker.invoke` 与 `runDeclaredTestCommand` 各自复检同一规则，拒绝写一条带 `trust` 的 `tool.refused` 审计。`artifact_write` 经后续裁决放行（写工作台产物库、不写项目，见 `trust-enforcement.md` §8）。真实双向演练见 `.agentdev/work/WP-12/trust-enforcement.md`。
 
 ## 4. 真实证据
 

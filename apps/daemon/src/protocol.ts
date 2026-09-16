@@ -1106,14 +1106,14 @@ const UI_STRINGS: Record<string, { readonly en: string; readonly zh: string }> =
   'projects.readOnly': { en: 'Read-only for now', zh: '暂时只读' },
   'projects.trustPromptTitle': { en: 'Trust this folder?', zh: '信任这个文件夹吗？' },
   'projects.trustPromptBody': {
-    en: 'This folder is read-only (只看不改) until you trust it: mutating tool calls are refused and your own instruction and extension resources are not loaded from it. Trust it now, or keep it read-only and change this later on the project row.',
-    zh: '在信任之前，该项目只读（只看不改）：会拒绝一切会改变状态的工具调用，也不会加载它自带的指令与扩展资源。可以现在信任，也可以暂时只读，之后在项目行里随时更改。',
+    en: 'This folder is read-only (只看不改) until you trust it: write/edit/bash/git tool calls are refused, while reads, search and its own report artifacts (artifact_write, kept in the workbench artifact store, never written into the project) still work; your own instruction and extension resources are not loaded from it. Trust it now, or keep it read-only and change this later on the project row.',
+    zh: '在信任之前，该项目只读（只看不改）：会拒绝 write/edit/bash/git 等改动项目文件的工具调用；read、search 与它自己的报告产物（artifact_write，落在工作台产物库、不写入项目）仍然可用；也不会加载它自带的指令与扩展资源。可以现在信任，也可以暂时只读，之后在项目行里随时更改。',
   },
   'projects.trusted': { en: 'trusted', zh: '已信任' },
   'projects.untrusted': { en: 'read-only (untrusted)', zh: '只看不改（未信任）' },
   'projects.trustEffect': {
-    en: 'Applies to tool admission immediately, including the next tool calls of a Run that is already running; a new Run reloads the project’s own instruction and extension resources under the new state.',
-    zh: '对工具准入立即生效（包括正在运行的 Run 的后续工具调用）；新 Run 启动时会按新状态重新加载项目自带的指令与扩展资源。',
+    en: 'Applies to tool admission immediately, including the next tool calls of a Run that is already running; read-only still allows artifact_write (your own report in the workbench artifact store); a new Run reloads the project’s own instruction and extension resources under the new state.',
+    zh: '对工具准入立即生效（包括正在运行的 Run 的后续工具调用）；只读时仍可用 artifact_write 写自己的工作台产物（不写入项目）；新 Run 启动时会按新状态重新加载项目自带的指令与扩展资源。',
   },
   'projects.trustNow': { en: 'Trust', zh: '信任' },
   'projects.untrustNow': { en: 'Make read-only', zh: '改为只读' },

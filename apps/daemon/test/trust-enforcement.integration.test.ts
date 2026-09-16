@@ -11,11 +11,14 @@
  *    `NOT_AUTHORIZED`, the trust state, the act that changes it) and leaves **nothing**
  *    behind: the file is unchanged, no `tool_operation` row, no writer lease, no candidate
  *    commit;
- * 2. `read` still works in the same Attempt, so the read-only investigation surface is real;
+ * 2. `read` and `artifact_write` still work in the same Attempt: the read really reads,
+ *    and the report really lands in the workbench artifact store (readable through
+ *    `artifact.get`) without creating a file in the project — read-only does not mean the
+ *    Run cannot leave a report (product-owner ruling);
  * 3. the recorded trust state of the Attempt is `untrusted` (the per-Attempt `trust.json`
  *    and the spawn diagnostic), so "which trust state did this Run run under" is answerable;
- * 4. after the real `project.trust {trusted:true}` command, the **same** call is admitted
- *    and really executes, and the stage result reports the updated file.
+ * 4. after the real `project.trust {trusted:true}` command, the **same** `write` call is
+ *    admitted and really executes, and the stage result reports the updated file.
  *
  * The only stub is the **Provider** (scripted `tool_calls`) plus the host's project-directory
  * port for the one `project.trust` command (the host directory is a large class; the drill
@@ -24,7 +27,7 @@
  * runs the shipped `apps/runner/dist/cli.js`.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -55,6 +58,9 @@ const PROVIDER_SECRET_VALUE = 'sk-trust-drill-secret';
 const NOTE = 'src/notes.md';
 const ORIGINAL = '# notes\n\noriginal\n';
 const TRUSTED_WRITE = '# notes\n\nwritten after the user trusted the project\n';
+/** The report an untrusted read-only Run may still write into the workbench artifact store. */
+const REPORT_PATH = 'docs/trust-report.md';
+const REPORT_BODY = '# trust drill report\n\nthe read-only investigation report\n';
 /** The Plan task the professional Run is bound to (its manifest proves a candidate commit). */
 const DRAFT_TASK_ID = '018f2c1e-9a4b-7c3d-8e5f-0a1b2c3e0070';
 
@@ -278,23 +284,33 @@ describe('an untrusted project is read-only and a trusted one is writable (WP-12
         if (turn === 0) {
           return { toolCalls: [{ name: 'write', args: { path: NOTE, content: TRUSTED_WRITE } }] };
         }
-        // 2. A read in the same Attempt: it must still work. It is held until the drill has
-        //    inspected the refusal's aftermath, so "the refused write took no writer lease"
-        //    is observed before the read's own call can take it.
+        // 2. The workbench artifact store is still allowed while untrusted (the owner's
+        //    ruling): the report is written into Core's artifact store, not the project. It
+        //    is held until the drill has inspected the refusal's aftermath, so "the refused
+        //    write took no writer lease" is observed before any later call can take it.
         if (turn === 1) {
           return {
             await: () => readGate,
-            then: { toolCalls: [{ name: 'read', args: { path: NOTE } }] },
+            then: {
+              toolCalls: [
+                {
+                  name: 'artifact_write',
+                  args: { path: REPORT_PATH, content: REPORT_BODY, mime: 'text/markdown' },
+                },
+              ],
+            },
           };
         }
-        // 3. The same mutating call, held until the user really trusts the project.
-        if (turn === 2) {
+        // 3. A read in the same Attempt: it must still work.
+        if (turn === 2) return { toolCalls: [{ name: 'read', args: { path: NOTE } }] };
+        // 4. The same mutating call, held until the user really trusts the project.
+        if (turn === 3) {
           return {
             await: () => trustGate,
             then: { toolCalls: [{ name: 'write', args: { path: NOTE, content: TRUSTED_WRITE } }] },
           };
         }
-        if (turn === 3) {
+        if (turn === 4) {
           return {
             toolCalls: [
               {
@@ -632,6 +648,48 @@ describe('an untrusted project is read-only and a trusted one is writable (WP-12
     // The read is released only now, so the assertions above observed the state the
     // refused write left: no lease, no manifest and a clean worktree.
     resolveReadGate();
+
+    // ---------------------------------------------------------------------
+    // `artifact_write` succeeds in the same untrusted Attempt: read-only does not mean the
+    // Run cannot leave a report (owner ruling). The bytes are in the workbench artifact
+    // store, never in the project.
+    // ---------------------------------------------------------------------
+    const report = await waitFor(
+      () => {
+        execution.supervisor.tick();
+        return opened.services.artifacts
+          .list(workId)
+          .find((artifact) => artifact.runId === backendRun.id && artifact.kind === 'evidence');
+      },
+      () => `the report artifact\n${diagnose()}`,
+      30_000,
+    );
+    expect(report.mime).toBe('text/markdown');
+    expect(Buffer.from(opened.services.artifacts.read(report)).toString('utf8')).toBe(REPORT_BODY);
+    // The documented `artifact.get` reads it back (the surface the UI uses).
+    const fetched = opened.protocol.dispatch(
+      'artifact.get',
+      { artifactId: report.id },
+      { caller },
+    ) as {
+      artifact?: { id?: string };
+    };
+    expect(fetched.artifact?.id).toBe(report.id);
+    // It was a real executed tool call, audited under the untrusted state, and it never
+    // created a file in the repository.
+    expect(
+      opened.store.toolOperations
+        .list({ where: 'run_id = ?', params: [backendRun.id] })
+        .find((row) => row.toolName === 'artifact_write')?.state,
+    ).toBe('finished');
+    expect(
+      opened.store.events
+        .readAfter(0, { limit: 20_000 })
+        .find(
+          (event) => event.name === 'tool.invoked' && event.data['operation'] === 'artifact_write',
+        )?.data['trust'],
+    ).toBe('untrusted');
+    expect(existsSync(join(repo, REPORT_PATH))).toBe(false);
 
     // ---------------------------------------------------------------------
     // Reads keep working in the same untrusted Attempt.

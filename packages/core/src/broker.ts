@@ -2580,6 +2580,22 @@ export class Broker {
     if (!trustAdmission.ok) {
       return refuse(trustAdmission.code, trustAdmission.reason, ['trust']);
     }
+    // The one allowed write for an untrusted project is the **artifact store**, whose body
+    // `ArtifactService` supplies (`tool-handler.ts`) and which never touches the
+    // repository. The Broker's built-in `artifact_write` executor *is* a file write, so a
+    // body-less call would smuggle a project write through the allowance; it is refused
+    // rather than executed.
+    if (
+      effectiveTrust === 'untrusted' &&
+      operation === 'artifact_write' &&
+      invocation.run === undefined
+    ) {
+      return refuse(
+        'NOT_AUTHORIZED',
+        'artifact_write without an artifact body would write a file into the untrusted project, which is refused; supply the artifact store body (Core ArtifactService) or mark the project trusted — do not retry this spelling',
+        ['trust', 'operation'],
+      );
+    }
 
     // 2. Role gate (AC-050). Review/Test never gain a write to source or
     //    verification input, in any mode. The question is a tool's **capability**,

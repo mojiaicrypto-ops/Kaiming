@@ -455,9 +455,11 @@ function trustOf(input: PrepareRunInput, options: PrepareRunOptions): TrustState
  */
 export function trustSentence(): string {
   return [
-    'This project is read-only (只看不改 / untrusted): mutating tools (write, edit, bash,',
-    'git, artifact_write) are refused before any side effect, while read, search and',
-    'analysis keep working. The user marks the project trusted on the project row',
+    'This project is read-only (只看不改 / untrusted): tools that change its files',
+    '(write, edit, bash, git) are refused before any side effect, while read, search,',
+    'analysis and artifact_write keep working — read-only does not mean you cannot leave a',
+    'report: `artifact_write` stores it in the workbench artifact store, not in the project.',
+    'The user marks the project trusted on the project row',
     '(`project.trust {trusted:true}`) to change it.',
   ].join(' ');
 }

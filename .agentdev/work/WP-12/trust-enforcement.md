@@ -11,7 +11,7 @@
 
 | 位置 | 做了什么 |
 |---|---|
-| 信任事实 | `store.projects.trust`（schema 既有列，`project.trust` 已会写它）。新增的唯一规则函数是 `packages/core/src/permissions.ts` 的 `decideTrustAdmission({trust, operation, toolName})`：trusted 全放行；untrusted 只放 `read`/`search`/`network`/`secret`，其余（`write`/`edit`/`bash`/`git`/`artifact_write`/未知名字）返回 `NOT_AUTHORIZED` + 原因文本 + `howToChange='project.trust {trusted:true}'`。 |
+| 信任事实 | `store.projects.trust`（schema 既有列，`project.trust` 已会写它）。新增的唯一规则函数是 `packages/core/src/permissions.ts` 的 `decideTrustAdmission({trust, operation, toolName})`：trusted 全放行；untrusted 只放 `read`/`search`/`network`/`secret`/`artifact_write`，其余（`write`/`edit`/`bash`/`git`/未知名字）返回 `NOT_AUTHORIZED` + 原因文本 + `howToChange='project.trust {trusted:true}'`。`artifact_write` 于后续裁决（§8）加入允许集合：它写的是工作台产物库，不是项目仓库。 |
 | 传进运行路径 | `apps/daemon/src/prepare-run.ts` 从项目行解析信任，写每 Attempt 的 `trust.json`（`runId`/`attemptId`/`trust`/`at`，0600，落在该 Attempt 目录、`models.json` 旁），未信任时在 prompt 里加一句「本机只看不改」。`apps/daemon/src/runner-spawn.ts` 的 `createChildRunnerSpawnPort` 新增 `trust: () => TrustState`（缺省 `untrusted`），仅 trusted 时给子进程加 `--trusted`；`main.ts` 注入读项目行的 live reader。Runner 自己早就支持 `--trusted`（`apps/runner/src/cli.ts` → `AttemptRunner` → `createExplicitResources({trusted})`），所以信任门现在是活的。**诚实边界**：生产路径目前**不向 Runner 传任何技能/指令文件**（`createPrepareRun` 只传 prompt/tools/catalog，没有资源选择面），所以「未信任不加载仓库自带指令/扩展资源」在今天是对所有项目都成立的结构性事实，而非未信任与信任的差异；本切片让这个门第一次拿到真实信任值（`--trusted` 仅 trusted 出现，`runner-spawn.test.ts` 直接断言），一旦将来出现资源选择面，未信任方向已由 `createExplicitResources` 的 `UNTRUSTED_RESOURCE`/`loadTrustedExtensions` 兜住（`AC-053` 的库级证据不变）。 |
 | 写准入 | `apps/daemon/src/tool-handler.ts` 的 `execute` 在**解析 workspace 之前**（因此早于 Task worktree 租约、Plan gate、单写者 lease、Broker）对 `BROKER_TOOLS` 里的 mutating 工具调用 `decideTrustAdmission`，拒绝时写一条带 `trust` 的 `tool.refused`（`layer:'admission'`）再抛 `ProtocolError(NOT_AUTHORIZED, details:{trust,approvable:false,howToChange,...})`。`request`（`permission.request`）同样早拒，未信任项目不会铸出任何可批准路径。`packages/core/src/broker.ts` 的 `Broker.invoke` 在 Grant 之前复检同一规则（拒绝写带 `trust` 的 `tool.refused`），`runDeclaredTestCommand` 从 Work 所属项目行派生信任并拒绝项目声明的验收命令（它不经 `tool.execute`）。接纳的调用也会记录状态：`tool.invoked` 的 data 带 `trust`（unknown 时不写），所以一个 Run 的工具历史里既有「这次以何信任状态被拒」也有「这次以何信任状态被放行」。 |
 
@@ -21,14 +21,16 @@
 
 规则函数是纯函数（`packages/core/test/trust-admission.test.ts` 4 例直接钉住放行/拒绝集合与拒绝文的四要素），生产路径的落点保证「拒绝发生在一切副作用之前」：
 
-1. `tool-handler.execute` 的顺序是：解析 Run/Work → **信任闸门** → `workspace.resolve`（Task worktree 租约）→ `planToolCall` → 网络预检 → Plan gate → read/ledger → 单写者 `assertWriter` → `broker.invoke`。拒绝点在最前，因此**没有 worktree 租约、没有 `workspace:<project>:<work>` 单写者租约、没有 Plan gate 评估、没有 Grant 消耗、没有 `tool_operation` 行**。
+1. `tool-handler.execute` 的顺序是：解析 Run/Work → **信任闸门** → `workspace.resolve`（Task worktree 租约）→ `planToolCall` → 网络预检 → Plan gate → read/ledger → 单写者 `assertWriter` → `broker.invoke`。被拒的操作（`write`/`edit`/`bash`/`git`/未知名字；`artifact_write` 自 §8 裁决起属允许集合）在闸门处即返回，因此**没有 worktree 租约、没有 `workspace:<project>:<work>` 单写者租约、没有 Plan gate 评估、没有 Grant 消耗、没有 `tool_operation` 行**。
 2. 拒绝发生在任何文件内容存在之前：`planToolCall` 都还没跑，更没有任何 `readFile`/`writeFile`。
 3. `Broker.invoke` 的复检在 `validateInvocation` 之后、Grant 之前，拒绝只写审计，`consumeOnceAsync`（唯一的 Grant/结果落库点）从未被调用。
 4. `runDeclaredTestCommand` 的拒绝在 `runCommandAsync` 之前，进程从未 `spawn`。
 
 真实演练（§4）逐条断言了这些：文件字节不变、`git status` 对该文件为空、`tool_operation` 无 `write` 行、单写者租约不存在（读被 gate 住，先观察拒绝后的状态再放行读）、Task 无 `latestManifestId`（无候选提交）。
 
-## 3. 真实证据（同一棵冻结树、串行）
+## 3. 真实证据（裁决前的全量门禁快照；裁决后的收尾门禁见 §8.7）
+
+同一棵冻结树、串行：
 
 | 命令 | 结果 |
 |---|---|
@@ -71,7 +73,7 @@
 
 ## 6. 仍未决 / 已知边界
 
-1. **只读 Run 不能落自己的 Artifact**：按交付要求，`artifact_write` 属于被拒的 mutating 工具，所以未信任项目里的 Run 连自己的报告 Artifact 也存不了（`ArtifactService` 写的是项目数据目录、不是仓库）。`docs/rules/agents.md` §1 允许只读调查「写自己的 Artifact」——若产品希望未信任调查仍能留下自己的报告产物，这是唯一需要再裁决的一点（本切片按任务列举执行，未自行放宽）。
+1. **只读 Run 可以落自己的 Artifact（已裁决，见 §8）**：`artifact_write` 现属允许集合——它写的是工作台产物库（`ArtifactService` + BlobStore，落在项目数据目录），不写仓库；`docs/rules/agents.md` §1「只读调查写自己的 Artifact」由此成立。仓库改写仍全部拒绝。
 2. **未信任项目的 `test` 角色**：Core 代表 Test Run 执行的 `policy.testCommands` 也被拒（同一条规则），因此未信任项目的 Test stage 只能记 `blocked`，不会执行项目声明的命令。
 3. **信任是项目级、非 Run 级冻结**：准入读的是**当前**项目行（撤销立即生效），`trust.json` 记录的是该 Attempt 准备时的状态；用户在一次 Run 中途改信任时，Run 的后续调用按新状态准入，而它在启动时加载的资源集不变。界面上已如实说明。
 4. **未做**：`git` 引用变更、工作区外删除、敏感文件等既有硬拦不变（未受本切片影响）；没有新增协议方法或事件名（`tool.refused` 复用既有事件，`data` 增加 `trust`/`layer` 字段）。
@@ -79,7 +81,7 @@
 
 ## 7. 改动文件
 
-- `packages/core/src/permissions.ts`：`decideTrustAdmission`/`trustReadOnlyOperation`/`TRUST_READ_ONLY_OPERATIONS`（唯一规则）。
+- `packages/core/src/permissions.ts`：`decideTrustAdmission`/`trustAllowsOperation`/`TRUST_ALLOWED_OPERATIONS`（唯一规则；`artifact_write` 于 §8 裁决后归入允许集合）。
 - `packages/core/src/broker.ts`：`ToolInvocation.trust`、`invoke` 的信任复检、`recordRefusal` 带 `trust`、`runDeclaredTestCommand` 的项目级拒绝与审计。
 - `apps/daemon/src/tool-handler.ts`：`execute`/`request` 的准入前信任闸门（带 `tool.refused` 审计与 `details.trust`/`howToChange`）。
 - `apps/daemon/src/prepare-run.ts`：从项目行解析信任、写每 Attempt `trust.json`、未信任 prompt 提示、日志带 `trust`。
@@ -89,3 +91,15 @@
 - `docs/architecture/protocol.md` §3：`project.open` 行加 `trust?:bool`，并补「`trust` 参数与只读准入」一段。（说明：`project.open`/`project.trust` 的方法表本就位于 §3「Project与Conversation」；任务书写的「§4」应是章节错位，故按文档实际结构补在 §3。）
 - `.agentdev/work/WP-12/project-ux.md`：§3 更新「准入已接通」、§5 记录两条决定与文档已补、§6.1 列本切片文件。
 - 测试：`apps/daemon/test/trust-enforcement.integration.test.ts`（新）、`packages/core/test/trust-admission.test.ts`（新）、`apps/daemon/test/runner-spawn.test.ts`、`apps/web/test/pages.test.ts`；`apps/daemon/test/{tool-bridge,tool-permission-runner}.integration.test.ts` 的夹具显式 `trust:'trusted'`（它们演练的本来就是可写项目的正常路径）。
+
+## 8. 追加裁决与收尾：未信任项目放行 `artifact_write`（产品负责人裁决）
+
+**裁决**：未信任项目放行 `artifact_write`。理由：产物落在工作台自己的产物存储里，不是写用户的仓库；只读调查产不出报告的体验是坏的。其余不变——`write`/`edit`/`bash`/`git` 与任何未知操作继续在准入层类型化拒绝、零副作用、带 `trust` 审计。
+
+1. **规则**：`artifact_write` 加入 `TRUST_ALLOWED_OPERATIONS`（函数相应更名 `trustAllowsOperation`），注释写明「写的是工作台产物库、不是项目仓库」。拒绝原因文本也改成「write/edit/bash/git 改动项目文件被拒；read/search/analysis 与 artifact_write 仍可用」。
+2. **防"借道放行"**：核查过生产路径——`tool-handler.ts` 的 `artifact_write` 总是带 `ArtifactService` 的 body（`createAgent`），其 `targets` 恒为 `[]`，`ArtifactService` 只写 `BlobStore`（项目数据目录），`tool-handler.integration.test.ts` 早已断言「creates a real artifact row instead of writing a file」。为堵住唯一反例（Broker 内置 `artifact_write` 执行器其实是文件写，见 `broker.ts` `execute`），`Broker.invoke` 增加窄闸门：**untrusted + `artifact_write` 且未提供 artifact body（`run === undefined`）→ `NOT_AUTHORIZED`**，不放行任何真正的项目写入。
+3. **措辞**：`prepare-run.ts` 的只读提示句与 `projects.trustPromptBody`/`projects.trustEffect`（`apps/web/src/i18n.ts` 与 `apps/daemon/src/protocol.ts` 两份目录逐字一致）改成「只读 ≠ 不能留报告；`artifact_write` 落在工作台产物库、不写入项目」。
+4. **演练**（同一未信任 Attempt，两个方向同时成立）：`artifact_write` **成功**——产物真实落库、经 `artifact.get` 读回正文、`tool.invoked` 带 `trust:'untrusted'`、仓库里不存在该逻辑路径的文件；同一 Attempt 的 `write` 仍被拒（零副作用断言不变：文件字节不变、无 write `tool_operation`、无单写者租约、无候选提交）。
+5. **确认「未信任 test 角色记 blocked」是正确行为**：`policy.testCommands` 是项目声明的真实进程（等于执行未信任项目自带的代码），未信任项目不应运行它；Test stage 只能记 `blocked`/`not_covered`，不放行——与「不加载/不执行未信任仓库自带资源」同一条边界。
+6. **确认「trust 是项目级、实时生效」语义未改**：准入按**当前**项目行在每次调用时判定（授予/撤销对新准入立即生效，含在途 Run 的后续调用）；`--trusted` 与仓库自带的指令/扩展资源只在新 Attempt 启动时按当时状态加载。界面文案已如实说明。
+7. **收尾门禁**（本裁决后的树）：`pnpm typecheck` exit 0；`pnpm lint` exit 0；`pnpm test:unit` 81 文件 / 1500 用例 0 失败；受影响的 integration（`broker`/`permissions`/`permissions-failures`/`tool-handler`/`tool-bridge`/`tool-permission-runner`/`tool-permission`/`assessment-dispatch` 以及可信 drill）7 文件 / 75 用例 0 失败；`pnpm test:e2e` 31 checks — PASS 30 / FAIL 0 / UNVERIFIED 1（exit 0，含真 Chromium）。**全量 `node scripts/acceptance.mjs` 按负责人安排在最终冻结树上由负责人跑一次**，本记录不复述。
