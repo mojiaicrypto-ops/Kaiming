@@ -33,7 +33,8 @@ import {
 import { FileBoundaryError, NodeFilePort, type FilePort } from './files.js';
 import { escapeHtml, renderDocument } from './html.js';
 import { normaliseLanguage, translator } from './i18n.js';
-import type { ProjectDirectoryPort } from './projects.js';
+import { PickerRefused, type FolderPickerPort, type PickerListing } from './picker.js';
+import type { ProjectDirectoryPort, ProjectEntry } from './projects.js';
 import {
   renderAgentsPage,
   renderBoardPage,
@@ -104,6 +105,16 @@ export interface WebAppOptions {
    * single-project behaviour.
    */
   readonly projects?: ProjectDirectoryPort;
+  /**
+   * The **human-only** folder picker behind "open a folder" (WP-12 project UX).
+   *
+   * It is a BFF read surface, never a protocol method or a tool: the `/picker/list`
+   * GET route below is the only caller, and no daemon method or Runner tool reaches
+   * it (`apps/web/src/picker.ts` states the full safety argument). Absent means the
+   * route answers `NOT_FOUND`, which is what every test double and single-project
+   * stack gets.
+   */
+  readonly picker?: FolderPickerPort;
   /** Overridable for tests; all four default to the real daemon transport. */
   readonly rpc?: typeof forwardRpc;
   readonly read?: typeof daemonRead;
@@ -247,6 +258,226 @@ const INSTALLATION_METHODS = new Set([
 /** True when a method is installation-level and carries no Project scope. */
 export function isInstallationMethod(method: string): boolean {
   return INSTALLATION_METHODS.has(method);
+}
+
+/**
+ * Installation-level project commands the BFF answers itself on a **vacant**
+ * installation (WP-12 project UX).
+ *
+ * `project.open` and friends are normally delegated by a project's daemon to the
+ * host's `ProjectDirectoryPort`. A fresh `agentdev start` has no open project, so
+ * there is no daemon listener to answer them, and the first "open a folder" from the
+ * browser could never succeed. In exactly that window — the installation directory
+ * reports no `open` entry — the BFF performs the same delegation in-process, through
+ * the port the daemon would have used, and answers the documented shapes. The first
+ * project to open takes the documented daemon port, after which every command is
+ * forwarded to a daemon again and the host's project directory stays the only writer.
+ *
+ * Every command here is idempotent on its own (`directory.open` is, `create` refuses
+ * a non-empty root, `trust`/`close` are writes of a state); the bootstrap window has
+ * no project store to record an idempotency key in, which the record registers.
+ */
+const BOOTSTRAP_LIFECYCLE = new Set([
+  'project.list',
+  'project.open',
+  'project.create',
+  'project.clone',
+  'project.trust',
+  'project.close',
+  'project.initialize',
+]);
+
+/** The documented `ProjectSummary` shape for one navigable project. */
+function bootstrapSummary(entry: ProjectEntry): Record<string, unknown> {
+  return {
+    projectId: entry.projectId ?? entry.root,
+    name: entry.name,
+    root: entry.root,
+    trust: entry.trust,
+    state: entry.state === 'open' ? 'open' : 'closed',
+    version: 0,
+    updatedAt: entry.updatedAt === '' ? new Date(0).toISOString() : entry.updatedAt,
+    runningRuns: entry.runningRuns,
+    executionReady: entry.executionReady,
+    lifecycleState: entry.state,
+    gitRoot: entry.gitRoot,
+    head: entry.head,
+    problem: entry.problem,
+    initialization: entry.initialization,
+    requirementImport: entry.import,
+  };
+}
+
+/** A typed refusal the bootstrap commands answer with the documented error envelope. */
+interface BootstrapFailure {
+  readonly status: number;
+  readonly code: string;
+  readonly message: string;
+  readonly details?: Record<string, unknown>;
+}
+
+/** The typed code/message of a `ProjectDirectoryError`-shaped throw, if it is one. */
+function bootstrapFailureOf(error: unknown): BootstrapFailure {
+  const shape = error as { code?: unknown; message?: unknown; details?: unknown };
+  const code = typeof shape?.code === 'string' ? shape.code : 'INTERNAL_ERROR';
+  const status = code === 'NOT_FOUND' ? 404 : code === 'INTERNAL_ERROR' ? 500 : 422;
+  return {
+    status,
+    code,
+    message: error instanceof Error ? error.message : String(error),
+    ...(typeof shape?.details === 'object' && shape.details !== null
+      ? { details: shape.details as Record<string, unknown> }
+      : {}),
+  };
+}
+
+/**
+ * Answers one installation-level project command through the host's directory.
+ *
+ * @throws never; a refusal comes back as the typed error envelope the client shows.
+ */
+async function bootstrapProjectCommand(
+  directory: ProjectDirectoryPort,
+  method: string,
+  params: Record<string, unknown>,
+  operationId: string,
+): Promise<Record<string, unknown>> {
+  const required = (key: string): string => {
+    const value = params[key];
+    if (typeof value !== 'string' || value.trim() === '') {
+      throw Object.assign(new Error(`${key} is required`), { code: 'VALIDATION_ERROR' });
+    }
+    return value;
+  };
+  try {
+    switch (method) {
+      case 'project.list':
+        return {
+          items: directory.list().map((entry) => bootstrapSummary(entry)),
+          nextCursor: null,
+          problems: directory.problems.map((problem) => ({ ...problem })),
+        };
+      case 'project.open': {
+        const root = required('root');
+        const trust = params['trust'];
+        if (trust !== undefined && typeof trust !== 'boolean') {
+          throw Object.assign(new Error('trust must be a boolean'), { code: 'VALIDATION_ERROR' });
+        }
+        const entry = await directory.open(root, { trust: trust === true });
+        return {
+          status: 'applied',
+          operationId,
+          entityId: entry.projectId,
+          version: 0,
+          projectId: entry.projectId,
+          project: bootstrapSummary(entry),
+          gitState: { gitRoot: entry.gitRoot, head: entry.head },
+          trust: entry.trust,
+        };
+      }
+      case 'project.create': {
+        const entry = await directory.create(required('root'), required('name'));
+        return {
+          status: 'applied',
+          operationId,
+          entityId: entry.projectId,
+          version: 0,
+          projectId: entry.projectId,
+          root: entry.root,
+          name: entry.name,
+          project: bootstrapSummary(entry),
+        };
+      }
+      case 'project.clone': {
+        const remoteUrl = required('remoteUrl');
+        const root = required('root');
+        // Q4: the Grant binds operation + target root + remote URL. When the caller
+        // named one, that Grant is the authority and `directory.clone` verifies it;
+        // when the browser did not (it has no way to mint one), the BFF mints it here
+        // from the user's explicit submit — the same act the admin surface performs
+        // for the CLI — and consumes it in the same command.
+        const supplied = params['grantId'];
+        const grantId =
+          typeof supplied === 'string' && supplied !== ''
+            ? supplied
+            : directory.grantClone({ remoteUrl, root }).grantId;
+        const entry = await directory.clone(remoteUrl, root, grantId);
+        return {
+          status: 'applied',
+          operationId,
+          entityId: entry.projectId,
+          version: 0,
+          projectId: entry.projectId,
+          root: entry.root,
+          name: entry.name,
+          project: bootstrapSummary(entry),
+        };
+      }
+      case 'project.trust': {
+        const projectId = required('projectId');
+        const trusted = params['trusted'];
+        if (typeof trusted !== 'boolean') {
+          throw Object.assign(new Error('trusted must be a boolean'), { code: 'VALIDATION_ERROR' });
+        }
+        const entry = directory.trust(projectId, trusted);
+        return {
+          status: 'applied',
+          operationId,
+          entityId: projectId,
+          version: 0,
+          projectId,
+          trust: entry.trust,
+          admission: entry.trust === 'trusted' ? 'open' : 'stopped',
+          project: bootstrapSummary(entry),
+        };
+      }
+      case 'project.close': {
+        const projectId = required('projectId');
+        const entry = directory.close(projectId);
+        return {
+          status: 'applied',
+          operationId,
+          entityId: projectId,
+          version: 0,
+          projectId,
+          state: entry.state,
+          project: bootstrapSummary(entry),
+        };
+      }
+      case 'project.initialize':
+        // Initialization drives an **open** project's own state machine and emits into
+        // its event stream, so in the vacant window there is nothing to initialize;
+        // this is the honest typed refusal, not a forward to a listener that is not
+        // bound yet.
+        throw Object.assign(
+          new Error('no project is open on this installation yet; open one before initializing'),
+          { code: 'INVALID_STATE' },
+        );
+      default:
+        return errorBody('VALIDATION_ERROR', `${method} is not a bootstrap project command`);
+    }
+  } catch (error) {
+    const failure = bootstrapFailureOf(error);
+    return {
+      ok: false,
+      error: {
+        code: failure.code,
+        message: failure.message,
+        retryable: false,
+        details: { ...failure.details, operationId },
+      },
+    };
+  }
+}
+
+/** The HTTP status one bootstrap answer is sent with. */
+function bootstrapStatus(body: Record<string, unknown>): number {
+  const error = body['error'];
+  if (typeof error !== 'object' || error === null) return 200;
+  const code = (error as { code?: unknown }).code;
+  if (code === 'NOT_FOUND') return 404;
+  if (code === 'INTERNAL_ERROR') return 500;
+  return 422;
 }
 
 /** The `projectId` a `/projects/<id>/...` page path names, when it names one. */
@@ -425,6 +656,54 @@ export function createWebApp(options: WebAppOptions): WebApp {
 
     const session = sessionOf(request);
 
+    /**
+     * The human-only folder picker (WP-12 project UX).
+     *
+     * A plain BFF GET route, deliberately **not** a `/rpc` method: it never reaches a
+     * daemon, it is absent from `INSTALLATION_METHODS`/`READ_ONLY`, and no tool
+     * catalogue or control channel names it (`apps/web/src/picker.ts` argues why).
+     * It is a read of names, so it needs the browser session but no Origin gate; it is
+     * read-only, so a non-GET method is refused rather than forwarded.
+     */
+    if (path === '/picker/list') {
+      if (method !== 'GET') {
+        json(response, 405, errorBody('VALIDATION_ERROR', 'the folder picker is read-only'));
+        return;
+      }
+      if (session === undefined) {
+        json(response, 401, errorBody('UNAUTHENTICATED', 'sign in to browse folders'));
+        return;
+      }
+      const picker = options.picker;
+      if (picker === undefined) {
+        json(response, 404, errorBody('NOT_FOUND', 'this installation serves no folder picker'));
+        return;
+      }
+      try {
+        // The audit record is written inside `list` **before** it answers, so a
+        // listing the trail could not record is refused, not served.
+        const listing: PickerListing = picker.list(url.searchParams.get('path') ?? undefined, {
+          sessionId: session.id,
+        });
+        json(response, 200, listing);
+      } catch (error) {
+        if (error instanceof PickerRefused) {
+          json(response, error.status, {
+            ok: false,
+            error: {
+              code: error.code,
+              message: error.message,
+              retryable: false,
+              details: error.details,
+            },
+          });
+          return;
+        }
+        json(response, 500, errorBody('INTERNAL_ERROR', messageOf(error)));
+      }
+      return;
+    }
+
     if (path === '/rpc' && method === 'POST') {
       if (session === undefined) {
         json(response, 401, errorBody('UNAUTHENTICATED', 'sign in to use the workbench'));
@@ -482,13 +761,50 @@ export function createWebApp(options: WebAppOptions): WebApp {
     try {
       created = await login(loginTarget(), token);
     } catch (error) {
-      // A wrong token is 401 from the daemon; the BFF never guesses a success.
-      json(
-        response,
-        statusOfFailure(error, 401),
-        errorBody(codeOfFailure(error, 'UNAUTHENTICATED'), messageOf(error)),
-      );
-      return;
+      /**
+       * The vacant installation (WP-12 project UX).
+       *
+       * `agentdev start` with no project binds no daemon listener, so there is no
+       * `/auth/login` to reach and the first sign-in of a fresh install would fail
+       * before the user could pick a folder. In exactly that window — the installation
+       * directory reports no `open` entry — the BFF signs the browser in against the
+       * `auth` service the host already shares with every project daemon. This is not
+       * a bypass: `auth.login` performs the identical constant-time credential check,
+       * the same 5/min per-IP limit and the same exact-Origin rule (`protocol.md` §2),
+       * and the resulting session is the very session every later project daemon
+       * authenticates. As soon as one project is open, the daemon login above is the
+       * only path, so a broken daemon is never papered over.
+       */
+      const vacant =
+        projects !== undefined && !projects.list().some((entry) => entry.state === 'open');
+      const decision = vacant
+        ? options.auth.login({
+            token,
+            ip: request.socket.remoteAddress ?? 'unknown',
+            ...(origin === undefined ? {} : { origin }),
+          })
+        : undefined;
+      if (decision === undefined || !decision.ok) {
+        // A wrong token is 401 from the daemon; the BFF never guesses a success.
+        json(
+          response,
+          decision === undefined ? statusOfFailure(error, 401) : decision.status,
+          errorBody(
+            decision === undefined
+              ? codeOfFailure(error, 'UNAUTHENTICATED')
+              : decision.status === 429
+                ? 'BUSY'
+                : 'UNAUTHENTICATED',
+            decision === undefined
+              ? messageOf(error)
+              : decision.status === 429
+                ? `too many failed sign-ins; retry after ${String(decision.retryAfterSec)}s`
+                : decision.message,
+          ),
+        );
+        return;
+      }
+      created = { daemonCookie: decision.sessionId, csrfToken: decision.csrfToken };
     }
     const session = sessions.create(created);
     response.setHeader('set-cookie', [sessionSetCookie(session.id, { secure: secureCookies })]);
@@ -580,6 +896,58 @@ export function createWebApp(options: WebAppOptions): WebApp {
         : routeOf(envelope.projectId);
     if (route === undefined) {
       refuseUnknownProject(response, envelope.projectId);
+      return;
+    }
+    /**
+     * The browser's project lifecycle (WP-12 project UX).
+     *
+     * Two cases are answered in-process against the host's `ProjectDirectoryPort`
+     * instead of being forwarded to a daemon:
+     *
+     * 1. **The vacant installation.** `project.open`/`create`/`trust`/`close`/`list`
+     *    are normally delegated by a project's daemon to the same directory, but a
+     *    fresh `agentdev start` has no daemon listener yet, so the first folder the
+     *    user picks could never be opened. While `projects.list()` reports no `open`
+     *    entry the BFF performs that delegation itself.
+     * 2. **A clone with no Grant.** `reliability.md` §7 requires an installation-level
+     *    once-Grant for the clone's network + out-of-root writes, minted by the
+     *    user's explicit act. The CLI mints it through the admin surface; the browser
+     *    has neither, so the BFF mints it from the user's own authenticated,
+     *    exact-Origin `/rpc` submit and consumes it immediately. A caller that does
+     *    supply a `grantId` is forwarded to a daemon unchanged.
+     *
+     * Once one project is open, every command except the grant-less clone is
+     * forwarded again; the host's directory stays the only writer either way.
+     */
+    const bootstrapParams = paramsOf(raw);
+    const cloneWithoutGrant =
+      projects !== undefined &&
+      method === 'project.clone' &&
+      envelope.projectId === undefined &&
+      typeof bootstrapParams['grantId'] !== 'string';
+    const vacantWindow =
+      projects !== undefined &&
+      method !== undefined &&
+      BOOTSTRAP_LIFECYCLE.has(method) &&
+      !projects.list().some((entry) => entry.state === 'open');
+    if (projects !== undefined && (cloneWithoutGrant || vacantWindow)) {
+      const bootstrap = await bootstrapProjectCommand(
+        projects,
+        method ?? '',
+        bootstrapParams,
+        `bootstrap-${String(Date.now())}-${String(Math.random()).slice(2, 8)}`,
+      );
+      // The answer keeps the documented response envelope (`protocol.md` §1) so a
+      // client cannot tell a BFF-answered command from a daemon-answered one.
+      const failure = bootstrap['error'];
+      json(response, bootstrapStatus(bootstrap), {
+        v: 1,
+        type: 'response',
+        id: envelope.id ?? `bootstrap-${String(Date.now())}`,
+        ...(typeof failure === 'object' && failure !== null
+          ? { ok: false, error: failure }
+          : { ok: true, result: bootstrap }),
+      });
       return;
     }
     const forwarded =
@@ -1341,15 +1709,35 @@ function numberRecord(value: unknown): Readonly<Record<string, number>> {
   return result;
 }
 
-function envelopeOf(raw: string): { method?: string; projectId?: string } {
+function envelopeOf(raw: string): { id?: string; method?: string; projectId?: string } {
   try {
     const parsed: unknown = JSON.parse(raw);
+    const id = (parsed as { id?: unknown }).id;
     const method = (parsed as { method?: unknown }).method;
     const projectId = (parsed as { projectId?: unknown }).projectId;
     return {
+      ...(typeof id === 'string' ? { id } : {}),
       ...(typeof method === 'string' ? { method } : {}),
       ...(typeof projectId === 'string' ? { projectId } : {}),
     };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The `params` object of a request envelope, or `{}`.
+ *
+ * Used only by the bootstrap project commands the BFF answers itself; everything
+ * else is forwarded as raw text so the daemon owns its own validation.
+ */
+function paramsOf(raw: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const params = (parsed as { params?: unknown }).params;
+    return typeof params === 'object' && params !== null && !Array.isArray(params)
+      ? (params as Record<string, unknown>)
+      : {};
   } catch {
     return {};
   }

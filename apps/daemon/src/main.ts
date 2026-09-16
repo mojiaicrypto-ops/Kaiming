@@ -19,12 +19,14 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
+import { appendFileSync, chmodSync, mkdirSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
 import {
   RUNTIME_PROTOCOL_VERSION,
   DEFAULT_LISTENERS,
+  runtimePaths,
   type RuntimeHost,
   type RuntimeInstance,
   type RuntimeRecord,
@@ -60,7 +62,7 @@ import {
   ProjectDirectoryError,
   type AssembledProject,
 } from './project-directory.js';
-import { createWebApp, NodeFilePort, WebSessionStore } from '@agentdev/web';
+import { createWebApp, NodeFilePort, NodeFolderPicker, WebSessionStore } from '@agentdev/web';
 import { projectPolicyHash } from './context-ports.js';
 import { createControlHandlers } from './control-handler.js';
 import { markMessageProcessing, markMessageSettled } from './message-state.js';
@@ -860,9 +862,26 @@ export async function startRuntime(options: StartRuntimeOptions): Promise<Runnin
           origin: DEFAULT_WEB_ORIGIN,
           bearer: installationToken,
         };
+        /**
+         * The human-only folder picker's audit trail (WP-12 project UX).
+         *
+         * One JSON line per listing or refusal, appended 0600 under the installation
+         * home's `logs/`. The sink throws on failure, and the picker writes the record
+         * *before* it answers, so a listing the trail cannot record is refused rather
+         * than served: the owner's ruling is that this read surface is audited.
+         */
+        const pickerAuditPath = join(runtimePaths(home).logs, 'picker-audit.jsonl');
+        const picker = new NodeFolderPicker({
+          audit: (record) => {
+            mkdirSync(runtimePaths(home).logs, { recursive: true, mode: 0o700 });
+            appendFileSync(pickerAuditPath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+            chmodSync(pickerAuditPath, 0o600);
+          },
+        });
         const web = createWebApp({
           daemon: fallbackTarget,
           projects: directory,
+          picker,
           auth,
           allowedOrigins: [...allowedOrigins],
           sessions: new WebSessionStore(),

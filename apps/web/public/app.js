@@ -1836,6 +1836,561 @@
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // Projects: browser-only loading, trust and switching (WP-12 project UX)
+  // ---------------------------------------------------------------------------
+
+  /** The one-time trust prompt is remembered per browser and project. */
+  const trustAskedPrefix = 'agentdev.trustAsked.';
+
+  function trustAsked(projectId) {
+    const store = storage();
+    if (!store || !projectId) return false;
+    try {
+      return store.getItem(trustAskedPrefix + projectId) === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  function rememberTrustAsked(projectId) {
+    const store = storage();
+    if (!store || !projectId) return;
+    try {
+      store.setItem(trustAskedPrefix + projectId, '1');
+    } catch {
+      // A browser that refuses storage simply asks again; nothing else depends on it.
+    }
+  }
+
+  const picker = {
+    path: null,
+    mode: 'open',
+    target: null,
+    listing: null,
+  };
+
+  // Monotonic request id: a navigation that arrives while an earlier listing is still
+  // in flight must win, never be dropped (the dialog opens with the home listing, and
+  // a pasted path submitted immediately afterwards is a normal thing to do).
+  let pickerRequest = 0;
+  // True while the human has edited the path themselves: a listing that was already in
+  // flight must then never overwrite what they typed.
+  let pickerEdited = false;
+
+  /**
+   * The only call the picker makes: the BFF's read-only listing route.
+   *
+   * It is deliberately not an `/rpc` method: the picker is a human read surface (see
+   * `apps/web/src/picker.ts`), and a missing session or a non-directory path comes
+   * back as the typed refusal shown below.
+   */
+  async function pickerList(path) {
+    let response;
+    try {
+      response = await fetch(
+        path === null || path === ''
+          ? '/picker/list'
+          : `/picker/list?path=${encodeURIComponent(path)}`,
+        { headers: { accept: 'application/json' } },
+      );
+    } catch (error) {
+      return { ok: false, error: { code: 'TRANSPORT_LOST', message: String(error) } };
+    }
+    let body;
+    try {
+      body = await response.json();
+    } catch {
+      return {
+        ok: false,
+        error: { code: 'PROTOCOL_MISMATCH', message: `the server answered ${response.status}` },
+      };
+    }
+    if (response.ok) return { ok: true, listing: body };
+    const failure = (body && body.error) || {};
+    return {
+      ok: false,
+      error: {
+        code: typeof failure.code === 'string' ? failure.code : 'INTERNAL_ERROR',
+        message: typeof failure.message === 'string' ? failure.message : 'the request failed',
+        details: failure.details,
+      },
+    };
+  }
+
+  function pickerSetStatus(key) {
+    const element = document.getElementById('pickerStatus');
+    if (!element) return;
+    element.hidden = key === null;
+    // The element keeps its server-rendered `data-i18n` (so a language switch still
+    // knows the key); the transient text is written directly.
+    element.textContent = key === null ? '' : state.strings[key] || translateClient(key);
+  }
+
+  function renderPickerListing(listing) {
+    const list = document.getElementById('pickerEntries');
+    const path = document.getElementById('pickerPath');
+    if (!list) return;
+    // The list itself says which directory it represents, so a stale listing is
+    // distinguishable from the current one (and the browser suite can wait on it).
+    list.dataset.path = listing.path;
+    // Never overwrite a path the human edited: a listing that was already in flight
+    // when they started typing must not clobber what they are entering (the dialog opens
+    // with the home listing).
+    if (path && !pickerEdited) path.value = listing.path;
+    picker.path = listing.path;
+    const upRows = [];
+    if (listing.parent !== null && listing.parent !== undefined) {
+      upRows.push(
+        `<li class="picker-entry up"><button type="button" data-picker-up="1">${escapeForHtml(state.strings['picker.upEntry'] || translateClient('picker.upEntry'))}</button></li>`,
+      );
+    }
+    const rows = [];
+    for (const entry of listing.entries || []) {
+      const label = entry.isDirectory ? `${entry.name}/` : entry.name;
+      const hidden = entry.hidden
+        ? ` <span class="picker-hidden">${escapeForHtml(state.strings['picker.hiddenEntry'] || translateClient('picker.hiddenEntry'))}</span>`
+        : '';
+      if (entry.isDirectory) {
+        rows.push(
+          `<li class="picker-entry" data-kind="directory"><button type="button" data-picker-enter="${escapeForHtml(entry.name)}">${escapeForHtml(label)}</button>${hidden}</li>`,
+        );
+      } else {
+        rows.push(
+          `<li class="picker-entry" data-kind="file"><span class="picker-name">${escapeForHtml(label)}</span>${hidden}</li>`,
+        );
+      }
+    }
+    // An empty folder says so even though the "parent folder" row is always present:
+    // a user creating a project here must be able to see that it is really empty.
+    if (rows.length === 0) {
+      rows.push(
+        `<li class="picker-empty">${escapeForHtml(state.strings['picker.empty'] || translateClient('picker.empty'))}</li>`,
+      );
+    }
+    list.innerHTML = upRows.concat(rows).join('');
+    pickerSetStatus(listing.truncated ? 'picker.truncated' : null);
+  }
+
+  /** Minimal HTML escape for values that come from the filesystem listing. */
+  function escapeForHtml(value) {
+    return String(value)
+      .replace(/&/gu, '&amp;')
+      .replace(/</gu, '&lt;')
+      .replace(/>/gu, '&gt;')
+      .replace(/"/gu, '&quot;')
+      .replace(/'/gu, '&#39;');
+  }
+
+  async function loadPicker(path) {
+    pickerRequest += 1;
+    const request = pickerRequest;
+    // The requested path is the intent, so the human's earlier edit is consumed here.
+    pickerEdited = false;
+    pickerSetStatus('picker.loading');
+    const answer = await pickerList(path);
+    // A newer listing superseded this one; its answer must not overwrite the newer view.
+    if (request !== pickerRequest) return;
+    if (!answer.ok) {
+      showError('projectsError', answer.error);
+      pickerSetStatus('picker.failed');
+      return;
+    }
+    showError('projectsError', null);
+    renderPickerListing(answer.listing);
+    picker.listing = answer.listing;
+  }
+
+  function openProjectPicker(mode, target) {
+    const dialog = document.getElementById('folderPicker');
+    if (!dialog) return;
+    picker.mode = mode;
+    picker.target = target || null;
+    dialog.dataset.mode = mode;
+    const create = document.getElementById('pickerCreate');
+    if (create) create.hidden = mode !== 'create';
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+    void loadPicker(null);
+  }
+
+  function closeProjectPicker() {
+    const dialog = document.getElementById('folderPicker');
+    if (!dialog) return;
+    if (typeof dialog.close === 'function') dialog.close();
+    else dialog.removeAttribute('open');
+  }
+
+  /** Polls `project.list` the way `protocol.md` §3 tells a client to wait. */
+  async function waitForProject(match, timeoutMs) {
+    const deadline = Date.now() + (timeoutMs || 30000);
+    for (;;) {
+      const listed = await rpc('project.list', {});
+      if (listed.ok) {
+        const items = (listed.result && listed.result.items) || [];
+        const found = items.find((item) => match(item));
+        if (found && found.lifecycleState === 'open') return { ok: true, project: found };
+        if (
+          found &&
+          (found.lifecycleState === 'missing' || found.lifecycleState === 'unreadable')
+        ) {
+          return {
+            ok: false,
+            error: {
+              code: 'INVALID_STATE',
+              message: (found.problem && found.problem.message) || found.lifecycleState,
+            },
+          };
+        }
+      }
+      if (Date.now() > deadline) {
+        return {
+          ok: false,
+          error: { code: 'TIMEOUT', message: 'the project did not become ready in time' },
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+  }
+
+  /**
+   * Opens one folder and, when it is not yet trusted, asks once.
+   *
+   * The folder is always opened **read-only** first (`project.open` without `trust`,
+   * `protocol.md` §3): nothing is loaded from a folder the user has not accepted, and
+   * the choice is then recorded with the documented `project.trust`.
+   */
+  async function openFolder(root) {
+    showError('projectsError', null);
+    showStatus(
+      'projectsStatus',
+      state.strings['projects.opening'] || translateClient('projects.opening'),
+    );
+    const answer = await rpc(
+      'project.open',
+      { root },
+      { idempotencyKey: newIdempotencyKey('project-open') },
+    );
+    if (!answer.ok) {
+      showStatus('projectsStatus', '');
+      showError('projectsError', answer.error);
+      return;
+    }
+    const result = answer.result || {};
+    let project = result.project || null;
+    let projectId = typeof result.projectId === 'string' ? result.projectId : null;
+    if (result.status === 'accepted' || !project) {
+      const waited = await waitForProject(
+        (item) => (projectId !== null ? item.projectId === projectId : item.root === root),
+        30000,
+      );
+      if (!waited.ok) {
+        showStatus('projectsStatus', '');
+        showError('projectsError', waited.error);
+        return;
+      }
+      project = waited.project;
+      projectId = waited.project.projectId;
+    }
+    showStatus('projectsStatus', '');
+    const trust = project && typeof project.trust === 'string' ? project.trust : 'untrusted';
+    if (trust !== 'trusted' && !trustAsked(projectId)) {
+      showTrustPrompt(projectId);
+      return;
+    }
+    gotoProject(projectId);
+  }
+
+  function gotoProject(projectId) {
+    if (!projectId) {
+      window.location.reload();
+      return;
+    }
+    window.location.assign(`/projects/${encodeURIComponent(projectId)}/chief`);
+  }
+
+  function showTrustPrompt(projectId) {
+    const dialog = document.getElementById('trustPrompt');
+    if (!dialog) {
+      gotoProject(projectId);
+      return;
+    }
+    dialog.dataset.project = projectId || '';
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    else dialog.setAttribute('open', '');
+  }
+
+  function closeTrustPrompt() {
+    const dialog = document.getElementById('trustPrompt');
+    if (!dialog) return;
+    if (typeof dialog.close === 'function') dialog.close();
+    else dialog.removeAttribute('open');
+  }
+
+  /** The trust choice, recorded with the documented `project.trust` method. */
+  async function applyTrust(projectId, trusted) {
+    const answer = await rpc(
+      'project.trust',
+      { trusted },
+      { projectId, idempotencyKey: newIdempotencyKey('project-trust') },
+    );
+    if (!answer.ok) {
+      showError('projectsError', answer.error);
+      return false;
+    }
+    showError('projectsError', null);
+    return true;
+  }
+
+  async function initProjects() {
+    const openButton = document.getElementById('openFolder');
+    const createButton = document.getElementById('createFolder');
+    const pickerDialog = document.getElementById('folderPicker');
+    const pathForm = document.getElementById('pickerPathForm');
+    const entries = document.getElementById('pickerEntries');
+    if (openButton) {
+      openButton.addEventListener('click', () => openProjectPicker('open', null));
+    }
+    if (createButton) {
+      createButton.addEventListener('click', () => openProjectPicker('create', null));
+    }
+    const clonePick = document.getElementById('clonePick');
+    if (clonePick) {
+      clonePick.addEventListener('click', () => openProjectPicker('clone-root', 'cloneRoot'));
+    }
+    const pathInput = document.getElementById('pickerPath');
+    if (pathInput) {
+      pathInput.addEventListener('input', () => {
+        pickerEdited = true;
+      });
+    }
+    if (pathForm) {
+      pathForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const input = document.getElementById('pickerPath');
+        void loadPicker(input ? input.value : null);
+      });
+    }
+    const up = document.getElementById('pickerUp');
+    if (up) {
+      up.addEventListener('click', () => {
+        const parent = picker.listing ? picker.listing.parent : null;
+        if (parent) void loadPicker(parent);
+      });
+    }
+    const home = document.getElementById('pickerHome');
+    if (home) {
+      home.addEventListener('click', () => void loadPicker(null));
+    }
+    const root = document.getElementById('pickerRoot');
+    if (root) {
+      root.addEventListener('click', () => void loadPicker('/'));
+    }
+    const cancel = document.getElementById('pickerCancel');
+    if (cancel) cancel.addEventListener('click', closeProjectPicker);
+    if (entries) {
+      entries.addEventListener('click', (event) => {
+        const up1 = event.target.closest('button[data-picker-up]');
+        if (up1) {
+          const parent = picker.listing ? picker.listing.parent : null;
+          if (parent) void loadPicker(parent);
+          return;
+        }
+        const enter = event.target.closest('button[data-picker-enter]');
+        if (!enter) return;
+        const base = picker.path || '';
+        const next = base.endsWith('/')
+          ? `${base}${enter.dataset.pickerEnter}`
+          : `${base}/${enter.dataset.pickerEnter}`;
+        void loadPicker(next);
+      });
+    }
+    const select = document.getElementById('pickerSelect');
+    if (select) {
+      select.addEventListener('click', async () => {
+        const chosen = picker.path;
+        if (!chosen) return;
+        if (picker.mode === 'clone-root') {
+          const input = document.getElementById(picker.target || 'cloneRoot');
+          if (input) input.value = chosen;
+          closeProjectPicker();
+          return;
+        }
+        if (picker.mode === 'create') {
+          const nameInput = document.getElementById('pickerName');
+          const name = nameInput && nameInput.value.trim() !== '' ? nameInput.value.trim() : null;
+          if (name === null) {
+            const create = document.getElementById('pickerCreate');
+            if (create) create.hidden = false;
+            showError('projectsError', {
+              code: 'VALIDATION_ERROR',
+              message: 'a project name is required',
+            });
+            return;
+          }
+          closeProjectPicker();
+          showError('projectsError', null);
+          const answer = await rpc(
+            'project.create',
+            { root: chosen, name },
+            { idempotencyKey: newIdempotencyKey('project-create') },
+          );
+          if (!answer.ok) {
+            showError('projectsError', answer.error);
+            return;
+          }
+          const result = answer.result || {};
+          let projectId = typeof result.projectId === 'string' ? result.projectId : null;
+          if (result.status === 'accepted' || !projectId) {
+            const waited = await waitForProject((item) => item.root === chosen, 30000);
+            if (!waited.ok) {
+              showError('projectsError', waited.error);
+              return;
+            }
+            projectId = waited.project.projectId;
+          }
+          gotoProject(projectId);
+          return;
+        }
+        closeProjectPicker();
+        await openFolder(chosen);
+      });
+    }
+    if (pickerDialog) {
+      pickerDialog.addEventListener('cancel', (event) => {
+        event.preventDefault();
+        closeProjectPicker();
+      });
+    }
+
+    const trustAccept = document.getElementById('trustAccept');
+    if (trustAccept) {
+      trustAccept.addEventListener('click', async () => {
+        const projectId = document.getElementById('trustPrompt').dataset.project || '';
+        rememberTrustAsked(projectId);
+        await applyTrust(projectId, true);
+        closeTrustPrompt();
+        gotoProject(projectId);
+      });
+    }
+    const trustReadOnly = document.getElementById('trustReadOnly');
+    if (trustReadOnly) {
+      trustReadOnly.addEventListener('click', async () => {
+        const projectId = document.getElementById('trustPrompt').dataset.project || '';
+        rememberTrustAsked(projectId);
+        // The folder is already read-only; recording the choice is the explicit
+        // `project.trust {trusted:false}` write, so the state is not merely implied.
+        await applyTrust(projectId, false);
+        closeTrustPrompt();
+        gotoProject(projectId);
+      });
+    }
+
+    const list = document.querySelector('.project-list');
+    if (list) {
+      list.addEventListener('click', async (event) => {
+        const button = event.target.closest('button[data-action]');
+        if (!button) return;
+        const action = button.dataset.action;
+        const projectId = button.dataset.project || '';
+        button.disabled = true;
+        let answer;
+        if (action === 'trust') {
+          answer = await rpc(
+            'project.trust',
+            { trusted: button.dataset.trusted !== 'true' },
+            { projectId, idempotencyKey: newIdempotencyKey('project-trust') },
+          );
+        } else if (action === 'initialize') {
+          answer = await rpc(
+            'project.initialize',
+            // `protocol.md` §3: `mode:'new'` is the explicit Git-initialization
+            // authorization; the button is that act. `sourceMessageId` records the
+            // user action the command is authorized by (`protocol.md` §8).
+            { mode: 'new', sourceMessageId: `web-project-initialize-${Date.now().toString(36)}` },
+            { projectId, idempotencyKey: newIdempotencyKey('project-initialize') },
+          );
+        } else if (action === 'close') {
+          answer = await rpc(
+            'project.close',
+            {},
+            { projectId, idempotencyKey: newIdempotencyKey('project-close') },
+          );
+        } else if (action === 'open') {
+          button.disabled = false;
+          await openFolder(button.dataset.root || '');
+          return;
+        } else {
+          button.disabled = false;
+          return;
+        }
+        button.disabled = false;
+        if (!answer.ok) {
+          showError('projectsError', answer.error);
+          return;
+        }
+        showError('projectsError', null);
+        showStatus(
+          'projectsStatus',
+          action === 'trust'
+            ? state.strings['projects.trustApplied'] || translateClient('projects.trustApplied')
+            : action === 'close'
+              ? state.strings['projects.closedNotice'] || translateClient('projects.closedNotice')
+              : state.strings['projects.opened'] || translateClient('projects.opened'),
+        );
+        window.location.reload();
+      });
+    }
+
+    const cloneForm = document.getElementById('cloneForm');
+    if (cloneForm) {
+      cloneForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const remoteUrl = document.getElementById('cloneRemote');
+        const root = document.getElementById('cloneRoot');
+        const remote = remoteUrl ? remoteUrl.value.trim() : '';
+        const destination = root ? root.value.trim() : '';
+        if (remote === '' || destination === '') {
+          showError('projectsError', {
+            code: 'VALIDATION_ERROR',
+            message: 'a Git remote URL and a destination folder are required',
+          });
+          return;
+        }
+        showError('projectsError', null);
+        showStatus(
+          'projectsStatus',
+          state.strings['projects.opening'] || translateClient('projects.opening'),
+        );
+        // The BFF mints the installation-level once-Grant for this explicit submit
+        // (`reliability.md` §7 Q4); the browser has no way to mint one itself.
+        const answer = await rpc(
+          'project.clone',
+          { remoteUrl: remote, root: destination },
+          { idempotencyKey: newIdempotencyKey('project-clone') },
+        );
+        if (!answer.ok) {
+          showStatus('projectsStatus', '');
+          showError('projectsError', answer.error);
+          return;
+        }
+        const result = answer.result || {};
+        let projectId = typeof result.projectId === 'string' ? result.projectId : null;
+        if (result.status === 'accepted' || !projectId) {
+          const waited = await waitForProject((item) => item.root === destination, 60000);
+          if (!waited.ok) {
+            showStatus('projectsStatus', '');
+            showError('projectsError', waited.error);
+            return;
+          }
+          projectId = waited.project.projectId;
+        }
+        showStatus('projectsStatus', '');
+        gotoProject(projectId);
+      });
+    }
+  }
+
   async function initLogin() {
     const form = document.getElementById('loginForm');
     if (!form) return;
@@ -1924,6 +2479,7 @@
     await initInbox();
     await initSettings();
     await initRuns();
+    if (page === 'projects') await initProjects();
 
     if (
       page === 'chief' ||

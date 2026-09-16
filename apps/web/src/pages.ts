@@ -194,22 +194,46 @@ export function renderProjectsPage(input: {
       // A project that is not navigable is not a link: the switcher must never offer a
       // destination the installation cannot serve.
       const navigable = problem === '' && lifecycle !== 'missing' && lifecycle !== 'unreadable';
+      const trusted = trust === 'trusted';
+      // WP-12 project UX: every project row carries its real actions and its real
+      // state. "Read-only until trusted" is shown in words, and the toggle, initialize
+      // and close actions are the same protocol methods the CLI uses.
+      const actions = [
+        navigable
+          ? `<a class="project-action" href="/projects/${escapeHtml(id)}/chief" data-action="switch" data-project="${escapeHtml(id)}" data-i18n="projects.switch">${escapeHtml(t('projects.switch'))}</a>`
+          : '',
+        navigable
+          ? `<button type="button" class="project-action" data-action="trust" data-project="${escapeHtml(id)}" data-trusted="${trusted ? 'true' : 'false'}" data-i18n="${trusted ? 'projects.untrustNow' : 'projects.trustNow'}">${escapeHtml(t(trusted ? 'projects.untrustNow' : 'projects.trustNow'))}</button>`
+          : '',
+        navigable
+          ? `<button type="button" class="project-action" data-action="initialize" data-project="${escapeHtml(id)}" data-i18n="projects.initialize">${escapeHtml(t('projects.initialize'))}</button>`
+          : '',
+        lifecycle === 'closed'
+          ? `<button type="button" class="project-action" data-action="open" data-root="${escapeHtml(root)}" data-i18n="projects.openAction">${escapeHtml(t('projects.openAction'))}</button>`
+          : '',
+        navigable && lifecycle === 'open'
+          ? `<button type="button" class="project-action" data-action="close" data-project="${escapeHtml(id)}" data-i18n="projects.close">${escapeHtml(t('projects.close'))}</button>`
+          : '',
+      ]
+        .filter((part) => part !== '')
+        .join('');
       return [
-        `<li class="project-row${current ? ' current' : ''}" data-project="${escapeHtml(id)}" data-state="${escapeHtml(lifecycle)}" data-i18n-project="${escapeHtml(id)}">`,
+        `<li class="project-row${current ? ' current' : ''}" data-project="${escapeHtml(id)}" data-state="${escapeHtml(lifecycle)}" data-trust="${escapeHtml(trust)}" data-i18n-project="${escapeHtml(id)}">`,
         navigable
           ? `<a class="project-link" href="/projects/${escapeHtml(id)}/chief"${current ? ' aria-current="page"' : ''}>${escapeHtml(name)}</a>`
           : `<span class="project-link unavailable" aria-disabled="true" title="${escapeHtml(problem)}">${escapeHtml(name)}</span>`,
         `<span class="project-meta mono">${escapeHtml(root)}</span>`,
         `<span class="project-meta mono">${escapeHtml(head.slice(0, 12))}</span>`,
-        chip('state', lifecycle),
-        chip('trust', trust),
+        chip(t('projects.state'), t(lifecycleChipKey(lifecycle))),
+        chip(t('projects.chipTrust'), t(trusted ? 'projects.trusted' : 'projects.untrusted')),
         typeof runningRuns === 'number' && runningRuns > 0
-          ? chip('runs', String(runningRuns), 'attention')
+          ? chip(t('projects.chipRuns'), String(runningRuns), 'attention')
           : '',
-        initialization === '' ? '' : chip('init', initialization),
+        initialization === '' ? '' : `${chip(t('projects.chipInit'), initialization)}`,
         problem === ''
           ? ''
           : `<span class="project-problem" role="status">${escapeHtml(problem)}</span>`,
+        actions === '' ? '' : `<div class="project-actions">${actions}</div>`,
         '</li>',
       ].join('');
     })
@@ -220,24 +244,105 @@ export function renderProjectsPage(input: {
   const problems = (input.problems ?? [])
     .map((problem) => `<li class="registry-problem" role="status">${escapeHtml(problem)}</li>`)
     .join('');
+  const firstRun = input.projects.length === 0;
   return [
     section(
       { id: 'projects', titleKey: 'nav.projects', t },
       [
-        rows === '' ? emptyNote(t, 'board.empty') : `<ul class="project-list">${rows}</ul>`,
+        firstRun
+          ? [
+              `<p class="first-run" data-i18n="projects.firstRunTitle">${escapeHtml(t('projects.firstRunTitle'))}</p>`,
+              `<p class="hint" data-i18n="projects.firstRunHint">${escapeHtml(t('projects.firstRunHint'))}</p>`,
+            ].join('')
+          : '',
+        rows === '' ? '' : `<ul class="project-list">${rows}</ul>`,
         problems === '' ? '' : `<ul class="registry-problems">${problems}</ul>`,
         `<p class="hint" id="currentProject" data-project="${escapeHtml(input.currentProjectId)}">${escapeHtml(input.currentProjectId)}</p>`,
         `<div class="chips">${counts}</div>`,
         `<p class="hint" data-i18n="board.l1Hidden">${escapeHtml(t('board.l1Hidden'))}</p>`,
-      ].join(''),
+      ]
+        .filter((part) => part !== '')
+        .join(''),
     ),
     section(
-      { id: 'projectActions', titleKey: 'shell.discussInChief', t },
+      { id: 'projectActions', titleKey: 'projects.actions', t },
       [
+        `<div class="project-actions-bar">`,
+        `<button type="button" id="openFolder" data-action="open-folder" data-i18n="projects.openFolder">${escapeHtml(t('projects.openFolder'))}</button>`,
+        `<button type="button" id="createFolder" data-action="create-folder" data-i18n="projects.createFolder">${escapeHtml(t('projects.createFolder'))}</button>`,
+        `</div>`,
+        `<form id="cloneForm" class="project-form">`,
+        `<label for="cloneRemote" data-i18n="projects.remoteUrl">${escapeHtml(t('projects.remoteUrl'))}</label>`,
+        `<input id="cloneRemote" name="remoteUrl" required autocomplete="off" spellcheck="false">`,
+        `<label for="cloneRoot" data-i18n="projects.path">${escapeHtml(t('projects.path'))}</label>`,
+        `<span class="picker-field"><input id="cloneRoot" name="root" required autocomplete="off" spellcheck="false"><button type="button" id="clonePick" data-i18n="projects.pick">${escapeHtml(t('projects.pick'))}</button></span>`,
+        `<button type="submit" id="cloneSubmit" data-i18n="projects.clone">${escapeHtml(t('projects.clone'))}</button>`,
+        `<span class="hint" data-i18n="projects.cloneHint">${escapeHtml(t('projects.cloneHint'))}</span>`,
+        `</form>`,
+        `<p class="alert" id="projectsError" role="alert" hidden></p>`,
+        `<p class="hint" id="projectsStatus" role="status" hidden></p>`,
         `<p class="hint" data-i18n="shell.chiefOnlyControls">${escapeHtml(t('shell.chiefOnlyControls'))}</p>`,
-        discussLink(input.currentProjectId, t, 'chief'),
+        // With no project open there is no Chief surface to link to; the first-run
+        // guidance above is the only action that makes sense.
+        firstRun ? '' : discussLink(input.currentProjectId, t, 'chief'),
       ].join(''),
     ),
+    renderFolderPicker(t),
+  ].join('');
+}
+
+/** The dictionary key for one lifecycle state (`protocol.md` §3 `project.list`). */
+function lifecycleChipKey(lifecycle: string): string {
+  switch (lifecycle) {
+    case 'open':
+      return 'projects.lifecycleOpen';
+    case 'missing':
+      return 'projects.lifecycleMissing';
+    case 'unreadable':
+      return 'projects.lifecycleUnreadable';
+    default:
+      return 'projects.lifecycleClosed';
+  }
+}
+
+/**
+ * The global folder picker and the one-time trust prompt.
+ *
+ * Both are plain `<dialog>` elements the client script drives; the picker only ever
+ * calls the BFF's `GET /picker/list` (names only, audited) and the trust prompt only
+ * calls the documented `project.trust` method. The markup is server-rendered so the
+ * labels exist in both locales before any script runs.
+ */
+function renderFolderPicker(t: Translator): string {
+  return [
+    `<dialog id="folderPicker" class="picker-dialog" data-mode="open" aria-labelledby="folderPickerTitle">`,
+    `<h2 id="folderPickerTitle" data-i18n="picker.title">${escapeHtml(t('picker.title'))}</h2>`,
+    `<p class="hint" data-i18n="projects.pickerHint">${escapeHtml(t('projects.pickerHint'))}</p>`,
+    `<form id="pickerPathForm">`,
+    `<label for="pickerPath" data-i18n="picker.path">${escapeHtml(t('picker.path'))}</label>`,
+    `<span class="picker-field"><input id="pickerPath" name="path" autocomplete="off" spellcheck="false"><button type="submit" data-i18n="picker.go">${escapeHtml(t('picker.go'))}</button></span>`,
+    `<span class="picker-field"><button type="button" id="pickerUp" data-i18n="picker.up">${escapeHtml(t('picker.up'))}</button><button type="button" id="pickerHome" data-i18n="picker.home">${escapeHtml(t('picker.home'))}</button><button type="button" id="pickerRoot" data-i18n="picker.root">${escapeHtml(t('picker.root'))}</button></span>`,
+    `</form>`,
+    `<ul class="picker-entries" id="pickerEntries" data-i18n-aria="picker.title" aria-label="${escapeHtml(t('picker.title'))}"></ul>`,
+    `<div class="picker-create" id="pickerCreate" hidden>`,
+    `<label for="pickerName" data-i18n="projects.name">${escapeHtml(t('projects.name'))}</label>`,
+    `<input id="pickerName" name="name" autocomplete="off">`,
+    `</div>`,
+    `<p class="hint" id="pickerStatus" data-i18n="picker.loading" role="status">${escapeHtml(t('picker.loading'))}</p>`,
+    `<p class="hint" data-i18n="picker.readOnlyNotice">${escapeHtml(t('picker.readOnlyNotice'))}</p>`,
+    `<div class="dialog-actions">`,
+    `<button type="button" id="pickerCancel" data-i18n="picker.cancel">${escapeHtml(t('picker.cancel'))}</button>`,
+    `<button type="button" id="pickerSelect" data-i18n="picker.select">${escapeHtml(t('picker.select'))}</button>`,
+    `</div>`,
+    `</dialog>`,
+    `<dialog id="trustPrompt" class="picker-dialog" data-project="" aria-labelledby="trustPromptTitle">`,
+    `<h2 id="trustPromptTitle" data-i18n="projects.trustPromptTitle">${escapeHtml(t('projects.trustPromptTitle'))}</h2>`,
+    `<p data-i18n="projects.trustPromptBody">${escapeHtml(t('projects.trustPromptBody'))}</p>`,
+    `<div class="dialog-actions">`,
+    `<button type="button" id="trustReadOnly" data-i18n="projects.readOnly">${escapeHtml(t('projects.readOnly'))}</button>`,
+    `<button type="button" id="trustAccept" data-i18n="projects.trust">${escapeHtml(t('projects.trust'))}</button>`,
+    `</div>`,
+    `</dialog>`,
   ].join('');
 }
 

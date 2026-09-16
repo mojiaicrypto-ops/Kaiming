@@ -100,6 +100,7 @@ describe('single-entry multi-project BFF (WP-12 T5.5)', () => {
       open: () => Promise.resolve(entries[0] as ProjectEntry),
       create: () => Promise.resolve(entries[0] as ProjectEntry),
       clone: () => Promise.resolve(entries[0] as ProjectEntry),
+      grantClone: () => ({ grantId: 'grant-test', expiresAt: new Date(0).toISOString() }),
       trust: () => entries[0] as ProjectEntry,
       close: () => entries[0] as ProjectEntry,
       initialize: () => Promise.resolve(entries[0] as ProjectEntry),

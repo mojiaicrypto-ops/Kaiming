@@ -441,3 +441,136 @@ pre {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* --------------------------------------------------------------------------
+   Projects page: first-run guidance, project actions and the folder picker
+   (WP-12 project UX). The picker is a plain <dialog>; `[hidden]` is reasserted
+   because this sheet sets `display` on several of the elements below.
+   -------------------------------------------------------------------------- */
+
+[hidden] {
+  display: none !important;
+}
+
+.project-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.project-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line, #2a2f3a);
+  border-radius: 8px;
+  background: var(--panel-alt, rgb(255 255 255 / 3%));
+}
+
+.project-row.current {
+  border-color: var(--accent, #4f8cff);
+}
+
+.project-row .project-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-row .project-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.project-actions-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.project-form {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+  max-width: 640px;
+}
+
+.picker-field {
+  display: flex;
+  gap: 6px;
+}
+
+.picker-field input {
+  flex: 1 1 auto;
+}
+
+.first-run {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.picker-dialog {
+  width: min(680px, 92vw);
+  max-height: 80vh;
+  overflow: auto;
+  border: 1px solid var(--line, #2a2f3a);
+  border-radius: 10px;
+  background: var(--panel, #14171d);
+  color: inherit;
+  padding: 16px;
+}
+
+.picker-dialog::backdrop {
+  background: rgb(0 0 0 / 55%);
+}
+
+.picker-entries {
+  list-style: none;
+  margin: 10px 0;
+  padding: 0;
+  max-height: 40vh;
+  overflow: auto;
+  border: 1px solid var(--line, #2a2f3a);
+  border-radius: 8px;
+}
+
+.picker-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+}
+
+.picker-entry button {
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  padding: 4px 0;
+  text-align: left;
+  width: 100%;
+}
+
+.picker-entry[data-kind='file'] .picker-name {
+  opacity: 0.65;
+}
+
+.picker-hidden {
+  font-size: 0.75rem;
+  opacity: 0.6;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}

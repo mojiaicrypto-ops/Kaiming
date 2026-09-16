@@ -10,6 +10,7 @@
 export {
   createWebApp,
   defaultPublicDir,
+  isInstallationMethod,
   pageOf,
   planCard,
   type WebApp,
@@ -61,6 +62,19 @@ export {
   type Language,
   type Translator,
 } from './i18n.js';
+export {
+  NodeFolderPicker,
+  PICKER_MAX_ENTRIES,
+  PickerRefused,
+  canonicalDirectory,
+  parentOf,
+  type FolderPickerPort,
+  type NodeFolderPickerOptions,
+  type PickerAuditRecord,
+  type PickerContext,
+  type PickerEntry,
+  type PickerListing,
+} from './picker.js';
 export {
   renderAgentsPage,
   renderBoardPage,

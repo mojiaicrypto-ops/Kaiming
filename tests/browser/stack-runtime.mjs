@@ -694,6 +694,78 @@ export async function openSwitcherStack() {
 
 let state = null;
 
+/**
+ * A fresh installation with **no project at all** (WP-12 project UX).
+ *
+ * `agentdev start` with an empty registry must bring up the one UI and let the user
+ * add their first project from the browser. The spec needs two candidate folders on
+ * disk — one empty directory to create a project in, and one real Git repository to
+ * open (and be asked to trust) — and neither is registered with the installation, so
+ * the whole flow really goes through the folder picker.
+ */
+export async function openEmptyStack() {
+  const { startRuntime } = await import('../../apps/daemon/src/main.ts');
+  const core = await import('@agentdev/core');
+  const base = mkdtempSync(join(tmpdir(), 'agentdev-browser-empty-'));
+  const home = join(base, 'home');
+  const port = await freePort();
+  const origin = `http://127.0.0.1:${String(port)}`;
+  const runtime = await startRuntime({
+    home,
+    roots: [],
+    execute: false,
+    daemonPort: 0,
+    webPort: port,
+    adminPort: 0,
+    webOrigins: [origin],
+    secretBackend: 'file',
+    log: () => undefined,
+  });
+
+  // The empty project folder `project.create` will initialize (real git init).
+  const createRoot = join(base, 'brand-new-project');
+  mkdirSync(createRoot, { recursive: true });
+  // An existing Git repository `project.open` will open, with a marker written into a
+  // file so the spec can prove the picker never echoes file bodies.
+  const repoRoot = join(base, 'existing-project');
+  mkdirSync(repoRoot, { recursive: true });
+  const repoMarker = 'EMPTY_STACK_REPO_BODY_MARKER';
+  const git = (...args) => execFileSync('git', args, { cwd: repoRoot, stdio: 'ignore' });
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 'browser@example.com');
+  git('config', 'user.name', 'Browser');
+  writeFileSync(join(repoRoot, 'NOTES.md'), `# notes\n\n${repoMarker}\n`, 'utf8');
+  writeFileSync(join(repoRoot, '.hidden-note'), 'hidden\n', 'utf8');
+  git('add', '.');
+  git('commit', '-q', '-m', 'initial');
+
+  // A third repository for the "read-only for now" branch of the trust prompt: it must
+  // stay untrusted (只看不改) exactly as the user chose.
+  const readOnlyRoot = join(base, 'read-only-project');
+  mkdirSync(readOnlyRoot, { recursive: true });
+  const readOnlyGit = (...args) =>
+    execFileSync('git', args, { cwd: readOnlyRoot, stdio: 'ignore' });
+  readOnlyGit('init', '-q', '-b', 'main');
+  readOnlyGit('config', 'user.email', 'browser@example.com');
+  readOnlyGit('config', 'user.name', 'Browser');
+  writeFileSync(join(readOnlyRoot, 'README.md'), '# read only\n', 'utf8');
+  readOnlyGit('add', '.');
+  readOnlyGit('commit', '-q', '-m', 'initial');
+
+  return {
+    webUrl: `http://${runtime.web.host}:${String(runtime.web.port)}`,
+    webOrigin: origin,
+    installationToken: core.readInstallationCredential(home),
+    stateDir: home,
+    home,
+    createRoot,
+    repoRoot,
+    repoMarker,
+    readOnlyRoot,
+    close: () => runtime.stop(),
+  };
+}
+
 /** Boots the real stack once and writes the fixture file the specs read. */
 export async function openBrowserStack() {
   if (state !== null) return state;
@@ -715,6 +787,9 @@ export async function openBrowserStack() {
   // The G5 switcher spec drives its own real host (two projects, one BFF); it boots
   // here so the browser suite pays for it once and closes it in teardown.
   const switcher = await openSwitcherStack();
+  // The zero-project installation the project-UX spec drives (WP-12 project UX): it is
+  // a real host with an empty registry, so the spec can pick its first folder.
+  const empty = await openEmptyStack();
   const fixture = {
     webUrl: harness.webUrl,
     webOrigin: WEB_ORIGIN,
@@ -737,10 +812,21 @@ export async function openBrowserStack() {
       // The clone project the portability spec drives (AC-087/AC-088/AC-089).
       clone: switcher.clone,
     },
+    empty: {
+      webUrl: empty.webUrl,
+      webOrigin: empty.webOrigin,
+      installationToken: empty.installationToken,
+      stateDir: empty.stateDir,
+      home: empty.home,
+      createRoot: empty.createRoot,
+      repoRoot: empty.repoRoot,
+      repoMarker: empty.repoMarker,
+      readOnlyRoot: empty.readOnlyRoot,
+    },
   };
   mkdirSync(dirname(FIXTURE_PATH), { recursive: true });
   writeFileSync(FIXTURE_PATH, `${JSON.stringify(fixture, null, 2)}\n`, 'utf8');
-  state = { harness, probe, switcher, fixture };
+  state = { harness, probe, switcher, empty, fixture };
   return state;
 }
 
@@ -751,5 +837,6 @@ export async function closeBrowserStack() {
   state = null;
   await current.probe.close();
   await current.switcher.close();
+  await current.empty.close();
   await current.harness.close();
 }

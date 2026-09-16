@@ -32,12 +32,28 @@ node apps/cli/dist/cli.js doctor
 | `projects.json` | 本安装服务的 Git root → projectId 映射（canonical root 映射） | 0600 |
 | `config.toml` | 全局配置：Provider、角色 Profile、限额、策略 | 0600 |
 | `secrets/` | 安装级凭证仓库；默认 `file` 后端，`keychain` 为可选后端 | 0700 |
-| `logs/` | `daemon.log` 与每 Project 日志 | 0700 |
+| `logs/` | `daemon.log`、每 Project 日志，以及 `picker-audit.jsonl`（文件夹选择器的逐次列表/拒绝审计：who=浏览器会话 id、what=canonical 路径、when） | 0700（`picker-audit.jsonl` 0600） |
 | `projects/<projectId>/` | 每 Project 的状态目录：`project.sqlite`、blobs、attempts、worktree | 0700 |
 
 `projectId = SHA256(canonicalRoot)[0:32]`（[技术架构](../architecture/ARCHITECTURE.md) §4），因此同一 Git 仓库的不同子目录/符号路径归一为同一 Project。
 
 ## 3. 首次运行
+
+零项目启动（推荐的首次体验，全程浏览器，不需要 CLI）：
+
+```sh
+agentdev start                       # 无 --root：起一个 BFF，即使一个项目都没有
+cat ~/.agentdev/installation-token   # 只在本机读取；命令输出永不打印它的值
+```
+
+打开 `http://127.0.0.1:4317`，粘贴安装凭证登录。空安装同样可登录（此时没有项目 daemon，BFF 用同一安装 `AuthService` 与同一凭证/来源/限流规则受理登录），`/projects` 显示首次引导：
+
+1. **打开文件夹…**：弹出全局文件夹选择器——从主目录开始，可上溯到 `/`，也可粘贴绝对路径；只列名称（名称、是否目录、是否隐藏），不读文件内容，每次列表都写 `logs/picker-audit.jsonl`。
+2. 选中已是 Git 仓库的目录后项目打开；**未信任过**的目录会问一次「信任并开始工作 / 暂时只读」。选择与结果都落库，之后可在项目行上随时更改。未信任即只读（只看不改）。
+3. **新建项目文件夹…**：在空目录里建初始 Git 与 `agentdev/main`（`project.create` 本身就是显式授权）。
+4. **从 Git 地址克隆**：需要远端 URL 与目标目录；这一次点击就是安装级 once-Grant 的铸造动作（`reliability.md` §7 Q4），不需要 CLI。
+
+传统 CLI 路径仍然可用：
 
 ```sh
 agentdev start [--root <path>]...   # 启动 daemon 与 BFF；无 --root 时按 projects.json 打开已注册 Project
@@ -239,6 +255,7 @@ rm -rf <checkout>                                          # 代码与构建产�
 | 带 `secretRef` 的 Provider 可用性 | **daemon/core 侧待修** | Gateway 可用性检查在无 Grant 上下文中解析 Provider 凭证会失败，导致 `conversation.message.send` 不入队 Chief Run（路由给 T1/T2 切片） |
 | Keychain 条目跨安装共享 | **已登记缺口** | 条目按用户（登录钥匙串）而非 `AGENTDEV_HOME` 隔离；同用户两个安装用相同 ref 会读写同一条目。需安装级隔离时给 ref 加安装前缀或改用 `file` 后端（见 §4） |
 | `security -w <value>` 的 argv 暴露 | **平台限制（已实测）** | 值在 `security` 子进程 argv 中短暂可见（`ps` 可捕捉）；CLI 自身 argv 不含值。故 `keychain` 严格 opt-in、默认 `file`（见 §4） |
+| 文件夹选择器的拒绝清单 | **待产品裁决（未实现）** | 当前选择器无路径范围限制、无拒绝清单，只有「必须是已存在目录」与「绝不读文件内容」两条硬规则；按产品负责人指示，是否排除安装自身 `~/.agentdev/secrets/` 等敏感目录需先提案、不自行发明策略。见 `.agentdev/work/WP-12/project-ux.md` §5 |
 
 ## 12. 演练记录
 

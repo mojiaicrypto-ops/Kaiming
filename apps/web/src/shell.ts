@@ -169,9 +169,27 @@ export function documentTitle(state: ShellState, pageTitle: string, t: Translato
   return pageTitle === '' ? product : `${pageTitle} · ${product}`;
 }
 
+/**
+ * True when this shell was told the installation has projects and **none** of them is
+ * open (WP-12 project UX's zero-project state).
+ *
+ * `state.projects === undefined` means the caller did not supply a directory list at
+ * all (a single-project stack), which is not the same fact and keeps the normal links.
+ */
+function shellHasNoOpenProject(state: ShellState): boolean {
+  if (state.projects === undefined) return false;
+  return !state.projects.some((entry) => entry.state === 'open');
+}
+
 function navItem(state: ShellState, entry: NavEntry, t: Translator): string {
   const active = state.page === entry.page;
-  const href = entry.href(state.projectId);
+  // WP-12 project UX: with no open project there is no project surface to link to, so
+  // every project-scoped entry points at `/projects` (the first-run guidance) instead
+  // of a dead `/projects/project/...` address. The projects entry keeps its own href.
+  const hasProject = (state.projects ?? []).some(
+    (candidate) => candidate.projectId === state.projectId && candidate.state === 'open',
+  );
+  const href = entry.page === 'projects' || hasProject ? entry.href(state.projectId) : '/projects';
   const count = entry.page === 'inbox' ? (state.inboxCount ?? 0) : 0;
   // The Inbox badge is always present on its own entry so a request that arrives over
   // the live subscription can update it without a reload (AC-074).
@@ -280,6 +298,13 @@ function renderTopbar(
   languages: readonly Language[],
 ): string {
   const chief = state.page === 'chief';
+  // WP-12 project UX: with no project open the routed placeholder id ('project') is not
+  // a destination this installation can serve, so the topbar points at the projects
+  // page — the surface that guides the user to add the first one — instead of
+  // rendering a dead link into a project that does not exist.
+  const projectHref = shellHasNoOpenProject(state)
+    ? '/projects'
+    : `/projects/${state.projectId}/chief`;
   const connectionLabel = t('connection.state');
   const connectionText = t(
     connection === 'open'
@@ -299,13 +324,13 @@ function renderTopbar(
     `<span class="brand-name" data-i18n="app.title">${escapeHtml(t('app.title'))}</span>`,
     '</div>',
     '<div class="project-area">',
-    `<a class="project-name" href="/projects/${escapeHtml(state.projectId)}/chief" data-i18n-project="${escapeHtml(state.projectId)}">${escapeHtml(state.projectName)}</a>`,
+    `<a class="project-name" href="${projectHref}" data-i18n-project="${escapeHtml(state.projectId)}">${escapeHtml(state.projectName)}</a>`,
     renderProjectSwitcher(state, t),
     chief
       ? `<button class="conversation-control" id="newConversation" type="button" data-i18n="chief.newConversation">${escapeHtml(t('chief.newConversation'))}</button>` +
         `<button class="conversation-control" id="switchConversation" type="button" data-i18n="chief.switchConversation" aria-expanded="false">${escapeHtml(t('chief.switchConversation'))}</button>`
       : // AC-072: no create/switch control outside Chief — only a deep link into it.
-        `<a class="discuss-link" id="discussInChief" href="/projects/${escapeHtml(state.projectId)}/chief" data-i18n="shell.discussInChief">${escapeHtml(t('shell.discussInChief'))}</a>`,
+        `<a class="discuss-link" id="discussInChief" href="${projectHref}" data-i18n="shell.discussInChief">${escapeHtml(t('shell.discussInChief'))}</a>`,
     '</div>',
     '<div class="topbar-tools">',
     `<span class="connection-state" id="connectionState" role="status" aria-live="polite" data-connection="${connection}" data-i18n-aria="connection.state" aria-label="${escapeHtml(connectionLabel)}">${escapeHtml(connectionText)}</span>`,

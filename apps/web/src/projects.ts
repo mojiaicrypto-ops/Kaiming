@@ -134,6 +134,17 @@ export interface ProjectDirectoryPort {
   create(root: string, name: string): Promise<ProjectEntry>;
   /** Clones a remote into a root and opens it (`protocol.md` §3). */
   clone(remoteUrl: string, root: string, grantId: string): Promise<ProjectEntry>;
+  /**
+   * Mints the installation-level once-Grant one `project.clone` consumes (`Q4`).
+   *
+   * The CLI mints it through the loopback admin surface. The browser has no CLI, so
+   * the BFF mints it from the user's own authenticated, exact-Origin submit — the
+   * explicit act the Grant model requires — and consumes it in the same command.
+   */
+  grantClone(input: { readonly remoteUrl: string; readonly root: string }): {
+    readonly grantId: string;
+    readonly expiresAt: string;
+  };
   /** Flips the stored trust flag; `trusted:false` stops new admission. */
   trust(projectId: string, trusted: boolean): ProjectEntry;
   /**
