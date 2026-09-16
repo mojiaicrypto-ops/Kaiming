@@ -15,7 +15,7 @@
 
 专业Agent均由Chief的agent_dispatch创建；每次Run有独立Session、Context、模型配置、工具范围及输出Schema。Chief可同时调度多个角色实例。角色模型Provider/Model/Reasoning独立可配，例如产品与审核采用不同模型；模型选择不是职责或权限变化。
 
-角色按任务使用，不要求全员运行。Backend/Frontend执行只读调查或产物制作时使用对应权限模式，不因为角色名称获得代码写入权。Review独立性由独立Run、Session、输入和权限保证，允许与开发使用同模型但显示实际配置。
+角色按任务使用，不要求全员运行。Backend/Frontend执行只读调查或产物制作时使用对应权限模式，不因为角色名称获得代码写入权。Review独立性由独立Run、Session、输入和权限保证，允许与开发使用同模型但显示实际配置。默认在宿主（项目根，或按Task分离时该Task自己的worktree）执行；容器只是项目可选的运行环境，不承载工具调用，也不是角色准入前提。
 
 ## 2. Chief决定上下文
 

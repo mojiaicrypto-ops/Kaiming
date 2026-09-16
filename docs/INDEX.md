@@ -12,7 +12,7 @@
 - [数据契约](architecture/data.md)：字段、枚举、产物、约束与迁移。
 - [协议契约](architecture/protocol.md)：公开/内部方法、响应、事件、错误与幂等。
 - [Context实现](architecture/context.md)：选择、解析、投影、快照、读取记录。
-- [执行与安全](architecture/execution.md)：平台、工具隔离、模型网关、Secret及测试环境。
+- [执行与安全](architecture/execution.md)：宿主优先执行、工具边界与守卫、模型网关、Secret及可选容器环境。
 - [可靠性与部署](architecture/reliability.md)：事务、集成、结算、重启、备份和恢复。
 - [安装与运维](operations/installation.md)：已执行的安装、凭证、备份/恢复/迁移、用户服务与卸载步骤。
 - [需求验收目录](delivery/acceptance.md)：唯一REQ/AC行为与证据目录。
@@ -59,3 +59,5 @@ WP-12 T6（运维与安装）已交付：`apps/cli` 新增 `agentdev backup [<pr
 开发从[实施工作包](delivery/implementation.md)开始，按依赖实现共享Schema与底座，再完成各项能力和[验收](delivery/acceptance.md)。规范中的包路径和工程命令是待交付接口，不能假定已经存在。
 
 本索引列出的文档是当前完整实现依据；产品行为、技术契约、角色/交付规则和验收要求共同适用。不依赖历史任务、旧方案、讨论记录或其他工作流副本。产品知识规范中的PROJECT、CODE_MAP等文件名描述AgentDev为用户项目生成的目标结构，不表示本仓库存在这些入口。
+
+**执行模型修订（本轮）**：产品负责人决定不再把隔离当作强制。现行文档描述**宿主优先**模型——默认在用户仓库或该Task自己的worktree内执行，容器仅作为项目可选的运行环境（测试/服务/数据库/依赖校验），审批只用于不可逆操作。上面按工作包记录的证据与结论仍是历史事实（其中"无Docker绝不回退""每条命令一个容器"等属于旧模型）；与现行文档的差异作为待关闭的代码缺口列在 [docs-simplification](../.agentdev/work/WP-12/docs-simplification.md)。

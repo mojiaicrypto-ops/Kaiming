@@ -13,12 +13,12 @@
 - 责任：Backend；验证由独立Review/Test。
 - 依赖：无。
 - 输入：产品方案、对应角色/流程规则、架构目录中受影响契约。
-- 输出：contracts/pi-runtime/runner基础工程；固定依赖/镜像；doctor命令。
+- 输出：contracts/pi-runtime/runner基础工程；固定依赖；可选容器运行镜像（项目声明时才需要）；doctor命令。
 - 关联验收：AC-048, AC-066, AC-067。
-- 本包必验范围：仅验证镜像/权限探测、Pi SDK生命周期与资源加载、Critical/可选扩展注册；使用隔离临时目录，不依赖知识或交付系统。
+- 本包必验范围：仅验证权限探测、Pi SDK生命周期与资源加载、Critical/可选扩展注册；使用临时目录，不依赖知识或交付系统。
 - 发布回归：关联AC的完整行为统一在WP-10复验。
-- 必需失败测试：依赖安装、SDK创建/取消/压缩/资源控制、只读挂载负例。
-- 退出：本包必验范围全部通过，Docker/Node/Pi可用且能力探测真实；代码、Schema、测试和相应文档入口完成结算。
+- 必需失败测试：依赖安装、SDK创建/取消/压缩/资源控制、只读角色写入负例。
+- 退出：本包必验范围全部通过，Node/Pi可用且能力探测真实（Docker只在项目声明容器环境时需要）；代码、Schema、测试和相应文档入口完成结算。
 
 ### WP-01 数据、状态与协议核心
 
@@ -97,12 +97,12 @@
 - 责任：Backend；验证由独立Review/Test。
 - 依赖：WP-00、WP-02。
 - 输入：产品方案、对应角色/流程规则、架构目录中受影响契约。
-- 输出：Broker、Grant、容器/宿主模式、网络代理、SecretStore、隔离DB/端口。
+- 输出：Broker、Grant、宿主执行与可选容器环境、网络守卫、SecretStore、端口/DB认领。
 - 关联验收：AC-048, AC-049, AC-050, AC-051, AC-053, AC-080。
-- 本包必验范围：用真实Docker/宿主进程/Broker/SecretStore验证权限和网络边界、同角色Grant隔离、测试只读输入及清理；不依赖真实产品功能开发。
+- 本包必验范围：用真实宿主进程/Broker/SecretStore验证权限和路径边界、同角色Grant隔离、测试只读输入及清理（项目声明容器环境时另验容器路径）；不依赖真实产品功能开发。
 - 发布回归：关联AC的完整行为统一在WP-10复验。
-- 必需失败测试：符号链接/私网/重定向、Secret泄漏、进程清理失败、无Docker拒绝。
-- 退出：本包必验范围全部通过，实际文件网络边界与界面承诺一致，验证隔离在所有模式有效；代码、Schema、测试和相应文档入口完成结算。
+- 必需失败测试：符号链接/硬拦项、Secret泄漏、进程清理失败。
+- 退出：本包必验范围全部通过，实际文件与网络守卫和文档承诺一致，独立验证不依赖容器；代码、Schema、测试和相应文档入口完成结算。
 
 ### WP-08 集成、结算与恢复
 
@@ -150,7 +150,7 @@
 | pnpm typecheck | 全Workspace tsc --noEmit | strict无错误 |
 | pnpm lint | TypeScript与格式 | 退出0 |
 | pnpm test:unit | Vitest领域/Schema | 全通过 |
-| pnpm test:integration | SQLite/Git/Pi/WS/容器 | 全通过，失败无残留工具进程 |
+| pnpm test:integration | SQLite/Git/Pi/WS（项目声明容器环境时含容器） | 全通过，失败无残留工具进程 |
 | pnpm test:e2e | 真实Core+BFF+真实HTTP/WS的无头端到端，并运行`tests/browser/**`的真实Chromium浏览器演练（Playwright为仅开发依赖，见WP-12 T7a） | UI与协议一致；服务端行为全部执行，浏览器侧子句（隔离预览与攻击样例、面板三态与窄屏焦点、键盘遍历/ARIA/语言切换、客户端附件限制提示）在真实Chromium中执行并逐项取证；仅当本环境没有可运行的Playwright/Chromium时，这些AC才登记UNVERIFIED并带原因 |
 | pnpm test:acceptance | fixture及AC证据汇总；本次运行内真实执行`test:e2e`/`test:live`并校验证据绑定 | 必需AC全有结果；PASS、已登记豁免与FAIL/MISSING分明；任何未登记或条件失效的UNVERIFIED按FAIL处置 |
 | pnpm test:live | 用户已配置的真实Provider纵向演练（未配置时显式UNVERIFIED且零网络调用） | HTML、L1、L2+结算三路径成功；未配置Provider时不伪造成通过 |

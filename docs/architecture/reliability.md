@@ -10,7 +10,7 @@ Project不同Mailbox互不等待。每连接有独立输出队列，软限合并
 
 ## 2. 准入、租约与工具结果
 
-每次Attempt分配递增epoch，签发Capability，持久Starting后启动Runner；ready确认epoch/进程标识/环境后Running。心跳每5秒，20秒无心跳标interrupted，冻结新工具；Supervisor核对进程/容器后撤销Capability并终止旧执行。旧进程未确认终止时不把工作区授予新写者。
+每次Attempt分配递增epoch，签发Capability，持久Starting后启动Runner；ready确认epoch/进程标识/环境后Running。心跳每5秒，20秒无心跳标interrupted，冻结新工具；Supervisor核对进程（项目选择容器运行时含其容器）后撤销Capability并终止旧执行。旧进程未确认终止时不把工作区授予新写者。
 
 所有工具记录prepared→started→finished，保存operationId、输入Hash、目标路径、结果Hash/错误。once Grant的消费与prepared在同一事务保存consumedByOperationId/inputHash；同操作同Hash重取原结果，不重复消费，同操作不同Hash拒绝。已finished的相同operationId返回原结果；started且结果未知的写入不重放。文件原子写可核对目标Hash决定是否完成；外部网络副作用要求查询回执或用户风险处置。
 
@@ -58,9 +58,9 @@ RecoveryReport={workId,operationId,expectedVersions,runnerState,leases,gitHeads,
 
 ## 7. 启停与部署
 
-agentdev start启动daemon和web；Linux提供systemd单用户服务，macOS提供launchd用户服务。daemon获取每Project文件锁和epoch后加载数据库；每Git-root锁文件在`~/.agentdev/locks/<sha256(canonicalRoot)>.lock`（0600、独占创建、死pid接管、按epoch释放），**不往用户仓库或工作树里写任何锁文件**；同一安装内第二个入口打开同一root返回PROJECT_ALREADY_OPEN并附持有pid/home。不同`AGENTDEV_HOME`的两个安装互不可见对方的锁目录，此跨安装限制为已登记缺口。安装级项目注册表`~/.agentdev/projects.json`逐条容错：单条schema非法或root/projectId重复的记录被跳过并在`project.list`/doctor以typed状态上报，容器级损坏（非JSON/非文档形状）仍拒绝启动、迁移、检查outbox/Run；Core存储/Git/迁移检查成功即可提供需求读取；Docker、项目依赖和Provider探测分别影响executionReady，不阻断需求池查看。/healthz.ready表示Core可服务，执行能力由Project快照executionReady和blockers展示。启动BFF不会自己恢复Runner。
+agentdev start启动daemon和web；Linux提供systemd单用户服务，macOS提供launchd用户服务。daemon获取每Project文件锁和epoch后加载数据库；每Git-root锁文件在`~/.agentdev/locks/<sha256(canonicalRoot)>.lock`（0600、独占创建、死pid接管、按epoch释放），**不往用户仓库或工作树里写任何锁文件**；同一安装内第二个入口打开同一root返回PROJECT_ALREADY_OPEN并附持有pid/home。不同`AGENTDEV_HOME`的两个安装互不可见对方的锁目录，此跨安装限制为已登记缺口。安装级项目注册表`~/.agentdev/projects.json`逐条容错：单条schema非法或root/projectId重复的记录被跳过并在`project.list`/doctor以typed状态上报，容器级损坏（非JSON/非文档形状）仍拒绝启动、迁移、检查outbox/Run；Core存储/Git/迁移检查成功即可提供需求读取；项目依赖和Provider探测影响executionReady，**Docker只在项目声明使用容器运行环境时影响该环境的可用性**，不阻断编码路径与需求池查看。/healthz.ready表示Core可服务，执行能力由Project快照executionReady和blockers展示。启动BFF不会自己恢复Runner。
 
-优雅停止：停止准入→持久化mailbox/outbox→请求Runner安全停→保存Checkpoint→回收容器/进程→关闭数据库。收到SIGKILL或断电后按恢复流程核对，旧Running不可直接显示继续运行。
+优雅停止：停止准入→持久化mailbox/outbox→请求Runner安全停→保存Checkpoint→回收工具进程（容器环境另回收容器）→关闭数据库。收到SIGKILL或断电后按恢复流程核对，旧Running不可直接显示继续运行。
 
 CLI命令契约：doctor输出依赖版本/Docker/目录权限/端口状态；start/stop/status；open <path>；secret set <ref> [--stdin]（值只从stdin读、不回显、不经argv）/secret list（只回元数据）/secret delete <ref>（daemon在运行则走其回环admin面，否则直连安装级仓库）；backup <projectId> --output <dir>；restore <backupDir> --root <path>；relocate <projectId> --root <path>。失败退出非零并输出error code和operationId；status只读。
 

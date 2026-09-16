@@ -4,7 +4,7 @@
 
 每条用户请求由Chief生成Assessment：intent、goal、scope、authorization_ref、semantic_impact、risk_flags、uncertainties、level、reason。intent取assist、artifact、document、delivery、operation。问答/解释为assist；独立说明为artifact；正式知识保存为document；项目代码/配置变更为delivery；部署、服务和数据操作为operation。
 
-Core检查角色、字段、授权、权限和版本；语义分类由Chief负责，有事实冲突时先调查，仍需用户选择则创建Decision。AI识别可改善之处只形成建议。执行消息可直接授权明确目标；混合消息拆多个Work分别绑定相同来源和各自范围。
+Core检查角色、字段、授权、权限和版本；语义分类由Chief负责，有事实冲突时先调查，仍需用户选择则创建Decision。AI识别可改善之处只形成建议。执行消息可直接授权明确目标；混合消息拆多个Work分别绑定相同来源和各自范围。默认在宿主执行；已批准范围内的操作直接执行、不再逐次询问，只有不可逆操作（把交付分支推送到远端、部署/发布、删除数据）需要用户明确批准。
 
 ## 2. 等级判断顺序
 

@@ -14,7 +14,7 @@ Browser ─HTTPS/WSS→ agentdev-web ─authenticated WS→ agentdevd
 本机CLI ──────────────────loopback authenticated WS──┘
 ```
 
-agentdevd拥有全部业务状态。ProjectRuntime是进程内逻辑隔离，各自拥有SQLite、EventHub和串行短命令Mailbox。Runner承载模型循环与工具调用；Core进程不执行项目Shell。Web只提供静态界面、认证代理和授权Artifact转发。
+agentdevd拥有全部业务状态。ProjectRuntime是进程内逻辑隔离，各自拥有SQLite、EventHub和串行短命令Mailbox。Runner承载模型循环与工具调用；Core进程不执行项目Shell。专业Agent的工具默认在宿主执行（项目根或按Task分离时该Task自己的worktree）；容器只是项目可选的运行环境，不承载工具调用。Web只提供静态界面、认证代理和授权Artifact转发。
 
 所有专业Run由Chief DispatchSpec创建；ContextBuilder执行Chief的选择；Workflow验证阶段条件；Supervisor实施准入。系统维护持久的chief_action_required事件，唤起Chief决定后续角色/上下文，不能由流水线偷偷替代Chief分派。
 
@@ -81,7 +81,7 @@ Pi采用独立Session Factory、显式ResourceLoader和自定义工具；只在p
 - [数据与产物](data.md)：持久记录、字段、Schema、权威、版本。
 - [协议](protocol.md)：客户端和Runner方法、错误、幂等、事件。
 - [Context](context.md)：Chief选择、知识解析、快照、隔离。
-- [执行安全](execution.md)：Runner、工具、平台、Secret、测试环境。
+- [执行安全](execution.md)：Runner、工具边界与守卫、平台、Secret、可选容器环境。
 - [可靠性](reliability.md)：事务、集成、结算、恢复、部署备份。
 
 外部依据：[Pi SDK](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/sdk.md)、[Node发行](https://nodejs.org/en/about/previous-releases)、[Git Worktree](https://git-scm.com/docs/git-worktree)、[SQLite备份](https://www.sqlite.org/backup.html)。这些资料解释依赖能力，产品行为由本规范定义。

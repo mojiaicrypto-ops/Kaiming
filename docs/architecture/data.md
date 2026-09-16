@@ -67,7 +67,7 @@ Plan={version:int,productRef?:Ref,goal:string,scope:Scope,tasks:[{id:ID,role:Rol
 
 CompactPlan={goal:string,paths:Path[],expectedChange:string,check:string,authorizationRef:ID,policyRevision:int}，作为kind=plan的Artifact，无需单独plan.md文件。
 
-CheckResult={status:passed/failed/not_covered/blocked,checks:[{acceptanceIds:string[],command?:string,procedure?:string,environmentRef:Env,inputTree:string,exitCode?:int,outputRef:ID,result:string}],uncovered:[{acceptanceId:string,reason:string,riskDecisionId?:ID}]}。command与procedure至少一个；自动化命令必有exitCode；人工/视觉步骤提供截图/实际观察产物，不能只有自述。Env=Runner在`attempt.ready`自报的执行环境描述串（`host:<platform>/<arch>/node-<major>`或`container:<image>`，容器未声明镜像时`container:undeclared`），不是ID：CheckResult的check与VerificationManifest必须绑定同一个Env值（W8-1），使两处可直接比对；命令实际运行的容器镜像与Runner描述串同时写入`result`。
+CheckResult={status:passed/failed/not_covered/blocked,checks:[{acceptanceIds:string[],command?:string,procedure?:string,environmentRef:Env,inputTree:string,exitCode?:int,outputRef:ID,result:string}],uncovered:[{acceptanceId:string,reason:string,riskDecisionId?:ID}]}。command与procedure至少一个；自动化命令必有exitCode；人工/视觉步骤提供截图/实际观察产物，不能只有自述。Env=Runner在`attempt.ready`自报的执行环境描述串（`host:<platform>/<arch>/node-<major>`或`container:<image>`，容器未声明镜像时`container:undeclared`），不是ID：CheckResult的check与VerificationManifest必须绑定同一个Env值（W8-1），使两处可直接比对；命令实际运行的环境（宿主，或项目声明的容器镜像）与Runner描述串同时写入`result`。
 
 ReviewResult={manifestId:ID,findingIds:ID[],checkResult:CheckResult}；TestResult同样绑定Manifest与CheckResult。SettlementResult={finalRevision:string,codeTree:string,updatedDocs:Path[],featureIds:string[],navigationChecks:ID[],evidenceRefs:ID[],unresolved:ID[]}，unresolved含阻断项则不通过。
 

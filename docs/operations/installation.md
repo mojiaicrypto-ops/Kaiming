@@ -6,7 +6,7 @@
 
 ## 1. 前置条件
 
-- Node.js ≥ 24.0.0、pnpm 12.3.4、Git；Docker 提供执行隔离（无 Docker 不回落宿主执行）。
+- Node.js ≥ 24.0.0、pnpm 12.3.4、Git。默认在宿主执行，**Docker 不是前置条件**：只有项目选择用容器运行服务/数据库/测试时才需要，且不影响 Agent 的编码路径。
 - 从仓库根安装与构建：
 
 ```sh
@@ -15,7 +15,7 @@ pnpm build
 node apps/cli/dist/cli.js doctor
 ```
 
-`doctor` 输出依赖版本、Docker、目录权限与端口占用；`execution ready: yes` 时退出码 0。`pnpm doctor` 与上一条等价。
+`doctor` 输出依赖版本、目录权限与端口占用，并在可用时报告 Docker（可选容器环境）；`execution ready: yes` 时退出码 0。`pnpm doctor` 与上一条等价。
 
 `doctor` 同时输出一行 `policy`：`permissionMode` 与**敏感文件档位** `configPolicy`（全局默认 `strict`；项目级覆盖写在 `<git-root>/.agentdev/config.toml` 的 `[policy] configPolicy`）。档位为 `test` 时该行以 `WARN` 开头并写明「本项目允许读取应用配置（application*/bootstrap*/*.properties/*.conf），凭据与密钥材料仍拒读」——非 `strict` 必须显著可见、不得静默开启（`.agentdev/work/WP-12/T3-implementation.md` 附录 A.7）。项目配置无法读取时该行给出文件名与原因，而不是退回默认值。`config.get` 的 `policy` 字段与项目设置页展示同一个值。
 
