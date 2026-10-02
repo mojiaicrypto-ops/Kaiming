@@ -18,6 +18,10 @@
 - [需求验收目录](delivery/acceptance.md)：唯一REQ/AC行为与证据目录。
 - [实施工作包](delivery/implementation.md)：WP-00–10、依赖、输出、检查命令与退出。
 
+## 产品需求建议稿
+
+- [AgentDev 产品需求](productnew/README.md)：从产品目标、业务模块、完整用户流程到模块行为与验收的独立建议稿。待整体评审与批准，不替代当前正式实现依据。
+
 ## 加载配方
 
 主管先读产品总览和当前Work，再选择相关功能；开发读工作包、授权Plan和对应架构/AC；Review读相同正式依据及冻结Diff，使用独立上下文；Test读有效Review、验收和环境；Settlement读实际变化和知识入口。
