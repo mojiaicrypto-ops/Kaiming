@@ -2,6 +2,8 @@
 
 实际文本是本套需求的一部分，见 [规则目录](rules/INDEX.md)。规则标识及工具名字必须与 [工具契约](contracts.md) 一致。
 
+主管 Agent 是用户的主对话伙伴和专业 Agent 的协作组织者，职责贯穿自由讨论、需求澄清、任务组织、调度协调、进展跟进和结果反馈。主管根据用户当前意图决定直接讨论、调查或组织专业协作；只有明确进入正式交付才启用相应流程。内部角色标识为 chief。
+
 ## AGT-01 主管启动包
 
 按以下顺序实际注入正文：Server 规则版本与项目身份 → [core](rules/core.md) → [chief](rules/chief.md) → [规则索引](rules/INDEX.md) → 受信项目 AGENTS.md → 当前用户输入（含真实 inputRef）或恢复摘要。系统恢复通知不能冒充用户授权。
@@ -22,7 +24,7 @@ Review/Test 的任务输入由角色装配约束：没有开发/主管 transcrip
 
 | 角色 | 可用职责 | 工具限制 |
 |---|---|---|
-| chief | 讨论、导航、组织、派发、请求用户决定、完成工作 | task/agent/user/project_ready/project_publish 工具；文件用于已确认初始化入口、需求文件（含正文）及需求入口、计划，不替代专业实施/验证 |
+| chief | 自由讨论、理解意图与澄清需求、知识导航、任务组织、调度协调、进展跟进、结果反馈及交付收口 | task/agent/user/project_ready/project_publish 工具；文件用于已确认初始化入口、需求文件（含正文）及需求入口、计划，不替代专业实施/验证 |
 | product / planning | 产品/知识整理与规划 | 授权文档读写、只读调查、agent_result |
 | frontend / backend | 对应实施与范围内修复 | 工作区文件/命令、agent_result；不能自行提交验证通过 |
 | review | 独立检查与 Findings | 源码只读，允许执行检查和写任务证据；不修改被审核文件 |
