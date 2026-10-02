@@ -48,11 +48,15 @@ document 路线 task_plan 必须传非空 targetPaths（项目内文件/目录�
 
 写工具带 operationId（默认由工具调用身份生成并持久，输出回执含该 ID；业务重试可显式传既有 operationId 复用）。同 ID 同参数返回同结果，不同参数冲突。外部执行开始后异常可能为 EFFECT_UNKNOWN；不得返回“失败，可以安全重试”。
 
-## TOOL-02 文件与命令
+## TOOL-02 文件、命令与需求查询
 
 复用 Pi read/edit/write/bash 能力及对应 cwd 工厂；必要的持久回执、原子写入和范围校验由工具适配器补充，不建立 Agent 文档业务引擎。
 
-read(path) 返回内容、contentHash；write(path,content,expectedHash?) 和 edit(path,oldText,newText,expectedHash?) 返回写入路径/hash。read 支持 offset/limit 行分页并返回全文 contentHash，默认从第 1 行最多 2000 行，标明截断和下一页。edit 的 oldText 必须非空且恰好匹配一次，否则 EDIT_AMBIGUOUS，不部分替换。write 的 content 与 oldText/newText 均为字符串。新增要求路径不存在；编辑需求/项目规则及共享知识要求 expectedHash，冲突不覆盖。写完可解析文件的格式由读取/查询验证。
+read(path) 返回内容、contentHash；write(path,content,expectedHash?) 和 edit(path,oldText,newText,expectedHash?) 返回写入路径/hash。read 支持 offset/limit 行分页并返回全文 contentHash，默认从第 1 行最多 2000 行，标明截断和下一页。edit 的 oldText 必须非空且恰好匹配一次，否则 EDIT_AMBIGUOUS，不部分替换。write 的 content 与 oldText/newText 均为字符串。新增要求路径不存在；编辑需求/项目规则及共享知识要求 expectedHash，冲突不覆盖。
+
+目标属于 `.dev/requirements/REQ-*.md` 时，通用 write/edit 在原子写入前，对完整候选内容使用 knowledge.md 的同一解析/校验函数。失败返回 REQUIREMENT_INVALID 及 path/具体错误，不写入；expectedHash 不匹配仍返回 FILE_CONFLICT。不另注册需求专用写工具。查询/任务入口重新校验实际文件，覆盖 bash 或外部修改；通用 read 不因需求格式错误拒绝读取原文，保留修复入口。其他文件的格式仍由适用读取/检查规则验证。
+
+requirements_list(status?) 是只读模型工具，projectId 从调用上下文注入；不接受模型指定另一项目。status 可省略或为需求状态枚举，省略返回全部有效记录。返回 `{items,errors,readAt}`，类型见 SCH-01；与用户 API requirements.list 共用查询函数、校验和排序。每次扫描实际文件，不调用模型，不修改需求或 task。详情由通用 read 按需读取。查询发现非法记录时返回 errors，不能把整个结果伪装为无待办。
 
 bash(command,cwd,timeoutSec?) timeoutSec 默认 120、范围 1–1800；返回实际 exitCode/outputRef；超时/取消保留是否已停止和副作用是否未知。运行环境接口至少 execute/cancel/status，输入输出一致；首版实现宿主，cwd 显式，不使用 process.chdir。
 
@@ -117,6 +121,7 @@ project_publish 输入 `{paths,message,operationId?,taskId?}`，paths 为本次�
 | FILE_CONFLICT、TARGET_CHANGED | 保留双方，重新读取/更新计划或验证 |
 | PROVIDER_UNAVAILABLE、INITIALIZATION_REQUIRED、CONTEXT_TOO_LARGE | 保留任务，提示明确补齐项 |
 | WORKSPACE_BUSY、PROJECT_BUSY | 不并行写入/重绑定，返回冲突执行身份 |
+| REQUIREMENT_INVALID | 返回路径和具体格式/字段/章节/引用错误；通用 write/edit 不落盘，查询保留错误与原文修复入口 |
 | RESULT_INVALID、TASK_INCOMPLETE | 返回具体 fields/missing，状态未完成 |
 | ACTION_STALE/ACTION_CLOSED、IDEMPOTENCY_CONFLICT | 不重复执行、不覆盖既有答复 |
 | EFFECT_UNKNOWN/GIT_RESULT_UNKNOWN | 保留待核实，禁止盲目重试同副作用 |
@@ -144,6 +149,12 @@ type Stage = "analysis" | "develop" | "review" | "test" | "settlement";
 type ResultStatus = "success" | "failed" | "needs_input";
 type Verdict = "passed" | "failed" | "blocked";
 type Retry = { operationId?: Id };
+type RequirementStatus = "queued" | "active" | "completed" | "cancelled" | "archived";
+type RequirementList = {
+  items: { id: string; title: string; status: RequirementStatus; path: Path; updatedAt: string }[];
+  errors: { path: Path; code: string; message: string }[];
+  readAt: string;
+};
 
 type Execution = {
   command?: string;       // command 或 steps 至少一项
@@ -181,6 +192,7 @@ type ToolParams = {
   write: Retry & { path: Path; content: string; expectedHash?: string };
   edit: Retry & { path: Path; oldText: string; newText: string; expectedHash?: string };
   bash: Retry & { command: string; cwd: Path; timeoutSec?: number };
+  requirements_list: { status?: RequirementStatus };
   task_create: Retry & { goal: string; route: Route; requirementPath?: Path; sourceRefs: Ref[] };
   task_get: { taskId: Id };
   task_plan: Retry & { taskId: Id; planPath: Path; authorizationRef: Ref;

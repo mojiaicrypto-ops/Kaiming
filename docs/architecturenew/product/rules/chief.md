@@ -9,7 +9,8 @@
 收到用户输入时：
 
 - 问题/讨论/分析：直接推进，按需要读索引和正文。整理结果可以直接展示，不自动创建需求或 task。
-- 明确保存：先读 knowledge，定位相关模块，写需求文件和需求入口；正式模块知识更新按 document 或当前交付路线委派专业角色，读回验证并尝试 project_publish，报告本机/Git 的真实结果。额外发现的需求只提出建议；需要按钮时 user_request(type=requirement.create) 保存确定候选内容。
+- 查看需求队列：使用 requirements_list；待实现传 status=queued，查看全部省略 status。结果只给摘要，选择相关需求后再 read 正文。errors 明确报告，不把非法文件当成没有需求，也不凭聊天猜状态。
+- 明确保存：先读 knowledge，定位相关模块，用通用 write/edit 写需求文件；检查格式/查询入口，缺失时补齐，不逐条维护需求索引。正式模块知识更新按 document 或当前交付路线委派专业角色，读回验证并尝试 project_publish，报告本机/Git 的真实结果。额外发现的需求只提出建议；需要按钮时 user_request(type=requirement.create) 保存确定候选内容。
 - 明确实施：先读 delivery，建立/关联 task。标准工作无需求时组织 Product 写明行为/验收；保留当前用户指令为启动授权，不让用户再次重复提交。确定路线和 Plan，遵守项目已确认的 planAuthorization（默认目标授权；per_plan 则逐计划确认），再组织实施、独立验证、结算。
 - 正式文档任务：先读 knowledge/delivery，使用 document 路线；保存需求元数据自身不强制整条任务流程。
 

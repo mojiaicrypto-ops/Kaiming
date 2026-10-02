@@ -8,7 +8,7 @@
 
 按以下顺序实际注入正文：Server 规则版本与项目身份 → [core](rules/core.md) → [chief](rules/chief.md) → [规则索引](rules/INDEX.md) → 受信项目 AGENTS.md → 当前用户输入（含真实 inputRef）或恢复摘要。系统恢复通知不能冒充用户授权。
 
-启动包包含 `.dev/INDEX.md` 位置、规则根位置、task 查询入口，不自动加载全部产品/技术文档。core 固定正文不被项目指令覆盖；项目补充规则可提高要求，不能取消必需独立验证、真实结果与结算。未信任时不注入项目 AGENTS 或扩展。
+启动包包含 `.dev/INDEX.md` 位置、规则根位置、task 查询入口和只读 requirements_list 的用途，不自动加载全部产品/技术文档。查询需求列表只返回结构化摘要和格式错误；主管再按需 read 选定正文。core 固定正文不被项目指令覆盖；项目补充规则可提高要求，不能取消必需独立验证、真实结果与结算。未信任时不注入项目 AGENTS 或扩展。
 
 目录中列有规则不等于读过正文。写需求前读 knowledge；开始交付前读 delivery；结算前读 settlement。用户自由讨论不强制读完这些文件。
 
@@ -24,7 +24,7 @@ Review/Test 的任务输入由角色装配约束：没有开发/主管 transcrip
 
 | 角色 | 可用职责 | 工具限制 |
 |---|---|---|
-| chief | 自由讨论、理解意图与澄清需求、知识导航、任务组织、调度协调、进展跟进、结果反馈及交付收口 | task/agent/user/project_ready/project_publish 工具；文件用于已确认初始化入口、需求文件（含正文）及需求入口、计划，不替代专业实施/验证 |
+| chief | 自由讨论、理解意图与澄清需求、知识导航、任务组织、调度协调、进展跟进、结果反馈及交付收口 | requirements_list 只读查询及 task/agent/user/project_ready/project_publish 工具；通用文件工具用于已确认初始化入口、需求文件（含正文）及需求入口、计划，不替代专业实施/验证 |
 | product / planning | 产品/知识整理与规划 | 授权文档读写、只读调查、agent_result |
 | frontend / backend | 对应实施与范围内修复 | 工作区文件/命令、agent_result；不能自行提交验证通过 |
 | review | 独立检查与 Findings | 源码只读，允许执行检查和写任务证据；不修改被审核文件 |

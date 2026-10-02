@@ -78,7 +78,7 @@ payload 保存不可变内容。引用需求/Plan 等可变文件时记录 expec
 | session.delete | projectId、sessionId | 已结束会话清理结果；条件与效果见下文 |
 | session.messages | projectId、sessionId、cursor?、limit? | Pi messages、nextCursor；默认 50，最大 200 |
 | session.send | projectId、sessionId、text、mode? | accepted、inputId |
-| requirements.list | projectId、status? | items、errors、readAt |
+| requirements.list | projectId、status? | items（id/title/status/path/updatedAt）、errors（path/code/message）、readAt |
 | requirements.get | projectId、path | metadata、body、contentHash、Git 状态 |
 | task.attach | projectId、taskId、sessionId | 绑定到同项目新主管的 Task，不自动开始 |
 | task.list / task.get | projectId、taskId? | 任务与步骤结果摘要/详细记录 |
@@ -86,6 +86,8 @@ payload 保存不可变内容。引用需求/Plan 等可变文件时记录 expec
 | action.respond | actionId、choiceId、text? | inputId、action 状态 |
 
 模型工具与用户 API 共用领域效果，但 Server 根据调用者区分角色/权限。用户查看/控制不必先让主管生成操作代码。归档需求通过用户指令交给主管按文件规则处理。
+
+requirements.list 的 status 可省略或使用 knowledge.md 的状态枚举；待实现列表传 queued。每次查询读取项目需求文件，结果采用 contracts.md 的 RequirementList；非法文件返回 errors，筛选不能隐藏错误。客户端保存成功、手动刷新、重开或重连时重新查询，外部修改在下一次查询体现。主管的只读 requirements_list 复用同一查询函数，projectId 由工具上下文注入。requirements.get 格式错误返回 REQUIREMENT_INVALID；通用 read 仍能读取原文修复。新项目尚无需求目录时返回空列表，目录不可读返回明确错误。
 
 验收：AC-E01～AC-E05、AC-R02。
 

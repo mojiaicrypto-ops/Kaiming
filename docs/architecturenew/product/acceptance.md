@@ -24,10 +24,10 @@
 | ID | 输入与检查步骤 | 通过条件 |
 |---|---|---|
 | AC-M01 | 输入“先自由聊聊这个想法是否值得做”，继续讨论密码重置；模型另外提出通知优化；不答复保存建议 | 主管可直接讨论、澄清和探索方向，无需先形成开发目标或派发专业角色；无需求文件/task，未把提议写成用户决定 |
-| AC-M02 | 明确“将密码重置保存为需求”；读取生成文件/查询结果 | 使用固定 7 字段、正文有范围/行为/异常/AC/来源/未知，id与文件名匹配；queued，不自动开发 |
+| AC-M02 | 明确“将密码重置保存为需求”；检查通用 write/edit 调用、生成文件和列表/详情 | 一条需求一个Markdown，头部固定7字段且status=queued，正文有范围/行为/异常/AC/来源/未知，id与文件名匹配；未注册需求专用写工具，不自动开发；索引无需逐条登记或维护实时状态表 |
 | AC-M03 | 已有账号模块，保存登录/重置相关变化；提供无关库存资料 | 保存时引用内聚账号模块，正式文档交付才更新模块；不机械按前后端复制完整定义；共享约束引用；库存未默认加载，索引可定位 |
-| AC-M04 | 制造非法 status、重复 id、缺完成摘要/空正文、失效 productRef；无模型查询 | 返回有效 items 与逐文件 errors，错误不隐藏、不让模型猜状态；正常列表顺序确定 |
-| AC-M05 | 两个写执行读取同 hash，A更新、B仍用旧 expectedHash 写；再解析 | B获 FILE_CONFLICT，A成果保留；不覆盖，不出现半写文件 |
+| AC-M04 | 外部制造非法YAML/重复键/status、重复id、缺完成摘要/空正文、失效productRef；无模型查询全部及queued；外部改变合法状态后再查询；详情查询非法文件，再用read读取修复 | 返回有效items与逐文件errors，status筛选不隐藏错误；items仅为结构化摘要、顺序确定，下一次查询反映外部变化；详情返回REQUIREMENT_INVALID，read仍给原文/hash；不让模型猜状态或解释正文 |
+| AC-M05 | 用通用write/edit提交非法需求候选（新建及编辑各一次）；两个写执行读取同hash，A有效更新、B仍用旧expectedHash写；再解析 | 非法候选获REQUIREMENT_INVALID及具体错误，新建无文件、编辑原文件不变；B获FILE_CONFLICT，A成果保留；修正格式后可保存，无半写文件 |
 | AC-M06 | N 保存、Git 项目正常提交、Git 有不相关 staged/冲突时保存；提交失败后重试 | 分别显示本机/committed/GIT_BLOCKED；保留全部文件和无关改动；重试不建重复需求；初始化 Git 必须明确授权 |
 | AC-M07 | Clone 只有 queued/active/completed 文件；分别查看/继续；直接标准开发无预存需求 | 查询无需DB；active无现场标待继续，不自动运行；标准指令先补需求再沿原授权继续，不要求重复开始 |
 
@@ -47,7 +47,7 @@
 
 | ID | 输入与检查步骤 | 通过条件 |
 |---|---|---|
-| AC-A01 | 创建主管后讨论、保存需求、实施、结算；检查模型请求/读取痕迹 | core/chief/目录实际注入；相应时刻read knowledge/delivery/settlement，不把目录当正文 |
+| AC-A01 | 创建主管后讨论、查看待实现列表、保存需求、实施、结算；检查模型请求/读取痕迹；从P尝试在requirements_list参数中指定Q | core/chief/目录及列表查询用途实际注入；requirements_list(status=queued)与客户端查询同结果，仅按需read相关正文；跨项目参数拒绝且无Q内容；相应时刻read knowledge/delivery/settlement，不把目录当正文 |
 | AC-A02 | 主管派发丰富任务说明和路径，查看子Agent启动包/阅读来源 | 角色+core+规则入口+项目参数+任务上下文；能自主补读/质疑；不强制逐字段上下文编译 |
 | AC-A03 | product/planning/frontend/backend/review/test/settlement分别正常/失败/缺输入 | 每角色实际输出匹配stageData；工具校验给具体缺项；自然语言结束不提交则result_missing |
 | AC-A04 | 项目覆盖角色模型，禁用Provider，修改配置，测试无效值/实际连接 | 实际配置按优先级；不中途静默换模型；新执行明确阻断；输入保留/查询无密钥/连接有实际证据 |

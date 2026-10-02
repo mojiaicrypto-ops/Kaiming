@@ -8,7 +8,7 @@
 | product/INDEX.md | 产品模块导航 | 讨论/保存需求/改变用户行为 |
 | technical/INDEX.md | 技术职责导航 | 规划、实现、接口数据调查 |
 | rules/INDEX.md | 项目补充规则导航 | 正式任务及涉及特定路径/操作 |
-| requirements/INDEX.md | 固定需求格式与查询入口 | 保存、选择、继续需求 |
+| requirements/INDEX.md | 单文件需求格式与程序列表查询入口 | 保存、选择、继续需求；主管用 requirements_list 查询队列 |
 
 按需生成 maps/code.md、maps/tests.md、issues.md；存在后加入本表，不给不存在文件伪造有效链接。
 
