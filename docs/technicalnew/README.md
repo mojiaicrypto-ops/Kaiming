@@ -22,9 +22,9 @@
 
 - 一个 Server 服务多个项目，统一管理多个独立 Pi Session；模型循环先在 Server 进程内运行。
 - Server 保存统一的运行数据库，用户项目保存需求、知识和可迁移的交付记录。
-- 继续使用当前锁定的 Pi，暂不升级 1.0，也不将 Durable 作为运行底座；参考其执行意图、结果持久化、恢复与环境抽象。
+- 新产品直接采用 Pi 1.0 SDK、原生模型循环、Session 与工具能力；Durable 用于参考持久状态、结果投递和恢复原则。
 - 主管自主理解、选择依据、拆分和协调；程序保证真实结果、持久状态、独立验证和必要完成条件。
-- 工具执行位置可扩展到 Local、Remote、Sandbox；首版先完整实现 Local。
+- 首版工具直接使用 Pi 1.0 默认本地 operations，不独立开发 Tool Executor 或通用 Execution Environment；需要 Remote/Sandbox 时再利用原生 operations 接入对应后端。
 - 运行核心采用 Session 与 Task：Session 保存持续上下文，Task 保存正式交付及专业分工进展；输入处理和工具回执是内部记录。
 - 协议依据新产品行为定义，基础 Agent 消息优先复用 Pi，不保留旧协议名称、载荷或旧 UI 映射。
 
