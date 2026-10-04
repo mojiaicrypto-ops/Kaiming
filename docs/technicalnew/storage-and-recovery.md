@@ -22,9 +22,11 @@ Dispatcher 读取 session_inputs。提交后内存唤醒，启动/周期扫描�
 | delegations | id/requestKey/taskId/chiefSessionId/ownerEpoch/members[{sessionId,inputId,workRevision}]/stage/basisDigest | 当前一步的固定成员；后续 wait 不改原成员或重建 Session |
 | results | id/taskId/sessionId/workRevision/sourceInputId/requestKey/kind/summary/reportRef/basisRefs/candidateId?/verdict?/checks/supersedes?/settlement? | 正文/结构不可变；validity=current/stale/late 为当前依据投影；requestKey 唯一 |
 | session_inputs | 见 Input | (sessionId,seq)/sourceKey 唯一；同 Session 至多一个 processing |
-| interactions | id/requestKey/projectId/taskId?/chiefSessionId/ownerEpoch?/sourceSessionId/sourceInputId/contextEpoch/invocationKey/toolCallId?/operationId?/workRevision?/interactionSequence/method/request/subjectRef?/subjectVersion?/actionRef?/operationDigest?/revision/state/response?/responseSource?/presentedOwnerEpoch? | M5 定义状态/请求/响应；无业务 kind，专业来源必有 taskId；接纳来源与当前路由分离 |
+| interactions | id/requestKey/projectId/taskId?/chiefSessionId/ownerEpoch?/sourceSessionId/sourceInputId/contextEpoch/invocationKey/toolCallId?/operationId?/workRevision?/interactionSequence/method/request/revision/state/response?/responseSource?/presentedOwnerEpoch? | M5 定义原生请求/响应与状态；专业来源必有 taskId；只保存请求、来源与答复事实，不含业务确认类型或授权范围字段；接纳来源与当前路由分离 |
 | operations | id/requestKey/inputId/sessionId/generation/contextEpoch/toolCallId/toolName/argsDigest/effectClass/intent/receipt?/state | state=intent/known/uncertain；长委派等待 intent 包含 delegationId/成员，终局 receipt 是 M2 返回 |
 | request_receipts | requestKey/method/paramsDigest/refs/status/result/error | status=pending/committed；参数绑定原 key；终局失败 committed+error |
+
+interactions.state=requested/presented/resolved/stale，分别表示已保存请求、已发布到宿主通道、已保存答复和已失效。presented 不证明用户已看到；断线从快照重现原 ID。resolved 的答复不可覆写，相同答复重试返回原回执，不同答复冲突。stale 不复活，原答复不用于新问题。请求/答复字段统一见 M5。
 
 Task 类型、阶段、报告种类及 endTask 完成语义唯一采用 [G2/G3](agents-and-tools.md#g2-模型工具)。S2 仅定义记录及技术状态：Task.status=active/waiting/pausing/paused/cancelling/cancelled/completed。阶段/业务摘要由 updateTask 写；实际控制由服务完成，不从子事件推导另一份 phase。completionResultId 保存 endTask 核对的正式成果引用；引用种类和适用门禁见 G2/G3。
 
@@ -71,9 +73,9 @@ workspaceClaims 记录真实目录的 writer/capture/settlement 所有者与 gen
 | updateTask | 当前 revision、阶段/总结/下一步；目标变化的已保存 Plan/依据版本与失效事实、回执 | 刷新看板，不自动启动下一角色 |
 | create/continue 专业工作 | Session/Task 关联、原输入、本批成员、操作 intent、接纳回执 | 调度，异步等待 M2 条件；接纳不等于模型最终返回 |
 | agent_report / 输入收尾 | 正式结果/原回执；或实际终态/checkpoint | 唤醒原批等待，不额外投同一结果输入 |
-| ctx.ui 原生请求 / 宿主呈现 | M5 的稳定请求/来源/范围/版本；宿主呈现状态 | 提交后直接主管通道展示，父委派继续等待；完整顺序见 M5 |
+| ctx.ui 原生请求 / 宿主呈现 | M5 的稳定请求/来源/版本；宿主呈现状态 | 提交后直接主管通道展示，父委派继续等待；完整顺序见 M5 |
 | 宿主原生请求失效 | M5 的 CAS 失效事实、原因/回执 | 按 M5/S5 解除源等待并退订；取消原待授权动作，不存在模型 invalidate 工具 |
-| 用户 respond | M5 的版本/答复/真实用户来源/必要授权事实/回执 | 按 M5 直接解除原 ctx.ui 等待；不排普通输入、不使委派提前返回 |
+| 用户 respond | M5 的版本/答复/真实用户来源/原请求关联/回执 | 按 M5 直接解除原 ctx.ui 等待；不排普通输入、不使委派提前返回 |
 | 委派工具终局返回 | 原 operation receipt = M2 结果、request_receipt | 才向 Pi 返回；响应丢失复用原结果 |
 | control/end/adopt | 控制/完成核对/协调归属、currentTaskId、回执 | 中止或唤醒当前等待；空闲时一次系统通知 |
 
@@ -92,6 +94,8 @@ claimNext(session):
 requestKey 参数不同冲突，事务失败不返回成功；文件跨存储按 S6。Task 交接先停稳原协调执行/必要写入，ownerEpoch 改变后旧主管不能派发或响应原生请求，未结束工作仍归同 Task；新主管由 currentTaskId 找回原批次/交互。
 
 有 Task 的委派/交互记录中的 chiefSessionId/ownerEpoch 保留接纳来源；当前委派 wait/respond 权限与主管 UI 路由统一读取 tasks.chiefSessionId/ownerEpoch，不拿旧接纳者当当前所有者。交接后快照和交互事件使用当前主管身份，旧页面答复拒绝；无 Task 的主管自由讨论原生请求归原主管，专业调查不存在无 Task 例外。
+
+原生交互沿用当前执行上下文：requestKey 由 inputId/contextEpoch/invocationKey 与调用内 interactionSequence 派生；工具调用用 toolCallId，其他扩展调用用宿主保存的调用身份。UIAdapter 在提交时保存关联与序号，不靠问题正文去重。等待绑定原调用的 AbortSignal，先注册再重查持久事实，提交后唤醒、扫描兜底；取消或失效返回原生取消值并清理等待。事务不跨用户长等待。重启不恢复内存 Promise，按 S7 核对原调用、已保存答复和效果后接续。
 
 ## S4 关键操作与 checkpoint
 
@@ -191,7 +195,7 @@ type SettlementManifest = {
 };
 ```
 
-服务先核对实际交付源码/配置/测试树与 candidate 清单一致；列明结算资料变化并执行相应文档检查，不能把源码或正式目标改变列成例外。coverageDispositions 的 interactionId 必须指向已有效解决的真实用户交互，处置答复须匹配指定 resultId/check 的未覆盖原因与风险范围，不能以普通同意替代。Git 回执由服务从实际提交核对，local 回执验证文件摘要。关联需求时，endTask 核对 settlement.requirement.version 与实际文件摘要一致，Git/本机保存清单也必须包含该版本；不一致返回缺项，Task 保持未完成且不释放主管槽位。结算列明的生命周期状态、完成摘要、已核对来源/工作关联和保存时间更新，不改变原目标、范围、行为、验收或技术规则；仅这些记录变化不要求重做验证。basisDigest 仍指已验证目标与契约依据，documents/requirement.version 记录结算后完整文件摘要，两者不以整体文件字节变化混同。其他实质依据变更回适用检查。没有关联需求时 requirement 可空，无遗留时 issuesRef 可空；不适用项明确记录检查，不能用空清单绕过应更新知识。
+服务先核对实际交付源码/配置/测试树与 candidate 清单一致；列明结算资料变化并执行相应文档检查，不能把源码或正式目标改变列成例外。coverageDispositions 由主管/结算角色记录指定 resultId/check 的原因、风险和用户处置引用；服务核对该结果/检查属于当前 Task、确为未覆盖、interactionId 指向同项目/Task 已解决且有真实用户来源的原生交互，不解析问题或答复的业务语义。主管依据保存的问题及实际答复确认处置，拒绝/取消不算接受；风险或验证结果改变后重新取得适用决定，不能把真实 failed 检查列成未覆盖。Git 回执由服务从实际提交核对，local 回执验证文件摘要。关联需求时，endTask 核对 settlement.requirement.version 与实际文件摘要一致，Git/本机保存清单也必须包含该版本；不一致返回缺项，Task 保持未完成且不释放主管槽位。结算列明的生命周期状态、完成摘要、已核对来源/工作关联和保存时间更新，不改变原目标、范围、行为、验收或技术规则；仅这些记录变化不要求重做验证。basisDigest 仍指已验证目标与契约依据，documents/requirement.version 记录结算后完整文件摘要，两者不以整体文件字节变化混同。其他实质依据变更回适用检查。没有关联需求时 requirement 可空，无遗留时 issuesRef 可空；不适用项明确记录检查，不能用空清单绕过应更新知识。
 
 结算后正文不必再加一个“已提交”报告并制造下一次提交；DB 记录最终保存回执，项目报告可以写稳定证据引用。写规则/新增代码会使验证对象变化，必须回到适用检查，不能混入结算。
 

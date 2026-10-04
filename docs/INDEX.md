@@ -16,7 +16,7 @@
 ## 当前状态
 
 - productnew：当前产品需求，明确轻量提案 → 统一设计角色与独立审阅 → 实施需求 → 实现 Task 流程 → 结算；采用主管总体 Plan、显式阶段与委派等待/宿主直接处理原生交互。
-- technicalnew：当前角色/工具、需求格式、原生交互、消息/存储/恢复与上下文装配已归一；[七角色与工具入口](technicalnew/agents-and-tools.md)、[格式规范](technicalnew/requirements-format.md)、[验证记录](technicalnew/validation.md)。文档检查不证明 SDK、模型或产品已经可用。
+- technicalnew：当前角色/工具、需求格式、消息/存储/恢复与上下文装配；模型提问采用官方 question 移植扩展，通过原生交互消息接入 WAL 和主管通道，与前端渲染分离。见[七角色与工具入口](technicalnew/agents-and-tools.md)、[格式规范](technicalnew/requirements-format.md)、[验证记录](technicalnew/validation.md)。完整审查仍有待闭合项，文档检查不证明 SDK、模型或产品已经可用。
 - 新架构业务代码尚未按本轮设计实施；Pi 接入、模型行为、故障与产品运行验收均未因文档写成而通过。实施先按 [实现检查](technicalnew/implementation-checks.md) 验证标记项目。
 - 本轮未审查原工程功能，不将已有代码与新产品需求逐项对应或宣称已完成。当前代码地图与真实运行检查入口在后续实施结算时形成。
 

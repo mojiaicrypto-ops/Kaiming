@@ -117,7 +117,7 @@ Pi 接入层只负责以下小范围连接，不接管模型循环：
 | create/open | 验证绑定、header/历史、cwd、实际模型和角色/工具契约；禁止默认模型回退或“最近文件” |
 | deliver user/delegation/continuation | 保留原生 content，使用 prompt/sendUserMessage；inputId 是宿主关联，不存在原生参数 |
 | return child result / blocker | 原 createTaskSessions 工具的 content/structuredContent 带真实 ID、状态与引用；保存原操作回执后返回，不再追加同一结果的 CustomMessage |
-| user interaction | 通过 session.bindExtensions({uiContext}) 接入宿主 UI 适配；ctx.ui.confirm/select/input 的关联、直接转发、答复与恢复严格按 M5；子请求不解除父委派等待，无主管模型呈现步骤 |
+| user interaction | 按 G2 经 resourceLoader.extensionFactories 加载官方 question 移植扩展，pi.registerTool 注册一次；通过 session.bindExtensions({uiContext}) 绑定宿主。ctx.ui.confirm/select/input 按 M5 的消息协议关联、提交、转发、答复和恢复；子请求不解除父委派等待，无主管模型呈现步骤 |
 | recovery/control notice | 只在空闲时 sendCustomMessage，customType=agentdev.input，模型可见内容含来源/ID/事实；不能给仍在等待的同一次调用重复输入 |
 | input correlation | 用公开 appendCustomEntry 写 agentdev.input 标记，串行定位其实际根输入条目；保留 markerId/inputEntryId，不按正文相等匹配 |
 | observe | subscribe 的同步 listener 仅广播/记录内存状态；不能 await 监听器承担持久事务 |

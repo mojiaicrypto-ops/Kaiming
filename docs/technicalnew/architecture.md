@@ -16,7 +16,7 @@ flowchart TB
   RUNTIME --> PI[独立 Pi 1.0 Session]
   PI --> LOCAL[Pi 原生 Local 工具：关键意图 / 回执]
   PI --> TOOLS[Task 工具 / 专业报告]
-  PI --> NATIVE[question / 扩展 ctx.ui 原生请求]
+  PI --> NATIVE[官方question移植扩展 / 工具ctx.ui原生请求]
   NATIVE --> ADAPTER[Server 原生 UI 适配]
   ADAPTER -->|请求提交| DB
   ADAPTER -->|提交后按当前主管路由| HUB

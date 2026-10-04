@@ -20,7 +20,7 @@
 
 ## G2 模型工具
 
-工具由 Pi SDK customTools 显式注册；内置扩展用于 UI/必要生命周期连接，不增加通用扩展系统。[SDK](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/docs/sdk.md)
+八个领域工具由 Pi SDK customTools 显式注册；question 采用官方示例的内置 Pi 扩展，通过 pi.registerTool 注册，不能再在 customTools 重复注册。宿主只加载明确配置的扩展，连接 UI/必要生命周期，不增加通用扩展系统。[SDK](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/docs/sdk.md)
 
 宿主 requestKey 从 inputId/contextEpoch/toolCallId/工具名派生，恢复复用原 key，参数摘要绑定原操作；模型不生成随机去重号。所有成功返回必须先保存真实回执。content 包含模型需要的 ID/状态/路径，structuredContent 是声明 outputSchema 时的程序返回，details 只供展示/重建、不进入模型上下文。错误设置 isError；关键保存失败按 S4 停止准入。
 
@@ -90,7 +90,17 @@ schemaVersion:2 的双类型元数据、状态、正文、引用、列表排序�
 
 ### question
 
-输入：method（confirm/select/input）、title、message?、options?（select 必需）。单个薄工具调用对应 ctx.ui 原生方法，按 M5 取得并返回真实 confirmed/value/cancelled 与 interactionId；取消值按原生接口映射。它只用于模型主动询问；options 是保存的可选字符串列表，不接受客户端扩充；工具内部需要授权时直接调用 ctx.ui，不再绕调用 question。没有业务 kind，也没有模型可调用的请求登记/呈现/解决/失效操作；具体动作权限仍由原工具/服务核对，普通“同意”不能授权未知动作。
+使用 [Pi v1.0.0 官方 question 扩展](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/examples/extensions/question.ts) 的注册方式，作为各角色共用的提问工具。通过 resourceLoader.extensionFactories 加载，pi.registerTool 注册一次，executionMode=sequential。浏览器接入移除示例中的 TUI/custom 界面，参数直接对应 Pi 通用交互：method=confirm/select/input、title:string、message?、options?、placeholder?（confirm 要求 message:string；select 要求 options:string[]）。模型选择交互类型并组织问题，不增加业务确认类型。
+
+```json
+{
+  "method": "select",
+  "title": "是否将讨论内容加入需求列表？",
+  "options": ["加入", "暂不加入"]
+}
+```
+
+execute 按 method 调用 ctx.ui.confirm/select/input，并传入 signal；取得真实答复后返回模型，由模型决定后续操作。宿主 UIAdapter 在当前工具调用上下文中关联请求，Pi 接入层将保存的 interactionId 随答复放入模型可见 content，ctx.ui 的原生返回类型保持不变。消息、渲染和 WAL 接续统一见 M5；question 不另建执行、审批或恢复机制。工具内部已有原生交互也走同一链路。
 
 ### project
 
