@@ -1,0 +1,67 @@
+{
+  "date": "2026-10-04",
+  "status": "passed",
+  "static": {
+    "files": 28,
+    "localLinks": 164,
+    "diagrams": 8,
+    "jsonExamples": 6,
+    "typeBlocks": 3,
+    "domainTools": 9,
+    "errors": []
+  },
+  "bodyExtractionContract": {
+    "status": "passed",
+    "count": 9,
+    "metadataExcluded": true,
+    "mappingExcluded": true,
+    "experienceMarkersRetained": [
+      "base",
+      "chief",
+      "designer",
+      "developer",
+      "reviewer",
+      "tester",
+      "settler",
+      "investigator",
+      "specialists"
+    ],
+    "doesNotProveRuntimeInjection": true
+  },
+  "scope": {
+    "G1-G3": "unchanged",
+    "productnew": "unchanged",
+    "protocolFilesUnchanged": [
+      "docs/technicalnew/architecture.md",
+      "docs/technicalnew/runtime-contract.md",
+      "docs/technicalnew/storage-and-recovery.md",
+      "docs/technicalnew/messaging-and-collaboration.md",
+      "docs/technicalnew/requirements-format.md"
+    ]
+  },
+  "unchangedEvidence": {
+    "previousVerification": "../pi-native-normalization-20261004/verification.json",
+    "mermaid": "unchanged, previous passed",
+    "typescript": "unchanged, previous passed"
+  },
+  "commands": [
+    {
+      "command": "node /tmp/agentdev-role-lessons-check-20261004/current-docs.mjs",
+      "exitCode": 0
+    },
+    {
+      "command": "git diff --check -- docs/technicalnew .agentdev/work/role-lessons-20261004",
+      "exitCode": 0
+    }
+  ],
+  "independentReviewers": [
+    "role_lessons_consistency_review",
+    "role_lessons_cold_review"
+  ],
+  "runtimeEvidence": {
+    "sdk": "NOT_RUN",
+    "models": "NOT_RUN",
+    "injection": "NOT_RUN",
+    "browser": "NOT_RUN"
+  }
+}
