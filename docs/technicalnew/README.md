@@ -1,40 +1,40 @@
 # AgentDev 技术设计入口
 
-日期：2026-10-04。版本：v1 技术契约草案。依据 [产品需求](../productnew/README.md) 和已确认的架构讨论；描述待实现系统，不声明代码已完成。本轮独立审阅与检查见 [交付记录](archive/20261004-ai-native-contracts.md)。
+日期：2026-10-04。当前 v1 契约；描述待实现系统。产品行为以 [产品需求](../productnew/README.md) 为准，当前文档检查见 [验证记录](validation.md)。
 
-## 从哪里开始
+## 按链路加载
 
-先读 [执行总图](architecture.md)，再按当前链路选择下表。实现时，输入、返回、身份、事务、错误和恢复行为以对应契约为准；文件布局、局部函数和库选择留给实施 Plan。
+先读 [执行总图](architecture.md)，再选择当前工作需要的契约。
 
-| 要实现的链路 | 只需展开的设计 | 会得到什么 |
+| 链路 | 设计入口 | 实现依据 |
 |---|---|---|
-| Server 组装、Project / Session / Task 归属 | [架构](architecture.md) | 总图、职责、关系和事实权威 |
-| 打开项目、输入接纳、Pi 调用与结束、停止 | [运行契约](runtime-contract.md) | 公开入口、输入状态、共用 Runtime 算法、Pi 接入边界 |
-| 输入存储、原子认领、回执、重启和恢复 | [存储与恢复](storage-and-recovery.md) | 记录字段、约束、事务、检查点、故障处理表 |
-| 多 Session 委派、Review→Test、结果投递、UI 推送 | [消息与协作](messaging-and-collaboration.md) | 协作时序子图、消息体、通道与快照握手 |
-| 角色、工具、Plan、上下文与基础规则 | [Agent 与工具](agents-and-tools.md) | 角色表、工具输入输出、规则加载、可内置提示词 |
-| 制定实施 Plan、验证 SDK / 可靠性 / 模型行为 | [实现检查](implementation-checks.md) | 先后顺序、接入试验、故障与业务行为检查 |
+| Server、Project、Session、Task | [架构](architecture.md) | 总图、关系、职责和资源边界 |
+| 公开请求、输入执行、Pi 接入和停止 | [运行契约](runtime-contract.md) | API、输入状态、共用 Runtime |
+| WAL、事务、回执、等待和重启 | [存储与恢复](storage-and-recovery.md) | 最小记录、认领、故障与继续算法 |
+| 当前步骤并行委派、授权、UI | [消息与协作](messaging-and-collaboration.md) | 协作/授权子图、返回条件与交互协议 |
+| 主管/专业角色、工具和上下文 | [Agent 与工具](agents-and-tools.md) | 四个主管核心工具、辅助工具、内置规则 |
+| 接入试验、实现顺序和验证 | [实现检查](implementation-checks.md) | SDK/可靠性/模型/浏览器证据要求 |
 
-## 产品规则与技术规则的边界
+## 当前架构
 
-| 问题 | 唯一定义位置 | 本目录如何使用 |
-|---|---|---|
-| 什么情况下保存需求、开工、确认或完成 | productnew 各模块 | 引用需求编号；不重新发明产品流程 |
-| 标准开发先 Review 后 Test、独立验证、结算 | [任务交付 D-02～D-08](../productnew/modules/delivery.md) | 工具校验身份/依据/结果；主管规则按这个顺序组织 |
-| 目录职责、内聚文档、按需加载 | [项目知识 K-02～K-05](../productnew/modules/project-knowledge.md) | 固定入口、结构校验与提示词；模块拆分由 Agent 判断 |
-| 怎样持久接纳、寻址、调度、停止、核对恢复 | technicalnew 链路契约 | 规定程序可验证的字段与算法 |
-| 当前任务修改哪些文件、用哪个局部算法 | 实施 Agent 的 Plan | 在产品和共同契约范围内自主决定 |
+- 同一部署环境全局一个 Server，管理全部 Project、独立 Pi Session 和统一 SQLite。
+- 每个主管 Session 同时协调一项未结束 Task；其他目标使用另一个主管 Session。
+- Task 是整项交付，主管维护 `.dev/work/<taskId>/plan.md` 总体 Plan，并显式调用 updateTask 更新阶段；子 Session 的内部计划自主决定，无另行落盘/审批义务。
+- 主管按当前步骤调用 createTaskSessions，内部原子创建、绑定并异步调度。模型等待本批成果；需要主管处理的交互或阻断让工具提前返回，处理后继续原 Session/原批次。
+- 所有子 Session 的交互先交回主管模型，由主管在自己的通道展示。用户答复走直接响应入口，保存后送回原请求，不排在普通输入队列之后。
+- 标准开发按实施 → 独立 Review → 独立 Test → 结算；同阶段可以多个独立 Session。endTask 核对完成条件。
+- Pi 1.0 coding-agent SDK 管模型循环、原生 Local 工具、历史和事件；SQLite 保存接纳、Task、关联、结果、交互与关键回执。原生流式输出走内存广播。
 
-模糊边界按“用户应得到什么”与“系统怎样可靠做到”拆开。例如独立审核是 D-03；新建 reviewer Session、不给开发聊天、保存候选与依据引用是技术实现。提示词落实既有规则，不能用新增提示词偷改产品承诺。
+## 定义边界
 
-## 已确认的设计输入
+| 定义 | 唯一依据 |
+|---|---|
+| 用户结果、保存/授权/交付含义 | productnew 对应模块与验收 |
+| 公开入口与输入状态 | R1/R2 |
+| 持久记录和事务 | S2/S3 |
+| 委派返回、交互请求/响应、UI 外层 | M1/M2/M5 |
+| 模型工具与角色规则 | G1/G2、prompts |
+| 当前项目目标、步骤和验证安排 | 主管的 Task 总体 Plan |
+| 子 Session 如何完成指定目标 | 专业 Agent 自主判断 |
 
-- 单 Server 进程，多 Project、多独立 Pi Session，统一 SQLite。使用 Pi 1.0 coding-agent SDK 与本地原生工具；Durable / OMP 作为选择性参考。
-- 运行对象是 Session 与 Task；输入、分工、结果、回执是内部记录，不增加 Run / Attempt 层。
-- 业务输入先存 SQLite，再由 Session Dispatcher 异步消费；每 Session 串行，跨 Session 按容量并行。
-- 主管委派只等待接纳；其本次 Pi 执行可结束。专业结果成为主管持久输入，驱动下一次执行。
-- Task 累计关联各阶段多个 Session；标准开发 Review 完成并处理必要问题后进入 Test；同阶段可并行多个 Review。
-- Pi JSONL 保存会话；原生流式事件走内存广播；不增加持久 UI 事件库。
-- 主管负责理解与组织；程序核对身份、保存结果、有效依据和必要完成条件。没有通用工作流 DSL、独立 Tool Executor 或自动并行合并框架。
-
-Pi 输入关联、可靠落盘和工具失败停止是明确的接入试验项。没有试验证据时采用文档规定的保守路径，不能自行声称透明恢复。[实现检查](implementation-checks.md) 中所有运行场景当前为 NOT_RUN。
+程序保存和核对事实，不替主管选择下一阶段。没有 Run/Attempt、通用工作流 DSL 或额外工具执行引擎。SDK 接入、模型行为与故障试验均为 NOT_RUN，不能从文档完成推断实现已完成。

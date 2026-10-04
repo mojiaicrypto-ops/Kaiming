@@ -11,13 +11,13 @@
 | [任务交付](productnew/modules/delivery.md) | 计划、授权、独立审核/测试、结算 | 正式修改与完成核对 |
 | [项目知识](productnew/modules/project-knowledge.md) | 权威文档、模块内聚、按需加载与项目记忆 | 整理文档/上下文/结算 |
 
-技术细节按 technicalnew/README 的链路索引加载，不默认读取所有文档。旧资料位于 old/，architecturenew 为历史讨论；它们不替代当前契约，不作为新设计的默认输入。
+技术细节按 technicalnew/README 的链路索引加载，不默认读取所有文档。当前产品和技术设计是正式依据。
 
 ## 当前状态
 
-- productnew：第一版产品需求文档，包含用户已确认的阶段顺序与异步协调澄清。
-- technicalnew：v1 技术契约草案，已明确组件、身份、输入/工具/消息、存储与恢复路线；独立审阅和文档检查在 [交付记录](technicalnew/archive/20261004-ai-native-contracts.md)。
+- productnew：当前产品需求，采用主管总体 Plan、显式阶段与同步推进/中间交互返回。
+- technicalnew：当前 v1 技术契约，已明确组件、身份、输入/工具/消息、存储与恢复路线；独立审阅和文档检查在 [验证记录](technicalnew/validation.md)。
 - 新架构业务代码尚未按本轮设计实施；Pi 接入、模型行为、故障与产品运行验收均未因文档写成而通过。实施先按 [实现检查](technicalnew/implementation-checks.md) 验证标记项目。
 - 本轮未审查原工程功能，不将已有代码与新产品需求逐项对应或宣称已完成。当前代码地图与真实运行检查入口在后续实施结算时形成。
 
-归档只用于追溯证据，不是默认实现依据。
+验证记录只说明当前证据，不替代实现契约。

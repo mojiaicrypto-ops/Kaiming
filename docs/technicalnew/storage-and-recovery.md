@@ -1,116 +1,97 @@
-# 持久输入、操作回执与崩溃恢复
+# 持久输入、等待回执与崩溃恢复
 
-产品依据：D-06/D-07、AC-19～AC-24。技术规则：数据库接纳事实、Pi 上下文和文件效果分开核对；不承诺任意外部操作恰好执行一次。
+产品依据：D-06/D-07、AC-19～AC-24。DB 保存接纳事实；Pi 上下文和效果分别核对，不承诺任意外部操作恰好执行一次。
 
 ## S1 存储基线
 
-统一 Server SQLite：journal_mode=WAL、synchronous=FULL、foreign_keys=ON；启动读取 PRAGMA 验证，写连接统一配置。数据库在 Server 状态目录，不按项目拆库。SQLite 自己 checkpoint 合并日志，Agent checkpoint 指向继续边界。[WAL](https://www.sqlite.org/wal.html)、[同步配置](https://www.sqlite.org/pragma.html#pragma_synchronous)
+全局 Server 统一 SQLite，journal_mode=WAL、synchronous=FULL、foreign_keys=ON；启动验证 PRAGMA，写连接统一配置。数据库不按项目拆分；SQLite checkpoint 与 Agent 继续边界是不同用途。[WAL](https://www.sqlite.org/wal.html)、[同步配置](https://www.sqlite.org/pragma.html#pragma_synchronous)
 
-Dispatcher 读取 session_inputs 表。Pi 文本/思考/工具进度不写该表；数据库不存另一份聊天全文。短事务在提交后发内存唤醒；启动和周期扫描同一记录兜底。扫描周期与容量是 Server 配置，不能成为可靠性唯一条件。
+Dispatcher 读取 session_inputs。提交后内存唤醒，启动/周期扫描兜底；扫描周期/容量为 Server 配置。流式文本/思考/工具进度不写业务输入表，不存第二份聊天全文。
 
-## S2 记录字段与唯一约束
+## S2 最小持久记录
 
-这是逻辑 Schema，SQL 列展开/索引实现可由 Plan 决定，以下字段含义、枚举与约束不能自行改变。ID 是安装内稳定不透明字符串；时间为 UTC RFC3339；摘要为 sha256；JSON 对象带 schemaVersion:1。外键同项目归属必须通过服务与约束校验。
+逻辑 Schema 固定语义，SQL 列/索引由实现决定。ID 安装内稳定不透明；时间 UTC RFC3339；摘要 sha256。外键/同项目归属校验；不使用 cwd、名字或相似文本代替身份。
 
 | 记录 | 必要字段 | 约束 |
 |---|---|---|
-| projects | id、realPath、revision、writeAuthorizationRef、initializationRef、configRef、workspaceClaims | realPath 唯一；移动用 CAS，不按名字匹配 |
-| sessions | id、projectId、roleId、specialization、taskId?、assignmentId?、cwd、configRef、activeContextEpoch、recoveryBlock? | 专业 assignmentId 唯一；稳定 id 不由 cwd 推导 |
-| session_bindings | sessionId、contextEpoch、piFile、branchEntryId?、hasHistory、configHash、rulesHash、createdAt | (sessionId,contextEpoch) 唯一；sessions 只指一个活动绑定；旧绑定保留 |
-| tasks | id、projectId、chiefSessionId、ownerEpoch、requirementId?、kind、goal/scope、acceptanceRefs、sourceInputId、authorizationRefs、goalRevision、phase、status、revision、basisRefs、nextStep/blockReason、candidate?、controlIntent、settlement? | 同 requirementId 仅一个未结束 Task；协调权唯一；completed 只能完成核对写入 |
-| assignments | id、projectId、taskId?、chiefSessionId、sessionId、batchKey、roleId、instructions、refs、dependencies、expectedKinds、candidateId?、status、revision、workRevision、activePlanResultId?、planApproval? | sessionId 唯一；同 Task 多个同角色分工分别保存；批次 key 可重建原回执 |
-| results | id、assignmentId、workRevision、sourceInputId、requestKey、kind、summary、reportRef/hash、basisRefs、candidateId?、verdict?、checks、final、supersedes?、settlement?、validity | 正文与结构化报告不可变；requestKey 唯一；validity=current/stale/late 为投影；修订新增记录 |
-| session_inputs | 见下方 Input | (sessionId,seq)、sourceKey 唯一；一个 Session 至多一个 processing |
-| operations | id、requestKey、inputId、sessionId、generation、contextEpoch、toolCallId、toolName、argsDigest、effectClass、intent、receipt?、state | requestKey 唯一；state=intent/known/uncertain；原身份绑定原参数 |
-| decisions | id、projectId、taskId?、chiefSessionId、kind、subjectRef/version、question、choices、initialization?、revision、status、resolution/sourceInputId? | status=open/resolved/stale；一次有效解决；旧版本选择拒绝；初始化差异包随决定持久保存 |
-| request_receipts | requestKey、method、paramsDigest、refs、status、result/error | key 安装内唯一，完整参数绑定；status=pending/committed；普通 DB 写在同事务记 committed；文件多步骤可 pending，终局失败以 committed+error 保存 |
+| projects | id/realPath/revision/writeAuthorizationRef/initializationRef/configRef/workspaceClaims | realPath 唯一，移动 CAS |
+| sessions | id/projectId/roleId/specialization/cwd/configRef/currentTaskId?/activeContextEpoch/recoveryBlock? | chief 的 currentTaskId 至多一个未结束 Task |
+| session_bindings | sessionId/contextEpoch/piFile/branchEntryId?/hasHistory/configHash/rulesHash | 绑定唯一；旧 epoch 保留，只有一个活动绑定 |
+| tasks | id/projectId/chiefSessionId/ownerEpoch/requirementId?/kind/goal/scope/acceptanceRefs/basisRefs/planRef/authorizationRefs/phase/status/revision/summary/nextStep/blockReason/candidate?/settlement?/controlIntent/sourceInputId | 同需求、同主管未结束唯一；只有主管显式更新 phase，endTask 写 completed |
+| task_sessions | sessionId/taskId?/chiefSessionId/roleId/stage/instructions/refs/dependencies/expectedKind/candidateId?/workRevision/currentInputId | 一个专业 Session 归一个专业目标；返工保留旧 workRevision；只读调查可无 Task |
+| delegations | id/requestKey/taskId?/chiefSessionId/ownerEpoch/members[{sessionId,inputId,workRevision}]/stage/basisDigest | 当前一步的固定成员；后续 wait 不改原成员或重建 Session |
+| results | id/taskId?/sessionId/workRevision/sourceInputId/requestKey/kind/summary/reportRef/basisRefs/candidateId?/verdict?/checks/supersedes?/settlement? | 正文/结构不可变；validity=current/stale/late 为当前依据投影；requestKey 唯一 |
+| session_inputs | 见 Input | (sessionId,seq)/sourceKey 唯一；同 Session 至多一个 processing |
+| interactions | id/requestKey/projectId/taskId?/chiefSessionId/sourceSessionId/sourceInputId/contextEpoch/toolCallId?/operationId?/workRevision?/kind/method/request/subjectRef/version/actionRef?/revision/state/response?/responseSource?/initialization? | state=requested/presented/resolved/stale；原请求/操作范围固定，一份有效答复 |
+| operations | id/requestKey/inputId/sessionId/generation/contextEpoch/toolCallId/toolName/argsDigest/effectClass/intent/receipt?/state | state=intent/known/uncertain；长委派等待 intent 包含 delegationId/成员，终局 receipt 是 M2 返回 |
+| request_receipts | requestKey/method/paramsDigest/refs/status/result/error | status=pending/committed；参数绑定原 key；终局失败 committed+error |
 
-Task.kind=standard/light/document；status=active/waiting/pausing/paused/cancelling/cancelled/completed；phase 见 G2。结算中由 active/waiting + phase=settle 表达，不另存竞争状态。Assignment.status=queued/working/waiting/reported/completed/failed/stopped/interrupted。reported 证明正式提交，completed 还需其当前输入停稳；Task 完成是另一步。结果 verdict=failed 可以是正常完成的检查，不等于执行 failed。
+Task.kind=standard/light/document；phase=clarify/design/plan/develop/review/test/settle；status=active/waiting/pausing/paused/cancelling/cancelled/completed。阶段/业务摘要由 updateTask 写；实际控制由服务完成，不从子事件推导另一份 phase。
 
-| 分工触发 | 新状态与动作 |
-|---|---|
-| 首条输入认领 | queued → working |
-| Plan final=false 提交/停稳 | waiting，保存 Plan；输入 completed，分工未完成 |
-| 批准 Plan、接续输入 | waiting → queued → working；同 Session、同 workRevision |
-| 最终报告提交/停稳 | working → reported → completed；只冻结当前 workRevision 的写入 |
-| 明确范围内返工 | completed/reported（先停稳）→ queued；workRevision+1，保留旧结果，复核 Plan；Review/Test 新检查另建分工 |
-| 暂停确认 | 未执行 queued 保留；当前输入 stopped，未完成分工 waiting，已 final 的结果保留 |
-| resume | 未解决 unknown 不启动；待确认 Plan 仍 waiting；其他未完分工生成一次新的剩余工作输入 |
-| 无 final 结果而异常/普通结束 | failed/interrupted 或 waiting+REPORT_MISSING 通知；不补成功报告 |
+专业状态通过 currentInput/正式结果/开放交互查询：queued/working/waiting_user/completed/failed/stopped/interrupted，不另同步一份看板状态。正式结果保存且输入停稳才 completed；检查 verdict=failed 不等于执行异常。一次输入处理结束无正式结果返回 REPORT_MISSING。
 
 ```typescript
 type Input = {
   schemaVersion: 1;
-  inputId: string;
-  projectId: string;
-  sessionId: string;
-  taskId?: string;
-  assignmentId?: string;
-  assignmentWorkRevision?: number;
-  seq: number;
-  sourceKey: string;
-  kind: 'user' | 'delegation' | 'agent_message' | 'result_notice' | 'decision' | 'system_notice';
-  payload: object; // M2 按 kind 校验的业务载荷
-  paramsDigest: string;
+  inputId: string; projectId: string; sessionId: string; taskId?: string; workRevision?: number;
+  seq: number; sourceKey: string; paramsDigest: string;
+  kind: 'user' | 'delegation' | 'continuation' | 'system_notice';
+  payload: object;
   status: 'queued' | 'processing' | 'completed' | 'failed' | 'stopped' | 'interrupted';
-  revision: number;
-  generation: { serverEpoch: number; claim: number } | null;
-  effectiveConfig?: object; // model/provider/credentialRef/cwd/rulesHash，不能含密钥
-  deliveryIntent?: { contextEpoch: number; recordedAt: string }; // 首次可能进入 Pi 前必须保存
-  checkpoint?: Checkpoint;
-  stopIntent?: { requestKey: string; reason: string };
-  resultRefs: string[];
-  error?: { code: string; message: string; evidenceRefs?: string[] };
-  createdAt: string;
-  updatedAt: string;
+  revision: number; generation: { serverEpoch: number; claim: number } | null;
+  effectiveConfig?: object; // 无密钥
+  deliveryIntent?: { contextEpoch: number; recordedAt: string };
+  checkpoint?: Checkpoint; stopIntent?: { requestKey: string; reason: string };
+  continuationOfInputId?: string; // 停稳后恢复同一未完成工作；不是新增目标的 continue
+  resultRefs: string[]; error?: { code: string; message: string; evidenceRefs?: string[] };
+  createdAt: string; updatedAt: string;
 };
 type Checkpoint = {
-  contextEpoch: number;
-  piFile: string;
-  leafEntryId: string;
-  inputMarkerId: string;
-  inputEntryId?: string;
-  outputEntryIds: string[];
-  configHash: string;
+  contextEpoch: number; piFile: string; leafEntryId: string;
+  inputMarkerId: string; inputEntryId?: string; outputEntryIds: string[]; configHash: string;
 };
 ```
 
-共同引用结构：DocumentRef={path,purpose,sha256}，path 为项目相对路径，服务在接纳时核对/补齐摘要；ReportRef={path,sha256}；Candidate={candidateId,root,manifestRef,contentDigest,basisDigest,createdAt}。PlanApproval={planResultId,goalRevision,basisDigest,authorizationRef,approvedAt}；Task.goalRevision 仅正式目标/依据实质修订增加。Report/Plan 记录引用当时版本，不用运行时文件覆盖历史。
+DocumentRef={path,purpose,sha256}；ReportRef={path,sha256}；PlanRef={path,sha256,authorizationRef}；Candidate={candidateId,root,manifestRef,contentDigest,basisDigest,createdAt}。项目引用相对路径，接纳时核对/补摘要，历史记录保留当时版本。总体 Plan 只有一份固定文件，变更保留引用版本/操作回执；没有子 Plan 批准记录。
 
-Assignment.workRevision 表示同一分工的当前工作修订，不是 Run 对象。Plan 提交后等待确认；最终报告后当前修订禁止再写。明确返工接续同一 developer Session 时增加 workRevision，保留旧结果并核对/更新 Plan 批准。Runtime 收尾不能把无 final 结果的 Plan 输入完成误写为整个分工 completed。
+workRevision 标识同专业 Session 的当前目标修订。最终报告后禁止此修订再写；停稳后明确返工才增加 workRevision/新输入。授权继续同一挂起工具不会增加 workRevision 或创建第二份输入。
 
-workspaceClaims 记录真实工作目录的写入/capture/settlement 所有者与 generation；重叠目录不得同时持有冲突归属。候选复制先预约 capture，短事务结束后复制，期间阻止新写入。前后清单及外部变化核对失败返回 CANDIDATE_CHANGED；释放预约。崩溃由原操作恢复清理，不把锁留成永久阻断。
+恢复输入的 continuationOfInputId 指向同 Session、同 workRevision 的已停稳前序输入；每个前序最多一个此类后继，禁止环和跨目标接续。resume/recovery 事务同时保存去重来源键、接续关系和 task_sessions.currentInputId；旧 delegation.members 保持不变。等待沿该链查询当前输入及有效结果，只承认原阶段/依据未改变、控制和效果已核对的接续；缺关系不能凭相同 Session 猜测。新目标或真实返工由 continue 建立新 workRevision/批次，不加入原恢复链。
 
-request_receipts 是技术去重记录，不是业务命令/Run。用户输入 inputId=requestId；内部输入由服务分配，sourceKey 由原业务事实派生。例如 result:<resultId>:chief:<ownerEpoch>。操作/tool requestKey 使用 G2 的宿主键，sourceKey 和工具回执键不能互相替代。
+workspaceClaims 记录真实目录的 writer/capture/settlement 所有者与 generation；重叠目录不得冲突。复制候选先预约，前后清单核对，外部变化返回 CANDIDATE_CHANGED。崩溃核对原操作后释放，不能永久锁死。
 
-## S3 事务与认领
+用户 inputId=requestId；内部 sourceKey 派生原业务事实。工具原 key 的回执不可变，新的 wait 调用可以读取新事实；不能把它当原调用重试并改原返回。
 
-| 动作 | 一个 DB 事务内必须保存 | 提交后的动作 |
+## S3 事务、认领与等待
+
+| 动作 | DB 事务保存 | 提交后 |
 |---|---|---|
-| 接纳用户输入 | 请求去重、原 payload、Session 顺序 seq、queued/revision | 返回接纳；唤醒 Dispatcher |
-| 建 Task | 唯一活跃需求约束、目标/归属/授权、来源与请求回执 | 返回 taskId；不自动开专业 Session |
-| 批量委派 | 所有 assignment、专业 Session、首条 queued 输入、原批次回执 | 返回全部身份；异步创建实际 Pi |
-| 接续专业 Session | 归属与批准核对、专业输入、回执 | 返回 inputId；唤醒 |
-| 提交专业结果 | 已保存报告引用、result、assignment 进展、主管 result_notice、回执 | 返回 resultId；唤醒主管 |
-| 记录用户决定 | subjectVersion、解决值/来源、主管 decision 输入、回执 | 返回收到；主管调用业务工具 |
-| 输入收尾 | 当前 generation/控制核对、终态/checkpoint、分工状态、必要停稳/异常通知 | 释放容量，扫描下一输入 |
-| Task 控制/完成/交接 | 当前 revision、控制意图或有效完成清单/协调归属、回执、主管 task.controlled 通知 | 执行 abort / 刷新通知 / 通知新主管 |
-
-认领采用短写事务（例如 BEGIN IMMEDIATE）与 CAS：
+| 接纳输入 | 去重、原 payload、seq、queued | 返回接纳，唤醒 |
+| createTask | 已保存总体 Plan 引用、目标/授权、主管槽位、Task/源输入关联、回执 | 返回原 taskId；不建全部专业 Session |
+| updateTask | 当前 revision、阶段/总结/下一步；目标变化的已保存 Plan/依据版本与失效事实、回执 | 刷新看板，不自动启动下一角色 |
+| create/continue 专业工作 | Session/Task 关联、原输入、本批成员、操作 intent、接纳回执 | 调度，异步等待 M2 条件；接纳不等于模型最终返回 |
+| agent_report / 输入收尾 | 正式结果/原回执；或实际终态/checkpoint | 唤醒原批等待，不额外投同一结果输入 |
+| 子交互 request / 主管 present | 原请求/来源/版本；或呈现状态/回执 | request 让委派返回 needs_input；present 后主管通道展示 |
+| interaction.invalidate / 自动失效 | CAS requested/presented → stale、原因/回执 | 解除源请求与主管 wait，退订回调；取消原待授权动作 |
+| 用户 respond | 版本/答复/真实用户来源/必要授权事实/回执 | 解除原请求与主管 wait；不排普通输入 |
+| 委派工具终局返回 | 原 operation receipt = M2 结果、request_receipt | 才向 Pi 返回；响应丢失复用原结果 |
+| control/end/adopt | 控制/完成核对/协调归属、currentTaskId、回执 | 中止或唤醒当前等待；空闲时一次系统通知 |
 
 ```text
 claimNext(session):
-  再检查 Session 无 processing、无未解决前序中断、控制允许
-  取本 Session 最早 queued；不能跳过同 Session 更早输入
-  专业 Session 再检查 Task/分工控制、阶段、写入负责人和容量；chief 的讨论/通知/控制不受 Task pause/cancel 阻断
-  固定有效配置与 generation = (本次 serverEpoch, claim+1)
-  UPDATE queued → processing, revision+1（预期原 revision/status）
-  COMMIT 后开始 Pi；失败则没有执行权
+  检查无 processing、无未核对前序中断、控制允许
+  chief 当前 Task 存在时：只选择当前 Task 关联输入；其他 queued 保留待该 Task 结束
+  选择上述可消费范围内最早 queued；同范围保持顺序
+  专业输入检查 Task 控制/当前阶段/授权/工作目录负责人
+  预约执行容量，短事务 CAS queued → processing，记录 generation
+  COMMIT 后才能开始 Pi；失败则释放预约
 ```
 
-同进程调度预约容量与事务认领成对释放，不能先启动后登记。queued 有模型/目录阻断时保留原因，允许扫描其他 Session。写入 Session 的工作目录归属持久记录在 Task/分工，崩溃后不能直接认为已释放，先核对残留影响。
+同 Session 执行所有权保持到停稳；await 子工作/用户时让出模型容量，继续调用模型前重新申请。运行子 Session 不依赖主管占用的名额；跨 Session 公平。等待注册后重查 DB；故障/唤醒丢失由扫描原记录处理。
 
-提交失败不返回成功。响应丢失用原 key 查询/重试；原 key 参数不同冲突。结果/通知由同事务保存，禁止先 callback 主管再落结果。通知待消费期间读取当前 Task 协调归属；交接用 ownerEpoch 生成新主管通知，旧 queued 通知停用，旧主管读到历史也无派发权。
+requestKey 参数不同冲突，事务失败不返回成功；文件跨存储按 S6。Task 交接先停稳原协调执行/必要写入，ownerEpoch 改变后旧主管不能派发/present/授权，未结束工作仍归同 Task；新主管由 currentTaskId 找回原批次/交互。
+
+有 Task 的委派/交互记录中的 chiefSessionId/ownerEpoch 保留接纳来源；当前 wait/present/respond 权限与主管 UI 路由统一读取 tasks.chiefSessionId/ownerEpoch，不拿旧接纳者当当前所有者。交接后快照和交互事件使用当前主管身份，旧页面答复拒绝；无 Task 调查始终归原主管，不参与 Task 转交。
 
 ## S4 关键操作与 checkpoint
 
@@ -118,7 +99,7 @@ read 等无副作用操作沿用 Pi 历史，不建立第二份全文账本。ed
 
 ```text
 关键工具 execute：
-  校验 actor / Plan / 代次 / 控制 / 写入归属
+  校验 actor / 总体 Plan 与授权 / 代次 / 控制 / 写入归属
   保存原 operationId、参数摘要、预期对象与 intent
   await 原生 execute（signal、onUpdate 原样传递）
   保存真实 receipt（成功/失败/退出码/产物摘要）
@@ -150,29 +131,39 @@ checkpoint 只在实际停稳、关键回执齐全、指定 Pi 文件可核对�
 ```
 
 - input.stop 只针对指定输入；不清空其他 queued，也不取消主管已委派的 Task。
-- Task pause/cancel 覆盖该 Task 未结束分工及相关写入；先停准入，后停止；先到 completed 的结果不改写为撤销。
-- 控制事务生成一次 sourceKey=task-control:<requestKey> 的主管 system_notice(code=task.controlled)，包括实际命令和状态；chief 可处理该通知与其他工作。
+- Task pause/cancel 覆盖该 Task 未结束专业工作及相关写入；先停准入，后停止；先到 completed 的结果不改写为撤销。
+- 控制事务先保存真实状态/回执并让相关等待返回 blocked；无活跃返回通道时保存去重 task.controlled 系统输入。主管只处理当前 Task，不因此开始其他目标。
 - queued：pause 保留排队；cancel 保存 stopped。working：确认停止后保存状态，已有文件/结果保留。
-- resume 先核对所有中断与控制事实，再恢复原 Task。未开始 queued 原样保留；已 stopped 的当前输入不重新执行，按原 Plan/已知成果为未完成分工创建一次去重的接续输入，只做剩余工作，必要时 handoff。Plan 等待批准保持 waiting。旧 final 结果不重做；“继续”不能解除 unknown。
+- resume 先核对所有中断与控制事实，再恢复原 Task。未开始 queued 原样保留；已 stopped 的当前输入不重新执行，按总体 Plan/已知成果为未完成专业工作创建一次去重的接续输入，只做剩余工作，必要时 handoff。停止源输入的未解决交互保留为 stale 历史，当前操作需要时生成新请求；不能恢复未获授权的动作。旧正式结果不重做；“继续”不能解除 unknown。
 - abort 在当前工具内只发起，不等待自己的 idle；外层负责等待。原生工具能管理的进程沿 Pi 取消；无法确认的 detached 进程保持待核实，不重建通用进程管理器猜测。
+- 宿主的 uiContext.confirm/select/input、interaction.wait、createTaskSessions 等待及容量重申请必须绑定所属工具/Session 的 AbortSignal；uiContext 使用调用 opts.signal，缺省时显式接入当前输入/工具的取消信号。Pi 不替宿主取消自建 Promise。signal/stale/超时触发时解除本调用、注销监听/回调、释放预约；UI wait 返回 false/undefined 或明确取消，委派 wait 返回 blocked 或按取消信号退出，再由 Runtime 核对收尾，外层 abort 不能永远卡在等 idle。
+- 仅停止主管当前输入：解除其委派/交互观察等待，不取消子 Session 的原请求/工作。停止子源输入或 Task pause/cancel：对应未解决源请求标 stale，并解除源 UI wait 与主管观察等待；已解决答复保留为历史，不能使被暂停/取消动作继续。parent present/wait 的取消不是替用户拒绝仍有效的子请求。
 - Task adopt/rebind 先阻止旧协调权的新写入与派发，停稳相关写工作，核对目录/结果/决定，再 CAS 转交。通知使用新 ownerEpoch；默认不复制主管聊天或继承旧环境授权。
 
 ## S6 文件、结果与结算的跨存储顺序
 
-报告/需求/项目知识/提交都不能与 SQLite 形成共同事务。写工具按稳定 operationId 记录步骤和摘要；重复补齐原步骤。
+总体 Plan/报告/需求/项目知识/提交都不能与 SQLite 形成共同事务。写工具按稳定 operationId 记录步骤和摘要；重复补齐原步骤。
 
 ```text
+总体 Plan：校验授权/提案摘要与旧版本，预约原 requestKey/稳定 taskId
+  → 保存 operation intent：目标路径、旧/新摘要、完整 Plan 内容与原槽位约束
+  → 同目录临时文件原子替换 plan.md，读取核对新摘要
+  → DB 事务：Task/Plan 引用、currentTaskId 或新 revision、原回执
+  → 返回 taskId/planRef；恢复核对文件与原 intent，只补原登记
+
 报告提交：分配稳定 resultId/operationId 并保存意图
   → 原子保存/读取核对项目报告文件
-  → DB 事务：result + 分工进展 + 主管通知 + 回执
+  → DB 事务：result + 原回执；提交后唤醒本批等待
   → Pi 保存工具结果；失败时复用 DB result，禁止重做专业工作
 
 结算：当前验证对象与依据核对
   → 保存受影响知识、需求摘要、索引和项目内报告
   → 执行相应文档检查，登记每项路径/摘要
   → Git 保存本次成果与记录，或确认本机保存
-  → DB 事务：核对完整清单，Task completed
+  → 主管 endTask：DB 事务核对完整清单，Task completed / 释放 currentTaskId
 ```
+
+Plan 保存期间同主管槽位/同需求与同 Task 的 Plan 修订只允许一个待完成操作；跨存储失败保留预约并阻断新的覆盖，核对原文件后补登记或报告冲突。外部编辑不能用原 intent 覆盖。已有新摘要则复用，仍为预期旧摘要才补原保存，其他摘要返回版本冲突；未核对完不让专业写入使用不一致 Plan。
 
 Git 回执记录 commit、parent、提交文件清单与内容摘要；发现已有同一步提交先核对，不重复提交。无法分离用户无关改动/暂存项时阻断。未收口的需求完成摘要结合 Task 显示待核对，不触发重开发。
 
@@ -190,14 +181,14 @@ type SettlementManifest = {
   requirement?: { id: string; version: string; summaryRef: string };
   reportRefs: Array<{ path: string; sha256: string }>;
   issuesRef?: { path: string; sha256: string };
-  coverageDispositions: Array<{ resultId: string; check: string; decisionId: string }>;
+  coverageDispositions: Array<{ resultId: string; check: string; interactionId: string }>;
   saveReceipt:
     | { mode: 'git'; commit: string; parent: string; manifestRef: string }
     | { mode: 'local'; savedAt: string; manifestRef: string };
 };
 ```
 
-服务先核对实际交付源码/配置/测试树与 candidate 清单一致；列明结算资料变化并执行相应文档检查，不能把源码或正式目标改变列成例外。Git 回执由服务从实际提交核对，local 回执验证文件摘要。没有关联需求时 requirement 可空，无遗留时 issuesRef 可空；不适用项明确记录检查，不能用空清单绕过应更新知识。
+服务先核对实际交付源码/配置/测试树与 candidate 清单一致；列明结算资料变化并执行相应文档检查，不能把源码或正式目标改变列成例外。coverageDispositions 的 interactionId 必须指向已有效解决的真实用户交互，处置答复须匹配指定 resultId/check 的未覆盖原因与风险范围，不能以普通同意替代。Git 回执由服务从实际提交核对，local 回执验证文件摘要。没有关联需求时 requirement 可空，无遗留时 issuesRef 可空；不适用项明确记录检查，不能用空清单绕过应更新知识。
 
 结算后正文不必再加一个“已提交”报告并制造下一次提交；DB 记录最终保存回执，项目报告可以写稳定证据引用。写规则/新增代码会使验证对象变化，必须回到适用检查，不能混入结算。
 
@@ -205,7 +196,7 @@ type SettlementManifest = {
 
 ```mermaid
 flowchart TD
-  BOOT[取得排他锁；增加 serverEpoch] --> SCAN[扫描输入、控制、分工、操作与绑定]
+  BOOT[取得排他锁；增加 serverEpoch] --> SCAN[扫描输入、控制、专业工作、委派、交互、操作与绑定]
   SCAN --> QUEUED[未执行 queued：核对条件后可调度]
   SCAN --> CONTROL[暂停／取消／等待决定：保留意图]
   SCAN --> INTERRUPT[旧 processing：失效代次，标 interrupted]
@@ -219,7 +210,7 @@ flowchart TD
   REPAIR --> CHECK[核对未完成工作、控制、角色与配置]
   HANDOFF --> CHECK
   CHECK --> CONTINUE[沿原逻辑 Session / Task 调度剩余工作]
-  REGISTER --> NOTIFY[恢复已存结果的主管通知]
+  REGISTER --> NOTIFY[恢复本批等待与交互；不重复投结果]
   CONTINUE --> NOTIFY
 ```
 
@@ -232,7 +223,9 @@ flowchart TD
 | 认领后、进入 Pi 前 | 只有强制投递前 deliveryIntent 未保存且实现保证未调用 Pi，才可回 queued。缺 root/intent 本身不证明未启动；其余 interrupted 后核对/交接 |
 | Pi 已有输入、DB 缺关联 | 通过标记/绑定补关联；不能再追加同一用户消息 |
 | 工具 intent 后、receipt 前 | verifiable_file 核对；unsafe 待核实，默认禁止重放 |
-| result/通知提交后、Pi 工具回执前 | 保留正式结果；公开补回执试验通过才修补，否则上下文交接 |
+| result/委派回执提交后、Pi 工具回执前 | 复用原结果/原工具终局回执；补回执试验通过才修补，否则上下文交接 |
+| 子请求已保存、主管呈现前 | 原批次返回 needs_input，主管按原 interactionId 呈现；不重建子 Session |
+| 用户答复已保存、解除等待前 | 核对原效果/原上下文，解除活跃原等待；重启无 Promise 则恢复绑定/交接，不自动重做动作 |
 | Pi 完整结束、DB finish 前 | 核对指定文件及关键回执，补原终态/checkpoint |
 | 暂停/取消处理中 | 保留控制，核对残留执行，确认后收口 |
 | 结算文件/Git 后、Task completed 前 | 核对原清单/提交，补缺步骤和完成登记 |
@@ -242,6 +235,16 @@ flowchart TD
 
 能从公开 SessionManager.appendMessage 补 ToolResultMessage，但没有跨存储事务保障。只有 PI-03 覆盖配对、分支、重复补写、继续行为后才启用；否则首版默认 handoff。[公开 appendMessage](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/src/core/session-manager.ts#L1204-L1214)
 
-handoff 保存旧文件，增加 contextEpoch，沿原 sessionId/inputId 携带正式目标、当前依据、有效决定/结果、已知操作与尚未完成工作。旧 epoch 不能再运行，旧 UI 片段不能写入新绑定。未核实 unsafe 效果时禁止用新上下文绕过阻断。
+handoff 保存旧文件，增加 contextEpoch，沿原 sessionId/inputId 携带正式目标、当前依据、有效交互/结果、已知操作与尚未完成工作。旧 epoch 不能再运行，旧 UI 片段不能写入新绑定。未核实 unsafe 效果时禁止用新上下文绕过阻断。
+
+
+委派和交互恢复先读持久事实，不恢复一个空的内存 Promise：
+
+1. 旧 processing 先失效代次并 interrupted，核对所有子输入/关键效果；其他独立 Session 可以继续。
+2. 已知报告停稳的子工作不再启动；同 delegationId 查询旧成员/结果。待授权/中断工作不会因父上下文替换获得新授权。
+3. 原 createTaskSessions 工具回执已保存则复用；未保存时从本批事实形成 needs_input/blocked/completed，并保存一次原回执。不能重建原成员。
+4. 原 Pi 工具调用配对可公开修补且 PI-03/08 已通过才继续原文件；否则新 contextEpoch 交接，给主管 currentTaskId/总体 Plan/原批次/未解决交互/已知结果。
+5. requested 请求先由恢复后的主管 present；presented 请求在主管快照重现；resolved 答复只恢复原授权范围。原执行效果不明保持阻断，不能把批准当作没有执行过。
+6. 活跃 SDK UI wait 可按原 ID 解除；Server 重启后须验证恢复绑定，不能把答复送到已失效 epoch 的回调。
 
 备份必须在停稳后包含 SQLite 一致快照、被引用 Pi 文件、规则/配置引用和项目交付产物；凭证按私有存储处理。只复制 .db 而漏未合并 WAL/Pi 文件不能称可恢复备份。具体备份入口属于部署实施 Plan，恢复需要实际演练。

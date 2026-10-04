@@ -1,6 +1,6 @@
 # 项目与 Session 运行契约
 
-本页定义公开接入和共用 Pi 执行流程。存储原子性见 [S3](storage-and-recovery.md#s3-事务与认领)，角色/工具见 [G1～G4](agents-and-tools.md)。接口版本 v1；未实施。
+本页定义公开接入和共用 Pi 执行流程。存储原子性见 [S3](storage-and-recovery.md#s3-事务认领与等待)，角色/工具见 [G1～G4](agents-and-tools.md)。接口版本 v1；未实施。
 
 ## R1 公开入口
 
@@ -33,15 +33,15 @@
 | project.get | projectId | 概要与当前绑定/入口问题；目录缺失明确报告 |
 | project.rebind | projectId、expectedRevision、path | 原 ID 的新目录绑定；先停写、校验引用与确认来源，禁止因同名自动认领 |
 | session.create | projectId、title? | chief 的逻辑 Session；Pi 懒创建，无模型也能创建/读取 |
-| session.get | projectId、sessionId | role、activity、当前输入、排队数、阻断、配置摘要；activity 为 idle/processing/stopping |
+| session.get | projectId、sessionId | role、currentTaskId、activity、当前输入、等待原因、排队数、配置摘要；activity=idle/processing/waiting_children/waiting_user/stopping |
 | session.messages.list | projectId、sessionId、cursor?、limit | 指定 Pi 历史、input 关联与状态、nextCursor；无历史的未开始会话为空，有历史而文件缺失报错 |
-| session.input.submit | projectId、sessionId、content、taskId? | 用户输入只投 chief；提交后返回 inputId/status/revision |
+| session.input.submit | projectId、sessionId、content、taskId? | 用户输入只投 chief；当前 Task 的补充须关联原 taskId，按安全边界处理；普通新话题排队至原 Task 结束或新开主管会话 |
 | session.input.get | projectId、sessionId、inputId | 当前状态、checkpoint/结果的公开引用、错误/停止原因；原内容保持不变 |
 | session.input.stop | projectId、sessionId、inputId | 保存停止意图后直接 abort；返回 Input 原 status/revision、stopRequested 与 Session.activity；未停稳 activity=stopping，未知为 interrupted |
 | task.list/get | projectId、taskId?、cursor?、limit? | Task 看板/详情，无模型也可读 |
 | task.control | projectId、taskId、expectedRevision、command | pause/resume/cancel，调用同一 TaskService；停止范围见 S5 |
 | requirement.list/get | projectId、过滤/分页或 requirementId | 使用同一文件读取服务，返回非法文件信息，不经模型 |
-| decision.submit | projectId、decisionId、expectedRevision、choice | 保存选择与主管输入；验证当前 subjectVersion；不直接运行选择涉及的工具 |
+| interaction.respond | projectId、chiefSessionId、interactionId、expectedRevision、response | response 按 M5 的 confirmed/value/cancelled 校验；保存答复后解除原请求等待，不投普通用户输入；返回已收到与当前请求状态 |
 | session.stream.prepare | projectId、sessionId | subscriptionId、epoch、boundary、快照；先缓冲后读快照，见 M4 |
 | session.recovery.inspect | projectId、sessionId | interrupted 输入、旧绑定、效果与证据；直接读取 |
 | session.recovery.resolve | projectId、sessionId、inputId、expectedRevision、operationResolutions、mode | 核实具体效果后补登记/关闭/交接；mode 为 reconcile/close/handoff，不是盲目重发 |
@@ -76,30 +76,31 @@ stateDiagram-v2
 | stopped | 确认不再执行；不代表回滚已有影响 |
 | interrupted | 无法确认边界或效果，先恢复核对，本 Session 后续普通输入不启动 |
 
-每次持久变化 revision 加一。重复接纳/停止/查询返回当前状态；旧 revision 的 queued 回执不能覆盖新 completed。session.activity 从当前 input 与控制意图派生；idle 时 Task 可以继续运行或等待结果。paused/cancelled Task 不因浏览器打开恢复。
+每次持久变化 revision 加一。重复接纳/停止/查询返回当前状态；旧 revision 的 queued 回执不能覆盖新 completed。session.activity 从当前 input、工具等待与控制意图派生；waiting_children/waiting_user 时 input 仍 processing，Pi 不接受第二次并发 prompt。paused/cancelled Task 不因浏览器打开恢复。
 
 ## R3 共用 Session 执行链路
 
 ```text
 dispatch(sessionId):
   核对控制、恢复、目录、配置、Session 空闲、全局/项目容量
-  Store.claimNext：事务认领本 Session 最早输入，增加执行代次
+  Store.claimNext：按 S3 的可消费范围事务认领最早输入，增加执行代次
   Registry.getOrCreate：取得该 sessionId 的唯一 Pi 实例
   固定 actor、cwd、模型、规则版本、工具集合和活动历史绑定
   先提交 deliveryIntent，再记录输入关联标记，投递原生用户消息或明确来源 CustomMessage
   Pi 运行；原生事件立即进入内存广播
   等实际 settled；核对错误、停止、关键回执和指定文件保存边界
   Store.finish：CAS 保存终态/checkpoint/公开结果引用
-  释放 Session / 容量，扫描下一输入；专业停稳通知主管
+  释放 Session / 容量，扫描下一输入；唤醒已持久关联的委派等待点
 ```
 
-- 同一 Session 只有一个执行所有者；Dispatcher 公平轮转可运行 Session，每次认领一项。后续 queued 不能越过前序 unresolved interrupted。
+- 同一 Session 只有一个执行所有者；Dispatcher 公平轮转可运行 Session，每次认领一项。同一可消费范围内 queued 不能越过前序 unresolved interrupted；当前 Task 外的输入保留至其结束。
 - 事务不跨模型、Shell、网络或文件复制的长 await。每个 Pi 实例的事件/工具绑定当前 inputId 与 generation，迟到回调拒绝修改新执行。
-- 用户、委派、追问、决定与专业结果都走这个函数。角色/工具/输入类型不同，不另写主管执行器或子 Agent 循环。
+- 用户/委派/接续输入共用此函数。专业结果/中间交互通过当前委派工具返回；交互答复直接解除原请求等待，不作为第二次 prompt 插入忙碌 Pi。
 - 任一领域工具/原生工具失败是实际工具结果；主管仍可说明失败并正常结束输入。未知副作用或关键保存失败必须 interrupted。
 - 当前用户消息先保存；只在 Pi 空闲时投递。首版不用 Pi steer/followUp 作第二条输入队列，不重复入两队。
-- Task 暂停不阻断主管的讨论、结果通知、查询/控制；只禁止该 Task 的专业执行和相关写入。主管自身 interrupted 则仍按恢复阻断处理。
-- 专业 report 成功不等于 Pi 停稳。final 报告后禁止后续候选写入；Runtime 确认结束才释放写入负责人。若有需主管推进的正式分工，持久保存一次 assignment.settled 通知，避免只靠内存等待。
+- 一个主管同时协调一项未结束 Task；当前 Task 的交互、补充与恢复可处理，其他目标用另一个主管。查询/交互响应/停止/恢复直接进入对应服务；主管自身 interrupted 不能启动普通队列。
+- 专业 report 成功不等于 Pi 停稳。正式最终报告后禁止本工作修订继续写入；Runtime 确认结束才释放负责人并满足本批完成条件。正式报告、交互和停稳均保存事实后唤醒原委派等待。
+- createTaskSessions / interaction.wait 的等待异步进行，释放模型执行容量但保留 Session 执行所有权；主管需要继续模型调用时重新公平申请容量。只有一个名额时子 Session 仍能运行。每个 Session 待运行模型/工具期间不同时使用另一输入。
 
 ## R4 Pi 接入的明确契约
 
@@ -110,14 +111,16 @@ Pi 接入层只负责以下小范围连接，不接管模型循环：
 | 宿主动作 | 接入要求 |
 |---|---|
 | create/open | 验证绑定、header/历史、cwd、实际模型和角色/工具契约；禁止默认模型回退或“最近文件” |
-| deliver user/delegation/send | 保留原生 content，使用 prompt/sendUserMessage；inputId 是宿主关联，不存在原生参数 |
-| deliver result/decision/system notice | `sendCustomMessage`，customType=agentdev.input，模型可见 content 含来源/ID/事实/引用；空闲时 triggerTurn |
+| deliver user/delegation/continuation | 保留原生 content，使用 prompt/sendUserMessage；inputId 是宿主关联，不存在原生参数 |
+| return child result / interaction | 原 createTaskSessions 工具的 content/structuredContent 带真实 ID、状态与引用；保存原操作回执后返回，不再追加同一结果的 CustomMessage |
+| user interaction | 通过 session.bindExtensions({uiContext}) 接入宿主 UI 适配；confirm/select/input 对应持久交互。子请求先让出当前委派，主管 present；答复按原身份解除等待 |
+| recovery/control notice | 只在空闲时 sendCustomMessage，customType=agentdev.input，模型可见内容含来源/ID/事实；不能给仍在等待的同一次调用重复输入 |
 | input correlation | 用公开 appendCustomEntry 写 agentdev.input 标记，串行定位其实际根输入条目；保留 markerId/inputEntryId，不按正文相等匹配 |
 | observe | subscribe 的同步 listener 仅广播/记录内存状态；不能 await 监听器承担持久事务 |
 | finish | 核对 agent_settled、错误/取消、关键回执及文件边界；完成后记录 checkpoint |
 | stop | 工具内 ctx.abort 发起取消；外层 await session.abort 等实际空闲 |
 
-agentdev.input 标记保存 inputId、requestDigest、generation、contextEpoch；它是 Pi 自定义条目，不把工程元数据伪装成用户文本。自定义内容通知的模型可见部分定义在 M3。
+agentdev.input 标记保存 inputId、requestDigest、generation、contextEpoch；它是 Pi 自定义条目，不把工程元数据伪装成用户文本。委派工具的模型可见返回定义在 M2；uiContext 的确切接口按固定版本导出类型接入，不将 SDK 嵌入改成 RPC 子进程。
 
 这套关联路线需 [PI-01](implementation-checks.md#i1-pi-接入必须先通过的试验) 验证：首次文件建立、模板转换、压缩、分支、扩展拦截、写失败与重复追加。标记不能确定根输入时停止准入、保留 interrupted，采用核对/交接；禁止让实现 Agent 自己添加原生 inputId 字段。
 
@@ -142,8 +145,8 @@ Project 首次 realpath 绑定由唯一约束保证，显示名不作身份。�
 | PROJECT_UNAVAILABLE / MODEL_UNAVAILABLE | 尚未开始输入保留 queued 和原因；已有历史/看板仍可读 |
 | HISTORY_UNAVAILABLE / PI_INPUT_UNCONFIRMED | 精确恢复/关联不成立；保留记录，进入检查或交接 |
 | STORAGE_UNAVAILABLE / EFFECT_UNCONFIRMED | 保存或效果不可确认；停止后续准入，不把已可能生效的操作自动重做 |
-| WORKSPACE_BUSY / TASK_CONTROLLED / STAGE_NOT_READY | 当前写入负责人、Task 控制或依赖未满足；不启动不适用专业工作 |
+| WORKSPACE_BUSY / TASK_BUSY / TASK_CONTROLLED / STAGE_NOT_READY | 当前写入负责人、Task 控制或依赖未满足；不启动不适用专业工作 |
 | REPORT_MISSING / REPORT_STALE / COMPLETION_INCOMPLETE | 无正式报告、候选/依据失效、完成缺项；保留 Task 与真实证据 |
-| DECISION_STALE / STREAM_RESYNC_REQUIRED | 重新展示当前决定，或重取快照；不套用旧选择/片段 |
+| INTERACTION_STALE / INTERACTION_NOT_PRESENTED / STREAM_RESYNC_REQUIRED | 请求已失效/未由主管展示，或须重取快照；不套旧授权、不直接展示子请求 |
 
 known errors 的错误形状一致；失败 details 提供可读原因/当前引用，不泄漏凭证。机器字段的枚举由本页/G2/S2 定义，新增公开方法/消息种类须改相应契约与检查，不在局部实现中私建协议。
