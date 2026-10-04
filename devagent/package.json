@@ -1,0 +1,20 @@
+{
+  "name": "devagent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "spikes": "node spikes/pi-01-input-correlation.ts && node spikes/pi-02-settle-semantics.ts && node spikes/pi-05-save-fail-abort.ts && node spikes/pi-07-multi-session.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2"
+  }
+}
