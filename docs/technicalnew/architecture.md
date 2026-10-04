@@ -1,6 +1,6 @@
 # 执行架构与职责
 
-当前 v1 设计。产品含义见 [产品总览](../productnew/README.md)，实现字段和算法按链路展开。
+当前技术设计。产品含义见 [产品总览](../productnew/README.md)，实现字段和算法按链路展开。
 
 ## A1 执行总图
 
@@ -15,10 +15,14 @@ flowchart TB
   DISPATCH --> RUNTIME[Session Registry / 共用 Runtime]
   RUNTIME --> PI[独立 Pi 1.0 Session]
   PI --> LOCAL[Pi 原生 Local 工具：关键意图 / 回执]
-  PI --> TOOLS[主管工具 / 专业报告 / 交互工具]
+  PI --> TOOLS[Task 工具 / 专业报告]
+  PI --> NATIVE[question / 扩展 ctx.ui 原生请求]
+  NATIVE --> ADAPTER[Server 原生 UI 适配]
+  ADAPTER -->|请求提交| DB
+  ADAPTER -->|提交后按当前主管路由| HUB
   TOOLS --> STORE
-  TOOLS --> WAIT[等待本批结果或中间交互]
-  DB -->|正式结果 / 交互事实| WAIT
+  TOOLS --> WAIT[父委派等待本批正式结果]
+  DB -->|正式报告且工作停稳| WAIT
   WAIT -->|原工具返回；主管继续决策| PI
   PI --> HISTORY[(指定 Pi JSONL)]
   PI --> HUB[按 sessionId 内存广播]
@@ -35,7 +39,7 @@ flowchart TB
 | 请求/写工具 → SQLite | 等短事务/必要文件保存；回执绑定原请求 | [S3/S6](storage-and-recovery.md) |
 | SQLite → Dispatcher | 提交唤醒、启动/周期扫描；异步消费输入行 | [R3](runtime-contract.md#r3-共用-session-执行链路) |
 | 委派工具 → 专业 Session | 创建/绑定后等待；事务不跨等待 | [M1](messaging-and-collaboration.md#m1-task-多-session-协作子图) |
-| 子结果/交互 → 主管 | 当前等待工具返回，持久事实可查询；不另投重复结果输入 | [M2](messaging-and-collaboration.md#m2-委派等待协议) |
+| 子正式结果 → 主管 | 当前等待工具返回；原生交互由宿主转发，父委派仍等待；不另投重复结果输入 | [M2](messaging-and-collaboration.md#m2-委派等待协议) |
 | 用户交互答复 → 原请求 | 直接保存并解除等待，不经过忙碌 Session 普通队列 | [M5](messaging-and-collaboration.md#m5-统一交互与授权) |
 | Pi → UI | 原生事件内存广播；历史从 Pi 读取 | [M4](messaging-and-collaboration.md#m4-ui-快照与实时事件) |
 | 停止/恢复 → Runtime | 直接控制，保存意图后中止/核对 | [S5/S7](storage-and-recovery.md) |
@@ -102,7 +106,7 @@ erDiagram
 | TaskService | 四个主管核心工具、当前 Task、总体 Plan、关联/结果、完成核对；阶段由主管显式写入 |
 | Store / Dispatcher | 短事务、CAS、去重、认领、容量、扫描；不解释自然语言或选择角色 |
 | SessionRegistry / Runtime | 独立 Pi/工具/上下文、等待与收尾；模型循环仍归 Pi |
-| InteractionService | 原请求身份、主管呈现、答复保存与原请求续接；不替主管作业务决定 |
+| 原生 UI 适配 | 原请求身份、路由到当前主管协作通道、答复保存并直接恢复源请求；不需要主管模型处理转发 |
 | RecoveryService | 核对 DB/Pi/效果、补原回执或交接；未知不重放 |
 
 这些是同一 Server 的职责，不要求每项建包/进程。SQLite WAL 是存储机制；Dispatcher 查询 session_inputs，不直接消费 -wal 文件。
@@ -121,7 +125,7 @@ erDiagram
 | 主源 | 采用 | AgentDev 负责 |
 |---|---|---|
 | [Pi v1.0.0 SDK](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/docs/sdk.md) | Session、模型循环、原生工具/历史/取消、UI 适配 | 项目/Task、可靠接纳、当前步骤等待与授权持久化 |
-| [OMP 同步委派](https://github.com/can1357/oh-my-pi/blob/9348320cc4a30a7195d36a1f05a6c11bcb701a17/packages/coding-agent/src/task/index.ts#L1463-L1570) | 有界并发、独立角色/Session、聚合工具返回 | 正式 Task、交互让出、重启后的关联/等待恢复 |
+| [OMP 同步委派](https://github.com/can1357/oh-my-pi/blob/9348320cc4a30a7195d36a1f05a6c11bcb701a17/packages/coding-agent/src/task/index.ts#L1463-L1570) | 有界并发、独立角色/Session、聚合工具返回 | 正式 Task、等待释放容量、重启后的关联/等待恢复 |
 | [Durable 固定版本](https://github.com/earendil-works/pi/blob/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/packages/durable/README.md) | 稳定请求、先保存、提交边界、未知效果不重放 | coding-agent SDK 中的所需机制 |
 
 Durable 使用 pi-ai + Chord 的独立 Harness。这里使用 coding-agent SDK；关键能力按 [I1](implementation-checks.md#i1-pi-接入必须先通过的试验) 取证。

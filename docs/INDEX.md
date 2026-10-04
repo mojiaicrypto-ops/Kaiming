@@ -11,12 +11,12 @@
 | [任务交付](productnew/modules/delivery.md) | 计划、授权、独立审核/测试、结算 | 正式修改与完成核对 |
 | [项目知识](productnew/modules/project-knowledge.md) | 权威文档、模块内聚、按需加载与项目记忆 | 整理文档/上下文/结算 |
 
-技术细节按 technicalnew/README 的链路索引加载，不默认读取所有文档。当前产品需求是正式依据；技术设计按下方当前状态区分可复用基线与待同步内容。
+技术细节按 technicalnew/README 的链路索引加载，不默认读取所有文档。当前产品需求是行为依据，技术设计是待实现契约；运行验证状态见下方。
 
 ## 当前状态
 
-- productnew：当前产品需求，明确轻量提案 → 统一设计角色与独立审阅 → 实施需求 → 实现 Task 流程 → 结算；采用主管总体 Plan、显式阶段与同步推进/中间交互返回。
-- technicalnew：既有 v1 技术基线，组件、输入/消息、存储与恢复路线及原审阅在 [验证记录](technicalnew/validation.md)。[Chief v2 目标提示词](technicalnew/prompts/chief.md) 与 [统一设计 Agent 提示词](technicalnew/prompts/designer.md) 已更新，设计角色入口/能力和按文件读、通过工具保存需求的边界已局部同步；需求类型/格式、统一设计角色、分析 Task 与所有专业委派绑定、Task 与需求关联、返回设计、完成收口、Pi 原生交互适配（移除业务确认分类和模型交互操作链）及基础规则/其他专业细节、模型行为检查尚须同步；这些待同步内容不得直接作为新功能实施依据，原验证不覆盖本轮产品变化。
+- productnew：当前产品需求，明确轻量提案 → 统一设计角色与独立审阅 → 实施需求 → 实现 Task 流程 → 结算；采用主管总体 Plan、显式阶段与委派等待/宿主直接处理原生交互。
+- technicalnew：当前角色/工具、需求格式、原生交互、消息/存储/恢复与上下文装配已归一；[七角色与工具入口](technicalnew/agents-and-tools.md)、[格式规范](technicalnew/requirements-format.md)、[验证记录](technicalnew/validation.md)。文档检查不证明 SDK、模型或产品已经可用。
 - 新架构业务代码尚未按本轮设计实施；Pi 接入、模型行为、故障与产品运行验收均未因文档写成而通过。实施先按 [实现检查](technicalnew/implementation-checks.md) 验证标记项目。
 - 本轮未审查原工程功能，不将已有代码与新产品需求逐项对应或宣称已完成。当前代码地图与真实运行检查入口在后续实施结算时形成。
 

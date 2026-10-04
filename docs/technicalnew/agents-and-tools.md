@@ -2,21 +2,21 @@
 
 产品依据：[任务交付](../productnew/modules/delivery.md)、[主管对话](../productnew/modules/chief-conversation.md)、[项目知识](../productnew/modules/project-knowledge.md)。
 
-角色提示词与能力目标已按当前产品方向局部同步；分析 Task、原生交互适配、需求类型/Schema 与完成收口仍待后续契约同步和运行验证。旧 interaction 操作链不作为最新提示词启用依据。
+本页定义目标角色、模型工具和装配契约；实现与运行验证状态见技术索引及实现检查。需求序列化唯一见 [需求格式](requirements-format.md)，原生交互唯一见 [M5](messaging-and-collaboration.md#m5-统一交互与授权)。文档写成不表示功能已实现。
 
 ## G1 角色与工具集合
 
 | roleId | 责任 | 能力 |
 |---|---|---|
-| chief | 用户讨论、总体 Plan、阶段更新、按步骤委派、交互业务判断、最终核对 | read；四个核心工具、task、requirement；Pi 原生交互接入 |
-| designer | 产品分析、内聚模块、实施需求与适用技术架构/契约 | read/write/edit、requirement.list/get/save、agent_report、task.get；Pi 原生交互接入 |
-| developer | 完成总体 Plan 中指定实施目标 | read/write/edit/bash、agent_report、task.get、requirement.list/get；Pi 原生交互接入 |
-| reviewer | 独立检查需求/验收、总体 Plan 和实际候选 | read、agent_report、task.get；Pi 原生交互接入；不提供任意 bash/源码写入 |
-| tester | Review 后在固定候选的测试副本验证 | read/bash、agent_report、task.get；Pi 原生交互接入 |
-| settler | 更新已验证知识/摘要/记录，保存成果 | read/write/edit/bash、agent_report、task.get、requirement；Pi 原生交互接入 |
-| investigator | 独立只读调查/核实具体效果 | read/已配置只读检查、agent_report、task.get；Pi 原生交互接入 |
+| chief | 用户讨论、总体 Plan、阶段更新、按步骤委派、交互业务判断、最终核对 | read；四个核心工具、task、requirement、project、question；Pi 原生交互接入 |
+| designer | 产品分析、内聚模块、实施需求与适用技术架构/契约 | read/write/edit、requirement.list/get/save、agent_report、task.get、question；Pi 原生交互接入 |
+| developer | 完成总体 Plan 中指定实施目标 | read/write/edit/bash、agent_report、task.get、requirement.list/get、question；Pi 原生交互接入 |
+| reviewer | 独立检查需求/验收、总体 Plan 和实际候选 | read、agent_report、task.get、question；Pi 原生交互接入；不提供任意 bash/源码写入 |
+| tester | Review 后在固定候选的测试副本验证 | read/bash、agent_report、task.get、question；Pi 原生交互接入 |
+| settler | 更新已验证知识/摘要/记录，保存成果 | read/write/edit/bash、agent_report、task.get、requirement、question；Pi 原生交互接入 |
+| investigator | 独立只读调查/核实具体效果 | read/已配置只读检查、agent_report、task.get、question；Pi 原生交互接入 |
 
-前后端是 developer.specialization。chief 从用户会话入口创建，专业 Session 不再委派。product 与 designer 合并为 designer；具体调查或试验由主管按需要提供权限与环境，不默认开放任意执行。身份由宿主绑定 projectId/sessionId/taskId，不能靠模型参数切换。工具 op 子集、写入负责人、当前总体 Plan 授权与控制由服务校验；普通 Local 工具不等于 OS 沙箱。
+前后端是 developer.specialization。chief 从用户会话入口创建，所有专业 Session 必须绑定 Task，且不再委派。designer 统一承担产品分析与适用技术设计；具体调查或试验由主管按需要提供权限与环境，不默认开放任意执行。身份由宿主绑定 projectId/sessionId/taskId，不能靠模型参数切换。工具 op 子集、写入负责人、当前总体 Plan 授权与控制由服务校验；普通 Local 工具不等于 OS 沙箱。
 
 ## G2 模型工具
 
@@ -26,41 +26,41 @@
 
 ### createTask
 
-输入：kind（standard/light/document）、goal、scope、acceptanceRefs、basisRefs、planMarkdown、sourceInputId、requirementId?、authorizationRef。
+输入：kind（analysis/design/standard/light/document）、goal、scope、acceptanceRefs、basisRefs、planMarkdown、sourceInputId、requirementId?、authorizationRef。
 
-先分配稳定 taskId，按 S6 保存总体 Plan 到 `.dev/work/<taskId>/plan.md`；事务登记 Task、planRef、当前主管 currentTaskId 与原回执。返回 taskId/revision/phase=plan/planRef。总体 Plan 包含目标、范围、依据、步骤/责任、验证、风险与待决定事项，不预先创建全部专业 Session。已有实施授权默认覆盖范围内 Plan；逐计划政策或新增范围需对应有效决定。
+先分配稳定 taskId；需要确认时先完成下述原生确认，再按 S6 保存总体 Plan 到 `.dev/work/<taskId>/plan.md`；事务登记 Task、planRef、当前主管 currentTaskId 与原回执。返回 taskId/revision/phase=plan/planRef。总体 Plan 包含目标、范围、依据、步骤/责任、验证、风险与待决定事项，不预先创建全部专业 Session。已有实施授权默认覆盖范围内 Plan；逐计划政策或新增范围需对应有效决定。
 
-逐计划确认时，主管先用 interaction.request 的 plan.confirm 展示完整 planMarkdown 提案，以正文摘要作为 subjectRef/version；批准后 createTask 提交相同正文并引用该 interactionId。确认不依赖已存在的 taskId 或 Plan 文件。修订已有 Plan 同样先批准提案，绑定原 taskId/Plan 版本，再由 updateTask 保存；政策不要求确认时沿原授权直接保存。
+逐计划政策需要确认时，createTask 工具内部通过 ctx.ui.confirm 展示完整 planMarkdown，按 M5 保存答复；确认绑定正文摘要、源授权和原主管槽位，拒绝不创建 Task 或登记 Plan 变更。已有有效授权涵盖同一正文/范围时可复用。updateTask 修订同样由工具内部确认，绑定 taskId、原 Plan 版本、修订正文摘要；等待答复后重新核对版本与控制，再按 S6 保存，不能把旧同意套到新正文。模型不登记或维护交互生命周期。
 
-同需求仅一个未结束 Task，同主管仅一项未结束 Task（含暂停）；碰撞返回原关联/TASK_BUSY，不默默建立第二项。需求保存和自由讨论不自动建 Task。
+同一实施需求至多一个未结束实现 Task，同主管至多一项未结束 Task（含暂停）；碰撞返回原关联/TASK_BUSY，不建立第二项。需求保存和主管自由讨论不自动建 Task；需要委派只读调查时先建 analysis Task。Task.kind 的唯一枚举为 analysis/design/standard/light/document；analysis 不改变项目文件或正式产品依据，调查结果作为 Task 成果保存。设计工作使用 design，正式文档维护使用 document，代码工作按产品 D-04 选 standard/light。
 
 ### updateTask
 
 输入：taskId、expectedRevision、phase、summary、nextStep?、blockReason?、status?（active/waiting）；修改正式目标时可附 changes={goal?,scope?,kind?,acceptanceRefs?,basisRefs?,planMarkdown?,expectedPlanVersion?,authorizationRef?}。
 
-保存前一阶段总结、当前阶段与下一步，返回新 revision。phase=clarify/design/plan/develop/review/test/settle；轻量/文档依 D-04 适用路线。阶段切换前调用，阶段内不逐 token 更新。Runtime/报告不自动推进 phase；技术事实不覆盖主管摘要。
+保存前一阶段总结、当前阶段与下一步，返回新 revision。phase 的唯一枚举为 clarify/analyze/design/plan/develop/review/test/settle；analysis 使用适用 analyze 阶段，其他依 D-04 的适用路线。阶段切换前调用，阶段内不逐 token 更新。Runtime/报告不自动推进 phase；技术事实不覆盖主管摘要。
 
 目标/验收/依据实质修订先停稳相关写入，核对用户决定与原 Plan 版本，保存新 Plan/basis，旧候选/验证失效。禁止用 updateTask 直接 completed/cancelled，禁止覆写原控制意图。进入 test 核对当前候选的必要 Review 已完成且问题处置有效；角色选择和是否返工由主管决定。
 
 ### createTaskSessions
 
-正式工作 taskId 必需；自由讨论的只读调查可省略，角色限 investigator。首版每次只组织当前步骤。mode 是互斥形状：
+所有专业委派 taskId 必需，含自由讨论中的调查和恢复核实；不能以 investigator 或只读权限绕过绑定。首版每次只组织当前步骤。mode 是互斥形状：
 
 | mode | 参数 | 动作 |
 |---|---|---|
 | create（默认） | sessions[{roleId,specialization?,label,instructions,refs,dependsOnResultIds?,expectedKind,candidateId?,workspaceRef?}] | 原子创建专业 Session、Task 关联、首条输入、本批 delegationId；提交后异步调度并等待 |
 | wait | delegationId | 等同一批现有工作；不追加输入、不重建 Session |
-| continue | sessionId、instructions、refs、dependsOnResultIds? | 原 Session 保存新输入并生成本次等待；适用返工增加 workRevision，旧结果保留 |
+| continue | sessionId、instructions、refs、dependsOnResultIds? | 原 Session 保存新输入并生成本次等待；当前工作停稳后进入新 workRevision/新批次，旧结果保留 |
 
 create 整批接纳失败则无半批工作。角色符合 Task 当前阶段；Review/Test 带 candidateId、总体 Plan/正式依据，不能同批混合 Review/Test。并行开发的 workspaceRef 必须是服务登记的分离目录；共享真实目录不允许多写者。工具内部复用统一 Session 创建/绑定/Runtime。
 
-工具保存接纳身份后等待，期间 onUpdate 可显示实际 ID/进度，但不当成功终态。返回固定 [M2](messaging-and-collaboration.md#m2-委派等待协议) 结果：completed、needs_input 或 blocked。主管等待的是当前指定工作，子请求/阻断会交回控制权；不等整项 Task 或 Session 永久结束。
+工具保存接纳身份后等待，期间 onUpdate 可显示实际 ID/进度，但不当成功终态。返回固定 [M2](messaging-and-collaboration.md#m2-委派等待协议) 结果：completed 或 blocked。主管等待当前指定工作；原生用户请求经 M5 宿主直转，父工具保持等待，正式阻断才交回控制权；不等整项 Task 或 Session 永久结束。
 
-continue 核对归属、授权/当前 Plan、控制和已知效果；不得在另一个输入仍执行或挂起时并发 prompt。活跃授权通过 interaction 响应继续原工具，不调用 continue 复制工作。开发/文档范围内返工可复用原 Session；新 Review/Test 必须独立 Session。
+continue 核对归属、授权/当前 Plan、控制和已知效果；不得在另一个输入仍执行或挂起时并发 prompt。活跃原生交互答复按 M5 继续原工具，不调用 continue 复制工作。开发/文档范围内返工可复用原 Session；正式阻断后补齐同一验证可 continue 原独立 Session，原独立上下文边界保持。已验证成果改变后新 Review/Test 必须用新的独立 Session，不能复用作者上下文。
 
 ### endTask
 
-输入：taskId、expectedRevision、settlementResultId。按 G3 核对，返回 completed/revision 或 COMPLETION_INCOMPLETE 与缺项。成功事务释放 currentTaskId；已有成果未变化时仅补缺项，不重新实施。phase=settle 留作最后业务阶段，完成由 status=completed 表达。
+输入：taskId、expectedRevision、completionResultId。按 G3 核对，返回 completed/revision 或 COMPLETION_INCOMPLETE 与缺项。成功事务释放 currentTaskId；已有成果未变化时仅补缺项，不重新实施。analysis 引用 investigation 成果，其他类型引用 settlement 成果；analysis 的最后适用阶段可为 analyze，其他为 settle，完成统一由 status=completed 表达。
 
 ### task
 
@@ -68,46 +68,35 @@ continue 核对归属、授权/当前 Plan、控制和已知效果；不得在�
 
 ### agent_report
 
-专业输入：kind（design/implementation/review/test/settlement/investigation/recovery）、summary、body 或 reportRef（二选一）、basisRefs、candidateId?、verdict?、checks[]、supersedesResultId?、settlement?。不提供子 Plan 报告种类；每个正式最终报告结束当前 workRevision 的写入。
+专业输入：kind（design/implementation/review/test/settlement/investigation/recovery）、summary、body 或 reportRef（二选一）、basisRefs、candidateId?、verdict?（passed/failed/blocked）、checks[]、supersedesResultId?、settlement?。不提供子 Plan 或临时协调报告种类；每个正式最终报告结束当前 workRevision 的写入。需要 chief 模型决策时，提交当前期待种类的正式 verdict=blocked 报告，说明问题、证据和需要主管决定的事项；停稳后父委派返回 blocked，主管解决后 continue 原 Session 的新 workRevision/批次。它不能替代普通 ctx.ui 用户交互，普通用户等待不构成另一种委派终局。
 
 checks 每项 name/status（passed/failed/blocked/not_run）/command?/exitCode?/reason?/evidenceRefs。只有实际检查写 passed，真实失败保留 failed；未覆盖有原因与处置引用。
 
-报告服务核对 actor/期待种类/候选/依据，保存 `.dev/work/<taskId>/<sessionId>/` 文件；无 Task 调查使用 Server 调查目录。然后一个事务保存 result、原回执；提交后唤醒相关委派等待。返回 resultId/reportRef，主管通过原委派工具取得结果。报告已保存但 Pi 未停稳时不能把本批工作标完成。
+报告服务核对 actor/期待种类/候选/依据。body 输入按 S6 保存 `.dev/work/<taskId>/<sessionId>/` 新报告；reportRef 输入核对该目录内已有完整报告原文及摘要，只登记该文件，不复制第二份或重写正文。结算报告在 Git/本机保存前准备，保存后用 reportRef 登记正式结果；提交号等最终回执仅进 DB 结构化字段，不回写已保存报告。然后一个事务保存 result、原回执；提交后唤醒相关委派等待。返回 resultId/reportRef，主管通过原委派工具取得结果。报告已保存但 Pi 未停稳时不能把本批工作标完成。
 
 报告正文/结构不可变；修订新增 resultId、supersedesResultId，validity 是当前工作/候选/依据的投影。只能修订同 Task 同种类且原 Session 或新独立复核明确依赖的报告。settlement 必须附 S6 的结构化清单。
 
 ### requirement
 
-访问边界：提案/实施需求可用普通 read 或 get 读取，列表使用 list；正式新建、修改、状态保存必须 save，不通过 write/edit/脚本绕过格式与版本校验。修改已有记录前 get 取得原文与版本。产品、技术及索引文档仍使用普通文件工具。提案轻量格式与实施需求七部分的精确双类型 Schema 尚待同步，下方 v1 格式不能直接用于新增提案。
+访问边界：提案/实施需求可用普通 read 或 get 读取，列表使用 list；正式新建、修改、状态保存必须 save，不通过 write/edit/脚本覆盖需求文件。修改已有记录前 get 取得原文与版本。产品、技术及索引文档仍使用普通文件工具。
 
 | op | 参数 → 结果 |
 |---|---|
-| list | status?、limit、cursor? → items/invalidFiles/nextCursor |
+| list | kind?、status?、limit、cursor? → items/invalidFiles/nextCursor |
 | get | requirementId → 原文、元数据、version、引用/格式问题 |
 | save | requirementId、expectedVersion（新建 null）、markdown、authorizationRef → 原子保存的 ID/path/version/metadata |
 
-格式 v1：YAML 元数据 schemaVersion:1/id/title/status/createdAt/updatedAt/modules[]；status=pending/in_progress/completed/cancelled/archived。正文七个二级标题按顺序各一次：目标、范围、行为与异常、验收、来源与决定、未知、完成摘要；可用三级标题细分，未知/尚未实施如实说明。modules 为已有项目相对文档路径；时间 UTC RFC3339；位置 `.dev/requirements/<id>.md`。
+schemaVersion:2 的双类型元数据、状态、正文、引用、列表排序和版本校验唯一见 [需求格式 F1～F4](requirements-format.md)，本页不复制 Schema。授权引用真实用户输入或已解决原生交互；保存不自动开 Task，归档不移动删除文件。
 
-安全解析 YAML，核对 Schema/引用/原版本，以同目录临时文件原子替换；碰撞/旧版本拒绝，失败保留原文。列表从文件重建，监听只加速，非法文件不被筛选隐藏。updatedAt 倒序/id 升序。授权必须引用真实用户输入/已解决交互；保存不自动开 Task，归档不移动删除文件。
+### question
 
-### interaction
+输入：method（confirm/select/input）、title、message?、options?（select 必需）。单个薄工具调用对应 ctx.ui 原生方法，按 M5 取得并返回真实 confirmed/value/cancelled 与 interactionId；取消值按原生接口映射。它只用于模型主动询问；options 是保存的可选字符串列表，不接受客户端扩充；工具内部需要授权时直接调用 ctx.ui，不再绕调用 question。没有业务 kind，也没有模型可调用的请求登记/呈现/解决/失效操作；具体动作权限仍由原工具/服务核对，普通“同意”不能授权未知动作。
 
-以下为尚未替换的 v1 记录，用于定位后续同步范围，不是当前模型的可启用交互工具集合。最新目标沿用 Pi 原生确认/选择/输入，由宿主负责关联、转发和恢复；不注册业务确认类型或让模型管理下列生命周期操作。
+### project
 
-按 [M5](messaging-and-collaboration.md#m5-统一交互与授权) 使用一个请求/响应协议：
+chief 的辅助工具首版 op=initialize。输入：expectedProjectRevision、files[{path,expectedVersion,content}]、reusedAuthorityRefs、requestWriteUse、authorizationRef?。形成明确初始化差异包，真实展示入口缺失、复用依据、拟写路径/内容与影响；工具内部调用 ctx.ui.confirm，确认严格绑定差异包摘要/原版本/请求用途。已有有效授权涵盖同一差异包和用途时复用，不重复确认。
 
-| op | 调用者与作用 |
-|---|---|
-| request | chief/专业 Session：kind、method、title/message、options?、subjectRef/version、actionRef?；保存原请求并等待答复。chief 自己发起即 presented；子请求为 requested，让当前委派返回 needs_input |
-| present | chief：interactionId；展示原请求/来源/影响，requested → presented；不能修改原操作范围或悄悄批准 |
-| wait | chief：interactionId；异步等已呈现请求的答复，经专用响应入口解除等待 |
-| resolve | chief：interactionId、expectedRevision、response、sourceInputId；仅处理已收到的真实用户文字答复；和按钮走同一服务，不接受模型自造授权 |
-| invalidate | chief：interactionId、expectedRevision、reason；失效原 requested/presented 请求并取消原 request/wait，不批准原动作；已解决请求不能覆写 |
-| apply_initialization | chief：已批准初始化 interactionId、expectedProjectRevision；应用批准差异包，核对入口，失败补原步骤 |
-
-kind 首版 requirement.create/requirement.implement/plan.confirm/scope.confirm/project.initialize/tool.confirm/question。Plan 确认仅指主管总体 Plan，request 附 planMarkdown、proposalHash、taskId?/basePlanVersion?，批准严格绑定该提案。已有明确授权复用，子内部计划不另触发确认。
-
-project.initialize 的 request 附 initialization={files:[{path,expectedVersion,content}],reusedAuthorityRefs,requestWriteUse}。批准事务记录 Project.writeAuthorizationRef 与 initializationRef={interactionId,proposalHash,status:approved_pending}；apply_initialization 只按批准包逐文件核对/原子保存/留回执，入口有效后 ready。拒绝不写，冲突保留原文并重新提出当前差异。
+批准后保存 Project.writeAuthorizationRef 与 initializationRef 的批准范围/执行步骤，按 S6 逐文件核对、原子保存和记录回执；入口有效后返回 ready 与实际文件引用。拒绝不写，冲突保留原文，重新核对当前差异再决定。保存失败核对原步骤补齐，不重做已成功步骤；原请求仅为 M5 原生交互，不注册初始化业务 kind 或 apply_initialization 模型生命周期工具。
 
 ## G3 总体 Plan、候选与完成核对
 
@@ -119,26 +108,41 @@ prepare_candidate 在相关写入停稳后取得 capture 预约，复制源码/�
 |---|---|
 | 目标/总体 Plan/授权 | 当前版本、依据、有效决定 |
 | 专业工作停稳 | 必需正式结果、无残留运行/未解决交互/未知效果 |
-| 适用验证 | 标准代码同候选 Review 后 Test；轻量/文档独立检查；阻断问题闭合 |
+| 适用验证 | standard 同候选 Review 后 Test；design/light/document 独立审阅或检查；阻断问题闭合 |
 | 交付一致 | 实际源码/配置/测试与候选清单一致，改变重新验证 |
-| 结算保存 | 受影响知识/摘要/入口/报告、遗留、覆盖处置、Git 或本机回执 |
+| 结算保存 | 受影响知识/摘要/入口/报告、遗留、覆盖处置、Git 或本机回执；有关需求最终内容/状态版本已纳入该保存并匹配清单 |
+
+上述验证、候选与结算条件适用于非 analysis 工作。analysis 核对目标/总体 Plan/授权、覆盖本次调查目标的有效非阻断 investigation 结果及全部专业工作停稳、无未解决请求/未知即可 endTask；不强制 Review/Test、结算或 Git。其他工作按适用检查和结算收口。
 
 不把真实缺陷改成未覆盖，不通过取消清除已报告问题。结算只变更列明记录，源码/正式目标改变回到适用检查。有 Git 保护无关改动/暂存；无 Git 返回 local_saved。
 
 ## G4 规则与上下文装配
 
 ```text
-Pi 原生说明 + 内置基础规则 + 当前角色规则
- + 项目入口 AGENTS.md / .dev/INDEX.md / .dev/PROJECT.md
- + 当前 Task/总体 Plan 与输入，或主管的专业目标/依据路径
+chief：Pi 原生说明 + base 完整正文 + chief 完整角色正文
+专业：Pi 原生说明 + base 完整正文 + specialists 共同规则正文 + 所选角色完整正文
+两者：项目入口 AGENTS.md / .dev/INDEX.md / .dev/PROJECT.md
+      + 当前 Task/总体 Plan/授权/控制 + 本次输入及正式依据路径
 ```
 
-内置文本：[base](prompts/base.md)、[chief](prompts/chief.md)、[专业共同规则与当前角色](prompts/specialists.md)。designer 实际加载 [完整设计提示词](prompts/designer.md) 的角色正文，替代旧 product/designer 短块；链接或角色名不能替代规则装配。只注入当前角色，规则/模型/工具/cwd/绑定摘要持久记录。主管压缩/重启从 currentTaskId + task.get 找回真实关系，不只靠记忆 ID。
+宿主实际读取并注入上述正文，不用角色名、短规则块或链接代替。共同规则唯一位于 [specialists](prompts/specialists.md)；基础规则唯一位于 [base](prompts/base.md)；chief 不注入专业共同规则。各完整角色正文唯一按下表装配，文档状态说明不作为角色正文。
 
-专业 Agent 自行按引用 read；Server 校验归属/可读性，不拼整项目。独立 Reviewer/Tester 不读开发/主管/其他 Reviewer 聊天自评。明确 resourceLoader，不自动加载未知扩展。项目规则变化在安全边界核对并显式更新/交接。
+| roleId / 完整正文 | 本次目标与依据上下文 | 权限及工作环境 |
+|---|---|---|
+| chief / [chief](prompts/chief.md) | 用户输入、项目入口、当前 Task/Plan、有效决定与正式结果；按需补读 | G1 主管工具及当前 Task ownerEpoch；无专业源码写入权限 |
+| designer / [designer](prompts/designer.md) | 设计目标、提案/需求、产品/技术索引及选定模块、已确认决定、Plan | 普通文档写入负责人；需求通过 save；不默认整项目或所有模块 |
+| developer / [developer](prompts/developer.md) | 指定实施目标、需求/验收、Plan、必要技术接口、依赖结果 | specialization、授权范围、登记工作目录/写入负责人、实际执行配置 |
+| reviewer / [reviewer](prompts/reviewer.md) | 正式需求/验收、Plan、固定候选、真实证据 | 独立只读候选；无作者、主管、其他 Reviewer 聊天自评，无任意 bash |
+| tester / [tester](prompts/tester.md) | 同候选有效 Review、需求/验收、Plan、环境与真实证据 | 独立可写测试副本，执行测试；不修改交付源码，无作者/主管聊天自评 |
+| settler / [settler](prompts/settler.md) | 有效成果/检查、固定候选、受影响知识入口、遗留与保存安排 | 仅适用结算记录与 Git/本机保存权限，保护无关改动 |
+| investigator / [investigator](prompts/investigator.md) | Task 调查目标或具体 operationId、选定事实/证据路径 | 只读与已配置检查；不默认任意执行，不改变恢复/完成状态 |
 
-角色模型按角色覆盖 → 项目默认 → Server 默认，执行时固定；不可用保留阻断，不静默回退。基础规则落实产品，不新增业务门禁或审批义务。
+宿主同时提供可读取的规范入口映射：R=需求管理、D=任务交付、K=项目知识、F=需求文件格式、G1/G2=角色工具契约。这些内置规范采用只读资源路径，由宿主映射为 read 实际可访问的文件；提示词中的章节简称必须能定位到该入口，不能只留下不可解析的 R-01 等名称。只注入入口，不拼接全部规范；按需读具体章节。项目自身 AGENTS/索引继续定位项目补充约束，冲突明确核对，不静默覆盖权威规则。
+
+只注入当前角色，宿主固定并持久记录 actor、taskId（专业必需）、role/specialization、cwd、实际模型/工具集合、规则内容摘要及绑定。专业 Agent 自行按引用 read；Server 校验归属/可读性，不拼整项目或作者聊天。上下文不充分可补读或提交真实阻断报告，不能把文档描述当实现证据。
+
+压缩/重启由 currentTaskId + task.get 找回真实关系，再按当前正式依据装配；不只靠记忆 ID，不重建已有专业 Session。明确 resourceLoader，不自动加载未知扩展。项目规则变化在安全边界核对并显式更新/交接。角色模型按角色覆盖 → 项目默认 → Server 默认，执行时固定；不可用保留阻断，不静默回退。基础规则落实产品，不新增业务门禁或审批义务。
 
 ## G5 模型行为检查
 
-覆盖自由讨论不建 Task、主管总体 Plan、显式阶段更新、按步委派、批次中间交互/原等待续接、并行 Review 后 Test、返工、真实报告、结算缺项和压缩恢复。统一设计角色还须检查粗略提案转化、模块内聚、可实施需求边界、已有技术依据复用、总图/子图/契约一致、正式需求写入不绕过 save，以及无设计聊天的独立实施。模型/运行证据见 [实现检查](implementation-checks.md)，提示词不证明可靠性。
+覆盖主管自由讨论不建 Task、专业调查绑定 analysis Task、主管总体 Plan、显式阶段更新、按步委派、原生交互期间父委派保持等待/宿主直接答复、正式 blocked 报告后原 Session 接续、并行 Review 后 Test、返工、真实报告、结算缺项和压缩恢复。统一设计角色还须检查粗略提案转化、模块内聚、可实施需求边界、已有技术依据复用、总图/子图/契约一致、正式需求写入不绕过 save，以及无设计聊天的独立实施。模型/运行证据见 [实现检查](implementation-checks.md)，提示词不证明可靠性。
