@@ -1,0 +1,128 @@
+{
+  "capturedAt": "2026-10-04T11:25:21.128710+00:00",
+  "sources": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "4fb1565f198e5367b6281ba48427fe7f246a92bb3fe0708845042957c5c04df6"
+    },
+    {
+      "path": "docs/INDEX.md",
+      "sha256": "67d1f7e512f3c3853cec6f49bd63e82f1849291dfc9fe6e9b0a746b1567d0f71"
+    },
+    {
+      "path": "docs/productnew/README.md",
+      "sha256": "d0a0d3f52c3cd6581dd788cf7ce12c16e5a24f2b63a986a5002dbca4af958b1e"
+    },
+    {
+      "path": "docs/productnew/acceptance.md",
+      "sha256": "3f74c6e4726ba6db24d1518f11cb85b49933e44c39f72a63ed9377518318dab6"
+    },
+    {
+      "path": "docs/productnew/journeys.md",
+      "sha256": "cea9dfb19eda8cc3a2f158319ccb79b8d70e0413ee531da13d9f6c16c87bcae6"
+    },
+    {
+      "path": "docs/productnew/modules/chief-conversation.md",
+      "sha256": "35d2b94df1685360072c41083b486476d27d31b43c3cfaf963da3bb1d2dc6154"
+    },
+    {
+      "path": "docs/productnew/modules/delivery.md",
+      "sha256": "e3358b995ac80de32d9ba86d3b6829eef6fedf3d136338c9c14315a9c2383075"
+    },
+    {
+      "path": "docs/productnew/modules/project-knowledge.md",
+      "sha256": "f6106d043dde34768541c6bddf10dfdfcca68160ba04d61868d3aaec66b3c14a"
+    },
+    {
+      "path": "docs/productnew/modules/project-workspace.md",
+      "sha256": "f5024333be789c100542a3f4b7d3ad59a3444b933a63178fa2067fbf377ce148"
+    },
+    {
+      "path": "docs/productnew/modules/requirements.md",
+      "sha256": "b22ddd2efecb61d9788672725216dbdbe59197218f8ddc34f449156d86b2cc8b"
+    },
+    {
+      "path": "docs/technicalnew/README.md",
+      "sha256": "e98c62dc8c8b9e529db9247ebb59ab4310902385dc9baf9221aefdd552203f19"
+    },
+    {
+      "path": "docs/technicalnew/agents-and-tools.md",
+      "sha256": "beccaf4abc5feef8f4c864c42d3779570f7b52e76af6207636b803f6075121d1"
+    },
+    {
+      "path": "docs/technicalnew/architecture.md",
+      "sha256": "ee02eeed8e48b5ebc0a8f2f856a3b7bf46c8403ae9c87c1abffaa06777290b79"
+    },
+    {
+      "path": "docs/technicalnew/implementation-checks.md",
+      "sha256": "3610dbad3b6c49c792dea6422074e1d1079d976113d936b811c32f702ba3fcd6"
+    },
+    {
+      "path": "docs/technicalnew/messaging-and-collaboration.md",
+      "sha256": "ca1fc5896f0813f531bf915caefc7d88dc59fb3a8ba29fb15f4bb9812dc69831"
+    },
+    {
+      "path": "docs/technicalnew/prompts/base.md",
+      "sha256": "85d28e391e48872220059fa0afc55fbcf8ac989f7535b9061b8dccd05c29173b"
+    },
+    {
+      "path": "docs/technicalnew/prompts/chief.md",
+      "sha256": "2ba363dfd8be00fe8322d052353b75e2748f6ba33dc278638bba79a91bea4c08"
+    },
+    {
+      "path": "docs/technicalnew/prompts/designer.md",
+      "sha256": "db7881dff046b4f2dbc532d5e13b8611efc59b7b686faa436aa1d6653ce6f0be"
+    },
+    {
+      "path": "docs/technicalnew/prompts/developer.md",
+      "sha256": "5b54bb444305916bbcb3715c10883b96999ef15979225fae81b31b99c7fb1a66"
+    },
+    {
+      "path": "docs/technicalnew/prompts/investigator.md",
+      "sha256": "a65b4cc180ef9351b0383a6c6224bc537aea55a254cb60b3abda3e5d62102258"
+    },
+    {
+      "path": "docs/technicalnew/prompts/reviewer.md",
+      "sha256": "c86d599ad3723cdc1276c3a4905c9c7a60ddaa20fcbe824fd31cf2733729c6ad"
+    },
+    {
+      "path": "docs/technicalnew/prompts/settler.md",
+      "sha256": "690ded3c50f6972d92e1bd6d0687a79680a8a8eacb41e43b35124ec31eabb225"
+    },
+    {
+      "path": "docs/technicalnew/prompts/specialists.md",
+      "sha256": "ca328635360116c32dcbd122dba05e3bbceb7facc3b41c800ceba08c5b195c24"
+    },
+    {
+      "path": "docs/technicalnew/prompts/tester.md",
+      "sha256": "e4054efad6936688e49559cfa54c37ba4f769a6cf24880e2050ab23fafcce583"
+    },
+    {
+      "path": "docs/technicalnew/requirements-format.md",
+      "sha256": "4ee96e62b273980055df3f015ea53ff5c9bc13da7d0ad33bfce46de9eb0fc2a5"
+    },
+    {
+      "path": "docs/technicalnew/runtime-contract.md",
+      "sha256": "c481199a89ad6222bd78e2ad3ab82d4ecc0a1db241be008bb52b1f0f48f857a0"
+    },
+    {
+      "path": "docs/technicalnew/storage-and-recovery.md",
+      "sha256": "3e32845c06aead6a12e7c973aa930775e7c45701a69dccf6f7f1c584222d3eb6"
+    },
+    {
+      "path": "docs/technicalnew/validation.md",
+      "sha256": "600e663e9fc7496700c5bbd01ff7c7f978754eca370625f64e7afccc3c30057e"
+    }
+  ],
+  "excluded": [
+    "docs/old",
+    "old implementation",
+    "development chat",
+    "historical review as current contract"
+  ],
+  "reviewers": [
+    "normalized_product_prompt_review",
+    "normalized_runtime_review",
+    "normalized_cold_developer_review"
+  ]
+}

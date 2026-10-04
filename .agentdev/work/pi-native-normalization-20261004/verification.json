@@ -1,0 +1,64 @@
+{
+  "date": "2026-10-04",
+  "status": "passed",
+  "static": {
+    "files": 28,
+    "localLinks": 161,
+    "diagrams": 8,
+    "jsonExamples": 6,
+    "typeBlocks": 3,
+    "domainTools": 9,
+    "errors": []
+  },
+  "checks": [
+    {
+      "name": "file-heading-links-json-tools",
+      "command": "node /tmp/agentdev-normalization-check-20261004/current-docs.mjs",
+      "exitCode": 0
+    },
+    {
+      "name": "mermaid",
+      "command": "node /tmp/agentdev-doc-check.C8cqSd/check.mjs /tmp/agentdev-normalization-check-20261004/current-mermaid.json",
+      "exitCode": 0,
+      "parser": "mermaid@11.12.0",
+      "diagrams": 8,
+      "errors": []
+    },
+    {
+      "name": "typescript",
+      "command": "node_modules/.bin/tsc --ignoreConfig --noEmit --strict --skipLibCheck --target es2022 /tmp/agentdev-normalization-check-20261004/current-contracts.ts",
+      "exitCode": 0
+    },
+    {
+      "name": "diff-format",
+      "command": "git diff --check -- docs/INDEX.md docs/productnew docs/technicalnew .agentdev/work/pi-native-normalization-20261004",
+      "exitCode": 0
+    },
+    {
+      "name": "roles-and-retired-fields",
+      "exitCode": 0,
+      "promptFiles": 9,
+      "retiredFields": [
+        "Task.kind",
+        "delegationId",
+        "workRevision",
+        "basisDigest",
+        "effectClass",
+        "contextEpoch",
+        "continuationOfInputId",
+        "deliveryIntent",
+        "INTERACTION_NOT_PRESENTED"
+      ],
+      "taskTypes": [
+        "read",
+        "write"
+      ]
+    }
+  ],
+  "runtimeEvidence": {
+    "sdk": "NOT_RUN",
+    "models": "NOT_RUN",
+    "crash-cancel-concurrency": "NOT_RUN",
+    "browser": "NOT_RUN"
+  }
+}

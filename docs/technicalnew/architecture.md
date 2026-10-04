@@ -14,15 +14,15 @@ flowchart TB
   DB -->|已提交输入| DISPATCH[Session Dispatcher]
   DISPATCH --> RUNTIME[Session Registry / 共用 Runtime]
   RUNTIME --> PI[独立 Pi 1.0 Session]
-  PI --> LOCAL[Pi 原生 Local 工具：关键意图 / 回执]
+  PI --> LOCAL[Pi 原生 Local 工具 / 原生历史]
   PI --> TOOLS[Task 工具 / 专业报告]
   PI --> NATIVE[官方question移植扩展 / 工具ctx.ui原生请求]
   NATIVE --> ADAPTER[Server 原生 UI 适配]
   ADAPTER -->|请求提交| DB
   ADAPTER -->|提交后按当前主管路由| HUB
   TOOLS --> STORE
-  TOOLS --> WAIT[父委派等待本批正式结果]
-  DB -->|正式报告且工作停稳| WAIT
+  TOOLS --> WAIT[父委派等待 Task 当前步骤]
+  DB -->|当前成员全部停稳 / 等待超时| WAIT
   WAIT -->|原工具返回；主管继续决策| PI
   PI --> HISTORY[(指定 Pi JSONL)]
   PI --> HUB[按 sessionId 内存广播]
@@ -55,22 +55,22 @@ flowchart TD
   READY -->|否| KEEP[保留 queued 与原因]
   READY -->|是| CLAIM[事务认领 / generation]
   CLAIM --> LOAD[显式配置、角色、工具、Pi 绑定]
-  LOAD --> INTENT[提交 deliveryIntent]
+  LOAD --> INTENT[提交 deliveryStartedAt]
   INTENT --> PI[追加关联标记；调用 Pi]
   PI --> WAIT[工具可等待子成果 / 用户答复；让出执行容量]
   WAIT --> PI
   PI --> END{实际停稳及保存核对}
-  END -->|已知正常| DONE[completed / checkpoint]
+  END -->|已知正常| DONE[completed / 历史边界]
   END -->|已知错误| FAIL[failed / 真实证据]
   END -->|确认停止| STOP[stopped / 已有影响]
   END -->|边界未知| UNKNOWN[interrupted / 阻断此 Session]
   DONE --> NEXT[释放资源 / 扫描下一输入]
   FAIL --> NEXT
   STOP --> NEXT
-  UNKNOWN --> RECOVER[直接核对 / 上下文交接]
+  UNKNOWN --> RECOVER[直接核对 / 新输入续办剩余工作]
 ```
 
-工具等待期间输入仍 processing，逻辑 Session 仍被占用；Server 继续服务其他 Session。等待不占子 Agent 所需的模型执行名额。输入 completed、专业成果完成和 Task 完成分别核对。
+工具等待期间输入仍 processing，逻辑 Session 仍被占用；Server 继续服务其他 Session。主管等待不占专业 Session 并发名额。输入 completed、专业成果完成和 Task 完成分别核对。
 
 ## A3 对象与事实来源
 
@@ -91,10 +91,10 @@ erDiagram
 | 事实 | 权威 |
 |---|---|
 | 项目/Session 身份、当前 Task、阶段、子 Session 关联、结果、交互、回执 | 统一 SQLite |
-| 总体 Plan | `.dev/work/<taskId>/plan.md`；DB 存路径/摘要/授权引用 |
+| 总体 Plan / 正式报告 | read Task 存 Server `work/<taskId>/`；write Task 存项目 `.dev/work/<taskId>/`；DB 存版本/引用 |
 | 会话、工具正文、压缩与分支 | 精确绑定的 Pi JSONL |
 | 需求内容与状态 | Markdown + YAML 头部，列表重建 |
-| 项目知识、实际成果与交付报告 | 项目权威文件；索引只导航 |
+| 项目知识与实际成果 | 项目权威文件；索引只导航 |
 | 原生流式输出 | 内存广播；断线重取快照/历史 |
 
 ## A4 模块责任
@@ -104,10 +104,10 @@ erDiagram
 | API / EventHub | 认证、接纳/查询/控制、快照/广播；只在主管通道展示其交互 |
 | ProjectService | realpath 绑定、入口初始化、需求保存/列表、配置 |
 | TaskService | 四个主管核心工具、当前 Task、总体 Plan、关联/结果、完成核对；阶段由主管显式写入 |
-| Store / Dispatcher | 短事务、CAS、去重、认领、容量、扫描；不解释自然语言或选择角色 |
+| Store / Dispatcher | 短事务、CAS、去重、认领、专业并发限制、扫描；不解释自然语言或选择角色 |
 | SessionRegistry / Runtime | 独立 Pi/工具/上下文、等待与收尾；模型循环仍归 Pi |
 | 原生 UI 适配 | 原请求身份、路由到当前主管协作通道、答复保存并直接恢复源请求；不需要主管模型处理转发 |
-| RecoveryService | 核对 DB/Pi/效果、补原回执或交接；未知不重放 |
+| RecoveryService | 读取 DB/Pi 历史/实际成果；核实后续办剩余工作，未知不重放 |
 
 这些是同一 Server 的职责，不要求每项建包/进程。SQLite WAL 是存储机制；Dispatcher 查询 session_inputs，不直接消费 -wal 文件。
 
@@ -117,15 +117,15 @@ erDiagram
 - Server 保存 DB、Pi 文件、规则/配置和恢复产物；项目保存 AGENTS.md、.dev/、成果与可迁移报告。凭证只存 Server 私有存储。
 - 每个 Session 显式 cwd/model/credentialRef/role/tools/piFile；不切换全局 cwd/env，不寻找最近会话。
 - 同一真实工作目录一个写入负责人；并行开发必须采用分离目录，组合成果再固定候选并检查。
-- Review 读取固定候选；Test 使用同候选独立测试副本。独立 Session 不等于 OS 沙箱，首版使用 Pi Local operations。
+- Review/Test 针对同一实际候选版本，测试有需要时使用副本/独立 worktree。独立 Session 不等于 OS 沙箱，首版复用 Pi Local 工具。
 - 其他话题新开主管 Session；状态查询、暂停/取消、已有交互答复可随时操作。Task 复制/迁移不会继承本环境执行权或授权。
 
 ## A6 主源与采用范围
 
 | 主源 | 采用 | AgentDev 负责 |
 |---|---|---|
-| [Pi v1.0.0 SDK](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/docs/sdk.md) | Session、模型循环、原生工具/历史/取消、UI 适配 | 项目/Task、可靠接纳、当前步骤等待与授权持久化 |
-| [OMP 同步委派](https://github.com/can1357/oh-my-pi/blob/9348320cc4a30a7195d36a1f05a6c11bcb701a17/packages/coding-agent/src/task/index.ts#L1463-L1570) | 有界并发、独立角色/Session、聚合工具返回 | 正式 Task、等待释放容量、重启后的关联/等待恢复 |
+| [Pi v1.0.0 SDK](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/docs/sdk.md) | Session、模型循环、原生工具/历史/取消、UI 适配 | 项目/Task、可靠接纳、当前步骤等待与交互事实持久化 |
+| [OMP 同步委派](https://github.com/can1357/oh-my-pi/blob/9348320cc4a30a7195d36a1f05a6c11bcb701a17/packages/coding-agent/src/task/index.ts#L1463-L1570) | 有界并发、独立角色/Session、聚合工具返回 | 正式 Task、当前步骤成员聚合、超时状态返回、重启后事实核对与续办 |
 | [Durable 固定版本](https://github.com/earendil-works/pi/blob/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/packages/durable/README.md) | 稳定请求、先保存、提交边界、未知效果不重放 | coding-agent SDK 中的所需机制 |
 
 Durable 使用 pi-ai + Chord 的独立 Harness。这里使用 coding-agent SDK；关键能力按 [I1](implementation-checks.md#i1-pi-接入必须先通过的试验) 取证。

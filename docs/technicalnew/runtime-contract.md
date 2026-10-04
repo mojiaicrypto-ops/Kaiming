@@ -36,19 +36,24 @@
 | session.get | projectId、sessionId | role、currentTaskId、activity、当前输入、等待原因、排队数、配置摘要；activity=idle/processing/waiting_children/waiting_user/stopping |
 | session.messages.list | projectId、sessionId、cursor?、limit | 指定 Pi 历史、input 关联与状态、nextCursor；无历史的未开始会话为空，有历史而文件缺失报错 |
 | session.input.submit | projectId、sessionId、content、taskId? | 用户输入只投 chief；当前 Task 的补充须关联原 taskId，按安全边界处理；普通新话题排队至原 Task 结束或新开主管会话 |
-| session.input.get | projectId、sessionId、inputId | 当前状态、checkpoint/结果的公开引用、错误/停止原因；原内容保持不变 |
+| session.input.get | projectId、sessionId、inputId | 当前状态、历史边界/结果的公开引用、错误/停止原因；原内容保持不变 |
 | session.input.stop | projectId、sessionId、inputId | 保存停止意图后直接 abort；返回 Input 原 status/revision、stopRequested 与 Session.activity；未停稳 activity=stopping，未知为 interrupted |
 | task.list/get | projectId、taskId?、cursor?、limit? | Task 看板/详情，无模型也可读 |
 | task.control | projectId、taskId、expectedRevision、command | pause/resume/cancel，调用同一 TaskService；停止范围见 S5 |
 | requirement.list/get | projectId、过滤/分页或 requirementId | 使用同一文件读取服务，返回非法文件信息，不经模型 |
 | interaction.respond | projectId、chiefSessionId、interactionId、expectedRevision、response | 请求/响应、当前主管路由、去重、保存后解除等待均按 M5；返回已收到与当前请求状态 |
 | session.stream.prepare | projectId、sessionId | subscriptionId、epoch、boundary、快照；先缓冲后读快照，见 M4 |
-| session.recovery.inspect | projectId、sessionId | interrupted 输入、旧绑定、效果与证据；直接读取 |
-| session.recovery.resolve | projectId、sessionId、inputId、expectedRevision、operationResolutions、mode | 核实具体效果后补登记/关闭/交接；mode 为 reconcile/close/handoff，不是盲目重发 |
+| task.report.get | projectId、taskId、resultId | 校验 Task/结果归属，读取 Server 或项目报告正文/版本；不接受任意路径 |
+| config.get/save/test | projectId?、roleId?；save:expectedRevision/value，test:配置引用 | 脱敏有效配置、版本/实际试连结果；密钥仅保存私有凭证引用 |
+| project.files.list/read | projectId、path；list:cursor?/limit，read:expectedVersion? | 项目相对目录/文件正文与版本；实际路径归属检查，不访问外部符号链接 |
+| session.cleanup | projectId、sessionId、expectedRevision | 只清理无未结束工作且不被当前 Task/成果引用的会话；被引用时拒绝并列明原因 |
+| auth.login/logout | login:本机配置的访问口令；logout:当前会话 | login 建立同源 cookie；logout 撤销 cookie/关闭所属流连接；不进入模型/WAL 业务输入 |
+| session.recovery.inspect | projectId、sessionId | interrupted 输入、Pi 绑定、已有结果与待核实事实；直接读取 |
+| session.recovery.resolve | projectId、sessionId、inputId、expectedRevision、evidenceRefs、resolution | resolution=completed/failed/stopped，核对归属、CAS及已有证据后关闭原输入，证据不足保持 interrupted；不调用模型、不重发操作 |
 
 project.rebind / task.control / recovery.resolve 是显式控制；session.input.submit 中自然语言“暂停”由主管理解后调用控制工具。旧页面的 input.stop 只停止指定 inputId，不误停后来的输入。
 
-认证采用同源安全会话 cookie，写入校验来源/CSRF；退出立即拒绝旧连接和后续请求。SSE 不通过 URL 携带访问凭证。目录与文件接口检查实际路径归属，脱离项目的符号链接不能经 Web 文件接口访问。这些是接入与数据保护，不扩展多用户权限系统。
+认证采用首版本机配置访问口令换取同源安全会话 cookie，写入校验来源/CSRF；退出立即拒绝旧连接和后续请求。SSE 不通过 URL 携带访问凭证。目录与文件接口检查实际路径归属，脱离项目的符号链接不能经 Web 文件接口访问。这些是接入与数据保护，不扩展多用户权限系统。
 
 ## R2 输入状态与版本
 
@@ -76,35 +81,35 @@ stateDiagram-v2
 | stopped | 确认不再执行；不代表回滚已有影响 |
 | interrupted | 无法确认边界或效果，先恢复核对，本 Session 后续普通输入不启动 |
 
-已进入 Pi 的输入不以原 inputId 重新 queued/prompt。核实后关闭原输入为实际已知终态，剩余工作按 S2/S7 创建 continuationOfInputId 关联的新输入；handoff 保留逻辑 Session、Task，替换 contextEpoch，不假装原执行栈仍存在。
+已进入 Pi 的输入不以原 inputId 重新 queued/prompt。核实后关闭原输入为实际已知终态，剩余工作按 G2/S7 由主管提交新的 continuation 输入，resumedFromInputId 仅供追溯；使用原生历史继续，不恢复原工具执行栈，不补写 ToolResult。
 
 每次持久变化 revision 加一。重复接纳/停止/查询返回当前状态；旧 revision 的 queued 回执不能覆盖新 completed。session.activity 从当前 input、工具等待与控制意图派生；waiting_children/waiting_user 时 input 仍 processing，Pi 不接受第二次并发 prompt。paused/cancelled Task 不因浏览器打开恢复。
 
 ## R3 共用 Session 执行链路
 
-所有专业 Session 的调度、调查和恢复核实都必须绑定 Task；自由讨论无需 Task，需委派时先创建 analysis Task。Task 类型、阶段与完成条件唯一采用 G2/G3，不在 Runtime 重定义。
+所有专业 Session 的调度、调查和恢复核实都必须绑定 Task；自由讨论无需 Task，需委派时先创建 read Task。Task 类型、阶段与完成条件唯一采用 G2/G3，不在 Runtime 重定义。
 
 ```text
 dispatch(sessionId):
-  核对控制、恢复、目录、配置、Session 空闲、全局/项目容量
+  核对控制、恢复、目录、配置、Session 空闲、专业 Session 并发限制
   Store.claimNext：按 S3 的可消费范围事务认领最早输入，增加执行代次
   Registry.getOrCreate：取得该 sessionId 的唯一 Pi 实例
   固定 actor、cwd、模型、规则版本、工具集合和活动历史绑定
-  先提交 deliveryIntent，再记录输入关联标记，投递原生用户消息或明确来源 CustomMessage
+  先提交 deliveryStartedAt，再记录输入关联标记，投递原生用户消息或明确来源 CustomMessage
   Pi 运行；原生事件立即进入内存广播
-  等实际 settled；核对错误、停止、关键回执和指定文件保存边界
+  等实际 settled；核对错误、停止、宿主正式结果及指定历史保存边界
   Store.finish：CAS 保存终态/checkpoint/公开结果引用
-  释放 Session / 容量，扫描下一输入；唤醒已持久关联的委派等待点
+  释放 Session / 专业并发名额，扫描下一输入；唤醒已持久关联的委派等待点
 ```
 
 - 同一 Session 只有一个执行所有者；Dispatcher 公平轮转可运行 Session，每次认领一项。同一可消费范围内 queued 不能越过前序 unresolved interrupted；当前 Task 外的输入保留至其结束。
 - 事务不跨模型、Shell、网络或文件复制的长 await。每个 Pi 实例的事件/工具绑定当前 inputId 与 generation，迟到回调拒绝修改新执行。
 - 用户/委派/接续输入共用此函数。专业结果与正式阻断报告通过当前委派工具返回；原生交互按 M5 直接解除原请求等待，不作为第二次 prompt 插入忙碌 Pi。
-- 任一领域工具/原生工具失败是实际工具结果；主管仍可说明失败并正常结束输入。未知副作用或关键保存失败必须 interrupted。
+- 普通原生工具失败由 Pi 如实返回；主管可组织修复。宿主关键保存失败、重启或无法核实停止边界时 interrupted，不要求程序从每条原生工具失败推断业务效果。
 - 当前用户消息先保存；只在 Pi 空闲时投递。首版不用 Pi steer/followUp 作第二条输入队列，不重复入两队。
 - 一个主管同时协调一项未结束 Task；当前 Task 的交互、补充与恢复可处理，其他目标用另一个主管。查询/交互响应/停止/恢复直接进入对应服务；主管自身 interrupted 不能启动普通队列。
-- 专业 report 成功不等于 Pi 停稳。正式最终报告后禁止本工作修订继续写入；Runtime 确认结束才释放负责人并满足本批完成条件。正式报告与停稳保存事实后唤醒原委派等待；原生交互等待不提前结束委派。
-- createTaskSessions / 原生 ctx.ui 的等待异步进行，释放模型执行容量但保留 Session 执行所有权；主管需要继续模型调用时重新公平申请容量。只有一个名额时子 Session 仍能运行。每个 Session 待运行模型/工具期间不同时使用另一输入。
+- 专业 report 成功不等于 Pi 停稳。正式最终报告后禁止该输入继续修改成果；Runtime 确认结束才释放负责人并满足当前步骤完成条件。正式报告与停稳保存事实后唤醒原委派等待；原生交互等待不提前结束委派。
+- createTaskSessions / 原生 ctx.ui 都是可取消异步等待，保留 Session 执行所有权。主管不占专业 Session 并发名额；专业名额=1 也能推进。首版不接管逐模型请求调度，每 Session 不接收第二次并发 prompt。
 
 ## R4 Pi 接入的明确契约
 
@@ -121,12 +126,12 @@ Pi 接入层只负责以下小范围连接，不接管模型循环：
 | recovery/control notice | 只在空闲时 sendCustomMessage，customType=agentdev.input，模型可见内容含来源/ID/事实；不能给仍在等待的同一次调用重复输入 |
 | input correlation | 用公开 appendCustomEntry 写 agentdev.input 标记，串行定位其实际根输入条目；保留 markerId/inputEntryId，不按正文相等匹配 |
 | observe | subscribe 的同步 listener 仅广播/记录内存状态；不能 await 监听器承担持久事务 |
-| finish | 核对 agent_settled、错误/取消、关键回执及文件边界；完成后记录 checkpoint |
+| finish | 核对 agent_settled、错误/取消、宿主正式结果及指定历史文件边界；完成后记录 checkpoint |
 | stop | 工具内 ctx.abort 发起取消；外层 await session.abort 等实际空闲 |
 
-agentdev.input 标记保存 inputId、requestDigest、generation、contextEpoch；它是 Pi 自定义条目，不把工程元数据伪装成用户文本。委派工具的模型可见返回定义在 M2；uiContext 的确切接口按固定版本导出类型接入，不将 SDK 嵌入改成 RPC 子进程。
+agentdev.input 标记保存 inputId、requestDigest、generation；它是 Pi 自定义条目，不把工程元数据伪装成用户文本。委派工具的模型可见返回定义在 M2；uiContext 的确切接口按固定版本导出类型接入，不将 SDK 嵌入改成 RPC 子进程。
 
-这套关联路线需 [PI-01](implementation-checks.md#i1-pi-接入必须先通过的试验) 验证：首次文件建立、模板转换、压缩、分支、扩展拦截、写失败与重复追加。标记不能确定根输入时停止准入、保留 interrupted，采用核对/交接；禁止让实现 Agent 自己添加原生 inputId 字段。
+这套关联路线需 [PI-01](implementation-checks.md#i1-pi-接入必须先通过的试验) 验证：首次文件建立、模板转换、压缩、分支、扩展拦截、写失败与重复追加。标记不能确定根输入时停止准入、保留 interrupted，核实后明确续办剩余工作；禁止让实现 Agent 自己添加原生 inputId 字段。
 
 首次 Pi 文件可能尚未建立；bindings.hasHistory 只有确认持久条目后才置 true。hasHistory=true 而缺文件/空文件/身份错误必须 HISTORY_UNAVAILABLE。Pi open 的新建行为不能当作恢复。[open 行为](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/src/core/session-manager.ts#L1029-L1054)
 
@@ -151,6 +156,6 @@ Project 首次 realpath 绑定由唯一约束保证，显示名不作身份。�
 | STORAGE_UNAVAILABLE / EFFECT_UNCONFIRMED | 保存或效果不可确认；停止后续准入，不把已可能生效的操作自动重做 |
 | WORKSPACE_BUSY / TASK_BUSY / TASK_CONTROLLED / STAGE_NOT_READY | 当前写入负责人、Task 控制或依赖未满足；不启动不适用专业工作 |
 | REPORT_MISSING / REPORT_STALE / COMPLETION_INCOMPLETE | 无正式报告、候选/依据失效、完成缺项；保留 Task 与真实证据 |
-| INTERACTION_STALE / INTERACTION_NOT_PRESENTED / STREAM_RESYNC_REQUIRED | 请求已失效/宿主尚未提交呈现状态，或须重取快照；不套旧授权，原生请求按 M5 经主管通道由宿主展示 |
+| INTERACTION_STALE / STREAM_RESYNC_REQUIRED | 请求已失效或须重取快照；请求保存后可响应，不另设呈现门禁 |
 
 known errors 的错误形状一致；失败 details 提供可读原因/当前引用，不泄漏凭证。机器字段的枚举由本页/G2/S2 定义，新增公开方法/消息种类须改相应契约与检查，不在局部实现中私建协议。

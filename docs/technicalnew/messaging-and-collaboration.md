@@ -1,133 +1,130 @@
 # 子 Session 协作、交互与 UI 通道
 
-共用 Runtime 见 [R3](runtime-contract.md#r3-共用-session-执行链路)，持久字段/事务见 [S2/S3](storage-and-recovery.md)。
+共用 Runtime 见 [R3](runtime-contract.md#r3-共用-session-执行链路)，持久字段与事务见 [S2/S3](storage-and-recovery.md)。
 
 ## M1 Task 多 Session 协作子图
 
-所有专业 Session 必须绑定 Task；Task 类型与阶段的权威定义见 [G2](agents-and-tools.md#g2-模型工具)。以下图示标准代码交付，analysis 按 G2 保存正式调查成果并停稳后即可收口，design/light/document 采用各自适用过程。主管总体 Plan 描述过程；Session 到当前步骤才创建，主管显式更新阶段。专业 Agent 内部计划不作为另一个流程门禁。
+Task 只有 read/write 两类，唯一枚举/工具字段见 [G2](agents-and-tools.md#g2-模型工具)。所有专业 Session 绑定 Task。下图为 write Task 的标准代码工作；read 调查保存 Server 报告收口，轻量/文档采用适用独立 Review 与结算，不伪造 Test。
 
 ```mermaid
 flowchart TD
-  TASK[createTask：目标和总体 Plan] --> DEVPHASE[updateTask：develop]
-  DEVPHASE --> DEV[createTaskSessions：一个或多个开发]
-  DEV --> DOUT{本批结果}
-  DOUT -->|需主管处理| HANDLE[主管模型协调 / 阻断；原 Session 保留]
-  HANDLE -->|continue原Session，新修订/批次| DEV
-  DOUT -->|正式成果停稳| FIXED[主管固定组合候选]
-  FIXED --> REVIEWPHASE[updateTask：review，保存开发总结]
-  REVIEWPHASE --> REVIEWS[createTaskSessions：并行 Review S1 / S2]
-  REVIEWS --> ROK{本轮 Review 满足？}
-  ROK -->|需主管决策| RHANDLE[主管协调；原 Session 续接]
-  RHANDLE -->|按G2接续；验证工作保持独立| REVIEWS
-  ROK -->|需修复| DEVPHASE
-  ROK -->|满足| TESTPHASE[updateTask：test，保存 Review 总结]
+  TASK[createTask：type=write / 总体 Plan] --> DEVPHASE[updateTask：开始 develop 步骤]
+  DEVPHASE --> DEV[createTaskSessions：开发；写入 currentSessionIds]
+  DEV --> DOUT{当前步骤全部停稳？}
+  DOUT -->|未结束| WAIT[继续异步等待；超时返回状态，不取消]
+  WAIT -->|主管 wait 或核实后 continue| DEV
+  DOUT -->|全部结束| AGG[汇总报告与异常；主管决定]
+  AGG -->|缺项或修复| DEVPHASE
+  AGG -->|成果满足| FIXED[记录最终组合候选版本]
+  FIXED --> REVIEWPHASE[updateTask：review；保留旧结果，清空当前成员]
+  REVIEWPHASE --> REVIEWS[createTaskSessions：Review S1 / S2 并行]
+  REVIEWS --> ROK[等全部成员结束 / 汇总全部 Review]
+  ROK -->|修复| DEVPHASE
+  ROK -->|满足| TESTPHASE[updateTask：test]
   TESTPHASE --> TEST[createTaskSessions：独立 Test]
-  TEST --> TOK{适用测试满足？}
-  TOK -->|需修复| DEVPHASE
-  TOK -->|需主管决策| THANDLE[主管协调；原 Session 续接]
-  THANDLE -->|按G2接续；验证工作保持独立| TEST
-  TOK -->|满足| SETTLE[updateTask：settle；结算 Session]
-  SETTLE --> END[endTask：完成核对]
+  TEST --> TOK[等 Test 结果 / 主管判断]
+  TOK -->|修复| DEVPHASE
+  TOK -->|满足| SETTLE[updateTask：settle；委派结算]
+  SETTLE --> END[endTask：必要报告 / 版本 / 实际保存]
 ```
 
-两个 Review 对同一候选，完成/问题处理后 Test；轻量/文档按 D-04 适用独立检查，不伪造 Test。收到一份 Review 或一条“完成”文本不满足当前步骤结束。
+普通子交互按 M5 经宿主直达主管页面，父工具仍等待。正式 blocked 报告结束该子输入；其他成员未结束时继续等，全部结束或等待超时才把报告/异常聚合给主管。超时之后主管可处理已经返回的阻断，但不能把仍运行工作当成结束。
 
 ```mermaid
 sequenceDiagram
   participant C as 主管 Pi C
-  participant TOOL as createTaskSessions
+  participant T as createTaskSessions
   participant DB as SQLite
   participant D as Dispatcher / Runtime
   participant S1 as Review Pi S1
   participant S2 as Review Pi S2
-  C->>TOOL: mode=create，Task T，Review S1/S2，候选 K
-  TOOL->>DB: 同事务保存关联、首条输入、本批身份
-  DB-->>TOOL: commit
-  TOOL-->>D: 唤醒；扫描兜底
-  Note over C,TOOL: 等本批成果或主管模型协调；原生用户交互期间继续等待
-  par Review S1
-    D->>DB: 认领 S1 输入
-    D->>S1: 指定角色 / 正式依据 / 候选
-    S1->>DB: agent_report 正式结果 R1
-    D->>DB: S1 停稳 / 原输入收尾
-  and Review S2
-    D->>DB: 认领 S2 输入
-    D->>S2: 指定角色 / 正式依据 / 候选
-    S2->>DB: agent_report 正式结果 R2
-    D->>DB: S2 停稳 / 原输入收尾
+  C->>T: create(Task T, Review S1/S2, candidate K)
+  T->>DB: 同事务：关联、输入、currentSessionIds
+  DB-->>T: commit：S1/S2/inputIds
+  T-->>D: 唤醒异步消费器
+  Note over C,T: 主管工具 await；不占专业并发名额
+  par 独立 Review S1
+    D->>S1: 认领后用共用 Runtime 调用 Pi
+    S1->>DB: agent_report R1
+    D->>DB: S1 实际停稳 / 输入收尾
+  and 独立 Review S2
+    D->>S2: 认领后用共用 Runtime 调用 Pi
+    S2->>DB: agent_report R2
+    D->>DB: S2 实际停稳 / 输入收尾
   end
-  DB-->>TOOL: 原记录查询；提交后唤醒
-  TOOL->>DB: 保存本次工具终局回执
-  TOOL-->>C: completed，S1/S2 状态与 R1/R2 引用
-  C->>DB: updateTask(test)，Review 总结
-  C->>TOOL: 下一步新建 Test Session
+  DB-->>T: 提交后唤醒 / 扫描兜底
+  T->>DB: 查询 Task 当前成员与各自 currentInputId
+  T->>DB: 全部停稳后保存聚合回执
+  T-->>C: 全部报告与异常状态
+  C->>DB: updateTask(test)，清空当前成员
+  C->>T: 下一步才创建 Test Session
 ```
 
-工具接纳后 onUpdate 可展示真实身份；模型最终返回不是 queued，而是 M2 结果。真实检查 verdict=failed 也可以是本批已完成，主管组织修复；程序不自动选择下一角色。
+Review verdict=failed 可以是工作正常结束的报告，主管必须判断修复；结果聚合不是业务通过。
 
 ## M2 委派等待协议
 
-delegationId 指已保存的当前批次成员，不是新业务 Task。每次 create/continue/wait 工具调用各有稳定 requestKey 和不可变终局回执；后续 wait 同一 delegationId 读取最新事实，不改旧调用回执。
+等待集合唯一取 **task.currentSessionIds**：当前 Task 当前步骤的专业 Session，不含主管、不含历史步骤。每成员查询 task_sessions.currentInputId，再取该输入正式报告/交互/终态。不是查询整个 Task 的所有历史 Session，也不为每次等待建立另一套批次对象。
 
 ```typescript
 type DelegationReturn = {
-  taskId: string; // 所有专业工作必需
-  delegationId: string;
-  outcome: 'completed' | 'blocked';
+  taskId: string;
+  outcome: 'completed' | 'blocked' | 'timeout';
   sessions: Array<{
-    sessionId: string; inputId: string; workRevision: number;
-    state: 'queued' | 'working' | 'waiting_user' | 'completed' | 'failed' | 'stopped' | 'interrupted';
-    resultIds: string[]; interactionIds: string[]; error?: { code: string; message: string };
+    sessionId: string; inputId: string;
+    state: 'queued' | 'working' | 'waiting_user' | 'stopping' | 'completed' | 'failed' | 'stopped' | 'interrupted';
+    resultIds: string[]; interactionIds: string[];
+    error?: { code: string; message: string };
   }>;
-  interactionIds: string[];
 };
 ```
 
-| 条件 | 返回 / 主管动作 |
+| 当前事实 | 分配层行为 / 返回 |
 |---|---|
-| 本批所有目标输入停稳，期待正式结果齐全，无阻断 verdict、待处理交互或未知 | completed；核对语义结果，显式更新阶段或返工 |
-| 成员提交正式阻断报告 verdict=blocked，需要 chief 模型判断 | blocked；保存本轮最终报告并停稳，主管处理后 continue 原 Session，以新 workRevision/批次接续 |
-| 成员正在 ctx.ui.confirm/select/input 等待用户 | 本次委派继续等待；宿主按 M5 转发、关联答复并解除原工具等待 |
-| 失败、停止、缺报告、未知效果或环境阻断需要处理 | blocked；返回各成员真实状态/原因，不假装全批结束 |
+| 存在 queued/working/waiting_user/stopping 成员 | 异步继续等待；一份报告不能提前宣布本步骤结束 |
+| 全部成员停稳，期待报告齐全，无 blocked/中断/停止/执行异常 | completed，包含所有报告；verdict=failed 仍由主管判断 |
+| 全部成员结束，但有正式 blocked、缺报告、失败/停止/中断 | blocked，汇总已有报告及每项真实异常；不丢成功成员 |
+| waitTimeoutMs 到达、仍有未结束成员 | timeout，全部成员当前状态、已有报告及交互；不停止/取消/重建子工作 |
+| 父输入停止或 Task 控制 | 解除父观察等待，按控制事实返回 blocked 或取消；Task/子停止范围见 S5 |
 
-检查顺序以真实未知/控制阻断优先，再正式阻断报告，再完成，其他情况继续异步等待。回执保存先于返回；报告/停稳/交互提交后唤醒，注册等待后再查一次原事实避免漏唤醒；启动/周期扫描兜底。等待不依赖内存 Promise 作为事实来源。
+报告和输入收尾提交后唤醒，注册等待后重查事实，周期扫描兜底；不把内存 Promise 当状态源。read/write 共用同一等待算法。create/continue 保存身份后等待，wait 只观察已存在工作。旧回执不可变，新 wait 可取最新快照。
 
-成员保留最初 inputId。暂停恢复时，查询按 S2 的 continuationOfInputId 链找到该成员同 Session/同 workRevision 的合法接续输入，再读取其实际状态及链上有效结果；返回中的 inputId 是当前有效输入。没有合法接续时仍返回原停止/中断事实。真正返工增加 workRevision 并建立新批次，不把旧批次的目标改成新目标。
+主管收到 timeout 先查看状态：运行或等用户的继续 wait；技术异常中断/停止先核实历史/成果，只用 continue 补剩余工作；用户暂停/取消不自动重启，completed 成果不重跑。queued 只是未执行，不是停止，不用 continue 复制。
 
-原生交互的 interactionIds 只供观察、关联与恢复；它们不触发委派终局返回。宿主直接解除原 ctx.ui 等待，原委派工具继续等待正式成果，不要求 chief 模型调用生命周期工具。真正需要主管判断时，专业 Agent 通过 agent_report(verdict=blocked) 提交本轮正式阻断报告，结束当前 workRevision 并停稳；父工具返回 blocked。主管解决原因后 mode=continue 原 Session，以新 workRevision/新批次接续，不丢弃 Session 或 Task。主管不能向仍在 processing 的专业 Pi 并发 prompt。已存在/完成的批次不能被 create 复制。
+正式 blocked 成员处理后可在当前步骤 continue 原 Session，currentInputId 指向新输入，旧结果保留；其他已完成成员仍留在集合，不重新执行。新一步由 updateTask 提供 phase 清空当前集合，哪怕同名阶段也明确新步骤；历史结果通过 task.get 找回。
+
+子用户请求不让父工具提前返回；宿主直接解除原 ctx.ui 等待，不等待主管模型处理转发。主管不能向仍 processing 的专业 Pi 并发 prompt。
 
 ## M3 输入、Pi JSONL 与结果
 
-| Input.kind | payload | 来源键 |
+| Input.kind | payload | 稳定来源 |
 |---|---|---|
 | user | Pi content、taskId? | user:<requestId> |
-| delegation | instructions、refs、expectedKind、candidateId? | session:<sessionId>:work:<workRevision>:initial |
-| continuation | instructions、refs、dependsOnResultIds? | 原 continue 工具 requestKey |
-| system_notice | code、taskId?、relatedInputId?、reason、evidenceRefs? | 原控制/恢复操作 + code；仅空闲/恢复接续时消费 |
+| delegation | instructions、refs、expectedKind、candidateId? | 原 create 调用 + 成员身份 |
+| continuation | 剩余 instructions、refs、dependsOnResultIds?、resumedFromInputId? | 原 continue/明确续办调用 |
+| system_notice | taskId?、code、相关输入/证据/原因 | 原控制/核实操作 + code |
 
-system_notice 首版 code=task.controlled/recovery.resolved。运行中控制先保存事实并让当前等待返回 blocked；仅无活跃等待/工具返回接入时，以稳定来源键投一份系统输入，不双重投递。公开用户入口不能伪造内部 kind。
+system_notice 首版 code=task.controlled/recovery.resolved，仅空闲时消费；控制先直接保存和解除等待，无活跃返回通道才投一份通知，不双重报告。公开入口不能伪造内部 kind。
 
 | 内容 | SQLite | Pi / UI |
 |---|---|---|
-| 原输入 | 身份、内容、顺序与状态 | 消费时追加原生消息；用户气泡按 inputId 合并 |
-| 模型/工具正文 | 不逐条复制 | 原生 JSONL 与内存事件 |
-| 专业正式结果 | 摘要、报告/依据/候选与结果身份 | 原专业工具回执；主管委派工具聚合返回 |
-| 子交互请求/用户答复 | 原请求、主体版本、来源、状态/答复 | 宿主提交原请求后直接在当前 Task 主管 UI 通道展示 |
-| 流式文本/思考/工具进度 | 不持久化 | pending/内存广播；崩溃可能丢片段 |
+| 接纳输入 | 身份、content、顺序与状态 | 消费时追加原生消息；用户气泡按 inputId 合并 |
+| 模型/原生工具正文 | 不复制 | 原生 JSONL；内存事件广播 |
+| 正式结果 | 摘要、来源、报告/版本引用 | 专业工具回执；主管等待聚合返回 |
+| 用户交互 | 原请求/来源/状态/真实答复 | 提交后主管通道显示，直接响应源调用 |
+| 文本/思考/工具进度 | 不落业务 WAL | 内存推送；重连读取历史，不承诺恢复崩溃片段 |
 
-返回模型的 content 必须含 taskId/delegationId/sessionId/outcome/正式结果引用；有报告或开放交互时附路径/interactionId；自由讨论中的专业调查也先建立 analysis Task。不能只放 details。blocked 返回不是 Task 完成。恢复系统消息用 sendCustomMessage/customType=agentdev.input/display=true，明确来源与事实，不伪装主管 assistant。[Pi 消息类型](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/docs/message-types.md)
-
-原生输入/条目关联见 R4；流式临时 messageKey 映射 contextEpoch/entryId，PI-01/04 验证。不得按正文相同或数组位置去重。
+模型 content 必须含 taskId/sessionId/outcome/结果路径，待用户请求附 interactionId；不能只放 details。恢复消息 sendCustomMessage/customType=agentdev.input/display=true，内容明确来源/事实，不伪装 assistant。原生输入/条目关联见 R4；不得按正文或数组位置去重。
 
 ## M4 UI 快照与实时事件
 
-每逻辑 Session 一个 EventHub，每连接有界缓冲；广播不竞争消费。普通页面订阅主管通道即可获得自己的原生消息、Task 失效通知和宿主已呈现交互；不自动订阅全部子 Session。用户主动查看专业历史可单独读取，响应权限始终校验当前 Task 主管归属。
+每逻辑 Session 一个 EventHub，每连接有界缓冲；广播不竞争消费。普通页面订阅主管通道即可获得自己的原生消息、Task 失效通知和已保存交互；不自动订阅全部子 Session。用户主动查看专业历史可单独读取，响应权限始终校验当前 Task 主管归属。
 
 ```text
 session.stream.prepare：
   校验归属，建立临时缓冲订阅
   同一内存边界复制 epoch / boundary seq / 消息映射 / pending / 已知 leaf
-  读取边界内的指定历史和业务状态，包括宿主已呈现且未解决交互
+  读取边界内的指定历史和业务状态，包括已保存且 pending 的交互
   返回 subscriptionId + 快照 + boundary
 
 GET /api/v1/sessions/<sessionId>/stream?subscriptionId=<id>：
@@ -145,7 +142,7 @@ GET /api/v1/sessions/<sessionId>/stream?subscriptionId=<id>：
 }
 ```
 
-event 保持 Pi AgentSessionEvent；inputId/messageKey 仅有实际关联时提供，epoch=serverEpoch/contextEpoch。业务通知 `{type:'invalidate',entity:'input'|'task'|'session'|'requirement'|'interaction',id,revision?}` 触发查询；交互事件见 M5。慢连接溢出不阻塞 Pi/其他页面。
+event 保持 Pi AgentSessionEvent；inputId/messageKey 仅有实际关联时提供，epoch=serverEpoch/当前 Pi 实例代次。业务通知 `{type:'invalidate',entity:'input'|'task'|'session'|'requirement'|'interaction',id,revision?}` 触发查询；交互事件见 M5。慢连接溢出不阻塞 Pi/其他页面。
 
 ## M5 统一交互与授权
 
@@ -205,4 +202,4 @@ interaction.respond 直接接入现有 WAL 服务：核对当前归属、请求 
 
 ## M6 主源与检查
 
-OMP 的 [同步聚合](https://github.com/can1357/oh-my-pi/blob/9348320cc4a30a7195d36a1f05a6c11bcb701a17/packages/coding-agent/src/task/index.ts#L1463-L1570) 与 [persisted-revive](https://github.com/can1357/oh-my-pi/blob/9348320cc4a30a7195d36a1f05a6c11bcb701a17/packages/coding-agent/src/task/persisted-revive.ts) 供有界并行、独立角色和配置恢复参考；其内存任务不替代 SQLite 事实。Durable 的 [后台子会话](https://github.com/earendil-works/pi/blob/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/packages/durable/test/examples/23-subagent-background.ts) 参考稳定输入/通知边界。当前产品的原生交互关联、主管协调返回和重启续接必须按 [I1/I3](implementation-checks.md) 实际验证。
+OMP 的 [同步聚合](https://github.com/can1357/oh-my-pi/blob/9348320cc4a30a7195d36a1f05a6c11bcb701a17/packages/coding-agent/src/task/index.ts#L1463-L1570) 与 [persisted-revive](https://github.com/can1357/oh-my-pi/blob/9348320cc4a30a7195d36a1f05a6c11bcb701a17/packages/coding-agent/src/task/persisted-revive.ts) 供有界并行、独立角色和配置恢复参考；其内存任务不替代 SQLite 事实。Durable 的 [后台子会话](https://github.com/earendil-works/pi/blob/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/packages/durable/test/examples/23-subagent-background.ts) 参考稳定输入/通知边界。当前产品的原生交互关联、主管协调返回和重启后的事实核对与续办必须按 [I1/I3](implementation-checks.md) 实际验证。
