@@ -1,0 +1,73 @@
+{
+  "date": "2026-10-04",
+  "status": "passed",
+  "baselineCommit": "eb7ad43419a63902700b8a48998ab7b7af854e55",
+  "static": {
+    "files": 28,
+    "localLinks": 166,
+    "diagrams": 8,
+    "jsonExamples": 6,
+    "typeBlocks": 3,
+    "domainTools": 9,
+    "errors": []
+  },
+  "unchangedFencedExamples": {
+    "mermaid": 8,
+    "typescript": 3
+  },
+  "bodyExtractionContract": {
+    "status": "passed",
+    "count": 9,
+    "metadataExcluded": true,
+    "mappingExcluded": true,
+    "testingMarkersRetained": [
+      "base",
+      "chief",
+      "developer",
+      "reviewer",
+      "tester"
+    ],
+    "doesNotProveRuntimeInjection": true
+  },
+  "protocolFilesUnchanged": [
+    "docs/technicalnew/architecture.md",
+    "docs/technicalnew/runtime-contract.md",
+    "docs/technicalnew/storage-and-recovery.md",
+    "docs/technicalnew/messaging-and-collaboration.md",
+    "docs/technicalnew/requirements-format.md"
+  ],
+  "G2-G3": "unchanged",
+  "commands": [
+    {
+      "command": "node /tmp/agentdev-testing-rule-check-20261004/current-docs.mjs",
+      "exitCode": 0
+    },
+    {
+      "command": "python3 /tmp/agentdev-testing-rule-check-20261004/check-bodies.py",
+      "exitCode": 0
+    },
+    {
+      "command": "git diff --check -- docs/INDEX.md docs/productnew docs/technicalnew .agentdev/work/testing-responsibilities-20261004",
+      "exitCode": 0
+    }
+  ],
+  "unchangedEvidence": {
+    "previousVerification": "../role-lessons-20261004/verification.json",
+    "mermaid": "8 unchanged blocks, previous passed parser evidence reused",
+    "typescript": "3 unchanged blocks, previous passed strict type evidence reused"
+  },
+  "independentReview": {
+    "agent": "testing_responsibility_review",
+    "forkTurns": "none",
+    "status": "passed",
+    "blockingFindings": 0,
+    "readOnly": true
+  },
+  "runtimeEvidence": {
+    "sdk": "NOT_RUN",
+    "models": "NOT_RUN",
+    "injection": "NOT_RUN",
+    "api": "NOT_RUN",
+    "browser": "NOT_RUN"
+  }
+}

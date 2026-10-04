@@ -8,9 +8,9 @@
 |---|---|---|
 | chief | 用户讨论、总体 Plan、阶段/步骤、委派、业务判断与收口 | read/grep/find/ls；四个核心工具、task、requirement、project、question |
 | designer | 产品分析、模块内聚、需求及适用技术架构/契约 | read/grep/find/ls/write/edit、requirement、agent_report、task.get、question |
-| developer | 指定实施目标 | read/grep/find/ls/write/edit/bash、agent_report、task.get、requirement.list/get、question |
+| developer | 实现指定目标，内置单元/TDD 自查（D-05） | read/grep/find/ls/write/edit/bash、agent_report、task.get、requirement.list/get、question |
 | reviewer | 独立检查需求/验收、Plan 和实际成果 | read/grep/find/ls、agent_report、task.get、question |
-| tester | Review 后独立实际验证 | read/grep/find/ls/bash、agent_report、task.get、question |
+| tester | Review 后独立端到端集成/E2E 验收（D-05） | read/grep/find/ls/bash、agent_report、task.get、question |
 | settler | 更新已验证知识/记录，保存成果 | read/grep/find/ls/write/edit/bash、agent_report、task.get、requirement、question |
 | investigator | 独立只读调查/恢复核实 | read/grep/find/ls、agent_report、task.get、question |
 
@@ -155,9 +155,9 @@ chief：Pi 原生说明 + base 完整正文 + chief 完整角色正文
 |---|---|---|
 | chief / [chief](prompts/chief.md) | 用户输入、项目入口、当前 Task/Plan、有效决定与正式结果；按需补读 | G1 主管工具及当前 Task ownerEpoch / 只读或修改类型；无专业源码写入权限 |
 | designer / [designer](prompts/designer.md) | 设计目标、提案/需求、产品/技术索引及选定模块、已确认决定、Plan | 普通文档写入负责人；需求通过 save；不默认整项目或所有模块 |
-| developer / [developer](prompts/developer.md) | 指定实施目标、需求/验收、Plan、必要技术接口、依赖结果 | specialization、授权范围、登记工作目录/写入负责人、实际执行配置 |
+| developer / [developer](prompts/developer.md) | 指定实施目标、需求/验收、Plan、必要技术接口、依赖结果、适用单元/集成/E2E 测试入口 | specialization、授权范围、登记工作目录/写入负责人、实际执行配置 |
 | reviewer / [reviewer](prompts/reviewer.md) | 正式需求/验收、Plan、同一实际交付版本、真实证据 | 独立只读成果；无作者、主管、其他 Reviewer 聊天自评，无任意 bash |
-| tester / [tester](prompts/tester.md) | 同候选有效 Review、需求/验收、Plan、环境与真实证据 | 适用测试目录/副本，执行测试；不修改交付源码，无作者/主管聊天自评 |
+| tester / [tester](prompts/tester.md) | 同候选有效 Review、需求/验收、Plan、API/浏览器 E2E 入口、适用服务/地址、环境与数据准备依据、真实证据 | 适用测试目录/副本，执行测试及准备临时验收产物；不修改交付源码，无作者/主管聊天自评 |
 | settler / [settler](prompts/settler.md) | 有效成果/检查、同一实际交付版本、受影响知识入口、遗留与保存安排 | 仅适用结算记录与 Git/本机保存权限，保护无关改动 |
 | investigator / [investigator](prompts/investigator.md) | Task 调查目标或被核实输入/事实、选定事实/证据路径 | 只读与已配置检查；不默认任意执行，不改变恢复/完成状态 |
 

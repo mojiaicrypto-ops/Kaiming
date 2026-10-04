@@ -8,7 +8,7 @@
 | [用户流程](productnew/journeys.md) | 从项目接入到需求、交付、结算和接续 | 讨论端到端行为 |
 | [产品验收](productnew/acceptance.md) | 可观察产品场景 | 制定验证与交付 |
 | [技术设计](technicalnew/README.md) | 总图、子图与各链路实现契约的导航 | 技术设计/实施前 |
-| [任务交付](productnew/modules/delivery.md) | 计划、授权、独立审核/测试、结算 | 正式修改与完成核对 |
+| [任务交付](productnew/modules/delivery.md) | 计划、授权、独立审核、开发单元/TDD 与独立端到端测试、结算 | 正式修改与完成核对 |
 | [项目知识](productnew/modules/project-knowledge.md) | 权威文档、模块内聚、按需加载与项目记忆 | 整理文档/上下文/结算 |
 
 技术细节按 technicalnew/README 的链路索引加载，不默认读取所有文档。当前产品需求是行为依据，技术设计是待实现契约；运行验证状态见下方。

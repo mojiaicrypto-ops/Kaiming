@@ -1,0 +1,148 @@
+{
+  "baselineCommit": "eb7ad43419a63902700b8a48998ab7b7af854e55",
+  "formalSources": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "4fb1565f198e5367b6281ba48427fe7f246a92bb3fe0708845042957c5c04df6"
+    },
+    {
+      "path": "docs/INDEX.md",
+      "sha256": "54cb9e4a85efe187040e34e42101776ab2b23538cf1abea6ce6f02579adfd1f2"
+    },
+    {
+      "path": "docs/productnew/README.md",
+      "sha256": "d0a0d3f52c3cd6581dd788cf7ce12c16e5a24f2b63a986a5002dbca4af958b1e"
+    },
+    {
+      "path": "docs/productnew/acceptance.md",
+      "sha256": "b55ba0e4775e0e2881f273930e6a7dc6d94d3f25822560cbc76ac041e1496e88"
+    },
+    {
+      "path": "docs/productnew/journeys.md",
+      "sha256": "cea9dfb19eda8cc3a2f158319ccb79b8d70e0413ee531da13d9f6c16c87bcae6"
+    },
+    {
+      "path": "docs/productnew/modules/chief-conversation.md",
+      "sha256": "35d2b94df1685360072c41083b486476d27d31b43c3cfaf963da3bb1d2dc6154"
+    },
+    {
+      "path": "docs/productnew/modules/delivery.md",
+      "sha256": "beed84865f7c0ad313c7939b13fd40044a300c7cb83f185fd38bc5cc0718792b"
+    },
+    {
+      "path": "docs/productnew/modules/project-knowledge.md",
+      "sha256": "f6106d043dde34768541c6bddf10dfdfcca68160ba04d61868d3aaec66b3c14a"
+    },
+    {
+      "path": "docs/productnew/modules/project-workspace.md",
+      "sha256": "f5024333be789c100542a3f4b7d3ad59a3444b933a63178fa2067fbf377ce148"
+    },
+    {
+      "path": "docs/productnew/modules/requirements.md",
+      "sha256": "b22ddd2efecb61d9788672725216dbdbe59197218f8ddc34f449156d86b2cc8b"
+    },
+    {
+      "path": "docs/technicalnew/README.md",
+      "sha256": "5147e613199cb22ed407f93a9701f35fa0dcc58f6fdd61d41a4f2aef785c3f76"
+    },
+    {
+      "path": "docs/technicalnew/agents-and-tools.md",
+      "sha256": "8bde7bb3b106a5fa2cf27770c4171d3ce32426c6fb2230cf24dd5361a04fb7bb"
+    },
+    {
+      "path": "docs/technicalnew/architecture.md",
+      "sha256": "ee02eeed8e48b5ebc0a8f2f856a3b7bf46c8403ae9c87c1abffaa06777290b79"
+    },
+    {
+      "path": "docs/technicalnew/implementation-checks.md",
+      "sha256": "4cb62c3876c92e57e00f93529f59c7538d3d1900b953aa841b37456580de0d53"
+    },
+    {
+      "path": "docs/technicalnew/messaging-and-collaboration.md",
+      "sha256": "ca1fc5896f0813f531bf915caefc7d88dc59fb3a8ba29fb15f4bb9812dc69831"
+    },
+    {
+      "path": "docs/technicalnew/prompts/base.md",
+      "sha256": "ae1aae2b6699b7da2e9d4e8a3c81c04fa29b92043804a2ee09ba165d662a7868"
+    },
+    {
+      "path": "docs/technicalnew/prompts/chief.md",
+      "sha256": "45fa2d2fb1354f5231247c05cde0849c9c8820729556682250c8a1a9bd7156fb"
+    },
+    {
+      "path": "docs/technicalnew/prompts/designer.md",
+      "sha256": "5c9f12a486c81fbf50615ff155328f0c2ca55fa68d8da8bd87c9f2499b3dfff4"
+    },
+    {
+      "path": "docs/technicalnew/prompts/developer.md",
+      "sha256": "3588d1ebec626aef0a87f2c3a616df310a0f7a740d2fb7b4af82a0102df2a6a7"
+    },
+    {
+      "path": "docs/technicalnew/prompts/investigator.md",
+      "sha256": "6770cb726dc9519ae8ffca32218f55879e062b4ca77c92b7cc9076ff9823d8f8"
+    },
+    {
+      "path": "docs/technicalnew/prompts/reviewer.md",
+      "sha256": "42584e594d8776da7e70201a58052efc69eac3583d203eec8699c2740c12c702"
+    },
+    {
+      "path": "docs/technicalnew/prompts/settler.md",
+      "sha256": "31b7f9b3e6586f183ed2f71893e938f50da73fbdc2224923d99a413ef0def2d0"
+    },
+    {
+      "path": "docs/technicalnew/prompts/specialists.md",
+      "sha256": "c7924a7f8c7f9625765073f244a536d1e452075ac0a30c5e2c91c90516ab0459"
+    },
+    {
+      "path": "docs/technicalnew/prompts/tester.md",
+      "sha256": "19a757d42bd5e02737f2891df8cb4f541cfb45bbc18c986eae89542d6a171e71"
+    },
+    {
+      "path": "docs/technicalnew/requirements-format.md",
+      "sha256": "4ee96e62b273980055df3f015ea53ff5c9bc13da7d0ad33bfce46de9eb0fc2a5"
+    },
+    {
+      "path": "docs/technicalnew/runtime-contract.md",
+      "sha256": "c481199a89ad6222bd78e2ad3ab82d4ecc0a1db241be008bb52b1f0f48f857a0"
+    },
+    {
+      "path": "docs/technicalnew/storage-and-recovery.md",
+      "sha256": "3e32845c06aead6a12e7c973aa930775e7c45701a69dccf6f7f1c584222d3eb6"
+    },
+    {
+      "path": "docs/technicalnew/validation.md",
+      "sha256": "00c247ee4e60a9a26a8afd6700e8d1b298e1ba908d55785c3e06704dda6f53e2"
+    }
+  ],
+  "loadedForRuleChange": [
+    "AGENTS.md",
+    "docs/INDEX.md",
+    "docs/productnew/modules/delivery.md",
+    "docs/productnew/acceptance.md",
+    "docs/technicalnew/agents-and-tools.md",
+    "docs/technicalnew/implementation-checks.md",
+    "docs/technicalnew/validation.md",
+    "docs/technicalnew/prompts/base.md",
+    "docs/technicalnew/prompts/chief.md",
+    "docs/technicalnew/prompts/developer.md",
+    "docs/technicalnew/prompts/reviewer.md",
+    "docs/technicalnew/prompts/tester.md"
+  ],
+  "independentReviewAdditionalContracts": [
+    "G2/G3",
+    "S2",
+    "M2"
+  ],
+  "skill": "/Users/huyaohua/.codex/skills/agentdev-project-workflow/SKILL.md",
+  "excluded": [
+    "old implementation as authority",
+    "docs/old",
+    "author chat and author self-assessment for independent review",
+    "external skill as product contract"
+  ],
+  "unverified": [
+    "actual prompt injection",
+    "model compliance",
+    "API and browser E2E execution"
+  ]
+}
