@@ -2,20 +2,21 @@
 
 产品依据：[任务交付](../productnew/modules/delivery.md)、[主管对话](../productnew/modules/chief-conversation.md)、[项目知识](../productnew/modules/project-knowledge.md)。
 
+角色提示词与能力目标已按当前产品方向局部同步；分析 Task、原生交互适配、需求类型/Schema 与完成收口仍待后续契约同步和运行验证。旧 interaction 操作链不作为最新提示词启用依据。
+
 ## G1 角色与工具集合
 
 | roleId | 责任 | 能力 |
 |---|---|---|
-| chief | 用户讨论、总体 Plan、阶段更新、按步骤委派、所有交互呈现、最终核对 | read；四个核心工具、task、requirement、interaction |
-| product | 内聚需求/产品知识与正式文档 | read/write/edit、requirement、agent_report、task.get、interaction.request |
-| designer | 技术职责/契约与证据 | read/write/edit、agent_report、task.get、interaction.request |
-| developer | 完成总体 Plan 中指定实施目标 | read/write/edit/bash、agent_report、task.get、requirement.list/get、interaction.request |
-| reviewer | 独立检查需求/验收、总体 Plan 和实际候选 | read、agent_report、task.get、interaction.request；不提供任意 bash/源码写入 |
-| tester | Review 后在固定候选的测试副本验证 | read/bash、agent_report、task.get、interaction.request |
-| settler | 更新已验证知识/摘要/记录，保存成果 | read/write/edit/bash、agent_report、task.get、requirement、interaction.request |
-| investigator | 独立只读调查/核实具体效果 | read/已配置只读检查、agent_report、task.get、interaction.request |
+| chief | 用户讨论、总体 Plan、阶段更新、按步骤委派、交互业务判断、最终核对 | read；四个核心工具、task、requirement；Pi 原生交互接入 |
+| designer | 产品分析、内聚模块、实施需求与适用技术架构/契约 | read/write/edit、requirement.list/get/save、agent_report、task.get；Pi 原生交互接入 |
+| developer | 完成总体 Plan 中指定实施目标 | read/write/edit/bash、agent_report、task.get、requirement.list/get；Pi 原生交互接入 |
+| reviewer | 独立检查需求/验收、总体 Plan 和实际候选 | read、agent_report、task.get；Pi 原生交互接入；不提供任意 bash/源码写入 |
+| tester | Review 后在固定候选的测试副本验证 | read/bash、agent_report、task.get；Pi 原生交互接入 |
+| settler | 更新已验证知识/摘要/记录，保存成果 | read/write/edit/bash、agent_report、task.get、requirement；Pi 原生交互接入 |
+| investigator | 独立只读调查/核实具体效果 | read/已配置只读检查、agent_report、task.get；Pi 原生交互接入 |
 
-前后端是 developer.specialization。chief 从用户会话入口创建，专业 Session 不再委派。身份由宿主绑定 projectId/sessionId/taskId，不能靠模型参数切换。工具 op 子集、写入负责人、当前总体 Plan 授权与控制由服务校验；普通 Local 工具不等于 OS 沙箱。
+前后端是 developer.specialization。chief 从用户会话入口创建，专业 Session 不再委派。product 与 designer 合并为 designer；具体调查或试验由主管按需要提供权限与环境，不默认开放任意执行。身份由宿主绑定 projectId/sessionId/taskId，不能靠模型参数切换。工具 op 子集、写入负责人、当前总体 Plan 授权与控制由服务校验；普通 Local 工具不等于 OS 沙箱。
 
 ## G2 模型工具
 
@@ -77,6 +78,8 @@ checks 每项 name/status（passed/failed/blocked/not_run）/command?/exitCode?/
 
 ### requirement
 
+访问边界：提案/实施需求可用普通 read 或 get 读取，列表使用 list；正式新建、修改、状态保存必须 save，不通过 write/edit/脚本绕过格式与版本校验。修改已有记录前 get 取得原文与版本。产品、技术及索引文档仍使用普通文件工具。提案轻量格式与实施需求七部分的精确双类型 Schema 尚待同步，下方 v1 格式不能直接用于新增提案。
+
 | op | 参数 → 结果 |
 |---|---|
 | list | status?、limit、cursor? → items/invalidFiles/nextCursor |
@@ -88,6 +91,8 @@ checks 每项 name/status（passed/failed/blocked/not_run）/command?/exitCode?/
 安全解析 YAML，核对 Schema/引用/原版本，以同目录临时文件原子替换；碰撞/旧版本拒绝，失败保留原文。列表从文件重建，监听只加速，非法文件不被筛选隐藏。updatedAt 倒序/id 升序。授权必须引用真实用户输入/已解决交互；保存不自动开 Task，归档不移动删除文件。
 
 ### interaction
+
+以下为尚未替换的 v1 记录，用于定位后续同步范围，不是当前模型的可启用交互工具集合。最新目标沿用 Pi 原生确认/选择/输入，由宿主负责关联、转发和恢复；不注册业务确认类型或让模型管理下列生命周期操作。
 
 按 [M5](messaging-and-collaboration.md#m5-统一交互与授权) 使用一个请求/响应协议：
 
@@ -128,7 +133,7 @@ Pi 原生说明 + 内置基础规则 + 当前角色规则
  + 当前 Task/总体 Plan 与输入，或主管的专业目标/依据路径
 ```
 
-内置文本：[base](prompts/base.md)、[chief](prompts/chief.md)、[当前专业角色块](prompts/specialists.md)。只注入当前角色，规则/模型/工具/cwd/绑定摘要持久记录。主管压缩/重启从 currentTaskId + task.get 找回真实关系，不只靠记忆 ID。
+内置文本：[base](prompts/base.md)、[chief](prompts/chief.md)、[专业共同规则与当前角色](prompts/specialists.md)。designer 实际加载 [完整设计提示词](prompts/designer.md) 的角色正文，替代旧 product/designer 短块；链接或角色名不能替代规则装配。只注入当前角色，规则/模型/工具/cwd/绑定摘要持久记录。主管压缩/重启从 currentTaskId + task.get 找回真实关系，不只靠记忆 ID。
 
 专业 Agent 自行按引用 read；Server 校验归属/可读性，不拼整项目。独立 Reviewer/Tester 不读开发/主管/其他 Reviewer 聊天自评。明确 resourceLoader，不自动加载未知扩展。项目规则变化在安全边界核对并显式更新/交接。
 
@@ -136,4 +141,4 @@ Pi 原生说明 + 内置基础规则 + 当前角色规则
 
 ## G5 模型行为检查
 
-覆盖自由讨论不建 Task、主管总体 Plan、显式阶段更新、按步委派、批次中间交互/原等待续接、并行 Review 后 Test、返工、真实报告、结算缺项和压缩恢复。模型/运行证据见 [实现检查](implementation-checks.md)，提示词不证明可靠性。
+覆盖自由讨论不建 Task、主管总体 Plan、显式阶段更新、按步委派、批次中间交互/原等待续接、并行 Review 后 Test、返工、真实报告、结算缺项和压缩恢复。统一设计角色还须检查粗略提案转化、模块内聚、可实施需求边界、已有技术依据复用、总图/子图/契约一致、正式需求写入不绕过 save，以及无设计聊天的独立实施。模型/运行证据见 [实现检查](implementation-checks.md)，提示词不证明可靠性。
