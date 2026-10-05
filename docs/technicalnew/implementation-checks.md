@@ -15,7 +15,7 @@
 | PI-05 | 宿主输入/Task/报告/交互/规范文件保存失败，ctx.abort、外层等 idle | 保存失败不能返回成功；停止新准入，实际影响核实；原生 edit/write/bash 不建第二套意图账 |
 | PI-06 | abort 本地 bash、超时、子进程/脱离管理影响；停止与结束竞态 | 确认停止才停态；无法确认的后代进程保留未知，不宣传自动回滚/隔离 |
 | PI-07 | 多 cwd/多模型并行，恢复原文件、模型不可用、角色工具/规则变化 | 不串项目，不改全局 cwd/env，不默认回退，冷恢复重建整个运行契约 |
-| PI-08 | 官方 question 移植扩展通过 extensionFactories/pi.registerTool 加载；SDK uiContext confirm/select/input；确认/选择/输入/取消；父委派等待中的请求、答复及各保存边界重启 | SDK 非 TUI 可用，无重复工具注册或 TUI 依赖；按 M5 请求/答复落 WAL 后转发/恢复；按原请求 ID 返回真实答复，无并发 prompt/循环等待；只在主管展示，取消返回原调用，原 Promise 丢失后保留问答事实、stale 原请求；模型必要时重新发问 |
+| PI-08 | 官方 question 移植扩展通过 extensionFactories/pi.registerTool 加载；SDK uiContext confirm/select/input；确认/选择/输入/取消；父委派等待中的请求、答复及各保存边界重启。宿主 UI 适配器必须实现为普通对象（不能是类实例） | SDK 非 TUI 可用，无重复工具注册或 TUI 依赖；按 M5 请求/答复落 WAL 后转发/恢复；按原请求 ID 返回真实答复，无并发 prompt/循环等待；只在主管展示，取消返回原调用，原 Promise 丢失后保留问答事实、stale 原请求；模型必要时重新发问。两条已实测结论：**(1) 交互开关是「是否绑定 UI 适配器」，mode 只作身份声明**（`hasUI()` 只判断 uiContext 是否绑定；绑定 + `rpc` 与绑定 + `print` 均可交互，未绑定时不可交互）；**(2) 适配器必须是普通对象**（bindExtensions 以 `{...ui, select, confirm, input, editor, custom}` 包装，类实例的原型成员会在包装后丢失，实测 `notify` 变 undefined）。回归检查：包装后 `notify` 仍可用并记录、TUI-only 成员调用时报出适配器自己的错误、theme 缺失为已知事实 |
 | PI-09 | 专业并发=1；多个子 Session 排队，父工具等待；成员先完成/阻断；超时、abort、stale 后续办 | 主管不占专业名额；等待全部当前成员，timeout 仅快照；wait 不追加输入；异常停稳核实后 continue，用户暂停/取消不自动重启；等待可取消，父 stop 不误取消子工作 |
 
 未通过 PI-01/02/05/07 前不实施需要可靠 Task 的模型执行链路；可以先实现纯存储/查询。PI-03 验证原生历史与已知成果续办能力；首版不实现工具回执修补。PI-04 必须在交付实时 UI 前通过；PI-08/09 必须在交付同步协作/授权前通过。

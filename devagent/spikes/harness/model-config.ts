@@ -34,7 +34,7 @@ function stringMap(value: unknown, field: string): Record<string, string> | stri
   if (value === undefined) {
     return {};
   }
-  if (typeof value !== 'object' || value === null) {
+  if (Array.isArray(value) || typeof value !== 'object' || value === null) {
     return `${field} must be an object`;
   }
   const out: Record<string, string> = {};
@@ -67,7 +67,7 @@ export function parseModelConfig(raw: unknown): ModelConfigResult {
   const endpoint = record['endpoint'];
   let providers: Record<string, unknown> = {};
   if (endpoint !== undefined) {
-    if (typeof endpoint !== 'object' || endpoint === null) {
+    if (Array.isArray(endpoint) || typeof endpoint !== 'object' || endpoint === null) {
       return { ok: false, error: 'endpoint must be an object' };
     }
     const endpointRecord = endpoint as Record<string, unknown>;

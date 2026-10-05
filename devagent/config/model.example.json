@@ -1,14 +1,8 @@
 {
-  "_comment": "复制为 devagent/config/model.json 并填入真实凭证；devagent/config/model.json 已被 .gitignore 忽略，不会提交。",
+  "_comment": "复制为 devagent/config/model.json 并填入真实凭证；model.json 已被 .gitignore 忽略，不会提交。协议由 provider 决定，key 必须与之匹配；三种写法见 config/README.md。",
   "provider": "anthropic",
   "model": "claude-sonnet-4-5",
   "env": {
-    "ANTHROPIC_API_KEY": "在此填写你的 key"
-  },
-  "endpoint": {
-    "_comment": "可选。仅在需要自定义/本地 OpenAI 兼容端点时填写；填写后会写入临时 models.json。云端官方服务留空或删除本字段。",
-    "baseUrl": "http://127.0.0.1:11434/v1",
-    "api": "openai-completions",
-    "apiKey": "ollama"
+    "ANTHROPIC_API_KEY": "在此填写 sk-ant-..."
   }
 }
