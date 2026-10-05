@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check:model": "node checks/real-model.ts",
+    "check:runtime": "node checks/runner-real-model.ts",
     "spikes": "node spikes/pi-01-input-correlation.ts && node spikes/pi-02-settle-semantics.ts && node spikes/pi-05-save-fail-abort.ts && node spikes/pi-07-multi-session.ts && node spikes/pi-08-host-ui.ts"
   },
   "dependencies": {

@@ -53,6 +53,10 @@ export interface InputRow {
   readonly serverEpoch: number | null;
   readonly claim: number;
   readonly deliveryStartedAt: string | null;
+  /** Redacted effective configuration captured at delivery time (no credentials). */
+  readonly effectiveConfig: string | null;
+  /** Delivered boundary: Pi file, leaf entry, input marker and root input entry ids. */
+  readonly checkpoint: string | null;
   readonly stopRequestKey: string | null;
   readonly stopReason: string | null;
   readonly errorCode: string | null;
@@ -108,10 +112,26 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
+
+/** Columns added by the v1 → v2 migration (checkpoint of the delivered input + redacted config). */
+const V2_COLUMNS: ReadonlyArray<{ name: string; ddl: string }> = [
+  { name: 'effectiveConfig', ddl: 'ALTER TABLE session_inputs ADD COLUMN effectiveConfig TEXT' },
+  { name: 'checkpoint', ddl: 'ALTER TABLE session_inputs ADD COLUMN checkpoint TEXT' },
+];
 
 const ONE_PROCESSING_INDEX_SQL = `CREATE UNIQUE INDEX IF NOT EXISTS idx_inputs_one_processing
   ON session_inputs (sessionId) WHERE status = 'processing';`;
+
+const SESSION_BINDINGS_SQL = `CREATE TABLE IF NOT EXISTS session_bindings (
+  sessionId TEXT PRIMARY KEY REFERENCES sessions(id),
+  piFile TEXT NOT NULL,
+  branchEntryId TEXT,
+  hasHistory INTEGER NOT NULL DEFAULT 0,
+  configHash TEXT,
+  rulesHash TEXT,
+  updatedAt TEXT NOT NULL
+);`;
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS projects (
@@ -151,6 +171,8 @@ CREATE TABLE IF NOT EXISTS session_inputs (
   serverEpoch INTEGER,
   claim INTEGER NOT NULL DEFAULT 0,
   deliveryStartedAt TEXT,
+  effectiveConfig TEXT,
+  checkpoint TEXT,
   stopRequestKey TEXT,
   stopReason TEXT,
   errorCode TEXT,
@@ -166,6 +188,15 @@ CREATE INDEX IF NOT EXISTS idx_inputs_session_status ON session_inputs (sessionI
 -- that bypasses that check. ALSO created by migrate() so upgraded databases get it too.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_inputs_one_processing ON session_inputs (sessionId)
   WHERE status = 'processing';
+CREATE TABLE IF NOT EXISTS session_bindings (
+  sessionId TEXT PRIMARY KEY REFERENCES sessions(id),
+  piFile TEXT NOT NULL,
+  branchEntryId TEXT,
+  hasHistory INTEGER NOT NULL DEFAULT 0,
+  configHash TEXT,
+  rulesHash TEXT,
+  updatedAt TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS request_receipts (
   requestKey TEXT PRIMARY KEY,
   method TEXT NOT NULL,
@@ -215,6 +246,11 @@ export class Store {
 
   close(): void {
     this.db.close();
+  }
+
+  /** The generation this store instance writes on claim (used by input correlation markers). */
+  get epoch(): number {
+    return this.serverEpoch;
   }
 
   createProject(params: CreateProjectParams): void {
@@ -388,22 +424,56 @@ export class Store {
     status: Extract<InputStatus, 'completed' | 'failed' | 'stopped' | 'interrupted'>;
     errorCode?: string;
     errorMessage?: string;
+    /** Delivered boundary, recorded only when the run actually settled. */
+    checkpoint?: unknown;
   }): boolean {
     const outcome = this.db
       .prepare(
         `UPDATE session_inputs
-            SET status = ?, revision = revision + 1, errorCode = ?, errorMessage = ?, updatedAt = ?
+            SET status = ?, revision = revision + 1, errorCode = ?, errorMessage = ?,
+                checkpoint = COALESCE(?, checkpoint), updatedAt = ?
           WHERE inputId = ? AND status = 'processing' AND revision = ?`,
       )
       .run(
         params.status,
         params.errorCode ?? null,
         params.errorMessage ?? null,
+        params.checkpoint === undefined ? null : canonical(params.checkpoint),
         this.clock(),
         params.inputId,
         params.expectedRevision,
       );
     return outcome.changes === 1;
+  }
+
+  /**
+   * Record the redacted effective configuration used for a claimed input and return the new
+   * revision. Credentials never appear here (the caller passes a redacted view).
+   */
+  recordEffectiveConfig(params: { inputId: string; effectiveConfig: unknown }): number {
+    return this.transaction(() => {
+      const input = this.requireInput(params.inputId);
+      if (input.status !== 'processing') {
+        throw new StoreError(
+          'INVALID_ARGUMENT',
+          'effective config can only be recorded for a running input',
+          { inputId: params.inputId, status: input.status },
+        );
+      }
+      const outcome = this.db
+        .prepare(
+          `UPDATE session_inputs
+              SET effectiveConfig = ?, revision = revision + 1, updatedAt = ?
+            WHERE inputId = ? AND status = 'processing' AND revision = ?`,
+        )
+        .run(canonical(params.effectiveConfig), this.clock(), params.inputId, input.revision);
+      if (outcome.changes !== 1) {
+        throw new StoreError('VERSION_CONFLICT', 'input moved while recording its config', {
+          inputId: params.inputId,
+        });
+      }
+      return this.requireInput(params.inputId).revision;
+    });
   }
 
   /**
@@ -481,6 +551,92 @@ export class Store {
     }>;
   }
 
+  getSession(sessionId: string): {
+    id: string;
+    projectId: string;
+    roleId: string;
+    specialization: string | null;
+    cwd: string;
+    configRef: string | null;
+    currentTaskId: string | null;
+    revision: number;
+  } | undefined {
+    return this.db
+      .prepare(
+        'SELECT id, projectId, roleId, specialization, cwd, configRef, currentTaskId, revision FROM sessions WHERE id = ?',
+      )
+      .get(sessionId) as
+      | {
+          id: string;
+          projectId: string;
+          roleId: string;
+          specialization: string | null;
+          cwd: string;
+          configRef: string | null;
+          currentTaskId: string | null;
+          revision: number;
+        }
+      | undefined;
+  }
+
+  /** Pi file binding for a logical session (S2 session_bindings): never pick "the newest file". */
+  recordSessionBinding(params: {
+    sessionId: string;
+    piFile: string;
+    branchEntryId?: string;
+    hasHistory: boolean;
+    configHash: string;
+    rulesHash?: string;
+  }): void {
+    const timestamp = this.clock();
+    this.db
+      .prepare(
+        `INSERT INTO session_bindings (sessionId, piFile, branchEntryId, hasHistory, configHash, rulesHash, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(sessionId) DO UPDATE SET
+           piFile = excluded.piFile,
+           branchEntryId = excluded.branchEntryId,
+           hasHistory = excluded.hasHistory,
+           configHash = excluded.configHash,
+           rulesHash = excluded.rulesHash,
+           updatedAt = excluded.updatedAt`,
+      )
+      .run(
+        params.sessionId,
+        params.piFile,
+        params.branchEntryId ?? null,
+        params.hasHistory ? 1 : 0,
+        params.configHash,
+        params.rulesHash ?? null,
+        timestamp,
+      );
+  }
+
+  getSessionBinding(sessionId: string): {
+    sessionId: string;
+    piFile: string;
+    branchEntryId: string | null;
+    hasHistory: boolean;
+    configHash: string | null;
+    rulesHash: string | null;
+  } | undefined {
+    const row = this.db
+      .prepare(
+        'SELECT sessionId, piFile, branchEntryId, hasHistory, configHash, rulesHash FROM session_bindings WHERE sessionId = ?',
+      )
+      .get(sessionId) as
+      | {
+          sessionId: string;
+          piFile: string;
+          branchEntryId: string | null;
+          hasHistory: number;
+          configHash: string | null;
+          rulesHash: string | null;
+        }
+      | undefined;
+    return row === undefined ? undefined : { ...row, hasHistory: row.hasHistory === 1 };
+  }
+
   getInput(inputId: string): InputRow | undefined {
     return this.db.prepare('SELECT * FROM session_inputs WHERE inputId = ?').get(inputId) as
       | InputRow
@@ -534,6 +690,14 @@ export class Store {
       this.transaction(() => {
         this.db.exec(SCHEMA_SQL);
         this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+      });
+    } else if (userVersion === 1) {
+      this.transaction(() => {
+        for (const column of V2_COLUMNS) {
+          this.db.exec(column.ddl);
+        }
+        this.db.exec(SESSION_BINDINGS_SQL);
+        this.db.exec('PRAGMA user_version = 2;');
       });
     } else if (userVersion !== SCHEMA_VERSION) {
       throw new StoreError('VERSION_CONFLICT', 'unsupported store schema version', {

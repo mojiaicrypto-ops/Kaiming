@@ -59,8 +59,30 @@ describe('store pragmas and schema', () => {
       journalMode: 'wal',
       synchronous: 2,
       foreignKeys: 1,
-      userVersion: 1,
+      userVersion: 2,
     });
+  });
+
+  it('migrates a v1 database by adding the P2 columns', () => {
+    const { store, path } = openStore();
+    seed(store);
+    accept(store);
+    closeStore(store);
+
+    // Emulates a v1 database: the two P2 columns absent, version rolled back.
+    const raw = new DatabaseSync(path);
+    raw.exec('ALTER TABLE session_inputs DROP COLUMN effectiveConfig');
+    raw.exec('ALTER TABLE session_inputs DROP COLUMN checkpoint');
+    raw.exec('PRAGMA user_version = 1');
+    raw.close();
+
+    const migrated = new Store({ path, serverEpoch: 1 });
+    stores.push(migrated);
+
+    expect(migrated.pragmas().userVersion).toBe(2);
+    const input = migrated.getInput('i-1');
+    expect(input).toMatchObject({ status: 'queued', effectiveConfig: null, checkpoint: null });
+    expect(migrated.claimNextInput('s-1').kind).toBe('claimed');
   });
 
   it('refuses to open a database that already has two running inputs in one session', () => {

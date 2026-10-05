@@ -1,0 +1,548 @@
+/**
+ * Input runner (P2): claim one accepted input, deliver it to its own Pi session, observe what really
+ * happened, and record the terminal state from message-level facts plus the persisted boundary.
+ *
+ * Rules it must not break (from the P0 findings and the storage contract):
+ *  - `prompt()` resolving is not success: the assistant stop reason decides error/aborted.
+ *  - A run whose boundary cannot be confirmed on disk is `interrupted`, never `completed`.
+ *  - An unavailable model or directory leaves the input queued (blocked) instead of falling back.
+ *  - Nothing is retried or replayed by this layer.
+ *  - A stop requested during a run must end as `stopped` against the current revision, not as a
+ *    model failure on a stale revision.
+ */
+import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { type SessionEntry } from '@earendil-works/pi-coding-agent';
+import { Store, StoreError, type InputRow } from '../store/store.ts';
+import { redactEffectiveConfig, type EffectiveConfig } from './config.ts';
+import { digestJson } from './hash.ts';
+import { INPUT_MARKER_CUSTOM_TYPE, HistoryUnavailableError, type PiRuntimeFactory } from './pi-runtime.ts';
+import { SessionRegistry, type LogicalSessionSpec } from './registry.ts';
+
+export interface InputCheckpoint {
+  readonly piFile: string;
+  readonly leafEntryId: string;
+  readonly inputMarkerId: string;
+  readonly inputEntryId: string;
+  readonly configHash: string;
+}
+
+export type TerminalStatus = 'completed' | 'failed' | 'stopped' | 'interrupted';
+
+export type RunOutcome =
+  | { readonly kind: 'idle' }
+  | { readonly kind: 'busy'; readonly inputId: string }
+  | { readonly kind: 'blocked'; readonly inputId: string; readonly code: 'RECOVERY_REQUIRED' }
+  | {
+      readonly kind: 'blocked_config';
+      readonly code: 'MODEL_UNAVAILABLE';
+      readonly detail: string;
+    }
+  | {
+      readonly kind: 'blocked_project';
+      readonly code: 'PROJECT_UNAVAILABLE';
+      readonly detail: string;
+    }
+  | {
+      readonly kind: TerminalStatus;
+      readonly inputId: string;
+      readonly detail: string;
+      readonly checkpoint?: InputCheckpoint;
+    };
+
+export interface RunnerOptions {
+  readonly store: Store;
+  readonly registry: SessionRegistry;
+  readonly factory: PiRuntimeFactory;
+  readonly resolveConfig: (roleId: string) => EffectiveConfig;
+  /** Extra session wiring (probe tools/extensions) used by tests and later work packages. */
+  readonly sessionExtras?: (sessionId: string) => {
+    readonly customTools?: LogicalSessionSpec['customTools'];
+    readonly extensionFactories?: LogicalSessionSpec['extensionFactories'];
+  };
+}
+
+export class InputRunner {
+  private readonly options: RunnerOptions;
+  /** `${sessionId}:${inputId}` of runs a host-owned tool asked to abort (S5 tool-initiated stop). */
+  private readonly hostAborts = new Set<string>();
+
+  constructor(options: RunnerOptions) {
+    this.options = options;
+  }
+
+  /**
+   * Called by host-owned tools right before they call `ctx.abort()`. Without this note an abort is
+   * indistinguishable from a provider error, because Pi reports it as stopReason=error with the
+   * message "This operation was aborted" — and classifying by message text is not allowed.
+   */
+  noteAbort(sessionId: string, inputId: string): void {
+    this.hostAborts.add(abortKey(sessionId, inputId));
+  }
+
+  /** Claim and run the next input of a session; returns what was actually observed. */
+  async runNext(sessionId: string): Promise<RunOutcome> {
+    const session = this.options.store.getSession(sessionId);
+    if (session === undefined) {
+      throw new StoreError('NOT_FOUND', 'session does not exist', { sessionId });
+    }
+    const config = this.options.resolveConfig(session.roleId);
+    if (!(await this.options.factory.isAvailable(config.selection))) {
+      return {
+        kind: 'blocked_config',
+        code: 'MODEL_UNAVAILABLE',
+        detail: `${config.selection.providerId}/${config.selection.modelId} has no usable credential`,
+      };
+    }
+    const project = this.checkProject(session.cwd);
+    if (!project.ok) {
+      return { kind: 'blocked_project', code: 'PROJECT_UNAVAILABLE', detail: project.detail };
+    }
+    // Task-level control eligibility (pause/cancel of the owning Task) arrives with the task table
+    // in P3; until then only the storage-level rules (busy / unresolved interrupted) are enforced.
+
+    const claim = this.options.store.claimNextInput(sessionId);
+    if (claim.kind === 'none') {
+      return { kind: 'idle' };
+    }
+    if (claim.kind === 'busy') {
+      return { kind: 'busy', inputId: claim.inputId };
+    }
+    if (claim.kind === 'blocked') {
+      return { kind: 'blocked', inputId: claim.inputId, code: claim.code };
+    }
+    const input = claim.input;
+
+    // A stop recorded before the run starts is honoured without delivering anything.
+    if (input.stopRequestKey !== null) {
+      const detail = 'stop requested before delivery';
+      const recorded = this.finishWithCurrentRevision(input.inputId, {
+        status: 'stopped',
+        errorCode: 'STOP_REQUESTED',
+        errorMessage: input.stopReason ?? detail,
+      });
+      return recorded
+        ? { kind: 'stopped', inputId: input.inputId, detail }
+        : { kind: 'interrupted', inputId: input.inputId, detail: 'could not record the stop' };
+    }
+
+    const text = textOfPayload(input.payload);
+    if (text === undefined) {
+      const detail = 'non-text input content rejected';
+      this.finishWithCurrentRevision(input.inputId, {
+        status: 'failed',
+        errorCode: 'INVALID_ARGUMENT',
+        errorMessage: 'this runtime only delivers text content',
+      });
+      return { kind: 'failed', inputId: input.inputId, detail };
+    }
+
+    // Everything from the claim onward runs inside one protected block: binding lookup, extras,
+    // instance preparation, the first Pi write, delivery and classification. Any failure must end in
+    // a recorded terminal state — a claimed input may never be left `processing`.
+    let deliveryStarted = false;
+    let status: TerminalStatus;
+    let detail: string;
+    let errorCode: string | undefined;
+    let checkpoint: InputCheckpoint | undefined;
+    try {
+      const binding = this.options.store.getSessionBinding(sessionId);
+      const extras = this.options.sessionExtras?.(sessionId);
+      const handle = await this.options.registry.acquire(
+        {
+          sessionId,
+          cwd: session.cwd,
+          ...(binding !== undefined ? { piFile: binding.piFile } : {}),
+          ...(extras?.customTools !== undefined ? { customTools: extras.customTools } : {}),
+          ...(extras?.extensionFactories !== undefined
+            ? { extensionFactories: extras.extensionFactories }
+            : {}),
+        },
+        config,
+      );
+
+      // Bookmark first, then deliver: the bookmark's subtree contains this input's root entry.
+      // From here on we are performing Pi writes, so a failure means the boundary is unconfirmed
+      // rather than "the session could not be prepared".
+      deliveryStarted = true;
+      const markerId = handle.sessionManager.appendCustomEntry(INPUT_MARKER_CUSTOM_TYPE, {
+        inputId: input.inputId,
+        requestDigest: input.paramsDigest,
+        generation: { serverEpoch: this.options.store.epoch, claim: input.claim },
+      });
+      this.options.store.recordEffectiveConfig({
+        inputId: input.inputId,
+        effectiveConfig: redactEffectiveConfig(config),
+      });
+
+      await handle.session.prompt(text);
+
+      const lastMessage = handle.session.messages[handle.session.messages.length - 1];
+      const stopReason = lastMessage?.role === 'assistant' ? lastMessage.stopReason : 'none';
+      const providerError =
+        lastMessage?.role === 'assistant' ? String(lastMessage.errorMessage ?? '') : '';
+      const piFile = handle.piFile();
+      const inputEntryId = rootInputEntryId(handle.sessionManager.getEntries(), markerId);
+      checkpoint =
+        piFile !== undefined && inputEntryId !== undefined
+          ? {
+              piFile,
+              leafEntryId: handle.sessionManager.getLeafId() ?? '',
+              inputMarkerId: markerId,
+              inputEntryId,
+              configHash: digestJson(redactEffectiveConfig(config)),
+            }
+          : undefined;
+
+      // The current persisted row decides what the stop facts are; the terminal write re-reads the
+      // revision again (a stop may land between here and there).
+      const live = this.options.store.getInput(input.inputId);
+      if (live === undefined || live.status !== 'processing') {
+        return {
+          kind: 'interrupted',
+          inputId: input.inputId,
+          detail: 'input was finalized elsewhere while the run was in flight',
+        };
+      }
+      const stoppedOnRequest =
+        live.stopRequestKey !== null || this.hostAborts.has(abortKey(sessionId, input.inputId));
+
+      if (stopReason === 'error') {
+        if (stoppedOnRequest) {
+          status = 'stopped';
+          detail = 'run was aborted as requested';
+        } else {
+          status = 'failed';
+          errorCode = 'MODEL_ERROR';
+          detail = `model run failed: ${providerError || 'unknown provider error'}`;
+        }
+      } else if (stopReason === 'aborted') {
+        status = 'stopped';
+        detail = 'run was aborted';
+      } else if (checkpoint === undefined || !boundaryPersistedOnDisk(checkpoint, {
+        inputId: input.inputId,
+        requestDigest: input.paramsDigest,
+        cwd: session.cwd,
+      })) {
+        status = 'interrupted';
+        errorCode = 'HISTORY_UNAVAILABLE';
+        detail = 'the delivered boundary could not be read back from disk';
+      } else {
+        status = 'completed';
+        detail = 'settled and persisted';
+      }
+    } catch (error) {
+      status = 'interrupted';
+      if (!deliveryStarted) {
+        // Nothing was written to Pi: report the precise cause instead of a delivery failure.
+        errorCode =
+          error instanceof HistoryUnavailableError ? 'HISTORY_UNAVAILABLE' : 'PROJECT_UNAVAILABLE';
+        detail = `session could not be prepared: ${errorMessageOf(error)}`;
+      } else {
+        errorCode = 'HOST_SAVE_FAILED';
+        detail = `delivery boundary unconfirmed: ${errorMessageOf(error)}`;
+      }
+    } finally {
+      this.hostAborts.delete(abortKey(sessionId, input.inputId));
+    }
+
+    const recorded = this.finishWithCurrentRevision(input.inputId, {
+      status,
+      ...(errorCode !== undefined ? { errorCode } : {}),
+      ...(status !== 'completed' ? { errorMessage: detail } : {}),
+      ...(checkpoint !== undefined ? { checkpoint } : {}),
+    });
+    if (!recorded) {
+      return {
+        kind: 'interrupted',
+        inputId: input.inputId,
+        detail: 'terminal state could not be recorded (another writer moved the input)',
+      };
+    }
+    if (checkpoint !== undefined) {
+      // Keep the exact file binding so later inputs (and a rebuilt instance) resume this history.
+      this.options.store.recordSessionBinding({
+        sessionId,
+        piFile: checkpoint.piFile,
+        branchEntryId: checkpoint.leafEntryId,
+        hasHistory: true,
+        configHash: checkpoint.configHash,
+      });
+    }
+    return {
+      kind: status,
+      inputId: input.inputId,
+      detail,
+      ...(checkpoint !== undefined ? { checkpoint } : {}),
+    };
+  }
+
+  /**
+   * Record a stop request and, when the session has a live Pi instance, actually stop it and wait
+   * for idleness before reporting the intent as handled.
+   */
+  async requestStop(
+    sessionId: string,
+    params: { inputId: string; requestKey: string; reason: string },
+  ): Promise<{ status: InputRow['status']; stopRequested: boolean }> {
+    const result = this.options.store.requestStop(params);
+    if (result.stopRequested) {
+      // Tell the runner which run is being stopped before aborting it, so the abort is classified
+      // as `stopped` rather than as a provider error.
+      this.noteAbort(sessionId, params.inputId);
+      const handle = this.options.registry.get(sessionId);
+      if (handle !== undefined) {
+        await handle.session.abort();
+        await handle.session.waitForIdle();
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Write a terminal state against the row's *current* revision. Between the claim and this write a
+   * stop request (or any other writer) can move the row, and finishing with the claimed revision
+   * would then fail the CAS and strand the input as `processing` forever.
+   */
+  private finishWithCurrentRevision(
+    inputId: string,
+    params: {
+      status: TerminalStatus;
+      errorCode?: string;
+      errorMessage?: string;
+      checkpoint?: InputCheckpoint;
+    },
+  ): boolean {
+    const live = this.options.store.getInput(inputId);
+    if (live === undefined || live.status !== 'processing') {
+      return false;
+    }
+    return this.options.store.finishInput({
+      inputId,
+      expectedRevision: live.revision,
+      status: params.status,
+      ...(params.errorCode !== undefined ? { errorCode: params.errorCode } : {}),
+      ...(params.errorMessage !== undefined ? { errorMessage: params.errorMessage } : {}),
+      ...(params.checkpoint !== undefined ? { checkpoint: params.checkpoint } : {}),
+    });
+  }
+
+  /** Pre-claim directory check (S3: 目录可用). */
+  private checkProject(cwd: string): { ok: true } | { ok: false; detail: string } {
+    try {
+      if (!statSync(cwd).isDirectory()) {
+        return { ok: false, detail: `${cwd} is not a directory` };
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, detail: `${cwd} is not accessible: ${errorMessageOf(error)}` };
+    }
+  }
+}
+
+function abortKey(sessionId: string, inputId: string): string {
+  return `${sessionId}:${inputId}`;
+}
+
+/**
+ * Read the exact Pi JSONL back from disk and confirm the recorded boundary is really there and really
+ * belongs to this input (P0/R4: a checkpoint is only trustworthy when the designated history can be
+ * read). Checking a set of ids is not enough — the marker must carry this input's identity, the root
+ * entry must be its first user message, and the leaf must be reachable from that root.
+ */
+export function boundaryPersistedOnDisk(
+  checkpoint: InputCheckpoint,
+  expected: { readonly inputId: string; readonly requestDigest: string; readonly cwd: string },
+): boolean {
+  let text: string;
+  try {
+    text = readFileSync(checkpoint.piFile, 'utf8');
+  } catch {
+    return false;
+  }
+  const entries: Array<Record<string, unknown>> = [];
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      return false;
+    }
+    if (typeof parsed !== 'object' || parsed === null) {
+      return false;
+    }
+    entries.push(parsed as Record<string, unknown>);
+  }
+  const header = entries[0];
+  if (header === undefined || header['type'] !== 'session') {
+    return false;
+  }
+  if (!headerMatchesCwd(header, expected.cwd)) {
+    return false;
+  }
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const entry of entries) {
+    const id = entry['id'];
+    if (typeof id === 'string') {
+      byId.set(id, entry);
+    }
+  }
+
+  const marker = byId.get(checkpoint.inputMarkerId);
+  if (marker === undefined || marker['type'] !== 'custom' || marker['customType'] !== INPUT_MARKER_CUSTOM_TYPE) {
+    return false;
+  }
+  const data = marker['data'];
+  if (typeof data !== 'object' || data === null) {
+    return false;
+  }
+  // `typeof` above proves an object; bracket access keeps the value as unknown for comparison.
+  const markerData = data as Record<string, unknown>;
+  if (markerData['inputId'] !== expected.inputId) {
+    return false;
+  }
+  // The digest must be present and match: a copied marker without it is not this input's marker.
+  if (markerData['requestDigest'] !== expected.requestDigest) {
+    return false;
+  }
+
+  const firstUser = firstDescendantUserEntry(entries, checkpoint.inputMarkerId);
+  if (firstUser !== checkpoint.inputEntryId) {
+    return false;
+  }
+  return leafReachableFromRoot(entries, checkpoint.inputEntryId, checkpoint.leafEntryId);
+}
+
+/** First `role=user` message reachable from a root entry, walking the parent chain downwards. */
+function firstDescendantUserEntry(
+  entries: readonly Record<string, unknown>[],
+  rootId: string,
+): string | undefined {
+  const queue = [rootId];
+  const seen = new Set<string>([rootId]);
+  while (queue.length > 0) {
+    const parentId = queue.shift();
+    if (parentId === undefined) {
+      break;
+    }
+    for (const entry of entries) {
+      if (entry['parentId'] !== parentId) {
+        continue;
+      }
+      const id = entry['id'];
+      if (typeof id !== 'string' || seen.has(id)) {
+        continue; // a corrupt file can contain cycles; the walk must still terminate
+      }
+      seen.add(id);
+      const message = entry['message'];
+      if (
+        entry['type'] === 'message' &&
+        typeof message === 'object' &&
+        message !== null &&
+        'role' in message &&
+        message.role === 'user'
+      ) {
+        return id;
+      }
+      queue.push(id);
+    }
+  }
+  return undefined;
+}
+
+/** Header identity: the file must belong to the expected working directory (symlinks resolved). */
+function headerMatchesCwd(header: Record<string, unknown>, cwd: string): boolean {
+  const headerCwd = header['cwd'];
+  if (typeof headerCwd !== 'string' || headerCwd.length === 0) {
+    return false;
+  }
+  try {
+    return realpathSync(headerCwd) === realpathSync(cwd);
+  } catch {
+    return false;
+  }
+}
+
+/** True when `targetId` is reachable from `rootId` following child links ('' target = no leaf check). */
+function leafReachableFromRoot(
+  entries: readonly Record<string, unknown>[],
+  rootId: string,
+  targetId: string,
+): boolean {
+  if (targetId === '') {
+    return true;
+  }
+  const queue = [rootId];
+  const seen = new Set<string>();
+  while (queue.length > 0) {
+    const parentId = queue.shift();
+    if (parentId === undefined) {
+      break;
+    }
+    for (const entry of entries) {
+      if (entry['parentId'] !== parentId) {
+        continue;
+      }
+      const id = entry['id'];
+      if (typeof id !== 'string' || seen.has(id)) {
+        continue;
+      }
+      if (id === targetId) {
+        return true;
+      }
+      seen.add(id);
+      queue.push(id);
+    }
+  }
+  return false;
+}
+
+/** Text of a stored payload; undefined when it contains anything other than text parts. */
+function textOfPayload(payload: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null || !('content' in parsed)) {
+    return undefined;
+  }
+  const content = parsed.content;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const parts: string[] = [];
+  for (const part of content) {
+    if (typeof part !== 'object' || part === null || !('type' in part)) {
+      return undefined;
+    }
+    if (part.type === 'text' && 'text' in part && typeof part.text === 'string') {
+      parts.push(part.text);
+      continue;
+    }
+    return undefined;
+  }
+  return parts.join('\n');
+}
+
+/** First role=user message inside the bookmark's subtree (P0: append-only chain, take the first). */
+function rootInputEntryId(entries: readonly SessionEntry[], markerId: string): string | undefined {
+  const descendants: SessionEntry[] = [];
+  const visit = (parentId: string): void => {
+    for (const entry of entries) {
+      if (entry.parentId === parentId) {
+        descendants.push(entry);
+        visit(entry.id);
+      }
+    }
+  };
+  visit(markerId);
+  return descendants.find((entry) => entry.type === 'message' && entry.message.role === 'user')?.id;
+}
+
+function errorMessageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
