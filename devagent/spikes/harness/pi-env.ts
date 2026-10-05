@@ -194,8 +194,13 @@ export interface StubEnv {
 }
 
 export async function createStubEnv(
-  baseUrl: string,
-  options: { readonly modelIds?: readonly string[]; readonly deadProviderBaseUrl?: string } = {},
+  baseUrl: string | undefined,
+  options: {
+    readonly modelIds?: readonly string[];
+    readonly deadProviderBaseUrl?: string;
+    /** When given, these providers are written verbatim and no stub provider is added. */
+    readonly providers?: Record<string, unknown>;
+  } = {},
 ): Promise<StubEnv> {
   const root = await mkdtemp(join(tmpdir(), 'devagent-p0-'));
   const cwd = join(root, 'project');
@@ -209,33 +214,27 @@ export async function createStubEnv(
   const modelsPath = join(agentDir, 'models.json');
   const authPath = join(agentDir, 'auth.json');
   const modelIds = options.modelIds ?? [STUB_MODEL];
-  await writeFile(
-    modelsPath,
-    JSON.stringify(
-      {
-        providers: {
-          [STUB_PROVIDER]: {
-            baseUrl,
-            api: 'openai-completions',
-            apiKey: STUB_API_KEY,
-            models: modelIds.map((id) => ({ id, name: id })),
-          },
-          ...(options.deadProviderBaseUrl
-            ? {
-                dead: {
-                  baseUrl: options.deadProviderBaseUrl,
-                  api: 'openai-completions',
-                  apiKey: 'dead-key',
-                  models: [{ id: 'dead-1', name: 'dead-1' }],
-                },
-              }
-            : {}),
-        },
+  const providers =
+    options.providers ??
+    ({
+      [STUB_PROVIDER]: {
+        baseUrl,
+        api: 'openai-completions',
+        apiKey: STUB_API_KEY,
+        models: modelIds.map((id) => ({ id, name: id })),
       },
-      null,
-      2,
-    ),
-  );
+      ...(options.deadProviderBaseUrl
+        ? {
+            dead: {
+              baseUrl: options.deadProviderBaseUrl,
+              api: 'openai-completions',
+              apiKey: 'dead-key',
+              models: [{ id: 'dead-1', name: 'dead-1' }],
+            },
+          }
+        : {}),
+    } satisfies Record<string, unknown>);
+  await writeFile(modelsPath, JSON.stringify({ providers }, null, 2));
   await writeFile(authPath, '[]');
   return {
     root,

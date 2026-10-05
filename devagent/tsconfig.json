@@ -17,5 +17,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*.ts", "spikes/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "spikes/**/*.ts", "test/**/*.ts", "checks/**/*.ts"]
 }
