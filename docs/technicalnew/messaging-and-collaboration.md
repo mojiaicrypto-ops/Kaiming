@@ -114,7 +114,7 @@ system_notice 首版 code=task.controlled/recovery.resolved，仅空闲时消费
 | 用户交互 | 原请求/来源/状态/真实答复 | 提交后主管通道显示，直接响应源调用 |
 | 文本/思考/工具进度 | 不落业务 WAL | 内存推送；重连读取历史，不承诺恢复崩溃片段 |
 
-模型 content 必须含 taskId/sessionId/outcome/结果路径，待用户请求附 interactionId；不能只放 details。恢复消息 sendCustomMessage/customType=agentdev.input/display=true，内容明确来源/事实，不伪装 assistant。原生输入/条目关联见 R4；不得按正文或数组位置去重。
+模型 content 必须含 taskId/sessionId/outcome/结果路径，待用户请求附 interactionId；不能只放 details。恢复消息 sendCustomMessage/customType=agentdev.input-notice/display=true，内容明确来源/事实，不伪装 assistant。输入关联书签名称见 R4（agentdev.input-marker）；不得按正文或数组位置去重。
 
 ## M4 UI 快照与实时事件
 
@@ -148,7 +148,7 @@ event 保持 Pi AgentSessionEvent；inputId/messageKey 仅有实际关联时提�
 
 确认是一轮可等待的问答：模型判断是否需要询问、选择 Pi 通用交互类型并组织内容；UI 按类型渲染；用户答复写入 WAL，再返回原调用供模型继续。Plan、需求、风险等含义放在问题内容中，不定义业务确认 kind 或专用确认协议。
 
-通过 session.bindExtensions({uiContext}) 把 ctx.ui.confirm/select/input 接入宿主 UIAdapter，复用 Pi 原生请求/答复字段。模型使用 G2 的 question 扩展，工具内部已有 ctx.ui 交互使用相同通道。[Pi 交互规范](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/docs/rpc-extension-ui.md)、[SDK 绑定源码](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/src/core/agent-session.ts#L3211-L3222)
+通过 session.bindExtensions({uiContext, mode}) 把 ctx.ui.confirm/select/input 接入宿主 UIAdapter，复用 Pi 原生请求/答复字段；**必须绑定 UI 适配器**，交互开关是「是否绑定适配器」而非 mode 字符串（实测绑定+`rpc`/绑定+`print` 都可交互，未绑定时 ctx.hasUI=false；与固定版本 `hasUI()` 实现一致），mode 按宿主真实身份声明（浏览器宿主首版 `"rpc"`）。适配器必须实现为普通对象：SDK 以对象展开包装 uiContext，类实例的原型方法会在包装后丢失。模型使用 G2 的 question 扩展，工具内部已有 ctx.ui 交互使用相同通道。[Pi 交互规范](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/docs/rpc-extension-ui.md)、[SDK 绑定源码](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/src/core/agent-session.ts#L3211-L3222)
 
 ```mermaid
 sequenceDiagram

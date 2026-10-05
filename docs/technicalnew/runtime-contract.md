@@ -122,14 +122,14 @@ Pi 接入层只负责以下小范围连接，不接管模型循环：
 | create/open | 验证绑定、header/历史、cwd、实际模型和角色/工具契约；禁止默认模型回退或“最近文件” |
 | deliver user/delegation/continuation | 保留原生 content，使用 prompt/sendUserMessage；inputId 是宿主关联，不存在原生参数 |
 | return child result / blocker | 原 createTaskSessions 工具的 content/structuredContent 带真实 ID、状态与引用；保存原操作回执后返回，不再追加同一结果的 CustomMessage |
-| user interaction | 按 G2 经 resourceLoader.extensionFactories 加载官方 question 移植扩展，pi.registerTool 注册一次；通过 session.bindExtensions({uiContext}) 绑定宿主。ctx.ui.confirm/select/input 按 M5 的消息协议关联、提交、转发、答复和恢复；子请求不解除父委派等待，无主管模型呈现步骤 |
-| recovery/control notice | 只在空闲时 sendCustomMessage，customType=agentdev.input，模型可见内容含来源/ID/事实；不能给仍在等待的同一次调用重复输入 |
-| input correlation | 用公开 appendCustomEntry 写 agentdev.input 标记，串行定位其实际根输入条目；保留 markerId/inputEntryId，不按正文相等匹配 |
+| user interaction | 按 G2 经 resourceLoader.extensionFactories 加载官方 question 移植扩展，pi.registerTool 注册一次；通过 session.bindExtensions({uiContext, mode}) 绑定宿主，**绑定 UI 适配器是必需动作**：实测（绑定+`rpc`、绑定+`print` 两种组合）与固定版本源码（`hasUI()` 只判断 uiContext 是否绑定）一致——绑定时 ctx.hasUI=true、未绑定时 false，交互开关是「是否绑定适配器」。mode 只用于宿主自我声明与 TUI-only 行为，按真实身份给值（浏览器宿主首版 `"rpc"`）。另外适配器必须是普通对象：SDK 用对象展开包装 uiContext，类实例的原型方法会在包装后丢失（实测 notify 变 undefined）。ctx.ui.confirm/select/input 按 M5 的消息协议关联、提交、转发、答复和恢复；子请求不解除父委派等待，无主管模型呈现步骤 |
+| recovery/control notice | 只在空闲时 sendCustomMessage，customType=agentdev.input-notice，模型可见内容含来源/ID/事实；不能给仍在等待的同一次调用重复输入 |
+| input correlation | 用公开 appendCustomEntry 写 agentdev.input-marker 标记，串行定位其实际根输入条目；保留 markerId/inputEntryId，不按正文相等匹配 |
 | observe | subscribe 的同步 listener 仅广播/记录内存状态；不能 await 监听器承担持久事务 |
 | finish | 核对 agent_settled、错误/取消、宿主正式结果及指定历史文件边界；完成后记录 checkpoint |
 | stop | 工具内 ctx.abort 发起取消；外层 await session.abort 等实际空闲 |
 
-agentdev.input 标记保存 inputId、requestDigest、generation；它是 Pi 自定义条目，不把工程元数据伪装成用户文本。委派工具的模型可见返回定义在 M2；uiContext 的确切接口按固定版本导出类型接入，不将 SDK 嵌入改成 RPC 子进程。
+agentdev.input-marker 标记保存 inputId、requestDigest、generation；它是 Pi 自定义条目，不把工程元数据伪装成用户文本。恢复/控制通知使用 agentdev.input-notice，属于会进入模型上下文的 custom message；两者名称不同，按名称扫描书签不会命中通知，不需要再判断条目种类。委派工具的模型可见返回定义在 M2；uiContext 的确切接口按固定版本导出类型接入，不将 SDK 嵌入改成 RPC 子进程。
 
 这套关联路线需 [PI-01](implementation-checks.md#i1-pi-接入必须先通过的试验) 验证：首次文件建立、模板转换、压缩、分支、扩展拦截、写失败与重复追加。标记不能确定根输入时停止准入、保留 interrupted，核实后明确续办剩余工作；禁止让实现 Agent 自己添加原生 inputId 字段。
 

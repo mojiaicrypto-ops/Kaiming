@@ -20,6 +20,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import {
   INPUT_MARKER_CUSTOM_TYPE,
+  NOTICE_CUSTOM_TYPE,
   createChecker,
   createStubEnv,
   descendantsOf,
@@ -39,6 +40,11 @@ function describeEntry(entry: SessionEntry): string {
     return `${entry.type}(${entry.customType}) id=${entry.id} parent=${entry.parentId ?? 'root'}`;
   }
   return `${entry.type} id=${entry.id} parent=${entry.parentId ?? 'root'}`;
+}
+
+/** customType of a bookmark/notice entry, '' for every other entry kind. */
+function customTypeOf(entry: SessionEntry): string {
+  return entry.type === 'custom' || entry.type === 'custom_message' ? entry.customType : '';
 }
 
 /** Text of a user message entry, read with narrowing (no unchecked cast). */
@@ -207,7 +213,7 @@ try {
     .getEntries()
     .filter((entry) => entry.type === 'message').length;
   await session.sendCustomMessage({
-    customType: INPUT_MARKER_CUSTOM_TYPE,
+    customType: NOTICE_CUSTOM_TYPE,
     content: 'recovery notice from spike',
     display: true,
   });
@@ -220,11 +226,19 @@ try {
       ? noticeEntry.customType
       : 'none';
   checker.check(
-    'notice is a custom_message entry, distinguishable from the custom marker',
+    'notice is a custom_message entry under its own name, distinct from the bookmark',
     noticeEntry !== undefined &&
       noticeEntry.type === 'custom_message' &&
-      noticeEntry.customType === INPUT_MARKER_CUSTOM_TYPE,
+      noticeEntry.customType === NOTICE_CUSTOM_TYPE,
     `lastEntryType=${noticeType} customType=${noticeCustomType}`,
+  );
+  checker.check(
+    'bookmark scan by name finds the marker and never the notice',
+    afterNotice.filter((entry) => customTypeOf(entry) === INPUT_MARKER_CUSTOM_TYPE).length === 1 &&
+      afterNotice.filter((entry) => entry.type === 'custom' && customTypeOf(entry) === INPUT_MARKER_CUSTOM_TYPE)
+        .length === 1 &&
+      afterNotice.filter((entry) => customTypeOf(entry) === NOTICE_CUSTOM_TYPE).length === 1,
+    `markerNamed=${afterNotice.filter((entry) => customTypeOf(entry) === INPUT_MARKER_CUSTOM_TYPE).length} markerKind=${afterNotice.filter((entry) => entry.type === 'custom' && customTypeOf(entry) === INPUT_MARKER_CUSTOM_TYPE).length} notice=${afterNotice.filter((entry) => customTypeOf(entry) === NOTICE_CUSTOM_TYPE).length}`,
   );
   checker.check(
     'sendCustomMessage did not append a user message',

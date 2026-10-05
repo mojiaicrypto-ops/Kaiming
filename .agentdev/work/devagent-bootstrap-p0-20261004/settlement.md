@@ -17,6 +17,7 @@ settlement:
     - "契约差异（I5 上报，未自行修改）：R4/M3 让同一个 customType `agentdev.input` 同时承担 `custom`（标记，不进上下文）与 `custom_message`（通知，进上下文）两种条目；建议改为两个 customType（如 agentdev.input-marker / agentdev.input-notice），否则扫描标记必须额外按 entry.type 过滤"
     - "契约补充建议：把 inputEntryId 的定位规则写明为『该 input 的 marker 子树内第一个 role=user 的 message』，并注明会话条目是 append-only 单链（后续输入的 marker 会嵌套在先前 marker 子树内）"
     - "待 PI-08 取证后补充：ExtensionBindings.mode 在浏览器宿主的取值（types 注明 dialog-capable 仅 TUI/RPC）"
+    - "【2026-10-05 已处理】上两条经用户确认并实施：书签/通知改名为 agentdev.input-marker / agentdev.input-notice；PI-08 实测交互开关是『是否绑定 UI 适配器』（mode 不是开关），契约已更新。本记录中出现的旧名 agentdev.input 均指拆名前名称。见 .agentdev/work/devagent-marker-notice-ui-mode-20261005/"
   indexes_updated:
     - none   # 本次不新增正式文档；docs/INDEX.md 与 docs/technicalnew 契约未变
   archived:

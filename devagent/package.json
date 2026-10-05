@@ -8,13 +8,15 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "spikes": "node spikes/pi-01-input-correlation.ts && node spikes/pi-02-settle-semantics.ts && node spikes/pi-05-save-fail-abort.ts && node spikes/pi-07-multi-session.ts"
+    "test": "vitest run",
+    "spikes": "node spikes/pi-01-input-correlation.ts && node spikes/pi-02-settle-semantics.ts && node spikes/pi-05-save-fail-abort.ts && node spikes/pi-07-multi-session.ts && node spikes/pi-08-host-ui.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.7"
   }
 }

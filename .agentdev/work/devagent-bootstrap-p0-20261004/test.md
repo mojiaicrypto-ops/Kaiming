@@ -23,7 +23,7 @@ test:
       evidence: "leftover_temp_dirs=0 —— 每处试验在 finally 清理临时根；pi-05 先把 0o555 目录复原为 0o755 再删除"
   key_evidence:
     - "PI-01: getSessionFile() 在首条消息前已返回预留路径而磁盘不存在（exists=false）；prompt 后 exists=true，marker 在 JSONL 中逐字保存（7 行）"
-    - "PI-01: 树形 model_change → thinking_level_change → custom(agentdev.input) → message(system) → message(user) → message(assistant)；根输入条目 = marker 子树内第一个 role=user"
+    - "PI-01: 树形 model_change → thinking_level_change → custom(agentdev.input；旧名，2026-10-05 已拆为 agentdev.input-marker) → message(system) → message(user) → message(assistant)；根输入条目 = marker 子树内第一个 role=user"
     - "PI-01: 第二输入的 marker 嵌套在第一输入 marker 子树内（marker2NestedInMarker1=true）；各自 marker 的首个 user 后代仍解析到各自输入 → 定位取『第一个』而非祖先独占或最后一个"
     - "PI-01: 扩展 turn_end 提供 messageEntryId（=该轮最后一个 message，∈本输入子树），公开 subscribe 的 turn_end 不含该字段；sendCustomMessage 产生 custom_message 且不新增 user 消息"
     - "PI-01: SessionManager.open 冷重启后 marker/子树/文件路径不变，续办在原历史上追加（13 → 15 条）"

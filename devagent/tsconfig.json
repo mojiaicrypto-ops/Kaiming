@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023"],
+    "lib": ["ES2024"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "types": ["node"],
@@ -17,5 +17,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*.ts", "spikes/**/*.ts"]
+  "include": ["src/**/*.ts", "spikes/**/*.ts", "test/**/*.ts"]
 }

@@ -22,8 +22,8 @@
 
 ## 2. 与契约的差异 / 待确认项（不自行改契约，按 I5 上报）
 
-1. **`agentdev.input` 一个 customType 承担两种条目**：R4 的输入标记用 `appendCustomEntry`（`type:"custom"`，不进上下文），M3/R4 的恢复通知用 `sendCustomMessage`（`type:"custom_message"`，进上下文）。两者可凭 `entry.type` 区分，但同名 customType 使「扫描标记」时必须额外过滤 type。建议契约层改为两个不同 customType（如 `agentdev.input-marker` / `agentdev.input-notice`）；本任务按契约字面实现，差异上报用户决定。
-2. **`ExtensionBindings.mode`**：`types.d.ts:216-218` 注明 `mode` 决定是否 dialog-capable（TUI/RPC 才可用）。浏览器宿主绑定时需显式给 `mode`，具体取值（`tui`/`rpc`/`print`）未在本任务取证 → 留给 PI-08。
+1. **`agentdev.input` 一个 customType 承担两种条目**：R4 的输入标记用 `appendCustomEntry`（`type:"custom"`，不进上下文），M3/R4 的恢复通知用 `sendCustomMessage`（`type:"custom_message"`，进上下文）。两者可凭 `entry.type` 区分，但同名 customType 使「扫描标记」时必须额外过滤 type。建议契约层改为两个不同 customType（如 `agentdev.input-marker` / `agentdev.input-notice`）；本任务按契约字面实现。**已于 2026-10-05 经用户确认采纳并实施**：R4/M3 改为 `agentdev.input-marker`（书签）与 `agentdev.input-notice`（通知），见 `.agentdev/work/devagent-marker-notice-ui-mode-20261005/`。
+2. **`ExtensionBindings.mode`**：`types.d.ts:216-218` 注明 `mode` 决定是否 dialog-capable（TUI/RPC 才可用）。**已由 PI-08 取证（2026-10-05）：交互可用性取决于宿主是否绑定 UI 适配器，与 mode 字符串无关**——绑定适配器后即使 `mode="print"` 也可交互；未绑定时 `ctx.hasUI=false`。契约据此改为「必须绑定适配器，mode 按真实身份声明」。见 `.agentdev/work/devagent-marker-notice-ui-mode-20261005/`。
 3. **首次文件建立时机**：`session-manager.d.ts:248-250` 明确「只有会话包含 user/assistant 消息才创建文件，纯 setup 条目留在内存」→ 与 R4「hasHistory 只在确认持久条目后置 true」一致，实现必须按此判定，不能把 `open()` 的新建行为当恢复。
 4. **`prompt()` 在流式中的语义**：已 streaming 时必须显式 `steer`/`followUp`，否则 reject（`docs/sdk.md`）→ 与 R3「不接收第二次并发 prompt」一致，宿主不应依赖隐式排队。
 

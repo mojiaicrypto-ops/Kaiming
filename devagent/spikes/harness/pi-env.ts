@@ -29,8 +29,10 @@ export const STUB_PROVIDER = 'stub';
 export const STUB_MODEL = 'stub-1';
 export const STUB_API_KEY = 'stub-key';
 
-/** Input-correlation marker customType, per R4 ("agentdev.input" + custom entry). */
-export const INPUT_MARKER_CUSTOM_TYPE = 'agentdev.input';
+/** Input-correlation bookmark customType (R4 `agentdev.input-marker`): bookkeeping only. */
+export const INPUT_MARKER_CUSTOM_TYPE = 'agentdev.input-marker';
+/** Recovery/control notice customType (R4/M3 `agentdev.input-notice`): enters model context. */
+export const NOTICE_CUSTOM_TYPE = 'agentdev.input-notice';
 
 export interface InputMarker {
   readonly inputId: string;
