@@ -1,31 +1,25 @@
 /**
  * Prompt-language check: the text a host injects into a model must be English.
  *
- * It mirrors the context-assembly boundaries (G4): base runs from `## Base rules` to EOF,
- * specialists from `## Shared rules` up to `## Role file map`, and each role from `## Role and goal`
- * to EOF. For every slice it asserts the boundary resolves exactly once, the body is substantial,
- * and it contains no CJK characters. The project entry (AGENTS.md) is checked the same way.
- *
- * It also keeps the prompt files' own links honest: every link target must exist, and every fragment
- * must match a heading in the target document (the headers are human-facing metadata, so their link
- * targets stay exactly as written — only the injected body is English).
+ * It reuses the product's own extraction (`src/runtime/prompt-assembly.ts`), so this check guards the
+ * code path that really feeds the model instead of a copy of it. For every injected body it asserts
+ * the slice is substantial and CJK-free, that the assembly composes the right bodies for the right
+ * role, that a broken boundary fails loudly, and that the injected files' links all resolve (their
+ * headers are human-facing metadata and keep the original anchors; only the injected body is English).
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  ROLE_IDS,
+  assembleSystemPrompt,
+  loadPromptBodies,
+  sliceInjectedBody,
+} from '../src/runtime/prompt-assembly.ts';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PROMPTS_DIR = join(REPO_ROOT, 'docs', 'technicalnew', 'prompts');
-
-const ROLE_FILES = [
-  'chief.md',
-  'designer.md',
-  'developer.md',
-  'reviewer.md',
-  'tester.md',
-  'settler.md',
-  'investigator.md',
-] as const;
 
 const CJK =
   /[\u3000-\u303f\u3040-\u30ff\u1100-\u11ff\u3130-\u318f\u2e80-\u2eff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef\u{20000}-\u{2fa1f}]/u;
@@ -42,30 +36,6 @@ const check = (name: string, ok: boolean, detail: string): void => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name} :: ${detail}`);
 };
 
-/** Slice from `start` heading to EOF, or up to (excluding) `end` heading when given. */
-function slice(
-  text: string,
-  start: string,
-  end?: string,
-): { ok: true; body: string } | { ok: false; reason: string } {
-  const startIndex = text.indexOf(start);
-  if (startIndex === -1) {
-    return { ok: false, reason: `missing boundary ${JSON.stringify(start)}` };
-  }
-  if (text.indexOf(start, startIndex + start.length) !== -1) {
-    return { ok: false, reason: `boundary ${JSON.stringify(start)} appears more than once` };
-  }
-  const endIndex = end === undefined ? text.length : text.indexOf(end, startIndex);
-  if (end !== undefined && endIndex === -1) {
-    return { ok: false, reason: `missing end boundary ${JSON.stringify(end)}` };
-  }
-  return { ok: true, body: text.slice(startIndex, endIndex) };
-}
-
-function readPrompt(file: string): string {
-  return readFileSync(join(PROMPTS_DIR, file), 'utf8');
-}
-
 function cjkSample(body: string): string {
   const match = CJK.exec(body);
   if (match === null) {
@@ -75,29 +45,119 @@ function cjkSample(body: string): string {
   return body.slice(start, match.index + 20).replace(/\n/g, ' ');
 }
 
-for (const [file, start, end] of [
-  ['base.md', '## Base rules', undefined],
-  ['specialists.md', '## Shared rules', '## Role file map'],
-] as const) {
-  const result = slice(readPrompt(file), start, end);
+const bodies = loadPromptBodies(PROMPTS_DIR);
+
+function reportEnglish(name: string, body: string): void {
+  const cjk = cjkSample(body);
   check(
-    `${file}: boundary ${JSON.stringify(start)} resolves and the body is English`,
-    result.ok && result.body.length > 300 && !CJK.test(result.body),
-    result.ok
-      ? `bodyChars=${result.body.length} cjk=${cjkSample(result.body) === '' ? 'none' : JSON.stringify(cjkSample(result.body))}`
-      : result.reason,
+    `${name}: injected body is substantial and English`,
+    body.length > 300 && cjk === '',
+    `bodyChars=${body.length} cjk=${cjk === '' ? 'none' : JSON.stringify(cjk)}`,
   );
 }
 
-for (const file of ROLE_FILES) {
-  const result = slice(readPrompt(file), '## Role and goal');
+reportEnglish('base.md', bodies.base.text);
+reportEnglish('specialists.md', bodies.specialists.text);
+for (const roleId of ROLE_IDS) {
+  reportEnglish(`${roleId}.md`, bodies.roles[roleId].text);
+}
+
+// Composition: chief = base + its own body; a specialist = base + shared specialist rules + its own.
+const chief = assembleSystemPrompt(bodies, 'chief');
+const reviewer = assembleSystemPrompt(bodies, 'reviewer');
+const compositionOk =
+  chief.sources.map((source) => source.name).join(',') === 'base,chief' &&
+  reviewer.sources.map((source) => source.name).join(',') === 'base,specialists,reviewer' &&
+  reviewer.text.includes(bodies.specialists.text) &&
+  !chief.text.includes(bodies.specialists.text) &&
+  !reviewer.text.includes(bodies.roles.chief.text);
+check(
+  'assembly composes base + (shared rules for specialists) + the current role only',
+  compositionOk,
+  `chief=[${chief.sources.map((source) => source.name).join(',')}] reviewer=[${reviewer.sources.map((source) => source.name).join(',')}]`,
+);
+
+// Independent of the extractor: the boundary headings themselves must be exactly as documented, so a
+// wrong-but-self-consistent literal cannot pass unnoticed.
+const EXPECTED_HEADINGS: Readonly<Record<string, readonly string[]>> = {
+  'base.md': ['## Base rules', '## Judgment and expression'],
+  'specialists.md': ['## Shared rules', '## Role file map'],
+  ...Object.fromEntries(ROLE_IDS.map((roleId) => [`${roleId}.md`, ['## Role and goal']])),
+};
+const wrongHeadings: string[] = [];
+for (const [file, headings] of Object.entries(EXPECTED_HEADINGS)) {
+  const text = readFileSync(join(PROMPTS_DIR, file), 'utf8');
+  for (const heading of headings) {
+    const occurrences = text.split('\n').filter((line) => line.trim() === heading).length;
+    if (occurrences !== 1) {
+      wrongHeadings.push(`${file}: ${heading} occurs ${occurrences}x`);
+    }
+  }
+}
+check(
+  'the documented boundary headings appear exactly once per injected file',
+  wrongHeadings.length === 0,
+  wrongHeadings.length === 0 ? `${Object.keys(EXPECTED_HEADINGS).length} files checked` : wrongHeadings.join(' | '),
+);
+
+// Pin the literal the extractor actually uses: the slice must begin with the documented heading, so a
+// self-consistent wrong boundary inside the runtime module cannot pass this check.
+const BOUNDARY_LITERALS: Readonly<Record<string, string>> = {
+  'base.md': '## Base rules',
+  'specialists.md': '## Shared rules',
+  ...Object.fromEntries(ROLE_IDS.map((roleId) => [`${roleId}.md`, '## Role and goal'])),
+};
+const wrongSliceStart: string[] = [];
+for (const [file, literal] of Object.entries(BOUNDARY_LITERALS)) {
+  const body =
+    file === 'base.md'
+      ? bodies.base.text
+      : file === 'specialists.md'
+        ? bodies.specialists.text
+        : bodies.roles[file.replace('.md', '') as (typeof ROLE_IDS)[number]].text;
+  if (!body.startsWith(literal)) {
+    wrongSliceStart.push(`${file}: slice starts with ${JSON.stringify(body.slice(0, 40))}`);
+  }
+}
+check(
+  'the extracted slice begins with the documented boundary literal',
+  wrongSliceStart.length === 0,
+  wrongSliceStart.length === 0 ? `${Object.keys(BOUNDARY_LITERALS).length} slices pinned` : wrongSliceStart.join(' | '),
+);
+
+// A broken boundary must fail loudly instead of injecting half a role body.
+const scratch = mkdtempSync(join(tmpdir(), 'devagent-prompt-check-'));
+try {
+  const brokenPath = join(scratch, 'broken.md');
+  let missingThrew = false;
+  try {
+    sliceInjectedBody('## Something else\n', 'role', brokenPath);
+  } catch {
+    missingThrew = true;
+  }
+  let duplicateStartThrew = false;
+  try {
+    sliceInjectedBody('## Role and goal\nfirst\n## Role and goal\nsecond\n', 'role', brokenPath);
+  } catch {
+    duplicateStartThrew = true;
+  }
+  let duplicateEndThrew = false;
+  try {
+    sliceInjectedBody(
+      '## Shared rules\nR1\n## Role file map\nM1\n## Role file map\nM2\n',
+      'specialists',
+      brokenPath,
+    );
+  } catch {
+    duplicateEndThrew = true;
+  }
   check(
-    `${file}: boundary "## Role and goal" resolves and the body is English`,
-    result.ok && result.body.length > 300 && !CJK.test(result.body),
-    result.ok
-      ? `bodyChars=${result.body.length} cjk=${cjkSample(result.body) === '' ? 'none' : JSON.stringify(cjkSample(result.body))}`
-      : result.reason,
+    'a missing start, duplicated start or duplicated end boundary is refused',
+    missingThrew && duplicateStartThrew && duplicateEndThrew,
+    `missingThrew=${missingThrew} duplicateStartThrew=${duplicateStartThrew} duplicateEndThrew=${duplicateEndThrew}`,
   );
+} finally {
+  rmSync(scratch, { recursive: true, force: true });
 }
 
 const agentsEntry = readFileSync(join(REPO_ROOT, 'AGENTS.md'), 'utf8');
@@ -107,7 +167,7 @@ check(
   CJK.test(agentsEntry) ? `cjk=${JSON.stringify(cjkSample(agentsEntry))}` : `chars=${agentsEntry.length}`,
 );
 
-// --- link integrity: prompt headers are metadata and must keep resolvable links ------------------
+// --- link integrity: injected files keep resolvable links ----------------------------------------
 const LINK = /\]\(([^)\s]+)\)/g;
 
 function slugify(heading: string): string {
@@ -119,9 +179,8 @@ function slugify(heading: string): string {
 }
 
 function headingsOf(file: string): Set<string> {
-  const text = readFileSync(file, 'utf8');
   const slugs = new Set<string>();
-  for (const line of text.split('\n')) {
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
     const match = /^#{1,6}\s+(.*)$/.exec(line);
     if (match?.[1] !== undefined) {
       slugs.add(slugify(match[1]));
@@ -130,17 +189,17 @@ function headingsOf(file: string): Set<string> {
   return slugs;
 }
 
-const promptFiles = ['base.md', 'specialists.md', ...ROLE_FILES];
-/** Injected artifacts: prompt files (relative to the prompts dir) and the project entry. */
 const linkTargets: ReadonlyArray<{ readonly file: string; readonly base: string }> = [
-  ...promptFiles.map((file) => ({ file: join(PROMPTS_DIR, file), base: PROMPTS_DIR })),
+  ...['base.md', 'specialists.md', ...ROLE_IDS.map((roleId) => `${roleId}.md`)].map((file) => ({
+    file: join(PROMPTS_DIR, file),
+    base: PROMPTS_DIR,
+  })),
   { file: join(REPO_ROOT, 'AGENTS.md'), base: REPO_ROOT },
 ];
 const broken: string[] = [];
 let linkCount = 0;
 for (const entry of linkTargets) {
-  const text = readFileSync(entry.file, 'utf8');
-  for (const match of text.matchAll(LINK)) {
+  for (const match of readFileSync(entry.file, 'utf8').matchAll(LINK)) {
     const target = match[1];
     if (target === undefined || target.startsWith('http') || target.startsWith('#')) {
       continue;
@@ -161,7 +220,7 @@ for (const entry of linkTargets) {
   }
 }
 check(
-  `prompt links resolve (${linkCount} targets checked, headers keep their original anchors)`,
+  `injected files keep resolvable links (${linkCount} targets, headers keep their original anchors)`,
   broken.length === 0,
   broken.length === 0 ? 'all resolvable' : broken.slice(0, 6).join(' | '),
 );

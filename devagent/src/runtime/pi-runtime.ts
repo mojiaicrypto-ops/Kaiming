@@ -49,6 +49,8 @@ export interface CreateSessionOptions {
   readonly extensionFactories?: InlineExtension[];
   readonly tools?: readonly string[];
   readonly thinkingLevel?: 'off' | 'low' | 'medium' | 'high';
+  /** Text appended to Pi's own instructions (role bodies); never replaces them. */
+  readonly appendSystemPrompt?: readonly string[];
 }
 
 export class PiRuntimeFactory {
@@ -94,6 +96,9 @@ export class PiRuntimeFactory {
       cwd: options.cwd,
       agentDir: config.agentDir,
       extensionFactories: options.extensionFactories ?? [],
+      ...(options.appendSystemPrompt !== undefined && options.appendSystemPrompt.length > 0
+        ? { appendSystemPrompt: [...options.appendSystemPrompt] }
+        : {}),
     });
     await resourceLoader.reload();
     const tools = [...(options.tools ?? config.tools)];

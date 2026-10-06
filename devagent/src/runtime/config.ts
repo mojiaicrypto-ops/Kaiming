@@ -16,6 +16,8 @@ export interface RuntimeDefaults {
   readonly model: ModelSelection;
   /** Pi config dir (models.json / auth.json live here); credentials stay outside project files. */
   readonly agentDir: string;
+  /** Directory holding the role prompt files shipped with the server (docs/technicalnew/prompts). */
+  readonly promptDir: string;
   /** Tool allowlist for sessions created by this runtime. */
   readonly tools: readonly string[];
 }
@@ -36,6 +38,8 @@ export interface EffectiveConfig {
   /** Where the selection came from — recorded so the user can tell why a model was used. */
   readonly source: 'role' | 'project' | 'server';
   readonly agentDir: string;
+  /** Directory of the role prompt files used for this session. */
+  readonly promptDir: string;
   readonly tools: readonly string[];
 }
 
@@ -48,6 +52,7 @@ export function resolveEffectiveConfig(input: ResolveInput): EffectiveConfig {
     selection,
     source,
     agentDir: input.server.agentDir,
+    promptDir: input.server.promptDir,
     tools: input.server.tools,
   };
 }
@@ -58,6 +63,7 @@ export function redactEffectiveConfig(config: EffectiveConfig): {
   modelId: string;
   source: EffectiveConfig['source'];
   agentDir: string;
+  promptDir: string;
   tools: readonly string[];
 } {
   return {
@@ -65,6 +71,7 @@ export function redactEffectiveConfig(config: EffectiveConfig): {
     modelId: config.selection.modelId,
     source: config.source,
     agentDir: config.agentDir,
+    promptDir: config.promptDir,
     tools: config.tools,
   };
 }

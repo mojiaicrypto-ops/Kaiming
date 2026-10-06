@@ -15,6 +15,12 @@ import { type SessionEntry } from '@earendil-works/pi-coding-agent';
 import { Store, StoreError, type InputRow } from '../store/store.ts';
 import { redactEffectiveConfig, type EffectiveConfig } from './config.ts';
 import { digestJson } from './hash.ts';
+import {
+  assembleSystemPrompt,
+  isPromptRoleId,
+  loadPromptBodies,
+  type PromptBodies,
+} from './prompt-assembly.ts';
 import { INPUT_MARKER_CUSTOM_TYPE, HistoryUnavailableError, type PiRuntimeFactory } from './pi-runtime.ts';
 import { SessionRegistry, type LogicalSessionSpec } from './registry.ts';
 
@@ -35,6 +41,11 @@ export type RunOutcome =
   | {
       readonly kind: 'blocked_config';
       readonly code: 'MODEL_UNAVAILABLE';
+      readonly detail: string;
+    }
+  | {
+      readonly kind: 'blocked_role';
+      readonly code: 'INVALID_ARGUMENT';
       readonly detail: string;
     }
   | {
@@ -65,9 +76,21 @@ export class InputRunner {
   private readonly options: RunnerOptions;
   /** `${sessionId}:${inputId}` of runs a host-owned tool asked to abort (S5 tool-initiated stop). */
   private readonly hostAborts = new Set<string>();
+  /** Role prompt bodies, cached per prompt directory. */
+  private readonly promptBodies = new Map<string, PromptBodies>();
 
   constructor(options: RunnerOptions) {
     this.options = options;
+  }
+
+  private bodiesFor(promptDir: string): PromptBodies {
+    const cached = this.promptBodies.get(promptDir);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const loaded = loadPromptBodies(promptDir);
+    this.promptBodies.set(promptDir, loaded);
+    return loaded;
   }
 
   /**
@@ -96,6 +119,14 @@ export class InputRunner {
     const project = this.checkProject(session.cwd);
     if (!project.ok) {
       return { kind: 'blocked_project', code: 'PROJECT_UNAVAILABLE', detail: project.detail };
+    }
+    if (!isPromptRoleId(session.roleId)) {
+      // Without a role body the model would run without its rules; refuse instead of guessing.
+      return {
+        kind: 'blocked_role',
+        code: 'INVALID_ARGUMENT',
+        detail: `unknown roleId ${JSON.stringify(session.roleId)}`,
+      };
     }
     // Task-level control eligibility (pause/cancel of the owning Task) arrives with the task table
     // in P3; until then only the storage-level rules (busy / unresolved interrupted) are enforced.
@@ -151,6 +182,9 @@ export class InputRunner {
         {
           sessionId,
           cwd: session.cwd,
+          appendSystemPrompt: [
+            assembleSystemPrompt(this.bodiesFor(config.promptDir), session.roleId).text,
+          ],
           ...(binding !== undefined ? { piFile: binding.piFile } : {}),
           ...(extras?.customTools !== undefined ? { customTools: extras.customTools } : {}),
           ...(extras?.extensionFactories !== undefined

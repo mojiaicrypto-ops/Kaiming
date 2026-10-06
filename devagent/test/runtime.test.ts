@@ -1,14 +1,26 @@
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../src/store/store.ts';
 import { resolveEffectiveConfig, type RuntimeDefaults } from '../src/runtime/config.ts';
 import { PiRuntimeFactory } from '../src/runtime/pi-runtime.ts';
+import { assembleSystemPrompt, loadPromptBodies } from '../src/runtime/prompt-assembly.ts';
 import { SessionRegistry } from '../src/runtime/registry.ts';
 import { InputRunner, boundaryPersistedOnDisk } from '../src/runtime/runner.ts';
 import { createStubEnv, startStubModelServer, type StubReply } from '../spikes/harness/pi-env.ts';
+
+/** The role prompts the server ships (docs/technicalnew/prompts). */
+const PROMPT_DIR = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'docs',
+  'technicalnew',
+  'prompts',
+);
 
 /**
  * Fixture note: the scripted model endpoint lives in spikes/harness (a test fixture); it should move
@@ -64,6 +76,7 @@ async function harness(options: {
   const defaults: RuntimeDefaults = {
     model: options.model ?? { providerId: 'stub', modelId: 'stub-1' },
     agentDir: env.agentDir,
+    promptDir: PROMPT_DIR,
     tools: options.tools ?? [],
   };
   const factory = new PiRuntimeFactory(defaults);
@@ -95,6 +108,7 @@ describe('effective configuration', () => {
   const server: RuntimeDefaults = {
     model: { providerId: 'stub', modelId: 'stub-1' },
     agentDir: '/agent',
+    promptDir: PROMPT_DIR,
     tools: ['read'],
   };
 
@@ -191,6 +205,74 @@ describe('delivered boundary read-back', () => {
     expect(
       boundaryPersistedOnDisk({ ...checkpoint, piFile: join(dir, 'nope.jsonl') }, expected),
     ).toBe(false);
+  });
+});
+
+describe('role context injection', () => {
+  it('injects the base rules and the chief body without replacing Pi instructions', async () => {
+    const h = await harness({ replies: [{ kind: 'text', text: 'ok' }] });
+    await h.runner.runNext('s-1');
+    const systemPrompt = h.registry.get('s-1')?.session.systemPrompt ?? '';
+    const bodies = loadPromptBodies(PROMPT_DIR);
+    const assembled = assembleSystemPrompt(bodies, 'chief');
+
+    expect(assembled.sources.map((source) => source.name)).toEqual(['base', 'chief']);
+    // A distinctive slice of each injected body really reaches the model.
+    expect(systemPrompt).toContain(bodies.base.text.slice(0, 120));
+    expect(systemPrompt).toContain(bodies.roles.chief.text.slice(0, 120));
+    // Pi's own instructions are still there (we append, never replace).
+    expect(systemPrompt.length).toBeGreaterThan(assembled.text.length);
+    expect(systemPrompt).toContain('<cwd>');
+  });
+
+  it('gives a specialist the shared specialist rules and only its own role body', async () => {
+    const h = await harness({ replies: [{ kind: 'text', text: 'ok' }] });
+    h.store.createSession({
+      id: 's-reviewer',
+      projectId: 'p-1',
+      roleId: 'reviewer',
+      cwd: h.cwd,
+    });
+    h.store.acceptInput({
+      inputId: 'r-1',
+      projectId: 'p-1',
+      sessionId: 's-reviewer',
+      sourceKey: 'delegation:r-1',
+      requestKey: 'r-1',
+      method: 'task.session',
+      kind: 'delegation',
+      payload: { content: [{ type: 'text', text: 'review the candidate' }] },
+    });
+
+    const outcome = await h.runner.runNext('s-reviewer');
+
+    expect(outcome.kind).toBe('completed');
+    const systemPrompt = h.registry.get('s-reviewer')?.session.systemPrompt ?? '';
+    const bodies = loadPromptBodies(PROMPT_DIR);
+    expect(systemPrompt).toContain(bodies.specialists.text.slice(0, 120));
+    expect(systemPrompt).toContain(bodies.roles.reviewer.text.slice(0, 120));
+    expect(systemPrompt).not.toContain(bodies.roles.chief.text.slice(0, 120));
+  });
+
+  it('refuses a session whose role has no prompt body instead of running without rules', async () => {
+    const h = await harness({ replies: [{ kind: 'text', text: 'ok' }] });
+    h.store.createSession({ id: 's-ghost', projectId: 'p-1', roleId: 'nobody', cwd: h.cwd });
+    h.store.acceptInput({
+      inputId: 'g-1',
+      projectId: 'p-1',
+      sessionId: 's-ghost',
+      sourceKey: 'user:g-1',
+      requestKey: 'g-1',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: 'hello' }] },
+    });
+
+    const outcome = await h.runner.runNext('s-ghost');
+
+    expect(outcome.kind).toBe('blocked_role');
+    expect(h.store.getInput('g-1')?.status).toBe('queued');
+    expect(h.registry.count()).toBe(0);
   });
 });
 
@@ -372,7 +454,12 @@ describe('input runner', () => {
     accept(store, 'i-1', 'req-1');
     accept(store, 'i-2', 'req-2');
     let selection = { providerId: 'stub', modelId: 'stub-1' };
-    const defaults: RuntimeDefaults = { model: selection, agentDir: env.agentDir, tools: [] };
+    const defaults: RuntimeDefaults = {
+      model: selection,
+      agentDir: env.agentDir,
+      promptDir: PROMPT_DIR,
+      tools: [],
+    };
     const factory = new PiRuntimeFactory(defaults);
     const registry = new SessionRegistry(factory);
     const runner = new InputRunner({
@@ -506,6 +593,7 @@ describe('input runner', () => {
     const defaults: RuntimeDefaults = {
       model: { providerId: 'stub', modelId: 'stub-1' },
       agentDir: env.agentDir,
+      promptDir: PROMPT_DIR,
       tools: [],
     };
     const factory = new PiRuntimeFactory(defaults);

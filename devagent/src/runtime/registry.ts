@@ -16,6 +16,7 @@ export interface LogicalSessionSpec {
   readonly piFile?: string;
   readonly customTools?: CreateSessionOptions['customTools'];
   readonly extensionFactories?: CreateSessionOptions['extensionFactories'];
+  readonly appendSystemPrompt?: CreateSessionOptions['appendSystemPrompt'];
 }
 
 interface Registered {
@@ -60,6 +61,9 @@ export class SessionRegistry {
       ...(spec.customTools !== undefined ? { customTools: spec.customTools } : {}),
       ...(spec.extensionFactories !== undefined
         ? { extensionFactories: spec.extensionFactories }
+        : {}),
+      ...(spec.appendSystemPrompt !== undefined
+        ? { appendSystemPrompt: spec.appendSystemPrompt }
         : {}),
     });
     this.entries.set(spec.sessionId, { handle, configHash });

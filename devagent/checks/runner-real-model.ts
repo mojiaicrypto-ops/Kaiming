@@ -7,7 +7,8 @@
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadModelConfig } from '../spikes/harness/model-config.ts';
 import { createStubEnv } from '../spikes/harness/pi-env.ts';
 import { resolveEffectiveConfig, type RuntimeDefaults } from '../src/runtime/config.ts';
@@ -54,6 +55,7 @@ try {
   const defaults: RuntimeDefaults = {
     model: { providerId: config.provider, modelId: config.model },
     agentDir: agentEnv.agentDir,
+    promptDir: join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'docs', 'technicalnew', 'prompts'),
     tools: [],
   };
   const runner = new InputRunner({
