@@ -23,6 +23,7 @@ import {
 } from './prompt-assembly.ts';
 import { INPUT_MARKER_CUSTOM_TYPE, HistoryUnavailableError, type PiRuntimeFactory } from './pi-runtime.ts';
 import { SessionRegistry, type LogicalSessionSpec } from './registry.ts';
+import { toolSetFor } from './tool-sets.ts';
 
 export interface InputCheckpoint {
   readonly piFile: string;
@@ -65,6 +66,8 @@ export interface RunnerOptions {
   readonly registry: SessionRegistry;
   readonly factory: PiRuntimeFactory;
   readonly resolveConfig: (roleId: string) => EffectiveConfig;
+  /** Task type the session currently runs under; `undefined` while it has no Task yet. */
+  readonly taskTypeOf?: (sessionId: string) => 'read' | 'write' | undefined;
   /** Extra session wiring (probe tools/extensions) used by tests and later work packages. */
   readonly sessionExtras?: (sessionId: string) => {
     readonly customTools?: LogicalSessionSpec['customTools'];
@@ -178,10 +181,24 @@ export class InputRunner {
     try {
       const binding = this.options.store.getSessionBinding(sessionId);
       const extras = this.options.sessionExtras?.(sessionId);
+      const taskType = this.options.taskTypeOf?.(sessionId);
+      const toolSet = toolSetFor(session.roleId, taskType);
+      // Host-registered tools (domain tools, probe tools) join the allowlist so they stay usable, but a
+      // name this role/task combination denies must not come back in through that union.
+      const denied = new Set(toolSet.denied);
+      const allowlist = [
+        ...new Set([
+          ...toolSet.allowlist,
+          ...(extras?.customTools ?? [])
+            .map((tool) => tool.name)
+            .filter((name) => !denied.has(name)),
+        ]),
+      ];
       const handle = await this.options.registry.acquire(
         {
           sessionId,
           cwd: session.cwd,
+          tools: allowlist,
           appendSystemPrompt: [
             assembleSystemPrompt(this.bodiesFor(config.promptDir), session.roleId).text,
           ],
@@ -205,7 +222,13 @@ export class InputRunner {
       });
       this.options.store.recordEffectiveConfig({
         inputId: input.inputId,
-        effectiveConfig: redactEffectiveConfig(config),
+        // Record what the session really has: the requested allowlist minus names Pi did not register.
+        effectiveConfig: {
+          ...redactEffectiveConfig(config),
+          requestedTools: allowlist,
+          activeTools: handle.session.getActiveToolNames(),
+          taskType: taskType ?? null,
+        },
       });
 
       await handle.session.prompt(text);

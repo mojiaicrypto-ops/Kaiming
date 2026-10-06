@@ -56,6 +56,9 @@ async function harness(options: {
   tools?: readonly string[];
   modelIds?: readonly string[];
   model?: RuntimeDefaults['model'];
+  taskType?: 'read' | 'write';
+  /** Mutable task type for tests that change it between inputs. */
+  taskTypeOf?: () => 'read' | 'write' | undefined;
   sessionExtras?: ConstructorParameters<typeof InputRunner>[0]['sessionExtras'];
   acceptInput?: boolean;
 }): Promise<Harness> {
@@ -86,6 +89,7 @@ async function harness(options: {
     registry,
     factory,
     resolveConfig: (roleId) => resolveEffectiveConfig({ roleId, server: defaults }),
+    taskTypeOf: options.taskTypeOf ?? (() => options.taskType),
     ...(options.sessionExtras !== undefined ? { sessionExtras: options.sessionExtras } : {}),
   });
   return { store, runner, registry, defaults, agentDir: env.agentDir, cwd: env.cwd };
@@ -662,6 +666,219 @@ describe('input runner', () => {
     // The stale instance is dropped instead of continuing against a vanished history.
     expect(h.registry.count()).toBe(0);
   }, 30_000);
+
+  it('keeps a reviewer session read-only even in a write Task', async () => {
+    const h = await harness({ replies: [{ kind: 'text', text: 'ok' }], taskType: 'write' });
+    h.store.createSession({ id: 's-reviewer', projectId: 'p-1', roleId: 'reviewer', cwd: h.cwd });
+    h.store.acceptInput({
+      inputId: 'r-1',
+      projectId: 'p-1',
+      sessionId: 's-reviewer',
+      sourceKey: 'delegation:r-1',
+      requestKey: 'r-1',
+      method: 'task.session',
+      kind: 'delegation',
+      payload: { content: [{ type: 'text', text: 'review the candidate' }] },
+    });
+
+    const outcome = await h.runner.runNext('s-reviewer');
+
+    expect(outcome.kind).toBe('completed');
+    const active = h.registry.get('s-reviewer')?.session.getActiveToolNames() ?? [];
+    expect(active).toContain('read');
+    expect(active).toContain('grep');
+    expect(active).not.toContain('write');
+    expect(active).not.toContain('edit');
+    expect(active).not.toContain('bash');
+  });
+
+  it('gives a developer session the writing tools in a write Task and refuses them in a read Task', async () => {
+    const writeHarness = await harness({
+      replies: [{ kind: 'text', text: 'ok' }],
+      taskType: 'write',
+    });
+    writeHarness.store.createSession({
+      id: 's-dev',
+      projectId: 'p-1',
+      roleId: 'developer',
+      cwd: writeHarness.cwd,
+    });
+    writeHarness.store.acceptInput({
+      inputId: 'd-1',
+      projectId: 'p-1',
+      sessionId: 's-dev',
+      sourceKey: 'delegation:d-1',
+      requestKey: 'd-1',
+      method: 'task.session',
+      kind: 'delegation',
+      payload: { content: [{ type: 'text', text: 'implement the change' }] },
+    });
+
+    const writeOutcome = await writeHarness.runner.runNext('s-dev');
+
+    expect(writeOutcome.kind).toBe('completed');
+    const writeTools = writeHarness.registry.get('s-dev')?.session.getActiveToolNames() ?? [];
+    expect(writeTools).toEqual(expect.arrayContaining(['read', 'write', 'edit', 'bash']));
+
+    const readHarness = await harness({ replies: [{ kind: 'text', text: 'ok' }], taskType: 'read' });
+    readHarness.store.createSession({
+      id: 's-dev',
+      projectId: 'p-1',
+      roleId: 'developer',
+      cwd: readHarness.cwd,
+    });
+    readHarness.store.acceptInput({
+      inputId: 'd-1',
+      projectId: 'p-1',
+      sessionId: 's-dev',
+      sourceKey: 'delegation:d-1',
+      requestKey: 'd-1',
+      method: 'task.session',
+      kind: 'delegation',
+      payload: { content: [{ type: 'text', text: 'analyse the change' }] },
+    });
+
+    const readOutcome = await readHarness.runner.runNext('s-dev');
+
+    expect(readOutcome.kind).toBe('completed');
+    const readTools = readHarness.registry.get('s-dev')?.session.getActiveToolNames() ?? [];
+    expect(readTools).toContain('read');
+    expect(readTools).not.toContain('write');
+    expect(readTools).not.toContain('edit');
+    expect(readTools).not.toContain('bash');
+  });
+
+  it('records the tool set that was requested and the one really active', async () => {
+    const h = await harness({ replies: [{ kind: 'text', text: 'ok' }], taskType: 'write' });
+    await h.runner.runNext('s-1');
+
+    const recorded: unknown = JSON.parse(h.store.getInput('i-1')?.effectiveConfig ?? '{}');
+    if (typeof recorded !== 'object' || recorded === null) {
+      throw new Error('effectiveConfig is not an object');
+    }
+    const shape = recorded as { requestedTools?: unknown; activeTools?: unknown; taskType?: unknown };
+    expect(Array.isArray(shape.requestedTools)).toBe(true);
+    expect(Array.isArray(shape.activeTools)).toBe(true);
+    const requested = shape.requestedTools as string[];
+    const active = shape.activeTools as string[];
+    expect(requested).toContain('read');
+    // The chief session never carries project-writing tools, even in a write Task.
+    expect(requested).not.toContain('write');
+    expect(requested).not.toContain('edit');
+    // Only registered names really activate; the record shows both.
+    expect(active.every((name) => requested.includes(name))).toBe(true);
+    expect(active).toContain('read');
+    expect(shape.taskType).toBe('write');
+  });
+
+  it('rebuilds the instance when the Task type changes the tool set', async () => {
+    let taskType: 'read' | 'write' | undefined = 'write';
+    const h = await harness({
+      replies: [{ kind: 'text', text: 'ok' }],
+      taskTypeOf: () => taskType,
+    });
+    h.store.createSession({ id: 's-dev', projectId: 'p-1', roleId: 'developer', cwd: h.cwd });
+    for (const [inputId, text] of [
+      ['d-1', 'implement'],
+      ['d-2', 'analyse'],
+    ] as const) {
+      h.store.acceptInput({
+        inputId,
+        projectId: 'p-1',
+        sessionId: 's-dev',
+        sourceKey: `delegation:${inputId}`,
+        requestKey: inputId,
+        method: 'task.session',
+        kind: 'delegation',
+        payload: { content: [{ type: 'text', text }] },
+      });
+    }
+
+    const first = await h.runner.runNext('s-dev');
+    const writeHandle = h.registry.get('s-dev');
+    const writeTools = writeHandle?.session.getActiveToolNames() ?? [];
+    taskType = 'read';
+    const second = await h.runner.runNext('s-dev');
+    const readHandle = h.registry.get('s-dev');
+    const readTools = readHandle?.session.getActiveToolNames() ?? [];
+
+    expect(first.kind).toBe('completed');
+    expect(second.kind).toBe('completed');
+    expect(writeTools).toEqual(expect.arrayContaining(['read', 'write', 'edit', 'bash']));
+    // A read Task must not keep the writing tools a previous write Task activated.
+    expect(readHandle).not.toBe(writeHandle);
+    expect(readTools).toContain('read');
+    expect(readTools).not.toContain('write');
+    expect(readTools).not.toContain('edit');
+    expect(readTools).not.toContain('bash');
+  });
+
+  it('never re-adds a denied tool through the host tool union', async () => {
+    const tool = (name: string) => ({
+      name,
+      label: name,
+      description: 'probe',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      executionMode: 'sequential' as const,
+      async execute() {
+        return { content: [{ type: 'text', text: 'ok' }], details: {} };
+      },
+    });
+    const h = await harness({
+      replies: [{ kind: 'text', text: 'ok' }],
+      taskType: 'read',
+      sessionExtras: () => ({ customTools: [tool('requirement') as never, tool('probe_ok') as never] }),
+    });
+
+    const outcome = await h.runner.runNext('s-1');
+
+    expect(outcome.kind).toBe('completed');
+    const active = h.registry.get('s-1')?.session.getActiveToolNames() ?? [];
+    expect(active).toContain('probe_ok');
+    expect(active).not.toContain('requirement');
+  });
+
+  it('keeps role-level denials intact through the host tool union in a write Task', async () => {
+    const tool = (name: string) => ({
+      name,
+      label: name,
+      description: 'probe',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      executionMode: 'sequential' as const,
+      async execute() {
+        return { content: [{ type: 'text', text: 'ok' }], details: {} };
+      },
+    });
+    const h = await harness({
+      replies: [{ kind: 'text', text: 'ok' }],
+      taskType: 'write',
+      sessionExtras: () => ({
+        customTools: [tool('createTask') as never, tool('probe_ok') as never],
+      }),
+    });
+    h.store.createSession({ id: 's-reviewer', projectId: 'p-1', roleId: 'reviewer', cwd: h.cwd });
+    h.store.acceptInput({
+      inputId: 'r-1',
+      projectId: 'p-1',
+      sessionId: 's-reviewer',
+      sourceKey: 'delegation:r-1',
+      requestKey: 'r-1',
+      method: 'task.session',
+      kind: 'delegation',
+      payload: { content: [{ type: 'text', text: 'review' }] },
+    });
+
+    const outcome = await h.runner.runNext('s-reviewer');
+
+    expect(outcome.kind).toBe('completed');
+    const active = h.registry.get('s-reviewer')?.session.getActiveToolNames() ?? [];
+    // A reviewer keeps its own tools and the generic probe, but never the chief's task tools.
+    expect(active).toContain('read');
+    expect(active).toContain('probe_ok');
+    expect(active).not.toContain('createTask');
+    expect(active).not.toContain('write');
+    expect(active).not.toContain('bash');
+  });
 
   it('keeps the input queued when the model is unavailable, without falling back', async () => {
     const h = await harness({

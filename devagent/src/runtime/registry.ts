@@ -17,11 +17,13 @@ export interface LogicalSessionSpec {
   readonly customTools?: CreateSessionOptions['customTools'];
   readonly extensionFactories?: CreateSessionOptions['extensionFactories'];
   readonly appendSystemPrompt?: CreateSessionOptions['appendSystemPrompt'];
+  readonly tools?: CreateSessionOptions['tools'];
 }
 
 interface Registered {
   readonly handle: PiSessionHandle;
-  readonly configHash: string;
+  /** Everything that must stay identical for the handle to be reusable. */
+  readonly bindingHash: string;
 }
 
 export class SessionRegistry {
@@ -33,22 +35,25 @@ export class SessionRegistry {
   }
 
   async acquire(spec: LogicalSessionSpec, config: EffectiveConfig): Promise<PiSessionHandle> {
-    const configHash = digestJson(config);
+    // Reuse only when everything that shapes the session is identical: config, tool allowlist and the
+    // appended prompt. The history file is compared against the handle's own file instead of being
+    // hashed, so "no file requested" and "the file this handle already uses" stay the same session.
+    const bindingHash = digestJson({
+      config,
+      tools: spec.tools ?? null,
+      appendSystemPrompt: spec.appendSystemPrompt ?? null,
+    });
     const existing = this.entries.get(spec.sessionId);
     if (existing !== undefined) {
-      const boundFile = spec.piFile;
-      // The bound history must still be the file this handle really uses, and it must still exist:
-      // continuing against a vanished history would silently start a partial replacement history.
-      if (existing.configHash === configHash && boundFile !== undefined && existing.handle.piFile() !== boundFile) {
-        existing.handle.dispose();
-        this.entries.delete(spec.sessionId);
-        throw new HistoryUnavailableError(boundFile);
-      }
-      if (existing.configHash === configHash) {
-        if (boundFile !== undefined && !existsSync(boundFile)) {
+      const requestedFile = spec.piFile;
+      const handleFile = existing.handle.piFile();
+      const sameFile = requestedFile === undefined || requestedFile === handleFile;
+      if (existing.bindingHash === bindingHash && sameFile) {
+        if (requestedFile !== undefined && !existsSync(requestedFile)) {
+          // The bound history vanished: continuing would start a partial replacement history.
           existing.handle.dispose();
           this.entries.delete(spec.sessionId);
-          throw new HistoryUnavailableError(boundFile);
+          throw new HistoryUnavailableError(requestedFile);
         }
         return existing.handle;
       }
@@ -65,8 +70,9 @@ export class SessionRegistry {
       ...(spec.appendSystemPrompt !== undefined
         ? { appendSystemPrompt: spec.appendSystemPrompt }
         : {}),
+      ...(spec.tools !== undefined ? { tools: spec.tools } : {}),
     });
-    this.entries.set(spec.sessionId, { handle, configHash });
+    this.entries.set(spec.sessionId, { handle, bindingHash });
     return handle;
   }
 

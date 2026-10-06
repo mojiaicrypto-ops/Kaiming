@@ -57,14 +57,14 @@ export function resolveEffectiveConfig(input: ResolveInput): EffectiveConfig {
   };
 }
 
-/** Redacted view written to the store: no credentials, no prompts. */
+/** Redacted view written to the store: no credentials, no prompts, and no server-default tool list
+ * (the runner records the role/task-trimmed `requestedTools`/`activeTools` instead). */
 export function redactEffectiveConfig(config: EffectiveConfig): {
   providerId: string;
   modelId: string;
   source: EffectiveConfig['source'];
   agentDir: string;
   promptDir: string;
-  tools: readonly string[];
 } {
   return {
     providerId: config.selection.providerId,
@@ -72,6 +72,5 @@ export function redactEffectiveConfig(config: EffectiveConfig): {
     source: config.source,
     agentDir: config.agentDir,
     promptDir: config.promptDir,
-    tools: config.tools,
   };
 }

@@ -1,0 +1,155 @@
+/**
+ * Role tool sets (P3): which tools a session may use.
+ *
+ * The sets follow the role/tool contract (G1): every write-capable role also reads (a role analyses the
+ * code before it changes it), a read-only role never gains write tools even inside a write Task, and a
+ * read Task opens neither project-writing tools nor arbitrary bash. The allowlist is static per role
+ * and Task type — the model cannot switch its own permissions, and the host does not offer extra ops.
+ *
+ * `taskType` is `undefined` while a session has no Task yet: then the role's own documented set
+ * applies (the chief still needs its requirement/project tools, for instance).
+ */
+import type { PromptRoleId } from './prompt-assembly.ts';
+import { ROLE_IDS } from './prompt-assembly.ts';
+
+export type TaskType = 'read' | 'write';
+
+/** Tools that can modify the project (never available to a read-only role or a read Task). */
+export const PROJECT_WRITE_TOOLS: readonly string[] = ['write', 'edit'];
+/** Shell access: documented per role, and never in a read Task. */
+const SHELL_TOOL = 'bash';
+/** Domain tools that can write project files; their read ops arrive with their own permission work. */
+const PROJECT_WRITING_DOMAIN_TOOLS: readonly string[] = ['requirement', 'project'];
+/** Reading tools every role has, including the write-capable ones. */
+const READ_TOOLS: readonly string[] = ['read', 'grep', 'find', 'ls'];
+
+/** Native tool sets exactly as the contract documents them. */
+const NATIVE_BY_ROLE: Readonly<Record<PromptRoleId, readonly string[]>> = {
+  chief: READ_TOOLS,
+  designer: [...READ_TOOLS, ...PROJECT_WRITE_TOOLS],
+  developer: [...READ_TOOLS, ...PROJECT_WRITE_TOOLS, SHELL_TOOL],
+  reviewer: READ_TOOLS,
+  tester: [...READ_TOOLS, SHELL_TOOL],
+  settler: [...READ_TOOLS, ...PROJECT_WRITE_TOOLS, SHELL_TOOL],
+  investigator: READ_TOOLS,
+};
+
+/** Domain tools each role may call (registered later; the allowlist only lists their names). */
+const DOMAIN_BY_ROLE: Readonly<Record<PromptRoleId, readonly string[]>> = {
+  chief: [
+    'createTask',
+    'updateTask',
+    'createTaskSessions',
+    'endTask',
+    'task',
+    'requirement',
+    'project',
+    'question',
+  ],
+  designer: ['requirement', 'agent_report', 'task', 'question'],
+  developer: ['agent_report', 'task', 'requirement', 'question'],
+  reviewer: ['agent_report', 'task', 'question'],
+  tester: ['agent_report', 'task', 'question'],
+  settler: ['agent_report', 'task', 'requirement', 'question'],
+  investigator: ['agent_report', 'task', 'question'],
+};
+
+/**
+ * Every domain tool name the host registers, in one place: P3-e must register exactly these names, so
+ * the tables below and the host registration cannot drift apart (a registered-but-unlisted tool would
+ * be admitted to every role through the host union).
+ */
+export const DOMAIN_TOOL_NAMES: readonly string[] = [
+  'createTask',
+  'updateTask',
+  'createTaskSessions',
+  'endTask',
+  'task',
+  'agent_report',
+  'requirement',
+  'project',
+  'question',
+];
+
+/**
+ * Every tool name the host may hand to a session. A role/task combination denies all of the names it
+ * does not hold, so a host-side union (domain tools, probe tools) can never widen its permissions.
+ */
+const TOOL_UNIVERSE: readonly string[] = [
+  ...new Set([...Object.values(NATIVE_BY_ROLE).flat(), ...DOMAIN_TOOL_NAMES]),
+].sort();
+
+export interface RoleToolSet {
+  /** Names handed to Pi as the session's allowlist (native + domain). */
+  readonly allowlist: readonly string[];
+  /** Native tools that only ever read. */
+  readonly readTools: readonly string[];
+  /** Names this role/task combination must never receive, so a host union cannot re-add them. */
+  readonly denied: readonly string[];
+  /** True when nothing in this set can change the project (including shell and project-writing tools). */
+  readonly projectReadOnly: boolean;
+  readonly taskType: TaskType | undefined;
+}
+
+/**
+ * Tools for one role under one Task type. A `read` Task drops project-writing tools, arbitrary shell
+ * and the project-writing domain tools; `agent_report` stays available because it writes a Server-side
+ * report, not a project file.
+ *
+ * Known deviation, to be closed when the domain tools are registered (P3-e): G1 narrows specialists to
+ * `task.get` and `developer` to `requirement.list/get`, but a tool allowlist can only name whole tools.
+ * Until the tools enforce their own op subsets for specialists, a specialist holding `task` or
+ * `requirement` could reach ops meant for the chief.
+ */
+export function toolSetFor(roleId: PromptRoleId, taskType: TaskType | undefined): RoleToolSet {
+  const readTask = taskType === 'read';
+  const native = readTask
+    ? NATIVE_BY_ROLE[roleId].filter(
+        (tool) => !PROJECT_WRITE_TOOLS.includes(tool) && tool !== SHELL_TOOL,
+      )
+    : NATIVE_BY_ROLE[roleId];
+  const domain = readTask
+    ? DOMAIN_BY_ROLE[roleId].filter((tool) => !PROJECT_WRITING_DOMAIN_TOOLS.includes(tool))
+    : DOMAIN_BY_ROLE[roleId];
+  const denied = TOOL_UNIVERSE.filter((name) => !native.includes(name) && !domain.includes(name));
+  return {
+    allowlist: [...native, ...domain],
+    readTools: native.filter((tool) => READ_TOOLS.includes(tool)),
+    denied,
+    projectReadOnly:
+      !native.some((tool) => PROJECT_WRITE_TOOLS.includes(tool) || tool === SHELL_TOOL) &&
+      !domain.some((tool) => PROJECT_WRITING_DOMAIN_TOOLS.includes(tool)),
+    taskType,
+  };
+}
+
+/** Read-only check used by tests and by the runtime's own assertions. */
+export function isProjectReadOnly(roleId: PromptRoleId, taskType: TaskType | undefined): boolean {
+  return toolSetFor(roleId, taskType).projectReadOnly;
+}
+
+export function toolSetMatrix(): Array<{
+  readonly roleId: PromptRoleId;
+  readonly taskType: TaskType | undefined;
+  readonly allowlist: readonly string[];
+  readonly projectReadOnly: boolean;
+}> {
+  const rows: Array<{
+    roleId: PromptRoleId;
+    taskType: TaskType | undefined;
+    allowlist: readonly string[];
+    projectReadOnly: boolean;
+  }> = [];
+  for (const roleId of ROLE_IDS) {
+    for (const taskType of [undefined, 'read', 'write'] as const) {
+      const set = toolSetFor(roleId, taskType);
+      rows.push({
+        roleId,
+        taskType,
+        allowlist: set.allowlist,
+        projectReadOnly: set.projectReadOnly,
+      });
+    }
+  }
+  return rows;
+}
