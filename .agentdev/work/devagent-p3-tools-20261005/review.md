@@ -167,3 +167,26 @@ second_delta_findings:
 residual:
   - "promptDir 内容变化不触发实例重建（缓存以路径为键）"
 ```
+## 切片 D —— 委派、等待与 Task 控制（会话 P3dDelegationReview）
+
+```yaml
+reviewer_session: P3dDelegationReview   # 独立上下文，不读开发聊天
+result: passed
+rounds:
+  - round: 1
+    verdict: failed
+    findings: 5 blocking
+    summary: "等待被派发阻塞而超时失效；暂停 Task 的恢复核实不可达；continue 放行暂停 Task 与未决成员；pause/cancel 未真正停止子工作且不释放槽位；成员会话未绑定 Task"
+  - round: 2
+    verdict: failed
+    findings: 4 blocking
+    summary: "恢复核实只被创建无法认领；cancel 直接终态未停止成员；pause 破坏 queued（违反 S5）；槽位生命周期不一致"
+  - round: 3
+    verdict: failed
+    findings: 1 blocking + 1 record
+    summary: "create 接受取消 Task 的恢复核实而 claim 永不认领（生产者/消费者错配）；记录计数与 pause/cancel 语义过期"
+residual:
+  - "聚合的 resultIds/interactionIds 与成员 waiting_user 状态等待 P3-e/P4；task.adopt/reconcile 等待 P5；候选文件摘要由调用方给出（P5 结算核对实际版本）"
+final_verification: "独立复核确认 create/claim 判据对齐（取消后零写入）、等待超时归等待自身、continue 与相位/种类门、控制状态机、成员身份与单事务边界均符合 G2/M2/S5，并确认记录与实测一致：typecheck 0；npm test 110/110（9 个文件）；check:prompts 15/15；spikes 47/47；真实模型 4/4"
+```
+

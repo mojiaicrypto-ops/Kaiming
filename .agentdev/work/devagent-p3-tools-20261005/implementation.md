@@ -43,8 +43,7 @@ review_round_1:
   - (non-blocking) effectiveConfig 记录的是"请求的允许列表"而非真正激活的工具 → 改为同时记录 requestedTools 与 activeTools（activeTools 取自会话本身）
   - (non-blocking) 专业角色的 task/requirement 工具范围比 G1 宽（G1 只给 task.get、requirement.list/get）→ 已在 tool-sets.ts 注释与本节记录中显式声明为 P3-e 必须收口的要求（工具内部 op 级权限）
   - 复跑：71/71 测试；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型端到端 4/4
-  - 增量复核（同一独立会话）又发现 3 项 non-blocking：计划保护依赖模型主动给 expectedPlanVersion（已改为默认按记录版本核对，外部改写一律 VERSION_CONFLICT）；适配器丢掉了工具级 sequential（已补回）；「被拒不留痕迹」用例断言了错误的 key（已改为按被拒调用的 taskId 断言并核对工作目录只有一个任务目录）
-  - 最终复核（同一独立会话）结果见 review.md
+  - 增量复核（同一独立会话）结果见 review.md
 plan_deviation:
   - "read Task 目前整体去掉 requirement/project 工具，而不是只去掉 requirement.save：工具内部的 op 级权限属 P3-e；这样宁可少给工具也不放松写权限"
   - "RuntimeDefaults.tools 现在只是工厂在未指定 spec.tools 时的默认值；运行器始终传自己的角色集合"
@@ -99,8 +98,66 @@ review_round_1:
   - 增量复核（同一独立会话）结果见 review.md
 ```
 
+## 切片 D · 委派与等待 + Task 控制（本次）
+
+```yaml
+slice: P3-d createTaskSessions（create/wait/continue）+ 当前步骤聚合 + task.control/prepare_candidate
+changed:
+  - path: devagent/src/store/store.ts
+    purpose: schema v4（task_sessions 表 + tasks.candidate）；createTaskSessions（会话/关联/首条输入/currentSessionIds 同事务）、continueTaskSession、getTaskSession/listTaskSessions/getTaskForSession、controlTask（pause→pausing|paused 保留槽位、resume→active 幂等重绑、cancel→cancelling|cancelled 释放槽位）、setCandidate；事务改为可重入（嵌套调用加入外层事务，SQLite 无嵌套事务）
+  - path: devagent/src/tools/delegation-tools.ts（新增）
+    purpose: createTaskSessions：create 原子创建当前步骤成员并等待；wait 只观察；continue 只对已停稳成员追加续办输入；角色相位门（reviewer→review、tester→test、settler→settle、developer→develop）；read Task 只收 investigation/recovery；暂停 Task 只收 investigator+recovery，取消后的 Task 不接受任何新工作；等待默认 120s（可给 1s–5min）；taskId 缺省用宿主当前 Task
+  - path: devagent/src/tools/task-tools.ts
+    purpose: task 工具扩展 op=get|prepare_candidate|control（控制与候选冻结都做版本校验与归属校验）
+  - path: devagent/src/runtime/runner.ts
+    purpose: 主管会话注册 createTaskSessions；提供委派宿主（dispatch=运行该成员会话；settleStep=轮询当前步骤成员的真实输入状态，超时返回快照且不取消子工作）；专业会话的工具集改为继承其 Task 的类型
+  - path: devagent/test/delegation.test.ts（新增）
+    purpose: 委派单测（12 项）：聚合、相位/种类门、暂停只收恢复核实、continue 只对已停稳成员、wait 不改动工作且超时快照原样返回、非归属会话被拒、control 与 candidate
+  - path: devagent/test/runtime.test.ts
+    purpose: 端到端：主管建 Task → 委派 developer 成员 → 成员在自己的会话里真实跑完 → 聚合为 completed
+behavior:
+  - "实测：npm test 110/110（9 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型端到端 4/4"
+  - "等待集合取 Task 当前步骤的成员（currentSessionIds），按成员 currentInputId 的真实输入状态判断是否停稳；一份报告不提前返回；超时只返回快照、不 abort、不重建"
+  - "派发只启动不等待：成员执行多久都不影响等待自身的 deadline（成员一直运行也按超时返回快照）"
+  - "continue 只对已停稳成员追加续办输入；运行中/排队中的成员被拒（STAGE_NOT_READY），中断成员被拒（RECOVERY_REQUIRED），非运行 Task 一律被拒（TASK_CONTROLLED）"
+  - "主管在工具内等待期间，成员在自己的会话与自己的 Pi 实例里运行；成员继承 Task 类型与角色工具集，且成员会话绑定 currentTaskId，可读取自己的 Task"
+  - "pause：保留排队输入（恢复后仍可消费）、保留主管绑定，只 abort 正在运行的成员，然后写 paused"
+  - "cancel：停止未开始工作（queued→stopped）并 abort 运行中的成员，写 cancelled 并释放主管绑定；取消后的 Task 不接受任何新工作"
+  - "被控制 Task 的排队工作在 claim 时返回 TASK_CONTROLLED，唯一例外是暂停 Task 的 investigator+recovery 只读核实（create 与 claim 同一判据）"
+review_rounds:
+  - round: 1
+    verdict: failed
+    findings: 5 blocking
+    fixes:
+      - "等待不再阻塞超时：runAndWait 只启动派发（失败记为成员结果），立即进入 settleStep 由其 deadline 决定；测试用永不结束的 dispatch 验证"
+      - "非运行 Task 例外先于普通相位门判定（investigator+recovery 任意相位），移除虚假相位 investigate"
+      - "continue 写库前拒绝非运行 Task（TASK_CONTROLLED）与 interrupted 成员（RECOVERY_REQUIRED）"
+      - "新增 store.finalizeControl 与 runner.controlTask（意图→停止子工作→终态），control 走宿主钩子"
+      - "createTaskSessions 同事务把成员会话绑定 currentTaskId；control/prepare_candidate 仅主管可用"
+  - round: 2
+    verdict: failed
+    findings: 4 blocking
+    fixes:
+      - "claimNextInput 关联 task_sessions 判例外，暂停 Task 的 investigator+recovery 可被认领（真实 runner 测试证明能跑完）"
+      - "有未结束成员工作时 cancel 先写 cancelling，停止循环后才由 finalizeControl 写 cancelled"
+      - "pause 不再把 queued 置为 stopped（S5：pause 保留 queued；cancel 才停止未开始工作）"
+      - "槽位生命周期按 G2/architecture 统一：pause 保留 currentTaskId，仅 cancelled 释放，resume 幂等重绑"
+  - round: 3
+    verdict: failed
+    findings: 1 blocking + 1 record
+    fixes:
+      - "create 与 claim 判据对齐：cancelling/cancelled 的 Task 不接受任何新工作（含恢复核实），且不写会话/关联/输入"
+      - "claim 判据去掉不可达的 interrupted Task 状态（interrupted 是输入状态，不是 Task 状态）"
+      - "记录更新为 110/110，并区分 pause/cancel 的排队与槽位语义"
+evidence_after_fixes: "npm test 110/110（9 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
+risks_remaining:
+  - "聚合里的 resultIds/interactionIds 目前恒为空：独立报告（agent_report）属 P3-e、原生交互属 P4；等待的“等用户”状态同样需要 P4 的交互接线"
+  - "task.adopt/reconcile 未实现（属 P5 的接续/恢复）"
+  - "冻结候选只登记调用方给出的文件摘要，运行器尚未自动计算（P5 结算时核对实际版本）"
+```
+
 ## 后续切片（计划内，未开始）
 
 ```yaml
-pending: [P3-d 委派与等待（createTaskSessions + 聚合 + 超时）, P3-e 报告与需求工具（agent_report/requirement/project）]
+pending: [P3-e 报告与需求工具（agent_report/requirement/project）]
 ```

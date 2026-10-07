@@ -999,6 +999,284 @@ describe('input runner', () => {
     expect(toolTexts.join(' ')).not.toContain('has no current Task');
   });
 
+  it('delegates a member through the real tool loop and waits for the whole step', async () => {
+    const createArgs = JSON.stringify({
+      type: 'write',
+      goal: 'reset password',
+      scope: 'account',
+      planMarkdown: '# plan\n1. develop\n',
+      authorizationRef: 'm-001',
+      requiresTest: true,
+    });
+    const delegateArgs = JSON.stringify({
+      mode: 'create',
+      waitTimeoutMs: 20_000,
+      sessions: [
+        {
+          roleId: 'developer',
+          label: 'implement',
+          instructions: 'implement the reset flow',
+          expectedKind: 'implementation',
+        },
+      ],
+    });
+    const h = await harness({
+      replies: [
+        { kind: 'tool_calls', calls: [{ name: 'createTask', arguments: createArgs }] },
+        { kind: 'text', text: 'task created' },
+        { kind: 'tool_calls', calls: [{ name: 'createTaskSessions', arguments: delegateArgs }] },
+        { kind: 'text', text: 'member done' },
+        { kind: 'text', text: 'delegation finished' },
+      ],
+    });
+    // Input 1: create the Task (the Task's first phase is plan, so move it before delegating).
+    const first = await h.runner.runNext('s-1');
+    expect(first.kind).toBe('completed');
+    const task = h.store.listTasks('p-1')[0];
+    expect(task).toBeDefined();
+    const moved = h.store.updateTask({
+      taskId: task?.id ?? '',
+      expectedRevision: task?.revision ?? 1,
+      phase: 'develop',
+    });
+    expect(moved.phase).toBe('develop');
+    accept(h.store, 'i-2', 'req-2');
+
+    const second = await h.runner.runNext('s-1');
+
+    expect(second.kind).toBe('completed');
+    const members = h.store.listTaskSessions(task?.id ?? '');
+    expect(members).toHaveLength(1);
+    expect(members[0]?.roleId).toBe('developer');
+    // The member really ran its own input in its own session with the Task's type.
+    expect(h.store.getInput(members[0]?.currentInputId ?? '')?.status).toBe('completed');
+    expect(h.store.getTaskSession(members[0]?.sessionId ?? '')).toMatchObject({
+      phase: 'develop',
+      expectedKind: 'implementation',
+    });
+    // The chief's wait ended with the aggregate, not a guess.
+    const memberHandle = h.registry.get(members[0]?.sessionId ?? '');
+    expect(memberHandle).toBeDefined();
+    expect(h.store.getTask(task?.id ?? '')?.currentSessionIds).toEqual([members[0]?.sessionId]);
+  }, 60_000);
+
+  it('stops the Task live work when it is paused and keeps the chief bound to it', async () => {
+    const entered = Promise.withResolvers<void>();
+    const createArgs = JSON.stringify({
+      type: 'write',
+      goal: 'reset password',
+      scope: 'account',
+      planMarkdown: '# plan\n1. develop\n',
+      authorizationRef: 'm-001',
+      requiresTest: true,
+    });
+    const delegateArgs = JSON.stringify({
+      mode: 'create',
+      waitTimeoutMs: 30_000,
+      sessions: [
+        {
+          roleId: 'developer',
+          label: 'implement',
+          instructions: 'implement the reset flow',
+          expectedKind: 'implementation',
+        },
+      ],
+    });
+    const h = await harness({
+      replies: [
+        { kind: 'tool_calls', calls: [{ name: 'createTask', arguments: createArgs }] },
+        { kind: 'text', text: 'task created' },
+        { kind: 'tool_calls', calls: [{ name: 'createTaskSessions', arguments: delegateArgs }] },
+        { kind: 'tool_calls', calls: [{ name: 'probe_wait', arguments: '{}' }] },
+        { kind: 'text', text: 'delegation ended' },
+      ],
+      tools: ['probe_wait'],
+      sessionExtras: () => ({
+        customTools: [
+          {
+            name: 'probe_wait',
+            label: 'probe_wait',
+            description: 'runs until aborted',
+            parameters: { type: 'object', properties: {}, additionalProperties: false },
+            executionMode: 'sequential',
+            async execute(
+              _toolCallId: string,
+              _params: unknown,
+              signal: AbortSignal | undefined,
+              _onUpdate: unknown,
+              _ctx: unknown,
+            ) {
+              entered.resolve();
+              const aborted = Promise.withResolvers<void>();
+              signal?.addEventListener('abort', () => aborted.resolve(), { once: true });
+              await aborted.promise;
+              return { content: [{ type: 'text', text: 'aborted' }], details: {} };
+            },
+          } as never,
+        ],
+      }),
+    });
+    const first = await h.runner.runNext('s-1');
+    expect(first.kind).toBe('completed');
+    const task = h.store.listTasks('p-1')[0];
+    h.store.updateTask({
+      taskId: task?.id ?? '',
+      expectedRevision: task?.revision ?? 1,
+      phase: 'develop',
+    });
+    accept(h.store, 'i-2', 'req-2');
+
+    // The chief delegates and waits while the member runs.
+    const chief = h.runner.runNext('s-1');
+    await entered.promise;
+    const member = h.store.listTaskSessions(task?.id ?? '')[0];
+    expect(member).toBeDefined();
+    expect(h.store.getInput(member?.currentInputId ?? '')?.status).toBe('processing');
+
+    const paused = await h.runner.controlTask({
+      taskId: task?.id ?? '',
+      expectedRevision: h.store.getTask(task?.id ?? '')?.revision ?? 1,
+      command: 'pause',
+    });
+
+    // The pause reaches its final status only after the Task's own work really stopped.
+    expect(paused.status).toBe('paused');
+    expect(h.store.getInput(member?.currentInputId ?? '')?.status).toBe('stopped');
+    // A paused Task refuses to hand out its queued work, and keeps the chief bound to it.
+    expect(h.store.claimNextInput(member?.sessionId ?? '').kind).not.toBe('claimed');
+    const stillRunning = await chief;
+    expect(stillRunning.kind).toBe('completed');
+    expect(h.store.getSession('s-1')?.currentTaskId).toBe(task?.id ?? null);
+    // Cancelling the paused Task ends it and frees the slot.
+    const cancelled = await h.runner.controlTask({
+      taskId: task?.id ?? '',
+      expectedRevision: h.store.getTask(task?.id ?? '')?.revision ?? 1,
+      command: 'cancel',
+    });
+    expect(cancelled.status).toBe('cancelled');
+    expect(h.store.getSession('s-1')?.currentTaskId).toBeNull();
+  }, 60_000);
+
+  it('runs the read-only recovery check of a paused Task through the real runner', async () => {
+    const h = await harness({ replies: [{ kind: 'text', text: 'recovery checked' }] });
+    const task = h.store.createTask({
+      id: 't-rec',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      goal: 'reset password',
+      scope: 'account',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'x' },
+      authorizationRefs: ['m-1'],
+      sourceInputId: 'i-1',
+    });
+    h.store.updateTask({ taskId: task.id, expectedRevision: task.revision, phase: 'develop' });
+    const paused = h.store.controlTask({
+      taskId: task.id,
+      expectedRevision: h.store.getTask(task.id)?.revision ?? 1,
+      command: 'pause',
+    });
+    expect(paused.status).toBe('paused');
+    h.store.createTaskSessions({
+      taskId: task.id,
+      members: [
+        {
+          sessionId: 's-rec',
+          taskId: task.id,
+          roleId: 'investigator',
+          phase: 'develop',
+          label: 'recover',
+          instructions: 'verify what the interrupted run left behind',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'recovery',
+          inputId: 'i-rec',
+          inputPayload: { content: [{ type: 'text', text: 'verify the work' }] },
+        },
+      ],
+    });
+
+    const outcome = await h.runner.runNext('s-rec');
+
+    // The claim exception really lets the recovery check run while the Task is not running.
+    expect(outcome.kind).toBe('completed');
+    expect(h.store.getInput('i-rec')?.status).toBe('completed');
+  }, 30_000);
+
+  it('keeps queued work when a Task is paused and stops it when cancelled', async () => {
+    const h = await harness({ replies: [{ kind: 'text', text: 'ok' }] });
+    const spec = (sessionId: string, inputId: string) => ({
+      sessionId,
+      taskId: '',
+      roleId: 'developer',
+      phase: 'develop' as const,
+      label: 'implement',
+      instructions: 'implement it',
+      refs: [],
+      dependencies: [],
+      expectedKind: 'implementation',
+      inputId,
+      inputPayload: { content: [{ type: 'text', text: 'implement it' }] },
+    });
+    const createTask = (id: string, chiefSessionId: string) =>
+      h.store.createTask({
+        id,
+        projectId: 'p-1',
+        chiefSessionId,
+        ownerEpoch: 1,
+        type: 'write',
+        requiresTest: true,
+        goal: 'reset password',
+        scope: 'account',
+        acceptanceRefs: [],
+        basisRefs: [],
+        planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'x' },
+        authorizationRefs: ['m-1'],
+        sourceInputId: 'i-1',
+      });
+
+    // pause: queued work is preserved for a later resume
+    const first = createTask('t-pause', 's-1');
+    h.store.updateTask({ taskId: first.id, expectedRevision: first.revision, phase: 'develop' });
+    h.store.createTaskSessions({ taskId: first.id, members: [{ ...spec('m-pause', 'i-mp'), taskId: first.id }] });
+    const paused = await h.runner.controlTask({
+      taskId: first.id,
+      expectedRevision: h.store.getTask(first.id)?.revision ?? 1,
+      command: 'pause',
+    });
+    expect(paused.status).toBe('paused');
+    expect(h.store.getInput('i-mp')?.status).toBe('queued');
+    expect(h.store.claimNextInput('m-pause').kind).toBe('controlled');
+
+    const resumed = await h.runner.controlTask({
+      taskId: first.id,
+      expectedRevision: h.store.getTask(first.id)?.revision ?? 1,
+      command: 'resume',
+    });
+    expect(resumed.status).toBe('active');
+    expect(h.store.claimNextInput('m-pause').kind).toBe('claimed');
+
+    // cancel: unstarted work is stopped and the chief's slot is released (a second chief, because the
+    // resumed Task above still holds its own slot)
+    h.store.createSession({ id: 's-2', projectId: 'p-1', roleId: 'chief', cwd: h.cwd });
+    const second = createTask('t-cancel', 's-2');
+    h.store.updateTask({ taskId: second.id, expectedRevision: second.revision, phase: 'develop' });
+    h.store.createTaskSessions({ taskId: second.id, members: [{ ...spec('m-cancel', 'i-mc'), taskId: second.id }] });
+    const cancelled = await h.runner.controlTask({
+      taskId: second.id,
+      expectedRevision: h.store.getTask(second.id)?.revision ?? 1,
+      command: 'cancel',
+    });
+
+    expect(cancelled.status).toBe('cancelled');
+    expect(h.store.getInput('i-mc')?.status).toBe('stopped');
+    expect(h.store.getSession('s-2')?.currentTaskId).toBeNull();
+  }, 30_000);
+
   it('keeps the input queued when the model is unavailable, without falling back', async () => {
     const h = await harness({
       replies: [{ kind: 'text', text: 'ok' }],

@@ -99,6 +99,7 @@ export interface TaskRow {
   readonly nextStep: string | null;
   readonly blockReason: string | null;
   readonly completionResultId: string | null;
+  readonly candidate: unknown;
   readonly sourceInputId: string;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -137,6 +138,39 @@ export interface UpdateTaskParams {
   readonly acceptanceRefs?: readonly string[];
   readonly basisRefs?: readonly string[];
   readonly requiresTest?: boolean;
+}
+
+export interface TaskSessionRow {
+  readonly sessionId: string;
+  readonly taskId: string;
+  readonly roleId: string;
+  readonly specialization: string | null;
+  readonly phase: TaskPhase;
+  readonly label: string;
+  readonly instructions: string;
+  readonly refs: readonly string[];
+  readonly dependencies: readonly string[];
+  readonly expectedKind: string;
+  readonly candidateId: string | null;
+  readonly workspaceRef: string | null;
+  readonly currentInputId: string | null;
+}
+
+export interface CreateTaskSessionParams {
+  readonly sessionId: string;
+  readonly taskId: string;
+  readonly roleId: string;
+  readonly specialization?: string;
+  readonly phase: TaskPhase;
+  readonly label: string;
+  readonly instructions: string;
+  readonly refs: readonly string[];
+  readonly dependencies: readonly string[];
+  readonly expectedKind: string;
+  readonly candidateId?: string;
+  readonly workspaceRef?: string;
+  readonly inputId: string;
+  readonly inputPayload: unknown;
 }
 
 export interface FileSaveRow {
@@ -188,7 +222,8 @@ export type ClaimResult =
   | { readonly kind: 'claimed'; readonly input: InputRow }
   | { readonly kind: 'none' }
   | { readonly kind: 'busy'; readonly inputId: string }
-  | { readonly kind: 'blocked'; readonly inputId: string; readonly code: 'RECOVERY_REQUIRED' };
+  | { readonly kind: 'blocked'; readonly inputId: string; readonly code: 'RECOVERY_REQUIRED' }
+  | { readonly kind: 'controlled'; readonly inputId: string; readonly code: 'TASK_CONTROLLED' };
 
 export interface OpenStoreOptions {
   readonly path: string;
@@ -219,11 +254,33 @@ export interface CreateSessionParams {
   readonly projectId: string;
   readonly roleId: string;
   readonly cwd: string;
+  readonly specialization?: string;
 }
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
+
+/** Tables added by the v3 → v4 migration (professional Session membership of a Task). */
+const V4_DDL = `
+CREATE TABLE IF NOT EXISTS task_sessions (
+  sessionId TEXT PRIMARY KEY REFERENCES sessions(id),
+  taskId TEXT NOT NULL REFERENCES tasks(id),
+  roleId TEXT NOT NULL,
+  specialization TEXT,
+  phase TEXT NOT NULL,
+  label TEXT NOT NULL,
+  instructions TEXT NOT NULL,
+  refs TEXT NOT NULL,
+  dependencies TEXT NOT NULL,
+  expectedKind TEXT NOT NULL,
+  candidateId TEXT,
+  workspaceRef TEXT,
+  currentInputId TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_sessions_task_phase ON task_sessions (taskId, phase);`;
 
 /** Tables added by the v2 → v3 migration (chief Task records and host-owned file saves). */
 const V3_DDL = `
@@ -249,6 +306,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   nextStep TEXT,
   blockReason TEXT,
   completionResultId TEXT,
+  candidate TEXT,
   sourceInputId TEXT NOT NULL,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
@@ -364,6 +422,7 @@ CREATE TABLE IF NOT EXISTS request_receipts (
   updatedAt TEXT NOT NULL
 );
 ${V3_DDL}
+${V4_DDL}
 `;
 
 /** Canonical JSON (sorted object keys) so the same value always digests the same way. */
@@ -389,6 +448,8 @@ export class Store {
   private readonly db: DatabaseSync;
   private readonly serverEpoch: number;
   private readonly clock: () => string;
+  /** Depth of the current transaction; nested helpers join the outer one. */
+  private transactionDepth = 0;
 
   constructor(options: OpenStoreOptions) {
     this.serverEpoch = options.serverEpoch;
@@ -423,9 +484,9 @@ export class Store {
     const timestamp = this.clock();
     this.db
       .prepare(
-        'INSERT INTO sessions (id, projectId, roleId, cwd, revision, createdAt, updatedAt) VALUES (?, ?, ?, ?, 1, ?, ?)',
+        'INSERT INTO sessions (id, projectId, roleId, specialization, cwd, revision, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, 1, ?, ?)',
       )
-      .run(params.id, params.projectId, params.roleId, params.cwd, timestamp, timestamp);
+      .run(params.id, params.projectId, params.roleId, params.specialization ?? null, params.cwd, timestamp, timestamp);
   }
 
   /**
@@ -537,6 +598,27 @@ export class Store {
         .get(sessionId) as { inputId: string } | undefined;
       if (candidate === undefined) {
         return { kind: 'none' } as ClaimResult;
+      }
+      const owner = this.db
+        .prepare(
+          `SELECT t.status AS taskStatus, ts.roleId AS roleId, ts.expectedKind AS expectedKind
+           FROM session_inputs i
+           JOIN tasks t ON t.id = i.taskId
+           LEFT JOIN task_sessions ts ON ts.sessionId = i.sessionId AND ts.taskId = i.taskId
+           WHERE i.inputId = ?`,
+        )
+        .get(candidate.inputId) as
+        | { taskStatus: string; roleId: string | null; expectedKind: string | null }
+        | undefined;
+      if (owner !== undefined && owner.taskStatus !== 'active' && owner.taskStatus !== 'waiting') {
+        // A Task that is not running hands out exactly one kind of work: the read-only recovery check.
+        const recovery =
+          (owner.taskStatus === 'paused' || owner.taskStatus === 'pausing') &&
+          owner.roleId === 'investigator' &&
+          owner.expectedKind === 'recovery';
+        if (!recovery) {
+          return { kind: 'controlled', inputId: candidate.inputId, code: 'TASK_CONTROLLED' } as ClaimResult;
+        }
       }
       const claimed = this.tryClaimInput(candidate.inputId);
       if (!claimed) {
@@ -1064,6 +1146,279 @@ export class Store {
       .get(requestKey) as FileSaveRow | undefined;
   }
 
+  /**
+   * Create the current step's professional members atomically (S3: create/continue 专业工作): the
+   * session row, its Task membership and its first input are written together, then the Task's
+   * currentSessionIds are replaced by the new members.
+   */
+  createTaskSessions(params: {
+    readonly taskId: string;
+    readonly members: readonly CreateTaskSessionParams[];
+  }): TaskSessionRow[] {
+    return this.transaction(() => {
+      const task = this.requireTask(params.taskId);
+      for (const member of params.members) {
+        if (member.taskId !== params.taskId) {
+          throw new StoreError('INVALID_ARGUMENT', 'member belongs to another Task', {
+            sessionId: member.sessionId,
+          });
+        }
+        if (member.phase !== task.phase) {
+          throw new StoreError('INVALID_ARGUMENT', 'member phase must be the Task current phase', {
+            sessionId: member.sessionId,
+            memberPhase: member.phase,
+            taskPhase: task.phase,
+          });
+        }
+      }
+      const timestamp = this.clock();
+      const created: TaskSessionRow[] = [];
+      for (const member of params.members) {
+        this.createSession({
+          id: member.sessionId,
+          projectId: task.projectId,
+          roleId: member.roleId,
+          cwd: this.requireTaskCwd(task),
+          ...(member.specialization !== undefined ? { specialization: member.specialization } : {}),
+        });
+        this.acceptInput({
+          inputId: member.inputId,
+          projectId: task.projectId,
+          sessionId: member.sessionId,
+          taskId: params.taskId,
+          sourceKey: `delegation:${member.inputId}`,
+          requestKey: member.inputId,
+          method: 'task.session',
+          kind: 'delegation',
+          payload: member.inputPayload,
+        });
+        this.db
+          .prepare('UPDATE sessions SET currentTaskId = ?, revision = revision + 1, updatedAt = ? WHERE id = ?')
+          .run(params.taskId, timestamp, member.sessionId);
+        this.db
+          .prepare(
+            `INSERT INTO task_sessions
+               (sessionId, taskId, roleId, specialization, phase, label, instructions, refs,
+                dependencies, expectedKind, candidateId, workspaceRef, currentInputId, createdAt, updatedAt)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            member.sessionId,
+            params.taskId,
+            member.roleId,
+            member.specialization ?? null,
+            member.phase,
+            member.label,
+            member.instructions,
+            canonical(member.refs),
+            canonical(member.dependencies),
+            member.expectedKind,
+            member.candidateId ?? null,
+            member.workspaceRef ?? null,
+            member.inputId,
+            timestamp,
+            timestamp,
+          );
+        created.push(this.requireTaskSession(member.sessionId));
+      }
+      const currentSessionIds = [...new Set([...task.currentSessionIds, ...created.map((m) => m.sessionId)])];
+      this.db
+        .prepare(
+          'UPDATE tasks SET currentSessionIds = ?, revision = revision + 1, updatedAt = ? WHERE id = ?',
+        )
+        .run(canonical(currentSessionIds), timestamp, params.taskId);
+      return created;
+    });
+  }
+
+  /** Append a continuation input to an already settled member and point currentInputId at it. */
+  continueTaskSession(params: {
+    readonly sessionId: string;
+    readonly instructions: string;
+    readonly refs: readonly string[];
+    readonly dependencies: readonly string[];
+    readonly inputId: string;
+  }): TaskSessionRow {
+    return this.transaction(() => {
+      const member = this.requireTaskSession(params.sessionId);
+      const timestamp = this.clock();
+      this.db
+        .prepare(
+          `UPDATE task_sessions SET instructions = ?, refs = ?, dependencies = ?, currentInputId = ?, updatedAt = ?
+             WHERE sessionId = ?`,
+        )
+        .run(
+          params.instructions,
+          canonical(params.refs),
+          canonical(params.dependencies),
+          params.inputId,
+          timestamp,
+          params.sessionId,
+        );
+      this.acceptInput({
+        inputId: params.inputId,
+        projectId: this.requireTask(member.taskId).projectId,
+        sessionId: params.sessionId,
+        taskId: member.taskId,
+        sourceKey: `continuation:${params.inputId}`,
+        requestKey: params.inputId,
+        method: 'task.session',
+        kind: 'continuation',
+        payload: { content: [{ type: 'text', text: params.instructions }] },
+      });
+      return this.requireTaskSession(params.sessionId);
+    });
+  }
+
+  getTaskSession(sessionId: string): TaskSessionRow | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM task_sessions WHERE sessionId = ?')
+      .get(sessionId) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : toTaskSessionRow(row);
+  }
+
+  listTaskSessions(taskId: string): TaskSessionRow[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM task_sessions WHERE taskId = ? ORDER BY createdAt, sessionId')
+        .all(taskId) as unknown as Array<Record<string, unknown>>
+    ).map(toTaskSessionRow);
+  }
+
+  /** The Task a professional session belongs to (its type drives the session's tool set). */
+  getTaskForSession(sessionId: string): TaskRow | undefined {
+    const member = this.getTaskSession(sessionId);
+    return member === undefined ? undefined : this.getTask(member.taskId);
+  }
+
+  /** Record the Task's control intent; the caller stops the work and reports the real state. */
+  controlTask(params: {
+    taskId: string;
+    expectedRevision: number;
+    command: 'pause' | 'resume' | 'cancel';
+  }): TaskRow {
+    return this.transaction(() => {
+      const task = this.requireTask(params.taskId);
+      if (task.revision !== params.expectedRevision) {
+        throw new StoreError('VERSION_CONFLICT', 'Task revision does not match', {
+          taskId: params.taskId,
+          actual: task.revision,
+        });
+      }
+      const unfinished = this.unfinishedMemberWork(params.taskId);
+      const next =
+        params.command === 'pause'
+          ? unfinished > 0
+            ? 'pausing'
+            : 'paused'
+          : params.command === 'resume'
+            ? task.status === 'paused' || task.status === 'pausing'
+              ? 'active'
+              : task.status
+            : unfinished > 0
+              ? 'cancelling'
+              : 'cancelled';
+      this.db
+        .prepare('UPDATE tasks SET status = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND revision = ?')
+        .run(next, this.clock(), params.taskId, params.expectedRevision);
+      if (next === 'cancelled') {
+        // The Task is over: only completion, cancellation or a safe handover free the chief's slot.
+        this.db
+          .prepare('UPDATE sessions SET currentTaskId = NULL, revision = revision + 1, updatedAt = ? WHERE id = ?')
+          .run(this.clock(), task.chiefSessionId);
+      }
+      if (next === 'active') {
+        // A paused Task keeps the association; re-bind defensively so a reloaded row finds its Task.
+        this.db
+          .prepare(
+            'UPDATE sessions SET currentTaskId = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND (currentTaskId IS NULL OR currentTaskId = ?)',
+          )
+          .run(params.taskId, this.clock(), task.chiefSessionId, params.taskId);
+      }
+      return this.requireTask(params.taskId);
+    });
+  }
+
+  /**
+   * How many current-step members of this Task still have work that has not reached a terminal state.
+   * A controlled Task only reaches its final status once this is zero.
+   */
+  private unfinishedMemberWork(taskId: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS unfinished
+         FROM task_sessions ts
+         JOIN session_inputs i ON i.inputId = ts.currentInputId
+         WHERE ts.taskId = ? AND i.status IN ('queued', 'processing', 'stopping')`,
+      )
+      .get(taskId) as { unfinished: number };
+    return row.unfinished;
+  }
+
+  /**
+   * Finish a control request once the Task's own work has actually stopped: move `pausing` to
+   * `paused` (or `cancelling` to `cancelled`) and release the chief's slot.
+   */
+  finalizeControl(params: { taskId: string; status: 'paused' | 'cancelled' }): TaskRow {
+    return this.transaction(() => {
+      const task = this.requireTask(params.taskId);
+      if (task.status === params.status) {
+        return task;
+      }
+      const allowed =
+        params.status === 'paused' ? task.status === 'pausing' : task.status === 'pausing' || task.status === 'cancelling';
+      if (!allowed) {
+        throw new StoreError('VERSION_CONFLICT', 'Task is not waiting for this control transition', {
+          taskId: params.taskId,
+          status: task.status,
+        });
+      }
+      const timestamp = this.clock();
+      this.db
+        .prepare('UPDATE tasks SET status = ?, revision = revision + 1, updatedAt = ? WHERE id = ?')
+        .run(params.status, timestamp, params.taskId);
+      if (params.status === 'cancelled') {
+        this.db
+          .prepare('UPDATE sessions SET currentTaskId = NULL, revision = revision + 1, updatedAt = ? WHERE id = ?')
+          .run(timestamp, task.chiefSessionId);
+      }
+      return this.requireTask(params.taskId);
+    });
+  }
+
+  /** Freeze the delivered candidate version (files + digests) for Review/Test. */
+  setCandidate(params: { taskId: string; expectedRevision: number; candidate: unknown }): TaskRow {
+    return this.transaction(() => {
+      const task = this.requireTask(params.taskId);
+      if (task.revision !== params.expectedRevision) {
+        throw new StoreError('VERSION_CONFLICT', 'Task revision does not match', {
+          taskId: params.taskId,
+          actual: task.revision,
+        });
+      }
+      this.db
+        .prepare('UPDATE tasks SET candidate = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND revision = ?')
+        .run(canonical(params.candidate), this.clock(), params.taskId, params.expectedRevision);
+      return this.requireTask(params.taskId);
+    });
+  }
+
+  private requireTaskCwd(task: TaskRow): string {
+    const session = this.getSession(task.chiefSessionId);
+    if (session === undefined) {
+      throw new StoreError('NOT_FOUND', 'the Task chief session is gone', { taskId: task.id });
+    }
+    return session.cwd;
+  }
+
+  private requireTaskSession(sessionId: string): TaskSessionRow {
+    const member = this.getTaskSession(sessionId);
+    if (member === undefined) {
+      throw new StoreError('NOT_FOUND', 'this session is not a Task member', { sessionId });
+    }
+    return member;
+  }
+
   private requireTask(taskId: string): TaskRow {
     const task = this.getTask(taskId);
     if (task === undefined) {
@@ -1101,6 +1456,19 @@ export class Store {
     });
   }
 
+  private migrateV3ToV4(): void {
+    this.transaction(() => {
+      this.db.exec(V4_DDL);
+      const column = this.db
+        .prepare("SELECT COUNT(*) AS present FROM pragma_table_info('tasks') WHERE name = 'candidate'")
+        .get() as { present: number };
+      if (column.present === 0) {
+        this.db.exec('ALTER TABLE tasks ADD COLUMN candidate TEXT');
+      }
+      this.db.exec('PRAGMA user_version = 4;');
+    });
+  }
+
   private migrate(): void {
     const { userVersion } = this.pragmas();
     if (userVersion === 0) {
@@ -1117,8 +1485,12 @@ export class Store {
         this.db.exec('PRAGMA user_version = 2;');
       });
       this.migrateV2ToV3();
+      this.migrateV3ToV4();
     } else if (userVersion === 2) {
       this.migrateV2ToV3();
+      this.migrateV3ToV4();
+    } else if (userVersion === 3) {
+      this.migrateV3ToV4();
     } else if (userVersion !== SCHEMA_VERSION) {
       throw new StoreError('VERSION_CONFLICT', 'unsupported store schema version', {
         userVersion,
@@ -1138,8 +1510,16 @@ export class Store {
     }
   }
 
+  /**
+   * Run work inside one transaction. Nested calls join the outer transaction instead of issuing a
+   * second BEGIN (SQLite has no nested transactions), so composite operations stay atomic.
+   */
   private transaction<T>(work: () => T): T {
+    if (this.transactionDepth > 0) {
+      return work();
+    }
     this.db.exec('BEGIN IMMEDIATE');
+    this.transactionDepth += 1;
     try {
       const result = work();
       this.db.exec('COMMIT');
@@ -1147,6 +1527,8 @@ export class Store {
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;
+    } finally {
+      this.transactionDepth -= 1;
     }
   }
 }
@@ -1177,6 +1559,36 @@ function parseArtifactRef(value: unknown): ArtifactRef | null {
   return { storage, path, sha256 };
 }
 
+function parseJsonOrNull(value: unknown): unknown {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function toTaskSessionRow(row: Record<string, unknown>): TaskSessionRow {
+  const nullable = (value: unknown): string | null => (value === null ? null : String(value));
+  return {
+    sessionId: String(row['sessionId']),
+    taskId: String(row['taskId']),
+    roleId: String(row['roleId']),
+    specialization: nullable(row['specialization']),
+    phase: String(row['phase']) as TaskPhase,
+    label: String(row['label']),
+    instructions: String(row['instructions']),
+    refs: parseStringList(row['refs']),
+    dependencies: parseStringList(row['dependencies']),
+    expectedKind: String(row['expectedKind']),
+    candidateId: nullable(row['candidateId']),
+    workspaceRef: nullable(row['workspaceRef']),
+    currentInputId: nullable(row['currentInputId']),
+  };
+}
+
 function toTaskRow(row: Record<string, unknown>): TaskRow {
   const nullable = (value: unknown): string | null => (value === null ? null : String(value));
   return {
@@ -1201,6 +1613,7 @@ function toTaskRow(row: Record<string, unknown>): TaskRow {
     nextStep: nullable(row['nextStep']),
     blockReason: nullable(row['blockReason']),
     completionResultId: nullable(row['completionResultId']),
+    candidate: parseJsonOrNull(row['candidate']),
     sourceInputId: String(row['sourceInputId']),
     createdAt: String(row['createdAt']),
     updatedAt: String(row['updatedAt']),

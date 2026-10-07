@@ -22,6 +22,12 @@ export interface TaskToolContext {
   readonly inputId: string;
   /** Host work area for read Tasks (`work/<taskId>/plan.md`). */
   readonly serverWorkDir: string;
+  /** Host control hook: stops the Task's own work before the final status is written. */
+  readonly controlTask?: (params: {
+    taskId: string;
+    expectedRevision: number;
+    command: 'pause' | 'resume' | 'cancel';
+  }) => Promise<TaskRow>;
   readonly currentTaskId?: string;
 }
 
@@ -507,15 +513,27 @@ function taskGetTool(contextOf: TaskToolContextResolver): DomainTool {
   return {
     name: 'task',
     label: 'task',
-    description: 'Read the current Task (or a given taskId): fields, overall Plan text and open items.',
+    description:
+      'Read the current Task (op=get), freeze a candidate version (op=prepare_candidate) or control it (op=control).',
     parameters: {
       type: 'object',
-      properties: { taskId: { type: 'string' } },
+      properties: {
+        op: { type: 'string', enum: ['get', 'prepare_candidate', 'control'] },
+        taskId: { type: 'string' },
+        includeResultBodies: { type: 'boolean' },
+        expectedRevision: { type: 'number' },
+        candidate: { type: 'object' },
+        command: { type: 'string', enum: ['pause', 'resume', 'cancel'] },
+      },
       additionalProperties: false,
     },
     async execute(_toolCallId, rawParams) {
       const context = contextOf();
       const params = asRecord(rawParams) ?? {};
+      const op = readString(params, 'op') ?? 'get';
+      if (op !== 'get' && context.roleId !== 'chief') {
+        return fail('FORBIDDEN', 'only the coordinating session may control a Task or freeze a candidate');
+      }
       const session = context.store.getSession(context.sessionId);
       const currentTaskId = session?.currentTaskId ?? undefined;
       const taskId = readString(params, 'taskId') ?? currentTaskId;
@@ -531,6 +549,60 @@ function taskGetTool(contextOf: TaskToolContextResolver): DomainTool {
         return owned.refusal;
       }
       const task = owned.task;
+
+      if (op === 'control') {
+        if (task.chiefSessionId !== context.sessionId) {
+          return fail('FORBIDDEN', `Task ${taskId} is coordinated by another session`);
+        }
+        const command = readString(params, 'command');
+        const expectedRevision = params['expectedRevision'];
+        if (
+          (command !== 'pause' && command !== 'resume' && command !== 'cancel') ||
+          typeof expectedRevision !== 'number'
+        ) {
+          return fail('INVALID_ARGUMENT', 'control needs command (pause/resume/cancel) and expectedRevision');
+        }
+        try {
+          // Control is a host operation: the Task can only reach its final status after its own
+          // work has actually stopped, which the host knows.
+          const updated =
+            context.controlTask === undefined
+              ? context.store.controlTask({ taskId, expectedRevision, command })
+              : await context.controlTask({ taskId, expectedRevision, command });
+          return ok(`Task ${taskId} is now ${updated.status}`, {
+            taskId,
+            status: updated.status,
+            revision: updated.revision,
+            currentSessionIds: updated.currentSessionIds,
+          });
+        } catch (error) {
+          const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
+          return fail(code, messageOf(error), { taskId });
+        }
+      }
+
+      if (op === 'prepare_candidate') {
+        if (task.chiefSessionId !== context.sessionId) {
+          return fail('FORBIDDEN', `Task ${taskId} is coordinated by another session`);
+        }
+        const expectedRevision = params['expectedRevision'];
+        const candidate = params['candidate'];
+        if (typeof expectedRevision !== 'number' || typeof candidate !== 'object' || candidate === null) {
+          return fail('INVALID_ARGUMENT', 'prepare_candidate needs expectedRevision and candidate');
+        }
+        try {
+          const updated = context.store.setCandidate({ taskId, expectedRevision, candidate });
+          return ok(`Task ${taskId} candidate frozen`, {
+            taskId,
+            revision: updated.revision,
+            candidate: updated.candidate,
+          });
+        } catch (error) {
+          const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
+          return fail(code, messageOf(error), { taskId });
+        }
+      }
+
       const plan = task.planRef === null ? { text: '', current: false } : readPlan(task.planRef);
       return ok(`Task ${task.id}: ${task.phase} (${task.status}), revision ${task.revision}`, {
         task: taskSummaryJson(task),

@@ -1,5 +1,52 @@
 # Test Report · devagent-p3-tools-20261005
 
+## 切片 D · 委派与等待（本次）
+
+```yaml
+runs:
+  - command: cd devagent && npx tsc --noEmit
+    result: passed
+    exit_code: 0
+    evidence: "无输出"
+  - command: cd devagent && npm test
+    result: passed
+    exit_code: 0
+    evidence: "9 个测试文件、110 项通过（delegation 12 项；runtime 36 项）"
+  - command: cd devagent && npm run check:prompts / npm run spikes / node checks/runner-real-model.ts
+    result: passed
+    exit_code: 0
+    evidence: "15/15；47/47（0 FAIL）；4/4"
+regression_after_review:
+  - "等待不再被派发阻塞：成员一直运行时按超时返回快照（成员 dispatch 永不结束）"
+  - "暂停中的 Task 在任意相位接受 investigator+recovery，普通工作被拒且不产生成员"
+  - "暂停 Task 的 continue 被拒（TASK_CONTROLLED）；interrupted 成员的 continue 被拒（RECOVERY_REQUIRED）；两者都不写入"
+  - "暂停会真正中止在运行中的成员（真实 Pi 运行被 abort 且输入落为 stopped），Task 落为 paused 且保留主管绑定；被控制 Task 的排队工作不再被 claim；cancel 停止未开始工作并释放绑定"
+  - "暂停 Task 的只读恢复核实能被真实认领并跑完（runNext 完成、输入 completed）；取消后的 Task 连恢复核实也被拒且不产生成员"
+  - "pause 保留 queued（恢复后可认领），cancel 把 queued 置为 stopped"
+  - "成员会话绑定 currentTaskId，专业会话可读取自己的 Task；control/prepare_candidate 仅主管可用"
+key_evidence:
+  - "create：成员会话、Task 关联、首条委派输入与 currentSessionIds 同事务写入；成员输入进入队列且被派发一次"
+  - "聚合：等待返回 outcome=completed 与每个成员的状态；wait 模式不新增工作、超时快照原样返回（1s 下限生效）"
+  - "相位门：plan 阶段委派 reviewer 被拒（STAGE_NOT_READY）且不产生任何成员"
+  - "种类门：read Task 只接受 investigation/recovery（INVALID_ARGUMENT）"
+  - "暂停门：Task 暂停后普通委派被拒（TASK_CONTROLLED），且不产生成员；仅 investigator+recovery 被接受（develop 相位也可）"
+  - "continue：已停稳成员可以续办（currentInputId 指向新的 continuation 输入并被派发）；仍在排队的成员被拒"
+  - "归属：非主管会话委派被拒（FORBIDDEN）"
+  - "控制：pause→paused 且保留 currentTaskId；旧版本号 resume 被拒；新版本号 resume 回到 active 且保持绑定；cancel→cancelled 并释放绑定；prepare_candidate 冻结候选版本"
+  - "端到端（真实 Pi 循环）：主管建 Task → 委派 developer → 成员在自己的会话真实跑完 → 聚合为 completed，成员属于 develop 阶段且 expectedKind=implementation"
+not_covered:
+  - area: "聚合的 resultIds/interactionIds 与成员 waiting_user 状态"
+    reason: "独立报告属 P3-e、原生交互属 P4"
+    disposition: pending
+  - area: "task.adopt/reconcile（接续与恢复核实）"
+    reason: "属 P5"
+    disposition: pending
+  - area: "真实模型下主管按步骤组织多角色（设计→开发→审核→测试→结算）的完整流程"
+    reason: "属 I4/P6 场景验证"
+    disposition: pending
+result: passed
+```
+
 ## 切片 C · Task 核心工具（本次）
 
 ```yaml

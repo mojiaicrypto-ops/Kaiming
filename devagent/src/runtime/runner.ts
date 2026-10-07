@@ -13,7 +13,7 @@
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { type SessionEntry } from '@earendil-works/pi-coding-agent';
-import { Store, StoreError, type InputRow } from '../store/store.ts';
+import { Store, StoreError, type InputRow, type TaskRow } from '../store/store.ts';
 import { redactEffectiveConfig, type EffectiveConfig } from './config.ts';
 import { digestJson } from './hash.ts';
 import {
@@ -26,6 +26,12 @@ import { INPUT_MARKER_CUSTOM_TYPE, HistoryUnavailableError, type PiRuntimeFactor
 import { SessionRegistry, type LogicalSessionSpec } from './registry.ts';
 import { toolSetFor } from './tool-sets.ts';
 import { asToolDefinitions, createChiefTaskTools, createTaskGetTool, type TaskToolContext } from '../tools/task-tools.ts';
+import {
+  createTaskSessionsTool,
+  type DelegationReturn,
+  type DelegationToolContext,
+  type MemberState,
+} from '../tools/delegation-tools.ts';
 
 export interface InputCheckpoint {
   readonly piFile: string;
@@ -41,6 +47,7 @@ export type RunOutcome =
   | { readonly kind: 'idle' }
   | { readonly kind: 'busy'; readonly inputId: string }
   | { readonly kind: 'blocked'; readonly inputId: string; readonly code: 'RECOVERY_REQUIRED' }
+  | { readonly kind: 'controlled'; readonly inputId: string; readonly code: 'TASK_CONTROLLED' }
   | {
       readonly kind: 'blocked_config';
       readonly code: 'MODEL_UNAVAILABLE';
@@ -148,6 +155,10 @@ export class InputRunner {
     if (claim.kind === 'blocked') {
       return { kind: 'blocked', inputId: claim.inputId, code: claim.code };
     }
+    if (claim.kind === 'controlled') {
+      // The owning Task is paused or cancelled: its work waits for an explicit resume.
+      return { kind: 'controlled', inputId: claim.inputId, code: claim.code };
+    }
     const input = claim.input;
 
     // A stop recorded before the run starts is honoured without delivering anything.
@@ -185,7 +196,8 @@ export class InputRunner {
     try {
       const binding = this.options.store.getSessionBinding(sessionId);
       const extras = this.options.sessionExtras?.(sessionId);
-      const taskType = this.options.taskTypeOf?.(sessionId);
+      // A professional session inherits its Task's type; an injected hook (tests) wins.
+      const taskType = this.options.taskTypeOf?.(sessionId) ?? this.options.store.getTaskForSession(sessionId)?.type;
       const toolSet = toolSetFor(session.roleId, taskType);
       // Host-owned domain tools: the chief organizes Tasks, a specialist may only read its own. The
       // context is resolved per tool call, because this Pi instance is reused across inputs.
@@ -202,12 +214,24 @@ const serverWorkDir = join(config.agentDir, 'work');
           roleId: session.roleId,
           inputId: live?.inputId ?? input.inputId,
           serverWorkDir: live?.serverWorkDir ?? serverWorkDir,
+          controlTask: (control) => this.controlTask(control),
           ...(currentTaskId != null ? { currentTaskId } : {}),
         };
       };
       const domainTools = asToolDefinitions(
         session.roleId === 'chief'
-          ? createChiefTaskTools(contextOf)
+          ? [
+              createTaskSessionsTool((): DelegationToolContext => ({
+                ...contextOf(),
+                host: {
+                  dispatch: async (memberSessionId: string) => {
+                    await this.runNext(memberSessionId);
+                  },
+                  settleStep: (taskId: string, timeoutMs: number) => this.settleStep(taskId, timeoutMs),
+                },
+              })),
+              ...createChiefTaskTools(contextOf),
+            ]
           : [createTaskGetTool(contextOf)],
       );
       const hostTools = [...domainTools, ...(extras?.customTools ?? [])];
@@ -362,6 +386,47 @@ const serverWorkDir = join(config.agentDir, 'work');
   }
 
   /**
+   * Control a Task end to end: record the intent, actually stop the Task's own work (queued inputs are
+   * marked, live runs are aborted and awaited), then write the final controlled status and release the
+   * chief's slot. `resume` only records the intent.
+   */
+  async controlTask(params: {
+    taskId: string;
+    expectedRevision: number;
+    command: 'pause' | 'resume' | 'cancel';
+  }): Promise<TaskRow> {
+    const intent = this.options.store.controlTask(params);
+    if (params.command === 'resume') {
+      return intent;
+    }
+    if (intent.status === 'paused' || intent.status === 'cancelled') {
+      // Nothing was unfinished, so the intent is already final.
+      return intent;
+    }
+    for (const member of this.options.store.listTaskSessions(params.taskId)) {
+      const input = member.currentInputId === null ? undefined : this.options.store.getInput(member.currentInputId);
+      if (input === undefined) {
+        continue;
+      }
+      // Pause keeps queued work for a later resume; cancel stops what never started. Live work is
+      // always stopped, so nothing keeps writing while the Task is not running.
+      const stop = input.status === 'processing' || (params.command === 'cancel' && input.status === 'queued');
+      if (!stop) {
+        continue;
+      }
+      await this.requestStop(member.sessionId, {
+        inputId: input.inputId,
+        requestKey: `control:${params.command}:${input.inputId}`,
+        reason: `the Task was asked to ${params.command}`,
+      });
+    }
+    return this.options.store.finalizeControl({
+      taskId: params.taskId,
+      status: params.command === 'pause' ? 'paused' : 'cancelled',
+    });
+  }
+
+  /**
    * Record a stop request and, when the session has a live Pi instance, actually stop it and wait
    * for idleness before reporting the intent as handled.
    */
@@ -412,6 +477,65 @@ const serverWorkDir = join(config.agentDir, 'work');
   }
 
   /** Pre-claim directory check (S3: 目录可用). */
+  /**
+   * Wait for the Task's current step: poll the members' real input states (the store is the truth, not
+   * an in-memory promise), return a snapshot on timeout, and never cancel or rebuild member work.
+   */
+  private async settleStep(taskId: string, timeoutMs: number): Promise<DelegationReturn> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const task = this.options.store.getTask(taskId);
+      if (task === undefined) {
+        throw new StoreError('NOT_FOUND', 'Task does not exist', { taskId });
+      }
+      const members = this.options.store
+        .listTaskSessions(taskId)
+        .filter((member) => task.currentSessionIds.includes(member.sessionId));
+      const sessions = members.map((member) => this.memberState(member.currentInputId));
+      const unfinished = sessions.filter(
+        (member) =>
+          member.state === 'queued' ||
+          member.state === 'working' ||
+          member.state === 'waiting_user' ||
+          member.state === 'stopping',
+      );
+      if (unfinished.length === 0) {
+        const failing = sessions.filter((member) => member.state !== 'completed');
+        return { taskId, outcome: failing.length === 0 ? 'completed' : 'blocked', sessions };
+      }
+      if (Date.now() >= deadline) {
+        return { taskId, outcome: 'timeout', sessions };
+      }
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, 25);
+      await promise;
+    }
+  }
+
+  private memberState(inputId: string | null): MemberState {
+    const input = inputId === null ? undefined : this.options.store.getInput(inputId);
+    const state: MemberState['state'] =
+      input === undefined
+        ? 'stopped'
+        : input.status === 'processing'
+          ? 'working'
+          : input.status;
+    return {
+      sessionId: this.memberSessionOf(inputId),
+      inputId: inputId ?? '',
+      state,
+      resultIds: [],
+      interactionIds: [],
+      ...(input?.errorCode != null
+        ? { error: { code: input.errorCode, message: input.errorMessage ?? '' } }
+        : {}),
+    };
+  }
+
+  private memberSessionOf(inputId: string | null): string {
+    return inputId === null ? '' : (this.options.store.getInput(inputId)?.sessionId ?? '');
+  }
+
   private checkProject(cwd: string): { ok: true } | { ok: false; detail: string } {
     try {
       if (!statSync(cwd).isDirectory()) {
