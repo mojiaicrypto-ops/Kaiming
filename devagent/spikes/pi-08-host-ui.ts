@@ -22,7 +22,7 @@ import {
   createHostUi,
   type ScriptedAnswer,
 } from './harness/host-ui.ts';
-import { createQuestionTool } from './harness/question-tool.ts';
+import { createQuestionTool } from '../src/tools/question-tool.ts';
 import { createChecker, createStubEnv, openSession, startStubModelServer } from './harness/pi-env.ts';
 
 const checker = createChecker();

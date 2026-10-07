@@ -880,6 +880,125 @@ describe('input runner', () => {
     expect(active).not.toContain('bash');
   });
 
+  it('gives the chief session the four core Task tools', async () => {
+    const h = await harness({ replies: [{ kind: 'text', text: 'ok' }] });
+    await h.runner.runNext('s-1');
+
+    const active = h.registry.get('s-1')?.session.getActiveToolNames() ?? [];
+
+    expect(active).toEqual(
+      expect.arrayContaining(['createTask', 'updateTask', 'endTask', 'task', 'read']),
+    );
+    expect(active).not.toContain('write');
+  });
+
+  it('creates a Task through the real tool loop and persists its plan', async () => {
+    const args = JSON.stringify({
+      type: 'write',
+      goal: 'add password reset',
+      scope: 'account module',
+      acceptanceRefs: ['AC-1'],
+      basisRefs: ['req-1'],
+      planMarkdown: '# Plan\n1. implement\n2. review\n',
+      authorizationRef: 'm-001',
+      requiresTest: true,
+    });
+    const h = await harness({
+      replies: [
+        { kind: 'tool_calls', calls: [{ name: 'createTask', arguments: args }] },
+        { kind: 'text', text: 'task created' },
+      ],
+    });
+
+    const outcome = await h.runner.runNext('s-1');
+
+    expect(outcome.kind).toBe('completed');
+    const tasks = h.store.listTasks('p-1');
+    expect(tasks).toHaveLength(1);
+    const task = tasks[0];
+    expect(task).toMatchObject({ type: 'write', requiresTest: true, phase: 'plan', status: 'active' });
+    expect(task?.planRef?.path).toContain(join('.dev', 'work'));
+    expect(existsSync(task?.planRef?.path ?? '')).toBe(true);
+    expect(readFileSync(task?.planRef?.path ?? '', 'utf8')).toContain('implement');
+    // The chief's slot is taken while the Task is open.
+    expect(h.store.getSession('s-1')?.currentTaskId).toBe(task?.id);
+  });
+
+  it('surfaces a refused createTask as an error result instead of a Task', async () => {
+    const args = JSON.stringify({
+      type: 'write',
+      goal: 'no tests declared',
+      scope: 'x',
+      planMarkdown: '# Plan\n',
+      authorizationRef: 'm-001',
+    });
+    const h = await harness({
+      replies: [
+        { kind: 'tool_calls', calls: [{ name: 'createTask', arguments: args }] },
+        { kind: 'text', text: 'refused' },
+      ],
+    });
+
+    const outcome = await h.runner.runNext('s-1');
+
+    expect(outcome.kind).toBe('completed');
+    expect(h.store.listTasks('p-1')).toHaveLength(0);
+    expect(h.store.getTask('t-1')).toBeUndefined();
+  });
+
+  it('resolves the current input and Task per run, not per session instance', async () => {
+    const h = await harness({
+      replies: [
+        {
+          kind: 'tool_calls',
+          calls: [
+            {
+              name: 'createTask',
+              arguments: JSON.stringify({
+                type: 'read',
+                goal: 'investigate',
+                scope: 'x',
+                planMarkdown: '# plan\n',
+                authorizationRef: 'm-001',
+              }),
+            },
+          ],
+        },
+        { kind: 'text', text: 'created' },
+        { kind: 'tool_calls', calls: [{ name: 'task', arguments: '{}' }] },
+        { kind: 'text', text: 'read back' },
+      ],
+    });
+    const toolTexts: string[] = [];
+    await h.runner.runNext('s-1');
+    const task = h.store.listTasks('p-1')[0];
+    expect(task?.sourceInputId).toBe('i-1');
+    h.registry.get('s-1')?.session.subscribe((event) => {
+      if (event.type === 'message_end' && event.message.role === 'toolResult') {
+        toolTexts.push(
+          event.message.content.map((part) => (part.type === 'text' ? part.text : '')).join(''),
+        );
+      }
+    });
+    h.store.acceptInput({
+      inputId: 'i-2',
+      projectId: 'p-1',
+      sessionId: 's-1',
+      sourceKey: 'user:req-2',
+      requestKey: 'req-2',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: 'what is my task?' }] },
+    });
+
+    const second = await h.runner.runNext('s-1');
+
+    expect(second.kind).toBe('completed');
+    // task.get without an id must find the Task created in this session (the instance is reused).
+    expect(toolTexts.join(' ')).toContain(task?.id ?? 'missing');
+    expect(toolTexts.join(' ')).not.toContain('has no current Task');
+  });
+
   it('keeps the input queued when the model is unavailable, without falling back', async () => {
     const h = await harness({
       replies: [{ kind: 'text', text: 'ok' }],

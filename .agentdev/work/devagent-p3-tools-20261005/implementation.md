@@ -43,7 +43,8 @@ review_round_1:
   - (non-blocking) effectiveConfig 记录的是"请求的允许列表"而非真正激活的工具 → 改为同时记录 requestedTools 与 activeTools（activeTools 取自会话本身）
   - (non-blocking) 专业角色的 task/requirement 工具范围比 G1 宽（G1 只给 task.get、requirement.list/get）→ 已在 tool-sets.ts 注释与本节记录中显式声明为 P3-e 必须收口的要求（工具内部 op 级权限）
   - 复跑：71/71 测试；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型端到端 4/4
-  - 增量复核（同一独立会话）结果见 review.md
+  - 增量复核（同一独立会话）又发现 3 项 non-blocking：计划保护依赖模型主动给 expectedPlanVersion（已改为默认按记录版本核对，外部改写一律 VERSION_CONFLICT）；适配器丢掉了工具级 sequential（已补回）；「被拒不留痕迹」用例断言了错误的 key（已改为按被拒调用的 taskId 断言并核对工作目录只有一个任务目录）
+  - 最终复核（同一独立会话）结果见 review.md
 plan_deviation:
   - "read Task 目前整体去掉 requirement/project 工具，而不是只去掉 requirement.save：工具内部的 op 级权限属 P3-e；这样宁可少给工具也不放松写权限"
   - "RuntimeDefaults.tools 现在只是工厂在未指定 spec.tools 时的默认值；运行器始终传自己的角色集合"
@@ -51,8 +52,55 @@ risks_remaining:
   - "工具允许列表不是 OS 沙箱（契约已声明）；真实影响仍由 Agent 判断、程序核对文件与版本"
 ```
 
+## 切片 C · Task 核心工具（本次）
+
+```yaml
+slice: P3-c 四个主管核心工具 + 总体 Plan 落盘
+changed:
+  - path: devagent/src/store/store.ts
+    purpose: schema v3：tasks 与 file_saves 两张表（含「同一主管至多一个未结束 Task」「同一实施需求至多一个未结束实现 Task」两个部分唯一索引）；createTask/getTask/listTasks/updateTask（版本 CAS、提供 phase 即开始新步骤并清空当前成员）/taskCompletionGaps/endTask/registerFileSave/getFileSave；v1→v2→v3 迁移
+  - path: devagent/src/runtime/plan-store.ts（新增）
+    purpose: 总体 Plan 落盘（S6）：稳定目标 → 同目录临时文件 + rename → 读回核对 sha256 → 登记 file_saves 回执；同 requestKey 且盘上仍是记录版本时复用回执；盘上被外部改写则拒绝覆盖；read Plan 并报告文件缺失/被改动
+  - path: devagent/src/tools/task-tools.ts（新增）
+    purpose: createTask/updateTask/endTask/task(get)；参数边界校验（read 禁止 requiresTest、write 必须显式给 boolean、sourceInputId 由宿主在每次工具调用时按当前输入固定（实例可跨输入复用））；写 Task 计划落 .dev/work/<taskId>/plan.md，read Task 落服务器 work/<taskId>/plan.md；相位枚举、CAS、plan 修订（expectedPlanVersion 版本校对）
+  - path: devagent/src/tools/question-tool.ts（由 spikes/harness 移入产品代码）
+    purpose: 提问工具归属产品；spike 与真实模型检查改为引用该实现（不再有两份）
+  - path: devagent/src/runtime/runner.ts
+    purpose: 按角色注册领域工具（主管四个；专业仅 task.get）并并入允许列表；会话未建 Task 时 task.get 报「无当前 Task」
+  - path: devagent/test/task-store.test.ts（新增）
+    purpose: 任务与计划落盘单测（10 项）
+  - path: devagent/test/task-tools.test.ts（新增）
+    purpose: 工具层单测（9 项）：创建/拒绝不留痕、版本竞争不碰磁盘、归属校验、缺省 currentTaskId、计划冲突语义
+  - path: devagent/test/runtime.test.ts
+    purpose: 集成用例：主管会话激活四个核心工具；模型通过真实工具循环建 Task 并落盘（断言行 + 计划文件 + 主管槽位）；写 Task 缺 requiresTest 被拒时不产生 Task
+behavior:
+  - "实测：npm test 94/94（8 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型端到端 4/4"
+  - "createTask：read 不许 requiresTest；write 必须显式 boolean（缺失即 INVALID_ARGUMENT）；chief 槽位与需求槽位冲突分别返回 WORKSPACE_BUSY / TASK_BUSY"
+  - "updateTask：版本 CAS；提供 phase 表示开始下一步骤（当前步骤成员未清空时返回 STAGE_NOT_READY）；可同时修订 goal/scope/依据/requiresTest 与 Plan（Plan 修订支持 expectedPlanVersion 校对）"
+  - "endTask：本轮只做程序可核对的部分，缺项如实列出（缺少完成结果记录、必要独立测试等），不以模型自称完成收尾"
+  - "task.get：返回任务字段、计划正文与「文件是否仍是记录版本」，不给模型猜服务器路径"
+  - "Plan 落盘：同 requestKey + 同内容 → 复用回执不重写；内容不同 → 原子重写并核对摘要"
+plan_deviation:
+  - "endTask 现在必然返回 COMPLETION_INCOMPLETE：独立报告（agent_report）在 P3-e 才会落库；这是有意为之——宁可如实报缺项，也不假装完成"
+  - "Task 的 control（pause/resume/cancel）与 adopt 属 P3-d；当前 updateTask 只接受 active/waiting"
+  - "question 工具尚未由运行器注册（需要宿主 UI 适配器，属 P4 的接入层）；本轮只完成归属迁移"
+risks_remaining:
+  - "schema v3 新增两张表：旧库升级路径已测（v1→v3），但 tasks 表尚无删除/归档路径（Task 只完成后保留）"
+  - "工具允许列表仍不是 OS 沙箱（契约已声明）"
+review_round_1:
+  - 独立审阅判定 failed：3 项 blocking + 3 项 non-blocking
+  - (blocking) updateTask 先写计划文件、后做版本 CAS：落后的写入者会把别人的计划文件覆盖掉 → 改为「先算出版本摘要 → store 版本校验并落 planRef → 再原子写文件并核对」；失败者根本不会碰文件（新增用例：stale revision 后磁盘内容不变、revision 不变）
+  - (blocking) 领域工具在实例创建时快照 inputId/currentTaskId，而 Pi 实例会跨输入复用 → sourceInputId 记为第一个输入、task.get 缺省 id 永远报「没有当前任务」 → 改为每次工具调用时解析上下文（live inputId + 会话当前 currentTaskId）；新增「同会话第二次输入仍能按缺省 id 读到任务」用例
+  - (blocking) 工具不校验归属：任何项目的主管都能推进别的项目的 Task，专业角色能读任意 Task → 每个工具先核 projectId，chief-only 工具再核 chiefSessionId；专业 task.get 只允许读自己会话的当前 Task（新增 FORBIDDEN/NOT_FOUND 用例）
+  - (non-blocking) createTask 被拒时留下孤儿计划文件与 file_saves 回执 → 改为先建 Task 行、成功后再写文件；被拒时不会产生任何文件或回执（新增用例）
+  - (non-blocking) updateTask 可把 read Task 的 requiresTest 改成 true → store 层与 createTask 同样拒绝（新增用例）
+  - (non-blocking) 计划复用分支不核对磁盘、file_saves 回执不随新内容更新 → 复用前读盘比对：盘上既不是记录版本也不是请求版本 → VERSION_CONFLICT（不覆盖外部编辑）；回执随实际写盘内容更新（新增用例）
+  - 复跑：94/94 测试（8 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型端到端 4/4
+  - 增量复核（同一独立会话）结果见 review.md
+```
+
 ## 后续切片（计划内，未开始）
 
 ```yaml
-pending: [P3-c Task 核心工具（createTask/updateTask/endTask/task + 计划落盘）, P3-d 委派与等待（createTaskSessions + 聚合 + 超时）, P3-e 报告与需求工具（agent_report/requirement/project）]
+pending: [P3-d 委派与等待（createTaskSessions + 聚合 + 超时）, P3-e 报告与需求工具（agent_report/requirement/project）]
 ```

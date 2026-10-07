@@ -87,6 +87,56 @@ overclaims:
   - "记录未覆盖 Task 类型切换 → 已补切换用例"
 ```
 
+## 切片 C · Task 核心工具 —— Round 1（会话 P3cTaskToolsReview）
+
+```yaml
+reviewer_session: P3cTaskToolsReview   # 新独立上下文，只读
+result: failed   # 3 项 blocking + 3 项 non-blocking
+verified_ok:
+  - "G2 createTask 规则与两种槽位冲突码成立（WORKSPACE_BUSY / TASK_BUSY / INVALID_ARGUMENT / NOT_FOUND）"
+  - "schema v1→v2→v3 升级保留既有数据与不变式"
+  - "question 工具迁移为纯搬迁（文件字节相同，仅两个引用方改动）"
+findings:
+  - severity: blocking
+    evidence: "updateTask 先写计划文件再走版本 CAS：落后的写入者会覆盖别人的计划文件，记录 planRef 却仍是旧摘要"
+    remediation: "先算版本摘要 → store 校验并落 planRef → 再原子写文件；失败者不碰文件"
+    status: fixed
+  - severity: blocking
+    evidence: "领域工具在实例创建时快照 inputId/currentTaskId，而 Pi 实例跨输入复用 → sourceInputId 记错、task.get 缺省 id 永远失败"
+    remediation: "工具改为每次调用时解析实时上下文"
+    status: fixed
+  - severity: blocking
+    evidence: "工具不校验归属：跨项目主管可推进任意 Task，专业角色可读任意 Task"
+    remediation: "每个工具核 projectId；chief-only 再核 chiefSessionId；专业 task.get 限自身当前 Task"
+    status: fixed
+  - severity: non-blocking
+    evidence: "createTask 被拒时留下孤儿计划文件与 saved 回执"
+    remediation: "先建 Task 行，成功后再写文件"
+    status: fixed
+  - severity: non-blocking
+    evidence: "updateTask 可把 read Task 的 requiresTest 翻成 true"
+    remediation: "store 层与 createTask 同样拒绝"
+    status: fixed
+  - severity: non-blocking
+    evidence: "计划复用分支不核对磁盘；file_saves 回执不随新内容更新"
+    remediation: "复用前读盘比对；外部改写 → VERSION_CONFLICT 不覆盖；回执随实际写盘内容更新"
+    status: fixed
+```
+
+## 切片 C · 增量复核（会话 P3cTaskToolsReview，两轮）
+
+```yaml
+reviewer_session: P3cTaskToolsReview   # 同一独立上下文
+result: passed
+round_1_delta:
+  - "六项修复全部核实（含探针：stale revision 后磁盘不变、跨输入仍能按缺省 id 读到任务、FORBIDDEN/NOT_FOUND、被拒不留痕）"
+  - "新增 3 项 non-blocking：计划保护依赖模型主动给 expectedPlanVersion（已改为默认按记录版本核对）；适配器丢掉工具级 sequential（已补回）；「被拒不留痕」断言了错误的 key（已改为按被拒调用自身 id 断言并核对工作目录）"
+round_2_delta:
+  - "三项修复核实通过：外部改写计划在未提供 expectedPlanVersion 时也报 VERSION_CONFLICT、文件不动；sequential 已到达运行时（session.getToolDefinition/getActiveToolNames 观测）"
+  - "无新发现；残留仅为记录记账（已在本文件与 implementation.md 修正）"
+  - "未验证项（已知待办）：STAGE_NOT_READY 守卫在 P3-d 填充当前步骤成员前不可达，测试记录已披露"
+```
+
 ## 切片 B —— 增量复核（会话 P3bToolsReview）
 
 ```yaml

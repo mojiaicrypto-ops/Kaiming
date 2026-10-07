@@ -13,7 +13,7 @@ import { type AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 import { createHostUi } from '../spikes/harness/host-ui.ts';
 import { loadModelConfig } from '../spikes/harness/model-config.ts';
 import { createStubEnv, openSession } from '../spikes/harness/pi-env.ts';
-import { createQuestionTool } from '../spikes/harness/question-tool.ts';
+import { createQuestionTool } from '../src/tools/question-tool.ts';
 
 const loaded = loadModelConfig();
 if (!loaded.ok) {

@@ -11,6 +11,7 @@
  *    model failure on a stale revision.
  */
 import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { type SessionEntry } from '@earendil-works/pi-coding-agent';
 import { Store, StoreError, type InputRow } from '../store/store.ts';
 import { redactEffectiveConfig, type EffectiveConfig } from './config.ts';
@@ -24,6 +25,7 @@ import {
 import { INPUT_MARKER_CUSTOM_TYPE, HistoryUnavailableError, type PiRuntimeFactory } from './pi-runtime.ts';
 import { SessionRegistry, type LogicalSessionSpec } from './registry.ts';
 import { toolSetFor } from './tool-sets.ts';
+import { asToolDefinitions, createChiefTaskTools, createTaskGetTool, type TaskToolContext } from '../tools/task-tools.ts';
 
 export interface InputCheckpoint {
   readonly piFile: string;
@@ -81,6 +83,8 @@ export class InputRunner {
   private readonly hostAborts = new Set<string>();
   /** Role prompt bodies, cached per prompt directory. */
   private readonly promptBodies = new Map<string, PromptBodies>();
+  /** Identity of the run currently executing per session: a Pi instance is reused across inputs. */
+  private readonly liveRuns = new Map<string, { readonly inputId: string; readonly serverWorkDir: string }>();
 
   constructor(options: RunnerOptions) {
     this.options = options;
@@ -183,15 +187,37 @@ export class InputRunner {
       const extras = this.options.sessionExtras?.(sessionId);
       const taskType = this.options.taskTypeOf?.(sessionId);
       const toolSet = toolSetFor(session.roleId, taskType);
+      // Host-owned domain tools: the chief organizes Tasks, a specialist may only read its own. The
+      // context is resolved per tool call, because this Pi instance is reused across inputs.
+const serverWorkDir = join(config.agentDir, 'work');
+      this.liveRuns.set(sessionId, { inputId: input.inputId, serverWorkDir });
+      const contextOf = (): TaskToolContext => {
+        const live = this.liveRuns.get(sessionId);
+        const currentTaskId = this.options.store.getSession(sessionId)?.currentTaskId;
+        return {
+          store: this.options.store,
+          sessionId,
+          projectId: session.projectId,
+          cwd: session.cwd,
+          roleId: session.roleId,
+          inputId: live?.inputId ?? input.inputId,
+          serverWorkDir: live?.serverWorkDir ?? serverWorkDir,
+          ...(currentTaskId != null ? { currentTaskId } : {}),
+        };
+      };
+      const domainTools = asToolDefinitions(
+        session.roleId === 'chief'
+          ? createChiefTaskTools(contextOf)
+          : [createTaskGetTool(contextOf)],
+      );
+      const hostTools = [...domainTools, ...(extras?.customTools ?? [])];
       // Host-registered tools (domain tools, probe tools) join the allowlist so they stay usable, but a
       // name this role/task combination denies must not come back in through that union.
       const denied = new Set(toolSet.denied);
       const allowlist = [
         ...new Set([
           ...toolSet.allowlist,
-          ...(extras?.customTools ?? [])
-            .map((tool) => tool.name)
-            .filter((name) => !denied.has(name)),
+          ...hostTools.map((tool) => tool.name).filter((name) => !denied.has(name)),
         ]),
       ];
       const handle = await this.options.registry.acquire(
@@ -207,6 +233,7 @@ export class InputRunner {
           ...(extras?.extensionFactories !== undefined
             ? { extensionFactories: extras.extensionFactories }
             : {}),
+          ...(hostTools.length > 0 ? { customTools: hostTools } : {}),
         },
         config,
       );
@@ -300,6 +327,7 @@ export class InputRunner {
       }
     } finally {
       this.hostAborts.delete(abortKey(sessionId, input.inputId));
+      this.liveRuns.delete(sessionId);
     }
 
     const recorded = this.finishWithCurrentRevision(input.inputId, {
