@@ -43,6 +43,8 @@ residual_notes:
   - "前缀键空间对客户端 id 单射；但 store 级原始键若恰为 rpc:<X>（acceptInput 保留原始键）会与后续 requestId=<X> 的写请求同键，结果是 REQUEST_CONFLICT（拒绝而非损坏，属可接受的失败安全）"
 risks_remaining:
   - "P4-c 的 session.input.submit 必须把客户端原始 id 交给 acceptInput（其自身回执），路由重放在 rpc: 前缀空间完成"
+  - "静态目录会跟随符号链接：web 根内的符号链接可指向根外并被送达。main.ts 目前不设置 staticDir（P4-a 未暴露该面）；R1 的 realpath 归属规则由 P4-b 的 project.files 接口落实，静态资产接入（P4-f）时按同一规则处理"
+  - "回执 pending 不跨重启对账：beginRequest 留下的 pending 行不会被 scanStartup 恢复，写若中断在 claim 与 commit 之间，重启后重试会得到 VERSION_CONFLICT 'still pending'（保守：不重做可能已生效的写）。P4-a 的处理器全部同步，故不可达；P4-c 的异步写必须在此处接上 S7 的恢复对账"
   - "会话为进程内存态：重启即需重新登录（首版可接受；持久化随 S7 恢复接线）"
   - "config.save/test、项目级角色覆盖尚未实现（P4-b）"
   - "SSE 路由与 stream.prepare 尚未实现（P4-d）；浏览器界面尚未接线（P4-f 起）"

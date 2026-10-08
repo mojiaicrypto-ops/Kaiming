@@ -55,5 +55,11 @@ not_covered:
   - area: "会话 cookie 在服务重启后的持久化"
     reason: "首版为内存会话，重启即需重新登录"
     disposition: allowed
+  - area: "静态目录的符号链接跟随"
+    reason: "web 根内符号链接可指向根外；该面在 P4-a 未启用（未配置 staticDir），真实资产接入时按 R1 realpath 规则处理"
+    disposition: pending
+  - area: "pending 回执跨重启对账"
+    reason: "P4-a 处理器全同步故不可达；P4-c 异步写接入时按 S7 恢复对账"
+    disposition: pending
 result: passed
 ```
