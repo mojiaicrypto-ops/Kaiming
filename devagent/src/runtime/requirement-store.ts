@@ -12,6 +12,8 @@ import { join } from 'node:path';
 
 export const REQUIREMENTS_DIR = join('.dev', 'requirements');
 
+const ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
 export const SCHEMA_VERSION = 2;
 
 export type RequirementKind = 'proposal' | 'implementation';
@@ -33,7 +35,6 @@ export const IMPLEMENTATION_SECTIONS = [
 
 const REQUIRED_FIELDS = ['schemaVersion', 'id', 'kind', 'title', 'status', 'createdAt', 'updatedAt'] as const;
 const ARRAY_FIELDS = ['modules', 'sourceRequirementIds', 'linkedTaskIds'] as const;
-const ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 
 export interface RequirementMetadata {
@@ -79,6 +80,10 @@ export function requirementsDirOf(cwd: string): string {
 }
 
 export function requirementPath(cwd: string, id: string): string {
+  if (!ID_PATTERN.test(id)) {
+    // The id is the file name: anything else could walk out of the requirements directory.
+    throw new Error(`the requirement id ${id} is not a valid record name`);
+  }
   return join(requirementsDirOf(cwd), `${id}.md`);
 }
 
@@ -422,7 +427,12 @@ export function getRequirement(
       readonly version: string;
       readonly parsed: ReturnType<typeof parseRequirement>;
     } {
-  const path = requirementPath(cwd, id);
+  let path: string;
+  try {
+    path = requirementPath(cwd, id);
+  } catch {
+    return { found: false };
+  }
   if (!existsSync(path)) {
     return { found: false };
   }

@@ -211,7 +211,6 @@ export function statusFor(response: RpcResponse): number {
     case 'UNAUTHORIZED':
       return 401;
     case 'FORBIDDEN':
-    case 'TASK_CONTROLLED':
       return 403;
     case 'NOT_FOUND':
       return 404;
@@ -219,8 +218,14 @@ export function statusFor(response: RpcResponse): number {
     case 'VERSION_CONFLICT':
     case 'WORKSPACE_BUSY':
     case 'TASK_BUSY':
+    case 'TASK_CONTROLLED':
     case 'INTERACTION_STALE':
     case 'STREAM_RESYNC_REQUIRED':
+    case 'HISTORY_UNAVAILABLE':
+    case 'PI_INPUT_UNCONFIRMED':
+    case 'REPORT_MISSING':
+    case 'REPORT_STALE':
+    case 'COMPLETION_INCOMPLETE':
       return 409;
     case 'STORAGE_UNAVAILABLE':
     case 'EFFECT_UNCONFIRMED':

@@ -11,7 +11,7 @@ runs:
   - command: cd devagent && npm test
     result: passed
     exit_code: 0
-    evidence: "14 个测试文件、166 项通过（server-read 13 项）"
+    evidence: "14 个测试文件、170 项通过（server-read 17 项）"
   - command: cd devagent && npm run check:prompts
     result: passed
     exit_code: 0
@@ -31,6 +31,7 @@ key_evidence:
   - "需求：合法记录与 req-broken.md invalidFiles 同时返回；损坏记录 get 返回 issues 而非抛错"
   - "文件：expectedVersion 不符 → VERSION_CONFLICT；二进制返回 binary=true/text=null；../ 越界与指向项目外的符号链接 → FORBIDDEN"
   - "恢复巡检：列出 interrupted 输入与其错误码、绑定信息（fileExists）、相关 Task 结果"
+  - "审阅修复验证：越界需求 id → INVALID_ARGUMENT 且不泄露；task.list 连续两页不同；清空绑定历史 → HISTORY_UNAVAILABLE；悬空/外部符号链接在列表中是 symlink 且无 size；requirement.list/files.list 未知游标 → INVALID_ARGUMENT"
   - "重绑：无决定引用 → FORBIDDEN；有在飞工作 → WORKSPACE_BUSY 且 gaps 指名 t-1 与 i-broken；干净项目重绑成功且会话 cwd 跟随新目录"
 not_covered:
   - area: "SSE 与快照（session.stream.prepare / stream）"

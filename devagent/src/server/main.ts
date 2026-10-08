@@ -13,6 +13,7 @@ import { AuthService } from './auth.ts';
 import { RpcRouter } from './rpc.ts';
 import { createWorkbenchServer } from './http.ts';
 import { registerCoreMethods } from './methods.ts';
+import { registerReadMethods } from './read-methods.ts';
 import type { RuntimeDefaults } from '../runtime/config.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -44,6 +45,7 @@ export function startWorkbench(options: StartOptions): Promise<{
   const auth = new AuthService({ accessPassword: options.accessPassword });
   const router = new RpcRouter();
   registerCoreMethods(router, { store, server });
+  registerReadMethods(router, { store });
   const workbench = createWorkbenchServer({
     store,
     auth,

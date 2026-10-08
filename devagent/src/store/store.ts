@@ -591,6 +591,70 @@ export class Store {
     });
   }
 
+  /** realpath is the identity of a project (R5): the same directory is the same project. */
+  getProjectByRealPath(realPath: string): ProjectRow | undefined {
+    const row = this.db.prepare('SELECT * FROM projects WHERE realPath = ?').get(realPath) as
+      | Record<string, unknown>
+      | undefined;
+    return row === undefined ? undefined : toProjectRow(row);
+  }
+
+  /**
+   * Why a project cannot be rebound right now: moving a directory while its sessions still hold
+   * unfinished work would silently point them at the wrong place (R1/R5).
+   */
+  projectRebindGaps(projectId: string): string[] {
+    const gaps: string[] = [];
+    for (const session of this.listSessions().filter((entry) => entry.projectId === projectId)) {
+      for (const input of this.listInputs(session.id)) {
+        if (input.status === 'queued' || input.status === 'processing') {
+          gaps.push(`session ${session.id} still has ${input.status} input ${input.inputId}`);
+        }
+        if (input.status === 'interrupted') {
+          gaps.push(`session ${session.id} has an unverified interrupted input ${input.inputId}`);
+        }
+      }
+    }
+    for (const task of this.listTasks(projectId)) {
+      if (task.status !== 'completed' && task.status !== 'cancelled') {
+        gaps.push(`Task ${task.id} is ${task.status}`);
+      }
+    }
+    return gaps;
+  }
+
+  /** Bind an existing project id to another real directory, checked against the project revision. */
+  rebindProject(params: { projectId: string; expectedRevision: number; realPath: string; authorizationRefs: readonly string[] }): ProjectRow {
+    return this.transaction(() => {
+      const project = this.getProject(params.projectId);
+      if (project === undefined) {
+        throw new StoreError('NOT_FOUND', 'project does not exist', { projectId: params.projectId });
+      }
+      const occupant = this.getProjectByRealPath(params.realPath);
+      if (occupant !== undefined && occupant.id !== params.projectId) {
+        throw new StoreError('VERSION_CONFLICT', 'that directory already belongs to another project', {
+          projectId: occupant.id,
+        });
+      }
+      const outcome = this.db
+        .prepare('UPDATE projects SET realPath = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND revision = ?')
+        .run(params.realPath, this.clock(), params.projectId, params.expectedRevision);
+      if (outcome.changes !== 1) {
+        throw new StoreError('VERSION_CONFLICT', 'project revision does not match', {
+          projectId: params.projectId,
+          actual: project.revision,
+        });
+      }
+      this.db
+        .prepare(
+          `UPDATE sessions SET cwd = (SELECT realPath FROM projects WHERE id = ?), revision = revision + 1, updatedAt = ?
+             WHERE projectId = ?`,
+        )
+        .run(params.projectId, this.clock(), params.projectId);
+      return this.getProject(params.projectId) as ProjectRow;
+    });
+  }
+
   createSession(params: CreateSessionParams): void {
     const timestamp = this.clock();
     this.db
