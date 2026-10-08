@@ -69,13 +69,43 @@
   verify: 每场景留证据（截图+网络记录+状态对照），失败记失败，未执行记未执行
 ```
 
-## 5. 明确不做
+## 5. 客户端基础架构（已确认：手写区域更新 + store 订阅；`devagent/web/`；Playwright）
+
+**与 mock 的对位**（mock 三段式）：CSS `webui/index.html:9-1269` → `web/styles/*`（选择器与令牌逐行照搬）；DOM `:1270-1746` → `web/index.html`（同骨架、同类名，视图容器由 JS 填充）；script `:1747-2976` → 只借**交互行为与 i18n 键名/中英文案**（`messages` 字典约 120 键），其假数据层整体丢弃。
+
+```text
+devagent/web/
+  index.html            外壳（topbar / content-shell / workspace / runtime / statusbar + 视图容器 + login）
+  styles/               tokens.css（令牌 + --font-scale）、components.css、views.css（含 1120/840/700/520 断点）
+  vendor/               固定版本 ESM（markdown-it、高亮、anser、virtual-core；P4-h0 量测后锁定）
+  core/
+    rpc.js              POST /api/v1/rpc 信封；requestId 首次发送前生成并复用；R6 错误码 → 统一异常
+    stream.js           stream.prepare → 快照+boundary → SSE(seq>boundary)；溢出/代次 → resync 重新 prepare
+    store.js            实体缓存（project/session/input/task/result/requirement/interaction）+ invalidate 重取；subscribe(entity, cb)
+    session-view.js     每会话实时视图状态：消息序列、流式块、pending 交互、activity
+    router.js / i18n.js / dom.js
+  components/
+    shell.js（topbar 项目切换/⌘K/Live/语言、sidebar 三组导航与徽标、statusbar）
+    message.js board-card.js data-list.js stage-strip.js tree-line.js log-line.js dialog.js toast.js live-dock.js
+    stream/markdown-stream.js（半截 fence/表格暂存 + 完成重排）thinking-block.js tool-card.js bash-block.js
+  views/                chief requirements runs inbox files docs agents settings + login
+```
+
+**更新规则（无框架的前提）**：区域分三类，各用一种方式——**只追加**（transcript、log；append + 超限窗口化/虚拟化）、**按 invalidate 整体替换**（列表、看板、卡片、状态栏）、**纯本地**（对话框、折叠、滚动跟随、选中；不进 URL）。服务端是唯一真值，**不做乐观改写**；SSE 只提供增量与提示，业务变化一律按实体重读（M4 的 invalidate）。
+
+**从 mock 取 / 换 / 删**：取——选择器与令牌、DOM 层级与类名、i18n 键名与文案、交互模式（视图切换/语言/Live Dock 折叠/四断点/Toast/dialog 三段）；换——假数据（providers/roleOverrides/runs 数组）→ 真实 RPC，`renderActiveView()` 静态渲染 → 视图 `mount/update`；删（进差距表）——`.runtime` 命令行 prompt 行、看板 priority 等无数据支撑装饰。
+
+**交付与开发环**：`index.html` + ES modules 由同一 Node 服务同源托管（R1 同源要求），无构建步骤；第三方库仅用于 markdown/高亮/ANSI/虚拟化，固定版本放 `vendor/` + import map。
+
+**测试分层**：纯逻辑（rpc 信封、stream 边界与 resync、markdown 暂存状态机、i18n、store 归约）用 vitest 无浏览器运行；渲染与点击用 Playwright + 真实 Chromium（P4-i），截图与网络记录作为证据。服务器侧协议用例（P4-a～e）必须能由非浏览器客户端（fetch 脚本）验证，浏览器只额外证明渲染与交互。
+
+## 6. 明确不做
 
 - 不把 Pi 改成 RPC 子进程（R4）；不暴露任意 Pi 工具名/cwd；不在前端建第二套协议或状态机。
 - 不做浅色主题、不引字体文件、不做移动端专项（照 mock 的四个断点）。
 - 不做多用户/团队权限；不做发布与定时任务。
 
-## 6. 风险
+## 7. 风险
 
 - 体量：8 视图 + 实时协议 + 交互桥是本轮最大交付；按切片独立审阅，避免一次性大改。
 - 字号：mock 用 7–11px 展示密度；DESIGN.md 要求原样保留并用 `--font-scale` 旋钮调节。需在真实浏览器里确认可读性与无障碍（可读性例外必须登记差距表）。
