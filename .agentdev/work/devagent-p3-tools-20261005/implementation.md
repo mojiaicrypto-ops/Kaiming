@@ -156,8 +156,60 @@ risks_remaining:
   - "冻结候选只登记调用方给出的文件摘要，运行器尚未自动计算（P5 结算时核对实际版本）"
 ```
 
+## 切片 E1 · agent_report（本次）
+
+```yaml
+slice: P3-e-1 agent_report（kind/summary/body|reportRef/checks/verdict/supersede）+ 结果落盘与完成核对
+changed:
+  - path: devagent/src/store/store.ts
+    purpose: schema v5（results 表 + 索引，v1→v5 迁移链补齐）；recordResult（不可变、单事务、校验归属/来源输入/种类/评审候选）、getResult/listTaskResults/resultsForInputs/supersededBy；taskCompletionGaps 改为按成员输入判定“专业工作已停稳/未核实中断”，并核对完成报告存在/种类/未被替代与 requiresTest 的同候选 passed Test
+  - path: devagent/src/runtime/report-store.ts（新增）
+    purpose: 报告正文目标与落盘（read Task → Server work/<taskId>/<sessionId>/<resultId>.md；write Task → 项目 .dev/work/<taskId>/<sessionId>/<resultId>.md）+ 原子写与读回核对
+  - path: devagent/src/tools/report-tools.ts（新增）
+    purpose: agent_report：身份/成员/运行中输入/期待种类核对；body 落盘或 reportRef 核对后仅登记；checks 严格解析；重试复用同一 resultId（同内容不产生重复报告）
+  - path: devagent/src/tools/tool-kit.ts（新增）
+    purpose: 抽出三个工具模块共用的 ToolOutcome/ok/fail/asRecord/readString/readStringArray/messageOf，去掉 task-tools 与 delegation-tools 的重复副本
+  - path: devagent/src/tools/task-tools.ts
+    purpose: task.get 返回正式结果（含 supersededBy 与 bodyRef）；控制/候选 op 仅主管
+  - path: devagent/src/runtime/runner.ts
+    purpose: 专业会话注册 agent_report；聚合的 resultIds 填入成员本输入真实产出的报告
+  - path: devagent/test/report.test.ts（新增，12 项）
+    purpose: 报告落盘位置、种类/verdict/候选校验、supersede 历史不覆写、reportRef 仅登记、仅运行中输入可报告、requiresTest 需同候选 passed Test、重试去重、read Task 以调查报告完成
+  - path: devagent/test/runtime.test.ts
+    purpose: 端到端：主管建 read Task → 委派 investigator → 成员经真实 Pi 循环提交 agent_report → 聚合带 resultIds → endTask 用该报告完成
+behavior:
+  - "实测：npm test 123/123（10 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
+  - "报告正文先落盘并读回核对，再写 result 行；重试同一报告复用 resultId，不产生第二份历史"
+  - "报告不可覆写：修订是新 resultId 并指明 supersedesResultId，旧正文保留，被替代的报告不再满足完成条件"
+  - "完成核对不再看“当前步骤列表是否为空”，而是逐成员核对真实输入状态（仍要求全部专业工作停稳、无未核实中断）"
+review_rounds:
+  - round: 1
+    verdict: passed
+    findings: 1 non-blocking
+    fixed:
+      - finding: "resultId 只按 kind/summary/body 派生：不同 reportRef 正文会撞同一个 id（第二份拿不到登记），summary+body 相同但 verdict/checks 不同的报告会被当成旧结果返回，新判定静默丢失"
+        fix: "resultId 改为整份报告身份（kind/summary/body 或 reportRef 三元组/verdict/candidateId/checks/basisRefs/supersedes/settlement）的摘要；同内容重试仍复用同一 id"
+        evidence: "report.test.ts：两条不同 reportRef 正文得到两条结果；同 summary/body 但 passed/blocked 得到两条不同结果；settlement 清单变化也是两条"
+      - finding: "记录注释称同事务保存 result 与回执，但只 INSERT results"
+        fix: "改为如实描述（正文由调用方先落盘核对，本事务只登记结果行并返回回执）"
+  - round: 2
+    verdict: passed
+    findings: 1 non-blocking
+    fixed:
+      - finding: "报告身份漏了 settlement 载荷：正文与摘要相同但清单变化的结算报告会被当成旧结果返回"
+        fix: "identity 增加 settlement 摘要；工具注释改为“每一个报告字段”"
+        evidence: "report.test.ts：同正文不同 settlement 清单得到两条结果"
+  residual_addressed:
+    - "补齐 G3 的“必要独立 Review”：write Task 完成必须有一份未失效、与冻结候选一致、verdict=passed 的 review，且 requiresTest 的 Test 不得早于该 Review（D-04 每个实施流程都含独立检查）"
+    - "残留说明：请求回执表（file_saves/request_receipts）未用于报告正文，报告落盘按 report-store 自身的“先文件后库”顺序（已在本节与工具注释写明）"
+risks_remaining:
+  - "settlement 清单只按实际调用保存，未做 S6 清单字段核对（属 P5 结算）"
+  - "交互（waiting_user）与 question 工具属 P4；恢复核实报告已可用但恢复服务（task.reconcile）属 P5"
+  - "报告正文未走 file_saves 回执/重试阶梯（S6 的该阶梯用于 Plan 等宿主规范保存）；重试幂等由整份报告身份派生的 resultId 保证"
+```
+
 ## 后续切片（计划内，未开始）
 
 ```yaml
-pending: [P3-e 报告与需求工具（agent_report/requirement/project）]
+pending: [P3-e-2 requirement（list/get/save）, P3-e-3 project.initialize]
 ```

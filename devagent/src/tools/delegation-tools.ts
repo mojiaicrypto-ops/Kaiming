@@ -9,6 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import { StoreError, type Store, type TaskPhase, type TaskRow, type TaskSessionRow } from '../store/store.ts';
 import type { DomainTool, TaskToolContext } from './task-tools.ts';
+import { asRecord, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
 
 export interface MemberState {
   readonly sessionId: string;
@@ -153,7 +154,7 @@ export function createTaskSessionsTool(contextOf: DelegationContextResolver): Do
         try {
           const created = context.store.createTaskSessions({ taskId, members });
           const returned = await runAndWait(context, taskId, created, waitMs);
-          return ok(describe(returned), { ...returned, members: created.map(summaryOf) });
+          return ok(describe(returned), { ...returned, members: created.map(summaryOf) } as Record<string, unknown>);
         } catch (error) {
           const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
           return fail(code, messageOf(error), { taskId });
@@ -204,7 +205,7 @@ export function createTaskSessionsTool(contextOf: DelegationContextResolver): Do
           });
           const member2 = context.store.getTaskSession(sessionId) as TaskSessionRow;
           const returned = await runAndWait(context, taskId, [member2], waitMs);
-          return ok(describe(returned), { ...returned, members: [summaryOf(member2)] });
+          return ok(describe(returned), { ...returned, members: [summaryOf(member2)] } as Record<string, unknown>);
         } catch (error) {
           const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
           return fail(code, messageOf(error), { taskId });
@@ -213,7 +214,7 @@ export function createTaskSessionsTool(contextOf: DelegationContextResolver): Do
 
       // wait: observe only, never add work.
       const returned = await context.host.settleStep(taskId, waitMs);
-      return ok(describe(returned), returned);
+      return ok(describe(returned), returned as unknown as Record<string, unknown>);
     },
   };
 }
@@ -312,41 +313,3 @@ function describe(returned: DelegationReturn): string {
   return `${returned.taskId} ${returned.outcome} (${parts.join(', ')})`;
 }
 
-interface ToolOutcome {
-  readonly content: Array<{ readonly type: 'text'; readonly text: string }>;
-  readonly details: Record<string, unknown>;
-  readonly isError: boolean;
-}
-
-function ok(text: string, details: object): ToolOutcome {
-  return { content: [{ type: 'text', text }], details: { ...details }, isError: false };
-}
-
-function fail(code: string, text: string, details: object = {}): ToolOutcome {
-  return {
-    content: [{ type: 'text', text: `Error: ${text}` }],
-    details: { code, ...details },
-    isError: true,
-  };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined;
-}
-
-function readString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === 'string' ? value : undefined;
-}
-
-function readStringArray(record: Record<string, unknown>, key: string): string[] | undefined {
-  const value = record[key];
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  return value.every((item) => typeof item === 'string') ? (value as string[]) : undefined;
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}

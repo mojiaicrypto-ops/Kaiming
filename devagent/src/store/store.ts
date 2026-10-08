@@ -156,6 +156,42 @@ export interface TaskSessionRow {
   readonly currentInputId: string | null;
 }
 
+export type ResultKind =
+  | 'design'
+  | 'implementation'
+  | 'review'
+  | 'test'
+  | 'settlement'
+  | 'investigation'
+  | 'recovery';
+
+export interface ResultCheck {
+  readonly name: string;
+  readonly status: 'passed' | 'failed' | 'blocked' | 'not_run';
+  readonly command?: string;
+  readonly exitCode?: number;
+  readonly reason?: string;
+  readonly evidenceRefs?: readonly string[];
+}
+
+export interface ResultRow {
+  readonly resultId: string;
+  readonly taskId: string;
+  readonly sessionId: string;
+  readonly inputId: string;
+  readonly roleId: string;
+  readonly kind: ResultKind;
+  readonly summary: string;
+  readonly verdict: 'passed' | 'failed' | 'blocked' | null;
+  readonly candidateId: string | null;
+  readonly bodyRef: ArtifactRef;
+  readonly basisRefs: readonly string[];
+  readonly checks: readonly ResultCheck[];
+  readonly supersedesResultId: string | null;
+  readonly settlement: unknown;
+  readonly createdAt: string;
+}
+
 export interface CreateTaskSessionParams {
   readonly sessionId: string;
   readonly taskId: string;
@@ -259,7 +295,33 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
+
+/**
+ * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
+ * A result is immutable; a revision is a new row that points at the one it supersedes.
+ */
+const V5_DDL = `
+CREATE TABLE IF NOT EXISTS results (
+  resultId TEXT PRIMARY KEY,
+  taskId TEXT NOT NULL REFERENCES tasks(id),
+  sessionId TEXT NOT NULL,
+  inputId TEXT NOT NULL,
+  roleId TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  verdict TEXT,
+  candidateId TEXT,
+  bodyRef TEXT NOT NULL,
+  basisRefs TEXT NOT NULL,
+  checks TEXT NOT NULL,
+  supersedesResultId TEXT,
+  settlement TEXT,
+  createdAt TEXT NOT NULL,
+  serverEpoch INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_results_task ON results (taskId, createdAt);
+CREATE INDEX IF NOT EXISTS idx_results_input ON results (inputId);`;
 
 /** Tables added by the v3 → v4 migration (professional Session membership of a Task). */
 const V4_DDL = `
@@ -423,6 +485,7 @@ CREATE TABLE IF NOT EXISTS request_receipts (
 );
 ${V3_DDL}
 ${V4_DDL}
+${V5_DDL}
 `;
 
 /** Canonical JSON (sorted object keys) so the same value always digests the same way. */
@@ -1062,16 +1125,60 @@ export class Store {
   taskCompletionGaps(taskId: string, completionResultId: string): string[] {
     const gaps: string[] = [];
     const task = this.requireTask(taskId);
-    if (task.currentSessionIds.length > 0) {
-      gaps.push(`current step still has members: ${task.currentSessionIds.join(', ')}`);
+    // "Every professional work has stopped" is judged per member input, not by whether the current
+    // step still has members listed (a settled step keeps its membership for traceability).
+    for (const member of this.listTaskSessions(taskId)) {
+      for (const input of this.listInputs(member.sessionId)) {
+        if (input.status === 'queued' || input.status === 'processing') {
+          gaps.push(`member ${member.sessionId} still has unfinished work (${input.inputId})`);
+        }
+        if (input.status === 'interrupted') {
+          gaps.push(`member ${member.sessionId} has an unverified interrupted input (${input.inputId})`);
+        }
+      }
     }
     if (completionResultId.trim() === '') {
       gaps.push('no completion result was referenced');
     } else {
-      gaps.push(`completion result ${completionResultId} is not recorded (report tools arrive in P3-e)`);
+      const result = this.getResult(completionResultId);
+      if (result === undefined || result.taskId !== taskId) {
+        gaps.push(`completion result ${completionResultId} is not recorded for this Task`);
+      } else {
+        const wanted: readonly ResultKind[] = task.type === 'read' ? ['investigation', 'recovery'] : ['settlement'];
+        if (!wanted.includes(result.kind)) {
+          gaps.push(`completion result must be ${wanted.join(' or ')} for a ${task.type} Task`);
+        }
+        if (this.supersededBy(result.resultId) !== undefined) {
+          gaps.push(`completion result ${result.resultId} was superseded`);
+        }
+      }
     }
-    if (task.type === 'write' && task.requiresTest) {
-      gaps.push('no passed independent test is recorded for this candidate');
+    if (task.type === 'write') {
+      const candidateId = this.candidateIdOf(task.candidate);
+      const valid = (entry: ResultRow): boolean => this.supersededBy(entry.resultId) === undefined;
+      const reviews = this.listTaskResults(taskId).filter(
+        (entry) => entry.kind === 'review' && entry.verdict === 'passed' && entry.candidateId === candidateId,
+      );
+      const tests = this.listTaskResults(taskId).filter(
+        (entry) => entry.kind === 'test' && entry.verdict === 'passed' && entry.candidateId === candidateId,
+      );
+      if (candidateId === null) {
+        gaps.push('no candidate version was frozen for this Task');
+      } else {
+        // Every implementation flow includes an independent check (D-04), and it precedes the Test.
+        const review = reviews.filter(valid)[0];
+        if (review === undefined) {
+          gaps.push(`no passed independent review is recorded for candidate ${candidateId}`);
+        } else {
+          const test = tests.filter(valid)[0];
+          if (test !== undefined && test.createdAt < review.createdAt) {
+            gaps.push('the independent test was recorded before the independent review');
+          }
+          if (task.requiresTest && test === undefined) {
+            gaps.push(`no passed independent test is recorded for candidate ${candidateId}`);
+          }
+        }
+      }
     }
     return gaps;
   }
@@ -1105,6 +1212,167 @@ export class Store {
         .run(timestamp, task.chiefSessionId);
       return { ok: true, task: this.requireTask(params.taskId) };
     });
+  }
+
+  /**
+   * Record one immutable result row in a single transaction. The body file is written and verified by
+   * the caller first (S6), so this only stores what really exists on disk; the returned row is the
+   * receipt the caller and the waiting aggregate read.
+   */
+  recordResult(params: {
+    resultId: string;
+    taskId: string;
+    sessionId: string;
+    inputId: string;
+    roleId: string;
+    kind: ResultKind;
+    summary: string;
+    verdict?: 'passed' | 'failed' | 'blocked';
+    candidateId?: string;
+    bodyRef: ArtifactRef;
+    basisRefs: readonly string[];
+    checks: readonly ResultCheck[];
+    supersedesResultId?: string;
+    settlement?: unknown;
+  }): ResultRow {
+    return this.transaction(() => {
+      const task = this.requireTask(params.taskId);
+      const member = this.getTaskSession(params.sessionId);
+      if (member === undefined || member.taskId !== params.taskId) {
+        throw new StoreError('NOT_FOUND', 'the reporting session is not a member of this Task', {
+          taskId: params.taskId,
+          sessionId: params.sessionId,
+        });
+      }
+      const input = this.requireInput(params.inputId);
+      if (input.sessionId !== params.sessionId || input.taskId !== params.taskId) {
+        throw new StoreError('NOT_FOUND', 'the source input does not belong to this reporting member', {
+          inputId: params.inputId,
+        });
+      }
+      const allowed: readonly ResultKind[] = task.type === 'read' ? ['investigation', 'recovery'] : [
+        'design',
+        'implementation',
+        'review',
+        'test',
+        'settlement',
+      ];
+      if (!allowed.includes(params.kind)) {
+        throw new StoreError('INVALID_ARGUMENT', `a ${task.type} Task does not accept ${params.kind} reports`, {
+          taskId: params.taskId,
+          kind: params.kind,
+        });
+      }
+      if ((params.kind === 'review' || params.kind === 'test') && params.verdict === undefined) {
+        throw new StoreError('INVALID_ARGUMENT', 'a review or test report needs a verdict', {
+          kind: params.kind,
+        });
+      }
+      if (params.kind === 'review' || params.kind === 'test') {
+        const candidate = this.candidateIdOf(task.candidate);
+        if (candidate === null || params.candidateId !== candidate) {
+          // A check must name the version it checked; a report about another version is not evidence.
+          throw new StoreError('INVALID_ARGUMENT', 'the report must name the Task candidate version', {
+            expected: candidate,
+            given: params.candidateId ?? null,
+          });
+        }
+      }
+      if (params.supersedesResultId !== undefined) {
+        const superseded = this.getResult(params.supersedesResultId);
+        if (superseded === undefined || superseded.taskId !== params.taskId) {
+          throw new StoreError('NOT_FOUND', 'the superseded result is not part of this Task', {
+            supersedesResultId: params.supersedesResultId,
+          });
+        }
+      }
+      const existing = this.db
+        .prepare('SELECT taskId FROM results WHERE resultId = ?')
+        .get(params.resultId) as { taskId: string } | undefined;
+      if (existing !== undefined) {
+        throw new StoreError('REQUEST_CONFLICT', 'this resultId is already recorded', {
+          resultId: params.resultId,
+          taskId: existing.taskId,
+        });
+      }
+      this.db
+        .prepare(
+          `INSERT INTO results
+             (resultId, taskId, sessionId, inputId, roleId, kind, summary, verdict, candidateId, bodyRef,
+              basisRefs, checks, supersedesResultId, settlement, createdAt, serverEpoch)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          params.resultId,
+          params.taskId,
+          params.sessionId,
+          params.inputId,
+          params.roleId,
+          params.kind,
+          params.summary,
+          params.verdict ?? null,
+          params.candidateId ?? null,
+          JSON.stringify(params.bodyRef),
+          JSON.stringify(params.basisRefs),
+          JSON.stringify(params.checks),
+          params.supersedesResultId ?? null,
+          params.settlement === undefined ? null : JSON.stringify(params.settlement),
+          this.clock(),
+          this.serverEpoch,
+        );
+      return this.requireResult(params.resultId);
+    });
+  }
+
+  getResult(resultId: string): ResultRow | undefined {
+    const row = this.db.prepare('SELECT * FROM results WHERE resultId = ?').get(resultId) as
+      | Record<string, unknown>
+      | undefined;
+    return row === undefined ? undefined : toResultRow(row);
+  }
+
+  requireResult(resultId: string): ResultRow {
+    const result = this.getResult(resultId);
+    if (result === undefined) {
+      throw new StoreError('NOT_FOUND', 'result does not exist', { resultId });
+    }
+    return result;
+  }
+
+  /** All results of a Task, oldest first, with the id of whatever superseded each one. */
+  listTaskResults(taskId: string): ResultRow[] {
+    const rows = this.db
+      .prepare('SELECT * FROM results WHERE taskId = ? ORDER BY createdAt, resultId')
+      .all(taskId) as Record<string, unknown>[];
+    return rows.map((row) => toResultRow(row));
+  }
+
+  /** Results whose source input is one of these inputs (the aggregate reports what each member produced). */
+  resultsForInputs(inputIds: readonly string[]): ResultRow[] {
+    if (inputIds.length === 0) {
+      return [];
+    }
+    const placeholders = inputIds.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare(`SELECT * FROM results WHERE inputId IN (${placeholders}) ORDER BY createdAt, resultId`)
+      .all(...inputIds) as Record<string, unknown>[];
+    return rows.map((row) => toResultRow(row));
+  }
+
+  /** The result that declared this one superseded, if any (S6: history is never overwritten). */
+  supersededBy(resultId: string): ResultRow | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM results WHERE supersedesResultId = ? ORDER BY createdAt LIMIT 1')
+      .get(resultId) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : toResultRow(row);
+  }
+
+  private candidateIdOf(candidate: unknown): string | null {
+    if (typeof candidate !== 'object' || candidate === null) {
+      return null;
+    }
+    const value = (candidate as Record<string, unknown>)['candidateId'];
+    return typeof value === 'string' ? value : null;
   }
 
   /** Register (or re-read) a host-owned file save so retries are idempotent (S6). */
@@ -1469,6 +1737,13 @@ export class Store {
     });
   }
 
+  private migrateV4ToV5(): void {
+    this.transaction(() => {
+      this.db.exec(V5_DDL);
+      this.db.exec('PRAGMA user_version = 5;');
+    });
+  }
+
   private migrate(): void {
     const { userVersion } = this.pragmas();
     if (userVersion === 0) {
@@ -1486,11 +1761,16 @@ export class Store {
       });
       this.migrateV2ToV3();
       this.migrateV3ToV4();
+      this.migrateV4ToV5();
     } else if (userVersion === 2) {
       this.migrateV2ToV3();
       this.migrateV3ToV4();
+      this.migrateV4ToV5();
     } else if (userVersion === 3) {
       this.migrateV3ToV4();
+      this.migrateV4ToV5();
+    } else if (userVersion === 4) {
+      this.migrateV4ToV5();
     } else if (userVersion !== SCHEMA_VERSION) {
       throw new StoreError('VERSION_CONFLICT', 'unsupported store schema version', {
         userVersion,
@@ -1568,6 +1848,29 @@ function parseJsonOrNull(value: unknown): unknown {
   } catch {
     return null;
   }
+}
+
+function toResultRow(row: Record<string, unknown>): ResultRow {
+  const nullable = (value: unknown): string | null => (value === null ? null : String(value));
+  const verdict = row['verdict'];
+  const checks = parseJsonOrNull(row['checks']);
+  return {
+    resultId: String(row['resultId']),
+    taskId: String(row['taskId']),
+    sessionId: String(row['sessionId']),
+    inputId: String(row['inputId']),
+    roleId: String(row['roleId']),
+    kind: String(row['kind']) as ResultKind,
+    summary: String(row['summary']),
+    verdict: verdict === 'passed' || verdict === 'failed' || verdict === 'blocked' ? verdict : null,
+    candidateId: nullable(row['candidateId']),
+    bodyRef: parseArtifactRef(row['bodyRef']) ?? { storage: 'server', path: '', sha256: '' },
+    basisRefs: parseStringList(row['basisRefs']),
+    checks: Array.isArray(checks) ? (checks as ResultCheck[]) : [],
+    supersedesResultId: nullable(row['supersedesResultId']),
+    settlement: parseJsonOrNull(row['settlement']),
+    createdAt: String(row['createdAt']),
+  };
 }
 
 function toTaskSessionRow(row: Record<string, unknown>): TaskSessionRow {

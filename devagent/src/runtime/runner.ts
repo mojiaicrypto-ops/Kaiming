@@ -26,6 +26,7 @@ import { INPUT_MARKER_CUSTOM_TYPE, HistoryUnavailableError, type PiRuntimeFactor
 import { SessionRegistry, type LogicalSessionSpec } from './registry.ts';
 import { toolSetFor } from './tool-sets.ts';
 import { asToolDefinitions, createChiefTaskTools, createTaskGetTool, type TaskToolContext } from '../tools/task-tools.ts';
+import { createReportTool, type ReportToolContext } from '../tools/report-tools.ts';
 import {
   createTaskSessionsTool,
   type DelegationReturn,
@@ -232,7 +233,18 @@ const serverWorkDir = join(config.agentDir, 'work');
               })),
               ...createChiefTaskTools(contextOf),
             ]
-          : [createTaskGetTool(contextOf)],
+          : [
+              createTaskGetTool(contextOf),
+              // Every professional member delivers its result through the same formal report.
+              createReportTool((): ReportToolContext => ({
+                store: this.options.store,
+                sessionId,
+                inputId: this.liveRuns.get(sessionId)?.inputId ?? input.inputId,
+                roleId: session.roleId,
+                cwd: session.cwd,
+                serverWorkDir: this.liveRuns.get(sessionId)?.serverWorkDir ?? serverWorkDir,
+              })),
+            ],
       );
       const hostTools = [...domainTools, ...(extras?.customTools ?? [])];
       // Host-registered tools (domain tools, probe tools) join the allowlist so they stay usable, but a
@@ -524,7 +536,9 @@ const serverWorkDir = join(config.agentDir, 'work');
       sessionId: this.memberSessionOf(inputId),
       inputId: inputId ?? '',
       state,
-      resultIds: [],
+      // What this member really delivered for the input the chief is waiting on.
+      resultIds:
+        inputId === null ? [] : this.options.store.resultsForInputs([inputId]).map((result) => result.resultId),
       interactionIds: [],
       ...(input?.errorCode != null
         ? { error: { code: input.errorCode, message: input.errorMessage ?? '' } }

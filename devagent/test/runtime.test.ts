@@ -1277,6 +1277,75 @@ describe('input runner', () => {
     expect(h.store.getSession('s-2')?.currentTaskId).toBeNull();
   }, 30_000);
 
+  it('delivers a member report through the real loop and closes a read Task with it', async () => {
+    const createArgs = JSON.stringify({
+      type: 'read',
+      goal: 'investigate the reset flow',
+      scope: 'account',
+      planMarkdown: '# read plan\n1. look\n',
+      authorizationRef: 'm-001',
+    });
+    const delegateArgs = JSON.stringify({
+      mode: 'create',
+      waitTimeoutMs: 20_000,
+      sessions: [
+        {
+          roleId: 'investigator',
+          label: 'investigate',
+          instructions: 'report what really exists',
+          expectedKind: 'investigation',
+        },
+      ],
+    });
+    const reportArgs = JSON.stringify({
+      kind: 'investigation',
+      summary: 'the reset flow exists but has no test',
+      body: '# investigation\n\nfound an untested reset path\n',
+      checks: [{ name: 'read the sources', status: 'passed' }],
+    });
+    const h = await harness({
+      replies: [
+        { kind: 'tool_calls', calls: [{ name: 'createTask', arguments: createArgs }] },
+        { kind: 'text', text: 'task created' },
+        { kind: 'tool_calls', calls: [{ name: 'createTaskSessions', arguments: delegateArgs }] },
+        { kind: 'tool_calls', calls: [{ name: 'agent_report', arguments: reportArgs }] },
+        { kind: 'text', text: 'member done' },
+        { kind: 'text', text: 'investigation recorded' },
+      ],
+    });
+    const first = await h.runner.runNext('s-1');
+    expect(first.kind).toBe('completed');
+    accept(h.store, 'i-2', 'req-2');
+
+    const second = await h.runner.runNext('s-1');
+
+    expect(second.kind).toBe('completed');
+    const task = h.store.listTasks('p-1')[0];
+    const member = h.store.listTaskSessions(task?.id ?? '')[0];
+    expect(member?.roleId).toBe('investigator');
+    expect(h.store.getInput(member?.currentInputId ?? '')?.status).toBe('completed');
+    const results = h.store.listTaskResults(task?.id ?? '');
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ kind: 'investigation', roleId: 'investigator', inputId: member?.currentInputId });
+    // The body is really on disk where a read Task keeps it, with the recorded digest.
+    expect(existsSync(results[0]?.bodyRef.path ?? '')).toBe(true);
+    expect(readFileSync(results[0]?.bodyRef.path ?? '', 'utf8')).toBe(
+      '# investigation\n\nfound an untested reset path\n',
+    );
+    // The aggregate the chief's wait returns reports what that member produced.
+    expect(h.store.resultsForInputs([member?.currentInputId ?? '']).map((entry) => entry.resultId)).toEqual([
+      results[0]?.resultId,
+    ]);
+    // The Task can be finished with exactly that report.
+    const ended = h.store.endTask({
+      taskId: task?.id ?? '',
+      expectedRevision: h.store.getTask(task?.id ?? '')?.revision ?? 1,
+      completionResultId: results[0]?.resultId ?? '',
+    });
+    expect(ended).toMatchObject({ ok: true });
+    expect(h.store.getTask(task?.id ?? '')?.status).toBe('completed');
+  }, 60_000);
+
   it('keeps the input queued when the model is unavailable, without falling back', async () => {
     const h = await harness({
       replies: [{ kind: 'text', text: 'ok' }],

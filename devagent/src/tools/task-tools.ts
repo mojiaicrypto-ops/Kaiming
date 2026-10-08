@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { StoreError, type ArtifactRef, type Store, type TaskPhase, type TaskRow } from '../store/store.ts';
 import { commitPlan, digestOfText, planRefFor, planTarget, readPlan } from '../runtime/plan-store.ts';
+import { asRecord, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
 
 export interface TaskToolContext {
   readonly store: Store;
@@ -71,37 +72,6 @@ const PHASES: readonly TaskPhase[] = [
   'test',
   'settle',
 ];
-
-interface ToolOutcome {
-  readonly content: Array<{ type: 'text'; text: string }>;
-  readonly details: Record<string, unknown>;
-  readonly isError: boolean;
-}
-
-function ok(text: string, details: Record<string, unknown>): ToolOutcome {
-  return { content: [{ type: 'text', text }], details, isError: false };
-}
-
-function fail(code: string, text: string, details: Record<string, unknown> = {}): ToolOutcome {
-  return { content: [{ type: 'text', text: `Error: ${text}` }], details: { code, ...details }, isError: true };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined;
-}
-
-function readString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === 'string' ? value : undefined;
-}
-
-function readStringArray(record: Record<string, unknown>, key: string): string[] | undefined {
-  const value = record[key];
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  return value.every((item) => typeof item === 'string') ? (value as string[]) : undefined;
-}
 
 function taskSummaryJson(task: TaskRow): Record<string, unknown> {
   return {
@@ -604,17 +574,26 @@ function taskGetTool(contextOf: TaskToolContextResolver): DomainTool {
       }
 
       const plan = task.planRef === null ? { text: '', current: false } : readPlan(task.planRef);
+      const results = context.store.listTaskResults(task.id).map((result) => ({
+        resultId: result.resultId,
+        kind: result.kind,
+        verdict: result.verdict,
+        candidateId: result.candidateId,
+        summary: result.summary,
+        sessionId: result.sessionId,
+        supersedesResultId: result.supersedesResultId,
+        // A result is no longer evidence once a later report superseded it (S6 keeps the history).
+        supersededBy: context.store.supersededBy(result.resultId)?.resultId ?? null,
+        bodyRef: result.bodyRef,
+        checks: result.checks,
+      }));
       return ok(`Task ${task.id}: ${task.phase} (${task.status}), revision ${task.revision}`, {
         task: taskSummaryJson(task),
         planText: plan.text,
         planCurrent: plan.current,
-        results: [],
+        results,
         missing: task.planRef !== null && !plan.current ? ['plan file is missing or changed'] : [],
       });
     },
   };
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

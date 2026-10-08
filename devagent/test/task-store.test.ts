@@ -135,7 +135,26 @@ describe('task store', () => {
       throw new Error('unreachable');
     }
     expect(result.gaps.join(' ')).toContain('not recorded');
-    expect(result.gaps.join(' ')).toContain('independent test');
+    // A Test requirement is checked against a really frozen candidate version.
+    expect(result.gaps.join(' ')).toContain('no candidate version was frozen');
+
+    // With a frozen candidate the gap names the version the Test must have covered.
+    store.setCandidate({
+      taskId: 't-1',
+      expectedRevision: store.getTask('t-1')?.revision ?? 1,
+      candidate: { candidateId: 'k-1', files: [] },
+    });
+    const second = store.endTask({
+      taskId: 't-1',
+      expectedRevision: store.getTask('t-1')?.revision ?? 1,
+      completionResultId: 'r-1',
+    });
+    expect(second.ok).toBe(false);
+    if (second.ok) {
+      throw new Error('unreachable');
+    }
+    // The implementation flow needs an independent Review first, then the same-candidate Test.
+    expect(second.gaps.join(' ')).toContain('no passed independent review is recorded for candidate k-1');
     expect(store.getTask('t-1')?.status).toBe('active');
     expect(store.getSession('c-1')?.currentTaskId).toBe('t-1');
   });

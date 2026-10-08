@@ -190,3 +190,25 @@ residual:
 final_verification: "独立复核确认 create/claim 判据对齐（取消后零写入）、等待超时归等待自身、continue 与相位/种类门、控制状态机、成员身份与单事务边界均符合 G2/M2/S5，并确认记录与实测一致：typecheck 0；npm test 110/110（9 个文件）；check:prompts 15/15；spikes 47/47；真实模型 4/4"
 ```
 
+
+## 切片 E1 —— agent_report（会话 P3eReportReview）
+
+```yaml
+reviewer_session: P3eReportReview   # 独立上下文，不读开发聊天
+result: passed
+rounds:
+  - round: 1
+    result: passed
+    findings: 1 non-blocking
+    summary: "resultId 只按 kind/summary/body 派生：不同 reportRef 正文撞同一 id，同 summary/body 不同 verdict 会被当成旧结果；记录注释称写入 result 与回执"
+  - round: 2
+    result: passed
+    findings: 1 non-blocking
+    summary: "报告身份漏 settlement 载荷：清单变化但正文相同会被当成旧结果"
+  - round: 3
+    result: passed
+    findings: []
+    summary: "报告身份覆盖全部字段；返回该记录为“重试不重复、不同报告不冲突”；记录中的计数与用例数一致"
+residual:
+  - "报告正文未使用 file_saves 回执阶梯（用于 Plan 等宿主规范保存），重试幂等由整份报告身份派生的 resultId 保证"
+```

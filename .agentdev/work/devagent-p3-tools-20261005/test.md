@@ -1,5 +1,41 @@
 # Test Report · devagent-p3-tools-20261005
 
+## 切片 E1 · agent_report（本次）
+
+```yaml
+runs:
+  - command: cd devagent && npx tsc --noEmit
+    result: passed
+    exit_code: 0
+    evidence: "无输出"
+  - command: cd devagent && npm test
+    result: passed
+    exit_code: 0
+    evidence: "10 个测试文件、123 项通过（report 12 项；runtime 37 项）"
+  - command: cd devagent && npm run check:prompts / npm run spikes / node checks/runner-real-model.ts
+    result: passed
+    exit_code: 0
+    evidence: "15/15；47/47（0 FAIL）；4/4"
+key_evidence:
+  - "落盘位置：write Task 报告在项目 .dev/work/<taskId>/<sessionId>/<resultId>.md，read Task 在 Server work 同构路径；正文读回摘要与登记一致"
+  - "种类门：期待种类不符、read Task 提交 implementation、review 无 verdict、review 候选版本不符，均拒绝且不写库"
+  - "不可覆写：第二份报告指向 supersedesResultId，旧正文保留；被替代的报告在完成核对中报出“was superseded”"
+  - "reportRef：只核对已有正文摘要并登记，不复制；摘要不符返回 VERSION_CONFLICT 且不写库"
+  - "身份：只有成员当前运行输入可以报告；非成员会话/过期输入被拒"
+  - "完成：write Task 需 settlement 报告 + 同候选 passed Review + （requiresTest 时）不早于 Review 的同候选 passed Test；缺任一不可完成，完成报告被替代也不可完成；read Task 以 investigation 报告完成"
+  - "报告身份去重：不同正文的 reportRef 报告是两条结果；同 summary/body 但 verdict 不同、settlement 清单不同也是两条（修复前会静默复用旧结果）"
+  - "重试：同一报告内容重复调用复用同一 resultId，不新增历史"
+  - "端到端（真实 Pi 循环）：成员调用 agent_report → 正文落盘、result 登记、聚合带 resultIds、endTask 以该报告完成"
+not_covered:
+  - area: "settlement 清单（S6 SettlementManifest）字段核对与 Git/本机保存回执"
+    reason: "属 P5 结算"
+    disposition: pending
+  - area: "question 工具与等待用户交互"
+    reason: "属 P4 原生交互接线"
+    disposition: pending
+result: passed
+```
+
 ## 切片 D · 委派与等待（本次）
 
 ```yaml
