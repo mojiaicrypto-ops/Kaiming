@@ -28,6 +28,7 @@ import { toolSetFor } from './tool-sets.ts';
 import { asToolDefinitions, createChiefTaskTools, createTaskGetTool, type TaskToolContext } from '../tools/task-tools.ts';
 import { createReportTool, type ReportToolContext } from '../tools/report-tools.ts';
 import { createRequirementTool, type RequirementToolContext } from '../tools/requirement-tools.ts';
+import { createProjectTool, type ProjectToolContext } from '../tools/project-tools.ts';
 import {
   createTaskSessionsTool,
   type DelegationReturn,
@@ -229,6 +230,20 @@ const serverWorkDir = join(config.agentDir, 'work');
       const requirementTools = ['chief', 'designer', 'settler', 'developer'].includes(session.roleId)
         ? [createRequirementTool(requirementContext)]
         : [];
+      const projectTools =
+        session.roleId === 'chief'
+          ? [
+              createProjectTool(
+                (): ProjectToolContext => ({
+                  store: this.options.store,
+                  projectId: session.projectId,
+                  cwd: session.cwd,
+                  roleId: session.roleId,
+                  sessionId,
+                }),
+              ),
+            ]
+          : [];
       const domainTools = asToolDefinitions(
         session.roleId === 'chief'
           ? [
@@ -243,6 +258,7 @@ const serverWorkDir = join(config.agentDir, 'work');
               })),
               ...createChiefTaskTools(contextOf),
               ...requirementTools,
+              ...projectTools,
             ]
           : [
               createTaskGetTool(contextOf),

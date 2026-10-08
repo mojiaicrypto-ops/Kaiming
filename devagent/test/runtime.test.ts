@@ -1390,6 +1390,33 @@ describe('input runner', () => {
     expect(readFileSync(path, 'utf8')).toContain('## 处理记录');
   }, 30_000);
 
+  it('initializes the project entries through the real tool loop', async () => {
+    const args = JSON.stringify({
+      op: 'initialize',
+      expectedProjectRevision: 1,
+      files: [
+        { path: 'AGENTS.md', expectedVersion: null, content: '# Agent rules\n\nRead .dev/INDEX.md first.\n' },
+        { path: '.dev/INDEX.md', expectedVersion: null, content: '# 索引\n' },
+      ],
+      reusedAuthorityRefs: [],
+      requestWriteUse: true,
+      authorizationRef: { inputId: 'i-1' },
+    });
+    const h = await harness({
+      replies: [
+        { kind: 'tool_calls', calls: [{ name: 'project', arguments: args }] },
+        { kind: 'text', text: 'entries created' },
+      ],
+    });
+
+    const outcome = await h.runner.runNext('s-1');
+
+    expect(outcome.kind).toBe('completed');
+    expect(readFileSync(join(h.cwd, 'AGENTS.md'), 'utf8')).toBe('# Agent rules\n\nRead .dev/INDEX.md first.\n');
+    expect(existsSync(join(h.cwd, '.dev', 'INDEX.md'))).toBe(true);
+    expect(h.store.getProject('p-1')?.initializationRef).not.toBeNull();
+  }, 30_000);
+
   it('keeps the input queued when the model is unavailable, without falling back', async () => {
     const h = await harness({
       replies: [{ kind: 'text', text: 'ok' }],

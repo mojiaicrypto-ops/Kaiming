@@ -262,8 +262,49 @@ risks_remaining:
   - "需求完成内容/状态与项目报告纳入同次保存、Git 回执属 P5 结算"
 ```
 
+## 切片 E3 · project.initialize（本次）
+
+```yaml
+slice: P3-e-3 project.initialize（入口差异、用户同意、逐文件 CAS 与 ready 核对）
+changed:
+  - path: devagent/src/runtime/project-store.ts（新增）
+    purpose: 入口文件计划与写入：路径必须留在项目内、内容非空；逐文件按 expectedVersion 做创建/替换/CAS，冲突保留原文；同目录临时文件原子替换并读回；每步写入宿主 file_saves 回执（S6）；ready 以“文件真实存在且为文件”为准；reusedAuthorityRefs 的引用必须真实可读
+  - path: devagent/src/store/store.ts
+    purpose: 项目访问器 getProject 与 setProjectInitialization（按 expectedProjectRevision 做 CAS 并写 initializationRef）
+  - path: devagent/src/tools/project-tools.ts（新增）
+    purpose: project 工具 op=initialize：仅主管；先给出真实入口缺口/复用依据/完整拟写内容与影响（requestWriteUse=false 为预览）；写入需要用户明确同意的决定引用，缺失时拒绝并附完整计划；冲突/失败不覆盖原文并返回逐文件结果与缺失清单
+  - path: devagent/src/runtime/runner.ts
+    purpose: 主管会话注册 project 工具
+  - path: devagent/test/project.test.ts（新增，6 项）
+    purpose: 预览不写、缺同意不写、写入后 ready 且登记 initializationRef 与 file_saves、重复执行复用、版本冲突保留原文、越出项目路径与不可验证复用依据被拒、非主管与过期项目版本被拒
+  - path: devagent/test/runtime.test.ts
+    purpose: 端到端：主管经真实 Pi 循环建立知识入口，文件与 initializationRef 真实存在
+behavior:
+  - "实测：npm test 142/142（12 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
+  - "写项目需要用户明确同意：无决定引用时不写，返回 needsConsent 与完整计划（内部 ctx.ui.confirm 属 P4 交互接线）"
+  - "每个入口独立版本校验与原子替换：冲突/失败保留原文，返回逐文件结果与缺失清单，重试只补缺项"
+  - "ready 只表示入口真实可用（文件存在且为文件），并随 initializationRef 记录实际写入版本"
+review_rounds:
+  - round: 1
+    verdict: passed
+    findings: 3 non-blocking
+    fixed:
+      - finding: "逐文件读取在 try/catch 之外：入口位置已存在目录时整批中断，且回报 wrote=false 与写前计划"
+        fix: "读取并入单文件保护：非普通文件/不可读计为该文件 failed 与缺失，其余文件继续，回报真实逐文件结果"
+        evidence: "project.test.ts：docs/ 占用路径时 AGENTS.md 仍创建，docs 记 failed 与 missing"
+      - finding: "预览与写入判定不一致：空内容在预览中是 create，写入时被拒"
+        fix: "空内容在参数校验阶段就拒绝（INVALID_ARGUMENT），预览不再承诺写入会拒绝的条目"
+        evidence: "project.test.ts：空白内容被拒"
+      - finding: "同一文件被计划两次：预览说两次 create，写入实际一次 create 一次 conflict"
+        fix: "解析后的重复路径在参数校验阶段拒绝"
+        evidence: "project.test.ts：AGENTS.md 与 ./.dev/INDEX.md 归一化后重复被拒且未写"
+risks_remaining:
+  - "内部 ctx.ui.confirm（需要新决定时在工具内确认）属 P4；当前以“拒绝 + 完整计划 + 决定引用”达成同一契约"
+  - "入口内容的业务质量（定位/能力/未知是否完整）由 Agent 判断，程序只核对保存与可用性"
+```
+
 ## 后续切片（计划内，未开始）
 
 ```yaml
-pending: [P3-e-3 project.initialize]
+pending: []（P3-e 三个子切片完成后由 P4 接续交互与 HTTP/SSE）
 ```

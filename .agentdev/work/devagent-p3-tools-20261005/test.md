@@ -1,5 +1,38 @@
 # Test Report · devagent-p3-tools-20261005
 
+## 切片 E3 · project.initialize（本次）
+
+```yaml
+runs:
+  - command: cd devagent && npx tsc --noEmit
+    result: passed
+    exit_code: 0
+    evidence: "无输出"
+  - command: cd devagent && npm test
+    result: passed
+    exit_code: 0
+    evidence: "12 个测试文件、142 项通过（project 6 项；runtime 39 项）"
+  - command: cd devagent && npm run check:prompts / npm run spikes / node checks/runner-real-model.ts
+    result: passed
+    exit_code: 0
+    evidence: "15/15；47/47（0 FAIL）；4/4"
+key_evidence:
+  - "预览：requestWriteUse=false 返回真实入口缺口、逐文件动作与完整拟写内容，且不写任何文件"
+  - "同意：无决定引用时不写，返回 FORBIDDEN + needsConsent + 完整计划；引用真实用户输入后写入"
+  - "写入：文件原子替换并读回；initializationRef 记录实际版本；每个入口写入 file_saves 回执（state=saved）"
+  - "重复执行：已一致的入口报 reused，不重写"
+  - "冲突：已存在但预期为新建、或版本不符时拒绝并保留原文；传入真实版本可有意替换"
+  - "边界：越出项目的路径、不可读的复用依据、非主管、过期项目版本分别被拒；过期版本时文件已在盘上、项目记录未写"
+  - "端到端（真实 Pi 循环）：主管建立 AGENTS.md 与 .dev/INDEX.md 并登记 initializationRef"
+  - "单文件失败不拖垮整批：目录占用路径时该文件记 failed 与 missing，其他文件仍创建并回报真实结果"
+  - "参数级拒绝：空白内容与归一化后重复的路径都在预览/写入前被拒（不再出现“预览承诺、写入拒绝”的不一致）"
+not_covered:
+  - area: "工具内部 ctx.ui.confirm 交互（需要新决定时原地确认）"
+    reason: "属 P4 原生交互接线"
+    disposition: pending
+result: passed
+```
+
 ## 切片 E2 · requirement（本次）
 
 ```yaml
