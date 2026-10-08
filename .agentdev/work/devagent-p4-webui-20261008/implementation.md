@@ -183,6 +183,8 @@ review_rounds:
       - "rpc.ts 的 RECOVERY_REQUIRED → PI_INPUT_UNCONFIRMED 映射此前实际未生效（补丁静默失配），现已真正落码"
       - "记录中 deleteSession 的顺序描述与代码不符，已随修复统一为"先删自身行再删会话""
       - "恢复核实用例补齐"核实后会话可继续消费剩余工作"（新 continuation 输入被认领）"
+collateral_notes:
+  - "终态保护同时落到了 setCandidate（同一段锚文本），即终态 Task 不能再冻结新候选；审阅判定无害且语义正确（已结束的 Task 不应产生新候选），此处如实登记"
 residual_notes:
   - "resolution=completed 只表示"已核实该输入可以按完成关闭"，不重发操作、不补写历史；剩余工作由主管以新的 continuation 输入继续（S7）"
 risks_remaining:
