@@ -1,5 +1,37 @@
 # Test Report · devagent-p3-tools-20261005
 
+## 切片 E2 · requirement（本次）
+
+```yaml
+runs:
+  - command: cd devagent && npx tsc --noEmit
+    result: passed
+    exit_code: 0
+    evidence: "无输出"
+  - command: cd devagent && npm test
+    result: passed
+    exit_code: 0
+    evidence: "11 个测试文件、135 项通过（requirement 11 项；runtime 38 项）"
+  - command: cd devagent && npm run check:prompts / npm run spikes / node checks/runner-real-model.ts
+    result: passed
+    exit_code: 0
+    evidence: "15/15；47/47（0 FAIL）；4/4"
+key_evidence:
+  - "保存保留调用方正文并以真实保存时间写 updatedAt；get 返回原文、元数据、文件摘要 version 与格式问题"
+  - "非法记录（缺节、状态与类型不符、重复键、schemaVersion 不支持、id 与文件名不符）拒绝且不落盘，问题可定位"
+  - "CAS：过期版本拒绝且原文不变；相同内容重复保存按重试处理；id/kind 不可原地变化，createdAt 不变"
+  - "list 从文件重建并支持 kind/status 过滤与游标分页；损坏文件出现在 invalidFiles 且不出现在合法记录中"
+  - "决定引用：未知输入被拒且不落盘；交互引用在 P4 前明确拒绝；developer 可读不可写（G1 op 级权限收口）"
+  - "端到端（真实 Pi 循环）：主管调用 requirement.save 后记录落在项目 .dev/requirements/<id>.md"
+  - "正文校验：中间空节与末节空节都被拒（修复前仅末节被发现）；modules 越出项目/非文件/不存在被拒，真实项目文件可保存"
+  - "健壮性：单个不可读文件（悬空符号链接）出现在 invalidFiles，其余合法记录仍可列出"
+not_covered:
+  - area: "同请求 requestKey 幂等去重"
+    reason: "属 API/请求层（P4）；文件级 CAS 已保证不重复写入"
+    disposition: pending
+result: passed
+```
+
 ## 切片 E1 · agent_report（本次）
 
 ```yaml

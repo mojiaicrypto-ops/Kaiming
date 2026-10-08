@@ -39,6 +39,17 @@ function world(options: { projectId?: string; sessionId?: string } = {}): World 
   store.createProject({ id: projectId, realPath: cwd });
   store.createSession({ id: sessionId, projectId, roleId: 'chief', cwd });
   const state = { inputId: 'i-1' };
+  // A real decision input in this project: the tool verifies the cited decision, not its wording.
+  store.acceptInput({
+    inputId: 'i-dec',
+    projectId,
+    sessionId,
+    sourceKey: `${sessionId}:i-dec`,
+    requestKey: 'i-dec',
+    method: 'session.input.submit',
+    kind: 'user',
+    payload: { content: [{ type: 'text', text: 'go ahead' }] },
+  });
   const serverWorkDir = join(root, 'work');
   const tools = createChiefTaskTools((): TaskToolContext => {
     const currentTaskId = store.getSession(sessionId)?.currentTaskId;
@@ -85,7 +96,7 @@ function createArgs(overrides: Record<string, unknown> = {}): Record<string, unk
     goal: 'reset password',
     scope: 'account module',
     planMarkdown: '# original plan\n',
-    authorizationRef: 'm-001',
+    authorizationRef: { inputId: 'i-dec' },
     requiresTest: true,
     ...overrides,
   };

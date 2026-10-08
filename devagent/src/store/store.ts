@@ -140,6 +140,16 @@ export interface UpdateTaskParams {
   readonly requiresTest?: boolean;
 }
 
+export interface ProjectRow {
+  readonly id: string;
+  readonly realPath: string;
+  readonly revision: number;
+  readonly initializationRef: unknown;
+  readonly configRef: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 export interface TaskSessionRow {
   readonly sessionId: string;
   readonly taskId: string;
@@ -541,6 +551,44 @@ export class Store {
         'INSERT INTO projects (id, realPath, revision, createdAt, updatedAt) VALUES (?, ?, 1, ?, ?)',
       )
       .run(params.id, params.realPath, timestamp, timestamp);
+  }
+
+  getProject(projectId: string): ProjectRow | undefined {
+    const row = this.db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as
+      | Record<string, unknown>
+      | undefined;
+    return row === undefined ? undefined : toProjectRow(row);
+  }
+
+  /** Record the entries a project was initialized with, checked against the project revision. */
+  setProjectInitialization(params: {
+    projectId: string;
+    expectedRevision: number;
+    initializationRef: unknown;
+  }): ProjectRow {
+    return this.transaction(() => {
+      const project = this.getProject(params.projectId);
+      if (project === undefined) {
+        throw new StoreError('NOT_FOUND', 'project does not exist', { projectId: params.projectId });
+      }
+      const outcome = this.db
+        .prepare(
+          'UPDATE projects SET initializationRef = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND revision = ?',
+        )
+        .run(
+          JSON.stringify(params.initializationRef),
+          this.clock(),
+          params.projectId,
+          params.expectedRevision,
+        );
+      if (outcome.changes !== 1) {
+        throw new StoreError('VERSION_CONFLICT', 'project revision does not match', {
+          projectId: params.projectId,
+          actual: project.revision,
+        });
+      }
+      return this.getProject(params.projectId) as ProjectRow;
+    });
   }
 
   createSession(params: CreateSessionParams): void {
@@ -1848,6 +1896,19 @@ function parseJsonOrNull(value: unknown): unknown {
   } catch {
     return null;
   }
+}
+
+function toProjectRow(row: Record<string, unknown>): ProjectRow {
+  const nullable = (value: unknown): string | null => (value === null ? null : String(value));
+  return {
+    id: String(row['id']),
+    realPath: String(row['realPath']),
+    revision: Number(row['revision']),
+    initializationRef: parseJsonOrNull(row['initializationRef']),
+    configRef: nullable(row['configRef']),
+    createdAt: String(row['createdAt']),
+    updatedAt: String(row['updatedAt']),
+  };
 }
 
 function toResultRow(row: Record<string, unknown>): ResultRow {

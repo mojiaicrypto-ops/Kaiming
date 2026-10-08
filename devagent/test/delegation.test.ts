@@ -38,6 +38,17 @@ async function fixture(): Promise<Fixture> {
   stores.push(store);
   store.createProject({ id: 'p-1', realPath: cwd });
   store.createSession({ id: 'c-1', projectId: 'p-1', roleId: 'chief', cwd });
+  // A real decision input: createTask verifies the decision reference it is given.
+  store.acceptInput({
+    inputId: 'i-dec',
+    projectId: 'p-1',
+    sessionId: 'c-1',
+    sourceKey: 'c-1:i-dec',
+    requestKey: 'i-dec',
+    method: 'session.input.submit',
+    kind: 'user',
+    payload: { content: [{ type: 'text', text: 'go ahead' }] },
+  });
   const state = { inputId: 'i-1', settle: undefined as DelegationReturn | undefined };
   const serverWorkDir = join(root, 'work');
   const contextOf = (): TaskToolContext => {
@@ -83,7 +94,7 @@ async function fixture(): Promise<Fixture> {
     goal: 'reset password',
     scope: 'account',
     planMarkdown: '# plan\n',
-    authorizationRef: 'm-001',
+    authorizationRef: { inputId: 'i-dec' },
     requiresTest: true,
   });
   // The stub returns a settled snapshot by default so tests can assert what the tool forwards.
@@ -189,7 +200,7 @@ describe('createTaskSessions', () => {
       goal: 'investigate',
       scope: 'x',
       planMarkdown: '# read plan\n',
-      authorizationRef: 'm-001',
+      authorizationRef: { inputId: 'i-dec' },
     });
     expect(created?.isError).toBe(false);
     const readTaskId = String(created?.details['taskId'] ?? '');

@@ -212,3 +212,26 @@ rounds:
 residual:
   - "报告正文未使用 file_saves 回执阶梯（用于 Plan 等宿主规范保存），重试幂等由整份报告身份派生的 resultId 保证"
 ```
+
+## 切片 E2 —— requirement（会话 P3eRequirementReview）
+
+```yaml
+reviewer_session: P3eRequirementReview   # 独立上下文，不读开发聊天
+result: passed
+rounds:
+  - round: 1
+    result: failed
+    findings: 1 blocking + 2 non-blocking
+    summary: "实施需求“每节有正文”只对末节成立（切片含下一个标题前缀）；list 未保护单文件读取；modules 未核对项目内存在与可读"
+  - round: 2
+    result: passed
+    findings: 1 non-blocking
+    summary: "get 仍未保护读取（存在但不可读会抛错）"
+  - round: 3
+    result: passed
+    findings: []
+    summary: "复核以真实模块探针确认：空中间节被拒、modules 越界/缺失被拒、悬空符号链接只进 invalidFiles；记录与用例数一致"
+residual:
+  - "需求保存尚未写 file_saves 回执（S6 宿主规范保存之一）；当前靠同目录原子替换 + 摘要 CAS 防止重复写入"
+  - "同请求 requestKey 幂等属 API/请求层（P4）"
+```

@@ -27,6 +27,7 @@ import { SessionRegistry, type LogicalSessionSpec } from './registry.ts';
 import { toolSetFor } from './tool-sets.ts';
 import { asToolDefinitions, createChiefTaskTools, createTaskGetTool, type TaskToolContext } from '../tools/task-tools.ts';
 import { createReportTool, type ReportToolContext } from '../tools/report-tools.ts';
+import { createRequirementTool, type RequirementToolContext } from '../tools/requirement-tools.ts';
 import {
   createTaskSessionsTool,
   type DelegationReturn,
@@ -219,6 +220,15 @@ const serverWorkDir = join(config.agentDir, 'work');
           ...(currentTaskId != null ? { currentTaskId } : {}),
         };
       };
+      const requirementContext = (): RequirementToolContext => ({
+        store: this.options.store,
+        projectId: session.projectId,
+        cwd: session.cwd,
+        roleId: session.roleId,
+      });
+      const requirementTools = ['chief', 'designer', 'settler', 'developer'].includes(session.roleId)
+        ? [createRequirementTool(requirementContext)]
+        : [];
       const domainTools = asToolDefinitions(
         session.roleId === 'chief'
           ? [
@@ -232,9 +242,11 @@ const serverWorkDir = join(config.agentDir, 'work');
                 },
               })),
               ...createChiefTaskTools(contextOf),
+              ...requirementTools,
             ]
           : [
               createTaskGetTool(contextOf),
+              ...requirementTools,
               // Every professional member delivers its result through the same formal report.
               createReportTool((): ReportToolContext => ({
                 store: this.options.store,

@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { StoreError, type ArtifactRef, type Store, type TaskPhase, type TaskRow } from '../store/store.ts';
 import { commitPlan, digestOfText, planRefFor, planTarget, readPlan } from '../runtime/plan-store.ts';
+import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
 import { asRecord, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
 
 export interface TaskToolContext {
@@ -131,7 +132,11 @@ function createTaskTool(contextOf: TaskToolContextResolver): DomainTool {
         acceptanceRefs: { type: 'array', items: { type: 'string' } },
         basisRefs: { type: 'array', items: { type: 'string' } },
         planMarkdown: { type: 'string' },
-        authorizationRef: { type: 'string' },
+        authorizationRef: {
+          type: 'object',
+          properties: { inputId: { type: 'string' }, interactionId: { type: 'string' } },
+          additionalProperties: false,
+        },
         requiresTest: { type: 'boolean' },
         requirementId: { type: 'string' },
       },
@@ -151,18 +156,20 @@ function createTaskTool(contextOf: TaskToolContextResolver): DomainTool {
       const goal = readString(params, 'goal');
       const scope = readString(params, 'scope');
       const planMarkdown = readString(params, 'planMarkdown');
-      const authorizationRef = readString(params, 'authorizationRef');
       if (
         goal === undefined ||
         goal.trim() === '' ||
         scope === undefined ||
         scope.trim() === '' ||
         planMarkdown === undefined ||
-        planMarkdown.trim() === '' ||
-        authorizationRef === undefined ||
-        authorizationRef.trim() === ''
+        planMarkdown.trim() === ''
       ) {
-        return fail('INVALID_ARGUMENT', 'goal, scope, planMarkdown and authorizationRef are required non-empty strings');
+        return fail('INVALID_ARGUMENT', 'goal, scope and planMarkdown are required non-empty strings');
+      }
+      // The cited decision must be a real one in this project; only its identity/state is verified.
+      const authorization = resolveAuthorizationRefs(context.store, context.projectId, params['authorizationRef']);
+      if (!authorization.ok) {
+        return fail('INVALID_ARGUMENT', `authorizationRef: ${authorization.message}`);
       }
       const requiresTest = params['requiresTest'];
       if (type === 'read' && requiresTest !== undefined && requiresTest !== false) {
@@ -200,7 +207,7 @@ function createTaskTool(contextOf: TaskToolContextResolver): DomainTool {
           acceptanceRefs,
           basisRefs,
           planRef: intendedPlan,
-          authorizationRefs: [authorizationRef],
+          authorizationRefs: authorization.refs,
           sourceInputId: context.inputId,
           summary: `created (${type})`,
         });

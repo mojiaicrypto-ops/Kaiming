@@ -208,8 +208,62 @@ risks_remaining:
   - "报告正文未走 file_saves 回执/重试阶梯（S6 的该阶梯用于 Plan 等宿主规范保存）；重试幂等由整份报告身份派生的 resultId 保证"
 ```
 
+## 切片 E2 · requirement（本次）
+
+```yaml
+slice: P3-e-2 requirement（list/get/save，F1-F4 格式、CAS 与双类型）+ 决定引用校验
+changed:
+  - path: devagent/src/runtime/requirement-store.ts（新增）
+    purpose: .dev/requirements/<id>.md 的严格解析/序列化/list/get/save：schemaVersion/kind/status/时间/数组字段/项目相对路径校验，实施需求七个二级标题各一次且有序有正文；list 从文件重建并按 updatedAt 倒序、id 升序，游标绑定同一过滤与排序边界；save 先算目标版本、比原文件摘要、同目录临时文件原子替换并读回核对
+  - path: devagent/src/tools/requirement-tools.ts（新增）
+    purpose: requirement 工具 op=list/get/save；save 校验决定引用与角色（仅 chief/designer/settler 可写），校验格式与 id/kind 不变、createdAt 不变，以实际保存时间更新 updatedAt
+  - path: devagent/src/runtime/authorization.ts（新增）
+    purpose: 按 G2 校验 authorizationRef 为 {inputId} 或 {interactionId}：主体（本项目）、来源（真实输入）与状态（非 failed/interrupted）由程序核对，交互引用在 P4 接线前明确拒绝
+  - path: devagent/src/tools/task-tools.ts
+    purpose: createTask 的 authorizationRef 改为契约对象形状并做同样校验（原为字符串，属偏差修正）
+  - path: devagent/src/runtime/runner.ts
+    purpose: 按角色注册 requirement 工具（chief/designer/settler/developer；read Task 仍被工具集 denied 过滤）
+  - path: devagent/test/requirement.test.ts（新增，11 项）
+    purpose: 新建/读回版本、非法记录拒绝（缺节/状态/重复键/版本/id 不符）、实施需求七节、版本冲突与原地改类型拒绝、决定引用与角色校验、list 过滤分页与非法文件、损坏记录如实报告
+  - path: devagent/test/runtime.test.ts
+    purpose: 端到端：主管经真实 Pi 循环保存提案记录，文件落在项目 .dev/requirements/
+behavior:
+  - "实测：npm test 135/135（11 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
+  - "需求文件是唯一权威：list 从文件重建，不维护第二份实时状态；损坏文件按 invalidFiles 报告，不被隐藏也不被猜成合法记录"
+  - "save 用原文件摘要做 CAS：期望版本不符拒绝且保留原文；id/kind 不可原地变化；createdAt 不变，updatedAt 由保存服务写为真实时间"
+  - "决定引用按 G2 为 {inputId}|{interactionId}，程序核对主体/来源/状态，不解释语义；交互引用在 P4 前拒绝"
+review_rounds:
+  - round: 1
+    verdict: failed
+    findings: 1 blocking + 2 non-blocking
+    fixed:
+      - finding: "实施需求“每节有正文”只对最后一节成立：中间空节的切片把下一个标题的 '## ' 前缀算了进去"
+        fix: "按“行尾到下一个标题行首”切片（用 match.index 而非 +title.length），空节一律报出"
+        evidence: "requirement.test.ts：空的“范围”节被拒且不落盘"
+      - finding: "list 直接 readFileSync，单个不可读文件（悬空符号链接/权限）会让整个 list 抛错"
+        fix: "逐文件 try/catch，读失败计入 invalidFiles（与注释一致）"
+        evidence: "requirement.test.ts：悬空符号链接出现在 invalidFiles，合法记录仍被列出"
+      - finding: "modules 只查前缀，不核对项目内存在与可读（F1 要求保存服务核对）"
+        fix: "parseRequirement 接收项目 cwd：拒绝越出项目、非文件、不存在或不可读的 modules 条目"
+        evidence: "requirement.test.ts：../outside.md 与非存在路径被拒，真实 .dev/PROJECT.md 可保存"
+  - round: 2
+    verdict: passed
+    findings: 1 non-blocking
+    fixed:
+      - finding: "getRequirement 仍未保护读取：存在但不可读的记录会抛错"
+        fix: "读取 try/catch，返回可定位原因（F4）"
+        evidence: "requirement.test.ts：以目录冒充 .md 记录时 get 返回 issues 而非抛错"
+    overclaim_fixed:
+      - "记录中“各一次且有序有正文”的措辞在修复后成立；新增用例覆盖中间空节"
+      - "端到端用例标题改为只声称保存（list 由单测覆盖）"
+risks_remaining:
+  - "同请求重试复用 requestKey 属 API/请求层（P4）；文件级 CAS 会拒绝过期重试，不会重复写入"
+  - "需求保存尚未写入 file_saves 回执（S6 表列出的宿主规范保存之一）；当前以同目录原子替换 + 摘要 CAS 保证不重复写入"
+  - "需求完成内容/状态与项目报告纳入同次保存、Git 回执属 P5 结算"
+```
+
 ## 后续切片（计划内，未开始）
 
 ```yaml
-pending: [P3-e-2 requirement（list/get/save）, P3-e-3 project.initialize]
+pending: [P3-e-3 project.initialize]
 ```

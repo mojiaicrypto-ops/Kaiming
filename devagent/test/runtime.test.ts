@@ -900,7 +900,7 @@ describe('input runner', () => {
       acceptanceRefs: ['AC-1'],
       basisRefs: ['req-1'],
       planMarkdown: '# Plan\n1. implement\n2. review\n',
-      authorizationRef: 'm-001',
+      authorizationRef: { inputId: 'i-1' },
       requiresTest: true,
     });
     const h = await harness({
@@ -930,7 +930,7 @@ describe('input runner', () => {
       goal: 'no tests declared',
       scope: 'x',
       planMarkdown: '# Plan\n',
-      authorizationRef: 'm-001',
+      authorizationRef: { inputId: 'i-1' },
     });
     const h = await harness({
       replies: [
@@ -959,7 +959,7 @@ describe('input runner', () => {
                 goal: 'investigate',
                 scope: 'x',
                 planMarkdown: '# plan\n',
-                authorizationRef: 'm-001',
+                authorizationRef: { inputId: 'i-1' },
               }),
             },
           ],
@@ -1005,7 +1005,7 @@ describe('input runner', () => {
       goal: 'reset password',
       scope: 'account',
       planMarkdown: '# plan\n1. develop\n',
-      authorizationRef: 'm-001',
+      authorizationRef: { inputId: 'i-1' },
       requiresTest: true,
     });
     const delegateArgs = JSON.stringify({
@@ -1067,7 +1067,7 @@ describe('input runner', () => {
       goal: 'reset password',
       scope: 'account',
       planMarkdown: '# plan\n1. develop\n',
-      authorizationRef: 'm-001',
+      authorizationRef: { inputId: 'i-1' },
       requiresTest: true,
     });
     const delegateArgs = JSON.stringify({
@@ -1283,7 +1283,7 @@ describe('input runner', () => {
       goal: 'investigate the reset flow',
       scope: 'account',
       planMarkdown: '# read plan\n1. look\n',
-      authorizationRef: 'm-001',
+      authorizationRef: { inputId: 'i-1' },
     });
     const delegateArgs = JSON.stringify({
       mode: 'create',
@@ -1345,6 +1345,50 @@ describe('input runner', () => {
     expect(ended).toMatchObject({ ok: true });
     expect(h.store.getTask(task?.id ?? '')?.status).toBe('completed');
   }, 60_000);
+
+  it('saves a requirement record through the real tool loop', async () => {
+    const markdown = [
+      '---',
+      'schemaVersion: 2',
+      'id: req-reset',
+      'kind: proposal',
+      'title: 密码重置',
+      'status: pending',
+      'createdAt: "2026-10-04T00:00:00Z"',
+      'updatedAt: "2026-10-04T00:00:00Z"',
+      '---',
+      '',
+      '## 目标',
+      '允许用户重置密码。',
+      '',
+      '## 来源与决定',
+      '用户提出。',
+      '',
+      '## 处理记录',
+      '尚待规划。',
+      '',
+    ].join('\n');
+    const saveArgs = JSON.stringify({
+      op: 'save',
+      requirementId: 'req-reset',
+      expectedVersion: null,
+      markdown,
+      authorizationRef: { inputId: 'i-1' },
+    });
+    const h = await harness({
+      replies: [
+        { kind: 'tool_calls', calls: [{ name: 'requirement', arguments: saveArgs }] },
+        { kind: 'text', text: 'saved' },
+      ],
+    });
+
+    const outcome = await h.runner.runNext('s-1');
+
+    expect(outcome.kind).toBe('completed');
+    const path = join(h.cwd, '.dev', 'requirements', 'req-reset.md');
+    expect(existsSync(path)).toBe(true);
+    expect(readFileSync(path, 'utf8')).toContain('## 处理记录');
+  }, 30_000);
 
   it('keeps the input queued when the model is unavailable, without falling back', async () => {
     const h = await harness({
