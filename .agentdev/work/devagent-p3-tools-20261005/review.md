@@ -235,3 +235,22 @@ residual:
   - "需求保存尚未写 file_saves 回执（S6 宿主规范保存之一）；当前靠同目录原子替换 + 摘要 CAS 防止重复写入"
   - "同请求 requestKey 幂等属 API/请求层（P4）"
 ```
+
+## 切片 E3 —— project.initialize（会话 P3eProjectReview）
+
+```yaml
+reviewer_session: P3eProjectReview   # 独立上下文，不读开发聊天
+result: passed
+rounds:
+  - round: 1
+    result: passed
+    findings: 3 non-blocking
+    summary: "单文件读取未保护（目录占用路径会中断整批并误报 wrote=false）；预览与写入对空内容判定不一致；同一文件可被计划两次"
+  - round: 2
+    result: passed
+    findings: []
+    summary: "三项均已修复并经探针/用例确认；记录计数可复现"
+residual:
+  - "内部 ctx.ui.confirm 属 P4；当前以“拒绝 + 完整计划 + 决定引用”达成同一契约"
+  - "file_saves 回执已登记但未读回核对（S6 阶梯的核对部分随请求幂等层）"
+```

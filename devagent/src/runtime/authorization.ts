@@ -29,6 +29,10 @@ export function resolveAuthorizationRefs(
       if (input === undefined || input.projectId !== projectId) {
         return { ok: false, message: `no input ${inputId} in this project` };
       }
+      if (input.kind !== 'user') {
+        // A decision is a real user input: a delegated instruction is the chief's, not the user's.
+        return { ok: false, message: `input ${inputId} is a ${input.kind} input, not a user decision` };
+      }
       if (input.status === 'failed' || input.status === 'interrupted') {
         return { ok: false, message: `input ${inputId} is ${input.status}, not a usable decision` };
       }

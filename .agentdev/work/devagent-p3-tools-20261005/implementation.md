@@ -218,20 +218,20 @@ changed:
   - path: devagent/src/tools/requirement-tools.ts（新增）
     purpose: requirement 工具 op=list/get/save；save 校验决定引用与角色（仅 chief/designer/settler 可写），校验格式与 id/kind 不变、createdAt 不变，以实际保存时间更新 updatedAt
   - path: devagent/src/runtime/authorization.ts（新增）
-    purpose: 按 G2 校验 authorizationRef 为 {inputId} 或 {interactionId}：主体（本项目）、来源（真实输入）与状态（非 failed/interrupted）由程序核对，交互引用在 P4 接线前明确拒绝
+    purpose: 按 G2 校验 authorizationRef 为 {inputId} 或 {interactionId}：主体（本项目）、来源（kind=user 的真实用户输入）与状态（非 failed/interrupted）由程序核对，交互引用在 P4 接线前明确拒绝
   - path: devagent/src/tools/task-tools.ts
     purpose: createTask 的 authorizationRef 改为契约对象形状并做同样校验（原为字符串，属偏差修正）
   - path: devagent/src/runtime/runner.ts
     purpose: 按角色注册 requirement 工具（chief/designer/settler/developer；read Task 仍被工具集 denied 过滤）
-  - path: devagent/test/requirement.test.ts（新增，11 项）
+  - path: devagent/test/requirement.test.ts（新增，12 项）
     purpose: 新建/读回版本、非法记录拒绝（缺节/状态/重复键/版本/id 不符）、实施需求七节、版本冲突与原地改类型拒绝、决定引用与角色校验、list 过滤分页与非法文件、损坏记录如实报告
   - path: devagent/test/runtime.test.ts
     purpose: 端到端：主管经真实 Pi 循环保存提案记录，文件落在项目 .dev/requirements/
 behavior:
-  - "实测：npm test 135/135（11 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
+  - "实测：npm test 143/143（12 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
   - "需求文件是唯一权威：list 从文件重建，不维护第二份实时状态；损坏文件按 invalidFiles 报告，不被隐藏也不被猜成合法记录"
   - "save 用原文件摘要做 CAS：期望版本不符拒绝且保留原文；id/kind 不可原地变化；createdAt 不变，updatedAt 由保存服务写为真实时间"
-  - "决定引用按 G2 为 {inputId}|{interactionId}，程序核对主体/来源/状态，不解释语义；交互引用在 P4 前拒绝"
+  - "决定引用按 G2 为 {inputId}|{interactionId}，程序核对主体/来源/状态（kind=user），不解释语义；委派指令与交互引用被拒"
 review_rounds:
   - round: 1
     verdict: failed
@@ -259,6 +259,7 @@ review_rounds:
 risks_remaining:
   - "同请求重试复用 requestKey 属 API/请求层（P4）；文件级 CAS 会拒绝过期重试，不会重复写入"
   - "需求保存尚未写入 file_saves 回执（S6 表列出的宿主规范保存之一）；当前以同目录原子替换 + 摘要 CAS 保证不重复写入"
+  - "authorizationRef 只接受 kind=user 的输入；P4 交互接线后 {interactionId} 分支启用"
   - "需求完成内容/状态与项目报告纳入同次保存、Git 回执属 P5 结算"
 ```
 
@@ -280,8 +281,8 @@ changed:
   - path: devagent/test/runtime.test.ts
     purpose: 端到端：主管经真实 Pi 循环建立知识入口，文件与 initializationRef 真实存在
 behavior:
-  - "实测：npm test 142/142（12 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
-  - "写项目需要用户明确同意：无决定引用时不写，返回 needsConsent 与完整计划（内部 ctx.ui.confirm 属 P4 交互接线）"
+  - "实测：npm test 143/143（12 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
+  - "写项目需要用户明确同意：无决定引用（或引用非 user 输入）时不写，返回 needsConsent 与完整计划（内部 ctx.ui.confirm 属 P4 交互接线）"
   - "每个入口独立版本校验与原子替换：冲突/失败保留原文，返回逐文件结果与缺失清单，重试只补缺项"
   - "ready 只表示入口真实可用（文件存在且为文件），并随 initializationRef 记录实际写入版本"
 review_rounds:
@@ -301,6 +302,7 @@ review_rounds:
 risks_remaining:
   - "内部 ctx.ui.confirm（需要新决定时在工具内确认）属 P4；当前以“拒绝 + 完整计划 + 决定引用”达成同一契约"
   - "入口内容的业务质量（定位/能力/未知是否完整）由 Agent 判断，程序只核对保存与可用性"
+  - "每个入口写入的 file_saves 回执已登记（state=saved），但重试以磁盘真实状态重规划，回执暂未被读回核对（S6 阶梯的核对部分随请求幂等层）"
 ```
 
 ## 后续切片（计划内，未开始）

@@ -240,6 +240,33 @@ describe('requirement records', () => {
     expect(forbidden.details['code']).toBe('FORBIDDEN');
   });
 
+  it('refuses a decision that is not a user input', async () => {
+    const f = fixture();
+    // A delegated instruction is the chief's work order, not the user's decision about a requirement.
+    f.store.acceptInput({
+      inputId: 'i-delegated',
+      projectId: 'p-1',
+      sessionId: 'c-1',
+      sourceKey: 'c-1:i-delegated',
+      requestKey: 'i-delegated',
+      method: 'task.session',
+      kind: 'delegation',
+      payload: { content: [{ type: 'text', text: 'implement it' }] },
+    });
+
+    const saved = await f.tool.execute('c1', {
+      op: 'save',
+      requirementId: 'req-reset',
+      expectedVersion: null,
+      markdown: proposal(),
+      authorizationRef: { inputId: 'i-delegated' },
+    });
+
+    expect(saved.isError).toBe(true);
+    expect(saved.details['code']).toBe('INVALID_ARGUMENT');
+    expect(existsSync(requirementPath(f.cwd, 'req-reset'))).toBe(false);
+  });
+
   it('lists valid records with filters and paging, and reports unreadable files', async () => {
     const f = fixture();
     for (const [id, status] of [

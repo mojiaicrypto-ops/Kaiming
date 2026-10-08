@@ -11,7 +11,7 @@ runs:
   - command: cd devagent && npm test
     result: passed
     exit_code: 0
-    evidence: "12 个测试文件、142 项通过（project 6 项；runtime 39 项）"
+    evidence: "12 个测试文件、143 项通过（project 6 项；runtime 39 项）"
   - command: cd devagent && npm run check:prompts / npm run spikes / node checks/runner-real-model.ts
     result: passed
     exit_code: 0
@@ -19,7 +19,7 @@ runs:
 key_evidence:
   - "预览：requestWriteUse=false 返回真实入口缺口、逐文件动作与完整拟写内容，且不写任何文件"
   - "同意：无决定引用时不写，返回 FORBIDDEN + needsConsent + 完整计划；引用真实用户输入后写入"
-  - "写入：文件原子替换并读回；initializationRef 记录实际版本；每个入口写入 file_saves 回执（state=saved）"
+  - "写入：文件原子替换并读回；initializationRef 记录实际版本；每个入口登记 file_saves 回执（state=saved；重试以磁盘真实状态重规划）"
   - "重复执行：已一致的入口报 reused，不重写"
   - "冲突：已存在但预期为新建、或版本不符时拒绝并保留原文；传入真实版本可有意替换"
   - "边界：越出项目的路径、不可读的复用依据、非主管、过期项目版本分别被拒；过期版本时文件已在盘上、项目记录未写"
@@ -44,7 +44,7 @@ runs:
   - command: cd devagent && npm test
     result: passed
     exit_code: 0
-    evidence: "11 个测试文件、135 项通过（requirement 11 项；runtime 38 项）"
+    evidence: "12 个测试文件、143 项通过（requirement 12 项；runtime 39 项）"
   - command: cd devagent && npm run check:prompts / npm run spikes / node checks/runner-real-model.ts
     result: passed
     exit_code: 0
@@ -54,7 +54,7 @@ key_evidence:
   - "非法记录（缺节、状态与类型不符、重复键、schemaVersion 不支持、id 与文件名不符）拒绝且不落盘，问题可定位"
   - "CAS：过期版本拒绝且原文不变；相同内容重复保存按重试处理；id/kind 不可原地变化，createdAt 不变"
   - "list 从文件重建并支持 kind/status 过滤与游标分页；损坏文件出现在 invalidFiles 且不出现在合法记录中"
-  - "决定引用：未知输入被拒且不落盘；交互引用在 P4 前明确拒绝；developer 可读不可写（G1 op 级权限收口）"
+  - "决定引用：未知输入与委派指令（kind=delegation）被拒且不落盘；交互引用在 P4 前明确拒绝；developer 可读不可写（G1 op 级权限收口）"
   - "端到端（真实 Pi 循环）：主管调用 requirement.save 后记录落在项目 .dev/requirements/<id>.md"
   - "正文校验：中间空节与末节空节都被拒（修复前仅末节被发现）；modules 越出项目/非文件/不存在被拒，真实项目文件可保存"
   - "健壮性：单个不可读文件（悬空符号链接）出现在 invalidFiles，其余合法记录仍可列出"
