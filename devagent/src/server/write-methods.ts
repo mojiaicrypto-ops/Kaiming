@@ -15,6 +15,12 @@ export interface WriteMethodsOptions {
     sessionId: string,
     params: { inputId: string; requestKey: string; reason: string },
   ) => Promise<{ readonly status: InputRow['status']; readonly stopRequested: boolean }>;
+  /** The same Task control path the chief's own tool uses (pause/resume/cancel + stop flow). */
+  readonly controlTask: (params: {
+    taskId: string;
+    expectedRevision: number;
+    command: 'pause' | 'resume' | 'cancel';
+  }) => Promise<{ readonly status: string; readonly revision: number; readonly currentSessionIds: readonly string[] }>;
 }
 
 export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOptions): void {
@@ -117,6 +123,107 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
       }
       // Already settled: stopping is idempotent and reports the current state unchanged.
       return stopResult(store, sessionId, inputId, input.status, false);
+    },
+  });
+
+  router.register('task.control', {
+    write: true,
+    run: async (params): Promise<unknown> => {
+      const project = requireProject(store, params);
+      const taskId = readString(params, 'taskId');
+      const command = params['command'];
+      const expectedRevision = params['expectedRevision'];
+      if (taskId === undefined || typeof expectedRevision !== 'number') {
+        throw new RpcError('INVALID_ARGUMENT', 'taskId and expectedRevision are required');
+      }
+      if (command !== 'pause' && command !== 'resume' && command !== 'cancel') {
+        throw new RpcError('INVALID_ARGUMENT', 'command must be pause, resume or cancel');
+      }
+      const task = store.getTask(taskId);
+      if (task === undefined || task.projectId !== project.id) {
+        throw new RpcError('NOT_FOUND', `Task ${taskId} does not exist in this project`, { taskId });
+      }
+      // The stop flow lives in the runner: the final status is written only after the work stopped.
+      const controlled = await options.controlTask({ taskId, expectedRevision, command });
+      options.notify();
+      return {
+        taskId,
+        command,
+        status: controlled.status,
+        revision: controlled.revision,
+        currentSessionIds: controlled.currentSessionIds,
+      };
+    },
+  });
+
+  router.register('session.cleanup', {
+    write: true,
+    run: (params): unknown => {
+      const project = requireProject(store, params);
+      const sessionId = readString(params, 'sessionId');
+      const expectedRevision = params['expectedRevision'];
+      if (sessionId === undefined || typeof expectedRevision !== 'number') {
+        throw new RpcError('INVALID_ARGUMENT', 'sessionId and expectedRevision are required');
+      }
+      const session = store.getSession(sessionId);
+      if (session === undefined || session.projectId !== project.id) {
+        throw new RpcError('NOT_FOUND', `session ${sessionId} does not exist in this project`, { sessionId });
+      }
+      const gaps = store.sessionCleanupGaps(sessionId);
+      if (gaps.length > 0) {
+        // A referenced or still-working session is never deleted: the reasons are the answer.
+        throw new RpcError('WORKSPACE_BUSY', 'the session is still referenced or has unfinished work', { gaps });
+      }
+      store.deleteSession({ sessionId, expectedRevision });
+      return { sessionId, deleted: true };
+    },
+  });
+
+  router.register('session.recovery.resolve', {
+    write: true,
+    run: (params, context): unknown => {
+      const project = requireProject(store, params);
+      const sessionId = readString(params, 'sessionId');
+      const inputId = readString(params, 'inputId');
+      const expectedRevision = params['expectedRevision'];
+      const resolution = params['resolution'];
+      if (sessionId === undefined || inputId === undefined || typeof expectedRevision !== 'number') {
+        throw new RpcError('INVALID_ARGUMENT', 'sessionId, inputId and expectedRevision are required');
+      }
+      if (resolution !== 'completed' && resolution !== 'failed' && resolution !== 'stopped') {
+        throw new RpcError('INVALID_ARGUMENT', 'resolution must be completed, failed or stopped');
+      }
+      const session = store.getSession(sessionId);
+      if (session === undefined || session.projectId !== project.id) {
+        throw new RpcError('NOT_FOUND', `session ${sessionId} does not exist in this project`, { sessionId });
+      }
+      const evidenceRefs = params['evidenceRefs'];
+      // No evidence, no closure: the input stays interrupted and the caller brings real verification.
+      if (
+        !Array.isArray(evidenceRefs) ||
+        evidenceRefs.length === 0 ||
+        evidenceRefs.some((entry) => typeof entry !== 'string' || entry.trim() === '')
+      ) {
+        throw new RpcError('PI_INPUT_UNCONFIRMED', 'resolution needs evidenceRefs describing what was verified', {
+          inputId,
+        });
+      }
+      const resolved = store.resolveInterruptedInput({
+        sessionId,
+        inputId,
+        expectedRevision,
+        resolution,
+        evidenceRefs: evidenceRefs as string[],
+        resolvedBy: context.actor,
+      });
+      // The session may now consume its remaining work.
+      options.notify();
+      return {
+        inputId: resolved.inputId,
+        status: resolved.status,
+        revision: resolved.revision,
+        recovery: resolved.recovery,
+      };
     },
   });
 }

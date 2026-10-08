@@ -67,6 +67,7 @@ export function startWorkbench(options: StartOptions): Promise<{
     store,
     notify: () => worker.notify(),
     stopInput: (sessionId, stop) => runner.requestStop(sessionId, stop),
+    controlTask: (control) => runner.controlTask(control),
   });
 
   const workbench = createWorkbenchServer({

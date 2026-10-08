@@ -181,6 +181,10 @@ export function toRpcError(error: unknown): RpcError {
     return error;
   }
   if (error instanceof StoreError) {
+    if (error.code === 'RECOVERY_REQUIRED') {
+      // The storage layer asks for verification; the public meaning is "the input is unconfirmed".
+      return new RpcError('PI_INPUT_UNCONFIRMED', error.message, error.details);
+    }
     const code = (ERROR_CODES as readonly string[]).includes(error.code)
       ? (error.code as ErrorCode)
       : 'STORAGE_UNAVAILABLE';

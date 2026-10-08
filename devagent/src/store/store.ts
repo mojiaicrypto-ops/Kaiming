@@ -252,6 +252,8 @@ export interface InputRow {
   readonly stopReason: string | null;
   readonly errorCode: string | null;
   readonly errorMessage: string | null;
+  /** The recovery verdict that closed an interrupted input, when one was recorded. */
+  readonly recovery: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -305,7 +307,7 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -332,6 +334,13 @@ CREATE TABLE IF NOT EXISTS results (
 );
 CREATE INDEX IF NOT EXISTS idx_results_task ON results (taskId, createdAt);
 CREATE INDEX IF NOT EXISTS idx_results_input ON results (inputId);`;
+
+/**
+ * Columns added by the v5 → v6 migration: the recovery verdict that closed an interrupted input
+ * (what was verified, by whom, on whose evidence).
+ */
+const V6_DDL = `
+ALTER TABLE session_inputs ADD COLUMN recovery TEXT;`;
 
 /** Tables added by the v3 → v4 migration (professional Session membership of a Task). */
 const V4_DDL = `
@@ -463,6 +472,7 @@ CREATE TABLE IF NOT EXISTS session_inputs (
   stopReason TEXT,
   errorCode TEXT,
   errorMessage TEXT,
+  recovery TEXT,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL,
   UNIQUE (sessionId, seq),
@@ -835,6 +845,128 @@ export class Store {
       result: row.result === null ? undefined : (JSON.parse(row.result) as unknown),
       error: row.error === null ? undefined : (JSON.parse(row.error) as unknown),
     };
+  }
+
+  /**
+   * Why a session cannot be cleaned up: it must have no unfinished work and must not be referenced by
+   * a Task or by a recorded result (the record has to stay readable).
+   */
+  sessionCleanupGaps(sessionId: string): string[] {
+    const gaps: string[] = [];
+    const session = this.getSession(sessionId);
+    if (session === undefined) {
+      return ['the session does not exist'];
+    }
+    if (session.currentTaskId !== null) {
+      gaps.push(`the session is bound to Task ${session.currentTaskId}`);
+    }
+    // A Task keeps referencing the chief session that coordinated it, so that record cannot be
+    // deleted without destroying delivery history: it is a reason to refuse, not to cascade.
+    const chiefing = this.db
+      .prepare('SELECT COUNT(*) AS n FROM tasks WHERE chiefSessionId = ?')
+      .get(sessionId) as { n: number };
+    if (chiefing.n > 0) {
+      gaps.push(`the session coordinated ${chiefing.n} recorded Task(s)`);
+    }
+    for (const input of this.listInputs(sessionId)) {
+      if (input.status === 'queued' || input.status === 'processing') {
+        gaps.push(`input ${input.inputId} is ${input.status}`);
+      }
+      if (input.status === 'interrupted') {
+        gaps.push(`input ${input.inputId} is interrupted and not verified`);
+      }
+    }
+    for (const member of this.listTaskSessions(sessionId)) {
+      gaps.push(`the session is a member of Task ${member.taskId}`);
+    }
+    const referenced = this.db
+      .prepare('SELECT COUNT(*) AS n FROM results WHERE sessionId = ?')
+      .get(sessionId) as { n: number };
+    if (referenced.n > 0) {
+      gaps.push(`the session produced ${referenced.n} recorded result(s)`);
+    }
+    return gaps;
+  }
+
+  /**
+   * Remove a session and its own rows once nothing references it (R1). The dependent rows go first,
+   * because they reference the session; a revision mismatch rolls the whole transaction back.
+   */
+  deleteSession(params: { sessionId: string; expectedRevision: number }): void {
+    this.transaction(() => {
+      const session = this.getSession(params.sessionId);
+      if (session === undefined) {
+        throw new StoreError('NOT_FOUND', 'session does not exist', { sessionId: params.sessionId });
+      }
+      this.db.prepare('DELETE FROM session_inputs WHERE sessionId = ?').run(params.sessionId);
+      this.db.prepare('DELETE FROM session_bindings WHERE sessionId = ?').run(params.sessionId);
+      this.db.prepare('DELETE FROM task_sessions WHERE sessionId = ?').run(params.sessionId);
+      const outcome = this.db
+        .prepare('DELETE FROM sessions WHERE id = ? AND revision = ?')
+        .run(params.sessionId, params.expectedRevision);
+      if (outcome.changes !== 1) {
+        throw new StoreError('VERSION_CONFLICT', 'session revision does not match', {
+          sessionId: params.sessionId,
+          actual: session.revision,
+        });
+      }
+    });
+  }
+
+  /**
+   * Close an interrupted input with the verdict a real verification reached (S7/R1): the evidence is
+   * required, the status is checked and the revision compared, and nothing is re-sent to Pi.
+   */
+  resolveInterruptedInput(params: {
+    sessionId: string;
+    inputId: string;
+    expectedRevision: number;
+    resolution: 'completed' | 'failed' | 'stopped';
+    evidenceRefs: readonly string[];
+    resolvedBy: string;
+  }): InputRow {
+    return this.transaction(() => {
+      const input = this.requireInput(params.inputId);
+      if (input.sessionId !== params.sessionId) {
+        throw new StoreError('NOT_FOUND', 'input does not belong to this session', { inputId: params.inputId });
+      }
+      if (input.status !== 'interrupted') {
+        throw new StoreError('INVALID_ARGUMENT', `input ${params.inputId} is ${input.status}, not interrupted`, {
+          inputId: params.inputId,
+        });
+      }
+      if (params.evidenceRefs.length === 0 || params.evidenceRefs.some((ref) => ref.trim() === '')) {
+        // Without real evidence the input stays interrupted: a verdict must cite what was verified.
+        throw new StoreError('RECOVERY_REQUIRED', 'no evidence was cited for this resolution', {
+          inputId: params.inputId,
+        });
+      }
+      const outcome = this.db
+        .prepare(
+          `UPDATE session_inputs
+             SET status = ?, recovery = ?, revision = revision + 1, updatedAt = ?
+           WHERE inputId = ? AND revision = ? AND status = 'interrupted'`,
+        )
+        .run(
+          params.resolution,
+          JSON.stringify({
+            resolution: params.resolution,
+            evidenceRefs: params.evidenceRefs,
+            resolvedBy: params.resolvedBy,
+            resolvedAt: this.clock(),
+          }),
+          this.clock(),
+          params.inputId,
+          params.expectedRevision,
+        );
+      if (outcome.changes !== 1) {
+        throw new StoreError('VERSION_CONFLICT', 'input revision does not match', {
+          inputId: params.inputId,
+          actual: input.revision,
+        });
+      }
+      return this.requireInput(params.inputId);
+    });
   }
 
   /**
@@ -1804,6 +1936,13 @@ export class Store {
   }): TaskRow {
     return this.transaction(() => {
       const task = this.requireTask(params.taskId);
+      if (task.status === 'completed' || task.status === 'cancelled') {
+        // A terminal Task is finished history: control cannot rewrite it back into a live lifecycle.
+        throw new StoreError('VERSION_CONFLICT', 'the Task is already terminal', {
+          taskId: params.taskId,
+          status: task.status,
+        });
+      }
       if (task.revision !== params.expectedRevision) {
         throw new StoreError('VERSION_CONFLICT', 'Task revision does not match', {
           taskId: params.taskId,
@@ -1895,6 +2034,13 @@ export class Store {
   setCandidate(params: { taskId: string; expectedRevision: number; candidate: unknown }): TaskRow {
     return this.transaction(() => {
       const task = this.requireTask(params.taskId);
+      if (task.status === 'completed' || task.status === 'cancelled') {
+        // A terminal Task is finished history: control cannot rewrite it back into a live lifecycle.
+        throw new StoreError('VERSION_CONFLICT', 'the Task is already terminal', {
+          taskId: params.taskId,
+          status: task.status,
+        });
+      }
       if (task.revision !== params.expectedRevision) {
         throw new StoreError('VERSION_CONFLICT', 'Task revision does not match', {
           taskId: params.taskId,
@@ -1981,6 +2127,18 @@ export class Store {
     });
   }
 
+  private migrateV5ToV6(): void {
+    this.transaction(() => {
+      const column = this.db
+        .prepare("SELECT COUNT(*) AS present FROM pragma_table_info('session_inputs') WHERE name = 'recovery'")
+        .get() as { present: number };
+      if (column.present === 0) {
+        this.db.exec(V6_DDL);
+      }
+      this.db.exec('PRAGMA user_version = 6;');
+    });
+  }
+
   private migrate(): void {
     const { userVersion } = this.pragmas();
     if (userVersion === 0) {
@@ -1999,15 +2157,21 @@ export class Store {
       this.migrateV2ToV3();
       this.migrateV3ToV4();
       this.migrateV4ToV5();
+      this.migrateV5ToV6();
     } else if (userVersion === 2) {
       this.migrateV2ToV3();
       this.migrateV3ToV4();
       this.migrateV4ToV5();
+      this.migrateV5ToV6();
     } else if (userVersion === 3) {
       this.migrateV3ToV4();
       this.migrateV4ToV5();
+      this.migrateV5ToV6();
     } else if (userVersion === 4) {
       this.migrateV4ToV5();
+      this.migrateV5ToV6();
+    } else if (userVersion === 5) {
+      this.migrateV5ToV6();
     } else if (userVersion !== SCHEMA_VERSION) {
       throw new StoreError('VERSION_CONFLICT', 'unsupported store schema version', {
         userVersion,

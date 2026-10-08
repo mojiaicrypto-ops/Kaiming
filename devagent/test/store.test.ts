@@ -59,7 +59,7 @@ describe('store pragmas and schema', () => {
       journalMode: 'wal',
       synchronous: 2,
       foreignKeys: 1,
-      userVersion: 5,
+      userVersion: 6,
     });
   });
 
@@ -79,11 +79,12 @@ describe('store pragmas and schema', () => {
     const migrated = new Store({ path, serverEpoch: 1 });
     stores.push(migrated);
 
-    expect(migrated.pragmas().userVersion).toBe(5);
+    expect(migrated.pragmas().userVersion).toBe(6);
     const input = migrated.getInput('i-1');
     expect(input).toMatchObject({ status: 'queued', effectiveConfig: null, checkpoint: null });
     expect(migrated.claimNextInput('s-1').kind).toBe('claimed');
     expect(migrated.listTaskResults('t-none')).toEqual([]);
+    expect(migrated.getInput('i-1')?.recovery ?? null).toBeNull();
   });
 
   it('refuses to open a database that already has two running inputs in one session', () => {

@@ -101,6 +101,7 @@ async function harness(
     store,
     notify: () => worker.notify(),
     stopInput: (sessionId, stop) => runner.requestStop(sessionId, stop),
+    controlTask: (control) => runner.controlTask(control),
   });
   const workbench = createWorkbenchServer({ store, auth, router });
   const { origin } = await workbench.listen(0);
@@ -344,6 +345,331 @@ describe('write surface', () => {
     expect(outcome.kind).toBe('stopped');
     expect(h.store.getInput('in-5')?.status).toBe('stopped');
   }, 60_000);
+
+  it('controls a Task through the same stop flow as the chief tool', async () => {
+    const h = await harness();
+    const task = h.store.createTask({
+      id: 't-ctrl',
+      projectId: h.projectId,
+      chiefSessionId: 's-chief',
+      ownerEpoch: 1,
+      type: 'read',
+      requiresTest: false,
+      goal: 'investigate',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'p' },
+      authorizationRefs: [],
+      sourceInputId: 'none',
+    });
+
+    const paused = await h.call('task.control', {
+      projectId: h.projectId,
+      taskId: task.id,
+      expectedRevision: h.store.getTask(task.id)?.revision ?? 1,
+      command: 'pause',
+    });
+    expect(paused.status).toBe(200);
+    expect(resultOf<{ status: string }>(paused.body).status).toBe('paused');
+
+    const stale = await h.call('task.control', {
+      projectId: h.projectId,
+      taskId: task.id,
+      expectedRevision: h.store.getTask(task.id)?.revision ?? 1,
+      command: 'cancel',
+    });
+    expect(resultOf<{ status: string }>(stale.body).status).toBe('cancelled');
+
+    const wrongProject = await h.call('task.control', {
+      projectId: h.projectId,
+      taskId: 't-nope',
+      expectedRevision: 1,
+      command: 'pause',
+    });
+    expect(wrongProject.status).toBe(404);
+  }, 30_000);
+
+  it('cleans up only a session nothing references and lists the real reasons otherwise', async () => {
+    const h = await harness();
+    // A session that still has work cannot be cleaned up: the reason names the input.
+    h.store.acceptInput({
+      inputId: 'in-8',
+      projectId: h.projectId,
+      sessionId: 's-dev',
+      sourceKey: 's-dev:in-8',
+      requestKey: 'in-8',
+      method: 'task.session',
+      kind: 'delegation',
+      payload: { content: [{ type: 'text', text: 'x' }] },
+    });
+    const busy = await h.call('session.cleanup', {
+      projectId: h.projectId,
+      sessionId: 's-dev',
+      expectedRevision: h.store.getSession('s-dev')?.revision ?? 1,
+    });
+    // WORKSPACE_BUSY: the session is still referenced, and the gaps say why (R6 mapping).
+    expect(busy.status).toBe(409);
+    expect(errorCode(busy.body)).toBe('WORKSPACE_BUSY');
+    expect((busy.body['error'] as { details: { gaps: string[] } }).details.gaps.join(' ')).toContain('in-8');
+    expect(h.store.getSession('s-dev')).toBeDefined();
+
+    // A session with its own rows still deletes cleanly: the rows go with it (no FK leftovers).
+    const created = await h.call('session.create', { projectId: h.projectId });
+    const fresh = resultOf<{ session: { sessionId: string } }>(created.body).session.sessionId;
+    h.store.acceptInput({
+      inputId: 'in-fresh',
+      projectId: h.projectId,
+      sessionId: fresh,
+      sourceKey: `${fresh}:in-fresh`,
+      requestKey: 'in-fresh',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: 'done' }] },
+    });
+    const claimedFresh = h.store.claimNextInput(fresh);
+    if (claimedFresh.kind !== 'claimed') {
+      throw new Error('the fresh session input could not be claimed');
+    }
+    h.store.finishInput({
+      inputId: 'in-fresh',
+      expectedRevision: claimedFresh.input.revision,
+      status: 'completed',
+    });
+    h.store.recordSessionBinding({ sessionId: fresh, piFile: join(tmpdir(), 'devagent-fresh.jsonl'), hasHistory: false, configHash: 'c' });
+    expect(h.store.sessionCleanupGaps(fresh)).toEqual([]);
+    const cleaned = await h.call('session.cleanup', {
+      projectId: h.projectId,
+      sessionId: fresh,
+      expectedRevision: h.store.getSession(fresh)?.revision ?? 1,
+    });
+
+    expect(cleaned.status).toBe(200);
+    expect(resultOf<{ deleted: boolean }>(cleaned.body).deleted).toBe(true);
+    expect(h.store.getSession(fresh)).toBeUndefined();
+    // Its own rows went with it (a parent-first delete would have failed on the FK).
+    expect(h.store.listInputs(fresh)).toEqual([]);
+    expect(h.store.getSessionBinding(fresh)).toBeUndefined();
+
+    // A session that coordinated a Task is referenced by that record: refused with the reason.
+    const coordinated = 's-chief';
+    const task = h.store.createTask({
+      id: 't-history',
+      projectId: h.projectId,
+      chiefSessionId: coordinated,
+      ownerEpoch: 1,
+      type: 'read',
+      requiresTest: false,
+      goal: 'investigate',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'p' },
+      authorizationRefs: [],
+      sourceInputId: 'none',
+    });
+    h.store.controlTask({ taskId: task.id, expectedRevision: task.revision, command: 'cancel' });
+    expect(h.store.getSession(coordinated)?.currentTaskId).toBeNull();
+    const chiefed = await h.call('session.cleanup', {
+      projectId: h.projectId,
+      sessionId: coordinated,
+      expectedRevision: h.store.getSession(coordinated)?.revision ?? 1,
+    });
+    expect(chiefed.status).toBe(409);
+    expect(errorCode(chiefed.body)).toBe('WORKSPACE_BUSY');
+    expect((chiefed.body['error'] as { details: { gaps: string[] } }).details.gaps.join(' ')).toContain('coordinated');
+
+    // A wrong revision on an otherwise clean session is a version conflict, and nothing is deleted.
+    const spare = await h.call('session.create', { projectId: h.projectId });
+    const spareId = resultOf<{ session: { sessionId: string } }>(spare.body).session.sessionId;
+    const stale = await h.call('session.cleanup', {
+      projectId: h.projectId,
+      sessionId: spareId,
+      expectedRevision: 999,
+    });
+    expect(stale.status).toBe(409);
+    expect(errorCode(stale.body)).toBe('VERSION_CONFLICT');
+    expect(h.store.getSession(spareId)).toBeDefined();
+  }, 30_000);
+
+  it('resolves an interrupted input only with cited evidence, then lets the queue continue', async () => {
+    const h = await harness();
+    // An interrupted input blocks the session until a real verification closes it.
+    h.store.acceptInput({
+      inputId: 'in-9',
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      sourceKey: 's-chief:in-9',
+      requestKey: 'in-9',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: 'first' }] },
+    });
+    const claimed = h.store.claimNextInput('s-chief');
+    if (claimed.kind !== 'claimed') {
+      throw new Error('the input could not be claimed');
+    }
+    h.store.finishInput({
+      inputId: 'in-9',
+      expectedRevision: claimed.input.revision,
+      status: 'interrupted',
+      errorCode: 'HOST_SAVE_FAILED',
+      errorMessage: 'boundary unknown',
+    });
+
+    const withoutEvidence = await h.call('session.recovery.resolve', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      inputId: 'in-9',
+      expectedRevision: h.store.getInput('in-9')?.revision ?? 1,
+      resolution: 'completed',
+      evidenceRefs: [],
+    });
+    expect(withoutEvidence.status).toBe(409);
+    expect(errorCode(withoutEvidence.body)).toBe('PI_INPUT_UNCONFIRMED');
+    expect(h.store.getInput('in-9')?.status).toBe('interrupted');
+
+    const resolved = await h.call('session.recovery.resolve', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      inputId: 'in-9',
+      expectedRevision: h.store.getInput('in-9')?.revision ?? 1,
+      resolution: 'completed',
+      evidenceRefs: ['session:history:i-1'],
+    });
+
+    expect(resolved.status).toBe(200);
+    const row = h.store.getInput('in-9');
+    expect(row?.status).toBe('completed');
+    expect(JSON.parse(row?.recovery ?? '{}')).toMatchObject({
+      resolution: 'completed',
+      evidenceRefs: ['session:history:i-1'],
+    });
+    // The session is consumable again and a second resolve is refused (the input is not interrupted).
+    const again = await h.call('session.recovery.resolve', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      inputId: 'in-9',
+      expectedRevision: row?.revision ?? 1,
+      resolution: 'completed',
+      evidenceRefs: ['x'],
+    });
+    expect(again.status).toBe(400);
+  }, 30_000);
+
+  it('refuses to control a terminal Task and to resolve without real evidence', async () => {
+    const h = await harness();
+    const task = h.store.createTask({
+      id: 't-done',
+      projectId: h.projectId,
+      chiefSessionId: 's-chief',
+      ownerEpoch: 1,
+      type: 'read',
+      requiresTest: false,
+      goal: 'investigate',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'p' },
+      authorizationRefs: [],
+      sourceInputId: 'none',
+    });
+    h.store.controlTask({ taskId: task.id, expectedRevision: task.revision, command: 'cancel' });
+
+    const resurrect = await h.call('task.control', {
+      projectId: h.projectId,
+      taskId: task.id,
+      expectedRevision: h.store.getTask(task.id)?.revision ?? 1,
+      command: 'pause',
+    });
+
+    expect(resurrect.status).toBe(409);
+    expect(errorCode(resurrect.body)).toBe('VERSION_CONFLICT');
+    expect(h.store.getTask(task.id)?.status).toBe('cancelled');
+
+    // Blank evidence is not evidence.
+    h.store.createSession({ id: 's-blank', projectId: h.projectId, roleId: 'chief', cwd: h.store.getProject(h.projectId)?.realPath ?? '' });
+    h.store.acceptInput({
+      inputId: 'in-blank',
+      projectId: h.projectId,
+      sessionId: 's-blank',
+      sourceKey: 's-blank:in-blank',
+      requestKey: 'in-blank',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: 'x' }] },
+    });
+    const claimed = h.store.claimNextInput('s-blank');
+    if (claimed.kind !== 'claimed') {
+      throw new Error('the input could not be claimed');
+    }
+    h.store.finishInput({
+      inputId: 'in-blank',
+      expectedRevision: claimed.input.revision,
+      status: 'interrupted',
+      errorCode: 'HOST_SAVE_FAILED',
+    });
+    const blank = await h.call('session.recovery.resolve', {
+      projectId: h.projectId,
+      sessionId: 's-blank',
+      inputId: 'in-blank',
+      expectedRevision: h.store.getInput('in-blank')?.revision ?? 1,
+      resolution: 'stopped',
+      evidenceRefs: ['   '],
+    });
+    expect(blank.status).toBe(409);
+    expect(errorCode(blank.body)).toBe('PI_INPUT_UNCONFIRMED');
+    expect(h.store.getInput('in-blank')?.status).toBe('interrupted');
+  }, 30_000);
+
+  it('lets the session consume its remaining work after a resolution', async () => {
+    const h = await harness();
+    h.store.acceptInput({
+      inputId: 'in-old',
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      sourceKey: 's-chief:in-old',
+      requestKey: 'in-old',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: 'first' }] },
+    });
+    const claimed = h.store.claimNextInput('s-chief');
+    if (claimed.kind !== 'claimed') {
+      throw new Error('the input could not be claimed');
+    }
+    h.store.finishInput({
+      inputId: 'in-old',
+      expectedRevision: claimed.input.revision,
+      status: 'interrupted',
+      errorCode: 'HOST_SAVE_FAILED',
+    });
+    // While the interrupted input is unverified nothing else of this session is consumable.
+    expect(h.store.claimNextInput('s-chief').kind).toBe('blocked');
+
+    const resolved = await h.call('session.recovery.resolve', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      inputId: 'in-old',
+      expectedRevision: h.store.getInput('in-old')?.revision ?? 1,
+      resolution: 'stopped',
+      evidenceRefs: ['session:history:i-1'],
+    });
+    expect(resolved.status).toBe(200);
+
+    // Real continuation: the next queued input is claimable again (S7: new work, not a resend).
+    await h.call(
+      'session.input.submit',
+      { projectId: h.projectId, sessionId: 's-chief', content: [{ type: 'text', text: 'continue' }] },
+      'in-new',
+    );
+    const next = h.store.claimNextInput('s-chief');
+    expect(next.kind).toBe('claimed');
+    if (next.kind === 'claimed') {
+      expect(next.input.inputId).toBe('in-new');
+      h.store.finishInput({ inputId: 'in-new', expectedRevision: next.input.revision, status: 'completed' });
+    }
+  }, 30_000);
 
   it('closes an input whose Task already ended instead of blocking the queue with it', async () => {
     const h = await harness();
