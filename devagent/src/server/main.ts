@@ -1,0 +1,81 @@
+/**
+ * Runnable entry for the workbench server: opens the store, binds the access password from the
+ * environment and serves the same-origin HTTP surface.
+ *
+ * Nothing sensitive is printed: the access password is only read, and the startup line carries the
+ * address and the data directory so the operator knows what is running.
+ */
+import { mkdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Store } from '../store/store.ts';
+import { AuthService } from './auth.ts';
+import { RpcRouter } from './rpc.ts';
+import { createWorkbenchServer } from './http.ts';
+import { registerCoreMethods } from './methods.ts';
+import type { RuntimeDefaults } from '../runtime/config.ts';
+
+const here = fileURLToPath(new URL('.', import.meta.url));
+
+export interface StartOptions {
+  readonly dataDir: string;
+  readonly accessPassword: string;
+  readonly port: number;
+  readonly host?: string;
+  readonly promptDir?: string;
+  readonly staticDir?: string;
+  readonly model?: { readonly providerId: string; readonly modelId: string };
+  readonly now?: () => string;
+}
+
+export function startWorkbench(options: StartOptions): Promise<{
+  readonly origin: string;
+  readonly port: number;
+  close(): Promise<void>;
+}> {
+  mkdirSync(options.dataDir, { recursive: true });
+  const store = new Store({ path: join(options.dataDir, 'state.db'), serverEpoch: 1 });
+  const server: RuntimeDefaults = {
+    model: options.model ?? { providerId: 'unset', modelId: 'unset' },
+    agentDir: options.dataDir,
+    promptDir: options.promptDir ?? resolve(here, '../../../docs/technicalnew/prompts'),
+    tools: [],
+  };
+  const auth = new AuthService({ accessPassword: options.accessPassword });
+  const router = new RpcRouter();
+  registerCoreMethods(router, { store, server });
+  const workbench = createWorkbenchServer({
+    store,
+    auth,
+    router,
+    ...(options.staticDir !== undefined ? { staticDir: options.staticDir } : {}),
+  });
+  return workbench.listen(options.port, options.host ?? '127.0.0.1').then(({ origin, port }) => ({
+    origin,
+    port,
+    close: async () => {
+      await workbench.close();
+      auth.revokeAll();
+      store.close();
+    },
+  }));
+}
+
+const entry = process.argv[1];
+if (entry !== undefined && resolve(entry) === resolve(fileURLToPath(import.meta.url))) {
+  const accessPassword = process.env['AGENTDEV_ACCESS_PASSWORD'] ?? '';
+  if (accessPassword.trim() === '') {
+    process.stderr.write('AGENTDEV_ACCESS_PASSWORD is required to start the workbench\n');
+    process.exit(2);
+  }
+  const dataDir = process.env['AGENTDEV_DATA_DIR'] ?? resolve(process.cwd(), '.agentdev-data');
+  const port = Number(process.env['AGENTDEV_PORT'] ?? 4173);
+  const host = process.env['AGENTDEV_HOST'] ?? '127.0.0.1';
+  const running = await startWorkbench({ dataDir, accessPassword, port, host });
+  process.stdout.write(`workbench listening on ${running.origin} (data: ${dataDir})\n`);
+  const shutdown = (): void => {
+    void running.close().then(() => process.exit(0));
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}

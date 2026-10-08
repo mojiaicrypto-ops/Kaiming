@@ -683,6 +683,97 @@ export class Store {
   }
 
   /**
+   * Claim a request key for one RPC call: the first caller runs it, a repeat with the same method and
+   * parameters replays the recorded outcome, a repeat with different parameters is a conflict, and a
+   * still-pending repeat is refused instead of running twice (R1/S2).
+   */
+  beginRequest(params: { requestKey: string; method: string; paramsDigest: string }):
+    | { readonly kind: 'run' }
+    | { readonly kind: 'replay'; readonly result: unknown; readonly error: unknown } {
+    return this.transaction(() => {
+      const receipt = this.db
+        .prepare('SELECT method, paramsDigest, status, result, error FROM request_receipts WHERE requestKey = ?')
+        .get(params.requestKey) as
+        | { method: string; paramsDigest: string; status: string; result: string | null; error: string | null }
+        | undefined;
+      if (receipt !== undefined) {
+        if (receipt.method !== params.method || receipt.paramsDigest !== params.paramsDigest) {
+          throw new StoreError('REQUEST_CONFLICT', 'the same requestId was used with different parameters', {
+            requestKey: params.requestKey,
+            method: receipt.method,
+          });
+        }
+        if (receipt.status !== 'committed') {
+          throw new StoreError('VERSION_CONFLICT', 'this request is still pending', {
+            requestKey: params.requestKey,
+          });
+        }
+        return {
+          kind: 'replay' as const,
+          result: receipt.result === null ? undefined : (JSON.parse(receipt.result) as unknown),
+          error: receipt.error === null ? undefined : (JSON.parse(receipt.error) as unknown),
+        };
+      }
+      const timestamp = this.clock();
+      this.db
+        .prepare(
+          `INSERT INTO request_receipts (requestKey, method, paramsDigest, status, createdAt, updatedAt)
+           VALUES (?, ?, ?, 'pending', ?, ?)`,
+        )
+        .run(params.requestKey, params.method, params.paramsDigest, timestamp, timestamp);
+      return { kind: 'run' as const };
+    });
+  }
+
+  /** Record the real outcome of a claimed request; a failure is recorded as truthfully as a success. */
+  commitRequest(params: {
+    requestKey: string;
+    result?: unknown;
+    error?: { code: string; message: string; details?: unknown };
+  }): void {
+    const outcome = this.db
+      .prepare(
+        `UPDATE request_receipts SET status = 'committed', result = ?, error = ?, updatedAt = ?
+           WHERE requestKey = ? AND status = 'pending'`,
+      )
+      .run(
+        params.result === undefined ? null : JSON.stringify(params.result),
+        params.error === undefined ? null : JSON.stringify(params.error),
+        this.clock(),
+        params.requestKey,
+      );
+    if (outcome.changes !== 1) {
+      throw new StoreError('VERSION_CONFLICT', 'this request is not pending any more', {
+        requestKey: params.requestKey,
+      });
+    }
+  }
+
+  getRequestReceipt(requestKey: string): {
+    readonly method: string;
+    readonly paramsDigest: string;
+    readonly status: string;
+    readonly result: unknown;
+    readonly error: unknown;
+  } | undefined {
+    const row = this.db
+      .prepare('SELECT method, paramsDigest, status, result, error FROM request_receipts WHERE requestKey = ?')
+      .get(requestKey) as
+      | { method: string; paramsDigest: string; status: string; result: string | null; error: string | null }
+      | undefined;
+    if (row === undefined) {
+      return undefined;
+    }
+    return {
+      method: row.method,
+      paramsDigest: row.paramsDigest,
+      status: row.status,
+      result: row.result === null ? undefined : (JSON.parse(row.result) as unknown),
+      error: row.error === null ? undefined : (JSON.parse(row.error) as unknown),
+    };
+  }
+
+  /**
    * Claim the earliest consumable input of a session. Refuses while the session still has a
    * processing row (one run at a time) or an unresolved interrupted row (must be verified first).
    */
