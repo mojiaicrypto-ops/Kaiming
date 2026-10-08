@@ -1,5 +1,33 @@
 # Test Report · devagent-p4-webui-20261008
 
+## 切片 P4-c2 · Task 控制、会话清理与恢复核实（本次）
+
+```yaml
+runs:
+  - command: cd devagent && npx tsc --noEmit
+    result: passed
+    exit_code: 0
+    evidence: "无输出"
+  - command: cd devagent && npm test
+    result: passed
+    exit_code: 0
+    evidence: "15 个测试文件、180 项通过（server-write 10 项）"
+  - command: cd devagent && npm run check:prompts / npm run spikes / node checks/runner-real-model.ts
+    result: passed
+    exit_code: 0
+    evidence: "15/15；47/47；4/4"
+key_evidence:
+  - "task.control：pause→paused、cancel→cancelled（走 runner 停止流程），外来任务 404；版本校验来自同一 CAS"
+  - "session.cleanup：仍有输入 → 409 WORKSPACE_BUSY 且 gaps 指名 in-8、会话仍存在；干净会话删除成功且行消失；干净会话用错误版本 → 409 VERSION_CONFLICT 且未删除"
+  - "session.recovery.resolve：无 evidenceRefs → 409 PI_INPUT_UNCONFIRMED 且输入保持 interrupted；带证据 → completed 且 recovery 记录 resolution/evidenceRefs；对已关闭输入再次核实 → 400（状态不符）"
+  - "schema v6：session_inputs.recovery 列在新建库与 v1→v6 迁移链上都存在（store.test.ts 断言版本 6 与列可读）"
+not_covered:
+  - area: "SSE 实时通知与浏览器快照刷新"
+    reason: "属 P4-d"
+    disposition: pending
+result: passed
+```
+
 ## 切片 P4-c1 · 输入接纳与停止（本次）
 
 ```yaml

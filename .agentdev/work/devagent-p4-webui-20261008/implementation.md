@@ -142,8 +142,34 @@ risks_remaining:
   - "worker 目前以 10ms–250ms 的休眠轮询兜底（外部改库也能被拾起）；事件驱动的唤醒优化随 P4-d 事件总线一并考虑"
 ```
 
+## 切片 P4-c2 · Task 控制、会话清理与恢复核实（本次）
+
+```yaml
+slice: P4-c2 task.control / session.cleanup / session.recovery.resolve（写入面收口）
+changed:
+  - path: devagent/src/server/write-methods.ts
+    purpose: task.control（校验项目/任务/命令与版本，调用与主管工具同一条 runner.controlTask 停止流程，返回最终状态/版本/当前成员）；session.cleanup（被引用或有未结束工作即拒绝并列明原因）；session.recovery.resolve（resolution 枚举、证据必需、CAS 关闭原输入，不调用模型、不重发操作）
+  - path: devagent/src/store/store.ts
+    purpose: schema v6（session_inputs.recovery 记录核实结论：resolution/evidenceRefs/resolvedBy/resolvedAt，v5→v6 迁移 + 新建库 DDL）；sessionCleanupGaps（未结束输入/绑定 Task/成员关系/被结果引用）、deleteSession（先删自身行再删会话，revision CAS）、resolveInterruptedInput（要求 interrupted 状态 + 证据 + 版本校验）
+  - path: devagent/src/server/rpc.ts
+    purpose: StoreError.RECOVERY_REQUIRED → 公共码 PI_INPUT_UNCONFIRMED 的映射（存储内码不扩充公共目录）
+  - path: devagent/src/server/main.ts
+    purpose: 入口注入 runner.controlTask
+  - path: devagent/test/server-write.test.ts（新增 3 项）
+    purpose: 控制（pause→paused、cancel→cancelled、外来任务 404）；清理（有输入→WORKSPACE_BUSY 且 gaps 指名输入、干净会话删除、版本不符 VERSION_CONFLICT 且不删）；恢复核实（无证据→PI_INPUT_UNCONFIRMED 且保持 interrupted、有证据→completed 并记录 recovery、重复核实被拒）
+behavior:
+  - "实测：npm test 180/180（15 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
+  - "task.control 与主管工具共用停止流程：pause 保留排队工作与主管绑定、cancel 停止未开始工作并释放绑定，最终状态在子工作真正停止后才写入"
+  - "清理只删除无引用会话：自身输入/绑定/成员关系一并删除；任何未结束输入、绑定 Task、成员关系或已记录结果都会拒绝并列出原因"
+  - "恢复核实以证据为前提：证据不足保持 interrupted 并返回 PI_INPUT_UNCONFIRMED，核实后原输入关闭、会话可继续消费剩余工作"
+residual_notes:
+  - "resolution=completed 只表示"已核实该输入可以按完成关闭"，不重发操作、不补写历史；剩余工作由主管以新的 continuation 输入继续（S7）"
+risks_remaining:
+  - "SSE 实时通知（input/task/recovery invalidate）属 P4-d；清理后浏览器端快照刷新依赖 P4-d 的失效通知"
+```
+
 ## 后续切片（计划内，未开始）
 
 ```yaml
-pending: [P4-c2 task.control/cleanup/recovery.resolve, P4-d SSE, P4-e 交互桥, P4-h0 渲染库试验, P4-f 设计系统与外壳, P4-g 业务页面, P4-h 流式渲染部件, P4-i 浏览器验收]
+pending: [P4-d SSE, P4-e 交互桥, P4-h0 渲染库试验, P4-f 设计系统与外壳, P4-g 业务页面, P4-h 流式渲染部件, P4-i 浏览器验收]
 ```
