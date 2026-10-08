@@ -103,8 +103,36 @@ risks_remaining:
   - "session.messages.list 只列 message 条目（压缩/分支条目计为其他，不混入对话）；Pi 分支历史的完整呈现随 P4-d/d 快照处理"
 ```
 
+## 切片 P4-c1 · 输入接纳与停止（本次）
+
+```yaml
+slice: P4-c1 session.input.submit / session.input.stop + worker 唤醒循环 + Task 内输入优先认领（R3）
+changed:
+  - path: devagent/src/server/write-methods.ts（新增）
+    purpose: session.input.submit（只投 chief、content 校验、taskId 必须等于当前 Task、inputId=调用方 requestId 保证重试幂等、返回 queued 与 waitingForTask）与 session.input.stop（保存停止意图后 abort 并等待空闲，未停稳 activity=stopping；已终态幂等返回当前状态）
+  - path: devagent/src/server/worker.ts（新增）
+    purpose: 唯一把已接纳输入变成真实 Pi 运行的地方：按会话公平轮转、每次由 runner 认领一项；无项可跑（idle/busy/blocked/controlled）则让出并休眠，notify 立即唤醒；stop 优雅退出
+  - path: devagent/src/server/rpc.ts / http.ts
+    purpose: RpcContext 带调用方 requestId（submit 以它作 inputId/requestKey，stop 以它作停止请求键）
+  - path: devagent/src/store/store.ts
+    purpose: claimNextInput 的 Task 内优先规则：会话正在协调某项 Task 时，只有该 Task 自己的输入可被认领，其他话题排队等待（R3）
+  - path: devagent/src/server/main.ts
+    purpose: 入口构建 PiRuntimeFactory/SessionRegistry/InputRunner + worker，注册写方法并启动/优雅关闭；模型由 AGENTDEV_MODEL_PROVIDER/ID 提供（未配置即 blocked_config，输入保持 queued）
+  - path: devagent/test/server-write.test.ts（新增，6 项）
+    purpose: 真实 HTTP + 真实 stub 模型：提交→worker 跑完（Pi 历史含 input-marker）、重试幂等/同 id 异内容 REQUEST_CONFLICT、专业会话与空 content 与外来 taskId 被拒、未关联输入排队（claimNextInput=busy）、排队输入停止、活动运行被停止并落 stopped
+behavior:
+  - "实测：npm test 176/176（15 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
+  - "提交只写库并唤醒 worker（不阻塞 HTTP）；worker 由 runner 认领，保证同一会话只有一个执行所有者（R3）"
+  - "未配置模型时 runner 返回 blocked_config：输入保持 queued，不伪装执行；配置模型后同一个 worker 会继续跑"
+  - "停止先保存意图再 abort 并等待空闲；已终态的停止幂等返回当前状态（重复停止不改变历史）"
+  - "Task 内优先：会话有未结束 Task 时，未关联该 Task 的输入不会被认领（避免新话题越过当前工作）"
+risks_remaining:
+  - "task.control / session.cleanup / session.recovery.resolve 属 P4-c2；SSE 通知（input/task invalidate）属 P4-d"
+  - "worker 目前以 10ms–250ms 的休眠轮询兜底（外部改库也能被拾起）；事件驱动的唤醒优化随 P4-d 事件总线一并考虑"
+```
+
 ## 后续切片（计划内，未开始）
 
 ```yaml
-pending: [P4-c 写入与执行面, P4-d SSE, P4-e 交互桥, P4-h0 渲染库试验, P4-f 设计系统与外壳, P4-g 业务页面, P4-h 流式渲染部件, P4-i 浏览器验收]
+pending: [P4-c2 task.control/cleanup/recovery.resolve, P4-d SSE, P4-e 交互桥, P4-h0 渲染库试验, P4-f 设计系统与外壳, P4-g 业务页面, P4-h 流式渲染部件, P4-i 浏览器验收]
 ```

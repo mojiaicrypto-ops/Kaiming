@@ -1,5 +1,38 @@
 # Test Report · devagent-p4-webui-20261008
 
+## 切片 P4-c1 · 输入接纳与停止（本次）
+
+```yaml
+runs:
+  - command: cd devagent && npx tsc --noEmit
+    result: passed
+    exit_code: 0
+    evidence: "无输出"
+  - command: cd devagent && npm test
+    result: passed
+    exit_code: 0
+    evidence: "15 个测试文件、176 项通过（server-write 6 项）"
+  - command: cd devagent && npm run check:prompts / npm run spikes / node checks/runner-real-model.ts
+    result: passed
+    exit_code: 0
+    evidence: "15/15；47/47；4/4"
+key_evidence:
+  - "提交→真实运行：session.input.submit 返回 queued，worker 用 stub 模型把该输入跑完（状态 completed），Pi 历史文件里存在 agentdev.input-marker 与 inputId"
+  - "幂等：同 requestId 同内容重发返回同一 inputId 且只有一行；同 requestId 不同内容 → 409 REQUEST_CONFLICT"
+  - "拒绝：专业会话收用户输入 403；空 content 400；外来 taskId 400 且不落任何输入行"
+  - "Task 内优先：会话有未结束 Task 时，未关联输入返回 waitingForTask 且 claimNextInput=busy（排队等待，不越过）"
+  - "排队停止：输入落 stopped 且 activity=idle（worker 无模型时不会先跑掉，状态可判定）"
+  - "活动停止：probe 工具持有运行时停止 → 输入先 processing，stop 返回 stopRequested=true，运行落 stopped、输入落 stopped（真实 abort 与空闲等待）"
+not_covered:
+  - area: "task.control / session.cleanup / session.recovery.resolve"
+    reason: "属 P4-c2"
+    disposition: pending
+  - area: "SSE 实时通知（input/task invalidate）"
+    reason: "属 P4-d"
+    disposition: pending
+result: passed
+```
+
 ## 切片 P4-b · 只读查询面（本次）
 
 ```yaml
