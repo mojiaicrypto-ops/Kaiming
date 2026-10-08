@@ -11,14 +11,16 @@ runs:
   - command: cd devagent && npm test
     result: passed
     exit_code: 0
-    evidence: "15 个测试文件、180 项通过（server-write 10 项）"
+    evidence: "15 个测试文件、182 项通过（server-write 12 项）"
   - command: cd devagent && npm run check:prompts / npm run spikes / node checks/runner-real-model.ts
     result: passed
     exit_code: 0
     evidence: "15/15；47/47；4/4"
 key_evidence:
   - "task.control：pause→paused、cancel→cancelled（走 runner 停止流程），外来任务 404；版本校验来自同一 CAS"
-  - "session.cleanup：仍有输入 → 409 WORKSPACE_BUSY 且 gaps 指名 in-8、会话仍存在；干净会话删除成功且行消失；干净会话用错误版本 → 409 VERSION_CONFLICT 且未删除"
+  - "session.cleanup：仍有输入 → 409 WORKSPACE_BUSY 且 gaps 指名 in-8、会话仍存在；带自身输入与绑定的会话删除成功且行随之消失；协调过 Task 的会话被拒并指名 coordinated；干净会话用错误版本 → 409 VERSION_CONFLICT 且未删除"
+  - "task.control 终态保护：对 cancelled Task 再 pause → VERSION_CONFLICT 且状态不变"
+  - "证据真实性：evidenceRefs=['   '] → PI_INPUT_UNCONFIRMED 且输入保持 interrupted；核实后同一会话的下一条 continuation 输入可被认领（S7 语义）"
   - "session.recovery.resolve：无 evidenceRefs → 409 PI_INPUT_UNCONFIRMED 且输入保持 interrupted；带证据 → completed 且 recovery 记录 resolution/evidenceRefs；对已关闭输入再次核实 → 400（状态不符）"
   - "schema v6：session_inputs.recovery 列在新建库与 v1→v6 迁移链上都存在（store.test.ts 断言版本 6 与列可读）"
 not_covered:

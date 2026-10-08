@@ -150,18 +150,39 @@ changed:
   - path: devagent/src/server/write-methods.ts
     purpose: task.control（校验项目/任务/命令与版本，调用与主管工具同一条 runner.controlTask 停止流程，返回最终状态/版本/当前成员）；session.cleanup（被引用或有未结束工作即拒绝并列明原因）；session.recovery.resolve（resolution 枚举、证据必需、CAS 关闭原输入，不调用模型、不重发操作）
   - path: devagent/src/store/store.ts
-    purpose: schema v6（session_inputs.recovery 记录核实结论：resolution/evidenceRefs/resolvedBy/resolvedAt，v5→v6 迁移 + 新建库 DDL）；sessionCleanupGaps（未结束输入/绑定 Task/成员关系/被结果引用）、deleteSession（先删自身行再删会话，revision CAS）、resolveInterruptedInput（要求 interrupted 状态 + 证据 + 版本校验）
+    purpose: schema v6（session_inputs.recovery 记录核实结论：resolution/evidenceRefs/resolvedBy/resolvedAt，v5→v6 迁移 + 新建库 DDL）；sessionCleanupGaps（未结束输入/绑定 Task/成员关系/被结果引用/被 Task.chiefSessionId 引用）、deleteSession（先删自身行再删会话，revision CAS）、resolveInterruptedInput（要求 interrupted 状态 + 非空证据 + 版本校验）；controlTask 拒绝终态 Task
   - path: devagent/src/server/rpc.ts
     purpose: StoreError.RECOVERY_REQUIRED → 公共码 PI_INPUT_UNCONFIRMED 的映射（存储内码不扩充公共目录）
   - path: devagent/src/server/main.ts
     purpose: 入口注入 runner.controlTask
-  - path: devagent/test/server-write.test.ts（新增 3 项）
+  - path: devagent/test/server-write.test.ts（新增 5 项）
     purpose: 控制（pause→paused、cancel→cancelled、外来任务 404）；清理（有输入→WORKSPACE_BUSY 且 gaps 指名输入、干净会话删除、版本不符 VERSION_CONFLICT 且不删）；恢复核实（无证据→PI_INPUT_UNCONFIRMED 且保持 interrupted、有证据→completed 并记录 recovery、重复核实被拒）
 behavior:
-  - "实测：npm test 180/180（15 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
+  - "实测：npm test 182/182（15 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
   - "task.control 与主管工具共用停止流程：pause 保留排队工作与主管绑定、cancel 停止未开始工作并释放绑定，最终状态在子工作真正停止后才写入"
   - "清理只删除无引用会话：自身输入/绑定/成员关系一并删除；任何未结束输入、绑定 Task、成员关系或已记录结果都会拒绝并列出原因"
   - "恢复核实以证据为前提：证据不足保持 interrupted 并返回 PI_INPUT_UNCONFIRMED，核实后原输入关闭、会话可继续消费剩余工作"
+review_rounds:
+  - round: 1
+    verdict: failed
+    findings: 2 blocking + 2 non-blocking
+    fixed:
+      - finding: "deleteSession 先删父行导致外键失败：任何有过输入/绑定的会话清理都会抛 FOREIGN KEY constraint failed（对外 503），清理实际不可用"
+        fix: "同一事务内先删自身行（输入/绑定/成员关系）再 CAS 删除会话；版本不符整体回滚"
+        evidence: "server-write.test.ts：带输入与绑定的会话清理成功，且其自身行随之消失"
+      - finding: "sessionCleanupGaps 未检测 tasks.chiefSessionId 引用：协调过 Task 的会话被判为可清理但删除时外键失败"
+        fix: "把"曾协调 N 个已记录 Task"列为拒绝原因（不级联删除交付记录）"
+        evidence: "server-write.test.ts：取消后的 Task 仍使会话清理返回 WORKSPACE_BUSY 且 gaps 指名 coordinated"
+      - finding: "task.control 可对终态 Task 改回 paused/active（复活已结束生命周期）"
+        fix: "store.controlTask 在写前拒绝 completed/cancelled Task"
+        evidence: "server-write.test.ts：对 cancelled Task 再 pause → VERSION_CONFLICT 且状态保持 cancelled"
+      - finding: "evidenceRefs 接受空串，等于无证据也能关闭中断输入"
+        fix: "处理器与 store 都拒绝空白证据条目"
+        evidence: "server-write.test.ts：evidenceRefs=['   '] → PI_INPUT_UNCONFIRMED 且保持 interrupted"
+    overclaim_fixed:
+      - "rpc.ts 的 RECOVERY_REQUIRED → PI_INPUT_UNCONFIRMED 映射此前实际未生效（补丁静默失配），现已真正落码"
+      - "记录中 deleteSession 的顺序描述与代码不符，已随修复统一为"先删自身行再删会话""
+      - "恢复核实用例补齐"核实后会话可继续消费剩余工作"（新 continuation 输入被认领）"
 residual_notes:
   - "resolution=completed 只表示"已核实该输入可以按完成关闭"，不重发操作、不补写历史；剩余工作由主管以新的 continuation 输入继续（S7）"
 risks_remaining:
