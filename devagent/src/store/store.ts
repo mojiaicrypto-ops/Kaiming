@@ -859,11 +859,45 @@ export class Store {
           code: 'RECOVERY_REQUIRED',
         } as ClaimResult;
       }
-      const candidate = this.db
-        .prepare("SELECT inputId FROM session_inputs WHERE sessionId = ? AND status = 'queued' ORDER BY seq LIMIT 1")
-        .get(sessionId) as { inputId: string } | undefined;
-      if (candidate === undefined) {
-        return { kind: 'none' } as ClaimResult;
+      let candidate: { inputId: string } | undefined;
+      for (;;) {
+        candidate = this.db
+          .prepare("SELECT inputId FROM session_inputs WHERE sessionId = ? AND status = 'queued' ORDER BY seq LIMIT 1")
+          .get(sessionId) as { inputId: string } | undefined;
+        if (candidate === undefined) {
+          return { kind: 'none' } as ClaimResult;
+        }
+        // An input whose Task already ended can never run: close it so it does not block the queue.
+        const owner = this.db
+          .prepare('SELECT status FROM tasks WHERE id = (SELECT taskId FROM session_inputs WHERE inputId = ?)')
+          .get(candidate.inputId) as { status: string } | undefined;
+        if (owner !== undefined && (owner.status === 'completed' || owner.status === 'cancelled')) {
+          this.db
+            .prepare(
+              `UPDATE session_inputs SET status = 'stopped', errorCode = 'TASK_ENDED',
+                 errorMessage = ?, revision = revision + 1, updatedAt = ?
+               WHERE inputId = ? AND status = 'queued'`,
+            )
+            .run(`Task ${owner.status} before this input could run`, this.clock(), candidate.inputId);
+          continue;
+        }
+        break;
+      }
+      // While a chief session coordinates a Task, only that Task's own work is consumable: another
+      // topic waits for the Task to end (R3) instead of overtaking it.
+      const currentTask = this.db
+        .prepare('SELECT currentTaskId FROM sessions WHERE id = ?')
+        .get(sessionId) as { currentTaskId: string | null } | undefined;
+      if (currentTask !== undefined && currentTask.currentTaskId !== null) {
+        const owned = this.db
+          .prepare(
+            "SELECT inputId FROM session_inputs WHERE sessionId = ? AND status = 'queued' AND taskId = ? ORDER BY seq LIMIT 1",
+          )
+          .get(sessionId, currentTask.currentTaskId) as { inputId: string } | undefined;
+        if (owned === undefined) {
+          return { kind: 'busy', inputId: candidate.inputId } as ClaimResult;
+        }
+        candidate = owned;
       }
       const owner = this.db
         .prepare(

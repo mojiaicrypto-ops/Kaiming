@@ -67,6 +67,8 @@ export interface RpcContext {
   readonly actor: string;
   /** Lets an auth handler attach its cookie without the router knowing about transport. */
   readonly setCookie?: (cookie: string) => void;
+  /** The request id the caller used: store-level idempotency keys must be stable across retries. */
+  readonly requestId: string;
 }
 
 export interface RpcHandler {

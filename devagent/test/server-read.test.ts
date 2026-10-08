@@ -127,10 +127,12 @@ async function harness(): Promise<Harness> {
     inputId: 'i-broken',
     projectId,
     sessionId: 's-dev',
+    // It belongs to the running Task: work outside the current Task waits (R3).
+    taskId: task.id,
     sourceKey: 's-dev:i-broken',
     requestKey: 'i-broken',
     method: 'task.session',
-    kind: 'delegation',
+    kind: 'continuation',
     payload: { content: [{ type: 'text', text: 'again' }] },
   });
   const first = store.claimNextInput('s-dev');

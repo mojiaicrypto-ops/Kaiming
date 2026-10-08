@@ -119,9 +119,11 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
     }
 
     const pendingCookies: string[] = [];
+    const incomingId = typeof envelope['requestId'] === 'string' ? envelope['requestId'] : '';
     const context: RpcContext = {
       store: options.store,
       actor: session?.value ?? 'anonymous',
+      requestId: incomingId,
       setCookie: (cookie: string) => pendingCookies.push(cookie),
     };
     const result = await options.router.handle(envelope, context, () => randomUUID());

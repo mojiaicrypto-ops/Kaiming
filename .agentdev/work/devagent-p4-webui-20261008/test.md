@@ -11,7 +11,7 @@ runs:
   - command: cd devagent && npm test
     result: passed
     exit_code: 0
-    evidence: "15 个测试文件、176 项通过（server-write 6 项）"
+    evidence: "15 个测试文件、177 项通过（server-write 7 项）"
   - command: cd devagent && npm run check:prompts / npm run spikes / node checks/runner-real-model.ts
     result: passed
     exit_code: 0
@@ -22,7 +22,8 @@ key_evidence:
   - "拒绝：专业会话收用户输入 403；空 content 400；外来 taskId 400 且不落任何输入行"
   - "Task 内优先：会话有未结束 Task 时，未关联输入返回 waitingForTask 且 claimNextInput=busy（排队等待，不越过）"
   - "排队停止：输入落 stopped 且 activity=idle（worker 无模型时不会先跑掉，状态可判定）"
-  - "活动停止：probe 工具持有运行时停止 → 输入先 processing，stop 返回 stopRequested=true，运行落 stopped、输入落 stopped（真实 abort 与空闲等待）"
+  - "活动停止：probe 工具持有运行时停止 → 输入先 processing，stop 回复 status=stopped/activity=idle（与行一致），运行落 stopped、输入落 stopped（真实 abort 与空闲等待）"
+  - "孤儿输入：Task 结束后，引用它的排队输入以 TASK_ENDED 关闭，同一会话的下一条输入仍能被认领（不阻塞队列）"
 not_covered:
   - area: "task.control / session.cleanup / session.recovery.resolve"
     reason: "属 P4-c2"

@@ -95,11 +95,13 @@ async function harness(options: {
   return { store, runner, registry, defaults, agentDir: env.agentDir, cwd: env.cwd };
 }
 
-function accept(store: Store, inputId: string, requestKey: string): void {
+function accept(store: Store, inputId: string, requestKey: string, taskId?: string): void {
   store.acceptInput({
     inputId,
     projectId: 'p-1',
     sessionId: 's-1',
+    // An input for the running Task must cite it (R3); without a Task the field stays absent.
+    ...(taskId !== undefined ? { taskId } : {}),
     sourceKey: `user:${requestKey}`,
     requestKey,
     method: 'session.input.submit',
@@ -984,6 +986,8 @@ describe('input runner', () => {
       inputId: 'i-2',
       projectId: 'p-1',
       sessionId: 's-1',
+      // A question about the running Task cites it (R3).
+      ...(task !== undefined ? { taskId: task.id } : {}),
       sourceKey: 'user:req-2',
       requestKey: 'req-2',
       method: 'session.input.submit',
@@ -1040,7 +1044,7 @@ describe('input runner', () => {
       phase: 'develop',
     });
     expect(moved.phase).toBe('develop');
-    accept(h.store, 'i-2', 'req-2');
+    accept(h.store, 'i-2', 'req-2', h.store.listTasks('p-1')[0]?.id);
 
     const second = await h.runner.runNext('s-1');
 
@@ -1124,7 +1128,7 @@ describe('input runner', () => {
       expectedRevision: task?.revision ?? 1,
       phase: 'develop',
     });
-    accept(h.store, 'i-2', 'req-2');
+    accept(h.store, 'i-2', 'req-2', task?.id);
 
     // The chief delegates and waits while the member runs.
     const chief = h.runner.runNext('s-1');
@@ -1315,7 +1319,7 @@ describe('input runner', () => {
     });
     const first = await h.runner.runNext('s-1');
     expect(first.kind).toBe('completed');
-    accept(h.store, 'i-2', 'req-2');
+    accept(h.store, 'i-2', 'req-2', h.store.listTasks('p-1')[0]?.id);
 
     const second = await h.runner.runNext('s-1');
 

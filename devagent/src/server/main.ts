@@ -14,6 +14,12 @@ import { RpcRouter } from './rpc.ts';
 import { createWorkbenchServer } from './http.ts';
 import { registerCoreMethods } from './methods.ts';
 import { registerReadMethods } from './read-methods.ts';
+import { registerWriteMethods } from './write-methods.ts';
+import { WorkbenchWorker } from './worker.ts';
+import { PiRuntimeFactory } from '../runtime/pi-runtime.ts';
+import { SessionRegistry } from '../runtime/registry.ts';
+import { InputRunner } from '../runtime/runner.ts';
+import { resolveEffectiveConfig } from '../runtime/config.ts';
 import type { RuntimeDefaults } from '../runtime/config.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -46,21 +52,43 @@ export function startWorkbench(options: StartOptions): Promise<{
   const router = new RpcRouter();
   registerCoreMethods(router, { store, server });
   registerReadMethods(router, { store });
+
+  // The runner and its worker: inputs are stored by the write surface, then actually run here.
+  const factory = new PiRuntimeFactory(server);
+  const registry = new SessionRegistry(factory);
+  const runner = new InputRunner({
+    store,
+    registry,
+    factory,
+    resolveConfig: (roleId) => resolveEffectiveConfig({ roleId, server }),
+  });
+  const worker = new WorkbenchWorker({ store, runner });
+  registerWriteMethods(router, {
+    store,
+    notify: () => worker.notify(),
+    stopInput: (sessionId, stop) => runner.requestStop(sessionId, stop),
+  });
+
   const workbench = createWorkbenchServer({
     store,
     auth,
     router,
     ...(options.staticDir !== undefined ? { staticDir: options.staticDir } : {}),
   });
-  return workbench.listen(options.port, options.host ?? '127.0.0.1').then(({ origin, port }) => ({
-    origin,
-    port,
-    close: async () => {
-      await workbench.close();
-      auth.revokeAll();
-      store.close();
-    },
-  }));
+  return workbench.listen(options.port, options.host ?? '127.0.0.1').then(({ origin, port }) => {
+    worker.start();
+    return {
+      origin,
+      port,
+      close: async () => {
+        await worker.stop();
+        await workbench.close();
+        registry.disposeAll();
+        auth.revokeAll();
+        store.close();
+      },
+    };
+  });
 }
 
 const entry = process.argv[1];
@@ -71,9 +99,13 @@ if (entry !== undefined && resolve(entry) === resolve(fileURLToPath(import.meta.
     process.exit(2);
   }
   const dataDir = process.env['AGENTDEV_DATA_DIR'] ?? resolve(process.cwd(), '.agentdev-data');
+  const model = {
+    providerId: process.env['AGENTDEV_MODEL_PROVIDER'] ?? 'unset',
+    modelId: process.env['AGENTDEV_MODEL_ID'] ?? 'unset',
+  };
   const port = Number(process.env['AGENTDEV_PORT'] ?? 4173);
   const host = process.env['AGENTDEV_HOST'] ?? '127.0.0.1';
-  const running = await startWorkbench({ dataDir, accessPassword, port, host });
+  const running = await startWorkbench({ dataDir, accessPassword, port, host, model });
   process.stdout.write(`workbench listening on ${running.origin} (data: ${dataDir})\n`);
   const shutdown = (): void => {
     void running.close().then(() => process.exit(0));

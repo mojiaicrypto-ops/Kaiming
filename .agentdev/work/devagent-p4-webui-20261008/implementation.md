@@ -118,14 +118,25 @@ changed:
     purpose: claimNextInput 的 Task 内优先规则：会话正在协调某项 Task 时，只有该 Task 自己的输入可被认领，其他话题排队等待（R3）
   - path: devagent/src/server/main.ts
     purpose: 入口构建 PiRuntimeFactory/SessionRegistry/InputRunner + worker，注册写方法并启动/优雅关闭；模型由 AGENTDEV_MODEL_PROVIDER/ID 提供（未配置即 blocked_config，输入保持 queued）
-  - path: devagent/test/server-write.test.ts（新增，6 项）
+  - path: devagent/test/server-write.test.ts（新增，7 项）
     purpose: 真实 HTTP + 真实 stub 模型：提交→worker 跑完（Pi 历史含 input-marker）、重试幂等/同 id 异内容 REQUEST_CONFLICT、专业会话与空 content 与外来 taskId 被拒、未关联输入排队（claimNextInput=busy）、排队输入停止、活动运行被停止并落 stopped
 behavior:
-  - "实测：npm test 176/176（15 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
+  - "实测：npm test 177/177（15 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
   - "提交只写库并唤醒 worker（不阻塞 HTTP）；worker 由 runner 认领，保证同一会话只有一个执行所有者（R3）"
   - "未配置模型时 runner 返回 blocked_config：输入保持 queued，不伪装执行；配置模型后同一个 worker 会继续跑"
   - "停止先保存意图再 abort 并等待空闲；已终态的停止幂等返回当前状态（重复停止不改变历史）"
   - "Task 内优先：会话有未结束 Task 时，未关联该 Task 的输入不会被认领（避免新话题越过当前工作）"
+review_rounds:
+  - round: 1
+    verdict: passed
+    findings: 1 non-blocking
+    fixed:
+      - finding: "停止回复沿用 requestStop 返回的旧状态：活动运行已落 stopped 时仍回 status=processing，与 activity=idle 自相矛盾"
+        fix: "stopResult 以重新读取的输入行为准，回复状态与 activity 一致"
+        evidence: "server-write.test.ts：活动停止回复 status=stopped、activity=idle"
+      - finding: "引用了已结束 Task 的输入会成为队头孤儿：Task 终态后 claimNextInput 返回 controlled，该输入永远 queued 并阻塞后续输入"
+        fix: "认领时若最早排队输入所属 Task 已 completed/cancelled，则以 TASK_ENDED 关闭该输入并继续取下一个候选（解除阻塞）"
+        evidence: "server-write.test.ts：Task 取消后，被引用的输入落 stopped/TASK_ENDED，同一会话的下一条输入被正常认领"
 risks_remaining:
   - "task.control / session.cleanup / session.recovery.resolve 属 P4-c2；SSE 通知（input/task invalidate）属 P4-d"
   - "worker 目前以 10ms–250ms 的休眠轮询兜底（外部改库也能被拾起）；事件驱动的唤醒优化随 P4-d 事件总线一并考虑"
