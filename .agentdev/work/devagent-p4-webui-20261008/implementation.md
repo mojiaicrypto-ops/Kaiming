@@ -50,8 +50,37 @@ risks_remaining:
   - "SSE 路由与 stream.prepare 尚未实现（P4-d）；浏览器界面尚未接线（P4-f 起）"
 ```
 
+## 切片 P4-b · 只读查询面（本次）
+
+```yaml
+slice: P4-b project.open/get/rebind、session.create/get/messages.list/input.get、task.list/get、task.report.get、requirement.list/get、project.files.list/read、session.recovery.inspect
+changed:
+  - path: devagent/src/server/read-methods.ts（新增）
+    purpose: R1 只读方法实现：project.open（realpath 为身份，同目录同一项目；缺失目录 PROJECT_UNAVAILABLE；登记不建会话/模型/项目文件）、project.get（入口存在性、会话与 Task 概要、目录缺失如实报告）、project.rebind（需用户决定引用 + 无在飞工作，CAS 后会话 cwd 跟随）、session.create/get（activity 由真实行派生）、session.messages.list（历史+输入关联+分页）、session.input.get（原文/边界/停止原因）、task.list/get（成员与结果）、task.report.get（正文按记录引用读取，不接受任意路径）、requirement.list/get（复用文件读取服务，含 invalidFiles）、project.files.list/read（realpath 归属与符号链接拒绝）、session.recovery.inspect
+  - path: devagent/src/server/history.ts（新增）
+    purpose: 读 Pi JSONL：session 头、agentdev.input-marker 关联、message 条目；坏行如实计入 problems；分页游标为条目 id（跨追加稳定），未知游标 INVALID_ARGUMENT
+  - path: devagent/src/store/store.ts
+    purpose: getProjectByRealPath、projectRebindGaps（会话输入与未结束 Task）、rebindProject（CAS realPath 并同步会话 cwd）
+  - path: devagent/src/server/rpc.ts
+    purpose: HTTP 状态映射补全（HISTORY_UNAVAILABLE/PI_INPUT_UNCONFIRMED/REPORT_*/COMPLETION_INCOMPLETE/TASK_CONTROLLED → 409）
+  - path: devagent/src/server/main.ts
+    purpose: 入口注册只读方法
+  - path: devagent/test/server-read.test.ts（新增，13 项）
+    purpose: 真实 HTTP 覆盖全部只读方法：同目录同项目与入口缺口、目录消失、无模型建会话、历史关联/分页/坏行/缺失历史、输入原文与边界、Task 成员与结果、报告正文与 stale、需求与非法文件、文件读取与越界/符号链接、恢复巡检、重绑的决定与阻挡
+behavior:
+  - "实测：npm test 166/166（14 个文件）；typecheck 0；check:prompts 15/15"
+  - "真实启动冒烟（端口 4182）：project.open→registered（入口缺口如实列出）→ session.create 无模型成功（activity=idle）→ task.list 空 → files.list/read 正常（返回 sha256 与 mtime）"
+  - "身份与安全：realpath 是项目身份（同目录不重复登记）；文件读取先解析 realpath 再判包含，越出项目或符号链接指向外部一律 FORBIDDEN；报告正文只按记录引用读取"
+  - "诚实性：目录缺失、历史文件缺失、报告正文被改动、非法需求文件都如实报告（PROJECT_UNAVAILABLE/HISTORY_UNAVAILABLE/REPORT_STALE/invalidFiles）"
+residual_notes:
+  - "HTTP 状态映射把 HISTORY_UNAVAILABLE/PI_INPUT_UNCONFIRMED/REPORT_*/COMPLETION_INCOMPLETE 归为 409（记录冲突，保留记录待检查），而非 503"
+  - "project.rebind 的"安全交接"仅覆盖输入停稳与 Task 结束；成果引用/需求版本的核对随 P5 结算"
+risks_remaining:
+  - "session.messages.list 只列 message 条目（压缩/分支条目计为其他，不混入对话）；Pi 分支历史的完整呈现随 P4-d/d 快照处理"
+```
+
 ## 后续切片（计划内，未开始）
 
 ```yaml
-pending: [P4-b 只读查询面, P4-c 写入与执行面, P4-d SSE, P4-e 交互桥, P4-h0 渲染库试验, P4-f 设计系统与外壳, P4-g 业务页面, P4-h 流式渲染部件, P4-i 浏览器验收]
+pending: [P4-c 写入与执行面, P4-d SSE, P4-e 交互桥, P4-h0 渲染库试验, P4-f 设计系统与外壳, P4-g 业务页面, P4-h 流式渲染部件, P4-i 浏览器验收]
 ```

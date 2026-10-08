@@ -1,5 +1,47 @@
 # Test Report · devagent-p4-webui-20261008
 
+## 切片 P4-b · 只读查询面（本次）
+
+```yaml
+runs:
+  - command: cd devagent && npx tsc --noEmit
+    result: passed
+    exit_code: 0
+    evidence: "无输出"
+  - command: cd devagent && npm test
+    result: passed
+    exit_code: 0
+    evidence: "14 个测试文件、166 项通过（server-read 13 项）"
+  - command: cd devagent && npm run check:prompts
+    result: passed
+    exit_code: 0
+    evidence: "15/15 通过"
+  - command: cd devagent && AGENTDEV_ACCESS_PASSWORD=… AGENTDEV_DATA_DIR=/tmp/agentdev-read-live AGENTDEV_PORT=4182 node src/server/main.ts + curl
+    result: passed
+    exit_code: 0
+    evidence: "project.open→registered（AGENTS.md:true,.dev/INDEX.md:false,.dev/PROJECT.md:false）；session.create→s-… role=chief activity=idle；task.list→[]；files.list→.dev:directory,AGENTS.md:file；files.read→version=sha256, text="# rules\n""
+key_evidence:
+  - "未认证调用任一读方法 → 401"
+  - "同目录再次 open → opened=existing（realpath 身份）；不存在目录 → PROJECT_UNAVAILABLE"
+  - "目录被删除的项目：directoryExists=false + problem 提示重绑（不假装正常）"
+  - "无模型可建会话与读取；未知 session/Task/需求 → NOT_FOUND；Task 只能按本项目读取"
+  - "历史：marker 关联 inputId 与 inputStatus；分页用条目 id 且第二次翻页只回下一条；坏行进 problems；无历史=空，绑定文件缺失=HISTORY_UNAVAILABLE(409)"
+  - "输入：原文 payload 不变，边界/停止原因/错误码按真实行返回"
+  - "报告：正文与版本返回；手改正文后 REPORT_STALE(409)"
+  - "需求：合法记录与 req-broken.md invalidFiles 同时返回；损坏记录 get 返回 issues 而非抛错"
+  - "文件：expectedVersion 不符 → VERSION_CONFLICT；二进制返回 binary=true/text=null；../ 越界与指向项目外的符号链接 → FORBIDDEN"
+  - "恢复巡检：列出 interrupted 输入与其错误码、绑定信息（fileExists）、相关 Task 结果"
+  - "重绑：无决定引用 → FORBIDDEN；有在飞工作 → WORKSPACE_BUSY 且 gaps 指名 t-1 与 i-broken；干净项目重绑成功且会话 cwd 跟随新目录"
+not_covered:
+  - area: "SSE 与快照（session.stream.prepare / stream）"
+    reason: "属 P4-d"
+    disposition: pending
+  - area: "写入面（input.submit/stop、task.control、cleanup、recovery.resolve）"
+    reason: "属 P4-c"
+    disposition: pending
+result: passed
+```
+
 ## 切片 P4-a · RPC 骨架与认证（本次）
 
 ```yaml
