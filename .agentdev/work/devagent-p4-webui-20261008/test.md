@@ -34,6 +34,9 @@ key_evidence:
   - "审阅修复验证：越界需求 id → INVALID_ARGUMENT 且不泄露；task.list 连续两页不同；清空绑定历史 → HISTORY_UNAVAILABLE；悬空/外部符号链接在列表中是 symlink 且无 size；requirement.list/files.list 未知游标 → INVALID_ARGUMENT"
   - "重绑：无决定引用 → FORBIDDEN；有在飞工作 → WORKSPACE_BUSY 且 gaps 指名 t-1 与 i-broken；干净项目重绑成功且会话 cwd 跟随新目录"
 not_covered:
+  - area: "绑定历史的完整身份校验（换入另一 Pi 会话但仍有 session 头的文件）"
+    reason: "绑定未记录预期 Pi session id；随 P4-d 快照/分支信息补上"
+    disposition: pending
   - area: "SSE 与快照（session.stream.prepare / stream）"
     reason: "属 P4-d"
     disposition: pending

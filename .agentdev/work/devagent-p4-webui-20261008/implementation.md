@@ -72,6 +72,7 @@ behavior:
   - "真实启动冒烟（端口 4182）：project.open→registered（入口缺口如实列出）→ session.create 无模型成功（activity=idle）→ task.list 空 → files.list/read 正常（返回 sha256 与 mtime）"
   - "身份与安全：realpath 是项目身份（同目录不重复登记）；文件读取先解析 realpath 再判包含，越出项目或符号链接指向外部一律 FORBIDDEN；报告正文只按记录引用读取"
   - "诚实性：目录缺失、历史文件缺失、报告正文被改动、非法需求文件都如实报告（PROJECT_UNAVAILABLE/HISTORY_UNAVAILABLE/REPORT_STALE/invalidFiles）"
+  - "历史身份校验的边界：绑定历史缺失/为空/无 session 头一律 HISTORY_UNAVAILABLE；但换入另一个 Pi 会话的文件（仍有 session 头）目前无法识别——绑定未记录预期 Pi session id，需随 P4-d 的快照/分支信息补上，记录不声称已做完整身份校验"
 review_rounds:
   - round: 1
     verdict: failed
