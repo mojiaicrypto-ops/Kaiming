@@ -1,5 +1,33 @@
 # Test Report · devagent-p4-webui-20261008
 
+## 切片 P4-e · 交互桥（本次）
+
+```yaml
+runs:
+  - command: cd devagent && npx tsc --noEmit
+    result: passed
+    exit_code: 0
+    evidence: "无输出"
+  - command: cd devagent && npm test
+    result: passed
+    exit_code: 0
+    evidence: "17 个测试文件、193 项通过（server-interaction 4 项）"
+  - command: cd devagent && npm run check:prompts
+    result: passed
+    exit_code: 0
+    evidence: "15/15 通过"
+key_evidence:
+  - "端到端（真实 stub 模型 + 真实适配器）：模型 question(select) → 交互落库 pending（含 options 与 inputId）→ stream.prepare 快照含该交互 → interaction.respond 写 resolved → 原 ctx.ui 调用返回并继续跑完输入"
+  - "不可覆写：同答复重试返回原记录；不同答复 → REQUEST_CONFLICT；库中答复保持第一次的值"
+  - "路由与版本：跨会话 chiefSessionId → FORBIDDEN；旧版本 → VERSION_CONFLICT；未答时状态仍 pending"
+  - "停止即失效：输入被停止 → 交互转 stale、输入落 stopped、bridge 等待者归零（无永久挂起）"
+not_covered:
+  - area: "子委派期间提问不解除父委派等待（M5）的浏览器级验收"
+    reason: "机制未变（委派等待只看成员输入状态）；浏览器用例随 P4-i"
+    disposition: pending
+result: passed
+```
+
 ## 切片 P4-d · SSE 实时（本次）
 
 ```yaml

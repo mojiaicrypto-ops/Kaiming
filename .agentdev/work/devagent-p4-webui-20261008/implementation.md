@@ -238,8 +238,38 @@ risks_remaining:
   - "历史 leaf 的 messageKey 去重字段随 P4-f 的对话渲染一并接入（当前快照给 entryId 与 inputId 关联）"
 ```
 
+## 切片 P4-e · 交互桥（本次）
+
+```yaml
+slice: P4-e UIAdapter（普通对象）+ bindExtensions({uiContext,mode:'rpc'}) + 交互 WAL + interaction.respond + question 工具接线
+changed:
+  - path: devagent/src/store/store.ts
+    purpose: schema v7（interactions 表 + 索引，v1→v7 迁移链与新建库 DDL）；createInteraction（展示前先落 pending）、listPendingInteractions/listInteractions、resolveInteraction（resolved 不可覆写：相同答复返回原记录、不同答复 REQUEST_CONFLICT、版本 CAS）、staleInteractionsForInput（源输入停止即置 stale）
+  - path: devagent/src/runtime/interactions.ts（新增）
+    purpose: InteractionBridge（唯一在进程内唤醒等待者的地方）：ask 先落库再等待、发布 interaction 失效通知、答复到达即用 Pi 原生返回形状回给 ctx.ui；abort 时把交互置 stale 并让 await 退出；createUiAdapter 返回**普通对象**（confirm/select/input/notify + 终端专属面明示为空操作），避免 SDK 展开 uiContext 时丢原型方法
+  - path: devagent/src/runtime/runner.ts
+    purpose: 每次准备会话时 bindExtensions({uiContext: adapter, mode:'rpc'})（未绑定则 ctx.hasUI=false，模型无法提问）；为所有角色注册移植的 question 工具，并让工具能取回宿主分配的 interactionId
+  - path: devagent/src/tools/question-tool.ts
+    purpose: 把工具收到的 abort signal 传进 ctx.ui 对话框（G2），被中止时返回可读错误而不是永远等待
+  - path: devagent/src/server/write-methods.ts
+    purpose: interaction.respond：校验项目/会话路由/版本，先保存答复再回给模型；相同重试幂等、不同答复冲突、过期/已失效 INTERACTION_STALE
+  - path: devagent/src/server/stream-methods.ts
+    purpose: 快照的 interactions 段改为真实 pending 交互（断线重连能看到未答问题）
+  - path: devagent/src/server/main.ts
+    purpose: 入口创建 InteractionBridge（发布经 hub）并接 runner 与写方法
+  - path: devagent/test/server-interaction.test.ts（新增，4 项）
+    purpose: 真实 stub 模型经真实适配器提问→落库→快照可见→浏览器答复→模型继续；答复不可覆写/同答复幂等/异答复冲突/跨会话与版本拒绝；输入停止→交互 stale 且无等待者
+behavior:
+  - "实测：npm test 193/193（17 个文件）；typecheck 0；check:prompts 15/15"
+  - "问题在展示前落库（pending），答复在返回模型前落库（resolved）：崩溃与重连都不丢、不重复决定"
+  - "答复路由：只能由该交互所属会话的主管页面回答（跨会话 FORBIDDEN），版本不符 VERSION_CONFLICT"
+  - "源输入被停止时其 pending 交互转 stale，等待者立即退出：不会留下永久挂起的调用"
+risks_remaining:
+  - "父委派等待与子会话交互的联动（M5 要求子问题不解除父委派等待）在 P4-g 的 UI 用例里一并验收；机制上委派等待只看成员输入状态，本切片未改变该逻辑"
+```
+
 ## 后续切片（计划内，未开始）
 
 ```yaml
-pending: [P4-e 交互桥, P4-h0 渲染库试验, P4-f 设计系统与外壳, P4-g 业务页面, P4-h 流式渲染部件, P4-i 浏览器验收]
+pending: [P4-h0 渲染库试验, P4-f 设计系统与外壳, P4-g 业务页面, P4-h 流式渲染部件, P4-i 浏览器验收]
 ```
