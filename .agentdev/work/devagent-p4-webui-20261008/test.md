@@ -38,6 +38,53 @@ not_covered:
 result: passed
 ```
 
+## 切片 P4-f/P4-g/P4-h/P4-i · 前端与浏览器验收（本次）
+
+```yaml
+runs:
+  - command: cd devagent && npx tsc --noEmit
+    result: passed
+    exit_code: 0
+    evidence: "无输出"
+  - command: cd devagent && npm test
+    result: passed
+    exit_code: 0
+    evidence: "18 个测试文件、198 项通过（含 web-markdown-stream 3 项）"
+  - command: cd devagent && npm run check:prompts / npm run spikes / node checks/runner-real-model.ts
+    result: passed
+    exit_code: 0
+    evidence: "15/15；47/47；4/4"
+  - command: cd devagent && node --experimental-strip-types spikes/web-01-renderers.ts
+    result: passed
+    exit_code: 0
+    evidence: "6/6 渲染库检查（markdown-it 2000 行围栏 32.1ms；表格 31 行；ansi_up 着色；virtual-core 5000 项窗口 0.159ms/range；无需打包器）"
+  - command: cd devagent && node web/styles/verify-selectors.mjs
+    result: passed
+    exit_code: 0
+    evidence: "found 485 / matched 485 / missing 0 / duplicated 0 / mismatched 0 / extra 0"
+  - command: cd devagent && node -e "JSON.parse(fs.readFileSync('web/i18n.json'))"（键数核对）
+    result: passed
+    exit_code: 0
+    evidence: "en 354 键、zh-CN 354 键、zh 缺键 0"
+  - command: cd devagent && npx playwright test --reporter=line
+    result: passed
+    exit_code: 0
+    evidence: "6 passed (5.2s)：acceptance 4 项 + smoke 2 项"
+key_evidence:
+  - "浏览器（chromium，无重试、单 worker，真实进程内工作台 + 真实 stub 模型端点）：开项目→八视图逐一可见；提交输入→用户消息出现→助手回答经流式渲染出现；提问在浏览器内回答→模型继续产出下文；离开页面再回来（about:blank→回）仍重建同一会话的对话"
+  - "首开无项目：登录对话框 → 空外壳可正常显示（smoke）"
+  - "外壳由真实数据驱动：项目名/路径来自 project.get；状态栏 connected；语言切换 EN/简中改变可见文案（smoke）"
+  - "渲染部件单测：半截围栏/未完成表格行/悬空行内标记被暂存为 pending 文本，完成时整块重解析并替换（最终渲染与一次性渲染一致）"
+not_covered:
+  - area: "P4-f/P4-g/P4-h/P4-i 的独立审阅"
+    reason: "子代理模型配额在 2026-10-09 17:14 前耗尽，评审会话无法启动"
+    disposition: pending
+  - area: "工具卡/思考块的浏览器级视觉核对（截图已存 test-results 附件，逐组件人工比对未做）"
+    reason: "组件级渲染已由单测与真实运行覆盖；逐组件视觉对照属 P6 完整验收"
+    disposition: pending
+result: passed
+```
+
 ## 切片 P4-e · 交互桥（本次）
 
 ```yaml
@@ -314,6 +361,51 @@ not_covered:
     disposition: pending
   - area: "app.js / core / components / views 运行时接线与数据渲染"
     reason: "同批次其它切片负责；本切片不含 JS 逻辑"
+    disposition: pending
+result: passed
+```
+
+## 切片 P4-g(A) · 需求/看板/文件/文档页（本次）
+
+```yaml
+runs:
+  - command: node --check devagent/web/views/{requirements,runs,files,docs}.js devagent/web/app.js
+    result: passed
+    exit_code: 0
+    evidence: "五个文件语法检查全部 OK"
+  - command: npx tsc --noEmit（devagent/）
+    result: passed
+    exit_code: 0
+    evidence: "TSC_OK；web/*.js 不在 tsconfig include 内，服务端类型面不受影响"
+  - command: npx vitest run --exclude "browser/**"（devagent/）
+    result: passed
+    exit_code: 0
+    evidence: "Test Files 17 passed (17) / Tests 195 passed (195)"
+  - command: npm test（devagent/，原样）
+    result: failed
+    exit_code: 1
+    evidence: "仅 browser/smoke.spec.ts 与 browser/acceptance.spec.ts 两个 Playwright 规格被 vitest 收集后报错（'Playwright Test did not expect test.beforeAll() to be called here'）；195 个服务端用例全部通过。browser/ 为同批次 P4-i 并发新增（未跟踪），与本切片无关"
+  - command: "AGENTDEV_ACCESS_PASSWORD=dev AGENTDEV_DATA_DIR=/tmp/p4-views-a AGENTDEV_PORT=4191 node src/server/main.ts"
+    result: passed
+    evidence: "workbench listening on http://127.0.0.1:4191（未设置 AGENTDEV_MODEL_*）"
+  - command: "真实 Chromium（eval browser 工具）打开 http://127.0.0.1:4191/ → 登录 → 打开夹具项目 /tmp/p4-views-project → 依次访问四视图"
+    result: passed
+    evidence: |
+      console errors: 0 / uncaught pageerrors: 0（全程）
+      #/requirements -> 筛选器(All/proposal/implementation, All/pending…archived) + 两条记录 REQ-002(Sample proposal, PENDING)、REQ-001(Sample implementation requirement, IN_PROGRESS) + “Unreadable record files 1” 段：BROKEN.md / “the file must start with a YAML front matter (`---`)” / INVALID。点击 REQ-001 打开对话：KIND/STATUS/UPDATED/VERSION/PATH 元数据 + “Record text” 原文（含 front matter 与七段中文小节）。
+      #/runs -> 显式空态 “No Tasks in this project yet.”（无模型、项目无 Task，属预期）。
+      #/files -> 树根 .dev/ AGENTS.md/ README.md/ src/，#visibleFileCount=2，#filePath=“Select a file to preview.”；点 AGENTS.md → meta “MD · 122 B · 4930eae484a1”、7 lines、代码正文、active 高亮。展开 .dev→requirements 惰性加载 3 个 md（count=5）；搜索 “REQ-001” 收敛为 1 条；“zzz” 时 #fileTreeEmpty 显示、count=0；清空后恢复。
+      #/docs -> 三条固定条目 AGENTS.md=present、.dev/INDEX.md=missing、.dev/PROJECT.md=missing；“Missing entries” 缺口段列出后两者；选中 AGENTS.md 渲染 markdown（<h1>/<p>/<ul>）；选中 .dev/INDEX.md 显示缺口卡片且无 markdown 元素。
+key_evidence:
+  - "四视图均以真实 RPC 数据渲染；夹具项目含 2 条合法需求 + 1 个非法文件 + 缺失的 .dev/INDEX.md 与 .dev/PROJECT.md，正好覆盖有效/无效/缺口三类真实形态"
+  - "Runs 为空态系因无模型时项目没有 Task（read-only 视图仍正常渲染，符合验收前提）"
+  - "i18n.json 合法 JSON，en 与 zh-CN 各 357 键、键集对称；四个视图引用的全部键命中，无未解析键"
+not_covered:
+  - area: "Runs 看板非空与 task.control / task.report.get 的实际点击"
+    reason: "无模型 → 无 Task；需真实模型全链路，属 P4-i"
+    disposition: pending
+  - area: "npm test 原样命令在 browser/ 存在时通过"
+    reason: "browser/*.spec.ts 为 P4-i（Playwright）并发产物，被 vitest 默认收集；属该切片范围"
     disposition: pending
 result: passed
 ```

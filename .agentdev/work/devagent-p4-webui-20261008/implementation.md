@@ -292,6 +292,41 @@ risks_remaining:
   - "vendor 体积 +91.5KB gzip 未纳入首屏预算核对（浏览器切片 P4-f 的实测网络记录复核）"
 ```
 
+## 切片 P4-f/P4-g/P4-h · 前端（本次）
+
+```yaml
+slice: 设计系统抽取 + 客户端内核 + 八个视图 + 流式渲染部件（真实浏览器可运行）
+changed:
+  - path: devagent/web/styles/{tokens,components,views}.css + web/i18n.json（抽取，字节保真）
+    purpose: mock 的 :root 令牌与全部组件/视图规则逐行照搬（393 条规则、485 个展开选择器，校验脚本输出 found 485 / matched 485 / missing 0 / duplicated 0 / mismatched 0）；i18n 字典 en/zh-CN 各 354 键、双向齐全
+  - path: devagent/web/index.html（外壳）
+    purpose: mock 骨架（topbar/content-shell/sidebar/workspace/runtime/statusbar + 八个视图容器 + 三个 dialog + toast host），无内联样式/脚本，vendor import map，<script type=module src=/app.js>
+  - path: devagent/web/core/*.js（内核）
+    purpose: rpc.js（信封 + 每用户动作一个 requestId、重试复用、CSRF 头，令牌存 sessionStorage 以便刷新后仍能写）、stream.js（prepare→快照→SSE→resync 重开，不依赖 Last-Event-ID）、store.js（实体缓存 + invalidate 重取 + 会话实时订阅）、session-view.js（消息/流式块/pending 交互，rAF 合并）、i18n.js、router.js（八视图 hash 路由）、dom.js（el/replace/rafSchedule/relativeTime）
+  - path: devagent/web/components/*.js
+    purpose: shell.js（顶栏/侧栏/状态栏/控制台折叠与页签）、toast.js、dialog.js、data-list.js、board-card.js、interaction-card.js（confirm/select/input 三种问答控件 + 版本化答复）
+  - path: devagent/web/components/stream/*.js
+    purpose: markdown-stream.js（**半截围栏/表格行/行内标记暂存**，完成时整块重解析并替换，见 test/web-markdown-stream.test.ts 3 项）、thinking-block.js、tool-card.js（参数流式摘要 + 结果/错误翻转）、log-line.js（ansi_up 着色 + 500 行窗口 + 截断计数）
+  - path: devagent/web/views/*.js（八个视图）
+    purpose: chief（对话流/问答/阶段条/输入框）、requirements、runs（看板 + task.control）、files（目录树 + 预览/版本/二进制/截断）、docs（固定入口存在性与正文）、inbox（待答问答/恢复核实/待处理任务）、agents（按角色的有效配置）、settings（有效配置/项目状态/未实现项）
+  - path: devagent/web/vendor/**（内置库）
+    purpose: markdown-it 14.1.0、@highlightjs/cdn-assets 11.11.1、ansi_up 6.0.6、@tanstack/virtual-core 3.13.12 及其 ESM 依赖（linkify-it/mdurl/uc.micro/punycode.js/entities），全部原始字节，import map 直连，无构建步骤
+  - path: devagent/src/server/http.ts
+    purpose: .mjs 以 JavaScript MIME 提供（真实浏览器首次加载即暴露的缺口）
+  - path: devagent/browser/**（Playwright）
+    purpose: playwright.config.ts（chromium、无重试、单 worker）+ harness.ts（进程内起真实工作台 + 可注入 stub 模型 + 通过 UI 登录 + 经 RPC 预置项目/会话）+ smoke.spec.ts（首开无项目、预置项目渲染外壳）+ acceptance.spec.ts（开项目与八视图、提交→流式回答、浏览器内回答提问→模型继续、离开后再回来）
+  - path: devagent/vitest.config.ts（新增）
+    purpose: 单元测试只收 test/**，browser/** 由 Playwright 运行（否则 Playwright 规格被 vitest 收集并报错）
+behavior:
+  - "实测：单元/集成 npm test 198/198（18 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
+  - "真实浏览器（chromium，无重试）：6 项全绿 —— 首开无项目可登录并渲染空外壳；预置项目渲染外壳（状态栏 connected、语言切换 EN/简中）；开项目后八视图逐一可见；提交输入→用户消息立即出现→助手回答经流式渲染出现；提问在浏览器内回答后模型继续；离开页面再回来仍能重建会话（cookie + 会话级 CSRF 令牌）"
+  - "真实浏览器暴露并修复的三处缺口：app.js 缺少变量声明导致整页不启动；http.ts 未把 .mjs 当 JS（内置 ESM 全部被拒）；markdown-it 的传递依赖未内置/未映射（顶层 import 直接失败）"
+risks_remaining:
+  - "会话 cookie 为进程内存态：服务重启需重新登录（首版可接受）"
+  - "无 project.list 方法：项目切换器只能按路径打开（契约内的诚实行为）"
+  - "agents/settings 视图只呈现当前有效配置；config.save/test 尚未实现"
+```
+
 ## 后续切片（计划内，未开始）
 
 ```yaml
@@ -358,4 +393,34 @@ not_covered:
   - area: "密度旋钮 --font-scale"
     reason: "mock :root 未定义；加入会破坏 :root 逐字节一致。见 OMISSIONS.md"
     disposition: deferred
+```
+
+## 切片 P4-g(A) · 需求/看板/文件/文档页（本次）
+
+```yaml
+slice: P4-g(A) 业务页面四分之一：Requirements / Runs(Task 看板) / Files / Docs 四个视图 + app.js 接线
+basis: "R1 只读方法表（requirement.list/get、task.list/get/report.get、task.control、project.get 的 entries、project.files.list/read）；plan.md §5 视图 mount/update 与 store 订阅；webui/index.html（mock）的 board/data-list/files/docs 结构与类名"
+changed:
+  - path: devagent/web/views/requirements.js（新增，约 200 行）
+    purpose: "requirement.list 记录渲染为 .data-list/.data-row（id/title/kind·updatedAt·version/status），kind+status 两个筛选 <select>（客户端筛选已加载列表）；行点击经 requirement.get 打开对话展示元数据、格式问题（issues）与记录原文（.code-pre）；invalidFiles 作为独立 .data-list 段落展示文件与各条 issue；无任何记录时显式空态并点名 .dev/requirements/"
+  - path: devagent/web/views/runs.js（新增，约 200 行）
+    purpose: "store.tasks 经 board-card.js 渲染进 .requirement-board，按真实 status 分入四列（active/pausing、waiting、paused/cancelling、completed/cancelled）；卡片点击经 task.get 打开详情（phase/status/revision/goal/scope/members/results）；pause/resume/cancel 调 store.rpc.call('task.control',{taskId,command,expectedRevision}, { requestId:newRequestId() })，成功后 refreshTasks 并关窗；结果行点击经 task.report.get 展示报告原文；无 Task 时显式空态"
+  - path: devagent/web/views/files.js（新增，约 260 行）
+    purpose: "project.files.list 惰性构建目录树（每目录一次、按 nextCursor 翻页取全），目录为 <details> 首次展开时加载；文件点击经 project.files.read 填充 #filePath/#fileMeta(size·sha256 版本)/#fileLineCount/#fileCode，binary 与 truncated 如实标注；#fileSearch 只过滤已加载树、并切换 #fileTreeEmpty 与 #visibleFileCount"
+  - path: devagent/web/views/docs.js（新增，约 160 行）
+    purpose: "project.get 的 entries（AGENTS.md/.dev/INDEX.md/.dev/PROJECT.md）逐条列出 present/missing，缺失条目单列“Missing entries”缺口段；选中存在条目经 project.files.read 取文并以 context.markdownIt 渲染（.markdown-body）；选中缺失条目报缺口卡片且不发起读取"
+  - path: devagent/web/app.js（修改，仅两处）
+    purpose: "import 四个工厂；createView(id) 增加 requirements/runs/files/docs 四个 case。placeholder 兜底未改，保留给 inbox/agents/settings（P4-g(B)）"
+  - path: devagent/web/i18n.json（修改）
+    purpose: "为四个视图新增 45 键（requirements.* / runs.* / docs.* / files.* / common.loading），en 与 zh-CN 对称"
+behavior:
+  - "四视图全部只用真实 RPC/ store 数据；空态、缺失、非法文件、binary/truncated 均如实呈现，绝不编造数值"
+  - "视图生命周期照 chief.js：createXView(context) 返回 { id, mount, update, destroy? }；requirements/docs/files 在 'requirement'/'project' 失效通知上重绘，runs 复用 app.js 既有的 task/session 全量 update 派发"
+not_covered:
+  - area: "Runs 看板非空形态与 task.control/report.get 的实际交互"
+    reason: "无模型时项目尚无 Task，看板落在空态；有模型的全链路交互属 P4-i"
+    disposition: pending
+  - area: "inbox / agents / settings 三视图"
+    reason: "属同批次 P4-g(B)（另一并发切片）"
+    disposition: pending
 ```

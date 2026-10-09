@@ -141,3 +141,20 @@ P4-h0 选定。此处每个文件均从 npm 发布构建**原样复制**：不�
 ```
 
 语言包说明：`highlight.js/es/languages/` 下内置 `bash/css/diff/javascript/json/markdown/python/typescript/xml/yaml` 十个 `.min.js`（逐个 `registerLanguage`）；主题内置 `styles/atom-one-dark.min.css`。
+
+## 补充（P4-i 浏览器验收）：markdown-it 的传递依赖
+
+P4-i 在真实 Chromium 里加载时发现：markdown-it 官方 ESM（`lib/**`）直接 import 裸说明符
+`linkify-it`、`mdurl`、`uc.micro`、`punycode.js`、`entities`。它们既未随 P4-h0 内置，也未在 `index.html`
+的 import map 里映射，于是 `app.js` 顶层的 `await import('markdown-it')` 失败、整个模块不执行（无登录框）。
+本次按同样规则（原样复制、不压缩、不改写）补齐以下传递依赖，并把这 5 个裸说明符加入 `index.html` 的 import map：
+
+| 裸说明符 | 入口 | 上游 |
+| --- | --- | --- |
+| `linkify-it` | `vendor/linkify-it/index.mjs` | `node_modules/linkify-it/`（index.mjs + lib/re.mjs） |
+| `mdurl` | `vendor/mdurl/index.mjs` | `node_modules/mdurl/`（index.mjs + lib/*.mjs） |
+| `uc.micro` | `vendor/uc.micro/index.mjs` | `node_modules/uc.micro/`（index.mjs + properties/** + categories/**） |
+| `punycode.js` | `vendor/punycode.js/punycode.es6.js` | `node_modules/punycode.js/` |
+| `entities` | `vendor/entities/lib/esm/index.js` | `node_modules/entities/lib/esm/**`（含 generated/**） |
+
+补齐后 `web/vendor/` 共 93 个文件；上面各库的原始 69 文件与方法学不变。

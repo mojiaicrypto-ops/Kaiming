@@ -3,7 +3,9 @@
  * UI state (open dialogs, collapsed blocks, scroll) deliberately stays out of the route (P4 plan §5).
  */
 
-export const VIEWS = ['chief', 'requirements', 'tasks', 'inbox', 'files', 'docs', 'agents', 'settings', 'projects'];
+// The mock's own nav: eight views. `runs` is the mock's name for the Task board; there is no
+// separate projects view (the project switcher lives in the topbar).
+export const VIEWS = ['chief', 'requirements', 'runs', 'inbox', 'files', 'docs', 'agents', 'settings'];
 
 export class Router {
   constructor(options = {}) {

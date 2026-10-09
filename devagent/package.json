@@ -9,6 +9,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:browser": "playwright test",
     "check:model": "node checks/real-model.ts",
     "check:runtime": "node checks/runner-real-model.ts",
     "check:prompts": "node checks/prompt-language.ts",
@@ -18,7 +19,14 @@
     "@earendil-works/pi-coding-agent": "1.0.0"
   },
   "devDependencies": {
+    "@highlightjs/cdn-assets": "11.11.1",
+    "@playwright/test": "^1.64.0",
+    "@tanstack/virtual-core": "3.13.12",
     "@types/node": "^24.3.0",
+    "anser": "2.3.2",
+    "ansi_up": "6.0.6",
+    "highlight.js": "11.11.1",
+    "markdown-it": "14.1.0",
     "typescript": "^5.9.2",
     "vitest": "^3.2.7"
   }

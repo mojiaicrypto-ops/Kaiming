@@ -30,6 +30,8 @@ const here = fileURLToPath(new URL('.', import.meta.url));
 
 export interface StartOptions {
   readonly dataDir: string;
+  /** Pi config directory (model/credential files); defaults to the data directory. */
+  readonly agentDir?: string;
   readonly accessPassword: string;
   readonly port: number;
   readonly host?: string;
@@ -48,7 +50,7 @@ export function startWorkbench(options: StartOptions): Promise<{
   const store = new Store({ path: join(options.dataDir, 'state.db'), serverEpoch: 1 });
   const server: RuntimeDefaults = {
     model: options.model ?? { providerId: 'unset', modelId: 'unset' },
-    agentDir: options.dataDir,
+    agentDir: options.agentDir ?? options.dataDir,
     promptDir: options.promptDir ?? resolve(here, '../../../docs/technicalnew/prompts'),
     tools: [],
   };
@@ -98,7 +100,8 @@ export function startWorkbench(options: StartOptions): Promise<{
     auth,
     router,
     hub,
-    ...(options.staticDir !== undefined ? { staticDir: options.staticDir } : {}),
+    // The browser surface is served from the same origin (R1); defaults to the shipped UI directory.
+    staticDir: options.staticDir ?? resolve(here, '../../web'),
   });
   return workbench.listen(options.port, options.host ?? '127.0.0.1').then(({ origin, port }) => {
     worker.start();

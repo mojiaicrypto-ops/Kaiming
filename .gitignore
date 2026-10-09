@@ -4,4 +4,7 @@ coverage/
 *.tsbuildinfo
 *.log
 .DS_Store
+devagent/browser/artifacts/
+devagent/test-results/
+devagent/playwright-report/
 devagent/config/model.json

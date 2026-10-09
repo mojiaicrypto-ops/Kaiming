@@ -25,11 +25,15 @@ export function newRequestId(prefix = 'c') {
   return `${prefix}-${Date.now().toString(36)}-${sequence}-${random}`;
 }
 
+const CSRF_KEY = 'agentdev.csrf';
+
 export class RpcClient {
   constructor(options = {}) {
     this.base = options.base ?? '';
     this.path = options.path ?? '/api/v1/rpc';
-    this.csrfToken = null;
+    // The cookie is HttpOnly; the token is what the page must keep to write, and a reload in the same
+    // tab must not lose it (sessionStorage is per tab and dies with it).
+    this.csrfToken = sessionStorage.getItem(CSRF_KEY);
     this.onUnauthorized = options.onUnauthorized ?? (() => undefined);
     this.pending = new Map();
   }
@@ -38,12 +42,14 @@ export class RpcClient {
   async login(password, requestId = newRequestId('login')) {
     const response = await this.#send(requestId, 'auth.login', { password }, false);
     this.csrfToken = response.csrfToken;
+    sessionStorage.setItem(CSRF_KEY, response.csrfToken);
     return response;
   }
 
   async logout() {
     const response = await this.call('auth.logout', {});
     this.csrfToken = null;
+    sessionStorage.removeItem(CSRF_KEY);
     return response;
   }
 
@@ -89,6 +95,11 @@ export class RpcClient {
       if (body.error !== undefined) {
         if (body.error.code === 'UNAUTHORIZED' && requiresAuth) {
           this.onUnauthorized();
+        }
+        if (body.error.code === 'FORBIDDEN' && headers['x-agentdev-csrf'] !== undefined) {
+          // A token the server rejects (restarted server, revoked session) is not kept around.
+          this.csrfToken = null;
+          sessionStorage.removeItem(CSRF_KEY);
         }
         throw new RpcError(body.error.code, body.error.message, body.error.details);
       }

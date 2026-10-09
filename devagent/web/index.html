@@ -13,6 +13,11 @@
     {
       "imports": {
         "markdown-it": "/vendor/markdown-it/index.mjs",
+        "linkify-it": "/vendor/linkify-it/index.mjs",
+        "mdurl": "/vendor/mdurl/index.mjs",
+        "uc.micro": "/vendor/uc.micro/index.mjs",
+        "punycode.js": "/vendor/punycode.js/punycode.es6.js",
+        "entities": "/vendor/entities/lib/esm/index.js",
         "highlight.js/core": "/vendor/highlight.js/es/core.min.js",
         "highlight.js/languages/": "/vendor/highlight.js/es/languages/",
         "ansi_up": "/vendor/ansi_up/ansi_up.js",
@@ -257,6 +262,8 @@
           <div class="agent-tree" id="agentTree" data-i18n-aria="aria.agentRunTree" aria-label="Agent run tree"></div>
 
           <div class="terminal-log" id="terminalLog" role="tabpanel" aria-labelledby="consoleTabLive" aria-live="polite"></div>
+          <div class="terminal-log" id="terminalEvents" role="tabpanel" aria-labelledby="consoleTabEvents" aria-live="polite" hidden></div>
+          <div class="terminal-log" id="terminalArtifacts" role="tabpanel" aria-labelledby="consoleTabArtifacts" aria-live="polite" hidden></div>
 
           <div class="terminal-prompt">
             <b>agentdev</b><span id="promptProject"></span><span id="promptCommand"></span><i class="cursor" aria-hidden="true">&#8203;</i>
@@ -272,12 +279,11 @@
 
     <footer class="statusbar">
       <div class="status-left">
-        <span class="status-item"><span class="status-led">&#8203;</span><span data-i18n="status.localDemo">local UI demo</span></span>
-        <span class="status-item muted" data-i18n="status.noCore">no Core connection</span>
+        <span class="status-item"><span class="status-led" id="statusLed" data-state="connecting" aria-hidden="true">&#8203;</span><span id="statusRun"></span></span>
         <span class="status-item muted" id="statusBranch"></span>
       </div>
       <div class="status-right">
-        <span id="statusRun" data-i18n="status.sampleRun"></span><span id="statusTokens"></span><span data-i18n="status.mockMetrics">mock metrics</span><span data-i18n="nav.workspace">Workspace</span>
+        <span id="statusTokens"></span><span data-i18n="nav.workspace">Workspace</span>
       </div>
     </footer>
   </div>
