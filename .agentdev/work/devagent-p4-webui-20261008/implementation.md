@@ -208,17 +208,34 @@ changed:
     purpose: 提交/停止/控制/清理/恢复核实后发布 {type:'invalidate', entity, id} 业务通知
   - path: devagent/src/server/main.ts
     purpose: 入口创建 hub、接 runner.onEvent、注入写方法与 stream 方法、把 hub 交给 HTTP 层
-  - path: devagent/test/server-stream.test.ts（新增，5 项）
+  - path: devagent/test/server-stream.test.ts（新增，7 项；全部事件驱动等待，无轮询）
     purpose: 快照+boundary 且不重放快照内事实；cookie 认证/跨主体/未知/重复认领；溢出→resync 且不发带洞事件；代次变化→resync；真实 Pi 事件流 + 断线不取消工作
 behavior:
-  - "实测：npm test 187/187（16 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
+  - "实测：npm test 189/189（16 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
   - "先订阅后快照：boundary 之前的业务事实只在快照里，boundary 之后的事件只走流，既不丢也不重放（无 Last-Event-ID 依赖）"
   - "阅读者跟不上只会溢出自己的缓冲并收到 resync；Pi 与其他页面不受影响（投递不 await、不阻塞）"
-  - "epoch=serverEpoch：代次变化时活动流发 resync 并关闭，客户端重新 prepare（同一 server 进程内的 Pi 实例重建检测列入残留）"
+  - "epoch=serverEpoch:Pi 实例代次（注册表在创建/销毁实例时递增）：实例真被重建时活动流发 resync 并关闭，客户端重新 prepare；在尚无实例时取的 boundary 会采纳第一个真实代次（否则首个实例的诞生会被误判为代次变化）"
   - "断线只销毁缓冲：已提交输入仍跑完（测试断言输入 completed 且 hub 订阅归零）"
+review_rounds:
+  - round: 1
+    verdict: passed
+    findings: 1 non-blocking
+    fixed:
+      - finding: "未被接管的 prepare 订阅永不失效：expiresAt 只在 take 时检查 → 订阅表与缓冲无界增长，且每个发布事件都要扫描"
+        fix: "hub 在 prepare/publish 时清理过期未接管订阅（TTL 语义成立，无需定时器）"
+        evidence: "server-stream.test.ts：可控时钟推进 TTL 后，下一次 prepare 只保留新订阅（size=1）"
+      - finding: "epoch 变化在运行时不可达（epoch 恒为不可变 serverEpoch，重启又会断连）"
+        fix: "epoch=serverEpoch:实例代次（注册表创建/销毁实例时递增），并加入"无实例时采纳首个真实代次"规则"
+        evidence: "server-stream.test.ts：真实 disposeAll 后再次运行 → 活动流 resync reason=epoch"
+      - finding: "失效通知嵌套在 event 内且帧类型为 pi，客户端需二次判别（wire-format 歧义）"
+        fix: "业务失效通知以帧级 type=invalidate 下发（Pi 事件仍保持 type=pi + event 嵌套）"
+        evidence: "server-stream.test.ts：帧级断言 type=invalidate 与 entity/id"
+      - finding: "写背压处置过激（write 返回 false 即判溢出），会让正常突发被误判为 resync"
+        fix: "按累计未落盘字节设 512KiB 上限，超限才 resync；否则交给 Node 缓冲，不阻塞发布方"
+        evidence: "server-stream.test.ts：真实运行的突发事件全部送达且不发生 resync"
 risks_remaining:
   - "交互事件与待处理交互快照属 P4-e（当前 snapshot.interactions 恒为空数组，已注明）"
-  - "同一 server 进程内 Pi 实例重建（配置/工具变化）目前不改变 epoch；若需要逐实例代次，应在注册表暴露 handle 代次后并入 epoch"
+  - "历史 leaf 的 messageKey 去重字段随 P4-f 的对话渲染一并接入（当前快照给 entryId 与 inputId 关联）"
 ```
 
 ## 后续切片（计划内，未开始）

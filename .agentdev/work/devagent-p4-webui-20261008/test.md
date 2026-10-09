@@ -11,7 +11,7 @@ runs:
   - command: cd devagent && npm test
     result: passed
     exit_code: 0
-    evidence: "16 个测试文件、187 项通过（server-stream 5 项）"
+    evidence: "16 个测试文件、189 项通过（server-stream 7 项）"
   - command: cd devagent && npm run check:prompts / npm run spikes / node checks/runner-real-model.ts
     result: passed
     exit_code: 0
@@ -21,14 +21,17 @@ key_evidence:
   - "只发 boundary 之后：先 prepare 再发布 2 个事件，客户端收到 seq=1,2 且快照里的输入没有被重放"
   - "认证：无 cookie → 401；跨会话/未知订阅 → 409 STREAM_RESYNC_REQUIRED（原因 forbidden/unknown）；同订阅再取一次 → 原因 taken"
   - "溢出：bufferLimit=3 时连发 6 个事件，客户端收到 event: resync reason=overflow 且 **零事件**（不发带洞数据）"
-  - "代次：活动流收到 epoch 变化事件 → resync reason=epoch，仅收到变化前的事件"
+  - "代次（合成）：活动流收到更高代次事件 → resync reason=epoch，仅收到变化前的事件"
+  - "代次（真实）：disposeAll 重建 Pi 实例后再次运行 → 活动流 resync reason=epoch（epoch=serverEpoch:实例代次）"
+  - "订阅失效：TTL 过期且从未被接管的订阅在下一次 prepare 时被清理（size 保持 1）"
+  - "帧形状：Pi 事件 type=pi + event 嵌套；失效通知为帧级 type=invalidate（entity/id 在顶层）"
   - "真实运行：提交输入→worker 跑完→流中出现 invalidate(input) 与带 inputId 的真实 Pi 事件；客户端断开后输入仍 completed，hub 订阅数归零"
 not_covered:
   - area: "交互事件（interaction pending/resolved）与快照中的待处理交互"
     reason: "属 P4-e"
     disposition: pending
-  - area: "同一进程内 Pi 实例重建的代次检测"
-    reason: "需要注册表暴露 handle 代次；当前 epoch 为 serverEpoch"
+  - area: "历史分片的 messageKey 去重字段"
+    reason: "随 P4-f 对话渲染接入；当前快照提供 entryId 与 inputId 关联"
     disposition: pending
 result: passed
 ```

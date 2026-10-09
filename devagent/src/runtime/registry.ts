@@ -29,9 +29,16 @@ interface Registered {
 export class SessionRegistry {
   private readonly factory: PiRuntimeFactory;
   private readonly entries = new Map<string, Registered>();
+  /** How many times a Pi instance has been created for a session (the instance generation). */
+  private readonly generations = new Map<string, number>();
 
   constructor(factory: PiRuntimeFactory) {
     this.factory = factory;
+  }
+
+  /** The current instance generation of a session: 0 before any instance existed. */
+  generationOf(sessionId: string): number {
+    return this.generations.get(sessionId) ?? 0;
   }
 
   async acquire(spec: LogicalSessionSpec, config: EffectiveConfig): Promise<PiSessionHandle> {
@@ -73,6 +80,8 @@ export class SessionRegistry {
       ...(spec.tools !== undefined ? { tools: spec.tools } : {}),
     });
     this.entries.set(spec.sessionId, { handle, bindingHash });
+    // A freshly created instance is a new generation: boundaries from an older one must resync.
+    this.generations.set(spec.sessionId, this.generationOf(spec.sessionId) + 1);
     return handle;
   }
 
@@ -90,6 +99,8 @@ export class SessionRegistry {
     if (existing !== undefined) {
       existing.handle.dispose();
       this.entries.delete(sessionId);
+      // The instance is gone: any boundary that described it is no longer current.
+      this.generations.set(sessionId, this.generationOf(sessionId) + 1);
     }
   }
 

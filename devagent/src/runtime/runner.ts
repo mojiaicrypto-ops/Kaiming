@@ -24,6 +24,7 @@ import {
 } from './prompt-assembly.ts';
 import { INPUT_MARKER_CUSTOM_TYPE, HistoryUnavailableError, type PiRuntimeFactory } from './pi-runtime.ts';
 import { SessionRegistry, type LogicalSessionSpec } from './registry.ts';
+import { epochOf } from './epoch.ts';
 import { toolSetFor } from './tool-sets.ts';
 import { asToolDefinitions, createChiefTaskTools, createTaskGetTool, type TaskToolContext } from '../tools/task-tools.ts';
 import { createReportTool, type ReportToolContext } from '../tools/report-tools.ts';
@@ -85,6 +86,11 @@ export interface RunnerOptions {
     readonly customTools?: LogicalSessionSpec['customTools'];
     readonly extensionFactories?: LogicalSessionSpec['extensionFactories'];
   };
+  /**
+   * Live observation (M4): every Pi session event is handed to the host synchronously. A listener
+   * only broadcasts or records in memory - it must never await a durable transaction (R4).
+   */
+  readonly onEvent?: (sessionId: string, event: unknown, meta: { inputId: string; epoch: string }) => void;
 }
 
 export class InputRunner {
@@ -95,6 +101,8 @@ export class InputRunner {
   private readonly promptBodies = new Map<string, PromptBodies>();
   /** Identity of the run currently executing per session: a Pi instance is reused across inputs. */
   private readonly liveRuns = new Map<string, { readonly inputId: string; readonly serverWorkDir: string }>();
+  /** Handles already wired to the observation hook (one subscription per Pi instance). */
+  private readonly observed = new WeakSet<object>();
 
   constructor(options: RunnerOptions) {
     this.options = options;
@@ -301,6 +309,21 @@ const serverWorkDir = join(config.agentDir, 'work');
         },
         config,
       );
+
+      // Observe the live session: the listener is synchronous and only publishes in memory.
+      if (this.options.onEvent !== undefined && !this.observed.has(handle)) {
+        this.observed.add(handle);
+        handle.session.subscribe((event) => {
+          this.options.onEvent?.(sessionId, event, {
+            inputId: this.liveRuns.get(sessionId)?.inputId ?? input.inputId,
+            // The same epoch definition the stream uses: server generation plus instance generation.
+            epoch: epochOf({
+              serverEpoch: this.options.store.epoch,
+              instanceGeneration: this.options.registry.generationOf(sessionId),
+            }),
+          });
+        });
+      }
 
       // Bookmark first, then deliver: the bookmark's subtree contains this input's root entry.
       // From here on we are performing Pi writes, so a failure means the boundary is unconfirmed

@@ -15,6 +15,8 @@ export interface WriteMethodsOptions {
     sessionId: string,
     params: { inputId: string; requestKey: string; reason: string },
   ) => Promise<{ readonly status: InputRow['status']; readonly stopRequested: boolean }>;
+  /** Business invalidation (M4): the caller's pages re-read the named entity. */
+  readonly invalidate?: (sessionId: string, entity: 'input' | 'task' | 'session' | 'interaction', id: string) => void;
   /** The same Task control path the chief's own tool uses (pause/resume/cancel + stop flow). */
   readonly controlTask: (params: {
     taskId: string;
@@ -75,6 +77,7 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
         payload: { content },
       });
       // The input is stored; the worker is only a hint to run it now.
+      options.invalidate?.(sessionId, 'input', accepted.inputId);
       options.notify();
       return {
         inputId: accepted.inputId,
@@ -111,7 +114,9 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
           requestKey: context.requestId === '' ? `stop:${inputId}` : `stop:${context.requestId}`,
           reason: 'user',
         });
-        return stopped.then((result) => stopResult(store, sessionId, inputId, result.status, result.stopRequested));
+        return stopped.then((result) =>
+          stopResult(store, sessionId, inputId, result.status, result.stopRequested, options.invalidate),
+        );
       }
       if (input.status === 'queued') {
         const result = store.requestStop({
@@ -119,10 +124,10 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
           requestKey: context.requestId === '' ? `stop:${inputId}` : `stop:${context.requestId}`,
           reason: 'user',
         });
-        return stopResult(store, sessionId, inputId, result.status, result.stopRequested);
+        return stopResult(store, sessionId, inputId, result.status, result.stopRequested, options.invalidate);
       }
       // Already settled: stopping is idempotent and reports the current state unchanged.
-      return stopResult(store, sessionId, inputId, input.status, false);
+      return stopResult(store, sessionId, inputId, input.status, false, options.invalidate);
     },
   });
 
@@ -145,6 +150,7 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
       }
       // The stop flow lives in the runner: the final status is written only after the work stopped.
       const controlled = await options.controlTask({ taskId, expectedRevision, command });
+      options.invalidate?.(task.chiefSessionId, 'task', taskId);
       options.notify();
       return {
         taskId,
@@ -174,6 +180,7 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
         // A referenced or still-working session is never deleted: the reasons are the answer.
         throw new RpcError('WORKSPACE_BUSY', 'the session is still referenced or has unfinished work', { gaps });
       }
+      options.invalidate?.(sessionId, 'session', sessionId);
       store.deleteSession({ sessionId, expectedRevision });
       return { sessionId, deleted: true };
     },
@@ -217,6 +224,7 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
         resolvedBy: context.actor,
       });
       // The session may now consume its remaining work.
+      options.invalidate?.(sessionId, 'input', inputId);
       options.notify();
       return {
         inputId: resolved.inputId,
@@ -234,9 +242,11 @@ function stopResult(
   inputId: string,
   status: InputRow['status'],
   stopRequested: boolean,
+  invalidate?: (sessionId: string, entity: 'input' | 'task' | 'session' | 'interaction', id: string) => void,
 ): Record<string, unknown> {
   const input = store.getInput(inputId);
   const running = store.listInputs(sessionId).some((entry) => entry.status === 'processing');
+  invalidate?.(sessionId, 'input', inputId);
   return {
     inputId,
     // The row is the truth: the value from requestStop is the pre-abort status and would contradict

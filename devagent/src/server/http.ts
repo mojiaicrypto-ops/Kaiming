@@ -8,6 +8,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { AuthService, CSRF_HEADER } from './auth.ts';
+import { SessionEventHub, type StreamEvent } from './hub.ts';
 import { RPC_PATH, RpcError, RpcRouter, statusFor, toRpcError, type RpcContext, type RpcResponse } from './rpc.ts';
 import type { Store } from '../store/store.ts';
 
@@ -17,6 +18,8 @@ export interface WorkbenchServerOptions {
   readonly store: Store;
   readonly auth: AuthService;
   readonly router: RpcRouter;
+  /** Live session events (M4); without a hub the stream route is not mounted. */
+  readonly hub?: SessionEventHub;
   /** Directory served at `/` (the workbench UI); absent means no static surface yet. */
   readonly staticDir?: string;
   readonly bodyLimitBytes?: number;
@@ -53,6 +56,11 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
     const path = url.split('?')[0] ?? '/';
     if (request.method === 'POST' && path === RPC_PATH) {
       await handleRpc(request, response);
+      return;
+    }
+    const stream = /^\/api\/v1\/sessions\/([^/]+)\/stream$/.exec(path);
+    if (request.method === 'GET' && stream !== null && options.hub !== undefined) {
+      await handleStream(request, response, decodeURIComponent(stream[1] ?? ''), url);
       return;
     }
     if (request.method === 'GET' || request.method === 'HEAD') {
@@ -156,6 +164,122 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
       revoked: context.actor === 'anonymous' ? false : options.auth.logoutValue(context.actor),
     }),
   });
+
+  /**
+   * The live stream (M4): the cookie authenticates it (never a URL credential), the prepared
+   * subscription is taken over, buffered events after its boundary are sent, and a reader that fell
+   * behind or crossed a generation is told to resync instead of being fed a gap.
+   */
+  async function handleStream(
+    request: IncomingMessage,
+    response: ServerResponse,
+    sessionId: string,
+    url: string,
+  ): Promise<void> {
+    const hub = options.hub;
+    if (hub === undefined) {
+      writeJson(response, 404, { requestId: 'unknown', error: { code: 'NOT_FOUND', message: 'streaming is not enabled' } });
+      return;
+    }
+    const session = options.auth.resolve(request.headers.cookie);
+    if (session === undefined) {
+      writeJson(response, 401, { requestId: 'unknown', error: { code: 'UNAUTHORIZED', message: 'log in first' } });
+      return;
+    }
+    const subscriptionId = new URLSearchParams(url.split('?')[1] ?? '').get('subscriptionId') ?? '';
+    const taken = hub.take({ subscriptionId, sessionId, actor: session.value });
+    if (taken.kind === 'resync') {
+      writeJson(response, 409, {
+        requestId: 'unknown',
+        error: {
+          code: 'STREAM_RESYNC_REQUIRED',
+          message: `prepare the stream again (${taken.reason})`,
+          details: { reason: taken.reason },
+        },
+      });
+      return;
+    }
+    const subscription = taken.subscription;
+    response.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-store',
+      connection: 'keep-alive',
+      'x-content-type-options': 'nosniff',
+      'x-accel-buffering': 'no',
+    });
+    response.flushHeaders?.();
+    let closed = false;
+    const close = (resync: { reason: string } | undefined): void => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      if (resync !== undefined) {
+        response.write(`event: resync\ndata: ${JSON.stringify({ type: 'stream.resync', reason: resync.reason })}\n\n`);
+      }
+      hub.release(subscription.subscriptionId);
+      response.end();
+    };
+    // Back-pressure: Node buffers, and only a reader that is really far behind (past the cap) is told
+    // to resync. Awaiting 'drain' here would block the work that produced the event (M4).
+    const pendingCap = 512 * 1024;
+    let pendingBytes = 0;
+    response.once('drain', () => {
+      pendingBytes = 0;
+    });
+    const send = (event: StreamEvent): void => {
+      if (closed) {
+        return;
+      }
+      if (event.epoch !== undefined && !subscription.adopted) {
+        // The boundary was taken before an instance existed: the first real one becomes the epoch.
+        subscription.epoch = event.epoch;
+        subscription.adopted = true;
+      }
+      if (event.epoch !== undefined && event.epoch !== subscription.epoch) {
+        // The instance generation changed: the boundary no longer describes the same Pi session.
+        close({ reason: 'epoch' });
+        return;
+      }
+      // A Pi event keeps its own shape; a business notice is the frame's own type (M4).
+      const notice =
+        typeof event.event === 'object' && event.event !== null && (event.event as { type?: unknown }).type === 'invalidate';
+      const frame = `id: ${event.seq}\ndata: ${JSON.stringify(
+        notice
+          ? {
+              seq: event.seq,
+              sessionId,
+              ...(event.epoch !== undefined ? { epoch: event.epoch } : {}),
+              ...(event.event as Record<string, unknown>),
+            }
+          : {
+              seq: event.seq,
+              type: 'pi',
+              sessionId,
+              ...(event.inputId !== undefined ? { inputId: event.inputId } : {}),
+              ...(event.epoch !== undefined ? { epoch: event.epoch } : {}),
+              event: event.event,
+            },
+      )}\n\n`;
+      response.write(frame);
+      pendingBytes += Buffer.byteLength(frame);
+      if (pendingBytes > pendingCap) {
+        // Far behind: this reader resyncs instead of holding the work (or its memory) back.
+        close({ reason: 'overflow' });
+      }
+    };
+    request.on('close', () => close(undefined));
+    response.on('error', () => close(undefined));
+    if (subscription.overflowed) {
+      close({ reason: 'overflow' });
+      return;
+    }
+    for (const buffered of subscription.buffer) {
+      send(buffered);
+    }
+    subscription.buffer.length = 0;
+    subscription.deliver = send;
+  }
 
   async function serveStatic(
     request: IncomingMessage,
