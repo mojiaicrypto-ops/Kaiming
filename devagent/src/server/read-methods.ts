@@ -162,6 +162,10 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
             entryId: record.id,
             role: record.role,
             content: record.content,
+            // The tool identity travels with a result message here too, as it does in the snapshot.
+            ...(record.toolCallId !== null ? { toolCallId: record.toolCallId } : {}),
+            ...(record.toolName !== null ? { toolName: record.toolName } : {}),
+            ...(record.isError !== null ? { isError: record.isError } : {}),
             timestamp: record.timestamp,
             inputId: record.inputId,
             inputStatus: input?.status ?? null,

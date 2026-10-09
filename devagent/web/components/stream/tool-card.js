@@ -11,12 +11,9 @@ export function createToolCard({ name, callId }) {
   let result = '';
   const summary = el('code', { class: 'tool-args' });
   const state = el('span', { class: 'tool-state', text: 'running' });
+  const nameLabel = el('span', { class: 'tool-name', text: name ?? 'tool' });
   const resultBody = el('pre', { class: 'tool-result', hidden: true });
-  const head = el('div', { class: 'tool-head' }, [
-    el('span', { class: 'tool-name', text: name ?? 'tool' }),
-    summary,
-    state,
-  ]);
+  const head = el('div', { class: 'tool-head' }, [nameLabel, summary, state]);
   const node = el('div', { class: 'tool-card', dataset: { callId: callId ?? '' } }, [head, resultBody]);
 
   const paint = () => {
@@ -29,6 +26,12 @@ export function createToolCard({ name, callId }) {
 
   return {
     node,
+    /** The name is only known when the finished message names the call; a streamed card is unnamed. */
+    setName(next) {
+      if (typeof next === 'string' && next !== '') {
+        nameLabel.textContent = next;
+      }
+    },
     appendArguments(delta) {
       argumentsText += delta;
       paint();

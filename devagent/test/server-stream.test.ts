@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,6 +35,9 @@ interface Harness {
   readonly origin: string;
   readonly store: Store;
   readonly projectId: string;
+  /** The temporary root and its project directory: tests write history files under them. */
+  readonly root: string;
+  readonly projectRoot: string;
   readonly hub: SessionEventHub;
   readonly registry: SessionRegistry;
   awaitRun(): Promise<void>;
@@ -144,6 +147,8 @@ async function harness(
     origin,
     store,
     projectId,
+    root,
+    projectRoot,
     hub,
     registry,
     awaitRun: () =>
@@ -314,6 +319,49 @@ describe('session stream', () => {
     expect((stream.state.events[0]?.['event'] as { type: string }).type).toBe('agent_start');
     expect(stream.state.events[1]).toMatchObject({ type: 'invalidate', entity: 'task', id: 't-1' });
     expect(stream.state.resync).toBeNull();
+  });
+
+  it('carries a tool result identity through the snapshot so a reload can flip the same card', async () => {
+    const h = await harness();
+    // A history in which a tool call was answered: the result message names the call.
+    const piFile = join(h.root, 'sessions', 's-chief.jsonl');
+    mkdirSync(dirname(piFile), { recursive: true });
+    writeFileSync(
+      piFile,
+      [
+        JSON.stringify({ type: 'session', id: 'h-1', version: 3, timestamp: 't', cwd: h.projectRoot }),
+        JSON.stringify({
+          type: 'message',
+          id: 'a-1',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'toolCall', id: 'call_7', name: 'question', arguments: { method: 'select' } }],
+          },
+          timestamp: 't1',
+        }),
+        JSON.stringify({
+          type: 'message',
+          id: 'r-1',
+          message: {
+            role: 'toolResult',
+            toolCallId: 'call_7',
+            toolName: 'question',
+            isError: false,
+            content: [{ type: 'text', text: 'interactionId=q-1' }],
+          },
+          timestamp: 't2',
+        }),
+      ].join('\n') + '\n',
+    );
+    h.store.recordSessionBinding({ sessionId: 's-chief', piFile, hasHistory: true, configHash: 'cfg' });
+
+    const prepared = await h.prepare('s-chief');
+    const messages = prepared.snapshot['messages'] as Array<Record<string, unknown>>;
+    const result = messages.find((message) => message['role'] === 'toolResult');
+    // Without the identity a reloaded transcript could not match the result to its call card.
+    expect(result).toMatchObject({ toolCallId: 'call_7', toolName: 'question', isError: false });
+    const call = messages.find((message) => message['role'] === 'assistant');
+    expect(call?.['toolCallId']).toBeUndefined();
   });
 
   it('auths the stream by cookie, refuses a foreign subscription and expires unused ones', async () => {

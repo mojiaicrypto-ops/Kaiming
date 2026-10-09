@@ -319,6 +319,36 @@ describe('read-only query surface', () => {
     expect(errorCode(badCursor.body)).toBe('INVALID_ARGUMENT');
   });
 
+  it('carries a tool result identity through the paged history', async () => {
+    const h = await harness();
+    const piFile = join(h.projectRoot, '..', 'sessions', 's-chief.jsonl');
+    mkdirSync(dirname(piFile), { recursive: true });
+    writeFileSync(
+      piFile,
+      [
+        JSON.stringify({ type: 'session', id: 'h-1', version: 3, timestamp: 't', cwd: h.projectRoot }),
+        JSON.stringify({
+          type: 'message',
+          id: 'r-1',
+          message: {
+            role: 'toolResult',
+            toolCallId: 'call_3',
+            toolName: 'question',
+            isError: true,
+            content: [{ type: 'text', text: 'Error: refused' }],
+          },
+          timestamp: 't1',
+        }),
+      ].join('\n') + '\n',
+    );
+    h.store.recordSessionBinding({ sessionId: 's-chief', piFile, hasHistory: true, configHash: 'cfg' });
+
+    const listed = await h.call('session.messages.list', { projectId: h.projectId, sessionId: 's-chief' });
+    const messages = resultOf<{ messages: Array<Record<string, unknown>> }>(listed.body).messages;
+    // The same identity the snapshot sends: a consumer can match the result to its call.
+    expect(messages[0]).toMatchObject({ role: 'toolResult', toolCallId: 'call_3', toolName: 'question', isError: true });
+  });
+
   it('tells a session with no history apart from one whose history file is missing', async () => {
     const h = await harness();
     const created = await h.call('session.create', { projectId: h.projectId });

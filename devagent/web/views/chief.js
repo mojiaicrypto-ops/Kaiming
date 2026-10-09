@@ -99,7 +99,8 @@ export function createChiefView(context) {
     const text = Array.isArray(message.content)
       ? message.content.map((block) => (block.type === 'text' ? block.text : '')).join('')
       : String(message.content ?? '');
-    const failed = /^Error:/m.test(text);
+    // The message says whether the tool failed; the text check stays as a fallback for older records.
+    const failed = message.isError === true || /^Error:/m.test(text);
     // The card that shows this call's arguments flips; only an unmatched result gets its own card.
     const callId = message.toolCallId ?? '';
     // The tool cards live inside the message entries' block maps, not in `rendered` itself.
@@ -180,9 +181,14 @@ export function createChiefView(context) {
         blockEntry.tool.appendArguments(args.slice((blockEntry.argsText ?? '').length));
         blockEntry.argsText = args;
       }
-      // The finished block names the call: the card adopts that id so its result can find it.
+      // The finished block names the call: the card adopts that id so its result can find it, and
+      // the real tool name (a card painted mid-stream was created before the name was known).
       if (typeof block.id === 'string' && block.id !== '') {
         blockEntry.callId = block.id;
+      }
+      if (typeof block.name === 'string' && block.name !== '') {
+        blockEntry.toolName = block.name;
+        blockEntry.tool.setName(block.name);
       }
       return;
     }

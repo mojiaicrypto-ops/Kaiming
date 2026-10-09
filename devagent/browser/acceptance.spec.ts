@@ -104,7 +104,12 @@ test('a question is answered in the browser and the model continues', async ({ p
     // One tool call, one card: the call card flips to its result instead of a second card appearing,
     // and the result body is the tool's real text (never a stringified object).
     await expect(page.locator('#projectMessages .tool-card')).toHaveCount(1);
-    await expect(page.locator('#projectMessages .tool-card')).toHaveClass(/is-done/);
+    const toolCard = page.locator('#projectMessages .tool-card');
+    await expect(toolCard).toHaveClass(/is-done/);
+    // It is the call's own card (same call id, arguments still shown), not a fresh result card.
+    await expect(toolCard).toHaveAttribute('data-call-id', /^call_/);
+    await expect(toolCard.locator('.tool-name')).toHaveText('question');
+    await expect(toolCard.locator('.tool-args')).toContainText('"method":"select"');
     // The flipped card shows the tool's own output, not a stringified result object.
     const result = page.locator('#projectMessages .tool-card .tool-result');
     await expect(result).toBeVisible();

@@ -370,6 +370,21 @@ review_rounds:
         evidence: "browser：同一工具调用只有 1 张 .tool-card，翻转为 is-done，.tool-result 可见且含工具真实输出（interactionId=），无 [object Object]"
     residual_notes:
       - "多工具并发时最后的退路（仍在运行的卡片）可能匹配错卡；本版任一时刻只有一个工具在跑，未就此加机制"
+  - round: 4
+    verdict: passed
+    findings: 0 blocking（5 项残留提示，全部收口）
+    fixed:
+      - note: "浏览器断言未证明幸存卡片就是调用卡"
+        fix: "断言 data-call-id 匹配 ^call_、工具名与参数仍在（不是新结果卡）"
+      - note: "session.messages.list 未随快照转发工具身份"
+        fix: "read-methods 的 messages.list 同样带上 toolCallId/toolName/isError"
+      - note: "新字段无测试固定"
+        fix: "新增 test/server-stream.test.ts 快照身份用例与 test/server-read.test.ts 分页历史用例；变异验证（快照去掉字段即失败）"
+      - note: "toolName 兜底对实时流卡片失效（流式首帧无名字）"
+        fix: "工具卡提供 setName；完成消息命名该调用时卡片采用真实 id 与名字"
+      - note: "isError 全链路传递却未被使用"
+        fix: "失败判定优先用 message.isError，文本匹配退为回退"
+    evidence: "tsc 0；npm test 200/200（18 文件）；playwright 8 passed；spikes 47/47；selectors 485/485 且 extra 0；prompts 15/15；real-model 4/4"
 risks_remaining:
   - "会话 cookie 为进程内存态：服务重启需重新登录（首版可接受）"
   - "无 project.list 方法：项目切换器只能按路径打开（契约内的诚实行为）"
