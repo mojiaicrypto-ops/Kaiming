@@ -1,5 +1,43 @@
 # Test Report · devagent-p4-webui-20261008
 
+## 切片 P4-h0 · 渲染库选型（本次）
+
+```yaml
+runs:
+  - command: cd devagent && node --experimental-strip-types spikes/web-01-renderers.ts
+    result: passed
+    exit_code: 0
+    evidence: "6/6 通过；内置体积合计 273.3KB 原始 / 91.5KB gzip；2000 行围栏 32.1ms/次；virtual-core 5000 项 600px 区间 0.159ms"
+  - command: cd devagent && npx tsc --noEmit
+    result: passed
+    exit_code: 0
+    evidence: "无输出"
+  - command: cd devagent && npm test
+    result: passed
+    exit_code: 0
+    evidence: "17 个测试文件、193 项通过"
+  - command: cd devagent && cmp 逐文件核对 web/vendor 与 node_modules 上游发布物
+    result: passed
+    exit_code: 0
+    evidence: "identical=69 mismatches=0（逐文件 sha256 见 web/vendor/README.md）"
+key_evidence:
+  - "试验脚本直接加载 web/vendor/ 下浏览器实际使用的 ESM（非 npm 入口），证明无打包步骤即可被浏览器消费"
+  - "markdown-it+highlight.js 渲染 2000 行 javascript 围栏：32.1ms/次（阈值 250ms），输出 374762 字符"
+  - "30 行 GFM 表格渲染出 31 个 <tr>"
+  - "virtual-core：5000 项 / 24px / 600px 视口，offset 0 → [0,24]、offset 1200 → [50,74]，总高 120000px"
+  - "ANSI：anser 仅经 Node CJS 互操作可着色（因此作为浏览器依赖被拒、不内置）；内置 ansi_up 6.0.6 输出 228 字符带 ansi-* 类 HTML"
+  - "拒绝并替换：anser（CJS）→ ansi_up；highlight.js 核心包 es/（CJS 包装）→ @highlightjs/cdn-assets 11.11.1"
+  - "退出码契约：任一库加载失败或单次 markdown 渲染 >250ms → 非零退出（本次 0）"
+not_covered:
+  - area: "浏览器内实际加载 vendor ESM 与高亮 CSS 渲染（真实 Chromium）"
+    reason: "属 P4-i；本片在 Node 中验证加载边界与脚本，尚未在浏览器验证"
+    disposition: pending
+  - area: "vendor 体积对首屏/网络的实测影响"
+    reason: "属 P4-f 外壳与 P4-i 验收"
+    disposition: pending
+result: passed
+```
+
 ## 切片 P4-e · 交互桥（本次）
 
 ```yaml
@@ -234,6 +272,48 @@ not_covered:
     disposition: pending
   - area: "pending 回执跨重启对账"
     reason: "P4-a 处理器全同步故不可达；P4-c 异步写接入时按 S7 恢复对账"
+    disposition: pending
+result: passed
+```
+
+## 切片 P4-f(1) · 设计系统与外壳抽取（本次）
+
+```yaml
+runs:
+  - command: node devagent/web/styles/verify-selectors.mjs
+    result: passed
+    exit_code: 0
+    evidence: |
+      CSS fidelity check vs webui/index.html <style>
+        selectors found in mock : 485
+        matched                 : 485
+        missing                 : 0
+        duplicated              : 0
+        mismatched declarations : 0
+        extra (not in mock)     : 0
+  - command: node -e "JSON.parse(require('fs').readFileSync('devagent/web/i18n.json','utf8'))"
+    result: passed
+    exit_code: 0
+    evidence: "i18n.json: valid JSON"
+  - command: node -e "…统计 index.html 的 data-i18n* 键并在 i18n.json 中查 resolve…"
+    result: passed
+    exit_code: 0
+    evidence: "keys in index.html: 121 | unresolved: none | view containers: 8"
+  - command: grep -n 'style="' devagent/web/index.html
+    result: passed
+    exit_code: 0
+    evidence: "无匹配（无内联 style）；脚本仅 importmap 与 type=module 外链"
+key_evidence:
+  - "逐字节保真：mock 的 485 个展开选择器全部出现在且仅出现在 tokens/components/views 之一，声明（去空白后）与 mock 完全一致；无遗漏、无重复、无新增选择器"
+  - "i18n：mock 生效字典（baseMessages 与 messages 两段合并结果）导出为 {en, zh-CN}；两语言键集相同（各 309）；130 个 mock 标记键全部可解析"
+  - "外壳：八个 .view 容器（chief/requirements/docs/agents/runs/inbox/settings/files）齐备；topbar/content-shell(sidebar+workspace+runtime)/statusbar/三对话框/toast host 类名与嵌套照搬 mock"
+  - "导入映射取 vendor/README.md 既定条目（markdown-it / highlight.js / ansi_up / @tanstack/virtual-core），路径改为同源 /vendor/"
+not_covered:
+  - area: "CSS 渲染截图对照、四断点、键盘可达性与 aria-live"
+    reason: "需真实 Chromium，属 P4-i 浏览器验收"
+    disposition: pending
+  - area: "app.js / core / components / views 运行时接线与数据渲染"
+    reason: "同批次其它切片负责；本切片不含 JS 逻辑"
     disposition: pending
 result: passed
 ```

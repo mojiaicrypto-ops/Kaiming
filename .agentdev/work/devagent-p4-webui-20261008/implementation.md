@@ -268,8 +268,94 @@ risks_remaining:
   - "父委派等待与子会话交互的联动（M5 要求子问题不解除父委派等待）在 P4-g 的 UI 用例里一并验收；机制上委派等待只看成员输入状态，本切片未改变该逻辑"
 ```
 
+## 切片 P4-h0 · 渲染库选型（本次）
+
+```yaml
+slice: P4-h0 前端渲染库量测（markdown / 高亮 / ANSI / 虚拟化）+ 固定版本 ESM 内置 web/vendor/
+changed:
+  - path: devagent/package.json
+    purpose: 新增 devDependencies（仅浏览器侧，服务器运行时依赖不变）：候选 markdown-it@14.1.0、highlight.js@11.11.1、anser@2.3.2、@tanstack/virtual-core@3.13.12，以及替代品 @highlightjs/cdn-assets@11.11.1、ansi_up@6.0.6
+  - path: devagent/spikes/web-01-renderers.ts（新增）
+    purpose: 直接加载 web/vendor/ 下浏览器实际使用的 ESM：markdown-it+highlight.js 渲染 2000 行围栏并计时、30 行 GFM 表格、ANSI 着色（anser 作候选对照 + 内置 ansi_up）、virtual-core 对 5000 项/600px 视口的区间计算；任一库加载失败或单次 markdown 渲染 >250ms 即退出非零
+  - path: devagent/web/vendor/（新增，69 个已发布 ESM 文件 + README.md，逐文件版本/许可证/导入路径/sha256 见 README）
+    purpose: markdown-it 14.1.0（index.mjs + lib/**，53 文件）、@highlightjs/cdn-assets 11.11.1（es/core.min.js + 10 语言 + atom-one-dark 主题，13 文件）、ansi_up 6.0.6（1 文件）、@tanstack/virtual-core 3.13.12（esm index.js+utils.js，2 文件）；全部原样复制（不压缩/不改写/不打包）、逐字节 cmp 核对一致
+  - path: .agentdev/work/devagent-p4-webui-20261008/p4h0-renderers.md（新增）
+    purpose: 体积 / 计时 / 打包需求结论 / 被拒候选与理由 / 复现命令与实测输出 / sha256 聚合
+behavior:
+  - "实测：cd devagent && node --experimental-strip-types spikes/web-01-renderers.ts → 退出 0，6/6 通过"
+  - "体积（原始/gzip）：markdown-it 161.6/56.8KB、highlight.js 61.6/24.8KB、ansi_up 22.1/3.6KB、virtual-core 27.9/6.3KB；合计 273.3/91.5KB"
+  - "计时：2000 行围栏 markdown-it+highlight.js 32.1ms/次；virtual-core 5000 项 600px 区间计算 0.159ms；30 行 GFM 表格 31 <tr>"
+  - "打包器：不需要——四个选定库均为原生浏览器 ESM，web/ 保持无构建步骤（未触发 plan §3 的 esbuild 例外）"
+  - "拒绝：anser（CJS，需打包）→ 换 ansi_up；highlight.js 核心包的 es/ 是 CJS 包装 → 换官方预编译 @highlightjs/cdn-assets（同版本 11.11.1）"
+risks_remaining:
+  - "高亮语言包当前内置 10 个；后续切片按需增补语言文件并同步更新 vendor/README.md"
+  - "vendor 体积 +91.5KB gzip 未纳入首屏预算核对（浏览器切片 P4-f 的实测网络记录复核）"
+```
+
 ## 后续切片（计划内，未开始）
 
 ```yaml
-pending: [P4-h0 渲染库试验, P4-f 设计系统与外壳, P4-g 业务页面, P4-h 流式渲染部件, P4-i 浏览器验收]
+pending: [P4-f 设计系统与外壳, P4-g 业务页面, P4-h 流式渲染部件, P4-i 浏览器验收]
+```
+
+## 切片 P4-f(1) · 设计系统与外壳抽取（本次）
+
+```yaml
+slice: P4-f(1) 从 mock 逐字节抽取设计系统（tokens/components/views）+ i18n 字典 + 外壳 index.html
+basis: "webui/index.html（mock）：<style> 9-1269、外壳/视图标记 1270-1746、prototype <script> 1747-2976 的 messages 字典"
+changed:
+  - path: devagent/web/styles/tokens.css（新增，59 行）
+    purpose: mock `:root` 自定义属性（mock:10-35）verbatim + 全局元素规则（mock:37-62：`*`、`html, body`、`body`、`button, textarea, input, select`、`button`、`:focus-visible` 组）
+  - path: devagent/web/styles/components.css（新增，1008 行 / 253 条规则）
+    purpose: 全部组件规则，选择器与声明逐字节照搬，按 mock 顺序分组、每组注释注明 mock 行范围
+  - path: devagent/web/styles/views.css（新增，488 行 / 133 条顶层规则，含 @media 内层共 198 个块）
+    purpose: 视图专有规则（generic/files/data-list/settings/board/decision/audit）+ 响应式断点（1120/840/700/520px 及 prefers-reduced-motion）
+  - path: devagent/web/i18n.json（新增，en 309 键 / zh-CN 309 键）
+    purpose: 断言 mock script 里 `messages`（= baseMessages + messages 两段 spread 的合并结果，即 mock 实际生效字典）导出为 {en, zh-CN}，键与 data-i18n/data-i18n-aria 用法一致
+  - path: devagent/web/index.html（新增，333 行）
+    purpose: 外壳（topbar / content-shell：sidebar + workspace + runtime / statusbar）+ 八个 .view 容器 + 三个 dialog + toast host；类名与 DOM 层级照搬 mock，内联 style/script 去除，mock 专有数据置空为同 id/类容器并带 data-i18n 键；附 /vendor/ import map 与 `<script type="module" src="/app.js">`
+  - path: devagent/web/styles/verify-selectors.mjs（新增）
+    purpose: 独立解析 mock `<style>` 与三个 CSS 文件，逐 (media 上下文, 选择器) 断言唯一归属且声明忽略空白后一致
+  - path: devagent/web/styles/OMISSIONS.md（新增）
+    purpose: 登记偏差——`--font-scale` 未收录（mock :root 无此令牌）、mock 数据置空、单一 #genericView 拆为八个 .view、.terminal-prompt 保留待裁
+mock_line_ranges:
+  tokens.css:
+    - [10, 35, ":root 设计令牌"]
+    - [37, 62, "全局元素规则"]
+  components.css:
+    - [64, 272, "topbar · brand / project switcher / top actions"]
+    - [274, 330, "shell · sidebar 导航"]
+    - [332, 352, "workspace 栅格"]
+    - [354, 483, "conversation 外壳 / header / switcher / stage-strip"]
+    - [485, 565, "message 列表 / message / context-memory 卡"]
+    - [567, 644, "command-chip / run-card / requirement-summary / activity"]
+    - [646, 692, "composer"]
+    - [951, 1097, "runtime 控制台 · chrome / run-summary / agent-tree / log / prompt"]
+    - [1099, 1163, "statusbar / toast / dialog"]
+  views.css:
+    - [347, 353, "workspace 收起轨 · @media (min-width: 841px)"]
+    - [694, 703, "generic-view 容器"]
+    - [705, 856, "files 视图 · tree / preview / code / sr-only"]
+    - [858, 864, "data-list"]
+    - [866, 896, "settings · config / profile / provider"]
+    - [898, 919, "requirement-board"]
+    - [921, 938, "decision-card"]
+    - [940, 949, "workflow-audit"]
+    - [1165, 1268, "响应式断点 1120/840/700/520 + prefers-reduced-motion"]
+behavior:
+  - "node devagent/web/styles/verify-selectors.mjs → 退出 0：found 485 / matched 485 / missing 0 / duplicated 0 / mismatched 0 / extra 0"
+  - "node -e \"JSON.parse(...i18n.json)\" → 合法 JSON（en/zh-CN 键集相同，309+309）"
+  - "index.html 中 121 个 data-i18n* 键全部在 i18n.json 的 en 与 zh-CN 中命中，无未解析键"
+  - "index.html 含 8 个 .view 容器（chief/requirements/docs/agents/runs/inbox/settings/files），无内联 style/script"
+  - "选择器总量：mock 共 393 条规则（485 个展开选择器）；tokens 7 / components 253 / views 133 条顶层规则 + 5 个 @media 块，全部归一"
+not_covered:
+  - area: "app.js 与 core/*、components/*、views/* 渲染逻辑"
+    reason: "由同批次其它切片负责；本切片仅外壳与设计系统"
+    disposition: pending
+  - area: "CSS 逐组件浏览器截图对照与键盘可达性"
+    reason: "属 P4-f 的浏览器验收（P4-i）"
+    disposition: pending
+  - area: "密度旋钮 --font-scale"
+    reason: "mock :root 未定义；加入会破坏 :root 逐字节一致。见 OMISSIONS.md"
+    disposition: deferred
 ```

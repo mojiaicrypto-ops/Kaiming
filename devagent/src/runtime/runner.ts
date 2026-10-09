@@ -25,6 +25,8 @@ import {
 import { INPUT_MARKER_CUSTOM_TYPE, HistoryUnavailableError, type PiRuntimeFactory } from './pi-runtime.ts';
 import { SessionRegistry, type LogicalSessionSpec } from './registry.ts';
 import { epochOf } from './epoch.ts';
+import { InteractionBridge, createUiAdapter } from './interactions.ts';
+import { createQuestionTool } from '../tools/question-tool.ts';
 import { toolSetFor } from './tool-sets.ts';
 import { asToolDefinitions, createChiefTaskTools, createTaskGetTool, type TaskToolContext } from '../tools/task-tools.ts';
 import { createReportTool, type ReportToolContext } from '../tools/report-tools.ts';
@@ -95,6 +97,8 @@ export interface RunnerOptions {
 
 export class InputRunner {
   private readonly options: RunnerOptions;
+  /** The interaction bridge (M5); the runner binds its adapter to every session it prepares. */
+  readonly interactions: InteractionBridge;
   /** `${sessionId}:${inputId}` of runs a host-owned tool asked to abort (S5 tool-initiated stop). */
   private readonly hostAborts = new Set<string>();
   /** Role prompt bodies, cached per prompt directory. */
@@ -104,8 +108,9 @@ export class InputRunner {
   /** Handles already wired to the observation hook (one subscription per Pi instance). */
   private readonly observed = new WeakSet<object>();
 
-  constructor(options: RunnerOptions) {
+  constructor(options: RunnerOptions & { interactions?: InteractionBridge }) {
     this.options = options;
+    this.interactions = options.interactions ?? new InteractionBridge({ store: options.store });
   }
 
   private bodiesFor(promptDir: string): PromptBodies {
@@ -282,7 +287,13 @@ const serverWorkDir = join(config.agentDir, 'work');
               })),
             ],
       );
-      const hostTools = [...domainTools, ...(extras?.customTools ?? [])];
+      const hostTools = [
+        ...domainTools,
+        // The ported official question tool: the model asks through the same ctx.ui channel (G2),
+        // and the host tells it which interaction the request became.
+        createQuestionTool(() => this.interactions.lastInteractionIdFor(sessionId)),
+        ...(extras?.customTools ?? []),
+      ];
       // Host-registered tools (domain tools, probe tools) join the allowlist so they stay usable, but a
       // name this role/task combination denies must not come back in through that union.
       const denied = new Set(toolSet.denied);
@@ -309,6 +320,23 @@ const serverWorkDir = join(config.agentDir, 'work');
         },
         config,
       );
+
+      // Bind the interaction adapter: without a bound uiContext ctx.hasUI is false and the model
+      // cannot ask anything (R4/M5). The adapter is a plain object on purpose.
+      {
+        const taskId = this.options.store.getTaskForSession(sessionId)?.id;
+        handle.session.bindExtensions({
+          // A deliberate subset: dialog methods are real, terminal-only surfaces are absent (as in
+          // PI's own RPC host). The SDK spreads the object, so the missing keys are simply undefined.
+          uiContext: createUiAdapter({
+            bridge: this.interactions,
+            sessionId,
+            inputId: input.inputId,
+            ...(taskId !== undefined ? { taskId } : {}),
+          }) as never,
+          mode: 'rpc',
+        });
+      }
 
       // Observe the live session: the listener is synchronous and only publishes in memory.
       if (this.options.onEvent !== undefined && !this.observed.has(handle)) {

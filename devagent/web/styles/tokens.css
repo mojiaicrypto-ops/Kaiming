@@ -1,0 +1,59 @@
+/* AgentDev design tokens — extracted verbatim from mock webui/index.html (previous-round prototype).
+   Source of truth for tokens: this file. Do not add tokens that the mock does not define. */
+
+/* mock:10-35 design tokens · :root custom properties */
+:root {
+      color-scheme: dark;
+      --bg: #0b0e11;
+      --surface: #101419;
+      --surface-raised: #14191f;
+      --surface-soft: #181e25;
+      --console: #090c0f;
+      --line: #242b33;
+      --line-strong: #35404b;
+      --text: #e8ebee;
+      --muted: #929ca7;
+      --dim: #89939d;
+      --accent: #a3e635;
+      --accent-soft: rgba(163, 230, 53, 0.11);
+      --blue: #7aa2f7;
+      --blue-soft: rgba(122, 162, 247, 0.12);
+      --cyan: #63d2df;
+      --amber: #e9b96e;
+      --red: #ff7b86;
+      --purple: #bb9af7;
+      --sidebar: 224px;
+      --header: 54px;
+      --status: 26px;
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+/* mock:37-62 global element rules */
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+button, textarea, input, select { font: inherit; }
+
+button { color: inherit; }
+
+button:focus-visible,
+    textarea:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    [tabindex]:focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 2px;
+    }
+

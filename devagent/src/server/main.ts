@@ -19,6 +19,7 @@ import { registerStreamMethods } from './stream-methods.ts';
 import { SessionEventHub } from './hub.ts';
 import { epochOf } from '../runtime/epoch.ts';
 import { WorkbenchWorker } from './worker.ts';
+import { InteractionBridge } from '../runtime/interactions.ts';
 import { PiRuntimeFactory } from '../runtime/pi-runtime.ts';
 import { SessionRegistry } from '../runtime/registry.ts';
 import { InputRunner } from '../runtime/runner.ts';
@@ -63,10 +64,17 @@ export function startWorkbench(options: StartOptions): Promise<{
   // The runner and its worker: inputs are stored by the write surface, then actually run here.
   const factory = new PiRuntimeFactory(server);
   const registry = new SessionRegistry(factory);
+  const interactions = new InteractionBridge({
+    store,
+    publish: (sessionId, event, meta) => {
+      hub.publish(sessionId, event, { ...(meta?.inputId !== undefined ? { inputId: meta.inputId } : {}) });
+    },
+  });
   const runner = new InputRunner({
     store,
     registry,
     factory,
+    interactions,
     resolveConfig: (roleId) => resolveEffectiveConfig({ roleId, server }),
     onEvent: (sessionId, event, meta) => {
       hub.publish(sessionId, event, { inputId: meta.inputId, epoch: meta.epoch });
@@ -81,6 +89,7 @@ export function startWorkbench(options: StartOptions): Promise<{
     invalidate: (sessionId, entity, id) => {
       hub.publish(sessionId, { type: 'invalidate', entity, id });
     },
+    resolveInteraction: (interactionId, response) => interactions.resolve(interactionId, response),
   });
   registerStreamMethods(router, { store, hub, epochOf: (sessionId) => epoch(sessionId) });
 
@@ -97,6 +106,7 @@ export function startWorkbench(options: StartOptions): Promise<{
       origin,
       port,
       close: async () => {
+        interactions.clear();
         await worker.stop();
         await workbench.close();
         registry.disposeAll();

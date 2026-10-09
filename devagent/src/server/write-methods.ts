@@ -17,6 +17,8 @@ export interface WriteMethodsOptions {
   ) => Promise<{ readonly status: InputRow['status']; readonly stopRequested: boolean }>;
   /** Business invalidation (M4): the caller's pages re-read the named entity. */
   readonly invalidate?: (sessionId: string, entity: 'input' | 'task' | 'session' | 'interaction', id: string) => void;
+  /** Deliver a saved answer to the awaiting Pi call (M5); without a bridge the answer is only stored. */
+  readonly resolveInteraction?: (interactionId: string, response: unknown) => boolean;
   /** The same Task control path the chief's own tool uses (pause/resume/cancel + stop flow). */
   readonly controlTask: (params: {
     taskId: string;
@@ -231,6 +233,51 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
         status: resolved.status,
         revision: resolved.revision,
         recovery: resolved.recovery,
+      };
+    },
+  });
+
+  router.register('interaction.respond', {
+    write: true,
+    run: (params, context): unknown => {
+      const project = requireProject(store, params);
+      const interactionId = readString(params, 'interactionId');
+      const expectedRevision = params['expectedRevision'];
+      if (interactionId === undefined || typeof expectedRevision !== 'number') {
+        throw new RpcError('INVALID_ARGUMENT', 'interactionId and expectedRevision are required');
+      }
+      if (!Object.hasOwn(params, 'response')) {
+        throw new RpcError('INVALID_ARGUMENT', 'response is required');
+      }
+      const interaction = store.getInteraction(interactionId);
+      if (interaction === undefined || interaction.projectId !== project.id) {
+        throw new RpcError('NOT_FOUND', `interaction ${interactionId} does not exist in this project`, {
+          interactionId,
+        });
+      }
+      const chiefSessionId = readString(params, 'chiefSessionId');
+      if (chiefSessionId !== undefined && interaction.sessionId !== chiefSessionId) {
+        // A page may only answer the session whose channel it is subscribed to (M5 routing).
+        throw new RpcError('FORBIDDEN', 'this interaction belongs to another chief session', {
+          interactionId,
+          sessionId: interaction.sessionId,
+        });
+      }
+      const saved = store.resolveInteraction({
+        interactionId,
+        expectedRevision,
+        response: params['response'],
+        answeredBy: context.actor,
+        requestKey: context.requestId === '' ? `answer:${interactionId}` : context.requestId,
+      });
+      // The answer is durable before it is handed back to the model.
+      options.resolveInteraction?.(interactionId, saved.response === null ? null : JSON.parse(saved.response));
+      options.invalidate?.(interaction.sessionId, 'interaction', interactionId);
+      return {
+        interactionId,
+        state: saved.state,
+        revision: saved.revision,
+        response: saved.response === null ? null : (JSON.parse(saved.response) as unknown),
       };
     },
   });

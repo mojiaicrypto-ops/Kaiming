@@ -28,6 +28,7 @@ export type StoreErrorCode =
   | 'TASK_BUSY'
   | 'STAGE_NOT_READY'
   | 'COMPLETION_INCOMPLETE'
+  | 'INTERACTION_STALE'
   | 'STORAGE_UNAVAILABLE';
 
 export class StoreError extends Error {
@@ -138,6 +139,28 @@ export interface UpdateTaskParams {
   readonly acceptanceRefs?: readonly string[];
   readonly basisRefs?: readonly string[];
   readonly requiresTest?: boolean;
+}
+
+export type InteractionState = 'pending' | 'resolved' | 'stale';
+
+export interface InteractionRow {
+  readonly interactionId: string;
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly inputId: string | null;
+  readonly taskId: string | null;
+  readonly method: 'confirm' | 'select' | 'input';
+  readonly title: string;
+  readonly message: string | null;
+  readonly options: string | null;
+  readonly placeholder: string | null;
+  readonly state: InteractionState;
+  readonly response: string | null;
+  readonly answeredBy: string | null;
+  readonly requestKey: string;
+  readonly revision: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
 }
 
 export interface ProjectRow {
@@ -307,7 +330,7 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -341,6 +364,33 @@ CREATE INDEX IF NOT EXISTS idx_results_input ON results (inputId);`;
  */
 const V6_DDL = `
 ALTER TABLE session_inputs ADD COLUMN recovery TEXT;`;
+
+/**
+ * Interactions added by the v6 → v7 migration: one durable record per user decision a session asks
+ * for (M5). The answer is written here before it is returned to the model, so a crash cannot lose or
+ * repeat a decision.
+ */
+const V7_DDL = `
+CREATE TABLE IF NOT EXISTS interactions (
+  interactionId TEXT PRIMARY KEY,
+  projectId TEXT NOT NULL REFERENCES projects(id),
+  sessionId TEXT NOT NULL REFERENCES sessions(id),
+  inputId TEXT,
+  taskId TEXT,
+  method TEXT NOT NULL,
+  title TEXT NOT NULL,
+  message TEXT,
+  options TEXT,
+  placeholder TEXT,
+  state TEXT NOT NULL,
+  response TEXT,
+  answeredBy TEXT,
+  requestKey TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_interactions_session_state ON interactions (sessionId, state, createdAt);`;
 
 /** Tables added by the v3 → v4 migration (professional Session membership of a Task). */
 const V4_DDL = `
@@ -506,6 +556,7 @@ CREATE TABLE IF NOT EXISTS request_receipts (
 ${V3_DDL}
 ${V4_DDL}
 ${V5_DDL}
+${V7_DDL}
 `;
 
 /** Canonical JSON (sorted object keys) so the same value always digests the same way. */
@@ -848,6 +899,147 @@ export class Store {
   }
 
   /**
+   * Record one pending interaction before it is shown (M5): the request is durable, so a reconnect
+   * re-reads it from the snapshot and a crash cannot lose the question.
+   */
+  createInteraction(params: {
+    interactionId: string;
+    projectId: string;
+    sessionId: string;
+    inputId?: string;
+    taskId?: string;
+    method: 'confirm' | 'select' | 'input';
+    title: string;
+    message?: string;
+    options?: readonly string[];
+    placeholder?: string;
+    requestKey: string;
+  }): InteractionRow {
+    return this.transaction(() => {
+      const existing = this.getInteraction(params.interactionId);
+      if (existing !== undefined) {
+        throw new StoreError('REQUEST_CONFLICT', 'this interaction already exists', {
+          interactionId: params.interactionId,
+        });
+      }
+      const timestamp = this.clock();
+      this.db
+        .prepare(
+          `INSERT INTO interactions
+             (interactionId, projectId, sessionId, inputId, taskId, method, title, message, options,
+              placeholder, state, requestKey, revision, createdAt, updatedAt)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 1, ?, ?)`,
+        )
+        .run(
+          params.interactionId,
+          params.projectId,
+          params.sessionId,
+          params.inputId ?? null,
+          params.taskId ?? null,
+          params.method,
+          params.title,
+          params.message ?? null,
+          params.options === undefined ? null : JSON.stringify(params.options),
+          params.placeholder ?? null,
+          params.requestKey,
+          timestamp,
+          timestamp,
+        );
+      return this.requireInteraction(params.interactionId);
+    });
+  }
+
+  getInteraction(interactionId: string): InteractionRow | undefined {
+    return this.db.prepare('SELECT * FROM interactions WHERE interactionId = ?').get(interactionId) as
+      | InteractionRow
+      | undefined;
+  }
+
+  /** Pending interactions of a session, oldest first: part of the snapshot boundary (M4/M5). */
+  listPendingInteractions(sessionId: string): InteractionRow[] {
+    return this.db
+      .prepare("SELECT * FROM interactions WHERE sessionId = ? AND state = 'pending' ORDER BY createdAt, interactionId")
+      .all(sessionId) as unknown as InteractionRow[];
+  }
+
+  listInteractions(sessionId: string): InteractionRow[] {
+    return this.db
+      .prepare('SELECT * FROM interactions WHERE sessionId = ? ORDER BY createdAt, interactionId')
+      .all(sessionId) as unknown as InteractionRow[];
+  }
+
+  /**
+   * Save the answer and close the interaction: a resolved answer is never overwritten, an identical
+   * retry returns the original record, and a different answer is a conflict (M5/S2).
+   */
+  resolveInteraction(params: {
+    interactionId: string;
+    expectedRevision: number;
+    response: unknown;
+    answeredBy: string;
+    requestKey: string;
+  }): InteractionRow {
+    return this.transaction(() => {
+      const interaction = this.requireInteraction(params.interactionId);
+      // The answer must fit the question: a select accepts only its own options (M5 trust boundary).
+      const shapeIssue = answerIssue(interaction, params.response);
+      if (shapeIssue !== undefined) {
+        throw new StoreError('INVALID_ARGUMENT', shapeIssue, { interactionId: params.interactionId });
+      }
+      const response = JSON.stringify(params.response ?? null);
+      if (interaction.state === 'resolved') {
+        if (interaction.response === response) {
+          return interaction;
+        }
+        throw new StoreError('REQUEST_CONFLICT', 'this interaction was already answered differently', {
+          interactionId: params.interactionId,
+        });
+      }
+      if (interaction.state !== 'pending') {
+        throw new StoreError('INTERACTION_STALE', `the interaction is ${interaction.state}`, {
+          interactionId: params.interactionId,
+        });
+      }
+      const outcome = this.db
+        .prepare(
+          `UPDATE interactions
+             SET state = 'resolved', response = ?, answeredBy = ?, requestKey = ?, revision = revision + 1, updatedAt = ?
+           WHERE interactionId = ? AND revision = ? AND state = 'pending'`,
+        )
+        .run(response, params.answeredBy, params.requestKey, this.clock(), params.interactionId, params.expectedRevision);
+      if (outcome.changes !== 1) {
+        throw new StoreError('VERSION_CONFLICT', 'interaction revision does not match', {
+          interactionId: params.interactionId,
+          actual: interaction.revision,
+        });
+      }
+      return this.requireInteraction(params.interactionId);
+    });
+  }
+
+  /**
+   * Mark pending interactions stale because their source stopped (M5): a stopped input's question can
+   * never be resumed, so it must not keep a page waiting.
+   */
+  staleInteractionsForInput(params: { inputId: string }): number {
+    const outcome = this.db
+      .prepare(
+        `UPDATE interactions SET state = 'stale', revision = revision + 1, updatedAt = ?
+           WHERE inputId = ? AND state = 'pending'`,
+      )
+      .run(this.clock(), params.inputId);
+    return Number(outcome.changes);
+  }
+
+  private requireInteraction(interactionId: string): InteractionRow {
+    const interaction = this.getInteraction(interactionId);
+    if (interaction === undefined) {
+      throw new StoreError('NOT_FOUND', 'interaction does not exist', { interactionId });
+    }
+    return interaction;
+  }
+
+  /**
    * Why a session cannot be cleaned up: it must have no unfinished work and must not be referenced by
    * a Task or by a recorded result (the record has to stay readable).
    */
@@ -898,6 +1090,7 @@ export class Store {
       if (session === undefined) {
         throw new StoreError('NOT_FOUND', 'session does not exist', { sessionId: params.sessionId });
       }
+      this.db.prepare('DELETE FROM interactions WHERE sessionId = ?').run(params.sessionId);
       this.db.prepare('DELETE FROM session_inputs WHERE sessionId = ?').run(params.sessionId);
       this.db.prepare('DELETE FROM session_bindings WHERE sessionId = ?').run(params.sessionId);
       this.db.prepare('DELETE FROM task_sessions WHERE sessionId = ?').run(params.sessionId);
@@ -2127,6 +2320,13 @@ export class Store {
     });
   }
 
+  private migrateV6ToV7(): void {
+    this.transaction(() => {
+      this.db.exec(V7_DDL);
+      this.db.exec('PRAGMA user_version = 7;');
+    });
+  }
+
   private migrateV5ToV6(): void {
     this.transaction(() => {
       const column = this.db
@@ -2158,20 +2358,27 @@ export class Store {
       this.migrateV3ToV4();
       this.migrateV4ToV5();
       this.migrateV5ToV6();
+      this.migrateV6ToV7();
     } else if (userVersion === 2) {
       this.migrateV2ToV3();
       this.migrateV3ToV4();
       this.migrateV4ToV5();
       this.migrateV5ToV6();
+      this.migrateV6ToV7();
     } else if (userVersion === 3) {
       this.migrateV3ToV4();
       this.migrateV4ToV5();
       this.migrateV5ToV6();
+      this.migrateV6ToV7();
     } else if (userVersion === 4) {
       this.migrateV4ToV5();
       this.migrateV5ToV6();
+      this.migrateV6ToV7();
     } else if (userVersion === 5) {
       this.migrateV5ToV6();
+      this.migrateV6ToV7();
+    } else if (userVersion === 6) {
+      this.migrateV6ToV7();
     } else if (userVersion !== SCHEMA_VERSION) {
       throw new StoreError('VERSION_CONFLICT', 'unsupported store schema version', {
         userVersion,
@@ -2249,6 +2456,40 @@ function parseJsonOrNull(value: unknown): unknown {
   } catch {
     return null;
   }
+}
+
+/**
+ * Whether an answer fits the interaction it answers (M5). `{cancelled:true}` is always allowed: it is
+ * how a dismissed dialog is reported.
+ */
+function answerIssue(interaction: InteractionRow, response: unknown): string | undefined {
+  if (typeof response === 'object' && response !== null && (response as { cancelled?: unknown }).cancelled === true) {
+    return undefined;
+  }
+  const value = (candidate: unknown): string | undefined =>
+    typeof candidate === 'string'
+      ? candidate
+      : typeof candidate === 'object' && candidate !== null && typeof (candidate as { value?: unknown }).value === 'string'
+        ? (candidate as { value: string }).value
+        : undefined;
+  if (interaction.method === 'confirm') {
+    const confirmed =
+      typeof response === 'boolean'
+        ? response
+        : typeof response === 'object' && response !== null && typeof (response as { confirmed?: unknown }).confirmed === 'boolean'
+          ? (response as { confirmed: boolean }).confirmed
+          : undefined;
+    return confirmed === undefined ? 'a confirmation answer must be a boolean or {confirmed}' : undefined;
+  }
+  const answered = value(response);
+  if (answered === undefined) {
+    return 'the answer must be a string or {value}';
+  }
+  if (interaction.method === 'select') {
+    const options = interaction.options === null ? [] : (JSON.parse(interaction.options) as string[]);
+    return options.includes(answered) ? undefined : 'the answer is not one of the offered options';
+  }
+  return undefined;
 }
 
 function toProjectRow(row: Record<string, unknown>): ProjectRow {

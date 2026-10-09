@@ -86,7 +86,7 @@ export function createQuestionTool(interactionIdOf: () => string): ToolDefinitio
       additionalProperties: false,
     },
     executionMode: 'sequential',
-    async execute(_toolCallId, rawParams, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, rawParams, signal, _onUpdate, ctx) {
       const parsed = parseQuestionParams(rawParams);
       if ('error' in parsed) {
         const details: QuestionDetails = {
@@ -127,13 +127,31 @@ export function createQuestionTool(interactionIdOf: () => string): ToolDefinitio
 
       // Sampled while this tool owns the run (an interaction is about to be requested).
       const idleAtToolEntry = ctx.isIdle();
+      // The abort signal travels with the dialog: a stopped input must not leave the model waiting.
+      const dialog = signal === undefined ? undefined : { signal };
       let answer: string | boolean | undefined;
-      if (request.method === 'confirm') {
-        answer = await ctx.ui.confirm(request.title, request.message ?? '');
-      } else if (request.method === 'select') {
-        answer = await ctx.ui.select(request.title, [...(request.options ?? [])]);
-      } else {
-        answer = await ctx.ui.input(request.title, request.placeholder);
+      try {
+        if (request.method === 'confirm') {
+          answer = await ctx.ui.confirm(request.title, request.message ?? '', dialog);
+        } else if (request.method === 'select') {
+          answer = await ctx.ui.select(request.title, [...(request.options ?? [])], dialog);
+        } else {
+          answer = await ctx.ui.input(request.title, request.placeholder, dialog);
+        }
+      } catch (error) {
+        return {
+          content: [{ type: 'text', text: `Error: the question was not answered (${error instanceof Error ? error.message : String(error)})` }],
+          details: {
+            // The host assigns ids; an aborted dialog never got one.
+            interactionId: 'none',
+            method: request.method,
+            answer: null,
+            hasUI: ctx.hasUI,
+            idleAtToolEntry,
+            error: error instanceof Error ? error.message : String(error),
+          } satisfies QuestionDetails,
+          isError: true,
+        };
       }
       // UI-surface probes: `notify` must survive the SDK's uiContext wrapping (spread), the
       // terminal-only surface must fail with our own message, and the absent theme must stay absent.

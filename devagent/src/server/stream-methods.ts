@@ -66,9 +66,20 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
             task === undefined
               ? null
               : { taskId: task.id, type: task.type, phase: task.phase, status: task.status, revision: task.revision },
-          // Pending interactions are part of the boundary copy (M5); the interaction store arrives
-          // with the interaction bridge (P4-e), so this is an honest empty list until then.
-          interactions: [],
+          // Pending interactions are part of the boundary copy (M5): a reconnecting page sees the
+          // open questions again instead of losing them.
+          interactions: store.listPendingInteractions(sessionId).map((interaction) => ({
+            interactionId: interaction.interactionId,
+            method: interaction.method,
+            title: interaction.title,
+            message: interaction.message,
+            options: interaction.options === null ? null : (JSON.parse(interaction.options) as string[]),
+            placeholder: interaction.placeholder,
+            inputId: interaction.inputId,
+            taskId: interaction.taskId,
+            revision: interaction.revision,
+            createdAt: interaction.createdAt,
+          })),
           messages: messages.records.map((record) => ({
             entryId: record.id,
             role: record.role,
