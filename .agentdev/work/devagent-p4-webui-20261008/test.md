@@ -1,5 +1,38 @@
 # Test Report · devagent-p4-webui-20261008
 
+## 切片 P4-d · SSE 实时（本次）
+
+```yaml
+runs:
+  - command: cd devagent && npx tsc --noEmit
+    result: passed
+    exit_code: 0
+    evidence: "无输出"
+  - command: cd devagent && npm test
+    result: passed
+    exit_code: 0
+    evidence: "16 个测试文件、187 项通过（server-stream 5 项）"
+  - command: cd devagent && npm run check:prompts / npm run spikes / node checks/runner-real-model.ts
+    result: passed
+    exit_code: 0
+    evidence: "15/15；47/47；4/4"
+key_evidence:
+  - "prepare：boundary=当前 seq，快照含既有 queued 输入与 activity；streamPath 携带 subscriptionId"
+  - "只发 boundary 之后：先 prepare 再发布 2 个事件，客户端收到 seq=1,2 且快照里的输入没有被重放"
+  - "认证：无 cookie → 401；跨会话/未知订阅 → 409 STREAM_RESYNC_REQUIRED（原因 forbidden/unknown）；同订阅再取一次 → 原因 taken"
+  - "溢出：bufferLimit=3 时连发 6 个事件，客户端收到 event: resync reason=overflow 且 **零事件**（不发带洞数据）"
+  - "代次：活动流收到 epoch 变化事件 → resync reason=epoch，仅收到变化前的事件"
+  - "真实运行：提交输入→worker 跑完→流中出现 invalidate(input) 与带 inputId 的真实 Pi 事件；客户端断开后输入仍 completed，hub 订阅数归零"
+not_covered:
+  - area: "交互事件（interaction pending/resolved）与快照中的待处理交互"
+    reason: "属 P4-e"
+    disposition: pending
+  - area: "同一进程内 Pi 实例重建的代次检测"
+    reason: "需要注册表暴露 handle 代次；当前 epoch 为 serverEpoch"
+    disposition: pending
+result: passed
+```
+
 ## 切片 P4-c2 · Task 控制、会话清理与恢复核实（本次）
 
 ```yaml

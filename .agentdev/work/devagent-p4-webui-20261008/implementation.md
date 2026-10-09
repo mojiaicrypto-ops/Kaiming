@@ -191,8 +191,38 @@ risks_remaining:
   - "SSE 实时通知（input/task/recovery invalidate）属 P4-d；清理后浏览器端快照刷新依赖 P4-d 的失效通知"
 ```
 
+## 切片 P4-d · SSE 实时（本次）
+
+```yaml
+slice: P4-d 每会话事件总线 + session.stream.prepare（快照与 boundary）+ GET /api/v1/sessions/<id>/stream + 溢出/代次 resync + 业务失效通知
+changed:
+  - path: devagent/src/server/hub.ts（新增）
+    purpose: 每会话单调 seq；prepare 先建缓冲再读快照（boundary=当前 seq）；已认领订阅由 stream 处理器直接投递，未认领进有界缓冲；溢出标记 overflowed 且不阻塞发布方；take 校验会话/主体/过期/重复认领并返回 resync 原因；release 释放
+  - path: devagent/src/server/stream-methods.ts（新增）
+    purpose: session.stream.prepare：先订阅后读快照（输入状态/activity/当前 Task/最近消息与历史 leaf/problems/待处理交互占位），返回 subscriptionId、streamPath、epoch、boundary 与 snapshot
+  - path: devagent/src/server/http.ts
+    purpose: GET /api/v1/sessions/:sessionId/stream?subscriptionId=：**cookie 认证（URL 不带凭证）**；订阅不可用（未知/过期/已认领/跨主体）→ 409 STREAM_RESYNC_REQUIRED + 原因；否则发送 boundary 之后的缓冲事件并持续投递；epoch 变化或写背压→发 resync 事件后关闭；断线仅释放缓冲
+  - path: devagent/src/runtime/runner.ts
+    purpose: onEvent 观察钩子（每 Pi 实例订阅一次、同步投递，不承担持久事务）→ 每事件带 inputId 与 epoch（serverEpoch）
+  - path: devagent/src/server/write-methods.ts
+    purpose: 提交/停止/控制/清理/恢复核实后发布 {type:'invalidate', entity, id} 业务通知
+  - path: devagent/src/server/main.ts
+    purpose: 入口创建 hub、接 runner.onEvent、注入写方法与 stream 方法、把 hub 交给 HTTP 层
+  - path: devagent/test/server-stream.test.ts（新增，5 项）
+    purpose: 快照+boundary 且不重放快照内事实；cookie 认证/跨主体/未知/重复认领；溢出→resync 且不发带洞事件；代次变化→resync；真实 Pi 事件流 + 断线不取消工作
+behavior:
+  - "实测：npm test 187/187（16 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
+  - "先订阅后快照：boundary 之前的业务事实只在快照里，boundary 之后的事件只走流，既不丢也不重放（无 Last-Event-ID 依赖）"
+  - "阅读者跟不上只会溢出自己的缓冲并收到 resync；Pi 与其他页面不受影响（投递不 await、不阻塞）"
+  - "epoch=serverEpoch：代次变化时活动流发 resync 并关闭，客户端重新 prepare（同一 server 进程内的 Pi 实例重建检测列入残留）"
+  - "断线只销毁缓冲：已提交输入仍跑完（测试断言输入 completed 且 hub 订阅归零）"
+risks_remaining:
+  - "交互事件与待处理交互快照属 P4-e（当前 snapshot.interactions 恒为空数组，已注明）"
+  - "同一 server 进程内 Pi 实例重建（配置/工具变化）目前不改变 epoch；若需要逐实例代次，应在注册表暴露 handle 代次后并入 epoch"
+```
+
 ## 后续切片（计划内，未开始）
 
 ```yaml
-pending: [P4-d SSE, P4-e 交互桥, P4-h0 渲染库试验, P4-f 设计系统与外壳, P4-g 业务页面, P4-h 流式渲染部件, P4-i 浏览器验收]
+pending: [P4-e 交互桥, P4-h0 渲染库试验, P4-f 设计系统与外壳, P4-g 业务页面, P4-h 流式渲染部件, P4-i 浏览器验收]
 ```
