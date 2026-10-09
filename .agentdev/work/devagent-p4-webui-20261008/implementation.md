@@ -361,6 +361,15 @@ review_rounds:
         fix: "同一任务内派发两次 keydown + 断言存储层输入数为 1；并做变异验证（移除两处保护 → 用例失败 Received: 2）"
     residual_notes:
       - "变异验证确认：业务拒绝用例在“任意 FORBIDDEN 即清令牌”的旧行为下会失败；重复提交用例在移除两处保护后失败。单独移除在飞保护不会失败（id 复用已足够），单独移除 id 复用也不会失败（保护已足够）——两者为纵深防御"
+  - round: 3
+    verdict: failed
+    findings: 1 blocking（工具结果翻转未真正生效）
+    fixed:
+      - finding: "工具结果的 toolCallId/toolName/isError 在客户端两条路径（实时 #applyComplete、快照 applySnapshot）与服务端快照 DTO 都被丢掉，renderToolResult 的匹配分支永不成立；流式卡片在完成消息里才知道真实 call id"
+        fix: "服务端 history 读取与快照 DTO 带上 toolCallId/toolName/isError；客户端两条路径保留这些字段；renderBlocks 在工具块拿到 id 时让卡片采用它；renderToolResult 改为在消息条目的 blocks 里找工具卡（此前误在 rendered 值上找，必然为空），按 callId 匹配、失败时按工具名匹配、再退到仍在运行的卡片"
+        evidence: "browser：同一工具调用只有 1 张 .tool-card，翻转为 is-done，.tool-result 可见且含工具真实输出（interactionId=），无 [object Object]"
+    residual_notes:
+      - "多工具并发时最后的退路（仍在运行的卡片）可能匹配错卡；本版任一时刻只有一个工具在跑，未就此加机制"
 risks_remaining:
   - "会话 cookie 为进程内存态：服务重启需重新登录（首版可接受）"
   - "无 project.list 方法：项目切换器只能按路径打开（契约内的诚实行为）"

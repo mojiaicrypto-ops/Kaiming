@@ -85,6 +85,10 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
             role: record.role,
             content: record.content,
             inputId: record.inputId,
+            // A tool result must keep the identity of the call it answers, in the snapshot too.
+            ...(record.toolCallId !== null ? { toolCallId: record.toolCallId } : {}),
+            ...(record.toolName !== null ? { toolName: record.toolName } : {}),
+            ...(record.isError !== null ? { isError: record.isError } : {}),
           })),
           historyLeaf: branchLeaf(history),
           historyProblems: history.problems,

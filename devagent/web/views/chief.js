@@ -102,12 +102,26 @@ export function createChiefView(context) {
     const failed = /^Error:/m.test(text);
     // The card that shows this call's arguments flips; only an unmatched result gets its own card.
     const callId = message.toolCallId ?? '';
+    // The tool cards live inside the message entries' block maps, not in `rendered` itself.
+    const running = [];
     for (const entry of rendered.values()) {
-      if (entry.kind === 'tool' && callId !== '' && entry.callId === callId && entry.tool.status === 'running') {
-        entry.tool.finish({ ok: !failed, text });
-        rendered.set(key, { node: entry.node, body: entry.body, blocks: entry.blocks, message });
-        return;
+      for (const blockEntry of entry.blocks.values()) {
+        if (blockEntry.kind === 'tool' && blockEntry.tool.status === 'running') {
+          running.push(blockEntry);
+        }
       }
+    }
+    // Match the call by its id; when the streamed card could not learn the id (the finished message
+    // named it only later), fall back to the tool name among the cards still running.
+    const match =
+      (callId === '' ? undefined : running.find((entry) => entry.callId === callId)) ??
+      (message.toolName === undefined ? undefined : running.find((entry) => entry.toolName === message.toolName)) ??
+      running[0];
+    if (match !== undefined) {
+      match.tool.finish({ ok: !failed, text });
+      // The card already sits in its message; only the result message is marked as rendered.
+      rendered.set(key, { node: match.node, body: match.body, blocks: new Map(), message });
+      return;
     }
     const tool = createToolCard({ name: message.toolName ?? 'tool', callId: message.toolCallId ?? key });
     tool.finish({ ok: !failed, text });
@@ -140,7 +154,7 @@ export function createChiefView(context) {
     if (block.type === 'toolCall') {
       const callId = block.id ?? `block-${index}`;
       const tool = createToolCard({ name: block.name, callId });
-      return { kind: 'tool', node: tool.node, tool, callId };
+      return { kind: 'tool', node: tool.node, tool, callId, toolName: block.name };
     }
     const stream = new MarkdownStream({ markdownIt, highlight });
     const node = el('div', { class: 'markdown-body' });
@@ -165,6 +179,10 @@ export function createChiefView(context) {
       if (args.length > (blockEntry.argsText ?? '').length) {
         blockEntry.tool.appendArguments(args.slice((blockEntry.argsText ?? '').length));
         blockEntry.argsText = args;
+      }
+      // The finished block names the call: the card adopts that id so its result can find it.
+      if (typeof block.id === 'string' && block.id !== '') {
+        blockEntry.callId = block.id;
       }
       return;
     }

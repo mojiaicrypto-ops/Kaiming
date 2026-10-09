@@ -37,6 +37,10 @@ export class SessionView {
       role: message.role,
       content: message.content,
       inputId: message.inputId,
+      // Tool identity travels with a tool result (the server sends it), so the card can be matched.
+      ...(message.toolCallId !== undefined ? { toolCallId: message.toolCallId } : {}),
+      ...(message.toolName !== undefined ? { toolName: message.toolName } : {}),
+      ...(message.isError !== undefined ? { isError: message.isError } : {}),
       streaming: false,
     }));
     this.blocks.clear();
@@ -138,6 +142,10 @@ export class SessionView {
       role: message.role ?? 'assistant',
       content: message.content ?? [],
       inputId: inputId ?? null,
+      // A tool result names the call it answers; without it no card could be matched.
+      ...(typeof message.toolCallId === 'string' ? { toolCallId: message.toolCallId } : {}),
+      ...(typeof message.toolName === 'string' ? { toolName: message.toolName } : {}),
+      ...(typeof message.isError === 'boolean' ? { isError: message.isError } : {}),
       streaming: false,
       stopReason: message.stopReason,
     };

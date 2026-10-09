@@ -101,6 +101,15 @@ test('a question is answered in the browser and the model continues', async ({ p
       '已按你的选择继续',
       { timeout: 20_000 },
     );
+    // One tool call, one card: the call card flips to its result instead of a second card appearing,
+    // and the result body is the tool's real text (never a stringified object).
+    await expect(page.locator('#projectMessages .tool-card')).toHaveCount(1);
+    await expect(page.locator('#projectMessages .tool-card')).toHaveClass(/is-done/);
+    // The flipped card shows the tool's own output, not a stringified result object.
+    const result = page.locator('#projectMessages .tool-card .tool-result');
+    await expect(result).toBeVisible();
+    await expect(result).toContainText('interactionId=');
+    await expect(result).not.toContainText('[object Object]');
     await page.screenshot({ path: test.info().outputPath('answered.png') });
   } finally {
     await harness.close();

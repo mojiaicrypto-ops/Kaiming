@@ -13,8 +13,12 @@ export interface HistoryRecord {
   readonly index: number;
   readonly id: string | null;
   readonly type: string;
-  readonly role: 'user' | 'assistant' | 'system' | null;
+  readonly role: 'user' | 'assistant' | 'system' | 'toolResult' | null;
   readonly content: unknown;
+  /** Tool identity, only for a result message (PI's ToolResultMessage carries them). */
+  readonly toolCallId: string | null;
+  readonly toolName: string | null;
+  readonly isError: boolean | null;
   readonly timestamp: string | null;
   /** The input this entry belongs to, when a host marker precedes it. */
   readonly inputId: string | null;
@@ -77,6 +81,9 @@ export function readPiHistory(piFile: string | undefined): HistoryRead {
         type,
         role: null,
         content: null,
+        toolCallId: null,
+        toolName: null,
+        isError: null,
         timestamp,
         inputId: currentInputId,
         marker: {
@@ -93,13 +100,19 @@ export function readPiHistory(piFile: string | undefined): HistoryRead {
     const message = (typeof entry['message'] === 'object' && entry['message'] !== null
       ? entry['message']
       : {}) as Record<string, unknown>;
-    const role = message['role'] === 'user' || message['role'] === 'assistant' || message['role'] === 'system' ? message['role'] : null;
+    const role =
+      message['role'] === 'user' || message['role'] === 'assistant' || message['role'] === 'system' || message['role'] === 'toolResult'
+        ? message['role']
+        : null;
     records.push({
       index,
       id,
       type,
       role,
       content: message['content'] ?? null,
+      toolCallId: typeof message['toolCallId'] === 'string' ? message['toolCallId'] : null,
+      toolName: typeof message['toolName'] === 'string' ? message['toolName'] : null,
+      isError: typeof message['isError'] === 'boolean' ? message['isError'] : null,
       timestamp,
       inputId: currentInputId,
       marker: null,
