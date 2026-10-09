@@ -120,7 +120,8 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
       if (!options.auth.verifyWrite(session, typeof csrf === 'string' ? csrf : undefined)) {
         writeJson(response, 403, {
           requestId: typeof envelope['requestId'] === 'string' ? envelope['requestId'] : 'unknown',
-          error: { code: 'FORBIDDEN', message: 'the CSRF token is missing or wrong' },
+          // The marker is what lets a client tell a CSRF refusal from a business refusal.
+          error: { code: 'FORBIDDEN', message: 'the CSRF token is missing or wrong', details: { csrf: true } },
         });
         return;
       }

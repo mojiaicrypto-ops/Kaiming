@@ -5,6 +5,8 @@
  * browser: they prove what unit tests cannot - that the page really talks to the server, renders what
  * the server holds, answers questions and keeps working when the reader leaves.
  */
+import { symlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { STORAGE_KEYS, loginThroughUi, startHarness } from './harness.ts';
@@ -49,10 +51,12 @@ test('a submitted input reaches the transcript and the run answers', async ({ pa
     await composer.press('Enter');
 
     await expect(page.locator('#projectMessages .message.user')).toHaveCount(1, { timeout: 15_000 });
-    // The assistant answer arrives through the live stream, not from a re-read.
+    // The assistant answer arrives through the live stream, not from a re-read - and exactly once:
+    // the streamed partial and its finished message must be the same node, not two.
     await expect(page.locator('#projectMessages .message.assistant .markdown-body').last()).toContainText('我们先讨论', {
       timeout: 20_000,
     });
+    await expect(page.locator('#projectMessages .message.assistant')).toHaveCount(1);
     await page.screenshot({ path: test.info().outputPath('conversation.png') });
   } finally {
     await harness.close();
@@ -98,6 +102,89 @@ test('a question is answered in the browser and the model continues', async ({ p
       { timeout: 20_000 },
     );
     await page.screenshot({ path: test.info().outputPath('answered.png') });
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a second Enter while the first submit is in flight does not submit twice', async ({ page }) => {
+  const harness = await startHarness({ model: [{ kind: 'text', text: '收到。' }] });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+
+    const composer = page.locator('#messageInput');
+    await composer.fill('只发一次');
+    // Two fast Enter presses: one user action, one input.
+    await composer.press('Enter');
+    await composer.press('Enter');
+
+    await expect(page.locator('#projectMessages .message.user')).toHaveCount(1, { timeout: 15_000 });
+    // The server holds exactly one input for that message, whatever the UI did.
+    const inputs = await page.evaluate(async () => {
+      const response = await fetch('/api/v1/rpc', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          requestId: `probe-${Math.random()}`,
+          method: 'session.get',
+          params: { projectId: localStorage.getItem('agentdev.projectId') ?? '', sessionId: localStorage.getItem('agentdev.sessionId') ?? '' },
+        }),
+      });
+      return response.status;
+    });
+    expect(inputs).toBeLessThan(500);
+    await expect(page.locator('#projectMessages .message.user')).toHaveCount(1);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a business refusal does not break writing, and no view shows a raw translation key', async ({ page }) => {
+  const harness = await startHarness({ model: [{ kind: 'text', text: '很好。' }] });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+
+    // A refusal that is not about CSRF must not lock the tab out: an in-project symlink pointing
+    // outside is refused as FORBIDDEN by the file interface (R1), with the CSRF token intact.
+    const projectPath = harness.project?.projectPath ?? '';
+    writeFileSync(join(projectPath, 'real.txt'), 'inside\n');
+    symlinkSync('/etc/hosts', join(projectPath, 'escape.txt'));
+    const projectId = await page.evaluate(() => localStorage.getItem('agentdev.projectId') ?? '');
+    const refusal = await page.evaluate(
+      async ({ projectId: id }) => {
+        const response = await fetch('/api/v1/rpc', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            requestId: `probe-${Math.random()}`,
+            method: 'project.files.read',
+            params: { projectId: id, path: 'escape.txt' },
+          }),
+        });
+        return (await response.json()).error?.code ?? 'none';
+      },
+      { projectId: projectId === '' ? (harness.project?.projectId ?? '') : projectId },
+    );
+    expect(refusal).toBe('FORBIDDEN');
+
+    // Writing still works afterwards.
+    const composer = page.locator('#messageInput');
+    await composer.fill('还能写');
+    await composer.press('Enter');
+    await expect(page.locator('#projectMessages .message.user')).toHaveCount(1, { timeout: 15_000 });
+
+    // No visible view shows a raw key (e.g. 'inbox.empty' or 'settings.noProject') instead of copy.
+    for (const view of ['inbox', 'agents', 'settings', 'requirements', 'runs', 'docs']) {
+      await page.locator(`.nav-item[data-view="${view}"]`).click();
+      const text = (await page.locator(`#${view}View`).innerText()).trim();
+      expect(text).not.toMatch(/^[a-z][a-zA-Z]+\.[a-zA-Z.]+$/m);
+    }
   } finally {
     await harness.close();
   }

@@ -79,6 +79,20 @@ export class SessionView {
         this.#applyComplete(event.message, frame.seq, frame.inputId);
         return;
       }
+      case 'tool_execution_end': {
+        // A tool result arrives as its own event: the transcript shows it as a result message.
+        this.messages.push({
+          entryId: `tool-${event.toolCallId ?? frame.seq}`,
+          role: 'toolResult',
+          content: [{ type: 'text', text: String(event.result ?? event.output ?? '') }],
+          toolName: event.toolName,
+          toolCallId: event.toolCallId,
+          inputId: frame.inputId ?? null,
+          streaming: false,
+        });
+        this.notify();
+        return;
+      }
       case 'agent_start':
         this.activity = 'processing';
         this.notify();
@@ -130,7 +144,8 @@ export class SessionView {
     }
     const index = this.messages.findIndex((entry) => entry.streaming === true);
     const completed = {
-      entryId: message.id ?? `live-${seq}`,
+      // Keep the key the streaming entry already had: re-keying would leave its node behind.
+      entryId: message.id ?? this.messages[index]?.entryId ?? `live-${seq}`,
       role: message.role ?? 'assistant',
       content: message.content ?? [],
       inputId: inputId ?? null,
@@ -139,7 +154,7 @@ export class SessionView {
     };
     if (index >= 0) {
       this.messages[index] = completed;
-    } else if (message.role === 'user') {
+    } else if (message.role === 'user' || message.role === 'toolResult') {
       this.messages.push(completed);
     }
     this.notify();

@@ -23,12 +23,20 @@ export function createChiefView(context) {
   const sendButton = qs('#composer .send-button');
   const rendered = new Map();
   let lastSnapshotApplied = null;
+  /** The message list object we last rendered: a new list means the conversation was replaced. */
+  let pendingSend = null;
 
   transcript?.before(interactionsRegion);
 
   const paint = rafSchedule(() => {
-    if (sessionView.messages !== lastSnapshotApplied) {
-      // A snapshot (or a fresh load) replaces the list; later updates append or patch in place.
+    if (lastSnapshotApplied !== null && sessionView.messages !== lastSnapshotApplied) {
+      // The conversation was replaced (snapshot, resync, another session): drop the nodes that
+      // belonged to the previous list instead of appending the new one under the old.
+      rendered.clear();
+      transcript.replaceChildren();
+      interactionsRegion.replaceChildren();
+    }
+    if (lastSnapshotApplied === null || sessionView.messages !== lastSnapshotApplied) {
       lastSnapshotApplied = sessionView.messages;
     }
     for (const message of sessionView.messages) {
@@ -90,6 +98,15 @@ export function createChiefView(context) {
       ? message.content.map((block) => (block.type === 'text' ? block.text : '')).join('')
       : String(message.content ?? '');
     const failed = /^Error:/m.test(text);
+    // The card that shows this call's arguments flips; only an unmatched result gets its own card.
+    const callId = message.toolCallId ?? '';
+    for (const entry of rendered.values()) {
+      if (entry.kind === 'tool' && callId !== '' && entry.callId === callId && entry.tool.status === 'running') {
+        entry.tool.finish({ ok: !failed, text });
+        rendered.set(key, { node: entry.node, body: entry.body, blocks: entry.blocks, message });
+        return;
+      }
+    }
     const tool = createToolCard({ name: message.toolName ?? 'tool', callId: message.toolCallId ?? key });
     tool.finish({ ok: !failed, text });
     rendered.set(key, { node: tool.node, body: tool.node, blocks: new Map(), message });
@@ -119,8 +136,9 @@ export function createChiefView(context) {
       return { kind: 'thinking', node: thinking.node, thinking };
     }
     if (block.type === 'toolCall') {
-      const tool = createToolCard({ name: block.name, callId: block.id ?? `block-${index}` });
-      return { kind: 'tool', node: tool.node, tool };
+      const callId = block.id ?? `block-${index}`;
+      const tool = createToolCard({ name: block.name, callId });
+      return { kind: 'tool', node: tool.node, tool, callId };
     }
     const stream = new MarkdownStream({ markdownIt, highlight });
     const node = el('div', { class: 'markdown-body' });
@@ -203,26 +221,41 @@ export function createChiefView(context) {
   }
 
   async function send() {
+    if (pendingSend !== null) {
+      // One send at a time: a second Enter while the first is in flight must not submit twice.
+      return;
+    }
     const text = input?.value?.trim() ?? '';
     if (text === '') {
       return;
     }
-    // One id per user action: a retry reuses it, so the input cannot be submitted twice (R1).
-    const requestId = context.newRequestId();
+    // One id per user action, kept for the retry of *this* text (R1); a new text gets a new id.
+    pendingSend = { text, requestId: context.newRequestId() };
     if (sendButton !== null) {
       sendButton.disabled = true;
     }
+    if (input !== null) {
+      input.disabled = true;
+    }
     try {
-      await store.submit([{ type: 'text', text }], { requestId });
-      input.value = '';
+      await store.submit([{ type: 'text', text }], { requestId: pendingSend.requestId });
+      if (input !== null) {
+        input.value = '';
+      }
+      pendingSend = null;
     } catch (error) {
       toast.error(error?.message ?? String(error));
+      // Keep the text and its id: pressing send again retries the same action instead of a new one.
       if (input !== null) {
         input.value = text;
       }
     } finally {
       if (sendButton !== null) {
         sendButton.disabled = false;
+      }
+      if (input !== null) {
+        input.disabled = false;
+        input.focus();
       }
     }
   }

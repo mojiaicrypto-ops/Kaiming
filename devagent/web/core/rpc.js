@@ -96,10 +96,13 @@ export class RpcClient {
         if (body.error.code === 'UNAUTHORIZED' && requiresAuth) {
           this.onUnauthorized();
         }
-        if (body.error.code === 'FORBIDDEN' && headers['x-agentdev-csrf'] !== undefined) {
-          // A token the server rejects (restarted server, revoked session) is not kept around.
+        if (body.error.code === 'FORBIDDEN' && body.error.details?.csrf === true) {
+          // Only a refusal the server marked as CSRF means the token itself is bad (a business
+          // FORBIDDEN, e.g. a path outside the project, must not lock the tab out of writing).
           this.csrfToken = null;
           sessionStorage.removeItem(CSRF_KEY);
+          // Recovery is honest: ask for the access password again instead of failing silently.
+          this.onUnauthorized();
         }
         throw new RpcError(body.error.code, body.error.message, body.error.details);
       }

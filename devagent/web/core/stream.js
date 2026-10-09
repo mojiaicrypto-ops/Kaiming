@@ -80,7 +80,8 @@ export class SessionStream {
         }
       }
     } catch (error) {
-      if (!this.closed) {
+      // An abort we caused (resync) is not a stream error.
+      if (!this.closed && this.resyncing !== true) {
         this.onError(error);
       }
     }

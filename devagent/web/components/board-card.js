@@ -26,20 +26,24 @@ export function boardCard(task, { onOpen } = {}) {
       ...(onOpen === undefined ? {} : { onclick: () => onOpen(task) }),
     },
     [
-      el('div', { class: 'card-top' }, [
+      // The mock's own header row: .board-card-top with the id and a .priority slot.
+      el('div', { class: 'board-card-top' }, [
         el('code', { text: task.taskId }),
-        el('span', { class: `card-kind ${task.type}`, text: task.type }),
+        el('span', { class: 'priority', text: task.type }),
       ]),
       el('strong', { text: task.goal }),
       el('p', { text: task.scope }),
-      el('div', { class: 'card-facts' }, [
-        el('span', {}, [el('small', { text: 'phase' }), el('b', { text: task.phase })]),
-        el('span', {}, [el('small', { text: 'status' }), el('b', { text: task.status })]),
-        el('span', {}, [el('small', { text: 'members' }), el('b', { text: String(members) })]),
-        el('span', {}, [el('small', { text: 'tests' }), el('b', { text: task.requiresTest ? 'required' : 'none' })]),
+      // The mock's <dl class="card-facts"> with dt/dd pairs (its CSS styles exactly that).
+      el('dl', { class: 'card-facts' }, [
+        ...[
+          ['phase', task.phase],
+          ['status', task.status],
+          ['members', String(members)],
+          ['tests', task.requiresTest ? 'required' : 'none'],
+        ].map(([term, value]) => el('div', {}, [el('dt', { text: term }), el('dd', { text: value })])),
       ]),
       el('div', { class: 'card-progress' }, [
-        el('span', { style: `width:${done ? 100 : (PHASE_PROGRESS[task.phase] ?? 5)}%` }),
+        el('i', { style: `width:${done ? 100 : (PHASE_PROGRESS[task.phase] ?? 5)}%` }),
       ]),
       el('div', { class: 'card-footer' }, [
         el('small', { text: `rev ${task.revision}` }),

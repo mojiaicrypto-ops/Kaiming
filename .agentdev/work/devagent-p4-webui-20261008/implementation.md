@@ -321,10 +321,36 @@ behavior:
   - "实测：单元/集成 npm test 198/198（18 个文件）；typecheck 0；check:prompts 15/15；SDK 试验 47/47；真实模型 4/4"
   - "真实浏览器（chromium，无重试）：6 项全绿 —— 首开无项目可登录并渲染空外壳；预置项目渲染外壳（状态栏 connected、语言切换 EN/简中）；开项目后八视图逐一可见；提交输入→用户消息立即出现→助手回答经流式渲染出现；提问在浏览器内回答后模型继续；离开页面再回来仍能重建会话（cookie + 会话级 CSRF 令牌）"
   - "真实浏览器暴露并修复的三处缺口：app.js 缺少变量声明导致整页不启动；http.ts 未把 .mjs 当 JS（内置 ESM 全部被拒）；markdown-it 的传递依赖未内置/未映射（顶层 import 直接失败）"
+review_rounds:
+  - round: 1
+    verdict: failed
+    findings: 4 blocking + 4 non-blocking
+    fixed:
+      - finding: "任意业务 FORBIDDEN（如点击项目内指向外部的符号链接）都会清掉 CSRF 令牌 → 该标签页之后所有写入 403 且不会再要求登录（永久写锁死）"
+        fix: "http.ts 的 CSRF 拒绝带 details:{csrf:true}；客户端只在带该标记时清令牌并触发登录流程"
+        evidence: "acceptance：在项目内建外部符号链接 → project.files.read 得 FORBIDDEN → 随后仍能提交输入并出现在对话中"
+      - finding: "助手消息重复：流式条目键为 live-<startSeq>，完成时换成 live-<endSeq>（PI 助手消息无 id），旧节点从不移除；快照/新会话也不清空"
+        fix: "完成时保留原键；paint 检测消息列表被替换时清空 transcript 与渲染表"
+        evidence: "acceptance：跑完一次后 .message.assistant 恰好 1 个"
+      - finding: "重复提交：send() 每次新生成 requestId 且无在飞保护，两次 Enter 即两次输入（违背 R1 复用）"
+        fix: "一次合成的消息一个 requestId（失败重发复用同一 id）+ 在飞保护（输入与按钮临时禁用）"
+        evidence: "acceptance：连续两次 Enter 后 .message.user 只有 1 个"
+      - finding: "36 个被视图引用的 i18n 键缺失（inbox/agents/settings/common.confirm/toast.answered 等），界面显示原始键"
+        fix: "en/zh-CN 对称补齐全部缺失键（各 399 键，双向无缺）"
+        evidence: "acceptance：六个视图可见文本不出现形如 a.b 的原始键"
+      - finding: "工具结果未实时进入对话（tool_execution_end/role=toolResult 被丢），卡片永远 running"
+        fix: "会话视图消费 tool_execution_end 与 toolResult 消息；chief 视图按 toolCallId 就地翻转原卡片"
+      - finding: "主动 resync 被当作流错误（LED 停在 reconnecting）"
+        fix: "catch 增加 !resyncing 条件；resync 帧恢复到 connected"
+      - finding: "board-card 用了 mock 没有的类名（card-top/card-kind/card-progress>span），看板头部与事实区未套上样式"
+        fix: "改为 mock 的 board-card-top/.priority/<dl class=card-facts><dt>/<dd> 与 .card-progress>i 结构"
+      - finding: "statusbar 模板用 {{count}} 但 tr() 只认 {count}，且 status.missingPath 缺失"
+        fix: "文案改为 {count} 并补齐 status.missingPath"
 risks_remaining:
   - "会话 cookie 为进程内存态：服务重启需重新登录（首版可接受）"
   - "无 project.list 方法：项目切换器只能按路径打开（契约内的诚实行为）"
   - "agents/settings 视图只呈现当前有效配置；config.save/test 尚未实现"
+  - "视图逐组件视觉对照（字号/间距与 mock 像素级一致）留待 P6 完整验收；本轮以选择器 485/485 与真实截图为准"
 ```
 
 ## 后续切片（计划内，未开始）

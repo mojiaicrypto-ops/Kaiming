@@ -69,12 +69,14 @@ runs:
   - command: cd devagent && npx playwright test --reporter=line
     result: passed
     exit_code: 0
-    evidence: "6 passed (5.2s)：acceptance 4 项 + smoke 2 项"
+    evidence: "8 passed (6.5s)：acceptance 6 项 + smoke 2 项"
 key_evidence:
   - "浏览器（chromium，无重试、单 worker，真实进程内工作台 + 真实 stub 模型端点）：开项目→八视图逐一可见；提交输入→用户消息出现→助手回答经流式渲染出现；提问在浏览器内回答→模型继续产出下文；离开页面再回来（about:blank→回）仍重建同一会话的对话"
   - "首开无项目：登录对话框 → 空外壳可正常显示（smoke）"
   - "外壳由真实数据驱动：项目名/路径来自 project.get；状态栏 connected；语言切换 EN/简中改变可见文案（smoke）"
   - "渲染部件单测：半截围栏/未完成表格行/悬空行内标记被暂存为 pending 文本，完成时整块重解析并替换（最终渲染与一次性渲染一致）"
+  - "审阅修复回归（全部走真实浏览器）：助手消息恰好 1 条（不重复）；连续两次 Enter 只产生 1 条用户消息；业务 FORBIDDEN（外部符号链接）后仍可写入；六个视图不出现原始 i18n 键"
+  - "i18n 键数：en 399 / zh-CN 399，双向无缺；视图实际引用的键全部命中"
 not_covered:
   - area: "P4-f/P4-g/P4-h/P4-i 的独立审阅"
     reason: "子代理模型配额在 2026-10-09 17:14 前耗尽，评审会话无法启动"

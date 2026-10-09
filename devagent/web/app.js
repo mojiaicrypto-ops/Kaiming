@@ -93,7 +93,7 @@ async function main() {
     }
     if (frame.type === 'resync') {
       sessionView.applySnapshot(frame.snapshot);
-      console.log('stream resynced');
+      setStatus('connected');
       return;
     }
     if (frame.type === 'stream-error') {
@@ -148,6 +148,7 @@ async function main() {
   async function openProject(path) {
     const project = await store.openProject(path);
     localStorage.setItem(PROJECT_KEY, project.realPath);
+    localStorage.setItem('agentdev.projectId', project.projectId);
     await store.refreshSessions();
     const known = localStorage.getItem(SESSION_KEY);
     const session =
