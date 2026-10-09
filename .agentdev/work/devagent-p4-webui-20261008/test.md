@@ -69,7 +69,7 @@ runs:
   - command: cd devagent && npx playwright test --reporter=line
     result: passed
     exit_code: 0
-    evidence: "8 passed (6.5s)：acceptance 6 项 + smoke 2 项"
+    evidence: "8 passed (6.2s)：acceptance 6 项 + smoke 2 项；重复提交用例经变异验证（移除保护即失败）"
 key_evidence:
   - "浏览器（chromium，无重试、单 worker，真实进程内工作台 + 真实 stub 模型端点）：开项目→八视图逐一可见；提交输入→用户消息出现→助手回答经流式渲染出现；提问在浏览器内回答→模型继续产出下文；离开页面再回来（about:blank→回）仍重建同一会话的对话"
   - "首开无项目：登录对话框 → 空外壳可正常显示（smoke）"

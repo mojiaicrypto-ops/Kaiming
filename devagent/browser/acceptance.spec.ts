@@ -116,27 +116,27 @@ test('a second Enter while the first submit is in flight does not submit twice',
 
     const composer = page.locator('#messageInput');
     await composer.fill('只发一次');
-    // Two fast Enter presses: one user action, one input.
-    await composer.press('Enter');
-    await composer.press('Enter');
+    // Two Enter presses dispatched in the same task: the second really happens while the first is
+    // still in flight, which is what the guard exists for.
+    await page.evaluate(() => {
+      const field = document.querySelector('#messageInput');
+      for (let index = 0; index < 2; index += 1) {
+        field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      }
+    });
 
     await expect(page.locator('#projectMessages .message.user')).toHaveCount(1, { timeout: 15_000 });
-    // The server holds exactly one input for that message, whatever the UI did.
-    const inputs = await page.evaluate(async () => {
-      const response = await fetch('/api/v1/rpc', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({
-          requestId: `probe-${Math.random()}`,
-          method: 'session.get',
-          params: { projectId: localStorage.getItem('agentdev.projectId') ?? '', sessionId: localStorage.getItem('agentdev.sessionId') ?? '' },
-        }),
-      });
-      return response.status;
-    });
-    expect(inputs).toBeLessThan(500);
     await expect(page.locator('#projectMessages .message.user')).toHaveCount(1);
+    // The server really holds one input: the snapshot is the server's own view of it.
+    const stored = await page.evaluate(async () => {
+      const client = window.__agentdev;
+      const prepared = await client.rpc.call('session.stream.prepare', {
+        projectId: client.store.projectId,
+        sessionId: client.store.sessionId,
+      });
+      return prepared.snapshot.inputs.length;
+    });
+    expect(stored).toBe(1);
   } finally {
     await harness.close();
   }
@@ -149,29 +149,26 @@ test('a business refusal does not break writing, and no view shows a raw transla
     await loginThroughUi(page, harness.accessPassword);
     await openProject(page, harness.project?.projectPath ?? '');
 
-    // A refusal that is not about CSRF must not lock the tab out: an in-project symlink pointing
-    // outside is refused as FORBIDDEN by the file interface (R1), with the CSRF token intact.
+    // A refusal that is not about CSRF must not lock the tab out. The refusal is driven through the
+    // page's own client, so the client's token handling is what this test exercises.
     const projectPath = harness.project?.projectPath ?? '';
     writeFileSync(join(projectPath, 'real.txt'), 'inside\n');
     symlinkSync('/etc/hosts', join(projectPath, 'escape.txt'));
-    const projectId = await page.evaluate(() => localStorage.getItem('agentdev.projectId') ?? '');
-    const refusal = await page.evaluate(
-      async ({ projectId: id }) => {
-        const response = await fetch('/api/v1/rpc', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          credentials: 'same-origin',
-          body: JSON.stringify({
-            requestId: `probe-${Math.random()}`,
-            method: 'project.files.read',
-            params: { projectId: id, path: 'escape.txt' },
-          }),
+    const refusal = await page.evaluate(async () => {
+      const client = window.__agentdev;
+      try {
+        await client.rpc.call('project.files.read', {
+          projectId: window.__agentdev.store.projectId,
+          path: 'escape.txt',
         });
-        return (await response.json()).error?.code ?? 'none';
-      },
-      { projectId: projectId === '' ? (harness.project?.projectId ?? '') : projectId },
-    );
-    expect(refusal).toBe('FORBIDDEN');
+        return { code: 'none', tokenAfter: client.rpc.csrfToken };
+      } catch (error) {
+        return { code: error.code ?? 'unknown', tokenAfter: client.rpc.csrfToken };
+      }
+    });
+    expect(refusal.code).toBe('FORBIDDEN');
+    // The tab can still write: the token is untouched by a business refusal.
+    expect(refusal.tokenAfter).not.toBeNull();
 
     // Writing still works afterwards.
     const composer = page.locator('#messageInput');

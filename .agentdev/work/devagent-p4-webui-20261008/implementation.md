@@ -346,6 +346,21 @@ review_rounds:
         fix: "改为 mock 的 board-card-top/.priority/<dl class=card-facts><dt>/<dd> 与 .card-progress>i 结构"
       - finding: "statusbar 模板用 {{count}} 但 tr() 只认 {count}，且 status.missingPath 缺失"
         fix: "文案改为 {count} 并补齐 status.missingPath"
+  - round: 2
+    verdict: failed
+    findings: 1 blocking + 4 non-blocking
+    fixed:
+      - finding: "为修重复提交引入的在飞保护会把失败后的输入框永久锁死（pendingSend 只在成功路径清空）——比原问题更严重"
+        fix: "在飞状态与重试 id 分离：sending 在 finally 无条件清空；同一文本复用同一 requestId，文本变了才换 id"
+        evidence: "acceptance：连续两次 Enter（同一任务内派发）后仅 1 条用户消息；快照 inputs 恰为 1"
+      - finding: "工具结果文本取自 event.result 对象 → 卡片显示 [object Object]；且 tool_execution_end 与 toolResult 消息两条路径各出一张卡"
+        fix: "只保留 toolResult 消息一条路径（其 content 为真实文本），按 toolCallId 就地翻转原卡片"
+      - finding: "业务 FORBIDDEN 的用例没有走页面自己的客户端（绕过 rpc.js），无法证明令牌保留的修复"
+        fix: "改为通过页面客户端自身发起 project.files.read（外部符号链接）并断言令牌仍在、随后仍能写入"
+      - finding: "重复 Enter 用例未真正并发、也未断言输入条数"
+        fix: "同一任务内派发两次 keydown + 断言存储层输入数为 1；并做变异验证（移除两处保护 → 用例失败 Received: 2）"
+    residual_notes:
+      - "变异验证确认：业务拒绝用例在“任意 FORBIDDEN 即清令牌”的旧行为下会失败；重复提交用例在移除两处保护后失败。单独移除在飞保护不会失败（id 复用已足够），单独移除 id 复用也不会失败（保护已足够）——两者为纵深防御"
 risks_remaining:
   - "会话 cookie 为进程内存态：服务重启需重新登录（首版可接受）"
   - "无 project.list 方法：项目切换器只能按路径打开（契约内的诚实行为）"

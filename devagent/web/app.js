@@ -119,6 +119,9 @@ async function main() {
   const shell = createShell(context);
   shell.mount();
   currentContext = context;
+  // A deliberate seam for the acceptance suite: assertions go through the page's own client, so a
+  // client-side regression (token handling, request ids) is what the browser test really exercises.
+  window.__agentdev = { rpc, store, sessionView, i18n, router };
   await boot();
 
   async function boot() {
@@ -271,5 +274,6 @@ function makeMarkdownIt(MarkdownIt) {
 /** The live console (the mock's .terminalLog): appended to, windowed, never re-rendered. */
 let consoleLog = null;
 /** The boot context, kept for the shell/views that read it after `main()` resolves. */
+/** Kept only so a future view can reach the boot context; nothing reads it today. */
 let currentContext = null;
 void main();

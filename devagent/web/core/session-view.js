@@ -79,20 +79,9 @@ export class SessionView {
         this.#applyComplete(event.message, frame.seq, frame.inputId);
         return;
       }
-      case 'tool_execution_end': {
-        // A tool result arrives as its own event: the transcript shows it as a result message.
-        this.messages.push({
-          entryId: `tool-${event.toolCallId ?? frame.seq}`,
-          role: 'toolResult',
-          content: [{ type: 'text', text: String(event.result ?? event.output ?? '') }],
-          toolName: event.toolName,
-          toolCallId: event.toolCallId,
-          inputId: frame.inputId ?? null,
-          streaming: false,
-        });
-        this.notify();
-        return;
-      }
+      // A tool result arrives as its own `toolResult` message (PI emits both
+      // `tool_execution_end` and that message): only the message is rendered, so one call yields
+      // exactly one card and the result text is the real content, not a stringified object.
       case 'agent_start':
         this.activity = 'processing';
         this.notify();

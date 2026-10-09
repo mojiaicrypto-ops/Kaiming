@@ -25,6 +25,8 @@ export function createChiefView(context) {
   let lastSnapshotApplied = null;
   /** The message list object we last rendered: a new list means the conversation was replaced. */
   let pendingSend = null;
+  /** True while one submit is in flight; cleared in `finally` so a failure never locks the composer. */
+  let sending = false;
 
   transcript?.before(interactionsRegion);
 
@@ -221,7 +223,7 @@ export function createChiefView(context) {
   }
 
   async function send() {
-    if (pendingSend !== null) {
+    if (sending) {
       // One send at a time: a second Enter while the first is in flight must not submit twice.
       return;
     }
@@ -229,8 +231,11 @@ export function createChiefView(context) {
     if (text === '') {
       return;
     }
-    // One id per user action, kept for the retry of *this* text (R1); a new text gets a new id.
-    pendingSend = { text, requestId: context.newRequestId() };
+    // One id per user action (R1): the same text retries with the same id, a new text gets a new one.
+    if (pendingSend === null || pendingSend.text !== text) {
+      pendingSend = { text, requestId: context.newRequestId() };
+    }
+    sending = true;
     if (sendButton !== null) {
       sendButton.disabled = true;
     }
@@ -245,11 +250,13 @@ export function createChiefView(context) {
       pendingSend = null;
     } catch (error) {
       toast.error(error?.message ?? String(error));
-      // Keep the text and its id: pressing send again retries the same action instead of a new one.
+      // Keep the text and its id so the next press retries the same action; `sending` is cleared
+      // below whatever happens, so a failure can never leave the composer unusable.
       if (input !== null) {
         input.value = text;
       }
     } finally {
+      sending = false;
       if (sendButton !== null) {
         sendButton.disabled = false;
       }
