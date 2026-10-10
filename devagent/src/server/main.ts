@@ -23,7 +23,7 @@ import { InteractionBridge } from '../runtime/interactions.ts';
 import { PiRuntimeFactory } from '../runtime/pi-runtime.ts';
 import { SessionRegistry } from '../runtime/registry.ts';
 import { InputRunner } from '../runtime/runner.ts';
-import { resolveEffectiveConfig } from '../runtime/config.ts';
+import { resolveStoredConfig } from '../runtime/config.ts';
 import type { RuntimeDefaults } from '../runtime/config.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -87,7 +87,17 @@ export function startWorkbench(options: StartOptions): Promise<{
     registry,
     factory,
     interactions,
-    resolveConfig: (roleId) => resolveEffectiveConfig({ roleId, server }),
+    // Overrides are read where they are saved: the same role/project resolution the config surface
+    // reports is the one a claimed input actually runs with (R5).
+    resolveConfig: (roleId, projectId) =>
+      resolveStoredConfig({
+        roleId,
+        ...(projectId !== undefined ? { projectId } : {}),
+        server,
+        store,
+      }),
+    // Every Pi event the runner reports reaches the session's stream (M4): without this the page
+    // shows a transcript that never fills in, even though the run really happened.
     onEvent: (sessionId, event, meta) => {
       hub.publish(sessionId, event, { inputId: meta.inputId, epoch: meta.epoch });
     },

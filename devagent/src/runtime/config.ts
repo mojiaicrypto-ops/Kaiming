@@ -57,6 +57,49 @@ export function resolveEffectiveConfig(input: ResolveInput): EffectiveConfig {
   };
 }
 
+/** Where a stored override lives: the same table the config surface saves into. */
+export interface OverrideSource {
+  getModelOverride(
+    scope: 'role' | 'project',
+    scopeId: string,
+  ): { readonly providerId: string; readonly modelId: string } | undefined;
+}
+
+/**
+ * The one place that turns stored overrides into an effective configuration: the config surface and
+ * the runner both call this, so what a page reports and what a run uses cannot drift apart (R5).
+ */
+export function resolveStoredConfig(input: {
+  readonly roleId: string;
+  readonly projectId?: string;
+  readonly server: RuntimeDefaults;
+  readonly store: OverrideSource;
+  readonly roleOverrides?: Readonly<Record<string, ModelSelection>>;
+}): EffectiveConfig {
+  const roleOverride = input.store.getModelOverride('role', input.roleId);
+  const projectOverride =
+    input.projectId === undefined ? undefined : input.store.getModelOverride('project', input.projectId);
+  return resolveEffectiveConfig({
+    roleId: input.roleId,
+    server: input.server,
+    ...(projectOverride !== undefined
+      ? { project: { model: { providerId: projectOverride.providerId, modelId: projectOverride.modelId } } }
+      : {}),
+    ...(roleOverride !== undefined || input.roleOverrides !== undefined
+      ? {
+          roleOverrides: {
+            ...(input.roleOverrides ?? {}),
+            ...(roleOverride !== undefined
+              ? {
+                  [input.roleId]: { providerId: roleOverride.providerId, modelId: roleOverride.modelId },
+                }
+              : {}),
+          },
+        }
+      : {}),
+  });
+}
+
 /** Redacted view written to the store: no credentials, no prompts, and no server-default tool list
  * (the runner records the role/task-trimmed `requestedTools`/`activeTools` instead). */
 export function redactEffectiveConfig(config: EffectiveConfig): {

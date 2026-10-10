@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
-import { Store, StoreError, type AcceptInputParams, type AcceptResult } from '../src/store/store.ts';
+import { SCHEMA_VERSION, Store, StoreError, type AcceptInputParams, type AcceptResult } from '../src/store/store.ts';
 
 const dirs: string[] = [];
 const stores: Store[] = [];
@@ -53,14 +53,37 @@ afterEach(() => {
 
 describe('store pragmas and schema', () => {
   it('applies the required pragmas and migrates to the current schema version', () => {
-    const { store } = openStore();
+    const { store, path } = openStore();
 
     expect(store.pragmas()).toEqual({
       journalMode: 'wal',
       synchronous: 2,
       foreignKeys: 1,
-      userVersion: 7,
+      // The current version, not a literal: the migrations below are what the number promises.
+      userVersion: SCHEMA_VERSION,
     });
+
+    // A migrated database really has the tables the version claims, instead of merely saying so.
+    const raw = new DatabaseSync(path);
+    try {
+      const tables = (
+        raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>
+      ).map((row) => row.name);
+      expect(tables).toEqual(
+        expect.arrayContaining([
+          'projects',
+          'sessions',
+          'session_inputs',
+          'tasks',
+          'results',
+          'interactions',
+          'providers',
+          'model_overrides',
+        ]),
+      );
+    } finally {
+      raw.close();
+    }
   });
 
   it('migrates a v1 database by adding the P2 columns', () => {
@@ -79,7 +102,7 @@ describe('store pragmas and schema', () => {
     const migrated = new Store({ path, serverEpoch: 1 });
     stores.push(migrated);
 
-    expect(migrated.pragmas().userVersion).toBe(7);
+    expect(migrated.pragmas().userVersion).toBe(SCHEMA_VERSION);
     const input = migrated.getInput('i-1');
     expect(input).toMatchObject({ status: 'queued', effectiveConfig: null, checkpoint: null });
     expect(migrated.claimNextInput('s-1').kind).toBe('claimed');

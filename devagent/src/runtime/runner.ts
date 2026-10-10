@@ -80,7 +80,8 @@ export interface RunnerOptions {
   readonly store: Store;
   readonly registry: SessionRegistry;
   readonly factory: PiRuntimeFactory;
-  readonly resolveConfig: (roleId: string) => EffectiveConfig;
+  /** Resolve the effective configuration at claim time: role override → project override → server. */
+  readonly resolveConfig: (roleId: string, projectId?: string) => EffectiveConfig;
   /** Task type the session currently runs under; `undefined` while it has no Task yet. */
   readonly taskTypeOf?: (sessionId: string) => 'read' | 'write' | undefined;
   /** Extra session wiring (probe tools/extensions) used by tests and later work packages. */
@@ -138,7 +139,7 @@ export class InputRunner {
     if (session === undefined) {
       throw new StoreError('NOT_FOUND', 'session does not exist', { sessionId });
     }
-    const config = this.options.resolveConfig(session.roleId);
+    const config = this.options.resolveConfig(session.roleId, session.projectId);
     if (!(await this.options.factory.isAvailable(config.selection))) {
       return {
         kind: 'blocked_config',

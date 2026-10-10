@@ -81,6 +81,51 @@ export class PiRuntimeFactory {
     );
   }
 
+  /**
+   * A real trial connection (R5/config.test): refresh the catalog over the network with a bounded
+   * timeout and report whether the selection is usable. Nothing is saved and no session is created.
+   */
+  async probe(selection: ModelSelection): Promise<{ available: boolean; detail: string }> {
+    try {
+      const runtime = await ModelRuntime.create({
+        modelsPath: join(this.defaults.agentDir, 'models.json'),
+        authPath: join(this.defaults.agentDir, 'auth.json'),
+        allowModelNetwork: true,
+        modelRefreshTimeoutMs: 5000,
+      });
+      const available = await runtime.getAvailable();
+      const known = runtime.getModel(selection.providerId, selection.modelId);
+      if (known === undefined) {
+        return { available: false, detail: `${selection.providerId}/${selection.modelId} is not in the catalog` };
+      }
+      if (!available.some((model) => model.provider === selection.providerId && model.id === selection.modelId)) {
+        return { available: false, detail: `${selection.providerId}/${selection.modelId} has no usable credential` };
+      }
+      // The catalog saying "usable" is not the same as the provider answering: ask it for one token,
+      // through the same SDK path a run uses, and report what actually came back.
+      const answered = runtime.completeSimple(
+        known,
+        { messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }], timestamp: Date.now() }] },
+        { maxTokens: 1 },
+      );
+      const deadline = new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new Error('the provider did not answer within 8000ms')), 8000);
+      });
+      const message = await Promise.race([answered, deadline]);
+      if (message.stopReason === 'error' || (message.errorMessage ?? '') !== '') {
+        // A failed request comes back as a message, not as a rejection: the error text is the answer.
+        return {
+          available: false,
+          detail: message.errorMessage ?? `the provider refused the request (${message.stopReason})`,
+        };
+      }
+      return { available: true, detail: `${selection.providerId}/${selection.modelId} answered a one-token request` };
+    } catch (error) {
+      // The upstream error is the useful part: authentication, DNS, timeout - say it, do not hide it.
+      return { available: false, detail: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   async create(config: EffectiveConfig, options: CreateSessionOptions): Promise<PiSessionHandle> {
     const runtime = await this.runtime();
     const model = runtime.getModel(config.selection.providerId, config.selection.modelId);

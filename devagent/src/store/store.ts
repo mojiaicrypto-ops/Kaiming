@@ -143,6 +143,31 @@ export interface UpdateTaskParams {
 
 export type InteractionState = 'pending' | 'resolved' | 'stale';
 
+/** A provider definition: where a model is reached. The key itself lives in the private file. */
+export interface ProviderRow {
+  readonly providerId: string;
+  readonly baseUrl: string;
+  readonly api: string | null;
+  /** JSON array of `{ id, name }`: the models this provider offers. */
+  readonly models: string;
+  /** Where the credential lives (private store); never the credential itself. */
+  readonly credentialRef: string | null;
+  readonly revision: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** Which provider/model a role or a project uses, overriding the server default. */
+export interface ModelOverrideRow {
+  readonly scope: 'role' | 'project';
+  readonly scopeId: string;
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly revision: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 export interface InteractionRow {
   readonly interactionId: string;
   readonly projectId: string;
@@ -330,7 +355,7 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -370,6 +395,33 @@ ALTER TABLE session_inputs ADD COLUMN recovery TEXT;`;
  * for (M5). The answer is written here before it is returned to the model, so a crash cannot lose or
  * repeat a decision.
  */
+/**
+ * Tables added by the v7 → v8 migration: the model configuration itself (R5) - the providers this
+ * installation knows and the role/project assignments that pick one. A key lives in the private
+ * credential store next to the database, never here: `credentialRef` is the only thing recorded.
+ */
+const V8_DDL = `
+CREATE TABLE IF NOT EXISTS providers (
+  providerId TEXT PRIMARY KEY,
+  baseUrl TEXT NOT NULL,
+  api TEXT,
+  models TEXT NOT NULL,
+  credentialRef TEXT,
+  revision INTEGER NOT NULL DEFAULT 1,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS model_overrides (
+  scope TEXT NOT NULL,
+  scopeId TEXT NOT NULL,
+  providerId TEXT NOT NULL,
+  modelId TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 1,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  PRIMARY KEY (scope, scopeId)
+);`;
+
 const V7_DDL = `
 CREATE TABLE IF NOT EXISTS interactions (
   interactionId TEXT PRIMARY KEY,
@@ -557,6 +609,28 @@ ${V3_DDL}
 ${V4_DDL}
 ${V5_DDL}
 ${V7_DDL}
+
+-- Model configuration (v8): providers and the role/project assignments that pick one.
+CREATE TABLE IF NOT EXISTS providers (
+  providerId TEXT PRIMARY KEY,
+  baseUrl TEXT NOT NULL,
+  api TEXT,
+  models TEXT NOT NULL,
+  credentialRef TEXT,
+  revision INTEGER NOT NULL DEFAULT 1,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS model_overrides (
+  scope TEXT NOT NULL,
+  scopeId TEXT NOT NULL,
+  providerId TEXT NOT NULL,
+  modelId TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 1,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  PRIMARY KEY (scope, scopeId)
+);
 `;
 
 /** Canonical JSON (sorted object keys) so the same value always digests the same way. */
@@ -1348,6 +1422,147 @@ export class Store {
    * before epochs existed), so calling this again later — a periodic scan, or a second Store on the
    * same file — cannot destroy runs owned by the current process.
    */
+  /**
+   * Save a provider definition (R5). The caller writes the credential to the private store first and
+   * passes only its reference, so a key can never end up in the database or in a response.
+   */
+  saveProvider(params: {
+    providerId: string;
+    baseUrl: string;
+    api?: string;
+    models: readonly { id: string; name: string }[];
+    credentialRef?: string;
+    expectedRevision: number | null;
+  }): ProviderRow {
+    return this.transaction(() => {
+      const existing = this.getProvider(params.providerId);
+      if (params.expectedRevision === null) {
+        if (existing !== undefined) {
+          throw new StoreError('VERSION_CONFLICT', `provider ${params.providerId} already exists`, {
+            providerId: params.providerId,
+            actual: existing.revision,
+          });
+        }
+      } else if (existing === undefined || existing.revision !== params.expectedRevision) {
+        throw new StoreError('VERSION_CONFLICT', `provider ${params.providerId} revision does not match`, {
+          providerId: params.providerId,
+          expected: params.expectedRevision,
+          actual: existing?.revision ?? null,
+        });
+      }
+      const timestamp = this.clock();
+      const models = JSON.stringify(params.models);
+      if (existing === undefined) {
+        this.db
+          .prepare(
+            `INSERT INTO providers (providerId, baseUrl, api, models, credentialRef, revision, createdAt, updatedAt)
+             VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+          )
+          .run(params.providerId, params.baseUrl, params.api ?? null, models, params.credentialRef ?? null, timestamp, timestamp);
+      } else {
+        this.db
+          .prepare(
+            `UPDATE providers SET baseUrl = ?, api = ?, models = ?, credentialRef = ?, revision = revision + 1, updatedAt = ?
+              WHERE providerId = ? AND revision = ?`,
+          )
+          .run(
+            params.baseUrl,
+            params.api ?? null,
+            models,
+            params.credentialRef ?? existing.credentialRef,
+            timestamp,
+            params.providerId,
+            params.expectedRevision ?? 0,
+          );
+      }
+      return this.requireProvider(params.providerId);
+    });
+  }
+
+  getProvider(providerId: string): ProviderRow | undefined {
+    const row = this.db.prepare('SELECT * FROM providers WHERE providerId = ?').get(providerId) as
+      | Record<string, unknown>
+      | undefined;
+    return row === undefined ? undefined : toProviderRow(row);
+  }
+
+  listProviders(): ProviderRow[] {
+    const rows = this.db.prepare('SELECT * FROM providers ORDER BY providerId').all() as Array<Record<string, unknown>>;
+    return rows.map(toProviderRow);
+  }
+
+  /** Save which provider/model one role or one project uses (R5), with the same revision discipline. */
+  saveModelOverride(params: {
+    scope: 'role' | 'project';
+    scopeId: string;
+    providerId: string;
+    modelId: string;
+    expectedRevision: number | null;
+  }): ModelOverrideRow {
+    return this.transaction(() => {
+      const existing = this.getModelOverride(params.scope, params.scopeId);
+      if (params.expectedRevision === null) {
+        if (existing !== undefined) {
+          throw new StoreError('VERSION_CONFLICT', `${params.scope} ${params.scopeId} already has an override`, {
+            scope: params.scope,
+            scopeId: params.scopeId,
+            actual: existing.revision,
+          });
+        }
+      } else if (existing === undefined || existing.revision !== params.expectedRevision) {
+        throw new StoreError('VERSION_CONFLICT', `${params.scope} ${params.scopeId} revision does not match`, {
+          scope: params.scope,
+          scopeId: params.scopeId,
+          expected: params.expectedRevision,
+          actual: existing?.revision ?? null,
+        });
+      }
+      const timestamp = this.clock();
+      if (existing === undefined) {
+        this.db
+          .prepare(
+            `INSERT INTO model_overrides (scope, scopeId, providerId, modelId, revision, createdAt, updatedAt)
+             VALUES (?, ?, ?, ?, 1, ?, ?)`,
+          )
+          .run(params.scope, params.scopeId, params.providerId, params.modelId, timestamp, timestamp);
+      } else {
+        this.db
+          .prepare(
+            `UPDATE model_overrides SET providerId = ?, modelId = ?, revision = revision + 1, updatedAt = ?
+              WHERE scope = ? AND scopeId = ? AND revision = ?`,
+          )
+          .run(params.providerId, params.modelId, timestamp, params.scope, params.scopeId, params.expectedRevision ?? 0);
+      }
+      const saved = this.getModelOverride(params.scope, params.scopeId);
+      if (saved === undefined) {
+        throw new StoreError('NOT_FOUND', `${params.scope} ${params.scopeId} override was not saved`);
+      }
+      return saved;
+    });
+  }
+
+  getModelOverride(scope: 'role' | 'project', scopeId: string): ModelOverrideRow | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM model_overrides WHERE scope = ? AND scopeId = ?')
+      .get(scope, scopeId) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : toModelOverrideRow(row);
+  }
+
+  listModelOverrides(scope: 'role' | 'project'): ModelOverrideRow[] {
+    const rows = this.db
+      .prepare('SELECT * FROM model_overrides WHERE scope = ? ORDER BY scopeId')
+      .all(scope) as Array<Record<string, unknown>>;
+    return rows.map(toModelOverrideRow);
+  }
+
+  private requireProvider(providerId: string): ProviderRow {
+    const provider = this.getProvider(providerId);
+    if (provider === undefined) {
+      throw new StoreError('NOT_FOUND', `provider ${providerId} does not exist`, { providerId });
+    }
+    return provider;
+  }
+
   scanStartup(): { interrupted: number } {
     return this.transaction(() => {
       const timestamp = this.clock();
@@ -2352,6 +2567,13 @@ export class Store {
     });
   }
 
+  private migrateV7ToV8(): void {
+    this.transaction(() => {
+      this.db.exec(V8_DDL);
+      this.db.exec('PRAGMA user_version = 8;');
+    });
+  }
+
   private migrate(): void {
     const { userVersion } = this.pragmas();
     if (userVersion === 0) {
@@ -2372,26 +2594,34 @@ export class Store {
       this.migrateV4ToV5();
       this.migrateV5ToV6();
       this.migrateV6ToV7();
+      this.migrateV7ToV8();
     } else if (userVersion === 2) {
       this.migrateV2ToV3();
       this.migrateV3ToV4();
       this.migrateV4ToV5();
       this.migrateV5ToV6();
       this.migrateV6ToV7();
+      this.migrateV7ToV8();
     } else if (userVersion === 3) {
       this.migrateV3ToV4();
       this.migrateV4ToV5();
       this.migrateV5ToV6();
       this.migrateV6ToV7();
+      this.migrateV7ToV8();
     } else if (userVersion === 4) {
       this.migrateV4ToV5();
       this.migrateV5ToV6();
       this.migrateV6ToV7();
+      this.migrateV7ToV8();
     } else if (userVersion === 5) {
       this.migrateV5ToV6();
       this.migrateV6ToV7();
+      this.migrateV7ToV8();
     } else if (userVersion === 6) {
       this.migrateV6ToV7();
+      this.migrateV7ToV8();
+    } else if (userVersion === 7) {
+      this.migrateV7ToV8();
     } else if (userVersion !== SCHEMA_VERSION) {
       throw new StoreError('VERSION_CONFLICT', 'unsupported store schema version', {
         userVersion,
@@ -2503,6 +2733,31 @@ function answerIssue(interaction: InteractionRow, response: unknown): string | u
     return options.includes(answered) ? undefined : 'the answer is not one of the offered options';
   }
   return undefined;
+}
+
+function toProviderRow(row: Record<string, unknown>): ProviderRow {
+  return {
+    providerId: String(row['providerId']),
+    baseUrl: String(row['baseUrl']),
+    api: row['api'] === null ? null : String(row['api']),
+    models: String(row['models']),
+    credentialRef: row['credentialRef'] === null ? null : String(row['credentialRef']),
+    revision: Number(row['revision']),
+    createdAt: String(row['createdAt']),
+    updatedAt: String(row['updatedAt']),
+  };
+}
+
+function toModelOverrideRow(row: Record<string, unknown>): ModelOverrideRow {
+  return {
+    scope: String(row['scope']) === 'project' ? 'project' : 'role',
+    scopeId: String(row['scopeId']),
+    providerId: String(row['providerId']),
+    modelId: String(row['modelId']),
+    revision: Number(row['revision']),
+    createdAt: String(row['createdAt']),
+    updatedAt: String(row['updatedAt']),
+  };
 }
 
 function toProjectRow(row: Record<string, unknown>): ProjectRow {
