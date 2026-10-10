@@ -12,7 +12,7 @@
 ### D1 交付界面里仍有 mock 演示文案与未解析键
 - 现象：顶栏胶囊显示 `LOCAL DEMO`；会话切换器选项文案是 `REQ-018 · Pi Runtime foundation`；`#kuai` 调色板提示写 `Try “REQ-018”, “RUN-104”…`；Files 计数后缀 `sample files · 24 indexed`、徽标 `Mock · Read only`；`aria.requirementProgress` 写死 `62%`；`focus.phase` 写死 `5 / 8 tasks`；`toast.consoleMobileHidden` 提到 "mock Run state"。
 - 另有两类：Inbox 视图渲染出原始键（`inbox.questions`/`inbox.recovery`/`inbox.blocked` 在字典里不存在）；`data-i18n-placeholder` 属性从未被 i18n 应用，输入框一直显示 HTML 里的旧文案。
-- 修复：改真实文案（`header.live`、`focus.*`、`files.*`、`palette.note`、`aria.requirementProgress`、`view.inbox.*`、`view.settings.subtitle` 等）；补 `inbox.*` 段标题与 `inbox.resolution.*` 选项文案；`I18n.apply` 处理 `data-i18n-placeholder`；删除 147 个“代码里已无任何渲染路径”的键（mock 的 board/card/audit/decision/run/requirement 演示流）。
+- 修复：改真实文案（`header.live`、`focus.*`、`files.*`、`palette.note`、`aria.requirementProgress`、`view.inbox.*`、`view.settings.subtitle` 等）；补 `inbox.*` 段标题与 `inbox.resolution.*` 选项文案；`I18n.apply` 处理 `data-i18n-placeholder`；删除“代码里已无任何渲染路径”的键（mock 的 board/card/audit/decision/run/requirement 演示流）；后经复核实测为 399 → 251 键（删 177、增 29），见 §2b。
 - 死键清理过程中的一次真实失误：首版扫描只认 `t('key')`，漏掉“把键当参数传给 helper”（`section('inbox.questions', …)`、`t(cond ? 'a' : 'b')`、`HEADERS` 数组里的键），误删 11 个仍在用的键（`run.pause`/`run.resume`/`runs.column.*`/`section.files*`/`toast.live*`/`aria.runConsoleCollapsed`）。已用“旧字典 × 现网字面量”比对找回，并把扫描改成保守版。
 - 新增 `test/web-i18n-keys.test.ts`（19 个测试文件的第 19 个）：代码/标记命名到的键必须两种语言都存在；两语言键集对称且非空；动态前缀（`status.${state}`、`agents.role.${id}`、`inbox.resolution.${v}`）至少有一条命中；没有被渲染路径的键必须为 0。
 
@@ -47,10 +47,10 @@
 
 首轮独立复核（`review.md`）指出 1 项阻断 + 若干过度声明，逐条处理：
 
-- **阻断：AC-01 的 B/N 分支当时并未执行**（记录却写成通过）。已在真实浏览器补做：B → `p-617c79822325` 独立项目/路径/会话，N → `p-3508b410d2a6` 同样独立，同实例三项目互不串内容；`test.md` 按此重写。
+- **阻断：AC-01 的 B/N 分支当时并未执行**（记录却写成通过）。已在真实浏览器补做：B → `p-617c79822375` 独立项目/路径/会话，N → `p-3508b410d2a6` 同样独立，同实例三项目互不串内容；`test.md` 按此重写。
 - **D7 的残留缺陷（复核发现）**：worker 每个空闲轮询都重发被阻塞事件 → 约 4 帧/秒、toast 反复触发、控制台无界增长。修复：`main.ts` 记住每个会话最后一次阻塞签名，只在变化时发布（14 秒约 50 次轮询内实测 `blocked` 帧 = 1、toast 1 条、控制台 1 行）。
 - **外壳残留（复核发现）**：`run.topLive` 写死 `Live · 1`、`aria.liveDockOpen` 写死“1 running”，而相邻胶囊显示真实连接态；阶段条把阶段 id（`clarify/analyze/…`）直接印出。修复：`run.topLive` 改为无数字的 `Live`、aria 文案去掉假数量、阶段条改用 `t('phase.<id>')`。
-- **字典契约用例可被绕过（复核发现）**：原“键解析”断言只查 `t('key')`，而 `section('inbox.questions', …)` 这类“把键当参数”的写法只落在字面量集合里，删掉这些键仍会绿。修复：解析断言改为覆盖“落在字典自有命名空间里的字面量”，并显式列出三个 RPC 方法名（`auth.logout`/`requirement.get`/`requirement.list`）作为唯一的白名单——新的命名冲突会立刻被测试要求做出决定。变异验证：删掉 `inbox.questions` 后该断言失败。
+- **字典契约用例可被绕过（复核发现）**：原“键解析”断言只查 `t('key')`，而 `section('inbox.questions', …)` 这类“把键当参数”的写法只落在字面量集合里，删掉这些键仍会绿。修复：解析断言改为覆盖“落在字典自有命名空间里的字面量”，并显式列出四个 RPC 方法名（`auth.login`/`auth.logout`/`requirement.get`/`requirement.list`；其中 `auth.login` 同时是真实文案键）作为唯一的白名单——新的命名冲突会立刻被测试要求做出决定。变异验证：删掉 `inbox.questions` 后该断言失败。
 - **记录数字纠正**：字典 399 → 251（删 177、增 29，不是“删 147”）；测试数 209/209（不是 208/208）。“53 条”原为渲染消息数而非记录总数，已在 `test.md` 中改为按记录数（102）与消息数（19/21）分别写明。
 
 ## 3. 记录但本轮未修的观察
