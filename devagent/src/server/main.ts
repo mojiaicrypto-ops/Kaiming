@@ -66,7 +66,8 @@ export function startWorkbench(options: StartOptions): Promise<{
   };
   const auth = new AuthService({ accessPassword: options.accessPassword });
   const router = new RpcRouter();
-  registerCoreMethods(router, { store, server });
+  // The factory is the one the runner uses, so a saved provider is visible to the next claimed input.
+  registerCoreMethods(router, { store, server, reloadRuntime: () => factory.reload() });
   registerReadMethods(router, { store });
 
   // Live events (M4): the runner publishes what Pi reports, the write surface publishes invalidations.

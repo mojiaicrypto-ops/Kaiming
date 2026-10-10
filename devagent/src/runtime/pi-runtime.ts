@@ -72,6 +72,17 @@ export class PiRuntimeFactory {
     return this.modelRuntime;
   }
 
+  /**
+   * Re-read the credential/catalog files after they changed (R5: a saved configuration must reach the
+   * next queued input). The SDK keeps one snapshot per runtime, so a provider written after the
+   * factory was first used is invisible until this runs - and config.test must not probe a state no
+   * run can see.
+   */
+  async reload(): Promise<void> {
+    const runtime = await this.runtime();
+    await runtime.refresh({ allowNetwork: false });
+  }
+
   /** True when the SDK reports the selection as usable (credential resolvable, model known). */
   async isAvailable(selection: ModelSelection): Promise<boolean> {
     const runtime = await this.runtime();
@@ -87,12 +98,10 @@ export class PiRuntimeFactory {
    */
   async probe(selection: ModelSelection): Promise<{ available: boolean; detail: string }> {
     try {
-      const runtime = await ModelRuntime.create({
-        modelsPath: join(this.defaults.agentDir, 'models.json'),
-        authPath: join(this.defaults.agentDir, 'auth.json'),
-        allowModelNetwork: true,
-        modelRefreshTimeoutMs: 5000,
-      });
+      // The same runtime a run uses (refreshed), so the answer describes the real state, not a
+      // second opinion from a runtime only this probe ever sees.
+      const runtime = await this.runtime();
+      await runtime.refresh({ allowNetwork: true });
       const available = await runtime.getAvailable();
       const known = runtime.getModel(selection.providerId, selection.modelId);
       if (known === undefined) {

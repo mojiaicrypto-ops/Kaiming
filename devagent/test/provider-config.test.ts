@@ -7,7 +7,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store, StoreError } from '../src/store/store.ts';
-import { credentialRefFor, modelsPathFor } from '../src/runtime/provider-store.ts';
+import { credentialRefFor, modelsPathFor, writeProvider } from '../src/runtime/provider-store.ts';
+import { PiRuntimeFactory } from '../src/runtime/pi-runtime.ts';
+import { createStubEnv } from '../spikes/harness/pi-env.ts';
 import { AuthService, CSRF_HEADER, SESSION_COOKIE } from '../src/server/auth.ts';
 import { RpcRouter } from '../src/server/rpc.ts';
 import { createWorkbenchServer } from '../src/server/http.ts';
@@ -366,4 +368,45 @@ describe('one resolver for the surface and the run', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+describe('a saved provider reaches the running runtime', () => {
+  it('makes a provider written after the factory was first used available without a restart', async () => {
+    const env = await createStubEnv(undefined, {
+      providers: {
+        first: {
+          baseUrl: 'http://127.0.0.1:1/v1',
+          api: 'openai-completions',
+          apiKey: 'k-first',
+          models: [{ id: 'first-1', name: 'first-1' }],
+        },
+      },
+    });
+    try {
+      const factory = new PiRuntimeFactory({
+        model: { providerId: 'first', modelId: 'first-1' },
+        agentDir: env.agentDir,
+        promptDir: '/tmp/prompts',
+        tools: [],
+      });
+      // Warm the cache, exactly as the first run of a process does.
+      expect(await factory.isAvailable({ providerId: 'second', modelId: 'second-1' })).toBe(false);
+
+      const written = writeProvider(env.agentDir, {
+        providerId: 'second',
+        baseUrl: 'http://127.0.0.1:2/v1',
+        api: 'openai-completions',
+        apiKey: 'k-second',
+        models: [{ id: 'second-1', name: 'second-1' }],
+      });
+      expect(written.ok).toBe(true);
+      // The cache still says no (this is the defect the reload exists for)...
+      expect(await factory.isAvailable({ providerId: 'second', modelId: 'second-1' })).toBe(false);
+      // ...and after the reload a run can use it, without restarting the process.
+      await factory.reload();
+      expect(await factory.isAvailable({ providerId: 'second', modelId: 'second-1' })).toBe(true);
+    } finally {
+      rmSync(env.root, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

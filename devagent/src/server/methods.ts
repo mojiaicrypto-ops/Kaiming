@@ -15,6 +15,11 @@ export interface CoreMethodsOptions {
   readonly server: RuntimeDefaults;
   /** Per-role model overrides configured on this installation. */
   readonly roleOverrides?: Readonly<Record<string, { providerId: string; modelId: string }>>;
+  /**
+   * Made visible to the runtime after a provider is written, so the next claimed input can use what
+   * the caller just saved instead of waiting for a restart (R5).
+   */
+  readonly reloadRuntime?: () => Promise<void>;
 }
 
 /**
@@ -84,6 +89,7 @@ export function registerCoreMethods(router: RpcRouter, options: CoreMethodsOptio
       });
       const selection = explicit ?? effective.selection;
       const factory = new PiRuntimeFactory(options.server);
+      await factory.reload().catch(() => undefined);
       const probed = await factory.probe(selection);
       return {
         roleId,
@@ -140,11 +146,11 @@ export function registerCoreMethods(router: RpcRouter, options: CoreMethodsOptio
 }
 
 /** Save a provider definition: the key goes to the private store, the database keeps its reference. */
-function saveProvider(
+async function saveProvider(
   options: CoreMethodsOptions,
   value: Record<string, unknown>,
   expectedRevision: number | null,
-): unknown {
+): Promise<unknown> {
   const providerId = typeof value['providerId'] === 'string' ? value['providerId'] : '';
   if (!/^[A-Za-z0-9._-]{1,64}$/.test(providerId)) {
     throw new RpcError('INVALID_ARGUMENT', 'providerId has an invalid form', { providerId });
@@ -185,6 +191,10 @@ function saveProvider(
     credentialRef: written.credentialRef,
     expectedRevision,
   });
+  // The runner's runtime caches one snapshot: without this the next claimed input would block until
+  // the process restarted, even though the configuration was saved successfully (R5). Awaiting it
+  // means the answer describes a state a run can already use.
+  await options.reloadRuntime?.();
   return {
     providerId: provider.providerId,
     revision: provider.revision,

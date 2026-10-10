@@ -25,6 +25,11 @@
 
 改写 `main.ts` 的 `resolveConfig` 时，我用整段替换把 `InputRunner` 的 `onEvent` 发布接线一并删掉了：runner 照常运行（输入 completed、历史里有回复），但事件永不进入会话流，页面表现为"提交后什么都不出现"。`tsc` 不会报（该选项可选），单元测试全绿（它们各自搭栈、不经过入口），只有浏览器验收用例与真实实例上的观察抓到。修复后新增 `test/workbench-entry.test.ts`：用 `startWorkbench` 真跑一次输入，断言读者收到 `agent_start`/`message_end` 且历史里有 assistant 消息；经变异验证（删掉 `onEvent` 即失败）。
 
+## 2c. 独立复核后的修复与遗留（见 review.md）
+
+- **已修（B2）**：复核发现 `config.test` 探到的状态与真实运行不同——runner 的工厂缓存一个运行时且从不重载，于是"保存后用 config.test 说可用、认领时却 blocked 直到重启"。修复：`PiRuntimeFactory.reload()` 重读凭证/目录；`config.save` 写入 provider 后 await 重载（runner 用的同一 factory 由 `main.ts` 注入 core methods）；`config.test` 先重载再探且复用同一运行时。新增用例复现并固定该场景（热身 → 写入 → 仍 false → reload → true）。
+- **未修（B1，阻断，如实登记）**：Agent 的内建 `read` 读到了 `<agentDir>/models.json`，含 key 的 toolResult 进入 Pi 历史与页面流。密钥必须待在 Pi 能读的文件里，而角色带有 `bash`，任何路径约束都能被绕过——真正的出路是收缩工具集或换凭证通道（或接受并以文档明示），属产品/设计决定，见 review.md「待用户决策」。
+
 ## 3. 未做（如实登记）
 
 - **前端配置入口**：按用户本轮明确要求，本期界面不需要编辑入口。`config.get/save/test` 已经是可用的系统能力；Settings/Agents 继续只读展示生效配置、来源与 provider 可用性。（P6 中删掉的那两个"点不开的 mock 对话框"保持删除。）
