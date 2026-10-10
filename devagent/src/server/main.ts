@@ -92,6 +92,8 @@ export function startWorkbench(options: StartOptions): Promise<{
       hub.publish(sessionId, event, { inputId: meta.inputId, epoch: meta.epoch });
     },
   });
+  /** The last block reported per session: a run that still cannot start must not repeat itself. */
+  const reportedBlocks = new Map<string, string>();
   const worker = new WorkbenchWorker({
     store,
     runner,
@@ -103,8 +105,15 @@ export function startWorkbench(options: StartOptions): Promise<{
         outcome.kind !== 'blocked_role' &&
         outcome.kind !== 'blocked_project'
       ) {
+        reportedBlocks.delete(sessionId);
         return;
       }
+      const signature = `${outcome.code}:${outcome.detail}`;
+      if (reportedBlocks.get(sessionId) === signature) {
+        // The worker retries every idle pass while the work waits: say it once, not four times a second.
+        return;
+      }
+      reportedBlocks.set(sessionId, signature);
       hub.publish(
         sessionId,
         { type: 'blocked', code: outcome.code, detail: outcome.detail },

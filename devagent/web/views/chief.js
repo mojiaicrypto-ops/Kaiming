@@ -240,7 +240,11 @@ export function createChiefView(context) {
             role: 'listitem',
             ...(index === current ? { 'aria-current': 'step' } : {}),
           },
-          [el('span', { class: 'stage-mark', text: index < current ? '✓' : index === current ? '●' : '' }), el('span', { text: phase })],
+          [
+            el('span', { class: 'stage-mark', text: index < current ? '✓' : index === current ? '●' : '' }),
+            // The same translated phase name the focus card shows; a raw id is not reader copy.
+            el('span', { text: context.i18n.t(`phase.${phase}`) }),
+          ],
         ),
       ),
     );

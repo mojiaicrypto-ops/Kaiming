@@ -75,8 +75,25 @@ describe('web i18n dictionary', () => {
     }
   }
 
+  /** The namespaces the dictionary actually owns: `inbox.` yes, `project.files.read` no (an RPC name). */
+  const namespaces = new Set(Object.keys(english).map((key) => key.slice(0, key.indexOf('.') + 1)));
+  /**
+   * RPC method names that happen to sit in a namespace the dictionary also owns. They are the
+   * server's vocabulary, not copy: naming them here is deliberate, so a new collision is a decision
+   * someone makes instead of a silent hole in this check.
+   */
+  const rpcMethods = new Set(['auth.login', 'auth.logout', 'requirement.get', 'requirement.list']);
+
   it('resolves every key the web code and markup names', () => {
-    const missing = [...used].filter((key) => english[key] === undefined || chinese[key] === undefined);
+    // Keys passed *through* a helper (`section('inbox.questions', …)`) are only literals, so the
+    // resolution check must cover any literal that lives in a namespace the dictionary owns.
+    const named = new Set([
+      ...used,
+      ...[...literals].filter(
+        (key) => namespaces.has(key.slice(0, key.indexOf('.') + 1)) && !rpcMethods.has(key),
+      ),
+    ]);
+    const missing = [...named].filter((key) => english[key] === undefined || chinese[key] === undefined);
     expect(missing).toEqual([]);
   });
 

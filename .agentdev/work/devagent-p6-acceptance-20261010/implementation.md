@@ -43,8 +43,19 @@
 - 现象：无模型实例里提交消息后，输入停在 `queued`，对话区没有用户消息、没有助手回复、界面不说明原因。
 - 修复：worker 的 `onOutcome` 在 `blocked_config`/`blocked_role`/`blocked_project` 时把原因发布到该会话的流；客户端把它显示为错误 toast（并自然进入 Live 控制台）。验证：无模型实例提交后出现 `MODEL_UNAVAILABLE: unset/unset has no usable credential`，助手消息数为 0。
 
+## 2b. 独立审阅后追加的修复（第二轮）
+
+首轮独立复核（`review.md`）指出 1 项阻断 + 若干过度声明，逐条处理：
+
+- **阻断：AC-01 的 B/N 分支当时并未执行**（记录却写成通过）。已在真实浏览器补做：B → `p-617c79822325` 独立项目/路径/会话，N → `p-3508b410d2a6` 同样独立，同实例三项目互不串内容；`test.md` 按此重写。
+- **D7 的残留缺陷（复核发现）**：worker 每个空闲轮询都重发被阻塞事件 → 约 4 帧/秒、toast 反复触发、控制台无界增长。修复：`main.ts` 记住每个会话最后一次阻塞签名，只在变化时发布（14 秒约 50 次轮询内实测 `blocked` 帧 = 1、toast 1 条、控制台 1 行）。
+- **外壳残留（复核发现）**：`run.topLive` 写死 `Live · 1`、`aria.liveDockOpen` 写死“1 running”，而相邻胶囊显示真实连接态；阶段条把阶段 id（`clarify/analyze/…`）直接印出。修复：`run.topLive` 改为无数字的 `Live`、aria 文案去掉假数量、阶段条改用 `t('phase.<id>')`。
+- **字典契约用例可被绕过（复核发现）**：原“键解析”断言只查 `t('key')`，而 `section('inbox.questions', …)` 这类“把键当参数”的写法只落在字面量集合里，删掉这些键仍会绿。修复：解析断言改为覆盖“落在字典自有命名空间里的字面量”，并显式列出三个 RPC 方法名（`auth.logout`/`requirement.get`/`requirement.list`）作为唯一的白名单——新的命名冲突会立刻被测试要求做出决定。变异验证：删掉 `inbox.questions` 后该断言失败。
+- **记录数字纠正**：字典 399 → 251（删 177、增 29，不是“删 147”）；测试数 209/209（不是 208/208）。“53 条”原为渲染消息数而非记录总数，已在 `test.md` 中改为按记录数（102）与消息数（19/21）分别写明。
+
 ## 3. 记录但本轮未修的观察
 
+- **记录 createdAt 由调用方提供**：新建需求记录保留主管传入的 `createdAt`（`requirement-tools.ts`），本轮保存的文件因此写着更早的时间（真实落盘时间是后来）。属工具设计选择，但模型可以借此写错日期。
 - **只读 Task 的工具集与 Plan 承诺不一致**：主管在只读调查 Plan 里写「允许只读运行 `node --test`」，但 `tool-sets.ts` 对 read Task 收掉了 bash，investigator 只能如实报告「无执行能力，not_run」。模型没有伪造输出（好），但产品侧应明确“只读 Task 不能取命令证据”，或在只读白名单里给出受限执行。
 - **首次渲染异常（未复现）**：某次“刚通过对话框打开项目后立即提交”的运行里，服务端已完成该输入（`session.messages.list` 有 17 条），浏览器 `sessionView.messages` 却为 0，且控制台有事件日志；手动 `applySnapshot` 立即恢复，之后两次同类复现均正常。当时页面刚在编辑 `web/` 文件后被 reload，怀疑是模块图与磁盘不一致；未定位，按未复现记录。
 - **无浏览器入口的服务端方法**：`project.rebind`、`session.cleanup` 只有服务端（`session.input.stop` 已由 D3 接上控制台）；`webui/index.html` 里没有它们的入口。
