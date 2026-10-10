@@ -50,5 +50,9 @@ export class I18n {
     for (const node of root.querySelectorAll('[data-i18n-aria]')) {
       node.setAttribute('aria-label', this.t(node.dataset.i18nAria));
     }
+    // Placeholders carry the same copy as labels; without this the markup's fallback text stays.
+    for (const node of root.querySelectorAll('[data-i18n-placeholder]')) {
+      node.setAttribute('placeholder', this.t(node.dataset.i18nPlaceholder));
+    }
   }
 }

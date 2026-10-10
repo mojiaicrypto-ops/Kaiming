@@ -82,7 +82,7 @@
 
         <div class="focus-card" id="focusCard">
           <div class="focus-top"><span data-i18n="focus.active">ACTIVE REQUIREMENT</span><code id="focusPercent"></code></div>
-          <div class="focus-title" id="focusTitle" data-i18n="focus.title"></div>
+          <div class="focus-title" id="focusTitle" data-i18n="focus.none">No active Task</div>
           <div class="progress" data-i18n-aria="aria.requirementProgress"><span>&#8203;</span></div>
           <div class="focus-meta"><span id="focusPhase" data-i18n="focus.phase"></span><span id="focusDecision" data-i18n="focus.decision"></span></div>
         </div>
@@ -97,15 +97,14 @@
               <div class="header-sub" id="sectionSubtitle" data-i18n="section.chiefSubtitle"></div>
             </div>
             <div class="header-controls">
-              <span class="live-pill"><span class="live-dot">&#8203;</span><span data-i18n="common.localDemo">Local demo</span></span>
+              <span class="live-pill"><span class="live-dot" id="liveDot">&#8203;</span><span id="liveLabel" data-i18n="header.live">Live</span></span>
             </div>
           </header>
 
           <div class="conversation-switcher" id="conversationSwitcher">
             <label class="sr-only" for="conversationSelect" data-i18n="conversation.selectLabel">Choose a conversation</label>
             <select class="conversation-select" id="conversationSelect">
-              <option value="project" data-i18n="conversation.project">Project discussion</option>
-              <option value="requirement" data-i18n="conversation.requirement">REQ-018 · Pi Runtime foundation</option>
+              <option value="" data-i18n="conversation.none">No conversation yet</option>
             </select>
             <span class="conversation-scope" id="conversationScope" data-i18n="conversation.projectScope">PROJECT SCOPE</span>
             <button class="conversation-new" id="newConversationButton" type="button" data-i18n="conversation.new">+ New conversation</button>
@@ -184,15 +183,15 @@
             <section class="view files-view" id="filesView" hidden data-i18n-aria="nav.files" aria-label="Project Files">
               <div class="file-browser">
                 <aside class="file-tree-panel" data-i18n-aria="aria.fileTree" aria-label="Project file tree">
-                  <div class="file-panel-head"><span data-i18n="nav.files">Project Files</span><span class="readonly-badge" data-i18n="files.mockReadOnly">Mock · Read only</span></div>
+                  <div class="file-panel-head"><span data-i18n="nav.files">Project Files</span><span class="readonly-badge" data-i18n="files.readOnlyBadge">Read only</span></div>
                   <div class="file-search-wrap">
                     <label class="sr-only" for="fileSearch" data-i18n="files.filterLabel">Filter project files</label>
                     <input class="file-search" id="fileSearch" type="search" data-i18n-placeholder="files.filterPlaceholder" placeholder="Filter files…" autocomplete="off">
                   </div>
                   <div class="file-tree" id="fileTree" role="tree" data-i18n-aria="aria.filesInProject" aria-label="Files in project">
-                    <p class="file-tree-empty" id="fileTreeEmpty" hidden data-i18n="files.noMatch">No matching files in this local dataset.</p>
+                    <p class="file-tree-empty" id="fileTreeEmpty" hidden data-i18n="files.noMatch">No matching files.</p>
                   </div>
-                  <div class="file-count"><span id="visibleFileCount"></span> <span data-i18n="files.countSuffix">sample files · 24 indexed in current Project</span></div>
+                  <div class="file-count"><span id="visibleFileCount"></span> <span data-i18n="files.countSuffix">files in this project</span></div>
                 </aside>
 
                 <section class="file-preview" data-i18n-aria="aria.filePreview" aria-label="Read-only file preview">
@@ -203,7 +202,7 @@
                   <div class="code-scroll" tabindex="0" data-i18n-aria="aria.fileContent" aria-label="File content">
                     <pre class="code-pre"><code id="fileCode"></code></pre>
                   </div>
-                  <footer class="file-preview-foot"><span data-i18n="files.readOnly">READ ONLY</span><span>UTF-8</span><span id="fileLineCount"></span><span data-i18n="files.localDataset">Local dataset</span></footer>
+                  <footer class="file-preview-foot"><span data-i18n="files.readOnly">READ ONLY</span><span>UTF-8</span><span id="fileLineCount"></span></footer>
                 </section>
               </div>
             </section>
@@ -212,7 +211,7 @@
           <form class="composer" id="composer">
             <div class="composer-box">
               <label for="messageInput" class="sr-only" data-i18n="composer.label">Message Chief</label>
-              <textarea id="messageInput" rows="2" data-i18n-placeholder="composer.placeholder" placeholder="Message Chief…  Use @task or /command"></textarea>
+              <textarea id="messageInput" rows="2" data-i18n-placeholder="composer.placeholder" placeholder="Message Chief…"></textarea>
               <div class="composer-tools">
                 <div class="composer-left">
                   <span class="mode-select" data-i18n="composer.mode">Workspace mode</span>
@@ -254,7 +253,6 @@
             </div>
             <div class="run-actions">
               <button class="console-button" id="errorFilter" type="button" aria-pressed="false" data-i18n="run.errors">ERRORS</button>
-              <button class="console-button" id="pauseRun" type="button" aria-pressed="false" data-i18n="run.pause">PAUSE</button>
               <button class="console-button danger" id="stopRun" type="button" data-i18n="run.stop">STOP</button>
             </div>
           </div>
@@ -293,7 +291,7 @@
     <div class="dialog-body">
       <label for="paletteInput" data-i18n="palette.label">Project, requirement, run, or document</label>
       <input id="paletteInput" autocomplete="off" data-i18n-placeholder="palette.placeholder" placeholder="Type to search…">
-      <p class="dialog-note" data-i18n="palette.note">Try “REQ-018”, “RUN-104”, or “Context Preview”.</p>
+      <p class="dialog-note" data-i18n="palette.note">Type to filter Requirements, Tasks, Files and Docs.</p>
     </div>
   </dialog>
 

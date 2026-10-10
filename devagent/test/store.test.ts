@@ -459,3 +459,45 @@ describe('restart classification', () => {
     });
   });
 });
+describe('startup scan and abandoned questions', () => {
+  it('stales the question of an interrupted input so nobody waits for an answer that is gone', () => {
+    const root = mkdtempSync(join(tmpdir(), 'devagent-scan-interaction-'));
+    const first = new Store({ path: join(root, 'state.db'), serverEpoch: 1 });
+    first.createProject({ id: 'p-1', realPath: root });
+    first.createSession({ id: 's-1', projectId: 'p-1', roleId: 'chief', cwd: root });
+    first.acceptInput({
+      inputId: 'i-1',
+      projectId: 'p-1',
+      sessionId: 's-1',
+      sourceKey: 's-1:i-1',
+      requestKey: 'i-1',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: 'go' }] },
+    });
+    const claimed = first.claimNextInput('s-1');
+    if (claimed.kind !== 'claimed') {
+      throw new Error('expected a claim');
+    }
+    first.createInteraction({
+      interactionId: 'q-1',
+      projectId: 'p-1',
+      sessionId: 's-1',
+      inputId: 'i-1',
+      method: 'confirm',
+      title: 'proceed?',
+      requestKey: 'q-1',
+    });
+    first.close();
+
+    // A new process: the run is gone, so the question can never reach its caller.
+    const restarted = new Store({ path: join(root, 'state.db'), serverEpoch: 2 });
+    try {
+      expect(restarted.scanStartup()).toEqual({ interrupted: 1 });
+      expect(restarted.getInteraction('q-1')?.state).toBe('stale');
+    } finally {
+      restarted.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

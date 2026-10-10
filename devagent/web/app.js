@@ -58,9 +58,13 @@ async function main() {
     streamFactory: (options) => new SessionStream({ rpc, ...options }),
   });
   const views = new Map();
+  // The shell is created after the router but the route callback only runs later: it repaints the
+  // shell so the header follows the visible view.
+  let shell = null;
   const router = new Router({
     onChange: (view) => {
       showView(view);
+      shell?.update();
     },
   });
 
@@ -76,6 +80,7 @@ async function main() {
     markdownIt,
     highlight: hljs.default ?? hljs,
     openProject: (path) => openProject(path),
+    openSession: (sessionId) => followSession(sessionId),
     newConversation: () => startNewConversation(),
   };
 
@@ -100,6 +105,11 @@ async function main() {
       setStatus('reconnecting');
       return;
     }
+    if (frame.type === 'pi' && frame.event?.type === 'blocked') {
+      // The run could not start (no usable model, unreadable project, unknown role): say why instead
+      // of leaving a queued input that looks like it might still run.
+      toast.error(`${frame.event.code ?? 'BLOCKED'}: ${frame.event.detail ?? ''}`);
+    }
     sessionView.applyFrame(frame);
     if (frame.type === 'pi') {
       logFrame(frame);
@@ -116,7 +126,7 @@ async function main() {
     views.get(router.current)?.update?.();
   });
 
-  const shell = createShell(context);
+  shell = createShell(context);
   shell.mount();
   currentContext = context;
   // A deliberate seam for the acceptance suite: assertions go through the page's own client, so a
@@ -166,15 +176,22 @@ async function main() {
 
   async function createSession() {
     const created = await rpc.call('session.create', { projectId: store.projectId });
+    // A new session belongs in the switcher's list; re-read instead of patching the cache.
+    await store.refreshSessions();
     return created.session.sessionId;
+  }
+
+  /** Follow an existing chief session; the shell's conversation switcher calls this. */
+  async function followSession(sessionId) {
+    await store.startSession(sessionId);
+    localStorage.setItem(SESSION_KEY, sessionId);
+    return sessionId;
   }
 
   /** Start a fresh chief session and follow it; the shell's new-conversation button calls this. */
   async function startNewConversation() {
     const sessionId = await createSession();
-    await store.startSession(sessionId);
-    localStorage.setItem(SESSION_KEY, sessionId);
-    return sessionId;
+    return followSession(sessionId);
   }
 
   /** The connection state is the shell's; it merges it with the session activity. */
@@ -191,7 +208,9 @@ async function main() {
     consoleLog = log;
     const event = frame.event ?? {};
     const tag = event.type?.startsWith('tool') === true ? 'tool' : event.type === 'message_end' ? 'pass' : 'agent';
-    log.line(tag, `${event.type ?? 'event'}${frame.inputId === undefined ? '' : ` · ${frame.inputId}`}`);
+    log.line(tag, `${event.type ?? 'event'}${frame.inputId === undefined ? '' : ` · ${frame.inputId}`}`, {
+      isError: event.type === 'error' || event.isError === true,
+    });
   }
 
   function showView(id) {

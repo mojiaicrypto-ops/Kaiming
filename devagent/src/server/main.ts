@@ -38,6 +38,8 @@ export interface StartOptions {
   readonly promptDir?: string;
   readonly staticDir?: string;
   readonly model?: { readonly providerId: string; readonly modelId: string };
+  /** This process's generation: a restart must be distinguishable from the run it inherits. */
+  readonly serverEpoch?: number;
   readonly now?: () => string;
 }
 
@@ -47,7 +49,15 @@ export function startWorkbench(options: StartOptions): Promise<{
   close(): Promise<void>;
 }> {
   mkdirSync(options.dataDir, { recursive: true });
-  const store = new Store({ path: join(options.dataDir, 'state.db'), serverEpoch: 1 });
+  // A new process is a new generation: the store classifies work left `processing` by an earlier
+  // generation as interrupted, and a reconnecting reader resyncs instead of trusting a stale epoch.
+  const serverEpoch = options.serverEpoch ?? Date.now() % 2_147_483_647;
+  const store = new Store({ path: join(options.dataDir, 'state.db'), serverEpoch });
+  // Work started by a process that is gone can never finish on its own: say so before serving.
+  const startup = store.scanStartup();
+  if (startup.interrupted > 0) {
+    process.stdout.write(`${startup.interrupted} input(s) from an earlier run are now interrupted and await verification\n`);
+  }
   const server: RuntimeDefaults = {
     model: options.model ?? { providerId: 'unset', modelId: 'unset' },
     agentDir: options.agentDir ?? options.dataDir,
@@ -82,7 +92,26 @@ export function startWorkbench(options: StartOptions): Promise<{
       hub.publish(sessionId, event, { inputId: meta.inputId, epoch: meta.epoch });
     },
   });
-  const worker = new WorkbenchWorker({ store, runner });
+  const worker = new WorkbenchWorker({
+    store,
+    runner,
+    // A run that cannot start must say why (P-06): the reason reaches whoever is looking, instead of
+    // leaving a queued input that looks like it might still run.
+    onOutcome: (sessionId, outcome) => {
+      if (
+        outcome.kind !== 'blocked_config' &&
+        outcome.kind !== 'blocked_role' &&
+        outcome.kind !== 'blocked_project'
+      ) {
+        return;
+      }
+      hub.publish(
+        sessionId,
+        { type: 'blocked', code: outcome.code, detail: outcome.detail },
+        { epoch: epoch(sessionId) },
+      );
+    },
+  });
   registerWriteMethods(router, {
     store,
     notify: () => worker.notify(),

@@ -1350,12 +1350,25 @@ export class Store {
    */
   scanStartup(): { interrupted: number } {
     return this.transaction(() => {
+      const timestamp = this.clock();
       const outcome = this.db
         .prepare(
           `UPDATE session_inputs SET status = 'interrupted', revision = revision + 1, updatedAt = ?
             WHERE status = 'processing' AND (serverEpoch IS NULL OR serverEpoch <> ?)`,
         )
-        .run(this.clock(), this.serverEpoch);
+        .run(timestamp, this.serverEpoch);
+      // A run that was waiting for an answer died with its process: the question can never reach its
+      // caller, so every question of an interrupted foreign run goes stale (M5). This is idempotent,
+      // so it also repairs questions left pending by an earlier start that did not classify them.
+      this.db
+        .prepare(
+          `UPDATE interactions SET state = 'stale', revision = revision + 1, updatedAt = ?
+            WHERE state = 'pending' AND inputId IN (
+              SELECT inputId FROM session_inputs
+               WHERE status = 'interrupted' AND (serverEpoch IS NULL OR serverEpoch <> ?)
+            )`,
+        )
+        .run(timestamp, this.serverEpoch);
       return { interrupted: Number(outcome.changes) };
     });
   }

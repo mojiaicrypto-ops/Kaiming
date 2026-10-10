@@ -1,11 +1,40 @@
 /**
  * Decision references (G2/S6): a Task or a requirement save cites the real user decision it acts on.
  *
- * The program checks the subject (this project), the source (really an input) and its state - it never
- * interprets what the user meant. Interactions arrive with the native question wiring (P4); until there
- * is a real interaction store, citing one is refused instead of silently accepted.
+ * The program checks the subject (this project), the source (really a user input, or an interaction the
+ * user answered in the browser) and its state - it never interprets what the user meant. A declined or
+ * cancelled answer is not a decision, so it is refused rather than silently accepted.
  */
-import type { Store } from '../store/store.ts';
+import type { Store, InteractionRow } from '../store/store.ts';
+
+/**
+ * The decision a resolved interaction carries: a confirmation must be an explicit yes; a choice or an
+ * answer must carry the user's own value. Cancelled or declined answers yield nothing.
+ */
+function interactionDecision(interaction: InteractionRow): string | undefined {
+  if (interaction.response === null) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(interaction.response);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed === 'object' && parsed !== null && (parsed as { cancelled?: unknown }).cancelled === true) {
+    return undefined;
+  }
+  if (interaction.method === 'confirm') {
+    const confirmed =
+      typeof parsed === 'boolean' ? parsed : (parsed as { confirmed?: unknown } | null)?.confirmed;
+    return confirmed === true ? 'confirmed' : undefined;
+  }
+  if (typeof parsed === 'string') {
+    return parsed === '' ? undefined : parsed;
+  }
+  const value = (parsed as { value?: unknown } | null)?.value;
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
 
 export function resolveAuthorizationRefs(
   store: Store,
@@ -40,7 +69,20 @@ export function resolveAuthorizationRefs(
       continue;
     }
     if (typeof interactionId === 'string') {
-      return { ok: false, message: 'interaction decisions are not available yet' };
+      // A question the user answered in the browser is as real a decision as a submitted input: the
+      // interaction store holds its state and the answer's own shape, and both are checked here.
+      const interaction = store.getInteraction(interactionId);
+      if (interaction === undefined || interaction.projectId !== projectId) {
+        return { ok: false, message: `no interaction ${interactionId} in this project` };
+      }
+      if (interaction.state !== 'resolved') {
+        return { ok: false, message: `interaction ${interactionId} is ${interaction.state}, not a decision` };
+      }
+      if (interactionDecision(interaction) === undefined) {
+        return { ok: false, message: `interaction ${interactionId} carries no positive decision` };
+      }
+      refs.push(`interaction:${interactionId}`);
+      continue;
     }
     return { ok: false, message: 'authorizationRef must be {inputId} or {interactionId}' };
   }

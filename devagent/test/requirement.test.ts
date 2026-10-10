@@ -94,6 +94,88 @@ updatedAt: "2026-10-04T00:00:00Z"
 
 ${IMPLEMENTATION_SECTIONS.map((section) => `## ${section}\n内容。\n`).join('\n')}`;
 
+describe('requirement save decisions', () => {
+  const saveWith = (f: Fixture, authorizationRef: unknown) =>
+    f.tool.execute('c1', {
+      op: 'save',
+      requirementId: 'req-reset',
+      expectedVersion: null,
+      markdown: proposal(),
+      authorizationRef,
+    });
+
+  /** Ask a question and return its current revision, so a resolution can name the real version. */
+  const ask = (f: Fixture, method: 'confirm' | 'select' | 'input', options?: readonly string[]): number => {
+    const created = f.store.createInteraction({
+      interactionId: 'q-1',
+      projectId: 'p-1',
+      sessionId: 'c-1',
+      method,
+      title: 'save?',
+      requestKey: 'q-1',
+      ...(options === undefined ? {} : { options }),
+    });
+    return created.revision;
+  };
+
+  it('accepts a confirmation the user answered in the browser', async () => {
+    const f = fixture();
+    const revision = ask(f, 'confirm');
+    f.store.resolveInteraction({ interactionId: 'q-1', expectedRevision: revision, response: { confirmed: true }, answeredBy: 'user', requestKey: 'q-1' });
+
+    const saved = await saveWith(f, { interactionId: 'q-1' });
+    expect(saved.isError).toBe(false);
+    // It really reached the file and reads back through the tool.
+    const read = await f.tool.execute('c1', { op: 'get', requirementId: 'req-reset' });
+    expect(read.isError).toBe(false);
+    expect(existsSync(requirementPath(f.cwd, 'req-reset'))).toBe(true);
+  });
+
+  it('refuses a declined confirmation, a pending question, a foreign one and a bare id', async () => {
+    const declined = fixture();
+    const declinedRevision = ask(declined, 'confirm');
+    declined.store.resolveInteraction({ interactionId: 'q-1', expectedRevision: declinedRevision, response: { confirmed: false }, answeredBy: 'user', requestKey: 'q-1' });
+    expect(await saveWith(declined, { interactionId: 'q-1' })).toMatchObject({ isError: true });
+
+    const pending = fixture();
+    ask(pending, 'confirm');
+    expect(await saveWith(pending, { interactionId: 'q-1' })).toMatchObject({ isError: true });
+
+    const foreign = fixture();
+    foreign.store.createProject({ id: 'p-2', realPath: join(foreign.cwd, 'other') });
+    const foreignRevision = ask(foreign, 'confirm');
+    foreign.store.resolveInteraction({ interactionId: 'q-1', expectedRevision: foreignRevision, response: true, answeredBy: 'user', requestKey: 'q-1' });
+    const context = { store: foreign.store, projectId: 'p-2', cwd: foreign.cwd, roleId: 'chief' };
+    const tool = createRequirementTool((): RequirementToolContext => context);
+    const refused = await tool.execute('c1', {
+      op: 'save',
+      requirementId: 'req-reset',
+      expectedVersion: null,
+      markdown: proposal(),
+      authorizationRef: { interactionId: 'q-1' },
+    });
+    expect(refused).toMatchObject({ isError: true });
+
+    const unknown = fixture();
+    expect(await saveWith(unknown, { interactionId: 'q-missing' })).toMatchObject({ isError: true });
+  });
+
+  it('accepts a chosen option and a typed answer, and still accepts a user input decision', async () => {
+    const chosen = fixture();
+    const chosenRevision = ask(chosen, 'select', ['save', 'later']);
+    chosen.store.resolveInteraction({ interactionId: 'q-1', expectedRevision: chosenRevision, response: { value: 'save' }, answeredBy: 'user', requestKey: 'q-1' });
+    expect(await saveWith(chosen, { interactionId: 'q-1' })).toMatchObject({ isError: false });
+
+    const typed = fixture();
+    const typedRevision = ask(typed, 'input');
+    typed.store.resolveInteraction({ interactionId: 'q-1', expectedRevision: typedRevision, response: 'save it', answeredBy: 'user', requestKey: 'q-1' });
+    expect(await saveWith(typed, { interactionId: 'q-1' })).toMatchObject({ isError: false });
+
+    const byInput = fixture();
+    expect(await saveWith(byInput, { inputId: 'i-dec' })).toMatchObject({ isError: false });
+  });
+});
+
 describe('requirement records', () => {
   it('saves a new proposal, reports its version and reads it back', async () => {
     const f = fixture();

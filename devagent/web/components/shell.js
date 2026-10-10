@@ -7,7 +7,8 @@
 import { el, qs, qsa, replace } from '../core/dom.js';
 
 export function createShell(context) {
-  const { store, sessionView, i18n, router, rpc, dialog, toast, openProject, newConversation } = context;
+  const { store, sessionView, i18n, router, rpc, dialog, toast, openProject, openSession, newConversation } =
+    context;
 
   const workspace = qs('#workspace');
   const runtime = qs('.runtime');
@@ -18,7 +19,35 @@ export function createShell(context) {
   const projectSwitcher = qs('#projectSwitcher');
   const languageSelect = qs('#languageSelect');
   const liveDockButton = qs('#liveDockButton');
+  const liveDot = qs('#liveDot');
+  const liveLabel = qs('#liveLabel');
+  const sectionEyebrow = qs('#sectionEyebrow');
+  const sectionTitle = qs('#sectionTitle');
+  const sectionSubtitle = qs('#sectionSubtitle');
+  const conversationSwitcher = qs('#conversationSwitcher');
+  const conversationSelect = qs('#conversationSelect');
+  const focusCard = qs('#focusCard');
+  const focusTitle = qs('#focusTitle');
+  const focusPercent = qs('#focusPercent');
+  const focusPhase = qs('#focusPhase');
+  const focusDecision = qs('#focusDecision');
   const consoleTabs = qsa('.console-tab');
+  const errorFilter = qs('#errorFilter');
+  const stopRun = qs('#stopRun');
+
+  /** The phase order the server reports; used to show a real position, never a made-up ratio. */
+  const PHASES = ['clarify', 'analyze', 'design', 'plan', 'develop', 'review', 'test', 'settle'];
+  /** One header per view: the same eyebrow/title/subtitle the view's own heading carries. */
+  const HEADERS = {
+    chief: ['section.chiefEyebrow', 'nav.chief', 'section.chiefSubtitle'],
+    requirements: ['view.requirements.eyebrow', 'view.requirements.title', 'view.requirements.subtitle'],
+    runs: ['view.runs.eyebrow', 'view.runs.title', 'view.runs.subtitle'],
+    files: ['section.filesEyebrow', 'nav.files', 'section.filesSubtitle'],
+    docs: ['view.docs.eyebrow', 'view.docs.title', 'view.docs.subtitle'],
+    agents: ['view.agents.eyebrow', 'view.agents.title', 'view.agents.subtitle'],
+    inbox: ['view.inbox.eyebrow', 'view.inbox.title', 'view.inbox.subtitle'],
+    settings: ['view.settings.eyebrow', 'view.settings.title', 'view.settings.subtitle'],
+  };
   const regions = {
     live: qs('#terminalLog'),
     events: qs('#terminalEvents'),
@@ -29,6 +58,8 @@ export function createShell(context) {
   let project = null;
   let consoleMode = 'live';
   let mounted = false;
+  /** The session ids the switcher was built from, so rebuilding does not reset the user's choice. */
+  let conversationsSignature = '';
   const unsubscribes = [];
 
   const t = (key) => i18n.t(key);
@@ -94,6 +125,95 @@ export function createShell(context) {
     paintProject();
   }
 
+  /** The conversation header follows the visible view: what a reader sees must match where they are. */
+  function paintHeader() {
+    const [eyebrow, title, subtitle] = HEADERS[router.current] ?? HEADERS.chief;
+    if (sectionEyebrow !== null) {
+      sectionEyebrow.textContent = t(eyebrow);
+    }
+    if (sectionTitle !== null) {
+      sectionTitle.textContent = t(title);
+    }
+    if (sectionSubtitle !== null) {
+      sectionSubtitle.textContent = t(subtitle);
+    }
+  }
+
+  /** The live pill states the connection and the session activity - never a fixed demo label. */
+  function paintLive() {
+    const state = displayState();
+    if (liveLabel !== null) {
+      liveLabel.textContent = connection === 'connected' ? t('header.live') : t(`status.${connection}`);
+    }
+    if (liveDot !== null) {
+      liveDot.dataset.state = state;
+    }
+  }
+
+  /**
+   * The conversation switcher lists the project's real sessions; changing it follows that session.
+   * With no project (or no session yet) it hides instead of showing an invented conversation.
+   */
+  function paintConversations() {
+    if (conversationSwitcher === null || conversationSelect === null) {
+      return;
+    }
+    if (store.projectId === null || store.sessions.length === 0) {
+      conversationSwitcher.hidden = true;
+      return;
+    }
+    conversationSwitcher.hidden = false;
+    const signature = store.sessions.map((session) => session.sessionId).join(',');
+    if (signature !== conversationsSignature) {
+      conversationsSignature = signature;
+      conversationSelect.textContent = '';
+      for (const session of store.sessions) {
+        conversationSelect.append(
+          el('option', {
+            value: session.sessionId,
+            text: `${t(`agents.role.${session.roleId}`)} · ${session.sessionId.slice(-6)}`,
+          }),
+        );
+      }
+    }
+    conversationSelect.value = store.sessionId ?? '';
+  }
+
+  /** The focus card shows the one Task that is still open, or an explicit empty state. */
+  function paintFocus() {
+    if (focusCard === null) {
+      return;
+    }
+    const task =
+      store.tasks.find((entry) => entry.status === 'active' || entry.status === 'waiting') ??
+      store.tasks.find((entry) => entry.status === 'paused' || entry.status === 'pausing') ??
+      null;
+    if (task === null) {
+      focusCard.hidden = true;
+      return;
+    }
+    focusCard.hidden = false;
+    const index = Math.max(0, PHASES.indexOf(task.phase));
+    if (focusTitle !== null) {
+      focusTitle.textContent = task.goal ?? task.taskId;
+    }
+    if (focusPhase !== null) {
+      // The phase is the server's own word for where the Task stands, translated for display.
+      focusPhase.textContent = t(`phase.${task.phase}`);
+    }
+    if (focusDecision !== null) {
+      // Only the Task's own recorded reason or next step; without one the card shows a dash.
+      focusDecision.textContent = task.blockReason ?? task.nextStep ?? t('focus.decision');
+    }
+    if (focusPercent !== null) {
+      focusPercent.textContent = `${index + 1} / ${PHASES.length}`;
+    }
+    const bar = focusCard.querySelector('.progress > span');
+    if (bar !== null) {
+      bar.style.width = `${Math.round(((index + 1) / PHASES.length) * 100)}%`;
+    }
+  }
+
   function setRuntimeState(state, focusSelector) {
     if (workspace !== null) {
       workspace.dataset.runtime = state;
@@ -144,6 +264,55 @@ export function createShell(context) {
     }
   }
 
+  /** The console shows only lines the run actually produced; ERRORS toggles a real filter. */
+  function toggleErrorsOnly() {
+    if (errorFilter === null || regions.live === null) {
+      return;
+    }
+    const next = errorFilter.getAttribute('aria-pressed') !== 'true';
+    errorFilter.setAttribute('aria-pressed', String(next));
+    let errors = 0;
+    for (const line of regions.live.querySelectorAll('.log-line')) {
+      const isError = line.classList.contains('is-error');
+      if (isError) {
+        errors += 1;
+      }
+      line.hidden = next && !isError;
+    }
+    toast.show(next ? tr('toast.errorsFiltered', { count: errors }) : t('toast.errorsShown'));
+  }
+
+  /**
+   * Stop the work this conversation is actually running: the server's own snapshot names the input,
+   * and the stop is recorded by the server (the toast never claims the work already stopped).
+   */
+  async function stopCurrentInput() {
+    if (store.projectId === null || store.sessionId === null) {
+      toast.show(t('toast.nothingRunning'));
+      return;
+    }
+    try {
+      const prepared = await rpc.call('session.stream.prepare', {
+        projectId: store.projectId,
+        sessionId: store.sessionId,
+      });
+      const inputs = Array.isArray(prepared.snapshot?.inputs) ? prepared.snapshot.inputs : [];
+      const running = [...inputs].reverse().find((entry) => entry.status === 'processing' || entry.status === 'queued');
+      if (running === undefined) {
+        toast.show(t('toast.nothingRunning'));
+        return;
+      }
+      await rpc.call('session.input.stop', {
+        projectId: store.projectId,
+        sessionId: store.sessionId,
+        inputId: running.inputId,
+      });
+      toast.show(t('toast.stopRequested'));
+    } catch (error) {
+      toast.error(error?.message ?? String(error));
+    }
+  }
+
   function openProjectDialog() {
     projectSwitcher?.setAttribute('aria-expanded', 'true');
     void dialog
@@ -167,6 +336,12 @@ export function createShell(context) {
       languageSelect.addEventListener('change', (event) => i18n.setLanguage(event.currentTarget.value));
     }
     projectSwitcher?.addEventListener('click', openProjectDialog);
+    conversationSelect?.addEventListener('change', (event) => {
+      const sessionId = event.currentTarget.value;
+      if (typeof sessionId === 'string' && sessionId !== '') {
+        void openSession?.(sessionId);
+      }
+    });
     qs('#paletteButton')?.addEventListener('click', () => router.navigate('settings'));
     qs('#newConversationButton')?.addEventListener('click', () => {
       void newConversation?.();
@@ -194,6 +369,8 @@ export function createShell(context) {
       toast.show(t(open ? 'toast.liveCompact' : 'toast.liveOpened'));
     });
 
+    errorFilter?.addEventListener('click', toggleErrorsOnly);
+    stopRun?.addEventListener('click', () => void stopCurrentInput());
     for (const tab of consoleTabs) {
       tab.addEventListener('click', () => selectConsoleTab(tab));
     }
@@ -228,13 +405,29 @@ export function createShell(context) {
     mounted = true;
     wire();
     unsubscribes.push(store.subscribe('project', () => void loadProject()));
-    unsubscribes.push(store.subscribe('task', () => paintStatus()));
-    unsubscribes.push(sessionView.subscribe(() => paintStatus()));
+    unsubscribes.push(
+      store.subscribe('task', () => {
+        paintStatus();
+        paintFocus();
+      }),
+    );
+    unsubscribes.push(
+      store.subscribe('session', () => paintConversations()),
+    );
+    unsubscribes.push(sessionView.subscribe(() => {
+      paintStatus();
+      paintLive();
+    }));
     unsubscribes.push(
       i18n.onLanguage(() => {
         paintStatus();
         paintProject();
         paintConsoleRegions();
+        paintHeader();
+        paintLive();
+        conversationsSignature = '';
+        paintConversations();
+        paintFocus();
         setRuntimeState(workspace?.dataset.runtime ?? 'open');
       }),
     );
@@ -242,6 +435,10 @@ export function createShell(context) {
     selectConsoleTab(qs('#consoleTabLive') ?? consoleTabs[0]);
     paintStatus();
     paintProject();
+    paintHeader();
+    paintLive();
+    paintConversations();
+    paintFocus();
     void loadProject();
   }
 
@@ -252,6 +449,10 @@ export function createShell(context) {
     update() {
       paintStatus();
       paintProject();
+      paintHeader();
+      paintLive();
+      paintConversations();
+      paintFocus();
     },
     destroy() {
       for (const unsubscribe of unsubscribes) {
