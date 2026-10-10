@@ -46,7 +46,7 @@ verdict: passed
 closed:
   - "阻断项（AC-01 B/N）真关闭：库里 projects 三行（A/B/N 各自 realPath 唯一），B/N 各有自己的会话与 cwd，project.open 的 15 条回执按 result 字段分别指向三个 projectId；B/N 目录没有 .dev，tasks 只有 A 的任务"
   - "阻塞通知不再重复：main.ts 只在签名变化时发布，非阻塞结果清除签名；帧形状与修复前一致，客户端分发不受影响"
-  - "外壳残留关闭：run.topLive='Live'、aria 文案无假数量、阶段条用 t('phase.<id>')（8 个 phase 键两语言齐全）"
+  - "外壳残留关闭（**有二轮后的补正**）：run.topLive='Live'、阶段条用 t('phase.<id>')；但当时只改了字典值，静态标记里的 aria-label 仍是 'Live Dock, 1 running. Compact'，且 I18n.apply 只在切语言时执行——真正可见/可读的文案没变。二轮之后补正：index.html 的静态文案与 aria-label 改为无数字，并在启动时执行一次 i18n.apply(document)；浏览器验收新增断言（dock 的 aria-label 与可见文本都不含数字）"
   - "字典用例绕过关闭：解析断言覆盖字典自有命名空间里的字面量；变异复现删除 inbox.questions 即失败；键数 251/251 对称"
 record_accuracy_nits:
   - "implementation.md 里 B 的 projectId 少写一位（已改 p-617c79822375）"

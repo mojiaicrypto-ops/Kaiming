@@ -190,6 +190,10 @@ test('a business refusal does not break writing, and no view shows a raw transla
     await composer.press('Enter');
     await expect(page.locator('#projectMessages .message.user')).toHaveCount(1, { timeout: 15_000 });
 
+    // No shell copy claims a number nothing updates (the dock label was a static "Live · 1").
+    await expect(page.locator('#liveDockButton')).not.toHaveAttribute('aria-label', /\d/);
+    await expect(page.locator('#liveDockButton span').last()).not.toHaveText(/\d/);
+
     // No visible view shows a raw key (e.g. 'inbox.empty' or 'settings.noProject') instead of copy.
     for (const view of ['inbox', 'agents', 'settings', 'requirements', 'runs', 'docs']) {
       await page.locator(`.nav-item[data-view="${view}"]`).click();

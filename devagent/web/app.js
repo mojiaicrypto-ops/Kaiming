@@ -31,6 +31,9 @@ const hljs = await import('highlight.js/core');
 
 async function main() {
   const i18n = await I18n.load('/i18n.json');
+  // Apply the stored language to the shipped markup before anything renders: without this the static
+  // copy (and its aria labels) keeps whatever the HTML happened to say.
+  i18n.apply(document);
   const toast = createToast();
   const dialog = createDialog();
   // One login dialog at a time: several 401s (a boot check plus a stream resync) must not race to
