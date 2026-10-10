@@ -295,42 +295,7 @@
     </div>
   </dialog>
 
-  <dialog id="profileDialog" aria-labelledby="profileDialogTitle">
-    <div class="dialog-head"><strong id="profileDialogTitle" data-i18n="profile.editTitle">Edit role profile</strong><button class="icon-button" type="button" data-close-dialog data-i18n-aria="common.close" aria-label="Close">×</button></div>
-    <form id="profileForm">
-      <div class="dialog-body">
-        <label for="profileRole" data-i18n="profile.role">Fixed role</label>
-        <input id="profileRole" readonly>
-        <div class="field-row">
-          <div><label for="profileProvider" data-i18n="profile.provider">Provider</label><select id="profileProvider"></select></div>
-          <div><label for="profileModel" data-i18n="profile.model">Model</label><select id="profileModel"></select></div>
-        </div>
-        <label for="profileReasoning" data-i18n="profile.reasoning">Reasoning</label>
-        <select id="profileReasoning"><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select>
-        <p class="dialog-note" data-i18n="profile.note">This Project override affects future Runs only. Role duties, gates, permission ceiling, and the active Runtime Snapshot do not change.</p>
-      </div>
-      <div class="dialog-actions"><button class="quiet-button" id="resetProfileButton" type="button" data-i18n="profile.reset">Use global default</button><button class="new-task" type="submit" data-i18n="common.save">Save override</button></div>
-    </form>
-  </dialog>
 
-  <dialog id="providerDialog" aria-labelledby="providerDialogTitle">
-    <div class="dialog-head"><strong id="providerDialogTitle" data-i18n="provider.editTitle">Configure provider</strong><button class="icon-button" type="button" data-close-dialog data-i18n-aria="common.close" aria-label="Close">×</button></div>
-    <form id="providerForm">
-      <div class="dialog-body">
-        <label for="providerName" data-i18n="provider.name">Provider connection</label>
-        <input id="providerName" readonly>
-        <label for="providerType" data-i18n="provider.type">Provider type</label>
-        <select id="providerType"><option value="OpenAI">OpenAI</option><option value="OpenAI compatible">OpenAI compatible</option><option value="Anthropic">Anthropic</option><option value="Google AI">Google AI</option><option value="Custom HTTP">Custom HTTP</option></select>
-        <label for="providerBaseUrl" data-i18n="provider.baseUrl">API Base URL</label>
-        <input id="providerBaseUrl" autocomplete="off">
-        <label for="providerSecretRef" data-i18n="provider.secretRef">Secret Reference</label>
-        <input id="providerSecretRef" autocomplete="off">
-        <label class="dialog-check" for="providerEnabled"><input id="providerEnabled" type="checkbox"><span data-i18n="provider.enabled">Enabled for new Runs</span></label>
-        <p class="dialog-note" data-i18n="provider.note">Only the reference is stored. Secret values remain in AgentDev Secret Store and are never echoed here.</p>
-      </div>
-      <div class="dialog-actions"><button class="quiet-button" type="button" data-close-dialog data-i18n="common.cancel">Cancel</button><button class="new-task" type="submit" data-i18n="common.saveProvider">Save provider</button></div>
-    </form>
-  </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 </body>
