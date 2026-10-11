@@ -44,6 +44,31 @@ blocking:
 - 证据：`test/tool-guard.test.ts` 5 项；`test/workbench-entry.test.ts` 的真实运行用例（模型读凭证文件被拒、转录不含密钥）。
 - 明确不承诺的部分：命令执行没有沙箱，刻意绕过的 shell 仍可读本机文件；需要更强保证时按沙箱单独立项。
 
-## Round 2 · 增量复核 · 待发起
+## Round 2 · P7Delta · result: failed（2 项新阻断，均已修）
 
-（复核者应验：B2 的 reload 语义、B1 的守卫是否真的拦住文件工具与显然的 shell 命令、改写后的文档是否与代码一致、以及新测试是否非空转。）
+```yaml
+closed:
+  - "B2 关闭：保存后 reload 经 runner 用的同一 factory；config.save await 后才回；config.test 复用该运行时（复核者引 pi-runtime.ts:81-84 / main.ts:70,73-85 / runner.ts:146 / methods.ts:197 / rpc.ts:140）"
+new_blocking:
+  - id: B1-a
+    verdict: confirmed
+    claim: "守卫只认绝对路径：@ 前缀、file://、~/ 这些 Pi 自己会归一化的写法直接绕过，端到端复现 STUB KEY IN TRANSCRIPT: true"
+    fix: "normalize() 先镜像 Pi 的输入归一化（去 @、展开 ~/、file://→路径），再 realpath；测试补 @/file:// 两形与一个端到端用例（脚本模型用 @ 形式读凭证文件）"
+  - id: B1-b
+    verdict: confirmed
+    claim: "realpath 失败（目标还不在）时退化为字符串比较 → <project>/plink/extensions/evil.ts（plink 指向数据目录）被放行，Pi 的 write 真在私有目录里建了文件；而 Pi 会自动加载 <agentDir>/extensions/*"
+    fix: "resolveThroughAncestors()：把最深的已存在祖先 realpath 后再接回剩余部分；测试补 dangling-symlink 写用例"
+new_non_blocking:
+  - id: B2-narrow
+    claim: "config.test 仍用自己新建的 factory → 手工编辑 models.json（README §3 的首选流程）时 config.test 说可用、运行仍用旧缓存"
+    fix: "core methods 支持注入 probeModel；main.ts 注入 runner 的同一 factory，config.test 先 reload 再探"
+  - id: B1-c
+    claim: "相对的 AGENTDEV_DATA_DIR 会让守卫失效（私有目录按 session cwd 解析，永远匹配不到）"
+    fix: "入口 resolve(process.cwd(), env ?? '.agentdev-data')；privateDirs 在入口与守卫内都按服务器 cwd 解析成绝对路径"
+```
+
+修复后证据：`tsc 0`；`npm test 227/227（22 文件，含 tool-guard 7 项、entry 2 项、provider-config 10 项）`；`playwright 8 passed`（commit `ab4acb2`）。
+
+## Round 3 · 增量复核 · 待发起
+
+（应验：B1-a/B1-b 的绕过是否真关闭、B2-narrow 与 B1-c 是否关闭、以及新增的归一化/祖先解析是否引入误杀。）
