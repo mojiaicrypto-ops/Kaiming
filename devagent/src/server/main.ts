@@ -67,7 +67,12 @@ export function startWorkbench(options: StartOptions): Promise<{
   const auth = new AuthService({ accessPassword: options.accessPassword });
   const router = new RpcRouter();
   // The factory is the one the runner uses, so a saved provider is visible to the next claimed input.
-  registerCoreMethods(router, { store, server, reloadRuntime: () => factory.reload() });
+  registerCoreMethods(router, {
+    store,
+    server,
+    reloadRuntime: () => factory.reload(),
+    probeModel: (selection) => factory.probe(selection),
+  });
   registerReadMethods(router, { store });
 
   // Live events (M4): the runner publishes what Pi reports, the write surface publishes invalidations.
@@ -90,7 +95,9 @@ export function startWorkbench(options: StartOptions): Promise<{
     interactions,
     // Overrides are read where they are saved: the same role/project resolution the config surface
     // reports is the one a claimed input actually runs with (R5).
-    privateDirs: [...new Set([options.dataDir, server.agentDir])],
+    // Absolute, because the guard compares real paths: a relative data dir would otherwise be
+    // resolved against each session's project and guard nothing.
+    privateDirs: [...new Set([resolve(options.dataDir), resolve(server.agentDir)])],
     resolveConfig: (roleId, projectId) =>
       resolveStoredConfig({
         roleId,
@@ -177,7 +184,8 @@ if (entry !== undefined && resolve(entry) === resolve(fileURLToPath(import.meta.
     process.stderr.write('AGENTDEV_ACCESS_PASSWORD is required to start the workbench\n');
     process.exit(2);
   }
-  const dataDir = process.env['AGENTDEV_DATA_DIR'] ?? resolve(process.cwd(), '.agentdev-data');
+  // Resolved here, so a relative value cannot reach the runtime as one (see the guard's privateDirs).
+  const dataDir = resolve(process.cwd(), process.env['AGENTDEV_DATA_DIR'] ?? '.agentdev-data');
   const model = {
     providerId: process.env['AGENTDEV_MODEL_PROVIDER'] ?? 'unset',
     modelId: process.env['AGENTDEV_MODEL_ID'] ?? 'unset',

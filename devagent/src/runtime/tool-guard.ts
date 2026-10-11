@@ -11,7 +11,9 @@
  * sandbox, which is a separate piece of work; the honest statement of the boundary is in the README.
  */
 import { realpathSync } from 'node:fs';
-import { isAbsolute, resolve, sep } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { ExtensionAPI, ExtensionFactory, ToolCallEvent } from '@earendil-works/pi-coding-agent';
 
 export interface GuardInput {
@@ -35,14 +37,54 @@ const PATH_ARGUMENT: Record<string, string> = {
 /** The shell tools whose command text is checked for a literal reference. */
 const COMMAND_TOOLS = new Set(['bash', 'powershell']);
 
-function normalize(candidate: string, cwd: string): string {
-  const absolute = isAbsolute(candidate) ? candidate : resolve(cwd, candidate);
-  try {
-    // A real path resolves symlinks, so a link inside the project cannot point the tool outside it.
-    return realpathSync(absolute);
-  } catch {
-    return absolute;
+/**
+ * The same shapes Pi's own file tools accept before they resolve a path: a leading `@`, a `~/` home
+ * prefix and a `file://` URL. A guard that only understood absolute paths would let every other form
+ * through, which is exactly the hole this closes.
+ */
+function normalizeInput(raw: string, cwd: string): string {
+  let candidate = raw.trim();
+  if (candidate.startsWith('file://')) {
+    try {
+      candidate = fileURLToPath(candidate);
+    } catch {
+      // Not a usable file URL: fall through and treat it as a literal path.
+    }
   }
+  if (candidate.startsWith('@')) {
+    candidate = candidate.slice(1);
+  }
+  if (candidate === '~' || candidate.startsWith('~/')) {
+    candidate = join(homedir(), candidate.slice(1));
+  }
+  return isAbsolute(candidate) ? candidate : resolve(cwd, candidate);
+}
+
+/**
+ * Resolve the deepest part of the path that exists and re-append the rest: a path that does not exist
+ * yet (a file about to be written, a directory about to be created) still gets compared through any
+ * symlinked parent instead of falling back to a plain string comparison.
+ */
+function resolveThroughAncestors(candidate: string): string {
+  let current = candidate;
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync(current);
+      return rest.length === 0 ? real : join(real, ...rest.reverse());
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) {
+        return candidate;
+      }
+      rest.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
+function normalize(candidate: string, cwd: string): string {
+  return resolveThroughAncestors(normalizeInput(candidate, cwd));
 }
 
 function inside(target: string, root: string): boolean {
@@ -55,7 +97,11 @@ function inside(target: string, root: string): boolean {
  * tested without a running session.
  */
 export function privatePathBlockReason(input: GuardInput): string | undefined {
-  const privateDirs = input.privateDirs.filter((dir) => dir !== '').map((dir) => normalize(dir, input.cwd));
+  // The private dirs belong to the server, not to the session: resolved against the server's own
+  // working directory, never against the project (which would make a relative value meaningless).
+  const privateDirs = input.privateDirs
+    .filter((dir) => dir !== '')
+    .map((dir) => normalize(dir, process.cwd()));
   if (privateDirs.length === 0) {
     return undefined;
   }

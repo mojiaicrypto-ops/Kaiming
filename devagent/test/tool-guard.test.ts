@@ -64,6 +64,30 @@ describe('private path guard', () => {
     expect(privatePathBlockReason({ ...base, toolName: 'bash', args: { command: 'node --test' } })).toBeUndefined();
   });
 
+  it('sees through the path forms Pi itself accepts', () => {
+    const { project, data, models } = layout();
+    const base = { cwd: project, privateDirs: [data] };
+    // The same shapes the built-in tools normalize before resolving: a leading @, a file:// URL.
+    expect(privatePathBlockReason({ ...base, toolName: 'read', args: { path: `@${models}` } })).toMatch(/private storage/);
+    expect(privatePathBlockReason({ ...base, toolName: 'read', args: { path: `file://${models}` } })).toMatch(
+      /private storage/,
+    );
+    expect(privatePathBlockReason({ ...base, toolName: 'read', args: { path: `@../data/models.json` } })).toMatch(
+      /private storage/,
+    );
+  });
+
+  it('sees through a symlinked directory for a path that does not exist yet', () => {
+    const { project, data } = layout();
+    // A project-visible link into the private storage: writing a new file below it must still be caught.
+    symlinkSync(data, join(project, 'linked'));
+    const base = { cwd: project, privateDirs: [data] };
+    expect(
+      privatePathBlockReason({ ...base, toolName: 'write', args: { path: 'linked/new/credential.json', content: 'x' } }),
+    ).toMatch(/private storage/);
+    expect(privatePathBlockReason({ ...base, toolName: 'write', args: { path: 'new/credential.json' } })).toBeUndefined();
+  });
+
   it('does not follow a symlink from the project into the private storage', () => {
     const { project, data, models } = layout();
     symlinkSync(models, join(project, 'shortcut.json'));

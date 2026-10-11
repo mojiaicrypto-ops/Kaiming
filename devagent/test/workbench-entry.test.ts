@@ -127,8 +127,10 @@ describe('the private path guard in a real run', () => {
     const replies: StubReply[] = [];
     const model = await startStubModelServer(replies);
     const env = await createStubEnv(model.baseUrl);
+    // The `@`-prefixed form: Pi's own read tool strips it before resolving, so a guard that only
+    // understood absolute paths would let this through (the verification proved exactly that).
     replies.push(
-      { kind: 'tool_calls', calls: [{ name: 'read', arguments: JSON.stringify({ path: modelsPathFor(env.agentDir) }) }] },
+      { kind: 'tool_calls', calls: [{ name: 'read', arguments: JSON.stringify({ path: `@${modelsPathFor(env.agentDir)}` }) }] },
       { kind: 'text', text: '好的。' },
     );
     const dataDir = mkdtempSync(join(tmpdir(), 'devagent-guard-run-'));

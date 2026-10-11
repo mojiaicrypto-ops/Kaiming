@@ -20,6 +20,14 @@ export interface CoreMethodsOptions {
    * the caller just saved instead of waiting for a restart (R5).
    */
   readonly reloadRuntime?: () => Promise<void>;
+  /**
+   * The runner's own runtime probe: `config.test` must describe the state a run will see, not a
+   * second opinion from a runtime only the probe ever built.
+   */
+  readonly probeModel?: (selection: { providerId: string; modelId: string }) => Promise<{
+    available: boolean;
+    detail: string;
+  }>;
 }
 
 /**
@@ -88,9 +96,16 @@ export function registerCoreMethods(router: RpcRouter, options: CoreMethodsOptio
         ...(options.roleOverrides !== undefined ? { roleOverrides: options.roleOverrides } : {}),
       });
       const selection = explicit ?? effective.selection;
-      const factory = new PiRuntimeFactory(options.server);
-      await factory.reload().catch(() => undefined);
-      const probed = await factory.probe(selection);
+      await options.reloadRuntime?.().catch(() => undefined);
+      const probed =
+        options.probeModel === undefined
+          ? await (async () => {
+              // No shared runtime was injected (tests assemble their own): build one for this probe.
+              const factory = new PiRuntimeFactory(options.server);
+              await factory.reload().catch(() => undefined);
+              return factory.probe(selection);
+            })()
+          : await options.probeModel(selection);
       return {
         roleId,
         ...(projectId !== undefined ? { projectId } : {}),
