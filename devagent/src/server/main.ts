@@ -90,6 +90,7 @@ export function startWorkbench(options: StartOptions): Promise<{
     interactions,
     // Overrides are read where they are saved: the same role/project resolution the config surface
     // reports is the one a claimed input actually runs with (R5).
+    privateDirs: [...new Set([options.dataDir, server.agentDir])],
     resolveConfig: (roleId, projectId) =>
       resolveStoredConfig({
         roleId,

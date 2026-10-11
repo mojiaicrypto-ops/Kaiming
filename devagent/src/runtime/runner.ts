@@ -27,6 +27,7 @@ import { SessionRegistry, type LogicalSessionSpec } from './registry.ts';
 import { epochOf } from './epoch.ts';
 import { InteractionBridge, createUiAdapter } from './interactions.ts';
 import { createQuestionTool } from '../tools/question-tool.ts';
+import { createPrivatePathGuard } from './tool-guard.ts';
 import { toolSetFor } from './tool-sets.ts';
 import { asToolDefinitions, createChiefTaskTools, createTaskGetTool, type TaskToolContext } from '../tools/task-tools.ts';
 import { createReportTool, type ReportToolContext } from '../tools/report-tools.ts';
@@ -82,6 +83,8 @@ export interface RunnerOptions {
   readonly factory: PiRuntimeFactory;
   /** Resolve the effective configuration at claim time: role override → project override → server. */
   readonly resolveConfig: (roleId: string, projectId?: string) => EffectiveConfig;
+  /** The server's own storage (data dir, credential dir): paths the model's tools must not reach. */
+  readonly privateDirs?: readonly string[];
   /** Task type the session currently runs under; `undefined` while it has no Task yet. */
   readonly taskTypeOf?: (sessionId: string) => 'read' | 'write' | undefined;
   /** Extra session wiring (probe tools/extensions) used by tests and later work packages. */
@@ -314,9 +317,14 @@ const serverWorkDir = join(config.agentDir, 'work');
           ],
           ...(binding !== undefined ? { piFile: binding.piFile } : {}),
           ...(extras?.customTools !== undefined ? { customTools: extras.customTools } : {}),
-          ...(extras?.extensionFactories !== undefined
-            ? { extensionFactories: extras.extensionFactories }
-            : {}),
+          // Always installed: the model's file tools never reach the server's private storage.
+          extensionFactories: [
+            ...(extras?.extensionFactories ?? []),
+            createPrivatePathGuard({
+              cwd: session.cwd,
+              privateDirs: this.options.privateDirs ?? [],
+            }),
+          ],
           ...(hostTools.length > 0 ? { customTools: hostTools } : {}),
         },
         config,

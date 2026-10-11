@@ -37,6 +37,13 @@ blocking:
 2. **密钥换通道**：保留 bash，改用 SDK `CredentialStore` 把密钥放在 Agent 读不到的地方（操作系统密钥链，或仅服务端进程持有的存储）；不改工具集，但引入平台相关的凭证依赖。
 3. **接受并明示**：Agent 以操作者权限运行，能读到本机可读的任何文件；在部署说明里明示该边界，并移除"凭证不会进入读取结果"的承诺（需改产品文档，属需求变更）。
 
+## B1 的处置（用户决策：半防护 + 文档如实写边界）
+
+- 代码：`src/runtime/tool-guard.ts`（`createPrivatePathGuard`）在 `tool_call` 前拦截指向服务器私有目录的文件工具与写了该目录路径的 shell 命令；`runner.ts` 对每个会话无条件安装，`main.ts` 传入数据目录与凭证目录。
+- 文档：`productnew/modules/project-workspace.md` 的 P-05 条款按事实改写（产品自身读取面 + 模型文件工具 + 明示 shell 边界）；`devagent/README.md` 记同一边界与 `config.*` 用法。
+- 证据：`test/tool-guard.test.ts` 5 项；`test/workbench-entry.test.ts` 的真实运行用例（模型读凭证文件被拒、转录不含密钥）。
+- 明确不承诺的部分：命令执行没有沙箱，刻意绕过的 shell 仍可读本机文件；需要更强保证时按沙箱单独立项。
+
 ## Round 2 · 增量复核 · 待发起
 
-（`B2` 修复与 B1 的处置确定后进行。）
+（复核者应验：B2 的 reload 语义、B1 的守卫是否真的拦住文件工具与显然的 shell 命令、改写后的文档是否与代码一致、以及新测试是否非空转。）

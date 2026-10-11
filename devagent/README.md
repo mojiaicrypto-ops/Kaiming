@@ -61,6 +61,15 @@ OpenAI 兼容端点（含 DeepSeek、本地服务）示例 `models.json`：
 
 `AGENTDEV_MODEL_PROVIDER`/`AGENTDEV_MODEL_ID` 必须与这里的 provider 与 models.id 对上。模型不可用（凭证缺失、id 不存在）时，提交的输入会留在队列里并以 `blocked_config MODEL_UNAVAILABLE` 说明原因，不会静默换用别的模型。
 
+也可以在运行中的工作台里配置（接口，本轮没有界面入口）：
+
+- `config.save`：`{expectedRevision, value:{kind:'provider', providerId, baseUrl, api, apiKey, models[]}}` 保存 provider（密钥写入上面这个文件，库里只记引用）；`{expectedRevision, value:{kind:'model', providerId, modelId}, roleId}` 或带 `projectId` 给角色/项目指定模型。
+- `config.get`：读当前生效配置与已配置的 provider（只回引用与"是否已配置"）。
+- `config.test`：真实试连一次，返回该选择的可用性与失败原因。
+- 保存 provider 后运行时会立即重载，下一次被认领的输入即可使用；已经开始的工作保持原配置。
+
+**凭证边界（如实说明）**：模型的文件工具被拒绝访问服务器私有目录（数据目录、凭证文件、数据库与会话历史），因此这些内容不会进入对话。但 Agent 的 `bash` 与操作者同权限，刻意绕过的命令仍可读到本机可读的任何文件——需要更强保证时应给命令执行加操作系统级沙箱（尚未实现）。
+
 快速自检（不启动工作台，直接用真实模型跑一次往返，并验证模型会调用提问工具）：
 
 ```bash

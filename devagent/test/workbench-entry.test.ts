@@ -9,7 +9,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startWorkbench } from '../src/server/main.ts';
-import { createStubEnv, startStubModelServer } from '../spikes/harness/pi-env.ts';
+import {
+  createStubEnv,
+  startStubModelServer,
+  STUB_API_KEY,
+  STUB_MODEL,
+  STUB_PROVIDER,
+  type StubReply,
+} from '../spikes/harness/pi-env.ts';
+import { modelsPathFor } from '../src/runtime/provider-store.ts';
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -109,5 +117,74 @@ describe('workbench entry point', () => {
       result: { messages: Array<{ role: string }> };
     };
     expect(listed.result.messages.some((message) => message.role === 'assistant')).toBe(true);
+  }, 60_000);
+});
+
+describe('the private path guard in a real run', () => {
+  it('refuses a model read of the credential file and keeps the key out of the transcript', async () => {
+    // The replies array stays ours: the tool call can name the real credential path, which is only
+    // known once the stub environment exists.
+    const replies: StubReply[] = [];
+    const model = await startStubModelServer(replies);
+    const env = await createStubEnv(model.baseUrl);
+    replies.push(
+      { kind: 'tool_calls', calls: [{ name: 'read', arguments: JSON.stringify({ path: modelsPathFor(env.agentDir) }) }] },
+      { kind: 'text', text: '好的。' },
+    );
+    const dataDir = mkdtempSync(join(tmpdir(), 'devagent-guard-run-'));
+    const running = await startWorkbench({
+      dataDir,
+      accessPassword: 'guard-secret',
+      port: 0,
+      model: { providerId: STUB_PROVIDER, modelId: STUB_MODEL },
+      agentDir: env.agentDir,
+    });
+    cleanups.push(async () => {
+      await running.close();
+      await model.close();
+      rmSync(dataDir, { recursive: true, force: true });
+      rmSync(env.root, { recursive: true, force: true });
+    });
+
+    const login = await fetch(`${running.origin}/api/v1/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'auth.login', params: { password: 'guard-secret' } }),
+    });
+    const cookie = /agentdev_session=([0-9a-f]+)/.exec(login.headers.get('set-cookie') ?? '')?.[1] ?? '';
+    const csrf = String(((await login.json()) as { result: { csrfToken: string } }).result.csrfToken);
+    const call = async (method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      const response = await fetch(`${running.origin}/api/v1/rpc`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: `agentdev_session=${cookie}`, 'x-agentdev-csrf': csrf },
+        body: JSON.stringify({ requestId: `guard-${Math.random()}`, method, params }),
+      });
+      return (await response.json()) as Record<string, unknown>;
+    };
+
+    const opened = (await call('project.open', { path: env.cwd })) as { result: { project: { projectId: string } } };
+    const projectId = opened.result.project.projectId;
+    const created = (await call('session.create', { projectId })) as {
+      result: { session: { sessionId: string } };
+    };
+    const sessionId = created.result.session.sessionId;
+    await call('session.input.submit', { projectId, sessionId, content: [{ type: 'text', text: '读一下配置文件' }] });
+
+    let messages: Array<{ role: string; content: unknown }> = [];
+    for (let i = 0; i < 100; i += 1) {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+      const listed = (await call('session.messages.list', { projectId, sessionId })) as {
+        result: { messages: Array<{ role: string; content: unknown }> };
+      };
+      messages = listed.result.messages;
+      if (messages.some((message) => message.role === 'assistant')) {
+        break;
+      }
+    }
+
+    const transcript = JSON.stringify(messages);
+    // The key never appears, and the refusal says why.
+    expect(transcript).not.toContain(STUB_API_KEY);
+    expect(transcript).toContain('private storage');
   }, 60_000);
 });
