@@ -75,6 +75,16 @@ describe('private path guard', () => {
     expect(privatePathBlockReason({ ...base, toolName: 'read', args: { path: `@../data/models.json` } })).toMatch(
       /private storage/,
     );
+    // The order matters: Pi strips `@` before converting the URL, so this combination reaches the file.
+    expect(privatePathBlockReason({ ...base, toolName: 'read', args: { path: `@file://${models}` } })).toMatch(
+      /private storage/,
+    );
+    expect(
+      privatePathBlockReason({ ...base, toolName: 'read', args: { path: `@file://localhost${models}` } }),
+    ).toMatch(/private storage/);
+    expect(privatePathBlockReason({ ...base, toolName: 'read', args: { path: `\u00A0${models}` } })).toMatch(
+      /private storage/,
+    );
   });
 
   it('sees through a symlinked directory for a path that does not exist yet', () => {

@@ -121,18 +121,20 @@ describe('workbench entry point', () => {
 });
 
 describe('the private path guard in a real run', () => {
-  it('refuses a model read of the credential file and keeps the key out of the transcript', async () => {
-    // The replies array stays ours: the tool call can name the real credential path, which is only
+  it('refuses a model read of the credential file in every path form and keeps the key out of the transcript', async () => {
+    // The replies array stays ours: the tool calls can name the real credential path, which is only
     // known once the stub environment exists.
     const replies: StubReply[] = [];
     const model = await startStubModelServer(replies);
     const env = await createStubEnv(model.baseUrl);
-    // The `@`-prefixed form: Pi's own read tool strips it before resolving, so a guard that only
-    // understood absolute paths would let this through (the verification proved exactly that).
-    replies.push(
-      { kind: 'tool_calls', calls: [{ name: 'read', arguments: JSON.stringify({ path: `@${modelsPathFor(env.agentDir)}` }) }] },
-      { kind: 'text', text: '好的。' },
-    );
+    // Every form Pi's own tools normalize: the checks proved a guard that understood only some of
+    // them let the credential through. Each read is a separate model turn.
+    const credential = modelsPathFor(env.agentDir);
+    const forms = [credential, `@${credential}`, `file://${credential}`, `@file://${credential}`, `@file://localhost${credential}`];
+    for (const path of forms) {
+      replies.push({ kind: 'tool_calls', calls: [{ name: 'read', arguments: JSON.stringify({ path }) }] });
+    }
+    replies.push({ kind: 'text', text: '好的。' });
     const dataDir = mkdtempSync(join(tmpdir(), 'devagent-guard-run-'));
     const running = await startWorkbench({
       dataDir,
@@ -185,8 +187,8 @@ describe('the private path guard in a real run', () => {
     }
 
     const transcript = JSON.stringify(messages);
-    // The key never appears, and the refusal says why.
+    // The key never appears, and every form was refused with the reason.
     expect(transcript).not.toContain(STUB_API_KEY);
-    expect(transcript).toContain('private storage');
+    expect(transcript.match(/private storage/g) ?? []).toHaveLength(forms.length);
   }, 60_000);
 });

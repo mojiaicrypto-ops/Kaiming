@@ -41,7 +41,7 @@ blocking:
 
 - 代码：`src/runtime/tool-guard.ts`（`createPrivatePathGuard`）在 `tool_call` 前拦截指向服务器私有目录的文件工具与写了该目录路径的 shell 命令；`runner.ts` 对每个会话无条件安装，`main.ts` 传入数据目录与凭证目录。
 - 文档：`productnew/modules/project-workspace.md` 的 P-05 条款按事实改写（产品自身读取面 + 模型文件工具 + 明示 shell 边界）；`devagent/README.md` 记同一边界与 `config.*` 用法。
-- 证据：`test/tool-guard.test.ts` 5 项；`test/workbench-entry.test.ts` 的真实运行用例（模型读凭证文件被拒、转录不含密钥）。
+- 证据：`test/tool-guard.test.ts` 9 项；`test/workbench-entry.test.ts` 的真实运行用例（模型读凭证文件被拒、转录不含密钥）。
 - 明确不承诺的部分：命令执行没有沙箱，刻意绕过的 shell 仍可读本机文件；需要更强保证时按沙箱单独立项。
 
 ## Round 2 · P7Delta · result: failed（2 项新阻断，均已修）
@@ -67,8 +67,24 @@ new_non_blocking:
     fix: "入口 resolve(process.cwd(), env ?? '.agentdev-data')；privateDirs 在入口与守卫内都按服务器 cwd 解析成绝对路径"
 ```
 
-修复后证据：`tsc 0`；`npm test 227/227（22 文件，含 tool-guard 7 项、entry 2 项、provider-config 10 项）`；`playwright 8 passed`（commit `ab4acb2`）。
+修复后证据：`tsc 0`；`npm test 227/227（22 文件，含 tool-guard 9 项、entry 2 项、provider-config 9 项）`；`playwright 8 passed`（commit `ab4acb2`）。
 
-## Round 3 · 增量复核 · 待发起
+## Round 3 · P7Delta2 · result: failed（1 项新阻断，已修）
 
-（应验：B1-a/B1-b 的绕过是否真关闭、B2-narrow 与 B1-c 是否关闭、以及新增的归一化/祖先解析是否引入误杀。）
+```yaml
+closed:
+  - "B1-b 真关闭：real 路径比较拦住了经符号链接祖先的未存在路径与现存链接，且未见误杀"
+  - "B2-narrow 关闭（probeModel 注入 runner 同一 factory）；B1-c 关闭（入口解析相对数据目录）"
+new_blocking:
+  - id: B1-a'
+    verdict: confirmed
+    claim: "归一化次序写反：守卫先转 file:// 再去 @，而 Pi 是先去 @ 再转 URL —— `@file://<abs>`（含 localhost 主机）仍被放行，真实运行可读到凭证文件"
+    fix: "normalizeInput 改成与 Pi 同序（Unicode 空格 → 去一个 @ → 展开 ~/ → file:// 转路径 → 解析）；单测补 @file://、@file://localhost、Unicode 空格；端到端用例改为对同一真实路径依次用 5 种写法各读一次，断言 5 次全被拒且转录不含密钥"
+non_blocking: "记录里的计数偏差（tool-guard 项数、provider-config 项数、全量项数）已按实测更正"
+```
+
+修复后证据：`tsc 0`；`npm test 227/227（22 文件）`；`playwright 8 passed`。
+
+## Round 4 · 增量复核 · 待发起
+
+（应验：B1-a' 的合并写法是否关闭、5 种写法的端到端断言是否真的都触发拒绝、以及是否引入误杀。）

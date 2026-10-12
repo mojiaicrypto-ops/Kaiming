@@ -38,24 +38,27 @@ const PATH_ARGUMENT: Record<string, string> = {
 const COMMAND_TOOLS = new Set(['bash', 'powershell']);
 
 /**
- * The same shapes Pi's own file tools accept before they resolve a path: a leading `@`, a `~/` home
- * prefix and a `file://` URL. A guard that only understood absolute paths would let every other form
- * through, which is exactly the hole this closes.
+ * The same shapes Pi's own file tools accept before they resolve a path, **in the same order**:
+ * unicode spaces, one leading `@`, `~/`, `file://`. The order matters - Pi strips `@` before it
+ * converts a URL, so `@file://<path>` reaches the credential file and a guard that did the two the
+ * other way round would let it through (the third check proved exactly that).
  */
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
+
 function normalizeInput(raw: string, cwd: string): string {
-  let candidate = raw.trim();
-  if (candidate.startsWith('file://')) {
-    try {
-      candidate = fileURLToPath(candidate);
-    } catch {
-      // Not a usable file URL: fall through and treat it as a literal path.
-    }
-  }
+  let candidate = raw.trim().replace(UNICODE_SPACES, ' ');
   if (candidate.startsWith('@')) {
     candidate = candidate.slice(1);
   }
   if (candidate === '~' || candidate.startsWith('~/')) {
     candidate = join(homedir(), candidate.slice(1));
+  }
+  if (/^file:\/\//.test(candidate)) {
+    try {
+      candidate = fileURLToPath(candidate);
+    } catch {
+      // Not a usable file URL: fall through and treat it as a literal path.
+    }
   }
   return isAbsolute(candidate) ? candidate : resolve(cwd, candidate);
 }
