@@ -43,3 +43,9 @@ node checks/runner-real-model.ts   4/4（真实模型）
 ## 5. 独立审阅
 
 见 `review.md`。审阅者应能在 `/tmp/p6/data`（实例 4310，口令 `p6-acceptance`）上复核 §2 的每一条。
+
+## R5 恢复条款的取证状态
+
+- 已取证：后续 queued 用新配置（覆盖前后 `effectiveConfig` 对照 + Pi 原生历史 `message.model`）；`config.save` 后无需重启即可用（`provider-config.test.ts` 的热身 → 写入 → 仍 false → reload → true）。
+- 记录面已就位：每个已认领输入 `effectiveConfig`、会话绑定 `configHash`、`session.recovery.inspect` 可读。
+- **未取证**："活动输入在保存时不受影响"（无实跑对照）、"恢复已执行输入按原配置且不可用时等明确变更"（本实现不重放旧输入，缺"继续这个输入"的入口，故无落点）。二者都不记为通过。
