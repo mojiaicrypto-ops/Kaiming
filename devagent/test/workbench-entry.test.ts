@@ -13,6 +13,7 @@ import {
   createStubEnv,
   startStubModelServer,
   STUB_API_KEY,
+  requestedModelId,
   STUB_MODEL,
   STUB_PROVIDER,
   type StubReply,
@@ -186,9 +187,140 @@ describe('the private path guard in a real run', () => {
       }
     }
 
+
+
     const transcript = JSON.stringify(messages);
     // The key never appears, and every form was refused with the reason.
     expect(transcript).not.toContain(STUB_API_KEY);
     expect(transcript.match(/private storage/g) ?? []).toHaveLength(forms.length);
+  }, 60_000);
+
+  it('keeps a running input on the configuration it started with while the operator changes it', async () => {
+    // The model asks the operator something, which parks the run: a deterministic window in which the
+    // operator saves a different assignment.
+    const replies: StubReply[] = [
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'question',
+            arguments: JSON.stringify({ method: 'confirm', title: '确认一下', message: '继续吗？' }),
+          },
+        ],
+      },
+      { kind: 'text', text: '好的。' },
+    ];
+    const model = await startStubModelServer(replies);
+    const env = await createStubEnv(model.baseUrl, { modelIds: [STUB_MODEL, 'stub-2'] });
+    const dataDir = mkdtempSync(join(tmpdir(), 'devagent-active-config-'));
+    const running = await startWorkbench({
+      dataDir,
+      accessPassword: 'active-secret',
+      port: 0,
+      model: { providerId: STUB_PROVIDER, modelId: STUB_MODEL },
+      agentDir: env.agentDir,
+    });
+    cleanups.push(async () => {
+      await running.close();
+      await model.close();
+      rmSync(dataDir, { recursive: true, force: true });
+      rmSync(env.root, { recursive: true, force: true });
+    });
+    const login = await fetch(`${running.origin}/api/v1/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'auth.login', params: { password: 'active-secret' } }),
+    });
+    const cookie = /agentdev_session=([0-9a-f]+)/.exec(login.headers.get('set-cookie') ?? '')?.[1] ?? '';
+    const csrf = String(((await login.json()) as { result: { csrfToken: string } }).result.csrfToken);
+    const call = async (method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      const response = await fetch(`${running.origin}/api/v1/rpc`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: `agentdev_session=${cookie}`, 'x-agentdev-csrf': csrf },
+        body: JSON.stringify({ requestId: `active-${Math.random()}`, method, params }),
+      });
+      return (await response.json()) as Record<string, unknown>;
+    };
+    const opened = (await call('project.open', { path: env.cwd })) as { result: { project: { projectId: string } } };
+    const projectId = opened.result.project.projectId;
+    const created = (await call('session.create', { projectId })) as { result: { session: { sessionId: string } } };
+    const sessionId = created.result.session.sessionId;
+    const submitted = (await call('session.input.submit', {
+      projectId,
+      sessionId,
+      content: [{ type: 'text', text: '问一下' }],
+    })) as { result: { inputId: string } };
+    const inputId = submitted.result.inputId;
+
+    // Wait for the question to be parked, so the run really is mid-flight.
+    let pending: { interactionId: string; revision: number } | undefined;
+    for (let i = 0; i < 200 && pending === undefined; i += 1) {
+      const prepared = (await call('session.stream.prepare', { projectId, sessionId })) as {
+        result?: { snapshot?: { interactions?: Array<{ interactionId: string; revision: number }> } };
+      };
+      // The snapshot lists the open questions; there is one while the run is parked on it.
+      const [first] = prepared.result?.snapshot?.interactions ?? [];
+      pending = first === undefined ? undefined : { interactionId: first.interactionId, revision: first.revision };
+      if (pending === undefined) {
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+      }
+    }
+    expect(pending).toBeDefined();
+
+    // The operator changes the configuration while the input is parked: a second model in the
+    // catalog and a project assignment pointing at it.
+    await call('config.save', {
+      expectedRevision: null,
+      value: {
+        kind: 'provider',
+        providerId: STUB_PROVIDER,
+        baseUrl: model.baseUrl,
+        api: 'openai-completions',
+        apiKey: STUB_API_KEY,
+        models: [
+          { id: STUB_MODEL, name: STUB_MODEL },
+          { id: 'stub-2', name: 'stub-2' },
+        ],
+      },
+    });
+    const assigned = (await call('config.save', {
+      expectedRevision: null,
+      value: { kind: 'model', providerId: STUB_PROVIDER, modelId: 'stub-2' },
+      projectId,
+    })) as { error?: unknown };
+    expect(assigned.error).toBeUndefined();
+
+    // Answer, let the run finish, and look at what the second model turn used.
+    await call('interaction.respond', {
+      projectId,
+      chiefSessionId: sessionId,
+      interactionId: pending?.interactionId,
+      expectedRevision: pending?.revision,
+      response: { confirmed: true },
+    });
+    let messages: Array<{ role: string }> = [];
+    for (let i = 0; i < 150; i += 1) {
+      const listed = (await call('session.messages.list', { projectId, sessionId })) as {
+        result: { messages: Array<{ role: string }> };
+      };
+      messages = listed.result.messages;
+      if (messages.some((message) => message.role === 'assistant')) {
+        break;
+      }
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+    }
+    expect(messages.some((message) => message.role === 'assistant')).toBe(true);
+    expect(model.requests).toHaveLength(2);
+    // The active input keeps the model it started with, and so does its recorded configuration.
+    expect(requestedModelId(model.requests[1])).toBe(STUB_MODEL);
+    const got = (await call('session.input.get', { projectId, sessionId, inputId })) as { result: unknown };
+    const recorded = (
+      got.result as { input: { effectiveConfig: { modelId: string; providerId: string; source: string } } }
+    ).input.effectiveConfig;
+    expect(recorded.providerId).toBe(STUB_PROVIDER);
+    expect(recorded.modelId).toBe(STUB_MODEL);
+    // The recorded config says where it came from: the server default it started with, not the
+    // project assignment saved while it ran.
+    expect(recorded.source).toBe('server');
   }, 60_000);
 });

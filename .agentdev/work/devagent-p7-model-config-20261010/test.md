@@ -48,4 +48,5 @@ node checks/runner-real-model.ts   4/4（真实模型）
 
 - 已取证：后续 queued 用新配置（覆盖前后 `effectiveConfig` 对照 + Pi 原生历史 `message.model`）；`config.save` 后无需重启即可用（`provider-config.test.ts` 的热身 → 写入 → 仍 false → reload → true）。
 - 记录面已就位：每个已认领输入 `effectiveConfig`、会话绑定 `configHash`、`session.recovery.inspect` 可读。
-- **未取证**："活动输入在保存时不受影响"（无实跑对照）、"恢复已执行输入按原配置且不可用时等明确变更"（本实现不重放旧输入，缺"继续这个输入"的入口，故无落点）。二者都不记为通过。
+- 已取证（新增）：**活动输入不受保存影响**——让运行停在 `question` 上，期间保存 provider（加第二个模型）并把项目覆盖指到 `stub-2`，回答后该输入的第二轮请求仍走 `stub-1`，`session.input.get` 的 `effectiveConfig` 也仍是 `stub-1 / source=server`（`test/workbench-entry.test.ts`，228 项全绿）。
+- **仍未取证**："恢复已执行输入按原配置且不可用时等明确变更"——本实现不重放旧输入，缺"继续这个输入"的入口，故无落点；届时必须读 `effectiveConfig`（现在已可读）并拒绝而不是换模型。不记为通过。

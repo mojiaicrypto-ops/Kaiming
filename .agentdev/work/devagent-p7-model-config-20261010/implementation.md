@@ -39,9 +39,9 @@
 
 | R5 句子 | 本实现的落点 | 证据 |
 |---|---|---|
-| 活动输入不受设置变更影响 | 运行中的会话持有已解析的配置，`config.save` 只重载工厂、不触碰活动会话 | 代码路径；**未**做"保存时正好有输入在跑"的实跑取证 |
+| 活动输入不受设置变更影响 | 运行中的会话在认领时锁定模型对象，`config.save` 只重载工厂（针对下一次认领） | **实跑取证**：`workbench-entry.test.ts` 第三例——让运行停在 `question` 上，此时保存 provider（加入第二个模型）并把项目覆盖指到 `stub-2`，再回答；该输入的第二轮模型请求仍是 `stub-1`，其 `effectiveConfig` 记为 `stub-1 / source=server`（并未被中途改写） |
 | 后续 queued 可用新配置 | `config.save` await 工厂 `reload()` 后，下一次认领用新配置 | 实跑 `effectiveConfig` 覆盖前后对照（`deepseek-flash/server` → `deepseek-chat/role`）+ Pi 原生历史 `message.model` |
-| 原已执行输入恢复时用原配置，不可用等待明确变更，不静默换模型 | 每个已认领输入记 `effectiveConfig`（脱敏配置 + 请求/生效工具名，`store.recordEffectiveConfig`）、会话绑定记 `configHash`，且 `session.recovery.inspect` 对外可读 | 记录面存在且可读（`read-methods.ts:440-462`） |
+| 原已执行输入恢复时用原配置，不可用等待明确变更，不静默换模型 | 每个已认领输入记 `effectiveConfig`（脱敏配置 + 请求/生效工具名，`store.recordEffectiveConfig`），`session.input.get` 现在**返回**该记录（脱敏，无凭证），会话绑定另记 `configHash` | 记录面可读：`session.input.get` 的 `effectiveConfig`（`modelId/providerId/source/工具名`）已在实跑用例中断言；`session.recovery.inspect` 另给 `configHash` |
 
 **边界（不冒充）**：本实现不重放被中断的输入——S7 要求先核实并 `session.recovery.resolve` 关闭，后续工作由**新输入**接续，新输入按当前（操作者显式保存过的）配置解析。所以"不静默换模型"在这里成立的方式是"从不重放旧输入 + 旧输入的真实配置可查"；"恢复时按原配置、不可用则等明确变更"的**比较与拒绝**逻辑要等出现"继续这个输入"的入口才有落点——届时必须读 `effectiveConfig`，不可用则按 `MODEL_UNAVAILABLE` 排队而不是换模型。本条按未取证登记。
 

@@ -206,6 +206,9 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
           payload: input.payload,
           // Public references only: the delivered boundary and the stop/error facts.
           boundary: input.checkpoint,
+          // What this input actually ran with (R5): the redacted effective configuration as recorded at
+          // claim time, so a difference from the current settings is visible instead of silent.
+          effectiveConfig: parseRecordedConfig(input.effectiveConfig),
           stopReason: input.stopReason,
           error: input.errorCode === null ? null : { code: input.errorCode, message: input.errorMessage ?? '' },
         },
@@ -618,4 +621,20 @@ function clampLimit(value: number | undefined): number {
     return DEFAULT_PAGE;
   }
   return Math.min(Math.floor(value), MAX_PAGE);
+}
+
+/**
+ * The effective configuration a claim recorded, as stored JSON. It is already redacted before it is
+ * written (no credential material), so it is returned as-is; an unreadable value is reported as absent
+ * rather than thrown, because an input's record must stay readable.
+ */
+function parseRecordedConfig(recorded: string | null): unknown {
+  if (recorded === null || recorded === '') {
+    return null;
+  }
+  try {
+    return JSON.parse(recorded) as unknown;
+  } catch {
+    return null;
+  }
 }
