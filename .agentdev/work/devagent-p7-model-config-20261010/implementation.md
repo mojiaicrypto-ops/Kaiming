@@ -29,9 +29,9 @@
 
 - **已修（B2）**：复核发现 `config.test` 探到的状态与真实运行不同——runner 的工厂缓存一个运行时且从不重载，于是"保存后用 config.test 说可用、认领时却 blocked 直到重启"。修复：`PiRuntimeFactory.reload()` 重读凭证/目录；`config.save` 写入 provider 后 await 重载（runner 用的同一 factory 由 `main.ts` 注入 core methods）；`config.test` 先重载再探且复用同一运行时。新增用例复现并固定该场景（热身 → 写入 → 仍 false → reload → true）。
 - **B1 处置（用户选择"半防护 + 文档如实写边界"）**：新增 `src/runtime/tool-guard.ts` —— 一个 Pi 扩展，在任何工具执行前拦截：带路径参数的文件工具（read/edit/write/ls/find/grep）只要指向服务器私有目录（数据目录/凭证目录，含经 realpath 解析的符号链接）就**拒绝执行并说明原因**；shell 工具（bash/powershell）若命令文本里出现私有目录路径也拒绝。runner 对每个会话无条件安装该守卫（`privateDirs` 由入口传入，取数据目录与凭证目录的并集）。文档按事实改写：`project-workspace.md` 的 P-05 条款改为"凭证不出现在产品自身的读取面（对话事件/报告/知识/需求/成果/接口响应）+ 模型文件工具不得读私有存储"，并明示边界（shell 与操作者同权限，刻意绕过仍可读本机文件，需更强保证则另立沙箱需求）；`devagent/README.md` 增加同样的说明与 `config.*` 接口用法。
-  - 证据：`test/tool-guard.test.ts`（9 项：绝对/相对路径、ls/grep/edit、项目内放行、bash 文本、符号链接、无私有目录时不设防、Pi 归一化的各种写法 `@`/`file://`/`@file://`/`@file://localhost`/Unicode 空格、未存在路径经符号链接祖先）；`test/workbench-entry.test.ts` 的真实运行用例——脚本模型对凭证文件**真实路径**依次用 5 种写法各 `read` 一次，断言 5 次都被拒且转录**不含** stub 密钥。
+  - 证据：`test/tool-guard.test.ts`（7 项：绝对/相对路径、ls/grep/edit、项目内放行、bash 文本、符号链接、无私有目录时不设防、Pi 归一化的各种写法 `@`/`file://`/`@file://`/`@file://localhost`/Unicode 空格、未存在路径经符号链接祖先）；`test/workbench-entry.test.ts` 的真实运行用例——脚本模型对凭证文件**真实路径**依次用 5 种写法各 `read` 一次，断言 5 次都被拒且转录**不含** stub 密钥。
   - 守卫的写法归一化与 Pi 自身**同序**（去 Unicode 空格 → 去掉一个 `@` → 展开 `~/` → `file://` 转路径 → 解析），第三轮复核正是抓到"先转 URL 再去 `@`"导致 `@file://…` 漏过；`privateDirs` 与相对 `AGENTDEV_DATA_DIR` 都在入口解析为绝对路径。
-  - 证据（本轮，commit `ab4acb2` 与之后）：`tsc 0`；`npm test 227/227（22 文件，其中 tool-guard 9、workbench-entry 2、provider-config 9）`；`playwright 8 passed`；`prompts 15/15`；`selectors 485/485`。
+  - 证据（本轮，commit `ab4acb2` 与之后）：`tsc 0`；`npm test 227/227（22 文件，其中 tool-guard 7、workbench-entry 2、provider-config 9）`；`playwright 8 passed`；`prompts 15/15`；`selectors 485/485`。
   - 仍未关闭的部分（如实登记）：这不是沙箱，`bash` 通过其他写法仍可能读到同一文件；"凭证不出现在对话"在产品自身上下文成立，在"刻意越权的命令"上不成立——这正是 P-05 改写后的措辞。
 - **（历史，已由上述处置覆盖）B1 原判**：Agent 的内建 `read` 读到了 `<agentDir>/models.json`，含 key 的 toolResult 进入 Pi 历史与页面流。密钥必须待在 Pi 能读的文件里，而角色带有 `bash`，任何路径约束都能被绕过——真正的出路是收缩工具集或换凭证通道（或接受并以文档明示），属产品/设计决定，见 review.md「待用户决策」。
 

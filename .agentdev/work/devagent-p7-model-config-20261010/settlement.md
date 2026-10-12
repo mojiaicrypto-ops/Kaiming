@@ -24,11 +24,11 @@ settlement:
     - "devagent/src/server/methods.ts / main.ts：`config.save/get/test`、注入 reload 与 probe、入口解析相对 `AGENTDEV_DATA_DIR`、`privateDirs`"
     - "devagent/src/server/read-methods.ts：`session.input.get` 返回记录中的脱敏生效配置"
     - "docs/productnew/modules/project-workspace.md（P-05 按事实改写）、devagent/README.md（边界 + config.* 用法）"
-    - "devagent/test/：provider-config.test.ts、tool-guard.test.ts（9 项）、workbench-entry.test.ts（3 项）"
+    - "devagent/test/：provider-config.test.ts、tool-guard.test.ts（7 项）、workbench-entry.test.ts（3 项）"
     - ".agentdev/work/devagent-p7-model-config-20261010/：plan/implementation/test/review/settlement"
   verification:
     - "tsc 0；npm test 228/228（22 文件）；playwright 8 passed；check:prompts 15/15；verify-selectors 485/485（extra 0）"
-    - "独立复核三轮：Round 1 failed（2 阻断：B2 保存后运行时未重载、B1 凭证被内建 read 读入对话）→ 处置并修复；Round 2 failed（2 新阻断：守卫可被 `@`/`file://`/`~/` 写法绕过、未存在路径经符号链接写入被放行；2 项非阻断）→ 修复；Round 3 failed（1 新阻断：归一化次序与 Pi 相反导致 `@file://…` 漏过）→ 修复；Round 4 增量复核见 review.md 末节"
+    - "独立复核四轮：Round 1 failed（2 阻断：B2 保存后运行时未重载、B1 凭证被内建 read 读入对话）→ 处置并修复；Round 2 failed（2 新阻断：守卫可被 `@`/`file://`/`~/` 写法绕过、未存在路径经符号链接写入被放行；2 项非阻断）→ 修复；Round 3 failed（1 新阻断：归一化次序与 Pi 相反导致 `@file://…` 漏过）→ 修复；Round 4 **passed**：以逐字复制的 SDK 归一化跑形状矩阵，`insidePrivate && guard=allow` 为 0 形，5 次独立工具调用的端到端用例在两种绕过下都会失败（拒绝计数与密钥文本）"
   checklist_result: "计划内的存储、配置服务、认领解析、复核修复四个切片全部完成；三轮独立复核发现的问题全部修复；未取证项逐条登记"
   not_covered:
     - "**不是沙箱**：`bash` 用变量/`cd` 等写法仍可能读到私有目录；这是 P-05 改写后明示的不承诺项，要真保证需另立操作系统级沙箱需求"
@@ -41,5 +41,5 @@ settlement:
     - .agentdev/work/devagent-p7-model-config-20261010/
   no_change:
     - "oldcode/、docs/old/、docs/architecturenew/、webui/"
-  completion_gate: pending_round4
+  completion_gate: passed
 ```

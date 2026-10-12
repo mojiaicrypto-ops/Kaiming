@@ -41,7 +41,7 @@ blocking:
 
 - 代码：`src/runtime/tool-guard.ts`（`createPrivatePathGuard`）在 `tool_call` 前拦截指向服务器私有目录的文件工具与写了该目录路径的 shell 命令；`runner.ts` 对每个会话无条件安装，`main.ts` 传入数据目录与凭证目录。
 - 文档：`productnew/modules/project-workspace.md` 的 P-05 条款按事实改写（产品自身读取面 + 模型文件工具 + 明示 shell 边界）；`devagent/README.md` 记同一边界与 `config.*` 用法。
-- 证据：`test/tool-guard.test.ts` 9 项；`test/workbench-entry.test.ts` 的真实运行用例（模型读凭证文件被拒、转录不含密钥）。
+- 证据：`test/tool-guard.test.ts` 7 项；`test/workbench-entry.test.ts` 的真实运行用例（模型读凭证文件被拒、转录不含密钥）。
 - 明确不承诺的部分：命令执行没有沙箱，刻意绕过的 shell 仍可读本机文件；需要更强保证时按沙箱单独立项。
 
 ## Round 2 · P7Delta · result: failed（2 项新阻断，均已修）
@@ -67,7 +67,7 @@ new_non_blocking:
     fix: "入口 resolve(process.cwd(), env ?? '.agentdev-data')；privateDirs 在入口与守卫内都按服务器 cwd 解析成绝对路径"
 ```
 
-修复后证据：`tsc 0`；`npm test 227/227（22 文件，含 tool-guard 9 项、entry 2 项、provider-config 9 项）`；`playwright 8 passed`（commit `ab4acb2`）。
+修复后证据：`tsc 0`；`npm test 227/227（22 文件，含 tool-guard 7 项、entry 2 项、provider-config 9 项）`；`playwright 8 passed`（commit `ab4acb2`）。
 
 ## Round 3 · P7Delta2 · result: failed（1 项新阻断，已修）
 
@@ -85,6 +85,19 @@ non_blocking: "记录里的计数偏差（tool-guard 项数、provider-config �
 
 修复后证据：`tsc 0`；`npm test 227/227（22 文件）`；`playwright 8 passed`。
 
-## Round 4 · 增量复核 · 待发起
+## Round 4 · P7Delta3 · result: **passed**
 
-（应验：B1-a' 的合并写法是否关闭、5 种写法的端到端断言是否真的都触发拒绝、以及是否引入误杀。）
+```yaml
+closed:
+  - "B1-a' 关闭：以逐字复制的 SDK `normalizePath`/`resolveReadPathAsync` 与真实 `privatePathBlockReason` 跑形状矩阵（plain/@/@@/file:///@file:///@file://localhost/file://localhost/file://// 带 query 与 fragment/%2ejson/尾随空格/../data/@../data），`insidePrivate && guard=allow` 为 0 形；两层都放行的形态要么落在私有目录外，要么在 Pi 侧直接抛错（没有工具执行）"
+  - "端到端用例真实：5 次独立的脚本工具调用；两种绕过下都会失败（拒绝计数从 5 掉下来、或 createStubEnv 的真实凭证文本进转录）"
+  - "无误杀：没有任何 Pi 本可打开的合法读取被拒绝（唯一差异是守卫先 trim，且那只拒绝 Pi 自己也会 ENOENT 的调用）"
+non_blocking_fixed:
+  - "记录笔误：tool-guard 用例数被上一轮改成 9（实际 7）；已在 review.md/implementation.md/settlement.md 按各时点真实值更正"
+  - "守卫未镜像 Pi 的 Windows 专有归一化；已在 README 边界段与守卫头部注明本工作台只在 POSIX 部署（不在产品契约里为未部署平台预留代码）"
+```
+
+```yaml
+result: passed
+blocking: none
+```

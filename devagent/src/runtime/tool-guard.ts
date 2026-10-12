@@ -6,6 +6,9 @@
  * of it with a plain `read` call - and whatever a tool returns becomes part of the conversation, which
  * is exactly where a credential must never be. This guard refuses such calls before they execute.
  *
+ * The shapes it understands are the POSIX ones Pi normalizes (`@`, `~/`, `file://`): this workbench
+ * runs on POSIX, and mirroring Pi's Windows-only branches would be code nothing here exercises.
+ *
  * What it does not do: it is not a sandbox. `bash` is checked by the text of the command, so a shell
  * can still reach the same file by other means. Confining the shell itself needs an operating-system
  * sandbox, which is a separate piece of work; the honest statement of the boundary is in the README.
