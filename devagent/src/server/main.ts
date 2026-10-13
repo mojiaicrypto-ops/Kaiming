@@ -5,7 +5,7 @@
  * Nothing sensitive is printed: the access password is only read, and the startup line carries the
  * address and the data directory so the operator knows what is running.
  */
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Store } from '../store/store.ts';
@@ -159,6 +159,11 @@ export function startWorkbench(options: StartOptions): Promise<{
     hub,
     // The browser surface is served from the same origin (R1); defaults to the shipped UI directory.
     staticDir: options.staticDir ?? resolve(here, '../../web'),
+    // The React shell (webapp build) mounts at /app/ when its build output exists: two shells
+    // coexist during the migration, the old one keeps serving /.
+    ...(existsSync(resolve(here, '../../web-static/app/index.html'))
+      ? { appStaticDir: resolve(here, '../../web-static/app') }
+      : {}),
   });
   return workbench.listen(options.port, options.host ?? '127.0.0.1').then(({ origin, port }) => {
     worker.start();

@@ -22,6 +22,8 @@ export interface WorkbenchServerOptions {
   readonly hub?: SessionEventHub;
   /** Directory served at `/` (the workbench UI); absent means no static surface yet. */
   readonly staticDir?: string;
+  /** Directory served at `/app/` (the React shell build); absent means the route is not mounted. */
+  readonly appStaticDir?: string;
   readonly bodyLimitBytes?: number;
   /** Origin allowed to call this server; defaults to the request's own host (same-origin). */
   readonly allowedOrigin?: (requestOrigin: string, host: string | undefined) => boolean;
@@ -64,6 +66,21 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
       return;
     }
     if (request.method === 'GET' || request.method === 'HEAD') {
+      if (path === '/app' || path.startsWith('/app/')) {
+        if (options.appStaticDir !== undefined) {
+          // '/app' and '/app/' both resolve to the shell; deeper paths map below the app root.
+          const subPath = path === '/app' || path === '/app/' ? '/index.html' : path.slice('/app'.length);
+          if (await serveStatic(request, response, subPath, options.appStaticDir)) {
+            return;
+          }
+          // SPA fallback: the client router owns sub-paths; the shell is always index.html.
+          if (await serveStatic(request, response, '/index.html', options.appStaticDir)) {
+            return;
+          }
+        }
+        writeJson(response, 404, { requestId: 'unknown', error: { code: 'NOT_FOUND', message: 'the /app surface is not built' } });
+        return;
+      }
       if (await serveStatic(request, response, path)) {
         return;
       }
@@ -286,11 +303,13 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
     request: IncomingMessage,
     response: ServerResponse,
     path: string,
+    rootOverride?: string,
   ): Promise<boolean> {
-    if (options.staticDir === undefined) {
+    const chosen = rootOverride ?? options.staticDir;
+    if (chosen === undefined) {
       return false;
     }
-    const root = resolve(options.staticDir);
+    const root = resolve(chosen);
     let decoded: string;
     try {
       decoded = decodeURIComponent(path);
