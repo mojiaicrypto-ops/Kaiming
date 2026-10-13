@@ -18,8 +18,10 @@ export function useChiefSession(session: ChiefSession | null) {
   const [needLogin, setNeedLogin] = useState(false);
   const [historyProblems, setHistoryProblems] = useState<readonly string[]>([]);
   const streamRef = useRef<SessionStream | null>(null);
-  const blockedRef = useRef<{ code: string; detail: string } | null>(null);
   const [blocked, setBlocked] = useState<{ code: string; detail: string } | null>(null);
+  /** The Task bound to this chief session (if any); refreshed on task invalidations. */
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [taskTick, setTaskTick] = useState(0);
 
   useEffect(() => {
     if (session === null) return;
@@ -27,6 +29,13 @@ export function useChiefSession(session: ChiefSession | null) {
     const onFrame = (frame: StreamFrame): void => {
       if (frame.type === 'pi' && frame.event?.type === 'blocked') {
         setBlocked({ code: String(frame.code ?? 'BLOCKED'), detail: String(frame.detail ?? '') });
+      }
+      // Business notices arrive as top-level frames ({type:'invalidate', entity, id}), not
+      // wrapped in event (http.ts publishes the notice object as the frame itself).
+      const notice = frame as unknown as { entity?: string; id?: string };
+      if (frame.type === 'invalidate' && notice.entity === 'task' && typeof notice.id === 'string') {
+        setActiveTaskId(notice.id);
+        setTaskTick((tick) => tick + 1);
       }
       dispatch({ type: 'frame', frame });
     };
@@ -89,5 +98,5 @@ export function useChiefSession(session: ChiefSession | null) {
     return detail;
   }, [rpc, session]);
 
-  return { rpc, slot, status, needLogin, setNeedLogin, historyProblems, blocked, submit, stop, respond, refreshTask };
+  return { rpc, slot, status, needLogin, setNeedLogin, historyProblems, blocked, submit, stop, respond, refreshTask, activeTaskId, taskTick };
 }

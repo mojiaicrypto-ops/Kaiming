@@ -53,7 +53,6 @@ export function ChiefApp(): React.ReactElement {
   const [pathInput, setPathInput] = useState('');
   const [members, setMembers] = useState<ReadonlyArray<{ sessionId: string; roleId: string }>>([]);
   const [drawer, setDrawer] = useState<{ sessionId: string; label: string } | null>(null);
-  const [taskId, setTaskId] = useState<string | null>(null);
   const [taskDetail, setTaskDetail] = useState<TaskDetail | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const session = useMemo(
@@ -61,6 +60,7 @@ export function ChiefApp(): React.ReactElement {
     [projectId, sessionId],
   );
   const chief = useChiefSession(session);
+  const taskId = chief.activeTaskId;
 
   useEffect(() => {
     if (session === null) return;
@@ -185,7 +185,6 @@ export function ChiefApp(): React.ReactElement {
               const created = await chief.rpc.call<{ session: { sessionId: string } }>('session.create', { projectId });
               localStorage.setItem('agentdev.sessionId', created.session.sessionId);
               setSessionId(created.session.sessionId);
-              setTaskId(null);
               setTaskDetail(null);
             })().catch(() => undefined);
           }}

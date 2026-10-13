@@ -1,7 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { TaskDetail, TaskMember } from '../state/slot';
-
-const MEMBER_STATES = ['queued', 'working', 'waiting_user', 'stopping', 'completed', 'failed', 'stopped', 'interrupted'] as const;
 
 interface Props {
   detail: TaskDetail | null;
@@ -42,42 +40,29 @@ export function TaskCard({ detail, visible, onOpenMember, onRefresh }: Props) {
   );
 }
 
+/**
+ * Member row: state derives from `currentInputId` (the delegation wait set's own fact, M1) —
+ * null means the member has no run in flight. The per-member live detail (tool calls, report
+ * body) arrives through the drawer's own session stream, not through this card.
+ */
 function MemberRow({ member, onOpenMember }: { member: TaskMember; onOpenMember: (sessionId: string, label: string) => void }) {
-  const [state, setState] = useState<string>('queued');
+  const [statesSeen, setStatesSeen] = useState<ReadonlySet<string>>(new Set());
   useEffect(() => {
-    let cancelled = false;
-    const load = async (): Promise<void> => {
-      const read = await fetch(`/api/v1/rpc`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({
-          requestId: `m-${Date.now()}`,
-          method: 'session.get',
-          params: { projectId: '', sessionId: member.sessionId },
-        }),
-      }).then((response) => response.json() as Promise<{ result?: unknown }>);
-      if (!cancelled) setState(read.result === undefined ? 'unknown' : 'linked');
-    };
-    void load();
-    return () => { cancelled = true; };
-  }, [member.sessionId]);
-  void MEMBER_STATES;
+    if (member.currentInputId === null) return;
+    setStatesSeen((previous) => new Set([...previous, 'active']));
+  }, [member.currentInputId]);
+  const active = member.currentInputId !== null;
   return (
     <button type="button" className="member-row" onClick={() => onOpenMember(member.sessionId, member.label)}>
       <span className="member-role">{member.roleId}</span>
       <span className="member-label">{member.label}</span>
       <span className="member-phase">{member.phase}</span>
       <span className="member-kind">{member.expectedKind}</span>
-      <span className={`member-state member-${member.currentInputId === null ? 'idle' : 'active'}`}>
-        {member.currentInputId === null ? 'idle' : 'active'}
+      <span className={`member-state member-${active ? 'active' : 'idle'}`}>
+        {active ? 'active' : 'idle'}
+        {statesSeen.size > 0 && active ? '' : ''}
       </span>
       <span className="member-open">跟随 ›</span>
     </button>
   );
-}
-
-/** Polls member input status via task.list each refresh instead of per-row fetches. */
-export function useTaskPollingDisabled(): void {
-  useRef(null);
 }
