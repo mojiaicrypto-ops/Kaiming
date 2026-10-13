@@ -4,7 +4,8 @@
  * (boundary + epoch) and what is already true at that moment.
  */
 import { RpcError, type RpcRouter } from './rpc.ts';
-import { pageHistory, readPiHistory } from './history.ts';
+import { pageHistory, readPiHistory, type HistoryRecord } from './history.ts';
+import { liveHistoryRead } from './live-snapshot.ts';
 import type { SessionEventHub } from './hub.ts';
 import type { Store } from '../store/store.ts';
 
@@ -15,6 +16,16 @@ export interface StreamMethodsOptions {
   readonly hub: SessionEventHub;
   /** serverEpoch and the current Pi instance generation, as a single epoch string. */
   readonly epochOf: (sessionId: string) => string;
+  /**
+   * Reads a session's CURRENT history: a live Pi instance projects its in-memory entries (the
+   * history file lags the stream — an in-flight message only lands on disk when it completes),
+   * and a finished session falls back to its file. Without this the prepare snapshot cannot
+   * describe what is on screen and a resync made the live message vanish.
+   */
+  readonly currentHistory?: (sessionId: string) => {
+    records: readonly HistoryRecord[];
+    problems?: readonly string[];
+  } | undefined;
 }
 
 export function registerStreamMethods(router: RpcRouter, options: StreamMethodsOptions): void {
@@ -39,8 +50,14 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
       const inputs = store.listInputs(sessionId);
       const task = session.currentTaskId === null ? undefined : store.getTask(session.currentTaskId);
       const binding = store.getSessionBinding(sessionId);
-      const history = readPiHistory(binding?.piFile);
-      const messages = pageHistory(history, undefined, SNAPSHOT_MESSAGES);
+      // Live instance first (in-flight entries visible); file fallback for idle sessions.
+      // Both shapes reduce to records + problems; the live read is problem-free by construction.
+      const live = options.currentHistory?.(sessionId);
+      const history = live !== undefined
+        ? live
+        : readPiHistory(binding?.piFile);
+      const problems: readonly string[] = history.problems ?? [];
+      const messages = pageHistory({ records: history.records }, undefined, SNAPSHOT_MESSAGES);
       const sessionRow = store.getSession(sessionId);
 
       return {
@@ -91,7 +108,7 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
             ...(record.isError !== null ? { isError: record.isError } : {}),
           })),
           historyLeaf: branchLeaf(history),
-          historyProblems: history.problems,
+          historyProblems: problems,
         },
       };
     },
@@ -108,7 +125,7 @@ function activityOf(inputs: readonly { readonly status: string }[]): string {
   return 'idle';
 }
 
-function branchLeaf(history: ReturnType<typeof readPiHistory>): string | null {
+function branchLeaf(history: { records: readonly HistoryRecord[] }): string | null {
   const last = history.records[history.records.length - 1];
   return last?.id ?? null;
 }

@@ -16,6 +16,7 @@ import { registerCoreMethods } from './methods.ts';
 import { registerReadMethods } from './read-methods.ts';
 import { registerWriteMethods } from './write-methods.ts';
 import { registerStreamMethods } from './stream-methods.ts';
+import { liveHistoryRead } from './live-snapshot.ts';
 import { SessionEventHub } from './hub.ts';
 import { epochOf } from '../runtime/epoch.ts';
 import { WorkbenchWorker } from './worker.ts';
@@ -150,7 +151,16 @@ export function startWorkbench(options: StartOptions): Promise<{
     },
     resolveInteraction: (interactionId, response) => interactions.resolve(interactionId, response),
   });
-  registerStreamMethods(router, { store, hub, epochOf: (sessionId) => epoch(sessionId) });
+  registerStreamMethods(router, {
+    store,
+    hub,
+    epochOf: (sessionId) => epoch(sessionId),
+    currentHistory: (sessionId) => {
+      const handle = registry.get(sessionId);
+      if (handle === undefined) return undefined;
+      return liveHistoryRead(handle.sessionManager);
+    },
+  });
 
   const workbench = createWorkbenchServer({
     store,

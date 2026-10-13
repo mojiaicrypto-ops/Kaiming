@@ -32,6 +32,7 @@ const PASSWORD = 'stream-secret';
 const PROMPT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'docs', 'technicalnew', 'prompts');
 
 interface Harness {
+  readonly liveHistories: Map<string, { records: readonly import('../src/server/history.ts').HistoryRecord[]; problems?: readonly string[] } | undefined>;
   readonly origin: string;
   readonly store: Store;
   readonly projectId: string;
@@ -107,6 +108,7 @@ async function harness(
       hub.publish(sessionId, event, { inputId: meta.inputId, epoch: epoch(sessionId) });
     },
   });
+  const liveHistories = new Map<string, { records: readonly import('../src/server/history.ts').HistoryRecord[]; problems?: readonly string[] } | undefined>();
   const runWaiters: Array<() => void> = [];
   const worker = new WorkbenchWorker({
     store,
@@ -131,7 +133,13 @@ async function harness(
     controlTask: (control) => runner.controlTask(control),
     invalidate: (sessionId, entity, id) => hub.publish(sessionId, { type: 'invalidate', entity, id }),
   });
-  registerStreamMethods(router, { store, hub, epochOf: (sessionId) => epoch(sessionId) });
+  registerStreamMethods(router, {
+    store,
+    hub,
+    epochOf: (sessionId) => epoch(sessionId),
+    // Tests inject a "live" history source (what main.ts backs with the registry).
+    currentHistory: (sessionId) => liveHistories.get(sessionId),
+  });
   const workbench = createWorkbenchServer({ store, auth, router, hub });
   const { origin } = await workbench.listen(0);
   worker.start();
@@ -144,6 +152,7 @@ async function harness(
   });
 
   const h: Harness = {
+    liveHistories,
     origin,
     store,
     projectId,
@@ -279,6 +288,11 @@ async function waitForRelease(hub: SessionEventHub, attempts = 500): Promise<voi
     await new Promise((resolve) => setImmediate(resolve));
   }
   expect(hub.size).toBe(0);
+}
+
+async function afterHarness(h: Harness): Promise<void> {
+  // The shared afterEach cleans by directory; nothing extra to release here.
+  void h;
 }
 
 describe('session stream', () => {
@@ -497,4 +511,54 @@ describe('session stream', () => {
     // The server releases the subscription when the connection goes away.
     await waitForRelease(h.hub);
   }, 30_000);
+});
+
+describe('session.stream.prepare with a live history source', () => {
+  it('snapshot messages come from the in-memory projection, so an in-flight entry is visible', async () => {
+    const h = await harness();
+    try {
+      // The "live" instance has seen the marker, the user message and an assistant entry that
+      // has NOT yet been flushed to the history file (readPiHistory would miss it).
+      h.liveHistories.set('s-chief', {
+        records: [
+          { index: 0, id: 'mk1', type: 'custom', role: null, content: null, toolCallId: null, toolName: null, isError: null, timestamp: null, inputId: 'i-1', marker: { inputId: 'i-1' } },
+          { index: 1, id: 'u1', type: 'message', role: 'user', content: [{ type: 'text', text: 'q' }], toolCallId: null, toolName: null, isError: null, timestamp: null, inputId: 'i-1', marker: null },
+          { index: 2, id: 'a-live', type: 'message', role: 'assistant', content: [{ type: 'text', text: 'streaming tail' }], toolCallId: null, toolName: null, isError: null, timestamp: null, inputId: 'i-1', marker: null },
+        ],
+        problems: [],
+      });
+      const { snapshot } = await h.prepare('s-chief');
+      const messages = snapshot['messages'] as Array<Record<string, unknown>>;
+      // Markers are not conversation: pageHistory lists message entries only (same as the file
+      // read). The correlated inputId still travels on each message.
+      expect(messages.map((entry) => entry['entryId'])).toEqual(['u1', 'a-live']);
+      expect(messages.every((entry) => entry['inputId'] === 'i-1')).toBe(true);
+      expect((messages[1]?.['content'] as Array<{ text?: string }>)[0]?.text).toBe('streaming tail');
+      expect(snapshot['historyProblems']).toEqual([]);
+    } finally {
+      await afterHarness(h);
+    }
+  });
+
+  it('without a live source the snapshot still reads the history file (fallback)', async () => {
+    const h = await harness();
+    try {
+      const piDir = join(h.root, 'sessions');
+      mkdirSync(piDir, { recursive: true });
+      const piFile = join(piDir, 'pi.jsonl');
+      writeFileSync(
+        piFile,
+        [
+          JSON.stringify({ type: 'session', id: 'pi-1', cwd: h.projectRoot, version: 2 }),
+          JSON.stringify({ type: 'message', id: 'u1', parentId: null, timestamp: 't', message: { role: 'user', content: [{ type: 'text', text: 'from file' }], timestamp: 1 } }),
+        ].join('\n') + '\n',
+      );
+      h.store.recordSessionBinding({ sessionId: 's-chief', piFile, hasHistory: true, configHash: 'test' });
+      const { snapshot } = await h.prepare('s-chief');
+      const messages = snapshot['messages'] as Array<Record<string, unknown>>;
+      expect(messages.map((entry) => entry['entryId'])).toEqual(['u1']);
+    } finally {
+      await afterHarness(h);
+    }
+  });
 });

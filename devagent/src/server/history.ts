@@ -123,7 +123,7 @@ export function readPiHistory(piFile: string | undefined): HistoryRead {
 
 /** Page the message records: the cursor is a previous page's last entry id (stable across appends). */
 export function pageHistory(
-  read: HistoryRead,
+  read: { records: readonly HistoryRecord[] },
   cursor: string | undefined,
   limit: number,
 ): { readonly records: readonly HistoryRecord[]; readonly nextCursor: string | null; readonly unknownCursor: boolean } {
