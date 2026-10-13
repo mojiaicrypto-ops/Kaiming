@@ -11,7 +11,7 @@ export interface ChiefSession {
 
 type Status = 'connecting' | 'connected' | 'reconnecting' | 'offline';
 
-export function useChiefSession(session: ChiefSession | null) {
+export function useChiefSession(session: ChiefSession | null, enabled: boolean) {
   const rpc = useMemo(() => new RpcClient({ onUnauthorized: () => setNeedLogin(true) }), []);
   const [slot, dispatch] = useReducer(slotReducer, undefined, emptySlot);
   const [status, setStatus] = useState<Status>('connecting');
@@ -24,7 +24,7 @@ export function useChiefSession(session: ChiefSession | null) {
   const [taskTick, setTaskTick] = useState(0);
 
   useEffect(() => {
-    if (session === null) return;
+    if (session === null || !enabled) return;
     dispatch({ type: 'reset' });
     const onFrame = (frame: StreamFrame): void => {
       if (frame.type === 'pi' && frame.event?.type === 'blocked') {
@@ -59,7 +59,7 @@ export function useChiefSession(session: ChiefSession | null) {
       stream.stop();
       streamRef.current = null;
     };
-  }, [rpc, session?.projectId, session?.sessionId]);
+  }, [rpc, session?.projectId, session?.sessionId, enabled]);
 
   const submit = useCallback(async (text: string): Promise<void> => {
     if (session === null) return;

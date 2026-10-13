@@ -59,7 +59,7 @@ export function ChiefApp(): React.ReactElement {
     () => (projectId !== '' && sessionId !== '' ? { projectId, sessionId, roleId: 'chief' } : null),
     [projectId, sessionId],
   );
-  const chief = useChiefSession(session);
+  const chief = useChiefSession(session, authed === true);
   const taskId = chief.activeTaskId;
 
   useEffect(() => {
