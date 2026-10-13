@@ -74,6 +74,8 @@ export const emptySlot = (): SessionSlot => ({
 export type SlotAction =
   | { type: 'snapshot'; snapshot: PreparedSnapshot; reason: 'initial' | 'resync' }
   | { type: 'frame'; frame: StreamFrame }
+  | { type: 'inputAccepted'; inputId: string }
+  | { type: 'interactionResolved'; interactionId: string }
   | { type: 'taskDetail'; detail: TaskDetail | null }
   | { type: 'reset' };
 
@@ -108,6 +110,12 @@ function normalizeMessage(message: HistoryMessage): HistoryMessage {
   };
 }
 
+function signatureOf(message: HistoryMessage): string {
+  const first = message.content[0];
+  const text = first !== undefined && 'text' in first ? first.text : first !== undefined && 'arguments' in first ? (first as { arguments?: string }).arguments ?? '' : '';
+  return `${message.role}:${(text ?? '').slice(0, 64)}:${message.toolCallId ?? ''}`;
+}
+
 function mergeMessages(current: readonly HistoryMessage[], incoming: readonly HistoryMessage[]): {
   items: readonly HistoryMessage[];
   liveKeys: ReadonlySet<string>;
@@ -135,12 +143,18 @@ function mergeMessages(current: readonly HistoryMessage[], incoming: readonly Hi
     if (message.streaming === true) liveKeys.add(message.entryId);
   }
   // 2. Live-only entries the snapshot does not know yet (its file read lags the stream),
-  //    in their existing tail order.
+  //    in their existing tail order. A completed live-only entry whose content matches a
+  //    snapshot entry (the stream joined between message_start and message_end, so the
+  //    transient live-* key exists while the snapshot knows the real one) is dropped —
+  //    otherwise it duplicates the bubble forever.
+  const incomingSignatures = new Set(
+    incoming.map((message) => signatureOf(normalizeMessage(message))),
+  );
   for (const message of current) {
-    if (!incomingKeys.has(message.entryId)) {
-      items.push(message);
-      if (message.streaming === true) liveKeys.add(message.entryId);
-    }
+    if (incomingKeys.has(message.entryId)) continue;
+    if (message.streaming !== true && incomingSignatures.has(signatureOf(message))) continue;
+    items.push(message);
+    if (message.streaming === true) liveKeys.add(message.entryId);
   }
   return { items, liveKeys };
 }
@@ -163,6 +177,12 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
     }
     case 'taskDetail':
       return { ...state, taskDetail: action.detail };
+    case 'inputAccepted':
+      // The submit receipt: mark the accepted input as current and the session as queued, so
+      // STOP targets the right input before any Pi event arrives.
+      return { ...state, currentInputId: action.inputId, busy: state.busy === 'idle' ? 'queued' : state.busy };
+    case 'interactionResolved':
+      return { ...state, pending: state.pending.filter((entry) => entry.interactionId !== action.interactionId) };
     case 'frame': {
       const { frame } = action;
       if (frame.type !== 'pi' || frame.event === undefined) {

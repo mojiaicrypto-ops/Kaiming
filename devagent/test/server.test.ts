@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../src/store/store.ts';
 import { AuthService, SESSION_COOKIE, CSRF_HEADER } from '../src/server/auth.ts';
@@ -23,12 +23,14 @@ interface Harness {
   readonly store: Store;
   readonly calls: string[];
   readonly staticDir: string;
+  readonly appStaticDir: string;
   call(method: string, params?: Record<string, unknown>, init?: { requestId?: string; cookie?: string; csrf?: string; origin?: string; raw?: string }): Promise<{ status: number; body: Record<string, unknown>; setCookie: string | null }>;
 }
 
 async function harness(): Promise<Harness> {
   const root = mkdtempSync(join(tmpdir(), 'devagent-server-'));
   const staticDir = join(root, 'web');
+  const appStaticDir = join(root, 'app');
   const store = new Store({ path: join(root, 'state.db'), serverEpoch: 1 });
   const auth = new AuthService({ accessPassword: PASSWORD });
   const router = new RpcRouter();
@@ -53,7 +55,7 @@ async function harness(): Promise<Harness> {
       return { echoed: params['value'] ?? null, calls: calls.length };
     },
   });
-  const workbench: WorkbenchServer = createWorkbenchServer({ store, auth, router, staticDir });
+  const workbench: WorkbenchServer = createWorkbenchServer({ store, auth, router, staticDir, appStaticDir });
   const { origin } = await workbench.listen(0);
   cleanups.push(async () => {
     await workbench.close();
@@ -65,6 +67,7 @@ async function harness(): Promise<Harness> {
     store,
     calls,
     staticDir,
+    appStaticDir,
     async call(method, params = {}, init = {}) {
       const headers: Record<string, string> = { 'content-type': 'application/json' };
       if (init.cookie !== undefined) {
@@ -307,5 +310,39 @@ describe('workbench RPC entry', () => {
     const malformed = await fetch(`${h.origin}/%`);
     expect(malformed.status).toBe(400);
     expect(((await malformed.json()) as { error: { code: string } }).error.code).toBe('INVALID_ARGUMENT');
+  });
+});
+
+describe('the /app surface (React shell build)', () => {
+  it('serves the shell and assets, falls back for deep paths, refuses traversal, 404s unbuilt', async () => {
+    const h = await harness();
+    // Shell + deep path both serve index.html (SPA fallback).
+    mkdirSync(h.appStaticDir, { recursive: true });
+    writeFileSync(join(h.appStaticDir, 'index.html'), '<html id="app-shell">');
+    mkdirSync(join(h.appStaticDir, 'assets'), { recursive: true });
+    writeFileSync(join(h.appStaticDir, 'assets', 'app.js'), 'export {}');
+    const shell = await fetch(`${h.origin}/app/`);
+    expect(shell.status).toBe(200);
+    expect(await shell.text()).toContain('app-shell');
+    const deep = await fetch(`${h.origin}/app/does-not-exist.js`);
+    expect(deep.status).toBe(200);
+    expect(await deep.text()).toContain('app-shell');
+    const asset = await fetch(`${h.origin}/app/assets/app.js`);
+    expect(asset.status).toBe(200);
+    expect(await asset.text()).toBe('export {}');
+    // Traversal out of the app root is refused even through /app/.
+    const escape = await fetch(`${h.origin}/app/../${basename(h.staticDir)}/index.html`);
+    expect(escape.status).toBe(404);
+    // No root escape via encoded dot segments either.
+    const encoded = await fetch(`${h.origin}/app/%2e%2e/${basename(h.staticDir)}/index.html`);
+    expect(encoded.status).toBe(404);
+  });
+
+  it('an absent build yields the explicit not-built error', async () => {
+    const h = await harness();
+    const unbuilt = await fetch(`${h.origin}/app/`);
+    expect(unbuilt.status).toBe(404);
+    const body = (await unbuilt.json()) as { error?: { message?: string } };
+    expect(body.error?.message).toContain('not built');
   });
 });

@@ -1,6 +1,7 @@
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RpcClient, newRequestId } from '../api/rpc';
+import { newRequestId } from '../api/rpc';
+import { createAutoscroll } from '../lib/scroll';
 import { useChiefSession } from '../state/useChiefSession';
 import { Transcript } from './Transcript';
 import { InteractionCard } from './InteractionCard';
@@ -9,9 +10,10 @@ import { MemberDrawer } from './MemberDrawer';
 import type { TaskDetail } from '../state/slot';
 
 interface LoginViewProps {
+  login: (password: string) => Promise<void>;
   onLogin: () => void;
 }
-function LoginView({ onLogin }: LoginViewProps) {
+function LoginView({ login, onLogin }: LoginViewProps) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   return (
@@ -22,7 +24,7 @@ function LoginView({ onLogin }: LoginViewProps) {
         setError(null);
         void (async () => {
           try {
-            await new RpcClient().login(password);
+            await login(password);
             onLogin();
           } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
@@ -54,7 +56,14 @@ export function ChiefApp(): React.ReactElement {
   const [members, setMembers] = useState<ReadonlyArray<{ sessionId: string; roleId: string }>>([]);
   const [drawer, setDrawer] = useState<{ sessionId: string; label: string } | null>(null);
   const [taskDetail, setTaskDetail] = useState<TaskDetail | null>(null);
-  const bodyRef = useRef<HTMLDivElement | null>(null);
+  // Auto-follow via the ported handle: it observes the content child (whose scrollHeight
+  // changes when messages stream) — the container's own box never resizes, so observing it
+  // alone never fired.
+  const autoscrollRef = useRef<ReturnType<typeof createAutoscroll> | null>(null);
+  const [, setAutoscrollState] = useState({ locked: false, showJumpButton: false });
+  const bodyRef = useCallback((element: HTMLDivElement | null) => {
+    autoscrollRef.current = element === null ? null : createAutoscroll(element, setAutoscrollState);
+  }, []);
   const session = useMemo(
     () => (projectId !== '' && sessionId !== '' ? { projectId, sessionId, roleId: 'chief' } : null),
     [projectId, sessionId],
@@ -72,28 +81,10 @@ export function ChiefApp(): React.ReactElement {
     })().catch(() => undefined);
   }, [chief.rpc, session]);
 
-  // Follow the live tail: the transcript container grows while streaming.
+  // Streaming growth follows the ported autoscroll handle (child observation + lock semantics).
   useEffect(() => {
-    const container = bodyRef.current;
-    if (container === null) return;
-    let locked = false;
-    let lastTop = container.scrollTop;
-    const onScroll = (): void => {
-      const atTail = container.scrollHeight - container.scrollTop - container.clientHeight < 60;
-      if (container.scrollTop < lastTop) locked = true;
-      else if (atTail) locked = false;
-      lastTop = container.scrollTop;
-    };
-    container.addEventListener('scroll', onScroll, { passive: true });
-    const observer = new ResizeObserver(() => {
-      if (!locked) container.scrollTop = container.scrollHeight;
-    });
-    observer.observe(container);
-    return () => {
-      container.removeEventListener('scroll', onScroll);
-      observer.disconnect();
-    };
-  }, []);
+    autoscrollRef.current?.followIfUnlocked();
+  }, [chief.slot.items]);
 
   const openProject = useCallback(async (path: string): Promise<void> => {
     const opened = await chief.rpc.call<{ project: { projectId: string; sessions: ReadonlyArray<{ sessionId: string; roleId: string }> } }>(
@@ -155,7 +146,7 @@ export function ChiefApp(): React.ReactElement {
     return <div className="app"><div className="login-view">连接中…</div></div>;
   }
   if (!authed) {
-    return <LoginView onLogin={() => setAuthed(true)} />;
+    return <LoginView login={(password) => chief.rpc.login(password)} onLogin={() => setAuthed(true)} />;
   }
 
   return (
@@ -196,7 +187,7 @@ export function ChiefApp(): React.ReactElement {
       <div className="content">
         <main className="chat-pane">
           <div className="chat-body" ref={bodyRef}>
-            <Transcript items={chief.slot.items.filter((entry) => entry.role !== 'system')} onStreamGrew={() => undefined} />
+            <Transcript items={chief.slot.items.filter((entry) => entry.role !== 'system')} />
             {taskId !== null && (
               <TaskCard
                 detail={taskDetail}

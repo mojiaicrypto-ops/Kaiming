@@ -84,7 +84,6 @@ export function MessageView({ message, live }: MessageProps) {
 
 interface TranscriptProps {
   items: readonly HistoryMessage[];
-  onStreamGrew: () => void;
 }
 
 /**
@@ -92,7 +91,7 @@ interface TranscriptProps {
  * running card (matched by call id, falling back to the newest running card) instead of
  * rendering a separate blob.
  */
-export function Transcript({ items, onStreamGrew }: TranscriptProps) {
+export function Transcript({ items }: TranscriptProps) {
   const toolResults = useRef(new Map<string, { text: string; failed: boolean }>());
   for (const message of items) {
     if (message.role === 'toolResult') {
@@ -104,7 +103,6 @@ export function Transcript({ items, onStreamGrew }: TranscriptProps) {
       }
     }
   }
-  useEffect(() => { onStreamGrew(); });
   return (
     <div className="transcript">
       {items.map((message) => {

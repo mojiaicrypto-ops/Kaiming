@@ -57,3 +57,17 @@ describe('slot merge', () => {
     expect(slot.items.map((entry) => entry.entryId)).toEqual(['u0', 'a1']);
   });
 });
+
+describe('slot merge · orphan live keys', () => {
+  it('a completed live-only entry whose content matches a snapshot entry is dropped (no duplicate)', () => {
+    let slot = emptySlot();
+    // Stream joined mid-turn: message_end arrived without message_start → transient key.
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'pi', seq: 4, event: { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'the answer' }] } } } });
+    expect(slot.items.map((entry) => entry.entryId)).toEqual(['live-4']);
+    // Snapshot catches up with the real entry id for the same message.
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'resync', snapshot: snapshotOf([
+      { entryId: 'real-a1', role: 'assistant', content: [{ type: 'text', text: 'the answer' }] },
+    ]) });
+    expect(slot.items.map((entry) => entry.entryId)).toEqual(['real-a1']);
+  });
+});

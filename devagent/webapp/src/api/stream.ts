@@ -76,6 +76,9 @@ export class SessionStream {
       projectId: this.projectId,
       sessionId: this.sessionId,
     })) as { subscriptionId: string; streamPath: string; snapshot: PreparedSnapshot };
+    // A prepare in flight while the caller switched sessions must not deliver into the new
+    // slot: the effect already dispatched reset for the next session.
+    if (this.closed) return;
     this.handlers.onSnapshot(prepared.snapshot, reason);
     if (!this.closed) {
       void this.connect(prepared.streamPath);

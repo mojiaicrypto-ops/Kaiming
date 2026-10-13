@@ -37,9 +37,20 @@ export function useChiefSession(session: ChiefSession | null, enabled: boolean) 
         setActiveTaskId(notice.id);
         setTaskTick((tick) => tick + 1);
       }
+      if (frame.type === 'invalidate' && notice.entity === 'input' && typeof notice.id === 'string') {
+        // The submit's own receipt: this input is now the session's current (queued) input.
+        // Without it currentInputId stays null and STOP would no-op on the run just started.
+        dispatch({ type: 'inputAccepted', inputId: notice.id });
+      }
+      if (frame.type === 'invalidate' && notice.entity === 'interaction' && typeof notice.id === 'string') {
+        // An answered (or re-resolved) interaction leaves the pending region (the old shell
+        // re-fetched on this notice; dropping it left answered cards actionable).
+        dispatch({ type: 'interactionResolved', interactionId: notice.id });
+      }
       dispatch({ type: 'frame', frame });
     };
     const onSnapshot = (snapshot: PreparedSnapshot): void => {
+      if (snapshot.sessionId !== session?.sessionId) return;
       setStatus('connected');
       setHistoryProblems(snapshot.historyProblems ?? []);
       dispatch({ type: 'snapshot', snapshot, reason: 'resync' });

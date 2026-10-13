@@ -34,6 +34,12 @@ export class RpcClient {
     this.csrfToken = stored === null ? null : stored;
   }
 
+  /** Re-read the stored token: a parallel client (login view) may have refreshed it. */
+  refreshCsrf(): void {
+    const stored = localStorage.getItem(CSRF_KEY);
+    this.csrfToken = stored === null ? null : stored;
+  }
+
   async login(password: string, requestId = newRequestId('login')): Promise<void> {
     const body = await this.send(requestId, 'auth.login', { password }, false);
     const result = body.result as { csrfToken?: string };

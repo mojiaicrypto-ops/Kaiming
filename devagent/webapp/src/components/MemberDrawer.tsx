@@ -41,11 +41,14 @@ export function MemberDrawer({ rpc, projectId, sessionId, label, onClose }: Prop
   useEffect(() => {
     const container = containerRef.current;
     if (container === null) return;
+    // The container's own box never resizes; observe the content child so streaming growth
+    // (scrollHeight change) actually triggers the follow.
     const observer = new ResizeObserver(() => {
       if (container.scrollHeight - container.scrollTop - container.clientHeight < 120) {
         container.scrollTop = container.scrollHeight;
       }
     });
+    for (const child of container.children) observer.observe(child);
     observer.observe(container);
     return () => observer.disconnect();
   }, []);
@@ -62,7 +65,7 @@ export function MemberDrawer({ rpc, projectId, sessionId, label, onClose }: Prop
         <button type="button" className="drawer-close" onClick={onClose}>×</button>
       </header>
       <div className="drawer-body" ref={containerRef}>
-        <Transcript items={messages} onStreamGrew={() => undefined} />
+        <Transcript items={messages} />
       </div>
       <footer className="drawer-foot">只读跟随 · 输入请回主管会话</footer>
     </aside>
