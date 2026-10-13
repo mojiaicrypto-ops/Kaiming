@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import MarkdownIt from 'markdown-it';
 import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';
@@ -28,6 +28,9 @@ function registerLanguages(): void {
   hljs.registerLanguage('markdown', markdown);
   registered = true;
 }
+// Languages register at module scope: the budget queue's deferred highlight runs outside the
+// markdown-it callback path and must never hit "Unknown language".
+registerLanguages();
 
 const markdownIt = new MarkdownIt({
   breaks: true,
@@ -51,36 +54,36 @@ interface CodeBlockProps {
 }
 
 function CodeBlock({ code, language }: CodeBlockProps) {
-  const [html, setHtml] = useMemoState(() =>
+  // Lazy init consumes the budget once per mount; a changed fence remounts via key in Markdown.
+  const [html, setHtml] = useState(() =>
     typeof language === 'string' && language !== '' && hljs.getLanguage(language) !== undefined && takeHighlightBudget(code.length)
       ? hljs.highlight(code, { language }).value
       : null,
-  [code, language]);
+  );
   useEffect(() => {
     if (html !== null) return;
     let cancelled = false;
     const cancel = waitForHighlight(() => {
       if (!cancelled) {
-        setHtml(hljs.highlight(code, { language }).value);
+        // Fences without a language stay plain: hljs would throw for an empty language.
+        if (language !== '' && hljs.getLanguage(language) !== undefined) {
+          setHtml(hljs.highlight(code, { language }).value);
+        }
       }
     });
     return () => {
       cancelled = true;
       cancel();
     };
-  }, [html, code, language, setHtml]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return html === null
     ? <pre><code className={`language-${language}`}>{code}</code></pre>
     : <pre><code className={`language-${language}`} dangerouslySetInnerHTML={{ __html: html }} /></pre>;
 }
 
-// tiny memo-state helper (avoid pulling extra hooks libs)
-import { useState } from 'react';
-function useMemoState<T>(init: () => T, deps: readonly unknown[]): [T, (v: T) => void] {
-  const [value, setValue] = useState<T>(init);
-  useEffect(() => { setValue(init()); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, deps);
-  return [value, setValue];
-}
+// (The previous useMemoState helper double-consumed the highlight budget and fought the
+// queue: lazy useState + keyed remount replaces it.)
 
 export function Markdown({ text }: { text: string }) {
   const blocks = useMemo(() => splitTopLevelFences(text), [text]);
@@ -88,7 +91,7 @@ export function Markdown({ text }: { text: string }) {
     <div className="markdown-body">
       {blocks.map((block, index) =>
         block.kind === 'fence'
-          ? <CodeBlock key={index} code={block.code} language={block.language} />
+          ? <CodeBlock key={`${index}:${block.code.length}:${block.code.slice(-24)}`} code={block.code} language={block.language} />
           : <div key={index} dangerouslySetInnerHTML={{ __html: markdownIt.render(block.text) }} />,
       )}
     </div>

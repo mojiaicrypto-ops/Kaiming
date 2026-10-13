@@ -44,7 +44,10 @@ function LoginView({ onLogin }: LoginViewProps) {
 }
 
 export function ChiefApp(): React.ReactElement {
-  const [authed, setAuthed] = useState(() => document.cookie.includes('agentdev_session='));
+  // Session presence is decided by a cheap authenticated read, not by document.cookie:
+  // the cookie is HttpOnly, so it is invisible to the page and the login view would show
+  // forever even with a valid session.
+  const [authed, setAuthed] = useState<boolean | null>(null);
   const [projectId, setProjectId] = useState(() => localStorage.getItem('agentdev.projectId') ?? '');
   const [sessionId, setSessionId] = useState(() => localStorage.getItem('agentdev.sessionId') ?? '');
   const [pathInput, setPathInput] = useState('');
@@ -127,6 +130,30 @@ export function ChiefApp(): React.ReactElement {
     return member?.roleId;
   }, [taskDetail, sessionId]);
 
+  // One auth probe on mount decides between the login view and the workbench; a stored
+  // project path reopens the project the way the old shell's boot does.
+  const probeRef = useRef(false);
+  useEffect(() => {
+    if (probeRef.current) return;
+    probeRef.current = true;
+    void (async () => {
+      try {
+        await chief.rpc.call('config.get', {});
+        setAuthed(true);
+        const storedPath = localStorage.getItem('agentdev.projectPath');
+        if (storedPath !== null && projectId === '') {
+          await openProject(storedPath);
+        }
+      } catch {
+        setAuthed(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (authed === null) {
+    return <div className="app"><div className="login-view">连接中…</div></div>;
+  }
   if (!authed) {
     return <LoginView onLogin={() => setAuthed(true)} />;
   }

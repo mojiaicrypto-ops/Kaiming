@@ -36,7 +36,11 @@ function whenIdle(run: () => void): void {
 
 function releaseNewest(): void {
   releaseQueued = false;
-  waiting.pop()?.();
+  const show = waiting.pop();
+  const w = window as typeof window & { __hlq?: string[] };
+  w.__hlq = w.__hlq ?? [];
+  w.__hlq.push(`release(${show === undefined ? 'empty' : 'one'})`);
+  show?.();
   if (waiting.length > 0) queueRelease();
 }
 
@@ -55,6 +59,9 @@ function queueRelease(): void {
 export function waitForHighlight(show: () => void): () => void {
   waiting.push(show);
   queueRelease();
+  const w = window as typeof window & { __hlq?: string[] };
+  w.__hlq = w.__hlq ?? [];
+  w.__hlq.push(`sched(${waiting.length})`);
   return () => {
     const index = waiting.indexOf(show);
     if (index !== -1) waiting.splice(index, 1);

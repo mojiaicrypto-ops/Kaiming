@@ -78,31 +78,70 @@ export type SlotAction =
   | { type: 'reset' };
 
 /** Merge snapshot messages with what the slot already shows: snapshot fills, live tail wins. */
+function normalizeBlock(block: unknown): ContentBlock {
+  if (typeof block !== 'object' || block === null) {
+    return { type: 'text', text: String(block ?? '') };
+  }
+  const record = block as Record<string, unknown>;
+  if (record.type === 'toolCall') {
+    // Pi history stores arguments as an object; the live stream appends them as a string.
+    // Normalize the snapshot shape here so the renderer only ever sees strings.
+    const raw = record.arguments;
+    const args = typeof raw === 'string' ? raw : raw === undefined ? '' : JSON.stringify(raw);
+    return {
+      type: 'toolCall',
+      ...(typeof record.id === 'string' ? { id: record.id } : {}),
+      ...(typeof record.name === 'string' ? { name: record.name } : {}),
+      arguments: args,
+    };
+  }
+  if (record.type === 'thinking') {
+    return { type: 'thinking', thinking: typeof record.thinking === 'string' ? record.thinking : '' };
+  }
+  return { type: 'text', text: typeof record.text === 'string' ? record.text : '' };
+}
+
+function normalizeMessage(message: HistoryMessage): HistoryMessage {
+  return {
+    ...message,
+    content: Array.isArray(message.content) ? message.content.map(normalizeBlock) : [{ type: 'text', text: String(message.content ?? '') }],
+  };
+}
+
 function mergeMessages(current: readonly HistoryMessage[], incoming: readonly HistoryMessage[]): {
   items: readonly HistoryMessage[];
   liveKeys: ReadonlySet<string>;
 } {
-  const byKey = new Map<string, HistoryMessage>();
-  for (const message of current) {
-    byKey.set(message.entryId, message);
-  }
+  // Order rule: the snapshot is chronological authority; live-only entries (streaming, echoes
+  // appended before a resync) keep their relative tail order after the snapshot's last entry.
+  const incomingKeys = new Set(incoming.map((message) => message.entryId));
+  const currentByKey = new Map(current.map((message) => [message.entryId, message]));
+  const incomingByKey = new Map<string, HistoryMessage>();
   for (const message of incoming) {
-    const existing = byKey.get(message.entryId);
+    const normalized = normalizeMessage(message);
+    const existing = currentByKey.get(normalized.entryId);
     // A live in-flight entry (streaming) is never downgraded by a lagging snapshot copy.
-    if (existing?.streaming === true && message.streaming !== true) {
-      continue;
+    if (existing?.streaming === true && normalized.streaming !== true) {
+      incomingByKey.set(normalized.entryId, existing);
+    } else {
+      incomingByKey.set(normalized.entryId, { ...normalized, streaming: normalized.streaming ?? false });
     }
-    byKey.set(message.entryId, { ...message, streaming: message.streaming ?? false });
   }
-  const liveKeys = new Set<string>();
   const items: HistoryMessage[] = [];
-  for (const message of byKey.values()) {
-    if (message.streaming === true) liveKeys.add(message.entryId);
+  const liveKeys = new Set<string>();
+  // 1. Snapshot order first: entries the snapshot knows, in the snapshot's own order.
+  for (const message of incomingByKey.values()) {
     items.push(message);
+    if (message.streaming === true) liveKeys.add(message.entryId);
   }
-  // Keep conversation order stable: server snapshots are chronological; live entries were
-  // appended after their snapshot position. Sort by arrival is wrong for tool results (they
-  // flip existing cards); a stable order by first appearance is what the old shell relied on.
+  // 2. Live-only entries the snapshot does not know yet (its file read lags the stream),
+  //    in their existing tail order.
+  for (const message of current) {
+    if (!incomingKeys.has(message.entryId)) {
+      items.push(message);
+      if (message.streaming === true) liveKeys.add(message.entryId);
+    }
+  }
   return { items, liveKeys };
 }
 
@@ -212,11 +251,10 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
             if (liveKey !== undefined) liveKeys.delete(liveKey);
             return { ...state, items, liveKeys };
           }
-          if (message.role === 'user' || message.role === 'toolResult') {
-            items.push(completed);
-            return { ...state, items };
-          }
-          return state;
+          // No live entry (e.g. the stream joined between message_start and message_end):
+          // keep the completed message — dropping it loses a real turn.
+          items.push(completed);
+          return { ...state, items };
         }
         case 'agent_start':
           return { ...state, busy: 'processing' };
