@@ -119,3 +119,15 @@ describe('slot merge · thinking-first twins', () => {
     expect(slot.items.map((e) => e.entryId)).toEqual(['a', 'b']);
   });
 });
+
+
+describe('slot merge · snapshot channel normalization', () => {
+  it('snapshot messages with object toolCall arguments normalize through the same boundary', () => {
+    let slot = emptySlot();
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'initial', snapshot: { sessionId: 's', projectId: 'p', roleId: 'chief', activity: 'idle', currentInputId: null, inputs: [], messages: [{ entryId: 'r1', role: 'assistant', content: [{ type: 'toolCall', id: 'c1', name: 'ls', arguments: { path: '.' } }] }], interactions: [], historyLeaf: null, historyProblems: [] } });
+    const block = slot.items[0]?.content[0] as { arguments: unknown };
+    expect(typeof block.arguments).toBe('string');
+    expect(block.arguments).toBe('{"path":"."}');
+    expect(slot.items[0]?.entryId).toBe('r1');
+  });
+});

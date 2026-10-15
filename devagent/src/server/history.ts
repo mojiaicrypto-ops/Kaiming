@@ -140,3 +140,13 @@ export function pageHistory(
   const next = start + limit < messages.length ? (page[page.length - 1]?.id ?? null) : null;
   return { records: page, nextCursor: next, unknownCursor: false };
 }
+
+/** The LAST `limit` message records: a reconnect snapshot must describe the conversation's
+ *  tail — the first-page cut silently dropped the newest turns once history passed the cap. */
+export function tailHistory(
+  read: { records: readonly HistoryRecord[] },
+  limit: number,
+): { readonly records: readonly HistoryRecord[] } {
+  const messages = read.records.filter((record) => record.type === 'message');
+  return { records: messages.slice(Math.max(messages.length - limit, 0)) };
+}

@@ -4,7 +4,7 @@
  * (boundary + epoch) and what is already true at that moment.
  */
 import { RpcError, type RpcRouter } from './rpc.ts';
-import { pageHistory, readPiHistory, type HistoryRecord } from './history.ts';
+import { tailHistory, readPiHistory, type HistoryRecord } from './history.ts';
 import { liveHistoryRead } from './live-snapshot.ts';
 import type { SessionEventHub } from './hub.ts';
 import type { Store } from '../store/store.ts';
@@ -57,7 +57,7 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
         ? live
         : readPiHistory(binding?.piFile);
       const problems: readonly string[] = history.problems ?? [];
-      const messages = pageHistory({ records: history.records }, undefined, SNAPSHOT_MESSAGES);
+      const messages = tailHistory({ records: history.records }, SNAPSHOT_MESSAGES);
       const sessionRow = store.getSession(sessionId);
 
       return {

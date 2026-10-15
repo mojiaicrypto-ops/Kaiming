@@ -6,8 +6,13 @@
  * MERGES into the slot by entry id and never drops a live in-flight entry. The snapshot may lag
  * the stream (the server reads history); the stream tail wins for entries the snapshot cannot
  * describe yet. Switching sessions switches slots: nothing is cleared or reloaded.
+ *
+ * Normalization: EVERY incoming message (snapshot file shape, message_start/end event shapes,
+ * delta accumulation) passes through state/normalize.ts exactly once at the boundary below —
+ * the reducer's internals and the renderer only ever see normalized blocks.
  */
 import type { PreparedSnapshot, PendingInteraction, StreamFrame } from '../api/stream';
+import { normalizeMessage, normalizePiMessage } from './normalize';
 
 export type ChatRole = 'user' | 'assistant' | 'system' | 'toolResult';
 
@@ -79,37 +84,6 @@ export type SlotAction =
   | { type: 'pendingReplaced'; pending: readonly PendingInteraction[] }
   | { type: 'taskDetail'; detail: TaskDetail | null }
   | { type: 'reset' };
-
-/** Merge snapshot messages with what the slot already shows: snapshot fills, live tail wins. */
-function normalizeBlock(block: unknown): ContentBlock {
-  if (typeof block !== 'object' || block === null) {
-    return { type: 'text', text: String(block ?? '') };
-  }
-  const record = block as Record<string, unknown>;
-  if (record.type === 'toolCall') {
-    // Pi history stores arguments as an object; the live stream appends them as a string.
-    // Normalize the snapshot shape here so the renderer only ever sees strings.
-    const raw = record.arguments;
-    const args = typeof raw === 'string' ? raw : raw === undefined ? '' : JSON.stringify(raw);
-    return {
-      type: 'toolCall',
-      ...(typeof record.id === 'string' ? { id: record.id } : {}),
-      ...(typeof record.name === 'string' ? { name: record.name } : {}),
-      arguments: args,
-    };
-  }
-  if (record.type === 'thinking') {
-    return { type: 'thinking', thinking: typeof record.thinking === 'string' ? record.thinking : '' };
-  }
-  return { type: 'text', text: typeof record.text === 'string' ? record.text : '' };
-}
-
-function normalizeMessage(message: HistoryMessage): HistoryMessage {
-  return {
-    ...message,
-    content: Array.isArray(message.content) ? message.content.map(normalizeBlock) : [{ type: 'text', text: String(message.content ?? '') }],
-  };
-}
 
 /**
  * Content fingerprint for the live-twin dedupe (mergeMessages step 2). Reads every block type
@@ -203,7 +177,22 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
       return emptySlot();
     case 'snapshot': {
       const { snapshot } = action;
-      const merged = mergeMessages(state.items, snapshot.messages as HistoryMessage[]);
+      // The snapshot's messages come from the history file (Pi shapes); the boundary
+      // normalizes them exactly like every other channel before the merge sees them.
+      // Each record's own entryId (the server projects record.id) is preserved.
+      const merged = mergeMessages(
+        state.items,
+        (snapshot.messages as unknown[]).map((message) =>
+          normalizePiMessage(message as { role?: string; content?: unknown }, {
+            entryId: typeof (message as { entryId?: unknown }).entryId === 'string' ? (message as { entryId: string }).entryId : '',
+            streaming: false,
+            inputId: (message as { inputId?: string | null }).inputId ?? null,
+            toolCallId: (message as { toolCallId?: string }).toolCallId,
+            toolName: (message as { toolName?: string }).toolName,
+            isError: (message as { isError?: boolean }).isError,
+          }),
+        ),
+      );
       return {
         ...state,
         items: merged.items,
@@ -229,16 +218,12 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
     case 'frame': {
       const { frame } = action;
       if (frame.type !== 'pi' || frame.event === undefined) {
-        if (frame.type === 'invalidate') {
-          // Business notices re-read through RPC elsewhere; nothing to change in the tail.
-          return state;
-        }
         return state;
       }
       const event = frame.event;
       switch (event.type) {
         case 'message_start': {
-          const message = (event.message ?? {}) as { role?: string; content?: ContentBlock[] };
+          const message = (event.message ?? {}) as { role?: string; content?: unknown };
           if (message.role !== 'assistant') return state;
           const entryId = `live-${frame.seq ?? Date.now()}`;
           if (state.liveKeys.has(entryId)) return state;
@@ -247,7 +232,7 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
             busy: 'processing',
             items: [
               ...state.items,
-              { entryId, role: 'assistant', content: normalizeMessage({ entryId, role: 'assistant', content: (message.content ?? []) as ContentBlock[] }).content, streaming: true, inputId: frame.inputId ?? null },
+              normalizePiMessage(message, { entryId, streaming: true, inputId: frame.inputId ?? null }),
             ],
             liveKeys: new Set([...state.liveKeys, entryId]),
           };
@@ -291,26 +276,22 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
         }
         case 'message_end': {
           const message = event.message as
-            | { id?: string; role?: ChatRole; content?: ContentBlock[]; toolCallId?: string; toolName?: string; isError?: boolean; stopReason?: string }
+            | { id?: string; role?: string; content?: unknown; toolCallId?: string; toolName?: string; isError?: boolean; stopReason?: string }
             | undefined;
           if (message === undefined) return state;
           const items = [...state.items];
           const liveIndex = items.findIndex((entry) => entry.streaming === true);
-          const completed: HistoryMessage = {
-            entryId: message.id ?? items[liveIndex]?.entryId ?? `live-${frame.seq}`,
-            role: message.role ?? 'assistant',
-            // message_end carries the same Pi shapes as the snapshot (toolCall arguments are
-            // objects): normalize here too, or the tool card crashes on a non-string arg.
-            content: normalizeMessage({ entryId: '', role: 'assistant', content: (message.content ?? []) as ContentBlock[] }).content,
-            inputId: frame.inputId ?? null,
+          const liveKey = items[liveIndex]?.entryId;
+          const completed = normalizePiMessage(message, {
+            entryId: message.id ?? liveKey ?? `live-${frame.seq}`,
             streaming: false,
+            inputId: frame.inputId ?? null,
+            toolCallId: message.toolCallId,
+            toolName: message.toolName,
+            isError: message.isError,
             stopReason: message.stopReason ?? null,
-            ...(message.toolCallId !== undefined ? { toolCallId: message.toolCallId } : {}),
-            ...(message.toolName !== undefined ? { toolName: message.toolName } : {}),
-            ...(message.isError !== undefined ? { isError: message.isError } : {}),
-          };
+          });
           if (liveIndex >= 0) {
-            const liveKey = items[liveIndex]?.entryId;
             items[liveIndex] = completed;
             const liveKeys = new Set(state.liveKeys);
             if (liveKey !== undefined) liveKeys.delete(liveKey);
