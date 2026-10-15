@@ -71,3 +71,20 @@ describe('slot merge · orphan live keys', () => {
     expect(slot.items.map((entry) => entry.entryId)).toEqual(['real-a1']);
   });
 });
+
+describe('slot merge · live frame shapes', () => {
+  it('message_end with object toolCall arguments normalizes to a string (the ToolCard crash)', () => {
+    let slot = emptySlot();
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'pi', seq: 7, event: { type: 'message_end', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'c1', name: 'ls', arguments: { path: '.' } }] } } } });
+    const block = slot.items[0]?.content[0] as { arguments: unknown };
+    expect(typeof block.arguments).toBe('string');
+    expect(block.arguments).toBe('{"path":"."}');
+  });
+
+  it('message_start with object toolCall arguments normalizes as well', () => {
+    let slot = emptySlot();
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'pi', seq: 8, event: { type: 'message_start', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'c2', name: 'ls', arguments: { path: 'x' } }] } } } });
+    const block = slot.items[0]?.content[0] as { arguments: unknown };
+    expect(typeof block.arguments).toBe('string');
+  });
+});

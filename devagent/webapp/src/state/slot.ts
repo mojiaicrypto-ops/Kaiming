@@ -204,7 +204,7 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
             busy: 'processing',
             items: [
               ...state.items,
-              { entryId, role: 'assistant', content: message.content ?? [], streaming: true, inputId: frame.inputId ?? null },
+              { entryId, role: 'assistant', content: normalizeMessage({ entryId, role: 'assistant', content: (message.content ?? []) as ContentBlock[] }).content, streaming: true, inputId: frame.inputId ?? null },
             ],
             liveKeys: new Set([...state.liveKeys, entryId]),
           };
@@ -256,7 +256,9 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
           const completed: HistoryMessage = {
             entryId: message.id ?? items[liveIndex]?.entryId ?? `live-${frame.seq}`,
             role: message.role ?? 'assistant',
-            content: message.content ?? [],
+            // message_end carries the same Pi shapes as the snapshot (toolCall arguments are
+            // objects): normalize here too, or the tool card crashes on a non-string arg.
+            content: normalizeMessage({ entryId: '', role: 'assistant', content: (message.content ?? []) as ContentBlock[] }).content,
             inputId: frame.inputId ?? null,
             streaming: false,
             stopReason: message.stopReason ?? null,
