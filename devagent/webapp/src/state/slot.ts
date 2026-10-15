@@ -111,10 +111,43 @@ function normalizeMessage(message: HistoryMessage): HistoryMessage {
   };
 }
 
+/**
+ * Content fingerprint for the live-twin dedupe (mergeMessages step 2). Reads every block type
+ * (text/thinking/toolCall) — thinking-first assistant messages previously all signed the same,
+ * which both failed to dedupe the live twin and over-deduped distinct messages.
+ *
+ * The stale-twin case is asymmetric: a leftover live-only entry holds the SAME or OLDER
+ * (streaming-cut) content than the snapshot's completed entry. `matchesTwin` therefore also
+ * accepts a strict prefix, so the partial "second copy with half the text" is dropped in
+ * favor of the file's complete version.
+ */
 function signatureOf(message: HistoryMessage): string {
-  const first = message.content[0];
-  const text = first !== undefined && 'text' in first ? first.text : first !== undefined && 'arguments' in first ? (first as { arguments?: string }).arguments ?? '' : '';
-  return `${message.role}:${(text ?? '').slice(0, 64)}:${message.toolCallId ?? ''}`;
+  const parts = message.content.map((block) => {
+    if (block.type === 'text') return `t:${block.text}`;
+    if (block.type === 'thinking') return `k:${block.thinking}`;
+    return `c:${block.id ?? ''}:${block.arguments ?? ''}`;
+  });
+  return `${message.role}|${message.toolCallId ?? ''}|${parts.join('\u0001')}`;
+}
+
+/** A live-only completed message whose content is a prefix of a snapshot entry's content
+ *  (same role, same block kinds in order) is that entry's stale twin. */
+function matchesTwin(partial: HistoryMessage, complete: HistoryMessage): boolean {
+  if (partial.role !== complete.role || partial.content.length > complete.content.length) return false;
+  if (partial.toolCallId !== complete.toolCallId) return false;
+  for (let index = 0; index < partial.content.length; index += 1) {
+    const a = partial.content[index];
+    const b = complete.content[index];
+    if (a === undefined || b === undefined || a.type !== b.type) return false;
+    if (a.type === 'text' && b.type === 'text' && !b.text.startsWith(a.text)) return false;
+    if (a.type === 'thinking' && b.type === 'thinking' && !b.thinking.startsWith(a.thinking)) return false;
+    if (a.type === 'toolCall' && b.type === 'toolCall') {
+      // Argument streams: a partial call has truncated or empty arguments; ids must match.
+      if ((a.id ?? '') !== (b.id ?? '')) return false;
+      if (a.arguments !== undefined && a.arguments !== '' && !(b.arguments ?? '').startsWith(a.arguments)) return false;
+    }
+  }
+  return true;
 }
 
 function mergeMessages(current: readonly HistoryMessage[], incoming: readonly HistoryMessage[]): {
@@ -144,16 +177,20 @@ function mergeMessages(current: readonly HistoryMessage[], incoming: readonly Hi
     if (message.streaming === true) liveKeys.add(message.entryId);
   }
   // 2. Live-only entries the snapshot does not know yet (its file read lags the stream),
-  //    in their existing tail order. A completed live-only entry whose content matches a
-  //    snapshot entry (the stream joined between message_start and message_end, so the
-  //    transient live-* key exists while the snapshot knows the real one) is dropped —
-  //    otherwise it duplicates the bubble forever.
+  //    in their existing tail order. A completed live-only entry that equals OR is a content
+  //    prefix of a snapshot entry (the stale twin: the stream joined mid-turn, so the
+  //    transient live-* key holds a partial copy) is dropped — otherwise it duplicates the
+  //    bubble, the partial copy showing "half the text".
   const incomingSignatures = new Set(
     incoming.map((message) => signatureOf(normalizeMessage(message))),
   );
   for (const message of current) {
     if (incomingKeys.has(message.entryId)) continue;
     if (message.streaming !== true && incomingSignatures.has(signatureOf(message))) continue;
+    if (message.streaming !== true) {
+      const staleTwin = incoming.some((candidate) => matchesTwin(message, candidate));
+      if (staleTwin) continue;
+    }
     items.push(message);
     if (message.streaming === true) liveKeys.add(message.entryId);
   }

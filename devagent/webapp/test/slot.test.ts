@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { emptySlot, slotReducer } from '../src/state/slot';
+import type { HistoryMessage } from '../src/state/slot';
 import type { PreparedSnapshot } from '../src/api/stream';
 
 function snapshotOf(messages: unknown[]): PreparedSnapshot {
@@ -86,5 +87,35 @@ describe('slot merge · live frame shapes', () => {
     slot = slotReducer(slot, { type: 'frame', frame: { type: 'pi', seq: 8, event: { type: 'message_start', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'c2', name: 'ls', arguments: { path: 'x' } }] } } } });
     const block = slot.items[0]?.content[0] as { arguments: unknown };
     expect(typeof block.arguments).toBe('string');
+  });
+});
+
+describe('slot merge · thinking-first twins', () => {
+  const thinkingMsg = (entryId: string, text: string): HistoryMessage => ({
+    entryId, role: 'assistant', streaming: false,
+    content: [{ type: 'thinking', thinking: 'plan it' }, { type: 'text', text }],
+  });
+
+  it('an exact completed live twin with thinking-first content is dropped', () => {
+    let slot = emptySlot();
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'pi', seq: 1, event: { type: 'message_start', message: { role: 'assistant', content: [] } } } });
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'pi', seq: 2, event: { type: 'message_end', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'plan it' }, { type: 'text', text: 'hello' }] } } } });
+    // Resync with the snapshot knowing the same turn under its real id.
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'resync', snapshot: { sessionId: 's', projectId: 'p', roleId: 'chief', activity: 'idle', currentInputId: null, inputs: [], messages: [thinkingMsg('real-1', 'hello')], interactions: [], historyLeaf: null, historyProblems: [] } });
+    expect(slot.items.map((e) => e.entryId)).toEqual(['real-1']);
+  });
+
+  it('a partial (half-text) live twin is dropped in favor of the complete snapshot entry', () => {
+    let slot = emptySlot();
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'pi', seq: 3, event: { type: 'message_start', message: { role: 'assistant', content: [] } } } });
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'pi', seq: 4, event: { type: 'message_end', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'plan it' }, { type: 'text', text: 'hel' }] } } } });
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'resync', snapshot: { sessionId: 's', projectId: 'p', roleId: 'chief', activity: 'idle', currentInputId: null, inputs: [], messages: [thinkingMsg('real-2', 'hello')], interactions: [], historyLeaf: null, historyProblems: [] } });
+    expect(slot.items.map((e) => e.entryId)).toEqual(['real-2']);
+  });
+
+  it('distinct thinking messages are NOT deduped against each other (old first-block-only signature bug)', () => {
+    let slot = emptySlot();
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'resync', snapshot: { sessionId: 's', projectId: 'p', roleId: 'chief', activity: 'idle', currentInputId: null, inputs: [], messages: [thinkingMsg('a', 'one'), thinkingMsg('b', 'two')], interactions: [], historyLeaf: null, historyProblems: [] } });
+    expect(slot.items.map((e) => e.entryId)).toEqual(['a', 'b']);
   });
 });
