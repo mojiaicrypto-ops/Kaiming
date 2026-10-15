@@ -51,3 +51,11 @@
 - W-c 剩余：`TaskCard`/`MemberDrawer` 已有实现但未接真实 Task 流（需要一次真实 createTaskSessions 运行）；
   成员状态轮询接的是 `session.get` 占位（`TaskCard.tsx` 内 fetch 待改为 rpc + `task.get` members.currentInputId 状态映射）。
 - W-e2 浏览器验收场景化（含"运行中代次变化"对照用例）与结算。
+
+
+### 交互卡两处断点（2026-10-15，commit 765627e）
+用户报告"选择弹框有、交互没反应"。实机驱动真实 select 问题定位：
+1. `interaction.respond` 缺 `projectId`（服务端 requireProject）→ 每次答复 409 'projectId is required'，卡片永远挂着。
+2. 新建的交互从不出现/消失不通畅：slot 只在快照时替换 pending；interaction invalidate 仅处理了"已答复"分支。现在任意 interaction invalidate 都会经 prepare 重读权威 pending 列表（旧壳 refreshInteractions 路径）并 dispatch `pendingReplaced`。
+端到端验证：select 问题 → 点 B → 卡片离开 pending 区域、模型回"已收到你的选择：B"；套件 235/235 + webapp 6/6。
+遗留设计缺口（登记）：连续多次选择（多轮 question）目前靠"每张卡独立 + pendingReplaced 全量刷新"支撑，视觉上无"第 N 问/进度"概念；若产品要求更强的多轮选择流（如向导式分步），需另行设计。
