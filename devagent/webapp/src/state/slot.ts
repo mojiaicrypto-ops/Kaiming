@@ -183,7 +183,9 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
       // STOP targets the right input before any Pi event arrives.
       return { ...state, currentInputId: action.inputId, busy: state.busy === 'idle' ? 'queued' : state.busy };
     case 'interactionResolved':
-      return { ...state, pending: state.pending.filter((entry) => entry.interactionId !== action.interactionId) };
+      // Keep the card visible so its echo shows; the authoritative pendingReplaced (which
+      // no longer contains it) removes it from the region.
+      return { ...state, pending: state.pending.map((entry) => entry.interactionId === action.interactionId ? { ...entry, resolved: true } : entry) };
     case 'pendingReplaced':
       // The server's pending list is authoritative (also covers creations); keep slot state.
       return { ...state, pending: action.pending };

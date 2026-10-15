@@ -14,14 +14,29 @@ interface Props {
  * to the chief stream; that gap is registered in the plan and is a later package.
  */
 export function TaskCard({ detail, visible, onOpenMember, onRefresh }: Props) {
+  const [refreshFailed, setRefreshFailed] = useState(false);
   useEffect(() => {
     if (!visible) return;
-    void onRefresh();
-    const timer = setInterval(() => { void onRefresh(); }, 3_000);
+    const poll = (): void => {
+      onRefresh().catch(() => setRefreshFailed(true));
+    };
+    void poll();
+    const timer = setInterval(poll, 3_000);
     return () => clearInterval(timer);
   }, [visible, onRefresh]);
 
-  if (detail === null) return null;
+  // The invalidate frame arrives before the first task.get answers: show a skeleton, not void.
+  if (detail === null) {
+    return (
+      <details className="task-card task-card-loading" open>
+        <summary>
+          <span className="task-kind">task</span>
+          <span className="task-phase">加载中…</span>
+          <span className="task-status task-running">loading</span>
+        </summary>
+      </details>
+    );
+  }
   return (
     <details className="task-card" data-task-id={detail.task.taskId} open>
       <summary>
@@ -29,6 +44,7 @@ export function TaskCard({ detail, visible, onOpenMember, onRefresh }: Props) {
         <span className="task-phase">{detail.task.phase}</span>
         <span className={`task-status task-${detail.task.status}`}>{detail.task.status}</span>
         <span className="task-results">{detail.results.length} result(s)</span>
+        {refreshFailed && <span className="task-refresh-failed" title="task.get 最近一次刷新失败，稍后自动重试">刷新失败</span>}
       </summary>
       <div className="task-members">
         {detail.members.length === 0 && <p className="task-empty">当前步骤还没有成员会话。</p>}

@@ -30,6 +30,8 @@ export interface PendingInteraction {
   taskId: string | null;
   revision: number;
   createdAt: string;
+  /** Local-only: an optimistically answered card stays until the authoritative refresh. */
+  resolved?: boolean;
 }
 
 export interface StreamFrame {

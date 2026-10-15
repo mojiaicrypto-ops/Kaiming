@@ -23,6 +23,15 @@ export function MemberDrawer({ rpc, projectId, sessionId, label, onClose }: Prop
   const containerRef = useRef<HTMLDivElement | null>(null);
   const followRef = useRef<() => void>(() => undefined);
 
+  // ESC closes the drawer (audit: the × hot zone alone is not enough).
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   useEffect(() => {
     const onFrame = (frame: StreamFrame): void => { dispatch({ type: 'frame', frame }); };
     const onSnapshot = (snapshot: PreparedSnapshot): void => {
@@ -65,9 +74,13 @@ export function MemberDrawer({ rpc, projectId, sessionId, label, onClose }: Prop
         <button type="button" className="drawer-close" onClick={onClose}>×</button>
       </header>
       <div className="drawer-body" ref={containerRef}>
-        <Transcript items={messages} />
+        {status !== 'connected' && slot.items.length === 0 ? (
+          <p className="drawer-loading">{status === 'connecting' ? '正在连接成员会话…' : '连接中断，正在重连…'}</p>
+        ) : (
+          <Transcript items={messages} />
+        )}
       </div>
-      <footer className="drawer-foot">只读跟随 · 输入请回主管会话</footer>
+      <footer className="drawer-foot">只读跟随 · 输入请回主管会话 · Esc 关闭</footer>
     </aside>
   );
 }

@@ -108,6 +108,9 @@ export function useChiefSession(session: ChiefSession | null, enabled: boolean) 
       expectedRevision: interaction.revision,
       response,
     }, { requestId: newRequestId('answer') });
+    // Optimistic local flip: the card shows its echo immediately; the invalidate-driven
+    // pendingReplaced refresh corrects the region if the server disagrees.
+    dispatch({ type: 'interactionResolved', interactionId: interaction.interactionId });
   }, [rpc, session]);
 
   const refreshTask = useCallback(async (taskId: string): Promise<TaskDetail | null> => {
