@@ -59,3 +59,14 @@
 2. 新建的交互从不出现/消失不通畅：slot 只在快照时替换 pending；interaction invalidate 仅处理了"已答复"分支。现在任意 interaction invalidate 都会经 prepare 重读权威 pending 列表（旧壳 refreshInteractions 路径）并 dispatch `pendingReplaced`。
 端到端验证：select 问题 → 点 B → 卡片离开 pending 区域、模型回"已收到你的选择：B"；套件 235/235 + webapp 6/6。
 遗留设计缺口（登记）：连续多次选择（多轮 question）目前靠"每张卡独立 + pendingReplaced 全量刷新"支撑，视觉上无"第 N 问/进度"概念；若产品要求更强的多轮选择流（如向导式分步），需另行设计。
+
+
+### 产品完整性专项（2026-10-16，commit 117e023）
+用户反馈"半成品"。走查 13 项 UX 断点（scout 审计 agent://WebappUxAudit），high/med 全部闭环：
+- 全局 toast（lib/toast.ts）：openProject/session.create/submit/stop 失败可见、成功有确认。
+- 会话过期（needLogin）→ 登录视图 + 提示，不再半死。
+- 交互卡完整生命周期：busy → 乐观回显（interactionResolved 保留卡片，pendingReplaced 收走）→ STALE"已被处理" → 网络失败行内重试；多问编号、input autoFocus、空输入防护。
+- 断流横幅（重连中/连接中 + 手动重试）；空态（未开项目引导 / 新会话欢迎）；composer IME 保护、失败恢复草稿、busy 占位、STOP 仅运行中显示；回到最新浮动按钮；TaskCard 骨架 + 刷新失败标记；抽屉加载态 + ESC；focus-visible。
+
+实机验收（真实模型，ux-accept tab）：错误口令提示 ✓、两连问（select→confirm）编号与排队 ✓、答"红"→确认→总结 ✓、越权答复后 STALE 路径 ✓（out-of-band respond rev2 后 UI 卡片收走）、空提交不发 ✓、Shift+Enter 换行不发 ✓、坏路径 toast ✓、回到底部按钮出现→点击回尾 ✓、套件 235/235 + webapp 6/6。
+遗留：抽屉 ESC 未实测（该会话无成员，逻辑已实现）；错误口令后 csrf 未刷新的边缘（登录成功路径覆盖）。
