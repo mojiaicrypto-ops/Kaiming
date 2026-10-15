@@ -23,6 +23,15 @@ export function useChiefSession(session: ChiefSession | null, enabled: boolean) 
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [taskTick, setTaskTick] = useState(0);
 
+  const refreshPending = useCallback(async (): Promise<void> => {
+    if (session === null) return;
+    const read = await rpc.call<{ snapshot: { interactions: PendingInteraction[] } }>('session.stream.prepare', {
+      projectId: session.projectId,
+      sessionId: session.sessionId,
+    });
+    dispatch({ type: 'pendingReplaced', pending: read.snapshot.interactions });
+  }, [rpc, session]);
+
   useEffect(() => {
     if (session === null || !enabled) return;
     dispatch({ type: 'reset' });
@@ -43,9 +52,10 @@ export function useChiefSession(session: ChiefSession | null, enabled: boolean) 
         dispatch({ type: 'inputAccepted', inputId: notice.id });
       }
       if (frame.type === 'invalidate' && notice.entity === 'interaction' && typeof notice.id === 'string') {
-        // An answered (or re-resolved) interaction leaves the pending region (the old shell
-        // re-fetched on this notice; dropping it left answered cards actionable).
-        dispatch({ type: 'interactionResolved', interactionId: notice.id });
+        // An interaction changed — created OR resolved. The frame carries no payload, so
+        // re-read the pending list (the old shell's refreshInteractions path); dispatching
+        // the authoritative list also removes answered cards.
+        void refreshPending();
       }
       dispatch({ type: 'frame', frame });
     };
@@ -93,11 +103,12 @@ export function useChiefSession(session: ChiefSession | null, enabled: boolean) 
 
   const respond = useCallback(async (interaction: PendingInteraction, response: unknown): Promise<void> => {
     await rpc.call('interaction.respond', {
+      projectId: session?.projectId,
       interactionId: interaction.interactionId,
       expectedRevision: interaction.revision,
       response,
     }, { requestId: newRequestId('answer') });
-  }, [rpc]);
+  }, [rpc, session]);
 
   const refreshTask = useCallback(async (taskId: string): Promise<TaskDetail | null> => {
     if (session === null) return null;

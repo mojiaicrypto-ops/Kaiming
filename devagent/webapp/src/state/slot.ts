@@ -76,6 +76,7 @@ export type SlotAction =
   | { type: 'frame'; frame: StreamFrame }
   | { type: 'inputAccepted'; inputId: string }
   | { type: 'interactionResolved'; interactionId: string }
+  | { type: 'pendingReplaced'; pending: readonly PendingInteraction[] }
   | { type: 'taskDetail'; detail: TaskDetail | null }
   | { type: 'reset' };
 
@@ -183,6 +184,9 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
       return { ...state, currentInputId: action.inputId, busy: state.busy === 'idle' ? 'queued' : state.busy };
     case 'interactionResolved':
       return { ...state, pending: state.pending.filter((entry) => entry.interactionId !== action.interactionId) };
+    case 'pendingReplaced':
+      // The server's pending list is authoritative (also covers creations); keep slot state.
+      return { ...state, pending: action.pending };
     case 'frame': {
       const { frame } = action;
       if (frame.type !== 'pi' || frame.event === undefined) {
