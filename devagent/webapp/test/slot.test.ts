@@ -124,10 +124,39 @@ describe('slot merge · thinking-first twins', () => {
 describe('slot merge · snapshot channel normalization', () => {
   it('snapshot messages with object toolCall arguments normalize through the same boundary', () => {
     let slot = emptySlot();
-    slot = slotReducer(slot, { type: 'snapshot', reason: 'initial', snapshot: { sessionId: 's', projectId: 'p', roleId: 'chief', activity: 'idle', currentInputId: null, inputs: [], messages: [{ entryId: 'r1', role: 'assistant', content: [{ type: 'toolCall', id: 'c1', name: 'ls', arguments: { path: '.' } }] }], interactions: [], historyLeaf: null, historyProblems: [] } });
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'initial', snapshot: { sessionId: 's', projectId: 'p', roleId: 'chief', activity: 'idle', currentInputId: null, inputs: [], messages: [{ entryId: 'r1', role: 'assistant', content: [{ type: 'toolCall', id: 'c1', name: 'ls', arguments: { path: '.' } }] }] as never, interactions: [], historyLeaf: null, historyProblems: [] } });
     const block = slot.items[0]?.content[0] as { arguments: unknown };
     expect(typeof block.arguments).toBe('string');
     expect(block.arguments).toBe('{"path":"."}');
     expect(slot.items[0]?.entryId).toBe('r1');
+  });
+});
+
+describe('slot merge · lost message_end under resync', () => {
+  const thinkingMsg = (entryId: string, text: string, streaming = false): HistoryMessage => ({
+    entryId, role: 'assistant', streaming,
+    content: [{ type: 'thinking', thinking: 'plan it' }, { type: 'text', text }],
+  });
+
+  it('a STILL-STREAMING live entry whose completed twin is in the snapshot is dropped (no ghost half-render)', () => {
+    let slot = emptySlot();
+    // The live entry started streaming (thinking, then partial text) and its end frame was
+    // lost in the resync.
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'pi', seq: 1, event: { type: 'message_start', message: { role: 'assistant', content: [] } } } });
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'pi', seq: 2, event: { type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: 'plan it' } } } });
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'pi', seq: 3, event: { type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 1, delta: 'hel' } } } });
+    // Resync: the run had completed, the snapshot carries the finished turn.
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'resync', snapshot: { sessionId: 's', projectId: 'p', roleId: 'chief', activity: 'idle', currentInputId: null, inputs: [], messages: [thinkingMsg('real-9', 'hello')], interactions: [], historyLeaf: null, historyProblems: [] } });
+    expect(slot.items.map((e) => e.entryId)).toEqual(['real-9']);
+    expect(slot.liveKeys.size).toBe(0);
+  });
+
+  it('a genuinely in-flight live entry with NO snapshot twin survives the merge (content not in file yet)', () => {
+    let slot = emptySlot();
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'pi', seq: 3, event: { type: 'message_start', message: { role: 'assistant', content: [] } } } });
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'pi', seq: 4, event: { type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'brand new content' } } } });
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'resync', snapshot: { sessionId: 's', projectId: 'p', roleId: 'chief', activity: 'processing', currentInputId: 'i1', inputs: [], messages: [], interactions: [], historyLeaf: null, historyProblems: [] } });
+    expect(slot.items).toHaveLength(1);
+    expect(slot.items[0]?.streaming).toBe(true);
   });
 });

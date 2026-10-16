@@ -161,10 +161,11 @@ function mergeMessages(current: readonly HistoryMessage[], incoming: readonly Hi
   for (const message of current) {
     if (incomingKeys.has(message.entryId)) continue;
     if (message.streaming !== true && incomingSignatures.has(signatureOf(message))) continue;
-    if (message.streaming !== true) {
-      const staleTwin = incoming.some((candidate) => matchesTwin(message, candidate));
-      if (staleTwin) continue;
-    }
+    // A streaming live-only entry whose content equals or prefixes a snapshot entry is the
+    // stale twin of a turn whose end frame was lost in the resync: the snapshot read history
+    // AFTER the run completed, so the file's copy wins and the live key must not linger
+    // (otherwise the transcript "breaks mid-render" with a half-content ghost node).
+    if (incoming.some((candidate) => matchesTwin(message, candidate))) continue;
     items.push(message);
     if (message.streaming === true) liveKeys.add(message.entryId);
   }
