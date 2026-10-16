@@ -86,3 +86,13 @@
 - `state/normalize.ts` 成为唯一知道 Pi 三通道形状（历史文件/事件对象/delta 字符串）的地方；snapshot、message_start、message_end 全部经 `normalizePiMessage` 过边界；渲染与去重只面对归一化后的块。
 - 归一化过程中暴露并修复一个服务端缺陷：`session.stream.prepare` 快照取历史**前** 100 条（pageHistory 无 cursor），会话超过 100 条后快照静默丢最新轮次——重连后尾部陈旧。改为 `tailHistory` 取**末** 100 条。
 - 测试：normalize 逐通道 ×3 + 快照通道回归 + 前轮孪生去重集；服务端 235/235、webapp 13/13；实机 70 条历史 0 相邻重复、count-60 轮在流中重连后恰好一次完整出现。
+
+
+### 流式渲染"中间断掉"（2026-10-16，commit 3fdc027）
+用户报告：md/流程图等长内容流式渲染中间会断，刷新后正常。实机复现与根因：
+- 长回复期间 resync（溢出/代次/重进会话）重读历史时运行已完成 → 快照含完整条目；
+- 而该轮的 message_end 帧在 resync 中丢失，live 条目永远停在 streaming 状态；
+- mergeMessages 的孪生去重只对**非 streaming** 条目生效 → 完整版下面挂着一个半内容幽灵节点（"第二次一半的文字"），且该节点高亮预算耗尽后看起来"渲染断掉"。
+- 刷新后无 live 键 → 只剩完整版 → "正常"。与之前双渲染同根，只是发生在 streaming 状态下。
+修复：matchesTwin 同样作用于 streaming live 条目——快照（运行完成后读取）里有相等或前缀副本即文件版胜出，丢弃 live 键；真正在飞、文件里还没有内容的条目仍保留。
+回归测试 ×2（thinking→text 真实 delta 顺序的 streaming 孪生丢弃；无孪生的在飞条目保留）；235/235 + 15/15；实机 mermaid+TS 长回复流中重载 → 恰好一次完整出现、0 幽灵节点。
