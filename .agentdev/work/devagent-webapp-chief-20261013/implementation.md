@@ -96,3 +96,11 @@
 - 刷新后无 live 键 → 只剩完整版 → "正常"。与之前双渲染同根，只是发生在 streaming 状态下。
 修复：matchesTwin 同样作用于 streaming live 条目——快照（运行完成后读取）里有相等或前缀副本即文件版胜出，丢弃 live 键；真正在飞、文件里还没有内容的条目仍保留。
 回归测试 ×2（thinking→text 真实 delta 顺序的 streaming 孪生丢弃；无孪生的在飞条目保留）；235/235 + 15/15；实机 mermaid+TS 长回复流中重载 → 恰好一次完整出现、0 幽灵节点。
+
+
+### 流式中断真根因：SSE 帧冗余 + 背压计数错误（2026-10-18，commit 49aee33）
+用户持续报告"输出一半，刷新后完整"，且无需刷新也会断。线上抓包定位到两层服务端缺陷：
+1. Pi 的 message_update 每个增量都**重发两份完整累积消息**（event.message + assistantMessageEvent.partial）。思考重的回合帧涨到 ~3KB，几十秒就 ~500KB，越过服务端 512KB pendingCap → 流被 mid-turn 关闭 → 客户端收不到 message_end/agent_end → live 节点冻结在部分内容（"输出一半"）。此前所有客户端修复都只是在给这个服务端问题兜底。
+2. pendingCap 统计的是**累计写入字节**而非未冲刷字节，健康的长时间读者必然被误杀（long turn 累计 1MB+）。
+修复：http.ts 发布前剥掉 update 帧里的两份冗余（客户端只读 delta/contentIndex，已有代码证实）；pendingBytes 改为仅在 write() 返回 false 时累计、drain 清零。
+线上验证：1MB 累计流量 reader 保持打开；message_end/turn_end/agent_end 全部到达；live 节点完整渲染 5.6KB markdown，与服务端文件逐字一致，无需刷新。服务端 235/235。
