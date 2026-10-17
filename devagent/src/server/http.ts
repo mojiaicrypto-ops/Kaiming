@@ -240,9 +240,12 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
     };
     // Back-pressure: Node buffers, and only a reader that is really far behind (past the cap) is told
     // to resync. Awaiting 'drain' here would block the work that produced the event (M4).
+    // pendingBytes tracks UNFLUSHED bytes: response.write() returning false means the kernel
+    // buffer is full; 'drain' clears it. Counting every byte ever written instead would kill
+    // a healthy long-lived reader (a long turn streams hundreds of KB cumulative) mid-turn.
     const pendingCap = 512 * 1024;
     let pendingBytes = 0;
-    response.once('drain', () => {
+    response.on('drain', () => {
       pendingBytes = 0;
     });
     const send = (event: StreamEvent): void => {
@@ -262,6 +265,25 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
       // A Pi event keeps its own shape; a business notice is the frame's own type (M4).
       const notice =
         typeof event.event === 'object' && event.event !== null && (event.event as { type?: unknown }).type === 'invalidate';
+      // message_update resends the FULL accumulated message twice per delta — event.message
+      // and assistantMessageEvent.partial (Pi's shape). No client reads either there — the
+      // slot consumes only assistantMessageEvent.delta/contentIndex — so streaming them
+      // makes frame sizes grow linearly and overflow this reader's 512KB cap mid-turn: the
+      // client loses message_end/agent_end and freezes at a partial render. Strip both;
+      // message_start/message_end still carry complete content.
+      let payload = event.event;
+      if (typeof payload === 'object' && payload !== null && (payload as { type?: unknown }).type === 'message_update') {
+        const record = payload as Record<string, unknown>;
+        const { message: _m, ...rest } = record;
+        void _m;
+        const delta = rest.assistantMessageEvent as Record<string, unknown> | undefined;
+        if (typeof delta === 'object' && delta !== null && 'partial' in delta) {
+          const { partial: _p, ...deltaRest } = delta;
+          void _p;
+          rest.assistantMessageEvent = deltaRest;
+        }
+        payload = rest;
+      }
       const frame = `id: ${event.seq}\ndata: ${JSON.stringify(
         notice
           ? {
@@ -276,11 +298,14 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
               sessionId,
               ...(event.inputId !== undefined ? { inputId: event.inputId } : {}),
               ...(event.epoch !== undefined ? { epoch: event.epoch } : {}),
-              event: event.event,
+              event: payload,
             },
       )}\n\n`;
-      response.write(frame);
-      pendingBytes += Buffer.byteLength(frame);
+      const flushed = response.write(frame);
+      if (!flushed) {
+        // Node is buffering: these bytes are pending until 'drain'.
+        pendingBytes += Buffer.byteLength(frame);
+      }
       if (pendingBytes > pendingCap) {
         // Far behind: this reader resyncs instead of holding the work (or its memory) back.
         close({ reason: 'overflow' });
