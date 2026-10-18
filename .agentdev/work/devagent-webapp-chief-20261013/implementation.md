@@ -114,3 +114,12 @@
 真任务恢复实录：chief 先后驱动 develop→review（rev 9）→settle（rev 10，chief 自己调 updateTask 成功并回执"Task updated: phase=settle revision=10"）；settler 派发与 endTask 收口链验证中。
 
 端到端验证实录（t-20a6fbfd，修复后）：chief 驱动 develop→review→settle→settlement 报告（r-ec30587e，passed）→ 回到 review → reviewer 独立评审（verdict: failed，6 项必须修改）。全链阶段切换不再受阻；endTask 未被调用是评审正确否决（内容有真问题），不是机制卡死。机制闭环验证完成。
+
+
+### 子会话运行状态前端可见（2026-10-19，commit 7a042e6）
+用户报告：子 session 工作时前端像"已经完成"一样，看不到运行状态。三处改动：
+1. `task.get` 成员携带实时会话状态（activity/liveInputId/queuedInputs，经 `liveSessionState` 派生，与 session.get 同源）；此前只有委派时的 currentInputId，永远非空 → 成员永远"active"或信息过期。
+2. 成员运行终止时（worker onOutcome terminal）向 chief 流发布 task invalidate → Task 卡即时刷新（此前仅 pause/resume/cancel 才发）。
+3. Task 卡：working 行绿色脉冲点 +「· 正在运行」、queued 显示排队数、卡头"N 个成员正在运行/N 个排队输入"；重连后经 session.get 恢复 activeTaskId（失效帧可能在订阅前已发过，卡片会缺席整个运行期）。
+实机验证：真实 developer 成员运行中，卡片实时显示"1 个成员正在运行"+ working 行脉冲点，与服务端 input 状态一致；idle→working 翻转已验证，working→idle 走同一 invalidate 路径（本次复核运行较长，等它结束时自然验证）。237/237 + 15/15。
+遗留：成员"当前工具调用"预览未做（需要成员流订阅或快照尾部，成本高；跟随抽屉已能看到工具流）。
