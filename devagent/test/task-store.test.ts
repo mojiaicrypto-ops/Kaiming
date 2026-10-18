@@ -229,3 +229,57 @@ describe('plan persistence', () => {
     expect(readPlan(ref)).toEqual({ text: '', current: false });
   });
 });
+describe('task store · stage readiness follows member input state', () => {
+  function addMember(store: Store, inputId: string): void {
+    store.updateTask({ taskId: 't-1', expectedRevision: store.getTask('t-1')!.revision, phase: 'develop' });
+    store.createTaskSessions({
+      taskId: 't-1',
+      members: [
+        {
+          sessionId: 'm-1',
+          taskId: 't-1',
+          roleId: 'developer',
+          phase: 'develop',
+          label: 'work',
+          instructions: 'do the work',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'implementation',
+          inputId,
+          inputPayload: { content: [{ type: 'text', text: 'work' }] },
+        },
+      ],
+    });
+  }
+
+  it('a member whose input is still processing blocks the phase change (STAGE_NOT_READY)', () => {
+    const { store } = setup();
+    create(store);
+    addMember(store, 'i-m1');
+    store.claimNextInput('m-1'); // → processing
+    expect(() =>
+      store.updateTask({ taskId: 't-1', expectedRevision: store.getTask('t-1')!.revision, phase: 'review' }),
+    ).toThrowError(expect.objectContaining({ code: 'STAGE_NOT_READY' }));
+  });
+
+  it('a member whose input has completed no longer blocks the phase change (the settle gate)', () => {
+    const { store } = setup();
+    create(store);
+    addMember(store, 'i-m1');
+    const claimed = store.claimNextInput('m-1');
+    if (claimed.kind !== 'claimed') throw new Error('the member input could not be claimed');
+    store.finishInput({
+      inputId: 'i-m1',
+      expectedRevision: claimed.input.revision,
+      status: 'completed',
+    });
+    const updated = store.updateTask({
+      taskId: 't-1',
+      expectedRevision: store.getTask('t-1')!.revision,
+      phase: 'review',
+      summary: 'develop step settled',
+    });
+    expect(updated.phase).toBe('review');
+    expect(updated.currentSessionIds).toEqual([]);
+  });
+});

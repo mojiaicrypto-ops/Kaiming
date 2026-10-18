@@ -666,6 +666,10 @@ export class Store {
     this.db.exec('PRAGMA journal_mode=WAL;');
     this.db.exec('PRAGMA synchronous=FULL;');
     this.db.exec('PRAGMA foreign_keys=ON;');
+    // Concurrent processes open this database (server, recovery probes, host tooling).
+    // Without a busy timeout any overlapping write window crashes the whole workbench with
+    // SQLITE_BUSY instead of waiting the contended writer out.
+    this.db.exec('PRAGMA busy_timeout=5000;');
     this.assertPragmas();
     this.migrate();
   }
@@ -1859,11 +1863,27 @@ export class Store {
         });
       }
       if (params.phase !== undefined && task.currentSessionIds.length > 0) {
-        throw new StoreError(
-          'STAGE_NOT_READY',
-          'the current step still has members; wait or continue them before starting the next step',
-          { taskId: params.taskId, currentSessionIds: task.currentSessionIds },
-        );
+        // Stage readiness is judged per member input, not by whether the step still lists
+        // members (a settled step keeps its membership for traceability — see
+        // taskCompletionGaps). currentSessionIds is only cleared BY a phase change, so a
+        // membership-count gate made phase transitions impossible once a step ever had
+        // members (STAGE_NOT_READY forever; t-20a6fbfd stuck in develop).
+        const busy: string[] = [];
+        for (const sessionId of task.currentSessionIds) {
+          const member = this.getTaskSession(sessionId);
+          const inputId = member?.currentInputId ?? null;
+          const input = inputId === null ? undefined : this.getInput(inputId);
+          if (input !== undefined && ['queued', 'processing', 'stopping', 'interrupted'].includes(input.status)) {
+            busy.push(`${sessionId}:${input.inputId}(${input.status})`);
+          }
+        }
+        if (busy.length > 0) {
+          throw new StoreError(
+            'STAGE_NOT_READY',
+            'the current step still has unfinished member work; wait or continue them before starting the next step',
+            { taskId: params.taskId, busy },
+          );
+        }
       }
       if (task.type === 'read' && params.requiresTest === true) {
         throw new StoreError('INVALID_ARGUMENT', 'a read Task cannot declare requiresTest', {
