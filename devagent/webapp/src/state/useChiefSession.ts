@@ -64,6 +64,18 @@ export function useChiefSession(session: ChiefSession | null, enabled: boolean) 
       setStatus('connected');
       setHistoryProblems(snapshot.historyProblems ?? []);
       dispatch({ type: 'snapshot', snapshot, reason: 'resync' });
+      // Restore the coordinated Task after (re)connect: the invalidate frames that would set
+      // activeTaskId may have fired before this tab subscribed, leaving the Task card absent
+      // even though a member is running right now.
+      void rpc.call<{ session: { currentTaskId: string | null } }>('session.get', {
+        projectId: session.projectId,
+        sessionId: session.sessionId,
+      }).then((read) => {
+        if (read.session.currentTaskId !== null) {
+          setActiveTaskId(read.session.currentTaskId);
+          setTaskTick((tick) => tick + 1);
+        }
+      }).catch(() => undefined);
     };
     const stream = new SessionStream(rpc, session.projectId, session.sessionId, {
       onFrame,

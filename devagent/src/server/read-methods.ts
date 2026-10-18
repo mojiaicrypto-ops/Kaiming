@@ -249,14 +249,22 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       }
       return {
         task: taskSummary(store, task),
-        members: store.listTaskSessions(task.id).map((member) => ({
-          sessionId: member.sessionId,
-          roleId: member.roleId,
-          phase: member.phase,
-          label: member.label,
-          expectedKind: member.expectedKind,
-          currentInputId: member.currentInputId,
-        })),
+        members: store.listTaskSessions(task.id).map((member) => {
+          // The delegation-time currentInputId is history; the live session state tells the
+          // Task card whether the member is working right now (R2: derived, not stored).
+          const live = liveSessionState(store, member.sessionId);
+          return {
+            sessionId: member.sessionId,
+            roleId: member.roleId,
+            phase: member.phase,
+            label: member.label,
+            expectedKind: member.expectedKind,
+            currentInputId: member.currentInputId,
+            activity: live.activity,
+            liveInputId: live.currentInputId,
+            queuedInputs: live.queuedInputs,
+          };
+        }),
         results: store.listTaskResults(task.id).map((result) => resultSummary(store, result)),
       };
     },
@@ -490,8 +498,9 @@ function requireSession(store: Store, projectId: string, sessionId: string) {
     throw new RpcError('NOT_FOUND', `session ${sessionId} does not exist in this project`, { sessionId });
   }
   const inputs = store.listInputs(sessionId);
+  const live = liveSessionState(store, sessionId);
+  const queued = live.queuedInputs;
   const current = inputs.find((input) => input.status === 'processing');
-  const queued = inputs.filter((input) => input.status === 'queued').length;
   const task = session.currentTaskId === null ? undefined : store.getTask(session.currentTaskId);
   return {
     sessionId: session.id,
@@ -517,6 +526,23 @@ function requireSession(store: Store, projectId: string, sessionId: string) {
           ? `Task ${current.taskId}`
           : null,
     task: task === undefined ? null : { taskId: task.id, type: task.type, phase: task.phase, status: task.status },
+  };
+}
+
+/** Derived live state for one session, from real input rows (R2). Shared by session.get and
+ *  task.get members so a Task card sees the same live state the session view shows. */
+export function liveSessionState(store: Store, sessionId: string): {
+  activity: 'idle' | 'queued' | 'processing';
+  currentInputId: string | null;
+  queuedInputs: number;
+} {
+  const inputs = store.listInputs(sessionId);
+  const current = inputs.find((input) => input.status === 'processing');
+  const queued = inputs.filter((input) => input.status === 'queued').length;
+  return {
+    activity: current === undefined ? (queued > 0 ? 'queued' : 'idle') : 'processing',
+    currentInputId: current?.inputId ?? null,
+    queuedInputs: queued,
   };
 }
 

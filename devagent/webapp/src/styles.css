@@ -161,6 +161,23 @@ button:disabled { opacity: 0.5; cursor: default; }
   padding: 6px 8px; text-align: left;
 }
 .member-row:hover { background: var(--surface-raised); }
+.member-row.member-processing { background: var(--accent-soft); }
+.member-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-dim); flex: none; align-self: center;
+}
+.member-dot-live {
+  background: var(--green);
+  animation: member-pulse 1.4s ease-in-out infinite;
+}
+@keyframes member-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(63, 178, 127, 0.5); }
+  50% { opacity: 0.55; box-shadow: 0 0 0 5px rgba(63, 178, 127, 0); }
+}
+.member-live-note { color: var(--green); margin-left: 4px; }
+.task-live { display: flex; gap: 8px; margin-left: 8px; }
+.task-live-working { color: var(--green); font-size: 11.5px; }
+.task-live-queued { color: var(--amber); font-size: 11.5px; }
 .member-role { color: var(--accent); font-weight: 600; min-width: 70px; }
 .member-label { flex: 1; }
 .member-phase, .member-kind { color: var(--text-dim); font-size: 12px; }

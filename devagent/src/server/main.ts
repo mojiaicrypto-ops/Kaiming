@@ -120,6 +120,18 @@ export function startWorkbench(options: StartOptions): Promise<{
     // A run that cannot start must say why (P-06): the reason reaches whoever is looking, instead of
     // leaving a queued input that looks like it might still run.
     onOutcome: (sessionId, outcome) => {
+      // A member run settled (or failed): the chief's Task card must refresh now, not on its
+      // 3s poll — the user watches member activity live here.
+      if (outcome.kind === 'completed' || outcome.kind === 'failed' || outcome.kind === 'stopped' || outcome.kind === 'interrupted') {
+        const input = store.getInput(outcome.inputId);
+        const taskId = input?.taskId ?? null;
+        if (taskId !== null) {
+          const task = store.getTask(taskId);
+          if (task !== undefined && task.chiefSessionId !== sessionId) {
+            hub.publish(task.chiefSessionId, { type: 'invalidate', entity: 'task', id: taskId });
+          }
+        }
+      }
       if (
         outcome.kind !== 'blocked_config' &&
         outcome.kind !== 'blocked_role' &&

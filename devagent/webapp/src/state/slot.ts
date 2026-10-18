@@ -40,6 +40,10 @@ export interface TaskMember {
   label: string;
   expectedKind: string;
   currentInputId: string | null;
+  /** Live session state (R2-derived): the member is working right now or not. */
+  activity?: 'idle' | 'queued' | 'processing';
+  liveInputId?: string | null;
+  queuedInputs?: number;
 }
 
 export interface TaskSummaryView {

@@ -44,6 +44,19 @@ export function TaskCard({ detail, visible, onOpenMember, onRefresh }: Props) {
         <span className="task-phase">{detail.task.phase}</span>
         <span className={`task-status task-${detail.task.status}`}>{detail.task.status}</span>
         <span className="task-results">{detail.results.length} result(s)</span>
+        {(() => {
+          const working = detail.members.filter((m) => (m.activity ?? 'idle') === 'processing').length;
+          const queued = detail.members.reduce((sum, m) => sum + (m.queuedInputs ?? 0), 0);
+          if (working > 0 || queued > 0) {
+            return (
+              <span className="task-live">
+                {working > 0 && <span className="task-live-working">{working} 个成员正在运行</span>}
+                {queued > 0 && <span className="task-live-queued">{queued} 个排队输入</span>}
+              </span>
+            );
+          }
+          return null;
+        })()}
         {refreshFailed && <span className="task-refresh-failed" title="task.get 最近一次刷新失败，稍后自动重试">刷新失败</span>}
       </summary>
       <div className="task-members">
@@ -57,26 +70,26 @@ export function TaskCard({ detail, visible, onOpenMember, onRefresh }: Props) {
 }
 
 /**
- * Member row: state derives from `currentInputId` (the delegation wait set's own fact, M1) —
- * null means the member has no run in flight. The per-member live detail (tool calls, report
- * body) arrives through the drawer's own session stream, not through this card.
+ * Member row: state derives from the live session activity (task.get enrichment, R2) —
+ * `working` means the member is running right now, `queued` means work is waiting, `idle`
+ * means this member has nothing in flight. The delegation-time `currentInputId` alone would
+ * show every ever-delegated member as permanently active.
  */
 function MemberRow({ member, onOpenMember }: { member: TaskMember; onOpenMember: (sessionId: string, label: string) => void }) {
-  const [statesSeen, setStatesSeen] = useState<ReadonlySet<string>>(new Set());
-  useEffect(() => {
-    if (member.currentInputId === null) return;
-    setStatesSeen((previous) => new Set([...previous, 'active']));
-  }, [member.currentInputId]);
-  const active = member.currentInputId !== null;
+  const activity = member.activity ?? 'idle';
+  const active = activity === 'processing';
+  const queued = member.queuedInputs ?? 0;
+  const stateText = active ? 'working' : activity === 'queued' ? `queued (${queued})` : 'idle';
   return (
-    <button type="button" className="member-row" onClick={() => onOpenMember(member.sessionId, member.label)}>
+    <button type="button" className={`member-row member-${activity}`} onClick={() => onOpenMember(member.sessionId, member.label)}>
+      <span className={`member-dot${active ? ' member-dot-live' : ''}`} aria-hidden />
       <span className="member-role">{member.roleId}</span>
       <span className="member-label">{member.label}</span>
       <span className="member-phase">{member.phase}</span>
       <span className="member-kind">{member.expectedKind}</span>
-      <span className={`member-state member-${active ? 'active' : 'idle'}`}>
-        {active ? 'active' : 'idle'}
-        {statesSeen.size > 0 && active ? '' : ''}
+      <span className={`member-state member-${active ? 'active' : activity}`}>
+        {stateText}
+        {active && <span className="member-live-note">· 正在运行</span>}
       </span>
       <span className="member-open">跟随 ›</span>
     </button>
