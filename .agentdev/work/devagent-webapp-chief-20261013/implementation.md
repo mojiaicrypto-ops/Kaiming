@@ -104,3 +104,11 @@
 2. pendingCap 统计的是**累计写入字节**而非未冲刷字节，健康的长时间读者必然被误杀（long turn 累计 1MB+）。
 修复：http.ts 发布前剥掉 update 帧里的两份冗余（客户端只读 delta/contentIndex，已有代码证实）；pendingBytes 改为仅在 write() 返回 false 时累计、drain 清零。
 线上验证：1MB 累计流量 reader 保持打开；message_end/turn_end/agent_end 全部到达；live 节点完整渲染 5.6KB markdown，与服务端文件逐字一致，无需刷新。服务端 235/235。
+
+
+### STAGE_NOT_READY 死锁（t-20a6fbfd，2026-10-18，commit bf07e69）
+用户报告：Task 卡在 develop，updateTask 换阶段十几次都 STAGE_NOT_READY，reviewer 派不出去，endTask 关不了。
+根因：`currentSessionIds` 只有换阶段才会清空，而换阶段又被"currentSessionIds 非空即拒绝"把守——先有鸡还是先有蛋：一旦某步骤有过成员，阶段切换永久不可能。成员 input 实际早已 completed。
+修复：store.updateTask 的就绪判定改为**逐成员 input 状态**（queued/processing/stopping/interrupted → STAGE_NOT_READY 并报出具体成员），与 taskCompletionGaps 的契约注释一致；完成步骤保留 task_sessions 行可追溯，成员随换阶段轮换。另加 busy_timeout=5s（此前并发进程一次撞锁就崩整个 workbench，实际崩过一次）。
+回归测试 ×2：processing 成员阻止换阶段；completed 成员放行。237/237。
+真任务恢复实录：chief 先后驱动 develop→review（rev 9）→settle（rev 10，chief 自己调 updateTask 成功并回执"Task updated: phase=settle revision=10"）；settler 派发与 endTask 收口链验证中。
