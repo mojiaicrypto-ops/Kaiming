@@ -112,3 +112,5 @@
 修复：store.updateTask 的就绪判定改为**逐成员 input 状态**（queued/processing/stopping/interrupted → STAGE_NOT_READY 并报出具体成员），与 taskCompletionGaps 的契约注释一致；完成步骤保留 task_sessions 行可追溯，成员随换阶段轮换。另加 busy_timeout=5s（此前并发进程一次撞锁就崩整个 workbench，实际崩过一次）。
 回归测试 ×2：processing 成员阻止换阶段；completed 成员放行。237/237。
 真任务恢复实录：chief 先后驱动 develop→review（rev 9）→settle（rev 10，chief 自己调 updateTask 成功并回执"Task updated: phase=settle revision=10"）；settler 派发与 endTask 收口链验证中。
+
+端到端验证实录（t-20a6fbfd，修复后）：chief 驱动 develop→review→settle→settlement 报告（r-ec30587e，passed）→ 回到 review → reviewer 独立评审（verdict: failed，6 项必须修改）。全链阶段切换不再受阻；endTask 未被调用是评审正确否决（内容有真问题），不是机制卡死。机制闭环验证完成。
