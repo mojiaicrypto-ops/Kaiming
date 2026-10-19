@@ -150,3 +150,9 @@
 3. **`task.reconcile` 工具不存在**：恢复契约（agents-and-tools）定义了它、chief 提示词也指示调用，但代码里没有——于是 interrupted 成员输入无路可关，步骤永久 STAGE_NOT_READY。已实现：校验 Task owner/成员归属/证据引用（须为本 Task 结果或 file: 前缀）→ 调用既有恢复服务关闭原输入；并对 chief 放行。
 另修：requestStop 的"停稳"不等于"终态行已写"，停止回执改为有界等待行离开 processing（契约本就要求回执反映已定稿行）。
 实机：重启后 chief 自动消费通知 → 自行核实（引用 recovery 报告 + review 报告）→ reconcile 关闭 i-bd85892d（记录 resolvedBy=s-138f42aad205:reconcile）→ 该 Task 成员无 busy、阶段门禁解除。244/244。
+
+### 角色分配与子会话提问（2026-10-19，commit 93810db + c71fc37）
+**Q1 设计文档派给 developer**：契约明确（delivery.md:13/141、G1 表）设计由 designer 承担、developer 做实现；但**主管提示词全文 0 次提到 designer**，唯一流程示例只有代码流 develop→review→test→settle，且 createTaskSessions 的 roleId 是自由字符串。于是"write Task → updateTask(develop) → developer"成为唯一被强化的路径，设计文档也走 developer。修复：chief 提示词加角色-步骤表 + 设计流程示例（design→review→settle）+ 明确"设计不是开发"；工具枚举 roleId，阶段不匹配时返回该阶段可派角色（designer/developer 提示）。
+**Q2 子会话提问到不了人**：三处断链——(a) 桥把失效通知发到成员自己的流（用户只看主管流）；(b) 主管快照按 sessionId 过滤 pending 交互，成员提问根本不在其中；(c) 应答鉴权只认交互自身会话。修复：通知路由到 Task 的 chief；快照改为"自己的 + 本 Task 成员的"（带 sourceSessionId）；应答接受 Task 主管；成员被提问时向委派等待报 waiting_user + interactionIds。
+**真正让 chat 卡死的根因**（用户症状"卡在这里"）：主管会话有一条自己被进程重启打断的输入 → claim 以 RECOVERY_REQUIRED 拒绝整个会话，而主管**无法自行关闭**（它跑不起来），于是后续所有输入（含用户消息、恢复通知、委派返回）全部冻结。R4 早就规定"主管自身中断时由宿主核实并直接关闭"。修复：启动时宿主把主管自己的 interrupted 输入按 stopped 关闭（证据 host:process-restart），并投一条 notice 说明"进程已消失、请先核实真实状态"。实测：启动日志 "host closed interrupted chief input c-mvf3w9sr-445-eea81d"，主管恢复消费。
+246/246 + 15/15 提示词检查。
