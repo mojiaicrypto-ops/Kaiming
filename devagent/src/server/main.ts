@@ -41,6 +41,10 @@ export interface StartOptions {
   readonly model?: { readonly providerId: string; readonly modelId: string };
   /** This process's generation: a restart must be distinguishable from the run it inherits. */
   readonly serverEpoch?: number;
+  /** Run watchdog: abort a run with no Pi activity for this long (default 15 min). */
+  readonly runStallMs?: number;
+  /** Run watchdog: abort a run exceeding this total duration (default 90 min). */
+  readonly runTotalMs?: number;
   readonly now?: () => string;
 }
 
@@ -58,6 +62,40 @@ export function startWorkbench(options: StartOptions): Promise<{
   const startup = store.scanStartup();
   if (startup.interrupted > 0) {
     process.stdout.write(`${startup.interrupted} input(s) from an earlier run are now interrupted and await verification\n`);
+  }
+  // Tell the owning chief: an interrupted member input blocks its step (claim refuses the
+  // session, updateTask reports STAGE_NOT_READY) and only the chief can verify it. Without
+  // this notice the Task waits forever on work whose process is gone.
+  for (const interrupted of store.listInterruptedTaskInputs()) {
+    const noticeId = `notice-${interrupted.inputId}`;
+    if (store.getInput(noticeId) !== undefined) continue;
+    const chief = store.getSession(interrupted.chiefSessionId);
+    if (chief === undefined) continue;
+    store.acceptInput({
+      inputId: noticeId,
+      projectId: chief.projectId,
+      sessionId: interrupted.chiefSessionId,
+      taskId: interrupted.taskId,
+      sourceKey: `recovery-notice:${interrupted.inputId}`,
+      requestKey: noticeId,
+      method: 'session.system_notice',
+      kind: 'system_notice',
+      payload: {
+        content: [
+          {
+            type: 'text',
+            text:
+              `The host detected an interrupted run. Member input ${interrupted.inputId} ` +
+              `(session ${interrupted.sessionId}, Task ${interrupted.taskId}` +
+              `${interrupted.errorCode !== null ? `, code ${interrupted.errorCode}` : ''}) ` +
+              'was started by a process that is gone, so its outcome is unknown. Verify the real ' +
+              'state (investigator + expectedKind=recovery, or your own read-only checks), then ' +
+              'close it with the reconcile tool citing that evidence. Do not assume it finished.',
+          },
+        ],
+      },
+    });
+    process.stdout.write(`recovery notice queued for chief ${interrupted.chiefSessionId} (input ${interrupted.inputId})\n`);
   }
   const server: RuntimeDefaults = {
     model: options.model ?? { providerId: 'unset', modelId: 'unset' },
@@ -111,6 +149,10 @@ export function startWorkbench(options: StartOptions): Promise<{
     onEvent: (sessionId, event, meta) => {
       hub.publish(sessionId, event, { inputId: meta.inputId, epoch: meta.epoch });
     },
+    // A hung provider or a run that never ends must reach a terminal state, not block its
+    // step, its Task and the user's queue forever.
+    ...(options.runStallMs !== undefined ? { runStallMs: options.runStallMs } : {}),
+    ...(options.runTotalMs !== undefined ? { runTotalMs: options.runTotalMs } : {}),
   });
   /** The last block reported per session: a run that still cannot start must not repeat itself. */
   const reportedBlocks = new Map<string, string>();
@@ -219,7 +261,17 @@ if (entry !== undefined && resolve(entry) === resolve(fileURLToPath(import.meta.
   };
   const port = Number(process.env['AGENTDEV_PORT'] ?? 4173);
   const host = process.env['AGENTDEV_HOST'] ?? '127.0.0.1';
-  const running = await startWorkbench({ dataDir, accessPassword, port, host, model });
+  const runStallMs = Number(process.env['AGENTDEV_RUN_STALL_MS'] ?? '');
+  const runTotalMs = Number(process.env['AGENTDEV_RUN_TOTAL_MS'] ?? '');
+  const running = await startWorkbench({
+    dataDir,
+    accessPassword,
+    port,
+    host,
+    model,
+    ...(Number.isFinite(runStallMs) && runStallMs > 0 ? { runStallMs } : {}),
+    ...(Number.isFinite(runTotalMs) && runTotalMs > 0 ? { runTotalMs } : {}),
+  });
   process.stdout.write(`workbench listening on ${running.origin} (data: ${dataDir})\n`);
   const shutdown = (): void => {
     void running.close().then(() => process.exit(0));

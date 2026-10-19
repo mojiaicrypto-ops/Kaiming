@@ -109,7 +109,7 @@ function loadOwnedTask(
 }
 
 export function createChiefTaskTools(contextOf: TaskToolContextResolver): DomainTool[] {
-  return [createTaskTool(contextOf), updateTaskTool(contextOf), endTaskTool(contextOf), taskGetTool(contextOf)];
+  return [createTaskTool(contextOf), updateTaskTool(contextOf), reconcileTaskTool(contextOf), endTaskTool(contextOf), taskGetTool(contextOf)];
 }
 
 /** Specialists may only read their own Task (G1: `task.get`). */
@@ -427,6 +427,103 @@ function updateTaskTool(contextOf: TaskToolContextResolver): DomainTool {
       } catch (error) {
         const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
         return fail(code, messageOf(error), { taskId });
+      }
+    },
+  };
+}
+
+/**
+ * task.reconcile (recovery contract): close a KNOWN interrupted input with real verification.
+ *
+ * Without this tool an interrupted member input blocks its step forever: claim refuses the
+ * session (RECOVERY_REQUIRED), updateTask reports STAGE_NOT_READY, and the chief has no path
+ * to the recovery service that already exists on the host (R1 session.recovery.resolve) — so
+ * the Task, its chief and the user's queue wait indefinitely. The contract (agents-and-tools
+ * `reconcile`) defines exactly this call; it was simply never implemented.
+ *
+ * It never starts a model or replays work: it records the verdict on the original input after
+ * checking ownership, membership and that the evidence really belongs to this Task.
+ */
+function reconcileTaskTool(contextOf: TaskToolContextResolver): DomainTool {
+  return {
+    name: 'reconcile',
+    label: 'reconcile',
+    description:
+      'Close a known interrupted input of this Task after real verification: cite the evidence (report/result ids) and the conclusion. Does not restart the run.',
+    parameters: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string' },
+        sessionId: { type: 'string' },
+        inputId: { type: 'string' },
+        expectedInputRevision: { type: 'number' },
+        evidenceRefs: { type: 'array', items: { type: 'string' } },
+        resolution: { type: 'string', enum: ['completed', 'failed', 'stopped'] },
+      },
+      required: ['taskId', 'sessionId', 'inputId', 'evidenceRefs', 'resolution'],
+      additionalProperties: false,
+    },
+    async execute(_toolCallId, rawParams) {
+      const context = contextOf();
+      const params = asRecord(rawParams);
+      if (params === undefined) return fail('INVALID_ARGUMENT', 'params must be an object');
+      const taskId = readString(params, 'taskId');
+      const sessionId = readString(params, 'sessionId');
+      const inputId = readString(params, 'inputId');
+      const resolution = readString(params, 'resolution');
+      const evidenceRefs = readStringArray(params, 'evidenceRefs');
+      const expectedInputRevision = params['expectedInputRevision'];
+      if (taskId === undefined || sessionId === undefined || inputId === undefined || evidenceRefs === undefined) {
+        return fail('INVALID_ARGUMENT', 'taskId, sessionId, inputId and evidenceRefs are required');
+      }
+      if (resolution !== 'completed' && resolution !== 'failed' && resolution !== 'stopped') {
+        return fail('INVALID_ARGUMENT', 'resolution must be completed, failed or stopped');
+      }
+      const owned = loadOwnedTask(context, taskId);
+      if ('refusal' in owned) return owned.refusal;
+      if (owned.task.chiefSessionId !== context.sessionId) {
+        return fail('FORBIDDEN', `Task ${taskId} is coordinated by another session`);
+      }
+      const member = context.store.getTaskSession(sessionId);
+      if (member === undefined || member.taskId !== taskId) {
+        return fail('NOT_FOUND', `session ${sessionId} is not a member of Task ${taskId}`, { sessionId, taskId });
+      }
+      // Evidence must be real: cited results of THIS Task (or explicit file refs the host can see).
+      const taskResults = new Set(context.store.listTaskResults(taskId).map((result) => result.resultId));
+      const foreign = evidenceRefs.filter((ref) => !taskResults.has(ref) && !ref.startsWith('file:'));
+      if (foreign.length > 0) {
+        return fail('INVALID_ARGUMENT', 'evidenceRefs must cite this Task\'s results or file: references', {
+          unknown: foreign,
+          knownResults: [...taskResults],
+        });
+      }
+      const input = context.store.getInput(inputId);
+      if (input === undefined || input.sessionId !== sessionId) {
+        return fail('NOT_FOUND', `input ${inputId} is not in session ${sessionId}`, { inputId });
+      }
+      if (input.status !== 'interrupted') {
+        return fail('INVALID_ARGUMENT', `input ${inputId} is ${input.status}, not interrupted`, { inputId });
+      }
+      const revision =
+        typeof expectedInputRevision === 'number' ? expectedInputRevision : input.revision;
+      try {
+        const resolved = context.store.resolveInterruptedInput({
+          sessionId,
+          inputId,
+          expectedRevision: revision,
+          resolution,
+          evidenceRefs,
+          resolvedBy: `${context.sessionId}:reconcile`,
+        });
+        return ok(
+          `Input ${resolved.inputId} closed as ${resolved.status}; the step can continue.`,
+          { inputId: resolved.inputId, status: resolved.status, taskId },
+        );
+      } catch (error) {
+        return fail(messageOf(error), 'the interrupted input was not closed', {
+          inputId,
+          hint: 're-read the input revision (task.get) and cite evidence from this Task',
+        });
       }
     },
   };

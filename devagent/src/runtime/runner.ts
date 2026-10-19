@@ -22,7 +22,7 @@ import {
   loadPromptBodies,
   type PromptBodies,
 } from './prompt-assembly.ts';
-import { INPUT_MARKER_CUSTOM_TYPE, HistoryUnavailableError, type PiRuntimeFactory } from './pi-runtime.ts';
+import { INPUT_MARKER_CUSTOM_TYPE, HistoryUnavailableError, type PiRuntimeFactory, type PiSessionHandle } from './pi-runtime.ts';
 import { SessionRegistry, type LogicalSessionSpec } from './registry.ts';
 import { epochOf } from './epoch.ts';
 import { InteractionBridge, createUiAdapter } from './interactions.ts';
@@ -77,6 +77,22 @@ export type RunOutcome =
       readonly checkpoint?: InputCheckpoint;
     };
 
+/** Defaults for the run watchdog: a workstation run may legitimately be silent for a while
+ *  (a long shell command emits no Pi events), so the stall window is generous. It exists to
+ *  turn a dead provider/stream into a terminal state instead of an infinite wait. */
+const DEFAULT_RUN_STALL_MS = 15 * 60 * 1000;
+const DEFAULT_RUN_TOTAL_MS = 90 * 60 * 1000;
+
+class RunWatchdogError extends Error {
+  constructor(
+    readonly code: 'RUN_STALLED' | 'RUN_TIMEOUT',
+    readonly detail: string,
+  ) {
+    super(detail);
+    this.name = 'RunWatchdogError';
+  }
+}
+
 export interface RunnerOptions {
   readonly store: Store;
   readonly registry: SessionRegistry;
@@ -97,6 +113,10 @@ export interface RunnerOptions {
    * only broadcasts or records in memory - it must never await a durable transaction (R4).
    */
   readonly onEvent?: (sessionId: string, event: unknown, meta: { inputId: string; epoch: string }) => void;
+  /** A run with no Pi activity for this long is aborted (RUN_STALLED) instead of waiting forever. */
+  readonly runStallMs?: number;
+  /** A run exceeding this total duration is aborted (RUN_TIMEOUT). */
+  readonly runTotalMs?: number;
 }
 
 export class InputRunner {
@@ -105,6 +125,8 @@ export class InputRunner {
   readonly interactions: InteractionBridge;
   /** `${sessionId}:${inputId}` of runs a host-owned tool asked to abort (S5 tool-initiated stop). */
   private readonly hostAborts = new Set<string>();
+  /** Last Pi activity per session: a stalled provider/stream must not mean an infinite wait. */
+  private readonly lastEventAt = new Map<string, number>();
   /** Role prompt bodies, cached per prompt directory. */
   private readonly promptBodies = new Map<string, PromptBodies>();
   /** Identity of the run currently executing per session: a Pi instance is reused across inputs. */
@@ -137,6 +159,51 @@ export class InputRunner {
   }
 
   /** Claim and run the next input of a session; returns what was actually observed. */
+  /**
+   * `prompt()` with a watchdog: a run whose provider/stream stops producing (or that never
+   * ends) is aborted and reported as a watchdog failure, so the input reaches a terminal
+   * state the chief can verify — instead of staying `processing` forever and blocking its
+   * step, its Task and the user's queue behind it.
+   */
+  private async promptWithWatchdog(handle: PiSessionHandle, sessionId: string, text: string): Promise<void> {
+    const stallMs = this.options.runStallMs ?? DEFAULT_RUN_STALL_MS;
+    const totalMs = this.options.runTotalMs ?? DEFAULT_RUN_TOTAL_MS;
+    const startedAt = Date.now();
+    this.lastEventAt.set(sessionId, startedAt);
+    let trip: { code: 'RUN_STALLED' | 'RUN_TIMEOUT'; detail: string } | null = null;
+    const check = (): void => {
+      if (trip !== null) return;
+      const now = Date.now();
+      const silentMs = now - (this.lastEventAt.get(sessionId) ?? startedAt);
+      if (silentMs >= stallMs) {
+        trip = {
+          code: 'RUN_STALLED',
+          detail: `no run activity for ${Math.round(silentMs / 1000)}s (limit ${Math.round(stallMs / 1000)}s); the run was aborted`,
+        };
+      } else if (now - startedAt >= totalMs) {
+        trip = {
+          code: 'RUN_TIMEOUT',
+          detail: `run exceeded ${Math.round(totalMs / 1000)}s; the run was aborted`,
+        };
+      }
+      if (trip !== null) {
+        // Abort the real Pi run; prompt() settles as aborted and the caller records the state.
+        void handle.session.abort().catch(() => undefined);
+      }
+    };
+    const timer = setInterval(check, Math.max(1_000, Math.min(15_000, Math.floor(stallMs / 4))));
+    timer.unref?.();
+    try {
+      await handle.session.prompt(text);
+      if (trip !== null) {
+        const decided = trip as { code: 'RUN_STALLED' | 'RUN_TIMEOUT'; detail: string };
+        throw new RunWatchdogError(decided.code, decided.detail);
+      }
+    } finally {
+      clearInterval(timer);
+    }
+  }
+
   async runNext(sessionId: string): Promise<RunOutcome> {
     const session = this.options.store.getSession(sessionId);
     if (session === undefined) {
@@ -351,6 +418,7 @@ const serverWorkDir = join(config.agentDir, 'work');
       if (this.options.onEvent !== undefined && !this.observed.has(handle)) {
         this.observed.add(handle);
         handle.session.subscribe((event) => {
+          this.lastEventAt.set(sessionId, Date.now());
           this.options.onEvent?.(sessionId, event, {
             inputId: this.liveRuns.get(sessionId)?.inputId ?? input.inputId,
             // The same epoch definition the stream uses: server generation plus instance generation.
@@ -382,7 +450,7 @@ const serverWorkDir = join(config.agentDir, 'work');
         },
       });
 
-      await handle.session.prompt(text);
+      await this.promptWithWatchdog(handle, sessionId, text);
 
       const lastMessage = handle.session.messages[handle.session.messages.length - 1];
       const stopReason = lastMessage?.role === 'assistant' ? lastMessage.stopReason : 'none';
@@ -440,7 +508,12 @@ const serverWorkDir = join(config.agentDir, 'work');
       }
     } catch (error) {
       status = 'interrupted';
-      if (!deliveryStarted) {
+      if (error instanceof RunWatchdogError) {
+        // The host aborted a stalled/over-long run: the delivered boundary cannot be trusted,
+        // so the input is interrupted and the chief must verify (R4) instead of assuming.
+        errorCode = error.code;
+        detail = error.detail;
+      } else if (!deliveryStarted) {
         // Nothing was written to Pi: report the precise cause instead of a delivery failure.
         errorCode =
           error instanceof HistoryUnavailableError ? 'HISTORY_UNAVAILABLE' : 'PROJECT_UNAVAILABLE';

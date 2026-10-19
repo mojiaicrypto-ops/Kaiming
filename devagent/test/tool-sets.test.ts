@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ROLE_IDS } from '../src/runtime/prompt-assembly.ts';
-import { isProjectReadOnly, toolSetFor } from '../src/runtime/tool-sets.ts';
+import { DOMAIN_TOOL_NAMES, isProjectReadOnly, toolSetFor, toolSetMatrix } from '../src/runtime/tool-sets.ts';
 
 describe('role tool sets', () => {
   it('gives every write-capable role the reading tools it needs to analyse code first', () => {
@@ -109,5 +109,16 @@ describe('role tool sets', () => {
   it('exposes a read-only answer for callers that only need the boolean', () => {
     expect(isProjectReadOnly('reviewer', 'write')).toBe(true);
     expect(isProjectReadOnly('developer', 'write')).toBe(false);
+  });
+});
+describe('chief task tools · recovery path', () => {
+  it('the chief allowlist carries every host-registered domain tool (reconcile included)', () => {
+    // Every registered domain tool must be callable by at least one role; a registered-but-
+    // unlisted tool would otherwise reach every role through the host union (or none at all).
+    for (const name of DOMAIN_TOOL_NAMES) {
+      const inSomeRole = toolSetMatrix().some((entry) => entry.allowlist.includes(name));
+      expect(inSomeRole, `${name} is registered but no role may call it`).toBe(true);
+    }
+    expect(toolSetFor('chief', 'write').allowlist).toContain('reconcile');
   });
 });

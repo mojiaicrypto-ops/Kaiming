@@ -1605,6 +1605,40 @@ export class Store {
   }
 
   /**
+   * Interrupted inputs that belong to a Task, with the chief session that must verify them.
+   * The startup sweep marks foreign-generation runs interrupted but nobody tells the chief;
+   * without this the Task, its step and the user's queue wait on work that will never finish.
+   */
+  listInterruptedTaskInputs(): Array<{
+    inputId: string;
+    sessionId: string;
+    taskId: string;
+    errorCode: string | null;
+    chiefSessionId: string;
+    taskStatus: string;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT i.inputId AS inputId, i.sessionId AS sessionId, i.taskId AS taskId,
+                i.errorCode AS errorCode, t.chiefSessionId AS chiefSessionId, t.status AS taskStatus
+           FROM session_inputs i
+           JOIN tasks t ON t.id = i.taskId
+          WHERE i.status = 'interrupted' AND i.taskId IS NOT NULL
+            AND t.status IN ('active', 'waiting', 'paused')
+          ORDER BY i.seq`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      inputId: String(row['inputId']),
+      sessionId: String(row['sessionId']),
+      taskId: String(row['taskId']),
+      errorCode: row['errorCode'] === null ? null : String(row['errorCode']),
+      chiefSessionId: String(row['chiefSessionId']),
+      taskStatus: String(row['taskStatus']),
+    }));
+  }
+
+  /**
    * Record a stop request. Queued work stops outright; running/awaiting-verification work keeps its
    * status and the intent is recorded for the runtime to act on; terminal rows are left untouched
    * (a late stop is reported but cannot rewrite history). Retrying the same requestKey is a no-op.

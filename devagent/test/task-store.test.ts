@@ -283,3 +283,35 @@ describe('task store · stage readiness follows member input state', () => {
     expect(updated.currentSessionIds).toEqual([]);
   });
 });
+
+describe('task store · interrupted member inputs', () => {
+  it('an interrupted task-bound input is listed for its chief; unrelated ones are not', () => {
+    const { store } = setup();
+    create(store);
+    store.updateTask({ taskId: 't-1', expectedRevision: store.getTask('t-1')!.revision, phase: 'develop' });
+    store.createTaskSessions({
+      taskId: 't-1',
+      members: [
+        {
+          sessionId: 'm-1', taskId: 't-1', roleId: 'developer', phase: 'develop', label: 'work',
+          instructions: 'do the work', refs: [], dependencies: [], expectedKind: 'implementation',
+          inputId: 'i-m1', inputPayload: { content: [{ type: 'text', text: 'work' }] },
+        },
+      ],
+    });
+    const claimed = store.claimNextInput('m-1');
+    if (claimed.kind !== 'claimed') throw new Error('input not claimable');
+    store.finishInput({ inputId: 'i-m1', expectedRevision: claimed.input.revision, status: 'interrupted', errorCode: 'RUN_STALLED' });
+
+    const listed = store.listInterruptedTaskInputs();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ inputId: 'i-m1', sessionId: 'm-1', taskId: 't-1', chiefSessionId: 'c-1', errorCode: 'RUN_STALLED' });
+
+    // Once the chief verifies and closes it, it leaves the list.
+    store.resolveInterruptedInput({
+      sessionId: 'm-1', inputId: 'i-m1', expectedRevision: store.getInput('i-m1')!.revision,
+      resolution: 'failed', evidenceRefs: ['r-1'], resolvedBy: 'c-1:reconcile',
+    });
+    expect(store.listInterruptedTaskInputs()).toHaveLength(0);
+  });
+});
