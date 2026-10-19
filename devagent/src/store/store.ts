@@ -1626,6 +1626,44 @@ export class Store {
    * The startup sweep marks foreign-generation runs interrupted but nobody tells the chief;
    * without this the Task, its step and the user's queue wait on work that will never finish.
    */
+  /**
+   * Interrupted inputs of CHIEF sessions. A chief cannot resolve its own interrupted input
+   * (the claim gate refuses the session while it exists, so it can never run), yet the same
+   * gate then freezes every later input of that session — the user's messages included. The
+   * host closes these directly at startup (R4: "while you yourself are still interrupted, the
+   * host verifies and closes directly").
+   */
+  listInterruptedChiefInputs(): Array<{ inputId: string; sessionId: string; revision: number; taskId: string | null }> {
+    const rows = this.db
+      .prepare(
+        `SELECT i.inputId AS inputId, i.sessionId AS sessionId, i.revision AS revision, i.taskId AS taskId
+           FROM session_inputs i
+           JOIN sessions s ON s.id = i.sessionId
+          WHERE i.status = 'interrupted' AND s.roleId = 'chief'
+          ORDER BY i.seq`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      inputId: String(row['inputId']),
+      sessionId: String(row['sessionId']),
+      revision: Number(row['revision']),
+      taskId: row['taskId'] === null ? null : String(row['taskId']),
+    }));
+  }
+
+  /** Drop a foreign generation's pending interactions: their calling run no longer exists. */
+  staleInteractionsOfInterruptedInputs(): number {
+    const outcome = this.db
+      .prepare(
+        `UPDATE interactions SET state = 'stale', revision = revision + 1, updatedAt = ?
+          WHERE state = 'pending' AND inputId IN (
+            SELECT inputId FROM session_inputs WHERE status = 'interrupted'
+          )`,
+      )
+      .run(this.clock());
+    return Number(outcome.changes);
+  }
+
   listInterruptedTaskInputs(): Array<{
     inputId: string;
     sessionId: string;

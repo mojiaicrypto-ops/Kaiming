@@ -63,6 +63,51 @@ export function startWorkbench(options: StartOptions): Promise<{
   if (startup.interrupted > 0) {
     process.stdout.write(`${startup.interrupted} input(s) from an earlier run are now interrupted and await verification\n`);
   }
+  // A chief cannot resolve its own interrupted input (the claim gate refuses the session, so
+  // it can never run) — yet that same gate freezes every later input of the session, the
+  // user's messages included. The host closes those directly at startup, as the recovery
+  // contract requires, and the chief is told what happened so it verifies the real state.
+  for (const frozen of store.listInterruptedChiefInputs()) {
+    try {
+      store.resolveInterruptedInput({
+        sessionId: frozen.sessionId,
+        inputId: frozen.inputId,
+        expectedRevision: frozen.revision,
+        resolution: 'stopped',
+        evidenceRefs: ['host:process-restart'],
+        resolvedBy: 'host:startup',
+      });
+      const task = frozen.taskId === null ? undefined : store.getTask(frozen.taskId);
+      const chief = store.getSession(frozen.sessionId);
+      const noticeId = `notice-host-closed-${frozen.inputId}`;
+      if (chief !== undefined && store.getInput(noticeId) === undefined) {
+        store.acceptInput({
+          inputId: noticeId,
+          projectId: chief.projectId,
+          sessionId: frozen.sessionId,
+          ...(task !== undefined ? { taskId: task.id } : {}),
+          sourceKey: `host-closed:${frozen.inputId}`,
+          requestKey: noticeId,
+          method: 'session.system_notice',
+          kind: 'system_notice',
+          payload: {
+            content: [
+              {
+                type: 'text',
+                text:
+                  `The host closed your interrupted input ${frozen.inputId} as stopped: the process ` +
+                  'that ran it is gone, so its outcome is unknown. Verify the real state (files, git, ' +
+                  'results) before continuing, and do not assume it finished.',
+              },
+            ],
+          },
+        });
+      }
+      process.stdout.write(`host closed interrupted chief input ${frozen.inputId}\n`);
+    } catch (error) {
+      process.stdout.write(`could not close interrupted chief input ${frozen.inputId}: ${String(error)}\n`);
+    }
+  }
   // Tell the owning chief: an interrupted member input blocks its step (claim refuses the
   // session, updateTask reports STAGE_NOT_READY) and only the chief can verify it. Without
   // this notice the Task waits forever on work whose process is gone.

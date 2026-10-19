@@ -713,3 +713,38 @@ describe('write surface', () => {
     }
   }, 30_000);
 });
+
+describe('frozen chief sessions', () => {
+  it('lists a chief session\'s own interrupted inputs so the host can close them', async () => {
+    const h = await harness();
+    // A chief's user input left interrupted by a dead process.
+    h.store.acceptInput({
+      inputId: 'in-frozen', projectId: h.projectId, sessionId: 's-chief',
+      sourceKey: 's-chief:in-frozen', requestKey: 'in-frozen', method: 'session.input.submit',
+      kind: 'user', payload: { content: [{ type: 'text', text: 'hello' }] },
+    });
+    const claimed = h.store.claimNextInput('s-chief');
+    if (claimed.kind !== 'claimed') throw new Error('not claimable');
+    h.store.finishInput({ inputId: 'in-frozen', expectedRevision: claimed.input.revision, status: 'interrupted' });
+
+    const frozen = h.store.listInterruptedChiefInputs();
+    expect(frozen.map((row) => row.inputId)).toContain('in-frozen');
+
+    // Until the host closes it, the session can consume nothing at all (RECOVERY_REQUIRED).
+    h.store.acceptInput({
+      inputId: 'in-later', projectId: h.projectId, sessionId: 's-chief',
+      sourceKey: 's-chief:in-later', requestKey: 'in-later', method: 'session.input.submit',
+      kind: 'user', payload: { content: [{ type: 'text', text: 'next' }] },
+    });
+    expect(h.store.claimNextInput('s-chief').kind).toBe('blocked');
+
+    // Host closes it: the queue moves again.
+    h.store.resolveInterruptedInput({
+      sessionId: 's-chief', inputId: 'in-frozen', expectedRevision: h.store.getInput('in-frozen')!.revision,
+      resolution: 'stopped', evidenceRefs: ['host:process-restart'], resolvedBy: 'host:startup',
+    });
+    const after = h.store.claimNextInput('s-chief');
+    expect(after.kind).toBe('claimed');
+    expect(after.kind === 'claimed' ? after.input.inputId : '').toBe('in-later');
+  });
+});
