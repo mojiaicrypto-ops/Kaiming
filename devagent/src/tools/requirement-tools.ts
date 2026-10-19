@@ -12,6 +12,8 @@ import {
   getRequirement,
   listRequirements,
   parseRequirement,
+  requirementFormatRules,
+  requirementTemplate,
   requirementsDirOf,
   requirementPath,
   saveRequirement,
@@ -40,17 +42,22 @@ export function createRequirementTool(contextOf: RequirementToolContextResolver)
   return {
     name: 'requirement',
     label: 'requirement',
-    description:
+    description: [
       'Work with requirement records: list, get, or save a proposal or implementation requirement (save is the only writer).',
+      'A record is a Markdown file with a YAML front matter; `markdown` must be exactly this shape:',
+      requirementTemplate('implementation'),
+      'Rules: ' + requirementFormatRules() + '.',
+      'Get the current version with op=get before revising an existing record (expectedVersion null only creates).',
+    ].join('\n'),
     parameters: {
       type: 'object',
       properties: {
         op: { type: 'string', enum: ['list', 'get', 'save'] },
         kind: { type: 'string', enum: ['proposal', 'implementation'] },
-        status: { type: 'string' },
-        requirementId: { type: 'string' },
-        expectedVersion: { type: ['string', 'null'] },
-        markdown: { type: 'string' },
+        status: { type: 'string', description: 'record status; valid values depend on kind' },
+        requirementId: { type: 'string', description: 'stable id, equal to the file name (proposals: req-...; the id itself is part of markdown)' },
+        expectedVersion: { type: ['string', 'null'], description: 'the version op=get returned, or null to create a new record' },
+        markdown: { type: 'string', description: 'the complete record file content: YAML front matter (schemaVersion/id/kind/title/status/createdAt/updatedAt) followed by the body sections' },
         authorizationRef: {
           type: 'object',
           properties: { inputId: { type: 'string' }, interactionId: { type: 'string' } },
@@ -155,7 +162,10 @@ function saveOp(
 ): ReturnType<typeof ok> | ReturnType<typeof fail> {
   const id = readString(params, 'requirementId');
   const markdown = readString(params, 'markdown');
-  const expectedVersion = params['expectedVersion'];
+  const rawExpectedVersion = params['expectedVersion'];
+  // Models routinely send the STRING "null" for a nullable field: treat it as null instead of
+  // comparing it against a real file version.
+  const expectedVersion = rawExpectedVersion === 'null' || rawExpectedVersion === undefined ? null : rawExpectedVersion;
   if (id === undefined || markdown === undefined) {
     return fail('INVALID_ARGUMENT', 'save needs requirementId and markdown');
   }
@@ -169,9 +179,18 @@ function saveOp(
   if (!authorization.ok) {
     return fail('INVALID_ARGUMENT', `authorizationRef: ${authorization.message}`);
   }
+  // The kind comes from the record itself (the caller may omit the parameter).
+  const declaredKind = readString(params, 'kind');
   const parsed = parseRequirement(markdown, id, context.cwd);
   if (!parsed.ok) {
-    return fail('INVALID_ARGUMENT', 'the record is not valid', { requirementId: id, issues: parsed.issues });
+    // The issues alone left the author guessing at a format it was never shown: the exact
+    // template and the rules travel with the refusal, so one retry can comply.
+    return fail('INVALID_ARGUMENT', `the record is not valid: ${parsed.issues.join('; ')}`, {
+      requirementId: id,
+      issues: parsed.issues,
+      format: requirementTemplate(declaredKind === 'proposal' ? 'proposal' : 'implementation', id),
+      rules: requirementFormatRules(),
+    });
   }
   const existing = getRequirement(context.cwd, id);
   if (existing.found && existing.parsed.ok && existing.parsed.record.metadata.kind !== parsed.record.metadata.kind) {

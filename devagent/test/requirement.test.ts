@@ -500,3 +500,51 @@ describe('requirement records', () => {
     expect(got.details['text']).toContain('kind: proposal');
   });
 });
+
+describe('requirement · the format travels with the tool', () => {
+  it('the tool description carries the exact record template the parser enforces', async () => {
+    const { createRequirementTool } = await import('../src/tools/requirement-tools.ts');
+    const { requirementTemplate, parseRequirement } = await import('../src/runtime/requirement-store.ts');
+    const tool = createRequirementTool(() => ({ store: undefined as never, projectId: 'p', cwd: '/tmp', roleId: 'chief' }));
+    const description = String(tool.description ?? '');
+    expect(description).toContain('schemaVersion: 2');
+    expect(description).toContain('## 目标');
+    expect(description).toContain('## 完成摘要');
+    // The template the description shows is one the parser actually accepts (same source).
+    const template = requirementTemplate('implementation', 'req-x');
+    const parsed = parseRequirement(template.replace(/<[^>]*>/g, 'x'), 'req-x', '/tmp');
+    expect(parsed.ok).toBe(true);
+  });
+
+  it('a rejected save reports the issues AND the format so one retry can comply', async () => {
+    const { createRequirementTool } = await import('../src/tools/requirement-tools.ts');
+    const { Store } = await import('../src/store/store.ts');
+    const { mkdtempSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const root = mkdtempSync(join(tmpdir(), 'devagent-req-format-'));
+    const store = new Store({ path: join(root, 'state.db'), serverEpoch: 1 });
+    store.createProject({ id: 'p-1', realPath: root });
+    const tool = createRequirementTool(() => ({ store, projectId: 'p-1', cwd: root, roleId: 'chief' }));
+    // A real user decision: the save checks authorization before it looks at the format.
+    store.createSession({ id: 's-fmt', projectId: 'p-1', roleId: 'chief', cwd: root });
+    const interaction = store.createInteraction({
+      interactionId: 'q-fmt', projectId: 'p-1', sessionId: 's-fmt', method: 'confirm',
+      title: 'save?', requestKey: 'q-fmt',
+    });
+    store.resolveInteraction({
+      interactionId: 'q-fmt', expectedRevision: interaction.revision,
+      response: { confirmed: true }, answeredBy: 'user', requestKey: 'q-fmt',
+    });
+    const outcome = await tool.execute('t1', {
+      op: 'save',
+      requirementId: 'req-x',
+      authorizationRef: { interactionId: 'q-fmt' },
+      markdown: '# 需求 · 没有 front matter\n\n## 用户能看到的\n内容\n',
+    });
+    const text = JSON.stringify(outcome);
+    expect(text).toContain('front matter');
+    expect(text).toContain('schemaVersion: 2');
+    store.close();
+  });
+});

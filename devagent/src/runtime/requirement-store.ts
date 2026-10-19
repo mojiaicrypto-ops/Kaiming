@@ -34,6 +34,46 @@ export const IMPLEMENTATION_SECTIONS = [
 ] as const;
 
 const REQUIRED_FIELDS = ['schemaVersion', 'id', 'kind', 'title', 'status', 'createdAt', 'updatedAt'] as const;
+
+/**
+ * The exact record shape, derived from the same constants the parser enforces. It is handed to
+ * the model (tool description and failure details) because the format contract lives in the
+ * design documents, which a run never reads: an author without it writes a plausible markdown
+ * document (headings, no front matter) and every save is rejected without a way to comply.
+ */
+export function requirementTemplate(kind: RequirementKind = 'implementation', id = 'req-example'): string {
+  const front = [
+    '---',
+    `schemaVersion: ${SCHEMA_VERSION}`,
+    `id: ${id}`,
+    `kind: ${kind}`,
+    'title: <非空标题>',
+    `status: ${STATUSES[kind][0]}`,
+    'createdAt: "2026-01-01T00:00:00Z"',
+    'updatedAt: "2026-01-01T00:00:00Z"',
+    '---',
+  ].join('\n');
+  const body = kind === 'implementation'
+    ? IMPLEMENTATION_SECTIONS.map((section) => `## ${section}\n<正文>`).join('\n\n')
+    : ['## 目标', '## 来源与决定', '## 处理记录'].map((section) => `${section}\n<正文>`).join('\n\n');
+  return `${front}\n\n${body}\n`;
+}
+
+/** The one-line rules a save must satisfy, quoted in the tool output so a retry can succeed. */
+export function requirementFormatRules(): string {
+  return [
+    'the file starts with a YAML front matter (`---`) and the required fields',
+    `schemaVersion must be ${SCHEMA_VERSION}`,
+    'id must equal the file name ([A-Za-z0-9_-]+); kind is proposal or implementation and cannot change in place',
+    `status: proposal ${STATUSES.proposal.join('/')}; implementation ${STATUSES.implementation.join('/')}`,
+    'createdAt/updatedAt are UTC RFC3339 strings ("2026-01-01T00:00:00Z"), updatedAt is stamped by the save',
+    `implementation body: each of ${IMPLEMENTATION_SECTIONS.map((section) => `## ${section}`).join(' ')} exactly once, in order, non-empty`,
+    'proposal body: non-empty (目标/来源与决定/处理记录 recommended)',
+    'modules entries must be existing project-relative markdown files',
+  ]
+    .filter((line) => line !== '')
+    .join('; ');
+}
 const ARRAY_FIELDS = ['modules', 'sourceRequirementIds', 'linkedTaskIds'] as const;
 const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 
