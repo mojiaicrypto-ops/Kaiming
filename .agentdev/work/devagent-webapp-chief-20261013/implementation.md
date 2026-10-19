@@ -156,3 +156,13 @@
 **Q2 子会话提问到不了人**：三处断链——(a) 桥把失效通知发到成员自己的流（用户只看主管流）；(b) 主管快照按 sessionId 过滤 pending 交互，成员提问根本不在其中；(c) 应答鉴权只认交互自身会话。修复：通知路由到 Task 的 chief；快照改为"自己的 + 本 Task 成员的"（带 sourceSessionId）；应答接受 Task 主管；成员被提问时向委派等待报 waiting_user + interactionIds。
 **真正让 chat 卡死的根因**（用户症状"卡在这里"）：主管会话有一条自己被进程重启打断的输入 → claim 以 RECOVERY_REQUIRED 拒绝整个会话，而主管**无法自行关闭**（它跑不起来），于是后续所有输入（含用户消息、恢复通知、委派返回）全部冻结。R4 早就规定"主管自身中断时由宿主核实并直接关闭"。修复：启动时宿主把主管自己的 interrupted 输入按 stopped 关闭（证据 host:process-restart），并投一条 notice 说明"进程已消失、请先核实真实状态"。实测：启动日志 "host closed interrupted chief input c-mvf3w9sr-445-eea81d"，主管恢复消费。
 246/246 + 15/15 提示词检查。
+
+### requirement.save 永远不合法（2026-10-19，commit afe4532）
+用户报告：requirement.save 连续报 "the record is not valid"，改 id/kind/status/markdown 结构都无效。
+**证据（该轮自己的历史）**：模型提交的 markdown **完全没有 YAML front matter**——它写的是一份看似合理的中文文档（`# 需求 · …`，自创 `## 用户能看到的` / `## 不做` 等小节）。严格解析器的第一条规则就拒绝（"the file must start with a YAML front matter"）。根因：`requirement` 工具描述只有一句"save a proposal or implementation requirement"，**格式契约只在设计文档里**（docs/technicalnew/requirements-format.md），运行期模型读不到 → 只能猜，猜不中就反复改无关字段。
+修复：
+- `requirement-store` 增加 `requirementTemplate(kind,id)` 与 `requirementFormatRules()`，**由解析器同一批常量派生**（不会漂移）；
+- 工具描述内嵌完整模板 + 规则（front matter 字段、schemaVersion、id=文件名、各 kind 的 status 取值、UTC RFC3339、implementation 七节顺序、modules 必须存在）；
+- 保存失败时返回 issues + 模板 + 规则（并在 message 里点明第一条问题），一次重试即可合规；
+- expectedVersion 收到字符串 "null"（模型对可空字段的常见写法）按 null 处理。
+测试：描述里的模板就是解析器接受的模板（同源）；被拒保存携带模板。248/248。
