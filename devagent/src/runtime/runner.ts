@@ -23,6 +23,7 @@ import {
   type PromptBodies,
 } from './prompt-assembly.ts';
 import { INPUT_MARKER_CUSTOM_TYPE, HistoryUnavailableError, type PiRuntimeFactory, type PiSessionHandle } from './pi-runtime.ts';
+import { RunWatchdogError, runWithWatchdog } from './run-watchdog.ts';
 import { SessionRegistry, type LogicalSessionSpec } from './registry.ts';
 import { epochOf } from './epoch.ts';
 import { InteractionBridge, createUiAdapter } from './interactions.ts';
@@ -82,16 +83,6 @@ export type RunOutcome =
  *  turn a dead provider/stream into a terminal state instead of an infinite wait. */
 const DEFAULT_RUN_STALL_MS = 15 * 60 * 1000;
 const DEFAULT_RUN_TOTAL_MS = 90 * 60 * 1000;
-
-class RunWatchdogError extends Error {
-  constructor(
-    readonly code: 'RUN_STALLED' | 'RUN_TIMEOUT',
-    readonly detail: string,
-  ) {
-    super(detail);
-    this.name = 'RunWatchdogError';
-  }
-}
 
 export interface RunnerOptions {
   readonly store: Store;
@@ -160,48 +151,19 @@ export class InputRunner {
 
   /** Claim and run the next input of a session; returns what was actually observed. */
   /**
-   * `prompt()` with a watchdog: a run whose provider/stream stops producing (or that never
-   * ends) is aborted and reported as a watchdog failure, so the input reaches a terminal
-   * state the chief can verify — instead of staying `processing` forever and blocking its
-   * step, its Task and the user's queue behind it.
+   * `prompt()` under the run watchdog: a provider/stream that stops producing (or a run that
+   * never ends) aborts and reports a watchdog failure, so the input reaches a terminal state
+   * the chief can verify instead of staying `processing` forever.
    */
   private async promptWithWatchdog(handle: PiSessionHandle, sessionId: string, text: string): Promise<void> {
-    const stallMs = this.options.runStallMs ?? DEFAULT_RUN_STALL_MS;
-    const totalMs = this.options.runTotalMs ?? DEFAULT_RUN_TOTAL_MS;
-    const startedAt = Date.now();
-    this.lastEventAt.set(sessionId, startedAt);
-    let trip: { code: 'RUN_STALLED' | 'RUN_TIMEOUT'; detail: string } | null = null;
-    const check = (): void => {
-      if (trip !== null) return;
-      const now = Date.now();
-      const silentMs = now - (this.lastEventAt.get(sessionId) ?? startedAt);
-      if (silentMs >= stallMs) {
-        trip = {
-          code: 'RUN_STALLED',
-          detail: `no run activity for ${Math.round(silentMs / 1000)}s (limit ${Math.round(stallMs / 1000)}s); the run was aborted`,
-        };
-      } else if (now - startedAt >= totalMs) {
-        trip = {
-          code: 'RUN_TIMEOUT',
-          detail: `run exceeded ${Math.round(totalMs / 1000)}s; the run was aborted`,
-        };
-      }
-      if (trip !== null) {
-        // Abort the real Pi run; prompt() settles as aborted and the caller records the state.
-        void handle.session.abort().catch(() => undefined);
-      }
-    };
-    const timer = setInterval(check, Math.max(1_000, Math.min(15_000, Math.floor(stallMs / 4))));
-    timer.unref?.();
-    try {
-      await handle.session.prompt(text);
-      if (trip !== null) {
-        const decided = trip as { code: 'RUN_STALLED' | 'RUN_TIMEOUT'; detail: string };
-        throw new RunWatchdogError(decided.code, decided.detail);
-      }
-    } finally {
-      clearInterval(timer);
-    }
+    this.lastEventAt.set(sessionId, Date.now());
+    await runWithWatchdog({
+      prompt: () => handle.session.prompt(text),
+      abort: () => handle.session.abort(),
+      activityAt: () => this.lastEventAt.get(sessionId) ?? 0,
+      stallMs: this.options.runStallMs ?? DEFAULT_RUN_STALL_MS,
+      totalMs: this.options.runTotalMs ?? DEFAULT_RUN_TOTAL_MS,
+    });
   }
 
   async runNext(sessionId: string): Promise<RunOutcome> {
@@ -616,6 +578,15 @@ const serverWorkDir = join(config.agentDir, 'work');
       if (handle !== undefined) {
         await handle.session.abort();
         await handle.session.waitForIdle();
+        // Idleness is not the same as a written terminal row: the run's own bookkeeping lands
+        // just after it. The caller reports the settled row, so wait (bounded) for that row
+        // instead of returning a status the row already contradicts.
+        const deadline = Date.now() + 5_000;
+        for (;;) {
+          const row = this.options.store.getInput(params.inputId);
+          if (row === undefined || row.status !== 'processing' || Date.now() >= deadline) break;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
       }
     }
     return result;
