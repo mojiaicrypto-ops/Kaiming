@@ -18,7 +18,7 @@ export const SCHEMA_VERSION = 2;
 
 export type RequirementKind = 'proposal' | 'implementation';
 
-const STATUSES: Readonly<Record<RequirementKind, readonly string[]>> = {
+export const STATUSES: Readonly<Record<RequirementKind, readonly string[]>> = {
   proposal: ['pending', 'planning', 'archived', 'cancelled'],
   implementation: ['pending', 'in_progress', 'completed', 'cancelled', 'archived'],
 };
@@ -411,6 +411,111 @@ export function serializeRequirement(metadata: RequirementMetadata, body: string
   ].join('\n');
   const normalized = body.startsWith('\n') ? body.slice(1) : body;
   return `${front}\n${normalized}${normalized.endsWith('\n') ? '' : '\n'}`;
+}
+
+/**
+ * A save prepared from fields rather than from a hand-written file: the author supplies the
+ * content and the decisions, the program owns the serialization (schemaVersion, id, the
+ * timestamps, the section headings). The produced text is parsed by the same authority before it
+ * is written, so the file keeps exactly one format definition.
+ */
+export interface RequirementDraft {
+  readonly id: string;
+  readonly kind: RequirementKind;
+  readonly title: string;
+  readonly status: string;
+  readonly modules: readonly string[];
+  readonly sourceRequirementIds: readonly string[];
+  readonly linkedTaskIds: readonly string[];
+  /** implementation: content per required heading; the keys are the headings themselves. */
+  readonly sections: Readonly<Record<string, string>> | undefined;
+  /** proposal: the free body. */
+  readonly body: string | undefined;
+}
+
+export function draftToMarkdown(
+  draft: RequirementDraft,
+  when: { readonly createdAt: string; readonly updatedAt: string },
+): { readonly ok: true; readonly markdown: string } | { readonly ok: false; readonly issues: readonly string[] } {
+  const issues: string[] = [];
+  let body: string;
+  if (draft.kind === 'implementation') {
+    if (draft.body !== undefined) {
+      issues.push('an implementation record takes `sections`, not `body`');
+    }
+    const sections = draft.sections ?? {};
+    for (const key of Object.keys(sections)) {
+      if (!(IMPLEMENTATION_SECTIONS as readonly string[]).includes(key)) {
+        issues.push(
+          `unknown section \`${key}\`; an implementation record has exactly ${IMPLEMENTATION_SECTIONS.join(' / ')}`,
+        );
+      }
+    }
+    const missing: string[] = [];
+    for (const heading of IMPLEMENTATION_SECTIONS) {
+      if ((sections[heading] ?? '').trim() === '') {
+        missing.push(heading);
+      }
+    }
+    if (missing.length > 0) {
+      issues.push(`sections without content: ${missing.join(' / ')}`);
+    }
+    body = IMPLEMENTATION_SECTIONS.map((heading) => `## ${heading}\n\n${(sections[heading] ?? '').trim()}`).join(
+      '\n\n',
+    );
+  } else {
+    if (draft.sections !== undefined) {
+      issues.push('a proposal takes `body`, not `sections`');
+    }
+    body = (draft.body ?? '').trim();
+    if (body === '') {
+      issues.push('a proposal needs a non-empty body');
+    }
+  }
+  if (issues.length > 0) {
+    return { ok: false, issues };
+  }
+  return {
+    ok: true,
+    markdown: serializeRequirement(
+      {
+        schemaVersion: SCHEMA_VERSION,
+        id: draft.id,
+        kind: draft.kind,
+        title: draft.title.trim(),
+        status: draft.status.trim(),
+        createdAt: when.createdAt,
+        updatedAt: when.updatedAt,
+        modules: [...draft.modules],
+        sourceRequirementIds: [...draft.sourceRequirementIds],
+        linkedTaskIds: [...draft.linkedTaskIds],
+      },
+      body,
+    ),
+  };
+}
+
+/** The section contents of an implementation body, keyed by heading; used to revise losslessly. */
+export function splitSections(body: string): Record<string, string> {
+  const marker = /^##\s+(.*?)\s*$/gm;
+  const found: Array<{ readonly title: string; readonly headingStart: number; readonly contentStart: number }> = [];
+  for (let match = marker.exec(body); match !== null; match = marker.exec(body)) {
+    found.push({
+      title: (match[1] ?? '').trim(),
+      headingStart: match.index,
+      contentStart: match.index + match[0].length,
+    });
+  }
+  const result: Record<string, string> = {};
+  found.forEach((section, index) => {
+    if (!(IMPLEMENTATION_SECTIONS as readonly string[]).includes(section.title)) {
+      return;
+    }
+    // A section runs to the start of the next heading (known or not), so its text is never clipped.
+    const stop = index + 1 < found.length ? (found[index + 1]?.headingStart ?? body.length) : body.length;
+    result[section.title] = body.slice(section.contentStart, stop).trim();
+  });
+  return result;
 }
 
 function quote(value: string): string {

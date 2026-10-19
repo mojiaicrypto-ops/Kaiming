@@ -1351,32 +1351,14 @@ describe('input runner', () => {
   }, 60_000);
 
   it('saves a requirement record through the real tool loop', async () => {
-    const markdown = [
-      '---',
-      'schemaVersion: 2',
-      'id: req-reset',
-      'kind: proposal',
-      'title: 密码重置',
-      'status: pending',
-      'createdAt: "2026-10-04T00:00:00Z"',
-      'updatedAt: "2026-10-04T00:00:00Z"',
-      '---',
-      '',
-      '## 目标',
-      '允许用户重置密码。',
-      '',
-      '## 来源与决定',
-      '用户提出。',
-      '',
-      '## 处理记录',
-      '尚待规划。',
-      '',
-    ].join('\n');
     const saveArgs = JSON.stringify({
       op: 'save',
       requirementId: 'req-reset',
       expectedVersion: null,
-      markdown,
+      kind: 'proposal',
+      title: '密码重置',
+      status: 'pending',
+      body: ['## 目标', '允许用户重置密码。', '', '## 来源与决定', '用户提出。', '', '## 处理记录', '尚待规划。', ''].join('\n'),
       authorizationRef: { inputId: 'i-1' },
     });
     const h = await harness({

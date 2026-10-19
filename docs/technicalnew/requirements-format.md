@@ -71,6 +71,6 @@ status 仅为 pending/in_progress/completed/cancelled/archived；各状态含义
 
 get 返回原文、元数据、实际文件摘要 version（sha256）及引用/格式问题。list 从文件重建，返回 id/kind/title/status/updatedAt、来源/关联摘要及 invalidFiles；按 kind/status 筛选只作用于合法记录，非法文件不会被隐藏。updatedAt 倒序、id 升序，游标绑定过滤条件与排序边界，不手工维护另一份实时状态索引。
 
-save 的 expectedVersion 新建为 null、修改为 get 返回的摘要；同请求重试复用原 requestKey。保存前校验原文件版本、id/kind 不变、格式及真实决定引用的身份/状态（授权含义由主管判断）；以同目录临时文件原子替换并读取核对，提交真实版本回执后才成功返回。新建碰撞或旧版本冲突拒绝，失败保留原文；跨存储意图和回执按 [S6](storage-and-recovery.md#s6-文件结果与结算的跨存储顺序)。正式新增、修改及状态保存只能通过 requirement.save，普通 read 可读取，write/edit/脚本不得覆盖需求文件。
+save 的 expectedVersion 新建为 null、修改为 get 返回的摘要；同请求重试复用原 requestKey。save 收内容与决定（kind/title/status/sections 或 body/可选数组），文件序列化由程序完成：schemaVersion、id、createdAt（改版取原值）、updatedAt（实际保存时间）与七个二级标题不由调用者填写；get 返回元数据、version 与实施需求各节正文，按返回值重交即可无损修改。保存前校验原文件版本、id/kind 不变、格式及真实决定引用的身份/状态（授权含义由主管判断）；以同目录临时文件原子替换并读取核对，提交真实版本回执后才成功返回。新建碰撞或旧版本冲突拒绝，失败保留原文；跨存储意图和回执按 [S6](storage-and-recovery.md#s6-文件结果与结算的跨存储顺序)。正式新增、修改及状态保存只能通过 requirement.save，普通 read 可读取，write/edit/脚本不得覆盖需求文件。
 
 格式损坏的修复仍使用 get/save 和原文件摘要 CAS：id 取目标文件名，不能移动或覆盖另一条记录；原 kind 合法或有已保存合法回执时保持该类型。kind 缺失/非法且无法从既有保存事实核实时，由主管说明未知、取得明确纠错决定后提交合法类型与 authorizationRef；程序核对决定来源/状态，不猜类型或解析批准语义。该规则只修复损坏字段，不允许把有效提案原地改成实施需求。

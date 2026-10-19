@@ -103,9 +103,9 @@ body 按 S6 保存新报告；reportRef 核对已有完整正文与摘要，仅�
 |---|---|
 | list | kind?、status?、limit、cursor? → items/invalidFiles/nextCursor |
 | get | requirementId → 原文、元数据、version、引用/格式问题 |
-| save | requirementId、expectedVersion（新建 null）、markdown、authorizationRef → 实际 ID/path/version/metadata |
+| save | requirementId、expectedVersion（新建 null）、kind、title、status、sections（实施需求按七个标题各一段 Markdown）或 body（提案自由正文）、modules/sourceRequirementIds/linkedTaskIds?、authorizationRef → 实际 ID/path/version/metadata |
 
-schemaVersion:2 双类型需求、状态和保存检查唯一见 [F](requirements-format.md)。授权引用输入/已解决交互；模型判断是否获得同意，程序验证身份/状态/格式/文件版本，不解释需求语义。保存不自动建 Task，归档不移动文件。
+schemaVersion:2 双类型需求、状态和保存检查唯一见 [F](requirements-format.md)。保存由模型给内容与决定、程序序列化为文件：schemaVersion/id/createdAt/updatedAt 与七个二级标题不由模型填写，get 返回 version 与现有 sections 供无损修改。授权引用输入/已解决交互；模型判断是否获得同意，程序验证身份/状态/内容形状/文件版本，不解释需求语义。保存不自动建 Task，归档不移动文件。
 
 ### question
 

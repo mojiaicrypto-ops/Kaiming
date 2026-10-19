@@ -94,13 +94,29 @@ updatedAt: "2026-10-04T00:00:00Z"
 
 ${IMPLEMENTATION_SECTIONS.map((section) => `## ${section}\n内容。\n`).join('\n')}`;
 
+const proposalFields = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  kind: 'proposal',
+  title: '密码重置',
+  status: 'pending',
+  body: '## 目标\n允许用户重置密码。\n\n## 来源与决定\n用户 2026-10-04 提出。\n\n## 处理记录\n尚待规划。',
+  ...overrides,
+});
+
+const implementationFields = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  kind: 'implementation',
+  title: '密码重置实施',
+  status: 'pending',
+  sections: Object.fromEntries(IMPLEMENTATION_SECTIONS.map((section) => [section, '内容。'])),
+  ...overrides,
+});
+
 describe('requirement save decisions', () => {
   const saveWith = (f: Fixture, authorizationRef: unknown) =>
     f.tool.execute('c1', {
       op: 'save',
       requirementId: 'req-reset',
       expectedVersion: null,
-      markdown: proposal(),
+      ...proposalFields(),
       authorizationRef,
     });
 
@@ -151,7 +167,7 @@ describe('requirement save decisions', () => {
       op: 'save',
       requirementId: 'req-reset',
       expectedVersion: null,
-      markdown: proposal(),
+      ...proposalFields(),
       authorizationRef: { interactionId: 'q-1' },
     });
     expect(refused).toMatchObject({ isError: true });
@@ -184,7 +200,7 @@ describe('requirement records', () => {
       op: 'save',
       requirementId: 'req-reset',
       expectedVersion: null,
-      markdown: proposal(),
+      ...proposalFields(),
       authorizationRef: { inputId: 'i-dec' },
     });
 
@@ -193,7 +209,8 @@ describe('requirement records', () => {
     expect(saved.details['path']).toBe(path);
     expect(existsSync(path)).toBe(true);
     const text = readFileSync(path, 'utf8');
-    // The save keeps the caller's content and stamps the real save time.
+    // The program wrote the file: identity, schema version and the real save time.
+    expect(text.startsWith('---\nschemaVersion: 2\nid: req-reset\nkind: proposal\n')).toBe(true);
     expect(text).toContain('## 目标');
     expect(text).toContain('用户 2026-10-04 提出。');
     expect(text).toMatch(/updatedAt: "\d{4}-\d{2}-\d{2}T/);
@@ -204,16 +221,30 @@ describe('requirement records', () => {
     expect((got.details['metadata'] as { kind: string }).kind).toBe('proposal');
   });
 
-  it('refuses an invalid record instead of writing it', async () => {
+  it('refuses incomplete or contradictory fields instead of writing them', async () => {
     const f = fixture();
 
-    // Missing implementation sections, a wrong status for the kind, a duplicate field.
-    const cases: Array<{ readonly markdown: string; readonly id: string; readonly reason: string }> = [
-      { id: 'req-a', markdown: proposal().replace('kind: proposal', 'kind: implementation'), reason: 'missing section' },
-      { id: 'req-b', markdown: proposal().replace('status: pending', 'status: in_progress'), reason: 'status in_progress is not valid' },
-      { id: 'req-c', markdown: proposal().replace('title: 密码重置', 'title: 密码重置\ntitle: 另一个'), reason: 'duplicate field' },
-      { id: 'req-d', markdown: proposal().replace('schemaVersion: 2', 'schemaVersion: 3'), reason: 'not supported' },
-      { id: 'req-e', markdown: proposal().replace('id: req-reset', 'id: req-other'), reason: 'does not match the file name' },
+    const cases: Array<{ readonly id: string; readonly fields: Record<string, unknown>; readonly reason: string }> = [
+      {
+        id: 'req-a',
+        fields: { kind: 'implementation', title: 'x', status: 'pending', body: 'free body' },
+        reason: 'takes `sections`, not `body`',
+      },
+      { id: 'req-b', fields: proposalFields({ status: 'in_progress' }), reason: 'status in_progress is not valid' },
+      {
+        id: 'req-c',
+        fields: implementationFields({
+          sections: Object.fromEntries(IMPLEMENTATION_SECTIONS.filter((s) => s !== '验收').map((s) => [s, '内容。'])),
+        }),
+        reason: 'sections without content: 验收',
+      },
+      {
+        id: 'req-d',
+        fields: implementationFields({
+          sections: { ...(implementationFields()['sections'] as object), 补充: '内容。' },
+        }),
+        reason: 'unknown section `补充`',
+      },
     ];
 
     for (const entry of cases) {
@@ -221,12 +252,28 @@ describe('requirement records', () => {
         op: 'save',
         requirementId: entry.id,
         expectedVersion: null,
-        markdown: entry.markdown,
+        ...entry.fields,
         authorizationRef: { inputId: 'i-dec' },
       });
       expect(result.isError).toBe(true);
       expect((result.details['issues'] as string[]).join(' ')).toContain(entry.reason);
       expect(existsSync(requirementPath(f.cwd, entry.id))).toBe(false);
+    }
+  });
+
+  it('still reports a damaged file on disk (the parser stays the single format authority)', () => {
+    // Nothing reaches the parser through save any more, but a file can still be damaged from
+    // outside: list/get must report it, never guess it into a valid record.
+    const cases: Array<{ readonly text: string; readonly reason: string }> = [
+      { text: proposal().replace('title: 密码重置', 'title: 密码重置\ntitle: 另一个'), reason: 'duplicate field' },
+      { text: proposal().replace('schemaVersion: 2', 'schemaVersion: 3'), reason: 'not supported' },
+      { text: proposal().replace('id: req-reset', 'id: req-other'), reason: 'does not match the file name' },
+      { text: '# no front matter\n', reason: 'front matter' },
+    ];
+    for (const entry of cases) {
+      const parsed = parseRequirement(entry.text, 'req-reset', '/tmp');
+      expect(parsed.ok).toBe(false);
+      expect(parsed.ok ? [] : parsed.issues.join(' ')).toContain(entry.reason);
     }
   });
 
@@ -237,7 +284,7 @@ describe('requirement records', () => {
       op: 'save',
       requirementId: 'req-reset-impl',
       expectedVersion: null,
-      markdown: implementation(),
+      ...implementationFields(),
       authorizationRef: { inputId: 'i-dec' },
     });
 
@@ -253,7 +300,7 @@ describe('requirement records', () => {
       op: 'save',
       requirementId: 'req-reset',
       expectedVersion: null,
-      markdown: proposal(),
+      ...proposalFields(),
       authorizationRef: { inputId: 'i-dec' },
     });
     const version = String(first.details['version']);
@@ -264,7 +311,7 @@ describe('requirement records', () => {
       op: 'save',
       requirementId: 'req-reset',
       expectedVersion: 'stale',
-      markdown: proposal().replace('pending', 'planning'),
+      ...proposalFields({ status: 'planning' }),
       authorizationRef: { inputId: 'i-dec' },
     });
     expect(stale.isError).toBe(true);
@@ -276,7 +323,7 @@ describe('requirement records', () => {
       op: 'save',
       requirementId: 'req-reset',
       expectedVersion: version,
-      markdown: implementation('req-reset'),
+      ...implementationFields(),
       authorizationRef: { inputId: 'i-dec' },
     });
     expect(changedKind.isError).toBe(true);
@@ -287,7 +334,7 @@ describe('requirement records', () => {
       op: 'save',
       requirementId: 'req-reset',
       expectedVersion: version,
-      markdown: proposal().replace('status: pending', 'status: planning'),
+      ...proposalFields({ status: 'planning' }),
       authorizationRef: { inputId: 'i-dec' },
     });
     expect(updated.isError).toBe(false);
@@ -302,7 +349,7 @@ describe('requirement records', () => {
       op: 'save',
       requirementId: 'req-reset',
       expectedVersion: null,
-      markdown: proposal(),
+      ...proposalFields(),
       authorizationRef: { inputId: 'nope' },
     });
     expect(unknownDecision.isError).toBe(true);
@@ -315,7 +362,7 @@ describe('requirement records', () => {
       op: 'save',
       requirementId: 'req-reset',
       expectedVersion: null,
-      markdown: proposal(),
+      ...proposalFields(),
       authorizationRef: { inputId: 'i-dec' },
     });
     expect(forbidden.isError).toBe(true);
@@ -340,7 +387,7 @@ describe('requirement records', () => {
       op: 'save',
       requirementId: 'req-reset',
       expectedVersion: null,
-      markdown: proposal(),
+      ...proposalFields(),
       authorizationRef: { inputId: 'i-delegated' },
     });
 
@@ -356,12 +403,11 @@ describe('requirement records', () => {
       ['req-b', 'planning'],
       ['req-c', 'pending'],
     ] as const) {
-      const markdown = proposal().replace('id: req-reset', `id: ${id}`).replace('status: pending', `status: ${status}`);
       const saved = await f.tool.execute(`save-${id}`, {
         op: 'save',
         requirementId: id,
         expectedVersion: null,
-        markdown,
+        ...proposalFields({ status }),
         authorizationRef: { inputId: 'i-dec' },
       });
       expect(saved.isError).toBe(false);
@@ -396,38 +442,30 @@ describe('requirement records', () => {
     expect(next.details['nextCursor']).toBeNull();
   });
 
-  it('refuses an implementation record with an empty inner section', async () => {
+  it('refuses an implementation record with an empty section', async () => {
     const f = fixture();
-    const broken = implementation().replace(
-      '## 范围\n内容。\n',
-      '## 范围\n\n',
-    );
+    const sections = { ...(implementationFields()['sections'] as Record<string, string>), 范围: '   ' };
 
     const saved = await f.tool.execute('c1', {
       op: 'save',
       requirementId: 'req-reset-impl',
       expectedVersion: null,
-      markdown: broken,
+      ...implementationFields({ sections }),
       authorizationRef: { inputId: 'i-dec' },
     });
 
     expect(saved.isError).toBe(true);
-    expect((saved.details['issues'] as string[]).join(' ')).toContain('has no content');
+    expect((saved.details['issues'] as string[]).join(' ')).toContain('sections without content: 范围');
     expect(existsSync(requirementPath(f.cwd, 'req-reset-impl'))).toBe(false);
   });
 
   it('refuses a module reference that is not a real project file', async () => {
     const f = fixture();
-    const cited = proposal().replace(
-      'title: 密码重置',
-      'title: 密码重置\nmodules: [.dev/PROJECT.md, ../outside.md, .dev/missing.md]',
-    );
-
     const saved = await f.tool.execute('c1', {
       op: 'save',
       requirementId: 'req-reset',
       expectedVersion: null,
-      markdown: cited,
+      ...proposalFields({ modules: ['.dev/PROJECT.md', '../outside.md', '.dev/missing.md'] }),
       authorizationRef: { inputId: 'i-dec' },
     });
 
@@ -443,7 +481,7 @@ describe('requirement records', () => {
       op: 'save',
       requirementId: 'req-reset',
       expectedVersion: null,
-      markdown: proposal().replace('title: 密码重置', 'title: 密码重置\nmodules: [.dev/PROJECT.md]'),
+      ...proposalFields({ modules: ['.dev/PROJECT.md'] }),
       authorizationRef: { inputId: 'i-dec' },
     });
     expect(ok.isError).toBe(false);
@@ -455,7 +493,7 @@ describe('requirement records', () => {
       op: 'save',
       requirementId: 'req-ok',
       expectedVersion: null,
-      markdown: proposal().replace('id: req-reset', 'id: req-ok'),
+      ...proposalFields(),
       authorizationRef: { inputId: 'i-dec' },
     });
     expect(saved.isError).toBe(false);
@@ -501,50 +539,111 @@ describe('requirement records', () => {
   });
 });
 
-describe('requirement · the format travels with the tool', () => {
-  it('the tool description carries the exact record template the parser enforces', async () => {
-    const { createRequirementTool } = await import('../src/tools/requirement-tools.ts');
-    const { requirementTemplate, parseRequirement } = await import('../src/runtime/requirement-store.ts');
+describe('requirement · the program owns the file format', () => {
+  it('the description names every section, so the author supplies content and not a syntax', () => {
     const tool = createRequirementTool(() => ({ store: undefined as never, projectId: 'p', cwd: '/tmp', roleId: 'chief' }));
     const description = String(tool.description ?? '');
-    expect(description).toContain('schemaVersion: 2');
-    expect(description).toContain('## 目标');
-    expect(description).toContain('## 完成摘要');
-    // The template the description shows is one the parser actually accepts (same source).
-    const template = requirementTemplate('implementation', 'req-x');
-    const parsed = parseRequirement(template.replace(/<[^>]*>/g, 'x'), 'req-x', '/tmp');
-    expect(parsed.ok).toBe(true);
+    for (const section of IMPLEMENTATION_SECTIONS) {
+      expect(description).toContain(section);
+    }
+    expect(description).toContain('the program writes schemaVersion, id, createdAt/updatedAt');
+    expect(description).not.toContain('YAML front matter');
   });
 
-  it('a rejected save reports the issues AND the format so one retry can comply', async () => {
-    const { createRequirementTool } = await import('../src/tools/requirement-tools.ts');
-    const { Store } = await import('../src/store/store.ts');
-    const { mkdtempSync } = await import('node:fs');
-    const { tmpdir } = await import('node:os');
-    const { join } = await import('node:path');
-    const root = mkdtempSync(join(tmpdir(), 'devagent-req-format-'));
-    const store = new Store({ path: join(root, 'state.db'), serverEpoch: 1 });
-    store.createProject({ id: 'p-1', realPath: root });
-    const tool = createRequirementTool(() => ({ store, projectId: 'p-1', cwd: root, roleId: 'chief' }));
-    // A real user decision: the save checks authorization before it looks at the format.
-    store.createSession({ id: 's-fmt', projectId: 'p-1', roleId: 'chief', cwd: root });
-    const interaction = store.createInteraction({
-      interactionId: 'q-fmt', projectId: 'p-1', sessionId: 's-fmt', method: 'confirm',
-      title: 'save?', requestKey: 'q-fmt',
-    });
-    store.resolveInteraction({
-      interactionId: 'q-fmt', expectedRevision: interaction.revision,
-      response: { confirmed: true }, answeredBy: 'user', requestKey: 'q-fmt',
-    });
-    const outcome = await tool.execute('t1', {
+  it('a save with a missing section names the section it needs instead of a syntax error', async () => {
+    const f = fixture();
+    const sections = { ...(implementationFields()['sections'] as Record<string, string>) };
+    delete sections['行为与异常'];
+
+    const outcome = await f.tool.execute('c1', {
       op: 'save',
       requirementId: 'req-x',
-      authorizationRef: { interactionId: 'q-fmt' },
-      markdown: '# 需求 · 没有 front matter\n\n## 用户能看到的\n内容\n',
+      expectedVersion: null,
+      ...implementationFields({ sections }),
+      authorizationRef: { inputId: 'i-dec' },
     });
+
+    expect(outcome.isError).toBe(true);
     const text = JSON.stringify(outcome);
-    expect(text).toContain('front matter');
-    expect(text).toContain('schemaVersion: 2');
-    store.close();
+    expect(text).toContain('sections without content: 行为与异常');
+    // The full heading list travels with the refusal: one retry can comply without guessing.
+    expect(text).toContain('完成摘要');
+  });
+
+  it('get returns the sections, and resubmitting them reproduces the same body', async () => {
+    const f = fixture();
+    const saved = await f.tool.execute('c1', {
+      op: 'save',
+      requirementId: 'req-reset-impl',
+      expectedVersion: null,
+      ...implementationFields({ sections: { ...(implementationFields()['sections'] as object), 验收: '1. npm test 全过\n2. 注册表能列出这个 skill' } }),
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    expect(saved.isError).toBe(false);
+
+    const got = await f.tool.execute('c2', { op: 'get', requirementId: 'req-reset-impl' });
+    const sections = got.details['sections'] as Record<string, string>;
+    expect(Object.keys(sections).sort()).toEqual([...IMPLEMENTATION_SECTIONS].sort());
+    expect(sections['验收']).toBe('1. npm test 全过\n2. 注册表能列出这个 skill');
+
+    // Round-trip: the returned values are exactly what save accepts.
+    const again = await f.tool.execute('c3', {
+      op: 'save',
+      requirementId: 'req-reset-impl',
+      expectedVersion: String(got.details['version']),
+      ...implementationFields({ sections, status: 'in_progress' }),
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    expect(again.isError).toBe(false);
+    const text = readFileSync(requirementPath(f.cwd, 'req-reset-impl'), 'utf8');
+    expect(text).toContain('## 验收\n\n1. npm test 全过\n2. 注册表能列出这个 skill');
+    expect(text).toContain('status: in_progress');
+  });
+
+  it('a damaged file on disk still gets the format hint (repair goes through save)', async () => {
+    const f = fixture();
+    const path = requirementPath(f.cwd, 'req-broken');
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, '---\nschemaVersion: 2\nid: req-broken\nkind: implementation\n---\n\nbody\n', 'utf8');
+
+    const got = await f.tool.execute('c1', { op: 'get', requirementId: 'req-broken' });
+    expect(got.isError).toBe(false);
+    expect(String(got.details['format'])).toContain('schemaVersion: 2');
+    expect(String(got.details['format'])).toContain('## 完成摘要');
+    expect(String(got.details['rules'])).toContain('UTC RFC3339');
+  });
+});
+
+describe('requirement · the model can see what it must act on', () => {
+  it('save and get put version, sections and issues in the text, not only in details', async () => {
+    const f = fixture();
+    const saved = await f.tool.execute('c1', {
+      op: 'save',
+      requirementId: 'req-reset-impl',
+      expectedVersion: null,
+      ...implementationFields(),
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    // Pi hands the model `content` only: a version that lives in details is a version it never had.
+    const saveText = saved.content.map((part) => part.text).join('\n');
+    expect(saveText).toContain(String(saved.details['version']));
+
+    const got = await f.tool.execute('c2', { op: 'get', requirementId: 'req-reset-impl' });
+    const getText = got.content.map((part) => part.text).join('\n');
+    expect(getText).toContain(String(got.details['version']));
+    expect(getText).toContain('## 验收');
+
+    // A refusal has to show its reasons, or the next attempt is a guess.
+    const missing = { ...(implementationFields()['sections'] as Record<string, string>) };
+    delete missing['未知'];
+    const refused = await f.tool.execute('c3', {
+      op: 'save',
+      requirementId: 'req-reset-impl',
+      expectedVersion: String(got.details['version']),
+      ...implementationFields({ sections: missing }),
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    const refusedText = refused.content.map((part) => part.text).join('\n');
+    expect(refusedText).toContain('sections without content: 未知');
   });
 });

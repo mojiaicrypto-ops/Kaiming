@@ -9,12 +9,27 @@ export interface ToolOutcome {
   readonly isError: boolean;
 }
 
+/**
+ * Pi shows a tool's `content` to the model and keeps `details` for the UI. Facts the model must act
+ * on (version, issues, sections, ids) therefore travel in the text as well: a model that cannot see
+ * *why* a save was refused can only guess, which is exactly what it did before.
+ */
+function withPayload(text: string, payload: Record<string, unknown>): string {
+  const entries = Object.entries(payload).filter(([, value]) => value !== undefined);
+  return entries.length === 0 ? text : `${text}\n${JSON.stringify(Object.fromEntries(entries))}`;
+}
+
 export function ok(text: string, details: Record<string, unknown>): ToolOutcome {
-  return { content: [{ type: 'text', text }], details, isError: false };
+  return { content: [{ type: 'text', text: withPayload(text, details) }], details, isError: false };
 }
 
 export function fail(code: string, text: string, details: Record<string, unknown> = {}): ToolOutcome {
-  return { content: [{ type: 'text', text: `Error: ${text}` }], details: { code, ...details }, isError: true };
+  const payload = { code, ...details };
+  return {
+    content: [{ type: 'text', text: withPayload(`Error: ${text}`, payload) }],
+    details: payload,
+    isError: true,
+  };
 }
 
 export function asRecord(value: unknown): Record<string, unknown> | undefined {

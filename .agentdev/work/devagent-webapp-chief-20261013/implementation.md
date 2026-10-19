@@ -166,3 +166,14 @@
 - 保存失败时返回 issues + 模板 + 规则（并在 message 里点明第一条问题），一次重试即可合规；
 - expectedVersion 收到字符串 "null"（模型对可空字段的常见写法）按 null 处理。
 测试：描述里的模板就是解析器接受的模板（同源）；被拒保存携带模板。248/248。
+
+### 需求保存改为字段式；工具结果对模型可见（2026-10-19）
+用户提出的产品设计问题:markdown 需求记录是否格式有问题、单独文件是否更好、是否复杂化。
+**结论与事实**:一条需求**本来就是单独文件**(`.dev/requirements/<id>.md`,id=文件名,无实时索引),文件形态不用改。复杂化在**保存接口**:`save(markdown)` 要求模型手写整份序列化,而 7 个必需字段里 4 个(schemaVersion/id/kind/updatedAt)本就由程序持有;七节标题除校验外**没有任何程序消费者**。一次保存约 18 条拒绝理由、全或无。
+**另一定位(更深因)**:`ok(text, details)` 只把 `text` 交给模型,`details` 只给 UI。因此模型从 `get` 拿不到 version、从失败里拿不到 issues——"the record is not valid" 反复失败又无法修正,正是这个机制造成的。
+修复:
+1. `save` 收字段:`requirementId/expectedVersion/kind/title/status/sections|body/modules?/sourceRequirementIds?/linkedTaskIds?/authorizationRef`;程序写 schemaVersion/id/createdAt(改版取原值)/updatedAt 与七节标题。`draftToMarkdown` 由解析器同一批常量派生,产出文本仍过 `parseRequirement`(单一格式权威),F1–F3 文件格式不变。
+2. `get` 返回 `body`(提案)或 `sections`(实施,逐节正文)+version;损坏文件仍给 format/rules 供修复。
+3. `tool-kit.ok/fail` 把结构化 payload 附在 content 文本里(Pi 只把 content 给模型),版本/issue/sections/id 因此可见。
+4. 文档同步:`agents-and-tools.md#requirement` 的 save 行、`requirements-format.md` F4、`prompts/base.md` 的 get 说明。
+实机:模型用字段式 save 一次写入 `req-probe-fields`(程序生成 front matter),list 解析 valid 2/invalid 0。套件 252/252。

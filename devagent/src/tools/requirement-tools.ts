@@ -9,18 +9,19 @@
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
 import {
   IMPLEMENTATION_SECTIONS,
+  SCHEMA_VERSION,
+  STATUSES,
+  draftToMarkdown,
   getRequirement,
   listRequirements,
-  parseRequirement,
   requirementFormatRules,
   requirementTemplate,
   requirementsDirOf,
   requirementPath,
   saveRequirement,
-  serializeRequirement,
-  type RequirementMetadata,
+  splitSections,
 } from '../runtime/requirement-store.ts';
-import { asRecord, fail, messageOf, ok, readString } from './tool-kit.ts';
+import { asRecord, fail, messageOf, ok, readString, readStringArray } from './tool-kit.ts';
 import type { DomainTool } from './task-tools.ts';
 import type { Store } from '../store/store.ts';
 
@@ -44,10 +45,13 @@ export function createRequirementTool(contextOf: RequirementToolContextResolver)
     label: 'requirement',
     description: [
       'Work with requirement records: list, get, or save a proposal or implementation requirement (save is the only writer).',
-      'A record is a Markdown file with a YAML front matter; `markdown` must be exactly this shape:',
-      requirementTemplate('implementation'),
-      'Rules: ' + requirementFormatRules() + '.',
-      'Get the current version with op=get before revising an existing record (expectedVersion null only creates).',
+      'save takes the content, not a file: the program writes schemaVersion, id, createdAt/updatedAt and the section headings.',
+      'An implementation record needs title, status, and sections keyed by these headings (each a non-empty Markdown string):',
+      IMPLEMENTATION_SECTIONS.map((section) => `  ${section}`).join(' / '),
+      'A proposal needs title, status and a free `body` (目标/来源与决定/处理记录 recommended).',
+      `status: proposal ${STATUSES.proposal.join('/')}; implementation ${STATUSES.implementation.join('/')}.`,
+      `Optional lists: modules (existing project-relative markdown files), sourceRequirementIds, linkedTaskIds.`,
+      'get returns the version and, for an implementation record, its current sections; revise by passing changed values with that exact version (expectedVersion null only creates).',
     ].join('\n'),
     parameters: {
       type: 'object',
@@ -55,9 +59,17 @@ export function createRequirementTool(contextOf: RequirementToolContextResolver)
         op: { type: 'string', enum: ['list', 'get', 'save'] },
         kind: { type: 'string', enum: ['proposal', 'implementation'] },
         status: { type: 'string', description: 'record status; valid values depend on kind' },
-        requirementId: { type: 'string', description: 'stable id, equal to the file name (proposals: req-...; the id itself is part of markdown)' },
+        title: { type: 'string', description: 'the record title (non-empty)' },
+        requirementId: { type: 'string', description: 'stable id, equal to the file name (e.g. req-password-reset)' },
         expectedVersion: { type: ['string', 'null'], description: 'the version op=get returned, or null to create a new record' },
-        markdown: { type: 'string', description: 'the complete record file content: YAML front matter (schemaVersion/id/kind/title/status/createdAt/updatedAt) followed by the body sections' },
+        sections: {
+          type: 'object',
+          description: 'implementation records only: content per required heading, keyed by the heading (each entry a non-empty Markdown string)',
+        },
+        body: { type: 'string', description: 'proposal records only: the free body Markdown' },
+        modules: { type: 'array', items: { type: 'string' }, description: 'existing project-relative markdown files this record relies on' },
+        sourceRequirementIds: { type: 'array', items: { type: 'string' } },
+        linkedTaskIds: { type: 'array', items: { type: 'string' } },
         authorizationRef: {
           type: 'object',
           properties: { inputId: { type: 'string' }, interactionId: { type: 'string' } },
@@ -98,8 +110,28 @@ export function createRequirementTool(contextOf: RequirementToolContextResolver)
             version: found.version,
             path: requirementPath(context.cwd, id),
             text: found.text,
-            ...(parsed.ok ? { metadata: parsed.record.metadata } : {}),
+            ...(parsed.ok
+              ? {
+                  metadata: parsed.record.metadata,
+                  // Revise by resubmitting these values: the same text comes back losslessly.
+                  body: parsed.record.metadata.kind === 'proposal' ? parsed.record.body.trim() : undefined,
+                  sections:
+                    parsed.record.metadata.kind === 'implementation'
+                      ? splitSections(parsed.record.body)
+                      : undefined,
+                }
+              : {}),
             issues: parsed.issues,
+            // A damaged file is repaired through save too: show the format it must end up in.
+            ...(parsed.ok
+              ? {}
+              : {
+                  format: requirementTemplate(
+                    found.text.includes('kind: proposal') ? 'proposal' : 'implementation',
+                    id,
+                  ),
+                  rules: requirementFormatRules(),
+                }),
           },
         );
       }
@@ -161,13 +193,12 @@ function saveOp(
   params: Record<string, unknown>,
 ): ReturnType<typeof ok> | ReturnType<typeof fail> {
   const id = readString(params, 'requirementId');
-  const markdown = readString(params, 'markdown');
   const rawExpectedVersion = params['expectedVersion'];
   // Models routinely send the STRING "null" for a nullable field: treat it as null instead of
   // comparing it against a real file version.
   const expectedVersion = rawExpectedVersion === 'null' || rawExpectedVersion === undefined ? null : rawExpectedVersion;
-  if (id === undefined || markdown === undefined) {
-    return fail('INVALID_ARGUMENT', 'save needs requirementId and markdown');
+  if (id === undefined) {
+    return fail('INVALID_ARGUMENT', 'save needs requirementId');
   }
   if (expectedVersion !== null && typeof expectedVersion !== 'string') {
     return fail('INVALID_ARGUMENT', 'expectedVersion must be null (new record) or the version get returned');
@@ -179,46 +210,90 @@ function saveOp(
   if (!authorization.ok) {
     return fail('INVALID_ARGUMENT', `authorizationRef: ${authorization.message}`);
   }
-  // The kind comes from the record itself (the caller may omit the parameter).
-  const declaredKind = readString(params, 'kind');
-  const parsed = parseRequirement(markdown, id, context.cwd);
-  if (!parsed.ok) {
-    // The issues alone left the author guessing at a format it was never shown: the exact
-    // template and the rules travel with the refusal, so one retry can comply.
-    return fail('INVALID_ARGUMENT', `the record is not valid: ${parsed.issues.join('; ')}`, {
-      requirementId: id,
-      issues: parsed.issues,
-      format: requirementTemplate(declaredKind === 'proposal' ? 'proposal' : 'implementation', id),
-      rules: requirementFormatRules(),
-    });
-  }
   const existing = getRequirement(context.cwd, id);
-  if (existing.found && existing.parsed.ok && existing.parsed.record.metadata.kind !== parsed.record.metadata.kind) {
+  const existingKind = existing.found && existing.parsed.ok ? existing.parsed.record.metadata.kind : undefined;
+  const declaredKind = readString(params, 'kind') ?? existingKind;
+  if (declaredKind !== 'proposal' && declaredKind !== 'implementation') {
+    return fail('INVALID_ARGUMENT', 'kind must be proposal or implementation (required for a new record)');
+  }
+  if (existingKind !== undefined && declaredKind !== existingKind) {
     // A record never changes its type in place (F1): a proposal becomes an implementation record as a
     // new, linked record instead.
     return fail('INVALID_ARGUMENT', 'a requirement record cannot change its kind', {
       requirementId: id,
-      was: existing.parsed.record.metadata.kind,
-      now: parsed.record.metadata.kind,
+      was: existingKind,
+      now: declaredKind,
     });
   }
-  // `save` keeps the caller's content and stamps the real save time (F1).
+  const title = readString(params, 'title');
+  const status = readString(params, 'status');
+  if (title === undefined || status === undefined) {
+    return fail('INVALID_ARGUMENT', 'save needs title and status');
+  }
+  const sectionsParam = params['sections'];
+  let sections: Record<string, string> | undefined;
+  if (sectionsParam !== undefined) {
+    const record = asRecord(sectionsParam);
+    if (record === undefined) {
+      return fail('INVALID_ARGUMENT', 'sections must be an object keyed by the section headings');
+    }
+    sections = {};
+    for (const [heading, content] of Object.entries(record)) {
+      if (typeof content !== 'string') {
+        return fail('INVALID_ARGUMENT', `section ${heading} must be a string`);
+      }
+      sections[heading] = content;
+    }
+  }
+  const lists = ['modules', 'sourceRequirementIds', 'linkedTaskIds'] as const;
+  const listValues: Record<(typeof lists)[number], string[]> = {
+    modules: [],
+    sourceRequirementIds: [],
+    linkedTaskIds: [],
+  };
+  for (const key of lists) {
+    if (params[key] === undefined) {
+      continue;
+    }
+    const value = readStringArray(params, key);
+    if (value === undefined) {
+      return fail('INVALID_ARGUMENT', `${key} must be a list of strings`);
+    }
+    listValues[key] = value;
+  }
+  // The content and the decisions come from the caller; the serialization does not (F1/F2/F3).
   const now = new Date().toISOString();
-  const createdAt = existing.found && existing.parsed.ok ? existing.parsed.record.metadata.createdAt : parsed.record.metadata.createdAt;
-  if (existing.found && existing.parsed.ok && parsed.record.metadata.createdAt !== createdAt) {
-    return fail('INVALID_ARGUMENT', 'createdAt cannot change once a record exists', {
+  const createdAt =
+    (existing.found && existing.parsed.ok ? existing.parsed.record.metadata.createdAt : undefined) ??
+    (existing.found ? /^createdAt:\s*"?([^"\n]+)"?\s*$/m.exec(existing.text)?.[1]?.trim() : undefined) ??
+    now;
+  const draft = draftToMarkdown(
+    {
+      id,
+      kind: declaredKind,
+      title,
+      status,
+      modules: listValues.modules,
+      sourceRequirementIds: listValues.sourceRequirementIds,
+      linkedTaskIds: listValues.linkedTaskIds,
+      sections,
+      body: readString(params, 'body'),
+    },
+    { createdAt, updatedAt: now },
+  );
+  if (!draft.ok) {
+    return fail('INVALID_ARGUMENT', `the record is not valid: ${draft.issues.join('; ')}`, {
       requirementId: id,
-      createdAt,
+      issues: draft.issues,
+      sections: declaredKind === 'implementation' ? [...IMPLEMENTATION_SECTIONS] : [],
     });
   }
-  const metadata: RequirementMetadata = { ...parsed.record.metadata, createdAt, updatedAt: now };
-  const text = serializeRequirement(metadata, parsed.record.body);
   try {
     const saved = saveRequirement({
       cwd: context.cwd,
       id,
       expectedVersion: expectedVersion as string | null,
-      markdown: text,
+      markdown: draft.markdown,
     });
     if (!saved.ok) {
       return fail(saved.code, saved.message, {
@@ -226,19 +301,27 @@ function saveOp(
         ...(saved.issues !== undefined ? { issues: saved.issues } : {}),
       });
     }
-    return ok(
-      `Requirement ${id} (${metadata.kind}, ${metadata.status}) ${saved.reused ? 'was already saved' : 'saved'}`,
-      {
-        requirementId: id,
-        path: saved.path,
-        version: saved.version,
-        reused: saved.reused,
-        savedAt: now,
-        metadata,
-        authorizationRefs: authorization.refs,
-        sections: metadata.kind === 'implementation' ? [...IMPLEMENTATION_SECTIONS] : [],
+    return ok(`Requirement ${id} (${declaredKind}, ${status}) ${saved.reused ? 'was already saved' : 'saved'}`, {
+      requirementId: id,
+      path: saved.path,
+      version: saved.version,
+      reused: saved.reused,
+      savedAt: now,
+      metadata: {
+        schemaVersion: SCHEMA_VERSION,
+        id,
+        kind: declaredKind,
+        title: title.trim(),
+        status: status.trim(),
+        createdAt,
+        updatedAt: now,
+        modules: listValues.modules,
+        sourceRequirementIds: listValues.sourceRequirementIds,
+        linkedTaskIds: listValues.linkedTaskIds,
       },
-    );
+      authorizationRefs: authorization.refs,
+      sections: declaredKind === 'implementation' ? [...IMPLEMENTATION_SECTIONS] : [],
+    });
   } catch (error) {
     return fail('STORAGE_UNAVAILABLE', `the record could not be saved: ${messageOf(error)}`, {
       requirementId: id,
