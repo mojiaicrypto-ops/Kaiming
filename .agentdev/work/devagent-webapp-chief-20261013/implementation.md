@@ -142,3 +142,11 @@
 用户报告：聊天像卡住，输入不被接受。根因**不是流**：webapp 的 `session.input.submit` 从不发送 `taskId`，而契约（R2）规定"当前 Task 的补充须关联原 taskId；普通新话题排队至原 Task 结束或新开主管会话"。于是会话一旦绑定 active Task，用户每条消息都按"新话题"被**保留**（queued 且永不消费）——s-138f42aad205 上已积压 5 条，UI 完全无提示。
 修复：submit 前用 `session.get` 取权威 currentTaskId 并关联（避免 Task 中途创建导致的陈旧值）→ 消息作为当前 Task 的补充立即执行；若服务端仍保留（waitingForTask），UI 显示"排队中"条带（来自快照 seeding，刷新后仍在）+ 说明 toast + **撤回**按钮（store.requestStop 支持 queued，实测 stopped）。
 实机验证：卡住的 5 条消息现在全部可见；新提交即时执行（chief 已回复）；撤回一条 → 条带 4 条、服务端该 input 为 stopped。webapp 16/16 + 服务端 239/239。
+
+### 异步容错三项（2026-10-19，commit fb924c2 + 9eb721e）
+用户指出：Task 卡了很久、应已结束或异常；异步异常不能变成无限等待，要求补容错。查证三处真实缺陷：
+1. **运行无上限**：`await handle.session.prompt(text)` 无界——provider/流停摆时永久挂起，该输入永远 processing，成员永不 settle，步骤/Task/用户队列全部堵死。新增运行看门狗（`run-watchdog.ts`）：无 Pi 活动达 runStallMs（默认 15min）或总时长超 runTotalMs（默认 90min）→ abort 该运行，输入落为 interrupted（RUN_STALLED/RUN_TIMEOUT），交主管核实。可用 AGENTDEV_RUN_STALL_MS/AGENTDEV_RUN_TOTAL_MS 配置；单元测试覆盖两种触发与健康路径（注入时钟）。
+2. **无人通知主管**：进程消失留下的 interrupted 成员输入只在 stdout 打印，主管不知道、也没法推进。启动时改为向该 Task 的 chief 排一条 system_notice（按 input 幂等、绑定 taskId 可消费），指示核实后 reconcile。
+3. **`task.reconcile` 工具不存在**：恢复契约（agents-and-tools）定义了它、chief 提示词也指示调用，但代码里没有——于是 interrupted 成员输入无路可关，步骤永久 STAGE_NOT_READY。已实现：校验 Task owner/成员归属/证据引用（须为本 Task 结果或 file: 前缀）→ 调用既有恢复服务关闭原输入；并对 chief 放行。
+另修：requestStop 的"停稳"不等于"终态行已写"，停止回执改为有界等待行离开 processing（契约本就要求回执反映已定稿行）。
+实机：重启后 chief 自动消费通知 → 自行核实（引用 recovery 报告 + review 报告）→ reconcile 关闭 i-bd85892d（记录 resolvedBy=s-138f42aad205:reconcile）→ 该 Task 成员无 busy、阶段门禁解除。244/244。
