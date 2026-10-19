@@ -41,6 +41,8 @@ authorizationRef 为 {inputId} 或 {interactionId}，引用真实用户输入或
 
 同一实施需求至多一个未结束实现 Task，同主管至多一项未结束 Task（含暂停）；冲突返回关联/TASK_BUSY。主管自行讨论、保存提案不自动建 Task；需要专业帮助先建 read 或 write Task。
 
+requirementId 只表示「本 Task 实施该实施需求」（R-04）：提供时程序核对记录存在、可读、kind 为 implementation 且状态为 pending/in_progress，否则拒绝并不建 Task；read Task 不得提供。Task 不必对应需求——设计/规划需求规则、调查、知识维护均可不填，设计 Task 与需求是来源/产出关系，由需求的 sourceRequirementIds 与 linkedTaskIds 记录，不经此字段。
+
 ### updateTask
 
 输入：taskId、expectedRevision、phase?、summary、nextStep?、blockReason?、status?（active/waiting）、changes?={goal?,scope?,acceptanceRefs?,basisRefs?,planMarkdown?,expectedPlanVersion?,authorizationRef?,requiresTest?,invalidateResultIds?}。
@@ -103,7 +105,9 @@ body 按 S6 保存新报告；reportRef 核对已有完整正文与摘要，仅�
 |---|---|
 | list | kind?、status?、limit、cursor? → items/invalidFiles/nextCursor |
 | get | requirementId → 原文、元数据、version、引用/格式问题 |
-| save | requirementId、expectedVersion（新建 null）、kind、title、status、sections（实施需求按七个标题各一段 Markdown）或 body（提案自由正文）、modules/sourceRequirementIds/linkedTaskIds?、authorizationRef → 实际 ID/path/version/metadata |
+| save | requirementId、expectedVersion（新建 null）、kind、title、status、sections（实施需求按七个标题各一段 Markdown）或 body（提案自由正文）、modules/sourceRequirementIds/linkedTaskIds?、authorizationRef → 实际 ID/path/version/metadata、一致性待核对项 |
+
+保存返回状态与事实的一致性提示，不改由主管作出的决定：实施需求 in_progress 但无实施 Task 时提示，completed 但仍有未结束实施 Task 时列为「完成记录待核对」并给出 Task，提案 archived 但无实施需求以 sourceRequirementIds 引用时列为待核对（R-05）。get 返回该需求名下实施 Task 的实际状态，并与文件记录的 linkedTaskIds 对照；list 报告指向不可读记录的实施 Task。
 
 schemaVersion:2 双类型需求、状态和保存检查唯一见 [F](requirements-format.md)。保存由模型给内容与决定、程序序列化为文件：schemaVersion/id/createdAt/updatedAt 与七个二级标题不由模型填写，get 返回 version 与现有 sections 供无损修改。授权引用输入/已解决交互；模型判断是否获得同意，程序验证身份/状态/内容形状/文件版本，不解释需求语义。保存不自动建 Task，归档不移动文件。
 

@@ -23,7 +23,7 @@ import {
 } from '../runtime/requirement-store.ts';
 import { asRecord, fail, messageOf, ok, readString, readStringArray } from './tool-kit.ts';
 import type { DomainTool } from './task-tools.ts';
-import type { Store } from '../store/store.ts';
+import { OPEN_TASK_STATUSES, type Store } from '../store/store.ts';
 
 export interface RequirementToolContext {
   readonly store: Store;
@@ -113,6 +113,18 @@ export function createRequirementTool(contextOf: RequirementToolContextResolver)
             ...(parsed.ok
               ? {
                   metadata: parsed.record.metadata,
+                  // The Task edge is program-owned state; the file's list is traceability only.
+                  implementationTasks: implementationTasksOf(context, id),
+                  recordedTaskIds: parsed.record.metadata.linkedTaskIds,
+                  // Three ways the record and the work can disagree, each reported rather than hidden.
+                  recordedButMissing: parsed.record.metadata.linkedTaskIds.filter(
+                    (taskId) => !context.store.listTasks(context.projectId).some((task) => task.id === taskId),
+                  ),
+                  recordedNotImplementing: parsed.record.metadata.linkedTaskIds.filter((taskId) =>
+                    context.store
+                      .listTasks(context.projectId)
+                      .some((task) => task.id === taskId && task.requirementId !== id),
+                  ),
                   // Revise by resubmitting these values: the same text comes back losslessly.
                   body: parsed.record.metadata.kind === 'proposal' ? parsed.record.body.trim() : undefined,
                   sections:
@@ -153,6 +165,12 @@ function listOp(context: RequirementToolContext, params: Record<string, unknown>
       : 20;
   const cursor = readString(params, 'cursor') ?? undefined;
   const { valid, invalid } = listRequirements(context.cwd);
+  // The reverse direction: a Task that implements a record the project cannot read.
+  const known = new Set(valid.map((entry) => entry.id));
+  const tasksWithoutRecord = context.store
+    .listTasks(context.projectId)
+    .filter((task) => task.requirementId !== null && !known.has(task.requirementId))
+    .map((task) => ({ taskId: task.id, requirementId: task.requirementId, status: task.status }));
   const filtered = valid.filter(
     (entry) =>
       (kindFilter === undefined || entry.kind === kindFilter) &&
@@ -182,10 +200,64 @@ function listOp(context: RequirementToolContext, params: Record<string, unknown>
         path: entry.path,
       })),
       invalidFiles: invalid,
+      ...(tasksWithoutRecord.length > 0 ? { tasksWithoutRecord } : {}),
       nextCursor,
       directory: requirementsDirOf(context.cwd),
     },
   );
+}
+
+/**
+ * What the record's own status claims versus what its implementation Tasks show. The program only
+ * reports: R-05 forbids deciding completion from Task counts, and a mismatch is a fact the chief
+ * has to see, not a state the program may write.
+ */
+function consistencyOf(
+  context: RequirementToolContext,
+  id: string,
+  kind: 'proposal' | 'implementation',
+  status: string,
+): { readonly pendingCheck: readonly string[]; readonly notes: readonly string[] } {
+  const pendingCheck: string[] = [];
+  const notes: string[] = [];
+  const implementationTasks = context.store
+    .listTasks(context.projectId)
+    .filter((task) => task.requirementId === id);
+  const openTasks = implementationTasks.filter((task) => OPEN_TASK_STATUSES.includes(task.status));
+  if (kind === 'implementation') {
+    if (status === 'in_progress' && implementationTasks.length === 0) {
+      notes.push('no Task implements this requirement yet; in_progress is a claim without work');
+    }
+    if (status === 'completed' && openTasks.length > 0) {
+      pendingCheck.push(
+        `completion recorded while ${openTasks.map((task) => `${task.id}(${task.status})`).join(', ')} is still open`,
+      );
+    }
+  }
+  if (kind === 'proposal' && status === 'archived') {
+    // R-05: a proposal is archived only once the produced implementation requirement is saved and
+    // linked; the program checks the link exists, not whether the design was any good.
+    const produced = listRequirements(context.cwd).valid.filter(
+      (record) => record.kind === 'implementation' && record.sourceRequirementIds.includes(id),
+    );
+    if (produced.length === 0) {
+      pendingCheck.push('no implementation requirement cites this proposal as its source');
+    }
+  }
+  return { pendingCheck, notes };
+}
+
+function implementationTasksOf(context: RequirementToolContext, id: string): Array<Record<string, unknown>> {
+  return context.store
+    .listTasks(context.projectId)
+    .filter((task) => task.requirementId === id)
+    .map((task) => ({
+      taskId: task.id,
+      status: task.status,
+      phase: task.phase,
+      requiresTest: task.requiresTest,
+      updatedAt: task.updatedAt,
+    }));
 }
 
 function saveOp(
@@ -301,12 +373,22 @@ function saveOp(
         ...(saved.issues !== undefined ? { issues: saved.issues } : {}),
       });
     }
-    return ok(`Requirement ${id} (${declaredKind}, ${status}) ${saved.reused ? 'was already saved' : 'saved'}`, {
+    const consistency = consistencyOf(context, id, declaredKind, status.trim());
+    const implementationTasks = implementationTasksOf(context, id);
+    return ok(
+      [
+        `Requirement ${id} (${declaredKind}, ${status}) ${saved.reused ? 'was already saved' : 'saved'}`,
+        ...consistency.pendingCheck.map((line) => `pending check: ${line}`),
+        ...consistency.notes.map((line) => `note: ${line}`),
+      ].join('\n'),
+      {
       requirementId: id,
       path: saved.path,
       version: saved.version,
       reused: saved.reused,
       savedAt: now,
+      ...(consistency.pendingCheck.length > 0 ? { pendingCheck: consistency.pendingCheck } : {}),
+      ...(implementationTasks.length > 0 ? { implementationTasks } : {}),
       metadata: {
         schemaVersion: SCHEMA_VERSION,
         id,
@@ -321,7 +403,8 @@ function saveOp(
       },
       authorizationRefs: authorization.refs,
       sections: declaredKind === 'implementation' ? [...IMPLEMENTATION_SECTIONS] : [],
-    });
+      },
+    );
   } catch (error) {
     return fail('STORAGE_UNAVAILABLE', `the record could not be saved: ${messageOf(error)}`, {
       requirementId: id,

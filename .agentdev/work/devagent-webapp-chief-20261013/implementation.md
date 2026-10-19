@@ -177,3 +177,11 @@
 3. `tool-kit.ok/fail` 把结构化 payload 附在 content 文本里(Pi 只把 content 给模型),版本/issue/sections/id 因此可见。
 4. 文档同步:`agents-and-tools.md#requirement` 的 save 行、`requirements-format.md` F4、`prompts/base.md` 的 get 说明。
 实机:模型用字段式 save 一次写入 `req-probe-fields`(程序生成 front matter),list 解析 valid 2/invalid 0。套件 252/252。
+
+### 需求与 Task 的边：只对实施需求成立，且程序核验（2026-10-19）
+用户纠正:Task 不必对应需求(写需求、规划需求规则的任务)。确认正确——R-04 的「关联 Task」只针对**实施需求进入实现**;D-09 的设计 Task 与需求是来源/产出关系,可覆盖多条,不能用单字段表达。
+因此缺陷收窄为:`tasks.requirementId` **一个字段被当成两种含义用且零校验**。修正:
+1. `createTask` 提供 `requirementId` 时,程序核对记录存在、可读、`kind=implementation`、状态 `pending/in_progress`;read Task 禁止提供。**不提供完全合法**(设计/规划/调查/知识维护)。这条恰好拦下本次事故:任务创建那一刻就会失败,而不是跑完数小时才发现需求没入库。
+2. `requirement.save` 返回一致性提示而不代决(R-05):`in_progress` 无实施 Task → 提示;`completed` 仍有未结束实施 Task → 「完成记录待核对」+Task 列表;提案 `archived` 但无实施需求以 `sourceRequirementIds` 引用 → 待核对。
+3. `get` 返回实施 Task 实际状态、文件记录的 `linkedTaskIds`、以及 `recordedButMissing`/`recordedNotImplementing` 两类差异;`list` 报告指向不可读记录的 Task。
+文档:`agents-and-tools.md` 的 createTask 段落与 requirement save/get/list 说明。套件 261/261。

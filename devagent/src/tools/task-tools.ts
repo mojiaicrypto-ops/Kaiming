@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { StoreError, type ArtifactRef, type Store, type TaskPhase, type TaskRow } from '../store/store.ts';
 import { commitPlan, digestOfText, planRefFor, planTarget, readPlan } from '../runtime/plan-store.ts';
+import { getRequirement } from '../runtime/requirement-store.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
 import { asRecord, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
 
@@ -121,8 +122,11 @@ function createTaskTool(contextOf: TaskToolContextResolver): DomainTool {
   return {
     name: 'createTask',
     label: 'createTask',
-    description:
+    description: [
       'Create one Task (type=read|write) with its overall Plan. write requires requiresTest (boolean); read forbids it.',
+      'A Task need not belong to a requirement: design/planning work, investigation and knowledge work stand alone.',
+      'When the Task implements an existing implementation requirement, pass its requirementId: the program checks it exists, is valid and is pending/in_progress. A read Task never cites one.',
+    ].join('\n'),
     parameters: {
       type: 'object',
       properties: {
@@ -138,7 +142,10 @@ function createTaskTool(contextOf: TaskToolContextResolver): DomainTool {
           additionalProperties: false,
         },
         requiresTest: { type: 'boolean' },
-        requirementId: { type: 'string' },
+        requirementId: {
+          type: 'string',
+          description: 'the implementation requirement this Task delivers (omit for design, investigation or knowledge work)',
+        },
       },
       required: ['type', 'goal', 'scope', 'planMarkdown', 'authorizationRef'],
       additionalProperties: false,
@@ -184,6 +191,40 @@ function createTaskTool(contextOf: TaskToolContextResolver): DomainTool {
       const acceptanceRefs = readStringArray(params, 'acceptanceRefs') ?? [];
       const basisRefs = readStringArray(params, 'basisRefs') ?? [];
       const requirementId = readString(params, 'requirementId');
+      if (requirementId !== undefined) {
+        // The field means "this Task implements that implementation requirement" (R-04); a design
+        // Task serves requirements through source/result links instead. A dangling or unusable
+        // citation is refused here, so a delivery cannot run for hours against a record that does not
+        // exist.
+        if (type === 'read') {
+          return fail('INVALID_ARGUMENT', 'a read Task does not implement a requirement; leave requirementId empty');
+        }
+        const record = getRequirement(context.cwd, requirementId);
+        if (!record.found) {
+          return fail('NOT_FOUND', `requirement ${requirementId} does not exist`, { requirementId });
+        }
+        if (!record.parsed.ok) {
+          return fail('INVALID_ARGUMENT', `requirement ${requirementId} is not valid`, {
+            requirementId,
+            issues: record.parsed.issues,
+          });
+        }
+        const { kind, status } = record.parsed.record.metadata;
+        if (kind !== 'implementation') {
+          return fail(
+            'INVALID_ARGUMENT',
+            `requirement ${requirementId} is a proposal; cite the implementation requirement delivered by this Task`,
+            { requirementId, kind },
+          );
+        }
+        if (status !== 'pending' && status !== 'in_progress') {
+          return fail(
+            'INVALID_ARGUMENT',
+            `requirement ${requirementId} is ${status}; an implementation Task needs pending or in_progress`,
+            { requirementId, status },
+          );
+        }
+      }
       const taskId = `t-${randomUUID().slice(0, 8)}`;
       const target = planTarget({
         taskId,

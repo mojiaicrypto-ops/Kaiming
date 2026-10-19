@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../src/store/store.ts';
 import { createRequirementTool, type RequirementToolContext } from '../src/tools/requirement-tools.ts';
+import { createChiefTaskTools, type TaskToolContext } from '../src/tools/task-tools.ts';
 import { IMPLEMENTATION_SECTIONS, parseRequirement, requirementPath } from '../src/runtime/requirement-store.ts';
 
 const dirs: string[] = [];
@@ -645,5 +646,204 @@ describe('requirement · the model can see what it must act on', () => {
     });
     const refusedText = refused.content.map((part) => part.text).join('\n');
     expect(refusedText).toContain('sections without content: 未知');
+  });
+});
+
+describe('requirement and Task: the implementation edge is checked, not assumed', () => {
+  /** A single chief context with one accepted decision, so a Task can be created. */
+  const taskContext = (f: Fixture) => {
+    const state = { inputId: 'i-dec' };
+    return {
+      state,
+      tools: createChiefTaskTools((): TaskToolContext => ({
+        store: f.store,
+        sessionId: 'c-1',
+        projectId: 'p-1',
+        cwd: f.cwd,
+        roleId: 'chief',
+        inputId: state.inputId,
+        serverWorkDir: join(f.cwd, '..', 'work'),
+      })),
+    };
+  };
+  const createTask = (f: Fixture, extra: Record<string, unknown>) => {
+    const tool = taskContext(f).tools.find((entry) => entry.name === 'createTask');
+    if (tool === undefined) throw new Error('createTask missing');
+    return tool.execute('c1', {
+      type: 'write',
+      goal: 'deliver it',
+      scope: 'the account area',
+      planMarkdown: '# plan\n',
+      authorizationRef: { inputId: 'i-dec' },
+      requiresTest: true,
+      ...extra,
+    });
+  };
+
+  it('a Task may stand alone (design, planning, investigation)', async () => {
+    const f = fixture();
+    const created = await createTask(f, {});
+    expect(created.isError).toBe(false);
+  });
+
+  it('refuses a Task that cites a record the project cannot read', async () => {
+    const f = fixture();
+    const missing = await createTask(f, { requirementId: 'req-missing' });
+    expect(missing.isError).toBe(true);
+    expect(missing.details['code']).toBe('NOT_FOUND');
+    expect(f.store.listTasks('p-1')).toHaveLength(0);
+  });
+
+  it('refuses a Task citing a proposal, an unusable status, or a read Task', async () => {
+    const proposalCase = fixture();
+    const savedProposal = await proposalCase.tool.execute('s1', {
+      op: 'save',
+      requirementId: 'req-reset',
+      expectedVersion: null,
+      ...proposalFields(),
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    expect(savedProposal.isError).toBe(false);
+    const fromProposal = await createTask(proposalCase, { requirementId: 'req-reset' });
+    expect(fromProposal.isError).toBe(true);
+    expect(String(fromProposal.details['message'] ?? fromProposal.content[0]?.text)).toContain('proposal');
+
+    const archivedCase = fixture();
+    await archivedCase.tool.execute('s1', {
+      op: 'save',
+      requirementId: 'req-done',
+      expectedVersion: null,
+      ...implementationFields({ status: 'completed' }),
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    const fromCompleted = await createTask(archivedCase, { requirementId: 'req-done' });
+    expect(fromCompleted.isError).toBe(true);
+    expect(fromCompleted.details['code']).toBe('INVALID_ARGUMENT');
+
+    const readCase = fixture();
+    const readTask = await createTask(readCase, { type: 'read', requiresTest: false, requirementId: 'req-missing' });
+    expect(readTask.isError).toBe(true);
+  });
+
+  it('accepts a Task that cites a pending implementation requirement', async () => {
+    const f = fixture();
+    await f.tool.execute('s1', {
+      op: 'save',
+      requirementId: 'req-reset-impl',
+      expectedVersion: null,
+      ...implementationFields(),
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    const created = await createTask(f, { requirementId: 'req-reset-impl' });
+    expect(created.isError).toBe(false);
+    expect(f.store.listTasks('p-1')[0]?.requirementId).toBe('req-reset-impl');
+  });
+
+  it('reports a completion recorded while its implementation Task is still open', async () => {
+    const f = fixture();
+    const saved = await f.tool.execute('s1', {
+      op: 'save',
+      requirementId: 'req-reset-impl',
+      expectedVersion: null,
+      ...implementationFields({ status: 'in_progress' }),
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    await createTask(f, { requirementId: 'req-reset-impl' });
+
+    const completed = await f.tool.execute('s2', {
+      op: 'save',
+      requirementId: 'req-reset-impl',
+      expectedVersion: String(saved.details['version']),
+      ...implementationFields({ status: 'completed' }),
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    // Saved, but the mismatch is reported: the program may not judge completion for the chief.
+    expect(completed.isError).toBe(false);
+    const pending = completed.details['pendingCheck'] as string[];
+    expect(pending.join(' ')).toContain('still open');
+    expect(completed.content[0]?.text).toContain('pending check');
+  });
+
+  it('notes in_progress without any implementing Task', async () => {
+    const f = fixture();
+    const saved = await f.tool.execute('s1', {
+      op: 'save',
+      requirementId: 'req-reset-impl',
+      expectedVersion: null,
+      ...implementationFields({ status: 'in_progress' }),
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    expect(saved.isError).toBe(false);
+    expect(saved.content[0]?.text).toContain('no Task implements this requirement yet');
+  });
+
+  it('reports archiving a proposal whose produced requirement is not recorded', async () => {
+    const f = fixture();
+    const saved = await f.tool.execute('s1', {
+      op: 'save',
+      requirementId: 'req-reset',
+      expectedVersion: null,
+      ...proposalFields({ status: 'archived' }),
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    expect(saved.isError).toBe(false);
+    expect((saved.details['pendingCheck'] as string[]).join(' ')).toContain('no implementation requirement cites');
+  });
+
+  it('get shows the real implementation Tasks, and list reports a Task whose record is gone', async () => {
+    const f = fixture();
+    await f.tool.execute('s1', {
+      op: 'save',
+      requirementId: 'req-reset-impl',
+      expectedVersion: null,
+      ...implementationFields({ status: 'in_progress' }),
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    await createTask(f, { requirementId: 'req-reset-impl' });
+    const taskId = f.store.listTasks('p-1')[0]?.id ?? '';
+
+    const got = await f.tool.execute('g1', { op: 'get', requirementId: 'req-reset-impl' });
+    expect((got.details['implementationTasks'] as Array<{ taskId: string }>).map((t) => t.taskId)).toEqual([taskId]);
+
+    // The record disappears while the Task remains: the list must surface the orphan.
+    rmSync(requirementPath(f.cwd, 'req-reset-impl'));
+    const listed = await f.tool.execute('l1', { op: 'list' });
+    expect((listed.details['tasksWithoutRecord'] as Array<{ taskId: string }>).map((t) => t.taskId)).toEqual([taskId]);
+  });
+});
+
+describe('requirement · recorded tasks that do not implement it', () => {
+  it('get names a linked Task that does not cite this requirement', async () => {
+    const f = fixture();
+    const saved = await f.tool.execute('s1', {
+      op: 'save',
+      requirementId: 'req-reset-impl',
+      expectedVersion: null,
+      ...implementationFields(),
+      linkedTaskIds: ['t-standalone'],
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    expect(saved.isError).toBe(false);
+    // A Task that really exists but does not carry requirementId (created before the edge was checked).
+    f.store.createTask({
+      id: 't-standalone',
+      projectId: 'p-1',
+      chiefSessionId: 'c-1',
+      type: 'write',
+      requiresTest: true,
+      goal: 'unrelated',
+      scope: 'unrelated',
+      acceptanceRefs: [],
+      basisRefs: [],
+      ownerEpoch: f.store.epoch,
+      planRef: { storage: 'project', path: '.dev/work/t-standalone/plan.md', sha256: '0'.repeat(64) },
+      authorizationRefs: ['input:i-dec'],
+      summary: '',
+      sourceInputId: 'i-dec',
+    });
+
+    const got = await f.tool.execute('g1', { op: 'get', requirementId: 'req-reset-impl' });
+    expect(got.details['recordedNotImplementing']).toEqual(['t-standalone']);
+    expect((got.details['implementationTasks'] as unknown[]).length).toBe(0);
   });
 });
