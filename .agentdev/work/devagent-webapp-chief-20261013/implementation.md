@@ -123,3 +123,10 @@
 3. Task 卡：working 行绿色脉冲点 +「· 正在运行」、queued 显示排队数、卡头"N 个成员正在运行/N 个排队输入"；重连后经 session.get 恢复 activeTaskId（失效帧可能在订阅前已发过，卡片会缺席整个运行期）。
 实机验证：真实 developer 成员运行中，卡片实时显示"1 个成员正在运行"+ working 行脉冲点，与服务端 input 状态一致；idle→working 翻转已验证，working→idle 走同一 invalidate 路径（本次复核运行较长，等它结束时自然验证）。237/237 + 15/15。
 遗留：成员"当前工具调用"预览未做（需要成员流订阅或快照尾部，成本高；跟随抽屉已能看到工具流）。
+
+
+### agent_report 全 kind 被拒（2026-10-19，commit 22f975b）
+用户报告：成员 agent_report 用任何 kind 都被拒——invented kind 'development' 被 schema 枚举拒，其他 legal kind 被 expectedKind 匹配拒，成员永久无法交付。
+根因：createTaskSessions 的 expectedKind 是自由字符串（schema `{type:'string'}`），chief 编造了 'development'（服务端源码中不存在该词）；而报告侧 kind 必须等于 member.expectedKind 且属于 RESULT_KINDS。两边枚举不一致 → 成员被夹死。
+修复：RESULT_KINDS 收敛到 store 单一来源；delegation-tools schema 枚举 + 工具级守卫（报出合法值）、store.createTaskSessions 创建期校验、report-tools 枚举共用。编造的 kind 现在在**创建时**即报"expectedKind must be one of ..."，不再在报告期卡死成员。
+数据修复：live 被夹成员 s-9c840bed 的 expectedKind 手术修正为 implementation（旧洞产生的坏数据）。实机验证：continueTaskSession → agent_report(kind=implementation, verdict=passed) 成功落盘（方向底稿 v0.3，提交 6a3666d + c83e2d5）。239/239。
