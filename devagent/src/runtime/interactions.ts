@@ -79,12 +79,25 @@ export class InteractionBridge {
       requestKey: interactionId,
     });
     this.lastIds.set(params.sessionId, interactionId);
+    // A member's question is presented on the chief's channel (M5): the chief is the only
+    // surface the user watches, and the member cannot reach the user itself. Publishing to the
+    // member's own stream left the question invisible and the member waiting forever.
     this.options.publish?.(
-      params.sessionId,
+      this.noticeTarget(params.sessionId, record.taskId),
       { type: 'invalidate', entity: 'interaction', id: record.interactionId, revision: record.revision },
       params.inputId === undefined ? {} : { inputId: params.inputId },
     );
     return this.wait(record, params.signal);
+  }
+
+  /**
+   * Where an interaction notice belongs: a Task member's question is presented by the Task's
+   * chief (M5); a chief's own question stays on its own stream.
+   */
+  private noticeTarget(sessionId: string, taskId: string | null): string {
+    if (taskId === null) return sessionId;
+    const task = this.options.store.getTask(taskId);
+    return task?.chiefSessionId ?? sessionId;
   }
 
   /** Wait for the durable answer of one interaction (used by ask and re-attached by the runner). */
@@ -104,7 +117,7 @@ export class InteractionBridge {
         // A stopped input can never be resumed: the question goes stale and the await unwinds.
         this.options.store.staleInteractionsForInput({ inputId: record.inputId ?? '' });
         this.options.publish?.(
-          record.sessionId,
+          this.noticeTarget(record.sessionId, record.taskId),
           { type: 'invalidate', entity: 'interaction', id: record.interactionId },
         );
         fail(new StoreError('INTERACTION_STALE', 'the interaction was aborted with its input', {

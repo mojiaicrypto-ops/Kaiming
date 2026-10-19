@@ -658,11 +658,19 @@ const serverWorkDir = join(config.agentDir, 'work');
 
   private memberState(inputId: string | null): MemberState {
     const input = inputId === null ? undefined : this.options.store.getInput(inputId);
+    // A member blocked on a question is not plain 'working': the chief must see that the user
+    // has to answer something before this step can move (M1/M5).
+    const waitingInteractions =
+      inputId === null
+        ? []
+        : this.options.store.listPendingInteractions(this.memberSessionOf(inputId)).filter((row) => row.inputId === inputId);
     const state: MemberState['state'] =
       input === undefined
         ? 'stopped'
         : input.status === 'processing'
-          ? 'working'
+          ? waitingInteractions.length > 0
+            ? 'waiting_user'
+            : 'working'
           : input.status;
     return {
       sessionId: this.memberSessionOf(inputId),
@@ -671,7 +679,7 @@ const serverWorkDir = join(config.agentDir, 'work');
       // What this member really delivered for the input the chief is waiting on.
       resultIds:
         inputId === null ? [] : this.options.store.resultsForInputs([inputId]).map((result) => result.resultId),
-      interactionIds: [],
+      interactionIds: waitingInteractions.map((row) => row.interactionId),
       ...(input?.errorCode != null
         ? { error: { code: input.errorCode, message: input.errorMessage ?? '' } }
         : {}),

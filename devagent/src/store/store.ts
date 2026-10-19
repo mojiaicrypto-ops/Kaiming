@@ -1046,6 +1046,23 @@ export class Store {
   }
 
   /** Pending interactions of a session, oldest first: part of the snapshot boundary (M4/M5). */
+  /**
+   * Pending interactions the CHIEF must present (M5): its own, plus every member session's
+   * questions for the Tasks it coordinates. A member's question reaches the user only through
+   * the chief's channel — filtering strictly by sessionId hid it and the member waited forever.
+   */
+  listPendingInteractionsForChief(chiefSessionId: string): InteractionRow[] {
+    return this.db
+      .prepare(
+        `SELECT i.* FROM interactions i
+          WHERE i.state = 'pending'
+            AND (i.sessionId = ?
+                 OR i.taskId IN (SELECT id FROM tasks WHERE chiefSessionId = ?))
+          ORDER BY i.createdAt, i.interactionId`,
+      )
+      .all(chiefSessionId, chiefSessionId) as unknown as InteractionRow[];
+  }
+
   listPendingInteractions(sessionId: string): InteractionRow[] {
     return this.db
       .prepare("SELECT * FROM interactions WHERE sessionId = ? AND state = 'pending' ORDER BY createdAt, interactionId")

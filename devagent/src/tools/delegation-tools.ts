@@ -69,7 +69,7 @@ export function createTaskSessionsTool(contextOf: DelegationContextResolver): Do
           items: {
             type: 'object',
             properties: {
-              roleId: { type: 'string' },
+              roleId: { type: 'string', enum: [...Object.keys(ROLE_PHASE)] },
               specialization: { type: 'string' },
               label: { type: 'string' },
               instructions: { type: 'string' },
@@ -289,7 +289,14 @@ function checkMember(
   }
   const phases = ROLE_PHASE[roleId] ?? [];
   if (phases.length > 0 && !phases.includes(task.phase)) {
-    return fail('STAGE_NOT_READY', `role ${roleId} is not dispatched in phase ${task.phase}`);
+    const allowed = Object.entries(ROLE_PHASE)
+      .filter(([, phases]) => phases.includes(task.phase))
+      .map(([role]) => role);
+    return fail(
+      'STAGE_NOT_READY',
+      `role ${roleId} is not dispatched in phase ${task.phase}; phase ${task.phase} dispatches ${allowed.join(', ') || 'no role'}`,
+      { phase: task.phase, allowed, hint: 'design documents belong to designer in a design step, code to developer in develop' },
+    );
   }
   if (taskType === 'read' && expectedKind !== 'investigation' && expectedKind !== 'recovery') {
     return fail('INVALID_ARGUMENT', 'a read Task only accepts investigation or recovery reports');

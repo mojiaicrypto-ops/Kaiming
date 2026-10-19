@@ -85,7 +85,9 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
               : { taskId: task.id, type: task.type, phase: task.phase, status: task.status, revision: task.revision },
           // Pending interactions are part of the boundary copy (M5): a reconnecting page sees the
           // open questions again instead of losing them.
-          interactions: store.listPendingInteractions(sessionId).map((interaction) => ({
+          interactions: (session.roleId === 'chief'
+            ? store.listPendingInteractionsForChief(sessionId)
+            : store.listPendingInteractions(sessionId)).map((interaction) => ({
             interactionId: interaction.interactionId,
             method: interaction.method,
             title: interaction.title,
@@ -94,6 +96,9 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
             placeholder: interaction.placeholder,
             inputId: interaction.inputId,
             taskId: interaction.taskId,
+            // The asking session travels with the request: the chief channel keeps the
+            // professional origin visible (M5).
+            sourceSessionId: interaction.sessionId,
             revision: interaction.revision,
             createdAt: interaction.createdAt,
           })),

@@ -28,6 +28,8 @@ export interface PendingInteraction {
   placeholder: string | null;
   inputId: string | null;
   taskId: string | null;
+  /** The session that asked (a member session when the chief is presenting it). */
+  sourceSessionId?: string;
   revision: number;
   createdAt: string;
   /** Local-only: an optimistically answered card stays until the authoritative refresh. */

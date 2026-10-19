@@ -256,8 +256,13 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
         });
       }
       const chiefSessionId = readString(params, 'chiefSessionId');
-      if (chiefSessionId !== undefined && interaction.sessionId !== chiefSessionId) {
-        // A page may only answer the session whose channel it is subscribed to (M5 routing).
+      // A page answers on the channel it watches: the interaction's own session, or the chief
+      // of the Task that member question belongs to (M5: members present through the chief).
+      const ownerTask = interaction.taskId === null ? undefined : store.getTask(interaction.taskId);
+      const ownsIt = chiefSessionId === undefined
+        || interaction.sessionId === chiefSessionId
+        || ownerTask?.chiefSessionId === chiefSessionId;
+      if (!ownsIt) {
         throw new RpcError('FORBIDDEN', 'this interaction belongs to another chief session', {
           interactionId,
           sessionId: interaction.sessionId,
@@ -273,6 +278,14 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
       // The answer is durable before it is handed back to the model.
       options.resolveInteraction?.(interactionId, saved.response === null ? null : JSON.parse(saved.response));
       options.invalidate?.(interaction.sessionId, 'interaction', interactionId);
+      // A member's question is presented on the chief's channel (M5), so the chief's pending
+      // list must learn that it left: otherwise the answered card stays visible there.
+      const taskChiefSessionId = interaction.taskId === null
+        ? null
+        : (store.getTask(interaction.taskId)?.chiefSessionId ?? null);
+      if (taskChiefSessionId !== null && taskChiefSessionId !== interaction.sessionId) {
+        options.invalidate?.(taskChiefSessionId, 'interaction', interactionId);
+      }
       return {
         interactionId,
         state: saved.state,

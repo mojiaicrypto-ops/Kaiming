@@ -388,3 +388,39 @@ describe('interaction bridge', () => {
     expect(h.runner.interactions.pendingCount).toBe(0);
   }, 30_000);
 });
+
+describe('member questions reach the chief channel', () => {
+  it('a member session question appears in the chief snapshot and can be answered', async () => {
+    const h = await harness([]);
+    const task = h.store.createTask({
+      id: 't-q', projectId: h.projectId, chiefSessionId: 's-chief', ownerEpoch: 1,
+      type: 'write', requiresTest: false, goal: 'g', scope: 's', acceptanceRefs: [], basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/p.md', sha256: 'x' }, authorizationRefs: [], sourceInputId: 'i-1',
+    });
+    h.store.updateTask({ taskId: task.id, expectedRevision: task.revision, phase: 'develop' });
+    // createTaskSessions creates the member session itself.
+    h.store.createTaskSessions({
+      taskId: task.id,
+      members: [
+        {
+          sessionId: 's-member', taskId: task.id, roleId: 'developer', phase: 'develop', label: 'work',
+          instructions: 'do the work', refs: [], dependencies: [], expectedKind: 'implementation',
+          inputId: 'i-m1', inputPayload: { content: [{ type: 'text', text: 'work' }] },
+        },
+      ],
+    });
+    // The member's own question (created by its ctx.ui call).
+    h.store.createInteraction({
+      interactionId: 'q-member', projectId: h.projectId, sessionId: 's-member', inputId: 'i-m1',
+      taskId: task.id, method: 'select', title: 'which target?', options: ['a', 'b'],
+      requestKey: 'q-member',
+    });
+
+    // The chief sees its member's pending question (M5: presented on the chief's channel).
+    const pending = h.store.listPendingInteractionsForChief('s-chief');
+    expect(pending.map((row) => row.interactionId)).toEqual(['q-member']);
+    // An unrelated chief sees nothing.
+    h.store.createSession({ id: 's-other', projectId: h.projectId, roleId: 'chief', cwd: '/tmp' });
+    expect(h.store.listPendingInteractionsForChief('s-other')).toHaveLength(0);
+  });
+});

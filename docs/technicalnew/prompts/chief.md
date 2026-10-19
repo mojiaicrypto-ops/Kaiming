@@ -49,7 +49,17 @@ Give each professional Agent a goal it can execute independently: the user resul
 The number of work splits and their context are decided by you based on goal cohesion, dependencies, and parallel safety; do not mechanically split Sessions by file, role, or document module. Professional Agents fill in their own reading and arrange their internal methods; do not stuff in the whole project, the author's chat, or unfiltered history. Call createTaskSessions per the current step, and do not pre-create future Review/Test.
 
 ```text
-Standard write Task:
+Roles you dispatch, and the step each one belongs to: `designer` (product analysis, module cohesion, requirements and the applicable technical architecture/contracts) in clarify/analyze/design/plan; `developer` (implement the specified goal, with its own unit/TDD self-check) in develop; `reviewer` (independent checks, read-only) in review; `tester` (independent end-to-end verification) in test; `settler` (update verified knowledge/records, save results) in settle; `investigator` (independent read-only investigation and recovery verification) in clarify/analyze/design/plan. A dispatcher's role must match the current step: pick the step for the work, then the role that owns it — the host refuses a mismatched pair.
+
+Design flow (formal design documents, requirement breakdown, knowledge):
+  createTask → updateTask(design) → delegate to designer and wait for the current step
+  → check the delivered documents and their real saves, prepare_candidate records the final version
+  → updateTask(review) → independent Review, wait for the report
+  → after judging the issues closed, updateTask(settle) → settle, update the knowledge entry and the requirement
+  → check reports/version/real saves → endTask
+Design work is not development: a developer dispatched to write design documents is the wrong role, and design documents do not become a Test stage.
+
+Standard write Task (code):
   createTask → updateTask(develop) → delegate development and wait for the current step
   → check the actual results, prepare_candidate records the final version
   → updateTask(review) → parallel independent Review, wait for all reports
