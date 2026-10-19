@@ -137,3 +137,8 @@
 ### "chat 流不输出"排查（2026-10-19，无代码变更）
 用户报告聊天流不输出。实机排查：probe EventSource 在运行前打开 → 16 帧全生命周期（invalidate/agent_start/turn_start/message_start×2/message_update/message_end×2/turn_end/agent_end/agent_settled）全部到达且流保持 open；UI 路径（composer 提交）端到端渲染成功；会话切换重连恢复历史。结论：流管线健康。症状与 13:52-13:53 两次服务重启窗口吻合——重启时在途运行被打断、用户 tab 的流被 epoch close 后自动 resync（该路径此前已验证），表现为"流停了"。属重启副作用，非代码缺陷。
 遗留观察：短回复的 assistant 消息保留 live-* entryId（Pi message_end 无 id 时回退），内容完整、快照合并可去重，仅 key 命名不美观，无行为影响。
+
+### "不能接受我的输入"（2026-10-19，commit a65a417）
+用户报告：聊天像卡住，输入不被接受。根因**不是流**：webapp 的 `session.input.submit` 从不发送 `taskId`，而契约（R2）规定"当前 Task 的补充须关联原 taskId；普通新话题排队至原 Task 结束或新开主管会话"。于是会话一旦绑定 active Task，用户每条消息都按"新话题"被**保留**（queued 且永不消费）——s-138f42aad205 上已积压 5 条，UI 完全无提示。
+修复：submit 前用 `session.get` 取权威 currentTaskId 并关联（避免 Task 中途创建导致的陈旧值）→ 消息作为当前 Task 的补充立即执行；若服务端仍保留（waitingForTask），UI 显示"排队中"条带（来自快照 seeding，刷新后仍在）+ 说明 toast + **撤回**按钮（store.requestStop 支持 queued，实测 stopped）。
+实机验证：卡住的 5 条消息现在全部可见；新提交即时执行（chief 已回复）；撤回一条 → 条带 4 条、服务端该 input 为 stopped。webapp 16/16 + 服务端 239/239。
