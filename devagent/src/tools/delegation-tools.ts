@@ -7,7 +7,7 @@
  * current phase, and a paused/cancelled Task only accepts a read-only recovery check.
  */
 import { randomUUID } from 'node:crypto';
-import { StoreError, type Store, type TaskPhase, type TaskRow, type TaskSessionRow } from '../store/store.ts';
+import { RESULT_KINDS, StoreError, type ResultKind, type Store, type TaskPhase, type TaskRow, type TaskSessionRow } from '../store/store.ts';
 import type { DomainTool, TaskToolContext } from './task-tools.ts';
 import { asRecord, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
 
@@ -75,7 +75,7 @@ export function createTaskSessionsTool(contextOf: DelegationContextResolver): Do
               instructions: { type: 'string' },
               refs: { type: 'array', items: { type: 'string' } },
               dependsOnResultIds: { type: 'array', items: { type: 'string' } },
-              expectedKind: { type: 'string' },
+              expectedKind: { type: 'string', enum: [...RESULT_KINDS] },
               candidateId: { type: 'string' },
               workspaceRef: { type: 'string' },
             },
@@ -265,6 +265,13 @@ function checkMember(
   const expectedKind = readString(request, 'expectedKind');
   if (roleId === undefined || label === undefined || instructions === undefined || expectedKind === undefined) {
     return fail('INVALID_ARGUMENT', 'roleId, label, instructions and expectedKind are required');
+  }
+  // The expected kind IS the report kind the member must deliver: reject an invented one now
+  // (with the legal values) instead of wedging the member at agent_report time.
+  if (!RESULT_KINDS.includes(expectedKind as ResultKind)) {
+    return fail('INVALID_ARGUMENT', `expectedKind must be one of ${RESULT_KINDS.join(', ')}`, {
+      expectedKind,
+    });
   }
   if (!(roleId in ROLE_PHASE)) {
     return fail('INVALID_ARGUMENT', `unknown roleId ${roleId}`);

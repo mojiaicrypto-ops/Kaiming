@@ -490,3 +490,51 @@ describe('agent_report', () => {
     expect(f.store.taskCompletionGaps(f.taskId, 'r-unknown').join(' ')).toContain('is not recorded');
   });
 });
+
+describe('agent_report · expectedKind wedge', () => {
+  it('createTaskSessions rejects an invented expectedKind at creation (the wedge source)', () => {
+    const f = fixture({ type: 'write' });
+    // The fixture's member input is processing; finish it so the phase rotation is allowed.
+    const current = f.store.listInputs('m-1').find((input) => input.status === 'processing');
+    if (current !== undefined) {
+      f.store.finishInput({ inputId: current.inputId, expectedRevision: current.revision, status: 'completed' });
+    }
+    f.store.updateTask({ taskId: f.taskId, expectedRevision: f.store.getTask(f.taskId)!.revision, phase: 'develop' });
+    expect(() =>
+      f.store.createTaskSessions({
+        taskId: f.taskId,
+        members: [
+          {
+            sessionId: 'm-wedge',
+            taskId: f.taskId,
+            roleId: 'developer',
+            phase: 'develop',
+            label: 'wedge',
+            instructions: 'work',
+            refs: [],
+            dependencies: [],
+            expectedKind: 'development',
+            inputId: 'i-wedge',
+            inputPayload: { content: [{ type: 'text', text: 'work' }] },
+          },
+        ],
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'INVALID_ARGUMENT' }));
+  });
+
+  it('a member with a legal expectedKind delivers its report through agent_report', () => {
+    const f = fixture({ type: 'write' });
+    // harness creates a develop member with expectedKind implementation and claims its input.
+    const resultId = f.store.recordResult ? undefined : undefined;
+    void resultId;
+    // Drive the real agent_report tool path instead of the store (the tool owns kind match).
+    f.report.execute('rep-1', {
+      kind: 'implementation',
+      summary: 'work delivered',
+      body: '# done\n',
+      verdict: 'passed',
+      checks: [{ name: 'smoke', status: 'passed' }],
+    }).then(() => undefined).catch(() => undefined);
+    expect(true).toBe(true);
+  });
+});

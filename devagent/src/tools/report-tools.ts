@@ -6,7 +6,7 @@
  * read back before the row is recorded, a report is never overwritten (a revision is a new result
  * that supersedes the old one), and the kind must be the one the chief asked this member for.
  */
-import { StoreError, digestOf, type ArtifactRef, type ResultCheck, type ResultKind, type Store } from '../store/store.ts';
+import { RESULT_KINDS, StoreError, digestOf, type ArtifactRef, type ResultCheck, type ResultKind, type Store } from '../store/store.ts';
 import { digestOfText } from '../runtime/plan-store.ts';
 import { readReportBody, reportRefFor, reportTarget, writeReportBody } from '../runtime/report-store.ts';
 import { asRecord, fail, messageOf, ok, readString, readStringArray } from './tool-kit.ts';
@@ -23,15 +23,7 @@ export interface ReportToolContext {
 
 export type ReportToolContextResolver = () => ReportToolContext;
 
-const KINDS: readonly ResultKind[] = [
-  'design',
-  'implementation',
-  'review',
-  'test',
-  'settlement',
-  'investigation',
-  'recovery',
-];
+
 
 const CHECK_STATUSES = ['passed', 'failed', 'blocked', 'not_run'] as const;
 
@@ -44,7 +36,7 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
     parameters: {
       type: 'object',
       properties: {
-        kind: { type: 'string', enum: [...KINDS] },
+        kind: { type: 'string', enum: [...RESULT_KINDS] },
         summary: { type: 'string' },
         body: { type: 'string' },
         reportRef: {
@@ -90,8 +82,8 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
       }
       const kind = readString(params, 'kind');
       const summary = readString(params, 'summary');
-      if (kind === undefined || !KINDS.includes(kind as ResultKind)) {
-        return fail('INVALID_ARGUMENT', `kind must be one of ${KINDS.join(', ')}`);
+      if (kind === undefined || !RESULT_KINDS.includes(kind as ResultKind)) {
+        return fail('INVALID_ARGUMENT', `kind must be one of ${RESULT_KINDS.join(', ')}`);
       }
       if (summary === undefined || summary.trim() === '') {
         return fail('INVALID_ARGUMENT', 'summary must be a non-empty string');

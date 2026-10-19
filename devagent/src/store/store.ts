@@ -223,6 +223,18 @@ export type ResultKind =
   | 'investigation'
   | 'recovery';
 
+/** Runtime list of the kinds (report-tools' schema enum and the member expectedKind check
+ *  share this — a mismatch between them wedges a member's report forever). */
+export const RESULT_KINDS: readonly ResultKind[] = [
+  'design',
+  'implementation',
+  'review',
+  'test',
+  'settlement',
+  'investigation',
+  'recovery',
+];
+
 export interface ResultCheck {
   readonly name: string;
   readonly status: 'passed' | 'failed' | 'blocked' | 'not_run';
@@ -2246,6 +2258,16 @@ export class Store {
             sessionId: member.sessionId,
             memberPhase: member.phase,
             taskPhase: task.phase,
+          });
+        }
+        // expectedKind becomes the member's ONLY acceptable report kind (report-tools demands
+        // kind === member.expectedKind). Accepting an invented kind here wedges the member:
+        // every agent_report fails (the enum rejects the invented value, the match rejects
+        // the legal ones) and the step can never close. Fail at creation instead.
+        if (!(RESULT_KINDS as readonly string[]).includes(member.expectedKind)) {
+          throw new StoreError('INVALID_ARGUMENT', `member expectedKind must be one of ${RESULT_KINDS.join(', ')}`, {
+            sessionId: member.sessionId,
+            expectedKind: member.expectedKind,
           });
         }
       }
