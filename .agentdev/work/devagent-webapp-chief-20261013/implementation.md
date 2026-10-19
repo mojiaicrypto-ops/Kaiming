@@ -133,3 +133,7 @@
 
 ### 成员完成态语义澄清（2026-10-19，commit 584716f）
 用户问"完成是不是显示 idle"。语义上 idle 只表示"当前无运行中的输入"，但让已完成成员与失败/中止成员看起来一样，是可读性缺陷。task.get 成员现携带 lastInputStatus（最近一次 delegation/continuation 输入的终态），卡片行显示 done（绿✓）/ failed·interrupted（红）/ stopped / queued (N) / working（脉冲）/ idle（尚无终态输入）。实机：t-20a6fbfd 卡片 9 行 done + 1 行 interrupted（早前重启所致，与库一致）。239/239 + 15/15。
+
+### "chat 流不输出"排查（2026-10-19，无代码变更）
+用户报告聊天流不输出。实机排查：probe EventSource 在运行前打开 → 16 帧全生命周期（invalidate/agent_start/turn_start/message_start×2/message_update/message_end×2/turn_end/agent_end/agent_settled）全部到达且流保持 open；UI 路径（composer 提交）端到端渲染成功；会话切换重连恢复历史。结论：流管线健康。症状与 13:52-13:53 两次服务重启窗口吻合——重启时在途运行被打断、用户 tab 的流被 epoch close 后自动 resync（该路径此前已验证），表现为"流停了"。属重启副作用，非代码缺陷。
+遗留观察：短回复的 assistant 消息保留 live-* entryId（Pi message_end 无 id 时回退），内容完整、快照合并可去重，仅 key 命名不美观，无行为影响。
