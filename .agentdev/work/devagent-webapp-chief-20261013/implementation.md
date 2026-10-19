@@ -130,3 +130,6 @@
 根因：createTaskSessions 的 expectedKind 是自由字符串（schema `{type:'string'}`），chief 编造了 'development'（服务端源码中不存在该词）；而报告侧 kind 必须等于 member.expectedKind 且属于 RESULT_KINDS。两边枚举不一致 → 成员被夹死。
 修复：RESULT_KINDS 收敛到 store 单一来源；delegation-tools schema 枚举 + 工具级守卫（报出合法值）、store.createTaskSessions 创建期校验、report-tools 枚举共用。编造的 kind 现在在**创建时**即报"expectedKind must be one of ..."，不再在报告期卡死成员。
 数据修复：live 被夹成员 s-9c840bed 的 expectedKind 手术修正为 implementation（旧洞产生的坏数据）。实机验证：continueTaskSession → agent_report(kind=implementation, verdict=passed) 成功落盘（方向底稿 v0.3，提交 6a3666d + c83e2d5）。239/239。
+
+### 成员完成态语义澄清（2026-10-19，commit 584716f）
+用户问"完成是不是显示 idle"。语义上 idle 只表示"当前无运行中的输入"，但让已完成成员与失败/中止成员看起来一样，是可读性缺陷。task.get 成员现携带 lastInputStatus（最近一次 delegation/continuation 输入的终态），卡片行显示 done（绿✓）/ failed·interrupted（红）/ stopped / queued (N) / working（脉冲）/ idle（尚无终态输入）。实机：t-20a6fbfd 卡片 9 行 done + 1 行 interrupted（早前重启所致，与库一致）。239/239 + 15/15。
