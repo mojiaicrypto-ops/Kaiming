@@ -275,6 +275,29 @@ export function ChiefApp(): React.ReactElement {
           </div>
 
           <div className="pending-region">
+            {chief.slot.queuedInputs.length > 0 && (
+              <div className="queued-inputs">
+                <p className="queued-head">
+                  {chief.slot.queuedInputs.length} 条消息在排队（当前会话正在推进一项 Task，其他话题请新建会话）
+                </p>
+                {chief.slot.queuedInputs.map((input) => (
+                  <div key={input.inputId} className="queued-row">
+                    <span className="queued-id">{input.inputId}</span>
+                    <span className="queued-status">等待中</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void chief.cancelQueuedInput(input.inputId).catch((error: unknown) => {
+                          toast(`撤回失败: ${error instanceof Error ? error.message : String(error)}`, 'error');
+                        });
+                      }}
+                    >
+                      撤回
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             {unresolvedCount > 1 && (
               <p className="pending-count">{unresolvedCount} 个问题等待你的回答</p>
             )}

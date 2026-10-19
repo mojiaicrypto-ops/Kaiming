@@ -71,6 +71,9 @@ export interface SessionSlot {
   liveKeys: ReadonlySet<string>;
   /** member session ids → their latest member state (from task polling) */
   taskDetail: TaskDetail | null;
+  /** Inputs waiting in this session's queue (submitted while a Task owns the session):
+   *  they are real user messages, so the UI must show them instead of swallowing them. */
+  queuedInputs: readonly { inputId: string; status: string }[];
 }
 
 export const emptySlot = (): SessionSlot => ({
@@ -80,6 +83,7 @@ export const emptySlot = (): SessionSlot => ({
   pending: [],
   liveKeys: new Set<string>(),
   taskDetail: null,
+  queuedInputs: [],
 });
 
 export type SlotAction =
@@ -89,6 +93,8 @@ export type SlotAction =
   | { type: 'interactionResolved'; interactionId: string }
   | { type: 'pendingReplaced'; pending: readonly PendingInteraction[] }
   | { type: 'taskDetail'; detail: TaskDetail | null }
+  | { type: 'inputQueued'; inputId: string }
+  | { type: 'inputRemoved'; inputId: string }
   | { type: 'reset' };
 
 /**
@@ -207,10 +213,20 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
         busy: snapshot.activity,
         currentInputId: snapshot.currentInputId,
         pending: snapshot.interactions,
+        // Retained inputs live in the snapshot: a reload must still show what is waiting.
+        queuedInputs: snapshot.inputs
+          .filter((input) => input.status === 'queued')
+          .map((input) => ({ inputId: input.inputId, status: input.status })),
       };
     }
     case 'taskDetail':
       return { ...state, taskDetail: action.detail };
+    case 'inputQueued':
+      return state.queuedInputs.some((entry) => entry.inputId === action.inputId)
+        ? state
+        : { ...state, queuedInputs: [...state.queuedInputs, { inputId: action.inputId, status: 'queued' }] };
+    case 'inputRemoved':
+      return { ...state, queuedInputs: state.queuedInputs.filter((entry) => entry.inputId !== action.inputId) };
     case 'inputAccepted':
       // The submit receipt: mark the accepted input as current and the session as queued, so
       // STOP targets the right input before any Pi event arrives.

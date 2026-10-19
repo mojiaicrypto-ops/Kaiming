@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { RpcClient, RpcError, newRequestId } from '../api/rpc';
 import { SessionStream, type PreparedSnapshot, type StreamFrame, type PendingInteraction } from '../api/stream';
 import { emptySlot, slotReducer, type SessionSlot, type TaskDetail } from '../state/slot';
+import { toast } from '../lib/toast';
 
 export interface ChiefSession {
   projectId: string;
@@ -97,11 +98,32 @@ export function useChiefSession(session: ChiefSession | null, enabled: boolean) 
   const submit = useCallback(async (text: string): Promise<void> => {
     if (session === null) return;
     setBlocked(null);
-    await rpc.call('session.input.submit', {
+    // While the session coordinates a Task, the user's message is that Task's supplement and
+    // MUST cite its taskId (R2: '当前 Task 的补充须关联原 taskId'). Without it the server
+    // treats the message as another topic and retains it until the Task ends — the user's
+    // 'input is not accepted any more'. Read the authoritative id right before submitting so
+    // a Task created mid-run cannot leave a stale value here.
+    let taskId: string | null = null;
+    try {
+      const read = await rpc.call<{ session: { currentTaskId: string | null } }>('session.get', {
+        projectId: session.projectId,
+        sessionId: session.sessionId,
+      });
+      taskId = read.session.currentTaskId;
+    } catch {
+      taskId = null;
+    }
+    const accepted = await rpc.call<{ inputId: string; waitingForTask?: string }>('session.input.submit', {
       projectId: session.projectId,
       sessionId: session.sessionId,
+      ...(taskId !== null ? { taskId } : {}),
       content: [{ type: 'text', text }],
     }, { requestId: newRequestId('c') });
+    if (accepted.waitingForTask !== undefined) {
+      // Retained by contract: say so instead of leaving the message silently invisible.
+      dispatch({ type: 'inputQueued', inputId: accepted.inputId });
+      toast(`这条消息已排队：当前会话正在推进 Task ${accepted.waitingForTask}，其他话题请新建会话，或撤回这条消息。`, 'info');
+    }
   }, [rpc, session]);
 
   const stop = useCallback(async (): Promise<void> => {
@@ -112,6 +134,17 @@ export function useChiefSession(session: ChiefSession | null, enabled: boolean) 
       inputId: slot.currentInputId,
     }, { requestId: newRequestId('stop') });
   }, [rpc, session, slot.currentInputId]);
+
+  /** Withdraw a retained (queued) input: the message never ran, so stopping it is the honest undo. */
+  const cancelQueuedInput = useCallback(async (inputId: string): Promise<void> => {
+    if (session === null) return;
+    await rpc.call('session.input.stop', {
+      projectId: session.projectId,
+      sessionId: session.sessionId,
+      inputId,
+    }, { requestId: newRequestId('cancel') });
+    dispatch({ type: 'inputRemoved', inputId });
+  }, [rpc, session]);
 
   const respond = useCallback(async (interaction: PendingInteraction, response: unknown): Promise<void> => {
     await rpc.call('interaction.respond', {
@@ -135,5 +168,5 @@ export function useChiefSession(session: ChiefSession | null, enabled: boolean) 
     return detail;
   }, [rpc, session]);
 
-  return { rpc, slot, status, needLogin, setNeedLogin, historyProblems, blocked, submit, stop, respond, refreshTask, activeTaskId, taskTick };
+  return { rpc, slot, status, needLogin, setNeedLogin, historyProblems, blocked, submit, stop, cancelQueuedInput, respond, refreshTask, activeTaskId, taskTick };
 }

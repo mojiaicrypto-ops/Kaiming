@@ -160,3 +160,15 @@ describe('slot merge · lost message_end under resync', () => {
     expect(slot.items[0]?.streaming).toBe(true);
   });
 });
+
+describe('slot · retained inputs', () => {
+  it('a snapshot seeds the queued inputs and inputQueued/inputRemoved track local adds/withdrawals', () => {
+    let slot = emptySlot();
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'initial', snapshot: { sessionId: 's', projectId: 'p', roleId: 'chief', activity: 'queued', currentInputId: null, inputs: [{ inputId: 'i-1', kind: 'user', status: 'queued', revision: 1, errorCode: null }, { inputId: 'i-2', kind: 'user', status: 'completed', revision: 1, errorCode: null }], messages: [], interactions: [], historyLeaf: null, historyProblems: [] } });
+    expect(slot.queuedInputs.map((entry) => entry.inputId)).toEqual(['i-1']);
+    slot = slotReducer(slot, { type: 'inputQueued', inputId: 'i-3' });
+    expect(slot.queuedInputs.map((entry) => entry.inputId)).toEqual(['i-1', 'i-3']);
+    slot = slotReducer(slot, { type: 'inputRemoved', inputId: 'i-1' });
+    expect(slot.queuedInputs.map((entry) => entry.inputId)).toEqual(['i-3']);
+  });
+});
