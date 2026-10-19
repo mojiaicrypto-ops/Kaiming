@@ -847,3 +847,48 @@ describe('requirement · recorded tasks that do not implement it', () => {
     expect((got.details['implementationTasks'] as unknown[]).length).toBe(0);
   });
 });
+
+describe('requirement · completion claims have a delivery behind them', () => {
+  it('reports completion when the only implementing Task was cancelled', async () => {
+    const f = fixture();
+    await f.tool.execute('s1', {
+      op: 'save',
+      requirementId: 'req-reset-impl',
+      expectedVersion: null,
+      ...implementationFields({ status: 'in_progress' }),
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    f.store.createTask({
+      id: 't-cancelled',
+      projectId: 'p-1',
+      chiefSessionId: 'c-1',
+      ownerEpoch: f.store.epoch,
+      requirementId: 'req-reset-impl',
+      type: 'write',
+      requiresTest: true,
+      goal: 'attempt',
+      scope: 'attempt',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'project', path: '.dev/work/t-cancelled/plan.md', sha256: '0'.repeat(64) },
+      authorizationRefs: ['input:i-dec'],
+      sourceInputId: 'i-dec',
+    });
+    // Cancel through the real control path: no unfinished member work, so it goes terminal at once.
+    f.store.controlTask({
+      taskId: 't-cancelled',
+      command: 'cancel',
+      expectedRevision: f.store.getTask('t-cancelled')?.revision ?? 1,
+    });
+
+    const completed = await f.tool.execute('s2', {
+      op: 'save',
+      requirementId: 'req-reset-impl',
+      expectedVersion: (await f.tool.execute('g1', { op: 'get', requirementId: 'req-reset-impl' })).details['version'],
+      ...implementationFields({ status: 'completed' }),
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    expect(completed.isError).toBe(false);
+    expect((completed.details['pendingCheck'] as string[]).join(' ')).toContain('no implementing Task completed');
+  });
+});

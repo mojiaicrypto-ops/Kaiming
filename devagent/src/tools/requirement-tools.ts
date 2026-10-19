@@ -233,6 +233,10 @@ function consistencyOf(
         `completion recorded while ${openTasks.map((task) => `${task.id}(${task.status})`).join(', ')} is still open`,
       );
     }
+    if (status === 'completed' && implementationTasks.length > 0 && !implementationTasks.some((task) => task.status === 'completed')) {
+      // A cancelled execution does not deliver anything (R-05): flag the completion claim, do not undo it.
+      pendingCheck.push('completion recorded but no implementing Task completed');
+    }
   }
   if (kind === 'proposal' && status === 'archived') {
     // R-05: a proposal is archived only once the produced implementation requirement is saved and

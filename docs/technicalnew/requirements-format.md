@@ -26,9 +26,9 @@ updatedAt: "2026-10-04T00:00:00Z"
 |---|---|
 | modules | 去重的项目相对 Markdown 路径数组；引用长期权威模块，不表示 Agent 分工 |
 | sourceRequirementIds | 去重的既有记录 id 数组；实施需求可引用来源提案/需求，合并与替代的具体关系写正文 |
-| linkedTaskIds | 去重的 Task id 数组；设计或实现工作入口，不在文件复制 Task 阶段/状态 |
+| linkedTaskIds | 去重的 Task id 数组；设计或实现工作入口，不在文件复制 Task 阶段/状态。实施关系的权威在 Task 侧 `requirementId`，本字段只作追溯，读取时与真实 Task 对照并报告差异 |
 
-可选数组缺省为空。用户输入/交互的决定来源与适用产品/技术路径写在正文，服务保存 authorizationRef 的真实回执；不把另一套业务状态、审批类型或聊天全文塞进 front matter。项目相对引用不得越出项目，路径存在性及可读性由保存服务核对；本环境无对应执行记录的 linkedTaskIds 保留并显示缺失，不编造历史或自动启动工作。
+可选数组缺省为空。用户输入/交互的决定来源与适用产品/技术路径写在正文，服务保存 authorizationRef 的真实回执；不把另一套业务状态、审批类型或聊天全文塞进 front matter。项目相对引用不得越出项目，路径存在性及可读性由保存服务核对；本环境无对应执行记录的 linkedTaskIds 保留并显示缺失，不编造历史或自动启动工作；存在但未声明 requirementId 的 Task 同样报告，不改写文件、不补写关系。
 
 ## F2 proposal
 
