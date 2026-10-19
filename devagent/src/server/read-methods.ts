@@ -253,6 +253,12 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
           // The delegation-time currentInputId is history; the live session state tells the
           // Task card whether the member is working right now (R2: derived, not stored).
           const live = liveSessionState(store, member.sessionId);
+          // How the member's assignment actually ended: idle alone cannot distinguish a
+          // finished member from an aborted or failed one.
+          const lastInput = store
+            .listInputs(member.sessionId)
+            .filter((input) => input.kind === 'delegation' || input.kind === 'continuation')
+            .at(-1);
           return {
             sessionId: member.sessionId,
             roleId: member.roleId,
@@ -263,6 +269,7 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
             activity: live.activity,
             liveInputId: live.currentInputId,
             queuedInputs: live.queuedInputs,
+            lastInputStatus: lastInput?.status ?? null,
           };
         }),
         results: store.listTaskResults(task.id).map((result) => resultSummary(store, result)),

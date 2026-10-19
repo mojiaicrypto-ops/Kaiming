@@ -522,19 +522,17 @@ describe('agent_report · expectedKind wedge', () => {
     ).toThrowError(expect.objectContaining({ code: 'INVALID_ARGUMENT' }));
   });
 
-  it('a member with a legal expectedKind delivers its report through agent_report', () => {
+  it('a member with a legal expectedKind delivers its report through agent_report', async () => {
     const f = fixture({ type: 'write' });
     // harness creates a develop member with expectedKind implementation and claims its input.
-    const resultId = f.store.recordResult ? undefined : undefined;
-    void resultId;
-    // Drive the real agent_report tool path instead of the store (the tool owns kind match).
-    f.report.execute('rep-1', {
+    // Drive the real agent_report tool path (the tool owns the kind match).
+    const outcome = await f.report.execute('rep-1', {
       kind: 'implementation',
       summary: 'work delivered',
       body: '# done\n',
       verdict: 'passed',
       checks: [{ name: 'smoke', status: 'passed' }],
-    }).then(() => undefined).catch(() => undefined);
-    expect(true).toBe(true);
+    });
+    expect(outcome).toBeDefined();
   });
 });

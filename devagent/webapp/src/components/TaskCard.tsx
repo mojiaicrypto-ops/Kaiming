@@ -79,15 +79,32 @@ function MemberRow({ member, onOpenMember }: { member: TaskMember; onOpenMember:
   const activity = member.activity ?? 'idle';
   const active = activity === 'processing';
   const queued = member.queuedInputs ?? 0;
-  const stateText = active ? 'working' : activity === 'queued' ? `queued (${queued})` : 'idle';
+  const last = member.lastInputStatus ?? null;
+  // idle means "no run in flight"; the last-input status says HOW the assignment ended.
+  const stateText =
+    active
+      ? 'working'
+      : activity === 'queued'
+        ? `queued (${queued})`
+        : last === 'completed'
+          ? 'done'
+          : last === 'failed'
+            ? 'failed'
+            : last === 'interrupted'
+              ? 'interrupted'
+              : last === 'stopped'
+                ? 'stopped'
+                : 'idle';
+  const stateClass =
+    active ? 'active' : activity === 'queued' ? 'queued' : last === 'completed' ? 'done' : last === 'failed' || last === 'interrupted' ? 'failed' : 'idle';
   return (
-    <button type="button" className={`member-row member-${activity}`} onClick={() => onOpenMember(member.sessionId, member.label)}>
-      <span className={`member-dot${active ? ' member-dot-live' : ''}`} aria-hidden />
+    <button type="button" className={`member-row member-${active ? 'processing' : activity}`} onClick={() => onOpenMember(member.sessionId, member.label)}>
+      <span className={`member-dot${active ? ' member-dot-live' : last === 'completed' ? ' member-dot-done' : ''}`} aria-hidden />
       <span className="member-role">{member.roleId}</span>
       <span className="member-label">{member.label}</span>
       <span className="member-phase">{member.phase}</span>
       <span className="member-kind">{member.expectedKind}</span>
-      <span className={`member-state member-${active ? 'active' : activity}`}>
+      <span className={`member-state member-${stateClass}`}>
         {stateText}
         {active && <span className="member-live-note">· 正在运行</span>}
       </span>

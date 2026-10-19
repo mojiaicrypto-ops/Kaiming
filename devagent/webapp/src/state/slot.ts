@@ -44,6 +44,8 @@ export interface TaskMember {
   activity?: 'idle' | 'queued' | 'processing';
   liveInputId?: string | null;
   queuedInputs?: number;
+  /** How the member's assignment ended (its latest delegation/continuation input). */
+  lastInputStatus?: 'completed' | 'failed' | 'stopped' | 'interrupted' | null;
 }
 
 export interface TaskSummaryView {

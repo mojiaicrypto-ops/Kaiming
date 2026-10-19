@@ -170,6 +170,9 @@ button:disabled { opacity: 0.5; cursor: default; }
   background: var(--green);
   animation: member-pulse 1.4s ease-in-out infinite;
 }
+.member-dot-done { background: var(--green); opacity: 0.7; }
+.member-state.member-done { color: var(--green); }
+.member-state.member-failed { color: var(--red); }
 @keyframes member-pulse {
   0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(63, 178, 127, 0.5); }
   50% { opacity: 0.55; box-shadow: 0 0 0 5px rgba(63, 178, 127, 0); }
