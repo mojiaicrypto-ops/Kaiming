@@ -11,6 +11,7 @@ import { StoreError, type InteractionRow, type Store } from '../store/store.ts';
 
 export interface InteractionWait {
   readonly interactionId: string;
+  readonly sessionId: string;
   settle(response: unknown): void;
   fail(error: unknown): void;
 }
@@ -28,6 +29,8 @@ export interface InteractionBridgeOptions {
  */
 export class InteractionBridge {
   private readonly waits = new Map<string, InteractionWait>();
+  /** Open waits per session: a run blocked on a human is waiting, not stalled. */
+  private readonly waitingBySession = new Map<string, number>();
   /** The last interaction created per session: the host-side id the asking tool reports back. */
   private readonly lastIds = new Map<string, string>();
   private readonly options: InteractionBridgeOptions;
@@ -38,6 +41,24 @@ export class InteractionBridge {
 
   get pendingCount(): number {
     return this.waits.size;
+  }
+
+  /** True while this session's run waits for a user answer (a question is on screen). */
+  isWaiting(sessionId: string): boolean {
+    return (this.waitingBySession.get(sessionId) ?? 0) > 0;
+  }
+
+  private startWaiting(sessionId: string): void {
+    this.waitingBySession.set(sessionId, (this.waitingBySession.get(sessionId) ?? 0) + 1);
+  }
+
+  private stopWaiting(sessionId: string): void {
+    const open = (this.waitingBySession.get(sessionId) ?? 0) - 1;
+    if (open > 0) {
+      this.waitingBySession.set(sessionId, open);
+    } else {
+      this.waitingBySession.delete(sessionId);
+    }
   }
 
   /** The id the host assigned to the most recent question of a session (the tool's visible return). */
@@ -104,12 +125,14 @@ export class InteractionBridge {
   wait(record: InteractionRow, signal?: AbortSignal): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const settle = (response: unknown): void => {
-        this.waits.delete(record.interactionId);
+        const known = this.waits.delete(record.interactionId);
+        if (known) this.stopWaiting(record.sessionId);
         cleanup();
         resolve(shapeResponse(record.method, response));
       };
       const fail = (error: unknown): void => {
-        this.waits.delete(record.interactionId);
+        const known = this.waits.delete(record.interactionId);
+        if (known) this.stopWaiting(record.sessionId);
         cleanup();
         reject(error instanceof Error ? error : new Error(String(error)));
       };
@@ -127,7 +150,13 @@ export class InteractionBridge {
       const cleanup = (): void => {
         signal?.removeEventListener('abort', onAbort);
       };
-      this.waits.set(record.interactionId, { interactionId: record.interactionId, settle, fail });
+      this.waits.set(record.interactionId, {
+        interactionId: record.interactionId,
+        sessionId: record.sessionId,
+        settle,
+        fail,
+      });
+      this.startWaiting(record.sessionId);
       if (signal?.aborted === true) {
         onAbort();
         return;
@@ -152,6 +181,7 @@ export class InteractionBridge {
       waiter.fail(new StoreError('INTERACTION_STALE', 'the server is shutting down'));
     }
     this.waits.clear();
+    this.waitingBySession.clear();
   }
 }
 

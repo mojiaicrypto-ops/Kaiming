@@ -61,6 +61,9 @@ async function harness(options: {
   taskTypeOf?: () => 'read' | 'write' | undefined;
   sessionExtras?: ConstructorParameters<typeof InputRunner>[0]['sessionExtras'];
   acceptInput?: boolean;
+  /** Run watchdog windows, for tests that exercise a stall without waiting 15 minutes. */
+  runStallMs?: number;
+  runTotalMs?: number;
 }): Promise<Harness> {
   const server = await startStubModelServer(options.replies);
   servers.push(server);
@@ -91,6 +94,8 @@ async function harness(options: {
     resolveConfig: (roleId) => resolveEffectiveConfig({ roleId, server: defaults }),
     taskTypeOf: options.taskTypeOf ?? (() => options.taskType),
     ...(options.sessionExtras !== undefined ? { sessionExtras: options.sessionExtras } : {}),
+    ...(options.runStallMs !== undefined ? { runStallMs: options.runStallMs } : {}),
+    ...(options.runTotalMs !== undefined ? { runTotalMs: options.runTotalMs } : {}),
   });
   return { store, runner, registry, defaults, agentDir: env.agentDir, cwd: env.cwd };
 }
@@ -527,6 +532,46 @@ describe('input runner', () => {
 
     expect(outcome.kind).toBe('interrupted');
     expect(h.store.getInput('i-1')?.status).toBe('interrupted');
+  }, 30_000);
+
+  it('keeps a run alive while it waits for a user answer, past the stall window', async () => {
+    const h = await harness({
+      replies: [
+        {
+          kind: 'tool_calls',
+          calls: [
+            {
+              name: 'question',
+              arguments: JSON.stringify({ method: 'select', title: 'which target?', options: ['a', 'b'] }),
+            },
+          ],
+        },
+        { kind: 'text', text: 'answered' },
+      ],
+      runStallMs: 120,
+      runTotalMs: 5_000,
+    });
+
+    // The user answers only after the stall window has passed: the run is waiting on a human, not
+    // stalled, so it must still settle normally instead of being aborted (RUN_STALLED).
+    const answering = (async () => {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        const pending = h.store.listPendingInteractionsForChief('s-1');
+        if (pending.length > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          expect(h.runner.interactions.resolve(pending[0]?.interactionId ?? '', 'a')).toBe(true);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error('the run never asked its question');
+    })();
+
+    const outcome = await h.runner.runNext('s-1');
+    await answering;
+
+    expect(outcome.kind).toBe('completed');
+    expect(h.store.getInput('i-1')?.status).toBe('completed');
   }, 30_000);
 
   it('reports an inaccessible project before claiming, leaving the input queued', async () => {

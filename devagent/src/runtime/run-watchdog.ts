@@ -32,6 +32,11 @@ export interface WatchdogOptions {
   readonly abort: () => Promise<void>;
   /** Epoch millis of the last observed Pi activity for this run. */
   readonly activityAt: () => number;
+  /**
+   * True while the run waits for the user (a pending question). Human time is not a stall and does
+   * not count against the total window either: an unanswered question must not kill the run.
+   */
+  readonly waiting?: () => boolean;
   readonly stallMs: number;
   readonly totalMs: number;
   readonly now?: () => number;
@@ -44,16 +49,25 @@ export async function runWithWatchdog(options: WatchdogOptions): Promise<void> {
   const now = options.now ?? (() => Date.now());
   const startedAt = now();
   let trip: { code: RunWatchdogCode; detail: string } | null = null;
+  let waitedMs = 0;
+  let lastTick = startedAt;
   const check = (): void => {
     if (trip !== null) return;
     const current = now();
-    const silentMs = current - Math.max(options.activityAt(), startedAt);
+    const delta = current - lastTick;
+    lastTick = current;
+    if (options.waiting?.() === true) {
+      // Frozen, not tripped: the same wait must not be charged twice across ticks.
+      waitedMs += Math.max(0, delta);
+      return;
+    }
+    const silentMs = current - Math.max(options.activityAt(), startedAt) - waitedMs;
     if (silentMs >= options.stallMs) {
       trip = {
         code: 'RUN_STALLED',
         detail: `no run activity for ${Math.round(silentMs / 1000)}s (limit ${Math.round(options.stallMs / 1000)}s); the run was aborted`,
       };
-    } else if (current - startedAt >= options.totalMs) {
+    } else if (current - startedAt - waitedMs >= options.totalMs) {
       trip = {
         code: 'RUN_TIMEOUT',
         detail: `run exceeded ${Math.round(options.totalMs / 1000)}s; the run was aborted`,

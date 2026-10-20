@@ -424,3 +424,27 @@ describe('member questions reach the chief channel', () => {
     expect(h.store.listPendingInteractionsForChief('s-other')).toHaveLength(0);
   });
 });
+
+describe('interaction wait state', () => {
+  it('marks the session as waiting until the answer arrives', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'devagent-wait-'));
+    const store = new Store({ path: join(root, 'state.db'), serverEpoch: 1 });
+    cleanups.push(() => {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    });
+    store.createProject({ id: 'p-1', realPath: '/projects/alpha' });
+    store.createSession({ id: 's-chief', projectId: 'p-1', roleId: 'chief', cwd: '/projects/alpha' });
+    store.createSession({ id: 's-other', projectId: 'p-1', roleId: 'chief', cwd: '/projects/alpha' });
+    const bridge = new InteractionBridge({ store });
+
+    const pending = bridge.ask({ sessionId: 's-chief', method: 'select', title: 'pick', options: ['a', 'b'] });
+    expect(bridge.isWaiting('s-chief')).toBe(true);
+    expect(bridge.isWaiting('s-other')).toBe(false);
+
+    expect(bridge.resolve(bridge.lastInteractionIdFor('s-chief'), 'a')).toBe(true);
+    await expect(pending).resolves.toBe('a');
+    // The run is producing again: the watchdog's stall clock applies as before.
+    expect(bridge.isWaiting('s-chief')).toBe(false);
+  });
+});

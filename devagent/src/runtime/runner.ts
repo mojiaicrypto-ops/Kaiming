@@ -156,6 +156,8 @@ export class InputRunner {
       prompt: () => handle.session.prompt(text),
       abort: () => handle.session.abort(),
       activityAt: () => this.lastEventAt.get(sessionId) ?? 0,
+      // A question on screen means the run waits on the user: that wait is not a stalled provider.
+      waiting: () => this.interactions.isWaiting(sessionId),
       stallMs: this.options.runStallMs ?? DEFAULT_RUN_STALL_MS,
       totalMs: this.options.runTotalMs ?? DEFAULT_RUN_TOTAL_MS,
     });

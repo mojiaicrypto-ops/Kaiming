@@ -324,3 +324,98 @@ describe('the private path guard in a real run', () => {
     expect(recorded.source).toBe('server');
   }, 60_000);
 });
+
+describe('a chief run aborted by the watchdog', () => {
+  it('is closed by the host so the session keeps working instead of freezing', async () => {
+    const replies: StubReply[] = [
+      { kind: 'hang' }, // the first turn never answers: the run really stalls
+      { kind: 'text', text: '收到。' }, // the host's closure notice
+      { kind: 'text', text: '继续。' }, // the user's next message
+    ];
+    const model = await startStubModelServer(replies);
+    const env = await createStubEnv(model.baseUrl);
+    const dataDir = mkdtempSync(join(tmpdir(), 'devagent-recover-'));
+    const running = await startWorkbench({
+      dataDir,
+      accessPassword: 'recover-secret',
+      port: 0,
+      model: { providerId: STUB_PROVIDER, modelId: STUB_MODEL },
+      agentDir: env.agentDir,
+      runStallMs: 400,
+    });
+    cleanups.push(async () => {
+      await running.close();
+      await model.close();
+      rmSync(dataDir, { recursive: true, force: true });
+      rmSync(env.root, { recursive: true, force: true });
+    });
+
+    const login = await fetch(`${running.origin}/api/v1/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'auth.login', params: { password: 'recover-secret' } }),
+    });
+    const cookie = /agentdev_session=([0-9a-f]+)/.exec(login.headers.get('set-cookie') ?? '')?.[1] ?? '';
+    const csrf = String(((await login.json()) as { result: { csrfToken: string } }).result.csrfToken);
+    const call = async (method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      const response = await fetch(`${running.origin}/api/v1/rpc`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          cookie: `agentdev_session=${cookie}`,
+          'x-agentdev-csrf': csrf,
+        },
+        body: JSON.stringify({ requestId: `recover-${Math.random()}`, method, params }),
+      });
+      return (await response.json()) as Record<string, unknown>;
+    };
+    const inputOf = async (inputId: string): Promise<Record<string, unknown>> => {
+      const read = (await call('session.input.get', { projectId, sessionId, inputId })) as {
+        result: { input: Record<string, unknown> };
+      };
+      return read.result.input;
+    };
+
+    const opened = (await call('project.open', { path: env.cwd })) as {
+      result: { project: { projectId: string } };
+    };
+    const projectId = opened.result.project.projectId;
+    const created = (await call('session.create', { projectId })) as {
+      result: { session: { sessionId: string } };
+    };
+    const sessionId = created.result.session.sessionId;
+
+    const submitted = (await call('session.input.submit', {
+      projectId,
+      sessionId,
+      content: [{ type: 'text', text: '看一下这个项目' }],
+    })) as { result: { inputId: string } };
+    const stalledId = submitted.result.inputId;
+
+    // Without the host closure the row stays interrupted and every later message is refused
+    // (RECOVERY_REQUIRED): the session the user saw as stuck.
+    let stalled: Record<string, unknown> = {};
+    for (let i = 0; i < 150; i += 1) {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+      stalled = await inputOf(stalledId);
+      if (stalled['status'] === 'stopped') break;
+    }
+    expect(stalled['status']).toBe('stopped');
+    const notice = await inputOf(`notice-host-closed-${stalledId}`);
+    expect(notice['kind']).toBe('system_notice');
+    expect(JSON.stringify(notice['payload'])).toContain('outcome is unknown');
+
+    // The next user message runs: the session is usable, not frozen behind recovery.
+    await call('session.input.submit', { projectId, sessionId, content: [{ type: 'text', text: '继续' }] });
+    let messages: Array<{ role: string }> = [];
+    for (let i = 0; i < 100; i += 1) {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+      const listed = (await call('session.messages.list', { projectId, sessionId })) as {
+        result: { messages: Array<{ role: string }> };
+      };
+      messages = listed.result.messages;
+      if (messages.filter((message) => message.role === 'assistant').length >= 2) break;
+    }
+    expect(messages.filter((message) => message.role === 'assistant').length).toBeGreaterThanOrEqual(2);
+  }, 60_000);
+});

@@ -87,3 +87,15 @@
 - 真实流程在 CLI 里由脚本代答提问;浏览器端的真人交互链路已有独立的 8 项 E2E,但未与完整 Task 流程串跑。
 - 不校验 Git 提交确实包含结算正文(需要宿主读 Git)。
 - 不支持并行多个 Task 的独立 worktree(v1 明确不做)。
+
+## 缺陷修复:等待用户提问被当作停滞(实跑发现)
+
+用户在 16:29 输入「查看一下文件下的所有文档…」后,主管在 16:40:48 通过 `question` 提问(select),用户未及时回答;16:55:52 run watchdog 以 `RUN_STALLED`(900s 无活动)中止该 run,交互标记 stale。用户 17:00 再发消息进入队列,但被「本 Session 有 interrupted 输入 → RECOVERY_REQUIRED」挡住(界面表现为卡住),4 分钟后用户手动停止。
+
+| 缺陷 | 原因 | 修复 |
+|---|---|---|
+| 等待用户回答被算作停滞 | watchdog 只看 Pi 事件;`question` 等人在 `ctx.ui` 里等待,不产生事件 | `InteractionBridge.isWaiting(sessionId)`;watchdog 新增 `waiting`,等待用户期间不计入停滞窗口与总时长窗口 |
+| 主管自身 interrupted 输入冻结整个会话 | 认领门禁要求先恢复,而主管无法解析自己的输入;宿主只在启动时关闭 | `server/host-recovery.ts`:`closeInterruptedChiefInput` 记录 `host:*` 证据、关闭为 stopped、注入「结果未知,先核实」系统提示;启动与 run 结束(interrupted)都调用 |
+| 回归证据 | — | `run-watchdog.test` 等待暂停两窗口;`runtime.test` 提问后超过停滞窗口再回答仍 completed(去修复会失败);`workbench-entry.test` 真实 startWorkbench + 挂起 provider:run 被中止 → 输入 stopped、通知存在、下一条消息正常运行(去修复会停在 interrupted) |
+
+验证:`tsc` 干净;26 文件 / 286 项测试;浏览器 8/8;提示词 15/15。运行中的服务需重启以加载修复。

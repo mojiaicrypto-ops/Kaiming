@@ -43,7 +43,9 @@ export interface InputMarker {
 export type StubReply =
   | { readonly kind: 'text'; readonly text: string }
   | { readonly kind: 'tool_calls'; readonly calls: ReadonlyArray<{ name: string; arguments: string }> }
-  | { readonly kind: 'http_error'; readonly status: number; readonly message?: string };
+  | { readonly kind: 'http_error'; readonly status: number; readonly message?: string }
+  /** Accept the request and never answer: a dead provider stream, for watchdog tests. */
+  | { readonly kind: 'hang' };
 
 export interface StubRequest {
   readonly path: string;
@@ -76,6 +78,9 @@ function sseChunk(modelId: string, delta: ChatChunkDelta, finishReason: string |
 const STUB_USAGE = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
 
 function writeCompletion(res: ServerResponse, reply: StubReply): void {
+  if (reply.kind === 'hang') {
+    return;
+  }
   if (reply.kind === 'http_error') {
     res.writeHead(reply.status, { 'content-type': 'application/json' });
     res.end(
@@ -163,6 +168,9 @@ export async function startStubModelServer(replies: readonly StubReply[]): Promi
       const reply =
         replies[Math.min(served, replies.length - 1)] ?? ({ kind: 'text', text: 'ok' } as const);
       served += 1;
+      if (reply.kind === 'hang') {
+        return;
+      }
       writeCompletion(res, reply);
     });
   });

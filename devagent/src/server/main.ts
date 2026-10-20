@@ -19,6 +19,7 @@ import { registerStreamMethods } from './stream-methods.ts';
 import { liveHistoryRead } from './live-snapshot.ts';
 import { SessionEventHub } from './hub.ts';
 import { epochOf } from '../runtime/epoch.ts';
+import { closeInterruptedChiefInput } from './host-recovery.ts';
 import { WorkbenchWorker } from './worker.ts';
 import { InteractionBridge } from '../runtime/interactions.ts';
 import { PiRuntimeFactory } from '../runtime/pi-runtime.ts';
@@ -69,40 +70,10 @@ export function startWorkbench(options: StartOptions): Promise<{
   // contract requires, and the chief is told what happened so it verifies the real state.
   for (const frozen of store.listInterruptedChiefInputs()) {
     try {
-      store.resolveInterruptedInput({
-        sessionId: frozen.sessionId,
-        inputId: frozen.inputId,
-        expectedRevision: frozen.revision,
-        resolution: 'stopped',
-        evidenceRefs: ['host:process-restart'],
-        resolvedBy: 'host:startup',
+      closeInterruptedChiefInput(store, frozen.inputId, {
+        code: 'process-restart',
+        detail: 'the process that ran it is gone',
       });
-      const task = frozen.taskId === null ? undefined : store.getTask(frozen.taskId);
-      const chief = store.getSession(frozen.sessionId);
-      const noticeId = `notice-host-closed-${frozen.inputId}`;
-      if (chief !== undefined && store.getInput(noticeId) === undefined) {
-        store.acceptInput({
-          inputId: noticeId,
-          projectId: chief.projectId,
-          sessionId: frozen.sessionId,
-          ...(task !== undefined ? { taskId: task.id } : {}),
-          sourceKey: `host-closed:${frozen.inputId}`,
-          requestKey: noticeId,
-          method: 'session.system_notice',
-          kind: 'system_notice',
-          payload: {
-            content: [
-              {
-                type: 'text',
-                text:
-                  `The host closed your interrupted input ${frozen.inputId} as stopped: the process ` +
-                  'that ran it is gone, so its outcome is unknown. Verify the real state (files, git, ' +
-                  'results) before continuing, and do not assume it finished.',
-              },
-            ],
-          },
-        });
-      }
       process.stdout.write(`host closed interrupted chief input ${frozen.inputId}\n`);
     } catch (error) {
       process.stdout.write(`could not close interrupted chief input ${frozen.inputId}: ${String(error)}\n`);
@@ -209,6 +180,20 @@ export function startWorkbench(options: StartOptions): Promise<{
     // A run that cannot start must say why (P-06): the reason reaches whoever is looking, instead of
     // leaving a queued input that looks like it might still run.
     onOutcome: (sessionId, outcome) => {
+      // A chief's own input is a conversation turn, and nobody but the host can close it: left
+      // interrupted, it freezes the whole session (every later message waits on recovery). Close
+      // it with what the host really observed; the chief's notice says the outcome is unknown.
+      if (outcome.kind === 'interrupted') {
+        const failed = store.getInput(outcome.inputId);
+        try {
+          closeInterruptedChiefInput(store, outcome.inputId, {
+            code: 'run-aborted',
+            detail: failed?.errorMessage ?? outcome.detail,
+          });
+        } catch {
+          // The next startup closes it; a session must not be frozen by a failed convenience pass.
+        }
+      }
       // A member run settled (or failed): the chief's Task card must refresh now, not on its
       // 3s poll — the user watches member activity live here.
       if (outcome.kind === 'completed' || outcome.kind === 'failed' || outcome.kind === 'stopped' || outcome.kind === 'interrupted') {
