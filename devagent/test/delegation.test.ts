@@ -315,7 +315,7 @@ describe('task dispatch', () => {
 
     const actions = read.details['nextActions'] as Array<{ op: string; action: string }>;
     expect(actions[0]?.action).toContain('wait for the step');
-    expect((read.details['gaps'] as string[]).join(' ')).toContain('not settled');
+    expect((read.details['gaps'] as string[]).join(' ')).toContain('unfinished work');
   });
 
   it('requires a write scope from writing members and reports overlaps without blocking', async () => {
@@ -354,6 +354,38 @@ describe('task dispatch', () => {
     expect(refused.isError).toBe(true);
     expect(refused.details['code']).toBe('STAGE_NOT_READY');
     expect(f.dispatchCalls).toEqual([]);
+  });
+
+  it('applies the review pre-gate to a tester whose kind was derived from the role', async () => {
+    const f = await fixture();
+    await moveToPhase(f, 'test');
+
+    const refused = await f.taskTool.execute('c1', {
+      op: 'dispatch',
+      sessions: [{ roleId: 'tester', instructions: 'run it' }],
+    });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.details['code']).toBe('STAGE_NOT_READY');
+    expect(f.dispatchCalls).toEqual([]);
+  });
+
+  it('leads with recover, not a wait, when every unsettled member was interrupted', async () => {
+    const f = await fixture();
+    await moveToPhase(f, 'develop');
+    await f.taskTool.execute('call-1', { op: 'dispatch', sessions: [member()] });
+    const task = f.store.listTasks('p-1')[0];
+    const row = f.store.listTaskSessions(task?.id ?? '')[0];
+    const claimed = f.store.claimNextInput(row?.sessionId ?? '');
+    if (claimed.kind !== 'claimed') throw new Error('the member input could not be claimed');
+    f.store.finishInput({ inputId: claimed.input.inputId, expectedRevision: claimed.input.revision, status: 'interrupted' });
+
+    const read = await f.taskTool.execute('call-2', { op: 'get' });
+
+    const actions = read.details['nextActions'] as Array<{ op: string; action: string }>;
+    expect(actions).toHaveLength(1);
+    expect(actions[0]?.op).toBe('recover');
+    expect(actions[0]?.action).toContain('task(op=recover');
   });
 
   it('applies the review pre-gate to a tester continuation too', async () => {

@@ -20,7 +20,7 @@
 | 检查 | 结果 |
 |---|---|
 | `npx tsc --noEmit` | 通过 |
-| `npx vitest run` | 25 文件 / 269 项通过(含真实 Pi SDK + stub 模型的工具循环) |
+| `npx vitest run` | 25 文件 / 280 项通过(含真实 Pi SDK + stub 模型的工具循环) |
 | `node checks/prompt-language.ts` | 15/15 |
 | 交付摘要实跑(本仓库) | 311 文件,103 ms,重算一致 |
 | 迁移 | v1→v9 模拟库与全新库均通过;V9 列检查幂等 |
@@ -41,7 +41,7 @@
 |---|---|---|
 | 第一轮 | 1 blocking + 4 major + 9 minor | 全部修复:补 v8→v9 分支(实跑仓库 v8 库副本复现并验证)、endTask 完成核对移入提交事务、恢复通知改 `task(op=recover)`、Test 派发前核对已通过的独立复核、强制 writeScope 并给出重叠告警、其余文档/注释/参数问题 |
 | 第二轮 | 14 项全部 fixed,无新增 blocking/major;2 项 minor 残留 | 已修复:续办 tester 也过复核前置门;根级 glob 视为与一切范围重叠。两项均有新测试 |
-| 验证 | 修复后 `tsc` 干净、269 项测试、8 项浏览器 E2E、prompt 检查 15/15 | — |
+| 验证 | 修复后 `tsc` 干净、280 项测试、8 项浏览器 E2E、prompt 检查 15/15 | — |
 
 ## 阶段 4:可发现性
 
@@ -53,17 +53,33 @@
 | — | dispatch 省略 label/expectedKind 时按 roleId 派生,减少必填项(与 G2 一致) | `delegation-tools.ts` |
 | — | Task 卡显示成员 writeScope | `read-methods.ts`,`web/views/runs.js` |
 
+## 阶段 4 复核
+
+另一上下文只读复核(与阶段 1 不同任务):changes requested(1 blocking + 4 major + 3 minor)→ 全部修复后确认 pass,无新增阻断。
+
+| 发现 | 处置 |
+|---|---|
+| 派生 expectedKind 后 Test 前置门仍按原始字段判断(blocking) | 门改用派生 kind;新增「不写 expectedKind 的 tester」回归用例 |
+| guidance 自行估算完成条件,可能与 store 不一致 | 抽出 `Store.completionBlockers`,end 与 guidance 共用同一算法 |
+| read Task 建议 designer、test 阶段无复核仍建议 tester | `dispatchAdvice` 按 Task 类型/已通过复核给建议;新增两个用例 |
+| 专业 Session 收到首席专属动作 | `guidanceFor(..., {chief:false})` 返回空动作,只给 gaps |
+| ROLE_PHASE 两份表 | 合并为 guidance 导出的单一表 |
+| 中断成员先建议 wait(等不出结果) | 全部中断时只给 recover;`recover` 进入 NextAction.op |
+| 检查脚本「恰好一个 Task」未断言 / 多 Task 误判 | 断言恰一个 write Task;前置的只读 Task 属正常产品行为 |
+| 授权引用报错不说明收到了什么 | 报错附收到的键名(不含值) |
+
 ## 真实流程实测
 
 `npm run check:workflow`(真实 deepseek-flash + 真实 Pi SDK,无浏览器;提问按「同意」自动答复):
 
 | 运行 | 结果 | 记录 |
 |---|---|---|
-| 3 次完整流程 | 每次都完成 `create → develop → review → test → settle → end`;交付物真实存在,`node --test` 通过 | 任务状态 completed,报告 implementation/review/test/settlement 齐全 |
-| 最终指标 | 38 次协议工具调用,7 次错误(18.4%);步骤/前置拒绝 0,读前写保护 1 | 错误全部为参数形状(缺 summary、authorizationRef 形状、空 files、结算正文与已提交文件不同),模型当轮纠正 |
-| 交付绑定 | review/test 都记录程序观察的交付(2–3 个文件) | `delivery=review:2 files, test:2 files` |
+| 7 次完整流程 | 每次都完成 `create → develop → review → test → settle → end`;交付物真实存在,`node --test` 通过 | 任务状态 completed,报告 implementation/review/test/settlement 齐全 |
+| 最终指标(最后一次) | 26 次协议调用,4 次错误(15.4%);步骤/前置拒绝 0,读前写保护 0,完成拒绝 0 | 4 次均为 `task` 参数形状(建 Task 前先 get、authorizationRef 形状 ×2、漏 op);模型当轮纠正 |
+| 交付绑定 | review/test 记录程序观察的交付(2–3 个文件) | `delivery=review:2 files, test:2 files` |
+| 波动 | 有一轮创建了 2 个 Task(含一个前置只读/分析 Task),另一轮在事实未齐时先调 end 被 COMPLETION_INCOMPLETE 挡回 | 都不是协议死结;检查脚本已按「恰一个 write Task + 完成拒绝计入指标」修正 |
 
-错误率说明:计划目标是流程类错误 < 5%。实测 18.4% 全部是模型参数失误,不是状态机摩擦(step refusals=0);协议侧已把可选字段改为宿主派生、报错附可行动事实。
+错误率说明:计划目标是流程类错误 < 5%。实测 15–18% 全部是模型参数失误,不是状态机摩擦(step refusals=0);协议侧已把可选字段改为宿主派生、报错附可行动事实。
 
 ## 未覆盖 / 后续
 

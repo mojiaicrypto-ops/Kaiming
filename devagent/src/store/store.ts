@@ -2013,11 +2013,11 @@ export class Store {
   }
 
   /**
-   * Completion check (G3): member work settled, the necessary reports present, and the reviewed
-   * delivery unchanged. The delivery state is program-observed (results.deliveryState): a change or
-   * removal of a reviewed file invalidates the review even though the report is still recorded.
+   * Facts that block completion regardless of which result is cited (G3): every member's input has
+   * settled, and a write Task has a passed review of an unchanged delivery plus a passed test of that
+   * same delivery when it requires one. One algorithm, shared by `endTask` and the tool guidance.
    */
-  taskCompletionGaps(taskId: string, completionResultId: string): string[] {
+  completionBlockers(taskId: string): string[] {
     const gaps: string[] = [];
     const task = this.requireTask(taskId);
     // "Every professional work has stopped" is judged per member input, not by whether the current
@@ -2032,6 +2032,47 @@ export class Store {
         }
       }
     }
+    if (task.type !== 'write') {
+      return gaps;
+    }
+    const results = this.listTaskResults(taskId);
+    // The latest passed report of a kind is its evidence: history is kept, never superseded.
+    const latestPassed = (kind: ResultKind): ResultRow | undefined =>
+      results.filter((entry) => entry.kind === kind && entry.verdict === 'passed').at(-1);
+    const review = latestPassed('review');
+    if (review === undefined) {
+      gaps.push('no passed independent review is recorded');
+      return gaps;
+    }
+    const reviewed = review.deliveryState;
+    if (reviewed === null) {
+      gaps.push(`review ${review.resultId} did not record the delivery it checked; review the current delivery`);
+    } else if (digestOfPaths(this.requireTaskCwd(task), reviewed.paths) !== reviewed.digest) {
+      gaps.push(
+        `the delivery changed after the last passed review (${review.resultId}); review the current delivery again`,
+      );
+    }
+    if (task.requiresTest) {
+      const test = latestPassed('test');
+      if (test === undefined) {
+        gaps.push('no passed independent test is recorded');
+      } else if (test.createdAt < review.createdAt) {
+        gaps.push('the independent test was recorded before the independent review');
+      } else if (
+        reviewed === null ||
+        test.deliveryState === null ||
+        test.deliveryState.digest !== reviewed.digest
+      ) {
+        gaps.push('the independent test did not cover the reviewed delivery; test the reviewed delivery');
+      }
+    }
+    return gaps;
+  }
+
+  /** Completion check: the blockers above, plus a completion result of the right kind that exists. */
+  taskCompletionGaps(taskId: string, completionResultId: string): string[] {
+    const gaps = this.completionBlockers(taskId);
+    const task = this.requireTask(taskId);
     if (completionResultId.trim() === '') {
       gaps.push('no completion result was referenced');
     } else {
@@ -2042,39 +2083,6 @@ export class Store {
         const wanted: readonly ResultKind[] = task.type === 'read' ? ['investigation', 'recovery'] : ['settlement'];
         if (!wanted.includes(result.kind)) {
           gaps.push(`completion result must be ${wanted.join(' or ')} for a ${task.type} Task`);
-        }
-      }
-    }
-    if (task.type === 'write') {
-      const results = this.listTaskResults(taskId);
-      // The latest passed report of a kind is its evidence: history is kept, never superseded.
-      const latestPassed = (kind: ResultKind): ResultRow | undefined =>
-        results.filter((entry) => entry.kind === kind && entry.verdict === 'passed').at(-1);
-      const review = latestPassed('review');
-      if (review === undefined) {
-        gaps.push('no passed independent review is recorded');
-      } else {
-        const reviewed = review.deliveryState;
-        if (reviewed === null) {
-          gaps.push(`review ${review.resultId} did not record the delivery it checked; review the current delivery`);
-        } else if (digestOfPaths(this.requireTaskCwd(task), reviewed.paths) !== reviewed.digest) {
-          gaps.push(
-            `the delivery changed after the last passed review (${review.resultId}); review the current delivery again`,
-          );
-        }
-        if (task.requiresTest) {
-          const test = latestPassed('test');
-          if (test === undefined) {
-            gaps.push('no passed independent test is recorded');
-          } else if (test.createdAt < review.createdAt) {
-            gaps.push('the independent test was recorded before the independent review');
-          } else if (
-            reviewed === null ||
-            test.deliveryState === null ||
-            test.deliveryState.digest !== reviewed.digest
-          ) {
-            gaps.push('the independent test did not cover the reviewed delivery; test the reviewed delivery');
-          }
         }
       }
     }

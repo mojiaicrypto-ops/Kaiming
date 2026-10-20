@@ -10,7 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { RESULT_KINDS, StoreError, type ResultKind, type Store, type TaskPhase, type TaskRow, type TaskSessionRow } from '../store/store.ts';
 import { asRecord, enrich, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
-import { dispatchRefusalFacts, guidanceFor } from './guidance.ts';
+import { ROLE_PHASE, dispatchRefusalFacts, guidanceFor } from './guidance.ts';
 import type { TaskToolContext } from './task-tools.ts';
 
 export interface MemberState {
@@ -43,7 +43,6 @@ const DEFAULT_WAIT_MS = 120_000;
 const MIN_WAIT_MS = 1_000;
 const MAX_WAIT_MS = 300_000;
 
-/** Which phase each role may be dispatched in (G2: Review/Test/settler are step-specific). */
 /** Roles that write project files in a write Task and therefore declare a writeScope. */
 const WRITING_ROLES = new Set(['designer', 'developer', 'settler']);
 
@@ -55,15 +54,6 @@ const EXPECTED_KIND_BY_ROLE: Readonly<Record<string, ResultKind>> = {
   tester: 'test',
   settler: 'settlement',
   investigator: 'investigation',
-};
-
-const ROLE_PHASE: Readonly<Record<string, readonly TaskPhase[]>> = {
-  designer: ['clarify', 'analyze', 'design', 'plan'],
-  developer: ['develop'],
-  reviewer: ['review'],
-  tester: ['test'],
-  settler: ['settle'],
-  investigator: ['clarify', 'analyze', 'design', 'plan'],
 };
 
 interface PlannedMember {
@@ -130,7 +120,8 @@ export async function dispatchOp(
         // Name what the step really holds now, so a refused dispatch is actionable.
         return enrich(invalid, dispatchRefusalFacts(context.store, task));
       }
-      wantsTest = wantsTest || readString(request, 'expectedKind') === 'test';
+      // The gate must see the kind the member will really deliver, not only an explicit field.
+      wantsTest = wantsTest || (readString(request, 'expectedKind') ?? EXPECTED_KIND_BY_ROLE[roleId]) === 'test';
       created.push({
         kind: 'create',
         member: {

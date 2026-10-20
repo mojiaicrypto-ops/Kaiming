@@ -48,7 +48,10 @@ export function resolveAuthorizationRefs(
   const refs: string[] = [];
   for (const entry of entries) {
     if (typeof entry !== 'object' || entry === null) {
-      return { ok: false, message: 'authorizationRef must be {inputId} or {interactionId}' };
+      return {
+        ok: false,
+        message: `authorizationRef must be {inputId} or {interactionId}; received ${typeof entry}`,
+      };
     }
     const record = entry as Record<string, unknown>;
     const inputId = record['inputId'];
@@ -84,7 +87,11 @@ export function resolveAuthorizationRefs(
       refs.push(`interaction:${interactionId}`);
       continue;
     }
-    return { ok: false, message: 'authorizationRef must be {inputId} or {interactionId}' };
+    // Echo the shape (keys only, never values) so the caller can correct it without guessing.
+    return {
+      ok: false,
+      message: `authorizationRef must be {inputId} or {interactionId}; received keys ${JSON.stringify(Object.keys(record))}`,
+    };
   }
   return { ok: true, refs };
 }

@@ -7,11 +7,21 @@
  */
 import type { ResultKind, ResultRow, Store, TaskPhase, TaskRow, TaskSessionRow } from '../store/store.ts';
 
+/** Which phase each role may be dispatched in (G2: Review/Test/settler are step-specific). */
+export const ROLE_PHASE: Readonly<Record<string, readonly TaskPhase[]>> = {
+  designer: ['clarify', 'analyze', 'design', 'plan'],
+  developer: ['develop'],
+  reviewer: ['review'],
+  tester: ['test'],
+  settler: ['settle'],
+  investigator: ['clarify', 'analyze', 'design', 'plan'],
+};
+
 export interface NextAction {
   /** A concrete call the caller can make now (an op name, or a one-line description). */
   readonly action: string;
   /** The operation the action belongs to. */
-  readonly op: 'create' | 'update' | 'dispatch' | 'control' | 'end' | 'get';
+  readonly op: 'create' | 'update' | 'dispatch' | 'control' | 'end' | 'get' | 'recover';
   /** Why it is allowed now (usually the fact that blocks everything else). */
   readonly reason: string;
 }
@@ -62,58 +72,55 @@ function latestResults(store: Store, taskId: string): Map<ResultKind, ResultRow>
  * The facts a caller needs to pick the next call. `end` readiness is reported as gaps, never as a
  * decision: the chief and independent agents judge whether the work is really done.
  */
-export function guidanceFor(store: Store, task: TaskRow): TaskGuidance {
+export function guidanceFor(
+  store: Store,
+  task: TaskRow,
+  options: { readonly chief: boolean } = { chief: true },
+): TaskGuidance {
   if (task.status === 'completed' || task.status === 'cancelled') {
     return { nextActions: [], gaps: [] };
   }
+  const results = latestResults(store, task.id);
+  const gaps = completionFacts(store, task, results);
   if (task.status === 'pausing' || task.status === 'paused') {
-    return {
-      nextActions: [
-        {
-          action: task.status === 'paused' ? 'task(op=control, command=resume) to continue' : 'wait for the pause to settle',
-          op: 'control',
-          reason: `the Task is ${task.status}`,
-        },
-      ],
-      gaps: [],
-    };
+    return { nextActions: [resumeAction(task.status, options.chief)], gaps: [] };
   }
   if (task.status === 'cancelling') {
     return { nextActions: [], gaps: [] };
   }
+  // A specialist may only read its Task (G2): guidance must not advertise calls it cannot express.
+  if (!options.chief) {
+    return { nextActions: [], gaps };
+  }
 
-  const members = memberFacts(store, task);
-  const busy = unfinished(members);
-  const results = latestResults(store, task.id);
-  const gaps = completionFacts(store, task, results);
+  const busy = unfinished(memberFacts(store, task));
   const actions: NextAction[] = [];
   if (busy.length > 0) {
-    const waiting = busy.filter((entry) => entry.state === 'interrupted');
-    actions.push({
-      action: 'task(op=dispatch) with no sessions to wait for the step',
-      op: 'dispatch',
-      reason: `${busy.length} member(s) of the current step have not settled`,
-    });
-    for (const entry of waiting) {
+    // Waiting cannot settle an interrupted input (settleStep reports it as blocked immediately), so
+    // only the recover calls are advertised for those members.
+    if (busy.some((entry) => entry.state !== 'interrupted')) {
+      actions.push({
+        action: 'task(op=dispatch) with no sessions to wait for the step',
+        op: 'dispatch',
+        reason: `${busy.filter((entry) => entry.state !== 'interrupted').length} member(s) of the current step are still running`,
+      });
+    }
+    for (const entry of busy.filter((member) => member.state === 'interrupted')) {
       actions.push({
         action: `task(op=recover, sessionId=${entry.member.sessionId}, evidenceRefs=[...], resolution=completed|failed|stopped)`,
-        op: 'get',
+        op: 'recover',
         reason: `${entry.member.sessionId} was interrupted; its outcome is unknown`,
       });
     }
   } else {
     actions.push({
-      action: `task(op=update, phase=...) to record this step and start the next one`,
+      action: 'task(op=update, phase=...) to record this step and start the next one',
       op: 'update',
       reason: `every member of ${task.phase} has settled`,
     });
-    const allowed = rolesForPhase(task.phase);
-    if (allowed.length > 0) {
-      actions.push({
-        action: `task(op=dispatch, sessions=[{roleId: ${allowed[0] ?? 'designer'}, ...}])`,
-        op: 'dispatch',
-        reason: `phase ${task.phase} accepts ${allowed.join(', ')}`,
-      });
+    const advice = dispatchAdvice(task, results);
+    if (advice !== undefined) {
+      actions.push(advice);
     }
     // `end` is offered only when the observed facts say the completion checks can pass; otherwise the
     // gaps below are the actionable part.
@@ -129,46 +136,71 @@ export function guidanceFor(store: Store, task: TaskRow): TaskGuidance {
   return { nextActions: actions, gaps };
 }
 
+function resumeAction(status: TaskRow['status'], chief: boolean): NextAction {
+  if (!chief) {
+    return { action: 'task(op=get) to read the Task state', op: 'get', reason: `the Task is ${status}` };
+  }
+  return {
+    action: status === 'paused' ? 'task(op=control, command=resume) to continue' : 'wait for the pause to settle',
+    op: 'control',
+    reason: `the Task is ${status}`,
+  };
+}
+
+/**
+ * The one role whose dispatch would be accepted now, if any. Honest by construction: a read Task only
+ * accepts the investigator, and a test phase without a passed review needs the review first.
+ */
+function dispatchAdvice(task: TaskRow, results: Map<ResultKind, ResultRow>): NextAction | undefined {
+  if (task.type === 'read') {
+    const allowed = ROLE_PHASE['investigator'] ?? [];
+    return allowed.includes(task.phase)
+      ? {
+          action: 'task(op=dispatch, sessions=[{roleId: investigator, instructions: ...}])',
+          op: 'dispatch',
+          reason: `a read Task in phase ${task.phase} accepts the investigator`,
+        }
+      : undefined;
+  }
+  if (task.phase === 'test' && results.get('review')?.verdict !== 'passed') {
+    return {
+      action: 'task(op=update, phase=review), then dispatch the reviewer',
+      op: 'update',
+      reason: 'the test phase needs a passed review of the current delivery first',
+    };
+  }
+  const allowed = rolesForPhase(task.phase);
+  const role = allowed[0];
+  if (role === undefined) {
+    return undefined;
+  }
+  return {
+    action: `task(op=dispatch, sessions=[{roleId: ${role}, instructions: ...}])`,
+    op: 'dispatch',
+    reason: `phase ${task.phase} accepts ${allowed.join(', ')}`,
+  };
+}
+
 /** The observable facts that stand between the Task and completion (not a decision). */
 function completionFacts(store: Store, task: TaskRow, results: Map<ResultKind, ResultRow>): string[] {
-  const gaps: string[] = [];
-  const busy = unfinished(memberFacts(store, task));
-  if (busy.length > 0) {
-    gaps.push(`${busy.length} member(s) of the current step have not settled`);
-  }
+  // One algorithm for the hard part: the same blockers `endTask` checks (members, passed review/test,
+  // unchanged delivery). Guidance only adds the completion-report fact it cannot know without an id.
+  const gaps = [...store.completionBlockers(task.id)];
   if (task.type === 'read') {
     if (!results.has('investigation') && !results.has('recovery')) {
       gaps.push('no investigation or recovery report is recorded');
     }
     return gaps;
   }
-  const settlement = results.get('settlement');
-  if (settlement === undefined) {
+  if (!results.has('settlement')) {
     gaps.push('no settlement report is recorded');
-  }
-  if (!results.has('review')) {
-    gaps.push('no review report is recorded');
-  }
-  if (task.requiresTest && !results.has('test')) {
-    gaps.push('no test report is recorded (this Task declares requiresTest)');
-  }
-  if (results.has('review') && !results.has('test') && task.requiresTest) {
-    gaps.push('dispatch the tester only after the review passed');
   }
   return gaps;
 }
 
-/** Roles the current phase accepts (kept in step with the dispatch rule). */
+/** Roles the current phase accepts, from the same table the dispatch rule uses. */
 function rolesForPhase(phase: TaskPhase): string[] {
-  const map: Record<string, readonly TaskPhase[]> = {
-    designer: ['clarify', 'analyze', 'design', 'plan'],
-    developer: ['develop'],
-    reviewer: ['review'],
-    tester: ['test'],
-    settler: ['settle'],
-    investigator: ['clarify', 'analyze', 'design', 'plan'],
-  };
-  return Object.entries(map)
+  return Object.entries(ROLE_PHASE)
     .filter(([, phases]) => phases.includes(phase))
     .map(([role]) => role);
 }

@@ -253,7 +253,7 @@ export function createTaskTool(contextOf: TaskToolContextResolver, options: { re
         case 'recover':
           return recoverOp(context, task, params);
         default:
-          return getOp(context, task, params);
+          return getOp(context, task, params, options.chief);
       }
     },
   };
@@ -621,7 +621,12 @@ function recoverOp(context: TaskToolContext, task: TaskRow, params: Record<strin
   }
 }
 
-function getOp(context: TaskToolContext, task: TaskRow, params: Record<string, unknown>): ToolOutcome {
+function getOp(
+  context: TaskToolContext,
+  task: TaskRow,
+  params: Record<string, unknown>,
+  chief: boolean,
+): ToolOutcome {
   const plan = task.planRef === null ? { text: '', current: false } : readPlan(task.planRef);
   const withBodies = params['includeResultBodies'] === true;
   const results = context.store.listTaskResults(task.id).map((result) => ({
@@ -653,6 +658,6 @@ function getOp(context: TaskToolContext, task: TaskRow, params: Record<string, u
     members,
     results,
     missing: task.planRef !== null && !plan.current ? ['plan file is missing or changed'] : [],
-    ...guidanceFor(context.store, task),
+    ...guidanceFor(context.store, task, { chief }),
   });
 }

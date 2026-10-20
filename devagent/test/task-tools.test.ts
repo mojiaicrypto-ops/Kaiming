@@ -172,6 +172,77 @@ describe('task guidance', () => {
   });
 });
 
+describe('task guidance · honest advice', () => {
+  it('advises the investigator for a read Task, never the designer', async () => {
+    const w = world();
+    const created = await tool(w.tools).execute('call-1', createArgs({ type: 'read', requiresTest: false }));
+
+    const actions = created.details['nextActions'] as Array<{ op: string; action: string }>;
+    const dispatch = actions.find((entry) => entry.op === 'dispatch');
+    expect(dispatch?.action).toContain('investigator');
+    expect(dispatch?.action).not.toContain('designer');
+  });
+
+  it('does not offer end when the recorded review failed', async () => {
+    const w = world();
+    await tool(w.tools).execute('call-1', createArgs());
+    const task = w.store.listTasks(w.projectId)[0];
+    w.store.createTaskSessions({
+      taskId: task?.id ?? '',
+      members: [
+        {
+          sessionId: 'm-1',
+          taskId: task?.id ?? '',
+          roleId: 'reviewer',
+          phase: 'plan',
+          label: 'review',
+          instructions: 'check it',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'review',
+          inputId: 'i-m1',
+          inputPayload: { content: [{ type: 'text', text: 'check it' }] },
+        },
+      ],
+    });
+    const claimed = w.store.claimNextInput('m-1');
+    if (claimed.kind !== 'claimed') throw new Error('the member input could not be claimed');
+    w.store.recordResult({
+      resultId: 'r-failed',
+      taskId: task?.id ?? '',
+      sessionId: 'm-1',
+      inputId: claimed.input.inputId,
+      roleId: 'reviewer',
+      kind: 'review',
+      summary: 'blocking finding',
+      verdict: 'failed',
+      deliveryState: { digest: 'x', paths: [] },
+      bodyRef: { storage: 'server', path: '/tmp/r-failed.md', sha256: 'x' },
+      basisRefs: [],
+      checks: [],
+    });
+
+    const read = await tool(w.tools).execute('call-2', { op: 'get' });
+
+    const actions = read.details['nextActions'] as Array<{ op: string }>;
+    expect(actions.map((entry) => entry.op)).not.toContain('end');
+    expect((read.details['gaps'] as string[]).join(' ')).toContain('no passed independent review');
+  });
+
+  it('sends a test phase without a passed review back to the review', async () => {
+    const w = world();
+    await tool(w.tools).execute('call-1', createArgs());
+    const task = w.store.listTasks(w.projectId)[0];
+    await tool(w.tools).execute('call-2', { op: 'update', taskId: task?.id, phase: 'test' });
+
+    const read = await tool(w.tools).execute('call-3', { op: 'get' });
+
+    const actions = read.details['nextActions'] as Array<{ op: string; action: string }>;
+    expect(actions.some((entry) => entry.action.includes('phase=review'))).toBe(true);
+    expect(actions.some((entry) => entry.action.includes('roleId: tester'))).toBe(false);
+  });
+});
+
 describe('task update', () => {
   it('refuses to overwrite a Plan edited outside the tool and returns the current text', async () => {
     const w = world();
@@ -329,6 +400,47 @@ describe('task get', () => {
     expect(members[0]).toMatchObject({ sessionId: 'm-1', expectedKind: 'implementation', writeScope: ['src/'] });
     const results = read.details['results'] as Array<Record<string, unknown>>;
     expect(results[0]).toMatchObject({ resultId: 'r-1', body: '# report\n' });
+  });
+
+  it('does not advertise chief-only calls to a specialist reader', async () => {
+    const w = world();
+    await tool(w.tools).execute('call-1', createArgs());
+    const task = w.store.listTasks(w.projectId)[0];
+    w.store.createTaskSessions({
+      taskId: task?.id ?? '',
+      members: [
+        {
+          sessionId: 'm-1',
+          taskId: task?.id ?? '',
+          roleId: 'developer',
+          phase: 'plan',
+          label: 'work',
+          instructions: 'do it',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'implementation',
+          writeScope: ['src/'],
+          inputId: 'i-m1',
+          inputPayload: { content: [{ type: 'text', text: 'do it' }] },
+        },
+      ],
+    });
+    const reader = createTaskGetTool(() => ({
+      store: w.store,
+      sessionId: 'm-1',
+      projectId: w.projectId,
+      cwd: w.cwd,
+      roleId: 'developer',
+      inputId: 'i-1',
+      serverWorkDir: w.serverWorkDir,
+    }));
+
+    const read = await reader.execute('call-2', { op: 'get' });
+
+    expect(read.isError).toBe(false);
+    expect(read.details['nextActions']).toEqual([]);
+    // The observable gaps stay: a member still learns what the Task is waiting for.
+    expect((read.details['gaps'] as string[]).length).toBeGreaterThan(0);
   });
 
   it('offers a specialist only the get operation', () => {
