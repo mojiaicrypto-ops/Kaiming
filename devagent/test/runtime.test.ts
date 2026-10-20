@@ -855,7 +855,7 @@ describe('input runner', () => {
       replies: [{ kind: 'text', text: 'ok' }],
       taskType: 'write',
       sessionExtras: () => ({
-        customTools: [tool('createTask') as never, tool('probe_ok') as never],
+        customTools: [tool('project') as never, tool('probe_ok') as never],
       }),
     });
     h.store.createSession({ id: 's-reviewer', projectId: 'p-1', roleId: 'reviewer', cwd: h.cwd });
@@ -877,25 +877,24 @@ describe('input runner', () => {
     // A reviewer keeps its own tools and the generic probe, but never the chief's task tools.
     expect(active).toContain('read');
     expect(active).toContain('probe_ok');
-    expect(active).not.toContain('createTask');
+    expect(active).not.toContain('project');
     expect(active).not.toContain('write');
     expect(active).not.toContain('bash');
   });
 
-  it('gives the chief session the four core Task tools', async () => {
+  it('gives the chief session the one Task tool and the project surface', async () => {
     const h = await harness({ replies: [{ kind: 'text', text: 'ok' }] });
     await h.runner.runNext('s-1');
 
     const active = h.registry.get('s-1')?.session.getActiveToolNames() ?? [];
 
-    expect(active).toEqual(
-      expect.arrayContaining(['createTask', 'updateTask', 'endTask', 'task', 'read']),
-    );
+    expect(active).toEqual(expect.arrayContaining(['task', 'requirement', 'project', 'read']));
     expect(active).not.toContain('write');
   });
 
   it('creates a Task through the real tool loop and persists its plan', async () => {
     const args = JSON.stringify({
+      op: 'create',
       type: 'write',
       goal: 'add password reset',
       scope: 'account module',
@@ -907,7 +906,7 @@ describe('input runner', () => {
     });
     const h = await harness({
       replies: [
-        { kind: 'tool_calls', calls: [{ name: 'createTask', arguments: args }] },
+        { kind: 'tool_calls', calls: [{ name: 'task', arguments: args }] },
         { kind: 'text', text: 'task created' },
       ],
     });
@@ -926,8 +925,9 @@ describe('input runner', () => {
     expect(h.store.getSession('s-1')?.currentTaskId).toBe(task?.id);
   });
 
-  it('surfaces a refused createTask as an error result instead of a Task', async () => {
+  it('surfaces a refused Task create as an error result instead of a Task', async () => {
     const args = JSON.stringify({
+      op: 'create',
       type: 'write',
       goal: 'no tests declared',
       scope: 'x',
@@ -936,7 +936,7 @@ describe('input runner', () => {
     });
     const h = await harness({
       replies: [
-        { kind: 'tool_calls', calls: [{ name: 'createTask', arguments: args }] },
+        { kind: 'tool_calls', calls: [{ name: 'task', arguments: args }] },
         { kind: 'text', text: 'refused' },
       ],
     });
@@ -955,8 +955,9 @@ describe('input runner', () => {
           kind: 'tool_calls',
           calls: [
             {
-              name: 'createTask',
+              name: 'task',
               arguments: JSON.stringify({
+                op: 'create',
                 type: 'read',
                 goal: 'investigate',
                 scope: 'x',
@@ -967,7 +968,7 @@ describe('input runner', () => {
           ],
         },
         { kind: 'text', text: 'created' },
-        { kind: 'tool_calls', calls: [{ name: 'task', arguments: '{}' }] },
+        { kind: 'tool_calls', calls: [{ name: 'task', arguments: '{"op":"get"}' }] },
         { kind: 'text', text: 'read back' },
       ],
     });
@@ -1005,6 +1006,7 @@ describe('input runner', () => {
 
   it('delegates a member through the real tool loop and waits for the whole step', async () => {
     const createArgs = JSON.stringify({
+      op: 'create',
       type: 'write',
       goal: 'reset password',
       scope: 'account',
@@ -1013,7 +1015,7 @@ describe('input runner', () => {
       requiresTest: true,
     });
     const delegateArgs = JSON.stringify({
-      mode: 'create',
+      op: 'dispatch',
       waitTimeoutMs: 20_000,
       sessions: [
         {
@@ -1026,9 +1028,9 @@ describe('input runner', () => {
     });
     const h = await harness({
       replies: [
-        { kind: 'tool_calls', calls: [{ name: 'createTask', arguments: createArgs }] },
+        { kind: 'tool_calls', calls: [{ name: 'task', arguments: createArgs }] },
         { kind: 'text', text: 'task created' },
-        { kind: 'tool_calls', calls: [{ name: 'createTaskSessions', arguments: delegateArgs }] },
+        { kind: 'tool_calls', calls: [{ name: 'task', arguments: delegateArgs }] },
         { kind: 'text', text: 'member done' },
         { kind: 'text', text: 'delegation finished' },
       ],
@@ -1040,7 +1042,6 @@ describe('input runner', () => {
     expect(task).toBeDefined();
     const moved = h.store.updateTask({
       taskId: task?.id ?? '',
-      expectedRevision: task?.revision ?? 1,
       phase: 'develop',
     });
     expect(moved.phase).toBe('develop');
@@ -1067,6 +1068,7 @@ describe('input runner', () => {
   it('stops the Task live work when it is paused and keeps the chief bound to it', async () => {
     const entered = Promise.withResolvers<void>();
     const createArgs = JSON.stringify({
+      op: 'create',
       type: 'write',
       goal: 'reset password',
       scope: 'account',
@@ -1075,7 +1077,7 @@ describe('input runner', () => {
       requiresTest: true,
     });
     const delegateArgs = JSON.stringify({
-      mode: 'create',
+      op: 'dispatch',
       waitTimeoutMs: 30_000,
       sessions: [
         {
@@ -1088,9 +1090,9 @@ describe('input runner', () => {
     });
     const h = await harness({
       replies: [
-        { kind: 'tool_calls', calls: [{ name: 'createTask', arguments: createArgs }] },
+        { kind: 'tool_calls', calls: [{ name: 'task', arguments: createArgs }] },
         { kind: 'text', text: 'task created' },
-        { kind: 'tool_calls', calls: [{ name: 'createTaskSessions', arguments: delegateArgs }] },
+        { kind: 'tool_calls', calls: [{ name: 'task', arguments: delegateArgs }] },
         { kind: 'tool_calls', calls: [{ name: 'probe_wait', arguments: '{}' }] },
         { kind: 'text', text: 'delegation ended' },
       ],
@@ -1125,7 +1127,6 @@ describe('input runner', () => {
     const task = h.store.listTasks('p-1')[0];
     h.store.updateTask({
       taskId: task?.id ?? '',
-      expectedRevision: task?.revision ?? 1,
       phase: 'develop',
     });
     accept(h.store, 'i-2', 'req-2', task?.id);
@@ -1139,7 +1140,6 @@ describe('input runner', () => {
 
     const paused = await h.runner.controlTask({
       taskId: task?.id ?? '',
-      expectedRevision: h.store.getTask(task?.id ?? '')?.revision ?? 1,
       command: 'pause',
     });
 
@@ -1154,7 +1154,6 @@ describe('input runner', () => {
     // Cancelling the paused Task ends it and frees the slot.
     const cancelled = await h.runner.controlTask({
       taskId: task?.id ?? '',
-      expectedRevision: h.store.getTask(task?.id ?? '')?.revision ?? 1,
       command: 'cancel',
     });
     expect(cancelled.status).toBe('cancelled');
@@ -1178,10 +1177,9 @@ describe('input runner', () => {
       authorizationRefs: ['m-1'],
       sourceInputId: 'i-1',
     });
-    h.store.updateTask({ taskId: task.id, expectedRevision: task.revision, phase: 'develop' });
+    h.store.updateTask({ taskId: task.id, phase: 'develop' });
     const paused = h.store.controlTask({
       taskId: task.id,
-      expectedRevision: h.store.getTask(task.id)?.revision ?? 1,
       command: 'pause',
     });
     expect(paused.status).toBe('paused');
@@ -1245,11 +1243,10 @@ describe('input runner', () => {
 
     // pause: queued work is preserved for a later resume
     const first = createTask('t-pause', 's-1');
-    h.store.updateTask({ taskId: first.id, expectedRevision: first.revision, phase: 'develop' });
+    h.store.updateTask({ taskId: first.id, phase: 'develop' });
     h.store.createTaskSessions({ taskId: first.id, members: [{ ...spec('m-pause', 'i-mp'), taskId: first.id }] });
     const paused = await h.runner.controlTask({
       taskId: first.id,
-      expectedRevision: h.store.getTask(first.id)?.revision ?? 1,
       command: 'pause',
     });
     expect(paused.status).toBe('paused');
@@ -1258,7 +1255,6 @@ describe('input runner', () => {
 
     const resumed = await h.runner.controlTask({
       taskId: first.id,
-      expectedRevision: h.store.getTask(first.id)?.revision ?? 1,
       command: 'resume',
     });
     expect(resumed.status).toBe('active');
@@ -1268,11 +1264,10 @@ describe('input runner', () => {
     // resumed Task above still holds its own slot)
     h.store.createSession({ id: 's-2', projectId: 'p-1', roleId: 'chief', cwd: h.cwd });
     const second = createTask('t-cancel', 's-2');
-    h.store.updateTask({ taskId: second.id, expectedRevision: second.revision, phase: 'develop' });
+    h.store.updateTask({ taskId: second.id, phase: 'develop' });
     h.store.createTaskSessions({ taskId: second.id, members: [{ ...spec('m-cancel', 'i-mc'), taskId: second.id }] });
     const cancelled = await h.runner.controlTask({
       taskId: second.id,
-      expectedRevision: h.store.getTask(second.id)?.revision ?? 1,
       command: 'cancel',
     });
 
@@ -1283,6 +1278,7 @@ describe('input runner', () => {
 
   it('delivers a member report through the real loop and closes a read Task with it', async () => {
     const createArgs = JSON.stringify({
+      op: 'create',
       type: 'read',
       goal: 'investigate the reset flow',
       scope: 'account',
@@ -1290,7 +1286,7 @@ describe('input runner', () => {
       authorizationRef: { inputId: 'i-1' },
     });
     const delegateArgs = JSON.stringify({
-      mode: 'create',
+      op: 'dispatch',
       waitTimeoutMs: 20_000,
       sessions: [
         {
@@ -1302,16 +1298,15 @@ describe('input runner', () => {
       ],
     });
     const reportArgs = JSON.stringify({
-      kind: 'investigation',
       summary: 'the reset flow exists but has no test',
       body: '# investigation\n\nfound an untested reset path\n',
       checks: [{ name: 'read the sources', status: 'passed' }],
     });
     const h = await harness({
       replies: [
-        { kind: 'tool_calls', calls: [{ name: 'createTask', arguments: createArgs }] },
+        { kind: 'tool_calls', calls: [{ name: 'task', arguments: createArgs }] },
         { kind: 'text', text: 'task created' },
-        { kind: 'tool_calls', calls: [{ name: 'createTaskSessions', arguments: delegateArgs }] },
+        { kind: 'tool_calls', calls: [{ name: 'task', arguments: delegateArgs }] },
         { kind: 'tool_calls', calls: [{ name: 'agent_report', arguments: reportArgs }] },
         { kind: 'text', text: 'member done' },
         { kind: 'text', text: 'investigation recorded' },
@@ -1343,7 +1338,6 @@ describe('input runner', () => {
     // The Task can be finished with exactly that report.
     const ended = h.store.endTask({
       taskId: task?.id ?? '',
-      expectedRevision: h.store.getTask(task?.id ?? '')?.revision ?? 1,
       completionResultId: results[0]?.resultId ?? '',
     });
     expect(ended).toMatchObject({ ok: true });
@@ -1354,7 +1348,6 @@ describe('input runner', () => {
     const saveArgs = JSON.stringify({
       op: 'save',
       requirementId: 'req-reset',
-      expectedVersion: null,
       kind: 'proposal',
       title: '密码重置',
       status: 'pending',
@@ -1379,10 +1372,9 @@ describe('input runner', () => {
   it('initializes the project entries through the real tool loop', async () => {
     const args = JSON.stringify({
       op: 'initialize',
-      expectedProjectRevision: 1,
       files: [
-        { path: 'AGENTS.md', expectedVersion: null, content: '# Agent rules\n\nRead .dev/INDEX.md first.\n' },
-        { path: '.dev/INDEX.md', expectedVersion: null, content: '# 索引\n' },
+        { path: 'AGENTS.md', content: '# Agent rules\n\nRead .dev/INDEX.md first.\n' },
+        { path: '.dev/INDEX.md', content: '# 索引\n' },
       ],
       reusedAuthorityRefs: [],
       requestWriteUse: true,

@@ -397,7 +397,7 @@ describe('member questions reach the chief channel', () => {
       type: 'write', requiresTest: false, goal: 'g', scope: 's', acceptanceRefs: [], basisRefs: [],
       planRef: { storage: 'server', path: '/tmp/p.md', sha256: 'x' }, authorizationRefs: [], sourceInputId: 'i-1',
     });
-    h.store.updateTask({ taskId: task.id, expectedRevision: task.revision, phase: 'develop' });
+    h.store.updateTask({ taskId: task.id, phase: 'develop' });
     // createTaskSessions creates the member session itself.
     h.store.createTaskSessions({
       taskId: task.id,

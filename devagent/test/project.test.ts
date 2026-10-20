@@ -64,12 +64,10 @@ function fixture(): Fixture {
   };
 }
 
-const entries = (): Array<{ path: string; expectedVersion: null; content: string }> => [
-  { path: 'AGENTS.md', expectedVersion: null, content: '# Agent rules\n\nRead .dev/INDEX.md first.\n' },
-  { path: '.dev/INDEX.md', expectedVersion: null, content: '# 索引\n\n- PROJECT.md\n' },
+const entries = (): Array<{ path: string; content: string }> => [
+  { path: 'AGENTS.md', content: '# Agent rules\n\nRead .dev/INDEX.md first.\n' },
+  { path: '.dev/INDEX.md', content: '# 索引\n\n- PROJECT.md\n' },
 ];
-
-const revision = (f: Fixture): number => f.store.getProject('p-1')?.revision ?? 1;
 
 describe('project.initialize', () => {
   it('shows the real entry gaps without writing anything in preview mode', async () => {
@@ -77,7 +75,6 @@ describe('project.initialize', () => {
 
     const preview = await f.tool.execute('c1', {
       op: 'initialize',
-      expectedProjectRevision: revision(f),
       files: entries(),
       reusedAuthorityRefs: [],
       requestWriteUse: false,
@@ -98,7 +95,6 @@ describe('project.initialize', () => {
 
     const refused = await f.tool.execute('c1', {
       op: 'initialize',
-      expectedProjectRevision: revision(f),
       files: entries(),
       reusedAuthorityRefs: [],
       requestWriteUse: true,
@@ -111,7 +107,6 @@ describe('project.initialize', () => {
 
     const written = await f.tool.execute('c2', {
       op: 'initialize',
-      expectedProjectRevision: revision(f),
       files: entries(),
       reusedAuthorityRefs: [],
       requestWriteUse: true,
@@ -132,7 +127,6 @@ describe('project.initialize', () => {
     // A second run reuses the entries instead of rewriting them.
     const again = await f.tool.execute('c3', {
       op: 'initialize',
-      expectedProjectRevision: revision(f),
       files: entries(),
       reusedAuthorityRefs: [],
       requestWriteUse: true,
@@ -145,35 +139,42 @@ describe('project.initialize', () => {
     ]);
   });
 
-  it('keeps existing content when the version does not match and refuses to guess', async () => {
+  it('never replaces an entry this session has not previewed, and returns the current content', async () => {
     const f = fixture();
     mkdirSync(dirname(join(f.cwd, 'AGENTS.md')), { recursive: true });
     writeFileSync(join(f.cwd, 'AGENTS.md'), '# existing rules\n', 'utf8');
 
-    const conflicted = await f.tool.execute('c1', {
+    // A blind write of an existing file is refused and shows what is really there.
+    const blind = await f.tool.execute('c1', {
       op: 'initialize',
-      expectedProjectRevision: revision(f),
       files: [
-        { path: 'AGENTS.md', expectedVersion: null, content: '# my rules\n' },
-        { path: '.dev/INDEX.md', expectedVersion: null, content: '# 索引\n' },
+        { path: 'AGENTS.md', content: '# my rules\n' },
+        { path: '.dev/INDEX.md', content: '# 索引\n' },
       ],
       reusedAuthorityRefs: [],
       requestWriteUse: true,
       authorizationRef: { inputId: 'i-dec' },
     });
 
-    expect(conflicted.isError).toBe(true);
-    expect(conflicted.details['code']).toBe('VERSION_CONFLICT');
+    expect(blind.isError).toBe(true);
+    expect(blind.details['code']).toBe('VERSION_CONFLICT');
+    expect(blind.details['currentText']).toBe('# existing rules\n');
     // The existing file is untouched, and nothing else was written for this attempt.
     expect(readFileSync(join(f.cwd, 'AGENTS.md'), 'utf8')).toBe('# existing rules\n');
     expect(existsSync(join(f.cwd, '.dev', 'INDEX.md'))).toBe(false);
 
-    // Reading the entry and passing its real version replaces it on purpose.
-    const currentVersion = digestOfText(readFileSync(join(f.cwd, 'AGENTS.md'), 'utf8'));
-    const updated = await f.tool.execute('c2', {
+    // A preview shows the difference and is what the write is checked against.
+    const preview = await f.tool.execute('c2', {
       op: 'initialize',
-      expectedProjectRevision: revision(f),
-      files: [{ path: 'AGENTS.md', expectedVersion: currentVersion, content: '# my rules\n' }],
+      files: [{ path: 'AGENTS.md', content: '# my rules\n' }],
+      reusedAuthorityRefs: [],
+      requestWriteUse: false,
+    });
+    expect((preview.details['files'] as Array<{ action: string }>)[0]?.action).toBe('replace');
+
+    const updated = await f.tool.execute('c3', {
+      op: 'initialize',
+      files: [{ path: 'AGENTS.md', content: '# my rules\n' }],
       reusedAuthorityRefs: [],
       requestWriteUse: true,
       authorizationRef: { inputId: 'i-dec' },
@@ -182,6 +183,26 @@ describe('project.initialize', () => {
     expect(updated.isError).toBe(false);
     expect(readFileSync(join(f.cwd, 'AGENTS.md'), 'utf8')).toBe('# my rules\n');
     expect((updated.details['files'] as Array<{ outcome: string }>)[0]?.outcome).toBe('updated');
+
+    // A file edited by someone else after the preview is not overwritten.
+    const previewAgain = await f.tool.execute('c4', {
+      op: 'initialize',
+      files: [{ path: 'AGENTS.md', content: '# my rules v2\n' }],
+      reusedAuthorityRefs: [],
+      requestWriteUse: false,
+    });
+    expect(previewAgain.isError).toBe(false);
+    writeFileSync(join(f.cwd, 'AGENTS.md'), '# edited elsewhere\n', 'utf8');
+    const changed = await f.tool.execute('c5', {
+      op: 'initialize',
+      files: [{ path: 'AGENTS.md', content: '# my rules v2\n' }],
+      reusedAuthorityRefs: [],
+      requestWriteUse: true,
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    expect(changed.details['code']).toBe('VERSION_CONFLICT');
+    expect(changed.details['currentText']).toBe('# edited elsewhere\n');
+    expect(readFileSync(join(f.cwd, 'AGENTS.md'), 'utf8')).toBe('# edited elsewhere\n');
   });
 
   it('refuses a path outside the project and an unverifiable reused authority', async () => {
@@ -189,8 +210,7 @@ describe('project.initialize', () => {
 
     const escaped = await f.tool.execute('c1', {
       op: 'initialize',
-      expectedProjectRevision: revision(f),
-      files: [{ path: '../outside.md', expectedVersion: null, content: '# x\n' }],
+      files: [{ path: '../outside.md', content: '# x\n' }],
       reusedAuthorityRefs: [],
       requestWriteUse: true,
       authorizationRef: { inputId: 'i-dec' },
@@ -201,7 +221,6 @@ describe('project.initialize', () => {
 
     const authority = await f.tool.execute('c2', {
       op: 'initialize',
-      expectedProjectRevision: revision(f),
       files: entries(),
       reusedAuthorityRefs: ['.dev/PROJECT.md'],
       requestWriteUse: true,
@@ -219,10 +238,9 @@ describe('project.initialize', () => {
 
     const partial = await f.tool.execute('c1', {
       op: 'initialize',
-      expectedProjectRevision: revision(f),
       files: [
-        { path: 'AGENTS.md', expectedVersion: null, content: '# rules\n' },
-        { path: 'docs', expectedVersion: null, content: '# docs\n' },
+        { path: 'AGENTS.md', content: '# rules\n' },
+        { path: 'docs', content: '# docs\n' },
       ],
       reusedAuthorityRefs: [],
       requestWriteUse: true,
@@ -243,8 +261,7 @@ describe('project.initialize', () => {
     // Empty content and one file planned twice are argument errors, refused before any plan.
     const empty = await f.tool.execute('c2', {
       op: 'initialize',
-      expectedProjectRevision: revision(f),
-      files: [{ path: '.dev/INDEX.md', expectedVersion: null, content: '   \n' }],
+      files: [{ path: '.dev/INDEX.md', content: '   \n' }],
       reusedAuthorityRefs: [],
       requestWriteUse: true,
       authorizationRef: { inputId: 'i-dec' },
@@ -253,10 +270,9 @@ describe('project.initialize', () => {
 
     const duplicated = await f.tool.execute('c3', {
       op: 'initialize',
-      expectedProjectRevision: revision(f),
       files: [
-        { path: '.dev/INDEX.md', expectedVersion: null, content: '# one\n' },
-        { path: './.dev/INDEX.md', expectedVersion: null, content: '# two\n' },
+        { path: '.dev/INDEX.md', content: '# one\n' },
+        { path: './.dev/INDEX.md', content: '# two\n' },
       ],
       reusedAuthorityRefs: [],
       requestWriteUse: true,
@@ -266,13 +282,12 @@ describe('project.initialize', () => {
     expect(existsSync(join(f.cwd, '.dev', 'INDEX.md'))).toBe(false);
   });
 
-  it('refuses a stale project revision and only lets the chief initialize', async () => {
+  it('only lets the chief initialize', async () => {
     const f = fixture();
     f.setRole('designer');
 
     const forbidden = await f.tool.execute('c1', {
       op: 'initialize',
-      expectedProjectRevision: revision(f),
       files: entries(),
       reusedAuthorityRefs: [],
       requestWriteUse: true,
@@ -280,21 +295,5 @@ describe('project.initialize', () => {
     });
     expect(forbidden.details['code']).toBe('FORBIDDEN');
     expect(existsSync(join(f.cwd, 'AGENTS.md'))).toBe(false);
-
-    f.setRole('chief');
-    const stale = await f.tool.execute('c2', {
-      op: 'initialize',
-      expectedProjectRevision: revision(f) + 5,
-      files: entries(),
-      reusedAuthorityRefs: [],
-      requestWriteUse: true,
-      authorizationRef: { inputId: 'i-dec' },
-    });
-    expect(stale.isError).toBe(true);
-    expect(stale.details['code']).toBe('VERSION_CONFLICT');
-    // The entries are on disk; only the project record could not be stamped.
-    expect(stale.details['missing']).toEqual([]);
-    expect(existsSync(join(f.cwd, 'AGENTS.md'))).toBe(true);
-    expect(f.store.getProject('p-1')?.initializationRef).toBeNull();
   });
 });

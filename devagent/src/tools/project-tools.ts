@@ -1,23 +1,19 @@
 /**
- * Project tool (P3-e): `project.initialize` establishes the fixed knowledge entries a project workspace
- * is usable through (K-02/P-02).
+ * Project tool (P3-e): `project.initialize` establishes the fixed knowledge entries a project
+ * workspace is usable through (K-02/P-02).
  *
  * The tool never guesses: it shows the real entry gaps, the authority it reuses and the exact content
  * it would write; it writes only when the chief asks for write use *and* cites the user's explicit
- * consent; every file is version-checked and recorded as a host-owned save, so a retry only completes
- * what is still missing. `ready` means the entries really exist, not that the call succeeded.
+ * consent. The program remembers what this session last saw, so a file changed by someone else is
+ * returned instead of silently replaced; no version is carried by the model. `ready` means the entries
+ * really exist, not that the call succeeded.
  */
-import {
-  digestOfText,
-  initializeProject,
-  resolveProjectFile,
-  reusedAuthorityIssues,
-} from '../runtime/project-store.ts';
+import { readFileSync } from 'node:fs';
+import { digestOfText, initializeProject, resolveProjectFile, reusedAuthorityIssues } from '../runtime/project-store.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
 import { asRecord, fail, messageOf, ok, readString, readStringArray } from './tool-kit.ts';
 import type { DomainTool } from './task-tools.ts';
 import type { Store } from '../store/store.ts';
-import { readFileSync } from 'node:fs';
 
 export interface ProjectToolContext {
   readonly store: Store;
@@ -31,28 +27,61 @@ export type ProjectToolContextResolver = () => ProjectToolContext;
 
 interface PlannedEntry {
   readonly path: string;
-  readonly expectedVersion: string | null;
   readonly content: string;
+}
+
+/**
+ * What this session has shown the chief about each project entry (digest, or null for "does not
+ * exist"). A write may only replace a file whose current content is the one that was shown.
+ */
+const observed = new Map<string, string | null>();
+
+function observedKey(context: ProjectToolContext, path: string): string {
+  return `${context.cwd}\0${context.sessionId}\0${path}`;
+}
+
+function currentEntryVersion(cwd: string, path: string): string | null {
+  const resolved = resolveProjectFile(cwd, path);
+  if (resolved === undefined) {
+    return null;
+  }
+  try {
+    return digestOfText(readFileSync(resolved, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function currentEntryText(cwd: string, path: string): string | undefined {
+  const resolved = resolveProjectFile(cwd, path);
+  if (resolved === undefined) {
+    return undefined;
+  }
+  try {
+    return readFileSync(resolved, 'utf8');
+  } catch {
+    return undefined;
+  }
 }
 
 export function createProjectTool(contextOf: ProjectToolContextResolver): DomainTool {
   return {
     name: 'project',
     label: 'project',
-    description:
-      'Initialize the project knowledge entries: shows the real gaps and the exact files, and writes them only with the user decision cited.',
+    description: [
+      'Initialize the project knowledge entries: a preview shows the real gaps and the exact files; writing needs the user decision cited.',
+      'Write the same content you previewed. If someone changed a file in between, the current content is returned instead of overwriting it.',
+    ].join('\n'),
     parameters: {
       type: 'object',
       properties: {
         op: { type: 'string', enum: ['initialize'] },
-        expectedProjectRevision: { type: 'number' },
         files: {
           type: 'array',
           items: {
             type: 'object',
             properties: {
               path: { type: 'string' },
-              expectedVersion: { type: ['string', 'null'] },
               content: { type: 'string' },
             },
             required: ['path', 'content'],
@@ -67,7 +96,7 @@ export function createProjectTool(contextOf: ProjectToolContextResolver): Domain
           additionalProperties: false,
         },
       },
-      required: ['op', 'expectedProjectRevision', 'files', 'requestWriteUse'],
+      required: ['op', 'files', 'requestWriteUse'],
       additionalProperties: false,
     },
     async execute(_toolCallId, rawParams) {
@@ -82,17 +111,13 @@ export function createProjectTool(contextOf: ProjectToolContextResolver): Domain
       if (context.roleId !== 'chief') {
         return fail('FORBIDDEN', 'only the chief session establishes the project entries');
       }
-      const expectedRevision = params['expectedProjectRevision'];
-      if (typeof expectedRevision !== 'number') {
-        return fail('INVALID_ARGUMENT', 'expectedProjectRevision is required');
-      }
       const project = context.store.getProject(context.projectId);
       if (project === undefined) {
         return fail('NOT_FOUND', `project ${context.projectId} does not exist`);
       }
       const files = parseFiles(params['files']);
       if (files === undefined || files.length === 0) {
-        return fail('INVALID_ARGUMENT', 'files must be a non-empty list of {path, expectedVersion?, content}');
+        return fail('INVALID_ARGUMENT', 'files must be a non-empty list of {path, content}');
       }
       const emptyContent = files.filter((entry) => entry.content.trim() === '');
       if (emptyContent.length > 0) {
@@ -128,17 +153,23 @@ export function createProjectTool(contextOf: ProjectToolContextResolver): Domain
       const plan = planEntries(context.cwd, files);
       const requestWriteUse = params['requestWriteUse'] === true;
       if (!requestWriteUse) {
-        // A preview is a real answer: the chief shows this to the user before asking for consent.
-        return ok(`Project entry plan: ${plan.length} file(s), ${plan.filter((entry) => entry.action !== 'unchanged').length} to write`, {
-          wrote: false,
-          ready: false,
-          cwd: context.cwd,
-          projectRevision: project.revision,
-          reusedAuthorityRefs,
-          files: plan,
-          entryGaps: plan.filter((entry) => entry.action === 'create').map((entry) => entry.path),
-          note: 'entries are written only when the user decision is cited',
-        });
+        // A preview is a real answer: the chief shows this to the user before asking for consent, and
+        // the program remembers it as the content this session has seen.
+        for (const entry of plan) {
+          observed.set(observedKey(context, entry.path), entry.currentVersion);
+        }
+        return ok(
+          `Project entry plan: ${plan.length} file(s), ${plan.filter((entry) => entry.action !== 'unchanged').length} to write`,
+          {
+            wrote: false,
+            ready: false,
+            cwd: context.cwd,
+            reusedAuthorityRefs,
+            files: plan,
+            entryGaps: plan.filter((entry) => entry.action === 'create').map((entry) => entry.path),
+            note: 'entries are written only when the user decision is cited',
+          },
+        );
       }
 
       const authorization = resolveAuthorizationRefs(context.store, context.projectId, params['authorizationRef']);
@@ -151,6 +182,22 @@ export function createProjectTool(contextOf: ProjectToolContextResolver): Domain
           files: plan,
           reusedAuthorityRefs,
         });
+      }
+      // Never replace a file this session has not seen in its current state.
+      for (const entry of plan) {
+        if (entry.currentVersion === null) {
+          continue;
+        }
+        const seen = observed.get(observedKey(context, entry.path));
+        if (seen !== entry.currentVersion) {
+          return fail(
+            'VERSION_CONFLICT',
+            seen === undefined
+              ? `the entry ${entry.path} was not read in this session; preview it first`
+              : `the entry ${entry.path} changed since it was shown; preview it again`,
+            { wrote: false, files: plan, path: entry.path, currentText: currentEntryText(context.cwd, entry.path) ?? null },
+          );
+        }
       }
       const blockingConflict = plan.find((entry) => entry.action === 'conflict');
       if (blockingConflict !== undefined) {
@@ -166,7 +213,7 @@ export function createProjectTool(contextOf: ProjectToolContextResolver): Domain
           cwd: context.cwd,
           files: files.map((entry) => ({
             path: entry.path,
-            expectedVersion: entry.expectedVersion,
+            expectedVersion: currentEntryVersion(context.cwd, entry.path),
             content: entry.content,
           })),
           recordSave: (entry) => {
@@ -188,11 +235,7 @@ export function createProjectTool(contextOf: ProjectToolContextResolver): Domain
         });
       }
 
-      const details = {
-        cwd: context.cwd,
-        files: initialized.files,
-        reusedAuthorityRefs,
-      };
+      const details = { cwd: context.cwd, files: initialized.files, reusedAuthorityRefs };
       if (!initialized.ready) {
         const conflict = initialized.files.some((entry) => entry.outcome === 'conflict');
         return fail(
@@ -206,28 +249,31 @@ export function createProjectTool(contextOf: ProjectToolContextResolver): Domain
       try {
         const updated = context.store.setProjectInitialization({
           projectId: context.projectId,
-          expectedRevision,
           initializationRef: {
             schemaVersion: 1,
             files: initialized.files.map((entry) => ({ path: entry.path, sha256: entry.version })),
             reusedAuthorityRefs,
           },
         });
+        // The session has now seen exactly the written content.
+        for (const entry of initialized.files) {
+          if (entry.version !== null) {
+            observed.set(observedKey(context, entry.path), entry.version);
+          }
+        }
         return ok(`Project ${context.projectId} entries are ready`, {
           ...details,
           ready: true,
           wrote: true,
-          projectRevision: updated.revision,
           initializationRef: updated.initializationRef,
         });
       } catch (error) {
         // The files are really there; only the project record could not be updated.
-        return fail('VERSION_CONFLICT', messageOf(error), {
+        return fail('STORAGE_UNAVAILABLE', messageOf(error), {
           ...details,
           missing: [],
           ready: true,
           wrote: true,
-          projectRevision: expectedRevision,
         });
       }
     },
@@ -250,27 +296,15 @@ function planEntries(
     if (resolved === undefined) {
       return { path: entry.path, action: 'conflict', currentVersion: null, content };
     }
-    let current: string | undefined;
-    try {
-      current = readFileSync(resolved, 'utf8');
-    } catch {
-      current = undefined;
-    }
-    const currentVersion = current === undefined ? null : digestOfText(current);
-    if (entry.expectedVersion === null) {
-      return {
-        path: entry.path,
-        action: currentVersion === null ? 'create' : currentVersion === digestOfText(content) ? 'unchanged' : 'conflict',
-        currentVersion,
-        content,
-      };
-    }
-    if (currentVersion !== entry.expectedVersion) {
-      return { path: entry.path, action: 'conflict', currentVersion, content };
-    }
+    const currentVersion = currentEntryVersion(cwd, entry.path);
     return {
       path: entry.path,
-      action: currentVersion === digestOfText(content) ? 'unchanged' : 'replace',
+      action:
+        currentVersion === null
+          ? 'create'
+          : currentVersion === digestOfText(content)
+            ? 'unchanged'
+            : 'replace',
       currentVersion,
       content,
     };
@@ -289,15 +323,10 @@ function parseFiles(value: unknown): PlannedEntry[] | undefined {
     }
     const path = readString(record, 'path');
     const content = typeof record['content'] === 'string' ? (record['content'] as string) : undefined;
-    const expectedVersion = record['expectedVersion'];
-    if (
-      path === undefined ||
-      content === undefined ||
-      (expectedVersion !== undefined && expectedVersion !== null && typeof expectedVersion !== 'string')
-    ) {
+    if (path === undefined || content === undefined) {
       return undefined;
     }
-    files.push({ path, content, expectedVersion: expectedVersion === undefined ? null : (expectedVersion as string | null) });
+    files.push({ path, content });
   }
   return files;
 }

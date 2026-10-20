@@ -7,6 +7,7 @@
  */
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { digestOfPaths, type DeliveryState } from '../runtime/deliverable.ts';
 
 export type InputStatus =
   | 'queued'
@@ -100,7 +101,6 @@ export interface TaskRow {
   readonly nextStep: string | null;
   readonly blockReason: string | null;
   readonly completionResultId: string | null;
-  readonly candidate: unknown;
   readonly sourceInputId: string;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -126,7 +126,6 @@ export interface CreateTaskParams {
 
 export interface UpdateTaskParams {
   readonly taskId: string;
-  readonly expectedRevision: number;
   readonly phase?: TaskPhase;
   readonly summary?: string;
   readonly nextStep?: string;
@@ -209,7 +208,8 @@ export interface TaskSessionRow {
   readonly refs: readonly string[];
   readonly dependencies: readonly string[];
   readonly expectedKind: string;
-  readonly candidateId: string | null;
+  /** Project-relative paths or globs this member owns in a parallel write step (G3/R-04). */
+  readonly writeScope: readonly string[];
   readonly workspaceRef: string | null;
   readonly currentInputId: string | null;
 }
@@ -253,11 +253,11 @@ export interface ResultRow {
   readonly kind: ResultKind;
   readonly summary: string;
   readonly verdict: 'passed' | 'failed' | 'blocked' | null;
-  readonly candidateId: string | null;
+  /** What the program observed when this review/test arrived (G3); null for other kinds. */
+  readonly deliveryState: DeliveryState | null;
   readonly bodyRef: ArtifactRef;
   readonly basisRefs: readonly string[];
   readonly checks: readonly ResultCheck[];
-  readonly supersedesResultId: string | null;
   readonly settlement: unknown;
   readonly createdAt: string;
 }
@@ -273,7 +273,7 @@ export interface CreateTaskSessionParams {
   readonly refs: readonly string[];
   readonly dependencies: readonly string[];
   readonly expectedKind: string;
-  readonly candidateId?: string;
+  readonly writeScope?: readonly string[];
   readonly workspaceRef?: string;
   readonly inputId: string;
   readonly inputPayload: unknown;
@@ -367,7 +367,7 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -469,7 +469,7 @@ CREATE TABLE IF NOT EXISTS task_sessions (
   refs TEXT NOT NULL,
   dependencies TEXT NOT NULL,
   expectedKind TEXT NOT NULL,
-  candidateId TEXT,
+  writeScope TEXT NOT NULL DEFAULT '[]',
   workspaceRef TEXT,
   currentInputId TEXT,
   createdAt TEXT NOT NULL,
@@ -501,7 +501,6 @@ CREATE TABLE IF NOT EXISTS tasks (
   nextStep TEXT,
   blockReason TEXT,
   completionResultId TEXT,
-  candidate TEXT,
   sourceInputId TEXT NOT NULL,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
@@ -711,33 +710,16 @@ export class Store {
     return row === undefined ? undefined : toProjectRow(row);
   }
 
-  /** Record the entries a project was initialized with, checked against the project revision. */
-  setProjectInitialization(params: {
-    projectId: string;
-    expectedRevision: number;
-    initializationRef: unknown;
-  }): ProjectRow {
+  /** Record the entries a project was initialized with (the files are already verified on disk). */
+  setProjectInitialization(params: { projectId: string; initializationRef: unknown }): ProjectRow {
     return this.transaction(() => {
       const project = this.getProject(params.projectId);
       if (project === undefined) {
         throw new StoreError('NOT_FOUND', 'project does not exist', { projectId: params.projectId });
       }
-      const outcome = this.db
-        .prepare(
-          'UPDATE projects SET initializationRef = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND revision = ?',
-        )
-        .run(
-          JSON.stringify(params.initializationRef),
-          this.clock(),
-          params.projectId,
-          params.expectedRevision,
-        );
-      if (outcome.changes !== 1) {
-        throw new StoreError('VERSION_CONFLICT', 'project revision does not match', {
-          projectId: params.projectId,
-          actual: project.revision,
-        });
-      }
+      this.db
+        .prepare('UPDATE projects SET initializationRef = ?, revision = revision + 1, updatedAt = ? WHERE id = ?')
+        .run(JSON.stringify(params.initializationRef), this.clock(), params.projectId);
       return this.getProject(params.projectId) as ProjectRow;
     });
   }
@@ -1950,17 +1932,19 @@ export class Store {
   }
 
   /**
-   * Version-checked Task update. Providing a phase starts a new step: the current-step members must be
-   * finished (none yet in this slice) and are cleared after the previous step's summary is kept.
+   * Task update. Providing a phase starts a new step: the current-step members must be finished and
+   * are cleared after the previous step's summary is kept.
+   *
+   * No version is compared: one chief session owns the Task and the tools are executed one call at a
+   * time, so a second writer cannot race this row (G2, sequence rule).
    */
   updateTask(params: UpdateTaskParams): TaskRow {
     return this.transaction(() => {
       const task = this.requireTask(params.taskId);
-      if (task.revision !== params.expectedRevision) {
-        throw new StoreError('VERSION_CONFLICT', 'Task revision does not match', {
+      if (task.status === 'completed' || task.status === 'cancelled') {
+        throw new StoreError('VERSION_CONFLICT', 'the Task is already terminal', {
           taskId: params.taskId,
-          expected: params.expectedRevision,
-          actual: task.revision,
+          status: task.status,
         });
       }
       if (params.phase !== undefined && task.currentSessionIds.length > 0) {
@@ -2000,7 +1984,7 @@ export class Store {
              acceptanceRefs = COALESCE(?, acceptanceRefs), basisRefs = COALESCE(?, basisRefs),
              requiresTest = COALESCE(?, requiresTest),
              revision = revision + 1, updatedAt = ?
-           WHERE id = ? AND revision = ?`,
+           WHERE id = ?`,
         )
         .run(
           params.phase ?? task.phase,
@@ -2017,7 +2001,6 @@ export class Store {
           params.requiresTest === undefined ? null : params.requiresTest ? 1 : 0,
           timestamp,
           params.taskId,
-          params.expectedRevision,
         );
       if (outcome.changes !== 1) {
         throw new StoreError('VERSION_CONFLICT', 'Task moved while updating', {
@@ -2029,9 +2012,9 @@ export class Store {
   }
 
   /**
-   * Completion check for this slice: everything the contract requires that the store can verify.
-   * Independent review/test/settlement reports arrive with their tools, so an endTask attempt now
-   * reports exactly what is missing instead of pretending the Task is complete.
+   * Completion check (G3): member work settled, the necessary reports present, and the reviewed
+   * delivery unchanged. The delivery state is program-observed (results.deliveryState): a change or
+   * removal of a reviewed file invalidates the review even though the report is still recorded.
    */
   taskCompletionGaps(taskId: string, completionResultId: string): string[] {
     const gaps: string[] = [];
@@ -2059,34 +2042,37 @@ export class Store {
         if (!wanted.includes(result.kind)) {
           gaps.push(`completion result must be ${wanted.join(' or ')} for a ${task.type} Task`);
         }
-        if (this.supersededBy(result.resultId) !== undefined) {
-          gaps.push(`completion result ${result.resultId} was superseded`);
-        }
       }
     }
     if (task.type === 'write') {
-      const candidateId = this.candidateIdOf(task.candidate);
-      const valid = (entry: ResultRow): boolean => this.supersededBy(entry.resultId) === undefined;
-      const reviews = this.listTaskResults(taskId).filter(
-        (entry) => entry.kind === 'review' && entry.verdict === 'passed' && entry.candidateId === candidateId,
-      );
-      const tests = this.listTaskResults(taskId).filter(
-        (entry) => entry.kind === 'test' && entry.verdict === 'passed' && entry.candidateId === candidateId,
-      );
-      if (candidateId === null) {
-        gaps.push('no candidate version was frozen for this Task');
+      const results = this.listTaskResults(taskId);
+      // The latest passed report of a kind is its evidence: history is kept, never superseded.
+      const latestPassed = (kind: ResultKind): ResultRow | undefined =>
+        results.filter((entry) => entry.kind === kind && entry.verdict === 'passed').at(-1);
+      const review = latestPassed('review');
+      if (review === undefined) {
+        gaps.push('no passed independent review is recorded');
       } else {
-        // Every implementation flow includes an independent check (D-04), and it precedes the Test.
-        const review = reviews.filter(valid)[0];
-        if (review === undefined) {
-          gaps.push(`no passed independent review is recorded for candidate ${candidateId}`);
-        } else {
-          const test = tests.filter(valid)[0];
-          if (test !== undefined && test.createdAt < review.createdAt) {
+        const reviewed = review.deliveryState;
+        if (reviewed === null) {
+          gaps.push(`review ${review.resultId} did not record the delivery it checked; review the current delivery`);
+        } else if (digestOfPaths(this.requireTaskCwd(task), reviewed.paths) !== reviewed.digest) {
+          gaps.push(
+            `the delivery changed after the last passed review (${review.resultId}); review the current delivery again`,
+          );
+        }
+        if (task.requiresTest) {
+          const test = latestPassed('test');
+          if (test === undefined) {
+            gaps.push('no passed independent test is recorded');
+          } else if (test.createdAt < review.createdAt) {
             gaps.push('the independent test was recorded before the independent review');
-          }
-          if (task.requiresTest && test === undefined) {
-            gaps.push(`no passed independent test is recorded for candidate ${candidateId}`);
+          } else if (
+            reviewed === null ||
+            test.deliveryState === null ||
+            test.deliveryState.digest !== reviewed.digest
+          ) {
+            gaps.push('the independent test did not cover the reviewed delivery; test the reviewed delivery');
           }
         }
       }
@@ -2095,26 +2081,31 @@ export class Store {
   }
 
   /** Release the chief slot and finish the Task; refuses while completion gaps remain. */
-  endTask(params: { taskId: string; expectedRevision: number; completionResultId: string }):
+  endTask(params: { taskId: string; completionResultId: string }):
     | { readonly ok: true; readonly task: TaskRow }
     | { readonly ok: false; readonly gaps: readonly string[] } {
+    // Observed outside the transaction: hashing the delivery must not hold the write lock.
+    const gaps = this.taskCompletionGaps(params.taskId, params.completionResultId);
+    if (gaps.length > 0) {
+      return { ok: false, gaps };
+    }
     return this.transaction(() => {
-      const gaps = this.taskCompletionGaps(params.taskId, params.completionResultId);
-      if (gaps.length > 0) {
-        return { ok: false, gaps };
+      const task = this.requireTask(params.taskId);
+      if (task.status === 'cancelled') {
+        throw new StoreError('VERSION_CONFLICT', 'the Task was cancelled', { taskId: params.taskId });
+      }
+      if (task.status === 'completed') {
+        return { ok: true, task } as const;
       }
       const timestamp = this.clock();
-      const task = this.requireTask(params.taskId);
       const outcome = this.db
         .prepare(
           `UPDATE tasks SET status = 'completed', completionResultId = ?, revision = revision + 1, updatedAt = ?
-             WHERE id = ? AND revision = ?`,
+             WHERE id = ?`,
         )
-        .run(params.completionResultId, timestamp, params.taskId, params.expectedRevision);
+        .run(params.completionResultId, timestamp, params.taskId);
       if (outcome.changes !== 1) {
-        throw new StoreError('VERSION_CONFLICT', 'Task revision does not match', {
-          taskId: params.taskId,
-        });
+        throw new StoreError('VERSION_CONFLICT', 'the Task could not be completed', { taskId: params.taskId });
       }
       this.db
         .prepare(
@@ -2139,11 +2130,11 @@ export class Store {
     kind: ResultKind;
     summary: string;
     verdict?: 'passed' | 'failed' | 'blocked';
-    candidateId?: string;
+    /** Observed by the caller (G3) for review/test; not a model-supplied value. */
+    deliveryState?: DeliveryState;
     bodyRef: ArtifactRef;
     basisRefs: readonly string[];
     checks: readonly ResultCheck[];
-    supersedesResultId?: string;
     settlement?: unknown;
   }): ResultRow {
     return this.transaction(() => {
@@ -2179,23 +2170,11 @@ export class Store {
           kind: params.kind,
         });
       }
-      if (params.kind === 'review' || params.kind === 'test') {
-        const candidate = this.candidateIdOf(task.candidate);
-        if (candidate === null || params.candidateId !== candidate) {
-          // A check must name the version it checked; a report about another version is not evidence.
-          throw new StoreError('INVALID_ARGUMENT', 'the report must name the Task candidate version', {
-            expected: candidate,
-            given: params.candidateId ?? null,
-          });
-        }
-      }
-      if (params.supersedesResultId !== undefined) {
-        const superseded = this.getResult(params.supersedesResultId);
-        if (superseded === undefined || superseded.taskId !== params.taskId) {
-          throw new StoreError('NOT_FOUND', 'the superseded result is not part of this Task', {
-            supersedesResultId: params.supersedesResultId,
-          });
-        }
+      if ((params.kind === 'review' || params.kind === 'test') && params.deliveryState === undefined) {
+        // The binding is what the report checked; without it the report cannot complete the Task.
+        throw new StoreError('INVALID_ARGUMENT', 'a review or test report needs the observed delivery state', {
+          kind: params.kind,
+        });
       }
       const existing = this.db
         .prepare('SELECT taskId FROM results WHERE resultId = ?')
@@ -2209,9 +2188,9 @@ export class Store {
       this.db
         .prepare(
           `INSERT INTO results
-             (resultId, taskId, sessionId, inputId, roleId, kind, summary, verdict, candidateId, bodyRef,
-              basisRefs, checks, supersedesResultId, settlement, createdAt, serverEpoch)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (resultId, taskId, sessionId, inputId, roleId, kind, summary, verdict, deliveryState, bodyRef,
+              basisRefs, checks, settlement, createdAt, serverEpoch)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           params.resultId,
@@ -2222,11 +2201,10 @@ export class Store {
           params.kind,
           params.summary,
           params.verdict ?? null,
-          params.candidateId ?? null,
+          params.deliveryState === undefined ? null : JSON.stringify(params.deliveryState),
           JSON.stringify(params.bodyRef),
           JSON.stringify(params.basisRefs),
           JSON.stringify(params.checks),
-          params.supersedesResultId ?? null,
           params.settlement === undefined ? null : JSON.stringify(params.settlement),
           this.clock(),
           this.serverEpoch,
@@ -2270,22 +2248,6 @@ export class Store {
     return rows.map((row) => toResultRow(row));
   }
 
-  /** The result that declared this one superseded, if any (S6: history is never overwritten). */
-  supersededBy(resultId: string): ResultRow | undefined {
-    const row = this.db
-      .prepare('SELECT * FROM results WHERE supersedesResultId = ? ORDER BY createdAt LIMIT 1')
-      .get(resultId) as Record<string, unknown> | undefined;
-    return row === undefined ? undefined : toResultRow(row);
-  }
-
-  private candidateIdOf(candidate: unknown): string | null {
-    if (typeof candidate !== 'object' || candidate === null) {
-      return null;
-    }
-    const value = (candidate as Record<string, unknown>)['candidateId'];
-    return typeof value === 'string' ? value : null;
-  }
-
   /** Register (or re-read) a host-owned file save so retries are idempotent (S6). */
   registerFileSave(params: {
     requestKey: string;
@@ -2326,13 +2288,20 @@ export class Store {
   }
 
   /**
-   * Create the current step's professional members atomically (S3: create/continue 专业工作): the
-   * session row, its Task membership and its first input are written together, then the Task's
-   * currentSessionIds are replaced by the new members.
+   * Create the current step's professional members and continue the settled ones atomically (S3:
+   * create/continue 专业工作): the session row, its Task membership and its input are written
+   * together, then the Task's currentSessionIds are replaced by the new members.
    */
   createTaskSessions(params: {
     readonly taskId: string;
     readonly members: readonly CreateTaskSessionParams[];
+    readonly continuations?: ReadonlyArray<{
+      readonly sessionId: string;
+      readonly instructions: string;
+      readonly refs: readonly string[];
+      readonly dependencies: readonly string[];
+      readonly inputId: string;
+    }>;
   }): TaskSessionRow[] {
     return this.transaction(() => {
       const task = this.requireTask(params.taskId);
@@ -2388,7 +2357,7 @@ export class Store {
           .prepare(
             `INSERT INTO task_sessions
                (sessionId, taskId, roleId, specialization, phase, label, instructions, refs,
-                dependencies, expectedKind, candidateId, workspaceRef, currentInputId, createdAt, updatedAt)
+                dependencies, expectedKind, writeScope, workspaceRef, currentInputId, createdAt, updatedAt)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
@@ -2402,7 +2371,7 @@ export class Store {
             canonical(member.refs),
             canonical(member.dependencies),
             member.expectedKind,
-            member.candidateId ?? null,
+            canonical(member.writeScope ?? []),
             member.workspaceRef ?? null,
             member.inputId,
             timestamp,
@@ -2410,7 +2379,17 @@ export class Store {
           );
         created.push(this.requireTaskSession(member.sessionId));
       }
-      const currentSessionIds = [...new Set([...task.currentSessionIds, ...created.map((m) => m.sessionId)])];
+      // Continuations join the same transaction: a batch is accepted whole or not at all.
+      for (const continuation of params.continuations ?? []) {
+        this.continueTaskSession(continuation);
+      }
+      const currentSessionIds = [
+        ...new Set([
+          ...task.currentSessionIds,
+          ...created.map((m) => m.sessionId),
+          ...(params.continuations ?? []).map((entry) => entry.sessionId),
+        ]),
+      ];
       this.db
         .prepare(
           'UPDATE tasks SET currentSessionIds = ?, revision = revision + 1, updatedAt = ? WHERE id = ?',
@@ -2483,7 +2462,8 @@ export class Store {
   /** Record the Task's control intent; the caller stops the work and reports the real state. */
   controlTask(params: {
     taskId: string;
-    expectedRevision: number;
+    /** Host RPCs pass the revision the user saw; the model's tool passes none (single writer). */
+    expectedRevision?: number;
     command: 'pause' | 'resume' | 'cancel';
   }): TaskRow {
     return this.transaction(() => {
@@ -2495,7 +2475,7 @@ export class Store {
           status: task.status,
         });
       }
-      if (task.revision !== params.expectedRevision) {
+      if (params.expectedRevision !== undefined && task.revision !== params.expectedRevision) {
         throw new StoreError('VERSION_CONFLICT', 'Task revision does not match', {
           taskId: params.taskId,
           actual: task.revision,
@@ -2516,7 +2496,7 @@ export class Store {
               : 'cancelled';
       this.db
         .prepare('UPDATE tasks SET status = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND revision = ?')
-        .run(next, this.clock(), params.taskId, params.expectedRevision);
+        .run(next, this.clock(), params.taskId, task.revision);
       if (next === 'cancelled') {
         // The Task is over: only completion, cancellation or a safe handover free the chief's slot.
         this.db
@@ -2582,26 +2562,57 @@ export class Store {
     });
   }
 
-  /** Freeze the delivered candidate version (files + digests) for Review/Test. */
-  setCandidate(params: { taskId: string; expectedRevision: number; candidate: unknown }): TaskRow {
+  /**
+   * Hand a running Task to another chief session (G2 adopt). Both the current owner and the target
+   * must be free of another Task, and the Task must still be running; nothing is replayed.
+   */
+  adoptTask(params: { taskId: string; chiefSessionId: string }): TaskRow {
     return this.transaction(() => {
       const task = this.requireTask(params.taskId);
       if (task.status === 'completed' || task.status === 'cancelled') {
-        // A terminal Task is finished history: control cannot rewrite it back into a live lifecycle.
         throw new StoreError('VERSION_CONFLICT', 'the Task is already terminal', {
           taskId: params.taskId,
           status: task.status,
         });
       }
-      if (task.revision !== params.expectedRevision) {
-        throw new StoreError('VERSION_CONFLICT', 'Task revision does not match', {
-          taskId: params.taskId,
-          actual: task.revision,
+      if (params.chiefSessionId === task.chiefSessionId) {
+        return task;
+      }
+      const target = this.getSession(params.chiefSessionId);
+      if (target === undefined) {
+        throw new StoreError('NOT_FOUND', 'the target session does not exist', {
+          sessionId: params.chiefSessionId,
         });
       }
+      if (target.roleId !== 'chief') {
+        throw new StoreError('INVALID_ARGUMENT', 'only a chief session can own a Task', {
+          sessionId: params.chiefSessionId,
+          roleId: target.roleId,
+        });
+      }
+      if (target.projectId !== task.projectId) {
+        throw new StoreError('INVALID_ARGUMENT', 'the target session belongs to another project', {
+          sessionId: params.chiefSessionId,
+        });
+      }
+      if (target.currentTaskId !== null) {
+        throw new StoreError('WORKSPACE_BUSY', 'the target session already coordinates a Task', {
+          sessionId: params.chiefSessionId,
+          taskId: target.currentTaskId,
+        });
+      }
+      const timestamp = this.clock();
       this.db
-        .prepare('UPDATE tasks SET candidate = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND revision = ?')
-        .run(canonical(params.candidate), this.clock(), params.taskId, params.expectedRevision);
+        .prepare('UPDATE sessions SET currentTaskId = NULL, revision = revision + 1, updatedAt = ? WHERE id = ?')
+        .run(timestamp, task.chiefSessionId);
+      this.db
+        .prepare('UPDATE sessions SET currentTaskId = ?, revision = revision + 1, updatedAt = ? WHERE id = ?')
+        .run(params.taskId, timestamp, params.chiefSessionId);
+      this.db
+        .prepare(
+          'UPDATE tasks SET chiefSessionId = ?, ownerEpoch = ?, revision = revision + 1, updatedAt = ? WHERE id = ?',
+        )
+        .run(params.chiefSessionId, this.epoch, timestamp, params.taskId);
       return this.requireTask(params.taskId);
     });
   }
@@ -2705,11 +2716,53 @@ export class Store {
     });
   }
 
+  private migrateV8ToV9(): void {
+    this.transaction(() => {
+      this.applyV9();
+      this.db.exec('PRAGMA user_version = 9;');
+    });
+  }
+
+  /**
+   * v8 → v9: the model no longer carries tokens. The candidate object and the report/result versions it
+   * bound are gone; a review/test report records the delivery state the program observed (G3), and a
+   * member of a parallel write step declares the paths it owns. Column checks keep this idempotent, so
+   * re-running a migration (or opening a database created by this revision) is harmless.
+   */
+  private applyV9(): void {
+    this.dropColumn('tasks', 'candidate');
+    this.dropColumn('task_sessions', 'candidateId');
+    this.addColumn('task_sessions', 'writeScope', "TEXT NOT NULL DEFAULT '[]'");
+    this.dropColumn('results', 'candidateId');
+    this.dropColumn('results', 'supersedesResultId');
+    this.addColumn('results', 'deliveryState', 'TEXT');
+  }
+
+  private hasColumn(table: string, column: string): boolean {
+    const row = this.db
+      .prepare(`SELECT COUNT(*) AS present FROM pragma_table_info('${table}') WHERE name = ?`)
+      .get(column) as { present: number };
+    return row.present > 0;
+  }
+
+  private dropColumn(table: string, column: string): void {
+    if (this.hasColumn(table, column)) {
+      this.db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+    }
+  }
+
+  private addColumn(table: string, column: string, ddl: string): void {
+    if (!this.hasColumn(table, column)) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+    }
+  }
+
   private migrate(): void {
     const { userVersion } = this.pragmas();
     if (userVersion === 0) {
       this.transaction(() => {
         this.db.exec(SCHEMA_SQL);
+        this.applyV9();
         this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
       });
     } else if (userVersion === 1) {
@@ -2726,6 +2779,7 @@ export class Store {
       this.migrateV5ToV6();
       this.migrateV6ToV7();
       this.migrateV7ToV8();
+      this.migrateV8ToV9();
     } else if (userVersion === 2) {
       this.migrateV2ToV3();
       this.migrateV3ToV4();
@@ -2733,26 +2787,32 @@ export class Store {
       this.migrateV5ToV6();
       this.migrateV6ToV7();
       this.migrateV7ToV8();
+      this.migrateV8ToV9();
     } else if (userVersion === 3) {
       this.migrateV3ToV4();
       this.migrateV4ToV5();
       this.migrateV5ToV6();
       this.migrateV6ToV7();
       this.migrateV7ToV8();
+      this.migrateV8ToV9();
     } else if (userVersion === 4) {
       this.migrateV4ToV5();
       this.migrateV5ToV6();
       this.migrateV6ToV7();
       this.migrateV7ToV8();
+      this.migrateV8ToV9();
     } else if (userVersion === 5) {
       this.migrateV5ToV6();
       this.migrateV6ToV7();
       this.migrateV7ToV8();
+      this.migrateV8ToV9();
     } else if (userVersion === 6) {
       this.migrateV6ToV7();
       this.migrateV7ToV8();
+      this.migrateV8ToV9();
     } else if (userVersion === 7) {
       this.migrateV7ToV8();
+      this.migrateV8ToV9();
     } else if (userVersion !== SCHEMA_VERSION) {
       throw new StoreError('VERSION_CONFLICT', 'unsupported store schema version', {
         userVersion,
@@ -2917,11 +2977,10 @@ function toResultRow(row: Record<string, unknown>): ResultRow {
     kind: String(row['kind']) as ResultKind,
     summary: String(row['summary']),
     verdict: verdict === 'passed' || verdict === 'failed' || verdict === 'blocked' ? verdict : null,
-    candidateId: nullable(row['candidateId']),
+    deliveryState: parseDeliveryState(row['deliveryState']),
     bodyRef: parseArtifactRef(row['bodyRef']) ?? { storage: 'server', path: '', sha256: '' },
     basisRefs: parseStringList(row['basisRefs']),
     checks: Array.isArray(checks) ? (checks as ResultCheck[]) : [],
-    supersedesResultId: nullable(row['supersedesResultId']),
     settlement: parseJsonOrNull(row['settlement']),
     createdAt: String(row['createdAt']),
   };
@@ -2940,7 +2999,7 @@ function toTaskSessionRow(row: Record<string, unknown>): TaskSessionRow {
     refs: parseStringList(row['refs']),
     dependencies: parseStringList(row['dependencies']),
     expectedKind: String(row['expectedKind']),
-    candidateId: nullable(row['candidateId']),
+    writeScope: parseStringList(row['writeScope']),
     workspaceRef: nullable(row['workspaceRef']),
     currentInputId: nullable(row['currentInputId']),
   };
@@ -2970,9 +3029,19 @@ function toTaskRow(row: Record<string, unknown>): TaskRow {
     nextStep: nullable(row['nextStep']),
     blockReason: nullable(row['blockReason']),
     completionResultId: nullable(row['completionResultId']),
-    candidate: parseJsonOrNull(row['candidate']),
     sourceInputId: String(row['sourceInputId']),
     createdAt: String(row['createdAt']),
     updatedAt: String(row['updatedAt']),
   };
+}
+function parseDeliveryState(value: unknown): DeliveryState | null {
+  const parsed = parseJsonOrNull(value);
+  if (typeof parsed !== 'object' || parsed === null) {
+    return null;
+  }
+  const record = parsed as { digest?: unknown; paths?: unknown };
+  if (typeof record.digest !== 'string' || !Array.isArray(record.paths)) {
+    return null;
+  }
+  return { digest: record.digest, paths: record.paths.filter((path): path is string => typeof path === 'string') };
 }

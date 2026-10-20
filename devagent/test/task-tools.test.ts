@@ -1,9 +1,9 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../src/store/store.ts';
-import { createChiefTaskTools, createTaskGetTool, type DomainTool, type TaskToolContext } from '../src/tools/task-tools.ts';
+import { createTaskGetTool, createTaskTool, type DomainTool, type TaskToolContext } from '../src/tools/task-tools.ts';
 
 const dirs: string[] = [];
 const stores: Store[] = [];
@@ -51,19 +51,22 @@ function world(options: { projectId?: string; sessionId?: string } = {}): World 
     payload: { content: [{ type: 'text', text: 'go ahead' }] },
   });
   const serverWorkDir = join(root, 'work');
-  const tools = createChiefTaskTools((): TaskToolContext => {
-    const currentTaskId = store.getSession(sessionId)?.currentTaskId;
-    return {
-      store,
-      sessionId,
-      projectId,
-      cwd,
-      roleId: 'chief',
-      inputId: state.inputId,
-      serverWorkDir,
-      ...(currentTaskId != null ? { currentTaskId } : {}),
-    };
-  });
+  const tool = createTaskTool(
+    (): TaskToolContext => {
+      const currentTaskId = store.getSession(sessionId)?.currentTaskId;
+      return {
+        store,
+        sessionId,
+        projectId,
+        cwd,
+        roleId: 'chief',
+        inputId: state.inputId,
+        serverWorkDir,
+        ...(currentTaskId != null ? { currentTaskId } : {}),
+      };
+    },
+    { chief: true },
+  );
   return {
     store,
     root,
@@ -71,27 +74,24 @@ function world(options: { projectId?: string; sessionId?: string } = {}): World 
     sessionId,
     projectId,
     serverWorkDir,
-    tools,
+    tools: [tool],
     setInput: (inputId) => {
       state.inputId = inputId;
     },
   };
 }
 
-function tool(tools: readonly DomainTool[], name: string): DomainTool {
-  const found = tools.find((entry) => entry.name === name);
+function tool(tools: readonly DomainTool[]): DomainTool {
+  const found = tools[0];
   if (found === undefined) {
-    throw new Error(`tool ${name} is not registered`);
+    throw new Error('the tool is not registered');
   }
   return found;
 }
 
-function chiefTool(w: World, name: string): DomainTool {
-  return tool(w.tools, name);
-}
-
 function createArgs(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
+    op: 'create',
     type: 'write',
     goal: 'reset password',
     scope: 'account module',
@@ -102,25 +102,27 @@ function createArgs(overrides: Record<string, unknown> = {}): Record<string, unk
   };
 }
 
-describe('createTask tool', () => {
+describe('task create', () => {
   it('creates the Task, writes the plan and records the calling input', async () => {
     const w = world();
     w.setInput('i-7');
 
-    const result = await chiefTool(w, 'createTask').execute('call-1', createArgs());
+    const result = await tool(w.tools).execute('call-1', createArgs());
 
     expect(result.isError).toBe(false);
     expect(result.details['planState']).toBe('saved');
     const task = w.store.listTasks(w.projectId)[0];
     expect(task?.sourceInputId).toBe('i-7');
     expect(readFileSync(task?.planRef?.path ?? '', 'utf8')).toBe('# original plan\n');
+    // The model-facing result carries no revision: the host owns that bookkeeping.
+    expect(result.details['revision']).toBeUndefined();
   });
 
   it('leaves no plan file or receipt behind when the Task cannot be created', async () => {
     const w = world();
-    await chiefTool(w, 'createTask').execute('call-1', createArgs());
+    await tool(w.tools).execute('call-1', createArgs());
 
-    const refused = await chiefTool(w, 'createTask').execute('call-2', createArgs({ goal: 'second' }));
+    const refused = await tool(w.tools).execute('call-2', createArgs({ goal: 'second' }));
 
     expect(refused.isError).toBe(true);
     expect(refused.details['code']).toBe('WORKSPACE_BUSY');
@@ -134,36 +136,38 @@ describe('createTask tool', () => {
   });
 });
 
-describe('updateTask tool', () => {
-  it('does not touch the plan when the revision is stale', async () => {
+describe('task update', () => {
+  it('refuses to overwrite a Plan edited outside the tool and returns the current text', async () => {
     const w = world();
-    await chiefTool(w, 'createTask').execute('call-1', createArgs());
+    await tool(w.tools).execute('call-1', createArgs());
     const task = w.store.listTasks(w.projectId)[0];
     const planPath = task?.planRef?.path ?? '';
+    // A person edits the Plan file: the recorded digest no longer matches what is on disk.
+    writeFileSync(planPath, '# hand edit\n', 'utf8');
 
-    const stale = await chiefTool(w, 'updateTask').execute('call-2', {
+    const stale = await tool(w.tools).execute('call-2', {
+      op: 'update',
       taskId: task?.id,
-      expectedRevision: 99,
       changes: { planMarkdown: '# STALE WRITER\n' },
     });
 
     expect(stale.isError).toBe(true);
     expect(stale.details['code']).toBe('VERSION_CONFLICT');
-    expect(readFileSync(planPath, 'utf8')).toBe('# original plan\n');
-    expect(w.store.getTask(task?.id ?? '')?.revision).toBe(1);
+    expect(stale.details['currentText']).toBe('# hand edit\n');
+    expect(readFileSync(planPath, 'utf8')).toBe('# hand edit\n');
   });
 
-  it('starts the next step and rewrites the plan at the current revision', async () => {
+  it('starts the next step and rewrites the plan from the recorded version', async () => {
     const w = world();
-    await chiefTool(w, 'createTask').execute('call-1', createArgs());
+    await tool(w.tools).execute('call-1', createArgs());
     const task = w.store.listTasks(w.projectId)[0];
 
-    const updated = await chiefTool(w, 'updateTask').execute('call-2', {
+    const updated = await tool(w.tools).execute('call-2', {
+      op: 'update',
       taskId: task?.id,
-      expectedRevision: 1,
       phase: 'develop',
       summary: 'plan fixed',
-      changes: { planMarkdown: '# revised plan\n', expectedPlanVersion: task?.planRef?.sha256 },
+      changes: { planMarkdown: '# revised plan\n' },
     });
 
     expect(updated.isError).toBe(false);
@@ -172,41 +176,25 @@ describe('updateTask tool', () => {
     expect(readFileSync(task?.planRef?.path ?? '', 'utf8')).toBe('# revised plan\n');
   });
 
-  it('refuses a revision that no longer matches the file on disk', async () => {
-    const w = world();
-    await chiefTool(w, 'createTask').execute('call-1', createArgs());
-    const task = w.store.listTasks(w.projectId)[0];
-
-    const mismatch = await chiefTool(w, 'updateTask').execute('call-2', {
-      taskId: task?.id,
-      expectedRevision: 1,
-      changes: { planMarkdown: '# revised\n', expectedPlanVersion: 'not-the-current-version' },
-    });
-
-    expect(mismatch.isError).toBe(true);
-    expect(mismatch.details['code']).toBe('VERSION_CONFLICT');
-  });
-
   it('refuses a Task coordinated by another session', async () => {
     const w = world();
-    await chiefTool(w, 'createTask').execute('call-1', createArgs());
+    await tool(w.tools).execute('call-1', createArgs());
     const task = w.store.listTasks(w.projectId)[0];
     w.store.createSession({ id: 'c-2', projectId: w.projectId, roleId: 'chief', cwd: w.cwd });
-    const secondChief = createChiefTaskTools(() => ({
-      store: w.store,
-      sessionId: 'c-2',
-      projectId: w.projectId,
-      cwd: w.cwd,
-      roleId: 'chief',
-      inputId: 'i-9',
-      serverWorkDir: w.serverWorkDir,
-    }));
+    const secondChief = createTaskTool(
+      () => ({
+        store: w.store,
+        sessionId: 'c-2',
+        projectId: w.projectId,
+        cwd: w.cwd,
+        roleId: 'chief',
+        inputId: 'i-9',
+        serverWorkDir: w.serverWorkDir,
+      }),
+      { chief: true },
+    );
 
-    const result = await tool(secondChief, 'updateTask').execute('call-2', {
-      taskId: task?.id,
-      expectedRevision: 1,
-      phase: 'develop',
-    });
+    const result = await secondChief.execute('call-2', { op: 'update', taskId: task?.id, phase: 'develop' });
 
     expect(result.isError).toBe(true);
     expect(result.details['code']).toBe('FORBIDDEN');
@@ -214,12 +202,12 @@ describe('updateTask tool', () => {
   });
 });
 
-describe('task.get tool', () => {
+describe('task get', () => {
   it('resolves the current Task without an id and reports the plan text', async () => {
     const w = world();
-    await chiefTool(w, 'createTask').execute('call-1', createArgs());
+    await tool(w.tools).execute('call-1', createArgs());
 
-    const read = await chiefTool(w, 'task').execute('call-2', {});
+    const read = await tool(w.tools).execute('call-2', { op: 'get' });
 
     expect(read.isError).toBe(false);
     const task = read.details['task'] as { taskId?: string };
@@ -231,7 +219,7 @@ describe('task.get tool', () => {
   it('says so when the session has no Task yet', async () => {
     const w = world();
 
-    const read = await chiefTool(w, 'task').execute('call-1', {});
+    const read = await tool(w.tools).execute('call-1', { op: 'get' });
 
     expect(read.isError).toBe(true);
     expect(read.details['code']).toBe('NOT_FOUND');
@@ -239,7 +227,7 @@ describe('task.get tool', () => {
 
   it('does not expose another project through a specialist reader', async () => {
     const owner = world();
-    await tool(owner.tools, 'createTask').execute('call-1', createArgs());
+    await tool(owner.tools).execute('call-1', createArgs());
     const task = owner.store.listTasks(owner.projectId)[0];
 
     const stranger = world({ projectId: 'p-2', sessionId: 'c-9' });
@@ -254,9 +242,17 @@ describe('task.get tool', () => {
       serverWorkDir: stranger.serverWorkDir,
     }));
 
-    const read = await reader.execute('call-2', { taskId: task?.id });
+    const read = await reader.execute('call-2', { op: 'get', taskId: task?.id });
 
     expect(read.isError).toBe(true);
     expect(read.details['code']).toBe('NOT_FOUND');
+  });
+
+  it('offers a specialist only the get operation', () => {
+    const reader = createTaskGetTool(() => {
+      throw new Error('the schema check does not execute the tool');
+    });
+    const op = reader.parameters['properties'] as Record<string, { enum?: string[] }>;
+    expect(op['op']?.enum).toEqual(['get']);
   });
 });

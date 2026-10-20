@@ -69,13 +69,15 @@ describe('role tool sets', () => {
     expect(toolSetFor('chief', 'read').allowlist).not.toContain('agent_report');
   });
 
-  it('only the chief carries the four core task tools', () => {
-    const chief = toolSetFor('chief', 'read').allowlist;
-    for (const tool of ['createTask', 'updateTask', 'createTaskSessions', 'endTask']) {
-      expect(chief).toContain(tool);
-      for (const roleId of ROLE_IDS.filter((id) => id !== 'chief')) {
-        expect(toolSetFor(roleId, 'write').allowlist).not.toContain(tool);
-      }
+  it('gives every role the one task tool and the chief alone the project task surface', () => {
+    const chief = toolSetFor('chief', 'write').allowlist;
+    expect(chief).toEqual(expect.arrayContaining(['task', 'requirement', 'project']));
+    for (const roleId of ROLE_IDS) {
+      // Every member reads its own Task through the same tool; only the chief may act on it.
+      expect(toolSetFor(roleId, 'write').allowlist).toContain('task');
+    }
+    for (const roleId of ROLE_IDS.filter((id) => id !== 'chief')) {
+      expect(toolSetFor(roleId, 'write').allowlist).not.toContain('project');
     }
   });
 
@@ -91,12 +93,12 @@ describe('role tool sets', () => {
     const designerWrite = toolSetFor('designer', 'write');
     expect(designerWrite.denied).not.toContain('write');
     expect(designerWrite.denied).not.toContain('requirement');
-    expect(designerWrite.denied).toEqual(expect.arrayContaining(['createTask', 'endTask', 'bash']));
+    expect(designerWrite.denied).toEqual(expect.arrayContaining(['project', 'bash']));
 
     // A reviewer must never be handed the chief's task tools, even through a host union.
     const reviewerWrite = toolSetFor('reviewer', 'write');
     expect(reviewerWrite.denied).toEqual(
-      expect.arrayContaining(['write', 'edit', 'bash', 'createTask', 'requirement', 'project']),
+      expect.arrayContaining(['write', 'edit', 'bash', 'requirement', 'project']),
     );
     expect(reviewerWrite.denied).not.toContain('agent_report');
 
@@ -112,13 +114,13 @@ describe('role tool sets', () => {
   });
 });
 describe('chief task tools · recovery path', () => {
-  it('the chief allowlist carries every host-registered domain tool (reconcile included)', () => {
+  it('the chief allowlist carries every host-registered domain tool (recovery included)', () => {
     // Every registered domain tool must be callable by at least one role; a registered-but-
     // unlisted tool would otherwise reach every role through the host union (or none at all).
     for (const name of DOMAIN_TOOL_NAMES) {
       const inSomeRole = toolSetMatrix().some((entry) => entry.allowlist.includes(name));
       expect(inSomeRole, `${name} is registered but no role may call it`).toBe(true);
     }
-    expect(toolSetFor('chief', 'write').allowlist).toContain('reconcile');
+    expect(toolSetFor('chief', 'write').allowlist).toContain('task');
   });
 });

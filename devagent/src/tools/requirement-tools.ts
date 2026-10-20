@@ -30,6 +30,8 @@ export interface RequirementToolContext {
   readonly projectId: string;
   readonly cwd: string;
   readonly roleId: string;
+  /** Which session's reads the save check remembers. */
+  readonly sessionId: string;
 }
 
 /** Only the roles that own product/technical writing may create or revise a record (G1). */
@@ -38,6 +40,17 @@ const SAVE_ROLES = new Set(['chief', 'designer', 'settler']);
 export type RequirementToolContextResolver = () => RequirementToolContext;
 
 const MAX_LIMIT = 100;
+
+/**
+ * What this session last saw of each record (digest of the file text). The model carries no version:
+ * a save may only replace the content that was actually read, and a file changed by someone else is
+ * returned instead of being overwritten.
+ */
+const lastRead = new Map<string, string>();
+
+function readKey(context: RequirementToolContext, id: string): string {
+  return `${context.cwd}\0${context.sessionId}\0${id}`;
+}
 
 export function createRequirementTool(contextOf: RequirementToolContextResolver): DomainTool {
   return {
@@ -51,7 +64,7 @@ export function createRequirementTool(contextOf: RequirementToolContextResolver)
       'A proposal needs title, status and a free `body` (目标/来源与决定/处理记录 recommended).',
       `status: proposal ${STATUSES.proposal.join('/')}; implementation ${STATUSES.implementation.join('/')}.`,
       `Optional lists: modules (existing project-relative markdown files), sourceRequirementIds, linkedTaskIds.`,
-      'get returns the version and, for an implementation record, its current sections; revise by passing changed values with that exact version (expectedVersion null only creates).',
+      'get returns the current metadata and sections; revise after reading it. The program refuses to replace content this session has not read or that changed since it was read, and returns the current text.',
     ].join('\n'),
     parameters: {
       type: 'object',
@@ -61,7 +74,6 @@ export function createRequirementTool(contextOf: RequirementToolContextResolver)
         status: { type: 'string', description: 'record status; valid values depend on kind' },
         title: { type: 'string', description: 'the record title (non-empty)' },
         requirementId: { type: 'string', description: 'stable id, equal to the file name (e.g. req-password-reset)' },
-        expectedVersion: { type: ['string', 'null'], description: 'the version op=get returned, or null to create a new record' },
         sections: {
           type: 'object',
           description: 'implementation records only: content per required heading, keyed by the heading (each entry a non-empty Markdown string)',
@@ -101,13 +113,13 @@ export function createRequirementTool(contextOf: RequirementToolContextResolver)
           return fail('NOT_FOUND', `requirement ${id} does not exist`, { requirementId: id });
         }
         const parsed = found.parsed;
+        lastRead.set(readKey(context, id), found.version);
         return ok(
           parsed.ok
             ? `Requirement ${id} (${parsed.record.metadata.kind}, ${parsed.record.metadata.status})`
             : `Requirement ${id} exists but is not valid`,
           {
             requirementId: id,
-            version: found.version,
             path: requirementPath(context.cwd, id),
             text: found.text,
             ...(parsed.ok
@@ -269,15 +281,8 @@ function saveOp(
   params: Record<string, unknown>,
 ): ReturnType<typeof ok> | ReturnType<typeof fail> {
   const id = readString(params, 'requirementId');
-  const rawExpectedVersion = params['expectedVersion'];
-  // Models routinely send the STRING "null" for a nullable field: treat it as null instead of
-  // comparing it against a real file version.
-  const expectedVersion = rawExpectedVersion === 'null' || rawExpectedVersion === undefined ? null : rawExpectedVersion;
   if (id === undefined) {
     return fail('INVALID_ARGUMENT', 'save needs requirementId');
-  }
-  if (expectedVersion !== null && typeof expectedVersion !== 'string') {
-    return fail('INVALID_ARGUMENT', 'expectedVersion must be null (new record) or the version get returned');
   }
   if (!SAVE_ROLES.has(context.roleId)) {
     return fail('FORBIDDEN', `role ${context.roleId} may read requirements but not save them`);
@@ -287,6 +292,21 @@ function saveOp(
     return fail('INVALID_ARGUMENT', `authorizationRef: ${authorization.message}`);
   }
   const existing = getRequirement(context.cwd, id);
+  if (existing.found) {
+    const seen = lastRead.get(readKey(context, id));
+    if (seen === undefined) {
+      return fail('VERSION_CONFLICT', `read requirement ${id} before saving it`, {
+        requirementId: id,
+        currentText: existing.text,
+      });
+    }
+    if (seen !== existing.version) {
+      return fail('VERSION_CONFLICT', `requirement ${id} changed since it was read; read it again before saving`, {
+        requirementId: id,
+        currentText: existing.text,
+      });
+    }
+  }
   const existingKind = existing.found && existing.parsed.ok ? existing.parsed.record.metadata.kind : undefined;
   const declaredKind = readString(params, 'kind') ?? existingKind;
   if (declaredKind !== 'proposal' && declaredKind !== 'implementation') {
@@ -368,7 +388,8 @@ function saveOp(
     const saved = saveRequirement({
       cwd: context.cwd,
       id,
-      expectedVersion: expectedVersion as string | null,
+      // The program passes the version it just verified, so a race with an external edit still fails.
+      expectedVersion: existing.found ? existing.version : null,
       markdown: draft.markdown,
     });
     if (!saved.ok) {
@@ -377,6 +398,7 @@ function saveOp(
         ...(saved.issues !== undefined ? { issues: saved.issues } : {}),
       });
     }
+    lastRead.set(readKey(context, id), saved.version);
     const consistency = consistencyOf(context, id, declaredKind, status.trim());
     const implementationTasks = implementationTasksOf(context, id);
     return ok(
@@ -388,7 +410,6 @@ function saveOp(
       {
       requirementId: id,
       path: saved.path,
-      version: saved.version,
       reused: saved.reused,
       savedAt: now,
       ...(consistency.pendingCheck.length > 0 ? { pendingCheck: consistency.pendingCheck } : {}),

@@ -30,16 +30,11 @@ import { InteractionBridge, createUiAdapter } from './interactions.ts';
 import { createQuestionTool } from '../tools/question-tool.ts';
 import { createPrivatePathGuard } from './tool-guard.ts';
 import { toolSetFor } from './tool-sets.ts';
-import { asToolDefinitions, createChiefTaskTools, createTaskGetTool, type TaskToolContext } from '../tools/task-tools.ts';
+import { asToolDefinitions, createTaskGetTool, createTaskTool, type TaskToolContext } from '../tools/task-tools.ts';
 import { createReportTool, type ReportToolContext } from '../tools/report-tools.ts';
 import { createRequirementTool, type RequirementToolContext } from '../tools/requirement-tools.ts';
 import { createProjectTool, type ProjectToolContext } from '../tools/project-tools.ts';
-import {
-  createTaskSessionsTool,
-  type DelegationReturn,
-  type DelegationToolContext,
-  type MemberState,
-} from '../tools/delegation-tools.ts';
+import type { DelegationReturn, MemberState } from '../tools/delegation-tools.ts';
 
 export interface InputCheckpoint {
   readonly piFile: string;
@@ -272,6 +267,7 @@ const serverWorkDir = join(config.agentDir, 'work');
         projectId: session.projectId,
         cwd: session.cwd,
         roleId: session.roleId,
+        sessionId,
       });
       const requirementTools = ['chief', 'designer', 'settler', 'developer'].includes(session.roleId)
         ? [createRequirementTool(requirementContext)]
@@ -293,7 +289,7 @@ const serverWorkDir = join(config.agentDir, 'work');
       const domainTools = asToolDefinitions(
         session.roleId === 'chief'
           ? [
-              createTaskSessionsTool((): DelegationToolContext => ({
+              createTaskTool((): TaskToolContext => ({
                 ...contextOf(),
                 host: {
                   dispatch: async (memberSessionId: string) => {
@@ -301,8 +297,7 @@ const serverWorkDir = join(config.agentDir, 'work');
                   },
                   settleStep: (taskId: string, timeoutMs: number) => this.settleStep(taskId, timeoutMs),
                 },
-              })),
-              ...createChiefTaskTools(contextOf),
+              }), { chief: true }),
               ...requirementTools,
               ...projectTools,
             ]
@@ -312,6 +307,7 @@ const serverWorkDir = join(config.agentDir, 'work');
               // Every professional member delivers its result through the same formal report.
               createReportTool((): ReportToolContext => ({
                 store: this.options.store,
+                projectId: session.projectId,
                 sessionId,
                 inputId: this.liveRuns.get(sessionId)?.inputId ?? input.inputId,
                 roleId: session.roleId,
@@ -527,7 +523,6 @@ const serverWorkDir = join(config.agentDir, 'work');
    */
   async controlTask(params: {
     taskId: string;
-    expectedRevision: number;
     command: 'pause' | 'resume' | 'cancel';
   }): Promise<TaskRow> {
     const intent = this.options.store.controlTask(params);

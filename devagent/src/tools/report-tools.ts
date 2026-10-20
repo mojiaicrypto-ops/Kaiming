@@ -1,13 +1,17 @@
 /**
  * Formal report tool (P3-e): `agent_report` is how a professional member delivers its result.
  *
- * The host fixes identity (actor, Task, source input, role) and the member only says what it
- * delivered: the kind, a summary, the body and the checks it really ran. The body is written and
- * read back before the row is recorded, a report is never overwritten (a revision is a new result
- * that supersedes the old one), and the kind must be the one the chief asked this member for.
+ * The host fixes identity (actor, Task, source input, role) and the kind this member must deliver
+ * (fixed at dispatch); the member only says what it really did: a summary, the body and the checks it
+ * ran. The body is written and read back before the row is recorded. For a review or test, the program
+ * also observes the delivery the report is about (G3) — the model never names a candidate or a version.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { RESULT_KINDS, StoreError, digestOf, type ArtifactRef, type ResultCheck, type ResultKind, type Store } from '../store/store.ts';
+import { digestOfPaths, snapshotDelivery, type DeliveryState } from '../runtime/deliverable.ts';
 import { digestOfText } from '../runtime/plan-store.ts';
+import { knowledgeEntryPaths } from '../runtime/project-store.ts';
 import { readReportBody, reportRefFor, reportTarget, writeReportBody } from '../runtime/report-store.ts';
 import { asRecord, fail, messageOf, ok, readString, readStringArray } from './tool-kit.ts';
 import type { DomainTool } from './task-tools.ts';
@@ -15,6 +19,7 @@ import type { DomainTool } from './task-tools.ts';
 export interface ReportToolContext {
   readonly store: Store;
   readonly sessionId: string;
+  readonly projectId: string;
   readonly inputId: string;
   readonly roleId: string;
   readonly cwd: string;
@@ -23,34 +28,23 @@ export interface ReportToolContext {
 
 export type ReportToolContextResolver = () => ReportToolContext;
 
-
-
 const CHECK_STATUSES = ['passed', 'failed', 'blocked', 'not_run'] as const;
 
 export function createReportTool(contextOf: ReportToolContextResolver): DomainTool {
   return {
     name: 'agent_report',
     label: 'agent_report',
-    description:
-      'Deliver the formal result of this work: kind, summary, body or reportRef, basisRefs, verdict, checks.',
+    description: [
+      'Deliver the formal result this step asked you for (its kind is fixed by the dispatch): summary, body, checks.',
+      'body is the complete user-visible text; the program stores it and records the delivery state for review/test.',
+      'Review and test need a verdict. Use it to report a blocked conclusion that needs the supervisor.',
+    ].join('\n'),
     parameters: {
       type: 'object',
       properties: {
-        kind: { type: 'string', enum: [...RESULT_KINDS] },
         summary: { type: 'string' },
         body: { type: 'string' },
-        reportRef: {
-          type: 'object',
-          properties: {
-            storage: { type: 'string', enum: ['project', 'server'] },
-            path: { type: 'string' },
-            sha256: { type: 'string' },
-          },
-          required: ['storage', 'path', 'sha256'],
-          additionalProperties: false,
-        },
         basisRefs: { type: 'array', items: { type: 'string' } },
-        candidateId: { type: 'string' },
         verdict: { type: 'string', enum: ['passed', 'failed', 'blocked'] },
         checks: {
           type: 'array',
@@ -68,10 +62,9 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
             additionalProperties: false,
           },
         },
-        supersedesResultId: { type: 'string' },
         settlement: { type: 'object' },
       },
-      required: ['kind', 'summary'],
+      required: ['summary', 'body'],
       additionalProperties: false,
     },
     async execute(_toolCallId, rawParams) {
@@ -80,21 +73,13 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
       if (params === undefined) {
         return fail('INVALID_ARGUMENT', 'params must be an object');
       }
-      const kind = readString(params, 'kind');
       const summary = readString(params, 'summary');
-      if (kind === undefined || !RESULT_KINDS.includes(kind as ResultKind)) {
-        return fail('INVALID_ARGUMENT', `kind must be one of ${RESULT_KINDS.join(', ')}`);
-      }
+      const body = readString(params, 'body');
       if (summary === undefined || summary.trim() === '') {
         return fail('INVALID_ARGUMENT', 'summary must be a non-empty string');
       }
-      const body = readString(params, 'body');
-      const reportRef = parseRef(params['reportRef']);
-      if ((body === undefined) === (reportRef === undefined)) {
-        return fail('INVALID_ARGUMENT', 'provide exactly one of body or reportRef');
-      }
-      if (params['reportRef'] !== undefined && reportRef === undefined) {
-        return fail('INVALID_ARGUMENT', 'reportRef needs storage, path and sha256');
+      if (body === undefined || body.trim() === '') {
+        return fail('INVALID_ARGUMENT', 'body must be the complete report text (non-empty)');
       }
       const checks = parseChecks(params['checks']);
       if (checks === undefined) {
@@ -118,12 +103,19 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
           inputId: context.inputId,
         });
       }
-      if (member.expectedKind !== kind) {
-        return fail('INVALID_ARGUMENT', `this member was asked for a ${member.expectedKind} report`, {
-          expected: member.expectedKind,
-          kind,
-        });
+      // The kind is what the supervisor asked for, not what the member decides.
+      const kind = member.expectedKind as ResultKind;
+      if (!RESULT_KINDS.includes(kind)) {
+        return fail('INVALID_ARGUMENT', `this member was asked for an unknown report kind (${member.expectedKind})`);
       }
+      if ((kind === 'review' || kind === 'test') && verdictRaw === undefined) {
+        return fail('INVALID_ARGUMENT', `a ${kind} report needs a verdict`);
+      }
+
+      // Delivery binding (G3): observed by the program now, never supplied by the model. A test is
+      // measured over the very files the last passed review covered, so the two are comparable even
+      // when the test run itself leaves new artifacts behind.
+      const delivery = observeDelivery(context, task.id, kind);
 
       // The id is derived from every field the report carries, so a retry of the very same report maps
       // to the same result while two different reports of one input can never collide.
@@ -134,49 +126,50 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
           context.inputId,
           kind,
           digestOfText(summary),
-          body !== undefined
-            ? `body:${digestOfText(body)}`
-            : `ref:${reportRef?.storage ?? ''}:${reportRef?.path ?? ''}:${reportRef?.sha256 ?? ''}`,
+          `body:${digestOfText(body)}`,
           `verdict:${verdictRaw ?? ''}`,
-          `candidate:${readString(params, 'candidateId') ?? ''}`,
           `checks:${digestOf(checks)}`,
           `basis:${digestOf(readStringArray(params, 'basisRefs') ?? [])}`,
-          `supersedes:${readString(params, 'supersedesResultId') ?? ''}`,
+          `delivery:${delivery?.digest ?? ''}`,
           `settlement:${digestOf(params['settlement'] ?? null)}`,
         ].join('|'),
       ).slice(0, 16)}`;
-      let bodyRef: ArtifactRef;
-      if (reportRef !== undefined) {
-        const existing = readReportBody(reportRef);
-        if (!existing.current) {
-          return fail('VERSION_CONFLICT', 'the referenced report body is missing or changed', {
-            path: reportRef.path,
-            expected: reportRef.sha256,
-          });
+
+      const target = reportTarget({
+        taskType: task.type,
+        cwd: context.cwd,
+        serverWorkDir: context.serverWorkDir,
+        taskId: task.id,
+        sessionId: context.sessionId,
+        kind,
+        resultId,
+      });
+      // A settlement body is committed before it is registered (D-07), so its path is predictable and
+      // the bytes already on disk must be exactly the body being submitted.
+      if (kind === 'settlement') {
+        const existing = readFileIfPresent(target.path);
+        if (existing !== undefined && existing !== body) {
+          return fail(
+            'VERSION_CONFLICT',
+            'a settlement report file already exists with different content; commit the body you submit',
+            { path: target.path },
+          );
         }
-        bodyRef = reportRef;
-      } else {
-        const target = reportTarget({
-          taskType: task.type,
-          cwd: context.cwd,
-          serverWorkDir: context.serverWorkDir,
-          taskId: task.id,
-          sessionId: context.sessionId,
-          resultId,
+      }
+      const bodyRef: ArtifactRef = reportRefFor(target, body);
+      try {
+        if (readFileIfPresent(target.path) !== body) {
+          writeReportBody(target, body);
+        }
+      } catch (error) {
+        return fail('STORAGE_UNAVAILABLE', `the report body could not be saved: ${messageOf(error)}`, {
+          path: target.path,
         });
-        bodyRef = reportRefFor(target, body ?? '');
-        try {
-          writeReportBody(target, body ?? '');
-        } catch (error) {
-          return fail('STORAGE_UNAVAILABLE', `the report body could not be saved: ${messageOf(error)}`, {
-            path: target.path,
-          });
-        }
-        if (!readReportBody(bodyRef).current) {
-          return fail('STORAGE_UNAVAILABLE', 'the saved report body does not read back as written', {
-            path: target.path,
-          });
-        }
+      }
+      if (!readReportBody(bodyRef).current) {
+        return fail('STORAGE_UNAVAILABLE', 'the saved report body does not read back as written', {
+          path: target.path,
+        });
       }
 
       try {
@@ -186,18 +179,13 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
           sessionId: context.sessionId,
           inputId: context.inputId,
           roleId: context.roleId,
-          kind: kind as ResultKind,
+          kind,
           summary,
           ...(verdictRaw !== undefined ? { verdict: verdictRaw } : {}),
-          ...(readString(params, 'candidateId') !== undefined
-            ? { candidateId: readString(params, 'candidateId') as string }
-            : {}),
+          ...(delivery !== null ? { deliveryState: delivery } : {}),
           bodyRef,
           basisRefs: readStringArray(params, 'basisRefs') ?? [],
           checks,
-          ...(readString(params, 'supersedesResultId') !== undefined
-            ? { supersedesResultId: readString(params, 'supersedesResultId') as string }
-            : {}),
           ...(params['settlement'] !== undefined ? { settlement: params['settlement'] } : {}),
         });
         return ok(`Report ${recorded.resultId} (${recorded.kind}) recorded for Task ${recorded.taskId}`, {
@@ -206,12 +194,15 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
           kind: recorded.kind,
           verdict: recorded.verdict,
           reportRef: recorded.bodyRef,
+          ...(recorded.deliveryState !== null
+            ? { delivery: { digest: recorded.deliveryState.digest, files: recorded.deliveryState.paths.length } }
+            : {}),
         });
       } catch (error) {
         // A retry of the very same report is not a new result: report the already-recorded one.
         if (error instanceof StoreError && error.code === 'REQUEST_CONFLICT') {
           const existing = context.store.getResult(resultId);
-          if (existing !== undefined && existing.bodyRef.sha256 === bodyRef.sha256) {
+          if (existing !== undefined) {
             return ok(`Report ${existing.resultId} (${existing.kind}) was already recorded`, {
               resultId: existing.resultId,
               taskId: existing.taskId,
@@ -228,18 +219,36 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
   };
 }
 
-function parseRef(value: unknown): ArtifactRef | undefined {
-  const record = asRecord(value);
-  if (record === undefined) {
+/**
+ * What the report is evidence about: the project files the delivery covers. Knowledge entries (the
+ * settlement legitimately rewrites them) and host bookkeeping are left out.
+ */
+function observeDelivery(context: ReportToolContext, taskId: string, kind: ResultKind): DeliveryState | null {
+  if (kind !== 'review' && kind !== 'test') {
+    return null;
+  }
+  const project = context.store.getProject(context.projectId);
+  const knowledge = knowledgeEntryPaths(project?.initializationRef).map((path) => join(context.cwd, path));
+  if (kind === 'test') {
+    // The same file set the last passed review covered, so the digests are directly comparable.
+    const review = context.store
+      .listTaskResults(taskId)
+      .filter((result) => result.kind === 'review' && result.verdict === 'passed')
+      .at(-1);
+    if (review?.deliveryState != null) {
+      const paths = review.deliveryState.paths;
+      return { digest: digestOfPaths(context.cwd, paths), paths };
+    }
+  }
+  return snapshotDelivery(context.cwd, knowledge);
+}
+
+function readFileIfPresent(path: string): string | undefined {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
     return undefined;
   }
-  const storage = record['storage'];
-  const path = record['path'];
-  const sha256 = record['sha256'];
-  if ((storage !== 'project' && storage !== 'server') || typeof path !== 'string' || typeof sha256 !== 'string') {
-    return undefined;
-  }
-  return { storage, path, sha256 };
 }
 
 /** Strict check parsing: a check the program cannot read is refused, never stored as prose. */
@@ -257,14 +266,17 @@ function parseChecks(value: unknown): ResultCheck[] | undefined {
       return undefined;
     }
     const name = readString(record, 'name');
-    const status = record['status'];
-    if (name === undefined || !CHECK_STATUSES.includes(status as (typeof CHECK_STATUSES)[number])) {
+    const status = readString(record, 'status');
+    if (name === undefined || status === undefined || !CHECK_STATUSES.includes(status as (typeof CHECK_STATUSES)[number])) {
       return undefined;
     }
     const command = readString(record, 'command');
+    const exitCode = record['exitCode'];
     const reason = readString(record, 'reason');
     const evidenceRefs = readStringArray(record, 'evidenceRefs');
-    const exitCode = record['exitCode'];
+    if (exitCode !== undefined && typeof exitCode !== 'number') {
+      return undefined;
+    }
     checks.push({
       name,
       status: status as ResultCheck['status'],

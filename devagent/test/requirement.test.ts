@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../src/store/store.ts';
 import { createRequirementTool, type RequirementToolContext } from '../src/tools/requirement-tools.ts';
-import { createChiefTaskTools, type TaskToolContext } from '../src/tools/task-tools.ts';
+import { createTaskTool, type TaskToolContext } from '../src/tools/task-tools.ts';
 import { IMPLEMENTATION_SECTIONS, parseRequirement, requirementPath } from '../src/runtime/requirement-store.ts';
 
 const dirs: string[] = [];
@@ -55,6 +55,7 @@ function fixture(): Fixture {
         projectId: 'p-1',
         cwd,
         roleId: state.roleId,
+        sessionId: 'c-1',
       }),
     ),
     setRole: (roleId) => {
@@ -116,7 +117,6 @@ describe('requirement save decisions', () => {
     f.tool.execute('c1', {
       op: 'save',
       requirementId: 'req-reset',
-      expectedVersion: null,
       ...proposalFields(),
       authorizationRef,
     });
@@ -162,12 +162,11 @@ describe('requirement save decisions', () => {
     foreign.store.createProject({ id: 'p-2', realPath: join(foreign.cwd, 'other') });
     const foreignRevision = ask(foreign, 'confirm');
     foreign.store.resolveInteraction({ interactionId: 'q-1', expectedRevision: foreignRevision, response: true, answeredBy: 'user', requestKey: 'q-1' });
-    const context = { store: foreign.store, projectId: 'p-2', cwd: foreign.cwd, roleId: 'chief' };
+    const context = { store: foreign.store, projectId: 'p-2', cwd: foreign.cwd, roleId: 'chief', sessionId: 'c-1' };
     const tool = createRequirementTool((): RequirementToolContext => context);
     const refused = await tool.execute('c1', {
       op: 'save',
       requirementId: 'req-reset',
-      expectedVersion: null,
       ...proposalFields(),
       authorizationRef: { interactionId: 'q-1' },
     });
@@ -200,7 +199,6 @@ describe('requirement records', () => {
     const saved = await f.tool.execute('c1', {
       op: 'save',
       requirementId: 'req-reset',
-      expectedVersion: null,
       ...proposalFields(),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -252,7 +250,6 @@ describe('requirement records', () => {
       const result = await f.tool.execute(`call-${entry.id}`, {
         op: 'save',
         requirementId: entry.id,
-        expectedVersion: null,
         ...entry.fields,
         authorizationRef: { inputId: 'i-dec' },
       });
@@ -284,7 +281,6 @@ describe('requirement records', () => {
     const saved = await f.tool.execute('c1', {
       op: 'save',
       requirementId: 'req-reset-impl',
-      expectedVersion: null,
       ...implementationFields(),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -295,51 +291,67 @@ describe('requirement records', () => {
     expect(parsed.ok).toBe(true);
   });
 
-  it('checks the version on update, keeps id and kind, and never moves a record', async () => {
+  it('refuses an update this session has not read, keeps id and kind, and never moves a record', async () => {
     const f = fixture();
     const first = await f.tool.execute('c1', {
       op: 'save',
       requirementId: 'req-reset',
-      expectedVersion: null,
       ...proposalFields(),
       authorizationRef: { inputId: 'i-dec' },
     });
-    const version = String(first.details['version']);
+    expect(first.isError).toBe(false);
     const text = readFileSync(requirementPath(f.cwd, 'req-reset'), 'utf8');
 
-    // A stale version is refused and the file is untouched.
-    const stale = await f.tool.execute('c2', {
+    // Another session has not read the record: it may not replace it, and it is shown the current text.
+    const stranger = createRequirementTool((): RequirementToolContext => ({
+      store: f.store,
+      projectId: 'p-1',
+      cwd: f.cwd,
+      roleId: 'chief',
+      sessionId: 'c-9',
+    }));
+    const blind = await stranger.execute('c2', {
       op: 'save',
       requirementId: 'req-reset',
-      expectedVersion: 'stale',
       ...proposalFields({ status: 'planning' }),
       authorizationRef: { inputId: 'i-dec' },
     });
-    expect(stale.isError).toBe(true);
-    expect(stale.details['code']).toBe('VERSION_CONFLICT');
+    expect(blind.isError).toBe(true);
+    expect(blind.details['code']).toBe('VERSION_CONFLICT');
+    expect(blind.details['currentText']).toBe(text);
     expect(readFileSync(requirementPath(f.cwd, 'req-reset'), 'utf8')).toBe(text);
 
-    // A record cannot change its kind in place (a proposal becomes a linked new record instead).
-    const changedKind = await f.tool.execute('c3', {
+    // A file edited outside the tool is refused too, even though this session read it earlier.
+    writeFileSync(requirementPath(f.cwd, 'req-reset'), text.replace('pending', 'planning'), 'utf8');
+    const changed = await f.tool.execute('c3', {
       op: 'save',
       requirementId: 'req-reset',
-      expectedVersion: version,
+      ...proposalFields({ status: 'planning' }),
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    expect(changed.isError).toBe(true);
+    expect(changed.details['code']).toBe('VERSION_CONFLICT');
+    expect(String(changed.details['currentText'])).toContain('status: planning');
+    writeFileSync(requirementPath(f.cwd, 'req-reset'), text, 'utf8');
+
+    // A record cannot change its kind in place (a proposal becomes a linked new record instead).
+    const changedKind = await f.tool.execute('c4', {
+      op: 'save',
+      requirementId: 'req-reset',
       ...implementationFields(),
       authorizationRef: { inputId: 'i-dec' },
     });
     expect(changedKind.isError).toBe(true);
     expect(changedKind.details['code']).toBe('INVALID_ARGUMENT');
 
-    // A real update goes through with the version get returned.
-    const updated = await f.tool.execute('c4', {
+    // A real update goes through after the record was read in this session.
+    const updated = await f.tool.execute('c5', {
       op: 'save',
       requirementId: 'req-reset',
-      expectedVersion: version,
       ...proposalFields({ status: 'planning' }),
       authorizationRef: { inputId: 'i-dec' },
     });
     expect(updated.isError).toBe(false);
-    expect(String(updated.details['version'])).not.toBe(version);
     expect(readFileSync(requirementPath(f.cwd, 'req-reset'), 'utf8')).toContain('status: planning');
   });
 
@@ -349,7 +361,6 @@ describe('requirement records', () => {
     const unknownDecision = await f.tool.execute('c1', {
       op: 'save',
       requirementId: 'req-reset',
-      expectedVersion: null,
       ...proposalFields(),
       authorizationRef: { inputId: 'nope' },
     });
@@ -362,7 +373,6 @@ describe('requirement records', () => {
     const forbidden = await f.tool.execute('c2', {
       op: 'save',
       requirementId: 'req-reset',
-      expectedVersion: null,
       ...proposalFields(),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -387,7 +397,6 @@ describe('requirement records', () => {
     const saved = await f.tool.execute('c1', {
       op: 'save',
       requirementId: 'req-reset',
-      expectedVersion: null,
       ...proposalFields(),
       authorizationRef: { inputId: 'i-delegated' },
     });
@@ -407,7 +416,6 @@ describe('requirement records', () => {
       const saved = await f.tool.execute(`save-${id}`, {
         op: 'save',
         requirementId: id,
-        expectedVersion: null,
         ...proposalFields({ status }),
         authorizationRef: { inputId: 'i-dec' },
       });
@@ -450,7 +458,6 @@ describe('requirement records', () => {
     const saved = await f.tool.execute('c1', {
       op: 'save',
       requirementId: 'req-reset-impl',
-      expectedVersion: null,
       ...implementationFields({ sections }),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -465,7 +472,6 @@ describe('requirement records', () => {
     const saved = await f.tool.execute('c1', {
       op: 'save',
       requirementId: 'req-reset',
-      expectedVersion: null,
       ...proposalFields({ modules: ['.dev/PROJECT.md', '../outside.md', '.dev/missing.md'] }),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -481,7 +487,6 @@ describe('requirement records', () => {
     const ok = await f.tool.execute('c2', {
       op: 'save',
       requirementId: 'req-reset',
-      expectedVersion: null,
       ...proposalFields({ modules: ['.dev/PROJECT.md'] }),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -493,7 +498,6 @@ describe('requirement records', () => {
     const saved = await f.tool.execute('save-ok', {
       op: 'save',
       requirementId: 'req-ok',
-      expectedVersion: null,
       ...proposalFields(),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -542,7 +546,7 @@ describe('requirement records', () => {
 
 describe('requirement · the program owns the file format', () => {
   it('the description names every section, so the author supplies content and not a syntax', () => {
-    const tool = createRequirementTool(() => ({ store: undefined as never, projectId: 'p', cwd: '/tmp', roleId: 'chief' }));
+    const tool = createRequirementTool(() => ({ store: undefined as never, projectId: 'p', cwd: '/tmp', roleId: 'chief', sessionId: 'c-1' }));
     const description = String(tool.description ?? '');
     for (const section of IMPLEMENTATION_SECTIONS) {
       expect(description).toContain(section);
@@ -559,7 +563,6 @@ describe('requirement · the program owns the file format', () => {
     const outcome = await f.tool.execute('c1', {
       op: 'save',
       requirementId: 'req-x',
-      expectedVersion: null,
       ...implementationFields({ sections }),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -576,7 +579,6 @@ describe('requirement · the program owns the file format', () => {
     const saved = await f.tool.execute('c1', {
       op: 'save',
       requirementId: 'req-reset-impl',
-      expectedVersion: null,
       ...implementationFields({ sections: { ...(implementationFields()['sections'] as object), 验收: '1. npm test 全过\n2. 注册表能列出这个 skill' } }),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -591,7 +593,6 @@ describe('requirement · the program owns the file format', () => {
     const again = await f.tool.execute('c3', {
       op: 'save',
       requirementId: 'req-reset-impl',
-      expectedVersion: String(got.details['version']),
       ...implementationFields({ sections, status: 'in_progress' }),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -616,23 +617,23 @@ describe('requirement · the program owns the file format', () => {
 });
 
 describe('requirement · the model can see what it must act on', () => {
-  it('save and get put version, sections and issues in the text, not only in details', async () => {
+  it('save and get put the record and its issues in the text, not only in details', async () => {
     const f = fixture();
     const saved = await f.tool.execute('c1', {
       op: 'save',
       requirementId: 'req-reset-impl',
-      expectedVersion: null,
       ...implementationFields(),
       authorizationRef: { inputId: 'i-dec' },
     });
-    // Pi hands the model `content` only: a version that lives in details is a version it never had.
+    // Pi hands the model `content` only: the result has to say what was saved.
     const saveText = saved.content.map((part) => part.text).join('\n');
-    expect(saveText).toContain(String(saved.details['version']));
+    expect(saveText).toContain('req-reset-impl');
+    expect(saveText).toContain('implementation');
 
     const got = await f.tool.execute('c2', { op: 'get', requirementId: 'req-reset-impl' });
     const getText = got.content.map((part) => part.text).join('\n');
-    expect(getText).toContain(String(got.details['version']));
-    expect(getText).toContain('## 验收');
+    expect(got.details['sections']).toBeDefined();
+    expect(String(getText)).toContain('## 验收');
 
     // A refusal has to show its reasons, or the next attempt is a guess.
     const missing = { ...(implementationFields()['sections'] as Record<string, string>) };
@@ -640,7 +641,6 @@ describe('requirement · the model can see what it must act on', () => {
     const refused = await f.tool.execute('c3', {
       op: 'save',
       requirementId: 'req-reset-impl',
-      expectedVersion: String(got.details['version']),
       ...implementationFields({ sections: missing }),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -655,21 +655,27 @@ describe('requirement and Task: the implementation edge is checked, not assumed'
     const state = { inputId: 'i-dec' };
     return {
       state,
-      tools: createChiefTaskTools((): TaskToolContext => ({
-        store: f.store,
-        sessionId: 'c-1',
-        projectId: 'p-1',
-        cwd: f.cwd,
-        roleId: 'chief',
-        inputId: state.inputId,
-        serverWorkDir: join(f.cwd, '..', 'work'),
-      })),
+      tools: [
+        createTaskTool(
+          (): TaskToolContext => ({
+            store: f.store,
+            sessionId: 'c-1',
+            projectId: 'p-1',
+            cwd: f.cwd,
+            roleId: 'chief',
+            inputId: state.inputId,
+            serverWorkDir: join(f.cwd, '..', 'work'),
+          }),
+          { chief: true },
+        ),
+      ],
     };
   };
   const createTask = (f: Fixture, extra: Record<string, unknown>) => {
-    const tool = taskContext(f).tools.find((entry) => entry.name === 'createTask');
-    if (tool === undefined) throw new Error('createTask missing');
+    const tool = taskContext(f).tools.find((entry) => entry.name === 'task');
+    if (tool === undefined) throw new Error('task missing');
     return tool.execute('c1', {
+      op: 'create',
       type: 'write',
       goal: 'deliver it',
       scope: 'the account area',
@@ -699,7 +705,6 @@ describe('requirement and Task: the implementation edge is checked, not assumed'
     const savedProposal = await proposalCase.tool.execute('s1', {
       op: 'save',
       requirementId: 'req-reset',
-      expectedVersion: null,
       ...proposalFields(),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -712,7 +717,6 @@ describe('requirement and Task: the implementation edge is checked, not assumed'
     await archivedCase.tool.execute('s1', {
       op: 'save',
       requirementId: 'req-done',
-      expectedVersion: null,
       ...implementationFields({ status: 'completed' }),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -730,7 +734,6 @@ describe('requirement and Task: the implementation edge is checked, not assumed'
     await f.tool.execute('s1', {
       op: 'save',
       requirementId: 'req-reset-impl',
-      expectedVersion: null,
       ...implementationFields(),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -744,7 +747,6 @@ describe('requirement and Task: the implementation edge is checked, not assumed'
     const saved = await f.tool.execute('s1', {
       op: 'save',
       requirementId: 'req-reset-impl',
-      expectedVersion: null,
       ...implementationFields({ status: 'in_progress' }),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -753,7 +755,6 @@ describe('requirement and Task: the implementation edge is checked, not assumed'
     const completed = await f.tool.execute('s2', {
       op: 'save',
       requirementId: 'req-reset-impl',
-      expectedVersion: String(saved.details['version']),
       ...implementationFields({ status: 'completed' }),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -769,7 +770,6 @@ describe('requirement and Task: the implementation edge is checked, not assumed'
     const saved = await f.tool.execute('s1', {
       op: 'save',
       requirementId: 'req-reset-impl',
-      expectedVersion: null,
       ...implementationFields({ status: 'in_progress' }),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -782,7 +782,6 @@ describe('requirement and Task: the implementation edge is checked, not assumed'
     const saved = await f.tool.execute('s1', {
       op: 'save',
       requirementId: 'req-reset',
-      expectedVersion: null,
       ...proposalFields({ status: 'archived' }),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -795,7 +794,6 @@ describe('requirement and Task: the implementation edge is checked, not assumed'
     await f.tool.execute('s1', {
       op: 'save',
       requirementId: 'req-reset-impl',
-      expectedVersion: null,
       ...implementationFields({ status: 'in_progress' }),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -818,7 +816,6 @@ describe('requirement · recorded tasks that do not implement it', () => {
     const saved = await f.tool.execute('s1', {
       op: 'save',
       requirementId: 'req-reset-impl',
-      expectedVersion: null,
       ...implementationFields(),
       linkedTaskIds: ['t-standalone'],
       authorizationRef: { inputId: 'i-dec' },
@@ -854,7 +851,6 @@ describe('requirement · completion claims have a delivery behind them', () => {
     await f.tool.execute('s1', {
       op: 'save',
       requirementId: 'req-reset-impl',
-      expectedVersion: null,
       ...implementationFields({ status: 'in_progress' }),
       authorizationRef: { inputId: 'i-dec' },
     });
@@ -884,7 +880,6 @@ describe('requirement · completion claims have a delivery behind them', () => {
     const completed = await f.tool.execute('s2', {
       op: 'save',
       requirementId: 'req-reset-impl',
-      expectedVersion: (await f.tool.execute('g1', { op: 'get', requirementId: 'req-reset-impl' })).details['version'],
       ...implementationFields({ status: 'completed' }),
       authorizationRef: { inputId: 'i-dec' },
     });

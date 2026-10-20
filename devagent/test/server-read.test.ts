@@ -88,7 +88,7 @@ async function harness(): Promise<Harness> {
     authorizationRefs: ['input:i-user'],
     sourceInputId: 'i-user',
   });
-  store.updateTask({ taskId: task.id, expectedRevision: task.revision, phase: 'develop' });
+  store.updateTask({ taskId: task.id, phase: 'develop' });
   store.createTaskSessions({
     taskId: task.id,
     members: [

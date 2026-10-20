@@ -36,17 +36,7 @@ const NATIVE_BY_ROLE: Readonly<Record<PromptRoleId, readonly string[]>> = {
 
 /** Domain tools each role may call (registered later; the allowlist only lists their names). */
 const DOMAIN_BY_ROLE: Readonly<Record<PromptRoleId, readonly string[]>> = {
-  chief: [
-    'createTask',
-    'updateTask',
-    'createTaskSessions',
-    'endTask',
-    'reconcile',
-    'task',
-    'requirement',
-    'project',
-    'question',
-  ],
+  chief: ['task', 'requirement', 'project', 'question'],
   designer: ['requirement', 'agent_report', 'task', 'question'],
   developer: ['agent_report', 'task', 'requirement', 'question'],
   reviewer: ['agent_report', 'task', 'question'],
@@ -60,18 +50,7 @@ const DOMAIN_BY_ROLE: Readonly<Record<PromptRoleId, readonly string[]>> = {
  * the tables below and the host registration cannot drift apart (a registered-but-unlisted tool would
  * be admitted to every role through the host union).
  */
-export const DOMAIN_TOOL_NAMES: readonly string[] = [
-  'createTask',
-  'updateTask',
-  'createTaskSessions',
-  'endTask',
-  'reconcile',
-  'task',
-  'agent_report',
-  'requirement',
-  'project',
-  'question',
-];
+export const DOMAIN_TOOL_NAMES: readonly string[] = ['task', 'agent_report', 'requirement', 'project', 'question'];
 
 /**
  * Every tool name the host may hand to a session. A role/task combination denies all of the names it

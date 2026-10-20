@@ -155,7 +155,7 @@ Project 首次 realpath 绑定由唯一约束保证，显示名不作身份。�
 | HISTORY_UNAVAILABLE / PI_INPUT_UNCONFIRMED | 精确恢复/关联不成立；保留记录，进入检查或交接 |
 | STORAGE_UNAVAILABLE / EFFECT_UNCONFIRMED | 保存或效果不可确认；停止后续准入，不把已可能生效的操作自动重做 |
 | WORKSPACE_BUSY / TASK_BUSY / TASK_CONTROLLED / STAGE_NOT_READY | 当前写入负责人、Task 控制或依赖未满足；不启动不适用专业工作 |
-| REPORT_MISSING / COMPLETION_INCOMPLETE | 无正式报告、完成缺项（含交付已变化需重新复核）；保留 Task 与真实证据 |
+| REPORT_MISSING / REPORT_STALE / COMPLETION_INCOMPLETE | 无正式报告、报告正文文件缺失或已被改动、完成缺项（含交付已变化需重新复核）；保留 Task 与真实证据 |
 | INTERACTION_STALE / STREAM_RESYNC_REQUIRED | 请求已失效或须重取快照；请求保存后可响应，不另设呈现门禁 |
 
 known errors 的错误形状一致；失败 details 提供可读原因/当前引用，不泄漏凭证。机器字段的枚举由本页/G2/S2 定义，新增公开方法/消息种类须改相应契约与检查，不在局部实现中私建协议。

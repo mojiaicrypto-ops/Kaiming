@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../src/store/store.ts';
-import { createTaskSessionsTool, type DelegationReturn } from '../src/tools/delegation-tools.ts';
-import { createChiefTaskTools, type DomainTool, type TaskToolContext } from '../src/tools/task-tools.ts';
+import type { DelegationReturn } from '../src/tools/delegation-tools.ts';
+import { createTaskTool, type DomainTool, type TaskToolContext } from '../src/tools/task-tools.ts';
 
 const dirs: string[] = [];
 const stores: Store[] = [];
@@ -23,11 +23,32 @@ interface Fixture {
   readonly cwd: string;
   readonly serverWorkDir: string;
   readonly chiefTools: readonly DomainTool[];
-  readonly delegation: DomainTool;
+  readonly taskTool: DomainTool;
   readonly dispatchCalls: string[];
   readonly settleCalls: Array<{ taskId: string; timeoutMs: number }>;
   setSettleReturn(value: DelegationReturn): void;
   setInput(inputId: string): void;
+}
+
+function chiefTool(store: Store, cwd: string, serverWorkDir: string, sessionId: string): DomainTool {
+  const contextOf = (): TaskToolContext => {
+    const currentTaskId = store.getSession(sessionId)?.currentTaskId;
+    return {
+      store,
+      sessionId,
+      projectId: 'p-1',
+      cwd,
+      roleId: 'chief',
+      inputId: 'i-1',
+      serverWorkDir,
+      ...(currentTaskId != null ? { currentTaskId } : {}),
+      host: {
+        dispatch: async () => undefined,
+        settleStep: async (taskId: string) => ({ taskId, outcome: 'completed' as const, sessions: [] }),
+      },
+    };
+  };
+  return createTaskTool(contextOf, { chief: true });
 }
 
 async function fixture(): Promise<Fixture> {
@@ -51,45 +72,35 @@ async function fixture(): Promise<Fixture> {
   });
   const state = { inputId: 'i-1', settle: undefined as DelegationReturn | undefined };
   const serverWorkDir = join(root, 'work');
-  const contextOf = (): TaskToolContext => {
-    const currentTaskId = store.getSession('c-1')?.currentTaskId;
-    return {
-      store,
-      sessionId: 'c-1',
-      projectId: 'p-1',
-      cwd,
-      roleId: 'chief',
-      inputId: state.inputId,
-      serverWorkDir,
-      ...(currentTaskId != null ? { currentTaskId } : {}),
-    };
-  };
-  const chiefTools = createChiefTaskTools(contextOf);
   const dispatchCalls: string[] = [];
   const settleCalls: Array<{ taskId: string; timeoutMs: number }> = [];
-  const delegation = createTaskSessionsTool(() => ({
-    ...contextOf(),
-    host: {
-      async dispatch(sessionId: string) {
-        dispatchCalls.push(sessionId);
-      },
-      async settleStep(taskId: string, timeoutMs: number) {
-        settleCalls.push({ taskId, timeoutMs });
-        return (
-          state.settle ?? {
-            taskId,
-            outcome: 'completed' as const,
-            sessions: [],
-          }
-        );
-      },
+  const taskTool = createTaskTool(
+    (): TaskToolContext => {
+      const currentTaskId = store.getSession('c-1')?.currentTaskId;
+      return {
+        store,
+        sessionId: 'c-1',
+        projectId: 'p-1',
+        cwd,
+        roleId: 'chief',
+        inputId: state.inputId,
+        serverWorkDir,
+        ...(currentTaskId != null ? { currentTaskId } : {}),
+        host: {
+          async dispatch(sessionId: string) {
+            dispatchCalls.push(sessionId);
+          },
+          async settleStep(taskId: string, timeoutMs: number) {
+            settleCalls.push({ taskId, timeoutMs });
+            return state.settle ?? { taskId, outcome: 'completed' as const, sessions: [] };
+          },
+        },
+      };
     },
-  }));
-  const create = chiefTools.find((entry) => entry.name === 'createTask');
-  if (create === undefined) {
-    throw new Error('createTask tool missing');
-  }
-  await create.execute('c1', {
+    { chief: true },
+  );
+  await taskTool.execute('c1', {
+    op: 'create',
     type: 'write',
     goal: 'reset password',
     scope: 'account',
@@ -101,22 +112,14 @@ async function fixture(): Promise<Fixture> {
   state.settle = {
     taskId: store.listTasks('p-1')[0]?.id ?? '',
     outcome: 'completed',
-    sessions: [
-      {
-        sessionId: 'member-1',
-        inputId: 'mi-1',
-        state: 'completed',
-        resultIds: [],
-        interactionIds: [],
-      },
-    ],
+    sessions: [{ sessionId: 'member-1', inputId: 'mi-1', state: 'completed', resultIds: [], interactionIds: [] }],
   };
   return {
     store,
     cwd,
     serverWorkDir,
-    chiefTools,
-    delegation,
+    chiefTools: [taskTool],
+    taskTool,
     dispatchCalls,
     settleCalls,
     setSettleReturn: (value) => {
@@ -138,26 +141,24 @@ const member = (overrides: Record<string, unknown> = {}): Record<string, unknown
 
 async function moveToPhase(f: Fixture, phase: string): Promise<void> {
   const task = f.store.listTasks('p-1')[0];
-  const update = f.chiefTools.find((entry) => entry.name === 'updateTask');
-  await update?.execute('u1', { taskId: task?.id, expectedRevision: task?.revision, phase });
+  const update = f.taskTool;
+  await update.execute('u1', { op: 'update', taskId: task?.id, phase });
 }
 
-describe('createTaskSessions', () => {
+describe('task dispatch', () => {
   it('creates the current step members, dispatches them and reports the aggregate', async () => {
     const f = await fixture();
     await moveToPhase(f, 'develop');
     const task = f.store.listTasks('p-1')[0];
 
-    const result = await f.delegation.execute('call-1', {
-      mode: 'create',
-      sessions: [member()],
-    });
+    const result = await f.taskTool.execute('call-1', { op: 'dispatch', sessions: [member({ writeScope: ['src/'] })] });
 
     expect(result.isError).toBe(false);
     const members = f.store.listTaskSessions(task?.id ?? '');
     expect(members).toHaveLength(1);
     expect(members[0]?.roleId).toBe('developer');
     expect(members[0]?.phase).toBe('develop');
+    expect(members[0]?.writeScope).toEqual(['src/']);
     expect(f.store.getTask(task?.id ?? '')?.currentSessionIds).toEqual([members[0]?.sessionId]);
     // The member's first input really exists and is queued, and it was dispatched once.
     expect(f.store.getInput(members[0]?.currentInputId ?? '')?.status).toBe('queued');
@@ -169,8 +170,8 @@ describe('createTaskSessions', () => {
   it('refuses a role outside the current phase and a report kind a read Task cannot ask for', async () => {
     const f = await fixture();
 
-    const wrongPhase = await f.delegation.execute('call-1', {
-      mode: 'create',
+    const wrongPhase = await f.taskTool.execute('call-1', {
+      op: 'dispatch',
       sessions: [member({ roleId: 'reviewer', expectedKind: 'review' })],
     });
 
@@ -180,81 +181,38 @@ describe('createTaskSessions', () => {
     expect(f.dispatchCalls).toEqual([]);
 
     // A read Task only accepts read-only report kinds.
-    const readTask = f.store.listTasks('p-1')[0];
     f.store.createSession({ id: 'c-2', projectId: 'p-1', roleId: 'chief', cwd: f.cwd });
-    const readTools = createChiefTaskTools(() => ({
-      store: f.store,
-      sessionId: 'c-2',
-      projectId: 'p-1',
-      cwd: f.cwd,
-      roleId: 'chief',
-      inputId: 'i-9',
-      serverWorkDir: f.serverWorkDir,
-      ...(f.store.getSession('c-2')?.currentTaskId != null
-        ? { currentTaskId: f.store.getSession('c-2')?.currentTaskId as string }
-        : {}),
-    }));
-    const create = readTools.find((entry) => entry.name === 'createTask');
-    const created = await create?.execute('c2', {
+    const readTool = chiefTool(f.store, f.cwd, f.serverWorkDir, 'c-2');
+    const created = await readTool.execute('c2', {
+      op: 'create',
       type: 'read',
       goal: 'investigate',
       scope: 'x',
       planMarkdown: '# read plan\n',
       authorizationRef: { inputId: 'i-dec' },
     });
-    expect(created?.isError).toBe(false);
-    const readTaskId = String(created?.details['taskId'] ?? '');
-    await readTools.find((entry) => entry.name === 'updateTask')?.execute('u2', {
-      taskId: readTaskId,
-      expectedRevision: f.store.getTask(readTaskId)?.revision,
-      phase: 'analyze',
-    });
-    const readTool = createTaskSessionsTool(() => ({
-      store: f.store,
-      sessionId: 'c-2',
-      projectId: 'p-1',
-      cwd: f.cwd,
-      roleId: 'chief',
-      inputId: 'i-9',
-      serverWorkDir: f.serverWorkDir,
-      currentTaskId: readTaskId,
-      host: {
-        async dispatch() {},
-        async settleStep(taskId: string) {
-          return { taskId, outcome: 'completed' as const, sessions: [] };
-        },
-      },
-    }));
+    expect(created.isError).toBe(false);
+    const readTaskId = String(created.details['taskId'] ?? '');
+    await readTool.execute('u2', { op: 'update', taskId: readTaskId, phase: 'analyze' });
 
     const badKind = await readTool.execute('call-2', {
-      mode: 'create',
+      op: 'dispatch',
       sessions: [member({ roleId: 'investigator', expectedKind: 'implementation' })],
     });
 
     expect(badKind.isError).toBe(true);
     expect(badKind.details['code']).toBe('INVALID_ARGUMENT');
-    expect(readTask).toBeDefined();
   });
 
   it('only allows a read-only recovery check while the Task is paused', async () => {
     const f = await fixture();
     await moveToPhase(f, 'develop');
     const task = f.store.listTasks('p-1')[0];
-    const control = f.chiefTools.find((entry) => entry.name === 'task');
-    const paused = await control?.execute('p1', {
-      op: 'control',
-      taskId: task?.id,
-      expectedRevision: task?.revision,
-      command: 'pause',
-    });
-    expect(paused?.isError).toBe(false);
+    const paused = await f.taskTool.execute('p1', { op: 'control', taskId: task?.id, command: 'pause' });
+    expect(paused.isError).toBe(false);
     expect(f.store.getTask(task?.id ?? '')?.status).toBe('paused');
 
-    const refused = await f.delegation.execute('call-1', {
-      taskId: task?.id,
-      mode: 'create',
-      sessions: [member()],
-    });
+    const refused = await f.taskTool.execute('call-1', { op: 'dispatch', taskId: task?.id, sessions: [member()] });
 
     expect(refused.isError).toBe(true);
     expect(refused.details['code']).toBe('TASK_CONTROLLED');
@@ -264,7 +222,7 @@ describe('createTaskSessions', () => {
   it('continues a settled member and refuses one that is still running', async () => {
     const f = await fixture();
     await moveToPhase(f, 'develop');
-    await f.delegation.execute('call-1', { mode: 'create', sessions: [member()] });
+    await f.taskTool.execute('call-1', { op: 'dispatch', sessions: [member()] });
     const task = f.store.listTasks('p-1')[0];
     const settled = f.store.listTaskSessions(task?.id ?? '')[0];
     // Simulate the member having finished its work.
@@ -279,10 +237,9 @@ describe('createTaskSessions', () => {
     });
     f.dispatchCalls.length = 0;
 
-    const continued = await f.delegation.execute('call-2', {
-      mode: 'continue',
-      sessionId: settled?.sessionId,
-      instructions: 'fix the finding',
+    const continued = await f.taskTool.execute('call-2', {
+      op: 'dispatch',
+      sessions: [{ sessionId: settled?.sessionId, instructions: 'fix the finding' }],
     });
 
     expect(continued.isError).toBe(false);
@@ -293,10 +250,9 @@ describe('createTaskSessions', () => {
 
     // A member that is still queued must not be continued.
     const running = f.store.listTaskSessions(task?.id ?? '')[0];
-    const refused = await f.delegation.execute('call-3', {
-      mode: 'continue',
-      sessionId: running?.sessionId,
-      instructions: 'again',
+    const refused = await f.taskTool.execute('call-3', {
+      op: 'dispatch',
+      sessions: [{ sessionId: running?.sessionId, instructions: 'again' }],
     });
 
     expect(refused.isError).toBe(true);
@@ -308,19 +264,11 @@ describe('createTaskSessions', () => {
     const snapshot: DelegationReturn = {
       taskId: f.store.listTasks('p-1')[0]?.id ?? '',
       outcome: 'timeout',
-      sessions: [
-        {
-          sessionId: 'member-9',
-          inputId: 'mi-9',
-          state: 'working',
-          resultIds: [],
-          interactionIds: [],
-        },
-      ],
+      sessions: [{ sessionId: 'member-9', inputId: 'mi-9', state: 'working', resultIds: [], interactionIds: [] }],
     };
     f.setSettleReturn(snapshot);
 
-    const waited = await f.delegation.execute('call-1', { mode: 'wait', waitTimeoutMs: 500 });
+    const waited = await f.taskTool.execute('call-1', { op: 'dispatch', waitTimeoutMs: 500 });
 
     expect(waited.isError).toBe(false);
     expect(waited.details['outcome']).toBe('timeout');
@@ -333,27 +281,9 @@ describe('createTaskSessions', () => {
     const f = await fixture();
     await moveToPhase(f, 'develop');
     const task = f.store.listTasks('p-1')[0];
-    const stranger = createTaskSessionsTool(() => ({
-      store: f.store,
-      sessionId: 'c-other',
-      projectId: 'p-1',
-      cwd: f.cwd,
-      roleId: 'chief',
-      inputId: 'i-1',
-      serverWorkDir: f.serverWorkDir,
-      host: {
-        async dispatch() {},
-        async settleStep(taskId: string) {
-          return { taskId, outcome: 'completed' as const, sessions: [] };
-        },
-      },
-    }));
+    const stranger = chiefTool(f.store, f.cwd, f.serverWorkDir, 'c-other');
 
-    const refused = await stranger.execute('call-1', {
-      taskId: task?.id,
-      mode: 'create',
-      sessions: [member()],
-    });
+    const refused = await stranger.execute('call-1', { op: 'dispatch', taskId: task?.id, sessions: [member()] });
 
     expect(refused.isError).toBe(true);
     expect(refused.details['code']).toBe('FORBIDDEN');
@@ -361,111 +291,58 @@ describe('createTaskSessions', () => {
 });
 
 describe('task control', () => {
-  it('pauses, resumes and cancels with version checks', async () => {
+  it('pauses, resumes and cancels without a version from the model', async () => {
     const f = await fixture();
     const task = f.store.listTasks('p-1')[0];
-    const control = f.chiefTools.find((entry) => entry.name === 'task');
 
-    const paused = await control?.execute('c1', {
-      op: 'control',
-      taskId: task?.id,
-      expectedRevision: task?.revision,
-      command: 'pause',
-    });
+    const paused = await f.taskTool.execute('c1', { op: 'control', taskId: task?.id, command: 'pause' });
     expect(paused?.isError).toBe(false);
     expect(f.store.getTask(task?.id ?? '')?.status).toBe('paused');
     // A paused Task still occupies the chief's only open-Task slot (G2: "含暂停").
     expect(f.store.getSession('c-1')?.currentTaskId).toBe(task?.id);
 
-    const stale = await control?.execute('c2', {
-      op: 'control',
-      taskId: task?.id,
-      expectedRevision: task?.revision,
-      command: 'resume',
-    });
-    expect(stale?.isError).toBe(true);
-    expect(stale?.details['code']).toBe('VERSION_CONFLICT');
-
-    const resumed = await control?.execute('c3', {
-      op: 'control',
-      taskId: task?.id,
-      expectedRevision: f.store.getTask(task?.id ?? '')?.revision,
-      command: 'resume',
-    });
+    const resumed = await f.taskTool.execute('c3', { op: 'control', taskId: task?.id, command: 'resume' });
     expect(resumed?.isError).toBe(false);
     expect(f.store.getTask(task?.id ?? '')?.status).toBe('active');
     expect(f.store.getSession('c-1')?.currentTaskId).toBe(task?.id);
 
     // Cancellation ends the Task and frees the slot.
-    const cancelled = await control?.execute('c4', {
-      op: 'control',
-      taskId: task?.id,
-      expectedRevision: f.store.getTask(task?.id ?? '')?.revision,
-      command: 'cancel',
-    });
+    const cancelled = await f.taskTool.execute('c4', { op: 'control', taskId: task?.id, command: 'cancel' });
     expect(cancelled?.isError).toBe(false);
     expect(f.store.getTask(task?.id ?? '')?.status).toBe('cancelled');
     expect(f.store.getSession('c-1')?.currentTaskId).toBeNull();
   });
-
-  it('freezes a candidate version with a version check', async () => {
-    const f = await fixture();
-    const task = f.store.listTasks('p-1')[0];
-    const control = f.chiefTools.find((entry) => entry.name === 'task');
-
-    const prepared = await control?.execute('c1', {
-      op: 'prepare_candidate',
-      taskId: task?.id,
-      expectedRevision: task?.revision,
-      candidate: { candidateId: 'k-1', files: [{ path: 'src/a.ts', sha256: 'abc' }] },
-    });
-
-    expect(prepared?.isError).toBe(false);
-    expect(f.store.getTask(task?.id ?? '')?.candidate).toEqual({
-      candidateId: 'k-1',
-      files: [{ path: 'src/a.ts', sha256: 'abc' }],
-    });
-  });
 });
-describe('delegation against the control rules', () => {
-  const contextFor = (
-    f: Fixture,
-    taskId: string,
-    host: Partial<{ dispatch: (sessionId: string) => Promise<void>; settleStep: (taskId: string, timeoutMs: number) => Promise<DelegationReturn> }> = {},
-  ) =>
-    ({
-      store: f.store,
-      sessionId: 'c-1',
-      projectId: 'p-1',
-      cwd: f.cwd,
-      roleId: 'chief',
-      inputId: 'i-1',
-      serverWorkDir: f.serverWorkDir,
-      currentTaskId: taskId,
-      host: {
-        dispatch: host.dispatch ?? (async () => undefined),
-        settleStep:
-          host.settleStep ?? (async (id: string) => ({ taskId: id, outcome: 'completed' as const, sessions: [] })),
-      },
-    }) as never;
 
+describe('dispatch against the control rules', () => {
   it('binds every member to the Task and lets the wait own the deadline', async () => {
     const f = await fixture();
     await moveToPhase(f, 'develop');
     const task = f.store.listTasks('p-1')[0];
     const deferred = Promise.withResolvers<void>();
     let waitedMs = 0;
-    const tool = createTaskSessionsTool(() =>
-      contextFor(f, task?.id ?? '', {
-        dispatch: () => deferred.promise,
-        settleStep: async (id: string, timeoutMs: number) => {
-          waitedMs = timeoutMs;
-          return { taskId: id, outcome: 'timeout', sessions: [] };
+    const tool = createTaskTool(
+      () => ({
+        store: f.store,
+        sessionId: 'c-1',
+        projectId: 'p-1',
+        cwd: f.cwd,
+        roleId: 'chief',
+        inputId: 'i-1',
+        serverWorkDir: f.serverWorkDir,
+        ...(task?.id !== undefined ? { currentTaskId: task.id } : {}),
+        host: {
+          dispatch: () => deferred.promise,
+          settleStep: async (id: string, timeoutMs: number) => {
+            waitedMs = timeoutMs;
+            return { taskId: id, outcome: 'timeout', sessions: [] };
+          },
         },
       }),
+      { chief: true },
     );
 
-    const result = await tool.execute('call-1', { mode: 'create', waitTimeoutMs: 1_500, sessions: [member()] });
+    const result = await tool.execute('call-1', { op: 'dispatch', waitTimeoutMs: 1_500, sessions: [member()] });
 
     // A member that keeps running must not hold the tool past the deadline.
     expect(result.isError).toBe(false);
@@ -481,24 +358,16 @@ describe('delegation against the control rules', () => {
     const f = await fixture();
     await moveToPhase(f, 'develop');
     const task = f.store.listTasks('p-1')[0];
-    const control = f.chiefTools.find((entry) => entry.name === 'task');
-    await control?.execute('p1', {
-      op: 'control',
-      taskId: task?.id,
-      expectedRevision: task?.revision,
-      command: 'pause',
-    });
-    const paused = f.store.getTask(task?.id ?? '');
-    expect(paused?.status).toBe('paused');
-    const tool = createTaskSessionsTool(() => contextFor(f, task?.id ?? ''));
+    await f.taskTool.execute('p1', { op: 'control', taskId: task?.id, command: 'pause' });
+    expect(f.store.getTask(task?.id ?? '')?.status).toBe('paused');
 
     // Ordinary work stays refused.
-    const refused = await tool.execute('call-1', { mode: 'create', sessions: [member()] });
+    const refused = await f.taskTool.execute('call-1', { op: 'dispatch', sessions: [member()] });
     expect(refused.details['code']).toBe('TASK_CONTROLLED');
 
     // The one allowed kind of work is the read-only recovery check, whatever the phase is.
-    const recovery = await tool.execute('call-2', {
-      mode: 'create',
+    const recovery = await f.taskTool.execute('call-2', {
+      op: 'dispatch',
       sessions: [member({ roleId: 'investigator', expectedKind: 'recovery', label: 'recover' })],
     });
 
@@ -513,18 +382,12 @@ describe('delegation against the control rules', () => {
     const f = await fixture();
     await moveToPhase(f, 'develop');
     const task = f.store.listTasks('p-1')[0];
-    const control = f.chiefTools.find((entry) => entry.name === 'task');
-    await control?.execute('p1', {
-      op: 'control',
-      taskId: task?.id,
-      expectedRevision: task?.revision,
-      command: 'cancel',
-    });
-    const tool = createTaskSessionsTool(() => contextFor(f, task?.id ?? ''));
+    await f.taskTool.execute('p1', { op: 'control', taskId: task?.id, command: 'cancel' });
 
     // Even the read-only recovery check is refused, and nothing is written.
-    const recovery = await tool.execute('call-1', {
-      mode: 'create',
+    const recovery = await f.taskTool.execute('call-1', {
+      op: 'dispatch',
+      taskId: task?.id,
       sessions: [member({ roleId: 'investigator', expectedKind: 'recovery', label: 'recover' })],
     });
 
@@ -536,7 +399,7 @@ describe('delegation against the control rules', () => {
   it('refuses to continue work of a paused Task and of an interrupted member', async () => {
     const f = await fixture();
     await moveToPhase(f, 'develop');
-    await f.delegation.execute('call-1', { mode: 'create', sessions: [member()] });
+    await f.taskTool.execute('call-1', { op: 'dispatch', sessions: [member()] });
     const task = f.store.listTasks('p-1')[0];
     const memberRow = f.store.listTaskSessions(task?.id ?? '')[0];
     const claimed = f.store.claimNextInput(memberRow?.sessionId ?? '');
@@ -549,34 +412,24 @@ describe('delegation against the control rules', () => {
       status: 'interrupted',
     });
 
-    const needsRecovery = await f.delegation.execute('call-2', {
-      mode: 'continue',
-      sessionId: memberRow?.sessionId,
-      instructions: 'carry on',
+    const needsRecovery = await f.taskTool.execute('call-2', {
+      op: 'dispatch',
+      sessions: [{ sessionId: memberRow?.sessionId, instructions: 'carry on' }],
     });
 
     expect(needsRecovery.isError).toBe(true);
     expect(needsRecovery.details['code']).toBe('RECOVERY_REQUIRED');
 
-    const control = f.chiefTools.find((entry) => entry.name === 'task');
-    await control?.execute('p1', {
-      op: 'control',
+    await f.taskTool.execute('p1', { op: 'control', taskId: task?.id, command: 'pause' });
+    const continuedWhilePaused = await f.taskTool.execute('call-3', {
+      op: 'dispatch',
       taskId: task?.id,
-      expectedRevision: f.store.getTask(task?.id ?? '')?.revision,
-      command: 'pause',
-    });
-    const continuedWhilePaused = await f.delegation.execute('call-3', {
-      taskId: task?.id,
-      mode: 'continue',
-      sessionId: memberRow?.sessionId,
-      instructions: 'carry on',
+      sessions: [{ sessionId: memberRow?.sessionId, instructions: 'carry on' }],
     });
 
     expect(continuedWhilePaused.isError).toBe(true);
     expect(continuedWhilePaused.details['code']).toBe('TASK_CONTROLLED');
     // Nothing was written for either refusal.
-    expect(f.store.getTaskSession(memberRow?.sessionId ?? '')?.currentInputId).toBe(
-      memberRow?.currentInputId,
-    );
+    expect(f.store.getTaskSession(memberRow?.sessionId ?? '')?.currentInputId).toBe(memberRow?.currentInputId);
   });
 });

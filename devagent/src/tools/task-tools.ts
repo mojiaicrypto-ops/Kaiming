@@ -1,11 +1,12 @@
 /**
- * Chief Task tools (P3): createTask, updateTask, endTask and task(get).
+ * The Task tool: one entry point for the whole Task lifecycle.
  *
  * The host fixes identity: the session, its project, the input currently running and the work
  * directories all come from the caller's context, resolved *at execution time* (a Pi session is reused
- * across inputs, so a snapshot would attribute the work to the wrong input). Every persistent change is
- * version-checked, every tool checks that the Task really belongs to the calling session's project, and
- * a refusal states what is missing instead of pretending success.
+ * across inputs, so a snapshot would attribute the work to the wrong input). The model passes what it
+ * knows — goal, work, members — and never a version, digest or candidate id: one chief session owns
+ * the Task and its tool calls are executed one at a time, so there is no second writer to guard
+ * against.
  */
 import { randomUUID } from 'node:crypto';
 import { type ToolDefinition } from '@earendil-works/pi-coding-agent';
@@ -13,6 +14,7 @@ import { StoreError, type ArtifactRef, type Store, type TaskPhase, type TaskRow 
 import { commitPlan, digestOfText, planRefFor, planTarget, readPlan } from '../runtime/plan-store.ts';
 import { getRequirement } from '../runtime/requirement-store.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
+import { dispatchOp, type DelegationHost } from './delegation-tools.ts';
 import { asRecord, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
 
 export interface TaskToolContext {
@@ -28,9 +30,10 @@ export interface TaskToolContext {
   /** Host control hook: stops the Task's own work before the final status is written. */
   readonly controlTask?: (params: {
     taskId: string;
-    expectedRevision: number;
     command: 'pause' | 'resume' | 'cancel';
   }) => Promise<TaskRow>;
+  /** Chief only: run and wait for the current step's members. */
+  readonly host?: DelegationHost;
   readonly currentTaskId?: string;
 }
 
@@ -64,16 +67,10 @@ export function asToolDefinitions(tools: readonly DomainTool[]): ToolDefinition[
   }));
 }
 
-const PHASES: readonly TaskPhase[] = [
-  'clarify',
-  'analyze',
-  'design',
-  'plan',
-  'develop',
-  'review',
-  'test',
-  'settle',
-];
+const PHASES: readonly TaskPhase[] = ['clarify', 'analyze', 'design', 'plan', 'develop', 'review', 'test', 'settle'];
+
+const CHIEF_OPS = ['create', 'update', 'dispatch', 'control', 'end', 'get', 'adopt', 'recover'] as const;
+const SPECIALIST_OPS = ['get'] as const;
 
 function taskSummaryJson(task: TaskRow): Record<string, unknown> {
   return {
@@ -81,7 +78,6 @@ function taskSummaryJson(task: TaskRow): Record<string, unknown> {
     type: task.type,
     phase: task.phase,
     status: task.status,
-    revision: task.revision,
     requiresTest: task.requiresTest,
     goal: task.goal,
     scope: task.scope,
@@ -109,33 +105,31 @@ function loadOwnedTask(
   return { task };
 }
 
-export function createChiefTaskTools(contextOf: TaskToolContextResolver): DomainTool[] {
-  return [createTaskTool(contextOf), updateTaskTool(contextOf), reconcileTaskTool(contextOf), endTaskTool(contextOf), taskGetTool(contextOf)];
-}
-
-/** Specialists may only read their own Task (G1: `task.get`). */
-export function createTaskGetTool(contextOf: TaskToolContextResolver): DomainTool {
-  return taskGetTool(contextOf);
-}
-
-function createTaskTool(contextOf: TaskToolContextResolver): DomainTool {
+/** The chief's tool: every operation. A specialist gets the same tool with only `get` (G1). */
+export function createTaskTool(contextOf: TaskToolContextResolver, options: { readonly chief: boolean }): DomainTool {
+  const ops = options.chief ? CHIEF_OPS : SPECIALIST_OPS;
   return {
-    name: 'createTask',
-    label: 'createTask',
-    description: [
-      'Create one Task (type=read|write) with its overall Plan. write requires requiresTest (boolean); read forbids it.',
-      'A Task need not belong to a requirement: design/planning work, investigation and knowledge work stand alone.',
-      'When the Task implements an existing implementation requirement, pass its requirementId: the program checks it exists, is valid and is pending/in_progress. A read Task never cites one.',
-    ].join('\n'),
+    name: 'task',
+    label: 'task',
+    description: options.chief
+      ? [
+          'Create and run one Task: create, update (phase/summary/plan), dispatch (start or continue the current step professional Sessions, then wait), control (pause/resume/cancel), end, get, adopt, recover.',
+          'No version or digest is passed: the host records what it observed.',
+          'The overall Plan is yours; each member decides its internal plan. Wait for the whole step before judging it.',
+        ].join('\n')
+      : 'Read the Task you belong to (op=get): goal, scope, plan, this step members and their reports.',
     parameters: {
       type: 'object',
       properties: {
+        op: { type: 'string', enum: [...ops] },
+        taskId: { type: 'string', description: 'the Task to act on; defaults to the session current Task' },
+        // create
         type: { type: 'string', enum: ['read', 'write'] },
         goal: { type: 'string' },
         scope: { type: 'string' },
+        planMarkdown: { type: 'string' },
         acceptanceRefs: { type: 'array', items: { type: 'string' } },
         basisRefs: { type: 'array', items: { type: 'string' } },
-        planMarkdown: { type: 'string' },
         authorizationRef: {
           type: 'object',
           properties: { inputId: { type: 'string' }, interactionId: { type: 'string' } },
@@ -146,162 +140,7 @@ function createTaskTool(contextOf: TaskToolContextResolver): DomainTool {
           type: 'string',
           description: 'the implementation requirement this Task delivers (omit for design, investigation or knowledge work)',
         },
-      },
-      required: ['type', 'goal', 'scope', 'planMarkdown', 'authorizationRef'],
-      additionalProperties: false,
-    },
-    async execute(_toolCallId, rawParams) {
-      const context = contextOf();
-      const params = asRecord(rawParams);
-      if (params === undefined) {
-        return fail('INVALID_ARGUMENT', 'params must be an object');
-      }
-      const type = readString(params, 'type');
-      if (type !== 'read' && type !== 'write') {
-        return fail('INVALID_ARGUMENT', 'type must be read or write');
-      }
-      const goal = readString(params, 'goal');
-      const scope = readString(params, 'scope');
-      const planMarkdown = readString(params, 'planMarkdown');
-      if (
-        goal === undefined ||
-        goal.trim() === '' ||
-        scope === undefined ||
-        scope.trim() === '' ||
-        planMarkdown === undefined ||
-        planMarkdown.trim() === ''
-      ) {
-        return fail('INVALID_ARGUMENT', 'goal, scope and planMarkdown are required non-empty strings');
-      }
-      // The cited decision must be a real one in this project; only its identity/state is verified.
-      const authorization = resolveAuthorizationRefs(context.store, context.projectId, params['authorizationRef']);
-      if (!authorization.ok) {
-        return fail('INVALID_ARGUMENT', `authorizationRef: ${authorization.message}`);
-      }
-      const requiresTest = params['requiresTest'];
-      if (type === 'read' && requiresTest !== undefined && requiresTest !== false) {
-        return fail('INVALID_ARGUMENT', 'a read Task cannot declare requiresTest=true');
-      }
-      if (type === 'write' && typeof requiresTest !== 'boolean') {
-        return fail(
-          'INVALID_ARGUMENT',
-          'a write Task must state requiresTest (true for behaviour code, false for lightweight/document work)',
-        );
-      }
-      const acceptanceRefs = readStringArray(params, 'acceptanceRefs') ?? [];
-      const basisRefs = readStringArray(params, 'basisRefs') ?? [];
-      const requirementId = readString(params, 'requirementId');
-      if (requirementId !== undefined) {
-        // The field means "this Task implements that implementation requirement" (R-04); a design
-        // Task serves requirements through source/result links instead. A dangling or unusable
-        // citation is refused here, so a delivery cannot run for hours against a record that does not
-        // exist.
-        if (type === 'read') {
-          return fail('INVALID_ARGUMENT', 'a read Task does not implement a requirement; leave requirementId empty');
-        }
-        const record = getRequirement(context.cwd, requirementId);
-        if (!record.found) {
-          return fail('NOT_FOUND', `requirement ${requirementId} does not exist`, { requirementId });
-        }
-        if (!record.parsed.ok) {
-          return fail('INVALID_ARGUMENT', `requirement ${requirementId} is not valid`, {
-            requirementId,
-            issues: record.parsed.issues,
-          });
-        }
-        const { kind, status } = record.parsed.record.metadata;
-        if (kind !== 'implementation') {
-          return fail(
-            'INVALID_ARGUMENT',
-            `requirement ${requirementId} is a proposal; cite the implementation requirement delivered by this Task`,
-            { requirementId, kind },
-          );
-        }
-        if (status !== 'pending' && status !== 'in_progress') {
-          return fail(
-            'INVALID_ARGUMENT',
-            `requirement ${requirementId} is ${status}; an implementation Task needs pending or in_progress`,
-            { requirementId, status },
-          );
-        }
-      }
-      const taskId = `t-${randomUUID().slice(0, 8)}`;
-      const target = planTarget({
-        taskId,
-        type,
-        projectCwd: context.cwd,
-        serverWorkDir: context.serverWorkDir,
-      });
-      const intendedPlan = planRefFor(target, planMarkdown);
-      try {
-        // Task row first: a refused create must not leave a plan file or a save receipt behind.
-        const task = context.store.createTask({
-          id: taskId,
-          projectId: context.projectId,
-          chiefSessionId: context.sessionId,
-          ownerEpoch: context.store.epoch,
-          ...(requirementId !== undefined ? { requirementId } : {}),
-          type,
-          requiresTest: type === 'write' ? (requiresTest as boolean) : false,
-          goal,
-          scope,
-          acceptanceRefs,
-          basisRefs,
-          planRef: intendedPlan,
-          authorizationRefs: authorization.refs,
-          sourceInputId: context.inputId,
-          summary: `created (${type})`,
-        });
-        let planState = 'saved';
-        try {
-          commitPlan({
-            store: context.store,
-            requestKey: `${context.inputId}:plan:${taskId}`,
-            target,
-            markdown: planMarkdown,
-          });
-        } catch (error) {
-          // The Task exists and points at the intended version; the file still has to be written.
-          planState = 'pending';
-          return ok(
-            `Task ${task.id} created but its Plan file is not saved yet (${messageOf(error)}); retry with the same plan`,
-            {
-              taskId: task.id,
-              revision: task.revision,
-              phase: task.phase,
-              currentSessionIds: task.currentSessionIds,
-              planRef: task.planRef,
-              planState,
-            },
-          );
-        }
-        return ok(`Task ${task.id} created (${type}, requiresTest=${task.requiresTest}); plan at ${target.path}`, {
-          taskId: task.id,
-          revision: task.revision,
-          phase: task.phase,
-          currentSessionIds: task.currentSessionIds,
-          planRef: task.planRef,
-          planState,
-        });
-      } catch (error) {
-        const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
-        return fail(code, messageOf(error), { taskId });
-      }
-    },
-  };
-}
-
-function updateTaskTool(contextOf: TaskToolContextResolver): DomainTool {
-  return {
-    name: 'updateTask',
-    label: 'updateTask',
-    description:
-      'Update the current Task: record the finished step summary and start the next phase, or revise goal/scope/plan.',
-    parameters: {
-      type: 'object',
-      properties: {
-        taskId: { type: 'string' },
-        expectedRevision: { type: 'number' },
+        // update
         phase: { type: 'string', enum: [...PHASES] },
         summary: { type: 'string' },
         nextStep: { type: 'string' },
@@ -315,274 +154,44 @@ function updateTaskTool(contextOf: TaskToolContextResolver): DomainTool {
             acceptanceRefs: { type: 'array', items: { type: 'string' } },
             basisRefs: { type: 'array', items: { type: 'string' } },
             planMarkdown: { type: 'string' },
-            expectedPlanVersion: { type: 'string' },
             requiresTest: { type: 'boolean' },
           },
           additionalProperties: false,
         },
-      },
-      required: ['taskId', 'expectedRevision'],
-      additionalProperties: false,
-    },
-    async execute(_toolCallId, rawParams) {
-      const context = contextOf();
-      const params = asRecord(rawParams);
-      if (params === undefined) {
-        return fail('INVALID_ARGUMENT', 'params must be an object');
-      }
-      const taskId = readString(params, 'taskId');
-      const expectedRevision = params['expectedRevision'];
-      if (taskId === undefined || typeof expectedRevision !== 'number') {
-        return fail('INVALID_ARGUMENT', 'taskId and expectedRevision are required');
-      }
-      const phase = readString(params, 'phase');
-      if (phase !== undefined && !PHASES.includes(phase as TaskPhase)) {
-        return fail('INVALID_ARGUMENT', `unknown phase ${phase}`);
-      }
-      const status = readString(params, 'status');
-      if (status !== undefined && status !== 'active' && status !== 'waiting') {
-        return fail('INVALID_ARGUMENT', 'status must be active or waiting');
-      }
-      const owned = loadOwnedTask(context, taskId);
-      if ('refusal' in owned) {
-        return owned.refusal;
-      }
-      const existing = owned.task;
-      // Ownership and revision are checked *before* any file write: a losing writer must not touch
-      // another writer's Plan (S6).
-      if (existing.chiefSessionId !== context.sessionId) {
-        return fail('FORBIDDEN', `Task ${taskId} is coordinated by another session`);
-      }
-      if (existing.revision !== expectedRevision) {
-        return fail('VERSION_CONFLICT', 'Task revision does not match', {
-          actual: existing.revision,
-          expected: expectedRevision,
-        });
-      }
-      const changes = asRecord(params['changes']);
-      const planMarkdown = changes === undefined ? undefined : readString(changes, 'planMarkdown');
-      let planRef: ArtifactRef | undefined;
-      let planState = 'unchanged';
-      if (planMarkdown !== undefined) {
-        const expectedPlanVersion = readString(changes ?? {}, 'expectedPlanVersion');
-        // The recorded version is the expected one unless the caller names another: protection must not
-        // depend on the model opting in. Compare against the file when it is readable.
-        const recordedVersion = existing.planRef?.sha256;
-        const onDisk = existing.planRef === null ? undefined : readPlan(existing.planRef);
-        const actualVersion =
-          onDisk !== undefined && onDisk.text !== '' ? digestOfText(onDisk.text) : recordedVersion;
-        const requestedVersion = digestOfText(planMarkdown);
-        if (expectedPlanVersion !== undefined) {
-          if (actualVersion !== undefined && actualVersion !== expectedPlanVersion) {
-            return fail('VERSION_CONFLICT', `the Plan changed since ${expectedPlanVersion}`, {
-              currentPlanVersion: actualVersion,
-            });
-          }
-        } else if (
-          actualVersion !== undefined &&
-          actualVersion !== recordedVersion &&
-          actualVersion !== requestedVersion
-        ) {
-          return fail('VERSION_CONFLICT', 'the Plan file on disk is neither the recorded nor the requested version', {
-            recorded: recordedVersion ?? 'none',
-            onDisk: actualVersion,
-          });
-        }
-        const target = planTarget({
-          taskId,
-          type: existing.type,
-          projectCwd: context.cwd,
-          serverWorkDir: context.serverWorkDir,
-        });
-        planRef = planRefFor(target, planMarkdown);
-      }
-      try {
-        const task = context.store.updateTask({
-          taskId,
-          expectedRevision,
-          ...(phase !== undefined ? { phase: phase as TaskPhase } : {}),
-          ...(readString(params, 'summary') !== undefined
-            ? { summary: readString(params, 'summary') as string }
-            : {}),
-          ...(readString(params, 'nextStep') !== undefined
-            ? { nextStep: readString(params, 'nextStep') as string }
-            : {}),
-          ...(readString(params, 'blockReason') !== undefined
-            ? { blockReason: readString(params, 'blockReason') as string }
-            : {}),
-          ...(status !== undefined ? { status: status as 'active' | 'waiting' } : {}),
-          ...(planRef !== undefined ? { planRef } : {}),
-          ...(changes !== undefined && readString(changes, 'goal') !== undefined
-            ? { goal: readString(changes, 'goal') as string }
-            : {}),
-          ...(changes !== undefined && readString(changes, 'scope') !== undefined
-            ? { scope: readString(changes, 'scope') as string }
-            : {}),
-          ...(changes !== undefined && readStringArray(changes, 'acceptanceRefs') !== undefined
-            ? { acceptanceRefs: readStringArray(changes, 'acceptanceRefs') as string[] }
-            : {}),
-          ...(changes !== undefined && readStringArray(changes, 'basisRefs') !== undefined
-            ? { basisRefs: readStringArray(changes, 'basisRefs') as string[] }
-            : {}),
-          ...(changes !== undefined && typeof changes['requiresTest'] === 'boolean'
-            ? { requiresTest: changes['requiresTest'] as boolean }
-            : {}),
-        });
-        if (planMarkdown !== undefined) {
-          try {
-            commitPlan({
-              store: context.store,
-              requestKey: `${context.inputId}:plan:${taskId}:r${expectedRevision}`,
-              target: planTarget({
-                taskId,
-                type: task.type,
-                projectCwd: context.cwd,
-                serverWorkDir: context.serverWorkDir,
-              }),
-              markdown: planMarkdown,
-            });
-            planState = 'saved';
-          } catch (error) {
-            planState = 'pending';
-            return ok(
-              `Task ${task.id} updated to ${task.phase} (revision ${task.revision}) but its Plan file is not saved yet (${messageOf(error)})`,
-              {
-                taskId: task.id,
-                revision: task.revision,
-                phase: task.phase,
-                currentSessionIds: task.currentSessionIds,
-                planRef: task.planRef,
-                planState,
+        // dispatch
+        sessions: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              roleId: { type: 'string', description: 'create a new professional Session with this role' },
+              sessionId: { type: 'string', description: 'continue a settled member of the current step' },
+              specialization: { type: 'string' },
+              label: { type: 'string' },
+              instructions: { type: 'string' },
+              refs: { type: 'array', items: { type: 'string' } },
+              dependsOnResultIds: { type: 'array', items: { type: 'string' } },
+              expectedKind: { type: 'string' },
+              writeScope: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'project-relative paths or globs this member writes; overlapping scopes are reported',
               },
-            );
-          }
-        }
-        return ok(`Task ${task.id} updated: phase=${task.phase} revision=${task.revision}`, {
-          taskId: task.id,
-          revision: task.revision,
-          phase: task.phase,
-          currentSessionIds: task.currentSessionIds,
-          planRef: task.planRef,
-          planState,
-        });
-      } catch (error) {
-        const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
-        return fail(code, messageOf(error), { taskId });
-      }
-    },
-  };
-}
-
-/**
- * task.reconcile (recovery contract): close a KNOWN interrupted input with real verification.
- *
- * Without this tool an interrupted member input blocks its step forever: claim refuses the
- * session (RECOVERY_REQUIRED), updateTask reports STAGE_NOT_READY, and the chief has no path
- * to the recovery service that already exists on the host (R1 session.recovery.resolve) — so
- * the Task, its chief and the user's queue wait indefinitely. The contract (agents-and-tools
- * `reconcile`) defines exactly this call; it was simply never implemented.
- *
- * It never starts a model or replays work: it records the verdict on the original input after
- * checking ownership, membership and that the evidence really belongs to this Task.
- */
-function reconcileTaskTool(contextOf: TaskToolContextResolver): DomainTool {
-  return {
-    name: 'reconcile',
-    label: 'reconcile',
-    description:
-      'Close a known interrupted input of this Task after real verification: cite the evidence (report/result ids) and the conclusion. Does not restart the run.',
-    parameters: {
-      type: 'object',
-      properties: {
-        taskId: { type: 'string' },
-        sessionId: { type: 'string' },
-        inputId: { type: 'string' },
-        expectedInputRevision: { type: 'number' },
+              workspaceRef: { type: 'string' },
+            },
+            additionalProperties: false,
+          },
+        },
+        waitTimeoutMs: { type: 'number' },
+        // control / end / get / adopt / recover
+        command: { type: 'string', enum: ['pause', 'resume', 'cancel'] },
+        completionResultId: { type: 'string' },
+        includeResultBodies: { type: 'boolean' },
+        chiefSessionId: { type: 'string', description: 'adopt: the chief session that takes the Task over' },
         evidenceRefs: { type: 'array', items: { type: 'string' } },
         resolution: { type: 'string', enum: ['completed', 'failed', 'stopped'] },
       },
-      required: ['taskId', 'sessionId', 'inputId', 'evidenceRefs', 'resolution'],
-      additionalProperties: false,
-    },
-    async execute(_toolCallId, rawParams) {
-      const context = contextOf();
-      const params = asRecord(rawParams);
-      if (params === undefined) return fail('INVALID_ARGUMENT', 'params must be an object');
-      const taskId = readString(params, 'taskId');
-      const sessionId = readString(params, 'sessionId');
-      const inputId = readString(params, 'inputId');
-      const resolution = readString(params, 'resolution');
-      const evidenceRefs = readStringArray(params, 'evidenceRefs');
-      const expectedInputRevision = params['expectedInputRevision'];
-      if (taskId === undefined || sessionId === undefined || inputId === undefined || evidenceRefs === undefined) {
-        return fail('INVALID_ARGUMENT', 'taskId, sessionId, inputId and evidenceRefs are required');
-      }
-      if (resolution !== 'completed' && resolution !== 'failed' && resolution !== 'stopped') {
-        return fail('INVALID_ARGUMENT', 'resolution must be completed, failed or stopped');
-      }
-      const owned = loadOwnedTask(context, taskId);
-      if ('refusal' in owned) return owned.refusal;
-      if (owned.task.chiefSessionId !== context.sessionId) {
-        return fail('FORBIDDEN', `Task ${taskId} is coordinated by another session`);
-      }
-      const member = context.store.getTaskSession(sessionId);
-      if (member === undefined || member.taskId !== taskId) {
-        return fail('NOT_FOUND', `session ${sessionId} is not a member of Task ${taskId}`, { sessionId, taskId });
-      }
-      // Evidence must be real: cited results of THIS Task (or explicit file refs the host can see).
-      const taskResults = new Set(context.store.listTaskResults(taskId).map((result) => result.resultId));
-      const foreign = evidenceRefs.filter((ref) => !taskResults.has(ref) && !ref.startsWith('file:'));
-      if (foreign.length > 0) {
-        return fail('INVALID_ARGUMENT', 'evidenceRefs must cite this Task\'s results or file: references', {
-          unknown: foreign,
-          knownResults: [...taskResults],
-        });
-      }
-      const input = context.store.getInput(inputId);
-      if (input === undefined || input.sessionId !== sessionId) {
-        return fail('NOT_FOUND', `input ${inputId} is not in session ${sessionId}`, { inputId });
-      }
-      if (input.status !== 'interrupted') {
-        return fail('INVALID_ARGUMENT', `input ${inputId} is ${input.status}, not interrupted`, { inputId });
-      }
-      const revision =
-        typeof expectedInputRevision === 'number' ? expectedInputRevision : input.revision;
-      try {
-        const resolved = context.store.resolveInterruptedInput({
-          sessionId,
-          inputId,
-          expectedRevision: revision,
-          resolution,
-          evidenceRefs,
-          resolvedBy: `${context.sessionId}:reconcile`,
-        });
-        return ok(
-          `Input ${resolved.inputId} closed as ${resolved.status}; the step can continue.`,
-          { inputId: resolved.inputId, status: resolved.status, taskId },
-        );
-      } catch (error) {
-        return fail(messageOf(error), 'the interrupted input was not closed', {
-          inputId,
-          hint: 're-read the input revision (task.get) and cite evidence from this Task',
-        });
-      }
-    },
-  };
-}
-
-function endTaskTool(contextOf: TaskToolContextResolver): DomainTool {
-  return {
-    name: 'endTask',
-    label: 'endTask',
-    description: 'Finish the Task once every completion requirement is recorded.',
-    parameters: {
-      type: 'object',
-      properties: {
-        taskId: { type: 'string' },
-        expectedRevision: { type: 'number' },
-        completionResultId: { type: 'string' },
-      },
-      required: ['taskId', 'expectedRevision', 'completionResultId'],
+      required: ['op'],
       additionalProperties: false,
     },
     async execute(_toolCallId, rawParams) {
@@ -591,72 +200,21 @@ function endTaskTool(contextOf: TaskToolContextResolver): DomainTool {
       if (params === undefined) {
         return fail('INVALID_ARGUMENT', 'params must be an object');
       }
-      const taskId = readString(params, 'taskId');
-      const expectedRevision = params['expectedRevision'];
-      const completionResultId = readString(params, 'completionResultId');
-      if (taskId === undefined || typeof expectedRevision !== 'number' || completionResultId === undefined) {
-        return fail('INVALID_ARGUMENT', 'taskId, expectedRevision and completionResultId are required');
-      }
-      const owned = loadOwnedTask(context, taskId);
-      if ('refusal' in owned) {
-        return owned.refusal;
-      }
-      if (owned.task.chiefSessionId !== context.sessionId) {
-        return fail('FORBIDDEN', `Task ${taskId} is coordinated by another session`);
-      }
-      try {
-        const result = context.store.endTask({ taskId, expectedRevision, completionResultId });
-        if (!result.ok) {
-          return fail('COMPLETION_INCOMPLETE', `the Task is not complete yet; missing: ${result.gaps.join('; ')}`, {
-            gaps: result.gaps,
-          });
-        }
-        return ok(`Task ${taskId} completed`, {
-          taskId,
-          status: result.task.status,
-          revision: result.task.revision,
-        });
-      } catch (error) {
-        const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
-        return fail(code, messageOf(error), { taskId });
-      }
-    },
-  };
-}
-
-function taskGetTool(contextOf: TaskToolContextResolver): DomainTool {
-  return {
-    name: 'task',
-    label: 'task',
-    description:
-      'Read the current Task (op=get), freeze a candidate version (op=prepare_candidate) or control it (op=control).',
-    parameters: {
-      type: 'object',
-      properties: {
-        op: { type: 'string', enum: ['get', 'prepare_candidate', 'control'] },
-        taskId: { type: 'string' },
-        includeResultBodies: { type: 'boolean' },
-        expectedRevision: { type: 'number' },
-        candidate: { type: 'object' },
-        command: { type: 'string', enum: ['pause', 'resume', 'cancel'] },
-      },
-      additionalProperties: false,
-    },
-    async execute(_toolCallId, rawParams) {
-      const context = contextOf();
-      const params = asRecord(rawParams) ?? {};
-      const op = readString(params, 'op') ?? 'get';
-      if (op !== 'get' && context.roleId !== 'chief') {
-        return fail('FORBIDDEN', 'only the coordinating session may control a Task or freeze a candidate');
+      const op = readString(params, 'op');
+      if (op === undefined || !(ops as readonly string[]).includes(op)) {
+        return fail('INVALID_ARGUMENT', `op must be one of ${ops.join(', ')}`, { op: op ?? null });
       }
       const session = context.store.getSession(context.sessionId);
-      const currentTaskId = session?.currentTaskId ?? undefined;
-      const taskId = readString(params, 'taskId') ?? currentTaskId;
+      const currentTaskId = session?.currentTaskId ?? context.currentTaskId;
+      const taskId = readString(params, 'taskId') ?? (op === 'create' ? undefined : currentTaskId);
+      if (op === 'create') {
+        return createOp(context, params);
+      }
       if (taskId === undefined) {
         return fail('NOT_FOUND', 'this session has no current Task');
       }
-      // A specialist may read its own Task only; the chief may read Tasks of its own project.
-      if (context.roleId !== 'chief' && taskId !== currentTaskId) {
+      // A specialist may read its own Task only; the chief may act on Tasks of its own project.
+      if (!options.chief && taskId !== currentTaskId) {
         return fail('NOT_FOUND', `Task ${taskId} is not this session's Task`);
       }
       const owned = loadOwnedTask(context, taskId);
@@ -664,81 +222,393 @@ function taskGetTool(contextOf: TaskToolContextResolver): DomainTool {
         return owned.refusal;
       }
       const task = owned.task;
-
-      if (op === 'control') {
-        if (task.chiefSessionId !== context.sessionId) {
-          return fail('FORBIDDEN', `Task ${taskId} is coordinated by another session`);
-        }
-        const command = readString(params, 'command');
-        const expectedRevision = params['expectedRevision'];
-        if (
-          (command !== 'pause' && command !== 'resume' && command !== 'cancel') ||
-          typeof expectedRevision !== 'number'
-        ) {
-          return fail('INVALID_ARGUMENT', 'control needs command (pause/resume/cancel) and expectedRevision');
-        }
-        try {
-          // Control is a host operation: the Task can only reach its final status after its own
-          // work has actually stopped, which the host knows.
-          const updated =
-            context.controlTask === undefined
-              ? context.store.controlTask({ taskId, expectedRevision, command })
-              : await context.controlTask({ taskId, expectedRevision, command });
-          return ok(`Task ${taskId} is now ${updated.status}`, {
-            taskId,
-            status: updated.status,
-            revision: updated.revision,
-            currentSessionIds: updated.currentSessionIds,
-          });
-        } catch (error) {
-          const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
-          return fail(code, messageOf(error), { taskId });
-        }
+      // Every op except get changes the Task, and only its owning chief may do that.
+      if (op !== 'get' && task.chiefSessionId !== context.sessionId) {
+        return fail('FORBIDDEN', `Task ${taskId} is coordinated by another session`);
       }
-
-      if (op === 'prepare_candidate') {
-        if (task.chiefSessionId !== context.sessionId) {
-          return fail('FORBIDDEN', `Task ${taskId} is coordinated by another session`);
-        }
-        const expectedRevision = params['expectedRevision'];
-        const candidate = params['candidate'];
-        if (typeof expectedRevision !== 'number' || typeof candidate !== 'object' || candidate === null) {
-          return fail('INVALID_ARGUMENT', 'prepare_candidate needs expectedRevision and candidate');
-        }
-        try {
-          const updated = context.store.setCandidate({ taskId, expectedRevision, candidate });
-          return ok(`Task ${taskId} candidate frozen`, {
-            taskId,
-            revision: updated.revision,
-            candidate: updated.candidate,
-          });
-        } catch (error) {
-          const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
-          return fail(code, messageOf(error), { taskId });
-        }
+      switch (op) {
+        case 'update':
+          return updateOp(context, task, params);
+        case 'dispatch':
+          if (context.host === undefined) {
+            return fail('FORBIDDEN', 'only a chief session dispatches members');
+          }
+          return dispatchOp({ ...context, host: context.host }, taskId, params);
+        case 'control':
+          return controlOp(context, task, params);
+        case 'end':
+          return endOp(context, task, params);
+        case 'adopt':
+          return adoptOp(context, task, params);
+        case 'recover':
+          return recoverOp(context, task, params);
+        default:
+          return getOp(context, task, params);
       }
-
-      const plan = task.planRef === null ? { text: '', current: false } : readPlan(task.planRef);
-      const results = context.store.listTaskResults(task.id).map((result) => ({
-        resultId: result.resultId,
-        kind: result.kind,
-        verdict: result.verdict,
-        candidateId: result.candidateId,
-        summary: result.summary,
-        sessionId: result.sessionId,
-        supersedesResultId: result.supersedesResultId,
-        // A result is no longer evidence once a later report superseded it (S6 keeps the history).
-        supersededBy: context.store.supersededBy(result.resultId)?.resultId ?? null,
-        bodyRef: result.bodyRef,
-        checks: result.checks,
-      }));
-      return ok(`Task ${task.id}: ${task.phase} (${task.status}), revision ${task.revision}`, {
-        task: taskSummaryJson(task),
-        planText: plan.text,
-        planCurrent: plan.current,
-        results,
-        missing: task.planRef !== null && !plan.current ? ['plan file is missing or changed'] : [],
-      });
     },
   };
+}
+
+/** Specialists may only read their own Task (G1). */
+export function createTaskGetTool(contextOf: TaskToolContextResolver): DomainTool {
+  return createTaskTool(contextOf, { chief: false });
+}
+
+function createOp(context: TaskToolContext, params: Record<string, unknown>): Promise<ToolOutcome> | ToolOutcome {
+  const type = readString(params, 'type');
+  if (type !== 'read' && type !== 'write') {
+    return fail('INVALID_ARGUMENT', 'type must be read or write');
+  }
+  const goal = readString(params, 'goal');
+  const scope = readString(params, 'scope');
+  const planMarkdown = readString(params, 'planMarkdown');
+  if (
+    goal === undefined ||
+    goal.trim() === '' ||
+    scope === undefined ||
+    scope.trim() === '' ||
+    planMarkdown === undefined ||
+    planMarkdown.trim() === ''
+  ) {
+    return fail('INVALID_ARGUMENT', 'goal, scope and planMarkdown are required non-empty strings');
+  }
+  // The cited decision must be a real one in this project; only its identity/state is verified.
+  const authorization = resolveAuthorizationRefs(context.store, context.projectId, params['authorizationRef']);
+  if (!authorization.ok) {
+    return fail('INVALID_ARGUMENT', `authorizationRef: ${authorization.message}`);
+  }
+  const requiresTest = params['requiresTest'];
+  if (type === 'read' && requiresTest !== undefined && requiresTest !== false) {
+    return fail('INVALID_ARGUMENT', 'a read Task cannot declare requiresTest=true');
+  }
+  if (type === 'write' && typeof requiresTest !== 'boolean') {
+    return fail(
+      'INVALID_ARGUMENT',
+      'a write Task must state requiresTest (true for behaviour code, false for lightweight/document work)',
+    );
+  }
+  const acceptanceRefs = readStringArray(params, 'acceptanceRefs') ?? [];
+  const basisRefs = readStringArray(params, 'basisRefs') ?? [];
+  const requirementId = readString(params, 'requirementId');
+  if (requirementId !== undefined) {
+    // The field means "this Task implements that implementation requirement" (R-04); a design
+    // Task serves requirements through source/result links instead. A dangling or unusable
+    // citation is refused here, so a delivery cannot run for hours against a record that does not
+    // exist.
+    if (type === 'read') {
+      return fail('INVALID_ARGUMENT', 'a read Task does not implement a requirement; leave requirementId empty');
+    }
+    const record = getRequirement(context.cwd, requirementId);
+    if (!record.found) {
+      return fail('NOT_FOUND', `requirement ${requirementId} does not exist`, { requirementId });
+    }
+    if (!record.parsed.ok) {
+      return fail('INVALID_ARGUMENT', `requirement ${requirementId} is not valid`, {
+        requirementId,
+        issues: record.parsed.issues,
+      });
+    }
+    const { kind, status } = record.parsed.record.metadata;
+    if (kind !== 'implementation') {
+      return fail(
+        'INVALID_ARGUMENT',
+        `requirement ${requirementId} is a proposal; cite the implementation requirement delivered by this Task`,
+        { requirementId, kind },
+      );
+    }
+    if (status !== 'pending' && status !== 'in_progress') {
+      return fail(
+        'INVALID_ARGUMENT',
+        `requirement ${requirementId} is ${status}; an implementation Task needs pending or in_progress`,
+        { requirementId, status },
+      );
+    }
+  }
+  const taskId = `t-${randomUUID().slice(0, 8)}`;
+  const target = planTarget({ taskId, type, projectCwd: context.cwd, serverWorkDir: context.serverWorkDir });
+  const intendedPlan = planRefFor(target, planMarkdown);
+  try {
+    // Task row first: a refused create must not leave a plan file or a save receipt behind.
+    const task = context.store.createTask({
+      id: taskId,
+      projectId: context.projectId,
+      chiefSessionId: context.sessionId,
+      ownerEpoch: context.store.epoch,
+      ...(requirementId !== undefined ? { requirementId } : {}),
+      type,
+      requiresTest: type === 'write' ? (requiresTest as boolean) : false,
+      goal,
+      scope,
+      acceptanceRefs,
+      basisRefs,
+      planRef: intendedPlan,
+      authorizationRefs: authorization.refs,
+      sourceInputId: context.inputId,
+      summary: `created (${type})`,
+    });
+    let planState = 'saved';
+    try {
+      commitPlan({
+        store: context.store,
+        requestKey: `${context.inputId}:plan:${taskId}`,
+        target,
+        markdown: planMarkdown,
+      });
+    } catch (error) {
+      // The Task exists and points at the intended version; the file still has to be written.
+      planState = 'pending';
+      return ok(
+        `Task ${task.id} created but its Plan file is not saved yet (${messageOf(error)}); retry with the same plan`,
+        { taskId: task.id, phase: task.phase, currentSessionIds: task.currentSessionIds, planRef: task.planRef, planState },
+      );
+    }
+    return ok(`Task ${task.id} created (${type}, requiresTest=${task.requiresTest}); plan at ${target.path}`, {
+      taskId: task.id,
+      phase: task.phase,
+      currentSessionIds: task.currentSessionIds,
+      planRef: task.planRef,
+      planState,
+    });
+  } catch (error) {
+    const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
+    return fail(code, messageOf(error), { taskId });
+  }
+}
+
+function updateOp(context: TaskToolContext, existing: TaskRow, params: Record<string, unknown>): ToolOutcome {
+  const taskId = existing.id;
+  const phase = readString(params, 'phase');
+  if (phase !== undefined && !PHASES.includes(phase as TaskPhase)) {
+    return fail('INVALID_ARGUMENT', `unknown phase ${phase}`);
+  }
+  const status = readString(params, 'status');
+  if (status !== undefined && status !== 'active' && status !== 'waiting') {
+    return fail('INVALID_ARGUMENT', 'status must be active or waiting');
+  }
+  const changes = asRecord(params['changes']);
+  const planMarkdown = changes === undefined ? undefined : readString(changes, 'planMarkdown');
+  let planRef: ArtifactRef | undefined;
+  let planState = 'unchanged';
+  if (planMarkdown !== undefined) {
+    // The chief is the only writer of the Plan, but a person can edit the file. Never overwrite a
+    // version nobody saw: compare the file with what the Task recorded and with what is being written.
+    const recorded = existing.planRef?.sha256;
+    const onDisk = existing.planRef === null ? undefined : readPlan(existing.planRef);
+    const diskDigest = onDisk !== undefined && onDisk.text !== '' ? digestOfText(onDisk.text) : recorded;
+    const requested = digestOfText(planMarkdown);
+    if (diskDigest !== undefined && diskDigest !== recorded && diskDigest !== requested) {
+      return fail('VERSION_CONFLICT', 'the Plan file changed since it was recorded; read it before revising', {
+        currentText: onDisk?.text ?? null,
+      });
+    }
+    const target = planTarget({
+      taskId,
+      type: existing.type,
+      projectCwd: context.cwd,
+      serverWorkDir: context.serverWorkDir,
+    });
+    planRef = planRefFor(target, planMarkdown);
+  }
+  try {
+    const task = context.store.updateTask({
+      taskId,
+      ...(phase !== undefined ? { phase: phase as TaskPhase } : {}),
+      ...(readString(params, 'summary') !== undefined ? { summary: readString(params, 'summary') as string } : {}),
+      ...(readString(params, 'nextStep') !== undefined ? { nextStep: readString(params, 'nextStep') as string } : {}),
+      ...(readString(params, 'blockReason') !== undefined
+        ? { blockReason: readString(params, 'blockReason') as string }
+        : {}),
+      ...(status !== undefined ? { status: status as 'active' | 'waiting' } : {}),
+      ...(planRef !== undefined ? { planRef } : {}),
+      ...(changes !== undefined && readString(changes, 'goal') !== undefined
+        ? { goal: readString(changes, 'goal') as string }
+        : {}),
+      ...(changes !== undefined && readString(changes, 'scope') !== undefined
+        ? { scope: readString(changes, 'scope') as string }
+        : {}),
+      ...(changes !== undefined && readStringArray(changes, 'acceptanceRefs') !== undefined
+        ? { acceptanceRefs: readStringArray(changes, 'acceptanceRefs') as string[] }
+        : {}),
+      ...(changes !== undefined && readStringArray(changes, 'basisRefs') !== undefined
+        ? { basisRefs: readStringArray(changes, 'basisRefs') as string[] }
+        : {}),
+      ...(changes !== undefined && typeof changes['requiresTest'] === 'boolean'
+        ? { requiresTest: changes['requiresTest'] as boolean }
+        : {}),
+    });
+    if (planMarkdown !== undefined) {
+      try {
+        commitPlan({
+          store: context.store,
+          requestKey: `${context.inputId}:plan:${taskId}`,
+          target: planTarget({
+            taskId,
+            type: task.type,
+            projectCwd: context.cwd,
+            serverWorkDir: context.serverWorkDir,
+          }),
+          markdown: planMarkdown,
+        });
+        planState = 'saved';
+      } catch (error) {
+        planState = 'pending';
+        return ok(
+          `Task ${task.id} updated to ${task.phase} but its Plan file is not saved yet (${messageOf(error)})`,
+          { taskId: task.id, phase: task.phase, currentSessionIds: task.currentSessionIds, planRef: task.planRef, planState },
+        );
+      }
+    }
+    return ok(`Task ${task.id} updated: phase=${task.phase}`, {
+      taskId: task.id,
+      phase: task.phase,
+      status: task.status,
+      currentSessionIds: task.currentSessionIds,
+      planRef: task.planRef,
+      planState,
+    });
+  } catch (error) {
+    const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
+    return fail(code, messageOf(error), { taskId });
+  }
+}
+
+async function controlOp(context: TaskToolContext, task: TaskRow, params: Record<string, unknown>): Promise<ToolOutcome> {
+  const command = readString(params, 'command');
+  if (command !== 'pause' && command !== 'resume' && command !== 'cancel') {
+    return fail('INVALID_ARGUMENT', 'control needs command (pause/resume/cancel)');
+  }
+  try {
+    // Control is a host operation: the Task can only reach its final status after its own work has
+    // actually stopped, which the host knows.
+    const updated =
+      context.controlTask === undefined
+        ? context.store.controlTask({ taskId: task.id, command })
+        : await context.controlTask({ taskId: task.id, command });
+    return ok(`Task ${task.id} is now ${updated.status}`, {
+      taskId: task.id,
+      status: updated.status,
+      currentSessionIds: updated.currentSessionIds,
+    });
+  } catch (error) {
+    const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
+    return fail(code, messageOf(error), { taskId: task.id });
+  }
+}
+
+function endOp(context: TaskToolContext, task: TaskRow, params: Record<string, unknown>): ToolOutcome {
+  const completionResultId = readString(params, 'completionResultId');
+  if (completionResultId === undefined) {
+    return fail('INVALID_ARGUMENT', 'end needs completionResultId (the settlement, investigation or recovery report)');
+  }
+  try {
+    const result = context.store.endTask({ taskId: task.id, completionResultId });
+    if (!result.ok) {
+      return fail('COMPLETION_INCOMPLETE', `the Task is not complete yet; missing: ${result.gaps.join('; ')}`, {
+        gaps: result.gaps,
+      });
+    }
+    return ok(`Task ${task.id} completed`, { taskId: task.id, status: result.task.status });
+  } catch (error) {
+    const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
+    return fail(code, messageOf(error), { taskId: task.id });
+  }
+}
+
+function adoptOp(context: TaskToolContext, task: TaskRow, params: Record<string, unknown>): ToolOutcome {
+  const chiefSessionId = readString(params, 'chiefSessionId');
+  if (chiefSessionId === undefined) {
+    return fail('INVALID_ARGUMENT', 'adopt needs chiefSessionId');
+  }
+  try {
+    const adopted = context.store.adoptTask({ taskId: task.id, chiefSessionId });
+    return ok(`Task ${task.id} now belongs to ${adopted.chiefSessionId}`, {
+      taskId: task.id,
+      chiefSessionId: adopted.chiefSessionId,
+      status: adopted.status,
+    });
+  } catch (error) {
+    const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
+    return fail(code, messageOf(error), { taskId: task.id });
+  }
+}
+
+/**
+ * recover (recovery contract): close a KNOWN interrupted input with real verification.
+ *
+ * Without this the interrupted member input blocks its step forever: claim refuses the session
+ * (RECOVERY_REQUIRED) and the chief has no path to the recovery service. It never starts a model or
+ * replays work: the interrupted input of the named member is located, the evidence must belong to
+ * this Task, and only then is the verdict recorded.
+ */
+function recoverOp(context: TaskToolContext, task: TaskRow, params: Record<string, unknown>): ToolOutcome {
+  const sessionId = readString(params, 'sessionId');
+  const resolution = readString(params, 'resolution');
+  const evidenceRefs = readStringArray(params, 'evidenceRefs');
+  if (sessionId === undefined || evidenceRefs === undefined) {
+    return fail('INVALID_ARGUMENT', 'recover needs sessionId and evidenceRefs');
+  }
+  if (resolution !== 'completed' && resolution !== 'failed' && resolution !== 'stopped') {
+    return fail('INVALID_ARGUMENT', 'resolution must be completed, failed or stopped');
+  }
+  const member = context.store.getTaskSession(sessionId);
+  if (member === undefined || member.taskId !== task.id) {
+    return fail('NOT_FOUND', `session ${sessionId} is not a member of Task ${task.id}`, { sessionId });
+  }
+  if (member.currentInputId === null) {
+    return fail('NOT_FOUND', `session ${sessionId} has no input to recover`, { sessionId });
+  }
+  const inputId = member.currentInputId;
+  const taskResults = new Set(context.store.listTaskResults(task.id).map((result) => result.resultId));
+  const foreign = evidenceRefs.filter((ref) => !taskResults.has(ref) && !ref.startsWith('file:'));
+  if (foreign.length > 0) {
+    return fail('INVALID_ARGUMENT', "evidenceRefs must cite this Task's results or file: references", {
+      unknown: foreign,
+      knownResults: [...taskResults],
+    });
+  }
+  const input = context.store.getInput(inputId);
+  if (input === undefined) {
+    return fail('NOT_FOUND', `input ${inputId} does not exist`, { inputId });
+  }
+  if (input.status !== 'interrupted') {
+    return fail('INVALID_ARGUMENT', `input ${inputId} is ${input.status}, not interrupted`, { inputId });
+  }
+  try {
+    const resolved = context.store.resolveInterruptedInput({
+      sessionId,
+      inputId,
+      expectedRevision: input.revision,
+      resolution,
+      evidenceRefs,
+      resolvedBy: `${context.sessionId}:recover`,
+    });
+    return ok(`Input ${resolved.inputId} closed as ${resolved.status}; the step can continue.`, {
+      inputId: resolved.inputId,
+      status: resolved.status,
+      taskId: task.id,
+    });
+  } catch (error) {
+    return fail(messageOf(error), 'the interrupted input was not closed', { inputId });
+  }
+}
+
+function getOp(context: TaskToolContext, task: TaskRow, params: Record<string, unknown>): ToolOutcome {
+  const plan = task.planRef === null ? { text: '', current: false } : readPlan(task.planRef);
+  const results = context.store.listTaskResults(task.id).map((result) => ({
+    resultId: result.resultId,
+    kind: result.kind,
+    verdict: result.verdict,
+    summary: result.summary,
+    sessionId: result.sessionId,
+    delivery: result.deliveryState === null ? null : { digest: result.deliveryState.digest, files: result.deliveryState.paths.length },
+    bodyRef: result.bodyRef,
+    checks: result.checks,
+  }));
+  return ok(`Task ${task.id}: ${task.phase} (${task.status})`, {
+    task: taskSummaryJson(task),
+    planText: plan.text,
+    planCurrent: plan.current,
+    results,
+    missing: task.planRef !== null && !plan.current ? ['plan file is missing or changed'] : [],
+  });
 }

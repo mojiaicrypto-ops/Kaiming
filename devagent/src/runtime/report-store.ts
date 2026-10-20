@@ -23,9 +23,14 @@ export function reportTarget(params: {
   serverWorkDir: string;
   taskId: string;
   sessionId: string;
+  kind: string;
   resultId: string;
 }): ReportTarget {
-  const relative = join(params.taskId, params.sessionId, `${params.resultId}.md`);
+  // A settlement report is committed before it is registered (D-07), so its path cannot depend on the
+  // body digest the writer cannot know: it is one predictable file per settle step. Other reports keep
+  // the content-addressed name, so two reports of one member never overwrite each other.
+  const name = params.kind === 'settlement' ? 'settlement.md' : `${params.resultId}.md`;
+  const relative = join(params.taskId, params.sessionId, name);
   return params.taskType === 'read'
     ? { storage: 'server', path: join(params.serverWorkDir, relative) }
     : { storage: 'project', path: join(params.cwd, '.dev', 'work', relative) };

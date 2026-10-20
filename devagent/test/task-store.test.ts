@@ -95,16 +95,12 @@ describe('task store', () => {
     );
   });
 
-  it('applies version-checked updates and clears the current step when a phase starts', () => {
+  it('applies updates without a version and clears the current step when a phase starts', () => {
     const { store } = setup();
     create(store);
 
-    expect(() => store.updateTask({ taskId: 't-1', expectedRevision: 2, summary: 'stale' })).toThrowError(
-      expect.objectContaining({ code: 'VERSION_CONFLICT' }),
-    );
     const updated = store.updateTask({
       taskId: 't-1',
-      expectedRevision: 1,
       phase: 'develop',
       summary: 'plan fixed',
       goal: 'reset password (revised)',
@@ -119,7 +115,7 @@ describe('task store', () => {
     create(store, { type: 'read', requiresTest: false });
 
     expect(() =>
-      store.updateTask({ taskId: 't-1', expectedRevision: 1, requiresTest: true }),
+      store.updateTask({ taskId: 't-1', requiresTest: true }),
     ).toThrowError(expect.objectContaining({ code: 'INVALID_ARGUMENT' }));
     expect(store.getTask('t-1')?.requiresTest).toBe(false);
   });
@@ -128,33 +124,15 @@ describe('task store', () => {
     const { store } = setup();
     create(store);
 
-    const result = store.endTask({ taskId: 't-1', expectedRevision: 1, completionResultId: 'r-1' });
+    const result = store.endTask({ taskId: 't-1', completionResultId: 'r-1' });
 
     expect(result.ok).toBe(false);
     if (result.ok) {
       throw new Error('unreachable');
     }
     expect(result.gaps.join(' ')).toContain('not recorded');
-    // A Test requirement is checked against a really frozen candidate version.
-    expect(result.gaps.join(' ')).toContain('no candidate version was frozen');
-
-    // With a frozen candidate the gap names the version the Test must have covered.
-    store.setCandidate({
-      taskId: 't-1',
-      expectedRevision: store.getTask('t-1')?.revision ?? 1,
-      candidate: { candidateId: 'k-1', files: [] },
-    });
-    const second = store.endTask({
-      taskId: 't-1',
-      expectedRevision: store.getTask('t-1')?.revision ?? 1,
-      completionResultId: 'r-1',
-    });
-    expect(second.ok).toBe(false);
-    if (second.ok) {
-      throw new Error('unreachable');
-    }
-    // The implementation flow needs an independent Review first, then the same-candidate Test.
-    expect(second.gaps.join(' ')).toContain('no passed independent review is recorded for candidate k-1');
+    // The implementation flow needs an independent Review; no candidate object is involved.
+    expect(result.gaps.join(' ')).toContain('no passed independent review is recorded');
     expect(store.getTask('t-1')?.status).toBe('active');
     expect(store.getSession('c-1')?.currentTaskId).toBe('t-1');
   });
@@ -166,7 +144,7 @@ describe('task store', () => {
     expect(() =>
       create(store, { id: 't-9', chiefSessionId: 's-dev', requirementId: undefined }),
     ).toThrowError(expect.objectContaining({ code: 'INVALID_ARGUMENT' }));
-    expect(() => store.updateTask({ taskId: 'nope', expectedRevision: 1 })).toThrowError(StoreError);
+    expect(() => store.updateTask({ taskId: 'nope' })).toThrowError(StoreError);
   });
 });
 
@@ -231,7 +209,7 @@ describe('plan persistence', () => {
 });
 describe('task store · stage readiness follows member input state', () => {
   function addMember(store: Store, inputId: string): void {
-    store.updateTask({ taskId: 't-1', expectedRevision: store.getTask('t-1')!.revision, phase: 'develop' });
+    store.updateTask({ taskId: 't-1', phase: 'develop' });
     store.createTaskSessions({
       taskId: 't-1',
       members: [
@@ -258,7 +236,7 @@ describe('task store · stage readiness follows member input state', () => {
     addMember(store, 'i-m1');
     store.claimNextInput('m-1'); // → processing
     expect(() =>
-      store.updateTask({ taskId: 't-1', expectedRevision: store.getTask('t-1')!.revision, phase: 'review' }),
+      store.updateTask({ taskId: 't-1', phase: 'review' }),
     ).toThrowError(expect.objectContaining({ code: 'STAGE_NOT_READY' }));
   });
 
@@ -275,7 +253,6 @@ describe('task store · stage readiness follows member input state', () => {
     });
     const updated = store.updateTask({
       taskId: 't-1',
-      expectedRevision: store.getTask('t-1')!.revision,
       phase: 'review',
       summary: 'develop step settled',
     });
@@ -288,7 +265,7 @@ describe('task store · interrupted member inputs', () => {
   it('an interrupted task-bound input is listed for its chief; unrelated ones are not', () => {
     const { store } = setup();
     create(store);
-    store.updateTask({ taskId: 't-1', expectedRevision: store.getTask('t-1')!.revision, phase: 'develop' });
+    store.updateTask({ taskId: 't-1', phase: 'develop' });
     store.createTaskSessions({
       taskId: 't-1',
       members: [

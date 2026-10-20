@@ -242,3 +242,21 @@ export function reusedAuthorityIssues(cwd: string, refs: readonly string[]): str
   }
   return issues;
 }
+
+/**
+ * The knowledge entries a project was initialized with, as project-relative paths. They are the
+ * project's memory (written by the settlement after a review), not part of a Task's delivery, so the
+ * delivery digest leaves them out.
+ */
+export function knowledgeEntryPaths(initializationRef: unknown): string[] {
+  if (typeof initializationRef !== 'object' || initializationRef === null) {
+    return [];
+  }
+  const files = (initializationRef as { files?: unknown }).files;
+  if (!Array.isArray(files)) {
+    return [];
+  }
+  return files
+    .map((entry) => (typeof entry === 'object' && entry !== null ? (entry as { path?: unknown }).path : undefined))
+    .filter((path): path is string => typeof path === 'string' && path.trim() !== '');
+}
