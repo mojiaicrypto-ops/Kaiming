@@ -136,6 +136,7 @@ const member = (overrides: Record<string, unknown> = {}): Record<string, unknown
   label: 'implement',
   instructions: 'implement the reset flow',
   expectedKind: 'implementation',
+  writeScope: ['src/'],
   ...overrides,
 });
 
@@ -275,6 +276,103 @@ describe('task dispatch', () => {
     expect(f.store.listTaskSessions(snapshot.taskId)).toHaveLength(0);
     expect(f.dispatchCalls).toEqual([]);
     expect(f.settleCalls).toEqual([{ taskId: snapshot.taskId, timeoutMs: 1_000 }]);
+  });
+
+  it('requires a write scope from writing members and reports overlaps without blocking', async () => {
+    const f = await fixture();
+    await moveToPhase(f, 'develop');
+
+    const missing = await f.taskTool.execute('c1', {
+      op: 'dispatch',
+      sessions: [{ roleId: 'developer', label: 'a', instructions: 'x', expectedKind: 'implementation' }],
+    });
+    expect(missing.isError).toBe(true);
+    expect(missing.details['code']).toBe('INVALID_ARGUMENT');
+    expect(f.store.listTaskSessions(f.store.listTasks('p-1')[0]?.id ?? '')).toHaveLength(0);
+
+    const overlap = await f.taskTool.execute('c2', {
+      op: 'dispatch',
+      sessions: [
+        member({ roleId: 'developer', label: 'one', writeScope: ['src/'] }),
+        member({ roleId: 'developer', label: 'two', writeScope: ['src/account'] }),
+      ],
+    });
+    expect(overlap.isError).toBe(false);
+    expect(overlap.details['warnings']).toEqual([expect.stringContaining('overlapping writeScope')]);
+    expect(f.store.listTaskSessions(f.store.listTasks('p-1')[0]?.id ?? '')).toHaveLength(2);
+  });
+
+  it('refuses a tester before an independent review has passed', async () => {
+    const f = await fixture();
+    await moveToPhase(f, 'test');
+
+    const refused = await f.taskTool.execute('c1', {
+      op: 'dispatch',
+      sessions: [{ roleId: 'tester', label: 'verify', instructions: 'run it', expectedKind: 'test' }],
+    });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.details['code']).toBe('STAGE_NOT_READY');
+    expect(f.dispatchCalls).toEqual([]);
+  });
+
+  it('applies the review pre-gate to a tester continuation too', async () => {
+    const f = await fixture();
+    await moveToPhase(f, 'test');
+    // A tester member that settled earlier in this step.
+    f.store.createTaskSessions({
+      taskId: f.store.listTasks('p-1')[0]?.id ?? '',
+      members: [
+        {
+          sessionId: 'm-test',
+          taskId: f.store.listTasks('p-1')[0]?.id ?? '',
+          roleId: 'tester',
+          phase: 'test',
+          label: 'verify',
+          instructions: 'run it',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'test',
+          inputId: 'i-test',
+          inputPayload: { content: [{ type: 'text', text: 'run it' }] },
+        },
+      ],
+    });
+    const claimed = f.store.claimNextInput('m-test');
+    if (claimed.kind !== 'claimed') throw new Error('the tester input could not be claimed');
+    f.store.finishInput({ inputId: 'i-test', expectedRevision: claimed.input.revision, status: 'completed' });
+
+    const refused = await f.taskTool.execute('c1', {
+      op: 'dispatch',
+      sessions: [{ sessionId: 'm-test', instructions: 'run it again' }],
+    });
+
+    expect(refused.isError).toBe(true);
+    expect(refused.details['code']).toBe('STAGE_NOT_READY');
+  });
+
+  it('treats a root-level glob as overlapping every scope', async () => {
+    const f = await fixture();
+    await moveToPhase(f, 'develop');
+
+    const result = await f.taskTool.execute('c1', {
+      op: 'dispatch',
+      sessions: [
+        member({ roleId: 'developer', label: 'one', writeScope: ['*.ts'] }),
+        member({ roleId: 'developer', label: 'two', writeScope: ['src/'] }),
+      ],
+    });
+
+    expect(result.details['warnings']).toEqual([expect.stringContaining('overlapping writeScope')]);
+  });
+
+  it('refuses a malformed sessions value instead of silently waiting', async () => {
+    const f = await fixture();
+
+    const refused = await f.taskTool.execute('c1', { op: 'dispatch', sessions: { roleId: 'developer' } });
+
+    expect(refused.details['code']).toBe('INVALID_ARGUMENT');
+    expect(f.settleCalls).toEqual([]);
   });
 
   it('refuses delegation from a session that does not coordinate the Task', async () => {

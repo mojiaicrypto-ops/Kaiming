@@ -10,7 +10,7 @@
  * review, while a change or removal of a reviewed file does.
  */
 import { createHash } from 'node:crypto';
-import { lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join, normalize, relative, sep } from 'node:path';
 
 export interface DeliveryState {
@@ -31,12 +31,16 @@ function toPosix(path: string): string {
   return sep === '/' ? path : path.split(sep).join('/');
 }
 
-/** Stable identity of one file: its digest, or a marker for missing/unreadable content. */
+/**
+ * Stable identity of one file: its digest, or a distinct marker for "gone" and "present but
+ * unreadable". The two must differ, or a reviewed file that was unreadable and is later deleted would
+ * still look unchanged.
+ */
 function hashFile(path: string): string {
   try {
     return createHash('sha256').update(readFileSync(path)).digest('hex');
   } catch {
-    return 'unreadable';
+    return existsSync(path) ? 'unreadable' : 'missing';
   }
 }
 

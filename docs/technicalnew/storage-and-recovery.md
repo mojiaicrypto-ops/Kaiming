@@ -17,9 +17,9 @@ Dispatcher 读取 session_inputs，提交后唤醒，启动/周期扫描兜底�
 | projects | id/realPath/revision/initializationRef/configRef | realPath 唯一；项目写入授权引用真实用户决定 |
 | sessions | id/projectId/roleId/specialization/cwd/configRef/currentTaskId?/recoveryBlock? | chief 至多一项未结束 Task；专业 Session 只归一个 Task |
 | session_bindings | sessionId/piFile/branchEntryId?/hasHistory/configHash/rulesHash | 指定 Pi 文件；保留原绑定记录，禁止寻找最近文件 |
-| tasks | id/projectId/chiefSessionId/ownerEpoch/requirementId?/type/requiresTest/goal/scope/acceptanceRefs/basisRefs/planRef/authorizationRefs/phase/currentSessionIds/status/revision/summary/nextStep/blockReason/completionResultId?/controlIntent/sourceInputId | 两类 Task、阶段与更新边界唯一见 G2；currentSessionIds 只含当前步骤的专业 Session；revision 仅供界面与宿主 RPC 使用，不进入模型工具参数 |
-| task_sessions | sessionId/taskId/roleId/phase/instructions/refs/dependencies/expectedKind/writeScope?/currentInputId | 续办时更新 currentInputId；历史输入/结果保留；writeScope 用于并行写成员的覆盖告警 |
-| results | id/taskId/sessionId/sourceInputId/requestKey/kind/summary/bodyRef/basisRefs/verdict?/checks/settlement?/deliverableState? | 不覆盖原报告，多份报告按保存顺序保留；kind 取自成员派发时的 expectedKind；deliverableState 记录提交时程序观察到的交付状态，供完成核对比较 |
+| tasks | id/projectId/chiefSessionId/ownerEpoch/requirementId?/type/requiresTest/goal/scope/acceptanceRefs/basisRefs/planRef/authorizationRefs/phase/currentSessionIds/status/revision/summary/nextStep/blockReason/completionResultId?/sourceInputId | 两类 Task、阶段与更新边界唯一见 G2；currentSessionIds 只含当前步骤的专业 Session；revision 仅供界面与宿主 RPC 使用，不进入模型工具参数；控制意图落在对应 session_inputs 的 stopRequestKey/stopReason |
+| task_sessions | sessionId/taskId/roleId/specialization?/phase/label/instructions/refs/dependencies/expectedKind/writeScope/workspaceRef?/currentInputId | 续办时更新 currentInputId；历史输入/结果保留；writeScope 用于并行写成员的覆盖告警 |
+| results | resultId/taskId/sessionId/inputId/roleId/kind/summary/verdict?/deliveryState?/bodyRef/basisRefs/checks/settlement?/createdAt | 不覆盖原报告，多份报告按保存顺序保留；kind 取自成员派发时的 expectedKind；deliveryState 记录提交时程序观察到的交付状态与被观察路径，供完成核对重算比较；resultId 由内容派生，同一报告重试映射同一行 |
 | session_inputs | 见 Input | (sessionId,seq)/sourceKey 唯一；同 Session 至多一项 processing |
 | interactions | id/requestKey/projectId/taskId?/sourceSessionId/sourceInputId/invocationKey/sequence/method/request/revision/state/response?/responseSource? | 原请求身份和答复事实；专业来源必有 taskId；当前主管路由读取 Task |
 | file_saves | requestKey/target/observedVersion/contentHash/content/state/receipt? | 仅宿主负责的 Plan/报告/需求/初始化保存；observedVersion 由程序记录本会话上次读到的内容，不要求模型携带；state=pending/saved/conflict |

@@ -77,10 +77,8 @@ export interface RoleToolSet {
  * and the project-writing domain tools; `agent_report` stays available because it writes a Server-side
  * report, not a project file.
  *
- * Known deviation, to be closed when the domain tools are registered (P3-e): G1 narrows specialists to
- * `task.get` and `developer` to `requirement.list/get`, but a tool allowlist can only name whole tools.
- * Until the tools enforce their own op subsets for specialists, a specialist holding `task` or
- * `requirement` could reach ops meant for the chief.
+ * The allowlist names whole tools; the op subsets G1 narrows (a specialist's `task` is get-only) are
+ * enforced by the tool itself, because the host fixes the caller's role.
  */
 export function toolSetFor(roleId: PromptRoleId, taskType: TaskType | undefined): RoleToolSet {
   const readTask = taskType === 'read';

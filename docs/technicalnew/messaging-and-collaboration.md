@@ -38,7 +38,7 @@ sequenceDiagram
   participant D as Dispatcher / Runtime
   participant S1 as Review Pi S1
   participant S2 as Review Pi S2
-  C->>T: create(Task T, Review S1/S2, candidate K)
+  C->>T: task(op=dispatch, sessions=[Review S1, Review S2])
   T->>DB: 同事务：关联、输入、currentSessionIds
   DB-->>T: commit：S1/S2/inputIds
   T-->>D: 唤醒异步消费器

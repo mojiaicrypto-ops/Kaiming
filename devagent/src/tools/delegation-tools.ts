@@ -43,6 +43,9 @@ const MIN_WAIT_MS = 1_000;
 const MAX_WAIT_MS = 300_000;
 
 /** Which phase each role may be dispatched in (G2: Review/Test/settler are step-specific). */
+/** Roles that write project files in a write Task and therefore declare a writeScope. */
+const WRITING_ROLES = new Set(['designer', 'developer', 'settler']);
+
 const ROLE_PHASE: Readonly<Record<string, readonly TaskPhase[]>> = {
   designer: ['clarify', 'analyze', 'design', 'plan'],
   developer: ['develop'],
@@ -83,6 +86,9 @@ export async function dispatchOp(
     return fail('FORBIDDEN', `Task ${taskId} is coordinated by another session`);
   }
   const waitMs = clampWait(params['waitTimeoutMs']);
+  if (params['sessions'] !== undefined && !Array.isArray(params['sessions'])) {
+    return fail('INVALID_ARGUMENT', 'sessions must be a list of entries (omit it to only wait)');
+  }
   const entries = Array.isArray(params['sessions']) ? params['sessions'] : [];
   if (entries.length === 0) {
     const returned = await context.host.settleStep(taskId, waitMs);
@@ -91,6 +97,8 @@ export async function dispatchOp(
 
   const created: PlannedMember[] = [];
   const continued: PlannedContinuation[] = [];
+  // Set for a new tester or a tester's continuation: both re-run the same pre-gate.
+  let wantsTest = false;
   for (const entry of entries) {
     const request = asRecord(entry);
     if (request === undefined) {
@@ -106,6 +114,7 @@ export async function dispatchOp(
       if (invalid !== undefined) {
         return invalid;
       }
+      wantsTest = wantsTest || readString(request, 'expectedKind') === 'test';
       created.push({
         kind: 'create',
         member: {
@@ -161,6 +170,7 @@ export async function dispatchOp(
         inputId: member.currentInputId,
       });
     }
+    wantsTest = wantsTest || member.expectedKind === 'test';
     continued.push({
       kind: 'continue',
       sessionId: sessionId as string,
@@ -169,6 +179,14 @@ export async function dispatchOp(
       dependencies: readStringArray(request, 'dependsOnResultIds') ?? [],
       inputId: `i-${randomUUID().slice(0, 8)}`,
     });
+  }
+
+  // A Test only makes sense after an independent review of this delivery has passed and settled (G2).
+  if (wantsTest) {
+    const refusal = testDispatchRefusal(context, taskId);
+    if (refusal !== undefined) {
+      return refusal;
+    }
   }
 
   const touched = [
@@ -191,9 +209,15 @@ export async function dispatchOp(
     const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
     return fail(code, messageOf(error), { taskId });
   }
+  const warnings = overlapWarnings(
+    touched
+      .map((sessionId) => context.store.getTaskSession(sessionId))
+      .filter((member): member is TaskSessionRow => member !== undefined),
+  );
   const returned = await runAndWait(context, taskId, touched, waitMs);
-  return ok(describe(returned), {
+  return ok(`${describe(returned)}${warnings.length > 0 ? ` | warning: ${warnings.join('; ')}` : ''}`, {
     ...returned,
+    ...(warnings.length > 0 ? { warnings } : {}),
     members: touched
       .map((sessionId) => context.store.getTaskSession(sessionId))
       .filter((member): member is TaskSessionRow => member !== undefined)
@@ -278,7 +302,83 @@ function checkMember(request: Record<string, unknown>, task: TaskRow): ToolOutco
   if (task.type === 'read' && expectedKind !== 'investigation' && expectedKind !== 'recovery') {
     return fail('INVALID_ARGUMENT', 'a read Task only accepts investigation or recovery reports');
   }
+  // Every member that writes into the project declares what it owns, so overlapping work is visible
+  // before two writers touch the same file (G3/R-04).
+  if (task.type === 'write' && WRITING_ROLES.has(roleId)) {
+    const scope = readStringArray(request, 'writeScope') ?? [];
+    if (scope.length === 0) {
+      return fail('INVALID_ARGUMENT', `role ${roleId} must declare writeScope in a write Task`, {
+        hint: 'project-relative paths or globs this member owns',
+      });
+    }
+  }
   return undefined;
+}
+
+/**
+ * The pre-gate for any Test work: a passed review must exist and the step it belongs to must have
+ * settled. Both a new tester and a tester continuation run it.
+ */
+function testDispatchRefusal(context: DispatchContext, taskId: string): ToolOutcome | undefined {
+  const passed = context.store
+    .listTaskResults(taskId)
+    .filter((result) => result.kind === 'review' && result.verdict === 'passed')
+    .at(-1);
+  if (passed === undefined) {
+    return fail('STAGE_NOT_READY', 'dispatch the tester only after an independent review has passed', {
+      hint: 'dispatch the reviewer in the review step first',
+    });
+  }
+  const reviewMember = context.store.getTaskSession(passed.sessionId);
+  const phase = reviewMember === undefined ? undefined : reviewMember.phase;
+  const unsettled = context.store
+    .listTaskSessions(taskId)
+    .filter((member) => member.phase === phase)
+    .filter((member) => {
+      const input = member.currentInputId === null ? undefined : context.store.getInput(member.currentInputId);
+      return input !== undefined && ['queued', 'processing', 'stopping', 'interrupted'].includes(input.status);
+    });
+  if (unsettled.length > 0) {
+    return fail('STAGE_NOT_READY', 'the review step still has unfinished member work', {
+      members: unsettled.map((member) => member.sessionId),
+    });
+  }
+  return undefined;
+}
+
+/**
+ * Path prefixes that overlap: equal, nested, or sharing a glob's directory prefix. A root-level glob
+ * (`*.ts`) has the project root as its prefix and therefore overlaps everything (a warning, never a
+ * refusal).
+ */
+function overlapWarnings(members: readonly { readonly sessionId: string; readonly roleId: string; readonly writeScope?: readonly string[] }[]): string[] {
+  const warnings: string[] = [];
+  const scopes = members
+    .map((member) => ({
+      sessionId: member.sessionId,
+      roleId: member.roleId,
+      roots: (member.writeScope ?? []).map((scope) => {
+        const normalized = scope.trim().replace(/^\.\//, '').replace(/\/+$/, '');
+        const wildcard = normalized.indexOf('*');
+        const prefix = wildcard === -1 ? normalized : normalized.slice(0, wildcard);
+        return prefix.replace(/\/+$/, '');
+      }),
+    }))
+    .filter((entry) => entry.roots.length > 0);
+  for (let i = 0; i < scopes.length; i += 1) {
+    for (let j = i + 1; j < scopes.length; j += 1) {
+      const left = scopes[i];
+      const right = scopes[j];
+      if (left === undefined || right === undefined) continue;
+      const overlap = left.roots.some((a) =>
+        right.roots.some((b) => a === '' || b === '' || a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)),
+      );
+      if (overlap) {
+        warnings.push(`${left.sessionId} (${left.roleId}) and ${right.sessionId} (${right.roleId}) declare overlapping writeScope`);
+      }
+    }
+  }
+  return warnings;
 }
 
 function clampWait(value: unknown): number {

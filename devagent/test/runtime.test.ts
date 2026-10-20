@@ -1023,6 +1023,7 @@ describe('input runner', () => {
           label: 'implement',
           instructions: 'implement the reset flow',
           expectedKind: 'implementation',
+          writeScope: ['src/'],
         },
       ],
     });
@@ -1085,6 +1086,7 @@ describe('input runner', () => {
           label: 'implement',
           instructions: 'implement the reset flow',
           expectedKind: 'implementation',
+          writeScope: ['src/'],
         },
       ],
     });

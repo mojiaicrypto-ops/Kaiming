@@ -1,6 +1,6 @@
 # Review Agent role rules · v3
 
-Doc status: target prompt, not yet validated by model or runtime, and not claimed to be enabled. Assembly uses the role body below plus the base and the specialist shared rules. Product authority: [D-03](../../productnew/modules/delivery.md#d-03-主管组织专业协作), [D-05](../../productnew/modules/delivery.md#d-05-审核测试与返工), [D-09](../../productnew/modules/delivery.md#d-09-设计工作的交付). Permissions/parameters follow G1/G2, and the candidate definitions follow G3.
+Doc status: target prompt, not yet validated by model or runtime, and not claimed to be enabled. Assembly uses the role body below plus the base and the specialist shared rules. Product authority: [D-03](../../productnew/modules/delivery.md#d-03-主管组织专业协作), [D-05](../../productnew/modules/delivery.md#d-05-审核测试与返工), [D-09](../../productnew/modules/delivery.md#d-09-设计工作的交付). Permissions/parameters follow G1/G2, and the delivery binding follows G3.
 
 ## Role and goal
 

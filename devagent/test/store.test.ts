@@ -111,6 +111,42 @@ describe('store pragmas and schema', () => {
     expect(migrated.listPendingInteractions('s-1')).toEqual([]);
   });
 
+  it('opens a v8 database and migrates it to v9 (the release that dropped candidate tokens)', () => {
+    const { store, path } = openStore();
+    closeStore(store);
+
+    // Emulates the previous release: candidate columns back, v9 columns absent, version rolled back.
+    const raw = new DatabaseSync(path);
+    raw.exec('ALTER TABLE tasks ADD COLUMN candidate TEXT');
+    raw.exec('ALTER TABLE task_sessions ADD COLUMN candidateId TEXT');
+    raw.exec('ALTER TABLE results ADD COLUMN candidateId TEXT');
+    raw.exec('ALTER TABLE results ADD COLUMN supersedesResultId TEXT');
+    raw.exec('ALTER TABLE results DROP COLUMN deliveryState');
+    raw.exec('ALTER TABLE task_sessions DROP COLUMN writeScope');
+    raw.exec('PRAGMA user_version = 8');
+    raw.close();
+
+    const migrated = new Store({ path, serverEpoch: 1 });
+    stores.push(migrated);
+
+    expect(migrated.pragmas().userVersion).toBe(SCHEMA_VERSION);
+    const rawAfter = new DatabaseSync(path);
+    try {
+      const columns = (table: string): string[] =>
+        (rawAfter.prepare(`SELECT name FROM pragma_table_info('${table}')`).all() as Array<{ name: string }>).map(
+          (row) => row.name,
+        );
+      expect(columns('tasks')).not.toContain('candidate');
+      expect(columns('results')).not.toContain('candidateId');
+      expect(columns('results')).not.toContain('supersedesResultId');
+      expect(columns('results')).toContain('deliveryState');
+      expect(columns('task_sessions')).toContain('writeScope');
+      expect(columns('task_sessions')).not.toContain('candidateId');
+    } finally {
+      rawAfter.close();
+    }
+  });
+
   it('refuses to open a database that already has two running inputs in one session', () => {
     const { store, path } = openStore();
     seed(store);

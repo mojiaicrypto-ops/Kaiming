@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { StoreError, type ArtifactRef, type Store, type TaskPhase, type TaskRow } from '../store/store.ts';
 import { commitPlan, digestOfText, planRefFor, planTarget, readPlan } from '../runtime/plan-store.ts';
+import { readReportBody } from '../runtime/report-store.ts';
 import { getRequirement } from '../runtime/requirement-store.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
 import { dispatchOp, type DelegationHost } from './delegation-tools.ts';
@@ -588,12 +589,14 @@ function recoverOp(context: TaskToolContext, task: TaskRow, params: Record<strin
       taskId: task.id,
     });
   } catch (error) {
-    return fail(messageOf(error), 'the interrupted input was not closed', { inputId });
+    const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
+    return fail(code, messageOf(error), { inputId });
   }
 }
 
 function getOp(context: TaskToolContext, task: TaskRow, params: Record<string, unknown>): ToolOutcome {
   const plan = task.planRef === null ? { text: '', current: false } : readPlan(task.planRef);
+  const withBodies = params['includeResultBodies'] === true;
   const results = context.store.listTaskResults(task.id).map((result) => ({
     resultId: result.resultId,
     kind: result.kind,
@@ -603,11 +606,24 @@ function getOp(context: TaskToolContext, task: TaskRow, params: Record<string, u
     delivery: result.deliveryState === null ? null : { digest: result.deliveryState.digest, files: result.deliveryState.paths.length },
     bodyRef: result.bodyRef,
     checks: result.checks,
+    ...(withBodies ? { body: readReportBody(result.bodyRef).text } : {}),
+  }));
+  const members = context.store.listTaskSessions(task.id).map((member) => ({
+    sessionId: member.sessionId,
+    roleId: member.roleId,
+    label: member.label,
+    phase: member.phase,
+    expectedKind: member.expectedKind,
+    writeScope: member.writeScope,
+    currentInputId: member.currentInputId,
+    inputState:
+      member.currentInputId === null ? null : (context.store.getInput(member.currentInputId)?.status ?? null),
   }));
   return ok(`Task ${task.id}: ${task.phase} (${task.status})`, {
     task: taskSummaryJson(task),
     planText: plan.text,
     planCurrent: plan.current,
+    members,
     results,
     missing: task.planRef !== null && !plan.current ? ['plan file is missing or changed'] : [],
   });

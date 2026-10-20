@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../src/store/store.ts';
 import { createTaskGetTool, createTaskTool, type DomainTool, type TaskToolContext } from '../src/tools/task-tools.ts';
+import { digestOfText } from '../src/runtime/plan-store.ts';
 
 const dirs: string[] = [];
 const stores: Store[] = [];
@@ -246,6 +247,53 @@ describe('task get', () => {
 
     expect(read.isError).toBe(true);
     expect(read.details['code']).toBe('NOT_FOUND');
+  });
+
+  it('returns the current members and, on request, the report bodies', async () => {
+    const w = world();
+    await tool(w.tools).execute('call-1', createArgs());
+    const task = w.store.listTasks(w.projectId)[0];
+    w.store.createTaskSessions({
+      taskId: task?.id ?? '',
+      members: [
+        {
+          sessionId: 'm-1',
+          taskId: task?.id ?? '',
+          roleId: 'developer',
+          phase: 'plan',
+          label: 'work',
+          instructions: 'do it',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'implementation',
+          writeScope: ['src/'],
+          inputId: 'i-m1',
+          inputPayload: { content: [{ type: 'text', text: 'do it' }] },
+        },
+      ],
+    });
+    const bodyPath = join(w.root, 'report.md');
+    writeFileSync(bodyPath, '# report\n', 'utf8');
+    w.store.recordResult({
+      resultId: 'r-1',
+      taskId: task?.id ?? '',
+      sessionId: 'm-1',
+      inputId: 'i-m1',
+      roleId: 'developer',
+      kind: 'implementation',
+      summary: 'done',
+      bodyRef: { storage: 'server', path: bodyPath, sha256: digestOfText('# report\n') },
+      basisRefs: [],
+      checks: [],
+    });
+
+    const read = await tool(w.tools).execute('call-2', { op: 'get', includeResultBodies: true });
+
+    expect(read.isError).toBe(false);
+    const members = read.details['members'] as Array<Record<string, unknown>>;
+    expect(members[0]).toMatchObject({ sessionId: 'm-1', expectedKind: 'implementation', writeScope: ['src/'] });
+    const results = read.details['results'] as Array<Record<string, unknown>>;
+    expect(results[0]).toMatchObject({ resultId: 'r-1', body: '# report\n' });
   });
 
   it('offers a specialist only the get operation', () => {

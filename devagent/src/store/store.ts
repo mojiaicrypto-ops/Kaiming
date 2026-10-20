@@ -371,7 +371,8 @@ export const SCHEMA_VERSION = 9;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
- * A result is immutable; a revision is a new row that points at the one it supersedes.
+ * A result is immutable; this is the v5 shape as shipped, and the v9 step drops the candidate and
+ * supersession columns that the model-facing protocol no longer uses.
  */
 const V5_DDL = `
 CREATE TABLE IF NOT EXISTS results (
@@ -2084,12 +2085,13 @@ export class Store {
   endTask(params: { taskId: string; completionResultId: string }):
     | { readonly ok: true; readonly task: TaskRow }
     | { readonly ok: false; readonly gaps: readonly string[] } {
-    // Observed outside the transaction: hashing the delivery must not hold the write lock.
-    const gaps = this.taskCompletionGaps(params.taskId, params.completionResultId);
-    if (gaps.length > 0) {
-      return { ok: false, gaps };
-    }
     return this.transaction(() => {
+      // Checked inside the transaction: a project file written between the check and the commit must
+      // not slip through (G3). Hashing the reviewed paths is short, and endTask is rare.
+      const gaps = this.taskCompletionGaps(params.taskId, params.completionResultId);
+      if (gaps.length > 0) {
+        return { ok: false, gaps } as const;
+      }
       const task = this.requireTask(params.taskId);
       if (task.status === 'cancelled') {
         throw new StoreError('VERSION_CONFLICT', 'the Task was cancelled', { taskId: params.taskId });
@@ -2228,7 +2230,7 @@ export class Store {
     return result;
   }
 
-  /** All results of a Task, oldest first, with the id of whatever superseded each one. */
+  /** All results of a Task, oldest first. */
   listTaskResults(taskId: string): ResultRow[] {
     const rows = this.db
       .prepare('SELECT * FROM results WHERE taskId = ? ORDER BY createdAt, resultId')
@@ -2563,8 +2565,9 @@ export class Store {
   }
 
   /**
-   * Hand a running Task to another chief session (G2 adopt). Both the current owner and the target
-   * must be free of another Task, and the Task must still be running; nothing is replayed.
+   * Hand a Task to another chief session (G2 adopt). Both the current owner and the target must be
+   * free of another Task, the Task must not be terminal or mid-control, and its members must have
+   * settled; nothing is replayed.
    */
   adoptTask(params: { taskId: string; chiefSessionId: string }): TaskRow {
     return this.transaction(() => {
@@ -2573,6 +2576,17 @@ export class Store {
         throw new StoreError('VERSION_CONFLICT', 'the Task is already terminal', {
           taskId: params.taskId,
           status: task.status,
+        });
+      }
+      if (task.status === 'pausing' || task.status === 'cancelling') {
+        throw new StoreError('STAGE_NOT_READY', 'the Task is still being controlled; wait until it settles', {
+          taskId: params.taskId,
+          status: task.status,
+        });
+      }
+      if (this.unfinishedMemberWork(params.taskId) > 0) {
+        throw new StoreError('STAGE_NOT_READY', 'the Task still has unfinished member work', {
+          taskId: params.taskId,
         });
       }
       if (params.chiefSessionId === task.chiefSessionId) {
@@ -2812,6 +2826,8 @@ export class Store {
       this.migrateV8ToV9();
     } else if (userVersion === 7) {
       this.migrateV7ToV8();
+      this.migrateV8ToV9();
+    } else if (userVersion === 8) {
       this.migrateV8ToV9();
     } else if (userVersion !== SCHEMA_VERSION) {
       throw new StoreError('VERSION_CONFLICT', 'unsupported store schema version', {

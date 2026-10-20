@@ -8,7 +8,7 @@ export interface TurnContextInput {
   readonly inputId: string;
   /** Task summary as recorded by the chief, when the session belongs to a task. */
   readonly taskSummary?: string;
-  /** Task phase, as written by the chief through updateTask. */
+  /** Task phase, as written by the chief through task(op=update). */
   readonly phase?: string;
   /** Path of the overall Plan the chief must follow. */
   readonly planPath?: string;

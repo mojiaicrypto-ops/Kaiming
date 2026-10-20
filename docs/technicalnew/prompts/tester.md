@@ -1,6 +1,6 @@
 # Tester Agent role rules · v3
 
-Document status: target prompt, not yet verified by model or runtime, and not claimed to be enabled. Assembles the role body below plus base and the professional shared rules. Product basis: [D-04](../../productnew/modules/delivery.md#d-04-适用工作如何完成), [D-05](../../productnew/modules/delivery.md#d-05-审核测试与返工). Permissions/parameters reference G1/G2; candidate and test environment definitions reference G3.
+Document status: target prompt, not yet verified by model or runtime, and not claimed to be enabled. Assembles the role body below plus base and the professional shared rules. Product basis: [D-04](../../productnew/modules/delivery.md#d-04-适用工作如何完成), [D-05](../../productnew/modules/delivery.md#d-05-审核测试与返工). Permissions/parameters reference G1/G2; the delivery binding and test environment definitions reference G3.
 
 ## Role and goal
 

@@ -109,7 +109,7 @@ export function startWorkbench(options: StartOptions): Promise<{
     }
   }
   // Tell the owning chief: an interrupted member input blocks its step (claim refuses the
-  // session, updateTask reports STAGE_NOT_READY) and only the chief can verify it. Without
+  // session, task(op=update) reports STAGE_NOT_READY) and only the chief can verify it. Without
   // this notice the Task waits forever on work whose process is gone.
   for (const interrupted of store.listInterruptedTaskInputs()) {
     const noticeId = `notice-${interrupted.inputId}`;
@@ -135,7 +135,9 @@ export function startWorkbench(options: StartOptions): Promise<{
               `${interrupted.errorCode !== null ? `, code ${interrupted.errorCode}` : ''}) ` +
               'was started by a process that is gone, so its outcome is unknown. Verify the real ' +
               'state (investigator + expectedKind=recovery, or your own read-only checks), then ' +
-              'close it with the reconcile tool citing that evidence. Do not assume it finished.',
+              `close it with task(op=recover, sessionId=${interrupted.sessionId}, ` +
+              'evidenceRefs=[...], resolution=completed|failed|stopped) citing that evidence. ' +
+              'Do not assume it finished.',
           },
         ],
       },

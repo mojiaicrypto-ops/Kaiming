@@ -33,8 +33,8 @@ task、agent_report、requirement、project 按工具级注册 Pi executionMode=
 | op | 参数 → 结果 |
 |---|---|
 | create | type（read/write）、goal、scope、acceptanceRefs、basisRefs、planMarkdown、requirementId?、requiresTest?、authorizationRef → taskId/phase/planRef |
-| update | taskId、phase?、summary、nextStep?、blockReason?、status?（active/waiting）、changes?={goal?,scope?,acceptanceRefs?,basisRefs?,planMarkdown?,authorizationRef?,requiresTest?} → 当前 Task/阶段/成员/下一允许动作 |
-| dispatch | taskId、sessions?[{roleId? 或 sessionId?、label?、instructions、expectedKind?、refs?、dependsOnResultIds?、writeScope?:string[]}]、waitTimeoutMs? → 当前步骤全部成员状态与报告 |
+| update | taskId、phase?、summary、nextStep?、blockReason?、status?（active/waiting）、changes?={goal?,scope?,acceptanceRefs?,basisRefs?,planMarkdown?,requiresTest?} → 当前 Task/阶段/成员/下一允许动作（授权引用建 Task 时固定，不在 update 中改写） |
+| dispatch | taskId、sessions?[{roleId? 或 sessionId?、label?、instructions、expectedKind?、refs?、dependsOnResultIds?、writeScope?:string[]}]、waitTimeoutMs? → 当前步骤全部成员状态与报告/重叠告警；写角色在 write Task 必须提供非空 writeScope |
 | control | taskId、command=pause/resume/cancel → 实际 status 与待处理状态 |
 | end | taskId、completionResultId → completed，或 COMPLETION_INCOMPLETE + 缺项清单 |
 | get | taskId?（缺省宿主 currentTaskId）、includeResultBodies? → Task/Plan/成员/结果/缺项/nextActions，按显式引用返回报告正文 |
@@ -53,7 +53,7 @@ task、agent_report、requirement、project 按工具级注册 Pi executionMode=
 
 并行规则（R-04/D-01）：只读工作可任意并行；写工作允许同一 Task 内按模块并行，每个写成员必须声明 writeScope（项目相对路径或 glob）。程序只核对范围**重叠**并告警，不拦截——是否可并行、如何分工由主管判断。首版不要求分离目录；并行多个 Task 使用独立 git worktree 属于后续版本，不在本版。
 
-程序按 M2 等待当前步骤全部成员停稳再聚合报告/异常。超时返回状态快照，不 abort 子工作；默认 Server `delegationWaitMs`。不得并发 prompt 同一成员，不续办仍 queued/working/waiting_user/stopping 的成员，不重复已完成成果。暂停/中断 Task 的只读恢复只允许 investigator + expectedKind=recovery。Test 派发前程序核对最近一次独立复核已停稳且 passed；Review 与 Test 不混合同步启动。
+程序按 M2 等待当前步骤全部成员停稳再聚合报告/异常。超时返回状态快照，不 abort 子工作；waitTimeoutMs 缺省 120 秒，按 1–300 秒夹取。不得并发 prompt 同一成员，不续办仍 queued/working/waiting_user/stopping 的成员，不重复已完成成果。暂停/中断 Task 的只读恢复只允许 investigator + expectedKind=recovery。Test 派发前程序核对存在 passed 的独立复核且其步骤成员已停稳，否则 STAGE_NOT_READY；Review 与 Test 不混合同步启动。
 
 **end**：按 G3 核对，成功事务 completed 并释放 currentTaskId；缺项 COMPLETION_INCOMPLETE，已有成果保留。业务完成判断由主管/独立 Agent 负责。
 
