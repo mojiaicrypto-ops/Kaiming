@@ -129,3 +129,23 @@ erDiagram
 | [Durable 固定版本](https://github.com/earendil-works/pi/blob/a13d35a742c6ef8462812a28fbe1d8c8b7431c32/packages/durable/README.md) | 稳定请求、先保存、提交边界、未知效果不重放 | coding-agent SDK 中的所需机制 |
 
 Durable 使用 pi-ai + Chord 的独立 Harness。这里使用 coding-agent SDK；关键能力按 [I1](implementation-checks.md#i1-pi-接入必须先通过的试验) 取证。
+
+## A7 前端层
+
+浏览器界面是一层独立实现，不改动 A1～A6 的 Server 语义；产品能力见[产品总览第 6 节](../productnew/README.md#6-用户实际能看到和操作什么)，实现依据见[UI 设计契约](ui-design.md)。
+
+```text
+浏览器(单页应用)
+  → /api/v1/rpc           请求/答复：认证、归属、去重
+  → /api/v1/sessions/<id>/stream   session.stream.prepare 快照 + SSE 增量(M4)
+```
+
+| 事实 | 现状 | 位置 |
+|---|---|---|
+| 技术栈 | React 19 + Vite 7 + TypeScript，构建产物由同一 Server 托管于 `/app/`（SPA 回退） | `devagent/webapp/` |
+| 入口 | `/` 仍由旧外壳（无构建的原生 JS）提供，`/app/` 为新外壳；两者共用同一 API | `devagent/web/`、`src/server/main.ts` |
+| 数据来源 | 会话流复用 `session.stream.prepare` + SSE；其他视图只调用已注册的只读/写入方法 | `src/server/read-methods.ts`、`write-methods.ts` |
+| 构建产物 | `devagent/web-static/` 不入库；`/app` 无产物时返回明确 404 | `devagent/.gitignore` |
+| 样式 | 旧外壳逐字节复制原型 mock；新外壳使用自己的令牌与组件层 | `devagent/web/styles/`、`devagent/webapp/src/` |
+
+服务端当前没有项目/会话列表方法，界面只能持有本地最近选择；多项目、多会话导航的真实列表需要只读查询方法，属待补齐缺口。
