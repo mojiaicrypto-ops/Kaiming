@@ -1,0 +1,101 @@
+/* Hi-fi prototype tokens. Graphite workbench: neutral surfaces, one accent, semantic status colours.
+   This file is the design source of truth for the prototype; the React app copies these values. */
+:root {
+  color-scheme: dark;
+
+  /* surfaces */
+  --bg: #0c0d0f;
+  --surface: #131519;
+  --raised: #191c21;
+  --inset: #0f1114;
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.12);
+
+  /* text */
+  --text: #e9eaec;
+  --text-2: #a0a6ad;
+  --text-3: #6f7680;
+
+  /* accent: the only colour allowed for actions */
+  --accent: #7dd3a0;
+  --accent-hover: #8fe0b1;
+  --accent-weak: rgba(125, 211, 160, 0.12);
+  --accent-line: rgba(125, 211, 160, 0.35);
+
+  /* status */
+  --run: #6ea8fe;
+  --run-weak: rgba(110, 168, 254, 0.14);
+  --decide: #b18cff;
+  --decide-weak: rgba(177, 140, 255, 0.14);
+  --done: #5ecb8a;
+  --done-weak: rgba(94, 203, 138, 0.14);
+  --block: #ff7d7d;
+  --block-weak: rgba(255, 125, 125, 0.12);
+  --warn: #e5b567;
+  --idle: #7b838c;
+
+  /* type */
+  --font: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  --mono: "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-20: 20px;
+  --fs-26: 26px;
+
+  /* spacing (4 base) */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s6: 24px;
+  --s8: 32px;
+  --s12: 48px;
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+
+  --z-sticky: 10;
+  --z-drawer: 40;
+  --z-dialog: 50;
+  --z-toast: 60;
+
+  --dur: 120ms;
+  --dur-slow: 180ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  --sidebar: 248px;
+  --rail: 320px;
+  --topbar: 52px;
+  --statusbar: 26px;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --raised: #ffffff;
+  --inset: #f1f2f4;
+  --line: rgba(0, 0, 0, 0.08);
+  --line-strong: rgba(0, 0, 0, 0.14);
+  --text: #17181a;
+  --text-2: #5b6067;
+  --text-3: #8a9099;
+  --accent: #1f8f57;
+  --accent-hover: #197a4a;
+  --accent-weak: rgba(31, 143, 87, 0.1);
+  --accent-line: rgba(31, 143, 87, 0.35);
+  --run: #2563c9;
+  --run-weak: rgba(37, 99, 201, 0.1);
+  --decide: #7a4fd0;
+  --decide-weak: rgba(122, 79, 208, 0.1);
+  --done: #1f8f57;
+  --done-weak: rgba(31, 143, 87, 0.1);
+  --block: #c93b3b;
+  --block-weak: rgba(201, 59, 59, 0.09);
+  --warn: #9a6b12;
+  --idle: #8a9099;
+}

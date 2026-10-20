@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentDev · 组件与令牌</title>
+  <link rel="stylesheet" href="assets/tokens.css">
+  <link rel="stylesheet" href="assets/components.css">
+  <link rel="stylesheet" href="assets/proto.css">
+</head>
+<body class="frame" data-screen="gallery">
+  <div class="app">
+    <header class="topbar">
+      <span class="brand"><span class="brand-mark"><i></i><i></i><i></i><i></i></span>AgentDev</span>
+      <span class="pill">设计系统 v1</span>
+      <span class="spacer"></span>
+      <span class="pill">深浅主题见右下角</span>
+    </header>
+
+    <aside class="sidebar">
+      <div data-proto-nav></div>
+    </aside>
+
+    <main class="main">
+      <section class="pane">
+        <div class="page-head">
+          <div>
+            <h1>组件与令牌</h1>
+            <div class="sub">所有界面只允许使用这里的组件；任何一次性样式都应先在这里出现。</div>
+          </div>
+        </div>
+
+        <div class="pane-scroll">
+          <div class="content">
+            <div class="gallery-section">
+              <h2>颜色令牌</h2>
+              <div class="gallery-row">
+                <div class="card tight" style="width: 128px"><div style="height: 40px; border-radius: var(--r-sm); background: var(--bg); border: 1px solid var(--line)"></div><div style="margin-top: 6px; font-family: var(--mono); font-size: var(--fs-11); color: var(--text-3)">--bg</div></div>
+                <div class="card tight" style="width: 128px"><div style="height: 40px; border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line)"></div><div style="margin-top: 6px; font-family: var(--mono); font-size: var(--fs-11); color: var(--text-3)">--surface</div></div>
+                <div class="card tight" style="width: 128px"><div style="height: 40px; border-radius: var(--r-sm); background: var(--raised)"></div><div style="margin-top: 6px; font-family: var(--mono); font-size: var(--fs-11); color: var(--text-3)">--raised</div></div>
+                <div class="card tight" style="width: 128px"><div style="height: 40px; border-radius: var(--r-sm); background: var(--accent)"></div><div style="margin-top: 6px; font-family: var(--mono); font-size: var(--fs-11); color: var(--text-3)">--accent</div></div>
+                <div class="card tight" style="width: 128px"><div style="height: 40px; border-radius: var(--r-sm); background: var(--run)"></div><div style="margin-top: 6px; font-family: var(--mono); font-size: var(--fs-11); color: var(--text-3)">--run</div></div>
+                <div class="card tight" style="width: 128px"><div style="height: 40px; border-radius: var(--r-sm); background: var(--decide)"></div><div style="margin-top: 6px; font-family: var(--mono); font-size: var(--fs-11); color: var(--text-3)">--decide</div></div>
+                <div class="card tight" style="width: 128px"><div style="height: 40px; border-radius: var(--r-sm); background: var(--done)"></div><div style="margin-top: 6px; font-family: var(--mono); font-size: var(--fs-11); color: var(--text-3)">--done</div></div>
+                <div class="card tight" style="width: 128px"><div style="height: 40px; border-radius: var(--r-sm); background: var(--block)"></div><div style="margin-top: 6px; font-family: var(--mono); font-size: var(--fs-11); color: var(--text-3)">--block</div></div>
+                <div class="card tight" style="width: 128px"><div style="height: 40px; border-radius: var(--r-sm); background: var(--warn)"></div><div style="margin-top: 6px; font-family: var(--mono); font-size: var(--fs-11); color: var(--text-3)">--warn</div></div>
+              </div>
+            </div>
+
+            <div class="gallery-section">
+              <h2>字体</h2>
+              <div class="card">
+                <div style="font-size: var(--fs-26); letter-spacing: -.02em">26 · 页面标题</div>
+                <div style="font-size: var(--fs-20); margin-top: var(--s2)">20 · 区块标题</div>
+                <div style="font-size: var(--fs-16); margin-top: var(--s2)">16 · 卡片标题</div>
+                <div style="font-size: var(--fs-14); margin-top: var(--s2)">14 · 正文（会话内容）</div>
+                <div style="font-size: var(--fs-13); margin-top: var(--s2); color: var(--text-2)">13 · 界面正文</div>
+                <div style="font-size: var(--fs-12); margin-top: var(--s2); color: var(--text-3)">12 · 元信息</div>
+                <div style="font-size: var(--fs-11); margin-top: var(--s2); color: var(--text-3); letter-spacing: .06em">11 · 标签 / 大写小标</div>
+                <div style="font-family: var(--mono); font-size: var(--fs-12); margin-top: var(--s2)">--mono · /api/v1/rpc · req-0042</div>
+              </div>
+            </div>
+
+            <div class="gallery-section">
+              <h2>按钮</h2>
+              <div class="gallery-row">
+                <button class="btn primary" type="button">主要操作</button>
+                <button class="btn" type="button">次要操作</button>
+                <button class="btn ghost" type="button">幽灵</button>
+                <button class="btn danger" type="button">危险</button>
+                <button class="btn primary" type="button" disabled>禁用</button>
+                <button class="btn sm" type="button">小号</button>
+                <button class="btn icon" type="button" aria-label="图标"><span data-icon="plus"></span></button>
+                <button class="btn primary icon" type="button" aria-label="发送"><span data-icon="up"></span></button>
+              </div>
+            </div>
+
+            <div class="gallery-section">
+              <h2>状态标签与状态点</h2>
+              <div class="gallery-row">
+                <span class="pill">中性</span>
+                <span class="pill run"><span class="dot run live"></span>运行中</span>
+                <span class="pill decide"><span class="dot decide"></span>等你决定</span>
+                <span class="pill done"><span class="dot done"></span>已完成</span>
+                <span class="pill block"><span class="dot block"></span>已阻断</span>
+                <span class="pill warn"><span class="dot warn"></span>需要处理</span>
+              </div>
+              <div class="gallery-row" style="margin-top: var(--s3)">
+                <span class="dot"></span><span class="dot run"></span><span class="dot decide"></span>
+                <span class="dot done"></span><span class="dot block"></span><span class="dot warn"></span>
+                <span class="role-badge">主管</span>
+                <span class="role-badge" data-role="designer">设计</span>
+                <span class="role-badge" data-role="developer">开发</span>
+                <span class="role-badge" data-role="reviewer">审核</span>
+                <span class="role-badge" data-role="tester">测试</span>
+              </div>
+            </div>
+
+            <div class="gallery-section">
+              <h2>表单</h2>
+              <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(260px, 1fr))">
+                <div class="field"><label for="i1">默认</label><input class="input" id="i1" placeholder="输入内容"></div>
+                <div class="field"><label for="i2">等宽</label><input class="input mono" id="i2" value="~/work/payments-api"></div>
+                <div class="field invalid"><label for="i3">错误</label><input class="input" id="i3" value="/Volumes/old"><span class="error">目录不存在或无权访问</span></div>
+                <div class="field"><label for="i4">选择</label><select class="select" id="i4"><option>gpt-6 · openai</option><option>gpt-5 · openai</option></select></div>
+                <div class="field"><label for="i5">只读</label><input class="input" id="i5" value="deepseek-v4-1" disabled></div>
+                <div class="field"><label>开关</label>
+                  <div class="row">
+                    <span class="switch" role="switch" aria-checked="true"></span>
+                    <span class="switch" role="switch" aria-checked="false"></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="gallery-section">
+              <h2>卡片与提示</h2>
+              <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(300px, 1fr))">
+                <div class="card">
+                  <div class="card-head"><span class="dot run live"></span><h3>带状态卡片</h3><span class="spacer"></span><span class="pill run">3 / 8</span></div>
+                  <div style="color: var(--text-2); font-size: var(--fs-12); line-height: 1.6">给账号增加客服端临时重置链接</div>
+                </div>
+                <div class="note"><span class="dot"></span><span>中性提示：说明性文字。</span></div>
+                <div class="note warn"><span class="dot warn"></span><span>提醒：需要处理但不是错误。</span></div>
+                <div class="note bad"><span class="dot block"></span><span>错误：测试环境不可用。</span></div>
+              </div>
+            </div>
+
+            <div class="gallery-section">
+              <h2>工具卡（折叠 / 展开 / 错误 / 进行中）</h2>
+              <div class="stack">
+                <details class="tool">
+                  <summary><span class="dot done"></span><span class="tname">read</span><span class="tsum">src/auth/password.ts · 214 行</span><span class="ttime">0.3s</span></summary>
+                  <pre>export async function resetPassword(adminId, targetId) { … }</pre>
+                </details>
+                <details class="tool" open>
+                  <summary><span class="dot run live"></span><span class="tname">bash</span><span class="tsum">pnpm vitest run src/auth</span><span class="ttime">进行中 · 6s</span></summary>
+                  <pre>✓ src/auth/password.test.ts (12 tests) 4.1s</pre>
+                </details>
+                <details class="tool" data-state="error">
+                  <summary><span class="dot block"></span><span class="tname">bash</span><span class="tsum">pnpm test:e2e 失败 · 退出码 1</span><span class="ttime">2.4s</span></summary>
+                  <pre>Error: connect ECONNREFUSED 127.0.0.1:5432</pre>
+                </details>
+              </div>
+            </div>
+
+            <div class="gallery-section">
+              <h2>决定卡</h2>
+              <div class="decision">
+                <div class="dhead"><span class="dot decide"></span>需要你决定</div>
+                <div class="dtitle">临时重置链接的入口放在哪里？</div>
+                <div class="dwhy">选项来自当前任务的提问；答复会直接回到提问的 Agent。</div>
+                <div class="dopts">
+                  <button class="btn primary" type="button">客服后台</button>
+                  <button class="btn" type="button">用户账号页</button>
+                  <button class="btn ghost" type="button">先不做</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="gallery-section">
+              <h2>空态</h2>
+              <div class="card">
+                <div class="empty" style="padding: var(--s8)">
+                  <span class="glyph" data-icon="chat"></span>
+                  <h2>和主管聊聊你想做的事</h2>
+                  <p>主管可以直接讨论、调查项目，也可以在你明确要求时把结论保存为需求。</p>
+                  <div class="examples"><button class="chip" type="button">示例问题</button></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="gallery-section">
+              <h2>表格与步骤</h2>
+              <div class="grid" style="grid-template-columns: 1.4fr 1fr">
+                <div class="card" style="padding: 0">
+                  <table class="table">
+                    <thead><tr><th>角色</th><th>模型</th><th>来源</th></tr></thead>
+                    <tbody>
+                      <tr><td><span class="role-name">测试</span></td><td><span style="color: var(--text-2)">gpt-5 · openai</span></td><td><span class="pill run">本项目指定</span></td></tr>
+                      <tr><td><span class="role-name">开发</span></td><td><span style="color: var(--text-2)">deepseek-v4-1</span></td><td><span class="pill">继承全局</span></td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="card">
+                  <div class="steps">
+                    <div class="step" data-state="done"><span class="mark"></span><div class="stext"><div class="sname">分析现状</div><div class="smeta">完成</div></div></div>
+                    <div class="step" data-state="run"><span class="mark"></span><div class="stext"><div class="sname">开发实现</div><div class="smeta">进行中</div></div></div>
+                    <div class="step" data-state="decide"><span class="mark"></span><div class="stext"><div class="sname">入口确认</div><div class="smeta">等待你决定</div></div></div>
+                    <div class="step" data-state="wait"><span class="mark"></span><div class="stext"><div class="sname">独立审核</div><div class="smeta">等待</div></div></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="assets/proto.js"></script>
+</body>
+</html>

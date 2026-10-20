@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentDev · 主管对话</title>
+  <link rel="stylesheet" href="assets/tokens.css">
+  <link rel="stylesheet" href="assets/components.css">
+  <link rel="stylesheet" href="assets/proto.css">
+</head>
+<body class="frame" data-screen="conversation">
+  <div class="app">
+    <header class="topbar">
+      <span class="brand"><span class="brand-mark"><i></i><i></i><i></i><i></i></span>AgentDev</span>
+      <button class="project-chip" type="button">
+        <span class="name">payments-api</span>
+        <span class="path">~/work/payments-api</span>
+        <span class="chev">▾</span>
+      </button>
+      <button class="project-chip" type="button">
+        <span class="name">密码重置</span>
+        <span class="path">会话 3</span>
+        <span class="chev">▾</span>
+      </button>
+      <span class="spacer"></span>
+      <button class="top-btn" type="button"><span data-icon="search"></span>搜索<kbd>⌘K</kbd></button>
+      <span class="conn" data-state="run"><span class="dot run live"></span>2 个 Agent 运行中</span>
+    </header>
+
+    <aside class="sidebar">
+      <div data-proto-nav></div>
+      <div class="work-card">
+        <span class="label">当前任务</span>
+        <span class="title">给账号增加密码重置</span>
+        <span class="meta">开发 · 2 / 8 步 · 已运行 12 分钟</span>
+      </div>
+    </aside>
+
+    <main class="main with-rail">
+      <section class="pane">
+        <div class="pane-scroll">
+          <!-- 空会话 -->
+          <div data-scenario-panel="conv" data-value="empty">
+            <div class="conv">
+              <div class="conv-head">
+                <span class="title">密码重置</span>
+                <span class="meta">新会话 · 还没有消息</span>
+              </div>
+              <div class="conv-body">
+                <div class="empty">
+                  <span class="glyph" data-icon="chat"></span>
+                  <h2>和主管聊聊你想做的事</h2>
+                  <p>主管可以直接讨论、调查项目，也可以在你明确要求时把结论保存为需求，或组织 Agent 协作完成。</p>
+                  <div class="examples">
+                    <button class="chip" type="button">我想给账号功能加密码重置，先聊聊有没有必要</button>
+                    <button class="chip" type="button">看看这个项目现在有哪些能力</button>
+                    <button class="chip" type="button">把刚才的结论保存为需求</button>
+                  </div>
+                </div>
+              </div>
+              <form class="composer" onsubmit="return false">
+                <div class="composer-inner">
+                  <div class="composer-box">
+                    <textarea rows="2" placeholder="和主管说说你的想法…"></textarea>
+                    <div class="composer-bar">
+                      <span class="composer-hint">Enter 发送 · Shift+Enter 换行</span>
+                      <span class="spacer"></span>
+                      <button class="btn primary icon" type="submit" aria-label="发送"><span data-icon="up"></span></button>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <!-- 讨论中 -->
+          <div data-scenario-panel="conv" data-value="discussing" hidden>
+            <div class="conv">
+              <div class="conv-head">
+                <span class="title">密码重置</span>
+                <span class="meta">讨论中 · 未创建任务</span>
+                <span class="spacer"></span>
+                <span class="pill">空闲</span>
+              </div>
+              <div class="conv-body">
+                <div class="conv-inner">
+                  <div class="msg user">
+                    <div class="msg-head"><span class="spacer"></span><span>你 · 10:42</span></div>
+                    <div class="bubble">我想给账号功能加密码重置，先聊聊有没有必要。现在客户是打电话找客服改密码。</div>
+                  </div>
+                  <div class="msg">
+                    <div class="msg-head"><span class="dot done"></span><span class="who">主管</span><span>10:42</span></div>
+                    <div class="body">
+                      <p>值得做，但先确认两点约束。我看了现有代码：账号模块只有管理员重置接口，没有自助入口；邮件服务目前只在邀请流程里用过。</p>
+                      <ul>
+                        <li>做自助重置需要邮件通道在客服场景也可用，现在只有邀请邮件，失败没有重试。</li>
+                        <li>现有密码规则要求 12 位，重置后强制改密的流程还没有。</li>
+                      </ul>
+                      <p>两个可选方案：<strong>A</strong> 接入邮件自助重置（覆盖面大，需要补邮件可靠性）；<strong>B</strong> 先做客服后台的临时链接生成（一天内可交付，自助入口后续再加）。你倾向哪个？</p>
+                    </div>
+                  </div>
+                  <details class="tool">
+                    <summary>
+                      <span class="dot done"></span>
+                      <span class="tname">read</span>
+                      <span class="tsum">src/auth/password.ts · 214 行</span>
+                      <span class="ttime">0.3s</span>
+                    </summary>
+                    <pre>export async function resetPassword(adminId: string, targetId: string) { … }</pre>
+                  </details>
+                  <div class="msg user">
+                    <div class="msg-head"><span class="spacer"></span><span>你 · 10:45</span></div>
+                    <div class="bubble">先按 B 做，但自助入口要留出来。</div>
+                  </div>
+                </div>
+              </div>
+              <form class="composer" onsubmit="return false">
+                <div class="composer-inner">
+                  <div class="composer-box">
+                    <textarea rows="2" placeholder="和主管说说你的想法…"></textarea>
+                    <div class="composer-bar">
+                      <span class="composer-hint">Enter 发送 · Shift+Enter 换行</span>
+                      <span class="spacer"></span>
+                      <button class="btn primary icon" type="submit" aria-label="发送"><span data-icon="up"></span></button>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <!-- 执行中 -->
+          <div data-scenario-panel="conv" data-value="running" hidden>
+            <div class="conv">
+              <div class="conv-head">
+                <span class="title">密码重置</span>
+                <span class="meta">实施中 · 任务 t-4f21</span>
+                <span class="spacer"></span>
+                <span class="pill run"><span class="dot run live"></span>正在执行</span>
+                <button class="btn sm ghost" type="button">暂停</button>
+              </div>
+              <div class="conv-body">
+                <div class="conv-inner">
+                  <div class="msg user">
+                    <div class="msg-head"><span class="spacer"></span><span>你 · 11:02</span></div>
+                    <div class="bubble">实现这个需求。</div>
+                  </div>
+                  <div class="msg">
+                    <div class="msg-head"><span class="dot done"></span><span class="who">主管</span><span>11:02</span></div>
+                    <div class="body">
+                      <p>需求 <code>req-0042</code> 依据充分，我建立了实施任务 t-4f21，总体计划 8 步。当前在第 3 步：开发实现，两个成员并行。</p>
+                    </div>
+                  </div>
+                  <div class="card tight">
+                    <div class="card-head">
+                      <span class="dot run live"></span>
+                      <h3>给账号增加客服端临时重置链接</h3>
+                      <span class="spacer"></span>
+                      <span class="pill run">第 3 / 8 步</span>
+                    </div>
+                    <div class="steps">
+                      <div class="step" data-state="done"><span class="mark"></span><div class="stext"><div class="sname">分析现状与影响面</div><div class="smeta">设计 · 1 个成员 · 4 分钟</div></div></div>
+                      <div class="step" data-state="done"><span class="mark"></span><div class="stext"><div class="sname">制定计划</div><div class="smeta">主管 · 已保存 8 步</div></div></div>
+                      <div class="step" data-state="run"><span class="mark"></span><div class="stext"><div class="sname">开发实现</div><div class="smeta">开发 · 2 个成员进行中</div></div></div>
+                      <div class="step" data-state="wait"><span class="mark"></span><div class="stext"><div class="sname">独立审核</div><div class="smeta">等待开发完成</div></div></div>
+                    </div>
+                  </div>
+                  <details class="tool" open>
+                    <summary>
+                      <span class="dot run live"></span>
+                      <span class="tname">bash</span>
+                      <span class="tsum">pnpm vitest run src/auth</span>
+                      <span class="ttime">进行中 · 6s</span>
+                    </summary>
+                    <pre>✓ src/auth/password.test.ts (12 tests) 4.1s
+✓ src/auth/reset-token.test.ts (5 tests) 1.2s
+… src/auth/self-service.test.ts</pre>
+                  </details>
+                  <div class="msg">
+                    <div class="msg-head"><span class="role-badge" data-role="developer">开发</span><span>11:14</span></div>
+                    <div class="body"><p>临时链接的后端已完成，前端入口还需要一次确认：放在账号页还是客服后台？</p></div>
+                  </div>
+                </div>
+              </div>
+              <form class="composer" onsubmit="return false">
+                <div class="composer-inner">
+                  <div class="composer-box">
+                    <textarea rows="2" placeholder="补充说明（会关联到当前任务 t-4f21）…"></textarea>
+                    <div class="composer-bar">
+                      <span class="composer-hint">当前任务进行中 · 消息将作为该任务的补充</span>
+                      <span class="spacer"></span>
+                      <button class="btn danger sm" type="button">停止</button>
+                      <button class="btn primary icon" type="submit" aria-label="发送"><span data-icon="up"></span></button>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <!-- 等待决定 -->
+          <div data-scenario-panel="conv" data-value="decide" hidden>
+            <div class="conv">
+              <div class="conv-head">
+                <span class="title">密码重置</span>
+                <span class="meta">实施中 · 任务 t-4f21</span>
+                <span class="spacer"></span>
+                <span class="pill decide"><span class="dot decide"></span>等你决定</span>
+              </div>
+              <div class="conv-body">
+                <div class="conv-inner">
+                  <div class="msg">
+                    <div class="msg-head"><span class="role-badge" data-role="developer">开发</span><span>11:20</span></div>
+                    <div class="body"><p>后端已通过单元测试，前端入口位置需要你确认后再继续。</p></div>
+                  </div>
+                  <div class="decision" role="group" aria-label="待你回答">
+                    <div class="dhead"><span class="dot decide"></span>需要你决定</div>
+                    <div class="dtitle">临时重置链接的入口放在哪里？</div>
+                    <div class="dwhy">开发 Agent 已完成后端，前端入口位置会影响客服操作流程。选项来自任务当前步骤的提问。</div>
+                    <div class="dopts">
+                      <button class="btn primary" type="button">客服后台 · 账号详情页</button>
+                      <button class="btn" type="button">用户账号页 · 自助入口</button>
+                      <button class="btn ghost" type="button">先不做入口</button>
+                    </div>
+                    <div class="composer-hint">答复会直接回到提问的 Agent，并继续当前任务。</div>
+                  </div>
+                </div>
+              </div>
+              <form class="composer" onsubmit="return false">
+                <div class="composer-inner">
+                  <div class="composer-box">
+                    <textarea rows="2" placeholder="补充说明（会关联到当前任务 t-4f21）…"></textarea>
+                    <div class="composer-bar">
+                      <span class="composer-hint">还有 1 个问题等待回答</span>
+                      <span class="spacer"></span>
+                      <button class="btn primary icon" type="submit" aria-label="发送"><span data-icon="up"></span></button>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <!-- 失败 -->
+          <div data-scenario-panel="conv" data-value="failed" hidden>
+            <div class="conv">
+              <div class="conv-head">
+                <span class="title">密码重置</span>
+                <span class="meta">实施中 · 任务 t-4f21</span>
+                <span class="spacer"></span>
+                <span class="pill block"><span class="dot block"></span>已阻断</span>
+              </div>
+              <div class="conv-body">
+                <div class="conv-inner">
+                  <div class="note bad">
+                    <span class="dot block"></span>
+                    <span>测试环境不可用：<code>pnpm test:e2e</code> 需要 Docker，当前主机没有运行中的 Docker 服务。任务已暂停在第 5 步。</span>
+                  </div>
+                  <div class="msg">
+                    <div class="msg-head"><span class="role-badge" data-role="tester">测试</span><span>11:38</span></div>
+                    <div class="body">
+                      <p>单元测试与接口集成通过（17 项），浏览器 E2E 无法执行，原因是环境缺失，不是代码失败。</p>
+                    </div>
+                  </div>
+                  <div class="card tight">
+                    <div class="card-head"><span class="dot block"></span><h3>下一步</h3></div>
+                    <div class="stack" style="gap: var(--s2)">
+                      <div class="row"><span class="pill">1</span><span>启动 Docker Desktop 后点“继续”</span></div>
+                      <div class="row"><span class="pill">2</span><span>或跳过 E2E，并在结算中登记未覆盖项</span></div>
+                    </div>
+                    <div class="row" style="margin-top: var(--s3)">
+                      <button class="btn primary" type="button">继续任务</button>
+                      <button class="btn" type="button">跳过并登记</button>
+                      <button class="btn ghost" type="button">查看报告</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <form class="composer" onsubmit="return false">
+                <div class="composer-inner">
+                  <div class="composer-box">
+                    <textarea rows="2" placeholder="和主管说说你的想法…"></textarea>
+                    <div class="composer-bar">
+                      <span class="composer-hint">Enter 发送 · Shift+Enter 换行</span>
+                      <span class="spacer"></span>
+                      <button class="btn primary icon" type="submit" aria-label="发送"><span data-icon="up"></span></button>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="rail">
+        <div class="rail-head">
+          <span class="title">当前工作</span>
+          <span class="spacer"></span>
+          <button class="btn sm ghost icon" type="button" aria-label="收起工作栏"><span data-icon="x"></span></button>
+        </div>
+        <div class="rail-body">
+          <div class="rail-section">
+            <span class="label">任务</span>
+            <div class="card tight">
+              <div class="row"><span class="dot run live"></span><strong>t-4f21</strong><span class="pill run sm">实现</span></div>
+              <div style="margin-top: 6px; color: var(--text-2); font-size: var(--fs-12); line-height: 1.5">
+                给账号增加客服端临时重置链接
+              </div>
+              <div style="margin-top: var(--s3)">
+                <div class="row" style="justify-content: space-between; font-size: var(--fs-11); color: var(--text-3)">
+                  <span>第 3 / 8 步</span><span>37%</span>
+                </div>
+                <div class="req" style="border: 0; padding: 0; background: transparent">
+                  <div class="rbar" style="margin-top: 6px"><i style="width: 37%"></i></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="rail-section">
+            <span class="label">步骤</span>
+            <div class="steps">
+              <div class="step" data-state="done"><span class="mark"></span><div class="stext"><div class="sname">分析现状</div><div class="smeta">设计 · 完成</div></div></div>
+              <div class="step" data-state="done"><span class="mark"></span><div class="stext"><div class="sname">制定计划</div><div class="smeta">8 步 · 已保存</div></div></div>
+              <div class="step" data-state="run"><span class="mark"></span><div class="stext"><div class="sname">开发实现</div><div class="smeta">2 个成员进行中</div></div></div>
+              <div class="step" data-state="wait"><span class="mark"></span><div class="stext"><div class="sname">独立审核</div><div class="smeta">等待</div></div></div>
+              <div class="step" data-state="wait"><span class="mark"></span><div class="stext"><div class="sname">独立测试</div><div class="smeta">等待</div></div></div>
+              <div class="step" data-state="wait"><span class="mark"></span><div class="stext"><div class="sname">结算</div><div class="smeta">等待</div></div></div>
+            </div>
+          </div>
+          <div class="rail-section">
+            <span class="label">参与角色</span>
+            <div class="member"><span class="avatar">设</span><div class="mrow"><div class="mname">设计</div><div class="msub">gpt-5 · 已完成</div></div><span class="dot done"></span></div>
+            <div class="member"><span class="avatar">开</span><div class="mrow"><div class="mname">开发 · 后端</div><div class="msub">gpt-6 · 运行中</div></div><span class="dot run live"></span></div>
+            <div class="member"><span class="avatar">开</span><div class="mrow"><div class="mname">开发 · 前端</div><div class="msub">gpt-6 · 运行中</div></div><span class="dot run live"></span></div>
+            <div class="member"><span class="avatar">审</span><div class="mrow"><div class="mname">审核</div><div class="msub">claude-4.5 · 未开始</div></div><span class="dot"></span></div>
+          </div>
+          <div class="rail-section">
+            <span class="label">需要你处理</span>
+            <div class="note warn"><span class="dot decide"></span><span>1 个问题等待回答（入口位置）</span></div>
+          </div>
+          <div class="rail-section">
+            <span class="label">产物</span>
+            <div class="row" style="justify-content: space-between; font-size: var(--fs-12)">
+              <span>计划</span><a href="#">.dev/work/t-4f21/plan.md</a>
+            </div>
+            <div class="row" style="justify-content: space-between; font-size: var(--fs-12)">
+              <span>测试报告</span><span style="color: var(--text-3)">待生成</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="statusbar">
+      <span class="seg"><span class="dot run"></span>2 个 Agent 运行中</span>
+      <span class="seg">main</span>
+      <span class="spacer"></span>
+      <span class="seg">gpt-6 · deepseek provider</span>
+    </footer>
+  </div>
+
+  <div class="proto-scenarios" data-proto-toolbar>
+    <div class="proto-scenario-bar">
+      <span class="lbl">场景</span>
+      <button class="btn sm" type="button" data-scenario="conv" data-value="empty">空会话</button>
+      <button class="btn sm" type="button" data-scenario="conv" data-value="discussing">讨论中</button>
+      <button class="btn sm" type="button" data-scenario="conv" data-value="running">执行中</button>
+      <button class="btn sm" type="button" data-scenario="conv" data-value="decide">等待决定</button>
+      <button class="btn sm" type="button" data-scenario="conv" data-value="failed">失败</button>
+    </div>
+  </div>
+
+  <script src="assets/proto.js"></script>
+</body>
+</html>

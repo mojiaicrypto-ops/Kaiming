@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentDev · 高保真原型</title>
+  <link rel="stylesheet" href="assets/tokens.css">
+  <link rel="stylesheet" href="assets/components.css">
+  <link rel="stylesheet" href="assets/proto.css">
+</head>
+<body class="frame">
+  <div class="proto-index">
+    <h1>AgentDev 工作台 · 高保真原型</h1>
+    <p class="lead">
+      石墨工作台方向：中性深灰底、单一强调色、状态用语义色。全部为静态页面与假数据，不含真实接口；
+      每页右下角可切换深浅主题，页面内可切换场景状态。
+    </p>
+
+    <h2>主要界面</h2>
+    <div class="proto-grid">
+      <a class="proto-card" href="conversation.html">
+        <span class="t">主管对话</span>
+        <span class="d">单会话的完整形态：转录、工具调用、任务卡、决定卡、输入框与右侧工作栏。</span>
+        <span class="s">
+          <span class="pill">空会话</span><span class="pill">讨论中</span><span class="pill run">执行中</span>
+          <span class="pill decide">等待决定</span><span class="pill block">失败</span>
+        </span>
+      </a>
+      <a class="proto-card" href="requirements.html">
+        <span class="t">需求看板</span>
+        <span class="d">提案与实施需求按状态分列；点开为详情抽屉，含来源、验收、关联任务。</span>
+        <span class="s"><span class="pill">有数据</span><span class="pill warn">解析问题</span></span>
+      </a>
+      <a class="proto-card" href="providers.html">
+        <span class="t">模型服务</span>
+        <span class="d">全局 provider 列表：地址、协议、模型清单与密钥配置状态；新增与试连。</span>
+        <span class="s"><span class="pill">已配置</span><span class="pill block">试连失败</span></span>
+      </a>
+      <a class="proto-card" href="models.html">
+        <span class="t">角色与模型</span>
+        <span class="d">每个角色一行：全局值、本项目值、生效来源；“项目覆盖”可单独指定。</span>
+        <span class="s"><span class="pill">全部继承</span><span class="pill run">项目覆盖</span></span>
+      </a>
+      <a class="proto-card" href="project.html">
+        <span class="t">项目</span>
+        <span class="d">新建/打开项目：目录选择、最近项目、同名与无效路径反馈。</span>
+        <span class="s"><span class="pill">选择目录</span><span class="pill block">无效路径</span></span>
+      </a>
+      <a class="proto-card" href="gallery.html">
+        <span class="t">组件与令牌</span>
+        <span class="d">按钮、表单、卡片、徽标、状态点、工具卡、空态、抽屉的全部状态。</span>
+        <span class="s"><span class="pill">深浅主题</span><span class="pill">状态矩阵</span></span>
+      </a>
+    </div>
+
+    <h2>本轮不做</h2>
+    <div class="card tight">
+      <div class="stack" style="gap: var(--s2)">
+        <div class="row"><span class="dot"></span><span>项目文件查看器（用户指定后期再做）</span></div>
+        <div class="row"><span class="dot"></span><span>文档与知识、Agent 运行控制台、独立收件箱页</span></div>
+        <div class="row"><span class="dot"></span><span>命令面板、运行抽屉（留到功能开发期）</span></div>
+      </div>
+    </div>
+  </div>
+  <script src="assets/proto.js"></script>
+</body>
+</html>

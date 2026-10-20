@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentDev · 项目</title>
+  <link rel="stylesheet" href="assets/tokens.css">
+  <link rel="stylesheet" href="assets/components.css">
+  <link rel="stylesheet" href="assets/proto.css">
+</head>
+<body class="frame" data-screen="project">
+  <div class="app">
+    <header class="topbar">
+      <span class="brand"><span class="brand-mark"><i></i><i></i><i></i><i></i></span>AgentDev</span>
+      <button class="project-chip" type="button">
+        <span class="name">payments-api</span>
+        <span class="path">~/work/payments-api</span>
+        <span class="chev">▾</span>
+      </button>
+      <span class="spacer"></span>
+      <span class="conn" data-state="ok"><span class="dot done"></span>已连接</span>
+    </header>
+
+    <aside class="sidebar">
+      <div data-proto-nav></div>
+    </aside>
+
+    <main class="main">
+      <section class="pane">
+        <div class="page-head">
+          <div>
+            <h1>项目</h1>
+            <div class="sub">工作台运行环境中的目录才能接入。磁盘上的目录不会因为放在同一台电脑就自动成为项目。</div>
+          </div>
+          <div class="actions">
+            <button class="btn primary" type="button"><span data-icon="plus"></span>打开或新建</button>
+          </div>
+        </div>
+
+        <div class="pane-scroll">
+          <div class="content">
+            <div class="stack" style="gap: var(--s6)">
+              <div>
+                <h2 style="font-size: var(--fs-12); text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); margin: 0 0 var(--s3)">最近项目</h2>
+                <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(320px, 1fr))">
+                  <button class="card" style="text-align: left; cursor: pointer">
+                    <div class="row">
+                      <span class="dot done"></span>
+                      <strong>payments-api</strong>
+                      <span class="spacer"></span>
+                      <span class="pill run">1 个任务进行中</span>
+                    </div>
+                    <div style="margin-top: 6px; font-family: var(--mono); font-size: var(--fs-11); color: var(--text-3)">~/work/payments-api</div>
+                    <div class="row" style="margin-top: var(--s3); gap: var(--s4); font-size: var(--fs-11); color: var(--text-3)">
+                      <span>3 个会话</span><span>6 条需求</span><span>最近 8 分钟前</span>
+                    </div>
+                  </button>
+
+                  <button class="card" style="text-align: left; cursor: pointer">
+                    <div class="row">
+                      <span class="dot done"></span>
+                      <strong>design-system</strong>
+                      <span class="spacer"></span>
+                      <span class="pill">空闲</span>
+                    </div>
+                    <div style="margin-top: 6px; font-family: var(--mono); font-size: var(--fs-11); color: var(--text-3)">~/work/design-system</div>
+                    <div class="row" style="margin-top: var(--s3); gap: var(--s4); font-size: var(--fs-11); color: var(--text-3)">
+                      <span>1 个会话</span><span>0 条需求</span><span>最近 2 天前</span>
+                    </div>
+                  </button>
+
+                  <button class="card" style="text-align: left; cursor: pointer; border-color: var(--warn)">
+                    <div class="row">
+                      <span class="dot warn"></span>
+                      <strong>notifier</strong>
+                      <span class="spacer"></span>
+                      <span class="pill warn">目录不可访问</span>
+                    </div>
+                    <div style="margin-top: 6px; font-family: var(--mono); font-size: var(--fs-11); color: var(--text-3)">~/work/notifier（已移动）</div>
+                    <div class="row" style="margin-top: var(--s3); gap: var(--s4); font-size: var(--fs-11); color: var(--text-3)">
+                      <span>记录保留</span><span>需要重新绑定</span>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <!-- 打开/新建对话框（内联展示） -->
+              <div>
+                <h2 style="font-size: var(--fs-12); text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); margin: 0 0 var(--s3)">打开或新建项目</h2>
+
+                <div data-scenario-panel="project" data-value="existing">
+                  <div class="card">
+                    <div class="card-head"><h3>选择目录</h3><span class="pill">服务端路径</span></div>
+                    <div class="row" style="gap: var(--s2)">
+                      <input class="input mono" value="~/work/payments-api" aria-label="项目目录">
+                      <button class="btn" type="button">浏览…</button>
+                      <button class="btn primary" type="button">打开</button>
+                    </div>
+                    <div class="grid" style="grid-template-columns: 240px 1fr; gap: var(--s3); margin-top: var(--s3)">
+                      <div class="card tight" style="background: var(--inset)">
+                        <div style="font-size: var(--fs-11); color: var(--text-3); margin-bottom: 6px">~/work</div>
+                        <div class="stack" style="gap: 2px; font-size: var(--fs-12)">
+                          <div class="row"><span data-icon="folder"></span><span>design-system</span></div>
+                          <div class="row" style="background: var(--accent-weak); border-radius: var(--r-sm); padding: 2px 4px"><span data-icon="folder"></span><span>payments-api</span></div>
+                          <div class="row"><span data-icon="folder"></span><span>notifier</span></div>
+                          <div class="row"><span data-icon="folder"></span><span>sandbox</span></div>
+                        </div>
+                      </div>
+                      <div class="card tight" style="background: var(--inset)">
+                        <div style="font-size: var(--fs-11); color: var(--text-3)">已识别</div>
+                        <div class="stack" style="gap: 6px; margin-top: 6px">
+                          <div class="row"><span class="pill done">Git 仓库 · main</span></div>
+                          <div class="row"><span class="pill done">已有 AGENTS.md</span><span class="pill done">.dev/ 已初始化</span></div>
+                          <div style="font-size: var(--fs-12); color: var(--text-2); margin-top: var(--s2)">打开后回到原项目，不会重复创建会话或工作。</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div data-scenario-panel="project" data-value="invalid" hidden>
+                  <div class="card" style="border-color: var(--block-weak)">
+                    <div class="card-head"><h3>选择目录</h3><span class="pill block">无法打开</span></div>
+                    <div class="field invalid">
+                      <div class="row" style="gap: var(--s2)">
+                        <input class="input mono" value="/Volumes/old/notifier" aria-label="项目目录">
+                        <button class="btn" type="button">浏览…</button>
+                        <button class="btn primary" type="button" disabled>打开</button>
+                      </div>
+                      <span class="error">目录不存在或工作台无权访问。请确认路径，或把目录移动到工作台可访问的位置。</span>
+                    </div>
+                    <div class="note" style="margin-top: var(--s3)">
+                      <span class="dot"></span>
+                      <span>远程访问时，浏览器所在电脑的目录不会自动成为项目目录；这里填写的是工作台所在机器的路径。</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div data-scenario-panel="project" data-value="new" hidden>
+                  <div class="card">
+                    <div class="card-head"><h3>新项目</h3><span class="pill">空目录会被视为新项目</span></div>
+                    <div class="stack" style="gap: var(--s3)">
+                      <div class="field">
+                        <label>目录</label>
+                        <input class="input mono" value="~/work/new-service" aria-label="项目目录">
+                      </div>
+                      <div class="field">
+                        <label>首次正式保存或实施前</label>
+                        <span class="help">主管会先说明将创建的知识入口（AGENTS.md、.dev/INDEX.md 等），展示差异，经你确认后再写入，并保留已有文件。</span>
+                      </div>
+                      <div class="row">
+                        <span class="spacer"></span>
+                        <button class="btn ghost" type="button">取消</button>
+                        <button class="btn primary" type="button">创建并打开</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="statusbar">
+      <span class="seg"><span class="dot done"></span>已连接</span>
+      <span class="seg">3 个项目 · 1 个需要重新绑定</span>
+      <span class="spacer"></span>
+      <span class="seg">所有项目共享同一个服务端</span>
+    </footer>
+  </div>
+
+  <div class="proto-scenarios" data-proto-toolbar>
+    <div class="proto-scenario-bar">
+      <span class="lbl">打开项目</span>
+      <button class="btn sm" type="button" data-scenario="project" data-value="existing">已有项目</button>
+      <button class="btn sm" type="button" data-scenario="project" data-value="new">新建</button>
+      <button class="btn sm" type="button" data-scenario="project" data-value="invalid">无效路径</button>
+    </div>
+  </div>
+
+  <script src="assets/proto.js"></script>
+  <style>
+    .proto-scenarios { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 60; }
+    .proto-scenario-bar {
+      display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+      border: 1px solid var(--line-strong); border-radius: 999px;
+      background: var(--surface); box-shadow: 0 8px 24px rgba(0,0,0,.35);
+    }
+    .proto-scenario-bar .lbl { color: var(--text-3); font-size: var(--fs-11); margin-right: 4px; }
+  </style>
+</body>
+</html>
