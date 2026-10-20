@@ -99,3 +99,16 @@
 | 回归证据 | — | `run-watchdog.test` 等待暂停两窗口;`runtime.test` 提问后超过停滞窗口再回答仍 completed(去修复会失败);`workbench-entry.test` 真实 startWorkbench + 挂起 provider:run 被中止 → 输入 stopped、通知存在、下一条消息正常运行(去修复会停在 interrupted) |
 
 验证:`tsc` 干净;26 文件 / 286 项测试;浏览器 8/8;提示词 15/15。运行中的服务需重启以加载修复。
+
+## 工具集:主管可直接执行命令
+
+实测确认各角色工具集(旧代号 `createTask/updateTask/...` 已在下线),与 G1 一致:developer/tester/settler 有 bash,designer 只有读+写,reviewer/investigator 只读。缺口是主管:只能 read/grep/find/ls,无法自己看 git 状态、跑测试入口或核实文件布局,只能采信别人给的摘要。
+
+| 变更 | 内容 |
+|---|---|
+| `tool-sets.ts` | chief 原生工具增加 `bash`;实现类写入仍交专业 Session,read Task 仍移除 bash |
+| 契约 | G1 主管行与上下文表同步;主管可用 bash 核实状态,不承担实现写入 |
+| 提示词 | chief.md 明确:读数不够时用 bash 查真实状态(git、测试入口、文件布局),不靠假设;实现仍委派 |
+| 证据 | `tool-sets.test` 断言主管在 write Task 与无 Task 时都有 bash、仍无 write/edit;`runtime.test` 用真实 Pi + stub 模型让主管执行 `echo chief-shell-ok`,断言 toolResult 出现真实输出 |
+
+验证:`tsc` 干净;26 文件 / 288 项测试;浏览器 8/8;提示词 15/15;服务已重启(pid 43767)加载新工具集。

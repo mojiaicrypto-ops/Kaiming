@@ -14,6 +14,7 @@ describe('role tool sets', () => {
   });
 
   it('lets a write Task keep shell for the roles the contract documents, and only those', () => {
+    expect(toolSetFor('chief', 'write').allowlist).toContain('bash');
     expect(toolSetFor('developer', 'write').allowlist).toContain('bash');
     expect(toolSetFor('tester', 'write').allowlist).toContain('bash');
     expect(toolSetFor('settler', 'write').allowlist).toContain('bash');
@@ -102,10 +103,11 @@ describe('role tool sets', () => {
     );
     expect(reviewerWrite.denied).not.toContain('agent_report');
 
-    // The chief holds requirement/project but not the report tool or project writes.
+    // The chief holds requirement/project and shell, but not the report tool or project writes.
     const chief = toolSetFor('chief', undefined);
     expect(chief.denied).not.toContain('requirement');
-    expect(chief.denied).toEqual(expect.arrayContaining(['agent_report', 'write', 'bash']));
+    expect(chief.denied).not.toContain('bash');
+    expect(chief.denied).toEqual(expect.arrayContaining(['agent_report', 'write', 'edit']));
   });
 
   it('exposes a read-only answer for callers that only need the boolean', () => {

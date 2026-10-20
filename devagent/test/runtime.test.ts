@@ -809,7 +809,8 @@ describe('input runner', () => {
     const requested = shape.requestedTools as string[];
     const active = shape.activeTools as string[];
     expect(requested).toContain('read');
-    // The chief session never carries project-writing tools, even in a write Task.
+    // The chief can check the real state itself, but never carries project-writing tools.
+    expect(requested).toContain('bash');
     expect(requested).not.toContain('write');
     expect(requested).not.toContain('edit');
     // Only registered names really activate; the record shows both.
@@ -817,6 +818,27 @@ describe('input runner', () => {
     expect(active).toContain('read');
     expect(shape.taskType).toBe('write');
   });
+
+  it('lets the chief run a shell command itself', async () => {
+    const h = await harness({
+      replies: [
+        {
+          kind: 'tool_calls',
+          calls: [{ name: 'bash', arguments: JSON.stringify({ command: 'echo chief-shell-ok' }) }],
+        },
+        { kind: 'text', text: 'checked' },
+      ],
+    });
+
+    const outcome = await h.runner.runNext('s-1');
+
+    expect(outcome.kind).toBe('completed');
+    const messages = h.registry.get('s-1')?.session.messages ?? [];
+    const observed = JSON.stringify(messages);
+    expect(observed).toContain('chief-shell-ok');
+    // The real command ran: the tool result, not the model's claim, carries the output.
+    expect(messages.some((message) => message.role === 'toolResult')).toBe(true);
+  }, 30_000);
 
   it('rebuilds the instance when the Task type changes the tool set', async () => {
     let taskType: 'read' | 'write' | undefined = 'write';

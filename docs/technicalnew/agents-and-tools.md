@@ -6,7 +6,7 @@
 
 | roleId | 责任 | 能力（Pi 原生文件工具按 Task 类型裁剪） |
 |---|---|---|
-| chief | 用户讨论、总体 Plan、阶段/步骤、委派、业务判断与收口 | read/grep/find/ls；四个核心工具、task（全 op）、requirement、project、question |
+| chief | 用户讨论、总体 Plan、阶段/步骤、委派、业务判断与收口 | read/grep/find/ls/bash；四个核心工具、task（全 op）、requirement、project、question |
 | designer | 产品分析、模块内聚、需求及适用技术架构/契约 | read/grep/find/ls/write/edit、requirement、agent_report、task(op=get)、question |
 | developer | 实现指定目标，内置单元/TDD 自查（D-05） | read/grep/find/ls/write/edit/bash、agent_report、task(op=get)、requirement.list/get、question |
 | reviewer | 独立检查需求/验收、Plan 和实际成果 | read/grep/find/ls、agent_report、task(op=get)、question |
@@ -14,7 +14,7 @@
 | settler | 更新已验证知识/记录，保存成果 | read/grep/find/ls/write/edit/bash、agent_report、task(op=get)、requirement、question |
 | investigator | 独立只读调查/恢复核实 | read/grep/find/ls、agent_report、task(op=get)、question |
 
-所有角色使用同一 Pi 原生交互适配。前后端是 developer.specialization。专业 Session 必须绑定 Task，不能再委派。身份/Task/工具 op 由宿主固定，不靠模型参数切换。read Task 不开放项目写工具、requirement.save 或任意 bash；agent_report 仍可写 Server 报告。write Task 中 Reviewer 依然只读。Local 工具允许列表不是 OS 沙箱，业务范围和命令影响由 Agent 判断，实际交付状态由程序核对。
+所有角色使用同一 Pi 原生交互适配。前后端是 developer.specialization。专业 Session 必须绑定 Task，不能再委派。身份/Task/工具 op 由宿主固定，不靠模型参数切换。read Task 不开放项目写工具、requirement.save 或任意 bash；agent_report 仍可写 Server 报告。write Task 中 Reviewer 依然只读。主管可用 bash 直接核实实际状态（git、测试入口、文件布局），实现类写入仍由专业 Session 承担。Local 工具允许列表不是 OS 沙箱，业务范围和命令影响由 Agent 判断，实际交付状态由程序核对。
 
 ## G2 模型工具
 
@@ -137,7 +137,7 @@ chief：Pi 原生说明 + base 完整正文 + chief 完整角色正文
 
 | roleId / 完整正文 | 本次目标与依据上下文 | 权限及工作环境 |
 |---|---|---|
-| chief / [chief](prompts/chief.md) | 用户输入、项目入口、当前 Task/Plan、有效决定与正式结果；按需补读 | G1 主管工具及当前 Task ownerEpoch / 只读或修改类型；无专业源码写入权限 |
+| chief / [chief](prompts/chief.md) | 用户输入、项目入口、当前 Task/Plan、有效决定与正式结果；按需补读 | G1 主管工具及当前 Task ownerEpoch / 只读或修改类型；可直接跑命令核实状态，不承担实现写入 |
 | designer / [designer](prompts/designer.md) | 设计目标、提案/需求、产品/技术索引及选定模块、已确认决定、Plan | 普通文档写入负责人；需求通过 save；不默认整项目或所有模块 |
 | developer / [developer](prompts/developer.md) | 指定实施目标、需求/验收、Plan、必要技术接口、依赖结果、适用单元/集成/E2E 测试入口 | specialization、授权范围、登记工作目录/写入负责人、实际执行配置 |
 | reviewer / [reviewer](prompts/reviewer.md) | 正式需求/验收、Plan、实际交付、真实证据 | 独立只读成果；无作者、主管、其他 Reviewer 聊天自评，无任意 bash |

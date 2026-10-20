@@ -25,7 +25,9 @@ const READ_TOOLS: readonly string[] = ['read', 'grep', 'find', 'ls'];
 
 /** Native tool sets exactly as the contract documents them. */
 const NATIVE_BY_ROLE: Readonly<Record<PromptRoleId, readonly string[]>> = {
-  chief: READ_TOOLS,
+  // The chief investigates and checks the real state itself (git, a test entry point, a file layout)
+  // instead of trusting a summary; implementing Task work still belongs to the delegated roles.
+  chief: [...READ_TOOLS, SHELL_TOOL],
   designer: [...READ_TOOLS, ...PROJECT_WRITE_TOOLS],
   developer: [...READ_TOOLS, ...PROJECT_WRITE_TOOLS, SHELL_TOOL],
   reviewer: READ_TOOLS,
