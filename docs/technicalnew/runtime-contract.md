@@ -43,9 +43,9 @@
 | requirement.list/get | projectId、过滤/分页或 requirementId | 使用同一文件读取服务，返回非法文件信息，不经模型 |
 | interaction.respond | projectId、chiefSessionId、interactionId、expectedRevision、response | 请求/响应、当前主管路由、去重、保存后解除等待均按 M5；返回已收到与当前请求状态 |
 | session.stream.prepare | projectId、sessionId | subscriptionId、epoch、boundary、快照；先缓冲后读快照，见 M4 |
-| task.report.get | projectId、taskId、resultId | 校验 Task/结果归属，读取 Server 或项目报告正文/版本；不接受任意路径 |
+| task.report.get | projectId、taskId、resultId | 校验 Task/结果归属，读取 Server 或项目报告正文；不接受任意路径 |
 | config.get/save/test | projectId?、roleId?；save:expectedRevision/value，test:配置引用 | 脱敏有效配置、版本/实际试连结果；密钥仅保存私有凭证引用 |
-| project.files.list/read | projectId、path；list:cursor?/limit，read:expectedVersion? | 项目相对目录/文件正文与版本；实际路径归属检查，不访问外部符号链接 |
+| project.files.list/read | projectId、path；list:cursor?/limit，read:expectedVersion? | 项目相对目录/文件正文；实际路径归属检查，不访问外部符号链接 |
 | session.cleanup | projectId、sessionId、expectedRevision | 只清理无未结束工作且不被当前 Task/成果引用的会话；被引用时拒绝并列明原因 |
 | auth.login/logout | login:本机配置的访问口令；logout:当前会话 | login 建立同源 cookie；logout 撤销 cookie/关闭所属流连接；不进入模型/WAL 业务输入 |
 | session.recovery.inspect | projectId、sessionId | interrupted 输入、Pi 绑定、已有结果与待核实事实；直接读取 |
@@ -109,7 +109,7 @@ dispatch(sessionId):
 - 当前用户消息先保存；只在 Pi 空闲时投递。首版不用 Pi steer/followUp 作第二条输入队列，不重复入两队。
 - 一个主管同时协调一项未结束 Task；当前 Task 的交互、补充与恢复可处理，其他目标用另一个主管。查询/交互响应/停止/恢复直接进入对应服务；主管自身 interrupted 不能启动普通队列。
 - 专业 report 成功不等于 Pi 停稳。正式最终报告后禁止该输入继续修改成果；Runtime 确认结束才释放负责人并满足当前步骤完成条件。正式报告与停稳保存事实后唤醒原委派等待；原生交互等待不提前结束委派。
-- createTaskSessions / 原生 ctx.ui 都是可取消异步等待，保留 Session 执行所有权。主管不占专业 Session 并发名额；专业名额=1 也能推进。首版不接管逐模型请求调度，每 Session 不接收第二次并发 prompt。
+- task(op=dispatch) / 原生 ctx.ui 都是可取消异步等待，保留 Session 执行所有权。主管不占专业 Session 并发名额；专业名额=1 也能推进。首版不接管逐模型请求调度，每 Session 不接收第二次并发 prompt。
 
 ## R4 Pi 接入的明确契约
 
@@ -121,7 +121,7 @@ Pi 接入层只负责以下小范围连接，不接管模型循环：
 |---|---|
 | create/open | 验证绑定、header/历史、cwd、实际模型和角色/工具契约；禁止默认模型回退或“最近文件” |
 | deliver user/delegation/continuation | 保留原生 content，使用 prompt/sendUserMessage；inputId 是宿主关联，不存在原生参数 |
-| return child result / blocker | 原 createTaskSessions 工具的 content/structuredContent 带真实 ID、状态与引用；保存原操作回执后返回，不再追加同一结果的 CustomMessage |
+| return child result / blocker | 原 task(op=dispatch) 的 content/structuredContent 带真实 ID、状态与引用；保存原操作回执后返回，不再追加同一结果的 CustomMessage |
 | user interaction | 按 G2 经 resourceLoader.extensionFactories 加载官方 question 移植扩展，pi.registerTool 注册一次；通过 session.bindExtensions({uiContext, mode}) 绑定宿主，**绑定 UI 适配器是必需动作**：实测（绑定+`rpc`、绑定+`print` 两种组合）与固定版本源码（`hasUI()` 只判断 uiContext 是否绑定）一致——绑定时 ctx.hasUI=true、未绑定时 false，交互开关是「是否绑定适配器」。mode 只用于宿主自我声明与 TUI-only 行为，按真实身份给值（浏览器宿主首版 `"rpc"`）。另外适配器必须是普通对象：SDK 用对象展开包装 uiContext，类实例的原型方法会在包装后丢失（实测 notify 变 undefined）。ctx.ui.confirm/select/input 按 M5 的消息协议关联、提交、转发、答复和恢复；子请求不解除父委派等待，无主管模型呈现步骤 |
 | recovery/control notice | 只在空闲时 sendCustomMessage，customType=agentdev.input-notice，模型可见内容含来源/ID/事实；不能给仍在等待的同一次调用重复输入 |
 | input correlation | 用公开 appendCustomEntry 写 agentdev.input-marker 标记，串行定位其实际根输入条目；保留 markerId/inputEntryId，不按正文相等匹配 |
@@ -150,12 +150,12 @@ Project 首次 realpath 绑定由唯一约束保证，显示名不作身份。�
 | code | 含义与后续 |
 |---|---|
 | UNAUTHORIZED / FORBIDDEN / NOT_FOUND | 会话凭证、项目归属或目标不存在；先解决访问，不能隐式换目标 |
-| INVALID_ARGUMENT / REQUEST_CONFLICT / VERSION_CONFLICT | Schema、同请求不同参数、CAS 冲突；返回字段/当前版本，调用者重新核对 |
+| INVALID_ARGUMENT / REQUEST_CONFLICT / VERSION_CONFLICT | Schema、同请求不同参数、CAS 冲突（宿主 RPC 与界面操作）；返回字段/当前状态，调用者重新核对 |
 | PROJECT_UNAVAILABLE / MODEL_UNAVAILABLE | 尚未开始输入保留 queued 和原因；已有历史/看板仍可读 |
 | HISTORY_UNAVAILABLE / PI_INPUT_UNCONFIRMED | 精确恢复/关联不成立；保留记录，进入检查或交接 |
 | STORAGE_UNAVAILABLE / EFFECT_UNCONFIRMED | 保存或效果不可确认；停止后续准入，不把已可能生效的操作自动重做 |
 | WORKSPACE_BUSY / TASK_BUSY / TASK_CONTROLLED / STAGE_NOT_READY | 当前写入负责人、Task 控制或依赖未满足；不启动不适用专业工作 |
-| REPORT_MISSING / REPORT_STALE / COMPLETION_INCOMPLETE | 无正式报告、候选/依据失效、完成缺项；保留 Task 与真实证据 |
+| REPORT_MISSING / COMPLETION_INCOMPLETE | 无正式报告、完成缺项（含交付已变化需重新复核）；保留 Task 与真实证据 |
 | INTERACTION_STALE / STREAM_RESYNC_REQUIRED | 请求已失效或须重取快照；请求保存后可响应，不另设呈现门禁 |
 
 known errors 的错误形状一致；失败 details 提供可读原因/当前引用，不泄漏凭证。机器字段的枚举由本页/G2/S2 定义，新增公开方法/消息种类须改相应契约与检查，不在局部实现中私建协议。

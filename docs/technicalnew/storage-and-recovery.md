@@ -17,17 +17,17 @@ Dispatcher 读取 session_inputs，提交后唤醒，启动/周期扫描兜底�
 | projects | id/realPath/revision/initializationRef/configRef | realPath 唯一；项目写入授权引用真实用户决定 |
 | sessions | id/projectId/roleId/specialization/cwd/configRef/currentTaskId?/recoveryBlock? | chief 至多一项未结束 Task；专业 Session 只归一个 Task |
 | session_bindings | sessionId/piFile/branchEntryId?/hasHistory/configHash/rulesHash | 指定 Pi 文件；保留原绑定记录，禁止寻找最近文件 |
-| tasks | id/projectId/chiefSessionId/ownerEpoch/requirementId?/type/requiresTest/goal/scope/acceptanceRefs/basisRefs/planRef/authorizationRefs/phase/currentSessionIds/status/revision/summary/nextStep/blockReason/candidate?/completionResultId?/controlIntent/sourceInputId | 两类 Task、阶段与更新边界唯一见 G2；currentSessionIds 只含当前步骤的专业 Session |
-| task_sessions | sessionId/taskId/roleId/phase/instructions/refs/dependencies/expectedKind/candidateId?/currentInputId | 续办时更新 currentInputId；历史输入/结果保留 |
-| results | id/taskId/sessionId/sourceInputId/requestKey/kind/summary/reportRef/basisRefs/candidateId?/verdict?/checks/supersedes?/settlement? | 不覆盖原报告；新结果明确替代关系；保存主管声明的 invalidatedBy/reason，程序读此事实，当前业务适用性由主管/独立 Agent 判断 |
+| tasks | id/projectId/chiefSessionId/ownerEpoch/requirementId?/type/requiresTest/goal/scope/acceptanceRefs/basisRefs/planRef/authorizationRefs/phase/currentSessionIds/status/revision/summary/nextStep/blockReason/completionResultId?/controlIntent/sourceInputId | 两类 Task、阶段与更新边界唯一见 G2；currentSessionIds 只含当前步骤的专业 Session；revision 仅供界面与宿主 RPC 使用，不进入模型工具参数 |
+| task_sessions | sessionId/taskId/roleId/phase/instructions/refs/dependencies/expectedKind/writeScope?/currentInputId | 续办时更新 currentInputId；历史输入/结果保留；writeScope 用于并行写成员的覆盖告警 |
+| results | id/taskId/sessionId/sourceInputId/requestKey/kind/summary/bodyRef/basisRefs/verdict?/checks/settlement?/deliverableState? | 不覆盖原报告，多份报告按保存顺序保留；kind 取自成员派发时的 expectedKind；deliverableState 记录提交时程序观察到的交付状态，供完成核对比较 |
 | session_inputs | 见 Input | (sessionId,seq)/sourceKey 唯一；同 Session 至多一项 processing |
 | interactions | id/requestKey/projectId/taskId?/sourceSessionId/sourceInputId/invocationKey/sequence/method/request/revision/state/response?/responseSource? | 原请求身份和答复事实；专业来源必有 taskId；当前主管路由读取 Task |
-| file_saves | requestKey/target/expectedVersion/contentHash/content/state/receipt? | 仅宿主负责的 Plan/报告/需求/初始化保存；state=pending/saved/conflict |
+| file_saves | requestKey/target/observedVersion/contentHash/content/state/receipt? | 仅宿主负责的 Plan/报告/需求/初始化保存；observedVersion 由程序记录本会话上次读到的内容，不要求模型携带；state=pending/saved/conflict |
 | request_receipts | requestKey/method/paramsDigest/status/result?/error? | status=pending/committed；同 key 不同参数冲突；成功与失败回执都如实保存 |
 
 interactions.state=pending/resolved/stale。pending 已保存、可展示；resolved 答复不可覆写，相同重试返回原回执，不同答复冲突；stale 不恢复原等待。没有“UI 已呈现”准入状态，保存后广播、断线从快照重现。请求/答复唯一见 M5。
 
-Task.status=active/waiting/pausing/paused/cancelling/cancelled/completed。阶段/业务摘要由主管 updateTask 写，控制状态由服务记录；子事件不自动推进 phase。专业状态通过 currentInput、正式报告与 pending 交互查询：queued/working/waiting_user/stopping/completed/failed/stopped/interrupted。正式结果保存且 Pi 停稳才 completed；一次输入结束没有期待报告为 REPORT_MISSING。检查 verdict=failed 是检查结论，不等于执行异常。
+Task.status=active/waiting/pausing/paused/cancelling/cancelled/completed。阶段/业务摘要由主管 task(op=update) 写，控制状态由服务记录；子事件不自动推进 phase。专业状态通过 currentInput、正式报告与 pending 交互查询：queued/working/waiting_user/stopping/completed/failed/stopped/interrupted。正式结果保存且 Pi 停稳才 completed；一次输入结束没有期待报告为 REPORT_MISSING。检查 verdict=failed 是检查结论，不等于执行异常。
 
 ```typescript
 type ArtifactRef = { storage: 'project' | 'server'; path: string; sha256: string };
@@ -49,19 +49,19 @@ type Input = {
 };
 ```
 
-DocumentRef={path,purpose,sha256} 是项目依据版本；PlanRef/ReportRef 采用 ArtifactRef。read Task 的 Plan 保存 Server `work/<taskId>/plan.md`，报告保存 `work/<taskId>/<sessionId>/<resultId>.md`；write Task 使用项目相同结构的 `.dev/work/<taskId>/`；API 通过受控 Task/结果身份读取，不暴露 Server 任意路径。原生历史仍在指定 Pi 文件，不复制报告成第二份正文。
+DocumentRef={path,purpose,sha256} 是项目依据的内容摘要；PlanRef/ReportRef 采用 ArtifactRef。read Task 的 Plan 保存 Server `work/<taskId>/plan.md`，报告保存 `work/<taskId>/<sessionId>/<resultId>.md`；write Task 使用项目相同结构的 `.dev/work/<taskId>/`；API 通过受控 Task/结果身份读取，不暴露 Server 任意路径。原生历史仍在指定 Pi 文件，不复制报告成第二份正文。
 
-Candidate={candidateId,files:[{path,sha256}],commit?} 记录本次实际交付版本，不是强制整项目副本。Review/Test 带同一 candidateId；程序核对声明文件的版本，主管和独立 Agent 判断文件选择、依据是否实质变化及结果是否仍适用。结算的摘要/状态回填与实际交付变更的区分也由 Agent 判断；源代码或正式规则改变需要重新验证。
+交付身份由程序观察：有 Git 时取提交/工作树，没有 Git 时取 Task 声明范围内交付文件的内容摘要；不引入候选对象，也不要求模型传递版本。Review/Test 报告提交时记录该状态，完成核对时比较。
 
-每个真实目录一个写入负责人；并行修改使用服务登记的分离目录。负责人覆盖运行写工作，停稳后释放；恢复前核实外部变化，不靠永久锁猜测已完成。候选检查期间不再修改其交付文件，测试环境有需要时使用副本/独立 worktree。
+同一 Task 的当前步骤可以有多个写成员，按声明的 writeScope 分工；程序核对范围重叠并告警，是否并行由主管判断。首版不要求分离目录，并行多个 Task 的独立 worktree 属于后续版本。负责人覆盖运行写工作，停稳后释放；恢复前核实外部变化，不靠永久锁猜测已完成。复核/测试期间不再修改其交付文件，测试环境有需要时使用副本/独立 worktree。
 
 ## S3 事务、认领与等待
 
 | 动作 | 短事务保存 | 提交后 |
 |---|---|---|
 | 接纳输入 | 去重、payload、seq、queued、回执 | 返回接纳身份，唤醒 Dispatcher |
-| createTask | 已保存 Plan 引用、目标/type/必要报告声明、主管槽位、Task、回执 | 返回 taskId；不预建未来步骤 |
-| updateTask | CAS revision、阶段/总结；新步骤清空 currentSessionIds，旧关联保留 | 刷新看板；不自动派发角色 |
+| task(op=create) | 已保存 Plan 引用、目标/type/必要报告声明、主管槽位、Task、回执 | 返回 taskId；不预建未来步骤 |
+| task(op=update) | 阶段/总结；新步骤清空 currentSessionIds，旧关联保留 | 刷新看板；不自动派发角色 |
 | create/continue 专业工作 | Session/Task 关联、首条或续办输入、currentInputId/currentSessionIds、接纳身份 | 异步调度；工具等待 M2 |
 | agent_report / 输入收尾 | 正式结果及原回执 / 实际终态及历史边界 | 唤醒 Task 当前步骤等待 |
 | 原生请求 / respond | 原请求 / 真实答复与回执 | 请求保存后主管通道广播；答复保存后直接解除原调用等待 |
@@ -119,15 +119,15 @@ Pi 原生 read/grep/find/ls/edit/write/bash、工具循环、重试、压缩及�
 
 ```text
 Plan：稳定 taskId + file_saves → 原子保存 Plan → DB Task/planRef/currentTaskId/回执
-报告：稳定 resultId → body 原子保存；或读取核对已有 reportRef
+报告：稳定 resultId → body 原子保存
     → DB result/回执 → 唤醒当前步骤等待
 结算：Agent 核对成果/验证 → 更新受影响知识、需求、导航、遗留
     → 准备结算报告 → Git 提交本次成果及报告；或本机保存并核对
-    → agent_report(reportRef + 实际保存回执)，不重写已保存报告
-    → chief endTask，事务保存 completed / 释放主管槽位
+    → agent_report(body + 实际保存回执)，不重写已保存报告
+    → chief task(op=end)，事务保存 completed / 释放主管槽位
 ```
 
-read Task 的报告按同一保存顺序写 Server，核对专业工作停稳后用调查/恢复报告 endTask，不强制 Review/Test、结算或 Git。write Task 执行适用独立检查与结算。Plan 创建/修订串行核对主管槽位、Task revision 与文件版本，部分保存失败只补登记/缺项。
+read Task 的报告按同一保存顺序写 Server，核对专业工作停稳后用调查/恢复报告 task(op=end)，不强制 Review/Test、结算或 Git。write Task 执行适用独立检查与结算。Plan 创建/修订串行核对主管槽位与文件内容，部分保存失败只补登记/缺项。
 
 ```typescript
 type SettlementManifest = {
@@ -143,9 +143,9 @@ type SettlementManifest = {
 };
 ```
 
-Agent 判断知识是否完整、未覆盖如何处置、需求是否满足、哪些记录需要更新。报告写明原因、风险、真实用户决定引用和遗留。程序只核对报告身份/种类、必要 Review/Test、候选文件版本、声明更新与需求版本、Git/本机真实保存；不计算自然语言授权范围或业务含义。真实 failed 不改成未覆盖。
+Agent 判断知识是否完整、未覆盖如何处置、需求是否满足、哪些记录需要更新。报告写明原因、风险、真实用户决定引用和遗留。程序只核对报告身份/种类、必要复核/测试、交付状态与真实保存；不计算自然语言授权范围或业务含义。真实 failed 不改成未覆盖。
 
-有关需求完成内容/状态文件与项目报告先纳入同次保存，再 endTask 核对版本。保存失败 Task 保持未完成，不再开发没有变化的成果。Git 回执从实际提交读取，保护无关改动和暂存；已有明确同次提交核对后复用，不盲目重复提交。最终 commit 写 DB 回执，不回写已提交报告制造下一次提交。
+有关需求完成内容/状态文件与项目报告先纳入同次保存，再 task(op=end) 核对交付状态。保存失败 Task 保持未完成，不再开发没有变化的成果。Git 回执从实际提交读取，保护无关改动和暂存；已有明确同次提交核对后复用，不盲目重复提交。最终 commit 写 DB 回执，不回写已提交报告制造下一次提交。
 
 ## S7 Server 重启恢复子图
 
@@ -167,7 +167,7 @@ flowchart TD
   NEW --> RUN[共用 Runtime 继续；已完成成员不重做]
 ```
 
-恢复是事实核对与续办，不是重新调用原工具。不恢复旧工具 Promise、父委派工具栈，不修补 Pi ToolResult；主/子双方从 task.get 看当前步骤成员和报告，再用 wait/continue 处理余下工作。
+恢复是事实核对与续办，不是重新调用原工具。不恢复旧工具 Promise、父委派工具栈，不修补 Pi ToolResult；主/子双方从 task(op=get) 看当前步骤成员和报告，再用 task(op=dispatch) 处理余下工作。
 
 | 崩溃位置 | 首版处理 |
 |---|---|
@@ -178,12 +178,12 @@ flowchart TD
 | 正式结果已保存、Pi 工具结果缺失 | 结果保留；新续办输入带该事实，不补写 ToolResult，不重做成果 |
 | 原生请求/答复已保存 | 活跃原调用可直接继续；重启调用已不存在，pending 置 stale，resolved 作为续办事实；仍需询问时模型发新通用请求 |
 | Pi 已停稳、DB finish 前 | 核对历史与期待结果后补原终态/checkpoint |
-| Plan/需求/报告部分保存或结算后未 endTask | 核对实际文件/提交，只补保存登记或完成缺项 |
+| Plan/需求/报告部分保存或结算后未 task(op=end) | 核对实际文件/提交，只补保存登记或完成缺项 |
 | 历史缺失/损坏、配置不可用 | HISTORY_UNAVAILABLE/MODEL_UNAVAILABLE；保留原资料，不开空历史冒充恢复、不静默换模型 |
 
 恢复入口直接服务，不排在中断输入后。主管自身 interrupted 时先由宿主/用户走 R1 inspect/resolve：核对该主管输入历史边界和自身 file_saves/回执后关闭原输入，再由用户向原 chief/Task 提交新续办输入。仅在观察子工作的父输入可以按已知停止事实关闭；子输入的未知独立保留，不能随父关闭消除。主管自身保存事实仍未知时不调用模型，先完成直接核实。
 
-主管可运行后，用 task.reconcile 将 investigator 的证据/实际文件核实结论提交同一恢复服务，核对并关闭原子输入；再按控制与剩余目标 continue。不从报告正文自动解析恢复状态，不以报告提交自动解除阻断。允许主管在暂停/中断 Task 内显式安排 investigator + expectedKind=recovery 的只读核实（不解除项目写入控制，不恢复原开发）；结果保存 Server，并与被核实 Task 关联。程序在 create/claim 同时校验例外、只读权限及关联，保留原 currentSessionIds、不 resume 原开发、不向活跃 Session 并发 prompt；业务核实由主管/独立 Agent 完成。
+主管可运行后，用 task op=recover 将 investigator 的证据/实际文件核实结论提交同一恢复服务，核对并关闭该 Session 的中断输入；再按控制与剩余目标 dispatch 续办。不从报告正文自动解析恢复状态，不以报告提交自动解除阻断。允许主管在暂停/中断 Task 内显式安排 investigator + expectedKind=recovery 的只读核实（不解除项目写入控制，不恢复原开发）；结果保存 Server，并与被核实 Task 关联。程序在 create/dispatch 同时校验例外、只读权限及关联，保留原 currentSessionIds、不 resume 原开发、不向活跃 Session 并发 prompt；业务核实由主管/独立 Agent 完成。
 
 历史有效时用 SessionManager.open 指定文件并恢复原角色、工具、规则与配置；历史不能用于继续时保留原文件和失败原因，由主管明确选择原生分支或新的独立 Session，附正式依据、已知成果及剩余目标，不通过新上下文绕过未知/控制。后者是明确重建上下文，不承诺自动历史修复。
 

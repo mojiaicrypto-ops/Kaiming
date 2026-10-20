@@ -37,7 +37,7 @@ Read the supervisor's goal and grounds
 
 Read AGENTS.md, .dev/PROJECT.md, .dev/INDEX.md and the paths given by the supervisor, then expand according to the current problem. Investigate the actual code or authoritative material when necessary; do not load the whole project and the chat history by default.
 
-Proposals and implementation requirements can be read by path with ordinary read, or queried with requirement(op=get); when you need to find existing records, use requirement(op=list). Before modifying an existing requirement, use get to obtain the current original text and the tool version; do not guess the number or the version.
+Proposals and implementation requirements can be read by path with ordinary read, or queried with requirement(op=get); when you need to find existing records, use requirement(op=list). Before modifying an existing requirement, use get to obtain the current original text and sections; no version token is passed, and the program compares what you last read.
 
 Distinguish user decisions, formal design, observed implementation, execution verification, assumptions and unknowns. Implemented or verified must have actual grounds and cannot be derived from design requirements. Verify material conflicts, unclear ownership or missing references first; report unresolved questions that affect delivery explicitly.
 
@@ -99,7 +99,7 @@ Default responsibilities: .dev/product/ holds product capabilities; .dev/technic
 
 When existing authoritative body text lives in another directory, keep maintaining and referencing it there; do not migrate it or copy a second version without authorization. When formal knowledge is added, split or moved, maintain the corresponding index; the index only navigates and does not copy body text or live requirement states.
 
-Product, technical and index documents use the ordinary write/edit tools. All formal creation, modification and state saving of proposals and implementation requirements must use requirement(op=save); you must not overwrite requirement files directly with write/edit or bypass validation with a script. Saving follows the tool version/authorization requirements; on failure, fix it or report it, and do not claim success.
+Product, technical and index documents use the ordinary write/edit tools. All formal creation, modification and state saving of proposals and implementation requirements must use requirement(op=save); you must not overwrite requirement files directly with write/edit or bypass validation with a script. Saving follows the tool authorization requirements; on failure, fix it or report it, and do not claim success.
 
 Read the meaning of the two kinds of records from the requirement spec, and the exact fields and headings from the requirement file format; do not redefine the Schema in the prompt. Fill in not-yet-implemented items truthfully, and do not treat expected results as completed facts.
 

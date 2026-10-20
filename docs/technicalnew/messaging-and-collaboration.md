@@ -8,24 +8,24 @@ Task 只有 read/write 两类，唯一枚举/工具字段见 [G2](agents-and-too
 
 ```mermaid
 flowchart TD
-  TASK[createTask：type=write / 总体 Plan] --> DEVPHASE[updateTask：开始 develop 步骤]
-  DEVPHASE --> DEV[createTaskSessions：开发；写入 currentSessionIds]
+  TASK[task(op=create)：type=write / 总体 Plan] --> DEVPHASE[task(op=update)：开始 develop 步骤]
+  DEVPHASE --> DEV[task(op=dispatch)：开发；写入 currentSessionIds]
   DEV --> DOUT{当前步骤全部停稳？}
   DOUT -->|未结束| WAIT[继续异步等待；超时返回状态，不取消]
   WAIT -->|主管 wait 或核实后 continue| DEV
   DOUT -->|全部结束| AGG[汇总报告与异常；主管决定]
   AGG -->|缺项或修复| DEVPHASE
-  AGG -->|成果满足| FIXED[记录最终组合候选版本]
-  FIXED --> REVIEWPHASE[updateTask：review；保留旧结果，清空当前成员]
-  REVIEWPHASE --> REVIEWS[createTaskSessions：Review S1 / S2 并行]
+  AGG -->|成果满足| FIXED[记录实际交付状态]
+  FIXED --> REVIEWPHASE[task(op=update)：review；保留旧结果，清空当前成员]
+  REVIEWPHASE --> REVIEWS[task(op=dispatch)：Review S1 / S2 并行]
   REVIEWS --> ROK[等全部成员结束 / 汇总全部 Review]
   ROK -->|修复| DEVPHASE
-  ROK -->|满足| TESTPHASE[updateTask：test]
-  TESTPHASE --> TEST[createTaskSessions：独立 Test]
+  ROK -->|满足| TESTPHASE[task(op=update)：test]
+  TESTPHASE --> TEST[task(op=dispatch)：独立 Test]
   TEST --> TOK[等 Test 结果 / 主管判断]
   TOK -->|修复| DEVPHASE
-  TOK -->|满足| SETTLE[updateTask：settle；委派结算]
-  SETTLE --> END[endTask：必要报告 / 版本 / 实际保存]
+  TOK -->|满足| SETTLE[task(op=update)：settle；委派结算]
+  SETTLE --> END[task(op=end)：必要报告 / 实际交付 / 真实保存]
 ```
 
 普通子交互按 M5 经宿主直达主管页面，父工具仍等待。正式 blocked 报告结束该子输入；其他成员未结束时继续等，全部结束或等待超时才把报告/异常聚合给主管。超时之后主管可处理已经返回的阻断，但不能把仍运行工作当成结束。
@@ -33,7 +33,7 @@ flowchart TD
 ```mermaid
 sequenceDiagram
   participant C as 主管 Pi C
-  participant T as createTaskSessions
+  participant T as task(op=dispatch)
   participant DB as SQLite
   participant D as Dispatcher / Runtime
   participant S1 as Review Pi S1
@@ -56,7 +56,7 @@ sequenceDiagram
   T->>DB: 查询 Task 当前成员与各自 currentInputId
   T->>DB: 全部停稳后保存聚合回执
   T-->>C: 全部报告与异常状态
-  C->>DB: updateTask(test)，清空当前成员
+  C->>DB: task(op=update, phase=test)，清空当前成员
   C->>T: 下一步才创建 Test Session
 ```
 
@@ -89,9 +89,9 @@ type DelegationReturn = {
 
 报告和输入收尾提交后唤醒，注册等待后重查事实，周期扫描兜底；不把内存 Promise 当状态源。read/write 共用同一等待算法。create/continue 保存身份后等待，wait 只观察已存在工作。旧回执不可变，新 wait 可取最新快照。
 
-主管收到 timeout 先查看状态：运行或等用户的继续 wait；技术异常中断/停止先核实历史/成果，只用 continue 补剩余工作；用户暂停/取消不自动重启，completed 成果不重跑。queued 只是未执行，不是停止，不用 continue 复制。
+主管收到 timeout 先查看状态：运行或等用户的继续等待；技术异常中断/停止先核实历史/成果，只用 dispatch 续办剩余工作；用户暂停/取消不自动重启，completed 成果不重跑。queued 只是未执行，不是停止，不用 dispatch 复制。
 
-正式 blocked 成员处理后可在当前步骤 continue 原 Session，currentInputId 指向新输入，旧结果保留；其他已完成成员仍留在集合，不重新执行。新一步由 updateTask 提供 phase 清空当前集合，哪怕同名阶段也明确新步骤；历史结果通过 task.get 找回。
+正式 blocked 成员处理后可在当前步骤用 dispatch 续办原 Session，currentInputId 指向新输入，旧结果保留；其他已完成成员仍留在集合，不重新执行。新一步由 task(op=update) 提供 phase 清空当前集合，哪怕同名阶段也明确新步骤；历史结果通过 task(op=get) 找回。
 
 子用户请求不让父工具提前返回；宿主直接解除原 ctx.ui 等待，不等待主管模型处理转发。主管不能向仍 processing 的专业 Pi 并发 prompt。
 
@@ -100,7 +100,7 @@ type DelegationReturn = {
 | Input.kind | payload | 稳定来源 |
 |---|---|---|
 | user | Pi content、taskId? | user:<requestId> |
-| delegation | instructions、refs、expectedKind、candidateId? | 原 create 调用 + 成员身份 |
+| delegation | instructions、refs、expectedKind、writeScope? | 原 dispatch 调用 + 成员身份 |
 | continuation | 剩余 instructions、refs、dependsOnResultIds?、resumedFromInputId? | 原 continue/明确续办调用 |
 | system_notice | taskId?、code、相关输入/证据/原因 | 原控制/核实操作 + code |
 
@@ -110,7 +110,7 @@ system_notice 首版 code=task.controlled/recovery.resolved，仅空闲时消费
 |---|---|---|
 | 接纳输入 | 身份、content、顺序与状态 | 消费时追加原生消息；用户气泡按 inputId 合并 |
 | 模型/原生工具正文 | 不复制 | 原生 JSONL；内存事件广播 |
-| 正式结果 | 摘要、来源、报告/版本引用 | 专业工具回执；主管等待聚合返回 |
+| 正式结果 | 摘要、来源、报告引用 | 专业工具回执；主管等待聚合返回 |
 | 用户交互 | 原请求/来源/状态/真实答复 | 提交后主管通道显示，直接响应源调用 |
 | 文本/思考/工具进度 | 不落业务 WAL | 内存推送；重连读取历史，不承诺恢复崩溃片段 |
 

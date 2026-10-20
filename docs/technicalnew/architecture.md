@@ -91,7 +91,7 @@ erDiagram
 | 事实 | 权威 |
 |---|---|
 | 项目/Session 身份、当前 Task、阶段、子 Session 关联、结果、交互、回执 | 统一 SQLite |
-| 总体 Plan / 正式报告 | read Task 存 Server `work/<taskId>/`；write Task 存项目 `.dev/work/<taskId>/`；DB 存版本/引用 |
+| 总体 Plan / 正式报告 | read Task 存 Server `work/<taskId>/`；write Task 存项目 `.dev/work/<taskId>/`；DB 存引用与摘要 |
 | 会话、工具正文、压缩与分支 | 精确绑定的 Pi JSONL |
 | 需求内容与状态 | Markdown + YAML 头部，列表重建 |
 | 项目知识与实际成果 | 项目权威文件；索引只导航 |
@@ -116,8 +116,8 @@ erDiagram
 - 同一部署环境的 AgentDev 全局一个 Server，统一入口/数据库；状态目录仅是存储位置。应用级 OS 排他锁身份固定，不随项目或传入目录改变；重复启动返回已有入口或明确拒绝。启动成功后增加 serverEpoch。
 - Server 保存 DB、Pi 文件、规则/配置和恢复产物；项目保存 AGENTS.md、.dev/、成果与可迁移报告。凭证只存 Server 私有存储。
 - 每个 Session 显式 cwd/model/credentialRef/role/tools/piFile；不切换全局 cwd/env，不寻找最近会话。
-- 同一真实工作目录一个写入负责人；并行开发必须采用分离目录，组合成果再固定候选并检查。
-- Review/Test 针对同一实际候选版本，测试有需要时使用副本/独立 worktree。独立 Session 不等于 OS 沙箱，首版复用 Pi Local 工具。
+- 同一 Task 的当前步骤可以有多个写成员并行，但必须按模块分工：每个写成员声明 `writeScope`，程序只核对范围重叠并告警，是否并行由主管判断。首版不要求分离目录；并行多个 Task 使用独立 git worktree 属于后续版本。
+- Review/Test 针对当前工作树的实际交付；程序在报告提交时记录交付状态（见 [G3](agents-and-tools.md#g3-task-流程交付核对与完成)），交付变化时才要求重新复核，模型不携带候选或版本。测试有环境需要时使用副本/独立 worktree。独立 Session 不等于 OS 沙箱，首版复用 Pi Local 工具。
 - 其他话题新开主管 Session；状态查询、暂停/取消、已有交互答复可随时操作。Task 复制/迁移不会继承本环境执行权或授权。
 
 ## A6 主源与采用范围

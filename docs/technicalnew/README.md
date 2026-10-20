@@ -13,7 +13,7 @@
 | Server、Project、Session、Task | [架构](architecture.md) | 总图、关系、职责和资源边界 |
 | 公开请求、输入执行、Pi 接入和停止 | [运行契约](runtime-contract.md) | API、输入状态、共用 Runtime |
 | WAL、事务、回执、等待和重启 | [存储与恢复](storage-and-recovery.md) | 最小记录、认领、故障与继续算法 |
-| 两类需求文件读取、保存与列表 | [需求格式](requirements-format.md) | 双类型元数据、正文、版本、引用与排序 |
+| 两类需求文件读取、保存与列表 | [需求格式](requirements-format.md) | 双类型元数据、正文、引用与排序 |
 | 当前步骤并行委派、授权、UI | [消息与协作](messaging-and-collaboration.md) | 协作/授权子图、返回条件与交互协议 |
 | 主管/专业角色、工具和上下文 | [Agent 与工具](agents-and-tools.md) | 四个主管核心工具、辅助工具、内置规则 |
 | 接入试验、实现顺序和验证 | [实现检查](implementation-checks.md) | SDK/可靠性/模型/浏览器证据要求 |
@@ -22,10 +22,10 @@
 
 - 同一部署环境全局一个 Server，管理全部 Project、独立 Pi Session 和统一 SQLite。
 - 每个主管 Session 同时协调一项未结束 Task；其他目标使用另一个主管 Session。
-- Task 只分 read/write，由主管选择适用 Review/Test 责任；read Plan/报告存 Server，write 存项目 `.dev/work/<taskId>/`。主管维护一份总体 Plan，并显式调用 updateTask 更新阶段；子 Session 的内部计划自主决定，无另行落盘/审批义务。
-- 主管按当前步骤调用 createTaskSessions，内部原子创建、绑定并异步调度。模型等待 Task 当前步骤全部成员；超时返回状态、不取消子工作。全部结束汇总报告/异常，主管处理后 wait 或核实 continue。普通原生交互不打断父等待。
+- Task 只分 read/write，由主管选择适用 Review/Test 责任；read Plan/报告存 Server，write 存项目 `.dev/work/<taskId>/`。主管维护一份总体 Plan，并显式调用 task(op=update) 更新阶段；子 Session 的内部计划自主决定，无另行落盘/审批义务。
+- 主管按当前步骤调用 task(op=dispatch)，内部原子创建、绑定并异步调度。模型等待 Task 当前步骤全部成员；超时返回状态、不取消子工作。全部结束汇总报告/异常，主管处理后 wait 或核实 continue。普通原生交互不打断父等待。
 - 模型提问采用官方 question 移植扩展，业务工具直接使用 Pi 原生交互。子请求经主管通道呈现，扩展与前端按 M5 消息协议分离；WAL 保存请求/答复，宿主处理转发与等待恢复。用户答复走直接响应入口，提交后送回原请求，不排在普通输入队列之后。
-- 标准开发按实施 → 独立 Review → 独立 Test → 结算；同阶段可以多个独立 Session。endTask 核对完成条件。
+- 标准开发按实施 → 独立 Review → 独立 Test → 结算；同阶段可以多个独立 Session。task(op=end) 核对完成条件。
 - Pi 1.0 coding-agent SDK 管模型循环、原生 Local 工具、历史和事件；SQLite 保存接纳、Task、关联、结果、交互与宿主保存回执。原生流式输出走内存广播。
 
 ## 定义边界
@@ -42,4 +42,4 @@
 | 当前项目目标、步骤和验证安排 | 主管的 Task 总体 Plan |
 | 子 Session 如何完成指定目标 | 专业 Agent 自主判断 |
 
-业务含义由主管与独立 Agent 判断；程序核对身份、状态、必要报告、版本及真实保存，不推断自然语言授权范围或结算完整。首版恢复 Task/原生历史/已知成果，核实后续办剩余工作，不恢复工具执行栈、不自动重放未知操作。没有 Run/Attempt、通用工作流 DSL 或额外工具执行引擎。SDK 接入、模型行为与故障试验均为 NOT_RUN，不能从文档完成推断实现已完成。
+业务含义由主管与独立 Agent 判断；程序核对身份、状态、必要报告、实际交付及真实保存，不推断自然语言授权范围或结算完整。首版恢复 Task/原生历史/已知成果，核实后续办剩余工作，不恢复工具执行栈、不自动重放未知操作。没有 Run/Attempt、通用工作流 DSL 或额外工具执行引擎。SDK 接入、模型行为与故障试验均为 NOT_RUN，不能从文档完成推断实现已完成。
