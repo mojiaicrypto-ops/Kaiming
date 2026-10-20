@@ -16,7 +16,8 @@ import { readReportBody } from '../runtime/report-store.ts';
 import { getRequirement } from '../runtime/requirement-store.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
 import { dispatchOp, type DelegationHost } from './delegation-tools.ts';
-import { asRecord, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
+import { asRecord, enrich, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
+import { dispatchRefusalFacts, guidanceFor } from './guidance.ts';
 
 export interface TaskToolContext {
   readonly store: Store;
@@ -212,7 +213,15 @@ export function createTaskTool(contextOf: TaskToolContextResolver, options: { re
         return createOp(context, params);
       }
       if (taskId === undefined) {
-        return fail('NOT_FOUND', 'this session has no current Task');
+        return fail('NOT_FOUND', 'this session has no current Task yet', {
+          nextActions: [
+            {
+              action: 'task(op=create, type=..., goal=..., scope=..., planMarkdown=..., authorizationRef=...)',
+              op: 'create',
+              reason: 'a Task is created first; every other op needs one',
+            },
+          ],
+        });
       }
       // A specialist may read its own Task only; the chief may act on Tasks of its own project.
       if (!options.chief && taskId !== currentTaskId) {
@@ -369,6 +378,7 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
       currentSessionIds: task.currentSessionIds,
       planRef: task.planRef,
       planState,
+      ...guidanceFor(context.store, task),
     });
   } catch (error) {
     const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
@@ -459,6 +469,7 @@ function updateOp(context: TaskToolContext, existing: TaskRow, params: Record<st
         );
       }
     }
+    const guidance = guidanceFor(context.store, task);
     return ok(`Task ${task.id} updated: phase=${task.phase}`, {
       taskId: task.id,
       phase: task.phase,
@@ -466,10 +477,17 @@ function updateOp(context: TaskToolContext, existing: TaskRow, params: Record<st
       currentSessionIds: task.currentSessionIds,
       planRef: task.planRef,
       planState,
+      ...guidance,
     });
   } catch (error) {
     const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
-    return fail(code, messageOf(error), { taskId });
+    // A refused phase change names the members still holding the step, so the caller can act on it.
+    const refusal = fail(code, messageOf(error), {
+      taskId,
+      ...(error instanceof StoreError ? error.details : {}),
+    });
+    const current = context.store.getTask(taskId);
+    return current === undefined ? refusal : enrich(refusal, dispatchRefusalFacts(context.store, current));
   }
 }
 
@@ -489,10 +507,14 @@ async function controlOp(context: TaskToolContext, task: TaskRow, params: Record
       taskId: task.id,
       status: updated.status,
       currentSessionIds: updated.currentSessionIds,
+      ...guidanceFor(context.store, updated),
     });
   } catch (error) {
     const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
-    return fail(code, messageOf(error), { taskId: task.id });
+    return fail(code, messageOf(error), {
+      taskId: task.id,
+      ...(error instanceof StoreError ? error.details : {}),
+    });
   }
 }
 
@@ -506,12 +528,16 @@ function endOp(context: TaskToolContext, task: TaskRow, params: Record<string, u
     if (!result.ok) {
       return fail('COMPLETION_INCOMPLETE', `the Task is not complete yet; missing: ${result.gaps.join('; ')}`, {
         gaps: result.gaps,
+        nextActions: guidanceFor(context.store, task).nextActions,
       });
     }
-    return ok(`Task ${task.id} completed`, { taskId: task.id, status: result.task.status });
+    return ok(`Task ${task.id} completed`, { taskId: task.id, status: result.task.status, nextActions: [] });
   } catch (error) {
     const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
-    return fail(code, messageOf(error), { taskId: task.id });
+    return fail(code, messageOf(error), {
+      taskId: task.id,
+      ...(error instanceof StoreError ? error.details : {}),
+    });
   }
 }
 
@@ -526,6 +552,7 @@ function adoptOp(context: TaskToolContext, task: TaskRow, params: Record<string,
       taskId: task.id,
       chiefSessionId: adopted.chiefSessionId,
       status: adopted.status,
+      ...guidanceFor(context.store, adopted),
     });
   } catch (error) {
     const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
@@ -626,5 +653,6 @@ function getOp(context: TaskToolContext, task: TaskRow, params: Record<string, u
     members,
     results,
     missing: task.planRef !== null && !plan.current ? ['plan file is missing or changed'] : [],
+    ...guidanceFor(context.store, task),
   });
 }

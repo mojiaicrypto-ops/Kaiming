@@ -278,6 +278,46 @@ describe('task dispatch', () => {
     expect(f.settleCalls).toEqual([{ taskId: snapshot.taskId, timeoutMs: 1_000 }]);
   });
 
+  it('derives the label and the report kind from the role when they are omitted', async () => {
+    const f = await fixture();
+    await moveToPhase(f, 'develop');
+
+    const result = await f.taskTool.execute('c1', {
+      op: 'dispatch',
+      sessions: [{ roleId: 'developer', instructions: 'implement it', writeScope: ['src/'] }],
+    });
+
+    expect(result.isError).toBe(false);
+    const member = f.store.listTaskSessions(f.store.listTasks('p-1')[0]?.id ?? '')[0];
+    expect(member).toMatchObject({ roleId: 'developer', label: 'developer', expectedKind: 'implementation' });
+  });
+
+  it('names the current members and allowed roles when a dispatch is refused', async () => {
+    const f = await fixture();
+
+    const wrongPhase = await f.taskTool.execute('call-1', {
+      op: 'dispatch',
+      sessions: [member({ roleId: 'reviewer', expectedKind: 'review' })],
+    });
+
+    expect(wrongPhase.isError).toBe(true);
+    expect(wrongPhase.details['phase']).toBe('plan');
+    expect(wrongPhase.details['allowedRoles']).toEqual(expect.arrayContaining(['designer', 'investigator']));
+    expect(wrongPhase.details['members']).toEqual([]);
+  });
+
+  it('lists a wait action while the current step has unsettled work', async () => {
+    const f = await fixture();
+    await moveToPhase(f, 'develop');
+    await f.taskTool.execute('call-1', { op: 'dispatch', sessions: [member()] });
+
+    const read = await f.taskTool.execute('call-2', { op: 'get' });
+
+    const actions = read.details['nextActions'] as Array<{ op: string; action: string }>;
+    expect(actions[0]?.action).toContain('wait for the step');
+    expect((read.details['gaps'] as string[]).join(' ')).toContain('not settled');
+  });
+
   it('requires a write scope from writing members and reports overlaps without blocking', async () => {
     const f = await fixture();
     await moveToPhase(f, 'develop');

@@ -136,7 +136,10 @@ export function createRunsView(context) {
               dataRow({
                 id: member.roleId,
                 main: member.label,
-                meta: [member.phase, member.expectedKind, member.sessionId].filter(Boolean).join(' · '),
+                meta: [member.phase, member.expectedKind, member.sessionId]
+                  .concat(Array.isArray(member.writeScope) && member.writeScope.length > 0 ? [`write: ${member.writeScope.join(', ')}`] : [])
+                  .filter(Boolean)
+                  .join(' · '),
                 status: member.currentInputId === null || member.currentInputId === undefined ? '' : 'active',
               }),
             ),

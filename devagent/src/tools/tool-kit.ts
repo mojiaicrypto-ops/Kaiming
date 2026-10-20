@@ -32,6 +32,21 @@ export function fail(code: string, text: string, details: Record<string, unknown
   };
 }
 
+/**
+ * Add facts to a refusal the model has already received: the same structured fields, and the same
+ * disclosure in the text it reads. Never changes a success.
+ */
+export function enrich(outcome: ToolOutcome, extra: Record<string, unknown>): ToolOutcome {
+  if (!outcome.isError) {
+    return outcome;
+  }
+  return {
+    ...outcome,
+    content: [{ type: 'text', text: `${outcome.content[0]?.text ?? ''}\n${JSON.stringify(extra)}` }],
+    details: { ...outcome.details, ...extra },
+  };
+}
+
 export function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined;
 }

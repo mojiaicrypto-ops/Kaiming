@@ -49,7 +49,7 @@ task、agent_report、requirement、project 按工具级注册 Pi executionMode=
 
 **update**：phase 枚举 clarify/analyze/design/plan/develop/review/test/settle，由主管显式记录；提供 phase 表示开始下一步骤，当前步骤成员必须已结束或已明确控制并停稳。事务保存上一步骤总结、当前 phase，清空 currentSessionIds，保留历史。不提供 phase 仅更新摘要/阻断/下一步。目标或依据实质改变时由主管判断并在 summary 说明，直接保存修订 Plan；不存在「旧报告自动失效」的声明参数——程序的核对见 G3。type 创建后不变。
 
-**dispatch**：只组织当前步骤。有 sessions 即派发：每项 roleId 与 sessionId 恰有一个——roleId 新建专业 Session，sessionId 对已停稳成员追加剩余工作；**instructions 只有一个位置**。不带 sessions 表示仅等待当前步骤。整批接纳原子，不出现半批。
+**dispatch**：只组织当前步骤。有 sessions 即派发：每项 roleId 与 sessionId 恰有一个——roleId 新建专业 Session，sessionId 对已停稳成员追加剩余工作；**instructions 只有一个位置**。新建成员省略 label/expectedKind 时由宿主按 roleId 取值（不给模型增加必填项）。不带 sessions 表示仅等待当前步骤。整批接纳原子，不出现半批。
 
 并行规则（R-04/D-01）：只读工作可任意并行；写工作允许同一 Task 内按模块并行，每个写成员必须声明 writeScope（项目相对路径或 glob）。程序只核对范围**重叠**并告警，不拦截——是否可并行、如何分工由主管判断。首版不要求分离目录；并行多个 Task 使用独立 git worktree 属于后续版本，不在本版。
 
@@ -57,7 +57,7 @@ task、agent_report、requirement、project 按工具级注册 Pi executionMode=
 
 **end**：按 G3 核对，成功事务 completed 并释放 currentTaskId；缺项 COMPLETION_INCOMPLETE，已有成果保留。业务完成判断由主管/独立 Agent 负责。
 
-**nextActions**：dispatch/update/get/end 的返回都带「现在允许做什么、缺什么、谁能做」，模型据此行动，不靠试错学习状态机。
+**nextActions**：dispatch/update/get/end 的返回都带「现在允许做什么、缺什么、谁能做」，模型据此行动，不靠试错学习状态机。被拒绝的派发/阶段切换同时返回当前步骤成员状态与当前阶段可派发的角色（phase/status/allowedRoles/members），报错即可行动；`gaps` 只是程序观察到的事实，不代替主管判定完成。
 
 ### agent_report
 

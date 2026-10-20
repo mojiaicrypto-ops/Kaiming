@@ -137,6 +137,41 @@ describe('task create', () => {
   });
 });
 
+describe('task guidance', () => {
+  it('reports the actions allowed right now and what still blocks completion', async () => {
+    const w = world();
+    const created = await tool(w.tools).execute('call-1', createArgs());
+
+    const actions = created.details['nextActions'] as Array<{ op: string; action: string; reason: string }>;
+    expect(actions.map((entry) => entry.op)).toEqual(expect.arrayContaining(['update', 'dispatch']));
+    // End is not offered while reports are missing; the gaps say what is.
+    expect(actions.map((entry) => entry.op)).not.toContain('end');
+    // The phase is plan: designer/investigator may be dispatched, developer may not.
+    expect(actions.some((entry) => entry.action.includes('designer'))).toBe(true);
+    const gaps = created.details['gaps'] as string[];
+    expect(gaps.join(' ')).toContain('settlement');
+    expect(gaps.join(' ')).toContain('review');
+  });
+
+  it('attaches the same guidance to a refused completion', async () => {
+    const w = world();
+    await tool(w.tools).execute('call-1', createArgs());
+    const task = w.store.listTasks(w.projectId)[0];
+
+    const refused = await tool(w.tools).execute('call-2', {
+      op: 'end',
+      taskId: task?.id,
+      completionResultId: 'r-1',
+    });
+
+    expect(refused.details['code']).toBe('COMPLETION_INCOMPLETE');
+    expect((refused.details['nextActions'] as Array<{ op: string }>).length).toBeGreaterThan(0);
+    // The model reads the content, so the guidance has to be in the text too.
+    const text = refused.content.map((part) => part.text).join('\n');
+    expect(text).toContain('nextActions');
+  });
+});
+
 describe('task update', () => {
   it('refuses to overwrite a Plan edited outside the tool and returns the current text', async () => {
     const w = world();

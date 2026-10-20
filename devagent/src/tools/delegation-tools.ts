@@ -9,7 +9,8 @@
  */
 import { randomUUID } from 'node:crypto';
 import { RESULT_KINDS, StoreError, type ResultKind, type Store, type TaskPhase, type TaskRow, type TaskSessionRow } from '../store/store.ts';
-import { asRecord, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
+import { asRecord, enrich, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
+import { dispatchRefusalFacts, guidanceFor } from './guidance.ts';
 import type { TaskToolContext } from './task-tools.ts';
 
 export interface MemberState {
@@ -45,6 +46,16 @@ const MAX_WAIT_MS = 300_000;
 /** Which phase each role may be dispatched in (G2: Review/Test/settler are step-specific). */
 /** Roles that write project files in a write Task and therefore declare a writeScope. */
 const WRITING_ROLES = new Set(['designer', 'developer', 'settler']);
+
+/** The report kind a role delivers; G2 marks expectedKind optional, so the host derives it. */
+const EXPECTED_KIND_BY_ROLE: Readonly<Record<string, ResultKind>> = {
+  designer: 'design',
+  developer: 'implementation',
+  reviewer: 'review',
+  tester: 'test',
+  settler: 'settlement',
+  investigator: 'investigation',
+};
 
 const ROLE_PHASE: Readonly<Record<string, readonly TaskPhase[]>> = {
   designer: ['clarify', 'analyze', 'design', 'plan'],
@@ -92,7 +103,11 @@ export async function dispatchOp(
   const entries = Array.isArray(params['sessions']) ? params['sessions'] : [];
   if (entries.length === 0) {
     const returned = await context.host.settleStep(taskId, waitMs);
-    return ok(describe(returned), returned as unknown as Record<string, unknown>);
+    const current = context.store.getTask(taskId) ?? task;
+    return ok(describe(returned), {
+      ...returned,
+      ...guidanceFor(context.store, current),
+    } as Record<string, unknown>);
   }
 
   const created: PlannedMember[] = [];
@@ -112,7 +127,8 @@ export async function dispatchOp(
     if (roleId !== undefined) {
       const invalid = checkMember(request, task);
       if (invalid !== undefined) {
-        return invalid;
+        // Name what the step really holds now, so a refused dispatch is actionable.
+        return enrich(invalid, dispatchRefusalFacts(context.store, task));
       }
       wantsTest = wantsTest || readString(request, 'expectedKind') === 'test';
       created.push({
@@ -125,11 +141,11 @@ export async function dispatchOp(
             ? { specialization: readString(request, 'specialization') as string }
             : {}),
           phase: task.phase,
-          label: readString(request, 'label') as string,
+          label: readString(request, 'label') ?? roleId,
           instructions: readString(request, 'instructions') as string,
           refs: readStringArray(request, 'refs') ?? [],
           dependencies: readStringArray(request, 'dependsOnResultIds') ?? [],
-          expectedKind: readString(request, 'expectedKind') as string,
+          expectedKind: readString(request, 'expectedKind') ?? EXPECTED_KIND_BY_ROLE[roleId] ?? '',
           writeScope: readStringArray(request, 'writeScope') ?? [],
           ...(readString(request, 'workspaceRef') !== undefined
             ? { workspaceRef: readString(request, 'workspaceRef') as string }
@@ -151,10 +167,13 @@ export async function dispatchOp(
       return fail('NOT_FOUND', `session ${sessionId} is not a member of Task ${taskId}`);
     }
     if (member.phase !== task.phase) {
-      return fail('STAGE_NOT_READY', 'that member belongs to an earlier step', {
-        memberPhase: member.phase,
-        taskPhase: task.phase,
-      });
+      return enrich(
+        fail('STAGE_NOT_READY', 'that member belongs to an earlier step', {
+          memberPhase: member.phase,
+          taskPhase: task.phase,
+        }),
+        dispatchRefusalFacts(context.store, task),
+      );
     }
     if (task.status !== 'active' && task.status !== 'waiting') {
       return fail('TASK_CONTROLLED', 'this Task is not running; resume it before continuing members', {
@@ -185,7 +204,7 @@ export async function dispatchOp(
   if (wantsTest) {
     const refusal = testDispatchRefusal(context, taskId);
     if (refusal !== undefined) {
-      return refusal;
+      return enrich(refusal, dispatchRefusalFacts(context.store, task));
     }
   }
 
@@ -215,6 +234,7 @@ export async function dispatchOp(
       .filter((member): member is TaskSessionRow => member !== undefined),
   );
   const returned = await runAndWait(context, taskId, touched, waitMs);
+  const current = context.store.getTask(taskId) ?? task;
   return ok(`${describe(returned)}${warnings.length > 0 ? ` | warning: ${warnings.join('; ')}` : ''}`, {
     ...returned,
     ...(warnings.length > 0 ? { warnings } : {}),
@@ -222,6 +242,7 @@ export async function dispatchOp(
       .map((sessionId) => context.store.getTaskSession(sessionId))
       .filter((member): member is TaskSessionRow => member !== undefined)
       .map(summaryOf),
+    ...guidanceFor(context.store, current),
   } as Record<string, unknown>);
 }
 
@@ -263,12 +284,14 @@ function memberInputState(
 
 function checkMember(request: Record<string, unknown>, task: TaskRow): ToolOutcome | undefined {
   const roleId = readString(request, 'roleId');
-  const label = readString(request, 'label');
   const instructions = readString(request, 'instructions');
-  const expectedKind = readString(request, 'expectedKind');
-  if (roleId === undefined || label === undefined || instructions === undefined || expectedKind === undefined) {
-    return fail('INVALID_ARGUMENT', 'roleId, label, instructions and expectedKind are required');
+  if (roleId === undefined || instructions === undefined || instructions.trim() === '') {
+    return fail('INVALID_ARGUMENT', 'a new member needs roleId and instructions', {
+      hint: 'label and expectedKind are optional; the host derives them from the role',
+    });
   }
+  // G2 marks both optional: the host fills them in, so a slip here cannot wedge the member.
+  const expectedKind = readString(request, 'expectedKind') ?? EXPECTED_KIND_BY_ROLE[roleId];
   // The expected kind IS the report kind the member must deliver: reject an invented one now
   // (with the legal values) instead of wedging the member at agent_report time.
   if (!RESULT_KINDS.includes(expectedKind as ResultKind)) {

@@ -76,6 +76,8 @@ OpenAI 兼容端点（含 DeepSeek、本地服务）示例 `models.json`：
 cd devagent
 cp config/model.example.json config/model.json   # 首次：填 provider/model/endpoint
 npm run check:model
+npm run check:runtime
+npm run check:workflow        # 约 3–5 分钟；无浏览器，提问按“同意”自动答复
 ```
 
 `config/model.json` 只给这个检查脚本用，服务端不读它；它已被 `.gitignore` 忽略。
@@ -112,6 +114,8 @@ tar -xzf agentdev-backup-YYYYMMDD.tgz -C <dataDir 的上一级>
 npm test                      # 单元与集成测试（不含浏览器）
 npx playwright test           # 浏览器验收（真实 Chromium + 真实服务进程，使用 stub 模型端点）
 npm run check:model           # 真实模型往返检查（需 config/model.json）
+npm run check:runtime         # 真实模型跑通一次输入执行与落盘
+npm run check:workflow        # 真实模型跑完整 Task 流程（开发→审核→测试→结算→结束）
 npm run check:prompts         # 角色提示文件与链接检查
 node web/styles/verify-selectors.mjs   # 外壳样式与 mock 的逐选择器对照
 ```

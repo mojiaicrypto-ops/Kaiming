@@ -265,6 +265,7 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
             phase: member.phase,
             label: member.label,
             expectedKind: member.expectedKind,
+            writeScope: member.writeScope,
             currentInputId: member.currentInputId,
             activity: live.activity,
             liveInputId: live.currentInputId,
