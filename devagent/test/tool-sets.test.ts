@@ -18,7 +18,8 @@ describe('role tool sets', () => {
     expect(toolSetFor('developer', 'write').allowlist).toContain('bash');
     expect(toolSetFor('tester', 'write').allowlist).toContain('bash');
     expect(toolSetFor('settler', 'write').allowlist).toContain('bash');
-    expect(toolSetFor('designer', 'write').allowlist).not.toContain('bash');
+    // Document work moves and deletes files, and Pi has no rm/mv tool.
+    expect(toolSetFor('designer', 'write').allowlist).toContain('bash');
     expect(toolSetFor('reviewer', 'write').allowlist).not.toContain('bash');
   });
 
@@ -94,7 +95,8 @@ describe('role tool sets', () => {
     const designerWrite = toolSetFor('designer', 'write');
     expect(designerWrite.denied).not.toContain('write');
     expect(designerWrite.denied).not.toContain('requirement');
-    expect(designerWrite.denied).toEqual(expect.arrayContaining(['project', 'bash']));
+    expect(designerWrite.denied).not.toContain('bash');
+    expect(designerWrite.denied).toEqual(expect.arrayContaining(['project']));
 
     // A reviewer must never be handed the chief's task tools, even through a host union.
     const reviewerWrite = toolSetFor('reviewer', 'write');

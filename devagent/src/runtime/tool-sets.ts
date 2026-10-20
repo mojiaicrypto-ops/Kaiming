@@ -28,7 +28,9 @@ const NATIVE_BY_ROLE: Readonly<Record<PromptRoleId, readonly string[]>> = {
   // The chief investigates and checks the real state itself (git, a test entry point, a file layout)
   // instead of trusting a summary; implementing Task work still belongs to the delegated roles.
   chief: [...READ_TOOLS, SHELL_TOOL],
-  designer: [...READ_TOOLS, ...PROJECT_WRITE_TOOLS],
+  // Document work includes moving and deleting files (archive, rename, remove a duplicate body):
+  // Pi has no rm/mv tool, so the shell is the native way to do it.
+  designer: [...READ_TOOLS, ...PROJECT_WRITE_TOOLS, SHELL_TOOL],
   developer: [...READ_TOOLS, ...PROJECT_WRITE_TOOLS, SHELL_TOOL],
   reviewer: READ_TOOLS,
   tester: [...READ_TOOLS, SHELL_TOOL],

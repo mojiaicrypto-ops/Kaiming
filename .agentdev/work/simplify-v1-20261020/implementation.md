@@ -110,5 +110,7 @@
 | 契约 | G1 主管行与上下文表同步;主管可用 bash 核实状态,不承担实现写入 |
 | 提示词 | chief.md 明确:读数不够时用 bash 查真实状态(git、测试入口、文件布局),不靠假设;实现仍委派 |
 | 证据 | `tool-sets.test` 断言主管在 write Task 与无 Task 时都有 bash、仍无 write/edit;`runtime.test` 用真实 Pi + stub 模型让主管执行 `echo chief-shell-ok`,断言 toolResult 出现真实输出 |
+| designer | 文档整理要归档/改名/删重复正文,而 Pi 没有 rm/mv 工具;designer 原生工具加 `bash`,write Task 中可用、read Task 仍移除;提示词要求移动后同步引用与索引 |
+| designer 证据 | `runtime.test` 用真实 Pi + stub 模型让 designer 执行 `mkdir -p archive && mv src/a.md archive/a.md && rm src/b.md`,断言新位置存在、原位置与重复文件消失 |
 
-验证:`tsc` 干净;26 文件 / 288 项测试;浏览器 8/8;提示词 15/15;服务已重启(pid 43767)加载新工具集。
+验证:`tsc` 干净;26 文件 / 289 项测试;浏览器 8/8;提示词 15/15;服务已重启加载新工具集。

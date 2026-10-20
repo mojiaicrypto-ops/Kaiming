@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -838,6 +838,45 @@ describe('input runner', () => {
     expect(observed).toContain('chief-shell-ok');
     // The real command ran: the tool result, not the model's claim, carries the output.
     expect(messages.some((message) => message.role === 'toolResult')).toBe(true);
+  }, 30_000);
+
+  it('lets the designer move and delete documents through the shell', async () => {
+    const h = await harness({
+      replies: [
+        {
+          kind: 'tool_calls',
+          calls: [
+            {
+              name: 'bash',
+              arguments: JSON.stringify({ command: 'mkdir -p archive && mv src/a.md archive/a.md && rm src/b.md' }),
+            },
+          ],
+        },
+        { kind: 'text', text: 'archived' },
+      ],
+    });
+    h.store.createSession({ id: 's-design', projectId: 'p-1', roleId: 'designer', cwd: h.cwd });
+    mkdirSync(join(h.cwd, 'src'), { recursive: true });
+    writeFileSync(join(h.cwd, 'src', 'a.md'), '# a\n');
+    writeFileSync(join(h.cwd, 'src', 'b.md'), '# b\n');
+    h.store.acceptInput({
+      inputId: 'i-design',
+      projectId: 'p-1',
+      sessionId: 's-design',
+      sourceKey: 'delegation:i-design',
+      requestKey: 'i-design',
+      method: 'task.session',
+      kind: 'delegation',
+      payload: { content: [{ type: 'text', text: 'archive the old document and drop the duplicate' }] },
+    });
+
+    const outcome = await h.runner.runNext('s-design');
+
+    expect(outcome.kind).toBe('completed');
+    // Pi has no rm/mv tool: without shell the designer cannot reorganize documents at all.
+    expect(existsSync(join(h.cwd, 'archive', 'a.md'))).toBe(true);
+    expect(existsSync(join(h.cwd, 'src', 'a.md'))).toBe(false);
+    expect(existsSync(join(h.cwd, 'src', 'b.md'))).toBe(false);
   }, 30_000);
 
   it('rebuilds the instance when the Task type changes the tool set', async () => {

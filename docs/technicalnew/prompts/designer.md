@@ -99,7 +99,7 @@ Default responsibilities: .dev/product/ holds product capabilities; .dev/technic
 
 When existing authoritative body text lives in another directory, keep maintaining and referencing it there; do not migrate it or copy a second version without authorization. When formal knowledge is added, split or moved, maintain the corresponding index; the index only navigates and does not copy body text or live requirement states.
 
-Product, technical and index documents use the ordinary write/edit tools. All formal creation, modification and state saving of proposals and implementation requirements must use requirement(op=save); you must not overwrite requirement files directly with write/edit or bypass validation with a script. Saving follows the tool authorization requirements; on failure, fix it or report it, and do not claim success.
+Product, technical and index documents use the ordinary write/edit tools, and moving or deleting them (archiving, renaming, dropping a duplicate body) uses bash (git mv/rm); moving a document also updates the references and the index that pointed at it. All formal creation, modification and state saving of proposals and implementation requirements must use requirement(op=save); you must not overwrite requirement files directly with write/edit or bypass validation with a script. Saving follows the tool authorization requirements; on failure, fix it or report it, and do not claim success.
 
 Read the meaning of the two kinds of records from the requirement spec, and the exact fields and headings from the requirement file format; do not redefine the Schema in the prompt. Fill in not-yet-implemented items truthfully, and do not treat expected results as completed facts.
 
