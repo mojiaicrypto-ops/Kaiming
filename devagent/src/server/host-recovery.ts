@@ -46,13 +46,16 @@ export function closeInterruptedChiefInput(
     evidenceRefs: [`host:${reason.code}`],
     resolvedBy: `host:${reason.code}`,
   });
+  // The notice is about the run that just died: during a Task it belongs to that Task, or the claim
+  // gate would keep it behind the Task it is meant to warn about.
+  const noticeTaskId = input.taskId ?? session.currentTaskId;
   const noticeId = `notice-host-closed-${inputId}`;
   if (store.getInput(noticeId) === undefined) {
     store.acceptInput({
       inputId: noticeId,
       projectId: session.projectId,
       sessionId: session.id,
-      ...(input.taskId !== null ? { taskId: input.taskId } : {}),
+      ...(noticeTaskId !== null ? { taskId: noticeTaskId } : {}),
       sourceKey: `host-closed:${inputId}`,
       requestKey: noticeId,
       method: 'session.system_notice',

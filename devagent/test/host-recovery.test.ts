@@ -86,6 +86,54 @@ describe('host recovery of a chief input', () => {
     expect(closeInterruptedChiefInput(store, 'i-1', { code: 'process-restart', detail: 'gone' }).closed).toBe(false);
   });
 
+  it('binds the notice to the current Task so the warning is not queued behind it', () => {
+    const store = openStore();
+    // The real shape: the turn started before the Task existed, and the Task was created mid-run.
+    store.acceptInput({
+      inputId: 'i-1',
+      projectId: 'p-1',
+      sessionId: 's-chief',
+      sourceKey: 'user:i-1',
+      requestKey: 'i-1',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: 'arrange the docs' }] },
+    });
+    const claim = store.claimNextInput('s-chief');
+    expect(claim.kind).toBe('claimed');
+    if (claim.kind !== 'claimed') return;
+    store.createTask({
+      id: 't-1',
+      projectId: 'p-1',
+      chiefSessionId: 's-chief',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      goal: 'reset password',
+      scope: 'account module',
+      acceptanceRefs: ['AC-1'],
+      basisRefs: ['req-1'],
+      planRef: { storage: 'server', path: '/tmp/x/plan.md', sha256: 'sha' },
+      authorizationRefs: ['m-001'],
+      sourceInputId: 'i-1',
+    });
+    expect(
+      store.finishInput({
+        inputId: 'i-1',
+        expectedRevision: claim.input.revision,
+        status: 'interrupted',
+        errorCode: 'RUN_STALLED',
+        errorMessage: 'run was aborted',
+      }),
+    ).toBe(true);
+
+    const closed = closeInterruptedChiefInput(store, 'i-1', { code: 'run-aborted', detail: 'aborted' });
+    expect(closed.closed).toBe(true);
+    expect(store.getInput(closed.noticeId ?? '')?.taskId).toBe('t-1');
+    // The chief's session is still on the Task: the notice is consumable instead of stranded.
+    expect(store.claimNextInput('s-chief')).toMatchObject({ kind: 'claimed' });
+  });
+
   it('leaves a member input to the chief, and a finished input as it is', () => {
     const store = openStore();
     interrupt(store, 's-dev', 'i-dev');
