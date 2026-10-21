@@ -7,6 +7,6 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
-    exclude: ['browser/**', 'web/**', 'node_modules/**', 'spikes/**'],
+    exclude: ['browser/**', 'node_modules/**', 'spikes/**'],
   },
 });
