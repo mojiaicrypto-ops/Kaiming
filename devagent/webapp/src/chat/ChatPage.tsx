@@ -1,0 +1,302 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RpcError } from '../api/rpc';
+import { useI18n } from '../i18n/I18nProvider';
+import { SessionsList } from './SessionsList';
+import { useTier } from '../layout/useTier';
+import { Transcript } from './Transcript';
+import { Banner } from './Banner';
+import { TaskStrip } from './TaskStrip';
+import { InteractionPanel, type AnswerState } from './InteractionPanel';
+import { Composer, DockHint } from './Composer';
+import { QueuedInputs } from './QueuedInputs';
+import { EmptyState } from './EmptyState';
+import { MemberDrawer } from './MemberDrawer';
+import { echoOf } from './interaction-model';
+import { createAutoscroll } from '../lib/scroll';
+import type { ChiefSessionApi } from '../state/useSession';
+import type { SessionRow } from '../state/useWorkspace';
+import type { TaskMemberRow } from './ToolTask';
+import type { TaskDetail } from '../state/slot';
+import type { PendingInteraction } from '../api/stream';
+
+function useCompact(): boolean {
+  const tier = useTier();
+  return tier === 'compact' || tier === 'phone';
+}
+
+export interface ChatPageProps {
+  readonly session: ChiefSessionApi;
+  readonly sessions: readonly SessionRow[];
+  readonly currentSessionId: string;
+  readonly projectId: string;
+  readonly hasProject: boolean;
+  readonly onSelectSession: (sessionId: string) => void;
+  readonly onCreateSession: () => void;
+  readonly onOpenRail: () => void;
+  readonly railOpen: boolean;
+}
+
+/**
+ * The chat screen. Region order is the prototype's: banners, task strip, transcript, dock. The
+ * transcript owns its own scroll-follow handle so that a streaming answer never yanks the view
+ * away from a user who scrolled up (R5); the "back to latest" pill is the only way it moves you.
+ */
+export function ChatPage({ session, sessions, currentSessionId, projectId, hasProject, onSelectSession, onCreateSession, railOpen, onOpenRail }: ChatPageProps) {
+  // Below 861px the session rail is a sheet, not a column: CSS hides the column, so the sheet is
+  // the only way to switch sessions there.
+  const compact = useCompact();
+  const { t } = useI18n();
+  const { slot } = session;
+  const txRef = useRef<HTMLDivElement | null>(null);
+  const [scrollUi, setScrollUi] = useState<{ locked: boolean; showJumpButton: boolean }>({ locked: false, showJumpButton: false });
+  const handleRef = useRef<ReturnType<typeof createAutoscroll> | null>(null);
+  const [membersOpen, setMembersOpen] = useState(false);
+  const [follow, setFollow] = useState<string | null>(null);
+  const [questionsCollapsed, setQuestionsCollapsed] = useState(false);
+  const [answers, setAnswers] = useState<Record<string, AnswerState>>({});
+
+  useEffect(() => {
+    const element = txRef.current;
+    if (element === null) return;
+    const handle = createAutoscroll(element, setScrollUi);
+    handleRef.current = handle;
+    return () => {
+      handleRef.current = null;
+    };
+  }, []);
+
+  // The rail sheet closes on Escape, like every other overlay.
+  useEffect(() => {
+    if (!compact || !railOpen) return;
+    const onKey = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === 'Escape') onOpenRail();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [compact, railOpen, onOpenRail]);
+
+  // Streaming growth and image loads change scrollHeight without a user scroll: follow again.
+  useEffect(() => {
+    handleRef.current?.followIfUnlocked();
+  }, [slot.items, slot.busy]);
+
+  const taskDetail: TaskDetail | null = slot.taskDetail;
+  const members: readonly TaskMemberRow[] = useMemo(() => {
+    const detail = taskDetail;
+    if (detail === null) return [];
+    return detail.members.map((member) => ({
+      sessionId: member.sessionId,
+      label: member.label,
+      activity: member.activity ?? 'idle',
+      lastInputStatus: member.lastInputStatus ?? null,
+      waitingUser: member.currentInputId !== null && (member.activity ?? 'idle') === 'idle',
+      note: (member.activity ?? 'idle') === 'processing' ? member.phase : '',
+    }));
+  }, [taskDetail]);
+
+  // The local echo keeps an answered card on screen until the server's authoritative list drops
+  // it: without this the panel (and its "answer received" line) vanishes the moment it is answered.
+  // `remembered` also keeps a card the server already removed: the answer's echo is the proof the
+  // reply was recorded, and it must survive the refresh that clears the question.
+  const remembered = useRef(new Map<string, PendingInteraction>());
+  for (const entry of slot.pending) remembered.current.set(entry.interactionId, entry);
+  const visibleQuestions = [
+    ...slot.pending.filter((entry) => entry.resolved !== true),
+    ...[...remembered.current.values()].filter(
+      (entry) => answers[entry.interactionId]?.kind === 'done' && !slot.pending.some((live) => live.interactionId === entry.interactionId),
+    ),
+  ];
+  const openQuestions = visibleQuestions.filter((entry) => answers[entry.interactionId]?.kind !== 'done');
+  const activeStaleId =
+    visibleQuestions.find((entry) => answers[entry.interactionId]?.kind === 'stale')?.interactionId ?? null;
+
+  const answer = useCallback(
+    async (interaction: PendingInteraction, response: unknown): Promise<void> => {
+      setAnswers((current) => ({ ...current, [interaction.interactionId]: { kind: 'busy' } }));
+      try {
+        await session.respond(interaction, response);
+        setAnswers((current) => ({ ...current, [interaction.interactionId]: { kind: 'done', echo: echoOf(response) } }));
+      } catch (error) {
+        const code = error instanceof RpcError ? error.code : '';
+        if (code === 'STALE_INTERACTION' || code === 'INTERACTION_STALE' || code === 'REVISION_CONFLICT') {
+          setAnswers((current) => ({ ...current, [interaction.interactionId]: { kind: 'stale' } }));
+        } else {
+          setAnswers((current) => ({
+            ...current,
+            [interaction.interactionId]: { kind: 'failed', message: error instanceof Error ? error.message : String(error) },
+          }));
+        }
+      }
+    },
+    [session],
+  );
+
+  const sourceLabel = useCallback(
+    (interaction: PendingInteraction): string => {
+      if (interaction.sourceSessionId === undefined || interaction.sourceSessionId === currentSessionId) {
+        return t('ask.fromChief');
+      }
+      const row = sessions.find((entry) => entry.sessionId === interaction.sourceSessionId);
+      return row === undefined || row.title === '' ? interaction.sourceSessionId : row.title;
+    },
+    [currentSessionId, sessions, t],
+  );
+
+  const submit = useCallback(
+    async (text: string): Promise<void> => {
+      try {
+        const outcome = await session.submit(text);
+        if (outcome.queued) {
+          session.notify(
+            outcome.waitingForTask === undefined ? t('queue.afterStep') : `${t('queue.afterStep')} · ${outcome.waitingForTask}`,
+            'info',
+          );
+        }
+      } catch (error) {
+        session.notify(t('toast.sendFailed', { reason: error instanceof Error ? error.message : String(error) }), 'error');
+        throw error;
+      }
+    },
+    [session, t],
+  );
+
+  return (
+    <div className="chat">
+      {compact && railOpen ? (
+        <>
+          <div className="drawer-scrim" onClick={onOpenRail} role="presentation" />
+          <SessionsList
+            className="sheet"
+            rows={sessions}
+            current={currentSessionId}
+            onSelect={onSelectSession}
+            onCreate={onCreateSession}
+            questionCount={(sessionId) => (sessionId === currentSessionId ? openQuestions.length : 0)}
+          />
+        </>
+      ) : (
+        <SessionsList
+          rows={sessions}
+          current={currentSessionId}
+          onSelect={onSelectSession}
+          onCreate={onCreateSession}
+          questionCount={(sessionId) => (sessionId === currentSessionId ? openQuestions.length : 0)}
+        />
+      )}
+      <section className="conv">
+        <Banner
+          status={session.status}
+          blocked={session.blocked}
+          onDismissBlocked={session.dismissBlocked}
+          onRetry={session.retry}
+          historyProblems={session.historyProblems}
+        />
+        <TaskStrip
+          detail={taskDetail}
+          pendingQuestions={openQuestions.length}
+          membersOpen={membersOpen}
+          onToggleMembers={() => setMembersOpen((open) => !open)}
+          onFollow={(sessionId) => setFollow(sessionId)}
+          onPause={() => {
+            if (taskDetail !== null) {
+              void session.rpc
+                .call('task.control', {
+                  projectId,
+                  taskId: taskDetail.task.taskId,
+                  command: 'pause',
+                  expectedRevision: taskDetail.task.revision,
+                })
+                .catch((error: unknown) => session.notify(error instanceof Error ? error.message : String(error), 'error'));
+            }
+          }}
+          onResume={() => {
+            if (taskDetail !== null) {
+              void session.rpc
+                .call('task.control', {
+                  projectId,
+                  taskId: taskDetail.task.taskId,
+                  command: 'resume',
+                  expectedRevision: taskDetail.task.revision,
+                })
+                .catch((error: unknown) => session.notify(error instanceof Error ? error.message : String(error), 'error'));
+            }
+          }}
+        />
+        <div className="tx scroll" ref={txRef} data-testid="transcript">
+          <div className="tx-in">
+            {slot.items.length === 0 ? (
+              <EmptyState hasProject={hasProject} onExample={(text) => void submit(text)} />
+            ) : (
+              <Transcript
+                items={slot.items}
+                busy={slot.busy}
+                variant="chief"
+                members={members}
+                onFollow={(sessionId) => setFollow(sessionId)}
+              />
+            )}
+          </div>
+        </div>
+        <div className="dock">
+          <div className="dock-in">
+            {scrollUi.showJumpButton && (
+              <button type="button" className="jump" onClick={() => handleRef.current?.jumpToBottom()}>
+                {t('chat.jump')}
+              </button>
+            )}
+            <InteractionPanel
+              interactions={visibleQuestions}
+              answerState={answers}
+              onAnswer={answer}
+              sourceLabel={sourceLabel}
+              collapsed={questionsCollapsed}
+              onCollapse={() => setQuestionsCollapsed(true)}
+              onExpand={() => setQuestionsCollapsed(false)}
+              onRetry={() => {
+                if (activeStaleId !== null) {
+                  setAnswers((current) => {
+                    const next = { ...current };
+                    delete next[activeStaleId];
+                    return next;
+                  });
+                }
+              }}
+            />
+            <QueuedInputs
+              inputs={slot.queuedInputs}
+              onWithdraw={async (inputId) => {
+                try {
+                  await session.cancelQueuedInput(inputId);
+                } catch (error) {
+                  session.notify(t('queue.withdrawFailed', { reason: error instanceof Error ? error.message : String(error) }), 'error');
+                }
+              }}
+            />
+            <Composer
+              busy={slot.busy}
+              canStop={slot.currentInputId !== null}
+              disabled={!hasProject}
+              onSubmit={submit}
+              onStop={async () => {
+                await session.stop().catch((error: unknown) => {
+                  session.notify(t('toast.stopFailed', { reason: error instanceof Error ? error.message : String(error) }), 'error');
+                  throw error;
+                });
+              }}
+            />
+            <DockHint busy={slot.busy} />
+          </div>
+        </div>
+      </section>
+      {follow !== null && (
+        <MemberDrawer
+          rpc={session.rpc}
+          projectId={projectId}
+          sessionId={follow}
+          label={sessions.find((row) => row.sessionId === follow)?.title || follow}
+          onClose={() => setFollow(null)}
+        />
+      )}
+    </div>
+  );
+}

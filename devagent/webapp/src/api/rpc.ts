@@ -1,3 +1,4 @@
+import { readStored, writeStored } from '../lib/storage';
 /**
  * RPC client (R1 semantics, TS port of web/core/rpc.js): one envelope, one error catalogue,
  * one stable request id per user action. The CSRF token from the login response travels with
@@ -25,19 +26,19 @@ export function newRequestId(prefix = 'c'): string {
 const CSRF_KEY = 'agentdev.csrf';
 
 export class RpcClient {
-  private csrfToken: string | null = null;
-  private onUnauthorized: (() => void) | null = null;
+  /** The write token; null before login. Read-only for callers (the acceptance harness checks it). */
+  csrfToken: string | null = null;
+  /** Set by the shell: a 401 means the cookie is gone and the login screen must take over. */
+  onUnauthorized: (() => void) | null = null;
 
   constructor(options: { onUnauthorized?: () => void } = {}) {
     this.onUnauthorized = options.onUnauthorized ?? null;
-    const stored = localStorage.getItem(CSRF_KEY);
-    this.csrfToken = stored === null ? null : stored;
+    this.csrfToken = readStored(CSRF_KEY);
   }
 
   /** Re-read the stored token: a parallel client (login view) may have refreshed it. */
   refreshCsrf(): void {
-    const stored = localStorage.getItem(CSRF_KEY);
-    this.csrfToken = stored === null ? null : stored;
+    this.csrfToken = readStored(CSRF_KEY);
   }
 
   async login(password: string, requestId = newRequestId('login')): Promise<void> {
@@ -45,7 +46,7 @@ export class RpcClient {
     const result = body.result as { csrfToken?: string };
     if (typeof result.csrfToken === 'string') {
       this.csrfToken = result.csrfToken;
-      localStorage.setItem(CSRF_KEY, result.csrfToken);
+      writeStored(CSRF_KEY, result.csrfToken);
     }
   }
 

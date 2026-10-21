@@ -88,13 +88,13 @@ function CodeBlock({ code, language }: CodeBlockProps) {
 export function Markdown({ text }: { text: string }) {
   const blocks = useMemo(() => splitTopLevelFences(text), [text]);
   return (
-    <div className="markdown-body">
+    <>
       {blocks.map((block, index) =>
         block.kind === 'fence'
           ? <CodeBlock key={`${index}:${block.code.length}:${block.code.slice(-24)}`} code={block.code} language={block.language} />
           : <div key={index} dangerouslySetInnerHTML={{ __html: markdownIt.render(block.text) }} />,
       )}
-    </div>
+    </>
   );
 }
 
