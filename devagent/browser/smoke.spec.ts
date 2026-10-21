@@ -1,52 +1,32 @@
 /**
- * Smoke tests for the real browser acceptance harness (P4-i): prove the page really talks to the
- * workbench, not to a mock. The server runs in-process with a temp data dir; the browser logs in with
- * the generated access password and the shell paints from real server data.
+ * Smoke tests for the real browser acceptance harness: prove the page really talks to the
+ * workbench, not to a mock. The server runs in-process with a temp data dir; the browser logs in
+ * with the generated access password and the shell paints from real server data.
  *
  * Two states are covered, because they exercise different boot paths:
- *  - a first run with no project (login dialog, then the empty shell) - the state a new user sees;
- *  - a seeded project open (the seeded project, the live session stream, statusbar connected).
- *
- * Scope is deliberately the shell that exists today (topbar/sidebar/statusbar + language switch) so a
- * sibling slice still landing `views/*` and `components/shell.js` cannot make these tests flaky.
+ *  - a first run with no project (login screen, then the empty shell) - what a new user sees;
+ *  - a seeded project open (the live session stream, the status bar connected).
  */
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect, type Page, type TestInfo } from '@playwright/test';
-import { STORAGE_KEYS, loginThroughUi, startHarness, type Harness, type SeededProject } from './harness.ts';
+import { loginThroughUi, startHarness, type Harness, type SeededProject } from './harness.ts';
 
 const ARTIFACTS = fileURLToPath(new URL('./artifacts', import.meta.url));
 
-/** Pin the language (and optionally a project/session) before `web/app.js` boots. */
-async function pinStorage(
-  page: Page,
-  seed: { readonly project?: SeededProject; readonly language: string },
-): Promise<void> {
-  await page.addInitScript(
-    (value: {
-      readonly projectPath: string | null;
-      readonly sessionId: string | null;
-      readonly language: string;
-      readonly keys: typeof STORAGE_KEYS;
-    }) => {
-      if (value.projectPath !== null) {
-        localStorage.setItem(value.keys.projectPath, value.projectPath);
-      }
-      if (value.sessionId !== null) {
-        localStorage.setItem(value.keys.sessionId, value.sessionId);
-      }
-      localStorage.setItem(value.keys.language, value.language);
-    },
-    {
-      projectPath: seed.project?.projectPath ?? null,
-      sessionId: seed.project?.sessionId ?? null,
-      language: seed.language,
-      keys: STORAGE_KEYS,
-    },
-  );
+/** Pin the language (and optionally a project/session) before the shell boots. */
+async function pinStorage(page: Page, seed: { readonly project?: SeededProject; readonly locale: string }): Promise<void> {
+  await page.addInitScript((value: { readonly projectPath: string | null; readonly sessionId: string | null; readonly locale: string }) => {
+    if (value.projectPath !== null) localStorage.setItem('agentdev.projectPath', value.projectPath);
+    if (value.sessionId !== null) localStorage.setItem('agentdev.sessionId', value.sessionId);
+    localStorage.setItem('agentdev.locale', value.locale);
+  }, {
+    projectPath: seed.project?.projectPath ?? null,
+    sessionId: seed.project?.sessionId ?? null,
+    locale: seed.locale,
+  });
 }
 
-/** Screenshot evidence saved on disk and attached to the test result. */
 async function attachScreenshot(page: Page, testInfo: TestInfo, name: string): Promise<void> {
   mkdirSync(ARTIFACTS, { recursive: true });
   const path = fileURLToPath(new URL(`./artifacts/${name}.png`, import.meta.url));
@@ -54,29 +34,31 @@ async function attachScreenshot(page: Page, testInfo: TestInfo, name: string): P
   await testInfo.attach(name, { path, contentType: 'image/png' });
 }
 
-test('a first run with no project boots: login dialog, then the empty shell', async ({ page }, testInfo) => {
+test('a first run with no project boots: login screen, then the empty shell', async ({ page }, testInfo) => {
   const harness: Harness = await startHarness({ seedProject: false });
   try {
-    await pinStorage(page, { language: 'en' });
+    await pinStorage(page, { locale: 'en' });
     await page.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' });
 
-    // The login dialog is the first thing a new user sees; the shell behind it is already shipped.
-    await expect(page.locator('#appDialog #accessPassword')).toBeVisible();
-    await expect(page.locator('.sidebar .nav-item[data-view]')).toHaveCount(8);
-
+    // The login screen is the first thing a new user sees.
+    await expect(page.locator('[data-testid="password"]')).toBeVisible();
     await loginThroughUi(page, harness.accessPassword);
 
-    // Empty shell from real (absent) state: no project painted, the statusbar stays honestly
-    // "connecting" (there is no session to stream), and the router/language wiring ran without one.
-    await expect(page.locator('#projectName')).toHaveText('');
-    await expect(page.locator('#statusLed')).toHaveAttribute('data-state', 'connecting');
-    const navRequirements = page.locator('.nav-item[data-view="requirements"] .nav-text');
-    await expect(navRequirements).toHaveText('Requirements');
-    await page.locator('#languageSelect').selectOption('zh-CN');
-    await expect(navRequirements).toHaveText('需求');
+    // Empty shell from real (absent) state: no project painted, the status bar stays honest, the
+    // three navigation labels are the TUI's.
+    await expect(page.locator('[data-testid="project-switcher"]')).toContainText('No project');
+    await expect(page.locator('.top .nav a')).toHaveCount(3);
+    const requirements = page.locator('.nav a[href="/requirements"]');
+    await expect(requirements).toHaveText('Requirements');
+
+    // Language changes immediately, without a reload, from the appearance pane.
+    await page.locator('.nav a[href="/settings/providers"]').click();
+    await page.locator('[data-testid="settings-tab-appearance"]').click();
+    await page.locator('[data-testid="language"]').selectOption('zh-CN');
+    await expect(requirements).toHaveText('需求');
     await attachScreenshot(page, testInfo, 'shell-first-run');
-    await page.locator('#languageSelect').selectOption('en');
-    await expect(navRequirements).toHaveText('Requirements');
+    await page.locator('[data-testid="language"]').selectOption('en');
+    await expect(requirements).toHaveText('Requirements');
   } finally {
     await harness.close();
   }
@@ -89,31 +71,271 @@ test('a seeded project renders the shell from real server data', async ({ page }
     if (project === null) {
       throw new Error('the harness did not seed a project');
     }
-    await pinStorage(page, { project, language: 'en' });
+    await pinStorage(page, { project, locale: 'en' });
 
     await page.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' });
     await loginThroughUi(page, harness.accessPassword);
 
     // The seeded project really reached the shell (painted from the RPC response, not the mock).
-    await expect(page.locator('#projectName')).toHaveText('project');
+    await expect(page.locator('[data-testid="project-switcher"]')).toContainText('project');
+    await expect(page.locator('.status .path')).toContainText('project');
 
-    // Eight nav items: the shell's sidebar is the shipped structure, not a partial render.
-    await expect(page.locator('.sidebar .nav-item[data-view]')).toHaveCount(8);
+    // The session rail shows the seeded session, titled from its first message (or untitled).
+    await expect(page.locator('[data-testid="session-row"]').first()).toBeVisible({ timeout: 15_000 });
 
-    // The statusbar leaves "connecting" only because the live session stream applied a real snapshot:
-    // the shell merges connection + session activity, so a connected idle session paints "idle".
-    await expect(page.locator('#statusLed')).toHaveAttribute('data-state', /^(idle|connected)$/, {
-      timeout: 15_000,
-    });
+    // The status bar leaves "connecting" because the live session stream applied a real snapshot.
+    await expect(page.locator('.top .st')).toHaveText(/Connected/, { timeout: 15_000 });
 
-    // The language switch changes a visible string through i18n (EN -> 简中 -> EN).
-    const navRequirements = page.locator('.nav-item[data-view="requirements"] .nav-text');
-    await expect(navRequirements).toHaveText('Requirements');
-    await page.locator('#languageSelect').selectOption('zh-CN');
-    await expect(navRequirements).toHaveText('需求');
+    // The language switch changes a visible string through the catalog (EN -> 简中 -> EN).
+    const requirements = page.locator('.nav a[href="/requirements"]');
+    await page.locator('.nav a[href="/settings/providers"]').click();
+    await page.locator('[data-testid="settings-tab-appearance"]').click();
+    await expect(requirements).toHaveText('Requirements');
+    await page.locator('[data-testid="language"]').selectOption('zh-CN');
+    await expect(requirements).toHaveText('需求');
     await attachScreenshot(page, testInfo, 'shell-seeded');
-    await page.locator('#languageSelect').selectOption('en');
-    await expect(navRequirements).toHaveText('Requirements');
+    await page.locator('[data-testid="language"]').selectOption('en');
+    await expect(requirements).toHaveText('Requirements');
+  } finally {
+    await harness.close();
+  }
+});
+
+test('five viewports render without a horizontal overflow', async ({ page }) => {
+  const harness: Harness = await startHarness();
+  try {
+    const project = harness.project;
+    if (project === null) throw new Error('the harness did not seed a project');
+    await pinStorage(page, { project, locale: 'en' });
+    for (const [width, height] of [[1440, 900], [1024, 768], [860, 700], [390, 844], [320, 700]] as const) {
+      await page.setViewportSize({ width, height });
+      await page.goto(`${harness.baseUrl}/`, { waitUntil: 'domcontentloaded' });
+      await loginThroughUi(page, harness.accessPassword);
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      expect(overflow, `${width}px wide`).toBeLessThanOrEqual(1);
+      // The rail collapses into a button on narrow screens; the button stays reachable.
+      if (width <= 860) {
+        await expect(page.locator('[data-testid="rail-toggle"]')).toBeVisible();
+        await page.locator('[data-testid="rail-toggle"]').click();
+        await expect(page.locator('.sessions.sheet')).toBeVisible();
+        await expect(page.locator('[data-testid="new-session"]')).toBeVisible();
+        // Every navigation label stays reachable at the narrow end (the header must not clip).
+        for (const label of ['Chat', 'Requirements', 'Settings']) {
+          await expect(page.locator('.nav a', { hasText: label })).toBeVisible();
+        }
+        await page.keyboard.press('Escape');
+      } else {
+        await expect(page.locator('[data-testid="rail-toggle"]')).toBeHidden();
+      }
+      await page.goto(`${harness.baseUrl}/requirements`, { waitUntil: 'domcontentloaded' });
+      const boardOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      expect(boardOverflow, `board at ${width}px`).toBeLessThanOrEqual(1);
+    }
+  } finally {
+    await harness.close();
+  }
+});
+
+test('the theme can be switched to light and back, without a reload', async ({ page }) => {
+  const harness: Harness = await startHarness();
+  try {
+    const project = harness.project;
+    if (project === null) throw new Error('the harness did not seed a project');
+    await pinStorage(page, { project, locale: 'en' });
+    await page.goto(`${harness.baseUrl}/settings/appearance`, { waitUntil: 'domcontentloaded' });
+    await loginThroughUi(page, harness.accessPassword);
+    const theme = (): Promise<string | null> => page.evaluate(() => document.documentElement.dataset['theme'] ?? null);
+    expect(await theme()).toBe('dark');
+    await page.getByRole('button', { name: 'Light' }).click();
+    expect(await theme()).toBe('light');
+    // The background really changed, not just an attribute: the token is applied by CSS.
+    const background = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    expect(background).not.toBe('rgb(13, 14, 17)');
+    await page.getByRole('button', { name: 'Dark' }).click();
+    expect(await theme()).toBe('dark');
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a long code fence scrolls inside its own box and never widens the transcript', async ({ page }) => {
+  // The markdown renderer emits bare <pre><code>; without its own overflow the widest line in a
+  // reply becomes the page's width, which is how a chat screen breaks on a phone.
+  const longLine = `const value = '${'x'.repeat(400)}';`;
+  const harness: Harness = await startHarness({
+    model: [{ kind: 'text', text: `示例：\n\n\`\`\`ts\n${longLine}\n\`\`\`\n 结束。` }],
+  });
+  try {
+    const project = harness.project;
+    if (project === null) throw new Error('the harness did not seed a project');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await pinStorage(page, { project, locale: 'en' });
+    await page.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' });
+    await loginThroughUi(page, harness.accessPassword);
+    const composer = page.locator('[data-testid="composer"]');
+    await composer.fill('show me a long line');
+    await composer.press('Enter');
+    await expect(page.locator('[data-testid="transcript"] .md pre').first()).toBeVisible({ timeout: 20_000 });
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(1);
+    // The fence really keeps the line: a wrapped or truncated block would also avoid overflow.
+    const fence = await page.locator('[data-testid="transcript"] .md pre').first().evaluate((el) => el.scrollWidth > el.clientWidth);
+    expect(fence).toBe(true);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('the task strip renders the coordinated Task and polls it', async ({ page }) => {
+  // The stub model cannot cite the authorization a real Task needs, so this test answers the two
+  // reads the strip depends on (`session.get` to restore the Task, `task.get` to poll it) and
+  // asserts the strip paints from them. It is a read stub, not a fake product path: the stream,
+  // the session and every write still go to the real server.
+  const harness: Harness = await startHarness();
+  try {
+    const project = harness.project;
+    if (project === null) throw new Error('the harness did not seed a project');
+    await page.addInitScript(() => {
+      const original = window.fetch;
+      const counters = { taskReads: 0 };
+      (window as unknown as { __counters: typeof counters }).__counters = counters;
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const body = typeof init?.body === 'string' ? init.body : '';
+        if (body.includes('"task.get"')) {
+          counters.taskReads += 1;
+          const envelope = JSON.parse(body) as { requestId: string };
+          return new Response(
+            JSON.stringify({
+              requestId: envelope.requestId,
+              result: {
+                task: { taskId: 't-1', type: 'write', phase: 'develop', status: 'active', revision: 3 },
+                members: [
+                  {
+                    sessionId: 's-m1',
+                    roleId: 'developer',
+                    phase: 'develop',
+                    label: 'developer',
+                    expectedKind: 'code',
+                    currentInputId: 'i-1',
+                    activity: 'processing',
+                  },
+                ],
+                results: [],
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (body.includes('"session.get"')) {
+          const envelope = JSON.parse(body) as { requestId: string };
+          return new Response(
+            JSON.stringify({
+              requestId: envelope.requestId,
+              result: {
+                session: {
+                  sessionId: 's',
+                  projectId: 'p',
+                  roleId: 'chief',
+                  currentTaskId: 't-1',
+                  revision: 1,
+                  activity: 'processing',
+                  currentInputId: 'i-1',
+                  lastActivityAt: null,
+                },
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return original(input, init);
+      };
+    });
+    await pinStorage(page, { project, locale: 'en' });
+    await page.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' });
+    await loginThroughUi(page, harness.accessPassword);
+
+    const strip = page.locator('[data-testid="task-strip"]');
+    await expect(strip).toBeVisible({ timeout: 15_000 });
+    await expect(strip).toContainText('t-1');
+    await expect(strip).toContainText('Develop');
+    await expect(strip).toContainText('Members 1');
+    await expect(page.locator('[data-testid="task-pause"]')).toBeVisible();
+    // The running member is reported, which is what the status bar counts.
+    await expect(strip).toContainText('Running');
+
+    // More than one read proves the poll loop is live rather than a one-off on snapshot.
+    const first = await page.evaluate(() => (window as unknown as { __counters: { taskReads: number } }).__counters.taskReads);
+    expect(first).toBeGreaterThanOrEqual(1);
+    await page.waitForTimeout(3_500);
+    const second = await page.evaluate(() => (window as unknown as { __counters: { taskReads: number } }).__counters.taskReads);
+    expect(second).toBeGreaterThan(first);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a Task that appears while the chief is working is picked up without a reload', async ({ page }) => {
+  // Task creation happens inside the chief's own run and publishes no invalidate, so the shell
+  // must ask again while the session is working. The two reads are stubbed to answer "no Task"
+  // first and "Task t-late" afterwards: only the discovery path can make the strip appear.
+  const harness: Harness = await startHarness({ model: [{ kind: 'text', text: '好的。' }] });
+  try {
+    const project = harness.project;
+    if (project === null) throw new Error('the harness did not seed a project');
+    await page.addInitScript(() => {
+      const original = window.fetch;
+      const state = { sessionReads: 0 };
+      (window as unknown as { __state: typeof state }).__state = state;
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const body = typeof init?.body === 'string' ? init.body : '';
+        const envelope = body.startsWith('{') ? (JSON.parse(body) as { requestId: string }) : null;
+        if (envelope !== null && body.includes('"session.get"')) {
+          state.sessionReads += 1;
+          return new Response(
+            JSON.stringify({
+              requestId: envelope.requestId,
+              result: {
+                session: {
+                  sessionId: 's',
+                  projectId: 'p',
+                  roleId: 'chief',
+                  currentTaskId: state.sessionReads > 1 ? 't-late' : null,
+                  revision: 1,
+                  activity: 'processing',
+                  currentInputId: 'i-1',
+                  lastActivityAt: null,
+                },
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (envelope !== null && body.includes('"task.get"')) {
+          return new Response(
+            JSON.stringify({
+              requestId: envelope.requestId,
+              result: {
+                task: { taskId: 't-late', type: 'write', phase: 'develop', status: 'active', revision: 1 },
+                members: [],
+                results: [],
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return original(input, init);
+      };
+    });
+    await pinStorage(page, { project, locale: 'en' });
+    await page.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' });
+    await loginThroughUi(page, harness.accessPassword);
+
+    const composer = page.locator('[data-testid="composer"]');
+    await composer.fill('开工');
+    await composer.press('Enter');
+
+    const strip = page.locator('[data-testid="task-strip"]');
+    await expect(strip).toContainText('t-late', { timeout: 15_000 });
   } finally {
     await harness.close();
   }

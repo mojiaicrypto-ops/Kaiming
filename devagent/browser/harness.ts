@@ -17,11 +17,11 @@ import { createStubEnv, startStubModelServer, type StubReply } from '../spikes/h
 const RPC_PATH = '/api/v1/rpc';
 const CSRF_HEADER = 'x-agentdev-csrf';
 
-/** localStorage keys the browser bootstrap (`web/app.js`) reads on boot. */
+/** localStorage keys the shell reads on boot (project, session, interface language). */
 export const STORAGE_KEYS = {
   projectPath: 'agentdev.projectPath',
   sessionId: 'agentdev.sessionId',
-  language: 'agentdev.language',
+  language: 'agentdev.locale',
 } as const;
 
 interface RpcSession {
@@ -173,13 +173,14 @@ export async function startHarness(
 }
 
 /**
- * Log in through the real login dialog (`#appDialog` opened by `web/app.js`), the same way a person
- * does; the dialog closes only when the server accepted the password.
+ * Log in through the real login screen, the same way a person does; it disappears only when the
+ * server accepted the password (the shell then paints the workspace).
  */
 export async function loginThroughUi(page: Page, accessPassword: string): Promise<void> {
-  const input = page.locator('#appDialog #accessPassword');
+  const input = page.locator('[data-testid="password"]');
+  if ((await page.locator('[data-testid="composer"]').count()) > 0) return;
   await input.waitFor({ state: 'visible' });
   await input.fill(accessPassword);
-  await page.locator('#appDialog .dialog-actions button.primary').click();
-  await expect(page.locator('#appDialog')).not.toBeVisible();
+  await page.locator('[data-testid="login"]').click();
+  await expect(input).not.toBeVisible();
 }

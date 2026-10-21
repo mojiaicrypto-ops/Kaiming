@@ -1,39 +1,52 @@
 /**
- * Browser acceptance (P4-i): the real workbench, a real Chromium and a real model endpoint.
+ * Browser acceptance: the real workbench, a real Chromium and a real model endpoint.
  *
  * These are the product's own acceptance steps (docs/productnew/acceptance.md) driven through the
- * browser: they prove what unit tests cannot - that the page really talks to the server, renders what
- * the server holds, answers questions and keeps working when the reader leaves.
+ * browser: they prove what unit tests cannot - that the page really talks to the server, renders
+ * what the server holds, answers questions and keeps working when the reader leaves.
  */
-import { symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { STORAGE_KEYS, loginThroughUi, startHarness } from './harness.ts';
+import { loginThroughUi, startHarness } from './harness.ts';
 
-test.describe.configure({ mode: 'serial' });
+/** Open the seeded project through the switcher (the first thing a user does). */
+async function openProject(page: Page, projectPath: string): Promise<void> {
+  await page.locator('[data-testid="project-switcher"]').click();
+  await page.locator('[data-testid="project-path"]').fill(projectPath);
+  await page.locator('[data-testid="project-path"]').press('Enter');
+  await expect(page.locator('[data-testid="project-switcher"]')).toContainText('project');
+  await expect(page.locator('[data-testid="composer"]')).toBeEnabled();
+}
 
-test('a project opens into its real state and the eight views render', async ({ page }) => {
+test('a project opens into its real state and every screen renders', async ({ page }) => {
   const harness = await startHarness();
   try {
     await page.goto(harness.url);
     await loginThroughUi(page, harness.accessPassword);
     expect(harness.project).not.toBeNull();
+    await openProject(page, harness.project?.projectPath ?? '');
 
-    // Open the project the server already knows (the switcher asks for the real path).
-    await page.locator('#projectSwitcher').click();
-    await page.locator('#projectPathInput').fill(harness.project?.projectPath ?? '');
-    await page.locator('#appDialog .dialog-actions button.primary').click();
+    // The shell is the TUI's: three screens in the header, one status line below.
+    await expect(page.locator('.top .nav a')).toHaveCount(3);
+    await expect(page.locator('.status .path')).toContainText('project');
 
-    await expect(page.locator('#projectName')).not.toHaveText('');
-    await expect(page.locator('#projectBranch')).toContainText(harness.project?.projectPath ?? '');
-    await expect(page.locator('.nav-item[data-view]')).toHaveCount(8);
+    await page.locator('.nav a[href="/requirements"]').click();
+    await expect(page.locator('[data-testid="board"]')).toBeVisible();
+    await expect(page.locator('[data-testid="board"] .colm')).toHaveCount(4);
 
-    for (const view of ['requirements', 'runs', 'inbox', 'files', 'docs', 'agents', 'settings']) {
-      await page.locator(`.nav-item[data-view="${view}"]`).click();
-      await expect(page.locator(`#${view}View`)).toBeVisible();
-    }
-    await page.screenshot({ path: test.info().outputPath('views.png'), fullPage: true });
+    await page.locator('.nav a[href="/settings/providers"]').click();
+    await expect(page.locator('[data-testid="providers"]')).toBeVisible();
+    await page.locator('[data-testid="settings-tab-models"]').click();
+    await expect(page.locator('[data-testid="models"]')).toBeVisible();
+    await page.locator('[data-testid="settings-tab-appearance"]').click();
+    await expect(page.locator('[data-testid="appearance"]')).toBeVisible();
+
+    // The address bar is the route: a reload lands on the same pane, not on chat.
+    await page.reload();
+    await expect(page.locator('[data-testid="appearance"]')).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath('screens.png'), fullPage: true });
   } finally {
     await harness.close();
   }
@@ -46,24 +59,24 @@ test('a submitted input reaches the transcript and the run answers', async ({ pa
     await loginThroughUi(page, harness.accessPassword);
     await openProject(page, harness.project?.projectPath ?? '');
 
-    const composer = page.locator('#messageInput');
+    const composer = page.locator('[data-testid="composer"]');
     await composer.fill('先讨论，不开始开发');
     await composer.press('Enter');
 
-    await expect(page.locator('#projectMessages .message.user')).toHaveCount(1, { timeout: 15_000 });
-    // The assistant answer arrives through the live stream, not from a re-read - and exactly once:
-    // the streamed partial and its finished message must be the same node, not two.
-    await expect(page.locator('#projectMessages .message.assistant .markdown-body').last()).toContainText('我们先讨论', {
+    await expect(page.locator('[data-testid="transcript"] .m.user')).toHaveCount(1, { timeout: 15_000 });
+    // The answer arrives through the live stream, not from a re-read - and exactly once: the
+    // streamed partial and its finished message are the same node, not two.
+    await expect(page.locator('[data-testid="transcript"] .m.chief .md').last()).toContainText('我们先讨论', {
       timeout: 20_000,
     });
-    await expect(page.locator('#projectMessages .message.assistant')).toHaveCount(1);
+    await expect(page.locator('[data-testid="transcript"] .m.chief')).toHaveCount(1);
     await page.screenshot({ path: test.info().outputPath('conversation.png') });
   } finally {
     await harness.close();
   }
 });
 
-test('a question is answered in the browser and the model continues', async ({ page }) => {
+test('a question is answered in the panel and the model continues', async ({ page }) => {
   const harness = await startHarness({
     model: [
       {
@@ -87,34 +100,24 @@ test('a question is answered in the browser and the model continues', async ({ p
     await loginThroughUi(page, harness.accessPassword);
     await openProject(page, harness.project?.projectPath ?? '');
 
-    const composer = page.locator('#messageInput');
+    const composer = page.locator('[data-testid="composer"]');
     await composer.fill('整理一下需求');
     await composer.press('Enter');
 
-    const card = page.locator('.interaction-card').first();
-    await expect(card).toBeVisible({ timeout: 20_000 });
-    await expect(card).toContainText('是否将讨论内容加入需求列表');
-    await card.getByRole('button', { name: '加入', exact: true }).click();
+    const panel = page.locator('[data-testid="question-panel"]');
+    await expect(panel).toBeVisible({ timeout: 20_000 });
+    await expect(panel).toContainText('是否将讨论内容加入需求列表');
+    // The panel is docked above the composer, not floating over the transcript.
+    await panel.getByRole('button', { name: /加入/ }).first().click();
 
-    await expect(page.locator('.interaction-card')).toHaveCount(0, { timeout: 15_000 });
-    await expect(page.locator('#projectMessages .message.assistant .markdown-body').last()).toContainText(
-      '已按你的选择继续',
-      { timeout: 20_000 },
-    );
-    // One tool call, one card: the call card flips to its result instead of a second card appearing,
-    // and the result body is the tool's real text (never a stringified object).
-    await expect(page.locator('#projectMessages .tool-card')).toHaveCount(1);
-    const toolCard = page.locator('#projectMessages .tool-card');
-    await expect(toolCard).toHaveClass(/is-done/);
-    // It is the call's own card (same call id, arguments still shown), not a fresh result card.
-    await expect(toolCard).toHaveAttribute('data-call-id', /^call_/);
-    await expect(toolCard.locator('.tool-name')).toHaveText('question');
-    await expect(toolCard.locator('.tool-args')).toContainText('"method":"select"');
-    // The flipped card shows the tool's own output, not a stringified result object.
-    const result = page.locator('#projectMessages .tool-card .tool-result');
-    await expect(result).toBeVisible();
-    await expect(result).toContainText('interactionId=');
-    await expect(result).not.toContainText('[object Object]');
+    // The answered card stays (its echo is the proof the reply was recorded), in the user's language.
+    await expect(panel).toContainText('Answer received', { timeout: 15_000 });
+    await expect(page.locator('[data-testid="transcript"] .m.chief .md').last()).toContainText('已按你的选择继续', {
+      timeout: 20_000,
+    });
+    // One tool call, one line: the question row flips to its answer instead of a second node.
+    await expect(page.locator('[data-testid="transcript"] .askline')).toHaveCount(1);
+    await expect(page.locator('[data-testid="transcript"] .askline')).toHaveClass(/ok/);
     await page.screenshot({ path: test.info().outputPath('answered.png') });
   } finally {
     await harness.close();
@@ -128,26 +131,28 @@ test('a second Enter while the first submit is in flight does not submit twice',
     await loginThroughUi(page, harness.accessPassword);
     await openProject(page, harness.project?.projectPath ?? '');
 
-    const composer = page.locator('#messageInput');
+    const composer = page.locator('[data-testid="composer"]');
+    // Wait for the stream to be really open: pressing Enter while the session is still connecting
+    // measures the reconnect path, not the double-submit guard this test is about.
+    await expect(page.locator('.top .st')).toHaveText(/Connected/, { timeout: 15_000 });
     await composer.fill('只发一次');
     // Two Enter presses dispatched in the same task: the second really happens while the first is
     // still in flight, which is what the guard exists for.
     await page.evaluate(() => {
-      const field = document.querySelector('#messageInput');
+      const field = document.querySelector('[data-testid="composer"]');
       for (let index = 0; index < 2; index += 1) {
-        field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+        field?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
       }
     });
 
-    await expect(page.locator('#projectMessages .message.user')).toHaveCount(1, { timeout: 15_000 });
-    await expect(page.locator('#projectMessages .message.user')).toHaveCount(1);
+    await expect(page.locator('[data-testid="transcript"] .m.user')).toHaveCount(1, { timeout: 15_000 });
     // The server really holds one input: the snapshot is the server's own view of it.
     const stored = await page.evaluate(async () => {
-      const client = window.__agentdev;
-      const prepared = await client.rpc.call('session.stream.prepare', {
-        projectId: client.store.projectId,
-        sessionId: client.store.sessionId,
-      });
+      const handle = (window as unknown as { __agentdev: { rpc: { call: (m: string, p: Record<string, unknown>) => Promise<unknown> }; workspace: { projectId: string; sessionId: string } } }).__agentdev;
+      const prepared = (await handle.rpc.call('session.stream.prepare', {
+        projectId: handle.workspace.projectId,
+        sessionId: handle.workspace.sessionId,
+      })) as { snapshot: { inputs: unknown[] } };
       return prepared.snapshot.inputs.length;
     });
     expect(stored).toBe(1);
@@ -156,7 +161,7 @@ test('a second Enter while the first submit is in flight does not submit twice',
   }
 });
 
-test('a business refusal does not break writing, and no view shows a raw translation key', async ({ page }) => {
+test('a business refusal does not break writing, and no screen shows a raw translation key', async ({ page }) => {
   const harness = await startHarness({ model: [{ kind: 'text', text: '很好。' }] });
   try {
     await page.goto(harness.url);
@@ -169,15 +174,12 @@ test('a business refusal does not break writing, and no view shows a raw transla
     writeFileSync(join(projectPath, 'real.txt'), 'inside\n');
     symlinkSync('/etc/hosts', join(projectPath, 'escape.txt'));
     const refusal = await page.evaluate(async () => {
-      const client = window.__agentdev;
+      const handle = (window as unknown as { __agentdev: { rpc: { call: (m: string, p: Record<string, unknown>) => Promise<unknown>; csrfToken: string | null }; workspace: { projectId: string } } }).__agentdev;
       try {
-        await client.rpc.call('project.files.read', {
-          projectId: window.__agentdev.store.projectId,
-          path: 'escape.txt',
-        });
-        return { code: 'none', tokenAfter: client.rpc.csrfToken };
+        await handle.rpc.call('project.files.read', { projectId: handle.workspace.projectId, path: 'escape.txt' });
+        return { code: 'none', tokenAfter: handle.rpc.csrfToken };
       } catch (error) {
-        return { code: error.code ?? 'unknown', tokenAfter: client.rpc.csrfToken };
+        return { code: (error as { code?: string }).code ?? 'unknown', tokenAfter: handle.rpc.csrfToken };
       }
     });
     expect(refusal.code).toBe('FORBIDDEN');
@@ -185,20 +187,29 @@ test('a business refusal does not break writing, and no view shows a raw transla
     expect(refusal.tokenAfter).not.toBeNull();
 
     // Writing still works afterwards.
-    const composer = page.locator('#messageInput');
+    const composer = page.locator('[data-testid="composer"]');
     await composer.fill('还能写');
     await composer.press('Enter');
-    await expect(page.locator('#projectMessages .message.user')).toHaveCount(1, { timeout: 15_000 });
+    await expect(page.locator('[data-testid="transcript"] .m.user')).toHaveCount(1, { timeout: 15_000 });
 
-    // No shell copy claims a number nothing updates (the dock label was a static "Live · 1").
-    await expect(page.locator('#liveDockButton')).not.toHaveAttribute('aria-label', /\d/);
-    await expect(page.locator('#liveDockButton span').last()).not.toHaveText(/\d/);
-
-    // No visible view shows a raw key (e.g. 'inbox.empty' or 'settings.noProject') instead of copy.
-    for (const view of ['inbox', 'agents', 'settings', 'requirements', 'runs', 'docs']) {
-      await page.locator(`.nav-item[data-view="${view}"]`).click();
-      const text = (await page.locator(`#${view}View`).innerText()).trim();
-      expect(text).not.toMatch(/^[a-z][a-zA-Z]+\.[a-zA-Z.]+$/m);
+    // No visible screen shows a raw key (e.g. `req.title`) instead of copy: wait for the pane to
+    // paint, then scan every line — a key can appear mid-line, not only as a whole line.
+    const panes: ReadonlyArray<readonly [string, string]> = [
+      ['/requirements', '[data-testid="board"]'],
+      ['/settings/providers', '[data-testid="providers"]'],
+      ['/settings/models', '[data-testid="models"]'],
+      ['/settings/appearance', '[data-testid="appearance"]'],
+      ['/', '[data-testid="composer"]'],
+    ];
+    for (const [path, ready] of panes) {
+      await page.goto(`${harness.baseUrl}${path}`);
+      // The live stream keeps the connection busy, so "network idle" never arrives: wait for the
+      // pane that owns the screen instead.
+      await expect(page.locator(ready)).toBeVisible();
+      const text = (await page.locator('body').innerText()).trim();
+      const keys = text.split('\n').flatMap((line) => line.match(/\b[a-z][a-zA-Z]*(?:\.[a-zA-Z]+)+\b/g) ?? []);
+      // A dotted token on screen is only legitimate as a file path or a model id.
+      expect(keys.filter((token) => !token.includes('/') && !/^[a-z]+\.[0-9]/.test(token))).toEqual([]);
     }
   } finally {
     await harness.close();
@@ -212,26 +223,102 @@ test('the reader may leave: the work keeps running and the page can come back', 
     await loginThroughUi(page, harness.accessPassword);
     await openProject(page, harness.project?.projectPath ?? '');
 
-    const composer = page.locator('#messageInput');
+    const composer = page.locator('[data-testid="composer"]');
     await composer.fill('开始吧');
     await composer.press('Enter');
-    await expect(page.locator('#projectMessages .message.user')).toHaveCount(1, { timeout: 15_000 });
+    await expect(page.locator('[data-testid="transcript"] .m.user')).toHaveCount(1, { timeout: 15_000 });
 
     // Leave the page entirely and come back: the conversation is re-read from the server, not from
     // anything the first page kept (M4: a disconnect destroys the buffer, never the work).
     await page.goto('about:blank');
     await page.goto(harness.url);
-    await expect(page.locator('#messages .message, #projectMessages .message')).not.toHaveCount(0, { timeout: 20_000 });
+    await expect(page.locator('[data-testid="transcript"] .m')).not.toHaveCount(0, { timeout: 20_000 });
     await page.screenshot({ path: test.info().outputPath('returned.png') });
   } finally {
     await harness.close();
   }
 });
 
-/** Open the seeded project through the switcher dialog (the first thing a user does). */
-async function openProject(page: Page, projectPath: string): Promise<void> {
-  await page.locator('#projectSwitcher').click();
-  await page.locator('#projectPathInput').fill(projectPath);
-  await page.locator('#appDialog .dialog-actions button.primary').click();
-  await expect(page.locator('#projectName')).not.toHaveText('');
-}
+test('a rejected tool call stays visible with its reason', async ({ page }) => {
+  // A task call that the server refuses must not vanish: a call that disappears takes its error
+  // with it, and the user cannot tell a refusal from a silent success.
+  const harness = await startHarness({
+    model: [
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'task',
+            arguments: JSON.stringify({ op: 'create', type: 'read', goal: 'g', scope: 's', planMarkdown: '# p' }),
+          },
+        ],
+      },
+      { kind: 'text', text: '没有建立任务。' },
+    ],
+  });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    await page.locator('[data-testid="composer"]').fill('建个任务');
+    await page.locator('[data-testid="composer"]').press('Enter');
+
+    const failed = page.locator('[data-testid="transcript"] .tc.failed');
+    await expect(failed).toHaveCount(1, { timeout: 20_000 });
+    await expect(failed.locator('.tn')).toContainText('task');
+    await expect(failed).toContainText('authorizationRef');
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a proposal opens with its own sections, and an unparsable file says why', async ({ page }) => {
+  const harness = await startHarness();
+  try {
+    const projectPath = harness.project?.projectPath ?? '';
+    const dir = join(projectPath, '.dev', 'requirements');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'PRO-1.md'),
+      [
+        '---',
+        'schemaVersion: 2',
+        'id: PRO-1',
+        'kind: proposal',
+        'title: Password reset proposal',
+        'status: pending',
+        'createdAt: "2026-10-01T00:00:00Z"',
+        'updatedAt: "2026-10-01T00:00:00Z"',
+        '---',
+        '',
+        '## 目标',
+        'Self-service reset.',
+        '',
+        '## 来源与决定',
+        'From session 10:47.',
+        '',
+        '## 处理记录',
+        'Nothing yet.',
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(join(dir, 'BROKEN.md'), '---\nid: BROKEN\nkind: proposal\n');
+
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, projectPath);
+    await page.goto(`${harness.baseUrl}/requirements`);
+
+    // The unparsable record is visible as a notice, not silently dropped.
+    await expect(page.locator('.notice')).toContainText('BROKEN.md');
+    await page.locator('[data-testid="requirement-card"]').first().click();
+
+    // A proposal body is 目标 / 来源与决定 / 处理记录 — none of it may be dropped.
+    const drawer = page.locator('.drawer .db');
+    await expect(drawer).toContainText('Self-service reset', { timeout: 10_000 });
+    await expect(drawer).toContainText('From session 10:47');
+    await expect(drawer).toContainText('Nothing yet');
+  } finally {
+    await harness.close();
+  }
+});
