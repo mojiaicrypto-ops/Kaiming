@@ -534,6 +534,12 @@ function requireSession(store: Store, projectId: string, sessionId: string) {
           ? `Task ${current.taskId}`
           : null,
     task: task === undefined ? null : { taskId: task.id, type: task.type, phase: task.phase, status: task.status },
+    // Last activity, from the input rows that already exist: the session list needs a stamp the
+    // database does not keep per row, and deriving it here avoids a second source of truth.
+    lastActivityAt: inputs.reduce<string | null>(
+      (latest, input) => (latest === null || input.updatedAt > latest ? input.updatedAt : latest),
+      null,
+    ),
   };
 }
 

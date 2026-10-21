@@ -20,10 +20,12 @@ export interface WorkbenchServerOptions {
   readonly router: RpcRouter;
   /** Live session events (M4); without a hub the stream route is not mounted. */
   readonly hub?: SessionEventHub;
-  /** Directory served at `/` (the workbench UI); absent means no static surface yet. */
+  /**
+   * Directory served at `/` (the workbench UI); absent means no static surface yet. Every
+   * unknown path falls back to its `index.html`, because the shell owns client routes such as
+   * `/requirements` and `/settings/models`.
+   */
   readonly staticDir?: string;
-  /** Directory served at `/app/` (the React shell build); absent means the route is not mounted. */
-  readonly appStaticDir?: string;
   readonly bodyLimitBytes?: number;
   /** Origin allowed to call this server; defaults to the request's own host (same-origin). */
   readonly allowedOrigin?: (requestOrigin: string, host: string | undefined) => boolean;
@@ -66,22 +68,29 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
       return;
     }
     if (request.method === 'GET' || request.method === 'HEAD') {
+      // The old `/app` prefix was the migration address of the React shell; it is now the only
+      // shell, so a bookmark of `/app/...` is sent to the same path without the prefix. The query
+      // string travels with it: `/app/requirements?selected=X` must not lose its selection.
       if (path === '/app' || path.startsWith('/app/')) {
-        if (options.appStaticDir !== undefined) {
-          // '/app' and '/app/' both resolve to the shell; deeper paths map below the app root.
-          const subPath = path === '/app' || path === '/app/' ? '/index.html' : path.slice('/app'.length);
-          if (await serveStatic(request, response, subPath, options.appStaticDir)) {
-            return;
-          }
-          // SPA fallback: the client router owns sub-paths; the shell is always index.html.
-          if (await serveStatic(request, response, '/index.html', options.appStaticDir)) {
-            return;
-          }
-        }
-        writeJson(response, 404, { requestId: 'unknown', error: { code: 'NOT_FOUND', message: 'the /app surface is not built' } });
+        const rest = path.slice('/app'.length).replace(/^\/+/, '');
+        const query = url.slice(path.length);
+        response.writeHead(301, { location: `/${rest}${query}` });
+        response.end();
         return;
       }
-      if (await serveStatic(request, response, path)) {
+      // `/` and directories need their index.html; serveStatic only answers real files.
+      if (await serveStatic(request, response, path === '/' || path.endsWith('/') ? `${path}index.html` : path)) {
+        return;
+      }
+      // Client routes (`/requirements`, `/settings/models`) are not files: the shell must load
+      // and read the address bar itself, so an unknown path serves index.html. An API path never
+      // falls back — `/api/...` answered with HTML would look like a success to a naive client.
+      if (
+        options.staticDir !== undefined &&
+        !path.includes('.') &&
+        !path.startsWith('/api/') &&
+        (await serveStatic(request, response, '/index.html'))
+      ) {
         return;
       }
     }

@@ -253,13 +253,9 @@ export function startWorkbench(options: StartOptions): Promise<{
     auth,
     router,
     hub,
-    // The browser surface is served from the same origin (R1); defaults to the shipped UI directory.
-    staticDir: options.staticDir ?? resolve(here, '../../web'),
-    // The React shell (webapp build) mounts at /app/ when its build output exists: two shells
-    // coexist during the migration, the old one keeps serving /.
-    ...(existsSync(resolve(here, '../../web-static/app/index.html'))
-      ? { appStaticDir: resolve(here, '../../web-static/app') }
-      : {}),
+    // The browser surface is served from the same origin (R1). The React build output is the
+    // whole shell now: `web-static/index.html` plus hashed assets, mounted at `/`.
+    staticDir: options.staticDir ?? resolve(here, '../../web-static'),
   });
   return workbench.listen(options.port, options.host ?? '127.0.0.1').then(({ origin, port }) => {
     worker.start();

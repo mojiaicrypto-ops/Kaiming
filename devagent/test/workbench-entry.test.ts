@@ -4,9 +4,10 @@
  * never carries an event - is invisible to every test that assembles its own stack, so this one uses
  * the entry point verbatim and asserts that a real run really reaches a reader.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startWorkbench } from '../src/server/main.ts';
 import {
@@ -418,4 +419,35 @@ describe('a chief run aborted by the watchdog', () => {
     }
     expect(messages.filter((message) => message.role === 'assistant').length).toBeGreaterThanOrEqual(2);
   }, 60_000);
+});
+
+/**
+ * The operator's entry point serves the built shell at `/`. The build is produced by
+ * `webapp/vite build`; this test builds into a temp directory only when the real output exists,
+ * so it never fabricates a shell the operator would not have.
+ */
+describe('workbench shell surface', () => {
+  // The build is a prerequisite, not a maybe: skipping silently would let a fresh checkout pass a
+  // suite whose shell does not exist. `npm run build` is part of the documented test sequence.
+  const shellDir = fileURLToPath(new URL('../web-static', import.meta.url));
+  const built = existsSync(join(shellDir, 'index.html'));
+
+  it('serves the built shell at / and falls back to it for client routes', async () => {
+    expect(built, 'web-static/index.html is missing: run `npm run build` first').toBe(true);
+    const dataDir = mkdtempSync(join(tmpdir(), 'devagent-shell-'));
+    const running = await startWorkbench({ dataDir, accessPassword: 'shell-secret', port: 0 });
+    cleanups.push(async () => {
+      await running.close();
+      rmSync(dataDir, { recursive: true, force: true });
+    });
+    const root = await fetch(`${running.origin}/`);
+    expect(root.status).toBe(200);
+    expect(await root.text()).toContain('id="root"');
+    const route = await fetch(`${running.origin}/requirements`);
+    expect(route.status).toBe(200);
+    expect(await route.text()).toContain('id="root"');
+    const moved = await fetch(`${running.origin}/app/settings/models`, { redirect: 'manual' });
+    expect(moved.status).toBe(301);
+    expect(moved.headers.get('location')).toBe('/settings/models');
+  });
 });

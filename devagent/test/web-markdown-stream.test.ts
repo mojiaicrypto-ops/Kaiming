@@ -1,57 +1,49 @@
+/**
+ * The streaming markdown splitter: a fenced block that has not closed yet must render as a growing
+ * code block, never flash as a mis-parsed paragraph, and a finished fence must render once with the
+ * whole body. This is the behaviour the transcript depends on while an answer is arriving.
+ */
 import { describe, expect, it } from 'vitest';
-// @ts-expect-error - the browser module is plain ESM JavaScript (no types shipped with the UI)
-import { MarkdownStream, escapeHtml, heldBackTail } from '../web/components/stream/markdown-stream.js';
+// The splitter is a pure function living next to the React renderer; the server's tsconfig has no
+// JSX, so the module is imported as JS and typed by the local interface below.
+// @ts-expect-error - .tsx module under the browser tsconfig (webapp/tsconfig.json owns its types)
+import { splitTopLevelFences as rawSplitter } from '../webapp/src/chat/Markdown.tsx';
 
-/** A markdown-it stand-in that records what it was asked to parse (the real one is vendored). */
-function fakeMarkdown(): { readonly parsed: string[]; render(text: string): string } {
-  const parsed: string[] = [];
-  return {
-    parsed,
-    render(text) {
-      parsed.push(text);
-      return `<p>${escapeHtml(text)}</p>`;
-    },
-  };
-}
+type Block = { kind: 'text'; text: string } | { kind: 'fence'; code: string; language: string };
+const splitTopLevelFences = rawSplitter as (text: string) => Block[];
 
-describe('markdown stream', () => {
-  it('holds back an unclosed fence until it closes', () => {
-    const stream = new MarkdownStream({ markdownIt: fakeMarkdown() });
-
-    stream.append('前言\n\n```ts\nconst a = 1;\n');
-
-    // The fence swallows the tail: only the prose before it is parsed.
-    expect(heldBackTail(stream.text)).toBe('```ts\nconst a = 1;\n');
-    expect(stream.stablePrefix().stable).toBe('前言\n\n');
-
-    stream.append('const b = 2;\n```\n');
-
-    expect(heldBackTail(stream.text)).toBe('');
-    expect(stream.stablePrefix().stable).toBe('前言\n\n```ts\nconst a = 1;\nconst b = 2;\n```\n');
+describe('splitTopLevelFences', () => {
+  it('keeps an unclosed fence as a growing code block', () => {
+    const blocks = splitTopLevelFences('前言\n\n```ts\nconst a = 1;\n');
+    expect(blocks).toEqual([
+      { kind: 'text', text: '前言\n' },
+      { kind: 'fence', code: 'const a = 1;', language: 'ts' },
+    ]);
   });
 
-  it('holds back an unfinished table row and a dangling inline marker', () => {
-    expect(heldBackTail('| a | b |\n| - | - |\n| 1 ')).toBe('| 1 ');
-    expect(heldBackTail('some **bold')).toBe('**bold');
-    // A completed line is stable.
-    expect(heldBackTail('| a | b |\n')).toBe('');
-    expect(heldBackTail('**bold** done\n')).toBe('');
+  it('closes the fence when the terminator arrives and keeps the following prose', () => {
+    const blocks = splitTopLevelFences('前言\n\n```ts\nconst a = 1;\n```\n\n后记\n');
+    expect(blocks).toEqual([
+      { kind: 'text', text: '前言\n' },
+      { kind: 'fence', code: 'const a = 1;', language: 'ts' },
+      { kind: 'text', text: '\n\n后记\n' },
+    ]);
   });
 
-  it('renders the held tail as pending text and replaces it when the block completes', () => {
-    const markdown = fakeMarkdown();
-    const stream = new MarkdownStream({ markdownIt: markdown });
-    stream.append('| a | b |\n| 1 ');
+  it('handles several fences in one message and a fence with no language', () => {
+    const blocks = splitTopLevelFences('```\nplain\n```\n\n中间\n\n```js\nlet x = 1;\n```\n');
+    expect(blocks.filter((block) => block.kind === 'fence')).toEqual([
+      { kind: 'fence', code: 'plain', language: '' },
+      { kind: 'fence', code: 'let x = 1;', language: 'js' },
+    ]);
+    // The opening fence line consumes its own newline, so the prose between the fences keeps one.
+    expect(blocks.filter((block) => block.kind === 'text').map((block) => (block.kind === 'text' ? block.text : ''))).toEqual([
+      '\n\n中间\n',
+      '\n',
+    ]);
+  });
 
-    const interim = stream.render();
-    expect(interim).toContain('stream-pending');
-    expect(markdown.parsed).toEqual(['| a | b |\n']);
-
-    stream.finish('| a | b |\n| - | - |\n| 1 | 2 |\n');
-    const final = stream.render();
-
-    // The finished render is authoritative: the whole document, once, with no pending fragment.
-    expect(final).not.toContain('stream-pending');
-    expect(markdown.parsed[markdown.parsed.length - 1]).toBe('| a | b |\n| - | - |\n| 1 | 2 |\n');
+  it('returns one text block for text without fences', () => {
+    expect(splitTopLevelFences('just prose')).toEqual([{ kind: 'text', text: 'just prose' }]);
   });
 });

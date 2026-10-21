@@ -1719,15 +1719,16 @@ export class Store {
     });
   }
 
-  listSessions(): Array<{ id: string; projectId: string; roleId: string; cwd: string; revision: number }> {
+  listSessions(): Array<{ id: string; projectId: string; roleId: string; cwd: string; revision: number; updatedAt: string }> {
     return this.db
-      .prepare('SELECT id, projectId, roleId, cwd, revision FROM sessions ORDER BY id')
+      .prepare('SELECT id, projectId, roleId, cwd, revision, updatedAt FROM sessions ORDER BY id')
       .all() as unknown as Array<{
       id: string;
       projectId: string;
       roleId: string;
       cwd: string;
       revision: number;
+      updatedAt: string;
     }>;
   }
 
