@@ -1,230 +1,214 @@
-# UI 前端整体重构 · Plan
+# Plan · UI 一次性重构（TUI 高保真 + 全渲染能力 + 多语言 + 响应式）
 
-状态:待授权。依据:`docs/productnew/`(产品行为)、`docs/technicalnew/`(M4 快照/事件、M5 交互)、
-`devagent/webapp/`(已在迁移中的 React 外壳)、`devagent/web/`(在用旧外壳)。
+```yaml
+plan:
+  task: ui-refactor-20261021
+  status: Awaiting Plan Confirmation
+  goal: >
+    用 docs/design/tui 的布局与设计语言重建工作台前端，一次性替换现有两套外壳：
+    / 即新壳（无 /app 前缀），旧壳 web/ 与 web-static/app 删除；
+    保留 webapp 现有 chat 渲染的全部能力；en/zh-CN 双语；五档响应式。
+```
 
-## 0. 先纠正一个前提
+## 1. 验收标准（可观察）
 
-本轮之前判断"前端零构建、应保持 vanilla"是错的。事实:
-
-| 项 | 事实 | 证据 |
+| 编号 | 验收 | 观察方式 |
 |---|---|---|
-| 构建工具 | 已使用 **Vite 7 + React 19**(`@vitejs/plugin-react`) | `devagent/webapp/package.json`、`vite.config.ts` |
-| 产物 | `webapp` → `../web-static/app`,`base=/app/` | `vite.config.ts` |
-| 服务 | `/app/*` 由服务端托管并带 SPA 回退 | `src/server/http.ts:70-79` |
-| 旧外壳 | `/` 仍由 `devagent/web/`(vanilla, 5.6k 行)提供 | `src/server/main.ts:259` |
-| 迁移状态 | React 只覆盖主管会话(transcript/task/interaction/drawer),其余 7 个视图仍在旧外壳 | `webapp/src/components/`、`web/views/` |
-| 产物入库 | `devagent/web-static/` 在 `.gitignore`,属本地构建产物 | `devagent/.gitignore:1` |
+| A1 | `/` 打开即新壳；`/app`、`/app/*` 301 到 `/` | curl + 浏览器 |
+| A2 | 顶栏含：字标、项目切换按钮（开对话框）、三导航标签、连接态 | 截图 + DOM |
+| A3 | 状态栏含：项目路径、分支、运行中 Agent 数、快捷键提示 | 截图 |
+| A4 | 会话页：左列会话（派生标题+状态符号+相对时间+新建）、横幅、任务条、转录、问题面板、队列、composer、成员抽屉 | 逐项截图 |
+| A5 | 转录渲染 TUI 全部 9 类消息 + 10 类工具/业务对象 | 场景脚本 + 截图 |
+| A6 | 保留能力 R1/R5/R6/R9/R11/R13 全部可观察 | 断线重连、上滚锁定、长代码、带 taskId 提交、中文 IME、离线横幅 |
+| A7 | 需求页：四列看板 + 解析失败通知 + 两型抽屉字段不同 | 截图 |
+| A8 | 设置页：Providers / Models / Appearance 三页；Appearance 含主题+语言+密度 | 截图 |
+| A9 | 语言切换即时生效，无刷新；两语键集合差异为 0 | 脚本断言 |
+| A10 | 五档视口（1440/1024/860/390/320）无横向溢出、关键操作可达 | 五档截图 |
+| A11 | 旧壳目录与旧构建产物不存在；仓库无残留引用 | grep + 构建 |
+| A12 | 现有浏览器验收场景迁移后全绿 | playwright |
 
-所以"整体重构"= **把 React 外壳做成产品级界面并完成迁移收口**,不是另起一套。
+## 2. 范围
 
-## 1. 目标与不做
+### in_scope
+- `devagent/webapp/`：全量重写为 TUI 结构（路由、外壳、三屏、组件层、令牌、i18n）
+- `devagent/src/server/http.ts`、`main.ts`：去掉 `/app` 专用分支，`/` 服务新构建
+- `devagent/webapp/vite.config.ts`：`base:/`、产物到 `web-static`
+- `devagent/browser/`：选择器迁移 + 新增视口与语言用例
+- 删除 `devagent/web/`、`devagent/web-static/`
 
-目标:
-1. 视觉与交互达到可直接交付的产品水准,不再是原型的逐字节复制。
-2. 信息架构以主管会话为中心,当前工作(任务/计划/证据/待决定)在右侧工作栏。
-3. 完成旧外壳到 React 的迁移,单一入口、单一代码库,删除旧外壳。
-4. 保持既有行为契约:M4 快照/边界/重连、M5 交互答复、WAL/恢复、i18n、可访问性。
+### out_of_scope
+- 后端业务语义、RPC 信封、存储结构（**不新增 sessions.title 列**）
+- TUI 原型的"原型控制"面板（重播/倍速/注入）
+- 文件浏览、文档视图、运行控制台（TUI 无，产品后续阶段）
+- 后端缺口：`project.list`、`session.list` 富字段、`config.matrix`
 
-不做:
-- 不改服务端业务语义(除缺口:项目/会话列表、必要时的事件字段)。
-- 不引入 Tailwind/组件库/CSS-in-JS;不加测试框架;不加服务端渲染。
-- 不在本期重做 Agent 提示词、存储、调度。
+## 3. 页面与路由
 
-## 2. 设计契约(作为实现依据,决定后写入 `docs/technicalnew/ui-design.md`)
+| 路径 | 屏 | 来源 |
+|---|---|---|
+| `/` | 会话 | `app.js` chat 分支 + `chat-*.js` |
+| `/requirements` | 需求 | `app.js` reqs 分支 |
+| `/settings/providers` | 设置 · Providers | `app.js` settings/providers |
+| `/settings/models` | 设置 · Models | `app.js` settings/roles |
+| `/settings/appearance` | 设置 · Appearance | `app.js` settings/look + 语言/密度 |
+| 其他 | 回 `/` | SPA fallback |
 
-### 2.1 布局(三区)
+导航标签：Chat / Requirements / Settings（中文：会话 / 需求 / 设置），快捷键 1/2/3。
 
-```text
-┌──────────────────────────────────────────────────────────────────────────┐
-│ topbar 52  项目切换 · 会话切换 · ⌘K · 连接状态(用户语言)                │
-├──────────────┬───────────────────────────────────┬───────────────────────┤
-│ 侧栏 248     │ 主区(会话 / 视图)                  │ 工作栏 320(可折叠)     │
-│ 会话列表     │ 内容 max-width 820,居中            │ 当前 Task / 计划步骤    │
-│ 需求 任务    │ 会话:transcript 滚动 + 输入框吸附   │ 参与 Agent / 待决定     │
-│ 文件 文档    │ 其他视图:统一 page-header + 内容    │ 证据与产物              │
-│ 设置        │                                    │                        │
-├──────────────┴───────────────────────────────────┴───────────────────────┤
-│ statusbar 26:连接 · 项目分支 · 运行摘要(单行,不重叠)                    │
-└──────────────────────────────────────────────────────────────────────────┘
-```
+## 4. 文件级改动
 
-规则:
-- 视图内部不得再渲染与 `page-header` 重复的标题(修掉现在"标题出现两次")。
-- 工作栏随路由上下文切换内容;无内容时整栏隐藏,让主区得到宽度。
-- `<1280px` 工作栏默认折叠;`<1024px` 侧栏改为抽屉;`<768px` 单列 + 顶部切换。
+### 4.1 新建 `devagent/webapp/src/`
 
-### 2.2 令牌(唯一权威 `webapp/src/styles/tokens.css`)
+| 路径 | 职责 | 来源证据 |
+|---|---|---|
+| `main.tsx` | 挂载 | 现有 |
+| `app/App.tsx` | 路由 + Providers（I18n/Theme/Layout/Session） | 新 |
+| `app/AppLayout.tsx` | 顶栏+主区+状态栏三行网格；三态视口 | `tui.css:58` |
+| `app/TopBar.tsx` | 字标 / 项目按钮 / 导航 / 连接态 | `app.js:22-33` |
+| `app/StatusBar.tsx` | 路径 / 分支 / 运行数 / 快捷键 | `app.js:34-38` |
+| `app/ProjectDialog.tsx` | 项目列表 + 添加目录 | `app.js:117-125` |
+| `app/router.ts` | pushState 路由 + 快捷键 | 新 |
+| `theme/tokens.css` | 照 `tui.css:1-45` 令牌（深/浅） | `tui.css` |
+| `theme/base.css` | 直角、字体分工、断点、滚动 | `tui.css` + 决策 |
+| `i18n/catalog.ts` | en/zh-CN 常量（迁移 236 键 + 新增） | `web/i18n.json` |
+| `i18n/I18nProvider.tsx` | `t()`、locale、持久化 | 新 |
+| `layout/useLayout.ts` | `matchMedia` 三态 | `responsive.md` |
+| `chat/ChatPage.tsx` | 会话页骨架 | `chat-mount.js:9-22` |
+| `chat/SessionsList.tsx` | 派生标题/时间/新建 | 决策 Q2 |
+| `chat/TaskStrip.tsx` | 阶段链/成员/暂停继续 | `chat-view.js:C.strip` |
+| `chat/Banner.tsx` | 断线/阻塞/历史警告 | `chat-view.js:C.banner` |
+| `chat/Transcript.tsx` | 消息流 + 组内续接 | `chat-view.js:item` |
+| `chat/MessageItem.tsx` | who/时间/正文/停止/忙碌 | `chat-view.js` |
+| `chat/ThinkingBlock.tsx` | 两态思考 | `chat-view.js` |
+| `chat/Markdown.tsx` | 移植现有（拆分 fence + 预算高亮） | `webapp/src/components/Markdown.tsx` |
+| `chat/ToolCard.tsx` | 通用工具 + 运行尾输出 | `chat-view.js:generic` |
+| `chat/ToolTask.tsx` | create/update/dispatch/end 四态 | `chat-view.js:taskTool` |
+| `chat/ToolQuestion.tsx` | 提问行 | `chat-view.js:questionTool` |
+| `chat/ToolReport.tsx` | 报告行 | `chat-view.js:reportTool` |
+| `chat/ToolRequirement.tsx` | 已保存事件行 | `chat-view.js:tool` |
+| `chat/Composer.tsx` | ❯ + textarea + STOP + IME | `chat-view.js` + 现有 |
+| `chat/InteractionPanel.tsx` | 数字键/↑↓/Esc/三型/回显 | `chat-view.js:C.popup` |
+| `chat/QueuedInputs.tsx` | 排队行 + 撤回 | `chat-view.js:C.dock` |
+| `chat/MemberDrawer.tsx` | 响应式抽屉只读跟随 | `MemberDrawer.tsx` + `chat-view.js:C.drawer` |
+| `chat/EmptyState.tsx` | 字标+三示例 | `chat-mount.js:empty` |
+| `requirements/RequirementsPage.tsx` | 四列看板 + 通知 | `app.js:reqs` |
+| `requirements/RequirementDrawer.tsx` | 两型字段/无效件 | `app.js:drawer` |
+| `settings/SettingsPage.tsx` | 菜单 + 分页 | `app.js:settings` |
+| `settings/ProvidersPage.tsx` | 列表 + 试连 + 添加 | `app.js:90` |
+| `settings/ModelsPage.tsx` | 全局/本项目 + 来源 | `app.js:92-95` |
+| `settings/AppearancePage.tsx` | 主题 + 语言 + 密度 | `app.js:102` + 新增 |
+| `auth/LoginPage.tsx` | 凭证 | 新 |
+| `state/*`、`api/*`、`lib/*` | 沿用现有，`useChiefSession` → `useSession`（多会话槽） | 现有 |
 
-| 维度 | 值 |
+### 4.2 修改
+
+| 路径 | 改动 |
 |---|---|
-| 背景 | `--bg #0c0d0f` / `--surface #131519` / `--raised #191c21` / `--inset #0f1114` |
-| 线 | `--line rgba(255,255,255,.07)` / `--line-strong rgba(255,255,255,.12)` |
-| 文本 | `--text #e9eaec` / `--text-2 #a0a6ad` / `--text-3 #6f7680` |
-| 强调 | `--accent #7dd3a0`(只用于主操作与当前项);`--accent-weak rgba(125,211,160,.12)` |
-| 语义 | 运行 `#6ea8fe` · 待决定 `#b18cff` · 完成 `#5ecb8a` · 阻断 `#ff7d7d` · 空闲 `#7b838c` · 警告 `#e5b567` |
-| 字阶 | 11 / 12 / 13 / 14 / 16 / 20 / 26,行高 1.45–1.6;正文 14 |
-| 字重 | 400 / 500 / 600,不用 700 |
-| 间距 | 4 基数:4/8/12/16/24/32/48 |
-| 圆角 | 6 / 10 / 14 |
-| 层级 | `--z-sticky 10` / `--z-drawer 40` / `--z-dialog 50` / `--z-toast 60` |
-| 动效 | 120ms(状态)/ 180ms(浮层),`ease-out`;`prefers-reduced-motion` 全禁 |
-| 主题 | `:root`(深)+ `[data-theme="light"]`;首版默认深色 |
+| `webapp/index.html` | 语言属性随 locale；标题 |
+| `webapp/vite.config.ts` | `base:'/'`、`outDir:'../web-static'`、proxy 去 `/vendor` `/i18n.json` |
+| `src/server/http.ts` | 删 `appStaticDir` 分支；`/app`→301 `/`；SPA fallback 到 `staticDir` |
+| `src/server/main.ts` | `staticDir` 指向 `web-static`；删探测 |
+| `devagent/.gitignore` | 若 `web-static` 仍忽略则调整（新壳产物需存在） |
+| `devagent/package.json` | `build` 脚本串联 webapp 构建（若缺） |
 
-禁止:组件内写死颜色/字号/间距;新增令牌必须先进 `tokens.css`。
+### 4.3 删除
 
-### 2.3 组件清单(只允许这些)
-
-`Button`(primary/secondary/ghost/danger,sm/md)、`IconButton`、`Field`、`Textarea`(自动增高)、
-`Select`、`Checkbox`、`Card`、`Panel`、`ListRow`、`Badge`、`StatusDot`、`StatusPill`、`Avatar`、
-`Tabs`、`Tooltip`、`Dialog`、`Drawer`、`EmptyState`、`ErrorState`、`Skeleton`、`Toast`、`CommandPalette`、
-`Markdown`、`CodeBlock`、`Timeline`、`StepList`。
-
-命名与实现:
-- `webapp/src/ui/<Component>.tsx` + `<Component>.module.css`,默认导出,props 显式,无全局副作用。
-- 图标:`lucide-react`(按需导入);删除两字母方块图标。
-- 每个组件在 `/app/#/design` 画廊页列出全部状态(默认/hover/focus/active/disabled/loading/空/错误)。
-
-### 2.4 会话面(核心,优先级最高)
-
-| 元素 | 规则 |
+| 路径 | 说明 |
 |---|---|
-| transcript | 消息分组:用户 / 主管 / 专业 Agent(带角色徽标与 Session 链接);组间距 24,组内 8 |
-| 流式 | 增量追加,不重渲染完成消息;光标只在最后一块;滚动遵循"仅在贴底时自动跟随" |
-| 工具卡 | 默认单行(图标 + 名称 + 一句摘要 + 耗时),展开看参数/输出/错误;错误行红色状态点 |
-| 计划/需求卡 | 内联卡片,标题 + 3 行摘要 + "查看"进入详情(视图或工作栏) |
-| 决策卡 | 内联、置顶于输入框上方,标题=问题,选项为按钮,附"原文/依据";答复后变为已答复态 |
-| 输入框 | 吸附底部;⌘↵ 发送、⇧↵ 换行;发送中禁用并显示状态;队列/保留输入可见并可撤回 |
-| 空态 | 一句价值主张 + 3 个示例问题 + 一个主操作;不出现文件路径等实现细节 |
-| 错误/断线 | 顶部条:一句话 + 重试;区分"未连接/重连中/已断开/服务端不可达" |
+| `devagent/web/` | 旧壳全量 |
+| `devagent/web-static/app/` | 旧 `/app` 产物 |
+| `webapp/src/components/*`（除迁移后的实现） | 被 `chat/` 取代 |
+| `webapp/src/styles.css` | 被 `theme/` 取代 |
+| `webapp/src/ported/`（若不再引用） | 视引用情况 |
 
-### 2.5 状态与语言
+## 5. 关键设计决策
 
-- 状态词面向用户:`正在执行(2 个 Agent)`、`等你决定:…`、`已阻断:…`、`已完成`、`已暂停`、`空闲`。
-- 所有文案走 `i18n.json`,`en`/`zh-CN` 键必须一致;新增键同时补齐两语;禁止硬编码中文(当前 React 外壳违反)。
-- 证据可追溯:任何"完成/失败"都要能展开看到来源(哪一个 Agent、哪次运行、哪条报告)。
-
-### 2.6 可访问性与细节
-
-- 焦点可见(2px `--accent`),焦点顺序符合阅读顺序;所有图标按钮有 `aria-label`。
-- 对比度 ≥ 4.5:1;正文不依赖颜色区分状态(点 + 文字)。
-- 键盘:⌘K 命令面板、⌘↵ 发送、Esc 关闭浮层、Tab 不落入隐藏视图。
-- 中文标点/`…`/引号统一;时间用相对时间(<24h)与绝对时间(tooltip)。
-
-## 3. 技术方案
-
-### 3.1 目录
-
-```text
-webapp/src/
-  main.tsx                 # 挂载 + 主题 + i18n provider
-  app/
-    App.tsx                # 路由与外壳
-    routes.tsx
-    Shell.tsx              # topbar/sidebar/rail/statusbar
-  ui/                      # 组件(见 2.3)
-  styles/                  # tokens.css / base.css / utilities.css
-  features/
-    chief/                 # 会话面(现有 ChiefApp/Transcript/... 迁入)
-    projects/              # 项目与会话列表
-    requirements/
-    tasks/
-    files/
-    docs/
-    agents/
-    inbox/
-    settings/
-  state/                   # 现有 slot/useChiefSession + 新增资源 hooks
-  api/                     # 现有 rpc/stream
-  i18n/
-```
-
-### 3.2 路由
-
-`react-router`(BrowserRouter,`basename="/app"`,服务端已有 SPA 回退):
-
-```text
-/                                   → 最近项目或欢迎页
-/p/:projectId/c/:sessionId          → 会话
-/p/:projectId/requirements          → 需求列表
-/p/:projectId/requirements/:reqId   → 需求详情
-/p/:projectId/tasks                 → 任务列表
-/p/:projectId/tasks/:taskId         → 任务详情
-/p/:projectId/files?path=…          → 文件
-/p/:projectId/docs                  → 文档与知识
-/p/:projectId/agents                → Agent/角色
-/p/:projectId/inbox                 → 收件箱(恢复/阻断/待决定)
-/p/:projectId/settings              → 设置
-/design                             → 组件画廊
-```
-
-### 3.3 数据层
-
-- 会话流:沿用 `useChiefSession` + `slot` reducer(已移植,有测试),不重写。
-- 其余资源:每个资源一个 hook(`useProject`、`useSessions`、`useRequirements`、`useTasks`、`useTask`、`useFiles`),
-  以 `invalidate` 帧驱动重取(与旧 `store.js` 的 `#emit` 语义一致),不做全局 store、不缓存跨项目。
-- 提交/答复/控制:沿用 `rpc.call`,`csrf` 与 `requestId` 规则不变。
-
-### 3.4 服务端缺口(需单独授权的小改动)
-
-1. `project.list` 与 `session.list`:现在没有列表方法,项目切换器只能靠本地最近记录;多项目/多会话列表需要真实来源。
-2. 若工作栏需要"待决定数量",确认 `session.get`/`task.get` 输出可满足;不足时只加字段,不加新协议。
-
-### 3.5 构建与交付
-
-- 开发:`npm run dev`(5183,代理 `/api`、`/i18n.json`、`/vendor` 到 4173)。
-- 构建:`npm run build` → `web-static/app`(产物不入库,部署/启动前必须构建;`/app` 缺失时服务端返回 404)。
-- 收口后:`/` 302 → `/app/`,删除 `devagent/web/` 与 `web-static/app` 之外的旧静态资源。
-
-### 3.6 测试
-
-| 层 | 方式 |
-|---|---|
-| 状态逻辑 | 现有 vitest(`slot`/`normalize`)+ 新增 hook 测试 |
-| 组件 | 画廊页 + Playwright 截图快照(1440/1024/390 × 深/浅 × 全部路由) |
-| 行为 | 现有 `browser/*.spec.ts` 迁移到 `/app/`:登录、开会话、发送、流式、交互答复、断线重连、任务卡 |
-| 契约 | 提示词/文档校验脚本保持;新增 i18n 键一致性检查 |
-
-## 4. 迁移矩阵(旧外壳 → React)
-
-| 界面 | 旧外壳能力 | React 现状 | 目标 |
+| # | 决策 | 理由 | 备选与为何不选 |
 |---|---|---|---|
-| 会话 | transcript、工具卡、阶段条、交互、发送/停止、快捷指令 | 有(缺阶段条、快捷指令、停止按钮位置) | 2.4 规格 |
-| 需求 | 列表 + 详情 + 生命周期 | 无 | 文档化详情 + 列表 |
-| 任务 | 列表、详情、成员、报告 | 仅会话内 TaskCard | 列表 + 详情 + 工作栏 |
-| 文件 | 树 + 只读预览 | 无 | 树 + 预览 + 搜索 |
-| 文档 | 知识索引 + 文件预览 | 无 | 索引 + 预览 |
-| Agent | 角色配置查看/编辑 | 无 | 只读配置 + 会话 |
-| 运行 | Live/Events/Artifacts 控制台 | 无 | 任务详情的"运行"抽屉 |
-| 收件箱 | 恢复检查/待答/阻断 | 无(会话内有) | 全局待办 |
-| 设置 | 模型/语言/项目 | 无 | 设置页 |
-| 命令面板 | 有 | 无 | ⌘K 路由/会话/需求/任务/文件 |
-| i18n | 有 | 无(硬编码中文) | 全量键 + 语言切换 |
+| D1 | 字体混合：代码/路径/ID/数字等宽，中文散文无衬线 | macOS 等宽中文字形回退成比例，混排断裂 | 全等宽：可读性差 |
+| D2 | 会话标题派生自首条 user 消息（24 全角截断） | 无 title 列；id 对用户无意义 | 新增 DB 列：本轮改后端 |
+| D3 | 路由用 pushState，服务端 SPA fallback | 深链可分享/刷新不 404 | hash 路由：URL 脏 |
+| D4 | 状态沿用 slot reducer，扩展为按 sessionId 分槽 | 已有 15 条行为验证 | 重写：丢 R1 |
+| D5 | 3 秒轮询 task.get 保留 | 服务端无 task 失效推送 | 新增推送：改后端 |
+| D6 | i18n 用 TS 常量而非 JSON 加载 | 构建期可校验键一致；无运行时 fetch | 运行时 JSON：首屏多一次请求 |
+| D7 | 删除旧壳；`/app` 301 | 用户要求一次性，不留并存 | 灰度：用户明确否决 |
 
-## 5. 分期与验收
+## 6. 保留能力（必须在组件内实现）
 
-| 期 | 内容 | 验收(可观察) |
+| 编号 | 能力 | 落点 |
 |---|---|---|
-| P0 | 令牌 + base + 基础组件 + 外壳骨架 + 画廊页;修正连接状态机与状态条重叠 | `/app/#/design` 覆盖全部组件状态;1440/1024/390 截图;无重叠/无重复标题 |
-| P1 | 会话面达标(分组、工具卡、决策卡、输入框、滚动、停止、空态) | 真实模型跑一轮讨论 + 一次交互答复 + 断线重连,观察流式与状态正确 |
-| P2 | 工作栏(当前 Task、计划步骤、成员、待决定)+ 任务详情/列表 | 从会话打开 Task 看到步骤与证据;暂停/恢复状态可见 |
-| P3 | 需求(列表/详情/生命周期)+ 文档/文件 | 从需求进入实现流程并回到会话,链接与状态一致 |
-| P4 | 收件箱、Agent、设置、命令面板、运行抽屉 | 每条待办可定位到来源;⌘K 可达全部路由 |
-| P5 | 浅色主题、响应式、可访问性、动效终检 | 对比度报告、键盘全流程、三档截图 |
-| P6 | 切换收口 | `/` → `/app/`;删除 `web/`;Playwright 全绿;文档更新 |
+| R1 | 快照按 entryId 合并，在飞不降级 | `state/slot.ts`（沿用） |
+| R2 | 统一归一化边界 | `state/normalize.ts`（沿用） |
+| R3 | 增量流式三型 | `state/slot.ts`（沿用） |
+| R4 | toolResult 按 callId 回填 | `chat/Transcript.tsx` |
+| R5 | 上滚锁定 / 贴底恢复 / 回到最新 | `lib/scroll.ts` ∈ `ChatPage` |
+| R6 | 高亮预算队列 | `lib/highlight-queue.ts` ∈ `chat/Markdown.tsx` |
+| R7 | 交互生命周期 busy→echo→stale→retry | `chat/InteractionPanel.tsx` |
+| R8 | 排队输入可见可撤回 | `chat/QueuedInputs.tsx` |
+| R9 | 提交前读 session.get 带 taskId | `state/useSession.ts` |
+| R10 | 失败不丢草稿 | `chat/Composer.tsx` |
+| R11 | IME 组合不发送 | `chat/Composer.tsx` |
+| R12 | 成员抽屉独立槽 | `chat/MemberDrawer.tsx` |
+| R13 | 连接四态 | `state/useSession.ts` + `Banner` |
+| R14 | 历史读取警告 | `chat/Banner.tsx` |
+| R15 | 任务实时状态 | `chat/TaskStrip.tsx` |
 
-## 6. 风险
+## 7. 响应式
 
-| 风险 | 处理 |
+| 断点 | 规则 |
 |---|---|
-| 迁移期两套外壳行为不一致 | 以 React 为唯一新增功能的落点;旧外壳只修阻断级缺陷 |
-| 构建产物不入库,`/app` 缺失时 404 | P6 前在启动脚本/文档中明确"先 build";健康检查提示 |
-| 会话流重写引入渲染抖动 | 不重写 `slot`/`useChiefSession`;只改表现层,截图与行为测试覆盖 |
-| i18n 补键工作量大 | 以旧 `web/i18n.json` 为基线迁移,键名不变 |
-| 服务端缺列表方法 | 单独小切片:`project.list`/`session.list`,只读、无新协议 |
+| ≥1101 | 240 侧栏 + 90% 居中内容 + 四列看板 + 设置左菜单 |
+| 861–1100 | 看板 2 列 |
+| ≤860 | 侧栏→顶栏按钮+sheet；看板 1 列；设置菜单横置；内容去 90% 限制；成员行隐备注 |
+| ≤640 | 抽屉全宽；工具摘要折行 |
+| ≤390 | 顶栏隐项目路径、状态栏只留连接态 |
 
-## 7. 待决
+`useLayout()` 用 `matchMedia` 输出 `{columns:number, mode:'wide'|'mid'|'compact'|'phone'}` 单一来源。
 
-1. 是否同意新增 `project.list` / `session.list`(多项目多会话列表需要真实数据源)。
-2. 运行控制台(Live/Events/Artifacts)按方案降级为任务详情抽屉,还是保留独立视图。
-3. 浅色主题放在 P5 终检,还是首版不做(减少工作量)。
+## 8. 验证计划
+
+| 层 | 命令 | 预期 |
+|---|---|---|
+| 类型 | `npm run typecheck`（webapp） | 0 错误 |
+| 单测 | `npx vitest run`（webapp + 仓库） | 全绿 |
+| i18n 键一致 | `node webapp/scripts/check-i18n.mjs` | 差异 0 |
+| 构建 | `npm run build`（webapp → web-static） | 产物存在 |
+| 浏览器 | `npx playwright test` | 迁移后的场景全绿 + 新增 5 档/双语 |
+| 手工 | 真服务 + 浏览器走 J-01~J-05 | 会话/需求/设置可完成 |
+
+## 9. 风险与回滚
+
+| 风险 | 缓解 |
+|---|---|
+| 删除旧壳导致验收全挂 | 浏览器用例与删除在同一任务内迁移（步骤 S7 之前必须先绿） |
+| 包体增大 | 依赖仍只有 react + markdown-it + highlight.js |
+| 派生标题性能 | 只 prepare 首条，不订阅；失败回退 `新会话` |
+| 一次性重构中途失控 | 每步结束可构建、可跑浏览器用例 |
+
+回滚：`git revert` 本轮提交（工作区干净为交付门槛）。
+
+## 10. 执行顺序（dev 单元）
+
+| 步 | 内容 | 自查 |
+|---|---|---|
+| S1 | 令牌 + i18n + 布局 + 路由 + 顶栏/状态栏/项目对话框 | 三屏空壳可切，双语可换 |
+| S2 | 会话屏：会话列 / 任务条 / 横幅 / 转录 / 消息 / 思考 / Markdown | 静态夹具渲染 9 类 |
+| S3 | 工具四类 + 问题面板 + 队列 + composer | 静态夹具渲染 10 类 |
+| S4 | 会话状态接入（slot/流/提交/停止/答复） | 真服务跑通一轮 |
+| S5 | 需求屏 | 看板 + 两型抽屉 + 无效件 |
+| S6 | 设置三页 + 登录 | 读写配置 |
+| S7 | 响应式五档 + 浏览器用例迁移 | playwright 绿 |
+| S8 | 服务端切换 + 删除旧壳 + 全量回归 | A1/A11/A12 绿 |
+
+## 11. 文档影响
+
+- `docs/technicalnew/ui-design.md`：被本轮整体替换（布局/令牌/组件/断点全部改写）
+- `docs/technicalnew/architecture.md` A7：外壳合并为单入口
+- `docs/technicalnew/validation.md`：记录本轮验证
+- `docs/INDEX.md`：若无入口变化则不改
+
+## 12. 审批
+
+```yaml
+approval: pending
+```

@@ -1,50 +1,46 @@
-# Settlement Record · ui-refactor-20261021(文档对齐部分)
+# Settlement · ui-refactor-20261021
 
-任务:UI 前端重构的项目记忆对齐。本轮只改文档与工作记录,不改业务代码。
-背景:此前把"前端零构建、应保持 vanilla"当作事实写进了推断,实际 `devagent/webapp/` 已是 React 19 + Vite 7,
-`/app/` 已由同一 Server 托管,session 记录也早已登记该事实,但 docs/INDEX 的"当前状态"仍写着"业务代码尚未实施"。
+日期：2026-10-21。
 
-## stable_facts
-
-| 事实 | 权威位置 |
-|---|---|
-| 前端为 React 19 + Vite 7 单页应用,产物托管于 `/app/`,`/` 仍是旧外壳 | `docs/technicalnew/architecture.md` A7 |
-| 前端的数据来源只有 `/api/v1/rpc` 与 `session.stream.prepare` + SSE | 同上 |
-| 迁移现状:只有主管会话面在新外壳,其余视图在旧外壳;入口收口前并存 | A7、`ui-design.md` U1/U8 |
-| 界面契约(布局、令牌、组件、会话面、状态语言、迁移矩阵、门禁) | `docs/technicalnew/ui-design.md` U1–U9 |
-| 产品层原则:主管对话为主入口,当前工作同屏可见 | `docs/productnew/README.md` 第 6 节 |
-| 服务端缺项目/会话列表查询,多项目导航无真实列表来源 | A7、docs/INDEX 当前状态 |
-| 文档索引不再宣称"业务代码尚未实施",改为指向验证记录逐包证据 | `docs/INDEX.md` 当前状态 |
-| 主管与 designer 可用 bash 核实状态/整理文档(上一提交已实现并验证) | `validation.md` 实施证据表 |
-
-## 变更清单
-
-- `docs/technicalnew/architecture.md`:+A7 前端层(技术栈、入口、数据来源、产物、缺口)。
-- `docs/technicalnew/ui-design.md`:新增契约 U1–U9。
-- `docs/technicalnew/README.md`:链路表加前端行;当前架构补一条前端事实。
-- `docs/technicalnew/validation.md`:实施证据表补工具集补齐一项。
-- `docs/INDEX.md`:入口表加前端设计契约;重写"当前状态"(前端事实、实施状态口径、列表缺口)。
-- `docs/productnew/README.md`:第 6 节补"主管对话为主入口 + 同屏当前工作"原则,布局细节指向技术契约。
-- `.agentdev/work/ui-refactor-20261021/plan.md`:UI 重构计划(待授权)。
-
-## verification
-
-- 文档链接与标题锚点:28 份正式 Markdown 逐引用检查,缺失文件 0 / 缺失锚点 0。
-- 新增/改动文档无超长段落(>400 字符)引入,与既有表格行一致。
-- `webapp`:`tsc --noEmit` 0;`vitest` 16/16;`vite build` 成功(产物 422 kB / CSS 11.5 kB)。
-- 文档所引代码事实逐条核对:Vite 配置、`/app` SPA 回退、`.gitignore` 产物、RPC 方法清单(缺 `project.list`/`session.list`)。
-
-## evidence_boundary
-
-- 本轮未执行浏览器端验收;`/app` 现有界面问题(状态条文字重叠、本地残留会话导致永久"正在连接")已在计划中登记,尚未修复。
-- 未做独立审阅:本轮为文档对齐,未改变协议与工具契约;若需要按交付流程走独立 Review,应在 UI 实施前补一次。
-- `ui-design.md` 是待实现契约,不代表界面已达标。
-
-## archived
-
-- `.agentdev/work/ui-refactor-20261021/`
-
-## completion_gate
-
-- 文档对齐:passed(边界如上)。
-- UI 重构本身:未开始,状态为 `Awaiting Plan Confirmation`。
+```yaml
+settlement:
+  task: ui-refactor-20261021
+  stable_facts:
+    - 浏览器外壳只有一套：React 19 + Vite，构建产物由同一 Server 托管在 /（旧无构建外壳已删除）
+    - /app/* 301 到同路径（保留查询串）；未知无扩展名路径回退 index.html；API 路径从不回退
+    - 现有 chat 渲真能力（快照合并、增量流式、工具结果配对、滚动锁定、高亮预算、交互生命周期、队列输入、提交带 taskId、草稿保留、IME、成员抽屉、连接四态、历史警告、任务轮询）在新外壳中逐条保留
+    - 界面文案唯一来源是 webapp/src/i18n/catalog.ts，en/zh-CN 键与占位符由测试强制一致
+    - 会话标题由首条用户消息派生（服务端不存标题）；活动时间由 session.get 的 lastActivityAt 派生
+    - 任务成员状态由 3 秒轮询 task.get 提供；运行中若无 Task 则轮询 session.get 以发现新建 Task
+    - 设计语言（直角、1px 线、单一强调色、符号+文字状态、等宽代码/无衬线中文）以 docs/design/tui 为准
+  updated:
+    - docs/technicalnew/ui-design.md        # 整页重写为已实现契约（布局、令牌、组件、断点、门禁）
+    - docs/technicalnew/architecture.md     # A7 前端层改为单入口
+    - docs/technicalnew/validation.md       # 本轮证据与未覆盖项
+    - devagent/README.md                    # 命令表加入构建，删除旧外壳样式核对
+    - devagent/src/server/read-methods.ts   # session.get 增加 lastActivityAt
+    - devagent/src/store/store.ts           # listSessions 返回 updatedAt
+  indexes_updated:
+    - docs/INDEX.md（未改：入口未变，仍指向 productnew / technicalnew）
+  archived:
+    - .agentdev/work/ui-refactor-20261021/requirements.md
+    - .agentdev/work/ui-refactor-20261021/tui-shell.md
+    - .agentdev/work/ui-refactor-20261021/responsive.md
+    - .agentdev/work/ui-refactor-20261021/context.md
+    - .agentdev/work/ui-refactor-20261021/plan.md
+    - .agentdev/work/ui-refactor-20261021/implementation.md
+    - .agentdev/work/ui-refactor-20261021/review.md
+    - .agentdev/work/ui-refactor-20261021/test.md
+    - .agentdev/work/ui-refactor-20261021/settlement.md
+  proposed_for_confirmation:
+    - 后端缺口：project.list（项目菜单目前用本地最近记录 + 手输路径）
+    - 后端缺口：任务创建/成员变化无推送，界面只能轮询
+    - 后端缺口：config.matrix（项目 × 角色）不存在，Models 页只有全局/本项目两档
+    - 决策：web-static/ 不入库，构建是测试前置（workbench-entry 测试在缺产物时失败）
+    - 决策：需求抽屉底部动作只提示"在会话里请主管…"，不实现从看板直接开会话（文案已改为不谎称已发送）
+  no_change:
+    - docs/productnew/**（本轮是技术实现，产品行为未变）
+    - RPC 信封、错误码、WAL/交互桥、恢复语义
+    - 存储表结构（未新增列）
+  completion_gate: passed
+```
