@@ -48,3 +48,21 @@
 | **新 UI 层 v1（webapp Chief 视图）+ 服务端活快照**：/app 双壳托管与越界守卫、prepare 快照取活 Pi 会话内存条目（消除 resync 丢在飞消息）、React 壳的 slot 合并（在飞不降级）、高亮预算队列、autoscroll 锁定、Task 卡/成员抽屉（数据路径） | 服务端 235/235（23 文件，含 live-snapshot/stream-harness//app 路由新用例）；webapp vitest 4/4 + tsc 0；playwright 旧壳 8 场景全绿；真实模型 + Chromium 实测：流式不丢、代次变化场景内容延续、刷新后历史完整 | `.agentdev/work/devagent-webapp-chief-20261013` |
 
 仍未取证：PI-01 的压缩/分支关联、PI-07 的配置变化冷恢复、PI-09 并发容量与超时、PI-03/PI-04/PI-06、P6 完整产品验收（浏览器全链路与视觉对照）与其余产品验收场景、P7 的"恢复已执行输入按原配置"（本实现不重放旧输入，无落点）、命令执行的沙箱隔离（P-05 已按事实明示边界）。其余实施证据边界见相应结算记录。
+
+## 2026-10-21 前端一次性重构
+
+外壳由"旧无构建 JS（`/`）+ React（`/app/`）"合并为单一 React 外壳（`/`），界面按 `docs/design/tui/` 重写，旧壳删除。
+
+| 检查 | 结果 | 证据 |
+|---|---|---|
+| 服务端类型 | Passed | `tsc -p tsconfig.json --noEmit` 无输出 |
+| 外壳类型 | Passed | `npm --prefix webapp run typecheck` 无输出 |
+| 单测与集成 | Passed | `npm test` 26 文件 290 用例 |
+| 外壳构建 | Passed | `npm run build` → `web-static/index.html` + 资产 |
+| 浏览器验收 | Passed | `npx playwright test` 15 用例（三屏、对话、提问答复、双击防重、业务拒绝、断线返回、被拒工具仍可见、提案三段正文、五档视口、主题切换、长代码块不横向溢出、任务条轮询、运行中新建 Task 被发现） |
+| 文案一致性 | Passed | `test/web-i18n-keys.test.ts`：两语键一致、界面引用的键都存在、无空值、占位符一致 |
+| 单壳路由 | Passed | `test/server.test.ts`：`/`、客户端路由回退、资产 404、`/app/*` 301 |
+| 视觉对照 | 部分 | 1440 三屏、390 手机、320 顶栏边界已人工查看/测量；未做逐组件像素对照 |
+| 独立审阅 | Passed | 两轮只读审阅；第一轮 9 项阻断、第二轮 2 项阻断，全部关闭，详见任务审阅记录 |
+
+未覆盖：真实模型下的完整 J-01～J-10 流程；拖拽/触屏手势；320px 以下的可用性。

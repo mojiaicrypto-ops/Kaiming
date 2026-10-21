@@ -142,10 +142,11 @@ Durable 使用 pi-ai + Chord 的独立 Harness。这里使用 coding-agent SDK�
 
 | 事实 | 现状 | 位置 |
 |---|---|---|
-| 技术栈 | React 19 + Vite 7 + TypeScript，构建产物由同一 Server 托管于 `/app/`（SPA 回退） | `devagent/webapp/` |
-| 入口 | `/` 仍由旧外壳（无构建的原生 JS）提供，`/app/` 为新外壳；两者共用同一 API | `devagent/web/`、`src/server/main.ts` |
-| 数据来源 | 会话流复用 `session.stream.prepare` + SSE；其他视图只调用已注册的只读/写入方法 | `src/server/read-methods.ts`、`write-methods.ts` |
-| 构建产物 | `devagent/web-static/` 不入库；`/app` 无产物时返回明确 404 | `devagent/.gitignore` |
-| 样式 | 旧外壳逐字节复制原型 mock；新外壳使用自己的令牌与组件层 | `devagent/web/styles/`、`devagent/webapp/src/` |
+| 技术栈 | React 19 + Vite 7 + TypeScript；`npm run build` 产出 `web-static/`，同一 Server 在 `/` 托管 | `devagent/webapp/` |
+| 入口 | 只有一套外壳：`/` 即新壳；`/requirements`、`/settings/*` 是客户端路由，未知无扩展名路径回退 `index.html`；旧地址 `/app/*` 301 到同路径 | `src/server/http.ts`、`src/server/main.ts` |
+| 数据来源 | 会话流复用 `session.stream.prepare` + SSE；其他界面只调用已注册的只读/写入方法 | `src/server/read-methods.ts`、`write-methods.ts` |
+| 构建产物 | `devagent/web-static/` 不入库，构建后可被测试与服务端使用 | `devagent/.gitignore` |
+| 样式 | 令牌与组件层照 `docs/design/tui/tui.css` 重写；代码/标识等宽，中文正文无衬线 | `devagent/webapp/src/theme/` |
+| 会话标题 | 服务端不存标题：界面取首条用户消息派生，新会话显示"新会话" | `devagent/webapp/src/state/useWorkspace.ts` |
 
 服务端当前没有项目/会话列表方法，界面只能持有本地最近选择；多项目、多会话导航的真实列表需要只读查询方法，属待补齐缺口。
