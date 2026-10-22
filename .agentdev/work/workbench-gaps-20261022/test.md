@@ -11,7 +11,7 @@
 | `npm test` | passed | 26 文件 / 299 用例 |
 | `npm --prefix webapp test` | passed | 3 文件 / 25 用例 |
 | `npm run build` | passed | `web-static/index.html` + 1 CSS + 1 JS |
-| `npm run test:browser`（先 build） | passed | 26 用例 |
+| `npm run test:browser`（先 build） | passed | 27 用例 |
 
 ## 新增/修改的单测与集成用例
 
@@ -24,7 +24,7 @@
 
 ## 浏览器用例（真实服务 + 真实 Chromium）
 
-新增 11 条，合计 26 条：
+新增 12 条，合计 27 条：
 
 | 用例 | 覆盖的缺口 |
 |---|---|
@@ -32,13 +32,14 @@
 | a requirement hands off to the chat without sending anything | D2：跳转 + 预填，`article.m` 计数为 0（未发送） |
 | a specialist report opens from the task detail, with the body it really wrote | U2：真实 dispatch → 成员 `agent_report` → 报告正文出现在抽屉且不在转录里 |
 | the project files open in a read-only viewer, and a binary file says so | U1/U7：知识入口打开 `AGENTS.md`；二进制文件给说明 |
-| the transcript can ask for older messages and stops at the beginning | U10：`before` 分页；到最早时按钮消失、无重复 |
+| the transcript asks for older messages and stops when there are none | U10：到最早时按钮消失、无重复（多页前插由服务端用例覆盖，原因见下） |
 | a moved directory is rebound from the menu and keeps its records | U3：目录缺失行 → 重绑定 → 顶栏跟随新路径 |
 | the board lists the project Tasks and links to the conversation that runs one | U6：任务段显示目标与本地化状态，点击回到协调会话 |
 | a modal keeps keyboard focus inside, and gives it back when it closes | D3：20 次 Tab 不逃出遮罩；Esc 后焦点回到触发按钮 |
 | an unreadable directory says why in the interface language | P3：错误码先给本地句子 |
 | a blocked run names the missing model instead of printing its code | D6：阻断横幅不显示 `blocked_config` |
 | the status bar names the model the work actually used | U8：状态栏显示 `stub/stub-1` |
+| the project menu lists what the server registered, not what this browser remembers | S1：本浏览器从未见过的项目出现在菜单；`localStorage` 无 recent 键 |
 | a Task the chief creates mid-run appears without a reload（改写） | S3：只有在收到推送时任务条才可能出现（轮询在知道 id 之后才启动） |
 
 ## 手工验证
@@ -57,4 +58,5 @@
 | 真实模型下的完整 J-01～J-10 | 未执行（无凭据），不记通过 |
 | U4 恢复核实 / U5 会话清理界面 | 未实现（产品未定义交互），见 `questions.md` |
 | 触屏手势、软键盘 | 未实测 |
-| 浏览器套件稳定性 | 9 次连续全绿中出现 2 次不可复现失败（一次 `toHaveCount`、一次 `toBeVisible`），逐条复跑与后续 5 次全量均通过；未定位到具体用例，记录为待观察项，不作为通过依据 |
+| 多页前插与滚动锚定 | 浏览器用例只覆盖「没有更早」：活跃会话的快照来自模型实例内存，测试无法注入 130 条历史（已实测：注入文件后页面仍只显示内存中的 2 条）。服务端 `before` 分页有单测；`scrollTop` 补偿为代码路径，未做自动化验证 |
+| 浏览器套件稳定性 | 9 次连续全绿中出现 2 次不可复现失败（一次 `toHaveCount`、一次 `toBeVisible`），逐条复跑与后续全量均通过；未定位到具体用例，记录为待观察项，不作为通过依据 |
