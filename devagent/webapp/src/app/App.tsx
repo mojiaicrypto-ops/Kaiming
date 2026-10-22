@@ -14,6 +14,7 @@ import { RequirementsPage } from '../requirements/RequirementsPage';
 import { SettingsPage } from '../settings/SettingsPage';
 import { LoginPage } from '../auth/LoginPage';
 import { ToastHost } from '../lib/ToastHost';
+import { FileDrawer } from '../files/FileDrawer';
 import { toast } from '../lib/toast';
 
 /**
@@ -42,6 +43,8 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
   const [railOpen, setRailOpen] = useState(false);
   /** A request the board hands to the chat: filled into the composer, never sent on its own. */
   const [draft, setDraft] = useState<string | null>(null);
+  /** The project file or directory the read-only viewer is showing; null when it is closed. */
+  const [filePath, setFilePath] = useState<string | null>(null);
 
   // A 401 from any call takes over the screen: the cookie is gone, not the work.
   useEffect(() => {
@@ -200,7 +203,20 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
               await workspace.rebindProject(projectId, path, '');
               notify(t('project.rebindDone'), 'success');
             }}
+            onOpenFile={(path) => {
+              setFilePath(path);
+              setProjectOpen(false);
+            }}
             onClose={() => setProjectOpen(false)}
+          />
+        )}
+        {filePath !== null && (
+          <FileDrawer
+            rpc={rpc}
+            projectId={workspace.projectId}
+            path={filePath}
+            entries={workspace.project?.entries ?? []}
+            onClose={() => setFilePath(null)}
           />
         )}
         <ToastHost />

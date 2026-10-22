@@ -24,6 +24,11 @@ export interface ChiefSessionApi {
   readonly cancelQueuedInput: (inputId: string) => Promise<void>;
   readonly respond: (interaction: PendingInteraction, response: unknown) => Promise<void>;
   readonly refreshTask: (taskId: string) => Promise<TaskDetail | null>;
+  /**
+   * Fetch the page of history older than one entry and put it in front of what is shown.
+   * Returns whether anything older still exists.
+   */
+  readonly loadEarlier: (beforeEntryId: string) => Promise<boolean>;
   readonly activeTaskId: string | null;
   readonly retry: () => void;
   readonly notify: (text: string, kind?: 'info' | 'success' | 'error') => void;
@@ -77,6 +82,19 @@ export function useSession(
       const detail: TaskDetail = { task: read.task, members: read.members, results: read.results };
       dispatch({ type: 'taskDetail', detail });
       return detail;
+    },
+    [rpc, session],
+  );
+
+  const loadEarlier = useCallback(
+    async (beforeEntryId: string): Promise<boolean> => {
+      if (session === null) return false;
+      const read = await rpc.call<{ messages: readonly unknown[]; previousCursor: string | null }>(
+        'session.messages.list',
+        { projectId: session.projectId, sessionId: session.sessionId, before: beforeEntryId, limit: 100 },
+      );
+      dispatch({ type: 'older', messages: read.messages });
+      return read.previousCursor !== null;
     },
     [rpc, session],
   );
@@ -298,6 +316,7 @@ export function useSession(
     cancelQueuedInput,
     respond,
     refreshTask,
+    loadEarlier,
     activeTaskId,
     retry,
     notify: toast,

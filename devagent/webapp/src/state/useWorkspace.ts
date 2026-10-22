@@ -14,6 +14,8 @@ export interface ProjectSummary {
   readonly directoryExists: boolean;
   readonly problem?: string;
   readonly sessions: ReadonlyArray<{ sessionId: string; roleId: string }>;
+  /** The knowledge entries the server checked for this project (present or missing). */
+  readonly entries?: ReadonlyArray<{ path: string; present: boolean }>;
 }
 
 /** One row of the project menu: a registered project, with what the menu needs to describe it. */

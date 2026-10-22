@@ -11,6 +11,7 @@ import { Composer, DockHint } from './Composer';
 import { QueuedInputs } from './QueuedInputs';
 import { EmptyState } from './EmptyState';
 import { MemberDrawer } from './MemberDrawer';
+import { TaskDrawer } from './TaskDrawer';
 import { echoOf } from './interaction-model';
 import { createAutoscroll } from '../lib/scroll';
 import type { ChiefSessionApi } from '../state/useSession';
@@ -56,6 +57,12 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
   const [scrollUi, setScrollUi] = useState<{ locked: boolean; showJumpButton: boolean }>({ locked: false, showJumpButton: false });
   const handleRef = useRef<ReturnType<typeof createAutoscroll> | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
+  const [taskOpen, setTaskOpen] = useState(false);
+  /** Backwards paging: the snapshot holds the tail, and this asks for the page before it. */
+  const [earlier, setEarlier] = useState<{ readonly loading: boolean; readonly hasMore: boolean }>({
+    loading: false,
+    hasMore: true,
+  });
   const [follow, setFollow] = useState<string | null>(null);
   const [questionsCollapsed, setQuestionsCollapsed] = useState(false);
   const [answers, setAnswers] = useState<Record<string, AnswerState>>({});
@@ -205,6 +212,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
           pendingQuestions={openQuestions.length}
           membersOpen={membersOpen}
           onToggleMembers={() => setMembersOpen((open) => !open)}
+          onOpenTask={() => setTaskOpen(true)}
           onFollow={(sessionId) => setFollow(sessionId)}
           onPause={() => {
             if (taskDetail !== null) {
@@ -233,6 +241,31 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
         />
         <div className="tx scroll" ref={txRef} data-testid="transcript">
           <div className="tx-in">
+            {slot.items.length > 0 && earlier.hasMore && (
+              <button
+                type="button"
+                className="btn ghost more"
+                disabled={earlier.loading}
+                onClick={() => {
+                  const oldest = slot.items.find((item) => item.entryId !== '');
+                  if (oldest === undefined) {
+                    setEarlier({ loading: false, hasMore: false });
+                    return;
+                  }
+                  setEarlier((current) => ({ ...current, loading: true }));
+                  void session
+                    .loadEarlier(oldest.entryId)
+                    .then((more) => setEarlier({ loading: false, hasMore: more }))
+                    .catch((error: unknown) => {
+                      setEarlier({ loading: false, hasMore: false });
+                      session.notify(error instanceof Error ? error.message : String(error), 'error');
+                    });
+                }}
+                data-testid="load-earlier"
+              >
+                {earlier.loading ? t('common.loading') : t('chat.earlier')}
+              </button>
+            )}
             {slot.items.length === 0 ? (
               <EmptyState hasProject={hasProject} onExample={(text) => void submit(text)} />
             ) : (
@@ -299,6 +332,9 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
           </div>
         </div>
       </section>
+      {taskOpen && taskDetail !== null && (
+        <TaskDrawer rpc={session.rpc} projectId={projectId} detail={taskDetail} onClose={() => setTaskOpen(false)} />
+      )}
       {follow !== null && (
         <MemberDrawer
           rpc={session.rpc}

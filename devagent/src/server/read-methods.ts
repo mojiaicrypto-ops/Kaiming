@@ -6,7 +6,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { RpcError, type RpcRouter } from './rpc.ts';
-import { pageHistory, readPiHistory } from './history.ts';
+import { pageHistory, pageHistoryBefore, readPiHistory } from './history.ts';
 import { digestOfText, getRequirement, listRequirements, requirementPath } from '../runtime/requirement-store.ts';
 import { readReportBody } from '../runtime/report-store.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
@@ -239,6 +239,10 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       requireSession(store, project.id, sessionId);
       const limit = clampLimit(readNumber(params, 'limit'));
       const cursor = readString(params, 'cursor');
+      const before = readString(params, 'before');
+      if (cursor !== undefined && before !== undefined) {
+        throw new RpcError('INVALID_ARGUMENT', 'pass either cursor (forward) or before (backward), not both', {});
+      }
       const binding = store.getSessionBinding(sessionId);
       const read = readPiHistory(binding?.piFile);
       // A session whose history is bound but missing, empty or without a session header must say so,
@@ -251,11 +255,12 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
         });
       }
       if (!read.found) {
-        return { messages: [], nextCursor: null, boundary: null, correlation: null, problems: [] };
+        return { messages: [], nextCursor: null, previousCursor: null, boundary: null, correlation: null, problems: [] };
       }
-      const page = pageHistory(read, cursor, limit);
+      const page =
+        before === undefined ? pageHistory(read, cursor, limit) : pageHistoryBefore(read, before, limit);
       if (page.unknownCursor) {
-        throw new RpcError('INVALID_ARGUMENT', 'the cursor does not belong to this history', { cursor });
+        throw new RpcError('INVALID_ARGUMENT', 'the cursor does not belong to this history', { cursor: cursor ?? before });
       }
       return {
         messages: page.records.map((record) => {
@@ -273,7 +278,9 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
             inputStatus: input?.status ?? null,
           };
         }),
-        nextCursor: page.nextCursor,
+        nextCursor: 'nextCursor' in page ? page.nextCursor : null,
+        // Backwards paging: the first entry of this page, or null at the beginning of history.
+        previousCursor: 'previousCursor' in page ? page.previousCursor : null,
         // The public boundary: where the caller's view of the history starts and how far it reaches.
         boundary: scrollBoundary(read),
         correlation: correlationSummary(read),

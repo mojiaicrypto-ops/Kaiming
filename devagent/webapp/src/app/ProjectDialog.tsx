@@ -7,6 +7,8 @@ export interface ProjectDialogProps {
   readonly projects: readonly ProjectRow[];
   readonly onOpen: (path: string) => Promise<void>;
   readonly onRebind: (projectId: string, path: string) => Promise<void>;
+  /** Opens a project file in the read-only viewer. */
+  readonly onOpenFile: (path: string) => void;
   readonly onClose: () => void;
 }
 
@@ -15,7 +17,7 @@ export interface ProjectDialogProps {
  * never seen. A project whose directory disappeared keeps its row and offers a rebind instead of
  * pretending it is gone; a rebound project keeps its id, sessions and records.
  */
-export function ProjectDialog({ current, projects, onOpen, onRebind, onClose }: ProjectDialogProps) {
+export function ProjectDialog({ current, projects, onOpen, onRebind, onOpenFile, onClose }: ProjectDialogProps) {
   const { t } = useI18n();
   const [path, setPath] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -138,6 +140,29 @@ export function ProjectDialog({ current, projects, onOpen, onRebind, onClose }: 
                 </div>
               );
             })}
+          </div>
+        </div>
+        <div>
+          <div className="f3" style={{ marginBottom: 'var(--s1)' }}>
+            {t('files.knowledge')}
+          </div>
+          <div className="plist">
+            {(current?.entries ?? []).map((entry) => (
+              <button
+                key={entry.path}
+                type="button"
+                onClick={() => onOpenFile(entry.path)}
+                disabled={!entry.present}
+                data-testid="project-entry"
+              >
+                <span className="mono">{entry.path}</span>
+                <span className="sp" />
+                <span className="f3">{entry.present ? t('files.present') : t('files.missing')}</span>
+              </button>
+            ))}
+            <button type="button" onClick={() => onOpenFile('.')} data-testid="project-browse">
+              <span>{t('files.browse')}</span>
+            </button>
           </div>
         </div>
         <div>

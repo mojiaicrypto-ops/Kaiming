@@ -13,6 +13,8 @@ export interface TaskStripProps {
   readonly onFollow: (sessionId: string) => void;
   readonly onPause: () => void;
   readonly onResume: () => void;
+  /** Opens the Task detail: goal, scope and the reports it produced. */
+  readonly onOpenTask: () => void;
 }
 
 /**
@@ -20,7 +22,7 @@ export interface TaskStripProps {
  * working and the one control that matters (pause / resume). It sits above the transcript and
  * disappears entirely when there is no Task — an empty strip is noise.
  */
-export function TaskStrip({ detail, pendingQuestions, membersOpen, onToggleMembers, onFollow, onPause, onResume }: TaskStripProps) {
+export function TaskStrip({ detail, pendingQuestions, membersOpen, onToggleMembers, onFollow, onPause, onResume, onOpenTask }: TaskStripProps) {
   const { t } = useI18n();
   const phaseLabel = usePhaseLabel();
   if (detail === null) return null;
@@ -48,7 +50,9 @@ export function TaskStrip({ detail, pendingQuestions, membersOpen, onToggleMembe
   return (
     <div className="task-strip" data-testid="task-strip">
       <div className="in">
-        <span className="f3 mono">{task.taskId}</span>
+        <button type="button" className="chip-btn mono" onClick={onOpenTask} data-testid="task-open">
+          {task.taskId}
+        </button>
         <span className="phases">
           {phases.map((phase, index) => (
             <span key={phase} style={{ display: 'contents' }}>

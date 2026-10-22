@@ -445,3 +445,117 @@ test('a requirement hands off to the chat without sending anything', async ({ pa
     await harness.close();
   }
 });
+
+test('a specialist report opens from the task detail, with the body it really wrote', async ({ page }) => {
+  // Chief creates a read Task, dispatches an investigator, the member delivers a report, and the
+  // user reads that report without a model retelling it. The body text is the stub's own words.
+  const harness = await startHarness({
+    model: [
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'task',
+            arguments: JSON.stringify({
+              op: 'create',
+              type: 'read',
+              goal: 'survey the account module',
+              scope: 'account module',
+              planMarkdown: '# survey\n',
+            }),
+          },
+        ],
+      },
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'task',
+            arguments: JSON.stringify({
+              op: 'dispatch',
+              waitTimeoutMs: 5_000,
+              sessions: [{ roleId: 'investigator', instructions: 'survey the account module' }],
+            }),
+          },
+        ],
+      },
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'agent_report',
+            arguments: JSON.stringify({ summary: '模块调查完成', body: '# 调查\n\n账户模块有三个入口。' }),
+          },
+        ],
+      },
+      { kind: 'text', text: '调查完成。' },
+    ],
+  });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    await page.locator('[data-testid="composer"]').fill('先调查账户模块');
+    await page.locator('[data-testid="composer"]').press('Enter');
+
+    await expect(page.locator('[data-testid="task-open"]')).toBeVisible({ timeout: 25_000 });
+    await page.locator('[data-testid="task-open"]').click();
+    const result = page.locator('[data-testid="result-open"]').first();
+    await expect(result).toContainText('模块调查完成', { timeout: 15_000 });
+    await result.click();
+
+    await expect(page.locator('.drawer')).toContainText('账户模块有三个入口');
+    // The body comes from the stored report, not from a chat message.
+    await expect(page.locator('[data-testid="transcript"]')).not.toContainText('账户模块有三个入口');
+  } finally {
+    await harness.close();
+  }
+});
+
+test('the project files open in a read-only viewer, and a binary file says so', async ({ page }) => {
+  const harness = await startHarness();
+  try {
+    const projectPath = harness.project?.projectPath ?? '';
+    writeFileSync(join(projectPath, 'AGENTS.md'), '# project rules\n\nKeep it short.\n');
+    writeFileSync(join(projectPath, 'blob.bin'), Buffer.from([0, 1, 2, 3]));
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, projectPath);
+
+    await page.locator('[data-testid="project-switcher"]').click();
+    const entry = page.locator('[data-testid="project-entry"]', { hasText: 'AGENTS.md' });
+    await entry.click();
+    await expect(page.locator('[data-testid="file-text"]')).toContainText('Keep it short.');
+    await page.locator('.drawer .dh button').last().click();
+
+    await page.locator('[data-testid="project-switcher"]').click();
+    await page.locator('[data-testid="project-browse"]').click();
+    await page.locator('[data-testid="file-entry"]', { hasText: 'blob.bin' }).click();
+    // A binary file is not text, and the viewer must say so instead of printing control bytes.
+    await expect(page.locator('.drawer')).toContainText(/[Bb]inary/);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('the transcript can ask for older messages and stops at the beginning', async ({ page }) => {
+  const harness = await startHarness({ model: [{ kind: 'text', text: '好的。' }] });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    await page.locator('[data-testid="composer"]').fill('你好');
+    await page.locator('[data-testid="composer"]').press('Enter');
+    const turns = page.locator('[data-testid="transcript"] article.m');
+    await expect(turns).toHaveCount(2, { timeout: 15_000 });
+
+    const earlier = page.locator('[data-testid="load-earlier"]');
+    await expect(earlier).toBeVisible();
+    await earlier.click();
+    // Nothing older exists: the rows stay as they were and the control stops offering more.
+    await expect(earlier).toHaveCount(0);
+    await expect(turns).toHaveCount(2);
+  } finally {
+    await harness.close();
+  }
+});

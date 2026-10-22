@@ -141,6 +141,35 @@ export function pageHistory(
   return { records: page, nextCursor: next, unknownCursor: false };
 }
 
+/**
+ * The page of messages strictly BEFORE one entry, so a reader can walk a long conversation backwards
+ * (the forward cursor only ever moves towards the newest message).
+ *
+ * Returns `previousCursor` = the first entry of this page, or null at the beginning of the history.
+ */
+export function pageHistoryBefore(
+  read: { records: readonly HistoryRecord[] },
+  before: string,
+  limit: number,
+): {
+  readonly records: readonly HistoryRecord[];
+  readonly previousCursor: string | null;
+  readonly unknownCursor: boolean;
+} {
+  const messages = read.records.filter((record) => record.type === 'message');
+  const found = messages.findIndex((record) => record.id === before);
+  if (found < 0) {
+    return { records: [], previousCursor: null, unknownCursor: true };
+  }
+  const start = Math.max(found - limit, 0);
+  const page = messages.slice(start, found);
+  return {
+    records: page,
+    previousCursor: start > 0 ? (page[0]?.id ?? null) : null,
+    unknownCursor: false,
+  };
+}
+
 /** The LAST `limit` message records: a reconnect snapshot must describe the conversation's
  *  tail — the first-page cut silently dropped the newest turns once history passed the cap. */
 export function tailHistory(

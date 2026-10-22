@@ -809,4 +809,65 @@ describe('read-only query surface', () => {
     expect(errorCode(bad.body)).toBe('INVALID_ARGUMENT');
   });
 
+  it('walks the history backwards from the oldest message a reader already has', async () => {
+    const h = await harness();
+    // Four messages on disk: a tail of two can be extended back one page at a time.
+    const piFile = join(h.projectRoot, '..', 'sessions', 's-chief.jsonl');
+    mkdirSync(dirname(piFile), { recursive: true });
+    writeFileSync(
+      piFile,
+      [
+        JSON.stringify({ type: 'session', id: 'h-1', version: 3, timestamp: 't', cwd: h.projectRoot }),
+        JSON.stringify({ type: 'message', id: 'u-1', message: { role: 'user', content: 'one' }, timestamp: 't1' }),
+        JSON.stringify({ type: 'message', id: 'a-1', message: { role: 'assistant', content: 'two' }, timestamp: 't2' }),
+        JSON.stringify({ type: 'message', id: 'u-2', message: { role: 'user', content: 'three' }, timestamp: 't3' }),
+        JSON.stringify({ type: 'message', id: 'a-2', message: { role: 'assistant', content: 'four' }, timestamp: 't4' }),
+      ].join('\n') + '\n',
+    );
+
+    const page = await h.call('session.messages.list', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      before: 'u-2',
+      limit: 1,
+    });
+    const read = resultOf<{
+      messages: Array<{ entryId: string }>;
+      previousCursor: string | null;
+      nextCursor: string | null;
+    }>(page.body);
+    // The page ends *before* the anchor, and the cursor is its own first entry.
+    expect(read.messages.map((entry) => entry.entryId)).toEqual(['a-1']);
+    expect(read.previousCursor).toBe('a-1');
+    expect(read.nextCursor).toBeNull();
+
+    const start = await h.call('session.messages.list', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      before: 'a-1',
+      limit: 5,
+    });
+    const first = resultOf<{ messages: Array<{ entryId: string }>; previousCursor: string | null }>(start.body);
+    expect(first.messages.map((entry) => entry.entryId)).toEqual(['u-1']);
+    // At the beginning of the history there is nothing older to ask for.
+    expect(first.previousCursor).toBeNull();
+
+    const both = await h.call('session.messages.list', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      cursor: 'u-1',
+      before: 'a-1',
+    });
+    expect(both.status).toBe(400);
+    expect(errorCode(both.body)).toBe('INVALID_ARGUMENT');
+
+    const unknown = await h.call('session.messages.list', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      before: 'nope',
+    });
+    expect(unknown.status).toBe(400);
+    expect(errorCode(unknown.body)).toBe('INVALID_ARGUMENT');
+  });
+
 });

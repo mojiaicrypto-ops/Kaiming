@@ -1446,6 +1446,36 @@ kbd {
   display: flex;
   gap: var(--s2);
 }
+/* The file reader: a listing of buttons, then the text of one file, scrolled inside its drawer. */
+.entry {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  width: 100%;
+  padding: 4px var(--s3);
+  min-width: 0;
+  text-align: left;
+}
+.entry:hover {
+  background: var(--sel);
+}
+.entry .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fileread {
+  margin: 0;
+  padding: var(--s3);
+  background: var(--inset);
+  border: 1px solid var(--line);
+  overflow-x: auto;
+  white-space: pre;
+  font-family: var(--mono);
+  font-size: var(--fs-12);
+  max-height: 100%;
+}
+
 .inp {
   height: 32px;
   padding: 0 var(--s3);

@@ -58,6 +58,7 @@ const en = {
   'chat.newSession': '+ New session',
   'chat.untitled': 'New session',
   'chat.moreSessions': 'Load more sessions',
+  'chat.earlier': 'Load earlier messages',
   'chat.today': 'Today {time}',
   'chat.yesterday': 'Yesterday',
   'chat.empty.title': 'Talk to the chief about what you want to build',
@@ -177,6 +178,32 @@ const en = {
   'tool.notPassed': 'Not passed',
   'tool.saving': 'Saving…',
   'tool.requirementSaved': 'Saved {id}',
+
+  // ---------- files ----------
+  'files.browse': 'Project files',
+  'files.readOnly': 'Read only',
+  'files.root': '/',
+  'files.back': 'Back',
+  'files.meta': '{size} bytes · version {version}',
+  'files.truncated': 'truncated at 1 MiB',
+  'files.binary': 'Binary file — no text to show.',
+  'files.knowledge': 'Knowledge entries',
+  'files.present': 'present',
+  'files.missing': 'missing',
+  'files.symlink': 'symlink (not followed)',
+  'files.other': 'not a regular file',
+  'files.more': 'Show more',
+
+  // ---------- task detail ----------
+  'task.detail': 'Task detail',
+  'task.goal': 'Goal',
+  'task.scope': 'Scope',
+  'task.nextStep': 'Next step',
+  'task.results': 'Results',
+  'task.noResults': 'No report yet.',
+  'task.openReport': 'Open report',
+  'task.reportStale': 'The report body is missing or changed on disk.',
+  'task.serverCopy': 'stored in the server work area',
 
   // ---------- requirements ----------
   'req.title': 'Requirements',
@@ -355,6 +382,7 @@ export const zhCN: Record<MessageKey, string> = {
   'chat.newSession': '＋ 新建会话',
   'chat.untitled': '新会话',
   'chat.moreSessions': '加载更多会话',
+  'chat.earlier': '加载更早的消息',
   'chat.today': '今天 {time}',
   'chat.yesterday': '昨天',
   'chat.empty.title': '和主管聊聊你想做的事',
@@ -472,6 +500,32 @@ export const zhCN: Record<MessageKey, string> = {
   'tool.notPassed': '未通过',
   'tool.saving': '保存中…',
   'tool.requirementSaved': '已保存 {id}',
+
+  // ---------- files ----------
+  'files.browse': '项目文件',
+  'files.readOnly': '只读',
+  'files.root': '/',
+  'files.back': '返回',
+  'files.meta': '{size} 字节 · 版本 {version}',
+  'files.truncated': '已截断到 1 MiB',
+  'files.binary': '二进制文件，没有可显示的文本。',
+  'files.knowledge': '知识入口',
+  'files.present': '存在',
+  'files.missing': '缺失',
+  'files.symlink': '符号链接（不跟随）',
+  'files.other': '不是普通文件',
+  'files.more': '显示更多',
+
+  // ---------- task detail ----------
+  'task.detail': '任务详情',
+  'task.goal': '目标',
+  'task.scope': '范围',
+  'task.nextStep': '下一步',
+  'task.results': '结果',
+  'task.noResults': '还没有报告。',
+  'task.openReport': '打开报告',
+  'task.reportStale': '报告正文缺失或已被改动。',
+  'task.serverCopy': '保存在服务端工作目录',
 
   // ---------- requirements ----------
   'req.title': '需求',

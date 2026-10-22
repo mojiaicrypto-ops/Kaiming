@@ -30,11 +30,13 @@
 | method | 参数 | 返回 / 行为 |
 |---|---|---|
 | project.open | path | realpath 唯一 Project、会话/工作摘要、知识入口；只登记/读取，不创建会话、模型或项目文件 |
-| project.get | projectId | 概要与当前绑定/入口问题；目录缺失明确报告 |
+| project.get | projectId | 概要与当前绑定/入口问题；目录缺失明确报告；不含任务列表（任务一律走 `task.list`） |
+| project.list | limit?、cursor? | 已登记项目列表：realPath、目录是否存在、会话/任务数、最后活动、更新时间；cursor 为 `updatedAt\|projectId`；不读项目文件 |
 | project.rebind | projectId、expectedRevision、path | 原 ID 的新目录绑定；先停写、校验引用与确认来源，禁止因同名自动认领 |
-| session.create | projectId、title? | chief 的逻辑 Session；Pi 懒创建，无模型也能创建/读取 |
-| session.get | projectId、sessionId | role、currentTaskId、activity、当前输入、等待原因、排队数、配置摘要；activity=idle/processing/waiting_children/waiting_user/stopping |
-| session.messages.list | projectId、sessionId、cursor?、limit | 指定 Pi 历史、input 关联与状态、nextCursor；无历史的未开始会话为空，有历史而文件缺失报错 |
+| session.create | projectId | chief 的逻辑 Session；Pi 懒创建，无模型也能创建/读取；标题不存储，由首条用户输入派生 |
+| session.get | projectId、sessionId | role、currentTaskId、activity、stopping、当前输入、等待原因、排队数、lastActivityAt、config{providerId,modelId,source}；activity=idle/queued/processing/stopping（stopping=已请求停止但尚未停稳）；config 取当前输入认领时记录的配置，只回这三个字段，不含服务端目录 |
+| session.list | projectId、limit?、cursor? | 会话列一次取齐：sessionId、roleId、title（派生，60 码点截断）、activity、lastActivityAt、currentTaskId、queuedInputs；cursor 为 `lastActivityAt\|sessionId`；不调用 `stream.prepare`、不读历史文件 |
+| session.messages.list | projectId、sessionId、cursor?、before?、limit | 指定 Pi 历史、input 关联与状态；cursor 向前翻（nextCursor），before 向后翻（previousCursor，页首 entry；到最早为 null），两者不可同时给；无历史的未开始会话为空，有历史而文件缺失报错 |
 | session.input.submit | projectId、sessionId、content、taskId? | 用户输入只投 chief；当前 Task 的补充须关联原 taskId，按安全边界处理；普通新话题排队至原 Task 结束或新开主管会话 |
 | session.input.get | projectId、sessionId、inputId | 当前状态、历史边界/结果的公开引用、错误/停止原因；原内容保持不变 |
 | session.input.stop | projectId、sessionId、inputId | 保存停止意图后直接 abort；返回 Input 原 status/revision、stopRequested 与 Session.activity；未停稳 activity=stopping，未知为 interrupted |

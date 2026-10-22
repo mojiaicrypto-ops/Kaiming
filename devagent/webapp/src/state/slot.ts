@@ -54,12 +54,21 @@ export interface TaskSummaryView {
   phase: string;
   status: string;
   revision: number;
+  goal: string;
+  scope: string;
+  nextStep: string | null;
 }
 
 export interface TaskDetail {
   task: TaskSummaryView;
   members: readonly TaskMember[];
-  results: ReadonlyArray<{ resultId: string; kind: string; label?: string }>;
+  results: ReadonlyArray<{
+    resultId: string;
+    kind: string;
+    label?: string;
+    summary?: string;
+    verdict?: string | null;
+  }>;
 }
 
 export interface SessionSlot {
@@ -95,6 +104,8 @@ export type SlotAction =
   | { type: 'taskDetail'; detail: TaskDetail | null }
   | { type: 'inputQueued'; inputId: string }
   | { type: 'inputRemoved'; inputId: string }
+  /** Older history, fetched on demand: inserted before what is already shown, never re-sorted. */
+  | { type: 'older'; messages: readonly unknown[] }
   | { type: 'reset' };
 
 /**
@@ -188,6 +199,26 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
   switch (action.type) {
     case 'reset':
       return emptySlot();
+    case 'older': {
+      // Backwards paging keeps its own order: the page is older than everything on screen, so it
+      // goes in front verbatim. Anything already present (a race with a resync) is skipped.
+      const known = new Set(state.items.map((item) => item.entryId));
+      const older = (action.messages as unknown[])
+        .map((message) =>
+          normalizePiMessage(message as { role?: string; content?: unknown }, {
+            entryId: typeof (message as { entryId?: unknown }).entryId === 'string' ? (message as { entryId: string }).entryId : '',
+            streaming: false,
+            inputId: (message as { inputId?: string | null }).inputId ?? null,
+            toolCallId: (message as { toolCallId?: unknown }).toolCallId as string | undefined,
+            toolName: (message as { toolName?: unknown }).toolName as string | undefined,
+            ...(typeof (message as { isError?: unknown }).isError === 'boolean'
+              ? { isError: (message as { isError: boolean }).isError }
+              : {}),
+          }),
+        )
+        .filter((message) => message.entryId !== '' && !known.has(message.entryId));
+      return { ...state, items: [...older, ...state.items] };
+    }
     case 'snapshot': {
       const { snapshot } = action;
       // The snapshot's messages come from the history file (Pi shapes); the boundary
