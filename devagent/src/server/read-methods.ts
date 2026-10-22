@@ -25,6 +25,12 @@ const ENTRY_PATHS = ['AGENTS.md', join('.dev', 'INDEX.md'), join('.dev', 'PROJEC
 
 export interface ReadMethodsOptions {
   readonly store: Store;
+  /**
+   * Why a session cannot run right now, if it cannot. The snapshot carries it for a connecting
+   * reader; this method carries it for a reader who is already here and asks "why is nothing
+   * happening" after a submit.
+   */
+  readonly blockedOf?: (sessionId: string) => { code: string; detail: string } | null;
 }
 
 export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptions): void {
@@ -183,7 +189,7 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       if (sessionId === undefined) {
         throw new RpcError('INVALID_ARGUMENT', 'sessionId is required');
       }
-      return { session: requireSession(store, project.id, sessionId) };
+      return { session: requireSession(store, project.id, sessionId, options.blockedOf) };
     },
   });
 
@@ -610,7 +616,12 @@ function requireProject(store: Store, params: Record<string, unknown>) {
   return project;
 }
 
-function requireSession(store: Store, projectId: string, sessionId: string) {
+function requireSession(
+  store: Store,
+  projectId: string,
+  sessionId: string,
+  blockedOf?: (sessionId: string) => { code: string; detail: string } | null,
+) {
   const session = store.getSession(sessionId);
   if (session === undefined || session.projectId !== projectId) {
     throw new RpcError('NOT_FOUND', `session ${sessionId} does not exist in this project`, { sessionId });
@@ -632,6 +643,8 @@ function requireSession(store: Store, projectId: string, sessionId: string) {
     activity: live.activity,
     // The same fact, named for a caller that only wants the one condition.
     stopping: live.activity === 'stopping',
+    // Why nothing is running, if nothing is running because of a block.
+    blocked: blockedOf?.(sessionId) ?? null,
     currentInputId: current?.inputId ?? null,
     // What this session is running with, from the claim's own record: a change in the settings
     // must be visible as a difference, not silently applied to work already running.

@@ -21,8 +21,11 @@ import { epochOf } from '../src/runtime/epoch.ts';
 import { createStubEnv, startStubModelServer, type StubReply } from '../spikes/harness/pi-env.ts';
 
 const cleanups: Array<() => Promise<void> | void> = [];
+/** Per-harness block records, read by the injected `blockedOf`. */
+const blocks = new Map<string, { code: string; detail: string }>();
 
 afterEach(async () => {
+  blocks.clear();
   for (const cleanup of cleanups.splice(0).reverse()) {
     await cleanup();
   }
@@ -136,6 +139,8 @@ async function harness(
   registerStreamMethods(router, {
     store,
     hub,
+    // The tests set this to model a run that cannot start.
+    blockedOf: (sessionId) => blocks.get(sessionId) ?? null,
     epochOf: (sessionId) => epoch(sessionId),
     // Tests inject a "live" history source (what main.ts backs with the registry).
     currentHistory: (sessionId) => liveHistories.get(sessionId),
@@ -560,5 +565,21 @@ describe('session.stream.prepare with a live history source', () => {
     } finally {
       await afterHarness(h);
     }
+  });
+});
+
+describe('stream preparation', () => {
+  it('carries the current block, so a late reader still learns why nothing runs', async () => {
+    const h = await harness();
+    h.store.createSession({ id: 's-blocked', projectId: h.projectId, roleId: 'chief', cwd: h.projectRoot });
+    blocks.set('s-blocked', { code: 'blocked_config', detail: 'no model is configured' });
+
+    const prepared = await h.prepare('s-blocked');
+
+    expect(prepared.snapshot['blocked']).toEqual({ code: 'blocked_config', detail: 'no model is configured' });
+    // A session with nothing blocking it says so, instead of carrying an old reason.
+    h.store.createSession({ id: 's-clear', projectId: h.projectId, roleId: 'chief', cwd: h.projectRoot });
+    const clear = await h.prepare('s-clear');
+    expect(clear.snapshot['blocked']).toBeNull();
   });
 });

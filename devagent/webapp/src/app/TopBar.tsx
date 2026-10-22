@@ -73,10 +73,13 @@ export function TopBar({ route, project, status, pendingQuestions, onOpenProject
           {t('nav.chat')}
         </button>
       )}
-      <State kind={statusKind}>
-        <span className="long-label">{t(statusKey)}</span>
-        <span className="short-label">{status === 'connected' ? '✓' : t(statusKey).slice(0, 1)}</span>
-      </State>
+      {/* The connection is a state, and the shell's tests read it as one. */}
+      <span data-testid="connection" data-state={status}>
+        <State kind={statusKind}>
+          <span className="long-label">{t(statusKey)}</span>
+          <span className="short-label">{status === 'connected' ? '✓' : t(statusKey).slice(0, 1)}</span>
+        </State>
+      </span>
     </header>
   );
 }

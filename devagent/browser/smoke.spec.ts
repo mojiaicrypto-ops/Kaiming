@@ -10,7 +10,7 @@
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect, type Page, type TestInfo } from '@playwright/test';
-import { loginThroughUi, startHarness, type Harness, type SeededProject } from './harness.ts';
+import { loginThroughUi, startHarness, waitForConnected, type Harness, type SeededProject } from './harness.ts';
 
 const ARTIFACTS = fileURLToPath(new URL('./artifacts', import.meta.url));
 
@@ -172,6 +172,7 @@ test('a long code fence scrolls inside its own box and never widens the transcri
     await pinStorage(page, { project, locale: 'en' });
     await page.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' });
     await loginThroughUi(page, harness.accessPassword);
+    await waitForConnected(page);
     const composer = page.locator('[data-testid="composer"]');
     await composer.fill('show me a long line');
     await composer.press('Enter');
@@ -303,6 +304,7 @@ test('a Task the chief creates mid-run appears without a reload', async ({ page 
     await pinStorage(page, { project, locale: 'en' });
     await page.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' });
     await loginThroughUi(page, harness.accessPassword);
+    await waitForConnected(page);
 
     const composer = page.locator('[data-testid="composer"]');
     await composer.fill('先调查一下账号模块');

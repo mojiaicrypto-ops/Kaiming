@@ -123,6 +123,20 @@ export function startWorkbench(options: StartOptions): Promise<{
   };
   const auth = new AuthService({ accessPassword: options.accessPassword });
   const router = new RpcRouter();
+  /**
+   * The last block reported per session: a run that still cannot start must not repeat itself.
+   * The same record answers "why is nothing running" for a reader who connects afterwards, so a
+   * blocked state is never delivered once and lost.
+   */
+  const reportedBlocks = new Map<string, string>();
+  const blockedOf = (sessionId: string): { code: string; detail: string } | null => {
+    const signature = reportedBlocks.get(sessionId);
+    if (signature === undefined) return null;
+    const separator = signature.indexOf(':');
+    return separator < 0
+      ? { code: signature, detail: '' }
+      : { code: signature.slice(0, separator), detail: signature.slice(separator + 1) };
+  }
   // The factory is the one the runner uses, so a saved provider is visible to the next claimed input.
   registerCoreMethods(router, {
     store,
@@ -130,7 +144,7 @@ export function startWorkbench(options: StartOptions): Promise<{
     reloadRuntime: () => factory.reload(),
     probeModel: (selection) => factory.probe(selection),
   });
-  registerReadMethods(router, { store });
+  registerReadMethods(router, { store, blockedOf });
 
   // Live events (M4): the runner publishes what Pi reports, the write surface publishes invalidations.
   const hub = new SessionEventHub();
@@ -179,8 +193,7 @@ export function startWorkbench(options: StartOptions): Promise<{
     ...(options.runStallMs !== undefined ? { runStallMs: options.runStallMs } : {}),
     ...(options.runTotalMs !== undefined ? { runTotalMs: options.runTotalMs } : {}),
   });
-  /** The last block reported per session: a run that still cannot start must not repeat itself. */
-  const reportedBlocks = new Map<string, string>();
+;
   const worker = new WorkbenchWorker({
     store,
     runner,
@@ -247,6 +260,7 @@ export function startWorkbench(options: StartOptions): Promise<{
   registerStreamMethods(router, {
     store,
     hub,
+    blockedOf,
     epochOf: (sessionId) => epoch(sessionId),
     currentHistory: (sessionId) => {
       const handle = registry.get(sessionId);

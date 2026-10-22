@@ -330,7 +330,9 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
             <Composer
               busy={slot.busy}
               canStop={slot.currentInputId !== null}
-              disabled={!hasProject}
+              // Sending while the session is not subscribed would start work the transcript could
+              // never show: the stream is the only way those events arrive.
+              disabled={!hasProject || session.status !== 'connected'}
               seed={draft}
               onSeed={(inserted) => onDraftConsumed(inserted)}
               onSubmit={submit}

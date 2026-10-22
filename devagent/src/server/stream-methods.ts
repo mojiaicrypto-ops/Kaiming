@@ -23,6 +23,8 @@ export interface StreamMethodsOptions {
    * and a finished session falls back to its file. Without this the prepare snapshot cannot
    * describe what is on screen and a resync made the live message vanish.
    */
+  /** Why the session cannot run right now, if it cannot: a snapshot must not lose a block. */
+  readonly blockedOf?: (sessionId: string) => { code: string; detail: string } | null;
   readonly currentHistory?: (sessionId: string) => {
     records: readonly HistoryRecord[];
     problems?: readonly string[];
@@ -88,6 +90,9 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
           // that is the running configuration, and after it ends it is what the last run really
           // used — which is how a reader notices that the settings no longer match the work.
           config: summarizeRecordedConfig(recordedConfigOf(inputs)),
+          // A blocked run is state, not an event: a reader who connects after it happened still
+          // has to see why nothing is running.
+          blocked: options.blockedOf?.(sessionId) ?? null,
           // Pending interactions are part of the boundary copy (M5): a reconnecting page sees the
           // open questions again instead of losing them.
           interactions: (session.roleId === 'chief'

@@ -16,6 +16,8 @@ export interface PreparedSnapshot {
   activity: SessionActivity;
   /** What the running input was configured with; null while nothing is running. */
   config?: { providerId: string; modelId: string; source: string } | null;
+  /** Why the session cannot run, as of the snapshot; null when nothing is blocked. */
+  blocked?: { code: string; detail: string } | null;
   currentInputId: string | null;
   inputs: ReadonlyArray<{ inputId: string; kind: string; status: string; revision: number; errorCode: string | null }>;
   messages: readonly HistoryMessage[];

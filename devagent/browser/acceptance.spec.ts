@@ -9,7 +9,7 @@ import { mkdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { loginThroughUi, startHarness } from './harness.ts';
+import { loginThroughUi, startHarness, waitForConnected } from './harness.ts';
 
 /** Open the seeded project through the switcher (the first thing a user does). */
 async function openProject(page: Page, projectPath: string): Promise<void> {
@@ -17,6 +17,7 @@ async function openProject(page: Page, projectPath: string): Promise<void> {
   await page.locator('[data-testid="project-path"]').fill(projectPath);
   await page.locator('[data-testid="project-path"]').press('Enter');
   await expect(page.locator('[data-testid="project-switcher"]')).toContainText('project');
+  await waitForConnected(page);
   await expect(page.locator('[data-testid="composer"]')).toBeEnabled();
 }
 

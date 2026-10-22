@@ -10,7 +10,7 @@
 
 ## 本轮结果（2026-10-22）
 
-- **D** 6 项全部关闭；**S** 4 项关闭、1 项按原决定不做；**C** 4 项与实现一致；**U** 7 项补上界面、1 项不做、2 项待确认（U4/U5，问题见 `.agentdev/work/workbench-gaps-20261022/questions.md`）。
+- **D** 9 项全部关闭；**S** 4 项关闭、1 项按原决定不做；**C** 4 项与实现一致；**U** 7 项补上界面、1 项不做、2 项待确认（U4/U5，问题见 `.agentdev/work/workbench-gaps-20261022/questions.md`）。
 - **P** 按本轮实现执行：单请求列表、推送取代轮询、错误码文案、焦点管理、方法消费表（[UI 设计契约](ui-design.md#u9-方法消费)）。
 - 验证：`npm test` 299 用例、`npm --prefix webapp test` 25 用例、`npm run test:browser` 25 用例、两处 `tsc --noEmit` 无输出；证据与未覆盖项见 [验证记录](validation.md)。
 
@@ -34,6 +34,10 @@
 | S3 | 任务创建与成员变化没有推送：`task` 工具没有发布钩子 | `src/tools/task-tools.ts:17-38`（`TaskToolContext` 无 invalidate）；仅控制/结束时由 `write-methods` 发 invalidate | 任务条依赖轮询；主管一次性建 Task 时界面最长 2 秒空白 | **已关闭** — Runner 增 `onTaskChange(sessionId, taskId)`，在 create/update/dispatch/control/end 后发布 `invalidate{task}`（并 `invalidate{session}` 供会话列刷新）；轮询降级为兜底 |
 | S4 | `session.get` 不区分「正在停止」，也不返回本次运行的实际配置 | `src/server/read-methods.ts:513-543` | 状态栏无法显示 stopping；P-05「当前工作显示实际使用配置」没有数据入口 | **已关闭** — 增加 `stopping`（存在 stopRequested 的 processing 输入）与 `config`（来自当前输入的记录，见 C4） |
 | S5 | `session.input.submit` 没有结构化需求引用 | `src/server/write-methods.ts:51-80` 只收 content/taskId | 需求交接只能靠文本提到 id | **不做**：文本 + `requirement` 工具已足够，且加字段会让「引用」出现第二处解释；见 D2 |
+
+| D7 | 阻断原因只作为一次事件发送：在订阅建立前发生的阻断永远看不到（实测无模型时 3 次里 2 次横幅不出现） | `src/server/main.ts`（只 `hub.publish`）；快照与 `session.get` 都不含它 | 用户提交后没有任何反应，也不知道「没有模型」 | **已关闭** — 阻断原因进入 `stream.prepare` 快照与 `session.get`；有排队输入且没有运行时按 1.5 秒读一次（可见时），事件仍作即时通道 |
+| D8 | 会话未订阅时 composer 仍可发送：这些事件到达不了任何订阅者，转录里看不到 | `webapp/src/chat/ChatPage.tsx`（`disabled={!hasProject}`） | 断线/刚打开时提交的消息看起来「消失」 | **已关闭** — 连接态不是 connected 时禁用发送（草稿保留），顶栏给出连接状态 |
+| D9 | 阻断横幅在 390px 下不可收缩，长原因把页面撑宽 12px | `theme/base.css` `.bn` 无 `flex-wrap`，详情不可断行 | 窄屏横向滚动 | **已关闭** — 横幅允许换行、详情可断行、按钮不收缩 |
 
 ## C 合同与实现不一致
 

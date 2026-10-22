@@ -159,6 +159,9 @@ export function useSession(
       setStatus('connected');
       setHistoryProblems(snapshot.historyProblems ?? []);
       setConfig(snapshot.config ?? null);
+      // The snapshot is the authority on "is something blocking this session": an event that
+      // arrived before this tab subscribed would otherwise be lost forever.
+      setBlocked(snapshot.blocked ?? null);
       dispatch({ type: 'snapshot', snapshot, reason: 'resync' });
       // Restore the coordinated Task after (re)connect: the invalidate frames that would set
       // activeTaskId may have fired before this tab subscribed, leaving the Task strip absent
@@ -280,6 +283,37 @@ export function useSession(
   // The server does not push Task member changes, so the strip polls the coordinated Task while
   // one exists (plan D5). A failed poll is ignored on purpose: the next tick retries, and a strip
   // that is one refresh stale is better than a banner for a transient read error.
+  /**
+   * An input is queued and nothing is running: either the user's message waits behind a Task, or a
+   * run cannot start (a missing model, a role that is not configured). The server knows which; the
+   * client asks, because the event that said so may have been published before this tab subscribed.
+   * Polling stops as soon as the state changes — it is not a heartbeat.
+   */
+  useEffect(() => {
+    if (slot.busy !== 'queued' || projectId === null || sessionId === null) return;
+    let cancelled = false;
+    const ask = (): void => {
+      if (document.visibilityState !== 'visible') return;
+      void rpc
+        .call<{ session: { blocked: { code: string; detail: string } | null; config: { providerId: string; modelId: string; source: string } | null } }>(
+          'session.get',
+          { projectId, sessionId },
+        )
+        .then((read) => {
+          if (cancelled) return;
+          setBlocked(read.session.blocked);
+          if (read.session.config !== null) setConfig(read.session.config);
+        })
+        .catch(() => undefined);
+    };
+    ask();
+    const timer = window.setInterval(ask, 1_500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [slot.busy, projectId, sessionId, rpc]);
+
   // A run ended: read what it actually used, once, instead of polling for a value that changes
   // at most once per run.
   const wasBusy = useRef(false);
@@ -287,11 +321,20 @@ export function useSession(
     const busyNow = slot.busy !== 'idle';
     if (wasBusy.current && !busyNow && projectId !== null && sessionId !== null) {
       void rpc
-        .call<{ session: { config: { providerId: string; modelId: string; source: string } | null } }>('session.get', {
+        .call<{
+          session: {
+            config: { providerId: string; modelId: string; source: string } | null;
+            blocked: { code: string; detail: string } | null;
+          };
+        }>('session.get', {
           projectId,
           sessionId,
         })
-        .then((read) => setConfig(read.session.config))
+        .then((read) => {
+          setConfig(read.session.config);
+          // The run ended without starting, or it failed: the same read says which.
+          setBlocked(read.session.blocked);
+        })
         .catch(() => undefined);
     }
     wasBusy.current = busyNow;

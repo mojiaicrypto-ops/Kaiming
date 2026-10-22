@@ -134,6 +134,13 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The model name is informative, never a reason to widen the shell: it clips like the path. */
+.status .model {
+  min-width: 0;
+  max-width: 28vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* ---------- state glyph + word ---------- */
 .st {
@@ -812,9 +819,20 @@ kbd {
   display: flex;
   gap: var(--s3);
   align-items: center;
+  /* A long reason wraps onto its own line on a narrow screen instead of widening the shell. */
+  flex-wrap: wrap;
   padding: var(--s2) var(--s8);
   border-bottom: 1px solid var(--line);
   font-size: var(--fs-13);
+  min-width: 0;
+}
+.bn > .f2,
+.bn > .st {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.bn .btn {
+  flex: 0 0 auto;
 }
 .bn.run {
   border-bottom-color: var(--run);

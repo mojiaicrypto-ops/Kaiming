@@ -173,6 +173,16 @@ export async function startHarness(
 }
 
 /**
+ * Wait until the open session is actually subscribed. The composer refuses input before that, and a
+ * test that typed into it earlier would be testing a state a user cannot reach.
+ */
+export async function waitForConnected(page: Page): Promise<void> {
+  await expect(page.locator('[data-testid="connection"]')).toHaveAttribute('data-state', 'connected', {
+    timeout: 15_000,
+  });
+}
+
+/**
  * Log in through the real login screen, the same way a person does; it disappears only when the
  * server accepted the password (the shell then paints the workspace).
  */

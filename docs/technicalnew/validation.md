@@ -57,7 +57,7 @@
 |---|---|---|
 | 服务端类型 | Passed | `tsc -p tsconfig.json --noEmit` 无输出 |
 | 外壳类型 | Passed | `npm --prefix webapp run typecheck` 无输出 |
-| 单测与集成 | Passed | `npm test` 26 文件 299 用例；`npm --prefix webapp test` 3 文件 25 用例 |
+| 单测与集成 | Passed | `npm test` 26 文件 300 用例；`npm --prefix webapp test` 3 文件 25 用例 |
 | 外壳构建 | Passed | `npm run build` → `web-static/index.html` + 资产 |
 | 浏览器验收 | Passed | `npm run test:browser` 27 用例（三屏、对话、提问答复、双击防重、业务拒绝、断线返回、被拒工具仍可见、提案三段正文、五档视口、主题切换、长代码块、任务条轮询、运行中新建 Task 的推送、模型范围写入、需求交接预填、文件与二进制阅读、报告正文、更早历史、重绑定、任务列表、焦点陷阱与归还、错误与阻断文案、运行模型显示） |
 | 文案一致性 | Passed | `test/web-i18n-keys.test.ts`：两语键一致、界面引用的键都存在、无空值、占位符一致 |

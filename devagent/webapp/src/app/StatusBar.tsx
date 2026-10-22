@@ -29,7 +29,7 @@ export function StatusBar({ project, runningMembers, connection, activity, confi
       {runningMembers > 0 && <State kind="run">{t('shell.running', { count: runningMembers })}</State>}
       {activity === 'stopping' && <State kind="paused">{t('shell.stopping')}</State>}
       {config !== null && (
-        <span className="f3 mono" title={t('shell.configSource', { source: config.source })} data-testid="status-model">
+        <span className="f3 mono model" title={t('shell.configSource', { source: config.source })} data-testid="status-model">
           {config.providerId}/{config.modelId}
         </span>
       )}
