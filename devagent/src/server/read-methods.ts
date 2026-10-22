@@ -11,8 +11,11 @@ import { digestOfText, getRequirement, listRequirements, requirementPath } from 
 import { readReportBody } from '../runtime/report-store.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
 import type { Store } from '../store/store.ts';
+import { textOfPayload } from '../runtime/input-text.ts';
 
 const MAX_FILE_BYTES = 1024 * 1024;
+/** A session's title is derived from its first user message; longer than this adds no information. */
+const TITLE_LIMIT = 60;
 const DEFAULT_PAGE = 50;
 const MAX_PAGE = 200;
 
@@ -58,6 +61,50 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
     },
   });
 
+  router.register('project.list', {
+    // A read, not a registration: opening the workbench must not touch the projects it lists.
+    write: false,
+    run: (params): unknown => {
+      const limit = clampLimit(readNumber(params, 'limit'));
+      const cursor = readString(params, 'cursor');
+      const rows = store.listProjectSummaries();
+      const key = (entry: { projectId: string; updatedAt: string }): string => `${entry.updatedAt}|${entry.projectId}`;
+      const start =
+        cursor === undefined
+          ? 0
+          : (() => {
+              const index = rows.findIndex((row) => `${row.updatedAt}|${row.id}` === cursor);
+              return index < 0 ? -1 : index + 1;
+            })();
+      if (start < 0) {
+        throw new RpcError('INVALID_ARGUMENT', 'the cursor does not belong to this listing', { cursor });
+      }
+      const page = rows.slice(start, start + limit);
+      const last = page[page.length - 1];
+      return {
+        projects: page.map((row) => {
+          const exists = existsSync(row.realPath);
+          return {
+            projectId: row.id,
+            realPath: row.realPath,
+            // The revision rebind takes: a menu row must not force a second read to act on it.
+            revision: row.revision,
+            directoryExists: exists,
+            ...(exists ? {} : { problem: 'the directory is missing; rebind it or restore it' }),
+            sessionCount: row.sessionCount,
+            taskCount: row.taskCount,
+            lastActivityAt: row.lastActivityAt,
+            updatedAt: row.updatedAt,
+          };
+        }),
+        nextCursor:
+          start + limit < rows.length && last !== undefined
+            ? key({ projectId: last.id, updatedAt: last.updatedAt })
+            : null,
+      };
+    },
+  });
+
   router.register('project.get', {
     write: false,
     run: (params): unknown => {
@@ -75,10 +122,17 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       if (expectedRevision === undefined || typeof raw !== 'string' || raw.trim() === '') {
         throw new RpcError('INVALID_ARGUMENT', 'expectedRevision and path are required');
       }
-      // A directory move is a real user decision, and it cannot happen while work is in flight.
-      const authorization = resolveAuthorizationRefs(store, project.id, params['authorizationRef']);
+      // Moving a directory is a user decision, and this method is only reachable from the
+      // authenticated browser: no model tool exposes it, so the cookie is the decision. A supplied
+      // reference is still validated (an agent-style caller may pass one), but it is not the gate -
+      // requiring it made the feature unreachable, since the browser has no decision to cite.
+      const supplied = params['authorizationRef'];
+      const authorization =
+        supplied === undefined
+          ? { ok: true as const, refs: [] as string[] }
+          : resolveAuthorizationRefs(store, project.id, supplied);
       if (!authorization.ok) {
-        throw new RpcError('FORBIDDEN', `rebinding needs the user decision (${authorization.message})`);
+        throw new RpcError('FORBIDDEN', `rebinding cites a reference that cannot be verified (${authorization.message})`);
       }
       const gaps = store.projectRebindGaps(project.id);
       if (gaps.length > 0) {
@@ -99,7 +153,13 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
         realPath,
         authorizationRefs: authorization.refs,
       });
-      return { project: projectSummary(store, rebound), authorizationRefs: authorization.refs };
+      return {
+        project: projectSummary(store, rebound),
+        // What the row pointed at before the move: the caller just changed a fact, so it must be
+        // able to show which fact changed without a second read.
+        previousRealPath: project.realPath,
+        authorizationRefs: authorization.refs,
+      };
     },
   });
 
@@ -123,6 +183,48 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
         throw new RpcError('INVALID_ARGUMENT', 'sessionId is required');
       }
       return { session: requireSession(store, project.id, sessionId) };
+    },
+  });
+
+  router.register('session.list', {
+    // One request for the rail: the alternative was two per session, and one of those opened a
+    // stream subscription nobody ever claimed (R1: a list is a list, not a prepared stream).
+    write: false,
+    run: (params): unknown => {
+      const project = requireProject(store, params);
+      const limit = clampLimit(readNumber(params, 'limit'));
+      const cursor = readString(params, 'cursor');
+      const rows = store
+        .listSessionSummaries(project.id)
+        .map((row) => ({
+          sessionId: row.id,
+          roleId: row.roleId,
+          title: titleOf(row.title),
+          activity: activityOfCounts(row.processing, row.queued, row.stopping),
+          lastActivityAt: row.lastActivityAt,
+          currentTaskId: row.currentTaskId,
+          queuedInputs: row.queued,
+        }))
+        // Newest activity first; a session with no input yet is the newest and sorts first, which
+        // is also where a freshly created session should appear.
+        .sort((left, right) => {
+          const leftKey = left.lastActivityAt ?? '~';
+          const rightKey = right.lastActivityAt ?? '~';
+          if (leftKey === rightKey) return left.sessionId < right.sessionId ? -1 : 1;
+          return leftKey > rightKey ? -1 : 1;
+        });
+      const key = (entry: { sessionId: string; lastActivityAt: string | null }): string =>
+        `${entry.lastActivityAt ?? ''}|${entry.sessionId}`;
+      const start = cursor === undefined ? 0 : rows.findIndex((entry) => key(entry) === cursor) + 1;
+      if (cursor !== undefined && start === 0) {
+        throw new RpcError('INVALID_ARGUMENT', 'the cursor does not belong to this listing', { cursor });
+      }
+      const page = rows.slice(start, start + limit);
+      const last = page[page.length - 1];
+      return {
+        sessions: page,
+        nextCursor: start + limit < rows.length && last !== undefined ? key(last) : null,
+      };
     },
   });
 
@@ -206,9 +308,9 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
           payload: input.payload,
           // Public references only: the delivered boundary and the stop/error facts.
           boundary: input.checkpoint,
-          // What this input actually ran with (R5): the redacted effective configuration as recorded at
-          // claim time, so a difference from the current settings is visible instead of silent.
-          effectiveConfig: parseRecordedConfig(input.effectiveConfig),
+          // What this input actually ran with (R5): the recorded configuration, cut to the three
+          // fields that describe a selection. The server's own directories are not public.
+          effectiveConfig: summarizeConfig(input.effectiveConfig),
           stopReason: input.stopReason,
           error: input.errorCode === null ? null : { code: input.errorCode, message: input.errorMessage ?? '' },
         },
@@ -519,13 +621,13 @@ function requireSession(store: Store, projectId: string, sessionId: string) {
     revision: session.revision,
     cwd: session.cwd,
     // activity is derived from real rows, never stored twice (R2).
-    activity:
-      current === undefined
-        ? queued > 0
-          ? 'queued'
-          : 'idle'
-        : 'processing',
+    activity: live.activity,
+    // The same fact, named for a caller that only wants the one condition.
+    stopping: live.activity === 'stopping',
     currentInputId: current?.inputId ?? null,
+    // What this session is running with right now, from the claim's own record: a change in the
+    // settings must be visible as a difference, not silently applied to work already running.
+    config: summarizeConfig(current?.effectiveConfig ?? null),
     queuedInputs: queued,
     waitingReason:
       current === undefined
@@ -546,7 +648,7 @@ function requireSession(store: Store, projectId: string, sessionId: string) {
 /** Derived live state for one session, from real input rows (R2). Shared by session.get and
  *  task.get members so a Task card sees the same live state the session view shows. */
 export function liveSessionState(store: Store, sessionId: string): {
-  activity: 'idle' | 'queued' | 'processing';
+  activity: 'idle' | 'queued' | 'processing' | 'stopping';
   currentInputId: string | null;
   queuedInputs: number;
 } {
@@ -554,10 +656,55 @@ export function liveSessionState(store: Store, sessionId: string): {
   const current = inputs.find((input) => input.status === 'processing');
   const queued = inputs.filter((input) => input.status === 'queued').length;
   return {
-    activity: current === undefined ? (queued > 0 ? 'queued' : 'idle') : 'processing',
+    // A stop was requested but the run has not settled: saying "working" would be a lie, and
+    // saying "stopped" would be worse (the durable status is still processing until it settles).
+    activity:
+      current === undefined
+        ? queued > 0
+          ? 'queued'
+          : 'idle'
+        : current.stopRequestKey === null
+          ? 'processing'
+          : 'stopping',
     currentInputId: current?.inputId ?? null,
     queuedInputs: queued,
   };
+}
+
+/** The same three-way derivation for the aggregate row a list query returns. */
+function activityOfCounts(processing: number, queued: number, stopping: number): 'idle' | 'queued' | 'processing' | 'stopping' {
+  if (processing > 0) return stopping > 0 ? 'stopping' : 'processing';
+  return queued > 0 ? 'queued' : 'idle';
+}
+
+/**
+ * A session's title is the first non-empty line of its first user message: derived, never stored,
+ * so there is no second place for a title to disagree with the conversation.
+ */
+function titleOf(payload: string | null): string | null {
+  if (payload === null) return null;
+  const text = textOfPayload(payload);
+  if (text === undefined) return null;
+  const line = text
+    .split('\n')
+    .map((entry) => entry.trim())
+    .find((entry) => entry !== '');
+  if (line === undefined) return null;
+  const points = [...line];
+  return points.length <= TITLE_LIMIT ? line : `${points.slice(0, TITLE_LIMIT).join('')}…`;
+}
+
+/** The public part of a recorded configuration: no server paths, no credential reference. */
+function summarizeConfig(recorded: string | null): { providerId: string; modelId: string; source: string } | null {
+  if (recorded === null) return null;
+  const parsed = parseRecordedConfig(recorded);
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const record = parsed as Record<string, unknown>;
+  const providerId = record['providerId'];
+  const modelId = record['modelId'];
+  const source = record['source'];
+  if (typeof providerId !== 'string' || typeof modelId !== 'string') return null;
+  return { providerId, modelId, source: typeof source === 'string' ? source : 'unknown' };
 }
 
 function projectSummary(store: Store, project: { id: string; realPath: string; revision: number; initializationRef: unknown; updatedAt: string }) {
@@ -578,7 +725,8 @@ function projectSummary(store: Store, project: { id: string; realPath: string; r
       .listSessions()
       .filter((session) => session.projectId === project.id)
       .map((session) => ({ sessionId: session.id, roleId: session.roleId })),
-    tasks: store.listTasks(project.id).map((task) => taskSummary(store, task)),
+    // Tasks are a paged resource (`task.list`); carrying every one on every project read would
+    // make a long-lived project's summary grow without bound.
   };
 }
 

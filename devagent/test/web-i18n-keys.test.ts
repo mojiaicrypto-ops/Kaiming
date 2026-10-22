@@ -11,20 +11,27 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { CATALOG, MESSAGE_KEYS, checkCatalog } from '../webapp/src/i18n/catalog.ts';
 
-/** RPC method names that share an interface namespace prefix but are not catalog keys. */
-const RPC_METHODS = new Set([
-  'auth.login',
-  'auth.logout',
-  'project.open',
-  'project.get',
-  'project.rebind',
-  'task.get',
-  'task.list',
-  'task.control',
-  'task.report.get',
-]);
-
 const here = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Every public method the server registers, read from the server's own source: a hand-kept list
+ * let `project.list` look like a missing interface key the moment it was added.
+ */
+function rpcMethodNames(): Set<string> {
+  const serverDir = join(here, '..', 'src', 'server');
+  const names = new Set<string>();
+  for (const file of readdirSync(serverDir)) {
+    if (!file.endsWith('.ts')) continue;
+    const text = readFileSync(join(serverDir, file), 'utf8');
+    for (const match of text.matchAll(/register\('([a-z]+\.[a-zA-Z.]+)'/g)) {
+      const name = match[1];
+      if (name !== undefined) names.add(name);
+    }
+  }
+  return names;
+}
+
+const RPC_METHODS = rpcMethodNames();
 const srcDir = join(here, '..', 'webapp', 'src');
 
 function sourceFiles(): string[] {

@@ -36,6 +36,11 @@ export interface TaskToolContext {
   }) => Promise<TaskRow>;
   /** Chief only: run and wait for the current step's members. */
   readonly host?: DelegationHost;
+  /**
+   * Called after an op that changed the Task (or its members): the host pushes the change to the
+   * browser instead of letting the UI poll for it. Never called for a refusal.
+   */
+  readonly onTaskChange?: (taskId: string) => void;
   readonly currentTaskId?: string;
 }
 
@@ -209,6 +214,28 @@ export function createTaskTool(contextOf: TaskToolContextResolver, options: { re
       const session = context.store.getSession(context.sessionId);
       const currentTaskId = session?.currentTaskId ?? context.currentTaskId;
       const taskId = readString(params, 'taskId') ?? (op === 'create' ? undefined : currentTaskId);
+      const outcome = await runOp(op, taskId, context, params, options.chief);
+      // A change the user can see must be announced once, not polled for: every op that writes the
+      // Task (or its members) publishes an invalidate, a read or a refusal does not.
+      if (!outcome.isError && MUTATING_OPS.has(op) && context.onTaskChange !== undefined) {
+        const changed = outcome.details['taskId'];
+        const changedId = typeof changed === 'string' ? changed : taskId;
+        if (changedId !== undefined) context.onTaskChange(changedId);
+      }
+      return outcome;
+    },
+  };
+}
+
+/** One op, after the tool has resolved identity: split out so the announce step has one place. */
+async function runOp(
+  op: string,
+  taskId: string | undefined,
+  context: TaskToolContext,
+  params: Record<string, unknown>,
+  chief: boolean,
+): Promise<ToolOutcome> {
+      const currentTaskId = context.store.getSession(context.sessionId)?.currentTaskId ?? context.currentTaskId;
       if (op === 'create') {
         return createOp(context, params);
       }
@@ -224,7 +251,7 @@ export function createTaskTool(contextOf: TaskToolContextResolver, options: { re
         });
       }
       // A specialist may read its own Task only; the chief may act on Tasks of its own project.
-      if (!options.chief && taskId !== currentTaskId) {
+      if (!chief && taskId !== currentTaskId) {
         return fail('NOT_FOUND', `Task ${taskId} is not this session's Task`);
       }
       const owned = loadOwnedTask(context, taskId);
@@ -253,11 +280,12 @@ export function createTaskTool(contextOf: TaskToolContextResolver, options: { re
         case 'recover':
           return recoverOp(context, task, params);
         default:
-          return getOp(context, task, params, options.chief);
+          return getOp(context, task, params, chief);
       }
-    },
-  };
 }
+
+/** Ops that write the Task or its membership: the ones a browser view must be told about. */
+const MUTATING_OPS: ReadonlySet<string> = new Set(['create', 'update', 'dispatch', 'control', 'end', 'adopt', 'recover']);
 
 /** Specialists may only read their own Task (G1). */
 export function createTaskGetTool(contextOf: TaskToolContextResolver): DomainTool {
@@ -283,7 +311,14 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
     return fail('INVALID_ARGUMENT', 'goal, scope and planMarkdown are required non-empty strings');
   }
   // The cited decision must be a real one in this project; only its identity/state is verified.
-  const authorization = resolveAuthorizationRefs(context.store, context.projectId, params['authorizationRef']);
+  // A chief creating a Task is running a user's own message, so that message is the decision: it is
+  // the only input this run has, and making the model echo an id it was never given would only
+  // invite a guess. A delegated instruction is not a user input, so a member cannot stand in.
+  const authorization = resolveAuthorizationRefs(
+    context.store,
+    context.projectId,
+    params['authorizationRef'] ?? { inputId: context.inputId },
+  );
   if (!authorization.ok) {
     return fail('INVALID_ARGUMENT', `authorizationRef: ${authorization.message}`);
   }

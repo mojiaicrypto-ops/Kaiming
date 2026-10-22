@@ -9,6 +9,9 @@ export interface SessionsListProps {
   readonly onSelect: (sessionId: string) => void;
   readonly onCreate: () => void;
   readonly questionCount: (sessionId: string) => number;
+  /** True when the server reported another page: the rail must not silently stop at one page. */
+  readonly hasMore: boolean;
+  readonly onLoadMore: () => void;
   /** Sheet form (compact viewports): the same rows, opened over the transcript. */
   readonly className?: string;
 }
@@ -35,14 +38,25 @@ function dayLabel(iso: string | null, t: (key: 'chat.today' | 'chat.yesterday') 
   return '';
 }
 
-export function SessionsList({ rows, current, onSelect, onCreate, questionCount, className }: SessionsListProps) {
+export function SessionsList({ rows, current, onSelect, onCreate, questionCount, hasMore, onLoadMore, className }: SessionsListProps) {
   const { t } = useI18n();
   return (
     <aside className={`sessions${className === undefined ? '' : ` ${className}`}`} aria-label={t('aria.sessionList')}>
       <div className="h">{t('chat.sessions')}</div>
       {rows.map((row) => {
         const questions = questionCount(row.sessionId);
-        const glyph = questions > 0 ? 'decide' : row.currentTaskId !== null ? 'run' : 'idle';
+        // The glyph is the state that matters most for picking a conversation: a question, then a
+        // Task, then a running or stopping input, then idle.
+        const glyph =
+          questions > 0
+            ? 'decide'
+            : row.currentTaskId !== null || row.activity === 'processing'
+              ? 'run'
+              : row.activity === 'stopping'
+                ? 'paused'
+                : row.activity === 'queued'
+                  ? 'wait'
+                  : 'idle';
         return (
           <button
             key={row.sessionId}
@@ -53,11 +67,16 @@ export function SessionsList({ rows, current, onSelect, onCreate, questionCount,
             data-testid="session-row"
           >
             <State kind={glyph} />
-            <span className="ell">{row.title === '' ? t('chat.untitled') : row.title}</span>
+            <span className="ell">{row.title === null || row.title === '' ? t('chat.untitled') : row.title}</span>
             <span className="f3 sess-time">{dayLabel(row.updatedAt, t)}</span>
           </button>
         );
       })}
+      {hasMore && (
+        <button type="button" className="s more" onClick={onLoadMore} data-testid="session-more">
+          <span className="f3">{t('chat.moreSessions')}</span>
+        </button>
+      )}
       <button type="button" className="new" onClick={onCreate} data-testid="new-session">
         {t('chat.newSession')}
       </button>

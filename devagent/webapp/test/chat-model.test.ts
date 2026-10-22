@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { argSummary, blocksOf, indexToolResults, parseArgs, streamedField } from '../src/chat/transcript-model';
 import { echoOf, responseFor, rowsFor } from '../src/chat/interaction-model';
-import { deriveTitle, } from '../src/state/useWorkspace';
 import type { HistoryMessage } from '../src/state/slot';
 
 /** A tool result must pair with its own call, or a card shows another call's answer (R4). */
@@ -93,20 +92,5 @@ describe('interaction answers', () => {
     expect(echoOf({ value: '加入' })).toBe('加入');
     expect(echoOf({ confirmed: true })).toBe('yes');
     expect(echoOf({ confirmed: false })).toBe('no');
-  });
-});
-
-/** The rail title is derived from the first message; it must be one clipped line. */
-describe('session titles', () => {
-  it('clips by display width, counting a CJK glyph as two cells', () => {
-    expect(deriveTitle('hello world')).toBe('hello world');
-    expect(deriveTitle('x'.repeat(40))).toBe(`${'x'.repeat(24)}…`);
-    expect(deriveTitle('中'.repeat(20))).toBe(`${'中'.repeat(12)}…`);
-  });
-
-  it('collapses whitespace and returns nothing for an empty first message', () => {
-    expect(deriveTitle('  a\n\n b  ')).toBe('a b');
-    expect(deriveTitle(undefined)).toBe('');
-    expect(deriveTitle('   ')).toBe('');
   });
 });

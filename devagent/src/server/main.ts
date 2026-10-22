@@ -164,6 +164,13 @@ export function startWorkbench(options: StartOptions): Promise<{
       }),
     // Every Pi event the runner reports reaches the session's stream (M4): without this the page
     // shows a transcript that never fills in, even though the run really happened.
+    // A Task created, updated or dispatched inside the chief's own run reaches the browser now:
+    // the tool publishes no invalidate of its own, and the strip must not wait for a poll.
+    onTaskChange: (chiefSessionId, taskId) => {
+      hub.publish(chiefSessionId, { type: 'invalidate', entity: 'task', id: taskId });
+      // A dispatch creates member sessions, so a rail that lists sessions is stale too.
+      hub.publish(chiefSessionId, { type: 'invalidate', entity: 'session', id: chiefSessionId });
+    },
     onEvent: (sessionId, event, meta) => {
       hub.publish(sessionId, event, { inputId: meta.inputId, epoch: meta.epoch });
     },

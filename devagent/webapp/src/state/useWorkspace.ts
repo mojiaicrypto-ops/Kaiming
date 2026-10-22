@@ -4,6 +4,8 @@ import { readStored, writeStored } from '../lib/storage';
 
 const PROJECT_KEY = 'agentdev.projectPath';
 const SESSION_KEY = 'agentdev.sessionId';
+/** One page of the rail; a long list asks for more instead of loading everything up front. */
+const SESSION_PAGE = 100;
 
 export interface ProjectSummary {
   readonly projectId: string;
@@ -12,166 +14,109 @@ export interface ProjectSummary {
   readonly directoryExists: boolean;
   readonly problem?: string;
   readonly sessions: ReadonlyArray<{ sessionId: string; roleId: string }>;
-  readonly tasks: ReadonlyArray<{ taskId: string; phase: string; status: string }>;
 }
 
-/** One row of the session rail. The title is derived, never stored: the server has no title column. */
+/** One row of the project menu: a registered project, with what the menu needs to describe it. */
+export interface ProjectRow {
+  readonly projectId: string;
+  readonly realPath: string;
+  readonly revision: number;
+  readonly directoryExists: boolean;
+  readonly problem?: string;
+  readonly sessionCount: number;
+  readonly taskCount: number;
+  readonly lastActivityAt: string | null;
+  readonly updatedAt: string;
+}
+
+/**
+ * One row of the session rail. The title comes from the server and is derived there from the first
+ * user message (never stored), so the rail needs no history read and a title cannot drift from
+ * the conversation it names.
+ */
 export interface SessionRow {
   readonly sessionId: string;
   readonly roleId: string;
-  readonly title: string;
+  readonly title: string | null;
+  readonly activity: 'idle' | 'queued' | 'processing' | 'stopping';
   readonly updatedAt: string | null;
   readonly currentTaskId: string | null;
-}
-
-interface RecentProject {
-  readonly path: string;
-  readonly name: string;
-}
-
-const RECENT_KEY = 'agentdev.recentProjects';
-/** Titles are cut by display width: a CJK glyph counts double, like the terminal it came from. */
-const TITLE_WIDTH = 24;
-
-function displayWidth(text: string): number {
-  let width = 0;
-  for (const char of text) {
-    const code = char.codePointAt(0) ?? 0;
-    width += code > 0x2e7f ? 2 : 1;
-  }
-  return width;
-}
-
-/** One line, cut to `TITLE_WIDTH` cells; a long first message must not stretch the rail. */
-export function deriveTitle(firstUserText: string | undefined): string {
-  if (firstUserText === undefined) return '';
-  const line = firstUserText.replace(/\s+/g, ' ').trim();
-  if (line === '') return '';
-  let out = '';
-  let width = 0;
-  for (const char of line) {
-    const next = displayWidth(char);
-    if (width + next > TITLE_WIDTH) return `${out}…`;
-    out += char;
-    width += next;
-  }
-  return out;
-}
-
-function readRecent(): RecentProject[] {
-  try {
-    const raw = readStored(RECENT_KEY);
-    const parsed = raw === null ? [] : (JSON.parse(raw) as unknown);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((entry): entry is RecentProject => {
-      const candidate = entry as Partial<RecentProject>;
-      return typeof candidate.path === 'string' && typeof candidate.name === 'string';
-    });
-  } catch {
-    return [];
-  }
-}
-
-function rememberRecent(path: string): RecentProject[] {
-  const next = [{ path, name: path.split('/').filter(Boolean).pop() ?? path }, ...readRecent().filter((entry) => entry.path !== path)].slice(0, 8);
-  writeStored(RECENT_KEY, JSON.stringify(next));
-  return next;
+  readonly queuedInputs: number;
 }
 
 export interface WorkspaceApi {
   readonly projectId: string;
   readonly project: ProjectSummary | null;
+  readonly projects: readonly ProjectRow[];
   readonly sessions: readonly SessionRow[];
-  readonly recent: readonly RecentProject[];
+  readonly hasMoreSessions: boolean;
   readonly sessionId: string;
   readonly loading: boolean;
   readonly openProject: (path: string) => Promise<void>;
+  readonly rebindProject: (projectId: string, path: string, authorizationRef: string) => Promise<void>;
   readonly selectSession: (sessionId: string) => void;
   readonly createSession: () => Promise<string | null>;
+  readonly loadMoreSessions: () => Promise<void>;
   readonly refresh: () => Promise<void>;
+  readonly reloadProjects: () => Promise<void>;
+  /** Re-read the rail after the server said the project's sessions changed. */
+  readonly refreshSessions: () => Promise<void>;
 }
 
 /**
- * Project + session selection. The server exposes no `project.list`, so the project menu is the
- * browser's own recent list plus a path field; the session list is `project.get`, and each row's
- * title is derived from the first user message read through `session.stream.prepare`
- * (read-only, no subscription).
+ * Project + session selection. Both lists come from the server (`project.list`, `session.list`):
+ * the browser remembers only which project and session the user was looking at.
  */
 export function useWorkspace(rpc: RpcClient): WorkspaceApi {
   const [project, setProject] = useState<ProjectSummary | null>(null);
+  const [projects, setProjects] = useState<readonly ProjectRow[]>([]);
   const [sessionId, setSessionId] = useState<string>(() => readStored(SESSION_KEY) ?? '');
   const [sessions, setSessions] = useState<readonly SessionRow[]>([]);
-  const [recent, setRecent] = useState<readonly RecentProject[]>(() => readRecent());
+  const [sessionCursor, setSessionCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  /** sessionId → derived title, so a refresh does not re-read every history. */
-  const titleCache = useRef(new Map<string, string>());
   /** The loaded project, for stable callbacks that must not depend on a changing prop. */
   const projectRef = useRef<ProjectSummary | null>(null);
 
-  const loadTitles = useCallback(
-    async (pid: string, rows: ReadonlyArray<{ sessionId: string; roleId: string }>): Promise<SessionRow[]> => {
-      const enriched = await Promise.all(
-        rows.map(async (row) => {
-          const cached = titleCache.current.get(row.sessionId);
-          try {
-            const prepared = await rpc.call<{
-              snapshot: {
-                messages: ReadonlyArray<{ role?: string; content?: unknown }>;
-                currentInputId: string | null;
-              };
-            }>('session.stream.prepare', { projectId: pid, sessionId: row.sessionId });
-            const firstUser = prepared.snapshot.messages.find((message) => message.role === 'user');
-            const text = Array.isArray(firstUser?.content)
-              ? (firstUser.content as Array<{ type?: string; text?: string }>).map((block) => (block.type === 'text' ? block.text ?? '' : '')).join('')
-              : typeof firstUser?.content === 'string'
-                ? firstUser.content
-                : '';
-            const title = deriveTitle(text) || cached || '';
-            titleCache.current.set(row.sessionId, title);
-            // `lastActivityAt` is derived by the server from the session's own input rows: it is
-            // the only activity stamp available, and the rail's relative day is derived from it.
-            const read = await rpc.call<{
-              session: { currentTaskId: string | null; lastActivityAt: string | null };
-            }>('session.get', { projectId: pid, sessionId: row.sessionId });
-            return {
-              sessionId: row.sessionId,
-              roleId: row.roleId,
-              title,
-              updatedAt: read.session.lastActivityAt,
-              currentTaskId: read.session.currentTaskId,
-            } satisfies SessionRow;
-          } catch {
-            return {
-              sessionId: row.sessionId,
-              roleId: row.roleId,
-              title: cached ?? '',
-              updatedAt: null,
-              currentTaskId: null,
-            } satisfies SessionRow;
-          }
-        }),
-      );
-      // Sessions without a first message are the newest: they sort first, like a fresh chat list.
-      return enriched.sort((left, right) => {
-        const leftEmpty = left.title === '' ? 0 : 1;
-        const rightEmpty = right.title === '' ? 0 : 1;
-        if (leftEmpty !== rightEmpty) return leftEmpty - rightEmpty;
-        return 0;
+  const loadProjects = useCallback(async (): Promise<void> => {
+    try {
+      const read = await rpc.call<{ projects: readonly ProjectRow[] }>('project.list', { limit: 200 });
+      setProjects(read.projects);
+    } catch {
+      // The menu degrades to the current project instead of hiding the failure behind an empty list.
+      setProjects([]);
+    }
+  }, [rpc]);
+
+  const loadSessions = useCallback(
+    async (pid: string, cursor?: string): Promise<{ rows: readonly SessionRow[]; nextCursor: string | null }> => {
+      const read = await rpc.call<{ sessions: readonly SessionRow[]; nextCursor: string | null }>('session.list', {
+        projectId: pid,
+        limit: SESSION_PAGE,
+        ...(cursor === undefined ? {} : { cursor }),
       });
+      return { rows: read.sessions, nextCursor: read.nextCursor };
     },
     [rpc],
   );
 
   projectRef.current = project;
 
-  // Same rule as above: a project row is a plain fact, so the callback that stores it must not
-  // change when a row does — otherwise every open re-creates the shell's session stream.
+  // A project row is a plain fact, so the callback that stores it must not change when a row does:
+  // otherwise every open re-creates the shell's session stream.
   const applyProject = useCallback(
     async (summary: ProjectSummary): Promise<void> => {
       projectRef.current = summary;
       setProject(summary);
       writeStored('agentdev.projectId', summary.projectId);
-      const rows = await loadTitles(summary.projectId, summary.sessions);
+      let rows: readonly SessionRow[] = [];
+      try {
+        const page = await loadSessions(summary.projectId);
+        rows = page.rows;
+        setSessionCursor(page.nextCursor);
+      } catch {
+        // A broken list must not look like a project with no sessions.
+        setSessionCursor(null);
+      }
       setSessions(rows);
       const known = readStored(SESSION_KEY);
       const next = rows.find((row) => row.sessionId === known)?.sessionId ?? rows[0]?.sessionId ?? '';
@@ -180,7 +125,7 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
         writeStored(SESSION_KEY, next);
       }
     },
-    [loadTitles],
+    [loadSessions],
   );
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -192,18 +137,18 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
     try {
       const opened = await rpc.call<{ project: ProjectSummary }>('project.open', { path }, { requestId: newRequestId('open') });
       writeStored(PROJECT_KEY, opened.project.realPath);
-      setRecent(rememberRecent(opened.project.realPath));
       await applyProject(opened.project);
     } catch {
       // An unreadable directory is not fatal: the shell still opens with the empty state.
       setProject(null);
     } finally {
       setLoading(false);
+      void loadProjects();
     }
-  }, [rpc, applyProject]);
+  }, [rpc, applyProject, loadProjects]);
 
   useEffect(() => {
-    // A stored project id is only a hint: re-open by path, so a moved directory reports itself
+    // A stored project path is only a hint: re-open by path, so a moved directory reports itself
     // instead of leaving the shell pointed at a row that no longer resolves.
     void refresh();
   }, []);
@@ -212,10 +157,35 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
     async (path: string): Promise<void> => {
       const opened = await rpc.call<{ project: ProjectSummary }>('project.open', { path }, { requestId: newRequestId('open') });
       writeStored(PROJECT_KEY, opened.project.realPath);
-      setRecent(rememberRecent(opened.project.realPath));
       await applyProject(opened.project);
+      await loadProjects();
     },
-    [rpc, applyProject],
+    [rpc, applyProject, loadProjects],
+  );
+
+  /**
+   * Rebind takes the revision the menu row carried plus an authorization reference: moving a
+   * project is a user decision, and the server refuses it while work is still in flight.
+   */
+  const rebindProject = useCallback(
+    async (targetProjectId: string, path: string, authorizationRef: string): Promise<void> => {
+      const row = projects.find((entry) => entry.projectId === targetProjectId);
+      const rebound = await rpc.call<{ project: ProjectSummary }>(
+        'project.rebind',
+        {
+          projectId: targetProjectId,
+          expectedRevision: row?.revision ?? 0,
+          path,
+          authorizationRef: { inputId: authorizationRef },
+        },
+        { requestId: newRequestId('rebind') },
+      );
+      if (projectRef.current?.projectId === targetProjectId) {
+        await applyProject(rebound.project);
+      }
+      await loadProjects();
+    },
+    [rpc, projects, applyProject, loadProjects],
   );
 
   const selectSession = useCallback((next: string): void => {
@@ -241,14 +211,75 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
       { requestId: newRequestId('sess') },
     );
     selectSession(created.session.sessionId);
-    const read = await rpc.call<{ project: ProjectSummary }>('project.get', { projectId: current.projectId });
-    const rows = await loadTitles(current.projectId, read.project.sessions);
-    setSessions(rows);
+    try {
+      const page = await loadSessions(current.projectId);
+      setSessions(page.rows);
+      setSessionCursor(page.nextCursor);
+    } catch {
+      setSessionCursor(null);
+    }
     return created.session.sessionId;
-  }, [rpc, selectSession, loadTitles]);
+  }, [rpc, selectSession, loadSessions]);
+
+  const refreshSessions = useCallback(async (): Promise<void> => {
+    const current = projectRef.current;
+    if (current === null) return;
+    try {
+      const page = await loadSessions(current.projectId);
+      setSessions(page.rows);
+      setSessionCursor(page.nextCursor);
+    } catch {
+      // Leave the rows as they are: a stale rail is better than a rail that empties itself.
+    }
+  }, [loadSessions]);
+
+  const loadMoreSessions = useCallback(async (): Promise<void> => {
+    const current = projectRef.current;
+    if (current === null || sessionCursor === null) return;
+    try {
+      const page = await loadSessions(current.projectId, sessionCursor);
+      // Append, never replace: the rows already shown stay in their order.
+      setSessions((previous) => [...previous, ...page.rows.filter((row) => !previous.some((shown) => shown.sessionId === row.sessionId))]);
+      setSessionCursor(page.nextCursor);
+    } catch {
+      setSessionCursor(null);
+    }
+  }, [loadSessions, sessionCursor]);
 
   return useMemo(
-    () => ({ projectId, project, sessions, recent, sessionId, loading, openProject, selectSession, createSession, refresh }),
-    [projectId, project, sessions, recent, sessionId, loading, openProject, selectSession, createSession, refresh],
+    () => ({
+      projectId,
+      project,
+      projects,
+      sessions,
+      hasMoreSessions: sessionCursor !== null,
+      sessionId,
+      loading,
+      openProject,
+      rebindProject,
+      selectSession,
+      createSession,
+      loadMoreSessions,
+      refresh,
+      refreshSessions,
+      reloadProjects: loadProjects,
+    }),
+    [
+      projectId,
+      project,
+      projects,
+      sessions,
+      sessionCursor,
+      sessionId,
+      loading,
+      openProject,
+      rebindProject,
+      selectSession,
+      createSession,
+      loadMoreSessions,
+      refresh,
+      refreshSessions,
+      loadProjects,
+    ],
   );
 }

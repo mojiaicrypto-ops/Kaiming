@@ -274,68 +274,43 @@ test('the task strip renders the coordinated Task and polls it', async ({ page }
   }
 });
 
-test('a Task that appears while the chief is working is picked up without a reload', async ({ page }) => {
-  // Task creation happens inside the chief's own run and publishes no invalidate, so the shell
-  // must ask again while the session is working. The two reads are stubbed to answer "no Task"
-  // first and "Task t-late" afterwards: only the discovery path can make the strip appear.
-  const harness: Harness = await startHarness({ model: [{ kind: 'text', text: '好的。' }] });
+test('a Task the chief creates mid-run appears without a reload', async ({ page }) => {
+  // The Task is created by the chief's own tool call, so nothing polls for it: the strip can only
+  // appear if the server pushes the change (the interval starts after the id is known, not before).
+  const harness: Harness = await startHarness({
+    model: [
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'task',
+            arguments: JSON.stringify({
+              op: 'create',
+              type: 'read',
+              goal: 'survey the account module',
+              scope: 'account module',
+              planMarkdown: '# survey\n\nread the module.\n',
+            }),
+          },
+        ],
+      },
+      { kind: 'text', text: '任务已建。' },
+    ],
+  });
   try {
     const project = harness.project;
     if (project === null) throw new Error('the harness did not seed a project');
-    await page.addInitScript(() => {
-      const original = window.fetch;
-      const state = { sessionReads: 0 };
-      (window as unknown as { __state: typeof state }).__state = state;
-      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-        const body = typeof init?.body === 'string' ? init.body : '';
-        const envelope = body.startsWith('{') ? (JSON.parse(body) as { requestId: string }) : null;
-        if (envelope !== null && body.includes('"session.get"')) {
-          state.sessionReads += 1;
-          return new Response(
-            JSON.stringify({
-              requestId: envelope.requestId,
-              result: {
-                session: {
-                  sessionId: 's',
-                  projectId: 'p',
-                  roleId: 'chief',
-                  currentTaskId: state.sessionReads > 1 ? 't-late' : null,
-                  revision: 1,
-                  activity: 'processing',
-                  currentInputId: 'i-1',
-                  lastActivityAt: null,
-                },
-              },
-            }),
-            { status: 200, headers: { 'content-type': 'application/json' } },
-          );
-        }
-        if (envelope !== null && body.includes('"task.get"')) {
-          return new Response(
-            JSON.stringify({
-              requestId: envelope.requestId,
-              result: {
-                task: { taskId: 't-late', type: 'write', phase: 'develop', status: 'active', revision: 1 },
-                members: [],
-                results: [],
-              },
-            }),
-            { status: 200, headers: { 'content-type': 'application/json' } },
-          );
-        }
-        return original(input, init);
-      };
-    });
     await pinStorage(page, { project, locale: 'en' });
     await page.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' });
     await loginThroughUi(page, harness.accessPassword);
 
     const composer = page.locator('[data-testid="composer"]');
-    await composer.fill('开工');
+    await composer.fill('先调查一下账号模块');
     await composer.press('Enter');
 
     const strip = page.locator('[data-testid="task-strip"]');
-    await expect(strip).toContainText('t-late', { timeout: 15_000 });
+    await expect(strip).toBeVisible({ timeout: 20_000 });
+    await expect(strip).toContainText('t-');
   } finally {
     await harness.close();
   }

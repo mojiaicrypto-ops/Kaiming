@@ -1719,6 +1719,96 @@ export class Store {
     });
   }
 
+  /**
+   * The rows a session list needs, in two queries rather than two per session: the last activity
+   * and the live status come from the input rows themselves (R2), and the first user text is the
+   * title. `stopRequested` is carried so a caller can say "stopping" instead of "working".
+   */
+  listSessionSummaries(projectId: string): Array<{
+    id: string;
+    roleId: string;
+    currentTaskId: string | null;
+    lastActivityAt: string | null;
+    processing: number;
+    queued: number;
+    stopping: number;
+    title: string | null;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT s.id AS id, s.roleId AS roleId, s.currentTaskId AS currentTaskId,
+                MAX(i.updatedAt) AS lastActivityAt,
+                SUM(CASE WHEN i.status = 'processing' THEN 1 ELSE 0 END) AS processing,
+                SUM(CASE WHEN i.status = 'queued' THEN 1 ELSE 0 END) AS queued,
+                SUM(CASE WHEN i.status = 'processing' AND i.stopRequestKey IS NOT NULL THEN 1 ELSE 0 END) AS stopping
+           FROM sessions s LEFT JOIN session_inputs i ON i.sessionId = s.id
+          WHERE s.projectId = ?
+          GROUP BY s.id`,
+      )
+      .all(projectId) as unknown as Array<{
+      id: string;
+      roleId: string;
+      currentTaskId: string | null;
+      lastActivityAt: string | null;
+      processing: number | null;
+      queued: number | null;
+      stopping: number | null;
+    }>;
+    // The first user text per session, still one query: the title is a derived fact, not a column.
+    const titles = new Map<string, string>();
+    const firstInputs = this.db
+      .prepare(
+        `SELECT i.sessionId AS sessionId, i.payload AS payload
+           FROM session_inputs i
+           JOIN (SELECT sessionId AS sid, MIN(seq) AS seq
+                   FROM session_inputs
+                  WHERE kind = 'user' AND projectId = ?
+                  GROUP BY sessionId) f
+             ON f.sid = i.sessionId AND f.seq = i.seq`,
+      )
+      .all(projectId) as unknown as Array<{ sessionId: string; payload: string }>;
+    for (const input of firstInputs) {
+      titles.set(input.sessionId, input.payload);
+    }
+    return rows.map((row) => ({
+      id: row.id,
+      roleId: row.roleId,
+      currentTaskId: row.currentTaskId,
+      lastActivityAt: row.lastActivityAt,
+      processing: row.processing ?? 0,
+      queued: row.queued ?? 0,
+      stopping: row.stopping ?? 0,
+      title: titles.get(row.id) ?? null,
+    }));
+  }
+
+  /**
+   * Every registered project with the two counts and the activity stamp the project menu shows,
+   * in one query: the menu must not cost a query per project.
+   */
+  listProjectSummaries(): Array<ProjectRow & {
+    sessionCount: number;
+    taskCount: number;
+    lastActivityAt: string | null;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT p.*,
+                (SELECT COUNT(*) FROM sessions s WHERE s.projectId = p.id) AS sessionCount,
+                (SELECT COUNT(*) FROM tasks t WHERE t.projectId = p.id) AS taskCount,
+                (SELECT MAX(i.updatedAt) FROM session_inputs i WHERE i.projectId = p.id) AS lastActivityAt
+           FROM projects p
+          ORDER BY p.updatedAt DESC, p.id`,
+      )
+      .all() as unknown as Array<Record<string, unknown> & { sessionCount: number; taskCount: number; lastActivityAt: string | null }>;
+    return rows.map((row) => ({
+      ...toProjectRow(row),
+      sessionCount: row.sessionCount ?? 0,
+      taskCount: row.taskCount ?? 0,
+      lastActivityAt: row.lastActivityAt ?? null,
+    }));
+  }
+
   listSessions(): Array<{ id: string; projectId: string; roleId: string; cwd: string; revision: number; updatedAt: string }> {
     return this.db
       .prepare('SELECT id, projectId, roleId, cwd, revision, updatedAt FROM sessions ORDER BY id')

@@ -451,3 +451,60 @@ describe('task get', () => {
     expect(op['op']?.enum).toEqual(['get']);
   });
 });
+
+describe('task change announcements', () => {
+  it('announces create, update and a refused op is silent', async () => {
+    const w = world();
+    const announced: string[] = [];
+    const tool = createTaskTool((): TaskToolContext => {
+      const currentTaskId = w.store.getSession(w.sessionId)?.currentTaskId;
+      return {
+        store: w.store,
+        sessionId: w.sessionId,
+        projectId: w.projectId,
+        cwd: w.cwd,
+        roleId: 'chief',
+        inputId: 'i-dec',
+        serverWorkDir: w.serverWorkDir,
+        onTaskChange: (taskId) => announced.push(taskId),
+        ...(currentTaskId != null ? { currentTaskId } : {}),
+      };
+    }, { chief: true });
+
+    const created = await tool.execute('call-1', createArgs());
+    const taskId = String(created.details['taskId']);
+    expect(announced).toEqual([taskId]);
+
+    await tool.execute('call-2', { op: 'update', phase: 'design' });
+    expect(announced).toEqual([taskId, taskId]);
+
+    // A read is not a change, and a refusal is not a change: neither may wake a browser up.
+    await tool.execute('call-3', { op: 'get' });
+    const refused = await tool.execute('call-4', { op: 'dispatch', sessions: [] });
+    expect(refused.isError).toBe(true);
+    expect(announced).toEqual([taskId, taskId]);
+  });
+
+  it('cites the running user input when the model does not pass a decision', async () => {
+    const w = world();
+    // The chief's own run is a user input in this project; a Task created inside it cites that
+    // input, so the model does not have to echo an id it was never given.
+    w.store.acceptInput({
+      inputId: 'i-run',
+      projectId: w.projectId,
+      sessionId: w.sessionId,
+      sourceKey: `${w.sessionId}:i-run`,
+      requestKey: 'i-run',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: '开工' }] },
+    });
+    w.setInput('i-run');
+
+    const created = await tool(w.tools).execute('call-1', createArgs({ authorizationRef: undefined }));
+
+    expect(created.isError).toBe(false);
+    const task = w.store.listTasks(w.projectId)[0];
+    expect(task?.authorizationRefs).toContain('input:i-run');
+  });
+});

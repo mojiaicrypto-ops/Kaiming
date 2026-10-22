@@ -557,25 +557,27 @@ describe('read-only query surface', () => {
     expect(inspected.taskId).toBe('t-1');
   });
 
-  it('rebinds a project only with a user decision and no work in flight', async () => {
+  it('rebinds a project only when no work is in flight, and only with a verifiable reference', async () => {
     const h = await harness();
     const moved = join(h.projectRoot, '..', 'moved-project');
     mkdirSync(join(moved, '.dev'), { recursive: true });
     const project = h.store.getProject(h.projectId);
 
-    const noDecision = await h.call('project.rebind', {
+    // A browser-initiated rebind needs no cited decision: no model tool exposes this method, so the
+    // authenticated request is the decision. A reference that is supplied is still checked.
+    const bogus = await h.call('project.rebind', {
       projectId: h.projectId,
       expectedRevision: project?.revision ?? 1,
       path: moved,
+      authorizationRef: { inputId: 'i-nope' },
     });
-    expect(noDecision.status).toBe(403);
-    expect(errorCode(noDecision.body)).toBe('FORBIDDEN');
+    expect(bogus.status).toBe(403);
+    expect(errorCode(bogus.body)).toBe('FORBIDDEN');
 
     const busy = await h.call('project.rebind', {
       projectId: h.projectId,
       expectedRevision: project?.revision ?? 1,
       path: moved,
-      authorizationRef: { inputId: 'i-user' },
     });
     expect(busy.status).toBe(409);
     expect(errorCode(busy.body)).toBe('WORKSPACE_BUSY');
@@ -619,4 +621,192 @@ describe('read-only query surface', () => {
     expect(h.store.getProject('p-settled')?.realPath).toBe(realpathSync(target));
     expect(h.store.getSession('s-settled')?.cwd).toBe(realpathSync(target));
   });
+  it('lists every session of a project with derived titles, live activity and one request', async () => {
+    const h = await harness();
+    // A session with no message yet, and one whose first message is too long for a title.
+    h.store.createSession({ id: 's-empty', projectId: h.projectId, roleId: 'chief', cwd: h.projectRoot });
+    h.store.createSession({ id: 's-long', projectId: h.projectId, roleId: 'chief', cwd: h.projectRoot });
+    const long = '长'.repeat(80);
+    h.store.acceptInput({
+      inputId: 'i-long',
+      projectId: h.projectId,
+      sessionId: 's-long',
+      sourceKey: 's-long:i-long',
+      requestKey: 'i-long',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: `\n  ${long}  ` }] },
+    });
+
+    const listed = await h.call('session.list', { projectId: h.projectId });
+
+    expect(listed.status).toBe(200);
+    const body = resultOf<{
+      sessions: Array<{
+        sessionId: string;
+        title: string | null;
+        activity: string;
+        lastActivityAt: string | null;
+        currentTaskId: string | null;
+      }>;
+      nextCursor: string | null;
+    }>(listed.body);
+    const byId = new Map(body.sessions.map((entry) => [entry.sessionId, entry]));
+    // The title is the first user message's first non-empty line, cut to 60 code points.
+    expect(byId.get('s-chief')?.title).toBe('先讨论，不开始开发');
+    expect([...(byId.get('s-long')?.title ?? '')]).toHaveLength(61);
+    expect(byId.get('s-long')?.title?.endsWith('…')).toBe(true);
+    // A session with no input has no title and no activity, and still appears (it is a session).
+    expect(byId.get('s-empty')?.title).toBeNull();
+    expect(byId.get('s-empty')?.activity).toBe('idle');
+    expect(byId.get('s-chief')?.activity).toBe('queued');
+    expect(byId.get('s-dev')?.activity).toBe('idle');
+    // A member session carries the Task it belongs to, so the rail can say which work it serves.
+    expect(byId.get('s-dev')?.currentTaskId).toBe('t-1');
+    expect(body.sessions).toHaveLength(4);
+    // Nothing is left out and nothing is opened: the list must not need a model or a stream.
+    expect(body.nextCursor).toBeNull();
+  });
+
+  it('pages the session list by its own cursor and rejects a foreign one', async () => {
+    const h = await harness();
+    h.store.createSession({ id: 's-empty', projectId: h.projectId, roleId: 'chief', cwd: h.projectRoot });
+
+    const first = await h.call('session.list', { projectId: h.projectId, limit: 2 });
+    const page = resultOf<{ sessions: Array<{ sessionId: string }>; nextCursor: string | null }>(first.body);
+    expect(page.sessions).toHaveLength(2);
+    expect(page.nextCursor).not.toBeNull();
+
+    const next = await h.call('session.list', { projectId: h.projectId, limit: 2, cursor: page.nextCursor });
+    const second = resultOf<{ sessions: Array<{ sessionId: string }>; nextCursor: string | null }>(next.body);
+    // Three sessions in this fixture: the second page holds the last one and ends the listing.
+    expect(second.sessions).toHaveLength(1);
+    expect(second.nextCursor).toBeNull();
+    expect(second.sessions.some((entry) => page.sessions.some((first) => first.sessionId === entry.sessionId))).toBe(false);
+
+    const bad = await h.call('session.list', { projectId: h.projectId, cursor: 'nope|s-1' });
+    expect(bad.status).toBe(400);
+    expect(errorCode(bad.body)).toBe('INVALID_ARGUMENT');
+  });
+
+  it('reports a session that is stopping, with the configuration it is running', async () => {
+    const h = await harness();
+    h.store.createSession({ id: 's-busy', projectId: h.projectId, roleId: 'chief', cwd: h.projectRoot });
+    h.store.acceptInput({
+      inputId: 'i-busy',
+      projectId: h.projectId,
+      sessionId: 's-busy',
+      sourceKey: 's-busy:i-busy',
+      requestKey: 'i-busy',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: '开始' }] },
+    });
+    const claimed = h.store.claimNextInput('s-busy');
+    if (claimed.kind !== 'claimed') throw new Error('the input could not be claimed');
+    h.store.recordEffectiveConfig({
+      inputId: 'i-busy',
+      // The recorded shape carries server directories too; the read surface must not show them.
+      effectiveConfig: {
+        providerId: 'p-a',
+        modelId: 'm-1',
+        source: 'role',
+        agentDir: '/private/server',
+        promptDir: '/private/prompts',
+      },
+    });
+
+    const running = await h.call('session.get', { projectId: h.projectId, sessionId: 's-busy' });
+    const runningSession = resultOf<{
+      session: { activity: string; stopping: boolean; config: Record<string, unknown> | null };
+    }>(running.body).session;
+    expect(runningSession.activity).toBe('processing');
+    expect(runningSession.stopping).toBe(false);
+    expect(runningSession.config).toEqual({ providerId: 'p-a', modelId: 'm-1', source: 'role' });
+
+    h.store.requestStop({ inputId: 'i-busy', requestKey: 'stop-1', reason: 'user asked' });
+    const stopping = await h.call('session.get', { projectId: h.projectId, sessionId: 's-busy' });
+    const stoppingSession = resultOf<{ session: { activity: string; stopping: boolean } }>(stopping.body).session;
+    expect(stoppingSession.activity).toBe('stopping');
+    expect(stoppingSession.stopping).toBe(true);
+
+    // The same session seen as a Task member must not have to interpret a different vocabulary.
+    const listed = await h.call('session.list', { projectId: h.projectId });
+    const row = resultOf<{ sessions: Array<{ sessionId: string; activity: string }> }>(listed.body).sessions.find(
+      (entry) => entry.sessionId === 's-busy',
+    );
+    expect(row?.activity).toBe('stopping');
+  });
+
+  it('keeps a project summary bounded and cuts the recorded configuration to its public fields', async () => {
+    const h = await harness();
+    const project = await h.call('project.get', { projectId: h.projectId });
+    expect(Object.keys(resultOf<{ project: Record<string, unknown> }>(project.body).project)).not.toContain('tasks');
+
+    h.store.createSession({ id: 's-cfg', projectId: h.projectId, roleId: 'chief', cwd: h.projectRoot });
+    h.store.acceptInput({
+      inputId: 'i-cfg',
+      projectId: h.projectId,
+      sessionId: 's-cfg',
+      sourceKey: 's-cfg:i-cfg',
+      requestKey: 'i-cfg',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: '跑一下' }] },
+    });
+    const claimed = h.store.claimNextInput('s-cfg');
+    if (claimed.kind !== 'claimed') throw new Error('the input could not be claimed');
+    h.store.recordEffectiveConfig({
+      inputId: 'i-cfg',
+      effectiveConfig: { providerId: 'p-a', modelId: 'm-2', source: 'project', agentDir: '/private/server' },
+    });
+
+    const read = await h.call('session.input.get', { projectId: h.projectId, sessionId: 's-cfg', inputId: 'i-cfg' });
+    expect(resultOf<{ input: { effectiveConfig: unknown } }>(read.body).input.effectiveConfig).toEqual({
+      providerId: 'p-a',
+      modelId: 'm-2',
+      source: 'project',
+    });
+  });
+
+  it('lists registered projects with counts, a missing directory and a working cursor', async () => {
+    const h = await harness();
+    h.store.createProject({ id: 'p-gone', realPath: join(h.projectRoot, '..', 'gone') });
+
+    const listed = await h.call('project.list', {});
+    expect(listed.status).toBe(200);
+    const projects = resultOf<{
+      projects: Array<{
+        projectId: string;
+        realPath: string;
+        directoryExists: boolean;
+        sessionCount: number;
+        taskCount: number;
+        lastActivityAt: string | null;
+        problem?: string;
+      }>;
+      nextCursor: string | null;
+    }>(listed.body).projects;
+    const mine = projects.find((entry) => entry.projectId === h.projectId);
+    expect(mine).toMatchObject({ directoryExists: true, sessionCount: 2, taskCount: 1 });
+    expect(mine?.lastActivityAt).not.toBeNull();
+    const gone = projects.find((entry) => entry.projectId === 'p-gone');
+    expect(gone?.directoryExists).toBe(false);
+    expect(gone?.problem).toContain('rebind');
+    // Listing is a read: it must not register anything, and it must not need a project id.
+    expect(h.store.listProjectSummaries()).toHaveLength(2);
+
+    const first = await h.call('project.list', { limit: 1 });
+    const page = resultOf<{ projects: Array<{ projectId: string }>; nextCursor: string | null }>(first.body);
+    expect(page.projects).toHaveLength(1);
+    expect(page.nextCursor).not.toBeNull();
+    const second = await h.call('project.list', { limit: 1, cursor: page.nextCursor });
+    const next = resultOf<{ projects: Array<{ projectId: string }> }>(second.body);
+    expect(next.projects[0]?.projectId).not.toBe(page.projects[0]?.projectId);
+
+    const bad = await h.call('project.list', { cursor: '2020-01-01T00:00:00Z|p-none' });
+    expect(bad.status).toBe(400);
+    expect(errorCode(bad.body)).toBe('INVALID_ARGUMENT');
+  });
+
 });

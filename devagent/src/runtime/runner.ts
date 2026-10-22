@@ -26,6 +26,7 @@ import { INPUT_MARKER_CUSTOM_TYPE, HistoryUnavailableError, type PiRuntimeFactor
 import { RunWatchdogError, runWithWatchdog } from './run-watchdog.ts';
 import { SessionRegistry, type LogicalSessionSpec } from './registry.ts';
 import { epochOf } from './epoch.ts';
+import { textOfPayload } from './input-text.ts';
 import { InteractionBridge, createUiAdapter } from './interactions.ts';
 import { createQuestionTool } from '../tools/question-tool.ts';
 import { createPrivatePathGuard } from './tool-guard.ts';
@@ -99,6 +100,11 @@ export interface RunnerOptions {
    * only broadcasts or records in memory - it must never await a durable transaction (R4).
    */
   readonly onEvent?: (sessionId: string, event: unknown, meta: { inputId: string; epoch: string }) => void;
+  /**
+   * A Task the chief just changed (or a member it just dispatched): the host publishes it, so the
+   * browser does not have to poll for something it can be told.
+   */
+  readonly onTaskChange?: (sessionId: string, taskId: string) => void;
   /** A run with no Pi activity for this long is aborted (RUN_STALLED) instead of waiting forever. */
   readonly runStallMs?: number;
   /** A run exceeding this total duration is aborted (RUN_TIMEOUT). */
@@ -299,6 +305,9 @@ const serverWorkDir = join(config.agentDir, 'work');
                   },
                   settleStep: (taskId: string, timeoutMs: number) => this.settleStep(taskId, timeoutMs),
                 },
+                ...(this.options.onTaskChange === undefined
+                  ? {}
+                  : { onTaskChange: (taskId: string) => this.options.onTaskChange?.(sessionId, taskId) }),
               }), { chief: true }),
               ...requirementTools,
               ...projectTools,
@@ -857,35 +866,6 @@ function leafReachableFromRoot(
     }
   }
   return false;
-}
-
-/** Text of a stored payload; undefined when it contains anything other than text parts. */
-function textOfPayload(payload: string): string | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(payload);
-  } catch {
-    return undefined;
-  }
-  if (typeof parsed !== 'object' || parsed === null || !('content' in parsed)) {
-    return undefined;
-  }
-  const content = parsed.content;
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const parts: string[] = [];
-  for (const part of content) {
-    if (typeof part !== 'object' || part === null || !('type' in part)) {
-      return undefined;
-    }
-    if (part.type === 'text' && 'text' in part && typeof part.text === 'string') {
-      parts.push(part.text);
-      continue;
-    }
-    return undefined;
-  }
-  return parts.join('\n');
 }
 
 /** First role=user message inside the bookmark's subtree (P0: append-only chain, take the first). */

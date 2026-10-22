@@ -1405,6 +1405,47 @@ kbd {
 .plist button[aria-current="true"] {
   background: var(--sel);
 }
+/* One registered project: the row opens it, and only a missing directory adds a second action. */
+.prow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  border-bottom: 1px solid var(--line);
+}
+.prow:last-child {
+  border-bottom: 0;
+}
+.prow .popen {
+  display: flex;
+  gap: var(--s3);
+  width: 100%;
+  padding: 6px var(--s3);
+  min-width: 0;
+  text-align: left;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.prow .popen:hover,
+.prow .popen[aria-current="true"] {
+  background: var(--sel);
+}
+.prow .popen:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.prow.missing .popen {
+  border-left: 2px solid var(--error);
+}
+.prow .rebind {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: 0 var(--s3) var(--s3);
+}
+.prow .rebind .row {
+  display: flex;
+  gap: var(--s2);
+}
 .inp {
   height: 32px;
   padding: 0 var(--s3);

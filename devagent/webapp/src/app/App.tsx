@@ -60,7 +60,11 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
     [workspace.projectId, workspace.sessionId],
   );
   const onUnauthorized = useCallback(() => setAuth('required'), []);
-  const session = useSession(sessionRef, auth === 'ready' && sessionRef !== null, rpc, onUnauthorized);
+  // A dispatch creates member sessions, and the server announces it: the rail re-reads instead of
+  // waiting for a reload to show work that is already happening.
+  const session = useSession(sessionRef, auth === 'ready' && sessionRef !== null, rpc, onUnauthorized, () => {
+    void workspace.refreshSessions();
+  });
 
   const notify = useCallback((message: string, kind: 'info' | 'success' | 'error' = 'info'): void => {
     toast(message, kind);
@@ -128,6 +132,8 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
             key={workspace.sessionId}
             session={session}
             sessions={workspace.sessions}
+            hasMoreSessions={workspace.hasMoreSessions}
+            onLoadMoreSessions={() => void workspace.loadMoreSessions()}
             currentSessionId={workspace.sessionId}
             projectId={workspace.projectId}
             hasProject={workspace.projectId !== ''}
@@ -174,10 +180,14 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
         {projectOpen && (
           <ProjectDialog
             current={workspace.project}
-            recent={workspace.recent}
+            projects={workspace.projects}
             onOpen={async (path) => {
               await workspace.openProject(path);
               notify(t('project.added'), 'success');
+            }}
+            onRebind={async (projectId, path) => {
+              await workspace.rebindProject(projectId, path, '');
+              notify(t('project.rebindDone'), 'success');
             }}
             onClose={() => setProjectOpen(false)}
           />

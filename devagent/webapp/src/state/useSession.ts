@@ -33,7 +33,14 @@ export interface ChiefSessionApi {
  * One chief session's live state, driven by the shell's single RPC client: the cookie, the CSRF
  * token and the 401 handling live in exactly one place, so a screen can never hold a stale copy.
  */
-export function useSession(session: SessionRef | null, enabled: boolean, rpc: RpcClient, onUnauthorized: () => void): ChiefSessionApi {
+export function useSession(
+  session: SessionRef | null,
+  enabled: boolean,
+  rpc: RpcClient,
+  onUnauthorized: () => void,
+  /** Called when the server says the project's session list changed (a dispatch created members). */
+  onSessionsChanged?: () => void,
+): ChiefSessionApi {
   const [slot, dispatch] = useReducer(slotReducer, undefined, emptySlot);
   const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [historyProblems, setHistoryProblems] = useState<readonly string[]>([]);
@@ -47,6 +54,21 @@ export function useSession(session: SessionRef | null, enabled: boolean, rpc: Rp
   // identity that changes with the caller's inline literal would restart the stream forever.
   const projectId = session?.projectId ?? null;
   const sessionId = session?.sessionId ?? null;
+  const refreshTask = useCallback(
+    async (taskId: string): Promise<TaskDetail | null> => {
+      if (session === null) return null;
+      const read = await rpc.call<{
+        task: TaskDetail['task'];
+        members: TaskDetail['members'];
+        results: TaskDetail['results'];
+      }>('task.get', { projectId: session.projectId, taskId });
+      const detail: TaskDetail = { task: read.task, members: read.members, results: read.results };
+      dispatch({ type: 'taskDetail', detail });
+      return detail;
+    },
+    [rpc, session],
+  );
+
   const refreshPending = useCallback(async (): Promise<void> => {
     if (projectId === null || sessionId === null) return;
     const read = await rpc.call<{ snapshot: { interactions: PendingInteraction[] } }>('session.stream.prepare', {
@@ -71,7 +93,13 @@ export function useSession(session: SessionRef | null, enabled: boolean, rpc: Rp
       // wrapped in event (http.ts publishes the notice object as the frame itself).
       const notice = frame as unknown as { entity?: string; id?: string };
       if (frame.type === 'invalidate' && notice.entity === 'task' && typeof notice.id === 'string') {
+        // The server now announces every change to the Task (created, updated, dispatched), so the
+        // strip updates on the event itself; the interval is only a fallback for a lost frame.
         setActiveTaskId(notice.id);
+        void refreshTask(notice.id).catch(() => undefined);
+      }
+      if (frame.type === 'invalidate' && notice.entity === 'session') {
+        onSessionsChanged?.();
       }
       if (frame.type === 'invalidate' && notice.entity === 'input' && typeof notice.id === 'string') {
         // The submit's own receipt: this input is now the session's current (queued) input.
@@ -122,7 +150,7 @@ export function useSession(session: SessionRef | null, enabled: boolean, rpc: Rp
     };
     // Identity-stable on purpose: the caller passes `{projectId, sessionId}` inline, so depending
     // on the object would restart the stream on every render (a hot loop, not a re-subscribe).
-  }, [rpc, projectId, sessionId, enabled, retryTick, refreshPending, onUnauthorized]);
+  }, [rpc, projectId, sessionId, enabled, retryTick, refreshPending, onUnauthorized, onSessionsChanged, refreshTask]);
 
   /** Reconnect now instead of waiting for the next backoff: the user's explicit retry. */
   const retry = useCallback((): void => setRetryTick((tick) => tick + 1), []);
@@ -206,60 +234,39 @@ export function useSession(session: SessionRef | null, enabled: boolean, rpc: Rp
     [rpc, session],
   );
 
-  const refreshTask = useCallback(
-    async (taskId: string): Promise<TaskDetail | null> => {
-      if (session === null) return null;
-      const read = await rpc.call<{
-        task: TaskDetail['task'];
-        members: TaskDetail['members'];
-        results: TaskDetail['results'];
-      }>('task.get', { projectId: session.projectId, taskId });
-      const detail: TaskDetail = { task: read.task, members: read.members, results: read.results };
-      dispatch({ type: 'taskDetail', detail });
-      return detail;
-    },
-    [rpc, session],
-  );
 
   // The server does not push Task member changes, so the strip polls the coordinated Task while
   // one exists (plan D5). A failed poll is ignored on purpose: the next tick retries, and a strip
   // that is one refresh stale is better than a banner for a transient read error.
-  // A Task created by the chief's own run publishes no invalidate (creation happens inside the
-  // tool), so while the session is working and no Task is known, ask the server whether one now
-  // exists. Two seconds is enough for the strip to appear while the chief is still talking.
-  const busy = slot.busy !== 'idle';
-  useEffect(() => {
-    if (projectId === null || sessionId === null || !busy || activeTaskId !== null) return;
-    let cancelled = false;
-    const read = (): void => {
-      void rpc
-        .call<{ session: { currentTaskId: string | null } }>('session.get', { projectId, sessionId })
-        .then((answer) => {
-          if (!cancelled && answer.session.currentTaskId !== null) setActiveTaskId(answer.session.currentTaskId);
-        })
-        .catch(() => undefined);
-    };
-    // Read once as soon as the chief starts working (the Task is usually created at the start of a
-    // run), then keep asking while the run lasts.
-    read();
-    const timer = setInterval(read, 2_000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [rpc, projectId, sessionId, busy, activeTaskId]);
-
   const taskStatus = slot.taskDetail?.task.status ?? null;
   useEffect(() => {
     // A finished Task is not polled any more: its strip has nothing left to update, and the
     // interval would keep a timer alive for as long as the tab is open.
     if (activeTaskId === null || taskStatus === 'completed' || taskStatus === 'cancelled') return;
+    let timer: number | null = null;
     const read = (): void => {
       void refreshTask(activeTaskId).catch(() => undefined);
     };
-    read();
-    const timer = setInterval(read, 3_000);
-    return () => clearInterval(timer);
+    const visible = (): boolean => document.visibilityState === 'visible';
+    const start = (): void => {
+      if (timer !== null || !visible()) return;
+      read();
+      timer = window.setInterval(read, 3_000);
+    };
+    const stop = (): void => {
+      if (timer === null) return;
+      window.clearInterval(timer);
+      timer = null;
+    };
+    // A hidden tab asks the server nothing: the user cannot see the answer, and a laptop that
+    // sleeps for an hour should not wake up to an hour of queued polls.
+    const onVisibility = (): void => (visible() ? start() : stop());
+    document.addEventListener('visibilitychange', onVisibility);
+    start();
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      stop();
+    };
   }, [activeTaskId, taskStatus, refreshTask]);
 
   return {

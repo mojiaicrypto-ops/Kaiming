@@ -32,6 +32,8 @@ export interface ChatPageProps {
   readonly hasProject: boolean;
   readonly onSelectSession: (sessionId: string) => void;
   readonly onCreateSession: () => void;
+  readonly hasMoreSessions: boolean;
+  readonly onLoadMoreSessions: () => void;
   readonly onOpenRail: () => void;
   readonly railOpen: boolean;
 }
@@ -41,7 +43,7 @@ export interface ChatPageProps {
  * transcript owns its own scroll-follow handle so that a streaming answer never yanks the view
  * away from a user who scrolled up (R5); the "back to latest" pill is the only way it moves you.
  */
-export function ChatPage({ session, sessions, currentSessionId, projectId, hasProject, onSelectSession, onCreateSession, railOpen, onOpenRail }: ChatPageProps) {
+export function ChatPage({ session, sessions, currentSessionId, projectId, hasProject, onSelectSession, onCreateSession, hasMoreSessions, onLoadMoreSessions, railOpen, onOpenRail }: ChatPageProps) {
   // Below 861px the session rail is a sheet, not a column: CSS hides the column, so the sheet is
   // the only way to switch sessions there.
   const compact = useCompact();
@@ -137,7 +139,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
         return t('ask.fromChief');
       }
       const row = sessions.find((entry) => entry.sessionId === interaction.sourceSessionId);
-      return row === undefined || row.title === '' ? interaction.sourceSessionId : row.title;
+      return row === undefined || row.title === null || row.title === '' ? interaction.sourceSessionId : row.title;
     },
     [currentSessionId, sessions, t],
   );
@@ -172,6 +174,8 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
             onSelect={onSelectSession}
             onCreate={onCreateSession}
             questionCount={(sessionId) => (sessionId === currentSessionId ? openQuestions.length : 0)}
+            hasMore={hasMoreSessions}
+            onLoadMore={onLoadMoreSessions}
           />
         </>
       ) : (
@@ -181,6 +185,8 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
           onSelect={onSelectSession}
           onCreate={onCreateSession}
           questionCount={(sessionId) => (sessionId === currentSessionId ? openQuestions.length : 0)}
+          hasMore={hasMoreSessions}
+          onLoadMore={onLoadMoreSessions}
         />
       )}
       <section className="conv">

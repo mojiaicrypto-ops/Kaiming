@@ -249,7 +249,9 @@ test('a rejected tool call stays visible with its reason', async ({ page }) => {
         calls: [
           {
             name: 'task',
-            arguments: JSON.stringify({ op: 'create', type: 'read', goal: 'g', scope: 's', planMarkdown: '# p' }),
+            // A write Task that does not say whether it requires a test: a real refusal the model
+            // can act on, and one that does not depend on any decision reference.
+            arguments: JSON.stringify({ op: 'create', type: 'write', goal: 'g', scope: 's', planMarkdown: '# p' }),
           },
         ],
       },
@@ -266,7 +268,7 @@ test('a rejected tool call stays visible with its reason', async ({ page }) => {
     const failed = page.locator('[data-testid="transcript"] .tc.failed');
     await expect(failed).toHaveCount(1, { timeout: 20_000 });
     await expect(failed.locator('.tn')).toContainText('task');
-    await expect(failed).toContainText('authorizationRef');
+    await expect(failed).toContainText('requiresTest');
   } finally {
     await harness.close();
   }
