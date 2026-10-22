@@ -33,7 +33,7 @@ plan:
 | B | `project.list` + 项目菜单接真实列表 | S1 | 清空浏览器存储后，已登记项目仍在菜单 |
 | C | 任务推送 + 轮询只在可见时运行 | S3、D4 | 建 Task 后任务条立即出现（无 2 秒空白）；隐藏标签页 0 请求 |
 | D | 写对与交接：模型设置范围、需求抽屉跳转预填 | D1、D2 | 项目范围写项目级覆盖；抽屉按钮打开会话并预填，未代发 |
-| E | 阅读器：知识入口、项目文件、报告与证据 | U7、U1、U2 | 从项目对话框与转录结果都能打开正文；二进制/截断说明清楚 |
+| E | 阅读器：知识入口、项目文件、报告与证据、更早历史 | U7、U1、U2、U10 | 从项目对话框与转录结果都能打开正文；二进制/截断说清楚；上滚能加载更早消息且不跳位 |
 | F | 重绑定与任务列表 | U3、U6 | 目录移动后可重绑定；任务列表分页可读 |
 | G | 交互质量：焦点、Toast 通知、错误文案 | D3、D6、P3 | Tab 不出遮罩；读屏能听到 Toast；错误码对应本地文案 |
 | H | 待确认问题（不实现） | U4、U5 | 列出问题与建议形态，等确认 |
@@ -94,8 +94,9 @@ plan:
 | `webapp/src/files/FileDrawer.tsx`（新） | 一个抽屉两种来源：`project.files.list/read` 与 `task.report.get`；面包屑 + 目录列表 + 文本视图；`binary`/`truncated`/超限各有说明；带 `version` 显示，不做编辑 |
 | `webapp/src/app/ProjectDialog.tsx` | 四个知识入口（AGENTS.md、.dev/INDEX.md、.dev/PROJECT.md、初始化记录）显示存在与否，点击进阅读器 |
 | `webapp/src/chat/ToolTask.tsx`、`ToolBusiness.tsx` | 结果与证据引用变成可点击（`resultId` → 报告；项目相对路径 → 文件） |
+| `webapp/src/chat/Transcript.tsx` | 上滚到顶加载更早历史（`session.messages.list` + `nextCursor` 反向前插，保持 `scrollTop` 不跳）；顶部显示「已到最早」或加载中 |
 | `webapp/src/i18n/catalog.ts` | 新增键（两语），`web-i18n-keys` 自动校验 |
-| `devagent/browser/acceptance.spec.ts` | 打开 AGENTS.md 读到正文；打开任务结果报告读到正文；打开二进制文件显示说明而非乱码 |
+| `devagent/browser/acceptance.spec.ts` | 打开 AGENTS.md 读到正文；打开任务结果报告读到正文；打开二进制文件显示说明而非乱码；101 条以上的会话上滚后看到第 1 条且视口不跳 |
 
 ### F 重绑定与任务列表
 
@@ -134,7 +135,7 @@ plan:
 4. B1 `project.list` + 测试；B2 界面接入 + 浏览器用例。
 5. C1 工具/Runner/Server 推送链 + 测试；C2 界面收推送、删发现循环、可见性轮询 + 浏览器用例。
 6. D1 模型范围；D2 交接预填；各一浏览器用例。
-7. E1 阅读器 + 知识入口；E2 报告/证据链接；各一浏览器用例。
+7. E1 阅读器 + 知识入口；E2 报告/证据链接；E3 更早历史分页；各一浏览器用例。
 8. F1 重绑定；F2 任务列表；各一浏览器用例。
 9. G 焦点、Toast、错误文案。
 10. H 问题文档。

@@ -51,6 +51,7 @@
 | U7 | `project.get.entries` / `initializationRef` | P-02、AC-03：知识入口与确认差异 | 返回了但界面不显示 | 项目对话框显示四个入口的存在与否；点击进 U1 阅读器 |
 | U8 | `session.input.get.effectiveConfig` | P-05：「当前工作显示实际使用配置」 | 0 处调用 | 随 S4：任务条/状态栏显示 `provider/model`，与设置不同时标出 |
 | U9 | `config.test`（草稿态） | AC-27：试无效配置 | 只能测已保存 provider | 不做：先保存再测已能覆盖；草稿试连会引入未保存状态 |
+| U10 | `session.messages.list` | J-01/接续：翻看更早的会话内容 | 0 处调用；转录只有 `session.stream.prepare` 的尾部 100 条（`stream-methods.ts:12,60`），超过 100 条的会话看不到更早内容且无入口 | 上滚到顶时按 `nextCursor` 加载，插入时保持滚动位置（阶段 E3） |
 
 ## P 最佳实践（本轮与后续都应遵守）
 
@@ -60,7 +61,7 @@
 | P2 | 有推送就不轮询；轮询只在页面可见时运行，且完成后停表 | S3/D4；当前两个 interval 在完成后仍保留一个（`useSession.ts:253-263`） |
 | P3 | 服务端错误码 → 本地文案，服务端 detail 作为第二行 | 现在多处直接拼接英文 detail（如 `settings.saveFailed`），中英混排且不可检索 |
 | P4 | 遮罩层：焦点陷阱、Esc、关闭归还、`aria-live` 通知 | D3；无障碍是可用性而不是装饰 |
-| P5 | 「方法消费」门禁：`ui-design.md` 的表格列出每个方法被哪个界面消费；未消费的必须在 gap-register 登记 | 现状 8 个方法 0 调用（U1–U8），没有任何检查会提醒 |
+| P5 | 「方法消费」门禁：`ui-design.md` 的表格列出每个方法被哪个界面消费；未消费的必须在 gap-register 登记 | 现状 10 个方法 0 调用（U1–U10），没有任何检查会提醒 |
 | P6 | 新方法清单：参数校验、归属校验、CAS/幂等、契约测试、`runtime-contract.md` 表格、README 索引 —— 五项齐全才算完成 | 避免再出现「方法在、字段缺、合同写别的」 |
 | P7 | 三态（加载/空/错误）只用 `State` 与既有 class，不各页自造 | 已有 `State`/`banner`/`notice`，复制会立刻分叉 |
 | P8 | 分页 cursor 语义统一：需求 `updatedAt\|id`、任务/文件 `id`，并在合同表注明 | C2 暴露的正是「同一资源两种分页语义」 |
