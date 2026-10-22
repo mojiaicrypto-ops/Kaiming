@@ -6,6 +6,7 @@
  * it through the host's own marker entries - the same correlation the runtime uses to recover.
  */
 import { existsSync, readFileSync } from 'node:fs';
+import { projectContentImages } from './image-projection.ts';
 
 export const INPUT_MARKER_CUSTOM_TYPE = 'agentdev.input-marker';
 
@@ -32,7 +33,11 @@ export interface HistoryRead {
   readonly problems: readonly string[];
 }
 
-export function readPiHistory(piFile: string | undefined): HistoryRead {
+/**
+ * Read the file. `agentDir` is where image bytes live: a message that carries base64 is projected to
+ * an attachment address, because the browser must never be handed the bytes themselves.
+ */
+export function readPiHistory(piFile: string | undefined, agentDir?: string): HistoryRead {
   if (piFile === undefined || !existsSync(piFile)) {
     return { found: false, header: null, records: [], problems: [] };
   }
@@ -109,7 +114,7 @@ export function readPiHistory(piFile: string | undefined): HistoryRead {
       id,
       type,
       role,
-      content: message['content'] ?? null,
+      content: projectContentImages(message['content'] ?? null, agentDir),
       toolCallId: typeof message['toolCallId'] === 'string' ? message['toolCallId'] : null,
       toolName: typeof message['toolName'] === 'string' ? message['toolName'] : null,
       isError: typeof message['isError'] === 'boolean' ? message['isError'] : null,

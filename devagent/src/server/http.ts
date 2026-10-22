@@ -8,11 +8,15 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { AuthService, CSRF_HEADER } from './auth.ts';
+import { MAX_IMAGE_BYTES, readImage, storeImage } from './attachments.ts';
 import { SessionEventHub, type StreamEvent } from './hub.ts';
 import { RPC_PATH, RpcError, RpcRouter, statusFor, toRpcError, type RpcContext, type RpcResponse } from './rpc.ts';
 import type { Store } from '../store/store.ts';
 
 const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
+/** Binary image upload (U6): one request carries one image, so no JSON envelope is involved. */
+export const UPLOAD_PATH = '/api/v1/uploads';
+export const ATTACHMENT_PATH_PREFIX = '/api/v1/attachments/';
 
 export interface WorkbenchServerOptions {
   readonly store: Store;
@@ -26,6 +30,11 @@ export interface WorkbenchServerOptions {
    * `/requirements` and `/settings/models`.
    */
   readonly staticDir?: string;
+  /**
+   * Where uploaded images live (`<agentDir>/attachments`). Absent means this server has no image
+   * storage, and both image routes answer 404 instead of accepting bytes they would have to drop.
+   */
+  readonly attachmentDir?: string;
   readonly bodyLimitBytes?: number;
   /** Origin allowed to call this server; defaults to the request's own host (same-origin). */
   readonly allowedOrigin?: (requestOrigin: string, host: string | undefined) => boolean;
@@ -58,6 +67,14 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
   async function handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = request.url ?? '/';
     const path = url.split('?')[0] ?? '/';
+    if (request.method === 'POST' && path === UPLOAD_PATH) {
+      await handleUpload(request, response);
+      return;
+    }
+    if (request.method === 'GET' && path.startsWith(ATTACHMENT_PATH_PREFIX)) {
+      await handleAttachment(request, response, decodeURIComponent(path.slice(ATTACHMENT_PATH_PREFIX.length)));
+      return;
+    }
     if (request.method === 'POST' && path === RPC_PATH) {
       await handleRpc(request, response);
       return;
@@ -333,6 +350,87 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
     subscription.deliver = send;
   }
 
+  /**
+   * Upload one image (U6). The cookie authenticates, the CSRF header proves the write came from the
+   * page, and the bytes themselves decide the format and the id — a declared type is never trusted.
+   */
+  async function handleUpload(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const dir = options.attachmentDir;
+    if (dir === undefined) {
+      writeJson(response, 404, { requestId: 'unknown', error: { code: 'NOT_FOUND', message: 'image upload is not enabled' } });
+      return;
+    }
+    const origin = request.headers.origin;
+    if (typeof origin === 'string' && !sameOrigin(origin, request.headers.host)) {
+      writeJson(response, 403, {
+        requestId: 'unknown',
+        error: { code: 'FORBIDDEN', message: 'cross-origin uploads are not accepted' },
+      });
+      return;
+    }
+    const session = options.auth.resolve(request.headers.cookie);
+    if (session === undefined) {
+      writeJson(response, 401, { requestId: 'unknown', error: { code: 'UNAUTHORIZED', message: 'log in first' } });
+      return;
+    }
+    const csrf = request.headers[CSRF_HEADER];
+    if (!options.auth.verifyWrite(session, typeof csrf === 'string' ? csrf : undefined)) {
+      writeJson(response, 403, {
+        requestId: 'unknown',
+        error: { code: 'FORBIDDEN', message: 'the CSRF token is missing or wrong', details: { csrf: true } },
+      });
+      return;
+    }
+    let body: Buffer;
+    try {
+      body = await readBinaryBody(request, MAX_IMAGE_BYTES);
+    } catch (error) {
+      const rpcError = toRpcError(error);
+      writeJson(response, statusFor({ requestId: 'unknown', error: rpcError }), {
+        requestId: 'unknown',
+        error: { code: rpcError.code, message: rpcError.message, details: { limit: MAX_IMAGE_BYTES } },
+      });
+      return;
+    }
+    const stored = storeImage(dir, body);
+    if (!stored.ok) {
+      writeJson(response, 400, {
+        requestId: 'unknown',
+        error: { code: stored.code, message: stored.message, details: { limit: MAX_IMAGE_BYTES } },
+      });
+      return;
+    }
+    writeJson(response, 200, {
+      requestId: 'unknown',
+      result: { ...stored.image, url: `${ATTACHMENT_PATH_PREFIX}${stored.image.id}` },
+    });
+  }
+
+  /** Serve one stored image. Immutable by construction: the id is the digest, so the bytes never change. */
+  async function handleAttachment(request: IncomingMessage, response: ServerResponse, id: string): Promise<void> {
+    const dir = options.attachmentDir;
+    if (dir === undefined) {
+      writeJson(response, 404, { requestId: 'unknown', error: { code: 'NOT_FOUND', message: 'image storage is not enabled' } });
+      return;
+    }
+    if (options.auth.resolve(request.headers.cookie) === undefined) {
+      writeJson(response, 401, { requestId: 'unknown', error: { code: 'UNAUTHORIZED', message: 'log in first' } });
+      return;
+    }
+    const image = readImage(dir, id);
+    if (image === undefined) {
+      writeJson(response, 404, { requestId: 'unknown', error: { code: 'NOT_FOUND', message: 'no such image' } });
+      return;
+    }
+    response.writeHead(200, {
+      'content-type': image.mimeType,
+      'content-length': image.bytes.byteLength,
+      'cache-control': 'private, max-age=31536000, immutable',
+      'x-content-type-options': 'nosniff',
+    });
+    response.end(image.bytes);
+  }
+
   async function serveStatic(
     request: IncomingMessage,
     response: ServerResponse,
@@ -417,6 +515,21 @@ async function readJsonBody(request: IncomingMessage, limit: number): Promise<un
   } catch {
     throw new RpcError('INVALID_ARGUMENT', 'the request body is not JSON');
   }
+}
+
+/** Raw bytes for the upload route: no JSON, and the same declared limit the store enforces. */
+async function readBinaryBody(request: IncomingMessage, limit: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = chunk as Buffer;
+    size += buffer.byteLength;
+    if (size > limit) {
+      throw new RpcError('INVALID_ARGUMENT', `the image is larger than ${limit} bytes`, { limit });
+    }
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
 }
 
 function writeJson(response: ServerResponse, status: number, body: RpcResponse | Record<string, unknown>): void {

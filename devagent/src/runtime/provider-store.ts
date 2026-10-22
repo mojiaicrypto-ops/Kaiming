@@ -15,6 +15,12 @@ export interface ProviderDefinition {
   readonly api?: string;
   /** Omitted when the caller only changes the catalog and keeps the existing key. */
   readonly apiKey?: string;
+  /**
+   * Declared input modalities. Defaults to text and image: Pi's catalog treats a provider entry that
+   * declares nothing as text-only and then drops every image silently, which looks like a broken
+   * upload. An endpoint that really cannot take images answers with an error the user can see.
+   */
+  readonly input?: readonly string[];
   readonly models: readonly { id: string; name: string }[];
 }
 
@@ -65,7 +71,11 @@ export function writeProvider(agentDir: string, definition: ProviderDefinition):
     baseUrl: definition.baseUrl,
     ...(definition.api !== undefined ? { api: definition.api } : {}),
     apiKey,
-    models: definition.models.map((model) => ({ id: model.id, name: model.name })),
+    models: definition.models.map((model) => ({
+      id: model.id,
+      name: model.name,
+      input: [...(definition.input ?? ['text', 'image'])],
+    })),
   };
   const path = modelsPathFor(agentDir);
   try {

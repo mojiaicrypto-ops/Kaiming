@@ -30,6 +30,17 @@ export function normalizeBlock(block: unknown): ContentBlock {
   if (record.type === 'thinking') {
     return { type: 'thinking', thinking: typeof record.thinking === 'string' ? record.thinking : '' };
   }
+  if (record.type === 'image') {
+    // The server sends an attachment id (bytes on disk); `src` may already be a URL.
+    const src =
+      typeof record.src === 'string' && record.src !== ''
+        ? record.src
+        : typeof record.id === 'string' && record.id !== ''
+          ? `/api/v1/attachments/${record.id}`
+          : '';
+    if (src === '') return { type: 'text', text: '' };
+    return { type: 'image', src, ...(typeof record.mimeType === 'string' ? { alt: record.mimeType } : {}) };
+  }
   return { type: 'text', text: typeof record.text === 'string' ? record.text : '' };
 }
 

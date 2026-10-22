@@ -93,6 +93,30 @@ export class PiRuntimeFactory {
   }
 
   /**
+   * The model provider's own search endpoint and credential, when it has one.
+   *
+   * `web_search` prefers this over a keyless scraper: the user already configured this key, so a
+   * lookup costs them nothing new. It is read through the same runtime a run uses, so a credential
+   * added later is visible on the next input without a restart.
+   */
+  async searchKey(selection: ModelSelection): Promise<{ readonly baseUrl: string; readonly apiKey: string } | undefined> {
+    if (selection.providerId !== 'deepseek') {
+      return undefined;
+    }
+    const runtime = await this.runtime();
+    const model = runtime.getModel(selection.providerId, selection.modelId);
+    if (model === undefined) {
+      return undefined;
+    }
+    const resolved = await runtime.getAuth(model);
+    const apiKey = resolved?.auth.apiKey;
+    if (typeof apiKey !== 'string' || apiKey === '') {
+      return undefined;
+    }
+    return { baseUrl: resolved?.auth.baseUrl ?? 'https://api.deepseek.com', apiKey };
+  }
+
+  /**
    * A real trial connection (R5/config.test): refresh the catalog over the network with a bounded
    * timeout and report whether the selection is usable. Nothing is saved and no session is created.
    */

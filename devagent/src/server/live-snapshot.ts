@@ -8,6 +8,7 @@
  */
 import type { SessionManager } from '@earendil-works/pi-coding-agent';
 import { INPUT_MARKER_CUSTOM_TYPE, type HistoryRecord } from './history.ts';
+import { projectContentImages } from './image-projection.ts';
 
 interface EntryLike {
   readonly type: string;
@@ -27,7 +28,7 @@ function contentOf(message: Record<string, unknown>): unknown {
  * host's input markers are conversation; everything else (compaction, usage, model changes) is
  * not listed — the same rule `readPiHistory` applies to file entries.
  */
-export function entriesToHistoryRecords(entries: readonly unknown[]): HistoryRecord[] {
+export function entriesToHistoryRecords(entries: readonly unknown[], agentDir?: string): HistoryRecord[] {
   const records: HistoryRecord[] = [];
   let currentInputId: string | null = null;
   for (const entry of entries as readonly EntryLike[]) {
@@ -66,7 +67,7 @@ export function entriesToHistoryRecords(entries: readonly unknown[]): HistoryRec
       id: typeof entry.id === 'string' ? entry.id : null,
       type,
       role,
-      content: contentOf(message),
+      content: projectContentImages(contentOf(message), agentDir),
       toolCallId: typeof message['toolCallId'] === 'string' ? message['toolCallId'] : null,
       toolName: typeof message['toolName'] === 'string' ? message['toolName'] : null,
       isError: typeof message['isError'] === 'boolean' ? message['isError'] : null,
@@ -79,10 +80,13 @@ export function entriesToHistoryRecords(entries: readonly unknown[]): HistoryRec
 }
 
 /** A live snapshot source: entries from the session manager when the instance is alive. */
-export function liveHistoryRead(sessionManager: SessionManager): {
+export function liveHistoryRead(sessionManager: SessionManager, agentDir?: string): {
   records: readonly HistoryRecord[];
   problems: readonly string[];
 } {
   // The live projection is built from typed entries, not parsed text: nothing to report.
-  return { records: entriesToHistoryRecords(sessionManager.getEntries() as readonly unknown[]), problems: [] };
+  return {
+    records: entriesToHistoryRecords(sessionManager.getEntries() as readonly unknown[], agentDir),
+    problems: [],
+  };
 }

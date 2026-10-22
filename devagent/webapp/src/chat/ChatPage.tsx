@@ -185,9 +185,9 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
   }, [projectId, currentSessionId, slot.busy, session.rpc]);
 
   const submit = useCallback(
-    async (text: string): Promise<void> => {
+    async (text: string, images: readonly string[]): Promise<void> => {
       try {
-        const outcome = await session.submit(text);
+        const outcome = await session.submit(text, images);
         if (outcome.queued) {
           session.notify(
             outcome.waitingForTask === undefined ? t('queue.afterStep') : `${t('queue.afterStep')} · ${outcome.waitingForTask}`,
@@ -314,7 +314,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
               </button>
             )}
             {slot.items.length === 0 ? (
-              <EmptyState hasProject={hasProject} onExample={(text) => void submit(text)} />
+              <EmptyState hasProject={hasProject} onExample={(text) => void submit(text, [])} />
             ) : (
               <Transcript
                 items={slot.items}
@@ -370,6 +370,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
               seed={draft}
               onSeed={(inserted) => onDraftConsumed(inserted)}
               onSubmit={submit}
+              onUpload={(file) => session.rpc.upload(file)}
               onStop={async () => {
                 await session.stop().catch((error: unknown) => {
                   session.notify(t('toast.stopFailed', { reason: errorText(error, t) }), 'error');

@@ -471,6 +471,21 @@ kbd {
 .md img {
   max-width: 100%;
 }
+.md img,
+.msg-image img {
+  max-width: 100%;
+}
+/* An image in a conversation: bounded, so one screenshot does not become the whole transcript. */
+.msg-image {
+  display: inline-block;
+  max-width: min(100%, 520px);
+  border: 1px solid var(--line-strong);
+  line-height: 0;
+}
+.msg-image img {
+  max-height: 360px;
+  width: auto;
+}
 .cursor {
   color: var(--accent);
   animation: blink 1s steps(1) infinite;
@@ -739,6 +754,45 @@ kbd {
   color: var(--accent);
   font-weight: 700;
   font-family: var(--mono);
+}
+.composer-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+.composer-thumb {
+  position: relative;
+  border: 1px solid var(--line-strong);
+  line-height: 0;
+}
+.composer-thumb img {
+  height: 56px;
+  width: auto;
+  max-width: 120px;
+  object-fit: cover;
+}
+.composer-thumb button {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line-strong);
+  background: var(--inset);
+  color: var(--fg-2);
+  line-height: 1;
+  font-size: var(--fs-12);
+}
+.composer-error {
+  color: var(--block);
+  font-size: var(--fs-12);
 }
 .composer textarea {
   flex: 1;

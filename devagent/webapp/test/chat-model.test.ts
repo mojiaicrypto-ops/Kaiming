@@ -20,8 +20,24 @@ describe('tool result pairing', () => {
 
   it('pairs by call id, including the error flag', () => {
     const index = indexToolResults([call('c1'), result('c1', 'ok'), call('c2'), result('c2', 'boom', true)]);
-    expect(index.get('c1')).toEqual({ text: 'ok', failed: false });
-    expect(index.get('c2')).toEqual({ text: 'boom', failed: true });
+    expect(index.get('c1')).toEqual({ text: 'ok', images: [], failed: false });
+    expect(index.get('c2')).toEqual({ text: 'boom', images: [], failed: true });
+  });
+
+  it('keeps a result image with its own call, and renders it as an image block', () => {
+    const withImage: HistoryMessage = {
+      entryId: 'r-c3',
+      role: 'toolResult',
+      toolCallId: 'c3',
+      content: [
+        { type: 'text', text: 'screenshot' },
+        { type: 'image', src: '/api/v1/attachments/abc', alt: 'image/png' },
+      ],
+    };
+    const index = indexToolResults([call('c3'), withImage]);
+    expect(index.get('c3')).toEqual({ text: 'screenshot', images: ['/api/v1/attachments/abc'], failed: false });
+    const blocks = blocksOf({ entryId: 'u1', role: 'user', content: [{ type: 'image', src: '/api/v1/attachments/abc' }] });
+    expect(blocks).toEqual([{ kind: 'image', src: '/api/v1/attachments/abc', alt: '' }]);
   });
 
   it('does not attach an id-less result to any call', () => {

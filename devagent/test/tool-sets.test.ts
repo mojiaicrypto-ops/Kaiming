@@ -62,6 +62,9 @@ describe('role tool sets', () => {
       'agent_report',
       'task',
       'question',
+      'web_search',
+      'web_fetch',
+      'browser',
     ]);
     expect(toolSetFor('reviewer', 'write').readTools).toEqual(['read', 'grep', 'find', 'ls']);
   });
@@ -69,6 +72,17 @@ describe('role tool sets', () => {
   it('keeps the report tool available in a read Task because it writes a Server-side report', () => {
     expect(toolSetFor('investigator', 'read').allowlist).toContain('agent_report');
     expect(toolSetFor('chief', 'read').allowlist).not.toContain('agent_report');
+  });
+
+  it('keeps external reading and the browser in a read Task, because neither writes the project', () => {
+    const investigatorRead = toolSetFor('investigator', 'read');
+    expect(investigatorRead.allowlist).toEqual(expect.arrayContaining(['web_search', 'web_fetch', 'browser']));
+    // The browser is registered read-only there, but the allowlist itself does not drop it.
+    expect(investigatorRead.projectReadOnly).toBe(true);
+    // A designer has no browser; the settler records verified work and gets neither.
+    expect(toolSetFor('designer', 'write').allowlist).not.toContain('browser');
+    expect(toolSetFor('settler', 'write').allowlist).not.toContain('web_search');
+    expect(toolSetFor('settler', 'write').allowlist).not.toContain('browser');
   });
 
   it('gives every role the one task tool and the chief alone the project task surface', () => {

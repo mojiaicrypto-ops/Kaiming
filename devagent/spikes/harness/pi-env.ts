@@ -77,7 +77,7 @@ function sseChunk(modelId: string, delta: ChatChunkDelta, finishReason: string |
 
 const STUB_USAGE = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
 
-function writeCompletion(res: ServerResponse, reply: StubReply): void {
+function writeCompletion(res: ServerResponse, reply: StubReply, turn: number): void {
   if (reply.kind === 'hang') {
     return;
   }
@@ -114,7 +114,9 @@ function writeCompletion(res: ServerResponse, reply: StubReply): void {
             tool_calls: [
               {
                 index,
-                id: `call_${index}`,
+                // Unique per turn: two replies that both call a tool must not share an id, or a
+                // result would pair with the wrong card.
+                id: `call_${turn}_${index}`,
                 type: 'function',
                 function: { name: call.name, arguments: call.arguments },
               },
@@ -171,7 +173,7 @@ export async function startStubModelServer(replies: readonly StubReply[]): Promi
       if (reply.kind === 'hang') {
         return;
       }
-      writeCompletion(res, reply);
+      writeCompletion(res, reply, served);
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));

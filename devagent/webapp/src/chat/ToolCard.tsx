@@ -11,6 +11,8 @@ export interface ToolCardProps {
   readonly args: string;
   readonly status: ToolStatus;
   readonly resultText?: string | undefined;
+  /** Attachment URLs in the tool result: a screenshot is evidence, not decoration. */
+  readonly resultImages?: readonly string[] | undefined;
   readonly elapsedMs?: number | undefined;
   readonly liveTail?: string | undefined;
 }
@@ -20,7 +22,7 @@ export interface ToolCardProps {
  * what it acts on, and how long it took. Expanding shows the full arguments and the output — the
  * structural equivalent of the previous card, drawn in the prototype's vocabulary (D1/D2).
  */
-export function ToolCard({ name, callId, args, status, resultText, elapsedMs, liveTail }: ToolCardProps) {
+export function ToolCard({ name, callId, args, status, resultText, resultImages, elapsedMs, liveTail }: ToolCardProps) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const parsed = parseArgs(args);
@@ -58,6 +60,12 @@ export function ToolCard({ name, callId, args, status, resultText, elapsedMs, li
             <pre className={status === 'failed' ? 'err' : ''}>{resultText}</pre>
           </>
         )}
+        {resultImages !== undefined &&
+          resultImages.map((src, index) => (
+            <a key={src} className="msg-image" href={src} target="_blank" rel="noreferrer">
+              <img src={src} alt={`${name} ${index + 1}`} loading="lazy" />
+            </a>
+          ))}
       </details>
       {status === 'running' && liveTail !== undefined && liveTail !== '' && <pre className="tc-tail">{liveTail}</pre>}
     </>

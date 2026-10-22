@@ -6,13 +6,13 @@
 
 | roleId | 责任 | 能力（Pi 原生文件工具按 Task 类型裁剪） |
 |---|---|---|
-| chief | 用户讨论、总体 Plan、阶段/步骤、委派、业务判断与收口 | read/grep/find/ls/bash；四个核心工具、task（全 op）、requirement、project、question |
-| designer | 产品分析、模块内聚、需求及适用技术架构/契约 | read/grep/find/ls/write/edit/bash、requirement、agent_report、task(op=get)、question |
-| developer | 实现指定目标，内置单元/TDD 自查（D-05） | read/grep/find/ls/write/edit/bash、agent_report、task(op=get)、requirement.list/get、question |
-| reviewer | 独立检查需求/验收、Plan 和实际成果 | read/grep/find/ls、agent_report、task(op=get)、question |
-| tester | Review 后独立端到端集成/E2E 验收（D-05） | read/grep/find/ls/bash、agent_report、task(op=get)、question |
+| chief | 用户讨论、总体 Plan、阶段/步骤、委派、业务判断与收口 | read/grep/find/ls/bash；四个核心工具、task（全 op）、requirement、project、question、web_search、web_fetch、browser |
+| designer | 产品分析、模块内聚、需求及适用技术架构/契约 | read/grep/find/ls/write/edit/bash、requirement、agent_report、task(op=get)、question、web_search、web_fetch |
+| developer | 实现指定目标，内置单元/TDD 自查（D-05） | read/grep/find/ls/write/edit/bash、agent_report、task(op=get)、requirement.list/get、question、web_search、web_fetch、browser |
+| reviewer | 独立检查需求/验收、Plan 和实际成果 | read/grep/find/ls、agent_report、task(op=get)、question、web_search、web_fetch、browser（只读动作） |
+| tester | Review 后独立端到端集成/E2E 验收（D-05） | read/grep/find/ls/bash、agent_report、task(op=get)、question、web_search、web_fetch、browser |
 | settler | 更新已验证知识/记录，保存成果 | read/grep/find/ls/write/edit/bash、agent_report、task(op=get)、requirement、question |
-| investigator | 独立只读调查/恢复核实 | read/grep/find/ls、agent_report、task(op=get)、question |
+| investigator | 独立只读调查/恢复核实 | read/grep/find/ls、agent_report、task(op=get)、question、web_search、web_fetch、browser（只读动作） |
 
 所有角色使用同一 Pi 原生交互适配。前后端是 developer.specialization。专业 Session 必须绑定 Task，不能再委派。身份/Task/工具 op 由宿主固定，不靠模型参数切换。read Task 不开放项目写工具、requirement.save 或任意 bash；agent_report 仍可写 Server 报告。write Task 中 Reviewer 依然只读。主管可用 bash 直接核实实际状态（git、测试入口、文件布局），实现类写入仍由专业 Session 承担。设计与文档整理需要移动或删除文件（归档、改名、去掉重复正文）时用 bash（`git mv`/`rm`）：Pi 没有 rm/mv 工具，不另造文件管理工具；移动后同步引用，不留下两份正文。Local 工具允许列表不是 OS 沙箱，业务范围和命令影响由 Agent 判断，实际交付状态由程序核对。
 
@@ -100,6 +100,18 @@ execute 按 method 调用 ctx.ui.confirm/select/input，传入 signal，真实�
 chief 的 op=initialize，输入 files[{path,content}]、reusedAuthorityRefs、requestWriteUse、authorizationRef?。展示真实入口缺口、复用依据、拟写路径/完整内容与影响；需要新决定时内部 ctx.ui.confirm，模型已有明确同意则提供决定引用，程序校验来源/状态而不匹配自然语言范围。
 
 按 S6 保存批准的差异包及文件/回执，实际入口有效才返回 ready。拒绝不写；程序记录本会话上次读到的实际内容，文件被他人修改时返回当前内容要求重新读取，模型不携带版本。失败核对已保存步骤，只补缺项。初始化仍是通用交互，不注册业务确认 kind。
+
+### web_search、web_fetch 与 browser
+
+三项都是"读外部世界"，不改项目文件，因此不计入 `projectReadOnly`，read Task 保留；settler 不持有（它只沉淀已核实成果）。browser 对 reviewer/investigator 恒为只读动作（open/observe/screenshot/console/network/close），在 read Task 也一样，模型无法自我提权；open 只接受 http/https/data/about（拒绝 `file:`，避免把本机文件读进转录）。
+
+- `web_search(query, limit?, recency?)`：按可用性降级——模型同 provider 的检索端点（DeepSeek 复用已配置 key）→ `BRAVE_API_KEY` → 无凭证的 DuckDuckGo 页面。返回 title/url/snippet，并标注 provider；全部失败返回 `Error:` 与各 provider 原因，不伪造结果。单 provider 30s 上限。
+- `web_fetch(url, maxChars?, raw?)`：仅 http/https，响应 ≤5MB；HTML 转文本后**全文落盘**到 `<agentDir>/work/<sessionId>/web/<hash>.txt`，只回前 20k 字符（上限 60k）+ 路径，模型用 grep/read 精读（单页文档实测 975KB HTML → 158k 字符）。`<agentDir>/work` 是私有目录里唯一的文件读取豁免区（凭证、数据库、会话文件仍被拒绝，shell 命令仍不得提及私有目录）；响应体按上限流式读取，不信任 `content-length`。
+- `browser(action, …)`：action = open/observe/click/type/press/wait/screenshot/console/network/close。observe 给可见交互元素分配 `e1…` 引用，click/type 只接受这种引用；截图写入附件存储、以 image 内容块返回（模型可见），并在文本里给出 attachment id。headless Chromium、每会话一个、空闲 10 分钟关闭；不接用户真实浏览器。缺 Chromium 返回 `BROWSER_UNAVAILABLE`，不假装可用。
+
+### 图片输入（U10）
+
+主管会话可带图片：`POST /api/v1/uploads`（cookie + CSRF，原始字节，png/jpeg/webp/gif，单张 ≤8MB）→ 内容寻址存储 `<agentDir>/attachments/<sha256[:32]>`；`session.input.submit` 的 content 接受 `{type:'image', attachmentId}`（单条 ≤6 张），payload 只存引用；runner 在投递时读盘转 base64 交给 Pi 的 `prompt(text,{images})`。history / 实时快照 / 实时事件统一把 image 块投影成 `{type:'image', id, mimeType}`，浏览器经 `GET /api/v1/attachments/<id>` 取字节——**base64 永不进入浏览器响应**。自定义 OpenAI 兼容 provider 写入 `models.json` 时声明 `input:["text","image"]`，否则 Pi 会静默丢弃图片。
 
 ## G3 Task 流程、交付核对与完成
 

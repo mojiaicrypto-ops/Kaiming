@@ -82,7 +82,9 @@ export function parseModelConfig(raw: unknown): ModelConfigResult {
         baseUrl,
         ...(typeof api === 'string' ? { api } : {}),
         ...(typeof apiKey === 'string' ? { apiKey } : {}),
-        models: [{ id: model, name: model }],
+        // The product's own provider store declares image input; a check must describe the same
+        // endpoint, or the model would silently drop every attached image.
+        models: [{ id: model, name: model, input: ['text', 'image'] }],
       },
     };
   }

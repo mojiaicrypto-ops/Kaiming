@@ -5,6 +5,12 @@
 
 export interface ToolOutcome {
   readonly content: Array<{ readonly type: 'text'; readonly text: string }>;
+  /**
+   * Images the model should look at (a screenshot). Kept beside the text instead of inside
+   * `content`, so every existing tool and test still sees a text-only array; the adapter that
+   * reaches Pi merges both.
+   */
+  readonly images?: readonly { readonly data: string; readonly mimeType: string }[];
   readonly details: Record<string, unknown>;
   readonly isError: boolean;
 }
@@ -19,8 +25,17 @@ function withPayload(text: string, payload: Record<string, unknown>): string {
   return entries.length === 0 ? text : `${text}\n${JSON.stringify(Object.fromEntries(entries))}`;
 }
 
-export function ok(text: string, details: Record<string, unknown>): ToolOutcome {
-  return { content: [{ type: 'text', text: withPayload(text, details) }], details, isError: false };
+export function ok(
+  text: string,
+  details: Record<string, unknown>,
+  images: readonly { readonly data: string; readonly mimeType: string }[] = [],
+): ToolOutcome {
+  return {
+    content: [{ type: 'text', text: withPayload(text, details) }],
+    ...(images.length > 0 ? { images } : {}),
+    details,
+    isError: false,
+  };
 }
 
 export function fail(code: string, text: string, details: Record<string, unknown> = {}): ToolOutcome {
@@ -54,6 +69,17 @@ export function asRecord(value: unknown): Record<string, unknown> | undefined {
 export function readString(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return typeof value === 'string' ? value : undefined;
+}
+
+/** A finite number, or undefined: a string "8" from a model is not silently coerced. */
+export function readNumber(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+export function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
+  const value = record[key];
+  return typeof value === 'boolean' ? value : undefined;
 }
 
 export function readStringArray(record: Record<string, unknown>, key: string): string[] | undefined {

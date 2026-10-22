@@ -69,7 +69,16 @@ export function asToolDefinitions(tools: readonly DomainTool[]): ToolDefinition[
     // Tool-level sequential execution is a contract requirement: one tool call at a time per message.
     executionMode: 'sequential',
     async execute(toolCallId, params) {
-      return tool.execute(toolCallId, params);
+      const outcome = await tool.execute(toolCallId, params);
+      // Pi's result carries text and images in one array; a tool's own outcome keeps them apart so a
+      // text-only tool (and every test over it) never has to think about images.
+      const content: Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }> = [
+        ...outcome.content,
+      ];
+      for (const image of outcome.images ?? []) {
+        content.push({ type: 'image', data: image.data, mimeType: image.mimeType });
+      }
+      return { content, details: outcome.details, isError: outcome.isError };
     },
   }));
 }

@@ -3,11 +3,26 @@ import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
 import type { SessionActivity } from '../api/stream';
 
+/** How many images one message may carry (the server refuses more). */
+const MAX_IMAGES = 6;
+
+/** An image already uploaded and stored by the server: only its id travels with the message. */
+export interface PendingImage {
+  readonly id: string;
+  readonly url: string;
+  readonly name: string;
+}
+
 export interface ComposerProps {
   readonly busy: SessionActivity;
   readonly canStop: boolean;
   readonly disabled: boolean;
-  readonly onSubmit: (text: string) => Promise<void>;
+  readonly onSubmit: (text: string, images: readonly string[]) => Promise<void>;
+  /**
+   * Uploads one image and returns its stored id. Separate from submit because the bytes are sent
+   * once, immediately, and the message only carries the reference.
+   */
+  readonly onUpload: (file: File) => Promise<{ id: string; url: string }>;
   /**
    * Text another screen wants said here (the requirement board's "implement"): it is filled in and
    * left for the user to send, and it never replaces text the user already typed.
@@ -22,10 +37,16 @@ export interface ComposerProps {
  *  - Enter sends, Shift+Enter breaks the line, and an IME composition never sends (R11);
  *  - a failed submit puts the text back instead of losing the user's message (R10);
  *  - while the chief runs, STOP targets the current input and says what it keeps (R13/C-stop).
+ *
+ * Images are attached the same way they are delivered: the file goes to the server first, the
+ * preview shows the stored copy, and the message carries the attachment ids.
  */
-export function Composer({ busy, canStop, disabled, onSubmit, onStop, seed, onSeed }: ComposerProps) {
+export function Composer({ busy, canStop, disabled, onSubmit, onUpload, onStop, seed, onSeed }: ComposerProps) {
   const { t } = useI18n();
   const [draft, setDraft] = useState('');
+  const [images, setImages] = useState<readonly PendingImage[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   // A ref, not just the state: two Enter presses can arrive in the same task, before React has
   // re-rendered with `sending: true`, and both would then pass the guard.
@@ -34,6 +55,7 @@ export function Composer({ busy, canStop, disabled, onSubmit, onStop, seed, onSe
   // A successful STOP clears the mark: the button should not stay red from an older attempt.
   const clearStopFailure = (): void => setStopFailed(false);
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   // The composer keeps focus across turns: it is the only place the user types.
   useEffect(() => {
@@ -58,14 +80,46 @@ export function Composer({ busy, canStop, disabled, onSubmit, onStop, seed, onSe
     onSeed?.(inserted);
   }, [seed, draft, onSeed]);
 
+  const addFiles = async (files: FileList | null): Promise<void> => {
+    if (files === null || files.length === 0) return;
+    setUploadError(null);
+    setUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        if (images.length >= MAX_IMAGES) {
+          setUploadError(t('chat.attach.limit', { count: MAX_IMAGES }));
+          break;
+        }
+        try {
+          const stored = await onUpload(file);
+          setImages((current) =>
+            current.length >= MAX_IMAGES
+              ? current
+              : [...current, { id: stored.id, url: stored.url, name: file.name }],
+          );
+        } catch (error) {
+          // The reason the server gave (wrong type, too large) is the useful part.
+          setUploadError(t('chat.attach.failed', { reason: error instanceof Error ? error.message : String(error) }));
+          break;
+        }
+      }
+    } finally {
+      setUploading(false);
+      // The same file can be chosen again after a removal.
+      if (fileRef.current !== null) fileRef.current.value = '';
+    }
+  };
+
   const send = async (): Promise<void> => {
     const text = draft.trim();
-    if (text === '' || inFlight.current || disabled) return;
+    if ((text === '' && images.length === 0) || inFlight.current || disabled) return;
     inFlight.current = true;
     setSending(true);
     try {
-      await onSubmit(text);
+      await onSubmit(text, images.map((image) => image.id));
       setDraft('');
+      setImages([]);
+      setUploadError(null);
     } catch {
       // onSubmit already surfaced the reason; the draft stays so nothing is lost.
     } finally {
@@ -87,23 +141,66 @@ export function Composer({ busy, canStop, disabled, onSubmit, onStop, seed, onSe
       }}
     >
       <span className="pr">❯</span>
-      <textarea
-        ref={areaRef}
-        rows={2}
-        aria-label={t('aria.composer')}
-        placeholder={placeholder}
-        value={draft}
-        disabled={disabled || sending}
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-            event.preventDefault();
-            void send();
-          }
-        }}
-        data-testid="composer"
+      <div className="composer-main">
+        {images.length > 0 && (
+          <div className="composer-attachments" data-testid="attachments">
+            {images.map((image) => (
+              <span key={image.id} className="composer-thumb">
+                <img src={image.url} alt={image.name} />
+                <button
+                  type="button"
+                  title={t('chat.attach.remove')}
+                  onClick={() => setImages((current) => current.filter((item) => item.id !== image.id))}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <textarea
+          ref={areaRef}
+          rows={2}
+          aria-label={t('aria.composer')}
+          placeholder={placeholder}
+          value={draft}
+          disabled={disabled || sending}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              void send();
+            }
+          }}
+          data-testid="composer"
+        />
+        {uploadError !== null && <div className="composer-error">{uploadError}</div>}
+      </div>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        multiple
+        hidden
+        onChange={(event) => void addFiles(event.target.files)}
+        data-testid="attach-input"
       />
-      <button type="submit" className="send" disabled={disabled || sending || draft.trim() === ''} title={t('chat.send')}>
+      <button
+        type="button"
+        className="send"
+        title={t('chat.attach')}
+        disabled={disabled || sending || uploading || images.length >= MAX_IMAGES}
+        onClick={() => fileRef.current?.click()}
+        data-testid="attach"
+      >
+        {uploading ? '…' : '＋'}
+      </button>
+      <button
+        type="submit"
+        className="send"
+        disabled={disabled || sending || uploading || (draft.trim() === '' && images.length === 0)}
+        title={t('chat.send')}
+      >
         ↑
       </button>
       {busy !== 'idle' && (

@@ -25,6 +25,13 @@ export interface GuardInput {
   /** The session's working directory, which relative arguments resolve against. */
   readonly cwd: string;
   readonly privateDirs: readonly string[];
+  /**
+   * Paths inside private storage that are nevertheless readable: the session work root holds the
+   * files the model itself produced (web text, reports, screenshots), and `web_fetch` hands the
+   * model a path there to grep. Only file-read tools get this exception; shell commands still may
+   * not name private storage at all.
+   */
+  readonly readableDirs?: readonly string[];
 }
 
 /** The path argument each built-in file tool uses, when it has one. */
@@ -111,8 +118,14 @@ export function privatePathBlockReason(input: GuardInput): string | undefined {
   if (privateDirs.length === 0) {
     return undefined;
   }
+  const readableDirs = (input.readableDirs ?? [])
+    .filter((dir) => dir !== '')
+    .map((dir) => normalize(dir, process.cwd()));
   const hit = (path: string): string | undefined => {
     const target = normalize(path, input.cwd);
+    if (readableDirs.some((dir) => inside(target, dir))) {
+      return undefined;
+    }
     return privateDirs.some((dir) => inside(target, dir))
       ? `${path} is inside the workbench's private storage (${privateDirs.join(', ')}); it holds credentials, the database and session history and is not part of the project`
       : undefined;
@@ -143,6 +156,7 @@ export function privatePathBlockReason(input: GuardInput): string | undefined {
 export function createPrivatePathGuard(options: {
   readonly cwd: string;
   readonly privateDirs: readonly string[];
+  readonly readableDirs?: readonly string[];
 }): ExtensionFactory {
   return (pi: ExtensionAPI): void => {
     pi.on('tool_call', (event: ToolCallEvent) => {
@@ -151,6 +165,7 @@ export function createPrivatePathGuard(options: {
         args: event.input as Record<string, unknown>,
         cwd: options.cwd,
         privateDirs: options.privateDirs,
+        ...(options.readableDirs !== undefined ? { readableDirs: options.readableDirs } : {}),
       });
       return reason === undefined ? undefined : { block: true, reason };
     });

@@ -26,12 +26,16 @@ import { INPUT_MARKER_CUSTOM_TYPE, HistoryUnavailableError, type PiRuntimeFactor
 import { RunWatchdogError, runWithWatchdog } from './run-watchdog.ts';
 import { SessionRegistry, type LogicalSessionSpec } from './registry.ts';
 import { epochOf } from './epoch.ts';
-import { textOfPayload } from './input-text.ts';
+import { partsOfPayload } from './input-text.ts';
+import { readImage } from '../server/attachments.ts';
 import { InteractionBridge, createUiAdapter } from './interactions.ts';
 import { createQuestionTool } from '../tools/question-tool.ts';
 import { createPrivatePathGuard } from './tool-guard.ts';
 import { toolSetFor } from './tool-sets.ts';
-import { asToolDefinitions, createTaskGetTool, createTaskTool, type TaskToolContext } from '../tools/task-tools.ts';
+import { asToolDefinitions, createTaskGetTool, createTaskTool, type DomainTool, type TaskToolContext } from '../tools/task-tools.ts';
+import { createBrowserTool } from '../tools/browser-tool.ts';
+import { createWebFetchTool } from '../tools/web-fetch.ts';
+import { createWebSearchTool } from '../tools/web-search.ts';
 import { createReportTool, type ReportToolContext } from '../tools/report-tools.ts';
 import { createRequirementTool, type RequirementToolContext } from '../tools/requirement-tools.ts';
 import { createProjectTool, type ProjectToolContext } from '../tools/project-tools.ts';
@@ -43,6 +47,13 @@ export interface InputCheckpoint {
   readonly inputMarkerId: string;
   readonly inputEntryId: string;
   readonly configHash: string;
+}
+
+/** The image attachment shape Pi's `prompt()` accepts: base64 plus mime, never a URL. */
+interface PiImage {
+  readonly type: 'image';
+  readonly data: string;
+  readonly mimeType: string;
 }
 
 export type TerminalStatus = 'completed' | 'failed' | 'stopped' | 'interrupted';
@@ -156,10 +167,17 @@ export class InputRunner {
    * never ends) aborts and reports a watchdog failure, so the input reaches a terminal state
    * the chief can verify instead of staying `processing` forever.
    */
-  private async promptWithWatchdog(handle: PiSessionHandle, sessionId: string, text: string): Promise<void> {
+  private async promptWithWatchdog(
+    handle: PiSessionHandle,
+    sessionId: string,
+    text: string,
+    images: readonly PiImage[],
+  ): Promise<void> {
     this.lastEventAt.set(sessionId, Date.now());
     await runWithWatchdog({
-      prompt: () => handle.session.prompt(text),
+      // Base64 travels only here (U6): Pi's prompt takes image attachments, and its session file
+      // keeps them as content blocks. Nothing about the bytes is cached in the host.
+      prompt: () => handle.session.prompt(text, images.length > 0 ? { images: [...images] } : undefined),
       abort: () => handle.session.abort(),
       activityAt: () => this.lastEventAt.get(sessionId) ?? 0,
       // A question on screen means the run waits on the user: that wait is not a stalled provider.
@@ -167,6 +185,41 @@ export class InputRunner {
       stallMs: this.options.runStallMs ?? DEFAULT_RUN_STALL_MS,
       totalMs: this.options.runTotalMs ?? DEFAULT_RUN_TOTAL_MS,
     });
+  }
+
+  /**
+   * Build only the external tools this role/task may call, so the allowlist and the registration
+   * cannot disagree. The provider search key is resolved once per input: it is ambient configuration,
+   * never something the model supplies.
+   */
+  private async externalTools(options: {
+    readonly sessionId: string;
+    readonly roleAllowed: (name: string) => boolean;
+    readonly readOnly: boolean;
+    readonly config: EffectiveConfig;
+  }): Promise<DomainTool[]> {
+    const tools: DomainTool[] = [];
+    if (options.roleAllowed('web_search')) {
+      // A credential file that cannot be read is not a reason to fail the run: the tool still has
+      // its keyless path and reports the provider it really used.
+      const key = await this.options.factory.searchKey(options.config.selection).catch(() => undefined);
+      tools.push(createWebSearchTool(key === undefined ? {} : { modelKey: key }));
+    }
+    if (options.roleAllowed('web_fetch')) {
+      tools.push(
+        createWebFetchTool({ workDir: join(options.config.agentDir, 'work', options.sessionId, 'web') }),
+      );
+    }
+    if (options.roleAllowed('browser')) {
+      tools.push(
+        createBrowserTool({
+          sessionId: options.sessionId,
+          agentDir: options.config.agentDir,
+          readOnly: options.readOnly,
+        }),
+      );
+    }
+    return tools;
   }
 
   async runNext(sessionId: string): Promise<RunOutcome> {
@@ -226,15 +279,32 @@ export class InputRunner {
         : { kind: 'interrupted', inputId: input.inputId, detail: 'could not record the stop' };
     }
 
-    const text = textOfPayload(input.payload);
-    if (text === undefined) {
-      const detail = 'non-text input content rejected';
+    const parts = partsOfPayload(input.payload);
+    if (parts === undefined) {
+      const detail = 'unreadable input content rejected';
       this.finishWithCurrentRevision(input.inputId, {
         status: 'failed',
         errorCode: 'INVALID_ARGUMENT',
-        errorMessage: 'this runtime only delivers text content',
+        errorMessage: 'the stored input content is not a text or image block',
       });
       return { kind: 'failed', inputId: input.inputId, detail };
+    }
+    const text = parts.text;
+    // Images are read here and only here: the bytes become base64 for this one prompt. A file the
+    // user deleted is a refused input, not a message that silently lost its picture.
+    const images: PiImage[] = [];
+    for (const id of parts.images) {
+      const image = readImage(config.agentDir, id);
+      if (image === undefined) {
+        const detail = `the image attachment ${id} is no longer available`;
+        this.finishWithCurrentRevision(input.inputId, {
+          status: 'failed',
+          errorCode: 'INVALID_ARGUMENT',
+          errorMessage: detail,
+        });
+        return { kind: 'failed', inputId: input.inputId, detail };
+      }
+      images.push({ type: 'image', data: image.bytes.toString('base64'), mimeType: image.mimeType });
     }
 
     // Everything from the claim onward runs inside one protected block: binding lookup, extras,
@@ -327,8 +397,20 @@ const serverWorkDir = join(config.agentDir, 'work');
               })),
             ],
       );
+      // External information and a real browser (S9): registered only for the roles whose allowlist
+      // names them. They read the network and never the project, so a read Task keeps them.
+      const external = await this.externalTools({
+        sessionId,
+        roleAllowed: (name) => toolSet.allowlist.includes(name),
+        // Reviewer and investigator are documented as observers: a review runs inside a write Task,
+        // so the Task kind alone would hand them an acting browser.
+        readOnly:
+          taskType === 'read' || session.roleId === 'reviewer' || session.roleId === 'investigator',
+        config,
+      });
       const hostTools = [
         ...domainTools,
+        ...asToolDefinitions(external),
         // The ported official question tool: the model asks through the same ctx.ui channel (G2),
         // and the host tells it which interaction the request became.
         createQuestionTool(() => this.interactions.lastInteractionIdFor(sessionId)),
@@ -359,6 +441,9 @@ const serverWorkDir = join(config.agentDir, 'work');
             createPrivatePathGuard({
               cwd: session.cwd,
               privateDirs: this.options.privateDirs ?? [],
+              // web_fetch saves the full page here and tells the model to grep it; reports and
+              // screenshots live under the same root. Credentials and session files stay blocked.
+              readableDirs: [join(config.agentDir, 'work')],
             }),
           ],
           ...(hostTools.length > 0 ? { customTools: hostTools } : {}),
@@ -419,7 +504,7 @@ const serverWorkDir = join(config.agentDir, 'work');
         },
       });
 
-      await this.promptWithWatchdog(handle, sessionId, text);
+      await this.promptWithWatchdog(handle, sessionId, text, images);
 
       const lastMessage = handle.session.messages[handle.session.messages.length - 1];
       const stopReason = lastMessage?.role === 'assistant' ? lastMessage.stopReason : 'none';

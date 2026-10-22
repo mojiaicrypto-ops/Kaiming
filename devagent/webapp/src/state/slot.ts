@@ -31,7 +31,9 @@ export interface HistoryMessage {
 export type ContentBlock =
   | { type: 'text'; text: string }
   | { type: 'thinking'; thinking: string }
-  | { type: 'toolCall'; id?: string; name?: string; arguments?: string };
+  | { type: 'toolCall'; id?: string; name?: string; arguments?: string }
+  /** `src` is an attachment URL the server serves; the bytes never travel inside a message. */
+  | { type: 'image'; src: string; alt?: string };
 
 export interface TaskMember {
   sessionId: string;
@@ -125,6 +127,7 @@ function signatureOf(message: HistoryMessage): string {
   const parts = message.content.map((block) => {
     if (block.type === 'text') return `t:${block.text}`;
     if (block.type === 'thinking') return `k:${block.thinking}`;
+    if (block.type === 'image') return `i:${block.src}`;
     return `c:${block.id ?? ''}:${block.arguments ?? ''}`;
   });
   return `${message.role}|${message.toolCallId ?? ''}|${parts.join('\u0001')}`;
@@ -146,6 +149,8 @@ function matchesTwin(partial: HistoryMessage, complete: HistoryMessage): boolean
       if ((a.id ?? '') !== (b.id ?? '')) return false;
       if (a.arguments !== undefined && a.arguments !== '' && !(b.arguments ?? '').startsWith(a.arguments)) return false;
     }
+    // An image is either the same attachment or the message is not the same message.
+    if (a.type === 'image' && b.type === 'image' && a.src !== b.src) return false;
   }
   return true;
 }

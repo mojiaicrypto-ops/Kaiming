@@ -77,6 +77,48 @@ test('a submitted input reaches the transcript and the run answers', async ({ pa
   }
 });
 
+test('an attached image is stored once, shown in the message, and still there after a reload', async ({ page }) => {
+  const harness = await startHarness({ model: [{ kind: 'text', text: '我看到了这张图。' }] });
+  try {
+    // A real PNG on disk: the upload route sniffs bytes, so a renamed text file would be refused.
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const pngPath = test.info().outputPath('pixel.png');
+    writeFileSync(pngPath, png);
+
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+
+    await page.setInputFiles('[data-testid="attach-input"]', pngPath);
+    const preview = page.locator('[data-testid="attachments"] img');
+    await expect(preview).toHaveCount(1);
+    const src = await preview.getAttribute('src');
+    expect(src).toMatch(/^\/api\/v1\/attachments\/[0-9a-f]{32}$/);
+
+    const composer = page.locator('[data-testid="composer"]');
+    await composer.fill('看看这张截图');
+    await composer.press('Enter');
+
+    const inMessage = page.locator('[data-testid="transcript"] .m.user img');
+    await expect(inMessage).toHaveCount(1, { timeout: 15_000 });
+    expect(await inMessage.getAttribute('src')).toBe(src);
+    // The bytes really arrive at the browser (the route is authenticated, not open).
+    expect(await inMessage.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
+    await expect(page.locator('[data-testid="transcript"] .m.user')).toContainText('看看这张截图');
+
+    // The transcript is rebuilt from the session history on reload, so the address must survive.
+    await page.reload();
+    await waitForConnected(page);
+    await expect(page.locator('[data-testid="transcript"] .m.user img')).toHaveCount(1, { timeout: 15_000 });
+    await page.screenshot({ path: test.info().outputPath('attachment.png') });
+  } finally {
+    await harness.close();
+  }
+});
+
 test('a question is answered in the panel and the model continues', async ({ page }) => {
   const harness = await startHarness({
     model: [
@@ -851,6 +893,53 @@ test('an unconfirmed run is announced and the chief is asked, not guessed at', a
     await page.locator('[data-testid="recovery-ask"]').click();
     await expect(page.locator('[data-testid="composer"]')).toHaveValue(/i-crashed/);
     await expect(page.locator('[data-testid="transcript"] article.m')).toHaveCount(0);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a browser screenshot from the tool appears inside its card and stays after a reload', async ({ page }) => {
+  // The model asks for the page, then for a screenshot; the host really launches Chromium.
+  const harness = await startHarness({
+    model: [
+      {
+        kind: 'tool_calls',
+        calls: [{ name: 'browser', arguments: JSON.stringify({ action: 'open', url: 'data:text/html,<h1>Shot page</h1><button>Go</button>' }) }],
+      },
+      { kind: 'tool_calls', calls: [{ name: 'browser', arguments: JSON.stringify({ action: 'screenshot' }) }] },
+      { kind: 'text', text: '截图完成。' },
+    ],
+  });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+
+    const composer = page.locator('[data-testid="composer"]');
+    await composer.fill('打开页面并截图');
+    await composer.press('Enter');
+
+    // The tool ran for real: the card shows the observation, and the screenshot is an attachment URL.
+    const card = page.locator('[data-testid="transcript"] .tc').first();
+    await expect(card).toContainText('browser', { timeout: 30_000 });
+    const shot = page.locator('[data-testid="transcript"] .tc img');
+    await expect(shot).toHaveCount(1, { timeout: 30_000 });
+    const src = await shot.getAttribute('src');
+    expect(src).toMatch(/^\/api\/v1\/attachments\/[0-9a-f]{32}$/);
+    // The image is lazy inside a collapsed card: open the card, then the bytes must really load.
+    await page.locator('[data-testid="transcript"] .tc summary').last().click();
+    await expect
+      .poll(async () => shot.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth), {
+        timeout: 15_000,
+      })
+      .toBeGreaterThan(0);
+    // The route is authenticated, so a page fetch sees the same bytes the <img> got.
+    expect(await page.evaluate(async (url: string) => (await fetch(url)).status, src ?? '')).toBe(200);
+
+    await page.reload();
+    await waitForConnected(page);
+    await expect(page.locator('[data-testid="transcript"] .tc img')).toHaveCount(1, { timeout: 20_000 });
+    await page.screenshot({ path: test.info().outputPath('tool-screenshot.png') });
   } finally {
     await harness.close();
   }

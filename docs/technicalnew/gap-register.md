@@ -8,6 +8,14 @@
 
 ---
 
+## 本轮新增（2026-10-22，工具与图片）
+
+| 编号 | 现象 | 证据位置 | 影响 | 处置 |
+|---|---|---|---|---|
+| N1 | Pi 原生只有文件/Shell 工具：没有联网检索、URL 取文和浏览器，测试角色只能自写 Playwright 脚本；reviewer/investigator 连 bash 都没有 | `src/runtime/tool-sets.ts`（改前无 web_search/web_fetch/browser）、`node_modules/@earendil-works/pi-coding-agent/dist/core/tools/` | 需求调研只能靠模型记忆；UI E2E 无统一证据 | **已关闭**：新增 `web_search`/`web_fetch`/`browser`，按角色授权，read Task 浏览器只读；真实模型 `npm run check:tools` 4/4 |
+| N2 | 自定义 OpenAI 兼容 provider 写入 `models.json` 时未声明 `input`，Pi 按纯文本模型处理并**静默丢弃**图片 | `src/runtime/provider-store.ts`（改前 models 只写 id/name） | 用户上传图片后模型看不到，且无错误提示 | **已关闭**：写入 `input:["text","image"]`；真实模型图片问答通过 |
+| N3 | 界面没有图片入口与渲染，工具返回的图片被丢弃 | `webapp/src/chat/`（改前无 image 分支） | 截图/上传都不可见 | **已关闭**：composer 上传、消息与工具卡图片渲染、`normalize`/`transcript-model` 支持 image 块 |
+
 ## 本轮结果（2026-10-22）
 
 - **D** 9 项全部关闭；**S** 4 项关闭、1 项按原决定不做；**C** 4 项与实现一致；**U** 9 项补上界面、1 项不做。U4/U5 按用户决定采用简单形态，见 `.agentdev/work/workbench-gaps-20261022/questions.md`。

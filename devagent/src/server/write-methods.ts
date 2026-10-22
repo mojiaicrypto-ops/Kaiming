@@ -3,10 +3,13 @@
  * nothing else yet. Handlers only do what the contract says: they verify identity and state, hand the
  * real work to the worker, and report the stored facts.
  */
+import { MAX_IMAGES_PER_INPUT, readImage } from './attachments.ts';
 import { RpcError, type RpcRouter } from './rpc.ts';
 import type { InputRow, Store } from '../store/store.ts';
 
 export interface WriteMethodsOptions {
+  /** Attachment storage for image blocks; absent means this server accepts text only. */
+  readonly attachmentDir?: string;
   readonly store: Store;
   /** Wakes the worker so an accepted input actually runs. */
   readonly notify: () => void;
@@ -51,6 +54,37 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
       const content = params['content'];
       if (!Array.isArray(content) || content.length === 0) {
         throw new RpcError('INVALID_ARGUMENT', 'content must be a non-empty array of content blocks');
+      }
+      // Images are references to bytes this server already stored (U6). Validating here means a
+      // queued input can never name a missing file, and the runner never has to guess.
+      let imageCount = 0;
+      for (const part of content) {
+        const block = typeof part === 'object' && part !== null ? (part as Record<string, unknown>) : {};
+        if (block['type'] === 'text') {
+          if (typeof block['text'] !== 'string') {
+            throw new RpcError('INVALID_ARGUMENT', 'a text block needs a string text');
+          }
+          continue;
+        }
+        if (block['type'] === 'image') {
+          if (options.attachmentDir === undefined) {
+            throw new RpcError('INVALID_ARGUMENT', 'image upload is not enabled on this server');
+          }
+          const attachmentId = block['attachmentId'];
+          if (typeof attachmentId !== 'string' || readImage(options.attachmentDir, attachmentId) === undefined) {
+            throw new RpcError('INVALID_ARGUMENT', 'the image attachment does not exist', {
+              attachmentId: typeof attachmentId === 'string' ? attachmentId : null,
+            });
+          }
+          imageCount += 1;
+          if (imageCount > MAX_IMAGES_PER_INPUT) {
+            throw new RpcError('INVALID_ARGUMENT', `one message may carry at most ${MAX_IMAGES_PER_INPUT} images`, {
+              limit: MAX_IMAGES_PER_INPUT,
+            });
+          }
+          continue;
+        }
+        throw new RpcError('INVALID_ARGUMENT', `unknown content block ${String(block['type'])}`);
       }
       const taskId = readString(params, 'taskId');
       if (taskId !== undefined && taskId !== session.currentTaskId) {

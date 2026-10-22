@@ -25,6 +25,8 @@ const ENTRY_PATHS = ['AGENTS.md', join('.dev', 'INDEX.md'), join('.dev', 'PROJEC
 
 export interface ReadMethodsOptions {
   readonly store: Store;
+  /** Where image bytes live, so a message carrying base64 is read as an attachment address (U6). */
+  readonly attachmentDir?: string;
   /**
    * Why a session cannot run right now, if it cannot. The snapshot carries it for a connecting
    * reader; this method carries it for a reader who is already here and asks "why is nothing
@@ -253,7 +255,7 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
         throw new RpcError('INVALID_ARGUMENT', 'pass either cursor (forward) or before (backward), not both', {});
       }
       const binding = store.getSessionBinding(sessionId);
-      const read = readPiHistory(binding?.piFile);
+      const read = readPiHistory(binding?.piFile, options.attachmentDir);
       // A session whose history is bound but missing, empty or without a session header must say so,
       // not look like an empty conversation (R4).
       const identifiable = read.found && read.header !== null;

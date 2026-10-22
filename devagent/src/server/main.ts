@@ -17,6 +17,7 @@ import { registerReadMethods } from './read-methods.ts';
 import { registerWriteMethods } from './write-methods.ts';
 import { registerStreamMethods } from './stream-methods.ts';
 import { liveHistoryRead } from './live-snapshot.ts';
+import { projectEventImages } from './image-projection.ts';
 import { SessionEventHub } from './hub.ts';
 import { epochOf } from '../runtime/epoch.ts';
 import { closeInterruptedChiefInput } from './host-recovery.ts';
@@ -144,7 +145,7 @@ export function startWorkbench(options: StartOptions): Promise<{
     reloadRuntime: () => factory.reload(),
     probeModel: (selection) => factory.probe(selection),
   });
-  registerReadMethods(router, { store, blockedOf });
+  registerReadMethods(router, { store, blockedOf, attachmentDir: server.agentDir });
 
   // Live events (M4): the runner publishes what Pi reports, the write surface publishes invalidations.
   const hub = new SessionEventHub();
@@ -186,7 +187,11 @@ export function startWorkbench(options: StartOptions): Promise<{
       hub.publish(chiefSessionId, { type: 'invalidate', entity: 'session', id: chiefSessionId });
     },
     onEvent: (sessionId, event, meta) => {
-      hub.publish(sessionId, event, { inputId: meta.inputId, epoch: meta.epoch });
+      // A live message may carry image bytes; the browser only ever gets the attachment address (U6).
+      hub.publish(sessionId, projectEventImages(event, server.agentDir) as typeof event, {
+        inputId: meta.inputId,
+        epoch: meta.epoch,
+      });
     },
     // A hung provider or a run that never ends must reach a terminal state, not block its
     // step, its Task and the user's queue forever.
@@ -249,6 +254,7 @@ export function startWorkbench(options: StartOptions): Promise<{
   });
   registerWriteMethods(router, {
     store,
+    attachmentDir: server.agentDir,
     notify: () => worker.notify(),
     stopInput: (sessionId, stop) => runner.requestStop(sessionId, stop),
     controlTask: (control) => runner.controlTask(control),
@@ -261,11 +267,12 @@ export function startWorkbench(options: StartOptions): Promise<{
     store,
     hub,
     blockedOf,
+    attachmentDir: server.agentDir,
     epochOf: (sessionId) => epoch(sessionId),
     currentHistory: (sessionId) => {
       const handle = registry.get(sessionId);
       if (handle === undefined) return undefined;
-      return liveHistoryRead(handle.sessionManager);
+      return liveHistoryRead(handle.sessionManager, server.agentDir);
     },
   });
 
@@ -277,6 +284,8 @@ export function startWorkbench(options: StartOptions): Promise<{
     // The browser surface is served from the same origin (R1). The React build output is the
     // whole shell now: `web-static/index.html` plus hashed assets, mounted at `/`.
     staticDir: options.staticDir ?? resolve(here, '../../web-static'),
+    // Uploaded chat images (U6): bytes on disk under the agent dir, addressed by digest.
+    attachmentDir: server.agentDir,
   });
   return workbench.listen(options.port, options.host ?? '127.0.0.1').then(({ origin, port }) => {
     worker.start();

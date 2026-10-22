@@ -66,13 +66,21 @@
 | 消息 | `who`（角色 + 时间）＋左侧竖线正文；同一轮连续消息不重复头部 |
 | 思考 | 流式中显示 `● 思考中` + 末尾预览；完成后折叠为字数 |
 | 流式 | 增量追加，光标只在末块；已完成消息不重渲染；仅贴底时自动跟随 |
-| 工具卡 | 默认一行（符号 + 名称 + 一句摘要 + 耗时）；展开参数与输出；`task create` 内联 plan，`dispatch` 显示成员行并可跟随，完成后退化单行 |
+| 工具卡 | 默认一行（符号 + 名称 + 一句摘要 + 耗时）；展开参数与输出；工具返回的图片在卡内显示为可点开的缩略图；`task create` 内联 plan，`dispatch` 显示成员行并可跟随，完成后退化单行 |
 | 决定面板 | 停靠在输入框上方、不遮盖转录；数字键直选、↑↓、Enter、Esc 稍后；answered 卡片保留回显 |
-| 输入框 | Enter 发送、Shift+Enter 换行、IME 组合不发送；失败保留草稿；运行中提供 STOP |
+| 输入框 | Enter 发送、Shift+Enter 换行、IME 组合不发送；失败保留草稿；运行中提供 STOP；可添加图片（见 U10） |
 | 队列 | 保留输入可见并显示排队原因，可撤回 |
 | 空态 | 字标 + 一句规则 + 三个示例 |
 | 连接 | 连接中 / 已连接 / 重连中 / 离线，横幅给出后果与重试 |
 | 错误 | 业务拒绝不清 token；历史读取警告可展开 |
+
+## U10 图片
+
+- 来源两种，落点一致：用户上传（`POST /api/v1/uploads`，cookie + CSRF，png/jpeg/webp/gif，单张 ≤8MB，单条 ≤6 张）；工具截图（browser 直接写入同一附件存储）。
+- 界面只拿地址：`GET /api/v1/attachments/<id>`（cookie 认证，`immutable` 缓存）。消息里的 `image` 块是 `{id, mimeType}`，前端拼成 `/api/v1/attachments/<id>`；浏览器响应里不出现 base64。
+- 输入框：添加按钮 + 已选缩略图（可逐个移除，上限 6）；上传失败显示服务端原因（类型/大小）；只有图片没有文字也能发送。
+- 消息与工具卡：图片缩略图最大 520×360，点击在新标签打开原图；刷新后从历史重新取到同一地址，不重新上传。
+- 尺寸与语言：`chat.attach`、`chat.attach.remove`、`chat.attach.limit`、`chat.attach.failed` 双语键；图片 `alt` 用文件名或 mime。
 
 ## U6 需求与设置
 
@@ -119,5 +127,8 @@
 | `config.get` / `config.save` / `config.test` | 设置三页 |
 | `session.recovery.resolve` | 无界面：处置由主管的 `task(op=recover)` 执行 |
 | `session.cleanup` | 会话列行内清理（两步确认） |
+| `POST /api/v1/uploads` | composer 添加图片 |
+| `GET /api/v1/attachments/<id>` | 消息、工具卡内的图片 |
+
 
 新增方法时同步这张表；有任何一行是「无」且未登记缺口，按缺陷处理。

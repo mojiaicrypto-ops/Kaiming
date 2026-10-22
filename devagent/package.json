@@ -15,10 +15,12 @@
     "check:runtime": "node checks/runner-real-model.ts",
     "check:prompts": "node checks/prompt-language.ts",
     "spikes": "node spikes/pi-01-input-correlation.ts && node spikes/pi-02-settle-semantics.ts && node spikes/pi-05-save-fail-abort.ts && node spikes/pi-07-multi-session.ts && node spikes/pi-08-host-ui.ts",
-    "check:workflow": "node checks/workflow-real-model.ts"
+    "check:workflow": "node checks/workflow-real-model.ts",
+    "check:tools": "node checks/external-tools-real-model.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "1.0.0"
+    "@earendil-works/pi-coding-agent": "1.0.0",
+    "playwright-core": "^1.64.0"
   },
   "devDependencies": {
     "@highlightjs/cdn-assets": "11.11.1",

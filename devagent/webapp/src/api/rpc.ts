@@ -63,6 +63,45 @@ export class RpcClient {
     return body.result as T;
   }
 
+  /**
+   * Upload one image as raw bytes (not JSON, so the envelope limit does not apply). The cookie
+   * authenticates and the CSRF header proves the page; the response names the stored attachment.
+   */
+  async upload(file: File): Promise<{ id: string; url: string; mimeType: string; bytes: number }> {
+    const headers: Record<string, string> = {
+      'content-type': file.type === '' ? 'application/octet-stream' : file.type,
+    };
+    if (this.csrfToken !== null) {
+      headers['x-agentdev-csrf'] = this.csrfToken;
+    }
+    const response = await fetch('/api/v1/uploads', {
+      method: 'POST',
+      headers,
+      credentials: 'same-origin',
+      body: file,
+    });
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new RpcError('BAD_RESPONSE', `the server returned a non-JSON body (${response.status})`);
+    }
+    const envelope = payload as {
+      result?: { id: string; url: string; mimeType: string; bytes: number };
+      error?: { code: string; message: string; details?: unknown };
+    };
+    if (envelope.error !== undefined) {
+      if (envelope.error.code === 'UNAUTHORIZED') {
+        this.onUnauthorized?.();
+      }
+      throw new RpcError(envelope.error.code, envelope.error.message, envelope.error.details);
+    }
+    if (response.status !== 200 || envelope.result === undefined) {
+      throw new RpcError('BAD_RESPONSE', `unexpected status ${response.status}`);
+    }
+    return envelope.result;
+  }
+
   private async send(
     requestId: string,
     method: string,

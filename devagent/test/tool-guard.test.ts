@@ -55,6 +55,26 @@ describe('private path guard', () => {
     expect(privatePathBlockReason({ ...base, toolName: 'find', args: { pattern: '**/*.ts' } })).toBeUndefined();
   });
 
+  it('lets the file tools read the session work root, but not the credential file beside it', () => {
+    const { project, data, models } = layout();
+    const work = join(data, 'work', 's-1', 'web');
+    const saved = join(work, 'page.txt');
+    const base = { cwd: project, privateDirs: [data], readableDirs: [join(data, 'work')] };
+
+    // web_fetch tells the model to grep the file it saved; that path must be reachable.
+    expect(privatePathBlockReason({ ...base, toolName: 'read', args: { path: saved } })).toBeUndefined();
+    expect(privatePathBlockReason({ ...base, toolName: 'grep', args: { pattern: 'x', path: work } })).toBeUndefined();
+    // The work root is not a hole in the rest of the private storage.
+    expect(privatePathBlockReason({ ...base, toolName: 'read', args: { path: models } })).toMatch(/private storage/);
+    expect(privatePathBlockReason({ ...base, toolName: 'ls', args: { path: join(data, 'sessions') } })).toMatch(
+      /private storage/,
+    );
+    // A shell command still may not name private storage at all: the exemption is for reading files.
+    expect(
+      privatePathBlockReason({ ...base, toolName: 'bash', args: { command: `cat ${join(data, 'work', 'a.txt')}` } }),
+    ).toMatch(/private storage/);
+  });
+
   it('refuses a command that names the private storage', () => {
     const { project, data, models } = layout();
     const base = { cwd: project, privateDirs: [data] };

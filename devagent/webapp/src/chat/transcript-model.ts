@@ -3,12 +3,15 @@ import type { ContentBlock, HistoryMessage } from '../state/slot';
 /** A tool call and its result, paired by call id, ready for one card. */
 export interface ToolResultView {
   readonly text: string;
+  /** Attachment URLs the tool returned (a browser screenshot); rendered inside the card. */
+  readonly images: readonly string[];
   readonly failed: boolean;
 }
 
 export type BlockKind =
   | { readonly kind: 'thinking'; readonly text: string }
   | { readonly kind: 'text'; readonly text: string }
+  | { readonly kind: 'image'; readonly src: string; readonly alt: string }
   | { readonly kind: 'tool'; readonly name: string; readonly callId: string; readonly args: string; readonly result: ToolResultView | null };
 
 /**
@@ -22,8 +25,9 @@ export function indexToolResults(items: readonly HistoryMessage[]): Map<string, 
   for (const message of items) {
     if (message.role !== 'toolResult') continue;
     const text = message.content.map((block) => (block.type === 'text' ? block.text : '')).join('');
+    const images = message.content.flatMap((block) => (block.type === 'image' ? [block.src] : []));
     if (message.toolCallId !== undefined) {
-      results.set(message.toolCallId, { text, failed: message.isError === true });
+      results.set(message.toolCallId, { text, images, failed: message.isError === true });
     }
   }
   return results;
@@ -74,6 +78,10 @@ export function blocksOf(message: HistoryMessage): BlockKind[] {
   message.content.forEach((block: ContentBlock, index) => {
     if (block.type === 'thinking') {
       blocks.push({ kind: 'thinking', text: block.thinking });
+      return;
+    }
+    if (block.type === 'image') {
+      blocks.push({ kind: 'image', src: block.src, alt: block.alt ?? '' });
       return;
     }
     if (block.type === 'toolCall') {

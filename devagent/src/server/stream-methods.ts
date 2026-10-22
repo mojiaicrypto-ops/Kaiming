@@ -15,6 +15,8 @@ const SNAPSHOT_MESSAGES = 100;
 export interface StreamMethodsOptions {
   readonly store: Store;
   readonly hub: SessionEventHub;
+  /** Where image bytes live: a snapshot carries attachment ids, never base64 (U6). */
+  readonly attachmentDir?: string;
   /** serverEpoch and the current Pi instance generation, as a single epoch string. */
   readonly epochOf: (sessionId: string) => string;
   /**
@@ -58,7 +60,7 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
       const live = options.currentHistory?.(sessionId);
       const history = live !== undefined
         ? live
-        : readPiHistory(binding?.piFile);
+        : readPiHistory(binding?.piFile, options.attachmentDir);
       const problems: readonly string[] = history.problems ?? [];
       const messages = tailHistory({ records: history.records }, SNAPSHOT_MESSAGES);
       const sessionRow = store.getSession(sessionId);

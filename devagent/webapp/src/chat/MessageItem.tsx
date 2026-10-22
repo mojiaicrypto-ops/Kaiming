@@ -50,6 +50,13 @@ export function MessageItem({ message, role, label, continuation, results, onFol
         </div>
       );
     }
+    if (block.kind === 'image') {
+      return (
+        <a key={`i${index}`} className="msg-image" href={block.src} target="_blank" rel="noreferrer">
+          <img src={block.src} alt={block.alt} loading="lazy" />
+        </a>
+      );
+    }
     const result = results.get(block.callId) ?? block.result;
     const status = result !== null ? (result.failed ? 'failed' : 'ok') : streaming ? 'running' : 'waiting';
     const parsed = parseArgs(block.args);
@@ -103,6 +110,7 @@ export function MessageItem({ message, role, label, continuation, results, onFol
         args={block.args}
         status={status}
         resultText={result?.text}
+        resultImages={result?.images}
       />
     );
   });

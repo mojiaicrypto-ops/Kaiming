@@ -55,7 +55,8 @@ describe('model config', () => {
         baseUrl: 'http://127.0.0.1:11434/v1',
         api: 'openai-completions',
         apiKey: 'ollama',
-        models: [{ id: 'qwen2.5-coder:7b', name: 'qwen2.5-coder:7b' }],
+        // Declared so Pi forwards attached images instead of dropping them silently.
+        models: [{ id: 'qwen2.5-coder:7b', name: 'qwen2.5-coder:7b', input: ['text', 'image'] }],
       },
     });
   });

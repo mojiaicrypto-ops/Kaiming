@@ -19,7 +19,9 @@ export interface ChiefSessionApi {
   readonly historyProblems: readonly string[];
   readonly blocked: { readonly code: string; readonly detail: string } | null;
   readonly dismissBlocked: () => void;
-  readonly submit: (text: string) => Promise<{ queued: boolean; waitingForTask?: string }>;
+  readonly submit: (text: string, images?: readonly string[]) => Promise<{ queued: boolean; waitingForTask?: string }>;
+  /** Store one image immediately; the message then carries only its id (U6). */
+  readonly upload: (file: File) => Promise<{ id: string; url: string }>;
   readonly stop: () => Promise<void>;
   readonly cancelQueuedInput: (inputId: string) => Promise<void>;
   readonly respond: (interaction: PendingInteraction, response: unknown) => Promise<void>;
@@ -201,7 +203,7 @@ export function useSession(
   const retry = useCallback((): void => setRetryTick((tick) => tick + 1), []);
 
   const submit = useCallback(
-    async (text: string): Promise<{ queued: boolean; waitingForTask?: string }> => {
+    async (text: string, images: readonly string[] = []): Promise<{ queued: boolean; waitingForTask?: string }> => {
       if (session === null) return { queued: false };
       setBlocked(null);
       // While the session coordinates a Task, the user's message is that Task's supplement and
@@ -223,7 +225,10 @@ export function useSession(
           projectId: session.projectId,
           sessionId: session.sessionId,
           ...(taskId !== null ? { taskId } : {}),
-          content: [{ type: 'text', text }],
+          content: [
+            ...(text !== '' ? [{ type: 'text', text }] : []),
+            ...images.map((attachmentId) => ({ type: 'image', attachmentId })),
+          ],
         },
         { requestId: newRequestId('c') },
       );
@@ -387,6 +392,7 @@ export function useSession(
     blocked,
     dismissBlocked: useCallback(() => setBlocked(null), []),
     submit,
+    upload: useCallback((file: File) => rpc.upload(file), [rpc]),
     stop,
     cancelQueuedInput,
     respond,

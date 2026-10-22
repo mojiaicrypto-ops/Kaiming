@@ -7,6 +7,7 @@
 - Node 24（`node:sqlite` 仍标记实验，启动日志会出现一条 ExperimentalWarning，属正常）。
 - 依赖已随仓库提供（`node_modules/` 已安装）。需要重装时在本目录执行 `npm install`。
 - 无需构建步骤：服务端用 TypeScript 直接运行，前端是同源静态文件。
+- 浏览器工具需要 Chromium 本体（`playwright-core` 只提供驱动）：首次使用前执行 `npx playwright install chromium`。没装时 `browser` 返回 `BROWSER_UNAVAILABLE`，其它功能不受影响。
 
 ## 2. 启动
 
@@ -88,6 +89,8 @@ npm run check:workflow        # 约 3–5 分钟；无浏览器，提问按“�
 <dataDir>/state.db                 SQLite：项目、会话、输入、任务、结果、需求索引、交互
 <dataDir>/sessions/*.jsonl         Pi 原生会话历史（每会话一个文件）
 <dataDir>/models.json, auth.json   模型凭证
+<dataDir>/attachments/<sha256>     会话图片（上传的与工具截图的字节，内容寻址）
+<dataDir>/work/<sessionId>/web/   web_fetch 落盘的网页正文（可用 grep/read 精读）
 ```
 
 项目文件本身**不在**数据目录里：项目是你选择的工作台运行环境中的既有目录，工作台只记录它的路径与其归属，不会把它复制进来。
@@ -117,5 +120,6 @@ npx playwright test           # 浏览器验收（真实 Chromium + 真实服务
 npm run check:model           # 真实模型往返检查（需 config/model.json）
 npm run check:runtime         # 真实模型跑通一次输入执行与落盘
 npm run check:workflow        # 真实模型跑完整 Task 流程（开发→审核→测试→结算→结束）
+npm run check:tools           # 真实模型跑三项外部工具与图片输入（web_search/web_fetch/browser）
 npm run check:prompts         # 角色提示文件与链接检查
 ```
