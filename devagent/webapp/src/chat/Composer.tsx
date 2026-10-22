@@ -7,6 +7,12 @@ export interface ComposerProps {
   readonly canStop: boolean;
   readonly disabled: boolean;
   readonly onSubmit: (text: string) => Promise<void>;
+  /**
+   * Text another screen wants said here (the requirement board's "implement"): it is filled in and
+   * left for the user to send, and it never replaces text the user already typed.
+   */
+  readonly seed?: string | null;
+  readonly onSeed?: (inserted: boolean) => void;
   readonly onStop: () => Promise<void>;
 }
 
@@ -16,7 +22,7 @@ export interface ComposerProps {
  *  - a failed submit puts the text back instead of losing the user's message (R10);
  *  - while the chief runs, STOP targets the current input and says what it keeps (R13/C-stop).
  */
-export function Composer({ busy, canStop, disabled, onSubmit, onStop }: ComposerProps) {
+export function Composer({ busy, canStop, disabled, onSubmit, onStop, seed, onSeed }: ComposerProps) {
   const { t } = useI18n();
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
@@ -34,6 +40,20 @@ export function Composer({ busy, canStop, disabled, onSubmit, onStop }: Composer
     if (window.matchMedia('(max-width: 560px)').matches) return;
     if (document.activeElement === null || document.activeElement === document.body) areaRef.current?.focus();
   }, [disabled]);
+
+  // The seed is consumed once per value: keeping it in state would refill the box after every send.
+  const lastSeed = useRef<string | null>(null);
+  useEffect(() => {
+    if (seed === null || seed === undefined || seed === lastSeed.current) return;
+    lastSeed.current = seed;
+    // A non-empty box is the user's own words; replacing them would be a silent edit.
+    const inserted = draft.trim() === '';
+    if (inserted) {
+      setDraft(seed);
+      areaRef.current?.focus();
+    }
+    onSeed?.(inserted);
+  }, [seed, draft, onSeed]);
 
   const send = async (): Promise<void> => {
     const text = draft.trim();

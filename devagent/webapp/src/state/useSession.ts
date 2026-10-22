@@ -49,6 +49,18 @@ export function useSession(
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   /** Bumped by a retry button: restarts the effect even when the session did not change. */
   const [retryTick, setRetryTick] = useState(0);
+  /**
+   * Callbacks the stream effect reaches for. They change with the loaded session, so putting them
+   * in the effect's dependencies would restart the stream on every render - a hot loop, not a
+   * re-subscribe. The ref is updated during render, so the effect always calls the current one.
+   */
+  const handlers = useRef<{
+    refreshTask: (taskId: string) => Promise<TaskDetail | null>;
+    onSessionsChanged?: () => void;
+  }>({
+    refreshTask: async () => null,
+    ...(onSessionsChanged === undefined ? {} : { onSessionsChanged }),
+  });
 
   // Keyed by the ids, not by the object: this callback is an effect dependency, and an
   // identity that changes with the caller's inline literal would restart the stream forever.
@@ -96,10 +108,10 @@ export function useSession(
         // The server now announces every change to the Task (created, updated, dispatched), so the
         // strip updates on the event itself; the interval is only a fallback for a lost frame.
         setActiveTaskId(notice.id);
-        void refreshTask(notice.id).catch(() => undefined);
+        void handlers.current.refreshTask(notice.id).catch(() => undefined);
       }
       if (frame.type === 'invalidate' && notice.entity === 'session') {
-        onSessionsChanged?.();
+        handlers.current.onSessionsChanged?.();
       }
       if (frame.type === 'invalidate' && notice.entity === 'input' && typeof notice.id === 'string') {
         // The submit's own receipt: this input is now the session's current (queued) input.
@@ -150,7 +162,7 @@ export function useSession(
     };
     // Identity-stable on purpose: the caller passes `{projectId, sessionId}` inline, so depending
     // on the object would restart the stream on every render (a hot loop, not a re-subscribe).
-  }, [rpc, projectId, sessionId, enabled, retryTick, refreshPending, onUnauthorized, onSessionsChanged, refreshTask]);
+  }, [rpc, projectId, sessionId, enabled, retryTick, refreshPending, onUnauthorized]);
 
   /** Reconnect now instead of waiting for the next backoff: the user's explicit retry. */
   const retry = useCallback((): void => setRetryTick((tick) => tick + 1), []);
@@ -238,6 +250,11 @@ export function useSession(
   // The server does not push Task member changes, so the strip polls the coordinated Task while
   // one exists (plan D5). A failed poll is ignored on purpose: the next tick retries, and a strip
   // that is one refresh stale is better than a banner for a transient read error.
+  handlers.current = {
+    refreshTask,
+    ...(onSessionsChanged === undefined ? {} : { onSessionsChanged }),
+  };
+
   const taskStatus = slot.taskDetail?.task.status ?? null;
   useEffect(() => {
     // A finished Task is not polled any more: its strip has nothing left to update, and the

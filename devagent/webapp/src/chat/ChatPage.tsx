@@ -33,6 +33,9 @@ export interface ChatPageProps {
   readonly onSelectSession: (sessionId: string) => void;
   readonly onCreateSession: () => void;
   readonly hasMoreSessions: boolean;
+  /** Text handed over from another screen: filled in, not sent. */
+  readonly draft: string | null;
+  readonly onDraftConsumed: (inserted: boolean) => void;
   readonly onLoadMoreSessions: () => void;
   readonly onOpenRail: () => void;
   readonly railOpen: boolean;
@@ -43,7 +46,7 @@ export interface ChatPageProps {
  * transcript owns its own scroll-follow handle so that a streaming answer never yanks the view
  * away from a user who scrolled up (R5); the "back to latest" pill is the only way it moves you.
  */
-export function ChatPage({ session, sessions, currentSessionId, projectId, hasProject, onSelectSession, onCreateSession, hasMoreSessions, onLoadMoreSessions, railOpen, onOpenRail }: ChatPageProps) {
+export function ChatPage({ session, sessions, currentSessionId, projectId, hasProject, onSelectSession, onCreateSession, hasMoreSessions, onLoadMoreSessions, draft, onDraftConsumed, railOpen, onOpenRail }: ChatPageProps) {
   // Below 861px the session rail is a sheet, not a column: CSS hides the column, so the sheet is
   // the only way to switch sessions there.
   const compact = useCompact();
@@ -282,6 +285,8 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
               busy={slot.busy}
               canStop={slot.currentInputId !== null}
               disabled={!hasProject}
+              seed={draft}
+              onSeed={(inserted) => onDraftConsumed(inserted)}
               onSubmit={submit}
               onStop={async () => {
                 await session.stop().catch((error: unknown) => {

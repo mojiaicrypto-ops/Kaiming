@@ -324,3 +324,124 @@ test('a proposal opens with its own sections, and an unparsable file says why', 
     await harness.close();
   }
 });
+
+test('the model scope switch changes what is saved, not only what is read', async ({ page }) => {
+  // The project scope must write a project override. A save that sent the role id instead would
+  // silently rewrite the global assignment while the screen said "this project".
+  const harness = await startHarness();
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    // A provider with two models, through the same RPC surface the Providers page uses.
+    await page.evaluate(async () => {
+      const handle = (window as unknown as { __agentdev: { rpc: { call: (method: string, params: unknown, options?: { requestId: string }) => Promise<unknown> } } }).__agentdev;
+      await handle.rpc.call(
+        'config.save',
+        {
+          expectedRevision: null,
+          value: {
+            kind: 'provider',
+            providerId: 'p-test',
+            baseUrl: 'http://127.0.0.1:9/v1',
+            apiKey: 'test-key',
+            models: [
+              { id: 'm-a', name: 'm-a' },
+              { id: 'm-b', name: 'm-b' },
+            ],
+          },
+        },
+        { requestId: 'seed-provider' },
+      );
+    });
+
+    await page.goto(`${harness.baseUrl}/settings/models`, { waitUntil: 'domcontentloaded' });
+    await page.locator('[data-testid="scope-project"]').click();
+    const select = page.locator('[data-testid="model-project"]');
+    await expect(select).toBeEnabled();
+    await select.selectOption('m-a');
+    await expect(page.locator('.toast')).toContainText(/saved|已保存/i);
+
+    const read = await page.evaluate(async () => {
+      const handle = (window as unknown as { __agentdev: { rpc: { call: (method: string, params: unknown) => Promise<unknown> } } }).__agentdev;
+      const projectId = (window as unknown as { __agentdev: { workspace: { projectId: string } } }).__agentdev.workspace.projectId;
+      const project = (await handle.rpc.call('config.get', { roleId: 'chief', projectId })) as {
+        effective: { modelId: string; source: string };
+      };
+      const global = (await handle.rpc.call('config.get', { roleId: 'chief' })) as {
+        effective: { modelId: string; source: string };
+      };
+      return { project, global };
+    });
+    // The project override exists; the global role assignment was not touched.
+    expect(read.project.effective).toMatchObject({ modelId: 'm-a', source: 'project' });
+    expect(read.global.effective.source).not.toBe('project');
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a requirement hands off to the chat without sending anything', async ({ page }) => {
+  // The board cannot start work. Its action fills the composer so the user can read and edit the
+  // request first; a hidden submit would be an action the user never saw.
+  const harness = await startHarness();
+  try {
+    const projectPath = harness.project?.projectPath ?? '';
+    const dir = join(projectPath, '.dev', 'requirements');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'req-reset.md'),
+      [
+        '---',
+        'schemaVersion: 2',
+        'id: req-reset',
+        'kind: implementation',
+        'title: Account password reset',
+        'status: pending',
+        'createdAt: "2026-10-01T00:00:00Z"',
+        'updatedAt: "2026-10-01T00:00:00Z"',
+        '---',
+        '',
+        '## 目标',
+        'allow a user to reset a password',
+        '',
+        '## 范围',
+        'account module',
+        '',
+        '## 行为与异常',
+        'expired token is refused',
+        '',
+        '## 验收',
+        'reset works, expired token does not',
+        '',
+        '## 来源与决定',
+        'session 2026-10-01',
+        '',
+        '## 未知',
+        'email provider',
+        '',
+        '## 完成摘要',
+        '(not started)',
+        '',
+      ].join('\n'),
+    );
+
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, projectPath);
+    await page.goto(`${harness.baseUrl}/requirements`, { waitUntil: 'domcontentloaded' });
+
+    await page.locator('[data-testid="requirement-card"]').first().click();
+    const handoff = page.locator('[data-testid="req-handoff"]');
+    await expect(handoff).toBeVisible();
+    await handoff.click();
+
+    // The chat is open with the request filled in and nothing sent.
+    await expect(page.locator('[data-testid="composer"]')).toHaveValue(/req-reset/);
+    await page.waitForTimeout(800);
+    await expect(page.locator('[data-testid="transcript"] article.m')).toHaveCount(0);
+    await expect(page.locator('[data-testid="composer"]')).toHaveValue(/req-reset/);
+  } finally {
+    await harness.close();
+  }
+});

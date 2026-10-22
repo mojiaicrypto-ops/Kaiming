@@ -10,7 +10,7 @@
     "build": "npm --prefix webapp run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:browser": "playwright test",
+    "test:browser": "npm run build && playwright test",
     "check:model": "node checks/real-model.ts",
     "check:runtime": "node checks/runner-real-model.ts",
     "check:prompts": "node checks/prompt-language.ts",

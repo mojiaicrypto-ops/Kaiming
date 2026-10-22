@@ -40,6 +40,8 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
   const [auth, setAuth] = useState<'unknown' | 'ready' | 'required'>('unknown');
   const [projectOpen, setProjectOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
+  /** A request the board hands to the chat: filled into the composer, never sent on its own. */
+  const [draft, setDraft] = useState<string | null>(null);
 
   // A 401 from any call takes over the screen: the cookie is gone, not the work.
   useEffect(() => {
@@ -130,6 +132,11 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
         {route.view === 'chat' && (
           <ChatPage
             key={workspace.sessionId}
+            draft={draft}
+            onDraftConsumed={(inserted) => {
+              setDraft(null);
+              notify(t(inserted ? 'req.handoffSent' : 'req.handoffKept'), inserted ? 'info' : 'error');
+            }}
             session={session}
             sessions={workspace.sessions}
             hasMoreSessions={workspace.hasMoreSessions}
@@ -160,6 +167,10 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
             selected={route.selected}
             onSelect={(id) => navigate(id === null ? '/requirements' : `/requirements?selected=${encodeURIComponent(id)}`)}
             onNotice={notify}
+            onHandOff={(text) => {
+              setDraft(text);
+              navigate('/');
+            }}
           />
         )}
         {route.view === 'settings' && (

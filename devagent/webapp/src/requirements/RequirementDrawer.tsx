@@ -13,7 +13,8 @@ export interface RequirementDrawerProps {
   readonly card: RequirementSummary | undefined;
   readonly invalid: InvalidRequirementFile | undefined;
   readonly onClose: () => void;
-  readonly onNotice: (message: string, kind: 'info' | 'success' | 'error') => void;
+  /** Hands the request to the chat: the drawer cannot start work, and must not pretend to. */
+  readonly onHandOff: (text: string) => void;
 }
 
 // The proposal body the server's own template produces (requirementStore.requirementTemplate):
@@ -63,7 +64,7 @@ function statusWord(
   return card.kind === 'proposal' ? t('req.state.idle') : t('req.state.todo');
 }
 
-export function RequirementDrawer({ rpc, projectId, invalidFile, card, invalid, onClose, onNotice }: RequirementDrawerProps) {
+export function RequirementDrawer({ rpc, projectId, invalidFile, card, invalid, onClose, onHandOff }: RequirementDrawerProps) {
   const { t } = useI18n();
   const [read, setRead] = useState<RequirementRead | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -96,10 +97,12 @@ export function RequirementDrawer({ rpc, projectId, invalidFile, card, invalid, 
   // where a session actually begins. Saying "sent" without that would be a false confirmation.
   const handToChief = useCallback(
     (text: string): void => {
-      onNotice(text, 'info');
-      onClose();
+      // Filled into the composer, never sent: the user still decides to send, and can edit first.
+      // Only the handoff runs here: it navigates to the chat, and calling onClose as well would
+      // push the board URL straight back and leave the user where they started.
+      onHandOff(text);
     },
-    [onNotice, onClose],
+    [onHandOff],
   );
 
   if (invalidFile !== null) {
@@ -109,7 +112,7 @@ export function RequirementDrawer({ rpc, projectId, invalidFile, card, invalid, 
         title={<State kind="block">{t('req.invalidView')}</State>}
         onClose={onClose}
         footer={
-          <button type="button" className="btn pri" onClick={() => handToChief(t('req.fixReady', { id: invalidFile }))}>
+          <button type="button" className="btn pri" data-testid="req-handoff" onClick={() => handToChief(t('req.fixReady', { id: invalidFile }))}>
             {t('req.askChiefFix')}
           </button>
         }
@@ -136,11 +139,11 @@ export function RequirementDrawer({ rpc, projectId, invalidFile, card, invalid, 
       onClose={onClose}
       footer={
         card.kind === 'proposal' ? (
-          <button type="button" className="btn pri" onClick={() => handToChief(t('req.delegateDesignReady', { id: card.id }))}>
+          <button type="button" className="btn pri" data-testid="req-handoff" onClick={() => handToChief(t('req.delegateDesignReady', { id: card.id }))}>
             {t('req.delegateDesign')}
           </button>
         ) : (
-          <button type="button" className="btn pri" onClick={() => handToChief(t('req.implementReady', { id: card.id }))}>
+          <button type="button" className="btn pri" data-testid="req-handoff" onClick={() => handToChief(t('req.implementReady', { id: card.id }))}>
             {t('req.implement')}
           </button>
         )

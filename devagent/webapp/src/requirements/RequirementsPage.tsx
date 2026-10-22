@@ -10,6 +10,8 @@ export interface RequirementsPageProps {
   readonly selected: string | null;
   readonly onSelect: (id: string | null) => void;
   readonly onNotice: (message: string, kind: 'info' | 'success' | 'error') => void;
+  /** Fills the chat composer with a request about one requirement, then switches to the chat. */
+  readonly onHandOff: (text: string) => void;
 }
 
 const COLUMNS: ReadonlyArray<{ column: Column; key: 'req.col.proposal' | 'req.col.todo' | 'req.col.doing' | 'req.col.done'; glyph: 'idle' | 'wait' | 'run' | 'done' }> = [
@@ -33,7 +35,7 @@ function cardState(card: RequirementSummary): { glyph: 'idle' | 'wait' | 'run' |
  * could not be parsed (kept visible — a silently dropped requirement is worse than a warning),
  * and a drawer with the record's own sections.
  */
-export function RequirementsPage({ rpc, projectId, selected, onSelect, onNotice }: RequirementsPageProps) {
+export function RequirementsPage({ rpc, projectId, selected, onSelect, onNotice, onHandOff }: RequirementsPageProps) {
   const { t } = useI18n();
   const { items, invalid, loading, error, reload } = useRequirements(rpc, projectId);
   const invalidSelection = selected !== null && selected.startsWith('invalid:') ? selected.slice('invalid:'.length) : null;
@@ -111,7 +113,7 @@ export function RequirementsPage({ rpc, projectId, selected, onSelect, onNotice 
           invalid={invalid.find((entry) => entry.file === invalidSelection)}
           invalidFile={invalidSelection}
           onClose={() => onSelect(null)}
-          onNotice={onNotice}
+          onHandOff={onHandOff}
         />
       )}
     </section>
