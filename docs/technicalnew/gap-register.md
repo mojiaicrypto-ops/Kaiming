@@ -10,7 +10,7 @@
 
 ## 本轮结果（2026-10-22）
 
-- **D** 9 项全部关闭；**S** 4 项关闭、1 项按原决定不做；**C** 4 项与实现一致；**U** 7 项补上界面、1 项不做、2 项待确认（U4/U5，问题见 `.agentdev/work/workbench-gaps-20261022/questions.md`）。
+- **D** 9 项全部关闭；**S** 4 项关闭、1 项按原决定不做；**C** 4 项与实现一致；**U** 9 项补上界面、1 项不做。U4/U5 按用户决定采用简单形态，见 `.agentdev/work/workbench-gaps-20261022/questions.md`。
 - **P** 按本轮实现执行：单请求列表、推送取代轮询、错误码文案、焦点管理、方法消费表（[UI 设计契约](ui-design.md#u9-方法消费)）。
 - 验证：`npm test` 299 用例、`npm --prefix webapp test` 25 用例、`npm run test:browser` 25 用例、两处 `tsc --noEmit` 无输出；证据与未覆盖项见 [验证记录](validation.md)。
 
@@ -55,8 +55,8 @@
 | U1 | `project.files.list` / `project.files.read` | P-05、AC-02：浏览目录、阅读文本文件 | 0 处调用 | **已关闭** — 文件阅读器（抽屉）：目录树 + 文本/二进制/截断提示；知识入口三文件置顶 |
 | U2 | `task.report.get` | delivery.md:76：用户能打开报告和证据 | 0 处调用；转录里报告只有摘要 | **已关闭** — 同一阅读器打开 `resultId` 正文（服务端已校验归属） |
 | U3 | `project.rebind` | P-03、AC-04：目录移动后重绑定 | 0 处调用 | **已关闭** — 项目对话框增加「重新绑定」：需要确认来源 + 目录选择，失败按 WORKSPACE_BUSY 原样说明 |
-| U4 | `session.recovery.inspect` / `session.recovery.resolve` | S6、AC-04：「仍在修改或引用缺失时说明待处理」 | 0 处调用 | 待确认：首版是否需要独立恢复界面，或用横幅 + 单条处置 |
-| U5 | `session.cleanup` | K-05：清理已结束会话、保留被引用资料 | 0 处调用 | 待确认：放置位置（会话列行操作）与拒绝原因展示 |
+| U4 | `session.recovery.inspect` / `session.recovery.resolve` | S6、AC-04：「仍在修改或引用缺失时说明待处理」 | 0 处调用 | **已关闭（简单方案）** — 会话空闲时读一次 inspect；有未核实输入就显示横幅，写明数量与输入 id，并提供「让主管核实」把请求填进 composer（由主管判断，界面不重放、不代答）；`resolve` 仍无界面：处置走主管的 `task(op=recover)` |
+| U5 | `session.cleanup` | K-05：清理已结束会话、保留被引用资料 | 0 处调用 | **已关闭** — 会话列行内「×」两步确认（不提供当前会话）；CAS 用行上的 revision；被拒绝时把服务端的 `gaps` 原样列出 |
 | U6 | `task.list` | P-03：查看正在进行的工作 | 0 处调用 | **已关闭** — 需求屏增加第三段「任务」，或在会话列顶部显示当前项目任务 |
 | U7 | `project.get.entries` / `initializationRef` | P-02、AC-03：知识入口与确认差异 | 返回了但界面不显示 | **已关闭** — 项目对话框显示三个知识入口（`AGENTS.md`、`.dev/INDEX.md`、`.dev/PROJECT.md`）的存在与否并可打开；`initializationRef` 仍是记录字段，不作为文件入口（没有对应文件可读） |
 | U8 | `session.input.get.effectiveConfig` | P-05：「当前工作显示实际使用配置」 | 0 处调用 | **已关闭** — 随 S4：任务条/状态栏显示 `provider/model`，与设置不同时标出 |

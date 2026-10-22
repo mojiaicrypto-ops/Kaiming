@@ -644,6 +644,7 @@ describe('read-only query surface', () => {
     const body = resultOf<{
       sessions: Array<{
         sessionId: string;
+        revision: number;
         title: string | null;
         activity: string;
         lastActivityAt: string | null;
@@ -654,6 +655,10 @@ describe('read-only query surface', () => {
     const byId = new Map(body.sessions.map((entry) => [entry.sessionId, entry]));
     // The title is the first user message's first non-empty line, cut to 60 code points.
     expect(byId.get('s-chief')?.title).toBe('先讨论，不开始开发');
+    // The rail can act on its own rows: cleanup is a compare-and-set on this revision, which the
+    // fixture bumped while seeding the Task.
+    expect(typeof byId.get('s-chief')?.revision).toBe('number');
+    expect(byId.get('s-chief')?.revision).toBeGreaterThanOrEqual(1);
     expect([...(byId.get('s-long')?.title ?? '')]).toHaveLength(61);
     expect(byId.get('s-long')?.title?.endsWith('…')).toBe(true);
     // A session with no input has no title and no activity, and still appears (it is a session).

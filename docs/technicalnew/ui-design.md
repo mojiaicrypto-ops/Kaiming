@@ -107,6 +107,7 @@
 | `project.files.list` / `project.files.read` | 文件阅读器 |
 | `session.create` / `session.list` / `session.get` | 会话列、新建、当前会话 |
 | `session.messages.list` | 转录「加载更早」 |
+| `session.recovery.inspect` | 会话横幅（未确认结束的运行） |
 | `session.stream.prepare` | 会话流（连一次，只读快照） |
 | `session.input.get` | 无——登记为缺口（U8 已由 `session.get.config` 覆盖） |
 | `session.input.submit` / `session.input.stop` | composer、队列撤回、STOP |
@@ -116,7 +117,7 @@
 | `requirement.list` / `requirement.get` | 需求看板、抽屉 |
 | `interaction.respond` | 问题面板 |
 | `config.get` / `config.save` / `config.test` | 设置三页 |
-| `session.recovery.inspect` / `session.recovery.resolve` | 无——待确认（U4） |
-| `session.cleanup` | 无——待确认（U5） |
+| `session.recovery.resolve` | 无界面：处置由主管的 `task(op=recover)` 执行 |
+| `session.cleanup` | 会话列行内清理（两步确认） |
 
 新增方法时同步这张表；有任何一行是「无」且未登记缺口，按缺陷处理。

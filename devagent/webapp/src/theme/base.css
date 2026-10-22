@@ -1504,6 +1504,35 @@ kbd {
 }
 
 /* The file reader: a listing of buttons, then the text of one file, scrolled inside its drawer. */
+/* A rail row with one trailing action: the row selects, the small button removes. */
+.srow {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  min-width: 0;
+}
+.srow .s {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.srow .sx {
+  flex: 0 0 auto;
+  font-size: var(--fs-11);
+  color: var(--fg-3);
+  padding: 2px var(--s2);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.srow .sx:hover,
+.srow .sx:focus-visible {
+  color: var(--fg);
+  border-color: var(--line-strong);
+}
+.srow.armed .sx {
+  color: var(--error);
+  border-color: var(--error);
+}
+
 .entry {
   display: flex;
   align-items: baseline;

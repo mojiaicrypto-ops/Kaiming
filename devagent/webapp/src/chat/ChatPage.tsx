@@ -35,6 +35,10 @@ export interface ChatPageProps {
   readonly onSelectSession: (sessionId: string) => void;
   readonly onCreateSession: () => void;
   readonly hasMoreSessions: boolean;
+  /** Removes a settled session; resolves to whether it was removed. */
+  readonly onCleanupSession: (sessionId: string, revision: number) => Promise<boolean>;
+  /** Fills the composer with a request about the interrupted run; the chief decides what follows. */
+  readonly onAskChief: (text: string) => void;
   /** Text handed over from another screen: filled in, not sent. */
   readonly draft: string | null;
   readonly onDraftConsumed: (inserted: boolean) => void;
@@ -48,7 +52,7 @@ export interface ChatPageProps {
  * transcript owns its own scroll-follow handle so that a streaming answer never yanks the view
  * away from a user who scrolled up (R5); the "back to latest" pill is the only way it moves you.
  */
-export function ChatPage({ session, sessions, currentSessionId, projectId, hasProject, onSelectSession, onCreateSession, hasMoreSessions, onLoadMoreSessions, draft, onDraftConsumed, railOpen, onOpenRail }: ChatPageProps) {
+export function ChatPage({ session, sessions, currentSessionId, projectId, hasProject, onSelectSession, onCreateSession, hasMoreSessions, onLoadMoreSessions, onCleanupSession, onAskChief, draft, onDraftConsumed, railOpen, onOpenRail }: ChatPageProps) {
   // Below 861px the session rail is a sheet, not a column: CSS hides the column, so the sheet is
   // the only way to switch sessions there.
   const compact = useCompact();
@@ -59,6 +63,9 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
   const handleRef = useRef<ReturnType<typeof createAutoscroll> | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
   const [taskOpen, setTaskOpen] = useState(false);
+  /** Inputs the host could not close (a crash, an unknown save): the user must be told they exist. */
+  const [interrupted, setInterrupted] = useState<readonly { inputId: string; errorCode: string | null }[]>([]);
+  const [recoveryDismissed, setRecoveryDismissed] = useState(false);
   /** Backwards paging: the snapshot holds the tail, and this asks for the page before it. */
   const [earlier, setEarlier] = useState<{ readonly loading: boolean; readonly hasMore: boolean }>({
     loading: false,
@@ -155,6 +162,28 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
     [currentSessionId, sessions, t],
   );
 
+  // An interrupted input is a fact the server holds; asking once per idle moment is enough, and a
+  // run in progress is not the moment (it may still close its own input).
+  useEffect(() => {
+    if (projectId === '' || currentSessionId === '' || slot.busy !== 'idle') return;
+    let cancelled = false;
+    void session.rpc
+      .call<{ interruptedInputs: Array<{ inputId: string; errorCode: string | null }> }>('session.recovery.inspect', {
+        projectId,
+        sessionId: currentSessionId,
+      })
+      .then((read) => {
+        if (cancelled) return;
+        setInterrupted(read.interruptedInputs.map((entry) => ({ inputId: entry.inputId, errorCode: entry.errorCode })));
+        // A new interruption deserves to be seen again even if an older one was dismissed.
+        setRecoveryDismissed((dismissed) => (read.interruptedInputs.length === 0 ? false : dismissed));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, currentSessionId, slot.busy, session.rpc]);
+
   const submit = useCallback(
     async (text: string): Promise<void> => {
       try {
@@ -187,6 +216,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
             questionCount={(sessionId) => (sessionId === currentSessionId ? openQuestions.length : 0)}
             hasMore={hasMoreSessions}
             onLoadMore={onLoadMoreSessions}
+            onCleanup={onCleanupSession}
           />
         </>
       ) : (
@@ -198,10 +228,14 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
           questionCount={(sessionId) => (sessionId === currentSessionId ? openQuestions.length : 0)}
           hasMore={hasMoreSessions}
           onLoadMore={onLoadMoreSessions}
+          onCleanup={onCleanupSession}
         />
       )}
       <section className="conv">
         <Banner
+          interrupted={recoveryDismissed ? [] : interrupted}
+          onAskChief={(text) => onAskChief(text)}
+          onDismissInterrupted={() => setRecoveryDismissed(true)}
           status={session.status}
           blocked={session.blocked}
           onDismissBlocked={session.dismissBlocked}
@@ -242,7 +276,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
         />
         <div className="tx scroll" ref={txRef} data-testid="transcript">
           <div className="tx-in">
-            {slot.items.length > 0 && earlier.hasMore && (
+            {slot.items.length > 0 && slot.hasEarlier && earlier.hasMore && (
               <button
                 type="button"
                 className="btn ghost more"

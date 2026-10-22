@@ -206,6 +206,8 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
         .map((row) => ({
           sessionId: row.id,
           roleId: row.roleId,
+          // The revision a cleanup must cite: a row that cannot act on itself forces a second read.
+          revision: row.revision,
           title: titleOf(row.title),
           activity: activityOfCounts(row.processing, row.queued, row.stopping),
           lastActivityAt: row.lastActivityAt,

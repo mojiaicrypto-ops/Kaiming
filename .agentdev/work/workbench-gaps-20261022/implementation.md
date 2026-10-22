@@ -92,9 +92,16 @@ Plan：`plan.md`（A–G 全做；U4/U5 只登记问题；阅读器只读）。�
 | 浏览器用例覆盖多页前插与 101 条 | 只覆盖「没有更早」；多页由服务端用例覆盖 | 活跃会话的快照来自模型实例内存，测试无法注入长历史 |
 | 阶段 C 单测断言 dispatch 推送 | create/update 断言 + 浏览器断言 dispatch 后成员数立即出现 | dispatch 会拉起成员运行，单测里模拟成本高于价值 |
 
+## 追加：U4 / U5（用户 2026-10-22 决定，简单形态）
+
+| 项 | 实现 | 位置 |
+|---|---|---|
+| U4 未确认结束的运行 | 会话空闲时读一次 `session.recovery.inspect`；有未核实输入 → 横幅（数量 + 输入 id）+「让主管核实」把请求填进 composer；可「知道了」收起；不重放、不代答；`resolve` 仍由主管的 `task(op=recover)` 执行 | `chat/ChatPage.tsx`、`chat/Banner.tsx`、`app/App.tsx`（`setDraft`） |
+| U10 补充 | 快照新增 `hasEarlier`（历史条数 > 100），短会话不再显示只会返回空页的「加载更早」 | `src/server/stream-methods.ts`、`state/slot.ts`、`chat/ChatPage.tsx` |
+| U5 清理会话 | 会话列行内「×」两步确认 → `session.cleanup`（`expectedRevision` 取行上的 revision）；当前会话不提供；拒绝时把 `gaps` 原样列出；成功后刷新会话列 | `chat/SessionsList.tsx`、`app/App.tsx`、`session.list` 增 `revision` |
+
 ## 未做（有记录的决定）
 
-- U4 恢复核实、U5 会话清理：只写问题（`questions.md`），不实现。
 - U9 草稿试连、S5 需求引用字段：按登记的理由不做。
 - U8 的 `config` 只显示在状态栏，没有单独的「当前配置」面板。
 

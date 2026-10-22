@@ -74,6 +74,8 @@ export interface TaskDetail {
 export interface SessionSlot {
   items: readonly HistoryMessage[];
   busy: SessionActivity;
+  /** Whether the server said older messages exist beyond the snapshot. */
+  hasEarlier: boolean;
   currentInputId: string | null;
   pending: readonly PendingInteraction[];
   /** Live stream state that must survive snapshot merges. */
@@ -88,6 +90,7 @@ export interface SessionSlot {
 export const emptySlot = (): SessionSlot => ({
   items: [],
   busy: 'idle',
+  hasEarlier: false,
   currentInputId: null,
   pending: [],
   liveKeys: new Set<string>(),
@@ -242,6 +245,7 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
         items: merged.items,
         liveKeys: merged.liveKeys,
         busy: snapshot.activity,
+        hasEarlier: snapshot.hasEarlier === true,
         currentInputId: snapshot.currentInputId,
         pending: snapshot.interactions,
         // Retained inputs live in the snapshot: a reload must still show what is waiting.

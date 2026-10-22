@@ -542,11 +542,9 @@ test('the project files open in a read-only viewer, and a binary file says so', 
   }
 });
 
-test('the transcript asks for older messages and stops when there are none', async ({ page }) => {
-  // A live session's snapshot is read from the model instance, not the file, so a seeded long
-  // history cannot be injected here; backward paging itself is covered by `test/server-read.test.ts`
-  // ("walks the history backwards"). This case proves the control's own behaviour: it asks once,
-  // duplicates nothing, and disappears at the beginning instead of offering an empty page.
+test('a short conversation offers no older page, because there is none', async ({ page }) => {
+  // The snapshot says whether anything precedes its tail; a fresh session must not show a control
+  // that can only return an empty page. Backward paging itself is a server-side test.
   const harness = await startHarness({ model: [{ kind: 'text', text: '好的。' }] });
   try {
     await page.goto(harness.url);
@@ -554,18 +552,13 @@ test('the transcript asks for older messages and stops when there are none', asy
     await openProject(page, harness.project?.projectPath ?? '');
     await page.locator('[data-testid="composer"]').fill('你好');
     await page.locator('[data-testid="composer"]').press('Enter');
-    const turns = page.locator('[data-testid="transcript"] article.m');
-    await expect(turns).toHaveCount(2, { timeout: 15_000 });
-
-    const earlier = page.locator('[data-testid="load-earlier"]');
-    await expect(earlier).toBeVisible();
-    await earlier.click();
-    await expect(earlier).toHaveCount(0);
-    await expect(turns).toHaveCount(2);
+    await expect(page.locator('[data-testid="transcript"] article.m')).toHaveCount(2, { timeout: 15_000 });
+    await expect(page.locator('[data-testid="load-earlier"]')).toHaveCount(0);
   } finally {
     await harness.close();
   }
 });
+
 
 
 
@@ -742,6 +735,122 @@ test('the project menu lists what the server registered, not what this browser r
     // localStorage holds the current path and session only; no "recent projects" list exists.
     const stored = await page.evaluate(() => Object.keys(localStorage).filter((key) => key.includes('recent')));
     expect(stored).toEqual([]);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a settled session can be cleaned up from the rail, and a busy one says why not', async ({ page }) => {
+  // No model: a submitted input stays queued, which is exactly the state cleanup must refuse.
+  const harness = await startHarness();
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+
+    // Two more sessions, created the way the shell creates them.
+    const ids = await page.evaluate(async () => {
+      const handle = (window as unknown as {
+        __agentdev: {
+          rpc: { call: (method: string, params: unknown, options?: { requestId: string }) => Promise<unknown> };
+          workspace: { projectId: string };
+        };
+      }).__agentdev;
+      const created: string[] = [];
+      for (const tag of ['settled', 'busy']) {
+        const read = (await handle.rpc.call(
+          'session.create',
+          { projectId: handle.workspace.projectId },
+          { requestId: `seed-${tag}` },
+        )) as { session: { sessionId: string } };
+        created.push(read.session.sessionId);
+      }
+      // The second one gets a queued input: with no model it never runs, so it cannot be removed.
+      const busy = created[1];
+      if (busy !== undefined) {
+        await handle.rpc.call(
+          'session.input.submit',
+          {
+            projectId: handle.workspace.projectId,
+            sessionId: busy,
+            content: [{ type: 'text', text: '等一会儿再做' }],
+          },
+          { requestId: 'seed-busy-input' },
+        );
+      }
+      return created;
+    });
+    expect(ids).toHaveLength(2);
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await waitForConnected(page);
+    await expect(page.locator('[data-testid="session-row"]')).toHaveCount(3, { timeout: 10_000 });
+
+    // The open session offers no cleanup: deleting what is on screen would leave nothing to show.
+    await expect(page.locator('.srow[aria-current], .srow:has([aria-current="true"]) [data-testid="session-cleanup"]')).toHaveCount(0);
+
+    // Remove the settled one: two clicks, then it is gone from the rail.
+    const settled = page.locator('[data-testid="session-row"]', { hasText: 'New session' }).first();
+    const row = page.locator('.srow', { has: settled });
+    await row.locator('[data-testid="session-cleanup"]').click();
+    await row.locator('[data-testid="session-cleanup"]').click();
+    await expect(page.locator('.toast')).toContainText(/removed|已清理/i, { timeout: 10_000 });
+    await expect(page.locator('[data-testid="session-row"]')).toHaveCount(2);
+
+    // The queued one is refused, with the reason the server gave.
+    const busyRow = page.locator('.srow').filter({ has: page.locator('[data-testid="session-row"]') }).last();
+    const before = await page.locator('[data-testid="session-row"]').count();
+    await busyRow.locator('[data-testid="session-cleanup"]').click();
+    await busyRow.locator('[data-testid="session-cleanup"]').click();
+    // The earlier confirmation is still on screen, so the refusal is read from the error toast.
+    await expect(page.locator('.toast.err')).toContainText(/Not removed|未清理/i, { timeout: 10_000 });
+    await expect(page.locator('[data-testid="session-row"]')).toHaveCount(before);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('an unconfirmed run is announced and the chief is asked, not guessed at', async ({ page }) => {
+  // The host reports interrupted inputs through one read; this case answers that read so the
+  // banner's own behaviour is what is tested (the server side is covered by server-read tests).
+  const harness = await startHarness();
+  try {
+    await page.addInitScript(() => {
+      const original = window.fetch;
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const body = typeof init?.body === 'string' ? init.body : '';
+        if (body.includes('"session.recovery.inspect"')) {
+          const envelope = JSON.parse(body) as { requestId: string };
+          return new Response(
+            JSON.stringify({
+              requestId: envelope.requestId,
+              result: {
+                sessionId: 's',
+                binding: null,
+                interruptedInputs: [{ inputId: 'i-crashed', kind: 'user', errorCode: 'HOST_SAVE_FAILED' }],
+                pendingInputs: [],
+                taskId: null,
+                results: [],
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return original(input, init);
+      };
+    });
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+
+    const banner = page.locator('[data-testid="interrupted-banner"]');
+    await expect(banner).toBeVisible({ timeout: 15_000 });
+    await expect(banner).toContainText('i-crashed');
+    // Nothing is replayed: the decision is the user's, sent through the chief.
+    await expect(page.locator('[data-testid="transcript"] article.m')).toHaveCount(0);
+    await page.locator('[data-testid="recovery-ask"]').click();
+    await expect(page.locator('[data-testid="composer"]')).toHaveValue(/i-crashed/);
+    await expect(page.locator('[data-testid="transcript"] article.m')).toHaveCount(0);
   } finally {
     await harness.close();
   }

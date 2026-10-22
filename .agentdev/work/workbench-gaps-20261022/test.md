@@ -11,7 +11,9 @@
 | `npm test` | passed | 26 文件 / 300 用例 |
 | `npm --prefix webapp test` | passed | 3 文件 / 25 用例 |
 | `npm run build` | passed | `web-static/index.html` + 1 CSS + 1 JS |
-| `npm run test:browser`（先 build） | passed | 27 用例 |
+| `npm run test:browser`（先 build） | passed | 29 用例 |
+| `npm run check:model`（真实模型） | passed | 4/4，deepseek/deepseek-flash，耗时约 3.5s |
+| `npm run check:runtime`（真实模型） | passed | 4/4，真实运行完成并记录交付边界 |
 
 ## 新增/修改的单测与集成用例
 
@@ -41,6 +43,8 @@
 | a blocked run names the missing model instead of printing its code | D6：阻断横幅不显示 `blocked_config` |
 | the status bar names the model the work actually used | U8：状态栏显示 `stub/stub-1` |
 | the project menu lists what the server registered, not what this browser remembers | S1：本浏览器从未见过的项目出现在菜单；`localStorage` 无 recent 键 |
+| a settled session can be cleaned up from the rail, and a busy one says why not | U5：两步确认删除；排队中的会话被拒并列出原因；当前会话无入口 |
+| an unconfirmed run is announced and the chief is asked, not guessed at | U4：横幅显示输入 id、不重放、按钮把请求填进 composer 而未发送 |
 | a Task the chief creates mid-run appears without a reload（改写） | S3：只有在收到推送时任务条才可能出现（轮询在知道 id 之后才启动） |
 
 ## 手工验证
@@ -51,13 +55,14 @@
 | 隐藏标签页不轮询 | 代码路径核对（`visibilitychange` + `visibilityState` 守卫）；未做真机休眠测试 | 通过（受限） |
 | 服务端工作区报告路径不显示 | 探针：抽屉显示「保存在服务端工作目录」 | 通过 |
 | 320/390 版式未回退 | 既有「五档视口」用例仍通过 | 通过 |
+| 真实模型 + 真实浏览器 | 以 `devagent/config/model.json` 的 DeepSeek 配置启动工作台（`agentDir` 写入 models.json），登录→接入目录→新建会话→发送一句话：得到真实回答，状态栏显示 `deepseek/deepseek-flash`，短会话不显示「加载更早」 | 通过（一次手工探针，不加入套件：需要付费端点） |
 
 ## 未覆盖与不稳定
 
 | 区域 | 状态 |
 |---|---|
-| 真实模型下的完整 J-01～J-10 | 未执行（无凭据），不记通过 |
-| U4 恢复核实 / U5 会话清理界面 | 未实现（产品未定义交互），见 `questions.md` |
+| 真实模型下的完整 J-01～J-10 | 未执行；真实模型只跑了 `check:model` / `check:runtime` 两项自动检查（4/4、4/4） |
+| U4 横幅的浏览器用例 | 用受控的 `recovery.inspect` 响应驱动（状态确定性优先）；服务端读取路径由 `server-read` 用例覆盖 |
 | 触屏手势、软键盘 | 未实测 |
 | 多页前插与滚动锚定 | 浏览器用例只覆盖「没有更早」：活跃会话的快照来自模型实例内存，测试无法注入 130 条历史（已实测：注入文件后页面仍只显示内存中的 2 条）。服务端 `before` 分页有单测；`scrollTop` 补偿为代码路径，未做自动化验证 |
 | 浏览器套件稳定性 | 早期出现过 2 次不可复现失败（`toHaveCount`、`toBeVisible`）；后续定位到同一类原因——**只靠一次事件传递的状态**（阻断原因、订阅建立前的事件）。修法见缺口登记 D7/D8：状态进入快照与 `session.get`，composer 在未订阅时禁用。修复后连续 3 次全量全绿（第 4 次见后记） |

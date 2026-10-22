@@ -123,6 +123,9 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
             ...(record.isError !== null ? { isError: record.isError } : {}),
           })),
           historyLeaf: branchLeaf(history),
+          // Whether the file holds anything before this tail: the transcript must not offer a
+          // "load earlier" that can only return an empty page.
+          hasEarlier: history.records.filter((record) => record.type === 'message').length > SNAPSHOT_MESSAGES,
           historyProblems: problems,
         },
       };

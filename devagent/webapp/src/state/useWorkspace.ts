@@ -40,6 +40,8 @@ export interface ProjectRow {
 export interface SessionRow {
   readonly sessionId: string;
   readonly roleId: string;
+  /** The session revision: cleanup is a compare-and-set on it. */
+  readonly revision: number;
   readonly title: string | null;
   readonly activity: SessionActivity;
   readonly updatedAt: string | null;
@@ -106,6 +108,7 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
         rows: read.sessions.map((row) => ({
           sessionId: row.sessionId,
           roleId: row.roleId,
+          revision: row.revision,
           title: row.title ?? null,
           activity: row.activity,
           updatedAt: row.lastActivityAt ?? null,

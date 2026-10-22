@@ -1727,6 +1727,7 @@ export class Store {
   listSessionSummaries(projectId: string): Array<{
     id: string;
     roleId: string;
+    revision: number;
     currentTaskId: string | null;
     lastActivityAt: string | null;
     processing: number;
@@ -1736,7 +1737,7 @@ export class Store {
   }> {
     const rows = this.db
       .prepare(
-        `SELECT s.id AS id, s.roleId AS roleId, s.currentTaskId AS currentTaskId,
+        `SELECT s.id AS id, s.roleId AS roleId, s.revision AS revision, s.currentTaskId AS currentTaskId,
                 MAX(i.updatedAt) AS lastActivityAt,
                 SUM(CASE WHEN i.status = 'processing' THEN 1 ELSE 0 END) AS processing,
                 SUM(CASE WHEN i.status = 'queued' THEN 1 ELSE 0 END) AS queued,
@@ -1748,6 +1749,7 @@ export class Store {
       .all(projectId) as unknown as Array<{
       id: string;
       roleId: string;
+      revision: number;
       currentTaskId: string | null;
       lastActivityAt: string | null;
       processing: number | null;
@@ -1773,6 +1775,7 @@ export class Store {
     return rows.map((row) => ({
       id: row.id,
       roleId: row.roleId,
+      revision: row.revision,
       currentTaskId: row.currentTaskId,
       lastActivityAt: row.lastActivityAt,
       processing: row.processing ?? 0,

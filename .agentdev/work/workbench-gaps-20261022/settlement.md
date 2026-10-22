@@ -39,7 +39,9 @@ settlement:
     - npm --prefix webapp run typecheck：无输出
     - npm test：26 文件 300 用例
     - npm --prefix webapp test：3 文件 25 用例
-    - npm run test:browser：27 用例，修复后连续 4 次全量全绿
+    - npm run test:browser：29 用例
+    - npm run check:model：4/4（真实模型 deepseek/deepseek-flash）
+    - npm run check:runtime：4/4（真实运行）
     - 独立审阅两轮（新上下文、只读）：均 passed，无阻断；第一轮 9 项非阻断全部修复
   archived:
     - .agentdev/work/workbench-gaps-20261022/plan.md
@@ -48,9 +50,11 @@ settlement:
     - .agentdev/work/workbench-gaps-20261022/test.md
     - .agentdev/work/workbench-gaps-20261022/questions.md
     - .agentdev/work/workbench-gaps-20261022/settlement.md
+  decided:
+    - U4 恢复核实：简单形态（横幅 + 交回主管），已实现
+    - U5 会话清理：会话列行内两步确认，已实现
   proposed_for_confirmation:
-    - U4 恢复核实的交互形态（横幅+表单 / 只读提示）
-    - U5 会话清理的入口（会话列行内 / 不提供）
+    - 阻断原因是否落库（当前在 Server 内存）
     - 多页前插的自动化：需要一种能重置会话运行实例的测试手段，当前只能在服务端层验证分页
     - 阻断原因目前保存在 Server 内存（进程重启后需要一次真实运行才会重新出现）：是否需要落库
     - 真实模型下的完整 J-01～J-10 仍未执行
@@ -63,6 +67,6 @@ settlement:
 
 ## 关闭的缺口
 
-D1–D6、S1–S4、C1–C4、U1–U3、U6–U8、U10：全部关闭，逐项处置见 `gap-register.md`。
+D1–D9、S1–S4、C1–C4、U1–U8、U10：全部关闭，逐项处置见 `gap-register.md`。
 U9、S5：维持"不做"及其理由。
-U4、U5：待产品确认交互形态，问题见 `questions.md`。
+U4、U5：按用户决定采用简单形态并实现（`questions.md` 记录了决定与边界）。

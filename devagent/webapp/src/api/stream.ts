@@ -21,6 +21,8 @@ export interface PreparedSnapshot {
   currentInputId: string | null;
   inputs: ReadonlyArray<{ inputId: string; kind: string; status: string; revision: number; errorCode: string | null }>;
   messages: readonly HistoryMessage[];
+  /** True when the history has more messages than this snapshot carries. */
+  hasEarlier?: boolean;
   interactions: ReadonlyArray<PendingInteraction>;
   historyLeaf: string | null;
   historyProblems: readonly string[];

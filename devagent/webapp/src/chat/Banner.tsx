@@ -4,6 +4,10 @@ import { MESSAGE_KEYS } from '../i18n/catalog';
 import { State } from '../app/State';
 
 export interface BannerProps {
+  /** Inputs the host could not close. The banner states the fact; the chief decides what follows. */
+  readonly interrupted: readonly { readonly inputId: string; readonly errorCode: string | null }[];
+  readonly onAskChief: (text: string) => void;
+  readonly onDismissInterrupted: () => void;
   readonly status: 'connecting' | 'connected' | 'reconnecting' | 'offline';
   readonly blocked: { readonly code: string; readonly detail: string } | null;
   readonly onDismissBlocked: () => void;
@@ -16,7 +20,16 @@ export interface BannerProps {
  * run, and a history that could not be read completely. Everything else belongs in the status bar
  * or the transcript. Each banner states the consequence, not just the condition.
  */
-export function Banner({ status, blocked, onDismissBlocked, onRetry, historyProblems }: BannerProps) {
+export function Banner({
+  interrupted,
+  onAskChief,
+  onDismissInterrupted,
+  status,
+  blocked,
+  onDismissBlocked,
+  onRetry,
+  historyProblems,
+}: BannerProps) {
   const { t } = useI18n();
   const items: ReactNode[] = [];
 
@@ -30,6 +43,31 @@ export function Banner({ status, blocked, onDismissBlocked, onRetry, historyProb
         <span className="sp" />
         <button type="button" className="btn ghost" onClick={onRetry}>
           {t('banner.retry')}
+        </button>
+      </div>,
+    );
+  }
+
+  if (interrupted.length > 0) {
+    // Not an error card and not a form: the surfaces below (a crash, an unconfirmed save) are facts
+    // the program cannot judge, so the banner says what it knows and hands the decision to the chief.
+    items.push(
+      <div key="interrupted" className="bn block" data-testid="interrupted-banner">
+        <State kind="paused">{t('recovery.title')}</State>
+        <span className="f2">
+          {t('recovery.detail', { count: interrupted.length })} {interrupted.map((entry) => entry.inputId).join(', ')}
+        </span>
+        <span className="sp" />
+        <button
+          type="button"
+          className="btn pri"
+          data-testid="recovery-ask"
+          onClick={() => onAskChief(t('recovery.prompt', { ids: interrupted.map((entry) => entry.inputId).join(', ') }))}
+        >
+          {t('recovery.ask')}
+        </button>
+        <button type="button" className="btn ghost" onClick={onDismissInterrupted}>
+          {t('recovery.ack')}
         </button>
       </div>,
     );

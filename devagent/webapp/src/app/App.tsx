@@ -8,7 +8,7 @@ import { ProjectDialog } from './ProjectDialog';
 import { I18nProvider } from '../i18n/I18nProvider';
 import { useSession, type SessionRef } from '../state/useSession';
 import { useWorkspace } from '../state/useWorkspace';
-import { RpcClient, RpcError } from '../api/rpc';
+import { RpcClient, RpcError, newRequestId } from '../api/rpc';
 import { ChatPage } from '../chat/ChatPage';
 import { RequirementsPage } from '../requirements/RequirementsPage';
 import { SettingsPage } from '../settings/SettingsPage';
@@ -145,6 +145,33 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
             sessions={workspace.sessions}
             hasMoreSessions={workspace.hasMoreSessions}
             onLoadMoreSessions={() => void workspace.loadMoreSessions()}
+            onAskChief={(text) => setDraft(text)}
+            onCleanupSession={async (sessionId, revision) => {
+              try {
+                await rpc.call(
+                  'session.cleanup',
+                  { projectId: workspace.projectId, sessionId, expectedRevision: revision },
+                  { requestId: newRequestId('cleanup') },
+                );
+                await workspace.refreshSessions();
+                notify(t('session.cleanupDone'), 'success');
+                return true;
+              } catch (error) {
+                // A refused cleanup says what still refers to the session; that list is the answer.
+                const gaps =
+                  error instanceof RpcError && typeof error.details === 'object' && error.details !== null
+                    ? ((error.details as { gaps?: unknown }).gaps ?? [])
+                    : [];
+                const reason = errorText(error, t);
+                notify(
+                  t('session.cleanupRefused', {
+                    reason: Array.isArray(gaps) && gaps.length > 0 ? `${reason}: ${gaps.join('; ')}` : reason,
+                  }),
+                  'error',
+                );
+                return false;
+              }
+            }}
             currentSessionId={workspace.sessionId}
             projectId={workspace.projectId}
             hasProject={workspace.projectId !== ''}
