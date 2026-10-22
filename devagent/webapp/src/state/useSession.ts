@@ -29,6 +29,8 @@ export interface ChiefSessionApi {
    * Returns whether anything older still exists.
    */
   readonly loadEarlier: (beforeEntryId: string) => Promise<boolean>;
+  /** The model the running (or last) input was claimed with, or null when nothing has run. */
+  readonly config: { providerId: string; modelId: string; source: string } | null;
   readonly activeTaskId: string | null;
   readonly retry: () => void;
   readonly notify: (text: string, kind?: 'info' | 'success' | 'error') => void;
@@ -52,6 +54,14 @@ export function useSession(
   const streamRef = useRef<SessionStream | null>(null);
   const [blocked, setBlocked] = useState<{ code: string; detail: string } | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  /** When the last pushed Task change arrived: the fallback poll skips a tick right after it. */
+  const lastPushAt = useRef(0);
+  /**
+   * The configuration the work really used. The snapshot carries it while a run is live; after a
+   * run the settings may already have changed, so the value is re-read when the session goes idle
+   * instead of being inferred from the current settings.
+   */
+  const [config, setConfig] = useState<{ providerId: string; modelId: string; source: string } | null>(null);
   /** Bumped by a retry button: restarts the effect even when the session did not change. */
   const [retryTick, setRetryTick] = useState(0);
   /**
@@ -126,6 +136,7 @@ export function useSession(
         // The server now announces every change to the Task (created, updated, dispatched), so the
         // strip updates on the event itself; the interval is only a fallback for a lost frame.
         setActiveTaskId(notice.id);
+        lastPushAt.current = Date.now();
         void handlers.current.refreshTask(notice.id).catch(() => undefined);
       }
       if (frame.type === 'invalidate' && notice.entity === 'session') {
@@ -147,6 +158,7 @@ export function useSession(
       if (snapshot.sessionId !== sessionId) return;
       setStatus('connected');
       setHistoryProblems(snapshot.historyProblems ?? []);
+      setConfig(snapshot.config ?? null);
       dispatch({ type: 'snapshot', snapshot, reason: 'resync' });
       // Restore the coordinated Task after (re)connect: the invalidate frames that would set
       // activeTaskId may have fired before this tab subscribed, leaving the Task strip absent
@@ -268,6 +280,23 @@ export function useSession(
   // The server does not push Task member changes, so the strip polls the coordinated Task while
   // one exists (plan D5). A failed poll is ignored on purpose: the next tick retries, and a strip
   // that is one refresh stale is better than a banner for a transient read error.
+  // A run ended: read what it actually used, once, instead of polling for a value that changes
+  // at most once per run.
+  const wasBusy = useRef(false);
+  useEffect(() => {
+    const busyNow = slot.busy !== 'idle';
+    if (wasBusy.current && !busyNow && projectId !== null && sessionId !== null) {
+      void rpc
+        .call<{ session: { config: { providerId: string; modelId: string; source: string } | null } }>('session.get', {
+          projectId,
+          sessionId,
+        })
+        .then((read) => setConfig(read.session.config))
+        .catch(() => undefined);
+    }
+    wasBusy.current = busyNow;
+  }, [slot.busy, projectId, sessionId, rpc]);
+
   handlers.current = {
     refreshTask,
     ...(onSessionsChanged === undefined ? {} : { onSessionsChanged }),
@@ -280,6 +309,9 @@ export function useSession(
     if (activeTaskId === null || taskStatus === 'completed' || taskStatus === 'cancelled') return;
     let timer: number | null = null;
     const read = (): void => {
+      // A push already answered this question within the last second; a second read would only
+      // duplicate the work the event just did.
+      if (Date.now() - lastPushAt.current < 1_000) return;
       void refreshTask(activeTaskId).catch(() => undefined);
     };
     const visible = (): boolean => document.visibilityState === 'visible';
@@ -317,6 +349,7 @@ export function useSession(
     respond,
     refreshTask,
     loadEarlier,
+    config,
     activeTaskId,
     retry,
     notify: toast,

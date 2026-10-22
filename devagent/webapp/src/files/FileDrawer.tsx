@@ -200,6 +200,9 @@ export function FileDrawer({ rpc, projectId, path, entries, onClose }: FileDrawe
               key={entry.path}
               type="button"
               className={`entry${entry.type === 'directory' ? ' dir' : ''}`}
+              // A symlink is listed, never followed: the server refuses to read through it, and a
+              // click that failed with NOT_FOUND would look like a broken project.
+              disabled={entry.type !== 'directory' && entry.type !== 'file'}
               onClick={() => (entry.type === 'directory' ? void go(entry.path) : void openFile(entry.path))}
               data-testid="file-entry"
             >

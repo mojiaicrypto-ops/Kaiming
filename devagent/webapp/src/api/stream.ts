@@ -6,11 +6,16 @@
  */
 import type { HistoryMessage } from '../state/slot';
 
+/** One vocabulary for a session's live state, shared by the snapshot, the reads and the views. */
+export type SessionActivity = 'idle' | 'queued' | 'processing' | 'stopping';
+
 export interface PreparedSnapshot {
   sessionId: string;
   projectId: string;
   roleId: string;
-  activity: 'idle' | 'queued' | 'processing';
+  activity: SessionActivity;
+  /** What the running input was configured with; null while nothing is running. */
+  config?: { providerId: string; modelId: string; source: string } | null;
   currentInputId: string | null;
   inputs: ReadonlyArray<{ inputId: string; kind: string; status: string; revision: number; errorCode: string | null }>;
   messages: readonly HistoryMessage[];

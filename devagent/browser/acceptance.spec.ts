@@ -5,7 +5,7 @@
  * browser: they prove what unit tests cannot - that the page really talks to the server, renders
  * what the server holds, answers questions and keeps working when the reader leaves.
  */
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
@@ -498,7 +498,10 @@ test('a specialist report opens from the task detail, with the body it really wr
     await page.locator('[data-testid="composer"]').fill('先调查账户模块');
     await page.locator('[data-testid="composer"]').press('Enter');
 
-    await expect(page.locator('[data-testid="task-open"]')).toBeVisible({ timeout: 25_000 });
+    const strip = page.locator('[data-testid="task-strip"]');
+    await expect(strip).toBeVisible({ timeout: 25_000 });
+    // The dispatch reached the browser as a push: the member count did not need a reload.
+    await expect(strip).toContainText(/Members 1|成员 1/, { timeout: 15_000 });
     await page.locator('[data-testid="task-open"]').click();
     const result = page.locator('[data-testid="result-open"]').first();
     await expect(result).toContainText('模块调查完成', { timeout: 15_000 });
@@ -538,7 +541,11 @@ test('the project files open in a read-only viewer, and a binary file says so', 
   }
 });
 
-test('the transcript can ask for older messages and stops at the beginning', async ({ page }) => {
+test('the transcript asks for older messages and stops when there are none', async ({ page }) => {
+  // A live session's snapshot is read from the model instance, not the file, so a seeded long
+  // history cannot be injected here; backward paging itself is covered by `test/server-read.test.ts`
+  // ("walks the history backwards"). This case proves the control's own behaviour: it asks once,
+  // duplicates nothing, and disappears at the beginning instead of offering an empty page.
   const harness = await startHarness({ model: [{ kind: 'text', text: '好的。' }] });
   try {
     await page.goto(harness.url);
@@ -552,9 +559,188 @@ test('the transcript can ask for older messages and stops at the beginning', asy
     const earlier = page.locator('[data-testid="load-earlier"]');
     await expect(earlier).toBeVisible();
     await earlier.click();
-    // Nothing older exists: the rows stay as they were and the control stops offering more.
     await expect(earlier).toHaveCount(0);
     await expect(turns).toHaveCount(2);
+  } finally {
+    await harness.close();
+  }
+});
+
+
+
+test('a moved directory is rebound from the menu and keeps its records', async ({ page }) => {
+  const harness = await startHarness();
+  try {
+    const projectPath = harness.project?.projectPath ?? '';
+    const moved = `${projectPath}-moved`;
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, projectPath);
+
+    // The directory moves behind the workbench's back; a reload must report it, not hide it.
+    renameSync(projectPath, moved);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.locator('[data-testid="project-switcher"]').click();
+    const row = page.locator('[data-testid="project-row"]').first();
+    await expect(row).toContainText(/missing|目录不存在/i);
+
+    await page.locator('[data-testid="project-rebind"]').first().click();
+    await page.locator('[data-testid="project-rebind-path"]').fill(moved);
+    await page.locator('.prow .rebind button.pri').click();
+
+    // The same project (id, sessions) now points at the new directory.
+    await expect(page.locator('.toast')).toContainText(/bound|绑定/i, { timeout: 10_000 });
+    await expect(page.locator('[data-testid="project-switcher"]')).toContainText('project-moved');
+  } finally {
+    await harness.close();
+  }
+});
+
+test('the board lists the project Tasks and links to the conversation that runs one', async ({ page }) => {
+  const harness = await startHarness({
+    model: [
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'task',
+            arguments: JSON.stringify({
+              op: 'create',
+              type: 'read',
+              goal: 'survey the account module',
+              scope: 'account module',
+              planMarkdown: '# survey\n',
+            }),
+          },
+        ],
+      },
+      { kind: 'text', text: '任务已建。' },
+    ],
+  });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    await page.locator('[data-testid="composer"]').fill('先调查一下账号模块');
+    await page.locator('[data-testid="composer"]').press('Enter');
+    await expect(page.locator('[data-testid="task-strip"]')).toBeVisible({ timeout: 20_000 });
+
+    await page.goto(`${harness.baseUrl}/requirements`, { waitUntil: 'domcontentloaded' });
+    const row = page.locator('[data-testid="task-row"]').first();
+    await expect(row).toContainText('survey the account module', { timeout: 15_000 });
+    // The row names translated state, never the server's raw enum.
+    await expect(row).toContainText(/Running|进行中/);
+    await row.click();
+    await expect(page.locator('[data-testid="composer"]')).toBeVisible();
+    await expect(page.locator('[data-testid="task-strip"]')).toBeVisible();
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a modal keeps keyboard focus inside, and gives it back when it closes', async ({ page }) => {
+  const harness = await startHarness();
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+
+    const switcher = page.locator('[data-testid="project-switcher"]');
+    await switcher.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.dlg')).toBeVisible();
+
+    // Twenty tabs: the loop has fewer elements than that, so escaping the dialog would show up.
+    for (let i = 0; i < 20; i += 1) await page.keyboard.press('Tab');
+    const inside = await page.evaluate(() => document.activeElement?.closest('.dlg') !== null);
+    expect(inside).toBe(true);
+
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.dlg')).toHaveCount(0);
+    // Focus returns to the control that opened it, not to the body.
+    await expect(switcher).toBeFocused();
+  } finally {
+    await harness.close();
+  }
+});
+
+test('an unreadable directory says why in the interface language', async ({ page }) => {
+  const harness = await startHarness({ seedProject: false });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await page.locator('[data-testid="project-switcher"]').click();
+    await page.locator('[data-testid="project-path"]').fill('/definitely/not/here');
+    await page.locator('[data-testid="project-path"]').press('Enter');
+
+    const error = page.locator('[data-testid="project-error"]');
+    await expect(error).toBeVisible({ timeout: 10_000 });
+    // The translated sentence comes first; the server's own sentence may follow it.
+    await expect(error).toContainText(/unreachable|不可访问/);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a blocked run names the missing model instead of printing its code', async ({ page }) => {
+  // No model configured: the run must say what is missing, in words, where the user looks.
+  const harness = await startHarness();
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    await page.locator('[data-testid="composer"]').fill('开始');
+    await page.locator('[data-testid="composer"]').press('Enter');
+
+    const banner = page.locator('.bn').first();
+    await expect(banner).toBeVisible({ timeout: 20_000 });
+    await expect(banner).toContainText(/model|模型/i);
+    await expect(banner).not.toContainText('blocked_config');
+  } finally {
+    await harness.close();
+  }
+});
+
+test('the status bar names the model the work actually used', async ({ page }) => {
+  const harness = await startHarness({ model: [{ kind: 'text', text: '好的。' }] });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    await page.locator('[data-testid="composer"]').fill('你好');
+    await page.locator('[data-testid="composer"]').press('Enter');
+    await expect(page.locator('[data-testid="transcript"] article.m')).toHaveCount(2, { timeout: 15_000 });
+
+    // The stub installation runs provider 'stub' model 'stub-1'; the status bar says so.
+    await expect(page.locator('[data-testid="status-model"]')).toContainText('stub/stub-1');
+  } finally {
+    await harness.close();
+  }
+});
+
+test('the project menu lists what the server registered, not what this browser remembers', async ({ page }) => {
+  const harness = await startHarness();
+  try {
+    const second = `${harness.project?.projectPath ?? ''}-second`;
+    mkdirSync(second, { recursive: true });
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+
+    // A project this browser has never seen: registered through the same call the menu would make.
+    await page.evaluate(async (path) => {
+      const handle = (window as unknown as {
+        __agentdev: { rpc: { call: (method: string, params: unknown, options?: { requestId: string }) => Promise<unknown> } };
+      }).__agentdev;
+      await handle.rpc.call('project.open', { path }, { requestId: 'seed-second' });
+    }, second);
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.locator('[data-testid="project-switcher"]').click();
+    await expect(page.locator('[data-testid="project-row"]')).toHaveCount(2, { timeout: 10_000 });
+    // localStorage holds the current path and session only; no "recent projects" list exists.
+    const stored = await page.evaluate(() => Object.keys(localStorage).filter((key) => key.includes('recent')));
+    expect(stored).toEqual([]);
   } finally {
     await harness.close();
   }

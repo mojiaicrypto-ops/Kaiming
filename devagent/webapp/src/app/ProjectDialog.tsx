@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
+import { useFocusTrap } from './focus';
 import { useI18n } from '../i18n/I18nProvider';
 import type { ProjectRow, ProjectSummary } from '../state/useWorkspace';
+import { errorText } from '../lib/errors';
 
 export interface ProjectDialogProps {
   readonly current: ProjectSummary | null;
@@ -27,6 +29,9 @@ export function ProjectDialog({ current, projects, onOpen, onRebind, onOpenFile,
   const [rebindPath, setRebindPath] = useState('');
   const inputRef = useRef<HTMLInputElement | null>(null);
 
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useFocusTrap(dialogRef);
+
   useEffect(() => {
     inputRef.current?.focus();
     const onKey = (event: KeyboardEvent): void => {
@@ -36,7 +41,7 @@ export function ProjectDialog({ current, projects, onOpen, onRebind, onOpenFile,
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const reason = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
+  const reason = (cause: unknown): string => errorText(cause, t);
 
   const submit = async (target: string): Promise<void> => {
     if (target.trim() === '' || busy) return;
@@ -71,6 +76,8 @@ export function ProjectDialog({ current, projects, onOpen, onRebind, onOpenFile,
   return (
     <div className="scrim" onClick={onClose} role="presentation">
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="dlg"
         role="dialog"
         aria-modal="true"

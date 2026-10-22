@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RpcClient, newRequestId } from '../api/rpc';
 import { readStored, writeStored } from '../lib/storage';
+import type { SessionActivity } from '../api/stream';
 
 const PROJECT_KEY = 'agentdev.projectPath';
 const SESSION_KEY = 'agentdev.sessionId';
@@ -40,7 +41,7 @@ export interface SessionRow {
   readonly sessionId: string;
   readonly roleId: string;
   readonly title: string | null;
-  readonly activity: 'idle' | 'queued' | 'processing' | 'stopping';
+  readonly activity: SessionActivity;
   readonly updatedAt: string | null;
   readonly currentTaskId: string | null;
   readonly queuedInputs: number;
@@ -55,7 +56,7 @@ export interface WorkspaceApi {
   readonly sessionId: string;
   readonly loading: boolean;
   readonly openProject: (path: string) => Promise<void>;
-  readonly rebindProject: (projectId: string, path: string, authorizationRef: string) => Promise<void>;
+  readonly rebindProject: (projectId: string, path: string) => Promise<void>;
   readonly selectSession: (sessionId: string) => void;
   readonly createSession: () => Promise<string | null>;
   readonly loadMoreSessions: () => Promise<void>;
@@ -91,12 +92,28 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
 
   const loadSessions = useCallback(
     async (pid: string, cursor?: string): Promise<{ rows: readonly SessionRow[]; nextCursor: string | null }> => {
-      const read = await rpc.call<{ sessions: readonly SessionRow[]; nextCursor: string | null }>('session.list', {
+      const read = await rpc.call<{
+        sessions: readonly (Omit<SessionRow, 'updatedAt'> & { lastActivityAt: string | null })[];
+        nextCursor: string | null;
+      }>('session.list', {
         projectId: pid,
         limit: SESSION_PAGE,
         ...(cursor === undefined ? {} : { cursor }),
       });
-      return { rows: read.sessions, nextCursor: read.nextCursor };
+      return {
+        // The server names the stamp for what it is; the rail's row keeps one name for "when it
+        // last moved", so a missing mapping cannot silently blank every timestamp.
+        rows: read.sessions.map((row) => ({
+          sessionId: row.sessionId,
+          roleId: row.roleId,
+          title: row.title ?? null,
+          activity: row.activity,
+          updatedAt: row.lastActivityAt ?? null,
+          currentTaskId: row.currentTaskId,
+          queuedInputs: row.queuedInputs,
+        })),
+        nextCursor: read.nextCursor,
+      };
     },
     [rpc],
   );
@@ -166,11 +183,12 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
   );
 
   /**
-   * Rebind takes the revision the menu row carried plus an authorization reference: moving a
-   * project is a user decision, and the server refuses it while work is still in flight.
+   * Rebind takes the revision the menu row carried: moving a directory is the user's decision, and
+   * the server refuses it while work is in flight (the refusal names what must stop first). No
+   * decision reference is sent: the browser has none to cite, and no model tool offers this call.
    */
   const rebindProject = useCallback(
-    async (targetProjectId: string, path: string, authorizationRef: string): Promise<void> => {
+    async (targetProjectId: string, path: string): Promise<void> => {
       const row = projects.find((entry) => entry.projectId === targetProjectId);
       const rebound = await rpc.call<{ project: ProjectSummary }>(
         'project.rebind',
@@ -178,13 +196,13 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
           projectId: targetProjectId,
           expectedRevision: row?.revision ?? 0,
           path,
-          authorizationRef: { inputId: authorizationRef },
         },
         { requestId: newRequestId('rebind') },
       );
-      if (projectRef.current?.projectId === targetProjectId) {
-        await applyProject(rebound.project);
-      }
+      // The user rebound the project they are looking at, so the shell follows it: the stored
+      // path is the new one, and the next boot opens the moved directory instead of failing.
+      writeStored(PROJECT_KEY, rebound.project.realPath);
+      await applyProject(rebound.project);
       await loadProjects();
     },
     [rpc, projects, applyProject, loadProjects],

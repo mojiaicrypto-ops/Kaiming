@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
+import type { SessionActivity } from '../api/stream';
 
 export interface ComposerProps {
-  readonly busy: 'idle' | 'queued' | 'processing';
+  readonly busy: SessionActivity;
   readonly canStop: boolean;
   readonly disabled: boolean;
   readonly onSubmit: (text: string) => Promise<void>;
@@ -45,10 +46,12 @@ export function Composer({ busy, canStop, disabled, onSubmit, onStop, seed, onSe
   const lastSeed = useRef<string | null>(null);
   useEffect(() => {
     if (seed === null || seed === undefined || seed === lastSeed.current) return;
-    lastSeed.current = seed;
-    // A non-empty box is the user's own words; replacing them would be a silent edit.
+    // A non-empty box is the user's own words; replacing them would be a silent edit. A refused
+    // seed is not remembered, so handing the same request over again (after clearing the box)
+    // really inserts it instead of doing nothing.
     const inserted = draft.trim() === '';
     if (inserted) {
+      lastSeed.current = seed;
       setDraft(seed);
       areaRef.current?.focus();
     }
@@ -121,7 +124,7 @@ export function Composer({ busy, canStop, disabled, onSubmit, onStop, seed, onSe
   );
 }
 
-export function DockHint({ busy }: { busy: 'idle' | 'queued' | 'processing' }) {
+export function DockHint({ busy }: { busy: SessionActivity }) {
   const { t } = useI18n();
   return (
     <div className="hint">

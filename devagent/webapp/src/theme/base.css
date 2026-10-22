@@ -1446,6 +1446,45 @@ kbd {
   display: flex;
   gap: var(--s2);
 }
+/* The board's Task list: a project-wide answer to "what is running now", below the requirements. */
+.tasks-sec {
+  border-top: 1px solid var(--line);
+  padding-top: var(--s4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-height: 0;
+}
+.tasks-sec h2 {
+  margin: 0;
+  font-size: var(--fs-12);
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.task-rows {
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  overflow: auto;
+}
+.task-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  padding: 5px var(--s3);
+  text-align: left;
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+}
+.task-row:hover {
+  background: var(--sel);
+}
+.task-row .ell {
+  max-width: 420px;
+}
+
 /* The file reader: a listing of buttons, then the text of one file, scrolled inside its drawer. */
 .entry {
   display: flex;

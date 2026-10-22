@@ -3,6 +3,7 @@ import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
 import { ROLES, useConfig, useRoleConfigs, type ConfigView, type RoleId } from './config-model';
 import type { RpcClient } from '../api/rpc';
+import { errorText } from '../lib/errors';
 
 export interface ModelsPageProps {
   readonly rpc: RpcClient;
@@ -35,7 +36,7 @@ export function ModelsPage({ rpc, projectId, onSaved, onError }: ModelsPageProps
       await reload();
       onSaved(t('settings.saved'));
     } catch (error) {
-      onError(t('settings.saveFailed', { reason: error instanceof Error ? error.message : String(error) }));
+      onError(t('settings.saveFailed', { reason: errorText(error, t) }));
     } finally {
       setSaving(null);
     }

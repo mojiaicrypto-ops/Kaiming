@@ -8,6 +8,7 @@ import { tailHistory, readPiHistory, type HistoryRecord } from './history.ts';
 import { liveHistoryRead } from './live-snapshot.ts';
 import type { SessionEventHub } from './hub.ts';
 import type { Store } from '../store/store.ts';
+import { recordedConfigOf, summarizeRecordedConfig } from '../runtime/recorded-config.ts';
 
 const SNAPSHOT_MESSAGES = 100;
 
@@ -83,6 +84,10 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
             task === undefined
               ? null
               : { taskId: task.id, type: task.type, phase: task.phase, status: task.status, revision: task.revision },
+          // What this session is running with, from the claim's own record: while a run is live
+          // that is the running configuration, and after it ends it is what the last run really
+          // used — which is how a reader notices that the settings no longer match the work.
+          config: summarizeRecordedConfig(recordedConfigOf(inputs)),
           // Pending interactions are part of the boundary copy (M5): a reconnecting page sees the
           // open questions again instead of losing them.
           interactions: (session.roleId === 'chief'
@@ -120,9 +125,12 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
   });
 }
 
-function activityOf(inputs: readonly { readonly status: string }[]): string {
+function activityOf(inputs: readonly { readonly status: string; readonly stopRequestKey?: string | null }[]): string {
   if (inputs.some((input) => input.status === 'processing')) {
-    return 'processing';
+    // A stop was requested but the run has not settled: the same word session.get uses.
+    return inputs.some((input) => input.status === 'processing' && (input.stopRequestKey ?? null) !== null)
+      ? 'stopping'
+      : 'processing';
   }
   if (inputs.some((input) => input.status === 'queued')) {
     return 'queued';

@@ -3,6 +3,7 @@ import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
 import { useConfig, type ProviderView } from './config-model';
 import type { RpcClient } from '../api/rpc';
+import { errorText } from '../lib/errors';
 
 /**
  * Providers: every configured endpoint, what it offers, and whether a credential exists. The key
@@ -43,7 +44,7 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
       setAdding(false);
       await reload();
     } catch (error) {
-      setSaveError(error instanceof Error ? error.message : String(error));
+      setSaveError(errorText(error, t));
     }
   };
 
@@ -57,7 +58,7 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
       });
       setResult({ provider: provider.providerId, ok: probed.available, detail: probed.detail });
     } catch (error) {
-      setResult({ provider: provider.providerId, ok: false, detail: error instanceof Error ? error.message : String(error) });
+      setResult({ provider: provider.providerId, ok: false, detail: errorText(error, t) });
     } finally {
       setTesting(null);
     }

@@ -19,6 +19,7 @@ import type { SessionRow } from '../state/useWorkspace';
 import type { TaskMemberRow } from './ToolTask';
 import type { TaskDetail } from '../state/slot';
 import type { PendingInteraction } from '../api/stream';
+import { errorText } from '../lib/errors';
 
 function useCompact(): boolean {
   const tier = useTier();
@@ -165,7 +166,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
           );
         }
       } catch (error) {
-        session.notify(t('toast.sendFailed', { reason: error instanceof Error ? error.message : String(error) }), 'error');
+        session.notify(t('toast.sendFailed', { reason: errorText(error, t) }), 'error');
         throw error;
       }
     },
@@ -253,9 +254,21 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
                     return;
                   }
                   setEarlier((current) => ({ ...current, loading: true }));
+                  // Prepending moves everything down; without this the reader's place jumps and
+                  // the messages they were reading vanish above the fold.
+                  const view = txRef.current;
+                  const heightBefore = view?.scrollHeight ?? 0;
+                  const topBefore = view?.scrollTop ?? 0;
                   void session
                     .loadEarlier(oldest.entryId)
-                    .then((more) => setEarlier({ loading: false, hasMore: more }))
+                    .then((more) => {
+                      setEarlier({ loading: false, hasMore: more });
+                      requestAnimationFrame(() => {
+                        const element = txRef.current;
+                        if (element === null) return;
+                        element.scrollTop = topBefore + (element.scrollHeight - heightBefore);
+                      });
+                    })
                     .catch((error: unknown) => {
                       setEarlier({ loading: false, hasMore: false });
                       session.notify(error instanceof Error ? error.message : String(error), 'error');
@@ -310,7 +323,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
                 try {
                   await session.cancelQueuedInput(inputId);
                 } catch (error) {
-                  session.notify(t('queue.withdrawFailed', { reason: error instanceof Error ? error.message : String(error) }), 'error');
+                  session.notify(t('queue.withdrawFailed', { reason: errorText(error, t) }), 'error');
                 }
               }}
             />
@@ -323,7 +336,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
               onSubmit={submit}
               onStop={async () => {
                 await session.stop().catch((error: unknown) => {
-                  session.notify(t('toast.stopFailed', { reason: error instanceof Error ? error.message : String(error) }), 'error');
+                  session.notify(t('toast.stopFailed', { reason: errorText(error, t) }), 'error');
                   throw error;
                 });
               }}

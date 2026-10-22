@@ -7,9 +7,14 @@ export function ToastHost() {
   useEffect(() => subscribeToasts(setToasts), []);
   if (toasts.length === 0) return null;
   return (
-    <div className="toasts" role="status" aria-live="polite">
+    <div className="toasts" role="status" aria-live="polite" aria-atomic="true">
       {toasts.map((entry) => (
-        <div key={entry.id} className={`toast${entry.kind === 'error' ? ' err' : entry.kind === 'success' ? ' ok' : ''}`}>
+        <div
+          key={entry.id}
+          // An error interrupts; a confirmation waits its turn.
+          role={entry.kind === 'error' ? 'alert' : 'status'}
+          className={`toast${entry.kind === 'error' ? ' err' : entry.kind === 'success' ? ' ok' : ''}`}
+        >
           {entry.text}
         </div>
       ))}

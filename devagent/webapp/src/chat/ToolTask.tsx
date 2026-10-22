@@ -4,6 +4,7 @@ import { Markdown } from './Markdown';
 import { parseArgs } from './transcript-model';
 import { ToolCard } from './ToolCard';
 import type { ToolStatus } from './ToolCard';
+import type { SessionActivity } from '../api/stream';
 
 const PHASE_KEY = {
   clarify: 'task.clarify',
@@ -27,7 +28,7 @@ export function usePhaseLabel(): (phase: string) => string {
 export interface TaskMemberRow {
   readonly sessionId: string;
   readonly label: string;
-  readonly activity: 'idle' | 'queued' | 'processing';
+  readonly activity: SessionActivity;
   readonly lastInputStatus: 'completed' | 'failed' | 'stopped' | 'interrupted' | null;
   readonly waitingUser?: boolean;
   readonly note: string;
@@ -167,7 +168,7 @@ function MemberState({
   lastInputStatus,
   waitingUser,
 }: {
-  activity: 'idle' | 'queued' | 'processing';
+  activity: SessionActivity;
   lastInputStatus: 'completed' | 'failed' | 'stopped' | 'interrupted' | null;
   waitingUser: boolean;
 }) {

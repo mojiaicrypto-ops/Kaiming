@@ -30,6 +30,8 @@ export function TaskDrawer({ rpc, projectId, detail, onClose }: TaskDrawerProps)
   useEffect(() => {
     if (openId === null) return;
     let cancelled = false;
+    // The previous result's body must not linger under the new title while this one loads.
+    setBody(null);
     setLoading(true);
     setError(null);
     void rpc

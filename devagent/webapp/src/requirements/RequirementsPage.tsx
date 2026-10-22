@@ -1,7 +1,8 @@
 import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
 import { RequirementDrawer } from './RequirementDrawer';
-import { columnOf, useRequirements, type Column, type RequirementSummary } from './requirement-model';
+import { columnOf, useRequirements, useTasks, type Column, type RequirementSummary, type TaskRowSummary } from './requirement-model';
+import { usePhaseLabel } from '../chat/ToolTask';
 import type { RpcClient } from '../api/rpc';
 
 export interface RequirementsPageProps {
@@ -12,6 +13,8 @@ export interface RequirementsPageProps {
   readonly onNotice: (message: string, kind: 'info' | 'success' | 'error') => void;
   /** Fills the chat composer with a request about one requirement, then switches to the chat. */
   readonly onHandOff: (text: string) => void;
+  /** Opens the chief session that coordinates a Task. */
+  readonly onOpenTaskSession: (sessionId: string) => void;
 }
 
 const COLUMNS: ReadonlyArray<{ column: Column; key: 'req.col.proposal' | 'req.col.todo' | 'req.col.doing' | 'req.col.done'; glyph: 'idle' | 'wait' | 'run' | 'done' }> = [
@@ -20,6 +23,20 @@ const COLUMNS: ReadonlyArray<{ column: Column; key: 'req.col.proposal' | 'req.co
   { column: 'doing', key: 'req.col.doing', glyph: 'run' },
   { column: 'done', key: 'req.col.done', glyph: 'done' },
 ];
+
+/** A Task row's state: the six server statuses, folded onto the four words the board uses. */
+function taskState(task: TaskRowSummary): {
+  glyph: 'run' | 'wait' | 'paused' | 'done' | 'block';
+  key: 'task.status.active' | 'task.status.waiting' | 'task.status.paused' | 'task.status.cancelled' | 'task.status.completed';
+} {
+  if (task.status === 'completed') return { glyph: 'done', key: 'task.status.completed' };
+  if (task.status === 'cancelled') return { glyph: 'block', key: 'task.status.cancelled' };
+  if (task.status === 'paused' || task.status === 'pausing' || task.status === 'cancelling') {
+    return { glyph: 'paused', key: 'task.status.paused' };
+  }
+  if (task.status === 'waiting') return { glyph: 'wait', key: 'task.status.waiting' };
+  return { glyph: 'run', key: 'task.status.active' };
+}
 
 /** Card status word, from the record itself: the board never invents a fifth state. */
 function cardState(card: RequirementSummary): { glyph: 'idle' | 'wait' | 'run' | 'done' | 'block'; key: 'req.state.idle' | 'req.state.todo' | 'req.state.done' | 'req.state.paused' } {
@@ -35,9 +52,11 @@ function cardState(card: RequirementSummary): { glyph: 'idle' | 'wait' | 'run' |
  * could not be parsed (kept visible — a silently dropped requirement is worse than a warning),
  * and a drawer with the record's own sections.
  */
-export function RequirementsPage({ rpc, projectId, selected, onSelect, onNotice, onHandOff }: RequirementsPageProps) {
+export function RequirementsPage({ rpc, projectId, selected, onSelect, onNotice, onHandOff, onOpenTaskSession }: RequirementsPageProps) {
   const { t } = useI18n();
+  const phaseLabel = usePhaseLabel();
   const { items, invalid, loading, error, reload } = useRequirements(rpc, projectId);
+  const { tasks, tasksError, reloadTasks, loadMoreTasks, hasMoreTasks } = useTasks(rpc, projectId);
   const invalidSelection = selected !== null && selected.startsWith('invalid:') ? selected.slice('invalid:'.length) : null;
   const card = selected === null ? undefined : items.find((item) => item.id === selected);
 
@@ -99,6 +118,40 @@ export function RequirementsPage({ rpc, projectId, selected, onSelect, onNotice,
             </div>
           );
         })}
+      </div>
+      <div className="tasks-sec">
+        <div className="page-h">
+          <h2>{t('task.listTitle')}</h2>
+          <span className="f3">{tasks.length === 0 ? t('task.listEmpty') : ''}</span>
+          <span className="sp" />
+          <button type="button" className="btn ghost" onClick={() => void reloadTasks()}>
+            {t('common.retry')}
+          </button>
+        </div>
+        {tasksError !== null && <State kind="block">{tasksError}</State>}
+        <div className="task-rows">
+          {tasks.map((task) => (
+            <button
+              key={task.taskId}
+              type="button"
+              className="task-row"
+              onClick={() => onOpenTaskSession(task.chiefSessionId)}
+              data-testid="task-row"
+            >
+              <span className="f3 mono">{task.taskId}</span>
+              <span className="ell">{task.goal}</span>
+              <span className="sp" />
+              <span className="f3">{phaseLabel(task.phase)}</span>
+              <State kind={taskState(task).glyph}>{t(taskState(task).key)}</State>
+              <span className="f3">{t('task.members', { count: task.phaseMembers.length })}</span>
+            </button>
+          ))}
+        </div>
+        {hasMoreTasks && (
+          <button type="button" className="btn ghost" onClick={() => void loadMoreTasks()}>
+            {t('files.more')}
+          </button>
+        )}
       </div>
       {loading && (
         <div className="none f3" style={{ padding: '0 var(--s8)' }}>

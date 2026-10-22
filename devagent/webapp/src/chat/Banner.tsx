@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
+import { MESSAGE_KEYS } from '../i18n/catalog';
 import { State } from '../app/State';
 
 export interface BannerProps {
@@ -38,7 +39,11 @@ export function Banner({ status, blocked, onDismissBlocked, onRetry, historyProb
     items.push(
       <div key="blocked" className="bn block">
         <State kind="block">
-          {t('banner.blocked')} {blocked.code}
+          {t('banner.blocked')} ·{' '}
+          {/* A code we have no sentence for keeps its own name instead of showing a key. */}
+          {MESSAGE_KEYS.includes(`error.${blocked.code}` as never)
+            ? t(`error.${blocked.code}` as 'error.blocked_config')
+            : blocked.code}
         </State>
         <span className="f2">{blocked.detail}</span>
         <span className="sp" />

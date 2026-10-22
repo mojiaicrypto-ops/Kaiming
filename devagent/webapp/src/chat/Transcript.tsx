@@ -5,10 +5,11 @@ import { MessageItem } from './MessageItem';
 import { indexToolResults } from './transcript-model';
 import type { HistoryMessage } from '../state/slot';
 import type { TaskMemberRow } from './ToolTask';
+import type { SessionActivity } from '../api/stream';
 
 export interface TranscriptProps {
   readonly items: readonly HistoryMessage[];
-  readonly busy: 'idle' | 'queued' | 'processing';
+  readonly busy: SessionActivity;
   /** Chief transcript or a specialist one: the who-line colour and the busy wording follow it. */
   readonly variant: 'chief' | 'agent';
   readonly onFollow?: ((sessionId: string) => void) | undefined;

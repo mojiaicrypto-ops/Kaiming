@@ -11,7 +11,7 @@
  * delta accumulation) passes through state/normalize.ts exactly once at the boundary below —
  * the reducer's internals and the renderer only ever see normalized blocks.
  */
-import type { PreparedSnapshot, PendingInteraction, StreamFrame } from '../api/stream';
+import type { PreparedSnapshot, SessionActivity, PendingInteraction, StreamFrame } from '../api/stream';
 import { normalizeMessage, normalizePiMessage } from './normalize';
 
 export type ChatRole = 'user' | 'assistant' | 'system' | 'toolResult';
@@ -41,7 +41,7 @@ export interface TaskMember {
   expectedKind: string;
   currentInputId: string | null;
   /** Live session state (R2-derived): the member is working right now or not. */
-  activity?: 'idle' | 'queued' | 'processing';
+  activity?: SessionActivity;
   liveInputId?: string | null;
   queuedInputs?: number;
   /** How the member's assignment ended (its latest delegation/continuation input). */
@@ -73,7 +73,7 @@ export interface TaskDetail {
 
 export interface SessionSlot {
   items: readonly HistoryMessage[];
-  busy: 'idle' | 'queued' | 'processing';
+  busy: SessionActivity;
   currentInputId: string | null;
   pending: readonly PendingInteraction[];
   /** Live stream state that must survive snapshot merges. */

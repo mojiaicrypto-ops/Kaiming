@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
+import { useFocusTrap } from './focus';
 import { useI18n } from '../i18n/I18nProvider';
 
 export interface DrawerProps {
@@ -20,8 +21,9 @@ export function Drawer({ title, eyebrow, footer, aside, children, onClose, class
   const { t } = useI18n();
   const panelRef = useRef<HTMLElement | null>(null);
 
+  useFocusTrap(panelRef);
+
   useEffect(() => {
-    panelRef.current?.focus();
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
         event.stopPropagation();

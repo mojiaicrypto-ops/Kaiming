@@ -80,3 +80,67 @@ export function useRequirements(rpc: RpcClient, projectId: string) {
   }, [reload]);
   return { items, invalid, loading, error, reload };
 }
+
+/** One Task row for the board: the same summary `task.get` returns, without the detail payload. */
+export interface TaskRowSummary {
+  readonly taskId: string;
+  readonly type: string;
+  readonly phase: string;
+  readonly status: string;
+  readonly goal: string;
+  readonly chiefSessionId: string;
+  readonly phaseMembers: readonly string[];
+  readonly updatedAt: string;
+}
+
+/**
+ * The project's Tasks, newest first as the server returns them. The board lists what is running
+ * next to what is requested: "what is happening now" is a question about this project, not only
+ * about the conversation that happens to be open.
+ */
+export function useTasks(rpc: RpcClient, projectId: string) {
+  const [tasks, setTasks] = useState<readonly TaskRowSummary[]>([]);
+  const [tasksError, setTasksError] = useState<string | null>(null);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const page = useCallback(
+    async (after?: string): Promise<{ rows: readonly TaskRowSummary[]; next: string | null }> => {
+      const read = await rpc.call<{ tasks: readonly TaskRowSummary[]; nextCursor: string | null }>('task.list', {
+        projectId,
+        limit: 50,
+        ...(after === undefined ? {} : { cursor: after }),
+      });
+      return { rows: read.tasks, next: read.nextCursor };
+    },
+    [rpc, projectId],
+  );
+  const reloadTasks = useCallback(async (): Promise<void> => {
+    if (projectId === '') {
+      setTasks([]);
+      setCursor(null);
+      return;
+    }
+    try {
+      const first = await page();
+      setTasks(first.rows);
+      setCursor(first.next);
+      setTasksError(null);
+    } catch (cause) {
+      // A failed read must not look like "no Tasks": the section says it could not read them.
+      setTasksError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [page, projectId]);
+  useEffect(() => {
+    void reloadTasks();
+  }, [reloadTasks]);
+  const loadMoreTasks = useCallback(async (): Promise<void> => {
+    if (cursor === null) return;
+    try {
+      const next = await page(cursor);
+      setTasks((previous) => [...previous, ...next.rows.filter((row) => !previous.some((shown) => shown.taskId === row.taskId))]);
+      setCursor(next.next);
+    } catch (cause) {
+      setTasksError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [page, cursor]);
+  return { tasks, tasksError, reloadTasks, loadMoreTasks, hasMoreTasks: cursor !== null };
+}

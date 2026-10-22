@@ -16,6 +16,7 @@ import { LoginPage } from '../auth/LoginPage';
 import { ToastHost } from '../lib/ToastHost';
 import { FileDrawer } from '../files/FileDrawer';
 import { toast } from '../lib/toast';
+import { errorText } from '../lib/errors';
 
 /**
  * The application shell. One RPC client, one workspace (project + sessions), one chief session,
@@ -156,7 +157,7 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
                 .createSession()
                 .then(() => notify(t('toast.sessionCreated'), 'success'))
                 .catch((error: unknown) =>
-                  notify(t('toast.sessionCreateFailed', { reason: error instanceof Error ? error.message : String(error) }), 'error'),
+                  notify(t('toast.sessionCreateFailed', { reason: errorText(error, t) }), 'error'),
                 );
             }}
             onOpenRail={() => setRailOpen((open) => !open)}
@@ -172,6 +173,10 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
             onNotice={notify}
             onHandOff={(text) => {
               setDraft(text);
+              navigate('/');
+            }}
+            onOpenTaskSession={(sessionId) => {
+              workspace.selectSession(sessionId);
               navigate('/');
             }}
           />
@@ -190,7 +195,13 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
             onNotice={notify}
           />
         )}
-        <StatusBar project={workspace.project} runningMembers={runningMembers} connection={session.status} />
+        <StatusBar
+          project={workspace.project}
+          runningMembers={runningMembers}
+          connection={session.status}
+          activity={session.slot.busy}
+          config={session.config}
+        />
         {projectOpen && (
           <ProjectDialog
             current={workspace.project}
@@ -200,7 +211,7 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
               notify(t('project.added'), 'success');
             }}
             onRebind={async (projectId, path) => {
-              await workspace.rebindProject(projectId, path, '');
+              await workspace.rebindProject(projectId, path);
               notify(t('project.rebindDone'), 'success');
             }}
             onOpenFile={(path) => {

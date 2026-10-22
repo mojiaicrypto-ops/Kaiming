@@ -12,6 +12,7 @@ import { readReportBody } from '../runtime/report-store.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
 import type { Store } from '../store/store.ts';
 import { textOfPayload } from '../runtime/input-text.ts';
+import { recordedConfigOf, summarizeRecordedConfig } from '../runtime/recorded-config.ts';
 
 const MAX_FILE_BYTES = 1024 * 1024;
 /** A session's title is derived from its first user message; longer than this adds no information. */
@@ -317,7 +318,7 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
           boundary: input.checkpoint,
           // What this input actually ran with (R5): the recorded configuration, cut to the three
           // fields that describe a selection. The server's own directories are not public.
-          effectiveConfig: summarizeConfig(input.effectiveConfig),
+          effectiveConfig: summarizeRecordedConfig(input.effectiveConfig),
           stopReason: input.stopReason,
           error: input.errorCode === null ? null : { code: input.errorCode, message: input.errorMessage ?? '' },
         },
@@ -632,9 +633,9 @@ function requireSession(store: Store, projectId: string, sessionId: string) {
     // The same fact, named for a caller that only wants the one condition.
     stopping: live.activity === 'stopping',
     currentInputId: current?.inputId ?? null,
-    // What this session is running with right now, from the claim's own record: a change in the
-    // settings must be visible as a difference, not silently applied to work already running.
-    config: summarizeConfig(current?.effectiveConfig ?? null),
+    // What this session is running with, from the claim's own record: a change in the settings
+    // must be visible as a difference, not silently applied to work already running.
+    config: summarizeRecordedConfig(recordedConfigOf(inputs)),
     queuedInputs: queued,
     waitingReason:
       current === undefined
@@ -701,18 +702,6 @@ function titleOf(payload: string | null): string | null {
   return points.length <= TITLE_LIMIT ? line : `${points.slice(0, TITLE_LIMIT).join('')}…`;
 }
 
-/** The public part of a recorded configuration: no server paths, no credential reference. */
-function summarizeConfig(recorded: string | null): { providerId: string; modelId: string; source: string } | null {
-  if (recorded === null) return null;
-  const parsed = parseRecordedConfig(recorded);
-  if (typeof parsed !== 'object' || parsed === null) return null;
-  const record = parsed as Record<string, unknown>;
-  const providerId = record['providerId'];
-  const modelId = record['modelId'];
-  const source = record['source'];
-  if (typeof providerId !== 'string' || typeof modelId !== 'string') return null;
-  return { providerId, modelId, source: typeof source === 'string' ? source : 'unknown' };
-}
 
 function projectSummary(store: Store, project: { id: string; realPath: string; revision: number; initializationRef: unknown; updatedAt: string }) {
   const exists = existsSync(project.realPath);
@@ -744,6 +733,9 @@ function taskSummary(store: Store, task: ReturnType<Store['getTask']> & object) 
     phase: task.phase,
     status: task.status,
     revision: task.revision,
+    // Which chief session coordinates it: the board links a Task to the conversation that runs it.
+    chiefSessionId: task.chiefSessionId,
+    requirementId: task.requirementId,
     goal: task.goal,
     scope: task.scope,
     requiresTest: task.requiresTest,
@@ -815,18 +807,3 @@ function clampLimit(value: number | undefined): number {
   return Math.min(Math.floor(value), MAX_PAGE);
 }
 
-/**
- * The effective configuration a claim recorded, as stored JSON. It is already redacted before it is
- * written (no credential material), so it is returned as-is; an unreadable value is reported as absent
- * rather than thrown, because an input's record must stay readable.
- */
-function parseRecordedConfig(recorded: string | null): unknown {
-  if (recorded === null || recorded === '') {
-    return null;
-  }
-  try {
-    return JSON.parse(recorded) as unknown;
-  } catch {
-    return null;
-  }
-}

@@ -92,5 +92,31 @@
 | 类型 | `npm run typecheck`（服务端）、`npm --prefix webapp run typecheck` |
 | 文案 | `test/web-i18n-keys.test.ts`：键一致、无缺失、无空值、占位符一致 |
 | 构建 | `npm run build` 成功产出 `web-static/index.html` |
-| 浏览器 | `npx playwright test`：三屏渲染、对话、提问答复、双击防重、业务拒绝、断线返回、五档视口、主题切换 |
+| 浏览器 | `npm run test:browser`（先构建再跑）：三屏、对话、提问答复、双击防重、业务拒绝、断线返回、被拒工具仍可见、提案分段、任务条与推送、模型范围、需求交接、文件/报告阅读、更早历史、重绑定、任务列表、焦点陷阱、错误文案、五档视口、主题切换 |
 | 单测 | `npm test` 全绿 |
+
+## U9 方法消费
+
+每个公开方法必须有一个界面消费者，否则它不该存在；没有消费者的方法登记在[缺口登记](gap-register.md)，不是「以后再接」。
+
+| 方法 | 消费界面 |
+|---|---|
+| `auth.login` / `auth.logout` | 登录屏、顶栏退出 |
+| `project.open` / `project.get` / `project.list` | 项目对话框、顶栏、状态栏 |
+| `project.rebind` | 项目对话框（目录缺失行） |
+| `project.files.list` / `project.files.read` | 文件阅读器 |
+| `session.create` / `session.list` / `session.get` | 会话列、新建、当前会话 |
+| `session.messages.list` | 转录「加载更早」 |
+| `session.stream.prepare` | 会话流（连一次，只读快照） |
+| `session.input.get` | 无——登记为缺口（U8 已由 `session.get.config` 覆盖） |
+| `session.input.submit` / `session.input.stop` | composer、队列撤回、STOP |
+| `task.get` / `task.list` | 任务条、成员抽屉、任务详情、需求屏任务段 |
+| `task.control` | 任务条暂停/继续 |
+| `task.report.get` | 任务详情里的报告 |
+| `requirement.list` / `requirement.get` | 需求看板、抽屉 |
+| `interaction.respond` | 问题面板 |
+| `config.get` / `config.save` / `config.test` | 设置三页 |
+| `session.recovery.inspect` / `session.recovery.resolve` | 无——待确认（U4） |
+| `session.cleanup` | 无——待确认（U5） |
+
+新增方法时同步这张表；有任何一行是「无」且未登记缺口，按缺陷处理。
