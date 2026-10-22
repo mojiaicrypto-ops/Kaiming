@@ -47,7 +47,7 @@ plan:
 
 | 文件 | 改动 |
 |---|---|
-| `src/server/read-methods.ts` | 新增 `session.list`：`{projectId, limit?, cursor?}` → `{sessions:[{sessionId, roleId, title, activity, lastActivityAt, currentTaskId, queuedInputs}], nextCursor}`；按 `lastActivityAt` 降序（空会话排最后），cursor=`<lastActivityAt>\|<sessionId>`。**不得**调用 `hub.prepare`、**不得**读历史文件。`session.get` 增 `stopping` 与 `config:{providerId,modelId,source}\|null`；`project.get` 移除 `tasks` |
+| `src/server/read-methods.ts` | 新增 `session.list`：`{projectId, limit?, cursor?}` → `{sessions:[{sessionId, roleId, title, activity, lastActivityAt, currentTaskId, queuedInputs}], nextCursor}`；按 `lastActivityAt` 降序（空会话排最后），cursor=`<lastActivityAt>\|<sessionId>`。**不得**调用 `hub.prepare`、**不得**读历史文件。`session.get` 增 `stopping` 与 `config:{providerId,modelId,source}\|null`（只回白名单字段，不带 `agentDir`/`promptDir`）；`session.input.get` 的 `effectiveConfig` 同样只回白名单；`project.get` 移除 `tasks` |
 | `src/store/store.ts` | 新增 `firstUserInputText(sessionId)`（`session_inputs` 中 `kind='user'` 最小 `seq` 的 `payload`，取首个 text block）；`listProjects()`（按 `updatedAt` 降序） |
 | `src/runtime/requirement-store.ts` | 不改；标题截断常量放 read-methods |
 | `test/server-read.test.ts` | 新增：`session.list` 排序/分页/cursor 失效/无输入标题为 null/标题截断；`session.get` 的 `stopping`（有 stopRequested 的 processing 输入）与 `config` 取当前输入；`project.get` 不含 `tasks` |
