@@ -4,7 +4,7 @@
 plan:
   task: workbench-gaps-20261022
   date: 2026-10-22
-  status: Awaiting Plan Confirmation
+  status: Approved (2026-10-22)
   basis:
     - docs/technicalnew/gap-register.md（本计划逐条对应其编号）
     - docs/productnew/modules/project-workspace.md（P-03、P-05、AC-01/02/04/27）
@@ -183,8 +183,10 @@ plan:
 - `.agentdev/work/workbench-gaps-20261022/`：`plan.md`、`implementation.md`、`review.md`、`test.md`、`settlement.md`、`questions.md`
 - 独立 Review 两轮（新上下文、只读）；blocking 发现必须在结算前关闭
 
-## 8. 待确认（开始前需要答复）
+## 8. 已确认的范围（2026-10-22）
 
-1. 阶段 A–G 是否全做，还是先做 A–D（真实状态与交接）与 E（阅读器）？
-2. U4/U5 是否进入本轮范围（当前按「只写问题」处理）。
-3. 阶段 E 的阅读器是否需要编辑能力（当前按只读设计）。
+| 决定 | 结论 |
+|---|---|
+| 阶段 | A–G 全做；H 只写问题文档 |
+| U4 恢复核实 / U5 会话清理 | 不实现，只登记问题与建议形态 |
+| 阅读器 | 只读（查看不等于修改） |
