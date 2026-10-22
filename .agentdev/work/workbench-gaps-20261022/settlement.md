@@ -33,12 +33,13 @@ settlement:
     - 34e7630 fix(webapp): make the model scope save what it shows, and hand requirements over
     - eaacbfd feat(webapp): read project files, task reports and earlier history
     - 8183fe0 feat: rebind, task list, focus, error copy, and the review fixes
+    - 817dcd2 fix(webapp): make a block reachable, and stop sending into a closed stream
   evidence:
     - tsc -p tsconfig.json --noEmit：无输出
     - npm --prefix webapp run typecheck：无输出
-    - npm test：26 文件 299 用例
+    - npm test：26 文件 300 用例
     - npm --prefix webapp test：3 文件 25 用例
-    - npm run test:browser：27 用例
+    - npm run test:browser：27 用例，修复后连续 4 次全量全绿
     - 独立审阅两轮（新上下文、只读）：均 passed，无阻断；第一轮 9 项非阻断全部修复
   archived:
     - .agentdev/work/workbench-gaps-20261022/plan.md
@@ -51,6 +52,7 @@ settlement:
     - U4 恢复核实的交互形态（横幅+表单 / 只读提示）
     - U5 会话清理的入口（会话列行内 / 不提供）
     - 多页前插的自动化：需要一种能重置会话运行实例的测试手段，当前只能在服务端层验证分页
+    - 阻断原因目前保存在 Server 内存（进程重启后需要一次真实运行才会重新出现）：是否需要落库
     - 真实模型下的完整 J-01～J-10 仍未执行
   no_change:
     - docs/productnew/**（本轮只实现，不改产品行为）
