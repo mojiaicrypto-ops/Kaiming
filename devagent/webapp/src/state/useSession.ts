@@ -9,7 +9,12 @@ export interface SessionRef {
   readonly sessionId: string;
 }
 
-export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'offline';
+/**
+ * 'idle' is the truth before a connection exists: no session is open, so nothing is being followed.
+ * Calling that "connecting" told the user something was in progress while the workbench was only
+ * waiting for a project to be opened.
+ */
+export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline';
 
 /** The live surface a screen consumes; declared here so screens import a name, not a helper type. */
 export interface ChiefSessionApi {
@@ -51,7 +56,7 @@ export function useSession(
   onSessionsChanged?: () => void,
 ): ChiefSessionApi {
   const [slot, dispatch] = useReducer(slotReducer, undefined, emptySlot);
-  const [status, setStatus] = useState<ConnectionStatus>('connecting');
+  const [status, setStatus] = useState<ConnectionStatus>('idle');
   const [historyProblems, setHistoryProblems] = useState<readonly string[]>([]);
   const streamRef = useRef<SessionStream | null>(null);
   const [blocked, setBlocked] = useState<{ code: string; detail: string } | null>(null);

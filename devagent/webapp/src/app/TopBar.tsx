@@ -1,7 +1,6 @@
 import type { MouseEvent } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 import { navigate, type Route } from './router';
-import { State } from './State';
 import type { ConnectionStatus } from '../state/useSession';
 import type { ProjectSummary } from '../state/useWorkspace';
 
@@ -28,9 +27,18 @@ const NAV: ReadonlyArray<{ view: Route['view']; path: string; key: 'nav.chat' | 
  */
 export function TopBar({ route, project, status, pendingQuestions, onOpenProject, onOpenRail, railOpen }: TopBarProps) {
   const { t } = useI18n();
+  // 'idle' only exists before a session does, so it must not borrow the "connecting" word: nothing
+  // is in progress, the workbench is waiting for the user to open a project or a session.
   const statusKey =
-    status === 'connected' ? 'shell.connected' : status === 'connecting' ? 'shell.connecting' : status === 'reconnecting' ? 'shell.reconnecting' : 'shell.offline';
-  const statusKind = status === 'connected' ? 'done' : status === 'offline' ? 'block' : 'run';
+    status === 'idle'
+      ? 'shell.noSession'
+      : status === 'connected'
+        ? 'shell.connected'
+        : status === 'connecting'
+          ? 'shell.connecting'
+          : status === 'reconnecting'
+            ? 'shell.reconnecting'
+            : 'shell.offline';
 
   return (
     <header className="top">
@@ -73,12 +81,11 @@ export function TopBar({ route, project, status, pendingQuestions, onOpenProject
           {t('nav.chat')}
         </button>
       )}
-      {/* The connection is a state, and the shell's tests read it as one. */}
-      <span data-testid="connection" data-state={status}>
-        <State kind={statusKind}>
-          <span className="long-label">{t(statusKey)}</span>
-          <span className="short-label">{status === 'connected' ? '✓' : t(statusKey).slice(0, 1)}</span>
-        </State>
+      {/* The connection is a state, and the shell's tests read it as one. The word already carries
+          the state, so the chip adds no second glyph (the glyphless part of `.st`). */}
+      <span data-testid="connection" data-state={status} className="st">
+        <span className="long-label">{t(statusKey)}</span>
+        <span className="short-label">{status === 'connected' ? '✓' : t(statusKey).slice(0, 1)}</span>
       </span>
     </header>
   );

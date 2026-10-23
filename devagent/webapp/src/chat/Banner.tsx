@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { ConnectionStatus } from '../state/useSession';
 import { useI18n } from '../i18n/I18nProvider';
 import { MESSAGE_KEYS } from '../i18n/catalog';
 import { State } from '../app/State';
@@ -8,7 +9,7 @@ export interface BannerProps {
   readonly interrupted: readonly { readonly inputId: string; readonly errorCode: string | null }[];
   readonly onAskChief: (text: string) => void;
   readonly onDismissInterrupted: () => void;
-  readonly status: 'connecting' | 'connected' | 'reconnecting' | 'offline';
+  readonly status: ConnectionStatus;
   readonly blocked: { readonly code: string; readonly detail: string } | null;
   readonly onDismissBlocked: () => void;
   readonly onRetry: () => void;

@@ -516,6 +516,32 @@ describe('session stream', () => {
     // The server releases the subscription when the connection goes away.
     await waitForRelease(h.hub);
   }, 30_000);
+
+  it('prepares again after a reader left, so a reloading tab reconnects from a fresh boundary', async () => {
+    const h = await harness([{ kind: 'text', text: '好的，先讨论。' }]);
+    const prepared = await h.prepare('s-chief');
+    const stream = await h.readStream(prepared.streamPath);
+    await h.call('session.input.submit', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      content: [{ type: 'text', text: '先讨论' }],
+    });
+    await h.awaitRun();
+    stream.close();
+    await stream.done;
+    await waitForRelease(h.hub);
+
+    // A reload is exactly this: the old reader is gone, a new prepare and a new connection follow.
+    // The subscription is the only existing one, so the connection taking it proves it works - the
+    // event-push path itself is covered by the boundary test above.
+    const again = await h.prepare('s-chief');
+    expect(again.snapshot['activity']).toBe('idle');
+    const reopened = await h.readStream(again.streamPath);
+    expect(h.hub.size).toBe(1);
+    reopened.close();
+    await reopened.done;
+    await waitForRelease(h.hub);
+  }, 30_000);
 });
 
 describe('session.stream.prepare with a live history source', () => {

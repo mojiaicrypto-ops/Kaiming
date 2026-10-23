@@ -47,6 +47,11 @@ test('a first run with no project boots: login screen, then the empty shell', as
     // Empty shell from real (absent) state: no project painted, the status bar stays honest, the
     // three navigation labels are the TUI's.
     await expect(page.locator('[data-testid="project-switcher"]')).toContainText('No project');
+    // Nothing is connected because nothing is open: saying "connecting" here made a healthy check
+    // wait look like a broken connection.
+    await expect(page.locator('[data-testid="connection"]')).toHaveAttribute('data-state', 'idle');
+    await expect(page.locator('[data-testid="connection"]')).toHaveText(/No session yet/);
+    await expect(page.locator('.status .conn')).toHaveText(/No session yet/);
     await expect(page.locator('.top .nav a')).toHaveCount(3);
     const requirements = page.locator('.nav a[href="/requirements"]');
     await expect(requirements).toHaveText('Requirements');
