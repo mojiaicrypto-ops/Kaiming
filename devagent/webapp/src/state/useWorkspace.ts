@@ -162,7 +162,12 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
   const refresh = useCallback(async (): Promise<void> => {
     const path = readStored(PROJECT_KEY);
     if (path === null) {
+      // Nothing remembered in THIS browser is not "no projects": the registry lives on the server,
+      // so a fresh browser (another machine, a cleared profile) must still see what was added. The
+      // early return here is why the switcher read "No project registered yet" while the server
+      // held a project.
       setLoading(false);
+      await loadProjects();
       return;
     }
     try {

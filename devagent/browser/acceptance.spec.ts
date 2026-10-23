@@ -924,6 +924,23 @@ test('the status bar names the model the work actually used', async ({ page }) =
   }
 });
 
+test('a browser that has never been here still sees the registered projects', async ({ page }) => {
+  // The registry lives on the server. A fresh profile (another machine, a cleared browser) has no
+  // stored path, which used to short-circuit the load and show "No project registered yet".
+  const harness = await startHarness();
+  try {
+    await page.goto(harness.url);
+    // Nothing is remembered in this context: that is the fresh-browser case.
+    expect(await page.evaluate(() => localStorage.getItem('agentdev.projectPath'))).toBeNull();
+    await loginThroughUi(page, harness.accessPassword);
+    await page.locator('[data-testid="project-switcher"]').click();
+    await expect(page.locator('[data-testid="project-row"]')).toHaveCount(1, { timeout: 10_000 });
+    await expect(page.locator('[data-testid="project-row"]')).toContainText(/\d+ session/);
+  } finally {
+    await harness.close();
+  }
+});
+
 test('the project menu lists what the server registered, not what this browser remembers', async ({ page }) => {
   const harness = await startHarness();
   try {
