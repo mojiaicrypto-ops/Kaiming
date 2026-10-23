@@ -1,2 +1,4 @@
 # The shell build is a test prerequisite (`npm run build`), not a committed artefact.
 web-static/
+.agentdev-data/
+.dev/

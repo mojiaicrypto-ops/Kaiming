@@ -8,3 +8,6 @@ devagent/browser/artifacts/
 devagent/test-results/
 devagent/playwright-report/
 devagent/config/model.json
+
+# Old workbench data archived before a clean restart.
+.backup-agentdev-data-*/
