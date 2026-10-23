@@ -73,6 +73,28 @@ test('a first run with no project boots: login screen, then the empty shell', as
   }
 });
 
+test('a stale stored session id does not leave the empty shell in "reconnecting"', async ({ page }) => {
+  const harness: Harness = await startHarness({ seedProject: false });
+  try {
+    // What a wiped database or a cleaned-up session leaves behind: the browser still remembers an
+    // id the server no longer has. It must be dropped, not fed to session.stream.prepare forever.
+    await page.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => {
+      localStorage.setItem('agentdev.projectPath', '/tmp/agentdev-missing-project');
+      localStorage.setItem('agentdev.sessionId', 's-gone');
+    });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await loginThroughUi(page, harness.accessPassword);
+    await expect(page.locator('[data-testid="connection"]')).toHaveAttribute('data-state', 'idle', { timeout: 15_000 });
+    await expect(page.locator('[data-testid="connection"]')).toHaveText(/No session yet/);
+    await expect(page.locator('[data-testid="connection-banner"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="no-session-banner"]')).toBeVisible();
+    expect(await page.evaluate(() => localStorage.getItem('agentdev.sessionId'))).toBeNull();
+  } finally {
+    await harness.close();
+  }
+});
+
 test('a seeded project renders the shell from real server data', async ({ page }, testInfo) => {
   const harness: Harness = await startHarness();
   try {

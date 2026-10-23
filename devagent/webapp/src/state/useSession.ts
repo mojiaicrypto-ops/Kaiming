@@ -59,6 +59,8 @@ export function useSession(
   const [status, setStatus] = useState<ConnectionStatus>('idle');
   const [historyProblems, setHistoryProblems] = useState<readonly string[]>([]);
   const streamRef = useRef<SessionStream | null>(null);
+  /** Which session the stream callbacks belong to; bumped whenever the shell opens or closes one. */
+  const generation = useRef(0);
   const [blocked, setBlocked] = useState<{ code: string; detail: string } | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   /** When the last pushed Task change arrived: the fallback poll skips a tick right after it. */
@@ -126,7 +128,16 @@ export function useSession(
   }, [rpc, projectId, sessionId]);
 
   useEffect(() => {
-    if (session === null || !enabled) return;
+    if (session === null || !enabled) {
+      // Nothing is open: that is the truth, not a connection that dropped. A failure belongs to the
+      // session it happened to, so leaving one clears the word instead of carrying it into the void.
+      setStatus('idle');
+      // A prepare that was in flight when the last session went away must not report its 404 as
+      // this (empty) shell's connection state.
+      generation.current += 1;
+      return;
+    }
+    const generationHere = (generation.current += 1);
     dispatch({ type: 'reset' });
     setBlocked(null);
     setHistoryProblems([]);
@@ -185,14 +196,20 @@ export function useSession(
         })
         .catch(() => undefined);
     };
+    // Every state write from here on belongs to this session: a late answer from the previous one
+    // (a prepare that 404s after the session was dropped) must not repaint the chip.
+    const alive = (): boolean => generation.current === generationHere;
     const stream = new SessionStream(rpc, session.projectId, session.sessionId, {
       onFrame,
       onSnapshot,
-      onError: () => setStatus('reconnecting'),
+      onError: () => {
+        if (alive()) setStatus('reconnecting');
+      },
     });
     streamRef.current = stream;
     setStatus('connecting');
     void stream.start().catch((error: unknown) => {
+      if (!alive()) return;
       if (error instanceof RpcError && error.code === 'UNAUTHORIZED') onUnauthorized();
       else setStatus('reconnecting');
     });

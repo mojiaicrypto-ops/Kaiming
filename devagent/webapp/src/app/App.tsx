@@ -145,7 +145,6 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
         />
         {route.view === 'chat' && (
           <ChatPage
-            key={workspace.sessionId}
             draft={draft}
             onDraftConsumed={(inserted) => {
               setDraft(null);

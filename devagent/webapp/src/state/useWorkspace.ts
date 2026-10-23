@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RpcClient, newRequestId } from '../api/rpc';
-import { readStored, writeStored } from '../lib/storage';
+import { readStored, removeStored, writeStored } from '../lib/storage';
 import type { SessionActivity } from '../api/stream';
 
 const PROJECT_KEY = 'agentdev.projectPath';
@@ -123,6 +123,20 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
 
   projectRef.current = project;
 
+  /**
+   * The one rule for "which session is shown": the remembered one if the server still has it,
+   * otherwise the newest, otherwise none. A stored id that no longer exists (a wiped database, a
+   * cleaned-up session) must be dropped - keeping it made the shell open a session the server does
+   * not have and sit in "reconnecting" forever.
+   */
+  const chooseSession = useCallback((rows: readonly SessionRow[]): void => {
+    const known = readStored(SESSION_KEY);
+    const next = rows.find((row) => row.sessionId === known)?.sessionId ?? rows[0]?.sessionId ?? '';
+    setSessionId(next);
+    if (next === '') removeStored(SESSION_KEY);
+    else writeStored(SESSION_KEY, next);
+  }, []);
+
   // A project row is a plain fact, so the callback that stores it must not change when a row does:
   // otherwise every open re-creates the shell's session stream.
   const applyProject = useCallback(
@@ -140,14 +154,9 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
         setSessionCursor(null);
       }
       setSessions(rows);
-      const known = readStored(SESSION_KEY);
-      const next = rows.find((row) => row.sessionId === known)?.sessionId ?? rows[0]?.sessionId ?? '';
-      if (next !== '') {
-        setSessionId(next);
-        writeStored(SESSION_KEY, next);
-      }
+      chooseSession(rows);
     },
-    [loadSessions],
+    [loadSessions, chooseSession],
   );
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -161,8 +170,12 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
       writeStored(PROJECT_KEY, opened.project.realPath);
       await applyProject(opened.project);
     } catch {
-      // An unreadable directory is not fatal: the shell still opens with the empty state.
+      // An unreadable directory is not fatal: the shell still opens with the empty state. The path
+      // stays (so the user can rebind it), but a remembered session cannot belong to a project that
+      // did not open - it would outlive its own project and point the shell at nothing.
       setProject(null);
+      setSessionId('');
+      removeStored(SESSION_KEY);
     } finally {
       setLoading(false);
       void loadProjects();
@@ -251,10 +264,12 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
       const page = await loadSessions(current.projectId);
       setSessions(page.rows);
       setSessionCursor(page.nextCursor);
+      // A rail that lost the open session (a cleanup, another tab) must move the shell with it.
+      chooseSession(page.rows);
     } catch {
       // Leave the rows as they are: a stale rail is better than a rail that empties itself.
     }
-  }, [loadSessions]);
+  }, [loadSessions, chooseSession]);
 
   const loadMoreSessions = useCallback(async (): Promise<void> => {
     const current = projectRef.current;
