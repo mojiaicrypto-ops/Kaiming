@@ -121,6 +121,24 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
   }, [slot.items, slot.busy]);
 
   const taskDetail: TaskDetail | null = slot.taskDetail;
+
+  // A member is not in the rail any more, so its row in the Task is where its name comes from: the
+  // role and the label the chief gave the assignment, not an id.
+  const memberOf = useCallback(
+    (sessionId: string): TaskDetail['members'][number] | undefined =>
+      taskDetail?.members.find((entry) => entry.sessionId === sessionId),
+    [taskDetail],
+  );
+  const memberLabel = useCallback(
+    (sessionId: string): string => {
+      const member = memberOf(sessionId);
+      if (member === undefined) return sessionId;
+      return member.label === '' || member.label === member.roleId
+        ? t(`chat.role.${member.roleId}` as 'chat.role.member')
+        : `${t(`chat.role.${member.roleId}` as 'chat.role.member')} · ${member.label}`;
+    },
+    [memberOf, t],
+  );
   const members: readonly TaskMemberRow[] = useMemo(() => {
     const detail = taskDetail;
     if (detail === null) return [];
@@ -273,6 +291,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
           onToggleMembers={() => setMembersOpen((open) => !open)}
           onOpenTask={() => setTaskOpen(true)}
           onFollow={(sessionId) => setFollow(sessionId)}
+          followedSessionId={follow}
           onPause={() => {
             if (taskDetail !== null) {
               void session.rpc
@@ -414,7 +433,9 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
           rpc={session.rpc}
           projectId={projectId}
           sessionId={follow}
-          label={sessions.find((row) => row.sessionId === follow)?.title || follow}
+          label={memberLabel(follow)}
+          phaseLabel={memberOf(follow)?.phase}
+          expectedKind={memberOf(follow)?.expectedKind}
           onClose={() => setFollow(null)}
         />
       )}

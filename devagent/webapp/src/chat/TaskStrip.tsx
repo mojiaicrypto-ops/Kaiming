@@ -27,19 +27,34 @@ export interface TaskStripProps {
   readonly onResume: () => void;
   /** Opens the Task detail: goal, scope and the reports it produced. */
   readonly onOpenTask: () => void;
+  /** The member whose transcript is open on the right, if any: its row stays highlighted. */
+  readonly followedSessionId: string | null;
+}
+
+/** How a member's assignment really ended; idle alone cannot tell "finished" from "never started". */
+function memberOutcomeKey(member: TaskDetail['members'][number]): string {
+  if (member.activity === 'processing') return 'tool.running';
+  if (member.activity === 'queued') return 'queue.queued';
+  if (member.lastInputStatus === 'completed') return 'tool.done';
+  if (member.lastInputStatus === 'failed') return 'tool.failed';
+  if (member.lastInputStatus === 'stopped') return 'tool.failed';
+  if (member.lastInputStatus === 'interrupted') return 'shell.reconnecting';
+  return 'common.none';
 }
 
 /**
- * The task strip: which Task this session coordinates, how far the phase chain has got, who is
- * working and the one control that matters (pause / resume). It sits above the transcript and
- * disappears entirely when there is no Task — an empty strip is noise.
+ * The task strip: the Task this session coordinates, how far its real phase chain has got, and who
+ * is working on it. With the panel open it is the whole picture of the run — the goal, one row per
+ * specialist Session (role, step, live state, result), and the reports those sessions delivered —
+ * so the user can see progress and open any member's transcript without leaving the conversation.
+ * It disappears entirely when there is no Task: an empty strip is noise.
  */
-export function TaskStrip({ detail, pendingQuestions, membersOpen, onToggleMembers, onFollow, onPause, onResume, onOpenTask }: TaskStripProps) {
+export function TaskStrip({ detail, pendingQuestions, membersOpen, onToggleMembers, onFollow, onPause, onResume, onOpenTask, followedSessionId }: TaskStripProps) {
   const { t } = useI18n();
   const phaseLabel = usePhaseLabel();
   if (detail === null) return null;
 
-  const { task, members } = detail;
+  const { task, members, results } = detail;
   const phases = chainOf([...members.map((member) => member.phase), task.phase]);
   const currentIndex = task.status === 'completed' ? phases.length : phases.indexOf(task.phase);
   const running = members.filter((member) => member.activity === 'processing').length;
@@ -77,7 +92,7 @@ export function TaskStrip({ detail, pendingQuestions, membersOpen, onToggleMembe
           ))}
         </span>
         {members.length > 0 && (
-          <button type="button" className="chip-btn" onClick={onToggleMembers} aria-expanded={membersOpen}>
+          <button type="button" className="chip-btn" onClick={onToggleMembers} aria-expanded={membersOpen} data-testid="task-members-toggle">
             {t('task.members', { count: members.length })} {membersOpen ? '▴' : '▾'}
           </button>
         )}
@@ -93,27 +108,45 @@ export function TaskStrip({ detail, pendingQuestions, membersOpen, onToggleMembe
           </button>
         ) : null}
       </div>
-      {membersOpen && members.length > 0 && (
-        <div className="mlist strip-m">
-          {members.map((member) => (
-            <button key={member.sessionId} type="button" className="mrow" onClick={() => onFollow(member.sessionId)}>
-              <MemberGlyph member={member} />
-              <span className="ml">{member.label}</span>
-              <span className="mn ell">{phaseLabel(member.phase)}</span>
-              <span className="mo">{t('chat.member.follow')}</span>
-            </button>
-          ))}
+      {membersOpen && (
+        <div className="strip-panel" data-testid="task-panel">
+          <div className="strip-goal">{task.goal}</div>
+          {members.length > 0 && (
+            <div className="mlist">
+              {members.map((member) => {
+                const state = member.activity === 'processing' ? 'run' : member.activity === 'queued' ? 'wait' : 'idle';
+                const followed = member.sessionId === followedSessionId;
+                return (
+                  <div key={member.sessionId} className={`mrow${followed ? ' on' : ''}`} data-testid="task-member-row" data-state={state}>
+                    <span className="mr">{t(`chat.role.${member.roleId}` as 'chat.role.member')}</span>
+                    <span className="ml ell" title={member.label}>{member.label}</span>
+                    <span className="mn">{phaseLabel(member.phase)}</span>
+                    <span className="ms ell">{member.expectedKind}</span>
+                    <State kind={state === 'run' ? 'run' : state === 'wait' ? 'wait' : member.lastInputStatus === 'failed' ? 'block' : member.lastInputStatus === 'completed' ? 'done' : 'idle'}>
+                      {t(memberOutcomeKey(member) as 'tool.done')}
+                    </State>
+                    <button type="button" className="mo" onClick={() => onFollow(member.sessionId)} data-testid="task-member-open">
+                      {followed ? t('chat.member.opened') : t('chat.member.open')}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {results.length > 0 && (
+            <div className="strip-results">
+              {results.map((result) => (
+                <button key={result.resultId} type="button" className="sres" onClick={onOpenTask} data-testid="task-strip-result">
+                  <State kind={result.verdict === 'passed' ? 'done' : result.verdict === 'failed' ? 'block' : 'idle'}>
+                    {result.kind}
+                  </State>
+                  <span className="ell">{result.summary ?? result.label ?? result.resultId}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
   );
-}
-
-function MemberGlyph({ member }: { member: TaskDetail["members"][number] }) {
-  const { t } = useI18n();
-  if (member.activity === 'processing') return <State kind="run">{t('tool.running')}</State>;
-  if (member.activity === 'queued') return <State kind="wait">{t('queue.queued')}</State>;
-  if (member.lastInputStatus === 'completed') return <State kind="done">{t('tool.done')}</State>;
-  if (member.lastInputStatus === 'failed') return <State kind="block">{t('tool.failed')}</State>;
-  return <State kind="idle">{t('common.none')}</State>;
 }

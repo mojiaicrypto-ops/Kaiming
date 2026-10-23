@@ -579,6 +579,78 @@ test('a Task member is not a conversation in the rail', async ({ page }) => {
   }
 });
 
+test('the task panel lists every specialist Session with its state, and opens its transcript', async ({ page }) => {
+  // What the user asked for: in the chat, see the Task and, under it, what each child Session is
+  // doing and how it ended, with a way into that session's own transcript.
+  const harness = await startHarness({
+    model: [
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'task',
+            arguments: JSON.stringify({
+              op: 'create',
+              type: 'write',
+              requiresTest: false,
+              goal: '把产品文档按现行代码事实整理',
+              scope: '.dev/product',
+              planMarkdown: '# 文档整理\n',
+            }),
+          },
+        ],
+      },
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'task',
+            arguments: JSON.stringify({
+              op: 'dispatch',
+              waitTimeoutMs: 8_000,
+              sessions: [
+                { roleId: 'designer', instructions: '整理产品文档', writeScope: ['.dev/product/**'] },
+                { roleId: 'investigator', instructions: '调查现状' },
+              ],
+            }),
+          },
+        ],
+      },
+      { kind: 'text', text: '两位成员已完成。' },
+    ],
+  });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    await page.locator('[data-testid="composer"]').fill('整理产品文档');
+    await page.locator('[data-testid="composer"]').press('Enter');
+
+    // The strip shows the Task and how many Sessions it holds before anything is opened.
+    await expect(page.locator('[data-testid="task-members-toggle"]')).toContainText(/Members 2|成员 2/, {
+      timeout: 25_000,
+    });
+    await page.locator('[data-testid="task-members-toggle"]').click();
+    const panel = page.locator('[data-testid="task-panel"]');
+    await expect(panel).toContainText('把产品文档按现行代码事实整理');
+    const rows = page.locator('[data-testid="task-member-row"]');
+    await expect(rows).toHaveCount(2);
+    // Each row names the role and what that Session is doing; the outcome is the real input state.
+    await expect(panel).toContainText(/Designer|设计/);
+    await expect(panel).toContainText(/Investigator|调查/);
+    // The outcome is the member's real input state: a finished assignment reads done, not "—".
+    await expect(rows.first()).toContainText(/done|已完成/, { timeout: 20_000 });
+
+    // Opening a member reads its own transcript, not the chief's retelling of it.
+    await page.locator('[data-testid="task-member-open"]').first().click();
+    await expect(page.locator('.drawer')).toContainText(/整理产品文档|调查现状/);
+    await expect(page.locator('.drawer')).toContainText(/Read-only follow|只读跟随/);
+    await page.screenshot({ path: test.info().outputPath('task-panel.png') });
+  } finally {
+    await harness.close();
+  }
+});
+
 test('a specialist report opens from the task detail, with the body it really wrote', async ({ page }) => {
   // Chief creates a read Task, dispatches an investigator, the member delivers a report, and the
   // user reads that report without a model retelling it. The body text is the stub's own words.

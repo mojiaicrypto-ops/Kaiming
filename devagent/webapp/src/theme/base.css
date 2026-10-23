@@ -1168,6 +1168,70 @@ kbd {
   border-top: 1px dashed var(--line);
   padding-top: var(--s2);
 }
+/* The open execution panel: the Task's goal, one row per specialist Session, their reports. */
+.strip-panel {
+  max-width: 90%;
+  margin: var(--s2) auto 0;
+  border-top: 1px dashed var(--line);
+  padding-top: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.strip-goal {
+  color: var(--fg-2);
+  font-size: var(--fs-13);
+  line-height: 1.6;
+}
+.mrow {
+  grid-template-columns: 5.5em minmax(0, 1.4fr) 4.5em 6em 8.5em auto;
+}
+.mrow.on {
+  background: var(--sel);
+}
+.mrow .mr {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.mrow .ms {
+  color: var(--fg-3);
+  font-size: var(--fs-12);
+  white-space: nowrap;
+}
+.mrow .mo {
+  border: 1px solid var(--line-strong);
+  padding: 0 6px;
+  background: none;
+  color: var(--fg-3);
+  font: inherit;
+  font-size: var(--fs-12);
+  cursor: pointer;
+}
+.mrow .mo:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.strip-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sres {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  border: none;
+  background: none;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--fs-13);
+  text-align: left;
+  padding: 2px 0;
+  cursor: pointer;
+}
+.sres:hover {
+  color: var(--accent);
+}
 
 /* ---------- drawers ---------- */
 .drawer-scrim {
@@ -1757,9 +1821,12 @@ kbd {
     padding: var(--s2) var(--s4);
   }
   .mrow {
-    grid-template-columns: 6.5em minmax(0, 1fr) auto;
+    grid-template-columns: 5em minmax(0, 1fr) 7em auto;
   }
-  .mrow .mn {
+  /* The step and the expected result are the first thing a narrow screen can drop: the role, the
+     assignment, the live state and the way in are what the panel is for. */
+  .mrow .mn,
+  .mrow .ms {
     display: none;
   }
   .drawer-tx {

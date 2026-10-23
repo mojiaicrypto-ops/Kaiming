@@ -13,6 +13,9 @@ export interface MemberDrawerProps {
   readonly projectId: string;
   readonly sessionId: string;
   readonly label: string;
+  /** The step this member works in and the result kind it owes: what the user is looking at. */
+  readonly phaseLabel?: string;
+  readonly expectedKind?: string;
   readonly onClose: () => void;
 }
 
@@ -21,7 +24,7 @@ export interface MemberDrawerProps {
  * closing this one) never disturbs the chief transcript (R12). The contract is unchanged — a page
  * only subscribes to a member when the user explicitly asks to look.
  */
-export function MemberDrawer({ rpc, projectId, sessionId, label, onClose }: MemberDrawerProps) {
+export function MemberDrawer({ rpc, projectId, sessionId, label, phaseLabel, expectedKind, onClose }: MemberDrawerProps) {
   const { t } = useI18n();
   const [slot, dispatch] = useReducer(slotReducer, undefined, emptySlot);
   const [status, setStatus] = useState<'connecting' | 'connected' | 'reconnecting'>('connecting');
@@ -64,7 +67,11 @@ export function MemberDrawer({ rpc, projectId, sessionId, label, onClose }: Memb
   return (
     <Drawer
       className="md-drawer"
-      eyebrow={`${sessionId} · ${t('chat.role.member')}`}
+      eyebrow={
+        phaseLabel === undefined && expectedKind === undefined
+          ? `${sessionId} · ${t('chat.role.member')}`
+          : `${phaseLabel ?? ''}${phaseLabel === undefined || expectedKind === undefined ? '' : ' · '}${expectedKind ?? ''}`
+      }
       title={label}
       aside={busy}
       onClose={onClose}
