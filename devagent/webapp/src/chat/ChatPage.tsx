@@ -76,6 +76,24 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
   const [follow, setFollow] = useState<string | null>(null);
   const [questionsCollapsed, setQuestionsCollapsed] = useState(false);
   const [answers, setAnswers] = useState<Record<string, AnswerState>>({});
+  // When each answer really landed, so "answer received" can be shown once and then go away.
+  const [answeredAt, setAnsweredAt] = useState<Record<string, number>>({});
+  // The echo is proof, not a dialog: a short beat to read it, then the composer has the room back.
+  const ECHO_MS = 4_000;
+  const [, setEchoTick] = useState(0);
+  useEffect(() => {
+    const waiting = Object.values(answers).some((state) => state.kind === 'done');
+    if (!waiting) return;
+    const timer = window.setInterval(() => setEchoTick((tick) => tick + 1), 1_000);
+    return () => window.clearInterval(timer);
+  }, [answers]);
+  const echoExpired = useCallback(
+    (interactionId: string): boolean => {
+      const at = answeredAt[interactionId];
+      return at !== undefined && Date.now() - at > ECHO_MS;
+    },
+    [answeredAt],
+  );
 
   useEffect(() => {
     const element = txRef.current;
@@ -116,16 +134,18 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
     }));
   }, [taskDetail]);
 
-  // The local echo keeps an answered card on screen until the server's authoritative list drops
-  // it: without this the panel (and its "answer received" line) vanishes the moment it is answered.
-  // `remembered` also keeps a card the server already removed: the answer's echo is the proof the
-  // reply was recorded, and it must survive the refresh that clears the question.
+  // The local echo keeps an answered card on screen just long enough to prove the answer was
+  // recorded (a few seconds), then closes it: a box that stays after the question is over blocks
+  // the transcript and asks the user to dismiss a decision they already made.
   const remembered = useRef(new Map<string, PendingInteraction>());
   for (const entry of slot.pending) remembered.current.set(entry.interactionId, entry);
   const visibleQuestions = [
     ...slot.pending.filter((entry) => entry.resolved !== true),
     ...[...remembered.current.values()].filter(
-      (entry) => answers[entry.interactionId]?.kind === 'done' && !slot.pending.some((live) => live.interactionId === entry.interactionId),
+      (entry) =>
+        answers[entry.interactionId]?.kind === 'done' &&
+        !slot.pending.some((live) => live.interactionId === entry.interactionId) &&
+        !echoExpired(entry.interactionId),
     ),
   ];
   const openQuestions = visibleQuestions.filter((entry) => answers[entry.interactionId]?.kind !== 'done');
@@ -138,6 +158,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
       try {
         await session.respond(interaction, response);
         setAnswers((current) => ({ ...current, [interaction.interactionId]: { kind: 'done', echo: echoOf(response) } }));
+        setAnsweredAt((current) => ({ ...current, [interaction.interactionId]: Date.now() }));
       } catch (error) {
         const code = error instanceof RpcError ? error.code : '';
         if (code === 'STALE_INTERACTION' || code === 'INTERACTION_STALE' || code === 'REVISION_CONFLICT') {

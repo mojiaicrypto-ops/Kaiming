@@ -59,6 +59,8 @@ export interface TaskSummaryView {
   goal: string;
   scope: string;
   nextStep: string | null;
+  /** The chief's declaration: a document Task legitimately has no test step. */
+  requiresTest?: boolean;
 }
 
 export interface TaskDetail {

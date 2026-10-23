@@ -135,7 +135,7 @@ const en = {
   'ask.pending': 'Waiting for you',
   'ask.answered': 'Answered',
   'ask.answerReceived': 'Answer received: {echo}',
-  'ask.answerHanded': 'Handed to {from}; the result is reported separately',
+  'ask.answerHanded': 'Handed to {from}; this box closes in a moment',
   'ask.fromChief': 'Chief',
   'ask.later': 'Later',
   'ask.laterTitle': 'Answer later (Esc)',
@@ -181,6 +181,7 @@ const en = {
   'task.ended': 'Task ended',
   'task.entered': 'Entered {phase}',
   'task.preparing': 'Preparing to dispatch…',
+  'task.dispatched': 'Dispatched',
   'task.resultCount': '{count} result(s)',
 
   // ---------- tools ----------
@@ -505,7 +506,7 @@ export const zhCN: Record<MessageKey, string> = {
   'ask.pending': '等你回答',
   'ask.answered': '已答复',
   'ask.answerReceived': '答复已收到：{echo}',
-  'ask.answerHanded': '已交给 {from}，执行结果会单独报告',
+  'ask.answerHanded': '已交给 {from}，此框稍后关闭',
   'ask.fromChief': '主管',
   'ask.later': '稍后',
   'ask.laterTitle': '稍后回答 (Esc)',
@@ -551,6 +552,7 @@ export const zhCN: Record<MessageKey, string> = {
   'task.ended': '任务已结束',
   'task.entered': '进入 {phase}',
   'task.preparing': '准备派发…',
+  'task.dispatched': '已派发',
   'task.resultCount': '{count} 个结果',
 
   // ---------- tools ----------

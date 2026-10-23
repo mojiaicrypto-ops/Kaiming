@@ -51,6 +51,10 @@ The requirement spec should be able to guide delivery: point out the trigger/inp
 
 Documents may be organized autonomously and do not have to fill every section mechanically. Write new goals and unconfirmed choices as proposals awaiting decision, not as formal commitments. Splitting must not omit the original intention, shared constraints, exceptions or confirmed acceptance.
 
+## The design deliverable is one whole
+
+Formal design always delivers the affected authoritative product documents, the implementation requirements derived from them, the technical grounds this implementation must resolve, and the source/coverage statement; a deliverable that leaves any of these to the report or to the chat is incomplete. Requirements still awaiting a decision stay proposals, and every proposal and implementation requirement is saved with requirement(op=save) - never only written into a report.
+
 ## Strict module and requirement splitting rules
 
 1. Per K-03, choose a single authoritative home before writing, and prefer maintaining an existing cohesive module. Define the same requirement rule only once; when several documents use it, reference the file and the rule heading, and do not define it again in different words. Acceptance references and checks that rule instead of creating a second definition of the behavior.

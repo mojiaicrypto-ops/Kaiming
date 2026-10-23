@@ -153,8 +153,10 @@ test('a question is answered in the panel and the model continues', async ({ pag
     // The panel is docked above the composer, not floating over the transcript.
     await panel.getByRole('button', { name: /加入/ }).first().click();
 
-    // The answered card stays (its echo is the proof the reply was recorded), in the user's language.
+    // The answered card shows its echo (the proof the reply was recorded) in the user's language,
+    // and then closes itself: a decision already made must not keep a box over the transcript.
     await expect(panel).toContainText('Answer received', { timeout: 15_000 });
+    await expect(panel).toHaveCount(0, { timeout: 15_000 });
     await expect(page.locator('[data-testid="transcript"] .m.chief .md').last()).toContainText('已按你的选择继续', {
       timeout: 20_000,
     });
@@ -484,6 +486,94 @@ test('a requirement hands off to the chat without sending anything', async ({ pa
     await page.waitForTimeout(800);
     await expect(page.locator('[data-testid="transcript"] article.m')).toHaveCount(0);
     await expect(page.locator('[data-testid="composer"]')).toHaveValue(/req-reset/);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a document Task draws the phases it really ran, not a code chain nobody executed', async ({ page }) => {
+  // A write Task that declares no independent test, moved to its design step: the strip must read
+  // "plan → design". The old chain was a fixed list (plan/develop/review/test/settle), so it showed
+  // steps that had not happened and a test step the Task never asked for.
+  const harness = await startHarness({
+    model: [
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'task',
+            arguments: JSON.stringify({
+              op: 'create',
+              type: 'write',
+              requiresTest: false,
+              goal: '把产品文档按现行代码整理',
+              scope: '.dev/product',
+              planMarkdown: '# 文档整理\n',
+            }),
+          },
+        ],
+      },
+      { kind: 'tool_calls', calls: [{ name: 'task', arguments: JSON.stringify({ op: 'update', phase: 'design', summary: '进入设计' }) }] },
+      { kind: 'text', text: '开始整理。' },
+    ],
+  });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    await page.locator('[data-testid="composer"]').fill('整理产品文档');
+    await page.locator('[data-testid="composer"]').press('Enter');
+
+    const strip = page.locator('[data-testid="task-strip"]');
+    await expect(strip).toBeVisible({ timeout: 25_000 });
+    // The chain is what the Task did: the design step it moved to, never the code chain's steps
+    // (develop/review/test/settle), which this document Task never runs.
+    await expect(strip.locator('.phases')).toContainText(/Design|设计/, { timeout: 20_000 });
+    // A phase the Task did not run is not progress: none of the code chain's steps may appear.
+    await expect(strip.locator('.phases')).not.toContainText(/Develop|开发/);
+    await expect(strip.locator('.phases')).not.toContainText(/Review|审核/);
+    await expect(strip.locator('.phases')).not.toContainText(/Test|测试/);
+    await expect(strip.locator('.phases')).not.toContainText(/Settle|结算/);
+    await page.screenshot({ path: test.info().outputPath('document-task.png') });
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a Task member is not a conversation in the rail', async ({ page }) => {
+  // The designer works inside the Task; it belongs to the strip and the members list. Listing it
+  // as another chat (titled by its delegation body) made the rail unreadable in the real project.
+  const harness = await startHarness({
+    model: [
+      { kind: 'tool_calls', calls: [{ name: 'task', arguments: JSON.stringify({ op: 'create', type: 'write', requiresTest: false, goal: 'g', scope: 's', planMarkdown: '# p\n' }) }] },
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'task',
+            arguments: JSON.stringify({
+              op: 'dispatch',
+              waitTimeoutMs: 8_000,
+              sessions: [{ roleId: 'designer', instructions: '整理产品文档', writeScope: ['.dev/product/**'] }],
+            }),
+          },
+        ],
+      },
+      { kind: 'text', text: '已安排设计。' },
+    ],
+  });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    await page.locator('[data-testid="composer"]').fill('整理产品文档');
+    await page.locator('[data-testid="composer"]').press('Enter');
+    const strip = page.locator('[data-testid="task-strip"]');
+    await expect(strip).toBeVisible({ timeout: 25_000 });
+    await expect(page.locator('[data-testid="session-row"]')).toHaveCount(1);
+    // The member is reachable where it belongs: the Task's own members list.
+    await expect(strip).toContainText(/成员 1|Members 1/, { timeout: 15_000 });
+    await page.screenshot({ path: test.info().outputPath('rail-members.png') });
   } finally {
     await harness.close();
   }

@@ -138,7 +138,9 @@ export function ToolTask({ callId, op, args, status, resultText, elapsedMs, task
         {status === 'running' ? (
           <State kind="run">{t('task.waitingStep', { elapsed: `${((elapsedMs ?? 0) / 1000).toFixed(1)}s` })}</State>
         ) : (
-          <State kind="wait">{t('task.preparing')}</State>
+          // "Preparing to dispatch" described a moment that had already ended: the call is over,
+          // and what it produced is the sentence beside the head (including a refusal).
+          <State kind="wait">{t('task.dispatched')}</State>
         )}
       </div>
       {status === 'running' && members !== undefined && members.length > 0 && (

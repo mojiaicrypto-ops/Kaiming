@@ -621,7 +621,7 @@ describe('read-only query surface', () => {
     expect(h.store.getProject('p-settled')?.realPath).toBe(realpathSync(target));
     expect(h.store.getSession('s-settled')?.cwd).toBe(realpathSync(target));
   });
-  it('lists every session of a project with derived titles, live activity and one request', async () => {
+  it('lists the chief conversations of a project with derived titles, live activity and one request', async () => {
     const h = await harness();
     // A session with no message yet, and one whose first message is too long for a title.
     h.store.createSession({ id: 's-empty', projectId: h.projectId, roleId: 'chief', cwd: h.projectRoot });
@@ -665,10 +665,10 @@ describe('read-only query surface', () => {
     expect(byId.get('s-empty')?.title).toBeNull();
     expect(byId.get('s-empty')?.activity).toBe('idle');
     expect(byId.get('s-chief')?.activity).toBe('queued');
-    expect(byId.get('s-dev')?.activity).toBe('idle');
-    // A member session carries the Task it belongs to, so the rail can say which work it serves.
-    expect(byId.get('s-dev')?.currentTaskId).toBe('t-1');
-    expect(body.sessions).toHaveLength(4);
+    // A Task member works inside its Task: the rail lists the user's conversations, and the member
+    // appears under the Task it serves instead of as another chat nobody started.
+    expect(body.sessions.map((entry) => entry.sessionId).sort()).toEqual(['s-chief', 's-empty', 's-long']);
+    expect(byId.has('s-dev')).toBe(false);
     // Nothing is left out and nothing is opened: the list must not need a model or a stream.
     expect(body.nextCursor).toBeNull();
   });
@@ -676,6 +676,9 @@ describe('read-only query surface', () => {
   it('pages the session list by its own cursor and rejects a foreign one', async () => {
     const h = await harness();
     h.store.createSession({ id: 's-empty', projectId: h.projectId, roleId: 'chief', cwd: h.projectRoot });
+    // The fixture also holds a Task member; it is not a conversation, so the listing has three
+    // chief sessions and needs two pages at limit 2.
+    h.store.createSession({ id: 's-second', projectId: h.projectId, roleId: 'chief', cwd: h.projectRoot });
 
     const first = await h.call('session.list', { projectId: h.projectId, limit: 2 });
     const page = resultOf<{ sessions: Array<{ sessionId: string }>; nextCursor: string | null }>(first.body);
@@ -684,7 +687,8 @@ describe('read-only query surface', () => {
 
     const next = await h.call('session.list', { projectId: h.projectId, limit: 2, cursor: page.nextCursor });
     const second = resultOf<{ sessions: Array<{ sessionId: string }>; nextCursor: string | null }>(next.body);
-    // Three sessions in this fixture: the second page holds the last one and ends the listing.
+    // Three chief sessions in this fixture (the Task member is not a conversation): the second page
+    // holds the last one and ends the listing.
     expect(second.sessions).toHaveLength(1);
     expect(second.nextCursor).toBeNull();
     expect(second.sessions.some((entry) => page.sessions.some((first) => first.sessionId === entry.sessionId))).toBe(false);

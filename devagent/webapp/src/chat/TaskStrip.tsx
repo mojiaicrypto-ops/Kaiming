@@ -3,7 +3,19 @@ import { State } from '../app/State';
 import { usePhaseLabel, type TaskMemberRow } from './ToolTask';
 import type { TaskDetail } from '../state/slot';
 
-const STEPS = ['plan', 'develop', 'review', 'test', 'settle'] as const;
+/** The order the phases really happen in (store TaskPhase), used only to sort what the Task did. */
+const PHASE_ORDER = ['clarify', 'analyze', 'design', 'plan', 'develop', 'review', 'test', 'settle'] as const;
+
+/**
+ * The steps this Task has really taken: every phase one of its members worked in, plus the phase it
+ * is in now, in phase order. A document Task therefore reads "clarify → design", not "plan → develop
+ * → review → test → settle": a chain that was never run is not progress, and a test step the chief
+ * did not ask for (requiresTest=false) is not a step at all.
+ */
+function chainOf(phases: readonly string[]): readonly string[] {
+  const seen = new Set(phases);
+  return PHASE_ORDER.filter((phase) => seen.has(phase));
+}
 
 export interface TaskStripProps {
   readonly detail: TaskDetail | null;
@@ -28,7 +40,7 @@ export function TaskStrip({ detail, pendingQuestions, membersOpen, onToggleMembe
   if (detail === null) return null;
 
   const { task, members } = detail;
-  const phases: readonly string[] = STEPS;
+  const phases = chainOf([...members.map((member) => member.phase), task.phase]);
   const currentIndex = task.status === 'completed' ? phases.length : phases.indexOf(task.phase);
   const running = members.filter((member) => member.activity === 'processing').length;
 

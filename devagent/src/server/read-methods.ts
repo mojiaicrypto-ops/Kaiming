@@ -205,6 +205,10 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       const cursor = readString(params, 'cursor');
       const rows = store
         .listSessionSummaries(project.id)
+        // The rail lists the conversations the user holds: a chief session. A Task member is a
+        // specialist working inside a Task, and it belongs to that Task's members - the same work
+        // listed twice, once as a stranger's chat, is what made the rail unreadable.
+        .filter((row) => row.roleId === 'chief')
         .map((row) => ({
           sessionId: row.id,
           roleId: row.roleId,

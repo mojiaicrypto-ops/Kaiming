@@ -1757,6 +1757,8 @@ export class Store {
       stopping: number | null;
     }>;
     // The first user text per session, still one query: the title is a derived fact, not a column.
+    // A delegation body is a host instruction, not something the user typed, so it never titles a
+    // session: a member row would otherwise read as a chat that starts mid-sentence.
     const titles = new Map<string, string>();
     const firstInputs = this.db
       .prepare(
