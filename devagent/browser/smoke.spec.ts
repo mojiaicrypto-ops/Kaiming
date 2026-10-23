@@ -52,6 +52,10 @@ test('a first run with no project boots: login screen, then the empty shell', as
     await expect(page.locator('[data-testid="connection"]')).toHaveAttribute('data-state', 'idle');
     await expect(page.locator('[data-testid="connection"]')).toHaveText(/No session yet/);
     await expect(page.locator('.status .conn')).toHaveText(/No session yet/);
+    // The transcript explains the empty screen instead of claiming a dropped connection.
+    await expect(page.locator('[data-testid="no-session-banner"]')).toBeVisible();
+    await expect(page.locator('[data-testid="connection-banner"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="no-session-banner"]')).not.toContainText(/dropped|reconnecting/i);
     await expect(page.locator('.top .nav a')).toHaveCount(3);
     const requirements = page.locator('.nav a[href="/requirements"]');
     await expect(requirements).toHaveText('Requirements');

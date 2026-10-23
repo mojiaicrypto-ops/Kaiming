@@ -13,6 +13,8 @@ export interface BannerProps {
   readonly blocked: { readonly code: string; readonly detail: string } | null;
   readonly onDismissBlocked: () => void;
   readonly onRetry: () => void;
+  /** Offered while no session is open: the one action that starts a real connection. */
+  readonly onNewSession: () => void;
   readonly historyProblems: readonly string[];
 }
 
@@ -29,6 +31,7 @@ export function Banner({
   blocked,
   onDismissBlocked,
   onRetry,
+  onNewSession,
   historyProblems,
 }: BannerProps) {
   const { t } = useI18n();
@@ -36,7 +39,7 @@ export function Banner({
 
   if (status === 'reconnecting' || status === 'offline') {
     items.push(
-      <div key="connection" className={`bn ${status === 'offline' ? 'block' : 'run'}`}>
+      <div key="connection" className={`bn ${status === 'offline' ? 'block' : 'run'}`} data-testid="connection-banner">
         <State kind={status === 'offline' ? 'block' : 'run'}>
           {status === 'offline' ? t('shell.offline') : t('banner.reconnecting')}
         </State>
@@ -44,6 +47,19 @@ export function Banner({
         <span className="sp" />
         <button type="button" className="btn ghost" onClick={onRetry}>
           {t('banner.retry')}
+        </button>
+      </div>,
+    );
+  } else if (status === 'idle') {
+    // Nothing is being followed yet: the transcript is empty because no session is open, which is
+    // not a failure. Saying "connection dropped" here sent the user looking for a broken server.
+    items.push(
+      <div key="no-session" className="bn idle" data-testid="no-session-banner">
+        <State kind="idle">{t('shell.noSession')}</State>
+        <span className="f2">{t('banner.noSessionDetail')}</span>
+        <span className="sp" />
+        <button type="button" className="btn ghost" onClick={onNewSession}>
+          {t('banner.newSession')}
         </button>
       </div>,
     );

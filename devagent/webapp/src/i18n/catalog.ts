@@ -105,6 +105,10 @@ const en = {
   'chat.member.follow': 'Follow ›',
 
   // ---------- banners ----------
+  'banner.noSession': 'No session yet',
+  'banner.noSessionDetail':
+    'Nothing is being followed, so there is no live connection. Start a session and it connects; until then the workbench is idle, not broken.',
+  'banner.newSession': 'New session',
   'banner.reconnecting': 'The connection dropped; reconnecting',
   'banner.reconnectingDetail':
     'Background work is unaffected; after reconnecting the view merges a snapshot, so the message being produced is not lost',
@@ -473,6 +477,9 @@ export const zhCN: Record<MessageKey, string> = {
   'chat.member.follow': '跟随 ›',
 
   // ---------- banners ----------
+  'banner.noSession': '尚无会话',
+  'banner.noSessionDetail': '当前没有可跟随的会话，所以没有活动连接。新建会话后才会连接；在此之前工作台是空闲的，不是故障。',
+  'banner.newSession': '新建会话',
   'banner.reconnecting': '连接已断开，正在重连',
   'banner.reconnectingDetail': '后台工作不受影响；重连后从快照合并，正在输出的内容不会丢',
   'banner.retry': '立即重试',

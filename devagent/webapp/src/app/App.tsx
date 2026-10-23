@@ -76,6 +76,16 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
     toast(message, kind);
   }, []);
 
+  /** Start a chief session: the rail's button and the "no session yet" banner share this answer. */
+  const startSession = useCallback((): void => {
+    void workspace
+      .createSession()
+      .then(() => notify(t('toast.sessionCreated'), 'success'))
+      .catch((error: unknown) =>
+        notify(t('toast.sessionCreateFailed', { reason: errorText(error, t) }), 'error'),
+      );
+  }, [workspace, notify, t]);
+
   // Debug handle for the acceptance harness: the same client the page uses, so a test drives the
   // real token handling instead of re-implementing it. Not used by product code.
   useEffect(() => {
@@ -146,6 +156,7 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
             hasMoreSessions={workspace.hasMoreSessions}
             onLoadMoreSessions={() => void workspace.loadMoreSessions()}
             onAskChief={(text) => setDraft(text)}
+            onNewSession={startSession}
             onCleanupSession={async (sessionId, revision) => {
               try {
                 await rpc.call(
@@ -179,14 +190,7 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
               workspace.selectSession(sessionId);
               setRailOpen(false);
             }}
-            onCreateSession={() => {
-              void workspace
-                .createSession()
-                .then(() => notify(t('toast.sessionCreated'), 'success'))
-                .catch((error: unknown) =>
-                  notify(t('toast.sessionCreateFailed', { reason: errorText(error, t) }), 'error'),
-                );
-            }}
+            onCreateSession={startSession}
             onOpenRail={() => setRailOpen((open) => !open)}
             railOpen={railOpen}
           />

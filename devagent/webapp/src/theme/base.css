@@ -894,6 +894,10 @@ kbd {
 .bn.block {
   border-bottom-color: var(--block);
 }
+/* Nothing to follow: a quiet line, not the alarm the reconnect banner uses. */
+.bn.idle {
+  color: var(--fg-2);
+}
 .bn details summary {
   cursor: pointer;
   color: var(--fg-3);
