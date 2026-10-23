@@ -6,30 +6,80 @@ import type { RpcClient } from '../api/rpc';
 import { errorText } from '../lib/errors';
 
 /**
- * Providers: every configured endpoint, what it offers, and whether a credential exists. The key
- * itself never travels — the server redacts it — so the only truthful statement here is
- * "configured"; there is no "show key" affordance because there is nothing to show.
+ * The protocols this workbench offers, in the order they are shown. Values are Pi's own `api`
+ * identifiers: the server refuses anything else, so a typo cannot become a provider that never
+ * loads.
+ */
+const APIS = ['openai-completions', 'openai-responses', 'anthropic-messages'] as const;
+
+/** The form's own state: the id is only editable while adding, so it is empty when editing. */
+interface Draft {
+  providerId: string;
+  name: string;
+  baseUrl: string;
+  api: string;
+  models: string;
+  apiKey: string;
+}
+
+const EMPTY: Draft = { providerId: '', name: '', baseUrl: '', api: 'openai-completions', models: '', apiKey: '' };
+
+/**
+ * Providers: every configured endpoint, what it offers, whether a credential exists, and which
+ * protocol it speaks. The key itself never travels — the server redacts it — so the only truthful
+ * statement here is "configured"; there is no "show key" affordance because there is nothing to show.
  */
 export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: string }) {
   const { t } = useI18n();
   const { config, failed, reload } = useConfig(rpc, projectId === '' ? undefined : projectId, 'chief');
   const [testing, setTesting] = useState<string | null>(null);
   const [result, setResult] = useState<{ provider: string; ok: boolean; detail: string } | null>(null);
-  const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState({ providerId: '', baseUrl: '', models: '', apiKey: '' });
+  /** The provider being added (null id) or edited (that id); nothing open means no form. */
+  const [editing, setEditing] = useState<{ providerId: string | null; revision: number | null } | null>(null);
+  const [draft, setDraft] = useState<Draft>(EMPTY);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  const openAdd = (): void => {
+    setDraft(EMPTY);
+    setSaveError(null);
+    setEditing({ providerId: null, revision: null });
+  };
+
+  const openEdit = (provider: ProviderView): void => {
+    setDraft({
+      providerId: provider.providerId,
+      name: provider.name,
+      baseUrl: provider.baseUrl,
+      // A provider saved before protocols were selectable has none stored: leave the choice to the
+      // user instead of writing the default they never saw.
+      api: provider.api ?? '',
+      models: provider.models.map((model) => model.id).join(', '),
+      apiKey: '',
+    });
+    setSaveError(null);
+    setEditing({ providerId: provider.providerId, revision: provider.revision });
+  };
+
+  const close = (): void => {
+    setEditing(null);
+    setDraft(EMPTY);
+    setSaveError(null);
+  };
+
   const save = async (): Promise<void> => {
+    if (editing === null) return;
     setSaveError(null);
     try {
       await rpc.call(
         'config.save',
         {
-          expectedRevision: null,
+          expectedRevision: editing.revision,
           value: {
             kind: 'provider',
             providerId: draft.providerId.trim(),
+            name: draft.name.trim(),
             baseUrl: draft.baseUrl.trim(),
+            api: draft.api,
             models: draft.models
               .split(',')
               .map((id) => id.trim())
@@ -40,8 +90,7 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
         },
         { requestId: `provider-${Date.now()}` },
       );
-      setDraft({ providerId: '', baseUrl: '', models: '', apiKey: '' });
-      setAdding(false);
+      close();
       await reload();
     } catch (error) {
       setSaveError(errorText(error, t));
@@ -64,6 +113,12 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
     }
   };
 
+  const apiLabel = (api: string | null): string => {
+    if (api === null || api === '') return t('settings.api');
+    const known = APIS.find((entry) => entry === api);
+    return known === undefined ? api : t(`settings.api.${known}` as Parameters<typeof t>[0]);
+  };
+
   return (
     <section className="set-pane scroll">
       <div className="set-in">
@@ -75,16 +130,27 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
           {(config?.providers ?? []).map((provider) => (
             <div className="prov" key={provider.providerId}>
               <span className="nm">
-                {provider.providerId}{' '}
+                {provider.name}{' '}
                 {provider.credentialConfigured ? (
                   <State kind="done">{t('settings.configured')}</State>
                 ) : (
                   <State kind="block">{t('settings.notConfigured')}</State>
                 )}
               </span>
+              <span className="meta">
+                {provider.providerId} · {apiLabel(provider.api)}
+              </span>
               <span className="meta">{provider.baseUrl}</span>
               <span className="meta">{provider.models.map((model) => model.id).join(' · ')}</span>
               <span className="act">
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => openEdit(provider)}
+                  data-testid="provider-edit"
+                >
+                  {t('settings.edit')}
+                </button>
                 <button
                   type="button"
                   className="btn ghost"
@@ -98,22 +164,39 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
                 <span className="meta">
                   <State kind={result.ok ? 'done' : 'block'}>
                     {result.ok
-                      ? t('settings.testOk', { name: provider.providerId })
-                      : t('settings.testFailed', { name: provider.providerId, reason: result.detail })}
+                      ? t('settings.testOk', { name: provider.name })
+                      : t('settings.testFailed', { name: provider.name, reason: result.detail })}
                   </State>
                 </span>
               )}
             </div>
           ))}
-          {adding ? (
+          {editing !== null ? (
             <div className="card-in">
+              <div className="f3" style={{ marginBottom: 'var(--s1)' }}>
+                {editing.providerId === null ? t('settings.addProvider') : t('settings.editProvider')}
+              </div>
+              <div className="rl">
+                <span>{t('settings.providerName')}</span>
+                <input
+                  className="inp"
+                  value={draft.name}
+                  onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+                  placeholder={draft.providerId === '' ? 'DeepSeek' : draft.providerId}
+                  data-testid="provider-name"
+                />
+                <span className="src">{t('settings.providerNameHint')}</span>
+              </div>
               <div className="rl">
                 <span>{t('settings.providerId')}</span>
                 <input
                   className="inp"
                   value={draft.providerId}
                   onChange={(event) => setDraft({ ...draft, providerId: event.target.value })}
-                  placeholder="openai"
+                  placeholder="deepseek"
+                  // The id is the key in models.json, the database and every assignment: renaming it
+                  // is a migration, not an edit.
+                  readOnly={editing.providerId !== null}
                   data-testid="provider-id"
                 />
                 <span />
@@ -128,6 +211,23 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
                   data-testid="provider-base"
                 />
                 <span />
+              </div>
+              <div className="rl">
+                <span>{t('settings.api')}</span>
+                <select
+                  className="inp"
+                  value={draft.api}
+                  onChange={(event) => setDraft({ ...draft, api: event.target.value })}
+                  data-testid="provider-api"
+                >
+                  {draft.api === '' && <option value="">—</option>}
+                  {APIS.map((api) => (
+                    <option key={api} value={api}>
+                      {apiLabel(api)}
+                    </option>
+                  ))}
+                </select>
+                <span className="src">{t('settings.apiHint')}</span>
               </div>
               <div className="rl">
                 <span>{t('settings.modelsList')}</span>
@@ -147,16 +247,23 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
                   type="password"
                   value={draft.apiKey}
                   onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })}
+                  placeholder={editing.providerId === null ? '' : '••••••'}
                   data-testid="provider-key"
                 />
                 <span className="src">{t('settings.apiKeyHint')}</span>
               </div>
               {saveError !== null && <div className="note st block">{saveError}</div>}
               <div className="btns">
-                <button type="button" className="btn pri" onClick={() => void save()} data-testid="provider-save">
+                <button
+                  type="button"
+                  className="btn pri"
+                  onClick={() => void save()}
+                  disabled={draft.api === ''}
+                  data-testid="provider-save"
+                >
                   {t('common.save')}
                 </button>
-                <button type="button" className="btn ghost" onClick={() => setAdding(false)}>
+                <button type="button" className="btn ghost" onClick={close}>
                   {t('common.cancel')}
                 </button>
               </div>
@@ -164,7 +271,7 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
           ) : (
             <>
               <div className="note">{t('settings.addProviderHint')}</div>
-              <button type="button" className="btn" onClick={() => setAdding(true)} data-testid="add-provider">
+              <button type="button" className="btn" onClick={openAdd} data-testid="add-provider">
                 {t('settings.addProvider')}
               </button>
             </>

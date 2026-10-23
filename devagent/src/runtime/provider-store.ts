@@ -13,6 +13,8 @@ export interface ProviderDefinition {
   readonly providerId: string;
   readonly baseUrl: string;
   readonly api?: string;
+  /** The label the user sees. Pi's provider schema carries it too, so the file stays self-describing. */
+  readonly name?: string;
   /** Omitted when the caller only changes the catalog and keeps the existing key. */
   readonly apiKey?: string;
   /**
@@ -70,6 +72,7 @@ export function writeProvider(agentDir: string, definition: ProviderDefinition):
   providers[definition.providerId] = {
     baseUrl: definition.baseUrl,
     ...(definition.api !== undefined ? { api: definition.api } : {}),
+    ...(definition.name !== undefined ? { name: definition.name } : {}),
     apiKey,
     models: definition.models.map((model) => ({
       id: model.id,

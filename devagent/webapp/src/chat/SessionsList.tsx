@@ -18,15 +18,20 @@ export interface SessionsListProps {
    * and says why; this callback carries that reason back to the user.
    */
   readonly onCleanup: (sessionId: string, revision: number) => Promise<boolean>;
+  /**
+   * Name a conversation. The server stores the name; an empty string restores the derived title.
+   * Returns false when the write was refused, so the caller can explain why.
+   */
+  readonly onRename: (sessionId: string, title: string, revision: number) => Promise<boolean>;
   /** Sheet form (compact viewports): the same rows, opened over the transcript. */
   readonly className?: string;
 }
 
 /**
  * The session rail. Each row's glyph is the state that matters most for picking a conversation:
- * a waiting question beats a running Task, which beats "done". Titles are derived from the first
- * user message (the server keeps no title), so a fresh session reads as "New session" instead of
- * exposing an id nobody recognises.
+ * a waiting question beats a running Task, which beats "done". A row shows the name the user gave
+ * it, or else the first user message the server derives it from, so a fresh session reads as
+ * "New session" instead of exposing an id nobody recognises.
  */
 /** Today shows a clock, yesterday its word, anything older a short date; unknown stays blank. */
 function dayLabel(iso: string | null, t: (key: 'chat.today' | 'chat.yesterday') => string): string {
@@ -44,10 +49,31 @@ function dayLabel(iso: string | null, t: (key: 'chat.today' | 'chat.yesterday') 
   return '';
 }
 
-export function SessionsList({ rows, current, onSelect, onCreate, questionCount, hasMore, onLoadMore, onCleanup, className }: SessionsListProps) {
+export function SessionsList({
+  rows,
+  current,
+  onSelect,
+  onCreate,
+  questionCount,
+  hasMore,
+  onLoadMore,
+  onCleanup,
+  onRename,
+  className,
+}: SessionsListProps) {
   const { t } = useI18n();
   // Two steps, because deleting a conversation has no undo: the first click only arms the row.
   const [armed, setArmed] = useState<string | null>(null);
+  /** The row being renamed and what the input holds; null means no row is in edit mode. */
+  const [renaming, setRenaming] = useState<{ sessionId: string; revision: number } | null>(null);
+  const [nameDraft, setNameDraft] = useState('');
+
+  const commitRename = async (): Promise<void> => {
+    if (renaming === null) return;
+    const target = renaming;
+    setRenaming(null);
+    await onRename(target.sessionId, nameDraft, target.revision);
+  };
   return (
     <aside className={`sessions${className === undefined ? '' : ` ${className}`}`} aria-label={t('aria.sessionList')}>
       <div className="h">{t('chat.sessions')}</div>
@@ -67,16 +93,54 @@ export function SessionsList({ rows, current, onSelect, onCreate, questionCount,
                   : 'idle';
         return (
           <div key={row.sessionId} className={`srow${armed === row.sessionId ? ' armed' : ''}`}>
+            {renaming !== null && renaming.sessionId === row.sessionId ? (
+              <input
+                className="inp srn"
+                autoFocus
+                value={nameDraft}
+                maxLength={60}
+                aria-label={t('session.rename')}
+                data-testid="session-rename-input"
+                onChange={(event) => setNameDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.nativeEvent.isComposing) return;
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    void commitRename();
+                  }
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    setRenaming(null);
+                  }
+                }}
+                onBlur={() => setRenaming(null)}
+              />
+            ) : (
+              <button
+                type="button"
+                className="s"
+                aria-current={row.sessionId === current ? 'true' : undefined}
+                onClick={() => onSelect(row.sessionId)}
+                data-testid="session-row"
+              >
+                <State kind={glyph} />
+                <span className="ell">{row.title === null || row.title === '' ? t('chat.untitled') : row.title}</span>
+                <span className="f3 sess-time">{dayLabel(row.updatedAt, t)}</span>
+              </button>
+            )}
             <button
               type="button"
-              className="s"
-              aria-current={row.sessionId === current ? 'true' : undefined}
-              onClick={() => onSelect(row.sessionId)}
-              data-testid="session-row"
+              className="sx"
+              aria-label={t('session.rename')}
+              title={`${t('session.rename')} — ${t('session.renameHint')}`}
+              data-testid="session-rename"
+              onClick={() => {
+                setArmed(null);
+                setNameDraft(row.title ?? '');
+                setRenaming({ sessionId: row.sessionId, revision: row.revision });
+              }}
             >
-              <State kind={glyph} />
-              <span className="ell">{row.title === null || row.title === '' ? t('chat.untitled') : row.title}</span>
-              <span className="f3 sess-time">{dayLabel(row.updatedAt, t)}</span>
+              ✎
             </button>
             {/* The open session is not offered: deleting what is on screen would leave the shell
                 pointing at nothing, and the reader is already there to decide. */}

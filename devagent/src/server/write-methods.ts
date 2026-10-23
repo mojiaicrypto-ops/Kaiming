@@ -222,6 +222,42 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
     },
   });
 
+  router.register('session.rename', {
+    write: true,
+    run: (params): unknown => {
+      const project = requireProject(store, params);
+      const sessionId = readString(params, 'sessionId');
+      const expectedRevision = params['expectedRevision'];
+      const raw = params['title'];
+      if (sessionId === undefined || typeof expectedRevision !== 'number' || typeof raw !== 'string') {
+        throw new RpcError('INVALID_ARGUMENT', 'sessionId, title and expectedRevision are required', {
+          sessionId,
+          title: raw,
+        });
+      }
+      const session = store.getSession(sessionId);
+      if (session === undefined || session.projectId !== project.id) {
+        throw new RpcError('NOT_FOUND', `session ${sessionId} does not exist in this project`, { sessionId });
+      }
+      // The rail lists chief conversations, so naming a sub-session would be a write nobody can see
+      // (and would invite a second, invisible vocabulary for the same session).
+      if (session.roleId !== 'chief') {
+        throw new RpcError('INVALID_ARGUMENT', 'only a chief session can be renamed', {
+          sessionId,
+          roleId: session.roleId,
+        });
+      }
+      // A pasted name must not smuggle a newline into a one-line rail: collapse whitespace first.
+      const title = raw.replace(/\s+/g, ' ').trim();
+      if (title.length > 60) {
+        throw new RpcError('INVALID_ARGUMENT', 'a session name is at most 60 characters', { length: title.length });
+      }
+      const renamed = store.renameSession({ sessionId, title: title === '' ? null : title, expectedRevision });
+      options.invalidate?.(sessionId, 'session', sessionId);
+      return { sessionId, title: renamed.title, revision: renamed.revision };
+    },
+  });
+
   router.register('session.recovery.resolve', {
     write: true,
     run: (params, context): unknown => {

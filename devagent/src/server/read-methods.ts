@@ -214,7 +214,9 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
           roleId: row.roleId,
           // The revision a cleanup must cite: a row that cannot act on itself forces a second read.
           revision: row.revision,
-          title: titleOf(row.title),
+          // A name the user typed is returned as typed (the rail ellipsizes it); only a title derived
+          // from a message payload needs extracting and shortening.
+          title: row.storedTitle ?? titleOf(row.derivedTitle),
           activity: activityOfCounts(row.processing, row.queued, row.stopping),
           lastActivityAt: row.lastActivityAt,
           currentTaskId: row.currentTaskId,

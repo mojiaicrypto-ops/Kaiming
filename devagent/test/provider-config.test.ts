@@ -2,7 +2,7 @@
  * Model configuration (R5): the provider definitions the installation knows and the role/project
  * assignments that pick one - saved with revisions, with the key kept in the private store only.
  */
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -257,6 +257,69 @@ describe('role and project model assignments', () => {
       ),
     ).toBe('NOT_FOUND');
   });
+});
+
+describe('provider name and protocol', () => {
+  it('keeps the id as the identity and stores the display name and protocol beside it', async () => {
+    const h = await harness();
+    const created = await h.call('config.save', {
+      expectedRevision: null,
+      value: provider({ name: 'DeepSeek 官方', api: 'openai-completions' }),
+    });
+    expect(created.status).toBe(200);
+    expect(resultOf<{ name: string }>(created.body).name).toBe('DeepSeek 官方');
+
+    // The display name travels to the credential store too, and the id stays the key there.
+    const file = JSON.parse(readFileSync(modelsPathFor(h.agentDir), 'utf8')) as {
+      providers: Record<string, { name?: string; api?: string }>;
+    };
+    expect(file.providers['deepseek']).toMatchObject({ name: 'DeepSeek 官方', api: 'openai-completions' });
+
+    const read = await h.call('config.get', {});
+    expect(resultOf<{ providers: Array<Record<string, unknown>> }>(read.body).providers[0]).toMatchObject({
+      providerId: 'deepseek',
+      name: 'DeepSeek 官方',
+      api: 'openai-completions',
+    });
+
+    // Renaming is an edit of the same provider: the id in the answer does not move, and a legacy
+    // credential reference still points at it.
+    const renamed = await h.call('config.save', {
+      expectedRevision: 1,
+      value: provider({ name: '本地代理', api: 'anthropic-messages' }),
+    });
+    expect(resultOf<{ providerId: string; name: string }>(renamed.body)).toMatchObject({
+      providerId: 'deepseek',
+      name: '本地代理',
+    });
+    expect(h.store.getProvider('deepseek')?.credentialRef).toBe(credentialRefFor('deepseek'));
+  }, 30_000);
+
+  it('refuses a save without a supported protocol instead of letting Pi guess one', async () => {
+    const h = await harness();
+    const missing = await h.call('config.save', {
+      expectedRevision: null,
+      value: { ...provider(), api: undefined },
+    });
+    expect(missing.status).toBe(400);
+    expect(errorCode(missing.body)).toBe('INVALID_ARGUMENT');
+    expect((missing.body['error'] as { message: string }).message).toContain('openai-completions');
+
+    const bogus = await h.call('config.save', { expectedRevision: null, value: provider({ api: 'openai' }) });
+    expect(bogus.status).toBe(400);
+    expect(errorCode(bogus.body)).toBe('INVALID_ARGUMENT');
+
+    // Neither refusal left anything behind: no database row, no credential file entry.
+    expect(h.store.getProvider('deepseek')).toBeUndefined();
+    expect(existsSync(modelsPathFor(h.agentDir))).toBe(false);
+  }, 30_000);
+
+  it('falls back to the id when no display name was given', async () => {
+    const h = await harness();
+    const created = await h.call('config.save', { expectedRevision: null, value: provider({ name: undefined }) });
+    expect(resultOf<{ name: string }>(created.body).name).toBe('deepseek');
+    expect(h.store.getProvider('deepseek')?.name).toBeNull();
+  }, 30_000);
 });
 
 describe('provider storage in the store itself', () => {

@@ -182,6 +182,22 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
                 return false;
               }
             }}
+            onRenameSession={async (sessionId, title, revision) => {
+              try {
+                await rpc.call(
+                  'session.rename',
+                  { projectId: workspace.projectId, sessionId, title, expectedRevision: revision },
+                  { requestId: newRequestId('rename') },
+                );
+                await workspace.refreshSessions();
+                return true;
+              } catch (error) {
+                // A refused rename is a fact about this row (someone else changed it), not a silent
+                // no-op: the user typed a name and needs to know it was not kept.
+                notify(errorText(error, t), 'error');
+                return false;
+              }
+            }}
             currentSessionId={workspace.sessionId}
             projectId={workspace.projectId}
             hasProject={workspace.projectId !== ''}

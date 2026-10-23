@@ -10,8 +10,10 @@ export interface ProviderModel {
 
 export interface ProviderView {
   readonly providerId: string;
+  /** Display label; the server falls back to providerId when nobody named it. */
+  readonly name: string;
   readonly baseUrl: string;
-  readonly api?: string;
+  readonly api: string | null;
   readonly models: readonly ProviderModel[];
   readonly credentialConfigured: boolean;
   readonly revision: number;

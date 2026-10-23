@@ -389,6 +389,7 @@ test('the model scope switch changes what is saved, not only what is read', asyn
             kind: 'provider',
             providerId: 'p-test',
             baseUrl: 'http://127.0.0.1:9/v1',
+            api: 'openai-completions',
             apiKey: 'test-key',
             models: [
               { id: 'm-a', name: 'm-a' },
@@ -936,6 +937,83 @@ test('a browser that has never been here still sees the registered projects', as
     await page.locator('[data-testid="project-switcher"]').click();
     await expect(page.locator('[data-testid="project-row"]')).toHaveCount(1, { timeout: 10_000 });
     await expect(page.locator('[data-testid="project-row"]')).toContainText(/\d+ session/);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a provider is added with a name and protocol, then edited without changing its id', async ({ page }) => {
+  const harness = await startHarness();
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    await page.goto(`${harness.baseUrl}/settings/providers`, { waitUntil: 'domcontentloaded' });
+
+    await page.locator('[data-testid="add-provider"]').click();
+    await page.locator('[data-testid="provider-name"]').fill('本地代理');
+    await page.locator('[data-testid="provider-id"]').fill('local-proxy');
+    await page.locator('[data-testid="provider-base"]').fill('http://127.0.0.1:3425/v1');
+    // The protocol is a required choice: no save is possible while it is unset.
+    await page.locator('[data-testid="provider-api"]').selectOption('anthropic-messages');
+    await page.locator('[data-testid="provider-models"]').fill('some-model');
+    await page.locator('[data-testid="provider-key"]').fill('test-key');
+    await page.locator('[data-testid="provider-save"]').click();
+
+    const row = page.locator('.prov').filter({ hasText: '本地代理' });
+    await expect(row).toHaveCount(1, { timeout: 10_000 });
+    await expect(row).toContainText('local-proxy');
+    await expect(row).toContainText('Anthropic messages');
+
+    // Editing changes the label and the protocol, never the identity everything else refers to.
+    await row.locator('[data-testid="provider-edit"]').click();
+    await expect(page.locator('[data-testid="provider-id"]')).toHaveAttribute('readonly', '');
+    await page.locator('[data-testid="provider-name"]').fill('公司网关');
+    await page.locator('[data-testid="provider-api"]').selectOption('openai-completions');
+    await page.locator('[data-testid="provider-save"]').click();
+    const edited = page.locator('.prov').filter({ hasText: '公司网关' });
+    await expect(edited).toHaveCount(1, { timeout: 10_000 });
+    await expect(edited).toContainText('local-proxy');
+    await expect(edited).toContainText('OpenAI chat/completions');
+
+    const saved = await page.evaluate(async () => {
+      const handle = (window as unknown as { __agentdev: { rpc: { call: (m: string, p?: unknown) => Promise<unknown> } } }).__agentdev;
+      return (await handle.rpc.call('config.get', {})) as {
+        providers: Array<{ providerId: string; name: string; api: string | null }>;
+      };
+    });
+    expect(saved.providers).toHaveLength(1);
+    expect(saved.providers[0]).toMatchObject({ providerId: 'local-proxy', name: '公司网关', api: 'openai-completions' });
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a conversation is renamed from the rail, and the name survives a reload', async ({ page }) => {
+  const harness = await startHarness();
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    const row = page.locator('[data-testid="session-row"]').first();
+    await expect(row).toContainText(/New session|新会话/);
+
+    await page.locator('[data-testid="session-rename"]').first().click();
+    await page.locator('[data-testid="session-rename-input"]').fill('重构文档');
+    await page.locator('[data-testid="session-rename-input"]').press('Enter');
+    await expect(page.locator('[data-testid="session-row"]').first()).toContainText('重构文档', { timeout: 10_000 });
+
+    // The name is stored, not a local label: a reload still shows it.
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.locator('[data-testid="session-row"]').first()).toContainText('重构文档', { timeout: 10_000 });
+
+    // Clearing it returns the row to the default name instead of leaving it blank.
+    await page.locator('[data-testid="session-rename"]').first().click();
+    await page.locator('[data-testid="session-rename-input"]').fill('');
+    await page.locator('[data-testid="session-rename-input"]').press('Enter');
+    await expect(page.locator('[data-testid="session-row"]').first()).toContainText(/New session|新会话/, {
+      timeout: 10_000,
+    });
   } finally {
     await harness.close();
   }

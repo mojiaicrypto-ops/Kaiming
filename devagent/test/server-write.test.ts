@@ -492,6 +492,72 @@ describe('write surface', () => {
     expect(h.store.getSession(spareId)).toBeDefined();
   }, 30_000);
 
+  it('names a chief conversation, and clearing the name returns it to the derived title', async () => {
+    const h = await harness([], { startWorker: false });
+    h.store.acceptInput({
+      inputId: 'in-name',
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      sourceKey: 's-chief:in-name',
+      requestKey: 'in-name',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: '帮我看一下这个项目的文档结构' }] },
+    });
+
+    const listed = async (): Promise<string | null> => {
+      const body = await h.call('session.list', { projectId: h.projectId, limit: 50 });
+      const sessions = resultOf<{ sessions: Array<{ sessionId: string; title: string | null; revision: number }> }>(
+        body.body,
+      ).sessions;
+      return sessions.find((row) => row.sessionId === 's-chief')?.title ?? null;
+    };
+    const revisionOf = (sessionId: string): number => h.store.getSession(sessionId)?.revision ?? 0;
+
+    // Unnamed: the rail falls back to the first thing the user said.
+    expect(await listed()).toBe('帮我看一下这个项目的文档结构');
+
+    const renamed = await h.call('session.rename', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      title: '文档结构',
+      expectedRevision: revisionOf('s-chief'),
+    });
+    expect(renamed.status).toBe(200);
+    expect(resultOf<{ title: string }>(renamed.body).title).toBe('文档结构');
+    expect(await listed()).toBe('文档结构');
+
+    // A name is not a blank label: an empty title means "back to the default", not "".
+    await h.call('session.rename', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      title: '   ',
+      expectedRevision: revisionOf('s-chief'),
+    });
+    expect(await listed()).toBe('帮我看一下这个项目的文档结构');
+
+    // Sub-sessions are not in the rail, so naming one would be a write nobody can see.
+    const sub = await h.call('session.rename', {
+      projectId: h.projectId,
+      sessionId: 's-dev',
+      title: 'dev',
+      expectedRevision: revisionOf('s-dev'),
+    });
+    expect(sub.status).toBe(400);
+    expect(errorCode(sub.body)).toBe('INVALID_ARGUMENT');
+
+    // A stale revision is a conflict, and the stored name is untouched.
+    const stale = await h.call('session.rename', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      title: 'other',
+      expectedRevision: 1,
+    });
+    expect(stale.status).toBe(409);
+    expect(errorCode(stale.body)).toBe('VERSION_CONFLICT');
+    expect(await listed()).toBe('帮我看一下这个项目的文档结构');
+  }, 30_000);
+
   it('resolves an interrupted input only with cited evidence, then lets the queue continue', async () => {
     const h = await harness();
     // An interrupted input blocks the session until a real verification closes it.

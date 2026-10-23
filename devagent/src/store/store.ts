@@ -147,6 +147,8 @@ export interface ProviderRow {
   readonly providerId: string;
   readonly baseUrl: string;
   readonly api: string | null;
+  /** The name the user sees; NULL keeps showing providerId. */
+  readonly name: string | null;
   /** JSON array of `{ id, name }`: the models this provider offers. */
   readonly models: string;
   /** Where the credential lives (private store); never the credential itself. */
@@ -367,7 +369,7 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -561,6 +563,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   configRef TEXT,
   currentTaskId TEXT,
   recoveryBlock TEXT,
+  /** The name the user gave this conversation; NULL keeps the derived title from the first input. */
+  title TEXT,
   revision INTEGER NOT NULL DEFAULT 1,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
@@ -627,6 +631,8 @@ CREATE TABLE IF NOT EXISTS providers (
   providerId TEXT PRIMARY KEY,
   baseUrl TEXT NOT NULL,
   api TEXT,
+  /** Display name the user can change; NULL falls back to providerId. */
+  name TEXT,
   models TEXT NOT NULL,
   credentialRef TEXT,
   revision INTEGER NOT NULL DEFAULT 1,
@@ -1197,6 +1203,35 @@ export class Store {
   }
 
   /**
+   * Name a conversation. An empty title removes the name, which puts the row back on its derived
+   * title - the user asked for "default again", not for an empty label. Nothing else about the
+   * session changes: history, ownership and authorization are not the name's business.
+   */
+  renameSession(params: { sessionId: string; title: string | null; expectedRevision: number }): {
+    title: string | null;
+    revision: number;
+  } {
+    return this.transaction(() => {
+      const session = this.getSession(params.sessionId);
+      if (session === undefined) {
+        throw new StoreError('NOT_FOUND', 'session does not exist', { sessionId: params.sessionId });
+      }
+      const title = params.title === null || params.title.trim() === '' ? null : params.title.trim();
+      const outcome = this.db
+        .prepare('UPDATE sessions SET title = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND revision = ?')
+        .run(title, this.clock(), params.sessionId, params.expectedRevision);
+      if (outcome.changes !== 1) {
+        throw new StoreError('VERSION_CONFLICT', 'session revision does not match', {
+          sessionId: params.sessionId,
+          actual: session.revision,
+        });
+      }
+      const updated = this.getSession(params.sessionId);
+      return { title: updated?.title ?? null, revision: updated?.revision ?? params.expectedRevision + 1 };
+    });
+  }
+
+  /**
    * Close an interrupted input with the verdict a real verification reached (S7/R1): the evidence is
    * required, the status is checked and the revision compared, and nothing is re-sent to Pi.
    */
@@ -1446,6 +1481,8 @@ export class Store {
     providerId: string;
     baseUrl: string;
     api?: string;
+    /** Display name; omitted on an update keeps the stored one. */
+    name?: string;
     models: readonly { id: string; name: string }[];
     credentialRef?: string;
     expectedRevision: number | null;
@@ -1471,19 +1508,29 @@ export class Store {
       if (existing === undefined) {
         this.db
           .prepare(
-            `INSERT INTO providers (providerId, baseUrl, api, models, credentialRef, revision, createdAt, updatedAt)
-             VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+            `INSERT INTO providers (providerId, baseUrl, api, name, models, credentialRef, revision, createdAt, updatedAt)
+             VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
           )
-          .run(params.providerId, params.baseUrl, params.api ?? null, models, params.credentialRef ?? null, timestamp, timestamp);
+          .run(
+            params.providerId,
+            params.baseUrl,
+            params.api ?? null,
+            params.name ?? null,
+            models,
+            params.credentialRef ?? null,
+            timestamp,
+            timestamp,
+          );
       } else {
         this.db
           .prepare(
-            `UPDATE providers SET baseUrl = ?, api = ?, models = ?, credentialRef = ?, revision = revision + 1, updatedAt = ?
+            `UPDATE providers SET baseUrl = ?, api = ?, name = ?, models = ?, credentialRef = ?, revision = revision + 1, updatedAt = ?
               WHERE providerId = ? AND revision = ?`,
           )
           .run(
             params.baseUrl,
             params.api ?? null,
+            params.name ?? existing.name,
             models,
             params.credentialRef ?? existing.credentialRef,
             timestamp,
@@ -1733,11 +1780,15 @@ export class Store {
     processing: number;
     queued: number;
     stopping: number;
-    title: string | null;
+    /** The name the user gave this conversation, or null when it still derives one. */
+    storedTitle: string | null;
+    /** The first user input's payload (JSON), the raw material for a derived title. */
+    derivedTitle: string | null;
   }> {
     const rows = this.db
       .prepare(
         `SELECT s.id AS id, s.roleId AS roleId, s.revision AS revision, s.currentTaskId AS currentTaskId,
+                s.title AS storedTitle,
                 MAX(i.updatedAt) AS lastActivityAt,
                 SUM(CASE WHEN i.status = 'processing' THEN 1 ELSE 0 END) AS processing,
                 SUM(CASE WHEN i.status = 'queued' THEN 1 ELSE 0 END) AS queued,
@@ -1751,14 +1802,15 @@ export class Store {
       roleId: string;
       revision: number;
       currentTaskId: string | null;
+      storedTitle: string | null;
       lastActivityAt: string | null;
       processing: number | null;
       queued: number | null;
       stopping: number | null;
     }>;
-    // The first user text per session, still one query: the title is a derived fact, not a column.
-    // A delegation body is a host instruction, not something the user typed, so it never titles a
-    // session: a member row would otherwise read as a chat that starts mid-sentence.
+    // A name the user chose wins; otherwise the first user text is the title. A delegation body is a
+    // host instruction, not something the user typed, so it never titles a session: a member row
+    // would otherwise read as a chat that starts mid-sentence.
     const titles = new Map<string, string>();
     const firstInputs = this.db
       .prepare(
@@ -1783,7 +1835,8 @@ export class Store {
       processing: row.processing ?? 0,
       queued: row.queued ?? 0,
       stopping: row.stopping ?? 0,
-      title: titles.get(row.id) ?? null,
+      storedTitle: row.storedTitle ?? null,
+      derivedTitle: titles.get(row.id) ?? null,
     }));
   }
 
@@ -1835,11 +1888,12 @@ export class Store {
     cwd: string;
     configRef: string | null;
     currentTaskId: string | null;
+    title: string | null;
     revision: number;
   } | undefined {
     return this.db
       .prepare(
-        'SELECT id, projectId, roleId, specialization, cwd, configRef, currentTaskId, revision FROM sessions WHERE id = ?',
+        'SELECT id, projectId, roleId, specialization, cwd, configRef, currentTaskId, title, revision FROM sessions WHERE id = ?',
       )
       .get(sessionId) as
       | {
@@ -1850,6 +1904,7 @@ export class Store {
           cwd: string;
           configRef: string | null;
           currentTaskId: string | null;
+          title: string | null;
           revision: number;
         }
       | undefined;
@@ -2841,6 +2896,23 @@ export class Store {
     });
   }
 
+  private migrateV9ToV10(): void {
+    this.transaction(() => {
+      this.applyV10();
+      this.db.exec('PRAGMA user_version = 10;');
+    });
+  }
+
+  /**
+   * v9 → v10: a conversation can be named, and a provider can carry a display name. Both columns are
+   * additive and nullable, so an unnamed session keeps deriving its title from the first input and an
+   * unnamed provider keeps showing its id. Column checks make this idempotent.
+   */
+  private applyV10(): void {
+    this.addColumn('sessions', 'title', 'TEXT');
+    this.addColumn('providers', 'name', 'TEXT');
+  }
+
   /**
    * v8 → v9: the model no longer carries tokens. The candidate object and the report/result versions it
    * bound are gone; a review/test report records the delivery state the program observed (G3), and a
@@ -2881,6 +2953,7 @@ export class Store {
       this.transaction(() => {
         this.db.exec(SCHEMA_SQL);
         this.applyV9();
+        this.applyV10();
         this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
       });
     } else if (userVersion === 1) {
@@ -2898,6 +2971,7 @@ export class Store {
       this.migrateV6ToV7();
       this.migrateV7ToV8();
       this.migrateV8ToV9();
+      this.migrateV9ToV10();
     } else if (userVersion === 2) {
       this.migrateV2ToV3();
       this.migrateV3ToV4();
@@ -2906,6 +2980,7 @@ export class Store {
       this.migrateV6ToV7();
       this.migrateV7ToV8();
       this.migrateV8ToV9();
+      this.migrateV9ToV10();
     } else if (userVersion === 3) {
       this.migrateV3ToV4();
       this.migrateV4ToV5();
@@ -2913,26 +2988,34 @@ export class Store {
       this.migrateV6ToV7();
       this.migrateV7ToV8();
       this.migrateV8ToV9();
+      this.migrateV9ToV10();
     } else if (userVersion === 4) {
       this.migrateV4ToV5();
       this.migrateV5ToV6();
       this.migrateV6ToV7();
       this.migrateV7ToV8();
       this.migrateV8ToV9();
+      this.migrateV9ToV10();
     } else if (userVersion === 5) {
       this.migrateV5ToV6();
       this.migrateV6ToV7();
       this.migrateV7ToV8();
       this.migrateV8ToV9();
+      this.migrateV9ToV10();
     } else if (userVersion === 6) {
       this.migrateV6ToV7();
       this.migrateV7ToV8();
       this.migrateV8ToV9();
+      this.migrateV9ToV10();
     } else if (userVersion === 7) {
       this.migrateV7ToV8();
       this.migrateV8ToV9();
+      this.migrateV9ToV10();
     } else if (userVersion === 8) {
       this.migrateV8ToV9();
+      this.migrateV9ToV10();
+    } else if (userVersion === 9) {
+      this.migrateV9ToV10();
     } else if (userVersion !== SCHEMA_VERSION) {
       throw new StoreError('VERSION_CONFLICT', 'unsupported store schema version', {
         userVersion,
@@ -3051,6 +3134,7 @@ function toProviderRow(row: Record<string, unknown>): ProviderRow {
     providerId: String(row['providerId']),
     baseUrl: String(row['baseUrl']),
     api: row['api'] === null ? null : String(row['api']),
+    name: row['name'] === null || row['name'] === undefined ? null : String(row['name']),
     models: String(row['models']),
     credentialRef: row['credentialRef'] === null ? null : String(row['credentialRef']),
     revision: Number(row['revision']),

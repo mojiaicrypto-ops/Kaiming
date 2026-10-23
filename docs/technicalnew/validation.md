@@ -67,3 +67,19 @@
 | 真实模型 | Passed（部分） | 一次手工浏览器探针：真实 DeepSeek 在真实外壳里回答，状态栏显示实际配置，短会话不提供「加载更早」；`npm run check:model` 4/4（deepseek/deepseek-flash：往返、question 工具、宿主答复、适配层事实）；`npm run check:runtime` 4/4（真实运行完成、交付边界、脱敏配置、认领代数）。完整 J-01～J-10 仍未执行 |
 
 未覆盖：真实模型下的完整 J-01～J-10 流程；拖拽/触屏手势；320px 以下的可用性；U4 恢复核实与 U5 会话清理的界面（产品未定义交互，问题见 `.agentdev/work/workbench-gaps-20261022/questions.md`）；浏览器套件在 9 次连续全绿中出现过 2 次不可复现的偶发失败（详见该任务 `test.md`）。
+
+## 2026-10-23 Provider 命名/协议与会话命名
+
+| 检查 | 结果 | 证据 |
+|---|---|---|
+| 协议不再推断 | Passed | `config.save` 只接受 `openai-completions` / `openai-responses` / `anthropic-messages`，缺失或拼错返回 `INVALID_ARGUMENT` 且不落库、不写文件；`test/provider-config.test.ts`「refuses a save without a supported protocol」 |
+| Pi 对缺少协议的两种真实反应 | Passed | 直接调用 `ModelRuntime`（本地临时 `models.json`）：自定义 id 且无 `api` → 该模型不加载并报 `no "api" specified`；id 为 `openai` 且无 `api` → 静默解析为 `openai-responses`。这是本轮把协议做成必选字段的原因 |
+| 显示名与标识分离 | Passed | `providers.name` 增量迁移（schema v9→v10）；`config.get` 返回 `name`（空则回退 `providerId`）；`models.json` 同步写 `name`；改名不改变 `providerId`、`credentialRef` 与指派。单测「keeps the id as the identity…」「falls back to the id…」 |
+| 编辑入口 | Passed | 设置页每行「修改」；编辑时技术标识只读，协议为必选下拉；浏览器用例「a provider is added with a name and protocol, then edited without changing its id」 |
+| 会话命名 | Passed | `sessions.title` 增量迁移；`session.rename` 写方法（只允许主管会话、上限 60 字符、空白归一化、revision 冲突）；`session.list` 有存储名用存储名，否则仍取首条用户发言。单测「names a chief conversation…」（清空回到派生名、子会话被拒、陈旧 revision 409）与浏览器用例「a conversation is renamed from the rail…」 |
+| 保存名不被二次截断 | Passed | `session.list` 对存储名原样返回、只对派生的消息载荷做提取与 60 字截断；把该分支改回「总是派生」时用例失败（`Expected: 文档结构 / Received: 帮我看一下…`） |
+| 迁移不破坏现有数据 | Passed | 真实数据目录重启后 `PRAGMA user_version` = 10，`providers.name` / `sessions.title` 就位；两个 provider 与 6 个会话、已完成 Task 记录保持 |
+| 真实端点 | Passed | 本机代理实测 `POST /v1/chat/completions` 200、`/v1/messages` 200、`/v1/responses` 400；改协议为 `openai-completions` 后 `config.test` 对 `openai/group/auto-deepseek-v4-1-flash` 与 `deepseek/deepseek-flash` 均 `available: true`（真实一次 token 往返） |
+| 全套测试 | Passed | 单测 32 文件 344 用例；浏览器 38 用例；`tsc --noEmit` 与 `npm run build` 无输出错误 |
+
+未覆盖：一次真实的「改名后交给另一个浏览器/设备」人工核对（用例在独立浏览器上下文重载中验证了服务端持久化）；provider 删除能力（产品本轮未定义）；`google-generative-ai` 等其他 Pi 协议。

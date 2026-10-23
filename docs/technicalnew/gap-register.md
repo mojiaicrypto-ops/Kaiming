@@ -85,10 +85,13 @@
 | P8 | 分页 cursor 语义统一：需求 `updatedAt\|id`、任务/文件 `id`，并在合同表注明 | C2 暴露的正是「同一资源两种分页语义」 |
 | P9 | 测试只钉可观察行为与合同边界；实现细节用一次性脚本验证 | 与上一轮 review 的结论一致（空测试、源码文本断言被删） |
 
-## 本轮关闭（2026-10-23，真实使用反馈）
+## 本轮缺陷与决定（2026-10-23，真实使用反馈）
 
 | 编号 | 现象 | 证据 | 处置 |
 |---|---|---|---|
+| D11 | Provider 协议无法选择：`config.save` 接受 `api`、`models.json` 会写、`config.get` 会回传，但设置页从不发送 | `webapp/src/settings/ProvidersPage.tsx` 的 `save()` 只写 providerId/baseUrl/models/apiKey | 协议只能由 Pi 推断。实测：自定义 id 且无 `api` → 该模型**拒绝加载**（`no "api" specified`）；id 撞上内置名（如 `openai`）且无 `api` → **静默变成 `openai-responses`**。本机代理实测 `/v1/responses` 返回 400，而 `/v1/chat/completions` 与 `/v1/messages` 均 200 | **已关闭（2026-10-23）**：协议成为创建/修改的必选字段并写入 `models.json`；单测与浏览器用例见 [验证记录](validation.md#2026-10-23-provider-命名协议与会话命名) |
+| D12 | Provider 没有显示名，`providerId` 同时是标识与名字；设置页只有「测试」，没有修改入口 | `ProvidersPage.tsx`（每行仅 test 按钮）、`providers` 表无 name 列 | 用户要改地址、协议或模型只能重加一个 id，旧的 `models.json` 条目与角色指派留在原地 | **已关闭（2026-10-23）**：新增 `providers.name`（显示用，可改）与设置页「修改」入口；`providerId` 创建后不变 |
+| D13 | 会话列的名字固定为派生值，用户不能改；`sessions` 表没有 title 列 | `src/store/store.ts` 的 `listSessions()`（首条用户输入派生） | 「明确不做」原定不新增 title 列 | **已关闭（2026-10-23）**：新增 `sessions.title`（空=继续派生）与 `session.rename`。理由：用户指定的名字不是第二份真相，而是用户意图优先于派生值；读不到存储名才回退到首条发言 |
 | D10 | 换新浏览器打开工作台，项目弹框显示「尚未登记项目」，而服务端已有登记项目 | `webapp/src/state/useWorkspace.ts` 的 `refresh()`：没有本地记住的路径时直接 `setLoading(false); return`，从不调用 `project.list` | **已关闭** — 该分支改为仍读取服务端项目列表；新增浏览器用例「a browser that has never been here still sees the registered projects」（修复前实测 0 行、修复后 1 行） |
 
 ## Q 待改（已决定方向，尚未实施）
@@ -124,7 +127,7 @@
 
 ## 明确不做
 
-- 不新增 `sessions.title` 列（标题派生，避免第二处真相）。
+- ~~不新增 `sessions.title` 列（标题派生，避免第二处真相）。~~ **2026-10-23 反转**：用户可给主管会话改名，`title` 空值才回退派生；见 D13。
 - 不引入状态管理库或请求缓存层（现有 `useState` + 单 `RpcClient` 足够）。
 - 不做虚拟滚动、不做移动端手势、不做多用户权限。
 - 不把 `config.test` 扩成草稿试连（U9）。

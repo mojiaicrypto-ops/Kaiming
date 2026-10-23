@@ -2047,3 +2047,12 @@ kbd {
   font-size: var(--fs-12);
   white-space: nowrap;
 }
+
+/* The rename input replaces the row's title button, so it takes the same share of the row. */
+.srow .srn {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  font-family: inherit;
+  font-size: var(--fs-13);
+}

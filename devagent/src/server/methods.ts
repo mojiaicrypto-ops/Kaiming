@@ -31,6 +31,14 @@ export interface CoreMethodsOptions {
 }
 
 /**
+ * The protocols this workbench offers. Pi knows more, but these three cover the endpoints the product
+ * supports, and a closed list turns a typo into a clear refusal instead of a provider that never
+ * loads. Values are Pi's own `api` identifiers in `models.json`.
+ */
+export const PROVIDER_APIS = ['openai-completions', 'openai-responses', 'anthropic-messages'] as const;
+export type ProviderApi = (typeof PROVIDER_APIS)[number];
+
+/**
  * The effective configuration (R5): the role override wins over the project override, which wins over
  * the server default. Keys never travel - a provider is described by where its credential lives.
  */
@@ -48,6 +56,8 @@ function readConfig(options: CoreMethodsOptions, roleId: string, projectId: stri
     effective: redactEffectiveConfig(effective),
     providers: options.store.listProviders().map((provider) => ({
       providerId: provider.providerId,
+      // The label the user sees; the id stays the technical identity everything else refers to.
+      name: provider.name ?? provider.providerId,
       baseUrl: provider.baseUrl,
       api: provider.api,
       models: JSON.parse(provider.models) as Array<{ id: string; name: string }>,
@@ -174,7 +184,21 @@ async function saveProvider(
   if (baseUrl === '') {
     throw new RpcError('INVALID_ARGUMENT', 'baseUrl is required', { providerId });
   }
-  const api = typeof value['api'] === 'string' && value['api'] !== '' ? value['api'] : undefined;
+  // The protocol is chosen, never inferred: Pi falls back to the catalog entry of a same-named
+  // builtin provider, or refuses to load the model at all, and neither failure is visible here.
+  const apiRaw = typeof value['api'] === 'string' ? value['api'] : '';
+  const api = PROVIDER_APIS.find((known) => known === apiRaw);
+  if (api === undefined) {
+    throw new RpcError('INVALID_ARGUMENT', `api must be one of ${PROVIDER_APIS.join(', ')}`, {
+      api: apiRaw,
+      providerId,
+    });
+  }
+  const nameRaw = typeof value['name'] === 'string' ? value['name'].trim() : '';
+  if (nameRaw.length > 80) {
+    throw new RpcError('INVALID_ARGUMENT', 'a provider name is at most 80 characters', { providerId });
+  }
+  const name = nameRaw === '' ? undefined : nameRaw;
   const modelsRaw = Array.isArray(value['models']) ? value['models'] : undefined;
   if (modelsRaw === undefined || modelsRaw.length === 0) {
     throw new RpcError('INVALID_ARGUMENT', 'models must be a non-empty list of { id, name }', { providerId });
@@ -191,7 +215,8 @@ async function saveProvider(
   const written = writeProvider(options.server.agentDir, {
     providerId,
     baseUrl,
-    ...(api !== undefined ? { api } : {}),
+    api,
+    ...(name !== undefined ? { name } : {}),
     ...(apiKey !== undefined ? { apiKey } : {}),
     models,
   });
@@ -201,7 +226,8 @@ async function saveProvider(
   const provider = options.store.saveProvider({
     providerId,
     baseUrl,
-    ...(api !== undefined ? { api } : {}),
+    api,
+    ...(name !== undefined ? { name } : {}),
     models,
     credentialRef: written.credentialRef,
     expectedRevision,
@@ -212,6 +238,7 @@ async function saveProvider(
   await options.reloadRuntime?.();
   return {
     providerId: provider.providerId,
+    name: provider.name ?? provider.providerId,
     revision: provider.revision,
     credentialRef: provider.credentialRef,
     models,
