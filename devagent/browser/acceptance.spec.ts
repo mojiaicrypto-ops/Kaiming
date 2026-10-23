@@ -626,12 +626,13 @@ test('the task panel lists every specialist Session with its state, and opens it
     await page.locator('[data-testid="composer"]').fill('整理产品文档');
     await page.locator('[data-testid="composer"]').press('Enter');
 
-    // The strip shows the Task and how many Sessions it holds before anything is opened.
+    // The strip shows the Task and how many Sessions it holds as soon as there is one.
     await expect(page.locator('[data-testid="task-members-toggle"]')).toContainText(/Members 2|成员 2/, {
       timeout: 25_000,
     });
-    await page.locator('[data-testid="task-members-toggle"]').click();
+    // A running Task opens its panel by itself: progress must not wait for a click.
     const panel = page.locator('[data-testid="task-panel"]');
+    await expect(panel).toBeVisible({ timeout: 15_000 });
     await expect(panel).toContainText('把产品文档按现行代码事实整理');
     const rows = page.locator('[data-testid="task-member-row"]');
     await expect(rows).toHaveCount(2);
@@ -646,6 +647,13 @@ test('the task panel lists every specialist Session with its state, and opens it
     await expect(page.locator('.drawer')).toContainText(/整理产品文档|调查现状/);
     await expect(page.locator('.drawer')).toContainText(/Read-only follow|只读跟随/);
     await page.screenshot({ path: test.info().outputPath('task-panel.png') });
+
+    // Closing it is the user's call and it holds: the panel must not reopen under the next poll.
+    await page.locator('.drawer [aria-label="Esc"], .drawer button:has-text("Esc")').first().click().catch(() => page.keyboard.press('Escape'));
+    await page.locator('[data-testid="task-members-toggle"]').click();
+    await expect(panel).toHaveCount(0);
+    await page.waitForTimeout(3_500);
+    await expect(panel).toHaveCount(0);
   } finally {
     await harness.close();
   }

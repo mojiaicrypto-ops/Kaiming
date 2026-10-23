@@ -64,6 +64,8 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
   const [scrollUi, setScrollUi] = useState<{ locked: boolean; showJumpButton: boolean }>({ locked: false, showJumpButton: false });
   const handleRef = useRef<ReturnType<typeof createAutoscroll> | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
+  /** The collapse the user asked for, remembered per Task: fresh work opens itself again. */
+  const collapsedFor = useRef<string | null>(null);
   const [taskOpen, setTaskOpen] = useState(false);
   /** Inputs the host could not close (a crash, an unknown save): the user must be told they exist. */
   const [interrupted, setInterrupted] = useState<readonly { inputId: string; errorCode: string | null }[]>([]);
@@ -121,6 +123,23 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
   }, [slot.items, slot.busy]);
 
   const taskDetail: TaskDetail | null = slot.taskDetail;
+
+  // The panel opens by itself as soon as the Task is running: the user asked to see the sub-Sessions
+  // without hunting for a toggle. Once they close it, it stays closed for this Task — reopening on
+  // every poll would fight the person looking at the transcript.
+  const taskId = taskDetail?.task.taskId ?? null;
+  const taskRunning =
+    taskDetail !== null && (taskDetail.task.status === 'active' || taskDetail.task.status === 'waiting');
+  const workingMembers = taskDetail === null ? 0 : taskDetail.members.length;
+  useEffect(() => {
+    if (taskId === null || workingMembers === 0) return;
+    if (collapsedFor.current === taskId) return;
+    if (taskRunning) setMembersOpen(true);
+  }, [taskId, taskRunning, workingMembers]);
+  const closeMembers = useCallback((): void => {
+    collapsedFor.current = taskId;
+    setMembersOpen(false);
+  }, [taskId]);
 
   // A member is not in the rail any more, so its row in the Task is where its name comes from: the
   // role and the label the chief gave the assignment, not an id.
@@ -288,7 +307,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
           detail={taskDetail}
           pendingQuestions={openQuestions.length}
           membersOpen={membersOpen}
-          onToggleMembers={() => setMembersOpen((open) => !open)}
+          onToggleMembers={() => (membersOpen ? closeMembers() : setMembersOpen(true))}
           onOpenTask={() => setTaskOpen(true)}
           onFollow={(sessionId) => setFollow(sessionId)}
           followedSessionId={follow}
