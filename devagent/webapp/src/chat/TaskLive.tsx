@@ -46,8 +46,8 @@ export function TaskMemberRows({
           >
             <State kind={state.kind}>{state.label}</State>
             <span className="ml">{row.label}</span>
-            <span className="mn ell" title={row.note}>
-              {row.note}
+            <span className="mn ell" title={row.note || row.assignment}>
+              {row.note || row.assignment}
             </span>
             <span className="mo">{t('chat.member.follow')}</span>
           </button>

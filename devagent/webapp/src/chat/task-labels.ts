@@ -24,7 +24,10 @@ export function usePhaseLabel(): (phase: string) => string {
 /** What the transcript knows about one member of a step, for its row. */
 export interface TaskMemberRow {
   readonly sessionId: string;
+  /** The role, the way the design names a member: short enough for its own column. */
   readonly label: string;
+  /** What the chief asked this member to do; shown when there is no live note to show instead. */
+  readonly assignment: string;
   readonly activity: SessionActivity;
   readonly lastInputStatus: 'completed' | 'failed' | 'stopped' | 'interrupted' | null;
   readonly waitingUser?: boolean;

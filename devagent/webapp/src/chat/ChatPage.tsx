@@ -236,13 +236,16 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
           ? t('task.note.asking', { title: question.title })
           : report !== undefined && lastInputStatus === 'completed'
             ? t('task.note.report', { summary: report.summary ?? '' })
-            : activity === 'processing'
-              ? t('task.note.working', { phase: phaseLabel(member.phase) })
+            : activity === 'processing' && phaseLabel(member.phase) !== roleName
+              ? // A settler working in Settle says nothing twice: the role already names the step.
+                t('task.note.working', { phase: phaseLabel(member.phase) })
               : '';
       return {
         sessionId: member.sessionId,
-        // The row names the role, then the chief's assignment - "Developer · 实现六件套".
-        label: member.label === '' || member.label === member.roleId ? roleName : `${roleName} · ${member.label}`,
+        // The design's row names the role; the assignment is the fallback note, so a long title
+        // cannot squeeze the role out of its column.
+        label: roleName,
+        assignment: member.label === '' || member.label === member.roleId ? '' : member.label,
         activity,
         lastInputStatus,
         waitingUser,

@@ -136,3 +136,18 @@
 | 只列当前在做的成员 | Passed | 继承时只取 live 成员（`membersForDispatch` 新增 `liveSessions` 参数），历史已结束成员不再出现在当前步骤里；webapp 用例新增断言 |
 | 「回到最新」不再压住内容 | Passed | `.jump` 从绝对定位改为 dock 内一行，实测不再覆盖成员行 |
 | 全套测试 | Passed | 服务端 345；webapp 31；浏览器 40；`tsc`/`build` 无错误 |
+
+### 按 `docs/design/tui/` 原型逐组件核对（同日）
+
+用户指出设计稿是 `docs/design` 下的 HTML 原型。仓库里 `docs/design/` 有三轮：`hifi/`（2026-10-21 00:57，提交 60a8037「graphite workbench」静态稿）、`v2/`、`tui/`（提交 8183fe0，含 `chat-view.js` 脚本化对话）。当前实现与 [U1](ui-design.md#u1-范围与现状) 都以 `tui/` 为基准，且用户指出的成员行（`✓ 已结束 / 开发 · 后端 / 报告：… / 跟随 ›`）只存在于 `tui/chat-view.js` 的 `memberRow`。据此逐组件对照并修正：
+
+| 检查 | 结果 | 证据 |
+|---|---|---|
+| 令牌与外壳 | 一致 | `tokens.css` 与 `tui.css` 的 `:root` 逐项相同（字体按 CJK 拆成 `--ui`/`--mono` 是已记录的有意偏差） |
+| 共享选择器 | 262 个中 20 处差异，逐条判定 | 本次修正 `.mrow`、`.jump`、抽屉宽度、纯等待折叠文案；`100dvh`、`minmax(0,1fr)`、`min-height` 等更有防御性的写法保留 |
+| `.mrow` 列 | Passed | 改为设计的 `7.5em 8em minmax(0,1fr) auto`，gap `--s3`、`center`、`4px --s2`；≤860 → `6.5em 1fr auto` 且隐藏详情列（实测 65px/585px/隐藏/47px）；≤560 → `5em 1fr auto`，并删掉遗留的 4 列规则（正是最初错位的同类残留） |
+| 派发卡片 | Passed | 恢复设计头部：`派发 N 名成员` / `继续 <角色>` + 右侧 `等待当前步骤全部成员 · 9.0s`；倒计时按首次出现的时刻本地计时（此前 `elapsedMs` 从未被传入，等宽时间列一直是空） |
+| 状态词 | Passed | 按设计 `actWord`：运行中 / 等你回答 / 已结束 / **未通过** / **已暂停** / **空闲**（失败→未通过、已停止→已暂停、—→空闲） |
+| 名称列 | Passed | `.ml` 只放角色；派发标题进详情列兜底（此前 `角色 · 标题` 塞进 8em 列会截断），阶段与角色同名时不再重复“结算 / 正在 结算” |
+| 折叠行 | Passed | 用设计的 `.tline` 外观（状态 + 标题 + 成员 + 耗时），正文仍在展开里：真实结果是机器 JSON（`t-… completed (s-…:completed) {...}`），铺在单行上不可读 |
+| 全套测试 | Passed | 服务端 345、webapp 31、浏览器 40、`tsc`/`build` 无错误 |

@@ -670,11 +670,11 @@ kbd {
 }
 .mrow {
   display: grid;
-  /* Content-sized columns: the state label must never be squeezed into the next column. */
-  grid-template-columns: max-content minmax(7em, max-content) minmax(0, 1fr) auto;
-  gap: var(--s4);
-  align-items: baseline;
-  padding: 5px var(--s2);
+  /* The design's four columns: state, who, what it is doing, and the way into its transcript. */
+  grid-template-columns: 7.5em 8em minmax(0, 1fr) auto;
+  gap: var(--s3);
+  align-items: center;
+  padding: 4px var(--s2);
   font-size: var(--fs-13);
   width: 100%;
   text-align: left;
@@ -942,10 +942,11 @@ kbd {
   overflow: auto;
 }
 .jump {
-  /* A row of its own above the composer: a pill floating over the transcript covered the last
-     member row it was sitting on top of. */
-  align-self: center;
-  margin: 0 auto var(--s2);
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: -40px;
+  z-index: 5;
   background: var(--raised);
   border: 1px solid var(--line-strong);
   padding: 2px var(--s3);
@@ -1181,6 +1182,17 @@ kbd {
   flex: none;
   font-family: var(--mono);
 }
+/* The same line, clickable: the summary must look exactly like a settled one-liner. */
+details.fold > summary.tline {
+  list-style: none;
+  cursor: pointer;
+}
+details.fold > summary.tline::-webkit-details-marker {
+  display: none;
+}
+details.fold > summary.tline:hover {
+  background: var(--sel);
+}
 
 /* ---------- task strip members ---------- */
 .chip-btn {
@@ -1221,7 +1233,7 @@ kbd {
   top: var(--top);
   bottom: var(--status);
   right: 0;
-  width: min(560px, 100vw);
+  width: min(560px, 92vw);
   background: var(--bg);
   border-left: 1px solid var(--accent);
   z-index: 21;
@@ -1276,7 +1288,7 @@ kbd {
   margin: 2px 0;
 }
 .md-drawer {
-  width: min(720px, 100vw);
+  width: min(720px, 92vw);
 }
 .md-drawer .dh {
   align-items: center;
@@ -1737,6 +1749,13 @@ kbd {
   .chat {
     grid-template-columns: minmax(0, 1fr);
   }
+  /* Narrow: the note is what gives way, not the member's name. */
+  .mrow {
+    grid-template-columns: 6.5em minmax(0, 1fr) auto;
+  }
+  .mrow .mn {
+    display: none;
+  }
   .sessions {
     display: none;
   }
@@ -1800,14 +1819,9 @@ kbd {
   .bn {
     padding: var(--s2) var(--s4);
   }
+  /* The note is already gone below 860; the member's name and its state are what remain. */
   .mrow {
-    grid-template-columns: 5em minmax(0, 1fr) 7em auto;
-  }
-  /* The step and the expected result are the first thing a narrow screen can drop: the role, the
-     assignment, the live state and the way in are what the panel is for. */
-  .mrow .mn,
-  .mrow .ms {
-    display: none;
+    grid-template-columns: 5em minmax(0, 1fr) auto;
   }
   .drawer-tx {
     padding: var(--s4);
