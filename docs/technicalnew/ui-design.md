@@ -10,7 +10,7 @@
 | 唯一外壳：React 19 + Vite 7，`npm run build` 产出 `web-static/`，服务端在 `/` 托管 | `devagent/webapp/vite.config.ts`、`src/server/http.ts` |
 | 三屏：Chat / Requirements / Settings（Providers · Models · Appearance） | `webapp/src/app/`、`chat/`、`requirements/`、`settings/` |
 | 旧的无构建外壳已删除；`/app/*` 301 到同路径 | `src/server/http.ts` |
-| 设计基准是 `docs/design/tui/`：`docs/design/tui/index.html` 是可直接打开的高保真原型（含脚本化对话）；`docs/design/hifi/` 与 `docs/design/v2/` 是更早两轮的静态稿，不作为基准 | `docs/design/tui/{index.html,tui.css,chat-view.js}` |
+| 设计基准是 `docs/design/tui/`：`docs/design/tui/index.html` 是可直接打开的高保真原型（含脚本化对话） | `docs/design/tui/{index.html,tui.css,chat-view.js}` |
 
 不包含：服务端业务语义、Agent 提示词、模型调度。
 

@@ -18,6 +18,7 @@ import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
 import { dispatchOp, type DelegationHost } from './delegation-tools.ts';
 import { asRecord, enrich, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
 import { dispatchRefusalFacts, guidanceFor } from './guidance.ts';
+import { deliveryCommitGaps } from './completion-git.ts';
 
 export interface TaskToolContext {
   readonly store: Store;
@@ -568,6 +569,16 @@ function endOp(context: TaskToolContext, task: TaskRow, params: Record<string, u
     return fail('INVALID_ARGUMENT', 'end needs completionResultId (the settlement, investigation or recovery report)');
   }
   try {
+    // The commit is the model's action, so the host only observes it - and asks the store for the
+    // rest of the gaps so one refusal lists everything. Nothing is closed on this path.
+    const uncommitted = deliveryCommitGaps(context.store, task);
+    if (uncommitted.length > 0) {
+      const gaps = [...context.store.taskCompletionGaps(task.id, completionResultId), ...uncommitted];
+      return fail('COMPLETION_INCOMPLETE', `the Task is not complete yet; missing: ${gaps.join('; ')}`, {
+        gaps,
+        nextActions: guidanceFor(context.store, task).nextActions,
+      });
+    }
     const result = context.store.endTask({ taskId: task.id, completionResultId });
     if (!result.ok) {
       return fail('COMPLETION_INCOMPLETE', `the Task is not complete yet; missing: ${result.gaps.join('; ')}`, {

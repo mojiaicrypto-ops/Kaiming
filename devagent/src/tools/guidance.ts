@@ -6,6 +6,7 @@
  * preconditions hold, and which roles the current phase accepts. The chief still chooses.
  */
 import type { ResultKind, ResultRow, Store, TaskPhase, TaskRow, TaskSessionRow } from '../store/store.ts';
+import { deliveryCommitGaps } from './completion-git.ts';
 
 /** Which phase each role may be dispatched in (G2: Review/Test/settler are step-specific). */
 export const ROLE_PHASE: Readonly<Record<string, readonly TaskPhase[]>> = {
@@ -184,8 +185,9 @@ function dispatchAdvice(task: TaskRow, results: Map<ResultKind, ResultRow>): Nex
 /** The observable facts that stand between the Task and completion (not a decision). */
 function completionFacts(store: Store, task: TaskRow, results: Map<ResultKind, ResultRow>): string[] {
   // One algorithm for the hard part: the same blockers `endTask` checks (members, passed review/test,
-  // unchanged delivery). Guidance only adds the completion-report fact it cannot know without an id.
-  const gaps = [...store.completionBlockers(task.id)];
+  // unchanged delivery), plus the commit the host observes. Guidance only adds the completion-report
+  // fact it cannot know without an id.
+  const gaps = [...store.completionBlockers(task.id), ...deliveryCommitGaps(store, task)];
   if (task.type === 'read') {
     if (!results.has('investigation') && !results.has('recovery')) {
       gaps.push('no investigation or recovery report is recorded');

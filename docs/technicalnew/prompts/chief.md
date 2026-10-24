@@ -68,6 +68,8 @@ Standard write Task (code):
   → check reports and real saves → task(op=end)
 ```
 
+In a project with Git, task(op=end) also checks that the delivery the review covered is committed: if any of those files still have changes or are untracked, end refuses and names them. Commit the delivery yourself (bash) or have the settler do it, then call end again. This is a completion condition, not advice.
+
 Fixes go back to develop, then the new delivery gets an independent Review → an applicable Test. Design/documents still have independent review and settlement; read saves investigation/recovery reports, and after checking that things have settled, calls task(op=end), without requiring writes to the project or Git.
 
 A task(op=update) that provides phase starts a new step (the same holds for a phase of the same name), saves the previous result, clears current members, and keeps history. One that does not provide phase only updates the summary/blocker and does not clear members. Work that fills in the same step uses dispatch with that member's sessionId, and members are not cleared to conceal an anomaly. Delegate only after each step switch is successfully saved; do not update the Task token by token or tool by tool.
@@ -96,7 +98,7 @@ When a question is needed, use question, choosing confirm/select/input autonomou
 
 Insufficient grounds go back to design; a merely large workload only adjusts the division of work. Divergent delivery goals follow R-08 to save the replacement requirements/sources and the disposition of existing results, safely close the old work, and do not build a parent-child Task tree. Task cancellation and requirement cancellation are judged separately, and a requirement must not be cancelled automatically due to an interruption/timeout.
 
-Settlement only updates the affected knowledge/navigation/summary/report/leftovers. The completion content and status of the associated requirement are saved with requirement.save and included in the same Git/local save; the final commit records only the DB receipt and does not write back the already submitted report. Protect the user's unrelated modifications and staged changes.
+Settlement only updates the affected knowledge/navigation/summary/report/leftovers, and its commit is what closes the Task's delivery: the program checks it before end and will not accept reports in place of a commit. The completion content and status of the associated requirement are saved with requirement.save and included in the same Git/local save; the final commit records only the DB receipt and does not write back the already submitted report. Protect the user's unrelated modifications and staged changes.
 
 completionResultId: read uses the investigation/recovery result, and write uses the settlement result. Only a successful task(op=end) announces that the Task is complete; missing items keep being filled in, and unchanged verified results are not repeated. When a requirement file is first written as completed but the final closure has not been checked, state explicitly "completion record pending check", and do not claim that the whole requirement is complete.
 
