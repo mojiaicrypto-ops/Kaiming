@@ -96,3 +96,16 @@
 | 浏览器用例 | Passed | 「a project can override one role, and choosing "default" gives the layer back」：设置 tester → `project-role`、同项目 chief 不受影响、再改一次仍是同一层、选「默认」回到继承 |
 | 迁移不破坏现有数据 | Passed | 真实数据目录重启后 `PRAGMA user_version` = 11，`model_overrides` 主键为 (scope, scopeId, roleId)；原有 3 条全局角色覆盖仍在，项目内 tester 覆盖写入新行 |
 | 全套测试 | Passed | 单测 32 文件 345 用例；浏览器 39 用例；`tsc --noEmit` 与 `npm run build` 无错误 |
+
+## 2026-10-24 任务在对话里的渲染
+
+| 检查 | 结果 | 证据 |
+|---|---|---|
+| 顶部只有流程 | Passed | 任务条删去成员数与展开面板，只留 Task 编号、真实走过的阶段链、状态与暂停/继续；Task `completed`/`cancelled` 后整条不渲染。浏览器用例「a finished dispatch folds to one line…」断言无 `task-members-toggle`、无 `task-panel` |
+| 成员行在派发位置 | Passed | `dispatch` 卡片在调用进行中展开成员行（状态 + 角色·标题 + 阶段 +「跟随」），结束后折叠为一行，真实结果放进展开。浏览器用例同时断言结束后 `details[data-call-id]` 存在、其内部没有 `.mrow`、也没有进行中的 `.disp` |
+| 只列该次点名的成员 | Passed | 新增纯函数 `membersForDispatch`（点名的成员交集；无点名时只有最新的 dispatch 继承当前成员），`webapp/test/dispatch-members.test.ts` 4 项断言 |
+| 顶部不重复成员信息 | Passed | 任务条不再读 `members`，`ChatPage` 删除 `membersOpen`/自动展开逻辑；`MessageItem` 删去未使用的 `memberNote`；CSS 删去 `.strip-panel`/`.strip-goal`/`.strip-m`/`.strip-results`/`.sres` |
+| 看完即真 | Passed | 1440×900 实跑截图（`task-dispatch-inline.png`），以及真实数据目录下 `t-…` 运行中的界面核对 |
+| 全套测试 | Passed | 服务端 32 文件 345 用例；webapp 4 文件 30 用例；浏览器 39 用例；`tsc --noEmit` 与 `npm run build` 无错误 |
+
+未覆盖：派发进行中的成员行由真实长跑 Task 观察（脚本 stub 在成员挂起时整条 assistant 消息不结束，卡片因此尚未出现在转录里，无法在自动化里稳定取到该窗口）；已由设计稿与真实使用核对形态。

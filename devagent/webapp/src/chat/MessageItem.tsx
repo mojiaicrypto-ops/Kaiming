@@ -5,7 +5,7 @@ import { ThinkingBlock } from './ThinkingBlock';
 import { ToolCard } from './ToolCard';
 import { ToolQuestion, ToolReport, ToolRequirement } from './ToolBusiness';
 import { ToolTask, type TaskMemberRow } from './ToolTask';
-import { blocksOf, parseArgs, type ToolResultView } from './transcript-model';
+import { blocksOf, membersForDispatch, parseArgs, type ToolResultView } from './transcript-model';
 import type { HistoryMessage } from '../state/slot';
 
 export interface MessageItemProps {
@@ -16,7 +16,6 @@ export interface MessageItemProps {
   readonly continuation: boolean;
   readonly results: ReadonlyMap<string, ToolResultView>;
   readonly onFollow?: ((sessionId: string) => void) | undefined;
-  readonly memberNote?: ((sessionId: string) => string) | undefined;
   readonly members?: readonly TaskMemberRow[] | undefined;
 }
 
@@ -30,11 +29,19 @@ function extractAnswer(text: string): string {
   return /answer="([^"]*)"/.exec(text)?.[1] ?? '';
 }
 
-export function MessageItem({ message, role, label, continuation, results, onFollow, memberNote, members }: MessageItemProps) {
+export function MessageItem({ message, role, label, continuation, results, onFollow, members }: MessageItemProps) {
   const { t } = useI18n();
   const streaming = message.streaming === true;
   const blocks = blocksOf(message);
   const stopped = message.stopReason === 'aborted';
+
+  // The Task's current membership goes to the LAST dispatch card only: an earlier dispatch happened
+  // before those members existed, and handing it the current list would show work it never started.
+  const lastDispatch = blocks.reduce((last, block, index) => {
+    if (block.kind !== 'tool' || block.name !== 'task') return last;
+    const parsed = parseArgs(block.args);
+    return parsed?.['op'] === 'dispatch' ? index : last;
+  }, -1);
 
   const rendered = blocks.map((block, index) => {
     const isLast = index === blocks.length - 1;
@@ -67,6 +74,8 @@ export function MessageItem({ message, role, label, continuation, results, onFol
       const taskId = typeof parsed?.['taskId'] === 'string' ? parsed['taskId'] : undefined;
       const planMarkdown = typeof parsed?.['planMarkdown'] === 'string' ? parsed['planMarkdown'] : undefined;
       const phase = typeof parsed?.['phase'] === 'string' ? parsed['phase'] : '';
+      // The card stands where the chief dispatched, so it lists the members THAT call named.
+      const own = membersForDispatch(members, parsed, index === lastDispatch);
       return (
         <ToolTask
           key={`c${index}`}
@@ -77,7 +86,7 @@ export function MessageItem({ message, role, label, continuation, results, onFol
           resultText={result?.text}
           taskId={taskId}
           planMarkdown={planMarkdown}
-          members={members}
+          members={own}
           onFollow={onFollow}
           phase={phase}
         />

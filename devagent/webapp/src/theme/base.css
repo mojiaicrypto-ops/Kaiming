@@ -642,6 +642,12 @@ kbd {
   border-color: var(--line);
   color: var(--fg-2);
 }
+/* A summary line of a finished dispatch must not expose live member rows under it: once the call is
+   over, a clickable "follow" row would claim a member is still running. The rows stay in the panel
+   only while the call is open. */
+.tline + .mlist {
+  display: none;
+}
 .mlist {
   display: flex;
   flex-direction: column;
@@ -1162,27 +1168,7 @@ kbd {
   border-color: var(--accent);
   color: var(--fg);
 }
-.strip-m {
-  max-width: 90%;
-  margin: var(--s2) auto 0;
-  border-top: 1px dashed var(--line);
-  padding-top: var(--s2);
-}
 /* The open execution panel: the Task's goal, one row per specialist Session, their reports. */
-.strip-panel {
-  max-width: 90%;
-  margin: var(--s2) auto 0;
-  border-top: 1px dashed var(--line);
-  padding-top: var(--s3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--s2);
-}
-.strip-goal {
-  color: var(--fg-2);
-  font-size: var(--fs-13);
-  line-height: 1.6;
-}
 .mrow {
   grid-template-columns: 5.5em minmax(0, 1.4fr) 4.5em 6em 8.5em auto;
 }
@@ -1211,28 +1197,6 @@ kbd {
   border-color: var(--accent);
   color: var(--accent);
 }
-.strip-results {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.sres {
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
-  border: none;
-  background: none;
-  color: var(--fg-2);
-  font: inherit;
-  font-size: var(--fs-13);
-  text-align: left;
-  padding: 2px 0;
-  cursor: pointer;
-}
-.sres:hover {
-  color: var(--accent);
-}
-
 /* ---------- drawers ---------- */
 .drawer-scrim {
   position: fixed;

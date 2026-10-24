@@ -53,6 +53,32 @@ export function parseArgs(raw: string): Record<string, unknown> | null {
   }
 }
 
+/** The member row the transcript hands to a dispatch card. */
+export interface DispatchMemberView {
+  readonly sessionId: string;
+}
+
+/**
+ * Which members a dispatch card shows: only the ones that call named, at the point it happened. A
+ * call that named none (a resume, an update) inherits the Task's live membership when it is the
+ * newest dispatch - otherwise an older card would claim work that had not started yet.
+ */
+export function membersForDispatch<T extends DispatchMemberView>(
+  members: readonly T[] | undefined,
+  parsed: Record<string, unknown> | null,
+  isNewestDispatch: boolean,
+): readonly T[] | undefined {
+  const named = Array.isArray(parsed?.['sessions'])
+    ? new Set(
+        (parsed['sessions'] as Array<{ sessionId?: unknown }>)
+          .map((entry) => entry.sessionId)
+          .filter((id): id is string => typeof id === 'string'),
+      )
+    : new Set<string>();
+  if (named.size > 0) return (members ?? []).filter((member) => named.has(member.sessionId));
+  return isNewestDispatch ? members : undefined;
+}
+
 /** One line describing what a tool call is doing, for the collapsed summary. */
 export function argSummary(name: string, parsed: Record<string, unknown> | null, raw: string): string {
   const pick = ['command', 'path', 'pattern', 'title', 'query'];

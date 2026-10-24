@@ -65,9 +65,6 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
   const txRef = useRef<HTMLDivElement | null>(null);
   const [scrollUi, setScrollUi] = useState<{ locked: boolean; showJumpButton: boolean }>({ locked: false, showJumpButton: false });
   const handleRef = useRef<ReturnType<typeof createAutoscroll> | null>(null);
-  const [membersOpen, setMembersOpen] = useState(false);
-  /** The collapse the user asked for, remembered per Task: fresh work opens itself again. */
-  const collapsedFor = useRef<string | null>(null);
   const [taskOpen, setTaskOpen] = useState(false);
   /** Inputs the host could not close (a crash, an unknown save): the user must be told they exist. */
   const [interrupted, setInterrupted] = useState<readonly { inputId: string; errorCode: string | null }[]>([]);
@@ -126,25 +123,18 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
 
   const taskDetail: TaskDetail | null = slot.taskDetail;
 
-  // The panel opens by itself as soon as the Task is running: the user asked to see the sub-Sessions
-  // without hunting for a toggle. Once they close it, it stays closed for this Task — reopening on
-  // every poll would fight the person looking at the transcript.
-  const taskId = taskDetail?.task.taskId ?? null;
-  const taskRunning =
-    taskDetail !== null && (taskDetail.task.status === 'active' || taskDetail.task.status === 'waiting');
-  const workingMembers = taskDetail === null ? 0 : taskDetail.members.length;
-  useEffect(() => {
-    if (taskId === null || workingMembers === 0) return;
-    if (collapsedFor.current === taskId) return;
-    if (taskRunning) setMembersOpen(true);
-  }, [taskId, taskRunning, workingMembers]);
-  const closeMembers = useCallback((): void => {
-    collapsedFor.current = taskId;
-    setMembersOpen(false);
-  }, [taskId]);
-
-  // A member is not in the rail any more, so its row in the Task is where its name comes from: the
-  // role and the label the chief gave the assignment, not an id.
+  // A member is not in the rail any more, so the dispatch card in the transcript and the drawer it
+  // opens are where its name comes from: the role and the label the chief gave the assignment.
+  // The row clicked in a dispatch card carries what it knows about its member; the Task's live
+  // detail fills in the rest. Without this the drawer can only name the member after a poll.
+  const [followedRow, setFollowedRow] = useState<TaskMemberRow | null>(null);
+  const followMember = useCallback(
+    (row: TaskMemberRow): void => {
+      setFollowedRow(row);
+      setFollow(row.sessionId);
+    },
+    [],
+  );
   const memberOf = useCallback(
     (sessionId: string): TaskDetail['members'][number] | undefined =>
       taskDetail?.members.find((entry) => entry.sessionId === sessionId),
@@ -153,12 +143,13 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
   const memberLabel = useCallback(
     (sessionId: string): string => {
       const member = memberOf(sessionId);
-      if (member === undefined) return sessionId;
+      // A card's own row names the member before the Task detail has caught up.
+      if (member === undefined) return followedRow?.sessionId === sessionId ? followedRow.label : sessionId;
       return member.label === '' || member.label === member.roleId
         ? t(`chat.role.${member.roleId}` as 'chat.role.member')
         : `${t(`chat.role.${member.roleId}` as 'chat.role.member')} · ${member.label}`;
     },
-    [memberOf, t],
+    [memberOf, followedRow, t],
   );
   const members: readonly TaskMemberRow[] = useMemo(() => {
     const detail = taskDetail;
@@ -310,11 +301,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
         <TaskStrip
           detail={taskDetail}
           pendingQuestions={openQuestions.length}
-          membersOpen={membersOpen}
-          onToggleMembers={() => (membersOpen ? closeMembers() : setMembersOpen(true))}
           onOpenTask={() => setTaskOpen(true)}
-          onFollow={(sessionId) => setFollow(sessionId)}
-          followedSessionId={follow}
           onPause={() => {
             if (taskDetail !== null) {
               void session.rpc
@@ -387,7 +374,11 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
                 busy={slot.busy}
                 variant="chief"
                 members={members}
-                onFollow={(sessionId) => setFollow(sessionId)}
+                onFollow={(sessionId) => {
+                  const row = members.find((entry) => entry.sessionId === sessionId);
+                  if (row === undefined) setFollow(sessionId);
+                  else followMember(row);
+                }}
               />
             )}
           </div>
@@ -457,7 +448,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
           projectId={projectId}
           sessionId={follow}
           label={memberLabel(follow)}
-          phaseLabel={memberOf(follow)?.phase}
+          phaseLabel={memberOf(follow)?.phase ?? (followedRow?.note === '' ? undefined : followedRow?.note)}
           expectedKind={memberOf(follow)?.expectedKind}
           onClose={() => setFollow(null)}
         />

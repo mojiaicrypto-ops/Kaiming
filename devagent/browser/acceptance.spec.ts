@@ -640,17 +640,20 @@ test('a Task member is not a conversation in the rail', async ({ page }) => {
     const strip = page.locator('[data-testid="task-strip"]');
     await expect(strip).toBeVisible({ timeout: 25_000 });
     await expect(page.locator('[data-testid="session-row"]')).toHaveCount(1);
-    // The member is reachable where it belongs: the Task's own members list.
-    await expect(strip).toContainText(/成员 1|Members 1/, { timeout: 15_000 });
+    // The member is reachable where it belongs: the dispatch card in the transcript, which names
+    // the session the strip no longer counts.
+    await expect(page.locator('[data-call-id]').first()).toBeVisible({ timeout: 15_000 });
     await page.screenshot({ path: test.info().outputPath('rail-members.png') });
   } finally {
     await harness.close();
   }
 });
 
-test('the task panel lists every specialist Session with its state, and opens its transcript', async ({ page }) => {
-  // What the user asked for: in the chat, see the Task and, under it, what each child Session is
-  // doing and how it ended, with a way into that session's own transcript.
+test('a finished dispatch folds to one line, and the members are not a toolbar', async ({ page }) => {
+  // What the user asked for, in the part a scripted run can hold still: once the call returns, its
+  // card is a single line (the members it started are history, and their live state lives in the
+  // transcript where they were dispatched), and the Task strip carries the flow instead of a
+  // member count with an expandable panel.
   const harness = await startHarness({
     model: [
       {
@@ -695,34 +698,35 @@ test('the task panel lists every specialist Session with its state, and opens it
     await page.locator('[data-testid="composer"]').fill('整理产品文档');
     await page.locator('[data-testid="composer"]').press('Enter');
 
-    // The strip shows the Task and how many Sessions it holds as soon as there is one.
-    await expect(page.locator('[data-testid="task-members-toggle"]')).toContainText(/Members 2|成员 2/, {
-      timeout: 25_000,
-    });
-    // A running Task opens its panel by itself: progress must not wait for a click.
-    const panel = page.locator('[data-testid="task-panel"]');
-    await expect(panel).toBeVisible({ timeout: 15_000 });
-    await expect(panel).toContainText('把产品文档按现行代码事实整理');
-    const rows = page.locator('[data-testid="task-member-row"]');
-    await expect(rows).toHaveCount(2);
-    // Each row names the role and what that Session is doing; the outcome is the real input state.
-    await expect(panel).toContainText(/Designer|设计/);
-    await expect(panel).toContainText(/Investigator|调查/);
-    // The outcome is the member's real input state: a finished assignment reads done, not "—".
-    await expect(rows.first()).toContainText(/done|已完成/, { timeout: 20_000 });
+    // The call's result really arrives for both members.
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(() => {
+            const bodies = Array.from(document.querySelectorAll('[data-call-id]'));
+            return bodies.map((entry) => (entry.textContent ?? '').replace(/\s+/g, ' ')).join(' || ');
+          }),
+        { timeout: 25_000 },
+      )
+      .toMatch(/Dispatch 2 member|派发 2 名成员/);
 
-    // Opening a member reads its own transcript, not the chief's retelling of it.
-    await page.locator('[data-testid="task-member-open"]').first().click();
-    await expect(page.locator('.drawer')).toContainText(/整理产品文档|调查现状/);
-    await expect(page.locator('.drawer')).toContainText(/Read-only follow|只读跟随/);
-    await page.screenshot({ path: test.info().outputPath('task-panel.png') });
-
-    // Closing it is the user's call and it holds: the panel must not reopen under the next poll.
-    await page.locator('.drawer [aria-label="Esc"], .drawer button:has-text("Esc")').first().click().catch(() => page.keyboard.press('Escape'));
-    await page.locator('[data-testid="task-members-toggle"]').click();
-    await expect(panel).toHaveCount(0);
-    await page.waitForTimeout(3_500);
-    await expect(panel).toHaveCount(0);
+    const settled = await page.evaluate(() => ({
+      // The returned call is one collapsed disclosure, not an expanded list of rows.
+      details: document.querySelectorAll('details[data-call-id]').length,
+      openRows: document.querySelectorAll('details[data-call-id] .mrow').length,
+      liveCards: document.querySelectorAll('.disp[data-call-id]').length,
+      toggle: document.querySelectorAll('[data-testid="task-members-toggle"]').length,
+      panel: document.querySelectorAll('[data-testid="task-panel"]').length,
+      phases: document.querySelector('[data-testid="task-strip"] .phases')?.textContent ?? '',
+    }));
+    expect(settled.details).toBeGreaterThan(0);
+    expect(settled.openRows).toBe(0);
+    expect(settled.liveCards).toBe(0);
+    expect(settled.toggle).toBe(0);
+    expect(settled.panel).toBe(0);
+    // The strip is the flow, and a finished Task has no strip at all.
+    if (settled.phases !== '') expect(settled.phases).toMatch(/Plan|计划/);
+    await page.screenshot({ path: test.info().outputPath('task-dispatch-inline.png') });
   } finally {
     await harness.close();
   }
@@ -782,8 +786,8 @@ test('a specialist report opens from the task detail, with the body it really wr
 
     const strip = page.locator('[data-testid="task-strip"]');
     await expect(strip).toBeVisible({ timeout: 25_000 });
-    // The dispatch reached the browser as a push: the member count did not need a reload.
-    await expect(strip).toContainText(/Members 1|成员 1/, { timeout: 15_000 });
+    // The dispatch reached the browser as a push: the card appeared without a reload.
+    await expect(page.locator('[data-call-id]').first()).toBeVisible({ timeout: 15_000 });
     await page.locator('[data-testid="task-open"]').click();
     const result = page.locator('[data-testid="result-open"]').first();
     await expect(result).toContainText('模块调查完成', { timeout: 15_000 });

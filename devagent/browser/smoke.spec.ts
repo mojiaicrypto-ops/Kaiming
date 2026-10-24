@@ -290,7 +290,13 @@ test('the task strip renders the coordinated Task and polls it', async ({ page }
     await expect(strip).toBeVisible({ timeout: 15_000 });
     await expect(strip).toContainText('t-1');
     await expect(strip).toContainText('Develop');
-    await expect(strip).toContainText('Members 1');
+    // The members are not a toolbar: the strip carries the flow, and the dispatch card in the
+    // transcript is where each member's state lives.
+    await expect(page.locator('[data-testid="task-members-toggle"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="task-panel"]')).toHaveCount(0);
+    // This fixture fabricates the Task through `task.get`, so no dispatch call exists in its
+    // transcript: what matters here is that the strip no longer carries the member list itself.
+
     await expect(page.locator('[data-testid="task-pause"]')).toBeVisible();
     // The running member is reported, which is what the status bar counts.
     await expect(strip).toContainText('Running');

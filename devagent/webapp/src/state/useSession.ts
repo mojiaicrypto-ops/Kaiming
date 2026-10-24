@@ -97,7 +97,14 @@ export function useSession(
         task: TaskDetail['task'];
         members: TaskDetail['members'];
         results: TaskDetail['results'];
-      }>('task.get', { projectId: session.projectId, taskId });
+      }>('task.get', { projectId: session.projectId, taskId }).catch(() => null);
+      if (read === null) {
+        // An unreadable Task is not "this session has no Task": keeping the last real detail beats
+        // blanking the strip and the cards that read their member rows from it.
+        return null;
+      }
+      // Belt as well as braces: a refresh is itself the authority on which Task this session runs.
+      setActiveTaskId(taskId);
       const detail: TaskDetail = { task: read.task, members: read.members, results: read.results };
       dispatch({ type: 'taskDetail', detail });
       return detail;
@@ -151,8 +158,10 @@ export function useSession(
       // wrapped in event (http.ts publishes the notice object as the frame itself).
       const notice = frame as unknown as { entity?: string; id?: string };
       if (frame.type === 'invalidate' && notice.entity === 'task' && typeof notice.id === 'string') {
-        // The server now announces every change to the Task (created, updated, dispatched), so the
+        // The server announces every change to the Task (created, updated, dispatched), so the
         // strip updates on the event itself; the interval is only a fallback for a lost frame.
+        // Not every announcement is a Task change: a member publishing its report names the chief
+        // session as the target, and reading that id as a taskId would blank the card.
         setActiveTaskId(notice.id);
         lastPushAt.current = Date.now();
         void handlers.current.refreshTask(notice.id).catch(() => undefined);
@@ -190,9 +199,11 @@ export function useSession(
           sessionId,
         })
         .then((read) => {
-          if (read.session.currentTaskId !== null) {
-            setActiveTaskId(read.session.currentTaskId);
-              }
+          if (read.session.currentTaskId === null) return;
+          setActiveTaskId(read.session.currentTaskId);
+          // A reload must show the Task straight away, not after the first 3s poll: the strip is
+          // how the user sees what is running.
+          void handlers.current.refreshTask(read.session.currentTaskId).catch(() => undefined);
         })
         .catch(() => undefined);
     };

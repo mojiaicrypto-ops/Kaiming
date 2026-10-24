@@ -96,21 +96,64 @@ export function ToolTask({ callId, op, args, status, resultText, elapsedMs, task
     );
   }
 
-  const sessions = Array.isArray(parsed['sessions']) ? (parsed['sessions'] as Array<{ sessionId?: string; label?: string }>) : [];
+  const sessions = Array.isArray(parsed['sessions'])
+    ? (parsed['sessions'] as Array<{ sessionId?: string; label?: string }>)
+    : [];
   const first = sessions[0]?.sessionId;
   const head =
     typeof first === 'string' && first !== ''
       ? t('task.dispatchContinue', { label: sessions[0]?.label ?? first })
       : t('task.dispatch', { count: sessions.length });
 
-  if (op === 'dispatch' && status === 'ok') {
+  /**
+   * One row per member this call named. The live Task detail is preferred (it carries the real input
+   * state); when it is gone - the Task finished and its detail panel is closed - the call's own
+   * arguments still name the members, and dropping them would erase who was dispatched.
+   */
+  const rows: ReadonlyArray<{
+    sessionId: string;
+    label: string;
+    activity: SessionActivity;
+    lastInputStatus: 'completed' | 'failed' | 'stopped' | 'interrupted' | null;
+    waitingUser: boolean;
+    note: string;
+  }> =
+    members !== undefined && members.length > 0
+      ? members.map((member) => ({
+          sessionId: member.sessionId,
+          label: member.label,
+          activity: member.activity,
+          lastInputStatus: member.lastInputStatus,
+          waitingUser: member.waitingUser === true,
+          note: member.note,
+        }))
+      : sessions
+          .filter((entry): entry is { sessionId: string; label?: string } => typeof entry.sessionId === 'string')
+          .map((entry) => ({
+            sessionId: entry.sessionId,
+            label: entry.label ?? entry.sessionId,
+            activity: 'idle' as SessionActivity,
+            lastInputStatus: null,
+            waitingUser: false,
+            note: '',
+          }));
+
+  // A dispatch that is still running keeps its card open and lists the members it started; only a
+  // returned call folds to one line, because then the rows would claim live work that already ended.
+  if (op === 'dispatch' && status !== 'running') {
+    // One line once the call is over: the members it started are no longer this line's business, and
+    // the raw result belongs behind a disclosure, not sprawling across the transcript.
     return (
-      <div className="tline">
-        <State kind="done" />
-        <span className="tn">{head}</span>
-        <span className="ts">{resultText ?? ''}</span>
-        <span className="tt">{elapsedMs === undefined ? '' : `${(elapsedMs / 1000).toFixed(1)}s`}</span>
-      </div>
+      <details className="tc" data-call-id={callId}>
+        <summary>
+          <State kind="done" />
+          <span className="tn">{head}</span>
+          <span className="ts">{sessions.length > 0 ? sessions.map((entry) => entry.label ?? entry.sessionId).join(' · ') : ''}</span>
+          <span className="tt">{elapsedMs === undefined ? '' : `${(elapsedMs / 1000).toFixed(1)}s`}</span>
+        </summary>
+        <div className="tc-sec">{t('tool.output')}</div>
+        <pre className="tc-out">{resultText ?? ''}</pre>
+      </details>
     );
   }
 
@@ -131,7 +174,7 @@ export function ToolTask({ callId, op, args, status, resultText, elapsedMs, task
   }
 
   return (
-    <div className={`obj disp ${status === 'running' ? 'running' : 'ok'}`}>
+    <div className={`obj disp ${status === 'running' ? 'running' : 'ok'}`} data-call-id={callId}>
       <div className="row">
         <b>{head}</b>
         <span className="sp" />
@@ -143,24 +186,22 @@ export function ToolTask({ callId, op, args, status, resultText, elapsedMs, task
           <State kind="wait">{t('task.dispatched')}</State>
         )}
       </div>
-      {status === 'running' && members !== undefined && members.length > 0 && (
-        <div className="mlist">
-          {members.map((member) => (
-            <button
-              key={member.sessionId}
-              type="button"
-              className="mrow"
-              onClick={() => onFollow?.(member.sessionId)}
-              disabled={onFollow === undefined}
-            >
-              <MemberState activity={member.activity} lastInputStatus={member.lastInputStatus} waitingUser={member.waitingUser === true} />
-              <span className="ml">{member.label}</span>
-              <span className="mn ell">{member.note}</span>
-              <span className="mo">{t('chat.member.follow')}</span>
-            </button>
-          ))}
-        </div>
-      )}
+      <div className="mlist">
+        {rows.map((row) => (
+          <button
+            key={row.sessionId}
+            type="button"
+            className="mrow"
+            onClick={() => onFollow?.(row.sessionId)}
+            disabled={onFollow === undefined}
+          >
+            <MemberState activity={row.activity} lastInputStatus={row.lastInputStatus} waitingUser={row.waitingUser} />
+            <span className="ml">{row.label}</span>
+            <span className="mn ell">{row.note}</span>
+            <span className="mo">{t('chat.member.follow')}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
