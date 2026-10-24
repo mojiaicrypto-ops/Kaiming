@@ -5,34 +5,8 @@ import { parseArgs } from './transcript-model';
 import { ToolCard } from './ToolCard';
 import type { ToolStatus } from './ToolCard';
 import type { SessionActivity } from '../api/stream';
-
-const PHASE_KEY = {
-  clarify: 'task.clarify',
-  analyze: 'task.analyze',
-  design: 'task.design',
-  plan: 'task.plan',
-  develop: 'task.develop',
-  review: 'task.review',
-  test: 'task.test',
-  settle: 'task.settle',
-} as const;
-
-export function usePhaseLabel(): (phase: string) => string {
-  const { t } = useI18n();
-  return (phase: string): string => {
-    const key = PHASE_KEY[phase as keyof typeof PHASE_KEY];
-    return key === undefined ? phase : t(key);
-  };
-}
-
-export interface TaskMemberRow {
-  readonly sessionId: string;
-  readonly label: string;
-  readonly activity: SessionActivity;
-  readonly lastInputStatus: 'completed' | 'failed' | 'stopped' | 'interrupted' | null;
-  readonly waitingUser?: boolean;
-  readonly note: string;
-}
+import { usePhaseLabel, type TaskMemberRow } from './task-labels';
+import { TaskMemberRows } from './TaskLive';
 
 export interface ToolTaskProps {
   /** The call's own id, so a fallback card can be matched to its result. */
@@ -45,6 +19,8 @@ export interface ToolTaskProps {
   readonly taskId?: string | undefined;
   readonly planMarkdown?: string | undefined;
   readonly members?: readonly TaskMemberRow[] | undefined;
+  /** Member sessions working right now: their dispatch stays expanded even if the call returned. */
+  readonly liveSessions?: ReadonlySet<string> | undefined;
   readonly onFollow?: ((sessionId: string) => void) | undefined;
   readonly phase: string;
   readonly summaryText?: string | undefined;
@@ -56,7 +32,7 @@ export interface ToolTaskProps {
  * closing event. Collapsing a finished call to one line is the point — a completed Task must not
  * keep a wall of text in the middle of a conversation (D3/D5/D6/D7).
  */
-export function ToolTask({ callId, op, args, status, resultText, elapsedMs, taskId, planMarkdown, members, onFollow, phase, summaryText }: ToolTaskProps) {
+export function ToolTask({ callId, op, args, status, resultText, elapsedMs, taskId, planMarkdown, members, liveSessions, onFollow, phase, summaryText }: ToolTaskProps) {
   const { t } = useI18n();
   const phaseLabel = usePhaseLabel();
   const parsed = parseArgs(args) ?? {};
@@ -100,10 +76,14 @@ export function ToolTask({ callId, op, args, status, resultText, elapsedMs, task
     ? (parsed['sessions'] as Array<{ sessionId?: string; label?: string }>)
     : [];
   const first = sessions[0]?.sessionId;
+  // A dispatch that named nobody is a pure wait; once it shows the live members it is simply the
+  // current step, and "Dispatch 0 member(s)" would be a lie in front of their rows.
   const head =
     typeof first === 'string' && first !== ''
       ? t('task.dispatchContinue', { label: sessions[0]?.label ?? first })
-      : t('task.dispatch', { count: sessions.length });
+      : sessions.length === 0 && (members?.length ?? 0) > 0
+        ? t('task.currentStep')
+        : t('task.dispatch', { count: sessions.length });
 
   /**
    * One row per member this call named. The live Task detail is preferred (it carries the real input
@@ -138,9 +118,11 @@ export function ToolTask({ callId, op, args, status, resultText, elapsedMs, task
             note: '',
           }));
 
-  // A dispatch that is still running keeps its card open and lists the members it started; only a
-  // returned call folds to one line, because then the rows would claim live work that already ended.
-  if (op === 'dispatch' && status !== 'running') {
+  // The card stays open while the work it started is still going: the chief's call returns when its
+  // wait expires, but the members keep developing, and folding then hides exactly what the user is
+  // watching. A returned call whose members have all stopped folds to one line as before.
+  const live = members !== undefined && liveSessions !== undefined && members.some((row) => liveSessions.has(row.sessionId));
+  if (op === 'dispatch' && status !== 'running' && !live) {
     // One line once the call is over: the members it started are no longer this line's business, and
     // the raw result belongs behind a disclosure, not sprawling across the transcript.
     return (
@@ -178,49 +160,15 @@ export function ToolTask({ callId, op, args, status, resultText, elapsedMs, task
       <div className="row">
         <b>{head}</b>
         <span className="sp" />
-        {status === 'running' ? (
-          <State kind="run">{t('task.waitingStep', { elapsed: `${((elapsedMs ?? 0) / 1000).toFixed(1)}s` })}</State>
+        {status === 'running' || live ? (
+          <State kind="run">{t('task.stepRunning')}</State>
         ) : (
           // "Preparing to dispatch" described a moment that had already ended: the call is over,
           // and what it produced is the sentence beside the head (including a refusal).
           <State kind="wait">{t('task.dispatched')}</State>
         )}
       </div>
-      <div className="mlist">
-        {rows.map((row) => (
-          <button
-            key={row.sessionId}
-            type="button"
-            className="mrow"
-            onClick={() => onFollow?.(row.sessionId)}
-            disabled={onFollow === undefined}
-          >
-            <MemberState activity={row.activity} lastInputStatus={row.lastInputStatus} waitingUser={row.waitingUser} />
-            <span className="ml">{row.label}</span>
-            <span className="mn ell">{row.note}</span>
-            <span className="mo">{t('chat.member.follow')}</span>
-          </button>
-        ))}
-      </div>
+      <TaskMemberRows rows={rows} onFollow={(sessionId) => onFollow?.(sessionId)} testId="task-dispatch-members" />
     </div>
   );
-}
-
-function MemberState({
-  activity,
-  lastInputStatus,
-  waitingUser,
-}: {
-  activity: SessionActivity;
-  lastInputStatus: 'completed' | 'failed' | 'stopped' | 'interrupted' | null;
-  waitingUser: boolean;
-}) {
-  const { t } = useI18n();
-  if (waitingUser) return <State kind="decide">{t('task.waitingYou')}</State>;
-  if (activity === 'processing') return <State kind="run">{t('tool.running')}</State>;
-  if (activity === 'queued') return <State kind="wait">{t('queue.queued')}</State>;
-  if (lastInputStatus === 'completed') return <State kind="done">{t('tool.done')}</State>;
-  if (lastInputStatus === 'failed') return <State kind="block">{t('tool.failed')}</State>;
-  if (lastInputStatus === 'stopped' || lastInputStatus === 'interrupted') return <State kind="paused">{t('task.paused')}</State>;
-  return <State kind="idle">{t('common.none')}</State>;
 }

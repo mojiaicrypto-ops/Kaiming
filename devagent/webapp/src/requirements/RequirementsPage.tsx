@@ -2,7 +2,7 @@ import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
 import { RequirementDrawer } from './RequirementDrawer';
 import { columnOf, useRequirements, useTasks, type Column, type RequirementSummary, type TaskRowSummary } from './requirement-model';
-import { usePhaseLabel } from '../chat/ToolTask';
+import { usePhaseLabel } from '../chat/task-labels';
 import type { RpcClient } from '../api/rpc';
 
 export interface RequirementsPageProps {

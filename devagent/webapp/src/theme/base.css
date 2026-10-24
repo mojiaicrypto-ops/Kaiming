@@ -648,6 +648,21 @@ kbd {
 .tline + .mlist {
   display: none;
 }
+/* The Task that is running now: same shape as a dispatch card, because it is the same information
+   at the only place it exists before the call returns (and after a reload). */
+.live-run {
+  border-color: var(--run);
+  margin-top: var(--s3);
+}
+.live-run .live-goal {
+  margin-top: var(--s2);
+  color: var(--fg-2);
+  font-size: var(--fs-13);
+  line-height: 1.6;
+}
+.live-run .mlist {
+  margin-top: var(--s2);
+}
 .mlist {
   display: flex;
   flex-direction: column;

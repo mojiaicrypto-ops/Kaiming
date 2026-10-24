@@ -1,6 +1,6 @@
 import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
-import { usePhaseLabel } from './ToolTask';
+import { usePhaseLabel } from './task-labels';
 import type { TaskDetail } from '../state/slot';
 
 /** The order the phases really happen in (store TaskPhase), used only to sort what the Task did. */

@@ -109,3 +109,15 @@
 | 全套测试 | Passed | 服务端 32 文件 345 用例；webapp 4 文件 30 用例；浏览器 39 用例；`tsc --noEmit` 与 `npm run build` 无错误 |
 
 未覆盖：派发进行中的成员行由真实长跑 Task 观察（脚本 stub 在成员挂起时整条 assistant 消息不结束，卡片因此尚未出现在转录里，无法在自动化里稳定取到该窗口）；已由设计稿与真实使用核对形态。
+
+### 运行中的 Task 在对话里（同日补正）
+
+真实项目复核发现上一版仍有缺口：主管在 `dispatch` 里等待时，承载该调用的 assistant 消息尚未结束、不进入历史，**刷新后转录里没有派发卡片**；而卡片按“调用是否返回”折叠，等待超时返回后成员仍在跑也会被收起。两处都已在真实项目与自动化里核对：
+
+| 检查 | 结果 | 证据 |
+|---|---|---|
+| 展开条件 | Passed | `liveSessions` 由成员状态判定（`activity` 或派发输入状态未终结）；只有**最新一次**派发卡片吃这个集合，历史派发仍折叠。真实项目 `t-70da006f`：刷新前后都是 `1` 个展开卡片 + `1` 行 `Developer · 实现 S0 六件套与产物链路 · running`；截图 `final-reload2.png` |
+| 刷新后可见 | Passed | 无派发调用时转录末尾渲染「当前步骤」块（Task 号 / 阶段 / 目标 / 成员行）。浏览器用例「a running Task is in the conversation even when history has no dispatch yet」：路由构造 `task.get` 与 `session.get`，断言块与成员行在打开与刷新后都存在 |
+| 不重复 | Passed | 同一成员只出现一次：存在任一派发调用时该块隐藏（用例断言 `.disp` 与 `task-live` 不同时出现于真实场景；真实项目 `live=0, rows=1`） |
+| 行内命名 | Passed | 成员行显示「角色 · 派发标题」（与设计稿一致），由 `ChatPage` 统一生成，派发卡片与当前步骤块共用 `TaskMemberRows` |
+| 全套测试 | Passed | 服务端 345 用例；webapp 30 用例；浏览器 40 用例；`tsc`/`build` 无错误 |

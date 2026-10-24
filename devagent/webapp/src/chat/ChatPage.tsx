@@ -6,6 +6,7 @@ import { useTier } from '../layout/useTier';
 import { Transcript } from './Transcript';
 import { Banner } from './Banner';
 import { TaskStrip } from './TaskStrip';
+import { TaskLive } from './TaskLive';
 import { InteractionPanel, type AnswerState } from './InteractionPanel';
 import { Composer, DockHint } from './Composer';
 import { QueuedInputs } from './QueuedInputs';
@@ -13,10 +14,11 @@ import { EmptyState } from './EmptyState';
 import { MemberDrawer } from './MemberDrawer';
 import { TaskDrawer } from './TaskDrawer';
 import { echoOf } from './interaction-model';
+import { parseArgs } from './transcript-model';
 import { createAutoscroll } from '../lib/scroll';
 import type { ChiefSessionApi } from '../state/useSession';
 import type { SessionRow } from '../state/useWorkspace';
-import type { TaskMemberRow } from './ToolTask';
+import type { TaskMemberRow } from './task-labels';
 import type { TaskDetail } from '../state/slot';
 import type { PendingInteraction } from '../api/stream';
 import { errorText } from '../lib/errors';
@@ -123,6 +125,64 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
 
   const taskDetail: TaskDetail | null = slot.taskDetail;
 
+  /**
+   * The running Task must be visible in the conversation, and after a reload the dispatch card is
+   * not there yet: while the chief waits inside that tool call, the assistant message holding it has
+   * not ended, so nothing is in history to render. This block fills exactly that gap, and steps
+   * aside as soon as a dispatch card names one of the same members.
+   */
+  const liveSessionIds = useMemo(() => {
+    const detail = taskDetail;
+    if (detail === null) return new Set<string>();
+    // "Still working" is not the same as the live activity flag: a member whose input is processing
+    // can read as idle between events. What settles it is the assignment's own status.
+    const settled = new Set(['completed', 'failed', 'stopped', 'interrupted']);
+    return new Set(
+      detail.members
+        .filter((member) => {
+          if (member.activity === 'processing' || member.activity === 'queued') return true;
+          return member.lastInputStatus !== null && member.lastInputStatus !== undefined
+            ? !settled.has(member.lastInputStatus)
+            : false;
+        })
+        .map((member) => member.sessionId),
+    );
+  }, [taskDetail]);
+
+  /**
+   * The newest dispatch call in the transcript. Only that one may show live member state: an older
+   * dispatch of the same member is the record of what was ordered then, not what is running now.
+   */
+  const liveCallId = useMemo(() => {
+    let newest: string | undefined;
+    for (const item of slot.items) {
+      for (const block of item.content) {
+        if (block.type !== 'toolCall' || block.name !== 'task') continue;
+        const parsed = parseArgs(block.arguments ?? '');
+        if (parsed?.['op'] === 'dispatch' && typeof block.id === 'string') newest = block.id;
+      }
+    }
+    return newest;
+  }, [slot.items]);
+
+  /**
+   * The running Task must be visible in the conversation, and after a reload the dispatch card is
+   * not there yet: while the chief waits inside that tool call, the assistant message holding it has
+   * not ended, so nothing is in history to render. This block fills exactly that gap and steps aside
+   * as soon as any dispatch call exists - that card then carries the same members, live.
+   */
+  const liveRun = useMemo(() => {
+    const detail = taskDetail;
+    if (detail === null || liveCallId !== undefined) return null;
+    if (detail.members.length === 0) return null;
+    return detail.task.status === 'active' ||
+      detail.task.status === 'waiting' ||
+      detail.task.status === 'pausing' ||
+      detail.task.status === 'paused'
+      ? detail
+      : null;
+  }, [taskDetail, liveCallId]);
+
   // A member is not in the rail any more, so the dispatch card in the transcript and the drawer it
   // opens are where its name comes from: the role and the label the chief gave the assignment.
   // The row clicked in a dispatch card carries what it knows about its member; the Task's live
@@ -154,15 +214,20 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
   const members: readonly TaskMemberRow[] = useMemo(() => {
     const detail = taskDetail;
     if (detail === null) return [];
-    return detail.members.map((member) => ({
+    return detail.members.map((member) => {
+      const roleName = t(`chat.role.${member.roleId}` as 'chat.role.member');
+      return {
       sessionId: member.sessionId,
-      label: member.label,
+      // The row names the role, then the chief's assignment - "Developer · 实现六件套", the way a
+      // dispatch reads in the conversation.
+      label: member.label === '' || member.label === member.roleId ? roleName : `${roleName} · ${member.label}`,
       activity: member.activity ?? 'idle',
       lastInputStatus: member.lastInputStatus ?? null,
       waitingUser: member.currentInputId !== null && (member.activity ?? 'idle') === 'idle',
       note: (member.activity ?? 'idle') === 'processing' ? member.phase : '',
-    }));
-  }, [taskDetail]);
+      };
+    });
+  }, [taskDetail, t]);
 
   // The local echo keeps an answered card on screen just long enough to prove the answer was
   // recorded (a few seconds), then closes it: a box that stays after the question is over blocks
@@ -370,15 +435,31 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
               <EmptyState hasProject={hasProject} onExample={(text) => void submit(text, [])} />
             ) : (
               <Transcript
-                items={slot.items}
-                busy={slot.busy}
-                variant="chief"
+                  items={slot.items}
+                  busy={slot.busy}
+                  variant="chief"
+                  members={members}
+                  liveSessions={liveSessionIds}
+                  liveCallId={liveCallId}
+                  onFollow={(sessionId) => {
+                    const row = members.find((entry) => entry.sessionId === sessionId);
+                    if (row === undefined) setFollow(sessionId);
+                    else followMember(row);
+                  }}
+                />
+            )}
+            {/* Outside the transcript switch: a Task can be running before any message is stored. */}
+            {liveRun !== null && (
+              <TaskLive
+                detail={liveRun}
                 members={members}
+                pendingQuestions={openQuestions.length}
                 onFollow={(sessionId) => {
                   const row = members.find((entry) => entry.sessionId === sessionId);
                   if (row === undefined) setFollow(sessionId);
                   else followMember(row);
                 }}
+                onOpenTask={() => setTaskOpen(true)}
               />
             )}
           </div>

@@ -4,7 +4,7 @@ import { State } from '../app/State';
 import { MessageItem } from './MessageItem';
 import { indexToolResults } from './transcript-model';
 import type { HistoryMessage } from '../state/slot';
-import type { TaskMemberRow } from './ToolTask';
+import type { TaskMemberRow } from './task-labels';
 import type { SessionActivity } from '../api/stream';
 
 export interface TranscriptProps {
@@ -14,6 +14,10 @@ export interface TranscriptProps {
   readonly variant: 'chief' | 'agent';
   readonly onFollow?: ((sessionId: string) => void) | undefined;
   readonly members?: readonly TaskMemberRow[] | undefined;
+  /** Member sessions working now: their dispatch card stays expanded. */
+  readonly liveSessions?: ReadonlySet<string> | undefined;
+  /** The newest dispatch call in this transcript: the only one that may show live member state. */
+  readonly liveCallId?: string | undefined;
 }
 
 /**
@@ -22,7 +26,7 @@ export interface TranscriptProps {
  * results are indexed by call id first, so a card flips in place instead of a second blob
  * appearing below it (R4).
  */
-export function Transcript({ items, busy, variant, onFollow, members }: TranscriptProps) {
+export function Transcript({ items, busy, variant, onFollow, members, liveSessions, liveCallId }: TranscriptProps) {
   const { t } = useI18n();
   const results = useMemo(() => indexToolResults(items), [items]);
   const live = items.some((message) => message.streaming === true);
@@ -48,6 +52,8 @@ export function Transcript({ items, busy, variant, onFollow, members }: Transcri
             results={results}
             onFollow={onFollow}
             members={members}
+            liveSessions={liveSessions}
+            liveCallId={liveCallId}
           />
         );
       })}

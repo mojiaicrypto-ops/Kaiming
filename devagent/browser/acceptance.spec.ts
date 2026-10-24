@@ -649,6 +649,77 @@ test('a Task member is not a conversation in the rail', async ({ page }) => {
   }
 });
 
+test('a running Task is in the conversation even when history has no dispatch yet', async ({ page }) => {
+  // The case the user hit: the chief is waiting inside the dispatch call, so the assistant message
+  // that holds it has not ended and nothing about the Task is in history. A reload must still show
+  // the Task and its member. The Task is served by `task.get`, which is what the page reads.
+  const harness = await startHarness();
+  const task = {
+    task: { taskId: 't-live', type: 'write', phase: 'develop', status: 'active', revision: 4, goal: '按验收实现六件套' },
+    members: [
+      {
+        sessionId: 's-live',
+        roleId: 'developer',
+        phase: 'develop',
+        label: '实现六件套',
+        expectedKind: 'code',
+        currentInputId: 'i-live',
+        activity: 'processing',
+      },
+    ],
+    results: [],
+  };
+  await page.route('**/api/v1/rpc', async (route) => {
+    const body = route.request().postData() ?? '';
+    if (!body.includes('"task.get"') && !body.includes('"session.get"')) return route.continue();
+    const envelope = JSON.parse(body) as { requestId: string };
+    const result = body.includes('"task.get"')
+      ? task
+      : {
+          session: {
+            sessionId: 's',
+            projectId: 'p',
+            roleId: 'chief',
+            currentTaskId: 't-live',
+            revision: 1,
+            activity: 'processing',
+            currentInputId: 'i-1',
+            lastActivityAt: null,
+          },
+        };
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ requestId: envelope.requestId, result }),
+    });
+  });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await page.locator('[data-testid="project-switcher"]').click();
+    await page.locator('[data-testid="project-row"]').first().click();
+    await expect(page.locator('[data-testid="composer"]')).toBeEnabled();
+
+    const live = page.locator('[data-testid="task-live"]');
+    await expect(live).toBeVisible({ timeout: 20_000 });
+    await expect(live).toContainText('按验收实现六件套');
+    const rows = page.locator('[data-testid="task-live-members"] [data-testid="task-member-row"]');
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first()).toContainText(/developer|开发/i);
+    await expect(rows.first()).toContainText(/running|运行/);
+
+    // The whole point: a reload while the Task runs keeps it on screen.
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.locator('[data-testid="task-live"]')).toBeVisible({ timeout: 20_000 });
+    await expect(
+      page.locator('[data-testid="task-live-members"] [data-testid="task-member-row"]'),
+    ).toHaveCount(1);
+    await page.screenshot({ path: test.info().outputPath('task-live-after-reload.png') });
+  } finally {
+    await harness.close();
+  }
+});
+
 test('a finished dispatch folds to one line, and the members are not a toolbar', async ({ page }) => {
   // What the user asked for, in the part a scripted run can hold still: once the call returns, its
   // card is a single line (the members it started are history, and their live state lives in the
@@ -670,6 +741,12 @@ test('a finished dispatch folds to one line, and the members are not a toolbar',
               planMarkdown: '# 文档整理\n',
             }),
           },
+        ],
+      },
+      {
+        kind: 'tool_calls',
+        calls: [
+          { name: 'task', arguments: JSON.stringify({ op: 'update', phase: 'design', summary: '进入设计' }) },
         ],
       },
       {
@@ -725,7 +802,8 @@ test('a finished dispatch folds to one line, and the members are not a toolbar',
     expect(settled.toggle).toBe(0);
     expect(settled.panel).toBe(0);
     // The strip is the flow, and a finished Task has no strip at all.
-    if (settled.phases !== '') expect(settled.phases).toMatch(/Plan|计划/);
+    // The chain holds the phases this Task really ran; the stub moves it to design.
+    if (settled.phases !== '') expect(settled.phases).toMatch(/Design|设计|Plan|计划/);
     await page.screenshot({ path: test.info().outputPath('task-dispatch-inline.png') });
   } finally {
     await harness.close();

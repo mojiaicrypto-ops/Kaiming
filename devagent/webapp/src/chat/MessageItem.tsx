@@ -4,7 +4,8 @@ import { Markdown } from './Markdown';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ToolCard } from './ToolCard';
 import { ToolQuestion, ToolReport, ToolRequirement } from './ToolBusiness';
-import { ToolTask, type TaskMemberRow } from './ToolTask';
+import { ToolTask } from './ToolTask';
+import type { TaskMemberRow } from './task-labels';
 import { blocksOf, membersForDispatch, parseArgs, type ToolResultView } from './transcript-model';
 import type { HistoryMessage } from '../state/slot';
 
@@ -17,6 +18,8 @@ export interface MessageItemProps {
   readonly results: ReadonlyMap<string, ToolResultView>;
   readonly onFollow?: ((sessionId: string) => void) | undefined;
   readonly members?: readonly TaskMemberRow[] | undefined;
+  readonly liveSessions?: ReadonlySet<string> | undefined;
+  readonly liveCallId?: string | undefined;
 }
 
 /**
@@ -29,7 +32,7 @@ function extractAnswer(text: string): string {
   return /answer="([^"]*)"/.exec(text)?.[1] ?? '';
 }
 
-export function MessageItem({ message, role, label, continuation, results, onFollow, members }: MessageItemProps) {
+export function MessageItem({ message, role, label, continuation, results, onFollow, members, liveSessions, liveCallId }: MessageItemProps) {
   const { t } = useI18n();
   const streaming = message.streaming === true;
   const blocks = blocksOf(message);
@@ -87,6 +90,7 @@ export function MessageItem({ message, role, label, continuation, results, onFol
           taskId={taskId}
           planMarkdown={planMarkdown}
           members={own}
+          liveSessions={block.callId === liveCallId ? liveSessions : undefined}
           onFollow={onFollow}
           phase={phase}
         />
