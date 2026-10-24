@@ -670,12 +670,17 @@ kbd {
 }
 .mrow {
   display: grid;
-  grid-template-columns: 7.5em 8em minmax(0, 1fr) auto;
-  gap: var(--s3);
-  align-items: center;
-  padding: 4px var(--s2);
+  /* Content-sized columns: the state label must never be squeezed into the next column. */
+  grid-template-columns: max-content minmax(7em, max-content) minmax(0, 1fr) auto;
+  gap: var(--s4);
+  align-items: baseline;
+  padding: 5px var(--s2);
   font-size: var(--fs-13);
   width: 100%;
+  text-align: left;
+}
+.mrow > .st {
+  white-space: nowrap;
 }
 .mrow:hover {
   background: var(--sel);
@@ -683,9 +688,15 @@ kbd {
 .mrow .ml {
   font-weight: 600;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .mrow .mn {
   color: var(--fg-3);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .mrow .mo {
   color: var(--fg-3);
@@ -931,11 +942,10 @@ kbd {
   overflow: auto;
 }
 .jump {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  top: -40px;
-  z-index: 5;
+  /* A row of its own above the composer: a pill floating over the transcript covered the last
+     member row it was sitting on top of. */
+  align-self: center;
+  margin: 0 auto var(--s2);
   background: var(--raised);
   border: 1px solid var(--line-strong);
   padding: 2px var(--s3);
@@ -1182,22 +1192,6 @@ kbd {
 .chip-btn:hover {
   border-color: var(--accent);
   color: var(--fg);
-}
-/* The open execution panel: the Task's goal, one row per specialist Session, their reports. */
-.mrow {
-  grid-template-columns: 5.5em minmax(0, 1.4fr) 4.5em 6em 8.5em auto;
-}
-.mrow.on {
-  background: var(--sel);
-}
-.mrow .mr {
-  font-weight: 600;
-  white-space: nowrap;
-}
-.mrow .ms {
-  color: var(--fg-3);
-  font-size: var(--fs-12);
-  white-space: nowrap;
 }
 .mrow .mo {
   border: 1px solid var(--line-strong);

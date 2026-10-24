@@ -38,14 +38,6 @@ export function MessageItem({ message, role, label, continuation, results, onFol
   const blocks = blocksOf(message);
   const stopped = message.stopReason === 'aborted';
 
-  // The Task's current membership goes to the LAST dispatch card only: an earlier dispatch happened
-  // before those members existed, and handing it the current list would show work it never started.
-  const lastDispatch = blocks.reduce((last, block, index) => {
-    if (block.kind !== 'tool' || block.name !== 'task') return last;
-    const parsed = parseArgs(block.args);
-    return parsed?.['op'] === 'dispatch' ? index : last;
-  }, -1);
-
   const rendered = blocks.map((block, index) => {
     const isLast = index === blocks.length - 1;
     const cursor = streaming && isLast ? <span className="cursor">▍</span> : null;
@@ -78,7 +70,7 @@ export function MessageItem({ message, role, label, continuation, results, onFol
       const planMarkdown = typeof parsed?.['planMarkdown'] === 'string' ? parsed['planMarkdown'] : undefined;
       const phase = typeof parsed?.['phase'] === 'string' ? parsed['phase'] : '';
       // The card stands where the chief dispatched, so it lists the members THAT call named.
-      const own = membersForDispatch(members, parsed, index === lastDispatch);
+      const own = membersForDispatch(members, parsed, block.callId === liveCallId, liveSessions);
       return (
         <ToolTask
           key={`c${index}`}

@@ -706,7 +706,7 @@ test('a running Task is in the conversation even when history has no dispatch ye
     const rows = page.locator('[data-testid="task-live-members"] [data-testid="task-member-row"]');
     await expect(rows).toHaveCount(1);
     await expect(rows.first()).toContainText(/developer|开发/i);
-    await expect(rows.first()).toContainText(/running|运行/);
+    await expect(rows.first()).toContainText(/running|运行/i);
 
     // The whole point: a reload while the Task runs keeps it on screen.
     await page.reload({ waitUntil: 'domcontentloaded' });

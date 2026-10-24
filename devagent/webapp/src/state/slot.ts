@@ -68,6 +68,8 @@ export interface TaskDetail {
   members: readonly TaskMember[];
   results: ReadonlyArray<{
     resultId: string;
+    /** The member that delivered it: the row for that member shows this report. */
+    sessionId?: string;
     kind: string;
     label?: string;
     summary?: string;

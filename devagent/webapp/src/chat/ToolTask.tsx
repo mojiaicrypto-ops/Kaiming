@@ -76,14 +76,10 @@ export function ToolTask({ callId, op, args, status, resultText, elapsedMs, task
     ? (parsed['sessions'] as Array<{ sessionId?: string; label?: string }>)
     : [];
   const first = sessions[0]?.sessionId;
-  // A dispatch that named nobody is a pure wait; once it shows the live members it is simply the
-  // current step, and "Dispatch 0 member(s)" would be a lie in front of their rows.
-  const head =
-    typeof first === 'string' && first !== ''
-      ? t('task.dispatchContinue', { label: sessions[0]?.label ?? first })
-      : sessions.length === 0 && (members?.length ?? 0) > 0
-        ? t('task.currentStep')
-        : t('task.dispatch', { count: sessions.length });
+  const continuation = typeof first === 'string' && first !== '';
+  // A dispatch that named nobody is a pure wait: it reads "Current step" while it is the live card,
+  // and "Waited for the step" once it has folded, where member rows are no longer beside it.
+  const named = sessions.length > 0;
 
   /**
    * One row per member this call named. The live Task detail is preferred (it carries the real input
@@ -129,8 +125,16 @@ export function ToolTask({ callId, op, args, status, resultText, elapsedMs, task
       <details className="tc" data-call-id={callId}>
         <summary>
           <State kind="done" />
-          <span className="tn">{head}</span>
-          <span className="ts">{sessions.length > 0 ? sessions.map((entry) => entry.label ?? entry.sessionId).join(' · ') : ''}</span>
+          <span className="tn">
+            {continuation
+              ? t('task.dispatchContinue', { label: sessions[0]?.label ?? first })
+              : named
+                ? t('task.dispatch', { count: sessions.length })
+                : t('task.dispatchWait')}
+          </span>
+          {/* A continuation's head already names the member; repeating the labels here read as a
+              stutter ("Continue X · X"). The named case still lists who was dispatched. */}
+          <span className="ts">{!continuation && named ? sessions.map((entry) => entry.label ?? entry.sessionId).join(' · ') : ''}</span>
           <span className="tt">{elapsedMs === undefined ? '' : `${(elapsedMs / 1000).toFixed(1)}s`}</span>
         </summary>
         <div className="tc-sec">{t('tool.output')}</div>
@@ -155,19 +159,15 @@ export function ToolTask({ callId, op, args, status, resultText, elapsedMs, task
     );
   }
 
+  // The design puts the members directly under the chief's message: the rows are the block, with no
+  // header repeating what the sentence above already said.
   return (
-    <div className={`obj disp ${status === 'running' ? 'running' : 'ok'}`} data-call-id={callId}>
-      <div className="row">
-        <b>{head}</b>
-        <span className="sp" />
-        {status === 'running' || live ? (
-          <State kind="run">{t('task.stepRunning')}</State>
-        ) : (
-          // "Preparing to dispatch" described a moment that had already ended: the call is over,
-          // and what it produced is the sentence beside the head (including a refusal).
-          <State kind="wait">{t('task.dispatched')}</State>
-        )}
-      </div>
+    <div
+      className={`obj disp ${status === 'running' ? 'running' : 'ok'}`}
+      data-call-id={callId}
+      data-call-status={status}
+      data-step={live ? 'live' : 'settled'}
+    >
       <TaskMemberRows rows={rows} onFollow={(sessionId) => onFollow?.(sessionId)} testId="task-dispatch-members" />
     </div>
   );

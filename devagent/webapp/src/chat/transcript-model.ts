@@ -67,6 +67,7 @@ export function membersForDispatch<T extends DispatchMemberView>(
   members: readonly T[] | undefined,
   parsed: Record<string, unknown> | null,
   isNewestDispatch: boolean,
+  liveSessions?: ReadonlySet<string>,
 ): readonly T[] | undefined {
   const named = Array.isArray(parsed?.['sessions'])
     ? new Set(
@@ -76,7 +77,12 @@ export function membersForDispatch<T extends DispatchMemberView>(
       )
     : new Set<string>();
   if (named.size > 0) return (members ?? []).filter((member) => named.has(member.sessionId));
-  return isNewestDispatch ? members : undefined;
+  if (!isNewestDispatch) return undefined;
+  // Inheriting means "this is the step running now", so it shows the members still working - not
+  // every member the Task ever had, whose finished rows belong to their own dispatch card.
+  return liveSessions === undefined
+    ? members
+    : (members ?? []).filter((member) => liveSessions.has(member.sessionId));
 }
 
 /** One line describing what a tool call is doing, for the collapsed summary. */

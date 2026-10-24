@@ -211,23 +211,45 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
     },
     [memberOf, followedRow, t],
   );
+  /**
+   * One row per member, with what the design shows beside the name: the report it delivered, the
+   * question it is waiting on, or the phase it is working in. Keeping the sentence here (not in the
+   * row component) lets the dispatch card and the live block read identically.
+   */
   const members: readonly TaskMemberRow[] = useMemo(() => {
     const detail = taskDetail;
     if (detail === null) return [];
+    const phaseLabel = (phase: string): string => t(`task.${phase}` as 'task.plan');
     return detail.members.map((member) => {
       const roleName = t(`chat.role.${member.roleId}` as 'chat.role.member');
+      const activity = member.activity ?? 'idle';
+      const lastInputStatus = member.lastInputStatus ?? null;
+      // A member is waiting on the user only while it really holds a pending question; an idle
+      // assignment that already delivered its report is done, not waiting.
+      const question = slot.pending.find(
+        (entry) => entry.sourceSessionId === member.sessionId && entry.resolved !== true,
+      );
+      const waitingUser = question !== undefined;
+      const report = [...detail.results].reverse().find((entry) => entry.sessionId === member.sessionId && entry.summary);
+      const note =
+        waitingUser && question !== undefined
+          ? t('task.note.asking', { title: question.title })
+          : report !== undefined && lastInputStatus === 'completed'
+            ? t('task.note.report', { summary: report.summary ?? '' })
+            : activity === 'processing'
+              ? t('task.note.working', { phase: phaseLabel(member.phase) })
+              : '';
       return {
-      sessionId: member.sessionId,
-      // The row names the role, then the chief's assignment - "Developer · 实现六件套", the way a
-      // dispatch reads in the conversation.
-      label: member.label === '' || member.label === member.roleId ? roleName : `${roleName} · ${member.label}`,
-      activity: member.activity ?? 'idle',
-      lastInputStatus: member.lastInputStatus ?? null,
-      waitingUser: member.currentInputId !== null && (member.activity ?? 'idle') === 'idle',
-      note: (member.activity ?? 'idle') === 'processing' ? member.phase : '',
+        sessionId: member.sessionId,
+        // The row names the role, then the chief's assignment - "Developer · 实现六件套".
+        label: member.label === '' || member.label === member.roleId ? roleName : `${roleName} · ${member.label}`,
+        activity,
+        lastInputStatus,
+        waitingUser,
+        note,
       };
     });
-  }, [taskDetail, t]);
+  }, [taskDetail, slot.pending, t]);
 
   // The local echo keeps an answered card on screen just long enough to prove the answer was
   // recorded (a few seconds), then closes it: a box that stays after the question is over blocks

@@ -18,21 +18,23 @@ export function TaskMemberRows({
   readonly testId?: string;
 }) {
   const { t } = useI18n();
+  // Compact left column, the way the design reads: a glyph and two or three characters, never a
+  // sentence that pushes the name of the member out of its column.
+  const stateOf = (row: TaskMemberRow): { kind: 'decide' | 'run' | 'wait' | 'done' | 'block' | 'idle'; label: string } => {
+    if (row.waitingUser === true) return { kind: 'decide', label: t('task.state.waiting') };
+    if (row.activity === 'processing') return { kind: 'run', label: t('task.state.running') };
+    if (row.activity === 'queued') return { kind: 'wait', label: t('task.state.queued') };
+    if (row.lastInputStatus === 'completed') return { kind: 'done', label: t('task.state.done') };
+    if (row.lastInputStatus === 'failed') return { kind: 'block', label: t('task.state.failed') };
+    if (row.lastInputStatus === 'stopped' || row.lastInputStatus === 'interrupted') {
+      return { kind: 'block', label: t('task.state.stopped') };
+    }
+    return { kind: 'idle', label: t('task.state.idle') };
+  };
   return (
     <div className="mlist" data-testid={testId}>
       {rows.map((row) => {
-        const state =
-          row.waitingUser === true
-            ? 'decide'
-            : row.activity === 'processing'
-              ? 'run'
-              : row.activity === 'queued'
-                ? 'wait'
-                : row.lastInputStatus === 'failed' || row.lastInputStatus === 'stopped'
-                  ? 'block'
-                  : row.lastInputStatus === 'completed'
-                    ? 'done'
-                    : 'idle';
+        const state = stateOf(row);
         return (
           <button
             key={row.sessionId}
@@ -40,25 +42,13 @@ export function TaskMemberRows({
             className="mrow"
             onClick={() => onFollow(row.sessionId)}
             data-testid="task-member-row"
-            data-state={state}
+            data-state={state.kind}
           >
-            <State kind={state}>
-              {row.waitingUser === true
-                ? t('task.waitingYou')
-                : row.activity === 'processing'
-                  ? t('tool.running')
-                  : row.activity === 'queued'
-                    ? t('queue.queued')
-                    : row.lastInputStatus === 'completed'
-                      ? t('tool.done')
-                      : row.lastInputStatus === 'failed'
-                        ? t('tool.failed')
-                        : row.lastInputStatus === 'stopped' || row.lastInputStatus === 'interrupted'
-                          ? t('task.paused')
-                          : t('common.none')}
-            </State>
+            <State kind={state.kind}>{state.label}</State>
             <span className="ml">{row.label}</span>
-            <span className="mn ell">{row.note}</span>
+            <span className="mn ell" title={row.note}>
+              {row.note}
+            </span>
             <span className="mo">{t('chat.member.follow')}</span>
           </button>
         );

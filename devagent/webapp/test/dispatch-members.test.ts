@@ -26,6 +26,15 @@ describe('which members a dispatch card shows', () => {
     expect(membersForDispatch(members, resume, false)).toBeUndefined();
   });
 
+  it('inherits the running step, not every member the Task ever had', () => {
+    const resume = { op: 'dispatch', waitTimeoutMs: 1000 };
+    const live = new Set(['s-b']);
+    expect(membersForDispatch(members, resume, true, live)?.map((m) => m.sessionId)).toEqual(['s-b']);
+    // A named call is unaffected: it shows who it dispatched, live or not.
+    const named = { op: 'dispatch', sessions: [{ sessionId: 's-a' }, { sessionId: 's-c' }] };
+    expect(membersForDispatch(members, named, true, live)?.map((m) => m.sessionId)).toEqual(['s-a', 's-c']);
+  });
+
   it('has nothing to show when there is no membership and no call', () => {
     expect(membersForDispatch(undefined, null, true)).toBeUndefined();
     expect(membersForDispatch([], { op: 'dispatch' }, true)).toEqual([]);
