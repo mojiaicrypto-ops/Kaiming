@@ -1,9 +1,10 @@
 /**
  * Effective configuration resolution (P2): which model and tool set a logical session runs with.
  *
- * Order: role override → project default → server default. Resolution is a pure function so it can
- * be tested without Pi; availability (does a credential actually exist?) is checked separately by
- * the runtime factory, and an unavailable selection blocks the input instead of falling back.
+ * Order: role inside the project → global role override → project default → server default. Resolution
+ * is a pure function so it can be tested without Pi; availability (does a credential actually exist?)
+ * is checked separately by the runtime factory, and an unavailable selection blocks the input instead
+ * of falling back.
  */
 
 export interface ModelSelection {
@@ -30,13 +31,15 @@ export interface ResolveInput {
   readonly roleId: string;
   readonly server: RuntimeDefaults;
   readonly project?: ProjectOverrides;
+  /** The role's own choice inside this project: narrower than both the role and the project. */
+  readonly projectRole?: ModelSelection;
   readonly roleOverrides?: Readonly<Record<string, ModelSelection>>;
 }
 
 export interface EffectiveConfig {
   readonly selection: ModelSelection;
   /** Where the selection came from — recorded so the user can tell why a model was used. */
-  readonly source: 'role' | 'project' | 'server';
+  readonly source: 'project-role' | 'role' | 'project' | 'server';
   readonly agentDir: string;
   /** Directory of the role prompt files used for this session. */
   readonly promptDir: string;
@@ -45,9 +48,15 @@ export interface EffectiveConfig {
 
 export function resolveEffectiveConfig(input: ResolveInput): EffectiveConfig {
   const roleOverride = input.roleOverrides?.[input.roleId];
-  const selection = roleOverride ?? input.project?.model ?? input.server.model;
+  const selection = input.projectRole ?? roleOverride ?? input.project?.model ?? input.server.model;
   const source: EffectiveConfig['source'] =
-    roleOverride !== undefined ? 'role' : input.project?.model !== undefined ? 'project' : 'server';
+    input.projectRole !== undefined
+      ? 'project-role'
+      : roleOverride !== undefined
+        ? 'role'
+        : input.project?.model !== undefined
+          ? 'project'
+          : 'server';
   return {
     selection,
     source,
@@ -62,6 +71,7 @@ export interface OverrideSource {
   getModelOverride(
     scope: 'role' | 'project',
     scopeId: string,
+    roleId?: string,
   ): { readonly providerId: string; readonly modelId: string } | undefined;
 }
 
@@ -79,9 +89,16 @@ export function resolveStoredConfig(input: {
   const roleOverride = input.store.getModelOverride('role', input.roleId);
   const projectOverride =
     input.projectId === undefined ? undefined : input.store.getModelOverride('project', input.projectId);
+  const projectRoleOverride =
+    input.projectId === undefined
+      ? undefined
+      : input.store.getModelOverride('project', input.projectId, input.roleId);
   return resolveEffectiveConfig({
     roleId: input.roleId,
     server: input.server,
+    ...(projectRoleOverride !== undefined
+      ? { projectRole: { providerId: projectRoleOverride.providerId, modelId: projectRoleOverride.modelId } }
+      : {}),
     ...(projectOverride !== undefined
       ? { project: { model: { providerId: projectOverride.providerId, modelId: projectOverride.modelId } } }
       : {}),

@@ -17,6 +17,7 @@ Dispatcher 读取 session_inputs，提交后唤醒，启动/周期扫描兜底�
 | projects | id/realPath/revision/initializationRef/configRef | realPath 唯一；项目写入授权引用真实用户决定 |
 | sessions | id/projectId/roleId/specialization/cwd/configRef/currentTaskId?/recoveryBlock?/title? | chief 至多一项未结束 Task；专业 Session 只归一个 Task；title 是用户命名，空表示未命名、读取时取该会话首条用户发言；改名不改变归属、历史或授权 |
 | providers | providerId/baseUrl/api/name?/models/credentialRef/revision | providerId 安装内不变，是 models.json key、指派与凭证引用的标识；name 仅供显示，空则用 providerId；api 必须显式保存（协议不推断） |
+| model_overrides | scope/scopeId/roleId?/providerId/modelId/revision | `scope=role` 时 scopeId 是角色；`scope=project` 时 scopeId 是项目，roleId 空表示该项目默认、非空表示该项目内某个角色；同一 (scope,scopeId,roleId) 至多一行 |
 | session_bindings | sessionId/piFile/branchEntryId?/hasHistory/configHash/rulesHash | 指定 Pi 文件；保留原绑定记录，禁止寻找最近文件 |
 | tasks | id/projectId/chiefSessionId/ownerEpoch/requirementId?/type/requiresTest/goal/scope/acceptanceRefs/basisRefs/planRef/authorizationRefs/phase/currentSessionIds/status/revision/summary/nextStep/blockReason/completionResultId?/sourceInputId | 两类 Task、阶段与更新边界唯一见 G2；currentSessionIds 只含当前步骤的专业 Session；revision 仅供界面与宿主 RPC 使用，不进入模型工具参数；控制意图落在对应 session_inputs 的 stopRequestKey/stopReason |
 | task_sessions | sessionId/taskId/roleId/specialization?/phase/label/instructions/refs/dependencies/expectedKind/writeScope/workspaceRef?/currentInputId | 续办时更新 currentInputId；历史输入/结果保留；writeScope 用于并行写成员的覆盖告警 |

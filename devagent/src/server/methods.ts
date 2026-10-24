@@ -50,10 +50,23 @@ function readConfig(options: CoreMethodsOptions, roleId: string, projectId: stri
     store: options.store,
     ...(options.roleOverrides !== undefined ? { roleOverrides: options.roleOverrides } : {}),
   });
+  // The stored layers, so a settings row can show what IT holds instead of guessing from the
+  // effective value: an inherited model is not a saved choice, and a project default is invisible
+  // while a narrower layer wins.
+  const layer = (
+    row: { providerId: string; modelId: string; revision: number } | undefined,
+  ): { providerId: string; modelId: string; revision: number } | null =>
+    row === undefined ? null : { providerId: row.providerId, modelId: row.modelId, revision: row.revision };
   return {
     roleId,
     ...(projectId !== undefined ? { projectId } : {}),
     effective: redactEffectiveConfig(effective),
+    overrides: {
+      role: layer(options.store.getModelOverride('role', roleId)),
+      project: projectId === undefined ? null : layer(options.store.getModelOverride('project', projectId)),
+      projectRole:
+        projectId === undefined ? null : layer(options.store.getModelOverride('project', projectId, roleId)),
+    },
     providers: options.store.listProviders().map((provider) => ({
       providerId: provider.providerId,
       // The label the user sees; the id stays the technical identity everything else refers to.
@@ -168,6 +181,32 @@ export function registerCoreMethods(router: RpcRouter, options: CoreMethodsOptio
       });
     },
   });
+
+  // Removing a layer is a different intent from setting a value: the page offers "default" and the
+  // server must actually drop the row, otherwise the control lies. Idempotent by design - clearing a
+  // layer that is not set is a no-op, not an error.
+  router.register('config.clear', {
+    write: true,
+    run: (params): unknown => {
+      const roleId = typeof params['roleId'] === 'string' && params['roleId'] !== '' ? params['roleId'] : undefined;
+      const projectId =
+        typeof params['projectId'] === 'string' && params['projectId'] !== '' ? params['projectId'] : undefined;
+      if (roleId === undefined && projectId === undefined) {
+        throw new RpcError('INVALID_ARGUMENT', 'roleId, projectId, or both must name the override', {});
+      }
+      if (projectId !== undefined && options.store.getProject(projectId) === undefined) {
+        throw new RpcError('NOT_FOUND', `project ${projectId} does not exist`, { projectId });
+      }
+      const scope = projectId === undefined ? 'role' : 'project';
+      const scopeId = (projectId ?? roleId) as string;
+      const cleared = options.store.deleteModelOverride(
+        scope,
+        scopeId,
+        projectId === undefined ? '' : (roleId ?? ''),
+      );
+      return { scope, scopeId, roleId: projectId === undefined ? '' : (roleId ?? ''), cleared };
+    },
+  });
 }
 
 /** Save a provider definition: the key goes to the private store, the database keeps its reference. */
@@ -247,7 +286,10 @@ async function saveProvider(
   };
 }
 
-/** Assign a provider/model to one role or one project; exactly one scope must be named. */
+/**
+ * Assign a provider/model. Three shapes: a role globally (`roleId`), a project's default (`projectId`),
+ * or one role inside a project (`roleId` + `projectId` — the most specific layer).
+ */
 function saveModelAssignment(
   options: CoreMethodsOptions,
   value: Record<string, unknown>,
@@ -267,15 +309,16 @@ function saveModelAssignment(
       modelId,
     });
   }
-  if ((scope.roleId === undefined) === (scope.projectId === undefined)) {
-    throw new RpcError('INVALID_ARGUMENT', 'exactly one of roleId or projectId must name the override', {});
+  if (scope.roleId === undefined && scope.projectId === undefined) {
+    throw new RpcError('INVALID_ARGUMENT', 'roleId, projectId, or both must name the override', {});
   }
   if (scope.projectId !== undefined && options.store.getProject(scope.projectId) === undefined) {
     throw new RpcError('NOT_FOUND', `project ${scope.projectId} does not exist`, { projectId: scope.projectId });
   }
   const saved = options.store.saveModelOverride({
-    scope: scope.roleId !== undefined ? 'role' : 'project',
-    scopeId: (scope.roleId ?? scope.projectId) as string,
+    scope: scope.projectId === undefined ? 'role' : 'project',
+    scopeId: (scope.projectId ?? scope.roleId) as string,
+    ...(scope.projectId !== undefined && scope.roleId !== undefined ? { roleId: scope.roleId } : {}),
     providerId,
     modelId,
     expectedRevision,
@@ -283,6 +326,7 @@ function saveModelAssignment(
   return {
     scope: saved.scope,
     scopeId: saved.scopeId,
+    roleId: saved.roleId,
     providerId: saved.providerId,
     modelId: saved.modelId,
     revision: saved.revision,

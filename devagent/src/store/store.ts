@@ -158,10 +158,15 @@ export interface ProviderRow {
   readonly updatedAt: string;
 }
 
-/** Which provider/model a role or a project uses, overriding the server default. */
+/**
+ * Which provider/model a role or a project uses, overriding the server default. For `scope=project`
+ * a non-empty `roleId` narrows the override to one role inside that project; empty means the whole
+ * project. A global role override keeps `roleId` empty because `scopeId` already names the role.
+ */
 export interface ModelOverrideRow {
   readonly scope: 'role' | 'project';
   readonly scopeId: string;
+  readonly roleId: string;
   readonly providerId: string;
   readonly modelId: string;
   readonly revision: number;
@@ -369,7 +374,7 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -642,12 +647,13 @@ CREATE TABLE IF NOT EXISTS providers (
 CREATE TABLE IF NOT EXISTS model_overrides (
   scope TEXT NOT NULL,
   scopeId TEXT NOT NULL,
+  roleId TEXT NOT NULL DEFAULT '',
   providerId TEXT NOT NULL,
   modelId TEXT NOT NULL,
   revision INTEGER NOT NULL DEFAULT 1,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL,
-  PRIMARY KEY (scope, scopeId)
+  PRIMARY KEY (scope, scopeId, roleId)
 );
 `;
 
@@ -1558,17 +1564,21 @@ export class Store {
   saveModelOverride(params: {
     scope: 'role' | 'project';
     scopeId: string;
+    /** Only for `scope=project`: the role this override is for; empty means the whole project. */
+    roleId?: string;
     providerId: string;
     modelId: string;
     expectedRevision: number | null;
   }): ModelOverrideRow {
+    const roleId = params.roleId ?? '';
     return this.transaction(() => {
-      const existing = this.getModelOverride(params.scope, params.scopeId);
+      const existing = this.getModelOverride(params.scope, params.scopeId, roleId);
       if (params.expectedRevision === null) {
         if (existing !== undefined) {
           throw new StoreError('VERSION_CONFLICT', `${params.scope} ${params.scopeId} already has an override`, {
             scope: params.scope,
             scopeId: params.scopeId,
+            roleId,
             actual: existing.revision,
           });
         }
@@ -1576,6 +1586,7 @@ export class Store {
         throw new StoreError('VERSION_CONFLICT', `${params.scope} ${params.scopeId} revision does not match`, {
           scope: params.scope,
           scopeId: params.scopeId,
+          roleId,
           expected: params.expectedRevision,
           actual: existing?.revision ?? null,
         });
@@ -1584,19 +1595,27 @@ export class Store {
       if (existing === undefined) {
         this.db
           .prepare(
-            `INSERT INTO model_overrides (scope, scopeId, providerId, modelId, revision, createdAt, updatedAt)
-             VALUES (?, ?, ?, ?, 1, ?, ?)`,
+            `INSERT INTO model_overrides (scope, scopeId, roleId, providerId, modelId, revision, createdAt, updatedAt)
+             VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
           )
-          .run(params.scope, params.scopeId, params.providerId, params.modelId, timestamp, timestamp);
+          .run(params.scope, params.scopeId, roleId, params.providerId, params.modelId, timestamp, timestamp);
       } else {
         this.db
           .prepare(
             `UPDATE model_overrides SET providerId = ?, modelId = ?, revision = revision + 1, updatedAt = ?
-              WHERE scope = ? AND scopeId = ? AND revision = ?`,
+              WHERE scope = ? AND scopeId = ? AND roleId = ? AND revision = ?`,
           )
-          .run(params.providerId, params.modelId, timestamp, params.scope, params.scopeId, params.expectedRevision ?? 0);
+          .run(
+            params.providerId,
+            params.modelId,
+            timestamp,
+            params.scope,
+            params.scopeId,
+            roleId,
+            params.expectedRevision ?? 0,
+          );
       }
-      const saved = this.getModelOverride(params.scope, params.scopeId);
+      const saved = this.getModelOverride(params.scope, params.scopeId, roleId);
       if (saved === undefined) {
         throw new StoreError('NOT_FOUND', `${params.scope} ${params.scopeId} override was not saved`);
       }
@@ -1604,18 +1623,26 @@ export class Store {
     });
   }
 
-  getModelOverride(scope: 'role' | 'project', scopeId: string): ModelOverrideRow | undefined {
+  getModelOverride(scope: 'role' | 'project', scopeId: string, roleId = ''): ModelOverrideRow | undefined {
     const row = this.db
-      .prepare('SELECT * FROM model_overrides WHERE scope = ? AND scopeId = ?')
-      .get(scope, scopeId) as Record<string, unknown> | undefined;
+      .prepare('SELECT * FROM model_overrides WHERE scope = ? AND scopeId = ? AND roleId = ?')
+      .get(scope, scopeId, roleId) as Record<string, unknown> | undefined;
     return row === undefined ? undefined : toModelOverrideRow(row);
   }
 
   listModelOverrides(scope: 'role' | 'project'): ModelOverrideRow[] {
     const rows = this.db
-      .prepare('SELECT * FROM model_overrides WHERE scope = ? ORDER BY scopeId')
+      .prepare('SELECT * FROM model_overrides WHERE scope = ? ORDER BY scopeId, roleId')
       .all(scope) as Array<Record<string, unknown>>;
     return rows.map(toModelOverrideRow);
+  }
+
+  /** Remove one layer of the model configuration: an unnamed role (or the whole project) falls back. */
+  deleteModelOverride(scope: 'role' | 'project', scopeId: string, roleId = ''): boolean {
+    const outcome = this.db
+      .prepare('DELETE FROM model_overrides WHERE scope = ? AND scopeId = ? AND roleId = ?')
+      .run(scope, scopeId, roleId);
+    return outcome.changes > 0;
   }
 
   private requireProvider(providerId: string): ProviderRow {
@@ -2913,6 +2940,42 @@ export class Store {
     this.addColumn('providers', 'name', 'TEXT');
   }
 
+  private migrateV10ToV11(): void {
+    this.transaction(() => {
+      this.applyV11();
+      this.db.exec('PRAGMA user_version = 11;');
+    });
+  }
+
+  /**
+   * v10 → v11: a model override can name a role inside a project, so the table gains `roleId` and the
+   * key becomes (scope, scopeId, roleId). SQLite cannot widen a primary key in place, so the table is
+   * rebuilt; existing rows keep roleId = '' (a global role override, or a project-wide default), which
+   * is exactly what they meant before this version. Column check keeps it idempotent.
+   */
+  private applyV11(): void {
+    if (this.hasColumn('model_overrides', 'roleId')) {
+      return;
+    }
+    this.db.exec(`
+      CREATE TABLE model_overrides_next (
+        scope TEXT NOT NULL,
+        scopeId TEXT NOT NULL,
+        roleId TEXT NOT NULL DEFAULT '',
+        providerId TEXT NOT NULL,
+        modelId TEXT NOT NULL,
+        revision INTEGER NOT NULL DEFAULT 1,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        PRIMARY KEY (scope, scopeId, roleId)
+      );
+      INSERT INTO model_overrides_next (scope, scopeId, roleId, providerId, modelId, revision, createdAt, updatedAt)
+        SELECT scope, scopeId, '', providerId, modelId, revision, createdAt, updatedAt FROM model_overrides;
+      DROP TABLE model_overrides;
+      ALTER TABLE model_overrides_next RENAME TO model_overrides;
+    `);
+  }
+
   /**
    * v8 → v9: the model no longer carries tokens. The candidate object and the report/result versions it
    * bound are gone; a review/test report records the delivery state the program observed (G3), and a
@@ -2954,73 +3017,51 @@ export class Store {
         this.db.exec(SCHEMA_SQL);
         this.applyV9();
         this.applyV10();
+        this.applyV11();
         this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
       });
-    } else if (userVersion === 1) {
-      this.transaction(() => {
-        for (const column of V2_COLUMNS) {
-          this.db.exec(column.ddl);
-        }
-        this.db.exec(SESSION_BINDINGS_SQL);
-        this.db.exec('PRAGMA user_version = 2;');
-      });
-      this.migrateV2ToV3();
-      this.migrateV3ToV4();
-      this.migrateV4ToV5();
-      this.migrateV5ToV6();
-      this.migrateV6ToV7();
-      this.migrateV7ToV8();
-      this.migrateV8ToV9();
-      this.migrateV9ToV10();
-    } else if (userVersion === 2) {
-      this.migrateV2ToV3();
-      this.migrateV3ToV4();
-      this.migrateV4ToV5();
-      this.migrateV5ToV6();
-      this.migrateV6ToV7();
-      this.migrateV7ToV8();
-      this.migrateV8ToV9();
-      this.migrateV9ToV10();
-    } else if (userVersion === 3) {
-      this.migrateV3ToV4();
-      this.migrateV4ToV5();
-      this.migrateV5ToV6();
-      this.migrateV6ToV7();
-      this.migrateV7ToV8();
-      this.migrateV8ToV9();
-      this.migrateV9ToV10();
-    } else if (userVersion === 4) {
-      this.migrateV4ToV5();
-      this.migrateV5ToV6();
-      this.migrateV6ToV7();
-      this.migrateV7ToV8();
-      this.migrateV8ToV9();
-      this.migrateV9ToV10();
-    } else if (userVersion === 5) {
-      this.migrateV5ToV6();
-      this.migrateV6ToV7();
-      this.migrateV7ToV8();
-      this.migrateV8ToV9();
-      this.migrateV9ToV10();
-    } else if (userVersion === 6) {
-      this.migrateV6ToV7();
-      this.migrateV7ToV8();
-      this.migrateV8ToV9();
-      this.migrateV9ToV10();
-    } else if (userVersion === 7) {
-      this.migrateV7ToV8();
-      this.migrateV8ToV9();
-      this.migrateV9ToV10();
-    } else if (userVersion === 8) {
-      this.migrateV8ToV9();
-      this.migrateV9ToV10();
-    } else if (userVersion === 9) {
-      this.migrateV9ToV10();
-    } else if (userVersion !== SCHEMA_VERSION) {
+    } else if (userVersion > SCHEMA_VERSION) {
       throw new StoreError('VERSION_CONFLICT', 'unsupported store schema version', {
         userVersion,
         supported: SCHEMA_VERSION,
       });
+    } else {
+      // One step per version, in order: a database at any older version runs exactly the remaining
+      // ones, so adding a version is one entry here instead of an edit to every earlier branch.
+      const steps: ReadonlyArray<readonly [number, () => void]> = [
+        [
+          1,
+          () =>
+            this.transaction(() => {
+              for (const column of V2_COLUMNS) {
+                this.db.exec(column.ddl);
+              }
+              this.db.exec(SESSION_BINDINGS_SQL);
+              this.db.exec('PRAGMA user_version = 2;');
+            }),
+        ],
+        [2, () => this.migrateV2ToV3()],
+        [3, () => this.migrateV3ToV4()],
+        [4, () => this.migrateV4ToV5()],
+        [5, () => this.migrateV5ToV6()],
+        [6, () => this.migrateV6ToV7()],
+        [7, () => this.migrateV7ToV8()],
+        [8, () => this.migrateV8ToV9()],
+        [9, () => this.migrateV9ToV10()],
+        [10, () => this.migrateV10ToV11()],
+      ];
+      for (const [from, step] of steps) {
+        if (this.pragmas().userVersion === from) {
+          step();
+        }
+      }
+      const migrated = this.pragmas().userVersion;
+      if (migrated !== SCHEMA_VERSION) {
+        throw new StoreError('VERSION_CONFLICT', 'unsupported store schema version', {
+          userVersion: migrated,
+          supported: SCHEMA_VERSION,
+        });
+      }
     }
     // Idempotent invariant that must also hold on databases created by an earlier revision, where
     // the version gate above skips the schema script.
@@ -3147,6 +3188,7 @@ function toModelOverrideRow(row: Record<string, unknown>): ModelOverrideRow {
   return {
     scope: String(row['scope']) === 'project' ? 'project' : 'role',
     scopeId: String(row['scopeId']),
+    roleId: row['roleId'] === null || row['roleId'] === undefined ? '' : String(row['roleId']),
     providerId: String(row['providerId']),
     modelId: String(row['modelId']),
     revision: Number(row['revision']),

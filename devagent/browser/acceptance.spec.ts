@@ -427,6 +427,74 @@ test('the model scope switch changes what is saved, not only what is read', asyn
   }
 });
 
+test('a project can override one role, and choosing "default" gives the layer back', async ({ page }) => {
+  const harness = await startHarness();
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    await page.evaluate(async () => {
+      const handle = (window as unknown as { __agentdev: { rpc: { call: (m: string, p: unknown, o?: { requestId: string }) => Promise<unknown> } } }).__agentdev;
+      for (const value of [
+        {
+          kind: 'provider',
+          providerId: 'p-test',
+          baseUrl: 'http://127.0.0.1:9/v1',
+          api: 'openai-completions',
+          apiKey: 'test-key',
+          models: [
+            { id: 'm-a', name: 'm-a' },
+            { id: 'm-b', name: 'm-b' },
+          ],
+        },
+      ]) {
+        await handle.rpc.call('config.save', { expectedRevision: null, value }, { requestId: `seed-${value.providerId}` });
+      }
+    });
+
+    await page.goto(`${harness.baseUrl}/settings/models`, { waitUntil: 'domcontentloaded' });
+    await page.locator('[data-testid="scope-project"]').click();
+    // The project scope edits every role, not only a project-wide value.
+    await expect(page.locator('[data-testid="model-project"]')).toBeVisible();
+    await expect(page.locator('[data-testid="model-project-tester"]')).toBeVisible();
+
+    await page.locator('[data-testid="model-project-tester"]').selectOption('m-b');
+    await expect(page.locator('.toast').last()).toContainText(/saved|已保存/i);
+
+    const stored = async () =>
+      page.evaluate(async () => {
+        const handle = (window as unknown as { __agentdev: { rpc: { call: (m: string, p: unknown) => Promise<unknown> } } }).__agentdev;
+        const projectId = (window as unknown as { __agentdev: { workspace: { projectId: string } } }).__agentdev.workspace.projectId;
+        const tester = (await handle.rpc.call('config.get', { roleId: 'tester', projectId })) as {
+          effective: { modelId: string; source: string };
+        };
+        const chief = (await handle.rpc.call('config.get', { roleId: 'chief', projectId })) as {
+          effective: { modelId: string; source: string };
+        };
+        return { tester, chief };
+      });
+
+    let read = await stored();
+    expect(read.tester.effective).toMatchObject({ modelId: 'm-b', source: 'project-role' });
+    // A sibling role in the same project is untouched.
+    expect(read.chief.effective.source).not.toBe('project-role');
+
+    // Re-selecting another model updates the same layer instead of failing as a conflict.
+    await page.locator('[data-testid="model-project-tester"]').selectOption('m-a');
+    await expect(page.locator('.toast').last()).toContainText(/saved|已保存/i);
+    read = await stored();
+    expect(read.tester.effective.modelId).toBe('m-a');
+
+    // "Default" is not a label: it removes the layer, and the role falls back.
+    await page.locator('[data-testid="model-project-tester"]').selectOption('');
+    await expect(page.locator('.toast').last()).toContainText(/saved|已保存/i);
+    read = await stored();
+    expect(read.tester.effective.source).not.toBe('project-role');
+  } finally {
+    await harness.close();
+  }
+});
+
 test('a requirement hands off to the chat without sending anything', async ({ page }) => {
   // The board cannot start work. Its action fills the composer so the user can read and edit the
   // request first; a hidden submit would be an action the user never saw.

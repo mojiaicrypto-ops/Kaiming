@@ -1469,7 +1469,7 @@ kbd {
 }
 .rl {
   display: grid;
-  grid-template-columns: 8em 1fr 9em;
+  grid-template-columns: 8em 1fr 17em;
   align-items: center;
   gap: var(--s4);
   padding: 6px 0;
@@ -1488,6 +1488,13 @@ kbd {
 .src {
   color: var(--fg-3);
   font-size: var(--fs-13);
+}
+/* The badge names a layer and the model it resolves to; it must not turn a row into a paragraph. */
+.rl .src {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .src.ov {
   color: var(--accent);

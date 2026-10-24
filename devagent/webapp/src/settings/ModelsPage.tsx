@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
-import { ROLES, useConfig, useRoleConfigs, type ConfigView, type RoleId } from './config-model';
+import { ROLES, useRoleConfigs, type ConfigView, type RoleId } from './config-model';
 import type { RpcClient } from '../api/rpc';
 import { errorText } from '../lib/errors';
 
@@ -13,26 +13,27 @@ export interface ModelsPageProps {
 }
 
 /**
- * Model assignment, in the two scopes the server really has: one model per role (global), or one
- * model for a project (project). The scope switch changes what is *edited*, not only what is read —
- * the server takes exactly one of `roleId`/`projectId` on a save, so a project-scope save that sent
- * a role id would quietly rewrite the global override.
+ * Model assignment, in the layers the server really has: each role globally, a project's default,
+ * and one role inside a project. Every row edits the layer it owns — the select shows what THAT layer
+ * stores, and the badge says which layer the run actually ends up using (role in project → role →
+ * project → default), so an inherited model never looks like a saved choice.
  */
 export function ModelsPage({ rpc, projectId, onSaved, onError }: ModelsPageProps) {
   const { t } = useI18n();
   const [scope, setScope] = useState<'global' | 'project'>(projectId === '' ? 'global' : 'project');
   const [saving, setSaving] = useState<string | null>(null);
-  const roles = useRoleConfigs(rpc, undefined);
-  const project = useConfig(rpc, projectId === '' ? undefined : projectId, 'chief');
-  const models = (roles.configs[0]?.providers ?? []).flatMap((provider) =>
+  const globalRoles = useRoleConfigs(rpc, undefined);
+  const projectRoles = useRoleConfigs(rpc, projectId === '' ? undefined : projectId);
+  const roles = scope === 'global' ? globalRoles : projectRoles;
+  const models = (globalRoles.configs[0]?.providers ?? []).flatMap((provider) =>
     provider.models.map((model) => ({ providerId: provider.providerId, modelId: model.id })),
   );
-  const failed = scope === 'global' ? roles.failed : project.failed;
+  const failed = roles.failed;
 
-  const save = async (key: string, value: Record<string, unknown>, reload: () => Promise<void>): Promise<void> => {
+  const commit = async (key: string, run: () => Promise<unknown>, reload: () => Promise<void>): Promise<void> => {
     setSaving(key);
     try {
-      await rpc.call('config.save', { ...value, expectedRevision: null });
+      await run();
       await reload();
       onSaved(t('settings.saved'));
     } catch (error) {
@@ -42,50 +43,71 @@ export function ModelsPage({ rpc, projectId, onSaved, onError }: ModelsPageProps
     }
   };
 
-  const assignRole = async (role: RoleId, modelId: string): Promise<void> => {
-    const provider = models.find((entry) => entry.modelId === modelId);
-    if (provider === undefined) return;
-    await save(
-      role,
-      { roleId: role, value: { kind: 'model', providerId: provider.providerId, modelId: provider.modelId } },
-      roles.reload,
-    );
-  };
-
-  const assignProject = async (modelId: string): Promise<void> => {
-    const provider = models.find((entry) => entry.modelId === modelId);
-    if (provider === undefined || projectId === '') return;
-    await save(
-      'project',
-      { projectId, value: { kind: 'model', providerId: provider.providerId, modelId: provider.modelId } },
-      project.reload,
+  /** Assign or clear one layer. An empty choice means "inherit", which removes that row's override. */
+  const assign = async (
+    key: string,
+    layer: { roleId?: string; projectId?: string },
+    modelId: string,
+    revision: number | null,
+    reload: () => Promise<void>,
+  ): Promise<void> => {
+    const model = models.find((entry) => entry.modelId === modelId);
+    if (modelId === '') {
+      await commit(key, () => rpc.call('config.clear', layer, { requestId: `clear-${Date.now()}` }), reload);
+      return;
+    }
+    if (model === undefined) return;
+    await commit(
+      key,
+      () =>
+        rpc.call(
+          'config.save',
+          {
+            ...layer,
+            // The revision of the row being changed: null creates, a number updates. Sending null for
+            // an existing row made a second change fail as a conflict.
+            expectedRevision: revision,
+            value: { kind: 'model', providerId: model.providerId, modelId: model.modelId },
+          },
+          { requestId: `assign-${Date.now()}` },
+        ),
+      reload,
     );
   };
 
   const sourceLabel = (source: string): string =>
-    source === 'project'
-      ? t('settings.src.override')
-      : source === 'role'
-        ? t('settings.src.role')
-        : source === 'server'
-          ? t('settings.src.global')
-          : t('settings.src.inherited');
+    source === 'project-role'
+      ? t('settings.src.projectRole')
+      : source === 'project'
+        ? t('settings.src.override')
+        : source === 'role'
+          ? t('settings.src.role')
+          : source === 'server'
+            ? t('settings.src.global')
+            : t('settings.src.inherited');
 
-  const options = (selected: string): ReactNode => (
+  const options = (stored: string, inherited: string): ReactNode => (
     <>
-      <option value="">{t('settings.defaultModel')}</option>
+      <option value="">
+        {stored === '' && inherited !== ''
+          ? t('settings.defaultModelWith', { model: inherited })
+          : t('settings.defaultModel')}
+      </option>
       {models.map((model) => (
         <option key={`${model.providerId}:${model.modelId}`} value={model.modelId}>
           {model.modelId}
         </option>
       ))}
-      {/* A saved model the provider no longer offers must stay visible, or the row would look
-          like it inherited the default while a run would still try the missing model. */}
-      {selected !== '' && !models.some((model) => model.modelId === selected) && (
-        <option value={selected}>{selected}</option>
+      {/* A saved model the provider no longer offers must stay visible, or the row would look like it
+          inherited the default while a run would still try the missing model. */}
+      {stored !== '' && !models.some((model) => model.modelId === stored) && (
+        <option value={stored}>{stored}</option>
       )}
     </>
   );
+
+  const roleConfig = (role: RoleId): ConfigView | undefined =>
+    roles.configs.find((config) => config.roleId === role);
 
   return (
     <section className="set-pane scroll">
@@ -110,47 +132,67 @@ export function ModelsPage({ rpc, projectId, onSaved, onError }: ModelsPageProps
               </button>
             </span>
           </div>
-          {scope === 'global' ? (
-            ROLES.map((entry, index) => {
-              const config: ConfigView | undefined = roles.configs[index];
-              const source = config?.effective.source ?? '';
-              return (
-                <div className="rl" key={entry}>
-                  <span>{t(`settings.role.${entry}` as 'settings.role.chief')}</span>
-                  <select
-                    className="sel"
-                    aria-label={t(`settings.role.${entry}` as 'settings.role.chief')}
-                    value={config?.effective.modelId ?? ''}
-                    onChange={(event) => void assignRole(entry, event.target.value)}
-                    disabled={saving !== null || models.length === 0}
-                    data-testid={`model-${entry}`}
-                  >
-                    {options(config?.effective.modelId ?? '')}
-                  </select>
-                  <span className={source === 'role' ? 'src ov' : 'src'}>{sourceLabel(source)}</span>
-                </div>
-              );
-            })
-          ) : (
+          {scope === 'project' && (
             <div className="rl">
-              <span>{t('settings.scope.project')}</span>
+              <span>{t('settings.scope.projectDefault')}</span>
               <select
                 className="sel"
-                aria-label={t('settings.scope.project')}
-                value={project.config?.effective.source === 'project' ? project.config.effective.modelId : ''}
-                onChange={(event) => void assignProject(event.target.value)}
+                aria-label={t('settings.scope.projectDefault')}
+                value={roleConfig('chief')?.overrides.project?.modelId ?? ''}
+                onChange={(event) =>
+                  void assign(
+                    'project',
+                    { projectId },
+                    event.target.value,
+                    roleConfig('chief')?.overrides.project?.revision ?? null,
+                    projectRoles.reload,
+                  )
+                }
                 disabled={saving !== null || models.length === 0}
                 data-testid="model-project"
               >
-                {options(
-                  project.config?.effective.source === 'project' ? project.config.effective.modelId : '',
-                )}
+                {/* No single inherited value exists for "the whole project": the roles differ. */}
+                {options(roleConfig('chief')?.overrides.project?.modelId ?? '', '')}
               </select>
-              <span className={project.config?.effective.source === 'project' ? 'src ov' : 'src'}>
-                {project.config === null ? '' : sourceLabel(project.config.effective.source)}
+              <span
+                className={roleConfig('chief')?.overrides.project ? 'src ov' : 'src'}
+              >
+                {roleConfig('chief')?.overrides.project ? sourceLabel('project') : t('settings.notSet')}
               </span>
             </div>
           )}
+          {ROLES.map((entry) => {
+            const config = roleConfig(entry);
+            const own = scope === 'global' ? config?.overrides.role : config?.overrides.projectRole;
+            const source = config?.effective.source ?? '';
+            const modelLabel = t(`settings.role.${entry}` as 'settings.role.chief');
+            return (
+              <div className="rl" key={`${scope}-${entry}`}>
+                <span>{modelLabel}</span>
+                <select
+                  className="sel"
+                  aria-label={modelLabel}
+                  value={own?.modelId ?? ''}
+                  onChange={(event) =>
+                    void assign(
+                      `${scope}-${entry}`,
+                      scope === 'global' ? { roleId: entry } : { projectId, roleId: entry },
+                      event.target.value,
+                      own?.revision ?? null,
+                      roles.reload,
+                    )
+                  }
+                  disabled={saving !== null || models.length === 0}
+                  data-testid={scope === 'global' ? `model-${entry}` : `model-project-${entry}`}
+                >
+                  {options(own?.modelId ?? '', config?.effective.modelId ?? '')}
+                </select>
+                <span className={own !== null && own !== undefined ? 'src ov' : 'src'} title={sourceLabel(source)}>
+                  {config === undefined ? '' : sourceLabel(source)}
+                </span>
+              </div>
+            );
+          })}
         </div>
       </div>
     </section>

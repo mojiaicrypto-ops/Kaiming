@@ -83,3 +83,16 @@
 | 全套测试 | Passed | 单测 32 文件 344 用例；浏览器 38 用例；`tsc --noEmit` 与 `npm run build` 无输出错误 |
 
 未覆盖：一次真实的「改名后交给另一个浏览器/设备」人工核对（用例在独立浏览器上下文重载中验证了服务端持久化）；provider 删除能力（产品本轮未定义）；`google-generative-ai` 等其他 Pi 协议。
+
+## 2026-10-24 模型配置的分层
+
+| 检查 | 结果 | 证据 |
+|---|---|---|
+| 项目内按角色设置 | Passed | `model_overrides` 增加 `roleId`（schema v10→v11 重建表，旧行 roleId=''）；`config.save` 同时接受 `roleId`+`projectId`；单测「narrows an override to one role inside a project…」断言该项目内该角色为 `project-role`、同角色在别处仍走全局、同项目其他角色走项目默认 |
+| 分层顺序 | Passed | `项目内角色 → 角色 → 项目默认 → Server 默认`；`EffectiveConfig.source` 增加 `project-role`；契约与产品文档同步（P-05、G4、U6、S2） |
+| 恢复默认真的删除 | Passed | 新增 `config.clear`（幂等）；Models 每行选「默认」即移除该层，单测逐层清回 `role → project → server` 并断言 `overrides` 三个键都为 null |
+| 第二次修改不再冲突 | Passed | 页面改为按已存行的 `revision` 保存（之前一律 `expectedRevision: null`，已存在的层再改会 `VERSION_CONFLICT`）。把该处改回 `null` 后浏览器用例失败，恢复后通过 |
+| 界面可读 | Passed | 项目作用域 8 行（本项目默认 + 7 角色），每行下拉显示「本层存了什么或 `默认（继承的模型）`」，右侧徽标显示生效层；1440×900 下每行 42px，无换行 |
+| 浏览器用例 | Passed | 「a project can override one role, and choosing "default" gives the layer back」：设置 tester → `project-role`、同项目 chief 不受影响、再改一次仍是同一层、选「默认」回到继承 |
+| 迁移不破坏现有数据 | Passed | 真实数据目录重启后 `PRAGMA user_version` = 11，`model_overrides` 主键为 (scope, scopeId, roleId)；原有 3 条全局角色覆盖仍在，项目内 tester 覆盖写入新行 |
+| 全套测试 | Passed | 单测 32 文件 345 用例；浏览器 39 用例；`tsc --noEmit` 与 `npm run build` 无错误 |

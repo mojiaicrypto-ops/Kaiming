@@ -19,8 +19,22 @@ export interface ProviderView {
   readonly revision: number;
 }
 
+/** One saved override, or null when that layer inherits. */
+export interface Assignment {
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly revision: number;
+}
+
 export interface ConfigView {
+  readonly roleId: string;
   readonly effective: { readonly providerId: string; readonly modelId: string; readonly source: string };
+  /** What each layer stores — an inherited model is not a saved choice. */
+  readonly overrides: {
+    readonly role: Assignment | null;
+    readonly project: Assignment | null;
+    readonly projectRole: Assignment | null;
+  };
   readonly providers: readonly ProviderView[];
 }
 

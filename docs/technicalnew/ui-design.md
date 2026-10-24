@@ -91,6 +91,7 @@
 
 - 需求页：四列（提案 / 待实现 / 进行中 / 已完成）是记录状态的投影；无法解析的文件在通知行显示并可查看原文；抽屉按类型显示各自章节。
 - 设置页：Providers（显示名 + 技术标识、地址、协议、模型、是否已配置、试连、编辑）、Models（全局 / 本项目作用域 + 来源标记）、Appearance（主题 / 语言 / 密度）。Provider 的技术标识创建后不可改；显示名、地址、协议、模型列表与凭证可改（凭证留空表示不变）。协议是必选下拉（OpenAI chat/completions / OpenAI responses / Anthropic messages），不按地址或名称推断。
+- Models 两个作用域都是逐行编辑：全局作用域 7 个角色各一行；本项目作用域一行「本项目默认」+ 同样 7 行角色，后者只影响该项目。每行右侧标明当前值来自「项目内角色 / 角色 / 项目默认 / 全局默认」，下拉选「默认」即移除该层覆盖、回到继承。
 
 ## U7 可访问性与文案
 
@@ -129,7 +130,7 @@
 | `task.report.get` | 任务详情里的报告 |
 | `requirement.list` / `requirement.get` | 需求看板、抽屉 |
 | `interaction.respond` | 问题面板 |
-| `config.get` / `config.save` / `config.test` | 设置三页 |
+| `config.get` / `config.save` / `config.clear` / `config.test` | 设置三页（`clear` = Models 行选「默认」） |
 | `session.recovery.resolve` | 无界面：处置由主管的 `task(op=recover)` 执行 |
 | `session.cleanup` | 会话列行内清理（两步确认） |
 | `POST /api/v1/uploads` | composer 添加图片 |

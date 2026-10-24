@@ -46,7 +46,7 @@
 | interaction.respond | projectId、chiefSessionId、interactionId、expectedRevision、response | 请求/响应、当前主管路由、去重、保存后解除等待均按 M5；返回已收到与当前请求状态 |
 | session.stream.prepare | projectId、sessionId | subscriptionId、epoch、boundary、快照；先缓冲后读快照，见 M4 |
 | task.report.get | projectId、taskId、resultId | 校验 Task/结果归属，读取 Server 或项目报告正文；不接受任意路径 |
-| config.get/save/test | projectId?、roleId?；save:expectedRevision/value，test:配置引用 | 脱敏有效配置、版本/实际试连结果；密钥仅保存私有凭证引用 |
+| config.get/save/clear/test | projectId?、roleId?（同时给出表示项目内该角色）；save:expectedRevision/value，clear 无版本，test:配置引用 | 脱敏有效配置与各层已存值、版本/实际试连结果；clear 幂等移除该层；密钥仅保存私有凭证引用 |
 | project.files.list/read | projectId、path；list:cursor?/limit，read:expectedVersion? | 项目相对目录/文件正文；实际路径归属检查，不访问外部符号链接 |
 | session.cleanup | projectId、sessionId、expectedRevision | 只清理无未结束工作且不被当前 Task/成果引用的会话；被引用时拒绝并列明原因 |
 | auth.login/logout | login:本机配置的访问口令；logout:当前会话 | login 建立同源 cookie；logout 撤销 cookie/关闭所属流连接；不进入模型/WAL 业务输入 |

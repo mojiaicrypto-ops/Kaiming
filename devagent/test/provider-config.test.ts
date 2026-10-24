@@ -197,7 +197,7 @@ describe('role and project model assignments', () => {
     ).toBe('VERSION_CONFLICT');
   });
 
-  it('refuses an unknown provider, an unknown model and an ambiguous or missing scope', async () => {
+  it('refuses an unknown provider, an unknown model and a missing scope', async () => {
     const h = await harness();
     await h.call('config.save', { expectedRevision: null, value: provider() });
 
@@ -228,18 +228,6 @@ describe('role and project model assignments', () => {
         (
           await h.call('config.save', {
             expectedRevision: null,
-            roleId: 'chief',
-            projectId: 'p-1',
-            value: { kind: 'model', providerId: 'deepseek', modelId: 'deepseek-flash' },
-          })
-        ).body,
-      ),
-    ).toBe('INVALID_ARGUMENT');
-    expect(
-      errorCode(
-        (
-          await h.call('config.save', {
-            expectedRevision: null,
             value: { kind: 'model', providerId: 'deepseek', modelId: 'deepseek-flash' },
           })
         ).body,
@@ -257,6 +245,73 @@ describe('role and project model assignments', () => {
       ),
     ).toBe('NOT_FOUND');
   });
+
+  it('narrows an override to one role inside a project and clears it back to the inherited layer', async () => {
+    const h = await harness();
+    await h.call('config.save', { expectedRevision: null, value: provider() });
+    await h.call('config.save', {
+      expectedRevision: null,
+      value: provider({
+        providerId: 'alt',
+        baseUrl: 'https://alt.example/v1',
+        models: [{ id: 'alt-1', name: 'alt-1' }],
+      }),
+    });
+    const assign = async (params: Record<string, unknown>, modelId: string): Promise<void> => {
+      const providerId = modelId === 'alt-1' ? 'alt' : 'deepseek';
+      const saved = await h.call('config.save', {
+        ...params,
+        value: { kind: 'model', providerId, modelId },
+      });
+      expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    };
+    const cfg = async (roleId: string, projectId?: string) => {
+      const read = await h.call('config.get', { roleId, ...(projectId === undefined ? {} : { projectId }) });
+      return resultOf<{
+        effective: { providerId: string; modelId: string; source: string };
+        overrides: {
+          role: { modelId: string } | null;
+          project: { modelId: string } | null;
+          projectRole: { modelId: string; revision: number } | null;
+        };
+      }>(read.body);
+    };
+
+    await assign({ expectedRevision: null, roleId: 'chief' }, 'deepseek-flash');
+    await assign({ expectedRevision: null, projectId: 'p-1' }, 'deepseek-flash');
+    // Both ids at once is the layer this feature adds: that role, in that project.
+    await assign({ expectedRevision: null, roleId: 'chief', projectId: 'p-1' }, 'alt-1');
+
+    expect((await cfg('chief', 'p-1')).effective).toMatchObject({
+      providerId: 'alt',
+      modelId: 'alt-1',
+      source: 'project-role',
+    });
+    expect((await cfg('chief', 'p-1')).overrides.projectRole?.modelId).toBe('alt-1');
+    // The same role outside that project keeps its global choice.
+    expect((await cfg('chief')).effective).toMatchObject({ modelId: 'deepseek-flash', source: 'role' });
+    // Another role in the project inherits the project default; the project default therefore
+    // reaches every role that has no narrower choice.
+    expect((await cfg('developer', 'p-1')).effective.source).toBe('project');
+    expect((await cfg('reviewer', 'p-1')).effective.source).toBe('project');
+
+    // Changing an existing layer needs its revision; a second save with null would be a conflict.
+    const stored = await cfg('chief', 'p-1');
+    await assign(
+      { expectedRevision: stored.overrides.projectRole?.revision ?? null, roleId: 'chief', projectId: 'p-1' },
+      'deepseek-flash',
+    );
+    expect((await cfg('chief', 'p-1')).effective).toMatchObject({ modelId: 'deepseek-flash', source: 'project-role' });
+
+    // Clearing walks back down the layers: project role → role → project → server.
+    await h.call('config.clear', { roleId: 'chief', projectId: 'p-1' });
+    expect((await cfg('chief', 'p-1')).effective.source).toBe('role');
+    await h.call('config.clear', { roleId: 'chief' });
+    expect((await cfg('chief', 'p-1')).effective.source).toBe('project');
+    await h.call('config.clear', { projectId: 'p-1' });
+    expect((await cfg('chief', 'p-1')).effective.source).toBe('server');
+    expect((await cfg('chief', 'p-1')).overrides).toEqual({ role: null, project: null, projectRole: null });
+  }, 30_000);
 });
 
 describe('provider name and protocol', () => {
