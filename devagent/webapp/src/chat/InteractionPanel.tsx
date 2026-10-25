@@ -54,6 +54,9 @@ export function InteractionPanel({ interactions, answerState, onAnswer, sourceLa
 
   // A new question resets the cursor and the escape hatch; typing in the composer is not interrupted.
   useEffect(() => {
+    selectedRef.current = 0;
+    otherRef.current = active?.method === 'input';
+    draftRef.current = '';
     setSelected(0);
     setOther(active?.method === 'input');
     // The draft belongs to the question it was typed for: carrying it into the next one would
@@ -79,9 +82,27 @@ export function InteractionPanel({ interactions, answerState, onAnswer, sourceLa
       ? []
       : rowsFor(active).map((row) => (row.label === 'confirm' ? { ...row, label: t('ask.confirm') } : row.label === 'reject' ? { ...row, label: t('ask.reject') } : row.label === 'other' ? { ...row, label: t('ask.other') } : row));
 
+  // The text being typed lives in a ref as well as in state: a form submit runs before React has
+  // re-rendered with the newest keystroke, and the click/submit closure would still read the old one.
+  const draftRef = useRef('');
+  const selectedRef = useRef(0);
+  const otherRef = useRef(false);
+
   const submit = async (value: unknown): Promise<void> => {
     if (active === undefined || state?.kind === 'busy') return;
     await onAnswer(active, responseFor(active.method, value));
+  };
+
+  /** Sends the typed answer, or - for a select - the row the cursor is on. */
+  const submitCurrent = (): void => {
+    if (active === undefined) return;
+    if (active.method === 'input' || otherRef.current) {
+      const text = draftRef.current;
+      if (text.trim() !== '') void submit(text);
+      return;
+    }
+    const row = rows[selectedRef.current];
+    if (row !== undefined) void submit(row.value);
   };
 
   const onKeyDown = (event: KeyboardEvent): void => {
@@ -89,6 +110,7 @@ export function InteractionPanel({ interactions, answerState, onAnswer, sourceLa
     if (event.key === 'Escape') {
       event.preventDefault();
       if (other && active.method === 'select' && draft !== '') {
+        draftRef.current = '';
         setDraft('');
         setDraftFor(null);
         return;
@@ -97,22 +119,28 @@ export function InteractionPanel({ interactions, answerState, onAnswer, sourceLa
       return;
     }
     if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+      // The text field's own Enter belongs to its form: cancelling it here would stop the browser
+      // from ever firing submit, and the field would silently do nothing.
+      if ((event.target as HTMLElement).tagName === 'INPUT') return;
       event.preventDefault();
       if (state?.kind === 'failed') {
         void submit(other && draft !== '' ? draft : active.method === 'confirm' ? rows[selected]?.value : draft);
         return;
       }
       if (other) {
-        void submit(draft);
+        // An empty "type another answer" is not an answer: the field keeps the cursor instead of
+        // sending nothing.
+        submitCurrent();
         return;
       }
       if (active.method === 'input') {
-        void submit(draft);
+        submitCurrent();
         return;
       }
       const row = rows[selected];
       if (row === undefined) return;
       if (row.input === true) {
+        otherRef.current = true;
         setOther(true);
         setDraftFor(active.interactionId);
         return;
@@ -126,9 +154,9 @@ export function InteractionPanel({ interactions, answerState, onAnswer, sourceLa
       const delta = event.key === 'ArrowDown' ? 1 : -1;
       setSelected((current) => {
         const next = current + delta;
-        if (next < 0) return rows.length - 1;
-        if (next >= rows.length) return 0;
-        return next;
+        const wrapped = next < 0 ? rows.length - 1 : next >= rows.length ? 0 : next;
+        selectedRef.current = wrapped;
+        return wrapped;
       });
       return;
     }
@@ -137,8 +165,10 @@ export function InteractionPanel({ interactions, answerState, onAnswer, sourceLa
       const row = rows[index];
       if (row === undefined) return;
       event.preventDefault();
+      selectedRef.current = index;
       setSelected(index);
       if (row.input === true) {
+        otherRef.current = true;
         setOther(true);
         setDraftFor(active.interactionId);
         return;
@@ -228,22 +258,43 @@ export function InteractionPanel({ interactions, answerState, onAnswer, sourceLa
                   {active.method === 'input' ? (
                     <div className="ao on other">
                       <span className="k">›</span>
-                      <input
-                        ref={inputRef}
-                        className="ao-in"
-                        placeholder={t('ask.inputPlaceholder')}
-                        aria-label={active.title}
-                        value={draftFor === active.interactionId ? draft : ''}
-                        onChange={(event) => {
-                          setDraft(event.target.value);
-                          setDraftFor(active.interactionId);
+                      <form
+                        className="ao-row"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          submitCurrent();
                         }}
-                      />
+                      >
+                        <input
+                          ref={inputRef}
+                          className="ao-in"
+                          placeholder={t('ask.inputPlaceholder')}
+                          aria-label={active.title}
+                          value={draftFor === active.interactionId ? draft : ''}
+                          onChange={(event) => {
+                            draftRef.current = event.target.value;
+                            setDraft(event.target.value);
+                            setDraftFor(active.interactionId);
+                          }}
+                        />
+                      </form>
                     </div>
                   ) : (
                     rows.map((row, index) =>
                       row.input === true && other ? (
-                        <div className="ao on other" key="other">
+                        <form
+                          className="ao on other"
+                          key="other"
+                          // A click on the row (its number or its padding) must land in the field,
+                          // or the panel's key handling would steal the next Enter.
+                          onClick={(event) => {
+                            if (event.target !== inputRef.current) inputRef.current?.focus();
+                          }}
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            submitCurrent();
+                          }}
+                        >
                           <span className="k">{index + 1}</span>
                           <input
                             ref={inputRef}
@@ -252,19 +303,24 @@ export function InteractionPanel({ interactions, answerState, onAnswer, sourceLa
                             aria-label={t('ask.other')}
                             value={draftFor === active.interactionId ? draft : ''}
                             onChange={(event) => {
+                              draftRef.current = event.target.value;
                               setDraft(event.target.value);
                               setDraftFor(active.interactionId);
                             }}
                           />
-                        </div>
+                        </form>
                       ) : (
                         <button
                           key={`${row.label}-${index}`}
                           type="button"
                           className={`ao${index === selected ? ' on' : ''}${row.input === true ? ' other' : ''}`}
-                          onMouseEnter={() => setSelected(index)}
+                          onMouseEnter={() => {
+                            selectedRef.current = index;
+                            setSelected(index);
+                          }}
                           onClick={() => {
                             if (row.input === true) {
+                              otherRef.current = true;
                               setOther(true);
                               setDraftFor(active.interactionId);
                               return;

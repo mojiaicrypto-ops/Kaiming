@@ -169,6 +169,55 @@ test('a question is answered in the panel and the model continues', async ({ pag
   }
 });
 
+test('a typed answer is sent once, and Enter in its field is what sends it', async ({ page }) => {
+  // The escape hatch row ("type another answer") opens a field inside the panel. Its Enter used to
+  // be handled twice - once by the panel on the way up, once by nothing at all - so the answer was
+  // sent before the field had a chance to decide, and an empty field counted as an answer.
+  const harness = await startHarness({
+    model: [
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'question',
+            arguments: JSON.stringify({
+              method: 'input',
+              title: '入口放在哪里？',
+              placeholder: '写下入口位置',
+            }),
+          },
+        ],
+      },
+      { kind: 'text', text: '已按你的说明继续。' },
+    ],
+  });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    const composer = page.locator('[data-testid="composer"]');
+    await composer.fill('按方案 B 做');
+    await composer.press('Enter');
+
+    const panel = page.locator('[data-testid="question-panel"]');
+    await expect(panel).toBeVisible({ timeout: 20_000 });
+    const field = panel.getByRole('textbox');
+    await field.fill('');
+    await field.press('Enter');
+    await expect(panel).toBeVisible();
+    await expect(panel.getByRole('textbox')).toHaveCount(1);
+
+    await field.fill('放客服后台，但保留自助入口的位置');
+    await field.press('Enter');
+    await expect(panel).toContainText('Answer received', { timeout: 15_000 });
+    const echo = panel.locator('.ask-echo');
+    await expect(echo).toContainText('放客服后台，但保留自助入口的位置');
+    await page.screenshot({ path: test.info().outputPath('typed-answer.png') });
+  } finally {
+    await harness.close();
+  }
+});
+
 test('a second Enter while the first submit is in flight does not submit twice', async ({ page }) => {
   const harness = await startHarness({ model: [{ kind: 'text', text: '收到。' }] });
   try {

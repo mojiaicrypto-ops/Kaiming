@@ -1059,7 +1059,11 @@ kbd {
   flex-direction: column;
   margin: var(--s2) 0 0;
 }
-.ao {
+/* A row is a button, or a wrapper holding the form with the typed answer: all must look the same. */
+.ao,
+form.ao,
+form.ao-row,
+.ao:has(form.ao-row) {
   display: flex;
   align-items: center;
   gap: var(--s3);
