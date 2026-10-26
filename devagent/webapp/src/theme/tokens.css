@@ -22,12 +22,12 @@
   --block: #ff7b72;
   --idle: #868c96;
 
-  /* Two families: the CJK prose never uses a monospace fallback (it would render
-     ratio-spaced glyphs inside a fixed pitch run); everything that aligns uses mono. */
+  /* One family: the workbench is a terminal. Latin runs are truly monospace; CJK
+     falls back to PingFang/YaHei inside the same stack (CJK glyphs are uniform
+     width anyway, so nothing misaligns). */
   --mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-  --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
-    "Microsoft YaHei", "Noto Sans SC", sans-serif;
-  --font: var(--ui);
+  --font: "JetBrains Mono", "SF Mono", Menlo, Consolas, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", monospace;
   --fs-12: 12px;
   --fs-13: 13px;
   --fs-14: 14px;

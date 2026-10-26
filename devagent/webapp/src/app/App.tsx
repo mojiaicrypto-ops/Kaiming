@@ -14,7 +14,8 @@ import { RequirementsPage } from '../requirements/RequirementsPage';
 import { SettingsPage } from '../settings/SettingsPage';
 import { LoginPage } from '../auth/LoginPage';
 import { ToastHost } from '../lib/ToastHost';
-import { FileDrawer } from '../files/FileDrawer';
+import { FileViewer } from '../files/FileViewer';
+import { downloadUrl } from '../files/paths';
 import { toast } from '../lib/toast';
 import { errorText } from '../lib/errors';
 
@@ -35,7 +36,14 @@ export function App() {
 function Shell({ preferences }: { preferences: PreferencesApi }) {
   const { t } = useI18n();
   const route = useRoute();
-  useShortcuts();
+  /** The project file or directory the read-only viewer is showing; null when it is closed. */
+  const [filePath, setFilePath] = useState<string | null>(null);
+  /** The viewer is a canvas over one screen; asking for any screen closes it first. */
+  const go = useCallback((path: string) => {
+    setFilePath(null);
+    navigate(path);
+  }, []);
+  useShortcuts(go);
   const [rpc] = useState(() => new RpcClient({}));
   // Unknown until a read answers: a cookie may exist (reload) or not (first run). Guessing either
   // way is wrong — guessing "authenticated" hides the password screen, guessing "login" flashes it.
@@ -44,8 +52,13 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
   const [railOpen, setRailOpen] = useState(false);
   /** A request the board hands to the chat: filled into the composer, never sent on its own. */
   const [draft, setDraft] = useState<string | null>(null);
-  /** The project file or directory the read-only viewer is showing; null when it is closed. */
-  const [filePath, setFilePath] = useState<string | null>(null);
+  /**
+   * The viewer is a canvas over ONE screen, so changing screens closes it. Leaving it open would
+   * put the new screen behind an overlay: the navigation would look like it did nothing.
+   */
+  useEffect(() => {
+    setFilePath(null);
+  }, [route.view]);
 
   // A 401 from any call takes over the screen: the cookie is gone, not the work.
   useEffect(() => {
@@ -142,6 +155,9 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
           onOpenProject={() => setProjectOpen(true)}
           onOpenRail={() => setRailOpen((open) => !open)}
           railOpen={railOpen}
+          onOpenFiles={() => setFilePath('.')}
+          filesOpen={filePath !== null}
+          onNavigate={go}
         />
         {route.view === 'chat' && (
           <ChatPage
@@ -200,6 +216,7 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
             }}
             currentSessionId={workspace.sessionId}
             projectId={workspace.projectId}
+            projectRealPath={workspace.project?.realPath ?? ''}
             hasProject={workspace.projectId !== ''}
             onSelectSession={(sessionId) => {
               workspace.selectSession(sessionId);
@@ -208,6 +225,7 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
             onCreateSession={startSession}
             onOpenRail={() => setRailOpen((open) => !open)}
             railOpen={railOpen}
+            onOpenFile={(path) => setFilePath(path)}
           />
         )}
         {route.view === 'requirements' && (
@@ -268,12 +286,23 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
           />
         )}
         {filePath !== null && (
-          <FileDrawer
+          <FileViewer
             rpc={rpc}
             projectId={workspace.projectId}
             path={filePath}
             entries={workspace.project?.entries ?? []}
+            onOpenPath={setFilePath}
             onClose={() => setFilePath(null)}
+            projectRealPath={workspace.project?.realPath ?? ''}
+            onOutside={() => notify(t('files.outside'), 'error')}
+            onDownload={(path) => {
+              // A download is the browser's job: an anchor click keeps the shell mounted and lets
+              // the response's own content-disposition name the saved file.
+              const anchor = document.createElement('a');
+              anchor.href = downloadUrl(workspace.projectId, path);
+              anchor.download = path.split('/').pop() ?? 'file';
+              anchor.click();
+            }}
           />
         )}
         <ToastHost />

@@ -10,7 +10,7 @@ import type { SessionActivity } from '../api/stream';
 export interface TranscriptProps {
   readonly items: readonly HistoryMessage[];
   readonly busy: SessionActivity;
-  /** Chief transcript or a specialist one: the who-line colour and the busy wording follow it. */
+  /** Chief transcript or a specialist one: the busy wording follows it. */
   readonly variant: 'chief' | 'agent';
   readonly onFollow?: ((sessionId: string) => void) | undefined;
   readonly members?: readonly TaskMemberRow[] | undefined;
@@ -18,6 +18,8 @@ export interface TranscriptProps {
   readonly liveSessions?: ReadonlySet<string> | undefined;
   /** The newest dispatch call in this transcript: the only one that may show live member state. */
   readonly liveCallId?: string | undefined;
+  /** Resolves a link in the text to the file viewer instead of a browser navigation. */
+  readonly onLink?: ((href: string) => void) | undefined;
 }
 
 /**
@@ -26,7 +28,7 @@ export interface TranscriptProps {
  * results are indexed by call id first, so a card flips in place instead of a second blob
  * appearing below it (R4).
  */
-export function Transcript({ items, busy, variant, onFollow, members, liveSessions, liveCallId }: TranscriptProps) {
+export function Transcript({ items, busy, variant, onFollow, members, liveSessions, liveCallId, onLink }: TranscriptProps) {
   const { t } = useI18n();
   const results = useMemo(() => indexToolResults(items), [items]);
   const live = items.some((message) => message.streaming === true);
@@ -54,6 +56,7 @@ export function Transcript({ items, busy, variant, onFollow, members, liveSessio
             members={members}
             liveSessions={liveSessions}
             liveCallId={liveCallId}
+            onLink={onLink}
           />
         );
       })}

@@ -9,12 +9,18 @@ import { RpcError, type RpcRouter } from './rpc.ts';
 import { pageHistory, pageHistoryBefore, readPiHistory } from './history.ts';
 import { digestOfText, getRequirement, listRequirements, requirementPath } from '../runtime/requirement-store.ts';
 import { readReportBody } from '../runtime/report-store.ts';
+import { mimeTypeOf, resolveInsideProject } from './fs-guard.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
 import type { Store } from '../store/store.ts';
 import { textOfPayload } from '../runtime/input-text.ts';
 import { recordedConfigOf, summarizeRecordedConfig } from '../runtime/recorded-config.ts';
 
 const MAX_FILE_BYTES = 1024 * 1024;
+/**
+ * Mimes that are never text, whatever their bytes look like. Everything else is judged by content
+ * (a NUL byte), so an unknown extension with text inside still opens as text.
+ */
+const NON_TEXTUAL_MIME = /^(image|video|audio)\/|application\/pdf/;
 /** A session's title is derived from its first user message; longer than this adds no information. */
 const TITLE_LIMIT = 60;
 const DEFAULT_PAGE = 50;
@@ -429,12 +435,19 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
         });
       }
       const truncated = body.text.length > MAX_FILE_BYTES;
+      // A project report is a project file and has a project-relative path the viewer can open;
+      // a read Task's report lives in the server's work area and must not be addressable by path.
+      const relativePath =
+        result.bodyRef.storage === 'project'
+          ? relative(project.realPath, result.bodyRef.path).split(sep).join('/')
+          : null;
       return {
         result: resultSummary(store, result),
         text: truncated ? body.text.slice(0, MAX_FILE_BYTES) : body.text,
         truncated,
         version: result.bodyRef.sha256,
         path: result.bodyRef.path,
+        relativePath,
       };
     },
   });
@@ -558,7 +571,10 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       }
       const truncated = content.byteLength > MAX_FILE_BYTES;
       const slice = truncated ? content.subarray(0, MAX_FILE_BYTES) : content;
-      const binary = slice.includes(0);
+      // An image is not text even when it happens to contain no NUL byte: the viewer asks for its
+      // bytes instead, and a PNG decoded as UTF-8 would be a screen of replacement characters.
+      const mimeType = mimeTypeOf(requested);
+      const binary = slice.includes(0) || NON_TEXTUAL_MIME.test(mimeType);
       return {
         path: requested,
         version,
@@ -566,6 +582,7 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
         updatedAt: info.mtime.toISOString(),
         truncated,
         binary,
+        mimeType,
         text: binary ? null : slice.toString('utf8'),
       };
     },
@@ -796,23 +813,6 @@ function correlationSummary(read: ReturnType<typeof readPiHistory>): { readonly 
 }
 
 /** A project-relative path that really stays inside the project, with no escaping symlink (R1). */
-function resolveInsideProject(projectRoot: string, requested: string): string {
-  const root = realpathSync(projectRoot);
-  const target = join(root, requested);
-  const inside = target === root || target.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
-  if (!inside) {
-    throw new RpcError('FORBIDDEN', `${requested} is not inside the project`, { path: requested });
-  }
-  if (!existsSync(target)) {
-    return target;
-  }
-  const real = realpathSync(target);
-  if (real !== root && !real.startsWith(root.endsWith(sep) ? root : `${root}${sep}`)) {
-    throw new RpcError('FORBIDDEN', `${requested} resolves outside the project`, { path: requested });
-  }
-  return real;
-}
-
 function readString(params: Record<string, unknown>, key: string): string | undefined {
   const value = params[key];
   return typeof value === 'string' && value.trim() !== '' ? value : undefined;

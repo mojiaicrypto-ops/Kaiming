@@ -52,7 +52,7 @@ export function navigate(path: string, options: { replace?: boolean } = {}): voi
  * The shortcuts the status bar advertises: 1/2/3 switch screens, `i` focuses the composer.
  * Typing in a field never triggers them — the keys belong to the shell, not to the text.
  */
-export function useShortcuts(): void {
+export function useShortcuts(onNavigate: (path: string) => void = navigate): void {
   useEffect(() => {
     const onKey = (event: globalThis.KeyboardEvent): void => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -63,9 +63,9 @@ export function useShortcuts(): void {
       // it, never to navigation (the prototype guards the same way).
       const questionOpen = document.querySelector('[data-testid="question-panel"]') !== null;
       if (questionOpen) return;
-      if (event.key === '1') navigate('/');
-      else if (event.key === '2') navigate('/requirements');
-      else if (event.key === '3') navigate('/settings/providers');
+      if (event.key === '1') onNavigate('/');
+      else if (event.key === '2') onNavigate('/requirements');
+      else if (event.key === '3') onNavigate('/settings/providers');
       else if (event.key === 'i') {
         const composer = document.querySelector<HTMLTextAreaElement>('[data-testid="composer"]');
         if (composer !== null) {
@@ -76,7 +76,7 @@ export function useShortcuts(): void {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [onNavigate]);
 }
 
 export function useRoute(): Route {

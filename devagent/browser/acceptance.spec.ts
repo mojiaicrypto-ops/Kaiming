@@ -10,6 +10,12 @@ import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { loginThroughUi, startHarness, waitForConnected } from './harness.ts';
+import type { StubReply } from '../spikes/harness/pi-env.ts';
+
+/** The task-list step for one phase — the unit both the strip and the list agree on. */
+function rowOf(live: import('@playwright/test').Locator, phase: string): import('@playwright/test').Locator {
+  return live.locator(`[data-testid="task-steps"] .todo-g[data-phase="${phase}"]`);
+}
 
 /** Open the seeded project through the switcher (the first thing a user does). */
 async function openProject(page: Page, projectPath: string): Promise<void> {
@@ -164,6 +170,54 @@ test('a question is answered in the panel and the model continues', async ({ pag
     await expect(page.locator('[data-testid="transcript"] .askline')).toHaveCount(1);
     await expect(page.locator('[data-testid="transcript"] .askline')).toHaveClass(/ok/);
     await page.screenshot({ path: test.info().outputPath('answered.png') });
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a question with long options wraps instead of being cut off', async ({ page }) => {
+  // Options are rows in a column, not pills in a row: a long reason must wrap inside its row
+  // with a hanging indent, and the panel must not grow past the viewport to show it.
+  const longA = '客服后台 —— 走工单流程,客服代发重置邮件,适合 B 端场景,需要给客服增加一层权限校验并把工单系统与现有账号体系打通,避免两套入口各自记账';
+  const longQ = '密码重置的入口放在哪里?考虑到现有账号体系已经有客服后台和用户自助页两套入口,需要确定这次挂到哪一边,以及是否要同时保留邮件链接的兜底路径。';
+  const harness = await startHarness({
+    model: [
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'question',
+            arguments: JSON.stringify({ title: longQ, options: [longA, '用户账号页', '先不做'], method: 'select' }),
+          },
+        ],
+      },
+      { kind: 'text', text: '等你选择。' },
+    ],
+  });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    await page.locator('[data-testid="composer"]').fill('入口放哪');
+    await page.locator('[data-testid="composer"]').press('Enter');
+
+    const panel = page.locator('[data-testid="question-panel"]');
+    await expect(panel).toBeVisible({ timeout: 20_000 });
+    // The full text is on screen — nothing ellipsized away.
+    await expect(panel).toContainText(longQ);
+    await expect(panel).toContainText(longA);
+    const row = panel.locator('.ao').first();
+    await expect(row).toContainText(longA);
+    // And it fits: the row stays inside the panel's box and is taller than one text line,
+    // which is only possible when the long text wrapped inside the row.
+    const box = await row.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const panelRect = element.closest('.ask')?.getBoundingClientRect();
+      return { width: rect.width, panelWidth: panelRect?.width ?? 0, height: rect.height, lineHeight: parseFloat(getComputedStyle(element).lineHeight) };
+    });
+    expect(box.width).toBeLessThanOrEqual(box.panelWidth);
+    expect(box.height).toBeGreaterThan(box.lineHeight * 1.5);
+    await page.screenshot({ path: test.info().outputPath('long-options.png') });
   } finally {
     await harness.close();
   }
@@ -644,14 +698,20 @@ test('a document Task draws the phases it really ran, not a code chain nobody ex
 
     const strip = page.locator('[data-testid="task-strip"]');
     await expect(strip).toBeVisible({ timeout: 25_000 });
-    // The chain is what the Task did: the design step it moved to, never the code chain's steps
-    // (develop/review/test/settle), which this document Task never runs.
+    // The real chain is what the Task did: the design step it moved to, never develop —
+    // that is a code step this document Task does not run, planned or otherwise.
     await expect(strip.locator('.phases')).toContainText(/Design|设计/, { timeout: 20_000 });
-    // A phase the Task did not run is not progress: none of the code chain's steps may appear.
     await expect(strip.locator('.phases')).not.toContainText(/Develop|开发/);
-    await expect(strip.locator('.phases')).not.toContainText(/Review|审核/);
+    // The plan's tail follows from the Task's own declaration (write, requiresTest=false):
+    // review and settle are owed and shown dimmed as planned, test is not.
+    await expect(strip.locator('.p.plan')).toHaveCount(2, { timeout: 20_000 });
+    await expect(strip.locator('.p.plan').first()).toContainText(/Review|审核/);
+    await expect(strip.locator('.p.plan').nth(1)).toContainText(/Settle|结算/);
     await expect(strip.locator('.phases')).not.toContainText(/Test|测试/);
-    await expect(strip.locator('.phases')).not.toContainText(/Settle|结算/);
+    // A planned step never wears a check and never calls itself current: it is the road, not the walk.
+    await expect(strip.locator('.p.plan .dot')).toHaveText(['', '']);
+    await expect(strip.locator('.p.cur')).toHaveCount(1);
+    await expect(strip.locator('.p.cur')).toContainText(/Design|设计/);
     await page.screenshot({ path: test.info().outputPath('document-task.png') });
   } finally {
     await harness.close();
@@ -751,11 +811,36 @@ test('a running Task is in the conversation even when history has no dispatch ye
 
     const live = page.locator('[data-testid="task-live"]');
     await expect(live).toBeVisible({ timeout: 20_000 });
-    await expect(live).toContainText('按验收实现六件套');
+    // The list names the step and the member's own label; the goal lives in the task detail.
+    await expect(live).toContainText(/Develop|开发/);
+    await expect(live).toContainText('实现六件套');
     const rows = page.locator('[data-testid="task-live-members"] [data-testid="task-member-row"]');
     await expect(rows).toHaveCount(1);
     await expect(rows.first()).toContainText(/developer|开发/i);
     await expect(rows.first()).toContainText(/running|运行/i);
+    // The step being worked on owns the eye: its node pulses (a 0ms animation under reduced
+    // motion, which is the only case where "static" is correct) and its title is the run colour.
+    await expect(rowOf(live, 'develop')).toHaveClass(/active/);
+    const pulse = await rowOf(live, 'develop').evaluate((node) => {
+      const dot = node.querySelector('.node');
+      return { name: dot === null ? '' : getComputedStyle(dot).animationName, count: getComputedStyle(node.querySelector('.node') ?? node).animationIterationCount };
+    });
+    expect(pulse.name).toBe('work');
+    // Planned steps are the road, not progress: no check, no active band, a hollow node each.
+    const planned = live.locator('[data-testid="task-steps"] .todo-g[data-planned="true"]');
+    await expect(planned).toHaveCount(2);
+    await expect(planned.first()).toContainText(/Review|审核/);
+    // Only develop's members exist here, and none has finished: no node wears a check.
+    await expect(live.locator('.todo-g .node')).toHaveText(['', '', '']);
+
+    // The strip is the same flow in outline: a pulsing current node, hollow planned nodes, and
+    // a meter that counts what finished. Nothing here is a second opinion about the list.
+    const phases = page.locator('[data-testid="task-phases"]');
+    await expect(phases.locator('.p')).toHaveCount(3);
+    await expect(phases.locator('.p.cur')).toHaveAttribute('data-phase', 'develop');
+    await expect(phases.locator('.p.plan')).toHaveCount(2);
+    await expect(phases.locator('.p.cur .dot')).toHaveCSS('animation-name', 'work');
+    await expect(page.locator('.task-strip .prog-n')).toHaveText('0/1');
 
     // The whole point: a reload while the Task runs keeps it on screen.
     await page.reload({ waitUntil: 'domcontentloaded' });
@@ -764,6 +849,95 @@ test('a running Task is in the conversation even when history has no dispatch ye
       page.locator('[data-testid="task-live-members"] [data-testid="task-member-row"]'),
     ).toHaveCount(1);
     await page.screenshot({ path: test.info().outputPath('task-live-after-reload.png') });
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a rework round shows as history: develop twice with the failed review between', async ({ page }) => {
+  // The user's scenario: develop finished, review did not pass, develop runs again. The task
+  // list must show every member the Task ever dispatched, grouped by phase-round, with the
+  // failed review kept as evidence and the strip saying the phase ran twice.
+  const harness = await startHarness();
+  const task = {
+    task: { taskId: 't-rw', type: 'write', phase: 'develop', status: 'active', revision: 9, goal: '实现六件套', requiresTest: true },
+    members: [
+      { sessionId: 's-d1', roleId: 'developer', phase: 'develop', label: '实现六件套', expectedKind: 'code', currentInputId: 'i1', activity: 'idle', lastInputStatus: 'completed' },
+      { sessionId: 's-r1', roleId: 'reviewer', phase: 'review', label: '审核六件套', expectedKind: 'review', currentInputId: 'i2', activity: 'idle', lastInputStatus: 'failed' },
+      { sessionId: 's-d2', roleId: 'developer', phase: 'develop', label: '返工修复', expectedKind: 'code', currentInputId: 'i3', activity: 'processing' },
+    ],
+    results: [
+      { resultId: 'r1', sessionId: 's-d1', kind: 'code', summary: '六件套已实现' },
+      { resultId: 'r2', sessionId: 's-r1', kind: 'review', verdict: 'failed', summary: '有效期未校验' },
+    ],
+  };
+  await page.route('**/api/v1/rpc', async (route) => {
+    const body = route.request().postData() ?? '';
+    const envelope = JSON.parse(body) as { requestId: string };
+    const fulfill = (result: unknown): Promise<void> =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ requestId: envelope.requestId, result }) });
+    const params = JSON.parse(body).params ?? {};
+    if (body.includes('"task.get"')) return fulfill(task);
+    if (body.includes('"session.get"')) {
+      return fulfill({ session: { sessionId: params.sessionId ?? 'rw', projectId: params.projectId ?? 'rw-p', roleId: 'chief', currentTaskId: 't-rw', revision: 1, activity: 'idle', currentInputId: null, lastActivityAt: null } });
+    }
+    if (body.includes('"session.stream.prepare"')) {
+      return fulfill({
+        subscriptionId: 'sub-rw',
+        streamPath: `/api/v1/sessions/rw/stream?subscriptionId=sub-rw`,
+        epoch: 1,
+        boundary: 0,
+        snapshot: {
+          sessionId: params.sessionId ?? 'rw',
+          projectId: params.projectId ?? 'rw-p',
+          roleId: 'chief',
+          activity: 'idle',
+          currentInputId: null,
+          inputs: [],
+          task: { taskId: 't-rw', type: 'write', phase: 'develop', status: 'active', revision: 9 },
+          config: null,
+          blocked: null,
+          interactions: [],
+          messages: [],
+          historyLeaf: null,
+          hasEarlier: false,
+          historyProblems: [],
+        },
+      });
+    }
+    return route.continue();
+  });
+  await page.route('**/api/v1/sessions/**/stream*', async (route) => {
+    await new Promise(() => {});
+  });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await page.locator('[data-testid="project-switcher"]').click();
+    await page.locator('[data-testid="project-row"]').first().click();
+
+    const live = page.locator('[data-testid="task-live"]');
+    await expect(live).toBeVisible({ timeout: 20_000 });
+    // Every member the Task ever dispatched is on the list, in creation order.
+    const rows = live.locator('[data-testid="task-member-row"]');
+    await expect(rows).toHaveCount(3, { timeout: 10_000 });
+    // The failed review stays as the evidence that triggered the rework round.
+    await expect(rows.nth(1)).toContainText(/Not passed|未通过/);
+    // The second develop round is marked as a round and the running member carries the rework glyph.
+    const group = live.locator('.todo-g[data-phase="develop"][data-round="2"]');
+    await expect(group.locator('[data-testid="task-member-row"]')).toContainText(/Running|运行/);
+    // The plan's remaining steps are visible before anyone works there: this write Task
+    // (requiresTest) owes review, test and settle past the reworked develop — review ran
+    // already, so the planned tail is test and settle, dimmed as planned groups.
+    const planned = live.locator('.todo-g[data-planned="true"]');
+    await expect(planned).toHaveCount(2, { timeout: 10_000 });
+    await expect(planned.first()).toHaveAttribute('data-phase', 'test');
+    await expect(planned.nth(1)).toHaveAttribute('data-phase', 'settle');
+    // The strip agrees: the dimmed tail follows the real chain (no ×n on planned steps).
+    const strip = page.locator('[data-testid="task-strip"] .phases');
+    await expect(strip).toContainText(/×2/);
+    await expect(strip.locator('.p.plan')).toHaveCount(2);
+    await page.screenshot({ path: test.info().outputPath('task-rework-rounds.png') });
   } finally {
     await harness.close();
   }
@@ -920,7 +1094,8 @@ test('a specialist report opens from the task detail, with the body it really wr
     await expect(result).toContainText('模块调查完成', { timeout: 15_000 });
     await result.click();
 
-    await expect(page.locator('.drawer')).toContainText('账户模块有三个入口');
+    // The body is the stored file, read as a document by the same viewer as any project file.
+    await expect(page.locator('[data-testid="md-body"]')).toContainText('账户模块有三个入口');
     // The body comes from the stored report, not from a chat message.
     await expect(page.locator('[data-testid="transcript"]')).not.toContainText('账户模块有三个入口');
   } finally {
@@ -928,31 +1103,130 @@ test('a specialist report opens from the task detail, with the body it really wr
   }
 });
 
-test('the project files open in a read-only viewer, and a binary file says so', async ({ page }) => {
+test('the Files label is a place: it shows as current, and any other label closes it', async ({ page }) => {
+  // Three things the user hit at once, and each one is the same mistake in a different place:
+  // the viewer looked like a mode (no current label), and it sat over the navigation (clicking
+  // "Chat" changed the route underneath it and nothing appeared to happen).
   const harness = await startHarness();
   try {
     const projectPath = harness.project?.projectPath ?? '';
-    writeFileSync(join(projectPath, 'AGENTS.md'), '# project rules\n\nKeep it short.\n');
-    writeFileSync(join(projectPath, 'blob.bin'), Buffer.from([0, 1, 2, 3]));
+    mkdirSync(join(projectPath, 'src'), { recursive: true });
+    writeFileSync(join(projectPath, 'README.md'), 'hello\n');
+    writeFileSync(join(projectPath, 'src', 'main.ts'), 'export const x = 1;\n');
     await page.goto(harness.url);
     await loginThroughUi(page, harness.accessPassword);
+
+    const files = page.locator('[data-testid="nav-files"]');
+    await expect(files).toBeDisabled();
+
     await openProject(page, projectPath);
+    const chatLabel = page.locator('.nav a').first();
+    await expect(files).toBeEnabled();
+    await files.click();
 
-    await page.locator('[data-testid="project-switcher"]').click();
-    const entry = page.locator('[data-testid="project-entry"]', { hasText: 'AGENTS.md' });
-    await entry.click();
-    await expect(page.locator('[data-testid="file-text"]')).toContainText('Keep it short.');
-    await page.locator('.drawer .dh button').last().click();
+    const viewer = page.locator('[data-testid="file-viewer"]');
+    await expect(viewer).toBeVisible();
+    await expect(page.locator('[data-testid="file-path"]')).toHaveText('/');
+    // Exactly one label is current, and it is Files: the screen underneath is not "where we are".
+    await expect(files).toHaveAttribute('aria-current', 'page');
+    await expect(chatLabel).not.toHaveAttribute('aria-current', 'page');
 
-    await page.locator('[data-testid="project-switcher"]').click();
-    await page.locator('[data-testid="project-browse"]').click();
-    await page.locator('[data-testid="file-entry"]', { hasText: 'blob.bin' }).click();
-    // A binary file is not text, and the viewer must say so instead of printing control bytes.
-    await expect(page.locator('.drawer')).toContainText(/[Bb]inary/);
+    // A folder and a file are not the same kind of row: a glyph, a trailing slash and a type.
+    await expect(page.locator('[data-testid="file-entry"][data-type="directory"]')).toContainText('src/');
+    await expect(page.locator('[data-testid="file-entry"][data-type="directory"] .ico')).toHaveText('▸');
+    await expect(page.locator('[data-testid="file-entry"][data-type="file"] .ico').first()).toHaveText('·');
+
+    // Clicking another label closes the canvas and really shows that screen.
+    await chatLabel.click();
+    await expect(viewer).toBeHidden();
+    await expect(files).not.toHaveAttribute('aria-current', 'page');
+    await expect(chatLabel).toHaveAttribute('aria-current', 'page');
+    await expect(page.locator('[data-testid="composer"]')).toBeVisible();
+    // And the canvas is not a route: the address bar never left the chat screen.
+    await expect(page).toHaveURL(/\/$/);
   } finally {
     await harness.close();
   }
 });
+
+test('the project files open in one full-window viewer, and each kind is shown as what it is', async ({ page }) => {
+  // Every file is read as itself: source with a gutter (jpg/png below prove the branch), the
+  // browser's own player for media, and an honest notice plus a download for bytes with no view.
+  const harness = await startHarness();
+  try {
+    const projectPath = harness.project?.projectPath ?? '';
+    writeFileSync(join(projectPath, 'AGENTS.md'), '# project rules\n\nKeep it short.\n');
+    writeFileSync(join(projectPath, 'app.ts'), 'const answer: number = 42;\nconsole.log(answer);\n');
+    writeFileSync(join(projectPath, 'note.html'), '<html><body><h1>report</h1></body></html>\n');
+    writeFileSync(join(projectPath, 'blob.bin'), Buffer.from([0, 1, 2, 3]));
+    writeFileSync(join(projectPath, 'dot.png'), transparentPng());
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, projectPath);
+
+    // Entry 1: a knowledge entry from the project dialog opens the same canvas.
+    await page.locator('[data-testid="project-switcher"]').click();
+    await page.locator('[data-testid="project-entry"]', { hasText: 'AGENTS.md' }).click();
+    const viewer = page.locator('[data-testid="file-viewer"]');
+    await expect(viewer).toBeVisible();
+    // Markdown is the one kind read as a document, and its source is one click away.
+    await expect(page.locator('[data-testid="md-body"]')).toContainText('Keep it short.');
+    await expect(page.locator('[data-testid="md-body"] h1')).toHaveText('project rules');
+    // The canvas covers the shell rather than sitting in a 560px drawer.
+    const width = await viewer.evaluate((node) => node.getBoundingClientRect().width);
+    expect(width).toBeGreaterThan(1000);
+    await page.locator('[data-testid="md-source"]').click();
+    await expect(page.locator('.srchigh, .srcplain')).toHaveCount(1);
+    await expect(page.locator('[data-testid="file-text"]')).toContainText('# project rules');
+    // The gutter numbers the lines and nothing else: a copy of the code never carries digits.
+    await expect(page.locator('.srcgutter')).toHaveText(/^1\n2\n3\n4$/);
+    // A search narrows nothing but tells the truth about how many lines match.
+    await page.locator('[data-testid="file-search"]').fill('Short');
+    await expect(page.locator('[data-testid="file-matches"]')).toContainText(/1|匹配/);
+
+    // Entry 2: the browser root, then a code file, an html file, a png and a binary.
+    await page.locator('[data-testid="file-close"]').click();
+    await page.locator('[data-testid="project-switcher"]').click();
+    await page.locator('[data-testid="project-browse"]').click();
+    await expect(page.locator('[data-testid="file-entry"]', { hasText: 'app.ts' })).toBeVisible();
+    await page.locator('[data-testid="file-entry"]', { hasText: 'app.ts' }).click();
+    // Coloured by the same grammar list the transcript uses, and the gutter is separate.
+    const keyword = page.locator('.srchigh .hljs-keyword').first();
+    await expect(keyword).toBeVisible();
+    // Colour, not just a span class: the accent token must actually differ from plain text.
+    const keywordColor = await keyword.evaluate((node) => getComputedStyle(node).color);
+    expect(keywordColor).toBe('rgb(191, 162, 255)');
+    await expect(page.locator('[data-testid="file-path"]')).toContainText('app.ts');
+    await page.screenshot({ path: test.info().outputPath('file-viewer-source.png') });
+
+    // An .html file is source, not a rendered document: the tags stay visible as text.
+    await page.locator('[data-testid="file-entry"]', { hasText: 'note.html' }).click();
+    await expect(page.locator('[data-testid="file-text"]')).toContainText('<h1>report</h1>');
+    await expect(page.locator('[data-testid="file-viewer"] h1')).toHaveCount(0);
+
+    // A real image renders from the byte route.
+    await page.locator('[data-testid="file-entry"]', { hasText: 'dot.png' }).click();
+    const image = page.locator('[data-testid="file-viewer"] .fv-media img');
+    await expect(image).toBeVisible();
+    const natural = await image.evaluate((node) => ({ w: node.naturalWidth, h: node.naturalHeight }));
+    expect(natural.w).toBeGreaterThan(0);
+
+    // Bytes with no view say so and offer the download instead of printing control characters.
+    await page.locator('[data-testid="file-entry"]', { hasText: 'blob.bin' }).click();
+    await expect(page.locator('[data-testid="file-viewer"] .fv-notice')).toContainText(/download|下载/i);
+    await expect(page.locator('[data-testid="file-download"]').first()).toBeVisible();
+  } finally {
+    await harness.close();
+  }
+});
+
+/** A 1x1 PNG, so the image branch is exercised with real decodable bytes. */
+function transparentPng(): Buffer {
+  return Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==',
+    'base64',
+  );
+}
 
 test('a short conversation offers no older page, because there is none', async ({ page }) => {
   // The snapshot says whether anything precedes its tail; a fresh session must not show a control
@@ -1032,6 +1306,16 @@ test('the board lists the project Tasks and links to the conversation that runs 
     await expect(page.locator('[data-testid="task-strip"]')).toBeVisible({ timeout: 20_000 });
 
     await page.goto(`${harness.baseUrl}/requirements`, { waitUntil: 'domcontentloaded' });
+    // Tasks are folded by default: the header says how many and that one is running, and nothing
+    // is listed until the user opens it.
+    const toggle = page.locator('[data-testid="tasks-toggle"]');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false', { timeout: 15_000 });
+    await expect(toggle).toContainText(/1 total|共 1 个/);
+    await expect(toggle).toContainText(/Running|运行/);
+    await expect(page.locator('[data-testid="task-row"]')).toHaveCount(0);
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
     const row = page.locator('[data-testid="task-row"]').first();
     await expect(row).toContainText('survey the account module', { timeout: 15_000 });
     // The row names translated state, never the server's raw enum.
@@ -1404,6 +1688,300 @@ test('a browser screenshot from the tool appears inside its card and stays after
     await waitForConnected(page);
     await expect(page.locator('[data-testid="transcript"] .tc img')).toHaveCount(1, { timeout: 20_000 });
     await page.screenshot({ path: test.info().outputPath('tool-screenshot.png') });
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a fast answer never leaves the reader behind, and the way back is always visible', async ({ page }) => {
+  // The user's report: while the chief writes fast, the view could not keep up with the tail.
+  // The fix is judged on frames, not on polls: the transcript is sampled every animation frame,
+  // and a frame counts as "behind" only if the content grew AND the view is not at the tail.
+  const harness = await startHarness({
+    model: [
+      {
+        kind: 'slow_text',
+        text: Array.from({ length: 120 }, (_, i) => `第 ${String(i)} 行：主管正在快速输出，用来观察尾部跟随。`).join('\n\n'),
+        chunks: 900,
+        delayMs: 20,
+      },
+    ],
+  });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await page.locator('[data-testid="project-switcher"]').click();
+    await page.locator('[data-testid="project-row"]').first().click();
+    const tx = page.locator('[data-testid="transcript"]');
+    await expect(tx).toBeVisible();
+    await page.evaluate(() => {
+      const w = window as unknown as { __gaps: number[]; __heights: number[]; __stop: boolean };
+      w.__gaps = [];
+      w.__heights = [];
+      w.__stop = false;
+      const tick = (): void => {
+        if (w.__stop === true) return;
+        const el = document.querySelector('[data-testid="transcript"]');
+        if (el !== null) {
+          w.__heights.push(el.scrollHeight);
+          w.__gaps.push(Math.round(el.scrollHeight - el.scrollTop - el.clientHeight));
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+
+    await page.locator('[data-testid="composer"]').fill('写一段长的');
+    await page.locator('[data-testid="composer"]').press('Enter');
+    // Let the answer stream well past one screen.
+    await expect
+      .poll(async () => tx.evaluate((el) => el.scrollHeight - el.clientHeight), { timeout: 30_000 })
+      .toBeGreaterThan(1200);
+
+    const behind = await page.evaluate(() => {
+      const w = window as unknown as { __gaps: number[]; __heights: number[] };
+      const rows: number[] = [];
+      for (let i = 1; i < w.__gaps.length; i++) {
+        const growth = (w.__heights[i] ?? 0) - (w.__heights[i - 1] ?? 0);
+        if (growth > 0 && (w.__gaps[i] ?? 0) > 0) rows.push(w.__gaps[i] ?? 0);
+      }
+      return rows;
+    });
+    // Not one painted frame of growth happened off the tail.
+    expect(behind).toEqual([]);
+
+    // The reader scrolls up mid-stream: the follow releases, and the pill reports what is
+    // still arriving below instead of silently losing the tail.
+    await page.evaluate(() => {
+      (window as unknown as { __stop: boolean }).__stop = true;
+    });
+    const box = await tx.boundingBox();
+    await page.mouse.move((box?.x ?? 0) + 300, (box?.y ?? 0) + 200);
+    await page.mouse.wheel(0, -600);
+    const pill = page.locator('[data-testid="jump-tail"]');
+    await expect(pill).toBeVisible();
+    await expect(pill).toContainText(/[1-9]\d* (line|行)/, { timeout: 10_000 });
+    const held = await tx.evaluate((el) => Math.round(el.scrollHeight - el.scrollTop - el.clientHeight));
+    // The output keeps coming and the view stays where the reader put it.
+    await page.waitForTimeout(700);
+    const later = await tx.evaluate((el) => Math.round(el.scrollHeight - el.scrollTop - el.clientHeight));
+    expect(later).toBeGreaterThan(held);
+    await page.screenshot({ path: test.info().outputPath('stream-tail-follow.png') });
+
+    // One click returns to the tail and the pill goes away.
+    await pill.click();
+    await expect(pill).toBeHidden();
+    const atTail = await tx.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+    expect(atTail).toBeLessThan(4);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a report opens, and the file it names opens in the same viewer', async ({ page }) => {
+  // The user's scenario: a write Task's report is a project file. The result screen shows the body
+  // in the source viewer and hands its project path to the very same canvas the browser uses —
+  // one reader, two doors, no second rendering path.
+  const harness = await startHarness();
+  const reportPath = '.dev/work/t-doc/s-doc/r1.md';
+  const reportBody = '# 结算\n\n共 3 个文件。\n';
+  const task = {
+    task: {
+      taskId: 't-doc',
+      type: 'write',
+      phase: 'settle',
+      status: 'active',
+      revision: 12,
+      goal: '整理产品文档',
+      scope: '.dev/product',
+      requiresTest: false,
+    },
+    members: [],
+    results: [{ resultId: 'r1', sessionId: 's-doc', kind: 'settlement', summary: '文档整理完成' }],
+  };
+  await page.route('**/api/v1/rpc', async (route) => {
+    const body = route.request().postData() ?? '';
+    const params = (JSON.parse(body) as { params?: Record<string, unknown> }).params ?? {};
+    const envelope = JSON.parse(body) as { requestId: string };
+    const fulfill = (result: unknown): Promise<void> =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ requestId: envelope.requestId, result }) });
+    const fail = (code: string, message: string): Promise<void> =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ requestId: envelope.requestId, error: { code, message } }),
+      });
+    if (body.includes('"task.get"')) return fulfill(task);
+    if (body.includes('"task.report.get"')) {
+      return fulfill({
+        result: { resultId: 'r1', kind: 'settlement', verdict: null, summary: '文档整理完成' },
+        text: reportBody,
+        truncated: false,
+        version: 'v1',
+        path: `/private/project/${reportPath}`,
+        relativePath: reportPath,
+      });
+    }
+    if (body.includes('"project.files.list"')) {
+      // A file is not a directory: the viewer's own probe relies on this answer to pick the branch.
+      if (params['path'] !== '.') return fail('INVALID_ARGUMENT', 'not a directory');
+      return fulfill({
+        path: '.',
+        entries: [
+          { name: '.dev', path: '.dev', type: 'directory', size: null, updatedAt: new Date().toISOString() },
+        ],
+        nextCursor: null,
+      });
+    }
+    if (body.includes('"project.files.read"')) {
+      return fulfill({
+        path: params['path'] ?? reportPath,
+        version: 'v1',
+        size: reportBody.length,
+        updatedAt: new Date().toISOString(),
+        truncated: false,
+        binary: false,
+        mimeType: 'text/markdown',
+        text: reportBody,
+      });
+    }
+    if (body.includes('"session.get"')) {
+      return fulfill({
+        session: {
+          sessionId: 's',
+          projectId: 'p',
+          roleId: 'chief',
+          currentTaskId: 't-doc',
+          revision: 1,
+          activity: 'processing',
+          currentInputId: 'i-1',
+          lastActivityAt: null,
+        },
+      });
+    }
+    if (body.includes('"session.stream.prepare"')) {
+      return fulfill({
+        subscriptionId: 'sub-doc',
+        streamPath: '/api/v1/sessions/s/stream?subscriptionId=sub-doc',
+        epoch: 1,
+        boundary: 0,
+        snapshot: {
+          sessionId: params['sessionId'] ?? 's',
+          projectId: params['projectId'] ?? 'p',
+          roleId: 'chief',
+          activity: 'processing',
+          currentInputId: 'i-1',
+          inputs: [],
+          task: { taskId: 't-doc', type: 'write', phase: 'settle', status: 'active', revision: 12 },
+          config: null,
+          blocked: null,
+          interactions: [],
+          messages: [],
+          historyLeaf: null,
+          hasEarlier: false,
+          historyProblems: [],
+        },
+      });
+    }
+    return route.continue();
+  });
+  await page.route('**/api/v1/sessions/**/stream*', async (route) => {
+    await new Promise(() => {});
+  });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await page.locator('[data-testid="project-switcher"]').click();
+    await page.locator('[data-testid="project-row"]').first().click();
+
+    // The task id in the strip opens the detail; the result opens the report body.
+    await page.locator('[data-testid="task-open"]').click({ timeout: 20_000 });
+    const result = page.locator('[data-testid="result-open"]').first();
+    await expect(result).toContainText('文档整理完成');
+    await result.click();
+
+    // The body is read as a document, with its project path offered as the way into the viewer.
+    const drawer = page.locator('.drawer');
+    await expect(drawer.locator('[data-testid="md-body"]')).toContainText('共 3 个文件');
+    const openFile = page.locator('[data-testid="report-open-file"]');
+    await expect(openFile).toContainText(reportPath);
+    await openFile.click();
+
+    // Same canvas, same engine: the report's own path, read through project.files.read.
+    const viewer = page.locator('[data-testid="file-viewer"]');
+    await expect(viewer).toBeVisible();
+    await expect(page.locator('[data-testid="file-path"]')).toHaveText(reportPath);
+    await expect(viewer.locator('[data-testid="md-body"]')).toContainText('共 3 个文件');
+    // A read Task's report has no project path, and the drawer says so instead of showing one.
+    expect(await page.evaluate(() => document.querySelectorAll('[data-testid="file-viewer"]').length)).toBe(1);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('a link in a message opens the file it names, never a route that does not exist', async ({ page }) => {
+  // The user's case: a report quotes `/Users/…/aisuangua/.dev/work/t-x/shots/a.png`. The browser
+  // turned that into `http://127.0.0.1:4173/Users/…` and 404ed, because a host path is not a route.
+  // The text is never rewritten: the click is resolved against the project root the shell knows.
+  const replies: StubReply[] = [{ kind: 'text', text: 'placeholder' }];
+  const harness = await startHarness({ model: replies });
+  const projectPath = harness.project?.projectPath ?? '';
+  mkdirSync(join(projectPath, '.dev/work/t-frames/shots'), { recursive: true });
+  writeFileSync(join(projectPath, '.dev/work/t-frames/shots/frame.png'), transparentPng());
+  writeFileSync(
+    join(projectPath, '.dev/work/t-frames/r1.md'),
+    '# 结算\n\n共 **3** 个文件。\n\n- 一帧：[frame](./shots/frame.png)\n- 外链：[example](https://example.com/x)\n',
+  );
+  // The reply is written once the project path is known: the link has to quote the real path.
+  replies[0] = {
+    kind: 'text',
+    text: [
+      `绝对路径：[frame](${projectPath}/.dev/work/t-frames/shots/frame.png)`,
+      '',
+      '项目外：[secret](/etc/hosts)',
+    ].join('\n'),
+  };
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, projectPath);
+    await page.locator('[data-testid="composer"]').fill('给我看看帧');
+    await page.locator('[data-testid="composer"]').press('Enter');
+
+    // 1. An absolute host path opens the project file: the viewer, not the address bar.
+    await page.locator('.md a[href^="/"]', { hasText: 'frame' }).click();
+    const viewer = page.locator('[data-testid="file-viewer"]');
+    await expect(viewer).toBeVisible();
+    await expect(page.locator('[data-testid="file-path"]')).toHaveText('.dev/work/t-frames/shots/frame.png');
+    await expect(viewer.locator('.fv-media img')).toBeVisible();
+    // The shell never left the screen it was on.
+    await expect(page).toHaveURL(/\/$/);
+
+    // 2. A path outside the project says so; it never navigates to a dead address.
+    await page.locator('[data-testid="file-close"]').click();
+    await page.locator('.md a', { hasText: 'secret' }).click();
+    await expect(page.locator('.toast').last()).toContainText(/outside this project|不在当前项目内/);
+    await expect(viewer).toHaveCount(0);
+    await expect(page).toHaveURL(/\/$/);
+
+    // 3. A markdown document is read formatted, and its source is one click away.
+    await page.locator('[data-testid="nav-files"]').click();
+    for (const step of ['.dev', 'work', 't-frames']) {
+      await page.locator('[data-testid="file-entry"]', { hasText: step }).first().click();
+    }
+    await page.locator('[data-testid="file-entry"]', { hasText: 'r1.md' }).click();
+    await expect(page.locator('[data-testid="md-body"] h1')).toHaveText('结算');
+    await expect(page.locator('[data-testid="md-body"] strong')).toHaveText('3');
+    // 4. A relative link inside the document resolves against the document's own directory.
+    await page.locator('[data-testid="md-body"] a', { hasText: 'frame' }).click();
+    await expect(page.locator('[data-testid="file-path"]')).toHaveText('.dev/work/t-frames/shots/frame.png');
+    // 5. The same bytes as source: the mode belongs to the file, and switching does not edit it.
+    await page.locator('[data-testid="file-entry"]', { hasText: 'r1.md' }).click();
+    await page.locator('[data-testid="md-rendered"]').click();
+    await expect(page.locator('[data-testid="md-body"]')).toBeVisible();
+    await page.locator('[data-testid="md-source"]').click();
+    await expect(page.locator('[data-testid="file-text"]')).toContainText('# 结算');
+    await page.screenshot({ path: test.info().outputPath('markdown-source.png') });
   } finally {
     await harness.close();
   }

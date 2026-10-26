@@ -289,94 +289,233 @@ kbd {
 .task-strip {
   flex: none;
   border-bottom: 1px solid var(--line);
-  padding: var(--s3) 0;
+  background: var(--surface);
+  padding: var(--s3) var(--s6);
 }
 .task-strip .in {
-  max-width: 90%;
-  margin: 0 auto;
   display: flex;
   align-items: center;
   gap: var(--s4);
   flex-wrap: wrap;
 }
+
+/* The flow line: a node rail. Each step is a dot + its word; the segment between two
+   steps is the line it sits on. Passed segments light up, the current dot pulses, and
+   the planned part of the road is dashed — never mistaken for progress. */
 .phases {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: var(--s1);
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+.phases .p {
   display: flex;
   align-items: center;
   gap: var(--s2);
+  font-size: var(--fs-13);
+  line-height: 1.2;
   color: var(--fg-3);
-  white-space: nowrap;
-  flex-wrap: wrap;
+  transition: color var(--t) ease;
 }
-.phases .p.done {
+.phases .p + .p {
+  margin-left: var(--s2);
+  padding-left: var(--s2);
+}
+.phases .p + .p::before {
+  /* The connector is owned by the step on its right: it knows what it is leaving. */
+  content: "";
+  flex: none;
+  width: var(--s4);
+  height: 1px;
+  background: var(--line-strong);
+}
+.phases .p.cur::before {
+  /* The road the work has reached: the segment into the current step is lit, not run-green. */
+  background: var(--run);
+  opacity: 0.45;
+}
+.phases .p.plan::before {
+  background: none;
+  border-top: 1px dashed var(--line-strong);
+}
+.phases .dot {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  font-size: 9px;
+  line-height: 1;
+}
+.phases .p.done .nm {
   color: var(--done);
 }
-.phases .p.cur,
-.phases .p.run {
+.phases .p.done .dot {
+  border: 1px solid var(--done);
+  background: var(--done);
+  color: var(--bg);
+}
+.phases .p:not(.done):not(.cur) .dot {
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+}
+.phases .p.cur {
+  font-weight: 600;
+}
+.phases .p.cur .nm {
   color: var(--run);
-  font-weight: 600;
 }
-.phases .p.decide {
+.phases .p.cur.run .dot,
+.phases .p.cur.wait .dot {
+  border-radius: 50%;
+  border: 1px solid var(--run);
+  animation: work 1.6s ease-in-out infinite;
+}
+.phases .p.cur.decide .nm {
   color: var(--decide);
-  font-weight: 600;
 }
-.phases .p.paused {
+.phases .p.cur.decide .dot {
+  border-radius: 50%;
+  border: 1px solid var(--decide);
+  animation: work 1.6s ease-in-out infinite;
+}
+.phases .p.cur.paused .nm,
+.phases .p.cur.idle .nm,
+.phases .p.cur.block .nm {
   color: var(--fg);
-  font-weight: 600;
 }
-.phases .sep {
-  color: var(--line-strong);
+.phases .p.cur.paused .dot {
+  border-radius: 50%;
+  border: 1px solid var(--fg-2);
+}
+.phases .p.cur.block .dot {
+  border-radius: 50%;
+  border: 1px solid var(--block);
+}
+.phases .p.cur.idle .dot {
+  border-radius: 50%;
+  border: 1px dashed var(--fg-3);
+}
+.phases .p.plan .nm {
+  color: var(--fg-3);
+  opacity: 0.75;
+}
+.phases .p.plan .dot {
+  border: 1px dotted var(--line-strong);
+  border-radius: 50%;
+}
+.phases .p .nm {
+  transition: color var(--t) ease;
+}
+.phases .x {
+  color: var(--decide);
+}
+/* How far along the road this Task is, in the same run colour as the current node: a
+   quiet second read of the same fact the words say. */
+.prog {
+  flex: none;
+  width: 72px;
+  height: 2px;
+  background: var(--line-strong);
+  overflow: hidden;
+}
+.prog .bar {
+  display: block;
+  height: 100%;
+  background: var(--run);
+  transition: width var(--t) ease;
+}
+.prog-n {
+  flex: none;
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+}
+/* The one loop in the workbench: a ring that breathes, so "this is being worked on"
+   reads before the word does. 150ms-scale easing, and reduced motion turns it off. */
+@keyframes work {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--run) 45%, transparent);
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--run) 0%, transparent);
+    opacity: 0.75;
+  }
 }
 
 .tx {
   flex: 1;
   min-height: 0;
 }
+/* Full width: a terminal does not leave document margins. Only long prose is
+   capped (110ch) so a paragraph stays readable; tool lines, tables and the task
+   list use the whole column. */
 .tx-in {
-  max-width: 90%;
-  margin: 0 auto;
-  padding: var(--s8) 0 var(--s6);
+  padding: var(--s6) var(--s6) var(--s4);
   display: flex;
   flex-direction: column;
-  gap: var(--s8);
+  gap: var(--s2);
 }
 
-/* ---------- messages ---------- */
-.m .who {
-  font-weight: 600;
-  margin-bottom: var(--s1);
-}
-.m .who .t {
-  color: var(--fg-3);
-  font-weight: 400;
-  margin-left: var(--s2);
-  font-size: var(--fs-13);
-  font-family: var(--mono);
-}
-.m.user .who {
-  color: var(--fg-2);
-}
-.m.chief .who {
-  color: var(--accent);
-}
-.m.agent .who {
-  color: var(--run);
-}
-.m .body {
-  padding-left: var(--s4);
-  border-left: 1px solid var(--line-strong);
+/* ---------- messages (flat terminal flow: no who header, no side rail) ---------- */
+.m {
   min-width: 0;
 }
-.m.chief .body {
-  border-left-color: var(--accent);
+/* The user's line reads as one typed command: the prompt glyph flows inline with the
+   text. The markdown renderer nests block divs (.md > div > p), so EVERY container in
+   the line goes inline — the chain breaks wherever one div stays block — and the rare
+   block content (images, tool cards, question lines) is explicitly given back. */
+.m.user .uline,
+.m.user .uline :where(div, p) {
+  display: inline;
 }
-.m .body > * + * {
+.m.user .uline > .askline,
+.m.user .uline > .msg-image,
+.m.user .uline .tc,
+.m.user .uline details,
+.m.user .uline pre,
+.m.user .uline table {
+  display: block;
   margin-top: var(--s2);
 }
-.m.cont {
-  margin-top: calc(var(--s8) * -0.75);
+.m.user::before {
+  content: "❯ ";
+  color: var(--accent);
+  user-select: none;
+  font-weight: 600;
 }
-.m.cont > .who {
-  display: none;
+.m.user {
+  color: var(--fg-2);
+  background: var(--surface);
+  border-left: 2px solid var(--accent);
+  padding: var(--s2) var(--s3);
+}
+.m.user .stopped {
+  display: block;
+  margin-top: var(--s1);
+}
+.m.chief {
+  color: var(--fg);
+}
+.m.agent {
+  color: var(--fg);
+}
+/* A turn break is the only vertical rhythm that matters: same-role blocks stack
+   tightly (s2 above), a user line starts a new turn. */
+.tx-in > .m.user {
+  margin-top: var(--s6);
+}
+.tx-in > .m.user:first-child {
+  margin-top: 0;
+}
+.m > * + * {
+  margin-top: var(--s2);
 }
 .busy {
   color: var(--fg-3);
@@ -390,6 +529,13 @@ kbd {
 }
 
 /* ---------- markdown ---------- */
+/* Prose measure: a paragraph longer than the cap wraps; everything machine-shaped
+   (tool lines, tables, the task list) keeps the full column. The user's own line is
+   exempt — it is one typed command inside its box, not an essay. */
+.m.chief .md,
+.m.agent .md {
+  max-width: 110ch;
+}
 .md p {
   margin: 0 0 var(--s2);
 }
@@ -431,6 +577,22 @@ kbd {
   margin: var(--s2) 0;
 }
 /* A fence must scroll inside its own box: a long line must never widen the transcript. */
+.md a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  text-underline-offset: 2px;
+}
+.md a:hover {
+  text-decoration-color: var(--accent);
+}
+/* A link that points at a file is still a link: the viewer decides where it goes, so the cursor
+   and the colour are the only promise the text makes. */
+.md a[href^="/"],
+.md a[href^="./"],
+.md a[href^="../"] {
+  cursor: pointer;
+}
 .md pre {
   background: var(--inset);
   border: 1px solid var(--line);
@@ -501,6 +663,7 @@ kbd {
 .think {
   color: var(--fg-3);
   font-size: var(--fs-13);
+  font-style: italic;
 }
 .think > summary {
   cursor: pointer;
@@ -509,6 +672,7 @@ kbd {
   gap: var(--s2);
   align-items: center;
   min-width: 0;
+  font-style: inherit;
 }
 .think > summary::-webkit-details-marker {
   display: none;
@@ -536,10 +700,10 @@ kbd {
   border-color: var(--line);
   background: var(--surface);
 }
-.m .body > .tc + .tc,
-.m .body > .tc + .tline,
-.m .body > .tline + .tc,
-.m .body > .tline + .tline {
+.m > .tc + .tc,
+.m > .tc + .tline,
+.m > .tline + .tc,
+.m > .tline + .tline {
   margin-top: 0;
 }
 .tc > summary {
@@ -615,81 +779,220 @@ kbd {
   white-space: pre-wrap;
   font-family: var(--mono);
 }
-
-/* ---------- task tools, report, question line ---------- */
-.obj {
+/* The task list: one block per running Task, the single place member state lives.
+   Header (id · phase · progress · state), the plan behind a disclosure, then the
+   roster grouped by phase-round so rework reads as history, not a rewrite. */
+.todo {
   border: 1px solid var(--line-strong);
+  background: var(--surface);
   padding: var(--s3) var(--s4);
+  margin-top: var(--s3);
   font-size: var(--fs-13);
 }
-.obj > .row {
-  flex-wrap: wrap;
-}
-.obj-b {
-  margin-top: var(--s2);
-  color: var(--fg-2);
-  max-height: 420px;
-  overflow: auto;
-}
-.obj-b pre,
-.obj-b code {
-  font-size: var(--fs-12);
-}
-.disp.running {
+.todo.running {
   border-color: var(--run);
 }
-.disp.ok {
-  border-color: var(--line);
-  color: var(--fg-2);
+.todo-h {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--line);
 }
-/* A summary line of a finished dispatch must not expose live member rows under it: once the call is
-   over, a clickable "follow" row would claim a member is still running. The rows stay in the panel
-   only while the call is open. */
-.tline + .mlist {
+.todo-h .st {
+  flex: none;
+}
+/* The steps are a vertical rail: a node per step, connected top to bottom, so the list
+   reads as one descending flow. The rail is painted by the step's own pseudo-element, so
+   the planned steps continue it dashed instead of starting a new list. */
+.steps {
+  list-style: none;
+  margin: var(--s2) 0 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+.todo-g.step {
+  position: relative;
+  padding: 6px 0 var(--s3) 24px;
+}
+.todo-g.step::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  /* The rail starts at the first node and ends at the last: nothing pokes out of the block. */
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px solid var(--line-strong);
+}
+.todo-g.step:last-child::before {
   display: none;
 }
-/* The Task that is running now: same shape as a dispatch card, because it is the same information
-   at the only place it exists before the call returns (and after a reload). */
-.live-run {
+.todo-g.step.active:not(.plan)::before {
+  border-left-color: var(--run);
+}
+.todo-g.step.done::before,
+.todo-g.step.past::before {
+  border-left-color: var(--done);
+  opacity: 0.5;
+}
+.todo-g.step.plan::before {
+  border-left-style: dashed;
+  border-left-color: var(--line);
+}
+.todo-g.step .node {
+  position: absolute;
+  left: 0;
+  top: 7px;
+  width: 13px;
+  height: 13px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  font-size: 8px;
+  line-height: 1;
+  background: var(--surface);
+  color: var(--bg);
+  z-index: 1;
+}
+.todo-g.step.done .node {
+  border-color: var(--done);
+  background: var(--done);
+}
+.todo-g.step.plan .node {
+  border-style: dotted;
+}
+.todo-g.step.active .node {
   border-color: var(--run);
-  margin-top: var(--s3);
 }
-.live-run .live-goal {
-  margin-top: var(--s2);
-  color: var(--fg-2);
+/* The step being worked on is the one thing the eye should land on: a run-tinted panel
+   behind it (not a colour on the text only), and the rows inside it get room to breathe. */
+.todo-g.step.active:not(.plan) {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--run) 9%, transparent), transparent 55%);
+}
+/* The work is happening at this node: it breathes, and the step's title follows. */
+.todo-g.step.active:not(.plan) .node {
+  animation: work 1.6s ease-in-out infinite;
+}
+.todo-g.step.decide .node {
+  border-color: var(--decide);
+}
+.todo-g.step.block .node {
+  border-color: var(--block);
+}
+.todo-g.step.plan {
+  opacity: 0.62;
+}
+.todo-g-h {
+  color: var(--fg);
   font-size: var(--fs-13);
-  line-height: 1.6;
+  display: flex;
+  gap: var(--s2);
+  align-items: baseline;
+  flex-wrap: wrap;
 }
-.live-run .mlist {
+.todo-g.step.plan .todo-g-h,
+.todo-g.step .todo-g-h .nm {
+  letter-spacing: 0.02em;
+}
+.todo-g.step.plan .todo-g-h {
+  color: var(--fg-3);
+}
+.todo-g.step.active .todo-g-h .nm {
+  color: var(--run);
+  font-weight: 600;
+}
+.todo-g.step.active .todo-g-h::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  align-self: center;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--run) 40%, transparent), transparent);
+}
+.todo-g.step.decide .todo-g-h .nm {
+  color: var(--decide);
+}
+.todo-g.step.done:not(.active) .todo-g-h .nm {
+  color: var(--fg-2);
+}
+.todo-g-h .mt {
+  color: var(--fg-3);
+  font-size: var(--fs-12);
+}
+.todo-g-h .rnd {
+  color: var(--decide);
+}
+.todo-plan {
   margin-top: var(--s2);
+  color: var(--fg-3);
+  font-size: var(--fs-12);
+}
+.todo-plan > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  gap: var(--s2);
+  align-items: center;
+}
+.todo-plan > summary::-webkit-details-marker {
+  display: none;
+}
+.todo-plan > summary:hover {
+  color: var(--fg-2);
+}
+.todo-plan .obj-b {
+  margin-top: var(--s2);
+}
+.todo-empty {
+  color: var(--fg-3);
+  font-size: var(--fs-12);
+  margin-top: var(--s1);
+}
+.todo-g.step.plan .todo-empty {
+  font-style: italic;
 }
 .mlist {
   display: flex;
   flex-direction: column;
-  margin-top: var(--s2);
+  margin-top: var(--s1);
 }
 .mrow {
   display: grid;
-  /* The design's four columns: state, who, what it is doing, and the way into its transcript. */
-  grid-template-columns: 7.5em 8em minmax(0, 1fr) auto;
-  gap: var(--s3);
-  align-items: center;
-  padding: 4px var(--s2);
+  /* Glyph, what the member is, and the state word: the state column is a word
+     because a colour alone is not a state (U3). */
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: var(--s2);
+  align-items: baseline;
+  padding: 3px var(--s1);
   font-size: var(--fs-13);
   width: 100%;
   text-align: left;
+  /* Rows sit one step in from their step's header, so the rail stays the spine. */
+  margin-left: calc(-1 * var(--s1));
 }
 .mrow > .st {
   white-space: nowrap;
+  justify-self: center;
 }
 .mrow:hover {
   background: var(--sel);
 }
 .mrow .ml {
-  font-weight: 600;
-  white-space: nowrap;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-2);
+}
+.mrow .ml b {
+  font-weight: 400;
+  color: var(--fg);
+}
+.mrow .ml .rw {
+  color: var(--decide);
+  margin-right: var(--s1);
 }
 .mrow .mn {
   color: var(--fg-3);
@@ -700,6 +1003,7 @@ kbd {
 }
 .mrow .mo {
   color: var(--fg-3);
+  white-space: nowrap;
 }
 .mrow:hover .mo {
   color: var(--accent);
@@ -759,8 +1063,7 @@ kbd {
   padding: 0 0 var(--s4);
 }
 .dock-in {
-  max-width: 90%;
-  margin: 0 auto;
+  padding: 0 var(--s6);
   display: flex;
   flex-direction: column;
   gap: var(--s4);
@@ -945,17 +1248,41 @@ kbd {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  top: -40px;
+  top: -44px;
   z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s3);
   background: var(--raised);
   border: 1px solid var(--line-strong);
-  padding: 2px var(--s3);
+  padding: 3px var(--s3);
   color: var(--fg-2);
   font-size: var(--fs-13);
+  animation: popin var(--t) ease-out;
 }
 .jump:hover {
   color: var(--fg);
   border-color: var(--accent);
+}
+/* Output is still arriving below the fold: the pill carries a run dot, so "the AI is
+   still writing" is visible even when the reader is not at the tail. */
+.jump.more {
+  border-color: color-mix(in srgb, var(--run) 55%, var(--line-strong));
+}
+.jump.more .n {
+  color: var(--run);
+  font-variant-numeric: tabular-nums;
+}
+.jump.more .n::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: var(--s2);
+  vertical-align: 1px;
+  border-radius: 50%;
+  background: var(--run);
+  animation: work 1.6s ease-in-out infinite;
 }
 #c-dock:empty {
   display: none;
@@ -1013,21 +1340,11 @@ kbd {
     opacity: 1;
   }
 }
-.ask-h {
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
-  min-width: 0;
-}
-.ask-h .st {
-  flex: none;
-}
 .ask-t {
   font-weight: 600;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* A question is a decision the user must read in full: it wraps, never ellipsizes. */
+  overflow-wrap: anywhere;
 }
 .ask-h .f3 {
   font-size: var(--fs-12);
@@ -1059,16 +1376,19 @@ kbd {
   flex-direction: column;
   margin: var(--s2) 0 0;
 }
-/* A row is a button, or a wrapper holding the form with the typed answer: all must look the same. */
+/* A row is a button, or a wrapper holding the form with the typed answer: all must look the same.
+   Grid keeps the number in its own column, so a long option wraps under itself with a hanging
+   indent instead of pushing under the digit. */
 .ao,
 form.ao,
 form.ao-row,
 .ao:has(form.ao-row) {
-  display: flex;
-  align-items: center;
-  gap: var(--s3);
+  display: grid;
+  grid-template-columns: 1.6em minmax(0, 1fr);
+  column-gap: var(--s2);
+  align-items: baseline;
   min-height: 30px;
-  padding: 0 var(--s3);
+  padding: var(--s1) var(--s3);
   color: var(--fg-2);
   border-left: 2px solid transparent;
   width: 100%;
@@ -1100,7 +1420,7 @@ form.ao-row,
   color: var(--fg-2);
 }
 .ao-in {
-  flex: 1;
+  width: 100%;
   min-width: 0;
   height: 24px;
   background: transparent;
@@ -1112,13 +1432,14 @@ form.ao-row,
 .ask-f {
   display: flex;
   gap: var(--s3);
+  flex-wrap: wrap;
   margin-top: var(--s2);
   padding-top: var(--s2);
   border-top: 1px dashed var(--line);
   color: var(--fg-3);
   font-size: var(--fs-12);
-  white-space: nowrap;
-  overflow: hidden;
+  /* A failure reason is evidence: it wraps instead of being clipped to one line. */
+  overflow-wrap: anywhere;
 }
 .ask-prev {
   display: flex;
@@ -1585,19 +1906,64 @@ details.fold > summary.tline:hover {
 /* The board's Task list: a project-wide answer to "what is running now", below the requirements. */
 .tasks-sec {
   border-top: 1px solid var(--line);
-  padding-top: var(--s4);
   display: flex;
   flex-direction: column;
   gap: var(--s2);
   min-height: 0;
 }
+/* Folded, this is one line: the board below the columns is the screen, and Tasks is a drawer you
+   open when you want them. The whole line is the control — a small caret alone is a target
+   nobody hits on the first try. */
+.tasks-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  width: 100%;
+  padding: var(--s3) var(--s8);
+  color: var(--fg-3);
+  min-width: 0;
+  text-align: left;
+}
+.tasks-toggle:hover {
+  background: var(--sel);
+  color: var(--fg-2);
+}
+.tasks-toggle .caret {
+  color: var(--fg-3);
+  width: 1em;
+  flex: none;
+}
+.tasks-sec.open .tasks-toggle {
+  color: var(--fg);
+}
 .tasks-sec h2 {
   margin: 0;
   font-size: var(--fs-12);
   font-weight: 500;
-  color: var(--muted);
+  color: inherit;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+.tasks-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: 0 var(--s8) var(--s4);
+  min-height: 0;
+}
+/* Two quiet actions on the header line: reload is a glyph, "more" is a word, and neither takes
+   a row of its own away from the list. */
+.tasks-reload,
+.tasks-more {
+  cursor: pointer;
+  flex: none;
+}
+.tasks-reload:hover,
+.tasks-more:hover {
+  color: var(--accent);
+}
+.tasks-sec.open .tasks-reload {
+  color: var(--fg-3);
 }
 .task-rows {
   display: flex;
@@ -1621,7 +1987,375 @@ details.fold > summary.tline:hover {
   max-width: 420px;
 }
 
-/* The file reader: a listing of buttons, then the text of one file, scrolled inside its drawer. */
+/* ---------- file viewer: one canvas, a tree, one file ---------- */
+/* A full-window canvas, not a 560px drawer: a report or a 2000-line source file is what people
+   open here, and a narrow panel turns reading into scrolling. It covers the shell below the
+   header so the navigation stays where it always is. */
+.fileviewer {
+  position: fixed;
+  inset: var(--top) 0 var(--status) 0;
+  z-index: 21;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  animation: fvin var(--t) ease-out;
+}
+@keyframes fvin {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.fv-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) var(--s4);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  min-width: 0;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+.fv-head .btn,
+.fv-head .f3 {
+  flex: none;
+}
+.fv-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+.fv-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+}
+.fv-tree {
+  border-right: 1px solid var(--line);
+  padding: var(--s2) 0;
+  overflow: auto;
+  min-height: 0;
+}
+.fv-tree .entry {
+  gap: var(--s2);
+}
+/* The glyph column is fixed so names line up down the tree whatever kind the row is. */
+.fv-tree .entry .ico {
+  flex: none;
+  width: 1.1em;
+  text-align: center;
+  color: var(--line-strong);
+}
+/* A directory is a place, a file is a thing: the glyph, the trailing slash and the name's
+   own colour all say it, so the tree is readable without reading every row. */
+.fv-tree .entry.directory .ico {
+  color: var(--accent);
+}
+.fv-tree .entry.directory .mono {
+  color: var(--fg);
+}
+.fv-tree .entry.file .mono {
+  color: var(--fg-2);
+}
+.fv-tree .entry.symlink .ico,
+.fv-tree .entry.other .ico {
+  color: var(--decide);
+}
+.fv-tree .entry:disabled {
+  opacity: 0.5;
+}
+.fv-tree .entry:disabled {
+  opacity: 0.55;
+}
+.fv-tree .entry.on {
+  background: var(--sel);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.fv-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: var(--s3) var(--s4);
+  gap: var(--s3);
+}
+.fv-media {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  background: var(--inset);
+  border: 1px solid var(--line);
+}
+.fv-media img,
+.fv-media video {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.fv-media audio {
+  width: min(560px, 100%);
+}
+.fv-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+/* A markdown document: rendered is the way a report is read, source is one click away. The bar is
+   the same height as the source bar so switching does not move the text under the pointer. */
+.mdview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  background: var(--inset);
+}
+.mdbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s1) var(--s3);
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.mdbar .tab {
+  color: var(--fg-3);
+  font-size: var(--fs-12);
+  padding: 1px var(--s2);
+  border: 1px solid transparent;
+}
+.mdbar .tab:hover {
+  color: var(--fg);
+}
+.mdbar .tab.on {
+  color: var(--fg);
+  border-color: var(--line-strong);
+  background: var(--surface);
+}
+/* Prose keeps its own measure inside a wide canvas: a 1400px line is unreadable. */
+.fv-md {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--s4) var(--s6);
+  max-width: 110ch;
+  margin: 0 auto;
+  width: 100%;
+}
+.fv-md img {
+  max-width: 100%;
+}
+/* A document gets document headings: in the transcript an answer is one turn among many, but a
+   report is the page you opened, and its outline has to be visible at a glance. */
+.fv-md h1 {
+  font-size: var(--fs-20);
+  margin: var(--s4) 0 var(--s2);
+}
+.fv-md h2 {
+  font-size: var(--fs-16);
+  margin: var(--s4) 0 var(--s2);
+}
+.fv-md h3 {
+  font-size: var(--fs-14);
+}
+.fv-md h1:first-child,
+.fv-md h2:first-child {
+  margin-top: 0;
+}
+.fv-md p,
+.fv-md li {
+  font-size: var(--fs-14);
+  line-height: 1.75;
+}
+.fv-md pre {
+  font-size: var(--fs-12);
+}
+.fv-md table {
+  font-size: var(--fs-13);
+}
+
+/* Source: a fixed gutter, then the file's own whitespace. The gutter is not selectable so a
+   copy of the code never carries the line numbers with it. */
+.srcview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  background: var(--inset);
+}
+.srcbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s1) var(--s3);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-12);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.srcsearch {
+  width: 180px;
+  height: 24px;
+  font-family: var(--mono);
+  font-size: var(--fs-12);
+}
+.srcscroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.srccode {
+  display: flex;
+  align-items: flex-start;
+  min-height: 100%;
+}
+.srcgutter {
+  flex: none;
+  margin: 0;
+  padding: var(--s2) var(--s3) var(--s2) var(--s4);
+  text-align: right;
+  color: var(--fg-3);
+  opacity: 0.65;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+  user-select: none;
+  white-space: pre;
+  font-size: var(--fs-12);
+  line-height: 1.7;
+}
+.srchigh,
+.srcplain {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: var(--s2) var(--s4);
+  white-space: pre;
+  font-size: var(--fs-12);
+  line-height: 1.7;
+  color: var(--fg);
+}
+.srchigh code {
+  font-family: inherit;
+  white-space: inherit;
+}
+.srchits {
+  flex: none;
+  max-height: 30%;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  padding: var(--s1) 0;
+}
+.srchit {
+  display: flex;
+  gap: var(--s3);
+  width: 100%;
+  padding: 2px var(--s3);
+  min-width: 0;
+  text-align: left;
+  font-size: var(--fs-12);
+}
+.srchit:hover {
+  background: var(--sel);
+}
+.srchit .mono:first-child {
+  flex: none;
+  width: 4ch;
+  text-align: right;
+}
+/* Highlighted code inside the viewer follows the transcript's own token colours, so the same
+   file reads the same in a fence and in the viewer. */
+.srchigh .hljs-keyword,
+.srchigh .hljs-selector-tag,
+.srchigh .hljs-built_in,
+.md .hljs-keyword,
+.md .hljs-selector-tag,
+.md .hljs-built_in {
+  color: var(--accent);
+}
+.srchigh .hljs-string,
+.srchigh .hljs-attr,
+.md .hljs-string,
+.md .hljs-attr {
+  color: var(--done);
+}
+.srchigh .hljs-number,
+.srchigh .hljs-literal,
+.md .hljs-number,
+.md .hljs-literal {
+  color: var(--run);
+}
+.srchigh .hljs-comment,
+.md .hljs-comment {
+  color: var(--fg-3);
+  font-style: italic;
+}
+.srchigh .hljs-title,
+.srchigh .hljs-function .hljs-title,
+.srchigh .hljs-section,
+.md .hljs-title,
+.md .hljs-function .hljs-title,
+.md .hljs-section {
+  color: var(--fg);
+  font-weight: 600;
+}
+.srchigh .hljs-variable,
+.srchigh .hljs-params,
+.md .hljs-variable,
+.md .hljs-params {
+  color: var(--fg-2);
+}
+.srchigh .hljs-meta,
+.srchigh .hljs-type,
+.md .hljs-meta,
+.md .hljs-type {
+  color: var(--decide);
+}
+.srchigh .hljs-tag,
+.srchigh .hljs-name,
+.md .hljs-tag,
+.md .hljs-name {
+  color: var(--run);
+}
+.srchigh .hljs-deletion,
+.md .hljs-deletion {
+  color: var(--block);
+}
+.srchigh .hljs-addition,
+.md .hljs-addition {
+  color: var(--done);
+}
+/* Phone: the tree becomes a strip above the file, because a 260px column on a 390px screen
+   leaves no room for the thing the reader came for. */
+@media (max-width: 860px) {
+  .fv-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 32%) minmax(0, 1fr);
+  }
+  .fv-tree {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+}
+/* .entry is shared by the tree, the report list and the knowledge rows; nothing here is
+   drawer-specific any more. */
 /* A rail row with one trailing action: the row selects, the small button removes. */
 .srow {
   display: flex;
@@ -1668,18 +2402,6 @@ details.fold > summary.tline:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.fileread {
-  margin: 0;
-  padding: var(--s3);
-  background: var(--inset);
-  border: 1px solid var(--line);
-  overflow-x: auto;
-  white-space: pre;
-  font-family: var(--mono);
-  font-size: var(--fs-12);
-  max-height: 100%;
-}
-
 .inp {
   height: 32px;
   padding: 0 var(--s3);
@@ -1739,6 +2461,15 @@ details.fold > summary.tline:hover {
 }
 
 /* ---------- responsive ---------- */
+/* Narrow: the strip keeps the flow (that is its whole job) and drops the meter, which is
+   the same fact as the words, said twice. */
+@media (max-width: 1280px) {
+  .prog,
+  .prog-n {
+    display: none;
+  }
+}
+
 @media (max-width: 1100px) {
   .board {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1754,10 +2485,11 @@ details.fold > summary.tline:hover {
     grid-template-columns: minmax(0, 1fr);
   }
   /* Narrow: the note is what gives way, not the member's name. */
-  .mrow {
-    grid-template-columns: 6.5em minmax(0, 1fr) auto;
-  }
   .mrow .mn {
+    display: none;
+  }
+  /* And a step's name stands alone: its agent count is in the rows below it. */
+  .todo-g-h .mt {
     display: none;
   }
   .sessions {
@@ -1822,10 +2554,6 @@ details.fold > summary.tline:hover {
   }
   .bn {
     padding: var(--s2) var(--s4);
-  }
-  /* The note is already gone below 860; the member's name and its state are what remain. */
-  .mrow {
-    grid-template-columns: 5em minmax(0, 1fr) auto;
   }
   .drawer-tx {
     padding: var(--s4);
@@ -1894,15 +2622,34 @@ details.fold > summary.tline:hover {
 }
 
 /* nav labels are anchors; they inherit the button rules above */
-.nav a {
+.nav a,
+.nav button {
   padding: 2px var(--s3);
   color: var(--fg-3);
   text-decoration: none;
   display: inline-flex;
   align-items: center;
+  font: inherit;
 }
-.nav a:hover {
+.nav a:hover,
+.nav button:hover {
   color: var(--fg);
+}
+/* The Files label opens a canvas over the current screen rather than navigating, so it is a
+   button; it must still look like the other labels, and say why it cannot open yet. */
+.nav button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.nav button:disabled:hover {
+  color: var(--fg-3);
+}
+/* The Files label is current while its canvas is open: same mark as a screen, because it is
+   a place the user is in, not a mode that is on. */
+.nav button[aria-current="page"] {
+  color: var(--fg);
+  background: var(--sel);
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 .nav a[aria-current="page"] {
   color: var(--fg);
@@ -1948,7 +2695,8 @@ details.fold > summary.tline:hover {
   .top {
     gap: var(--s2);
   }
-  .nav a {
+  .nav a,
+  .nav button {
     padding: 2px var(--s1);
     font-size: var(--fs-13);
   }
@@ -1979,7 +2727,8 @@ details.fold > summary.tline:hover {
     content: "❯";
     font-size: var(--fs-14);
   }
-  .top .nav a {
+  .top .nav a,
+  .top .nav button {
     padding: 2px var(--s1);
     font-size: var(--fs-12);
   }

@@ -30,6 +30,11 @@ export interface ComposerProps {
   readonly seed?: string | null;
   readonly onSeed?: (inserted: boolean) => void;
   readonly onStop: () => Promise<void>;
+  /**
+   * The user said "follow the output again" (Escape in an empty box). The transcript's own
+   * follow is released by scrolling up, and this is the keyboard way back to the tail.
+   */
+  readonly onReleaseSight?: (() => void) | undefined;
 }
 
 /**
@@ -41,7 +46,7 @@ export interface ComposerProps {
  * Images are attached the same way they are delivered: the file goes to the server first, the
  * preview shows the stored copy, and the message carries the attachment ids.
  */
-export function Composer({ busy, canStop, disabled, onSubmit, onUpload, onStop, seed, onSeed }: ComposerProps) {
+export function Composer({ busy, canStop, disabled, onSubmit, onUpload, onStop, seed, onSeed, onReleaseSight }: ComposerProps) {
   const { t } = useI18n();
   const [draft, setDraft] = useState('');
   const [images, setImages] = useState<readonly PendingImage[]>([]);
@@ -170,6 +175,13 @@ export function Composer({ busy, canStop, disabled, onSubmit, onUpload, onStop, 
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
               void send();
+              return;
+            }
+            // Escape in an empty box is not "cancel the draft" (there is none): it is "put me
+            // back at the live output", which is what a reader who scrolled up wants.
+            if (event.key === 'Escape' && draft === '' && onReleaseSight !== undefined) {
+              event.preventDefault();
+              onReleaseSight();
             }
           }}
           data-testid="composer"

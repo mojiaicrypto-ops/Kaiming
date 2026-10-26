@@ -9,6 +9,7 @@ import { extname, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { AuthService, CSRF_HEADER } from './auth.ts';
 import { MAX_IMAGE_BYTES, readImage, storeImage } from './attachments.ts';
+import { readProjectFileBytes } from './fs-guard.ts';
 import { SessionEventHub, type StreamEvent } from './hub.ts';
 import { RPC_PATH, RpcError, RpcRouter, statusFor, toRpcError, type RpcContext, type RpcResponse } from './rpc.ts';
 import type { Store } from '../store/store.ts';
@@ -17,6 +18,12 @@ const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
 /** Binary image upload (U6): one request carries one image, so no JSON envelope is involved. */
 export const UPLOAD_PATH = '/api/v1/uploads';
 export const ATTACHMENT_PATH_PREFIX = '/api/v1/attachments/';
+/**
+ * Bytes of one project file (U11): the viewer shows images, video and downloads through this
+ * address because `project.files.read` only carries text. Read-only and project-scoped; the
+ * path segment is the project id, so a URL never names a host path.
+ */
+export const PROJECT_FILE_PATH_PREFIX = '/api/v1/project-files/';
 
 export interface WorkbenchServerOptions {
   readonly store: Store;
@@ -73,6 +80,10 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
     }
     if (request.method === 'GET' && path.startsWith(ATTACHMENT_PATH_PREFIX)) {
       await handleAttachment(request, response, decodeURIComponent(path.slice(ATTACHMENT_PATH_PREFIX.length)));
+      return;
+    }
+    if ((request.method === 'GET' || request.method === 'HEAD') && path.startsWith(PROJECT_FILE_PATH_PREFIX)) {
+      await handleProjectFile(request, response, path.slice(PROJECT_FILE_PATH_PREFIX.length), url.includes('?download=1'));
       return;
     }
     if (request.method === 'POST' && path === RPC_PATH) {
@@ -429,6 +440,53 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
       'x-content-type-options': 'nosniff',
     });
     response.end(image.bytes);
+  }
+
+  /**
+   * One project file as bytes: `<projectId>/<path>`. Same rules as the RPC file methods — the
+   * project must be known, the path must stay inside it, a symlink is never followed — plus the
+   * two headers a browser needs to display or save it. It is a viewer's byte source, nothing more:
+   * no HTML is rendered from it and no script can run through it (`nosniff`, no inline rendering).
+   */
+  async function handleProjectFile(request: IncomingMessage, response: ServerResponse, rest: string, download: boolean): Promise<void> {
+    if (options.auth.resolve(request.headers.cookie) === undefined) {
+      writeJson(response, 401, { requestId: 'unknown', error: { code: 'UNAUTHORIZED', message: 'log in first' } });
+      return;
+    }
+    const slash = rest.indexOf('/');
+    const projectId = slash < 0 ? '' : decodeURIComponent(rest.slice(0, slash));
+    const requested = slash < 0 ? '' : decodeURIComponent(rest.slice(slash + 1));
+    if (projectId === '' || requested === '') {
+      writeJson(response, 404, { requestId: 'unknown', error: { code: 'NOT_FOUND', message: 'project and path are required' } });
+      return;
+    }
+    const project = options.store.getProject(projectId);
+    if (project === undefined) {
+      writeJson(response, 404, { requestId: 'unknown', error: { code: 'NOT_FOUND', message: `project ${projectId} is not open` } });
+      return;
+    }
+    let file: ReturnType<typeof readProjectFileBytes>;
+    try {
+      file = readProjectFileBytes(project.realPath, requested);
+    } catch (error) {
+      const rpcError = error instanceof RpcError ? error : new RpcError('NOT_FOUND', 'the file cannot be read');
+      writeJson(response, statusFor({ requestId: 'unknown', error: { code: rpcError.code, message: rpcError.message } }), {
+        requestId: 'unknown',
+        error: { code: rpcError.code, message: rpcError.message },
+      });
+      return;
+    }
+    const name = requested.split('/').pop() ?? 'file';
+    response.writeHead(200, {
+      'content-type': file.mimeType,
+      'content-length': file.size,
+      // A reader re-reads after an edit; the version is not in the URL, so caching would show old bytes.
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      // Never sniff an HTML report into a document: this route serves a viewer, not a page.
+      'content-disposition': `${download ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(name)}`,
+    });
+    response.end(request.method === 'HEAD' ? undefined : file.bytes);
   }
 
   async function serveStatic(

@@ -7,6 +7,7 @@ import { ToolQuestion, ToolReport, ToolRequirement } from './ToolBusiness';
 import { ToolTask } from './ToolTask';
 import type { TaskMemberRow } from './task-labels';
 import { blocksOf, membersForDispatch, parseArgs, type ToolResultView } from './transcript-model';
+import { hrefOfEvent } from '../files/link-target';
 import type { HistoryMessage } from '../state/slot';
 
 export interface MessageItemProps {
@@ -20,6 +21,11 @@ export interface MessageItemProps {
   readonly members?: readonly TaskMemberRow[] | undefined;
   readonly liveSessions?: ReadonlySet<string> | undefined;
   readonly liveCallId?: string | undefined;
+  /**
+   * A link in the text. Reports quote host paths (`/Users/…/shots/a.png`), and the browser cannot
+   * open those: the shell resolves them and opens the file viewer instead of navigating away.
+   */
+  readonly onLink?: ((href: string) => void) | undefined;
 }
 
 /**
@@ -32,7 +38,7 @@ function extractAnswer(text: string): string {
   return /answer="([^"]*)"/.exec(text)?.[1] ?? '';
 }
 
-export function MessageItem({ message, role, label, continuation, results, onFollow, members, liveSessions, liveCallId }: MessageItemProps) {
+export function MessageItem({ message, role, label, continuation, results, onFollow, members, liveSessions, liveCallId, onLink }: MessageItemProps) {
   const { t } = useI18n();
   const streaming = message.streaming === true;
   const blocks = blocksOf(message);
@@ -46,7 +52,21 @@ export function MessageItem({ message, role, label, continuation, results, onFol
     }
     if (block.kind === 'text') {
       return (
-        <div key={`t${index}`} className="md">
+        <div
+          key={`t${index}`}
+          className="md"
+          onClick={
+            onLink === undefined
+              ? undefined
+              : (event) => {
+                  const href = hrefOfEvent(event.target);
+                  if (href === undefined) return;
+                  // Never let a reference navigate the workbench away: it is a file, not a route.
+                  event.preventDefault();
+                  onLink(href);
+                }
+          }
+        >
           <Markdown text={block.text} />
           {cursor}
         </div>
@@ -119,18 +139,17 @@ export function MessageItem({ message, role, label, continuation, results, onFol
       />
     );
   });
-
-  if (rendered.length === 0 && !streaming && !stopped) return null;
-
-  const who = role === 'user' ? t('chat.you') : role === 'chief' ? t('chat.chief') : label;
+  const userLine = role === 'user';
 
   return (
-    <article className={`m ${role}${continuation ? ' cont' : ''}`} data-entry-id={message.entryId}>
-      <div className="who">{who}</div>
-      <div className="body">
-        {rendered.length > 0 ? rendered : <State kind="run" />}
-        {stopped && <div className="stopped">{t('chat.stopped')}</div>}
-      </div>
+    <article
+      className={`m ${role}${continuation ? ' cont' : ''}`}
+      data-entry-id={message.entryId}
+    >
+      {/* The flat terminal flow: a user line is one ❯-prefixed run, an assistant message is
+          its blocks laid out directly. No who header, no side rail — turn breaks are spacing. */}
+      {userLine ? <div className="uline">{rendered.length > 0 ? rendered : <State kind="run" />}</div> : rendered.length > 0 ? rendered : <State kind="run" />}
+      {stopped && <div className="stopped">{t('chat.stopped')}</div>}
     </article>
   );
 }

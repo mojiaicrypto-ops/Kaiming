@@ -42,6 +42,8 @@ export interface InputMarker {
 
 export type StubReply =
   | { readonly kind: 'text'; readonly text: string }
+  /** The same text, emitted in slices so the transcript grows over time, like a real stream. */
+  | { readonly kind: 'slow_text'; readonly text: string; readonly chunks: number; readonly delayMs: number }
   | { readonly kind: 'tool_calls'; readonly calls: ReadonlyArray<{ name: string; arguments: string }> }
   | { readonly kind: 'http_error'; readonly status: number; readonly message?: string }
   /** Accept the request and never answer: a dead provider stream, for watchdog tests. */
@@ -77,7 +79,7 @@ function sseChunk(modelId: string, delta: ChatChunkDelta, finishReason: string |
 
 const STUB_USAGE = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
 
-function writeCompletion(res: ServerResponse, reply: StubReply, turn: number): void {
+async function writeCompletion(res: ServerResponse, reply: StubReply, turn: number): Promise<void> {
   if (reply.kind === 'hang') {
     return;
   }
@@ -100,7 +102,18 @@ function writeCompletion(res: ServerResponse, reply: StubReply, turn: number): v
     connection: 'keep-alive',
   });
   res.write(sseChunk(STUB_MODEL, { role: 'assistant', content: '' }, null));
-  if (reply.kind === 'text') {
+  if (reply.kind === 'slow_text') {
+    // One slice per delay: the client sees the answer build up the way a real provider streams.
+    const size = Math.max(1, Math.ceil(reply.text.length / reply.chunks));
+    for (let at = 0; at < reply.text.length; at += size) {
+      await new Promise<void>((resolve) => setTimeout(resolve, reply.delayMs));
+      if (res.destroyed) return;
+      res.write(sseChunk(STUB_MODEL, { content: reply.text.slice(at, at + size) }, null));
+    }
+    res.write(
+      sseChunk(STUB_MODEL, {}, 'stop').replace('}}', `},"usage":${JSON.stringify(STUB_USAGE)}}`),
+    );
+  } else if (reply.kind === 'text') {
     res.write(sseChunk(STUB_MODEL, { content: reply.text }, null));
     res.write(
       sseChunk(STUB_MODEL, {}, 'stop').replace('}}', `},"usage":${JSON.stringify(STUB_USAGE)}}`),
@@ -173,7 +186,7 @@ export async function startStubModelServer(replies: readonly StubReply[]): Promi
       if (reply.kind === 'hang') {
         return;
       }
-      writeCompletion(res, reply, served);
+      void writeCompletion(res, reply, served);
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));

@@ -22,6 +22,7 @@ const en = {
   'nav.chat': 'Chat',
   'nav.requirements': 'Requirements',
   'nav.settings': 'Settings',
+  'nav.files': 'Files',
   'nav.hint': '{n} to switch · i to type · Esc to close',
   'shell.connected': 'Connected',
   'shell.noSession': 'No session yet',
@@ -91,6 +92,7 @@ const en = {
   'chat.hint.send': 'Enter to send · Shift+Enter for a new line',
   'chat.hint.stop': 'STOP keeps what was already produced',
   'chat.jump': '↓ Back to latest',
+  'chat.jumpMore': '+{count} line(s) below',
 
   // ---------- chat: states ----------
   'chat.busy.chief': 'The chief is working…',
@@ -205,6 +207,13 @@ const en = {
   'task.preparing': 'Preparing to dispatch…',
   'task.dispatched': 'Dispatched',
   'task.resultCount': '{count} result(s)',
+  'task.planLines': '{count} line(s) of Plan',
+  'task.round': 'round {n}',
+  'task.rework': 'Rework: this member is back after a failed check',
+  'task.waitingDispatch': 'Waiting for the chief to dispatch this step',
+  'task.todoProgress': '{done}/{total} settled',
+  'task.stepMembers': '{count} agent(s)',
+  'task.notStarted': 'Not started (planned)',
 
   // ---------- tools ----------
   'tool.arguments': 'Arguments',
@@ -226,6 +235,7 @@ const en = {
 
   // ---------- files ----------
   'files.browse': 'Project files',
+  'files.needProject': 'Open a project first',
   'files.readOnly': 'Read only',
   'files.root': '/',
   'files.back': 'Back',
@@ -238,6 +248,18 @@ const en = {
   'files.symlink': 'symlink (not followed)',
   'files.other': 'not a regular file',
   'files.more': 'Show more',
+  'files.download': 'Download',
+  'files.tree': 'Project tree',
+  'files.pick': 'Pick a file on the left to read it.',
+  'files.noPreview': 'No preview for .{ext} — download it to open with the right tool.',
+  'files.lines': '{count} lines',
+  'files.openInViewer': 'Open in the file viewer',
+  'files.directory': 'folder',
+  'files.rendered': 'Rendered',
+  'files.source': 'Source',
+  'files.outside': 'That path is outside this project, so it cannot be opened here.',
+  'files.find': 'Find in file',
+  'files.matches': '{count} matching line(s)',
 
   // ---------- task detail ----------
   'task.detail': 'Task detail',
@@ -247,6 +269,7 @@ const en = {
   'task.results': 'Results',
   'task.noResults': 'No report yet.',
   'task.listTitle': 'Tasks',
+  'task.listCount': '{count} total',
   'task.listEmpty': 'No Task in this project yet.',
   'task.openSession': 'Open the conversation',
   'task.status.active': 'Running',
@@ -432,6 +455,7 @@ export const zhCN: Record<MessageKey, string> = {
   'nav.chat': '会话',
   'nav.requirements': '需求',
   'nav.settings': '设置',
+  'nav.files': '文件',
   'nav.hint': '{n} 切换 · i 输入 · Esc 关闭',
   'shell.connected': '已连接',
   'shell.noSession': '尚无会话',
@@ -500,6 +524,7 @@ export const zhCN: Record<MessageKey, string> = {
   'chat.hint.send': 'Enter 发送 · Shift+Enter 换行',
   'chat.hint.stop': 'STOP 保留已输出的内容',
   'chat.jump': '↓ 回到最新',
+  'chat.jumpMore': '下方还有 {count} 行',
 
   // ---------- chat: states ----------
   'chat.busy.chief': '主管正在处理…',
@@ -612,6 +637,13 @@ export const zhCN: Record<MessageKey, string> = {
   'task.preparing': '准备派发…',
   'task.dispatched': '已派发',
   'task.resultCount': '{count} 个结果',
+  'task.planLines': '{count} 行 Plan',
+  'task.round': '第 {n} 轮',
+  'task.rework': '返工:该成员在检查未通过后重新开工',
+  'task.waitingDispatch': '等待主管派发这一步',
+  'task.todoProgress': '{done}/{total} 已结束',
+  'task.stepMembers': '{count} 个 Agent',
+  'task.notStarted': '未开始(计划内)',
 
   // ---------- tools ----------
   'tool.arguments': '参数',
@@ -633,6 +665,7 @@ export const zhCN: Record<MessageKey, string> = {
 
   // ---------- files ----------
   'files.browse': '项目文件',
+  'files.needProject': '请先打开一个项目',
   'files.readOnly': '只读',
   'files.root': '/',
   'files.back': '返回',
@@ -645,6 +678,18 @@ export const zhCN: Record<MessageKey, string> = {
   'files.symlink': '符号链接（不跟随）',
   'files.other': '不是普通文件',
   'files.more': '显示更多',
+  'files.download': '下载',
+  'files.tree': '项目文件树',
+  'files.pick': '在左侧选一个文件查看内容。',
+  'files.noPreview': '·{ext} 不能预览 —— 下载后用对应的工具打开。',
+  'files.lines': '{count} 行',
+  'files.openInViewer': '在文件查看器里打开',
+  'files.directory': '文件夹',
+  'files.rendered': '渲染',
+  'files.source': '源码',
+  'files.outside': '该路径不在当前项目内，无法在这里打开。',
+  'files.find': '在文件内查找',
+  'files.matches': '匹配 {count} 行',
 
   // ---------- task detail ----------
   'task.detail': '任务详情',
@@ -654,6 +699,7 @@ export const zhCN: Record<MessageKey, string> = {
   'task.results': '结果',
   'task.noResults': '还没有报告。',
   'task.listTitle': '任务',
+  'task.listCount': '共 {count} 个',
   'task.listEmpty': '这个项目还没有任务。',
   'task.openSession': '打开对应会话',
   'task.status.active': '进行中',

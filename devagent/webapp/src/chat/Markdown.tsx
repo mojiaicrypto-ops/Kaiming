@@ -1,50 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import MarkdownIt from 'markdown-it';
-import hljs from 'highlight.js/lib/core';
-import javascript from 'highlight.js/lib/languages/javascript';
-import typescript from 'highlight.js/lib/languages/typescript';
-import json from 'highlight.js/lib/languages/json';
-import bash from 'highlight.js/lib/languages/bash';
-import python from 'highlight.js/lib/languages/python';
-import xml from 'highlight.js/lib/languages/xml';
-import css from 'highlight.js/lib/languages/css';
-import yaml from 'highlight.js/lib/languages/yaml';
-import diff from 'highlight.js/lib/languages/diff';
-import markdown from 'highlight.js/lib/languages/markdown';
+import { hasLanguage, highlightToHtml, registerLanguages } from '../lib/highlight';
 import { takeHighlightBudget, waitForHighlight } from '../lib/highlight-queue';
 
-let registered = false;
-function registerLanguages(): void {
-  if (registered) return;
-  hljs.registerLanguage('javascript', javascript);
-  hljs.registerLanguage('typescript', typescript);
-  hljs.registerLanguage('json', json);
-  hljs.registerLanguage('bash', bash);
-  hljs.registerLanguage('python', python);
-  hljs.registerLanguage('xml', xml);
-  hljs.registerLanguage('css', css);
-  hljs.registerLanguage('yaml', yaml);
-  hljs.registerLanguage('diff', diff);
-  hljs.registerLanguage('markdown', markdown);
-  registered = true;
-}
-// Languages register at module scope: the budget queue's deferred highlight runs outside the
-// markdown-it callback path and must never hit "Unknown language".
+// Grammars register once, in one list shared with the file viewer: a `.ts` file and a `.ts` fence
+// must be coloured by the same grammar or the two screens disagree about the same code.
 registerLanguages();
 
 const markdownIt = new MarkdownIt({
   breaks: true,
   linkify: true,
   highlight(code, language) {
-    registerLanguages();
-    if (typeof language === 'string' && language !== '' && hljs.getLanguage(language) !== undefined) {
-      // Budgeted: long or numerous fences render plain first and gain colors in idle slices.
-      if (takeHighlightBudget(code.length)) {
-        return hljs.highlight(code, { language }).value;
-      }
-      return '';
-    }
-    return '';
+    if (typeof language !== 'string' || !hasLanguage(language)) return '';
+    // Budgeted: long or numerous fences render plain first and gain colors in idle slices.
+    return takeHighlightBudget(code.length) ? highlightToHtml(code, language) : '';
   },
 });
 
@@ -56,8 +25,8 @@ interface CodeBlockProps {
 function CodeBlock({ code, language }: CodeBlockProps) {
   // Lazy init consumes the budget once per mount; a changed fence remounts via key in Markdown.
   const [html, setHtml] = useState(() =>
-    typeof language === 'string' && language !== '' && hljs.getLanguage(language) !== undefined && takeHighlightBudget(code.length)
-      ? hljs.highlight(code, { language }).value
+    hasLanguage(language) && takeHighlightBudget(code.length)
+      ? highlightToHtml(code, language)
       : null,
   );
   useEffect(() => {
@@ -66,9 +35,7 @@ function CodeBlock({ code, language }: CodeBlockProps) {
     const cancel = waitForHighlight(() => {
       if (!cancelled) {
         // Fences without a language stay plain: hljs would throw for an empty language.
-        if (language !== '' && hljs.getLanguage(language) !== undefined) {
-          setHtml(hljs.highlight(code, { language }).value);
-        }
+        if (hasLanguage(language)) setHtml(highlightToHtml(code, language));
       }
     });
     return () => {

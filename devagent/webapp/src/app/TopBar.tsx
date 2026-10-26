@@ -1,6 +1,6 @@
 import type { MouseEvent } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
-import { navigate, type Route } from './router';
+import type { Route } from './router';
 import type { ConnectionStatus } from '../state/useSession';
 import type { ProjectSummary } from '../state/useWorkspace';
 
@@ -12,6 +12,19 @@ export interface TopBarProps {
   readonly onOpenProject: () => void;
   readonly onOpenRail: () => void;
   readonly railOpen: boolean;
+  /**
+   * The project file viewer. It is a shell-level place, not something hidden in a dialog: reading a
+   * project's files is a reason to open the workbench at all, so it gets a nav label next to the
+   * other screens.
+   */
+  readonly onOpenFiles: () => void;
+  /** The viewer is a canvas over the current screen: the label shows as current while it is open. */
+  readonly filesOpen: boolean;
+  /**
+   * Every label goes through the shell's navigation, which first closes the file canvas: the canvas
+   * covers the screen the user is leaving, so a plain route change would look like a dead click.
+   */
+  readonly onNavigate: (path: string) => void;
 }
 
 const NAV: ReadonlyArray<{ view: Route['view']; path: string; key: 'nav.chat' | 'nav.requirements' | 'nav.settings' }> = [
@@ -25,7 +38,7 @@ const NAV: ReadonlyArray<{ view: Route['view']; path: string; key: 'nav.chat' | 
  * Navigation is plain anchors so a middle-click or a copied address works; a same-origin click
  * is intercepted to keep the shell mounted.
  */
-export function TopBar({ route, project, status, pendingQuestions, onOpenProject, onOpenRail, railOpen }: TopBarProps) {
+export function TopBar({ route, project, status, pendingQuestions, onOpenProject, onOpenRail, railOpen, onOpenFiles, filesOpen, onNavigate }: TopBarProps) {
   const { t } = useI18n();
   // 'idle' only exists before a session does, so it must not borrow the "connecting" word: nothing
   // is in progress, the workbench is waiting for the user to open a project or a session.
@@ -57,17 +70,33 @@ export function TopBar({ route, project, status, pendingQuestions, onOpenProject
           <a
             key={entry.view}
             href={entry.path}
-            aria-current={route.view === entry.view ? 'page' : undefined}
+            // While the file canvas is open it is the place the user is in, so only it looks
+            // current: two selected labels would say the shell is in two places at once.
+            aria-current={!filesOpen && route.view === entry.view ? 'page' : undefined}
             onClick={(event) => {
               if (event.metaKey || event.ctrlKey || event.shiftKey) return;
               event.preventDefault();
-              navigate(entry.path);
+              onNavigate(entry.path);
             }}
           >
             {t(entry.key)}
             {entry.view === 'chat' && pendingQuestions > 0 && <span className="n decide">◆{pendingQuestions}</span>}
           </a>
         ))}
+        {/* A button, not a link: the viewer is a canvas over the current screen, so the address
+            bar stays on the screen the user is already on. */}
+        <button
+          type="button"
+          // The project must be open first: a listing of nothing is not a screen worth having.
+          disabled={project === null}
+          // Open is a location, so it says so the same way the screens do: the label is current.
+          aria-current={filesOpen ? 'page' : undefined}
+          onClick={onOpenFiles}
+          data-testid="nav-files"
+          title={project === null ? t('files.needProject') : t('files.browse')}
+        >
+          {t('nav.files')}
+        </button>
       </nav>
       <span className="sp" />
       {route.view === 'chat' && (

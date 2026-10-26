@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { RpcError } from '../api/rpc';
 import { useI18n } from '../i18n/I18nProvider';
 import { SessionsList } from './SessionsList';
@@ -6,7 +6,7 @@ import { useTier } from '../layout/useTier';
 import { Transcript } from './Transcript';
 import { Banner } from './Banner';
 import { TaskStrip } from './TaskStrip';
-import { TaskLive } from './TaskLive';
+import { TaskTodo } from './TaskTodo';
 import { InteractionPanel, type AnswerState } from './InteractionPanel';
 import { Composer, DockHint } from './Composer';
 import { QueuedInputs } from './QueuedInputs';
@@ -16,6 +16,7 @@ import { TaskDrawer } from './TaskDrawer';
 import { echoOf } from './interaction-model';
 import { parseArgs } from './transcript-model';
 import { createAutoscroll } from '../lib/scroll';
+import { resolveLink } from '../files/link-target';
 import type { ChiefSessionApi } from '../state/useSession';
 import type { SessionRow } from '../state/useWorkspace';
 import type { TaskMemberRow } from './task-labels';
@@ -33,6 +34,8 @@ export interface ChatPageProps {
   readonly sessions: readonly SessionRow[];
   readonly currentSessionId: string;
   readonly projectId: string;
+  /** The project's absolute path: what an absolute link in a report is measured against. */
+  readonly projectRealPath: string;
   readonly hasProject: boolean;
   readonly onSelectSession: (sessionId: string) => void;
   readonly onCreateSession: () => void;
@@ -51,6 +54,8 @@ export interface ChatPageProps {
   readonly onLoadMoreSessions: () => void;
   readonly onOpenRail: () => void;
   readonly railOpen: boolean;
+  /** Open one project file in the viewer: report links and evidence go through the same canvas. */
+  readonly onOpenFile: (path: string) => void;
 }
 
 /**
@@ -58,14 +63,14 @@ export interface ChatPageProps {
  * transcript owns its own scroll-follow handle so that a streaming answer never yanks the view
  * away from a user who scrolled up (R5); the "back to latest" pill is the only way it moves you.
  */
-export function ChatPage({ session, sessions, currentSessionId, projectId, hasProject, onSelectSession, onCreateSession, hasMoreSessions, onLoadMoreSessions, onCleanupSession, onRenameSession, onAskChief, onNewSession, draft, onDraftConsumed, railOpen, onOpenRail }: ChatPageProps) {
+export function ChatPage({ session, sessions, currentSessionId, projectId, projectRealPath, hasProject, onSelectSession, onCreateSession, hasMoreSessions, onLoadMoreSessions, onCleanupSession, onRenameSession, onAskChief, onNewSession, draft, onDraftConsumed, railOpen, onOpenRail, onOpenFile }: ChatPageProps) {
   // Below 861px the session rail is a sheet, not a column: CSS hides the column, so the sheet is
   // the only way to switch sessions there.
   const compact = useCompact();
   const { t } = useI18n();
   const { slot } = session;
   const txRef = useRef<HTMLDivElement | null>(null);
-  const [scrollUi, setScrollUi] = useState<{ locked: boolean; showJumpButton: boolean }>({ locked: false, showJumpButton: false });
+  const [scrollUi, setScrollUi] = useState<{ locked: boolean; showJumpButton: boolean; unseen: number }>({ locked: false, showJumpButton: false, unseen: 0 });
   const handleRef = useRef<ReturnType<typeof createAutoscroll> | null>(null);
   const [taskOpen, setTaskOpen] = useState(false);
   /** Inputs the host could not close (a crash, an unknown save): the user must be told they exist. */
@@ -101,7 +106,11 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
   useEffect(() => {
     const element = txRef.current;
     if (element === null) return;
-    const handle = createAutoscroll(element, setScrollUi);
+    // The handle reports "how far has it grown since you left", which the trailing edge shows:
+    // a static bar tells the reader the output is still coming, a count tells them how much.
+    const handle = createAutoscroll(element, () => {
+      setScrollUi({ locked: handle.locked, showJumpButton: handle.showJumpButton, unseen: handle.unseen });
+    });
     handleRef.current = handle;
     return () => {
       handleRef.current = null;
@@ -118,12 +127,35 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
     return () => window.removeEventListener('keydown', onKey);
   }, [compact, railOpen, onOpenRail]);
 
-  // Streaming growth and image loads change scrollHeight without a user scroll: follow again.
-  useEffect(() => {
+  // Growth changes scrollHeight without a user scroll: follow again. This is a LAYOUT effect on
+  // purpose — it runs after React wrote the new content but before the browser paints, so a
+  // streaming line never becomes visible one frame off the tail.
+  useLayoutEffect(() => {
     handleRef.current?.followIfUnlocked();
   }, [slot.items, slot.busy]);
 
   const taskDetail: TaskDetail | null = slot.taskDetail;
+
+  /**
+   * A link in a message or a report is a reference to a file on this machine. It is resolved here,
+   * once, for every place that shows text: absolute host paths inside the project open the viewer,
+   * anything else says it cannot be opened rather than navigating the shell to a 404.
+   */
+  const openLink = useCallback(
+    (href: string): void => {
+      const target = resolveLink(href, projectRealPath);
+      if (target.kind === 'project') {
+        onOpenFile(target.path);
+        return;
+      }
+      if (target.kind === 'outside') {
+        session.notify(t('files.outside'), 'error');
+        return;
+      }
+      if (target.kind === 'external') window.open(target.href, '_blank', 'noopener,noreferrer');
+    },
+    [projectRealPath, onOpenFile, session, t],
+  );
 
   /**
    * The running Task must be visible in the conversation, and after a reload the dispatch card is
@@ -150,38 +182,40 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
   }, [taskDetail]);
 
   /**
-   * The newest dispatch call in the transcript. Only that one may show live member state: an older
-   * dispatch of the same member is the record of what was ordered then, not what is running now.
+   * The plan the chief wrote at create time, taken from the newest `task create` call in the
+   * transcript: the task list's header offers "N 行 Plan" behind a disclosure, and the source
+   * of truth is the call the model actually made (the Task row only keeps a file reference).
    */
-  const liveCallId = useMemo(() => {
-    let newest: string | undefined;
+  const taskPlan = useMemo(() => {
+    let plan: string | undefined;
     for (const item of slot.items) {
       for (const block of item.content) {
         if (block.type !== 'toolCall' || block.name !== 'task') continue;
         const parsed = parseArgs(block.arguments ?? '');
-        if (parsed?.['op'] === 'dispatch' && typeof block.id === 'string') newest = block.id;
+        if (parsed?.['op'] === 'create' && typeof parsed['planMarkdown'] === 'string') {
+          plan = parsed['planMarkdown'];
+        }
       }
     }
-    return newest;
+    return plan;
   }, [slot.items]);
 
   /**
-   * The running Task must be visible in the conversation, and after a reload the dispatch card is
-   * not there yet: while the chief waits inside that tool call, the assistant message holding it has
-   * not ended, so nothing is in history to render. This block fills exactly that gap and steps aside
-   * as soon as any dispatch call exists - that card then carries the same members, live.
+   * The running Task's roster block: rendered whenever a Task is live, independent of the
+   * transcript. The dispatch cards are history now (one line each), so this list is the only
+   * place live member state exists — including after a reload, when no dispatch call is in
+   * history yet because the chief is still waiting inside it.
    */
   const liveRun = useMemo(() => {
     const detail = taskDetail;
-    if (detail === null || liveCallId !== undefined) return null;
-    if (detail.members.length === 0) return null;
+    if (detail === null) return null;
     return detail.task.status === 'active' ||
       detail.task.status === 'waiting' ||
       detail.task.status === 'pausing' ||
       detail.task.status === 'paused'
       ? detail
       : null;
-  }, [taskDetail, liveCallId]);
+  }, [taskDetail]);
 
   // A member is not in the rail any more, so the dispatch card in the transcript and the drawer it
   // opens are where its name comes from: the role and the label the chief gave the assignment.
@@ -242,6 +276,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
               : '';
       return {
         sessionId: member.sessionId,
+        phase: member.phase,
         // The design's row names the role; the assignment is the fallback note, so a long title
         // cannot squeeze the role out of its column.
         label: roleName,
@@ -329,6 +364,9 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
 
   const submit = useCallback(
     async (text: string, images: readonly string[]): Promise<void> => {
+      // Sending is a statement of intent to watch the answer: whatever the reader was looking
+      // at, the view goes (and stays) at the tail from here.
+      handleRef.current?.pinToTail();
       try {
         const outcome = await session.submit(text, images);
         if (outcome.queued) {
@@ -460,25 +498,26 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
               <EmptyState hasProject={hasProject} onExample={(text) => void submit(text, [])} />
             ) : (
               <Transcript
-                  items={slot.items}
-                  busy={slot.busy}
-                  variant="chief"
-                  members={members}
-                  liveSessions={liveSessionIds}
-                  liveCallId={liveCallId}
-                  onFollow={(sessionId) => {
-                    const row = members.find((entry) => entry.sessionId === sessionId);
-                    if (row === undefined) setFollow(sessionId);
-                    else followMember(row);
-                  }}
-                />
+                items={slot.items}
+                busy={slot.busy}
+                variant="chief"
+                members={members}
+                liveSessions={liveSessionIds}
+                onFollow={(sessionId) => {
+                  const row = members.find((entry) => entry.sessionId === sessionId);
+                  if (row === undefined) setFollow(sessionId);
+                  else followMember(row);
+                }}
+                onLink={openLink}
+              />
             )}
             {/* Outside the transcript switch: a Task can be running before any message is stored. */}
             {liveRun !== null && (
-              <TaskLive
+              <TaskTodo
                 detail={liveRun}
                 members={members}
                 pendingQuestions={openQuestions.length}
+                planMarkdown={taskPlan}
                 onFollow={(sessionId) => {
                   const row = members.find((entry) => entry.sessionId === sessionId);
                   if (row === undefined) setFollow(sessionId);
@@ -492,8 +531,14 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
         <div className="dock">
           <div className="dock-in">
             {scrollUi.showJumpButton && (
-              <button type="button" className="jump" onClick={() => handleRef.current?.jumpToBottom()}>
+              <button
+                type="button"
+                className={`jump${scrollUi.unseen > 0 ? ' more' : ''}`}
+                onClick={() => handleRef.current?.jumpToBottom()}
+                data-testid="jump-tail"
+              >
                 {t('chat.jump')}
+                {scrollUi.unseen > 0 ? <span className="n">{t('chat.jumpMore', { count: Math.max(1, Math.round(scrollUi.unseen / 120)) })}</span> : undefined}
               </button>
             )}
             <InteractionPanel
@@ -534,6 +579,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
               onSeed={(inserted) => onDraftConsumed(inserted)}
               onSubmit={submit}
               onUpload={(file) => session.rpc.upload(file)}
+              onReleaseSight={() => handleRef.current?.pinToTail()}
               onStop={async () => {
                 await session.stop().catch((error: unknown) => {
                   session.notify(t('toast.stopFailed', { reason: errorText(error, t) }), 'error');
@@ -546,7 +592,15 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, hasPr
         </div>
       </section>
       {taskOpen && taskDetail !== null && (
-        <TaskDrawer rpc={session.rpc} projectId={projectId} detail={taskDetail} onClose={() => setTaskOpen(false)} />
+        <TaskDrawer
+          rpc={session.rpc}
+          projectId={projectId}
+          detail={taskDetail}
+          onOpenFile={onOpenFile}
+          projectRealPath={projectRealPath}
+          onOutside={() => session.notify(t('files.outside'), 'error')}
+          onClose={() => setTaskOpen(false)}
+        />
       )}
       {follow !== null && (
         <MemberDrawer

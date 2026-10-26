@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
 import { RequirementDrawer } from './RequirementDrawer';
@@ -57,6 +58,13 @@ export function RequirementsPage({ rpc, projectId, selected, onSelect, onNotice,
   const phaseLabel = usePhaseLabel();
   const { items, invalid, loading, error, reload } = useRequirements(rpc, projectId);
   const { tasks, tasksError, reloadTasks, loadMoreTasks, hasMoreTasks } = useTasks(rpc, projectId);
+  /**
+   * The board is the screen; Tasks are the one part of it nobody opens most of the time. Closed by
+   * default, so the columns get the whole height — and the header says how many are running, which
+   * is the only thing worth knowing while it is folded.
+   */
+  const [tasksOpen, setTasksOpen] = useState(false);
+  const runningTasks = tasks.filter((task) => task.status === 'active' || task.status === 'waiting').length;
   const invalidSelection = selected !== null && selected.startsWith('invalid:') ? selected.slice('invalid:'.length) : null;
   const card = selected === null ? undefined : items.find((item) => item.id === selected);
 
@@ -119,38 +127,77 @@ export function RequirementsPage({ rpc, projectId, selected, onSelect, onNotice,
           );
         })}
       </div>
-      <div className="tasks-sec">
-        <div className="page-h">
+      <div className={`tasks-sec${tasksOpen ? ' open' : ''}`}>
+        <button
+          type="button"
+          className="tasks-toggle"
+          aria-expanded={tasksOpen}
+          onClick={() => setTasksOpen((open) => !open)}
+          data-testid="tasks-toggle"
+        >
+          <span className="caret" aria-hidden="true">{tasksOpen ? '▾' : '▸'}</span>
           <h2>{t('task.listTitle')}</h2>
-          <span className="f3">{tasks.length === 0 ? t('task.listEmpty') : ''}</span>
+          <span className="f3">
+            {tasks.length === 0 ? t('task.listEmpty') : t('task.listCount', { count: tasks.length })}
+          </span>
+          {/* Running is stated even when folded: it is the one fact that makes opening it urgent. */}
+          {!tasksOpen && runningTasks > 0 && (
+            <State kind="run">{t('task.running', { count: runningTasks })}</State>
+          )}
           <span className="sp" />
-          <button type="button" className="btn ghost" onClick={() => void reloadTasks()}>
-            {t('common.retry')}
-          </button>
-        </div>
-        {tasksError !== null && <State kind="block">{tasksError}</State>}
-        <div className="task-rows">
-          {tasks.map((task) => (
-            <button
-              key={task.taskId}
-              type="button"
-              className="task-row"
-              onClick={() => onOpenTaskSession(task.chiefSessionId)}
-              data-testid="task-row"
+          {/* Reload and paging live on the header line, not in a row of their own: the list is a
+              footnote of the board, and its chrome must not cost more height than its rows. */}
+          {tasksOpen && hasMoreTasks && (
+            <span
+              className="f3 tasks-more"
+              role="button"
+              tabIndex={0}
+              onClick={(event) => {
+                event.stopPropagation();
+                void loadMoreTasks();
+              }}
             >
-              <span className="f3 mono">{task.taskId}</span>
-              <span className="ell">{task.goal}</span>
-              <span className="sp" />
-              <span className="f3">{phaseLabel(task.phase)}</span>
-              <State kind={taskState(task).glyph}>{t(taskState(task).key)}</State>
-              <span className="f3">{t('task.members', { count: task.phaseMembers.length })}</span>
-            </button>
-          ))}
-        </div>
-        {hasMoreTasks && (
-          <button type="button" className="btn ghost" onClick={() => void loadMoreTasks()}>
-            {t('files.more')}
-          </button>
+              {t('files.more')}
+            </span>
+          )}
+          <span
+            className="f3 tasks-reload"
+            role="button"
+            tabIndex={0}
+            title={t('common.retry')}
+            onClick={(event) => {
+              // The header itself toggles; these two only reload, so the toggle must not fire.
+              event.stopPropagation();
+              void reloadTasks();
+            }}
+          >
+            ↻
+          </span>
+        </button>
+        {tasksOpen && (
+          <>
+            <div className="tasks-body">
+              {tasksError !== null && <State kind="block">{tasksError}</State>}
+              <div className="task-rows">
+                {tasks.map((task) => (
+                  <button
+                    key={task.taskId}
+                    type="button"
+                    className="task-row"
+                    onClick={() => onOpenTaskSession(task.chiefSessionId)}
+                    data-testid="task-row"
+                  >
+                    <span className="f3 mono">{task.taskId}</span>
+                    <span className="ell">{task.goal}</span>
+                    <span className="sp" />
+                    <span className="f3">{phaseLabel(task.phase)}</span>
+                    <State kind={taskState(task).glyph}>{t(taskState(task).key)}</State>
+                    <span className="f3">{t('task.members', { count: task.phaseMembers.length })}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
         )}
       </div>
       {loading && (

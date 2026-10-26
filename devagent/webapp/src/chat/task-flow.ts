@@ -1,0 +1,106 @@
+import type { StateKind } from '../app/State';
+import { rosterGroupsOf, type RosterGroup } from './TaskTodo';
+
+/**
+ * One step of the flow, as both the strip and the task list draw it. `plan` is the only
+ * derived kind: a step the Task's own declaration still owes, which the chief has not
+ * reached yet. Everything else is something that really happened.
+ */
+export interface FlowStep {
+  readonly phase: string;
+  readonly round: number;
+  /** Real member states in this step, summarised: run > decide > wait > block > done > idle. */
+  readonly kind: StateKind | 'plan';
+  /** Every member of this step reported completed — the only state that earns a check. */
+  readonly done: boolean;
+  readonly members: number;
+  readonly running: number;
+}
+
+/** The canonical phase order: how far along the flow a phase sits, for the planned tail. */
+const PHASE_ORDER = ['clarify', 'analyze', 'design', 'plan', 'develop', 'review', 'test', 'settle'] as const;
+
+/** Steps a step's own members imply, in the order that wins when several apply. */
+const RANK: readonly (StateKind | 'plan')[] = ['run', 'decide', 'wait', 'paused', 'block', 'done', 'idle', 'plan'];
+
+function rankOf(kind: StateKind | 'plan'): number {
+  return RANK.indexOf(kind);
+}
+
+export interface FlowInput {
+  readonly task: {
+    readonly type: string;
+    readonly phase: string;
+    readonly status: string;
+    readonly requiresTest?: boolean | undefined;
+  };
+  readonly members: readonly {
+    readonly phase: string;
+    readonly activity?: string | undefined;
+    readonly lastInputStatus?: 'completed' | 'failed' | 'stopped' | 'interrupted' | null;
+    readonly waitingUser?: boolean | undefined;
+  }[];
+  /** Open questions anywhere in the Task: they outrank any member state, it is the user's turn. */
+  readonly pendingQuestions: number;
+}
+
+function memberKind(member: FlowInput['members'][number]): StateKind {
+  if (member.waitingUser === true) return 'decide';
+  if (member.activity === 'processing') return 'run';
+  if (member.activity === 'queued') return 'wait';
+  if (member.lastInputStatus === 'failed') return 'block';
+  if (member.lastInputStatus === 'completed') return 'done';
+  return 'idle';
+}
+
+/**
+ * The plan's remaining steps, from the Task's own declaration: a write Task ends in review
+ * (and test when the chief declared requiresTest) then settle. Only phases AFTER the furthest
+ * step really reached are listed, so rework (review ran, develop runs again) never re-plans
+ * review. Read Tasks owe nothing: their flow is whatever the chief actually runs.
+ */
+export function plannedTail(
+  task: { readonly type: string; readonly phase: string; readonly requiresTest?: boolean | undefined },
+  phasesSoFar: readonly string[],
+): readonly string[] {
+  if (task.type !== 'write') return [];
+  const reach = Math.max(
+    PHASE_ORDER.indexOf(task.phase as (typeof PHASE_ORDER)[number]),
+    ...phasesSoFar.map((phase) => PHASE_ORDER.indexOf(phase as (typeof PHASE_ORDER)[number])),
+  );
+  const tail = ['review', ...(task.requiresTest === true ? ['test'] : []), 'settle'];
+  return tail.filter((phase) => PHASE_ORDER.indexOf(phase as (typeof PHASE_ORDER)[number]) > reach);
+}
+
+/**
+ * THE flow of a running Task. Strip and list both render this array, position by position, so
+ * the two can never draw the flow in two different orders: real phase-rounds first (grouped by
+ * the same rule that keeps rework legible), the planned tail after them, in canonical order.
+ */
+export function flowOf({ task, members, pendingQuestions }: FlowInput): readonly FlowStep[] {
+  const groups: readonly RosterGroup<FlowInput['members'][number]>[] = rosterGroupsOf(members, task.phase);
+  const steps: FlowStep[] = groups.map((group) => {
+    const kinds = group.rows.map(memberKind);
+    const kind =
+      pendingQuestions > 0
+        ? 'decide'
+        : kinds.reduce<StateKind | 'plan'>((worst, next) => (rankOf(next) < rankOf(worst) ? next : worst), 'done');
+    // A group with no rows is the frontier: the chief moved the phase, nothing dispatched there yet.
+    const frontier = group.rows.length === 0;
+    return {
+      phase: group.phase,
+      round: group.round,
+      kind: frontier ? 'wait' : kind,
+      done: !frontier && kind === 'done' && group.rows.every((row) => row.lastInputStatus === 'completed'),
+      members: group.rows.length,
+      running: group.rows.filter((row) => row.activity === 'processing').length,
+    };
+  });
+  // A paused Task is not going anywhere until the user says so: no tail is promised.
+  const moving = task.status !== 'paused' && task.status !== 'pausing';
+  const planned = moving ? plannedTail(task, groups.map((group) => group.phase)) : [];
+  return [
+    ...steps,
+    ...planned.map((phase): FlowStep => ({ phase, round: 1, kind: 'plan', done: false, members: 0, running: 0 })),
+  ];
+}

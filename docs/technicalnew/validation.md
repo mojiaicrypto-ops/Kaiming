@@ -165,3 +165,37 @@
 | 无法核实不静默放行 | Passed | `.git` 存在但 git 读不出来（gitdir 损坏、git 不可用）一律 `unverifiable` 阻断；仓库标记按项目目录向上查找，子目录项目不会退化成「无 Git」 |
 | 独立 Review / Test | Passed | 四轮独立 Review（`review.md`）与四轮独立 Test（`test.md`，39 个探针场景）；最终结论均为通过，关闭项含 gitignore 交付、内嵌仓库、两层嵌套、submodule 指针、`.git` 假标记、路径分批 |
 | 全套测试 | Passed | 服务端 33 files / 368；webapp 31；浏览器 40；`tsc --noEmit` 无错误 |
+
+## 2026-10-25 会话转录 TUI 化与工作流全量展示
+
+用户逐轮确认的视觉定稿（omp 平铺转录 + 产品骨架 + 列式问题区）落地；工作流展示改为「任务清单」：全量成员按阶段-轮次分组、返工可见。
+
+| 检查 | 结果 | 证据 |
+|---|---|---|
+| 全站等宽 | Passed | `--font` 单一字族栈（JetBrains Mono → PingFang SC/雅黑回退）；实跑截图核对中英混排 |
+| 平铺转录 | Passed | 无 who 头/边栏线；用户行 `❯` 前缀；散文 110ch 软上限、工具行满宽；`npm run build` 后真实服务 + Chromium 截图核对 |
+| 任务清单（TaskTodo） | Passed | 全量成员、阶段-轮次分组（`Develop · 第 2 轮`）、未通过成员保留为返工证据、`↻` 返工前缀、头部进度 `n/m 已结束`、Plan 可展开；截图核对三组成员与分组标题 |
+| 任务条轮次 | Passed | 同阶段两次进入显示 `×2`；与任务清单同一分组算法（`rosterGroupsOf`），两处永不矛盾 |
+| 派发卡收敛单行 | Passed | create/dispatch 均为 `.tline` 折叠，Plan 与真实结果进展开；`useRunningFor`/live 展开逻辑删除（成员状态唯一来源 = 任务清单） |
+| 问题区列排序 | Passed | 选项为数字槽 + 悬挂缩进的行，长文案行内换行；问题标题可换行不省略；新增用例「a question with long options wraps instead of being cut off」实测行高 > 1.5 倍行距且不出面板框 |
+| 返工场景用例 | Passed | 新增「a rework round shows as history」：develop→review 未通过→develop 再跑，断言 3 行全量成员、第二段 develop 分组、`×2` 阶段链、未通过行 |
+| 全套测试 | Passed | 服务端 33 文件 368 用例；webapp 4 文件 31 用例；浏览器 44 用例（含 2 新增）；`tsc`（两端）与 `npm run build` 无错误 |
+
+| 用户行内联与区分（同日两次补正） | Passed | 第一次修复漏了 Markdown 渲染器的嵌套块级 div（`.md > div > p`）与 `.uline` 本身，长消息仍从第二行起（实测文字 top 比文章 top 低 35px）；改为 `.uline` 及其全部 `div/p` 后代内联后，`❯ 要不要把聊天前端…` 完整同行（文字 top 79 = 文章 top 68 + padding，首行起点在 `❯` 之后），块级例外（图片/工具/问题行/代码块/表格）显式还原。真实服务 + Chromium 截图核对 |；用户消息带 surface 底色 + 2px accent 左边线、`❯` accent 加粗，主管回复无底色无边线；110ch 软上限只作用于主管/成员散文，用户行不限宽。真实服务 + Chromium 截图核对 |
+| 全套测试（补正后） | Passed | 浏览器 44 用例（一次运行中「browser screenshot」用例偶发失败、单独复跑通过——与既有登记的偶发相同，不经过用户消息样式路径）；`tsc` 与 `build` 无错误 |
+
+| 计划阶段前置显示（同日） | Passed | write 任务从 `type + requiresTest` 推导计划尾段（review（+test）/settle），以暗色计划态画进任务条（`Design·Review·Test·Settle`，无轮次标记）与任务清单（`未开始(计划内)` 组）；reach 取真实走过的最远阶段——返工场景（develop→review 未通过→develop）只计划 test+settle，review 不重复计划。真实服务 + Chromium 截图核对（用户场景 t-df361582 设计进行中）；rework 用例与文档任务用例断言扩展 |
+| 全套测试（计划阶段） | Passed | 浏览器 44 用例；单测 368+31；`tsc`/`build` 无错误 |
+| 流程可视化（同日第三轮） | Passed | 任务条与任务清单改由同一个 `flowOf` 驱动（`webapp/src/chat/task-flow.ts`）：横向节点轨道（完成✓ / 当前呼吸圆 / 计划虚线圆，连线亮到当前步骤）+ 竖向节点轨道（active 行 run 色底带、失败 block 色、计划虚线与「未开始(计划内)」）+ 进度条（只数已完成，计划不计，<1280px 隐去）。真实服务 + Chromium 双主题双宽度截图核对（design 进行中：`Design ⃝ ─ ─ Review · Test · Settle`，清单同序）；`task-flow.test.ts` 7 例锁定分组/轮次/返工/暂停/read 任务；浏览器用例断言 `.p.cur` 的 `animation-name: work`、计划节点无 ✓、进度 `0/1`、计划步骤数 2 |
+| 全套测试（流程可视化） | Passed | 浏览器 44 用例；单测 368（服务端）+ 38（webapp）；两侧 `tsc --noEmit` 无错误；`npm run build` 成功 |
+| 尾部跟随（同日第四轮） | Passed | 复现：新增 `slow_text` 桩回复（900 分片 / 20ms）让答案真正逐字增长，页内逐帧采样 `scrollHeight - scrollTop - clientHeight`。修复前 61 个增长帧中 3–5 帧视图落后尾部（最深 32px，正好一个新段落）——根因是 `createAutoscroll` 用「距离 < 60px」判定贴底，单帧增量超过 60px 时自伤地解锁。修复后：跟随改为意图判定（用户发送 / 跳转 / 空输入框按 Esc 才钉住，只有用户上滑解除）+ `useLayoutEffect` 在绘制前跟随，连续 3 次运行 **0 个落后帧**；上滑后视图停在原处且胶囊显示「下方还有 N 行」，点击回到底部。用例：`browser/acceptance.spec.ts`「a fast answer never leaves the reader behind, and the way back is always visible」断言逐帧零落后、胶囊计数、上滑保持、点击归位 |
+| 全套测试（尾部跟随） | Passed | 浏览器 45 用例；单测 368（服务端）+ 38（webapp）；两侧 `tsc --noEmit` 无错误；`npm run build` 成功 |
+| 文件与报告查看器（U11） | Passed | 单一查看画布 `files/FileViewer`（全屏：260px 目录树 + `SourceView`），两个入口共用：项目对话框知识条目/目录浏览、任务结果 → 报告正文 → 报告自身项目路径。所有文本文件（含 `.html`/`.md`）按源码显示（行号栏 + 等宽 + 不折行 + 文件内查找与命中行跳转）；语法高亮走 `lib/highlight.ts` 单注册表，与转录围栏同一 grammar 与同一 token 配色（实测 `hljs-keyword=rgb(191,162,255)`）；图片/媒体由新增只读字节路由 `GET /api/v1/project-files/<projectId>/<path>` 提供，二进制/PDF 明说不可预览并给下载。安全性由 7 条服务端用例覆盖：无 cookie 401、路径穿越拒绝、**符号链接指向项目外返回 403 且不泄漏内容**、目录/未知项目/缺失文件 404、图片 `nosniff`、下载 `content-disposition`。`project.files.read` 现在按 mime 判定二进制（图片不再被当作文本吞掉）。浏览器用例断言：画布宽度 >1000px、`.html` 标签仍是可见文本且画布内无 `<h1>`、PNG `naturalWidth>0`、关键字 token 颜色、报告相对路径可点进同一画布 |
+| 链接解析与文档渲染（U11 追加） | Passed | 复现用户场景：消息里的 `[frame](/Users/…/aisuangua/.dev/work/t-acbbb5bd/shots/zoom-1440.png)` 点击后浏览器跳到 `http://127.0.0.1:4173/Users/…` 得到 404。修复：`files/link-target.ts` 在点击时解析（不改写正文）——项目根内的宿主绝对路径转项目相对路径并开画布、相对路径按文档目录解析、越过项目根判为项目外并提示、真外链开新标签。同时 `.md` 改为默认渲染态 + `渲染/源码` 页签（`files/MarkdownView`），报告正文与大画布共用。验证：`link-target.test.ts` 7 例（宿主路径、相对、`..` 越根、前缀相似的兄弟项目、file://、锚点、项目根本身）；浏览器用例断言点击后 URL 仍是 `/`、画布显示该帧、项目外链接有提示且不导航、文档默认渲染（h1/strong）、相对链接按文档目录命中、切到源码看到原文。报告正文的旧断言（要求按源码显示）按其编码的旧契约改写 |
+| 全套测试（链接与文档） | Passed | 浏览器 48 用例；单测 375（服务端）+ 50（webapp）；两侧 `tsc --noEmit` 无错误；`npm run build` 成功 |
+| 需求页任务区折叠 | Passed | 任务区默认折叠为一行（`data-testid=tasks-toggle`，`aria-expanded=false`），折叠时即可见「共 N 个」与进行中数量，列表 DOM 不渲染；点击后展开，`aria-expanded=true`；刷新与分页移到标题行右侧，不再各占一行（展开后仅两行：标题行 + 任务行）。浏览器用例断言折叠态无 `task-row`、计数与运行态可见、点击后出现；1280px 实测截图核对 |
+| 全套测试（任务区折叠） | Passed | 浏览器 48 用例；单测 375（服务端）+ 50（webapp）；两侧 `tsc --noEmit` 无错误；`npm run build` 成功 |
+| 全套测试（查看器） | Passed | 浏览器 47 用例（含顶栏「文件」入口：未打开项目时禁用、打开后进入根目录、**打开期间只有文件标签 current**、**点击会话标签关闭画布并显示会话**、**目录与文件用字形+尾斜杠+`data-type` 区分**、关闭不改地址）；单测 375（服务端，含新增 7 条字节路由安全用例）+ 43（webapp，含 5 条文件类型判定）；两侧 `tsc --noEmit` 无错误；`npm run build` 成功 |
+
+
+未覆盖：Windows 下微软雅黑回退的实际观感（本环境仅 macOS/Chromium）；返工轮次由真实长跑 Task 观察（自动化以 `task.get` mock 驱动，服务端零改动，风险在分组算法已由用例锁定）。
