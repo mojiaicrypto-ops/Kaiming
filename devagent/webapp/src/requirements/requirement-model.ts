@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RpcClient } from '../api/rpc';
 
 export interface RequirementSummary {
@@ -49,6 +49,44 @@ export function sectionsOf(text: string): Record<string, string> {
   return out;
 }
 
+/**
+ * Reads again while the tab is visible. The board is a projection of files another process writes —
+ * a value kept from mount is a claim about the past, and the user's own Task can move a card while
+ * the board is open. A hidden tab asks nothing: nobody can see the answer.
+ */
+function useVisibleRefresh(read: () => Promise<void>, intervalMs: number): void {
+  useEffect(() => {
+    let timer: number | null = null;
+    const visible = (): boolean => document.visibilityState === 'visible';
+    const tick = (): void => {
+      void read().catch(() => undefined);
+    };
+    const start = (): void => {
+      if (timer !== null || !visible()) return;
+      tick();
+      timer = window.setInterval(tick, intervalMs);
+    };
+    const stop = (): void => {
+      if (timer === null) return;
+      window.clearInterval(timer);
+      timer = null;
+    };
+    const onVisibility = (): void => {
+      if (visible()) start();
+      else stop();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    start();
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      stop();
+    };
+  }, [read, intervalMs]);
+}
+
+/** How often the board re-reads the records. Files change when a person or the chief writes them. */
+const BOARD_POLL_MS = 5_000;
+
 export function useRequirements(rpc: RpcClient, projectId: string) {
   const [items, setItems] = useState<readonly RequirementSummary[]>([]);
   const [invalid, setInvalid] = useState<readonly InvalidRequirementFile[]>([]);
@@ -78,6 +116,7 @@ export function useRequirements(rpc: RpcClient, projectId: string) {
   useEffect(() => {
     void reload().catch(() => setLoading(false));
   }, [reload]);
+  useVisibleRefresh(reload, BOARD_POLL_MS);
   return { items, invalid, loading, error, reload };
 }
 
@@ -132,8 +171,16 @@ export function useTasks(rpc: RpcClient, projectId: string) {
   useEffect(() => {
     void reloadTasks();
   }, [reloadTasks]);
+  // A refresh replaces the first page, so it would collapse rows the user asked for with "show more".
+  const extended = useRef(false);
+  const stableReload = useCallback(async (): Promise<void> => {
+    if (extended.current) return;
+    await reloadTasks();
+  }, [reloadTasks]);
+  useVisibleRefresh(stableReload, BOARD_POLL_MS);
   const loadMoreTasks = useCallback(async (): Promise<void> => {
     if (cursor === null) return;
+    extended.current = true;
     try {
       const next = await page(cursor);
       setTasks((previous) => [...previous, ...next.rows.filter((row) => !previous.some((shown) => shown.taskId === row.taskId))]);

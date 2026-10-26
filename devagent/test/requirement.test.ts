@@ -729,17 +729,57 @@ describe('requirement and Task: the implementation edge is checked, not assumed'
     expect(readTask.isError).toBe(true);
   });
 
-  it('accepts a Task that cites a pending implementation requirement', async () => {
+  it('accepts a pending implementation requirement and puts it in progress', async () => {
     const f = fixture();
     await f.tool.execute('s1', {
+      op: 'save',
+      requirementId: 'req-reset-impl',
+      ...implementationFields({ sections: Object.fromEntries(IMPLEMENTATION_SECTIONS.map((section) => [section, `原文-${section}`])) }),
+      authorizationRef: { inputId: 'i-dec' },
+    });
+
+    const created = await createTask(f, { requirementId: 'req-reset-impl' });
+
+    expect(created.isError).toBe(false);
+    expect(f.store.listTasks('p-1')[0]?.requirementId).toBe('req-reset-impl');
+    // R-05: the one status the program derives — the work has begun, so the record says so.
+    expect(created.details['requirement']).toEqual({ requirementId: 'req-reset-impl', status: 'in_progress' });
+    expect(created.content[0]?.text).toContain('requirement req-reset-impl is in_progress');
+    const parsed = parseRequirement(readFileSync(requirementPath(f.cwd, 'req-reset-impl'), 'utf8'), 'req-reset-impl', f.cwd);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.record.metadata.status).toBe('in_progress');
+    expect(parsed.record.metadata.title).toBe('密码重置实施');
+    // The edit is confined to the two front-matter lines: an owner's prose is not re-serialized.
+    expect(parsed.record.body).toContain('原文-目标');
+    expect(parsed.record.body).toContain('原文-验收');
+  });
+
+  it('leaves an already in-progress record byte-identical and a recordless Task touches nothing', async () => {
+    const f = fixture();
+    await f.tool.execute('s1', {
+      op: 'save',
+      requirementId: 'req-reset-impl',
+      ...implementationFields({ status: 'in_progress' }),
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    const before = readFileSync(requirementPath(f.cwd, 'req-reset-impl'), 'utf8');
+    const created = await createTask(f, { requirementId: 'req-reset-impl' });
+    expect(created.isError).toBe(false);
+    expect(readFileSync(requirementPath(f.cwd, 'req-reset-impl'), 'utf8')).toBe(before);
+
+    const bare = fixture();
+    await bare.tool.execute('s1', {
       op: 'save',
       requirementId: 'req-reset-impl',
       ...implementationFields(),
       authorizationRef: { inputId: 'i-dec' },
     });
-    const created = await createTask(f, { requirementId: 'req-reset-impl' });
-    expect(created.isError).toBe(false);
-    expect(f.store.listTasks('p-1')[0]?.requirementId).toBe('req-reset-impl');
+    const untouched = readFileSync(requirementPath(bare.cwd, 'req-reset-impl'), 'utf8');
+    const standalone = await createTask(bare, {});
+    expect(standalone.isError).toBe(false);
+    expect(standalone.details['requirement']).toBeUndefined();
+    expect(readFileSync(requirementPath(bare.cwd, 'req-reset-impl'), 'utf8')).toBe(untouched);
   });
 
   it('reports a completion recorded while its implementation Task is still open', async () => {

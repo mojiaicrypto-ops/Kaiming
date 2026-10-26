@@ -13,7 +13,7 @@ import { type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { StoreError, type ArtifactRef, type Store, type TaskPhase, type TaskRow } from '../store/store.ts';
 import { commitPlan, digestOfText, planRefFor, planTarget, readPlan } from '../runtime/plan-store.ts';
 import { readReportBody } from '../runtime/report-store.ts';
-import { getRequirement } from '../runtime/requirement-store.ts';
+import { getRequirement, promoteRequirementToInProgress } from '../runtime/requirement-store.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
 import { dispatchOp, type DelegationHost } from './delegation-tools.ts';
 import { asRecord, enrich, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
@@ -401,6 +401,23 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
       sourceInputId: context.inputId,
       summary: `created (${type})`,
     });
+    // R-05: an implementation requirement becomes in_progress when its Task starts. This is the one
+    // status the program derives, and it derives it from a fact, not from an outcome: the row exists,
+    // so work has begun. Completion stays a recorded decision (a cancelled run delivers nothing).
+    const raised =
+      requirementId === undefined
+        ? undefined
+        : promoteRequirementToInProgress({ cwd: context.cwd, id: requirementId });
+    const requirementNote =
+      raised === undefined
+        ? ''
+        : raised.ok
+          ? `; requirement ${requirementId} is in_progress`
+          : `; WARNING requirement ${requirementId} stayed as it was (${raised.message})`;
+    const requirementState =
+      raised === undefined
+        ? undefined
+        : { requirementId, status: raised.ok ? raised.status : 'unchanged' };
     let planState = 'saved';
     try {
       commitPlan({
@@ -413,16 +430,24 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
       // The Task exists and points at the intended version; the file still has to be written.
       planState = 'pending';
       return ok(
-        `Task ${task.id} created but its Plan file is not saved yet (${messageOf(error)}); retry with the same plan`,
-        { taskId: task.id, phase: task.phase, currentSessionIds: task.currentSessionIds, planRef: task.planRef, planState },
+        `Task ${task.id} created but its Plan file is not saved yet (${messageOf(error)})${requirementNote}; retry with the same plan`,
+        {
+          taskId: task.id,
+          phase: task.phase,
+          currentSessionIds: task.currentSessionIds,
+          planRef: task.planRef,
+          planState,
+          ...(requirementState !== undefined ? { requirement: requirementState } : {}),
+        },
       );
     }
-    return ok(`Task ${task.id} created (${type}, requiresTest=${task.requiresTest}); plan at ${target.path}`, {
+    return ok(`Task ${task.id} created (${type}, requiresTest=${task.requiresTest})${requirementNote}; plan at ${target.path}`, {
       taskId: task.id,
       phase: task.phase,
       currentSessionIds: task.currentSessionIds,
       planRef: task.planRef,
       planState,
+      ...(requirementState !== undefined ? { requirement: requirementState } : {}),
       ...guidanceFor(context.store, task),
     });
   } catch (error) {

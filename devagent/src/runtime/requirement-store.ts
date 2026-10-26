@@ -599,6 +599,49 @@ export function getRequirement(
   return { found: true, text, version: digestOfText(text), parsed: parseRequirement(text, id, cwd) };
 }
 
+/**
+ * The one transition the program itself writes: an implementation requirement whose Task has started
+ * is `in_progress` (R-05). Only this fact is derived — completion, cancellation and archiving stay
+ * decisions the owner records through the tool, with their evidence.
+ *
+ * The edit is confined to the two front-matter lines that change, so an owner's prose is never
+ * re-serialized by a program that only knows about status; the result is re-parsed before it is
+ * written, and the version check makes a concurrent external edit lose instead of being overwritten.
+ */
+export function promoteRequirementToInProgress(params: {
+  readonly cwd: string;
+  readonly id: string;
+}):
+  | { readonly ok: true; readonly status: string; readonly path: string }
+  | { readonly ok: false; readonly code: 'NOT_FOUND' | 'INVALID_ARGUMENT' | 'VERSION_CONFLICT'; readonly message: string } {
+  const found = getRequirement(params.cwd, params.id);
+  if (!found.found) return { ok: false, code: 'NOT_FOUND', message: `requirement ${params.id} does not exist` };
+  if (!found.parsed.ok) {
+    return { ok: false, code: 'INVALID_ARGUMENT', message: `requirement ${params.id} is not valid: ${found.parsed.issues.join('; ')}` };
+  }
+  const metadata = found.parsed.record.metadata;
+  if (metadata.kind !== 'implementation') {
+    return { ok: false, code: 'INVALID_ARGUMENT', message: `requirement ${params.id} is a proposal; only an implementation requirement can be in progress` };
+  }
+  if (metadata.status === 'in_progress') {
+    return { ok: true, status: 'in_progress', path: requirementPath(params.cwd, params.id) };
+  }
+  if (metadata.status !== 'pending') {
+    // A cancelled, completed or archived record is a decision already taken; the program reports it.
+    return { ok: false, code: 'INVALID_ARGUMENT', message: `requirement ${params.id} is ${metadata.status}; a started Task does not reopen it` };
+  }
+  const now = new Date().toISOString();
+  const rewritten = found.text
+    .replace(/^status:\s*"?[^"\n]*"?\s*$/m, 'status: in_progress')
+    .replace(/^updatedAt:\s*.*$/m, `updatedAt: "${now}"`);
+  const expected = digestOfText(found.text);
+  const saved = saveRequirement({ cwd: params.cwd, id: params.id, expectedVersion: expected, markdown: rewritten });
+  if (!saved.ok) {
+    return { ok: false, code: saved.code, message: saved.message };
+  }
+  return { ok: true, status: 'in_progress', path: saved.path };
+}
+
 export interface SaveRequirementParams {
   readonly cwd: string;
   readonly id: string;

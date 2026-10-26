@@ -45,7 +45,7 @@ task、agent_report、requirement、project 按工具级注册 Pi executionMode=
 
 分配稳定 taskId，按 S6 保存总体 Plan，再事务登记 Task/planRef/currentTaskId/回执。Plan 写目标、范围、依据、步骤/角色、验证、风险与未决事项，规模与任务相称；不预建未来专业 Session。read Plan 可以很短，但不写入项目。authorizationRef 为 {inputId} 或 {interactionId}；程序只校验引用的主体、来源与状态，不解释语义授权范围。
 
-同一实施需求至多一个未结束实现 Task，同主管至多一项未结束 Task（含暂停）；冲突返回关联/TASK_BUSY。requirementId 只表示「本 Task 实施该实施需求」（R-04）：提供时核对记录存在、可读、kind 为 implementation 且状态为 pending/in_progress，否则拒绝并不建 Task；read Task 不得提供。Task 不必对应需求——设计/规划规则、调查、知识维护均可不填。
+同一实施需求至多一个未结束实现 Task，同主管至多一项未结束 Task（含暂停）；冲突返回关联/TASK_BUSY。requirementId 只表示「本 Task 实施该实施需求」（R-04）：提供时核对记录存在、可读、kind 为 implementation 且状态为 pending/in_progress，否则拒绝并不建 Task；read Task 不得提供。Task 建立成功后，若该记录为 pending，程序把它改为 in_progress 并在结果里报告（`requirement.status`），这是程序唯一自行写入的需求状态：有未结束实现 Task 即是进行中。改写只动 front matter 的 status/updatedAt 两行，正文不重新序列化；已 in_progress 的文件保持字节不变；cancelled/completed/archived 不被重新打开，只作为告警返回。完成、取消、归档仍由主管保存决定。Task 不必对应需求——设计/规划规则、调查、知识维护均可不填。
 
 **update**：phase 枚举 clarify/analyze/design/plan/develop/review/test/settle，由主管显式记录；提供 phase 表示开始下一步骤，当前步骤成员必须已结束或已明确控制并停稳。事务保存上一步骤总结、当前 phase，清空 currentSessionIds，保留历史。不提供 phase 仅更新摘要/阻断/下一步。目标或依据实质改变时由主管判断并在 summary 说明，直接保存修订 Plan；不存在「旧报告自动失效」的声明参数——程序的核对见 G3。type 创建后不变。
 

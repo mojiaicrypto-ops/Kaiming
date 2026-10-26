@@ -104,3 +104,15 @@
 **移动端**：320/390 两档完整走查，修掉 5 个真实缺陷（外壳栅格 `auto` 列被内容撑宽、项目按钮宽 0、rail 开关在屏幕外、Toast 盖住首条消息/输入框、查看器 Esc 被 Download 挤出），并补两条用例锁定（`a phone can reach every control`、`every screen is usable on a phone`）。第一条做了「撤销修复 → 失败 → 恢复 → 通过」的闭环验证。
 
 **形态重做搁置**：用户判断当前窄屏是「压缩版、凑活」，要求按响应式最佳实践改成移动端形态（底部 Tab Bar / 全屏会话列表 / 顶栏只留项目与连接）。本轮按用户指示**先记录不动手**，已落 [缺口登记 M1–M5](../../docs/technicalnew/gap-register.md)，并在 [UI 契约 U2](../../docs/technicalnew/ui-design.md) 指向该条目。实施前需先出 320/390 两档形态稿核对。
+
+## 第十轮 · 实施需求状态为何不跟随 Task（真实项目故障）
+
+现场：`aisuangua` 的 `t-aedc73cc` 在 Test 阶段跑着，需求看板上 `req-ui-shell` 仍在「待实现」，`In progress 0`。
+
+结论：**看板没有过期，过时的是记录**。`req-ui-shell.md` 的 `status: pending`、`updatedAt` 10:38:22Z（早于 Task 创建 13:37:38Z），该主管 Session 当天调用 `requirement` 工具 0 次。R-05 要求「开始实现 Task 后进入进行中」，但只有主管手动 save 一条路，`task create` 对 pending 静默接受；`consistencyOf` 的三个偏差方向也不含「pending 但有未结束实现 Task」。
+
+修复（用户决定：由程序写这一半事实）：`task create` 成功后 pending → `in_progress`，结果报 `requirement.status`；看板可见时每 5 秒重读（隐藏不发请求，回前台立刻读）。完成/取消/归档仍由主管显式保存，R-05 的「不按 Task 数量判断完成」不变。
+
+验证：服务端 376（新增 1 条断言正文不被重新序列化、无需求 Task 不触碰记录）；浏览器 51（新增「看板跟随磁盘变化」，去掉轮询后失败、恢复后通过）；webapp 50；两侧 tsc 与 build 干净。存量记录已手工置为 in_progress 并复核解析。
+
+运行中的 workbench（pid 1951，`node src/server/main.ts`，无热重载）仍持有旧代码：**当前这条正在跑的 Task 结束后重启服务**，新的自动状态转移才对后续 Task 生效。

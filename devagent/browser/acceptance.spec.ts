@@ -598,6 +598,71 @@ test('a project can override one role, and choosing "default" gives the layer ba
   }
 });
 
+test('a board left open follows the record when it changes on disk', async ({ page }) => {
+  // The board is a projection of project files another process writes; a value it kept from mount
+  // would be a claim about the past. This is the run that reported "the board never updates": the
+  // record was still pending while its Task was in Test.
+  const harness = await startHarness();
+  try {
+    const projectPath = harness.project?.projectPath ?? '';
+    const dir = join(projectPath, '.dev', 'requirements');
+    mkdirSync(dir, { recursive: true });
+    const card = (status: string): string =>
+      [
+        '---',
+        'schemaVersion: 2',
+        'id: req-reset',
+        'kind: implementation',
+        'title: Account password reset',
+        'status: ' + status,
+        'createdAt: "2026-10-01T00:00:00Z"',
+        'updatedAt: "2026-10-01T00:00:00Z"',
+        '---',
+        '',
+        '## 目标',
+        'allow a user to reset a password',
+        '',
+        '## 范围',
+        'account module',
+        '',
+        '## 行为与异常',
+        'expired token is refused',
+        '',
+        '## 验收',
+        'reset works, expired token does not',
+        '',
+        '## 来源与决定',
+        'session 2026-10-01',
+        '',
+        '## 未知',
+        'email provider',
+        '',
+        '## 完成摘要',
+        '(not started)',
+        '',
+      ].join('\n');
+    const path = join(dir, 'req-reset.md');
+    writeFileSync(path, card('pending'));
+
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, projectPath);
+    await page.goto(`${harness.baseUrl}/requirements`, { waitUntil: 'domcontentloaded' });
+
+    const board = page.locator('[data-testid="board"]');
+    await expect(board.locator('[data-testid="requirement-card"]')).toHaveCount(1, { timeout: 15_000 });
+    const columns = board.locator('.colm');
+    await expect(columns.nth(1)).toContainText('req-reset', { timeout: 15_000 });
+
+    // Someone else (the chief) records the transition. No reload, no click.
+    writeFileSync(path, card('in_progress'));
+    await expect(columns.nth(2).locator('[data-testid="requirement-card"]')).toHaveCount(1, { timeout: 20_000 });
+    await expect(columns.nth(1)).toContainText(/Nothing here|暂无/, { timeout: 20_000 });
+  } finally {
+    await harness.close();
+  }
+});
+
 test('a requirement hands off to the chat without sending anything', async ({ page }) => {
   // The board cannot start work. Its action fills the composer so the user can read and edit the
   // request first; a hidden submit would be an action the user never saw.
