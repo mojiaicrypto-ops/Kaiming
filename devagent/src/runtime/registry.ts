@@ -69,6 +69,9 @@ export class SessionRegistry {
     }
     const handle = await this.factory.create(config, {
       cwd: spec.cwd,
+      // The level was resolved together with the model (same assignment row), so a session never
+      // runs a model at a level nobody chose for it. Pi clamps it to what the model accepts.
+      thinkingLevel: config.thinkingLevel,
       ...(spec.piFile !== undefined ? { piFile: spec.piFile } : {}),
       ...(spec.customTools !== undefined ? { customTools: spec.customTools } : {}),
       ...(spec.extensionFactories !== undefined

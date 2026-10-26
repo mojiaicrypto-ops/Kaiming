@@ -220,6 +220,8 @@ export async function createStubEnv(
   baseUrl: string | undefined,
   options: {
     readonly modelIds?: readonly string[];
+    /** Declare the stub models as reasoning-capable, so Pi offers thinking levels above `off`. */
+    readonly reasoning?: boolean;
     readonly deadProviderBaseUrl?: string;
     /** When given, these providers are written verbatim and no stub provider is added. */
     readonly providers?: Record<string, unknown>;
@@ -244,7 +246,11 @@ export async function createStubEnv(
         baseUrl,
         api: 'openai-completions',
         apiKey: STUB_API_KEY,
-        models: modelIds.map((id) => ({ id, name: id })),
+        models: modelIds.map((id) => ({
+          id,
+          name: id,
+          ...(options.reasoning === true ? { reasoning: true } : {}),
+        })),
       },
       ...(options.deadProviderBaseUrl
         ? {

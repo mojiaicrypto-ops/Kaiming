@@ -33,7 +33,7 @@ interface Harness {
   call(method: string, params?: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }>;
 }
 
-async function harness(): Promise<Harness> {
+async function harness(options: { modelLevels?: (selection: { providerId: string; modelId: string }) => Promise<readonly string[]> } = {}): Promise<Harness> {
   const root = mkdtempSync(join(tmpdir(), 'devagent-config-'));
   const store = new Store({ path: join(root, 'state.db'), serverEpoch: 1 });
   store.createProject({ id: 'p-1', realPath: join(root, 'project') });
@@ -46,7 +46,11 @@ async function harness(): Promise<Harness> {
   };
   const auth = new AuthService({ accessPassword: PASSWORD });
   const router = new RpcRouter();
-  registerCoreMethods(router, { store, server });
+  registerCoreMethods(router, {
+    store,
+    server,
+    ...(options.modelLevels !== undefined ? { modelLevels: options.modelLevels } : {}),
+  });
   const workbench = createWorkbenchServer({ store, auth, router });
   const { origin } = await workbench.listen(0);
   cleanups.push(async () => {
@@ -79,6 +83,9 @@ async function harness(): Promise<Harness> {
     },
   };
 }
+
+/** The levels a run would accept, as the runtime would report them for a reasoning-capable model. */
+const reasoningLevels = async (): Promise<readonly string[]> => ['off', 'minimal', 'low', 'medium', 'high'];
 
 const provider = (overrides: Record<string, unknown> = {}) => ({
   kind: 'provider',
@@ -527,4 +534,105 @@ describe('a saved provider reaches the running runtime', () => {
       rmSync(env.root, { recursive: true, force: true });
     }
   }, 30_000);
+});
+
+describe('thinking level, saved with the model it belongs to', () => {
+  it('saves a level the model accepts and reports it on the layer and the effective config', async () => {
+    const h = await harness({ modelLevels: reasoningLevels });
+    await h.call('config.save', { expectedRevision: null, value: provider() });
+
+    const saved = await h.call('config.save', {
+      expectedRevision: null,
+      value: { kind: 'model', providerId: 'deepseek', modelId: 'deepseek-flash', thinkingLevel: 'high' },
+      roleId: 'developer',
+    });
+    expect(saved.status).toBe(200);
+    expect(resultOf<{ thinkingLevel: string }>(saved.body).thinkingLevel).toBe('high');
+
+    const read = resultOf<{
+      effective: { thinkingLevel: string; thinkingLevels: string[] };
+      overrides: { role: { thinkingLevel: string } | null };
+    }>((await h.call('config.get', { roleId: 'developer' })).body);
+    expect(read.overrides.role?.thinkingLevel).toBe('high');
+    expect(read.effective.thinkingLevel).toBe('high');
+    // The page lists what a run would accept, so it cannot offer a level that gets clamped away.
+    expect(read.effective.thinkingLevels).toEqual(['off', 'minimal', 'low', 'medium', 'high']);
+  });
+
+  it('refuses a level the model does not accept, and writes nothing', async () => {
+    const h = await harness({ modelLevels: async () => ['off'] });
+    await h.call('config.save', { expectedRevision: null, value: provider() });
+
+    const refused = await h.call('config.save', {
+      expectedRevision: null,
+      value: { kind: 'model', providerId: 'deepseek', modelId: 'deepseek-flash', thinkingLevel: 'high' },
+      roleId: 'developer',
+    });
+
+    expect(errorCode(refused.body)).toBe('INVALID_ARGUMENT');
+    expect((refused.body['error'] as { details: { allowed: string[] } }).details.allowed).toEqual(['off']);
+    expect(h.store.getModelOverride('role', 'developer')).toBeUndefined();
+  });
+
+  it('keeps the level of the winning layer only, and an unset row runs at off', async () => {
+    const h = await harness({ modelLevels: reasoningLevels });
+    await h.call('config.save', { expectedRevision: null, value: provider() });
+    // The role globally asks for medium...
+    await h.call('config.save', {
+      expectedRevision: null,
+      value: { kind: 'model', providerId: 'deepseek', modelId: 'deepseek-flash', thinkingLevel: 'medium' },
+      roleId: 'developer',
+    });
+    // ...and the narrower layer names the same model without an effort: no cross-layer mixing.
+    const narrow = await h.call('config.save', {
+      expectedRevision: null,
+      value: { kind: 'model', providerId: 'deepseek', modelId: 'deepseek-flash' },
+      roleId: 'developer',
+      projectId: 'p-1',
+    });
+    expect(narrow.status).toBe(200);
+
+    const read = resultOf<{ effective: { source: string; thinkingLevel: string } }>(
+      (await h.call('config.get', { roleId: 'developer', projectId: 'p-1' })).body,
+    );
+    expect(read.effective.source).toBe('project-role');
+    expect(read.effective.thinkingLevel).toBe('off');
+
+    // Clearing the narrower layer hands the model (and its level) back.
+    await h.call('config.clear', { roleId: 'developer', projectId: 'p-1' });
+    const back = resultOf<{ effective: { source: string; thinkingLevel: string } }>(
+      (await h.call('config.get', { roleId: 'developer', projectId: 'p-1' })).body,
+    );
+    expect(back.effective).toMatchObject({ source: 'role', thinkingLevel: 'medium' });
+  });
+
+  it('records the reasoning declaration on the provider and reads it back', async () => {
+    const h = await harness({ modelLevels: reasoningLevels });
+    const created = await h.call('config.save', {
+      expectedRevision: null,
+      value: provider({
+        models: [
+          { id: 'deepseek-flash', name: 'deepseek-flash' },
+          { id: 'deepseek-reasoner', name: 'deepseek-reasoner', reasoning: true },
+        ],
+      }),
+    });
+    expect(created.status).toBe(200);
+
+    // Pi reads this file: a declaration that never reaches it would leave the levels inert.
+    const written = JSON.parse(readFileSync(modelsPathFor(h.agentDir), 'utf8')) as {
+      providers: { deepseek: { models: Array<{ id: string; reasoning?: boolean }> } };
+    };
+    expect(written.providers.deepseek.models.find((model) => model.id === 'deepseek-reasoner')?.reasoning).toBe(true);
+    expect(written.providers.deepseek.models.find((model) => model.id === 'deepseek-flash')?.reasoning).toBeUndefined();
+
+    const read = resultOf<{ providers: Array<{ models: Array<{ id: string; reasoning: boolean; thinkingLevels: string[] }> }> }>(
+      (await h.call('config.get', {})).body,
+    );
+    const models = read.providers[0]?.models ?? [];
+    expect(models.find((model) => model.id === 'deepseek-reasoner')).toMatchObject({
+      reasoning: true,
+      thinkingLevels: ['off', 'minimal', 'low', 'medium', 'high'],
+    });
+  });
 });

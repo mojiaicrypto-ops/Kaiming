@@ -6,6 +6,10 @@ import type { RpcClient } from '../api/rpc';
 export interface ProviderModel {
   readonly id: string;
   readonly name?: string;
+  /** Declared by the user: Pi offers thinking levels other than `off` only for such a model. */
+  readonly reasoning?: boolean;
+  /** What Pi would accept for this model; the page renders these, it never keeps its own list. */
+  readonly thinkingLevels?: readonly string[];
 }
 
 export interface ProviderView {
@@ -23,12 +27,20 @@ export interface ProviderView {
 export interface Assignment {
   readonly providerId: string;
   readonly modelId: string;
+  /** Pi thinking level saved with this model; empty means the row never set one. */
+  readonly thinkingLevel?: string;
   readonly revision: number;
 }
 
 export interface ConfigView {
   readonly roleId: string;
-  readonly effective: { readonly providerId: string; readonly modelId: string; readonly source: string };
+  readonly effective: {
+    readonly providerId: string;
+    readonly modelId: string;
+    readonly thinkingLevel: string;
+    readonly thinkingLevels?: readonly string[];
+    readonly source: string;
+  };
   /** What each layer stores — an inherited model is not a saved choice. */
   readonly overrides: {
     readonly role: Assignment | null;

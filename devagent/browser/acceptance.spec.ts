@@ -1490,6 +1490,101 @@ test('a browser that has never been here still sees the registered projects', as
   }
 });
 
+test('effort is chosen per model, and only where the model declares reasoning', async ({ page }) => {
+  // The levels are Pi's: a model that declares no reasoning has nothing to pick, and the way to make
+  // one available is to declare it on the provider — the page says so instead of showing a dead select.
+  const harness = await startHarness();
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    await page.evaluate(async () => {
+      const handle = (window as unknown as { __agentdev: { rpc: { call: (m: string, p: unknown, o?: { requestId: string }) => Promise<unknown> } } }).__agentdev;
+      await handle.rpc.call(
+        'config.save',
+        {
+          expectedRevision: null,
+          value: {
+            kind: 'provider',
+            providerId: 'p-effort',
+            baseUrl: 'http://127.0.0.1:9/v1',
+            api: 'openai-completions',
+            apiKey: 'test-key',
+            models: [
+              { id: 'm-think', name: 'm-think', reasoning: true },
+              { id: 'm-plain', name: 'm-plain' },
+            ],
+          },
+        },
+        { requestId: 'seed-provider-effort' },
+      );
+    });
+
+    await page.goto(`${harness.baseUrl}/settings/models`, { waitUntil: 'domcontentloaded' });
+    await page.locator('[data-testid="scope-global"]').click();
+
+    // A reasoning model: the level select lists what Pi accepts, minus `off` (that is "not set").
+    await page.locator('[data-testid="model-chief"]').selectOption('m-think');
+    const level = page.locator('[data-testid="level-chief"]');
+    await expect(level).toBeVisible({ timeout: 10_000 });
+    const options = await level.locator('option').allTextContents();
+    expect(options[0]).toMatch(/Not set \(off\)|未设置/);
+    expect(options.slice(1).map((text) => text.trim())).toEqual(['Minimal', 'Low', 'Medium', 'High']);
+
+    await level.selectOption('high');
+    await expect(page.locator('.toast').last()).toContainText(/saved|已保存/i);
+
+    // A model that declares nothing: the row says so and offers no choice at all.
+    await page.locator('[data-testid="model-developer"]').selectOption('m-plain');
+    await expect(page.locator('[data-testid="level-developer-unsupported"]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('level-developer-unsupported')).toHaveAttribute('title', /Providers|服务/i);
+
+    // It survives a reload, and what the run would use is the value that was saved.
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.locator('[data-testid="scope-global"]').click();
+    await expect(page.locator('[data-testid="level-chief"]')).toHaveValue('high', { timeout: 10_000 });
+    const read = await page.evaluate(async () => {
+      const handle = (window as unknown as { __agentdev: { rpc: { call: (m: string, p?: unknown) => Promise<unknown> } } }).__agentdev;
+      return (await handle.rpc.call('config.get', { roleId: 'chief' })) as {
+        effective: { thinkingLevel: string; thinkingLevels: string[] };
+        overrides: { role: { thinkingLevel: string } | null };
+      };
+    });
+    expect(read.overrides.role).toMatchObject({ thinkingLevel: 'high' });
+    expect(read.effective.thinkingLevel).toBe('high');
+
+    // Declaring reasoning on the provider is what turns the level back on for that model.
+    await page.goto(`${harness.baseUrl}/settings/providers`, { waitUntil: 'domcontentloaded' });
+    const provider = page.locator('.prov').filter({ hasText: 'p-effort' });
+    await provider.locator('[data-testid="provider-edit"]').click();
+    const plain = page.locator('.model-row').filter({ has: page.locator('input[value="m-plain"]') });
+    await plain.locator('[data-testid="provider-model-reasoning"]').check();
+    await page.locator('[data-testid="provider-save"]').click();
+    // The declaration must reach Pi, not only the database: it is what turns levels on.
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(async () => {
+            const handle = (window as unknown as { __agentdev: { rpc: { call: (m: string, p?: unknown) => Promise<unknown> } } }).__agentdev;
+            const read = (await handle.rpc.call('config.get', {})) as {
+              providers: Array<{ providerId: string; models: Array<{ id: string; reasoning?: boolean; thinkingLevels: string[] }> }>;
+            };
+            const model = read.providers.find((entry) => entry.providerId === 'p-effort')?.models.find((entry) => entry.id === 'm-plain');
+            return model?.thinkingLevels.length ?? 0;
+          }),
+        { timeout: 15_000 },
+      )
+      .toBeGreaterThan(1);
+
+    await page.goto(`${harness.baseUrl}/settings/models`, { waitUntil: 'domcontentloaded' });
+    await page.locator('[data-testid="scope-global"]').click();
+    // The row already saved `m-plain`; now that the model declares reasoning, the level appears.
+    await expect(page.locator('[data-testid="level-developer"]')).toBeVisible({ timeout: 10_000 });
+  } finally {
+    await harness.close();
+  }
+});
+
 test('a provider is added with a name and protocol, then edited without changing its id', async ({ page }) => {
   const harness = await startHarness();
   try {
@@ -1504,7 +1599,7 @@ test('a provider is added with a name and protocol, then edited without changing
     await page.locator('[data-testid="provider-base"]').fill('http://127.0.0.1:3425/v1');
     // The protocol is a required choice: no save is possible while it is unset.
     await page.locator('[data-testid="provider-api"]').selectOption('anthropic-messages');
-    await page.locator('[data-testid="provider-models"]').fill('some-model');
+    await page.locator('[data-testid="provider-model-id"]').first().fill('some-model');
     await page.locator('[data-testid="provider-key"]').fill('test-key');
     await page.locator('[data-testid="provider-save"]').click();
 

@@ -1784,7 +1784,75 @@ details.fold > summary.tline:hover {
   border-bottom: 1px solid var(--line);
 }
 .set-body .rl {
-  grid-template-columns: 8em minmax(0, 420px) 9em;
+  grid-template-columns: 8em minmax(0, 380px) 8.5em 9em;
+}
+/* The effort control is narrow on purpose: it holds a word, and the model select is what needs room. */
+.set-body .rl .sel.lvl {
+  max-width: none;
+  width: 100%;
+}
+/* A level that belongs to a more specific layer, or a model with no levels at all: text, not a dead
+   select — there is nothing here to choose. */
+.lvl-inherited,
+.lvl-none {
+  font-size: var(--fs-12);
+  color: var(--fg-3);
+}
+.lvl-none {
+  font-style: italic;
+}
+/* The provider's model list: one row per model, id + reasoning + remove. */
+.set-body .rl.models-row {
+  align-items: start;
+  /* Two columns, not four: the rows need the width the badge column would take, and there is no
+     badge for a list of models. */
+  grid-template-columns: 8em minmax(0, 1fr);
+}
+.models-row > span:first-child {
+  padding-top: 7px;
+}
+.model-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-width: 0;
+}
+.model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--s2);
+}
+.model-row .inp {
+  font-family: var(--mono);
+}
+.model-row .chk {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-12);
+  color: var(--fg-2);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.model-row .chk input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+.model-row .btn.x {
+  padding: 0 6px;
+  font-size: var(--fs-14);
+  line-height: 1;
+  color: var(--fg-3);
+}
+.model-row .btn.x:hover:not(:disabled) {
+  color: var(--error);
+}
+.add-model {
+  align-self: start;
+  padding: 2px var(--s3);
+  font-size: var(--fs-12);
 }
 .prov {
   display: grid;
@@ -1804,6 +1872,9 @@ details.fold > summary.tline:hover {
   color: var(--fg-3);
   font-size: var(--fs-13);
   font-family: var(--mono);
+  /* Ellipsize instead of wrapping: an id broken mid-word ("deepseek-" / "reasoner") reads as two
+     models and pushes the row to three lines on a phone. */
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -2643,8 +2714,48 @@ details.fold > summary.tline:hover {
     padding-right: var(--s4);
   }
   .set-body .rl {
-    grid-template-columns: 4em minmax(0, 1fr) auto;
-    gap: var(--s3);
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s2) var(--s3);
+    align-items: center;
+  }
+  .set-body .rl > span:first-child {
+    flex: 1 0 100%;
+    color: var(--fg-3);
+    font-size: var(--fs-12);
+  }
+  .set-body .rl .sel {
+    flex: 1 1 9em;
+    max-width: none;
+  }
+  .set-body .rl .inp {
+    flex: 1 1 100%;
+  }
+  .set-body .rl .src {
+    flex: 0 1 auto;
+  }
+  .models-row > span:first-child {
+    padding-top: 0;
+  }
+  .set-body .rl .model-rows {
+    flex: 1 1 100%;
+  }
+  .model-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "id id"
+      "chk x";
+    row-gap: var(--s1);
+  }
+  .model-row .inp {
+    grid-area: id;
+  }
+  .model-row .chk {
+    grid-area: chk;
+  }
+  .model-row .btn.x {
+    grid-area: x;
+    justify-self: end;
   }
   .ask-h .f3 {
     display: none;

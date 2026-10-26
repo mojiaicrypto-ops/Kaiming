@@ -12,17 +12,30 @@ import { errorText } from '../lib/errors';
  */
 const APIS = ['openai-completions', 'openai-responses', 'anthropic-messages'] as const;
 
+/** One model of the endpoint: the id Pi uses, and whether it can reason. */
+interface ModelDraft {
+  id: string;
+  reasoning: boolean;
+}
+
 /** The form's own state: the id is only editable while adding, so it is empty when editing. */
 interface Draft {
   providerId: string;
   name: string;
   baseUrl: string;
   api: string;
-  models: string;
+  models: readonly ModelDraft[];
   apiKey: string;
 }
 
-const EMPTY: Draft = { providerId: '', name: '', baseUrl: '', api: 'openai-completions', models: '', apiKey: '' };
+const EMPTY: Draft = {
+  providerId: '',
+  name: '',
+  baseUrl: '',
+  api: 'openai-completions',
+  models: [{ id: '', reasoning: false }],
+  apiKey: '',
+};
 
 /**
  * Providers: every configured endpoint, what it offers, whether a credential exists, and which
@@ -53,7 +66,10 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
       // A provider saved before protocols were selectable has none stored: leave the choice to the
       // user instead of writing the default they never saw.
       api: provider.api ?? '',
-      models: provider.models.map((model) => model.id).join(', '),
+      models:
+        provider.models.length === 0
+          ? [{ id: '', reasoning: false }]
+          : provider.models.map((model) => ({ id: model.id, reasoning: model.reasoning === true })),
       apiKey: '',
     });
     setSaveError(null);
@@ -80,11 +96,10 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
             name: draft.name.trim(),
             baseUrl: draft.baseUrl.trim(),
             api: draft.api,
+            // Only rows with an id travel: a blank row the user added but left empty is not a model.
             models: draft.models
-              .split(',')
-              .map((id) => id.trim())
-              .filter((id) => id !== '')
-              .map((id) => ({ id })),
+              .map((model) => ({ id: model.id.trim(), reasoning: model.reasoning }))
+              .filter((model) => model.id !== ''),
             ...(draft.apiKey.trim() === '' ? {} : { apiKey: draft.apiKey.trim() }),
           },
         },
@@ -229,16 +244,69 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
                 </select>
                 <span className="src">{t('settings.apiHint')}</span>
               </div>
-              <div className="rl">
+              <div className="rl models-row">
                 <span>{t('settings.modelsList')}</span>
-                <input
-                  className="inp"
-                  value={draft.models}
-                  onChange={(event) => setDraft({ ...draft, models: event.target.value })}
-                  placeholder="gpt-5, gpt-5-mini"
-                  data-testid="provider-models"
-                />
-                <span />
+                <div className="model-rows" data-testid="provider-models">
+                  {draft.models.map((model, index) => (
+                    <div className="model-row" key={String(index)}>
+                      <input
+                        className="inp"
+                        value={model.id}
+                        placeholder="gpt-5, deepseek-reasoner…"
+                        aria-label={t('settings.modelId')}
+                        onChange={(event) =>
+                          setDraft({
+                            ...draft,
+                            models: draft.models.map((entry, position) =>
+                              position === index ? { ...entry, id: event.target.value } : entry,
+                            ),
+                          })
+                        }
+                        data-testid="provider-model-id"
+                      />
+                      <label className="chk" title={t('settings.modelReasoningHint')}>
+                        <input
+                          type="checkbox"
+                          checked={model.reasoning}
+                          onChange={(event) =>
+                            setDraft({
+                              ...draft,
+                              models: draft.models.map((entry, position) =>
+                                position === index ? { ...entry, reasoning: event.target.checked } : entry,
+                              ),
+                            })
+                          }
+                          data-testid="provider-model-reasoning"
+                        />
+                        {t('settings.modelReasoning')}
+                      </label>
+                      <button
+                        type="button"
+                        className="btn ghost x"
+                        aria-label={t('settings.modelRemove')}
+                        title={t('settings.modelRemove')}
+                        // One row always stays: an endpoint with no model is not a provider.
+                        disabled={draft.models.length <= 1}
+                        onClick={() =>
+                          setDraft({
+                            ...draft,
+                            models: draft.models.filter((_, position) => position !== index),
+                          })
+                        }
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    className="btn ghost add-model"
+                    onClick={() => setDraft({ ...draft, models: [...draft.models, { id: '', reasoning: false }] })}
+                    data-testid="provider-model-add"
+                  >
+                    {t('settings.modelAdd')}
+                  </button>
+                </div>
               </div>
               <div className="rl">
                 <span>{t('settings.apiKey')}</span>

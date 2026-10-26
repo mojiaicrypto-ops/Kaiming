@@ -23,7 +23,18 @@ export interface ProviderDefinition {
    * upload. An endpoint that really cannot take images answers with an error the user can see.
    */
   readonly input?: readonly string[];
-  readonly models: readonly { id: string; name: string }[];
+  readonly models: readonly ProviderModelDefinition[];
+}
+
+/**
+ * One model the endpoint serves. `reasoning` is what makes Pi offer thinking levels other than `off`:
+ * the catalog has no metadata for an endpoint the operator typed in, so the declaration has to come
+ * from the person who knows the model.
+ */
+export interface ProviderModelDefinition {
+  readonly id: string;
+  readonly name: string;
+  readonly reasoning?: boolean;
 }
 
 export type ProviderWriteResult =
@@ -78,6 +89,7 @@ export function writeProvider(agentDir: string, definition: ProviderDefinition):
       id: model.id,
       name: model.name,
       input: [...(definition.input ?? ['text', 'image'])],
+      ...(model.reasoning === true ? { reasoning: true } : {}),
     })),
   };
   const path = modelsPathFor(agentDir);

@@ -28,6 +28,11 @@ export interface CoreMethodsOptions {
     available: boolean;
     detail: string;
   }>;
+  /**
+   * The thinking levels Pi offers for one model. The page lists what a run would accept instead of
+   * guessing from the model id; a missing runtime answers with the one level that always exists.
+   */
+  readonly modelLevels?: (selection: { providerId: string; modelId: string }) => Promise<readonly string[]>;
 }
 
 /**
@@ -42,7 +47,7 @@ export type ProviderApi = (typeof PROVIDER_APIS)[number];
  * The effective configuration (R5): the role override wins over the project override, which wins over
  * the server default. Keys never travel - a provider is described by where its credential lives.
  */
-function readConfig(options: CoreMethodsOptions, roleId: string, projectId: string | undefined): unknown {
+async function readConfig(options: CoreMethodsOptions, roleId: string, projectId: string | undefined): Promise<unknown> {
   const effective = resolveStoredConfig({
     roleId,
     ...(projectId !== undefined ? { projectId } : {}),
@@ -54,31 +59,62 @@ function readConfig(options: CoreMethodsOptions, roleId: string, projectId: stri
   // effective value: an inherited model is not a saved choice, and a project default is invisible
   // while a narrower layer wins.
   const layer = (
-    row: { providerId: string; modelId: string; revision: number } | undefined,
-  ): { providerId: string; modelId: string; revision: number } | null =>
-    row === undefined ? null : { providerId: row.providerId, modelId: row.modelId, revision: row.revision };
+    row: { providerId: string; modelId: string; thinkingLevel: string; revision: number } | undefined,
+  ): { providerId: string; modelId: string; thinkingLevel: string; revision: number } | null =>
+    row === undefined
+      ? null
+      : {
+          providerId: row.providerId,
+          modelId: row.modelId,
+          thinkingLevel: row.thinkingLevel,
+          revision: row.revision,
+        };
+  // One read per (provider, model) pair actually assigned, not per role: the page shows a list per
+  // model and the same model appears in several rows.
+  const levels = new Map<string, readonly string[]>();
+  const levelsOf = async (selection: { providerId: string; modelId: string }): Promise<readonly string[]> => {
+    const key = `${selection.providerId}\u0000${selection.modelId}`;
+    const cached = levels.get(key);
+    if (cached !== undefined) return cached;
+    const read = await (options.modelLevels?.(selection) ?? Promise.resolve(['off'])).catch(() => ['off']);
+    levels.set(key, read);
+    return read;
+  };
+  const effectiveLevels = await levelsOf(effective.selection);
   return {
     roleId,
     ...(projectId !== undefined ? { projectId } : {}),
-    effective: redactEffectiveConfig(effective),
     overrides: {
       role: layer(options.store.getModelOverride('role', roleId)),
       project: projectId === undefined ? null : layer(options.store.getModelOverride('project', projectId)),
       projectRole:
         projectId === undefined ? null : layer(options.store.getModelOverride('project', projectId, roleId)),
     },
-    providers: options.store.listProviders().map((provider) => ({
-      providerId: provider.providerId,
-      // The label the user sees; the id stays the technical identity everything else refers to.
-      name: provider.name ?? provider.providerId,
-      baseUrl: provider.baseUrl,
-      api: provider.api,
-      models: JSON.parse(provider.models) as Array<{ id: string; name: string }>,
-      credentialRef: provider.credentialRef,
-      revision: provider.revision,
-      // Availability, never the key: the caller can tell configured from usable.
-      credentialConfigured: provider.credentialRef !== null,
-    })),
+    // The levels for the model this configuration resolves to, so a row can say what will really run.
+    effective: { ...redactEffectiveConfig(effective), thinkingLevels: effectiveLevels },
+    providers: await Promise.all(
+      options.store.listProviders().map(async (provider) => {
+        const models = JSON.parse(provider.models) as Array<{ id: string; name: string; reasoning?: boolean }>;
+        return {
+          providerId: provider.providerId,
+          // The label the user sees; the id stays the technical identity everything else refers to.
+          name: provider.name ?? provider.providerId,
+          baseUrl: provider.baseUrl,
+          api: provider.api,
+          // Pi decides the choices; the page renders them rather than keeping a second list.
+          models: await Promise.all(
+            models.map(async (model) => ({
+              ...model,
+              thinkingLevels: await levelsOf({ providerId: provider.providerId, modelId: model.id }),
+            })),
+          ),
+          credentialRef: provider.credentialRef,
+          revision: provider.revision,
+          // Availability, never the key: the caller can tell configured from usable.
+          credentialConfigured: provider.credentialRef !== null,
+        };
+      }),
+    ),
     // Secrets are referenced, never echoed: only availability travels.
     credentials: { mode: 'reference', inResponse: false },
   };
@@ -87,13 +123,13 @@ function readConfig(options: CoreMethodsOptions, roleId: string, projectId: stri
 export function registerCoreMethods(router: RpcRouter, options: CoreMethodsOptions): void {
   router.register('config.get', {
     write: false,
-    run: (params): unknown => {
+    run: async (params): Promise<unknown> => {
       const roleId = typeof params['roleId'] === 'string' && params['roleId'] !== '' ? params['roleId'] : 'chief';
       const projectId = typeof params['projectId'] === 'string' && params['projectId'] !== '' ? params['projectId'] : undefined;
       if (projectId !== undefined && options.store.getProject(projectId) === undefined) {
         throw new RpcError('NOT_FOUND', `project ${projectId} does not exist`, { projectId });
       }
-      return readConfig(options, roleId, projectId);
+      return await readConfig(options, roleId, projectId);
     },
   });
 
@@ -144,7 +180,7 @@ export function registerCoreMethods(router: RpcRouter, options: CoreMethodsOptio
 
   router.register('config.save', {
     write: true,
-    run: (params): unknown => {
+    run: async (params): Promise<unknown> => {
       const expectedRevision =
         params['expectedRevision'] === null || params['expectedRevision'] === undefined
           ? null
@@ -166,7 +202,7 @@ export function registerCoreMethods(router: RpcRouter, options: CoreMethodsOptio
         return saveProvider(options, record, expectedRevision);
       }
       if (record['kind'] === 'model') {
-        return saveModelAssignment(
+        return await saveModelAssignment(
           options,
           record,
           {
@@ -248,7 +284,13 @@ async function saveProvider(
     if (id === '') {
       throw new RpcError('INVALID_ARGUMENT', 'every model needs an id', { providerId });
     }
-    return { id, name: typeof model['name'] === 'string' && model['name'] !== '' ? model['name'] : id };
+    return {
+      id,
+      name: typeof model['name'] === 'string' && model['name'] !== '' ? model['name'] : id,
+      // The catalog knows nothing about an endpoint the operator typed in; without this declaration
+      // Pi answers every thinking-level question with "off".
+      reasoning: model['reasoning'] === true,
+    };
   });
   const apiKey = typeof value['apiKey'] === 'string' && value['apiKey'] !== '' ? value['apiKey'] : undefined;
   const written = writeProvider(options.server.agentDir, {
@@ -290,12 +332,12 @@ async function saveProvider(
  * Assign a provider/model. Three shapes: a role globally (`roleId`), a project's default (`projectId`),
  * or one role inside a project (`roleId` + `projectId` — the most specific layer).
  */
-function saveModelAssignment(
+async function saveModelAssignment(
   options: CoreMethodsOptions,
   value: Record<string, unknown>,
   scope: { roleId?: string; projectId?: string },
   expectedRevision: number | null,
-): unknown {
+): Promise<unknown> {
   const providerId = typeof value['providerId'] === 'string' ? value['providerId'] : '';
   const modelId = typeof value['modelId'] === 'string' ? value['modelId'] : '';
   const provider = providerId === '' ? undefined : options.store.getProvider(providerId);
@@ -315,12 +357,31 @@ function saveModelAssignment(
   if (scope.projectId !== undefined && options.store.getProject(scope.projectId) === undefined) {
     throw new RpcError('NOT_FOUND', `project ${scope.projectId} does not exist`, { projectId: scope.projectId });
   }
+  // The level is saved with the model because the levels are the model's own: validated against what
+  // Pi reports for THIS model, so a value that a run would clamp away is refused here with the real
+  // list instead of being stored and silently ignored.
+  const levelRaw = value['thinkingLevel'];
+  if (levelRaw !== undefined && typeof levelRaw !== 'string') {
+    throw new RpcError('INVALID_ARGUMENT', 'thinkingLevel must be a string', { thinkingLevel: levelRaw });
+  }
+  const thinkingLevel = typeof levelRaw === 'string' ? levelRaw : '';
+  if (thinkingLevel !== '') {
+    const allowed = await (options.modelLevels?.({ providerId, modelId }) ?? Promise.resolve(['off']));
+    if (!allowed.includes(thinkingLevel)) {
+      throw new RpcError(
+        'INVALID_ARGUMENT',
+        `model ${modelId} does not support thinking level ${thinkingLevel}`,
+        { providerId, modelId, thinkingLevel, allowed },
+      );
+    }
+  }
   const saved = options.store.saveModelOverride({
     scope: scope.projectId === undefined ? 'role' : 'project',
     scopeId: (scope.projectId ?? scope.roleId) as string,
     ...(scope.projectId !== undefined && scope.roleId !== undefined ? { roleId: scope.roleId } : {}),
     providerId,
     modelId,
+    thinkingLevel,
     expectedRevision,
   });
   return {
@@ -329,6 +390,7 @@ function saveModelAssignment(
     roleId: saved.roleId,
     providerId: saved.providerId,
     modelId: saved.modelId,
+    thinkingLevel: saved.thinkingLevel,
     revision: saved.revision,
   };
 }

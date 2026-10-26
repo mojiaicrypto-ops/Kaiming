@@ -169,6 +169,8 @@ export interface ModelOverrideRow {
   readonly roleId: string;
   readonly providerId: string;
   readonly modelId: string;
+  /** Pi thinking level saved with this assignment; empty means "unset" (Pi runs it at `off`). */
+  readonly thinkingLevel: string;
   readonly revision: number;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -374,7 +376,7 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -650,6 +652,7 @@ CREATE TABLE IF NOT EXISTS model_overrides (
   roleId TEXT NOT NULL DEFAULT '',
   providerId TEXT NOT NULL,
   modelId TEXT NOT NULL,
+  thinkingLevel TEXT NOT NULL DEFAULT '',
   revision INTEGER NOT NULL DEFAULT 1,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL,
@@ -1568,6 +1571,8 @@ export class Store {
     roleId?: string;
     providerId: string;
     modelId: string;
+    /** Pi thinking level for this assignment; empty/omitted means unset, never "keep the old one". */
+    thinkingLevel?: string;
     expectedRevision: number | null;
   }): ModelOverrideRow {
     const roleId = params.roleId ?? '';
@@ -1595,19 +1600,29 @@ export class Store {
       if (existing === undefined) {
         this.db
           .prepare(
-            `INSERT INTO model_overrides (scope, scopeId, roleId, providerId, modelId, revision, createdAt, updatedAt)
-             VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+            `INSERT INTO model_overrides (scope, scopeId, roleId, providerId, modelId, thinkingLevel, revision, createdAt, updatedAt)
+             VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
           )
-          .run(params.scope, params.scopeId, roleId, params.providerId, params.modelId, timestamp, timestamp);
+          .run(
+            params.scope,
+            params.scopeId,
+            roleId,
+            params.providerId,
+            params.modelId,
+            params.thinkingLevel ?? '',
+            timestamp,
+            timestamp,
+          );
       } else {
         this.db
           .prepare(
-            `UPDATE model_overrides SET providerId = ?, modelId = ?, revision = revision + 1, updatedAt = ?
+            `UPDATE model_overrides SET providerId = ?, modelId = ?, thinkingLevel = ?, revision = revision + 1, updatedAt = ?
               WHERE scope = ? AND scopeId = ? AND roleId = ? AND revision = ?`,
           )
           .run(
             params.providerId,
             params.modelId,
+            params.thinkingLevel ?? '',
             timestamp,
             params.scope,
             params.scopeId,
@@ -2940,6 +2955,18 @@ export class Store {
     this.addColumn('providers', 'name', 'TEXT');
   }
 
+  /**
+   * v11 → v12: a model assignment can record the Pi thinking level that goes with the model it names.
+   * Additive and defaulted to empty, so an existing row keeps behaving exactly as before (unset =
+   * `off`, which is what every session ran at until now).
+   */
+  private migrateV11ToV12(): void {
+    this.transaction(() => {
+      this.addColumn('model_overrides', 'thinkingLevel', "TEXT NOT NULL DEFAULT ''");
+      this.db.exec('PRAGMA user_version = 12;');
+    });
+  }
+
   private migrateV10ToV11(): void {
     this.transaction(() => {
       this.applyV11();
@@ -3049,6 +3076,7 @@ export class Store {
         [8, () => this.migrateV8ToV9()],
         [9, () => this.migrateV9ToV10()],
         [10, () => this.migrateV10ToV11()],
+        [11, () => this.migrateV11ToV12()],
       ];
       for (const [from, step] of steps) {
         if (this.pragmas().userVersion === from) {
@@ -3191,6 +3219,7 @@ function toModelOverrideRow(row: Record<string, unknown>): ModelOverrideRow {
     roleId: row['roleId'] === null || row['roleId'] === undefined ? '' : String(row['roleId']),
     providerId: String(row['providerId']),
     modelId: String(row['modelId']),
+    thinkingLevel: row['thinkingLevel'] === null || row['thinkingLevel'] === undefined ? '' : String(row['thinkingLevel']),
     revision: Number(row['revision']),
     createdAt: String(row['createdAt']),
     updatedAt: String(row['updatedAt']),

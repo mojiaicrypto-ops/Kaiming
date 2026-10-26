@@ -144,6 +144,9 @@ export function startWorkbench(options: StartOptions): Promise<{
     server,
     reloadRuntime: () => factory.reload(),
     probeModel: (selection) => factory.probe(selection),
+    // The settings page lists the levels Pi would accept for a model; the rule lives in the same
+    // runtime that creates the sessions, so the page cannot drift from the run.
+    modelLevels: (selection) => factory.levelsFor(selection),
   });
   registerReadMethods(router, { store, blockedOf, attachmentDir: server.agentDir });
 

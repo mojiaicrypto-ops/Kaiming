@@ -116,3 +116,13 @@
 验证：服务端 376（新增 1 条断言正文不被重新序列化、无需求 Task 不触碰记录）；浏览器 51（新增「看板跟随磁盘变化」，去掉轮询后失败、恢复后通过）；webapp 50；两侧 tsc 与 build 干净。存量记录已手工置为 in_progress 并复核解析。
 
 运行中的 workbench（pid 1951，`node src/server/main.ts`，无热重载）仍持有旧代码：**当前这条正在跑的 Task 结束后重启服务**，新的自动状态转移才对后续 Task 生效。
+
+## 第十一轮 · 模型思考等级（effort）
+
+需求：Models 页选模型时能设 effort，符合 Pi 的底层设计。
+
+做法（Pi 原生语义，不新造概念）：`thinkingLevel` 属于「模型指派」这一行，存在 `model_overrides.thinkingLevel`（schema v12，空 = 未设置 = `off`，与既有行为一致）。可选级别由服务端按 Pi 的 `getSupportedThinkingLevels` 判定给出（API package root 未导出该函数，规则镜像在 `src/runtime/thinking-levels.ts`：未声明 `reasoning` 只有 `off`；声明后 `off…high`；`xhigh`/`max` 需显式映射）。保存时服务端按同一判定拒绝并返回允许列表；运行时不二次猜测，由 Pi 钳制，`EffectiveConfig.thinkingLevel` 随模型一起解析并进入会话记录。
+
+关键实测：用户现有 4 个自定义模型在 Pi 里全是 `reasoning=false`，因此只提供 Pi 的清单会让功能对这一部署完全不可见。补了 Providers 的模型声明入口（模型列表改为逐行编辑，勾选「支持推理」写入 `models.json` 的 `reasoning`），并在 Models 行对未声明的模型显示「不支持推理」并指向该入口，而不是留一个空下拉。
+
+界面：Models 行四格（角色 / 模型 / 思考 / 来源）；继承行显示继承到的等级而不是假装是本行的选择（模型根本不存在时留空）；窄屏标签独占一行、控件换行。验证：服务端 383（+7）、浏览器 52（+1）、webapp 50、两侧 tsc、build；1440/390 深浅两色截图核对，Providers 模型行与 `.prov` 元信息（长 id 改省略号，避免在手机上折成三行）一并修好。

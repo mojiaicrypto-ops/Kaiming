@@ -16,7 +16,8 @@ import {
   type InlineExtension,
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
-import type { EffectiveConfig, ModelSelection, RuntimeDefaults } from './config.ts';
+import type { EffectiveConfig, ModelSelection, RuntimeDefaults, ThinkingLevel } from './config.ts';
+import { supportedThinkingLevels } from './thinking-levels.ts';
 
 /** Input-correlation bookmark (design R4); never shown to the model. */
 export const INPUT_MARKER_CUSTOM_TYPE = 'agentdev.input-marker';
@@ -48,7 +49,7 @@ export interface CreateSessionOptions {
   readonly customTools?: ToolDefinition[];
   readonly extensionFactories?: InlineExtension[];
   readonly tools?: readonly string[];
-  readonly thinkingLevel?: 'off' | 'low' | 'medium' | 'high';
+  readonly thinkingLevel?: ThinkingLevel;
   /** Text appended to Pi's own instructions (role bodies); never replaces them. */
   readonly appendSystemPrompt?: readonly string[];
 }
@@ -157,6 +158,18 @@ export class PiRuntimeFactory {
       // The upstream error is the useful part: authentication, DNS, timeout - say it, do not hide it.
       return { available: false, detail: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  /**
+   * The thinking levels Pi offers for one model (`getAvailableThinkingLevels` on a session uses the
+   * same rule). The settings page lists exactly these, so it can never offer a level the run would
+   * clamp away. An unknown model gets `['off']`: it is not a choice, it is the absence of one.
+   */
+  async levelsFor(selection: ModelSelection): Promise<readonly string[]> {
+    const runtime = await this.runtime();
+    const model = runtime.getModel(selection.providerId, selection.modelId);
+    if (model === undefined) return ['off'];
+    return supportedThinkingLevels(model);
   }
 
   async create(config: EffectiveConfig, options: CreateSessionOptions): Promise<PiSessionHandle> {

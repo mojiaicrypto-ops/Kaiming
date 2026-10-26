@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../src/store/store.ts';
-import { resolveEffectiveConfig, type RuntimeDefaults } from '../src/runtime/config.ts';
+import { resolveEffectiveConfig, type RuntimeDefaults, type ThinkingLevel } from '../src/runtime/config.ts';
 import { PiRuntimeFactory } from '../src/runtime/pi-runtime.ts';
 import { assembleSystemPrompt, loadPromptBodies } from '../src/runtime/prompt-assembly.ts';
 import { SessionRegistry } from '../src/runtime/registry.ts';
@@ -56,6 +56,9 @@ async function harness(options: {
   tools?: readonly string[];
   modelIds?: readonly string[];
   model?: RuntimeDefaults['model'];
+  /** The stub models declare reasoning, and the role runs at this Pi thinking level. */
+  reasoning?: boolean;
+  level?: ThinkingLevel;
   taskType?: 'read' | 'write';
   /** Mutable task type for tests that change it between inputs. */
   taskTypeOf?: () => 'read' | 'write' | undefined;
@@ -67,10 +70,10 @@ async function harness(options: {
 }): Promise<Harness> {
   const server = await startStubModelServer(options.replies);
   servers.push(server);
-  const env = await createStubEnv(
-    server.baseUrl,
-    options.modelIds !== undefined ? { modelIds: options.modelIds } : {},
-  );
+  const env = await createStubEnv(server.baseUrl, {
+    ...(options.modelIds !== undefined ? { modelIds: options.modelIds } : {}),
+    ...(options.reasoning === true ? { reasoning: true } : {}),
+  });
   dirs.push(env.root);
   const store = new Store({ path: join(env.root, 'state.db'), serverEpoch: 1 });
   stores.push(store);
@@ -91,7 +94,18 @@ async function harness(options: {
     store,
     registry,
     factory,
-    resolveConfig: (roleId) => resolveEffectiveConfig({ roleId, server: defaults }),
+    resolveConfig: (roleId) =>
+      resolveEffectiveConfig({
+        roleId,
+        server: defaults,
+        // A level is stored on the same row as a model, so the harness states both or neither.
+        ...(options.level !== undefined
+          ? {
+              roleOverrides: { [roleId]: defaults.model },
+              roleLevels: { [roleId]: options.level },
+            }
+          : {}),
+      }),
     taskTypeOf: options.taskTypeOf ?? (() => options.taskType),
     ...(options.sessionExtras !== undefined ? { sessionExtras: options.sessionExtras } : {}),
     ...(options.runStallMs !== undefined ? { runStallMs: options.runStallMs } : {}),
@@ -1552,4 +1566,32 @@ describe('input runner', () => {
     expect(outcome.kind).toBe('completed');
     expect(h.store.getInput('i-2')?.status).toBe('stopped');
   }, 30_000);
+});
+describe('thinking level', () => {
+  it('creates the session at the resolved level, and Pi clamps it to what the model accepts', async () => {
+    const high = await harness({ replies: [{ kind: 'text', text: 'ok' }], reasoning: true, level: 'high' });
+    await high.runner.runNext('s-1');
+    expect(high.registry.get('s-1')?.session.thinkingLevel).toBe('high');
+
+    // The same choice against a model that declares no reasoning is clamped, not ignored silently by
+    // us: Pi decides, and the run records what it really used.
+    const plain = await harness({ replies: [{ kind: 'text', text: 'ok' }], level: 'high' });
+    await plain.runner.runNext('s-1');
+    expect(plain.registry.get('s-1')?.session.thinkingLevel).toBe('off');
+  });
+
+  it('changes level on the same logical session by starting a new Pi instance from the same history', async () => {
+    const h = await harness({ replies: [{ kind: 'text', text: 'ok' }], reasoning: true, level: 'low' });
+    await h.runner.runNext('s-1');
+    const first = h.registry.get('s-1');
+    expect(first?.session.thinkingLevel).toBe('low');
+    const file = first?.piFile();
+
+    // The level is part of the binding: a different level must not reuse an instance created with the
+    // old one, but it must continue the same conversation file.
+    const upgraded = await harness({ replies: [{ kind: 'text', text: 'ok' }], reasoning: true, level: 'high' });
+    await upgraded.runner.runNext('s-1');
+    expect(upgraded.registry.get('s-1')?.session.thinkingLevel).toBe('high');
+    expect(file).toBeDefined();
+  });
 });

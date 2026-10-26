@@ -147,6 +147,35 @@ describe('store pragmas and schema', () => {
     }
   });
 
+  it('opens a v11 database and adds the thinking level to the model rows it already had', () => {
+    const { store, path } = openStore();
+    store.saveModelOverride({
+      scope: 'role',
+      scopeId: 'developer',
+      providerId: 'p',
+      modelId: 'm',
+      expectedRevision: null,
+    });
+    closeStore(store);
+
+    // Emulates the previous release: the column absent, version rolled back, one assignment already
+    // saved. Opening it must keep that assignment and give it the "unset" level, not drop it.
+    const raw = new DatabaseSync(path);
+    raw.exec('ALTER TABLE model_overrides DROP COLUMN thinkingLevel');
+    raw.exec('PRAGMA user_version = 11');
+    raw.close();
+
+    const migrated = new Store({ path, serverEpoch: 1 });
+    stores.push(migrated);
+
+    expect(migrated.pragmas().userVersion).toBe(SCHEMA_VERSION);
+    expect(migrated.getModelOverride('role', 'developer')).toMatchObject({
+      providerId: 'p',
+      modelId: 'm',
+      thinkingLevel: '',
+    });
+  });
+
   it('refuses to open a database that already has two running inputs in one session', () => {
     const { store, path } = openStore();
     seed(store);
