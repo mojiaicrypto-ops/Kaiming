@@ -11,3 +11,8 @@ devagent/config/model.json
 
 # Old workbench data archived before a clean restart.
 .backup-agentdev-data-*/
+
+# Not part of this repository's basis: archived pre-redesign code and local tool settings.
+# AGENTS.md names oldcode/ as "not read, not processed", so it never belongs in history.
+oldcode/
+.kiro/
