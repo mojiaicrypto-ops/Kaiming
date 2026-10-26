@@ -132,6 +132,57 @@ test('a seeded project renders the shell from real server data', async ({ page }
   }
 });
 
+test('a phone can reach every control, and nothing is clipped off the header', async ({ page }) => {
+  // The bugs this locks, all found at 320–390px and all the same mistake — a control with no
+  // guaranteed room in a header that hides its overflow:
+  //  - the project button shrank to 0px, so a phone could not open a project at all;
+  //  - the rail toggle was pushed past the right edge;
+  //  - the toast sat on the first message (top) or on the composer (bottom).
+  const harness: Harness = await startHarness();
+  try {
+    const project = harness.project;
+    if (project === null) throw new Error('the harness did not seed a project');
+    for (const width of [390, 320] as const) {
+      await page.setViewportSize({ width, height: 780 });
+      await pinStorage(page, { project, locale: 'en' });
+      await page.goto(`${harness.baseUrl}/`, { waitUntil: 'domcontentloaded' });
+      await loginThroughUi(page, harness.accessPassword);
+
+      // Every header control is inside the viewport and has a real hit area.
+      const header = await page.evaluate(() => {
+        const ids = ['project-switcher', 'rail-toggle', 'connection'];
+        const rects: Record<string, { x: number; w: number }> = {};
+        for (const id of ids) {
+          const el = document.querySelector(`[data-testid="${id}"]`);
+          const r = el?.getBoundingClientRect();
+          if (r !== undefined) rects[id] = { x: Math.round(r.x), w: Math.round(r.width) };
+        }
+        const nav = Array.from(document.querySelectorAll('.nav a, .nav button')).map((el) => {
+          const r = el.getBoundingClientRect();
+          return Math.round(r.x + r.width);
+        });
+        return { rects, navRight: Math.max(...nav, 0), viewport: window.innerWidth };
+      });
+      const projectButton = header.rects['project-switcher'];
+      expect(projectButton, `${width}px project button`).toBeDefined();
+      expect(projectButton?.w ?? 0, `${width}px: the project button must be tappable`).toBeGreaterThan(20);
+      expect(header.rects['rail-toggle']?.w ?? 0, `${width}px: the rail toggle must have room`).toBeGreaterThan(20);
+      expect(header.navRight, `${width}px: the nav must not run off the edge`).toBeLessThanOrEqual(header.viewport);
+
+      // The project button really opens the project dialog (it did not, at 390px).
+      await page.locator('[data-testid="project-switcher"]').click();
+      await expect(page.locator('[data-testid="project-path"]')).toBeVisible();
+      await page.keyboard.press('Escape');
+
+      // The nav label names its screen at both widths, whether it shows the word or the glyph.
+      const chatLabel = page.locator('.nav a').first();
+      await expect(chatLabel).toHaveAccessibleName(/Chat/);
+    }
+  } finally {
+    await harness.close();
+  }
+});
+
 test('five viewports render without a horizontal overflow', async ({ page }) => {
   const harness: Harness = await startHarness();
   try {

@@ -1986,3 +1986,74 @@ test('a link in a message opens the file it names, never a route that does not e
     await harness.close();
   }
 });
+
+test('every screen is usable on a phone: the viewer, the board and the settings tabs', async ({ page }) => {
+  test.setTimeout(90_000);
+  // The mobile pass found four separate failures, all of the shape "a control with no room":
+  // a zero-width project button, a rail toggle past the right edge, a toast on the first message,
+  // and a shell column that grew with its widest child and carried the header along with it.
+  const harness = await startHarness({ model: [{ kind: 'text', text: '先讨论一下。' }] });
+  const projectPath = harness.project?.projectPath ?? '';
+  mkdirSync(join(projectPath, '.dev/work/t-m/shots'), { recursive: true });
+  writeFileSync(join(projectPath, 'AGENTS.md'), '# rules\n\nKeep it short.\n');
+  writeFileSync(join(projectPath, 'note.md'), '# 说明\n\n一段文字。\n');
+  try {
+    for (const width of [390, 320] as const) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto(harness.url);
+      await loginThroughUi(page, harness.accessPassword);
+
+      const noOverflow = async (label: string): Promise<void> => {
+        const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        expect(overflow, `${label} at ${width}px`).toBeLessThanOrEqual(1);
+      };
+
+      // The project button is reachable at both widths and opens the dialog.
+      await page.locator('[data-testid="project-switcher"]').click();
+      await page.locator('[data-testid="project-path"]').fill(projectPath);
+      await page.locator('[data-testid="project-path"]').press('Enter');
+      await waitForConnected(page);
+      await noOverflow('chat');
+
+      // The rail toggle is on screen, and the sheet it opens is usable.
+      await page.locator('[data-testid="rail-toggle"]').click();
+      await expect(page.locator('.sessions.sheet')).toBeVisible();
+      await page.keyboard.press('Escape');
+
+      // Sending puts the user line above the reply, and the toast does not cover it.
+      await page.locator('[data-testid="composer"]').fill('你好');
+      await page.locator('[data-testid="composer"]').press('Enter');
+      await expect(page.locator('[data-testid="transcript"] article.m.user')).toContainText('你好', { timeout: 15_000 });
+      await expect(page.locator('[data-testid="transcript"] article.m.chief')).toContainText('先讨论一下');
+      await page.screenshot({ path: test.info().outputPath(`phone-${String(width)}-chat.png`) });
+
+      // The file viewer is a full canvas; on a phone its tree sits above the file and the hint
+      // does not name a side.
+      await page.locator('[data-testid="nav-files"]').click();
+      const viewer = page.locator('[data-testid="file-viewer"]');
+      await expect(viewer).toBeVisible();
+      await expect(page.locator('[data-testid="file-path"]')).toHaveText('/');
+      await noOverflow('file viewer');
+      await page.locator('[data-testid="file-entry"]', { hasText: 'note.md' }).click();
+      await expect(page.locator('[data-testid="md-body"]')).toContainText('一段文字');
+      await page.locator('[data-testid="file-close"]').click();
+
+      // The board scrolls one column at a time, and its Tasks row is one line and tappable.
+      await page.locator('.nav a', { hasText: /Requirements|需求/ }).click();
+      await expect(page.locator('[data-testid="tasks-toggle"]')).toBeVisible();
+      await noOverflow('board');
+      const toggleHeight = await page.locator('[data-testid="tasks-toggle"]').evaluate((node) => node.getBoundingClientRect().height);
+      expect(toggleHeight, 'the folded Tasks row is one line').toBeLessThan(56);
+      await page.locator('[data-testid="tasks-toggle"]').click();
+      await expect(page.locator('[data-testid="tasks-toggle"]')).toHaveAttribute('aria-expanded', 'true');
+      await noOverflow('board with tasks open');
+
+      // Settings keeps its three tabs reachable.
+      await page.locator('.nav a', { hasText: /Settings|设置/ }).click();
+      await expect(page.locator('.nav a[aria-current="page"]')).toHaveCount(1);
+      await noOverflow('settings');
+    }
+  } finally {
+    await harness.close();
+  }
+});

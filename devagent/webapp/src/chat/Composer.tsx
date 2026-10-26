@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
+import { useTier } from '../layout/useTier';
 import type { SessionActivity } from '../api/stream';
 
 /** How many images one message may carry (the server refuses more). */
@@ -134,8 +135,16 @@ export function Composer({ busy, canStop, disabled, onSubmit, onUpload, onStop, 
     }
   };
 
+  // The long prompt explains two key combinations; a phone has neither a Shift key nor the room.
+  const tier = useTier();
   const placeholder =
-    busy === 'processing' ? t('chat.composer.busy') : busy === 'queued' ? t('chat.composer.queued') : t('chat.composer.placeholder');
+    busy === 'processing'
+      ? t('chat.composer.busy')
+      : busy === 'queued'
+        ? t('chat.composer.queued')
+        : tier === 'phone'
+          ? t('chat.composer.short')
+          : t('chat.composer.placeholder');
 
   return (
     <form

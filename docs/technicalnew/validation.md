@@ -195,6 +195,8 @@
 | 全套测试（链接与文档） | Passed | 浏览器 48 用例；单测 375（服务端）+ 50（webapp）；两侧 `tsc --noEmit` 无错误；`npm run build` 成功 |
 | 需求页任务区折叠 | Passed | 任务区默认折叠为一行（`data-testid=tasks-toggle`，`aria-expanded=false`），折叠时即可见「共 N 个」与进行中数量，列表 DOM 不渲染；点击后展开，`aria-expanded=true`；刷新与分页移到标题行右侧，不再各占一行（展开后仅两行：标题行 + 任务行）。浏览器用例断言折叠态无 `task-row`、计数与运行态可见、点击后出现；1280px 实测截图核对 |
 | 全套测试（任务区折叠） | Passed | 浏览器 48 用例；单测 375（服务端）+ 50（webapp）；两侧 `tsc --noEmit` 无错误；`npm run build` 成功 |
+| 移动端（320/390px） | Passed | 在 320、390 两档做完整走查（聊天、会话抽屉、文件画布、需求看板、设置），逐屏截图核对。修复 5 个真实缺陷：① `.app` 的隐式栅格列是 `auto`，被看板最宽子元素的 min-content 撑到 355px（视口 320），顶栏随之被推出右边缘 —— 改为 `minmax(0,1fr)` 并把看板列、`.colm` 一并收紧；② 项目切换器在手机上宽度为 0，完全点不到 —— 给可点击下限并让它先于导航收缩（实测修复前 `proj:[36,36]`、rail 在 `x=572` 而视口 390）；③ 顶栏 rail 开关被挤出屏幕，且文案错写为「Chat」—— 改为 `≡` + `aria-label`，导航与开关 `flex: none`；④ Toast 在手机上要么盖住首条消息（贴顶）要么盖住 composer（贴底）—— 改为由 `ToastHost` 的 `lift` 按屏幕给抬升量；⑤ 文件查看器打开文件后多出 Download，把 Esc 推出可见区 —— 头部在手机上换行、路径独占一行。另修：`≤400` 导航标签换图标时 DOM 里文案出现两遍（`sr-only` 未生效于非定位父级），改为单份文字 + `data-glyph` 伪元素，`toHaveText` 恢复为单个词。用例：`smoke.spec.ts`「a phone can reach every control」断言两档下项目按钮宽 >20px、rail 开关可见、导航右缘不越界、项目按钮真的能打开对话框；`acceptance.spec.ts`「every screen is usable on a phone」走完五屏并逐屏断言无横向溢出 |
+| 全套测试（移动端） | Passed | 浏览器 50 用例；单测 375（服务端）+ 50（webapp）；两侧 `tsc --noEmit` 无错误；`npm run build` 成功 |
 | 全套测试（查看器） | Passed | 浏览器 47 用例（含顶栏「文件」入口：未打开项目时禁用、打开后进入根目录、**打开期间只有文件标签 current**、**点击会话标签关闭画布并显示会话**、**目录与文件用字形+尾斜杠+`data-type` 区分**、关闭不改地址）；单测 375（服务端，含新增 7 条字节路由安全用例）+ 43（webapp，含 5 条文件类型判定）；两侧 `tsc --noEmit` 无错误；`npm run build` 成功 |
 
 

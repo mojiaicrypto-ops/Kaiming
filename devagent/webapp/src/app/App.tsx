@@ -305,7 +305,8 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
             }}
           />
         )}
-        <ToastHost />
+        {/* 88px on chat: the composer plus its hint. Everywhere else the toast may sit at the edge. */}
+        <ToastHost lift={route.view === 'chat' ? 88 : 0} />
     </div>
   );
 }

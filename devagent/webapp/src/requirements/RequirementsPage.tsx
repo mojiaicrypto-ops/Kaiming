@@ -72,7 +72,6 @@ export function RequirementsPage({ rpc, projectId, selected, onSelect, onNotice,
     <section className="page">
       <div className="page-h">
         <h1>{t('req.title')}</h1>
-        <span className="f3">{t('req.subtitle')}</span>
         <span className="sp" />
         <button type="button" className="btn ghost" onClick={() => void reload()}>
           {t('common.retry')}
@@ -137,8 +136,8 @@ export function RequirementsPage({ rpc, projectId, selected, onSelect, onNotice,
         >
           <span className="caret" aria-hidden="true">{tasksOpen ? '▾' : '▸'}</span>
           <h2>{t('task.listTitle')}</h2>
-          <span className="f3">
-            {tasks.length === 0 ? t('task.listEmpty') : t('task.listCount', { count: tasks.length })}
+          <span className="f3 tasks-count">
+            {tasksOpen || tasks.length > 0 ? t('task.listCount', { count: tasks.length }) : t('task.listEmpty')}
           </span>
           {/* Running is stated even when folded: it is the one fact that makes opening it urgent. */}
           {!tasksOpen && runningTasks > 0 && (

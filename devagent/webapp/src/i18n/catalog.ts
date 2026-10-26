@@ -80,6 +80,7 @@ const en = {
   'chat.empty.noProject': 'Open a project to start a session.',
   'chat.composer': 'Message',
   'chat.composer.placeholder': 'Message the chief — Enter to send, Shift+Enter for a new line',
+  'chat.composer.short': 'Message the chief…',
   'chat.composer.busy': 'The chief is working…',
   'chat.attach': 'Attach images',
   'chat.attach.remove': 'Remove this image',
@@ -250,7 +251,7 @@ const en = {
   'files.more': 'Show more',
   'files.download': 'Download',
   'files.tree': 'Project tree',
-  'files.pick': 'Pick a file on the left to read it.',
+  'files.pick': 'Pick a file in the tree to read it.',
   'files.noPreview': 'No preview for .{ext} — download it to open with the right tool.',
   'files.lines': '{count} lines',
   'files.openInViewer': 'Open in the file viewer',
@@ -283,7 +284,6 @@ const en = {
 
   // ---------- requirements ----------
   'req.title': 'Requirements',
-  'req.subtitle': 'A proposal is designed first; an implementation requirement can be built directly',
   'req.col.proposal': 'Proposal',
   'req.col.todo': 'To build',
   'req.col.doing': 'In progress',
@@ -445,6 +445,7 @@ const en = {
   'aria.question': 'Waiting for your answer: {title}',
   'aria.memberDrawer': 'Specialist session',
   'aria.requirementDrawer': 'Requirement detail',
+  'aria.rail': 'Sessions',
   'aria.dialog': 'Dialog',
 } as const;
 
@@ -512,6 +513,7 @@ export const zhCN: Record<MessageKey, string> = {
   'chat.empty.noProject': '先打开一个项目才能开始会话。',
   'chat.composer': '消息',
   'chat.composer.placeholder': '给主管发消息：Enter 发送，Shift+Enter 换行',
+  'chat.composer.short': '给主管发消息…',
   'chat.composer.busy': '主管正在处理…',
   'chat.composer.queued': '已进入队列，当前步骤结束后执行',
   'chat.attach': '添加图片',
@@ -680,7 +682,7 @@ export const zhCN: Record<MessageKey, string> = {
   'files.more': '显示更多',
   'files.download': '下载',
   'files.tree': '项目文件树',
-  'files.pick': '在左侧选一个文件查看内容。',
+  'files.pick': '在文件树里选一个文件查看内容。',
   'files.noPreview': '·{ext} 不能预览 —— 下载后用对应的工具打开。',
   'files.lines': '{count} 行',
   'files.openInViewer': '在文件查看器里打开',
@@ -713,7 +715,6 @@ export const zhCN: Record<MessageKey, string> = {
 
   // ---------- requirements ----------
   'req.title': '需求',
-  'req.subtitle': '提案先设计，实施需求可以直接实现',
   'req.col.proposal': '提案',
   'req.col.todo': '待实现',
   'req.col.doing': '进行中',
@@ -873,6 +874,7 @@ export const zhCN: Record<MessageKey, string> = {
   'aria.question': '等你回答：{title}',
   'aria.memberDrawer': '专业会话',
   'aria.requirementDrawer': '需求详情',
+  'aria.rail': '会话列表',
   'aria.dialog': '对话框',
 };
 

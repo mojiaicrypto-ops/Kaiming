@@ -96,3 +96,11 @@
 ### 附 D · 文档渲染与链接解析
 
 契约从「一律源码」改为「代码一律源码，`.md` 是唯一按渲染显示的类别」，旧用例（要求报告按源码显示）按其编码的旧契约改写。链接解析规则见表格第 7 行；顺带把路径/地址助手抽到 `files/paths.ts`。
+
+## 第九轮 · 移动端可用性修复 + 需求页副标题移除
+
+**移除副标题**：需求页头部的 `A proposal is designed first; an implementation requirement can be built directly` 删除（`RequirementsPage` 与双侧 i18n 键一并移除，无残留）。
+
+**移动端**：320/390 两档完整走查，修掉 5 个真实缺陷（外壳栅格 `auto` 列被内容撑宽、项目按钮宽 0、rail 开关在屏幕外、Toast 盖住首条消息/输入框、查看器 Esc 被 Download 挤出），并补两条用例锁定（`a phone can reach every control`、`every screen is usable on a phone`）。第一条做了「撤销修复 → 失败 → 恢复 → 通过」的闭环验证。
+
+**形态重做搁置**：用户判断当前窄屏是「压缩版、凑活」，要求按响应式最佳实践改成移动端形态（底部 Tab Bar / 全屏会话列表 / 顶栏只留项目与连接）。本轮按用户指示**先记录不动手**，已落 [缺口登记 M1–M5](../../docs/technicalnew/gap-register.md)，并在 [UI 契约 U2](../../docs/technicalnew/ui-design.md) 指向该条目。实施前需先出 320/390 两档形态稿核对。

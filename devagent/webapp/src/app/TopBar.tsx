@@ -27,10 +27,16 @@ export interface TopBarProps {
   readonly onNavigate: (path: string) => void;
 }
 
-const NAV: ReadonlyArray<{ view: Route['view']; path: string; key: 'nav.chat' | 'nav.requirements' | 'nav.settings' }> = [
-  { view: 'chat', path: '/', key: 'nav.chat' },
-  { view: 'requirements', path: '/requirements', key: 'nav.requirements' },
-  { view: 'settings', path: '/settings/providers', key: 'nav.settings' },
+const NAV: ReadonlyArray<{
+  view: Route['view'];
+  path: string;
+  key: 'nav.chat' | 'nav.requirements' | 'nav.settings';
+  /** The phone form. Four words do not fit 320px; the glyph does, and the name stays in `title`. */
+  glyph: string;
+}> = [
+  { view: 'chat', path: '/', key: 'nav.chat', glyph: '❯' },
+  { view: 'requirements', path: '/requirements', key: 'nav.requirements', glyph: '▤' },
+  { view: 'settings', path: '/settings/providers', key: 'nav.settings', glyph: '⚙' },
 ];
 
 /**
@@ -79,7 +85,11 @@ export function TopBar({ route, project, status, pendingQuestions, onOpenProject
               onNavigate(entry.path);
             }}
           >
-            {t(entry.key)}
+            {/* One word, two shapes: on a phone the word is swapped for its glyph by CSS, so the
+                accessible name is always the word and nothing appears twice in the DOM. */}
+            <span className="nav-word" data-glyph={entry.glyph}>
+              {t(entry.key)}
+            </span>
             {entry.view === 'chat' && pendingQuestions > 0 && <span className="n decide">◆{pendingQuestions}</span>}
           </a>
         ))}
@@ -95,7 +105,9 @@ export function TopBar({ route, project, status, pendingQuestions, onOpenProject
           data-testid="nav-files"
           title={project === null ? t('files.needProject') : t('files.browse')}
         >
-          {t('nav.files')}
+          <span className="nav-word" data-glyph="▦">
+            {t('nav.files')}
+          </span>
         </button>
       </nav>
       <span className="sp" />
@@ -106,8 +118,13 @@ export function TopBar({ route, project, status, pendingQuestions, onOpenProject
           aria-expanded={railOpen}
           onClick={onOpenRail}
           data-testid="rail-toggle"
+          title={t('aria.rail')}
         >
-          {t('nav.chat')}
+          {/* It opens the session list, so it says so: the nav label "Chat" belonged to a different
+              control and read as a second, identical nav entry on a phone. The glyph is the
+              visible form, the label is the accessible name. */}
+          <span aria-hidden="true">≡</span>
+          <span className="sr-only">{t('aria.rail')}</span>
         </button>
       )}
       {/* The connection is a state, and the shell's tests read it as one. The word already carries
