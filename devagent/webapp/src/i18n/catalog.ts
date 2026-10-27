@@ -412,6 +412,13 @@ const en = {
   'settings.modelAliasHint':
     'A gateway often names models its own way. Name the catalogue model this id really is, and its context window, output cap and reasoning support are used instead of 128k/16k/no reasoning.',
   'settings.modelAliasUnknown': 'not in the catalogue — check the name, or tick the box instead',
+  'settings.modelIdPlaceholder': 'leave empty to use the model name',
+  'settings.modelIdFromPicker': 'from the catalogue — click to give this endpoint its own id',
+  'settings.modelPickerPlaceholder': 'search Pi\'s models, e.g. glm, d4f, claude-opus',
+  'settings.modelPickerHint':
+    'Pick the model from Pi\'s own catalogue: its protocol, reasoning support and effort levels come with it. Type part of a name — matching is fuzzy.',
+  'settings.modelPickerEmpty': 'no model matches — try fewer characters',
+  'settings.modelPickerUnknown': 'not in the catalogue — a saved id the picker does not know',
   'settings.modelFactsCtx': 'ctx',
   'settings.modelFactsOut': 'out',
   'settings.modelAdd': '+ Add model',
@@ -866,6 +873,13 @@ export const zhCN: Record<MessageKey, string> = {
   'settings.modelAliasHint':
     '网关常用自己的名字。填上这个 id 实际对应的目录模型，上下文窗口、输出上限与推理能力就用真模型的，而不是 128k/16k/不支持推理。',
   'settings.modelAliasUnknown': '目录里没有这个名字——检查拼写，或改用勾选',
+  'settings.modelIdPlaceholder': '留空则用模型原名',
+  'settings.modelIdFromPicker': '来自目录——点击可改成该端点自己的名字',
+  'settings.modelPickerPlaceholder': '搜索 Pi 的模型，如 glm、d4f、claude-opus',
+  'settings.modelPickerHint':
+    '从 Pi 自己的模型目录里选：协议、是否支持推理、可选的思考等级都由目录给出。输入名称的一部分即可，支持模糊匹配。',
+  'settings.modelPickerEmpty': '没有匹配的模型——少输入几个字符试试',
+  'settings.modelPickerUnknown': '不在模型目录里——这是已保存、但选择器不认识的名字',
   'settings.modelFactsCtx': '上下文',
   'settings.modelFactsOut': '输出',
   'settings.modelAdd': '+ 添加模型',

@@ -40,6 +40,11 @@ export interface ProviderModelDefinition {
   readonly id: string;
   readonly name: string;
   readonly reasoning?: boolean;
+  /**
+   * The catalogue model this id really is. Pi loads its own vendors by baseUrl, so a model resolved
+   * from the catalogue also carries the api it really speaks (recorded here, not in the database).
+   */
+  readonly upstream?: { readonly providerId: string; readonly modelId: string; readonly api?: string };
   /** Resolved from `baseModel`: the catalog's own numbers, never the operator's guesses. */
   readonly thinkingLevelMap?: Readonly<Record<string, string | null>>;
   readonly contextWindow?: number;
@@ -91,6 +96,22 @@ export function writeProvider(agentDir: string, definition: ProviderDefinition):
   if (apiKey === undefined || apiKey === '') {
     return { ok: false, message: 'apiKey is required for a new provider' };
   }
+  /*
+   * An id resolved from the catalogue speaks the vendor's own protocol (Anthropic messages, Bedrock,
+   * Google…), and Pi keys its built-in vendors off the model's `api`/`baseUrl`. A provider the operator
+   * typed in therefore keeps its own `baseUrl`+`api` for the endpoint, and each model carries the
+   * vendor it really is: `api` selects the wire format, `baseUrl` keeps Pi from overriding the
+   * endpoint the user typed. Models nobody resolved stay plain entries under the provider's api.
+   */
+  const vendorOf = (model: ProviderModelDefinition): Record<string, unknown> => {
+    const vendor = model.upstream;
+    if (vendor === undefined) return {};
+    return {
+      provider: vendor.providerId,
+      ...(vendor.api !== undefined ? { api: vendor.api } : {}),
+      baseUrl: definition.baseUrl,
+    };
+  };
   providers[definition.providerId] = {
     baseUrl: definition.baseUrl,
     ...(definition.api !== undefined ? { api: definition.api } : {}),
@@ -100,6 +121,7 @@ export function writeProvider(agentDir: string, definition: ProviderDefinition):
       id: model.id,
       name: model.name,
       input: [...(model.input ?? definition.input ?? ['text', 'image'])],
+      ...vendorOf(model),
       ...(model.reasoning === true ? { reasoning: true } : {}),
       ...(model.thinkingLevelMap !== undefined ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
       ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),

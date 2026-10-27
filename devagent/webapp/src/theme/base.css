@@ -1819,38 +1819,90 @@ details.fold > summary.tline:hover {
 }
 .model-row {
   display: grid;
-  /* id · real model · (facts or the reasoning box) · remove */
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) auto auto;
-  align-items: center;
+  /* endpoint id · model picker · remove; the picker takes the width, the id only needs a name. */
+  grid-template-columns: minmax(0, 0.72fr) minmax(0, 2.4fr) auto;
+  align-items: start;
   gap: var(--s2);
-}
-.model-row .inp.alias {
-  font-family: var(--mono);
 }
 .model-row .meta {
   font-size: var(--fs-12);
   color: var(--fg-3);
-  white-space: nowrap;
-}
-.model-row .meta.warn {
-  color: var(--warning);
 }
 .model-row .inp {
   font-family: var(--mono);
 }
-.model-row .chk {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: var(--fs-12);
-  color: var(--fg-2);
-  white-space: nowrap;
-  cursor: pointer;
-  user-select: none;
+/* The picker: a text input over an anchored list, so the row never reflows as matches change. */
+.picker {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
-.model-row .chk input {
-  accent-color: var(--accent);
+.picker .inp {
+  font-family: var(--mono);
+  width: 100%;
+}
+.picker .meta {
+  font-size: var(--fs-12);
+  color: var(--fg-3);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-list {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 280px;
+  overflow-y: auto;
   margin: 0;
+  padding: 2px;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 32%);
+}
+.picker-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  padding: 3px var(--s2);
+  font-size: var(--fs-12);
+  font-family: var(--mono);
+  cursor: pointer;
+}
+.picker-row.on {
+  background: var(--accent);
+  color: var(--bg);
+}
+.picker-row .pk-id {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-row .pk-meta {
+  flex: 0 1 auto;
+  min-width: 0;
+  text-align: right;
+  color: var(--fg-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-row.on .pk-meta {
+  color: var(--bg);
+  opacity: 0.8;
+}
+.picker-empty {
+  padding: var(--s2);
+  font-size: var(--fs-12);
+  color: var(--fg-3);
 }
 .model-row .btn.x {
   padding: 0 6px;

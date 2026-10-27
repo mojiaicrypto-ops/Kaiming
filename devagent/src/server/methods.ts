@@ -35,10 +35,26 @@ export interface CoreMethodsOptions {
   readonly modelLevels?: (selection: { providerId: string; modelId: string }) => Promise<readonly string[]>;
   /** The catalogue facts of one model; `undefined` when the catalogue does not know it. */
   readonly modelFacts?: (selection: { providerId: string; modelId: string }) => Promise<ModelFacts | undefined>;
-  /** Every model the catalogue knows, for the alias picker on the Providers page. */
-  readonly catalogModels?: () => Promise<
-    readonly { providerId: string; modelId: string; reasoning: boolean; contextWindow: number; maxTokens: number }[]
-  >;
+  /**
+   * Every chat model the catalogue knows, for the model picker. Each entry carries the protocol it
+   * really speaks and the levels Pi accepts for it, so choosing a model is one control instead of an
+   * alias plus a checkbox nobody can verify.
+   */
+  readonly catalogModels?: () => Promise<readonly CatalogModelFacts[]>;
+}
+
+/** One catalogue model as the picker shows it. */
+export interface CatalogModelFacts {
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly name: string;
+  /** The `api` Pi would use for this model (`anthropic-messages`, `openai-completions`, …). */
+  readonly api: string;
+  readonly reasoning: boolean;
+  /** Exactly `supportedThinkingLevels`: the picker never invents a level. */
+  readonly thinkingLevels: readonly string[];
+  readonly contextWindow: number;
+  readonly maxTokens: number;
 }
 
 /**
@@ -103,8 +119,10 @@ async function readConfig(options: CoreMethodsOptions, roleId: string, projectId
         const models = JSON.parse(provider.models) as Array<{
           id: string;
           name: string;
+          upstream?: { providerId: string; modelId: string; api?: string };
           reasoning?: boolean;
           baseModel?: { providerId: string; modelId: string };
+          thinkingLevelMap?: Readonly<Record<string, string | null>>;
           contextWindow?: number;
           maxTokens?: number;
         }>;
@@ -146,18 +164,21 @@ export function registerCoreMethods(router: RpcRouter, options: CoreMethodsOptio
     },
   });
 
-  // The alias picker needs the catalogue's names. It is its own read because the list is long and only
-  // the provider editor needs it: folding it into config.get would ship it on every settings row.
+  // The model picker needs the catalogue. It is its own read because the list is long and only the
+  // provider editor needs it: folding it into config.get would ship it on every settings row.
   router.register('config.catalog', {
     write: false,
     run: async (): Promise<unknown> => {
       const models = (await options.catalogModels?.()) ?? [];
-      const byProvider = new Map<string, Array<{ id: string; reasoning: boolean; contextWindow: number; maxTokens: number }>>();
+      const byProvider = new Map<string, Array<Omit<CatalogModelFacts, 'providerId'>>>();
       for (const model of models) {
         const list = byProvider.get(model.providerId) ?? [];
         list.push({
-          id: model.modelId,
+          modelId: model.modelId,
+          name: model.name,
+          api: model.api,
           reasoning: model.reasoning,
+          thinkingLevels: model.thinkingLevels,
           contextWindow: model.contextWindow,
           maxTokens: model.maxTokens,
         });
@@ -315,9 +336,21 @@ async function saveProvider(
   if (modelsRaw === undefined || modelsRaw.length === 0) {
     throw new RpcError('INVALID_ARGUMENT', 'models must be a non-empty list of { id, name }', { providerId });
   }
+  /*
+   * Two ways to declare a model, one of them now the ordinary one:
+   *
+   * - `catalog` names a catalogue model outright (the picker). The id defaults to the catalogue's own
+   *   name, and reasoning, the thinking-level map, both limits and the input modalities are copied
+   *   from it — there is nothing to tick by hand, so nothing can be ticked wrong.
+   * - `baseModel` keeps working for an id a gateway invented ("group/auto-…"): same borrowed facts,
+   *   but the id stays the endpoint's own.
+   *
+   * Either way the catalogue is the only source of the facts; the operator only names the model.
+   */
   const models: Array<{
     id: string;
     name: string;
+    upstream?: { providerId: string; modelId: string; api: string };
     reasoning: boolean;
     baseModel?: { providerId: string; modelId: string };
     contextWindow?: number;
@@ -327,22 +360,37 @@ async function saveProvider(
   }> = [];
   for (const entry of modelsRaw) {
     const model = entry as Record<string, unknown>;
-    const id = typeof model['id'] === 'string' ? model['id'] : '';
+    const chosen = await resolveAlias(options, model['catalog'] ?? undefined, providerId);
+    const chosenId = typeof model['id'] === 'string' ? model['id'].trim() : '';
+    const id = chosenId !== '' ? chosenId : (chosen?.modelId ?? '');
     if (id === '') {
       throw new RpcError('INVALID_ARGUMENT', 'every model needs an id', { providerId });
     }
-    const alias = await resolveAlias(options, model['baseModel'], providerId);
+    const named = await resolveAlias(options, model['baseModel'], providerId);
+    if (chosen !== undefined && named !== undefined) {
+      throw new RpcError('INVALID_ARGUMENT', 'name a model with catalog or baseModel, not both', {
+        providerId,
+        id,
+      });
+    }
+    const facts = chosen ?? named;
     models.push({
       id,
       name: typeof model['name'] === 'string' && model['name'] !== '' ? model['name'] : id,
-      // The catalogue knows nothing about an endpoint the operator typed in, so either the alias
-      // points at the real model (facts borrowed from it) or the operator declares reasoning itself.
-      reasoning: alias?.reasoning === true || model['reasoning'] === true,
-      ...(alias !== undefined ? { baseModel: { providerId: alias.providerId, modelId: alias.modelId } } : {}),
-      ...(alias?.contextWindow !== undefined ? { contextWindow: alias.contextWindow } : {}),
-      ...(alias?.maxTokens !== undefined ? { maxTokens: alias.maxTokens } : {}),
-      ...(alias?.thinkingLevelMap !== undefined ? { thinkingLevelMap: alias.thinkingLevelMap } : {}),
-      ...(alias?.input !== undefined ? { input: alias.input } : {}),
+      // Pi routes an id that resolves to a catalogue model through that model's own protocol. Naming
+      // the model through `baseModel` gets the same treatment: borrowing the facts while keeping the
+      // endpoint's wire format would describe a model this id is not.
+      ...(facts !== undefined
+        ? { upstream: { providerId: facts.providerId, modelId: facts.modelId, api: facts.api ?? api } }
+        : {}),
+      // The catalogue knows nothing about an endpoint the operator typed in, so either the model is
+      // resolved (facts borrowed from it) or the operator declares reasoning itself.
+      reasoning: facts?.reasoning === true || model['reasoning'] === true,
+      ...(facts !== undefined ? { baseModel: { providerId: facts.providerId, modelId: facts.modelId } } : {}),
+      ...(facts?.contextWindow !== undefined ? { contextWindow: facts.contextWindow } : {}),
+      ...(facts?.maxTokens !== undefined ? { maxTokens: facts.maxTokens } : {}),
+      ...(facts?.thinkingLevelMap !== undefined ? { thinkingLevelMap: facts.thinkingLevelMap } : {}),
+      ...(facts?.input !== undefined ? { input: facts.input } : {}),
     });
   }
   const apiKey = typeof value['apiKey'] === 'string' && value['apiKey'] !== '' ? value['apiKey'] : undefined;
@@ -352,7 +400,18 @@ async function saveProvider(
     api,
     ...(name !== undefined ? { name } : {}),
     ...(apiKey !== undefined ? { apiKey } : {}),
-    models,
+    // `models.json` needs the vendor each id really is; the database row only records the identity the
+    // configuration page shows back, so the two are mapped separately instead of one blob twice.
+    models: models.map((model) => ({
+      id: model.id,
+      name: model.name,
+      ...(model.upstream !== undefined ? { upstream: model.upstream } : {}),
+      ...(model.reasoning ? { reasoning: true } : {}),
+      ...(model.thinkingLevelMap !== undefined ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+      ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+      ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
+      ...(model.input !== undefined ? { input: model.input } : {}),
+    })),
   });
   if (!written.ok) {
     throw new RpcError('INVALID_ARGUMENT', written.message, { providerId });
@@ -362,7 +421,13 @@ async function saveProvider(
     baseUrl,
     api,
     ...(name !== undefined ? { name } : {}),
-    models,
+    models: models.map((model) => ({
+      id: model.id,
+      name: model.name,
+      ...(model.upstream !== undefined ? { upstream: `${model.upstream.providerId}/${model.upstream.modelId}` } : {}),
+      reasoning: model.reasoning,
+      ...(model.thinkingLevelMap !== undefined ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+    })),
     credentialRef: written.credentialRef,
     expectedRevision,
   });

@@ -13,7 +13,7 @@ import { createStubEnv } from '../spikes/harness/pi-env.ts';
 import { AuthService, CSRF_HEADER, SESSION_COOKIE } from '../src/server/auth.ts';
 import { RpcRouter } from '../src/server/rpc.ts';
 import { createWorkbenchServer } from '../src/server/http.ts';
-import { registerCoreMethods } from '../src/server/methods.ts';
+import { registerCoreMethods, type CatalogModelFacts } from '../src/server/methods.ts';
 import { resolveStoredConfig, type RuntimeDefaults } from '../src/runtime/config.ts';
 import type { ModelFacts } from '../src/runtime/pi-runtime.ts';
 
@@ -38,9 +38,7 @@ async function harness(
   options: {
     modelLevels?: (selection: { providerId: string; modelId: string }) => Promise<readonly string[]>;
     modelFacts?: (selection: { providerId: string; modelId: string }) => Promise<ModelFacts | undefined>;
-    catalogModels?: () => Promise<
-      readonly { providerId: string; modelId: string; reasoning: boolean; contextWindow: number; maxTokens: number }[]
-    >;
+    catalogModels?: () => Promise<readonly CatalogModelFacts[]>;
   } = {},
 ): Promise<Harness> {
   const root = mkdtempSync(join(tmpdir(), 'devagent-config-'));
@@ -650,19 +648,43 @@ describe('thinking level, saved with the model it belongs to', () => {
 
 describe('a gateway alias borrows the real model\'s facts', () => {
   /** One catalogue: a reasoning model with real limits, and a small one. */
-  const catalog = [
-    { providerId: 'zai', modelId: 'glm-5-3', reasoning: true, contextWindow: 200_000, maxTokens: 128_000 },
+  const entry = (
+    providerId: string,
+    modelId: string,
+    reasoning: boolean,
+    api = 'openai-completions',
+  ): CatalogModelFacts => ({
+    providerId,
+    modelId,
+    name: modelId,
+    api,
+    reasoning,
+    thinkingLevels: reasoning ? ['off', 'low', 'high'] : ['off'],
+    contextWindow: reasoning ? 200_000 : 128_000,
+    maxTokens: reasoning ? 128_000 : 16_384,
+  });
+  const catalog: readonly CatalogModelFacts[] = [
+    entry('zai', 'glm-5-3', true),
     // The same id on a second provider: a bare name is then ambiguous.
-    { providerId: 'zai-cn', modelId: 'glm-5-3', reasoning: true, contextWindow: 200_000, maxTokens: 128_000 },
-    { providerId: 'baseten', modelId: 'zai-org/GLM-5.3', reasoning: true, contextWindow: 200_000, maxTokens: 128_000 },
-    { providerId: 'openai', modelId: 'gpt-4o', reasoning: false, contextWindow: 128_000, maxTokens: 16_384 },
+    entry('zai-cn', 'glm-5-3', true),
+    entry('baseten', 'zai-org/GLM-5.3', true),
+    entry('openai', 'gpt-4o', false),
   ];
   const facts =
     (levelMap: Readonly<Record<string, string | null>> = {}) =>
     async (selection: { providerId: string; modelId: string }): Promise<ModelFacts | undefined> => {
-      const entry = catalog.find((row) => row.providerId === selection.providerId && row.modelId === selection.modelId);
-      if (entry === undefined) return undefined;
-      return { ...entry, thinkingLevelMap: levelMap, input: ['text', 'image'] };
+      const found = catalog.find((row) => row.providerId === selection.providerId && row.modelId === selection.modelId);
+      if (found === undefined) return undefined;
+      return {
+        providerId: found.providerId,
+        modelId: found.modelId,
+        api: found.api,
+        reasoning: found.reasoning,
+        contextWindow: found.contextWindow,
+        maxTokens: found.maxTokens,
+        thinkingLevelMap: levelMap,
+        input: ['text', 'image'],
+      };
     };
   const gateway = (models: unknown[]): Record<string, unknown> => ({
     kind: 'provider',
@@ -698,14 +720,15 @@ describe('a gateway alias borrows the real model\'s facts', () => {
       thinkingLevelMap: { high: 'high' },
     });
 
-    // The page shows the mapping it saved, so the operator can see the alias took effect.
-    const read = resultOf<{ providers: Array<{ models: Array<{ id: string; baseModel?: { providerId: string; modelId: string }; contextWindow?: number }> }> }>(
-      (await h.call('config.get', {})).body,
-    );
+    // The page shows the mapping it saved, so the operator can see the alias took effect. The copied
+    // numbers live in models.json (asserted above); the row keeps the identity and the declaration.
+    const read = resultOf<{
+      providers: Array<{ models: Array<{ id: string; upstream?: string; reasoning: boolean }> }>;
+    }>((await h.call('config.get', {})).body);
     expect(read.providers[0]?.models[0]).toMatchObject({
       id: 'auto-glm-5-3',
-      baseModel: { providerId: 'zai', modelId: 'glm-5-3' },
-      contextWindow: 200_000,
+      upstream: 'zai/glm-5-3',
+      reasoning: true,
     });
   });
 
@@ -767,13 +790,12 @@ describe('a gateway alias borrows the real model\'s facts', () => {
       modelFacts: async (selection) => ({
         providerId: selection.providerId,
         modelId: selection.modelId,
+        api: 'openai-completions',
         reasoning: false,
         contextWindow: 128_000,
         maxTokens: 16_384,
       }),
-      catalogModels: async () => [
-        { providerId: 'my-gateway', modelId: 'auto-model', reasoning: false, contextWindow: 128_000, maxTokens: 16_384 },
-      ],
+      catalogModels: async () => [entry('my-gateway', 'auto-model', false)],
     });
 
     const refused = await h.call('config.save', {
@@ -789,12 +811,17 @@ describe('a gateway alias borrows the real model\'s facts', () => {
   it('serves the catalogue for the picker, grouped by provider', async () => {
     const h = await harness({ catalogModels: async () => catalog });
 
-    const read = resultOf<{ providers: Array<{ providerId: string; models: Array<{ id: string; contextWindow: number }> }>; count: number }>(
-      (await h.call('config.catalog', {})).body,
-    );
+    const read = resultOf<{
+      providers: Array<{ providerId: string; models: Array<CatalogModelFacts> }>;
+      count: number;
+    }>((await h.call('config.catalog', {})).body);
     expect(read.count).toBe(4);
-    expect(read.providers.map((entry) => entry.providerId)).toEqual(
+    expect(read.providers.map((row) => row.providerId)).toEqual(
       expect.arrayContaining(['zai', 'zai-cn', 'baseten', 'openai']),
     );
+    // The picker needs the levels too: choosing a model then asking "does it reason?" is a question
+    // the catalogue already answers.
+    const glm = read.providers.find((row) => row.providerId === 'zai')?.models[0];
+    expect(glm).toMatchObject({ modelId: 'glm-5-3', api: 'openai-completions', thinkingLevels: ['off', 'low', 'high'] });
   });
 });

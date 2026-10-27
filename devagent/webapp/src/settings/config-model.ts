@@ -13,17 +13,24 @@ export interface ProviderModel {
    * facts below are copied from the real model instead of Pi's fallback (128k context, 16k output).
    */
   readonly baseModel?: { readonly providerId: string; readonly modelId: string };
+  /** `provider/model` of the catalogue model this entry is; the facts were copied from it. */
+  readonly upstream?: string;
   readonly contextWindow?: number;
   readonly maxTokens?: number;
   /** What Pi would accept for this model; the page renders these, it never keeps its own list. */
   readonly thinkingLevels?: readonly string[];
 }
 
-/** One catalogue name the alias picker offers. */
+/** One catalogue model the picker offers, described completely enough to be chosen in one click. */
 export interface CatalogModel {
   readonly providerId: string;
   readonly id: string;
+  readonly name: string;
+  /** The `api` the model really speaks; an endpoint id that resolves to it uses that protocol. */
+  readonly api: string;
   readonly reasoning: boolean;
+  /** Exactly the levels Pi accepts; the settings page never keeps a second list. */
+  readonly thinkingLevels: readonly string[];
   readonly contextWindow: number;
   readonly maxTokens: number;
 }
@@ -98,8 +105,8 @@ export function useRoleConfigs(rpc: RpcClient, projectId: string | undefined) {
 }
 
 /**
- * The catalogue's model names, read once for the alias picker. It is a long list (order of a thousand
- * entries), so it is its own call: every settings row would otherwise carry it.
+ * The catalogue's models, read once for the picker. It is a long list (order of a thousand entries), so
+ * it is its own call: every settings row would otherwise carry it.
  */
 export function useCatalog(rpc: RpcClient) {
   const [models, setModels] = useState<readonly CatalogModel[]>([]);
@@ -110,7 +117,15 @@ export function useCatalog(rpc: RpcClient) {
       .call<{
         providers: Array<{
           providerId: string;
-          models: Array<{ id: string; reasoning: boolean; contextWindow: number; maxTokens: number }>;
+          models: Array<{
+            modelId: string;
+            name: string;
+            api: string;
+            reasoning: boolean;
+            thinkingLevels: readonly string[];
+            contextWindow: number;
+            maxTokens: number;
+          }>;
         }>;
       }>('config.catalog', {})
       .then((read) => {
@@ -119,8 +134,11 @@ export function useCatalog(rpc: RpcClient) {
           read.providers.flatMap((provider) =>
             provider.models.map((model) => ({
               providerId: provider.providerId,
-              id: model.id,
+              id: model.modelId,
+              name: model.name,
+              api: model.api,
               reasoning: model.reasoning,
+              thinkingLevels: model.thinkingLevels,
               contextWindow: model.contextWindow,
               maxTokens: model.maxTokens,
             })),

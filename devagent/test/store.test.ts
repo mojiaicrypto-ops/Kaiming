@@ -87,6 +87,8 @@ describe('store pragmas and schema', () => {
   });
 
   it('migrates a v1 database by adding the P2 columns', () => {
+    // A database newer than v1 already has every later column, so the chain beyond v1 is a no-op here;
+    // what the test proves is that the whole ladder runs and lands on the current version.
     const { store, path } = openStore();
     seed(store);
     accept(store);

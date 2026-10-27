@@ -1556,17 +1556,28 @@ test('a gateway alias can name the real model, and the effort follows it', async
     const catalog = await page.evaluate(async () => {
       const handle = (window as unknown as { __agentdev: { rpc: { call: (m: string, p?: unknown) => Promise<unknown> } } }).__agentdev;
       const read = (await handle.rpc.call('config.catalog', {})) as {
-        providers: Array<{ providerId: string; models: Array<{ id: string; reasoning: boolean; contextWindow: number }> }>;
+        providers: Array<{
+          providerId: string;
+          models: Array<{
+            modelId: string;
+            reasoning: boolean;
+            thinkingLevels: string[];
+            contextWindow: number;
+          }>;
+        }>;
       };
       const reasoning = read.providers
         .flatMap((provider) => provider.models.map((model) => ({ providerId: provider.providerId, ...model })))
-        .filter((model) => model.reasoning && !model.id.includes(' ') && model.contextWindow > 0);
+        .filter((model) => model.reasoning && !model.modelId.includes(' ') && model.contextWindow > 0);
       return { count: reasoning.length, sample: reasoning.find((model) => model.providerId === 'anthropic') ?? reasoning[0] };
     });
     expect(catalog.count).toBeGreaterThan(0);
     const real = catalog.sample;
     expect(real).toBeDefined();
-    const alias = `${String(real?.providerId)}/${String(real?.id)}`;
+    const alias = `${String(real?.providerId)}/${String(real?.modelId)}`;
+    // The fuzzy match is what the user types: a few characters from the middle of the name, not the
+    // whole "provider/model" string the picker stores.
+    const needle = String(real?.modelId).replace(/[^a-z0-9]/gi, '').slice(-6);
 
     await page.goto(`${harness.baseUrl}/settings/providers`, { waitUntil: 'domcontentloaded' });
     await page.locator('[data-testid="add-provider"]').click();
@@ -1574,10 +1585,17 @@ test('a gateway alias can name the real model, and the effort follows it', async
     await page.locator('[data-testid="provider-base"]').fill('http://127.0.0.1:9/v1');
     await page.locator('[data-testid="provider-api"]').selectOption('openai-completions');
     await page.locator('[data-testid="provider-key"]').fill('gw-key');
+    // A gateway names its models its own way, then picks what they really are. The typed id stays;
+    // everything the row needs to say about the model comes from the catalogue.
     await page.locator('[data-testid="provider-model-id"]').first().fill('auto-model');
-    await page.locator('[data-testid="provider-model-alias"]').first().fill(alias);
-    // The row says what it resolved to before anything is saved: the box is not a second source.
-    await expect(page.locator('[data-testid="provider-model-alias-facts"]').first()).toContainText(/reason|推理/i);
+    await page.locator('[data-testid="provider-model-picker"]').first().fill(needle.toLowerCase());
+    // One click on the row the list shows: the options are ordered, and comparing their ids is the
+    // picker's business, not this test's.
+    await page.locator('[data-testid="provider-model-option"]').filter({ hasText: alias }).first().click();
+    // The id the operator typed stays — an online pick never renames the endpoint's model.
+    await expect(page.locator('[data-testid="provider-model-id"]').first()).toHaveValue('auto-model');
+    // The row says what it resolved to before anything is saved: the picker is not a second source.
+    await expect(page.locator('[data-testid="provider-model-alias-facts"]').first()).toContainText(/\//);
     await expect(page.locator('[data-testid="provider-model-reasoning"]')).toHaveCount(0);
 
     await page.locator('[data-testid="provider-save"]').click();
@@ -1588,15 +1606,16 @@ test('a gateway alias can name the real model, and the effort follows it', async
       const read = (await handle.rpc.call('config.get', {})) as {
         providers: Array<{
           providerId: string;
-          models: Array<{ id: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number; thinkingLevels: string[] }>;
+          models: Array<{ id: string; reasoning?: boolean; thinkingLevels: string[] }>;
         }>;
       };
       return read.providers.find((provider) => provider.providerId === 'my-gateway')?.models[0];
     });
     expect(written).toMatchObject({ id: 'auto-model', reasoning: true });
-    expect(written?.contextWindow).toBe(real?.contextWindow);
-    // What the run accepts is now the real model's list, not `off` alone.
+    // What the run accepts is now the real model's list, not `off` alone — which is the point of
+    // picking it from the catalogue: effort levels arrive with the model, nobody ticks a box.
     expect(written?.thinkingLevels.length ?? 0).toBeGreaterThan(1);
+    expect(written?.thinkingLevels).toEqual(real?.thinkingLevels);
 
     // And the effort control on Models follows the alias without any extra declaration.
     await page.goto(`${harness.baseUrl}/settings/models`, { waitUntil: 'domcontentloaded' });
@@ -1671,14 +1690,21 @@ test('effort is chosen per model, and only where the model declares reasoning', 
     expect(read.overrides.role).toMatchObject({ thinkingLevel: 'high' });
     expect(read.effective.thinkingLevel).toBe('high');
 
-    // Declaring reasoning on the provider is what turns the level back on for that model.
+    // Pointing the row at the model it really is turns the level back on: the catalogue says the model
+    // reasons, so nobody has to declare it — that is the whole reason the picker replaced the box.
     await page.goto(`${harness.baseUrl}/settings/providers`, { waitUntil: 'domcontentloaded' });
     const provider = page.locator('.prov').filter({ hasText: 'p-effort' });
     await provider.locator('[data-testid="provider-edit"]').click();
     const plain = page.locator('.model-row').filter({ has: page.locator('input[value="m-plain"]') });
-    await plain.locator('[data-testid="provider-model-reasoning"]').check();
+    // `deepseek-flash` is a reasoning model in Pi's own catalogue.
+    await plain.locator('[data-testid="provider-model-picker"]').fill('deepseek-flash');
+    await plain
+      .locator('[data-testid="provider-model-option"]')
+      .filter({ has: page.locator('.pk-id', { hasText: /^deepseek-flash$/ }) })
+      .first()
+      .click();
     await page.locator('[data-testid="provider-save"]').click();
-    // The declaration must reach Pi, not only the database: it is what turns levels on.
+    // What the catalogue says must reach Pi, not only the database: it is what turns levels on.
     await expect
       .poll(
         async () =>

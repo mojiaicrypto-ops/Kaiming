@@ -25,15 +25,22 @@ export const INPUT_MARKER_CUSTOM_TYPE = 'agentdev.input-marker';
 export interface CatalogEntry {
   readonly providerId: string;
   readonly modelId: string;
+  /** The catalogue's display name ("Anthropic: Claude Fable 5"), so the picker reads as a list of models. */
+  readonly name: string;
+  /** The `api` this model speaks; an endpoint id that resolves to it uses that protocol. */
+  readonly api: string;
   readonly reasoning: boolean;
+  /** Exactly what Pi accepts for it, so the picker lists no level a run would clamp away. */
+  readonly thinkingLevels: readonly string[];
   readonly contextWindow: number;
   readonly maxTokens: number;
 }
 
-/** What a catalogue model declares; the alias inherits exactly this and nothing invented. */
+/** What a catalogue model declares; an endpoint id adopting it inherits exactly this, nothing invented. */
 export interface ModelFacts {
   readonly providerId: string;
   readonly modelId: string;
+  readonly api: string;
   readonly reasoning: boolean;
   readonly thinkingLevelMap?: Readonly<Record<string, string | null>>;
   readonly contextWindow: number;
@@ -196,6 +203,7 @@ export class PiRuntimeFactory {
     return {
       providerId: selection.providerId,
       modelId: selection.modelId,
+      api: model.api,
       reasoning: model.reasoning === true,
       ...(model.thinkingLevelMap !== undefined ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
       contextWindow: model.contextWindow,
@@ -205,8 +213,9 @@ export class PiRuntimeFactory {
   }
 
   /**
-   * Every model the catalogue knows, for the alias picker. The few facts included are the ones the
-   * editor shows to prove the mapping took effect, not a catalogue dump.
+   * Every chat model the catalogue knows, for the picker. Name, protocol and accepted levels travel
+   * with it: a model the user picks is fully described, so the editor never asks a second question
+   * ("does it reason?") whose answer the catalogue already holds.
    */
   async catalog(): Promise<readonly CatalogEntry[]> {
     const runtime = await this.runtime();
@@ -215,7 +224,10 @@ export class PiRuntimeFactory {
       .map((model) => ({
         providerId: model.provider,
         modelId: model.id,
+        name: model.name,
+        api: model.api,
         reasoning: model.reasoning === true,
+        thinkingLevels: supportedThinkingLevels(model),
         contextWindow: model.contextWindow,
         maxTokens: model.maxTokens,
       }))

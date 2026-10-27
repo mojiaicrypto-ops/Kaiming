@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
 import { useCatalog, useConfig, type ProviderView } from './config-model';
+import { ModelPicker, keyOf } from './ModelPicker';
 import type { RpcClient } from '../api/rpc';
 import { errorText } from '../lib/errors';
 
@@ -19,8 +20,13 @@ const APIS = ['openai-completions', 'openai-responses', 'anthropic-messages'] as
 interface ModelDraft {
   id: string;
   reasoning: boolean;
-  /** "provider/model" of the real model; empty when the id is the catalogue's own name. */
+  /** "provider/model" of the catalogue model; empty when nothing was resolved. */
   baseModel: string;
+  /**
+   * True while the id was derived from the picker ("picked"). Typing over it makes the id the
+   * operator's own again — then the id box keeps their text and the facts stay borrowed.
+   */
+  picked: boolean;
 }
 
 /** The form's own state: the id is only editable while adding, so it is empty when editing. */
@@ -38,7 +44,7 @@ const EMPTY: Draft = {
   name: '',
   baseUrl: '',
   api: 'openai-completions',
-  models: [{ id: '', reasoning: false, baseModel: '' }],
+  models: [{ id: '', reasoning: false, baseModel: '', picked: false }],
   apiKey: '',
 };
 
@@ -74,12 +80,13 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
       api: provider.api ?? '',
       models:
         provider.models.length === 0
-          ? [{ id: '', reasoning: false, baseModel: '' }]
+          ? [{ id: '', reasoning: false, baseModel: '', picked: false }]
           : provider.models.map((model) => ({
               id: model.id,
               reasoning: model.reasoning === true,
-              baseModel:
-                model.baseModel === undefined ? '' : `${model.baseModel.providerId}/${model.baseModel.modelId}`,
+              baseModel: model.upstream ?? '',
+              // A saved id that a catalogue entry explains is not the operator's own name.
+              picked: model.upstream !== undefined && model.upstream.endsWith(`/${model.id}`),
             })),
       apiKey: '',
     });
@@ -144,12 +151,6 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
       setTesting(null);
     }
   };
-
-  /** Token counts are read at a glance: "1M" and "131k", never "1000k". */
-  const size = (count: number): string =>
-    count >= 1_000_000
-      ? `${(count / 1_000_000).toFixed(count % 1_000_000 === 0 ? 0 : 1)}M`
-      : `${String(Math.round(count / 1000))}k`;
 
   const apiLabel = (api: string | null): string => {
     if (api === null || api === '') return t('settings.api');
@@ -271,17 +272,9 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
                 <span>{t('settings.modelsList')}</span>
                 <div className="model-rows" data-testid="provider-models">
                   {draft.models.map((model, index) => {
-                    // The edited provider is excluded: its own ids are the aliases being named, and
-                    // pointing an alias at itself would only record Pi's fallback values as facts.
+                    // The edited provider is excluded: its own ids are the models being chosen, and
+                    // pointing one at itself would only record Pi's fallback values as facts.
                     const self = draft.providerId.trim();
-                    const typed = model.baseModel.trim();
-                    const alias = catalog.models.find(
-                      (entry) => entry.providerId !== self && `${entry.providerId}/${entry.id}` === typed,
-                    );
-                    const suggestions = catalog.models
-                      .filter((entry) => entry.providerId !== self)
-                      .filter((entry) => `${entry.providerId}/${entry.id}`.toLowerCase().includes(typed.toLowerCase()))
-                      .slice(0, 40);
                     const update = (patch: Partial<ModelDraft>): void =>
                       setDraft({
                         ...draft,
@@ -291,56 +284,45 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
                       });
                     return (
                       <div className="model-row" key={String(index)}>
+                        {/*
+                          One control, not three: the catalogue entry already says the protocol, whether
+                          the model reasons and which levels it accepts, so choosing it is the whole
+                          declaration. The id box stays for the case a gateway invented its own name
+                          ("auto-glm-5-3") — leave it empty and the catalogue name is used.
+                        */}
                         <input
                           className="inp"
+                          // A picked id is the model's own name: showing it read-only until the user
+                          // says otherwise keeps "which id does this row save?" answerable at a glance.
+                          readOnly={model.picked}
                           value={model.id}
-                          placeholder="gpt-5, deepseek-reasoner…"
+                          placeholder={t('settings.modelIdPlaceholder')}
                           aria-label={t('settings.modelId')}
-                          onChange={(event) => update({ id: event.target.value })}
+                          title={model.picked ? t('settings.modelIdFromPicker') : undefined}
+                          onChange={(event) => update({ id: event.target.value, picked: false })}
+                          onFocus={() => {
+                            // Focusing the id is how a gateway renaming its models starts.
+                            if (model.picked) update({ picked: false });
+                          }}
                           data-testid="provider-model-id"
                         />
-                        <input
-                          className="inp alias"
+                        <ModelPicker
+                          models={catalog.models}
                           value={model.baseModel}
-                          list={`catalog-${String(index)}`}
-                          placeholder={t('settings.modelAliasPlaceholder')}
-                          aria-label={t('settings.modelAlias')}
-                          title={t('settings.modelAliasHint')}
-                          onChange={(event) => update({ baseModel: event.target.value })}
-                          data-testid="provider-model-alias"
+                          excludeProvider={self}
+                          placeholder={t('settings.modelPickerPlaceholder')}
+                          onChange={(chosen) =>
+                            update({
+                              baseModel: chosen === null ? '' : keyOf(chosen),
+                              reasoning: chosen?.reasoning === true,
+                              // A gateway id is the endpoint's, not the catalogue's: an id already
+                              // typed stays, only the facts are borrowed.
+                              ...(chosen === null || model.id.trim() !== ''
+                                ? {}
+                                : { id: chosen.id, picked: true }),
+                            })
+                          }
                         />
-                        <datalist id={`catalog-${String(index)}`}>
-                          {suggestions.map((entry) => (
-                            <option key={`${entry.providerId}/${entry.id}`} value={`${entry.providerId}/${entry.id}`} />
-                          ))}
-                        </datalist>
-                        {/* The alias decides the facts when it is set: a checkbox that the mapping
-                            overrides would be a claim the run does not honour. */}
-                        {typed === '' ? (
-                          <label className="chk" title={t('settings.modelReasoningHint')}>
-                            <input
-                              type="checkbox"
-                              checked={model.reasoning}
-                              onChange={(event) => update({ reasoning: event.target.checked })}
-                              data-testid="provider-model-reasoning"
-                            />
-                            {t('settings.modelReasoning')}
-                          </label>
-                        ) : (
-                          <span
-                            className={alias === undefined ? 'meta warn' : 'meta'}
-                            title={alias === undefined ? t('settings.modelAliasUnknown') : typed}
-                            data-testid="provider-model-alias-facts"
-                          >
-                            {alias === undefined
-                              ? t('settings.modelAliasUnknown')
-                              : [
-                                  alias.reasoning ? t('settings.modelReasoning') : t('settings.level.unsupported'),
-                                  `${t('settings.modelFactsCtx')} ${size(alias.contextWindow)}`,
-                                  `${t('settings.modelFactsOut')} ${size(alias.maxTokens)}`,
-                                ].join(' · ')}
-                          </span>
-                        )}
                         <button
                           type="button"
                           className="btn ghost x"
@@ -366,7 +348,7 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
                     onClick={() =>
                       setDraft({
                         ...draft,
-                        models: [...draft.models, { id: '', reasoning: false, baseModel: '' }],
+                        models: [...draft.models, { id: '', reasoning: false, baseModel: '', picked: false }],
                       })
                     }
                     data-testid="provider-model-add"

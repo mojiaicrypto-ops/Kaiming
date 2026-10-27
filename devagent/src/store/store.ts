@@ -149,7 +149,7 @@ export interface ProviderRow {
   readonly api: string | null;
   /** The name the user sees; NULL keeps showing providerId. */
   readonly name: string | null;
-  /** JSON array of `{ id, name }`: the models this provider offers. */
+  /** JSON array of `{ id, name, upstream?, reasoning?, thinkingLevelMap? }`: the models this provider offers. */
   readonly models: string;
   /** Where the credential lives (private store); never the credential itself. */
   readonly credentialRef: string | null;
@@ -376,7 +376,7 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -1492,7 +1492,14 @@ export class Store {
     api?: string;
     /** Display name; omitted on an update keeps the stored one. */
     name?: string;
-    models: readonly { id: string; name: string }[];
+    models: readonly {
+      id: string;
+      name: string;
+      /** The catalogue model this endpoint id really is; the facts below are copied from it. */
+      upstream?: string;
+      reasoning?: boolean;
+      thinkingLevelMap?: Readonly<Record<string, string | null>>;
+    }[];
     credentialRef?: string;
     expectedRevision: number | null;
   }): ProviderRow {
@@ -2967,6 +2974,20 @@ export class Store {
     });
   }
 
+  /**
+   * v12 → v13: a provider model records which catalogue model it really is, and the facts copied from
+   * it, so the configuration page can say what a model will do instead of asking the operator.
+   *
+   * No column changes: `providers.models` already holds a JSON array, and the new keys are optional.
+   * Rows written by v12 keep working unchanged (an unresolvable model keeps Pi's fallback), which is
+   * why the step only moves the version forward.
+   */
+  private migrateV12ToV13(): void {
+    this.transaction(() => {
+      this.db.exec('PRAGMA user_version = 13;');
+    });
+  }
+
   private migrateV10ToV11(): void {
     this.transaction(() => {
       this.applyV11();
@@ -3038,16 +3059,13 @@ export class Store {
   }
 
   private migrate(): void {
+    // `version 0` is a database this revision creates (or one written without a header): the ladder's
+    // first entry builds the current schema and stamps 1, so the remaining steps still run.
+    if (this.pragmas().userVersion === 0) {
+      this.db.exec(SCHEMA_SQL);
+    }
     const { userVersion } = this.pragmas();
-    if (userVersion === 0) {
-      this.transaction(() => {
-        this.db.exec(SCHEMA_SQL);
-        this.applyV9();
-        this.applyV10();
-        this.applyV11();
-        this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
-      });
-    } else if (userVersion > SCHEMA_VERSION) {
+    if (userVersion > SCHEMA_VERSION) {
       throw new StoreError('VERSION_CONFLICT', 'unsupported store schema version', {
         userVersion,
         supported: SCHEMA_VERSION,
@@ -3056,12 +3074,25 @@ export class Store {
       // One step per version, in order: a database at any older version runs exactly the remaining
       // ones, so adding a version is one entry here instead of an edit to every earlier branch.
       const steps: ReadonlyArray<readonly [number, () => void]> = [
+        // A fresh database is created at v1 and then walks the same ladder as an old one, so a new
+        // schema version is one entry here instead of an edit to both branches.
+        [
+          0,
+          () =>
+            this.transaction(() => {
+              this.db.exec('PRAGMA user_version = 1;');
+            }),
+        ],
         [
           1,
           () =>
             this.transaction(() => {
+              // A database created by this revision already carries them through SCHEMA_SQL; the
+              // check keeps the step idempotent either way.
               for (const column of V2_COLUMNS) {
-                this.db.exec(column.ddl);
+                if (!this.hasColumn('session_inputs', column.name)) {
+                  this.db.exec(column.ddl);
+                }
               }
               this.db.exec(SESSION_BINDINGS_SQL);
               this.db.exec('PRAGMA user_version = 2;');
@@ -3077,6 +3108,7 @@ export class Store {
         [9, () => this.migrateV9ToV10()],
         [10, () => this.migrateV10ToV11()],
         [11, () => this.migrateV11ToV12()],
+        [12, () => this.migrateV12ToV13()],
       ];
       for (const [from, step] of steps) {
         if (this.pragmas().userVersion === from) {
