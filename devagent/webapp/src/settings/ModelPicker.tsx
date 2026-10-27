@@ -32,7 +32,10 @@ export function ModelPicker({
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
-  const box = useRef<HTMLDivElement>(null);
+  /** Where the list is drawn: measured from the input, so no scrolling ancestor can clip it. */
+  const [box, setBox] = useState<{ top: number; left: number; width: number; up: boolean } | null>(null);
+  const wrap = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLInputElement>(null);
 
   const chosen = models.find((model) => keyOf(model) === value && model.providerId !== excludeProvider);
   const matches = useMemo(
@@ -45,10 +48,39 @@ export function ModelPicker({
   useEffect(() => {
     if (!open) return;
     const onDown = (event: MouseEvent): void => {
-      if (box.current !== null && !box.current.contains(event.target as Node)) setOpen(false);
+      if (wrap.current !== null && !wrap.current.contains(event.target as Node)) setOpen(false);
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  // Keep the list under (or above, near the bottom edge) its input while it is open. Measuring on
+  // every scroll and resize is cheap here: one open picker at a time.
+  useEffect(() => {
+    if (!open) {
+      setBox(null);
+      return;
+    }
+    const place = (): void => {
+      const element = input.current;
+      if (element === null) return;
+      const rect = element.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const up = spaceBelow < 240 && rect.top > spaceBelow;
+      setBox({
+        top: up ? Math.max(8, rect.top - Math.min(280, rect.top - 8) - 4) : rect.bottom + 2,
+        left: rect.left,
+        width: rect.width,
+        up,
+      });
+    };
+    place();
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
   }, [open]);
 
   const choose = (model: CatalogModel): void => {
@@ -58,8 +90,9 @@ export function ModelPicker({
   };
 
   return (
-    <div className="picker" ref={box}>
+    <div className="picker" ref={wrap}>
       <input
+        ref={input}
         className="inp"
         role="combobox"
         aria-expanded={open}
@@ -95,14 +128,29 @@ export function ModelPicker({
               event.preventDefault();
               choose(pick);
             }
-          } else if (event.key === 'Escape') {
+          } else if (event.key === 'Escape' && open) {
+            // With the list open, Escape dismisses the list and nothing else: the form behind may
+            // hold unsaved edits, and losing them to a closed dropdown would be a trap. With it
+            // closed, Escape is the dialog's to handle, so it is left to bubble.
+            event.preventDefault();
+            event.stopPropagation();
             setOpen(false);
           }
         }}
         data-testid="provider-model-picker"
       />
       {open && (
-        <ul className="picker-list" id="model-picker-list" role="listbox" data-testid="provider-model-options">
+        <ul
+          className="picker-list"
+          id="model-picker-list"
+          role="listbox"
+          style={
+            box === null
+              ? undefined
+              : { top: box.top, left: box.left, width: box.width, maxHeight: box.up ? 280 : undefined }
+          }
+          data-testid="provider-model-options"
+        >
           {matches.length === 0 ? (
             <li className="picker-empty">{t('settings.modelPickerEmpty')}</li>
           ) : (

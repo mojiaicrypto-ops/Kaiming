@@ -1852,11 +1852,10 @@ details.fold > summary.tline:hover {
   white-space: nowrap;
 }
 .picker-list {
-  position: absolute;
-  top: calc(100% + 2px);
-  left: 0;
-  right: 0;
-  z-index: 20;
+  /* `fixed` with coordinates measured from the input: an absolutely positioned list is clipped by any
+     scrolling ancestor, and the provider form lives in one. */
+  position: fixed;
+  z-index: 60;
   max-height: 280px;
   overflow-y: auto;
   margin: 0;
@@ -2022,6 +2021,85 @@ details.fold > summary.tline:hover {
   margin: 0;
   font-size: var(--fs-16);
 }
+/* The provider editor: a dialog wide enough for the model rows, with the body scrolling instead of
+   the page, so the save buttons stay reachable however many models are listed. */
+.provider-dlg {
+  width: min(880px, calc(100vw - 32px));
+  max-height: 86vh;
+  padding: 0;
+  gap: 0;
+  border-color: var(--line-strong);
+}
+.provider-dlg .dlg-h {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  padding: var(--s4) var(--s6) var(--s3);
+  border-bottom: 1px solid var(--line);
+}
+.provider-dlg .dlg-h .meta {
+  color: var(--fg-3);
+  font-size: var(--fs-12);
+  font-family: var(--mono);
+}
+.provider-dlg .dlg-b {
+  padding: var(--s4) var(--s6);
+  overflow-y: auto;
+  min-height: 0;
+}
+.provider-dlg .btns {
+  padding: var(--s3) var(--s6) var(--s4);
+  border-top: 1px solid var(--line);
+}
+.provider-dlg .rl {
+  grid-template-columns: 7em minmax(0, 1fr) 15em;
+}
+/* A hint is the reason this dialog exists: it wraps here instead of ending in an ellipsis. */
+.provider-dlg .rl .src {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.45;
+}
+.provider-dlg .models-row {
+  align-items: start;
+  /* The list needs the dialog's width: two inputs plus a remove button per row do not fit a 15em
+     hint column. */
+  grid-template-columns: 7em minmax(0, 1fr);
+}
+.provider-dlg .models-row > .model-rows {
+  grid-column: 2;
+}
+@media (max-width: 860px) {
+  .provider-dlg .rl {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s1);
+  }
+  .provider-dlg .rl > .src {
+    text-align: left;
+  }
+  /* The label sits above the list once the row is single-column: `grid-column: 2` would otherwise
+     create an implicit second column and squeeze everything. */
+  .provider-dlg .models-row > .model-rows {
+    grid-column: 1;
+  }
+  /* Two inputs plus a button do not fit a phone: the id and the picker stack, the remove button
+     keeps its own column so it cannot be pressed while aiming at the picker. */
+  .provider-dlg .model-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+  .provider-dlg .model-row > .picker {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .provider-dlg .model-row > .btn.x {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    margin-left: 0;
+  }
+}
+
 .plist button {
   display: flex;
   gap: var(--s3);

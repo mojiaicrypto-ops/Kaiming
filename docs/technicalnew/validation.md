@@ -208,4 +208,6 @@
 | 迁移阶梯 | Passed | 新增 schema 版本时发现：新库走 `user_version = 0` 分支直接建到 `SCHEMA_VERSION`，老库走阶梯，两处都要改。改为**新库也走阶梯**（0 → 建表并盖 1 → 逐级），阶梯的 v2 步骤加列前先查列，避免新库重复加列。另修正一处误判：v12 → v13 的阶梯项写漏，导致 `user_version` 停在 12 时报不支持 | 
 | 全套测试（模型选择器） | Passed | 服务端 34 文件 388 用例；webapp 8 文件 57 用例（新增 7 条模糊匹配用例：空查询保序、连续命中、分散命中、按 provider 收窄、排除自身 provider、不命中返回空、紧致匹配优先）；浏览器 54 用例；两侧 `tsc --noEmit` 无错误；`npm run build` 成功 |
 
+| Provider 编辑改为弹框 | Passed | 现场：provider 列表很长时点第一行的「修改」像没有反应 —— 表单是追加在列表末尾的一块，开在折叠线以下。改为 `role="dialog"` + `aria-modal="true"` 的弹框（`min(880px, 100vw-32px)`，`max-height: 86vh`，主体滚动 + 底部按钮常驻），带焦点陷阱，`Esc` 关闭；列表首行按钮始终可见。实测 8 个 provider 的列表：点第一行后弹框顶部 y=118、底部 844（视口 800→切 1280×800 时整块在视口内），框内直接显示 `gw-0` 与名称 `gateway 0`。选择器列表改为 `position: fixed` 并按输入框矩形定位（滚动/resize 时重算），因此不再被弹框的滚动容器裁掉；展开时 `Esc` 只收列表（`stopPropagation`），收起后再按 `Esc` 才关弹框 —— 否则一次 `Esc` 会连未保存的编辑一起丢弃。保存成功走外壳 toast，失败则错误留在框内。窄屏（390px）实测：字段单列、模型行 id 与选择器上下堆叠、移除按钮独立一列。浏览器新增用例「the provider editor opens as a dialog, not below a long list」（8 个 provider、首行编辑、弹框完整在视口内、`Esc` 分层、保存后关闭并更新列表） |
+
 未覆盖：Windows 下微软雅黑回退的实际观感（本环境仅 macOS/Chromium）；返工轮次由真实长跑 Task 观察（自动化以 `task.get` mock 驱动，服务端零改动，风险在分组算法已由用例锁定）。

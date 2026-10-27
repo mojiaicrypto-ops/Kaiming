@@ -50,7 +50,13 @@ export function SettingsPage({ route, rpc, projectId, locale, onLocale, theme, o
           </button>
         ))}
       </aside>
-      {route.tab === 'providers' && <ProvidersPage rpc={rpc} projectId={projectId} />}
+      {route.tab === 'providers' && (
+        <ProvidersPage
+          rpc={rpc}
+          projectId={projectId}
+          onSaved={(message) => onNotice(message, 'success')}
+        />
+      )}
       {route.tab === 'models' && (
         <ModelsPage
           rpc={rpc}

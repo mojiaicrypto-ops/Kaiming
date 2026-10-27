@@ -1729,6 +1729,77 @@ test('effort is chosen per model, and only where the model declares reasoning', 
   }
 });
 
+test('the provider editor opens as a dialog, not below a long list', async ({ page }) => {
+  // The report: with many providers, "Edit" on an early row looked like a no-op — the form was
+  // appended under every row, so it opened past the fold. It is a dialog now, and these are the
+  // properties that make it one.
+  const harness = await startHarness();
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    await page.evaluate(async () => {
+      const handle = (window as unknown as { __agentdev: { rpc: { call: (m: string, p: unknown, o?: { requestId: string }) => Promise<unknown> } } }).__agentdev;
+      for (let index = 0; index < 8; index += 1) {
+        await handle.rpc.call(
+          'config.save',
+          {
+            expectedRevision: null,
+            value: {
+              kind: 'provider',
+              providerId: `gw-${String(index)}`,
+              name: `gateway ${String(index)}`,
+              baseUrl: `https://gw${String(index)}.example/v1`,
+              api: 'openai-completions',
+              apiKey: 'test-key',
+              models: [{ id: `model-${String(index)}` }],
+            },
+          },
+          { requestId: `seed-gw-${String(index)}` },
+        );
+      }
+    });
+    await page.goto(`${harness.baseUrl}/settings/providers`, { waitUntil: 'domcontentloaded' });
+
+    // Editing the first of eight: the dialog must be on screen without the page scrolling to it.
+    await page.locator('[data-testid="provider-edit"]').first().click();
+    const dialog = page.locator('[data-testid="provider-form"]');
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+    await expect(dialog).toHaveAttribute('aria-modal', 'true');
+    // The header carries the identity being edited; the label lives in the input.
+    await expect(dialog).toContainText('gw-0');
+    await expect(page.locator('[data-testid="provider-name"]')).toHaveValue('gateway 0');
+    const box = await dialog.boundingBox();
+    const height = page.viewportSize()?.height ?? 0;
+    expect(box).not.toBeNull();
+    // Wholly inside the viewport, top and bottom: a dialog the user has to scroll to reach is the bug
+    // this replaced.
+    expect(box?.y ?? 0).toBeGreaterThanOrEqual(0);
+    expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(height);
+
+    // Escape dismisses the picker first: unsaved edits must not be discarded by a closed dropdown.
+    await page.locator('[data-testid="provider-model-picker"]').first().click();
+    await expect(page.locator('[data-testid="provider-model-options"]')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-testid="provider-model-options"]')).toHaveCount(0);
+    await expect(dialog).toBeVisible();
+
+    // It is modal: the list behind it is out of the tab order, and Escape closes it.
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(page.locator('[data-testid="provider-edit"]').first()).toBeVisible();
+
+    // Saving closes it and the list reflects the change without a reload.
+    await page.locator('[data-testid="provider-edit"]').first().click();
+    await page.locator('[data-testid="provider-name"]').fill('renamed gateway');
+    await page.locator('[data-testid="provider-save"]').click();
+    await expect(dialog).toHaveCount(0, { timeout: 10_000 });
+    await expect(page.locator('.prov').filter({ hasText: 'renamed gateway' })).toHaveCount(1);
+  } finally {
+    await harness.close();
+  }
+});
+
 test('a provider is added with a name and protocol, then edited without changing its id', async ({ page }) => {
   const harness = await startHarness();
   try {

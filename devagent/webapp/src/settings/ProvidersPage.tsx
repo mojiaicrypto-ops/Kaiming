@@ -2,139 +2,32 @@ import { useState } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
 import { useCatalog, useConfig, type ProviderView } from './config-model';
-import { ModelPicker, keyOf } from './ModelPicker';
+import { ProviderForm, APIS } from './ProviderForm';
 import type { RpcClient } from '../api/rpc';
 import { errorText } from '../lib/errors';
-
-/**
- * The protocols this workbench offers, in the order they are shown. Values are Pi's own `api`
- * identifiers: the server refuses anything else, so a typo cannot become a provider that never
- * loads.
- */
-const APIS = ['openai-completions', 'openai-responses', 'anthropic-messages'] as const;
-
-/**
- * One model of the endpoint: the id Pi uses, whether it can reason, and — when the id is a gateway
- * alias — which catalogue model it really is.
- */
-interface ModelDraft {
-  id: string;
-  reasoning: boolean;
-  /** "provider/model" of the catalogue model; empty when nothing was resolved. */
-  baseModel: string;
-  /**
-   * True while the id was derived from the picker ("picked"). Typing over it makes the id the
-   * operator's own again — then the id box keeps their text and the facts stay borrowed.
-   */
-  picked: boolean;
-}
-
-/** The form's own state: the id is only editable while adding, so it is empty when editing. */
-interface Draft {
-  providerId: string;
-  name: string;
-  baseUrl: string;
-  api: string;
-  models: readonly ModelDraft[];
-  apiKey: string;
-}
-
-const EMPTY: Draft = {
-  providerId: '',
-  name: '',
-  baseUrl: '',
-  api: 'openai-completions',
-  models: [{ id: '', reasoning: false, baseModel: '', picked: false }],
-  apiKey: '',
-};
 
 /**
  * Providers: every configured endpoint, what it offers, whether a credential exists, and which
  * protocol it speaks. The key itself never travels — the server redacts it — so the only truthful
  * statement here is "configured"; there is no "show key" affordance because there is nothing to show.
  */
-export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: string }) {
+export function ProvidersPage({
+  rpc,
+  projectId,
+  onSaved,
+}: {
+  rpc: RpcClient;
+  projectId: string;
+  /** The page's own confirmation channel; the shell already owns where "saved" appears. */
+  onSaved: (message: string) => void;
+}) {
   const { t } = useI18n();
   const { config, failed, reload } = useConfig(rpc, projectId === '' ? undefined : projectId, 'chief');
   const catalog = useCatalog(rpc);
   const [testing, setTesting] = useState<string | null>(null);
   const [result, setResult] = useState<{ provider: string; ok: boolean; detail: string } | null>(null);
-  /** The provider being added (null id) or edited (that id); nothing open means no form. */
+  /** The provider being added (null id) or edited (that id); nothing open means no dialog. */
   const [editing, setEditing] = useState<{ providerId: string | null; revision: number | null } | null>(null);
-  const [draft, setDraft] = useState<Draft>(EMPTY);
-  const [saveError, setSaveError] = useState<string | null>(null);
-
-  const openAdd = (): void => {
-    setDraft(EMPTY);
-    setSaveError(null);
-    setEditing({ providerId: null, revision: null });
-  };
-
-  const openEdit = (provider: ProviderView): void => {
-    setDraft({
-      providerId: provider.providerId,
-      name: provider.name,
-      baseUrl: provider.baseUrl,
-      // A provider saved before protocols were selectable has none stored: leave the choice to the
-      // user instead of writing the default they never saw.
-      api: provider.api ?? '',
-      models:
-        provider.models.length === 0
-          ? [{ id: '', reasoning: false, baseModel: '', picked: false }]
-          : provider.models.map((model) => ({
-              id: model.id,
-              reasoning: model.reasoning === true,
-              baseModel: model.upstream ?? '',
-              // A saved id that a catalogue entry explains is not the operator's own name.
-              picked: model.upstream !== undefined && model.upstream.endsWith(`/${model.id}`),
-            })),
-      apiKey: '',
-    });
-    setSaveError(null);
-    setEditing({ providerId: provider.providerId, revision: provider.revision });
-  };
-
-  const close = (): void => {
-    setEditing(null);
-    setDraft(EMPTY);
-    setSaveError(null);
-  };
-
-  const save = async (): Promise<void> => {
-    if (editing === null) return;
-    setSaveError(null);
-    try {
-      await rpc.call(
-        'config.save',
-        {
-          expectedRevision: editing.revision,
-          value: {
-            kind: 'provider',
-            providerId: draft.providerId.trim(),
-            name: draft.name.trim(),
-            baseUrl: draft.baseUrl.trim(),
-            api: draft.api,
-            // Only rows with an id travel: a blank row the user added but left empty is not a model.
-            // The alias travels as text; the server resolves it and refuses a name the catalogue
-            // does not know instead of writing numbers nobody checked.
-            models: draft.models
-              .map((model) => ({
-                id: model.id.trim(),
-                reasoning: model.reasoning,
-                ...(model.baseModel.trim() === '' ? {} : { baseModel: model.baseModel.trim() }),
-              }))
-              .filter((model) => model.id !== ''),
-            ...(draft.apiKey.trim() === '' ? {} : { apiKey: draft.apiKey.trim() }),
-          },
-        },
-        { requestId: `provider-${Date.now()}` },
-      );
-      close();
-      await reload();
-    } catch (error) {
-      setSaveError(errorText(error, t));
-    }
-  };
 
   const test = async (provider: ProviderView): Promise<void> => {
     setTesting(provider.providerId);
@@ -185,7 +78,7 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
                 <button
                   type="button"
                   className="btn ghost"
-                  onClick={() => openEdit(provider)}
+                  onClick={() => setEditing({ providerId: provider.providerId, revision: provider.revision })}
                   data-testid="provider-edit"
                 >
                   {t('settings.edit')}
@@ -210,191 +103,35 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
               )}
             </div>
           ))}
-          {editing !== null ? (
-            <div className="card-in">
-              <div className="f3" style={{ marginBottom: 'var(--s1)' }}>
-                {editing.providerId === null ? t('settings.addProvider') : t('settings.editProvider')}
-              </div>
-              <div className="rl">
-                <span>{t('settings.providerName')}</span>
-                <input
-                  className="inp"
-                  value={draft.name}
-                  onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-                  placeholder={draft.providerId === '' ? 'DeepSeek' : draft.providerId}
-                  data-testid="provider-name"
-                />
-                <span className="src">{t('settings.providerNameHint')}</span>
-              </div>
-              <div className="rl">
-                <span>{t('settings.providerId')}</span>
-                <input
-                  className="inp"
-                  value={draft.providerId}
-                  onChange={(event) => setDraft({ ...draft, providerId: event.target.value })}
-                  placeholder="deepseek"
-                  // The id is the key in models.json, the database and every assignment: renaming it
-                  // is a migration, not an edit.
-                  readOnly={editing.providerId !== null}
-                  data-testid="provider-id"
-                />
-                <span />
-              </div>
-              <div className="rl">
-                <span>{t('settings.baseUrl')}</span>
-                <input
-                  className="inp"
-                  value={draft.baseUrl}
-                  onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })}
-                  placeholder="https://api.openai.com/v1"
-                  data-testid="provider-base"
-                />
-                <span />
-              </div>
-              <div className="rl">
-                <span>{t('settings.api')}</span>
-                <select
-                  className="inp"
-                  value={draft.api}
-                  onChange={(event) => setDraft({ ...draft, api: event.target.value })}
-                  data-testid="provider-api"
-                >
-                  {draft.api === '' && <option value="">—</option>}
-                  {APIS.map((api) => (
-                    <option key={api} value={api}>
-                      {apiLabel(api)}
-                    </option>
-                  ))}
-                </select>
-                <span className="src">{t('settings.apiHint')}</span>
-              </div>
-              <div className="rl models-row">
-                <span>{t('settings.modelsList')}</span>
-                <div className="model-rows" data-testid="provider-models">
-                  {draft.models.map((model, index) => {
-                    // The edited provider is excluded: its own ids are the models being chosen, and
-                    // pointing one at itself would only record Pi's fallback values as facts.
-                    const self = draft.providerId.trim();
-                    const update = (patch: Partial<ModelDraft>): void =>
-                      setDraft({
-                        ...draft,
-                        models: draft.models.map((entry, position) =>
-                          position === index ? { ...entry, ...patch } : entry,
-                        ),
-                      });
-                    return (
-                      <div className="model-row" key={String(index)}>
-                        {/*
-                          One control, not three: the catalogue entry already says the protocol, whether
-                          the model reasons and which levels it accepts, so choosing it is the whole
-                          declaration. The id box stays for the case a gateway invented its own name
-                          ("auto-glm-5-3") — leave it empty and the catalogue name is used.
-                        */}
-                        <input
-                          className="inp"
-                          // A picked id is the model's own name: showing it read-only until the user
-                          // says otherwise keeps "which id does this row save?" answerable at a glance.
-                          readOnly={model.picked}
-                          value={model.id}
-                          placeholder={t('settings.modelIdPlaceholder')}
-                          aria-label={t('settings.modelId')}
-                          title={model.picked ? t('settings.modelIdFromPicker') : undefined}
-                          onChange={(event) => update({ id: event.target.value, picked: false })}
-                          onFocus={() => {
-                            // Focusing the id is how a gateway renaming its models starts.
-                            if (model.picked) update({ picked: false });
-                          }}
-                          data-testid="provider-model-id"
-                        />
-                        <ModelPicker
-                          models={catalog.models}
-                          value={model.baseModel}
-                          excludeProvider={self}
-                          placeholder={t('settings.modelPickerPlaceholder')}
-                          onChange={(chosen) =>
-                            update({
-                              baseModel: chosen === null ? '' : keyOf(chosen),
-                              reasoning: chosen?.reasoning === true,
-                              // A gateway id is the endpoint's, not the catalogue's: an id already
-                              // typed stays, only the facts are borrowed.
-                              ...(chosen === null || model.id.trim() !== ''
-                                ? {}
-                                : { id: chosen.id, picked: true }),
-                            })
-                          }
-                        />
-                        <button
-                          type="button"
-                          className="btn ghost x"
-                          aria-label={t('settings.modelRemove')}
-                          title={t('settings.modelRemove')}
-                          // One row always stays: an endpoint with no model is not a provider.
-                          disabled={draft.models.length <= 1}
-                          onClick={() =>
-                            setDraft({
-                              ...draft,
-                              models: draft.models.filter((_, position) => position !== index),
-                            })
-                          }
-                        >
-                          ×
-                        </button>
-                      </div>
-                    );
-                  })}
-                  <button
-                    type="button"
-                    className="btn ghost add-model"
-                    onClick={() =>
-                      setDraft({
-                        ...draft,
-                        models: [...draft.models, { id: '', reasoning: false, baseModel: '', picked: false }],
-                      })
-                    }
-                    data-testid="provider-model-add"
-                  >
-                    {t('settings.modelAdd')}
-                  </button>
-                </div>
-              </div>
-              <div className="rl">
-                <span>{t('settings.apiKey')}</span>
-                <input
-                  className="inp"
-                  type="password"
-                  value={draft.apiKey}
-                  onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })}
-                  placeholder={editing.providerId === null ? '' : '••••••'}
-                  data-testid="provider-key"
-                />
-                <span className="src">{t('settings.apiKeyHint')}</span>
-              </div>
-              {saveError !== null && <div className="note st block">{saveError}</div>}
-              <div className="btns">
-                <button
-                  type="button"
-                  className="btn pri"
-                  onClick={() => void save()}
-                  disabled={draft.api === ''}
-                  data-testid="provider-save"
-                >
-                  {t('common.save')}
-                </button>
-                <button type="button" className="btn ghost" onClick={close}>
-                  {t('common.cancel')}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <div className="note">{t('settings.addProviderHint')}</div>
-              <button type="button" className="btn" onClick={openAdd} data-testid="add-provider">
-                {t('settings.addProvider')}
-              </button>
-            </>
-          )}
+          <div className="note">{t('settings.addProviderHint')}</div>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => setEditing({ providerId: null, revision: null })}
+            data-testid="add-provider"
+          >
+            {t('settings.addProvider')}
+          </button>
         </div>
       </div>
+      {/*
+        The editor is a dialog, not another block under the list: with a dozen providers the form used
+        to open past the fold, so pressing "Edit" looked like nothing happened.
+      */}
+      {editing !== null && (
+        <ProviderForm
+          key={editing.providerId ?? 'new'}
+          rpc={rpc}
+          editing={editing}
+          provider={(config?.providers ?? []).find((entry) => entry.providerId === editing.providerId)}
+          catalog={catalog.models}
+          onSaved={async (message) => {
+            onSaved(message);
+            await reload();
+          }}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </section>
   );
 }

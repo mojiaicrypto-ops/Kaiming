@@ -418,6 +418,7 @@ const en = {
   'settings.modelPickerHint':
     'Pick the model from Pi\'s own catalogue: its protocol, reasoning support and effort levels come with it. Type part of a name — matching is fuzzy.',
   'settings.modelPickerEmpty': 'no model matches — try fewer characters',
+  'settings.saving': 'Saving…',
   'settings.modelPickerUnknown': 'not in the catalogue — a saved id the picker does not know',
   'settings.modelFactsCtx': 'ctx',
   'settings.modelFactsOut': 'out',
@@ -879,6 +880,7 @@ export const zhCN: Record<MessageKey, string> = {
   'settings.modelPickerHint':
     '从 Pi 自己的模型目录里选：协议、是否支持推理、可选的思考等级都由目录给出。输入名称的一部分即可，支持模糊匹配。',
   'settings.modelPickerEmpty': '没有匹配的模型——少输入几个字符试试',
+  'settings.saving': '保存中…',
   'settings.modelPickerUnknown': '不在模型目录里——这是已保存、但选择器不认识的名字',
   'settings.modelFactsCtx': '上下文',
   'settings.modelFactsOut': '输出',
