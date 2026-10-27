@@ -760,6 +760,32 @@ describe('a gateway alias borrows the real model\'s facts', () => {
     expect(written.providers['my-gateway'].models[1]?.contextWindow).toBeUndefined();
   });
 
+  it('refuses an alias that points back at the provider being saved', async () => {
+    // The installation's own entries are in the same catalogue, so this mistake is easy to make —
+    // and it would record Pi's fallback numbers as if they were the real model's.
+    const h = await harness({
+      modelFacts: async (selection) => ({
+        providerId: selection.providerId,
+        modelId: selection.modelId,
+        reasoning: false,
+        contextWindow: 128_000,
+        maxTokens: 16_384,
+      }),
+      catalogModels: async () => [
+        { providerId: 'my-gateway', modelId: 'auto-model', reasoning: false, contextWindow: 128_000, maxTokens: 16_384 },
+      ],
+    });
+
+    const refused = await h.call('config.save', {
+      expectedRevision: null,
+      value: gateway([{ id: 'auto-model', baseModel: 'my-gateway/auto-model' }]),
+    });
+
+    expect(errorCode(refused.body)).toBe('INVALID_ARGUMENT');
+    expect(String((refused.body['error'] as { message: string }).message)).toContain('not my-gateway itself');
+    expect(h.store.listProviders()).toEqual([]);
+  });
+
   it('serves the catalogue for the picker, grouped by provider', async () => {
     const h = await harness({ catalogModels: async () => catalog });
 

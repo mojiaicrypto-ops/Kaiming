@@ -331,7 +331,7 @@ async function saveProvider(
     if (id === '') {
       throw new RpcError('INVALID_ARGUMENT', 'every model needs an id', { providerId });
     }
-    const alias = await resolveAlias(options, model['baseModel']);
+    const alias = await resolveAlias(options, model['baseModel'], providerId);
     models.push({
       id,
       name: typeof model['name'] === 'string' && model['name'] !== '' ? model['name'] : id,
@@ -392,6 +392,7 @@ async function saveProvider(
 async function resolveAlias(
   options: CoreMethodsOptions,
   raw: unknown,
+  editingProviderId: string,
 ): Promise<ModelFacts | undefined> {
   if (raw === undefined || raw === null || raw === '') return undefined;
   const asked: { kind: 'pair'; providerId: string; modelId: string } | { kind: 'bare'; name: string } | undefined =
@@ -415,6 +416,16 @@ async function resolveAlias(
     });
   }
   if (options.modelFacts === undefined) return undefined;
+  // The installation's own entries live in the same catalogue (models.json is the catalogue's input),
+  // so an alias must not point back at the provider being saved: that would record the fallback as if
+  // it were the real model's facts, which is the mistake this mapping exists to prevent.
+  if (asked.kind === 'pair' && asked.providerId === editingProviderId) {
+    throw new RpcError(
+      'INVALID_ARGUMENT',
+      `baseModel must name a catalogue model, not ${editingProviderId} itself`,
+      { baseModel: raw },
+    );
+  }
   if (asked.kind === 'pair') {
     const facts = await options.modelFacts({ providerId: asked.providerId, modelId: asked.modelId });
     if (facts === undefined) {

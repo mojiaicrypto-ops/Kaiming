@@ -271,11 +271,15 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
                 <span>{t('settings.modelsList')}</span>
                 <div className="model-rows" data-testid="provider-models">
                   {draft.models.map((model, index) => {
-                    const alias = catalog.models.find(
-                      (entry) => `${entry.providerId}/${entry.id}` === model.baseModel.trim(),
-                    );
+                    // The edited provider is excluded: its own ids are the aliases being named, and
+                    // pointing an alias at itself would only record Pi's fallback values as facts.
+                    const self = draft.providerId.trim();
                     const typed = model.baseModel.trim();
+                    const alias = catalog.models.find(
+                      (entry) => entry.providerId !== self && `${entry.providerId}/${entry.id}` === typed,
+                    );
                     const suggestions = catalog.models
+                      .filter((entry) => entry.providerId !== self)
                       .filter((entry) => `${entry.providerId}/${entry.id}`.toLowerCase().includes(typed.toLowerCase()))
                       .slice(0, 40);
                     const update = (patch: Partial<ModelDraft>): void =>
