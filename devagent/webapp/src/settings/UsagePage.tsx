@@ -22,11 +22,15 @@ interface Report {
 }
 
 /**
- * Usage: what the installation actually consumed, by role and by model, for one project or all.
+ * Usage: what the installation consumed, by role and by model, for one project or all.
  *
- * The numbers are reported by the provider per response; the ledger behind this page is written once
- * per finished input, so opening it costs one aggregate query and never slows the conversation. A
- * figure that was never reported stays empty — a request whose price is unknown is not a free one.
+ * Layout follows the workbench's grammar rather than a spreadsheet: three headline figures (requests,
+ * tokens, cost) answer "how much" without arithmetic, then two bordered panels answer "where". Each
+ * panel repeats the same five columns and adds a share bar, because the question a reader actually
+ * has is "who used most", and a bar answers it faster than comparing two numbers.
+ *
+ * The numbers are reported by the provider per response and recorded when each response completes,
+ * so opening this page costs one aggregate query and never slows a conversation.
  */
 export function UsagePage({ rpc, projectId }: { rpc: RpcClient; projectId: string }): React.JSX.Element {
   const { t } = useI18n();
@@ -50,9 +54,9 @@ export function UsagePage({ rpc, projectId }: { rpc: RpcClient; projectId: strin
     };
     read();
     /*
-     * A delegated member can run for minutes, and its ledger row grows with every response. Reading
-     * once would show a stale number that looks like "nothing is being counted", so the page rereads
-     * while it is visible (the requirement board does the same) and stops the moment it is not.
+     * A delegated member can run for minutes and its row grows with every response. Reading once
+     * would show a stale number that looks like "nothing is being counted", so the page rereads while
+     * it is visible (the requirement board does the same) and stops when it is not.
      */
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') read();
@@ -68,11 +72,18 @@ export function UsagePage({ rpc, projectId }: { rpc: RpcClient; projectId: strin
     };
   }, [rpc, scope, projectId, t]);
 
-  const count = (value: number | null): string => (value === null ? t('usage.unreported') : compact(value));
-  const cost = (value: number | null): string =>
-    value === null ? t('usage.unreported') : `$${value < 0.01 && value > 0 ? value.toFixed(4) : value.toFixed(2)}`;
-
   const totals = report?.totals ?? null;
+  const tokens = (figures: Figures): number =>
+    (figures.inputTokens ?? 0) + (figures.outputTokens ?? 0);
+  const cache = (figures: Figures): number | null =>
+    figures.cacheReadTokens === null && figures.cacheWriteTokens === null
+      ? null
+      : (figures.cacheReadTokens ?? 0) + (figures.cacheWriteTokens ?? 0);
+  const totalTokens = totals === null ? 0 : tokens(totals);
+
+  /** Share of the scope's tokens, for the bar. Null when there is nothing to divide by. */
+  const share = (figures: Figures): number | null =>
+    totalTokens === 0 ? null : Math.min(1, tokens(figures) / totalTokens);
 
   return (
     <section className="set-pane scroll">
@@ -80,7 +91,7 @@ export function UsagePage({ rpc, projectId }: { rpc: RpcClient; projectId: strin
         <h1>{t('usage.title')}</h1>
         <p className="f3">{t('usage.desc')}</p>
         <div className="set-body" data-testid="usage">
-          <div className="row" style={{ marginBottom: 'var(--s4)' }}>
+          <div className="usage-scope">
             <span className="seg">
               <button
                 type="button"
@@ -100,6 +111,11 @@ export function UsagePage({ rpc, projectId }: { rpc: RpcClient; projectId: strin
                 {t('usage.scope.all')}
               </button>
             </span>
+            {report !== null && (
+              <span className="usage-scope-note">
+                {report.scope === 'all' ? t('usage.scope.allHint') : t('usage.scope.projectHint')}
+              </span>
+            )}
           </div>
 
           {failure !== null && (
@@ -116,58 +132,55 @@ export function UsagePage({ rpc, projectId }: { rpc: RpcClient; projectId: strin
 
           {failure === null && report !== null && totals !== null && totals.responses > 0 && (
             <>
-              {/* The totals row is the page's headline: same columns as the tables below, so a row can
-                  be read against it without arithmetic. */}
-              <div className="usage-grid" data-testid="usage-totals">
-                <Head />
-                <span className="ut" data-col="label">
-                  {t('usage.total')}
-                </span>
-                <span data-col="requests">{compact(totals.responses)}</span>
-                <span data-col="input">{count(totals.inputTokens)}</span>
-                <span data-col="output">{count(totals.outputTokens)}</span>
-                <span data-col="cacheRead">{count(totals.cacheReadTokens)}</span>
-                <span data-col="cacheWrite">{count(totals.cacheWriteTokens)}</span>
-                <span data-col="reasoning">{count(totals.reasoningTokens)}</span>
-                <span title={t('usage.costHint')} data-col="cost">
-                  {cost(totals.costTotal)}
-                </span>
+              {/* Headline: three figures, read once. Everything finer lives in the panels below. */}
+              <div className="usage-sum" data-testid="usage-totals">
+                <Figure label={t('usage.requests')} value={format(totals.responses)} />
+                <Figure label={t('usage.tokens')} value={format(totalTokens)} />
+                <Figure
+                  label={t('usage.cost')}
+                  value={money(totals.costTotal, t('usage.unreported'))}
+                  hint={t('usage.costHint')}
+                />
+                <div className="usage-sum-detail">
+                  {[
+                    `${t('usage.input')} ${figure(totals.inputTokens, t)}`,
+                    `${t('usage.output')} ${figure(totals.outputTokens, t)}`,
+                    `${t('usage.cache')} ${figure(cache(totals), t)}`,
+                    `${t('usage.reasoning')} ${figure(totals.reasoningTokens, t)}`,
+                  ].join(' · ')}
+                </div>
               </div>
 
-              <div className="usage-split">
-                <div>
-                  <div className="f3 usage-h">{t('usage.byRole')}</div>
-                  <div className="usage-grid" data-testid="usage-by-role">
-                    <Head />
-                    {report.byRole.length === 0 && <span className="ut">{t('usage.empty')}</span>}
-                    {report.byRole.map((row) => (
-                      <Row
-                        key={`role-${row.roleId}`}
-                        label={t(`settings.role.${row.roleId}` as 'settings.role.chief')}
-                        figures={row}
-                        count={count}
-                        cost={cost}
-                      />
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="f3 usage-h">{t('usage.byModel')}</div>
-                  <div className="usage-grid mono" data-testid="usage-by-model">
-                    <Head />
-                    {report.byModel.length === 0 && <span className="ut">{t('usage.empty')}</span>}
-                    {report.byModel.map((row) => (
-                      <Row
-                        key={`model-${row.providerId}-${row.modelId}`}
-                        label={`${row.providerId}/${row.modelId}`}
-                        figures={row}
-                        count={count}
-                        cost={cost}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </div>
+              <Panel
+                title={t('usage.byRole')}
+                count={report.byRole.length}
+                empty={t('usage.empty')}
+                testId="usage-by-role"
+                head={t('usage.role')}
+                rows={report.byRole.map((row) => ({
+                  key: `role-${row.roleId}`,
+                  label: t(`settings.role.${row.roleId}` as 'settings.role.chief'),
+                  detail: null,
+                  figures: row,
+                  share: share(row),
+                }))}
+              />
+
+              <Panel
+                title={t('usage.byModel')}
+                count={report.byModel.length}
+                empty={t('usage.empty')}
+                testId="usage-by-model"
+                head={t('usage.model')}
+                mono
+                rows={report.byModel.map((row) => ({
+                  key: `model-${row.providerId}-${row.modelId}`,
+                  label: row.modelId,
+                  detail: row.providerId,
+                  figures: row,
+                  share: share(row),
+                }))}
+              />
             </>
           )}
         </div>
@@ -176,73 +189,117 @@ export function UsagePage({ rpc, projectId }: { rpc: RpcClient; projectId: strin
   );
 }
 
-/** The column headings every table repeats: three tables, one set of columns, no cross-referencing. */
-function Head({ label }: { label?: string } = {}): React.JSX.Element {
-  const { t } = useI18n();
+/** One headline figure. The label is quiet, the number is not: that is the whole point of a summary. */
+function Figure({ label, value, hint }: { label: string; value: string; hint?: string }): React.JSX.Element {
   return (
-    <>
-      <span className="uh ul" data-col="label">
-        {label ?? ''}
-      </span>
-      <span className="uh" data-col="requests">
-        {t('usage.requests')}
-      </span>
-      <span className="uh" data-col="input">
-        {t('usage.input')}
-      </span>
-      <span className="uh" data-col="output">
-        {t('usage.output')}
-      </span>
-      <span className="uh" data-col="cacheRead">
-        {t('usage.cacheRead')}
-      </span>
-      <span className="uh" data-col="cacheWrite">
-        {t('usage.cacheWrite')}
-      </span>
-      <span className="uh" data-col="reasoning">
-        {t('usage.reasoning')}
-      </span>
-      <span className="uh" data-col="cost">
-        {t('usage.cost')}
-      </span>
-      {/* One rule for the whole row: per-cell borders leave a stray segment under the empty label
-          column, which reads as a broken table. */}
-      <span className="uh-rule" aria-hidden="true" />
-    </>
+    <div className="usage-fig" {...(hint === undefined ? {} : { title: hint })}>
+      <span className="usage-fig-v">{value}</span>
+      <span className="usage-fig-l">{label}</span>
+    </div>
   );
 }
 
-/** One ledger slice. `count`/`cost` format a figure, so both tables read identically. */
-function Row({
-  label,
-  figures,
+interface PanelRow {
+  readonly key: string;
+  readonly label: string;
+  /** A quieter qualifier under/after the label (the provider id for a model row). */
+  readonly detail: string | null;
+  readonly figures: Figures;
+  readonly share: number | null;
+}
+
+/**
+ * One breakdown table.
+ *
+ * A real `<table>` rather than a grid: these are tabular data, and the header cells scope the columns
+ * for a screen reader ("Requests, 2"). The five columns are the ones a reader compares; cache read and
+ * write are summed here and kept apart in the row's tooltip, because splitting them across two columns
+ * made the interesting numbers ("tokens", "cost") sit far apart with empty cells between.
+ */
+function Panel({
+  title,
   count,
-  cost,
+  empty,
+  testId,
+  head,
+  mono = false,
+  rows,
 }: {
-  label: string;
-  figures: Figures;
-  count: (value: number | null) => string;
-  cost: (value: number | null) => string;
+  title: string;
+  count: number;
+  empty: string;
+  testId: string;
+  head: string;
+  mono?: boolean;
+  rows: readonly PanelRow[];
 }): React.JSX.Element {
+  const { t } = useI18n();
   return (
-    <>
-      <span className="ur" title={label} data-col="label">
-        {label}
-      </span>
-      <span data-col="requests">{compact(figures.responses)}</span>
-      <span data-col="input">{count(figures.inputTokens)}</span>
-      <span data-col="output">{count(figures.outputTokens)}</span>
-      <span data-col="cacheRead">{count(figures.cacheReadTokens)}</span>
-      <span data-col="cacheWrite">{count(figures.cacheWriteTokens)}</span>
-      <span data-col="reasoning">{count(figures.reasoningTokens)}</span>
-      <span data-col="cost">{cost(figures.costTotal)}</span>
-    </>
+    <section className="usage-panel">
+      <div className="usage-panel-h">
+        <span className="usage-panel-t">{title}</span>
+        <span className="usage-panel-n">{t('usage.count', { count: String(count) })}</span>
+      </div>
+      {rows.length === 0 ? (
+        <div className="note">{empty}</div>
+      ) : (
+        <table className={mono ? 'usage-tbl mono' : 'usage-tbl'} data-testid={testId}>
+          <thead>
+            <tr>
+              <th scope="col">{head}</th>
+              <th scope="col" className="usage-share-col" aria-label={t('usage.share')} />
+              <th scope="col">{t('usage.requests')}</th>
+              <th scope="col">{t('usage.input')}</th>
+              <th scope="col">{t('usage.output')}</th>
+              <th scope="col">{t('usage.cost')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.key}>
+                <th scope="row">
+                  <span className="usage-name" title={row.label}>
+                    {row.label}
+                  </span>
+                  {row.detail !== null && <span className="usage-sub">{row.detail}</span>}
+                </th>
+                <td className="usage-share-col">
+                  <span
+                    className="usage-bar"
+                    title={`${t('usage.share')} ${row.share === null ? '—' : `${Math.round(row.share * 100)}%`}`}
+                  >
+                    <span
+                      className="usage-bar-fill"
+                      style={{ width: `${String(Math.round((row.share ?? 0) * 100))}%` }}
+                    />
+                  </span>
+                </td>
+                <td>{format(row.figures.responses)}</td>
+                <td>{figure(row.figures.inputTokens, t)}</td>
+                <td>{figure(row.figures.outputTokens, t)}</td>
+                <td title={t('usage.costHint')}>{money(row.figures.costTotal, t('usage.unreported'))}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
   );
 }
 
 /** Counts are read at a glance: 1.2M and 480k, never 1200000. */
-function compact(value: number): string {
+function format(value: number): string {
   if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(1))}M`;
   if (value >= 1_000) return `${Number((value / 1_000).toFixed(1))}k`;
   return String(value);
+}
+
+/** A figure the provider may never have reported prints as a dash, not as a free request. */
+function figure(value: number | null, t: (key: 'usage.unreported') => string): string {
+  return value === null ? t('usage.unreported') : format(value);
+}
+
+function money(value: number | null, missing: string): string {
+  if (value === null) return missing;
+  return value > 0 && value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`;
 }
