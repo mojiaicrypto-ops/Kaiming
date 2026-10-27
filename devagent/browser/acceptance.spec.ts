@@ -83,6 +83,66 @@ test('a submitted input reaches the transcript and the run answers', async ({ pa
   }
 });
 
+test('a finished conversation shows up as token usage, per project and overall', async ({ page }) => {
+  // The stub endpoint reports `prompt_tokens: 1, completion_tokens: 1` per response, which makes the
+  // ledger readable without guessing: two replies must read as two requests and 2/2 tokens.
+  const harness = await startHarness({ model: [{ kind: 'text', text: '第一轮回答。' }, { kind: 'text', text: '第二轮回答。' }] });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+
+    const composer = page.locator('[data-testid="composer"]');
+    for (const text of ['第一句话', '第二句话']) {
+      await composer.fill(text);
+      await composer.press('Enter');
+      await expect(page.locator('[data-testid="transcript"] .m.user').last()).toContainText(text);
+      // Wait for that specific answer: the second input must not race the first run.
+      await expect(page.locator('[data-testid="transcript"] .m.chief .md').last()).toContainText('回答', {
+        timeout: 20_000,
+      });
+      await expect(page.locator('[data-testid="connection"]')).toHaveAttribute('data-state', 'connected');
+    }
+
+    await page.goto(`${harness.baseUrl}/settings/usage`, { waitUntil: 'domcontentloaded' });
+    const totals = page.locator('[data-testid="usage-totals"]');
+    await expect(totals).toBeVisible({ timeout: 10_000 });
+    // Two model responses, one input each: the ledger was written when each input finished.
+    await expect(totals).toContainText('2');
+    const read = await page.evaluate(async () => {
+      const handle = (window as unknown as { __agentdev: { rpc: { call: (m: string, p?: unknown) => Promise<unknown> } } }).__agentdev;
+      return (await handle.rpc.call('usage.report', {})) as {
+        scope: string;
+        totals: { responses: number; inputTokens: number | null; outputTokens: number | null };
+        byRole: Array<{ roleId: string; responses: number }>;
+        byModel: Array<{ providerId: string; modelId: string; responses: number }>;
+      };
+    });
+    expect(read.scope).toBe('all');
+    expect(read.totals.responses).toBe(2);
+    expect(read.totals.inputTokens).toBe(2);
+    expect(read.totals.outputTokens).toBe(2);
+    // One role (the chief wrote both turns) and one model (the stub endpoint).
+    expect(read.byRole).toHaveLength(1);
+    expect(read.byRole[0]).toMatchObject({ roleId: 'chief', responses: 2, inputTokens: 2 });
+    expect(read.byModel).toHaveLength(1);
+    expect(read.byModel[0]).toMatchObject({ providerId: 'stub', responses: 2, inputTokens: 2 });
+
+    // The scoped view is the same ledger filtered, so it can never disagree with the total.
+    const scoped = await page.evaluate(async (projectId) => {
+      const handle = (window as unknown as { __agentdev: { rpc: { call: (m: string, p?: unknown) => Promise<unknown> } } }).__agentdev;
+      return (await handle.rpc.call('usage.report', { projectId })) as { totals: { responses: number } };
+    }, harness.project?.projectId ?? '');
+    expect(scoped.totals.responses).toBe(2);
+
+    await page.locator('[data-testid="usage-scope-project"]').click();
+    await expect(page.locator('[data-testid="usage-by-model"]')).toContainText('stub');
+    await page.screenshot({ path: test.info().outputPath('usage.png') });
+  } finally {
+    await harness.close();
+  }
+});
+
 test('an attached image is stored once, shown in the message, and still there after a reload', async ({ page }) => {
   const harness = await startHarness({ model: [{ kind: 'text', text: '我看到了这张图。' }] });
   try {

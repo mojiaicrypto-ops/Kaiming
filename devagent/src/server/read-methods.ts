@@ -348,6 +348,21 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
     },
   });
 
+  /**
+   * Token usage. One scope argument: a project, or every project when it is absent — the UI switch
+   * is this parameter and nothing else, so both views are computed from the same ledger rows.
+   */
+  router.register('usage.report', {
+    write: false,
+    run: (params): unknown => {
+      const projectId = readString(params, 'projectId');
+      if (projectId !== undefined) {
+        requireProject(store, { projectId });
+      }
+      return store.usageReport(projectId === undefined ? {} : { projectId });
+    },
+  });
+
   router.register('task.list', {
     write: false,
     run: (params): unknown => {

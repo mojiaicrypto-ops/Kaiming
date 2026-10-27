@@ -9,9 +9,9 @@ export type Route =
   | { readonly view: 'requirements'; readonly selected: string | null }
   | { readonly view: 'settings'; readonly tab: SettingsTab };
 
-export type SettingsTab = 'providers' | 'models' | 'appearance';
+export type SettingsTab = 'providers' | 'models' | 'usage' | 'appearance';
 
-const SETTINGS_TABS: readonly SettingsTab[] = ['providers', 'models', 'appearance'];
+const SETTINGS_TABS: readonly SettingsTab[] = ['providers', 'models', 'usage', 'appearance'];
 const SETTINGS_PATH = /^\/settings(?:\/([^/]+))?\/?$/;
 const REQUIREMENTS_PATH = /^\/requirements\/?$/;
 

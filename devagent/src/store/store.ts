@@ -376,7 +376,7 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -550,6 +550,42 @@ const SESSION_BINDINGS_SQL = `CREATE TABLE IF NOT EXISTS session_bindings (
   rulesHash TEXT,
   updatedAt TEXT NOT NULL
 );`;
+
+/**
+ * Usage ledger: one row per (input, role, model), appended when the input reaches its end.
+ *
+ * A ledger rather than counters: the requirement asks for totals by role, by model, per project and
+ * across projects, and a running counter cannot answer "which model cost this" after the fact, nor be
+ * corrected. Rows are tiny (one input produces one row per model it touched), and every figure the
+ * UI shows is a GROUP BY over this table.
+ *
+ * Numeric columns are nullable on purpose: a gateway that reports no usage must read as "not
+ * reported", never as zero.
+ */
+const USAGE_LEDGER_SQL = `
+CREATE TABLE IF NOT EXISTS usage_entries (
+  inputId TEXT NOT NULL,
+  projectId TEXT NOT NULL,
+  sessionId TEXT NOT NULL,
+  taskId TEXT,
+  roleId TEXT NOT NULL,
+  providerId TEXT NOT NULL,
+  modelId TEXT NOT NULL,
+  inputTokens INTEGER,
+  outputTokens INTEGER,
+  cacheReadTokens INTEGER,
+  cacheWriteTokens INTEGER,
+  reasoningTokens INTEGER,
+  costTotal REAL,
+  responses INTEGER NOT NULL,
+  startedAt TEXT NOT NULL,
+  endedAt TEXT NOT NULL,
+  PRIMARY KEY (inputId, providerId, modelId)
+);
+CREATE INDEX IF NOT EXISTS idx_usage_project ON usage_entries (projectId, endedAt);
+CREATE INDEX IF NOT EXISTS idx_usage_role ON usage_entries (roleId);
+CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_entries (providerId, modelId);
+`;
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS projects (
@@ -1442,6 +1478,139 @@ export class Store {
         params.expectedRevision,
       );
     return outcome.changes === 1;
+  }
+
+  /**
+   * Append one input's usage to the ledger.
+   *
+   * Called once per input, before its terminal state is written, with the responses aggregated per
+   * (role, model). Idempotent on `(inputId, providerId, modelId)`: a retry after a crash credits the
+   * tokens once, and a re-run of an input that already settled cannot double-count.
+   *
+   * Values are nullable because "the gateway reported nothing" and "the gateway reported zero" are
+   * different facts, and only one of them means free.
+   */
+  recordUsage(params: {
+    inputId: string;
+    projectId: string;
+    sessionId: string;
+    taskId?: string | null;
+    roleId: string;
+    startedAt: string;
+    endedAt: string;
+    entries: readonly {
+      providerId: string;
+      modelId: string;
+      inputTokens: number | null;
+      outputTokens: number | null;
+      cacheReadTokens: number | null;
+      cacheWriteTokens: number | null;
+      reasoningTokens: number | null;
+      costTotal: number | null;
+      responses: number;
+    }[];
+  }): number {
+    if (params.entries.length === 0) return 0;
+    return this.transaction(() => {
+      const statement = this.db.prepare(
+        `INSERT OR IGNORE INTO usage_entries
+           (inputId, projectId, sessionId, taskId, roleId, providerId, modelId, inputTokens, outputTokens,
+            cacheReadTokens, cacheWriteTokens, reasoningTokens, costTotal, responses, startedAt, endedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      let written = 0;
+      for (const entry of params.entries) {
+        const outcome = statement.run(
+          params.inputId,
+          params.projectId,
+          params.sessionId,
+          params.taskId ?? null,
+          params.roleId,
+          entry.providerId,
+          entry.modelId,
+          entry.inputTokens,
+          entry.outputTokens,
+          entry.cacheReadTokens,
+          entry.cacheWriteTokens,
+          entry.reasoningTokens,
+          entry.costTotal,
+          entry.responses,
+          params.startedAt,
+          params.endedAt,
+        );
+        written += Number(outcome.changes);
+      }
+      return written;
+    });
+  }
+
+  /**
+   * Usage totals, grouped three ways over the same rows.
+   *
+   * `projectId` omitted means every project — the scope switch is exactly this argument, so the two
+   * views can never disagree about what "all projects" contains. Sums are `SUM()` over the ledger
+   * (NULLs skipped by SQLite, so a model that never reported usage contributes no tokens and still
+   * counts its responses).
+   */
+  usageReport(params: { projectId?: string } = {}): UsageReport {
+    const where = params.projectId === undefined ? '' : 'WHERE projectId = ?';
+    const args = params.projectId === undefined ? [] : [params.projectId];
+    const group = (column: string): string =>
+      `SELECT ${column} AS key,
+              COUNT(*) AS rows,
+              SUM(responses) AS responses,
+              SUM(inputTokens) AS inputTokens,
+              SUM(outputTokens) AS outputTokens,
+              SUM(cacheReadTokens) AS cacheReadTokens,
+              SUM(cacheWriteTokens) AS cacheWriteTokens,
+              SUM(reasoningTokens) AS reasoningTokens,
+              SUM(costTotal) AS costTotal
+         FROM usage_entries ${where}
+        GROUP BY ${column}
+        ORDER BY SUM(COALESCE(inputTokens, 0) + COALESCE(outputTokens, 0)) DESC, key`;
+
+    const totals = this.db
+      .prepare(
+        `SELECT COUNT(*) AS rows,
+                SUM(responses) AS responses,
+                SUM(inputTokens) AS inputTokens,
+                SUM(outputTokens) AS outputTokens,
+                SUM(cacheReadTokens) AS cacheReadTokens,
+                SUM(cacheWriteTokens) AS cacheWriteTokens,
+                SUM(reasoningTokens) AS reasoningTokens,
+                SUM(costTotal) AS costTotal
+           FROM usage_entries ${where}`,
+      )
+      .get(...args) as Record<string, unknown>;
+
+    const roleRows = this.db.prepare(group('roleId')).all(...args) as Array<Record<string, unknown>>;
+    const modelRows = this.db
+      .prepare(
+        `SELECT providerId, modelId,
+                COUNT(*) AS rows,
+                SUM(responses) AS responses,
+                SUM(inputTokens) AS inputTokens,
+                SUM(outputTokens) AS outputTokens,
+                SUM(cacheReadTokens) AS cacheReadTokens,
+                SUM(cacheWriteTokens) AS cacheWriteTokens,
+                SUM(reasoningTokens) AS reasoningTokens,
+                SUM(costTotal) AS costTotal
+           FROM usage_entries ${where}
+          GROUP BY providerId, modelId
+          ORDER BY SUM(COALESCE(inputTokens, 0) + COALESCE(outputTokens, 0)) DESC, providerId, modelId`,
+      )
+      .all(...args) as Array<Record<string, unknown>>;
+
+    return {
+      scope: params.projectId === undefined ? 'all' : 'project',
+      totals: usageFigures(totals),
+      byRole: roleRows.map((row) => ({ roleId: String(row['key']), ...usageFigures(row) })),
+      byModel: modelRows.map((row) => ({
+        providerId: String(row['providerId']),
+        modelId: String(row['modelId']),
+        ...usageFigures(row),
+      })),
+    };
   }
 
   /**
@@ -2988,6 +3157,19 @@ export class Store {
     });
   }
 
+  /**
+   * v13 → v14: the usage ledger. Additive and `IF NOT EXISTS`, so an installation created by this
+   * revision (whose schema script already contains the table) and one upgraded from v13 both end up
+   * with the same shape. No existing record changes, and no history is back-filled: statistics start
+   * when the installation starts recording them.
+   */
+  private migrateV13ToV14(): void {
+    this.transaction(() => {
+      this.db.exec(USAGE_LEDGER_SQL);
+      this.db.exec('PRAGMA user_version = 14;');
+    });
+  }
+
   private migrateV10ToV11(): void {
     this.transaction(() => {
       this.applyV11();
@@ -3109,6 +3291,7 @@ export class Store {
         [10, () => this.migrateV10ToV11()],
         [11, () => this.migrateV11ToV12()],
         [12, () => this.migrateV12ToV13()],
+        [13, () => this.migrateV13ToV14()],
       ];
       for (const [from, step] of steps) {
         if (this.pragmas().userVersion === from) {
@@ -3231,6 +3414,45 @@ function answerIssue(interaction: InteractionRow, response: unknown): string | u
     return answered.trim() === '' ? 'a selection answer cannot be empty' : undefined;
   }
   return undefined;
+}
+
+/**
+ * One slice of the usage ledger as the API reports it.
+ *
+ * Every figure but `responses` is nullable: `null` means the provider never reported that number
+ * (or the response predates reporting), which the UI must show as "not reported" rather than as a
+ * free request. `responses` is always known: it counts model requests, not tokens.
+ */
+export interface UsageFigures {
+  readonly responses: number;
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly cacheReadTokens: number | null;
+  readonly cacheWriteTokens: number | null;
+  readonly reasoningTokens: number | null;
+  /** Estimated at the model catalogue's prices; a gateway may bill differently. */
+  readonly costTotal: number | null;
+}
+
+export interface UsageReport {
+  readonly scope: 'project' | 'all';
+  readonly totals: UsageFigures;
+  readonly byRole: ReadonlyArray<UsageFigures & { readonly roleId: string }>;
+  readonly byModel: ReadonlyArray<UsageFigures & { readonly providerId: string; readonly modelId: string }>;
+}
+
+function usageFigures(row: Record<string, unknown>): UsageFigures {
+  const number = (value: unknown): number | null =>
+    value === null || value === undefined ? null : Number(value);
+  return {
+    responses: Number(row['responses'] ?? 0),
+    inputTokens: number(row['inputTokens']),
+    outputTokens: number(row['outputTokens']),
+    cacheReadTokens: number(row['cacheReadTokens']),
+    cacheWriteTokens: number(row['cacheWriteTokens']),
+    reasoningTokens: number(row['reasoningTokens']),
+    costTotal: number(row['costTotal']),
+  };
 }
 
 function toProviderRow(row: Record<string, unknown>): ProviderRow {

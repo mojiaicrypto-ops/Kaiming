@@ -66,13 +66,20 @@ interface ChatChunkDelta {
   readonly [key: string]: unknown;
 }
 
-function sseChunk(modelId: string, delta: ChatChunkDelta, finishReason: string | null): string {
+function sseChunk(
+  modelId: string,
+  delta: ChatChunkDelta,
+  finishReason: string | null,
+  /** Top-level usage, as OpenAI puts it on the chunk that carries the finish reason. */
+  usage?: typeof STUB_USAGE,
+): string {
   const payload = {
     id: 'chatcmpl-stub',
     object: 'chat.completion.chunk',
     created: Math.floor(Date.now() / 1000),
     model: modelId,
     choices: [{ index: 0, delta, finish_reason: finishReason }],
+    ...(usage === undefined ? {} : { usage }),
   };
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
@@ -110,14 +117,10 @@ async function writeCompletion(res: ServerResponse, reply: StubReply, turn: numb
       if (res.destroyed) return;
       res.write(sseChunk(STUB_MODEL, { content: reply.text.slice(at, at + size) }, null));
     }
-    res.write(
-      sseChunk(STUB_MODEL, {}, 'stop').replace('}}', `},"usage":${JSON.stringify(STUB_USAGE)}}`),
-    );
+    res.write(sseChunk(STUB_MODEL, {}, 'stop', STUB_USAGE));
   } else if (reply.kind === 'text') {
     res.write(sseChunk(STUB_MODEL, { content: reply.text }, null));
-    res.write(
-      sseChunk(STUB_MODEL, {}, 'stop').replace('}}', `},"usage":${JSON.stringify(STUB_USAGE)}}`),
-    );
+    res.write(sseChunk(STUB_MODEL, {}, 'stop', STUB_USAGE));
   } else {
     reply.calls.forEach((call, index) => {
       res.write(
@@ -139,12 +142,7 @@ async function writeCompletion(res: ServerResponse, reply: StubReply, turn: numb
         ),
       );
     });
-    res.write(
-      sseChunk(STUB_MODEL, {}, 'tool_calls').replace(
-        '}}',
-        `},"usage":${JSON.stringify(STUB_USAGE)}}`,
-      ),
-    );
+    res.write(sseChunk(STUB_MODEL, {}, 'tool_calls', STUB_USAGE));
   }
   res.write('data: [DONE]\n\n');
   res.end();

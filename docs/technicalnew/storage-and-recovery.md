@@ -26,6 +26,7 @@ Dispatcher 读取 session_inputs，提交后唤醒，启动/周期扫描兜底�
 | interactions | id/requestKey/projectId/taskId?/sourceSessionId/sourceInputId/invocationKey/sequence/method/request/revision/state/response?/responseSource? | 原请求身份和答复事实；专业来源必有 taskId；当前主管路由读取 Task |
 | file_saves | requestKey/target/observedVersion/contentHash/content/state/receipt? | 仅宿主负责的 Plan/报告/需求/初始化保存；observedVersion 由程序记录本会话上次读到的内容，不要求模型携带；state=pending/saved/conflict |
 | request_receipts | requestKey/method/paramsDigest/status/result?/error? | status=pending/committed；同 key 不同参数冲突；成功与失败回执都如实保存 |
+| usage_entries | inputId/projectId/sessionId/taskId?/roleId/providerId/modelId/inputTokens/outputTokens/cacheReadTokens/cacheWriteTokens/reasoningTokens/costTotal/responses/startedAt/endedAt | 追加写入，不改写历史；(inputId,providerId,modelId) 唯一，重试不会重复计数；数值全部取自响应上报的用量，缺失记 NULL 而不是 0；按项目/角色/模型三种维度统计时由查询 GROUP BY 得出，不维护累加计数器 |
 
 interactions.state=pending/resolved/stale。pending 已保存、可展示；resolved 答复不可覆写，相同重试返回原回执，不同答复冲突；stale 不恢复原等待。没有“UI 已呈现”准入状态，保存后广播、断线从快照重现。请求/答复唯一见 M5。
 
@@ -56,6 +57,18 @@ DocumentRef={path,purpose,sha256} 是项目依据的内容摘要；PlanRef/Repor
 交付身份由程序观察：有 Git 时取提交/工作树，没有 Git 时取 Task 声明范围内交付文件的内容摘要；不引入候选对象，也不要求模型传递版本。Review/Test 报告提交时记录该状态，完成核对时比较。
 
 同一 Task 的当前步骤可以有多个写成员，按声明的 writeScope 分工；程序核对范围重叠并告警，是否并行由主管判断。首版不要求分离目录，并行多个 Task 的独立 worktree 属于后续版本。负责人覆盖运行写工作，停稳后释放；恢复前核实外部变化，不靠永久锁猜测已完成。复核/测试期间不再修改其交付文件，测试环境有需要时使用副本/独立 worktree。
+
+## S2 用量记录的边界
+
+用量只在一次输入（claim → 终态）内部聚合写入，不在流式过程中写库：
+
+- 输入开始时记录 Pi 历史的消息下标；输入结束时取该下标之后的 assistant 消息，按响应自带的 `provider`/`model` 归并，累加 `input`/`output`/`cacheRead`/`cacheWrite`/`reasoning`/`cost.total`，`responses` 记归并的响应数。
+- 写入发生在输入终态之前，且按 `(inputId, providerId, modelId)` 幂等：中途崩溃时已花费的 tokens 仍然记账，重放不会翻倍；用量记录失败不阻断输入的终态（统计缺失不改变对话结果，但会在验证记录中如实报告）。
+- 角色取该 Session 的 `roleId`，Task/项目取会话归属，模型取响应自己的 `provider`/`model`——模型不取配置里的意图值，因此压缩等内部调用按真实模型归属。
+- 服务方未上报用量的响应（老网关、部分代理）记 NULL；界面据此显示「未上报」，不用 0 冒充。
+- 不做历史回填：`.pi` 历史里的事实不作为首版统计来源，避免启动时扫描全部会话文件。
+
+统计由查询完成：`usage.report` 对同一 WHERE 做三次聚合（合计 / 按角色 / 按模型），作用域就是 `projectId` 是否参与过滤；不维护可漂移的计数器。
 
 ## S3 事务、认领与等待
 

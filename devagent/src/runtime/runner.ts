@@ -26,6 +26,7 @@ import { INPUT_MARKER_CUSTOM_TYPE, HistoryUnavailableError, type PiRuntimeFactor
 import { RunWatchdogError, runWithWatchdog } from './run-watchdog.ts';
 import { SessionRegistry, type LogicalSessionSpec } from './registry.ts';
 import { epochOf } from './epoch.ts';
+import { rollupUsage } from './usage-rollup.ts';
 import { partsOfPayload } from './input-text.ts';
 import { readImage } from '../server/attachments.ts';
 import { InteractionBridge, createUiAdapter } from './interactions.ts';
@@ -504,7 +505,19 @@ const serverWorkDir = join(config.agentDir, 'work');
         },
       });
 
+      // Usage is read as a slice of the session's own messages: this input's responses are exactly the
+      // ones appended from here on. Nothing is written while the model streams.
+      const usageStart = handle.session.messages.length;
+      const usageStartedAt = new Date().toISOString();
       await this.promptWithWatchdog(handle, sessionId, text, images);
+      this.recordUsageOf(
+        session,
+        input.inputId,
+        handle,
+        usageStart,
+        usageStartedAt,
+        this.options.store.getTaskForSession(sessionId)?.id,
+      );
 
       const lastMessage = handle.session.messages[handle.session.messages.length - 1];
       const stopReason = lastMessage?.role === 'assistant' ? lastMessage.stopReason : 'none';
@@ -681,6 +694,48 @@ const serverWorkDir = join(config.agentDir, 'work');
       }
     }
     return result;
+  }
+
+  /**
+   * Append this input's token usage to the ledger, aggregated per (role, model).
+   *
+   * Why here and not while streaming: usage is only reported with a completed response, and an input
+   * performs several of them (every tool round is a request). One transaction per input keeps the
+   * conversation path free of writes, and the ledger stays a plain append — the statistics are
+   * GROUP BYs, so nothing has to be kept consistent.
+   *
+   * Attribution comes from the response itself (`provider`/`model`), not from the configuration: a
+   * compaction or a fallback model must be counted where it was really spent. A response that reports
+   * no usage still counts as a response, with null figures — "unreported" and "free" are different.
+   *
+   * Failure to record never changes the conversation's outcome: the run already happened, and the
+   * input's terminal state is written by the caller regardless.
+   */
+  private recordUsageOf(
+    session: { readonly id: string; readonly projectId: string; readonly roleId: string },
+    inputId: string,
+    handle: PiSessionHandle,
+    from: number,
+    startedAt: string,
+    taskId: string | undefined,
+  ): void {
+    try {
+      const entries = rollupUsage(handle.session.messages, from);
+      if (entries.length === 0) return;
+      this.options.store.recordUsage({
+        inputId,
+        projectId: session.projectId,
+        sessionId: session.id,
+        ...(taskId !== undefined ? { taskId } : {}),
+        roleId: session.roleId,
+        startedAt,
+        endedAt: new Date().toISOString(),
+        entries,
+      });
+    } catch {
+      // Statistics are not the conversation's contract: a ledger write that fails must not turn a
+      // successful run into a failed input. The gap shows up as a missing row, never as a wrong one.
+    }
   }
 
   /**

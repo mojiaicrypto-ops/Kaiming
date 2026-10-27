@@ -1979,6 +1979,82 @@ details.fold > summary.tline:hover {
 .src.ov {
   color: var(--accent);
 }
+/* Usage: three tables with one set of columns, stacked, so every figure sits in the same vertical
+   track and a row can be read against the total above it. Fixed numeric tracks (not fractions) are
+   what keeps them aligned: the label column absorbs the remaining width. */
+.usage-grid {
+  display: grid;
+  /* label · requests · input · output · cache read · cache write · reasoning · cost */
+  grid-template-columns: minmax(8em, 1fr) 5em 5em 5.5em 7.4em 7.4em 6em 5em;
+  gap: 2px var(--s3);
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+}
+.usage-grid > span {
+  padding: 2px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-grid > span:not(:first-child) {
+  text-align: right;
+}
+.usage-grid .uh {
+  color: var(--fg-3);
+}
+.usage-grid .uh.ul {
+  text-align: left;
+}
+.usage-grid .uh-rule {
+  grid-column: 1 / -1;
+  height: 1px;
+  padding: 0;
+  background: var(--line);
+}
+.usage-grid .ut,
+.usage-grid .ur {
+  color: var(--fg-2);
+  /* A label is not a number: it stays on the left, where the eye starts. */
+  text-align: left !important;
+}
+[data-testid='usage-totals'] {
+  margin-bottom: var(--s5);
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--line-strong);
+  font-size: var(--fs-13);
+  color: var(--fg);
+}
+[data-testid='usage-totals'] .ut {
+  color: var(--fg);
+}
+.usage-h {
+  margin: var(--s4) 0 var(--s2);
+}
+.usage-split {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+}
+@media (max-width: 760px) {
+  /* A phone cannot hold eight numeric columns at a readable size: the table scrolls sideways
+     inside its own box instead of squashing the numbers into illegibility. */
+  /* A phone shows the four figures that decide anything; the cache and reasoning split is detail
+     that stays on wide screens (it is zero for most gateways). */
+  .usage-grid {
+    /* Measured against a 390px viewport: label + five figures, 4px gutters. "Requests" needs the
+       widest numeric column; the model id ellipsizes (its full text is the cell's title). */
+    grid-template-columns: minmax(5em, 1fr) 5.2em 4.7em 4.9em 4.6em;
+    column-gap: 4px;
+  }
+  .usage-grid [data-col='cacheRead'],
+  .usage-grid [data-col='cacheWrite'],
+  .usage-grid [data-col='reasoning'] {
+    display: none;
+  }
+}
+
 .seg {
   display: inline-flex;
   border: 1px solid var(--line-strong);

@@ -4,6 +4,7 @@ import type { Locale } from '../i18n/catalog';
 import type { Density, ThemePreference } from '../app/usePreferences';
 import { ProvidersPage } from './ProvidersPage';
 import { ModelsPage } from './ModelsPage';
+import { UsagePage } from './UsagePage';
 import { AppearancePage } from './AppearancePage';
 import type { RpcClient } from '../api/rpc';
 
@@ -20,9 +21,13 @@ export interface SettingsPageProps {
   readonly onNotice: (message: string, kind: 'info' | 'success' | 'error') => void;
 }
 
-const TABS: ReadonlyArray<{ tab: SettingsTab; key: 'settings.providers' | 'settings.models' | 'settings.appearance' }> = [
+const TABS: ReadonlyArray<{
+  tab: SettingsTab;
+  key: 'settings.providers' | 'settings.models' | 'settings.usage' | 'settings.appearance';
+}> = [
   { tab: 'providers', key: 'settings.providers' },
   { tab: 'models', key: 'settings.models' },
+  { tab: 'usage', key: 'settings.usage' },
   { tab: 'appearance', key: 'settings.appearance' },
 ];
 
@@ -65,6 +70,7 @@ export function SettingsPage({ route, rpc, projectId, locale, onLocale, theme, o
           onError={(message) => onNotice(message, 'error')}
         />
       )}
+      {route.tab === 'usage' && <UsagePage rpc={rpc} projectId={projectId} />}
       {route.tab === 'appearance' && (
         <AppearancePage
           locale={locale}
