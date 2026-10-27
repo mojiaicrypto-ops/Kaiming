@@ -175,6 +175,58 @@ test('a question is answered in the panel and the model continues', async ({ pag
   }
 });
 
+test('a choice can be answered in the user\'s own words, not only from its options', async ({ page }) => {
+  // The options can all be wrong. Refusing the typed answer made the panel offer a door that did not
+  // open: the user typed, pressed Enter, and the server answered "not one of the offered options".
+  const harness = await startHarness({
+    model: [
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'question',
+            arguments: JSON.stringify({
+              method: 'select',
+              title: '「评/说」边界怎么定？',
+              options: ['采纳双轨', '只在聊天里解读', '保持现状'],
+            }),
+          },
+        ],
+      },
+      { kind: 'text', text: '好的，先出样例。' },
+    ],
+  });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+
+    const composer = page.locator('[data-testid="composer"]');
+    await composer.fill('继续');
+    await composer.press('Enter');
+
+    const panel = page.locator('[data-testid="question-panel"]');
+    await expect(panel).toBeVisible({ timeout: 20_000 });
+    // The escape hatch is a row of its own, after the options.
+    await panel.locator('.ao.other').click();
+    const field = panel.getByRole('textbox');
+    await expect(field).toBeFocused();
+    await field.fill('方向认同，但先看一份具体样例：拿一个真实盘做骨架＋解读段落');
+    await field.press('Enter');
+
+    // Accepted and echoed verbatim: no "not one of the offered options", no mapping to an option.
+    await expect(panel).toContainText('Answer received', { timeout: 15_000 });
+    await expect(panel).toContainText('先看一份具体样例');
+    await expect(panel).toHaveCount(0, { timeout: 15_000 });
+    await expect(page.locator('[data-testid="transcript"] .askline')).toHaveClass(/ok/);
+    await expect(page.locator('[data-testid="transcript"] .m.chief .md').last()).toContainText('先出样例', {
+      timeout: 20_000,
+    });
+  } finally {
+    await harness.close();
+  }
+});
+
 test('a question with long options wraps instead of being cut off', async ({ page }) => {
   // Options are rows in a column, not pills in a row: a long reason must wrap inside its row
   // with a hanging indent, and the panel must not grow past the viewport to show it.

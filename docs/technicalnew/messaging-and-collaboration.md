@@ -171,10 +171,10 @@ sequenceDiagram
 | request.method | 请求字段 | 用户 response | 原 ctx.ui 返回 |
 |---|---|---|---|
 | confirm | title、message | {confirmed:boolean} 或 {cancelled:true} | boolean，取消为 false |
-| select | title、options:string[] | {value:string} 或 {cancelled:true} | 选项字符串，取消为 undefined |
+| select | title、options:string[] | {value:string} 或 {cancelled:true} | 选项字符串或用户自填的答复，取消为 undefined |
 | input | title、placeholder? | {value:string} 或 {cancelled:true} | 输入文本，取消为 undefined |
 
-UI 只根据 method 渲染并发送实际答复；选项来自请求，不由 UI 添加业务动作。模型需要另问或改用输入时，再发起相应通用交互。未答复不视为同意；取消后将取消结果返回原调用，由模型决定继续、调整或停止。
+UI 只根据 method 渲染并发送实际答复；选项来自请求，不由 UI 添加业务动作。选择请求始终附带一个「自行输入」入口：选项可能都不成立，逼用户挑一个会把错误决定写进记录；自填答复原样交给模型，不映射成某个选项、不解释成同意。模型需要另问或改用输入时，再发起相应通用交互。未答复不视为同意；取消后将取消结果返回原调用，由模型决定继续、调整或停止。
 
 ```json
 {
@@ -196,7 +196,7 @@ UI 只根据 method 渲染并发送实际答复；选项来自请求，不由 UI
 }
 ```
 
-interaction.respond 直接接入现有 WAL 服务：核对当前归属、请求 ID/版本与答复形状（select 必须是原选项），提交后解除原 ctx.ui 等待。它不排普通 Session 输入、不触发新 prompt、不等待主管模型转发。业务含义由模型根据问题和真实答复判断，Server 不解析业务批准范围，也不增加业务确认字段。
+interaction.respond 直接接入现有 WAL 服务：核对当前归属、请求 ID/版本与答复形状（select 为非空字符串：选项之一或用户自填；空答复不成立，非字符串不成立），提交后解除原 ctx.ui 等待。它不排普通 Session 输入、不触发新 prompt、不等待主管模型转发。业务含义由模型根据问题和真实答复判断，Server 不解析业务批准范围，也不增加业务确认字段。
 
 请求持久化后才发布，答复持久化后才继续；断线从快照重现原请求，重复答复复用原回执。停止、失效与重启沿用 [S2/S3/S5/S7](storage-and-recovery.md)，question 和 UI 不维护另一套恢复状态。
 

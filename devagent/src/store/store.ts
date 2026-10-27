@@ -1086,7 +1086,7 @@ export class Store {
   }): InteractionRow {
     return this.transaction(() => {
       const interaction = this.requireInteraction(params.interactionId);
-      // The answer must fit the question: a select accepts only its own options (M5 trust boundary).
+      // The answer must fit the question: a select takes a non-empty string (M5 trust boundary).
       const shapeIssue = answerIssue(interaction, params.response);
       if (shapeIssue !== undefined) {
         throw new StoreError('INVALID_ARGUMENT', shapeIssue, { interactionId: params.interactionId });
@@ -3192,8 +3192,11 @@ function answerIssue(interaction: InteractionRow, response: unknown): string | u
     return 'the answer must be a string or {value}';
   }
   if (interaction.method === 'select') {
-    const options = interaction.options === null ? [] : (JSON.parse(interaction.options) as string[]);
-    return options.includes(answered) ? undefined : 'the answer is not one of the offered options';
+    // A choice is answered with a string: one of the offered options, or the user's own words. The
+    // panel always offers that second door, because options can all be wrong — refusing the typed
+    // answer would force a decision nobody made into the record. What stays forbidden is an *empty*
+    // answer: silence is not a choice, and the asking model cannot act on it.
+    return answered.trim() === '' ? 'a selection answer cannot be empty' : undefined;
   }
   return undefined;
 }

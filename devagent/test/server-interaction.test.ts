@@ -300,7 +300,7 @@ describe('interaction bridge', () => {
     await h.awaitRun();
   }, 30_000);
 
-  it('refuses an answer that is not one of the offered options', async () => {
+  it('accepts a typed answer that is not one of the options, and refuses an empty one', async () => {
     const h = await harness([
       questionReply('select', { options: ['加入', '暂不加入'] }),
       { kind: 'text', text: '好' },
@@ -312,26 +312,31 @@ describe('interaction bridge', () => {
     });
     const pending = await awaitPending(h.store, 's-chief');
 
-    const forged = await h.call('interaction.respond', {
+    // Silence is not a choice: an empty answer would hand the model nothing to act on.
+    const empty = await h.call('interaction.respond', {
       projectId: h.projectId,
       chiefSessionId: 's-chief',
       interactionId: pending.interactionId,
       expectedRevision: pending.revision,
-      response: { value: '从未提供过的选项' },
+      response: { value: '   ' },
     });
-
-    expect((forged['error'] as { code: string }).code).toBe('INVALID_ARGUMENT');
+    expect((empty['error'] as { code: string }).code).toBe('INVALID_ARGUMENT');
     expect(h.store.getInteraction(pending.interactionId)?.state).toBe('pending');
 
-    // A real option is accepted, and the run continues.
-    const answered = await h.call('interaction.respond', {
+    // The user's own words are a legitimate answer: the options can all be wrong, and forcing one of
+    // them would put a decision nobody made into the record. It is stored verbatim, not mapped.
+    const typed = await h.call('interaction.respond', {
       projectId: h.projectId,
       chiefSessionId: 's-chief',
       interactionId: pending.interactionId,
       expectedRevision: pending.revision,
-      response: { value: '加入' },
+      response: { value: '先看一份样例再定' },
     });
-    expect(answered['error']).toBeUndefined();
+    expect(typed['error']).toBeUndefined();
+    expect(h.store.getInteraction(pending.interactionId)).toMatchObject({
+      state: 'resolved',
+      response: '{"value":"先看一份样例再定"}',
+    });
     await h.awaitRun();
   }, 30_000);
 

@@ -67,6 +67,12 @@ export function InteractionPanel({ interactions, answerState, onAnswer, sourceLa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, active?.method]);
 
+  // Opening the "type another answer" row must land the cursor in it: the row was clicked, so the
+  // user's next keystrokes belong there, not to the transcript's shortcut handler.
+  useEffect(() => {
+    if (other) inputRef.current?.focus();
+  }, [other]);
+
   useEffect(() => {
     if (activeId === null || sealed) return;
     const element = document.activeElement as HTMLElement | null;
