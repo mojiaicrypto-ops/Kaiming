@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store, StoreError } from '../src/store/store.ts';
 import { credentialRefFor, modelsPathFor, writeProvider } from '../src/runtime/provider-store.ts';
+import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { PiRuntimeFactory } from '../src/runtime/pi-runtime.ts';
 import { createStubEnv } from '../spikes/harness/pi-env.ts';
 import { AuthService, CSRF_HEADER, SESSION_COOKIE } from '../src/server/auth.ts';
@@ -16,6 +17,7 @@ import { createWorkbenchServer } from '../src/server/http.ts';
 import { registerCoreMethods, type CatalogModelFacts } from '../src/server/methods.ts';
 import { resolveStoredConfig, type RuntimeDefaults } from '../src/runtime/config.ts';
 import type { ModelFacts } from '../src/runtime/pi-runtime.ts';
+
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -730,6 +732,60 @@ describe('a gateway alias borrows the real model\'s facts', () => {
       upstream: 'zai/glm-5-3',
       reasoning: true,
     });
+  });
+
+  it('borrows the catalogue facts but never its wire protocol', async () => {
+    // The incident: a catalogue entry lists the vendor's own `api` (`pi-messages` for Pi's radius).
+    // Writing that onto the model made Pi serialize Pi's protocol at an OpenAI-compatible gateway, so
+    // every request failed at the endpoint AND at the gateway, with nothing in the UI saying why. The
+    // loader is the one that has to hold: whatever a caller hands `writeProvider`, the model must not
+    // acquire a protocol of its own.
+    const root = mkdtempSync(join(tmpdir(), 'devagent-vendor-'));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    const agentDir = join(root, 'agent');
+    const written = writeProvider(agentDir, {
+      providerId: 'my-gateway',
+      baseUrl: 'http://127.0.0.1:3425/v1',
+      api: 'openai-completions',
+      apiKey: 'gw-key',
+      models: [
+        {
+          id: 'auto-deepseek',
+          name: 'auto-deepseek',
+          reasoning: true,
+          thinkingLevelMap: { off: 'none', low: 'low', high: 'high' },
+          contextWindow: 1_000_000,
+          maxTokens: 32_768,
+          // What the removed code passed: the catalogue model's vendor identity.
+          upstream: { providerId: 'radius', modelId: 'deepseek-v4.1-flash', api: 'pi-messages' },
+        } as never,
+      ],
+    });
+    expect(written.ok).toBe(true);
+
+    const parsed = JSON.parse(readFileSync(modelsPathFor(agentDir), 'utf8')) as {
+      providers: { 'my-gateway': { api?: string; models: Array<Record<string, unknown>> } };
+    };
+    const provider = parsed.providers['my-gateway'];
+    const model = provider.models[0] ?? {};
+    expect(model).toMatchObject({
+      id: 'auto-deepseek',
+      reasoning: true,
+      thinkingLevelMap: { off: 'none', low: 'low', high: 'high' },
+      contextWindow: 1_000_000,
+      maxTokens: 32_768,
+    });
+    expect(model['api']).toBeUndefined();
+    expect(model['provider']).toBeUndefined();
+    expect(model['baseUrl']).toBeUndefined();
+
+    // And what Pi would really use: the endpoint's protocol.
+    const runtime = await ModelRuntime.create({
+      modelsPath: modelsPathFor(agentDir),
+      authPath: join(agentDir, 'auth.json'),
+      allowModelNetwork: false,
+    });
+    expect(runtime.getModel('my-gateway', 'auto-deepseek')?.api).toBe('openai-completions');
   });
 
   it('refuses a name the catalogue does not know, and an ambiguous one, before anything is written', async () => {

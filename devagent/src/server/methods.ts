@@ -350,7 +350,8 @@ async function saveProvider(
   const models: Array<{
     id: string;
     name: string;
-    upstream?: { providerId: string; modelId: string; api: string };
+    /** `provider/model` of the catalogue model the facts were copied from; display only. */
+    upstream?: string;
     reasoning: boolean;
     baseModel?: { providerId: string; modelId: string };
     contextWindow?: number;
@@ -377,12 +378,9 @@ async function saveProvider(
     models.push({
       id,
       name: typeof model['name'] === 'string' && model['name'] !== '' ? model['name'] : id,
-      // Pi routes an id that resolves to a catalogue model through that model's own protocol. Naming
-      // the model through `baseModel` gets the same treatment: borrowing the facts while keeping the
-      // endpoint's wire format would describe a model this id is not.
-      ...(facts !== undefined
-        ? { upstream: { providerId: facts.providerId, modelId: facts.modelId, api: facts.api ?? api } }
-        : {}),
+      // Recorded so the configuration page can show which catalogue model these facts came from. It
+      // is not a protocol claim: the wire format stays the endpoint's (see `writeProvider`).
+      ...(facts !== undefined ? { upstream: `${facts.providerId}/${facts.modelId}` } : {}),
       // The catalogue knows nothing about an endpoint the operator typed in, so either the model is
       // resolved (facts borrowed from it) or the operator declares reasoning itself.
       reasoning: facts?.reasoning === true || model['reasoning'] === true,
@@ -405,7 +403,7 @@ async function saveProvider(
     models: models.map((model) => ({
       id: model.id,
       name: model.name,
-      ...(model.upstream !== undefined ? { upstream: model.upstream } : {}),
+
       ...(model.reasoning ? { reasoning: true } : {}),
       ...(model.thinkingLevelMap !== undefined ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
       ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
@@ -424,7 +422,7 @@ async function saveProvider(
     models: models.map((model) => ({
       id: model.id,
       name: model.name,
-      ...(model.upstream !== undefined ? { upstream: `${model.upstream.providerId}/${model.upstream.modelId}` } : {}),
+      ...(model.upstream !== undefined ? { upstream: model.upstream } : {}),
       reasoning: model.reasoning,
       ...(model.thinkingLevelMap !== undefined ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
     })),

@@ -40,11 +40,6 @@ export interface ProviderModelDefinition {
   readonly id: string;
   readonly name: string;
   readonly reasoning?: boolean;
-  /**
-   * The catalogue model this id really is. Pi loads its own vendors by baseUrl, so a model resolved
-   * from the catalogue also carries the api it really speaks (recorded here, not in the database).
-   */
-  readonly upstream?: { readonly providerId: string; readonly modelId: string; readonly api?: string };
   /** Resolved from `baseModel`: the catalog's own numbers, never the operator's guesses. */
   readonly thinkingLevelMap?: Readonly<Record<string, string | null>>;
   readonly contextWindow?: number;
@@ -97,21 +92,17 @@ export function writeProvider(agentDir: string, definition: ProviderDefinition):
     return { ok: false, message: 'apiKey is required for a new provider' };
   }
   /*
-   * An id resolved from the catalogue speaks the vendor's own protocol (Anthropic messages, Bedrock,
-   * Google…), and Pi keys its built-in vendors off the model's `api`/`baseUrl`. A provider the operator
-   * typed in therefore keeps its own `baseUrl`+`api` for the endpoint, and each model carries the
-   * vendor it really is: `api` selects the wire format, `baseUrl` keeps Pi from overriding the
-   * endpoint the user typed. Models nobody resolved stay plain entries under the provider's api.
+   * Only capability facts are copied from the catalogue: `reasoning`, the level map, both limits and
+   * the input modalities. The wire protocol is NOT copied, and this is the reason:
+   *
+   * A catalogue entry describes the vendor's own API (`pi-messages` for Pi's radius, `anthropic-messages`
+   * for api.anthropic.com, and so on). The model behind this endpoint reaches it through a gateway that
+   * speaks what *this provider* was configured to speak. Writing the vendor's `api` onto the model made
+   * Pi serialize `pi-messages` at an OpenAI-compatible gateway, which rejected every request — the
+   * endpoint and the gateway both failed, and nothing in the UI said why. A per-model `api` override is
+   * only correct for an endpoint that genuinely serves mixed protocols, which is not what picking a
+   * catalogue model means.
    */
-  const vendorOf = (model: ProviderModelDefinition): Record<string, unknown> => {
-    const vendor = model.upstream;
-    if (vendor === undefined) return {};
-    return {
-      provider: vendor.providerId,
-      ...(vendor.api !== undefined ? { api: vendor.api } : {}),
-      baseUrl: definition.baseUrl,
-    };
-  };
   providers[definition.providerId] = {
     baseUrl: definition.baseUrl,
     ...(definition.api !== undefined ? { api: definition.api } : {}),
@@ -121,7 +112,6 @@ export function writeProvider(agentDir: string, definition: ProviderDefinition):
       id: model.id,
       name: model.name,
       input: [...(model.input ?? definition.input ?? ['text', 'image'])],
-      ...vendorOf(model),
       ...(model.reasoning === true ? { reasoning: true } : {}),
       ...(model.thinkingLevelMap !== undefined ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
       ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
