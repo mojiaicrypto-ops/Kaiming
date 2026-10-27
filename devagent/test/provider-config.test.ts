@@ -722,6 +722,29 @@ describe('a gateway alias borrows the real model\'s facts', () => {
       thinkingLevelMap: { high: 'high' },
     });
 
+    /*
+     * The shape of the file is not the contract: what Pi *reads* is. Ask the loader that a run uses
+     * what this model will actually be sent as, so a key we got semantically wrong (the transport,
+     * above all) cannot pass by being present and plausible in JSON.
+     */
+    const runtime = await ModelRuntime.create({
+      modelsPath: modelsPathFor(h.agentDir),
+      authPath: join(h.agentDir, 'auth.json'),
+      allowModelNetwork: false,
+    });
+    const effective = runtime.getModel('my-gateway', 'auto-glm-5-3');
+    expect(effective).toMatchObject({
+      // The endpoint's protocol, never the catalogue vendor's.
+      api: 'openai-completions',
+      provider: 'my-gateway',
+      baseUrl: 'https://gw.example/v1',
+      reasoning: true,
+      contextWindow: 200_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { high: 'high' },
+      input: ['text', 'image'],
+    });
+
     // The page shows the mapping it saved, so the operator can see the alias took effect. The copied
     // numbers live in models.json (asserted above); the row keeps the identity and the declaration.
     const read = resultOf<{
@@ -735,11 +758,73 @@ describe('a gateway alias borrows the real model\'s facts', () => {
   });
 
   it('borrows the catalogue facts but never its wire protocol', async () => {
-    // The incident: a catalogue entry lists the vendor's own `api` (`pi-messages` for Pi's radius).
-    // Writing that onto the model made Pi serialize Pi's protocol at an OpenAI-compatible gateway, so
-    // every request failed at the endpoint AND at the gateway, with nothing in the UI saying why. The
-    // loader is the one that has to hold: whatever a caller hands `writeProvider`, the model must not
-    // acquire a protocol of its own.
+    // The incident: catalogue entries carry the vendor's own `api` (`pi-messages` for Pi's radius,
+    // `anthropic-messages` for api.anthropic.com). Writing that onto a model made Pi serialize the
+    // vendor's protocol at an OpenAI-compatible gateway: every request failed on both ends, and the
+    // UI said nothing. The model must keep the protocol its *endpoint* was configured with.
+    const vendorModels: CatalogModelFacts[] = [
+      entry('radius', 'deepseek-v4.1-flash', true, 'pi-messages'),
+      entry('anthropic', 'claude-opus-4-6', true, 'anthropic-messages'),
+    ];
+    const h = await harness({
+      modelFacts: async (selection) => {
+        const found = vendorModels.find(
+          (row) => row.providerId === selection.providerId && row.modelId === selection.modelId,
+        );
+        return found === undefined
+          ? undefined
+          : {
+              providerId: found.providerId,
+              modelId: found.modelId,
+              api: found.api,
+              reasoning: found.reasoning,
+              contextWindow: found.contextWindow,
+              maxTokens: found.maxTokens,
+              thinkingLevelMap: { off: 'none', low: 'low', high: 'high' },
+              input: ['text', 'image'],
+            };
+      },
+      catalogModels: async () => vendorModels,
+    });
+
+    // Both ways of naming a catalogue model: the picker's `catalog` and the older `baseModel`.
+    const saved = await h.call('config.save', {
+      expectedRevision: null,
+      value: gateway([
+        { id: 'auto-deepseek', catalog: 'radius/deepseek-v4.1-flash' },
+        { id: 'my-claude', baseModel: 'anthropic/claude-opus-4-6' },
+      ]),
+    });
+    expect(saved.status).toBe(200);
+
+    const written = JSON.parse(readFileSync(modelsPathFor(h.agentDir), 'utf8')) as {
+      providers: { 'my-gateway': { api?: string; models: Array<Record<string, unknown>> } };
+    };
+    const provider = written.providers['my-gateway'];
+    expect(provider.api).toBe('openai-completions');
+    for (const model of provider.models) {
+      // The facts arrive...
+      expect(model).toMatchObject({ reasoning: true, thinkingLevelMap: { high: 'high' } });
+      // ...and the transport does not ride along.
+      expect(model['api']).toBeUndefined();
+      expect(model['provider']).toBeUndefined();
+      expect(model['baseUrl']).toBeUndefined();
+    }
+
+    // What Pi would really serialize a request with, per model.
+    const runtime = await ModelRuntime.create({
+      modelsPath: modelsPathFor(h.agentDir),
+      authPath: join(h.agentDir, 'auth.json'),
+      allowModelNetwork: false,
+    });
+    for (const id of ['auto-deepseek', 'my-claude']) {
+      expect(runtime.getModel('my-gateway', id)?.api).toBe('openai-completions');
+    }
+  });
+
+  it('never lets a model acquire a protocol of its own, whatever the caller passes', async () => {
+    // The loader is the last line of defence: the bug above came from this function trusting a
+    // vendor identity handed to it. Whatever a future caller passes, no `api` may be written.
     const root = mkdtempSync(join(tmpdir(), 'devagent-vendor-'));
     cleanups.push(() => rmSync(root, { recursive: true, force: true }));
     const agentDir = join(root, 'agent');
@@ -753,10 +838,9 @@ describe('a gateway alias borrows the real model\'s facts', () => {
           id: 'auto-deepseek',
           name: 'auto-deepseek',
           reasoning: true,
-          thinkingLevelMap: { off: 'none', low: 'low', high: 'high' },
           contextWindow: 1_000_000,
           maxTokens: 32_768,
-          // What the removed code passed: the catalogue model's vendor identity.
+          // Exactly what the removed code forwarded: the catalogue model's vendor identity.
           upstream: { providerId: 'radius', modelId: 'deepseek-v4.1-flash', api: 'pi-messages' },
         } as never,
       ],
@@ -764,22 +848,14 @@ describe('a gateway alias borrows the real model\'s facts', () => {
     expect(written.ok).toBe(true);
 
     const parsed = JSON.parse(readFileSync(modelsPathFor(agentDir), 'utf8')) as {
-      providers: { 'my-gateway': { api?: string; models: Array<Record<string, unknown>> } };
+      providers: { 'my-gateway': { models: Array<Record<string, unknown>> } };
     };
-    const provider = parsed.providers['my-gateway'];
-    const model = provider.models[0] ?? {};
-    expect(model).toMatchObject({
-      id: 'auto-deepseek',
-      reasoning: true,
-      thinkingLevelMap: { off: 'none', low: 'low', high: 'high' },
-      contextWindow: 1_000_000,
-      maxTokens: 32_768,
-    });
+    const model = parsed.providers['my-gateway'].models[0] ?? {};
+    expect(model).toMatchObject({ id: 'auto-deepseek', reasoning: true, contextWindow: 1_000_000 });
     expect(model['api']).toBeUndefined();
     expect(model['provider']).toBeUndefined();
     expect(model['baseUrl']).toBeUndefined();
 
-    // And what Pi would really use: the endpoint's protocol.
     const runtime = await ModelRuntime.create({
       modelsPath: modelsPathFor(agentDir),
       authPath: join(agentDir, 'auth.json'),

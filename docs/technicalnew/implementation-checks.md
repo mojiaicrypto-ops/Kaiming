@@ -84,3 +84,13 @@
 本目录唯一字段/语义定义：R1/R2 是公开输入与状态，S2 是持久记录，M2/M4/M5 是委派返回、UI 外层与原生交互，G2 是模型工具，requirements-format 是需求序列化，G4 是上下文装配，prompts 是角色执行指导。产品规则归属按 K-03。其他文档引用，不复制一套不同 Schema。
 
 实施发现 SDK 不支持时，先记录失败试验、受影响契约与最小替代。若替代保持产品含义，可在技术设计审阅后落实；改变产品行为/验收/授权或风险接受，提供具体差异给用户决定。不能用局部代码默默改协议。
+
+## I6 写给 Pi 的文件必须由 Pi 的加载器读回验证
+
+我们写两类文件供 Pi 读取：`models.json`（Provider 与模型）与项目侧 `.pi` 历史。写入它们的键不是"我们的 Schema"，而是 SDK 的 Schema，且语义常与字面不同——同一个键放在 Provider 层和模型层含义可以完全不同。
+
+**规则**：凡写入这类文件的字段，测试必须用 SDK 自己的入口（`ModelRuntime.create({ modelsPath })`、`SessionManager.open` 等）读回，并断言**运行时真正会用的值**（例如某模型实际以哪个 `api` 序列化请求）。`JSON.parse` 后做 `toMatchObject` 只证明键在，不证明键对；断言"该有的都在"从不发现"多写了不该有的"。
+
+事故（2026-10-26）：Provider 模型从目录选型后，保存流程把目录条目的 `api`（radius 的 `pi-messages`）写到了模型条目上。模型因此在 OpenAI 兼容网关上被按 Pi 自己的消息协议序列化，端点与网关两侧同时失败，界面无任何提示。当时的测试断言 `models.json` 里 `reasoning`/`contextWindow`/`thinkingLevelMap` 都存在且正确——全部通过；没有任何测试问过"Pi 会用什么协议发这个模型的请求"。
+
+由此固定两条：**目录能给能力，不能给传输协议**（网关讲的是 Provider 配置的协议）；**能力事实可复制，身份与协议不可复制**。回归用例同时锁两层：保存路径（`config.save` → 目录选型 → `models.json`）与加载器（`writeProvider` 收到任何形状都不得写出模型级 `api`/`provider`/`baseUrl`），两者都在旧实现上失败。
