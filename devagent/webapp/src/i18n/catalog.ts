@@ -407,6 +407,13 @@ const en = {
   'settings.modelReasoning': 'Supports reasoning',
   'settings.modelReasoningHint':
     'Declare it only if the model really reasons: Pi offers effort levels only for a model that does.',
+  'settings.modelAlias': 'Real model',
+  'settings.modelAliasPlaceholder': 'catalogue model, e.g. zai/glm-5-3',
+  'settings.modelAliasHint':
+    'A gateway often names models its own way. Name the catalogue model this id really is, and its context window, output cap and reasoning support are used instead of 128k/16k/no reasoning.',
+  'settings.modelAliasUnknown': 'not in the catalogue — check the name, or tick the box instead',
+  'settings.modelFactsCtx': 'ctx',
+  'settings.modelFactsOut': 'out',
   'settings.modelAdd': '+ Add model',
   'settings.modelRemove': 'Remove model',
   'settings.edit': 'Edit',
@@ -854,6 +861,13 @@ export const zhCN: Record<MessageKey, string> = {
   'settings.modelId': '模型标识',
   'settings.modelReasoning': '支持推理',
   'settings.modelReasoningHint': '仅在模型确实支持推理时勾选：Pi 只为这类模型提供思考等级。',
+  'settings.modelAlias': '实际模型',
+  'settings.modelAliasPlaceholder': '目录里的模型，如 zai/glm-5-3',
+  'settings.modelAliasHint':
+    '网关常用自己的名字。填上这个 id 实际对应的目录模型，上下文窗口、输出上限与推理能力就用真模型的，而不是 128k/16k/不支持推理。',
+  'settings.modelAliasUnknown': '目录里没有这个名字——检查拼写，或改用勾选',
+  'settings.modelFactsCtx': '上下文',
+  'settings.modelFactsOut': '输出',
   'settings.modelAdd': '+ 添加模型',
   'settings.modelRemove': '移除模型',
   'settings.edit': '修改',

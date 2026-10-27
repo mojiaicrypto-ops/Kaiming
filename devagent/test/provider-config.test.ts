@@ -15,6 +15,7 @@ import { RpcRouter } from '../src/server/rpc.ts';
 import { createWorkbenchServer } from '../src/server/http.ts';
 import { registerCoreMethods } from '../src/server/methods.ts';
 import { resolveStoredConfig, type RuntimeDefaults } from '../src/runtime/config.ts';
+import type { ModelFacts } from '../src/runtime/pi-runtime.ts';
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -33,7 +34,15 @@ interface Harness {
   call(method: string, params?: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }>;
 }
 
-async function harness(options: { modelLevels?: (selection: { providerId: string; modelId: string }) => Promise<readonly string[]> } = {}): Promise<Harness> {
+async function harness(
+  options: {
+    modelLevels?: (selection: { providerId: string; modelId: string }) => Promise<readonly string[]>;
+    modelFacts?: (selection: { providerId: string; modelId: string }) => Promise<ModelFacts | undefined>;
+    catalogModels?: () => Promise<
+      readonly { providerId: string; modelId: string; reasoning: boolean; contextWindow: number; maxTokens: number }[]
+    >;
+  } = {},
+): Promise<Harness> {
   const root = mkdtempSync(join(tmpdir(), 'devagent-config-'));
   const store = new Store({ path: join(root, 'state.db'), serverEpoch: 1 });
   store.createProject({ id: 'p-1', realPath: join(root, 'project') });
@@ -50,6 +59,8 @@ async function harness(options: { modelLevels?: (selection: { providerId: string
     store,
     server,
     ...(options.modelLevels !== undefined ? { modelLevels: options.modelLevels } : {}),
+    ...(options.modelFacts !== undefined ? { modelFacts: options.modelFacts } : {}),
+    ...(options.catalogModels !== undefined ? { catalogModels: options.catalogModels } : {}),
   });
   const workbench = createWorkbenchServer({ store, auth, router });
   const { origin } = await workbench.listen(0);
@@ -634,5 +645,130 @@ describe('thinking level, saved with the model it belongs to', () => {
       reasoning: true,
       thinkingLevels: ['off', 'minimal', 'low', 'medium', 'high'],
     });
+  });
+});
+
+describe('a gateway alias borrows the real model\'s facts', () => {
+  /** One catalogue: a reasoning model with real limits, and a small one. */
+  const catalog = [
+    { providerId: 'zai', modelId: 'glm-5-3', reasoning: true, contextWindow: 200_000, maxTokens: 128_000 },
+    // The same id on a second provider: a bare name is then ambiguous.
+    { providerId: 'zai-cn', modelId: 'glm-5-3', reasoning: true, contextWindow: 200_000, maxTokens: 128_000 },
+    { providerId: 'baseten', modelId: 'zai-org/GLM-5.3', reasoning: true, contextWindow: 200_000, maxTokens: 128_000 },
+    { providerId: 'openai', modelId: 'gpt-4o', reasoning: false, contextWindow: 128_000, maxTokens: 16_384 },
+  ];
+  const facts =
+    (levelMap: Readonly<Record<string, string | null>> = {}) =>
+    async (selection: { providerId: string; modelId: string }): Promise<ModelFacts | undefined> => {
+      const entry = catalog.find((row) => row.providerId === selection.providerId && row.modelId === selection.modelId);
+      if (entry === undefined) return undefined;
+      return { ...entry, thinkingLevelMap: levelMap, input: ['text', 'image'] };
+    };
+  const gateway = (models: unknown[]): Record<string, unknown> => ({
+    kind: 'provider',
+    providerId: 'my-gateway',
+    baseUrl: 'https://gw.example/v1',
+    api: 'openai-completions',
+    apiKey: 'gw-key',
+    models,
+  });
+
+  it('writes the catalogue numbers into models.json, not Pi\'s 128k/16k fallback', async () => {
+    const h = await harness({ modelFacts: facts({ high: 'high' }), catalogModels: async () => catalog });
+
+    const saved = await h.call('config.save', {
+      expectedRevision: null,
+      value: gateway([{ id: 'auto-glm-5-3', name: 'auto-glm-5-3', baseModel: 'zai/glm-5-3' }]),
+    });
+    expect(saved.status).toBe(200);
+
+    const written = JSON.parse(readFileSync(modelsPathFor(h.agentDir), 'utf8')) as {
+      providers: {
+        'my-gateway': {
+          models: Array<{ id: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number; thinkingLevelMap?: Record<string, string> }>;
+        };
+      };
+    };
+    const model = written.providers['my-gateway'].models[0];
+    expect(model).toMatchObject({
+      id: 'auto-glm-5-3',
+      reasoning: true,
+      contextWindow: 200_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { high: 'high' },
+    });
+
+    // The page shows the mapping it saved, so the operator can see the alias took effect.
+    const read = resultOf<{ providers: Array<{ models: Array<{ id: string; baseModel?: { providerId: string; modelId: string }; contextWindow?: number }> }> }>(
+      (await h.call('config.get', {})).body,
+    );
+    expect(read.providers[0]?.models[0]).toMatchObject({
+      id: 'auto-glm-5-3',
+      baseModel: { providerId: 'zai', modelId: 'glm-5-3' },
+      contextWindow: 200_000,
+    });
+  });
+
+  it('refuses a name the catalogue does not know, and an ambiguous one, before anything is written', async () => {
+    const h = await harness({ modelFacts: facts(), catalogModels: async () => catalog });
+
+    const unknown = await h.call('config.save', {
+      expectedRevision: null,
+      value: gateway([{ id: 'auto-x', baseModel: 'zai/not-a-model' }]),
+    });
+    expect(errorCode(unknown.body)).toBe('INVALID_ARGUMENT');
+    expect(String((unknown.body['error'] as { message: string }).message)).toContain('no model zai/not-a-model');
+
+    // The same id lives in two providers with different limits: picking one silently would change
+    // when a session compacts, so the caller has to say which.
+    const ambiguous = await h.call('config.save', {
+      expectedRevision: null,
+      value: gateway([{ id: 'auto-glm', baseModel: 'glm-5-3' }]),
+    });
+    expect(errorCode(ambiguous.body)).toBe('INVALID_ARGUMENT');
+    expect((ambiguous.body['error'] as { details: { candidates: string[] } }).details.candidates).toEqual([
+      'zai/glm-5-3',
+      'zai-cn/glm-5-3',
+    ]);
+    expect(h.store.listProviders()).toEqual([]);
+  });
+
+  it('accepts a bare name when only one provider has it, and keeps the reasoning box for unmapped ids', async () => {
+    const h = await harness({ modelFacts: facts(), catalogModels: async () => catalog });
+
+    const bare = await h.call('config.save', {
+      expectedRevision: null,
+      value: gateway([
+        { id: 'my-gpt', baseModel: 'gpt-4o' },
+        { id: 'my-plain', reasoning: true },
+      ]),
+    });
+    expect(bare.status).toBe(200);
+
+    const written = JSON.parse(readFileSync(modelsPathFor(h.agentDir), 'utf8')) as {
+      providers: { 'my-gateway': { models: Array<{ id: string; reasoning?: boolean; contextWindow?: number }> } };
+    };
+    expect(written.providers['my-gateway'].models[0]).toMatchObject({
+      id: 'my-gpt',
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+    });
+    // Absence is the same statement to Pi, and it keeps the file free of values that are not facts.
+    expect(written.providers['my-gateway'].models[0]).not.toHaveProperty('reasoning', true);
+    // No alias: the operator's own declaration is what travels, and no numbers are invented.
+    expect(written.providers['my-gateway'].models[1]).toMatchObject({ id: 'my-plain', reasoning: true });
+    expect(written.providers['my-gateway'].models[1]?.contextWindow).toBeUndefined();
+  });
+
+  it('serves the catalogue for the picker, grouped by provider', async () => {
+    const h = await harness({ catalogModels: async () => catalog });
+
+    const read = resultOf<{ providers: Array<{ providerId: string; models: Array<{ id: string; contextWindow: number }> }>; count: number }>(
+      (await h.call('config.catalog', {})).body,
+    );
+    expect(read.count).toBe(4);
+    expect(read.providers.map((entry) => entry.providerId)).toEqual(
+      expect.arrayContaining(['zai', 'zai-cn', 'baseten', 'openai']),
+    );
   });
 });

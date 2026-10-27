@@ -27,14 +27,25 @@ export interface ProviderDefinition {
 }
 
 /**
- * One model the endpoint serves. `reasoning` is what makes Pi offer thinking levels other than `off`:
- * the catalog has no metadata for an endpoint the operator typed in, so the declaration has to come
- * from the person who knows the model.
+ * One model the endpoint serves.
+ *
+ * A gateway usually names models its own way ("auto-glm-5-3" for GLM 5.3), and the catalog has no
+ * metadata for an endpoint the operator typed in — so Pi falls back to 128k context, 16k output,
+ * no reasoning and text-only input. Those defaults are not harmless: the context window decides when
+ * a session compacts, and the output cap decides what a truncated answer means. `baseModel` names the
+ * catalog model this alias really is, and the facts below are resolved from it at save time (they are
+ * written into `models.json`, where the runtime reads them).
  */
 export interface ProviderModelDefinition {
   readonly id: string;
   readonly name: string;
   readonly reasoning?: boolean;
+  /** Resolved from `baseModel`: the catalog's own numbers, never the operator's guesses. */
+  readonly thinkingLevelMap?: Readonly<Record<string, string | null>>;
+  readonly contextWindow?: number;
+  readonly maxTokens?: number;
+  /** Input modalities of the real model; unset keeps the provider default (text + image). */
+  readonly input?: readonly string[];
 }
 
 export type ProviderWriteResult =
@@ -88,8 +99,11 @@ export function writeProvider(agentDir: string, definition: ProviderDefinition):
     models: definition.models.map((model) => ({
       id: model.id,
       name: model.name,
-      input: [...(definition.input ?? ['text', 'image'])],
+      input: [...(model.input ?? definition.input ?? ['text', 'image'])],
       ...(model.reasoning === true ? { reasoning: true } : {}),
+      ...(model.thinkingLevelMap !== undefined ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+      ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+      ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
     })),
   };
   const path = modelsPathFor(agentDir);

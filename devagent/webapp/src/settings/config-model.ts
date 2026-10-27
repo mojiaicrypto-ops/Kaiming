@@ -8,8 +8,24 @@ export interface ProviderModel {
   readonly name?: string;
   /** Declared by the user: Pi offers thinking levels other than `off` only for such a model. */
   readonly reasoning?: boolean;
+  /**
+   * The catalogue model this gateway alias really is. A gateway names models its own way, and the
+   * facts below are copied from the real model instead of Pi's fallback (128k context, 16k output).
+   */
+  readonly baseModel?: { readonly providerId: string; readonly modelId: string };
+  readonly contextWindow?: number;
+  readonly maxTokens?: number;
   /** What Pi would accept for this model; the page renders these, it never keeps its own list. */
   readonly thinkingLevels?: readonly string[];
+}
+
+/** One catalogue name the alias picker offers. */
+export interface CatalogModel {
+  readonly providerId: string;
+  readonly id: string;
+  readonly reasoning: boolean;
+  readonly contextWindow: number;
+  readonly maxTokens: number;
 }
 
 export interface ProviderView {
@@ -79,6 +95,47 @@ export function useRoleConfigs(rpc: RpcClient, projectId: string | undefined) {
     void reload();
   }, [reload]);
   return { configs, failed, reload };
+}
+
+/**
+ * The catalogue's model names, read once for the alias picker. It is a long list (order of a thousand
+ * entries), so it is its own call: every settings row would otherwise carry it.
+ */
+export function useCatalog(rpc: RpcClient) {
+  const [models, setModels] = useState<readonly CatalogModel[]>([]);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void rpc
+      .call<{
+        providers: Array<{
+          providerId: string;
+          models: Array<{ id: string; reasoning: boolean; contextWindow: number; maxTokens: number }>;
+        }>;
+      }>('config.catalog', {})
+      .then((read) => {
+        if (cancelled) return;
+        setModels(
+          read.providers.flatMap((provider) =>
+            provider.models.map((model) => ({
+              providerId: provider.providerId,
+              id: model.id,
+              reasoning: model.reasoning,
+              contextWindow: model.contextWindow,
+              maxTokens: model.maxTokens,
+            })),
+          ),
+        );
+        setFailed(false);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rpc]);
+  return { models, failed };
 }
 
 /**

@@ -1819,9 +1819,21 @@ details.fold > summary.tline:hover {
 }
 .model-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  /* id · real model · (facts or the reasoning box) · remove */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) auto auto;
   align-items: center;
   gap: var(--s2);
+}
+.model-row .inp.alias {
+  font-family: var(--mono);
+}
+.model-row .meta {
+  font-size: var(--fs-12);
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+.model-row .meta.warn {
+  color: var(--warning);
 }
 .model-row .inp {
   font-family: var(--mono);
@@ -1842,6 +1854,7 @@ details.fold > summary.tline:hover {
 }
 .model-row .btn.x {
   padding: 0 6px;
+  margin-left: var(--s2);
   font-size: var(--fs-14);
   line-height: 1;
   color: var(--fg-3);
@@ -2742,15 +2755,21 @@ details.fold > summary.tline:hover {
   }
   .model-row {
     grid-template-columns: minmax(0, 1fr) auto;
+    /* Remove stays on the row's first line: on the last line it would read as the next model's. */
     grid-template-areas:
-      "id id"
-      "chk x";
+      "id x"
+      "alias alias"
+      "chk chk";
     row-gap: var(--s1);
   }
   .model-row .inp {
     grid-area: id;
   }
-  .model-row .chk {
+  .model-row .inp.alias {
+    grid-area: alias;
+  }
+  .model-row .chk,
+  .model-row .meta {
     grid-area: chk;
   }
   .model-row .btn.x {

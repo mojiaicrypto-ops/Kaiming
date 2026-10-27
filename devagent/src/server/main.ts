@@ -147,6 +147,10 @@ export function startWorkbench(options: StartOptions): Promise<{
     // The settings page lists the levels Pi would accept for a model; the rule lives in the same
     // runtime that creates the sessions, so the page cannot drift from the run.
     modelLevels: (selection) => factory.levelsFor(selection),
+    // An alias borrows the real model's facts from the same catalogue a run reads (context window and
+    // output cap included: they decide compaction and truncation, not just the effort list).
+    modelFacts: (selection) => factory.facts(selection),
+    catalogModels: () => factory.catalog(),
   });
   registerReadMethods(router, { store, blockedOf, attachmentDir: server.agentDir });
 

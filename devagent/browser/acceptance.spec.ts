@@ -1490,6 +1490,72 @@ test('a browser that has never been here still sees the registered projects', as
   }
 });
 
+test('a gateway alias can name the real model, and the effort follows it', async ({ page }) => {
+  // A gateway names models its own way ("auto-glm-5-3" is GLM 5.3). Without the alias Pi uses its
+  // fallback for an unknown id — 128k context, 16k output, no reasoning — so the real model's facts
+  // are borrowed from the catalogue instead of being guessed here.
+  const harness = await startHarness();
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+
+    // The catalogue Pi ships, through the same method the picker uses.
+    const catalog = await page.evaluate(async () => {
+      const handle = (window as unknown as { __agentdev: { rpc: { call: (m: string, p?: unknown) => Promise<unknown> } } }).__agentdev;
+      const read = (await handle.rpc.call('config.catalog', {})) as {
+        providers: Array<{ providerId: string; models: Array<{ id: string; reasoning: boolean; contextWindow: number }> }>;
+      };
+      const reasoning = read.providers
+        .flatMap((provider) => provider.models.map((model) => ({ providerId: provider.providerId, ...model })))
+        .filter((model) => model.reasoning && !model.id.includes(' ') && model.contextWindow > 0);
+      return { count: reasoning.length, sample: reasoning.find((model) => model.providerId === 'anthropic') ?? reasoning[0] };
+    });
+    expect(catalog.count).toBeGreaterThan(0);
+    const real = catalog.sample;
+    expect(real).toBeDefined();
+    const alias = `${String(real?.providerId)}/${String(real?.id)}`;
+
+    await page.goto(`${harness.baseUrl}/settings/providers`, { waitUntil: 'domcontentloaded' });
+    await page.locator('[data-testid="add-provider"]').click();
+    await page.locator('[data-testid="provider-id"]').fill('my-gateway');
+    await page.locator('[data-testid="provider-base"]').fill('http://127.0.0.1:9/v1');
+    await page.locator('[data-testid="provider-api"]').selectOption('openai-completions');
+    await page.locator('[data-testid="provider-key"]').fill('gw-key');
+    await page.locator('[data-testid="provider-model-id"]').first().fill('auto-model');
+    await page.locator('[data-testid="provider-model-alias"]').first().fill(alias);
+    // The row says what it resolved to before anything is saved: the box is not a second source.
+    await expect(page.locator('[data-testid="provider-model-alias-facts"]').first()).toContainText(/reason|推理/i);
+    await expect(page.locator('[data-testid="provider-model-reasoning"]')).toHaveCount(0);
+
+    await page.locator('[data-testid="provider-save"]').click();
+    await expect(page.locator('.prov').filter({ hasText: 'my-gateway' })).toHaveCount(1, { timeout: 10_000 });
+
+    const written = await page.evaluate(async () => {
+      const handle = (window as unknown as { __agentdev: { rpc: { call: (m: string, p?: unknown) => Promise<unknown> } } }).__agentdev;
+      const read = (await handle.rpc.call('config.get', {})) as {
+        providers: Array<{
+          providerId: string;
+          models: Array<{ id: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number; thinkingLevels: string[] }>;
+        }>;
+      };
+      return read.providers.find((provider) => provider.providerId === 'my-gateway')?.models[0];
+    });
+    expect(written).toMatchObject({ id: 'auto-model', reasoning: true });
+    expect(written?.contextWindow).toBe(real?.contextWindow);
+    // What the run accepts is now the real model's list, not `off` alone.
+    expect(written?.thinkingLevels.length ?? 0).toBeGreaterThan(1);
+
+    // And the effort control on Models follows the alias without any extra declaration.
+    await page.goto(`${harness.baseUrl}/settings/models`, { waitUntil: 'domcontentloaded' });
+    await page.locator('[data-testid="scope-global"]').click();
+    await page.locator('[data-testid="model-chief"]').selectOption('auto-model');
+    await expect(page.locator('[data-testid="level-chief"]')).toBeVisible({ timeout: 10_000 });
+  } finally {
+    await harness.close();
+  }
+});
+
 test('effort is chosen per model, and only where the model declares reasoning', async ({ page }) => {
   // The levels are Pi's: a model that declares no reasoning has nothing to pick, and the way to make
   // one available is to declare it on the provider — the page says so instead of showing a dead select.

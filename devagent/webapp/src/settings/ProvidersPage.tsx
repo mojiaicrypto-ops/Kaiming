@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
-import { useConfig, type ProviderView } from './config-model';
+import { useCatalog, useConfig, type ProviderView } from './config-model';
 import type { RpcClient } from '../api/rpc';
 import { errorText } from '../lib/errors';
 
@@ -12,10 +12,15 @@ import { errorText } from '../lib/errors';
  */
 const APIS = ['openai-completions', 'openai-responses', 'anthropic-messages'] as const;
 
-/** One model of the endpoint: the id Pi uses, and whether it can reason. */
+/**
+ * One model of the endpoint: the id Pi uses, whether it can reason, and — when the id is a gateway
+ * alias — which catalogue model it really is.
+ */
 interface ModelDraft {
   id: string;
   reasoning: boolean;
+  /** "provider/model" of the real model; empty when the id is the catalogue's own name. */
+  baseModel: string;
 }
 
 /** The form's own state: the id is only editable while adding, so it is empty when editing. */
@@ -33,7 +38,7 @@ const EMPTY: Draft = {
   name: '',
   baseUrl: '',
   api: 'openai-completions',
-  models: [{ id: '', reasoning: false }],
+  models: [{ id: '', reasoning: false, baseModel: '' }],
   apiKey: '',
 };
 
@@ -45,6 +50,7 @@ const EMPTY: Draft = {
 export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: string }) {
   const { t } = useI18n();
   const { config, failed, reload } = useConfig(rpc, projectId === '' ? undefined : projectId, 'chief');
+  const catalog = useCatalog(rpc);
   const [testing, setTesting] = useState<string | null>(null);
   const [result, setResult] = useState<{ provider: string; ok: boolean; detail: string } | null>(null);
   /** The provider being added (null id) or edited (that id); nothing open means no form. */
@@ -68,8 +74,13 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
       api: provider.api ?? '',
       models:
         provider.models.length === 0
-          ? [{ id: '', reasoning: false }]
-          : provider.models.map((model) => ({ id: model.id, reasoning: model.reasoning === true })),
+          ? [{ id: '', reasoning: false, baseModel: '' }]
+          : provider.models.map((model) => ({
+              id: model.id,
+              reasoning: model.reasoning === true,
+              baseModel:
+                model.baseModel === undefined ? '' : `${model.baseModel.providerId}/${model.baseModel.modelId}`,
+            })),
       apiKey: '',
     });
     setSaveError(null);
@@ -97,8 +108,14 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
             baseUrl: draft.baseUrl.trim(),
             api: draft.api,
             // Only rows with an id travel: a blank row the user added but left empty is not a model.
+            // The alias travels as text; the server resolves it and refuses a name the catalogue
+            // does not know instead of writing numbers nobody checked.
             models: draft.models
-              .map((model) => ({ id: model.id.trim(), reasoning: model.reasoning }))
+              .map((model) => ({
+                id: model.id.trim(),
+                reasoning: model.reasoning,
+                ...(model.baseModel.trim() === '' ? {} : { baseModel: model.baseModel.trim() }),
+              }))
               .filter((model) => model.id !== ''),
             ...(draft.apiKey.trim() === '' ? {} : { apiKey: draft.apiKey.trim() }),
           },
@@ -127,6 +144,12 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
       setTesting(null);
     }
   };
+
+  /** Token counts are read at a glance: "1M" and "131k", never "1000k". */
+  const size = (count: number): string =>
+    count >= 1_000_000
+      ? `${(count / 1_000_000).toFixed(count % 1_000_000 === 0 ? 0 : 1)}M`
+      : `${String(Math.round(count / 1000))}k`;
 
   const apiLabel = (api: string | null): string => {
     if (api === null || api === '') return t('settings.api');
@@ -247,61 +270,101 @@ export function ProvidersPage({ rpc, projectId }: { rpc: RpcClient; projectId: s
               <div className="rl models-row">
                 <span>{t('settings.modelsList')}</span>
                 <div className="model-rows" data-testid="provider-models">
-                  {draft.models.map((model, index) => (
-                    <div className="model-row" key={String(index)}>
-                      <input
-                        className="inp"
-                        value={model.id}
-                        placeholder="gpt-5, deepseek-reasoner…"
-                        aria-label={t('settings.modelId')}
-                        onChange={(event) =>
-                          setDraft({
-                            ...draft,
-                            models: draft.models.map((entry, position) =>
-                              position === index ? { ...entry, id: event.target.value } : entry,
-                            ),
-                          })
-                        }
-                        data-testid="provider-model-id"
-                      />
-                      <label className="chk" title={t('settings.modelReasoningHint')}>
+                  {draft.models.map((model, index) => {
+                    const alias = catalog.models.find(
+                      (entry) => `${entry.providerId}/${entry.id}` === model.baseModel.trim(),
+                    );
+                    const typed = model.baseModel.trim();
+                    const suggestions = catalog.models
+                      .filter((entry) => `${entry.providerId}/${entry.id}`.toLowerCase().includes(typed.toLowerCase()))
+                      .slice(0, 40);
+                    const update = (patch: Partial<ModelDraft>): void =>
+                      setDraft({
+                        ...draft,
+                        models: draft.models.map((entry, position) =>
+                          position === index ? { ...entry, ...patch } : entry,
+                        ),
+                      });
+                    return (
+                      <div className="model-row" key={String(index)}>
                         <input
-                          type="checkbox"
-                          checked={model.reasoning}
-                          onChange={(event) =>
+                          className="inp"
+                          value={model.id}
+                          placeholder="gpt-5, deepseek-reasoner…"
+                          aria-label={t('settings.modelId')}
+                          onChange={(event) => update({ id: event.target.value })}
+                          data-testid="provider-model-id"
+                        />
+                        <input
+                          className="inp alias"
+                          value={model.baseModel}
+                          list={`catalog-${String(index)}`}
+                          placeholder={t('settings.modelAliasPlaceholder')}
+                          aria-label={t('settings.modelAlias')}
+                          title={t('settings.modelAliasHint')}
+                          onChange={(event) => update({ baseModel: event.target.value })}
+                          data-testid="provider-model-alias"
+                        />
+                        <datalist id={`catalog-${String(index)}`}>
+                          {suggestions.map((entry) => (
+                            <option key={`${entry.providerId}/${entry.id}`} value={`${entry.providerId}/${entry.id}`} />
+                          ))}
+                        </datalist>
+                        {/* The alias decides the facts when it is set: a checkbox that the mapping
+                            overrides would be a claim the run does not honour. */}
+                        {typed === '' ? (
+                          <label className="chk" title={t('settings.modelReasoningHint')}>
+                            <input
+                              type="checkbox"
+                              checked={model.reasoning}
+                              onChange={(event) => update({ reasoning: event.target.checked })}
+                              data-testid="provider-model-reasoning"
+                            />
+                            {t('settings.modelReasoning')}
+                          </label>
+                        ) : (
+                          <span
+                            className={alias === undefined ? 'meta warn' : 'meta'}
+                            title={alias === undefined ? t('settings.modelAliasUnknown') : typed}
+                            data-testid="provider-model-alias-facts"
+                          >
+                            {alias === undefined
+                              ? t('settings.modelAliasUnknown')
+                              : [
+                                  alias.reasoning ? t('settings.modelReasoning') : t('settings.level.unsupported'),
+                                  `${t('settings.modelFactsCtx')} ${size(alias.contextWindow)}`,
+                                  `${t('settings.modelFactsOut')} ${size(alias.maxTokens)}`,
+                                ].join(' · ')}
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          className="btn ghost x"
+                          aria-label={t('settings.modelRemove')}
+                          title={t('settings.modelRemove')}
+                          // One row always stays: an endpoint with no model is not a provider.
+                          disabled={draft.models.length <= 1}
+                          onClick={() =>
                             setDraft({
                               ...draft,
-                              models: draft.models.map((entry, position) =>
-                                position === index ? { ...entry, reasoning: event.target.checked } : entry,
-                              ),
+                              models: draft.models.filter((_, position) => position !== index),
                             })
                           }
-                          data-testid="provider-model-reasoning"
-                        />
-                        {t('settings.modelReasoning')}
-                      </label>
-                      <button
-                        type="button"
-                        className="btn ghost x"
-                        aria-label={t('settings.modelRemove')}
-                        title={t('settings.modelRemove')}
-                        // One row always stays: an endpoint with no model is not a provider.
-                        disabled={draft.models.length <= 1}
-                        onClick={() =>
-                          setDraft({
-                            ...draft,
-                            models: draft.models.filter((_, position) => position !== index),
-                          })
-                        }
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    );
+                  })}
                   <button
                     type="button"
                     className="btn ghost add-model"
-                    onClick={() => setDraft({ ...draft, models: [...draft.models, { id: '', reasoning: false }] })}
+                    onClick={() =>
+                      setDraft({
+                        ...draft,
+                        models: [...draft.models, { id: '', reasoning: false, baseModel: '' }],
+                      })
+                    }
                     data-testid="provider-model-add"
                   >
                     {t('settings.modelAdd')}

@@ -146,6 +146,8 @@ Project 首次 realpath 绑定由唯一约束保证，显示名不作身份。�
 
 逻辑 Session 创建不要求可用模型；认领时解析角色/项目/Server 覆盖，固定 effectiveConfigHash 与 credentialRef。活动输入不受设置变更影响；后续 queued 可用新配置。原已执行输入恢复时用原配置，不可用等待明确变更，不静默换模型。
 
+网关别名的真相只有目录能给：Provider 的模型条目可带 `baseModel`（目录中的 provider/model，或唯一时可只写模型名）。保存时按目录解析，把 `reasoning`、`thinkingLevelMap`、`contextWindow`、`maxTokens`、`input` 取真模型的值写入 `models.json`；目录不认识、或名字有歧义时拒绝并返回候选，不落任何数据、不猜。理由是可核的事实：未知 id 的兜底值是 128k 上下文、16k 输出、不支持推理，而 `contextWindow` 决定自动压缩阈值、`maxTokens` 决定长度截断的判定——填错不会报错，只会安静地压缩太早或误判截断。价格不复制：那是网关的商业事实，不是模型能力。
+
 思考等级（`thinkingLevel`）是模型指派的一部分，随 `model_overrides` 的同一行保存（列为空表示未设置，传给 Pi 的是 `off`，与既有行为一致）；生效顺序与模型相同，取的是「赢得该次模型选择的那一层」的等级，不跨层拼接——可用级别取决于具体模型，把 A 模型选的等级套到 B 模型上没有意义。可选级别来自 Pi 对该模型的能力判定（`getSupportedThinkingLevels`：未声明 `reasoning` 只有 `off`；声明后为 `off/minimal/low/medium/high`，`xhigh`/`max` 需模型显式映射），保存时服务端按同一判定拒绝不支持的级别，运行时不重复猜测：仍由 Pi 钳制，钳制后的实际值写入会话记录与有效配置。Provider 的模型声明可以带 `reasoning`，这是让自定义端点出现除 `off` 以外级别的唯一途径。
 
 配置服务至少支持读取脱敏有效配置、保存预期版本的项目/角色覆盖、试连并返回实际 provider/model 与错误。密钥保存 Server 私有目录，查询只返引用/可用性；初始化与模型安装参数由部署 Plan 给出实际说明，对应 AC-27。

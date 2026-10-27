@@ -22,6 +22,25 @@ import { supportedThinkingLevels } from './thinking-levels.ts';
 /** Input-correlation bookmark (design R4); never shown to the model. */
 export const INPUT_MARKER_CUSTOM_TYPE = 'agentdev.input-marker';
 
+export interface CatalogEntry {
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly reasoning: boolean;
+  readonly contextWindow: number;
+  readonly maxTokens: number;
+}
+
+/** What a catalogue model declares; the alias inherits exactly this and nothing invented. */
+export interface ModelFacts {
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly reasoning: boolean;
+  readonly thinkingLevelMap?: Readonly<Record<string, string | null>>;
+  readonly contextWindow: number;
+  readonly maxTokens: number;
+  readonly input?: readonly string[];
+}
+
 export class ModelUnavailableError extends Error {
   readonly providerId: string;
   readonly modelId: string;
@@ -165,6 +184,44 @@ export class PiRuntimeFactory {
    * same rule). The settings page lists exactly these, so it can never offer a level the run would
    * clamp away. An unknown model gets `['off']`: it is not a choice, it is the absence of one.
    */
+  /**
+   * The catalogue facts for one model: what a gateway alias has to borrow to behave like the model it
+   * really is. `undefined` means the catalogue does not know it, which is different from "it has no
+   * capabilities" — the caller must not invent defaults from it.
+   */
+  async facts(selection: ModelSelection): Promise<ModelFacts | undefined> {
+    const runtime = await this.runtime();
+    const model = runtime.getModel(selection.providerId, selection.modelId);
+    if (model === undefined) return undefined;
+    return {
+      providerId: selection.providerId,
+      modelId: selection.modelId,
+      reasoning: model.reasoning === true,
+      ...(model.thinkingLevelMap !== undefined ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
+      ...(Array.isArray(model.input) ? { input: [...model.input] } : {}),
+    };
+  }
+
+  /**
+   * Every model the catalogue knows, for the alias picker. The few facts included are the ones the
+   * editor shows to prove the mapping took effect, not a catalogue dump.
+   */
+  async catalog(): Promise<readonly CatalogEntry[]> {
+    const runtime = await this.runtime();
+    return runtime
+      .getModels()
+      .map((model) => ({
+        providerId: model.provider,
+        modelId: model.id,
+        reasoning: model.reasoning === true,
+        contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens,
+      }))
+      .sort((a, b) => a.providerId.localeCompare(b.providerId) || a.modelId.localeCompare(b.modelId));
+  }
+
   async levelsFor(selection: ModelSelection): Promise<readonly string[]> {
     const runtime = await this.runtime();
     const model = runtime.getModel(selection.providerId, selection.modelId);

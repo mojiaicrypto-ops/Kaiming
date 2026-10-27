@@ -6,7 +6,7 @@
 import { RpcError, type RpcRouter } from './rpc.ts';
 import { redactEffectiveConfig, resolveStoredConfig, type RuntimeDefaults } from '../runtime/config.ts';
 import { credentialRefFor, writeProvider } from '../runtime/provider-store.ts';
-import { PiRuntimeFactory } from '../runtime/pi-runtime.ts';
+import { PiRuntimeFactory, type ModelFacts } from '../runtime/pi-runtime.ts';
 import type { Store } from '../store/store.ts';
 
 export interface CoreMethodsOptions {
@@ -33,6 +33,12 @@ export interface CoreMethodsOptions {
    * guessing from the model id; a missing runtime answers with the one level that always exists.
    */
   readonly modelLevels?: (selection: { providerId: string; modelId: string }) => Promise<readonly string[]>;
+  /** The catalogue facts of one model; `undefined` when the catalogue does not know it. */
+  readonly modelFacts?: (selection: { providerId: string; modelId: string }) => Promise<ModelFacts | undefined>;
+  /** Every model the catalogue knows, for the alias picker on the Providers page. */
+  readonly catalogModels?: () => Promise<
+    readonly { providerId: string; modelId: string; reasoning: boolean; contextWindow: number; maxTokens: number }[]
+  >;
 }
 
 /**
@@ -94,7 +100,14 @@ async function readConfig(options: CoreMethodsOptions, roleId: string, projectId
     effective: { ...redactEffectiveConfig(effective), thinkingLevels: effectiveLevels },
     providers: await Promise.all(
       options.store.listProviders().map(async (provider) => {
-        const models = JSON.parse(provider.models) as Array<{ id: string; name: string; reasoning?: boolean }>;
+        const models = JSON.parse(provider.models) as Array<{
+          id: string;
+          name: string;
+          reasoning?: boolean;
+          baseModel?: { providerId: string; modelId: string };
+          contextWindow?: number;
+          maxTokens?: number;
+        }>;
         return {
           providerId: provider.providerId,
           // The label the user sees; the id stays the technical identity everything else refers to.
@@ -130,6 +143,30 @@ export function registerCoreMethods(router: RpcRouter, options: CoreMethodsOptio
         throw new RpcError('NOT_FOUND', `project ${projectId} does not exist`, { projectId });
       }
       return await readConfig(options, roleId, projectId);
+    },
+  });
+
+  // The alias picker needs the catalogue's names. It is its own read because the list is long and only
+  // the provider editor needs it: folding it into config.get would ship it on every settings row.
+  router.register('config.catalog', {
+    write: false,
+    run: async (): Promise<unknown> => {
+      const models = (await options.catalogModels?.()) ?? [];
+      const byProvider = new Map<string, Array<{ id: string; reasoning: boolean; contextWindow: number; maxTokens: number }>>();
+      for (const model of models) {
+        const list = byProvider.get(model.providerId) ?? [];
+        list.push({
+          id: model.modelId,
+          reasoning: model.reasoning,
+          contextWindow: model.contextWindow,
+          maxTokens: model.maxTokens,
+        });
+        byProvider.set(model.providerId, list);
+      }
+      return {
+        providers: [...byProvider].map(([providerId, list]) => ({ providerId, models: list })),
+        count: models.length,
+      };
     },
   });
 
@@ -278,20 +315,36 @@ async function saveProvider(
   if (modelsRaw === undefined || modelsRaw.length === 0) {
     throw new RpcError('INVALID_ARGUMENT', 'models must be a non-empty list of { id, name }', { providerId });
   }
-  const models = modelsRaw.map((entry) => {
+  const models: Array<{
+    id: string;
+    name: string;
+    reasoning: boolean;
+    baseModel?: { providerId: string; modelId: string };
+    contextWindow?: number;
+    maxTokens?: number;
+    thinkingLevelMap?: Readonly<Record<string, string | null>>;
+    input?: readonly string[];
+  }> = [];
+  for (const entry of modelsRaw) {
     const model = entry as Record<string, unknown>;
     const id = typeof model['id'] === 'string' ? model['id'] : '';
     if (id === '') {
       throw new RpcError('INVALID_ARGUMENT', 'every model needs an id', { providerId });
     }
-    return {
+    const alias = await resolveAlias(options, model['baseModel']);
+    models.push({
       id,
       name: typeof model['name'] === 'string' && model['name'] !== '' ? model['name'] : id,
-      // The catalog knows nothing about an endpoint the operator typed in; without this declaration
-      // Pi answers every thinking-level question with "off".
-      reasoning: model['reasoning'] === true,
-    };
-  });
+      // The catalogue knows nothing about an endpoint the operator typed in, so either the alias
+      // points at the real model (facts borrowed from it) or the operator declares reasoning itself.
+      reasoning: alias?.reasoning === true || model['reasoning'] === true,
+      ...(alias !== undefined ? { baseModel: { providerId: alias.providerId, modelId: alias.modelId } } : {}),
+      ...(alias?.contextWindow !== undefined ? { contextWindow: alias.contextWindow } : {}),
+      ...(alias?.maxTokens !== undefined ? { maxTokens: alias.maxTokens } : {}),
+      ...(alias?.thinkingLevelMap !== undefined ? { thinkingLevelMap: alias.thinkingLevelMap } : {}),
+      ...(alias?.input !== undefined ? { input: alias.input } : {}),
+    });
+  }
   const apiKey = typeof value['apiKey'] === 'string' && value['apiKey'] !== '' ? value['apiKey'] : undefined;
   const written = writeProvider(options.server.agentDir, {
     providerId,
@@ -326,6 +379,68 @@ async function saveProvider(
     // The key itself is never part of the answer.
     credentials: { mode: 'reference', inResponse: false },
   };
+}
+
+/**
+ * The catalogue model an alias stands for.
+ *
+ * A gateway names models its own way, so the operator says which real model an id is. The identity is
+ * resolved against the catalogue and never guessed: an unknown or ambiguous name is refused with the
+ * candidates, because borrowing the wrong model's context window silently changes when sessions
+ * compact.
+ */
+async function resolveAlias(
+  options: CoreMethodsOptions,
+  raw: unknown,
+): Promise<ModelFacts | undefined> {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const asked: { kind: 'pair'; providerId: string; modelId: string } | { kind: 'bare'; name: string } | undefined =
+    typeof raw === 'string'
+      ? raw.includes('/')
+        ? {
+            kind: 'pair',
+            providerId: raw.slice(0, raw.indexOf('/')),
+            modelId: raw.slice(raw.indexOf('/') + 1),
+          }
+        : { kind: 'bare', name: raw }
+      : (() => {
+          const record = raw as Record<string, unknown>;
+          const providerId = typeof record['providerId'] === 'string' ? record['providerId'] : '';
+          const modelId = typeof record['modelId'] === 'string' ? record['modelId'] : '';
+          return providerId !== '' && modelId !== '' ? { kind: 'pair', providerId, modelId } : undefined;
+        })();
+  if (asked === undefined) {
+    throw new RpcError('INVALID_ARGUMENT', 'baseModel must be "provider/model" or {providerId, modelId}', {
+      baseModel: raw,
+    });
+  }
+  if (options.modelFacts === undefined) return undefined;
+  if (asked.kind === 'pair') {
+    const facts = await options.modelFacts({ providerId: asked.providerId, modelId: asked.modelId });
+    if (facts === undefined) {
+      throw new RpcError('INVALID_ARGUMENT', `the catalogue has no model ${asked.providerId}/${asked.modelId}`, {
+        baseModel: raw,
+      });
+    }
+    return facts;
+  }
+  // A bare name is accepted only when it is unambiguous: the same id exists in several providers with
+  // different limits, and picking one silently would change when sessions compact.
+  const all = (await options.catalogModels?.()) ?? [];
+  const matches = all.filter((model) => model.modelId.toLowerCase() === asked.name.toLowerCase());
+  if (matches.length === 0) {
+    throw new RpcError('INVALID_ARGUMENT', `the catalogue has no model named ${asked.name}; give "provider/model"`, {
+      baseModel: raw,
+    });
+  }
+  if (matches.length > 1) {
+    throw new RpcError('INVALID_ARGUMENT', `${asked.name} exists in several providers; name one of them`, {
+      baseModel: raw,
+      candidates: matches.map((model) => `${model.providerId}/${model.modelId}`),
+    });
+  }
+  const only = matches[0] as { providerId: string; modelId: string };
+  return await options.modelFacts(only);
 }
 
 /**
