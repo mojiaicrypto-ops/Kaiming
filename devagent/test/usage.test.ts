@@ -57,13 +57,13 @@ function record(
 }
 
 describe('usage ledger', () => {
-  it('adds one turn to the totals, and the same turn twice is still one turn', () => {
+  it('writes one turn as one row, and re-flushing it does not double the totals', () => {
     const store = openStore();
     expect(record(store)).toBe(1);
-    // The runner records before the input's terminal write, so a retry after a crash must not count
-    // the tokens again. The key is (input, provider, model) — the same input can legitimately have
-    // several models, which is why it is not keyed by input alone.
-    expect(record(store)).toBe(0);
+    // The runner flushes after every response and again when the input ends, with the input's
+    // absolute totals. The key is (input, provider, model) — one input can legitimately touch several
+    // models — and the row always states "this input used this much", never a delta.
+    expect(record(store)).toBe(1);
 
     const report = store.usageReport();
     expect(report.totals).toMatchObject({
@@ -113,6 +113,22 @@ describe('usage ledger', () => {
     expect(all.totals).toMatchObject({ responses: 3, inputTokens: 147 });
     // The per-role rows of "all projects" merge the two projects' chief turns.
     expect(all.byRole.find((row) => row.roleId === 'chief')?.inputTokens).toBe(107);
+  });
+
+  it('lets a mid-run flush be replaced by the larger final one', () => {
+    // A long delegation: after the first response the row says "one response, 100 in", and after the
+    // third it says "three responses, 340 in". The page shows the second, not their sum.
+    const store = openStore();
+    record(store, { entries: [entry({ inputTokens: 100, outputTokens: 20, responses: 1 })] });
+    record(store, {
+      entries: [entry({ inputTokens: 340, outputTokens: 55, responses: 3, costTotal: 0.9 })],
+    });
+
+    const report = store.usageReport();
+    expect(report.totals).toMatchObject({ responses: 3, inputTokens: 340, outputTokens: 55 });
+    expect(report.totals.costTotal).toBeCloseTo(0.9);
+    // Still one row per model per input: a flush updates, it never appends.
+    expect(report.byModel).toHaveLength(1);
   });
 
   it('reports an unreported figure as missing, not as zero', () => {

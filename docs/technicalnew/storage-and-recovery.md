@@ -62,8 +62,9 @@ DocumentRef={path,purpose,sha256} 是项目依据的内容摘要；PlanRef/Repor
 
 用量只在一次输入（claim → 终态）内部聚合写入，不在流式过程中写库：
 
-- 输入开始时记录 Pi 历史的消息下标；输入结束时取该下标之后的 assistant 消息，按响应自带的 `provider`/`model` 归并，累加 `input`/`output`/`cacheRead`/`cacheWrite`/`reasoning`/`cost.total`，`responses` 记归并的响应数。
-- 写入发生在输入终态之前，且按 `(inputId, providerId, modelId)` 幂等：中途崩溃时已花费的 tokens 仍然记账，重放不会翻倍；用量记录失败不阻断输入的终态（统计缺失不改变对话结果，但会在验证记录中如实报告）。
+- 输入开始时记录 Pi 历史的消息下标；此后每完成一次 assistant 响应（`message_end`）就取该下标之后的 assistant 消息，按响应自带的 `provider`/`model` 归并，累加 `input`/`output`/`cacheRead`/`cacheWrite`/`reasoning`/`cost.total`，`responses` 记归并的响应数。
+- 每次写入的是**该输入的绝对累计值**，按 `(inputId, providerId, modelId)` upsert：中途崩溃时已花费的 tokens 仍然记账，重放或重复刷新不会翻倍。因为写入发生在每次响应之后而不只是输入结束，长跑的成员在进行中就能看到已产生的用量；输入结束时再写一次就是最终值。
+- 失败的输入同样记账（`try/finally` 里最后一次刷新）：已完成的响应是真实花掉的，停止/失败不是免费的证据。用量记录失败不阻断输入的终态（统计缺失不改变对话结果，但会在验证记录中如实报告）。
 - 角色取该 Session 的 `roleId`，Task/项目取会话归属，模型取响应自己的 `provider`/`model`——模型不取配置里的意图值，因此压缩等内部调用按真实模型归属。
 - 服务方未上报用量的响应（老网关、部分代理）记 NULL；界面据此显示「未上报」，不用 0 冒充。
 - 不做历史回填：`.pi` 历史里的事实不作为首版统计来源，避免启动时扫描全部会话文件。

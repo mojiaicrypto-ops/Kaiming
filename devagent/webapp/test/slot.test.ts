@@ -45,6 +45,90 @@ describe('slot merge', () => {
     expect(slot.items.map((entry) => entry.entryId)).toEqual(['u1', 'live-9']);
   });
 
+  it('a completion frame whose turn the snapshot already has does not add a second bubble', () => {
+    /*
+     * The reported bug: the same answer appeared twice — once as the snapshot's entry, once as the
+     * live one. A snapshot that lands between message_start and message_end replaces the streaming
+     * twin, so the completion frame finds no live entry and used to append blindly.
+     */
+    let slot = emptySlot();
+    slot = slotReducer(slot, {
+      type: 'snapshot',
+      reason: 'initial',
+      snapshot: snapshotOf([
+        { entryId: 'u1', role: 'user', content: [{ type: 'text', text: '你好' }] },
+        { entryId: 'a1', role: 'assistant', content: [{ type: 'text', text: '先讨论一下。' }] },
+      ]),
+    });
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: {
+        type: 'pi',
+        seq: 21,
+        event: { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: '先讨论一下。' }] } },
+      },
+    });
+    expect(slot.items).toHaveLength(2);
+    expect(slot.items.filter((entry) => entry.role === 'assistant')).toHaveLength(1);
+    // The snapshot's copy is the one kept: it is the file's own entry id.
+    expect(slot.items[1]?.entryId).toBe('a1');
+  });
+
+  it('a resync that carried the finished turn drops the live twin when it completes', () => {
+    // The reported case: the connection drops mid-turn, the resync snapshot already contains the
+    // file's copy of the answer, and the completion frame then replaces the live entry — leaving the
+    // same answer twice unless the snapshot's copy wins.
+    let slot = emptySlot();
+    slot = slotReducer(slot, {
+      type: 'snapshot',
+      reason: 'initial',
+      snapshot: snapshotOf([{ entryId: 'u1', role: 'user', content: [{ type: 'text', text: '你好' }] }]),
+    });
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'pi', seq: 9, event: { type: 'message_start', message: { role: 'assistant', content: [] } } },
+    });
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'pi', seq: 10, event: { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '先讨论', contentIndex: 0 } } },
+    });
+    // Reconnect: the snapshot was read after the provider finished, so it holds the whole answer.
+    slot = slotReducer(slot, {
+      type: 'snapshot',
+      reason: 'resync',
+      snapshot: snapshotOf([
+        { entryId: 'u1', role: 'user', content: [{ type: 'text', text: '你好' }] },
+        { entryId: 'a1', role: 'assistant', content: [{ type: 'text', text: '先讨论一下。' }] },
+      ]),
+    });
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'pi', seq: 11, event: { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: '先讨论一下。' }] } } },
+    });
+    expect(slot.items.filter((entry) => entry.role === 'assistant')).toHaveLength(1);
+    expect(slot.items.at(-1)?.entryId).toBe('a1');
+  });
+
+  it('a turn the snapshot does not have yet is still appended on its completion frame', () => {
+    // The other half of the rule: dedupe must not swallow a real turn when the stream joined late.
+    let slot = emptySlot();
+    slot = slotReducer(slot, {
+      type: 'snapshot',
+      reason: 'initial',
+      snapshot: snapshotOf([{ entryId: 'u1', role: 'user', content: [{ type: 'text', text: '你好' }] }]),
+    });
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: {
+        type: 'pi',
+        seq: 21,
+        event: { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: '答。' }] } },
+      },
+    });
+    expect(slot.items).toHaveLength(2);
+    expect(slot.items[1]?.content[0]).toMatchObject({ type: 'text', text: '答。' });
+  });
+
   it('live-only completed entries stay after the snapshot tail (no reordering)', () => {
     let slot = emptySlot();
     slot = slotReducer(slot, { type: 'snapshot', reason: 'initial', snapshot: snapshotOf([

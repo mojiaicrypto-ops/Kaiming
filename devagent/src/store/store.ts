@@ -1481,11 +1481,13 @@ export class Store {
   }
 
   /**
-   * Append one input's usage to the ledger.
+   * Write one input's usage to the ledger, aggregated per (role, model).
    *
-   * Called once per input, before its terminal state is written, with the responses aggregated per
-   * (role, model). Idempotent on `(inputId, providerId, modelId)`: a retry after a crash credits the
-   * tokens once, and a re-run of an input that already settled cannot double-count.
+   * The caller passes **absolute totals for that input**, so this is an upsert rather than an append:
+   * the runner flushes after every completed response, which is what lets a long Task show its cost
+   * while it runs, and the input's final flush simply overwrites with the same (or larger) figures.
+   * Because the values are absolute, re-flushing or replaying an input cannot double-count — the row
+   * for `(inputId, providerId, modelId)` always states "this input used this much on this model".
    *
    * Values are nullable because "the gateway reported nothing" and "the gateway reported zero" are
    * different facts, and only one of them means free.
@@ -1513,10 +1515,19 @@ export class Store {
     if (params.entries.length === 0) return 0;
     return this.transaction(() => {
       const statement = this.db.prepare(
-        `INSERT OR IGNORE INTO usage_entries
+        `INSERT INTO usage_entries
            (inputId, projectId, sessionId, taskId, roleId, providerId, modelId, inputTokens, outputTokens,
             cacheReadTokens, cacheWriteTokens, reasoningTokens, costTotal, responses, startedAt, endedAt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(inputId, providerId, modelId) DO UPDATE SET
+           inputTokens = excluded.inputTokens,
+           outputTokens = excluded.outputTokens,
+           cacheReadTokens = excluded.cacheReadTokens,
+           cacheWriteTokens = excluded.cacheWriteTokens,
+           reasoningTokens = excluded.reasoningTokens,
+           costTotal = excluded.costTotal,
+           responses = excluded.responses,
+           endedAt = excluded.endedAt`,
       );
       let written = 0;
       for (const entry of params.entries) {

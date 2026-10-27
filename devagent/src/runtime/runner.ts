@@ -505,19 +505,31 @@ const serverWorkDir = join(config.agentDir, 'work');
         },
       });
 
-      // Usage is read as a slice of the session's own messages: this input's responses are exactly the
-      // ones appended from here on. Nothing is written while the model streams.
+      /*
+       * Usage is read as a slice of the session's own messages: this input's responses are exactly the
+       * ones appended from here on. It is flushed after *every* completed response, not only when the
+       * input ends — a delegated member can run for minutes, and "no numbers until it finishes" reads
+       * as "nothing is being counted". Each flush writes the input's absolute totals for the models it
+       * has touched so far, so the numbers converge instead of piling up, and the last flush is the
+       * input's final cost.
+       */
       const usageStart = handle.session.messages.length;
       const usageStartedAt = new Date().toISOString();
-      await this.promptWithWatchdog(handle, sessionId, text, images);
-      this.recordUsageOf(
-        session,
-        input.inputId,
-        handle,
-        usageStart,
-        usageStartedAt,
-        this.options.store.getTaskForSession(sessionId)?.id,
-      );
+      const taskIdOfRun = this.options.store.getTaskForSession(sessionId)?.id;
+      const flushUsage = (): void =>
+        this.recordUsageOf(session, input.inputId, handle, usageStart, usageStartedAt, taskIdOfRun);
+      const stopWatchingUsage = handle.session.subscribe((event) => {
+        // Only assistant messages carry usage; the user and tool-result messages this event also
+        // fires for would be writes with nothing to add.
+        if (event.type === 'message_end' && event.message.role === 'assistant') flushUsage();
+      });
+      try {
+        await this.promptWithWatchdog(handle, sessionId, text, images);
+      } finally {
+        // Also the path of a failed or stopped run: the responses that did complete were paid for.
+        stopWatchingUsage();
+        flushUsage();
+      }
 
       const lastMessage = handle.session.messages[handle.session.messages.length - 1];
       const stopReason = lastMessage?.role === 'assistant' ? lastMessage.stopReason : 'none';

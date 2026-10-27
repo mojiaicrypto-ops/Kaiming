@@ -358,16 +358,35 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
             isError: message.isError,
             stopReason: message.stopReason ?? null,
           });
-          if (liveIndex >= 0) {
-            items[liveIndex] = completed;
-            const liveKeys = new Set(state.liveKeys);
+          /*
+           * The turn exists once, no matter which path brought it here.
+           *
+           * Three orders are possible and all of them must end with a single bubble: the live entry
+           * is present (stream joined normally); a resync snapshot already carries the file's copy
+           * (the connection dropped mid-turn and merged); or neither is (the stream joined between
+           * message_start and message_end). Same signature means same message, so the snapshot's own
+           * entry id wins and the transient live one is dropped.
+           */
+          const signature = signatureOf(completed);
+          const duplicate = items.findIndex(
+            (entry, index) =>
+              index !== liveIndex && entry.streaming !== true && signatureOf(entry) === signature,
+          );
+          const liveKeys = new Set(state.liveKeys);
+          let next: readonly HistoryMessage[];
+          if (liveIndex >= 0 && duplicate >= 0) {
+            // The snapshot already has this turn: keep it, drop the live twin we just completed.
+            next = items.filter((_, index) => index !== liveIndex);
             if (liveKey !== undefined) liveKeys.delete(liveKey);
-            return { ...state, items, liveKeys };
+          } else if (liveIndex >= 0) {
+            next = items.map((entry, index) => (index === liveIndex ? completed : entry));
+            if (liveKey !== undefined) liveKeys.delete(liveKey);
+          } else if (duplicate >= 0) {
+            return state;
+          } else {
+            next = [...items, completed];
           }
-          // No live entry (e.g. the stream joined between message_start and message_end):
-          // keep the completed message — dropping it loses a real turn.
-          items.push(completed);
-          return { ...state, items };
+          return { ...state, items: next, liveKeys };
         }
         case 'agent_start':
           return { ...state, busy: 'processing' };

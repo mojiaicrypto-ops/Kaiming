@@ -38,16 +38,33 @@ export function UsagePage({ rpc, projectId }: { rpc: RpcClient; projectId: strin
     let cancelled = false;
     setFailure(null);
     const params = scope === 'project' && projectId !== '' ? { projectId } : {};
-    void rpc
-      .call<Report>('usage.report', params)
-      .then((read) => {
-        if (!cancelled) setReport(read);
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) setFailure(errorText(error, t));
-      });
+    const read = (): void => {
+      void rpc
+        .call<Report>('usage.report', params)
+        .then((next) => {
+          if (!cancelled) setReport(next);
+        })
+        .catch((error: unknown) => {
+          if (!cancelled) setFailure(errorText(error, t));
+        });
+    };
+    read();
+    /*
+     * A delegated member can run for minutes, and its ledger row grows with every response. Reading
+     * once would show a stale number that looks like "nothing is being counted", so the page rereads
+     * while it is visible (the requirement board does the same) and stops the moment it is not.
+     */
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') read();
+    }, 10_000);
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') read();
+    };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [rpc, scope, projectId, t]);
 
