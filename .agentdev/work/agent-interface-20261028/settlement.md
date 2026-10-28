@@ -1,4 +1,6 @@
-# Settlement · 外部 Agent 接入（MCP）产品文档
+# Settlement · 外部 Agent 接入（MCP）
+
+## 第一部分：产品文档（2026-10-28，已完成）
 
 ```yaml
 settlement:
@@ -75,3 +77,69 @@ settlement:
 3. `docs/technicalnew/mcp-service.md` + R1/A3/存储迁移的契约补写 + `gap-register` 登记（MCP 未实现、channel 未实现、只读委派无硬保证）。
 4. 真实客户端门禁：Codex 与 Claude Code 各跑一次（stdio 与 http），日志存入验证记录。
 5. 未实测：Grok（未安装）；Windows/远程部署下的 `/mcp` 行为。
+
+## 第二部分：实现（P1–P3，2026-10-28，Completed）
+
+```yaml
+implementation:
+  task: agent-interface-20261028
+  changed:
+    - path: devagent/src/mcp/{main,protocol,http,control,runs}.ts
+      purpose: stdio 与 /mcp 两个传输、工具面、run 标识与状态推导、附着/实例记录
+    - path: devagent/src/runtime/task-progress.ts
+      purpose: 与浏览器共享的阶段-轮次/计划尾段/是否通过规则
+    - path: devagent/src/store/store.ts
+      purpose: schema v15 `sessions.channel` + 部分唯一索引、`getSessionByChannel`、摘要 channel
+    - path: devagent/src/server/read-methods.ts
+      purpose: `session.open`、`interaction.list`、`session.list.channel`、`session.input.get` 只给 inputId 并回 sessionId/taskId、`task.get{includePlan}` 与 `sourceInputId`
+    - path: devagent/src/server/{http,auth,main}.ts
+      purpose: `/mcp` 挂载、bearer 或 cookie 鉴权、启动诊断改走 log 汇（默认 stderr）
+    - path: devagent/webapp/src/chat/{task-flow,TaskTodo,task-labels,ChatPage}.tsx
+      purpose: 同一 `memberPassed` 谓词；成员行按报告 verdict 显示"未通过"
+    - path: devagent/test/{mcp,mcp-instance,mcp-protocol,mcp-runs,mcp-http,task-progress}.test.ts + fixtures
+      purpose: 协议、真进程、实例附着、工具语义、迁移与进度规则的回归
+  behavior:
+    - 编码 Agent 通过 MCP 委派 → 拿到 runId → status/wait 看阶段与计划尾段、答问题、补充、取消、读报告/Plan/对话/文件
+    - 同一项目一条固定会话，并发委派排队并指出挡在前面的 Task；缺模型时说明真实阻断
+    - 重启后 runId 仍可查；stdout 只有协议消息；第二个客户端附着而不是再开一个库
+  plan_deviations:
+    - `read(kind=transcript)` 增加按 inputId 过滤（评审发现共享会话会返回他人回合）
+    - 新增实例记录 `mcp-instance.json`（计划只写了"附着或自启"，未定义发现机制）
+    - "是否通过"从 MCP 侧叠加改为共享规则（评审指出两个接入面会给出相反答案）
+  document_impact:
+    - docs/technicalnew/mcp-service.md（新）
+    - docs/technicalnew/{runtime-contract,architecture,storage-and-recovery,README,validation,gap-register}.md
+  risks_remaining:
+    - Grok 未安装，未实测
+    - `/mcp` 未经过 TLS/反代；非默认端口且未告知 `AGENTDEV_MCP_URL` 的 workbench 不可发现（已在 M1 写明为运维责任）
+    - 非默认端口场景没有自动化覆盖
+```
+
+### 执行过的检查（真实命令与结果）
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 服务端全量 | `npm test` | 41 文件 / 435 用例通过 |
+| webapp | `npm --prefix webapp test` | 10 文件 / 70 用例通过 |
+| 浏览器 | `npm run test:browser` | 56 用例通过 |
+| 类型 | `npx tsc --noEmit`、`npm --prefix webapp run typecheck` | 通过 |
+| 构建 | `npm run build` | 通过 |
+| 真实客户端 | Codex 0.155.1 `codex exec` + Claude Code 2.1.310 `claude -p`，stdio 连到 stub 模型 workbench | 两者 `delegate → status → read` 均成功并读回 stub 答复；Codex 在 `approval: never` 下会被宿主拒绝（注解生效） |
+| 独立评审 | 4 轮（1 轮设计 + 3 轮代码） | 最终 passed，无 blocking |
+
+### 明确未执行
+
+- Grok 客户端（未安装）。
+- 真实模型跑完整 write Task（门禁用 stub 模型；真实模型只用于既有 `check:workflow` 历史证据）。
+- `/mcp` 经 TLS/反向代理、多机部署。
+
+### 完成判据
+
+- [x] Plan 已确认（`plan.md` status: Approved）
+- [x] 实现与 Plan 一致；偏离已在上表列出
+- [x] blocking 发现全部关闭并由独立评审复核
+- [x] 测试已执行，未覆盖项明确
+- [x] 产品行为已确认（X-01～X-08，均为本轮对话中的用户决定）
+- [x] 技术/接口/存储/验证文档与缺口登记已更新
+- [x] 任务证据归档（plan/review/settlement）
+- [x] git 提交（见提交记录）
