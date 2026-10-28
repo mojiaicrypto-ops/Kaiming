@@ -247,3 +247,13 @@
 **证据**：真实服务 + 真实 worker + 脚本化 SSE 模型：模型自建 Task 的会话，暂停后新消息 `queued→processing→completed`，该轮模型请求工具表为 `read,grep,find,ls,task,question,web_search,web_fetch,browser`（无写工具），resume 后恢复 `bash,requirement,project`；Task 在首轮前即暂停时同样成立。成员仍 `TASK_CONTROLLED`、cancelled 无主管轮次、cancelling 仍拒绝、真实崩溃重启后仍 `RECOVERY_REQUIRED`。单测 42 文件 444 用例、`tsc --noEmit` 全绿；在 HEAD 工作树上仅覆盖新测试时，5 个新用例按预期失败（tool-sets 1、store 1、task-tools 1、runtime 3）。详见 `.agentdev/work/paused-chief-input-20261028/`。
 
 **未覆盖**：暂停期是否需要保留 `requirement`/`project` 的只读 op（当前整工具移除，产品未要求）；暂停轮与恢复轮的实例身份只在单测验证（`startWorkbench` 不暴露 registry）。一轮独立测试曾报“复用实例仍带 bash”，复核为按请求序号取错轮次的测量假象：按轮次文本关联后不成立。
+
+## 2026-10-28 · 状态栏上下文占用
+
+**需求**：主管 chat 中能直接看到当前模型的上下文窗口与已用占用，不需要打开设置页或读日志。用户确认：位置=状态栏模型区；只显示上下文占用；无实例时显示 `— / 窗口`。产品行为见 C-03、验收 AC-43、UI U2、M4 与 R1 快照字段。
+
+**实现**：`AgentSession.getContextUsage()` 为权威估算；`contextOf` 活实例优先，无实例时按上次运行模型（否则当前设置）取目录窗口并标 `live=false`；快照带 `context`，assistant `message_end` / `compaction_end` 后在 microtask 发布顶层 `context` 通知（避开 Pi 先广播后 append，并保证观测失败不影响 run）。前端 slot 合并并在状态栏渲染 `已用 / 窗口 · 百分比`；≥70% warning、≥90% danger；压缩后 `?`、无实例 `—`；≤560 只留百分比，≤480 隐藏分支，≤400 隐藏运行计数，模型最后才收缩、快捷键提示先让位。
+
+**证据**：真实服务 + 真实 Chromium + 脚本化 provider：桌面 `2 / 128k · 0.0%`（role=meter，title 含 estimated/auto-compaction）；用量递增 provider 下 12k→38k（9.4%→29.7%）；重启后 prepare 返回 `{tokens:null,contextWindow:128000,percent:null,autoCompaction:null,live:false}`，config.get 不变；390/320 可见且仅百分比、无横向溢出；拥挤 + 长模型名在 401/430/480/561/650/861 连接词均在栏内。单测 43 文件 453 用例、webapp 12 文件 79 用例、两侧 `tsc` 与浏览器 57 用例通过。详见 `.agentdev/work/context-meter-20261028/`。
+
+**未覆盖**：真实触发压缩后的 `?`、真实 70/90 颜色（由 SSR 单测覆盖）、真实成员运行/真实断线（几何用注入同形节点）、中文字符串窄屏宽度。
