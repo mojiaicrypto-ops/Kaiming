@@ -34,15 +34,17 @@
 | project.list | limit?、cursor? | 已登记项目列表：realPath、目录是否存在、会话/任务数、最后活动、更新时间；cursor 为 `updatedAt\|projectId`；不读项目文件 |
 | project.rebind | projectId、expectedRevision、path | 原 ID 的新目录绑定；先停写、校验引用与确认来源，禁止因同名自动认领 |
 | session.create | projectId | chief 的逻辑 Session；Pi 懒创建，无模型也能创建/读取；标题不存储，由首条用户输入派生 |
+| session.open | projectId、channel | 外部通道的**固定会话**：有就返回、没有才建（`created` 区分）；channel 为 1–32 位小写字母/数字/连字符；同一 (projectId, channel) 至多一条，靠部分唯一索引保证并发 |
 | session.get | projectId、sessionId | role、currentTaskId、activity、stopping、当前输入、等待原因、排队数、lastActivityAt、config{providerId,modelId,source}；activity=idle/queued/processing/stopping（stopping=已请求停止但尚未停稳）；config 取当前输入认领时记录的配置，只回这三个字段，不含服务端目录 |
-| session.list | projectId、limit?、cursor? | 会话列一次取齐：sessionId、roleId、revision（清理的 CAS 依据）、title（派生，60 码点截断）、activity、lastActivityAt、currentTaskId、queuedInputs；cursor 为 `lastActivityAt\|sessionId`；不调用 `stream.prepare`、不读历史文件 |
+| session.list | projectId、limit?、cursor? | 会话列一次取齐：sessionId、roleId、revision（清理的 CAS 依据）、title（派生，60 码点截断）、channel（外部通道的固定会话，普通会话为 null）、activity、lastActivityAt、currentTaskId、queuedInputs；cursor 为 `lastActivityAt\|sessionId`；不调用 `stream.prepare`、不读历史文件 |
 | session.messages.list | projectId、sessionId、cursor?、before?、limit | 指定 Pi 历史、input 关联与状态；cursor 向前翻（nextCursor），before 向后翻（previousCursor，页首 entry；到最早为 null），两者不可同时给；无历史的未开始会话为空，有历史而文件缺失报错 |
 | session.input.submit | projectId、sessionId、content、taskId? | 用户输入只投 chief；当前 Task 的补充须关联原 taskId，按安全边界处理；普通新话题排队至原 Task 结束或新开主管会话 |
-| session.input.get | projectId、sessionId、inputId | 当前状态、历史边界/结果的公开引用、错误/停止原因；原内容保持不变 |
+| session.input.get | projectId、inputId、sessionId? | 当前状态、历史边界/结果的公开引用、错误/停止原因；原内容保持不变。给出 sessionId 时校验归属，省略时按 inputId 解析（外部调用方只有运行标识）；返回 `sessionId` 与该输入的 `taskId` |
 | session.input.stop | projectId、sessionId、inputId | 保存停止意图后直接 abort；返回 Input 原 status/revision、stopRequested 与 Session.activity；未停稳 activity=stopping，未知为 interrupted |
-| task.list/get | projectId、taskId?、cursor?、limit? | Task 看板/详情，无模型也可读 |
+| task.list/get | projectId、taskId?、cursor?、limit?；get 另可给 includePlan | Task 看板/详情，无模型也可读；摘要含 `sourceInputId`（创建它的授权输入，外部运行的标识由此派生）；`includePlan` 时 `plan` 返回 Plan 正文与 `current`（文件是否仍与保存时一致）；报告正文按 `resultId` 另经 `task.report.get` 读取，本方法只给结果摘要 |
 | task.control | projectId、taskId、expectedRevision、command | pause/resume/cancel，调用同一 TaskService；停止范围见 S5 |
 | requirement.list/get | projectId、过滤/分页或 requirementId | 使用同一文件读取服务，返回非法文件信息，不经模型 |
+| interaction.list | projectId、sessionId | 该会话当前待答问题（interactionId、method、title、message、options、placeholder、inputId、taskId、sourceSessionId、revision、createdAt）；只读，不需要实时订阅 |
 | interaction.respond | projectId、chiefSessionId、interactionId、expectedRevision、response | 请求/响应、当前主管路由、去重、保存后解除等待均按 M5；返回已收到与当前请求状态 |
 | session.stream.prepare | projectId、sessionId | subscriptionId、epoch、boundary、快照；先缓冲后读快照，见 M4 |
 | task.report.get | projectId、taskId、resultId | 校验 Task/结果归属，读取 Server 或项目报告正文；不接受任意路径 |
@@ -55,7 +57,7 @@
 
 project.rebind / task.control / recovery.resolve 是显式控制；session.input.submit 中自然语言“暂停”由主管理解后调用控制工具。旧页面的 input.stop 只停止指定 inputId，不误停后来的输入。
 
-认证采用首版本机配置访问口令换取同源安全会话 cookie，写入校验来源/CSRF；退出立即拒绝旧连接和后续请求。SSE 不通过 URL 携带访问凭证。目录与文件接口检查实际路径归属，脱离项目的符号链接不能经 Web 文件接口访问。这些是接入与数据保护，不扩展多用户权限系统。
+认证采用首版本机配置访问口令换取同源安全会话 cookie，写入校验来源/CSRF；退出立即拒绝旧连接和后续请求。`/mcp`（外部 Agent 接入）接受同一口令作为 `Authorization: Bearer`，与 cookie 并存，供不持有 cookie 的机器调用方使用；未认证请求 401，跨源 403。SSE 不通过 URL 携带访问凭证。目录与文件接口检查实际路径归属，脱离项目的符号链接不能经 Web 文件接口访问。这些是接入与数据保护，不扩展多用户权限系统。
 
 ## R2 输入状态与版本
 

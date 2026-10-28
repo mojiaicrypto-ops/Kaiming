@@ -91,6 +91,7 @@ erDiagram
 | 事实 | 权威 |
 |---|---|
 | 项目/Session 身份、当前 Task、阶段、子 Session 关联、结果、交互、回执 | 统一 SQLite |
+| 外部通道的固定会话 | `sessions.channel`（程序字段，如 `mcp`）：同一项目每个通道至多一条；显示名仍是 `title`，改名不改变身份。产品语义见 X-02 |
 | 总体 Plan / 正式报告 | read Task 存 Server `work/<taskId>/`；write Task 存项目 `.dev/work/<taskId>/`；DB 存引用与摘要 |
 | 会话、工具正文、压缩与分支 | 精确绑定的 Pi JSONL |
 | 需求内容与状态 | Markdown + YAML 头部，列表重建 |
@@ -145,6 +146,7 @@ Durable 使用 pi-ai + Chord 的独立 Harness。这里使用 coding-agent SDK�
 | 技术栈 | React 19 + Vite 7 + TypeScript；`npm run build` 产出 `web-static/`，同一 Server 在 `/` 托管 | `devagent/webapp/` |
 | 入口 | 只有一套外壳：`/` 即新壳；`/requirements`、`/settings/*` 是客户端路由，未知无扩展名路径回退 `index.html`；旧地址 `/app/*` 301 到同路径 | `src/server/http.ts`、`src/server/main.ts` |
 | 数据来源 | 会话流复用 `session.stream.prepare` + SSE；其他界面只调用已注册的只读/写入方法 | `src/server/read-methods.ts`、`write-methods.ts` |
+| 外部接入 | 编码 Agent 通过 MCP 调用同一 Server：`/mcp`（Streamable HTTP，与前端同进程）与 `npm run mcp`（stdio 子进程，附着或自启 workbench）；工具面与状态推导见 [MCP 服务](mcp-service.md) | `src/mcp/` |
 | 构建产物 | `devagent/web-static/` 不入库，构建后可被测试与服务端使用 | `devagent/.gitignore` |
 | 样式 | 令牌与组件层照 `docs/design/tui/tui.css` 重写；代码/标识等宽，中文正文无衬线 | `devagent/webapp/src/theme/` |
 | 会话标题 | 服务端不存标题：界面取首条用户消息派生，新会话显示"新会话" | `devagent/webapp/src/state/useWorkspace.ts` |
