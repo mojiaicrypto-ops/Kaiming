@@ -92,22 +92,30 @@ export interface RoleToolSet {
   readonly taskType: TaskType | undefined;
 }
 
+/** How the current Task holds this session's project writes (S3: a paused Task keeps "read only"). */
+export type WriteHold = 'running' | 'paused';
+
 /**
  * Tools for one role under one Task type. A `read` Task drops project-writing tools, arbitrary shell
  * and the project-writing domain tools; `agent_report` stays available because it writes a Server-side
- * report, not a project file.
+ * report, not a project file. A `paused` hold drops the same names: the chief may still talk, read and
+ * resume, but nothing may change the project while the Task is not running.
  *
  * The allowlist names whole tools; the op subsets G1 narrows (a specialist's `task` is get-only) are
  * enforced by the tool itself, because the host fixes the caller's role.
  */
-export function toolSetFor(roleId: PromptRoleId, taskType: TaskType | undefined): RoleToolSet {
-  const readTask = taskType === 'read';
-  const native = readTask
+export function toolSetFor(
+  roleId: PromptRoleId,
+  taskType: TaskType | undefined,
+  hold: WriteHold = 'running',
+): RoleToolSet {
+  const held = taskType === 'read' || hold === 'paused';
+  const native = held
     ? NATIVE_BY_ROLE[roleId].filter(
         (tool) => !PROJECT_WRITE_TOOLS.includes(tool) && tool !== SHELL_TOOL,
       )
     : NATIVE_BY_ROLE[roleId];
-  const domain = readTask
+  const domain = held
     ? DOMAIN_BY_ROLE[roleId].filter((tool) => !PROJECT_WRITING_DOMAIN_TOOLS.includes(tool))
     : DOMAIN_BY_ROLE[roleId];
   const denied = TOOL_UNIVERSE.filter((name) => !native.includes(name) && !domain.includes(name));

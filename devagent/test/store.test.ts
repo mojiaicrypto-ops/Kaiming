@@ -396,6 +396,101 @@ describe('claiming', () => {
       errorMessage: 'no usable model',
     });
   });
+
+  /** Runs `seed` to completion: the chief's input that created the Task is no longer queued. */
+  function runSeed(store: Store): void {
+    accept(store, { sessionId: 's-2', inputId: 'seed', sourceKey: 'user:seed', requestKey: 'seed' });
+    const claimed = store.claimNextInput('s-2');
+    if (claimed.kind !== 'claimed') {
+      throw new Error(`expected seed to be claimed, got ${claimed.kind}`);
+    }
+    store.finishInput({ inputId: 'seed', expectedRevision: claimed.input.revision, status: 'completed' });
+  }
+
+  /** A Task coordinated by `s-2` (a chief with no `task_sessions` binding), paused or not. */
+  function seedTask(store: Store, status: 'active' | 'paused' | 'cancelled' = 'active'): string {
+    runSeed(store);
+    const task = store.createTask({
+      id: 't-1',
+      projectId: 'p-1',
+      chiefSessionId: 's-2',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      goal: 'reset password',
+      scope: 'account',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'x' },
+      authorizationRefs: ['m-1'],
+      sourceInputId: 'seed',
+    });
+    store.updateTask({ taskId: task.id, phase: 'review' });
+    if (status !== 'active') {
+      store.controlTask({ taskId: task.id, command: 'pause' });
+    }
+    if (status === 'cancelled') {
+      store.controlTask({ taskId: task.id, command: 'cancel' });
+    }
+    return task.id;
+  }
+
+  it('hands the chief its own turn while its Task is paused, so the session can be resumed at all', () => {
+    const { store } = openStore();
+    seed(store);
+    const taskId = seedTask(store, 'paused');
+    accept(store, { sessionId: 's-2', taskId, inputId: 'i-chief', sourceKey: 'user:c', requestKey: 'req-c' });
+
+    const claimed = store.claimNextInput('s-2');
+
+    expect(claimed.kind).toBe('claimed');
+    expect(store.getInput('i-chief')?.status).toBe('processing');
+  });
+
+  it('refuses the paused Task\u2019s work to a member session, which is not the chief', () => {
+    const { store } = openStore();
+    seed(store);
+    const paused = seedTask(store, 'paused');
+    // A specialist session is not the chief: its work stays held for a resume.
+    store.createSession({ id: 'm-1', projectId: 'p-1', roleId: 'developer', cwd: '/projects/alpha' });
+    accept(store, { sessionId: 'm-1', taskId: paused, inputId: 'i-m', sourceKey: 'user:m', requestKey: 'req-m' });
+
+    expect(store.claimNextInput('m-1')).toEqual({ kind: 'controlled', inputId: 'i-m', code: 'TASK_CONTROLLED' });
+  });
+
+  it('runs no turn of a cancelled Task: the pause exception stops where the Task ends', () => {
+    const { store } = openStore();
+    seed(store);
+    const cancelled = seedTask(store, 'cancelled');
+    // Cancelling frees the chief's slot, so this input cites the Task explicitly - the case a
+    // replayed or late request creates.
+    accept(store, { sessionId: 's-2', taskId: cancelled, inputId: 'i-x', sourceKey: 'user:x', requestKey: 'req-x' });
+
+    expect(store.claimNextInput('s-2').kind).not.toBe('claimed');
+  });
+
+  it('keeps a paused session blocked while an interrupted input still awaits verification', () => {
+    const { store, path } = openStore(1);
+    seed(store);
+    const taskId = seedTask(store, 'active');
+    accept(store, { sessionId: 's-2', taskId, inputId: 'i-run', sourceKey: 'user:r', requestKey: 'req-r' });
+    expect(store.claimNextInput('s-2').kind).toBe('claimed');
+    store.close();
+    stores.splice(stores.indexOf(store), 1);
+
+    const restarted = new Store({ path, serverEpoch: 2 });
+    stores.push(restarted);
+    restarted.scanStartup();
+    restarted.controlTask({ taskId, command: 'pause' });
+    accept(restarted, { sessionId: 's-2', taskId, inputId: 'i-later', sourceKey: 'user:l', requestKey: 'req-l' });
+
+    // The pause does not weaken S3's first gate: an unknown outcome is verified before anything runs.
+    expect(restarted.claimNextInput('s-2')).toEqual({
+      kind: 'blocked',
+      inputId: 'i-run',
+      code: 'RECOVERY_REQUIRED',
+    });
+  });
 });
 
 describe('stop intent', () => {

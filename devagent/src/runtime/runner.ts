@@ -13,7 +13,7 @@
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { type SessionEntry } from '@earendil-works/pi-coding-agent';
-import { Store, StoreError, type InputRow, type TaskRow } from '../store/store.ts';
+import { Store, StoreError, type InputRow, type TaskRow, type TaskStatus } from '../store/store.ts';
 import { redactEffectiveConfig, type EffectiveConfig } from './config.ts';
 import { digestJson } from './hash.ts';
 import {
@@ -32,7 +32,7 @@ import { readImage } from '../server/attachments.ts';
 import { InteractionBridge, createUiAdapter } from './interactions.ts';
 import { createQuestionTool } from '../tools/question-tool.ts';
 import { createPrivatePathGuard } from './tool-guard.ts';
-import { toolSetFor } from './tool-sets.ts';
+import { toolSetFor, type WriteHold } from './tool-sets.ts';
 import { asToolDefinitions, createTaskGetTool, createTaskTool, type DomainTool, type TaskToolContext } from '../tools/task-tools.ts';
 import { createBrowserTool } from '../tools/browser-tool.ts';
 import { createWebFetchTool } from '../tools/web-fetch.ts';
@@ -321,7 +321,10 @@ export class InputRunner {
       const extras = this.options.sessionExtras?.(sessionId);
       // A professional session inherits its Task's type; an injected hook (tests) wins.
       const taskType = this.options.taskTypeOf?.(sessionId) ?? this.options.store.getTaskForSession(sessionId)?.type;
-      const toolSet = toolSetFor(session.roleId, taskType);
+      // S3 scopes the hold to the chief: its conversation runs while the Task is paused, its project
+      // writes do not. A specialist's set stays the G1 table's, which the claim gate already guards.
+      const hold = session.roleId === 'chief' ? holdOf(this.options.store, sessionId) : 'running';
+      const toolSet = toolSetFor(session.roleId, taskType, hold);
       // Host-owned domain tools: the chief organizes Tasks, a specialist may only read its own. The
       // context is resolved per tool call, because this Pi instance is reused across inputs.
 const serverWorkDir = join(config.agentDir, 'work');
@@ -858,6 +861,16 @@ const serverWorkDir = join(config.agentDir, 'work');
       return { ok: false, detail: `${cwd} is not accessible: ${errorMessageOf(error)}` };
     }
   }
+}
+
+/**
+ * The write hold of the Task a chief coordinates. The Task stays bound through `pausing`/`paused`,
+ * so the hold is read from the Task row - never from the input that is being claimed.
+ */
+function holdOf(store: Store, sessionId: string): WriteHold {
+  const taskId = store.getSession(sessionId)?.currentTaskId ?? null;
+  const status: TaskStatus | undefined = taskId === null ? undefined : store.getTask(taskId)?.status;
+  return status === 'pausing' || status === 'paused' ? 'paused' : 'running';
 }
 
 function abortKey(sessionId: string, inputId: string): string {

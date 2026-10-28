@@ -336,6 +336,47 @@ describe('input runner', () => {
     expect(h.registry.count()).toBe(1);
   });
 
+  it('gives the paused turn its own instance and tool set, not the running one\'s', async () => {
+    // The tool allowlist is part of the registry's binding hash, so a pause - which narrows it - must
+    // produce a fresh instance from the same history rather than running on the old, wider one.
+    const h = await harness({ replies: [{ kind: 'text', text: 'ok' }, { kind: 'text', text: 'paused' }, { kind: 'text', text: 'resumed' }] });
+    expect((await h.runner.runNext('s-1')).kind).toBe('completed');
+    const runningHandle = h.registry.get('s-1');
+    expect(runningHandle?.session.getActiveToolNames() ?? []).toContain('bash');
+
+    const task = h.store.createTask({
+      id: 't-reuse',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      goal: 'reset password',
+      scope: 'account',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'x' },
+      authorizationRefs: ['m-1'],
+      sourceInputId: 'i-1',
+    });
+    h.store.updateTask({ taskId: task.id, phase: 'review' });
+    h.store.controlTask({ taskId: task.id, command: 'pause' });
+    accept(h.store, 'i-2', 'req-2', task.id);
+    expect((await h.runner.runNext('s-1')).kind).toBe('completed');
+
+    const pausedHandle = h.registry.get('s-1');
+    expect(pausedHandle).not.toBe(runningHandle);
+    expect(pausedHandle?.piFile()).toBe(runningHandle?.piFile());
+    const active = pausedHandle?.session.getActiveToolNames() ?? [];
+    expect(active).not.toContain('bash');
+    expect(active).toEqual(expect.arrayContaining(['read', 'grep', 'find', 'ls', 'task']));
+
+    h.store.controlTask({ taskId: task.id, command: 'resume' });
+    accept(h.store, 'i-3', 'req-3', task.id);
+    expect((await h.runner.runNext('s-1')).kind).toBe('completed');
+    expect(h.registry.get('s-1')?.session.getActiveToolNames() ?? []).toContain('bash');
+  });
+
   it('classifies a failing model run as failed rather than completed', async () => {
     const h = await harness({ replies: [{ kind: 'http_error', status: 500, message: 'boom' }] });
 
@@ -1566,6 +1607,104 @@ describe('input runner', () => {
     expect(outcome.kind).toBe('completed');
     expect(h.store.getInput('i-2')?.status).toBe('stopped');
   }, 30_000);
+
+  it('runs the chief own turn while its Task is paused, and refuses its project writes there', async () => {
+    const h = await harness({ replies: [{ kind: 'text', text: 'ok' }, { kind: 'text', text: 'and again' }] });
+    const task = h.store.createTask({
+      id: 't-held',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      goal: 'reset password',
+      scope: 'account',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'x' },
+      authorizationRefs: ['m-1'],
+      sourceInputId: 'i-1',
+    });
+    h.store.updateTask({ taskId: task.id, phase: 'review' });
+    const paused = await h.runner.controlTask({ taskId: task.id, command: 'pause' });
+    expect(paused.status).toBe('paused');
+    // The chief keeps its Task while it is paused, so the user's next message cites it.
+    accept(h.store, 'i-2', 'req-2', task.id);
+
+    const outcome = await h.runner.runNext('s-1');
+
+    // The conversation is not Task work: it is delivered while the Task is held (S3).
+    expect(outcome.kind).toBe('completed');
+    expect(h.store.getInput('i-2')?.status).toBe('completed');
+    // The recorded allowlist is this run's own: the probe test below covers what Pi really activated.
+    const recorded = JSON.parse(h.store.getInput('i-2')?.effectiveConfig ?? '{}') as {
+      requestedTools?: string[];
+    };
+    // Recorded too, so a reader of the run can see why the shell was missing.
+    expect(recorded.requestedTools ?? []).not.toContain('bash');
+  }, 60_000);
+
+  it('hands the chief a paused turn without its shell, and the resumed turn with it', async () => {
+    // The probe reads the live registry from inside a tool call, so it records what the model could
+    // really call in that turn - not a scope read after the run settled.
+    const scopes: string[][] = [];
+    let harnessRef: Harness | undefined;
+    const h = await harness({
+      replies: [
+        { kind: 'tool_calls', calls: [{ name: 'probe_scope', arguments: '{}' }] },
+        { kind: 'text', text: 'recorded' },
+        { kind: 'tool_calls', calls: [{ name: 'probe_scope', arguments: '{}' }] },
+        { kind: 'text', text: 'recorded' },
+      ],
+      tools: ['probe_scope'],
+      sessionExtras: () => ({
+        customTools: [
+          {
+            name: 'probe_scope',
+            label: 'probe_scope',
+            description: 'records the active tool names of this run',
+            parameters: { type: 'object', properties: {}, additionalProperties: false },
+            executionMode: 'sequential',
+            async execute(): Promise<{ content: { type: 'text'; text: string }[]; details: Record<string, never> }> {
+              scopes.push([...(harnessRef?.registry.get('s-1')?.session.getActiveToolNames() ?? [])]);
+              return { content: [{ type: 'text', text: 'recorded' }], details: {} };
+            },
+          } as never,
+        ],
+      }),
+    });
+    harnessRef = h;
+    const task = h.store.createTask({
+      id: 't-shell',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      goal: 'reset password',
+      scope: 'account',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'x' },
+      authorizationRefs: ['m-1'],
+      sourceInputId: 'i-1',
+    });
+    h.store.updateTask({ taskId: task.id, phase: 'review' });
+    h.store.controlTask({ taskId: task.id, command: 'pause' });
+    accept(h.store, 'i-2', 'req-2', task.id);
+    expect((await h.runner.runNext('s-1')).kind).toBe('completed');
+    // `bash` is the one writing-capable tool a chief carries, so it is the honest probe of the hold.
+    for (const withheld of ['bash', 'write', 'edit', 'requirement', 'project']) {
+      expect(scopes[0] ?? []).not.toContain(withheld);
+    }
+    expect(scopes[0] ?? []).toEqual(expect.arrayContaining(['read', 'grep', 'find', 'ls', 'task']));
+
+    h.store.controlTask({ taskId: task.id, command: 'resume' });
+    accept(h.store, 'i-3', 'req-3', task.id);
+    expect((await h.runner.runNext('s-1')).kind).toBe('completed');
+    // A second probe, in the running Task: the shell is back.
+    expect(scopes[1] ?? []).toContain('bash');
+  }, 60_000);
 });
 describe('thinking level', () => {
   it('creates the session at the resolved level, and Pi clamps it to what the model accepts', async () => {

@@ -1401,34 +1401,56 @@ export class Store {
         .prepare('SELECT currentTaskId FROM sessions WHERE id = ?')
         .get(sessionId) as { currentTaskId: string | null } | undefined;
       if (currentTask !== undefined && currentTask.currentTaskId !== null) {
+        // A Task's work plus, when this session is its chief, the chief's own conversation inputs:
+        // those are how a paused Task is discussed and resumed, not work the pause holds.
         const owned = this.db
           .prepare(
-            "SELECT inputId FROM session_inputs WHERE sessionId = ? AND status = 'queued' AND taskId = ? ORDER BY seq LIMIT 1",
+            `SELECT i.inputId AS inputId,
+                    i.kind IN ('user', 'system_notice')
+                      AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id = i.taskId AND t.chiefSessionId = i.sessionId)
+                      AS held
+               FROM session_inputs i
+              WHERE i.sessionId = ? AND i.status = 'queued' AND i.taskId = ?
+              ORDER BY i.seq LIMIT 1`,
           )
-          .get(sessionId, currentTask.currentTaskId) as { inputId: string } | undefined;
+          .get(sessionId, currentTask.currentTaskId) as { inputId: string; held: number } | undefined;
         if (owned === undefined) {
           return { kind: 'busy', inputId: candidate.inputId } as ClaimResult;
         }
-        candidate = owned;
+        if (owned.held !== 0) {
+          // Not this Task's chief, and not Task work either: the job waits with the Task, and the gate
+          // below says so (`controlled`), exactly as it did before the chief's own turn was exempted.
+          return { kind: 'controlled', inputId: owned.inputId, code: 'TASK_CONTROLLED' } as ClaimResult;
+        }
+        candidate = { inputId: owned.inputId };
       }
       const owner = this.db
         .prepare(
-          `SELECT t.status AS taskStatus, ts.roleId AS roleId, ts.expectedKind AS expectedKind
+          `SELECT t.status AS taskStatus, t.chiefSessionId AS chiefSessionId, i.kind AS kind,
+                  ts.roleId AS roleId, ts.expectedKind AS expectedKind
            FROM session_inputs i
            JOIN tasks t ON t.id = i.taskId
            LEFT JOIN task_sessions ts ON ts.sessionId = i.sessionId AND ts.taskId = i.taskId
            WHERE i.inputId = ?`,
         )
         .get(candidate.inputId) as
-        | { taskStatus: string; roleId: string | null; expectedKind: string | null }
+        | { taskStatus: string; chiefSessionId: string; kind: InputKind; roleId: string | null; expectedKind: string | null }
         | undefined;
       if (owner !== undefined && owner.taskStatus !== 'active' && owner.taskStatus !== 'waiting') {
-        // A Task that is not running hands out exactly one kind of work: the read-only recovery check.
+        // A paused Task hands out exactly two kinds of work: the chief's own turn, and the read-only
+        // recovery check. The chief's conversation is not Task work - it is how the user finds out
+        // what happened and how the Task gets resumed - so freezing it would leave the session with
+        // no way back (R3/S3). It still may not write to the project: the tool set drops the writing
+        // tools while the Task is not running.
+        const chiefTurn =
+          (owner.taskStatus === 'paused' || owner.taskStatus === 'pausing') &&
+          owner.chiefSessionId === sessionId &&
+          (owner.kind === 'user' || owner.kind === 'system_notice');
         const recovery =
           (owner.taskStatus === 'paused' || owner.taskStatus === 'pausing') &&
           owner.roleId === 'investigator' &&
           owner.expectedKind === 'recovery';
-        if (!recovery) {
+        if (!chiefTurn && !recovery) {
           return { kind: 'controlled', inputId: candidate.inputId, code: 'TASK_CONTROLLED' } as ClaimResult;
         }
       }

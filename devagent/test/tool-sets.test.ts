@@ -130,7 +130,26 @@ describe('role tool sets', () => {
     expect(isProjectReadOnly('reviewer', 'write')).toBe(true);
     expect(isProjectReadOnly('developer', 'write')).toBe(false);
   });
+
+  it('withholds project writes from a session whose Task is paused, keeping reads and Task control', () => {
+    // The chief may still talk to the user and resume its Task; it may not change the project while
+    // the Task is not running (S3: "项目写 op 仍拒绝").
+    const held = toolSetFor('chief', 'write', 'paused');
+    expect(held.allowlist).toEqual(
+      expect.arrayContaining(['read', 'grep', 'find', 'ls', 'task', 'question']),
+    );
+    for (const withheld of ['write', 'edit', 'bash', 'requirement', 'project']) {
+      expect(held.allowlist).not.toContain(withheld);
+      expect(held.denied).toContain(withheld);
+    }
+    expect(held.projectReadOnly).toBe(true);
+
+    // Resuming the Task restores exactly the running set.
+    expect(toolSetFor('chief', 'write', 'running').allowlist).toEqual(toolSetFor('chief', 'write').allowlist);
+    expect(toolSetFor('chief', 'write').allowlist).toContain('bash');
+  });
 });
+
 describe('chief task tools · recovery path', () => {
   it('the chief allowlist carries every host-registered domain tool (recovery included)', () => {
     // Every registered domain tool must be callable by at least one role; a registered-but-

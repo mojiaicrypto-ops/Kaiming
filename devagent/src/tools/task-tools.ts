@@ -738,6 +738,16 @@ function getOp(
     members,
     results,
     missing: task.planRef !== null && !plan.current ? ['plan file is missing or changed'] : [],
+    // A Task that is not running holds project writes: say so here instead of letting the model find
+    // out from a tool that is simply not there.
+    ...(task.status === 'paused' || task.status === 'pausing' || task.status === 'cancelling'
+      ? {
+          context: {
+            writeHold: 'paused',
+            note: 'The Task is not running: project writes (write/edit/bash/requirement/project) are withheld here until it is resumed; reading, talking and Task control still work.',
+          },
+        }
+      : {}),
     ...guidanceFor(context.store, task, { chief }),
   });
 }

@@ -323,6 +323,34 @@ describe('task get', () => {
     expect(read.details['planCurrent']).toBe(true);
   });
 
+  it('says project writes are held while the Task is not running, and drops the note once it resumes', async () => {
+    const w = world();
+    const created = await tool(w.tools).execute('call-1', createArgs());
+    expect(created.isError).toBe(false);
+    const taskId = w.store.listTasks(w.projectId)[0]?.id ?? '';
+    const paused = await tool(w.tools).execute('call-2', { op: 'control', taskId, command: 'pause' });
+    expect(paused.isError).toBe(false);
+
+    const held = await tool(w.tools).execute('call-3', { op: 'get', taskId });
+
+    expect(held.isError).toBe(false);
+    expect(held.details['context']).toEqual({
+      writeHold: 'paused',
+      note: expect.stringContaining('withheld here'),
+    });
+    // The Task can still be resumed from here: the note is not a dead end.
+    const actions = held.details['nextActions'];
+    expect(Array.isArray(actions)).toBe(true);
+    if (Array.isArray(actions)) {
+      const first = actions[0];
+      expect(String((first as { action?: string } | undefined)?.action)).toContain('command=resume');
+    }
+
+    await tool(w.tools).execute('call-4', { op: 'control', taskId, command: 'resume' });
+    const open = await tool(w.tools).execute('call-5', { op: 'get', taskId });
+    expect(open.details['context']).toBeUndefined();
+  });
+
   it('says so when the session has no Task yet', async () => {
     const w = world();
 
