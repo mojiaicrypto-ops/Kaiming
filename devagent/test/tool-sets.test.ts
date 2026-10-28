@@ -67,6 +67,10 @@ describe('role tool sets', () => {
       'browser',
     ]);
     expect(toolSetFor('reviewer', 'write').readTools).toEqual(['read', 'grep', 'find', 'ls']);
+    // An investigator verifies by reading and external research; running a script needs a handoff.
+    const investigatorWrite = toolSetFor('investigator', 'write');
+    expect(investigatorWrite.allowlist).not.toContain('bash');
+    expect(investigatorWrite.projectReadOnly).toBe(true);
   });
 
   it('keeps the report tool available in a read Task because it writes a Server-side report', () => {

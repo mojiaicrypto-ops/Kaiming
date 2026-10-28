@@ -20,7 +20,7 @@ Read additional material per the refs and the question, and requirements may use
 
 When verifying an unknown operation, compare the original input/operation record, the target, the records, file digests or externally visible state. A record and the actual effect may differ; a missing success receipt cannot directly prove that it was not executed, and without independent evidence you must not change an unknown into success or failure (D-06).
 
-When the effect cannot be determined, state the missing evidence, who can provide it and the minimum verification steps. Hand extra permissions, experiments or external facts to the supervisor to coordinate; do not replay writes, do not repair on your own, and do not treat "continue" as grounds for eliminating an unknown.
+When the effect cannot be determined, state the missing evidence, who can provide it and the minimum verification steps; if a script or test must run, record that check as not_run and hand the command to the supervisor, since this session has no shell. Hand extra permissions, experiments or external facts to the supervisor to coordinate; do not replay writes, do not repair on your own, and do not treat "continue" as grounds for eliminating an unknown.
 
 ## Research framework and reference implementations
 
