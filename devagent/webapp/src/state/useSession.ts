@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { RpcClient, RpcError, newRequestId } from '../api/rpc';
 import { SessionStream, type PreparedSnapshot, type StreamFrame, type PendingInteraction } from '../api/stream';
-import { emptySlot, slotReducer, type SessionSlot, type TaskDetail } from '../state/slot';
+import { emptySlot, slotReducer, type ContentBlock, type SessionSlot, type TaskDetail } from '../state/slot';
+import type { SessionActivity } from '../api/stream';
 import { toast } from '../lib/toast';
 
 export interface SessionRef {
@@ -265,11 +266,18 @@ export function useSession(
         },
         { requestId: newRequestId('c') },
       );
+      // The echo is the message itself: what the user typed, plus the images already uploaded.
+      const echo: ContentBlock[] = [
+        ...(text !== '' ? [{ type: 'text', text } as const] : []),
+        ...images.map((src) => ({ type: 'image', src }) as const),
+      ];
       if (accepted.waitingForTask !== undefined) {
         // Retained by contract: say so instead of leaving the message silently invisible.
         dispatch({ type: 'inputQueued', inputId: accepted.inputId });
+        dispatch({ type: 'inputAccepted', inputId: accepted.inputId, content: echo });
         return { queued: true, waitingForTask: accepted.waitingForTask };
       }
+      dispatch({ type: 'inputAccepted', inputId: accepted.inputId, content: echo });
       return { queued: false };
     },
     [rpc, session],
@@ -323,9 +331,10 @@ export function useSession(
   // that is one refresh stale is better than a banner for a transient read error.
   /**
    * An input is queued and nothing is running: either the user's message waits behind a Task, or a
-   * run cannot start (a missing model, a role that is not configured). The server knows which; the
-   * client asks, because the event that said so may have been published before this tab subscribed.
-   * Polling stops as soon as the state changes — it is not a heartbeat.
+   * run cannot start (a missing model, a role that is not configured), or the row that would say
+   * "processing" was written a moment after the queue emptied. The server knows which; the client
+   * asks, because the event that said so may have been published before this tab subscribed.
+   * Polling stops as soon as a run is live — it is not a heartbeat.
    */
   useEffect(() => {
     if (slot.busy !== 'queued' || projectId === null || sessionId === null) return;
@@ -333,7 +342,13 @@ export function useSession(
     const ask = (): void => {
       if (document.visibilityState !== 'visible') return;
       void rpc
-        .call<{ session: { blocked: { code: string; detail: string } | null; config: { providerId: string; modelId: string; source: string } | null } }>(
+        .call<{
+          session: {
+            activity: SessionActivity;
+            blocked: { code: string; detail: string } | null;
+            config: { providerId: string; modelId: string; source: string } | null;
+          };
+        }>(
           'session.get',
           { projectId, sessionId },
         )
@@ -341,6 +356,10 @@ export function useSession(
           if (cancelled) return;
           setBlocked(read.session.blocked);
           if (read.session.config !== null) setConfig(read.session.config);
+          // The queue may have drained into a run while no event reached this tab (an input row
+          // changes without a Pi event in between): adopt the server's answer instead of waiting
+          // for an event that may never be replayed.
+          if (read.session.activity !== 'queued') dispatch({ type: 'busy', activity: read.session.activity });
         })
         .catch(() => undefined);
     };

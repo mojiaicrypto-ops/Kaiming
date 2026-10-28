@@ -223,3 +223,15 @@
 | 外部 Agent 接入（MCP，X-01～X-08） | Passed | 实现：`src/mcp/{main,protocol,http,control,runs}.ts`（stdio + `/mcp`，同一个 router/store，无第二套业务规则）；schema v15 加 `sessions.channel` + 部分唯一索引；R1 新增 `session.open`、`interaction.list`，`session.input.get` 支持只给 `inputId`，`task.get{includePlan}` 与摘要 `sourceInputId`；进度推导 `src/runtime/task-progress.ts` 与浏览器 `task-flow.ts` 由 `test-fixtures/task-progress.json` 双向钉住（两侧单测读同一份 fixture，服务端侧发现并修掉「空 frontier 组被当成已完成」）。测试：服务端 41 文件 435 用例（新增 `task-progress` 8、`mcp` 2、`mcp-protocol` 8、`mcp-runs` 6、`mcp-http` 3、`mcp-instance` 1，另 `store` 迁移与 `server-read` 会话/交互各加用例）、webapp 10 文件 70 用例、浏览器 56 用例、两侧 `tsc --noEmit`、`npm run build` 全绿。真实客户端：Codex 0.155.1 与 Claude Code 2.1.310 各用 stdio 连到同一 workbench（stub 模型），三件套调用链 `delegate → status → read` 均成功，读回 stub 答复原文（`GATE-ANSWER…`）。实测两点值得记：① Codex 在 `approval: never` 下直接拒绝调用 `agentdev_delegate`（`destructiveHint` 触发的宿主批准策略），说明注解是生效的，宿主必须显式放开；② Claude Code 的 `read(kind=transcript)` 同时看到了 Codex 那次委派的内容——固定会话共享上下文（X-02 的预期语义），因此实现改为按 `inputId` 过滤本次运行的条目，并在整段条目都带归属但都不属于本运行时返回空集，而不是退回尾部。独立评审后另修三处：stdout 在重启带未完成工作时被启动诊断污染（改为 stderr 日志汇）、第二个 MCP 进程会在同一库上再开一个 workbench（改为实例记录 + 附着，绑定配置端口）、`cancel` 对暂停中的 Task 不下发控制（改为所有非终态都走 `task.control`）；同时把「成员是否通过」的正式报告 verdict 合并进 `taskProgress` 与浏览器 `flowOf`/成员行，两个接入面对同一份复核结论给出同一答案（fixture 增加「复核完成但报告未通过」用例，成员行另有单测）。未覆盖：Grok（未安装）；`/mcp` 经 TLS/反向代理；真实模型跑完整的 write Task 流程 |
 
 未覆盖：Windows 下微软雅黑回退的实际观感（本环境仅 macOS/Chromium）；返工轮次由真实长跑 Task 观察（自动化以 `task.get` mock 驱动，服务端零改动，风险在分组算法已由用例锁定）。
+
+## 2026-10-28 · 前端：主管运行指示与发送回显（浏览器实测）
+
+**现象（用户实测）**：①频繁对话中「The chief is working…」经常性消失；②输入「继续」后主管已在等模型，但转录里既没有「继续」也没有运行指示，刷新后才出现。
+
+**根因**：①运行指示的渲染条件是 `busy === 'processing' && !live`，而 `live` 由「有任一消息在 streaming」得出；助手消息从 `message_start` 到 `message_end` 全程 streaming，于是指示恰在真正干活时被抑制（探针：一轮内 `working` 值 300ms 起即为 true，指示却始终不出现）；②Pi 在**运行开始**时才写用户轮，`session.input.submit` 受理到 `turn_start` 之间流与快照都没有这条消息——客户端此前只把 `inputAccepted` 用于 STOP 目标，从不画出来。
+
+**修复**：①指示改为「会话不空闲即显示」，位置在流式正文之后（停手中圆点静止变暗）；②新增 `pendingEcho`：受理后立即按提交内容画成用户行，历史出现该 inputId（或 `turn_start`）即撤下，同一条消息永远一行；③`agent_end` 后面还有排队输入时回落为 `queued` 而不是 `idle`；④排队轮询把服务端回答的 `activity` 采纳到本地（队列清空但事件没到的情形）；⑤回显图片用附件 id，渲染时补成 `/api/v1/attachments/<id>`。
+
+**证据**：新增浏览器用例「the working line stays on screen for the whole turn, driven from the composer」——真实输入框发送，断言发送后与正文流式中指示都在，运行结束才消失；把渲染条件改回 `&& !live` 时该用例失败（已实测），证明它钉住的就是这个退化。单元侧新增 `webapp/test/transcript-busy.test.ts`（streaming 正文存在时指示仍渲染；空闲时没有）。浏览器 57 用例、服务端 435、webapp 72、两侧 `tsc` 与 `npm run build` 全绿。
+
+**未覆盖**：受理到 `turn_start` 的窗口在脚本化模型下只有毫秒级，自动用例无法在其中取样（`kind: 'hang'` 会让关闭流程挂住），回显由单元与失败前/后的实机现象支持；真实模型长思考时的观察仍靠用户实机。

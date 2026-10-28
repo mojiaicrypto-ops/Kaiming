@@ -537,9 +537,57 @@ kbd {
 .m > * + * {
   margin-top: var(--s2);
 }
+/* "The chief is working" must be the most certain thing on screen: it exists exactly while a turn
+   is live, and it is the only place a run is stated as a run. The dots read before the words do. */
 .busy {
-  color: var(--fg-3);
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  color: var(--fg-2);
   font-size: var(--fs-13);
+  padding: var(--s2) 0 0;
+}
+@keyframes dotpulse {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+.dots {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 12px;
+}
+.dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--run);
+  animation: dotpulse 1.4s ease-in-out infinite;
+}
+.dots i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.dots i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+/* A stop that has not settled is not progress: the dots hold still, dimmed. */
+.dots.still i {
+  animation: none;
+  opacity: 0.4;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dots i {
+    animation: none;
+    opacity: 0.7;
+  }
 }
 .stopped {
   color: var(--fg-3);

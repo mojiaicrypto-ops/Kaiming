@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
-import { State } from '../app/State';
 import { MessageItem } from './MessageItem';
 import { indexToolResults } from './transcript-model';
 import type { HistoryMessage } from '../state/slot';
@@ -20,6 +19,11 @@ export interface TranscriptProps {
   readonly liveCallId?: string | undefined;
   /** Resolves a link in the text to the file viewer instead of a browser navigation. */
   readonly onLink?: ((href: string) => void) | undefined;
+  /**
+   * A message this tab submitted that history does not carry yet: Pi stores the user turn only when
+   * the run starts, so between the receipt and the first event the reader would see nothing at all.
+   */
+  readonly echo?: { readonly inputId: string; readonly content: readonly HistoryMessage['content'][number][] } | undefined;
 }
 
 /**
@@ -28,10 +32,18 @@ export interface TranscriptProps {
  * results are indexed by call id first, so a card flips in place instead of a second blob
  * appearing below it (R4).
  */
-export function Transcript({ items, busy, variant, onFollow, members, liveSessions, liveCallId, onLink }: TranscriptProps) {
+export function Transcript({ items, busy, variant, onFollow, members, liveSessions, liveCallId, onLink, echo }: TranscriptProps) {
   const { t } = useI18n();
   const results = useMemo(() => indexToolResults(items), [items]);
-  const live = items.some((message) => message.streaming === true);
+  /*
+   * The busy line owns the whole live turn, not only the gaps between messages. It used to be
+   * suppressed whenever any entry was streaming, which is most of a turn - the assistant message
+   * streams from message_start to message_end - so "The chief is working…" appeared for a moment
+   * and then vanished exactly while the work was happening. The line now shows whenever the
+   * session is not idle, and sits AFTER the streaming text (the reader sees the answer growing
+   * and, underneath, that the run is still going).
+   */
+  const working = busy === 'processing' || busy === 'stopping';
 
   return (
     <>
@@ -60,9 +72,26 @@ export function Transcript({ items, busy, variant, onFollow, members, liveSessio
           />
         );
       })}
-      {busy === 'processing' && !live && (
-        <div className="busy">
-          <State kind="run" />
+      {echo !== undefined && (
+        // Not a stored message: it is what this tab sent, shown until history carries it.
+        <MessageItem
+          message={{ entryId: `echo-${echo.inputId}`, role: 'user', content: [...echo.content], inputId: echo.inputId }}
+          role="user"
+          label=""
+          continuation={false}
+          results={results}
+          onFollow={onFollow}
+          onLink={onLink}
+        />
+      )}
+      {working && (
+        <div className="busy" role="status" aria-live="polite" data-testid="chief-working">
+          {/* Three dots while the model is thinking, a still glyph while a stop is settling. */}
+          <span className={busy === 'stopping' ? 'dots still' : 'dots'} aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
           {variant === 'chief' ? t('chat.busy.chief') : t('chat.busy.member')}
         </div>
       )}

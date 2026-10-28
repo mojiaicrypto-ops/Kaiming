@@ -497,12 +497,13 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, proje
                 {earlier.loading ? t('common.loading') : t('chat.earlier')}
               </button>
             )}
-            {slot.items.length === 0 ? (
+            {slot.items.length === 0 && slot.pendingEcho === null ? (
               <EmptyState hasProject={hasProject} onExample={(text) => void submit(text, [])} />
             ) : (
               <Transcript
                 items={slot.items}
                 busy={slot.busy}
+                echo={slot.pendingEcho ?? undefined}
                 variant="chief"
                 members={members}
                 liveSessions={liveSessionIds}

@@ -83,6 +83,46 @@ test('a submitted input reaches the transcript and the run answers', async ({ pa
   }
 });
 
+test('the working line stays on screen for the whole turn, driven from the composer', async ({ page }) => {
+  // The measured failure: "The chief is working…" showed for a moment and then vanished while the
+  // model was still generating. The cause was the guard `busy && !live`: an assistant message is
+  // streaming for most of a turn, so the line was hidden exactly while work happened. This types
+  // into the real composer and samples the marker: it must be there right after sending, still
+  // there mid-turn, and only then leave with the run.
+  const harness = await startHarness({ model: [{ kind: 'slow_text', text: '慢慢说，先别急。', chunks: 40, delayMs: 700 }] });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+
+    const composer = page.locator('[data-testid="composer"]');
+    const users = page.locator('[data-testid="transcript"] .m.user');
+    const working = page.locator('[data-testid="chief-working"]');
+
+    await composer.fill('继续');
+    await composer.press('Enter');
+
+    // The line the reader typed is on screen, and the run says so.
+    await expect(users).toHaveCount(1, { timeout: 15_000 });
+    await expect(users).toContainText('继续');
+    await expect(working).toBeVisible();
+    await expect(page.locator('[data-testid="chief-working"] .dots i')).toHaveCount(3);
+
+    // Mid-turn - the answer is already streaming - the marker is still there.
+    await expect(page.locator('[data-testid="transcript"] .m.chief .md').last()).toContainText('慢慢说', {
+      timeout: 30_000,
+    });
+    await expect(working).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath('working-while-generating.png') });
+
+    // The marker leaves with the run, not before it, and the line stays single.
+    await expect(working).toHaveCount(0, { timeout: 30_000 });
+    await expect(users).toHaveCount(1);
+  } finally {
+    await harness.close();
+  }
+});
+
 test('a finished conversation shows up as token usage, per project and overall', async ({ page }) => {
   // The stub endpoint reports `prompt_tokens: 1, completion_tokens: 1` per response, which makes the
   // ledger readable without guessing: two replies must read as two requests and 2/2 tokens.

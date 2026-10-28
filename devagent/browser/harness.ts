@@ -43,6 +43,12 @@ export interface Harness {
   readonly project: SeededProject | null;
   /** The absolute URL a spec navigates to (the port is dynamic). */
   readonly url: string;
+  /**
+   * Submit a message to the seeded session through the same RPC the page uses, and hand back the
+   * input id. A scripted provider answers in milliseconds, so a spec that needs to observe a live
+   * run cannot get there by typing; this is the only way to hold that state still.
+   */
+  submitInput(text: string): Promise<string>;
   close(): Promise<void>;
 }
 
@@ -160,12 +166,22 @@ export async function startHarness(
     rmSync(root, { recursive: true, force: true });
   };
 
+  const project =
+    options.seedProject === false
+      ? null
+      : await seedProjectSession(running.origin, accessPassword, realpathSync(projectDir));
+  const submitInput = async (text: string): Promise<string> => {
+    if (project === null) throw new Error('submitInput needs a seeded project');
+    const session = await login(running.origin, accessPassword);
+    const accepted = (await rpc(running.origin, session, 'session.input.submit', {
+      projectId: project.projectId,
+      sessionId: project.sessionId,
+      content: [{ type: 'text', text }],
+    })) as { readonly inputId: string };
+    return accepted.inputId;
+  };
   try {
-    const project =
-      options.seedProject === false
-        ? null
-        : await seedProjectSession(running.origin, accessPassword, realpathSync(projectDir));
-    return { baseUrl: running.origin, url: `${running.origin}/`, accessPassword, project, close };
+    return { baseUrl: running.origin, url: `${running.origin}/`, accessPassword, project, submitInput, close };
   } catch (error) {
     await close();
     throw error;

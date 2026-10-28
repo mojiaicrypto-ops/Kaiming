@@ -91,6 +91,13 @@ export interface SessionSlot {
   /** Inputs waiting in this session's queue (submitted while a Task owns the session):
    *  they are real user messages, so the UI must show them instead of swallowing them. */
   queuedInputs: readonly { inputId: string; status: string }[];
+  /**
+   * A message this tab submitted that has not reached the history yet. Pi writes the user turn only
+   * when the run starts, so between "accepted" and "delivered" neither the stream nor a reload
+   * snapshot can show it: the reader typed "continue" and saw nothing. The echo closes that gap and
+   * is dropped the moment the real entry arrives.
+   */
+  pendingEcho: { inputId: string; content: readonly ContentBlock[] } | null;
 }
 
 export const emptySlot = (): SessionSlot => ({
@@ -102,12 +109,31 @@ export const emptySlot = (): SessionSlot => ({
   liveKeys: new Set<string>(),
   taskDetail: null,
   queuedInputs: [],
+  pendingEcho: null,
 });
+
+/**
+ * Whether the history already carries the message an echo stands for. The entry's own `inputId` is
+ * the truth; a live entry for that input (or one still streaming) counts too, because Pi writes the
+ * user turn and the assistant reply under the same input.
+ */
+function echoArrived(
+  echo: SessionSlot['pendingEcho'],
+  snapshot: PreparedSnapshot,
+  items: readonly HistoryMessage[],
+): boolean {
+  if (echo === null) return false;
+  if (snapshot.currentInputId === echo.inputId) return true;
+  if (snapshot.inputs.some((input) => input.inputId === echo.inputId && input.status === 'processing')) return true;
+  return items.some((item) => item.inputId === echo.inputId);
+}
 
 export type SlotAction =
   | { type: 'snapshot'; snapshot: PreparedSnapshot; reason: 'initial' | 'resync' }
   | { type: 'frame'; frame: StreamFrame }
-  | { type: 'inputAccepted'; inputId: string }
+  | { type: 'inputAccepted'; inputId: string; content?: readonly ContentBlock[] }
+  /** Adopt the server's activity verbatim (a read, not a guess): used when a queued session turns out to be running. */
+  | { type: 'busy'; activity: SessionActivity }
   | { type: 'interactionResolved'; interactionId: string }
   | { type: 'pendingReplaced'; pending: readonly PendingInteraction[] }
   | { type: 'taskDetail'; detail: TaskDetail | null }
@@ -253,6 +279,8 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
         ...state,
         items: merged.items,
         liveKeys: merged.liveKeys,
+        // The real entry now exists (its own id or a live one for the same input): the echo is done.
+        pendingEcho: echoArrived(state.pendingEcho, snapshot, merged.items) ? null : state.pendingEcho,
         busy: snapshot.activity,
         hasEarlier: snapshot.hasEarlier === true,
         currentInputId: snapshot.currentInputId,
@@ -273,8 +301,16 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
       return { ...state, queuedInputs: state.queuedInputs.filter((entry) => entry.inputId !== action.inputId) };
     case 'inputAccepted':
       // The submit receipt: mark the accepted input as current and the session as queued, so
-      // STOP targets the right input before any Pi event arrives.
-      return { ...state, currentInputId: action.inputId, busy: state.busy === 'idle' ? 'queued' : state.busy };
+      // STOP targets the right input before any Pi event arrives. The echo shows the message the
+      // server accepted until history carries it.
+      return {
+        ...state,
+        currentInputId: action.inputId,
+        busy: state.busy === 'idle' ? 'queued' : state.busy,
+        pendingEcho: action.content === undefined ? state.pendingEcho : { inputId: action.inputId, content: action.content },
+      };
+    case 'busy':
+      return state.busy === action.activity ? state : { ...state, busy: action.activity };
     case 'interactionResolved':
       // Keep the card visible so its echo shows; the authoritative pendingReplaced (which
       // no longer contains it) removes it from the region.
@@ -392,7 +428,14 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
           return { ...state, busy: 'processing' };
         case 'agent_settled':
         case 'agent_end':
-          return { ...state, busy: 'idle' };
+          // A settled agent is not always an idle session: a queue still holds inputs waiting for
+          // the slot, and a reload snapshot says `queued`. Showing idle here made the working marker
+          // (and the STOP button) disappear between two turns of the same queue.
+          return { ...state, busy: state.queuedInputs.length > 0 ? 'queued' : 'idle' };
+        case 'turn_start':
+          // Pi announces the input it is about to run before any assistant message exists. This is
+          // the earliest honest "working" signal, and the echo has now been delivered.
+          return { ...state, busy: 'processing', pendingEcho: null };
         default:
           return state;
       }

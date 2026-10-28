@@ -73,9 +73,12 @@ export function MessageItem({ message, role, label, continuation, results, onFol
       );
     }
     if (block.kind === 'image') {
+      // An echo carries the uploaded id (that is what the submit names); every stored message
+      // carries the attachment address. Both must render the same way, so a bare id is addressed.
+      const src = /^[0-9a-f]{32}$/.test(block.src ?? '') ? `/api/v1/attachments/${block.src}` : block.src;
       return (
-        <a key={`i${index}`} className="msg-image" href={block.src} target="_blank" rel="noreferrer">
-          <img src={block.src} alt={block.alt} loading="lazy" />
+        <a key={`i${index}`} className="msg-image" href={src} target="_blank" rel="noreferrer">
+          <img src={src} alt={block.alt} loading="lazy" />
         </a>
       );
     }
