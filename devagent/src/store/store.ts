@@ -2672,12 +2672,16 @@ export class Store {
           inputId: params.inputId,
         });
       }
+      // A write Task may contain read-only investigation during clarify/analyze/design/plan.
+      // Its report is evidence, not delivered project work, and never completes the Task.
       const allowed: readonly ResultKind[] = task.type === 'read' ? ['investigation', 'recovery'] : [
         'design',
         'implementation',
         'review',
         'test',
         'settlement',
+        'investigation',
+        'recovery',
       ];
       if (!allowed.includes(params.kind)) {
         throw new StoreError('INVALID_ARGUMENT', `a ${task.type} Task does not accept ${params.kind} reports`, {

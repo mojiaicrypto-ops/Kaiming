@@ -269,3 +269,11 @@
 **证据**：服务端 45 文件 469 用例、webapp 12 文件 80 用例、浏览器 59 用例、两侧 `tsc` 全绿；真实浏览器保存 70→85 并刷新/新上下文保持、关闭开关后保持、40% 保存被拒；空闲面板“立即压缩”小会话返回 nothing，运行中按钮禁用，重启后无实例禁用并说明；真实服务 + 自定义 provider（80k prompt / 100k window）第二条输入前发出 `compaction_start/end` 且两条输入均完成；5×40k 字符历史手动压缩返回 `{status:'compacted',tokensBefore:60811,estimatedTokensAfter:30548}`，面板显示 `60.8k → 30.5k`，随后占用 `?` 并在下一次响应恢复 30.8%；v15→v16 升级测试断言默认行与 `user_version`。
 
 **未覆盖**：压缩调用的 tokens/成本未进入用量 ledger（既有缺口，Pi 的 summary 调用不是 assistant message）；真实成功压缩需要足够历史，小会话只验证 nothing 路径；压缩摘要未做超时/退避；真实 98% Pi 兜底只按 SDK 逻辑核对，未在浏览器触发。
+
+## 2026-10-28 · write Task 内的只读调查报告
+
+**问题**：write Task 可在 clarify/analyze/design/plan 派发 investigator，但 `recordResult` 只允许 write 的 design/implementation/review/test/settlement；`reportTarget` 又把所有 write 报告写项目。于是只读 investigator 的 investigation 报告被拒，且若放行还会把只读证据写进项目。
+
+**修正**：write Task 接受 investigator 的 investigation/recovery 结果；这两类报告按内容而不是 Task 类型写 Server `work/<taskId>/<sessionId>/`；它们只作证据，write 的完成仍只认 settlement。`agent_report` 仍是宿主保存，investigator 不需要项目写工具。
+
+**证据**：`test/report.test.ts` 新增 write Task + investigator + investigation 用例，断言报告保存且 `bodyRef.storage=server`、项目 `.dev/work` 不产生目录、`taskCompletionGaps` 仍要求 settlement；服务端 471 用例全绿。

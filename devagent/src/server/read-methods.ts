@@ -534,7 +534,7 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       }
       const truncated = body.text.length > MAX_FILE_BYTES;
       // A project report is a project file and has a project-relative path the viewer can open;
-      // a read Task's report lives in the server's work area and must not be addressable by path.
+      // a Server-side report (read Task or read-only evidence) must not be addressable by path.
       const relativePath =
         result.bodyRef.storage === 'project'
           ? relative(project.realPath, result.bodyRef.path).split(sep).join('/')

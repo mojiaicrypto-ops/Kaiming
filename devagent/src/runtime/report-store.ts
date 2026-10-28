@@ -2,10 +2,11 @@
  * Report body persistence (S6): the body is written and read back before the result row exists, so a
  * registered report always has real bytes behind it.
  *
- * read Task reports stay in the host work area (`work/<taskId>/<sessionId>/<resultId>.md`); write Task
- * reports go into the project (`.dev/work/<taskId>/<sessionId>/<resultId>.md`) because the delivered
- * work travels with the project. The API reads them through the Task/result identity, never by
- * exposing host paths.
+ * Read-only reports (investigation/recovery) stay in the host work area
+ * (`work/<taskId>/<sessionId>/<resultId>.md`), in a read Task and in a write Task alike: they are
+ * evidence, not delivered work. Other write Task reports go into the project
+ * (`.dev/work/<taskId>/<sessionId>/<resultId>.md`) because the delivered work travels with the project.
+ * The API reads them through the Task/result identity, never by exposing host paths.
  */
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -31,7 +32,8 @@ export function reportTarget(params: {
   // the content-addressed name, so two reports of one member never overwrite each other.
   const name = params.kind === 'settlement' ? 'settlement.md' : `${params.resultId}.md`;
   const relative = join(params.taskId, params.sessionId, name);
-  return params.taskType === 'read'
+  const readOnly = params.kind === 'investigation' || params.kind === 'recovery';
+  return params.taskType === 'read' || readOnly
     ? { storage: 'server', path: join(params.serverWorkDir, relative) }
     : { storage: 'project', path: join(params.cwd, '.dev', 'work', relative) };
 }

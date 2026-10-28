@@ -1507,6 +1507,63 @@ describe('input runner', () => {
     expect(h.store.getTask(task?.id ?? '')?.status).toBe('completed');
   }, 60_000);
 
+  it('lets an investigator deliver a read-only report inside a write Task', async () => {
+    const createArgs = JSON.stringify({
+      op: 'create',
+      type: 'write',
+      goal: 'change the reset flow',
+      scope: 'account',
+      planMarkdown: '# write plan\n1. look, then change\n',
+      authorizationRef: { inputId: 'i-1' },
+      requiresTest: false,
+    });
+    const delegateArgs = JSON.stringify({
+      op: 'dispatch',
+      waitTimeoutMs: 20_000,
+      sessions: [
+        {
+          roleId: 'investigator',
+          label: 'investigate',
+          instructions: 'report what really exists before the change',
+          expectedKind: 'investigation',
+        },
+      ],
+    });
+    const reportArgs = JSON.stringify({
+      summary: 'the reset flow exists but has no test',
+      body: '# investigation\n\nfound an untested reset path\n',
+      checks: [{ name: 'read the sources', status: 'passed' }],
+    });
+    const h = await harness({
+      replies: [
+        { kind: 'tool_calls', calls: [{ name: 'task', arguments: createArgs }] },
+        { kind: 'text', text: 'task created' },
+        { kind: 'tool_calls', calls: [{ name: 'task', arguments: delegateArgs }] },
+        { kind: 'tool_calls', calls: [{ name: 'agent_report', arguments: reportArgs }] },
+        { kind: 'text', text: 'member done' },
+        { kind: 'text', text: 'investigation recorded' },
+      ],
+    });
+    const first = await h.runner.runNext('s-1');
+    expect(first.kind).toBe('completed');
+    const task = h.store.listTasks('p-1')[0];
+    accept(h.store, 'i-2', 'req-2', task?.id);
+
+    const second = await h.runner.runNext('s-1');
+    expect(second.kind).toBe('completed');
+    const member = h.store.listTaskSessions(task?.id ?? '')[0];
+    const results = h.store.listTaskResults(task?.id ?? '');
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ kind: 'investigation', roleId: 'investigator' });
+    expect(results[0]?.bodyRef.storage).toBe('server');
+    expect(existsSync(results[0]?.bodyRef.path ?? '')).toBe(true);
+    expect(readFileSync(results[0]?.bodyRef.path ?? '', 'utf8')).toBe(
+      '# investigation\n\nfound an untested reset path\n',
+    );
+    expect(h.store.getTask(task?.id ?? '')?.status).toBe('active');
+    expect(member?.currentInputId).not.toBeNull();
+  }, 60_000);
+
   it('saves a requirement record through the real tool loop', async () => {
     const saveArgs = JSON.stringify({
       op: 'save',

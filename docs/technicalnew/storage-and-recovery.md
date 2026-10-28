@@ -53,7 +53,7 @@ type Input = {
 };
 ```
 
-DocumentRef={path,purpose,sha256} 是项目依据的内容摘要；PlanRef/ReportRef 采用 ArtifactRef。read Task 的 Plan 保存 Server `work/<taskId>/plan.md`，报告保存 `work/<taskId>/<sessionId>/<resultId>.md`；write Task 使用项目相同结构的 `.dev/work/<taskId>/`；API 通过受控 Task/结果身份读取，不暴露 Server 任意路径。原生历史仍在指定 Pi 文件，不复制报告成第二份正文。
+DocumentRef={path,purpose,sha256} 是项目依据的内容摘要；PlanRef/ReportRef 采用 ArtifactRef。read Task 的 Plan 保存 Server `work/<taskId>/plan.md`，报告保存 `work/<taskId>/<sessionId>/<resultId>.md`；write Task 使用项目相同结构的 `.dev/work/<taskId>/`，其中 investigation/recovery 只读证据仍写 Server（不把只读调查变成项目交付）；API 通过受控 Task/结果身份读取，不暴露 Server 任意路径。原生历史仍在指定 Pi 文件，不复制报告成第二份正文。
 
 交付身份由程序观察：有 Git 时取提交/工作树，没有 Git 时取 Task 声明范围内交付文件的内容摘要；不引入候选对象，也不要求模型传递版本。Review/Test 报告提交时记录该状态，完成核对时比较。
 
@@ -145,7 +145,7 @@ Plan：稳定 taskId + file_saves → 原子保存 Plan → DB Task/planRef/curr
       未提交即返回 COMPLETION_INCOMPLETE + 缺项；通过后事务保存 completed / 释放主管槽位
 ```
 
-read Task 的报告按同一保存顺序写 Server，核对专业工作停稳后用调查/恢复报告 task(op=end)，不强制 Review/Test、结算或 Git。write Task 执行适用独立检查与结算。Plan 创建/修订串行核对主管槽位与文件内容，部分保存失败只补登记/缺项。
+read Task 的报告按同一保存顺序写 Server，核对专业工作停稳后用调查/恢复报告 task(op=end)，不强制 Review/Test、结算或 Git。write Task 内的 investigation/recovery 报告同样写 Server，只作证据，不能充当结算；write Task 仍执行适用独立检查与结算。Plan 创建/修订串行核对主管槽位与文件内容，部分保存失败只补登记/缺项。
 
 ```typescript
 type SettlementManifest = {

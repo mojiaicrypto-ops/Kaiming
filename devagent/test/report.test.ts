@@ -147,6 +147,36 @@ describe('agent_report', () => {
     expect(result.details['kind']).toBe('implementation');
   });
 
+  it('accepts a read-only investigation inside a write Task and keeps it on the server', async () => {
+    const f = fixture({ type: 'write', roleId: 'investigator', expectedKind: 'investigation' });
+
+    const result = await f.report.execute(
+      'call-1',
+      report({ summary: 'looked around', body: '# investigation\n\nreset path is not covered\n' }),
+    );
+
+    expect(result.isError).toBe(false);
+    const row = f.store.getResult(String(result.details['resultId']));
+    const expectedPath = join(f.serverWorkDir, f.taskId, 'm-1', `${row?.resultId}.md`);
+    expect(row?.kind).toBe('investigation');
+    expect(row?.bodyRef).toMatchObject({ storage: 'server', path: expectedPath });
+    expect(existsSync(expectedPath)).toBe(true);
+    expect(existsSync(join(f.cwd, '.dev', 'work', f.taskId, 'm-1'))).toBe(false);
+
+    // A blocked investigation is still an investigation; it uses the same Server-side channel.
+    const blocked = await f.report.execute(
+      'call-2',
+      report({ summary: 'blocked', body: '# investigation\n\nneeds a decision\n', verdict: 'blocked' }),
+    );
+    expect(blocked.isError).toBe(false);
+    expect(f.store.getResult(String(blocked.details['resultId']))?.bodyRef.storage).toBe('server');
+
+    // Evidence does not stand in for the write Task's settlement.
+    expect(f.store.taskCompletionGaps(f.taskId, String(row?.resultId))).toContain(
+      'completion result must be settlement for a write Task',
+    );
+  });
+
   it('keeps a read Task report in the host work area', async () => {
     const f = fixture({ type: 'read' });
 

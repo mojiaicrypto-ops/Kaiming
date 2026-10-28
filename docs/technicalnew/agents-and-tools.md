@@ -67,7 +67,7 @@ task、agent_report、requirement、project 按工具级注册 Pi executionMode=
 
 每项 checks 为 name/status（passed/failed/blocked/not_run）/command?/exitCode?/reason?/evidenceRefs。真正执行才 passed，真实失败保留 failed，未覆盖说明原因/风险/用户决定。需要主管决策时提交 expectedKind 的正式 blocked 报告并结束当前输入；普通用户问答使用 question。
 
-body 为用户可见的完整正文，按 S6 原子保存（read 报告写 Server，write 报告写项目 `.dev/work/<taskId>/<sessionId>/`），提交时程序记录报告事实与实际交付状态（见 G3），模型不传候选或版本。唯一例外是结算报告：路径固定为 `<taskId>/<sessionId>/settlement.md`，结算先写入并提交该正文（D-07），再以相同 body 提交报告；程序发现已有文件内容不同则拒绝，不会改写已提交正文。报告保存且 Pi 停稳才算成员结束。正式报告后不继续修改当前成果。
+body 为用户可见的完整正文，按 S6 原子保存：read 报告与 write Task 内的 investigation/recovery 只读报告写 Server，其余 write 报告写项目 `.dev/work/<taskId>/<sessionId>/`；提交时程序记录报告事实与实际交付状态（见 G3），模型不传候选或版本。唯一例外是结算报告：路径固定为 `<taskId>/<sessionId>/settlement.md`，结算先写入并提交该正文（D-07），再以相同 body 提交报告；程序发现已有文件内容不同则拒绝，不会改写已提交正文。报告保存且 Pi 停稳才算成员结束。正式报告后不继续修改当前成果。
 
 ### requirement
 
