@@ -235,3 +235,15 @@
 **证据**：新增浏览器用例「the working line stays on screen for the whole turn, driven from the composer」——真实输入框发送，断言发送后与正文流式中指示都在，运行结束才消失；把渲染条件改回 `&& !live` 时该用例失败（已实测），证明它钉住的就是这个退化。单元侧新增 `webapp/test/transcript-busy.test.ts`（streaming 正文存在时指示仍渲染；空闲时没有）。浏览器 57 用例、服务端 435、webapp 72、两侧 `tsc` 与 `npm run build` 全绿。
 
 **未覆盖**：受理到 `turn_start` 的窗口在脚本化模型下只有毫秒级，自动用例无法在其中取样（`kind: 'hang'` 会让关闭流程挂住），回显由单元与失败前/后的实机现象支持；真实模型长思考时的观察仍靠用户实机。
+
+## 2026-10-28 · 暂停 Task 不再冻结主管会话
+
+**现象（用户实测）**：一个会话卡住；唯一 pending 输入 `c-mvrpgbc4-25-271cab` 长期 `queued`、`claim=0`。现场：`t-b41cb0ec.status=paused`，会话 `currentTaskId` 仍指向它，全库无 `processing`/`interrupted`。
+
+**根因**：`Store.claimNextInput` 只看 Task 状态和 `investigator + expectedKind=recovery` 例外，主管自身输入（`task_sessions` 无行）在 Task 暂停时一律 `controlled`；`InputRunner` 原样返回、worker 每 250ms 空转。与 S3「chief 自身已停稳且无未核实中断时，Task 暂停不阻止其状态/控制/恢复输入；项目写 op 仍拒绝」不符。前端提交前总带 `currentTaskId`，所以聊天无法自行恢复，只有 Task 条上的 Resume 可用。
+
+**修复**：①暂停/暂停中（`paused`/`pausing`）且会话是该 Task 的 `chiefSessionId` 时，`user`/`system_notice` 输入照常认领；`cancelling`/`cancelled`、成员工作、未核实 interrupted 的拒绝不变；②chief 在 `pausing`/`paused` 时的工具集移除 `write`/`edit`/`bash`/`requirement`/`project`（与 read Task 同一形态），resume 后恢复；③`task(op=get)` 在暂停期返回 `context.writeHold='paused'` 与一句说明。
+
+**证据**：真实服务 + 真实 worker + 脚本化 SSE 模型：模型自建 Task 的会话，暂停后新消息 `queued→processing→completed`，该轮模型请求工具表为 `read,grep,find,ls,task,question,web_search,web_fetch,browser`（无写工具），resume 后恢复 `bash,requirement,project`；Task 在首轮前即暂停时同样成立。成员仍 `TASK_CONTROLLED`、cancelled 无主管轮次、cancelling 仍拒绝、真实崩溃重启后仍 `RECOVERY_REQUIRED`。单测 42 文件 444 用例、`tsc --noEmit` 全绿；在 HEAD 工作树上仅覆盖新测试时，5 个新用例按预期失败（tool-sets 1、store 1、task-tools 1、runtime 3）。详见 `.agentdev/work/paused-chief-input-20261028/`。
+
+**未覆盖**：暂停期是否需要保留 `requirement`/`project` 的只读 op（当前整工具移除，产品未要求）；暂停轮与恢复轮的实例身份只在单测验证（`startWorkbench` 不暴露 registry）。一轮独立测试曾报“复用实例仍带 bash”，复核为按请求序号取错轮次的测量假象：按轮次文本关联后不成立。
