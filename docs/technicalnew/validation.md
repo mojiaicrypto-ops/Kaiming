@@ -257,3 +257,15 @@
 **证据**：真实服务 + 真实 Chromium + 脚本化 provider：桌面 `2 / 128k · 0.0%`（role=meter，title 含 estimated/auto-compaction）；用量递增 provider 下 12k→38k（9.4%→29.7%）；重启后 prepare 返回 `{tokens:null,contextWindow:128000,percent:null,autoCompaction:null,live:false}`，config.get 不变；390/320 可见且仅百分比、无横向溢出；拥挤 + 长模型名在 401/430/480/561/650/861 连接词均在栏内。单测 43 文件 453 用例、webapp 12 文件 79 用例、两侧 `tsc` 与浏览器 57 用例通过。详见 `.agentdev/work/context-meter-20261028/`。
 
 **未覆盖**：真实触发压缩后的 `?`、真实 70/90 颜色（由 SSR 单测覆盖）、真实成员运行/真实断线（几何用注入同形节点）、中文字符串窄屏宽度。
+
+## 2026-10-28 · 主动与手动压缩
+
+**需求（用户确认）**：全局配置“达到窗口百分之多少时自动压缩”，默认 70%；在下一条消息开始前执行；保留 Pi 原生兜底；点状态栏上下文档位手动压缩。见 C-03、AC-44、P-07 与 UI U2/Models。
+
+**Pi 默认**：`compaction.enabled=true`、`reserveTokens=16384`、`keepRecentTokens=20000`，阈值 = `window - reserve`（1M→98.4%、200k→91.8%、128k→87.5%）；每次模型请求前与每轮结束后检查，溢出另有一次恢复压缩；手动 `compact()` 先 abort 当前操作。默认适合作为安全网，不适合作为可预期的主动策略。
+
+**实现**：SQLite v16 `compaction_settings` 单行（默认自动/70%/revision）；`compaction.get/save`；runner 每会话压缩锁，认领后、交付前按全局阈值调用 Pi `compact()`；手动 `session.compact` 在空闲、无未核实中断、有活实例时执行；快照与 `compaction_start/end` 驱动“压缩中”，重连也可恢复。
+
+**证据**：服务端 45 文件 469 用例、webapp 12 文件 80 用例、浏览器 59 用例、两侧 `tsc` 全绿；真实浏览器保存 70→85 并刷新/新上下文保持、关闭开关后保持、40% 保存被拒；空闲面板“立即压缩”小会话返回 nothing，运行中按钮禁用，重启后无实例禁用并说明；真实服务 + 自定义 provider（80k prompt / 100k window）第二条输入前发出 `compaction_start/end` 且两条输入均完成；5×40k 字符历史手动压缩返回 `{status:'compacted',tokensBefore:60811,estimatedTokensAfter:30548}`，面板显示 `60.8k → 30.5k`，随后占用 `?` 并在下一次响应恢复 30.8%；v15→v16 升级测试断言默认行与 `user_version`。
+
+**未覆盖**：压缩调用的 tokens/成本未进入用量 ledger（既有缺口，Pi 的 summary 调用不是 assistant message）；真实成功压缩需要足够历史，小会话只验证 nothing 路径；压缩摘要未做超时/退避；真实 98% Pi 兜底只按 SDK 逻辑核对，未在浏览器触发。
