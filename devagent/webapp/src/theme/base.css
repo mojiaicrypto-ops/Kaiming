@@ -173,6 +173,120 @@ kbd {
   text-overflow: ellipsis;
 }
 
+/* The reading is also the manual-compaction entry: a button around the meter, with a caret so the
+   action is discoverable. The panel is portaled to the body, so this bar's overflow cannot clip it. */
+.status .ctx-btn {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s1);
+  flex: none;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.status .ctx-btn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+.status .ctx-caret {
+  color: var(--fg-3);
+  font-size: 9px;
+  line-height: 1;
+}
+.status .ctx-btn:hover .ctx-caret {
+  color: var(--fg-2);
+}
+.cmp {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-bottom: var(--s4);
+  padding: var(--s4);
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.cmp-h {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  font-weight: 600;
+}
+.cmp-h .src {
+  font-weight: 400;
+}
+.cmp-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s4);
+}
+.cmp-check,
+.cmp-at {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.cmp-check input {
+  accent-color: var(--accent);
+}
+.cmp-at .sel {
+  width: 6em;
+}
+.cmp-desc {
+  margin: 0;
+}
+
+.ctx-pop {
+  position: fixed;
+  right: var(--s6);
+  bottom: calc(var(--status) + var(--s2));
+  z-index: 60;
+  width: min(340px, calc(100vw - 2 * var(--s6)));
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s4);
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+.ctx-pop-h {
+  font-weight: 600;
+}
+.ctx-pop-rows {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+}
+.ctx-pop-rows > div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s4);
+}
+.ctx-pop-rows dt {
+  color: var(--fg-3);
+}
+.ctx-pop-rows dd {
+  margin: 0;
+}
+.ctx-pop-note {
+  margin: 0;
+}
+.ctx-compact {
+  align-self: flex-start;
+}
+@media (max-width: 560px) {
+  .ctx-pop {
+    left: var(--s2);
+    right: var(--s2);
+    width: auto;
+  }
+}
+
 /* Context occupancy: text first, colour only as a second signal. The absolute pair gives way on
    narrow screens, because the percentage is the part a reader needs at a glance. */
 .status .ctx {

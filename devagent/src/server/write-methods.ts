@@ -6,6 +6,7 @@
 import { MAX_IMAGES_PER_INPUT, readImage } from './attachments.ts';
 import { RpcError, type RpcRouter } from './rpc.ts';
 import type { InputRow, Store } from '../store/store.ts';
+import type { CompactionOutcome } from '../runtime/runner.ts';
 
 export interface WriteMethodsOptions {
   /** Attachment storage for image blocks; absent means this server accepts text only. */
@@ -22,6 +23,8 @@ export interface WriteMethodsOptions {
   readonly invalidate?: (sessionId: string, entity: 'input' | 'task' | 'session' | 'interaction', id: string) => void;
   /** Deliver a saved answer to the awaiting Pi call (M5); without a bridge the answer is only stored. */
   readonly resolveInteraction?: (interactionId: string, response: unknown) => boolean;
+  /** Run Pi's own compaction for one idle session (manual entry); validation lives in the runner. */
+  readonly compactSession?: (sessionId: string) => Promise<CompactionOutcome>;
   /** The same Task control path the chief's own tool uses (pause/resume/cancel + stop flow). */
   readonly controlTask: (params: {
     taskId: string;
@@ -164,6 +167,23 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
       }
       // Already settled: stopping is idempotent and reports the current state unchanged.
       return stopResult(store, sessionId, inputId, input.status, false, options.invalidate);
+    },
+  });
+
+  router.register('session.compact', {
+    write: true,
+    run: async (params): Promise<unknown> => {
+      const project = requireProject(store, params);
+      const sessionId = readString(params, 'sessionId');
+      if (sessionId === undefined) {
+        throw new RpcError('INVALID_ARGUMENT', 'sessionId is required');
+      }
+      const session = store.getSession(sessionId);
+      if (session === undefined || session.projectId !== project.id) {
+        throw new RpcError('NOT_FOUND', `session ${sessionId} does not exist in this project`, { sessionId });
+      }
+      // The runner owns the idle/interrupted/live-instance checks and the claim lock.
+      return (await options.compactSession?.(sessionId)) ?? { status: 'unavailable' };
     },
   });
 

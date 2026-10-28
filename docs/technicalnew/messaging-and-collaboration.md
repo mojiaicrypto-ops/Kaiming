@@ -142,7 +142,7 @@ GET /api/v1/sessions/<sessionId>/stream?subscriptionId=<id>：
 }
 ```
 
-event 保持 Pi AgentSessionEvent；inputId/messageKey 仅有实际关联时提供，epoch=serverEpoch/当前 Pi 实例代次。业务通知 `{type:'invalidate',entity:'input'|'task'|'session'|'requirement'|'interaction',id,revision?}` 触发查询；`{type:'context',context}` 在每次 assistant `message_end` 与 `compaction_end` 后直接携带上下文占用（有活实例时），读者无需再查；连接/重连的初始值在快照 `context`。交互事件见 M5。慢连接溢出不阻塞 Pi/其他页面。
+event 保持 Pi AgentSessionEvent；inputId/messageKey 仅有实际关联时提供，epoch=serverEpoch/当前 Pi 实例代次。业务通知 `{type:'invalidate',entity:'input'|'task'|'session'|'requirement'|'interaction',id,revision?}` 触发查询；`{type:'context',context}` 在每次 assistant `message_end` 与 `compaction_end` 后直接携带上下文占用（有活实例时），读者无需再查；连接/重连的初始值在快照 `context`。Pi 的 `compaction_start/compaction_end` 原样进入事件流，前端据此显示“压缩中”，快照 `compacting` 覆盖重连时的情况。交互事件见 M5。慢连接溢出不阻塞 Pi/其他页面。
 
 ## M5 统一交互与授权
 

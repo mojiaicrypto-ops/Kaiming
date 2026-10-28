@@ -17,6 +17,14 @@ export interface SessionRef {
  */
 export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'offline';
 
+/** What one manual compaction attempt returned; the popover explains every status. */
+export interface CompactionResult {
+  readonly status: 'compacted' | 'nothing' | 'busy' | 'recovery' | 'unavailable' | 'failed';
+  readonly tokensBefore?: number;
+  readonly estimatedTokensAfter?: number | null;
+  readonly detail?: string;
+}
+
 /** The live surface a screen consumes; declared here so screens import a name, not a helper type. */
 export interface ChiefSessionApi {
   readonly rpc: RpcClient;
@@ -29,6 +37,8 @@ export interface ChiefSessionApi {
   /** Store one image immediately; the message then carries only its id (U6). */
   readonly upload: (file: File) => Promise<{ id: string; url: string }>;
   readonly stop: () => Promise<void>;
+  /** Summarize now; the caller renders the outcome, so no separate toast channel is needed. */
+  readonly compact: () => Promise<CompactionResult>;
   readonly cancelQueuedInput: (inputId: string) => Promise<void>;
   readonly respond: (interaction: PendingInteraction, response: unknown) => Promise<void>;
   readonly refreshTask: (taskId: string) => Promise<TaskDetail | null>;
@@ -292,6 +302,15 @@ export function useSession(
     );
   }, [rpc, session, slot.currentInputId]);
 
+  const compact = useCallback(async (): Promise<CompactionResult> => {
+    if (session === null) return { status: 'unavailable' };
+    return await rpc.call<CompactionResult>(
+      'session.compact',
+      { projectId: session.projectId, sessionId: session.sessionId },
+      { requestId: newRequestId('compact') },
+    );
+  }, [rpc, session]);
+
   /** Withdraw a retained (queued) input: the message never ran, so stopping it is the honest undo. */
   const cancelQueuedInput = useCallback(
     async (inputId: string): Promise<void> => {
@@ -446,6 +465,7 @@ export function useSession(
     submit,
     upload: useCallback((file: File) => rpc.upload(file), [rpc]),
     stop,
+    compact,
     cancelQueuedInput,
     respond,
     refreshTask,

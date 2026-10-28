@@ -301,6 +301,42 @@ export function registerCoreMethods(router: RpcRouter, options: CoreMethodsOptio
       return { scope, scopeId, roleId: projectId === undefined ? '' : (roleId ?? ''), cleared };
     },
   });
+
+  // The proactive-compaction policy is global: one row, read by every claimed input. Pi's own
+  // near-limit compaction remains a separate backstop and is not controlled here.
+  router.register('compaction.get', {
+    write: false,
+    run: (): unknown => ({ config: options.store.getCompactionConfig() }),
+  });
+
+  router.register('compaction.save', {
+    write: true,
+    run: (params): unknown => {
+      const auto = params['auto'];
+      const thresholdPercent = Number(params['thresholdPercent']);
+      const expectedRevision = Number(params['expectedRevision']);
+      if (typeof auto !== 'boolean') {
+        throw new RpcError('INVALID_ARGUMENT', 'auto must be a boolean', { auto });
+      }
+      if (!Number.isInteger(thresholdPercent) || thresholdPercent < 50 || thresholdPercent > 95) {
+        throw new RpcError('INVALID_ARGUMENT', 'thresholdPercent must be an integer between 50 and 95', {
+          thresholdPercent: params['thresholdPercent'],
+        });
+      }
+      if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+        throw new RpcError('INVALID_ARGUMENT', 'expectedRevision must be a non-negative integer', {
+          expectedRevision: params['expectedRevision'],
+        });
+      }
+      return {
+        config: options.store.saveCompactionConfig({
+          auto,
+          thresholdPercent,
+          expectedRevision,
+        }),
+      };
+    },
+  });
 }
 
 /** Save a provider definition: the key goes to the private store, the database keeps its reference. */

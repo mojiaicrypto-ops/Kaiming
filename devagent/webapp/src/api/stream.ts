@@ -30,6 +30,8 @@ export interface PreparedSnapshot {
   config?: { providerId: string; modelId: string; source: string } | null;
   /** Context occupancy at this boundary; null when the model declares no window. */
   context?: ContextView | null;
+  /** Pi is summarizing this session right now (manual or automatic compaction). */
+  compacting?: boolean;
   /** Why the session cannot run, as of the snapshot; null when nothing is blocked. */
   blocked?: { code: string; detail: string } | null;
   currentInputId: string | null;

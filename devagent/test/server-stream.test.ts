@@ -328,6 +328,7 @@ describe('session stream', () => {
     expect(prepared.boundary).toBe(0);
     expect((prepared.snapshot['inputs'] as Array<{ inputId: string }>).map((entry) => entry.inputId)).toEqual(['i-old']);
     expect(prepared.snapshot['activity']).toBe('queued');
+    expect(prepared.snapshot['compacting']).toBe(false);
     expect(prepared.streamPath).toContain(`subscriptionId=${prepared.subscriptionId}`);
 
     const stream = await h.readStream(prepared.streamPath);

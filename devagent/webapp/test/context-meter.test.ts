@@ -14,7 +14,12 @@ function render(context: ContextView): string {
     createElement(I18nProvider, {
       locale: 'en',
       onLocale: () => undefined,
-      children: createElement(ContextMeter, { context }),
+      children: createElement(ContextMeter, {
+        context,
+        activity: 'idle',
+        compacting: false,
+        onCompact: async () => ({ status: 'nothing' as const }),
+      }),
     }),
   );
 }
@@ -36,6 +41,9 @@ describe('context meter', () => {
     expect(html).toContain('role="meter"');
     expect(html).toContain('aria-valuenow="62"');
     expect(html).toContain('auto-compaction on');
+    // The reading is the manual-compaction entry; the panel itself is closed until clicked.
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain('context-panel');
   });
 
   it('marks 70% as a warning and 90% as danger', () => {

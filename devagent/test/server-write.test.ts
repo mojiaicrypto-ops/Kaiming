@@ -101,6 +101,7 @@ async function harness(
     store,
     notify: () => worker.notify(),
     stopInput: (sessionId, stop) => runner.requestStop(sessionId, stop),
+    compactSession: (sessionId) => runner.compactManually(sessionId),
     controlTask: (control) => runner.controlTask(control),
   });
   const workbench = createWorkbenchServer({ store, auth, router });
@@ -812,5 +813,40 @@ describe('frozen chief sessions', () => {
     const after = h.store.claimNextInput('s-chief');
     expect(after.kind).toBe('claimed');
     expect(after.kind === 'claimed' ? after.input.inputId : '').toBe('in-later');
+  });
+});
+
+describe('compaction policy surface', () => {
+  it('reads the default, saves a valid threshold and refuses an out-of-range one', async () => {
+    const h = await harness();
+
+    const initial = await h.call('compaction.get');
+    expect(initial.status).toBe(200);
+    const first = (initial.body['result'] as { config: { auto: boolean; thresholdPercent: number; revision: number } }).config;
+    expect(first).toMatchObject({ auto: true, thresholdPercent: 70, revision: 1 });
+
+    const saved = await h.call('compaction.save', { auto: false, thresholdPercent: 85, expectedRevision: first.revision });
+    expect(saved.status).toBe(200);
+    const next = (saved.body['result'] as { config: { auto: boolean; thresholdPercent: number; revision: number } }).config;
+    expect(next).toMatchObject({ auto: false, thresholdPercent: 85, revision: 2 });
+
+    const refused = await h.call('compaction.save', { auto: true, thresholdPercent: 40, expectedRevision: next.revision });
+    expect(refused.status).toBe(400);
+    expect((refused.body['error'] as { code: string }).code).toBe('INVALID_ARGUMENT');
+  });
+
+  it('answers a manual compact request from the runner instead of guessing the session state', async () => {
+    const h = await harness([{ kind: 'text', text: '好的。' }]);
+
+    const noInstance = await h.call('session.compact', { projectId: h.projectId, sessionId: 's-chief' });
+    expect(noInstance.status).toBe(200);
+    expect(noInstance.body['result']).toEqual({ status: 'unavailable' });
+
+    await h.call('session.input.submit', { projectId: h.projectId, sessionId: 's-chief', content: [{ type: 'text', text: '你好' }] });
+    await h.awaitOutcome('s-chief', 'completed');
+
+    const nothing = await h.call('session.compact', { projectId: h.projectId, sessionId: 's-chief' });
+    expect(nothing.status).toBe(200);
+    expect(nothing.body['result']).toEqual({ status: 'nothing' });
   });
 });

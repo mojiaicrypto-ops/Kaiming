@@ -106,6 +106,15 @@ export interface TaskRow {
   readonly updatedAt: string;
 }
 
+/** The global proactive-compaction policy (one row; Pi's own backstop is separate). */
+export interface CompactionConfigRow {
+  readonly auto: boolean;
+  /** Window percentage at which the next input compacts before it is delivered. */
+  readonly thresholdPercent: number;
+  readonly revision: number;
+  readonly updatedAt: string;
+}
+
 export interface CreateTaskParams {
   readonly id: string;
   readonly projectId: string;
@@ -378,7 +387,7 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -592,6 +601,19 @@ CREATE INDEX IF NOT EXISTS idx_usage_project ON usage_entries (projectId, endedA
 CREATE INDEX IF NOT EXISTS idx_usage_role ON usage_entries (roleId);
 CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_entries (providerId, modelId);
 `;
+
+/**
+ * Tables added by the v15 → v16 migration: the global compaction policy. One row, always present,
+ * so a reader never has to invent a default and a writer has one revision to compare.
+ */
+const V16_DDL = `
+CREATE TABLE IF NOT EXISTS compaction_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  revision INTEGER NOT NULL,
+  auto INTEGER NOT NULL,
+  thresholdPercent INTEGER NOT NULL,
+  updatedAt TEXT NOT NULL
+);`;
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS projects (
@@ -1774,6 +1796,62 @@ export class Store {
           );
       }
       return this.requireProvider(params.providerId);
+    });
+  }
+
+  /** The global compaction policy. A missing row (should not happen after v16) reads as the default. */
+  getCompactionConfig(): CompactionConfigRow {
+    const row = this.db
+      .prepare('SELECT * FROM compaction_settings WHERE id = 1')
+      .get() as Record<string, unknown> | undefined;
+    if (row === undefined) {
+      return { auto: true, thresholdPercent: 70, revision: 0, updatedAt: '' };
+    }
+    return {
+      auto: Number(row['auto']) !== 0,
+      thresholdPercent: Number(row['thresholdPercent']),
+      revision: Number(row['revision']),
+      updatedAt: String(row['updatedAt']),
+    };
+  }
+
+  /** Save the global policy with the same revision discipline as every other stored setting. */
+  saveCompactionConfig(params: {
+    auto: boolean;
+    thresholdPercent: number;
+    expectedRevision: number;
+  }): CompactionConfigRow {
+    if (!Number.isInteger(params.thresholdPercent) || params.thresholdPercent < 50 || params.thresholdPercent > 95) {
+      throw new StoreError('INVALID_ARGUMENT', 'thresholdPercent must be an integer between 50 and 95', {
+        thresholdPercent: params.thresholdPercent,
+      });
+    }
+    return this.transaction(() => {
+      const existing = this.getCompactionConfig();
+      if (existing.revision !== params.expectedRevision) {
+        throw new StoreError('VERSION_CONFLICT', 'compaction configuration revision does not match', {
+          expected: params.expectedRevision,
+          actual: existing.revision,
+        });
+      }
+      const timestamp = this.clock();
+      if (existing.revision === 0) {
+        this.db
+          .prepare(
+            `INSERT INTO compaction_settings (id, revision, auto, thresholdPercent, updatedAt)
+             VALUES (1, 1, ?, ?, ?)`,
+          )
+          .run(params.auto ? 1 : 0, params.thresholdPercent, timestamp);
+      } else {
+        this.db
+          .prepare(
+            `UPDATE compaction_settings
+                SET auto = ?, thresholdPercent = ?, revision = revision + 1, updatedAt = ?
+              WHERE id = 1 AND revision = ?`,
+          )
+          .run(params.auto ? 1 : 0, params.thresholdPercent, timestamp, params.expectedRevision);
+      }
+      return this.getCompactionConfig();
     });
   }
 
@@ -3231,6 +3309,23 @@ export class Store {
    * channel NULL and the partial unique index ignores them — and idempotent, because a database this
    * revision creates already carries the column through SCHEMA_SQL.
    */
+  /**
+   * v15 → v16: the global compaction policy. Additive and idempotent; the default row is inserted
+   * once so every reader sees the same starting point (auto, 70%).
+   */
+  private migrateV15ToV16(): void {
+    this.transaction(() => {
+      this.db.exec(V16_DDL);
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO compaction_settings (id, revision, auto, thresholdPercent, updatedAt)
+           VALUES (1, 1, 1, 70, ?)`,
+        )
+        .run(this.clock());
+      this.db.exec('PRAGMA user_version = 16;');
+    });
+  }
+
   private migrateV14ToV15(): void {
     this.transaction(() => {
       this.addColumn('sessions', 'channel', 'TEXT');
@@ -3369,6 +3464,7 @@ export class Store {
         [12, () => this.migrateV12ToV13()],
         [13, () => this.migrateV13ToV14()],
         [14, () => this.migrateV14ToV15()],
+        [15, () => this.migrateV15ToV16()],
       ];
       for (const [from, step] of steps) {
         if (this.pragmas().userVersion === from) {

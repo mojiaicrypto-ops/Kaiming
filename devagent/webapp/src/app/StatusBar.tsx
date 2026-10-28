@@ -3,7 +3,7 @@ import { State } from './State';
 import { ContextMeter } from './ContextMeter';
 import type { ProjectSummary } from '../state/useWorkspace';
 import type { ContextView, SessionActivity } from '../api/stream';
-import type { ConnectionStatus } from '../state/useSession';
+import type { CompactionResult, ConnectionStatus } from '../state/useSession';
 
 export interface StatusBarProps {
   readonly project: ProjectSummary | null;
@@ -15,6 +15,9 @@ export interface StatusBarProps {
   readonly config: { providerId: string; modelId: string; source: string } | null;
   /** How full that model's context window is; null when the model declares no window. */
   readonly context: ContextView | null;
+  /** Pi is summarizing the session; the manual action is disabled until it settles. */
+  readonly compacting: boolean;
+  readonly onCompact: () => Promise<CompactionResult>;
 }
 
 /**
@@ -22,7 +25,7 @@ export interface StatusBarProps {
  * project path, the branch, the live agent count and the keyboard hint — and every field is
  * clipped rather than wrapped, so the line never grows the shell.
  */
-export function StatusBar({ project, runningMembers, connection, activity, config, context }: StatusBarProps) {
+export function StatusBar({ project, runningMembers, connection, activity, config, context, compacting, onCompact }: StatusBarProps) {
   const { t } = useI18n();
   return (
     <footer className="status">
@@ -37,7 +40,9 @@ export function StatusBar({ project, runningMembers, connection, activity, confi
           {config.providerId}/{config.modelId}
         </span>
       )}
-      {context !== null && <ContextMeter context={context} />}
+      {context !== null && (
+        <ContextMeter context={context} activity={activity} compacting={compacting} onCompact={onCompact} />
+      )}
       <span className="sp" />
       {connection !== 'connected' && (
         <span className="conn" data-state={connection}>

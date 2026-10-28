@@ -120,7 +120,7 @@
 ## U6 需求与设置
 
 - 需求页：四列（提案 / 待实现 / 进行中 / 已完成）是记录状态的投影，因此看板在标签页可见时每 5 秒重读一次（隐藏时不发请求，回到前台立刻读一次）；一次刷新替换第一页，已「显示更多」过的任务列表不再被刷新折叠回第一页。无法解析的文件在通知行显示并可查看原文；抽屉按类型显示各自章节。**任务区默认折叠**：折叠时只占一行（`▸ 任务 · 共 N 个`，有进行中任务时附带 `● 进行中 N`），点击整行才展开列表（`aria-expanded`）；刷新与「显示更多」放在这一行的右侧，不单独占行——需求看板是主体，任务列表是脚注，它的控件不能比它的内容占更多高度。
-- 设置页：Providers（显示名 + 技术标识、地址、协议、模型、是否已配置、试连、编辑）、Models（全局 / 本项目作用域 + 来源标记）、Usage（本项目 / 全部项目作用域 + 合计 + 按角色/按模型）、Appearance（主题 / 语言 / 密度）。Provider 的技术标识创建后不可改；显示名、地址、协议、模型列表与凭证可改（凭证留空表示不变）。协议是必选下拉（OpenAI chat/completions / OpenAI responses / Anthropic messages），不按地址或名称推断。
+- 设置页：Providers（显示名 + 技术标识、地址、协议、模型、是否已配置、试连、编辑）、Models（全局 / 本项目作用域 + 来源标记；顶部全局「上下文压缩」开关与阈值，50–95%，默认 70%）、Usage（本项目 / 全部项目作用域 + 合计 + 按角色/按模型）、Appearance（主题 / 语言 / 密度）。Provider 的技术标识创建后不可改；显示名、地址、协议、模型列表与凭证可改（凭证留空表示不变）。协议是必选下拉（OpenAI chat/completions / OpenAI responses / Anthropic messages），不按地址或名称推断。
 - Provider 的编辑是**弹框**（`role="dialog"` + `aria-modal`，宽 `min(880px, 100vw-32px)`，`max-height: 86vh`，主体滚动、底部按钮常驻），不是追加在列表末尾的一块：列表很长时原来点「修改」看不出反应（表单开在折叠线以下）。弹框有焦点陷阱，`Esc` 关闭；选择器展开时 `Esc` 只收起列表，不关弹框（放弃未保存的编辑是陷阱）。列表头行显示正在编辑的技术标识；保存成功用外壳的 toast，失败则错误留在弹框内（唯一能改的地方）。
 - Provider 的模型列表逐行编辑：每行是一个模型（端点 id + 「模型（来自 Pi 目录）」选择器 + 移除），末行「+ 添加模型」。窄屏（≤860）下标签独占一行、id 与选择器上下堆叠，移除按钮单独一列。
   - 主控件是**目录选择器**，不是自由文本别名：输入任意片段即模糊匹配 `provider/id 显示名`（连续命中优先于分散命中、靠前优先于靠后、同分时短名优先），最多显示 40 条，`↑`/`↓` 移动、`Enter` 选中、`Esc` 关闭、点外部关闭。选中一项即完成全部声明——协议、是否支持推理、可选思考等级、上下文窗口、输出上限都随目录项一起来，不再有「支持推理」勾选框，也就没有可勾错的地方。选中后行下显示事实摘要（`zai · openai-completions · off/low/high · 上下文 200k · 输出 128k`）。
@@ -169,6 +169,7 @@
 | `session.stream.prepare` | 会话流（连一次，只读快照） |
 | `session.input.get` | 无——登记为缺口（U8 已由 `session.get.config` 覆盖） |
 | `session.input.submit` / `session.input.stop` | composer、队列撤回、STOP |
+| `session.compact` | 状态栏上下文档位的「立即压缩」 |
 | `task.get` / `task.list` | 任务条、成员抽屉、任务详情、需求屏任务段 |
 | `task.control` | 任务条暂停/继续 |
 | `task.report.get` | 任务详情里的报告 |
@@ -176,6 +177,7 @@
 | `interaction.respond` | 问题面板 |
 | `config.get` / `config.save` / `config.clear` / `config.test` | 设置三页（`clear` = Models 行选「默认」） |
 | `config.catalog` | Providers 编辑器的「实际模型」建议（目录里的模型名与事实，按 provider 分组） |
+| `compaction.get` / `compaction.save` | Models 页全局「上下文压缩」卡片 |
 | `session.recovery.resolve` | 无界面：处置由主管的 `task(op=recover)` 执行 |
 | `session.cleanup` | 会话列行内清理（两步确认） |
 | `POST /api/v1/uploads` | composer 添加图片 |

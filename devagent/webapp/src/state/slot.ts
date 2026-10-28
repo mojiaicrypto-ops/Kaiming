@@ -93,6 +93,8 @@ export interface SessionSlot {
   queuedInputs: readonly { inputId: string; status: string }[];
   /** How full the model's window is; the snapshot and every `context` notice keep it current. */
   context: ContextView | null;
+  /** Pi's summary call is running; the manual action is disabled until it settles. */
+  compacting: boolean;
   /**
    * A message this tab submitted that has not reached the history yet. Pi writes the user turn only
    * when the run starts, so between "accepted" and "delivered" neither the stream nor a reload
@@ -113,6 +115,7 @@ export const emptySlot = (): SessionSlot => ({
   queuedInputs: [],
   pendingEcho: null,
   context: null,
+  compacting: false,
 });
 
 /**
@@ -294,6 +297,7 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
           .map((input) => ({ inputId: input.inputId, status: input.status })),
         // The boundary copy is authoritative on connect: a missed notice cannot leave a stale meter.
         context: snapshot.context ?? null,
+        compacting: snapshot.compacting === true,
       };
     }
     case 'taskDetail':
@@ -436,12 +440,16 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
         }
         case 'agent_start':
           return { ...state, busy: 'processing' };
+        case 'compaction_start':
+          return { ...state, compacting: true };
+        case 'compaction_end':
+          return { ...state, compacting: false };
         case 'agent_settled':
         case 'agent_end':
           // A settled agent is not always an idle session: a queue still holds inputs waiting for
           // the slot, and a reload snapshot says `queued`. Showing idle here made the working marker
           // (and the STOP button) disappear between two turns of the same queue.
-          return { ...state, busy: state.queuedInputs.length > 0 ? 'queued' : 'idle' };
+          return { ...state, busy: state.queuedInputs.length > 0 ? 'queued' : 'idle', compacting: false };
         case 'turn_start':
           // Pi announces the input it is about to run before any assistant message exists. This is
           // the earliest honest "working" signal, and the echo has now been delivered.

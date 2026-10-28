@@ -318,6 +318,7 @@ export function startWorkbench(options: StartOptions): Promise<{
     attachmentDir: server.agentDir,
     notify: () => worker.notify(),
     stopInput: (sessionId, stop) => runner.requestStop(sessionId, stop),
+    compactSession: (sessionId) => runner.compactManually(sessionId),
     controlTask: (control) => runner.controlTask(control),
     invalidate: (sessionId, entity, id) => {
       hub.publish(sessionId, { type: 'invalidate', entity, id });
@@ -331,6 +332,7 @@ export function startWorkbench(options: StartOptions): Promise<{
     attachmentDir: server.agentDir,
     epochOf: (sessionId) => epoch(sessionId),
     contextOf,
+    compactingOf: (sessionId) => registry.get(sessionId)?.session.isCompacting ?? false,
     currentHistory: (sessionId) => {
       const handle = registry.get(sessionId);
       if (handle === undefined) return undefined;

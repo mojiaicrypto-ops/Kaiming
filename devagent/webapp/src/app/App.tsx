@@ -266,6 +266,8 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
           activity={session.slot.busy}
           config={session.config}
           context={session.slot.context}
+          compacting={session.slot.compacting}
+          onCompact={session.compact}
         />
         {projectOpen && (
           <ProjectDialog

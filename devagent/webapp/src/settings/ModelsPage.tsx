@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
 import { ROLES, useRoleConfigs, type Assignment, type ConfigView, type ProviderView, type RoleId } from './config-model';
@@ -34,6 +34,42 @@ export function ModelsPage({ rpc, projectId, onSaved, onError }: ModelsPageProps
     provider.models.map((model) => ({ providerId: provider.providerId, modelId: model.id })),
   );
   const failed = roles.failed;
+  const [compaction, setCompaction] = useState<{ auto: boolean; thresholdPercent: number; revision: number } | null>(null);
+  const [compactionFailed, setCompactionFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void rpc
+      .call<{ config: { auto: boolean; thresholdPercent: number; revision: number } }>('compaction.get', {})
+      .then((read) => {
+        if (!cancelled) setCompaction(read.config);
+      })
+      .catch(() => {
+        if (!cancelled) setCompactionFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rpc]);
+
+  const saveCompaction = async (next: { auto: boolean; thresholdPercent: number }): Promise<void> => {
+    if (compaction === null) return;
+    setSaving('compaction');
+    try {
+      const read = await rpc.call<{ config: { auto: boolean; thresholdPercent: number; revision: number } }>(
+        'compaction.save',
+        { ...next, expectedRevision: compaction.revision },
+        { requestId: `compaction-${Date.now()}` },
+      );
+      setCompaction(read.config);
+      setCompactionFailed(false);
+      onSaved(t('settings.saved'));
+    } catch (error) {
+      onError(t('settings.saveFailed', { reason: errorText(error, t) }));
+    } finally {
+      setSaving(null);
+    }
+  };
 
   const commit = async (key: string, run: () => Promise<unknown>, reload: () => Promise<void>): Promise<void> => {
     setSaving(key);
@@ -245,6 +281,51 @@ export function ModelsPage({ rpc, projectId, onSaved, onError }: ModelsPageProps
         <h1>{t('settings.models')}</h1>
         <p className="f3">{t('settings.modelsDesc')}</p>
         <div className="set-body" data-testid="models">
+          <div className="cmp" data-testid="compaction-settings">
+            <div className="cmp-h">
+              <span>{t('settings.compaction')}</span>
+              <span className="src">{t('settings.compactionGlobal')}</span>
+            </div>
+            {compactionFailed ? (
+              <State kind="block">{t('settings.readFailed')}</State>
+            ) : compaction === null ? (
+              <p className="f3">{t('common.loading')}</p>
+            ) : (
+              <>
+                <div className="cmp-row">
+                  <label className="cmp-check">
+                    <input
+                      type="checkbox"
+                      checked={compaction.auto}
+                      disabled={saving !== null}
+                      onChange={(event) => void saveCompaction({ auto: event.target.checked, thresholdPercent: compaction.thresholdPercent })}
+                      data-testid="compaction-auto"
+                    />
+                    {t('settings.compactionAuto')}
+                  </label>
+                  <label className="cmp-at">
+                    {t('settings.compactionAt')}
+                    <select
+                      className="sel"
+                      value={compaction.thresholdPercent}
+                      disabled={saving !== null}
+                      onChange={(event) =>
+                        void saveCompaction({ auto: compaction.auto, thresholdPercent: Number(event.target.value) })
+                      }
+                      data-testid="compaction-threshold"
+                    >
+                      {[50, 55, 60, 65, 70, 75, 80, 85, 90, 95].map((value) => (
+                        <option key={value} value={value}>
+                          {value}%
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <p className="f3 cmp-desc">{t('settings.compactionHint')}</p>
+              </>
+            )}
+          </div>
           {failed && <State kind="block">{t('settings.readFailed')}</State>}
           <div className="row" style={{ marginBottom: 'var(--s4)' }}>
             <span className="seg">

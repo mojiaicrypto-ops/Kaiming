@@ -257,6 +257,27 @@ describe('slot · retained inputs', () => {
   });
 });
 
+describe('slot · compaction state', () => {
+  it('tracks compaction_start/end and restores it from a snapshot', () => {
+    let slot = slotReducer(emptySlot(), {
+      type: 'frame',
+      frame: { type: 'pi', event: { type: 'compaction_start', reason: 'manual' } },
+    });
+    expect(slot.compacting).toBe(true);
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'pi', event: { type: 'compaction_end' } } });
+    expect(slot.compacting).toBe(false);
+
+    slot = slotReducer(slot, {
+      type: 'snapshot',
+      reason: 'resync',
+      snapshot: { ...snapshotOf([]), compacting: true },
+    });
+    expect(slot.compacting).toBe(true);
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'initial', snapshot: snapshotOf([]) });
+    expect(slot.compacting).toBe(false);
+  });
+});
+
 describe('slot · context occupancy', () => {
   const context = {
     tokens: 616_855,

@@ -493,6 +493,51 @@ describe('claiming', () => {
   });
 });
 
+describe('compaction configuration', () => {
+  it('starts at auto, 70%, revision 1 and saves with a revision check', () => {
+    const { store } = openStore();
+
+    const initial = store.getCompactionConfig();
+    expect(initial).toMatchObject({ auto: true, thresholdPercent: 70, revision: 1 });
+
+    const saved = store.saveCompactionConfig({ auto: false, thresholdPercent: 85, expectedRevision: 1 });
+    expect(saved).toMatchObject({ auto: false, thresholdPercent: 85, revision: 2 });
+    expect(store.getCompactionConfig()).toEqual(saved);
+
+    expect(() =>
+      store.saveCompactionConfig({ auto: true, thresholdPercent: 60, expectedRevision: 1 }),
+    ).toThrow(expect.objectContaining({ code: 'VERSION_CONFLICT' }));
+  });
+
+  it('migrates a v15 database by adding the default policy row', () => {
+    const { store, path } = openStore();
+    closeStore(store);
+    const raw = new DatabaseSync(path);
+    raw.exec('DROP TABLE compaction_settings');
+    raw.exec('PRAGMA user_version = 15');
+    raw.close();
+
+    const migrated = new Store({ path, serverEpoch: 1 });
+    stores.push(migrated);
+
+    expect(migrated.pragmas().userVersion).toBe(SCHEMA_VERSION);
+    expect(migrated.getCompactionConfig()).toMatchObject({ auto: true, thresholdPercent: 70, revision: 1 });
+  });
+
+  it('refuses a threshold outside 50..95 before touching the row', () => {
+    const { store } = openStore();
+    const before = store.getCompactionConfig();
+
+    expect(() => store.saveCompactionConfig({ auto: true, thresholdPercent: 0, expectedRevision: 1 })).toThrow(
+      expect.objectContaining({ code: 'INVALID_ARGUMENT' }),
+    );
+    expect(() => store.saveCompactionConfig({ auto: true, thresholdPercent: 100, expectedRevision: 1 })).toThrow(
+      expect.objectContaining({ code: 'INVALID_ARGUMENT' }),
+    );
+    expect(store.getCompactionConfig()).toEqual(before);
+  });
+});
+
 describe('stop intent', () => {
   it('stops queued work outright and only records the intent for running work', () => {
     const { store } = openStore();

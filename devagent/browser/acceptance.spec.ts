@@ -1625,7 +1625,7 @@ test('the status bar names the model the work actually used', async ({ page }) =
     await expect(meter).toBeVisible();
     await expect(meter).toContainText(/\d+(\.\d+)?[kM]? \/ \d+(\.\d+)?[kM]/);
     await expect(meter).toContainText('%');
-    await expect(meter).toHaveAttribute('role', 'meter');
+    await expect(meter.locator('.ctx')).toHaveAttribute('role', 'meter');
     // The branch is informative on a wide bar and yields at the phone floor.
     await expect(page.locator('.status .branch')).toBeVisible();
     // A normal phone width with agents running and a lost connection: the tight bar keeps the
@@ -1696,6 +1696,63 @@ test('the status bar names the model the work actually used', async ({ page }) =
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(
       await page.evaluate(() => document.documentElement.clientWidth),
     );
+  } finally {
+    await harness.close();
+  }
+});
+
+test('the global compaction threshold is editable and survives a reload', async ({ page }) => {
+  const harness = await startHarness();
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await page.goto(`${harness.url}settings/models`);
+    const card = page.locator('[data-testid="compaction-settings"]');
+    await expect(card).toBeVisible();
+    const threshold = card.locator('[data-testid="compaction-threshold"]');
+    await expect(threshold).toHaveValue('70');
+
+    await threshold.selectOption('85');
+    await expect(page.locator('.toast').last()).toContainText(/saved|已保存/i);
+    await page.reload();
+    await expect(page.locator('[data-testid="compaction-threshold"]')).toHaveValue('85');
+
+    const auto = page.locator('[data-testid="compaction-auto"]');
+    await auto.click();
+    await expect(page.locator('.toast').last()).toContainText(/saved|已保存/i);
+    await page.reload();
+    await expect(page.locator('[data-testid="compaction-auto"]')).not.toBeChecked();
+    await expect(page.locator('[data-testid="compaction-threshold"]')).toHaveValue('85');
+  } finally {
+    await harness.close();
+  }
+});
+
+test('the context panel offers a manual compaction and reports what happened', async ({ page }) => {
+  const harness = await startHarness({ model: [{ kind: 'text', text: '好的。' }] });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    const projectPath = harness.project?.projectPath ?? '';
+    await page.locator('[data-testid="project-switcher"]').click();
+    await page.locator('[data-testid="project-path"]').fill(projectPath);
+    await page.locator('[data-testid="project-path"]').press('Enter');
+    await waitForConnected(page);
+    await page.locator('[data-testid="composer"]').fill('你好');
+    await page.locator('[data-testid="composer"]').press('Enter');
+    const meter = page.locator('[data-testid="status-context"]');
+    await expect(meter).toBeVisible({ timeout: 15_000 });
+    // The run has settled: the STOP control is gone, so the manual action is allowed.
+    await expect(page.locator('[data-testid="stop"]')).toHaveCount(0, { timeout: 15_000 });
+
+    await meter.click();
+    const panel = page.locator('[data-testid="context-panel"]');
+    await expect(panel).toBeVisible();
+    const button = panel.locator('[data-testid="context-compact"]');
+    await expect(button).toBeEnabled();
+    await button.click();
+    // The stub session is far below Pi's keep-recent budget, so the honest answer is "nothing".
+    await expect(panel.locator('[data-testid="context-compact-result"]')).toContainText(/Nothing to compact|没有可压缩/i);
   } finally {
     await harness.close();
   }

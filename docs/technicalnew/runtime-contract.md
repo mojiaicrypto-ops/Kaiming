@@ -40,13 +40,15 @@
 | session.messages.list | projectId、sessionId、cursor?、before?、limit | 指定 Pi 历史、input 关联与状态；cursor 向前翻（nextCursor），before 向后翻（previousCursor，页首 entry；到最早为 null），两者不可同时给；无历史的未开始会话为空，有历史而文件缺失报错 |
 | session.input.submit | projectId、sessionId、content、taskId? | 用户输入只投 chief；当前 Task 的补充须关联原 taskId，按安全边界处理；普通新话题排队至原 Task 结束或新开主管会话 |
 | session.input.get | projectId、inputId、sessionId? | 当前状态、历史边界/结果的公开引用、错误/停止原因；原内容保持不变。给出 sessionId 时校验归属，省略时按 inputId 解析（外部调用方只有运行标识）；返回 `sessionId` 与该输入的 `taskId` |
+| session.compact | projectId、sessionId | 手动压缩：无运行输入、无未核实中断且有活实例时调用 Pi 原生 compact；返回 `{status:'compacted'|'nothing'|'busy'|'recovery'|'unavailable'|'failed', tokensBefore?, estimatedTokensAfter?, detail?}`；不写输入行、不改 Task |
+| compaction.get/save | get 无参；save:auto、thresholdPercent、expectedRevision | 全局主动压缩策略（50–95%，默认 70%）与 revision；Pi 原生兜底不在此开关内 |
 | session.input.stop | projectId、sessionId、inputId | 保存停止意图后直接 abort；返回 Input 原 status/revision、stopRequested 与 Session.activity；未停稳 activity=stopping，未知为 interrupted |
 | task.list/get | projectId、taskId?、cursor?、limit?；get 另可给 includePlan | Task 看板/详情，无模型也可读；摘要含 `sourceInputId`（创建它的授权输入，外部运行的标识由此派生）；`includePlan` 时 `plan` 返回 Plan 正文与 `current`（文件是否仍与保存时一致）；报告正文按 `resultId` 另经 `task.report.get` 读取，本方法只给结果摘要 |
 | task.control | projectId、taskId、expectedRevision、command | pause/resume/cancel，调用同一 TaskService；停止范围见 S5 |
 | requirement.list/get | projectId、过滤/分页或 requirementId | 使用同一文件读取服务，返回非法文件信息，不经模型 |
 | interaction.list | projectId、sessionId | 该会话当前待答问题（interactionId、method、title、message、options、placeholder、inputId、taskId、sourceSessionId、revision、createdAt）；只读，不需要实时订阅 |
 | interaction.respond | projectId、chiefSessionId、interactionId、expectedRevision、response | 请求/响应、当前主管路由、去重、保存后解除等待均按 M5；返回已收到与当前请求状态 |
-| session.stream.prepare | projectId、sessionId | subscriptionId、epoch、boundary、快照；快照含 `context{tokens,contextWindow,percent,autoCompaction,live}`：有活实例时用 Pi 的估算（压缩后 tokens/percent 为 null），无实例时只给模型窗口（`live=false`，取该会话上次运行或按当前设置将运行的模型）。先缓冲后读快照，见 M4 |
+| session.stream.prepare | projectId、sessionId | subscriptionId、epoch、boundary、快照；快照含 `context{tokens,contextWindow,percent,autoCompaction,live}`：有活实例时用 Pi 的估算（压缩后 tokens/percent 为 null），无实例时只给模型窗口（`live=false`，取该会话上次运行或按当前设置将运行的模型）；另含 `compacting`（Pi 正在摘要）。先缓冲后读快照，见 M4 |
 | task.report.get | projectId、taskId、resultId | 校验 Task/结果归属，读取 Server 或项目报告正文；不接受任意路径 |
 | config.get/save/clear/test | projectId?、roleId?（同时给出表示项目内该角色）；save:expectedRevision/value，clear 无版本，test:配置引用 | 脱敏有效配置与各层已存值、版本/实际试连结果；clear 幂等移除该层；密钥仅保存私有凭证引用 |
 | project.files.list/read | projectId、path；list:cursor?/limit，read:expectedVersion? | 项目相对目录/文件正文；实际路径归属检查，不访问外部符号链接 |

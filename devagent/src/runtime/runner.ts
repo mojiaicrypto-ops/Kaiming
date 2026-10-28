@@ -28,6 +28,7 @@ import { SessionRegistry, type LogicalSessionSpec } from './registry.ts';
 import { epochOf } from './epoch.ts';
 import { rollupUsage } from './usage-rollup.ts';
 import { partsOfPayload } from './input-text.ts';
+import { compactionDue } from './compaction-policy.ts';
 import { readImage } from '../server/attachments.ts';
 import { InteractionBridge, createUiAdapter } from './interactions.ts';
 import { createQuestionTool } from '../tools/question-tool.ts';
@@ -58,6 +59,19 @@ interface PiImage {
 }
 
 export type TerminalStatus = 'completed' | 'failed' | 'stopped' | 'interrupted';
+
+/** What one compaction attempt did, as the host can honestly report it. */
+export type CompactionOutcome =
+  | {
+      readonly status: 'compacted';
+      readonly tokensBefore: number;
+      readonly estimatedTokensAfter: number | null;
+    }
+  | { readonly status: 'nothing' }
+  | { readonly status: 'busy' }
+  | { readonly status: 'recovery' }
+  | { readonly status: 'unavailable' }
+  | { readonly status: 'failed'; readonly detail: string };
 
 export type RunOutcome =
   | { readonly kind: 'idle' }
@@ -137,6 +151,9 @@ export class InputRunner {
   private readonly liveRuns = new Map<string, { readonly inputId: string; readonly serverWorkDir: string }>();
   /** Handles already wired to the observation hook (one subscription per Pi instance). */
   private readonly observed = new WeakSet<object>();
+  /** Sessions whose Pi instance is compacting: claims wait, and a second compaction reports busy. */
+  private readonly compacting = new Set<string>();
+  private readonly compactionDone = new Map<string, Promise<void>>();
 
   constructor(options: RunnerOptions & { interactions?: InteractionBridge }) {
     this.options = options;
@@ -223,6 +240,88 @@ export class InputRunner {
     return tools;
   }
 
+  /**
+   * Compact one session at the user's explicit request. The idle/interrupted checks run under the
+   * same lock the worker uses, so a claim cannot slip between "idle" and the summary.
+   */
+  async compactManually(sessionId: string): Promise<CompactionOutcome> {
+    if (this.compacting.has(sessionId)) return { status: 'busy' };
+    return this.withCompaction(sessionId, async () => {
+      const inputs = this.options.store.listInputs(sessionId);
+      if (inputs.some((input) => input.status === 'processing')) {
+        return { status: 'busy' } as const;
+      }
+      if (inputs.some((input) => input.status === 'interrupted')) {
+        return { status: 'recovery' } as const;
+      }
+      const handle = this.options.registry.get(sessionId);
+      if (handle === undefined) return { status: 'unavailable' } as const;
+      return this.summarize(handle);
+    });
+  }
+
+  /**
+   * Proactive compaction before an input is delivered: only when the global policy is on and the
+   * live estimate is at or above its percentage. Best-effort; the caller falls through on failure.
+   */
+  async compactIfDue(sessionId: string): Promise<CompactionOutcome | null> {
+    const policy = this.options.store.getCompactionConfig();
+    if (!policy.auto) return null;
+    const handle = this.options.registry.get(sessionId);
+    if (handle === undefined) return null;
+    let percent: number | null | undefined;
+    try {
+      percent = handle.session.getContextUsage()?.percent;
+    } catch {
+      return null;
+    }
+    if (!compactionDue(percent, policy)) return null;
+    if (this.compacting.has(sessionId)) return { status: 'busy' };
+    return this.withCompaction(sessionId, () => this.summarize(handle));
+  }
+
+  /** Run Pi's own compaction (summary, keep-recent, usage, events) and classify its outcome. */
+  private async summarize(handle: PiSessionHandle): Promise<CompactionOutcome> {
+    try {
+      const result = await handle.session.compact();
+      return {
+        status: 'compacted',
+        tokensBefore: result.tokensBefore,
+        estimatedTokensAfter: result.estimatedTokensAfter ?? null,
+      };
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      // Pi's two ordinary "there is nothing to do" answers are not failures.
+      if (detail.includes('Nothing to compact') || detail.includes('Already compacted')) {
+        return { status: 'nothing' };
+      }
+      return { status: 'failed', detail };
+    }
+  }
+
+  /** Serialize compaction with claims for one session; the flag and its promise are set together. */
+  private async withCompaction<T>(sessionId: string, run: () => Promise<T>): Promise<T> {
+    const done = Promise.withResolvers<void>();
+    this.compacting.add(sessionId);
+    this.compactionDone.set(sessionId, done.promise);
+    try {
+      return await run();
+    } finally {
+      this.compacting.delete(sessionId);
+      this.compactionDone.delete(sessionId);
+      done.resolve();
+    }
+  }
+
+  /** Wait until a manual compaction owns the session no more, so a claim cannot interleave. */
+  private async waitForCompaction(sessionId: string): Promise<void> {
+    while (this.compacting.has(sessionId)) {
+      const done = this.compactionDone.get(sessionId);
+      if (done === undefined) return;
+      await done.catch(() => undefined);
+    }
+  }
+
   async runNext(sessionId: string): Promise<RunOutcome> {
     const session = this.options.store.getSession(sessionId);
     if (session === undefined) {
@@ -251,6 +350,10 @@ export class InputRunner {
     // Task-level control eligibility (pause/cancel of the owning Task) arrives with the task table
     // in P3; until then only the storage-level rules (busy / unresolved interrupted) are enforced.
 
+    // A manual compaction owns the session until it finishes: claiming in the middle would make
+    // the two writes (summary and input) race. The check and the claim below have no await between
+    // them, so a compaction cannot start in the gap.
+    await this.waitForCompaction(sessionId);
     const claim = this.options.store.claimNextInput(sessionId);
     if (claim.kind === 'none') {
       return { kind: 'idle' };
@@ -308,6 +411,32 @@ export class InputRunner {
       images.push({ type: 'image', data: image.bytes.toString('base64'), mimeType: image.mimeType });
     }
 
+    // Attribute compaction events to the input that caused them: the run's identity must be set
+    // before the summary, not only before delivery.
+    const serverWorkDir = join(config.agentDir, 'work');
+    this.liveRuns.set(sessionId, { inputId: input.inputId, serverWorkDir });
+    // Proactive compaction: at or above the configured window percentage, summarize before this
+    // input is delivered. It happens after the claim, so the worker cannot start a second run, and
+    // it is best-effort — a failed summary falls through to the input (Pi's own limit stays a
+    // backstop).
+    await this.compactIfDue(sessionId).catch(() => undefined);
+    // A stop can arrive while the summary runs; the input is still undelivered and must end stopped.
+    const afterCompaction = this.options.store.getInput(input.inputId);
+    if (afterCompaction !== undefined && afterCompaction.stopRequestKey !== null) {
+      const detail = 'stop requested while compacting';
+      // The run's identity was set before the summary; both entries must not outlive this path.
+      this.hostAborts.delete(abortKey(sessionId, input.inputId));
+      this.liveRuns.delete(sessionId);
+      const recorded = this.finishWithCurrentRevision(input.inputId, {
+        status: 'stopped',
+        errorCode: 'STOP_REQUESTED',
+        errorMessage: detail,
+      });
+      return recorded
+        ? { kind: 'stopped', inputId: input.inputId, detail }
+        : { kind: 'interrupted', inputId: input.inputId, detail: 'could not record the stop' };
+    }
+
     // Everything from the claim onward runs inside one protected block: binding lookup, extras,
     // instance preparation, the first Pi write, delivery and classification. Any failure must end in
     // a recorded terminal state — a claimed input may never be left `processing`.
@@ -327,8 +456,6 @@ export class InputRunner {
       const toolSet = toolSetFor(session.roleId, taskType, hold);
       // Host-owned domain tools: the chief organizes Tasks, a specialist may only read its own. The
       // context is resolved per tool call, because this Pi instance is reused across inputs.
-const serverWorkDir = join(config.agentDir, 'work');
-      this.liveRuns.set(sessionId, { inputId: input.inputId, serverWorkDir });
       const contextOf = (): TaskToolContext => {
         const live = this.liveRuns.get(sessionId);
         const currentTaskId = this.options.store.getSession(sessionId)?.currentTaskId;
@@ -688,8 +815,11 @@ const serverWorkDir = join(config.agentDir, 'work');
     sessionId: string,
     params: { inputId: string; requestKey: string; reason: string },
   ): Promise<{ status: InputRow['status']; stopRequested: boolean }> {
+    // A queued input has no Pi run to abort: aborting here would also cancel an unrelated summary
+    // that owns the session, so only a really processing input reaches the live handle.
+    const before = this.options.store.getInput(params.inputId);
     const result = this.options.store.requestStop(params);
-    if (result.stopRequested) {
+    if (result.stopRequested && before?.status === 'processing') {
       // Tell the runner which run is being stopped before aborting it, so the abort is classified
       // as `stopped` rather than as a provider error.
       this.noteAbort(sessionId, params.inputId);

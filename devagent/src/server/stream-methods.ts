@@ -37,6 +37,8 @@ export interface StreamMethodsOptions {
    * the session, otherwise only the window of the model it last ran with (or would run with).
    */
   readonly contextOf?: (sessionId: string) => Promise<ContextUsageView | null>;
+  /** Whether Pi is summarizing this session right now (manual or automatic compaction). */
+  readonly compactingOf?: (sessionId: string) => boolean;
 }
 
 export function registerStreamMethods(router: RpcRouter, options: StreamMethodsOptions): void {
@@ -102,6 +104,8 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
           // How full the model's window is, as of this boundary: a reader who connects mid-run
           // must see the same number the meter had before the reconnect.
           context: contextUsage,
+          // A reconnect during a summary must still show "compacting", not an idle button.
+          compacting: options.compactingOf?.(sessionId) ?? false,
           // A blocked run is state, not an event: a reader who connects after it happened still
           // has to see why nothing is running.
           blocked: options.blockedOf?.(sessionId) ?? null,
