@@ -4,7 +4,7 @@
 
 | 入口 | 职责 | 何时读 |
 |---|---|---|
-| [产品需求](productnew/README.md) | 产品定位、五个业务模块、用户结果与首版范围 | 首次理解产品 |
+| [产品需求](productnew/README.md) | 产品定位、六个业务模块（含外部 Agent 接入）、用户结果与首版范围 | 首次理解产品 |
 | [用户流程](productnew/journeys.md) | 从项目接入到需求、交付、结算和接续 | 讨论端到端行为 |
 | [产品验收](productnew/acceptance.md) | 可观察产品场景 | 制定验证与交付 |
 | [技术设计](technicalnew/README.md) | 总图、子图与各链路实现契约的导航 | 技术设计/实施前 |
