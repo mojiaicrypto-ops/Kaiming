@@ -17,6 +17,7 @@ import { PiRuntimeFactory } from '../src/runtime/pi-runtime.ts';
 import { SessionRegistry } from '../src/runtime/registry.ts';
 import { InputRunner } from '../src/runtime/runner.ts';
 import { resolveEffectiveConfig, type RuntimeDefaults } from '../src/runtime/config.ts';
+import { contextUsageOf } from '../src/runtime/context-usage.ts';
 import { epochOf } from '../src/runtime/epoch.ts';
 import { createStubEnv, startStubModelServer, type StubReply } from '../spikes/harness/pi-env.ts';
 
@@ -142,6 +143,11 @@ async function harness(
     // The tests set this to model a run that cannot start.
     blockedOf: (sessionId) => blocks.get(sessionId) ?? null,
     epochOf: (sessionId) => epoch(sessionId),
+    // What main.ts backs with the registry: occupancy from the live instance when there is one.
+    contextOf: async (sessionId) => {
+      const handle = registry.get(sessionId);
+      return handle === undefined ? null : contextUsageOf(handle.session);
+    },
     // Tests inject a "live" history source (what main.ts backs with the registry).
     currentHistory: (sessionId) => liveHistories.get(sessionId),
   });
@@ -515,6 +521,40 @@ describe('session stream', () => {
     expect(h.store.getInput(inputId)?.status).toBe('completed');
     // The server releases the subscription when the connection goes away.
     await waitForRelease(h.hub);
+  }, 30_000);
+
+  it('carries context occupancy in the snapshot and streams it as a notice frame', async () => {
+    const h = await harness([{ kind: 'text', text: '好的。' }]);
+    // One real response is enough for Pi to know its context; the instance then stays live.
+    const submitted = await h.call('session.input.submit', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      content: [{ type: 'text', text: '你好' }],
+    });
+    expect((submitted['result'] as { status: string }).status).toBe('queued');
+    await h.awaitRun();
+
+    const prepared = await h.prepare('s-chief');
+    const context = prepared.snapshot['context'] as {
+      tokens: number | null;
+      contextWindow: number;
+      percent: number | null;
+      autoCompaction: boolean | null;
+      live: boolean;
+    };
+    expect(context.live).toBe(true);
+    expect(context.contextWindow).toBeGreaterThan(0);
+    expect(typeof context.tokens).toBe('number');
+    expect(typeof context.autoCompaction).toBe('boolean');
+
+    const stream = await h.readStream(prepared.streamPath);
+    h.hub.publish('s-chief', { type: 'context', context }, { epoch: prepared.epoch });
+    await stream.waitForEvents(1);
+
+    expect(stream.state.events[0]).toMatchObject({ type: 'context', context });
+    expect(stream.state.resync).toBeNull();
+    stream.close();
+    await stream.done;
   }, 30_000);
 
   it('prepares again after a reader left, so a reloading tab reconnects from a fresh boundary', async () => {

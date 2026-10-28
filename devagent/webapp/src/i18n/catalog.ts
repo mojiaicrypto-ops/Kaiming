@@ -33,6 +33,11 @@ const en = {
   'shell.branch': 'main',
   'shell.stopping': 'Stopping',
   'shell.configSource': 'Model source: {source}',
+  'shell.contextKnown': 'Context: {used} / {window} tokens ({percent}) · estimated',
+  'shell.contextCompacted': 'Context usage is measured after the next response · window {window}',
+  'shell.contextUnknown': 'Context usage is unknown until this session runs here · window {window}',
+  'shell.contextAutoOn': 'auto-compaction on',
+  'shell.contextAutoOff': 'auto-compaction off',
   'shell.project': 'Switch project',
   'shell.noProject': 'No project',
 
@@ -529,6 +534,11 @@ export const zhCN: Record<MessageKey, string> = {
   'shell.branch': 'main',
   'shell.stopping': '正在停止',
   'shell.configSource': '模型来源：{source}',
+  'shell.contextKnown': '上下文：{used} / {window} tokens（{percent}）· 估算',
+  'shell.contextCompacted': '上下文占用待下一次响应后更新 · 窗口 {window}',
+  'shell.contextUnknown': '本进程尚未运行该会话，占用未知 · 窗口 {window}',
+  'shell.contextAutoOn': '自动压缩已开启',
+  'shell.contextAutoOff': '自动压缩已关闭',
   'shell.project': '切换项目',
   'shell.noProject': '未打开项目',
 

@@ -337,9 +337,13 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
         close({ reason: 'epoch' });
         return;
       }
-      // A Pi event keeps its own shape; a business notice is the frame's own type (M4).
-      const notice =
-        typeof event.event === 'object' && event.event !== null && (event.event as { type?: unknown }).type === 'invalidate';
+      // A Pi event keeps its own shape; a business notice (invalidate, context) is the frame's own
+      // type (M4). The context notice carries the occupancy itself, so the meter needs no re-read.
+      const eventType =
+        typeof event.event === 'object' && event.event !== null
+          ? (event.event as { type?: unknown }).type
+          : undefined;
+      const notice = eventType === 'invalidate' || eventType === 'context';
       // message_update resends the FULL accumulated message twice per delta — event.message
       // and assistantMessageEvent.partial (Pi's shape). No client reads either there — the
       // slot consumes only assistantMessageEvent.delta/contentIndex — so streaming them

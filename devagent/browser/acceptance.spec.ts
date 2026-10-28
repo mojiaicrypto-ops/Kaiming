@@ -1620,6 +1620,82 @@ test('the status bar names the model the work actually used', async ({ page }) =
 
     // The stub installation runs provider 'stub' model 'stub-1'; the status bar says so.
     await expect(page.locator('[data-testid="status-model"]')).toContainText('stub/stub-1');
+    // The same area carries what the response cost in context: a real reading, not a placeholder.
+    const meter = page.locator('[data-testid="status-context"]');
+    await expect(meter).toBeVisible();
+    await expect(meter).toContainText(/\d+(\.\d+)?[kM]? \/ \d+(\.\d+)?[kM]/);
+    await expect(meter).toContainText('%');
+    await expect(meter).toHaveAttribute('role', 'meter');
+    // The branch is informative on a wide bar and yields at the phone floor.
+    await expect(page.locator('.status .branch')).toBeVisible();
+    // A normal phone width with agents running and a lost connection: the tight bar keeps the
+    // connection word inside the line instead of letting the meter push it out.
+    await page.setViewportSize({ width: 430, height: 800 });
+    const crowded = await page.evaluate(() => {
+      const status = document.querySelector('.status') as HTMLElement;
+      const model = document.querySelector('.status .model') as Element;
+      const hint = document.querySelector('.status .hint-key') as Element;
+      const run = document.createElement('span');
+      run.className = 'st run';
+      run.textContent = '2 agent(s) running';
+      const conn = document.createElement('span');
+      conn.className = 'conn';
+      conn.textContent = 'Reconnecting';
+      status.insertBefore(run, model);
+      status.insertBefore(conn, hint);
+      return {
+        connRight: conn.getBoundingClientRect().right,
+        statusRight: status.getBoundingClientRect().right,
+        modelWidth: model.getBoundingClientRect().width,
+        branch: getComputedStyle(document.querySelector('.status .branch') as Element).display,
+        run: getComputedStyle(run).display,
+      };
+    });
+    expect(crowded.connRight).toBeLessThanOrEqual(crowded.statusRight);
+    // The branch yields at 480; the running count still fits once it is gone.
+    expect(crowded.branch).toBe('none');
+    expect(crowded.run).not.toBe('none');
+    expect(crowded.modelWidth).toBeGreaterThan(0);
+    // A normal-length model id must still leave the connection word inside the line. The model
+    // yields last (a small shrink factor), so this is the case a full-width id would otherwise
+    // push out at the 430 and 561 boundaries.
+    for (const width of [430, 561]) {
+      await page.setViewportSize({ width, height: 800 });
+      const longId = await page.evaluate(() => {
+        const model = document.querySelector('.status .model') as Element;
+        const status = document.querySelector('.status') as HTMLElement;
+        const conn = document.querySelector('.status .conn') as Element;
+        const previous = model.textContent;
+        model.textContent = 'provider/a-long-model-name-1';
+        const measured = {
+          connRight: conn.getBoundingClientRect().right,
+          statusRight: status.getBoundingClientRect().right,
+          modelWidth: model.getBoundingClientRect().width,
+        };
+        model.textContent = previous;
+        return measured;
+      });
+      expect(longId.connRight).toBeLessThanOrEqual(longId.statusRight);
+      expect(longId.modelWidth).toBeGreaterThan(0);
+    }
+    // Narrow screens keep the percentage and drop the absolute pair; the phone floor still shows it.
+    await page.setViewportSize({ width: 390, height: 800 });
+    await expect(meter).toBeVisible();
+    await expect(meter.locator('.ctx-abs')).toBeHidden();
+    await expect(meter.locator('.ctx-pct')).toHaveText(/^\d+(\.\d+)?%$/);
+    await page.setViewportSize({ width: 320, height: 700 });
+    await expect(meter).toBeVisible();
+    await expect(meter.locator('.ctx-abs')).toBeHidden();
+    await expect(meter.locator('.ctx-pct')).toHaveText(/^\d+(\.\d+)?%$/);
+    await expect(page.locator('.status .branch')).toBeHidden();
+    await expect(page.locator('.status .st.run')).toBeHidden();
+    expect(await page.locator('.status .model').evaluate((element) => element.getBoundingClientRect().width)).toBeGreaterThan(0);
+    expect(await page.locator('.status .conn').evaluate((element) => element.getBoundingClientRect().right)).toBeLessThanOrEqual(
+      await page.locator('.status').evaluate((element) => element.getBoundingClientRect().right),
+    );
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(
+      await page.evaluate(() => document.documentElement.clientWidth),
+    );
   } finally {
     await harness.close();
   }

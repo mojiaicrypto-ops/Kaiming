@@ -9,6 +9,7 @@ import { liveHistoryRead } from './live-snapshot.ts';
 import type { SessionEventHub } from './hub.ts';
 import type { Store } from '../store/store.ts';
 import { recordedConfigOf, summarizeRecordedConfig } from '../runtime/recorded-config.ts';
+import type { ContextUsageView } from '../runtime/context-usage.ts';
 
 const SNAPSHOT_MESSAGES = 100;
 
@@ -31,6 +32,11 @@ export interface StreamMethodsOptions {
     records: readonly HistoryRecord[];
     problems?: readonly string[];
   } | undefined;
+  /**
+   * The context occupancy a reader sees on connect: live when the process holds a Pi instance for
+   * the session, otherwise only the window of the model it last ran with (or would run with).
+   */
+  readonly contextOf?: (sessionId: string) => Promise<ContextUsageView | null>;
 }
 
 export function registerStreamMethods(router: RpcRouter, options: StreamMethodsOptions): void {
@@ -38,7 +44,7 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
 
   router.register('session.stream.prepare', {
     write: false,
-    run: (params, context): unknown => {
+    run: async (params, context): Promise<unknown> => {
       const projectId = typeof params['projectId'] === 'string' ? params['projectId'] : undefined;
       const sessionId = typeof params['sessionId'] === 'string' ? params['sessionId'] : undefined;
       if (projectId === undefined || sessionId === undefined) {
@@ -64,6 +70,7 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
       const problems: readonly string[] = history.problems ?? [];
       const messages = tailHistory({ records: history.records }, SNAPSHOT_MESSAGES);
       const sessionRow = store.getSession(sessionId);
+      const contextUsage = await options.contextOf?.(sessionId) ?? null;
 
       return {
         subscriptionId: subscription.subscriptionId,
@@ -92,6 +99,9 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
           // that is the running configuration, and after it ends it is what the last run really
           // used — which is how a reader notices that the settings no longer match the work.
           config: summarizeRecordedConfig(recordedConfigOf(inputs)),
+          // How full the model's window is, as of this boundary: a reader who connects mid-run
+          // must see the same number the meter had before the reconnect.
+          context: contextUsage,
           // A blocked run is state, not an event: a reader who connects after it happened still
           // has to see why nothing is running.
           blocked: options.blockedOf?.(sessionId) ?? null,

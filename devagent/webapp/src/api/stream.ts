@@ -9,6 +9,18 @@ import type { HistoryMessage } from '../state/slot';
 /** One vocabulary for a session's live state, shared by the snapshot, the reads and the views. */
 export type SessionActivity = 'idle' | 'queued' | 'processing' | 'stopping';
 
+/** Context occupancy of one session, as the server reads it from the live Pi instance. */
+export interface ContextView {
+  /** Estimated tokens of the next request; null right after compaction. */
+  tokens: number | null;
+  contextWindow: number;
+  percent: number | null;
+  /** Pi's auto-compaction setting; null when no live instance reported it. */
+  autoCompaction: boolean | null;
+  /** False when only the window is known (no Pi instance in this process). */
+  live: boolean;
+}
+
 export interface PreparedSnapshot {
   sessionId: string;
   projectId: string;
@@ -16,6 +28,8 @@ export interface PreparedSnapshot {
   activity: SessionActivity;
   /** What the running input was configured with; null while nothing is running. */
   config?: { providerId: string; modelId: string; source: string } | null;
+  /** Context occupancy at this boundary; null when the model declares no window. */
+  context?: ContextView | null;
   /** Why the session cannot run, as of the snapshot; null when nothing is blocked. */
   blocked?: { code: string; detail: string } | null;
   currentInputId: string | null;
@@ -46,10 +60,12 @@ export interface PendingInteraction {
 }
 
 export interface StreamFrame {
-  type: 'pi' | 'invalidate' | 'blocked' | 'resync';
+  type: 'pi' | 'invalidate' | 'blocked' | 'resync' | 'context';
   seq?: number;
   inputId?: string;
   event?: { type: string; [key: string]: unknown };
+  /** Carried by a `context` notice: the occupancy itself, so no re-read is needed. */
+  context?: ContextView;
   snapshot?: PreparedSnapshot;
   code?: string;
   detail?: string;

@@ -115,10 +115,114 @@ describe('workbench entry point', () => {
     // The run really happened (the input settled), and its events really reached the reader.
     expect(frames.some((frame) => frame.includes('agent_start'))).toBe(true);
     expect(frames.some((frame) => frame.includes('message_end'))).toBe(true);
-    const listed = (await call('session.messages.list', { projectId, sessionId })) as {
+    // `message_end` above may have been the user's or a tool result's: Pi emits it per message, so
+    // the frame says nothing about the assistant entry being persisted yet. Wait for that entry
+    // itself instead of sampling the history once.
+    let listed = (await call('session.messages.list', { projectId, sessionId })) as {
       result: { messages: Array<{ role: string }> };
     };
+    for (let i = 0; i < 50 && !listed.result.messages.some((message) => message.role === 'assistant'); i += 1) {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+      listed = (await call('session.messages.list', { projectId, sessionId })) as {
+        result: { messages: Array<{ role: string }> };
+      };
+    }
     expect(listed.result.messages.some((message) => message.role === 'assistant')).toBe(true);
+  }, 60_000);
+
+  it('shows the window without a reading after a restart, until the session runs again', async () => {
+    const model = await startStubModelServer([{ kind: 'text', text: '收到。' }]);
+    const env = await createStubEnv(model.baseUrl);
+    const dataDir = mkdtempSync(join(tmpdir(), 'devagent-context-restart-'));
+    const first = await startWorkbench({
+      dataDir,
+      accessPassword: 'context-secret',
+      port: 0,
+      model: { providerId: STUB_PROVIDER, modelId: STUB_MODEL },
+      agentDir: env.agentDir,
+    });
+    let second: { origin: string; close(): Promise<void> } | undefined;
+    let firstClosed = false;
+    cleanups.push(async () => {
+      await second?.close();
+      if (!firstClosed) await first.close();
+      await model.close();
+      rmSync(dataDir, { recursive: true, force: true });
+      rmSync(env.root, { recursive: true, force: true });
+    });
+
+    const client = async (
+      origin: string,
+    ): Promise<{ call(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> }> => {
+      const login = await fetch(`${origin}/api/v1/rpc`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ method: 'auth.login', params: { password: 'context-secret' } }),
+      });
+      const cookie = /agentdev_session=([0-9a-f]+)/.exec(login.headers.get('set-cookie') ?? '')?.[1] ?? '';
+      const csrf = String(((await login.json()) as { result: { csrfToken: string } }).result.csrfToken);
+      let seq = 0;
+      return {
+        call: async (method, params) => {
+          seq += 1;
+          const response = await fetch(`${origin}/api/v1/rpc`, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              cookie: `agentdev_session=${cookie}`,
+              'x-agentdev-csrf': csrf,
+            },
+            body: JSON.stringify({ requestId: `restart-${seq}`, method, params }),
+          });
+          return (await response.json()) as Record<string, unknown>;
+        },
+      };
+    };
+
+    const before = await client(first.origin);
+    const opened = (await before.call('project.open', { path: env.cwd })) as {
+      result: { project: { projectId: string } };
+    };
+    const projectId = opened.result.project.projectId;
+    const created = (await before.call('session.create', { projectId })) as {
+      result: { session: { sessionId: string } };
+    };
+    const sessionId = created.result.session.sessionId;
+    const submitted = (await before.call('session.input.submit', {
+      projectId,
+      sessionId,
+      content: [{ type: 'text', text: '你好' }],
+    })) as { result: { inputId: string } };
+    // The run is a real subprocess-free Pi session; wait for its recorded terminal status.
+    for (let i = 0; i < 50; i += 1) {
+      const row = (await before.call('session.input.get', {
+        projectId,
+        inputId: submitted.result.inputId,
+      })) as { result: { input: { status: string } } };
+      if (row.result.input.status === 'completed') break;
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+    }
+    await first.close();
+    firstClosed = true;
+
+    // A new process holds no Pi instance: the tokens are unknown, but the model's window is not.
+    second = await startWorkbench({
+      dataDir,
+      accessPassword: 'context-secret',
+      port: 0,
+      model: { providerId: STUB_PROVIDER, modelId: STUB_MODEL },
+      agentDir: env.agentDir,
+    });
+    const after = await client(second.origin);
+    const prepared = (await after.call('session.stream.prepare', { projectId, sessionId })) as {
+      result: { snapshot: { context: Record<string, unknown> | null } };
+    };
+    expect(prepared.result.snapshot.context).toMatchObject({
+      tokens: null,
+      percent: null,
+      live: false,
+    });
+    expect(prepared.result.snapshot.context?.['contextWindow']).toBeGreaterThan(0);
   }, 60_000);
 });
 

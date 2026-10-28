@@ -46,7 +46,7 @@
 | requirement.list/get | projectId、过滤/分页或 requirementId | 使用同一文件读取服务，返回非法文件信息，不经模型 |
 | interaction.list | projectId、sessionId | 该会话当前待答问题（interactionId、method、title、message、options、placeholder、inputId、taskId、sourceSessionId、revision、createdAt）；只读，不需要实时订阅 |
 | interaction.respond | projectId、chiefSessionId、interactionId、expectedRevision、response | 请求/响应、当前主管路由、去重、保存后解除等待均按 M5；返回已收到与当前请求状态 |
-| session.stream.prepare | projectId、sessionId | subscriptionId、epoch、boundary、快照；先缓冲后读快照，见 M4 |
+| session.stream.prepare | projectId、sessionId | subscriptionId、epoch、boundary、快照；快照含 `context{tokens,contextWindow,percent,autoCompaction,live}`：有活实例时用 Pi 的估算（压缩后 tokens/percent 为 null），无实例时只给模型窗口（`live=false`，取该会话上次运行或按当前设置将运行的模型）。先缓冲后读快照，见 M4 |
 | task.report.get | projectId、taskId、resultId | 校验 Task/结果归属，读取 Server 或项目报告正文；不接受任意路径 |
 | config.get/save/clear/test | projectId?、roleId?（同时给出表示项目内该角色）；save:expectedRevision/value，clear 无版本，test:配置引用 | 脱敏有效配置与各层已存值、版本/实际试连结果；clear 幂等移除该层；密钥仅保存私有凭证引用 |
 | project.files.list/read | projectId、path；list:cursor?/limit，read:expectedVersion? | 项目相对目录/文件正文；实际路径归属检查，不访问外部符号链接 |

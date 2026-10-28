@@ -11,7 +11,7 @@
  * delta accumulation) passes through state/normalize.ts exactly once at the boundary below —
  * the reducer's internals and the renderer only ever see normalized blocks.
  */
-import type { PreparedSnapshot, SessionActivity, PendingInteraction, StreamFrame } from '../api/stream';
+import type { ContextView, PreparedSnapshot, SessionActivity, PendingInteraction, StreamFrame } from '../api/stream';
 import { normalizeMessage, normalizePiMessage } from './normalize';
 
 export type ChatRole = 'user' | 'assistant' | 'system' | 'toolResult';
@@ -91,6 +91,8 @@ export interface SessionSlot {
   /** Inputs waiting in this session's queue (submitted while a Task owns the session):
    *  they are real user messages, so the UI must show them instead of swallowing them. */
   queuedInputs: readonly { inputId: string; status: string }[];
+  /** How full the model's window is; the snapshot and every `context` notice keep it current. */
+  context: ContextView | null;
   /**
    * A message this tab submitted that has not reached the history yet. Pi writes the user turn only
    * when the run starts, so between "accepted" and "delivered" neither the stream nor a reload
@@ -110,6 +112,7 @@ export const emptySlot = (): SessionSlot => ({
   taskDetail: null,
   queuedInputs: [],
   pendingEcho: null,
+  context: null,
 });
 
 /**
@@ -289,6 +292,8 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
         queuedInputs: snapshot.inputs
           .filter((input) => input.status === 'queued')
           .map((input) => ({ inputId: input.inputId, status: input.status })),
+        // The boundary copy is authoritative on connect: a missed notice cannot leave a stale meter.
+        context: snapshot.context ?? null,
       };
     }
     case 'taskDetail':
@@ -320,6 +325,11 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
       return { ...state, pending: action.pending };
     case 'frame': {
       const { frame } = action;
+      // A context notice carries the number itself: no re-read, and it stays current between
+      // snapshots even while a run streams several responses.
+      if (frame.type === 'context') {
+        return frame.context === undefined ? state : { ...state, context: frame.context };
+      }
       if (frame.type !== 'pi' || frame.event === undefined) {
         return state;
       }

@@ -256,3 +256,50 @@ describe('slot · retained inputs', () => {
     expect(slot.queuedInputs.map((entry) => entry.inputId)).toEqual(['i-3']);
   });
 });
+
+describe('slot · context occupancy', () => {
+  const context = {
+    tokens: 616_855,
+    contextWindow: 1_000_000,
+    percent: 61.6855,
+    autoCompaction: true,
+    live: true,
+  };
+
+  it('takes the snapshot reading and then follows context notices', () => {
+    let slot = emptySlot();
+    slot = slotReducer(slot, {
+      type: 'snapshot',
+      reason: 'initial',
+      snapshot: { ...snapshotOf([]), context },
+    });
+    expect(slot.context).toEqual(context);
+
+    const next = { tokens: 700_000, contextWindow: 1_000_000, percent: 70, autoCompaction: true, live: true };
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'context', context: next } });
+    expect(slot.context).toEqual(next);
+  });
+
+  it('a snapshot without a reading clears it, and a notice without a payload changes nothing', () => {
+    let slot = slotReducer(emptySlot(), {
+      type: 'snapshot',
+      reason: 'initial',
+      snapshot: { ...snapshotOf([]), context },
+    });
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'resync', snapshot: snapshotOf([]) });
+    expect(slot.context).toBeNull();
+
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'context' } });
+    expect(slot.context).toBeNull();
+  });
+
+  it('reset clears the reading with the rest of the per-session state', () => {
+    let slot = slotReducer(emptySlot(), {
+      type: 'snapshot',
+      reason: 'initial',
+      snapshot: { ...snapshotOf([]), context },
+    });
+    slot = slotReducer(slot, { type: 'reset' });
+    expect(slot.context).toBeNull();
+  });
+});

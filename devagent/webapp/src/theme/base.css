@@ -156,10 +156,43 @@ kbd {
 }
 /* The model name is informative, never a reason to widen the shell: it clips like the path. */
 .status .model {
+  /* Last to shrink: the hint's 4× factor yields first, and a long id only gives way when the
+     line cannot hold it without pushing the connection word out. */
+  flex-shrink: 0.1;
   min-width: 0;
   max-width: 28vw;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* The keyboard hint is the one optional field on the right: when the line is tight it must be the
+   first to truncate, not the model name (whose own min-width lets it collapse first otherwise). */
+.status .hint-key {
+  flex: 0 4 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Context occupancy: text first, colour only as a second signal. The absolute pair gives way on
+   narrow screens, because the percentage is the part a reader needs at a glance. */
+.status .ctx {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s1);
+  min-width: 0;
+  flex: none;
+  color: var(--fg-3);
+}
+.status .ctx-abs {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.status .ctx[data-state="warn"] .ctx-pct {
+  color: var(--decide);
+}
+.status .ctx[data-state="danger"] .ctx-pct {
+  color: var(--block);
 }
 
 /* ---------- state glyph + word ---------- */
@@ -3166,12 +3199,24 @@ details.fold > summary.tline:hover {
   .hint {
     display: none;
   }
+  /* The status bar loses its wide-screen breathing room before its fields start clipping: the
+     model, the reading and the connection word matter more than 16px of gap. */
+  .status {
+    gap: var(--s2);
+    padding: 0 var(--s2);
+  }
 }
 
 @media (max-width: 560px) {
   /* The path and the keyboard hint are optional; the connection word is not. */
   .status .path,
   .status .hint-key {
+    display: none;
+  }
+  /* At this width only the percentage is kept; an unknown reading has no percentage to keep, so
+     it stays as `— / window` instead of disappearing. */
+  .status .ctx[data-known="true"] .ctx-abs,
+  .status .ctx[data-known="true"] .ctx-sep {
     display: none;
   }
   /* The composer spends its width on the buttons it needs; the text is what the user came to
@@ -3406,6 +3451,14 @@ details.fold > summary.tline:hover {
   }
 }
 
+/* The branch yields before the model name does: at this width the branch plus the running count
+   can squeeze the model into an ellipsis when the meter and a connection word share the line. */
+@media (max-width: 480px) {
+  .status .branch {
+    display: none;
+  }
+}
+
 /* Below 400px the header cannot hold the wordmark, four labels, the rail toggle and the
    connection state; the status bar carries the connection instead of clipping it. */
 @media (max-width: 400px) {
@@ -3418,6 +3471,11 @@ details.fold > summary.tline:hover {
     content: attr(data-glyph);
     font-size: var(--fs-14);
     line-height: 1;
+  }
+  /* The branch and the running count are descriptive; the model, the reading and the connection
+     word are what the reader acts on. Dropping the two gives those three the room. */
+  .status .st.run {
+    display: none;
   }
   .top .nav a,
   .top .nav button {

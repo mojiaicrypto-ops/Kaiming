@@ -265,6 +265,7 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
           connection={session.status}
           activity={session.slot.busy}
           config={session.config}
+          context={session.slot.context}
         />
         {projectOpen && (
           <ProjectDialog

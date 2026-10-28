@@ -32,6 +32,8 @@ import { SessionRegistry } from '../runtime/registry.ts';
 import { InputRunner } from '../runtime/runner.ts';
 import { resolveStoredConfig } from '../runtime/config.ts';
 import type { RuntimeDefaults } from '../runtime/config.ts';
+import { contextNoticeOf, contextUsageOf, windowOnlyContext, type ContextUsageView } from '../runtime/context-usage.ts';
+import { recordedConfigOf, summarizeRecordedConfig } from '../runtime/recorded-config.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 
@@ -171,6 +173,31 @@ export function startWorkbench(options: StartOptions): Promise<{
   // The runner and its worker: inputs are stored by the write surface, then actually run here.
   const factory = new PiRuntimeFactory(server);
   const registry = new SessionRegistry(factory);
+  /**
+   * The context occupancy a reader sees. A live instance answers with its own estimate; without one
+   * (a restart, a model change) only the window is knowable, and it is the window of the model the
+   * session last ran with - or the one it would run with next when it has not run yet.
+   *
+   * The meter is optional telemetry: no failure here may take down the session stream, so the whole
+   * read answers null instead of propagating.
+   */
+  const contextOf = async (sessionId: string): Promise<ContextUsageView | null> => {
+    try {
+      const handle = registry.get(sessionId);
+      if (handle !== undefined) {
+        return contextUsageOf(handle.session);
+      }
+      const session = store.getSession(sessionId);
+      if (session === undefined) return null;
+      const recorded = summarizeRecordedConfig(recordedConfigOf(store.listInputs(sessionId)));
+      const selection =
+        recorded ??
+        resolveStoredConfig({ roleId: session.roleId, projectId: session.projectId, server, store }).selection;
+      return windowOnlyContext((await factory.facts(selection))?.contextWindow);
+    } catch {
+      return null;
+    }
+  };
   const interactions = new InteractionBridge({
     store,
     publish: (sessionId, event, meta) => {
@@ -208,6 +235,23 @@ export function startWorkbench(options: StartOptions): Promise<{
       hub.publish(sessionId, projectEventImages(event, server.agentDir) as typeof event, {
         inputId: meta.inputId,
         epoch: meta.epoch,
+      });
+      // Occupancy moves only when a response or a compaction lands. Pi emits message_end *before*
+      // it appends the message, so the estimate is taken on a microtask: the append and the rest of
+      // the run keep their order, and the reader's next frame is still in the same tick. Observation
+      // must never break the run: a failed estimate leaves the last value until the next snapshot.
+      const type = (event as { type?: unknown }).type;
+      const assistant = (event as { message?: { role?: unknown } }).message?.role === 'assistant';
+      if (!(type === 'message_end' && assistant) && type !== 'compaction_end') return;
+      queueMicrotask(() => {
+        try {
+          const notice = contextNoticeOf(event, registry.get(sessionId)?.session);
+          if (notice !== null) {
+            hub.publish(sessionId, notice, { inputId: meta.inputId, epoch: meta.epoch });
+          }
+        } catch {
+          // No frame; the next response or a resync will update the meter.
+        }
       });
     },
     // A hung provider or a run that never ends must reach a terminal state, not block its
@@ -286,6 +330,7 @@ export function startWorkbench(options: StartOptions): Promise<{
     blockedOf,
     attachmentDir: server.agentDir,
     epochOf: (sessionId) => epoch(sessionId),
+    contextOf,
     currentHistory: (sessionId) => {
       const handle = registry.get(sessionId);
       if (handle === undefined) return undefined;
