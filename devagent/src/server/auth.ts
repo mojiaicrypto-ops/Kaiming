@@ -62,6 +62,14 @@ export class AuthService {
     return { cookie: this.cookieFor(value), csrfToken };
   }
 
+  /**
+   * Check the access password without creating a session. Machine callers (the `/mcp` endpoint) present
+   * it as a bearer token on every request; they do not hold a browser cookie.
+   */
+  verifyPassword(password: string): boolean {
+    return safeEqual(digest(password), this.passwordDigest);
+  }
+
   /** Resolve a session from a Cookie header, refreshing its idle window. Expired sessions are dropped. */
   resolve(cookieHeader: string | undefined): { readonly value: string; readonly csrfToken: string } | undefined {
     const value = cookieValue(cookieHeader);

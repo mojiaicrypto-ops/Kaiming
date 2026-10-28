@@ -590,4 +590,33 @@ describe('startup scan and abandoned questions', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('migrates a v14 database by adding the external-channel column and its unique index', () => {
+    const { store, path } = openStore();
+    closeStore(store);
+
+    // Emulates the previous release: no channel column, no partial unique index, version rolled back.
+    const raw = new DatabaseSync(path);
+    raw.exec('DROP INDEX IF EXISTS idx_sessions_channel');
+    raw.exec('ALTER TABLE sessions DROP COLUMN channel');
+    raw.exec('PRAGMA user_version = 14');
+    raw.close();
+
+    const migrated = new Store({ path, serverEpoch: 1 });
+    stores.push(migrated);
+    expect(migrated.pragmas().userVersion).toBe(SCHEMA_VERSION);
+
+    migrated.createProject({ id: 'p-channel', realPath: '/tmp/channel-project' });
+    migrated.createSession({ id: 's-fixed', projectId: 'p-channel', roleId: 'chief', cwd: '/tmp/channel-project', channel: 'mcp' });
+    expect(migrated.getSessionByChannel('p-channel', 'mcp')?.id).toBe('s-fixed');
+    // One fixed session per channel: a second one is refused by the index, not by convention.
+    expect(() =>
+      migrated.createSession({ id: 's-second', projectId: 'p-channel', roleId: 'chief', cwd: '/tmp/channel-project', channel: 'mcp' }),
+    ).toThrow();
+    // Ordinary sessions keep channel NULL, and the partial index does not restrict them.
+    migrated.createSession({ id: 's-ui-1', projectId: 'p-channel', roleId: 'chief', cwd: '/tmp/channel-project' });
+    migrated.createSession({ id: 's-ui-2', projectId: 'p-channel', roleId: 'chief', cwd: '/tmp/channel-project' });
+    expect(migrated.listSessionSummaries('p-channel').find((row) => row.id === 's-fixed')?.channel).toBe('mcp');
+  });
+
 });

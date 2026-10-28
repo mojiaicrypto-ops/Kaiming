@@ -12,6 +12,10 @@ import { Store } from '../store/store.ts';
 import { AuthService } from './auth.ts';
 import { RpcRouter } from './rpc.ts';
 import { createWorkbenchServer } from './http.ts';
+import { inProcessControl } from '../mcp/control.ts';
+import { createMcpHttpHandler } from '../mcp/http.ts';
+import { createMcpProtocol } from '../mcp/protocol.ts';
+import { RunTools } from '../mcp/runs.ts';
 import { registerCoreMethods } from './methods.ts';
 import { registerReadMethods } from './read-methods.ts';
 import { registerWriteMethods } from './write-methods.ts';
@@ -48,6 +52,11 @@ export interface StartOptions {
   /** Run watchdog: abort a run exceeding this total duration (default 90 min). */
   readonly runTotalMs?: number;
   readonly now?: () => string;
+  /**
+   * Where startup diagnostics go. Defaults to stderr: a caller that hosts this workbench inside
+   * another protocol (the MCP stdio server) must keep fd 1 free for its own messages.
+   */
+  readonly log?: (line: string) => void;
 }
 
 export function startWorkbench(options: StartOptions): Promise<{
@@ -56,6 +65,7 @@ export function startWorkbench(options: StartOptions): Promise<{
   close(): Promise<void>;
 }> {
   mkdirSync(options.dataDir, { recursive: true });
+  const log = options.log ?? ((line: string): void => void process.stderr.write(`${line}\n`));
   // A new process is a new generation: the store classifies work left `processing` by an earlier
   // generation as interrupted, and a reconnecting reader resyncs instead of trusting a stale epoch.
   const serverEpoch = options.serverEpoch ?? Date.now() % 2_147_483_647;
@@ -63,7 +73,7 @@ export function startWorkbench(options: StartOptions): Promise<{
   // Work started by a process that is gone can never finish on its own: say so before serving.
   const startup = store.scanStartup();
   if (startup.interrupted > 0) {
-    process.stdout.write(`${startup.interrupted} input(s) from an earlier run are now interrupted and await verification\n`);
+    log(`${startup.interrupted} input(s) from an earlier run are now interrupted and await verification`);
   }
   // A chief cannot resolve its own interrupted input (the claim gate refuses the session, so
   // it can never run) — yet that same gate freezes every later input of the session, the
@@ -75,9 +85,9 @@ export function startWorkbench(options: StartOptions): Promise<{
         code: 'process-restart',
         detail: 'the process that ran it is gone',
       });
-      process.stdout.write(`host closed interrupted chief input ${frozen.inputId}\n`);
+      log(`host closed interrupted chief input ${frozen.inputId}`);
     } catch (error) {
-      process.stdout.write(`could not close interrupted chief input ${frozen.inputId}: ${String(error)}\n`);
+      log(`could not close interrupted chief input ${frozen.inputId}: ${String(error)}`);
     }
   }
   // Tell the owning chief: an interrupted member input blocks its step (claim refuses the
@@ -114,7 +124,7 @@ export function startWorkbench(options: StartOptions): Promise<{
         ],
       },
     });
-    process.stdout.write(`recovery notice queued for chief ${interrupted.chiefSessionId} (input ${interrupted.inputId})\n`);
+    log(`recovery notice queued for chief ${interrupted.chiefSessionId} (input ${interrupted.inputId})`);
   }
   const server: RuntimeDefaults = {
     model: options.model ?? { providerId: 'unset', modelId: 'unset' },
@@ -283,11 +293,32 @@ export function startWorkbench(options: StartOptions): Promise<{
     },
   });
 
+  /**
+   * The MCP endpoint (product module external-agents): other coding agents call the same router in
+   * this process, so there is one server, one store and one dispatcher. A protocol instance per
+   * request keeps the caller's identity attached to anything it answers.
+   */
+  const mcpHandler = createMcpHttpHandler({
+    protocolFor: (actor) =>
+      createMcpProtocol({
+        tools: new RunTools({
+          control: inProcessControl({ router, store, actor }),
+          // The endpoint serves every project, so inheriting the server's cwd would delegate into
+          // whatever directory it was started in. Remote callers name the project explicitly.
+          defaultProjectPath: resolve(process.env['AGENTDEV_MCP_PROJECT'] ?? process.cwd()),
+          requireProjectPath: process.env['AGENTDEV_MCP_PROJECT'] === undefined,
+          caller: 'an MCP client',
+        }),
+        info: { name: 'agentdev', title: 'AgentDev', version: '0.1.0' },
+        log: (line) => process.stderr.write(`[mcp] ${line}\n`),
+      }),
+  });
   const workbench = createWorkbenchServer({
     store,
     auth,
     router,
     hub,
+    mcp: (request, response, actor) => mcpHandler.handle(request, response, actor),
     // The browser surface is served from the same origin (R1). The React build output is the
     // whole shell now: `web-static/index.html` plus hashed assets, mounted at `/`.
     staticDir: options.staticDir ?? resolve(here, '../../web-static'),

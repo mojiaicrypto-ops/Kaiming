@@ -1,0 +1,279 @@
+{
+  "description": "One answer to 'what are the Task's steps', shared by the browser flow (webapp/src/chat/task-flow.ts) and the external surface (src/runtime/task-progress.ts). Both packages have a unit test reading this file, so a change to either rule fails against the other.",
+  "cases": [
+    {
+      "name": "design running, Test declared",
+      "task": {
+        "type": "write",
+        "phase": "design",
+        "status": "active",
+        "requiresTest": true
+      },
+      "members": [
+        {
+          "phase": "design",
+          "roleId": "designer",
+          "label": "Designer",
+          "activity": "processing",
+          "lastInputStatus": null
+        }
+      ],
+      "steps": [
+        {
+          "phase": "design",
+          "round": 1,
+          "state": "in_progress"
+        },
+        {
+          "phase": "review",
+          "round": 1,
+          "state": "planned"
+        },
+        {
+          "phase": "test",
+          "round": 1,
+          "state": "planned"
+        },
+        {
+          "phase": "settle",
+          "round": 1,
+          "state": "planned"
+        }
+      ],
+      "stepsDone": 0,
+      "stepsTotal": 4
+    },
+    {
+      "name": "design done, nothing dispatched at the current phase",
+      "task": {
+        "type": "write",
+        "phase": "review",
+        "status": "active",
+        "requiresTest": false
+      },
+      "members": [
+        {
+          "phase": "design",
+          "roleId": "designer",
+          "label": "Designer",
+          "activity": "idle",
+          "lastInputStatus": "completed"
+        }
+      ],
+      "steps": [
+        {
+          "phase": "design",
+          "round": 1,
+          "state": "completed"
+        },
+        {
+          "phase": "review",
+          "round": 1,
+          "state": "in_progress"
+        },
+        {
+          "phase": "settle",
+          "round": 1,
+          "state": "planned"
+        }
+      ],
+      "stepsDone": 1,
+      "stepsTotal": 3
+    },
+    {
+      "name": "rework: develop, review, develop again",
+      "task": {
+        "type": "write",
+        "phase": "develop",
+        "status": "active",
+        "requiresTest": false
+      },
+      "members": [
+        {
+          "phase": "develop",
+          "roleId": "developer",
+          "label": "Developer",
+          "activity": "idle",
+          "lastInputStatus": "completed"
+        },
+        {
+          "phase": "review",
+          "roleId": "reviewer",
+          "label": "Reviewer",
+          "activity": "idle",
+          "lastInputStatus": "failed"
+        },
+        {
+          "phase": "develop",
+          "roleId": "developer",
+          "label": "Developer",
+          "activity": "processing",
+          "lastInputStatus": null
+        }
+      ],
+      "steps": [
+        {
+          "phase": "develop",
+          "round": 1,
+          "state": "completed"
+        },
+        {
+          "phase": "review",
+          "round": 1,
+          "state": "in_progress"
+        },
+        {
+          "phase": "develop",
+          "round": 2,
+          "state": "in_progress"
+        },
+        {
+          "phase": "settle",
+          "round": 1,
+          "state": "planned"
+        }
+      ],
+      "stepsDone": 1,
+      "stepsTotal": 4
+    },
+    {
+      "name": "read Task owes no tail",
+      "task": {
+        "type": "read",
+        "phase": "analyze",
+        "status": "active",
+        "requiresTest": false
+      },
+      "members": [
+        {
+          "phase": "analyze",
+          "roleId": "investigator",
+          "label": "Investigator",
+          "activity": "processing",
+          "lastInputStatus": null
+        }
+      ],
+      "steps": [
+        {
+          "phase": "analyze",
+          "round": 1,
+          "state": "in_progress"
+        }
+      ],
+      "stepsDone": 0,
+      "stepsTotal": 1
+    },
+    {
+      "name": "paused Task promises nothing further",
+      "task": {
+        "type": "write",
+        "phase": "develop",
+        "status": "paused",
+        "requiresTest": true
+      },
+      "members": [
+        {
+          "phase": "develop",
+          "roleId": "developer",
+          "label": "Developer",
+          "activity": "idle",
+          "lastInputStatus": "completed"
+        }
+      ],
+      "steps": [
+        {
+          "phase": "develop",
+          "round": 1,
+          "state": "completed"
+        }
+      ],
+      "stepsDone": 1,
+      "stepsTotal": 1
+    },
+    {
+      "name": "cancelled Task promises nothing further",
+      "task": {
+        "type": "write",
+        "phase": "review",
+        "status": "cancelled",
+        "requiresTest": false
+      },
+      "members": [
+        {
+          "phase": "design",
+          "roleId": "designer",
+          "label": "Designer",
+          "activity": "idle",
+          "lastInputStatus": "completed"
+        },
+        {
+          "phase": "review",
+          "roleId": "reviewer",
+          "label": "Reviewer",
+          "activity": "idle",
+          "lastInputStatus": "stopped"
+        }
+      ],
+      "steps": [
+        {
+          "phase": "design",
+          "round": 1,
+          "state": "completed"
+        },
+        {
+          "phase": "review",
+          "round": 1,
+          "state": "in_progress"
+        }
+      ],
+      "stepsDone": 1,
+      "stepsTotal": 2
+    },
+    {
+      "name": "review finished, report failed",
+      "task": {
+        "type": "write",
+        "phase": "review",
+        "status": "active",
+        "requiresTest": false
+      },
+      "members": [
+        {
+          "phase": "design",
+          "roleId": "designer",
+          "label": "Designer",
+          "activity": "idle",
+          "lastInputStatus": "completed",
+          "latestVerdict": null
+        },
+        {
+          "phase": "review",
+          "roleId": "reviewer",
+          "label": "Reviewer",
+          "activity": "idle",
+          "lastInputStatus": "completed",
+          "latestVerdict": "failed"
+        }
+      ],
+      "steps": [
+        {
+          "phase": "design",
+          "round": 1,
+          "state": "completed"
+        },
+        {
+          "phase": "review",
+          "round": 1,
+          "state": "in_progress"
+        },
+        {
+          "phase": "settle",
+          "round": 1,
+          "state": "planned"
+        }
+      ],
+      "stepsDone": 1,
+      "stepsTotal": 3
+    }
+  ]
+}

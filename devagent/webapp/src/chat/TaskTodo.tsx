@@ -157,7 +157,23 @@ export function TaskTodo({ detail, members, pendingQuestions, planMarkdown, onFo
   );
 }
 
-/** One roster row: glyph + role (+ rework marker) + note, the live state on the right. */
+/** One member row's glyph and word. A finished input is not a pass on its own: the latest report's
+ * verdict decides, the same predicate `task-flow.ts` uses for steps (X-04: the two must agree).
+ */
+export function memberRowState(row: TaskMemberRow): {
+  readonly kind: 'decide' | 'run' | 'wait' | 'block' | 'done' | 'idle';
+  readonly note: 'asking' | 'running' | 'queued' | 'failed' | 'done' | 'idle';
+} {
+  const verdict = row.latestVerdict ?? null;
+  if (row.waitingUser === true) return { kind: 'decide', note: 'asking' };
+  if (row.activity === 'processing') return { kind: 'run', note: 'running' };
+  if (row.activity === 'queued') return { kind: 'wait', note: 'queued' };
+  if (verdict === 'blocked') return { kind: 'decide', note: 'asking' };
+  if (row.lastInputStatus === 'failed' || verdict === 'failed') return { kind: 'block', note: 'failed' };
+  if (row.lastInputStatus === 'completed') return { kind: 'done', note: 'done' };
+  return { kind: 'idle', note: 'idle' };
+}
+
 function TodoMemberRow({
   row,
   laterRound,
@@ -171,19 +187,12 @@ function TodoMemberRow({
   // A member back at work after its report already exists is rework, not a first pass; and a
   // failed assignment is the evidence that triggered whatever round follows it.
   const rework = laterRound && row.activity === 'processing';
-  const failed = row.lastInputStatus === 'failed';
-  const kind = row.waitingUser === true ? 'decide' : row.activity === 'processing' ? 'run' : row.activity === 'queued' ? 'wait' : failed ? 'block' : row.lastInputStatus === 'completed' ? 'done' : 'idle';
-  const label = row.waitingUser === true
-    ? t('task.note.asking', { title: row.note === '' ? '' : row.note })
-    : row.activity === 'processing'
-      ? t('task.state.running')
-      : row.activity === 'queued'
-        ? t('task.state.queued')
-        : failed
-          ? t('task.state.failed')
-          : row.lastInputStatus === 'completed'
-            ? t('task.state.done')
-            : t('task.state.idle');
+  const state = memberRowState(row);
+  const kind = state.kind;
+  const label =
+    state.note === 'asking'
+      ? t('task.note.asking', { title: row.note === '' ? '' : row.note })
+      : t(`task.state.${state.note}` as 'task.state.done');
   return (
     <button type="button" className="mrow" data-testid="task-member-row" onClick={() => onFollow(row.sessionId)}>
       <State kind={kind} />

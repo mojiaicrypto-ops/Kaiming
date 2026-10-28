@@ -372,11 +372,13 @@ export interface CreateSessionParams {
   readonly roleId: string;
   readonly cwd: string;
   readonly specialization?: string;
+  /** An external channel owns at most one session per project (unique index enforces it). */
+  readonly channel?: string;
 }
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -465,6 +467,10 @@ CREATE TABLE IF NOT EXISTS interactions (
   updatedAt TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_interactions_session_state ON interactions (sessionId, state, createdAt);`;
+
+/** One fixed session per (project, external channel): the MCP surface must never create a second. */
+const SESSIONS_CHANNEL_SQL =
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_channel ON sessions (projectId, channel) WHERE channel IS NOT NULL;';
 
 /** Tables added by the v3 → v4 migration (professional Session membership of a Task). */
 const V4_DDL = `
@@ -608,6 +614,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   recoveryBlock TEXT,
   /** The name the user gave this conversation; NULL keeps the derived title from the first input. */
   title TEXT,
+  /** The external channel this session is the fixed home of ('mcp'), or NULL for an ordinary one. */
+  channel TEXT,
   revision INTEGER NOT NULL DEFAULT 1,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
@@ -844,9 +852,18 @@ export class Store {
     const timestamp = this.clock();
     this.db
       .prepare(
-        'INSERT INTO sessions (id, projectId, roleId, specialization, cwd, revision, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, 1, ?, ?)',
+        'INSERT INTO sessions (id, projectId, roleId, specialization, cwd, channel, revision, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)',
       )
-      .run(params.id, params.projectId, params.roleId, params.specialization ?? null, params.cwd, timestamp, timestamp);
+      .run(
+        params.id,
+        params.projectId,
+        params.roleId,
+        params.specialization ?? null,
+        params.cwd,
+        params.channel ?? null,
+        timestamp,
+        timestamp,
+      );
   }
 
   /**
@@ -2011,13 +2028,15 @@ export class Store {
     stopping: number;
     /** The name the user gave this conversation, or null when it still derives one. */
     storedTitle: string | null;
+    /** The external channel this session is the fixed home of, or null for an ordinary one. */
+    channel: string | null;
     /** The first user input's payload (JSON), the raw material for a derived title. */
     derivedTitle: string | null;
   }> {
     const rows = this.db
       .prepare(
         `SELECT s.id AS id, s.roleId AS roleId, s.revision AS revision, s.currentTaskId AS currentTaskId,
-                s.title AS storedTitle,
+                s.title AS storedTitle, s.channel AS channel,
                 MAX(i.updatedAt) AS lastActivityAt,
                 SUM(CASE WHEN i.status = 'processing' THEN 1 ELSE 0 END) AS processing,
                 SUM(CASE WHEN i.status = 'queued' THEN 1 ELSE 0 END) AS queued,
@@ -2032,6 +2051,7 @@ export class Store {
       revision: number;
       currentTaskId: string | null;
       storedTitle: string | null;
+      channel: string | null;
       lastActivityAt: string | null;
       processing: number | null;
       queued: number | null;
@@ -2065,6 +2085,7 @@ export class Store {
       queued: row.queued ?? 0,
       stopping: row.stopping ?? 0,
       storedTitle: row.storedTitle ?? null,
+      channel: row.channel ?? null,
       derivedTitle: titles.get(row.id) ?? null,
     }));
   }
@@ -2118,11 +2139,12 @@ export class Store {
     configRef: string | null;
     currentTaskId: string | null;
     title: string | null;
+    channel: string | null;
     revision: number;
   } | undefined {
     return this.db
       .prepare(
-        'SELECT id, projectId, roleId, specialization, cwd, configRef, currentTaskId, title, revision FROM sessions WHERE id = ?',
+        'SELECT id, projectId, roleId, specialization, cwd, configRef, currentTaskId, title, channel, revision FROM sessions WHERE id = ?',
       )
       .get(sessionId) as
       | {
@@ -2134,9 +2156,17 @@ export class Store {
           configRef: string | null;
           currentTaskId: string | null;
           title: string | null;
+          channel: string | null;
           revision: number;
         }
       | undefined;
+  }
+
+  /** The fixed session of an external channel (`mcp`), if the project already has one. */
+  getSessionByChannel(projectId: string, channel: string): { id: string; channel: string | null } | undefined {
+    return this.db
+      .prepare('SELECT id, channel FROM sessions WHERE projectId = ? AND channel = ?')
+      .get(projectId, channel) as { id: string; channel: string | null } | undefined;
   }
 
   /** Pi file binding for a logical session (S2 session_bindings): never pick "the newest file". */
@@ -3174,6 +3204,19 @@ export class Store {
    * with the same shape. No existing record changes, and no history is back-filled: statistics start
    * when the installation starts recording them.
    */
+  /**
+   * v14 → v15: an external channel owns one fixed session per project. Additive — existing rows keep
+   * channel NULL and the partial unique index ignores them — and idempotent, because a database this
+   * revision creates already carries the column through SCHEMA_SQL.
+   */
+  private migrateV14ToV15(): void {
+    this.transaction(() => {
+      this.addColumn('sessions', 'channel', 'TEXT');
+      this.db.exec(SESSIONS_CHANNEL_SQL);
+      this.db.exec('PRAGMA user_version = 15;');
+    });
+  }
+
   private migrateV13ToV14(): void {
     this.transaction(() => {
       this.db.exec(USAGE_LEDGER_SQL);
@@ -3303,6 +3346,7 @@ export class Store {
         [11, () => this.migrateV11ToV12()],
         [12, () => this.migrateV12ToV13()],
         [13, () => this.migrateV13ToV14()],
+        [14, () => this.migrateV14ToV15()],
       ];
       for (const [from, step] of steps) {
         if (this.pragmas().userVersion === from) {

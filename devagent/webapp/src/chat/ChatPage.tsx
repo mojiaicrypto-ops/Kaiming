@@ -265,6 +265,8 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, proje
       );
       const waitingUser = question !== undefined;
       const report = [...detail.results].reverse().find((entry) => entry.sessionId === member.sessionId && entry.summary);
+      // The latest report (save order, reversed) decides whether a finished input counts as a pass.
+      const latest = [...detail.results].reverse().find((entry) => entry.sessionId === member.sessionId);
       const note =
         waitingUser && question !== undefined
           ? t('task.note.asking', { title: question.title })
@@ -283,6 +285,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, proje
         assignment: member.label === '' || member.label === member.roleId ? '' : member.label,
         activity,
         lastInputStatus,
+        latestVerdict: latest?.verdict ?? null,
         waitingUser,
         note,
       };

@@ -879,4 +879,64 @@ describe('read-only query surface', () => {
     expect(errorCode(unknown.body)).toBe('INVALID_ARGUMENT');
   });
 
+
+  it('opens one fixed session per external channel, and says which channel a session belongs to', async () => {
+    const h = await harness();
+    const first = await h.call('session.open', { projectId: h.projectId, channel: 'mcp' });
+    expect(first.status).toBe(200);
+    const opened = first.body['result'] as { session: { sessionId: string }; created: boolean };
+    expect(opened.created).toBe(true);
+
+    // Two callers asking at the same time still get one session: the unique index decides.
+    const raced = await Promise.all([
+      h.call('session.open', { projectId: h.projectId, channel: 'race' }),
+      h.call('session.open', { projectId: h.projectId, channel: 'race' }),
+    ]);
+    const racedIds = raced.map((entry) => (entry.body['result'] as { session: { sessionId: string } }).session.sessionId);
+    expect(raced.every((entry) => entry.status === 200)).toBe(true);
+    expect(new Set(racedIds).size).toBe(1);
+
+    const again = await h.call('session.open', { projectId: h.projectId, channel: 'mcp' });
+    const reopened = again.body['result'] as { session: { sessionId: string }; created: boolean };
+    expect(reopened.created).toBe(false);
+    expect(reopened.session.sessionId).toBe(opened.session.sessionId);
+
+    // A second channel is a second session; the same channel is never a third one.
+    const other = await h.call('session.open', { projectId: h.projectId, channel: 'other' });
+    expect((other.body['result'] as { session: { sessionId: string } }).session.sessionId).not.toBe(
+      opened.session.sessionId,
+    );
+
+    // A channel name is a program identity, not free text.
+    const refused = await h.call('session.open', { projectId: h.projectId, channel: 'MCP Channel' });
+    expect(refused.status).toBe(400);
+    expect(errorCode(refused.body)).toBe('INVALID_ARGUMENT');
+
+    // The rail can label the fixed session instead of presenting it as an ordinary chat.
+    const list = await h.call('session.list', { projectId: h.projectId });
+    const rows = (list.body['result'] as { sessions: Array<{ sessionId: string; channel: string | null }> }).sessions;
+    expect(rows.find((row) => row.sessionId === opened.session.sessionId)?.channel).toBe('mcp');
+    expect(rows.find((row) => row.sessionId === 's-chief')?.channel).toBeNull();
+  });
+
+  it('lists the questions a session is waiting on, without a live subscription', async () => {
+    const h = await harness();
+    h.store.createInteraction({
+      interactionId: 'q-read',
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      inputId: 'i-user',
+      method: 'select',
+      title: '是否继续？',
+      message: '需要你决定',
+      options: ['继续', '暂停'],
+      requestKey: 'q-read',
+    });
+    const listed = await h.call('interaction.list', { projectId: h.projectId, sessionId: 's-chief' });
+    expect(listed.status).toBe(200);
+    const interactions = (listed.body['result'] as { interactions: Array<Record<string, unknown>> }).interactions;
+    expect(interactions).toHaveLength(1);
+    expect(interactions[0]).toMatchObject({ interactionId: 'q-read', method: 'select', options: ['继续', '暂停'] });
+  });
+
 });

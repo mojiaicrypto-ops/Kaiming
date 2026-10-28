@@ -18,6 +18,8 @@ const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
 /** Binary image upload (U6): one request carries one image, so no JSON envelope is involved. */
 export const UPLOAD_PATH = '/api/v1/uploads';
 export const ATTACHMENT_PATH_PREFIX = '/api/v1/attachments/';
+/** The MCP endpoint (Streamable HTTP): one path, POST/GET/DELETE. */
+export const MCP_PATH = '/mcp';
 /**
  * Bytes of one project file (U11): the viewer shows images, video and downloads through this
  * address because `project.files.read` only carries text. Read-only and project-scoped; the
@@ -45,6 +47,11 @@ export interface WorkbenchServerOptions {
   readonly bodyLimitBytes?: number;
   /** Origin allowed to call this server; defaults to the request's own host (same-origin). */
   readonly allowedOrigin?: (requestOrigin: string, host: string | undefined) => boolean;
+  /**
+   * The MCP endpoint (`/mcp`): this layer owns the access password and the Origin check, and hands
+   * the protocol handler a resolved actor. No handler means the endpoint is not mounted.
+   */
+  readonly mcp?: (request: IncomingMessage, response: ServerResponse, actor: string) => Promise<void>;
 }
 
 export interface WorkbenchServer {
@@ -84,6 +91,23 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
     }
     if ((request.method === 'GET' || request.method === 'HEAD') && path.startsWith(PROJECT_FILE_PATH_PREFIX)) {
       await handleProjectFile(request, response, path.slice(PROJECT_FILE_PATH_PREFIX.length), url.includes('?download=1'));
+      return;
+    }
+    if (path === MCP_PATH && options.mcp !== undefined) {
+      const requestOrigin = request.headers.origin;
+      if (typeof requestOrigin === 'string' && !sameOrigin(requestOrigin, request.headers.host)) {
+        writeJson(response, 403, { requestId: 'unknown', error: { code: 'FORBIDDEN', message: 'cross-origin calls are not accepted' } });
+        return;
+      }
+      const actor = mcpActor(request);
+      if (actor === undefined) {
+        writeJson(response, 401, {
+          requestId: 'unknown',
+          error: { code: 'UNAUTHORIZED', message: 'authenticate with the access password' },
+        });
+        return;
+      }
+      await options.mcp(request, response, actor);
       return;
     }
     if (request.method === 'POST' && path === RPC_PATH) {
@@ -126,6 +150,20 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
       requestId: 'unknown',
       error: { code: 'NOT_FOUND', message: `${request.method ?? 'GET'} ${path} is not available` },
     });
+  }
+
+  /**
+   * Who is calling the MCP endpoint: a browser cookie session, or the access password as a bearer
+   * token (machine callers, which do not hold cookies). Anything else is refused above.
+   */
+  function mcpActor(request: IncomingMessage): string | undefined {
+    const session = options.auth.resolve(request.headers.cookie);
+    if (session !== undefined) return session.value;
+    const authorization = request.headers.authorization;
+    if (typeof authorization === 'string' && authorization.startsWith('Bearer ')) {
+      return options.auth.verifyPassword(authorization.slice('Bearer '.length)) ? 'mcp' : undefined;
+    }
+    return undefined;
   }
 
   async function handleRpc(request: IncomingMessage, response: ServerResponse): Promise<void> {

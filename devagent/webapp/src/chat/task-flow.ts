@@ -39,17 +39,26 @@ export interface FlowInput {
     readonly activity?: string | undefined;
     readonly lastInputStatus?: 'completed' | 'failed' | 'stopped' | 'interrupted' | null;
     readonly waitingUser?: boolean | undefined;
+    /** Verdict of the member's latest report: an input that ended normally is not a pass. */
+    readonly latestVerdict?: string | null | undefined;
   }[];
   /** Open questions anywhere in the Task: they outrank any member state, it is the user's turn. */
   readonly pendingQuestions: number;
+}
+
+/** Same predicate as `src/runtime/task-progress.ts`'s `memberPassed`: input ended, report agrees. */
+function memberPassed(member: FlowInput['members'][number]): boolean {
+  const verdict = member.latestVerdict ?? null;
+  return member.lastInputStatus === 'completed' && verdict !== 'failed' && verdict !== 'blocked';
 }
 
 function memberKind(member: FlowInput['members'][number]): StateKind {
   if (member.waitingUser === true) return 'decide';
   if (member.activity === 'processing') return 'run';
   if (member.activity === 'queued') return 'wait';
-  if (member.lastInputStatus === 'failed') return 'block';
-  if (member.lastInputStatus === 'completed') return 'done';
+  if (member.latestVerdict === 'blocked') return 'decide';
+  if (member.lastInputStatus === 'failed' || member.latestVerdict === 'failed') return 'block';
+  if (memberPassed(member)) return 'done';
   return 'idle';
 }
 
@@ -91,13 +100,14 @@ export function flowOf({ task, members, pendingQuestions }: FlowInput): readonly
       phase: group.phase,
       round: group.round,
       kind: frontier ? 'wait' : kind,
-      done: !frontier && kind === 'done' && group.rows.every((row) => row.lastInputStatus === 'completed'),
+      done: !frontier && kind === 'done' && group.rows.every(memberPassed),
       members: group.rows.length,
       running: group.rows.filter((row) => row.activity === 'processing').length,
     };
   });
-  // A paused Task is not going anywhere until the user says so: no tail is promised.
-  const moving = task.status !== 'paused' && task.status !== 'pausing';
+  // A Task that is not moving (paused, cancelled, already completed) promises nothing further.
+  const moving =
+    task.status !== 'paused' && task.status !== 'pausing' && task.status !== 'cancelled' && task.status !== 'completed';
   const planned = moving ? plannedTail(task, groups.map((group) => group.phase)) : [];
   return [
     ...steps,

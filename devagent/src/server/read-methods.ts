@@ -9,6 +9,7 @@ import { RpcError, type RpcRouter } from './rpc.ts';
 import { pageHistory, pageHistoryBefore, readPiHistory } from './history.ts';
 import { digestOfText, getRequirement, listRequirements, requirementPath } from '../runtime/requirement-store.ts';
 import { readReportBody } from '../runtime/report-store.ts';
+import { readPlan } from '../runtime/plan-store.ts';
 import { mimeTypeOf, resolveInsideProject } from './fs-guard.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
 import type { Store } from '../store/store.ts';
@@ -189,6 +190,33 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
     },
   });
 
+  router.register('session.open', {
+    // Idempotent by construction: one session per (project, channel), enforced by a unique index.
+    // External callers cannot choose a session, so this is the only way they may obtain one.
+    write: true,
+    run: (params): unknown => {
+      const project = requireProject(store, params);
+      const channel = readString(params, 'channel');
+      if (channel === undefined || !/^[a-z0-9-]{1,32}$/.test(channel)) {
+        throw new RpcError('INVALID_ARGUMENT', 'channel must be 1-32 lowercase letters, digits or hyphens');
+      }
+      const existing = store.getSessionByChannel(project.id, channel);
+      if (existing !== undefined) {
+        return { session: requireSession(store, project.id, existing.id, options.blockedOf), created: false };
+      }
+      const id = `s-${digestOfText(`${project.id}:${channel}:${Date.now()}:${Math.random()}`).slice(0, 12)}`;
+      try {
+        store.createSession({ id, projectId: project.id, roleId: 'chief', cwd: project.realPath, channel });
+      } catch {
+        // A concurrent open won the unique index: return the winner rather than a second session.
+        const winner = store.getSessionByChannel(project.id, channel);
+        if (winner === undefined) throw new RpcError('VERSION_CONFLICT', 'the channel session could not be opened');
+        return { session: requireSession(store, project.id, winner.id, options.blockedOf), created: false };
+      }
+      return { session: requireSession(store, project.id, id, options.blockedOf), created: true };
+    },
+  });
+
   router.register('session.get', {
     write: false,
     run: (params): unknown => {
@@ -223,6 +251,9 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
           // A name the user typed is returned as typed (the rail ellipsizes it); only a title derived
           // from a message payload needs extracting and shortening.
           title: row.storedTitle ?? titleOf(row.derivedTitle),
+          // An external channel owns exactly one fixed session (MCP): the list says which, so the
+          // browser can label it instead of presenting it as a stranger's chat.
+          channel: row.channel,
           activity: activityOfCounts(row.processing, row.queued, row.stopping),
           lastActivityAt: row.lastActivityAt,
           currentTaskId: row.currentTaskId,
@@ -247,6 +278,39 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       return {
         sessions: page,
         nextCursor: start + limit < rows.length && last !== undefined ? key(last) : null,
+      };
+    },
+  });
+
+  router.register('interaction.list', {
+    // Pending questions of one session, in the shape the stream snapshot already uses (M5): a
+    // caller that can ask "what is waiting" does not have to hold a live subscription to find out.
+    write: false,
+    run: (params): unknown => {
+      const project = requireProject(store, params);
+      const sessionId = readString(params, 'sessionId');
+      if (sessionId === undefined) {
+        throw new RpcError('INVALID_ARGUMENT', 'sessionId is required');
+      }
+      const session = requireSession(store, project.id, sessionId);
+      const rows =
+        session.roleId === 'chief'
+          ? store.listPendingInteractionsForChief(sessionId)
+          : store.listPendingInteractions(sessionId);
+      return {
+        interactions: rows.map((interaction) => ({
+          interactionId: interaction.interactionId,
+          method: interaction.method,
+          title: interaction.title,
+          message: interaction.message,
+          options: interaction.options === null ? null : (JSON.parse(interaction.options) as string[]),
+          placeholder: interaction.placeholder,
+          inputId: interaction.inputId,
+          taskId: interaction.taskId,
+          sourceSessionId: interaction.sessionId,
+          revision: interaction.revision,
+          createdAt: interaction.createdAt,
+        })),
       };
     },
   });
@@ -318,15 +382,24 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       const project = requireProject(store, params);
       const sessionId = readString(params, 'sessionId');
       const inputId = readString(params, 'inputId');
-      if (sessionId === undefined || inputId === undefined) {
-        throw new RpcError('INVALID_ARGUMENT', 'sessionId and inputId are required');
+      if (inputId === undefined) {
+        throw new RpcError('INVALID_ARGUMENT', 'inputId is required');
       }
-      requireSession(store, project.id, sessionId);
+      // The input knows its session: an external caller holding only the run handle it was given can
+      // still read the run, and a caller that does name a session must name the right one.
       const input = store.getInput(inputId);
-      if (input === undefined || input.sessionId !== sessionId) {
+      if (input === undefined || input.projectId !== project.id) {
+        throw new RpcError('NOT_FOUND', `input ${inputId} does not exist in this project`, { inputId });
+      }
+      requireSession(store, project.id, sessionId ?? input.sessionId);
+      if (sessionId !== undefined && input.sessionId !== sessionId) {
         throw new RpcError('NOT_FOUND', `input ${inputId} does not exist in this session`, { inputId });
       }
       return {
+        // The ownership an external caller needs to continue from one input id alone: the run
+        // handle it was given, and the Task that input authorized when it created one.
+        sessionId: input.sessionId,
+        taskId: input.taskId,
         input: {
           inputId: input.inputId,
           kind: input.kind,
@@ -394,8 +467,18 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       if (task === undefined || task.projectId !== project.id) {
         throw new RpcError('NOT_FOUND', `Task ${taskId} does not exist in this project`, { taskId });
       }
+      // The Plan is the authority a caller judges work by; a missing or changed file is reported as
+      // such rather than silently replaced by a summary.
+      const plan =
+        params['includePlan'] === true && task.planRef !== null
+          ? (() => {
+              const read = readPlan(task.planRef);
+              return { markdown: read.text, current: read.current };
+            })()
+          : null;
       return {
         task: taskSummary(store, task),
+        plan,
         members: store.listTaskSessions(task.id).map((member) => {
           // The delegation-time currentInputId is history; the live session state tells the
           // Task card whether the member is working right now (R2: derived, not stored).
@@ -798,6 +881,8 @@ function taskSummary(store: Store, task: ReturnType<Store['getTask']> & object) 
     nextStep: task.nextStep,
     blockReason: task.blockReason,
     completionResultId: task.completionResultId,
+    // The input whose authorization created this Task: the run handle an external caller was given.
+    sourceInputId: task.sourceInputId,
     phaseMembers: store.listTaskSessions(task.id).map((member) => member.sessionId),
     updatedAt: task.updatedAt,
   };
