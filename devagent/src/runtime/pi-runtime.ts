@@ -83,20 +83,32 @@ export interface CreateSessionOptions {
 export class PiRuntimeFactory {
   private readonly defaults: RuntimeDefaults;
   private modelRuntime: ModelRuntime | undefined;
+  /** The in-flight creation: two sessions starting together must share one runtime. */
+  private runtimePromise: Promise<ModelRuntime> | undefined;
 
   constructor(defaults: RuntimeDefaults) {
     this.defaults = defaults;
   }
 
   async runtime(): Promise<ModelRuntime> {
-    if (this.modelRuntime === undefined) {
-      this.modelRuntime = await ModelRuntime.create({
+    if (this.modelRuntime !== undefined) return this.modelRuntime;
+    if (this.runtimePromise === undefined) {
+      this.runtimePromise = ModelRuntime.create({
         modelsPath: join(this.defaults.agentDir, 'models.json'),
         authPath: join(this.defaults.agentDir, 'auth.json'),
         allowModelNetwork: false,
+      }).then((runtime) => {
+        this.modelRuntime = runtime;
+        return runtime;
       });
     }
-    return this.modelRuntime;
+    try {
+      return await this.runtimePromise;
+    } catch (error) {
+      // A failed initialization must be retryable; do not cache a rejected promise forever.
+      this.runtimePromise = undefined;
+      throw error;
+    }
   }
 
   /**

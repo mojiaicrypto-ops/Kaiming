@@ -142,6 +142,7 @@ export function startWorkbench(options: StartOptions): Promise<{
    * blocked state is never delivered once and lost.
    */
   const reportedBlocks = new Map<string, string>();
+  const reportedWorkerErrors = new Map<string, string>();
   const blockedOf = (sessionId: string): { code: string; detail: string } | null => {
     const signature = reportedBlocks.get(sessionId);
     if (signature === undefined) return null;
@@ -265,7 +266,14 @@ export function startWorkbench(options: StartOptions): Promise<{
     runner,
     // A run that cannot start must say why (P-06): the reason reaches whoever is looking, instead of
     // leaving a queued input that looks like it might still run.
+    onError: (sessionId, error) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      if (reportedWorkerErrors.get(sessionId) === detail) return;
+      reportedWorkerErrors.set(sessionId, detail);
+      log(`worker error for ${sessionId}: ${detail}`);
+    },
     onOutcome: (sessionId, outcome) => {
+      reportedWorkerErrors.delete(sessionId);
       // A chief's own input is a conversation turn, and nobody but the host can close it: left
       // interrupted, it freezes the whole session (every later message waits on recovery). Close
       // it with what the host really observed; the chief's notice says the outcome is unknown.

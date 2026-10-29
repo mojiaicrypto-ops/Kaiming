@@ -87,8 +87,12 @@ async function harness(
     idleDelayMs: 10,
     onOutcome: (sessionId, outcome) => {
       outcomes.push({ sessionId, kind: outcome.kind });
-      for (const waiter of waiters.splice(0).filter((entry) => entry.sessionId === sessionId && entry.kind === outcome.kind)) {
-        waiter.resolve();
+      const matched = waiters.filter(
+        (entry) => entry.sessionId === sessionId && entry.kind === outcome.kind,
+      );
+      for (const waiter of matched) waiter.resolve();
+      for (let index = waiters.length - 1; index >= 0; index -= 1) {
+        if (matched.includes(waiters[index]!)) waiters.splice(index, 1);
       }
     },
   });

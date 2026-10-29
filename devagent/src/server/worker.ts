@@ -1,10 +1,10 @@
 /**
  * The workbench worker: the one place that turns accepted inputs into real Pi runs.
  *
- * It walks the sessions fairly (R3: the dispatcher rotates, one claim per pass) and lets the runner
- * claim - so a session that has nothing consumable is simply skipped, and a session whose work is
- * blocked (no model, missing directory, a controlled Task) never spins: when nothing ran the loop
- * sleeps until a caller wakes it or the idle delay expires.
+ * Sessions are independent: one long run must not stop another session's message from starting.
+ * The worker therefore starts every session that has no run in flight, while the store still allows
+ * at most one processing input per session. A session whose work is blocked (no model, missing
+ * directory, a controlled Task) ends its run quickly and never spins the loop.
  */
 import type { Store } from '../store/store.ts';
 import type { RunOutcome } from '../runtime/runner.ts';
@@ -19,14 +19,13 @@ export interface WorkerOptions {
   /** How long to wait when nothing is runnable; a notify wakes the loop immediately. */
   readonly idleDelayMs?: number;
   readonly onOutcome?: (sessionId: string, outcome: RunOutcome) => void;
+  /** A runner failure for one session must not stop the other sessions. */
+  readonly onError?: (sessionId: string, error: unknown) => void;
 }
-
-/** Outcomes that mean an input was really processed (and therefore the rotation should move on). */
-const RAN: readonly RunOutcome['kind'][] = ['completed', 'failed', 'stopped', 'interrupted'];
 
 export class WorkbenchWorker {
   private readonly options: WorkerOptions;
-  private cursor = 0;
+  private readonly runs = new Map<string, Promise<void>>();
   private stopped = false;
   private loop: Promise<void> | undefined;
   private wake: (() => void) | undefined;
@@ -55,30 +54,46 @@ export class WorkbenchWorker {
     this.notify();
     await this.loop;
     this.loop = undefined;
+    // Runs already started are allowed to finish; closing the store under them would lose the
+    // terminal state. Their finalizers notify the loop, which is already stopped.
+    await Promise.allSettled([...this.runs.values()]);
   }
 
   private async run(): Promise<void> {
     while (!this.stopped) {
-      const sessions = this.options.store.listSessions().map((session) => session.id);
-      let ran = false;
-      for (let step = 0; step < sessions.length && !this.stopped; step += 1) {
-        const index = (this.cursor + step) % sessions.length;
-        const sessionId = sessions[index];
-        if (sessionId === undefined) {
-          continue;
-        }
-        const outcome = await this.options.runner.runNext(sessionId);
-        this.options.onOutcome?.(sessionId, outcome);
-        if (RAN.includes(outcome.kind)) {
-          // One input per claim (R3); the next turn starts after this session.
-          this.cursor = (index + 1) % sessions.length;
-          ran = true;
-          break;
-        }
+      for (const session of this.options.store.listSessions()) {
+        if (this.stopped || this.runs.has(session.id)) continue;
+        // Starting is synchronous up to the first await; recording the promise before returning
+        // means the next pass cannot start the same session twice.
+        const run = this.runOne(session.id);
+        this.runs.set(session.id, run);
       }
-      if (!ran && !this.stopped) {
+      // Wait for a completion or new input. The timeout is only a safety net for a runner that
+      // returns without notifying; it is not the scheduling interval.
+      if (!this.stopped) {
         await this.waitForWork();
       }
+    }
+  }
+
+  private async runOne(sessionId: string): Promise<void> {
+    let progressed = false;
+    try {
+      const outcome = await this.options.runner.runNext(sessionId);
+      this.options.onOutcome?.(sessionId, outcome);
+      // Idle/busy/controlled/blocked results are cheap observations, not progress. Waking the
+      // loop for them would spin on a session with nothing to do; the idle delay is the retry.
+      progressed =
+        outcome.kind === 'completed' ||
+        outcome.kind === 'failed' ||
+        outcome.kind === 'stopped' ||
+        outcome.kind === 'interrupted';
+    } catch (error) {
+      // One session's unexpected failure is local; the remaining sessions must keep running.
+      this.options.onError?.(sessionId, error);
+    } finally {
+      this.runs.delete(sessionId);
+      if (progressed) this.notify();
     }
   }
 
