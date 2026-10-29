@@ -19,6 +19,8 @@
 | R2 | 「只读委派」不是程序强制：`mode` 只是给主管的指令，Task 类型仍由主管按 D-04 判断；调用方沙箱不约束工作台 | `src/mcp/runs.ts`（delegationText）、X-03/X-08 | 一个以只读沙箱运行的客户端仍可能通过委派产生写入 | 已知并接受（用户确认）；`destructiveHint` 已如实标注，宿主因此会走自己的批准策略（Codex 实测在 `approval: never` 下直接拒绝调用，正是该策略生效） |
 | U6 | 未提供 MCP resources / prompts：只有工具面 | `src/mcp/protocol.ts`（capabilities 只有 tools） | 调用方不能把报告/Plan 当资源浏览，也没有 `/delegate-review` 之类的提示模板 | 后续可选；当前 `agentdev_read` 已覆盖读取需求 |
 
+| S8 | 没有订阅账号登录：Pi 的 `anthropic`（Claude Pro/Max）与 `openai`（Sign in with ChatGPT）OAuth 可用，但本工作台没有 `auth.login`/`auth.logout` 方法，也没有订阅 provider 的模型入口；设置页只接受带 `apiKey` 的自定义 provider | `src/server/methods.ts`（无 auth 方法）、`src/runtime/provider-store.ts`（`apiKey` 必填）、`webapp/src/settings/ProvidersPage.tsx`、`webapp/src/settings/ModelsPage.tsx` | 用户无法在界面内使用 Claude/ChatGPT 订阅；手工放 `auth.json` 也没有可选的模型行 | 待实现需求：`.agentdev/work/pi-subscription-providers-20261028/requirement.md`；Pi SDK 已支持 OAuth/刷新，运行时已读 `auth.json`，缺认证入口与 provider 表达 |
+
 ## 本轮新增（2026-10-22，工具与图片）
 
 | 编号 | 现象 | 证据位置 | 影响 | 处置 |
