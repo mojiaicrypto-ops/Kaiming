@@ -273,6 +273,7 @@ describe('task dispatch', () => {
 
     expect(waited.isError).toBe(false);
     expect(waited.details['outcome']).toBe('timeout');
+    expect(String(waited.details['hint'])).toContain('call task(op=dispatch) with no sessions again');
     expect(f.store.listTaskSessions(snapshot.taskId)).toHaveLength(0);
     expect(f.dispatchCalls).toEqual([]);
     expect(f.settleCalls).toEqual([{ taskId: snapshot.taskId, timeoutMs: 1_000 }]);

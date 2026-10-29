@@ -133,6 +133,7 @@ export function createTaskTool(contextOf: TaskToolContextResolver, options: { re
           'Create and run one Task: create, update (phase/summary/plan), dispatch (start or continue the current step professional Sessions, then wait), control (pause/resume/cancel), end, get, adopt, recover.',
           'No version or digest is passed: the host records what it observed.',
           'The overall Plan is yours; each member decides its internal plan. Wait for the whole step before judging it.',
+          'A dispatch timeout is a status snapshot, not a stop. If members are still running, call dispatch again with no sessions in the same turn; do not end the turn with a status update.',
         ].join('\n')
       : 'Read the Task you belong to (op=get): goal, scope, plan, this step members and their reports.',
     parameters: {

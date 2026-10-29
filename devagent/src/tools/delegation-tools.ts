@@ -96,6 +96,7 @@ export async function dispatchOp(
     const current = context.store.getTask(taskId) ?? task;
     return ok(describe(returned), {
       ...returned,
+      ...timeoutHint(returned),
       ...guidanceFor(context.store, current),
     } as Record<string, unknown>);
   }
@@ -228,6 +229,7 @@ export async function dispatchOp(
   const current = context.store.getTask(taskId) ?? task;
   return ok(`${describe(returned)}${warnings.length > 0 ? ` | warning: ${warnings.join('; ')}` : ''}`, {
     ...returned,
+    ...timeoutHint(returned),
     ...(warnings.length > 0 ? { warnings } : {}),
     members: touched
       .map((sessionId) => context.store.getTaskSession(sessionId))
@@ -412,6 +414,17 @@ function summaryOf(member: TaskSessionRow): Record<string, unknown> {
     writeScope: member.writeScope,
     currentInputId: member.currentInputId,
   };
+}
+
+/** A timeout is a snapshot, not a conclusion: make the next action impossible to misread. */
+function timeoutHint(returned: DelegationReturn): { readonly hint?: string } {
+  return returned.outcome === 'timeout'
+    ? {
+        hint:
+          'Member work is still running. This is a status snapshot, not a report or a stop: ' +
+          'call task(op=dispatch) with no sessions again in this turn; do not end with a status update.',
+      }
+    : {};
 }
 
 function describe(returned: DelegationReturn): string {
