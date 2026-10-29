@@ -287,3 +287,19 @@
 **证据**：`test/delegation.test.ts` 两个 timeout 分支（空名单、创建+等待）都断言 `details.hint`；服务端 45 文件 471 用例、`tsc`、构建通过；独立 Review 通过（唯一非阻塞项为第二个分支缺断言，已补并复核）；独立测试用真实工具调用确认 hint 出现在模型可见正文和 `details`，`completed` 不带 hint。
 
 **未覆盖**：真实模型是否遵守该指令未验证；这是提示层修正，程序不强制模型继续。需要时另加宿主级“步骤停稳后唤醒主管”机制（会新增自动模型回合，属产品行为变化）。
+
+## 2026-10-29 · 同项目两个会话互相阻塞
+
+**现象**：同一项目里一个会话在运行时，另一个会话提交的消息一直不运行；不是消息被拒绝，而是排在全局串行 worker 后面。
+
+**根因**：`WorkbenchWorker.run()` 对每个 session `await runner.runNext(sessionId)`，一个 Pi run 不结束就不会扫描下一个 session。成员由 `task` 直接 `runNext`，但另一个主管会话的用户输入只能等前一个 run 完成。另有并发创建 `ModelRuntime` 的竞态：两个会话同时首次运行时可能各建一个 runtime。
+
+**修正**：
+- worker 每个 session 至多一个 run，不同 session 并行启动；idle/busy/controlled 结果不唤醒循环，避免空转；`stop()` 等所有在飞 run 结束；单个 session 的 runner 异常经 `onError` 隔离。
+- `PiRuntimeFactory.runtime()` 缓存**创建中的 Promise**，并发会话共享一个 `ModelRuntime`；创建失败可重试。
+- `onError` 按 session+原因去重，避免每个空转周期重复日志。
+- 测试修复：`server-write` 的等待器只移除匹配项，不再被无关的 idle outcome 清空。
+
+**证据**：`test/worker.test.ts` 4 例（并发启动、同会话不重入、stop 等待在飞 run、单会话异常隔离）；`test/runtime-factory.test.ts` 并发 runtime 同一实例；`test/server-write.test.ts` 16 例；定向 3 文件 21 例通过；全量 47 文件 476 例中 474 通过，2 个 `git-commit-gate` 在并行负载下 5s 超时，单文件复跑 23/23 通过，且在 HEAD 基线同样复现，属主机负载 flake。
+
+**未覆盖**：没有通过真实 HTTP/worker 同时提交两个主管会话的 E2E；并发启动由 worker 单测证明。专业 Session 并发上限仍未由程序强制（既有缺口，和本次两个主管会话相互阻塞不同）。
