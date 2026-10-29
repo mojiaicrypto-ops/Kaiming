@@ -277,3 +277,13 @@
 **修正**：write Task 接受 investigator 的 investigation/recovery 结果；这两类报告按内容而不是 Task 类型写 Server `work/<taskId>/<sessionId>/`；它们只作证据，write 的完成仍只认 settlement。`agent_report` 仍是宿主保存，investigator 不需要项目写工具。
 
 **证据**：`test/report.test.ts` 新增 write Task + investigator + investigation 用例，断言报告保存且 `bodyRef.storage=server`、项目 `.dev/work` 不产生目录、`taskCompletionGaps` 仍要求 settlement；服务端 471 用例全绿。
+
+## 2026-10-29 · dispatch 超时后的继续等待
+
+**现象**：Task `t-68e3cfbd` 在 develop 阶段看起来停住。实际是成员仍在运行编辑/测试，`dispatch` 等满窗口返回 `timeout` 快照；主管随后发了状态说明并结束回合，成员停稳后没有输入再推进 Task。该会话最后一次压缩在 02:58，当前这轮从 04:36 开始，之后无 compaction 事件，不是压缩导致。
+
+**修正**：`task` 工具描述、`dispatch` 的 timeout 回执 `hint`、`prompts/chief.md` 与 G2 合同均明确：timeout 只是快照，不是报告或停止；成员仍在运行/排队/等用户时，必须在同一回合再次 `task(op=dispatch)` 空名单等待，不得以状态说明结束回合。不新增宿主自动唤醒，不改变等待时长或取消语义。
+
+**证据**：`test/delegation.test.ts` 两个 timeout 分支（空名单、创建+等待）都断言 `details.hint`；服务端 45 文件 471 用例、`tsc`、构建通过；独立 Review 通过（唯一非阻塞项为第二个分支缺断言，已补并复核）；独立测试用真实工具调用确认 hint 出现在模型可见正文和 `details`，`completed` 不带 hint。
+
+**未覆盖**：真实模型是否遵守该指令未验证；这是提示层修正，程序不强制模型继续。需要时另加宿主级“步骤停稳后唤醒主管”机制（会新增自动模型回合，属产品行为变化）。
