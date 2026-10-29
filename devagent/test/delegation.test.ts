@@ -518,6 +518,7 @@ describe('dispatch against the control rules', () => {
     // A member that keeps running must not hold the tool past the deadline.
     expect(result.isError).toBe(false);
     expect(result.details['outcome']).toBe('timeout');
+    expect(String(result.details['hint'])).toContain('call task(op=dispatch) with no sessions again');
     expect(waitedMs).toBe(1_500);
     const created = f.store.listTaskSessions(task?.id ?? '')[0];
     // The member's identity is bound to the Task it works on.
