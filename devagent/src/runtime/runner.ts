@@ -32,7 +32,7 @@ import { compactionDue } from './compaction-policy.ts';
 import { readImage } from '../server/attachments.ts';
 import { InteractionBridge, createUiAdapter } from './interactions.ts';
 import { createQuestionTool } from '../tools/question-tool.ts';
-import { createPrivatePathGuard } from './tool-guard.ts';
+import { createBashTimeoutGuard, createPrivatePathGuard, DEFAULT_BASH_TIMEOUT_SECONDS } from './tool-guard.ts';
 import { toolSetFor, type WriteHold } from './tool-sets.ts';
 import { asToolDefinitions, createTaskGetTool, createTaskTool, type DomainTool, type TaskToolContext } from '../tools/task-tools.ts';
 import { createBrowserTool } from '../tools/browser-tool.ts';
@@ -144,6 +144,11 @@ export interface RunnerOptions {
    * the user or on a dispatched step is not charged: that is not the run's own work.
    */
   readonly runTotalMs?: number;
+  /**
+   * Default timeout for a bash call that omits one (Pi's tool has no default). 0 disables the
+   * guard. A timeout is a tool result the model can act on, not a run abort.
+   */
+  readonly bashTimeoutSeconds?: number;
 }
 
 export class InputRunner {
@@ -583,6 +588,7 @@ export class InputRunner {
           ...hostTools.map((tool) => tool.name).filter((name) => !denied.has(name)),
         ]),
       ];
+      const bashTimeoutSeconds = this.options.bashTimeoutSeconds ?? DEFAULT_BASH_TIMEOUT_SECONDS;
       const handle = await this.options.registry.acquire(
         {
           sessionId,
@@ -603,6 +609,7 @@ export class InputRunner {
               // screenshots live under the same root. Credentials and session files stay blocked.
               readableDirs: [join(config.agentDir, 'work')],
             }),
+            ...(bashTimeoutSeconds > 0 ? [createBashTimeoutGuard({ seconds: bashTimeoutSeconds })] : []),
           ],
           ...(hostTools.length > 0 ? { customTools: hostTools } : {}),
         },

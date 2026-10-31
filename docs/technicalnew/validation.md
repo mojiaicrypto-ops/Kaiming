@@ -379,3 +379,15 @@
 **证据**：`test/store.test.ts`「orders a continued member after the members dispatched while it was settled」在旧排序下失败、新排序下通过；`test-fixtures/task-progress.json` 新增「rework by continuing the same member after test」，服务端与 webapp 两侧的 flow 测试共同读取并通过；全量 49 文件 493 用例、webapp 12 文件 81 用例、`tsc --noEmit` 通过。对运行中的 `t-cb094c4a` 用新排序读取，步骤为 `develop#1 completed, review#1 completed, test#1 completed, develop#2 completed, settle planned`，无空步骤。
 
 **未覆盖**：若某阶段只有这一个成员，续办后旧轮分组消失（轮号从 1 重新计），需要逐次派发行才能保留两轮历史；浏览器视觉未重启验证（运行中的服务仍是旧代码）。
+
+## 2026-10-31 · bash 无默认超时导致 M7 开发 run 被 stall 中止
+
+**现象**：`t-3892928a` 的旧开发 `i-7d2e0b42` 在 09:45:36 以 `RUN_STALLED` 停止（`no run activity for 908s (limit 900s)`），会话只有 1 次 task get、8 次 read、35 次 bash、**0 次 write/edit**，没有报告。重派 `i-a09f29dc` 在 17:48 又执行同样的 `node t.mjs`，17:58 手动结束挂起的 node 进程后恢复。
+
+**根因**：最后一条 bash 命令用 `node -e` 加载 `react-dom/server.browser`，打印两行结果后进程不退出；Pi 的 bash 工具 `timeout` 可选且没有默认值，工具执行期间没有 Pi 事件，run watchdog 的 900 秒 stall 把整个 run 中止。复现原命令时 `timeout 8` 退出码为 124，确认是命令不退出而不是模型/Provider 停摆。
+
+**修正**：`createBashTimeoutGuard` 在 `tool_call` 上为未写 `timeout` 的 bash 调用注入宿主默认值（默认 600 秒，`AGENTDEV_BASH_TIMEOUT_SECONDS` 可调，0 关闭；显式值优先）；`runner.ts` 与 `privatePathGuard` 一起安装。`step-wake.ts` 的步骤停稳通知在“watchdog stopped 且无报告”时提示续办原 Session，`guidance.ts` 的 `nextActions` 同样给出 `sessionId` 续办动作；专业 Agent 提示词补充“打印完不退出是 hang，不是长任务”。
+
+**证据**：`test/runtime.test.ts`「bounds a bash command that omits a timeout, so a hang is a tool result not a stalled run」用真实 `sleep 2` + 1 秒默认值，run 以 `completed` 结束且工具结果含 `timed out after 1 seconds`；`test/tool-guard.test.ts` 覆盖空值注入、显式值不覆盖、非 bash 不处理；`test/step-wake.test.ts` 与 `test/delegation.test.ts` 覆盖 watchdog-stopped 的续办提示。`tsc --noEmit` 通过。
+
+**未覆盖**：600 秒默认值对真实长构建的影响未实测；超过 15 分钟的静默工具仍会触发 run stall；环境变量未在重启后的服务上验证；浏览器无界面变化。

@@ -131,6 +131,24 @@ export function wakeForSettledStep(store: Store, taskId: string): StepWakeResult
           )
           .join(', ');
 
+  const watchdogStopped = memberInputIds
+    .map((inputId) => store.getInput(inputId))
+    .filter(
+      (input): input is InputRow =>
+        input !== undefined &&
+        input.status === 'stopped' &&
+        (input.errorCode === 'RUN_STALLED' || input.errorCode === 'RUN_TIMEOUT') &&
+        store.resultsForInputs([input.inputId]).length === 0,
+    );
+  const continuation =
+    watchdogStopped.length === 0
+      ? ''
+      : ` ${watchdogStopped
+          .map((input) => `${input.sessionId} (${input.inputId}, ${input.errorCode ?? 'stopped'})`)
+          .join(', ')} was stopped by the run watchdog, not by a report. If it left no formal report ` +
+        'or attributable project change, continue that same session with task(op=dispatch) using its ' +
+        'sessionId and tell it what the hung command produced; a replacement repeats the investigation ' +
+        'and its context tokens.';
   store.acceptInput({
     inputId: noticeId,
     projectId: task.projectId,
@@ -147,7 +165,7 @@ export function wakeForSettledStep(store: Store, taskId: string): StepWakeResult
           text:
             `The host woke you because the Task's current step has settled and your previous turn had ` +
             `already ended: Task ${task.id} (${task.type}, phase ${task.phase}) has no unfinished member ` +
-            `work. Results: ${reported}. Read the results before deciding; the host advanced nothing. ` +
+            `work. Results: ${reported}.${continuation} Read the results before deciding; the host advanced nothing. ` +
             'Continue the Task: dispatch the next step, or complete, pause or cancel it as the facts require.',
         },
       ],

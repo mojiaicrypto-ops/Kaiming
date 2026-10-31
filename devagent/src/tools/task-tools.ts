@@ -699,6 +699,7 @@ function recoverOp(context: TaskToolContext, task: TaskRow, params: Record<strin
       inputId: resolved.inputId,
       status: resolved.status,
       taskId: task.id,
+      ...guidanceFor(context.store, task),
     });
   } catch (error) {
     const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';

@@ -6,7 +6,8 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { privatePathBlockReason } from '../src/runtime/tool-guard.ts';
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { createBashTimeoutGuard, privatePathBlockReason } from '../src/runtime/tool-guard.ts';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -129,5 +130,47 @@ describe('private path guard', () => {
 
   it('guards nothing when there is no private directory to guard', () => {
     expect(privatePathBlockReason({ toolName: 'read', args: { path: '/etc/hosts' }, cwd: '/tmp', privateDirs: [] })).toBeUndefined();
+  });
+});
+
+describe('bash timeout guard', () => {
+  type TestCall = { type: string; toolCallId: string; toolName: string; input: Record<string, unknown> };
+  function install(seconds: number): (event: { toolName: string; input: Record<string, unknown> }) => unknown {
+    const handlers: Array<(event: unknown) => unknown> = [];
+    const api = {
+      on(event: string, handler: (event: unknown) => unknown) {
+        if (event === 'tool_call') handlers.push(handler);
+        return () => undefined;
+      },
+    } as unknown as ExtensionAPI;
+    createBashTimeoutGuard({ seconds })(api);
+    const handler = handlers[0];
+    if (handler === undefined) throw new Error('the guard did not register a tool_call handler');
+    return (event) => handler(event);
+  }
+
+  it('adds the host deadline only when the model omitted one', () => {
+    const call = install(600);
+    const bash = { type: 'tool_call', toolCallId: '1', toolName: 'bash', input: { command: 'sleep 1' } } as TestCall;
+    call(bash);
+    expect(bash.input.timeout).toBe(600);
+
+    const explicit = {
+      type: 'tool_call',
+      toolCallId: '2',
+      toolName: 'bash',
+      input: { command: 'sleep 1', timeout: 30 },
+    } as TestCall;
+    call(explicit);
+    expect(explicit.input.timeout).toBe(30);
+
+    const read = { type: 'tool_call', toolCallId: '3', toolName: 'read', input: { path: 'README.md' } } as TestCall;
+    call(read);
+    expect(read.input.timeout).toBeUndefined();
+  });
+
+  it('refuses a non-positive default', () => {
+    expect(() => createBashTimeoutGuard({ seconds: 0 })).toThrow();
+    expect(() => createBashTimeoutGuard({ seconds: -1 })).toThrow();
   });
 });

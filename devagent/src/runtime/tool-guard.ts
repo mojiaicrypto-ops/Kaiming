@@ -171,3 +171,25 @@ export function createPrivatePathGuard(options: {
     });
   };
 }
+
+/** Host default for bash: Pi's tool has no timeout unless the model passes one. */
+export const DEFAULT_BASH_TIMEOUT_SECONDS = 10 * 60;
+
+/**
+ * Give every bash call a deadline when the model did not set one. A command that prints its result
+ * and then keeps the event loop alive (or simply hangs) otherwise looks like a dead provider to the
+ * run watchdog; the tool returns a timeout the model can act on instead of losing the whole run.
+ */
+export function createBashTimeoutGuard(options: { readonly seconds: number }): ExtensionFactory {
+  if (!Number.isFinite(options.seconds) || options.seconds <= 0) {
+    throw new Error('bash timeout must be a positive number of seconds');
+  }
+  return (pi: ExtensionAPI): void => {
+    pi.on('tool_call', (event: ToolCallEvent) => {
+      if (event.toolName !== 'bash') return undefined;
+      const input = event.input as { timeout?: number };
+      if (input.timeout === undefined) input.timeout = options.seconds;
+      return undefined;
+    });
+  };
+}

@@ -55,6 +55,11 @@ export interface StartOptions {
   readonly runStallMs?: number;
   /** Run watchdog: abort a run exceeding this total duration (default 90 min). */
   readonly runTotalMs?: number;
+  /**
+   * Default timeout for a bash call that omits one (seconds; default 600, 0 disables). The tool
+   * result is a timeout the model can act on, not a run abort.
+   */
+  readonly bashTimeoutSeconds?: number;
   readonly now?: () => string;
   /**
    * Where startup diagnostics go. Defaults to stderr: a caller that hosts this workbench inside
@@ -318,6 +323,7 @@ export function startWorkbench(options: StartOptions): Promise<{
     // step, its Task and the user's queue forever.
     ...(options.runStallMs !== undefined ? { runStallMs: options.runStallMs } : {}),
     ...(options.runTotalMs !== undefined ? { runTotalMs: options.runTotalMs } : {}),
+    ...(options.bashTimeoutSeconds !== undefined ? { bashTimeoutSeconds: options.bashTimeoutSeconds } : {}),
   });
 ;
   const worker = new WorkbenchWorker({
@@ -426,6 +432,9 @@ if (entry !== undefined && resolve(entry) === resolve(fileURLToPath(import.meta.
   const host = process.env['AGENTDEV_HOST'] ?? '127.0.0.1';
   const runStallMs = Number(process.env['AGENTDEV_RUN_STALL_MS'] ?? '');
   const runTotalMs = Number(process.env['AGENTDEV_RUN_TOTAL_MS'] ?? '');
+  const rawBashTimeout = process.env['AGENTDEV_BASH_TIMEOUT_SECONDS'];
+  const bashTimeoutSeconds =
+    rawBashTimeout === undefined || rawBashTimeout.trim() === '' ? undefined : Number(rawBashTimeout);
   const running = await startWorkbench({
     dataDir,
     accessPassword,
@@ -434,6 +443,9 @@ if (entry !== undefined && resolve(entry) === resolve(fileURLToPath(import.meta.
     model,
     ...(Number.isFinite(runStallMs) && runStallMs > 0 ? { runStallMs } : {}),
     ...(Number.isFinite(runTotalMs) && runTotalMs > 0 ? { runTotalMs } : {}),
+    ...(bashTimeoutSeconds !== undefined && Number.isFinite(bashTimeoutSeconds) && bashTimeoutSeconds >= 0
+      ? { bashTimeoutSeconds }
+      : {}),
   });
   process.stdout.write(`workbench listening on ${running.origin} (data: ${dataDir})\n`);
   const shutdown = (): void => {

@@ -389,6 +389,32 @@ describe('task dispatch', () => {
     expect(actions[0]?.action).toContain('task(op=recover');
   });
 
+  it('offers to continue a watchdog-stopped member instead of replacing it', async () => {
+    const f = await fixture();
+    await moveToPhase(f, 'develop');
+    await f.taskTool.execute('call-1', { op: 'dispatch', sessions: [member()] });
+    const task = f.store.listTasks('p-1')[0];
+    const row = f.store.listTaskSessions(task?.id ?? '')[0];
+    const claimed = f.store.claimNextInput(row?.sessionId ?? '');
+    if (claimed.kind !== 'claimed') throw new Error('the member input could not be claimed');
+    f.store.finishInput({
+      inputId: claimed.input.inputId,
+      expectedRevision: claimed.input.revision,
+      status: 'stopped',
+      errorCode: 'RUN_STALLED',
+      errorMessage: 'no run activity for 908s (limit 900s); the run was aborted',
+    });
+
+    const read = await f.taskTool.execute('call-2', { op: 'get' });
+
+    const actions = read.details['nextActions'] as Array<{ op: string; action: string }>;
+    expect(
+      actions.some(
+        (entry) => entry.op === 'dispatch' && entry.action.includes(`sessionId: ${row?.sessionId ?? ''}`),
+      ),
+    ).toBe(true);
+  });
+
   it('applies the review pre-gate to a tester continuation too', async () => {
     const f = await fixture();
     await moveToPhase(f, 'test');

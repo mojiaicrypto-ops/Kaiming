@@ -33,6 +33,9 @@ node src/server/main.ts
 | `AGENTDEV_MODEL_ID` | 否 | `unset` | 默认模型 id |
 | `AGENTDEV_PORT` | 否 | `4173` | 监听端口 |
 | `AGENTDEV_HOST` | 否 | `127.0.0.1` | 监听地址（远程访问需自行评估暴露风险） |
+| `AGENTDEV_RUN_STALL_MS` | 否 | `900000`（15 分钟） | run 无任何 Pi 事件超过该值即中止（`RUN_STALLED`） |
+| `AGENTDEV_RUN_TOTAL_MS` | 否 | `5400000`（90 分钟） | run 的计费时长超过该值即中止（`RUN_TIMEOUT`；等待用户/成员的时间不计） |
+| `AGENTDEV_BASH_TIMEOUT_SECONDS` | 否 | `600` | 模型未给 bash 传 `timeout` 时的宿主默认秒数；`0` 关闭。显式 `timeout` 优先 |
 
 模型两个变量填 `unset` 时也能启动：项目、会话、需求、任务、报告与文本文件都可读，输入不会被模型执行。要真正跑模型，见第 3 节。
 

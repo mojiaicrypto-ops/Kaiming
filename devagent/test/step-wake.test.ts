@@ -141,6 +141,27 @@ describe('settled-step wake', () => {
     expect(wakeForSettledStep(store, 't-1')).toMatchObject({ woken: true, reason: 'woken' });
   });
 
+  it('tells the chief to continue a watchdog-stopped session instead of replacing it', () => {
+    const store = openStore();
+    seedStep(store);
+    const claimed = store.claimNextInput('s-dev');
+    if (claimed.kind !== 'claimed') throw new Error('member input was not claimable');
+    store.finishInput({
+      inputId: claimed.input.inputId,
+      expectedRevision: claimed.input.revision,
+      status: 'stopped',
+      errorCode: 'RUN_STALLED',
+      errorMessage: 'no run activity for 908s (limit 900s); the run was aborted',
+    });
+
+    const woke = wakeForSettledStep(store, 't-1');
+    expect(woke).toMatchObject({ woken: true, reason: 'woken' });
+    const text = JSON.stringify(store.getInput(woke.noticeId ?? '')?.payload);
+    expect(text).toContain('RUN_STALLED');
+    expect(text).toContain('continue that same session');
+    expect(text).toContain('s-dev');
+  });
+
   it('sends an interrupted member to the recovery notice, once, with the recover instruction', () => {
     const store = openStore();
     seedStep(store);

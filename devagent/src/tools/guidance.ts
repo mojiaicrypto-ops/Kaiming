@@ -38,6 +38,8 @@ export interface MemberFact {
   readonly member: TaskSessionRow;
   readonly state: string;
   readonly resultIds: readonly string[];
+  /** The watchdog code of the member's current input, when it has one. */
+  readonly errorCode: string | null;
 }
 
 export function memberFacts(store: Store, task: TaskRow): MemberFact[] {
@@ -50,6 +52,7 @@ export function memberFacts(store: Store, task: TaskRow): MemberFact[] {
         member,
         state: input === undefined ? 'none' : input.status,
         resultIds: input === undefined ? [] : store.resultsForInputs([input.inputId]).map((entry) => entry.resultId),
+        errorCode: input?.errorCode ?? null,
       };
     });
 }
@@ -94,7 +97,8 @@ export function guidanceFor(
     return { nextActions: [], gaps };
   }
 
-  const busy = unfinished(memberFacts(store, task));
+  const facts = memberFacts(store, task);
+  const busy = unfinished(facts);
   const actions: NextAction[] = [];
   if (busy.length > 0) {
     // Waiting cannot settle an interrupted input (settleStep reports it as blocked immediately), so
@@ -114,6 +118,18 @@ export function guidanceFor(
       });
     }
   } else {
+    for (const entry of facts.filter(
+      (member) =>
+        member.state === 'stopped' &&
+        (member.errorCode === 'RUN_STALLED' || member.errorCode === 'RUN_TIMEOUT') &&
+        member.resultIds.length === 0,
+    )) {
+      actions.push({
+        action: `task(op=dispatch, sessions=[{sessionId: ${entry.member.sessionId}, instructions: '<continue from the hung command>'}])`,
+        op: 'dispatch',
+        reason: `${entry.member.sessionId} was stopped by the run watchdog without a report; continuing its session reuses the context, a replacement repeats the investigation`,
+      });
+    }
     actions.push({
       action: 'task(op=update, phase=...) to record this step and start the next one',
       op: 'update',

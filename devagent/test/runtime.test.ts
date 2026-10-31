@@ -67,6 +67,8 @@ async function harness(options: {
   /** Run watchdog windows, for tests that exercise a stall without waiting 15 minutes. */
   runStallMs?: number;
   runTotalMs?: number;
+  /** Give bash calls this many seconds when the test model omits a timeout. */
+  bashTimeoutSeconds?: number;
   /** Runs the runner started outside the worker (the chief's dispatch tool). */
   onRunSettled?: (sessionId: string, outcome: RunOutcome) => void;
 }): Promise<Harness> {
@@ -112,6 +114,7 @@ async function harness(options: {
     ...(options.sessionExtras !== undefined ? { sessionExtras: options.sessionExtras } : {}),
     ...(options.runStallMs !== undefined ? { runStallMs: options.runStallMs } : {}),
     ...(options.runTotalMs !== undefined ? { runTotalMs: options.runTotalMs } : {}),
+    ...(options.bashTimeoutSeconds !== undefined ? { bashTimeoutSeconds: options.bashTimeoutSeconds } : {}),
     ...(options.onRunSettled !== undefined ? { onRunSettled: options.onRunSettled } : {}),
   });
   return { store, runner, registry, defaults, agentDir: env.agentDir, cwd: env.cwd };
@@ -1033,6 +1036,26 @@ describe('input runner', () => {
     expect(observed).toContain('chief-shell-ok');
     // The real command ran: the tool result, not the model's claim, carries the output.
     expect(messages.some((message) => message.role === 'toolResult')).toBe(true);
+  }, 30_000);
+
+  it('bounds a bash command that omits a timeout, so a hang is a tool result not a stalled run', async () => {
+    const h = await harness({
+      replies: [
+        {
+          kind: 'tool_calls',
+          calls: [{ name: 'bash', arguments: JSON.stringify({ command: 'sleep 2' }) }],
+        },
+        { kind: 'text', text: 'saw the timeout' },
+      ],
+      bashTimeoutSeconds: 1,
+      runStallMs: 60_000,
+    });
+
+    const outcome = await h.runner.runNext('s-1');
+
+    expect(outcome.kind).toBe('completed');
+    const observed = JSON.stringify(h.registry.get('s-1')?.session.messages ?? []);
+    expect(observed).toContain('timed out after 1 seconds');
   }, 30_000);
 
   it('lets the designer move and delete documents through the shell', async () => {

@@ -15,6 +15,8 @@
 | investigator | 独立只读调查/恢复核实 | read/grep/find/ls、agent_report、task(op=get)、question、web_search、web_fetch、browser（只读动作） |
 
 所有角色使用同一 Pi 原生交互适配。前后端是 developer.specialization。专业 Session 必须绑定 Task，不能再委派。身份/Task/工具 op 由宿主固定，不靠模型参数切换。read Task 不开放项目写工具、requirement.save 或任意 bash；agent_report 仍可写 Server 报告。write Task 中 Reviewer 依然只读。主管可用 bash 直接核实实际状态（git、测试入口、文件布局），实现类写入仍由专业 Session 承担。设计与文档整理需要移动或删除文件（归档、改名、去掉重复正文）时用 bash（`git mv`/`rm`）：Pi 没有 rm/mv 工具，不另造文件管理工具；移动后同步引用，不留下两份正文。Local 工具允许列表不是 OS 沙箱，业务范围和命令影响由 Agent 判断，实际交付状态由程序核对。investigator 不持有 bash/write：需要执行脚本或测试才能核实时，在报告中把对应 check 标为 `not_run`，写明最小复现命令和缺失证据，由主管在适用阶段派 tester，或主管自己用 bash 执行；结果作为证据回到核实，不改变 investigator 的只读身份，也不新增执行工具。
+**bash 超时由宿主兜底**：模型未传 `timeout` 时，宿主扩展为每次 bash 调用注入默认值（`AGENTDEV_BASH_TIMEOUT_SECONDS`，默认 600 秒；0 关闭），显式值优先。超时是工具错误结果，模型可换命令或加大超时重试，不会把整个 run 拖到 15 分钟 stall。
+
 
 ## G2 模型工具
 
