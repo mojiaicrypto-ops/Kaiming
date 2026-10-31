@@ -8,11 +8,11 @@ import { SCHEMA_VERSION, Store, StoreError, type AcceptInputParams, type AcceptR
 const dirs: string[] = [];
 const stores: Store[] = [];
 
-function openStore(serverEpoch = 1): { store: Store; path: string } {
+function openStore(serverEpoch = 1, now?: () => string): { store: Store; path: string } {
   const dir = mkdtempSync(join(tmpdir(), 'devagent-store-'));
   dirs.push(dir);
   const path = join(dir, 'state.db');
-  const store = new Store({ path, serverEpoch });
+  const store = new Store({ path, serverEpoch, ...(now === undefined ? {} : { now }) });
   stores.push(store);
   return { store, path };
 }
@@ -492,6 +492,37 @@ describe('claiming', () => {
       inputId: 'i-run',
       code: 'RECOVERY_REQUIRED',
     });
+  });
+
+  it('orders a continued member after the members dispatched while it was settled', () => {
+    let tick = 0;
+    const { store } = openStore(1, () => new Date(Date.UTC(2026, 0, 1, 0, 0, 0) + tick++ * 1000).toISOString());
+    seed(store);
+    const taskId = seedTask(store, 'active');
+    store.updateTask({ taskId, phase: 'develop' });
+    const base = {
+      taskId,
+      phase: 'develop' as const,
+      roleId: 'developer',
+      label: 'dev',
+      instructions: 'work',
+      refs: [],
+      dependencies: [],
+      expectedKind: 'implementation',
+      writeScope: ['src/'],
+    };
+    store.createTaskSessions({
+      taskId,
+      members: ['m-a', 'm-b', 'm-c'].map((sessionId) => ({
+        ...base,
+        sessionId,
+        inputId: `i-${sessionId}`,
+        inputPayload: { content: [{ type: 'text', text: 'work' }] },
+      })),
+    });
+    store.continueTaskSession({ sessionId: 'm-a', instructions: 'again', refs: [], dependencies: [], inputId: 'i-m-a-2' });
+
+    expect(store.listTaskSessions(taskId).map((member) => member.sessionId)).toEqual(['m-b', 'm-c', 'm-a']);
   });
 });
 

@@ -274,6 +274,76 @@
       ],
       "stepsDone": 1,
       "stepsTotal": 3
+    },
+    {
+      "name": "rework by continuing the same member after test",
+      "task": {
+        "type": "write",
+        "phase": "develop",
+        "status": "active",
+        "requiresTest": true
+      },
+      "members": [
+        {
+          "phase": "develop",
+          "roleId": "developer",
+          "label": "M1 中断恢复核验",
+          "activity": "idle",
+          "lastInputStatus": "completed"
+        },
+        {
+          "phase": "review",
+          "roleId": "reviewer",
+          "label": "M1 Review",
+          "activity": "idle",
+          "lastInputStatus": "completed",
+          "latestVerdict": "passed"
+        },
+        {
+          "phase": "test",
+          "roleId": "tester",
+          "label": "M1 端到端验收",
+          "activity": "idle",
+          "lastInputStatus": "completed",
+          "latestVerdict": "passed"
+        },
+        {
+          "phase": "develop",
+          "roleId": "developer",
+          "label": "M1 鉴权",
+          "activity": "processing",
+          "lastInputStatus": null
+        }
+      ],
+      "steps": [
+        {
+          "phase": "develop",
+          "round": 1,
+          "state": "completed"
+        },
+        {
+          "phase": "review",
+          "round": 1,
+          "state": "completed"
+        },
+        {
+          "phase": "test",
+          "round": 1,
+          "state": "completed"
+        },
+        {
+          "phase": "develop",
+          "round": 2,
+          "state": "in_progress"
+        },
+        {
+          "phase": "settle",
+          "round": 1,
+          "state": "planned"
+        }
+      ],
+      "stepsDone": 3,
+      "stepsTotal": 5
     }
   ]
 }

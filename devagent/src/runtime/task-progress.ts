@@ -56,7 +56,7 @@ export interface ProgressInput {
     readonly status: string;
     readonly requiresTest?: boolean | undefined;
   };
-  /** Members in creation order, as the store returns them. */
+  /** Members in latest-dispatch order, as the store returns them (a continuation moves its row last). */
   readonly members: readonly ProgressMember[];
 }
 

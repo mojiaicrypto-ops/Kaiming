@@ -2987,10 +2987,15 @@ export class Store {
     return row === undefined ? undefined : toTaskSessionRow(row);
   }
 
+  /**
+   * Members in latest-dispatch order: a continuation updates `updatedAt`, so the member working a
+   * rework round sorts after the phases it already passed and the roster can group it as the new
+   * round instead of leaving an empty frontier.
+   */
   listTaskSessions(taskId: string): TaskSessionRow[] {
     return (
       this.db
-        .prepare('SELECT * FROM task_sessions WHERE taskId = ? ORDER BY createdAt, sessionId')
+        .prepare('SELECT * FROM task_sessions WHERE taskId = ? ORDER BY updatedAt, createdAt, sessionId')
         .all(taskId) as unknown as Array<Record<string, unknown>>
     ).map(toTaskSessionRow);
   }

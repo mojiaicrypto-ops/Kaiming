@@ -367,3 +367,15 @@
 **证据**：`test/runtime.test.ts`「reports a member run the dispatch tool started after the chief turn ended」（删掉 `onRunSettled` 即超时失败）；`test/step-wake-e2e.test.ts` 新增两条真实 workbench E2E：dispatch 成员晚于主管回合结束（删除 main 的接线后 3/3 失败）、重启后已停稳步骤补唤醒（删除启动扫描后失败）；全量 49 文件 491 用例、`tsc --noEmit` 通过。独立 Review 两轮 `passed`（含 worker/dispatch 竞争、启动去重与 paused/completed 无副作用的实测）。
 
 **未覆盖**：唤醒回合自身失败后的重试；成员 queued 但 blocked；浏览器视觉。
+
+## 2026-10-31 · 续办成员后任务清单出现空的下一轮
+
+**现象**：`t-cb094c4a` 在 test 通过后由主管把阶段退回 `develop`，并用 continuation 续办原开发 Session `s-ace2ab56` 修 P2。任务清单同时显示「开发（成员运行中）」和「开发 · 第 2 轮 / 等待主管派发」：续办成员仍按 `createdAt` 留在旧一轮，当前阶段又被追加为空 frontier。
+
+**根因**：`listTaskSessions` 按 `createdAt` 排序，续办不改变成员在列表中的位置；`rosterGroups` 只在成员阶段序列末尾追加当前阶段的空组，无法把续办成员放进新一轮。外部 `taskProgress` 与浏览器共用这一顺序，因此两处一致地错。
+
+**修正**：`listTaskSessions` 改按最近派发序（`updatedAt, createdAt, sessionId`）。`continueTaskSession` 会更新 `updatedAt`，续办成员因此排到已走过阶段之后，`rosterGroups` 将其归入新的阶段轮次，不再产生空 frontier；浏览器契约同步改为“按最近派发序”。
+
+**证据**：`test/store.test.ts`「orders a continued member after the members dispatched while it was settled」在旧排序下失败、新排序下通过；`test-fixtures/task-progress.json` 新增「rework by continuing the same member after test」，服务端与 webapp 两侧的 flow 测试共同读取并通过；全量 49 文件 493 用例、webapp 12 文件 81 用例、`tsc --noEmit` 通过。对运行中的 `t-cb094c4a` 用新排序读取，步骤为 `develop#1 completed, review#1 completed, test#1 completed, develop#2 completed, settle planned`，无空步骤。
+
+**未覆盖**：若某阶段只有这一个成员，续办后旧轮分组消失（轮号从 1 重新计），需要逐次派发行才能保留两轮历史；浏览器视觉未重启验证（运行中的服务仍是旧代码）。
