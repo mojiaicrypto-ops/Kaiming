@@ -56,16 +56,24 @@ function seedStep(store: Store): void {
         writeScope: ['src/**'],
         inputId: 'i-dev',
         inputPayload: { content: [{ type: 'text', text: 'implement it' }] },
+
       },
     ],
   });
 }
 
 /** Run the member's input to a terminal state, the way the worker would. */
-function settleMember(store: Store, status: 'completed' | 'failed' = 'completed'): void {
+function settleMember(store: Store, status: 'completed' | 'failed' | 'interrupted' = 'completed'): void {
   const claimed = store.claimNextInput('s-dev');
   if (claimed.kind !== 'claimed') throw new Error(`member input was not claimable: ${claimed.kind}`);
-  store.finishInput({ inputId: claimed.input.inputId, expectedRevision: claimed.input.revision, status });
+  store.finishInput({
+    inputId: claimed.input.inputId,
+    expectedRevision: claimed.input.revision,
+    status,
+    ...(status === 'interrupted'
+      ? { errorCode: 'RUN_TIMEOUT', errorMessage: 'run exceeded 5400s; the run was aborted' }
+      : {}),
+  });
 }
 
 function queueChiefInput(store: Store, inputId: string): void {
@@ -131,6 +139,36 @@ describe('settled-step wake', () => {
     settleMember(store, 'failed');
 
     expect(wakeForSettledStep(store, 't-1')).toMatchObject({ woken: true, reason: 'woken' });
+  });
+
+  it('sends an interrupted member to the recovery notice, once, with the recover instruction', () => {
+    const store = openStore();
+    seedStep(store);
+    settleMember(store, 'interrupted');
+
+    const woke = wakeForSettledStep(store, 't-1');
+    expect(woke).toMatchObject({ woken: true, noticeId: 'notice-i-dev' });
+    const notice = store.getInput('notice-i-dev');
+    expect(notice).toMatchObject({ kind: 'system_notice', status: 'queued', taskId: 't-1', sessionId: 's-chief' });
+    const text = JSON.stringify(notice?.payload);
+    expect(text).toContain('RUN_TIMEOUT');
+    expect(text).toContain('outcome is unknown');
+    expect(text).toContain('task(op=recover');
+    expect(text).toContain('Do not assume it finished');
+    // Only the recovery notice: the generic "continue" notice would hide the unknown outcome.
+    expect(store.listInputs('s-chief').map((input) => input.inputId)).toEqual(['notice-i-dev']);
+    expect(wakeForSettledStep(store, 't-1')).toMatchObject({ woken: false, reason: 'already-notified' });
+    expect(store.claimNextInput('s-chief').kind).toBe('claimed');
+  });
+
+  it('defers the interrupted-member recovery notice while the chief is busy', () => {
+    const store = openStore();
+    seedStep(store);
+    settleMember(store, 'interrupted');
+    queueChiefInput(store, 'i-chief');
+
+    expect(wakeForSettledStep(store, 't-1')).toMatchObject({ woken: false, reason: 'chief-busy' });
+    expect(store.getInput('notice-i-dev')).toBeUndefined();
   });
 
   it('does not wake a Task that is no longer running', () => {

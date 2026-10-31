@@ -14,7 +14,8 @@
  * `settleStep` sees the settled members.
  */
 import { createHash } from 'node:crypto';
-import type { InputStatus, Store } from '../store/store.ts';
+import { interruptedMemberNoticeId, queueInterruptedMemberNotice } from './host-recovery.ts';
+import type { InputRow, InputStatus, Store } from '../store/store.ts';
 
 /** Input states that mean "the step is still moving" (a stop request is still `processing`). */
 const UNSETTLED: readonly InputStatus[] = ['queued', 'processing'];
@@ -71,15 +72,48 @@ export function wakeForSettledStep(store: Store, taskId: string): StepWakeResult
   if (unsettled.length > 0) {
     return { woken: false, reason: 'step-busy' };
   }
-  const noticeId = stepNoticeId(taskId, memberInputIds);
-  if (store.getInput(noticeId) !== undefined) {
-    // One notice per dispatched step: re-entering this check must not wake the chief twice.
-    return { woken: false, reason: 'already-notified' };
-  }
   const chiefSessionId = task.chiefSessionId;
   const chief = store.getSession(chiefSessionId);
   if (chief === undefined || chief.roleId !== 'chief') {
     return { woken: false, reason: 'no-task' };
+  }
+  // An interrupted member has no verified outcome: complete/phase changes refuse the step until it
+  // is closed with evidence. Queue the same recovery notice the startup scan uses (same id), and do
+  // not also send the generic "continue" notice that would hide the unknown outcome.
+  const interrupted = memberInputIds
+    .map((inputId) => store.getInput(inputId))
+    .filter((input): input is InputRow => input !== undefined && input.status === 'interrupted');
+  if (interrupted.length > 0) {
+    if (interrupted.every((input) => store.getInput(interruptedMemberNoticeId(input.inputId)) !== undefined)) {
+      return { woken: false, reason: 'already-notified' };
+    }
+    if (store.listInputs(chiefSessionId).some((input) => CHIEF_BUSY.includes(input.status))) {
+      return { woken: false, reason: 'chief-busy' };
+    }
+    const queued = interrupted
+      .map((input) =>
+        queueInterruptedMemberNotice(
+          store,
+          {
+            inputId: input.inputId,
+            sessionId: input.sessionId,
+            taskId,
+            errorCode: input.errorCode,
+            chiefSessionId,
+          },
+          'was aborted before it delivered a report',
+        ),
+      )
+      .filter((notice) => notice.queued);
+    const first = queued[0];
+    return first === undefined
+      ? { woken: false, reason: 'already-notified' }
+      : { woken: true, noticeId: first.noticeId, reason: 'woken' };
+  }
+  const noticeId = stepNoticeId(taskId, memberInputIds);
+  if (store.getInput(noticeId) !== undefined) {
+    // One notice per dispatched step: re-entering this check must not wake the chief twice.
+    return { woken: false, reason: 'already-notified' };
   }
   if (store.listInputs(chiefSessionId).some((input) => CHIEF_BUSY.includes(input.status))) {
     // It is running (its own wait will see the members) or it already has a notice to run.

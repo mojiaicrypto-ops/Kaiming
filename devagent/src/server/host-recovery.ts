@@ -75,3 +75,62 @@ export function closeInterruptedChiefInput(
   }
   return { closed: true, noticeId };
 }
+
+export interface InterruptedMemberInput {
+  readonly inputId: string;
+  readonly sessionId: string;
+  readonly taskId: string;
+  readonly errorCode: string | null;
+  readonly chiefSessionId: string;
+}
+
+/** The one id both the startup scan and a live watchdog abort use for the same member input. */
+export function interruptedMemberNoticeId(inputId: string): string {
+  return `notice-${inputId}`;
+}
+
+/**
+ * Tell the owning chief that a member run has no verified outcome. Only the chief can verify it and
+ * close it (`task(op=recover)`); without this notice the step waits forever on unknown work. The id
+ * is derived from the member input, so the startup scan and a live watchdog abort agree on one row.
+ */
+export function queueInterruptedMemberNotice(
+  store: Store,
+  interrupted: InterruptedMemberInput,
+  detail: string,
+): { readonly queued: boolean; readonly noticeId: string } {
+  const noticeId = interruptedMemberNoticeId(interrupted.inputId);
+  if (store.getInput(noticeId) !== undefined) {
+    return { queued: false, noticeId };
+  }
+  const chief = store.getSession(interrupted.chiefSessionId);
+  if (chief === undefined) {
+    return { queued: false, noticeId };
+  }
+  store.acceptInput({
+    inputId: noticeId,
+    projectId: chief.projectId,
+    sessionId: interrupted.chiefSessionId,
+    taskId: interrupted.taskId,
+    sourceKey: `recovery-notice:${interrupted.inputId}`,
+    requestKey: noticeId,
+    method: 'session.system_notice',
+    kind: 'system_notice',
+    payload: {
+      content: [
+        {
+          type: 'text',
+          text:
+            `The host detected an interrupted run. Member input ${interrupted.inputId} ` +
+            `(session ${interrupted.sessionId}, Task ${interrupted.taskId}` +
+            `${interrupted.errorCode === null ? '' : `, code ${interrupted.errorCode}`}) ${detail}. ` +
+            'Its outcome is unknown. Verify the real state (investigator + expectedKind=recovery, or ' +
+            'your own read-only checks), then close it with ' +
+            `task(op=recover, sessionId=${interrupted.sessionId}, evidenceRefs=[...], ` +
+            'resolution=completed|failed|stopped) citing that evidence. Do not assume it finished.',
+        },
+      ],
+    },
+  });
+  return { queued: true, noticeId };
+}

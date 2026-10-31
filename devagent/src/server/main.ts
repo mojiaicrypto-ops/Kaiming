@@ -25,7 +25,7 @@ import { projectEventImages } from './image-projection.ts';
 import { SessionEventHub } from './hub.ts';
 import { wakeForSettledStep } from './step-wake.ts';
 import { epochOf } from '../runtime/epoch.ts';
-import { closeInterruptedChiefInput } from './host-recovery.ts';
+import { closeInterruptedChiefInput, queueInterruptedMemberNotice } from './host-recovery.ts';
 import { WorkbenchWorker } from './worker.ts';
 import { InteractionBridge } from '../runtime/interactions.ts';
 import { PiRuntimeFactory } from '../runtime/pi-runtime.ts';
@@ -97,37 +97,10 @@ export function startWorkbench(options: StartOptions): Promise<{
   // session, task(op=update) reports STAGE_NOT_READY) and only the chief can verify it. Without
   // this notice the Task waits forever on work whose process is gone.
   for (const interrupted of store.listInterruptedTaskInputs()) {
-    const noticeId = `notice-${interrupted.inputId}`;
-    if (store.getInput(noticeId) !== undefined) continue;
-    const chief = store.getSession(interrupted.chiefSessionId);
-    if (chief === undefined) continue;
-    store.acceptInput({
-      inputId: noticeId,
-      projectId: chief.projectId,
-      sessionId: interrupted.chiefSessionId,
-      taskId: interrupted.taskId,
-      sourceKey: `recovery-notice:${interrupted.inputId}`,
-      requestKey: noticeId,
-      method: 'session.system_notice',
-      kind: 'system_notice',
-      payload: {
-        content: [
-          {
-            type: 'text',
-            text:
-              `The host detected an interrupted run. Member input ${interrupted.inputId} ` +
-              `(session ${interrupted.sessionId}, Task ${interrupted.taskId}` +
-              `${interrupted.errorCode !== null ? `, code ${interrupted.errorCode}` : ''}) ` +
-              'was started by a process that is gone, so its outcome is unknown. Verify the real ' +
-              'state (investigator + expectedKind=recovery, or your own read-only checks), then ' +
-              `close it with task(op=recover, sessionId=${interrupted.sessionId}, ` +
-              'evidenceRefs=[...], resolution=completed|failed|stopped) citing that evidence. ' +
-              'Do not assume it finished.',
-          },
-        ],
-      },
-    });
-    log(`recovery notice queued for chief ${interrupted.chiefSessionId} (input ${interrupted.inputId})`);
+    const notice = queueInterruptedMemberNotice(store, interrupted, 'was started by a process that is gone');
+    if (notice.queued) {
+      log(`recovery notice queued for chief ${interrupted.chiefSessionId} (input ${interrupted.inputId})`);
+    }
   }
   const server: RuntimeDefaults = {
     model: options.model ?? { providerId: 'unset', modelId: 'unset' },

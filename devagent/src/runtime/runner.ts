@@ -133,7 +133,10 @@ export interface RunnerOptions {
   readonly onTaskChange?: (sessionId: string, taskId: string) => void;
   /** A run with no Pi activity for this long is aborted (RUN_STALLED) instead of waiting forever. */
   readonly runStallMs?: number;
-  /** A run exceeding this total duration is aborted (RUN_TIMEOUT). */
+  /**
+   * A run exceeding this total *charged* duration is aborted (RUN_TIMEOUT). Time spent waiting on
+   * the user or on a dispatched step is not charged: that is not the run's own work.
+   */
   readonly runTotalMs?: number;
 }
 
@@ -145,6 +148,15 @@ export class InputRunner {
   private readonly hostAborts = new Set<string>();
   /** Last Pi activity per session: a stalled provider/stream must not mean an infinite wait. */
   private readonly lastEventAt = new Map<string, number>();
+  /**
+   * Host-owned waits per `${sessionId}\0${inputId}`: the watchdog must not charge a dispatch wait to
+   * the run that owns it. The input id is part of the key so a poll left behind by a stopped run
+   * cannot freeze the next run's windows.
+   */
+  private readonly hostWaits = new Map<string, number>();
+  private hostWaitKey(sessionId: string): string {
+    return `${sessionId}\u0000${this.liveRuns.get(sessionId)?.inputId ?? ''}`;
+  }
   /** Role prompt bodies, cached per prompt directory. */
   private readonly promptBodies = new Map<string, PromptBodies>();
   /** Identity of the run currently executing per session: a Pi instance is reused across inputs. */
@@ -199,7 +211,12 @@ export class InputRunner {
       abort: () => handle.session.abort(),
       activityAt: () => this.lastEventAt.get(sessionId) ?? 0,
       // A question on screen means the run waits on the user: that wait is not a stalled provider.
-      waiting: () => this.interactions.isWaiting(sessionId),
+      // The same holds while the chief waits on a dispatched step: the slow work belongs to member
+      // runs with their own watchdogs, so charging it here would abort every Task longer than the
+      // total window. The model's own generation still counts.
+      waiting: () =>
+        this.interactions.isWaiting(sessionId) ||
+        (this.hostWaits.get(this.hostWaitKey(sessionId)) ?? 0) > 0,
       stallMs: this.options.runStallMs ?? DEFAULT_RUN_STALL_MS,
       totalMs: this.options.runTotalMs ?? DEFAULT_RUN_TOTAL_MS,
     });
@@ -504,7 +521,8 @@ export class InputRunner {
                   dispatch: async (memberSessionId: string) => {
                     await this.runNext(memberSessionId);
                   },
-                  settleStep: (taskId: string, timeoutMs: number) => this.settleStep(taskId, timeoutMs),
+                  settleStep: (taskId: string, timeoutMs: number) =>
+                    this.settleStep(taskId, timeoutMs, sessionId),
                 },
                 ...(this.options.onTaskChange === undefined
                   ? {}
@@ -915,35 +933,48 @@ export class InputRunner {
   /**
    * Wait for the Task's current step: poll the members' real input states (the store is the truth, not
    * an in-memory promise), return a snapshot on timeout, and never cancel or rebuild member work.
+   * The wait is host work, not the chief's own run: it is marked so the watchdog does not charge it.
    */
-  private async settleStep(taskId: string, timeoutMs: number): Promise<DelegationReturn> {
+  private async settleStep(
+    taskId: string,
+    timeoutMs: number,
+    sessionId: string,
+  ): Promise<DelegationReturn> {
     const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      const task = this.options.store.getTask(taskId);
-      if (task === undefined) {
-        throw new StoreError('NOT_FOUND', 'Task does not exist', { taskId });
+    const waitKey = this.hostWaitKey(sessionId);
+    this.hostWaits.set(waitKey, (this.hostWaits.get(waitKey) ?? 0) + 1);
+    try {
+      for (;;) {
+        const task = this.options.store.getTask(taskId);
+        if (task === undefined) {
+          throw new StoreError('NOT_FOUND', 'Task does not exist', { taskId });
+        }
+        const members = this.options.store
+          .listTaskSessions(taskId)
+          .filter((member) => task.currentSessionIds.includes(member.sessionId));
+        const sessions = members.map((member) => this.memberState(member.currentInputId));
+        const unfinished = sessions.filter(
+          (member) =>
+            member.state === 'queued' ||
+            member.state === 'working' ||
+            member.state === 'waiting_user' ||
+            member.state === 'stopping',
+        );
+        if (unfinished.length === 0) {
+          const failing = sessions.filter((member) => member.state !== 'completed');
+          return { taskId, outcome: failing.length === 0 ? 'completed' : 'blocked', sessions };
+        }
+        if (Date.now() >= deadline) {
+          return { taskId, outcome: 'timeout', sessions };
+        }
+        const { promise, resolve } = Promise.withResolvers<void>();
+        setTimeout(resolve, 25);
+        await promise;
       }
-      const members = this.options.store
-        .listTaskSessions(taskId)
-        .filter((member) => task.currentSessionIds.includes(member.sessionId));
-      const sessions = members.map((member) => this.memberState(member.currentInputId));
-      const unfinished = sessions.filter(
-        (member) =>
-          member.state === 'queued' ||
-          member.state === 'working' ||
-          member.state === 'waiting_user' ||
-          member.state === 'stopping',
-      );
-      if (unfinished.length === 0) {
-        const failing = sessions.filter((member) => member.state !== 'completed');
-        return { taskId, outcome: failing.length === 0 ? 'completed' : 'blocked', sessions };
-      }
-      if (Date.now() >= deadline) {
-        return { taskId, outcome: 'timeout', sessions };
-      }
-      const { promise, resolve } = Promise.withResolvers<void>();
-      setTimeout(resolve, 25);
-      await promise;
+    } finally {
+      const remaining = (this.hostWaits.get(waitKey) ?? 1) - 1;
+      if (remaining <= 0) this.hostWaits.delete(waitKey);
+      else this.hostWaits.set(waitKey, remaining);
     }
   }
 

@@ -629,6 +629,81 @@ describe('input runner', () => {
     expect(h.store.getInput('i-1')?.status).toBe('completed');
   }, 30_000);
 
+  it('does not charge the chief for time spent waiting on a dispatched step', async () => {
+    const h = await harness({
+      replies: [
+        {
+          kind: 'tool_calls',
+          calls: [
+            {
+              name: 'task',
+              arguments: JSON.stringify({ op: 'dispatch', taskId: 't-1', waitTimeoutMs: 2_000 }),
+            },
+          ],
+        },
+        { kind: 'text', text: 'step settled' },
+      ],
+      runTotalMs: 500,
+      runStallMs: 600,
+      acceptInput: false,
+    });
+    h.store.createTask({
+      id: 't-1',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      goal: 'ship it',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'p' },
+      authorizationRefs: [],
+      sourceInputId: 'seed',
+    });
+    h.store.createTaskSessions({
+      taskId: 't-1',
+      members: [
+        {
+          sessionId: 's-dev',
+          taskId: 't-1',
+          roleId: 'developer',
+          phase: 'plan',
+          label: 'dev',
+          instructions: 'implement it',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'implementation',
+          writeScope: ['src/**'],
+          inputId: 'i-dev',
+          inputPayload: { content: [{ type: 'text', text: 'implement it' }] },
+        },
+      ],
+    });
+    // The chief's input cites the Task, as the browser does while the Task is open.
+    accept(h.store, 'i-1', 'req-1', 't-1');
+    const member = h.store.claimNextInput('s-dev');
+    if (member.kind !== 'claimed') throw new Error(`member input was not claimable: ${member.kind}`);
+
+    // The member settles well past both watchdog windows. Only the chief's wait is real here, so a
+    // watchdog that charges that wait would abort the chief (RUN_TIMEOUT/RUN_STALLED) before this.
+    const finishing = (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      h.store.finishInput({
+        inputId: 'i-dev',
+        expectedRevision: member.input.revision,
+        status: 'completed',
+      });
+    })();
+
+    const outcome = await h.runner.runNext('s-1');
+    await finishing;
+
+    expect(outcome.kind).toBe('completed');
+    expect(h.store.getInput('i-1')?.status).toBe('completed');
+  }, 30_000);
+
   it('reports an inaccessible project before claiming, leaving the input queued', async () => {
     const h = await harness({ replies: [{ kind: 'text', text: 'ok' }] });
     rmSync(h.cwd, { recursive: true, force: true });
