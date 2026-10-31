@@ -303,3 +303,31 @@
 **证据**：`test/worker.test.ts` 4 例（并发启动、同会话不重入、stop 等待在飞 run、单会话异常隔离）；`test/runtime-factory.test.ts` 并发 runtime 同一实例；`test/server-write.test.ts` 16 例；定向 3 文件 21 例通过；全量 47 文件 476 例中 474 通过，2 个 `git-commit-gate` 在并行负载下 5s 超时，单文件复跑 23/23 通过，且在 HEAD 基线同样复现，属主机负载 flake。
 
 **未覆盖**：没有通过真实 HTTP/worker 同时提交两个主管会话的 E2E；并发启动由 worker 单测证明。专业 Session 并发上限仍未由程序强制（既有缺口，和本次两个主管会话相互阻塞不同）。
+
+## 2026-10-31 · Task 结束后排队中的主管消息被丢弃
+
+**现象**：用户与主管的对话在队列里（Task 或主管上一轮仍在运行），Task 结束后这条消息没有运行，也没有任何反馈。aisuangua 现场：`s-7f07dfca29b5` 的 `c-mvv6kpir-2230-a9abe0`（`task完成后，不需要我确认直接按照你的计划进行下一个需求实现`）在 Task `t-12db109f` 完成的同一秒被写成 `stopped` / `TASK_ENDED`，从未进入主管。
+
+**根因**：`Store.claimNextInput` 的队列清扫把「`taskId` 指向已 completed/cancelled Task 的 queued 输入」一律关闭，不区分作者。用户消息在 Task 运行期间被关联到该 Task，Task 一结束就被当成孤儿 Task 工作清掉；暂停分支里已有的「主管自己的回合不算 Task 工作」豁免没有覆盖终态 Task。
+
+**修正**：清扫只关闭真正的 Task 工作；当输入是**该 Task 主管会话自己的 `user`/`system_notice` 回合**时保留并投递（R3：新话题排队到 Task 结束，而不是被丢弃）。`TASK_CONTROLLED` 门禁对终态 Task 同样放行主管回合（终态指针本应在 `endTask`/`controlTask` 同一事务里清空，这里是防御性一致）。成员 `continuation` 等 Task 工作仍按原规则以 `TASK_ENDED` 关闭。
+
+**证据**：`test/server-write.test.ts`（主管消息在 Task 取消后仍被 claim 并运行、成员工作被关闭）、`test/store.test.ts`（引用已取消 Task 的主管迟到回合被投递）；真实 `state.db` 副本按现场行形状插入 queued 主管消息后 `claimNextInput` 返回 `claimed`（修正前为 `stopped/TASK_ENDED`）；全量 47 文件 477 用例、`tsc --noEmit` 通过。
+
+**未覆盖**：已停止的历史消息（`c-mvv6kpir-2230-a9abe0`）不会自动恢复；是否重新投递由用户决定。真实浏览器里「排队中回显 → 投递」的视觉链路未重跑。
+
+**独立复核**：Review `passed`（无阻塞项）；Test 定向 4 文件 52 用例、全量 49 文件 484 用例、`tsc --noEmit` 通过；证据归档 `.agentdev/work/chief-session-continuity-20261031/`。
+
+## 2026-10-31 · 报告晚到后主管不再推进（宿主唤醒）
+
+**现象**：Task 运行中，主管回合因等待超时/看门狗/模型失败先结束；成员随后交报告，主管不推进，直到用户发消息。aisuangua 现场：主管通知回合 14:52:07 结束，dev 输入 15:29:00 完成、报告 15:28:36 落库，主管其后 43 分钟没有任何输入，15:35:26 用户消息才恢复推进。产品决定（本轮确认）：新增宿主级“步骤停稳唤醒”。
+
+**根因**：`settleStep` 是主管回合内的内存轮询（`src/runtime/runner.ts`），回合结束即消失；成员报告只经 `hub.publish(invalidate)` 到浏览器（`src/server/main.ts`），不写任何输入；`WorkbenchWorker` 只调度有 queued 输入的会话。唯一自动恢复只覆盖主管输入被写成 `interrupted` 的情形（看门狗 → `notice-host-closed-*`）。
+
+**修正**：新增 `src/server/step-wake.ts`，在任意输入到达终态后（`main.ts` 的 `onOutcome`）检查该 Task：状态 active/waiting、当前步骤成员全部停稳（queued/processing 之外）、主管没有任何 queued/processing/interrupted 输入、且这个步骤尚未通知过，则为该步骤投递一条 `system_notice` 并投递给主管会话。通知 id 由 Task 与该步骤成员输入集合散列得出，一步只唤醒一次；通知只给主管一次回合，不推进阶段、不判定完成、不重放任何成员工作。主管仍在运行时跳过（它自己的 `settleStep` 会看到成员结果），其回合结束时再次检查。
+
+**证据**：`test/step-wake.test.ts` 6 例（唤醒、可被 claim、按步骤去重、成员未停稳/主管忙/Task 非运行/无步骤不投递、失败成员也唤醒）；`test/step-wake-e2e.test.ts` 真实 workbench + stub 模型：成员运行结束 → 宿主写入 `notice-step-t-1-*` → worker 认领并跑完主管回合；全量 49 文件 484 用例、`tsc --noEmit` 通过。契约补充见 `runtime-contract.md` R3。
+
+**未覆盖**：主管若在唤醒回合里仍不推进且不改变步骤，这条通知不会重复投递（有意不循环）；浏览器里“自动唤醒回合”的视觉呈现未重跑；旧的 `notice-host-closed` 与本次唤醒可能在同一场景先后出现，目前靠主管忙检查避免叠加，未做专门去重测试。
+
+**独立复核**：Review `passed`（无阻塞项）；Test 同上。非阻塞发现（暂停→恢复/queued 停止/恢复确认不触发唤醒、修复一缺少真实回合 E2E、interrupted 成员提示文案）处置待定，见归档 `review.md` 与 `settlement.md`。

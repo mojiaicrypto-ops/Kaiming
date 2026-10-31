@@ -8,6 +8,13 @@
 
 ---
 
+## 本轮新增（2026-10-31，主管会话连续性）
+
+| 编号 | 现象 | 证据位置 | 影响 | 处置 |
+|---|---|---|---|---|
+| C6 | 已终止 Task 的队列清扫把该 Task 主管会话自己的 queued 用户消息也写成 `stopped/TASK_ENDED`。aisuangua `c-mvv6kpir-2230-a9abe0` 在 Task `t-12db109f` 完成的同一秒被关闭 | `src/store/store.ts`（`claimNextInput` 清扫） | 用户消息无提示丢失，Task 结束后主管不再推进 | **已关闭（2026-10-31，`7b8d9bc`）**：清扫只关闭真正的 Task 工作；该 Task 主管会话的 `user`/`system_notice` 回合保留并投递，控制门禁对终态 Task 同样放行主管回合。用例 `test/store.test.ts`、`test/server-write.test.ts` |
+| C7 | 委派等待是主管回合内的内存轮询，回合结束（等待超时 / 看门狗 / 模型失败）后成员报告到达时没有输入可调度；`onOutcome` 只向浏览器发布 invalidate | `src/runtime/runner.ts`（`settleStep`）、`src/server/main.ts`（`onOutcome`） | 报告到了主管不推进，直到用户发消息。aisuangua 现场：主管回合 14:52 结束，dev 报告 15:29 落库，15:35 用户消息才恢复 | **已关闭（2026-10-31，`d5f4e53`）**：`src/server/step-wake.ts` 在步骤停稳、主管空闲时投递一次 `system_notice`（按该步骤成员输入集合去重）；主管忙、Task 非运行、空步骤不投递。用例 `test/step-wake.test.ts`、`test/step-wake-e2e.test.ts`；契约见 [runtime-contract](runtime-contract.md#r3-共用-session-执行链路) |
+
 ## 本轮新增（2026-10-28，外部 Agent 接入 MCP）
 
 | 编号 | 现象 | 证据位置 | 影响 | 处置 |
