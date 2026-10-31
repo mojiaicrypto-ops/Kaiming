@@ -23,6 +23,7 @@ import { registerStreamMethods } from './stream-methods.ts';
 import { liveHistoryRead } from './live-snapshot.ts';
 import { projectEventImages } from './image-projection.ts';
 import { SessionEventHub } from './hub.ts';
+import { wakeForSettledStep } from './step-wake.ts';
 import { epochOf } from '../runtime/epoch.ts';
 import { closeInterruptedChiefInput } from './host-recovery.ts';
 import { WorkbenchWorker } from './worker.ts';
@@ -297,6 +298,21 @@ export function startWorkbench(options: StartOptions): Promise<{
           const task = store.getTask(taskId);
           if (task !== undefined && task.chiefSessionId !== sessionId) {
             hub.publish(task.chiefSessionId, { type: 'invalidate', entity: 'task', id: taskId });
+          }
+        }
+        // The chief's dispatch wait lives in its own turn. When that turn is gone (wait timeout,
+        // watchdog, provider error) nothing would consume a report that lands afterwards; wake the
+        // chief once per settled step, whichever side just settled.
+        const coordinated = taskId ?? store.getSession(sessionId)?.currentTaskId ?? null;
+        if (coordinated !== null) {
+          try {
+            const woke = wakeForSettledStep(store, coordinated);
+            if (woke.woken) log(`woke the chief for settled step of ${coordinated} (${woke.noticeId ?? ''})`);
+          } catch (error) {
+            log(
+              `could not wake the chief for ${coordinated}: ` +
+                (error instanceof Error ? error.message : String(error)),
+            );
           }
         }
       }
