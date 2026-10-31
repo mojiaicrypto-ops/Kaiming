@@ -33,6 +33,7 @@ settlement:
     - review 问题 4：主管已消费结果但故意不派发下一步时会多一次提醒回合；是否接受。
     - AC-45 已写入验收场景，但浏览器/真实模型未执行（仍为未验证）。
     - 已停止的历史消息 `c-mvv6kpir-2230-a9abe0` 不自动重投；是否按原文重投由用户决定。
+  deferred_by_user: 2026-10-31 — F1–F3、四个 review 问题、AC-45 未执行、历史消息不重投，全部只记录、暂不处理。
   indexes_updated: []
   archived:
     - .agentdev/work/chief-session-continuity-20261031/plan.md
@@ -46,14 +47,15 @@ settlement:
     - docs/technicalnew/messaging-and-collaboration.md (M2 已定义 timeout 快照；宿主补回合写在 R3)
     - docs/productnew/modules/external-agents.md (外部状态仍由事实推导，无行为变化)
     - rules / skills (触发条件未变)
-  completion_gate: pending
+  completion_gate: passed
 ```
 
-## Pending（需要用户决定后才可记为 Completed）
+## Deferred（用户 2026-10-31 决定：只记录，暂不处理）
 
-1. F1–F3 的处置：全部为非阻塞；F1 是同机制内真实未覆盖路径，建议优先。
-2. 四个 review 问题：其中“通知在 Task 结束后仍运行”是两条改动相互作用的已知边界，目前接受为一次性多回合。
-3. AC-45 未在浏览器/真实模型下执行；`test/browser` 未运行。该条的验收措辞按本轮确认的行为 A 写成，若口径不同以用户修订为准。
+1. F1–F3：暂停→恢复 / queued 停止 / 恢复确认不触发唤醒；修复一缺真实回合 E2E；interrupted 成员通知文案。
+2. 四个 review 问题：通知在 Task 结束后仍运行、CHIEF_BUSY 计入不可 claim 的旧输入、唤醒回合失败不重发、主管故意不派发时多一次提醒。
+3. AC-45 未在浏览器/真实模型下执行；`test/browser` 未运行。AC-45 措辞按确认的行为 A 写成。
+4. 已停止的历史消息 `c-mvv6kpir-2230-a9abe0` 不自动重投。
 
 ## Commits
 

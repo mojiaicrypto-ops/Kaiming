@@ -14,6 +14,8 @@
 |---|---|---|---|---|
 | C6 | 已终止 Task 的队列清扫把该 Task 主管会话自己的 queued 用户消息也写成 `stopped/TASK_ENDED`。aisuangua `c-mvv6kpir-2230-a9abe0` 在 Task `t-12db109f` 完成的同一秒被关闭 | `src/store/store.ts`（`claimNextInput` 清扫） | 用户消息无提示丢失，Task 结束后主管不再推进 | **已关闭（2026-10-31，`7b8d9bc`）**：清扫只关闭真正的 Task 工作；该 Task 主管会话的 `user`/`system_notice` 回合保留并投递，控制门禁对终态 Task 同样放行主管回合。用例 `test/store.test.ts`、`test/server-write.test.ts` |
 | C7 | 委派等待是主管回合内的内存轮询，回合结束（等待超时 / 看门狗 / 模型失败）后成员报告到达时没有输入可调度；`onOutcome` 只向浏览器发布 invalidate | `src/runtime/runner.ts`（`settleStep`）、`src/server/main.ts`（`onOutcome`） | 报告到了主管不推进，直到用户发消息。aisuangua 现场：主管回合 14:52 结束，dev 报告 15:29 落库，15:35 用户消息才恢复 | **已关闭（2026-10-31，`d5f4e53`）**：`src/server/step-wake.ts` 在步骤停稳、主管空闲时投递一次 `system_notice`（按该步骤成员输入集合去重）；主管忙、Task 非运行、空步骤不投递。用例 `test/step-wake.test.ts`、`test/step-wake-e2e.test.ts`；契约见 [runtime-contract](runtime-contract.md#r3-共用-session-执行链路) |
+| C8 | 宿主唤醒只在 run outcome 之后评估；暂停→恢复、queued 输入被停止、`session.recovery.resolve` 都不产生 outcome，步骤停稳后仍没有唤醒 | `src/server/main.ts`（唯一调用点）、`src/runtime/runner.ts`（`controlTask`）、`src/store/store.ts`（`requestStop`） | 这三条路径下 Task 仍要等用户发消息才推进 | **登记（2026-10-31）**：用户决定先记录、暂不处理（review F1） |
+| C9 | 步骤停稳唤醒把 `interrupted` 成员视为停稳，通知写「no unfinished member work / no formal report was recorded」，没有 `task(op=recover)` 指引；而完成与切阶段都会拒绝未核实的中断 | `src/server/step-wake.ts`（成员停稳判定与通知文案） | 主管可能被引向会被拒绝的操作，未知执行结果得不到核实。现场 `t-cb094c4a`：dev `i-56a31e98` RUN_TIMEOUT，主管 02:42 已结束，唤醒通知只说“没有正式报告” | **登记（2026-10-31）**：随“主会话结束后的成员未知异常”调查处理（review F3） |
 
 ## 本轮新增（2026-10-28，外部 Agent 接入 MCP）
 
