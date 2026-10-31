@@ -206,6 +206,10 @@ export function createTaskTool(contextOf: TaskToolContextResolver, options: { re
         completionResultId: { type: 'string' },
         includeResultBodies: { type: 'boolean' },
         chiefSessionId: { type: 'string', description: 'adopt: the chief session that takes the Task over' },
+        sessionId: {
+          type: 'string',
+          description: 'recover: the member session whose interrupted input is being closed',
+        },
         evidenceRefs: { type: 'array', items: { type: 'string' } },
         resolution: { type: 'string', enum: ['completed', 'failed', 'stopped'] },
       },

@@ -1184,6 +1184,81 @@ describe('input runner', () => {
     expect(h.store.getTask('t-1')).toBeUndefined();
   });
 
+  it('closes an interrupted member input through task(op=recover, sessionId)', async () => {
+    const h = await harness({
+      replies: [
+        {
+          kind: 'tool_calls',
+          calls: [
+            {
+              name: 'task',
+              arguments: JSON.stringify({
+                op: 'recover',
+                taskId: 't-1',
+                sessionId: 's-dev',
+                evidenceRefs: ['file:src/x.ts'],
+                resolution: 'stopped',
+              }),
+            },
+          ],
+        },
+        { kind: 'text', text: 'recovered' },
+      ],
+      acceptInput: false,
+    });
+    h.store.createTask({
+      id: 't-1',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      goal: 'ship it',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'p' },
+      authorizationRefs: [],
+      sourceInputId: 'seed',
+    });
+    h.store.createTaskSessions({
+      taskId: 't-1',
+      members: [
+        {
+          sessionId: 's-dev',
+          taskId: 't-1',
+          roleId: 'developer',
+          phase: 'plan',
+          label: 'dev',
+          instructions: 'implement it',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'implementation',
+          writeScope: ['src/**'],
+          inputId: 'i-dev',
+          inputPayload: { content: [{ type: 'text', text: 'implement it' }] },
+        },
+      ],
+    });
+    accept(h.store, 'i-1', 'req-1', 't-1');
+    const member = h.store.claimNextInput('s-dev');
+    if (member.kind !== 'claimed') throw new Error(`member input was not claimable: ${member.kind}`);
+    h.store.finishInput({
+      inputId: 'i-dev',
+      expectedRevision: member.input.revision,
+      status: 'interrupted',
+      errorCode: 'RUN_TIMEOUT',
+      errorMessage: 'run exceeded 5400s',
+    });
+
+    const outcome = await h.runner.runNext('s-1');
+
+    // The schema must declare `sessionId` or the tool layer rejects the whole call; the op reads it
+    // at the top level, so a rejected call leaves the interrupted input untouched.
+    expect(outcome.kind).toBe('completed');
+    expect(h.store.getInput('i-dev')?.status).toBe('stopped');
+  }, 30_000);
+
   it('resolves the current input and Task per run, not per session instance', async () => {
     const h = await harness({
       replies: [
