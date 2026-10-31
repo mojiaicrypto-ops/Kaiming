@@ -117,6 +117,7 @@ dispatch(sessionId):
 - `waiting_user` 的原生交互等待与委派等待（`settleStep`）都不计入运行停滞/总时长窗口：用户思考、成员施工都不是该 run 自己的工作量。委派等待的时间属于成员运行，成员各有看门狗；主管自己的模型生成仍计入。主管自身输入被停滞或超时中止时，宿主关闭为 stopped、在 recovery 记录 `host:*` 证据并注入系统提示说明结果未知，队列随后继续；不重投原输入，也不要求用户在界面另行恢复。
 - 专业 report 成功不等于 Pi 停稳。正式最终报告后禁止该输入继续修改成果；Runtime 确认结束才释放负责人并满足当前步骤完成条件。正式报告与停稳保存事实后唤醒原委派等待；原生交互等待不提前结束委派。
 - 委派等待只活在主管自己的回合里。回合结束后（`waitTimeoutMs` 返回快照、看门狗中止、模型失败）成员报告到达时，宿主为该 Task 的当前步骤投递一条系统通知，唤醒主管一次；system_notice 按该步骤的成员输入集合去重，主管仍有 queued/processing/interrupted 输入或 Task 不是 active/waiting 时不投递。当前步骤含 `interrupted` 成员时改投恢复通知 `notice-<成员输入>`（与启动扫描同一 id，列出运行错误并给出 `task(op=recover, sessionId, evidenceRefs, resolution)` 指引），不投“步骤已停稳”的通用通知。宿主只补这一次回合，不推进阶段、不判定完成。
+- `task(op=dispatch)` 直接启动的成员运行与 Dispatcher 启动的运行使用同一终态处理：运行结束（完成/失败/停止/中断）必须上报宿主，否则回合结束后的成员结果既不会刷新界面也不会触发上面的唤醒。工作台启动时对每个 active/waiting 且当前步骤已停稳的 Task 再评估一次唤醒（同一 `notice-step-*` 去重）；进程重启不重复投递。
 - task(op=dispatch) / 原生 ctx.ui 都是可取消异步等待，保留 Session 执行所有权。主管不占专业 Session 并发名额；专业名额=1 也能推进。首版不接管逐模型请求调度，每 Session 不接收第二次并发 prompt。
 
 ## R4 Pi 接入的明确契约

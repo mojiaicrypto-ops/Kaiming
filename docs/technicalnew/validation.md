@@ -355,3 +355,15 @@
 **证据**：`test/runtime.test.ts`「closes an interrupted member input through task(op=recover, sessionId)」走真实 stub 模型 → Pi 工具调用 → handler；修正前成员输入保持 `interrupted`（调用被 schema 拒绝），修正后变为 `stopped`。独立测试在 `/tmp` 副本删除该属性后复现失败，恢复后通过；全量 49 文件 488 用例、`tsc --noEmit` 通过。独立 Review `passed`，确认八种 op 的 schema/handler 一致。
 
 **未覆盖**：recover 的其余错误分支（缺证据、非本 Task 成员、非 interrupted）未通过工具环覆盖；真实 provider 路径未跑。
+
+## 2026-10-31 · dispatch 启动的成员结束后无人接收（含重启补唤醒）
+
+**现象**：`t-cb094c4a` 的 test 成员 `i-825150fc` 在 06:36:57 完成（结果 `r-60d3e1ee` passed 于 06:36:51），主管回合 `c-mvvzd6h5` 已于 06:30:36 结束；之后没有任何主管输入，也没有 `notice-step-*`。WAL 备份探针证明 `wakeForSettledStep` 本可唤醒（`woken: true`），说明唤醒根本没被调用。
+
+**根因**：`task(op=dispatch)` 通过 `runner.runNext(member)` 直接启动成员，运行不在 `WorkbenchWorker` 名下，worker 的 `onOutcome` 不会触发；主管回合结束后成员才结束时，既没有界面 invalidate，也没有步骤停稳唤醒。启动扫描也只处理 interrupted 输入，进程停止期间已停稳的步骤同样无人补回合。
+
+**修正**：`RunnerOptions.onRunSettled` 在 dispatch 等待的 `runNext` 结束后上报终态；`main.ts` 抽出 `handleOutcome`，同时作为 worker 的 `onOutcome` 与 runner 的 `onRunSettled`。启动时为每个 active/waiting Task 调用一次 `wakeForSettledStep`（按 `notice-step-*` 去重；paused/completed 与未停稳步骤不投递）。
+
+**证据**：`test/runtime.test.ts`「reports a member run the dispatch tool started after the chief turn ended」（删掉 `onRunSettled` 即超时失败）；`test/step-wake-e2e.test.ts` 新增两条真实 workbench E2E：dispatch 成员晚于主管回合结束（删除 main 的接线后 3/3 失败）、重启后已停稳步骤补唤醒（删除启动扫描后失败）；全量 49 文件 491 用例、`tsc --noEmit` 通过。独立 Review 两轮 `passed`（含 worker/dispatch 竞争、启动去重与 paused/completed 无副作用的实测）。
+
+**未覆盖**：唤醒回合自身失败后的重试；成员 queued 但 blocked；浏览器视觉。
