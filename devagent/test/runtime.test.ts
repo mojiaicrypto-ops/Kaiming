@@ -9,7 +9,7 @@ import { resolveEffectiveConfig, type RuntimeDefaults, type ThinkingLevel } from
 import { PiRuntimeFactory } from '../src/runtime/pi-runtime.ts';
 import { assembleSystemPrompt, loadPromptBodies } from '../src/runtime/prompt-assembly.ts';
 import { SessionRegistry } from '../src/runtime/registry.ts';
-import { InputRunner, boundaryPersistedOnDisk } from '../src/runtime/runner.ts';
+import { InputRunner, boundaryPersistedOnDisk, type RunOutcome } from '../src/runtime/runner.ts';
 import { createStubEnv, startStubModelServer, type StubReply } from '../spikes/harness/pi-env.ts';
 
 /** The role prompts the server ships (docs/technicalnew/prompts). */
@@ -67,6 +67,8 @@ async function harness(options: {
   /** Run watchdog windows, for tests that exercise a stall without waiting 15 minutes. */
   runStallMs?: number;
   runTotalMs?: number;
+  /** Runs the runner started outside the worker (the chief's dispatch tool). */
+  onRunSettled?: (sessionId: string, outcome: RunOutcome) => void;
 }): Promise<Harness> {
   const server = await startStubModelServer(options.replies);
   servers.push(server);
@@ -110,6 +112,7 @@ async function harness(options: {
     ...(options.sessionExtras !== undefined ? { sessionExtras: options.sessionExtras } : {}),
     ...(options.runStallMs !== undefined ? { runStallMs: options.runStallMs } : {}),
     ...(options.runTotalMs !== undefined ? { runTotalMs: options.runTotalMs } : {}),
+    ...(options.onRunSettled !== undefined ? { onRunSettled: options.onRunSettled } : {}),
   });
   return { store, runner, registry, defaults, agentDir: env.agentDir, cwd: env.cwd };
 }
@@ -702,6 +705,68 @@ describe('input runner', () => {
 
     expect(outcome.kind).toBe('completed');
     expect(h.store.getInput('i-1')?.status).toBe('completed');
+  }, 30_000);
+
+  it('reports a member run the dispatch tool started after the chief turn ended', async () => {
+    const memberSettled = Promise.withResolvers<string>();
+    const h = await harness({
+      replies: [
+        {
+          kind: 'tool_calls',
+          calls: [
+            {
+              name: 'task',
+              arguments: JSON.stringify({
+                op: 'dispatch',
+                taskId: 't-1',
+                waitTimeoutMs: 1_000,
+                sessions: [
+                  {
+                    roleId: 'developer',
+                    instructions: 'implement it',
+                    writeScope: ['src/**'],
+                    expectedKind: 'implementation',
+                  },
+                ],
+              }),
+            },
+          ],
+        },
+        { kind: 'slow_text', text: 'member finished', chunks: 1, delayMs: 1_200 },
+        { kind: 'text', text: 'chief ended before the member' },
+      ],
+      acceptInput: false,
+      onRunSettled: (sessionId, outcome) => {
+        if (sessionId !== 's-1' && outcome.kind === 'completed') memberSettled.resolve(sessionId);
+      },
+    });
+    h.store.createTask({
+      id: 't-1',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      goal: 'ship it',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'p' },
+      authorizationRefs: [],
+      sourceInputId: 'seed',
+    });
+    h.store.updateTask({ taskId: 't-1', phase: 'develop' });
+    accept(h.store, 'i-1', 'req-1', 't-1');
+
+    const outcome = await h.runner.runNext('s-1');
+    expect(outcome.kind).toBe('completed');
+
+    // The dispatch wait returned before the member; its run finishes afterwards in the background
+    // and must still be reported to the host (otherwise no invalidate and no settled-step wake).
+    const memberSessionId = await memberSettled.promise;
+    const member = h.store.getTaskSession(memberSessionId);
+    expect(member?.taskId).toBe('t-1');
+    expect(h.store.getInput(member?.currentInputId ?? '')?.status).toBe('completed');
   }, 30_000);
 
   it('reports an inaccessible project before claiming, leaving the input queued', async () => {

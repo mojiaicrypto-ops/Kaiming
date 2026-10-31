@@ -119,4 +119,179 @@ describe('settled-step wake (real workbench)', () => {
     // Two model requests: the member's own run, then the chief's wake turn.
     expect(stub.requests.length).toBeGreaterThanOrEqual(2);
   }, 60_000);
+
+  it('wakes the chief when the dispatch tool starts a member that outlives its turn', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'devagent-dispatch-e2e-'));
+    const dataDir = join(root, 'data');
+    const projectDir = join(root, 'project');
+    mkdirSync(projectDir, { recursive: true });
+    mkdirSync(dataDir, { recursive: true });
+    const stub = await startStubModelServer([
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'task',
+            arguments: JSON.stringify({
+              op: 'dispatch',
+              taskId: 't-1',
+              waitTimeoutMs: 1_000,
+              sessions: [
+                {
+                  roleId: 'developer',
+                  instructions: 'implement it',
+                  writeScope: ['src/**'],
+                  expectedKind: 'implementation',
+                },
+              ],
+            }),
+          },
+        ],
+      },
+      { kind: 'slow_text', text: 'member finished', chunks: 1, delayMs: 1_200 },
+      { kind: 'text', text: 'chief ended before the member' },
+      { kind: 'text', text: 'chief woke on the settled step' },
+    ]);
+    const env = await createStubEnv(stub.baseUrl);
+    cleanups.push(() => stub.close());
+    cleanups.push(() => rmSync(env.root, { recursive: true, force: true }));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+
+    const seed = new Store({ path: join(dataDir, 'state.db'), serverEpoch: 1 });
+    const realProject = realpathSync(projectDir);
+    seed.createProject({ id: 'p-1', realPath: realProject });
+    seed.createSession({ id: 's-chief', projectId: 'p-1', roleId: 'chief', cwd: realProject });
+    seed.createTask({
+      id: 't-1',
+      projectId: 'p-1',
+      chiefSessionId: 's-chief',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      goal: 'ship it',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'p' },
+      authorizationRefs: [],
+      sourceInputId: 'seed',
+    });
+    seed.updateTask({ taskId: 't-1', phase: 'develop' });
+    seed.acceptInput({
+      inputId: 'c-1',
+      projectId: 'p-1',
+      sessionId: 's-chief',
+      taskId: 't-1',
+      sourceKey: 's-chief:c-1',
+      requestKey: 'c-1',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: 'go' }] },
+    });
+    seed.close();
+
+    const running = await startWorkbench({
+      dataDir,
+      agentDir: env.agentDir,
+      accessPassword: 'dispatch-wake-secret',
+      port: 0,
+      model: { providerId: 'stub', modelId: 'stub-1' },
+      log: () => undefined,
+    });
+    cleanups.push(() => running.close());
+    const reader = new Store({ path: join(dataDir, 'state.db'), serverEpoch: 2 });
+    cleanups.push(() => reader.close());
+
+    const memberInputId = await until(() => reader.listTaskSessions('t-1')[0]?.currentInputId ?? undefined);
+    await until(() => (reader.getInput(memberInputId)?.status === 'completed' ? true : undefined));
+
+    // The chief's turn was over when the member settled: only the dispatch outcome hook can wake it.
+    const notice = await until(() =>
+      reader.listInputs('s-chief').find((input) => input.inputId.startsWith('notice-step-')),
+    );
+    await until(() => (reader.getInput(notice.inputId)?.status === 'completed' ? true : undefined));
+    expect(notice).toMatchObject({ taskId: 't-1' });
+    expect(JSON.stringify(notice.payload)).toContain('phase develop');
+    expect(reader.getTask('t-1')).toMatchObject({ status: 'active', phase: 'develop' });
+  }, 60_000);
+
+  it('wakes the chief on startup for a step that settled while the process was down', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'devagent-startup-wake-'));
+    const dataDir = join(root, 'data');
+    const projectDir = join(root, 'project');
+    mkdirSync(projectDir, { recursive: true });
+    mkdirSync(dataDir, { recursive: true });
+    const stub = await startStubModelServer([{ kind: 'text', text: 'chief woke after restart' }]);
+    const env = await createStubEnv(stub.baseUrl);
+    cleanups.push(() => stub.close());
+    cleanups.push(() => rmSync(env.root, { recursive: true, force: true }));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+
+    const seed = new Store({ path: join(dataDir, 'state.db'), serverEpoch: 1 });
+    const realProject = realpathSync(projectDir);
+    seed.createProject({ id: 'p-1', realPath: realProject });
+    seed.createSession({ id: 's-chief', projectId: 'p-1', roleId: 'chief', cwd: realProject });
+    seed.createTask({
+      id: 't-1',
+      projectId: 'p-1',
+      chiefSessionId: 's-chief',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      goal: 'ship it',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'p' },
+      authorizationRefs: [],
+      sourceInputId: 'seed',
+    });
+    seed.updateTask({ taskId: 't-1', phase: 'develop' });
+    seed.createTaskSessions({
+      taskId: 't-1',
+      members: [
+        {
+          sessionId: 's-dev',
+          taskId: 't-1',
+          roleId: 'developer',
+          phase: 'develop',
+          label: 'dev',
+          instructions: 'implement it',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'implementation',
+          writeScope: ['src/**'],
+          inputId: 'i-dev',
+          inputPayload: { content: [{ type: 'text', text: 'implement it' }] },
+        },
+      ],
+    });
+    const member = seed.claimNextInput('s-dev');
+    if (member.kind !== 'claimed') throw new Error(`member input was not claimable: ${member.kind}`);
+    seed.finishInput({
+      inputId: 'i-dev',
+      expectedRevision: member.input.revision,
+      status: 'completed',
+    });
+    seed.close();
+
+    const running = await startWorkbench({
+      dataDir,
+      agentDir: env.agentDir,
+      accessPassword: 'startup-wake-secret',
+      port: 0,
+      model: { providerId: 'stub', modelId: 'stub-1' },
+      log: () => undefined,
+    });
+    cleanups.push(() => running.close());
+    const reader = new Store({ path: join(dataDir, 'state.db'), serverEpoch: 2 });
+    cleanups.push(() => reader.close());
+
+    // The member settled before the process started: the startup sweep must still give the chief a turn.
+    const notice = await until(() =>
+      reader.listInputs('s-chief').find((input) => input.inputId.startsWith('notice-step-')),
+    );
+    await until(() => (reader.getInput(notice.inputId)?.status === 'completed' ? true : undefined));
+    expect(reader.getTask('t-1')).toMatchObject({ status: 'active', phase: 'develop' });
+  }, 60_000);
 });

@@ -131,6 +131,12 @@ export interface RunnerOptions {
    * browser does not have to poll for something it can be told.
    */
   readonly onTaskChange?: (sessionId: string, taskId: string) => void;
+  /**
+   * A run this runner started outside the worker (the chief's dispatch tool) has settled. The worker
+   * reports its own runs; without this hook a member dispatched inside the chief's turn would finish
+   * silently when that turn had already ended (no invalidate, no settled-step wake).
+   */
+  readonly onRunSettled?: (sessionId: string, outcome: RunOutcome) => void;
   /** A run with no Pi activity for this long is aborted (RUN_STALLED) instead of waiting forever. */
   readonly runStallMs?: number;
   /**
@@ -519,7 +525,10 @@ export class InputRunner {
                 ...contextOf(),
                 host: {
                   dispatch: async (memberSessionId: string) => {
-                    await this.runNext(memberSessionId);
+                    // The worker does not own this run: report its outcome here, or a member that
+                    // finishes after the chief's turn ended would be invisible to the host.
+                    const outcome = await this.runNext(memberSessionId);
+                    this.options.onRunSettled?.(memberSessionId, outcome);
                   },
                   settleStep: (taskId: string, timeoutMs: number) =>
                     this.settleStep(taskId, timeoutMs, sessionId),

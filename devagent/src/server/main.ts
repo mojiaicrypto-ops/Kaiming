@@ -31,6 +31,7 @@ import { InteractionBridge } from '../runtime/interactions.ts';
 import { PiRuntimeFactory } from '../runtime/pi-runtime.ts';
 import { SessionRegistry } from '../runtime/registry.ts';
 import { InputRunner } from '../runtime/runner.ts';
+import type { RunOutcome } from '../runtime/runner.ts';
 import { resolveStoredConfig } from '../runtime/config.ts';
 import type { RuntimeDefaults } from '../runtime/config.ts';
 import { contextNoticeOf, contextUsageOf, windowOnlyContext, type ContextUsageView } from '../runtime/context-usage.ts';
@@ -100,6 +101,22 @@ export function startWorkbench(options: StartOptions): Promise<{
     const notice = queueInterruptedMemberNotice(store, interrupted, 'was started by a process that is gone');
     if (notice.queued) {
       log(`recovery notice queued for chief ${interrupted.chiefSessionId} (input ${interrupted.inputId})`);
+    }
+  }
+  // A settled step whose chief turn is gone (the process stopped, or a dispatch-owned member ended
+  // after its turn) has no outcome left to report. Give the chief the same one turn the live path
+  // gives it; the notice is deduped per step, so a restart cannot repeat it.
+  for (const project of store.listProjectSummaries()) {
+    for (const task of store.listTasks(project.id)) {
+      try {
+        const woke = wakeForSettledStep(store, task.id);
+        if (woke.woken) log(`woke the chief for settled step of ${task.id} on startup (${woke.noticeId ?? ''})`);
+      } catch (error) {
+        log(
+          `could not wake the chief for ${task.id} on startup: ` +
+            (error instanceof Error ? error.message : String(error)),
+        );
+      }
     }
   }
   const server: RuntimeDefaults = {
@@ -179,6 +196,73 @@ export function startWorkbench(options: StartOptions): Promise<{
       hub.publish(sessionId, event, { ...(meta?.inputId !== undefined ? { inputId: meta.inputId } : {}) });
     },
   });
+  /**
+   * One handler for every run that settles: worker-owned runs and runs the chief's dispatch tool
+   * started directly. The latter used to finish silently when the chief's turn had already ended.
+   */
+  const handleOutcome = (sessionId: string, outcome: RunOutcome): void => {
+    reportedWorkerErrors.delete(sessionId);
+    // A chief's own input is a conversation turn, and nobody but the host can close it: left
+    // interrupted, it freezes the whole session (every later message waits on recovery). Close
+    // it with what the host really observed; the chief's notice says the outcome is unknown.
+    if (outcome.kind === 'interrupted') {
+      const failed = store.getInput(outcome.inputId);
+      try {
+        closeInterruptedChiefInput(store, outcome.inputId, {
+          code: 'run-aborted',
+          detail: failed?.errorMessage ?? outcome.detail,
+        });
+      } catch {
+        // The next startup closes it; a session must not be frozen by a failed convenience pass.
+      }
+    }
+    // A member run settled (or failed): the chief's Task card must refresh now, not on its
+    // 3s poll — the user watches member activity live here.
+    if (outcome.kind === 'completed' || outcome.kind === 'failed' || outcome.kind === 'stopped' || outcome.kind === 'interrupted') {
+      const input = store.getInput(outcome.inputId);
+      const taskId = input?.taskId ?? null;
+      if (taskId !== null) {
+        const task = store.getTask(taskId);
+        if (task !== undefined && task.chiefSessionId !== sessionId) {
+          hub.publish(task.chiefSessionId, { type: 'invalidate', entity: 'task', id: taskId });
+        }
+      }
+      // The chief's dispatch wait lives in its own turn. When that turn is gone (wait timeout,
+      // watchdog, provider error) nothing would consume a report that lands afterwards; wake the
+      // chief once per settled step, whichever side just settled.
+      const coordinated = taskId ?? store.getSession(sessionId)?.currentTaskId ?? null;
+      if (coordinated !== null) {
+        try {
+          const woke = wakeForSettledStep(store, coordinated);
+          if (woke.woken) log(`woke the chief for settled step of ${coordinated} (${woke.noticeId ?? ''})`);
+        } catch (error) {
+          log(
+            `could not wake the chief for ${coordinated}: ` +
+              (error instanceof Error ? error.message : String(error)),
+          );
+        }
+      }
+    }
+    if (
+      outcome.kind !== 'blocked_config' &&
+      outcome.kind !== 'blocked_role' &&
+      outcome.kind !== 'blocked_project'
+    ) {
+      reportedBlocks.delete(sessionId);
+      return;
+    }
+    const signature = `${outcome.code}:${outcome.detail}`;
+    if (reportedBlocks.get(sessionId) === signature) {
+      // The worker retries every idle pass while the work waits: say it once, not four times a second.
+      return;
+    }
+    reportedBlocks.set(sessionId, signature);
+    hub.publish(
+      sessionId,
+      { type: 'blocked', code: outcome.code, detail: outcome.detail },
+      { epoch: epoch(sessionId) },
+    );
+  };
   const runner = new InputRunner({
     store,
     registry,
@@ -205,6 +289,7 @@ export function startWorkbench(options: StartOptions): Promise<{
       // A dispatch creates member sessions, so a rail that lists sessions is stale too.
       hub.publish(chiefSessionId, { type: 'invalidate', entity: 'session', id: chiefSessionId });
     },
+    onRunSettled: handleOutcome,
     onEvent: (sessionId, event, meta) => {
       // A live message may carry image bytes; the browser only ever gets the attachment address (U6).
       hub.publish(sessionId, projectEventImages(event, server.agentDir) as typeof event, {
@@ -246,69 +331,7 @@ export function startWorkbench(options: StartOptions): Promise<{
       reportedWorkerErrors.set(sessionId, detail);
       log(`worker error for ${sessionId}: ${detail}`);
     },
-    onOutcome: (sessionId, outcome) => {
-      reportedWorkerErrors.delete(sessionId);
-      // A chief's own input is a conversation turn, and nobody but the host can close it: left
-      // interrupted, it freezes the whole session (every later message waits on recovery). Close
-      // it with what the host really observed; the chief's notice says the outcome is unknown.
-      if (outcome.kind === 'interrupted') {
-        const failed = store.getInput(outcome.inputId);
-        try {
-          closeInterruptedChiefInput(store, outcome.inputId, {
-            code: 'run-aborted',
-            detail: failed?.errorMessage ?? outcome.detail,
-          });
-        } catch {
-          // The next startup closes it; a session must not be frozen by a failed convenience pass.
-        }
-      }
-      // A member run settled (or failed): the chief's Task card must refresh now, not on its
-      // 3s poll — the user watches member activity live here.
-      if (outcome.kind === 'completed' || outcome.kind === 'failed' || outcome.kind === 'stopped' || outcome.kind === 'interrupted') {
-        const input = store.getInput(outcome.inputId);
-        const taskId = input?.taskId ?? null;
-        if (taskId !== null) {
-          const task = store.getTask(taskId);
-          if (task !== undefined && task.chiefSessionId !== sessionId) {
-            hub.publish(task.chiefSessionId, { type: 'invalidate', entity: 'task', id: taskId });
-          }
-        }
-        // The chief's dispatch wait lives in its own turn. When that turn is gone (wait timeout,
-        // watchdog, provider error) nothing would consume a report that lands afterwards; wake the
-        // chief once per settled step, whichever side just settled.
-        const coordinated = taskId ?? store.getSession(sessionId)?.currentTaskId ?? null;
-        if (coordinated !== null) {
-          try {
-            const woke = wakeForSettledStep(store, coordinated);
-            if (woke.woken) log(`woke the chief for settled step of ${coordinated} (${woke.noticeId ?? ''})`);
-          } catch (error) {
-            log(
-              `could not wake the chief for ${coordinated}: ` +
-                (error instanceof Error ? error.message : String(error)),
-            );
-          }
-        }
-      }
-      if (
-        outcome.kind !== 'blocked_config' &&
-        outcome.kind !== 'blocked_role' &&
-        outcome.kind !== 'blocked_project'
-      ) {
-        reportedBlocks.delete(sessionId);
-        return;
-      }
-      const signature = `${outcome.code}:${outcome.detail}`;
-      if (reportedBlocks.get(sessionId) === signature) {
-        // The worker retries every idle pass while the work waits: say it once, not four times a second.
-        return;
-      }
-      reportedBlocks.set(sessionId, signature);
-      hub.publish(
-        sessionId,
-        { type: 'blocked', code: outcome.code, detail: outcome.detail },
-        { epoch: epoch(sessionId) },
-      );
-    },
+    onOutcome: handleOutcome,
   });
   registerWriteMethods(router, {
     store,
