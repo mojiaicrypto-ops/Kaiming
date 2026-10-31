@@ -52,7 +52,7 @@ settlement:
 
 ## Deferred（用户 2026-10-31 决定：只记录，暂不处理）
 
-1. F1–F3：暂停→恢复 / queued 停止 / 恢复确认不触发唤醒；修复一缺真实回合 E2E；interrupted 成员通知文案。
+1. F1–F3：暂停→恢复 / queued 停止 / 恢复确认不触发唤醒；修复一缺真实回合 E2E；interrupted 成员通知文案（F3 已由 `watchdog-wait-and-recovery-20261031` 关闭）。
 2. 四个 review 问题：通知在 Task 结束后仍运行、CHIEF_BUSY 计入不可 claim 的旧输入、唤醒回合失败不重发、主管故意不派发时多一次提醒。
 3. AC-45 未在浏览器/真实模型下执行；`test/browser` 未运行。AC-45 措辞按确认的行为 A 写成。
 4. 已停止的历史消息 `c-mvv6kpir-2230-a9abe0` 不自动重投。

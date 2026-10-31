@@ -331,3 +331,15 @@
 **未覆盖**：主管若在唤醒回合里仍不推进且不改变步骤，这条通知不会重复投递（有意不循环）；浏览器里“自动唤醒回合”的视觉呈现未重跑；旧的 `notice-host-closed` 与本次唤醒可能在同一场景先后出现，目前靠主管忙检查避免叠加，未做专门去重测试。
 
 **独立复核**：Review `passed`（无阻塞项）；Test 同上。非阻塞发现（暂停→恢复/queued 停止/恢复确认不触发唤醒、修复一缺少真实回合 E2E、interrupted 成员提示文案）处置待定，见归档 `review.md` 与 `settlement.md`。
+
+## 2026-10-31 · 成员被看门狗中止后的自主恢复与主管等待计时
+
+**现象**：Task `t-cb094c4a`（aisuangua）的 dev 成员 `i-56a31e98` 02:21:38 开始、03:51:39 被 90 分钟总时长中止为 `interrupted/RUN_TIMEOUT`；主管最后回合 02:42:17 已结束，之后没有任何输入，Task 停在 phase develop。若用上一版唤醒，通知会写「has no unfinished member work / no formal report was recorded」，与“执行情况未知”的事实不符，主管可能去 update/end 并被 `STAGE_NOT_READY` 拒绝。
+
+**根因**：① 唤醒只分“停稳/未停稳”，`interrupted` 被视为停稳并走通用文案；② 主管在 `settleStep` 中等待成员的时间被计入它自己的 stall/total 窗口，任务只要超过 90 分钟，协调回合必然被看门狗中止（`c-mvuxl2dw` 现场）。
+
+**修正**：① 抽出 `queueInterruptedMemberNotice`（`src/server/host-recovery.ts`）：id 固定为 `notice-<成员输入>`，启动扫描与运行期唤醒共用，文案列出错误码、说明结果未知并给出 `task(op=recover, sessionId, evidenceRefs, resolution)`；`step-wake` 在当前步骤含 `interrupted` 成员时只投该通知，不投通用通知。② `settleStep` 以 `sessionId + 当前 inputId` 标记 host wait，`promptWithWatchdog` 的 `waiting` 同时看它：等待成员的时间不再计入主管的停滞/总时长，模型自身生成仍计入；键含 inputId，旧回合遗留的轮询不会冻结下一回合。
+
+**证据**：`test/step-wake.test.ts` 8 例（新增 interrupted 成员的恢复通知与 id/dedupe/可 claim，主管忙时延迟）；`test/runtime.test.ts` 新增「does not charge the chief for time spent waiting on a dispatched step」（total 500ms、stall 600ms，成员 900ms 后完成；去掉冻结即 `RUN_STALLED` 失败，独立测试在临时副本中复现）；全量 49 文件 487 用例、`tsc --noEmit` 通过；WAL 备份现场探针返回 `notice-i-56a31e98`（含 RUN_TIMEOUT 与 recover 指引），未生成通用通知。契约见 `runtime-contract.md` R3。
+
+**未覆盖**：唤醒回合自身失败后的重试；成员 queued 但 blocked（缺模型/目录）；孤儿 processing 输入；浏览器视觉。
