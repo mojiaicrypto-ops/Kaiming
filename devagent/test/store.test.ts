@@ -458,15 +458,17 @@ describe('claiming', () => {
     expect(store.claimNextInput('m-1')).toEqual({ kind: 'controlled', inputId: 'i-m', code: 'TASK_CONTROLLED' });
   });
 
-  it('runs no turn of a cancelled Task: the pause exception stops where the Task ends', () => {
+  it('delivers the chief’s own late turn that cites a cancelled Task, since conversation is not Task work', () => {
     const { store } = openStore();
     seed(store);
     const cancelled = seedTask(store, 'cancelled');
     // Cancelling frees the chief's slot, so this input cites the Task explicitly - the case a
-    // replayed or late request creates.
+    // message typed while the Task was still running creates. Dropping it would lose what the
+    // user wrote; only work that belonged to the Task may be closed.
     accept(store, { sessionId: 's-2', taskId: cancelled, inputId: 'i-x', sourceKey: 'user:x', requestKey: 'req-x' });
 
-    expect(store.claimNextInput('s-2').kind).not.toBe('claimed');
+    expect(store.claimNextInput('s-2')).toMatchObject({ kind: 'claimed' });
+    expect(store.getInput('i-x')).toMatchObject({ status: 'processing' });
   });
 
   it('keeps a paused session blocked while an interrupted input still awaits verification', () => {

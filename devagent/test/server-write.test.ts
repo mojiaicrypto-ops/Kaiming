@@ -742,9 +742,9 @@ describe('write surface', () => {
     }
   }, 30_000);
 
-  it('closes an input whose Task already ended instead of blocking the queue with it', async () => {
+  it('delivers the chief\'s own queued message after the Task it cited has ended', async () => {
     const h = await harness();
-    // The chief gets a Task and cites it on a supplementary input.
+    // The chief has a Task and the user sends a message that is associated with it.
     const task = h.store.createTask({
       id: 't-ends',
       projectId: h.projectId,
@@ -765,7 +765,7 @@ describe('write surface', () => {
       { projectId: h.projectId, sessionId: 's-chief', content: [{ type: 'text', text: 'more about it' }], taskId: task.id },
       'in-6',
     );
-    // The Task ends before that input is ever claimed.
+    // The Task ends before that input is ever claimed, and another message queues behind it.
     h.store.controlTask({ taskId: task.id, expectedRevision: h.store.getTask(task.id)?.revision ?? 1, command: 'cancel' });
     await h.call(
       'session.input.submit',
@@ -773,15 +773,55 @@ describe('write surface', () => {
       'in-7',
     );
 
+    // The user's message is conversation, not Task work: it is delivered, not silently dropped.
     const claim = h.store.claimNextInput('s-chief');
-
-    // The orphaned input is closed with the real reason, and the queue moves on to the next input.
-    expect(h.store.getInput('in-6')).toMatchObject({ status: 'stopped', errorCode: 'TASK_ENDED' });
+    expect(h.store.getInput('in-6')).toMatchObject({ status: 'processing' });
     expect(claim.kind).toBe('claimed');
     if (claim.kind === 'claimed') {
-      expect(claim.input.inputId).toBe('in-7');
-      h.store.finishInput({ inputId: 'in-7', expectedRevision: claim.input.revision, status: 'completed' });
+      expect(claim.input.inputId).toBe('in-6');
+      h.store.finishInput({ inputId: 'in-6', expectedRevision: claim.input.revision, status: 'completed' });
     }
+    const next = h.store.claimNextInput('s-chief');
+    expect(next.kind).toBe('claimed');
+    if (next.kind === 'claimed') {
+      expect(next.input.inputId).toBe('in-7');
+      h.store.finishInput({ inputId: 'in-7', expectedRevision: next.input.revision, status: 'completed' });
+    }
+  }, 30_000);
+
+  it('closes Task work whose Task already ended instead of blocking the member queue with it', async () => {
+    const h = await harness();
+    const task = h.store.createTask({
+      id: 't-ends',
+      projectId: h.projectId,
+      chiefSessionId: 's-chief',
+      ownerEpoch: 1,
+      type: 'read',
+      requiresTest: false,
+      goal: 'investigate',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'p' },
+      authorizationRefs: [],
+      sourceInputId: 'none',
+    });
+    h.store.acceptInput({
+      inputId: 'in-member',
+      projectId: h.projectId,
+      sessionId: 's-dev',
+      taskId: task.id,
+      sourceKey: 's-dev:in-member',
+      requestKey: 'in-member',
+      method: 'test',
+      kind: 'continuation',
+      payload: { content: [{ type: 'text', text: 'keep going' }] },
+    });
+    h.store.controlTask({ taskId: task.id, expectedRevision: h.store.getTask(task.id)?.revision ?? 1, command: 'cancel' });
+
+    // Member work for an ended Task can never run: it is closed with the real reason.
+    expect(h.store.claimNextInput('s-dev').kind).toBe('none');
+    expect(h.store.getInput('in-member')).toMatchObject({ status: 'stopped', errorCode: 'TASK_ENDED' });
   }, 30_000);
 });
 

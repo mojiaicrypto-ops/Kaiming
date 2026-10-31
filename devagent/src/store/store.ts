@@ -1395,24 +1395,37 @@ export class Store {
       }
       let candidate: { inputId: string } | undefined;
       for (;;) {
-        candidate = this.db
-          .prepare("SELECT inputId FROM session_inputs WHERE sessionId = ? AND status = 'queued' ORDER BY seq LIMIT 1")
-          .get(sessionId) as { inputId: string } | undefined;
-        if (candidate === undefined) {
+        const queued = this.db
+          .prepare(
+            `SELECT i.inputId AS inputId, i.kind AS kind,
+                    t.status AS taskStatus, t.chiefSessionId AS chiefSessionId
+               FROM session_inputs i
+               LEFT JOIN tasks t ON t.id = i.taskId
+              WHERE i.sessionId = ? AND i.status = 'queued'
+              ORDER BY i.seq LIMIT 1`,
+          )
+          .get(sessionId) as
+          | { inputId: string; kind: string; taskStatus: string | null; chiefSessionId: string | null }
+          | undefined;
+        if (queued === undefined) {
           return { kind: 'none' } as ClaimResult;
         }
-        // An input whose Task already ended can never run: close it so it does not block the queue.
-        const owner = this.db
-          .prepare('SELECT status FROM tasks WHERE id = (SELECT taskId FROM session_inputs WHERE inputId = ?)')
-          .get(candidate.inputId) as { status: string } | undefined;
-        if (owner !== undefined && (owner.status === 'completed' || owner.status === 'cancelled')) {
+        candidate = { inputId: queued.inputId };
+        // Work that belonged to a Task that already ended can never run: close it so it does not
+        // block the queue. The chief's own turn is NOT that work — a user message queued behind a
+        // Task is delivered when the Task is over (R3: a new topic waits for the Task to end), so
+        // dropping it would lose what the user typed.
+        const ended = queued.taskStatus === 'completed' || queued.taskStatus === 'cancelled';
+        const chiefTurn =
+          queued.chiefSessionId === sessionId && (queued.kind === 'user' || queued.kind === 'system_notice');
+        if (ended && !chiefTurn) {
           this.db
             .prepare(
               `UPDATE session_inputs SET status = 'stopped', errorCode = 'TASK_ENDED',
                  errorMessage = ?, revision = revision + 1, updatedAt = ?
                WHERE inputId = ? AND status = 'queued'`,
             )
-            .run(`Task ${owner.status} before this input could run`, this.clock(), candidate.inputId);
+            .run(`Task ${queued.taskStatus} before this input could run`, this.clock(), queued.inputId);
           continue;
         }
         break;
@@ -1464,8 +1477,13 @@ export class Store {
         // what happened and how the Task gets resumed - so freezing it would leave the session with
         // no way back (R3/S3). It still may not write to the project: the tool set drops the writing
         // tools while the Task is not running.
+        // A terminal status here means the session's pointer is stale (endTask/controlTask clear it
+        // in the same transaction); the chief's turn is still conversation, not Task work.
         const chiefTurn =
-          (owner.taskStatus === 'paused' || owner.taskStatus === 'pausing') &&
+          (owner.taskStatus === 'paused' ||
+            owner.taskStatus === 'pausing' ||
+            owner.taskStatus === 'completed' ||
+            owner.taskStatus === 'cancelled') &&
           owner.chiefSessionId === sessionId &&
           (owner.kind === 'user' || owner.kind === 'system_notice');
         const recovery =
