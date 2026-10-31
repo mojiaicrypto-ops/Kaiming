@@ -343,3 +343,15 @@
 **证据**：`test/step-wake.test.ts` 8 例（新增 interrupted 成员的恢复通知与 id/dedupe/可 claim，主管忙时延迟）；`test/runtime.test.ts` 新增「does not charge the chief for time spent waiting on a dispatched step」（total 500ms、stall 600ms，成员 900ms 后完成；去掉冻结即 `RUN_STALLED` 失败，独立测试在临时副本中复现）；全量 49 文件 487 用例、`tsc --noEmit` 通过；WAL 备份现场探针返回 `notice-i-56a31e98`（含 RUN_TIMEOUT 与 recover 指引），未生成通用通知。契约见 `runtime-contract.md` R3。
 
 **未覆盖**：唤醒回合自身失败后的重试；成员 queued 但 blocked（缺模型/目录）；孤儿 processing 输入；浏览器视觉。
+
+## 2026-10-31 · `task(op=recover)` 的 sessionId 被工具 schema 拒绝
+
+**现象**：M1 开发会话的 `i-56a31e98` 被宿主中断后，主管每次 `task(op=recover, ...)` 都返回 `recover needs sessionId and evidenceRefs`；顶层 `sessionId`、`sessions[].sessionId`、`chiefSessionId`、`file:` 证据等组合结果相同。
+
+**根因**：`task` 工具的 `parameters` 设了 `additionalProperties: false`，却没有声明顶层 `sessionId`，而 `recoverOp` 从顶层读取它。Pi 的 `validateToolArguments` 会拒绝不符合 schema 的调用（`sessionId: schema is false / must not have additional properties`），处理函数根本收不到参数。G2 早已写明 recover 接受 `taskId、sessionId、evidenceRefs、resolution`，属于实现漏项。
+
+**修正**：在 `src/tools/task-tools.ts` 的 properties 中补顶层 `sessionId`（recover 专用描述）。逐 op 审计 schema 与 handler 读取字段，未发现其他缺项。
+
+**证据**：`test/runtime.test.ts`「closes an interrupted member input through task(op=recover, sessionId)」走真实 stub 模型 → Pi 工具调用 → handler；修正前成员输入保持 `interrupted`（调用被 schema 拒绝），修正后变为 `stopped`。独立测试在 `/tmp` 副本删除该属性后复现失败，恢复后通过；全量 49 文件 488 用例、`tsc --noEmit` 通过。独立 Review `passed`，确认八种 op 的 schema/handler 一致。
+
+**未覆盖**：recover 的其余错误分支（缺证据、非本 Task 成员、非 interrupted）未通过工具环覆盖；真实 provider 路径未跑。
