@@ -415,3 +415,15 @@
 **证据**：`webapp/test/slot.test.ts`「repeated text across turns」覆盖三条：不同 input 的相同文字在 `message_end` 后保留；resync 不丢与旧回复重复/前缀相同的 live-only 完成条目；同一 input 的相同回复仍然去重。webapp 12 文件 84 用例、`tsc --noEmit` 通过；服务端未改动。
 
 **未覆盖**：浏览器实际长连接/断线重连未重启验证；同一 `inputId` 内两条正文完全相同的不同助手消息仍无法靠 `inputId` 区分（需要服务端稳定消息 id，当前未做）。
+
+## 2026-11-01 · 旧流帧把较新的实时回复顶掉
+
+**现象**：实时回复已经出现，随后忽然消失，只剩更早内容；刷新后又从 history 文件恢复。上一轮的“按内容去重”修复后仍能复现。
+
+**根因**：`message_end` 先取 `items.findIndex(streaming)` 作为 live 条目，再用 `duplicate` 在全部历史里找同文消息。resync/重放中，旧 input 的完成帧会命中旧快照里的同文条目；此时 `liveIndex` 可能是**另一个较新 input 正在流式输出**的条目，代码却把它删掉。`message_update` 同样只按“最后一个 streaming”追加，旧 delta 可能污染新文本。
+
+**修正**：`message_end` 按 `frame.inputId` 选择 streaming 条目（没有 input 的旧消息才回退到 null 条目），只有 live 与完成帧属于同一轮才删除/替换；旧完成帧已有快照副本时直接返回，不碰其他 input 的 live。`message_update` 跳过已知不同 input 的条目。
+
+**证据**：新增 `webapp/test/slot.test.ts`「a replayed older end or delta cannot take over a newer streaming message」：旧 input 的 delta/end 到达后，i2 的 live 文本仍为 `new`；随后 i2 的真实 end 正常完成，最终两个 assistant 消息。webapp 12 文件 85 用例、`tsc --noEmit` 通过；服务端未改动。
+
+**未覆盖**：浏览器真实长连接/断线重连未重启验证；同一 `inputId` 内两条正文完全相同的不同助手消息仍无法仅靠 inputId 区分。
