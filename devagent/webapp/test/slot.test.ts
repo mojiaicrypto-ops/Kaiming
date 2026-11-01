@@ -143,6 +143,78 @@ describe('slot merge', () => {
   });
 });
 
+describe('slot merge · repeated text across turns', () => {
+  const text = (value: string): unknown[] => [{ type: 'text', text: value }];
+
+  it('keeps a new completion whose text repeats an earlier turn', () => {
+    let slot = emptySlot();
+    slot = slotReducer(slot, {
+      type: 'snapshot',
+      reason: 'initial',
+      snapshot: snapshotOf([
+        { entryId: 'u1', role: 'user', content: text('one'), inputId: 'i1' },
+        { entryId: 'a1', role: 'assistant', content: text('done'), inputId: 'i1' },
+      ]),
+    });
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'pi', seq: 20, inputId: 'i2', event: { type: 'message_start', message: { role: 'assistant', content: [] } } },
+    });
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'pi', seq: 21, inputId: 'i2', event: { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'done', contentIndex: 0 } } },
+    });
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'pi', seq: 22, inputId: 'i2', event: { type: 'message_end', message: { role: 'assistant', content: text('done') } } },
+    });
+
+    const assistants = slot.items.filter((entry) => entry.role === 'assistant');
+    expect(assistants).toHaveLength(2);
+    expect(assistants[0]?.inputId).toBe('i1');
+    expect(assistants[1]?.inputId).toBe('i2');
+    expect(assistants[1]?.streaming).toBe(false);
+  });
+
+  it('a resync keeps a live-only completion that repeats and prefixes an older turn', () => {
+    let slot = emptySlot();
+    const older = [
+      { entryId: 'u1', role: 'user', content: text('one'), inputId: 'i1' },
+      { entryId: 'a1', role: 'assistant', content: text('done and more'), inputId: 'i1' },
+    ];
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'initial', snapshot: snapshotOf(older) });
+    // The stream joined at message_end: a new turn with the same opening words, no message_start.
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'pi', seq: 30, inputId: 'i2', event: { type: 'message_end', message: { role: 'assistant', content: text('done') } } },
+    });
+    expect(slot.items.filter((entry) => entry.role === 'assistant')).toHaveLength(2);
+
+    // The stale snapshot only knows the older turn. The new one must not be dropped as its twin.
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'resync', snapshot: snapshotOf(older) });
+    const assistants = slot.items.filter((entry) => entry.role === 'assistant');
+    expect(assistants).toHaveLength(2);
+    expect(assistants[1]?.inputId).toBe('i2');
+  });
+
+  it('still dedupes the same turn when both sides carry the same input id', () => {
+    let slot = emptySlot();
+    slot = slotReducer(slot, {
+      type: 'snapshot',
+      reason: 'initial',
+      snapshot: snapshotOf([
+        { entryId: 'u1', role: 'user', content: text('one'), inputId: 'i1' },
+        { entryId: 'a1', role: 'assistant', content: text('done'), inputId: 'i1' },
+      ]),
+    });
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'pi', seq: 40, inputId: 'i1', event: { type: 'message_end', message: { role: 'assistant', content: text('done') } } },
+    });
+    expect(slot.items.filter((entry) => entry.role === 'assistant')).toHaveLength(1);
+  });
+});
+
 describe('slot merge · orphan live keys', () => {
   it('a completed live-only entry whose content matches a snapshot entry is dropped (no duplicate)', () => {
     let slot = emptySlot();

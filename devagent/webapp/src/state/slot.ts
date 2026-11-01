@@ -169,6 +169,22 @@ function signatureOf(message: HistoryMessage): string {
   return `${message.role}|${message.toolCallId ?? ''}|${parts.join('\u0001')}`;
 }
 
+/**
+ * Whether two entries can describe the SAME turn. The input id is the identity the stream and the
+ * snapshot both carry; content is not identity. A new turn that repeats an older reply (or starts
+ * with the same words) must not be deduped against it. Two entries without an input id are the
+ * legacy history case, where content is the only available signal.
+ */
+function sameTurn(left: HistoryMessage, right: HistoryMessage): boolean {
+  if (left.entryId !== '' && left.entryId === right.entryId && !left.entryId.startsWith('live-')) {
+    return true;
+  }
+  const leftInput = left.inputId ?? null;
+  const rightInput = right.inputId ?? null;
+  if (leftInput === null && rightInput === null) return true;
+  return leftInput !== null && rightInput !== null && leftInput === rightInput;
+}
+
 /** A live-only completed message whose content is a prefix of a snapshot entry's content
  *  (same role, same block kinds in order) is that entry's stale twin. */
 function matchesTwin(partial: HistoryMessage, complete: HistoryMessage): boolean {
@@ -197,11 +213,11 @@ function mergeMessages(current: readonly HistoryMessage[], incoming: readonly Hi
 } {
   // Order rule: the snapshot is chronological authority; live-only entries (streaming, echoes
   // appended before a resync) keep their relative tail order after the snapshot's last entry.
-  const incomingKeys = new Set(incoming.map((message) => message.entryId));
+  const normalizedIncoming = incoming.map(normalizeMessage);
+  const incomingKeys = new Set(normalizedIncoming.map((message) => message.entryId));
   const currentByKey = new Map(current.map((message) => [message.entryId, message]));
   const incomingByKey = new Map<string, HistoryMessage>();
-  for (const message of incoming) {
-    const normalized = normalizeMessage(message);
+  for (const normalized of normalizedIncoming) {
     const existing = currentByKey.get(normalized.entryId);
     // A live in-flight entry (streaming) is never downgraded by a lagging snapshot copy.
     if (existing?.streaming === true && normalized.streaming !== true) {
@@ -218,21 +234,25 @@ function mergeMessages(current: readonly HistoryMessage[], incoming: readonly Hi
     if (message.streaming === true) liveKeys.add(message.entryId);
   }
   // 2. Live-only entries the snapshot does not know yet (its file read lags the stream),
-  //    in their existing tail order. A completed live-only entry that equals OR is a content
-  //    prefix of a snapshot entry (the stale twin: the stream joined mid-turn, so the
-  //    transient live-* key holds a partial copy) is dropped — otherwise it duplicates the
-  //    bubble, the partial copy showing "half the text".
-  const incomingSignatures = new Set(
-    incoming.map((message) => signatureOf(normalizeMessage(message))),
-  );
+  //    in their existing tail order. A live-only entry that equals OR is a content prefix of a
+  //    snapshot entry is the stale twin of THAT turn only when it belongs to the same input;
+  //    a newer turn that repeats an older reply is a real message and stays.
   for (const message of current) {
     if (incomingKeys.has(message.entryId)) continue;
-    if (message.streaming !== true && incomingSignatures.has(signatureOf(message))) continue;
+    if (
+      message.streaming !== true &&
+      normalizedIncoming.some(
+        (candidate) => sameTurn(message, candidate) && signatureOf(candidate) === signatureOf(message),
+      )
+    ) {
+      continue;
+    }
     // A streaming live-only entry whose content equals or prefixes a snapshot entry is the
     // stale twin of a turn whose end frame was lost in the resync: the snapshot read history
     // AFTER the run completed, so the file's copy wins and the live key must not linger
-    // (otherwise the transcript "breaks mid-render" with a half-content ghost node).
-    if (incoming.some((candidate) => matchesTwin(message, candidate))) continue;
+    // (otherwise the transcript "breaks mid-render" with a half-content ghost node). The same
+    // input check keeps a new turn with a matching opening fragment.
+    if (normalizedIncoming.some((candidate) => sameTurn(message, candidate) && matchesTwin(message, candidate))) continue;
     items.push(message);
     if (message.streaming === true) liveKeys.add(message.entryId);
   }
@@ -414,13 +434,16 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
            * Three orders are possible and all of them must end with a single bubble: the live entry
            * is present (stream joined normally); a resync snapshot already carries the file's copy
            * (the connection dropped mid-turn and merged); or neither is (the stream joined between
-           * message_start and message_end). Same signature means same message, so the snapshot's own
-           * entry id wins and the transient live one is dropped.
+           * message_start and message_end). The same input and signature mean the same message, so
+           * the snapshot's own entry id wins and the transient live one is dropped.
            */
           const signature = signatureOf(completed);
           const duplicate = items.findIndex(
             (entry, index) =>
-              index !== liveIndex && entry.streaming !== true && signatureOf(entry) === signature,
+              index !== liveIndex &&
+              entry.streaming !== true &&
+              sameTurn(entry, completed) &&
+              signatureOf(entry) === signature,
           );
           const liveKeys = new Set(state.liveKeys);
           let next: readonly HistoryMessage[];
