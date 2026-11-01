@@ -391,3 +391,15 @@
 **证据**：`test/runtime.test.ts`「bounds a bash command that omits a timeout, so a hang is a tool result not a stalled run」用真实 `sleep 2` + 1 秒默认值，run 以 `completed` 结束且工具结果含 `timed out after 1 seconds`；`test/tool-guard.test.ts` 覆盖空值注入、显式值不覆盖、非 bash 不处理；`test/step-wake.test.ts` 与 `test/delegation.test.ts` 覆盖 watchdog-stopped 的续办提示。`tsc --noEmit` 通过。
 
 **未覆盖**：600 秒默认值对真实长构建的影响未实测；超过 15 分钟的静默工具仍会触发 run stall；环境变量未在重启后的服务上验证；浏览器无界面变化。
+
+## 2026-11-01 · ignored 文件被当成交付导致 end 拒绝
+
+**现象**：视觉任务跑完后 `.visual/**` 出现 2000+ 个被忽略文件，用户自己的 `dexprep涨跌.docx` 又被 `.git/info/exclude` 排除；end 把这些文件列为“交付里的 ignored file(s)”并拒绝。为了让 end 通过删除了 `node_modules`，随后每个 Task 都要重装依赖、重拷字体、重建 `.next`；删除语义还波及过用户文件。
+
+**根因**：`snapshotDelivery` 遍历项目时只跳过 `.git`、`node_modules`、`.dev`，构建产物和用户自己的 ignored 文件都进入 Review 的 `deliveryState.paths`；end 再对这些路径执行 `git check-ignore`，于是“被 ignore 的文件”与“交付”被绑定在一起。检查本身在追一个上游矛盾：快照先收进了任何 commit 都带不走的文件。
+
+**修正**：交付定义为 Git 能提交的文件。`snapshotDelivery` 用 `git ls-files --others --ignored --exclude-standard` 排除未跟踪的 ignored 路径；`deliveryCommitGaps` 对旧 Review 已记录的路径做同一过滤；已跟踪文件即使匹配 ignore 规则仍属于交付；未提交的非 ignored 源码仍按原缺项拦截。没有增加构建目录白名单，也没有删除任何环境或用户文件。
+
+**证据**：`test/deliverable.test.ts`「leaves git-ignored untracked files out and keeps tracked files that match a pattern」用真实临时仓库覆盖 `.gitignore` 的 `dist/`、`*.tsbuildinfo`、`private.docx`、`.git/info/exclude` 的 `local.docx`，以及被 `git add -f` 跟踪的 `dist/tracked.js`；`test/git-commit-gate.test.ts`「does not count ignored files from an older review as delivery」覆盖旧 Review 同时含 ignored 路径和未提交 `src/a.ts` 时只报源码，提交后无缺项。全量 49 文件 500 用例、webapp 12 文件 81 用例、`tsc --noEmit` 通过。
+
+**未覆盖**：运行中的服务仍是旧代码，尚未重启验证；嵌套仓库的 ignored 路径按所在仓库语义处理，未新增用例；Git 不可用时快照不过滤，end 仍按原有 unverifiable/缺项路径阻断；旧 Review 的 test digest 可能仍覆盖 ignored 路径，未做历史迁移。
