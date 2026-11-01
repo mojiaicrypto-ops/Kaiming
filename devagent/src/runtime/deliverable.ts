@@ -3,15 +3,17 @@
  * the delivered files it actually checked.
  *
  * The state is a digest over the project's file contents, excluding host bookkeeping (`.dev`), the
- * repository metadata (`.git`), installed packages (`node_modules`) and the project knowledge entries
- * the workspace was initialized with: those are records the settlement writes, not the delivery it
- * verifies. The observed path list travels with the digest, so completion re-reads exactly the files
- * the report covered — a later addition (a knowledge entry, a report body) does not invalidate a
- * review, while a change or removal of a reviewed file does.
+ * repository metadata (`.git`), installed packages (`node_modules`), the project knowledge entries
+ * the workspace was initialized with, and files git ignores: the first three are host records,
+ * knowledge is rewritten by settlement, and ignored files are build outputs or the user's own files
+ * that no commit can carry. The observed path list travels with the digest, so completion re-reads
+ * exactly the files the report covered — a later addition (a knowledge entry, a report body) does
+ * not invalidate a review, while a change or removal of a reviewed file does.
  */
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join, normalize, relative, sep } from 'node:path';
+import { ignoredProjectPaths } from './git-delivery.ts';
 
 export interface DeliveryState {
   /** sha256 over the observed paths and their contents. */
@@ -73,13 +75,18 @@ function collect(cwd: string, dir: string, excluded: ReadonlySet<string>, out: s
 }
 
 /**
- * Observe the whole delivery now. `excludePaths` are absolute paths of project knowledge entries: a
- * settlement legitimately rewrites them after the review, so they are not part of what was reviewed.
+ * Observe the committable delivery now. `excludePaths` are absolute paths of project knowledge
+ * entries: a settlement legitimately rewrites them after the review, so they are not part of what
+ * was reviewed. Files git ignores are removed by the same rule.
  */
 export function snapshotDelivery(cwd: string, excludePaths: readonly string[] = []): DeliveryState {
   const excluded = new Set(excludePaths.map((path) => normalize(path)));
-  const paths: string[] = [];
-  collect(cwd, '', excluded, paths);
+  const observed: string[] = [];
+  collect(cwd, '', excluded, observed);
+  // A file git ignores is not part of the delivery, even though the walk sees it on disk: no commit
+  // can carry it, and build outputs or the user's own excluded files must not invalidate a review.
+  const ignored = ignoredProjectPaths(cwd, observed);
+  const paths = ignored.size === 0 ? observed : observed.filter((path) => !ignored.has(path));
   return { digest: digestOfPaths(cwd, paths), paths };
 }
 

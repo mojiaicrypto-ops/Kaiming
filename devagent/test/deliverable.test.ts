@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,6 +22,10 @@ function project(): string {
   return root;
 }
 
+function git(cwd: string, args: readonly string[]): void {
+  execFileSync('git', args, { cwd, stdio: 'ignore' });
+}
+
 describe('delivery observation', () => {
   it('covers project files and leaves host bookkeeping and knowledge entries out', () => {
     const cwd = project();
@@ -33,6 +38,31 @@ describe('delivery observation', () => {
     const snapshot = snapshotDelivery(cwd, [join(cwd, 'AGENTS.md')]);
 
     expect([...snapshot.paths].sort()).toEqual(['a.ts', 'src/b.ts']);
+    expect(snapshot.digest).toBe(digestOfPaths(cwd, snapshot.paths));
+  });
+
+  it('leaves git-ignored untracked files out and keeps tracked files that match a pattern', () => {
+    const cwd = project();
+    git(cwd, ['init', '--quiet']);
+    writeFileSync(join(cwd, '.gitignore'), 'dist/\n*.tsbuildinfo\nprivate.docx\n', 'utf8');
+    mkdirSync(join(cwd, 'dist'));
+    writeFileSync(join(cwd, 'dist', 'out.js'), 'built\n', 'utf8');
+    writeFileSync(join(cwd, 'cache.tsbuildinfo'), 'cache\n', 'utf8');
+    writeFileSync(join(cwd, 'private.docx'), 'mine\n', 'utf8');
+    writeFileSync(join(cwd, '.git/info/exclude'), 'local.docx\n', 'utf8');
+    writeFileSync(join(cwd, 'local.docx'), 'excluded by info/exclude\n', 'utf8');
+    writeFileSync(join(cwd, 'dist', 'tracked.js'), 'tracked despite the rule\n', 'utf8');
+    git(cwd, ['add', '-f', 'dist/tracked.js']);
+
+    const snapshot = snapshotDelivery(cwd);
+
+    expect(snapshot.paths).toContain('dist/tracked.js');
+    expect(snapshot.paths).not.toContain('dist/out.js');
+    expect(snapshot.paths).not.toContain('cache.tsbuildinfo');
+    expect(snapshot.paths).not.toContain('private.docx');
+    expect(snapshot.paths).not.toContain('local.docx');
+    expect(snapshot.paths).toContain('a.ts');
+    expect(snapshot.paths).toContain('src/b.ts');
     expect(snapshot.digest).toBe(digestOfPaths(cwd, snapshot.paths));
   });
 

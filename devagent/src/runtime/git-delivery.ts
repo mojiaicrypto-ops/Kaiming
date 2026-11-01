@@ -167,6 +167,24 @@ function blocks(start: number, total: number, size: number): readonly [number, n
   return out;
 }
 
+/**
+ * The observed paths git cannot commit: untracked files matched by `.gitignore`,
+ * `.git/info/exclude` or the configured global excludes. Tracked files are deliberately absent even
+ * when a pattern matches them - git keeps tracked files committable. A missing repository or git is
+ * not an error here; the caller simply has nothing to exclude.
+ */
+export function ignoredProjectPaths(cwd: string, paths: readonly string[]): ReadonlySet<string> {
+  if (paths.length === 0) return new Set();
+  const list = runGit(cwd, ['ls-files', '--others', '--ignored', '--exclude-standard', '-z']);
+  if (!list.ok) return new Set();
+  const wanted = new Set(paths);
+  const ignored = new Set<string>();
+  for (const path of list.stdout.split('\0')) {
+    if (path !== '' && wanted.has(path)) ignored.add(path);
+  }
+  return ignored;
+}
+
 /** Whether (and how) git can speak for this project, and which of `paths` are not committed. */
 export function observeCommit(cwd: string, paths: readonly string[]): CommitObservation {
   const inside = runGit(cwd, ['rev-parse', '--is-inside-work-tree']);

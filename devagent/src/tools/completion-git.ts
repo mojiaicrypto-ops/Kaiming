@@ -6,7 +6,7 @@
  * else returns no gaps, so read Tasks and no-git projects keep the behaviour they had.
  */
 import type { Store, TaskRow } from '../store/store.ts';
-import { commitGaps, observeCommit } from '../runtime/git-delivery.ts';
+import { commitGaps, ignoredProjectPaths, observeCommit } from '../runtime/git-delivery.ts';
 
 export function deliveryCommitGaps(store: Store, task: TaskRow): string[] {
   if (task.type !== 'write') return [];
@@ -16,13 +16,17 @@ export function deliveryCommitGaps(store: Store, task: TaskRow): string[] {
     .listTaskResults(task.id)
     .filter((entry) => entry.kind === 'review' && entry.verdict === 'passed')
     .at(-1);
-  const paths = review?.deliveryState?.paths ?? [];
-  if (paths.length === 0) return [];
+  const reviewed = review?.deliveryState?.paths ?? [];
+  if (reviewed.length === 0) return [];
   const cwd = store.getSession(task.chiefSessionId)?.cwd;
   if (cwd === undefined) {
     // Unreachable through today's store (a session always has a cwd), but silence here would be the
     // same "cannot verify, so pass" that the rest of this gate refuses.
     return ['the project directory of this Task is unknown, so its delivery could not be checked against git; end again once the directory is known'];
   }
+  // A review recorded before ignored files were filtered may still list build outputs or the user's
+  // own excluded files. They are not delivery: no commit can carry them, so check only the rest.
+  const ignored = ignoredProjectPaths(cwd, reviewed);
+  const paths = ignored.size === 0 ? reviewed : reviewed.filter((path) => !ignored.has(path));
   return [...commitGaps(observeCommit(cwd, paths))];
 }

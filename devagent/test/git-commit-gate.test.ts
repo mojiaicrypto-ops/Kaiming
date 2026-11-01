@@ -459,6 +459,27 @@ describe('the completion gate', () => {
     expect(gaps[0]).toContain('src/a.ts');
   });
 
+  it('does not count ignored files from an older review as delivery', () => {
+    const repo = initRepo();
+    write(repo, '.gitignore', 'dist/\n');
+    write(repo, 'dist/out.js', 'built\n');
+    write(repo, '.git/info/exclude', 'local.docx\n');
+    write(repo, 'local.docx', 'mine\n');
+    write(repo, 'src/a.ts', 'export const a = 1;\n');
+    const { store, taskId } = taskWithReview(['dist/out.js', 'local.docx', 'src/a.ts'], repo);
+
+    const gaps = deliveryCommitGaps(store, store.getTask(taskId)!);
+    const text = gaps.join(' ');
+    expect(gaps).toHaveLength(1);
+    expect(text).toContain('src/a.ts');
+    expect(text).not.toContain('dist/out.js');
+    expect(text).not.toContain('local.docx');
+    expect(text).not.toContain('ignored');
+
+    commitAll(repo);
+    expect(deliveryCommitGaps(store, store.getTask(taskId)!)).toEqual([]);
+  });
+
   it('says nothing for a read Task', () => {
     const repo = initRepo();
     write(repo, 'src/a.ts', 'export const a = 1;\n');
