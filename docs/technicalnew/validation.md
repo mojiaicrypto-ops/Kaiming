@@ -427,3 +427,13 @@
 **证据**：新增 `webapp/test/slot.test.ts`「a replayed older end or delta cannot take over a newer streaming message」：旧 input 的 delta/end 到达后，i2 的 live 文本仍为 `new`；随后 i2 的真实 end 正常完成，最终两个 assistant 消息。webapp 12 文件 85 用例、`tsc --noEmit` 通过；服务端未改动。
 
 **未覆盖**：浏览器真实长连接/断线重连未重启验证；同一 `inputId` 内两条正文完全相同的不同助手消息仍无法仅靠 inputId 区分。
+
+## 2026-11-01 · Task 成员长状态溢出与图片粘贴
+
+**现象**：Task 成员行的 `正在 question：<长标题>` 把状态列撑到上千像素，成员标签被压成 0，整个 Task 卡片和转录出现横向过界；输入框只能点 `＋` 选文件，不能直接粘贴截图。
+
+**修正**：`.mrow` 的状态轨道从 `auto` 改为 `fit-content(45%)`，状态填满轨道并 ellipsis，完整文本放进 `title`，成员标签保留 `1fr`。Composer 的 `paste` 只拦截含图片的剪贴板，复用文件选择器的上传路径；纯文本粘贴不拦截。
+
+**证据**：运行中的工作台 1568px 实测长 `Asking` 行：label 632px、state 546px，`.todo` 与 document 均无横向溢出（`scrollWidth === clientWidth`）；真实浏览器截图中状态被省略且卡片右边框完整。通过页面构造 `DataTransfer` + PNG `File` 触发 paste，附件托盘出现 1 张图、无上传错误，移除后归零。webapp 12 文件 85 用例、`tsc --noEmit`、`npm run build` 通过。
+
+**未覆盖**：真实系统剪贴板/多图粘贴与移动端长状态未逐项实测；粘贴含图片和文字时只取图片，文字不另行插入。
