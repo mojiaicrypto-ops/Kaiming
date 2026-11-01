@@ -403,3 +403,15 @@
 **证据**：`test/deliverable.test.ts`「leaves git-ignored untracked files out and keeps tracked files that match a pattern」用真实临时仓库覆盖 `.gitignore` 的 `dist/`、`*.tsbuildinfo`、`private.docx`、`.git/info/exclude` 的 `local.docx`，以及被 `git add -f` 跟踪的 `dist/tracked.js`；`test/git-commit-gate.test.ts`「does not count ignored files from an older review as delivery」覆盖旧 Review 同时含 ignored 路径和未提交 `src/a.ts` 时只报源码，提交后无缺项。全量 49 文件 500 用例、webapp 12 文件 81 用例、`tsc --noEmit` 通过。
 
 **未覆盖**：运行中的服务仍是旧代码，尚未重启验证；嵌套仓库的 ignored 路径按所在仓库语义处理，未新增用例；Git 不可用时快照不过滤，end 仍按原有 unverifiable/缺项路径阻断；旧 Review 的 test digest 可能仍覆盖 ignored 路径，未做历史迁移。
+
+## 2026-11-01 · 实时回复按内容去重被误删
+
+**现象**：chat 已经实时显示回复，随后突然只剩更早的内容，最新几轮消失；刷新后从 history 文件恢复。触发与回复正文重复或前缀相同有关。
+
+**根因**：`slot.ts` 的 `message_end` 用 `signatureOf` 在全部历史里找相同正文，命中即删当前 live 条目；`mergeMessages` 的 resync 也把内容相同或前缀相同的 live-only 条目当 stale twin。两处都没有检查 `inputId`，不同输入的新回复因此被当成旧消息的副本。
+
+**修正**：新增 `sameTurn`：非 live entry id 相同，或双方 `inputId` 相同，才可能是同一条；不同输入一律不是 twin，双方都没有 `inputId` 时才保留内容兜底。`message_end` 的重复检查、快照合并的精确匹配与前缀匹配都走这条身份规则。
+
+**证据**：`webapp/test/slot.test.ts`「repeated text across turns」覆盖三条：不同 input 的相同文字在 `message_end` 后保留；resync 不丢与旧回复重复/前缀相同的 live-only 完成条目；同一 input 的相同回复仍然去重。webapp 12 文件 84 用例、`tsc --noEmit` 通过；服务端未改动。
+
+**未覆盖**：浏览器实际长连接/断线重连未重启验证；同一 `inputId` 内两条正文完全相同的不同助手消息仍无法靠 `inputId` 区分（需要服务端稳定消息 id，当前未做）。
