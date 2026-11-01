@@ -1177,7 +1177,10 @@ kbd {
   display: grid;
   /* Glyph, what the member is, and the state word: the state column is a word
      because a colour alone is not a state (U3). */
-  grid-template-columns: 20px minmax(0, 1fr) auto;
+  /* The state column sizes to its short word but is capped on a long question title, leaving the
+     member label its own flexible column. `auto` would make the long title's max-content width
+     collapse the label to zero even when the title itself is ellipsized. */
+  grid-template-columns: 20px minmax(0, 1fr) fit-content(45%);
   gap: var(--s2);
   align-items: baseline;
   padding: 3px var(--s1);
@@ -1753,6 +1756,14 @@ details.fold > summary.tline:hover {
   font: inherit;
   font-size: var(--fs-12);
   cursor: pointer;
+  /* A question title can be arbitrarily long; the state column is a summary, not a second
+     transcript. Keep the card inside the task block and leave the full text to title. */
+  min-width: 0;
+  /* The column track is capped by `fit-content(45%)`; fill it so the state sits at the right edge. */
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .mrow .mo:hover {
   border-color: var(--accent);

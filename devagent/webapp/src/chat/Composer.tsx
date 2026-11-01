@@ -7,6 +7,19 @@ import type { SessionActivity } from '../api/stream';
 /** How many images one message may carry (the server refuses more). */
 const MAX_IMAGES = 6;
 
+/** Images pasted from the clipboard use the same upload path as the file picker. */
+function imageFilesFromClipboard(data: DataTransfer | null): File[] {
+  if (data === null) return [];
+  const files: File[] = [];
+  for (let index = 0; index < data.items.length; index += 1) {
+    const item = data.items[index];
+    if (item === undefined || item.kind !== 'file' || !item.type.startsWith('image/')) continue;
+    const file = item.getAsFile();
+    if (file !== null) files.push(file);
+  }
+  return files;
+}
+
 /** An image already uploaded and stored by the server: only its id travels with the message. */
 export interface PendingImage {
   readonly id: string;
@@ -86,7 +99,7 @@ export function Composer({ busy, canStop, disabled, onSubmit, onUpload, onStop, 
     onSeed?.(inserted);
   }, [seed, draft, onSeed]);
 
-  const addFiles = async (files: FileList | null): Promise<void> => {
+  const addFiles = async (files: FileList | readonly File[] | null): Promise<void> => {
     if (files === null || files.length === 0) return;
     setUploadError(null);
     setUploading(true);
@@ -180,6 +193,14 @@ export function Composer({ busy, canStop, disabled, onSubmit, onUpload, onStop, 
           value={draft}
           disabled={disabled || sending}
           onChange={(event) => setDraft(event.target.value)}
+          onPaste={(event) => {
+            const pasted = imageFilesFromClipboard(event.clipboardData);
+            if (pasted.length === 0) return;
+            // Image bytes belong in the attachment tray, not as a broken text paste. A text-only
+            // paste is left entirely to the browser.
+            event.preventDefault();
+            void addFiles(pasted);
+          }}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();

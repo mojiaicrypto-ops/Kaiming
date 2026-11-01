@@ -114,7 +114,7 @@
 
 - 来源两种，落点一致：用户上传（`POST /api/v1/uploads`，cookie + CSRF，png/jpeg/webp/gif，单张 ≤8MB，单条 ≤6 张）；工具截图（browser 直接写入同一附件存储）。
 - 界面只拿地址：`GET /api/v1/attachments/<id>`（cookie 认证，`immutable` 缓存）。消息里的 `image` 块是 `{id, mimeType}`，前端拼成 `/api/v1/attachments/<id>`；浏览器响应里不出现 base64。
-- 输入框：添加按钮 + 已选缩略图（可逐个移除，上限 6）；上传失败显示服务端原因（类型/大小）；只有图片没有文字也能发送。
+- 输入框：添加按钮或直接粘贴剪贴板图片 + 已选缩略图（可逐个移除，上限 6）；仅拦截含图片的粘贴，纯文本粘贴仍由浏览器原样插入；上传失败显示服务端原因（类型/大小）；只有图片没有文字也能发送。
 - 消息与工具卡：图片缩略图最大 520×360，点击在新标签打开原图；刷新后从历史重新取到同一地址，不重新上传。
 - 尺寸与语言：`chat.attach`、`chat.attach.remove`、`chat.attach.limit`、`chat.attach.failed` 双语键；图片 `alt` 用文件名或 mime。
 

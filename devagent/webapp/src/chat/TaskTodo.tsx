@@ -201,7 +201,7 @@ function TodoMemberRow({
         <b>{row.label}</b>
         {row.assignment === '' ? '' : <span className="mn"> — {row.assignment}</span>}
       </span>
-      <span className="mo">{label}</span>
+      <span className="mo" title={label}>{label}</span>
     </button>
   );
 }
