@@ -9,3 +9,11 @@ The product design documents describe behaviour to be implemented; they are not 
 Confirmed scope and basis: `docs/productnew/` (product requirements) and `docs/technicalnew/` (technical design) are the only implementation basis, implemented as a whole. `oldcode/` and `docs/old/` are not read, not processed and need no understanding; `docs/architecturenew/` is a previous-round plan and is not an implementation basis.
 
 Simple first: do not over-engineer and do not over-think. Solve the current problem within the confirmed requirements and prefer Pi's native capabilities and the existing mechanisms; without a clear need, do not add objects, states, protocols or abstraction layers, and do not pre-build complex mechanisms for hypothetical future needs.
+
+## Discuss before sensitive changes
+
+A change is sensitive when it touches completion checks, delivery or commit judgement, cleanup or deletion, environment and process ownership, permissions, persistence, or a cross-module contract. For these, present the observed facts, the viable options and their consequences, and the recommendation first; wait for the user's decision, then write the applicable Plan and change code. Do not turn a proposal made during discussion into an implementation on your own.
+
+Never delete files, installed dependencies, build outputs or user data just to make a check pass. When a check rejects ordinary work, treat the check and the work as two separate questions: report the false positive, preserve the environment, and discuss the fix. A passing completion gate is not a reason to destroy the workspace.
+
+The end-of-Task delivery check is one such sensitive area: which files count as the reviewed delivery, and whether ignored build outputs or user-excluded files should be filtered, is an open decision to discuss. Do not change that check ad hoc.
