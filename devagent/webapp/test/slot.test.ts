@@ -213,6 +213,48 @@ describe('slot merge · repeated text across turns', () => {
     });
     expect(slot.items.filter((entry) => entry.role === 'assistant')).toHaveLength(1);
   });
+
+  it('a replayed older end or delta cannot take over a newer streaming message', () => {
+    let slot = emptySlot();
+    slot = slotReducer(slot, {
+      type: 'snapshot',
+      reason: 'initial',
+      snapshot: snapshotOf([
+        { entryId: 'a1', role: 'assistant', content: text('old'), inputId: 'i1' },
+      ]),
+    });
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'pi', seq: 50, inputId: 'i2', event: { type: 'message_start', message: { role: 'assistant', content: [] } } },
+    });
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'pi', seq: 51, inputId: 'i2', event: { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'new', contentIndex: 0 } } },
+    });
+    // Replayed from the old input's buffer: it must not touch the newer live message.
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'pi', seq: 52, inputId: 'i1', event: { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'old', contentIndex: 0 } } },
+    });
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'pi', seq: 53, inputId: 'i1', event: { type: 'message_end', message: { role: 'assistant', content: text('old') } } },
+    });
+
+    const live = slot.items.find((entry) => entry.streaming === true);
+    expect(live?.inputId).toBe('i2');
+    expect(live?.content[0]).toMatchObject({ type: 'text', text: 'new' });
+
+    // The real completion for i2 still replaces it with the finished message.
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'pi', seq: 54, inputId: 'i2', event: { type: 'message_end', message: { role: 'assistant', content: text('new') } } },
+    });
+    const assistants = slot.items.filter((entry) => entry.role === 'assistant');
+    expect(assistants).toHaveLength(2);
+    expect(assistants[1]?.content[0]).toMatchObject({ type: 'text', text: 'new' });
+    expect(assistants[1]?.streaming).toBe(false);
+  });
 });
 
 describe('slot merge · orphan live keys', () => {

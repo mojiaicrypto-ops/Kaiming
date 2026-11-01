@@ -383,6 +383,8 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
           for (let index = items.length - 1; index >= 0; index -= 1) {
             const entry = items[index];
             if (entry === undefined || entry.streaming !== true) continue;
+            // A late delta for an older input must not be appended to the newer live message.
+            if (frame.inputId !== undefined && entry.inputId !== frame.inputId && entry.inputId != null) continue;
             const content = [...entry.content];
             const blockIndex = delta.contentIndex ?? Math.max(content.length - 1, 0);
             while (content.length <= blockIndex) content.push({ type: 'text', text: '' });
@@ -417,7 +419,15 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
             | undefined;
           if (message === undefined) return state;
           const items = [...state.items];
-          const liveIndex = items.findIndex((entry) => entry.streaming === true);
+          // A replayed old message_end must not take over the live entry of a newer input: match the
+          // streaming entry by this event's input id before considering any other started message.
+          const exactLive = frame.inputId === undefined
+            ? items.findIndex((entry) => entry.streaming === true)
+            : items.findIndex((entry) => entry.streaming === true && entry.inputId === frame.inputId);
+          const nullLive = frame.inputId === undefined
+            ? -1
+            : items.findIndex((entry) => entry.streaming === true && (entry.inputId === null || entry.inputId === undefined));
+          const liveIndex = exactLive >= 0 ? exactLive : nullLive;
           const liveKey = items[liveIndex]?.entryId;
           const completed = normalizePiMessage(message, {
             entryId: message.id ?? liveKey ?? `live-${frame.seq}`,
@@ -445,16 +455,23 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
               sameTurn(entry, completed) &&
               signatureOf(entry) === signature,
           );
+          // A null input on the selected live entry is the legacy shape: if it was the only
+          // candidate, the completion belongs to it. A genuinely different input never does.
+          const liveIsSameTurn =
+            liveIndex >= 0 &&
+            (sameTurn(items[liveIndex]!, completed) || items[liveIndex]!.inputId == null);
           const liveKeys = new Set(state.liveKeys);
           let next: readonly HistoryMessage[];
-          if (liveIndex >= 0 && duplicate >= 0) {
+          if (liveIsSameTurn && duplicate >= 0) {
             // The snapshot already has this turn: keep it, drop the live twin we just completed.
             next = items.filter((_, index) => index !== liveIndex);
             if (liveKey !== undefined) liveKeys.delete(liveKey);
-          } else if (liveIndex >= 0) {
+          } else if (liveIsSameTurn) {
             next = items.map((entry, index) => (index === liveIndex ? completed : entry));
             if (liveKey !== undefined) liveKeys.delete(liveKey);
           } else if (duplicate >= 0) {
+            // A stale completion for a turn already in the snapshot: do not touch another input's
+            // live entry that happens to be streaming now.
             return state;
           } else {
             next = [...items, completed];
