@@ -160,7 +160,7 @@
 |---|---|---|
 | 未提交即拒绝收口 | Passed | 真实 store + 真实 `task` 工具 + 临时 git 仓库：passed Review 之后改动交付文件，`end` 返回 `COMPLETION_INCOMPLETE`，缺项列出文件与 `git add -- <paths>`，Task 保持 `active`；提交后同一调用不再出现该缺项并可 `completed`（`test/git-commit-gate.test.ts` 端到端用例；独立 Test 亦以自建脚本复现） |
 | 提交由模型执行 | Passed | 程序只运行 `rev-parse` / `status` / `check-ignore`；`agents-and-tools.md` 与 D-07 无「程序代提交」表述 |
-| 缺项覆盖三类事实 | Passed | 未提交；被 `.gitignore` 排除（`git add -f` 只在规则写错时）；内嵌仓库里的交付文件（在它自己的仓库核对，外层是否记录该仓库另算一条）。三类各自成缺项，不合并 |
+| 缺项覆盖三类事实 | Passed | 未提交；被忽略（2026-11-01 起顶层未跟踪 ignored 文件不再进入交付路径，这里只指内嵌仓库根被外层忽略或内嵌仓库里的交付路径被忽略）；内嵌仓库里的交付文件（在它自己的仓库核对，外层是否记录该仓库另算一条）。三类各自成缺项，不合并 |
 | 合法形态不被永久阻断 | Passed | 真实 `git submodule add`：内层内容提交 + 外层提交指针后 `gaps` 为空；两层内嵌逐级记录后为空；项目位于更大仓库之下时路径按前缀换回项目相对 |
 | 无法核实不静默放行 | Passed | `.git` 存在但 git 读不出来（gitdir 损坏、git 不可用）一律 `unverifiable` 阻断；仓库标记按项目目录向上查找，子目录项目不会退化成「无 Git」 |
 | 独立 Review / Test | Passed | 四轮独立 Review（`review.md`）与四轮独立 Test（`test.md`，39 个探针场景）；最终结论均为通过，关闭项含 gitignore 交付、内嵌仓库、两层嵌套、submodule 指针、`.git` 假标记、路径分批 |
