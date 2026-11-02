@@ -437,3 +437,15 @@
 **证据**：运行中的工作台 1568px 实测长 `Asking` 行：label 632px、state 546px，`.todo` 与 document 均无横向溢出（`scrollWidth === clientWidth`）；真实浏览器截图中状态被省略且卡片右边框完整。通过页面构造 `DataTransfer` + PNG `File` 触发 paste，附件托盘出现 1 张图、无上传错误，移除后归零。webapp 12 文件 85 用例、`tsc --noEmit`、`npm run build` 通过。
 
 **未覆盖**：真实系统剪贴板/多图粘贴与移动端长状态未逐项实测；粘贴含图片和文字时只取图片，文字不另行插入。
+
+## 2026-11-02 · 长时间停留后的重连快照排序
+
+**现象**：页面长时间不动后，重连会把已经显示的消息显示成更早内容/看似丢失；刷新 history 后又正常。上一轮的 C17/C18 去重修复没有覆盖这一条路径。
+
+**根因**：`session.stream.prepare` 只带最新 100 条消息。`mergeMessages` 把当前状态里**快照没有的条目全部当成 live tail**追加到快照之后；历史超过尾窗后，页面原有的旧消息被放到最新快照后面，贴底自动跟随把视口带到旧内容，最新消息留在上方。
+
+**修正**：快照消息携带 Pi 记录的时间戳。合并时先用时间戳与快照首尾比较，再用当前数组相对共享条目的位置兜底：旧条目放在快照之前，只有快照读取之后新增的流条目放在之后；没有任何共享条目时按旧内容处理。`normalizePiMessage` 同时保留 streaming 标记（加时间戳时曾遗漏，测试已抓住）。
+
+**证据（`feece57`）**：新增 `webapp/test/slot.test.ts`「a resync whose snapshot tail advanced keeps shown history before the new tail」和「a reconnect with no shared ids orders old stream entries before newer history」；前者在旧合并逻辑下会得到 `h2,h3,h4,h1`，现在为 `h1,h2,h3,h4`。webapp 12 文件 87 用例、`tsc --noEmit`、`npm run build` 通过；服务端 `server-stream`/`server-read` 39 用例和 `tsc --noEmit` 通过。另用临时数据副本重启真实 workbench：页面 100 条消息在服务停止/重启后仍在，重试后快照恢复。
+
+**未覆盖**：未在真实浏览器里等到一次超过 100 条历史的长时间断连；页面整页刷新仍只从最新 100 条开始（不恢复此前“加载更早”的页），这是既有快照边界而非本次改动。
