@@ -446,7 +446,6 @@
 
 **修正**：快照消息携带 Pi 记录的时间戳。合并时先用时间戳与快照首尾比较，再用当前数组相对共享条目的位置兜底：旧条目放在快照之前，只有快照读取之后新增的流条目放在之后；没有任何共享条目时按旧内容处理。`normalizePiMessage` 同时保留 streaming 标记（加时间戳时曾遗漏，测试已抓住）。
 
-**证据（`feece57`）**：新增 `webapp/test/slot.test.ts`「a resync whose snapshot tail advanced keeps shown history before the new tail」「a reconnect with no shared ids orders old stream entries before newer history」「a reconnect with no shared ids keeps entries without timestamps as older history」；第一条在旧合并逻辑下会得到 `h2,h3,h4,h1`，现在为 `h1,h2,h3,h4`；第三条证明旧服务端没有 timestamp 时的位置兜底。webapp 12 文件 88 用例、`tsc --noEmit`、`npm run build` 通过；服务端 `server-stream`/`server-read` 39 用例和 `tsc --noEmit` 通过。另用临时数据副本重启真实 workbench：页面 100 条消息在服务停止/重启后仍在，重试后快照恢复。
 
 **未覆盖**：未在真实浏览器里等到一次超过 100 条历史的长时间断连；页面整页刷新仍只从最新 100 条开始（不恢复此前“加载更早”的页），这是既有快照边界而非本次改动。
 
@@ -460,7 +459,7 @@
 
 - `runner` 在成员输入即将 `completed` 前，按 `currentInputId` 核对 `results`；没有本次输入的报告时写 `failed` / `REPORT_MISSING`，保留 Pi 输出与边界。
 - `task.get`、Task detail 和 dispatch 成员状态暴露 `reportMissing` / `errorCode`；`memberPassed`、浏览器 `task-flow` 与成员行不再把这种输入标成完成。
-- `guidanceFor` 在缺报告时给出**原 Session continuation** 的建议，并停止推荐 phase update/新 Review；`completionBlockers` 也拒绝缺报告的完成。
+- `guidanceFor` 在缺报告时给出**原 Session continuation** 的建议，并停止推荐 phase update/新 Review；`completionBlockers` 对当前步骤拒绝无报告完成（历史已被后续独立复核取代的缺报告不阻塞总完成）。
 - `reviewer.md` / `specialists.md` 明确：结束输入必须调用 `agent_report`，纯文本不是报告。
 - 不伪造报告、不自动重派、不自动续办；主管看到真实失败后显式决定。
 
