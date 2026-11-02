@@ -240,7 +240,21 @@ function observeDelivery(context: ReportToolContext, taskId: string, kind: Resul
       return { digest: digestOfPaths(context.cwd, paths), paths };
     }
   }
-  return snapshotDelivery(context.cwd, knowledge);
+  return scopeReviewDelivery(context.cwd, snapshotDelivery(context.cwd, knowledge));
+}
+
+/**
+ * Bind a code delivery to its code files. A settlement writes docs and commits after Review/Test;
+ * those edits must not force a fresh review or a rerun of an expensive test when the code did not
+ * change. A docs-only delivery keeps its docs, so document tasks are still bound to their output.
+ */
+function scopeReviewDelivery(cwd: string, snapshot: DeliveryState): DeliveryState {
+  // Docs (docs/** and root Markdown) are settlement output; only code paths bind the review.
+  const codePaths = snapshot.paths.filter((path) => !path.startsWith('docs/') && (path.includes('/') || !path.endsWith('.md')));
+  if (codePaths.length === 0 || codePaths.length === snapshot.paths.length) {
+    return snapshot;
+  }
+  return { digest: digestOfPaths(cwd, codePaths), paths: codePaths };
 }
 
 function readFileIfPresent(path: string): string | undefined {

@@ -287,6 +287,8 @@ describe('agent_report', () => {
     // The delivered file the review will cover.
     mkdirSync(join(f.cwd, 'src'), { recursive: true });
     writeFileSync(join(f.cwd, 'src', 'a.ts'), 'export const a = 1;\n', 'utf8');
+    mkdirSync(join(f.cwd, 'docs'), { recursive: true });
+    writeFileSync(join(f.cwd, 'docs', 'runbook.md'), '# runbook v1\n', 'utf8');
     const settlementBody = '# settlement\n\nall checked\n';
     writeSettlement(f.cwd, f.taskId, settlementBody);
     const settlement = await f.report.execute('call-1', {
@@ -307,6 +309,7 @@ describe('agent_report', () => {
     const review = await reviewerReport(f, 'passed');
     expect(review.isError).toBe(false);
     expect(f.store.getResult(String(review.details['resultId']))?.deliveryState?.paths).toContain('src/a.ts');
+    expect(f.store.getResult(String(review.details['resultId']))?.deliveryState?.paths).not.toContain('docs/runbook.md');
 
     // The Test covers the same files the review covered.
     const test = await testerReport(f, 'passed');
@@ -327,10 +330,26 @@ describe('agent_report', () => {
 
     // Restoring the reviewed content makes the recorded evidence valid again.
     writeFileSync(join(f.cwd, 'src', 'a.ts'), 'export const a = 1;\n', 'utf8');
+    // Settlement docs are not the code delivery: changing them after Review must not require a rerun.
+    writeFileSync(join(f.cwd, 'docs', 'runbook.md'), '# runbook v2\n', 'utf8');
     const ended = f.store.endTask({ taskId: f.taskId, completionResultId: settlementId });
     expect(ended).toMatchObject({ ok: true });
     expect(f.store.getTask(f.taskId)?.status).toBe('completed');
     expect(f.store.getSession('c-1')?.currentTaskId).toBeNull();
+  });
+  it('keeps a documentation-only delivery bound to its docs', async () => {
+    const f = fixture({ type: 'write', roleId: 'reviewer', expectedKind: 'review' });
+    mkdirSync(join(f.cwd, 'docs'), { recursive: true });
+    writeFileSync(join(f.cwd, 'docs', 'spec.md'), '# spec\n\nv1\n', 'utf8');
+
+    const review = await f.report.execute('call-1', {
+      summary: 'docs checked',
+      body: '# review\n\nchecked\n',
+      verdict: 'passed',
+    });
+
+    expect(review.isError).toBe(false);
+    expect(f.store.getResult(String(review.details['resultId']))?.deliveryState?.paths).toEqual(['docs/spec.md']);
   });
 
   it('reports the same retry as one result instead of a duplicate', async () => {
