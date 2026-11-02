@@ -133,6 +133,9 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
             role: record.role,
             content: record.content,
             inputId: record.inputId,
+            // Timestamps let a reconnecting page order stream-only entries against the snapshot's
+            // tail even when the two sides share no entry ids.
+            timestamp: record.timestamp,
             // A tool result must keep the identity of the call it answers, in the snapshot too.
             ...(record.toolCallId !== null ? { toolCallId: record.toolCallId } : {}),
             ...(record.toolName !== null ? { toolName: record.toolName } : {}),

@@ -26,6 +26,8 @@ export interface HistoryMessage {
   isError?: boolean;
   streaming?: boolean;
   stopReason?: string | null;
+  /** ISO stamp from Pi history or the frame; ordering aid, never shown. */
+  timestamp?: string | null;
 }
 
 export type ContentBlock =
@@ -226,18 +228,33 @@ function mergeMessages(current: readonly HistoryMessage[], incoming: readonly Hi
       incomingByKey.set(normalized.entryId, { ...normalized, streaming: normalized.streaming ?? false });
     }
   }
-  const items: HistoryMessage[] = [];
+  const incomingItems: HistoryMessage[] = [];
   const liveKeys = new Set<string>();
-  // 1. Snapshot order first: entries the snapshot knows, in the snapshot's own order.
   for (const message of incomingByKey.values()) {
-    items.push(message);
+    incomingItems.push(message);
     if (message.streaming === true) liveKeys.add(message.entryId);
   }
-  // 2. Live-only entries the snapshot does not know yet (its file read lags the stream),
-  //    in their existing tail order. A live-only entry that equals OR is a content prefix of a
-  //    snapshot entry is the stale twin of THAT turn only when it belongs to the same input;
-  //    a newer turn that repeats an older reply is a real message and stays.
-  for (const message of current) {
+  /*
+   * Entries the snapshot no longer carries are not all "live tail". A long-lived page can have
+   * older history that a newer snapshot's 100-message tail has already cut off; appending that
+   * after the new tail made the transcript jump back to old content (the reported "messages
+   * disappeared after a reconnect"). Prefer the entry's own timestamp against the snapshot
+   * range; fall back to the current array's position against the shared entries. Only entries
+   * newer than the snapshot belong after it.
+   */
+  const sharedPositions = current
+    .map((message, index) => (incomingKeys.has(message.entryId) ? index : -1))
+    .filter((index) => index >= 0);
+  const firstShared = sharedPositions.length === 0 ? -1 : Math.min(...sharedPositions);
+  const lastShared = sharedPositions.length === 0 ? -1 : Math.max(...sharedPositions);
+  const incomingTimes = incomingItems
+    .map((message) => message.timestamp)
+    .filter((time): time is string => typeof time === 'string' && time !== '');
+  const firstIncomingTime = incomingTimes[0] ?? null;
+  const lastIncomingTime = incomingTimes.at(-1) ?? null;
+  const earlier: HistoryMessage[] = [];
+  const tail: HistoryMessage[] = [];
+  for (const [index, message] of current.entries()) {
     if (incomingKeys.has(message.entryId)) continue;
     if (
       message.streaming !== true &&
@@ -253,10 +270,20 @@ function mergeMessages(current: readonly HistoryMessage[], incoming: readonly Hi
     // (otherwise the transcript "breaks mid-render" with a half-content ghost node). The same
     // input check keeps a new turn with a matching opening fragment.
     if (normalizedIncoming.some((candidate) => sameTurn(message, candidate) && matchesTwin(message, candidate))) continue;
-    items.push(message);
+    const time = message.timestamp;
+    const newerThanSnapshot =
+      time !== null && time !== undefined && firstIncomingTime !== null && time < firstIncomingTime
+        ? false
+        : time !== null && time !== undefined && lastIncomingTime !== null && time > lastIncomingTime
+          ? true
+          : firstShared < 0
+            ? false
+            : index > lastShared;
+    if (newerThanSnapshot) tail.push(message);
+    else earlier.push(message);
     if (message.streaming === true) liveKeys.add(message.entryId);
   }
-  return { items, liveKeys };
+  return { items: [...earlier, ...incomingItems, ...tail], liveKeys };
 }
 
 export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot {
@@ -273,6 +300,7 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
             entryId: typeof (message as { entryId?: unknown }).entryId === 'string' ? (message as { entryId: string }).entryId : '',
             streaming: false,
             inputId: (message as { inputId?: string | null }).inputId ?? null,
+            timestamp: typeof (message as { timestamp?: unknown }).timestamp === 'string' ? (message as { timestamp: string }).timestamp : null,
             toolCallId: (message as { toolCallId?: unknown }).toolCallId as string | undefined,
             toolName: (message as { toolName?: unknown }).toolName as string | undefined,
             ...(typeof (message as { isError?: unknown }).isError === 'boolean'
@@ -295,6 +323,7 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
             entryId: typeof (message as { entryId?: unknown }).entryId === 'string' ? (message as { entryId: string }).entryId : '',
             streaming: false,
             inputId: (message as { inputId?: string | null }).inputId ?? null,
+            timestamp: typeof (message as { timestamp?: unknown }).timestamp === 'string' ? (message as { timestamp: string }).timestamp : null,
             toolCallId: (message as { toolCallId?: string }).toolCallId,
             toolName: (message as { toolName?: string }).toolName,
             isError: (message as { isError?: boolean }).isError,
@@ -360,7 +389,7 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
       const event = frame.event;
       switch (event.type) {
         case 'message_start': {
-          const message = (event.message ?? {}) as { role?: string; content?: unknown };
+          const message = (event.message ?? {}) as { role?: string; content?: unknown; timestamp?: string };
           if (message.role !== 'assistant') return state;
           const entryId = `live-${frame.seq ?? Date.now()}`;
           if (state.liveKeys.has(entryId)) return state;
@@ -369,7 +398,7 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
             busy: 'processing',
             items: [
               ...state.items,
-              normalizePiMessage(message, { entryId, streaming: true, inputId: frame.inputId ?? null }),
+              normalizePiMessage(message, { entryId, streaming: true, inputId: frame.inputId ?? null, timestamp: message.timestamp ?? new Date().toISOString() }),
             ],
             liveKeys: new Set([...state.liveKeys, entryId]),
           };
@@ -415,7 +444,7 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
         }
         case 'message_end': {
           const message = event.message as
-            | { id?: string; role?: string; content?: unknown; toolCallId?: string; toolName?: string; isError?: boolean; stopReason?: string }
+            | { id?: string; role?: string; content?: unknown; toolCallId?: string; toolName?: string; isError?: boolean; stopReason?: string; timestamp?: string }
             | undefined;
           if (message === undefined) return state;
           const items = [...state.items];
@@ -437,6 +466,7 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
             toolName: message.toolName,
             isError: message.isError,
             stopReason: message.stopReason ?? null,
+            timestamp: message.timestamp ?? new Date().toISOString(),
           });
           /*
            * The turn exists once, no matter which path brought it here.

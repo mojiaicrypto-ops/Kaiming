@@ -141,6 +141,39 @@ describe('slot merge', () => {
     ]) });
     expect(slot.items.map((entry) => entry.entryId)).toEqual(['u0', 'a1']);
   });
+  it('a resync whose snapshot tail advanced keeps shown history before the new tail', () => {
+    let slot = emptySlot();
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'initial', snapshot: snapshotOf([
+      { entryId: 'h1', role: 'user', content: [{ type: 'text', text: 'one' }] },
+      { entryId: 'h2', role: 'assistant', content: [{ type: 'text', text: 'two' }] },
+      { entryId: 'h3', role: 'user', content: [{ type: 'text', text: 'three' }] },
+    ]) });
+    // A long-lived page, then a reconnect after the history moved past the snapshot's 100-message
+    // tail. h1 is no longer in the snapshot, but it is older than the new tail, not a live tail.
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'resync', snapshot: snapshotOf([
+      { entryId: 'h2', role: 'assistant', content: [{ type: 'text', text: 'two' }] },
+      { entryId: 'h3', role: 'user', content: [{ type: 'text', text: 'three' }] },
+      { entryId: 'h4', role: 'assistant', content: [{ type: 'text', text: 'four' }] },
+    ]) });
+    expect(slot.items.map((entry) => entry.entryId)).toEqual(['h1', 'h2', 'h3', 'h4']);
+  });
+  it('a reconnect with no shared ids orders old stream entries before newer history', () => {
+    let slot = emptySlot();
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'initial', snapshot: snapshotOf([
+      { entryId: 'h1', role: 'user', content: [{ type: 'text', text: 'one' }], timestamp: '2026-11-02T01:00:00.000Z' },
+      { entryId: 'h2', role: 'assistant', content: [{ type: 'text', text: 'two' }], timestamp: '2026-11-02T01:00:01.000Z' },
+    ]) });
+    // A stream completion was shown before the connection dropped.
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'pi', seq: 3, event: { type: 'message_end', message: {
+      id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'three' }], timestamp: '2026-11-02T01:00:02.000Z',
+    } } } });
+    // The reconnect snapshot advanced past all of it (more than the 100-message tail).
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'resync', snapshot: snapshotOf([
+      { entryId: 'h4', role: 'user', content: [{ type: 'text', text: 'four' }], timestamp: '2026-11-02T01:00:03.000Z' },
+      { entryId: 'h5', role: 'assistant', content: [{ type: 'text', text: 'five' }], timestamp: '2026-11-02T01:00:04.000Z' },
+    ]) });
+    expect(slot.items.map((entry) => entry.entryId)).toEqual(['h1', 'h2', 'a1', 'h4', 'h5']);
+  });
 });
 
 describe('slot merge · repeated text across turns', () => {

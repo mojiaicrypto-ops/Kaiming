@@ -54,7 +54,7 @@ export function normalizeMessage(message: HistoryMessage): HistoryMessage {
 /** Normalize a raw Pi event message (role/content of unknown shape) into a HistoryMessage. */
 export function normalizePiMessage(
   raw: { role?: string; content?: unknown },
-  fields: { entryId: string; streaming: boolean; inputId?: string | null; toolCallId?: string; toolName?: string; isError?: boolean; stopReason?: string | null },
+  fields: { entryId: string; streaming: boolean; inputId?: string | null; toolCallId?: string; toolName?: string; isError?: boolean; stopReason?: string | null; timestamp?: string | null },
 ): HistoryMessage {
   const role = raw.role === 'user' || raw.role === 'system' || raw.role === 'toolResult' ? raw.role : 'assistant';
   return normalizeMessage({
@@ -65,6 +65,7 @@ export function normalizePiMessage(
     inputId: fields.inputId ?? null,
     streaming: fields.streaming,
     stopReason: fields.stopReason ?? null,
+    timestamp: fields.timestamp ?? null,
     ...(fields.toolCallId !== undefined ? { toolCallId: fields.toolCallId } : {}),
     ...(fields.toolName !== undefined ? { toolName: fields.toolName } : {}),
     ...(fields.isError !== undefined ? { isError: fields.isError } : {}),
