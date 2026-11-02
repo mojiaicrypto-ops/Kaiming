@@ -71,6 +71,8 @@ task、agent_report、requirement、project 按工具级注册 Pi executionMode=
 
 body 为用户可见的完整正文，按 S6 原子保存：read 报告与 write Task 内的 investigation/recovery 只读报告写 Server，其余 write 报告写项目 `.dev/work/<taskId>/<sessionId>/`；提交时程序记录报告事实与实际交付状态（见 G3），模型不传候选或版本。唯一例外是结算报告：路径固定为 `<taskId>/<sessionId>/settlement.md`，结算先写入并提交该正文（D-07），再以相同 body 提交报告；程序发现已有文件内容不同则拒绝，不会改写已提交正文。报告保存且 Pi 停稳才算成员结束。正式报告后不继续修改当前成果。
 
+The host checks the formal report against the input that is ending. A member whose input settles without a result for its `expectedKind` is recorded as `failed` / `REPORT_MISSING`, not `completed`; `task.get`, dispatch member state and the Task detail expose that fact, and completion refuses it. The supervisor should continue that same Session with a report-only instruction (same phase) instead of dispatching a replacement review; the missing report is never treated as a pass.
+
 ### requirement
 
 提案/实施需求可 get，待处理列表用 list；正式新建/修改/状态保存必须 save，不能 write/edit/脚本覆盖。产品、技术、索引文档仍用原生文件工具。

@@ -18,6 +18,15 @@ Task `t-b491e240` 的 M8 Review：`s-994dc03e`（i-d470ab42）与 `s-0a84035e`�
 4. 回归测试：正常结束但未调用 `agent_report` → failed/REPORT_MISSING；已有报告 → completed。
 5. 更新 validation/gap 记录；真实 workbench 需重启才生效。
 
+## 实施结果（`c199154`）
+
+- `runner`：成员输入无本次正式报告落 `failed/REPORT_MISSING`；有报告仍 `completed`。
+- 读取面：`task.get`、Task detail、dispatch 成员状态给 `reportMissing/errorCode`。
+- 进度/界面：`memberPassed`、`task-flow`、成员行都不把缺报告当完成，显示“缺报告”。
+- 指引：缺报告时推荐原 Session report-only continuation，停止推荐 phase update/新 Review；`completionBlockers` 阻止无报告完成。
+- 回归：服务端 49 文件 503 用例、webapp 12 文件 90 用例、两侧 `tsc`、webapp build 全部通过。
+- 历史已 `completed` 的缺报告输入不回填；真实 workbench 需重启加载新 runner。
+
 ## 非目标
 
 - 不替模型补写 Review 正文，不把普通文本当报告。

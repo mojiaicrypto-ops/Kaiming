@@ -449,3 +449,21 @@
 **证据（`feece57`）**：新增 `webapp/test/slot.test.ts`「a resync whose snapshot tail advanced keeps shown history before the new tail」「a reconnect with no shared ids orders old stream entries before newer history」「a reconnect with no shared ids keeps entries without timestamps as older history」；第一条在旧合并逻辑下会得到 `h2,h3,h4,h1`，现在为 `h1,h2,h3,h4`；第三条证明旧服务端没有 timestamp 时的位置兜底。webapp 12 文件 88 用例、`tsc --noEmit`、`npm run build` 通过；服务端 `server-stream`/`server-read` 39 用例和 `tsc --noEmit` 通过。另用临时数据副本重启真实 workbench：页面 100 条消息在服务停止/重启后仍在，重试后快照恢复。
 
 **未覆盖**：未在真实浏览器里等到一次超过 100 条历史的长时间断连；页面整页刷新仍只从最新 100 条开始（不恢复此前“加载更早”的页），这是既有快照边界而非本次改动。
+
+## 2026-11-02 · 专业成员结束后没有正式报告
+
+**现象**：Task `t-b491e240` 的 Review 多次出现“会话已完成但没有报告”：`s-994dc03e`、`s-0a84035e` 以及 `s-181c159d` 的 continuation 输入都是 `completed`，`results` 没有对应行；主管看到的步骤仍像已结束，只能再派一个新的 Review。
+
+**根因**：`src/runtime/runner.ts` 只看 Pi 的 `stopReason` 与交付边界，正常 `stop` 就写 `completed`，没有核对成员是否提交了派发时 `expectedKind` 要求的报告。`task-progress.ts` / `task-flow.ts` 的 `memberPassed` 又把“输入 completed 且没有 failed/blocked 报告”当成通过，因此缺少报告不会阻止步骤显示完成。模型有时把 Review 写成正文，甚至把 `agent_report<invoke ...>` 当成普通文本（`s-0a84035e`），没有被工具层接收。
+
+**修正（`c199154`）**：
+
+- `runner` 在成员输入即将 `completed` 前，按 `currentInputId` 核对 `results`；没有本次输入的报告时写 `failed` / `REPORT_MISSING`，保留 Pi 输出与边界。
+- `task.get`、Task detail 和 dispatch 成员状态暴露 `reportMissing` / `errorCode`；`memberPassed`、浏览器 `task-flow` 与成员行不再把这种输入标成完成。
+- `guidanceFor` 在缺报告时给出**原 Session continuation** 的建议，并停止推荐 phase update/新 Review；`completionBlockers` 也拒绝缺报告的完成。
+- `reviewer.md` / `specialists.md` 明确：结束输入必须调用 `agent_report`，纯文本不是报告。
+- 不伪造报告、不自动重派、不自动续办；主管看到真实失败后显式决定。
+
+**证据**：`runtime.test.ts` 的「marks a member input failed when it stops without the report it was dispatched for」验证 `failed/REPORT_MISSING` 与空 results；`task-tools.test.ts` 的「points missing reports at the same Session instead of a replacement review」验证 `reportMissing`、原 Session 动作、无 update 建议与 gap；`task-progress.test.ts`、webapp `task-flow.test.ts`、`member-row-state.test.ts` 验证两侧都不标完成。服务端 49 文件 503 用例和 `tsc --noEmit` 通过；webapp 12 文件 90 用例、`tsc --noEmit`、`npm run build` 通过。`step-wake-e2e.test.ts` 的真实 workbench 用例已补交报告并继续通过。
+
+**未覆盖**：未在真实浏览器等待一次“成员正常结束但模型拒绝调用 agent_report”的完整复现；历史中已经写成 `completed` 的缺报告输入不会自动回填，需主管按新状态显式续办。

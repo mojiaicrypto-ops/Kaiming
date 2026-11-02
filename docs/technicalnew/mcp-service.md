@@ -64,7 +64,7 @@
 | 输入 `failed` / `stopped` / `interrupted` | `failed` / `cancelled` / `unknown` |
 
 - **步骤**（`steps`）：`src/runtime/task-progress.ts` 的 `taskProgress`，规则与浏览器任务条/清单完全一致（阶段-轮次、返工即新一轮、计划尾段），`stepsDone/stepsTotal` 由它给出。两个包共用 `test-fixtures/task-progress.json`，各跑一个单测钉住。暂停/取消/完成的 Task 不再列出计划尾段。
-- **通过与否**：`memberPassed` 是**共享规则**（`src/runtime/task-progress.ts`，浏览器 `task-flow.ts` 与成员行用同一谓词）——输入正常结束且最新报告不是 `failed`/`blocked` 才算通过；`src/mcp/runs.ts` 只把 `task.get` 的结果映射成每个成员的 `latestVerdict`。因此"输入正常结束但复核未通过"在两个接入面都不会显示成勾，与 X-04「是否有未通过的报告」一致。
+- **通过与否**：`memberPassed` 是**共享规则**（`src/runtime/task-progress.ts`，浏览器 `task-flow.ts` 与成员行用同一谓词）——输入正常结束、本次输入有正式报告，且最新报告不是 `failed`/`blocked` 才算通过；输入结束但没有对应报告时 `reportMissing=true`，不显示为勾。`src/mcp/runs.ts` 把 `task.get` 的 `reportMissing` 与 `latestVerdict` 映射到同一条规则。因此"输入正常结束但复核未通过/未交报告"在两个接入面都不会显示成勾，与 X-04「是否有未通过的报告」一致。
 - **执行情况未知**：`status=unknown`、`complete=false`，`summary` 明确写「需在浏览器核实真实状态」；不自动重放、不把未知当完成，调用方可以用 `cancel` 收尾。
 - **排队说明**：`awaiting` 取 `queued`（会话还有未结束工作）、`blocked`（有阻断原因，如无可用模型）、`user`（有待答问题）、`none`；`waitingForTask` 给出挡在前面的 Task（可取消、可读），`summary` 同时带上 `session.blocked` 的真实原因，不用"等会话空闲"掩盖"缺模型"。
 
