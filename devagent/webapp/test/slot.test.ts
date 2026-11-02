@@ -174,6 +174,20 @@ describe('slot merge', () => {
     ]) });
     expect(slot.items.map((entry) => entry.entryId)).toEqual(['h1', 'h2', 'a1', 'h4', 'h5']);
   });
+  it('a reconnect with no shared ids keeps entries without timestamps as older history', () => {
+    let slot = emptySlot();
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'initial', snapshot: snapshotOf([
+      { entryId: 'h1', role: 'user', content: [{ type: 'text', text: 'one' }] },
+      { entryId: 'h2', role: 'assistant', content: [{ type: 'text', text: 'two' }] },
+    ]) });
+    // The new backend adds timestamps, but an older running server does not. Position must still
+    // keep the page's messages before a snapshot that has moved past all of them.
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'resync', snapshot: snapshotOf([
+      { entryId: 'h4', role: 'user', content: [{ type: 'text', text: 'four' }] },
+      { entryId: 'h5', role: 'assistant', content: [{ type: 'text', text: 'five' }] },
+    ]) });
+    expect(slot.items.map((entry) => entry.entryId)).toEqual(['h1', 'h2', 'h4', 'h5']);
+  });
 });
 
 describe('slot merge · repeated text across turns', () => {
