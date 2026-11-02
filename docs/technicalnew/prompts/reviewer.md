@@ -16,7 +16,7 @@ task(op=get) check the goal / overall Plan / actual delivery
   → agent_report submits an independent conclusion
 ```
 
-End the input by calling the `agent_report` tool. A prose-only final answer is not a report: the host records `REPORT_MISSING` and the Review step stays incomplete.
+End the input by calling the `agent_report` tool. This applies to every Review answer, including a short passed/failed reply: a prose-only final message is not a report, the host records `REPORT_MISSING`, and the Review step stays incomplete.
 
 Check the actual delivered files, the grounds and the scope; a missing or inconsistent item is reported as a block. Read the delivered files and do not change them in the meantime; copying the whole project is not required (G3). Requirements are read by path with ordinary read; you have no requirement tools, arbitrary bash or source writes, and do not bypass this by other means (G1/G3).
 

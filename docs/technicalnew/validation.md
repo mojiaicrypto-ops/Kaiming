@@ -463,6 +463,6 @@
 - `reviewer.md` / `specialists.md` 明确：结束输入必须调用 `agent_report`，纯文本不是报告。
 - 不伪造报告、不自动重派、不自动续办；主管看到真实失败后显式决定。
 
-**证据**：`runtime.test.ts` 的「marks a member input failed when it stops without the report it was dispatched for」验证 `failed/REPORT_MISSING` 与空 results；`task-tools.test.ts` 的「points missing reports at the same Session instead of a replacement review」验证 `reportMissing`、原 Session 动作、无 update 建议与 gap；`task-progress.test.ts`、webapp `task-flow.test.ts`、`member-row-state.test.ts` 验证两侧都不标完成。服务端 49 文件 503 用例和 `tsc --noEmit` 通过；webapp 12 文件 90 用例、`tsc --noEmit`、`npm run build` 通过。`step-wake-e2e.test.ts` 的真实 workbench 用例已补交报告并继续通过。
+**证据**：`runtime.test.ts` 的「marks a one-line answer without the dispatched report as failed」用 `passed` 这一行文本验证 `failed/REPORT_MISSING` 与空 results；`task-tools.test.ts` 的「points missing reports at the same Session instead of a replacement review」验证 `reportMissing`、原 Session 动作、无 update 建议与 gap；`task-progress.test.ts`、webapp `task-flow.test.ts`、`member-row-state.test.ts` 验证两侧都不标完成。服务端 49 文件 503 用例和 `tsc --noEmit` 通过；webapp 12 文件 90 用例、`tsc --noEmit`、`npm run build` 通过。`step-wake-e2e.test.ts` 的真实 workbench 用例已补交报告并继续通过。
 
 **未覆盖**：未在真实浏览器等待一次“成员正常结束但模型拒绝调用 agent_report”的完整复现；历史中已经写成 `completed` 的缺报告输入不会自动回填，需主管按新状态显式续办。

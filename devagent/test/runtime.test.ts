@@ -1771,8 +1771,8 @@ describe('input runner', () => {
     expect(ended).toMatchObject({ ok: true });
     expect(h.store.getTask(task?.id ?? '')?.status).toBe('completed');
   }, 60_000);
-  it('marks a member input failed when it stops without the report it was dispatched for', async () => {
-    const h = await harness({ replies: [{ kind: 'text', text: '## Review\n\nlooks fine, but this is only prose' }] });
+  it('marks a one-line answer without the dispatched report as failed', async () => {
+    const h = await harness({ replies: [{ kind: 'text', text: 'passed' }] });
     const task = h.store.createTask({
       id: 't-no-report',
       projectId: 'p-1',
