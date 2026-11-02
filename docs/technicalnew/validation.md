@@ -466,3 +466,15 @@
 **证据**：`runtime.test.ts` 的「marks a one-line answer without the dispatched report as failed」用 `passed` 这一行文本验证 `failed/REPORT_MISSING` 与空 results；`task-tools.test.ts` 的「points missing reports at the same Session instead of a replacement review」验证 `reportMissing`、原 Session 动作、无 update 建议与 gap；`task-progress.test.ts`、webapp `task-flow.test.ts`、`member-row-state.test.ts` 验证两侧都不标完成。服务端 49 文件 503 用例和 `tsc --noEmit` 通过；webapp 12 文件 90 用例、`tsc --noEmit`、`npm run build` 通过。`step-wake-e2e.test.ts` 的真实 workbench 用例已补交报告并继续通过。
 
 **未覆盖**：未在真实浏览器等待一次“成员正常结束但模型拒绝调用 agent_report”的完整复现；历史中已经写成 `completed` 的缺报告输入不会自动回填，需主管按新状态显式续办。
+
+## 2026-11-02 · 结算文档不应触发重审重测
+
+**现象**：Review passed 后进入结算；结算写文档并提交，`task(op=end)` 报“交付变了”，要求重新 Review/Test。M4/M5/M6/M8 均出现过，补测需要重跑完整测试和浏览器，而代码没有变化。
+
+**根因**：Review 的 `deliveryState` 对项目内所有被观察文件取摘要（只排除 `.git`、`node_modules`、`.dev`、知识入口和 Git 忽略文件）。结算按 D-07 更新 `docs/**`，这些文档也在摘要里，于是 end 重算时摘要变化，最近一次 Review/Test 被判定不再覆盖当前交付。Test 又沿用 Review 的路径清单，产生第二次无效验证。
+
+**修正（`c18a395`）**：当 Review 快照里存在代码路径时，只把非文档路径作为交付绑定；`docs/**` 与根目录 Markdown 视为结算输出，不进入 Review/Test 的摘要。若交付本身只有文档（没有任何代码路径），文档仍完整绑定，文档任务仍会因文档改动要求重新复核。代码变化仍然使 `deliveryState` 失效，end 继续拒绝。
+
+**证据**：`report.test.ts` 的「binds review and test to the observed delivery and refuses completion after it changed」现在在 Review 前放 `docs/runbook.md`，确认 Review 路径不含它；随后修改文档、代码保持不变，end 成功。新增「keeps a documentation-only delivery bound to its docs」确认只有文档时路径仍为 `docs/spec.md`。服务端 49 文件 504 用例和 `tsc --noEmit` 通过。
+
+**边界**：该修复作用于新的 Review 结果；已有 Review 的 `deliveryState` 仍按旧路径清单记录，若当前 Task 已在此规则生效前 Review，还需要一次新的 Review 才能获得代码范围绑定。历史已记录的报告正文和结果不改写。
