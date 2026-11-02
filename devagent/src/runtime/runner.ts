@@ -746,8 +746,22 @@ export class InputRunner {
         errorCode = 'HISTORY_UNAVAILABLE';
         detail = 'the delivered boundary could not be read back from disk';
       } else {
-        status = 'completed';
-        detail = 'settled and persisted';
+        // A professional member owes the report kind fixed at dispatch. A normal stop with prose
+        // only is not a delivered result: without this check the input would be `completed` and
+        // the Task strip would show a check, while `results` has nothing for the reviewer/test.
+        const member = this.options.store.getTaskSession(sessionId);
+        const reportMissing =
+          member !== undefined &&
+          member.currentInputId === input.inputId &&
+          this.options.store.resultsForInputs([input.inputId]).length === 0;
+        if (reportMissing) {
+          status = 'failed';
+          errorCode = 'REPORT_MISSING';
+          detail = `the run ended without the formal ${member.expectedKind} report this step requires`;
+        } else {
+          status = 'completed';
+          detail = 'settled and persisted';
+        }
       }
     } catch (error) {
       status = 'interrupted';

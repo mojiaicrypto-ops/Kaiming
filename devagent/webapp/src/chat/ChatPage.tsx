@@ -285,6 +285,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, proje
         assignment: member.label === '' || member.label === member.roleId ? '' : member.label,
         activity,
         lastInputStatus,
+        reportMissing: member.reportMissing === true,
         latestVerdict: latest?.verdict ?? null,
         waitingUser,
         note,

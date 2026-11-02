@@ -162,12 +162,13 @@ export function TaskTodo({ detail, members, pendingQuestions, planMarkdown, onFo
  */
 export function memberRowState(row: TaskMemberRow): {
   readonly kind: 'decide' | 'run' | 'wait' | 'block' | 'done' | 'idle';
-  readonly note: 'asking' | 'running' | 'queued' | 'failed' | 'done' | 'idle';
+  readonly note: 'asking' | 'running' | 'queued' | 'failed' | 'missingReport' | 'done' | 'idle';
 } {
   const verdict = row.latestVerdict ?? null;
   if (row.waitingUser === true) return { kind: 'decide', note: 'asking' };
   if (row.activity === 'processing') return { kind: 'run', note: 'running' };
   if (row.activity === 'queued') return { kind: 'wait', note: 'queued' };
+  if (row.reportMissing === true) return { kind: 'block', note: 'missingReport' };
   if (verdict === 'blocked') return { kind: 'decide', note: 'asking' };
   if (row.lastInputStatus === 'failed' || verdict === 'failed') return { kind: 'block', note: 'failed' };
   if (row.lastInputStatus === 'completed') return { kind: 'done', note: 'done' };
@@ -192,7 +193,7 @@ function TodoMemberRow({
   const label =
     state.note === 'asking'
       ? t('task.note.asking', { title: row.note === '' ? '' : row.note })
-      : t(`task.state.${state.note}` as 'task.state.done');
+      : t(`task.state.${state.note}` as 'task.state.missingReport');
   return (
     <button type="button" className="mrow" data-testid="task-member-row" onClick={() => onFollow(row.sessionId)}>
       <State kind={kind} />

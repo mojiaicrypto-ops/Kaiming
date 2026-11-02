@@ -27,6 +27,10 @@ describe('a member row', () => {
       note: 'failed',
     });
   });
+  it('is not done when the settled input has no formal report', () => {
+    expect(memberRowState(row({ reportMissing: true }))).toEqual({ kind: 'block', note: 'missingReport' });
+  });
+
 
   it('is done only when the input ended and no report says otherwise', () => {
     expect(memberRowState(row({ latestVerdict: null }))).toEqual({ kind: 'done', note: 'done' });

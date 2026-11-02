@@ -20,6 +20,8 @@ export interface ProgressMember {
   readonly activity: string;
   /** How the member's own input ended, when it ended at all. */
   readonly lastInputStatus: string | null;
+  /** True when the input settled without the formal report this member was dispatched for. */
+  readonly reportMissing?: boolean;
   /**
    * The verdict of the member's latest formal report, or null when it has none. An input that ended
    * normally is not a pass: a reviewer can finish its turn with `verdict=failed`.
@@ -27,8 +29,13 @@ export interface ProgressMember {
   readonly latestVerdict?: string | null;
 }
 
-/** Did this member actually pass: its input ended normally and no report says otherwise. */
-export function memberPassed(member: { readonly lastInputStatus: string | null; readonly latestVerdict?: string | null }): boolean {
+/** Did this member actually pass: its input ended normally, delivered its report, and that report agrees. */
+export function memberPassed(member: {
+  readonly lastInputStatus: string | null;
+  readonly reportMissing?: boolean;
+  readonly latestVerdict?: string | null;
+}): boolean {
+  if (member.reportMissing === true) return false;
   const verdict = member.latestVerdict ?? null;
   return member.lastInputStatus === 'completed' && verdict !== 'failed' && verdict !== 'blocked';
 }

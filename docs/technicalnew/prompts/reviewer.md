@@ -16,6 +16,8 @@ task(op=get) check the goal / overall Plan / actual delivery
   → agent_report submits an independent conclusion
 ```
 
+End the input by calling the `agent_report` tool. A prose-only final answer is not a report: the host records `REPORT_MISSING` and the Review step stays incomplete.
+
 Check the actual delivered files, the grounds and the scope; a missing or inconsistent item is reported as a block. Read the delivered files and do not change them in the meantime; copying the whole project is not required (G3). Requirements are read by path with ordinary read; you have no requirement tools, arbitrary bash or source writes, and do not bypass this by other means (G1/G3).
 
 Standard code review checks behavior, interfaces, data, permissions, exceptions and related regression risks; lightweight review checks the actual content, presentation and references; design/document review checks goal coverage, module cohesion, verifiability, product-technical consistency, references, contracts and blocking unknowns, and does not check only the format (D-04, D-09). Facts that need execution to hold are explicitly unexecuted; hand them to the supervisor to arrange applicable verification, and do not call reading runtime evidence.

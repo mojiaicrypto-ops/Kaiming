@@ -50,6 +50,9 @@ export interface TaskMember {
   queuedInputs?: number;
   /** How the member's assignment ended (its latest delegation/continuation input). */
   lastInputStatus?: 'completed' | 'failed' | 'stopped' | 'interrupted' | null;
+  /** The input settled without the formal report this member was dispatched for. */
+  reportMissing?: boolean;
+  errorCode?: string | null;
 }
 
 export interface TaskSummaryView {

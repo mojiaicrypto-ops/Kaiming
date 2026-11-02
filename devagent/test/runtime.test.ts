@@ -735,6 +735,15 @@ describe('input runner', () => {
             },
           ],
         },
+        {
+          kind: 'tool_calls',
+          calls: [
+            {
+              name: 'agent_report',
+              arguments: JSON.stringify({ summary: 'implemented it', body: '# implementation\n\ndone\n' }),
+            },
+          ],
+        },
         { kind: 'slow_text', text: 'member finished', chunks: 1, delayMs: 1_200 },
         { kind: 'text', text: 'chief ended before the member' },
       ],
@@ -1426,11 +1435,16 @@ describe('input runner', () => {
         },
       ],
     });
+    const reportArgs = JSON.stringify({
+      summary: 'implemented the reset flow',
+      body: '# implementation\n\nimplemented the reset flow\n',
+    });
     const h = await harness({
       replies: [
         { kind: 'tool_calls', calls: [{ name: 'task', arguments: createArgs }] },
         { kind: 'text', text: 'task created' },
         { kind: 'tool_calls', calls: [{ name: 'task', arguments: delegateArgs }] },
+        { kind: 'tool_calls', calls: [{ name: 'agent_report', arguments: reportArgs }] },
         { kind: 'text', text: 'member done' },
         { kind: 'text', text: 'delegation finished' },
       ],
@@ -1562,7 +1576,20 @@ describe('input runner', () => {
   }, 60_000);
 
   it('runs the read-only recovery check of a paused Task through the real runner', async () => {
-    const h = await harness({ replies: [{ kind: 'text', text: 'recovery checked' }] });
+    const h = await harness({
+      replies: [
+        {
+          kind: 'tool_calls',
+          calls: [
+            {
+              name: 'agent_report',
+              arguments: JSON.stringify({ summary: 'recovery checked', body: '# recovery\n\nchecked\n' }),
+            },
+          ],
+        },
+        { kind: 'text', text: 'recovery checked' },
+      ],
+    });
     const task = h.store.createTask({
       id: 't-rec',
       projectId: 'p-1',
@@ -1744,6 +1771,55 @@ describe('input runner', () => {
     expect(ended).toMatchObject({ ok: true });
     expect(h.store.getTask(task?.id ?? '')?.status).toBe('completed');
   }, 60_000);
+  it('marks a member input failed when it stops without the report it was dispatched for', async () => {
+    const h = await harness({ replies: [{ kind: 'text', text: '## Review\n\nlooks fine, but this is only prose' }] });
+    const task = h.store.createTask({
+      id: 't-no-report',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      goal: 'deliver the change',
+      scope: 'deploy',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'x' },
+      authorizationRefs: ['m-1'],
+      sourceInputId: 'i-1',
+    });
+    h.store.updateTask({ taskId: task.id, phase: 'review' });
+    h.store.createTaskSessions({
+      taskId: task.id,
+      members: [
+        {
+          sessionId: 's-review-no-report',
+          taskId: task.id,
+          roleId: 'reviewer',
+          phase: 'review',
+          label: 'review',
+          instructions: 'review the change',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'review',
+          inputId: 'i-review-no-report',
+          inputPayload: { content: [{ type: 'text', text: 'review the change' }] },
+        },
+      ],
+    });
+
+    const outcome = await h.runner.runNext('s-review-no-report');
+
+    // A clean Pi stop is not a delivered review: the host records the missing report and leaves the
+    // Session available for the chief to continue, instead of showing a passed step.
+    expect(outcome.kind).toBe('failed');
+    expect(h.store.getInput('i-review-no-report')).toMatchObject({
+      status: 'failed',
+      errorCode: 'REPORT_MISSING',
+    });
+    expect(h.store.resultsForInputs(['i-review-no-report'])).toEqual([]);
+    expect(h.store.getTaskSession('s-review-no-report')?.currentInputId).toBe('i-review-no-report');
+  }, 30_000);
 
   it('lets an investigator deliver a read-only report inside a write Task', async () => {
     const createArgs = JSON.stringify({

@@ -489,6 +489,8 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
             .listInputs(member.sessionId)
             .filter((input) => input.kind === 'delegation' || input.kind === 'continuation')
             .at(-1);
+          const reportIds =
+            lastInput === undefined ? [] : store.resultsForInputs([lastInput.inputId]).map((result) => result.resultId);
           return {
             sessionId: member.sessionId,
             roleId: member.roleId,
@@ -501,6 +503,12 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
             liveInputId: live.currentInputId,
             queuedInputs: live.queuedInputs,
             lastInputStatus: lastInput?.status ?? null,
+            errorCode: lastInput?.errorCode ?? null,
+            reportMissing:
+              reportIds.length === 0 &&
+              (lastInput?.status === 'completed' ||
+                lastInput?.status === 'failed' ||
+                lastInput?.status === 'stopped'),
           };
         }),
         results: store.listTaskResults(task.id).map((result) => resultSummary(store, result)),

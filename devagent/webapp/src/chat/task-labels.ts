@@ -32,7 +32,7 @@ export interface TaskMemberRow {
   readonly assignment: string;
   readonly activity: SessionActivity;
   readonly lastInputStatus: 'completed' | 'failed' | 'stopped' | 'interrupted' | null;
-  /** Verdict of this member's latest report, when it delivered one. */
+  readonly reportMissing?: boolean;
   readonly latestVerdict?: string | null;
   readonly waitingUser?: boolean;
   readonly note: string;

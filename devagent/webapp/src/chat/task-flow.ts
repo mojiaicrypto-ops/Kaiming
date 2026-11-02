@@ -38,6 +38,7 @@ export interface FlowInput {
     readonly phase: string;
     readonly activity?: string | undefined;
     readonly lastInputStatus?: 'completed' | 'failed' | 'stopped' | 'interrupted' | null;
+    readonly reportMissing?: boolean | undefined;
     readonly waitingUser?: boolean | undefined;
     /** Verdict of the member's latest report: an input that ended normally is not a pass. */
     readonly latestVerdict?: string | null | undefined;
@@ -46,8 +47,9 @@ export interface FlowInput {
   readonly pendingQuestions: number;
 }
 
-/** Same predicate as `src/runtime/task-progress.ts`'s `memberPassed`: input ended, report agrees. */
+/** Same predicate as `src/runtime/task-progress.ts`'s `memberPassed`: input ended, report delivered and agrees. */
 function memberPassed(member: FlowInput['members'][number]): boolean {
+  if (member.reportMissing === true) return false;
   const verdict = member.latestVerdict ?? null;
   return member.lastInputStatus === 'completed' && verdict !== 'failed' && verdict !== 'blocked';
 }
@@ -56,6 +58,7 @@ function memberKind(member: FlowInput['members'][number]): StateKind {
   if (member.waitingUser === true) return 'decide';
   if (member.activity === 'processing') return 'run';
   if (member.activity === 'queued') return 'wait';
+  if (member.reportMissing === true) return 'block';
   if (member.latestVerdict === 'blocked') return 'decide';
   if (member.lastInputStatus === 'failed' || member.latestVerdict === 'failed') return 'block';
   if (memberPassed(member)) return 'done';

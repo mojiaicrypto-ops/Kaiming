@@ -726,17 +726,25 @@ function getOp(
     checks: result.checks,
     ...(withBodies ? { body: readReportBody(result.bodyRef).text } : {}),
   }));
-  const members = context.store.listTaskSessions(task.id).map((member) => ({
-    sessionId: member.sessionId,
-    roleId: member.roleId,
-    label: member.label,
-    phase: member.phase,
-    expectedKind: member.expectedKind,
-    writeScope: member.writeScope,
-    currentInputId: member.currentInputId,
-    inputState:
-      member.currentInputId === null ? null : (context.store.getInput(member.currentInputId)?.status ?? null),
-  }));
+  const members = context.store.listTaskSessions(task.id).map((member) => {
+    const input = member.currentInputId === null ? undefined : context.store.getInput(member.currentInputId);
+    const reportIds =
+      member.currentInputId === null ? [] : context.store.resultsForInputs([member.currentInputId]).map((result) => result.resultId);
+    return {
+      sessionId: member.sessionId,
+      roleId: member.roleId,
+      label: member.label,
+      phase: member.phase,
+      expectedKind: member.expectedKind,
+      writeScope: member.writeScope,
+      currentInputId: member.currentInputId,
+      inputState: input?.status ?? null,
+      errorCode: input?.errorCode ?? null,
+      reportMissing:
+        reportIds.length === 0 &&
+        (input?.status === 'completed' || input?.status === 'failed' || input?.status === 'stopped'),
+    };
+  });
   return ok(`Task ${task.id}: ${task.phase} (${task.status})`, {
     task: taskSummaryJson(task),
     planText: plan.text,

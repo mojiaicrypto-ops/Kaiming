@@ -2559,6 +2559,18 @@ export class Store {
           gaps.push(`member ${member.sessionId} has an unverified interrupted input (${input.inputId})`);
         }
       }
+      const currentInput = member.currentInputId === null ? undefined : this.getInput(member.currentInputId);
+      const settledWithoutReport =
+        currentInput !== undefined &&
+        (currentInput.status === 'completed' ||
+          currentInput.status === 'failed' ||
+          currentInput.status === 'stopped') &&
+        this.resultsForInputs([currentInput.inputId]).length === 0;
+      if (settledWithoutReport) {
+        gaps.push(
+          `member ${member.sessionId} has no formal ${member.expectedKind} report for ${currentInput.inputId}`,
+        );
+      }
     }
     if (task.type !== 'write') {
       return gaps;

@@ -76,6 +76,7 @@ interface RpcMember {
   readonly label: string;
   readonly activity: string;
   readonly lastInputStatus: string | null;
+  readonly reportMissing?: boolean;
 }
 
 interface RpcResult {
@@ -307,6 +308,7 @@ export class RunTools {
       label: member.label,
       activity: member.activity,
       lastInputStatus: member.lastInputStatus,
+      reportMissing: member.reportMissing === true,
       latestVerdict: latestVerdict.get(member.sessionId) ?? null,
     }));
     return taskProgress({ task, members });

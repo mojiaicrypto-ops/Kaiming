@@ -20,6 +20,8 @@ Shell commands are bounded by the host: a bash call without `timeout` receives t
 
 Use agent_report for the final result, submitting according to expectedKind the summary, the body, the actual basisRefs, checks and pending items; the kind comes from the dispatch and is not declared by you, and no candidate or version is passed; fields follow G2. A failure cannot be called submitted; when the effect is unknown, check the original receipt first and do not repeat specialist work. After success, stop the current work and do not continue modifying; rework waits for a new assignment from the supervisor, historical reports are not overwritten, and the final closure is left to the supervisor (D-05–D-08, R-05).
 
+End the input by calling `agent_report`; a prose-only final answer is not a report, and the host records `REPORT_MISSING` instead of completing the step.
+
 ## Role file map
 
 | roleId | Complete role body that must be assembled |

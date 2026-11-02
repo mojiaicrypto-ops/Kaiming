@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { flowOf, plannedTail } from '../src/chat/task-flow';
 
 const write = { type: 'write', phase: 'design', status: 'active' as const, requiresTest: false };
-const member = (phase: string, over: Partial<{ activity: string; lastInputStatus: 'completed' | 'failed' | null; waitingUser: boolean }> = {}) => ({
+const member = (
+  phase: string,
+  over: Partial<{ activity: string; lastInputStatus: 'completed' | 'failed' | null; reportMissing: boolean; waitingUser: boolean }> = {},
+) => ({
   phase,
   activity: over.activity ?? 'idle',
   lastInputStatus: over.lastInputStatus ?? null,
+  ...(over.reportMissing === undefined ? {} : { reportMissing: over.reportMissing }),
   ...(over.waitingUser === undefined ? {} : { waitingUser: over.waitingUser }),
 });
 
@@ -36,6 +40,15 @@ describe('the flow of a running Task', () => {
     expect(flow.map((step) => step.phase)).toEqual(['design', 'review', 'test', 'settle']);
     expect(flow[1]).toMatchObject({ kind: 'block', done: false });
   });
+  it('does not mark a step done when a settled member has no formal report', () => {
+    const flow = flowOf({
+      task: { ...write, phase: 'review' },
+      members: [member('review', { lastInputStatus: 'completed', reportMissing: true })],
+      pendingQuestions: 0,
+    });
+    expect(flow[0]).toMatchObject({ phase: 'review', kind: 'block', done: false });
+  });
+
 
   it('shows rework as a second round of the same phase, and does not re-plan what already ran', () => {
     const flow = flowOf({

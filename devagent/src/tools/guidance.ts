@@ -130,14 +130,37 @@ export function guidanceFor(
         reason: `${entry.member.sessionId} was stopped by the run watchdog without a report; continuing its session reuses the context, a replacement repeats the investigation`,
       });
     }
-    actions.push({
-      action: 'task(op=update, phase=...) to record this step and start the next one',
-      op: 'update',
-      reason: `every member of ${task.phase} has settled`,
-    });
-    const advice = dispatchAdvice(task, results);
-    if (advice !== undefined) {
-      actions.push(advice);
+    // A member that stopped normally but never called agent_report has not delivered its result.
+    // Keep the step open and point at that same Session: a replacement repeats the investigation and
+    // can miss the report again.
+    const missingReports = facts.filter(
+      (member) =>
+        member.resultIds.length === 0 &&
+        (member.state === 'completed' || member.state === 'failed'),
+    );
+    if (missingReports.length > 0) {
+      for (const entry of missingReports) {
+        actions.push({
+          action: `task(op=dispatch, sessions=[{sessionId: ${entry.member.sessionId}, instructions: '<submit the formal ${entry.member.expectedKind} report from the work you already completed; do not redo the work>'}])`,
+          op: 'dispatch',
+          reason: `${entry.member.sessionId} ended without its formal ${entry.member.expectedKind} report${entry.errorCode === null ? '' : ` (${entry.errorCode})`}; continue that Session instead of dispatching a replacement`,
+        });
+      }
+      for (const entry of missingReports) {
+        gaps.push(
+          `${entry.member.sessionId} has no formal ${entry.member.expectedKind} report for ${entry.member.currentInputId ?? 'its current input'}`,
+        );
+      }
+    } else {
+      actions.push({
+        action: 'task(op=update, phase=...) to record this step and start the next one',
+        op: 'update',
+        reason: `every member of ${task.phase} has settled`,
+      });
+      const advice = dispatchAdvice(task, results);
+      if (advice !== undefined) {
+        actions.push(advice);
+      }
     }
     // `end` is offered only when the observed facts say the completion checks can pass; otherwise the
     // gaps below are the actionable part.

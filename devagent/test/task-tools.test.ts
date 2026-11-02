@@ -170,6 +170,61 @@ describe('task guidance', () => {
     const text = refused.content.map((part) => part.text).join('\n');
     expect(text).toContain('nextActions');
   });
+  it('points missing reports at the same Session instead of a replacement review', async () => {
+    const w = world();
+    const task = w.store.createTask({
+      id: 't-missing-report',
+      projectId: w.projectId,
+      chiefSessionId: w.sessionId,
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: true,
+      goal: 'deliver it',
+      scope: 'deploy',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: join(w.serverWorkDir, 'plan.md'), sha256: 'x' },
+      authorizationRefs: ['i-dec'],
+      sourceInputId: 'i-1',
+    });
+    w.store.updateTask({ taskId: task.id, phase: 'review' });
+    w.store.createTaskSessions({
+      taskId: task.id,
+      members: [
+        {
+          sessionId: 's-review',
+          taskId: task.id,
+          roleId: 'reviewer',
+          phase: 'review',
+          label: 'review',
+          instructions: 'review it',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'review',
+          inputId: 'i-review',
+          inputPayload: { content: [{ type: 'text', text: 'review it' }] },
+        },
+      ],
+    });
+    expect(w.store.claimNextInput('s-review').kind).toBe('claimed');
+    const input = w.store.getInput('i-review');
+    expect(input).toBeDefined();
+    expect(
+      w.store.finishInput({
+        inputId: 'i-review',
+        expectedRevision: input?.revision ?? 0,
+        status: 'completed',
+      }),
+    ).toBe(true);
+
+    const read = await tool(w.tools).execute('call-1', { op: 'get', taskId: task.id });
+    const members = read.details['members'] as Array<{ sessionId: string; reportMissing: boolean }>;
+    expect(members).toContainEqual(expect.objectContaining({ sessionId: 's-review', reportMissing: true }));
+    const actions = read.details['nextActions'] as Array<{ action: string; op: string; reason: string }>;
+    expect(actions.some((entry) => entry.action.includes('s-review') && entry.reason.includes('without its formal'))).toBe(true);
+    expect(actions.map((entry) => entry.op)).not.toContain('update');
+    expect((read.details['gaps'] as string[]).join(' ')).toContain('no formal review report');
+  });
 });
 
 describe('task guidance · honest advice', () => {

@@ -47,4 +47,22 @@ describe('the flow of a Task as an external caller sees it', () => {
     expect(review?.state).toBe('in_progress');
     expect(review?.members.map((member) => member.passed)).toEqual([false]);
   });
+
+  it('does not pass a member whose settled input has no formal report', () => {
+    const progress = taskProgress({
+      task: { type: 'write', phase: 'review', status: 'active', requiresTest: false },
+      members: [
+        {
+          phase: 'review',
+          roleId: 'reviewer',
+          label: 'review',
+          activity: 'idle',
+          lastInputStatus: 'completed',
+          reportMissing: true,
+        },
+      ],
+    });
+    expect(progress.steps[0]).toMatchObject({ phase: 'review', state: 'in_progress' });
+    expect(progress.steps[0]?.members[0]?.passed).toBe(false);
+  });
 });

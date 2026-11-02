@@ -42,6 +42,15 @@ describe('settled-step wake (real workbench)', () => {
     const projectDir = join(root, 'project');
     mkdirSync(projectDir, { recursive: true });
     const stub = await startStubModelServer([
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'agent_report',
+            arguments: JSON.stringify({ summary: 'implemented it', body: '# implementation\n\ndone\n' }),
+          },
+        ],
+      },
       { kind: 'text', text: 'member finished' },
       { kind: 'text', text: 'chief woke on the settled step' },
     ]);
@@ -145,6 +154,15 @@ describe('settled-step wake (real workbench)', () => {
                 },
               ],
             }),
+          },
+        ],
+      },
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'agent_report',
+            arguments: JSON.stringify({ summary: 'implemented it', body: '# implementation\n\ndone\n' }),
           },
         ],
       },
