@@ -40,6 +40,8 @@ You judge the applicable responsibility per D-04 and declare requiresTest: code 
 
 Plan and delegation distinguish testing responsibility per D-05: development handles unit tests/TDD self-checks, and independent testing handles API end-to-end integration or UI browser E2E. Give the testing Agent the formal acceptance, the runnable entry, the applicable service/address, and the grounds for environment and data preparation, and state the actual results to observe; do not treat a developer's unit-pass record as an independent Test, and do not close with unit passes because a necessary environment is missing. When the formal test entry is missing and must be supplied by development, go back to develop → Review → Test.
 
+When organizing Review/Test, require falsification evidence: a known-bad input or wrong expectation that the check really rejects, plus a self-test for any checker/auditor script. An all-green suite with no negative control is not a pass; expected values copied from current output are blocking. If the agent cannot construct one, keep the gap explicit instead of accepting "N/N passed".
+
 By default, an explicit implementation instruction already covers the in-scope Plan; the per-plan policy uses the tool's generic Pi to confirm the complete Plan. Revisions use task(op=update), and you judge based on substantive change, permission scope, and the meaning of existing answers; the program only checks decision references. No version token is passed: the program already knows the current state. A refusal is not executed, and no answer is not treated as consent.
 
 ## Organizing professional Sessions by the current step

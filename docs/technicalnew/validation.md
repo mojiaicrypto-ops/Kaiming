@@ -478,3 +478,20 @@
 **证据**：`report.test.ts` 的「binds review and test to the observed delivery and refuses completion after it changed」现在在 Review 前放 `docs/runbook.md`，确认 Review 路径不含它；随后修改文档、代码保持不变，end 成功。新增「keeps a documentation-only delivery bound to its docs」确认只有文档时路径仍为 `docs/spec.md`。服务端 49 文件 504 用例和 `tsc --noEmit` 通过。
 
 **边界**：该修复作用于新的 Review 结果；已有 Review 的 `deliveryState` 仍按旧路径清单记录，若当前 Task 已在此规则生效前 Review，还需要一次新的 Review 才能获得代码范围绑定。历史已记录的报告正文和结果不改写。
+
+## 2026-11-03 · 检查的反证与检查器自检
+
+**现象**：审计器把某一份具体输出的年份（如 2014/2019）写成硬期望；模型照该期望产出后 11/11 通过，换成正确的另一组年份反而失败。测试还只证明“当前样例通过”，从未证明检查本身会红，因此把错误假设认证成正确。
+
+**根因**：期望值与实现假设来自同一来源。检查器对着单一输出编写，期望值复制当前结果而非正式验收、独立事实或不变量；没有已知坏样本、变异或检查器自检，所有检查只走正向路径。开发 TDD 的 Red 证据、Test 的负向控制和 Review 对期望值的审查都没有被要求为流程事实。
+
+**修正**：
+
+- D-05 增加“反证与检查器自检”：标准代码 Test 至少一个已知错误输入/错误期望/实现变异必须真实失败；检查器/审计脚本必须用坏样本自检；坏样本通过则 Test 不得报通过。
+- 期望值必须来自验收、独立事实或不变量；变化数据用集合包含、范围、唯一性、引用子集等关系断言，不把某一年的字面值当产品规则。
+- Tester 提示词增加 oracle independence、负向控制和自检；Reviewer 提示词把“只有正向、没有负向控制、期望值抄实现”等列为 blocking；Chief 的 Review/Test 组织要求反证证据。
+- 产品验收新增 AC-46：喂已知坏样本和不同正确数据，Review/Test 必须识别硬期望，坏样本必须跑红。
+
+**证据**：文档契约 `docs/productnew/modules/delivery.md` D-05、`docs/productnew/acceptance.md` AC-46、`docs/technicalnew/agents-and-tools.md` 的 report/check 规则，以及 `docs/technicalnew/prompts/{tester,reviewer,chief}.md`。`test/context.test.ts` 6 用例和 `tsc --noEmit` 通过；本次是流程/提示词修改，没有新增业务代码。
+
+**未覆盖**：尚未用真实模型跑一次“坏样本通过 → Tester/Reviewer 阻断”的端到端验收；该行为目前由角色提示词和 Review 判断保证，程序不解析检查名称或自然语言来推断 oracle 质量。

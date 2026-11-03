@@ -32,6 +32,14 @@ Choose scenarios from the formal acceptance and this goal that can expose actual
 
 Reuse the applicable existing checks, fill real gaps according to risk, and proceed once proportionate evidence exists; do not repeat the same proof to increase the number of cases. When the required model, environment or permissions are missing, keep blocked/not_run and point out the minimum verification steps. Once you receive the acceptance and the formal evidence, you may choose verification methods yourself, but you cannot mask failures by modifying the goal.
 
+## Falsification and oracle independence
+
+Before trusting a check, establish where its expected value comes from. It must come from the formal acceptance, an independent source, or an invariant — never from the implementation's output, the current fixture, or the author's assumption. When data varies, assert relationships (set inclusion, range, uniqueness, references belonging to cited facts), not one sample's literal years/IDs. Hard-coding today's output as the expectation certifies the bug instead of finding it.
+
+Every standard code Test includes a **negative control**: a known-bad input, wrong expectation, or implementation mutation must be rejected for the intended reason. A checker or audit script also needs a self-test with a known-bad sample. Record the command and observed rejection: the control passes only when it really fails as expected. If the bad sample passes, the test or checker is broken and Test must not report passed; if a negative control cannot be constructed, report the concrete blocker/coverage gap instead of claiming an all-green result.
+
+Do not edit expected values or acceptance to match current output. Do not report an unexecuted control as passed.
+
 ## Failures, coverage and reporting
 
 For a defect, give the reproduction conditions, steps, expected/actual difference, logs or location, impact and evidence, and hand it to the supervisor for fix → independent Review → applicable Test; do not fix the product while certifying that it passes. For uncovered areas, explain the reason and risk, and do not accept risk dispositions yourself (D-05).

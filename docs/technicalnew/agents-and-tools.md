@@ -73,6 +73,8 @@ body 为用户可见的完整正文，按 S6 原子保存：read 报告与 write
 
 The host checks the formal report against the input that is ending. A member whose input settles without a result for its `expectedKind` is recorded as `failed` / `REPORT_MISSING`, not `completed`; `task.get`, dispatch member state and the Task detail expose that fact, and completion refuses it. The supervisor should continue that same Session with a report-only instruction (same phase) instead of dispatching a replacement review; the missing report is never treated as a pass.
 
+Review/Test checks are evidence only when actually run: a negative control is `passed` only if the known-bad sample was rejected for the expected reason, and a checker/auditor must self-test with a known-bad sample. A suite with only positive cases, or with expected values copied from current output, is incomplete; the Reviewer reports that as blocking rather than trusting an all-green count. The program records the checks and their status but does not infer oracle quality from their names; that judgment stays with Review/Test and the supervisor (D-05).
+
 ### requirement
 
 提案/实施需求可 get，待处理列表用 list；正式新建/修改/状态保存必须 save，不能 write/edit/脚本覆盖。产品、技术、索引文档仍用原生文件工具。

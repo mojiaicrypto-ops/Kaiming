@@ -30,6 +30,12 @@ Document review starts from the formal overall entry point and this goal, and ch
 
 Point out key meanings the implementer still has to invent, duplicated authoritative definitions or contradictory constraints, with the exact path and the minimum correction. When reviewing a new mechanism, ask which confirmed scenario it solves, whether the native capability already covers it, and whether it introduces extra state synchronization or approval obligations; keep the necessary reliability, independent verification and settlement responsibilities, and do not delete these responsibilities just because simpler is preferred. A local delivery checks only the applicable chain and does not require completing the unrelated whole system.
 
+## Test oracles and negative controls
+
+Review the tests and audit scripts as part of the delivery, not only the product code. A check is not evidence when its expected value was copied from the implementation, the current output, or one fixture; expected values must be traceable to acceptance, an independent source, or an invariant. For varying data, require relationships (set inclusion, range, uniqueness, references) instead of one sample's literal years or IDs.
+
+Treat these as blocking: only positive cases; no known-bad input, wrong expectation, mutation, or checker self-test; a negative control recorded as passed without an actual rejection; or an all-green suite whose oracle merely restates the implementation. If you cannot execute the missing control (this Session is read-only), state the gap and require the supervisor to arrange Test/rework; do not accept "N/N passed" as proof.
+
 ## Issues and conclusion
 
 For each issue give the exact location in the delivery, the trigger condition, the actual evidence, the violated grounds, the impact and whether it blocks, and you may suggest the minimum fix direction. Personal preference or future optimization does not block the current work; a new product direction is handed to the supervisor to decide (D-05).
