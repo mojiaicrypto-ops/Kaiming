@@ -21,6 +21,7 @@
 - technicalnew：当前角色/工具、需求格式、消息/存储/恢复与上下文装配；模型提问采用官方 question 移植扩展，通过原生交互消息接入 WAL 和主管通道，与前端渲染分离。见[七角色与工具入口](technicalnew/agents-and-tools.md)、[格式规范](technicalnew/requirements-format.md)、[验证记录](technicalnew/validation.md)。恢复只核实原生历史/已知成果后续办；业务判断交 Agent，程序核对身份/状态/必要报告/版本/保存。当前审阅状态以验证记录为准，文档检查不证明 SDK、模型或产品可用。
 - 前端：React 19 + Vite 7 单页应用，构建产物由同一 Server 托管在 `/`（`/app/*` 301 到同路径；产物不入库，缺失时会话入口提示构建）。登录屏与会话/需求/设置三屏在同一外壳内。契约见[前端设计契约](technicalnew/ui-design.md)与[A7](technicalnew/architecture.md#a7-前端层)。
 - 实施状态：业务代码已按本轮设计实施并持续验证，逐个工作包的证据、边界与未执行项记在[验证记录](technicalnew/validation.md)与各工作包结算记录；该表不等同于产品验收。产品验收仍按 [acceptance](productnew/acceptance.md) 逐条执行，未执行项不得视为通过。
+- 质量门：标准代码 Test 需包含真实失败的负向控制/检查器自检；Review 检查期望值来自验收、独立事实或不变量，不以全绿数量代替。D-05、AC-46、Tester/Reviewer/Chief 提示词已更新；项目级结算与交付门禁见 `AGENTS.md`。
 - 已知缺口：项目/会话列表方法、任务变更推送、重绑定入口等尚未实现，逐项证据与处置见[缺口登记](technicalnew/gap-register.md)。文件与报告查看（U11）已实现：统一的文件查看画布 + 只读字节路由，报告正文与其内链接走同一条解析。
 
 验证记录只说明当前证据，不替代实现契约。

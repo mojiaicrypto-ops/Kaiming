@@ -16,4 +16,10 @@ A change is sensitive when it touches completion checks, delivery or commit judg
 
 Never delete files, installed dependencies, build outputs or user data just to make a check pass. When a check rejects ordinary work, treat the check and the work as two separate questions: report the false positive, preserve the environment, and discuss the fix. A passing completion gate is not a reason to destroy the workspace.
 
-The end-of-Task delivery check is one such sensitive area: which files count as the reviewed delivery, and whether ignored build outputs or user-excluded files should be filtered, is an open decision to discuss. Do not change that check ad hoc.
+The end-of-Task delivery check is sensitive. The confirmed rule: for a code delivery, Review/Test bind code paths and treat `docs/**` plus root Markdown as settlement output; a docs-only delivery still binds its docs. Any change to this rule needs discussion first.
+
+## Quality and settlement
+
+Standard code Review/Test treats checks as falsification. A Test must include a known-bad input, wrong expectation, mutation, or checker self-test that really fails for the intended reason; an all-green suite with no negative control is incomplete. Review checks that expected values come from acceptance, independent facts or invariants, not from current output, a single fixture or the author's assumption. Tests may use relationships (inclusion/range/uniqueness/references) instead of one sample's literal values.
+
+Every code or material product/design change settles into the nearest authoritative product/technical documents, validation record and this file when project rules change. No change work is complete until its settlement report exists, affected documents are current, and the reviewed delivery paths are committed relative to HEAD. Read-only Tasks close per D-04 without settlement. Unrelated dirty files are preserved and do not block completion; never commit or delete them merely to clean the worktree. Settlement not committed = not happened.

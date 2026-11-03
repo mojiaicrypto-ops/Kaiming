@@ -494,4 +494,4 @@
 
 **证据**：文档契约 `docs/productnew/modules/delivery.md` D-05、`docs/productnew/acceptance.md` AC-46、`docs/technicalnew/agents-and-tools.md` 的 report/check 规则，以及 `docs/technicalnew/prompts/{tester,reviewer,chief}.md`。`test/context.test.ts` 6 用例和 `tsc --noEmit` 通过；本次是流程/提示词修改，没有新增业务代码。
 
-**未覆盖**：尚未用真实模型跑一次“坏样本通过 → Tester/Reviewer 阻断”的端到端验收；该行为目前由角色提示词和 Review 判断保证，程序不解析检查名称或自然语言来推断 oracle 质量。
+**未覆盖**：尚未用真实模型跑一次“坏样本通过 → Tester/Reviewer 阻断”的端到端验收；对应场景已登记在 [I4](implementation-checks.md#i4-提示词与真实业务检查)，该行为目前由角色提示词和 Review 判断保证，程序不解析检查名称或自然语言来推断 oracle 质量。

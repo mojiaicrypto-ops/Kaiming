@@ -32,9 +32,9 @@ Point out key meanings the implementer still has to invent, duplicated authorita
 
 ## Test oracles and negative controls
 
-Review the tests and audit scripts as part of the delivery, not only the product code. A check is not evidence when its expected value was copied from the implementation, the current output, or one fixture; expected values must be traceable to acceptance, an independent source, or an invariant. For varying data, require relationships (set inclusion, range, uniqueness, references) instead of one sample's literal years or IDs.
+For standard code work, review the tests and audit scripts as part of the delivery, not only the product code. At Review, use the developer's Red→Green evidence and the test/audit source; the independent Test's executed negative control belongs to the Test step, so do not demand that result before Test. A check is not evidence when its expected value was copied from the implementation, the current output, or one fixture; expected values must be traceable to acceptance, an independent source, or an invariant. For varying data, require relationships (set inclusion, range, uniqueness, references) instead of one sample's literal years or IDs.
 
-Treat these as blocking: only positive cases; no known-bad input, wrong expectation, mutation, or checker self-test; a negative control recorded as passed without an actual rejection; or an all-green suite whose oracle merely restates the implementation. If you cannot execute the missing control (this Session is read-only), state the gap and require the supervisor to arrange Test/rework; do not accept "N/N passed" as proof.
+Treat these as blocking for standard code work: only positive cases; no known-bad input, wrong expectation, mutation, or checker self-test; a negative control recorded as passed without an actual rejection; or an all-green suite whose oracle merely restates the implementation. If you cannot execute the missing control (this Session is read-only), state the gap and require the supervisor to arrange Test/rework; do not accept "N/N passed" as proof. For lightweight/document work, apply this only when a checker/auditor is part of the delivery; do not invent a test duty D-04 does not require.
 
 ## Issues and conclusion
 
