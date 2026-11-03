@@ -495,3 +495,15 @@
 **证据**：文档契约 `docs/productnew/modules/delivery.md` D-05、`docs/productnew/acceptance.md` AC-46、`docs/technicalnew/agents-and-tools.md` 的 report/check 规则，以及 `docs/technicalnew/prompts/{tester,reviewer,chief}.md`。`test/context.test.ts` 6 用例和 `tsc --noEmit` 通过；本次是流程/提示词修改，没有新增业务代码。
 
 **未覆盖**：尚未用真实模型跑一次“坏样本通过 → Tester/Reviewer 阻断”的端到端验收；对应场景已登记在 [I4](implementation-checks.md#i4-提示词与真实业务检查)，该行为目前由角色提示词和 Review 判断保证，程序不解析检查名称或自然语言来推断 oracle 质量。
+
+## 2026-11-03 · 会话切换后残留上一条 Task
+
+**现象**：主管会话 A 有运行中的 Task；切换到无 Task 的会话 B 后，任务条、任务清单、成员状态仍显示 A 的 Task，页面标题/会话已切到 B。
+
+**根因**：`useSession` 的 `activeTaskId` 和 `taskDetail` 没有 session 归属。切换会话只 reset 了 chat slot；旧 `activeTaskId` 仍触发 3 秒轮询，旧 `refreshTask`/`session.get` 回包也可能在新会话写入旧 Task。ChatPage 按会话复用局部 Task/成员 UI，因而继续显示旧面板。
+
+**修正**：Task detail/active id 记录 `taskSessionId`；渲染、轮询和回包只接受当前 `sessionId`，切换时清空并用 generation/currentSessionId 丢弃旧异步结果。`session.get` 的 null 结果通过单调任务推送序号保护，不能清掉更新的 Task 公告。ChatPage 在会话切换的 layout effect 中清理 Task 弹层、成员抽屉、互动/中断等会话级 UI，但不重挂载 Composer，未发送文字和图片保留。
+
+**证据**：新增 `webapp/test/task-scope.test.ts`（旧会话 Task 在新 session 为 null、同 session 保留）。真实浏览器（4173，构建后）：任务会话显示 `t-db45d0ce`；切到无 Task 会话后 `activeTaskId=null`、`taskDetail=null`、无 `task-live` DOM；切回恢复。未发送草稿 `draft-keep` 在来回切换后仍在。webapp 13 文件 92 用例、`tsc --noEmit`、`npm run build` 通过；独立 Review 首轮两个非阻塞问题（Page key 丢草稿、session.get null 回包覆盖新公告）已修复并复审通过。
+
+**未覆盖**：未在重启 workbench 后再次执行整套浏览器验收；当前静态产物已构建，后端需重启无需改动（本次仅前端）。

@@ -222,6 +222,20 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, proje
   // The row clicked in a dispatch card carries what it knows about its member; the Task's live
   // detail fills in the rest. Without this the drawer can only name the member after a poll.
   const [followedRow, setFollowedRow] = useState<TaskMemberRow | null>(null);
+
+  // Task/member panels are session-owned. Clear them before the next paint; the composer's own
+  // unsent text and attachments live below this component and must survive the switch.
+  useLayoutEffect(() => {
+    setTaskOpen(false);
+    setFollow(null);
+    setFollowedRow(null);
+    setAnswers({});
+    setAnsweredAt({});
+    setInterrupted([]);
+    setEarlier({ loading: false, hasMore: true });
+    setQuestionsCollapsed(false);
+    setRecoveryDismissed(false);
+  }, [currentSessionId]);
   const followMember = useCallback(
     (row: TaskMemberRow): void => {
       setFollowedRow(row);

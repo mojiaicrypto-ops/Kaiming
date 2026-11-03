@@ -4,6 +4,7 @@ import { SessionStream, type PreparedSnapshot, type StreamFrame, type PendingInt
 import { emptySlot, slotReducer, type ContentBlock, type SessionSlot, type TaskDetail } from '../state/slot';
 import type { SessionActivity } from '../api/stream';
 import { toast } from '../lib/toast';
+import { taskForSession } from './task-scope';
 
 export interface SessionRef {
   readonly projectId: string;
@@ -74,8 +75,12 @@ export function useSession(
   const generation = useRef(0);
   const [blocked, setBlocked] = useState<{ code: string; detail: string } | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  /** The session the current Task detail belongs to; a new session must not inherit it. */
+  const [taskSessionId, setTaskSessionId] = useState<string | null>(null);
   /** When the last pushed Task change arrived: the fallback poll skips a tick right after it. */
   const lastPushAt = useRef(0);
+  /** Monotonic task announcements; a snapshot read that started earlier must not overwrite one. */
+  const taskPushSeq = useRef(0);
   /**
    * The configuration the work really used. The snapshot carries it while a run is live; after a
    * run the settings may already have changed, so the value is re-read when the session goes idle
@@ -101,20 +106,26 @@ export function useSession(
   // identity that changes with the caller's inline literal would restart the stream forever.
   const projectId = session?.projectId ?? null;
   const sessionId = session?.sessionId ?? null;
+  /** The session whose state is allowed to paint; a late read from the previous one must not. */
+  const currentSessionId = useRef<string | null>(sessionId);
+  currentSessionId.current = sessionId;
   const refreshTask = useCallback(
     async (taskId: string): Promise<TaskDetail | null> => {
       if (session === null) return null;
+      const requestedSessionId = session.sessionId;
       const read = await rpc.call<{
         task: TaskDetail['task'];
         members: TaskDetail['members'];
         results: TaskDetail['results'];
       }>('task.get', { projectId: session.projectId, taskId }).catch(() => null);
+      if (currentSessionId.current !== requestedSessionId) return null;
       if (read === null) {
         // An unreadable Task is not "this session has no Task": keeping the last real detail beats
         // blanking the strip and the cards that read their member rows from it.
         return null;
       }
       // Belt as well as braces: a refresh is itself the authority on which Task this session runs.
+      setTaskSessionId(requestedSessionId);
       setActiveTaskId(taskId);
       const detail: TaskDetail = { task: read.task, members: read.members, results: read.results };
       dispatch({ type: 'taskDetail', detail });
@@ -150,6 +161,7 @@ export function useSession(
       // Nothing is open: that is the truth, not a connection that dropped. A failure belongs to the
       // session it happened to, so leaving one clears the word instead of carrying it into the void.
       setStatus('idle');
+      setActiveTaskId(null);
       // A prepare that was in flight when the last session went away must not report its 404 as
       // this (empty) shell's connection state.
       generation.current += 1;
@@ -159,7 +171,12 @@ export function useSession(
     dispatch({ type: 'reset' });
     setBlocked(null);
     setHistoryProblems([]);
+    setActiveTaskId(null);
+    setTaskSessionId(null);
+    lastPushAt.current = 0;
+    const alive = (): boolean => generation.current === generationHere;
     const onFrame = (frame: StreamFrame): void => {
+      if (!alive()) return;
       const event = frame.event;
       if (frame.type === 'pi' && event?.type === 'blocked') {
         const blockedEvent = event as { code?: unknown; detail?: unknown };
@@ -173,6 +190,8 @@ export function useSession(
         // strip updates on the event itself; the interval is only a fallback for a lost frame.
         // Not every announcement is a Task change: a member publishing its report names the chief
         // session as the target, and reading that id as a taskId would blank the card.
+        taskPushSeq.current += 1;
+        setTaskSessionId(sessionId);
         setActiveTaskId(notice.id);
         lastPushAt.current = Date.now();
         void handlers.current.refreshTask(notice.id).catch(() => undefined);
@@ -193,7 +212,7 @@ export function useSession(
       dispatch({ type: 'frame', frame });
     };
     const onSnapshot = (snapshot: PreparedSnapshot): void => {
-      if (snapshot.sessionId !== sessionId) return;
+      if (!alive() || snapshot.sessionId !== sessionId) return;
       setStatus('connected');
       setHistoryProblems(snapshot.historyProblems ?? []);
       setConfig(snapshot.config ?? null);
@@ -204,13 +223,20 @@ export function useSession(
       // Restore the coordinated Task after (re)connect: the invalidate frames that would set
       // activeTaskId may have fired before this tab subscribed, leaving the Task strip absent
       // even though a member is running right now.
+      const taskPushAtRead = taskPushSeq.current;
       void rpc
         .call<{ session: { currentTaskId: string | null } }>('session.get', {
           projectId,
           sessionId,
         })
         .then((read) => {
-          if (read.session.currentTaskId === null) return;
+          if (!alive() || taskPushSeq.current !== taskPushAtRead) return;
+          if (read.session.currentTaskId === null) {
+            setTaskSessionId(null);
+            setActiveTaskId(null);
+            return;
+          }
+          setTaskSessionId(sessionId);
           setActiveTaskId(read.session.currentTaskId);
           // A reload must show the Task straight away, not after the first 3s poll: the strip is
           // how the user sees what is running.
@@ -220,7 +246,7 @@ export function useSession(
     };
     // Every state write from here on belongs to this session: a late answer from the previous one
     // (a prepare that 404s after the session was dropped) must not repaint the chip.
-    const alive = (): boolean => generation.current === generationHere;
+
     const stream = new SessionStream(rpc, session.projectId, session.sessionId, {
       onFrame,
       onSnapshot,
@@ -421,11 +447,12 @@ export function useSession(
     ...(onSessionsChanged === undefined ? {} : { onSessionsChanged }),
   };
 
-  const taskStatus = slot.taskDetail?.task.status ?? null;
+  const visibleTaskDetail = taskForSession(slot.taskDetail, taskSessionId, sessionId);
+  const taskStatus = visibleTaskDetail?.task.status ?? null;
   useEffect(() => {
     // A finished Task is not polled any more: its strip has nothing left to update, and the
     // interval would keep a timer alive for as long as the tab is open.
-    if (activeTaskId === null || taskStatus === 'completed' || taskStatus === 'cancelled') return;
+    if (activeTaskId === null || taskSessionId !== sessionId || taskStatus === 'completed' || taskStatus === 'cancelled') return;
     let timer: number | null = null;
     const read = (): void => {
       // A push already answered this question within the last second; a second read would only
@@ -453,11 +480,12 @@ export function useSession(
       document.removeEventListener('visibilitychange', onVisibility);
       stop();
     };
-  }, [activeTaskId, taskStatus, refreshTask]);
+  }, [activeTaskId, taskSessionId, sessionId, taskStatus, refreshTask]);
 
+  const visibleSlot = { ...slot, taskDetail: visibleTaskDetail };
   return {
     rpc,
-    slot,
+    slot: visibleSlot,
     status,
     historyProblems,
     blocked,
@@ -471,7 +499,7 @@ export function useSession(
     refreshTask,
     loadEarlier,
     config,
-    activeTaskId,
+    activeTaskId: taskForSession(activeTaskId, taskSessionId, sessionId),
     retry,
     notify: toast,
   };
