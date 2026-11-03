@@ -507,3 +507,15 @@
 **证据**：新增 `webapp/test/task-scope.test.ts`（旧会话 Task 在新 session 为 null、同 session 保留）。真实浏览器（4173，构建后）：任务会话显示 `t-db45d0ce`；切到无 Task 会话后 `activeTaskId=null`、`taskDetail=null`、无 `task-live` DOM；切回恢复。未发送草稿 `draft-keep` 在来回切换后仍在。webapp 13 文件 92 用例、`tsc --noEmit`、`npm run build` 通过；独立 Review 首轮两个非阻塞问题（Page key 丢草稿、session.get null 回包覆盖新公告）已修复并复审通过。
 
 **未覆盖**：未在重启 workbench 后再次执行整套浏览器验收；当前静态产物已构建，后端需重启无需改动（本次仅前端）。
+
+## 2026-11-03 · 开发自查与独立 Test 范围
+
+**现象**：develop 阶段每个改动都跑全量测试，页面改动还跑整套端到端；Review 和 Tester 随后仍会独立检查，造成重复、无信息量的执行时间，拖慢交付。
+
+**决定**：开发自查按变更面收敛——后端只跑变更函数/接口及直接契约的定向单元/集成测试；页面改动先用单元测试覆盖被改代码行为，再跑一条聚焦真实浏览器路径；不默认跑全量套件或整套 E2E。共享契约、数据迁移、权限/状态机、公共层或已知高风险改动才扩大范围，并说明原因。Review 后独立 Test 仍按本次验收和相关回归执行；不因开发自查收敛而省略。
+
+**落点**：`docs/productnew/modules/delivery.md` D-05、`docs/productnew/acceptance.md` AC-47、`AGENTS.md`、`docs/technicalnew/prompts/{developer,tester,chief}.md`、`docs/technicalnew/implementation-checks.md` I4。
+
+**证据**：`test/context.test.ts` 6 用例和 `tsc --noEmit` 通过（提示词装配边界不变）；本次是流程/提示词修改，没有新增业务代码。真实模型是否遵守“定向自查”仍需 I4/实际交付观察。
+
+**未覆盖**：尚未用真实 Task 对比定向自查与全量套件的耗时和漏检率；AC-47 作为后续验收场景保留。

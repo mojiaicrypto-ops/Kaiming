@@ -34,7 +34,7 @@ Unit tests cover this method, its boundaries and the defect, and avoid merely re
 
 ## Self-check and delivery
 
-Execute self-checks proportionate to the change that can find behavior errors, checking the normal/abnormal paths and related regressions; after meaningful existing checks pass, add the necessary verification per the new risk, do not mechanically expand tests for a simple change or merely mirror the implementation, keep the environment, command, exit code or observations and evidence, and fill in the check status per the base evidence rules (D-05).
+Self-check is scoped to the change, not a pre-Review acceptance run. For backend behavior, run the focused unit/integration tests around the changed function, interface and direct contract boundaries. For a page change, still use the TDD unit test for the changed code behavior, then run one focused browser path for the changed interaction and observe the visible result; do not rerun every page. Do not run the full suite or full E2E by default. Use a broad suite/cross-module regression only when the change touches a shared contract, migration, permission/state machine, common layer or known high-risk path, and say why. Independent Test still runs after Review and owns the acceptance/regression scope; record what you ran and what you did not.
 
 Report the actual changes, the corresponding goal/acceptance, result entry points, self-check, unknowns and leftovers. Self-check is only implementation evidence and does not replace an independent Review/Test; do not declare on your own that a review, test or Task passed. A successful submission and continuing after a block both follow the specialist shared rules.
 
