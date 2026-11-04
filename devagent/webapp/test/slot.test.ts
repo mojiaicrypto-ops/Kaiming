@@ -409,12 +409,75 @@ describe('slot merge · lost message_end under resync', () => {
 describe('slot · retained inputs', () => {
   it('a snapshot seeds the queued inputs and inputQueued/inputRemoved track local adds/withdrawals', () => {
     let slot = emptySlot();
-    slot = slotReducer(slot, { type: 'snapshot', reason: 'initial', snapshot: { sessionId: 's', projectId: 'p', roleId: 'chief', activity: 'queued', currentInputId: null, inputs: [{ inputId: 'i-1', kind: 'user', status: 'queued', revision: 1, errorCode: null }, { inputId: 'i-2', kind: 'user', status: 'completed', revision: 1, errorCode: null }], messages: [], interactions: [], historyLeaf: null, historyProblems: [] } });
-    expect(slot.queuedInputs.map((entry) => entry.inputId)).toEqual(['i-1']);
-    slot = slotReducer(slot, { type: 'inputQueued', inputId: 'i-3' });
+    slot = slotReducer(slot, { type: 'snapshot', reason: 'initial', snapshot: { sessionId: 's', projectId: 'p', roleId: 'chief', activity: 'queued', currentInputId: null, inputs: [{ inputId: 'i-1', kind: 'user', status: 'queued', revision: 1, errorCode: null, text: '排队内容', imageCount: 1 }, { inputId: 'i-2', kind: 'user', status: 'completed', revision: 1, errorCode: null }, { inputId: 'i-notice', kind: 'system_notice', status: 'queued', revision: 1, errorCode: null, text: 'internal' }], messages: [], interactions: [], historyLeaf: null, historyProblems: [] } });
+    expect(slot.queuedInputs).toEqual([{ inputId: 'i-1', status: 'queued', text: '排队内容', imageCount: 1 }]);
+    slot = slotReducer(slot, { type: 'inputQueued', inputId: 'i-3', content: [{ type: 'text', text: '新消息' }, { type: 'image', src: '/a' }] });
     expect(slot.queuedInputs.map((entry) => entry.inputId)).toEqual(['i-1', 'i-3']);
+    expect(slot.queuedInputs[1]).toMatchObject({ text: '新消息', imageCount: 1 });
     slot = slotReducer(slot, { type: 'inputRemoved', inputId: 'i-1' });
     expect(slot.queuedInputs.map((entry) => entry.inputId)).toEqual(['i-3']);
+  });
+
+  it('removes the queue row when the input starts its turn', () => {
+    const queued = slotReducer(emptySlot(), {
+      type: 'inputQueued',
+      inputId: 'i-turn',
+      content: [{ type: 'text', text: '现在运行' }],
+    });
+    const started = slotReducer(queued, {
+      type: 'frame',
+      frame: { type: 'pi', inputId: 'i-turn', event: { type: 'turn_start' } },
+    });
+    expect(started.queuedInputs).toEqual([]);
+    expect(started.busy).toBe('processing');
+  });
+
+  it('clears the current input and echo when a retained input is removed', () => {
+    let slot = slotReducer(emptySlot(), {
+      type: 'inputQueued',
+      inputId: 'i-stop',
+      content: [{ type: 'text', text: '停止我' }],
+    });
+    slot = slotReducer(slot, {
+      type: 'inputAccepted',
+      inputId: 'i-stop',
+      content: [{ type: 'text', text: '停止我' }],
+    });
+    expect(slot.currentInputId).toBe('i-stop');
+    expect(slot.pendingEcho?.inputId).toBe('i-stop');
+    slot = slotReducer(slot, { type: 'inputRemoved', inputId: 'i-stop' });
+    expect(slot.currentInputId).toBeNull();
+    expect(slot.pendingEcho).toBeNull();
+  });
+
+  it('does not retarget STOP at a message queued behind the running input', () => {
+    let slot = slotReducer(emptySlot(), {
+      type: 'inputAccepted',
+      inputId: 'i-running',
+      content: [{ type: 'text', text: '正在运行' }],
+    });
+    slot = slotReducer(slot, { type: 'busy', activity: 'processing' });
+    slot = slotReducer(slot, {
+      type: 'inputAccepted',
+      inputId: 'i-second',
+      content: [{ type: 'text', text: '排队' }],
+    });
+    expect(slot.currentInputId).toBe('i-running');
+    expect(slot.pendingEcho?.inputId).toBe('i-second');
+    slot = slotReducer(slot, {
+      type: 'inputQueued',
+      inputId: 'i-second',
+      content: [{ type: 'text', text: '排队' }],
+    });
+    slot = slotReducer(slot, { type: 'frame', frame: { type: 'pi', inputId: 'i-running', event: { type: 'agent_end' } } });
+    expect(slot.currentInputId).toBeNull();
+    expect(slot.busy).toBe('queued');
+    slot = slotReducer(slot, {
+      type: 'frame',
+      frame: { type: 'pi', inputId: 'i-second', event: { type: 'turn_start' } },
+    });
+    expect(slot.currentInputId).toBe('i-second');
+    expect(slot.queuedInputs).toEqual([]);
   });
 });
 

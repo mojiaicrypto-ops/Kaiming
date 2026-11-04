@@ -71,6 +71,9 @@ export function Composer({ busy, canStop, disabled, onSubmit, onUpload, onStop, 
   // re-rendered with `sending: true`, and both would then pass the guard.
   const inFlight = useRef(false);
   const [stopFailed, setStopFailed] = useState(false);
+  // The server only reports `stopping` after it sees the request; the click itself must give
+  // immediate feedback while the run settles.
+  const [stopping, setStopping] = useState(false);
   // A successful STOP clears the mark: the button should not stay red from an older attempt.
   const clearStopFailure = (): void => setStopFailed(false);
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -245,18 +248,24 @@ export function Composer({ busy, canStop, disabled, onSubmit, onUpload, onStop, 
       >
         ↑
       </button>
-      {busy !== 'idle' && (
+      {(busy === 'processing' || busy === 'stopping') && (
         <button
           type="button"
           className={`send${stopFailed ? ' danger' : ''}`}
           title={canStop ? t('chat.stopTitle') : t('chat.hint.stop')}
+          disabled={!canStop || stopping || busy === 'stopping'}
+          aria-busy={stopping || busy === 'stopping'}
           onClick={() => {
+            if (stopping) return;
             clearStopFailure();
-            void onStop().catch(() => setStopFailed(true));
+            setStopping(true);
+            void onStop()
+              .catch(() => setStopFailed(true))
+              .finally(() => setStopping(false));
           }}
           data-testid="stop"
         >
-          {t('chat.stop')}
+          {stopping || busy === 'stopping' ? t('chat.stopping') : t('chat.stop')}
         </button>
       )}
     </form>
@@ -268,7 +277,7 @@ export function DockHint({ busy }: { busy: SessionActivity }) {
   return (
     <div className="hint">
       <span>{t('chat.hint.send')}</span>
-      {busy !== 'idle' && <State kind="wait">{t('chat.hint.stop')}</State>}
+      {(busy === 'processing' || busy === 'stopping') && <State kind="wait">{t('chat.hint.stop')}</State>}
     </div>
   );
 }

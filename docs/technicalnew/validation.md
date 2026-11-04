@@ -519,3 +519,17 @@
 **证据**：`test/context.test.ts` 6 用例和 `tsc --noEmit` 通过（提示词装配边界不变）；本次是流程/提示词修改，没有新增业务代码。真实模型是否遵守“定向自查”仍需 I4/实际交付观察。
 
 **未覆盖**：尚未用真实 Task 对比定向自查与全量套件的耗时和漏检率；AC-47 作为后续验收场景保留。
+
+## 2026-11-04 · 操作即时反馈与队列正文
+
+**现象**：STOP、Task 暂停/继续、手动压缩点击后仍显示旧状态，直到服务端事件或 3s 轮询才变化；运行中提交的补充消息实际排队，但前端没有立即登记队列，刷新快照后才出现，且队列行只显示 inputId。
+
+**根因**：STOP 和 Task 控制只有 RPC 返回后才改变 `busy`/Task detail；`session.input.submit` 只在“未带 taskId 且有当前 Task”时返回 `waitingForTask`，带 taskId 的补充消息没有排队原因；`session.stream.prepare` 的 `inputs` 快照不带 payload 正文，前端队列无内容可显示。
+
+**修正**：① Composer 增加本地 stopping 状态，STOP 点击立即显示“正在停止…”并禁用；ContextMeter 的压缩按钮增加 `aria-busy`/忙碌样式；② ChatPage 增加 Task pause/resume pending，TaskStrip 立即显示 Pausing/Resuming 并禁用，RPC 返回后重读 Task；③ submit 响应在输入确实被保留时带 `waitingForTask`（未带 taskId 且有当前 Task，或带 taskId 但主管回合仍在 processing）；前端在等待 Task 或提交时非 idle 时立即 `inputQueued`，`turn_start`/`message_start` 按 inputId 移除；STOP 保持当前运行输入，不把排队行当作当前输入，队列行用撤回移除；④ prepare 快照的 queued user inputs 附 `text/imageCount`，队列显示正文和图片数量，不显示 inputId，宿主 system_notice 不进入队列。
+
+**证据**：webapp 14 文件 98 用例；服务端全量 49 文件 505 用例（`--maxWorkers=1`），其中定向 queue 用例 31；两边 `tsc --noEmit` 与 webapp `npm run build`；真实浏览器（harness 真服务 + 脚本化流式模型）5 用例：运行中第二条消息不刷新即显示正文、刷新后仍显示、STOP 点击后立即停止中并禁用、撤回排队行立即消失、队列交接到下一条后 STOP 仍指向正在运行的输入；Task 路由夹具验证暂停 pending。对应 AC-48。
+
+**落点**：`docs/productnew/acceptance.md` AC-48、`docs/technicalnew/ui-design.md` U5、`docs/technicalnew/runtime-contract.md` `session.input.submit`/`session.stream.prepare`、`devagent/webapp/src/{chat,state,app}`、`devagent/src/server/{write-methods,stream-methods}.ts`。
+
+**未覆盖**：真实模型下 Task 暂停/继续与手动压缩的完整计时（浏览器用延迟路由夹具验证 pending 外观）；队列在真实 Task 成员运行中的刷新由服务端快照单测覆盖，未另做真实成员长跑。

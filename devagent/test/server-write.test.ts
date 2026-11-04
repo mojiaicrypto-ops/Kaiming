@@ -266,6 +266,61 @@ describe('write surface', () => {
     expect(resultOf<{ waitingForTask?: string }>(submitted.body).waitingForTask).toBe('t-open');
     expect(h.store.getInput('in-3')?.status).toBe('queued');
     expect(h.store.claimNextInput('s-chief').kind).toBe('busy');
+    // A cited supplement with an idle chief is not retained: the claim gate lets the chief's own
+    // turn through, so the receipt must not name the Task as its waiting reason.
+    const supplement = await h.call(
+      'session.input.submit',
+      {
+        projectId: h.projectId,
+        sessionId: 's-chief',
+        taskId: task.id,
+        content: [{ type: 'text', text: '补充认证边界' }],
+      },
+      'in-3b',
+    );
+    expect(resultOf<{ waitingForTask?: string }>(supplement.body).waitingForTask).toBeUndefined();
+    expect(h.store.getInput('in-3b')?.status).toBe('queued');
+  }, 30_000);
+
+  it('names the Task for a cited supplement while the chief is already running', async () => {
+    const h = await harness();
+    h.store.acceptInput({
+      inputId: 'in-running',
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      sourceKey: 's-chief:in-running',
+      requestKey: 'in-running',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: 'running turn' }] },
+    });
+    expect(h.store.claimNextInput('s-chief').kind).toBe('claimed');
+    const task = h.store.createTask({
+      id: 't-busy',
+      projectId: h.projectId,
+      chiefSessionId: 's-chief',
+      ownerEpoch: 1,
+      type: 'read',
+      requiresTest: false,
+      goal: 'investigate',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/plan.md', sha256: 'p' },
+      authorizationRefs: [],
+      sourceInputId: 'none',
+    });
+    const submitted = await h.call(
+      'session.input.submit',
+      {
+        projectId: h.projectId,
+        sessionId: 's-chief',
+        taskId: task.id,
+        content: [{ type: 'text', text: '补充认证边界' }],
+      },
+      'in-busy',
+    );
+    expect(resultOf<{ waitingForTask?: string }>(submitted.body).waitingForTask).toBe('t-busy');
   }, 30_000);
 
   it('stops a queued input without running it and reports the session as idle', async () => {

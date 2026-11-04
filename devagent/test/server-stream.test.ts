@@ -320,13 +320,30 @@ describe('session stream', () => {
       kind: 'user',
       payload: { content: [{ type: 'text', text: 'before' }] },
     });
+    // A host notice is queued too, but its instruction text is not the reader's message.
+    h.store.acceptInput({
+      inputId: 'i-notice',
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      sourceKey: 's-chief:i-notice',
+      requestKey: 'i-notice',
+      method: 'session.input.submit',
+      kind: 'system_notice',
+      payload: { content: [{ type: 'text', text: 'internal host instruction' }] },
+    });
+
 
     const prepared = await h.prepare('s-chief');
 
     // serverEpoch:instanceGeneration - no Pi instance exists yet, so the generation is 0.
     expect(prepared.epoch).toBe('7:0');
     expect(prepared.boundary).toBe(0);
-    expect((prepared.snapshot['inputs'] as Array<{ inputId: string }>).map((entry) => entry.inputId)).toEqual(['i-old']);
+    expect((prepared.snapshot['inputs'] as Array<{ inputId: string }>).map((entry) => entry.inputId)).toEqual(['i-old', 'i-notice']);
+    expect(prepared.snapshot['inputs']).toMatchObject([
+      { inputId: 'i-old', text: 'before', imageCount: 0 },
+      { inputId: 'i-notice', kind: 'system_notice' },
+    ]);
+    expect((prepared.snapshot['inputs'] as Array<{ text?: string }>)[1]?.text).toBeUndefined();
     expect(prepared.snapshot['activity']).toBe('queued');
     expect(prepared.snapshot['compacting']).toBe(false);
     expect(prepared.streamPath).toContain(`subscriptionId=${prepared.subscriptionId}`);

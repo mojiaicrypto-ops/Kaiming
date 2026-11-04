@@ -18,7 +18,7 @@ import type { TaskDetail } from '../state/slot';
  * The whole strip disappears when the Task is over: a finished Task is history, and history
  * belongs in the transcript.
  */
-export function TaskStrip({ detail, onOpenTask, onPause, onResume, pendingQuestions }: TaskStripProps) {
+export function TaskStrip({ detail, onOpenTask, onPause, onResume, pendingQuestions, pending }: TaskStripProps) {
   const { t } = useI18n();
   const phaseLabel = usePhaseLabel();
   if (detail === null) return null;
@@ -35,7 +35,11 @@ export function TaskStrip({ detail, onOpenTask, onPause, onResume, pendingQuesti
   const real = flow.filter((step) => step.kind !== 'plan');
 
   const state =
-    task.status === 'pausing' ? (
+    pending === 'pause' ? (
+      <State kind="wait">{t('task.pausing')}</State>
+    ) : pending === 'resume' ? (
+      <State kind="wait">{t('task.resuming')}</State>
+    ) : task.status === 'pausing' ? (
       <State kind="wait">{t('task.pausing')}</State>
     ) : task.status === 'paused' ? (
       <State kind="paused">{t('task.paused')}</State>
@@ -91,12 +95,25 @@ export function TaskStrip({ detail, onOpenTask, onPause, onResume, pendingQuesti
         </span>
         {state}
         {task.status === 'paused' ? (
-          <button type="button" className="btn ghost" onClick={onResume}>
-            {t('task.resume')}
+          <button
+            type="button"
+            className="btn ghost"
+            onClick={onResume}
+            disabled={pending !== null}
+            aria-busy={pending === 'resume'}
+          >
+            {pending === 'resume' ? t('task.resuming') : t('task.resume')}
           </button>
         ) : (
-          <button type="button" className="btn ghost" onClick={onPause} data-testid="task-pause">
-            {t('task.pause')}
+          <button
+            type="button"
+            className="btn ghost"
+            onClick={onPause}
+            disabled={pending !== null || task.status === 'pausing'}
+            aria-busy={pending === 'pause' || task.status === 'pausing'}
+            data-testid="task-pause"
+          >
+            {pending === 'pause' || task.status === 'pausing' ? t('task.pausing') : t('task.pause')}
           </button>
         )}
       </div>
@@ -109,6 +126,8 @@ export interface TaskStripProps {
   readonly pendingQuestions: number;
   readonly onPause: () => void;
   readonly onResume: () => void;
+  /** A user action already sent, until the server's Task read reflects it. */
+  readonly pending: 'pause' | 'resume' | null;
   /** Opens the Task detail: goal, scope and the reports it produced. */
   readonly onOpenTask: () => void;
 }

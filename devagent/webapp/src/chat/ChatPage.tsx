@@ -73,6 +73,8 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, proje
   const [scrollUi, setScrollUi] = useState<{ locked: boolean; showJumpButton: boolean; unseen: number }>({ locked: false, showJumpButton: false, unseen: 0 });
   const handleRef = useRef<ReturnType<typeof createAutoscroll> | null>(null);
   const [taskOpen, setTaskOpen] = useState(false);
+  /** A Task pause/resume already sent, until the refreshed Task reflects it. */
+  const [taskAction, setTaskAction] = useState<'pause' | 'resume' | null>(null);
   /** Inputs the host could not close (a crash, an unknown save): the user must be told they exist. */
   const [interrupted, setInterrupted] = useState<readonly { inputId: string; errorCode: string | null }[]>([]);
   const [recoveryDismissed, setRecoveryDismissed] = useState(false);
@@ -322,6 +324,27 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, proje
     ),
   ];
   const openQuestions = visibleQuestions.filter((entry) => answers[entry.interactionId]?.kind !== 'done');
+
+  const controlTask = async (command: 'pause' | 'resume'): Promise<void> => {
+    if (taskDetail === null || taskAction !== null) return;
+    const { taskId, revision } = taskDetail.task;
+    setTaskAction(command);
+    try {
+      await session.rpc.call('task.control', {
+        projectId,
+        taskId,
+        command,
+        expectedRevision: revision,
+      });
+      // The control reply is a receipt, not the whole Task: read the authoritative status before
+      // releasing the pending label.
+      await session.refreshTask(taskId);
+    } catch (error) {
+      session.notify(error instanceof Error ? error.message : String(error), 'error');
+    } finally {
+      setTaskAction(null);
+    }
+  };
   const activeStaleId =
     visibleQuestions.find((entry) => answers[entry.interactionId]?.kind === 'stale')?.interactionId ?? null;
 
@@ -449,29 +472,12 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, proje
           pendingQuestions={openQuestions.length}
           onOpenTask={() => setTaskOpen(true)}
           onPause={() => {
-            if (taskDetail !== null) {
-              void session.rpc
-                .call('task.control', {
-                  projectId,
-                  taskId: taskDetail.task.taskId,
-                  command: 'pause',
-                  expectedRevision: taskDetail.task.revision,
-                })
-                .catch((error: unknown) => session.notify(error instanceof Error ? error.message : String(error), 'error'));
-            }
+            void controlTask('pause');
           }}
           onResume={() => {
-            if (taskDetail !== null) {
-              void session.rpc
-                .call('task.control', {
-                  projectId,
-                  taskId: taskDetail.task.taskId,
-                  command: 'resume',
-                  expectedRevision: taskDetail.task.revision,
-                })
-                .catch((error: unknown) => session.notify(error instanceof Error ? error.message : String(error), 'error'));
-            }
+            void controlTask('resume');
           }}
+          pending={taskAction}
         />
         <div className="tx scroll" ref={txRef} data-testid="transcript">
           <div className="tx-in">
@@ -590,7 +596,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, proje
             />
             <Composer
               busy={slot.busy}
-              canStop={slot.currentInputId !== null}
+              canStop={slot.currentInputId !== null && (slot.busy === 'processing' || slot.busy === 'stopping')}
               // Sending while the session is not subscribed would start work the transcript could
               // never show: the stream is the only way those events arrive.
               disabled={!hasProject || session.status !== 'connected'}

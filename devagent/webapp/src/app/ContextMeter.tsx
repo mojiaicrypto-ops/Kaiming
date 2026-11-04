@@ -82,6 +82,7 @@ export function ContextMeter({
       : {};
 
   const running = activity === 'processing' || activity === 'stopping';
+  const pending = busy || compacting;
   const disabled = !context.live || running || compacting || busy;
   const reason = !context.live
     ? t('shell.compactNoInstance')
@@ -210,9 +211,10 @@ export function ContextMeter({
               className="btn pri ctx-compact"
               onClick={() => void run()}
               disabled={disabled}
+              aria-busy={pending}
               data-testid="context-compact"
             >
-              {busy || compacting ? t('shell.compactBusy') : t('shell.compactNow')}
+              {pending ? t('shell.compactBusy') : t('shell.compactNow')}
             </button>
             {reason !== null && <p className="f3 ctx-pop-note">{reason}</p>}
             {note !== null && (

@@ -276,6 +276,7 @@ export function useSession(
     async (text: string, images: readonly string[] = []): Promise<{ queued: boolean; waitingForTask?: string }> => {
       if (session === null) return { queued: false };
       setBlocked(null);
+      const busyAtSubmit = slot.busy !== 'idle';
       // While the session coordinates a Task, the user's message is that Task's supplement and
       // MUST cite its taskId: without it the server treats the message as another topic and
       // retains it until the Task ends. Read the authoritative id right before submitting.
@@ -289,7 +290,7 @@ export function useSession(
       } catch {
         taskId = null;
       }
-      const accepted = await rpc.call<{ inputId: string; waitingForTask?: string }>(
+      const accepted = await rpc.call<{ inputId: string; status?: string; waitingForTask?: string }>(
         'session.input.submit',
         {
           projectId: session.projectId,
@@ -307,26 +308,31 @@ export function useSession(
         ...(text !== '' ? [{ type: 'text', text } as const] : []),
         ...images.map((src) => ({ type: 'image', src }) as const),
       ];
-      if (accepted.waitingForTask !== undefined) {
-        // Retained by contract: say so instead of leaving the message silently invisible.
-        dispatch({ type: 'inputQueued', inputId: accepted.inputId });
-        dispatch({ type: 'inputAccepted', inputId: accepted.inputId, content: echo });
-        return { queued: true, waitingForTask: accepted.waitingForTask };
+      const queued = accepted.waitingForTask !== undefined || (accepted.status === 'queued' && busyAtSubmit);
+      if (queued) {
+        // Retained by contract: show the user's own message immediately, not after a reload.
+        dispatch({ type: 'inputQueued', inputId: accepted.inputId, content: echo });
       }
       dispatch({ type: 'inputAccepted', inputId: accepted.inputId, content: echo });
-      return { queued: false };
+      return queued
+        ? { queued: true, ...(accepted.waitingForTask === undefined ? {} : { waitingForTask: accepted.waitingForTask }) }
+        : { queued: false };
     },
-    [rpc, session],
+    [rpc, session, slot.busy],
   );
 
   const stop = useCallback(async (): Promise<void> => {
     if (session === null || slot.currentInputId === null) return;
+    const stoppingId = slot.currentInputId;
+    const wasQueued = slot.queuedInputs.some((entry) => entry.inputId === stoppingId);
     await rpc.call(
       'session.input.stop',
-      { projectId: session.projectId, sessionId: session.sessionId, inputId: slot.currentInputId },
+      { projectId: session.projectId, sessionId: session.sessionId, inputId: stoppingId },
       { requestId: newRequestId('stop') },
     );
-  }, [rpc, session, slot.currentInputId]);
+    // A queued input is stopped without a turn: no turn_start/message_start will remove its row.
+    if (wasQueued) dispatch({ type: 'inputRemoved', inputId: stoppingId });
+  }, [rpc, session, slot.currentInputId, slot.queuedInputs]);
 
   const compact = useCallback(async (): Promise<CompactionResult> => {
     if (session === null) return { status: 'unavailable' };

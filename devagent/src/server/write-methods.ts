@@ -118,13 +118,19 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
       // The input is stored; the worker is only a hint to run it now.
       options.invalidate?.(sessionId, 'input', accepted.inputId);
       options.notify();
+      const busy = store.listInputs(sessionId).some((input) => input.status === 'processing');
+      // Retained means the store will not hand this input out now: an unassociated topic waits
+      // for the Task to end, while a cited supplement waits only while the chief is mid-turn.
+      // A paused Task's own turn can run at once, so naming it as the wait reason would be false.
+      const waitingForTask =
+        session.currentTaskId !== null && (taskId === undefined || busy)
+          ? session.currentTaskId
+          : undefined;
       return {
         inputId: accepted.inputId,
         status: accepted.status,
         revision: accepted.revision,
-        ...(taskId === undefined && session.currentTaskId !== null
-          ? { waitingForTask: session.currentTaskId }
-          : {}),
+        ...(waitingForTask === undefined ? {} : { waitingForTask }),
       };
     },
   });

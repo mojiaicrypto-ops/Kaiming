@@ -9,6 +9,7 @@ import { liveHistoryRead } from './live-snapshot.ts';
 import type { SessionEventHub } from './hub.ts';
 import type { Store } from '../store/store.ts';
 import { recordedConfigOf, summarizeRecordedConfig } from '../runtime/recorded-config.ts';
+import { partsOfPayload } from '../runtime/input-text.ts';
 import type { ContextUsageView } from '../runtime/context-usage.ts';
 
 const SNAPSHOT_MESSAGES = 100;
@@ -86,13 +87,21 @@ export function registerStreamMethods(router: RpcRouter, options: StreamMethodsO
           roleId: sessionRow?.roleId ?? 'chief',
           activity: activityOf(inputs),
           currentInputId: inputs.find((input) => input.status === 'processing')?.inputId ?? null,
-          inputs: inputs.slice(-20).map((input) => ({
-            inputId: input.inputId,
-            kind: input.kind,
-            status: input.status,
-            revision: input.revision,
-            errorCode: input.errorCode,
-          })),
+          inputs: inputs.slice(-20).map((input) => {
+            // Only a user's own retained message has text on screen: a host notice is an
+            // instruction, not something the reader wrote.
+            const parts = input.status === 'queued' && input.kind === 'user'
+              ? partsOfPayload(input.payload)
+              : undefined;
+            return {
+              inputId: input.inputId,
+              kind: input.kind,
+              status: input.status,
+              revision: input.revision,
+              errorCode: input.errorCode,
+              ...(parts === undefined ? {} : { text: parts.text, imageCount: parts.images.length }),
+            };
+          }),
           task:
             task === undefined
               ? null

@@ -81,6 +81,14 @@ export interface TaskDetail {
     verdict?: string | null;
   }>;
 }
+export interface QueuedInput {
+  inputId: string;
+  status: string;
+  /** The user's own message. Empty is legal (an image-only message). */
+  text: string;
+  imageCount: number;
+}
+
 
 export interface SessionSlot {
   items: readonly HistoryMessage[];
@@ -94,8 +102,8 @@ export interface SessionSlot {
   /** member session ids → their latest member state (from task polling) */
   taskDetail: TaskDetail | null;
   /** Inputs waiting in this session's queue (submitted while a Task owns the session):
-   *  they are real user messages, so the UI must show them instead of swallowing them. */
-  queuedInputs: readonly { inputId: string; status: string }[];
+   *  they are real user messages, so the UI shows their text instead of swallowing them. */
+  queuedInputs: readonly QueuedInput[];
   /** How full the model's window is; the snapshot and every `context` notice keep it current. */
   context: ContextView | null;
   /** Pi's summary call is running; the manual action is disabled until it settles. */
@@ -148,7 +156,7 @@ export type SlotAction =
   | { type: 'interactionResolved'; interactionId: string }
   | { type: 'pendingReplaced'; pending: readonly PendingInteraction[] }
   | { type: 'taskDetail'; detail: TaskDetail | null }
-  | { type: 'inputQueued'; inputId: string }
+  | { type: 'inputQueued'; inputId: string; content?: readonly ContentBlock[] }
   | { type: 'inputRemoved'; inputId: string }
   /** Older history, fetched on demand: inserted before what is already shown, never re-sorted. */
   | { type: 'older'; messages: readonly unknown[] }
@@ -345,8 +353,13 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
         pending: snapshot.interactions,
         // Retained inputs live in the snapshot: a reload must still show what is waiting.
         queuedInputs: snapshot.inputs
-          .filter((input) => input.status === 'queued')
-          .map((input) => ({ inputId: input.inputId, status: input.status })),
+          .filter((input) => input.status === 'queued' && input.kind === 'user')
+          .map((input) => ({
+            inputId: input.inputId,
+            status: input.status,
+            text: input.text ?? '',
+            imageCount: input.imageCount ?? 0,
+          })),
         // The boundary copy is authoritative on connect: a missed notice cannot leave a stale meter.
         context: snapshot.context ?? null,
         compacting: snapshot.compacting === true,
@@ -354,19 +367,37 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
     }
     case 'taskDetail':
       return { ...state, taskDetail: action.detail };
-    case 'inputQueued':
-      return state.queuedInputs.some((entry) => entry.inputId === action.inputId)
-        ? state
-        : { ...state, queuedInputs: [...state.queuedInputs, { inputId: action.inputId, status: 'queued' }] };
+    case 'inputQueued': {
+      const existing = state.queuedInputs.find((entry) => entry.inputId === action.inputId);
+      const text = action.content === undefined
+        ? existing?.text ?? ''
+        : action.content
+            .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+            .map((block) => block.text)
+            .join('\n');
+      const imageCount = action.content === undefined
+        ? existing?.imageCount ?? 0
+        : action.content.filter((block) => block.type === 'image').length;
+      const entry = { inputId: action.inputId, status: 'queued', text, imageCount };
+      return existing === undefined
+        ? { ...state, queuedInputs: [...state.queuedInputs, entry] }
+        : { ...state, queuedInputs: state.queuedInputs.map((item) => item.inputId === action.inputId ? entry : item) };
+    }
     case 'inputRemoved':
-      return { ...state, queuedInputs: state.queuedInputs.filter((entry) => entry.inputId !== action.inputId) };
-    case 'inputAccepted':
-      // The submit receipt: mark the accepted input as current and the session as queued, so
-      // STOP targets the right input before any Pi event arrives. The echo shows the message the
-      // server accepted until history carries it.
       return {
         ...state,
-        currentInputId: action.inputId,
+        queuedInputs: state.queuedInputs.filter((entry) => entry.inputId !== action.inputId),
+        currentInputId: state.currentInputId === action.inputId ? null : state.currentInputId,
+        pendingEcho: state.pendingEcho?.inputId === action.inputId ? null : state.pendingEcho,
+      };
+    case 'inputAccepted':
+      // The submit receipt: adopt the input before any Pi event arrives, but do not retarget STOP
+      // while another run is executing. A second message accepted during that run belongs to the
+      // queue; its row has its own withdraw action. The echo shows the accepted message.
+      const running = state.busy === 'processing' || state.busy === 'stopping';
+      return {
+        ...state,
+        currentInputId: running ? state.currentInputId : action.inputId,
         busy: state.busy === 'idle' ? 'queued' : state.busy,
         pendingEcho: action.content === undefined ? state.pendingEcho : { inputId: action.inputId, content: action.content },
       };
@@ -399,11 +430,18 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
           return {
             ...state,
             busy: 'processing',
+            // This input is the one executing now: STOP follows it across a queue handoff.
+            currentInputId: frame.inputId ?? state.currentInputId,
             items: [
               ...state.items,
               normalizePiMessage(message, { entryId, streaming: true, inputId: frame.inputId ?? null, timestamp: message.timestamp ?? new Date().toISOString() }),
             ],
             liveKeys: new Set([...state.liveKeys, entryId]),
+            // The queue row is only for work that has not started; this input now has a live
+            // assistant entry, so showing it as queued too would be a duplicate.
+            queuedInputs: frame.inputId === undefined
+              ? state.queuedInputs
+              : state.queuedInputs.filter((entry) => entry.inputId !== frame.inputId),
           };
         }
         case 'message_update': {
@@ -521,12 +559,27 @@ export function slotReducer(state: SessionSlot, action: SlotAction): SessionSlot
         case 'agent_end':
           // A settled agent is not always an idle session: a queue still holds inputs waiting for
           // the slot, and a reload snapshot says `queued`. Showing idle here made the working marker
-          // (and the STOP button) disappear between two turns of the same queue.
-          return { ...state, busy: state.queuedInputs.length > 0 ? 'queued' : 'idle', compacting: false };
+          // (and the STOP button) disappear between two turns of the same queue. The settled input
+          // is no longer stoppable; the next `turn_start` adopts the queue's executing input.
+          return {
+            ...state,
+            busy: state.queuedInputs.length > 0 ? 'queued' : 'idle',
+            currentInputId: state.queuedInputs.length > 0 ? null : state.currentInputId,
+            compacting: false,
+          };
         case 'turn_start':
           // Pi announces the input it is about to run before any assistant message exists. This is
-          // the earliest honest "working" signal, and the echo has now been delivered.
-          return { ...state, busy: 'processing', pendingEcho: null };
+          // the earliest honest "working" signal, the echo has now been delivered, and the input
+          // that is now running - not the last accepted one - is what STOP must target.
+          return {
+            ...state,
+            busy: 'processing',
+            pendingEcho: null,
+            currentInputId: frame.inputId ?? state.currentInputId,
+            queuedInputs: frame.inputId === undefined
+              ? state.queuedInputs
+              : state.queuedInputs.filter((entry) => entry.inputId !== frame.inputId),
+          };
         default:
           return state;
       }

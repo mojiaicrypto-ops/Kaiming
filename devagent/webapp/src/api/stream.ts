@@ -35,7 +35,17 @@ export interface PreparedSnapshot {
   /** Why the session cannot run, as of the snapshot; null when nothing is blocked. */
   blocked?: { code: string; detail: string } | null;
   currentInputId: string | null;
-  inputs: ReadonlyArray<{ inputId: string; kind: string; status: string; revision: number; errorCode: string | null }>;
+  inputs: ReadonlyArray<{
+    inputId: string;
+    kind: string;
+    status: string;
+    revision: number;
+    errorCode: string | null;
+    /** Present on a retained (queued) input: the message text, so the queue is not an id. */
+    text?: string;
+    /** How many images the retained message carries; the queue names the count. */
+    imageCount?: number;
+  }>;
   messages: readonly HistoryMessage[];
   /** True when the history has more messages than this snapshot carries. */
   hasEarlier?: boolean;
