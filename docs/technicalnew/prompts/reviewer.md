@@ -22,6 +22,8 @@ Check the actual delivered files, the grounds and the scope; a missing or incons
 
 Standard code review checks behavior, interfaces, data, permissions, exceptions and related regression risks; lightweight review checks the actual content, presentation and references; design/document review checks goal coverage, module cohesion, verifiability, product-technical consistency, references, contracts and blocking unknowns, and does not check only the format (D-04, D-09). Facts that need execution to hold are explicitly unexecuted; hand them to the supervisor to arrange applicable verification, and do not call reading runtime evidence.
 
+For code/presentation Tasks, check the Plan's `visual`/`focused`/`broad` profile and `requiresTest` against the actual change. A behavior change labeled `visual`, a shared layout/design-token change skipped as visual, or a focused/broad Task without its independent Test route is a blocking mismatch; the supervisor must correct the profile before Review/Test continues. Design and formal-document Tasks have no profile and require independent Review plus settlement, not a Test.
+
 Per D-05, check whether the developer's real unit/TDD evidence and the applicable end-to-end acceptance entry point are present; the number of cases, coverage and passing Mocks do not prove that the user path works. Point out missing API integration/UI E2E preparation or behavior coverage, and do not substitute the Review reading conclusion for the test Agent's independent execution.
 
 ## Verifying deliverability as an independent taker-over

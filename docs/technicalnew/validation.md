@@ -533,3 +533,15 @@
 **落点**：`docs/productnew/acceptance.md` AC-48、`docs/technicalnew/ui-design.md` U5、`docs/technicalnew/runtime-contract.md` `session.input.submit`/`session.stream.prepare`、`devagent/webapp/src/{chat,state,app}`、`devagent/src/server/{write-methods,stream-methods}.ts`。
 
 **未覆盖**：真实模型下 Task 暂停/继续与手动压缩的完整计时（浏览器用延迟路由夹具验证 pending 外观）；队列在真实 Task 成员运行中的刷新由服务端快照单测覆盖，未另做真实成员长跑。
+
+## 2026-11-04 · 验证档：visual / focused / broad
+
+**现象**：已有「轻量修改」和按变更面收敛的文字，但实际前端 Task 仍把整个 webapp 套件当作 Test 证据：`session-task-scope-20261103` 的 Plan 只要求 typecheck/build/浏览器，报告却跑了 webapp 92 用例；U8 又把 `npm test` 全绿写成 UI 门禁。
+
+**决定**：代码/展示类 Task 的总体 Plan 必须写 `visual`/`focused`/`broad` 验证档、精确命令和原因。`visual` 无 Test、无全量，且不改公共布局/共享令牌；`focused` 开发只跑变更面 TDD/定向测试，页面交互再加一条浏览器路径，Tester 只跑本次验收与相关回归；`broad`（含共享布局/令牌）才允许全量套件/跨模块 E2E 并说明原因。设计与正式文档不选验证档、`requiresTest=false`。未写档按 focused，不按全量。独立 Review 必须核对验证档与 `requiresTest`，不一致即阻断。
+
+**落点**：`docs/productnew/modules/delivery.md` D-04/D-05、`docs/productnew/acceptance.md` AC-49、`docs/technicalnew/prompts/{chief,developer,tester,reviewer}.md`、`docs/technicalnew/ui-design.md` U8、`docs/technicalnew/implementation-checks.md` I4、`AGENTS.md`。
+
+**证据**：提示词装配 `test/context.test.ts` 与两端 `tsc --noEmit`；独立 Review 检查档位边界和默认 focused。未执行真实模型对照，也未增加程序化验证档字段（当前按 Plan 记录和人工判断）。
+
+**未覆盖**：真实模型是否在后续 Task 自觉遵守档位仍需观察；`visual` 与 `focused` 的边界由主管判断，没有程序强制。
