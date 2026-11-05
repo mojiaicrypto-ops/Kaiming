@@ -2,29 +2,37 @@
 
 [简体中文](README.md) | **English**
 
-> A self-hosted, single-user workbench for AI software delivery: talk with a chief agent, turn agreed work into requirements, then let specialized agents design, build, review, test and settle it. The result stays in the project.
+> AI coding agents can already write good code, but delivering a piece of work takes far more than one generation: goals must stay consistent across conversations and phases, conclusions must survive independent checks, progress must survive disconnects and restarts, and results must stay in the project as documents. Kaiming turns that entire process into a self-hosted, single-user workbench.
 
-Kaiming is not a code-completion plugin, and it is not a chat transcript that disappears when the tab closes. It keeps the lifecycle of a piece of software work as a traceable project asset: requirements, the overall Plan, Tasks, phases, specialist Sessions, reports, verification results and final settlement.
+Kaiming is not a code-completion plugin, and it is not a chat transcript that disappears when the tab closes. It keeps the full lifecycle of a piece of software work — requirements, the overall Plan, Tasks, phases, specialist Sessions, reports, verification results and final settlement — as a traceable project asset, and delivers three outcomes:
+
+1. **The work gets done**: real code or document results, with a record of which checks ran and what issues remain.
+2. **The project remembers**: requirements, product and technical knowledge, code and test entry points are updated as work proceeds — not just a chat summary.
+3. **You can pick up next time**: work continues after you leave; reopening or switching sessions finds the progress, results and next step.
 
 **Status: early development.** Before using it, read [Installation and setup](docs/install.en.md), the [product overview (Chinese)](docs/productnew/README.md) and [Security boundaries](#security-boundaries).
 
-## Why this exists
+## Why this workflow
 
-Coding agents can already write code, but delivering a piece of work is not a single generation step. It needs:
+Today's AI coding tools default to putting everything into one ever-longer chat. Context windows are indeed growing, but the failure modes of delivery are not caused by windows being too small — they are properties of the "one long chat does everything" form itself, and a bigger model does not remove them:
 
-- goals, evidence and completed results that survive multiple conversations and phases;
-- the right context for the right role, instead of one enormous chat doing design, development, review and testing;
-- rework after a failed check, followed by a fresh check in an independent Session;
-- a way to know what finished and what did not after the browser closes, the process restarts or a model call fails;
-- requirements, project knowledge and real evidence left in the project so the next session can continue.
+| Failure mode of the long chat | Kaiming's answer |
+|---|---|
+| **Context drift**: restatements of early facts become unreliable, or the model confidently invents decisions that were made | **Facts live in files**: requirements, Plans, reports and knowledge are project files; sessions load the current documents on demand instead of inheriting a possibly-drifted memory |
+| **Self-review**: development and checking share one context, so "looks right" gets announced as done | **Structural independence**: review and test are separate Sessions with separate context; they read real files and run results, not the developer's self-assessment |
+| **Nobody resumes**: closing the page loses progress; after a restart, nobody knows what finished | **Resident Server + fact checks**: execution is separate from viewing; recovery works from the database and actual files, not replay |
+| **Scope drift**: things done in passing quietly expand the delivery | **Explicit gates**: a requirement exists only when the user saves it, and delivery starts only when the user says so; new findings start as suggestions |
+| **Nowhere to hand over**: conclusions are scattered in chat, and the next session starts from zero | **Settlement writes back**: when a Task ends, the requirement summary, module knowledge and verification entry points are written into the project |
 
-Kaiming is designed around those long-lived facts, not around one model's context window. The user owns goals and trade-offs. Agents organize work within the authorized scope. The host persists facts and checks the required results.
+Each design decision answers a concrete failure mode; roles exist for responsibility and context, not to mirror a human org chart. Kaiming is designed around these long-lived facts, not around one model's context window: the user owns goals and trade-offs, agents organize work within the authorized scope, and the host persists facts and checks required results.
 
 ## First principles
 
 ### 1. Project facts belong to the project, not to a chat
 
-Model context is compressed, truncated, lost, or simply restated incorrectly. Requirements, Plans, reports, project knowledge and actual code must live in files. Tasks, inputs, phases, interactions and report references must live in durable records. Chat is an interface, not the source of truth.
+Model context is compressed, truncated, lost, or simply restated incorrectly — not as an occasional bug, but as an inherent property of long context. Requirements, Plans, reports, project knowledge and actual code must live in files. Tasks, inputs, phases, interactions and report references must live in durable records. Chat is an interface, not the source of truth.
+
+Documents are also the input for sessions: each specialist Session assembles its context from the relevant documents, not from a long chat that may have drifted. The decision in the document is the only version that happened; a restatement in chat is not.
 
 ### 2. Execution and viewing are separate
 
@@ -36,7 +44,9 @@ A requirement exists only when the user explicitly saves it. Delivery starts onl
 
 ### 4. Independence comes from structure, not from asking a model to review itself
 
-Review and test use separate Sessions, separate context and real evidence. A developer agent claiming success in its own chat is not completion. The host checks identity, state, required reports, actual artifacts and persisted results.
+Review and test use separate Sessions, separate context and real evidence, not the developer agent claiming success in its own chat. Independent context is not just a different perspective: a session that loads facts from documents has no memory to confuse — it never joined the developer's chat, so it neither vouches for the developer nor repeats conclusions that may have drifted there. The smaller and more purpose-built the context, the fewer places hallucination can hide.
+
+An agent's completion report is not completion; the host checks identity, state, required reports, actual artifacts and persisted results.
 
 ### 5. Failure is normal, not an edge case
 
