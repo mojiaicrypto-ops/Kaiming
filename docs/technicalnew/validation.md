@@ -603,3 +603,15 @@
 **证据**：服务端全量 **52 文件 525 用例通过**；边界单测覆盖相对路径、绝对路径、`..`、符号链接（指向项目外拒绝、指向项目内允许）、work root 只读例外与写入拒绝、bash 不适用；E2E 证明项目外文件读取返回 `isError` 且文件内容不出现在会话消息中。`tsc --noEmit` 通过。
 
 **未覆盖**：`bash` 仍可读写项目外（`cat /etc/passwd`、`cp` 到外部目录），这是本期明确的取舍，路径范围留给后续沙箱；`agent_report`/`requirement`/`task` 等宿主工具的写入路径不经过该守卫（它们由程序固定路径）；未在 Windows 上验证（当前实现依赖 POSIX 路径语义）。
+
+## 2026-11-06 · 提示词层禁止变相删除
+
+**需求**：在所有给出 bash 的提示词里明确——不得变相执行任何删除，删除必须由用户确认。作为宿主门禁之外的第一道软约束（预计覆盖多数正常行为，但不替代程序校验）。
+
+**实现**：`prompts/base.md` 新增独立段落“Deletion is never disguised”：只允许直接、可读、用户可见确认的命令；禁止脚本删除（`node -e`、`python -c`、`os.remove`、`shutil.rmtree`、`fs.rmSync`）、截断或覆盖文件、管道内隐藏破坏性 git、解码/求值字符串执行删除、被拒后换写法重试；用户拒绝时改为保留/归档/报告。`prompts/specialists.md` 的 shell 段追加同一规则的一句摘要；`prompts/chief.md` 的 bash 段落追加一句边界说明。base 由所有角色注入，specialists 由专业角色注入，因此所有持有 bash 的角色（chief/designer/developer/tester/settler）都收到该规则；reviewer/investigator 无 bash，收到条件句但不适用。
+
+**落点**：`docs/technicalnew/prompts/{base,specialists,chief}.md`、`docs/technicalnew/agents-and-tools.md` G1。
+
+**证据**：`npm run check:prompts` **15/15 通过**（装配顺序、边界标题唯一、切片起点、缺失/重复边界拒绝、英文注入、链接可解析）；新增文本位于 `## Base rules` 之后的注入区，不含中日韩字符，符合提示词语言门禁。
+
+**未覆盖**：提示词是软约束，没有模型行为证据——未用真实模型验证它是否降低变相删除率；宿主 `deletion-gate` 的 confirm 仍是唯一执行边界；模型仍可能用未被文本规则覆盖的写法（如语言层动态调用）绕过，需靠后续沙箱收敛。
