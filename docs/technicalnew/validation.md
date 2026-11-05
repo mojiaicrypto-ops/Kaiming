@@ -579,3 +579,15 @@
 **证据**：`test/server-read.test.ts` 新增用例（home 默认起点、子目录名列表不含文件、符号链接目录可导航、NOT_FOUND/INVALID_ARGUMENT 拒绝），服务端全量 **511 passed**；webapp **102 passed**；两端 `tsc --noEmit`；真实 Chromium 全量 **66 passed**（新增浏览器用例：浏览→Esc 返回键入→上一级→选择→打开真实项目，截图 `browser/artifacts/project-picker.png`）。
 
 **未覆盖**：未在受限权限目录（如 /System 根深处的不可读条目）上人工观察大量跳过路径；自动化覆盖了 stat 失败跳过的代码分支。目录列表上限未设阈值（`readdirSync` 全量返回）；个人 home 目录规模下无性能问题。
+
+## 2026-11-05 · 删除命令必须用户确认
+
+**需求**：Agent 的删除命令要严格限制，必须询问用户。动因是 2026-11-01 记录过的真实事故——为让交付核对通过而删除 `node_modules`，删除语义波及过用户文件。原有边界（read Task 无 bash、私有目录守卫）只挡住范围，没有挡住“范围之内但破坏性”的命令。
+
+**实现**：`src/runtime/deletion-gate.ts` 作为 `extensionFactories` 在 `runner.ts` 对所有会话安装。`tool_call` 事件（异步）先按文本规则判定：直接删除（`rm`/`rmdir`/`shred`/`unlink`、`find -delete`、脚本内 `fs.*Sync`/`os.remove`/`shutil.rmtree`）与 Git 破坏性操作（`git clean -f`、`reset --hard`、`restore`、`checkout --`、`stash drop/clear`、`branch -D`、`push --force`/`--force-with-lease`）。命中后经 `ctx.ui.confirm` 走既有 InteractionBridge：交互先落库再等待，成员的问题呈现在主管频道，等待期间 watchdog 不计 stall，浏览器答复后恢复原调用；批准则原样执行，拒绝则 `block: true` 返回 `isError` 工具结果（模型可见原因），无 UI 时拒绝。规则按**命令位置**匹配（段首、`sudo`/`xargs`/`nohup` 等包装后、`$(…)`/反引号内），所以 `git commit -m "rm unused import"` 与 `echo "rm -rf x"` 不误问；分号/`&&`/`||`/管道/换行分段检测，`echo hi && rm -rf build` 必被拦截。
+
+**落点**：`src/runtime/deletion-gate.ts`、`src/runtime/runner.ts`（安装点）、`test/deletion-gate.test.ts`（规则矩阵）、`test/deletion-gate-runtime.test.ts`（真实 Pi runtime + stub 模型的批准/拒绝/普通命令三条路径）、`test/runtime.test.ts`（designer 删除用例改为先批准；stall 用例改为以 watchdog 同一 `isWaiting` 谓词为答复门槛）、`docs/technicalnew/agents-and-tools.md` G1。
+
+**证据**：服务端全量 **52 文件 520 用例通过**，其中 E2E 证明：批准后文件真实删除、拒绝后文件保留且工具结果含 “the user declined”、普通命令不产生 interaction；规则单测覆盖 12 条破坏性命令、10 条安全近邻、5 种复合命令形态、4 种脚本删除与引用误报边界。`tsc --noEmit` 通过；webapp 与浏览器套件随后验证（无界面改动，交互面板复用既有 confirm 卡片）。
+
+**未覆盖**：文本规则不是 shell 解析器也不是沙箱——`base64 -d | sh`、变量拼接、语言层动态调用等刻意绕过不保证拦截，外层仍依赖工具集白名单与交付核对；PowerShell 规则沿用同一文本检测但当前工具集从不激活它；未用真实模型人工走一遍浏览器确认卡片（E2E 直接驱动 interaction 存储与等待者，浏览器 confirm 渲染由既有交互用例覆盖）。

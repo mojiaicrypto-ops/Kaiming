@@ -617,8 +617,11 @@ describe('input runner', () => {
     // stalled, so it must still settle normally instead of being aborted (RUN_STALLED).
     const answering = (async () => {
       for (let attempt = 0; attempt < 200; attempt += 1) {
-        const pending = h.store.listPendingInteractionsForChief('s-1');
-        if (pending.length > 0) {
+        // Wait for the watchdog's own predicate, not just the stored row: the record is written
+        // slightly before the waiter is registered, and answering in that gap let the stall check
+        // see "not waiting" and abort the run under a loaded suite.
+        if (h.runner.interactions.isWaiting('s-1')) {
+          const pending = h.store.listPendingInteractionsForChief('s-1');
           await new Promise((resolve) => setTimeout(resolve, 250));
           expect(h.runner.interactions.resolve(pending[0]?.interactionId ?? '', 'a')).toBe(true);
           return;
@@ -1097,7 +1100,28 @@ describe('input runner', () => {
       payload: { content: [{ type: 'text', text: 'archive the old document and drop the duplicate' }] },
     });
 
+    // The command deletes src/b.md, so the deletion gate asks first; the user approves it here.
+    const approving = (async () => {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        const question = h.store.listPendingInteractionsForChief('s-design')[0];
+        if (question !== undefined) {
+          h.store.resolveInteraction({
+            interactionId: question.interactionId,
+            expectedRevision: question.revision,
+            response: true,
+            answeredBy: 'test',
+            requestKey: `answer:${question.interactionId}`,
+          });
+          expect(h.runner.interactions.resolve(question.interactionId, true)).toBe(true);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error('the gate never asked about the deletion');
+    })();
+
     const outcome = await h.runner.runNext('s-design');
+    await approving;
 
     expect(outcome.kind).toBe('completed');
     // Pi has no rm/mv tool: without shell the designer cannot reorganize documents at all.

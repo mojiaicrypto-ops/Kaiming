@@ -33,6 +33,7 @@ import { compactionDue } from './compaction-policy.ts';
 import { readDocument, readImage } from '../server/attachments.ts';
 import { InteractionBridge, createUiAdapter } from './interactions.ts';
 import { createQuestionTool } from '../tools/question-tool.ts';
+import { createDeletionGate } from './deletion-gate.ts';
 import { createBashTimeoutGuard, createPrivatePathGuard, DEFAULT_BASH_TIMEOUT_SECONDS } from './tool-guard.ts';
 import { toolSetFor, type WriteHold } from './tool-sets.ts';
 import { asToolDefinitions, createTaskGetTool, createTaskTool, type DomainTool, type TaskToolContext } from '../tools/task-tools.ts';
@@ -625,6 +626,9 @@ export class InputRunner {
               // screenshots live under the same root. Credentials and session files stay blocked.
               readableDirs: [join(config.agentDir, 'work')],
             }),
+            // A destructive command (rm, git reset --hard …) asks the user before it runs, through
+            // the same durable interaction surface the question tool uses.
+            createDeletionGate(),
             ...(bashTimeoutSeconds > 0 ? [createBashTimeoutGuard({ seconds: bashTimeoutSeconds })] : []),
           ],
           ...(hostTools.length > 0 ? { customTools: hostTools } : {}),
