@@ -168,6 +168,7 @@
 | `auth.login` / `auth.logout` | 登录屏、顶栏退出 |
 | `project.open` / `project.get` / `project.list` | 项目对话框、顶栏、状态栏 |
 | `project.rebind` | 项目对话框（目录缺失行） |
+| `fs.browse` | 项目对话框的宿主目录选择器（新增路径字段与重绑定字段共用 `DirField`：浏览…/上一级/目录列表/选择此目录；省略 path 从用户 home 开始；键入路径始终保留——选择器是键盘的替代，不是替代键盘） |
 | `project.files.list` / `project.files.read` | FileViewer（目录树 + 源码视图） |
 | `GET project-files/<projectId>/<path>` | FileViewer 的图片/媒体/下载字节来源（唯一非 RPC 读取面） |
 | `session.create` / `session.list` / `session.get` | 会话列、新建、当前会话 |

@@ -4,7 +4,8 @@
  * files, or accepts a caller-chosen path outside a project.
  */
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, join, relative, sep } from 'node:path';
 import { RpcError, type RpcRouter } from './rpc.ts';
 import { pageHistory, pageHistoryBefore, readPiHistory } from './history.ts';
 import { digestOfText, getRequirement, listRequirements, requirementPath } from '../runtime/requirement-store.ts';
@@ -118,6 +119,48 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
             ? key({ projectId: last.id, updatedAt: last.updatedAt })
             : null,
       };
+    },
+  });
+
+  router.register('fs.browse', {
+    // Read-only host directory names, so the browser can offer a picker instead of a hand-typed
+    // absolute path. It names directories on the workbench host only — no file names, no sizes,
+    // no contents — and the same cookie authenticates it as every other read. Without a path it
+    // starts at the process user's home, which is where a person's projects usually live.
+    write: false,
+    run: (params): unknown => {
+      const raw = params['path'];
+      const target = typeof raw === 'string' && raw.trim() !== '' ? raw : homedir();
+      let realPath: string;
+      try {
+        realPath = realpathSync(target);
+      } catch {
+        throw new RpcError('NOT_FOUND', `the directory ${target} does not exist or cannot be read`, { path: target });
+      }
+      if (!statSync(realPath).isDirectory()) {
+        throw new RpcError('INVALID_ARGUMENT', `${target} is not a directory`, { path: target });
+      }
+      let names: readonly string[];
+      try {
+        names = readdirSync(realPath);
+      } catch {
+        throw new RpcError('FORBIDDEN', `the directory ${realPath} cannot be listed`, { path: realPath });
+      }
+      const directories: string[] = [];
+      for (const name of names) {
+        // statSync follows symlinks: a link to a directory stays navigable, a broken link is
+        // skipped, and one unreadable entry never fails the whole listing.
+        try {
+          if (statSync(join(realPath, name), { throwIfNoEntry: false })?.isDirectory() === true) {
+            directories.push(name);
+          }
+        } catch {
+          // an entry the process cannot stat is not shown, that is all
+        }
+      }
+      directories.sort((a, b) => a.localeCompare(b));
+      const parent = dirname(realPath);
+      return { path: realPath, parent: parent === realPath ? null : parent, directories };
     },
   });
 

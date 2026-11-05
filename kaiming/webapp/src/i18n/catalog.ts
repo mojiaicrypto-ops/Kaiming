@@ -77,6 +77,14 @@ const en = {
   'project.rebindDone': 'Project bound to the new directory. Its records are unchanged.',
   'project.never': 'never used',
 
+  // ---------- project dialog: host directory picker (fs.browse) ----------
+  'dir.browse': 'Browse…',
+  'dir.up': 'Up',
+  'dir.use': 'Use this directory',
+  'dir.back': 'Back',
+  'dir.empty': 'No subdirectories',
+  'dir.failed': 'Could not list the directory: {reason}',
+
   // ---------- chat: sessions ----------
   'chat.sessions': 'Chief sessions',
   'chat.newSession': '+ New session',
@@ -611,6 +619,14 @@ export const zhCN: Record<MessageKey, string> = {
   'project.rebindConfirm': '重新绑定',
   'project.rebindDone': '项目已绑定到新目录，原有记录不变。',
   'project.never': '尚未使用',
+
+  // ---------- 项目对话框：宿主目录选择器（fs.browse） ----------
+  'dir.browse': '浏览…',
+  'dir.up': '上一级',
+  'dir.use': '选择此目录',
+  'dir.back': '返回输入',
+  'dir.empty': '没有子目录',
+  'dir.failed': '无法读取目录：{reason}',
 
   // ---------- chat: sessions ----------
   'chat.sessions': '主管会话',

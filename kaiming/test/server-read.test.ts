@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Store } from '../src/store/store.ts';
@@ -247,6 +247,40 @@ describe('read-only query surface', () => {
     const missing = await h.call('project.open', { path: join(h.projectRoot, 'nope') });
     expect(missing.status).toBe(503);
     expect(errorCode(missing.body)).toBe('PROJECT_UNAVAILABLE');
+  });
+
+  it('lists host directories for the picker: names only, real paths, parents, and refusals', async () => {
+    const h = await harness();
+
+    // Without a path the listing starts at the process user's home: the natural place to look.
+    const home = await h.call('fs.browse', {});
+    const homeListing = resultOf<{ path: string; parent: string | null; directories: readonly string[] }>(home.body);
+    expect(homeListing.path).toBe(realpathSync(homedir()));
+    expect(Array.isArray(homeListing.directories)).toBe(true);
+
+    // A given directory: canonical path, its parent, and directory names only — files never appear.
+    const root = realpathSync(join(h.projectRoot, '..'));
+    const listed = await h.call('fs.browse', { path: join(h.projectRoot, '..') });
+    const listing = resultOf<{ path: string; parent: string | null; directories: readonly string[] }>(listed.body);
+    expect(listing.path).toBe(root);
+    expect(listing.parent).toBe(dirname(root));
+    expect(listing.directories).toContain('project');
+    expect(listing.directories).toContain('sessions');
+    expect(listing.directories).not.toContain('outside.txt');
+    expect(listing.directories).not.toContain('state.db');
+
+    // A symlink to a directory stays navigable: project.open realpaths whatever it is given.
+    symlinkSync(h.projectRoot, join(root, 'linked'));
+    const withLink = await h.call('fs.browse', { path: root });
+    expect(resultOf<{ directories: readonly string[] }>(withLink.body).directories).toContain('linked');
+
+    // Refusals: a path that does not exist, and a path that is a file.
+    const missing = await h.call('fs.browse', { path: join(root, 'not-here') });
+    expect(missing.status).toBe(404);
+    expect(errorCode(missing.body)).toBe('NOT_FOUND');
+    const file = await h.call('fs.browse', { path: join(root, 'outside.txt') });
+    expect(file.status).toBe(400);
+    expect(errorCode(file.body)).toBe('INVALID_ARGUMENT');
   });
 
   it('reports a project whose directory disappeared instead of pretending it is fine', async () => {

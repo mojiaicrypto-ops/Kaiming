@@ -567,3 +567,15 @@
 **证据**：服务端 50 文件 510 用例、webapp 15 文件 102 用例、真实 Chromium 65 用例全部通过；两端 `tsc --noEmit` 与 build 通过。用 `scripts/start.sh` 启动迁移后的真实数据目录后，登录、`project.list`（1 个项目、140 个会话、28 个 Task）、`session.list` 和 `session.messages.list` 均成功返回历史内容；138 个 `piFile` 全部存在。
 
 **未覆盖**：历史会话正文/报告中出现的旧产品名和旧绝对路径按“保留历史”原则不改写；浏览器侧已有 cookie 会因 cookie 名改变需要重新登录。`.kaiming` 历史工作记录保留，不重写其内容。
+
+## 2026-11-05 · 项目选择的宿主目录选择器
+
+**需求**：项目对话框此前只能手工键入绝对路径。浏览器无法读取宿主文件系统，需要一个真实的文件选择器：浏览目录、进入子目录、上一级、选定为路径；重绑定字段同样受益。
+
+**实现**：新增只读 RPC `fs.browse`（`src/server/read-methods.ts`）——给定目录的子目录名列表（规范路径、parent、排序），省略 path 从进程用户 home 开始；不返回文件名/大小/内容；指向目录的符号链接可导航；单个不可读条目跳过。前端新增 `DirField`（`webapp/src/app/DirField.tsx`）：键入字段 +「浏览…」按钮，打开后由目录列表替换；Esc 返回键入且焦点保持在选择器内（打开时聚焦容器，避免焦点落在 body 导致 Esc 冒泡关闭整个对话框）；「选择此目录」写回路径字段。新增路径与重绑定两个字段共用同一组件；键盘键入始终保留。
+
+**落点**：`src/server/read-methods.ts`、`webapp/src/app/{DirField.tsx,ProjectDialog.tsx,App.tsx}`、`webapp/src/i18n/catalog.ts`、`webapp/src/theme/base.css`、`browser/smoke.spec.ts`、`docs/technicalnew/{runtime-contract.md,ui-design.md}`。
+
+**证据**：`test/server-read.test.ts` 新增用例（home 默认起点、子目录名列表不含文件、符号链接目录可导航、NOT_FOUND/INVALID_ARGUMENT 拒绝），服务端全量 **511 passed**；webapp **102 passed**；两端 `tsc --noEmit`；真实 Chromium 全量 **66 passed**（新增浏览器用例：浏览→Esc 返回键入→上一级→选择→打开真实项目，截图 `browser/artifacts/project-picker.png`）。
+
+**未覆盖**：未在受限权限目录（如 /System 根深处的不可读条目）上人工观察大量跳过路径；自动化覆盖了 stat 失败跳过的代码分支。目录列表上限未设阈值（`readdirSync` 全量返回）；个人 home 目录规模下无性能问题。

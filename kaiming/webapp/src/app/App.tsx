@@ -285,6 +285,7 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
               setFilePath(path);
               setProjectOpen(false);
             }}
+            browse={(path) => rpc.call('fs.browse', path === undefined ? {} : { path })}
             onClose={() => setProjectOpen(false)}
           />
         )}

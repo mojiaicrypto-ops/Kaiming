@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFocusTrap } from './focus';
 import { useI18n } from '../i18n/I18nProvider';
+import { DirField, type Browse } from './DirField';
 import type { ProjectRow, ProjectSummary } from '../state/useWorkspace';
 import { errorText } from '../lib/errors';
 
@@ -11,6 +12,8 @@ export interface ProjectDialogProps {
   readonly onRebind: (projectId: string, path: string) => Promise<void>;
   /** Opens a project file in the read-only viewer. */
   readonly onOpenFile: (path: string) => void;
+  /** Lists host directories for the pickers (fs.browse); the dialog could not offer them otherwise. */
+  readonly browse: Browse;
   readonly onClose: () => void;
 }
 
@@ -19,7 +22,7 @@ export interface ProjectDialogProps {
  * never seen. A project whose directory disappeared keeps its row and offers a rebind instead of
  * pretending it is gone; a rebound project keeps its id, sessions and records.
  */
-export function ProjectDialog({ current, projects, onOpen, onRebind, onOpenFile, onClose }: ProjectDialogProps) {
+export function ProjectDialog({ current, projects, onOpen, onRebind, onOpenFile, browse, onClose }: ProjectDialogProps) {
   const { t } = useI18n();
   const [path, setPath] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -128,15 +131,14 @@ export function ProjectDialog({ current, projects, onOpen, onRebind, onOpenFile,
                     <div className="rebind">
                       <div className="f3">{t('project.rebindHint')}</div>
                       <div className="row">
-                        <input
-                          className="inp"
+                        <DirField
                           value={rebindPath}
-                          onChange={(event) => setRebindPath(event.target.value)}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' && !event.nativeEvent.isComposing) void rebind();
-                          }}
+                          onChange={setRebindPath}
+                          onEnter={() => void rebind()}
                           placeholder={t('project.addPlaceholder')}
-                          data-testid="project-rebind-path"
+                          busy={busy}
+                          testId="project-rebind-path"
+                          browse={browse}
                         />
                         <button type="button" className="btn pri" onClick={() => void rebind()} disabled={busy}>
                           {t('project.rebindConfirm')}
@@ -176,16 +178,15 @@ export function ProjectDialog({ current, projects, onOpen, onRebind, onOpenFile,
           <div className="f3" style={{ marginBottom: 'var(--s1)' }}>
             {t('project.add')}
           </div>
-          <input
-            ref={inputRef}
-            className="inp"
-            placeholder={t('project.addPlaceholder')}
+          <DirField
+            inputRef={inputRef}
             value={path}
-            onChange={(event) => setPath(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.nativeEvent.isComposing) void submit(path);
-            }}
-            data-testid="project-path"
+            onChange={setPath}
+            onEnter={() => void submit(path)}
+            placeholder={t('project.addPlaceholder')}
+            busy={busy}
+            testId="project-path"
+            browse={browse}
           />
           {error !== null && (
             <div className="st block" style={{ marginTop: 'var(--s2)' }} data-testid="project-error">
@@ -194,10 +195,16 @@ export function ProjectDialog({ current, projects, onOpen, onRebind, onOpenFile,
           )}
         </div>
         <div className="btns" style={{ justifyContent: 'flex-end' }}>
-          <button type="button" className="btn ghost" onClick={onClose}>
+          <button type="button" className="btn ghost" onClick={onClose} data-testid="project-cancel">
             {t('project.cancel')}
           </button>
-          <button type="button" className="btn pri" onClick={() => void submit(path)} disabled={busy}>
+          <button
+            type="button"
+            className="btn pri"
+            onClick={() => void submit(path)}
+            disabled={busy}
+            data-testid="project-confirm"
+          >
             {t('project.confirm')}
           </button>
         </div>

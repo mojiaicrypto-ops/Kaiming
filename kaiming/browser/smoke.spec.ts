@@ -7,7 +7,9 @@
  *  - a first run with no project (login screen, then the empty shell) - what a new user sees;
  *  - a seeded project open (the live session stream, the status bar connected).
  */
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, realpathSync } from 'node:fs';
+import { basename, dirname } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { test, expect, type Page, type TestInfo } from '@playwright/test';
 import { loginThroughUi, startHarness, waitForConnected, type Harness, type SeededProject } from './harness.ts';
@@ -90,6 +92,44 @@ test('a stale stored session id does not leave the empty shell in "reconnecting"
     await expect(page.locator('[data-testid="connection-banner"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="no-session-banner"]')).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem('kaiming.sessionId'))).toBeNull();
+  } finally {
+    await harness.close();
+  }
+});
+
+test('the project path can be picked from the host filesystem instead of typed', async ({ page }, testInfo) => {
+  const harness: Harness = await startHarness({ seedProject: false });
+  try {
+    await pinStorage(page, { locale: 'en' });
+    await page.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' });
+    await loginThroughUi(page, harness.accessPassword);
+
+    // The path field offers a picker: the browser cannot reach the host's filesystem, so it
+    // navigates the server's fs.browse answers — starting at the process user's home.
+    await page.locator('[data-testid="project-switcher"]').click();
+    await page.locator('[data-testid="project-path-browse"]').click();
+    const home = realpathSync(homedir());
+    await expect(page.locator('.dirpick .row .mono')).toHaveText(home);
+    await expect(page.locator('[data-testid="project-path-list"]')).toBeVisible();
+
+    // Escape returns to the typed path without choosing anything — it must not close the dialog.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-testid="project-path"]')).toBeVisible();
+    await expect(page.locator('[data-testid="project-path"]')).toHaveValue('');
+
+    // Browse again, go up one level, choose that directory, and open it like a typed path.
+    await page.locator('[data-testid="project-path-browse"]').click();
+    await page.locator('[data-testid="project-path-up"]').click();
+    const parent = dirname(home);
+    await expect(page.locator('.dirpick .row .mono')).toHaveText(parent);
+    await page.locator('[data-testid="project-path-use"]').click();
+    await expect(page.locator('[data-testid="project-path"]')).toHaveValue(parent);
+    await page.locator('[data-testid="project-confirm"]').click();
+    // The switcher shows the picked directory's name, and an empty project honestly stays "No
+    // session yet" until one is created — idle is the real state, not "connected".
+    await expect(page.locator('[data-testid="project-switcher"]')).toContainText(basename(parent));
+    await expect(page.locator('[data-testid="connection"]')).toHaveText(/No session yet/);
+    await attachScreenshot(page, testInfo, 'project-picker');
   } finally {
     await harness.close();
   }

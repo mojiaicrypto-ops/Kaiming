@@ -30,6 +30,7 @@
 | method | 参数 | 返回 / 行为 |
 |---|---|---|
 | project.open | path | realpath 唯一 Project、会话/工作摘要、知识入口；只登记/读取，不创建会话、模型或项目文件 |
+| fs.browse | path? | 只读目录选择器：宿主机某一目录内的**子目录名**列表（realpath 规范路径、parent、按名排序）；省略 path 从进程用户 home 开始；不返回文件名、大小或内容；statSync 跟随符号链接（指向目录的链接可导航），单个不可读条目跳过不失败整个列表；不存在→NOT_FOUND，非目录→INVALID_ARGUMENT，不可列→FORBIDDEN |
 | project.get | projectId | 概要与当前绑定/入口问题；目录缺失明确报告；不含任务列表（任务一律走 `task.list`） |
 | project.list | limit?、cursor? | 已登记项目列表：realPath、目录是否存在、会话/任务数、最后活动、更新时间；cursor 为 `updatedAt\|projectId`；不读项目文件 |
 | project.rebind | projectId、expectedRevision、path | 原 ID 的新目录绑定；先停写、校验引用与确认来源，禁止因同名自动认领 |

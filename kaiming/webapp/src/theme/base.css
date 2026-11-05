@@ -2649,6 +2649,51 @@ details.fold > summary.tline:hover {
   display: flex;
   gap: var(--s2);
 }
+/* The host directory picker (fs.browse): current path + Up on one line, a scrolling name list, and
+   choose/back at the bottom. It replaces the input it belongs to while open, not overlays it, so
+   the dialog's focus trap and width keep governing the whole thing. The .dirfield wrapper grows
+   inside the rebind row it sits in (its input is width:100%); alone in the add section it is a
+   plain block child and flex is inert. */
+.dirfield {
+  flex: 1;
+  min-width: 0;
+}
+.dirpick {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.dirpick:focus {
+  outline: none;
+}
+.dirpick .row {
+  display: flex;
+  gap: var(--s2);
+  align-items: center;
+}
+.dirpick .row .mono {
+  flex: 1;
+  min-width: 0;
+}
+.dirlist {
+  border: 1px solid var(--line);
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.dirlist button {
+  text-align: left;
+  padding: 4px var(--s3);
+  min-width: 0;
+}
+.dirlist button:hover,
+.dirlist button:focus-visible {
+  background: var(--sel);
+}
+.dirlist .dir-empty {
+  padding: var(--s3);
+}
 /* The board's Task list: a project-wide answer to "what is running now", below the requirements. */
 .tasks-sec {
   border-top: 1px solid var(--line);
