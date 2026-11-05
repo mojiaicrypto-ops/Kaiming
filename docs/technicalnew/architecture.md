@@ -114,7 +114,7 @@ erDiagram
 
 ## A5 运行资源与边界
 
-- 同一部署环境的 AgentDev 全局一个 Server，统一入口/数据库；状态目录仅是存储位置。应用级 OS 排他锁身份固定，不随项目或传入目录改变；重复启动返回已有入口或明确拒绝。启动成功后增加 serverEpoch。
+- 同一部署环境的开明全局一个 Server，统一入口/数据库；状态目录仅是存储位置。应用级 OS 排他锁身份固定，不随项目或传入目录改变；重复启动返回已有入口或明确拒绝。启动成功后增加 serverEpoch。
 - Server 保存 DB、Pi 文件、规则/配置和恢复产物；项目保存 AGENTS.md、.dev/、成果与可迁移报告。凭证只存 Server 私有存储。
 - 每个 Session 显式 cwd/model/credentialRef/role/tools/piFile；不切换全局 cwd/env，不寻找最近会话。
 - 同一 Task 的当前步骤可以有多个写成员并行，但必须按模块分工：每个写成员声明 `writeScope`，程序只核对范围重叠并告警，是否并行由主管判断。首版不要求分离目录；并行多个 Task 使用独立 git worktree 属于后续版本。
@@ -123,7 +123,7 @@ erDiagram
 
 ## A6 主源与采用范围
 
-| 主源 | 采用 | AgentDev 负责 |
+| 主源 | 采用 | 开明负责 |
 |---|---|---|
 | [Pi v1.0.0 SDK](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/docs/sdk.md) | Session、模型循环、原生工具/历史/取消、UI 适配 | 项目/Task、可靠接纳、当前步骤等待与交互事实持久化 |
 | [OMP 同步委派](https://github.com/can1357/oh-my-pi/blob/9348320cc4a30a7195d36a1f05a6c11bcb701a17/packages/coding-agent/src/task/index.ts#L1463-L1570) | 有界并发、独立角色/Session、聚合工具返回 | 正式 Task、当前步骤成员聚合、超时状态返回、重启后事实核对与续办 |
@@ -143,12 +143,12 @@ Durable 使用 pi-ai + Chord 的独立 Harness。这里使用 coding-agent SDK�
 
 | 事实 | 现状 | 位置 |
 |---|---|---|
-| 技术栈 | React 19 + Vite 7 + TypeScript；`npm run build` 产出 `web-static/`，同一 Server 在 `/` 托管 | `devagent/webapp/` |
+| 技术栈 | React 19 + Vite 7 + TypeScript；`npm run build` 产出 `web-static/`，同一 Server 在 `/` 托管 | `kaiming/webapp/` |
 | 入口 | 只有一套外壳：`/` 即新壳；`/requirements`、`/settings/*` 是客户端路由，未知无扩展名路径回退 `index.html`；旧地址 `/app/*` 301 到同路径 | `src/server/http.ts`、`src/server/main.ts` |
 | 数据来源 | 会话流复用 `session.stream.prepare` + SSE；其他界面只调用已注册的只读/写入方法 | `src/server/read-methods.ts`、`write-methods.ts` |
 | 外部接入 | 编码 Agent 通过 MCP 调用同一 Server：`/mcp`（Streamable HTTP，与前端同进程）与 `npm run mcp`（stdio 子进程，附着或自启 workbench）；工具面与状态推导见 [MCP 服务](mcp-service.md) | `src/mcp/` |
-| 构建产物 | `devagent/web-static/` 不入库，构建后可被测试与服务端使用 | `devagent/.gitignore` |
-| 样式 | 令牌与组件层照 `docs/design/tui/tui.css` 重写；代码/标识等宽，中文正文无衬线 | `devagent/webapp/src/theme/` |
-| 会话标题 | 服务端不存标题：界面取首条用户消息派生，新会话显示"新会话" | `devagent/webapp/src/state/useWorkspace.ts` |
+| 构建产物 | `kaiming/web-static/` 不入库，构建后可被测试与服务端使用 | `kaiming/.gitignore` |
+| 样式 | 令牌与组件层照 `docs/design/tui/tui.css` 重写；代码/标识等宽，中文正文无衬线 | `kaiming/webapp/src/theme/` |
+| 会话标题 | 服务端不存标题：界面取首条用户消息派生，新会话显示"新会话" | `kaiming/webapp/src/state/useWorkspace.ts` |
 
 服务端当前没有项目/会话列表方法，界面只能持有本地最近选择；多项目、多会话导航的真实列表需要只读查询方法，属待补齐缺口。

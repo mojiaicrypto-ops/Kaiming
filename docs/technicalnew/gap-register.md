@@ -21,7 +21,7 @@
 | C12 | `task(op=dispatch)` 直接调用 `runner.runNext(member)`，成员运行不在 worker 名下；主管回合结束后成员才结束时没有 `onOutcome` → 无界面刷新、无步骤停稳唤醒。现场 `t-cb094c4a`：test 成员 `i-825150fc` 06:36:57 完成，主管回合 06:30:36 已结束，从未出现 `notice-step-*` | `src/runtime/runner.ts`（host.dispatch）、`src/server/main.ts`（onOutcome） | 测试/报告通过后主管永远不推进，直到用户发消息 | **已关闭（2026-10-31，`bbc3d9c`）**：新增 `onRunSettled`，dispatch 结束后上报；main 用同一 `handleOutcome` 接 worker 与 runner。用例 `test/runtime.test.ts`、`test/step-wake-e2e.test.ts` |
 | C13 | 启动只扫描 interrupted 输入；进程停止期间已停稳的步骤（成员已结束、主管回合早已结束）没有补唤醒，重启后仍要用户发消息 | `src/server/main.ts`（startup）、`src/server/step-wake.ts` | 重启不能自恢复已停稳的 Task | **已关闭（2026-10-31，`bbc3d9c`）**：启动时对每个 active/waiting Task 调用 `wakeForSettledStep`（按 `notice-step-*` 去重，paused/completed 与未停稳步骤不投递）。用例 `test/step-wake-e2e.test.ts`「wakes the chief on startup…」 |
 | C14 | 主管把阶段退回 `develop` 并**续办**原开发 Session（不是新建成员）后，任务清单按 `createdAt` 排序成员：续办成员仍留在旧一轮，当前阶段又被追加为空 frontier，界面同时出现「开发（运行中）」和「开发 · 第 2 轮 / 等待主管派发」。现场 `t-cb094c4a`：08:08 的 P2 修复续办 `s-ace2ab56` | `src/store/store.ts`（`listTaskSessions`）、`src/runtime/task-progress.ts`、`webapp/src/chat/TaskTodo.tsx`（`rosterGroupsOf`） | 用户误以为有两个开发步骤，实际只有一个成员在跑；空的“等待派发”与真实状态矛盾 | **已关闭（2026-10-31，`f536fea`）**：`listTaskSessions` 改按最近派发序（`updatedAt, createdAt, sessionId`），续办会更新 `updatedAt`，成员因此排到已走过阶段之后并形成新一轮；任务清单/外部 `taskProgress` 共用该顺序。用例 `test/store.test.ts`「orders a continued member after...」、`test-fixtures/task-progress.json`「rework by continuing...」；全量 49 文件 493 用例、webapp 12 文件 81 用例、`tsc` 通过。边界：若某阶段只有这一个成员，续办后旧轮分组会消失（轮号从 1 重新计），不影响“无空步骤”；需要逐次派发行才能保留两轮历史 |
-| C15 | bash 工具没有默认超时；一条命令打印结果后进程不退出（M7 的 `node -e` 加载 `react-dom/server.browser`）时，run 在工具执行期间没有任何 Pi 事件，900 秒 stall 把整个 run 中止。现场 `i-7d2e0b42` 908 秒零产出；重派 `i-a09f29dc` 又执行同样的 `node t.mjs`，17:58 手动结束 node 进程后才恢复 | `src/runtime/runner.ts`（extensionFactories）、`src/runtime/tool-guard.ts`、`src/server/step-wake.ts`、`src/tools/guidance.ts` | 每挂一次损失 15 分钟并中止整个 run；重派新成员又重复调查上下文，token 翻倍 | **已关闭（2026-10-31，`c382c3a`）**：宿主为未写 `timeout` 的 bash 调用注入默认 600 秒（`AGENTDEV_BASH_TIMEOUT_SECONDS`，0 关闭；显式值优先），超时作为工具结果返回；步骤停稳通知与 `nextActions` 在 watchdog 停止且无报告时提示续办原 Session 而不是重派。用例 `test/tool-guard.test.ts`、`test/step-wake.test.ts`、`test/delegation.test.ts`、`test/runtime.test.ts`（真实 `sleep 2` + 默认 1 秒）；边界：合法静默命令超过默认值会收到超时结果，长构建需显式加大 `timeout`；超过 15 分钟仍会触发 run stall |
+| C15 | bash 工具没有默认超时；一条命令打印结果后进程不退出（M7 的 `node -e` 加载 `react-dom/server.browser`）时，run 在工具执行期间没有任何 Pi 事件，900 秒 stall 把整个 run 中止。现场 `i-7d2e0b42` 908 秒零产出；重派 `i-a09f29dc` 又执行同样的 `node t.mjs`，17:58 手动结束 node 进程后才恢复 | `src/runtime/runner.ts`（extensionFactories）、`src/runtime/tool-guard.ts`、`src/server/step-wake.ts`、`src/tools/guidance.ts` | 每挂一次损失 15 分钟并中止整个 run；重派新成员又重复调查上下文，token 翻倍 | **已关闭（2026-10-31，`c382c3a`）**：宿主为未写 `timeout` 的 bash 调用注入默认 600 秒（`KAIMING_BASH_TIMEOUT_SECONDS`，0 关闭；显式值优先），超时作为工具结果返回；步骤停稳通知与 `nextActions` 在 watchdog 停止且无报告时提示续办原 Session 而不是重派。用例 `test/tool-guard.test.ts`、`test/step-wake.test.ts`、`test/delegation.test.ts`、`test/runtime.test.ts`（真实 `sleep 2` + 默认 1 秒）；边界：合法静默命令超过默认值会收到超时结果，长构建需显式加大 `timeout`；超过 15 分钟仍会触发 run stall |
 | C16 | 交付快照遍历项目时只跳过 `.git`、`node_modules`、`.dev`，`.next`、`public/fonts`、`.visual/**`、`*.tsbuildinfo` 以及 `.git/info/exclude` 中的用户文件（现场 `dexprep涨跌.docx`）都进入 Review 路径；end 再对这些路径执行 `git check-ignore`，把可重跑产物和用户自己的文件当成交付要求提交 | `src/runtime/deliverable.ts`（`snapshotDelivery`）、`src/runtime/git-delivery.ts`（`observeCommit`）、`src/tools/completion-git.ts`（`deliveryCommitGaps`） | 为了让 end 通过而删除 `node_modules`/构建产物，随后每个 Task 重装依赖、重拷字体、重建 `.next`；删除动作还会波及用户文件 | **已关闭（2026-11-01，`ac2ba50`）**：交付快照按 `git ls-files --others --ignored --exclude-standard` 排除未跟踪的 ignored 文件；旧 Review 已记录的这类路径在 end 时也过滤；已跟踪文件即使匹配 ignore 规则仍属于交付；未提交的非 ignored 源码仍按原缺项拦截。用例 `test/deliverable.test.ts`、`test/git-commit-gate.test.ts`；全量 49 文件 500 用例、webapp 12 文件 81 用例、`tsc` 通过 |
 | C17 | 实时回复已经显示后突然消失，最新几轮内容回到更早状态，刷新又从 history 文件恢复。根因是前端按正文内容去重：`message_end` 把与历史某条文字相同的新回复删掉；resync 快照合并也把内容相同或前缀相同的 live-only 条目当作 stale twin，即使它们属于不同的 `inputId` | `webapp/src/state/slot.ts`（`message_end`、`mergeMessages`、`sameTurn`） | 重复的短回复（如“已完成/好的”）会整条丢失；前缀相同的流式回复在重连时消失，用户以为输出回退 | **已关闭（2026-11-01，`c7d5afd`）**：按消息身份去重——非 live entry id 相同，或双方 `inputId` 相同才是同一轮；不同 `inputId` 即使正文相同/前缀相同也保留；双方都没有 `inputId` 时才保留内容兜底。用例 `webapp/test/slot.test.ts`「repeated text across turns」；webapp 84 用例、`tsc` 通过 |
 | C18 | 实时回复已经显示后突然消失，只剩更早内容，刷新恢复；进一步定位为 resync/重放时，旧 input 的 `message_end` 命中了旧快照中的同文消息，却把 `liveIndex`（当时另一个较新 input 的 streaming 条目）删掉；旧 `message_update` 也可能追加到较新的 live 文本 | `webapp/src/state/slot.ts`（`message_end` 的 `liveIndex`/`duplicate` 选择、`message_update` 的流式条目选择） | 最新回复在完成/重连时被旧完成帧顶掉，看起来像回到几个会话之前；刷新读 history 后又恢复 | **已关闭（2026-11-01，`4ac20f2`）**：`message_end` 按 `frame.inputId` 选择 streaming 条目（无 input 的旧消息才回退到 null 条目），只在 live 与完成帧属于同一轮时才删除/替换；旧完成帧已有快照副本时直接返回，不碰其他 input 的 live；`message_update` 跳过已知不同 input 的条目。用例 `webapp/test/slot.test.ts`「a replayed older end or delta cannot take over a newer streaming message」；webapp 12 文件 85 用例、`tsc` 通过 |
@@ -35,7 +35,7 @@
 
 | 编号 | 需求 | 设计位置 | 状态 |
 |---|---|---|---|
-| F1 | 从当前主管会话 fork 一条新会话，保留到当前分支的 AI 上下文，之后两边独立 | `.agentdev/work/fork-chief-session-20261101/plan.md`（Pi `createBranchedSession`、新 `session_bindings`、会话列入口） | **待实现，未改代码**；源会话忙/无历史时拒绝，fork 不继承 Task/队列/授权 |
+| F1 | 从当前主管会话 fork 一条新会话，保留到当前分支的 AI 上下文，之后两边独立 | `.kaiming/work/fork-chief-session-20261101/plan.md`（Pi `createBranchedSession`、新 `session_bindings`、会话列入口） | **待实现，未改代码**；源会话忙/无历史时拒绝，fork 不继承 Task/队列/授权 |
 
 ## 本轮新增（2026-10-28，外部 Agent 接入 MCP）
 
@@ -46,9 +46,9 @@
 | U7 | 浏览器侧栏已能收到 `channel`，但界面没有标注「外部接入的固定会话」 | `src/server/read-methods.ts`（session.list 回 channel）、`webapp/src/chat/`（无 channel 渲染） | 用户看到一条普通会话，不知道它由别的 Agent 使用 | 登记：加一个不可编辑的标记即可；不影响归属与身份。产品未要求，非缺陷 |
 | C5 | `task.get` 的合同原写「按显式引用返回报告正文」，实现只返回结果摘要，正文走 `task.report.get`（同一事实两种说法） | `docs/technicalnew/runtime-contract.md` R1（task.list/get 行）、`src/server/read-methods.ts` | 读 Task 详情的调用方需要两次调用，且不知道以哪句为准 | **已关闭（2026-10-28）**：合同改为「报告正文按 resultId 另经 task.report.get」，与本轮补上的 `includePlan`（Plan 正文）一致 |
 | R2 | 「只读委派」不是程序强制：`mode` 只是给主管的指令，Task 类型仍由主管按 D-04 判断；调用方沙箱不约束工作台 | `src/mcp/runs.ts`（delegationText）、X-03/X-08 | 一个以只读沙箱运行的客户端仍可能通过委派产生写入 | 已知并接受（用户确认）；`destructiveHint` 已如实标注，宿主因此会走自己的批准策略（Codex 实测在 `approval: never` 下直接拒绝调用，正是该策略生效） |
-| U6 | 未提供 MCP resources / prompts：只有工具面 | `src/mcp/protocol.ts`（capabilities 只有 tools） | 调用方不能把报告/Plan 当资源浏览，也没有 `/delegate-review` 之类的提示模板 | 后续可选；当前 `agentdev_read` 已覆盖读取需求 |
+| U6 | 未提供 MCP resources / prompts：只有工具面 | `src/mcp/protocol.ts`（capabilities 只有 tools） | 调用方不能把报告/Plan 当资源浏览，也没有 `/delegate-review` 之类的提示模板 | 后续可选；当前 `kaiming_read` 已覆盖读取需求 |
 
-| S8 | 没有订阅账号登录：Pi 的 `anthropic`（Claude Pro/Max）与 `openai`（Sign in with ChatGPT）OAuth 可用，但本工作台没有 `auth.login`/`auth.logout` 方法，也没有订阅 provider 的模型入口；设置页只接受带 `apiKey` 的自定义 provider | `src/server/methods.ts`（无 auth 方法）、`src/runtime/provider-store.ts`（`apiKey` 必填）、`webapp/src/settings/ProvidersPage.tsx`、`webapp/src/settings/ModelsPage.tsx` | 用户无法在界面内使用 Claude/ChatGPT 订阅；手工放 `auth.json` 也没有可选的模型行 | 待实现需求：`.agentdev/work/pi-subscription-providers-20261028/requirement.md`；Pi SDK 已支持 OAuth/刷新，运行时已读 `auth.json`，缺认证入口与 provider 表达 |
+| S8 | 没有订阅账号登录：Pi 的 `anthropic`（Claude Pro/Max）与 `openai`（Sign in with ChatGPT）OAuth 可用，但本工作台没有 `auth.login`/`auth.logout` 方法，也没有订阅 provider 的模型入口；设置页只接受带 `apiKey` 的自定义 provider | `src/server/methods.ts`（无 auth 方法）、`src/runtime/provider-store.ts`（`apiKey` 必填）、`webapp/src/settings/ProvidersPage.tsx`、`webapp/src/settings/ModelsPage.tsx` | 用户无法在界面内使用 Claude/ChatGPT 订阅；手工放 `auth.json` 也没有可选的模型行 | 待实现需求：`.kaiming/work/pi-subscription-providers-20261028/requirement.md`；Pi SDK 已支持 OAuth/刷新，运行时已读 `auth.json`，缺认证入口与 provider 表达 |
 
 ## 本轮新增（2026-10-22，工具与图片）
 
@@ -60,7 +60,7 @@
 
 ## 本轮结果（2026-10-22）
 
-- **D** 9 项全部关闭；**S** 4 项关闭、1 项按原决定不做；**C** 4 项与实现一致；**U** 9 项补上界面、1 项不做。U4/U5 按用户决定采用简单形态，见 `.agentdev/work/workbench-gaps-20261022/questions.md`。
+- **D** 9 项全部关闭；**S** 4 项关闭、1 项按原决定不做；**C** 4 项与实现一致；**U** 9 项补上界面、1 项不做。U4/U5 按用户决定采用简单形态，见 `.kaiming/work/workbench-gaps-20261022/questions.md`。
 - **P** 按本轮实现执行：单请求列表、推送取代轮询、错误码文案、焦点管理、方法消费表（[UI 设计契约](ui-design.md#u9-方法消费)）。
 - 验证：`npm test` 299 用例、`npm --prefix webapp test` 25 用例、`npm run test:browser` 25 用例、两处 `tsc --noEmit` 无输出；证据与未覆盖项见 [验证记录](validation.md)。
 
@@ -154,11 +154,11 @@
 
 ## N 需求体系外接远程系统（已存档，暂不讨论）
 
-**状态（2026-10-26，用户决定）：存档，以后再讨论。** 不排期、不进入设计、不改任何 R 系列契约；本文与 [research.md](../../.agentdev/work/remote-requirement-sources-20261027/research.md) 保留为恢复讨论的起点。
+**状态（2026-10-26，用户决定）：存档，以后再讨论。** 不排期、不进入设计、不改任何 R 系列契约；本文与 [research.md](../../.kaiming/work/remote-requirement-sources-20261027/research.md) 保留为恢复讨论的起点。
 
-用户提出的定位不是「对接一个系统」，而是把 AgentDev 变成**执行端**：飞书等远程系统管控需求（本地只负责执行），需求的写入方可以是有权限的另一个 Agent。这个定位把问题从「读哪里」变成「谁有资格改需求、多台执行端如何不撞车」，因此需要独立一轮讨论，不适合混在功能开发里。
+用户提出的定位不是「对接一个系统」，而是把开明变成**执行端**：飞书等远程系统管控需求（本地只负责执行），需求的写入方可以是有权限的另一个 Agent。这个定位把问题从「读哪里」变成「谁有资格改需求、多台执行端如何不撞车」，因此需要独立一轮讨论，不适合混在功能开发里。
 
-调研结论与取舍记录在 [research.md](../../.agentdev/work/remote-requirement-sources-20261027/research.md)。要点：
+调研结论与取舍记录在 [research.md](../../.kaiming/work/remote-requirement-sources-20261027/research.md)。要点：
 
 - 代码耦合面很小：只有 `runtime/requirement-store.ts` 认识文件，工具/任务/界面只认 `<id, 文本, 版本>`，可插一层 `RequirementSource` 接口。
 - 飞书 Task v2 能承载标题、完成态、自定义单选字段（状态）、`origin` 链接与 `client_token` 幂等；`description` 上限 3000 字符，**放不下七节正文**，正文只能另进 docx 或留在本地。
@@ -170,7 +170,7 @@
 1. 远程是「让团队看进度」还是「让团队直接在远端管需求」？
 2. 需求正文必须在远端可读可改吗（正文进 docx，还是远端只有摘要）？
 3. 远端状态被人工改动时，执行端：忽略 / 提示待确认 / 直接采纳？
-4. 一个 AgentDev 项目对应远端一个任务清单，还是所有项目共用一个？
+4. 一个开明项目对应远端一个任务清单，还是所有项目共用一个？
 5. Task（执行中的任务）是否也发布到远端？
 
 另有一条已在讨论中形成、恢复讨论时应作为前提的判断：**执行端永不修改需求的目标与验收，只能回传事实（进度、阻塞、反向发现）**——写端可以换人、换 Agent，这条不变；它是现行 R-03「不能修改验收来掩盖实际缺陷」的跨机器版本。

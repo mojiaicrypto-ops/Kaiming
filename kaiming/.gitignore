@@ -1,0 +1,8 @@
+# The shell build is a test prerequisite (`npm run build`), not a committed artefact.
+web-static/
+.kaiming-data/
+.dev/
+.env
+state.db
+start.sh
+.start.sh.swp

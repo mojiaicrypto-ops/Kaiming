@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="AgentDev Workspace 纯 HTML WebUI 原型">
+  <meta name="description" content="Kaiming Workspace 纯 HTML WebUI 原型">
   <meta name="theme-color" content="#0b0e11">
-  <title>AgentDev Workspace</title>
+  <title>Kaiming Workspace</title>
   <style>
     :root {
       color-scheme: dark;
@@ -1271,24 +1271,24 @@
 <body>
   <div class="app">
     <header class="topbar">
-      <div class="brand" aria-label="AgentDev Workspace">
+      <div class="brand" aria-label="Kaiming Workspace">
         <span class="brand-mark" aria-hidden="true"><i>&#8203;</i><i>&#8203;</i><i>&#8203;</i><i>&#8203;</i></span>
-        <span class="brand-name">AgentDev</span>
+        <span class="brand-name">Kaiming</span>
       </div>
 
       <div class="project-area">
         <button class="project-switcher" id="projectSwitcher" type="button" aria-haspopup="menu" aria-expanded="false">
           <span class="repo-chip" aria-hidden="true">AD</span>
           <span class="project-copy">
-            <span class="project-name" id="projectName">agentdev-workspace</span>
-            <span class="project-branch" id="projectBranch">main · /workspace/agentdev</span>
+            <span class="project-name" id="projectName">kaiming-workspace</span>
+            <span class="project-branch" id="projectBranch">main · /workspace/kaiming</span>
           </span>
           <span class="chevron" aria-hidden="true">⌄</span>
         </button>
         <div class="project-menu" id="projectMenu" role="menu" hidden>
           <div class="project-menu-label" data-i18n="projects.open">Open projects</div>
-          <button class="project-option" type="button" role="menuitem" data-project="agentdev-workspace" data-branch="main · /workspace/agentdev" data-code="AD" data-available="true">
-            <span class="repo-chip">AD</span><span><strong>agentdev-workspace</strong><small data-i18n="projects.activeRuns">main · 2 runs active</small></span><span class="run-count">02</span>
+          <button class="project-option" type="button" role="menuitem" data-project="kaiming-workspace" data-branch="main · /workspace/kaiming" data-code="AD" data-available="true">
+            <span class="repo-chip">AD</span><span><strong>kaiming-workspace</strong><small data-i18n="projects.activeRuns">main · 2 runs active</small></span><span class="run-count">02</span>
           </button>
           <button class="project-option" type="button" role="menuitem" aria-disabled="true" data-project="payments-api" data-branch="feat/idempotency · /workspace/payments" data-code="PA" data-available="false">
             <span class="repo-chip">PA</span><span><strong>payments-api</strong><small data-i18n="projects.notLoaded">static preview · dataset not loaded</small></span><span class="run-count">—</span>
@@ -1410,10 +1410,10 @@
                         <strong data-i18n="initialization.title">Existing project · memory setup preview</strong>
                         <p data-i18n="initialization.detail">Chief first reads only top-level identity and dependency files, proposes the project map, then waits for initialization authorization.</p>
                         <div class="memory-grid">
-                          <div class="memory-item"><span data-i18n="initialization.documentRoot">Document root</span><code>docs/agentdev/</code></div>
+                          <div class="memory-item"><span data-i18n="initialization.documentRoot">Document root</span><code>docs/kaiming/</code></div>
                           <div class="memory-item"><span data-i18n="initialization.codeRoot">Code root</span><code>./</code></div>
                           <div class="memory-item"><span>Git</span><code data-i18n="initialization.oneGit">one repository</code></div>
-                          <div class="memory-item"><span data-i18n="initialization.runtimeData">Runtime data</span><code>~/.agentdev/state/…</code></div>
+                          <div class="memory-item"><span data-i18n="initialization.runtimeData">Runtime data</span><code>~/.kaiming/state/…</code></div>
                         </div>
                         <div class="memory-note" id="initializationNote" data-i18n="initialization.note">Preview only · no recursive code read · runtime data stays outside Git</div>
                         <div class="context-actions">
@@ -1555,7 +1555,7 @@
                     <label class="sr-only" for="fileSearch" data-i18n="files.filterLabel">Filter project files</label>
                     <input class="file-search" id="fileSearch" type="search" data-i18n-placeholder="files.filterPlaceholder" placeholder="Filter files…" autocomplete="off">
                   </div>
-                  <div class="file-tree" id="fileTree" role="tree" data-i18n-aria="aria.filesInProject" data-i18n-project="agentdev-workspace" aria-label="Files in agentdev-workspace">
+                  <div class="file-tree" id="fileTree" role="tree" data-i18n-aria="aria.filesInProject" data-i18n-project="kaiming-workspace" aria-label="Files in kaiming-workspace">
                     <button class="file-item active" type="button" role="treeitem" aria-current="page" data-file="project"><span class="file-kind">MD</span><span class="file-name">PROJECT.md</span></button>
                     <button class="file-item" type="button" role="treeitem" data-file="code-map"><span class="file-kind">MD</span><span class="file-name">CODE_MAP.md</span></button>
                     <details open>
@@ -1643,7 +1643,7 @@
               <button class="console-tab" id="consoleTabArtifacts" type="button" role="tab" aria-selected="false" aria-controls="terminalLog" tabindex="-1" data-console="artifacts" data-i18n="run.artifacts">ARTIFACTS</button>
             </div>
             <span class="console-spacer">&#8203;</span>
-            <span class="console-title">agentdev-projectd / agentdev-workspace</span>
+            <span class="console-title">kaiming-projectd / kaiming-workspace</span>
             <span class="console-window-actions">
               <button class="console-icon-button" id="collapseRuntime" type="button" data-i18n-aria="aria.collapseRun" aria-label="Collapse Run console" aria-expanded="true">›</button>
               <button class="console-icon-button" id="closeRuntime" type="button" data-i18n-aria="aria.closeRun" aria-label="Close Run console">×</button>
@@ -1673,7 +1673,7 @@
           <div class="terminal-log" id="terminalLog" role="tabpanel" aria-labelledby="consoleTabLive" aria-live="polite">&#8203;</div>
 
           <div class="terminal-prompt">
-            <b>agentdev</b><span id="promptProject">agentdev-workspace</span><span>› stream --run RUN-104</span><i class="cursor" aria-hidden="true">&#8203;</i>
+            <b>kaiming</b><span id="promptProject">kaiming-workspace</span><span>› stream --run RUN-104</span><i class="cursor" aria-hidden="true">&#8203;</i>
           </div>
         </aside>
 
@@ -1736,7 +1736,7 @@
         <label for="providerSecretRef" data-i18n="provider.secretRef">Secret Reference</label>
         <input id="providerSecretRef" autocomplete="off">
         <label class="dialog-check" for="providerEnabled"><input id="providerEnabled" type="checkbox"><span data-i18n="provider.enabled">Enabled for new Runs</span></label>
-        <p class="dialog-note" data-i18n="provider.note">Only the reference is stored. Secret values remain in AgentDev Secret Store and are never echoed here.</p>
+        <p class="dialog-note" data-i18n="provider.note">Only the reference is stored. Secret values remain in Kaiming Secret Store and are never echoed here.</p>
       </div>
       <div class="dialog-actions"><button class="quiet-button" type="button" data-close-dialog data-i18n="common.cancel">Cancel</button><button class="new-task" type="submit" data-i18n="common.saveProvider">Save provider</button></div>
     </form>
@@ -1828,10 +1828,10 @@
           "view.agents.eyebrow": "Fixed roles · configurable profiles", "view.agents.title": "Agents", "view.agents.subtitle": "Models and skills can vary by role; responsibilities, stage gates, and permission ceilings cannot.",
           "view.runs.eyebrow": "Persistent asynchronous jobs", "view.runs.title": "Runs", "view.runs.subtitle": "Logical Runs survive browser disconnects; every Attempt keeps its own immutable evidence.",
           "view.inbox.eyebrow": "Cross-project summaries only", "view.inbox.title": "Inbox", "view.inbox.subtitle": "Attention items are aggregated without loading another Project's conversation or document Context.",
-          "view.settings.eyebrow": "Core-owned configuration", "view.settings.title": "Settings", "view.settings.subtitle": "The WebUI edits configuration through AgentDev Protocol; it never owns model credentials or merges project settings.",
+          "view.settings.eyebrow": "Core-owned configuration", "view.settings.title": "Settings", "view.settings.subtitle": "The WebUI edits configuration through Kaiming Protocol; it never owns model credentials or merges project settings.",
           "agents.introTitle": "Fixed roles · editable runtime profiles", "agents.introDetail": "Provider and model can vary by role. Duties, gates, output contracts, and permission ceilings remain fixed.", "agents.futureOnly": "Changes affect future Runs only. RUN-104 keeps cfg_c91d.", "agents.edit": "Edit profile", "agents.reset": "Reset", "agents.global": "Global default", "agents.override": "Project override", "agents.permission": "fixed ceiling",
           "profile.editTitle": "Edit role profile", "profile.role": "Fixed role", "profile.provider": "Provider", "profile.model": "Model", "profile.reasoning": "Reasoning", "profile.note": "This Project override affects future Runs only. Role duties, gates, permission ceiling, and the active Runtime Snapshot do not change.", "profile.reset": "Use global default",
-          "provider.editTitle": "Configure provider", "provider.name": "Provider connection", "provider.type": "Provider type", "provider.baseUrl": "API Base URL", "provider.secretRef": "Secret Reference", "provider.enabled": "Enabled for new Runs", "provider.note": "Only the reference is stored. Secret values remain in AgentDev Secret Store and are never echoed here.", "provider.configure": "Configure", "provider.test": "Test connection", "provider.connected": "connected", "provider.untested": "not tested", "provider.disabled": "disabled", "provider.models": "models", "provider.secretConfigured": "secret configured", "provider.globalTitle": "Provider Connections", "provider.globalDetail": "AgentDev global · secrets stay outside Project Git", "settings.layersTitle": "Configuration resolution", "settings.layersDetail": "Run parameters → Project Role Override → Global Role Profile → built-in default",
+          "provider.editTitle": "Configure provider", "provider.name": "Provider connection", "provider.type": "Provider type", "provider.baseUrl": "API Base URL", "provider.secretRef": "Secret Reference", "provider.enabled": "Enabled for new Runs", "provider.note": "Only the reference is stored. Secret values remain in Kaiming Secret Store and are never echoed here.", "provider.configure": "Configure", "provider.test": "Test connection", "provider.connected": "connected", "provider.untested": "not tested", "provider.disabled": "disabled", "provider.models": "models", "provider.secretConfigured": "secret configured", "provider.globalTitle": "Provider Connections", "provider.globalDetail": "Kaiming global · secrets stay outside Project Git", "settings.layersTitle": "Configuration resolution", "settings.layersDetail": "Run parameters → Project Role Override → Global Role Profile → built-in default",
           "toast.profileSaved": "Project override saved. Active RUN-104 keeps its frozen snapshot.", "toast.profileReset": "Role profile now inherits the global default.", "toast.providerSaved": "Provider connection saved in the local mock.", "toast.providerConnected": "Connection test passed with a redacted credential reference.", "toast.providerInUse": "This provider is used by an effective role profile. Reassign those roles before disabling it.", "toast.liveOpened": "Live Dock opened. Run state is unchanged.", "toast.liveCompact": "Live Dock compacted. Run state is unchanged."
         },
         "zh-CN": {
@@ -1855,10 +1855,10 @@
           "view.agents.eyebrow": "固定角色 · 可配置 Profile", "view.agents.title": "Agent", "view.agents.subtitle": "角色可使用不同模型和 Skill，但职责、阶段门和权限上限不可改变。",
           "view.runs.eyebrow": "持久化异步作业", "view.runs.title": "运行", "view.runs.subtitle": "Logical Run 不受浏览器断开影响；每个 Attempt 保存独立且不可变的证据。",
           "view.inbox.eyebrow": "仅汇总跨项目摘要", "view.inbox.title": "收件箱", "view.inbox.subtitle": "待处理事项可以聚合，但不会加载其他 Project 的对话或文档 Context。",
-          "view.settings.eyebrow": "Core 管理的配置", "view.settings.title": "设置", "view.settings.subtitle": "WebUI 通过 AgentDev Protocol 修改配置，不持有模型凭证，也不负责合并项目配置。",
+          "view.settings.eyebrow": "Core 管理的配置", "view.settings.title": "设置", "view.settings.subtitle": "WebUI 通过 Kaiming Protocol 修改配置，不持有模型凭证，也不负责合并项目配置。",
           "agents.introTitle": "固定角色 · 可编辑运行 Profile", "agents.introDetail": "每个角色可以使用不同 Provider 和模型；职责、门禁、输出契约和权限上限保持固定。", "agents.futureOnly": "变更只影响后续 Run；RUN-104 继续使用 cfg_c91d。", "agents.edit": "编辑 Profile", "agents.reset": "恢复默认", "agents.global": "全局默认", "agents.override": "项目覆盖", "agents.permission": "固定上限",
           "profile.editTitle": "编辑角色 Profile", "profile.role": "固定角色", "profile.provider": "Provider", "profile.model": "模型", "profile.reasoning": "推理强度", "profile.note": "Project 覆盖只影响后续 Run；角色职责、门禁、权限上限和当前 Runtime Snapshot 不改变。", "profile.reset": "使用全局默认",
-          "provider.editTitle": "配置 Provider", "provider.name": "Provider Connection", "provider.type": "Provider 类型", "provider.baseUrl": "API Base URL", "provider.secretRef": "Secret Reference", "provider.enabled": "允许新 Run 使用", "provider.note": "这里只保存引用；Secret 本体保留在 AgentDev Secret Store 中，不会在此回显。", "provider.configure": "配置", "provider.test": "测试连接", "provider.connected": "连接正常", "provider.untested": "尚未测试", "provider.disabled": "已禁用", "provider.models": "个模型", "provider.secretConfigured": "Secret 已配置", "provider.globalTitle": "Provider Connections", "provider.globalDetail": "AgentDev 全局配置 · Secret 不进入 Project Git", "settings.layersTitle": "配置解析顺序", "settings.layersDetail": "Run 参数 → Project Role Override → Global Role Profile → 内置默认",
+          "provider.editTitle": "配置 Provider", "provider.name": "Provider Connection", "provider.type": "Provider 类型", "provider.baseUrl": "API Base URL", "provider.secretRef": "Secret Reference", "provider.enabled": "允许新 Run 使用", "provider.note": "这里只保存引用；Secret 本体保留在 Kaiming Secret Store 中，不会在此回显。", "provider.configure": "配置", "provider.test": "测试连接", "provider.connected": "连接正常", "provider.untested": "尚未测试", "provider.disabled": "已禁用", "provider.models": "个模型", "provider.secretConfigured": "Secret 已配置", "provider.globalTitle": "Provider Connections", "provider.globalDetail": "Kaiming 全局配置 · Secret 不进入 Project Git", "settings.layersTitle": "配置解析顺序", "settings.layersDetail": "Run 参数 → Project Role Override → Global Role Profile → 内置默认",
           "toast.profileSaved": "Project 覆盖已保存；当前 RUN-104 继续使用冻结 Snapshot。", "toast.profileReset": "角色 Profile 已恢复继承全局默认。", "toast.providerSaved": "Provider Connection 已保存到本地 Mock。", "toast.providerConnected": "连接测试通过，凭证引用已脱敏。", "toast.providerInUse": "该 Provider 正被生效中的角色 Profile 使用；请先调整这些角色，再禁用连接。", "toast.liveOpened": "Live Dock 已打开，Run 状态未改变。", "toast.liveCompact": "Live Dock 已收起，Run 状态未改变。"
         }
       };
@@ -1930,7 +1930,7 @@
 
       function initialLanguage() {
         try {
-          const stored = localStorage.getItem("agentdev.ui.language");
+          const stored = localStorage.getItem("kaiming.ui.language");
           if (stored && Object.hasOwn(messages, stored)) return stored;
         } catch (error) {
           // Local UI preferences remain optional when storage is unavailable.
@@ -1953,9 +1953,9 @@
           path: "PROJECT.md",
           meta: "Markdown · 1.8 KB · Mock",
           lines: [
-            "# AgentDev Workspace",
+            "# Kaiming Workspace",
             "",
-            "AgentDev is a single-user, self-hosted Coding Agent workbench.",
+            "Kaiming is a single-user, self-hosted Coding Agent workbench.",
             "",
             "## Current focus",
             "",
@@ -1992,11 +1992,11 @@
             "",
             "## Product",
             "",
-            "- AgentDev Workspace Product Design",
+            "- Kaiming Workspace Product Design",
             "",
             "## Prototype",
             "",
-            "- AgentDev WebUI pure HTML prototype",
+            "- Kaiming WebUI pure HTML prototype",
             "- WEBUI-004 Requirement-centered WebUI"
           ]
         },
@@ -2004,11 +2004,11 @@
           path: "docs/product/本地软件研发Agent工作台_产品设计.md",
           meta: "Markdown · 48.6 KB · Mock excerpt",
           lines: [
-            "# AgentDev Workspace 产品设计",
+            "# Kaiming Workspace 产品设计",
             "",
             "## WebUI",
             "",
-            "WebUI is a client of AgentDev Core.",
+            "WebUI is a client of Kaiming Core.",
             "It does not own Project state, Agent lifecycle, or credentials.",
             "",
             "Project Files are always scoped to the active Project.",
@@ -2072,7 +2072,7 @@
           ["09:43:06", "TOOL", "tool", "edit  packages/pi-runtime/src/session-factory.ts  +118 -0"],
           ["09:43:41", "TOOL", "tool", "edit  packages/pi-runtime/src/index.ts  +9 -1"],
           ["09:44:02", "INFO", "info", "Runtime config snapshot validated · cfg_c91d"],
-          ["09:44:08", "TOOL", "tool", "bash  pnpm --filter @agentdev/pi-runtime test"],
+          ["09:44:08", "TOOL", "tool", "bash  pnpm --filter @kaiming/pi-runtime test"],
           ["09:44:12", "PASS", "pass", "12 tests passed · 1.42s"],
           ["09:44:17", "WARN", "warn", "Provider retry policy remains inline · follow-up suggested"],
           ["09:44:29", "TOOL", "tool", "edit  packages/pi-runtime/src/session-factory.test.ts  +64 -3"],
@@ -2192,7 +2192,7 @@
           eyebrow: "Project memory",
           title: "Docs & Context",
           subtitle: "Navigate broadly, load narrowly. Context sources remain explainable and stage-specific.",
-          content: `<div class="data-list"><div class="data-row"><span class="data-id">ROOTS</span><span class="data-main"><strong>docs/agentdev/ · ./</strong><small>Document root + code root · one Git repository</small></span><span class="data-status">project</span></div><div class="data-row"><span class="data-id">L0</span><span class="data-main"><strong>PROJECT.md</strong><small>Bootstrap · always loaded</small></span><span class="data-status">1.8 KB</span></div><div class="data-row"><span class="data-id">L1</span><span class="data-main"><strong>docs/INDEX.md</strong><small>Navigation · 14 linked entries</small></span><span class="data-status">selected</span></div><div class="data-row"><span class="data-id">CTX</span><span class="data-main"><strong>Context rebuilt</strong><small>Formal docs → Snapshot → Checkpoint · recent messages only</small></span><span class="data-status">current</span></div><div class="data-row"><span class="data-id">STATE</span><span class="data-main"><strong>~/.agentdev/state/…</strong><small>Sessions, SQLite, logs and artifacts · outside project Git</small></span><span class="data-status">external</span></div></div>`
+          content: `<div class="data-list"><div class="data-row"><span class="data-id">ROOTS</span><span class="data-main"><strong>docs/kaiming/ · ./</strong><small>Document root + code root · one Git repository</small></span><span class="data-status">project</span></div><div class="data-row"><span class="data-id">L0</span><span class="data-main"><strong>PROJECT.md</strong><small>Bootstrap · always loaded</small></span><span class="data-status">1.8 KB</span></div><div class="data-row"><span class="data-id">L1</span><span class="data-main"><strong>docs/INDEX.md</strong><small>Navigation · 14 linked entries</small></span><span class="data-status">selected</span></div><div class="data-row"><span class="data-id">CTX</span><span class="data-main"><strong>Context rebuilt</strong><small>Formal docs → Snapshot → Checkpoint · recent messages only</small></span><span class="data-status">current</span></div><div class="data-row"><span class="data-id">STATE</span><span class="data-main"><strong>~/.kaiming/state/…</strong><small>Sessions, SQLite, logs and artifacts · outside project Git</small></span><span class="data-status">external</span></div></div>`
         },
         agents: {
           eyebrow: "Fixed roles · configurable profiles",
@@ -2210,12 +2210,12 @@
           eyebrow: "Cross-project summaries only",
           title: "Inbox",
           subtitle: "Attention items are aggregated without loading another Project's conversation or document Context.",
-          content: `<div class="data-list"><div class="data-row"><span class="data-id">PRODUCT</span><span class="data-main"><strong>Choose compatibility boundary for REQ-021</strong><small>agentdev-workspace · outside confirmed scope · 8 minutes ago</small></span><span class="data-status">decision</span></div><div class="data-row"><span class="data-id">PERM</span><span class="data-main"><strong>Allow registry.npmjs.org for dependency metadata</strong><small>payments-api · RUN-882 · network read · once · may expose package names</small></span><span class="data-status">approval</span></div><div class="data-row"><span class="data-id">TEST</span><span class="data-main"><strong>Regression suite failed</strong><small>design-system · 2 failures</small></span><span class="data-status">blocked</span></div></div>`
+          content: `<div class="data-list"><div class="data-row"><span class="data-id">PRODUCT</span><span class="data-main"><strong>Choose compatibility boundary for REQ-021</strong><small>kaiming-workspace · outside confirmed scope · 8 minutes ago</small></span><span class="data-status">decision</span></div><div class="data-row"><span class="data-id">PERM</span><span class="data-main"><strong>Allow registry.npmjs.org for dependency metadata</strong><small>payments-api · RUN-882 · network read · once · may expose package names</small></span><span class="data-status">approval</span></div><div class="data-row"><span class="data-id">TEST</span><span class="data-main"><strong>Regression suite failed</strong><small>design-system · 2 failures</small></span><span class="data-status">blocked</span></div></div>`
         },
         settings: {
           eyebrow: "Core-owned configuration",
           title: "Settings",
-          subtitle: "The WebUI edits configuration through AgentDev Protocol; it never owns model credentials or merges project settings.",
+          subtitle: "The WebUI edits configuration through Kaiming Protocol; it never owns model credentials or merges project settings.",
           content: () => providerSettingsMarkup()
         }
       };
@@ -2399,7 +2399,7 @@
         renderActiveView();
         syncDynamicTranslations();
         try {
-          localStorage.setItem("agentdev.ui.language", language);
+          localStorage.setItem("kaiming.ui.language", language);
         } catch (error) {
           // The current page remains translated even if persistence is unavailable.
         }
@@ -2538,7 +2538,7 @@
         $("#promptProject").textContent = option.dataset.project;
         $("#fileTree").dataset.i18nProject = option.dataset.project;
         $("#fileTree").setAttribute("aria-label", t("aria.filesInProject", { project: option.dataset.project }));
-        $(".console-title").textContent = `agentdev-projectd / ${option.dataset.project}`;
+        $(".console-title").textContent = `kaiming-projectd / ${option.dataset.project}`;
         projectMenu.hidden = true;
         projectSwitcher.setAttribute("aria-expanded", "false");
         showToast(t("toast.projectActive", { project: option.dataset.project }));

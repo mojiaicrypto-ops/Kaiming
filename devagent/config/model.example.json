@@ -1,8 +1,0 @@
-{
-  "_comment": "复制为 devagent/config/model.json 并填入真实凭证；model.json 已被 .gitignore 忽略，不会提交。协议由 provider 决定，key 必须与之匹配；三种写法见 config/README.md。",
-  "provider": "anthropic",
-  "model": "claude-sonnet-4-5",
-  "env": {
-    "ANTHROPIC_API_KEY": "在此填写 sk-ant-..."
-  }
-}

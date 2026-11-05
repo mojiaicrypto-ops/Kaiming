@@ -22,7 +22,7 @@
       <div id="c-drawer"></div>
     </section></div>`;
 
-  const empty = () => `<div class="empty"><div class="logo">❯ AgentDev</div><h2>和主管聊聊你想做的事</h2>
+  const empty = () => `<div class="empty"><div class="logo">❯ Kaiming</div><h2>和主管聊聊你想做的事</h2>
     <p>先自由讨论，不会自动开发。说“保存”才会记成需求，说“实现”才开始交付。</p>
     <div class="ex">${['看看这个项目现在有哪些能力', '我想给账号加密码重置，先聊聊有没有必要', '先设计支付网关，不要开发'].map((x) => `<button data-act="c-ex:${x}">${x}</button>`).join('')}</div></div>`;
 

@@ -1,4 +1,4 @@
-# AgentDev development entry
+# Kaiming development entry
 
 Read the [documentation index](docs/INDEX.md) first, then load the product, architecture, rules and acceptance documents for the work package at hand. The formal documents listed in the index are the complete implementation basis; the current implementation state is recorded there too.
 

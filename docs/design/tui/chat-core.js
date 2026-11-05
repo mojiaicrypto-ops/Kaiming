@@ -1,5 +1,5 @@
 /* Chat core: Pi-frame reducer, mock server state, markdown.
-   Mirrors devagent/webapp state/slot.ts: per-session slots fed by Pi frames
+   Mirrors kaiming/webapp state/slot.ts: per-session slots fed by Pi frames
    (message_start/update/end, tool_execution_*, agent_start/end) plus business
    invalidate frames (task / interaction / input). Mock only — no server. */
 window.Chat = (() => {

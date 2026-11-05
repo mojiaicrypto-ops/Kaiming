@@ -114,7 +114,7 @@ system_notice 首版 code=task.controlled/recovery.resolved，仅空闲时消费
 | 用户交互 | 原请求/来源/状态/真实答复 | 提交后主管通道显示，直接响应源调用 |
 | 文本/思考/工具进度 | 不落业务 WAL | 内存推送；重连读取历史，不承诺恢复崩溃片段 |
 
-模型 content 必须含 taskId/sessionId/outcome/结果路径，待用户请求附 interactionId；不能只放 details。恢复消息 sendCustomMessage/customType=agentdev.input-notice/display=true，内容明确来源/事实，不伪装 assistant。输入关联书签名称见 R4（agentdev.input-marker）；不得按正文或数组位置去重。
+模型 content 必须含 taskId/sessionId/outcome/结果路径，待用户请求附 interactionId；不能只放 details。恢复消息 sendCustomMessage/customType=kaiming.input-notice/display=true，内容明确来源/事实，不伪装 assistant。输入关联书签名称见 R4（kaiming.input-marker）；不得按正文或数组位置去重。
 
 ## M4 UI 快照与实时事件
 

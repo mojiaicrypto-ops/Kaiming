@@ -1,4 +1,4 @@
-/* AgentDev TUI prototype — three screens: 会话 / 需求 / 设置. Static mock, no server. */
+/* Kaiming TUI prototype — three screens: 会话 / 需求 / 设置. Static mock, no server. */
 (() => {
   const M = window.MOCK;
   const $ = (s) => document.querySelector(s);
@@ -23,7 +23,7 @@
     const p = M.projects.find((x) => x.id === S.proj);
     const pending = CH.srv.asks.filter((a) => !a.answered && !a.gone).length;
     return `<header class="top">
-      <span class="brand">AgentDev</span>
+      <span class="brand">Kaiming</span>
       <button class="proj" data-act="ov:project" title="切换项目"><b>${p.name}</b> <span class="f3">▾</span></button>
       <nav class="nav">${VIEWS.map(([v, n], i) => `<button data-act="view:${v}" ${S.view === v ? 'aria-current="page"' : ''} title="快捷键 ${i + 1}">${n}${v === 'chat' && pending ? `<span class="n" style="color:var(--decide)">◆${pending}</span>` : ''}</button>`).join('')}</nav>
       <span class="sp"></span>

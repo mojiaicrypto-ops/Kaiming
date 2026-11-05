@@ -4,13 +4,13 @@
 
 ## 范围与独立审阅
 
-当前正式文档统一 read/write Task、当前步骤全部成员聚合/超时、Pi 原生历史续办、业务与程序核对边界、通用交互与七角色提示词。上一轮三份独立上下文只读审阅最终 Passed，覆盖归一化的产品与运行契约；发现、修正及历史审查处置见 [审阅记录](../../.agentdev/work/pi-native-normalization-20261004/review.md)。
+当前正式文档统一 read/write Task、当前步骤全部成员聚合/超时、Pi 原生历史续办、业务与程序核对边界、通用交互与七角色提示词。上一轮三份独立上下文只读审阅最终 Passed，覆盖归一化的产品与运行契约；发现、修正及历史审查处置见 [审阅记录](../../.kaiming/work/pi-native-normalization-20261004/review.md)。
 
-从正式索引可以开始 P0 SDK 最小试验和纯存储/查询工作，后续按依赖实施。文档完整并不表示所有实现决策或 SDK 行为已经取证；本次具体范围见 [结算记录](../../.agentdev/work/pi-native-normalization-20261004/settlement.md)。历史审查保留其基线结果，不替代当前设计与审阅。
+从正式索引可以开始 P0 SDK 最小试验和纯存储/查询工作，后续按依赖实施。文档完整并不表示所有实现决策或 SDK 行为已经取证；本次具体范围见 [结算记录](../../.kaiming/work/pi-native-normalization-20261004/settlement.md)。历史审查保留其基线结果，不替代当前设计与审阅。
 
-角色经验已写入九份提示词、G4/G5和I4，上一轮两个独立上下文只读审阅 Passed；详见 [角色经验审阅](../../.agentdev/work/role-lessons-20261004/review.md) 与 [结算记录](../../.agentdev/work/role-lessons-20261004/settlement.md)。
+角色经验已写入九份提示词、G4/G5和I4，上一轮两个独立上下文只读审阅 Passed；详见 [角色经验审阅](../../.kaiming/work/role-lessons-20261004/review.md) 与 [结算记录](../../.kaiming/work/role-lessons-20261004/settlement.md)。
 
-本次明确开发内置单元/TDD、独立测试优先 API 集成/UI E2E 的责任，更新 D-05、验收、相关提示词及 G1/G4/I4；一份干净上下文独立只读审阅 Passed，无阻断发现，详见 [测试责任审阅](../../.agentdev/work/testing-responsibilities-20261004/review.md) 与 [结算记录](../../.agentdev/work/testing-responsibilities-20261004/settlement.md)。装配正文提取边界明确，但尚未实现宿主注入或验证实际模型效果。
+本次明确开发内置单元/TDD、独立测试优先 API 集成/UI E2E 的责任，更新 D-05、验收、相关提示词及 G1/G4/I4；一份干净上下文独立只读审阅 Passed，无阻断发现，详见 [测试责任审阅](../../.kaiming/work/testing-responsibilities-20261004/review.md) 与 [结算记录](../../.kaiming/work/testing-responsibilities-20261004/settlement.md)。装配正文提取边界明确，但尚未实现宿主注入或验证实际模型效果。
 
 ## 实际文档检查
 
@@ -37,15 +37,15 @@
 
 | 范围 | 证据 | 记录 |
 |---|---|---|
-| PI-01/02/05/07/08 的 SDK 机制：输入关联、停稳与事件语义、宿主保存失败与停止、多会话隔离、宿主交互往返与 UI 适配器形状 | 47/47 断言真实运行（Node 24.8.0 + Pi 1.0.0，机制层用本地 stub 端点） | `.agentdev/work/devagent-bootstrap-p0-20261004/`、`.agentdev/work/devagent-marker-notice-ui-mode-20261005/` |
-| 存储与调度内核（接纳去重、事务认领、一会话一运行中、按代次重启分类、停止意图、轮转调度） | 22 项单元测试真实运行（node:sqlite） | `.agentdev/work/devagent-p1-store-dispatcher-20261005/` |
-| **真实模型下的宿主问答往返**（模型实际调用 question 工具、宿主答复回到模型）与上述两条适配器结论 | 4/4 真实模型检查通过（deepseek-flash；模型可达 1.7s、工具调用 1 次 select、答复 B 回到模型、notify/TUI 报错/theme 缺失均符合预期） | `.agentdev/work/devagent-real-model-20261005/` |
-| **RPC/认证/只读/写入/SSE/交互桥服务端与浏览器外壳**（同源信封与幂等、会话 cookie+CSRF、SSE 缓冲与 resync、交互 WAL 与答复校验、八视图真实 RPC 渲染、485 选择器保真） | 服务端 209 项单元/集成测试；8 个浏览器场景（真实 Chromium + 真实工作台 + stub 模型端点）；选择器 485/485（extra 0）；提示词 15/15；渲染选型 47/47 | `.agentdev/work/devagent-p4-webui-20261008/` |
-| **P6 产品验收（真实模型 + 真实浏览器）**：只读调查 Task（Plan/报告落盘、如实记 not_run）、提案保存（浏览器 confirm 授权）、重启判中断与悬挂提问转 stale、无模型/无效模型的明确说明、备份恢复实跑、八视图无死键无假数据 | AC-01/02/05/06/07/20/21/22/27 有实机证据（部分项标“部分”并写明未执行分支）；AC-08～AC-35 逐条登记未执行 | `.agentdev/work/devagent-p6-acceptance-20261010/` |
-| **v1 协议简化（统一 task 工具、去模型令牌、程序观察交付）**：模型可见工具从 10 个收敛为 5 个；版本/候选/报告种类不再由模型传递；复核绑定改为程序观察的交付摘要（路径清单 + 完成时重算）；`nextActions`/拒绝事实可行动 | 286 项单元/集成测试；浏览器 8/8；提示词 15/15；真实模型完整流程多次实跑全部完成（每次约 4–6 分钟），最近一次 37 次协议调用/6 次参数错误、步骤拒绝 0、读前写保护 0；另修实跑暴露的缺陷：等待用户提问超过 15 分钟被当作停滞中止、主管自身中断输入冻结会话（见实现记录「缺陷修复」） | `.agentdev/work/simplify-v1-20261020/` |
-| **P7 模型配置（provider/角色/项目）**：provider 定义写私有文件（0600、密钥不进库与响应）、role→project→server 单一解析实现、保存后无需重启即生效、`config.test` 真实试连、覆盖在实跑中生效（`effectiveConfig` 与 Pi 原生 `message.model` 对照）、活动输入不受设置变更影响（停在 question 上改配置的实跑）、`session.input.get` 返回记录的脱敏生效配置、私有路径守卫（文件工具与 shell，Pi 同序归一化 + 祖先解析，5 种写法端到端全拒） | 228/228（22 文件）+ 浏览器 8/8；三轮独立复核的阻断项全部修复；AC-27 只覆盖本轮可达范围，其余场景未执行 | `.agentdev/work/devagent-p7-model-config-20261010/` |
-| **工具集补齐（主管与设计角色可执行命令）**：`bash` 加入主管与 designer 的原生工具集（read Task 仍移除）；契约 G1、两份提示词与上下文表同步；运行测试用真实 Pi 执行 `echo` 与 `mv`/`rm` 观察真实输出与文件效果 | 288→289 项测试全绿；浏览器 8/8；提示词 15/15 | `.agentdev/work/simplify-v1-20261020/` |
-| **新 UI 层 v1（webapp Chief 视图）+ 服务端活快照**：/app 双壳托管与越界守卫、prepare 快照取活 Pi 会话内存条目（消除 resync 丢在飞消息）、React 壳的 slot 合并（在飞不降级）、高亮预算队列、autoscroll 锁定、Task 卡/成员抽屉（数据路径） | 服务端 235/235（23 文件，含 live-snapshot/stream-harness//app 路由新用例）；webapp vitest 4/4 + tsc 0；playwright 旧壳 8 场景全绿；真实模型 + Chromium 实测：流式不丢、代次变化场景内容延续、刷新后历史完整 | `.agentdev/work/devagent-webapp-chief-20261013` |
+| PI-01/02/05/07/08 的 SDK 机制：输入关联、停稳与事件语义、宿主保存失败与停止、多会话隔离、宿主交互往返与 UI 适配器形状 | 47/47 断言真实运行（Node 24.8.0 + Pi 1.0.0，机制层用本地 stub 端点） | `.kaiming/work/kaiming-bootstrap-p0-20261004/`、`.kaiming/work/kaiming-marker-notice-ui-mode-20261005/` |
+| 存储与调度内核（接纳去重、事务认领、一会话一运行中、按代次重启分类、停止意图、轮转调度） | 22 项单元测试真实运行（node:sqlite） | `.kaiming/work/kaiming-p1-store-dispatcher-20261005/` |
+| **真实模型下的宿主问答往返**（模型实际调用 question 工具、宿主答复回到模型）与上述两条适配器结论 | 4/4 真实模型检查通过（deepseek-flash；模型可达 1.7s、工具调用 1 次 select、答复 B 回到模型、notify/TUI 报错/theme 缺失均符合预期） | `.kaiming/work/kaiming-real-model-20261005/` |
+| **RPC/认证/只读/写入/SSE/交互桥服务端与浏览器外壳**（同源信封与幂等、会话 cookie+CSRF、SSE 缓冲与 resync、交互 WAL 与答复校验、八视图真实 RPC 渲染、485 选择器保真） | 服务端 209 项单元/集成测试；8 个浏览器场景（真实 Chromium + 真实工作台 + stub 模型端点）；选择器 485/485（extra 0）；提示词 15/15；渲染选型 47/47 | `.kaiming/work/kaiming-p4-webui-20261008/` |
+| **P6 产品验收（真实模型 + 真实浏览器）**：只读调查 Task（Plan/报告落盘、如实记 not_run）、提案保存（浏览器 confirm 授权）、重启判中断与悬挂提问转 stale、无模型/无效模型的明确说明、备份恢复实跑、八视图无死键无假数据 | AC-01/02/05/06/07/20/21/22/27 有实机证据（部分项标“部分”并写明未执行分支）；AC-08～AC-35 逐条登记未执行 | `.kaiming/work/kaiming-p6-acceptance-20261010/` |
+| **v1 协议简化（统一 task 工具、去模型令牌、程序观察交付）**：模型可见工具从 10 个收敛为 5 个；版本/候选/报告种类不再由模型传递；复核绑定改为程序观察的交付摘要（路径清单 + 完成时重算）；`nextActions`/拒绝事实可行动 | 286 项单元/集成测试；浏览器 8/8；提示词 15/15；真实模型完整流程多次实跑全部完成（每次约 4–6 分钟），最近一次 37 次协议调用/6 次参数错误、步骤拒绝 0、读前写保护 0；另修实跑暴露的缺陷：等待用户提问超过 15 分钟被当作停滞中止、主管自身中断输入冻结会话（见实现记录「缺陷修复」） | `.kaiming/work/simplify-v1-20261020/` |
+| **P7 模型配置（provider/角色/项目）**：provider 定义写私有文件（0600、密钥不进库与响应）、role→project→server 单一解析实现、保存后无需重启即生效、`config.test` 真实试连、覆盖在实跑中生效（`effectiveConfig` 与 Pi 原生 `message.model` 对照）、活动输入不受设置变更影响（停在 question 上改配置的实跑）、`session.input.get` 返回记录的脱敏生效配置、私有路径守卫（文件工具与 shell，Pi 同序归一化 + 祖先解析，5 种写法端到端全拒） | 228/228（22 文件）+ 浏览器 8/8；三轮独立复核的阻断项全部修复；AC-27 只覆盖本轮可达范围，其余场景未执行 | `.kaiming/work/kaiming-p7-model-config-20261010/` |
+| **工具集补齐（主管与设计角色可执行命令）**：`bash` 加入主管与 designer 的原生工具集（read Task 仍移除）；契约 G1、两份提示词与上下文表同步；运行测试用真实 Pi 执行 `echo` 与 `mv`/`rm` 观察真实输出与文件效果 | 288→289 项测试全绿；浏览器 8/8；提示词 15/15 | `.kaiming/work/simplify-v1-20261020/` |
+| **新 UI 层 v1（webapp Chief 视图）+ 服务端活快照**：/app 双壳托管与越界守卫、prepare 快照取活 Pi 会话内存条目（消除 resync 丢在飞消息）、React 壳的 slot 合并（在飞不降级）、高亮预算队列、autoscroll 锁定、Task 卡/成员抽屉（数据路径） | 服务端 235/235（23 文件，含 live-snapshot/stream-harness//app 路由新用例）；webapp vitest 4/4 + tsc 0；playwright 旧壳 8 场景全绿；真实模型 + Chromium 实测：流式不丢、代次变化场景内容延续、刷新后历史完整 | `.kaiming/work/kaiming-webapp-chief-20261013` |
 
 仍未取证：PI-01 的压缩/分支关联、PI-07 的配置变化冷恢复、PI-09 并发容量与超时、PI-03/PI-04/PI-06、P6 完整产品验收（浏览器全链路与视觉对照）与其余产品验收场景、P7 的"恢复已执行输入按原配置"（本实现不重放旧输入，无落点）、命令执行的沙箱隔离（P-05 已按事实明示边界）。其余实施证据边界见相应结算记录。
 
@@ -66,7 +66,7 @@
 | 独立审阅 | Passed | 外壳重构两轮（9+2 项阻断，全部关闭）；缺口补齐两轮（无阻断，9 项非阻断关闭，见 `workbench-gaps-20261022/review.md`） |
 | 真实模型 | Passed（部分） | 一次手工浏览器探针：真实 DeepSeek 在真实外壳里回答，状态栏显示实际配置，短会话不提供「加载更早」；`npm run check:model` 4/4（deepseek/deepseek-flash：往返、question 工具、宿主答复、适配层事实）；`npm run check:runtime` 4/4（真实运行完成、交付边界、脱敏配置、认领代数）。完整 J-01～J-10 仍未执行 |
 
-未覆盖：真实模型下的完整 J-01～J-10 流程；拖拽/触屏手势；320px 以下的可用性；U4 恢复核实与 U5 会话清理的界面（产品未定义交互，问题见 `.agentdev/work/workbench-gaps-20261022/questions.md`）；浏览器套件在 9 次连续全绿中出现过 2 次不可复现的偶发失败（详见该任务 `test.md`）。
+未覆盖：真实模型下的完整 J-01～J-10 流程；拖拽/触屏手势；320px 以下的可用性；U4 恢复核实与 U5 会话清理的界面（产品未定义交互，问题见 `.kaiming/work/workbench-gaps-20261022/questions.md`）；浏览器套件在 9 次连续全绿中出现过 2 次不可复现的偶发失败（详见该任务 `test.md`）。
 
 ## 2026-10-23 Provider 命名/协议与会话命名
 
@@ -210,7 +210,7 @@
 
 | Provider 编辑改为弹框 | Passed | 现场：provider 列表很长时点第一行的「修改」像没有反应 —— 表单是追加在列表末尾的一块，开在折叠线以下。改为 `role="dialog"` + `aria-modal="true"` 的弹框（`min(880px, 100vw-32px)`，`max-height: 86vh`，主体滚动 + 底部按钮常驻），带焦点陷阱，`Esc` 关闭；列表首行按钮始终可见。实测 8 个 provider 的列表：点第一行后弹框顶部 y=118、底部 844（视口 800→切 1280×800 时整块在视口内），框内直接显示 `gw-0` 与名称 `gateway 0`。选择器列表改为 `position: fixed` 并按输入框矩形定位（滚动/resize 时重算），因此不再被弹框的滚动容器裁掉；展开时 `Esc` 只收列表（`stopPropagation`），收起后再按 `Esc` 才关弹框 —— 否则一次 `Esc` 会连未保存的编辑一起丢弃。保存成功走外壳 toast，失败则错误留在框内。窄屏（390px）实测：字段单列、模型行 id 与选择器上下堆叠、移除按钮独立一列。浏览器新增用例「the provider editor opens as a dialog, not below a long list」（8 个 provider、首行编辑、弹框完整在视口内、`Esc` 分层、保存后关闭并更新列表） |
 
-| 改思考级别后全部失败（协议被覆盖） | Passed | 现场：用户为 `openai` provider 里的 `group/auto-deepseek-v4-1-flash` 从目录选中模型后，所有请求失败，网关侧也报错。根因：上一版把目录条目的 `api` 一起写进了 `models.json`（该目录条目属于 Pi 的 radius 供应商，`api: pi-messages`），而该 provider 自己声明的是 `openai-completions` —— 实测 `ModelConfig` 读回的结果是 `model.api = "pi-messages"`，即 Pi 用 Pi 自己的消息协议去请求一个 OpenAI 兼容网关（`127.0.0.1:3425`），端点与网关两侧同时失败。与思考等级本身无关：`writeProvider` 现在只复制能力事实（`reasoning`/`thinkingLevelMap`/`contextWindow`/`maxTokens`/`input`），模型级 `api`/`provider`/`baseUrl` 一律不写；`providers.models.upstream` 只是 `provider/model` 字符串，供配置页回显。修复后本机实测：`levelsFor` = `off/low/high/max`，真实 Session 在 `off`、`high`、`max` 三档各跑一次都返回 `OK`；网关直连 `max_tokens: 32768 + reasoning_effort: high` 正常返回 `reasoning_content`。已修复用户磁盘上的 `models.json`（移除被写入的 `api: pi-messages`、`provider`、`baseUrl`，备份 `.agentdev-data/models.json.bak`）。回归测试补到两层，均已在旧实现上验证会失败：① 保存路径（`config.save` → 目录选型 `catalog`/`baseModel` → `models.json`）断言落盘条目不含 `api`/`provider`/`baseUrl`，并用 `ModelRuntime` 读回确认两个模型都以 `openai-completions` 序列化；② 加载器（直接给 `writeProvider` 传带 vendor 身份的模型定义，即旧代码产生的形状）断言任何形状都不会写出模型级协议。此外把原有的「写入目录数字」用例从 `JSON.parse + toMatchObject` 升级为经 `ModelRuntime` 读回后的完整断言（`api`/`provider`/`baseUrl`/`reasoning`/`contextWindow`/`maxTokens`/`thinkingLevelMap`/`input`），并在 [实现检查 I6](implementation-checks.md#i6-写给-pi-的文件必须由-pi-的加载器读回验证) 固定「写给 Pi 的文件必须由 Pi 的加载器读回验证」。 |
+| 改思考级别后全部失败（协议被覆盖） | Passed | 现场：用户为 `openai` provider 里的 `group/auto-deepseek-v4-1-flash` 从目录选中模型后，所有请求失败，网关侧也报错。根因：上一版把目录条目的 `api` 一起写进了 `models.json`（该目录条目属于 Pi 的 radius 供应商，`api: pi-messages`），而该 provider 自己声明的是 `openai-completions` —— 实测 `ModelConfig` 读回的结果是 `model.api = "pi-messages"`，即 Pi 用 Pi 自己的消息协议去请求一个 OpenAI 兼容网关（`127.0.0.1:3425`），端点与网关两侧同时失败。与思考等级本身无关：`writeProvider` 现在只复制能力事实（`reasoning`/`thinkingLevelMap`/`contextWindow`/`maxTokens`/`input`），模型级 `api`/`provider`/`baseUrl` 一律不写；`providers.models.upstream` 只是 `provider/model` 字符串，供配置页回显。修复后本机实测：`levelsFor` = `off/low/high/max`，真实 Session 在 `off`、`high`、`max` 三档各跑一次都返回 `OK`；网关直连 `max_tokens: 32768 + reasoning_effort: high` 正常返回 `reasoning_content`。已修复用户磁盘上的 `models.json`（移除被写入的 `api: pi-messages`、`provider`、`baseUrl`，备份 `.kaiming-data/models.json.bak`）。回归测试补到两层，均已在旧实现上验证会失败：① 保存路径（`config.save` → 目录选型 `catalog`/`baseModel` → `models.json`）断言落盘条目不含 `api`/`provider`/`baseUrl`，并用 `ModelRuntime` 读回确认两个模型都以 `openai-completions` 序列化；② 加载器（直接给 `writeProvider` 传带 vendor 身份的模型定义，即旧代码产生的形状）断言任何形状都不会写出模型级协议。此外把原有的「写入目录数字」用例从 `JSON.parse + toMatchObject` 升级为经 `ModelRuntime` 读回后的完整断言（`api`/`provider`/`baseUrl`/`reasoning`/`contextWindow`/`maxTokens`/`thinkingLevelMap`/`input`），并在 [实现检查 I6](implementation-checks.md#i6-写给-pi-的文件必须由-pi-的加载器读回验证) 固定「写给 Pi 的文件必须由 Pi 的加载器读回验证」。 |
 
 | 用量统计（P-07 / AC-37） | Passed | 需求：合计、按角色、按模型，各自可按项目与全部项目查看。实现为追加式账本 `usage_entries`（schema v14，`(inputId,providerId,modelId)` 主键），**不在流式过程中写库**：每次输入结束时把本次新增的 assistant 响应按响应自带的 `provider`/`model` 归并成每模型一行，在写输入终态**之前**一次事务写入（崩溃时已花费的 tokens 仍记账，重放因主键幂等不翻倍）；统计一律 `SUM()/GROUP BY`，不维护累加计数器。实测：stub 网关（每响应 `prompt_tokens:1, completion_tokens:1`）连发两轮对话后 `usage.report` 返回 `responses=2, inputTokens=2, outputTokens=2`，`byRole=[chief:2]`、`byModel=[stub/stub-1:2]`，项目作用域与全部项目一致；界面三张表列宽固定、上下堆叠，数字落在同一垂直轨道，320px 下只保留四列仍完整不溢出。口径细节：Pi 把 `usage` 初始化为 0 且只在服务方上报时填充，因此**全 0 视为未上报**、记 NULL 并显示 `—`（请求数仍计入）；成本为 0 同样视为「无目录价」而不是免费。单测 13 条（账本 6 + 归并与「未上报」判定 7），浏览器 1 条（真实对话 → 页面 → RPC 双作用域）。 |
 
@@ -220,7 +220,7 @@
 
 | 用量页视觉重做（三层结构） | Passed | 反馈：原页面「表格太难看、角色与模型分类不明显、间隔难看」。原因：三张同构网格上下堆叠，合计也是一行数据，分组只靠一行 `f3` 灰字，标签与数字同为等宽同色，视觉上没有层级。改为三层：① 首屏三个数字（请求数 / Tokens / 成本，20px 等宽）＋一行分项（输入/输出/缓存/推理）；② 两张独立面板（边框 + 深色标题条 + 右侧计数），与表格列头（大写灰字 + 细线）形成两级对比；③ 真正的 `<table>` + `<th scope>`，五列（名称 · 占比条 · 请求数 · 输入 · 输出 · 成本），数值列按内容收敛、名称列固定占比、剩余宽度给占比条——「谁用得最多」由条形直接回答。实测截图（1280×900 与 390×844，五个角色 / 三个模型的真实数据）核对：模型 id 完整不截断、三张表数字右对齐同一边缘、面板间距 16px、窄屏隐藏输入/输出两列且不溢出。顺带修掉一个隐藏缺陷：`--s5` 这个间距令牌从未定义，导致 `padding: var(--s4) var(--s5)` 整条声明失效（合计卡片内容贴住上边框）——全部改用已存在的 `--s4`/`--s6`。 |
 
-| 外部 Agent 接入（MCP，X-01～X-08） | Passed | 实现：`src/mcp/{main,protocol,http,control,runs}.ts`（stdio + `/mcp`，同一个 router/store，无第二套业务规则）；schema v15 加 `sessions.channel` + 部分唯一索引；R1 新增 `session.open`、`interaction.list`，`session.input.get` 支持只给 `inputId`，`task.get{includePlan}` 与摘要 `sourceInputId`；进度推导 `src/runtime/task-progress.ts` 与浏览器 `task-flow.ts` 由 `test-fixtures/task-progress.json` 双向钉住（两侧单测读同一份 fixture，服务端侧发现并修掉「空 frontier 组被当成已完成」）。测试：服务端 41 文件 435 用例（新增 `task-progress` 8、`mcp` 2、`mcp-protocol` 8、`mcp-runs` 6、`mcp-http` 3、`mcp-instance` 1，另 `store` 迁移与 `server-read` 会话/交互各加用例）、webapp 10 文件 70 用例、浏览器 56 用例、两侧 `tsc --noEmit`、`npm run build` 全绿。真实客户端：Codex 0.155.1 与 Claude Code 2.1.310 各用 stdio 连到同一 workbench（stub 模型），三件套调用链 `delegate → status → read` 均成功，读回 stub 答复原文（`GATE-ANSWER…`）。实测两点值得记：① Codex 在 `approval: never` 下直接拒绝调用 `agentdev_delegate`（`destructiveHint` 触发的宿主批准策略），说明注解是生效的，宿主必须显式放开；② Claude Code 的 `read(kind=transcript)` 同时看到了 Codex 那次委派的内容——固定会话共享上下文（X-02 的预期语义），因此实现改为按 `inputId` 过滤本次运行的条目，并在整段条目都带归属但都不属于本运行时返回空集，而不是退回尾部。独立评审后另修三处：stdout 在重启带未完成工作时被启动诊断污染（改为 stderr 日志汇）、第二个 MCP 进程会在同一库上再开一个 workbench（改为实例记录 + 附着，绑定配置端口）、`cancel` 对暂停中的 Task 不下发控制（改为所有非终态都走 `task.control`）；同时把「成员是否通过」的正式报告 verdict 合并进 `taskProgress` 与浏览器 `flowOf`/成员行，两个接入面对同一份复核结论给出同一答案（fixture 增加「复核完成但报告未通过」用例，成员行另有单测）。未覆盖：Grok（未安装）；`/mcp` 经 TLS/反向代理；真实模型跑完整的 write Task 流程 |
+| 外部 Agent 接入（MCP，X-01～X-08） | Passed | 实现：`src/mcp/{main,protocol,http,control,runs}.ts`（stdio + `/mcp`，同一个 router/store，无第二套业务规则）；schema v15 加 `sessions.channel` + 部分唯一索引；R1 新增 `session.open`、`interaction.list`，`session.input.get` 支持只给 `inputId`，`task.get{includePlan}` 与摘要 `sourceInputId`；进度推导 `src/runtime/task-progress.ts` 与浏览器 `task-flow.ts` 由 `test-fixtures/task-progress.json` 双向钉住（两侧单测读同一份 fixture，服务端侧发现并修掉「空 frontier 组被当成已完成」）。测试：服务端 41 文件 435 用例（新增 `task-progress` 8、`mcp` 2、`mcp-protocol` 8、`mcp-runs` 6、`mcp-http` 3、`mcp-instance` 1，另 `store` 迁移与 `server-read` 会话/交互各加用例）、webapp 10 文件 70 用例、浏览器 56 用例、两侧 `tsc --noEmit`、`npm run build` 全绿。真实客户端：Codex 0.155.1 与 Claude Code 2.1.310 各用 stdio 连到同一 workbench（stub 模型），三件套调用链 `delegate → status → read` 均成功，读回 stub 答复原文（`GATE-ANSWER…`）。实测两点值得记：① Codex 在 `approval: never` 下直接拒绝调用 `kaiming_delegate`（`destructiveHint` 触发的宿主批准策略），说明注解是生效的，宿主必须显式放开；② Claude Code 的 `read(kind=transcript)` 同时看到了 Codex 那次委派的内容——固定会话共享上下文（X-02 的预期语义），因此实现改为按 `inputId` 过滤本次运行的条目，并在整段条目都带归属但都不属于本运行时返回空集，而不是退回尾部。独立评审后另修三处：stdout 在重启带未完成工作时被启动诊断污染（改为 stderr 日志汇）、第二个 MCP 进程会在同一库上再开一个 workbench（改为实例记录 + 附着，绑定配置端口）、`cancel` 对暂停中的 Task 不下发控制（改为所有非终态都走 `task.control`）；同时把「成员是否通过」的正式报告 verdict 合并进 `taskProgress` 与浏览器 `flowOf`/成员行，两个接入面对同一份复核结论给出同一答案（fixture 增加「复核完成但报告未通过」用例，成员行另有单测）。未覆盖：Grok（未安装）；`/mcp` 经 TLS/反向代理；真实模型跑完整的 write Task 流程 |
 
 未覆盖：Windows 下微软雅黑回退的实际观感（本环境仅 macOS/Chromium）；返工轮次由真实长跑 Task 观察（自动化以 `task.get` mock 驱动，服务端零改动，风险在分组算法已由用例锁定）。
 
@@ -244,7 +244,7 @@
 
 **修复**：①暂停/暂停中（`paused`/`pausing`）且会话是该 Task 的 `chiefSessionId` 时，`user`/`system_notice` 输入照常认领；`cancelling`/`cancelled`、成员工作、未核实 interrupted 的拒绝不变；②chief 在 `pausing`/`paused` 时的工具集移除 `write`/`edit`/`bash`/`requirement`/`project`（与 read Task 同一形态），resume 后恢复；③`task(op=get)` 在暂停期返回 `context.writeHold='paused'` 与一句说明。
 
-**证据**：真实服务 + 真实 worker + 脚本化 SSE 模型：模型自建 Task 的会话，暂停后新消息 `queued→processing→completed`，该轮模型请求工具表为 `read,grep,find,ls,task,question,web_search,web_fetch,browser`（无写工具），resume 后恢复 `bash,requirement,project`；Task 在首轮前即暂停时同样成立。成员仍 `TASK_CONTROLLED`、cancelled 无主管轮次、cancelling 仍拒绝、真实崩溃重启后仍 `RECOVERY_REQUIRED`。单测 42 文件 444 用例、`tsc --noEmit` 全绿；在 HEAD 工作树上仅覆盖新测试时，5 个新用例按预期失败（tool-sets 1、store 1、task-tools 1、runtime 3）。详见 `.agentdev/work/paused-chief-input-20261028/`。
+**证据**：真实服务 + 真实 worker + 脚本化 SSE 模型：模型自建 Task 的会话，暂停后新消息 `queued→processing→completed`，该轮模型请求工具表为 `read,grep,find,ls,task,question,web_search,web_fetch,browser`（无写工具），resume 后恢复 `bash,requirement,project`；Task 在首轮前即暂停时同样成立。成员仍 `TASK_CONTROLLED`、cancelled 无主管轮次、cancelling 仍拒绝、真实崩溃重启后仍 `RECOVERY_REQUIRED`。单测 42 文件 444 用例、`tsc --noEmit` 全绿；在 HEAD 工作树上仅覆盖新测试时，5 个新用例按预期失败（tool-sets 1、store 1、task-tools 1、runtime 3）。详见 `.kaiming/work/paused-chief-input-20261028/`。
 
 **未覆盖**：暂停期是否需要保留 `requirement`/`project` 的只读 op（当前整工具移除，产品未要求）；暂停轮与恢复轮的实例身份只在单测验证（`startWorkbench` 不暴露 registry）。一轮独立测试曾报“复用实例仍带 bash”，复核为按请求序号取错轮次的测量假象：按轮次文本关联后不成立。
 
@@ -254,7 +254,7 @@
 
 **实现**：`AgentSession.getContextUsage()` 为权威估算；`contextOf` 活实例优先，无实例时按上次运行模型（否则当前设置）取目录窗口并标 `live=false`；快照带 `context`，assistant `message_end` / `compaction_end` 后在 microtask 发布顶层 `context` 通知（避开 Pi 先广播后 append，并保证观测失败不影响 run）。前端 slot 合并并在状态栏渲染 `已用 / 窗口 · 百分比`；≥70% warning、≥90% danger；压缩后 `?`、无实例 `—`；≤560 只留百分比，≤480 隐藏分支，≤400 隐藏运行计数，模型最后才收缩、快捷键提示先让位。
 
-**证据**：真实服务 + 真实 Chromium + 脚本化 provider：桌面 `2 / 128k · 0.0%`（role=meter，title 含 estimated/auto-compaction）；用量递增 provider 下 12k→38k（9.4%→29.7%）；重启后 prepare 返回 `{tokens:null,contextWindow:128000,percent:null,autoCompaction:null,live:false}`，config.get 不变；390/320 可见且仅百分比、无横向溢出；拥挤 + 长模型名在 401/430/480/561/650/861 连接词均在栏内。单测 43 文件 453 用例、webapp 12 文件 79 用例、两侧 `tsc` 与浏览器 57 用例通过。详见 `.agentdev/work/context-meter-20261028/`。
+**证据**：真实服务 + 真实 Chromium + 脚本化 provider：桌面 `2 / 128k · 0.0%`（role=meter，title 含 estimated/auto-compaction）；用量递增 provider 下 12k→38k（9.4%→29.7%）；重启后 prepare 返回 `{tokens:null,contextWindow:128000,percent:null,autoCompaction:null,live:false}`，config.get 不变；390/320 可见且仅百分比、无横向溢出；拥挤 + 长模型名在 401/430/480/561/650/861 连接词均在栏内。单测 43 文件 453 用例、webapp 12 文件 79 用例、两侧 `tsc` 与浏览器 57 用例通过。详见 `.kaiming/work/context-meter-20261028/`。
 
 **未覆盖**：真实触发压缩后的 `?`、真实 70/90 颜色（由 SSR 单测覆盖）、真实成员运行/真实断线（几何用注入同形节点）、中文字符串窄屏宽度。
 
@@ -316,7 +316,7 @@
 
 **未覆盖**：已停止的历史消息（`c-mvv6kpir-2230-a9abe0`）不会自动恢复；是否重新投递由用户决定。真实浏览器里「排队中回显 → 投递」的视觉链路未重跑。
 
-**独立复核**：Review `passed`（无阻塞项）；Test 定向 4 文件 52 用例、全量 49 文件 484 用例、`tsc --noEmit` 通过；证据归档 `.agentdev/work/chief-session-continuity-20261031/`。
+**独立复核**：Review `passed`（无阻塞项）；Test 定向 4 文件 52 用例、全量 49 文件 484 用例、`tsc --noEmit` 通过；证据归档 `.kaiming/work/chief-session-continuity-20261031/`。
 
 ## 2026-10-31 · 报告晚到后主管不再推进（宿主唤醒）
 
@@ -386,7 +386,7 @@
 
 **根因**：最后一条 bash 命令用 `node -e` 加载 `react-dom/server.browser`，打印两行结果后进程不退出；Pi 的 bash 工具 `timeout` 可选且没有默认值，工具执行期间没有 Pi 事件，run watchdog 的 900 秒 stall 把整个 run 中止。复现原命令时 `timeout 8` 退出码为 124，确认是命令不退出而不是模型/Provider 停摆。
 
-**修正**：`createBashTimeoutGuard` 在 `tool_call` 上为未写 `timeout` 的 bash 调用注入宿主默认值（默认 600 秒，`AGENTDEV_BASH_TIMEOUT_SECONDS` 可调，0 关闭；显式值优先）；`runner.ts` 与 `privatePathGuard` 一起安装。`step-wake.ts` 的步骤停稳通知在“watchdog stopped 且无报告”时提示续办原 Session，`guidance.ts` 的 `nextActions` 同样给出 `sessionId` 续办动作；专业 Agent 提示词补充“打印完不退出是 hang，不是长任务”。
+**修正**：`createBashTimeoutGuard` 在 `tool_call` 上为未写 `timeout` 的 bash 调用注入宿主默认值（默认 600 秒，`KAIMING_BASH_TIMEOUT_SECONDS` 可调，0 关闭；显式值优先）；`runner.ts` 与 `privatePathGuard` 一起安装。`step-wake.ts` 的步骤停稳通知在“watchdog stopped 且无报告”时提示续办原 Session，`guidance.ts` 的 `nextActions` 同样给出 `sessionId` 续办动作；专业 Agent 提示词补充“打印完不退出是 hang，不是长任务”。
 
 **证据**：`test/runtime.test.ts`「bounds a bash command that omits a timeout, so a hang is a tool result not a stalled run」用真实 `sleep 2` + 1 秒默认值，run 以 `completed` 结束且工具结果含 `timed out after 1 seconds`；`test/tool-guard.test.ts` 覆盖空值注入、显式值不覆盖、非 bash 不处理；`test/step-wake.test.ts` 与 `test/delegation.test.ts` 覆盖 watchdog-stopped 的续办提示。`tsc --noEmit` 通过。
 
@@ -530,7 +530,7 @@
 
 **证据**：webapp 14 文件 98 用例；服务端全量 49 文件 505 用例（`--maxWorkers=1`），其中定向 queue 用例 31；两边 `tsc --noEmit` 与 webapp `npm run build`；真实浏览器（harness 真服务 + 脚本化流式模型）5 用例：运行中第二条消息不刷新即显示正文、刷新后仍显示、STOP 点击后立即停止中并禁用、撤回排队行立即消失、队列交接到下一条后 STOP 仍指向正在运行的输入；Task 路由夹具验证暂停 pending。对应 AC-48。
 
-**落点**：`docs/productnew/acceptance.md` AC-48、`docs/technicalnew/ui-design.md` U5、`docs/technicalnew/runtime-contract.md` `session.input.submit`/`session.stream.prepare`、`devagent/webapp/src/{chat,state,app}`、`devagent/src/server/{write-methods,stream-methods}.ts`。
+**落点**：`docs/productnew/acceptance.md` AC-48、`docs/technicalnew/ui-design.md` U5、`docs/technicalnew/runtime-contract.md` `session.input.submit`/`session.stream.prepare`、`kaiming/webapp/src/{chat,state,app}`、`kaiming/src/server/{write-methods,stream-methods}.ts`。
 
 **未覆盖**：真实模型下 Task 暂停/继续与手动压缩的完整计时（浏览器用延迟路由夹具验证 pending 外观）；队列在真实 Task 成员运行中的刷新由服务端快照单测覆盖，未另做真实成员长跑。
 
@@ -545,3 +545,25 @@
 **证据**：提示词装配 `test/context.test.ts` 与两端 `tsc --noEmit`；独立 Review 检查档位边界和默认 focused。未执行真实模型对照，也未增加程序化验证档字段（当前按 Plan 记录和人工判断）。
 
 **未覆盖**：真实模型是否在后续 Task 自觉遵守档位仍需观察；`visual` 与 `focused` 的边界由主管判断，没有程序强制。
+
+## 2026-11-05 · Task 与专业 Session 执行耗时
+
+**现象**：Task 条、任务清单和任务详情只说明状态与成员，用户看不到这项工作已经运行多久；专业 Session 的成员行也没有最近一次委派的执行耗时。
+
+**修正**：`task.list`/`task.get` 返回 Task 的 `createdAt`/`updatedAt`；`task.get` 的成员返回最近一次 delegation/continuation 的 `executionStartedAt`（`deliveryStartedAt`）与 `executionEndedAt`（输入停稳时的 `updatedAt`）。前端 `Elapsed` 从这些记录时间计算，只有运行中的显示每秒更新；Task 条、任务详情、需求页任务列表和成员行显示耗时，成员抽屉沿用同一窗口。暂停/完成/取消停在最后记录的 `updatedAt`，排队且未开始的输入不显示伪造耗时。Task 耗时是墙钟时间，包含等待与暂停，不是纯模型执行时间。
+
+**落点**：`src/server/read-methods.ts`、`webapp/src/chat/{Elapsed.tsx,task-time.ts,TaskStrip.tsx,TaskTodo.tsx,TaskDrawer.tsx,MemberDrawer.tsx}`、`webapp/src/requirements/{RequirementsPage.tsx,requirement-model.ts}`、`webapp/src/state/slot.ts`、`docs/productnew/acceptance.md` AC-50、`docs/technicalnew/ui-design.md`。
+
+**证据**：服务端全量 50 文件 510 用例通过（`test/server-read.test.ts` 断言 Task 与成员时间字段）；webapp 15 文件 102 用例通过（新增 `task-time.test.ts`）；两端 `tsc --noEmit`；webapp build；真实 Chromium 全量 65 用例通过，其中任务条/成员行、任务列表、任务详情断言时间非空且刷新后仍显示，截图 `test-results/acceptance-a-running-Task--0fd6f-history-has-no-dispatch-yet-chromium/task-live-after-reload.png`。
+
+**未覆盖**：没有用真实长跑 Task 人工观察跨小时/暂停/取消后的墙钟；自动化用固定时间戳和短任务验证显示与刷新保持。成员行只显示最近一次委派，不展开历史每一次续办的耗时。
+
+## 2026-11-05 · 项目更名为开明（Kaiming）
+
+**决定**：弃用重叠严重的 AgentDev/Workloom/Runstead，采用《山海经》开明兽意象，产品名“开明”，代码标识 `kaiming`。这是一次干净改名：应用目录 `devagent/` → `kaiming/`，数据目录 `.agentdev-data/` → `.kaiming-data/`，环境变量 `AGENTDEV_*` → `KAIMING_*`，MCP 工具 `agentdev_*` → `kaiming_*`，cookie/header、Pi marker、包名、UI、文档和图片全部同步。
+
+**历史保留**：迁移前备份源与数据；SQLite 中 138 条 `session_bindings.piFile`、620 条含旧数据路径的 `effectiveConfig`/`checkpoint` 改为新路径；142 个 Pi JSONL 的 `agentdev.input-marker` 改为 `kaiming.input-marker`；项目、会话、Task、报告和附件原样保留。旧备份保留在 `/tmp`。
+
+**证据**：服务端 50 文件 510 用例、webapp 15 文件 102 用例、真实 Chromium 65 用例全部通过；两端 `tsc --noEmit` 与 build 通过。用 `scripts/start.sh` 启动迁移后的真实数据目录后，登录、`project.list`（1 个项目、140 个会话、28 个 Task）、`session.list` 和 `session.messages.list` 均成功返回历史内容；138 个 `piFile` 全部存在。
+
+**未覆盖**：历史会话正文/报告中出现的旧产品名和旧绝对路径按“保留历史”原则不改写；浏览器侧已有 cookie 会因 cookie 名改变需要重新登录。`.kaiming` 历史工作记录保留，不重写其内容。

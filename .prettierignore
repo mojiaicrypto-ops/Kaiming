@@ -4,5 +4,5 @@ coverage
 *.tsbuildinfo
 webui/index.html
 docs
-.agentdev
+.kaiming
 pnpm-lock.yaml
