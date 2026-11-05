@@ -615,3 +615,22 @@
 **证据**：`npm run check:prompts` **15/15 通过**（装配顺序、边界标题唯一、切片起点、缺失/重复边界拒绝、英文注入、链接可解析）；新增文本位于 `## Base rules` 之后的注入区，不含中日韩字符，符合提示词语言门禁。
 
 **未覆盖**：提示词是软约束，没有模型行为证据——未用真实模型验证它是否降低变相删除率；宿主 `deletion-gate` 的 confirm 仍是唯一执行边界；模型仍可能用未被文本规则覆盖的写法（如语言层动态调用）绕过，需靠后续沙箱收敛。
+
+## 2026-11-06 · 评审 REPORT_MISSING 根因（suangua 现场）
+
+**现象**：suangua 项目里 reviewer 多次在输入结束时没有调用 `agent_report`，宿主记 `failed / REPORT_MISSING`；当前步骤无法完成，主管只能让原 Session 补交。
+
+**统计（本机 `.kaiming-data/state.db`，截至 2026-11-05T17:07Z）**：reviewer 输入 133 条，其中 22 条 `REPORT_MISSING`（16.5%）；这 22 条里 **21 条的主管派发指令只描述了报告的聊天形态**（如“报告 ≤12 行，首行 `pass` 或 `needs_fix`”），从未要求调用 `agent_report`；只有 1 条指令写明了工具要求。
+
+**两类原因，分开取证**：
+
+1. **指令形态（21/22）**：模型按字面把结论写成聊天正文后 `stopReason=stop` 结束。工具本身可用——同一 session 的 `effectiveConfig.activeTools` 含 `agent_report`，后续补交输入一次调用即成功。系统提示（`specialists.md`、`reviewer.md`）已写明“纯正文不算结果”，但具体派发文本更近、更具体，模型跟了它。
+2. **模型退化（1/22）**：`t-6c2caeca` 的 `s-db850430` / `i-bc63c8cd` 指令已明确要求 `agent_report`，但最后一条 assistant 消息的 text 块与 thinking 块**逐字相同**（各 3915 字符，`SequenceMatcher` ratio 1.0），`stopReason=stop`，无 toolCall。模型 `group/auto-glm-5-3-flash` 把推理原文当可见答案重复后收尾。
+
+**宿主行为符合既有契约**：无 `expectedKind` 结果即 `REPORT_MISSING`，不自动重试；主管让原 Session 补交（`agents-and-tools.md` G2、`guidance.ts` 的补交 nextAction）。现场该路径有效：`i-bc63c8cd` 失败后，`i-358f0c38`（只补交、不重审）在 15 秒内记录 `r-2a9aed92` passed，Task 随后 settle 并 completed。
+
+**处置**：`prompts/chief.md` 派发段新增规则——每次派发必须在 instructions 里写明结果经 `agent_report` 提交、纯正文不算结果，并禁止只描述报告形态；成员缺报告时续办原 Session，不另派替代 Review。这是 21/22 的直接成因。
+
+**证据**：`npm run check:prompts` 15/15；统计脚本直接读 `state.db` 与 `session_bindings.piFile` 的转录。
+
+**未覆盖**：模型退化（原因 2）不是提示词能消除的；宿主目前没有“输入结束但无结果”的自动补交动作，是否让程序在派发时固定追加提交要求、或自动重试一次，属于新的产品/技术决定，本期未实现。
