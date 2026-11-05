@@ -634,3 +634,17 @@
 **证据**：`npm run check:prompts` 15/15；统计脚本直接读 `state.db` 与 `session_bindings.piFile` 的转录。
 
 **未覆盖**：模型退化（原因 2）不是提示词能消除的；宿主目前没有“输入结束但无结果”的自动补交动作，是否让程序在派发时固定追加提交要求、或自动重试一次，属于新的产品/技术决定，本期未实现。
+
+## 2026-11-06 · 结算（提示词两条硬规则 + REPORT_MISSING 根因）
+
+**交付**：`558e3bc`（删除不得伪装：base/specialists/chief + G1 提示词层说明）、`09f8f0a`（派发必须写明经 `agent_report` 提交：chief + 根因取证）。
+
+**事实**：
+
+- 两次改动均为提示词/文档，无代码变更，因此不产生 Review/Test 阶段；以 `npm run check:prompts`（15/15，装配顺序/边界/英文/链接）与 `npm test`（525 passed，改后复跑）作为验证。
+- 提示词正文按 `promptDir` 进程内缓存（`runner.bodiesFor`），已运行的 workbench 需重启才使用新文本。
+- 实际效果尚未有模型行为证据：两条规则是否降低变相删除与 `REPORT_MISSING` 发生率，仍属未测。
+
+**文档面**：`docs/INDEX.md` 当前状态补两条提示词硬规则；`docs/technicalnew/gap-register.md` R6 登记“报告提交依赖派发措辞与模型自觉、程序无兜底”；`AGENTS.md` 新增 Settlement lessons（缓存/重启、派发文本优先、`REPORT_MISSING` 可续办）。
+
+**未完成项**：程序层“派发时追加提交要求或失败自动重试”仍待产品决定，未实现。
