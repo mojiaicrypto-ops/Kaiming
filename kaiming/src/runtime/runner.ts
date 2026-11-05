@@ -34,7 +34,7 @@ import { readDocument, readImage } from '../server/attachments.ts';
 import { InteractionBridge, createUiAdapter } from './interactions.ts';
 import { createQuestionTool } from '../tools/question-tool.ts';
 import { createDeletionGate } from './deletion-gate.ts';
-import { createBashTimeoutGuard, createPrivatePathGuard, DEFAULT_BASH_TIMEOUT_SECONDS } from './tool-guard.ts';
+import { createBashTimeoutGuard, createFileBoundaryGuard, DEFAULT_BASH_TIMEOUT_SECONDS } from './tool-guard.ts';
 import { toolSetFor, type WriteHold } from './tool-sets.ts';
 import { asToolDefinitions, createTaskGetTool, createTaskTool, type DomainTool, type TaskToolContext } from '../tools/task-tools.ts';
 import { createBrowserTool } from '../tools/browser-tool.ts';
@@ -616,11 +616,15 @@ export class InputRunner {
           ],
           ...(binding !== undefined ? { piFile: binding.piFile } : {}),
           ...(extras?.customTools !== undefined ? { customTools: extras.customTools } : {}),
-          // Always installed: the model's file tools never reach the server's private storage.
+          // Always installed: the model's file tools stay inside the project (and never reach the
+          // server's private storage); shell commands keep their own deletion gate.
           extensionFactories: [
             ...(extras?.extensionFactories ?? []),
-            createPrivatePathGuard({
+            createFileBoundaryGuard({
               cwd: session.cwd,
+              // The project row is the authority, not the cwd: a session that ever ran in a
+              // subdirectory must still be bounded by the whole project.
+              projectRoot: this.options.store.getProject(session.projectId)?.realPath ?? session.cwd,
               privateDirs: this.options.privateDirs ?? [],
               // web_fetch saves the full page here and tells the model to grep it; reports and
               // screenshots live under the same root. Credentials and session files stay blocked.

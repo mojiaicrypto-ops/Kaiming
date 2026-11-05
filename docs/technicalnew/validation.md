@@ -591,3 +591,15 @@
 **证据**：服务端全量 **52 文件 520 用例通过**，其中 E2E 证明：批准后文件真实删除、拒绝后文件保留且工具结果含 “the user declined”、普通命令不产生 interaction；规则单测覆盖 12 条破坏性命令、10 条安全近邻、5 种复合命令形态、4 种脚本删除与引用误报边界。`tsc --noEmit` 通过；webapp 与浏览器套件随后验证（无界面改动，交互面板复用既有 confirm 卡片）。
 
 **未覆盖**：文本规则不是 shell 解析器也不是沙箱——`base64 -d | sh`、变量拼接、语言层动态调用等刻意绕过不保证拦截，外层仍依赖工具集白名单与交付核对；PowerShell 规则沿用同一文本检测但当前工具集从不激活它；未用真实模型人工走一遍浏览器确认卡片（E2E 直接驱动 interaction 存储与等待者，浏览器 confirm 渲染由既有交互用例覆盖）。
+
+## 2026-11-06 · 文件工具限制在项目目录内
+
+**需求**：第一期不引入沙箱，也不列可写路径白名单（项目可能是 Rust/Java，目录无法枚举）；先把基础文件操作限制在项目路径内，`bash` 另议，删除命令继续走审批。
+
+**实现**：`src/runtime/tool-guard.ts` 新增 `projectBoundaryBlockReason`，并把原私有目录守卫合并为 `createFileBoundaryGuard` 在 `runner.ts` 对所有会话安装。`read`/`write`/`edit`/`grep`/`find`/`ls` 的路径参数经 `normalize`（`~`、`@`、`file://`、相对路径、真实祖先）解析后必须落在项目根内，否则以 `isError` 工具结果拒绝并说明原因；项目根取 `store.getProject(session.projectId).realPath` 而不是 cwd。只读工具保留 `agentDir/work` 例外（`web_fetch` 保存的网页、报告、截图可 grep），`write`/`edit` 不适用。私有存储拒绝先于项目边界，原因仍按私有存储报告。`bash` 不在路径规则内——它由删除门禁与工具集白名单治理。
+
+**落点**：`src/runtime/tool-guard.ts`、`src/runtime/runner.ts`、`test/tool-guard.test.ts`（新增 4 条边界用例：相对/绝对/`..`、省略 path 与 work root 读写差异、符号链接按落点判断、bash 不受路径规则）、`test/runtime.test.ts`（真实 Pi run：读取项目外真实文件被拒且内容不进入转录）、`docs/technicalnew/agents-and-tools.md` G1、`README.md`/`README.en.md` 安全边界。
+
+**证据**：服务端全量 **52 文件 525 用例通过**；边界单测覆盖相对路径、绝对路径、`..`、符号链接（指向项目外拒绝、指向项目内允许）、work root 只读例外与写入拒绝、bash 不适用；E2E 证明项目外文件读取返回 `isError` 且文件内容不出现在会话消息中。`tsc --noEmit` 通过。
+
+**未覆盖**：`bash` 仍可读写项目外（`cat /etc/passwd`、`cp` 到外部目录），这是本期明确的取舍，路径范围留给后续沙箱；`agent_report`/`requirement`/`task` 等宿主工具的写入路径不经过该守卫（它们由程序固定路径）；未在 Windows 上验证（当前实现依赖 POSIX 路径语义）。

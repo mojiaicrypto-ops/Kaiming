@@ -312,6 +312,7 @@ The workbench provides stdio MCP and a resident `/mcp` endpoint. Codex, Claude C
 - By default it listens only on `127.0.0.1`. Do not expose the port directly to the internet; for remote access add a reverse proxy, TLS and access control.
 - The login password is in `kaiming/.env`; model keys live in the data directory or Settings. Never commit either.
 - Agent `bash` has the same permissions as the system user that started the workbench. This is not an OS-level sandbox; do not use it on untrusted code or grant it unnecessary privileges.
+- File tools (read, write, edit, search) may only reach the project directory. `bash` is not path-restricted, but destructive commands (`rm`, `git reset --hard`, …) ask you to confirm in the browser every time.
 - Do not place projects inside the data directory: file tools treat private storage as inaccessible, which would block the whole project.
 - Single-user only. Team accounts, RBAC and managed hosting are out of scope.
 

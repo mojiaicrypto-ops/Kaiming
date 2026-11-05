@@ -1050,6 +1050,31 @@ describe('input runner', () => {
     expect(messages.some((message) => message.role === 'toolResult')).toBe(true);
   }, 30_000);
 
+  it('refuses a model file read outside the project as a tool result', async () => {
+    // The stub reads its reply array at request time, so the call can name a path only known after
+    // the harness exists.
+    const replies: StubReply[] = [];
+    const h = await harness({ replies });
+    const outside = join(h.cwd, '..', 'outside.txt');
+    // A real file outside the project: the refusal must be the boundary, not a missing file.
+    writeFileSync(outside, 'TOP-SECRET-CONTENT');
+    replies.push(
+      { kind: 'tool_calls', calls: [{ name: 'read', arguments: JSON.stringify({ path: outside }) }] },
+      { kind: 'text', text: 'could not read it' },
+    );
+
+    const outcome = await h.runner.runNext('s-1');
+
+    expect(outcome.kind).toBe('completed');
+    const messages = h.registry.get('s-1')?.session.messages ?? [];
+    const result = messages.find((message) => message.role === 'toolResult') as
+      | { isError?: boolean; content?: unknown }
+      | undefined;
+    expect(result?.isError).toBe(true);
+    expect(JSON.stringify(result?.content)).toMatch(/outside the project/);
+    expect(JSON.stringify(messages)).not.toContain('TOP-SECRET-CONTENT');
+  }, 30_000);
+
   it('bounds a bash command that omits a timeout, so a hang is a tool result not a stalled run', async () => {
     const h = await harness({
       replies: [

@@ -152,22 +152,73 @@ export function privatePathBlockReason(input: GuardInput): string | undefined {
   return undefined;
 }
 
-/** The extension that installs the guard for one session (its cwd plus the server's private dirs). */
-export function createPrivatePathGuard(options: {
+/** File tools that only read; they may also reach the session work root (web_fetch output). */
+const READ_FILE_TOOLS = new Set(['read', 'ls', 'find', 'grep']);
+
+export interface BoundaryInput extends GuardInput {
+  /** The project this session belongs to; the model's file tools may not leave it. */
+  readonly projectRoot: string;
+}
+
+/**
+ * Why this file-tool call leaves the project, or `undefined` when it stays inside. The path is
+ * resolved through its real ancestors, so `..`, absolute paths and a symlink pointing out of the
+ * project are all judged by where they actually land. Read-only tools keep the work-root exception
+ * (web_fetch saves pages there and tells the model to grep them); write/edit do not. Shell tools are
+ * deliberately out of scope here — `bash` is governed by its own deletion gate, not by a path list.
+ */
+export function projectBoundaryBlockReason(input: BoundaryInput): string | undefined {
+  const pathArgument = PATH_ARGUMENT[input.toolName];
+  if (pathArgument === undefined) {
+    return undefined;
+  }
+  const value = input.args[pathArgument];
+  // No path means the session cwd (the project root), which is inside by definition.
+  if (typeof value !== 'string' || value === '') {
+    return undefined;
+  }
+  const target = normalize(value, input.cwd);
+  const root = normalize(input.projectRoot, process.cwd());
+  if (inside(target, root)) {
+    return undefined;
+  }
+  if (READ_FILE_TOOLS.has(input.toolName)) {
+    const readable = (input.readableDirs ?? [])
+      .filter((dir) => dir !== '')
+      .map((dir) => normalize(dir, process.cwd()));
+    if (readable.some((dir) => inside(target, dir))) {
+      return undefined;
+    }
+  }
+  return `${value} is outside the project (${root}); the file tools work inside the project directory only`;
+}
+
+/**
+ * The extension that installs the file boundary for one session: the server's private storage is
+ * refused first (its own reason), then anything outside the project. Shell commands are not
+ * path-restricted here.
+ */
+export function createFileBoundaryGuard(options: {
   readonly cwd: string;
+  readonly projectRoot: string;
   readonly privateDirs: readonly string[];
   readonly readableDirs?: readonly string[];
 }): ExtensionFactory {
   return (pi: ExtensionAPI): void => {
     pi.on('tool_call', (event: ToolCallEvent) => {
-      const reason = privatePathBlockReason({
+      const input: GuardInput = {
         toolName: event.toolName,
         args: event.input as Record<string, unknown>,
         cwd: options.cwd,
         privateDirs: options.privateDirs,
         ...(options.readableDirs !== undefined ? { readableDirs: options.readableDirs } : {}),
-      });
-      return reason === undefined ? undefined : { block: true, reason };
+      };
+      const privateReason = privatePathBlockReason(input);
+      if (privateReason !== undefined) {
+        return { block: true, reason: privateReason };
+      }
+      const boundaryReason = projectBoundaryBlockReason({ ...input, projectRoot: options.projectRoot });
+      return boundaryReason === undefined ? undefined : { block: true, reason: boundaryReason };
     });
   };
 }
