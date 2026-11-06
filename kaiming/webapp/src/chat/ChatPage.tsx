@@ -310,6 +310,18 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, proje
       };
     });
   }, [taskDetail, slot.pending, t]);
+  /**
+   * One stable handler for every card that can follow a member: an inline arrow would give every
+   * row a new prop identity on each streamed frame and defeat the row memo.
+   */
+  const followSession = useCallback(
+    (sessionId: string): void => {
+      const row = members.find((entry) => entry.sessionId === sessionId);
+      if (row === undefined) setFollow(sessionId);
+      else followMember(row);
+    },
+    [members, followMember],
+  );
 
   // The local echo keeps an answered card on screen just long enough to prove the answer was
   // recorded (a few seconds), then closes it: a box that stays after the question is over blocks
@@ -530,11 +542,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, proje
                 variant="chief"
                 members={members}
                 liveSessions={liveSessionIds}
-                onFollow={(sessionId) => {
-                  const row = members.find((entry) => entry.sessionId === sessionId);
-                  if (row === undefined) setFollow(sessionId);
-                  else followMember(row);
-                }}
+                onFollow={followSession}
                 onLink={openLink}
               />
             )}
@@ -545,11 +553,7 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, proje
                 members={members}
                 pendingQuestions={openQuestions.length}
                 planMarkdown={taskPlan}
-                onFollow={(sessionId) => {
-                  const row = members.find((entry) => entry.sessionId === sessionId);
-                  if (row === undefined) setFollow(sessionId);
-                  else followMember(row);
-                }}
+                onFollow={followSession}
                 onOpenTask={() => setTaskOpen(true)}
               />
             )}

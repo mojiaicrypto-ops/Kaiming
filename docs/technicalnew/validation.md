@@ -664,3 +664,26 @@
 **边界**：同标签内切换项目仍会替换该标签的会话选择，这是该标签自己的语义；`sessionStorage` 被禁用时退回“无记忆”，不影响可用性；语言与主题仍是 profile 级偏好（`localStorage`）。
 
 **经验**：`refresh()` 在登录前也会跑一次，未认证的 `project.open` 会失败——旧键只能在**成功打开后**清除，否则一次失败的预跑就吃掉了唯一副本，用户升级后看到空项目。迁移类读取一律“成功后消费”，不要“读取即消费”。
+
+## 2026-11-06 · 流式回答只重绘真正变化的那一条消息
+
+**现象**：Task 跑起来、主管在长会话里持续输出时，界面整体发钝，点击（含切换项目）要等一会儿才有反应；流一停就恢复。
+
+**根因（代码 + 实测）**：`webapp/src/api/stream.ts` 每收到一帧就 `dispatch`，`Transcript`/`MessageItem` 都没有 `memo` → **每个 token 都把整篇 transcript 重渲染一次**，每个 `Markdown` 重新解析。真实实例上实测：362 条可见时一次全量重渲染约 54ms。
+
+**处置**：① `MessageItem` 加 `memo` + 自定义比较器（消息对象身份；只比较这条消息自己的 toolCall 结果视图；`onFollow` 从内联箭头改为 `useCallback`，否则每帧都是新身份）；② `indexToolResults` 按 toolResult 消息对象缓存视图（reducer 保证未变消息对象身份不变），未变结果不再重新拼接文本；③ `SessionStream` 用 `requestAnimationFrame` 合并帧，交付上限从 token 速率降到屏幕刷新率；`stop()`/resync/`prepare` 丢弃缓冲，隐藏标签页超过 512 帧同步 flush 防止无界堆积。
+
+**测量（脚本化 stub 模型，同一份负载，前后各一次；CDP `Performance.getMetrics` 在一次流式回答前后取差）**：
+
+| transcript 行数 | 流（200 chunk / ~1.15s） | ScriptDuration | TaskDuration |
+|---|---|---|---|
+| 80 | 修复前 | 291ms | 454ms |
+| 80 | 修复后 | **104ms** | **226ms** |
+| 300 | 修复前 | 797ms（占墙钟 69%） | 1010ms |
+| 300 | 修复后 | **178ms** | **338ms** |
+
+300 行时主线程脚本时间降到约 1/4.5，且不再随可见历史线性变差的那一半（markdown 重解析）已经消失；剩下的是每帧 300 个元素的 reconcile，仍随行数线性增长。
+
+**正确性**：`browser/acceptance.spec.ts` 全量 **50 passed**（含工具卡片结果到达后就地翻转、成员抽屉、语言/主题、手机布局）；`smoke`/`feedback`/`feedback-task`/`project-per-tab`/`walk` **18 passed**；webapp 单测 **102 passed**；根与 webapp `tsc --noEmit`、`npm run build` 通过。测量用的临时 harness 与 spec 已删除。
+
+**未做（有明确触发条件才做）**：transcript 虚拟化——只有在可见历史很长且模型速率很高、上述改动仍不够时才需要；现在每一次帧只重绘一条消息。

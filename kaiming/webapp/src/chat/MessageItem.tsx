@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
 import { Markdown } from './Markdown';
@@ -39,7 +40,7 @@ function extractAnswer(text: string): string {
   return /answer="([^"]*)"/.exec(text)?.[1] ?? '';
 }
 
-export function MessageItem({ message, role, label, continuation, results, onFollow, members, liveSessions, liveCallId, onLink }: MessageItemProps) {
+function MessageItemRow({ message, role, label, continuation, results, onFollow, members, liveSessions, liveCallId, onLink }: MessageItemProps) {
   const { t } = useI18n();
   const streaming = message.streaming === true;
   const blocks = blocksOf(message);
@@ -169,3 +170,34 @@ export function MessageItem({ message, role, label, continuation, results, onFol
     </article>
   );
 }
+
+/** True when every tool result this message shows is still the same view object. */
+function sameResults(before: MessageItemProps, after: MessageItemProps): boolean {
+  if (before.results === after.results) return true;
+  for (const block of before.message.content) {
+    // A call without an id never matches a result (`blocksOf` gives it a synthetic key), so it has
+    // nothing to compare here.
+    if (block.type !== 'toolCall' || block.id === undefined) continue;
+    if (before.results.get(block.id) !== after.results.get(block.id)) return false;
+  }
+  return true;
+}
+
+/**
+ * A streamed token changes one message; without this comparison React would re-render every row of
+ * the transcript for each token, re-parsing markdown that did not change. The slot reducer keeps the
+ * identity of untouched messages and cached tool-result views, so identity is the honest test.
+ * Context (language) still reaches a memoized row, because `useI18n` reads it.
+ */
+export const MessageItem = memo(MessageItemRow, (before, after) =>
+  before.message === after.message &&
+  before.role === after.role &&
+  before.label === after.label &&
+  before.continuation === after.continuation &&
+  before.onFollow === after.onFollow &&
+  before.onLink === after.onLink &&
+  before.members === after.members &&
+  before.liveSessions === after.liveSessions &&
+  before.liveCallId === after.liveCallId &&
+  sameResults(before, after),
+);

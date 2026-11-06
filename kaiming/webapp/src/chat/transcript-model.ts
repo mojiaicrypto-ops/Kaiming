@@ -21,14 +21,28 @@ export type BlockKind =
  * old renderer attached it to the newest running card, which mislabels a result when two calls
  * interleave, so the shell shows the call with a waiting status instead of a wrong answer.
  */
+/**
+ * Views are cached by the message object they came from. The slot reducer keeps the identity of
+ * every message a frame did not touch, so walking the whole list again yields the same objects and
+ * a memoized row can tell "my tool results did not change" by identity alone.
+ */
+const viewCache = new WeakMap<HistoryMessage, ToolResultView>();
+
 export function indexToolResults(items: readonly HistoryMessage[]): Map<string, ToolResultView> {
   const results = new Map<string, ToolResultView>();
   for (const message of items) {
     if (message.role !== 'toolResult') continue;
-    const text = message.content.map((block) => (block.type === 'text' ? block.text : '')).join('');
-    const images = message.content.flatMap((block) => (block.type === 'image' ? [block.src] : []));
     if (message.toolCallId !== undefined) {
-      results.set(message.toolCallId, { text, images, failed: message.isError === true });
+      let view = viewCache.get(message);
+      if (view === undefined) {
+        // Only the message that actually changed pays for joining its blocks: an untouched result
+        // is the same object every frame, which is what lets a row skip its own re-render.
+        const text = message.content.map((block) => (block.type === 'text' ? block.text : '')).join('');
+        const images = message.content.flatMap((block) => (block.type === 'image' ? [block.src] : []));
+        view = { text, images, failed: message.isError === true };
+        viewCache.set(message, view);
+      }
+      results.set(message.toolCallId, view);
     }
   }
   return results;

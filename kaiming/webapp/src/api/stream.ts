@@ -90,6 +90,14 @@ export class SessionStream {
   private closed = false;
   private resyncing = false;
   private attempts = 0;
+  /**
+   * Frames read within one animation frame are delivered together. A provider streams many more
+   * tokens per second than the screen can show, and every frame used to become its own React
+   * render; a frame is now the unit of delivery, so the cost is bounded by the refresh rate instead
+   * of by the token rate.
+   */
+  private pending: StreamFrame[] = [];
+  private pendingHandle: number | null = null;
 
   constructor(
     private readonly rpc: import('./rpc').RpcClient,
@@ -104,6 +112,7 @@ export class SessionStream {
 
   stop(): void {
     this.closed = true;
+    this.dropPending();
     this.controller?.abort();
     this.controller = null;
   }
@@ -115,6 +124,8 @@ export class SessionStream {
   }
 
   private async prepare(reason: 'initial' | 'resync'): Promise<void> {
+    // The snapshot below replaces the whole slot: anything still queued describes the state before it.
+    this.dropPending();
     const prepared = (await this.rpc.call('session.stream.prepare', {
       projectId: this.projectId,
       sessionId: this.sessionId,
@@ -184,12 +195,52 @@ export class SessionStream {
       void this.resync('resync-frame');
       return;
     }
-    this.handlers.onFrame(payload);
+    this.queue(payload);
+  }
+
+  /** Deliver at most once per animation frame; a hidden tab must not grow the buffer without bound. */
+  private queue(frame: StreamFrame): void {
+    this.pending.push(frame);
+    // A background tab throttles animation frames to nothing: flush synchronously rather than hold
+    // an unbounded queue of tokens the user will never see arrive.
+    if (this.pending.length >= 512) {
+      this.flush();
+      return;
+    }
+    if (this.pendingHandle !== null) return;
+    this.pendingHandle = requestAnimationFrame(() => {
+      this.pendingHandle = null;
+      this.flush();
+    });
+  }
+
+  private flush(): void {
+    if (this.pendingHandle !== null) {
+      cancelAnimationFrame(this.pendingHandle);
+      this.pendingHandle = null;
+    }
+    if (this.pending.length === 0) return;
+    const frames = this.pending;
+    this.pending = [];
+    for (const frame of frames) this.handlers.onFrame(frame);
+  }
+
+  /**
+   * Frames buffered for the stream being replaced belong to no snapshot the reader will see: drop
+   * them so a stale delta cannot land on top of the state a resync just installed.
+   */
+  private dropPending(): void {
+    if (this.pendingHandle !== null) {
+      cancelAnimationFrame(this.pendingHandle);
+      this.pendingHandle = null;
+    }
+    this.pending = [];
   }
 
   private async resync(reason: string): Promise<void> {
     if (this.closed || this.resyncing) return;
     this.resyncing = true;
+    this.dropPending();
     this.controller?.abort();
     this.attempts += 1;
     const delay = Math.min(200 * this.attempts, 1_000);
