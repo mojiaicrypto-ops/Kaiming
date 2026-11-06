@@ -21,3 +21,4 @@ kaiming/config/model.json
 # AGENTS.md names oldcode/ as "not read, not processed", so it never belongs in history.
 oldcode/
 .kiro/
+roadmap
