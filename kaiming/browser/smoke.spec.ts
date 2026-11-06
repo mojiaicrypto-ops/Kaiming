@@ -19,8 +19,8 @@ const ARTIFACTS = fileURLToPath(new URL('./artifacts', import.meta.url));
 /** Pin the language (and optionally a project/session) before the shell boots. */
 async function pinStorage(page: Page, seed: { readonly project?: SeededProject; readonly locale: string }): Promise<void> {
   await page.addInitScript((value: { readonly projectPath: string | null; readonly sessionId: string | null; readonly locale: string }) => {
-    if (value.projectPath !== null) localStorage.setItem('kaiming.projectPath', value.projectPath);
-    if (value.sessionId !== null) localStorage.setItem('kaiming.sessionId', value.sessionId);
+    if (value.projectPath !== null) sessionStorage.setItem('kaiming.projectPath', value.projectPath);
+    if (value.sessionId !== null) sessionStorage.setItem('kaiming.sessionId', value.sessionId);
     localStorage.setItem('kaiming.locale', value.locale);
   }, {
     projectPath: seed.project?.projectPath ?? null,
@@ -82,8 +82,8 @@ test('a stale stored session id does not leave the empty shell in "reconnecting"
     // id the server no longer has. It must be dropped, not fed to session.stream.prepare forever.
     await page.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' });
     await page.evaluate(() => {
-      localStorage.setItem('kaiming.projectPath', '/tmp/kaiming-missing-project');
-      localStorage.setItem('kaiming.sessionId', 's-gone');
+      sessionStorage.setItem('kaiming.projectPath', '/tmp/kaiming-missing-project');
+      sessionStorage.setItem('kaiming.sessionId', 's-gone');
     });
     await page.reload({ waitUntil: 'domcontentloaded' });
     await loginThroughUi(page, harness.accessPassword);
@@ -91,7 +91,7 @@ test('a stale stored session id does not leave the empty shell in "reconnecting"
     await expect(page.locator('[data-testid="connection"]')).toHaveText(/No session yet/);
     await expect(page.locator('[data-testid="connection-banner"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="no-session-banner"]')).toBeVisible();
-    expect(await page.evaluate(() => localStorage.getItem('kaiming.sessionId'))).toBeNull();
+    expect(await page.evaluate(() => sessionStorage.getItem('kaiming.sessionId'))).toBeNull();
   } finally {
     await harness.close();
   }

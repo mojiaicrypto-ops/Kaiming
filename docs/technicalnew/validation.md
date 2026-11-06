@@ -648,3 +648,17 @@
 **文档面**：`docs/INDEX.md` 当前状态补两条提示词硬规则；`docs/technicalnew/gap-register.md` R6 登记“报告提交依赖派发措辞与模型自觉、程序无兜底”；`AGENTS.md` 新增 Settlement lessons（缓存/重启、派发文本优先、`REPORT_MISSING` 可续办）。
 
 **未完成项**：程序层“派发时追加提交要求或失败自动重试”仍待产品决定，未实现。
+
+## 2026-11-06 · 项目与会话选择改为标签页独立
+
+**现象**：同一浏览器开两个标签，一个切到项目 B 后，另一个标签刷新就落到 B；用户无法让 A 标签停在 A 项目、B 标签停在 B 项目。
+
+**根因**：`webapp/src/state/useWorkspace.ts` 把 `kaiming.projectPath` / `kaiming.sessionId` 存在 `localStorage`——同一 profile 的所有标签共用一份值。服务端没有“当前项目”状态（`project.open` 只注册，`session.list` 按参数取数），跨浏览器本来就独立。
+
+**实测（修复前，真实 Chromium + 真实 workbench，两项目）**：标签 2 打开时自动进入标签 1 的项目；标签 2 切到 B 后，标签 1 显示不变但共享值已是 B；标签 1 刷新落到 B（`switcher="kaiming-second-oOizBE"`）。独立 profile 的浏览器启动为 `No project`，可独立打开任意项目。
+
+**处置**：项目/会话改为 `sessionStorage`（每标签一份，刷新保留）；`localStorage` 只保留 `kaiming.lastProjectPath` 作为新标签的一次性默认值，因此新标签仍沿用最近项目，之后各标签互不影响。写入集中在 `applyProject`（唯一知道项目真的打开的位置）；删除了只写不读的 `kaiming.projectId`。契约补进 [U1](ui-design.md#u1-范围与现状)。
+
+**证据**：新增 `browser/project-per-tab.spec.ts`——两标签各开一项目，各自刷新后仍在本标签项目，第三个新标签沿用最近项目（B）。**反向控制**：同一场景在旧实现上运行，刷新后 `tabA` 显示 `kaiming-second-…`，用例失败（日志保留在本次会话）。回归：`smoke` + `feedback` + `feedback-task` 15 passed、acceptance「never been here」1 passed、webapp 单测 102 passed、`tsc --noEmit`（根 + webapp）与 `npm run build` 通过。
+
+**边界**：同标签内切换项目仍会替换该标签的会话选择，这是该标签自己的语义；`sessionStorage` 被禁用时退回“无记忆”，不影响可用性；语言与主题仍是 profile 级偏好（`localStorage`）。

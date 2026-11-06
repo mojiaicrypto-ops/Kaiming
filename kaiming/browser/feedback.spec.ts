@@ -8,8 +8,8 @@ import { loginThroughUi, startHarness, waitForConnected, type SeededProject } fr
 
 async function pinStorage(page: Page, project: SeededProject): Promise<void> {
   await page.addInitScript((value: { projectPath: string; sessionId: string }) => {
-    localStorage.setItem('kaiming.projectPath', value.projectPath);
-    localStorage.setItem('kaiming.sessionId', value.sessionId);
+    sessionStorage.setItem('kaiming.projectPath', value.projectPath);
+    sessionStorage.setItem('kaiming.sessionId', value.sessionId);
     localStorage.setItem('kaiming.locale', 'en');
   }, { projectPath: project.projectPath, sessionId: project.sessionId });
 }

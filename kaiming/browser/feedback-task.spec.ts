@@ -72,8 +72,8 @@ test('pausing a Task immediately shows a disabled pending control', async ({ pag
     });
 
     await page.addInitScript((value: { projectPath: string; sessionId: string }) => {
-      localStorage.setItem('kaiming.projectPath', value.projectPath);
-      localStorage.setItem('kaiming.sessionId', value.sessionId);
+      sessionStorage.setItem('kaiming.projectPath', value.projectPath);
+      sessionStorage.setItem('kaiming.sessionId', value.sessionId);
       localStorage.setItem('kaiming.locale', 'en');
     }, { projectPath: harness.project?.projectPath ?? '', sessionId: harness.project?.sessionId ?? '' });
     await page.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' });

@@ -11,6 +11,7 @@
 | 三屏：Chat / Requirements / Settings（Providers · Models · Appearance） | `webapp/src/app/`、`chat/`、`requirements/`、`settings/` |
 | 旧的无构建外壳已删除；`/app/*` 301 到同路径 | `src/server/http.ts` |
 | 设计基准是 `docs/design/tui/`：`docs/design/tui/index.html` 是可直接打开的高保真原型（含脚本化对话） | `docs/design/tui/{index.html,tui.css,chat-view.js}` |
+| 项目与会话的选择属于**标签页**：`kaiming.projectPath` / `kaiming.sessionId` 存 `sessionStorage`，两个标签可各开一个项目，刷新不互相带走；`localStorage` 只存 `kaiming.lastProjectPath` 作为新标签默认值，语言仍按 profile 存 | `webapp/src/state/useWorkspace.ts`、`webapp/src/lib/storage.ts`；用例 `browser/project-per-tab.spec.ts` |
 
 不包含：服务端业务语义、Agent 提示词、模型调度。
 

@@ -17,10 +17,14 @@ import { createStubEnv, startStubModelServer, type StubReply } from '../spikes/h
 const RPC_PATH = '/api/v1/rpc';
 const CSRF_HEADER = 'x-kaiming-csrf';
 
-/** localStorage keys the shell reads on boot (project, session, interface language). */
+/**
+ * Keys the shell reads on boot: the open project and session belong to one tab (`sessionStorage`),
+ * the interface language and the "last project" default belong to the profile (`localStorage`).
+ */
 export const STORAGE_KEYS = {
   projectPath: 'kaiming.projectPath',
   sessionId: 'kaiming.sessionId',
+  lastProjectPath: 'kaiming.lastProjectPath',
   language: 'kaiming.locale',
 } as const;
 

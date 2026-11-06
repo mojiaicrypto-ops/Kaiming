@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RpcClient, newRequestId } from '../api/rpc';
-import { readStored, removeStored, writeStored } from '../lib/storage';
+import { readStored, readTab, removeTab, writeStored, writeTab } from '../lib/storage';
 import type { SessionActivity } from '../api/stream';
 
+/**
+ * The open project and session belong to this tab, not to the browser profile: two tabs may sit on
+ * two projects, and switching in one must not move the other. `LAST_PROJECT_KEY` is the one shared
+ * value — a default for a tab that has not chosen yet, which is also how a new tab opens what the
+ * user was last looking at.
+ */
 const PROJECT_KEY = 'kaiming.projectPath';
 const SESSION_KEY = 'kaiming.sessionId';
+const LAST_PROJECT_KEY = 'kaiming.lastProjectPath';
 /** One page of the rail; a long list asks for more instead of loading everything up front. */
 const SESSION_PAGE = 100;
 
@@ -69,13 +76,13 @@ export interface WorkspaceApi {
 }
 
 /**
- * Project + session selection. Both lists come from the server (`project.list`, `session.list`):
- * the browser remembers only which project and session the user was looking at.
+ * Project + session selection. Both lists come from the server (`project.list`, `session.list`);
+ * the tab remembers only which project and session it was showing, so two tabs stay independent.
  */
 export function useWorkspace(rpc: RpcClient): WorkspaceApi {
   const [project, setProject] = useState<ProjectSummary | null>(null);
   const [projects, setProjects] = useState<readonly ProjectRow[]>([]);
-  const [sessionId, setSessionId] = useState<string>(() => readStored(SESSION_KEY) ?? '');
+  const [sessionId, setSessionId] = useState<string>(() => readTab(SESSION_KEY) ?? '');
   const [sessions, setSessions] = useState<readonly SessionRow[]>([]);
   const [sessionCursor, setSessionCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -130,11 +137,11 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
    * not have and sit in "reconnecting" forever.
    */
   const chooseSession = useCallback((rows: readonly SessionRow[]): void => {
-    const known = readStored(SESSION_KEY);
+    const known = readTab(SESSION_KEY);
     const next = rows.find((row) => row.sessionId === known)?.sessionId ?? rows[0]?.sessionId ?? '';
     setSessionId(next);
-    if (next === '') removeStored(SESSION_KEY);
-    else writeStored(SESSION_KEY, next);
+    if (next === '') removeTab(SESSION_KEY);
+    else writeTab(SESSION_KEY, next);
   }, []);
 
   // A project row is a plain fact, so the callback that stores it must not change when a row does:
@@ -143,7 +150,10 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
     async (summary: ProjectSummary): Promise<void> => {
       projectRef.current = summary;
       setProject(summary);
-      writeStored('kaiming.projectId', summary.projectId);
+      // Both scopes are written here, from the one place that knows the project really opened:
+      // this tab now shows it, and a tab opened later starts from it.
+      writeTab(PROJECT_KEY, summary.realPath);
+      writeStored(LAST_PROJECT_KEY, summary.realPath);
       let rows: readonly SessionRow[] = [];
       try {
         const page = await loadSessions(summary.projectId);
@@ -160,27 +170,27 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
   );
 
   const refresh = useCallback(async (): Promise<void> => {
-    const path = readStored(PROJECT_KEY);
+    // This tab's own choice wins; a tab that has not chosen yet starts from the last project the
+    // profile opened, which keeps "open the workbench and continue" while tabs stay independent.
+    const path = readTab(PROJECT_KEY) ?? readStored(LAST_PROJECT_KEY);
     if (path === null) {
-      // Nothing remembered in THIS browser is not "no projects": the registry lives on the server,
-      // so a fresh browser (another machine, a cleared profile) must still see what was added. The
-      // early return here is why the switcher read "No project registered yet" while the server
-      // held a project.
+      // Nothing remembered here is not "no projects": the registry lives on the server, so a fresh
+      // tab or browser must still see what was added. The early return here is why the switcher
+      // once read "No project registered yet" while the server held a project.
       setLoading(false);
       await loadProjects();
       return;
     }
     try {
       const opened = await rpc.call<{ project: ProjectSummary }>('project.open', { path }, { requestId: newRequestId('open') });
-      writeStored(PROJECT_KEY, opened.project.realPath);
       await applyProject(opened.project);
     } catch {
-      // An unreadable directory is not fatal: the shell still opens with the empty state. The path
-      // stays (so the user can rebind it), but a remembered session cannot belong to a project that
-      // did not open - it would outlive its own project and point the shell at nothing.
+      // An unreadable directory is not fatal: the shell still opens with the empty state. This
+      // tab's path stays (so the user can rebind it), but a remembered session cannot belong to a
+      // project that did not open - it would outlive its own project and point the shell at nothing.
       setProject(null);
       setSessionId('');
-      removeStored(SESSION_KEY);
+      removeTab(SESSION_KEY);
     } finally {
       setLoading(false);
       void loadProjects();
@@ -196,7 +206,6 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
   const openProject = useCallback(
     async (path: string): Promise<void> => {
       const opened = await rpc.call<{ project: ProjectSummary }>('project.open', { path }, { requestId: newRequestId('open') });
-      writeStored(PROJECT_KEY, opened.project.realPath);
       await applyProject(opened.project);
       await loadProjects();
     },
@@ -220,9 +229,8 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
         },
         { requestId: newRequestId('rebind') },
       );
-      // The user rebound the project they are looking at, so the shell follows it: the stored
-      // path is the new one, and the next boot opens the moved directory instead of failing.
-      writeStored(PROJECT_KEY, rebound.project.realPath);
+      // The user rebound the project they are looking at, so this tab follows it: the stored path is
+      // the new one, and the next boot opens the moved directory instead of failing.
       await applyProject(rebound.project);
       await loadProjects();
     },
@@ -231,7 +239,7 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
 
   const selectSession = useCallback((next: string): void => {
     setSessionId(next);
-    writeStored(SESSION_KEY, next);
+    writeTab(SESSION_KEY, next);
   }, []);
 
   // The project id is derived from the loaded project, never stored twice: two sources of the

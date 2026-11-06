@@ -1784,7 +1784,12 @@ test('a browser that has never been here still sees the registered projects', as
   try {
     await page.goto(harness.url);
     // Nothing is remembered in this context: that is the fresh-browser case.
-    expect(await page.evaluate(() => localStorage.getItem('kaiming.projectPath'))).toBeNull();
+    expect(
+      await page.evaluate(() => ({
+        tab: sessionStorage.getItem('kaiming.projectPath'),
+        profile: localStorage.getItem('kaiming.lastProjectPath'),
+      })),
+    ).toEqual({ tab: null, profile: null });
     await loginThroughUi(page, harness.accessPassword);
     await page.locator('[data-testid="project-switcher"]').click();
     await expect(page.locator('[data-testid="project-row"]')).toHaveCount(1, { timeout: 10_000 });
