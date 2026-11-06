@@ -657,8 +657,10 @@
 
 **实测（修复前，真实 Chromium + 真实 workbench，两项目）**：标签 2 打开时自动进入标签 1 的项目；标签 2 切到 B 后，标签 1 显示不变但共享值已是 B；标签 1 刷新落到 B（`switcher="kaiming-second-oOizBE"`）。独立 profile 的浏览器启动为 `No project`，可独立打开任意项目。
 
-**处置**：项目/会话改为 `sessionStorage`（每标签一份，刷新保留）；`localStorage` 只保留 `kaiming.lastProjectPath` 作为新标签的一次性默认值，因此新标签仍沿用最近项目，之后各标签互不影响。写入集中在 `applyProject`（唯一知道项目真的打开的位置）；删除了只写不读的 `kaiming.projectId`。契约补进 [U1](ui-design.md#u1-范围与现状)。
+**处置**：项目/会话改为 `sessionStorage`（每标签一份，刷新保留）；`localStorage` 只保留 `kaiming.lastProjectPath` 作为新标签的一次性默认值，因此新标签仍沿用最近项目，之后各标签互不影响。写入集中在 `applyProject`（唯一知道项目真的打开的位置）；删除了只写不读的 `kaiming.projectId`。升级兼容：旧版本写在 `localStorage.kaiming.projectPath` 的值被采纳一次并清除，避免既有 profile 升级后空项目启动。契约补进 [U1](ui-design.md#u1-范围与现状)。
 
-**证据**：新增 `browser/project-per-tab.spec.ts`——两标签各开一项目，各自刷新后仍在本标签项目，第三个新标签沿用最近项目（B）。**反向控制**：同一场景在旧实现上运行，刷新后 `tabA` 显示 `kaiming-second-…`，用例失败（日志保留在本次会话）。回归：`smoke` + `feedback` + `feedback-task` 15 passed、acceptance「never been here」1 passed、webapp 单测 102 passed、`tsc --noEmit`（根 + webapp）与 `npm run build` 通过。
+**证据**：新增 `browser/project-per-tab.spec.ts`——两标签各开一项目，各自刷新后仍在本标签项目，第三个新标签沿用最近项目（B）；另一条用例覆盖旧键采纳（旧键被清除、`lastProjectPath` 与标签路径写入、流已订阅）。**反向控制**：同一场景在旧实现上运行，刷新后 `tabA` 显示 `kaiming-second-…`，用例失败（日志保留在本次会话）。回归：`smoke` + `feedback` + `feedback-task` + `project-per-tab` **17 passed**、acceptance「never been here」1 passed、webapp 单测 102 passed、`tsc --noEmit`（根 + webapp）与 `npm run build` 通过。
 
 **边界**：同标签内切换项目仍会替换该标签的会话选择，这是该标签自己的语义；`sessionStorage` 被禁用时退回“无记忆”，不影响可用性；语言与主题仍是 profile 级偏好（`localStorage`）。
+
+**经验**：`refresh()` 在登录前也会跑一次，未认证的 `project.open` 会失败——旧键只能在**成功打开后**清除，否则一次失败的预跑就吃掉了唯一副本，用户升级后看到空项目。迁移类读取一律“成功后消费”，不要“读取即消费”。

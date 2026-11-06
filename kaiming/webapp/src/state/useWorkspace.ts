@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RpcClient, newRequestId } from '../api/rpc';
-import { readStored, readTab, removeTab, writeStored, writeTab } from '../lib/storage';
+import { readStored, readTab, removeStored, removeTab, writeStored, writeTab } from '../lib/storage';
 import type { SessionActivity } from '../api/stream';
 
 /**
@@ -172,7 +172,12 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
   const refresh = useCallback(async (): Promise<void> => {
     // This tab's own choice wins; a tab that has not chosen yet starts from the last project the
     // profile opened, which keeps "open the workbench and continue" while tabs stay independent.
-    const path = readTab(PROJECT_KEY) ?? readStored(LAST_PROJECT_KEY);
+    // A tab that has not chosen yet starts from the last project the profile opened. Builds before
+    // per-tab scoping kept this very key in localStorage; adopt that value so an upgrade does not
+    // land the user on an empty shell. It is cleared only after the project really opened, because
+    // this refresh also runs before login and a refused open must not consume the only copy.
+    const legacyPath = readStored(PROJECT_KEY);
+    const path = readTab(PROJECT_KEY) ?? readStored(LAST_PROJECT_KEY) ?? legacyPath;
     if (path === null) {
       // Nothing remembered here is not "no projects": the registry lives on the server, so a fresh
       // tab or browser must still see what was added. The early return here is why the switcher
@@ -184,6 +189,7 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
     try {
       const opened = await rpc.call<{ project: ProjectSummary }>('project.open', { path }, { requestId: newRequestId('open') });
       await applyProject(opened.project);
+      if (legacyPath !== null) removeStored(PROJECT_KEY);
     } catch {
       // An unreadable directory is not fatal: the shell still opens with the empty state. This
       // tab's path stays (so the user can rebind it), but a remembered session cannot belong to a

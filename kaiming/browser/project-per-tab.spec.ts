@@ -13,13 +13,15 @@ import { loginThroughUi, startHarness, waitForConnected, type Harness } from './
  */
 
 const switcher = (page: Page) => page.locator('[data-testid="project-switcher"]');
+/** The project's name as the header shows it; an exact match, so "No project" cannot pass. */
+const projectName = (page: Page) => page.locator('[data-testid="project-switcher"] b');
 
 /** Open a project directory the way a user does, and wait until the shell shows it. */
 async function openProject(page: Page, projectPath: string): Promise<void> {
   await switcher(page).click();
   await page.locator('[data-testid="project-path"]').fill(projectPath);
   await page.locator('[data-testid="project-path"]').press('Enter');
-  await expect(switcher(page)).toContainText(basename(projectPath));
+  await expect(projectName(page)).toHaveText(basename(projectPath));
 }
 
 /** A tab that may be mid-boot (login screen) or already authenticated in this context. */
@@ -53,29 +55,48 @@ test('two tabs hold two projects and a reload keeps each tab on its own', async 
     // A new tab starts from the last project (the profile default), then becomes independent.
     const tabB = await profile.newPage();
     await boot(tabB, harness);
-    await expect(switcher(tabB)).toContainText(first, { timeout: 15_000 });
+    await expect(projectName(tabB)).toHaveText(first, { timeout: 15_000 });
     await openProject(tabB, secondDir);
-    await expect(switcher(tabB)).toContainText(second);
+    await expect(projectName(tabB)).toHaveText(second);
 
     // Tab A reloads into its own project, not into the one tab B chose.
     await tabA.reload();
-    await expect(switcher(tabA)).toContainText(first, { timeout: 15_000 });
+    await expect(projectName(tabA)).toHaveText(first, { timeout: 15_000 });
     await expect
       .poll(async () => tabA.evaluate(() => sessionStorage.getItem('kaiming.sessionId')), { timeout: 15_000 })
       .toBe(sessionOfA);
 
     // B keeps its own project after a reload too: neither tab overwrites the other.
     await tabB.reload();
-    await expect(switcher(tabB)).toContainText(second, { timeout: 15_000 });
+    await expect(projectName(tabB)).toHaveText(second, { timeout: 15_000 });
 
     // A tab opened after both choices starts from the most recent project (B).
     const tabC = await profile.newPage();
     await boot(tabC, harness);
-    await expect(switcher(tabC)).toContainText(second, { timeout: 15_000 });
+    await expect(projectName(tabC)).toHaveText(second, { timeout: 15_000 });
 
     await profile.close();
   } finally {
     await harness.close();
     rmSync(secondDir, { recursive: true, force: true });
+  }
+});
+
+test('a profile from the shared-key build keeps its project after the upgrade', async ({ page }) => {
+  const harness = await startHarness();
+  const first = basename(harness.project?.projectPath ?? '');
+  try {
+    // The old build wrote the open project into the shared store; that value must be adopted once,
+    // not ignored, or every existing profile would open on an empty shell.
+    await page.addInitScript((path: string) => localStorage.setItem('kaiming.projectPath', path), harness.project?.projectPath ?? '');
+    await boot(page, harness);
+    await expect(projectName(page)).toHaveText(first, { timeout: 15_000 });
+    await waitForConnected(page);
+    await expect
+      .poll(async () => page.evaluate(() => localStorage.getItem('kaiming.projectPath')), { timeout: 15_000 })
+      .toBeNull();
+    expect(await page.evaluate(() => localStorage.getItem('kaiming.lastProjectPath'))).not.toBeNull();
+  } finally {
+    await harness.close();
   }
 });
