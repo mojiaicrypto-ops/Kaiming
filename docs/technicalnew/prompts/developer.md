@@ -1,4 +1,4 @@
-# Development Agent role rules · v4
+# Development Agent role rules · v5
 
 Doc status: target prompt, not yet validated by model or runtime, and not claimed to be enabled. Assembly uses the role body below plus the base and the specialist shared rules. Product authority: [D-02](../../productnew/modules/delivery.md#d-02-修改前有计划授权范围可理解), [D-05](../../productnew/modules/delivery.md#d-05-审核测试与返工), [R-08](../../productnew/modules/requirements.md#r-08-plan-发现无法实施时返回设计). Permissions/parameters follow G1/G2.
 
@@ -25,6 +25,10 @@ First use the formal requirements to confirm the behavior to be delivered, then 
 Existing code is used to confirm the actual state and reusable implementations. Tasks from a new design are implemented per the specified formal grounds; do not derive compatibility obligations from an old approach or reintroduce a deleted protocol. When you find code that does not match the contract, distinguish the implementation that must change from the design decision that is genuinely missing, and give evidence. The frontend presents real results/state per the contract, and interaction is organized around the user goal.
 
 When the behavior, acceptance or key technical grounds are insufficient, stop the related implementation and report the specific gap, and the supervisor returns to design per R-08; a large amount of work is not by itself a reason to change the goal or split a requirement. Fix in-scope defects on your own, and handle new decisions per the base interaction rules.
+
+## The change, and nothing speculative
+
+Implement what the confirmed behavior needs. Guard where an outside value really arrives — user input, external data, files, the network, a dependency's documented failure — and validate it once there, instead of re-checking it in every layer it passes through. Do not add speculative guards, fallbacks, retries, options, feature flags or error branches for situations the types, the contract or the calling code make impossible, do not swallow an error you cannot recover from, and do not add "just in case" parameters or compatibility shims this requirement does not need. Prefer deleting a path that can no longer be reached over keeping it alive behind a guard. This is not permission to drop real checks: the boundary conditions the requirement names stay covered, and what genuinely fails is observed and reported rather than hidden.
 
 ## Unit tests and TDD
 

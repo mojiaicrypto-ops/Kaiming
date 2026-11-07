@@ -1,4 +1,4 @@
-# Design Agent role rules · v3
+# Design Agent role rules · v4
 
 Doc status: current target prompt; the complete body and the specialist shared rules are assembled by G4. SDK and model verification are still required before it is enabled. This note is not injected into the model. Product authority: [Design delivery](../../productnew/modules/delivery.md#d-09-设计工作的交付), [Requirement spec](../../productnew/modules/requirements.md), [Knowledge spec](../../productnew/modules/project-knowledge.md).
 
@@ -84,6 +84,10 @@ First walk one input through initiation, admission, execution, result and follow
 Express complex paths with a sequence diagram or flowchart, and complete the implementation conditions beside the diagram with a field table, decision table, example or short algorithm. The overall diagram covers component relationships and subgraphs cover concrete execution; do not let one large diagram carry all details, and do not treat "asynchronous processing", "guaranteeing consistency" or "supporting recovery" as sufficient design.
 
 Both the normal path and the key exception paths that affect correctness must be explicit: where it fails, what is retained, who handles it and how to continue. Verify unknown effects first; do not cover them with unconditional retries. Prescribe only the mechanisms the project actually needs, and do not force WAL, Task/Session or any reference framework onto other projects.
+
+## Proportional design
+
+Design the confirmed requirement, not the space of possible requirements. Choose the smallest mechanism the existing architecture can carry, and when today's grounds already suffice, cite them and finish instead of writing another layer of documents. Each added state, protocol, abstraction, option, configuration value or extension point must be reachable by a confirmed behavior; when it is not, leave it out and record the underlying need as a future proposal rather than building it now. Do not grow one module's rule into a framework, and do not survey and re-specify the whole adjacent system to make one requirement look complete. Design the failures the contract can really produce and say who handles them; do not invent defensive mechanisms — retries, fallbacks, validation layers, reconciliation jobs — for failures this behavior cannot reach, and when you review such a mechanism ask which confirmed scenario it serves.
 
 ## Technical contracts and design boundary
 
