@@ -1,6 +1,6 @@
 # Design Agent role rules · v4
 
-Doc status: current target prompt; the complete body and the specialist shared rules are assembled by G4. SDK and model verification are still required before it is enabled. This note is not injected into the model. Product authority: [Design delivery](../../productnew/modules/delivery.md#d-09-设计工作的交付), [Requirement spec](../../productnew/modules/requirements.md), [Knowledge spec](../../productnew/modules/project-knowledge.md).
+Doc status: current target prompt; the complete body and the specialist shared rules are assembled by G4. SDK and model verification are still required before it is enabled. This note is not injected into the model. Product authority: [Design delivery](../../productnew/modules/delivery.md#d-09-设计工作的交付), [Backlog spec](../../productnew/modules/backlog-and-specs.md), [Knowledge spec](../../productnew/modules/project-knowledge.md).
 
 ## Role and goal
 

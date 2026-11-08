@@ -142,11 +142,11 @@ GET /api/v1/sessions/<sessionId>/stream?subscriptionId=<id>：
 }
 ```
 
-event 保持 Pi AgentSessionEvent；inputId/messageKey 仅有实际关联时提供，epoch=serverEpoch/当前 Pi 实例代次。业务通知 `{type:'invalidate',entity:'input'|'task'|'session'|'requirement'|'interaction',id,revision?}` 触发查询；`{type:'context',context}` 在每次 assistant `message_end` 与 `compaction_end` 后直接携带上下文占用（有活实例时），读者无需再查；连接/重连的初始值在快照 `context`。Pi 的 `compaction_start/compaction_end` 原样进入事件流，前端据此显示“压缩中”，快照 `compacting` 覆盖重连时的情况。交互事件见 M5。慢连接溢出不阻塞 Pi/其他页面。
+event 保持 Pi AgentSessionEvent；inputId/messageKey 仅有实际关联时提供，epoch=serverEpoch/当前 Pi 实例代次。业务通知 `{type:'invalidate',entity:'input'|'task'|'session'|'backlog'|'interaction',id,revision?}` 触发查询；`{type:'context',context}` 在每次 assistant `message_end` 与 `compaction_end` 后直接携带上下文占用（有活实例时），读者无需再查；连接/重连的初始值在快照 `context`。Pi 的 `compaction_start/compaction_end` 原样进入事件流，前端据此显示“压缩中”，快照 `compacting` 覆盖重连时的情况。交互事件见 M5。慢连接溢出不阻塞 Pi/其他页面。
 
 ## M5 统一交互与授权
 
-确认是一轮可等待的问答：模型判断是否需要询问、选择 Pi 通用交互类型并组织内容；UI 按类型渲染；用户答复写入 WAL，再返回原调用供模型继续。Plan、需求、风险等含义放在问题内容中，不定义业务确认 kind 或专用确认协议。
+确认是一轮可等待的问答：模型判断是否需要询问、选择 Pi 通用交互类型并组织内容；UI 按类型渲染；用户答复写入 WAL，再返回原调用供模型继续。会阻塞 Task 的决定（改变验收、改变模块边界、确认技术选型、确认切片清单、删除确认）统一以待决问题提出，含义放在问题内容中，不定义业务确认 kind 或专用确认协议。
 
 通过 session.bindExtensions({uiContext, mode}) 把 ctx.ui.confirm/select/input 接入宿主 UIAdapter，复用 Pi 原生请求/答复字段；**必须绑定 UI 适配器**，交互开关是「是否绑定适配器」而非 mode 字符串（实测绑定+`rpc`/绑定+`print` 都可交互，未绑定时 ctx.hasUI=false；与固定版本 `hasUI()` 实现一致），mode 按宿主真实身份声明（浏览器宿主首版 `"rpc"`）。适配器必须实现为普通对象：SDK 以对象展开包装 uiContext，类实例的原型方法会在包装后丢失。模型使用 G2 的 question 扩展，工具内部已有 ctx.ui 交互使用相同通道。[Pi 交互规范](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/docs/rpc-extension-ui.md)、[SDK 绑定源码](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/src/core/agent-session.ts#L3211-L3222)
 

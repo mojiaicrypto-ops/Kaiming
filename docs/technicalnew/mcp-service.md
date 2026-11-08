@@ -43,7 +43,7 @@
 | `kaiming_read` | `task.report.get` / `task.get{includePlan}` / `session.messages.list` / `project.files.list` | transcript 只返回本 run 的条目（固定会话共享，见 M6） |
 | `kaiming_runs` | `task.list` → 每项带 `runId`（由 `sourceInputId` 派生） | 断线后找回已接纳的 run，不重复委派；只列 Task——主管直接回答的委派没有 Task，也就没有要续的工作 |
 | `kaiming_projects` | `project.list` | 只读，不读项目文件 |
-| `kaiming_requirements` | `requirement.list` / `requirement.get` | 非法文件如实列为问题项 |
+| `kaiming_backlog` | `backlog.list` / `backlog.get` | 只读；有问题的条目如实列为问题项 |
 
 ## M4 run 标识与状态推导
 

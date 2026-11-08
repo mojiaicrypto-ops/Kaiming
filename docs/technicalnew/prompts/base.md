@@ -1,6 +1,6 @@
 # 开明 built-in base rules · v5
 
-Doc status: target prompt; assembly, model behavior and runtime verification are not yet complete, so it is not claimed to be enabled. All body text from "Base rules" onward enters the model, including "Judgment and expression"; the status note is not injected. Product authority: [R](../../productnew/modules/requirements.md), [D](../../productnew/modules/delivery.md), [K](../../productnew/modules/project-knowledge.md).
+Doc status: target prompt; assembly, model behavior and runtime verification are not yet complete, so it is not claimed to be enabled. All body text from "Base rules" onward enters the model, including "Judgment and expression"; the status note is not injected. Product authority: [B](../../productnew/modules/backlog-and-specs.md), [D](../../productnew/modules/delivery.md), [K](../../productnew/modules/project-knowledge.md).
 
 ## Base rules
 

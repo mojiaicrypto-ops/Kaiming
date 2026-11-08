@@ -1,6 +1,6 @@
 # Specialist shared rules and role assembly · v4
 
-Doc status: target prompt, not yet verified by model or runtime. Assembly uses the base body, the shared rules on this page, and the complete role body of the current role file; the status and the mapping table do not enter the model body. Permissions follow [G1](../agents-and-tools.md#g1-角色与工具集合), operation parameters follow [G2](../agents-and-tools.md#g2-模型工具), and no Schema is defined separately in the prompt. Product authority: [D](../../productnew/modules/delivery.md), [R](../../productnew/modules/requirements.md), [K](../../productnew/modules/project-knowledge.md).
+Doc status: target prompt, not yet verified by model or runtime. Assembly uses the base body, the shared rules on this page, and the complete role body of the current role file; the status and the mapping table do not enter the model body. Permissions follow [G1](../agents-and-tools.md#g1-角色与工具集合), operation parameters follow [G2](../agents-and-tools.md#g2-模型工具), and no Schema is defined separately in the prompt. Product authority: [D](../../productnew/modules/delivery.md), [B](../../productnew/modules/backlog-and-specs.md), [K](../../productnew/modules/project-knowledge.md).
 
 ## Shared rules
 

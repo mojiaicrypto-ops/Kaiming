@@ -94,7 +94,7 @@ erDiagram
 | 外部通道的固定会话 | `sessions.channel`（程序字段，如 `mcp`）：同一项目每个通道至多一条；显示名仍是 `title`，改名不改变身份。产品语义见 X-02 |
 | 总体 Plan / 正式报告 | read Task 存 Server `work/<taskId>/`；write Task 存项目 `.dev/work/<taskId>/`；DB 存引用与摘要 |
 | 会话、工具正文、压缩与分支 | 精确绑定的 Pi JSONL |
-| 需求内容与状态 | Markdown + YAML 头部，列表重建 |
+| 待办内容与状态 | `.dev/backlog.md` 以文件为准：读取时解析，问题与警告当次报出；关联的未结束 Task 从数据库派生 |
 | 项目知识与实际成果 | 项目权威文件；索引只导航 |
 | 原生流式输出 | 内存广播；断线重取快照/历史 |
 
@@ -103,8 +103,9 @@ erDiagram
 | 模块 | 职责 |
 |---|---|
 | API / EventHub | 认证、接纳/查询/控制、快照/广播；只在主管通道展示其交互 |
-| ProjectService | realpath 绑定、入口初始化、需求保存/列表、配置 |
-| TaskService | 四个主管核心工具、当前 Task、总体 Plan、关联/结果、完成核对；阶段由主管显式写入 |
+| ProjectService | realpath 绑定、入口初始化、配置 |
+| BacklogStore / Refs | 待办文件解析、编号分配、条目级写入与项目锁；引用格式解析与版本（BF-5） |
+| TaskService | 五个主管核心工具、当前 Task、总体 Plan、关联/结果、完成核对；阶段由主管显式写入 |
 | Store / Dispatcher | 短事务、CAS、去重、认领、专业并发限制、扫描；不解释自然语言或选择角色 |
 | SessionRegistry / Runtime | 独立 Pi/工具/上下文、等待与收尾；模型循环仍归 Pi |
 | 原生 UI 适配 | 原请求身份、路由到当前主管协作通道、答复保存并直接恢复源请求；不需要主管模型处理转发 |
@@ -144,7 +145,7 @@ Durable 使用 pi-ai + Chord 的独立 Harness。这里使用 coding-agent SDK�
 | 事实 | 现状 | 位置 |
 |---|---|---|
 | 技术栈 | React 19 + Vite 7 + TypeScript；`npm run build` 产出 `web-static/`，同一 Server 在 `/` 托管 | `kaiming/webapp/` |
-| 入口 | 只有一套外壳：`/` 即新壳；`/requirements`、`/settings/*` 是客户端路由，未知无扩展名路径回退 `index.html`；旧地址 `/app/*` 301 到同路径 | `src/server/http.ts`、`src/server/main.ts` |
+| 入口 | 只有一套外壳：`/` 即新壳；`/project`、`/settings/*` 是客户端路由（`/requirements` 重定向到 `/project`），未知无扩展名路径回退 `index.html`；旧地址 `/app/*` 301 到同路径 | `src/server/http.ts`、`src/server/main.ts` |
 | 数据来源 | 会话流复用 `session.stream.prepare` + SSE；其他界面只调用已注册的只读/写入方法 | `src/server/read-methods.ts`、`write-methods.ts` |
 | 外部接入 | 编码 Agent 通过 MCP 调用同一 Server：`/mcp`（Streamable HTTP，与前端同进程）与 `npm run mcp`（stdio 子进程，附着或自启 workbench）；工具面与状态推导见 [MCP 服务](mcp-service.md) | `src/mcp/` |
 | 构建产物 | `kaiming/web-static/` 不入库，构建后可被测试与服务端使用 | `kaiming/.gitignore` |
@@ -152,3 +153,29 @@ Durable 使用 pi-ai + Chord 的独立 Harness。这里使用 coding-agent SDK�
 | 会话标题 | 服务端不存标题：界面取首条用户消息派生，新会话显示"新会话" | `kaiming/webapp/src/state/useWorkspace.ts` |
 
 服务端当前没有项目/会话列表方法，界面只能持有本地最近选择；多项目、多会话导航的真实列表需要只读查询方法，属待补齐缺口。
+
+## A8 协调扩展点（本阶段只定义，不实现）
+
+本机开明是自主的执行节点；团队协调服务只做“共享事实库 + 收件箱”，不编排、不下发执行内容。本阶段不写网络代码，也不建 outbox 表。
+
+- **边界**：项目事实（规格、待办、Plan、报告、任务记录）留在本机项目与数据库；跨机器的项目身份由每台机器各自绑定，仓库不增加文件。
+- **领取的调用位置**：`claimBacklogItems` 在 `store.createTask` 的同一个事务内调用，保证“一条待办同一时间只关联一个未结束 Task”。将来换成跨机器的带租约领取时，仍然只改这个调用位置，调用方不变。
+- **引用**：跨机器传递的依据使用 [BF-5](backlog-format.md) 的引用格式与读到时版本（Git blob 或内容 sha256）。外部文档没有 Git 历史，Plan 的依据部分必须写明版本。
+- **操作者**：`actorId` 是稳定主体标识；待办的创建人/关闭人与 `interactions.answeredBy` 都取它，不取登录会话值。
+- **完成汇总**：Task 结束时可以推出的不可变事实，只定义结构，不实现汇总函数。
+
+```text
+TaskSummary {
+  schemaVersion: 1
+  taskId, projectId(本机), type, status, createdAt, endedAt
+  actorId
+  backlogIds[]
+  goal, acceptance(Plan 验收一节原文), scopeDeclared[], outOfScope[]
+  basisRefs[] / acceptanceRefs[]（含 resolveRef 版本）
+  results[]: { kind, roleId, verdict, checks }
+  commit: SHA | null, settlementReportRef
+  usage: 按 provider/model 汇总的 tokens 与成本
+}
+```
+
+**不可变约束**：Task 结束后，构成汇总的数据只能追加，不能改写：`results` 只追加、不覆盖，`tasks` 进入终态后不再修改。将来若要表示“后一份报告取代前一份”，再引入取代字段；本阶段的记录里没有这一列。

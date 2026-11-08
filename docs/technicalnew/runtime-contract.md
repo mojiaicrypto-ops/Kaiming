@@ -27,6 +27,8 @@
 
 失败响应为 requestId + error:{code,message,details?}，与 result 互斥。写调用必须有稳定 requestId，第一次发送前生成，重试复用。每个 ID 在同一安装下绑定 method + 完整规范化参数；同 ID 不同归属/内容返回 REQUEST_CONFLICT。规范化只处理 Schema 默认值和对象键顺序，不归并自然语言。
 
+**操作者身份**：RPC 上下文带稳定的 `actorId`，与登录会话值分开——本机单人部署为 `local`，将来多用户或多调用方时由认证层给出稳定主体标识。待办的 `创建人` / `关闭人`、`interactions.answeredBy` 都取 `actorId`；旧记录里已有的会话值保留不动。输入被接纳时把 `actorId` 记入 `session_inputs`（S2）。
+
 | method | 参数 | 返回 / 行为 |
 |---|---|---|
 | project.open | path | realpath 唯一 Project、会话/工作摘要、知识入口；只登记/读取，不创建会话、模型或项目文件 |
@@ -46,8 +48,9 @@
 | session.input.stop | projectId、sessionId、inputId | 保存停止意图后直接 abort；返回 Input 原 status/revision、stopRequested 与 Session.activity；未停稳 activity=stopping，未知为 interrupted |
 | task.list/get | projectId、taskId?、cursor?、limit?；get 另可给 includePlan | Task 看板/详情，无模型也可读；摘要含 `sourceInputId`（创建它的授权输入，外部运行的标识由此派生）；`includePlan` 时 `plan` 返回 Plan 正文与 `current`（文件是否仍与保存时一致）；报告正文按 `resultId` 另经 `task.report.get` 读取，本方法只给结果摘要 |
 | task.control | projectId、taskId、expectedRevision、command | pause/resume/cancel，调用同一 TaskService；停止范围见 S5 |
-| requirement.list/get | projectId、过滤/分页或 requirementId | 使用同一文件读取服务，返回非法文件信息，不经模型 |
-| interaction.list | projectId、sessionId | 该会话当前待答问题（interactionId、method、title、message、options、placeholder、inputId、taskId、sourceSessionId、revision、createdAt）；只读，不需要实时订阅 |
+| backlog.list/get | projectId、state?/query?/limit?/cursor?，或 id | 使用同一文件读取服务；返回条目、问题、警告、更新时间，以及每条关联的未结束 Task 及其真实状态、最近一次已结束或已取消的关联（用于“上一次的 Task 已取消”）；有问题的条目如实返回，不隐藏，不经模型 |
+| backlog.add/update/close/reopen | projectId、内容或 id、expectedDigest?、note?、state、taskIds? | 界面的写入口（模型用 `backlog` 工具的 add/close/edit）：更新与重开必须带 expectedDigest，不一致返回 VERSION_CONFLICT 并带回当前条目；写入在项目锁内、原子替换 |
+| interaction.list（修改） | projectId、sessionId?（省略即本项目全部） | 省略 sessionId 时返回本项目全部未回答的问题，每条带 taskId 与 sourceSessionId；给出时行为不变；只读，不需要实时订阅 |
 | interaction.respond | projectId、chiefSessionId、interactionId、expectedRevision、response | 请求/响应、当前主管路由、去重、保存后解除等待均按 M5；返回已收到与当前请求状态 |
 | session.stream.prepare | projectId、sessionId | subscriptionId、epoch、boundary、快照；快照含 `context{tokens,contextWindow,percent,autoCompaction,live}`：有活实例时用 Pi 的估算（压缩后 tokens/percent 为 null），无实例时只给模型窗口（`live=false`，取该会话上次运行或按当前设置将运行的模型）；另含 `compacting`（Pi 正在摘要）。`inputs` 的 queued 项附 `text/imageCount`，队列直接显示用户正文，不用 inputId 代替。先缓冲后读快照，见 M4 |
 | task.report.get | projectId、taskId、resultId | 校验 Task/结果归属，读取 Server 或项目报告正文；不接受任意路径 |

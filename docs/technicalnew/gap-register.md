@@ -8,6 +8,15 @@
 
 ---
 
+## 本轮新增（2026-11-08，待办与规格重构，规划稿）
+
+| 编号 | 现象 | 证据位置 | 影响 | 处置 |
+|---|---|---|---|---|
+| P10 | 需求实体与交付契约重复：9 个状态、七节格式、唯一写入口，与 Plan 的验收/范围、Task 状态、模块文档重复维护 | 已删除的两份旧需求文档；`src/runtime/requirement-store.ts` | 模型维护大量与当前工作无关的字段；独立检查的依据与实现脱节 | **计划中** — WP-1 已把正式文档改为待办 + 规格 + 模块地图 + Task 契约；代码切换按工作包计划尚未执行（WP-2～WP-8） |
+| S9 | 修改 Task 的 Plan 没有验收必填检查，范围也没有可核对的声明 | `src/tools/task-tools.ts`（无 `plan-contract.ts`） | 验收可以按实现结果补写，Review/Test 失去开发前的期望值 | **计划中** — WP-3：write Task 的 Plan 必含「验收」一节；范围提取与越界提示，见 [G2 task](agents-and-tools.md#task) |
+| S10 | 待办文件的读写方法与会话级操作者身份缺失 | `src/server/read-methods.ts`（无 `backlog.*`）、`src/server/rpc.ts`（无 `actorId`） | 项目页与外部接入无法列出待办；操作者只能取登录会话值 | **计划中** — WP-2/WP-4：`backlog.list/get/add/update/close/reopen` 与 `actorId`（[R1](runtime-contract.md)、[S2](storage-and-recovery.md)） |
+| D10 | 需求页是四列看板，不显示待办文件的问题、等你决定与模块地图 | `webapp/src/requirements/`（WP-7 删除） | 用户看不到“现在在做什么、接下来做什么、系统由哪几块组成” | **计划中** — WP-5：`/project` 项目页（[U6](ui-design.md#u6-项目页与设置)） |
+
 ## 本轮新增（2026-10-31，主管会话连续性）
 
 | 编号 | 现象 | 证据位置 | 影响 | 处置 |
@@ -69,7 +78,7 @@
 | 编号 | 现象 | 证据 | 影响 | 处置 |
 |---|---|---|---|---|
 | D1 | 模型设置切到「本项目」只改变**读**的解析范围，保存仍发 `roleId`：项目范围永远写不出项目级覆盖，反而写坏全局角色覆盖 | `webapp/src/settings/ModelsPage.tsx:42-46`（只传 roleId）；`src/server/methods.ts:243-245`（roleId/projectId 必须恰有一个） | AC-27「按角色/项目设置可辨认」不成立 | **已关闭** — 项目范围改为单行「本项目」写入 `{projectId}`；全局范围保留按角色行 |
-| D2 | 需求抽屉的「实施 / 委派设计 / 修复」只弹一条提示，不打开会话、不预填 | `webapp/src/requirements/RequirementDrawer.tsx:97-102` | J-03 → J-04 的交接靠用户手抄需求号；与产品「选择需求进入 J-04」不符 | **已关闭** — 跳转到主管会话并预填「实施 \<id\>」；用户按下发送才算数（不代发） |
+| D2 | 需求抽屉的「实施 / 委派设计 / 修复」只弹一条提示，不打开会话、不预填 | `webapp/src/requirements/RequirementDrawer.tsx:97-102` | J-03 → J-04 的交接靠用户手抄需求号；与产品「选择需求进入 J-04」不符 | **已关闭** — 跳转到主管会话并预填「实施 \<id\>」；用户按下发送才算数（不代发）。2026-11-08：随需求页由项目页的详情抽屉取代（WP-5） |
 | D3 | 抽屉与项目对话框只把焦点移入，没有陷阱、关闭后不归还 | `webapp/src/app/Drawer.tsx:22-33`；`app/ProjectDialog.tsx:20-30` | Tab 会跑到遮罩后的页面；键盘用户失去位置 | **已关闭** — 加焦点陷阱与关闭归还；`aria-live` 给 Toast |
 | D4 | 后台标签页仍在轮询：任务 3 秒、任务发现 2 秒 | `webapp/src/state/useSession.ts:231-263` | 长开标签页持续请求；离线/休眠后首个回调制造无意义读 | **已关闭** — `visibilitychange` 时暂停，恢复时立即读一次 |
 | D5 | 会话列每行两次请求（`session.stream.prepare` + `session.get`），前者还会在服务端**建一个 30 秒订阅** | `webapp/src/state/useWorkspace.ts:111-142`；`src/server/hub.ts:71-88`（prepare → 订阅，TTL 30s） | 20 个会话＝40 次往返 + 20 个无用订阅；标题靠读整段历史 | **已关闭** — 由 `session.list` 一次返回（S2），删除客户端标题派生与 `titleCache` |
@@ -83,7 +92,7 @@
 | S2 | 没有 `session.list`：`project.get` 的 `sessions` 只有 id 与 roleId | `src/server/read-methods.ts:577-580` | 会话列无标题/活动/时间/任务，只能 N+1 读（D5） | **已关闭** — 新增 `session.list`：标题（由首条 user 输入派生，见 C1）、activity、lastActivityAt、currentTaskId、queuedInputs；一次一请求 |
 | S3 | 任务创建与成员变化没有推送：`task` 工具没有发布钩子 | `src/tools/task-tools.ts:17-38`（`TaskToolContext` 无 invalidate）；仅控制/结束时由 `write-methods` 发 invalidate | 任务条依赖轮询；主管一次性建 Task 时界面最长 2 秒空白 | **已关闭** — Runner 增 `onTaskChange(sessionId, taskId)`，在 create/update/dispatch/control/end 后发布 `invalidate{task}`（并 `invalidate{session}` 供会话列刷新）；轮询降级为兜底 |
 | S4 | `session.get` 不区分「正在停止」，也不返回本次运行的实际配置 | `src/server/read-methods.ts:513-543` | 状态栏无法显示 stopping；P-05「当前工作显示实际使用配置」没有数据入口 | **已关闭** — 增加 `stopping`（存在 stopRequested 的 processing 输入）与 `config`（来自当前输入的记录，见 C4） |
-| S5 | `session.input.submit` 没有结构化需求引用 | `src/server/write-methods.ts:51-80` 只收 content/taskId | 需求交接只能靠文本提到 id | **不做**：文本 + `requirement` 工具已足够，且加字段会让「引用」出现第二处解释；见 D2 |
+| S5 | `session.input.submit` 没有结构化需求引用 | `src/server/write-methods.ts:51-80` 只收 content/taskId | 需求交接只能靠文本提到 id | **不做**：会话输入不结构化引用待办；关联写在 Task 侧的 `backlogIds`（本次计划），交接仍走文本与项目页预填；见 D2 |
 
 | D7 | 阻断原因只作为一次事件发送：在订阅建立前发生的阻断永远看不到（实测无模型时 3 次里 2 次横幅不出现） | `src/server/main.ts`（只 `hub.publish`）；快照与 `session.get` 都不含它 | 用户提交后没有任何反应，也不知道「没有模型」 | **已关闭** — 阻断原因进入 `stream.prepare` 快照与 `session.get`；有排队输入且没有运行时按 1.5 秒读一次（可见时），事件仍作即时通道 |
 | D8 | 会话未订阅时 composer 仍可发送：这些事件到达不了任何订阅者，转录里看不到 | `webapp/src/chat/ChatPage.tsx`（`disabled={!hasProject}`） | 断线/刚打开时提交的消息看起来「消失」 | **已关闭** — 连接态不是 connected 时禁用发送（草稿保留），顶栏给出连接状态 |
@@ -107,7 +116,7 @@
 | U3 | `project.rebind` | P-03、AC-04：目录移动后重绑定 | 0 处调用 | **已关闭** — 项目对话框增加「重新绑定」：需要确认来源 + 目录选择，失败按 WORKSPACE_BUSY 原样说明 |
 | U4 | `session.recovery.inspect` / `session.recovery.resolve` | S6、AC-04：「仍在修改或引用缺失时说明待处理」 | 0 处调用 | **已关闭（简单方案）** — 会话空闲时读一次 inspect；有未核实输入就显示横幅，写明数量与输入 id，并提供「让主管核实」把请求填进 composer（由主管判断，界面不重放、不代答）；`resolve` 仍无界面：处置走主管的 `task(op=recover)` |
 | U5 | `session.cleanup` | K-05：清理已结束会话、保留被引用资料 | 0 处调用 | **已关闭** — 会话列行内「×」两步确认（不提供当前会话）；CAS 用行上的 revision；被拒绝时把服务端的 `gaps` 原样列出 |
-| U6 | `task.list` | P-03：查看正在进行的工作 | 0 处调用 | **已关闭** — 需求屏增加第三段「任务」，或在会话列顶部显示当前项目任务 |
+| U6 | `task.list` | P-03：查看正在进行的工作 | 0 处调用 | **已关闭** — 曾并入需求屏第三段「任务」；2026-11-08 起并入项目页「进行中」（WP-5） |
 | U7 | `project.get.entries` / `initializationRef` | P-02、AC-03：知识入口与确认差异 | 返回了但界面不显示 | **已关闭** — 项目对话框显示三个知识入口（`AGENTS.md`、`.dev/INDEX.md`、`.dev/PROJECT.md`）的存在与否并可打开；`initializationRef` 仍是记录字段，不作为文件入口（没有对应文件可读） |
 | U8 | `session.input.get.effectiveConfig` | P-05：「当前工作显示实际使用配置」 | 0 处调用 | **已关闭** — 随 S4：任务条/状态栏显示 `provider/model`，与设置不同时标出 |
 | U9 | `config.test`（草稿态） | AC-27：试无效配置 | 只能测已保存 provider | 不做：先保存再测已能覆盖；草稿试连会引入未保存状态 |
@@ -124,7 +133,7 @@
 | P5 | 「方法消费」门禁：`ui-design.md` 的表格列出每个方法被哪个界面消费；未消费的必须在 gap-register 登记 | 现状 10 个方法 0 调用（U1–U10），没有任何检查会提醒 |
 | P6 | 新方法清单：参数校验、归属校验、CAS/幂等、契约测试、`runtime-contract.md` 表格、README 索引 —— 五项齐全才算完成 | 避免再出现「方法在、字段缺、合同写别的」 |
 | P7 | 三态（加载/空/错误）只用 `State` 与既有 class，不各页自造 | 已有 `State`/`banner`/`notice`，复制会立刻分叉 |
-| P8 | 分页 cursor 语义统一：需求 `updatedAt\|id`、任务/文件 `id`，并在合同表注明 | C2 暴露的正是「同一资源两种分页语义」 |
+| P8 | 分页 cursor 语义统一：待办 `updatedAt\|id`、任务/文件 `id`，并在合同表注明 | C2 暴露的正是「同一资源两种分页语义」 |
 | P9 | 测试只钉可观察行为与合同边界；实现细节用一次性脚本验证 | 与上一轮 review 的结论一致（空测试、源码文本断言被删） |
 
 ## 本轮缺陷与决定（2026-10-23，真实使用反馈）
@@ -154,7 +163,7 @@
 
 ## N 需求体系外接远程系统（已存档，暂不讨论）
 
-**状态（2026-10-26，用户决定）：存档，以后再讨论。** 不排期、不进入设计、不改任何 R 系列契约；本文与 [research.md](../../.kaiming/work/remote-requirement-sources-20261027/research.md) 保留为恢复讨论的起点。
+**状态（2026-10-26，用户决定）：存档，以后再讨论。** 不排期、不进入设计、不改任何 R 系列契约；本文与 [research.md](../../.kaiming/work/remote-requirement-sources-20261027/research.md) 保留为恢复讨论的起点。2026-11-08 起，“外部同步”由 [A8 协调扩展点](architecture.md#a8-协调扩展点本阶段只定义不实现) 承接：本机是执行节点，协调服务只做共享事实库 + 收件箱；本节保留为历史调研。
 
 用户提出的定位不是「对接一个系统」，而是把开明变成**执行端**：飞书等远程系统管控需求（本地只负责执行），需求的写入方可以是有权限的另一个 Agent。这个定位把问题从「读哪里」变成「谁有资格改需求、多台执行端如何不撞车」，因此需要独立一轮讨论，不适合混在功能开发里。
 
@@ -162,7 +171,7 @@
 
 - 代码耦合面很小：只有 `runtime/requirement-store.ts` 认识文件，工具/任务/界面只认 `<id, 文本, 版本>`，可插一层 `RequirementSource` 接口。
 - 飞书 Task v2 能承载标题、完成态、自定义单选字段（状态）、`origin` 链接与 `client_token` 幂等；`description` 上限 3000 字符，**放不下七节正文**，正文只能另进 docx 或留在本地。
-- 远程权威会丢失四条现有保证：R-06（换环境仍可读）、离线可读、内容级并发（shasum 乐观锁）、七节结构化校验与 R-05 的状态决定权。
+- 远程权威会丢失四条现有保证：换环境仍可读、离线可读、内容级并发（shasum 乐观锁）、结构化校验与状态决定权。
 - 建议第一期做**镜像**（本地权威、远程发布与回填提示），不做替换、不做双向同步。
 
 存档时未决的问题（恢复讨论时先回答）：
@@ -173,7 +182,7 @@
 4. 一个开明项目对应远端一个任务清单，还是所有项目共用一个？
 5. Task（执行中的任务）是否也发布到远端？
 
-另有一条已在讨论中形成、恢复讨论时应作为前提的判断：**执行端永不修改需求的目标与验收，只能回传事实（进度、阻塞、反向发现）**——写端可以换人、换 Agent，这条不变；它是现行 R-03「不能修改验收来掩盖实际缺陷」的跨机器版本。
+另有一条已在讨论中形成、恢复讨论时应作为前提的判断：**执行端永不修改需求的目标与验收，只能回传事实（进度、阻塞、反向发现）**——写端可以换人、换 Agent，这条不变；它是旧 R-03「不能修改验收来掩盖实际缺陷」的跨机器版本，与现行 [BL-07](../productnew/modules/backlog-and-specs.md#bl-07-从待办或直接目标进入实现) 的“验收写在开发之前”是同一条原则。
 
 ## M 移动端（方向已定，尚未实施）
 
@@ -193,7 +202,7 @@
 
 | 编号 | 风险 | 现状 |
 |---|---|---|
-| R1 | 真实模型下的 J-01～J-10 未执行 | 只有 stub 模型；需要凭据与人工参与 |
+| R1 | 真实模型下的 J-01～J-13 未执行 | 只有 stub 模型；需要凭据与人工参与 |
 | R2 | 触屏手势与软键盘遮挡未实测 | CSS 用 `100dvh` + 安全区，未在真机验证 |
 | R3 | 320px 以下不作承诺 | 声明下限 320 |
 | R4 | 转录未虚拟化 | 快照上限 100 条 + 增量；超长会话的内存与滚动未测 |
@@ -214,4 +223,4 @@
 - 不引入状态管理库或请求缓存层（现有 `useState` + 单 `RpcClient` 足够）。
 - 不做虚拟滚动、不做移动端手势、不做多用户权限。
 - 不把 `config.test` 扩成草稿试连（U9）。
-- 不为需求交接新增 `requirementId` 参数（S5）。
+- 不为会话输入新增待办引用参数（S5）；关联写在 Task 的 `backlogIds`。

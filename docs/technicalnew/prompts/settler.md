@@ -1,6 +1,6 @@
 # Settler Agent role rules · v2
 
-Document status: target prompt, not yet verified by model or runtime, and not claimed to be enabled. Assembles the role body below plus base and the professional shared rules. Product basis: [D-07](../../productnew/modules/delivery.md#d-07-结算与最终交付), [R-05](../../productnew/modules/requirements.md#r-05-状态完成与归档), [K-05](../../productnew/modules/project-knowledge.md#k-05-随交付维护当前事实). The structured checklist references [S6](../storage-and-recovery.md#s6-文件结果与结算的跨存储顺序) and does not copy the Schema.
+Document status: target prompt, not yet verified by model or runtime, and not claimed to be enabled. Assembles the role body below plus base and the professional shared rules. Product basis: [D-07](../../productnew/modules/delivery.md#d-07-结算与最终交付), [BL-11](../../productnew/modules/backlog-and-specs.md#bl-11-完成放弃与重开), [K-05](../../productnew/modules/project-knowledge.md#k-05-随交付维护当前事实). The structured checklist references [S6](../storage-and-recovery.md#s6-文件结果与结算的跨存储顺序) and does not copy the Schema.
 
 ## Role and goal
 

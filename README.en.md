@@ -4,10 +4,10 @@
 
 > AI coding agents can already write good code, but delivering a piece of work takes far more than one generation: goals must stay consistent across conversations and phases, conclusions must survive independent checks, progress must survive disconnects and restarts, and results must stay in the project as documents. Kaiming turns that entire process into a self-hosted, single-user workbench.
 
-Kaiming is not a code-completion plugin, and it is not a chat transcript that disappears when the tab closes. It keeps the full lifecycle of a piece of software work — requirements, the overall Plan, Tasks, phases, specialist Sessions, reports, verification results and final settlement — as a traceable project asset, and delivers three outcomes:
+Kaiming is not a code-completion plugin, and it is not a chat transcript that disappears when the tab closes. It keeps the full lifecycle of a piece of software work — backlog items, specs, the overall Plan, Tasks, phases, specialist Sessions, reports, verification results and final settlement — as a traceable project asset, and delivers three outcomes:
 
 1. **The work gets done**: real code or document results, with a record of which checks ran and what issues remain.
-2. **The project remembers**: requirements, product and technical knowledge, code and test entry points are updated as work proceeds — not just a chat summary.
+2. **The project remembers**: backlog items, specs and project knowledge, code and test entry points are updated as work proceeds — not just a chat summary.
 3. **You can pick up next time**: work continues after you leave; reopening or switching sessions finds the progress, results and next step.
 
 **Status: early development.** Before using it, read [Installation and setup](docs/install.en.md), the [product overview (Chinese)](docs/productnew/README.md) and [Security boundaries](#security-boundaries).
@@ -18,11 +18,11 @@ Today's AI coding tools default to putting everything into one ever-longer chat.
 
 | Failure mode of the long chat | Kaiming's answer |
 |---|---|
-| **Context drift**: restatements of early facts become unreliable, or the model confidently invents decisions that were made | **Facts live in files**: requirements, Plans, reports and knowledge are project files; sessions load the current documents on demand instead of inheriting a possibly-drifted memory |
+| **Context drift**: restatements of early facts become unreliable, or the model confidently invents decisions that were made | **Facts live in files**: specs, Plans, reports and knowledge are project files; sessions load the current documents on demand instead of inheriting a possibly-drifted memory |
 | **Self-review**: development and checking share one context, so "looks right" gets announced as done | **Structural independence**: review and test are separate Sessions with separate context; they read real files and run results, not the developer's self-assessment |
 | **Nobody resumes**: closing the page loses progress; after a restart, nobody knows what finished | **Resident Server + fact checks**: execution is separate from viewing; recovery works from the database and actual files, not replay |
-| **Scope drift**: things done in passing quietly expand the delivery | **Explicit gates**: a requirement exists only when the user saves it, and delivery starts only when the user says so; new findings start as suggestions |
-| **Nowhere to hand over**: conclusions are scattered in chat, and the next session starts from zero | **Settlement writes back**: when a Task ends, the requirement summary, module knowledge and verification entry points are written into the project |
+| **Scope drift**: things done in passing quietly expand the delivery | **Explicit gates**: a backlog item exists only when the user asks for it, and delivery starts only when the user says so; new findings start as suggestions |
+| **Nowhere to hand over**: conclusions are scattered in chat, and the next session starts from zero | **Settlement writes back**: when a Task ends, the spec implementation state, closed backlog items, module knowledge and verification entry points are written into the project |
 
 Each design decision answers a concrete failure mode; roles exist for responsibility and context, not to mirror a human org chart. Kaiming is designed around these long-lived facts, not around one model's context window: the user owns goals and trade-offs, agents organize work within the authorized scope, and the host persists facts and checks required results.
 
@@ -30,7 +30,7 @@ Each design decision answers a concrete failure mode; roles exist for responsibi
 
 ### 1. Project facts belong to the project, not to a chat
 
-Model context is compressed, truncated, lost, or simply restated incorrectly — not as an occasional bug, but as an inherent property of long context. Requirements, Plans, reports, project knowledge and actual code must live in files. Tasks, inputs, phases, interactions and report references must live in durable records. Chat is an interface, not the source of truth.
+Model context is compressed, truncated, lost, or simply restated incorrectly — not as an occasional bug, but as an inherent property of long context. Specs, Plans, reports, project knowledge and actual code must live in files. Tasks, inputs, phases, interactions and report references must live in durable records. Chat is an interface, not the source of truth.
 
 Documents are also the input for sessions: each specialist Session assembles its context from the relevant documents, not from a long chat that may have drifted. The decision in the document is the only version that happened; a restatement in chat is not.
 
@@ -40,7 +40,7 @@ The browser is one client for observing and controlling the workbench. The resid
 
 ### 3. Humans own goals; agents execute
 
-A requirement exists only when the user explicitly saves it. Delivery starts only when the user explicitly says to implement it. Newly discovered work is a suggestion until the user expands scope. Authorization, pause, cancel and important trade-offs belong to the user; the chief explains, organizes and executes.
+A backlog item exists only when the user explicitly asks to record it. Delivery starts only when the user explicitly says to implement it. Newly discovered work is a suggestion until the user expands scope. Authorization, pause, cancel and important trade-offs belong to the user; the chief explains, organizes and executes.
 
 ### 4. Independence comes from structure, not from asking a model to review itself
 
@@ -66,7 +66,8 @@ Installation
     │       ├── Overall Plan
     │       ├── Phases (analysis / design / plan / develop / review / test / settle)
     │       └── Specialist Sessions (investigate, design, develop, review, test, settle)
-    ├── Requirements (project files with behavior and acceptance)
+    ├── Backlog (things to do later, directly editable)
+    ├── Specs (behavior, acceptance points, implementation state)
     └── Project knowledge (modules, evidence, implementation and verification entry points)
 ```
 
@@ -76,7 +77,8 @@ Installation
 | **Chief Session** | The collaboration context between the user and the chief. It advances at most one unfinished Task at a time; other topics get a new session. |
 | **Task** | One delivery objective with a goal, overall Plan, phases and completion conditions. |
 | **Specialist Session** | The context of one specialist agent in a phase, with independent history, tool permissions and review. |
-| **Requirement** | A project file describing goal, scope, behavior, acceptance, sources and status. |
+| **Backlog** | The project backlog file: id, title, state; optional body and spec references. |
+| **Spec** | A module spec: behavior, exceptions, acceptance points, implementation state and unknowns. |
 | **Result/Report** | The formal result a specialist Session actually delivered, stored in the project or the server workspace with a recorded reference. |
 
 ![Kaiming hand-drawn overview: chief, specialist roles, independent contexts, different models, document consistency and the end-to-end project flow](docs/assets/kaiming-overview-gpt-image.en-v3.png)
@@ -150,31 +152,31 @@ Do not start multiple Servers against the same data directory. An MCP stdio proc
 ## How a piece of work flows
 
 1. The user opens a project and discusses its current state and goal with the chief.
-2. When the user explicitly saves, a proposal or implementation requirement is created.
-3. When the user explicitly starts implementation, the chief creates a Task and fixes an overall Plan.
-4. The chief dispatches specialist Sessions for the current step; they investigate, design, develop or check in independent contexts.
+2. When the user says "record it", a backlog item is created; it only records future work and starts nothing.
+3. The user says "implement B-12" or gives a development goal directly. The chief checks whether the specs are enough to write observable acceptance; if not, design runs first and produces specs plus a slice list the user confirms.
+4. The chief creates a Task. The Plan must first state acceptance (from the specs or a user decision) and scope; then specialist Sessions are dispatched for the current step.
 5. Review or test findings return to the same Task; independent Sessions re-check the work.
-6. Once completion conditions hold, settlement performs documentation close-out, updates the requirement, project knowledge and verification entry points, and stores the result and report.
-7. Later, the user reopens the project and sees the real state of the same Task instead of explaining the requirement again.
+6. Once completion conditions hold, settlement updates the spec implementation state, closes finished backlog items, records remaining issues as new backlog items, and stores the result and report.
+7. Later, the user reopens the project and sees the real state of the same Task instead of explaining the goal again.
 
 ## Document consistency and settlement
 
-Kaiming is document-first, not transcript-first. Requirements, design, the overall Plan, reports, project knowledge and verification entry points are project facts: they determine what the next session can read, and whether a delivery is actually complete.
+Kaiming is document-first, not transcript-first. Specs, design, the overall Plan, reports, project knowledge and verification entry points are project facts: they determine what the next session can read, and whether a delivery is actually complete.
 
-- **Phase changes**: when the chief updates the current phase and results, the affected requirement, design, knowledge or verification entry points are maintained together; documents must not be left at an old state.
-- **Settlement is not just code**: settlement includes documentation close-out: the requirement completion summary, module knowledge, code/test entry points, verification report, uncovered items and open issues all need a landing place.
+- **Phase changes**: when the chief updates the current phase and results, the affected specs, navigation, knowledge or verification entry points are maintained together; documents must not be left at an old state.
+- **Settlement is not just code**: settlement includes documentation close-out: the spec implementation state, closed backlog items, module knowledge, code/test entry points, verification report, uncovered items and open issues all need a landing place.
 - **Consistency comes from actual files**: Review/Test read real documents, code and reports; they do not treat the chief's narrative or a chat summary as project fact.
-- **Handover is document-based**: sessions have independent context, but hand over through the same documents, requirement references and Task records. A new session reads what it needs instead of re-explaining the whole project.
+- **Handover is document-based**: sessions have independent context, but hand over through the same documents, spec references and Task records. A new session reads what it needs instead of re-explaining the whole project.
 
 The host verifies identity, state, required reports, versions and actual saves. Whether the documents are complete and meet the goal is still judged by the chief and independent agents.
 
 ## What it does
 
-- **Chief conversation**: free discussion, project investigation and clarification. Only explicit saving creates a requirement; only explicit implementation starts delivery.
-- **Requirements and design**: save lightweight proposals; design agents complete behavior, technical evidence and implementation requirements, which can then be implemented.
+- **Chief conversation**: free discussion, project investigation and clarification. Only an explicit request records a backlog item; only explicit implementation starts delivery.
+- **Backlog and design**: record what may be done later; design agents produce specs and a slice list, which the user confirms before implementation.
 - **Controlled delivery**: the chief writes an overall Plan and organizes development, independent review, independent test and settlement. Phases do not advance silently.
 - **Specialist Sessions**: role-isolated context; multiple members can work in parallel in one phase, with waiting, pause, resume and restart continuity recorded.
-- **Project memory**: requirements, design, code and verification entry points are updated as work progresses; a new session does not need the whole project explained again.
+- **Project memory**: backlog items, specs, code and verification entry points are updated as work progresses; a new session does not need the whole project explained again.
 - **External agent access**: Codex, Claude Code, Grok and other agents can delegate work through MCP and see the same session, Tasks and reports in the browser.
 - **Single machine, single user**: one Server manages multiple projects and chief sessions; data is local and model credentials do not enter the conversation.
 
@@ -234,7 +236,7 @@ cd <repository-directory>
 
 Open `http://127.0.0.1:4173` and sign in with the password.
 
-Then open **Settings → Models**, add a provider, model id and API key, and choose a default model. Before that, projects, requirements and history are readable, but inputs are not executed by a model.
+Then open **Settings → Models**, add a provider, model id and API key, and choose a default model. Before that, projects, backlog items and history are readable, but inputs are not executed by a model.
 
 Restart later with:
 

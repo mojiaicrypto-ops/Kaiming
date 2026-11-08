@@ -19,15 +19,18 @@ Dispatcher 读取 session_inputs，提交后唤醒，启动/周期扫描兜底�
 | providers | providerId/baseUrl/api/name?/models/credentialRef/revision | providerId 安装内不变，是 models.json key、指派与凭证引用的标识；name 仅供显示，空则用 providerId；api 必须显式保存（协议不推断） |
 | model_overrides | scope/scopeId/roleId?/providerId/modelId/revision | `scope=role` 时 scopeId 是角色；`scope=project` 时 scopeId 是项目，roleId 空表示该项目默认、非空表示该项目内某个角色；同一 (scope,scopeId,roleId) 至多一行 |
 | session_bindings | sessionId/piFile/branchEntryId?/hasHistory/configHash/rulesHash | 指定 Pi 文件；保留原绑定记录，禁止寻找最近文件 |
-| tasks | id/projectId/chiefSessionId/ownerEpoch/requirementId?/type/requiresTest/goal/scope/acceptanceRefs/basisRefs/planRef/authorizationRefs/phase/currentSessionIds/status/revision/summary/nextStep/blockReason/completionResultId?/sourceInputId | 两类 Task、阶段与更新边界唯一见 G2；currentSessionIds 只含当前步骤的专业 Session；revision 仅供界面与宿主 RPC 使用，不进入模型工具参数；控制意图落在对应 session_inputs 的 stopRequestKey/stopReason |
+| tasks | id/projectId/chiefSessionId/ownerEpoch/requirementId?/backlogIds/type/requiresTest/goal/scope/acceptanceRefs/basisRefs/planRef/authorizationRefs/phase/currentSessionIds/status/revision/summary/nextStep/blockReason/completionResultId?/sourceInputId | 两类 Task、阶段与更新边界唯一见 G2；currentSessionIds 只含当前步骤的专业 Session；revision 仅供界面与宿主 RPC 使用，不进入模型工具参数；控制意图落在对应 session_inputs 的 stopRequestKey/stopReason；`backlogIds` 是 JSON 数组，领取在同一事务内核对；`requirementId` 保留列但不再写入，旧 Task 照常显示；新 taskId 为 `t-<12 位十六进制>`，旧 8 位仍可读 |
 | task_sessions | sessionId/taskId/roleId/specialization?/phase/label/instructions/refs/dependencies/expectedKind/writeScope/workspaceRef?/currentInputId | 续办时更新 currentInputId；历史输入/结果保留；writeScope 用于并行写成员的覆盖告警 |
 | results | resultId/taskId/sessionId/inputId/roleId/kind/summary/verdict?/deliveryState?/bodyRef/basisRefs/checks/settlement?/createdAt | 不覆盖原报告，多份报告按保存顺序保留；kind 取自成员派发时的 expectedKind；deliveryState 记录提交时程序观察到的交付状态与被观察路径，供完成核对重算比较；resultId 由内容派生，同一报告重试映射同一行 |
-| session_inputs | 见 Input | (sessionId,seq)/sourceKey 唯一；同 Session 至多一项 processing |
+| session_inputs | 见 Input | (sessionId,seq)/sourceKey 唯一；同 Session 至多一项 processing；`actorId` 记录接纳时的操作者，v16→v17 加列，旧行取 `local` |
 | interactions | id/requestKey/projectId/taskId?/sourceSessionId/sourceInputId/invocationKey/sequence/method/request/revision/state/response?/responseSource? | 原请求身份和答复事实；专业来源必有 taskId；当前主管路由读取 Task |
-| file_saves | requestKey/target/observedVersion/contentHash/content/state/receipt? | 仅宿主负责的 Plan/报告/需求/初始化保存；observedVersion 由程序记录本会话上次读到的内容，不要求模型携带；state=pending/saved/conflict |
+| file_saves | requestKey/target/observedVersion/contentHash/content/state/receipt? | 仅宿主负责的 Plan / 报告 / 入口初始化保存（待办文件不走 file_saves，写入失败直接返回错误）；observedVersion 由程序记录本会话上次读到的内容，不要求模型携带；state=pending/saved/conflict |
 | request_receipts | requestKey/method/paramsDigest/status/result?/error? | status=pending/committed；同 key 不同参数冲突；成功与失败回执都如实保存 |
 | compaction_settings | id=1/revision/auto/thresholdPercent/updatedAt | 全局主动压缩策略单行（默认自动、70%）；v15→v16 建表并插入默认；不按项目/角色分层，Pi 原生兜底不在此表 |
+
 | usage_entries | inputId/projectId/sessionId/taskId?/roleId/providerId/modelId/inputTokens/outputTokens/cacheReadTokens/cacheWriteTokens/reasoningTokens/costTotal/responses/startedAt/endedAt | 追加写入，不改写历史；(inputId,providerId,modelId) 唯一，重试不会重复计数；数值全部取自响应上报的用量，缺失记 NULL 而不是 0；按项目/角色/模型三种维度统计时由查询 GROUP BY 得出，不维护累加计数器 |
+
+v16→v17：`tasks` 加 `backlogIds`、`session_inputs` 加 `actorId`。既有 Task 的 `backlogIds` 为 `[]`，`requirementId` 原值不变；既有输入的 `actorId` 取 `local`。
 
 interactions.state=pending/resolved/stale。pending 已保存、可展示；resolved 答复不可覆写，相同重试返回原回执，不同答复冲突；stale 不恢复原等待。没有“UI 已呈现”准入状态，保存后广播、断线从快照重现。请求/答复唯一见 M5。
 
@@ -138,7 +141,7 @@ Pi 原生 read/grep/find/ls/edit/write/bash、工具循环、重试、压缩及�
 Plan：稳定 taskId + file_saves → 原子保存 Plan → DB Task/planRef/currentTaskId/回执
 报告：稳定 resultId → body 原子保存
     → DB result/回执 → 唤醒当前步骤等待
-结算：Agent 核对成果/验证 → 更新受影响知识、需求、导航、遗留
+结算：Agent 核对成果/验证 → 更新受影响规格的实现状态与导航、关闭已完成的待办并写明 Task、遗留记为待办
     → 准备结算报告 → Git 提交本次成果及报告；或本机保存并核对
     → agent_report(body + 实际保存回执)，不重写已保存报告
     → chief task(op=end)：先由宿主观察复核覆盖路径的提交状态（`runtime/git-delivery.ts`），
@@ -153,17 +156,17 @@ type SettlementManifest = {
   taskId: string;
   verificationResultIds: string[];
   updatedRefs: Array<{ path: string; sha256: string }>;
-  requirement?: { id: string; version: string };
-  issuesRef?: { path: string; sha256: string };
+  backlog?: { closed: string[]; added: string[] };
+  outOfScope?: string[];
   saveReceipt:
     | { mode: 'git'; commit: string; files: Array<{ path: string; sha256: string }> }
     | { mode: 'local'; savedAt: string; files: Array<{ path: string; sha256: string }> };
 };
 ```
 
-Agent 判断知识是否完整、未覆盖如何处置、需求是否满足、哪些记录需要更新。报告写明原因、风险、真实用户决定引用和遗留。程序只核对报告身份/种类、必要复核/测试、交付状态与真实保存；不计算自然语言授权范围或业务含义。真实 failed 不改成未覆盖。
+Agent 判断知识是否完整、未覆盖如何处置、验收是否满足、越界文件是否合理、哪些记录需要更新。报告写明原因、风险、真实用户决定引用和遗留。程序只核对报告身份/种类、必要复核/测试、交付状态与真实保存；不计算自然语言授权范围或业务含义。真实 failed 不改成未覆盖。
 
-有关需求完成内容/状态文件与项目报告先纳入同次保存，再 task(op=end) 核对交付状态；该核对包含提交状态（复核覆盖路径相对 HEAD 已提交），提交仍由模型执行。保存失败 Task 保持未完成，不再开发没有变化的成果。Git 回执从实际提交读取，保护无关改动和暂存；已有明确同次提交核对后复用，不盲目重复提交。最终 commit 写 DB 回执，不回写已提交报告制造下一次提交。
+待办的关闭与新增、规格更新和结算报告先纳入同次保存，再 task(op=end) 核对交付状态；该核对包含提交状态（复核覆盖路径相对 HEAD 已提交），提交仍由模型执行。保存失败 Task 保持未完成，不再开发没有变化的成果。Git 回执从实际提交读取，保护无关改动和暂存；已有明确同次提交核对后复用，不盲目重复提交。最终 commit 写 DB 回执，不回写已提交报告制造下一次提交。
 
 ## S7 Server 重启恢复子图
 
@@ -196,7 +199,7 @@ flowchart TD
 | 正式结果已保存、Pi 工具结果缺失 | 结果保留；新续办输入带该事实，不补写 ToolResult，不重做成果 |
 | 原生请求/答复已保存 | 活跃原调用可直接继续；重启调用已不存在，pending 置 stale，resolved 作为续办事实；仍需询问时模型发新通用请求 |
 | Pi 已停稳、DB finish 前 | 核对历史与期待结果后补原终态/checkpoint |
-| Plan/需求/报告部分保存或结算后未 task(op=end) | 核对实际文件/提交，只补保存登记或完成缺项 |
+| Plan/待办/报告部分保存或结算后未 task(op=end) | 核对实际文件/提交，只补保存登记或完成缺项 |
 | 历史缺失/损坏、配置不可用 | HISTORY_UNAVAILABLE/MODEL_UNAVAILABLE；保留原资料，不开空历史冒充恢复、不静默换模型 |
 
 恢复入口直接服务，不排在中断输入后。主管自身 interrupted 时先由宿主/用户走 R1 inspect/resolve：核对该主管输入历史边界和自身 file_saves/回执后关闭原输入，再由用户向原 chief/Task 提交新续办输入。仅在观察子工作的父输入可以按已知停止事实关闭；子输入的未知独立保留，不能随父关闭消除。主管自身保存事实仍未知时不调用模型，先完成直接核实。

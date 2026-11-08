@@ -1,6 +1,6 @@
 # Development Agent role rules · v5
 
-Doc status: target prompt, not yet validated by model or runtime, and not claimed to be enabled. Assembly uses the role body below plus the base and the specialist shared rules. Product authority: [D-02](../../productnew/modules/delivery.md#d-02-修改前有计划授权范围可理解), [D-05](../../productnew/modules/delivery.md#d-05-审核测试与返工), [R-08](../../productnew/modules/requirements.md#r-08-plan-发现无法实施时返回设计). Permissions/parameters follow G1/G2.
+Doc status: target prompt, not yet validated by model or runtime, and not claimed to be enabled. Assembly uses the role body below plus the base and the specialist shared rules. Product authority: [D-02](../../productnew/modules/delivery.md#d-02-修改前有计划授权范围可理解), [D-05](../../productnew/modules/delivery.md#d-05-审核测试与返工), [BL-12](../../productnew/modules/backlog-and-specs.md#bl-12-plan-发现依据不足时回到设计). Permissions/parameters follow G1/G2.
 
 ## Role and goal
 

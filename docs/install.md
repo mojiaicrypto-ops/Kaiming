@@ -89,7 +89,7 @@ KAIMING_MODEL_PROVIDER=deepseek
 KAIMING_MODEL_ID=deepseek-flash
 ```
 
-两者默认都是 `unset`。`unset` 时工作台仍可启动并读取项目、会话、需求和历史，但输入不会被模型执行，界面会说明缺少模型配置。
+两者默认都是 `unset`。`unset` 时工作台仍可启动并读取项目、会话、待办和历史，但输入不会被模型执行，界面会说明缺少模型配置。
 
 ### 4.3 直接维护模型文件
 
@@ -175,7 +175,7 @@ tar -xzf kaiming-backup-YYYYMMDD.tgz -C kaiming
 ./scripts/start.sh
 ```
 
-使用与备份时相同的 `KAIMING_DATA_DIR`。恢复后应能看到原项目、会话、需求、Task 和报告；`sessions/*.jsonl` 决定原生会话能否续办，应与数据库一起恢复。
+使用与备份时相同的 `KAIMING_DATA_DIR`。恢复后应能看到原项目、会话、待办、Task 和报告；`sessions/*.jsonl` 决定原生会话能否续办，应与数据库一起恢复。
 
 ### 升级
 

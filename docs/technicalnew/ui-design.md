@@ -8,7 +8,7 @@
 | 事实 | 证据 |
 |---|---|
 | 唯一外壳：React 19 + Vite 7，`npm run build` 产出 `web-static/`，服务端在 `/` 托管 | `kaiming/webapp/vite.config.ts`、`src/server/http.ts` |
-| 三屏：Chat / Requirements / Settings（Providers · Models · Appearance） | `webapp/src/app/`、`chat/`、`requirements/`、`settings/` |
+| 三屏：Chat / Project / Settings（Providers · Models · Appearance） | `webapp/src/app/`、`chat/`、`project/`、`settings/` |
 | 旧的无构建外壳已删除；`/app/*` 301 到同路径 | `src/server/http.ts` |
 | 设计基准是 `docs/design/tui/`：`docs/design/tui/index.html` 是可直接打开的高保真原型（含脚本化对话） | `docs/design/tui/{index.html,tui.css,chat-view.js}` |
 | 项目与会话的选择属于**标签页**：`kaiming.projectPath` / `kaiming.sessionId` 存 `sessionStorage`，两个标签可各开一个项目，刷新不互相带走；`localStorage` 只存 `kaiming.lastProjectPath` 作为新标签默认值，语言仍按 profile 存 | `webapp/src/state/useWorkspace.ts`、`webapp/src/lib/storage.ts`；用例 `browser/project-per-tab.spec.ts` |
@@ -26,7 +26,7 @@
 │ 项目路径 │ ⎇ main │ ● N 个 Agent 运行中 │ 快捷键提示                 │
 ```
 
-- 导航是顶栏文字标签，当前项由地址决定；`/`、`/requirements`、`/settings/*` 可刷新、可分享。
+- 导航是顶栏文字标签，当前项由地址决定；`/`、`/project`、`/settings/*` 可刷新、可分享；访问 `/requirements` 时客户端重定向到 `/project`，快捷键 2 仍指向它。
 - Chat 屏区域顺序固定：横幅 → 任务条 → 转录（宽 90% 居中）→ dock（问题面板 / 队列 / 输入框 / 提示）。
 - 断点：`≤1100` 看板 4→2 列；`≤860` 会话列收为顶栏按钮 + 抽屉、设置菜单横置、内容取消 90% 限制、顶栏仅显示连接符号、文件查看器的树移到上方 32%；`≤560` 抽屉全宽、选项行 ≥44px、顶栏连线符号化、composer 压缩留出正文、Toast 抬到 dock 之上；`≤400` 导航标签换成图标（文字仍在 DOM 内，是读屏的可读名称）。
 - 状态栏模型区：`provider/model · 已用 / 窗口 · 百分比`。占用是 Pi 对下一次请求的估算：≥70% 用 `--decide`、≥90% 用 `--block`，且数字本身在列（不能只靠颜色）；压缩后到下一次响应前显示 `?`，本进程没有该会话实例时显示 `—`，两种情况都保留窗口。`≤860` 收紧状态栏间距；`≤560` 只留百分比（未知时保留 `— / 窗口`）；`≤480` 隐藏分支；`≤400` 再隐藏“N 个 Agent 运行中”，保留模型、读数与连接状态；空间不足时先截断路径与快捷键提示，模型名最后才收缩，连接状态始终保留。`title` 给出绝对 tokens、估算说明与自动压缩是否开启。
@@ -59,9 +59,9 @@
 ## U4 组件
 
 `app/`：TopBar、StatusBar、ProjectDialog、Drawer、State（状态符号+词）、router。
-`chat/`：SessionsList、Banner、TaskStrip、TaskTodo、Transcript、MessageItem、ThinkingBlock、Markdown、ToolCard、ToolTask、ToolBusiness（question / report / requirement）、InteractionPanel、QueuedInputs、Composer、EmptyState、MemberDrawer、TaskDrawer。
+`chat/`：SessionsList、Banner、TaskStrip、TaskTodo、Transcript、MessageItem、ThinkingBlock、Markdown、ToolCard、ToolTask、ToolBusiness（question / report / backlog）、InteractionPanel、QueuedInputs、Composer、EmptyState、MemberDrawer、TaskDrawer。
 `files/`：FileViewer（唯一文件查看画布）、SourceView（源码视图：行号 + 高亮 + 查找）、MarkdownView（`.md` 渲染/源码两态）、file-kind（按扩展名决定显示方式与语法）、link-target（链接归属解析）、paths（路径与字节地址助手）；`lib/highlight.ts` 是唯一语法注册表。
-`requirements/`：RequirementsPage（四列看板）、RequirementDrawer。
+`project/`：ProjectPage（问题提示、进行中、待办、模块、早期文件）、BacklogDrawer（详情与编辑）、project-model（分组、等你决定、模块截取、冲突草稿）。
 `settings/`：SettingsPage、ProvidersPage、ModelsPage、AppearancePage。
 `auth/`：LoginPage。
 
@@ -83,7 +83,7 @@
 | 工具卡 | 默认一行（符号 + 名称 + 一句摘要 + 耗时）；展开参数与输出；工具返回的图片在卡内显示为可点开的缩略图；`task create` 折为单行 `✓ Task created · T-x · N 行 Plan`，展开是 Plan 原文 |
 | 运行中的 Task | **任务清单（`data-testid=task-live`，TaskTodo）**：转录末尾的一块（头部 Task 号可点 · 当前阶段 · `n/m 已结束` · 状态；可选展开的 Plan；成员清单按**阶段-轮次**分组，画成一条竖向节点轨道：每个步骤一个节点（完成=实心✓、进行中=呼吸圆圈+整行 run 色底带、计划=虚线圈、失败=block 色），步骤间由轨道连线，正在进行的步骤轨道段亮 run 色）。它是成员实时状态的**唯一来源**：派发卡折为单行历史；真实分组之后追加**计划中的后续阶段**（write 任务依 `type + requiresTest` 推导：`review`（+`requiresTest` 时 `test`）+ `settle`，取真实走过的最远阶段之后的部分，暗色显示、组内为「未开始(计划内)」，主管偏离计划时不新增（现实优先））；清单列出该 Task **全部**派发过的成员（`task.get` 按最近派发序：续办会更新 `updatedAt`），同阶段重现即新一轮（`Develop · 第 2 轮`），未通过成员行染 block 保留（触发返工的证据），已在报告后又运行的成员带 `↻ 返工` 前缀；行可点开成员抽屉。刷新/主管等待中恒渲染，不依赖转录里存在派发调用 |
 | 任务条 | 只有流程，画成横向节点轨道：一行 = Task 编号 + 步骤节点序列（每步 = 节点圆点 + 名称；完成=实心✓、当前=呼吸圆圈（`work` 动画）、计划=虚线圈；同阶段重复进入显示 `×n`）+ 进度条与 `已完成/真实步骤数`（计划步骤永不计数，窄屏 <1280px 隐去，因与文字同义）+ 当前状态 + 暂停/继续。暂停/继续点击后立即显示 Pausing/Resuming 状态并禁用按钮，直到服务端 Task 读回真实状态，不先显示旧状态。节点之间的连线由右侧步骤持有：走到当前步骤的那段亮 run 色，计划段全部虚线——「已走到哪」与「还欠什么」一眼可分。步骤来自 `flowOf`，与任务清单返回同一个数组，按位置一一对应，两处永不矛盾。Task 完成或取消后不再显示 |
-| 执行时间 | Task 条、任务详情和需求页任务列表显示 Task 耗时：从 `createdAt` 到完成/取消/暂停时最后记录的 `updatedAt`，进行中按当前时间增长；成员行显示最近一次委派从 `deliveryStartedAt` 到输入停稳的耗时，仍在运行时增长；排队未开始不显示伪造耗时。持续时间每秒只在显示处刷新，不重渲染整块任务或 Plan |
+| 执行时间 | Task 条、任务详情和项目页任务列表显示 Task 耗时：从 `createdAt` 到完成/取消/暂停时最后记录的 `updatedAt`，进行中按当前时间增长；成员行显示最近一次委派从 `deliveryStartedAt` 到输入停稳的耗时，仍在运行时增长；排队未开始不显示伪造耗时。持续时间每秒只在显示处刷新，不重渲染整块任务或 Plan |
 | 会话切换 | Task 条、任务清单、成员抽屉和 Task 抽屉属于**当前主管会话**。切换会话时立即清空旧会话的 Task detail/active id，并在新会话的快照/`session.get` 返回后再显示它；切换过程中不可显示上一条会话的 Task，也不可让旧会话的轮询/回包重新写入。Composer 的未发送文字和附件不属于 Task，切换会话时保留。 |
 | 派发卡片 | 恒为单行（符号 + `派发 N 名成员`/`继续 <角色>` + 成员名 + 耗时），展开是调用真实结果（机器 JSON 不铺在行上）；成员实时状态一律在任务清单 |
 | 决定面板 | 停靠在输入框上方、不遮盖转录；**选项列排序**（数字槽 + 悬挂缩进，长文案在行内换行、问题标题可换行不省略）；数字键直选、↑↓、Enter、Esc 稍后；答复后显示"答复已收到"回显数秒即自行关闭。选择题的选项之后始终有「自行输入」一行：点它把光标放进输入框（下一次按键属于这里，不落到转录快捷键），Enter 提交用户自己的话，Esc 退回选项；服务端按非空字符串受理并原样交回模型，不折算成某个选项——选项都不成立时，逼选一个会把错误决定写进记录 |
@@ -123,9 +123,16 @@
 - 消息与工具卡：图片缩略图最大 520×360，点击在新标签打开原图；文档显示文件卡片，展开显示提取文本（最多 200,000 字符，超出明确标注截断），点击打开/下载原文；刷新后从历史重新取到同一地址，不重新上传。
 - 尺寸与语言：`chat.attach`、`chat.attach.remove`、`chat.attach.limit`、`chat.attach.failed`、`chat.document.*` 双语键；图片 `alt` 用文件名或 mime。
 
-## U6 需求与设置
+## U6 项目页与设置
 
-- 需求页：四列（提案 / 待实现 / 进行中 / 已完成）是记录状态的投影，因此看板在标签页可见时每 5 秒重读一次（隐藏时不发请求，回到前台立刻读一次）；一次刷新替换第一页，已「显示更多」过的任务列表不再被刷新折叠回第一页。无法解析的文件在通知行显示并可查看原文；抽屉按类型显示各自章节。**任务区默认折叠**：折叠时只占一行（`▸ 任务 · 共 N 个`，有进行中任务时附带 `● 进行中 N`），点击整行才展开列表（`aria-expanded`）；刷新与「显示更多」放在这一行的右侧，不单独占行——需求看板是主体，任务列表是脚注，它的控件不能比它的内容占更多高度。
+- 项目页（`/project`）：自上而下是问题提示 → 进行中 → 待办 → 模块 → 早期文件（[BL-04](../productnew/modules/backlog-and-specs.md)）；没有内容的区块折叠为一行或不显示。数据来自 `backlog.list`、`task.list`、`interaction.list`（不带 `sessionId`）与 `project.files.read`，标签页可见时每 5 秒重读一次（隐藏时不发请求，回到前台立刻读一次），收到 `backlog` / `task` / `interaction` 推送时立即刷新。**任务区默认折叠**：折叠时只占一行（`▸ 任务 · 共 N 个`，有进行中任务时附带 `● 进行中 N`），点击整行才展开列表（`aria-expanded`）；刷新与「显示更多」放在这一行右侧，看板是主体，任务列表是脚注。
+- 问题提示：`issues` 非空时显示“N 处需要修复”，点击后在文件查看器中打开 `.dev/backlog.md` 并按行号滚动到对应行（读取仍是整份正文）；文件级问题单独一行说明。
+- 进行中：未结束 Task 的编号、标题、当前步骤与关联待办；`interaction.list` 中有对应 `taskId` 的标“等你决定”，点击跳到该问题所在的会话；末尾一行显示最近完成的 Task。
+- 待办：顶部一行输入框，输入标题后回车即新增；「就绪」「想法」两组，「已关闭」默认折叠；每行显示编号、标题、关联 Task 的状态点、待核对与警告标记；关联的 Task 已取消时在行上显示“上一次的 Task 已取消”。
+- 详情抽屉：正文（可编辑）、规格引用（在文件查看器中打开；带 `#标题` 时滚动到该标题，查看器不支持锚点时只打开文件）、来源、创建人、关联 Task（含最近一次已结束或已取消的关联；该 Task 在本环境不存在时显示缺失）、关闭说明；操作「实施」「讨论」「完成」「放弃」「重开」。「实施」只在主管输入框中预填“实施 B-12”，“讨论”只预填“讨论 B-12：”，都不代为发送；「完成」「放弃」「重开」要求写一句说明。写入返回 `VERSION_CONFLICT` 时显示当前内容与“已被他人修改”，保留用户草稿。
+- 模块：用 `project.files.read` 读取 `PROJECT.md`，截取「模块」一节原样渲染为只读；链接在文件查看器中打开；「来自 PROJECT.md」打开源文件；不提供编辑，不汇总实现进度。
+- 早期文件：项目里有 `.dev/requirements/` 或 `.dev/issues.md` 时，页面底部显示一行入口，点击在文件查看器中打开，不解析内容。
+- Task 详情显示 `scopeCheck`：声明的范围与越界文件；旧 Task 关联旧需求时显示原来的需求编号（只读，标为“早期需求”）。
 - 设置页：Providers（显示名 + 技术标识、地址、协议、模型、是否已配置、试连、编辑）、Models（全局 / 本项目作用域 + 来源标记；顶部全局「上下文压缩」开关与阈值，50–95%，默认 70%）、Usage（本项目 / 全部项目作用域 + 合计 + 按角色/按模型）、Appearance（主题 / 语言 / 密度）。Provider 的技术标识创建后不可改；显示名、地址、协议、模型列表与凭证可改（凭证留空表示不变）。协议是必选下拉（OpenAI chat/completions / OpenAI responses / Anthropic messages），不按地址或名称推断。
 - Provider 的编辑是**弹框**（`role="dialog"` + `aria-modal`，宽 `min(880px, 100vw-32px)`，`max-height: 86vh`，主体滚动、底部按钮常驻），不是追加在列表末尾的一块：列表很长时原来点「修改」看不出反应（表单开在折叠线以下）。弹框有焦点陷阱，`Esc` 关闭；选择器展开时 `Esc` 只收起列表，不关弹框（放弃未保存的编辑是陷阱）。列表头行显示正在编辑的技术标识；保存成功用外壳的 toast，失败则错误留在弹框内（唯一能改的地方）。
 - Provider 的模型列表逐行编辑：每行是一个模型（端点 id + 「模型（来自 Pi 目录）」选择器 + 移除），末行「+ 添加模型」。窄屏（≤860）下标签独占一行、id 与选择器上下堆叠，移除按钮单独一列。
@@ -157,7 +164,7 @@
 | 类型 | `npm run typecheck`（服务端）、`npm --prefix webapp run typecheck` |
 | 文案 | `test/web-i18n-keys.test.ts`：键一致、无缺失、无空值、占位符一致 |
 | 构建 | `npm run build` 成功产出 `web-static/index.html` |
-| 浏览器 | `broad`/发布：`npm run test:browser`（先构建再跑）：三屏、对话、提问答复、双击防重、业务拒绝、断线返回、被拒工具仍可见、提案分段、任务条与推送、模型范围、思考等级、需求交接、文件/报告阅读、更早历史、重绑定、任务列表、焦点陷阱、错误文案、五档视口、主题切换。`focused` 只跑本次相关用例。 |
+| 浏览器 | `broad`/发布：`npm run test:browser`（先构建再跑）：三屏、对话、提问答复、双击防重、业务拒绝、断线返回、被拒工具仍可见、任务条与推送、模型范围、思考等级、项目页（新增/编辑/冲突/等你决定/模块）、文件/报告阅读、更早历史、重绑定、任务列表、焦点陷阱、错误文案、五档视口、主题切换。`focused` 只跑本次相关用例。 |
 | 单测 | `broad`/发布：`npm test` 全绿；`focused` 只跑受影响测试文件，`visual` 不跑测试。 |
 
 ## U9 方法消费
@@ -179,10 +186,11 @@
 | `session.input.get` | 无——登记为缺口（U8 已由 `session.get.config` 覆盖） |
 | `session.input.submit` / `session.input.stop` | composer、队列撤回、STOP |
 | `session.compact` | 状态栏上下文档位的「立即压缩」 |
-| `task.get` / `task.list` | 任务条、成员抽屉、任务详情、需求屏任务段 |
+| `task.get` / `task.list` | 任务条、成员抽屉、任务详情、项目页任务段 |
 | `task.control` | 任务条暂停/继续 |
 | `task.report.get` | 任务详情里的报告 |
-| `requirement.list` / `requirement.get` | 需求看板、抽屉 |
+| `backlog.list` / `backlog.get` / `backlog.add` / `backlog.update` / `backlog.close` / `backlog.reopen` | 项目页待办列表、详情抽屉与新增输入框 |
+| `interaction.list`（不带 `sessionId`） | 项目页「进行中」的“等你决定”与跳转 |
 | `interaction.respond` | 问题面板 |
 | `config.get` / `config.save` / `config.clear` / `config.test` | 设置三页（`clear` = Models 行选「默认」） |
 | `config.catalog` | Providers 编辑器的「实际模型」建议（目录里的模型名与事实，按 provider 分组） |

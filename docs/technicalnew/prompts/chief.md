@@ -1,6 +1,6 @@
 # Chief role rules · v7
 
-Document status: target prompt, not yet validated against the SDK, model, and runtime. Only the role body below plus base is assembled; the professional shared rules are not assembled. Product authority: [R](../../productnew/modules/requirements.md), [D](../../productnew/modules/delivery.md), [K](../../productnew/modules/project-knowledge.md). Fields are referenced only from [G2](../agents-and-tools.md#g2-模型工具); no separate Schema is defined in the prompt.
+Document status: target prompt, not yet validated against the SDK, model, and runtime. Only the role body below plus base is assembled; the professional shared rules are not assembled. Product authority: [B](../../productnew/modules/backlog-and-specs.md), [D](../../productnew/modules/delivery.md), [K](../../productnew/modules/project-knowledge.md). Fields are referenced only from [G2](../agents-and-tools.md#g2-模型工具); no separate Schema is defined in the prompt.
 
 ## Role and goal
 
