@@ -90,13 +90,16 @@ function tool(tools: readonly DomainTool[]): DomainTool {
   return found;
 }
 
+/** A write Plan must state acceptance (G2), so every fixture carries one. */
+const PLAN = '# original plan\n\n## 验收\n- observable result\n';
+
 function createArgs(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     op: 'create',
     type: 'write',
     goal: 'reset password',
     scope: 'account module',
-    planMarkdown: '# original plan\n',
+    planMarkdown: PLAN,
     authorizationRef: { inputId: 'i-dec' },
     requiresTest: true,
     ...overrides,
@@ -114,7 +117,7 @@ describe('task create', () => {
     expect(result.details['planState']).toBe('saved');
     const task = w.store.listTasks(w.projectId)[0];
     expect(task?.sourceInputId).toBe('i-7');
-    expect(readFileSync(task?.planRef?.path ?? '', 'utf8')).toBe('# original plan\n');
+    expect(readFileSync(task?.planRef?.path ?? '', 'utf8')).toBe(PLAN);
     // The model-facing result carries no revision: the host owns that bookkeeping.
     expect(result.details['revision']).toBeUndefined();
   });
@@ -310,7 +313,7 @@ describe('task update', () => {
     const stale = await tool(w.tools).execute('call-2', {
       op: 'update',
       taskId: task?.id,
-      changes: { planMarkdown: '# STALE WRITER\n' },
+      changes: { planMarkdown: '# STALE WRITER\n\n## 验收\n- other\n' },
     });
 
     expect(stale.isError).toBe(true);
@@ -329,13 +332,13 @@ describe('task update', () => {
       taskId: task?.id,
       phase: 'develop',
       summary: 'plan fixed',
-      changes: { planMarkdown: '# revised plan\n' },
+      changes: { planMarkdown: '# revised plan\n\n## 验收\n- observable result\n' },
     });
 
     expect(updated.isError).toBe(false);
     expect(updated.details['phase']).toBe('develop');
     expect(updated.details['planState']).toBe('saved');
-    expect(readFileSync(task?.planRef?.path ?? '', 'utf8')).toBe('# revised plan\n');
+    expect(readFileSync(task?.planRef?.path ?? '', 'utf8')).toBe('# revised plan\n\n## 验收\n- observable result\n');
   });
 
   it('refuses a Task coordinated by another session', async () => {
@@ -374,7 +377,7 @@ describe('task get', () => {
     expect(read.isError).toBe(false);
     const task = read.details['task'] as { taskId?: string };
     expect(task.taskId).toBe(w.store.listTasks(w.projectId)[0]?.id);
-    expect(read.details['planText']).toBe('# original plan\n');
+    expect(read.details['planText']).toBe(PLAN);
     expect(read.details['planCurrent']).toBe(true);
   });
 

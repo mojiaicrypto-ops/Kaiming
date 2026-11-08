@@ -65,6 +65,12 @@ export interface RpcContext {
   readonly store: Store;
   /** Who is calling: the cookie session this connection authenticated with. */
   readonly actor: string;
+  /**
+   * Stable operator identity, separate from the login session value: `local` for the browser of a
+   * single-user installation, the caller's stable name for an external surface. Records that must
+   * name a person (backlog 创建人/关闭人, interactions.answeredBy) use this, never the cookie value.
+   */
+  readonly actorId?: string;
   /** Lets an auth handler attach its cookie without the router knowing about transport. */
   readonly setCookie?: (cookie: string) => void;
   /** The request id the caller used: store-level idempotency keys must be stable across retries. */

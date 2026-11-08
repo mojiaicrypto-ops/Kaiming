@@ -234,6 +234,9 @@ export function createWorkbenchServer(options: WorkbenchServerOptions): Workbenc
     const context: RpcContext = {
       store: options.store,
       actor: session?.value ?? 'anonymous',
+      // A single-user installation: the browser writes as `local`. The cookie value stays `actor`
+      // because transports and subscriptions key on it.
+      actorId: 'local',
       requestId: incomingId,
       setCookie: (cookie: string) => pendingCookies.push(cookie),
     };

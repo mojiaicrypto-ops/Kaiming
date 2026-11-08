@@ -14,6 +14,8 @@ import { StoreError, type ArtifactRef, type Store, type TaskPhase, type TaskRow 
 import { commitPlan, digestOfText, planRefFor, planTarget, readPlan } from '../runtime/plan-store.ts';
 import { readReportBody } from '../runtime/report-store.ts';
 import { getRequirement, promoteRequirementToInProgress } from '../runtime/requirement-store.ts';
+import { acceptanceChanged, acceptanceGap, scopeCheckFor, scopeCheckText } from '../runtime/plan-contract.ts';
+import { BacklogProblemError, readBacklog } from '../runtime/backlog-store.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
 import { dispatchOp, type DelegationHost } from './delegation-tools.ts';
 import { asRecord, enrich, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
@@ -102,6 +104,7 @@ function taskSummaryJson(task: TaskRow): Record<string, unknown> {
     basisRefs: task.basisRefs,
     planRef: task.planRef,
     requirementId: task.requirementId,
+    backlogIds: task.backlogIds,
     currentSessionIds: task.currentSessionIds,
     summary: task.summary,
     nextStep: task.nextStep,
@@ -157,6 +160,11 @@ export function createTaskTool(contextOf: TaskToolContextResolver, options: { re
         requirementId: {
           type: 'string',
           description: 'the implementation requirement this Task delivers (omit for design, investigation or knowledge work)',
+        },
+        backlogIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'backlog items this Task implements (0..n); each may belong to only one open Task',
         },
         // update
         phase: { type: 'string', enum: [...PHASES] },
@@ -325,6 +333,15 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
   ) {
     return fail('INVALID_ARGUMENT', 'goal, scope and planMarkdown are required non-empty strings');
   }
+  if (type === 'write') {
+    const gap = acceptanceGap(planMarkdown);
+    if (gap !== undefined) {
+      return fail('INVALID_ARGUMENT', `${gap}; add it before the Task is created`, {
+        missing: 'acceptance',
+        example: '## 验收\n- 登录页按钮文案为“进入”，点击行为不变。',
+      });
+    }
+  }
   // The cited decision must be a real one in this project; only its identity/state is verified.
   // A chief creating a Task is running a user's own message, so that message is the decision: it is
   // the only input this run has, and making the model echo an id it was never given would only
@@ -384,7 +401,39 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
       );
     }
   }
-  const taskId = `t-${randomUUID().slice(0, 8)}`;
+  const backlogIds = readStringArray(params, 'backlogIds') ?? [];
+  if (backlogIds.length > 0) {
+    if (type === 'read') {
+      return fail('INVALID_ARGUMENT', 'a read Task cannot implement backlog items; leave backlogIds empty');
+    }
+    const read = readBacklog(context.cwd);
+    for (const id of backlogIds) {
+      const item = read.items.find((entry) => entry.id === id);
+      const problems = read.issues.filter((issue) => issue.id === id);
+      if (item === undefined) {
+        if (problems.length > 0) {
+          return fail('INVALID_ARGUMENT', `backlog item ${id} has a format problem`, {
+            backlogId: id,
+            issues: problems,
+          });
+        }
+        return fail('NOT_FOUND', `backlog item ${id} does not exist`, { backlogId: id });
+      }
+      if (problems.length > 0) {
+        return fail('INVALID_ARGUMENT', `backlog item ${id} has a format problem`, {
+          backlogId: id,
+          issues: problems,
+        });
+      }
+      if (item.state !== 'open') {
+        return fail('INVALID_ARGUMENT', `backlog item ${id} is ${item.state}; only open items can be implemented`, {
+          backlogId: id,
+          state: item.state,
+        });
+      }
+    }
+  }
+  const taskId = `t-${randomUUID().replace(/-/g, '').slice(0, 12)}`;
   const target = planTarget({ taskId, type, projectCwd: context.cwd, serverWorkDir: context.serverWorkDir });
   const intendedPlan = planRefFor(target, planMarkdown);
   try {
@@ -395,6 +444,7 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
       chiefSessionId: context.sessionId,
       ownerEpoch: context.store.epoch,
       ...(requirementId !== undefined ? { requirementId } : {}),
+      ...(backlogIds.length > 0 ? { backlogIds } : {}),
       type,
       requiresTest: type === 'write' ? (requiresTest as boolean) : false,
       goal,
@@ -443,6 +493,7 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
           planRef: task.planRef,
           planState,
           ...(requirementState !== undefined ? { requirement: requirementState } : {}),
+          scopeCheck: scopeCheckFor(context.cwd, planMarkdown),
         },
       );
     }
@@ -453,6 +504,7 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
       planRef: task.planRef,
       planState,
       ...(requirementState !== undefined ? { requirement: requirementState } : {}),
+      scopeCheck: scopeCheckFor(context.cwd, planMarkdown),
       ...guidanceFor(context.store, task),
     });
   } catch (error) {
@@ -475,6 +527,15 @@ function updateOp(context: TaskToolContext, existing: TaskRow, params: Record<st
   const planMarkdown = changes === undefined ? undefined : readString(changes, 'planMarkdown');
   let planRef: ArtifactRef | undefined;
   let planState = 'unchanged';
+  let acceptanceChangedFlag: boolean | undefined;
+  if (planMarkdown !== undefined && existing.type === 'write') {
+    const gap = acceptanceGap(planMarkdown);
+    if (gap !== undefined) {
+      return fail('INVALID_ARGUMENT', `${gap}; a revised Plan keeps the acceptance section`, {
+        missing: 'acceptance',
+      });
+    }
+  }
   if (planMarkdown !== undefined) {
     // The chief is the only writer of the Plan, but a person can edit the file. Never overwrite a
     // version nobody saw: compare the file with what the Task recorded and with what is being written.
@@ -487,6 +548,7 @@ function updateOp(context: TaskToolContext, existing: TaskRow, params: Record<st
         currentText: onDisk?.text ?? null,
       });
     }
+    acceptanceChangedFlag = acceptanceChanged(onDisk?.text ?? '', planMarkdown);
     const target = planTarget({
       taskId,
       type: existing.type,
@@ -540,20 +602,39 @@ function updateOp(context: TaskToolContext, existing: TaskRow, params: Record<st
         planState = 'pending';
         return ok(
           `Task ${task.id} updated to ${task.phase} but its Plan file is not saved yet (${messageOf(error)})`,
-          { taskId: task.id, phase: task.phase, currentSessionIds: task.currentSessionIds, planRef: task.planRef, planState },
+          {
+            taskId: task.id,
+            phase: task.phase,
+            currentSessionIds: task.currentSessionIds,
+            planRef: task.planRef,
+            planState,
+            ...(acceptanceChangedFlag === true ? { acceptanceChanged: true } : {}),
+          },
         );
       }
     }
     const guidance = guidanceFor(context.store, task);
-    return ok(`Task ${task.id} updated: phase=${task.phase}`, {
-      taskId: task.id,
-      phase: task.phase,
-      status: task.status,
-      currentSessionIds: task.currentSessionIds,
-      planRef: task.planRef,
-      planState,
-      ...guidance,
-    });
+    return ok(
+      `Task ${task.id} updated: phase=${task.phase}${
+        acceptanceChangedFlag === true
+          ? '; acceptance changed — if this exceeds the original authorization, ask the user (D-08); completed Review/Test do not cover the new acceptance'
+          : ''
+      }`,
+      {
+        taskId: task.id,
+        phase: task.phase,
+        status: task.status,
+        currentSessionIds: task.currentSessionIds,
+        planRef: task.planRef,
+        planState,
+        ...(acceptanceChangedFlag === true ? { acceptanceChanged: true } : {}),
+        scopeCheck: scopeCheckFor(
+          context.cwd,
+          planMarkdown ?? (task.planRef === null ? '' : readPlan(task.planRef).text),
+        ),
+        ...guidance,
+      },
+    );
   } catch (error) {
     const code = error instanceof StoreError ? error.code : 'STORAGE_UNAVAILABLE';
     // A refused phase change names the members still holding the step, so the caller can act on it.
@@ -745,10 +826,25 @@ function getOp(
         (input?.status === 'completed' || input?.status === 'failed' || input?.status === 'stopped'),
     };
   });
+  const backlogHints: string[] = [];
+  if (task.backlogIds.length > 0) {
+    const backlog = readBacklog(context.cwd);
+    for (const id of task.backlogIds) {
+      const item = backlog.items.find((entry) => entry.id === id);
+      if (item === undefined) {
+        backlogHints.push(`关联的待办不存在：${id}`);
+      } else if (backlog.issues.some((issue) => issue.id === id)) {
+        backlogHints.push(`关联的待办需要修复：${id}`);
+      }
+    }
+  }
   return ok(`Task ${task.id}: ${task.phase} (${task.status})`, {
     task: taskSummaryJson(task),
     planText: plan.text,
     planCurrent: plan.current,
+    scopeCheck: scopeCheckFor(context.cwd, plan.text),
+    scopeCheckText: scopeCheckText(scopeCheckFor(context.cwd, plan.text)),
+    ...(backlogHints.length > 0 ? { backlogHints } : {}),
     members,
     results,
     missing: task.planRef !== null && !plan.current ? ['plan file is missing or changed'] : [],

@@ -113,6 +113,46 @@ describe('store pragmas and schema', () => {
     expect(migrated.listPendingInteractions('s-1')).toEqual([]);
   });
 
+  it('migrates a v16 database: backlogIds empty, actorId local, requirementId preserved', () => {
+    const { store, path } = openStore();
+    seed(store);
+    accept(store);
+    store.createTask({
+      id: 't-abcdef12',
+      projectId: 'p-1',
+      chiefSessionId: 's-2',
+      ownerEpoch: 1,
+      requirementId: 'req-legacy',
+      type: 'write',
+      requiresTest: false,
+      goal: 'old work',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/old.md', sha256: 'old' },
+      authorizationRefs: [],
+      sourceInputId: 'i-1',
+    });
+    closeStore(store);
+
+    // Emulates the previous release: the v17 columns absent, version rolled back.
+    const raw = new DatabaseSync(path);
+    raw.exec('ALTER TABLE tasks DROP COLUMN backlogIds');
+    raw.exec('ALTER TABLE session_inputs DROP COLUMN actorId');
+    raw.exec('PRAGMA user_version = 16');
+    raw.close();
+
+    const migrated = new Store({ path, serverEpoch: 1 });
+    stores.push(migrated);
+
+    expect(migrated.pragmas().userVersion).toBe(SCHEMA_VERSION);
+    expect(migrated.getTask('t-abcdef12')).toMatchObject({
+      backlogIds: [],
+      requirementId: 'req-legacy',
+    });
+    expect(migrated.getInput('i-1')?.actorId).toBe('local');
+  });
+
   it('opens a v8 database and migrates it to v9 (the release that dropped candidate tokens)', () => {
     const { store, path } = openStore();
     closeStore(store);

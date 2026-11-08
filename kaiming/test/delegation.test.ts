@@ -104,7 +104,7 @@ async function fixture(): Promise<Fixture> {
     type: 'write',
     goal: 'reset password',
     scope: 'account',
-    planMarkdown: '# plan\n',
+    planMarkdown: '# plan\n\n## 验收\n- observable result\n',
     authorizationRef: { inputId: 'i-dec' },
     requiresTest: true,
   });

@@ -679,7 +679,7 @@ describe('requirement and Task: the implementation edge is checked, not assumed'
       type: 'write',
       goal: 'deliver it',
       scope: 'the account area',
-      planMarkdown: '# plan\n',
+      planMarkdown: '# plan\n\n## 验收\n- observable result\n',
       authorizationRef: { inputId: 'i-dec' },
       requiresTest: true,
       ...extra,

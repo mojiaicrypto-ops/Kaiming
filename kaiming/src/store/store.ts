@@ -85,6 +85,7 @@ export interface TaskRow {
   readonly chiefSessionId: string;
   readonly ownerEpoch: number;
   readonly requirementId: string | null;
+  readonly backlogIds: readonly string[];
   readonly type: TaskType;
   readonly requiresTest: boolean;
   readonly goal: string;
@@ -121,6 +122,7 @@ export interface CreateTaskParams {
   readonly chiefSessionId: string;
   readonly ownerEpoch: number;
   readonly requirementId?: string;
+  readonly backlogIds?: readonly string[];
   readonly type: TaskType;
   readonly requiresTest: boolean;
   readonly goal: string;
@@ -312,6 +314,8 @@ export interface InputRow {
   readonly projectId: string;
   readonly sessionId: string;
   readonly taskId: string | null;
+  /** Stable operator identity recorded when the input was accepted. */
+  readonly actorId: string;
   readonly seq: number;
   readonly sourceKey: string;
   readonly paramsDigest: string;
@@ -368,6 +372,8 @@ export interface AcceptInputParams {
   readonly method: string;
   readonly kind: InputKind;
   readonly payload: unknown;
+  /** Stable operator identity; a single-machine deployment records `local`. */
+  readonly actorId?: string;
 }
 
 export interface CreateProjectParams {
@@ -387,7 +393,7 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -510,6 +516,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   chiefSessionId TEXT NOT NULL REFERENCES sessions(id),
   ownerEpoch INTEGER NOT NULL,
   requirementId TEXT,
+  backlogIds TEXT NOT NULL DEFAULT '[]',
   type TEXT NOT NULL,
   requiresTest INTEGER NOT NULL,
   goal TEXT NOT NULL,
@@ -647,6 +654,7 @@ CREATE TABLE IF NOT EXISTS session_inputs (
   projectId TEXT NOT NULL,
   sessionId TEXT NOT NULL REFERENCES sessions(id),
   taskId TEXT,
+  actorId TEXT NOT NULL DEFAULT 'local',
   seq INTEGER NOT NULL,
   sourceKey TEXT NOT NULL,
   paramsDigest TEXT NOT NULL,
@@ -942,15 +950,16 @@ export class Store {
       this.db
         .prepare(
           `INSERT INTO session_inputs
-             (inputId, projectId, sessionId, taskId, seq, sourceKey, paramsDigest, kind, payload,
-              status, revision, createdAt, updatedAt)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 1, ?, ?)`,
+             (inputId, projectId, sessionId, taskId, actorId, seq, sourceKey, paramsDigest, kind,
+              payload, status, revision, createdAt, updatedAt)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 1, ?, ?)`,
         )
         .run(
           params.inputId,
           params.projectId,
           params.sessionId,
           params.taskId ?? null,
+          params.actorId ?? 'local',
           seqRow.nextSeq,
           params.sourceKey,
           paramsDigest,
@@ -2377,6 +2386,19 @@ export class Store {
         taskId: params.id,
       });
     }
+    const backlogIds = params.backlogIds ?? [];
+    if (params.type === 'read' && backlogIds.length > 0) {
+      throw new StoreError('INVALID_ARGUMENT', 'a read Task cannot implement backlog items', {
+        taskId: params.id,
+      });
+    }
+    for (const id of backlogIds) {
+      if (typeof id !== 'string' || id.trim() === '') {
+        throw new StoreError('INVALID_ARGUMENT', 'backlogIds must be non-empty strings', {
+          taskId: params.id,
+        });
+      }
+    }
     return this.transaction(() => {
       const session = this.getSession(params.chiefSessionId);
       if (session === undefined) {
@@ -2395,10 +2417,10 @@ export class Store {
         this.db
           .prepare(
             `INSERT INTO tasks
-               (id, projectId, chiefSessionId, ownerEpoch, requirementId, type, requiresTest, goal,
-                scope, acceptanceRefs, basisRefs, planRef, authorizationRefs, phase,
-                currentSessionIds, status, revision, summary, sourceInputId, createdAt, updatedAt)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'plan', '[]', 'active', 1, ?, ?, ?, ?)`,
+               (id, projectId, chiefSessionId, ownerEpoch, requirementId, backlogIds, type,
+                requiresTest, goal, scope, acceptanceRefs, basisRefs, planRef, authorizationRefs,
+                phase, currentSessionIds, status, revision, summary, sourceInputId, createdAt, updatedAt)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'plan', '[]', 'active', 1, ?, ?, ?, ?)`,
           )
           .run(
             params.id,
@@ -2406,6 +2428,7 @@ export class Store {
             params.chiefSessionId,
             params.ownerEpoch,
             params.requirementId ?? null,
+            canonical(backlogIds),
             params.type,
             params.requiresTest ? 1 : 0,
             params.goal,
@@ -2438,11 +2461,46 @@ export class Store {
         }
         throw error;
       }
+      // Claim inside the same transaction: two creates that name one backlog item cannot both pass,
+      // and a refused create leaves neither the Task nor the claim behind.
+      if (backlogIds.length > 0) {
+        this.claimBacklogItems(backlogIds, params.id);
+      }
       this.db
         .prepare('UPDATE sessions SET currentTaskId = ?, revision = revision + 1, updatedAt = ? WHERE id = ?')
         .run(params.id, timestamp, params.chiefSessionId);
       return this.requireTask(params.id);
     });
+  }
+
+  /**
+   * "One backlog item belongs to at most one unfinished write Task." Called inside createTask's
+   * transaction, so an interleaved create cannot claim the same item twice. Whether the entry itself
+   * exists and is readable is checked by the caller that read the file (task tool).
+   */
+  private claimBacklogItems(ids: readonly string[], taskId: string): void {
+    const placeholders = ids.map(() => '?').join(', ');
+    const row = this.db
+      .prepare(
+        `SELECT t.id AS taskId, t.chiefSessionId AS chiefSessionId, t.status AS status,
+                j.value AS backlogId
+           FROM tasks t, json_each(t.backlogIds) j
+          WHERE t.id <> ? AND t.type = 'write'
+            AND t.status IN ('active', 'waiting', 'pausing', 'paused', 'cancelling')
+            AND j.value IN (${placeholders})
+          LIMIT 1`,
+      )
+      .get(taskId, ...ids) as
+      | { taskId: string; chiefSessionId: string; status: string; backlogId: string }
+      | undefined;
+    if (row !== undefined) {
+      throw new StoreError('TASK_BUSY', 'the backlog item already has an open Task', {
+        backlogId: row.backlogId,
+        taskId: row.taskId,
+        chiefSessionId: row.chiefSessionId,
+        status: row.status,
+      });
+    }
   }
 
   getTask(taskId: string): TaskRow | undefined {
@@ -3370,6 +3428,19 @@ export class Store {
     });
   }
 
+  /**
+   * v16 → v17: a Task records the backlog items it implements, and an accepted input records the
+   * stable operator identity. Additive with defaults, so an existing row behaves exactly as before
+   * (`backlogIds` empty, `actorId` `local`); column checks keep it idempotent for fresh databases.
+   */
+  private migrateV16ToV17(): void {
+    this.transaction(() => {
+      this.addColumn('tasks', 'backlogIds', "TEXT NOT NULL DEFAULT '[]'");
+      this.addColumn('session_inputs', 'actorId', "TEXT NOT NULL DEFAULT 'local'");
+      this.db.exec('PRAGMA user_version = 17;');
+    });
+  }
+
   private migrateV14ToV15(): void {
     this.transaction(() => {
       this.addColumn('sessions', 'channel', 'TEXT');
@@ -3509,6 +3580,7 @@ export class Store {
         [13, () => this.migrateV13ToV14()],
         [14, () => this.migrateV14ToV15()],
         [15, () => this.migrateV15ToV16()],
+        [16, () => this.migrateV16ToV17()],
       ];
       for (const [from, step] of steps) {
         if (this.pragmas().userVersion === from) {
@@ -3762,6 +3834,7 @@ function toTaskRow(row: Record<string, unknown>): TaskRow {
     chiefSessionId: String(row['chiefSessionId']),
     ownerEpoch: Number(row['ownerEpoch']),
     requirementId: nullable(row['requirementId']),
+    backlogIds: parseStringList(row['backlogIds']),
     type: row['type'] === 'write' ? 'write' : 'read',
     requiresTest: Number(row['requiresTest']) === 1,
     goal: String(row['goal']),

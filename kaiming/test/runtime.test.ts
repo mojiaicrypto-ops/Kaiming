@@ -1282,7 +1282,7 @@ describe('input runner', () => {
       scope: 'account module',
       acceptanceRefs: ['AC-1'],
       basisRefs: ['req-1'],
-      planMarkdown: '# Plan\n1. implement\n2. review\n',
+      planMarkdown: '# Plan\n1. implement\n2. review\n\n## 验收\n- feature works\n',
       authorizationRef: { inputId: 'i-1' },
       requiresTest: true,
     });
@@ -1467,7 +1467,7 @@ describe('input runner', () => {
       type: 'write',
       goal: 'reset password',
       scope: 'account',
-      planMarkdown: '# plan\n1. develop\n',
+      planMarkdown: '# plan\n1. develop\n\n## 验收\n- feature works\n',
       authorizationRef: { inputId: 'i-1' },
       requiresTest: true,
     });
@@ -1535,7 +1535,7 @@ describe('input runner', () => {
       type: 'write',
       goal: 'reset password',
       scope: 'account',
-      planMarkdown: '# plan\n1. develop\n',
+      planMarkdown: '# plan\n1. develop\n\n## 验收\n- feature works\n',
       authorizationRef: { inputId: 'i-1' },
       requiresTest: true,
     });
@@ -1876,7 +1876,7 @@ describe('input runner', () => {
       type: 'write',
       goal: 'change the reset flow',
       scope: 'account',
-      planMarkdown: '# write plan\n1. look, then change\n',
+      planMarkdown: '# write plan\n1. look, then change\n\n## 验收\n- behaviour changed\n',
       authorizationRef: { inputId: 'i-1' },
       requiresTest: false,
     });

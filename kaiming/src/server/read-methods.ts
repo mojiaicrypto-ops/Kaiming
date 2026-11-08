@@ -11,6 +11,7 @@ import { pageHistory, pageHistoryBefore, readPiHistory } from './history.ts';
 import { digestOfText, getRequirement, listRequirements, requirementPath } from '../runtime/requirement-store.ts';
 import { readReportBody } from '../runtime/report-store.ts';
 import { readPlan } from '../runtime/plan-store.ts';
+import { scopeCheckFor } from '../runtime/plan-contract.ts';
 import { mimeTypeOf, resolveInsideProject } from './fs-guard.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
 import type { Store } from '../store/store.ts';
@@ -512,16 +513,16 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       }
       // The Plan is the authority a caller judges work by; a missing or changed file is reported as
       // such rather than silently replaced by a summary.
+      const planRead = task.planRef === null ? undefined : readPlan(task.planRef);
       const plan =
-        params['includePlan'] === true && task.planRef !== null
-          ? (() => {
-              const read = readPlan(task.planRef);
-              return { markdown: read.text, current: read.current };
-            })()
+        params['includePlan'] === true && planRead !== undefined
+          ? { markdown: planRead.text, current: planRead.current }
           : null;
       return {
         task: taskSummary(store, task),
         plan,
+        scopeCheck: planRead === undefined ? null : scopeCheckFor(project.realPath, planRead.text),
+
         members: store.listTaskSessions(task.id).map((member) => {
           // The delegation-time currentInputId is history; the live session state tells the
           // Task card whether the member is working right now (R2: derived, not stored).
@@ -934,6 +935,7 @@ function taskSummary(store: Store, task: ReturnType<Store['getTask']> & object) 
     // Which chief session coordinates it: the board links a Task to the conversation that runs it.
     chiefSessionId: task.chiefSessionId,
     requirementId: task.requirementId,
+    backlogIds: task.backlogIds,
     goal: task.goal,
     scope: task.scope,
     requiresTest: task.requiresTest,

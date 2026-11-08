@@ -130,6 +130,7 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
         sessionId,
         // Only the running Task's own work is consumable, so an unassociated input waits for it.
         ...(taskId !== undefined ? { taskId } : {}),
+        actorId: context.actorId ?? 'local',
         sourceKey: `${sessionId}:${inputId}`,
         requestKey: inputId,
         method: 'session.input.submit',
@@ -389,7 +390,7 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
         interactionId,
         expectedRevision,
         response: params['response'],
-        answeredBy: context.actor,
+        answeredBy: context.actorId ?? context.actor,
         requestKey: context.requestId === '' ? `answer:${interactionId}` : context.requestId,
       });
       // The answer is durable before it is handed back to the model.

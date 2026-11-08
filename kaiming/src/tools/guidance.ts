@@ -173,6 +173,15 @@ export function guidanceFor(
     }
   }
 
+  if (task.phase === 'settle' && task.backlogIds.length > 0) {
+    actions.push({
+      action:
+        'backlog(op=close, id=<item>, state=done|dropped, note=<why>) for each delivered item; record leftovers with backlog(op=add)',
+      op: 'get',
+      reason: `${String(task.backlogIds.length)} backlog item(s) belong to this Task; settlement closes the delivered ones and records what remains`,
+    });
+  }
+
   return { nextActions: actions, gaps };
 }
 

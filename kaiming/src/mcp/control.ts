@@ -40,6 +40,7 @@ export function inProcessControl(options: InProcessControlOptions): Control {
       const context: RpcContext = {
         store: options.store,
         actor: options.actor,
+        actorId: options.actor,
         requestId: id,
       };
       const response = await options.router.handle({ requestId: id, method, params }, context, () => randomUUID());

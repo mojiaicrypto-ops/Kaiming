@@ -185,6 +185,24 @@ export function ignoredProjectPaths(cwd: string, paths: readonly string[]): Read
   return ignored;
 }
 
+/**
+ * Project-relative paths with staged, unstaged or untracked changes anywhere in the work tree.
+ * Used by the Plan scope check: the same status observation the commit gate relies on, without a
+ * reviewed-path filter. A project without a readable repository reports no changed paths.
+ */
+export function changedProjectPaths(cwd: string): readonly string[] {
+  const inside = runGit(cwd, ['rev-parse', '--is-inside-work-tree']);
+  if (!inside.ok) return [];
+  const prefixRun = runGit(cwd, ['rev-parse', '--show-prefix']);
+  const prefix = prefixRun.ok ? prefixRun.stdout.trim() : '';
+  const status = runGit(cwd, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  if (!status.ok) return [];
+  return dirtyPaths(status.stdout)
+    .map((path) => (prefix !== '' && path.startsWith(prefix) ? path.slice(prefix.length) : path))
+    .filter((path) => path !== '')
+    .sort();
+}
+
 /** Whether (and how) git can speak for this project, and which of `paths` are not committed. */
 export function observeCommit(cwd: string, paths: readonly string[]): CommitObservation {
   const inside = runGit(cwd, ['rev-parse', '--is-inside-work-tree']);

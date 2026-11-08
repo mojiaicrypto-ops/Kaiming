@@ -535,7 +535,7 @@ describe('task end refuses an uncommitted delivery', () => {
       type: 'write',
       goal: 'reset password',
       scope: 'account module',
-      planMarkdown: '# plan\n',
+      planMarkdown: '# plan\n\n## 验收\n- observable result\n',
       authorizationRef: { inputId: 'i-dec' },
       requiresTest: false,
     });

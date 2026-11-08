@@ -12,6 +12,22 @@ import { RESULT_KINDS, StoreError, type ResultKind, type Store, type TaskPhase, 
 import { asRecord, enrich, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
 import { ROLE_PHASE, dispatchRefusalFacts, guidanceFor } from './guidance.ts';
 import type { TaskToolContext } from './task-tools.ts';
+import { readPlan } from '../runtime/plan-store.ts';
+import { scopeCheckFor, scopeCheckText } from '../runtime/plan-contract.ts';
+
+/** Host-supplied facts a member must not have to guess: the declared scope and files outside it. */
+function scopeNoteFor(context: DispatchContext, task: TaskRow): string | undefined {
+  if (!['review', 'test', 'settle'].includes(task.phase) || task.planRef === null) {
+    return undefined;
+  }
+  const plan = readPlan(task.planRef);
+  const check = scopeCheckFor(context.cwd, plan.text);
+  return `Host facts (not the dispatcher's words) — ${scopeCheckText(check)}`;
+}
+
+function withScopeNote(instructions: string, note: string | undefined): string {
+  return note === undefined ? instructions : `${instructions}\n\n${note}`;
+}
 
 export interface MemberState {
   readonly sessionId: string;
@@ -86,6 +102,8 @@ export async function dispatchOp(
   if (task.chiefSessionId !== context.sessionId) {
     return fail('FORBIDDEN', `Task ${taskId} is coordinated by another session`);
   }
+
+  const scopeNote = scopeNoteFor(context, task);
   const waitMs = clampWait(params['waitTimeoutMs']);
   if (params['sessions'] !== undefined && !Array.isArray(params['sessions'])) {
     return fail('INVALID_ARGUMENT', 'sessions must be a list of entries (omit it to only wait)');
@@ -123,6 +141,7 @@ export async function dispatchOp(
       }
       // The gate must see the kind the member will really deliver, not only an explicit field.
       wantsTest = wantsTest || (readString(request, 'expectedKind') ?? EXPECTED_KIND_BY_ROLE[roleId]) === 'test';
+      const memberInstructions = withScopeNote(readString(request, 'instructions') as string, scopeNote);
       created.push({
         kind: 'create',
         member: {
@@ -134,7 +153,7 @@ export async function dispatchOp(
             : {}),
           phase: task.phase,
           label: readString(request, 'label') ?? roleId,
-          instructions: readString(request, 'instructions') as string,
+          instructions: memberInstructions,
           refs: readStringArray(request, 'refs') ?? [],
           dependencies: readStringArray(request, 'dependsOnResultIds') ?? [],
           expectedKind: readString(request, 'expectedKind') ?? EXPECTED_KIND_BY_ROLE[roleId] ?? '',
@@ -144,7 +163,7 @@ export async function dispatchOp(
             : {}),
           inputId: `i-${randomUUID().slice(0, 8)}`,
           inputPayload: {
-            content: [{ type: 'text', text: readString(request, 'instructions') as string }],
+            content: [{ type: 'text', text: memberInstructions }],
           },
         },
       });
@@ -185,7 +204,7 @@ export async function dispatchOp(
     continued.push({
       kind: 'continue',
       sessionId: sessionId as string,
-      instructions,
+      instructions: withScopeNote(instructions, scopeNote),
       refs: readStringArray(request, 'refs') ?? [],
       dependencies: readStringArray(request, 'dependsOnResultIds') ?? [],
       inputId: `i-${randomUUID().slice(0, 8)}`,
