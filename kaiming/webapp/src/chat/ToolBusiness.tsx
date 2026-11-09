@@ -48,3 +48,24 @@ export function ToolRequirement({ status, resultText }: { status: 'running' | 'o
     </div>
   );
 }
+
+/**
+ * A backlog write is one line of text ("已记为 B-12" / "已关闭 B-12"): the item itself lives on the
+ * project page, so the transcript only needs to say what happened and which entry it was.
+ */
+export function ToolBacklog({ status, resultText }: { status: 'running' | 'ok' | 'failed' | 'waiting'; resultText?: string | undefined }) {
+  const { t } = useI18n();
+  if (status !== 'ok' || resultText === undefined) return null;
+  const saved = /已记为\s+(\S+)/.exec(resultText);
+  const closed = /已关闭\s+(\S+)/.exec(resultText);
+  if (saved === null && closed === null) return null;
+  return (
+    <div className="ev ok">
+      <State kind="done">
+        {saved !== null
+          ? t('tool.backlogSaved', { id: saved[1] ?? '' })
+          : t('tool.backlogClosed', { id: closed?.[1] ?? '' })}
+      </State>
+    </div>
+  );
+}

@@ -88,6 +88,11 @@ export interface TaskDetail {
     summary?: string;
     verdict?: string | null;
   }>;
+  /** What the Plan declares and which changed files fall outside it (host-computed). */
+  scopeCheck?: {
+    declared: readonly string[] | null;
+    outOfScope: readonly string[];
+  };
 }
 export interface QueuedInput {
   inputId: string;

@@ -135,6 +135,22 @@ export function TaskDrawer({ rpc, projectId, detail, onOpenFile, projectRealPath
         <div className="sh">{t('task.scope')}</div>
         <div>{detail.task.scope}</div>
       </div>
+
+      {detail.scopeCheck !== undefined && (
+        <div className="sec" data-testid="task-scope-check">
+          <div className="sh">{t('task.scopeCheck')}</div>
+          <div className="f3">
+            {detail.scopeCheck.declared === null
+              ? t('task.scopeCheckNone')
+              : detail.scopeCheck.declared.join(', ')}
+          </div>
+          {detail.scopeCheck.outOfScope.length > 0 && (
+            <div className="f3" data-testid="task-scope-out">
+              {t('task.scopeOutOfScope', { files: detail.scopeCheck.outOfScope.join(', ') })}
+            </div>
+          )}
+        </div>
+      )}
       {detail.task.nextStep !== null && detail.task.nextStep !== '' && (
         <div className="sec">
           <div className="sh">{t('task.nextStep')}</div>

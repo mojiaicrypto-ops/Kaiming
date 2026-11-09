@@ -6,14 +6,16 @@ import { useCallback, useEffect, useState } from 'react';
  */
 export type Route =
   | { readonly view: 'chat' }
-  | { readonly view: 'requirements'; readonly selected: string | null }
+  | { readonly view: 'project'; readonly selected: string | null }
   | { readonly view: 'settings'; readonly tab: SettingsTab };
 
 export type SettingsTab = 'providers' | 'models' | 'usage' | 'appearance';
 
 const SETTINGS_TABS: readonly SettingsTab[] = ['providers', 'models', 'usage', 'appearance'];
 const SETTINGS_PATH = /^\/settings(?:\/([^/]+))?\/?$/;
-const REQUIREMENTS_PATH = /^\/requirements\/?$/;
+const PROJECT_PATH = /^\/project\/?$/;
+/** The old address still works: a bookmark or a typed URL lands on the project page. */
+const LEGACY_REQUIREMENTS_PATH = /^\/requirements\/?$/;
 
 export function parsePath(pathname: string, search = ''): Route {
   const settings = SETTINGS_PATH.exec(pathname);
@@ -21,20 +23,20 @@ export function parsePath(pathname: string, search = ''): Route {
     const tab = settings[1] as SettingsTab | undefined;
     return { view: 'settings', tab: tab !== undefined && SETTINGS_TABS.includes(tab) ? tab : 'providers' };
   }
-  if (REQUIREMENTS_PATH.test(pathname)) {
+  if (PROJECT_PATH.test(pathname) || LEGACY_REQUIREMENTS_PATH.test(pathname)) {
     const selected = new URLSearchParams(search).get('selected');
-    return { view: 'requirements', selected: selected === null || selected === '' ? null : selected };
+    return { view: 'project', selected: selected === null || selected === '' ? null : selected };
   }
   return { view: 'chat' };
 }
 
-/** Route → address. The selected requirement lives in the query string so a reload reopens it. */
+/** Route → address. The selected backlog item lives in the query string so a reload reopens it. */
 export function hrefOf(route: Route): string {
   switch (route.view) {
     case 'chat':
       return '/';
-    case 'requirements':
-      return route.selected === null ? '/requirements' : `/requirements?selected=${encodeURIComponent(route.selected)}`;
+    case 'project':
+      return route.selected === null ? '/project' : `/project?selected=${encodeURIComponent(route.selected)}`;
     case 'settings':
       return `/settings/${route.tab}`;
   }
@@ -64,7 +66,7 @@ export function useShortcuts(onNavigate: (path: string) => void = navigate): voi
       const questionOpen = document.querySelector('[data-testid="question-panel"]') !== null;
       if (questionOpen) return;
       if (event.key === '1') onNavigate('/');
-      else if (event.key === '2') onNavigate('/requirements');
+      else if (event.key === '2') onNavigate('/project');
       else if (event.key === '3') onNavigate('/settings/providers');
       else if (event.key === 'i') {
         const composer = document.querySelector<HTMLTextAreaElement>('[data-testid="composer"]');

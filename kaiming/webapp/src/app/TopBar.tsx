@@ -30,12 +30,12 @@ export interface TopBarProps {
 const NAV: ReadonlyArray<{
   view: Route['view'];
   path: string;
-  key: 'nav.chat' | 'nav.requirements' | 'nav.settings';
+  key: 'nav.chat' | 'nav.project' | 'nav.settings';
   /** The phone form. Four words do not fit 320px; the glyph does, and the name stays in `title`. */
   glyph: string;
 }> = [
   { view: 'chat', path: '/', key: 'nav.chat', glyph: '❯' },
-  { view: 'requirements', path: '/requirements', key: 'nav.requirements', glyph: '▤' },
+  { view: 'project', path: '/project', key: 'nav.project', glyph: '▤' },
   { view: 'settings', path: '/settings/providers', key: 'nav.settings', glyph: '⚙' },
 ];
 

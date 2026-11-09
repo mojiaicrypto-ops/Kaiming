@@ -117,6 +117,7 @@ export function useSession(
         task: TaskDetail['task'];
         members: TaskDetail['members'];
         results: TaskDetail['results'];
+        scopeCheck?: TaskDetail['scopeCheck'];
       }>('task.get', { projectId: session.projectId, taskId }).catch(() => null);
       if (currentSessionId.current !== requestedSessionId) return null;
       if (read === null) {
@@ -127,7 +128,12 @@ export function useSession(
       // Belt as well as braces: a refresh is itself the authority on which Task this session runs.
       setTaskSessionId(requestedSessionId);
       setActiveTaskId(taskId);
-      const detail: TaskDetail = { task: read.task, members: read.members, results: read.results };
+      const detail: TaskDetail = {
+        task: read.task,
+        members: read.members,
+        results: read.results,
+        ...(read.scopeCheck === undefined || read.scopeCheck === null ? {} : { scopeCheck: read.scopeCheck }),
+      };
       dispatch({ type: 'taskDetail', detail });
       return detail;
     },

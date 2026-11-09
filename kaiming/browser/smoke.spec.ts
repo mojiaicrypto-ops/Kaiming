@@ -59,17 +59,17 @@ test('a first run with no project boots: login screen, then the empty shell', as
     await expect(page.locator('[data-testid="connection-banner"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="no-session-banner"]')).not.toContainText(/dropped|reconnecting/i);
     await expect(page.locator('.top .nav a')).toHaveCount(3);
-    const requirements = page.locator('.nav a[href="/requirements"]');
-    await expect(requirements).toHaveText('Requirements');
+    const projectNav = page.locator('.nav a[href="/project"]');
+    await expect(projectNav).toHaveText('Project');
 
     // Language changes immediately, without a reload, from the appearance pane.
     await page.locator('.nav a[href="/settings/providers"]').click();
     await page.locator('[data-testid="settings-tab-appearance"]').click();
     await page.locator('[data-testid="language"]').selectOption('zh-CN');
-    await expect(requirements).toHaveText('需求');
+    await expect(projectNav).toHaveText('项目');
     await attachScreenshot(page, testInfo, 'shell-first-run');
     await page.locator('[data-testid="language"]').selectOption('en');
-    await expect(requirements).toHaveText('Requirements');
+    await expect(projectNav).toHaveText('Project');
   } finally {
     await harness.close();
   }
@@ -158,15 +158,15 @@ test('a seeded project renders the shell from real server data', async ({ page }
     await expect(page.locator('.top .st')).toHaveText(/Connected/, { timeout: 15_000 });
 
     // The language switch changes a visible string through the catalog (EN -> 简中 -> EN).
-    const requirements = page.locator('.nav a[href="/requirements"]');
+    const projectNav = page.locator('.nav a[href="/project"]');
     await page.locator('.nav a[href="/settings/providers"]').click();
     await page.locator('[data-testid="settings-tab-appearance"]').click();
-    await expect(requirements).toHaveText('Requirements');
+    await expect(projectNav).toHaveText('Project');
     await page.locator('[data-testid="language"]').selectOption('zh-CN');
-    await expect(requirements).toHaveText('需求');
+    await expect(projectNav).toHaveText('项目');
     await attachScreenshot(page, testInfo, 'shell-seeded');
     await page.locator('[data-testid="language"]').selectOption('en');
-    await expect(requirements).toHaveText('Requirements');
+    await expect(projectNav).toHaveText('Project');
   } finally {
     await harness.close();
   }
@@ -242,14 +242,14 @@ test('five viewports render without a horizontal overflow', async ({ page }) => 
         await expect(page.locator('.sessions.sheet')).toBeVisible();
         await expect(page.locator('[data-testid="new-session"]')).toBeVisible();
         // Every navigation label stays reachable at the narrow end (the header must not clip).
-        for (const label of ['Chat', 'Requirements', 'Settings']) {
+        for (const label of ['Chat', 'Project', 'Settings']) {
           await expect(page.locator('.nav a', { hasText: label })).toBeVisible();
         }
         await page.keyboard.press('Escape');
       } else {
         await expect(page.locator('[data-testid="rail-toggle"]')).toBeHidden();
       }
-      await page.goto(`${harness.baseUrl}/requirements`, { waitUntil: 'domcontentloaded' });
+      await page.goto(`${harness.baseUrl}/project`, { waitUntil: 'domcontentloaded' });
       const boardOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(boardOverflow, `board at ${width}px`).toBeLessThanOrEqual(1);
     }

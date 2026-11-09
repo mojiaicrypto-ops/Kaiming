@@ -10,7 +10,7 @@ import { useSession, type SessionRef } from '../state/useSession';
 import { useWorkspace } from '../state/useWorkspace';
 import { RpcClient, RpcError, newRequestId } from '../api/rpc';
 import { ChatPage } from '../chat/ChatPage';
-import { RequirementsPage } from '../requirements/RequirementsPage';
+import { ProjectPage } from '../project/ProjectPage';
 import { SettingsPage } from '../settings/SettingsPage';
 import { LoginPage } from '../auth/LoginPage';
 import { ToastHost } from '../lib/ToastHost';
@@ -228,12 +228,12 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
             onOpenFile={(path) => setFilePath(path)}
           />
         )}
-        {route.view === 'requirements' && (
-          <RequirementsPage
+        {route.view === 'project' && (
+          <ProjectPage
             rpc={rpc}
             projectId={workspace.projectId}
             selected={route.selected}
-            onSelect={(id) => navigate(id === null ? '/requirements' : `/requirements?selected=${encodeURIComponent(id)}`)}
+            onSelect={(id) => navigate(id === null ? '/project' : `/project?selected=${encodeURIComponent(id)}`)}
             onNotice={notify}
             onHandOff={(text) => {
               setDraft(text);
@@ -243,6 +243,7 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
               workspace.selectSession(sessionId);
               navigate('/');
             }}
+            onOpenFile={(path) => setFilePath(path)}
           />
         )}
         {route.view === 'settings' && (

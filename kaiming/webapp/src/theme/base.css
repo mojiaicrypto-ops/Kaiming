@@ -2055,6 +2055,28 @@ details.fold > summary.tline:hover {
 }
 .rc .mt {
   font-size: var(--fs-13);
+  display: flex;
+  gap: var(--s2);
+  align-items: center;
+  flex-wrap: wrap;
+  color: var(--fg-3);
+}
+.tag {
+  border: 1px solid var(--line);
+  padding: 0 var(--s2);
+  font-size: var(--fs-12);
+  color: var(--fg-2);
+}
+.sec .sub {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-top: var(--s3);
+}
+details > summary {
+  cursor: pointer;
+  color: var(--fg-3);
+  margin-top: var(--s3);
 }
 .colm .none {
   color: var(--fg-3);
