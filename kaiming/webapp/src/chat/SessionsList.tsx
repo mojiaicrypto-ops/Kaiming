@@ -3,6 +3,7 @@ import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
 import type { SessionRow } from '../state/useWorkspace';
 import { relativeDay } from './transcript-model';
+import { externalChannelKey, isExternalSession } from './session-channel';
 
 export interface SessionsListProps {
   readonly rows: readonly SessionRow[];
@@ -125,6 +126,11 @@ export function SessionsList({
               >
                 <State kind={glyph} />
                 <span className="ell">{row.title === null || row.title === '' ? t('chat.untitled') : row.title}</span>
+                {isExternalSession(row.channel) && (
+                  <span className="tag" data-testid="session-external" title={t('session.externalHint')}>
+                    {t(externalChannelKey(row.channel ?? ''))}
+                  </span>
+                )}
                 <span className="f3 sess-time">{dayLabel(row.updatedAt, t)}</span>
               </button>
             )}

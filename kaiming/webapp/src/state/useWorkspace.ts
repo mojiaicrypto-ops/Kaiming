@@ -50,6 +50,8 @@ export interface SessionRow {
   /** The session revision: cleanup is a compare-and-set on it. */
   readonly revision: number;
   readonly title: string | null;
+  /** `'mcp'` when an external agent owns this fixed session, `null` for an ordinary one. */
+  readonly channel: string | null;
   readonly activity: SessionActivity;
   readonly updatedAt: string | null;
   readonly currentTaskId: string | null;
@@ -117,6 +119,7 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
           roleId: row.roleId,
           revision: row.revision,
           title: row.title ?? null,
+          channel: row.channel ?? null,
           activity: row.activity,
           updatedAt: row.lastActivityAt ?? null,
           currentTaskId: row.currentTaskId,

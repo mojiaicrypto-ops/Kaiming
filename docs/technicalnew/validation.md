@@ -723,3 +723,16 @@
 **真实模型证据（2026-11-09）**：`npm run check:workflow` 让真实主管完成 create → develop → review → test → settlement → end；其中一次 `task` 调用因 Plan 缺「验收」被程序拒绝，模型补上后继续，最终 8/8 通过（含交付文件、测试真实运行、报告齐备）。新增 `npm run check:backlog` 4/4 通过：`project(op=initialize)` 写出的记录含模块表（`.dev/PROJECT.md` 的 `## Modules`）、两条待办经 `backlog(op=add)` 写入而非 bash、人为制造的重复编号由 `backlog(op=edit)` 修好（B-3）且未重写文件。
 
 **未覆盖**：产品验收（J-12/J-13 的界面走查，AC-07/08/10/19/23/26/29/30/34、AC-51～AC-58）仍需按 [acceptance](../productnew/acceptance.md) 人工执行；本轮的证据是真实模型下的程序路径，不等于用户可见验收。WP-8 的度量（验收/范围比例、越界合理性）未采集。`claimBacklogItems` 的跨进程并发未做实验（进程内 `createTask` 是同步事务）；设计产多切片时以待决问题请用户确认这一条只有提示词约束，无真实模型观察。
+
+### 真实 Server + 真实项目 + 真实模型（2026-11-09）
+
+用 `deepseek/deepseek-flash`（`config/model.json` 的端点与密钥）起真实 Server，数据目录与项目目录均为临时目录，项目是一个小的 `src/index.js` + `node:test` 仓库：
+
+| 路径 | 结果 |
+|---|---|
+| 公开 RPC（与浏览器同一条接口） | `auth.login` → `config.save`（provider `deepseek-gw`，OpenAI 兼容端点 + 密钥）→ `config.test` 返回 `available=true` → `project.open` → `session.create` → `session.input.submit`；真实主管调用 `project(op=initialize)`，经 `interaction.respond` 确认一次写入后生成 `.dev/PROJECT.md`（含「模块」表）与 `.dev/backlog.md`，并用文本汇报入口文件 |
+| 真实浏览器（临时 Playwright 探针，不入库） | 登录 → 输入项目路径 → 新建会话 → 发送初始化请求；问题面板点击确认；**20.4 秒**后 `.dev/PROJECT.md` 出现且含「模块」一节，`.dev/backlog.md` 存在，转录显示回复 |
+
+同时修复：空状态文案仍写“说保存记成需求”，改为“说出待办或目标并明确实施”；会话列的 `channel` 映射补上前端类型，MCP 会话显示 `MCP` 标记（U7 关闭）。
+
+**边界**：上面的探针是一次性验证脚本，已删除，未进入自动套件（真实模型 + 网络不适合作为默认门禁）。产品验收仍按 acceptance 人工执行。

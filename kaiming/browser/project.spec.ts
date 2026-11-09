@@ -134,3 +134,36 @@ test('a broken backlog line and a module cell open the file they name', async ({
   await expect(page.locator('[data-testid="file-text"]')).toContainText('export const login');
   await page.locator('[data-testid="file-close"]').click();
 });
+
+test('a session an external agent owns is marked in the rail', async ({ page }) => {
+  const harness = await startHarness();
+  const projectPath = harness.project?.projectPath ?? '';
+
+  // The MCP client's own call before the browser attaches: the public RPC, same channel the
+  // external attach uses. Doing it first means the rail reads it as part of its initial list.
+  const origin = harness.url.replace(/\/$/, '');
+  const rpc = async (method: string, params: Record<string, unknown>, cookie = '', csrf = ''): Promise<Record<string, unknown>> => {
+    const response = await fetch(`${origin}/api/v1/rpc`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(cookie === '' ? {} : { cookie }),
+        ...(csrf === '' ? {} : { 'x-kaiming-csrf': csrf }),
+      },
+      body: JSON.stringify({ requestId: `seed-${method}`, method, params }),
+    });
+    const body = (await response.json()) as { result?: Record<string, unknown>; error?: { message?: string } };
+    if (body.error !== undefined) throw new Error(body.error.message ?? 'rpc failed');
+    return { ...body.result, ...(method === 'auth.login' ? { cookie: (response.headers.getSetCookie()[0] ?? '').split(';')[0] } : {}) };
+  };
+  const login = (await rpc('auth.login', { password: harness.accessPassword })) as { csrfToken: string; cookie: string };
+  const projects = (await rpc('project.list', { limit: 10 }, login.cookie, login.csrfToken)) as { projects: Array<{ projectId: string }> };
+  const projectId = projects.projects.find((row) => row.projectId !== '')?.projectId ?? '';
+  const opened = (await rpc('session.open', { projectId, channel: 'mcp' }, login.cookie, login.csrfToken)) as { created: boolean };
+  expect(opened.created).toBe(true);
+
+  await openProject(page, harness);
+  await page.getByRole('link', { name: 'Chat' }).click();
+  await expect(page.locator('[data-testid="session-external"]')).toHaveText('MCP');
+  expect(projectPath).not.toBe('');
+});

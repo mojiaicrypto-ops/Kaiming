@@ -23,6 +23,6 @@
 - 前端：React 19 + Vite 7 单页应用，构建产物由同一 Server 托管在 `/`（`/app/*` 301 到同路径；产物不入库，缺失时会话入口提示构建）。登录屏与会话/项目/设置三屏在同一外壳内。契约见[前端设计契约](technicalnew/ui-design.md)与[A7](technicalnew/architecture.md#a7-前端层)。
 - 实施状态：已实现部分按既有设计实施并持续验证，逐个工作包的证据、边界与未执行项记在[验证记录](technicalnew/validation.md)与各工作包结算记录；该表不等同于产品验收。产品验收仍按 [acceptance](productnew/acceptance.md) 逐条执行，未执行项不得视为通过。
 - 质量门：标准代码 Test 需包含真实失败的负向控制/检查器自检；Review 检查期望值来自验收、独立事实或不变量，不以全绿数量代替。D-05、AC-46、Tester/Reviewer/Chief 提示词已更新；项目级结算与交付门禁见 `AGENTS.md`。
-- 已知缺口：项目/会话列表方法、任务变更推送、重绑定入口等尚未实现，逐项证据与处置见[缺口登记](technicalnew/gap-register.md)。文件与报告查看（U11）已实现：统一的文件查看画布 + 只读字节路由，报告正文与其内链接走同一条解析。
+- 已知缺口：项目/会话列表方法、任务变更推送、重绑定入口、外部会话标记均已实现（`project.list`/`session.list`、会话流内 Task 通知、ProjectDialog 重绑定、会话列 `MCP` 标记）。仍登记未做的项见[缺口登记](technicalnew/gap-register.md)：F1 会话 fork、S8 订阅账号 OAuth、R6 报告缺失的程序层兜底；C8 宿主唤醒只在 run outcome 后评估，按用户决定暂不处理。文件与报告查看（U11）已实现：统一的文件查看画布 + 只读字节路由，报告正文与其内链接走同一条解析。
 
 验证记录只说明当前证据，不替代实现契约。

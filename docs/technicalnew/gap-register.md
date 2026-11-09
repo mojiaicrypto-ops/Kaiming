@@ -52,7 +52,7 @@
 |---|---|---|---|---|
 | S6 | 不发 `usage_update`：`usage.report` 只有项目/全部两个作用域，没有会话级用量查询 | `src/server/methods.ts`（usage.report）、`src/mcp/runs.ts`（无 usage 映射） | 调用方看不到某次运行的成本/上下文占用；编一个数字会误导 | 登记缺陷：需要会话级用量查询（按 `usage_entries.sessionId` 聚合）后再映射；`src/mcp/protocol.ts` 未声明该能力，不算违约 |
 | S7 | 不声明 `config_option`/`session/set_config_option`：模型与思考等级只有项目/角色层，没有会话层 | `src/runtime/config.ts`、`src/mcp/protocol.ts` | ACP/MCP 调用方不能为一次委派选模型 | 产品决定（X-03/第 8 节取舍）：沿用设置页配置；若要做，需新增会话级配置层与优先级，单独立项 |
-| U7 | 浏览器侧栏已能收到 `channel`，但界面没有标注「外部接入的固定会话」 | `src/server/read-methods.ts`（session.list 回 channel）、`webapp/src/chat/`（无 channel 渲染） | 用户看到一条普通会话，不知道它由别的 Agent 使用 | 登记：加一个不可编辑的标记即可；不影响归属与身份。产品未要求，非缺陷 |
+| U7 | 浏览器侧栏已能收到 `channel`，但界面没有标注「外部接入的固定会话」 | `src/server/read-methods.ts`（session.list 回 channel）、`webapp/src/chat/SessionsList.tsx`（已渲染） | 用户看到一条普通会话，不知道它由别的 Agent 使用 | **已关闭（2026-11-09）**：`SessionRow.channel` 进入前端类型与映射；`mcp` 会话在会话列显示不可编辑的 `MCP` 标记（`session-channel.ts` 纯函数单测 + 浏览器用例 `project.spec.ts` 用真实 `session.open{channel:'mcp'}` 验证） |
 | C5 | `task.get` 的合同原写「按显式引用返回报告正文」，实现只返回结果摘要，正文走 `task.report.get`（同一事实两种说法） | `docs/technicalnew/runtime-contract.md` R1（task.list/get 行）、`src/server/read-methods.ts` | 读 Task 详情的调用方需要两次调用，且不知道以哪句为准 | **已关闭（2026-10-28）**：合同改为「报告正文按 resultId 另经 task.report.get」，与本轮补上的 `includePlan`（Plan 正文）一致 |
 | R2 | 「只读委派」不是程序强制：`mode` 只是给主管的指令，Task 类型仍由主管按 D-04 判断；调用方沙箱不约束工作台 | `src/mcp/runs.ts`（delegationText）、X-03/X-08 | 一个以只读沙箱运行的客户端仍可能通过委派产生写入 | 已知并接受（用户确认）；`destructiveHint` 已如实标注，宿主因此会走自己的批准策略（Codex 实测在 `approval: never` 下直接拒绝调用，正是该策略生效） |
 | U6 | 未提供 MCP resources / prompts：只有工具面 | `src/mcp/protocol.ts`（capabilities 只有 tools） | 调用方不能把报告/Plan 当资源浏览，也没有 `/delegate-review` 之类的提示模板 | 后续可选；当前 `kaiming_read` 已覆盖读取需求 |
