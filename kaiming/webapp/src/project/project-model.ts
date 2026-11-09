@@ -248,6 +248,20 @@ export function moduleRows(markdown: string | null): readonly ModuleRow[] | null
   return rows.slice(1);
 }
 
+/**
+ * A module cell that names something openable: a repository path (with or without a trailing
+ * slash) or a code/spec file. Prose cells, URLs and absolute paths are not links.
+ * `server/account/` is the common case; a plain word like `账号` is not.
+ */
+export function cellPath(cell: string): string | undefined {
+  const token = cell.trim().replace(/^`|`$/g, '');
+  if (token === '' || token.includes('`') || /\s/.test(token)) return undefined;
+  if (token.startsWith('/') || token.startsWith('~') || /^[a-z]+:\/\//i.test(token)) return undefined;
+  if (!/^[\w.@/-]+$/.test(token)) return undefined;
+  if (token.endsWith('/')) return token;
+  return /\.(tsx?|jsx?|json|md)$/i.test(token) ? token : undefined;
+}
+
 /** The same rule the server enforces: a stale digest is a merge prompt, not a crash. */
 export function isVersionConflict(error: unknown): error is RpcError {
   return error instanceof RpcError && error.code === 'VERSION_CONFLICT';

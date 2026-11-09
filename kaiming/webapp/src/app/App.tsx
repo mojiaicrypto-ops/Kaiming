@@ -38,9 +38,16 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
   const route = useRoute();
   /** The project file or directory the read-only viewer is showing; null when it is closed. */
   const [filePath, setFilePath] = useState<string | null>(null);
+  /** The line the viewer should reveal; it belongs to one opening, not to the file selection. */
+  const [fileLine, setFileLine] = useState<number | undefined>(undefined);
+  const openFile = useCallback((path: string | null, line?: number) => {
+    setFilePath(path);
+    setFileLine(line);
+  }, []);
   /** The viewer is a canvas over one screen; asking for any screen closes it first. */
   const go = useCallback((path: string) => {
     setFilePath(null);
+    setFileLine(undefined);
     navigate(path);
   }, []);
   useShortcuts(go);
@@ -58,6 +65,12 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
    */
   useEffect(() => {
     setFilePath(null);
+    setFileLine(undefined);
+    // The requirements board was replaced by the project page: one address must not keep a dead
+    // screen, so the legacy path is rewritten instead of only being parsed to the same view.
+    if (route.view === 'project' && window.location.pathname === '/requirements') {
+      window.history.replaceState(null, '', `/project${window.location.search}`);
+    }
   }, [route.view]);
 
   // A 401 from any call takes over the screen: the cookie is gone, not the work.
@@ -155,7 +168,7 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
           onOpenProject={() => setProjectOpen(true)}
           onOpenRail={() => setRailOpen((open) => !open)}
           railOpen={railOpen}
-          onOpenFiles={() => setFilePath('.')}
+          onOpenFiles={() => openFile('.')}
           filesOpen={filePath !== null}
           onNavigate={go}
         />
@@ -225,7 +238,7 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
             onCreateSession={startSession}
             onOpenRail={() => setRailOpen((open) => !open)}
             railOpen={railOpen}
-            onOpenFile={(path) => setFilePath(path)}
+            onOpenFile={openFile}
           />
         )}
         {route.view === 'project' && (
@@ -243,7 +256,7 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
               workspace.selectSession(sessionId);
               navigate('/');
             }}
-            onOpenFile={(path) => setFilePath(path)}
+            onOpenFile={openFile}
           />
         )}
         {route.view === 'settings' && (
@@ -283,7 +296,7 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
               notify(t('project.rebindDone'), 'success');
             }}
             onOpenFile={(path) => {
-              setFilePath(path);
+              openFile(path);
               setProjectOpen(false);
             }}
             browse={(path) => rpc.call('fs.browse', path === undefined ? {} : { path })}
@@ -295,9 +308,10 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
             rpc={rpc}
             projectId={workspace.projectId}
             path={filePath}
+            focusLine={fileLine}
             entries={workspace.project?.entries ?? []}
-            onOpenPath={setFilePath}
-            onClose={() => setFilePath(null)}
+            onOpenPath={(path) => openFile(path)}
+            onClose={() => openFile(null)}
             projectRealPath={workspace.project?.realPath ?? ''}
             onOutside={() => notify(t('files.outside'), 'error')}
             onDownload={(path) => {

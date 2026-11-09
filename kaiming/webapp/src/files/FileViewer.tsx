@@ -36,6 +36,11 @@ export interface FileViewerProps {
    * browser: one component, one engine, two entry points.
    */
   readonly path: string | null;
+  /**
+   * A line to reveal after opening. It switches the text view to source even for Markdown: the
+   * rendered view has no stable line positions, and the caller asked for one exact line.
+   */
+  readonly focusLine?: number;
   /** Knowledge entries pinned above the root listing: they are how a new session finds a project. */
   readonly entries: readonly { readonly path: string; readonly present: boolean }[];
   readonly onClose: () => void;
@@ -55,7 +60,7 @@ export interface FileViewerProps {
  * `.html`), the browser's own player for images and media, and an honest notice plus a download
  * for bytes that cannot be displayed. It renders files; it does not run them.
  */
-export function FileViewer({ rpc, projectId, path, entries, onClose, onOpenPath, onDownload, projectRealPath, onOutside }: FileViewerProps) {
+export function FileViewer({ rpc, projectId, path, focusLine, entries, onClose, onOpenPath, onDownload, projectRealPath, onOutside }: FileViewerProps) {
   const { t } = useI18n();
   const [body, setBody] = useState<FileBody | null>(null);
   const [listing, setListing] = useState<readonly Entry[]>([]);
@@ -215,7 +220,7 @@ export function FileViewer({ rpc, projectId, path, entries, onClose, onOpenPath,
           {!loading && body === null && error === null && (
             <div className="f3">{t('files.pick')}</div>
           )}
-          {body !== null && kind === 'text' && body.text !== null && isMarkdown(body.path) && (
+          {body !== null && kind === 'text' && body.text !== null && isMarkdown(body.path) && focusLine === undefined && (
             <MarkdownView
               text={body.text}
               path={body.path}
@@ -225,8 +230,8 @@ export function FileViewer({ rpc, projectId, path, entries, onClose, onOpenPath,
               onOutside={onOutside}
             />
           )}
-          {body !== null && kind === 'text' && body.text !== null && !isMarkdown(body.path) && (
-            <SourceView text={body.text} path={body.path} truncated={body.truncated} />
+          {body !== null && kind === 'text' && body.text !== null && (!isMarkdown(body.path) || focusLine !== undefined) && (
+            <SourceView text={body.text} path={body.path} truncated={body.truncated} focusLine={focusLine} />
           )}
           {body !== null && kind === 'text' && body.text === null && (
             <State kind="wait">{t('files.binary')}</State>

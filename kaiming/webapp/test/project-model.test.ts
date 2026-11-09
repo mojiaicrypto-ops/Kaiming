@@ -3,6 +3,7 @@ import { RpcError } from '../src/api/rpc';
 import {
   groupsOf,
   isVersionConflict,
+  cellPath,
   moduleRows,
   parseSpecRefs,
   type BacklogItemView,
@@ -69,6 +70,17 @@ describe('module section', () => {
     expect(moduleRows(null)).toBeNull();
     expect(moduleRows('# 项目\n只有几段话。\n')).toBeNull();
     expect(moduleRows('## 模块\n\n没有表格。\n')).toBeNull();
+  });
+
+  it('opens only code-shaped cells as paths', () => {
+    expect(cellPath('`server/account/`')).toBe('server/account/');
+    expect(cellPath('webapp/src/app/App.tsx')).toBe('webapp/src/app/App.tsx');
+    expect(cellPath('docs/technicalnew/ui-design.md')).toBe('docs/technicalnew/ui-design.md');
+    expect(cellPath('账号')).toBeUndefined();
+    expect(cellPath('登录与重置')).toBeUndefined();
+    expect(cellPath('https://example.com/a.ts')).toBeUndefined();
+    expect(cellPath('/etc/passwd')).toBeUndefined();
+    expect(cellPath('server/account/ （负责登录)')).toBeUndefined();
   });
 });
 

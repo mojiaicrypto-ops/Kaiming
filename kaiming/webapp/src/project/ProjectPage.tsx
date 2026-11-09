@@ -6,6 +6,7 @@ import type { RpcClient } from '../api/rpc';
 import { usePhaseLabel } from '../chat/task-labels';
 import { BacklogDrawer } from './BacklogDrawer';
 import {
+  cellPath,
   groupsOf,
   moduleRows,
   useBacklog,
@@ -26,7 +27,7 @@ export interface ProjectPageProps {
   /** Opens the chief session that coordinates a Task. */
   readonly onOpenTaskSession: (sessionId: string) => void;
   /** Opens a project file in the one file canvas. */
-  readonly onOpenFile: (path: string) => void;
+  readonly onOpenFile: (path: string, line?: number) => void;
 }
 
 const FINISHED = new Set(['completed', 'cancelled']);
@@ -157,9 +158,15 @@ export function ProjectPage({
           </button>
           <div className="f3">
             {backlog.data.issues.map((issue) => (
-              <div key={`${String(issue.line)}-${issue.reason}`}>
+              <button
+                key={`${String(issue.line)}-${issue.reason}`}
+                type="button"
+                className="lnk"
+                data-testid="project-issue"
+                onClick={() => onOpenFile('.dev/backlog.md', issue.line > 0 ? issue.line : undefined)}
+              >
                 {issue.line === 0 ? issue.reason : t('backlog.lineReason', { line: issue.line, reason: issue.reason })}
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -195,6 +202,28 @@ export function ProjectPage({
           <div className="f3" data-testid="project-recent">
             {t('project.recentDone', { id: recent.taskId, goal: recent.goal })}
           </div>
+        )}
+        {tasks.tasks.filter((task) => !running.some((row) => row.taskId === task.taskId) && task.taskId !== recent?.taskId).length > 0 && (
+          <details className="sec" data-testid="project-all-tasks">
+            <summary className="f3">{t('project.allTasks', { count: tasks.tasks.length })}</summary>
+            {tasks.tasks
+              .filter((task) => !running.some((row) => row.taskId === task.taskId) && task.taskId !== recent?.taskId)
+              .map((task) => (
+                <button
+                  key={task.taskId}
+                  type="button"
+                  className="rc"
+                  data-testid="project-task-all"
+                  onClick={() => onOpenTaskSession(task.chiefSessionId)}
+                >
+                  <span className="id">{task.taskId}</span>
+                  <span className="tt">{task.goal}</span>
+                  <span className="mt">
+                    {phaseLabel(task.phase)} · {t(statusKeyOf(task.status))}
+                  </span>
+                </button>
+              ))}
+          </details>
         )}
       </div>
 
@@ -285,11 +314,24 @@ export function ProjectPage({
           <div className="sh">{t('project.modules')}</div>
           {modules.map((row) => (
             <div key={row.cells.join('|')} className="row">
-              {row.cells.map((cell, index) => (
-                <span key={`${String(index)}-${cell}`} className={index === 0 ? '' : 'f3'}>
-                  {cell}
-                </span>
-              ))}
+              {row.cells.map((cell, index) => {
+                const target = cellPath(cell);
+                return target === undefined ? (
+                  <span key={`${String(index)}-${cell}`} className={index === 0 ? '' : 'f3'}>
+                    {cell}
+                  </span>
+                ) : (
+                  <button
+                    key={`${String(index)}-${cell}`}
+                    type="button"
+                    className={`lnk ${index === 0 ? '' : 'f3'}`}
+                    data-testid="project-module-link"
+                    onClick={() => onOpenFile(target)}
+                  >
+                    {cell}
+                  </button>
+                );
+              })}
             </div>
           ))}
           <button type="button" className="lnk" onClick={() => onOpenFile('.dev/PROJECT.md')}>

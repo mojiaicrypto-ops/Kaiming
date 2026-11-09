@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 import { highlightToHtml, hasLanguage } from '../lib/highlight';
 import { languageOf } from './file-kind';
@@ -10,6 +10,8 @@ export interface SourceViewProps {
   readonly path: string;
   /** The body was cut at the server's limit: say so, never pretend this is the whole file. */
   readonly truncated: boolean;
+  /** A line to reveal after the text arrives (the issue the user clicked). */
+  readonly focusLine?: number;
 }
 
 /**
@@ -21,7 +23,7 @@ export interface SourceViewProps {
  * - Highlighting is a whole-file pass, budgeted by the shared queue: a 4000-line file renders
  *   plain first and gains colour in an idle slice, instead of freezing the frame that opens it.
  */
-export function SourceView({ text, path, truncated }: SourceViewProps) {
+export function SourceView({ text, path, truncated, focusLine }: SourceViewProps) {
   const { t } = useI18n();
   const language = languageOf(path);
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -41,6 +43,16 @@ export function SourceView({ text, path, truncated }: SourceViewProps) {
     }
     return count;
   }, [query, text]);
+
+  // Same arithmetic as a search hit: the code never wraps, so line height times the index is the
+  // exact offset. Runs after the text is committed, so the scroll box already has that height.
+  useEffect(() => {
+    const view = bodyRef.current;
+    if (view === null || focusLine === undefined) return;
+    const line = parseFloat(getComputedStyle(view).lineHeight);
+    const height = Number.isFinite(line) && line > 0 ? line : 18;
+    view.scrollTop = Math.max(0, (focusLine - 1) * height - view.clientHeight / 3);
+  }, [text, focusLine]);
 
   return (
     <div className="srcview">

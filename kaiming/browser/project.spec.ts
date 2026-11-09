@@ -84,4 +84,53 @@ test('the project page shows the backlog, adds an item, reports a stale save and
   await expect(page.locator('[data-testid="backlog-conflict"]')).toBeVisible();
   await expect(drawer).toHaveValue('我的草稿');
   await expect.poll(() => readFileSync(path, 'utf8')).toContain('别人改过的标题');
+
+  // The old requirements address is rewritten, not just parsed: no dead bookmark left behind.
+  await page.goto(`${harness.url}requirements`);
+  await expect(page.locator('[data-testid="project-page"]')).toBeVisible();
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/project');
+});
+
+test('a broken backlog line and a module cell open the file they name', async ({ page }) => {
+  const harness = await startHarness();
+  const projectPath = harness.project?.projectPath ?? '';
+  mkdirSync(join(projectPath, '.dev'), { recursive: true });
+  writeFileSync(
+    join(projectPath, '.dev', 'backlog.md'),
+    ['# 待办', '', '## 未完成', '', '### B-1 正常条目', '- 状态: open', '', '### 坏编号', ''].join('\n'),
+    'utf8',
+  );
+  writeFileSync(
+    join(projectPath, '.dev', 'PROJECT.md'),
+    [
+      '# 项目',
+      '',
+      '## 模块',
+      '',
+      '| 模块 | 职责 | 代码位置 |',
+      '|---|---|---|',
+      '| 账号 | 登录 | `server/account/login.ts` |',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+  mkdirSync(join(projectPath, 'server', 'account'), { recursive: true });
+  writeFileSync(join(projectPath, 'server', 'account', 'login.ts'), 'export const login = 1;\n', 'utf8');
+
+  await openProject(page, harness);
+  await page.getByRole('link', { name: 'Project' }).click();
+
+  // A line the file cannot mean is reported with its number, and opening it lands in source view
+  // at that line: the rendered Markdown has no stable positions, so the exact line wins.
+  await expect(page.locator('[data-testid="project-issue"]')).toContainText('8');
+  await page.locator('[data-testid="project-issue"]').first().click();
+  await expect(page.locator('[data-testid="file-path"]')).toHaveText('.dev/backlog.md');
+  await expect(page.locator('[data-testid="file-search"]')).toBeVisible();
+  await page.locator('[data-testid="file-close"]').click();
+
+  // A code position in the module table opens that file instead of being inert text.
+  await page.locator('[data-testid="project-module-link"]').last().click();
+  await expect(page.locator('[data-testid="file-path"]')).toHaveText('server/account/login.ts');
+  await expect(page.locator('[data-testid="file-text"]')).toContainText('export const login');
+  await page.locator('[data-testid="file-close"]').click();
 });
