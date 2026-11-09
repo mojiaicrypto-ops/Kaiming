@@ -607,23 +607,6 @@ export class RunTools {
     }) as Promise<Record<string, unknown>>;
   }
 
-  async requirements(args: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const project = await this.projectFor(optionalText(args['project_path'], 'project_path'));
-    const requirementId = optionalText(args['requirement_id'], 'requirement_id');
-    if (requirementId !== undefined) {
-      return this.options.control.call('requirement.get', {
-        projectId: project.projectId,
-        requirementId,
-      }) as Promise<Record<string, unknown>>;
-    }
-    return this.options.control.call('requirement.list', {
-      projectId: project.projectId,
-      limit: integer(args['limit'], 'limit', 1, 200, 50),
-      ...(optionalText(args['kind'], 'kind') === undefined ? {} : { kind: optionalText(args['kind'], 'kind') }),
-      ...(optionalText(args['status'], 'status') === undefined ? {} : { status: optionalText(args['status'], 'status') }),
-      ...(optionalText(args['cursor'], 'cursor') === undefined ? {} : { cursor: optionalText(args['cursor'], 'cursor') }),
-    }) as Promise<Record<string, unknown>>;
-  }
 
   async backlog(args: Record<string, unknown>): Promise<Record<string, unknown>> {
     const project = await this.projectFor(optionalText(args['project_path'], 'project_path'));

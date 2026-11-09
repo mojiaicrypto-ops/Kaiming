@@ -42,7 +42,7 @@ describe('the MCP protocol layer', () => {
     const tools = (answer?.result as {
       tools: Array<{ name: string; description: string; inputSchema: { type: string }; annotations: Record<string, boolean> }>;
     }).tools;
-    expect(tools.length).toBe(11);
+    expect(tools.length).toBe(10);
     for (const tool of tools) {
       expect(tool.inputSchema.type).toBe('object');
       expect(tool.description.length).toBeGreaterThan(40);
@@ -54,7 +54,7 @@ describe('the MCP protocol layer', () => {
       'kaiming_status',
       'kaiming_read',
       'kaiming_projects',
-      'kaiming_requirements',
+
       'kaiming_backlog',
       'kaiming_runs',
     ]) {

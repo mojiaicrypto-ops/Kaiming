@@ -40,9 +40,9 @@ test('a project opens into its real state and every screen renders', async ({ pa
     await expect(page.locator('.top .nav a')).toHaveCount(3);
     await expect(page.locator('.status .path')).toContainText('project');
 
-    await page.locator('.nav a[href="/requirements"]').click();
-    await expect(page.locator('[data-testid="board"]')).toBeVisible();
-    await expect(page.locator('[data-testid="board"] .colm')).toHaveCount(4);
+    await page.locator('.nav a[href="/project"]').click();
+    await expect(page.locator('[data-testid="project-page"]')).toBeVisible();
+    await expect(page.locator('[data-testid="backlog-add"]')).toBeVisible();
 
     await page.locator('.nav a[href="/settings/providers"]').click();
     await expect(page.locator('[data-testid="providers"]')).toBeVisible();
@@ -496,7 +496,7 @@ test('a business refusal does not break writing, and no screen shows a raw trans
     // No visible screen shows a raw key (e.g. `req.title`) instead of copy: wait for the pane to
     // paint, then scan every line — a key can appear mid-line, not only as a whole line.
     const panes: ReadonlyArray<readonly [string, string]> = [
-      ['/requirements', '[data-testid="board"]'],
+      ['/project', '[data-testid="project-page"]'],
       ['/settings/providers', '[data-testid="providers"]'],
       ['/settings/models', '[data-testid="models"]'],
       ['/settings/appearance', '[data-testid="appearance"]'],
@@ -552,7 +552,13 @@ test('a rejected tool call stays visible with its reason', async ({ page }) => {
             name: 'task',
             // A write Task that does not say whether it requires a test: a real refusal the model
             // can act on, and one that does not depend on any decision reference.
-            arguments: JSON.stringify({ op: 'create', type: 'write', goal: 'g', scope: 's', planMarkdown: '# p' }),
+            arguments: JSON.stringify({
+              op: 'create',
+              type: 'write',
+              goal: 'g',
+              scope: 's',
+              planMarkdown: '# p\n\n## 验收\n- ok\n',
+            }),
           },
         ],
       },
@@ -570,57 +576,6 @@ test('a rejected tool call stays visible with its reason', async ({ page }) => {
     await expect(failed).toHaveCount(1, { timeout: 20_000 });
     await expect(failed.locator('.tn')).toContainText('task');
     await expect(failed).toContainText('requiresTest');
-  } finally {
-    await harness.close();
-  }
-});
-
-test('a proposal opens with its own sections, and an unparsable file says why', async ({ page }) => {
-  const harness = await startHarness();
-  try {
-    const projectPath = harness.project?.projectPath ?? '';
-    const dir = join(projectPath, '.dev', 'requirements');
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, 'PRO-1.md'),
-      [
-        '---',
-        'schemaVersion: 2',
-        'id: PRO-1',
-        'kind: proposal',
-        'title: Password reset proposal',
-        'status: pending',
-        'createdAt: "2026-10-01T00:00:00Z"',
-        'updatedAt: "2026-10-01T00:00:00Z"',
-        '---',
-        '',
-        '## 目标',
-        'Self-service reset.',
-        '',
-        '## 来源与决定',
-        'From session 10:47.',
-        '',
-        '## 处理记录',
-        'Nothing yet.',
-        '',
-      ].join('\n'),
-    );
-    writeFileSync(join(dir, 'BROKEN.md'), '---\nid: BROKEN\nkind: proposal\n');
-
-    await page.goto(harness.url);
-    await loginThroughUi(page, harness.accessPassword);
-    await openProject(page, projectPath);
-    await page.goto(`${harness.baseUrl}/requirements`);
-
-    // The unparsable record is visible as a notice, not silently dropped.
-    await expect(page.locator('.notice')).toContainText('BROKEN.md');
-    await page.locator('[data-testid="requirement-card"]').first().click();
-
-    // A proposal body is 目标 / 来源与决定 / 处理记录 — none of it may be dropped.
-    const drawer = page.locator('.drawer .db');
-    await expect(drawer).toContainText('Self-service reset', { timeout: 10_000 });
-    await expect(drawer).toContainText('From session 10:47');
-    await expect(drawer).toContainText('Nothing yet');
   } finally {
     await harness.close();
   }
@@ -751,136 +706,6 @@ test('a project can override one role, and choosing "default" gives the layer ba
   }
 });
 
-test('a board left open follows the record when it changes on disk', async ({ page }) => {
-  // The board is a projection of project files another process writes; a value it kept from mount
-  // would be a claim about the past. This is the run that reported "the board never updates": the
-  // record was still pending while its Task was in Test.
-  const harness = await startHarness();
-  try {
-    const projectPath = harness.project?.projectPath ?? '';
-    const dir = join(projectPath, '.dev', 'requirements');
-    mkdirSync(dir, { recursive: true });
-    const card = (status: string): string =>
-      [
-        '---',
-        'schemaVersion: 2',
-        'id: req-reset',
-        'kind: implementation',
-        'title: Account password reset',
-        'status: ' + status,
-        'createdAt: "2026-10-01T00:00:00Z"',
-        'updatedAt: "2026-10-01T00:00:00Z"',
-        '---',
-        '',
-        '## 目标',
-        'allow a user to reset a password',
-        '',
-        '## 范围',
-        'account module',
-        '',
-        '## 行为与异常',
-        'expired token is refused',
-        '',
-        '## 验收',
-        'reset works, expired token does not',
-        '',
-        '## 来源与决定',
-        'session 2026-10-01',
-        '',
-        '## 未知',
-        'email provider',
-        '',
-        '## 完成摘要',
-        '(not started)',
-        '',
-      ].join('\n');
-    const path = join(dir, 'req-reset.md');
-    writeFileSync(path, card('pending'));
-
-    await page.goto(harness.url);
-    await loginThroughUi(page, harness.accessPassword);
-    await openProject(page, projectPath);
-    await page.goto(`${harness.baseUrl}/requirements`, { waitUntil: 'domcontentloaded' });
-
-    const board = page.locator('[data-testid="board"]');
-    await expect(board.locator('[data-testid="requirement-card"]')).toHaveCount(1, { timeout: 15_000 });
-    const columns = board.locator('.colm');
-    await expect(columns.nth(1)).toContainText('req-reset', { timeout: 15_000 });
-
-    // Someone else (the chief) records the transition. No reload, no click.
-    writeFileSync(path, card('in_progress'));
-    await expect(columns.nth(2).locator('[data-testid="requirement-card"]')).toHaveCount(1, { timeout: 20_000 });
-    await expect(columns.nth(1)).toContainText(/Nothing here|暂无/, { timeout: 20_000 });
-  } finally {
-    await harness.close();
-  }
-});
-
-test('a requirement hands off to the chat without sending anything', async ({ page }) => {
-  // The board cannot start work. Its action fills the composer so the user can read and edit the
-  // request first; a hidden submit would be an action the user never saw.
-  const harness = await startHarness();
-  try {
-    const projectPath = harness.project?.projectPath ?? '';
-    const dir = join(projectPath, '.dev', 'requirements');
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(
-      join(dir, 'req-reset.md'),
-      [
-        '---',
-        'schemaVersion: 2',
-        'id: req-reset',
-        'kind: implementation',
-        'title: Account password reset',
-        'status: pending',
-        'createdAt: "2026-10-01T00:00:00Z"',
-        'updatedAt: "2026-10-01T00:00:00Z"',
-        '---',
-        '',
-        '## 目标',
-        'allow a user to reset a password',
-        '',
-        '## 范围',
-        'account module',
-        '',
-        '## 行为与异常',
-        'expired token is refused',
-        '',
-        '## 验收',
-        'reset works, expired token does not',
-        '',
-        '## 来源与决定',
-        'session 2026-10-01',
-        '',
-        '## 未知',
-        'email provider',
-        '',
-        '## 完成摘要',
-        '(not started)',
-        '',
-      ].join('\n'),
-    );
-
-    await page.goto(harness.url);
-    await loginThroughUi(page, harness.accessPassword);
-    await openProject(page, projectPath);
-    await page.goto(`${harness.baseUrl}/requirements`, { waitUntil: 'domcontentloaded' });
-
-    await page.locator('[data-testid="requirement-card"]').first().click();
-    const handoff = page.locator('[data-testid="req-handoff"]');
-    await expect(handoff).toBeVisible();
-    await handoff.click();
-
-    // The chat is open with the request filled in and nothing sent.
-    await expect(page.locator('[data-testid="composer"]')).toHaveValue(/req-reset/);
-    await page.waitForTimeout(800);
-    await expect(page.locator('[data-testid="transcript"] article.m')).toHaveCount(0);
-    await expect(page.locator('[data-testid="composer"]')).toHaveValue(/req-reset/);
-  } finally {
-    await harness.close();
-  }
-});
-
 test('a document Task draws the phases it really ran, not a code chain nobody executed', async ({ page }) => {
   // A write Task that declares no independent test, moved to its design step: the strip must read
   // "plan → design". The old chain was a fixed list (plan/develop/review/test/settle), so it showed
@@ -898,7 +723,7 @@ test('a document Task draws the phases it really ran, not a code chain nobody ex
               requiresTest: false,
               goal: '把产品文档按现行代码整理',
               scope: '.dev/product',
-              planMarkdown: '# 文档整理\n',
+              planMarkdown: '# 文档整理\n\n## 验收\n- 文档整理完成\n',
             }),
           },
         ],
@@ -941,7 +766,7 @@ test('a Task member is not a conversation in the rail', async ({ page }) => {
   // as another chat (titled by its delegation body) made the rail unreadable in the real project.
   const harness = await startHarness({
     model: [
-      { kind: 'tool_calls', calls: [{ name: 'task', arguments: JSON.stringify({ op: 'create', type: 'write', requiresTest: false, goal: 'g', scope: 's', planMarkdown: '# p\n' }) }] },
+      { kind: 'tool_calls', calls: [{ name: 'task', arguments: JSON.stringify({ op: 'create', type: 'write', requiresTest: false, goal: 'g', scope: 's', planMarkdown: '# p\n\n## 验收\n- ok\n' }) }] },
       {
         kind: 'tool_calls',
         calls: [
@@ -1195,7 +1020,7 @@ test('a finished dispatch folds to one line, and the members are not a toolbar',
               requiresTest: false,
               goal: '把产品文档按现行代码事实整理',
               scope: '.dev/product',
-              planMarkdown: '# 文档整理\n',
+              planMarkdown: '# 文档整理\n\n## 验收\n- 文档整理完成\n',
             }),
           },
         ],
@@ -1540,22 +1365,12 @@ test('the board lists the project Tasks and links to the conversation that runs 
     await page.locator('[data-testid="composer"]').press('Enter');
     await expect(page.locator('[data-testid="task-strip"]')).toBeVisible({ timeout: 20_000 });
 
-    await page.goto(`${harness.baseUrl}/requirements`, { waitUntil: 'domcontentloaded' });
-    // Tasks are folded by default: the header says how many and that one is running, and nothing
-    // is listed until the user opens it.
-    const toggle = page.locator('[data-testid="tasks-toggle"]');
-    await expect(toggle).toHaveAttribute('aria-expanded', 'false', { timeout: 15_000 });
-    await expect(toggle).toContainText(/1 total|共 1 个/);
-    await expect(toggle).toContainText(/Running|运行/);
-    await expect(page.locator('[data-testid="task-row"]')).toHaveCount(0);
-    await toggle.click();
-    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-
-    const row = page.locator('[data-testid="task-row"]').first();
+    await page.goto(`${harness.baseUrl}/project`, { waitUntil: 'domcontentloaded' });
+    // The project page shows every unfinished Task in 进行中, with its real state and goal.
+    const row = page.locator('[data-testid="project-task"]').first();
     await expect(row).toContainText('survey the account module', { timeout: 15_000 });
-    // The row names translated state, never the server's raw enum.
-    await expect(row).toContainText(/Running|进行中/);
-    await expect(row.locator('[data-testid="task-row-elapsed"]')).toContainText(/ms|s|m/);
+    await expect(row).toContainText(/Running|运行/);
+    // Clicking it opens the conversation that coordinates it, not a second copy of the Task.
     await row.click();
     await expect(page.locator('[data-testid="composer"]')).toBeVisible();
     await expect(page.locator('[data-testid="task-strip"]')).toBeVisible();
@@ -2670,15 +2485,11 @@ test('every screen is usable on a phone: the viewer, the board and the settings 
       await expect(page.locator('[data-testid="md-body"]')).toContainText('一段文字');
       await page.locator('[data-testid="file-close"]').click();
 
-      // The board scrolls one column at a time, and its Tasks row is one line and tappable.
-      await page.locator('.nav a', { hasText: /Requirements|需求/ }).click();
-      await expect(page.locator('[data-testid="tasks-toggle"]')).toBeVisible();
-      await noOverflow('board');
-      const toggleHeight = await page.locator('[data-testid="tasks-toggle"]').evaluate((node) => node.getBoundingClientRect().height);
-      expect(toggleHeight, 'the folded Tasks row is one line').toBeLessThan(56);
-      await page.locator('[data-testid="tasks-toggle"]').click();
-      await expect(page.locator('[data-testid="tasks-toggle"]')).toHaveAttribute('aria-expanded', 'true');
-      await noOverflow('board with tasks open');
+      // The project page fits a phone: no horizontal overflow, and its backlog input stays tappable.
+      await page.locator('.nav a', { hasText: /Project|项目/ }).click();
+      await expect(page.locator('[data-testid="project-page"]')).toBeVisible();
+      await noOverflow('project');
+      await expect(page.locator('[data-testid="backlog-add"]')).toBeVisible();
 
       // Settings keeps its three tabs reachable.
       await page.locator('.nav a', { hasText: /Settings|设置/ }).click();

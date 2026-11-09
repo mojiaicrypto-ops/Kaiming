@@ -29,7 +29,7 @@ describe('role tool sets', () => {
       expect(set.allowlist).not.toContain('write');
       expect(set.allowlist).not.toContain('edit');
       expect(set.allowlist).not.toContain('bash');
-      expect(set.allowlist).not.toContain('requirement');
+      expect(set.allowlist).not.toContain('backlog');
       expect(set.allowlist).not.toContain('project');
       expect(set.projectReadOnly).toBe(true);
     }
@@ -37,9 +37,9 @@ describe('role tool sets', () => {
 
   it('keeps the role\u2019s own set while a session has no Task yet', () => {
     const chief = toolSetFor('chief', undefined);
-    expect(chief.allowlist).toContain('requirement');
+    expect(chief.allowlist).toContain('backlog');
     expect(chief.allowlist).toContain('project');
-    expect(chief.projectReadOnly).toBe(false); // it can save requirements
+    expect(chief.projectReadOnly).toBe(false); // it can write the backlog
     expect(toolSetFor('reviewer', undefined).projectReadOnly).toBe(true);
     expect(toolSetFor('developer', undefined).allowlist).toEqual(
       expect.arrayContaining(['read', 'write', 'edit', 'bash']),
@@ -91,7 +91,7 @@ describe('role tool sets', () => {
 
   it('gives every role the one task tool and the chief alone the project task surface', () => {
     const chief = toolSetFor('chief', 'write').allowlist;
-    expect(chief).toEqual(expect.arrayContaining(['task', 'requirement', 'project']));
+    expect(chief).toEqual(expect.arrayContaining(['task', 'backlog', 'project']));
     for (const roleId of ROLE_IDS) {
       // Every member reads its own Task through the same tool; only the chief may act on it.
       expect(toolSetFor(roleId, 'write').allowlist).toContain('task');
@@ -104,7 +104,7 @@ describe('role tool sets', () => {
   it('denies every name the role does not hold, so a host union cannot widen it', () => {
     const designerRead = toolSetFor('designer', 'read');
     expect(designerRead.denied).toEqual(
-      expect.arrayContaining(['write', 'edit', 'bash', 'requirement', 'project']),
+      expect.arrayContaining(['write', 'edit', 'bash', 'backlog', 'project']),
     );
     // The reading tools and the report tool it does hold are not denied.
     expect(designerRead.denied).not.toContain('read');
@@ -112,20 +112,20 @@ describe('role tool sets', () => {
 
     const designerWrite = toolSetFor('designer', 'write');
     expect(designerWrite.denied).not.toContain('write');
-    expect(designerWrite.denied).not.toContain('requirement');
+    expect(designerWrite.denied).not.toContain('backlog');
     expect(designerWrite.denied).not.toContain('bash');
     expect(designerWrite.denied).toEqual(expect.arrayContaining(['project']));
 
     // A reviewer must never be handed the chief's task tools, even through a host union.
     const reviewerWrite = toolSetFor('reviewer', 'write');
     expect(reviewerWrite.denied).toEqual(
-      expect.arrayContaining(['write', 'edit', 'bash', 'requirement', 'project']),
+      expect.arrayContaining(['write', 'edit', 'bash', 'backlog', 'project']),
     );
     expect(reviewerWrite.denied).not.toContain('agent_report');
 
-    // The chief holds requirement/project and shell, but not the report tool or project writes.
+    // The chief holds backlog/project and shell, but not the report tool or project writes.
     const chief = toolSetFor('chief', undefined);
-    expect(chief.denied).not.toContain('requirement');
+    expect(chief.denied).not.toContain('backlog');
     expect(chief.denied).not.toContain('bash');
     expect(chief.denied).toEqual(expect.arrayContaining(['agent_report', 'write', 'edit']));
   });
@@ -142,7 +142,7 @@ describe('role tool sets', () => {
     expect(held.allowlist).toEqual(
       expect.arrayContaining(['read', 'grep', 'find', 'ls', 'task', 'question']),
     );
-    for (const withheld of ['write', 'edit', 'bash', 'requirement', 'project']) {
+    for (const withheld of ['write', 'edit', 'bash', 'backlog', 'project']) {
       expect(held.allowlist).not.toContain(withheld);
       expect(held.denied).toContain(withheld);
     }

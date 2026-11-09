@@ -38,16 +38,6 @@ export function ToolReport({ args, status, resultText }: { args: string; status:
   );
 }
 
-export function ToolRequirement({ status, resultText }: { status: 'running' | 'ok' | 'failed' | 'waiting'; resultText?: string | undefined }) {
-  const { t } = useI18n();
-  if (status !== 'ok' || resultText === undefined || !/saved/.test(resultText)) return null;
-  const id = resultText.replace('saved ', '').trim();
-  return (
-    <div className="ev ok">
-      <State kind="done">{t('tool.requirementSaved', { id })}</State>
-    </div>
-  );
-}
 
 /**
  * A backlog write is one line of text ("已记为 B-12" / "已关闭 B-12"): the item itself lives on the

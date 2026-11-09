@@ -303,27 +303,6 @@ export function toolDefinitions(tools: RunTools): readonly ToolDefinition[] {
       run: (args) => tools.projects(args),
     },
     {
-      name: 'kaiming_requirements',
-      title: 'List or read requirements',
-      description:
-        'Requirements of one project: proposals and implementation requirements with status and readability, or one requirement’s full content by id. Unreadable files are reported, not hidden. Read-only.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          project_path: { type: 'string', description: projectHelp },
-          kind: { type: 'string', enum: ['proposal', 'implementation'], description: 'Filter by requirement kind.' },
-          status: { type: 'string', description: 'Filter by status, e.g. pending, in_progress, completed, archived.' },
-          requirement_id: { type: 'string', description: 'Return this requirement’s full content instead of a list.' },
-          limit: { type: 'integer', minimum: 1, maximum: 200, description: 'Page size (default 50).' },
-          cursor: { type: 'string', description: 'nextCursor from a previous page.' },
-        },
-        additionalProperties: false,
-      },
-      outputSchema: { type: 'object', additionalProperties: true },
-      annotations: READ_ONLY,
-      run: (args) => tools.requirements(args),
-    },
-    {
       name: 'kaiming_backlog',
       title: 'List or read backlog items',
       description:

@@ -13,7 +13,7 @@
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { type SessionEntry } from '@earendil-works/pi-coding-agent';
-import { Store, StoreError, type InputRow, type TaskRow, type TaskStatus } from '../store/store.ts';
+import { OPEN_TASK_STATUSES, Store, StoreError, type InputRow, type TaskRow, type TaskStatus } from '../store/store.ts';
 import { redactEffectiveConfig, type EffectiveConfig } from './config.ts';
 import { digestJson } from './hash.ts';
 import {
@@ -41,7 +41,7 @@ import { createBrowserTool } from '../tools/browser-tool.ts';
 import { createWebFetchTool } from '../tools/web-fetch.ts';
 import { createWebSearchTool } from '../tools/web-search.ts';
 import { createReportTool, type ReportToolContext } from '../tools/report-tools.ts';
-import { createRequirementTool, type RequirementToolContext } from '../tools/requirement-tools.ts';
+import { createBacklogTool, type BacklogToolContext } from '../tools/backlog-tools.ts';
 import { createProjectTool, type ProjectToolContext } from '../tools/project-tools.ts';
 import type { DelegationReturn, MemberState } from '../tools/delegation-tools.ts';
 
@@ -516,15 +516,37 @@ export class InputRunner {
           ...(currentTaskId != null ? { currentTaskId } : {}),
         };
       };
-      const requirementContext = (): RequirementToolContext => ({
-        store: this.options.store,
-        projectId: session.projectId,
-        cwd: session.cwd,
-        roleId: session.roleId,
-        sessionId,
-      });
-      const requirementTools = ['chief', 'designer', 'settler', 'developer'].includes(session.roleId)
-        ? [createRequirementTool(requirementContext)]
+      const backlogContext = (): BacklogToolContext => {
+        const live = this.liveRuns.get(sessionId);
+        const inputId = live?.inputId ?? input.inputId;
+        const currentTaskId = this.options.store.getSession(sessionId)?.currentTaskId;
+        return {
+          cwd: session.cwd,
+          roleId: session.roleId,
+          actorId: this.options.store.getInput(inputId)?.actorId ?? 'local',
+          sessionId,
+          inputId,
+          ...(currentTaskId != null ? { currentTaskId } : {}),
+          tasksOf: (backlogId: string) => {
+            const tasks = this.options.store
+              .listTasks(session.projectId)
+              .filter((task) => task.backlogIds.includes(backlogId));
+            const lastClosed = tasks
+              .filter((task) => task.status === 'completed' || task.status === 'cancelled')
+              .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+            return {
+              open: tasks
+                .filter((task) => OPEN_TASK_STATUSES.includes(task.status))
+                .map((task) => ({ taskId: task.id, status: task.status })),
+              ...(lastClosed === undefined
+                ? {}
+                : { lastClosed: { taskId: lastClosed.id, status: lastClosed.status } }),
+            };
+          },
+        };
+      };
+      const backlogTools = ['chief', 'designer', 'developer', 'settler'].includes(session.roleId)
+        ? [createBacklogTool(backlogContext)]
         : [];
       const projectTools =
         session.roleId === 'chief'
@@ -559,12 +581,12 @@ export class InputRunner {
                   ? {}
                   : { onTaskChange: (taskId: string) => this.options.onTaskChange?.(sessionId, taskId) }),
               }), { chief: true }),
-              ...requirementTools,
+              ...backlogTools,
               ...projectTools,
             ]
           : [
               createTaskGetTool(contextOf),
-              ...requirementTools,
+              ...backlogTools,
               // Every professional member delivers its result through the same formal report.
               createReportTool((): ReportToolContext => ({
                 store: this.options.store,

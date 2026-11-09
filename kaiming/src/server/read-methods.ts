@@ -8,9 +8,9 @@ import { homedir } from 'node:os';
 import { dirname, join, relative, sep } from 'node:path';
 import { RpcError, type RpcRouter } from './rpc.ts';
 import { pageHistory, pageHistoryBefore, readPiHistory } from './history.ts';
-import { digestOfText, getRequirement, listRequirements, requirementPath } from '../runtime/requirement-store.ts';
+
 import { readReportBody } from '../runtime/report-store.ts';
-import { readPlan } from '../runtime/plan-store.ts';
+import { digestOfText, readPlan } from '../runtime/plan-store.ts';
 import { scopeCheckFor } from '../runtime/plan-contract.ts';
 import { mimeTypeOf, resolveInsideProject } from './fs-guard.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
@@ -620,58 +620,6 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
     },
   });
 
-  router.register('requirement.list', {
-    write: false,
-    run: (params): unknown => {
-      const project = requireProject(store, params);
-      const kind = readString(params, 'kind');
-      const status = readString(params, 'status');
-      const limit = clampLimit(readNumber(params, 'limit'));
-      const { valid, invalid } = listRequirements(project.realPath);
-      const filtered = valid.filter(
-        (entry) => (kind === undefined || entry.kind === kind) && (status === undefined || entry.status === status),
-      );
-      const cursor = readString(params, 'cursor');
-      const index = cursor === undefined ? -1 : filtered.findIndex((entry) => `${entry.updatedAt}|${entry.id}` === cursor);
-      if (cursor !== undefined && index < 0) {
-        throw new RpcError('INVALID_ARGUMENT', 'the cursor does not belong to this listing', { cursor });
-      }
-      const start = index + 1;
-      const page = filtered.slice(start, start + limit);
-      const last = page[page.length - 1];
-      return {
-        items: page.map((entry) => ({ ...entry })),
-        invalidFiles: invalid,
-        nextCursor: start + limit < filtered.length && last !== undefined ? `${last.updatedAt}|${last.id}` : null,
-      };
-    },
-  });
-
-  router.register('requirement.get', {
-    write: false,
-    run: (params): unknown => {
-      const project = requireProject(store, params);
-      const requirementId = readString(params, 'requirementId');
-      if (requirementId === undefined) {
-        throw new RpcError('INVALID_ARGUMENT', 'requirementId is required');
-      }
-      if (!/^[A-Za-z0-9_-]+$/.test(requirementId)) {
-        throw new RpcError('INVALID_ARGUMENT', 'requirementId has an invalid form', { requirementId });
-      }
-      const found = getRequirement(project.realPath, requirementId);
-      if (!found.found) {
-        throw new RpcError('NOT_FOUND', `requirement ${requirementId} does not exist`, { requirementId });
-      }
-      return {
-        requirementId,
-        path: requirementPath(project.realPath, requirementId),
-        version: found.version,
-        text: found.text,
-        ...(found.parsed.ok ? { metadata: found.parsed.record.metadata } : {}),
-        issues: found.parsed.issues,
-      };
-    },
-  });
 
   router.register('backlog.list', {
     write: false,

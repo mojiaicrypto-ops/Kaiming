@@ -7,7 +7,7 @@
  * and Task type — the model cannot switch its own permissions, and the host does not offer extra ops.
  *
  * `taskType` is `undefined` while a session has no Task yet: then the role's own documented set
- * applies (the chief still needs its requirement/project tools, for instance).
+ * applies (the chief still needs its backlog/project tools, for instance).
  */
 import type { PromptRoleId } from './prompt-assembly.ts';
 import { ROLE_IDS } from './prompt-assembly.ts';
@@ -19,7 +19,7 @@ export const PROJECT_WRITE_TOOLS: readonly string[] = ['write', 'edit'];
 /** Shell access: documented per role, and never in a read Task. */
 const SHELL_TOOL = 'bash';
 /** Domain tools that can write project files; their read ops arrive with their own permission work. */
-const PROJECT_WRITING_DOMAIN_TOOLS: readonly string[] = ['requirement', 'project'];
+const PROJECT_WRITING_DOMAIN_TOOLS: readonly string[] = ['backlog', 'project'];
 /** Reading tools every role has, including the write-capable ones. */
 const READ_TOOLS: readonly string[] = ['read', 'grep', 'find', 'ls'];
 
@@ -47,13 +47,13 @@ const BROWSER_TOOLS: readonly string[] = ['browser'];
 
 /** Domain tools each role may call (registered later; the allowlist only lists their names). */
 const DOMAIN_BY_ROLE: Readonly<Record<PromptRoleId, readonly string[]>> = {
-  chief: ['task', 'requirement', 'project', 'question', ...WEB_TOOLS, ...BROWSER_TOOLS],
-  designer: ['requirement', 'agent_report', 'task', 'question', ...WEB_TOOLS],
-  developer: ['agent_report', 'task', 'requirement', 'question', ...WEB_TOOLS, ...BROWSER_TOOLS],
+  chief: ['task', 'backlog', 'project', 'question', ...WEB_TOOLS, ...BROWSER_TOOLS],
+  designer: ['backlog', 'agent_report', 'task', 'question', ...WEB_TOOLS],
+  developer: ['agent_report', 'task', 'backlog', 'question', ...WEB_TOOLS, ...BROWSER_TOOLS],
   reviewer: ['agent_report', 'task', 'question', ...WEB_TOOLS, ...BROWSER_TOOLS],
   tester: ['agent_report', 'task', 'question', ...WEB_TOOLS, ...BROWSER_TOOLS],
   // The settler records what was already verified: a fresh web lookup is not its job.
-  settler: ['agent_report', 'task', 'requirement', 'question'],
+  settler: ['agent_report', 'task', 'backlog', 'question'],
   investigator: ['agent_report', 'task', 'question', ...WEB_TOOLS, ...BROWSER_TOOLS],
 };
 
@@ -65,7 +65,7 @@ const DOMAIN_BY_ROLE: Readonly<Record<PromptRoleId, readonly string[]>> = {
 export const DOMAIN_TOOL_NAMES: readonly string[] = [
   'task',
   'agent_report',
-  'requirement',
+  'backlog',
   'project',
   'question',
   ...WEB_TOOLS,

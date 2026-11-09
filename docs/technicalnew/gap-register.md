@@ -12,10 +12,10 @@
 
 | 编号 | 现象 | 证据位置 | 影响 | 处置 |
 |---|---|---|---|---|
-| P10 | 需求实体与交付契约重复：9 个状态、七节格式、唯一写入口，与 Plan 的验收/范围、Task 状态、模块文档重复维护 | 已删除的两份旧需求文档；`src/runtime/requirement-store.ts` | 模型维护大量与当前工作无关的字段；独立检查的依据与实现脱节 | **计划中** — WP-1 已把正式文档改为待办 + 规格 + 模块地图 + Task 契约；代码切换按工作包计划尚未执行（WP-2～WP-8） |
-| S9 | 修改 Task 的 Plan 没有验收必填检查，范围也没有可核对的声明 | `src/tools/task-tools.ts`（无 `plan-contract.ts`） | 验收可以按实现结果补写，Review/Test 失去开发前的期望值 | **计划中** — WP-3：write Task 的 Plan 必含「验收」一节；范围提取与越界提示，见 [G2 task](agents-and-tools.md#task) |
-| S10 | 待办文件的读写方法与会话级操作者身份缺失 | `src/server/read-methods.ts`（无 `backlog.*`）、`src/server/rpc.ts`（无 `actorId`） | 项目页与外部接入无法列出待办；操作者只能取登录会话值 | **计划中** — WP-2/WP-4：`backlog.list/get/add/update/close/reopen` 与 `actorId`（[R1](runtime-contract.md)、[S2](storage-and-recovery.md)） |
-| D10 | 需求页是四列看板，不显示待办文件的问题、等你决定与模块地图 | `webapp/src/requirements/`（WP-7 删除） | 用户看不到“现在在做什么、接下来做什么、系统由哪几块组成” | **计划中** — WP-5：`/project` 项目页（[U6](ui-design.md#u6-项目页与设置)） |
+| P10 | 需求实体与交付契约重复：9 个状态、七节格式、唯一写入口，与 Plan 的验收/范围、Task 状态、模块文档重复维护 | 原需求文档与 `src/runtime/requirement-store.ts`、`src/tools/requirement-tools.ts`（均已删除） | 模型维护大量与当前工作无关的字段；独立检查的依据与实现脱节 | **已关闭（2026-11-09）** — 待办 + 规格 + 模块地图 + Task 契约的文档、代码、RPC/MCP、项目页与角色工具切换全部落地；旧需求实现与需求页已删除。证据：服务端 59 文件 566 用例、webapp 16 文件 108 用例、浏览器 66 用例通过 |
+| S9 | 修改 Task 的 Plan 没有验收必填检查，范围也没有可核对的声明 | `src/tools/task-tools.ts`、`src/runtime/plan-contract.ts` | 验收可以按实现结果补写，Review/Test 失去开发前的期望值 | **已关闭（2026-11-09）** — write Plan 必含「验收」一节（create/update 都检查），修订时报告 `acceptanceChanged`；范围从 Plan 提取，`scopeDrift` 排除 `.dev/**`、`docs/**`、根 Markdown 并在 `task.get`/Review/结算派发中列出越界文件。见 [G2 task](agents-and-tools.md#task) |
+| S10 | 待办文件的读写方法与会话级操作者身份缺失 | `src/server/read-methods.ts`、`write-methods.ts`、`src/server/rpc.ts` | 项目页与外部接入无法列出待办；操作者只能取登录会话值 | **已关闭（2026-11-09）** — `backlog.list/get/add/update/close/reopen` 与项目级 `interaction.list`；`RpcContext.actorId` 记录到输入、待办与交互答复；MCP 提供只读 `kaiming_backlog`（[R1](runtime-contract.md)、[S2](storage-and-recovery.md)） |
+| D10 | 需求页是四列看板，不显示待办文件的问题、等你决定与模块地图 | `webapp/src/project/` | 用户看不到“现在在做什么、接下来做什么、系统由哪几块组成” | **已关闭（2026-11-09）** — `/project` 项目页：问题提示、进行中（含等你决定）、就绪/想法/已关闭待办、模块地图与早期文件；`/requirements` 旧地址落到同一页，需求页已删除（[U6](ui-design.md#u6-项目页与设置)） |
 
 ## 本轮新增（2026-10-31，主管会话连续性）
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 import { State } from '../app/State';
 import type { RpcClient } from '../api/rpc';
-import { useTasks } from '../requirements/requirement-model';
+
 import { usePhaseLabel } from '../chat/task-labels';
 import { BacklogDrawer } from './BacklogDrawer';
 import {
@@ -11,6 +11,7 @@ import {
   useBacklog,
   usePendingInteractions,
   useProjectText,
+  useTasks,
   type BacklogItemView,
 } from './project-model';
 
@@ -30,6 +31,17 @@ export interface ProjectPageProps {
 
 const FINISHED = new Set(['completed', 'cancelled']);
 const HOLDS_SLOT = new Set(['active', 'waiting', 'pausing', 'paused', 'cancelling']);
+
+/** The record's own state, in the user's language: the raw enum never reaches the screen. */
+function statusKeyOf(
+  status: string,
+): 'task.status.active' | 'task.status.waiting' | 'task.status.paused' | 'task.status.completed' | 'task.status.cancelled' {
+  if (status === 'completed') return 'task.status.completed';
+  if (status === 'cancelled') return 'task.status.cancelled';
+  if (status === 'paused' || status === 'pausing' || status === 'cancelling') return 'task.status.paused';
+  if (status === 'waiting') return 'task.status.waiting';
+  return 'task.status.active';
+}
 
 /**
  * The project page answers three questions in order: what is wrong, what is running, what to do
@@ -167,7 +179,7 @@ export function ProjectPage({
               <span className="id">{task.taskId}</span>
               <span className="tt">{task.goal}</span>
               <span className="mt">
-                {phaseLabel(task.phase)} · {task.status}
+                {phaseLabel(task.phase)} · {t(statusKeyOf(task.status))}
                 {deciding !== undefined && (
                   <span className="tag" data-testid="project-deciding">
                     {t('project.deciding')}

@@ -77,7 +77,7 @@ describe('the /mcp endpoint', () => {
     expect(init.sessionId).not.toBeNull();
 
     const listed = await post(origin, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, auth);
-    expect((listed.json['result'] as { tools: unknown[] }).tools).toHaveLength(11);
+    expect((listed.json['result'] as { tools: unknown[] }).tools).toHaveLength(10);
 
     const projects = await post(
       origin,

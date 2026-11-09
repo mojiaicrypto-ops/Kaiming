@@ -35,9 +35,9 @@ test('walk', async ({ page }) => {
     const panel = page.locator('[data-testid="question-panel"]');
     await expect_visible(panel, page);
     await page.screenshot({ path: '/tmp/wk-chat-ask.png' });
-    await page.locator('.nav a[href="/requirements"]').click();
+    await page.locator('.nav a[href="/project"]').click();
     await page.waitForTimeout(400);
-    await page.screenshot({ path: '/tmp/wk-req.png', fullPage: true });
+    await page.screenshot({ path: '/tmp/wk-project.png', fullPage: true });
     await page.locator('.nav a[href="/settings/providers"]').click();
     await page.waitForTimeout(400);
     await page.screenshot({ path: '/tmp/wk-settings.png' });

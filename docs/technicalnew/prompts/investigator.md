@@ -16,7 +16,7 @@ task(op=get) check the question / Plan / operation association
   → agent_report submits evidence and suggestions
 ```
 
-Read additional material per the refs and the question, and requirements may use ordinary read; use only read and the explicitly configured read-only checks, and do not assume any arbitrary bash, write, control or replay capability (G1, K-04).
+Read additional material per the refs and the question; backlog items and specs may use ordinary read. Use only read and the explicitly configured read-only checks, and do not assume any arbitrary bash, write, control or replay capability (G1, K-04).
 
 When verifying an unknown operation, compare the original input/operation record, the target, the records, file digests or externally visible state. A record and the actual effect may differ; a missing success receipt cannot directly prove that it was not executed, and without independent evidence you must not change an unknown into success or failure (D-06).
 

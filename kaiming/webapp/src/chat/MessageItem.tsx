@@ -4,7 +4,7 @@ import { State } from '../app/State';
 import { Markdown } from './Markdown';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ToolCard } from './ToolCard';
-import { ToolBacklog, ToolQuestion, ToolReport, ToolRequirement } from './ToolBusiness';
+import { ToolBacklog, ToolQuestion, ToolReport } from './ToolBusiness';
 import { ToolTask } from './ToolTask';
 import { DocumentAttachment } from './DocumentAttachment';
 import type { TaskMemberRow } from './task-labels';
@@ -140,10 +140,7 @@ function MessageItemRow({ message, role, label, continuation, results, onFollow,
     if (name === 'agent_report') {
       return <ToolReport key={`c${index}`} args={block.args} status={status} resultText={result?.text} />;
     }
-    if (name === 'requirement') {
-      const saved = <ToolRequirement key={`c${index}`} status={status} resultText={result?.text} />;
-      if (status === 'ok' && result?.text !== undefined && /saved/.test(result.text)) return saved;
-    }
+
     if (name === 'backlog') {
       const card = <ToolBacklog key={`c${index}`} status={status} resultText={result?.text} />;
       if (status === 'ok' && result?.text !== undefined && /已(记为|关闭)/.test(result.text)) return card;

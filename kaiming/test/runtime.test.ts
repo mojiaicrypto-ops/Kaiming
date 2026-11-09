@@ -1211,7 +1211,7 @@ describe('input runner', () => {
     const h = await harness({
       replies: [{ kind: 'text', text: 'ok' }],
       taskType: 'read',
-      sessionExtras: () => ({ customTools: [tool('requirement') as never, tool('probe_ok') as never] }),
+      sessionExtras: () => ({ customTools: [tool('backlog') as never, tool('probe_ok') as never] }),
     });
 
     const outcome = await h.runner.runNext('s-1');
@@ -1219,7 +1219,7 @@ describe('input runner', () => {
     expect(outcome.kind).toBe('completed');
     const active = h.registry.get('s-1')?.session.getActiveToolNames() ?? [];
     expect(active).toContain('probe_ok');
-    expect(active).not.toContain('requirement');
+    expect(active).not.toContain('backlog');
   });
 
   it('keeps role-level denials intact through the host tool union in a write Task', async () => {
@@ -1270,7 +1270,7 @@ describe('input runner', () => {
 
     const active = h.registry.get('s-1')?.session.getActiveToolNames() ?? [];
 
-    expect(active).toEqual(expect.arrayContaining(['task', 'requirement', 'project', 'read']));
+    expect(active).toEqual(expect.arrayContaining(['task', 'backlog', 'project', 'read']));
     expect(active).not.toContain('write');
   });
 
@@ -1927,29 +1927,27 @@ describe('input runner', () => {
     expect(member?.currentInputId).not.toBeNull();
   }, 60_000);
 
-  it('saves a requirement record through the real tool loop', async () => {
-    const saveArgs = JSON.stringify({
-      op: 'save',
-      requirementId: 'req-reset',
-      kind: 'proposal',
+  it('writes a backlog item through the real tool loop', async () => {
+    const addArgs = JSON.stringify({
+      op: 'add',
       title: '密码重置',
-      status: 'pending',
-      body: ['## 目标', '允许用户重置密码。', '', '## 来源与决定', '用户提出。', '', '## 处理记录', '尚待规划。', ''].join('\n'),
-      authorizationRef: { inputId: 'i-1' },
+      body: '允许用户重置密码。',
     });
     const h = await harness({
       replies: [
-        { kind: 'tool_calls', calls: [{ name: 'requirement', arguments: saveArgs }] },
-        { kind: 'text', text: 'saved' },
+        { kind: 'tool_calls', calls: [{ name: 'backlog', arguments: addArgs }] },
+        { kind: 'text', text: 'recorded' },
       ],
     });
 
     const outcome = await h.runner.runNext('s-1');
 
     expect(outcome.kind).toBe('completed');
-    const path = join(h.cwd, '.dev', 'requirements', 'req-reset.md');
+    const path = join(h.cwd, '.dev', 'backlog.md');
     expect(existsSync(path)).toBe(true);
-    expect(readFileSync(path, 'utf8')).toContain('## 处理记录');
+    const text = readFileSync(path, 'utf8');
+    expect(text).toContain('密码重置');
+    expect(text).toContain('- 创建人: local');
   }, 30_000);
 
   it('initializes the project entries through the real tool loop', async () => {
@@ -2114,7 +2112,7 @@ describe('input runner', () => {
     accept(h.store, 'i-2', 'req-2', task.id);
     expect((await h.runner.runNext('s-1')).kind).toBe('completed');
     // `bash` is the one writing-capable tool a chief carries, so it is the honest probe of the hold.
-    for (const withheld of ['bash', 'write', 'edit', 'requirement', 'project']) {
+    for (const withheld of ['bash', 'write', 'edit', 'backlog', 'project']) {
       expect(scopes[0] ?? []).not.toContain(withheld);
     }
     expect(scopes[0] ?? []).toEqual(expect.arrayContaining(['read', 'grep', 'find', 'ls', 'task']));

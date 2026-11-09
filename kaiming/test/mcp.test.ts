@@ -165,7 +165,7 @@ describe('the MCP surface', () => {
         'kaiming_delegate',
         'kaiming_projects',
         'kaiming_read',
-        'kaiming_requirements',
+
         'kaiming_runs',
         'kaiming_status',
         'kaiming_tell',

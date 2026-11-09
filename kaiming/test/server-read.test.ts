@@ -475,23 +475,6 @@ describe('read-only query surface', () => {
     expect(errorCode(stale.body)).toBe('REPORT_STALE');
   });
 
-  it('lists requirements with invalid files reported and reads one record by id', async () => {
-    const h = await harness();
-
-    const list = await h.call('requirement.list', { projectId: h.projectId });
-    expect(resultOf<{ items: Array<{ id: string }> }>(list.body).items.map((item) => item.id)).toEqual(['req-reset']);
-    expect(resultOf<{ invalidFiles: Array<{ file: string }> }>(list.body).invalidFiles.map((entry) => entry.file)).toEqual([
-      'req-broken.md',
-    ]);
-
-    const one = await h.call('requirement.get', { projectId: h.projectId, requirementId: 'req-reset' });
-    expect(resultOf<{ metadata: { kind: string } }>(one.body).metadata.kind).toBe('proposal');
-
-    const broken = await h.call('requirement.get', { projectId: h.projectId, requirementId: 'req-broken' });
-    expect(broken.status).toBe(200);
-    expect(resultOf<{ issues: string[] }>(broken.body).issues.length).toBeGreaterThan(0);
-  });
-
   it('lists and reads project files without escaping the project', async () => {
     const h = await harness();
 

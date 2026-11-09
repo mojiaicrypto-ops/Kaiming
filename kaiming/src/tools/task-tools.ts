@@ -13,9 +13,8 @@ import { type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { StoreError, type ArtifactRef, type Store, type TaskPhase, type TaskRow } from '../store/store.ts';
 import { commitPlan, digestOfText, planRefFor, planTarget, readPlan } from '../runtime/plan-store.ts';
 import { readReportBody } from '../runtime/report-store.ts';
-import { getRequirement, promoteRequirementToInProgress } from '../runtime/requirement-store.ts';
 import { acceptanceChanged, acceptanceGap, scopeCheckFor, scopeCheckText } from '../runtime/plan-contract.ts';
-import { BacklogProblemError, readBacklog } from '../runtime/backlog-store.ts';
+import { readBacklog } from '../runtime/backlog-store.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
 import { dispatchOp, type DelegationHost } from './delegation-tools.ts';
 import { asRecord, enrich, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
@@ -157,10 +156,7 @@ export function createTaskTool(contextOf: TaskToolContextResolver, options: { re
           additionalProperties: false,
         },
         requiresTest: { type: 'boolean' },
-        requirementId: {
-          type: 'string',
-          description: 'the implementation requirement this Task delivers (omit for design, investigation or knowledge work)',
-        },
+
         backlogIds: {
           type: 'array',
           items: { type: 'string' },
@@ -366,41 +362,7 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
   }
   const acceptanceRefs = readStringArray(params, 'acceptanceRefs') ?? [];
   const basisRefs = readStringArray(params, 'basisRefs') ?? [];
-  const requirementId = readString(params, 'requirementId');
-  if (requirementId !== undefined) {
-    // The field means "this Task implements that implementation requirement" (R-04); a design
-    // Task serves requirements through source/result links instead. A dangling or unusable
-    // citation is refused here, so a delivery cannot run for hours against a record that does not
-    // exist.
-    if (type === 'read') {
-      return fail('INVALID_ARGUMENT', 'a read Task does not implement a requirement; leave requirementId empty');
-    }
-    const record = getRequirement(context.cwd, requirementId);
-    if (!record.found) {
-      return fail('NOT_FOUND', `requirement ${requirementId} does not exist`, { requirementId });
-    }
-    if (!record.parsed.ok) {
-      return fail('INVALID_ARGUMENT', `requirement ${requirementId} is not valid`, {
-        requirementId,
-        issues: record.parsed.issues,
-      });
-    }
-    const { kind, status } = record.parsed.record.metadata;
-    if (kind !== 'implementation') {
-      return fail(
-        'INVALID_ARGUMENT',
-        `requirement ${requirementId} is a proposal; cite the implementation requirement delivered by this Task`,
-        { requirementId, kind },
-      );
-    }
-    if (status !== 'pending' && status !== 'in_progress') {
-      return fail(
-        'INVALID_ARGUMENT',
-        `requirement ${requirementId} is ${status}; an implementation Task needs pending or in_progress`,
-        { requirementId, status },
-      );
-    }
-  }
+
   const backlogIds = readStringArray(params, 'backlogIds') ?? [];
   if (backlogIds.length > 0) {
     if (type === 'read') {
@@ -443,7 +405,7 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
       projectId: context.projectId,
       chiefSessionId: context.sessionId,
       ownerEpoch: context.store.epoch,
-      ...(requirementId !== undefined ? { requirementId } : {}),
+
       ...(backlogIds.length > 0 ? { backlogIds } : {}),
       type,
       requiresTest: type === 'write' ? (requiresTest as boolean) : false,
@@ -456,23 +418,7 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
       sourceInputId: context.inputId,
       summary: `created (${type})`,
     });
-    // R-05: an implementation requirement becomes in_progress when its Task starts. This is the one
-    // status the program derives, and it derives it from a fact, not from an outcome: the row exists,
-    // so work has begun. Completion stays a recorded decision (a cancelled run delivers nothing).
-    const raised =
-      requirementId === undefined
-        ? undefined
-        : promoteRequirementToInProgress({ cwd: context.cwd, id: requirementId });
-    const requirementNote =
-      raised === undefined
-        ? ''
-        : raised.ok
-          ? `; requirement ${requirementId} is in_progress`
-          : `; WARNING requirement ${requirementId} stayed as it was (${raised.message})`;
-    const requirementState =
-      raised === undefined
-        ? undefined
-        : { requirementId, status: raised.ok ? raised.status : 'unchanged' };
+
     let planState = 'saved';
     try {
       commitPlan({
@@ -485,25 +431,23 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
       // The Task exists and points at the intended version; the file still has to be written.
       planState = 'pending';
       return ok(
-        `Task ${task.id} created but its Plan file is not saved yet (${messageOf(error)})${requirementNote}; retry with the same plan`,
+        `Task ${task.id} created but its Plan file is not saved yet (${messageOf(error)}); retry with the same plan`,
         {
           taskId: task.id,
           phase: task.phase,
           currentSessionIds: task.currentSessionIds,
           planRef: task.planRef,
           planState,
-          ...(requirementState !== undefined ? { requirement: requirementState } : {}),
           scopeCheck: scopeCheckFor(context.cwd, planMarkdown),
         },
       );
     }
-    return ok(`Task ${task.id} created (${type}, requiresTest=${task.requiresTest})${requirementNote}; plan at ${target.path}`, {
+    return ok(`Task ${task.id} created (${type}, requiresTest=${task.requiresTest}); plan at ${target.path}`, {
       taskId: task.id,
       phase: task.phase,
       currentSessionIds: task.currentSessionIds,
       planRef: task.planRef,
       planState,
-      ...(requirementState !== undefined ? { requirement: requirementState } : {}),
       scopeCheck: scopeCheckFor(context.cwd, planMarkdown),
       ...guidanceFor(context.store, task),
     });
@@ -854,7 +798,7 @@ function getOp(
       ? {
           context: {
             writeHold: 'paused',
-            note: 'The Task is not running: project writes (write/edit/bash/requirement/project) are withheld here until it is resumed; reading, talking and Task control still work.',
+            note: 'The Task is not running: project writes (write/edit/bash/backlog/project) are withheld here until it is resumed; reading, talking and Task control still work.',
           },
         }
       : {}),

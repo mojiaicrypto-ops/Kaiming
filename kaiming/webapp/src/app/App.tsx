@@ -164,7 +164,7 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
             draft={draft}
             onDraftConsumed={(inserted) => {
               setDraft(null);
-              notify(t(inserted ? 'req.handoffSent' : 'req.handoffKept'), inserted ? 'info' : 'error');
+              notify(t(inserted ? 'project.handoffSent' : 'project.handoffKept'), inserted ? 'info' : 'error');
             }}
             session={session}
             sessions={workspace.sessions}

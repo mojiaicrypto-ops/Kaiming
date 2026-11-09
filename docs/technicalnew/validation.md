@@ -705,3 +705,18 @@
 **证据**：`npm run check:prompts` **15/15 通过**（注入边界标题唯一、切片起点、装配顺序 base + shared + role、英文注入、39 个链接可解析）；`npm test` **52 files / 525 passed**。新增正文全部位于注入区、无中日韩字符。
 
 **未覆盖**：提示词是软约束，没有真实模型行为证据——未验证它是否真的降低了过度设计与防御性代码的比例；reviewer 的对称条款只消除"评审反向要求防御"这一类偏差，不改变任何已声明的可靠性与验证责任。
+
+## 2026-11-09 · 需求实体改为待办 + 规格（工作包 WP-1～WP-7）
+
+正式文档按 `roadmap/` 规划改写（WP-1，含独立 Review 与修复）；代码按 WP-2～WP-7 落地：
+
+| 工作包 | 内容 | 证据 |
+|---|---|---|
+| WP-2 | `runtime/backlog-store.ts`（解析/问题与警告分类/编号/锁内条目写入/`editRaw`）、`runtime/refs.ts`、`tools/backlog-tools.ts` | 定向 44 用例；6 项负向控制真实失败 |
+| WP-3 | schema v17（`backlogIds`、`actorId`）、`claimBacklogItems` 在 `createTask` 事务内、`runtime/plan-contract.ts`（验收/验收变化/范围/越界）、12 位 Task ID、`scopeCheck` 与 `backlogHints`、`actorId` 贯穿 | 定向 19 用例 + v16→v17 迁移用例；3 项负向控制 |
+| WP-4 | `backlog.list/get/add/update/close/reopen`、`interaction.list` 项目级、MCP 只读 `kaiming_backlog` | 定向 44 用例；2 项负向控制 |
+| WP-5 | `/project` 项目页、待办抽屉、`ToolBacklog`、Task 详情 `scopeCheck`、导航/路由/文案 | webapp 108 用例、构建、1 条聚焦浏览器路径 |
+| WP-6 | 角色工具集与提示词正文切换到 `backlog`，删除 `requirementId` 参数 | `check:prompts` 15/15；服务端全量 |
+| WP-7 | 删除需求存储/工具/页/MCP 工具与其 RPC、未用 `req.*` 文案 | 服务端 59 文件 566 用例、webapp 16 文件 108 用例、浏览器 66 用例通过；`tsc --noEmit` 通过 |
+
+**未覆盖**：真实模型下的产品验收尚未执行——J-12/J-13、AC-07/08/10/19/23/26/29/30/34、AC-51～AC-58 需要可用模型与人工决定（夹具与浏览器用例只覆盖程序可靠性）；`check:model` 中本轮新增检查项与 WP-8 的度量（验收/范围比例、越界合理性）未运行。`claimBacklogItems` 的跨进程并发未做实验（进程内 `createTask` 是同步事务）。
