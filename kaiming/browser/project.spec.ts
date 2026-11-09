@@ -52,6 +52,10 @@ test('the project page shows the backlog, adds an item, reports a stale save and
   writeFileSync(join(projectPath, '.dev', 'backlog.md'), BACKLOG, 'utf8');
   writeFileSync(join(projectPath, '.dev', 'PROJECT.md'), PROJECT, 'utf8');
 
+  // Legacy records are offered as an entry, not parsed: the requirements folder is a directory.
+  mkdirSync(join(projectPath, '.dev', 'requirements'), { recursive: true });
+  writeFileSync(join(projectPath, '.dev', 'issues.md'), '# 遗留问题\n', 'utf8');
+
   await openProject(page, harness);
   await page.getByRole('link', { name: 'Project' }).click();
   await expect(page.locator('[data-testid="project-page"]')).toBeVisible();
@@ -59,6 +63,7 @@ test('the project page shows the backlog, adds an item, reports a stale save and
   // The existing entry and the module block are projections of the files, not of a second store.
   await expect(page.locator('[data-testid="backlog-row"]').filter({ hasText: '已有的条目' })).toBeVisible();
   await expect(page.locator('[data-testid="project-modules"]')).toContainText('server/account/');
+  await expect(page.locator('[data-testid="project-early"]')).toContainText('.dev/requirements/');
 
   // Adding an item writes the file; a reload reads it back.
   await page.locator('[data-testid="backlog-add"]').fill('浏览器新增');

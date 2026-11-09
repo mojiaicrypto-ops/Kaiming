@@ -78,9 +78,11 @@ export function ProjectPage({
         path: '.dev',
       })
       .then((read) => {
+        // `.dev/requirements` is a directory, `issues.md` a file: the entry is the legacy record,
+        // whatever its kind. Only the two known names are ever offered.
         setEarly(
           read.entries
-            .filter((entry) => entry.type === 'file' && (entry.name === 'issues.md' || entry.name === 'requirements'))
+            .filter((entry) => entry.name === 'issues.md' || entry.name === 'requirements')
             .map((entry) => (entry.name === 'issues.md' ? '.dev/issues.md' : '.dev/requirements/')),
         );
       })
