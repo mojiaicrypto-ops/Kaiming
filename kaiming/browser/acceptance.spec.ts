@@ -2470,8 +2470,8 @@ test('every screen is usable on a phone: the viewer, the board and the settings 
       // Sending puts the user line above the reply, and the toast does not cover it.
       await page.locator('[data-testid="composer"]').fill('你好');
       await page.locator('[data-testid="composer"]').press('Enter');
-      await expect(page.locator('[data-testid="transcript"] article.m.user')).toContainText('你好', { timeout: 15_000 });
-      await expect(page.locator('[data-testid="transcript"] article.m.chief')).toContainText('先讨论一下');
+      await expect(page.locator('[data-testid="transcript"] article.m.user').last()).toContainText('你好', { timeout: 15_000 });
+      await expect(page.locator('[data-testid="transcript"] article.m.chief').last()).toContainText('先讨论一下');
       await page.screenshot({ path: test.info().outputPath(`phone-${String(width)}-chat.png`) });
 
       // The file viewer is a full canvas; on a phone its tree sits above the file and the hint

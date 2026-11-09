@@ -122,10 +122,10 @@ export function ProjectPage({
   }
 
   return (
-    <section className="page" data-testid="project-page">
-      <div className="page-h">
+    <section className="pp" data-testid="project-page">
+      <div className="pp-head">
         <h1>{t('project.pageTitle')}</h1>
-        <span className="sp" />
+        <div className="pp-sub">{t('project.subtitle')}</div>
         <button
           type="button"
           className="btn ghost"
@@ -150,18 +150,22 @@ export function ProjectPage({
       )}
 
       {backlog.data.issues.length > 0 && (
-        <div className="notice" data-testid="project-issues">
-          <State kind="block">{t('project.issues', { count: backlog.data.issues.length })}</State>
-          <span className="sp" />
-          <button type="button" className="lnk" onClick={() => onOpenFile('.dev/backlog.md')}>
+        <div className="pp-alert" data-testid="project-issues">
+          <div className="pp-alert-head">
+            <span className="pp-alert-icon" aria-hidden="true">
+              !
+            </span>
+            <span>{t('project.issues', { count: backlog.data.issues.length })}</span>
+          </div>
+          <button type="button" className="btn ghost" onClick={() => onOpenFile('.dev/backlog.md')}>
             {t('project.openBacklog')}
           </button>
-          <div className="f3">
+          <div className="pp-issues">
             {backlog.data.issues.map((issue) => (
               <button
                 key={`${String(issue.line)}-${issue.reason}`}
                 type="button"
-                className="lnk"
+                className="pp-issue"
                 data-testid="project-issue"
                 onClick={() => onOpenFile('.dev/backlog.md', issue.line > 0 ? issue.line : undefined)}
               >
@@ -172,64 +176,83 @@ export function ProjectPage({
         </div>
       )}
 
-      <div className="sec" data-testid="project-progress">
-        <div className="sh">{t('project.progress')}</div>
-        {running.length === 0 && <div className="f3">{t('project.progressEmpty')}</div>}
-        {running.map((task) => {
-          const deciding = pending.byTask.get(task.taskId);
-          return (
-            <button
-              key={task.taskId}
-              type="button"
-              className="rc"
-              data-testid="project-task"
-              onClick={() => onOpenTaskSession(task.chiefSessionId)}
-            >
-              <span className="id">{task.taskId}</span>
-              <span className="tt">{task.goal}</span>
-              <span className="mt">
-                {phaseLabel(task.phase)} · {t(statusKeyOf(task.status))}
-                {deciding !== undefined && (
-                  <span className="tag" data-testid="project-deciding">
-                    {t('project.deciding')}
-                  </span>
-                )}
-              </span>
-            </button>
-          );
-        })}
-        {recent !== undefined && (
-          <div className="f3" data-testid="project-recent">
-            {t('project.recentDone', { id: recent.taskId, goal: recent.goal })}
-          </div>
-        )}
-        {tasks.tasks.filter((task) => !running.some((row) => row.taskId === task.taskId) && task.taskId !== recent?.taskId).length > 0 && (
-          <details className="sec" data-testid="project-all-tasks">
-            <summary className="f3">{t('project.allTasks', { count: tasks.tasks.length })}</summary>
-            {tasks.tasks
-              .filter((task) => !running.some((row) => row.taskId === task.taskId) && task.taskId !== recent?.taskId)
-              .map((task) => (
+      {running.length === 0 && recent === undefined && tasks.tasks.length === 0 ? (
+        <div className="pp-line" data-testid="project-progress">
+          <span className="pp-sec-title">{t('project.progress')}</span>
+          <span>{t('project.progressEmpty')}</span>
+        </div>
+      ) : (
+      <div className="pp-section" data-testid="project-progress">
+        <div className="pp-sec-head">
+          <span className="pp-sec-title">{t('project.progress')}</span>
+          <span className="pp-count">{running.length}</span>
+        </div>
+        <div className="pp-sec-body">
+          {running.length === 0 && <div className="pp-empty">{t('project.progressEmpty')}</div>}
+          <div className="pp-list">
+            {running.map((task) => {
+              const deciding = pending.byTask.get(task.taskId);
+              return (
                 <button
                   key={task.taskId}
                   type="button"
-                  className="rc"
-                  data-testid="project-task-all"
+                  className="pp-row"
+                  data-testid="project-task"
                   onClick={() => onOpenTaskSession(task.chiefSessionId)}
                 >
-                  <span className="id">{task.taskId}</span>
-                  <span className="tt">{task.goal}</span>
-                  <span className="mt">
+                  <span className="pp-id">{task.taskId}</span>
+                  <span className="pp-title">{task.goal}</span>
+                  <span className="pp-meta">
                     {phaseLabel(task.phase)} · {t(statusKeyOf(task.status))}
+                    {deciding !== undefined && (
+                      <span className="pp-tag decide" data-testid="project-deciding">
+                        {t('project.deciding')}
+                      </span>
+                    )}
                   </span>
                 </button>
-              ))}
-          </details>
-        )}
+              );
+            })}
+          </div>
+          {recent !== undefined && (
+            <div className="pp-note" data-testid="project-recent">
+              {t('project.recentDone', { id: recent.taskId, goal: recent.goal })}
+            </div>
+          )}
+          {tasks.tasks.filter((task) => !running.some((row) => row.taskId === task.taskId) && task.taskId !== recent?.taskId).length > 0 && (
+            <details className="pp-details" data-testid="project-all-tasks">
+              <summary>{t('project.allTasks', { count: tasks.tasks.length })}</summary>
+              <div className="pp-list">
+                {tasks.tasks
+                  .filter((task) => !running.some((row) => row.taskId === task.taskId) && task.taskId !== recent?.taskId)
+                  .map((task) => (
+                    <button
+                      key={task.taskId}
+                      type="button"
+                      className="pp-row"
+                      data-testid="project-task-all"
+                      onClick={() => onOpenTaskSession(task.chiefSessionId)}
+                    >
+                      <span className="pp-id">{task.taskId}</span>
+                      <span className="pp-title">{task.goal}</span>
+                      <span className="pp-meta">
+                        {phaseLabel(task.phase)} · {t(statusKeyOf(task.status))}
+                      </span>
+                    </button>
+                  ))}
+              </div>
+            </details>
+          )}
+        </div>
       </div>
+      )}
 
-      <div className="sec" data-testid="project-backlog">
-        <div className="sh">{t('project.backlog')}</div>
-        <div className="row">
+      <div className="pp-section" data-testid="project-backlog">
+        <div className="pp-sec-head">
+          <span className="pp-sec-title">{t('project.backlog')}</span>
+          <span className="pp-count">{groups.ready.length + groups.ideas.length}</span>
+        </div>
+        <div className="pp-compose">
           <input
             className="inp"
             value={title}
@@ -247,107 +270,128 @@ export function ProjectPage({
             {t('common.add')}
           </button>
         </div>
-        {[
-          { key: 'backlog.ready' as const, rows: groups.ready },
-          { key: 'backlog.ideas' as const, rows: groups.ideas },
-        ].map((group) => (
-          <div key={group.key} className="sub">
-            <div className="ch">
-              {t(group.key)}
-              <span className="n">{group.rows.length}</span>
+        <div className="pp-sec-body">
+          {[
+            { key: 'backlog.ready' as const, rows: groups.ready },
+            { key: 'backlog.ideas' as const, rows: groups.ideas },
+          ].map((group) => (
+            <div key={group.key} className="pp-group">
+              <div className="pp-group-head">
+                {t(group.key)}
+                <span className="pp-count">{group.rows.length}</span>
+              </div>
+              {group.rows.length === 0 && <div className="pp-empty">{t('backlog.none')}</div>}
+              <div className="pp-list">
+                {group.rows.map((row) => (
+                  <button
+                    key={row.id}
+                    type="button"
+                    className="pp-row"
+                    data-testid="backlog-row"
+                    aria-selected={selected === row.id}
+                    onClick={() => onSelect(row.id)}
+                  >
+                    <span className="pp-id">{row.id}</span>
+                    <span className="pp-title">{row.title}</span>
+                    <span className="pp-meta">
+                      {row.openTasks.length > 0 && <span className="pp-tag">{row.openTasks[0]?.status}</span>}
+                      {row.problems.length > 0 && (
+                        <span className="pp-tag" data-testid="backlog-row-problem">
+                          {t('backlog.problems', { count: row.problems.length })}
+                        </span>
+                      )}
+                      {row.lastClosedTask?.status === 'cancelled' && (
+                        <span className="pp-tag" data-testid="backlog-row-cancelled">
+                          {t('backlog.previousCancelled')}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
-            {group.rows.length === 0 && <div className="f3">{t('backlog.none')}</div>}
-            {group.rows.map((row) => (
-              <button
-                key={row.id}
-                type="button"
-                className="rc"
-                data-testid="backlog-row"
-                aria-selected={selected === row.id}
-                onClick={() => onSelect(row.id)}
-              >
-                <span className="id">{row.id}</span>
-                <span className="tt">{row.title}</span>
-                <span className="mt">
-                  {row.openTasks.length > 0 && <span className="tag">{row.openTasks[0]?.status}</span>}
-                  {row.problems.length > 0 && (
-                    <span className="tag" data-testid="backlog-row-problem">
-                      {t('backlog.problems', { count: row.problems.length })}
+          ))}
+          {groups.closed.length > 0 && (
+            <details className="pp-closed">
+              <summary>
+                {t('backlog.closed')}
+                <span className="pp-count">{groups.closed.length}</span>
+              </summary>
+              <div className="pp-list">
+                {groups.closed.map((row) => (
+                  <button
+                    key={row.id}
+                    type="button"
+                    className="pp-row"
+                    data-testid="backlog-row"
+                    onClick={() => onSelect(row.id)}
+                  >
+                    <span className="pp-id">{row.id}</span>
+                    <span className="pp-title">{row.title}</span>
+                    <span className="pp-meta">
+                      {row.state === 'dropped' ? t('backlog.stateDropped') : t('backlog.stateDone')}
                     </span>
-                  )}
-                  {row.lastClosedTask?.status === 'cancelled' && (
-                    <span className="tag" data-testid="backlog-row-cancelled">
-                      {t('backlog.previousCancelled')}
-                    </span>
-                  )}
-                </span>
-              </button>
-            ))}
-          </div>
-        ))}
-        {groups.closed.length > 0 && (
-          <details>
-            <summary>
-              {t('backlog.closed')} <span className="n">{groups.closed.length}</span>
-            </summary>
-            {groups.closed.map((row) => (
-              <button
-                key={row.id}
-                type="button"
-                className="rc"
-                data-testid="backlog-row"
-                onClick={() => onSelect(row.id)}
-              >
-                <span className="id">{row.id}</span>
-                <span className="tt">{row.title}</span>
-                <span className="mt">
-                  {row.state === 'dropped' ? t('backlog.stateDropped') : t('backlog.stateDone')}
-                </span>
-              </button>
-            ))}
-          </details>
-        )}
+                  </button>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
       </div>
 
       {modules !== null && (
-        <div className="sec" data-testid="project-modules">
-          <div className="sh">{t('project.modules')}</div>
-          {modules.map((row) => (
-            <div key={row.cells.join('|')} className="row">
-              {row.cells.map((cell, index) => {
-                const target = cellPath(cell);
-                return target === undefined ? (
-                  <span key={`${String(index)}-${cell}`} className={index === 0 ? '' : 'f3'}>
-                    {cell}
-                  </span>
-                ) : (
-                  <button
-                    key={`${String(index)}-${cell}`}
-                    type="button"
-                    className={`lnk ${index === 0 ? '' : 'f3'}`}
-                    data-testid="project-module-link"
-                    onClick={() => onOpenFile(target)}
-                  >
-                    {cell}
-                  </button>
-                );
-              })}
+        <div className="pp-section" data-testid="project-modules">
+          <div className="pp-sec-head">
+            <span className="pp-sec-title">{t('project.modules')}</span>
+            <span className="sp" />
+            <button type="button" className="pp-path" onClick={() => onOpenFile('.dev/PROJECT.md')}>
+              {t('project.modulesSource')}
+            </button>
+          </div>
+          <div className="pp-sec-body">
+            <div className="pp-table">
+              {modules.map((row) => (
+                <div key={row.cells.join('|')} className="pp-tr">
+                  {row.cells.map((cell, index) => {
+                    const target = cellPath(cell);
+                    return (
+                      <span key={`${String(index)}-${cell}`} className="pp-td">
+                        {target === undefined ? (
+                          cell
+                        ) : (
+                          <button
+                            type="button"
+                            className="pp-path"
+                            data-testid="project-module-link"
+                            onClick={() => onOpenFile(target)}
+                          >
+                            {cell.replace(/^`|`$/g, '')}
+                          </button>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+              ))}
             </div>
-          ))}
-          <button type="button" className="lnk" onClick={() => onOpenFile('.dev/PROJECT.md')}>
-            {t('project.modulesSource')}
-          </button>
+          </div>
         </div>
       )}
 
       {early.length > 0 && (
-        <div className="sec" data-testid="project-early">
-          <div className="sh">{t('project.earlyFiles')}</div>
-          {early.map((path) => (
-            <button key={path} type="button" className="lnk" onClick={() => onOpenFile(path)}>
-              {path}
-            </button>
-          ))}
+        <div className="pp-section" data-testid="project-early">
+          <div className="pp-sec-head">
+            <span className="pp-sec-title">{t('project.earlyFiles')}</span>
+          </div>
+          <div className="pp-sec-body">
+            <div className="pp-links">
+              {early.map((path) => (
+                <button key={path} type="button" className="pp-path" onClick={() => onOpenFile(path)}>
+                  {path}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 

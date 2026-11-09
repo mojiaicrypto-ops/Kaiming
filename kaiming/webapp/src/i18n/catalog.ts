@@ -280,6 +280,7 @@ const en = {
   // ---------- project page / backlog ----------
   'nav.project': 'Project',
   'project.pageTitle': 'Project',
+  'project.subtitle': 'What needs fixing, what is running, and what to do next — read from the project files.',
   'project.noProject': 'No project is open yet.',
   'project.readFailed': 'Could not read the backlog: {reason}',
   'project.tasksReadFailed': 'Could not read Tasks: {reason}',
@@ -842,6 +843,7 @@ export const zhCN: Record<MessageKey, string> = {
   // ---------- project page / backlog ----------
   'nav.project': '项目',
   'project.pageTitle': '项目',
+  'project.subtitle': '哪里需要修复、什么在跑、下一步做什么——都直接来自项目文件。',
   'project.noProject': '还没有打开项目。',
   'project.readFailed': '读取待办失败：{reason}',
   'project.tasksReadFailed': '读取 Task 失败：{reason}',

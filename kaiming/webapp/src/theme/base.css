@@ -3842,3 +3842,319 @@ details > summary {
   font-family: inherit;
   font-size: var(--fs-13);
 }
+
+/* Project page: a read-only projection of the project files. Panels, not a list: the page answers
+   "what is wrong, what is running, what is next" in that order, and every panel owns one question. */
+.pp {
+  min-height: 0;
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: var(--s6) var(--s8) var(--s12);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s6);
+  overflow: auto;
+}
+.pp-head {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s4);
+  flex-wrap: wrap;
+}
+.pp-head h1 {
+  margin: 0;
+  font-size: var(--fs-20);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.pp-sub {
+  flex: 1 1 260px;
+  min-width: 0;
+  color: var(--fg-3);
+  font-size: var(--fs-13);
+  line-height: 1.5;
+}
+.pp-section {
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.pp-sec-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-width: 0;
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line);
+}
+.pp-sec-title {
+  color: var(--fg-2);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.pp-count {
+  flex: none;
+  padding: 0 var(--s2);
+  border: 1px solid var(--line);
+  color: var(--fg-3);
+  font-family: var(--mono);
+  font-size: var(--fs-12);
+  line-height: 18px;
+}
+.pp-sec-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s2) var(--s4) var(--s4);
+}
+.pp-empty {
+  padding: var(--s4) 0 var(--s2);
+  color: var(--fg-3);
+  font-size: var(--fs-13);
+}
+.pp-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--block);
+  background: color-mix(in srgb, var(--block) 6%, var(--surface));
+}
+.pp-alert-head {
+  flex: 1 1 240px;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+  font-size: var(--fs-13);
+}
+.pp-alert-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--block);
+  color: var(--block);
+  font-family: var(--mono);
+  font-size: var(--fs-12);
+}
+.pp-issues {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+.pp-issue {
+  padding: var(--s1) 0;
+  color: var(--fg-2);
+  font-family: var(--mono);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+.pp-issue:hover {
+  color: var(--fg);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.pp-row {
+  display: grid;
+  grid-template-columns: minmax(84px, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s3);
+  width: 100%;
+  padding: var(--s2);
+  color: var(--fg);
+}
+.pp-list > .pp-row + .pp-row {
+  border-top: 1px solid var(--line);
+}
+.pp-row:hover {
+  background: var(--sel);
+}
+.pp-row[aria-selected="true"] {
+  background: var(--sel);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.pp-id {
+  color: var(--fg-3);
+  font-family: var(--mono);
+  font-size: var(--fs-12);
+  white-space: nowrap;
+}
+.pp-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pp-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  color: var(--fg-3);
+  font-size: var(--fs-12);
+}
+.pp-tag {
+  padding: 0 var(--s2);
+  border: 1px solid var(--line-strong);
+  color: var(--fg-2);
+  font-size: var(--fs-12);
+  line-height: 18px;
+  white-space: nowrap;
+}
+.pp-tag.decide {
+  border-color: var(--decide);
+  color: var(--decide);
+}
+.pp-compose {
+  display: flex;
+  gap: var(--s2);
+  padding: var(--s3) var(--s4) 0;
+}
+.pp-compose .inp {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.pp-group {
+  display: flex;
+  flex-direction: column;
+}
+.pp-group + .pp-group {
+  margin-top: var(--s4);
+}
+.pp-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) 0;
+  color: var(--fg-2);
+  font-size: var(--fs-12);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.pp-group-head .pp-count {
+  line-height: 16px;
+}
+.pp-closed {
+  margin-top: var(--s3);
+}
+.pp-closed > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin: 0;
+  padding: var(--s2) 0;
+  color: var(--fg-2);
+  font-size: var(--fs-12);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.pp-table {
+  display: flex;
+  flex-direction: column;
+}
+.pp-tr {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--s3);
+  align-items: baseline;
+  padding: var(--s2) 0;
+  font-size: var(--fs-13);
+}
+.pp-list > .pp-tr + .pp-tr,
+.pp-table > .pp-tr + .pp-tr {
+  border-top: 1px solid var(--line);
+}
+.pp-td {
+  min-width: 0;
+  color: var(--fg-2);
+  overflow-wrap: anywhere;
+}
+.pp-td:first-child {
+  color: var(--fg);
+  font-weight: 600;
+}
+.pp-path {
+  max-width: 100%;
+  color: var(--fg-2);
+  font-family: var(--mono);
+  font-size: var(--fs-12);
+  border-bottom: 1px solid var(--line-strong);
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.pp-path:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.pp-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s4);
+}
+.pp-links .pp-path {
+  border-bottom: 0;
+}
+.pp-links .pp-path:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.pp-note {
+  padding-top: var(--s2);
+  color: var(--fg-3);
+  font-size: var(--fs-12);
+}
+.pp-details {
+  margin-top: var(--s2);
+}
+.pp-details > summary {
+  margin: 0;
+  padding: var(--s2) 0;
+  color: var(--fg-3);
+  font-size: var(--fs-12);
+}
+
+@media (max-width: 700px) {
+  .pp {
+    padding: var(--s4);
+    gap: var(--s4);
+  }
+  .pp-head {
+    align-items: flex-start;
+  }
+  .pp-row {
+    grid-template-columns: 1fr;
+    gap: var(--s1);
+  }
+  .pp-meta {
+    justify-content: flex-start;
+  }
+  .pp-tr {
+    grid-template-columns: 1fr;
+    gap: var(--s1);
+  }
+  .pp-sec-head {
+    padding: var(--s3);
+  }
+  .pp-sec-body {
+    padding: var(--s2) var(--s3) var(--s3);
+  }
+  .pp-compose {
+    padding: var(--s3) var(--s3) 0;
+  }
+}
+
+/* An empty return: one line, not a panel that pretends to hold something. */
+.pp-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: 0 var(--s2);
+  color: var(--fg-3);
+  font-size: var(--fs-13);
+}
