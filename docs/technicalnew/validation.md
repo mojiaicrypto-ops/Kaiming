@@ -717,6 +717,9 @@
 | WP-4 | `backlog.list/get/add/update/close/reopen`、`interaction.list` 项目级、MCP 只读 `kaiming_backlog` | 定向 44 用例；2 项负向控制 |
 | WP-5 | `/project` 项目页、待办抽屉、`ToolBacklog`、Task 详情 `scopeCheck`、导航/路由/文案 | webapp 108 用例、构建、1 条聚焦浏览器路径 |
 | WP-6 | 角色工具集与提示词正文切换到 `backlog`，删除 `requirementId` 参数 | `check:prompts` 15/15；服务端全量 |
-| WP-7 | 删除需求存储/工具/页/MCP 工具与其 RPC、未用 `req.*` 文案 | 服务端 59 文件 566 用例、webapp 16 文件 108 用例、浏览器 66 用例通过；`tsc --noEmit` 通过 |
+| WP-7 | 删除需求存储/工具/页/MCP 工具与其 RPC、未用 `req.*` 文案 | 服务端 59 文件 565 用例、webapp 16 文件 109 用例、浏览器 67 用例通过；`tsc --noEmit` 通过 |
+| WP-8（程序侧） | 真实模型（deepseek/deepseek-flash）：`check:workflow` 8/8、`check:backlog` 4/4、`check:runtime` 4/4、`check:tools` 4/4、`check:model` 4/4 | 见下方真实模型证据 |
 
-**未覆盖**：真实模型下的产品验收尚未执行——J-12/J-13、AC-07/08/10/19/23/26/29/30/34、AC-51～AC-58 需要可用模型与人工决定（夹具与浏览器用例只覆盖程序可靠性）；`check:model` 中本轮新增检查项与 WP-8 的度量（验收/范围比例、越界合理性）未运行。`claimBacklogItems` 的跨进程并发未做实验（进程内 `createTask` 是同步事务）。
+**真实模型证据（2026-11-09）**：`npm run check:workflow` 让真实主管完成 create → develop → review → test → settlement → end；其中一次 `task` 调用因 Plan 缺「验收」被程序拒绝，模型补上后继续，最终 8/8 通过（含交付文件、测试真实运行、报告齐备）。新增 `npm run check:backlog` 4/4 通过：`project(op=initialize)` 写出的记录含模块表（`.dev/PROJECT.md` 的 `## Modules`）、两条待办经 `backlog(op=add)` 写入而非 bash、人为制造的重复编号由 `backlog(op=edit)` 修好（B-3）且未重写文件。
+
+**未覆盖**：产品验收（J-12/J-13 的界面走查，AC-07/08/10/19/23/26/29/30/34、AC-51～AC-58）仍需按 [acceptance](../productnew/acceptance.md) 人工执行；本轮的证据是真实模型下的程序路径，不等于用户可见验收。WP-8 的度量（验收/范围比例、越界合理性）未采集。`claimBacklogItems` 的跨进程并发未做实验（进程内 `createTask` 是同步事务）；设计产多切片时以待决问题请用户确认这一条只有提示词约束，无真实模型观察。
