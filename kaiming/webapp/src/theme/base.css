@@ -3868,12 +3868,40 @@ details > summary {
   font-weight: 600;
   letter-spacing: -0.01em;
 }
-.pp-sub {
-  flex: 1 1 260px;
+.pp-ident {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   min-width: 0;
+}
+.pp-stats {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+.pp-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s2);
+  padding: var(--s1) var(--s3);
+  border: 1px solid var(--line);
   color: var(--fg-3);
-  font-size: var(--fs-13);
-  line-height: 1.5;
+  font-size: var(--fs-12);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.pp-stat b {
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: var(--fs-14);
+}
+.pp-stat.decide {
+  border-color: var(--decide);
+  color: var(--decide);
+}
+.pp-stat.decide b {
+  color: var(--decide);
 }
 .pp-section {
   border: 1px solid var(--line);
@@ -4011,6 +4039,10 @@ details > summary {
   border-color: var(--decide);
   color: var(--decide);
 }
+.pp-go {
+  color: var(--fg-3);
+  font-family: var(--mono);
+}
 .pp-compose {
   display: flex;
   gap: var(--s2);
@@ -4079,6 +4111,17 @@ details > summary {
   color: var(--fg);
   font-weight: 600;
 }
+.pp-th .pp-td {
+  color: var(--fg-3);
+  font-size: var(--fs-12);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.pp-th {
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--line);
+}
 .pp-path {
   max-width: 100%;
   color: var(--fg-2);
@@ -4130,6 +4173,7 @@ details > summary {
   .pp-row {
     grid-template-columns: 1fr;
     gap: var(--s1);
+    padding: var(--s3) var(--s2);
   }
   .pp-meta {
     justify-content: flex-start;
@@ -4147,14 +4191,4 @@ details > summary {
   .pp-compose {
     padding: var(--s3) var(--s3) 0;
   }
-}
-
-/* An empty return: one line, not a panel that pretends to hold something. */
-.pp-line {
-  display: flex;
-  align-items: center;
-  gap: var(--s3);
-  padding: 0 var(--s2);
-  color: var(--fg-3);
-  font-size: var(--fs-13);
 }

@@ -140,10 +140,16 @@ export function useBacklog(rpc: RpcClient, projectId: string): {
 export function usePendingInteractions(
   rpc: RpcClient,
   projectId: string,
-): { readonly byTask: ReadonlyMap<string, PendingInteractionView>; readonly reload: () => Promise<void> } {
+): {
+  readonly all: readonly PendingInteractionView[];
+  readonly byTask: ReadonlyMap<string, PendingInteractionView>;
+  readonly reload: () => Promise<void>;
+} {
+  const [all, setAll] = useState<readonly PendingInteractionView[]>([]);
   const [byTask, setByTask] = useState<ReadonlyMap<string, PendingInteractionView>>(new Map());
   const reload = useCallback(async (): Promise<void> => {
     if (projectId === '') {
+      setAll([]);
       setByTask(new Map());
       return;
     }
@@ -157,6 +163,7 @@ export function usePendingInteractions(
           next.set(interaction.taskId, interaction);
         }
       }
+      setAll(read.interactions);
       setByTask(next);
     } catch {
       // A failed read must not invent a decision: keep the last known markers and let the next
@@ -164,7 +171,7 @@ export function usePendingInteractions(
     }
   }, [rpc, projectId]);
   useVisiblePoll(reload);
-  return { byTask, reload };
+  return { all, byTask, reload };
 }
 
 /** The project knowledge file, read as text: the module section is rendered from it verbatim. */
@@ -206,15 +213,34 @@ export function groupsOf(items: readonly BacklogItemView[]): {
   };
 }
 
+/**
+ * The page's name for the project: the first level-1 heading of PROJECT.md, unless it is missing,
+ * generic, or absurdly long. The directory name is the honest fallback — a temporary checkout
+ * should not turn into a title.
+ */
+export function projectNameFrom(markdown: string | null, fallback: string): string {
+  const line = markdown?.split(/\r?\n/).find((entry) => /^#\s+\S/.test(entry.trim()));
+  if (line === undefined) return fallback;
+  const title = line.trim().replace(/^#\s+/, '').trim();
+  if (title === '' || title.length > 80 || /^(项目|project)$/i.test(title)) return fallback;
+  return title;
+}
+
 export interface ModuleRow {
   readonly cells: readonly string[];
+}
+
+/** The table's own header row plus its body: a table without headings hides what the columns mean. */
+export interface ModuleTable {
+  readonly headers: readonly string[];
+  readonly rows: readonly ModuleRow[];
 }
 
 /**
  * The「模块」section of `.dev/PROJECT.md`, as its first Markdown table. Returns null when the
  * section or the table is absent: the page then simply has no module block (BL-04).
  */
-export function moduleRows(markdown: string | null): readonly ModuleRow[] | null {
+export function moduleTable(markdown: string | null): ModuleTable | null {
   if (markdown === null) return null;
   const lines = markdown.split(/\r?\n/);
   const start = lines.findIndex((line) => /^#{2,3}\s+(模块|modules)\s*$/i.test(line.trim()));
@@ -245,7 +271,8 @@ export function moduleRows(markdown: string | null): readonly ModuleRow[] | null
     if (cells.every((cell) => /^:?-{2,}:?$/.test(cell))) continue;
     rows.push({ cells });
   }
-  return rows.slice(1);
+  const headers = rows[0];
+  return headers === undefined ? null : { headers: headers.cells, rows: rows.slice(1) };
 }
 
 /**

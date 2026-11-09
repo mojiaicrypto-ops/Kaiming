@@ -8,7 +8,8 @@ import { BacklogDrawer } from './BacklogDrawer';
 import {
   cellPath,
   groupsOf,
-  moduleRows,
+  moduleTable,
+  projectNameFrom,
   useBacklog,
   usePendingInteractions,
   useProjectText,
@@ -19,6 +20,8 @@ import {
 export interface ProjectPageProps {
   readonly rpc: RpcClient;
   readonly projectId: string;
+  /** The project's directory name and path: the page is about a project, not about a route. */
+  readonly projectName: string;
   readonly selected: string | null;
   readonly onSelect: (id: string | null) => void;
   readonly onNotice: (message: string, kind: 'info' | 'success' | 'error') => void;
@@ -52,6 +55,7 @@ function statusKeyOf(
 export function ProjectPage({
   rpc,
   projectId,
+  projectName,
   selected,
   onSelect,
   onNotice,
@@ -93,7 +97,8 @@ export function ProjectPage({
   const groups = useMemo(() => groupsOf(backlog.data.items), [backlog.data.items]);
   const running = tasks.tasks.filter((task) => HOLDS_SLOT.has(task.status));
   const recent = tasks.tasks.find((task) => FINISHED.has(task.status));
-  const modules = moduleRows(project.text);
+  const modules = moduleTable(project.text);
+  const projectTitle = projectNameFrom(project.text, projectName);
   const item: BacklogItemView | undefined =
     selected === null ? undefined : backlog.data.items.find((entry) => entry.id === selected);
 
@@ -124,8 +129,10 @@ export function ProjectPage({
   return (
     <section className="pp" data-testid="project-page">
       <div className="pp-head">
-        <h1>{t('project.pageTitle')}</h1>
-        <div className="pp-sub">{t('project.subtitle')}</div>
+        <div className="pp-ident">
+          <h1>{projectTitle}</h1>
+        </div>
+        <span className="sp" />
         <button
           type="button"
           className="btn ghost"
@@ -136,6 +143,25 @@ export function ProjectPage({
         >
           {t('common.retry')}
         </button>
+      </div>
+
+      <div className="pp-stats" data-testid="project-stats">
+        <span className="pp-stat">
+          <b>{groups.ready.length}</b>
+          {t('backlog.ready')}
+        </span>
+        <span className="pp-stat">
+          <b>{running.length}</b>
+          {t('project.progress')}
+        </span>
+        <span className={`pp-stat${pending.all.length > 0 ? ' decide' : ''}`}>
+          <b>{pending.all.length}</b>
+          {t('project.deciding')}
+        </span>
+        <span className="pp-stat">
+          <b>{groups.ideas.length}</b>
+          {t('backlog.ideas')}
+        </span>
       </div>
 
       {backlog.error !== null && (
@@ -149,18 +175,34 @@ export function ProjectPage({
         </div>
       )}
 
-      {backlog.data.issues.length > 0 && (
-        <div className="pp-alert" data-testid="project-issues">
+      {(pending.all.length > 0 || backlog.data.issues.length > 0) && (
+        <div
+          className="pp-alert"
+          data-testid={backlog.data.issues.length > 0 ? 'project-issues' : 'project-attention'}
+        >
           <div className="pp-alert-head">
             <span className="pp-alert-icon" aria-hidden="true">
               !
             </span>
-            <span>{t('project.issues', { count: backlog.data.issues.length })}</span>
+            <span>{t('project.attention', { count: pending.all.length + backlog.data.issues.length })}</span>
           </div>
-          <button type="button" className="btn ghost" onClick={() => onOpenFile('.dev/backlog.md')}>
-            {t('project.openBacklog')}
-          </button>
+          {backlog.data.issues.length > 0 && (
+            <button type="button" className="btn ghost" onClick={() => onOpenFile('.dev/backlog.md')}>
+              {t('project.openBacklog')}
+            </button>
+          )}
           <div className="pp-issues">
+            {pending.all.map((question) => (
+              <button
+                key={question.interactionId}
+                type="button"
+                className="pp-issue"
+                data-testid="project-question"
+                onClick={() => onOpenTaskSession(question.sourceSessionId)}
+              >
+                {t('project.waitingForYou', { title: question.title })}
+              </button>
+            ))}
             {backlog.data.issues.map((issue) => (
               <button
                 key={`${String(issue.line)}-${issue.reason}`}
@@ -176,16 +218,16 @@ export function ProjectPage({
         </div>
       )}
 
-      {running.length === 0 && recent === undefined && tasks.tasks.length === 0 ? (
-        <div className="pp-line" data-testid="project-progress">
-          <span className="pp-sec-title">{t('project.progress')}</span>
-          <span>{t('project.progressEmpty')}</span>
-        </div>
-      ) : (
+      {tasks.tasks.length > 0 && (
       <div className="pp-section" data-testid="project-progress">
         <div className="pp-sec-head">
           <span className="pp-sec-title">{t('project.progress')}</span>
           <span className="pp-count">{running.length}</span>
+          {pending.byTask.size > 0 && (
+            <span className="pp-tag decide">
+              {t('project.deciding')} {pending.byTask.size}
+            </span>
+          )}
         </div>
         <div className="pp-sec-body">
           {running.length === 0 && <div className="pp-empty">{t('project.progressEmpty')}</div>}
@@ -198,7 +240,7 @@ export function ProjectPage({
                   type="button"
                   className="pp-row"
                   data-testid="project-task"
-                  onClick={() => onOpenTaskSession(task.chiefSessionId)}
+                  onClick={() => onOpenTaskSession(deciding?.sourceSessionId ?? task.chiefSessionId)}
                 >
                   <span className="pp-id">{task.taskId}</span>
                   <span className="pp-title">{task.goal}</span>
@@ -209,6 +251,7 @@ export function ProjectPage({
                         {t('project.deciding')}
                       </span>
                     )}
+                    <span className="pp-go" aria-hidden="true">›</span>
                   </span>
                 </button>
               );
@@ -237,6 +280,7 @@ export function ProjectPage({
                       <span className="pp-title">{task.goal}</span>
                       <span className="pp-meta">
                         {phaseLabel(task.phase)} · {t(statusKeyOf(task.status))}
+                        <span className="pp-go" aria-hidden="true">›</span>
                       </span>
                     </button>
                   ))}
@@ -271,7 +315,8 @@ export function ProjectPage({
           </button>
         </div>
         <div className="pp-sec-body">
-          {[
+          {groups.ready.length + groups.ideas.length === 0 && <div className="pp-empty">{t('backlog.none')}</div>}
+          {groups.ready.length + groups.ideas.length > 0 && [
             { key: 'backlog.ready' as const, rows: groups.ready },
             { key: 'backlog.ideas' as const, rows: groups.ideas },
           ].map((group) => (
@@ -280,7 +325,6 @@ export function ProjectPage({
                 {t(group.key)}
                 <span className="pp-count">{group.rows.length}</span>
               </div>
-              {group.rows.length === 0 && <div className="pp-empty">{t('backlog.none')}</div>}
               <div className="pp-list">
                 {group.rows.map((row) => (
                   <button
@@ -305,6 +349,7 @@ export function ProjectPage({
                           {t('backlog.previousCancelled')}
                         </span>
                       )}
+                      <span className="pp-go" aria-hidden="true">›</span>
                     </span>
                   </button>
                 ))}
@@ -330,6 +375,7 @@ export function ProjectPage({
                     <span className="pp-title">{row.title}</span>
                     <span className="pp-meta">
                       {row.state === 'dropped' ? t('backlog.stateDropped') : t('backlog.stateDone')}
+                      <span className="pp-go" aria-hidden="true">›</span>
                     </span>
                   </button>
                 ))}
@@ -350,7 +396,14 @@ export function ProjectPage({
           </div>
           <div className="pp-sec-body">
             <div className="pp-table">
-              {modules.map((row) => (
+              <div className="pp-tr pp-th">
+                {modules.headers.map((cell, index) => (
+                  <span key={`h-${String(index)}-${cell}`} className="pp-td">
+                    {cell}
+                  </span>
+                ))}
+              </div>
+              {modules.rows.map((row) => (
                 <div key={row.cells.join('|')} className="pp-tr">
                   {row.cells.map((cell, index) => {
                     const target = cellPath(cell);

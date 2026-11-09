@@ -245,6 +245,7 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
           <ProjectPage
             rpc={rpc}
             projectId={workspace.projectId}
+            projectName={(workspace.project?.realPath ?? '').split('/').filter(Boolean).at(-1) ?? t('project.pageTitle')}
             selected={route.selected}
             onSelect={(id) => navigate(id === null ? '/project' : `/project?selected=${encodeURIComponent(id)}`)}
             onNotice={notify}
