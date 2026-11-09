@@ -167,7 +167,7 @@ Durable 使用 pi-ai + Chord 的独立 Harness。这里使用 coding-agent SDK�
 ```text
 TaskSummary {
   schemaVersion: 1
-  taskId, projectId(本机), type, status, createdAt, endedAt
+  taskId, projectId(本机), type, workKind, status, phase, reworkCount, createdAt, endedAt
   actorId
   backlogIds[]
   goal, acceptance(Plan 验收一节原文), scopeDeclared[], outOfScope[]

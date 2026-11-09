@@ -4192,3 +4192,108 @@ details > summary {
     padding: var(--s3) var(--s3) 0;
   }
 }
+
+/* Project board: four derived lanes; cards are facts, not drag targets. */
+.pp-board {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s3);
+  align-items: start;
+}
+.pp-lane {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.pp-lane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  padding: var(--s3);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--muted);
+}
+.pp-lane-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s2);
+  min-height: 64px;
+}
+.pp-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  width: 100%;
+  padding: var(--s3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.pp-card:hover {
+  background: var(--sel);
+}
+.pp-card-h {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  min-width: 0;
+}
+.pp-card-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pp-chain {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.pp-chip {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--fs-11);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.pp-chip.done {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+}
+.pp-chip.current {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.pp-chip.planned {
+  border-style: dashed;
+  opacity: 0.72;
+}
+.pp-tag.wait {
+  color: var(--warning);
+}
+@media (max-width: 1100px) {
+  .pp-board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 640px) {
+  .pp-board {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: var(--s2);
+  }
+  .pp-lane {
+    flex: 0 0 82vw;
+  }
+}

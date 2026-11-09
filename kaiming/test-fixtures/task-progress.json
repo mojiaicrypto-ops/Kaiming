@@ -344,6 +344,111 @@
       ],
       "stepsDone": 3,
       "stepsTotal": 5
+    },
+    {
+      "name": "design Task starts at its own chain",
+      "task": {
+        "type": "write",
+        "workKind": "design",
+        "phase": "design",
+        "status": "active",
+        "requiresTest": false
+      },
+      "members": [],
+      "steps": [
+        {
+          "phase": "design",
+          "round": 1,
+          "state": "in_progress"
+        },
+        {
+          "phase": "review",
+          "round": 1,
+          "state": "planned"
+        },
+        {
+          "phase": "settle",
+          "round": 1,
+          "state": "planned"
+        }
+      ],
+      "stepsDone": 0,
+      "stepsTotal": 3
+    },
+    {
+      "name": "J-10 supplement returns to develop after design",
+      "task": {
+        "type": "write",
+        "workKind": "implement",
+        "phase": "design",
+        "status": "active",
+        "requiresTest": true
+      },
+      "members": [],
+      "steps": [
+        {
+          "phase": "design",
+          "round": 1,
+          "state": "in_progress"
+        },
+        {
+          "phase": "develop",
+          "round": 1,
+          "state": "planned"
+        },
+        {
+          "phase": "review",
+          "round": 1,
+          "state": "planned"
+        },
+        {
+          "phase": "test",
+          "round": 1,
+          "state": "planned"
+        },
+        {
+          "phase": "settle",
+          "round": 1,
+          "state": "planned"
+        }
+      ],
+      "stepsDone": 0,
+      "stepsTotal": 5
+    },
+    {
+      "name": "document Task plans design before review",
+      "task": {
+        "type": "write",
+        "workKind": "document",
+        "phase": "plan",
+        "status": "active",
+        "requiresTest": false
+      },
+      "members": [],
+      "steps": [
+        {
+          "phase": "plan",
+          "round": 1,
+          "state": "in_progress"
+        },
+        {
+          "phase": "design",
+          "round": 1,
+          "state": "planned"
+        },
+        {
+          "phase": "review",
+          "round": 1,
+          "state": "planned"
+        },
+        {
+          "phase": "settle",
+          "round": 1,
+          "state": "planned"
+        }
+      ],
+      "stepsDone": 0,
+      "stepsTotal": 4
     }
   ]
 }

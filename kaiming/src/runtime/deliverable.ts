@@ -90,6 +90,24 @@ export function snapshotDelivery(cwd: string, excludePaths: readonly string[] = 
   return { digest: digestOfPaths(cwd, paths), paths };
 }
 
+/**
+ * The files a main design Task is reviewed against. `.dev/backlog.md` is excluded because
+ * settlement legitimately closes the original item after Review; `.dev/work` and legacy records are
+ * host/evidence files, not design output.
+ */
+export function snapshotDesignDelivery(cwd: string, excludePaths: readonly string[] = []): DeliveryState {
+  const excluded = new Set(excludePaths.map((path) => normalize(path)));
+  const observed: string[] = [];
+  for (const dir of ['.dev/product', '.dev/technical']) {
+    collect(cwd, dir, new Set(), observed);
+  }
+  for (const file of ['AGENTS.md', '.dev/INDEX.md', '.dev/PROJECT.md']) {
+    if (isObservedFile(cwd, file)) observed.push(file);
+  }
+  const paths = [...new Set(observed)].filter((path) => !excluded.has(normalize(join(cwd, path)))).sort();
+  return { digest: digestOfPaths(cwd, paths), paths };
+}
+
 /** Recompute the digest of the very paths a report covered (missing files count as changed). */
 export function digestOfPaths(cwd: string, paths: readonly string[]): string {
   const lines = [...paths].sort().map((path) => `${path}\0${hashFile(join(cwd, path))}`);

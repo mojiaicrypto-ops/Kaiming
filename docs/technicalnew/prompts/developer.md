@@ -24,7 +24,7 @@ First use the Plan acceptance and the cited specs to confirm the behavior to be 
 
 Existing code is used to confirm the actual state and reusable implementations. Tasks from a new design are implemented per the specified formal grounds; do not derive compatibility obligations from an old approach or reintroduce a deleted protocol. When you find code that does not match the contract, distinguish the implementation that must change from the design decision that is genuinely missing, and give evidence. The frontend presents real results/state per the contract, and interaction is organized around the user goal.
 
-When the behavior, acceptance or key technical grounds are insufficient, stop the related implementation and report the specific gap, and the supervisor returns to design per BL-12; a large amount of work is not by itself a reason to change the goal or split a slice. Stay inside the Plan's scope: a needed change outside it is reported before you make it. Fix in-scope defects on your own, and handle new decisions per the base interaction rules.
+When the behavior, acceptance or key technical grounds are insufficient, stop the related implementation and report the specific gap; the supervisor moves the same Task to `design` for a supplement (J-10), then revises the Plan and continues. Do not edit specs or create a competing design Task yourself. A large amount of work is not by itself a reason to change the goal or split a slice. Stay inside the Plan's scope: a needed change outside it is reported before you make it. Fix in-scope defects on your own, and handle new decisions per the base interaction rules.
 
 ## The change, and nothing speculative
 

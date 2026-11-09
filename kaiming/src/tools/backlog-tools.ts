@@ -36,7 +36,7 @@ export interface BacklogToolContext {
    * Association facts come from the database (WP-3). Until that wiring exists this is absent and the
    * tool reports no associated Task; the shape is already the one the UI needs.
    */
-  readonly tasksOf?: (backlogId: string) => {
+  readonly tasksOf?: (backlogId: string, taskIds?: readonly string[]) => {
     readonly open: readonly BacklogTaskRef[];
     readonly lastClosed?: BacklogTaskRef;
   };
@@ -70,7 +70,7 @@ function itemView(
   issues: BacklogReadResult['issues'],
   warnings: BacklogReadResult['warnings'],
 ): Record<string, unknown> {
-  const tasks = context.tasksOf?.(item.id);
+  const tasks = context.tasksOf?.(item.id, item.taskIds);
   const ownIssues = issues.filter((issue) => issue.id === item.id);
   const ownWarnings = warnings.filter((issue) => issue.id === item.id);
   return {
@@ -236,6 +236,9 @@ export function createBacklogTool(contextOf: BacklogToolContextResolver): Domain
             ...(readStringArray(params, 'specRefs') === undefined
               ? {}
               : { specRefs: readStringArray(params, 'specRefs') ?? [] }),
+            ...(context.currentTaskId !== undefined && (context.roleId === 'designer' || context.roleId === 'settler')
+              ? { taskIds: [context.currentTaskId] }
+              : {}),
             source: sourceOf(context),
             actorId: context.actorId,
           });

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useI18n } from '../i18n/I18nProvider';
 import { Drawer } from '../app/Drawer';
-import { isVersionConflict, parseSpecRefs, type BacklogItemView } from './project-model';
+import { awaitingDesign, isVersionConflict, parseSpecRefs, type BacklogItemView } from './project-model';
 
 export interface BacklogDrawerProps {
   readonly item: BacklogItemView;
@@ -16,6 +16,7 @@ export interface BacklogDrawerProps {
   /** Hands a request to the chief composer: the drawer never starts work by itself. */
   readonly onHandOff: (text: string) => void;
   readonly onOpenRef: (ref: string) => void;
+  readonly onOpenTask: (sessionId: string) => void;
   readonly onNotice: (message: string, kind: 'info' | 'success' | 'error') => void;
 }
 
@@ -31,6 +32,7 @@ export function BacklogDrawer({
   onReopen,
   onHandOff,
   onOpenRef,
+  onOpenTask,
   onNotice,
 }: BacklogDrawerProps) {
   const { t } = useI18n();
@@ -108,6 +110,7 @@ export function BacklogDrawer({
   };
 
   const open = item.state === 'open';
+  const waitingDesign = awaitingDesign(item);
 
   return (
     <Drawer
@@ -120,7 +123,14 @@ export function BacklogDrawer({
             {t('backlog.discuss')}
           </button>
           {open ? (
-            <button type="button" className="btn pri" data-testid="backlog-implement" onClick={() => onHandOff(`实施 ${item.id}`)}>
+            <button
+              type="button"
+              className="btn pri"
+              data-testid="backlog-implement"
+              disabled={waitingDesign}
+              title={waitingDesign ? t('project.awaitingDesign') : undefined}
+              onClick={() => onHandOff(`实施 ${item.id}`)}
+            >
               {t('backlog.implement')}
             </button>
           ) : (
@@ -206,6 +216,38 @@ export function BacklogDrawer({
         )}
         {item.note !== undefined && <div className="f3">{t('backlog.noteValue', { note: item.note })}</div>}
         {item.source !== undefined && <div className="f3">{t('backlog.sourceValue', { source: item.source })}</div>}
+        {(item.relatedTasks ?? []).length > 0 && (
+          <div className="pp-list" data-testid="backlog-lineage">
+            {(item.relatedTasks ?? []).map((task) => (
+              <button
+                key={task.taskId}
+                type="button"
+                className="lnk"
+                onClick={() => {
+                  if (task.chiefSessionId !== undefined) onOpenTask(task.chiefSessionId);
+                }}
+              >
+                {task.taskId} ·{' '}
+                {t(
+                  task.workKind === 'design'
+                    ? 'task.kind.design'
+                    : task.workKind === 'document'
+                      ? 'task.kind.document'
+                      : task.workKind === 'investigate'
+                        ? 'task.kind.investigate'
+                        : 'task.kind.implement',
+                )}{' '}
+                · {task.status}
+                {task.phase === undefined ? '' : ` · ${task.phase}`}
+              </button>
+            ))}
+          </div>
+        )}
+        {(item.splitInto ?? []).length > 0 && (
+          <div className="f3" data-testid="backlog-split-into">
+            {t('project.splitInto', { ids: (item.splitInto ?? []).join(', ') })}
+          </div>
+        )}
       </div>
 
       {open ? (

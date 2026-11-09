@@ -555,6 +555,7 @@ test('a rejected tool call stays visible with its reason', async ({ page }) => {
             arguments: JSON.stringify({
               op: 'create',
               type: 'write',
+              workKind: 'implement',
               goal: 'g',
               scope: 's',
               planMarkdown: '# p\n\n## 验收\n- ok\n',
@@ -720,6 +721,7 @@ test('a document Task draws the phases it really ran, not a code chain nobody ex
             arguments: JSON.stringify({
               op: 'create',
               type: 'write',
+              workKind: 'document',
               requiresTest: false,
               goal: '把产品文档按现行代码整理',
               scope: '.dev/product',
@@ -766,7 +768,7 @@ test('a Task member is not a conversation in the rail', async ({ page }) => {
   // as another chat (titled by its delegation body) made the rail unreadable in the real project.
   const harness = await startHarness({
     model: [
-      { kind: 'tool_calls', calls: [{ name: 'task', arguments: JSON.stringify({ op: 'create', type: 'write', requiresTest: false, goal: 'g', scope: 's', planMarkdown: '# p\n\n## 验收\n- ok\n' }) }] },
+      { kind: 'tool_calls', calls: [{ name: 'task', arguments: JSON.stringify({ op: 'create', type: 'write', workKind: 'implement', requiresTest: false, goal: 'g', scope: 's', planMarkdown: '# p\n\n## 验收\n- ok\n' }) }] },
       {
         kind: 'tool_calls',
         calls: [

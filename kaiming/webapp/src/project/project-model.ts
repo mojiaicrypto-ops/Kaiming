@@ -16,6 +16,11 @@ export interface BacklogIssueView {
 export interface BacklogTaskRef {
   readonly taskId: string;
   readonly status: string;
+  readonly workKind?: string;
+  readonly phase?: string;
+  readonly reworkCount?: number;
+  readonly requiresTest?: boolean;
+  readonly goal?: string;
   readonly chiefSessionId?: string;
 }
 
@@ -34,6 +39,9 @@ export interface BacklogItemView {
   readonly createdBy?: string;
   readonly closedBy?: string;
   readonly openTasks: readonly BacklogTaskRef[];
+  readonly producerTasks?: readonly BacklogTaskRef[];
+  readonly relatedTasks?: readonly BacklogTaskRef[];
+  readonly splitInto?: readonly string[];
   readonly lastClosedTask?: BacklogTaskRef;
   readonly problems: readonly BacklogIssueView[];
   readonly warnings: readonly BacklogIssueView[];
@@ -213,6 +221,104 @@ export function groupsOf(items: readonly BacklogItemView[]): {
   };
 }
 
+const OPEN_TASK = new Set(['active', 'waiting', 'pausing', 'paused', 'cancelling']);
+
+export interface ChainStep {
+  readonly key: string;
+  readonly gate?: boolean;
+  readonly state: 'done' | 'current' | 'planned';
+}
+
+export interface BoardItem {
+  readonly item: BacklogItemView;
+  readonly awaitingDesign: boolean;
+  readonly reworkCount: number;
+  readonly chain: readonly ChainStep[];
+}
+
+export interface BoardView {
+  readonly ideas: readonly BoardItem[];
+  readonly designing: readonly BoardItem[];
+  readonly ready: readonly BoardItem[];
+  readonly implementing: readonly BoardItem[];
+  readonly completed: readonly BacklogItemView[];
+}
+
+export function awaitingDesign(item: BacklogItemView): boolean {
+  return [...item.openTasks, ...(item.producerTasks ?? [])].some(
+    (task) => task.workKind === 'design' && OPEN_TASK.has(task.status),
+  );
+}
+
+export function flowChain(item: BacklogItemView, pending: boolean): readonly ChainStep[] {
+  const active = item.openTasks[0];
+  const kind = active?.workKind ?? (item.ready ? 'implement' : 'design');
+  const requiresTest = active?.requiresTest ?? true;
+  const phase = active?.phase ?? (kind === 'design' ? 'design' : 'plan');
+  const keys =
+    kind === 'design'
+      ? ['design', 'review', 'gate', 'settle']
+      : kind === 'document'
+        ? ['plan', 'design', 'review', 'settle']
+        : kind === 'investigate'
+          ? ['analyze', 'settle']
+          : phase === 'design'
+            ? ['design', 'develop', 'review', ...(requiresTest ? ['test'] : []), 'settle']
+            : ['plan', 'develop', 'review', ...(requiresTest ? ['test'] : []), 'settle'];
+  const current = keys.indexOf(phase);
+  return keys.map((key, index) => {
+    if (key === 'gate') {
+      const state = phase === 'settle' ? 'done' : pending ? 'current' : 'planned';
+      return { key, gate: true, state };
+    }
+    const state = index < current ? 'done' : index === current ? 'current' : 'planned';
+    return { key, state };
+  });
+}
+
+export function boardOf(items: readonly BacklogItemView[]): BoardView {
+  const board: { ideas: BoardItem[]; designing: BoardItem[]; ready: BoardItem[]; implementing: BoardItem[]; completed: BacklogItemView[] } = {
+    ideas: [],
+    designing: [],
+    ready: [],
+    implementing: [],
+    completed: [],
+  };
+  for (const item of items) {
+    if (item.state !== 'open') {
+      board.completed.push(item);
+      continue;
+    }
+    const active = item.openTasks[0];
+    const reworkCount = Math.max(0, ...(item.relatedTasks ?? []).map((task) => task.reworkCount ?? 0));
+    const card: BoardItem = {
+      item,
+      awaitingDesign: awaitingDesign(item),
+      reworkCount,
+      chain: flowChain(item, false),
+    };
+    if (active?.workKind === 'design') board.designing.push(card);
+    else if (active !== undefined) board.implementing.push(card);
+    else if (item.ready) board.ready.push(card);
+    else board.ideas.push(card);
+  }
+  return board;
+}
+
+export function directTasks(tasks: readonly TaskRowSummary[]): readonly TaskRowSummary[] {
+  return tasks.filter((task) => (task.backlogIds ?? []).length === 0 && OPEN_TASK.has(task.status));
+}
+
+export function orphanTasks(
+  tasks: readonly TaskRowSummary[],
+  items: readonly BacklogItemView[],
+): readonly TaskRowSummary[] {
+  const known = new Set(items.map((item) => item.id));
+  return tasks.filter(
+    (task) => OPEN_TASK.has(task.status) && (task.backlogIds ?? []).some((id) => !known.has(id)),
+  );
+}
+
 /**
  * The page's name for the project: the first level-1 heading of PROJECT.md, unless it is missing,
  * generic, or absurdly long. The directory name is the honest fallback — a temporary checkout
@@ -306,6 +412,11 @@ export interface TaskRowSummary {
   readonly taskId: string;
   readonly type: string;
   readonly phase: string;
+  readonly workKind?: string;
+  readonly flowVersion?: number;
+  readonly reworkCount?: number;
+  readonly requiresTest?: boolean;
+  readonly backlogIds?: readonly string[];
   readonly status: string;
   readonly goal: string;
   readonly chiefSessionId: string;

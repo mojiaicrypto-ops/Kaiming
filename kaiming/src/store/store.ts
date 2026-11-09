@@ -56,6 +56,33 @@ export type TaskPhase =
   | 'test'
   | 'settle';
 
+/** The completion chain a Task follows. It is not a user-facing task type: `type` stays read/write. */
+export type WorkKind = 'design' | 'implement' | 'document' | 'investigate';
+
+export const WORK_KINDS: readonly WorkKind[] = ['design', 'implement', 'document', 'investigate'];
+
+/** Canonical phase order per kind; a phase may move within this set, not outside it. */
+const WORK_KIND_PHASES: Readonly<Record<WorkKind, readonly TaskPhase[]>> = {
+  design: ['clarify', 'analyze', 'design', 'review', 'settle'],
+  implement: ['plan', 'design', 'develop', 'review', 'test', 'settle'],
+  document: ['plan', 'design', 'review', 'settle'],
+  investigate: ['clarify', 'analyze', 'design', 'plan', 'settle'],
+};
+
+/** Test is part of the implementation chain only when the Task declares it. */
+export function phasesFor(workKind: WorkKind, requiresTest: boolean): readonly TaskPhase[] {
+  const phases = WORK_KIND_PHASES[workKind];
+  return workKind === 'implement' && !requiresTest ? phases.filter((phase) => phase !== 'test') : phases;
+}
+
+export function initialPhaseFor(workKind: WorkKind): TaskPhase {
+  return workKind === 'design' ? 'design' : 'plan';
+}
+
+export function isWorkKind(value: string): value is WorkKind {
+  return (WORK_KINDS as readonly string[]).includes(value);
+}
+
 export type TaskStatus =
   | 'active'
   | 'waiting'
@@ -87,6 +114,9 @@ export interface TaskRow {
   readonly requirementId: string | null;
   readonly backlogIds: readonly string[];
   readonly type: TaskType;
+  readonly workKind: WorkKind;
+  readonly flowVersion: number;
+  readonly reworkCount: number;
   readonly requiresTest: boolean;
   readonly goal: string;
   readonly scope: string;
@@ -125,6 +155,9 @@ export interface CreateTaskParams {
   readonly backlogIds?: readonly string[];
   readonly type: TaskType;
   readonly requiresTest: boolean;
+  readonly workKind?: WorkKind;
+  readonly flowVersion?: number;
+  readonly initialPhase?: TaskPhase;
   readonly goal: string;
   readonly scope: string;
   readonly acceptanceRefs: readonly string[];
@@ -393,7 +426,7 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -518,6 +551,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   requirementId TEXT,
   backlogIds TEXT NOT NULL DEFAULT '[]',
   type TEXT NOT NULL,
+  workKind TEXT NOT NULL DEFAULT 'implement',
+  flowVersion INTEGER NOT NULL DEFAULT 0,
+  reworkCount INTEGER NOT NULL DEFAULT 0,
   requiresTest INTEGER NOT NULL,
   goal TEXT NOT NULL,
   scope TEXT NOT NULL,
@@ -2395,6 +2431,12 @@ export class Store {
         taskId: params.id,
       });
     }
+    const workKind = params.workKind ?? (params.type === 'read' ? 'investigate' : 'implement');
+    if (workKind !== 'implement' && params.requiresTest) {
+      throw new StoreError('INVALID_ARGUMENT', `a ${workKind} Task cannot declare requiresTest`, {
+        taskId: params.id,
+      });
+    }
     const backlogIds = params.backlogIds ?? [];
     if (params.type === 'read' && backlogIds.length > 0) {
       throw new StoreError('INVALID_ARGUMENT', 'a read Task cannot implement backlog items', {
@@ -2427,9 +2469,10 @@ export class Store {
           .prepare(
             `INSERT INTO tasks
                (id, projectId, chiefSessionId, ownerEpoch, requirementId, backlogIds, type,
-                requiresTest, goal, scope, acceptanceRefs, basisRefs, planRef, authorizationRefs,
-                phase, currentSessionIds, status, revision, summary, sourceInputId, createdAt, updatedAt)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'plan', '[]', 'active', 1, ?, ?, ?, ?)`,
+                workKind, flowVersion, reworkCount, requiresTest, goal, scope, acceptanceRefs, basisRefs,
+                planRef, authorizationRefs, phase, currentSessionIds, status, revision, summary,
+                sourceInputId, createdAt, updatedAt)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 'active', 1, ?, ?, ?, ?)`,
           )
           .run(
             params.id,
@@ -2439,6 +2482,8 @@ export class Store {
             params.requirementId ?? null,
             canonical(backlogIds),
             params.type,
+            params.workKind ?? (params.type === 'read' ? 'investigate' : 'implement'),
+            params.flowVersion ?? 0,
             params.requiresTest ? 1 : 0,
             params.goal,
             params.scope,
@@ -2446,6 +2491,7 @@ export class Store {
             canonical(params.basisRefs),
             canonical(params.planRef),
             canonical(params.authorizationRefs),
+            params.initialPhase ?? (params.workKind === 'design' ? 'design' : 'plan'),
             params.summary ?? '',
             params.sourceInputId,
             timestamp,
@@ -2571,6 +2617,35 @@ export class Store {
           taskId: params.taskId,
         });
       }
+      const nextRequiresTest = params.requiresTest ?? task.requiresTest;
+      if (task.workKind !== 'implement' && nextRequiresTest) {
+        throw new StoreError('INVALID_ARGUMENT', `a ${task.workKind} Task cannot declare requiresTest`, {
+          taskId: params.taskId,
+        });
+      }
+      let reworkDelta = 0;
+      if (task.flowVersion >= 1) {
+        const allowed = phasesFor(task.workKind, nextRequiresTest);
+        if (!allowed.includes(task.phase)) {
+          throw new StoreError(
+            'INVALID_ARGUMENT',
+            `phase ${task.phase} is not part of the ${task.workKind} completion chain`,
+            { taskId: params.taskId, workKind: task.workKind, allowed },
+          );
+        }
+        if (params.phase !== undefined && !allowed.includes(params.phase)) {
+          throw new StoreError(
+            'INVALID_ARGUMENT',
+            `phase ${params.phase} is not part of the ${task.workKind} completion chain`,
+            { taskId: params.taskId, workKind: task.workKind, allowed },
+          );
+        }
+        const current = allowed.indexOf(task.phase);
+        const target = params.phase === undefined ? -1 : allowed.indexOf(params.phase);
+        if (params.phase !== undefined && params.phase !== task.phase && current >= 0 && target >= 0 && target < current) {
+          reworkDelta = 1;
+        }
+      }
       const timestamp = this.clock();
       const outcome = this.db
         .prepare(
@@ -2579,6 +2654,7 @@ export class Store {
              planRef = COALESCE(?, planRef), goal = COALESCE(?, goal), scope = COALESCE(?, scope),
              acceptanceRefs = COALESCE(?, acceptanceRefs), basisRefs = COALESCE(?, basisRefs),
              requiresTest = COALESCE(?, requiresTest),
+             reworkCount = reworkCount + ?,
              revision = revision + 1, updatedAt = ?
            WHERE id = ?`,
         )
@@ -2595,6 +2671,7 @@ export class Store {
           params.acceptanceRefs === undefined ? null : canonical(params.acceptanceRefs),
           params.basisRefs === undefined ? null : canonical(params.basisRefs),
           params.requiresTest === undefined ? null : params.requiresTest ? 1 : 0,
+          reworkDelta,
           timestamp,
           params.taskId,
         );
@@ -3450,6 +3527,16 @@ export class Store {
     });
   }
 
+  private migrateV17ToV18(): void {
+    this.transaction(() => {
+      this.addColumn('tasks', 'workKind', "TEXT NOT NULL DEFAULT 'implement'");
+      this.addColumn('tasks', 'flowVersion', 'INTEGER NOT NULL DEFAULT 0');
+      this.addColumn('tasks', 'reworkCount', 'INTEGER NOT NULL DEFAULT 0');
+      this.db.prepare("UPDATE tasks SET workKind = 'investigate' WHERE type = 'read'").run();
+      this.db.exec('PRAGMA user_version = 18;');
+    });
+  }
+
   private migrateV14ToV15(): void {
     this.transaction(() => {
       this.addColumn('sessions', 'channel', 'TEXT');
@@ -3590,6 +3677,7 @@ export class Store {
         [14, () => this.migrateV14ToV15()],
         [15, () => this.migrateV15ToV16()],
         [16, () => this.migrateV16ToV17()],
+        [17, () => this.migrateV17ToV18()],
       ];
       for (const [from, step] of steps) {
         if (this.pragmas().userVersion === from) {
@@ -3845,6 +3933,9 @@ function toTaskRow(row: Record<string, unknown>): TaskRow {
     requirementId: nullable(row['requirementId']),
     backlogIds: parseStringList(row['backlogIds']),
     type: row['type'] === 'write' ? 'write' : 'read',
+    workKind: isWorkKind(String(row['workKind'])) ? (String(row['workKind']) as WorkKind) : row['type'] === 'read' ? 'investigate' : 'implement',
+    flowVersion: Number(row['flowVersion'] ?? 0),
+    reworkCount: Number(row['reworkCount'] ?? 0),
     requiresTest: Number(row['requiresTest']) === 1,
     goal: String(row['goal']),
     scope: String(row['scope']),

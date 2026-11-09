@@ -36,22 +36,26 @@ task、agent_report、backlog、project 按工具级注册 Pi executionMode=sequ
 
 | op | 参数 → 结果 |
 |---|---|
-| create | type（read/write）、goal、scope（一句话范围概述）、acceptanceRefs、basisRefs、planMarkdown（write 必含「验收」一节；越界提示读取其中的「范围」一节）、backlogIds?、requiresTest?、authorizationRef → taskId/phase/planRef |
-| update | taskId、phase?、summary、nextStep?、blockReason?、status?（active/waiting）、changes?={goal?,scope?,acceptanceRefs?,basisRefs?,planMarkdown?,requiresTest?} → 当前 Task/阶段/成员/下一允许动作（授权引用建 Task 时固定，不在 update 中改写） |
+| create | type（read/write）、workKind（design/implement/document/investigate；write 必填，read 省略为 investigate）、goal、scope（一句话范围概述）、acceptanceRefs、basisRefs、planMarkdown（write 必含「验收」一节；越界提示读取其中的「范围」一节）、backlogIds?、requiresTest?、authorizationRef → taskId/phase/workKind/planRef |
+| update | taskId、phase?、summary、nextStep?、blockReason?、status?（active/waiting）、changes?={goal?,scope?,acceptanceRefs?,basisRefs?,planMarkdown?,requiresTest?} → 当前 Task/阶段/workKind/成员/下一允许动作（授权引用建 Task 时固定，不在 update 中改写；type/workKind 创建后不变） |
 | dispatch | taskId、sessions?[{roleId? 或 sessionId?、label?、instructions、expectedKind?、refs?、dependsOnResultIds?、writeScope?:string[]}]、waitTimeoutMs? → 当前步骤全部成员状态与报告/重叠告警；写角色在 write Task 必须提供非空 writeScope |
 | control | taskId、command=pause/resume/cancel → 实际 status 与待处理状态 |
-| end | taskId、completionResultId → completed，或 COMPLETION_INCOMPLETE + 缺项清单 |
+| end | taskId、completionResultId → completed，或 COMPLETION_INCOMPLETE + 缺项清单；主设计 Task 另核对设计产物、原待办关闭和切片引用 |
 | get | taskId?（缺省宿主 currentTaskId）、includeResultBodies? → Task/Plan/成员/结果/缺项/nextActions，按显式引用返回报告正文 |
 | adopt | taskId、chiefSessionId → 新所有者；停稳相关执行，目标主管无未结束 Task |
 | recover | taskId、sessionId、evidenceRefs、resolution=completed/failed/stopped → 核对归属与证据后关闭该 Session 的中断输入；证据不足保持 interrupted |
 
-**create**：type 由主管依据目标选择，与专业角色分开。requiresTest 是主管按 D-04 声明的必要报告：行为代码修改必须 true，轻量/文档通常 false；read 必须 false。read 省略 requiresTest 时取 false，禁止 true；write 必须显式提供 boolean，缺失 INVALID_ARGUMENT。程序验证值及必要报告，不从 goal 自然语言推断类型/测试责任。write 的 `planMarkdown` 必须含一个二级或三级「验收」/`Acceptance`/`Acceptance criteria` 标题，且该节至少一行非空、非标题内容，否则 INVALID_ARGUMENT 并附 `details.missing='acceptance'` 与最小示例；只读 Task 不检查。「范围」/`Scope` 一节不强制存在，但缺失时越界提示为“未声明范围”；越界计算只读这一节，不使用 `scope` 参数。
+**create**：type 仍只有 read/write；workKind 选择完成链，不是新的用户任务类型。write 必须显式给 workKind；read 省略时取 investigate，禁止 write kind。type 与 kind 必须一致：design/implement/document 只能 write，investigate 只能 read。requiresTest：implement 必须显式 boolean；design/document/investigate 必须 false 或省略。程序不从 goal 推断 kind 或测试责任。
+
+工作链：`design` 初始 design，允许 clarify/analyze/design/review/settle，requiresTest=false；`implement` 初始 plan，允许 plan/design/develop/review/test/settle，`design` 只用于 J-10 补充设计，test 只在 requiresTest=true 时合法；`document` 初始 plan，允许 plan/design/review/settle，requiresTest=false；`investigate` 初始 plan，允许 clarify/analyze/design/plan/settle，无 Review/Test。新 Task 写 `flowVersion=1`；迁移旧 Task 为 0，不校验阶段图。
+
+write 的 `planMarkdown` 必须含一个二级或三级「验收」/`Acceptance`/`Acceptance criteria` 标题，且该节至少一行非空、非标题内容，否则 INVALID_ARGUMENT 并附 `details.missing='acceptance'` 与最小示例；只读 Task 不检查。「范围」/`Scope` 一节不强制存在，但缺失时越界提示为“未声明范围”；越界计算只读这一节，不使用 `scope` 参数。
 
 分配稳定 taskId，按 S6 保存总体 Plan，再事务登记 Task/planRef/currentTaskId/回执。Plan 写目标、范围、依据、步骤/角色、验证、风险与未决事项，规模与任务相称；不预建未来专业 Session。read Plan 可以很短，但不写入项目。authorizationRef 为 {inputId} 或 {interactionId}；程序只校验引用的主体、来源与状态，不解释语义授权范围。
 
-同一待办至多一个未结束实现 Task，同主管至多一项未结束 Task（含暂停）；冲突返回 TASK_BUSY 与已有 Task。`backlogIds` 表示本 Task 实施的待办（0～n 条）：领取与 Task 登记在**同一个事务**内完成，条目必须存在、没有格式问题、状态为 open，否则拒绝并不建 Task；read Task 不得提供。程序不写待办状态——“进行中”从数据库派生显示。taskId 形如 `t-<12 位十六进制>`，旧的 8 位 ID 仍能读取和推进。Task 不必关联待办——设计、调查、知识维护均可不填。
+同一待办至多一个未结束 Task（含设计）；同主管至多一项未结束 Task（含暂停）；冲突返回 TASK_BUSY 与已有 Task。`backlogIds` 表示本 Task 实施或设计的待办（0～n 条）：领取与 Task 登记在**同一个事务**内完成，条目必须存在、没有格式问题、状态为 open，否则拒绝并不建 Task；read Task 不得提供。程序不写待办状态——“进行中”从数据库派生显示。taskId 形如 `t-<12 位十六进制>`，旧的 8 位 ID 仍能读取和推进。Task 不必关联待办——设计、调查、知识维护均可不填。
 
-**update**：phase 枚举 clarify/analyze/design/plan/develop/review/test/settle，由主管显式记录；提供 phase 表示开始下一步骤，当前步骤成员必须已结束或已明确控制并停稳。事务保存上一步骤总结、当前 phase，清空 currentSessionIds，保留历史。不提供 phase 仅更新摘要/阻断/下一步。目标或依据实质改变时由主管判断并在 summary 说明，直接保存修订 Plan；提供的 `changes.planMarkdown` 同样检查验收一节，并且验收文本（规范化空白后）与旧版不同时返回 `acceptanceChanged: true`，“已完成的 Review/Test 不覆盖新验收”。不存在「旧报告自动失效」的声明参数——程序的核对见 G3。type 创建后不变。
+**update**：phase 枚举 clarify/analyze/design/plan/develop/review/test/settle，由主管显式记录；提供 phase 表示开始下一步骤，当前步骤成员必须已结束或已明确控制并停稳。`flowVersion=1` 时程序按 workKind 校验目标阶段属于允许集合；目标阶段在完成链中位于当前阶段之前时 `reworkCount+1`。事务保存上一步骤总结、当前 phase，清空 currentSessionIds，保留历史。不提供 phase 仅更新摘要/阻断/下一步。目标或依据实质改变时由主管判断并在 summary 说明，直接保存修订 Plan；提供的 `changes.planMarkdown` 同样检查验收一节，并且验收文本（规范化空白后）与旧版不同时返回 `acceptanceChanged: true`，“已完成的 Review/Test 不覆盖新验收”。不存在「旧报告自动失效」的声明参数——程序的核对见 G3。type/workKind 创建后不变。
 
 **dispatch**：只组织当前步骤。有 sessions 即派发：每项 roleId 与 sessionId 恰有一个——roleId 新建专业 Session，sessionId 对已停稳成员追加剩余工作；**instructions 只有一个位置**。新建成员省略 label/expectedKind 时由宿主按 roleId 取值（不给模型增加必填项）。不带 sessions 表示仅等待当前步骤。整批接纳原子，不出现半批。
 
@@ -85,13 +89,13 @@ Review/Test checks are evidence only when actually run. A negative control is re
 |---|---|---|
 | list | state?（open/done/dropped/all，默认 open）、query?、limit? → items（编号、标题、状态、是否就绪、规格引用、更新时间、关联的未结束 Task 及其状态、最近一次已结束的关联 Task（含已取消，用于显示“上一次的 Task 已取消”）、待核对提示）、issues、warnings | 拥有该工具的角色 |
 | get | id → 完整条目（含原文）、关联 Task 的真实状态（含最近一次已结束或已取消的关联）、引用/格式问题 | 同上 |
-| add | title、body、specRefs? → 新条目 | chief、designer、settler |
+| add | title、body、specRefs? → 新条目；designer/settler 在 Task 内调用时宿主自动把当前 Task 写入 `Task`（产生者），chief/界面新增不写 | chief、designer、settler |
 | close | id、state（done/dropped）、note、taskIds? → 新条目 | chief、settler |
 | edit | oldText、newText → 重新解析后的 items、issues、warnings | chief、designer、settler |
 
 - op 级权限按 roleId 拒绝；developer 只有 list/get，reviewer/tester/investigator 不挂载该工具。
 - **不携带版本**：add 在项目锁内分配编号；close 只核对条目存在、没有格式问题、状态为 open；edit 要求 oldText 在文件中恰好出现一次，否则拒绝并返回当前内容，不覆盖。用户在编辑器里的改动由读回核对发现。
-- **程序填写来源与操作者**：来源是 `<roleId> <sessionId> / <inputId>`，操作者取当前输入的 actorId；settler 的 close 在关联当前 Task 时默认填 taskIds。
+- **程序填写来源与操作者**：来源是 `<roleId> <sessionId> / <inputId>`，操作者取当前输入的 actorId；designer/settler 的 add 自动把当前 Task 写入 `Task`，settler 的 close 在关联当前 Task 时默认填 taskIds；chief/界面新增不自动关联 Task。
 - **不提供删除**：edit 可以删掉原文，但提示词要求以关闭代替删除；被删条目若仍被 Task 关联，出现“关联的待办不存在”的待核对提示。
 - **返回即重新解析**：add/close/edit 都在项目锁内读回，写入后立刻能看出是否写坏；失败时附 BF-2 的格式摘要和相关问题行号。
 - **只读 Task**：backlog 列入 `PROJECT_WRITING_DOMAIN_TOOLS`（取代 requirement），只读 Task 中整个工具不挂载，需要查看时用普通读取。
@@ -136,6 +140,8 @@ Task 仅主管总体 Plan；子 Agent 可自行计划或直接完成目标，不
 | 复核/测试是否针对当前交付、必要报告是否齐全、真实保存回执、越界文件清单 | 程序；内容判断由 Agent 负责 |
 
 **交付状态的绑定（程序侧，模型不可见）**：保存 Review/Test 报告时，程序对项目文件取内容摘要（排除 `.git`、`node_modules`、`.dev`、工作区已初始化的知识入口，以及 Git 忽略规则排除的未跟踪文件），并随报告记录被摘要的路径清单；Test 沿用最近一次通过复核的同一路径清单，两者可直接比较。完成核对按该清单重算：被复核文件被修改或删除即视为交付已变化，最近一次通过的报告不再作为完成依据，要求重新复核；复核之后新增的记录文件不影响判断。该判定直接体现在 end 的缺项里，不引入候选对象或版本参数。
+
+**主设计的交付绑定**：主设计 Task 的 Review/Test 绑定 `.dev/product/**`、`.dev/technical/**` 的完整快照；`AGENTS.md`、`.dev/INDEX.md`、`.dev/PROJECT.md` 是项目知识入口，由结算保存，不进入绑定，避免结算写导航导致重新审阅。另排除 `.dev/backlog.md`、`.dev/work/**`、`.dev/requirements/**`、`.dev/issues.md`。Review 后新增、修改或删除规格/技术设计都要求重新 Review；关闭原待办不使 Review 失效。
 
 当快照同时含代码路径时，`docs/**` 与根目录 Markdown 视为结算输出，不进入 Review/Test 绑定的路径清单；结算后修改这些文档或提交 Git 不会要求重审重测。若交付本身只有文档（快照没有代码路径），文档仍完整绑定，文档任务不会因此失去复核依据。
 

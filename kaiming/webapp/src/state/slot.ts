@@ -66,6 +66,9 @@ export interface TaskSummaryView {
   type: string;
   phase: string;
   status: string;
+  workKind?: string;
+  flowVersion?: number;
+  reworkCount?: number;
   revision: number;
   goal: string;
   scope: string;

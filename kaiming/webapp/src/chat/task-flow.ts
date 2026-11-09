@@ -30,6 +30,7 @@ function rankOf(kind: StateKind | 'plan'): number {
 export interface FlowInput {
   readonly task: {
     readonly type: string;
+    readonly workKind?: string | undefined;
     readonly phase: string;
     readonly status: string;
     readonly requiresTest?: boolean | undefined;
@@ -72,16 +73,38 @@ function memberKind(member: FlowInput['members'][number]): StateKind {
  * review. Read Tasks owe nothing: their flow is whatever the chief actually runs.
  */
 export function plannedTail(
-  task: { readonly type: string; readonly phase: string; readonly requiresTest?: boolean | undefined },
+  task: {
+    readonly type: string;
+    readonly phase: string;
+    readonly requiresTest?: boolean | undefined;
+    readonly workKind?: string | undefined;
+  },
   phasesSoFar: readonly string[],
 ): readonly string[] {
   if (task.type !== 'write') return [];
-  const reach = Math.max(
-    PHASE_ORDER.indexOf(task.phase as (typeof PHASE_ORDER)[number]),
-    ...phasesSoFar.map((phase) => PHASE_ORDER.indexOf(phase as (typeof PHASE_ORDER)[number])),
-  );
-  const tail = ['review', ...(task.requiresTest === true ? ['test'] : []), 'settle'];
-  return tail.filter((phase) => PHASE_ORDER.indexOf(phase as (typeof PHASE_ORDER)[number]) > reach);
+  const test = task.requiresTest === true ? ['test'] : [];
+  const kind = task.workKind;
+  if (kind === undefined) {
+    const index = (phase: string): number => PHASE_ORDER.indexOf(phase as (typeof PHASE_ORDER)[number]);
+    const reach = Math.max(index(task.phase), ...phasesSoFar.map(index));
+    return ['review', ...test, 'settle'].filter((phase) => index(phase) > reach);
+  }
+  const sequence =
+    kind === 'design'
+      ? ['clarify', 'analyze', 'design', 'review', 'settle']
+      : kind === 'document'
+        ? ['plan', 'design', 'review', 'settle']
+        : kind === 'implement'
+          ? task.phase === 'design'
+            ? ['design', 'develop', 'review', ...test, 'settle']
+            : ['plan', 'develop', 'review', ...test, 'settle']
+          : [];
+  if (sequence.length === 0) return [];
+  const positions = [task.phase, ...phasesSoFar]
+    .map((phase) => sequence.indexOf(phase))
+    .filter((position) => position >= 0);
+  const reach = positions.length === 0 ? -1 : Math.max(...positions);
+  return sequence.slice(reach + 1);
 }
 
 /**

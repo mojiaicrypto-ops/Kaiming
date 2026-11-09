@@ -19,7 +19,7 @@ Dispatcher 读取 session_inputs，提交后唤醒，启动/周期扫描兜底�
 | providers | providerId/baseUrl/api/name?/models/credentialRef/revision | providerId 安装内不变，是 models.json key、指派与凭证引用的标识；name 仅供显示，空则用 providerId；api 必须显式保存（协议不推断） |
 | model_overrides | scope/scopeId/roleId?/providerId/modelId/revision | `scope=role` 时 scopeId 是角色；`scope=project` 时 scopeId 是项目，roleId 空表示该项目默认、非空表示该项目内某个角色；同一 (scope,scopeId,roleId) 至多一行 |
 | session_bindings | sessionId/piFile/branchEntryId?/hasHistory/configHash/rulesHash | 指定 Pi 文件；保留原绑定记录，禁止寻找最近文件 |
-| tasks | id/projectId/chiefSessionId/ownerEpoch/requirementId?/backlogIds/type/requiresTest/goal/scope/acceptanceRefs/basisRefs/planRef/authorizationRefs/phase/currentSessionIds/status/revision/summary/nextStep/blockReason/completionResultId?/sourceInputId | 两类 Task、阶段与更新边界唯一见 G2；currentSessionIds 只含当前步骤的专业 Session；revision 仅供界面与宿主 RPC 使用，不进入模型工具参数；控制意图落在对应 session_inputs 的 stopRequestKey/stopReason；`backlogIds` 是 JSON 数组，领取在同一事务内核对；`requirementId` 保留列但不再写入，旧 Task 照常显示；新 taskId 为 `t-<12 位十六进制>`，旧 8 位仍可读 |
+| tasks | id/projectId/chiefSessionId/ownerEpoch/requirementId?/backlogIds/type/workKind/flowVersion/reworkCount/requiresTest/goal/scope/acceptanceRefs/basisRefs/planRef/authorizationRefs/phase/currentSessionIds/status/revision/summary/nextStep/blockReason/completionResultId?/sourceInputId | 两类 Task、阶段与更新边界唯一见 G2；workKind 选择完成链（design/implement/document/investigate），不是用户任务类型；flowVersion=1 的新 Task 按 workKind 校验阶段，0 为迁移旧 Task 不校验；reworkCount 记录阶段后退次数；currentSessionIds 只含当前步骤的专业 Session；revision 仅供界面与宿主 RPC 使用，不进入模型工具参数；控制意图落在对应 session_inputs 的 stopRequestKey/stopReason；`backlogIds` 是 JSON 数组，领取在同一事务内核对；`requirementId` 保留列但不再写入，旧 Task 照常显示；新 taskId 为 `t-<12 位十六进制>`，旧 8 位仍可读 |
 | task_sessions | sessionId/taskId/roleId/specialization?/phase/label/instructions/refs/dependencies/expectedKind/writeScope/workspaceRef?/currentInputId | 续办时更新 currentInputId；历史输入/结果保留；writeScope 用于并行写成员的覆盖告警 |
 | results | resultId/taskId/sessionId/inputId/roleId/kind/summary/verdict?/deliveryState?/bodyRef/basisRefs/checks/settlement?/createdAt | 不覆盖原报告，多份报告按保存顺序保留；kind 取自成员派发时的 expectedKind；deliveryState 记录提交时程序观察到的交付状态与被观察路径，供完成核对重算比较；resultId 由内容派生，同一报告重试映射同一行 |
 | session_inputs | 见 Input | (sessionId,seq)/sourceKey 唯一；同 Session 至多一项 processing；`actorId` 记录接纳时的操作者，v16→v17 加列，旧行取 `local` |
@@ -31,6 +31,8 @@ Dispatcher 读取 session_inputs，提交后唤醒，启动/周期扫描兜底�
 | usage_entries | inputId/projectId/sessionId/taskId?/roleId/providerId/modelId/inputTokens/outputTokens/cacheReadTokens/cacheWriteTokens/reasoningTokens/costTotal/responses/startedAt/endedAt | 追加写入，不改写历史；(inputId,providerId,modelId) 唯一，重试不会重复计数；数值全部取自响应上报的用量，缺失记 NULL 而不是 0；按项目/角色/模型三种维度统计时由查询 GROUP BY 得出，不维护累加计数器 |
 
 v16→v17：`tasks` 加 `backlogIds`、`session_inputs` 加 `actorId`。既有 Task 的 `backlogIds` 为 `[]`，`requirementId` 原值不变；既有输入的 `actorId` 取 `local`。
+
+v17→v18：`tasks` 加 `workKind`（默认 `implement`）、`flowVersion`（默认 0）、`reworkCount`（默认 0）。迁移把 read Task 的 workKind 回填为 `investigate`，write 保持 `implement`；旧行 flowVersion=0、reworkCount=0，不启用阶段图，旧 8 位 ID 和旧需求列照常可读。新 Task 由 task 工具写 flowVersion=1。
 
 interactions.state=pending/resolved/stale。pending 已保存、可展示；resolved 答复不可覆写，相同重试返回原回执，不同答复冲突；stale 不恢复原等待。没有“UI 已呈现”准入状态，保存后广播、断线从快照重现。请求/答复唯一见 M5。
 

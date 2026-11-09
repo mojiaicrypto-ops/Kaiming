@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -98,6 +98,7 @@ function createArgs(overrides: Record<string, unknown> = {}): Record<string, unk
     planMarkdown: PLAN,
     requiresTest: false,
     backlogIds: ['B-1'],
+    workKind: overrides.workKind ?? (overrides.type === 'read' ? 'investigate' : 'implement'),
     authorizationRef: { inputId: 'i-dec' },
     ...overrides,
   };
@@ -211,5 +212,50 @@ describe('backlog association', () => {
     writeFileSync(w.path, '# 待办\n\n## 未完成\n', 'utf8');
     const missing = await w.execute({ op: 'get', taskId: result.details['taskId'] });
     expect(missing.details['backlogHints']).toEqual(['关联的待办不存在：B-1']);
+  });
+});
+
+
+describe('design producer gate', () => {
+  it('refuses a slice while the design that produced it is still open', async () => {
+    const w = world();
+    w.store.createTask({
+      id: 't-design',
+      projectId: 'p-1',
+      chiefSessionId: 'c-1',
+      ownerEpoch: 1,
+      type: 'write',
+      workKind: 'design',
+      flowVersion: 1,
+      initialPhase: 'design',
+      requiresTest: false,
+      goal: 'design it',
+      scope: '.dev/product',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/d.md', sha256: 'd' },
+      authorizationRefs: [],
+      sourceInputId: 'i-dec',
+    });
+    writeFileSync(
+      w.path,
+      `${readFileSync(w.path, 'utf8')}\n### B-4 切片\n- 状态: open\n- 规格: .dev/product/account.md#x\n- Task: t-design\n`,
+      'utf8',
+    );
+    const tool = createTaskTool(
+      () => ({
+        store: w.store,
+        sessionId: 'c-2',
+        projectId: 'p-1',
+        cwd: w.cwd,
+        roleId: 'chief',
+        inputId: 'i-2',
+        serverWorkDir: join(w.cwd, '..', 'work2'),
+      }),
+      { chief: true },
+    );
+    const refused = await tool.execute('c2', createArgs({ backlogIds: ['B-4'], workKind: 'implement', requiresTest: false }));
+    expect(refused.isError).toBe(true);
+    expect(refused.details['code']).toBe('DESIGN_NOT_READY');
   });
 });

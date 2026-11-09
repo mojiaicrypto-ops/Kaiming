@@ -74,6 +74,7 @@ function createArgs(overrides: Record<string, unknown> = {}): Record<string, unk
     scope: '账号模块',
     planMarkdown: PLAN,
     requiresTest: false,
+    workKind: overrides.workKind ?? (overrides.type === 'read' ? 'investigate' : 'implement'),
     authorizationRef: { inputId: 'i-dec' },
     ...overrides,
   };

@@ -527,10 +527,10 @@ export class InputRunner {
           sessionId,
           inputId,
           ...(currentTaskId != null ? { currentTaskId } : {}),
-          tasksOf: (backlogId: string) => {
+          tasksOf: (backlogId: string, taskIds?: readonly string[]) => {
             const tasks = this.options.store
               .listTasks(session.projectId)
-              .filter((task) => task.backlogIds.includes(backlogId));
+              .filter((task) => task.backlogIds.includes(backlogId) || (taskIds ?? []).includes(task.id));
             const lastClosed = tasks
               .filter((task) => task.status === 'completed' || task.status === 'cancelled')
               .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];

@@ -14,7 +14,7 @@ import { digestOfText, readPlan } from '../runtime/plan-store.ts';
 import { scopeCheckFor } from '../runtime/plan-contract.ts';
 import { mimeTypeOf, resolveInsideProject } from './fs-guard.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
-import { OPEN_TASK_STATUSES, type Store } from '../store/store.ts';
+import { OPEN_TASK_STATUSES, type Store, type TaskRow } from '../store/store.ts';
 import {
   readBacklog,
   type BacklogIssue,
@@ -495,7 +495,9 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       const project = requireProject(store, params);
       const limit = clampLimit(readNumber(params, 'limit'));
       const cursor = readString(params, 'cursor');
-      const tasks = store.listTasks(project.id);
+      const tasks = [...store.listTasks(project.id)].sort(
+        (left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),
+      );
       const start = cursor === undefined ? 0 : tasks.findIndex((task) => task.id === cursor) + 1;
       if (cursor !== undefined && start === 0) {
         throw new RpcError('INVALID_ARGUMENT', 'the cursor does not belong to this project', { cursor });
@@ -649,8 +651,9 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       const start = index + 1;
       const page = filtered.slice(start, start + limit);
       const last = page[page.length - 1];
+      const projectTasks = store.listTasks(project.id);
       return {
-        items: page.map((item) => backlogItemView(store, project.id, item, read)),
+        items: page.map((item) => backlogItemView(item, read, projectTasks)),
         issues: read.issues,
         warnings: read.warnings,
         nextCursor:
@@ -675,7 +678,7 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
         throw new RpcError('NOT_FOUND', `backlog item ${id} does not exist in this project`, { id });
       }
       return {
-        ...backlogItemView(store, project.id, item, read),
+        ...backlogItemView(item, read, store.listTasks(project.id)),
         issues: read.issues.filter((issue) => issue.id === id),
         warnings: read.warnings.filter((warning) => warning.id === id),
       };
@@ -683,16 +686,40 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
   });
 
 function backlogItemView(
-  store: Store,
-  projectId: string,
   item: BacklogItem,
-  read: { readonly issues: readonly BacklogIssue[]; readonly warnings: readonly BacklogIssue[] },
+  read: {
+    readonly items: readonly BacklogItem[];
+    readonly issues: readonly BacklogIssue[];
+    readonly warnings: readonly BacklogIssue[];
+  },
+  allTasks: readonly TaskRow[],
 ): Record<string, unknown> {
-  const tasks = store.listTasks(projectId).filter((task) => task.backlogIds.includes(item.id));
-  const openTasks = tasks
+  const claimed = allTasks.filter((task) => task.backlogIds.includes(item.id));
+  const produced = allTasks.filter((task) => item.taskIds.includes(task.id));
+  const related = [...claimed, ...produced.filter((task) => !claimed.some((row) => row.id === task.id))];
+  const compact = (task: (typeof allTasks)[number]): Record<string, unknown> => ({
+    taskId: task.id,
+    status: task.status,
+    workKind: task.workKind,
+    phase: task.phase,
+    reworkCount: task.reworkCount,
+    requiresTest: task.requiresTest,
+    goal: task.goal,
+    chiefSessionId: task.chiefSessionId,
+    updatedAt: task.updatedAt,
+  });
+  const openTasks = claimed
     .filter((task) => OPEN_TASK_STATUSES.includes(task.status))
-    .map((task) => ({ taskId: task.id, status: task.status, chiefSessionId: task.chiefSessionId }));
-  const lastClosed = tasks
+    .map(compact);
+  const producerTasks = produced.map(compact);
+  const sliceIds = new Set<string>();
+  for (const task of related) {
+    if (task.workKind !== 'design') continue;
+    for (const other of read.items) {
+      if (other.id !== item.id && other.taskIds.includes(task.id)) sliceIds.add(other.id);
+    }
+  }
+  const lastClosed = claimed
     .filter((task) => task.status === 'completed' || task.status === 'cancelled')
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
   return {
@@ -714,6 +741,9 @@ function backlogItemView(
     line: item.line,
     digest: item.digest,
     openTasks,
+    producerTasks,
+    relatedTasks: related.map(compact),
+    splitInto: [...sliceIds],
     ...(lastClosed === undefined ? {} : { lastClosedTask: { taskId: lastClosed.id, status: lastClosed.status } }),
     problems: read.issues.filter((issue) => issue.id === item.id),
     warnings: read.warnings.filter((warning) => warning.id === item.id),
@@ -985,6 +1015,9 @@ function taskSummary(store: Store, task: ReturnType<Store['getTask']> & object) 
   return {
     taskId: task.id,
     type: task.type,
+    workKind: task.workKind,
+    flowVersion: task.flowVersion,
+    reworkCount: task.reworkCount,
     phase: task.phase,
     status: task.status,
     revision: task.revision,

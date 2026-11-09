@@ -167,3 +167,50 @@ test('a session an external agent owns is marked in the rail', async ({ page }) 
   await expect(page.locator('[data-testid="session-external"]')).toHaveText('MCP');
   expect(projectPath).not.toBe('');
 });
+
+test('a design Task appears in the designing lane and its slices cannot be implemented yet', async ({ page }) => {
+  const harness = await startHarness({
+    model: [
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'task',
+            arguments: JSON.stringify({
+              op: 'create',
+              type: 'write',
+              workKind: 'design',
+              goal: 'design B-1',
+              scope: 'account module',
+              planMarkdown: '# design\n\n## 验收\n- slices confirmed\n',
+              backlogIds: ['B-1'],
+            }),
+          },
+        ],
+      },
+      { kind: 'text', text: '设计已开始。' },
+    ],
+  });
+  try {
+    const projectPath = harness.project?.projectPath ?? '';
+    mkdirSync(join(projectPath, '.dev'), { recursive: true });
+    writeFileSync(join(projectPath, '.dev', 'backlog.md'), BACKLOG, 'utf8');
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness);
+    await page.locator('[data-testid="composer"]').fill('先设计 B-1');
+    await page.locator('[data-testid="composer"]').press('Enter');
+    await expect(page.locator('[data-testid="task-strip"]')).toBeVisible({ timeout: 20_000 });
+
+    await page.goto(`${harness.baseUrl}/project`, { waitUntil: 'domcontentloaded' });
+    const lane = page.locator('[data-testid="board-designing"]');
+    await expect(lane).toContainText('B-1', { timeout: 15_000 });
+    await expect(lane).toContainText(/设计|Design/);
+    await lane.locator('[data-testid="backlog-row"]').click();
+    const implement = page.locator('[data-testid="backlog-implement"]');
+    await expect(implement).toBeVisible();
+    await expect(implement).toBeDisabled();
+  } finally {
+    await harness.close();
+  }
+});

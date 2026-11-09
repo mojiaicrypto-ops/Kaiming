@@ -249,3 +249,23 @@ describe('operations', () => {
     expect(details.lastClosedTask).toEqual({ taskId: 't-0', status: 'cancelled' });
   });
 });
+
+
+describe('slice producer', () => {
+  it('records the current design Task when a designer adds a slice', async () => {
+    const f = fixture();
+    f.setRole('designer');
+    f.setCurrentTask('t-design');
+    const added = await run(f, { op: 'add', title: '切片', specRefs: ['spec.md#x'] });
+    expect(added.isError).toBe(false);
+    expect(readFileSync(f.path, 'utf8')).toContain('- Task: t-design');
+  });
+
+  it('does not attach a chief idea to the current Task', async () => {
+    const f = fixture();
+    f.setCurrentTask('t-chief');
+    const added = await run(f, { op: 'add', title: '以后再做' });
+    expect(added.isError).toBe(false);
+    expect(readFileSync(f.path, 'utf8')).not.toContain('- Task: t-chief');
+  });
+});

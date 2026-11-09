@@ -533,6 +533,7 @@ describe('task end refuses an uncommitted delivery', () => {
     const created = await w.tool.execute('call-1', {
       op: 'create',
       type: 'write',
+      workKind: 'implement',
       goal: 'reset password',
       scope: 'account module',
       planMarkdown: '# plan\n\n## 验收\n- observable result\n',

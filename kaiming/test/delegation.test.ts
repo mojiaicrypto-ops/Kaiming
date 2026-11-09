@@ -102,6 +102,7 @@ async function fixture(): Promise<Fixture> {
   await taskTool.execute('c1', {
     op: 'create',
     type: 'write',
+    workKind: 'implement',
     goal: 'reset password',
     scope: 'account',
     planMarkdown: '# plan\n\n## 验收\n- observable result\n',
@@ -187,6 +188,7 @@ describe('task dispatch', () => {
     const created = await readTool.execute('c2', {
       op: 'create',
       type: 'read',
+      workKind: 'investigate',
       goal: 'investigate',
       scope: 'x',
       planMarkdown: '# read plan\n',

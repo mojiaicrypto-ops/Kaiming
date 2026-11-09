@@ -832,4 +832,118 @@ describe('startup scan and abandoned questions', () => {
     expect(migrated.listSessionSummaries('p-channel').find((row) => row.id === 's-fixed')?.channel).toBe('mcp');
   });
 
+
+  it('migrates a v17 database and preserves legacy phase freedom', () => {
+    const { store, path } = openStore();
+    seed(store);
+    const task = store.createTask({
+      id: 't-legacy',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      requiresTest: false,
+      goal: 'old design work',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/old.md', sha256: 'old' },
+      authorizationRefs: [],
+      sourceInputId: 'i-1',
+    });
+    expect(task.workKind).toBe('implement');
+    const read = store.createTask({
+      id: 't-read',
+      projectId: 'p-1',
+      chiefSessionId: 's-2',
+      ownerEpoch: 1,
+      type: 'read',
+      requiresTest: false,
+      goal: 'old investigation',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/read.md', sha256: 'r' },
+      authorizationRefs: [],
+      sourceInputId: 'i-1',
+    });
+    expect(read.workKind).toBe('investigate');
+    closeStore(store);
+
+    const raw = new DatabaseSync(path);
+    raw.exec('ALTER TABLE tasks DROP COLUMN workKind');
+    raw.exec('ALTER TABLE tasks DROP COLUMN flowVersion');
+    raw.exec('ALTER TABLE tasks DROP COLUMN reworkCount');
+    raw.exec('PRAGMA user_version = 17');
+    raw.close();
+
+    const migrated = new Store({ path, serverEpoch: 1 });
+    stores.push(migrated);
+    expect(migrated.pragmas().userVersion).toBe(SCHEMA_VERSION);
+    expect(migrated.getTask('t-legacy')).toMatchObject({
+      workKind: 'implement',
+      flowVersion: 0,
+      reworkCount: 0,
+    });
+    expect(migrated.getTask('t-read')?.workKind).toBe('investigate');
+    // Legacy Tasks keep their old freedom: no completion-chain refusal applies.
+    expect(migrated.updateTask({ taskId: 't-legacy', phase: 'test' }).phase).toBe('test');
+  });
+
+  it('freezes each workKind phase chain and counts backward moves as rework', () => {
+    const { store } = openStore();
+    seed(store);
+    accept(store);
+    const design = store.createTask({
+      id: 't-design',
+      projectId: 'p-1',
+      chiefSessionId: 's-1',
+      ownerEpoch: 1,
+      type: 'write',
+      workKind: 'design',
+      flowVersion: 1,
+      initialPhase: 'design',
+      requiresTest: false,
+      goal: 'design it',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/d.md', sha256: 'd' },
+      authorizationRefs: [],
+      sourceInputId: 'i-1',
+    });
+    expect(design.phase).toBe('design');
+    expect(() => store.updateTask({ taskId: 't-design', phase: 'develop' })).toThrow(StoreError);
+    expect(() => store.updateTask({ taskId: 't-design', phase: 'test' })).toThrow(StoreError);
+    store.updateTask({ taskId: 't-design', phase: 'review' });
+    const back = store.updateTask({ taskId: 't-design', phase: 'design' });
+    expect(back.reworkCount).toBe(1);
+    expect(() => store.updateTask({ taskId: 't-design', requiresTest: true })).toThrow(StoreError);
+
+    accept(store, { inputId: 'i-2', sourceKey: 'user:req-2', requestKey: 'req-2' });
+    const impl = store.createTask({
+      id: 't-impl',
+      projectId: 'p-1',
+      chiefSessionId: 's-2',
+      ownerEpoch: 1,
+      type: 'write',
+      workKind: 'implement',
+      flowVersion: 1,
+      initialPhase: 'plan',
+      requiresTest: false,
+      goal: 'implement it',
+      scope: 'x',
+      acceptanceRefs: [],
+      basisRefs: [],
+      planRef: { storage: 'server', path: '/tmp/i.md', sha256: 'i' },
+      authorizationRefs: [],
+      sourceInputId: 'i-2',
+    });
+    expect(impl.phase).toBe('plan');
+    expect(() => store.updateTask({ taskId: 't-impl', phase: 'test' })).toThrow(StoreError);
+    store.updateTask({ taskId: 't-impl', phase: 'develop' });
+    const supplement = store.updateTask({ taskId: 't-impl', phase: 'design' });
+    expect(supplement.reworkCount).toBe(1);
+  });
+
 });

@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { RpcError } from '../src/api/rpc';
 import {
   groupsOf,
+  boardOf,
+  flowChain,
+  awaitingDesign,
   isVersionConflict,
   cellPath,
   moduleTable,
@@ -21,6 +24,9 @@ function item(overrides: Partial<BacklogItemView> & { id: string }): BacklogItem
     body: overrides.body ?? '',
     digest: overrides.digest ?? 'd',
     openTasks: overrides.openTasks ?? [],
+    ...(overrides.producerTasks === undefined ? {} : { producerTasks: overrides.producerTasks }),
+    ...(overrides.relatedTasks === undefined ? {} : { relatedTasks: overrides.relatedTasks }),
+    ...(overrides.splitInto === undefined ? {} : { splitInto: overrides.splitInto }),
     problems: overrides.problems ?? [],
     warnings: overrides.warnings ?? [],
   };
@@ -110,5 +116,51 @@ describe('editing helpers', () => {
 
   it('parses one spec reference per non-empty line', () => {
     expect(parseSpecRefs(' a.md \n\nb.md#标题\n')).toEqual(['a.md', 'b.md#标题']);
+  });
+});
+
+describe('design board', () => {
+  it('separates designing, ready, implementing and completed from derived task facts', () => {
+    const board = boardOf([
+      item({
+        id: 'B-1',
+        openTasks: [{ taskId: 't-d', status: 'active', workKind: 'design', phase: 'design' }],
+      }),
+      item({
+        id: 'B-2',
+        ready: true,
+        specRefs: ['spec.md#x'],
+        producerTasks: [{ taskId: 't-d', status: 'active', workKind: 'design', phase: 'design' }],
+      }),
+      item({
+        id: 'B-3',
+        openTasks: [{ taskId: 't-i', status: 'active', workKind: 'implement', phase: 'develop' }],
+      }),
+      item({ id: 'B-4', state: 'done' }),
+    ]);
+    expect(board.designing.map((card) => card.item.id)).toEqual(['B-1']);
+    expect(board.ready.map((card) => card.item.id)).toEqual(['B-2']);
+    expect(board.implementing.map((card) => card.item.id)).toEqual(['B-3']);
+    expect(board.completed.map((entry) => entry.id)).toEqual(['B-4']);
+  });
+
+  it('marks a slice whose producing design Task is unfinished', () => {
+    const slice = item({
+      id: 'B-7',
+      ready: true,
+      specRefs: ['spec.md#x'],
+      producerTasks: [{ taskId: 't-d', status: 'waiting', workKind: 'design', phase: 'review' }],
+    });
+    expect(awaitingDesign(slice)).toBe(true);
+    expect(awaitingDesign({ ...slice, producerTasks: [{ taskId: 't-d', status: 'completed', workKind: 'design' }] })).toBe(false);
+  });
+
+  it('shows the design chain with its user-confirmation gate', () => {
+    const design = item({
+      id: 'B-1',
+      openTasks: [{ taskId: 't-d', status: 'waiting', workKind: 'design', phase: 'review' }],
+    });
+    expect(flowChain(design, true).map((step) => step.key)).toEqual(['design', 'review', 'gate', 'settle']);
+    expect(flowChain(design, true).find((step) => step.gate)?.state).toBe('current');
   });
 });

@@ -736,3 +736,19 @@
 同时修复：空状态文案仍写“说保存记成需求”，改为“说出待办或目标并明确实施”；会话列的 `channel` 映射补上前端类型，MCP 会话显示 `MCP` 标记（U7 关闭）。
 
 **边界**：上面的探针是一次性验证脚本，已删除，未进入自动套件（真实模型 + 网络不适合作为默认门禁）。产品验收仍按 acceptance 人工执行。
+
+## 2026-11-09 · 设计流水线与项目看板
+
+**文档**：BL-04/BL-07/BL-08、D-01/D-04/D-09、AC-55/AC-59/AC-60/AC-61、J-09/J-10、G2、S6、BF-2、U6、TaskSummary 与四条角色提示词已同步；`workKind` 明确为完成链选择，不改变 read/write 两类用户任务。
+
+**代码**：schema v18（`workKind`/`flowVersion`/`reworkCount`，旧 Task flowVersion=0 不校验）；task 工具按 kind 校验初始阶段/阶段集合/requiresTest；实施 Task 允许 J-10 的 design 补充阶段；设计 Review 绑定 `.dev/product/**`、`.dev/technical/**` 的完整快照（项目知识入口由结算保存，不进入绑定）；设计 end 核对原待办 done、切片 open 且有规格引用；`backlog.add` 在 designer/settler 下记录产生者 Task；创建实施 Task 时拒绝仍有未结束设计产生者的切片；项目页改为四列看板，已拆分/来源设计/返工/等待确认均由事实派生。
+
+**证据**：
+
+- 服务端：`npm test` **60 文件 / 579 用例通过**；新增 v17→v18 迁移（含 read→investigate 回填）、旧 Task 阶段自由、design 阶段拒绝 develop/test、implement 仅 requiresTest=true 可 test、requiresTest 变更守卫、J-10 回 design 计返工、设计完成核对、切片产生者与 DESIGN_NOT_READY 等用例。
+- webapp：`npm run typecheck`、`npm test` **17 文件 / 119 用例通过**、`npm run build` 通过；新增看板分组、awaitingDesign、flowChain 与设计确认门单元测试。
+- 浏览器：`browser/project.spec.ts` 4/4（真实 Task 经脚本化模型进入“设计中”，B-1 卡片显示设计链且“实施”禁用）；`browser/acceptance.spec.ts` **47/47** 通过，其中原文档 Task 阶段链用例按 document/workKind 更新后通过。
+- 提示词：`npm run check:prompts` **15/15**。
+- 真实模型：`npm run check:backlog` **4/4**；`npm run check:workflow` **8/8**（真实主管 create → develop → review → test → settlement → end，交付文件真实存在且测试真实通过，Review/Test 记录了程序观察的 delivery state）。
+
+**未覆盖**：主设计“Review 后修改规格必须重新 Review”的端到端真实模型路径只由单元/集成测试覆盖；设计切片确认门的用户答复内容由 Review 与提示词判断，不是新的程序审批状态；旧设计 Task 迁移后 workKind 回填为 implement，不能追溯区分；AC-55/59/60/61 与 J-09/J-10 的人工验收尚未逐条执行。

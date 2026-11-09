@@ -10,7 +10,16 @@
  */
 import { randomUUID } from 'node:crypto';
 import { type ToolDefinition } from '@earendil-works/pi-coding-agent';
-import { StoreError, type ArtifactRef, type Store, type TaskPhase, type TaskRow } from '../store/store.ts';
+import {
+  StoreError,
+  OPEN_TASK_STATUSES,
+  WORK_KINDS,
+  type ArtifactRef,
+  type Store,
+  type TaskPhase,
+  type TaskRow,
+  type WorkKind,
+} from '../store/store.ts';
 import { commitPlan, digestOfText, planRefFor, planTarget, readPlan } from '../runtime/plan-store.ts';
 import { readReportBody } from '../runtime/report-store.ts';
 import { acceptanceChanged, acceptanceGap, scopeCheckFor, scopeCheckText } from '../runtime/plan-contract.ts';
@@ -19,6 +28,7 @@ import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
 import { dispatchOp, type DelegationHost } from './delegation-tools.ts';
 import { asRecord, enrich, fail, messageOf, ok, readString, readStringArray, type ToolOutcome } from './tool-kit.ts';
 import { dispatchRefusalFacts, guidanceFor } from './guidance.ts';
+import { designCompletionGaps } from '../runtime/design-completion.ts';
 import { deliveryCommitGaps } from './completion-git.ts';
 
 export interface TaskToolContext {
@@ -94,6 +104,9 @@ function taskSummaryJson(task: TaskRow): Record<string, unknown> {
   return {
     taskId: task.id,
     type: task.type,
+    workKind: task.workKind,
+    flowVersion: task.flowVersion,
+    reworkCount: task.reworkCount,
     phase: task.phase,
     status: task.status,
     requiresTest: task.requiresTest,
@@ -145,6 +158,11 @@ export function createTaskTool(contextOf: TaskToolContextResolver, options: { re
         taskId: { type: 'string', description: 'the Task to act on; defaults to the session current Task' },
         // create
         type: { type: 'string', enum: ['read', 'write'] },
+        workKind: {
+          type: 'string',
+          enum: [...WORK_KINDS],
+          description: 'completion chain: design/implement/document (write) or investigate (read)',
+        },
         goal: { type: 'string' },
         scope: { type: 'string' },
         planMarkdown: { type: 'string' },
@@ -316,6 +334,23 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
   if (type !== 'read' && type !== 'write') {
     return fail('INVALID_ARGUMENT', 'type must be read or write');
   }
+  const rawKind = readString(params, 'workKind');
+  if (rawKind !== undefined && !(WORK_KINDS as readonly string[]).includes(rawKind)) {
+    return fail('INVALID_ARGUMENT', `workKind must be one of ${WORK_KINDS.join(', ')}`, { workKind: rawKind });
+  }
+  if (type === 'write' && rawKind === undefined) {
+    return fail('INVALID_ARGUMENT', 'a write Task needs workKind (design, implement or document)', {
+      missing: 'workKind',
+      example: 'workKind: "implement"',
+    });
+  }
+  const workKind: WorkKind = (rawKind as WorkKind | undefined) ?? 'investigate';
+  if (type === 'read' && workKind !== 'investigate') {
+    return fail('INVALID_ARGUMENT', 'a read Task must use workKind=investigate', { workKind });
+  }
+  if (type === 'write' && workKind === 'investigate') {
+    return fail('INVALID_ARGUMENT', 'workKind=investigate is only for read Tasks', { workKind });
+  }
   const goal = readString(params, 'goal');
   const scope = readString(params, 'scope');
   const planMarkdown = readString(params, 'planMarkdown');
@@ -350,16 +385,20 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
   if (!authorization.ok) {
     return fail('INVALID_ARGUMENT', `authorizationRef: ${authorization.message}`);
   }
-  const requiresTest = params['requiresTest'];
-  if (type === 'read' && requiresTest !== undefined && requiresTest !== false) {
-    return fail('INVALID_ARGUMENT', 'a read Task cannot declare requiresTest=true');
+  const rawTest = params['requiresTest'];
+  if (rawTest !== undefined && typeof rawTest !== 'boolean') {
+    return fail('INVALID_ARGUMENT', 'requiresTest must be a boolean when given');
   }
-  if (type === 'write' && typeof requiresTest !== 'boolean') {
+  if (workKind === 'implement' && typeof rawTest !== 'boolean') {
     return fail(
       'INVALID_ARGUMENT',
-      'a write Task must state requiresTest (true for behaviour code, false for lightweight/document work)',
+      'an implement Task must state requiresTest (true for behaviour code, false for visual work)',
     );
   }
+  if (workKind !== 'implement' && rawTest === true) {
+    return fail('INVALID_ARGUMENT', `a ${workKind} Task cannot declare requiresTest=true`);
+  }
+  const requiresTest = workKind === 'implement' ? (rawTest as boolean) : false;
   const acceptanceRefs = readStringArray(params, 'acceptanceRefs') ?? [];
   const basisRefs = readStringArray(params, 'basisRefs') ?? [];
 
@@ -393,6 +432,20 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
           state: item.state,
         });
       }
+      for (const producerId of item.taskIds) {
+        const producer = context.store.getTask(producerId);
+        if (
+          producer !== undefined &&
+          OPEN_TASK_STATUSES.includes(producer.status) &&
+          producer.workKind === 'design'
+        ) {
+          return fail(
+            'DESIGN_NOT_READY',
+            `backlog item ${id} is still produced by an unfinished design Task; confirm and settle the design first`,
+            { backlogId: id, designTaskId: producer.id, designStatus: producer.status },
+          );
+        }
+      }
     }
   }
   const taskId = `t-${randomUUID().replace(/-/g, '').slice(0, 12)}`;
@@ -408,7 +461,10 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
 
       ...(backlogIds.length > 0 ? { backlogIds } : {}),
       type,
-      requiresTest: type === 'write' ? (requiresTest as boolean) : false,
+      workKind,
+      flowVersion: 1,
+      initialPhase: workKind === 'design' ? 'design' : 'plan',
+      requiresTest,
       goal,
       scope,
       acceptanceRefs,
@@ -416,7 +472,7 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
       planRef: intendedPlan,
       authorizationRefs: authorization.refs,
       sourceInputId: context.inputId,
-      summary: `created (${type})`,
+      summary: `created (${workKind})`,
     });
 
     let planState = 'saved';
@@ -434,6 +490,7 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
         `Task ${task.id} created but its Plan file is not saved yet (${messageOf(error)}); retry with the same plan`,
         {
           taskId: task.id,
+          workKind: task.workKind,
           phase: task.phase,
           currentSessionIds: task.currentSessionIds,
           planRef: task.planRef,
@@ -442,8 +499,9 @@ function createOp(context: TaskToolContext, params: Record<string, unknown>): Pr
         },
       );
     }
-    return ok(`Task ${task.id} created (${type}, requiresTest=${task.requiresTest}); plan at ${target.path}`, {
+    return ok(`Task ${task.id} created (${workKind}, requiresTest=${task.requiresTest}); plan at ${target.path}`, {
       taskId: task.id,
+      workKind: task.workKind,
       phase: task.phase,
       currentSessionIds: task.currentSessionIds,
       planRef: task.planRef,
@@ -627,8 +685,9 @@ function endOp(context: TaskToolContext, task: TaskRow, params: Record<string, u
     // The commit is the model's action, so the host only observes it - and asks the store for the
     // rest of the gaps so one refusal lists everything. Nothing is closed on this path.
     const uncommitted = deliveryCommitGaps(context.store, task);
-    if (uncommitted.length > 0) {
-      const gaps = [...context.store.taskCompletionGaps(task.id, completionResultId), ...uncommitted];
+    const designGaps = designCompletionGaps(context.store, context.cwd, task);
+    if (uncommitted.length > 0 || designGaps.length > 0) {
+      const gaps = [...context.store.taskCompletionGaps(task.id, completionResultId), ...designGaps, ...uncommitted];
       return fail('COMPLETION_INCOMPLETE', `the Task is not complete yet; missing: ${gaps.join('; ')}`, {
         gaps,
         nextActions: guidanceFor(context.store, task).nextActions,

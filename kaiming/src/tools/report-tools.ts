@@ -9,7 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RESULT_KINDS, StoreError, digestOf, type ArtifactRef, type ResultCheck, type ResultKind, type Store } from '../store/store.ts';
-import { digestOfPaths, snapshotDelivery, type DeliveryState } from '../runtime/deliverable.ts';
+import { digestOfPaths, snapshotDelivery, snapshotDesignDelivery, type DeliveryState } from '../runtime/deliverable.ts';
 import { digestOfText } from '../runtime/plan-store.ts';
 import { knowledgeEntryPaths } from '../runtime/project-store.ts';
 import { readReportBody, reportRefFor, reportTarget, writeReportBody } from '../runtime/report-store.ts';
@@ -227,8 +227,12 @@ function observeDelivery(context: ReportToolContext, taskId: string, kind: Resul
   if (kind !== 'review' && kind !== 'test') {
     return null;
   }
+  const task = context.store.getTask(taskId);
   const project = context.store.getProject(context.projectId);
   const knowledge = knowledgeEntryPaths(project?.initializationRef).map((path) => join(context.cwd, path));
+  if (task?.workKind === 'design' && task.flowVersion >= 1) {
+    return snapshotDesignDelivery(context.cwd, knowledge);
+  }
   if (kind === 'test') {
     // The same file set the last passed review covered, so the digests are directly comparable.
     const review = context.store

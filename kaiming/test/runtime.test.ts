@@ -1278,6 +1278,7 @@ describe('input runner', () => {
     const args = JSON.stringify({
       op: 'create',
       type: 'write',
+      workKind: 'implement',
       goal: 'add password reset',
       scope: 'account module',
       acceptanceRefs: ['AC-1'],
@@ -1311,6 +1312,7 @@ describe('input runner', () => {
     const args = JSON.stringify({
       op: 'create',
       type: 'write',
+      workKind: 'implement',
       goal: 'no tests declared',
       scope: 'x',
       planMarkdown: '# Plan\n',
@@ -1416,6 +1418,7 @@ describe('input runner', () => {
               arguments: JSON.stringify({
                 op: 'create',
                 type: 'read',
+                workKind: 'investigate',
                 goal: 'investigate',
                 scope: 'x',
                 planMarkdown: '# plan\n',
@@ -1465,6 +1468,7 @@ describe('input runner', () => {
     const createArgs = JSON.stringify({
       op: 'create',
       type: 'write',
+      workKind: 'implement',
       goal: 'reset password',
       scope: 'account',
       planMarkdown: '# plan\n1. develop\n\n## 验收\n- feature works\n',
@@ -1533,6 +1537,7 @@ describe('input runner', () => {
     const createArgs = JSON.stringify({
       op: 'create',
       type: 'write',
+      workKind: 'implement',
       goal: 'reset password',
       scope: 'account',
       planMarkdown: '# plan\n1. develop\n\n## 验收\n- feature works\n',
@@ -1874,6 +1879,7 @@ describe('input runner', () => {
     const createArgs = JSON.stringify({
       op: 'create',
       type: 'write',
+      workKind: 'implement',
       goal: 'change the reset flow',
       scope: 'account',
       planMarkdown: '# write plan\n1. look, then change\n\n## 验收\n- behaviour changed\n',

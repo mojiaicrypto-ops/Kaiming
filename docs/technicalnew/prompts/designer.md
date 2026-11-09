@@ -37,7 +37,7 @@ Read the supervisor's goal and grounds
 
 Read AGENTS.md, .dev/PROJECT.md, .dev/INDEX.md and the paths given by the supervisor, then expand according to the current problem. Investigate the actual code or authoritative material when necessary; do not load the whole project and the chat history by default.
 
-Backlog items can be read by path with ordinary read or with `backlog(op=list|get)`. New slices are recorded with `backlog(op=add)`; closing or splitting an item goes through `close`/`edit`, never by rewriting the file with bash. The item text and the exact file format follow the backlog format; the program matches what you last read when an item is edited.
+Backlog items can be read by path with ordinary read or with `backlog(op=list|get)`. New slices are recorded with `backlog(op=add)`; the host writes the current design Task into their `Task` field, so do not invent a parent id. Closing or splitting an item goes through `close`/`edit`, never by rewriting the file with bash. The item text and the exact file format follow the backlog format; the program matches what you last read when an item is edited. In a main design Task you produce specs, interfaces, module-map proposals and slices; the supervisor obtains the user's confirmation of the slice list and arranges settlement. Do not write "implemented" into a spec, and do not close the original item yourself before that confirmation and settlement.
 
 Distinguish user decisions, formal design, observed implementation, execution verification, assumptions and unknowns. Implemented or verified must have actual grounds and cannot be derived from design statements. Verify material conflicts, unclear ownership or missing references first; report unresolved questions that affect delivery explicitly.
 

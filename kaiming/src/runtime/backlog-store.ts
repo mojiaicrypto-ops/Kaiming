@@ -54,6 +54,8 @@ export interface BacklogDraft {
   readonly title: string;
   readonly body?: string;
   readonly specRefs?: readonly string[];
+  /** Task that produced this item (a design slice); written by the host, not a model parameter. */
+  readonly taskIds?: readonly string[];
   readonly source: string;
   readonly actorId: string;
 }
@@ -718,6 +720,9 @@ export async function addItem(cwd: string, draft: BacklogDraft): Promise<Backlog
     push('state', '状态', 'open');
     for (const ref of specRefs) {
       push('spec', '规格', ref);
+    }
+    for (const taskId of draft.taskIds ?? []) {
+      if (taskId.trim() !== '') push('task', 'Task', taskId);
     }
     push('source', '来源', draft.source);
     push('createdBy', '创建人', draft.actorId);

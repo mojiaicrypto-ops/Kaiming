@@ -59,6 +59,7 @@ export interface ProgressStep {
 export interface ProgressInput {
   readonly task: {
     readonly type: string;
+    readonly workKind?: string | undefined;
     readonly phase: string;
     readonly status: string;
     readonly requiresTest?: boolean | undefined;
@@ -73,14 +74,38 @@ export interface ProgressInput {
  * listed, so rework never re-plans a phase that already ran. Read Tasks owe nothing.
  */
 export function plannedTail(
-  task: { readonly type: string; readonly phase: string; readonly requiresTest?: boolean | undefined },
+  task: {
+    readonly type: string;
+    readonly phase: string;
+    readonly requiresTest?: boolean | undefined;
+    readonly workKind?: string | undefined;
+  },
   phasesSoFar: readonly string[],
 ): readonly string[] {
   if (task.type !== 'write') return [];
-  const index = (phase: string): number => PHASE_ORDER.indexOf(phase as (typeof PHASE_ORDER)[number]);
-  const reach = Math.max(index(task.phase), ...phasesSoFar.map(index));
-  const tail = ['review', ...(task.requiresTest === true ? ['test'] : []), 'settle'];
-  return tail.filter((phase) => index(phase) > reach);
+  const test = task.requiresTest === true ? ['test'] : [];
+  const kind = task.workKind;
+  if (kind === undefined) {
+    const index = (phase: string): number => PHASE_ORDER.indexOf(phase as (typeof PHASE_ORDER)[number]);
+    const reach = Math.max(index(task.phase), ...phasesSoFar.map(index));
+    return ['review', ...test, 'settle'].filter((phase) => index(phase) > reach);
+  }
+  const sequence =
+    kind === 'design'
+      ? ['clarify', 'analyze', 'design', 'review', 'settle']
+      : kind === 'document'
+        ? ['plan', 'design', 'review', 'settle']
+        : kind === 'implement'
+          ? task.phase === 'design'
+            ? ['design', 'develop', 'review', ...test, 'settle']
+            : ['plan', 'develop', 'review', ...test, 'settle']
+          : [];
+  if (sequence.length === 0) return [];
+  const positions = [task.phase, ...phasesSoFar]
+    .map((phase) => sequence.indexOf(phase))
+    .filter((position) => position >= 0);
+  const reach = positions.length === 0 ? -1 : Math.max(...positions);
+  return sequence.slice(reach + 1);
 }
 
 /**

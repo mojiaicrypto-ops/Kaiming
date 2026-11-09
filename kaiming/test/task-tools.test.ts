@@ -102,6 +102,7 @@ function createArgs(overrides: Record<string, unknown> = {}): Record<string, unk
     planMarkdown: PLAN,
     authorizationRef: { inputId: 'i-dec' },
     requiresTest: true,
+    workKind: overrides.workKind ?? (overrides.type === 'read' ? 'investigate' : 'implement'),
     ...overrides,
   };
 }
@@ -593,4 +594,39 @@ describe('task change announcements', () => {
     const task = w.store.listTasks(w.projectId)[0];
     expect(task?.authorizationRefs).toContain('input:i-run');
   });
+
+describe('workKind contract', () => {
+  it('starts a design Task at design and refuses an implementation-only test', async () => {
+    const w = world();
+    const created = await tool(w.tools).execute(
+      'call-1',
+      createArgs({ workKind: 'design', requiresTest: undefined }),
+    );
+    expect(created.isError).toBe(false);
+    const task = w.store.listTasks(w.projectId)[0];
+    expect(task).toMatchObject({ workKind: 'design', phase: 'design', requiresTest: false });
+
+    const refused = await tool(w.tools).execute('call-2', { op: 'update', phase: 'develop' });
+    expect(refused.isError).toBe(true);
+    expect(refused.details['allowed']).toContain('review');
+  });
+
+  it('requires an explicit test decision only for implement Tasks', async () => {
+    const w = world();
+    const write = await tool(w.tools).execute('call-1', createArgs({ requiresTest: undefined }));
+    expect(write.isError).toBe(true);
+    expect(write.details['missing']).toBeUndefined();
+
+    const read = await tool(w.tools).execute('call-2', {
+      op: 'create',
+      type: 'read',
+      goal: 'survey',
+      scope: 'x',
+      planMarkdown: '# survey\n',
+      authorizationRef: { inputId: 'i-dec' },
+    });
+    expect(read.isError).toBe(false);
+    expect(w.store.listTasks(w.projectId)[0]?.workKind).toBe('investigate');
+  });
+});
 });
