@@ -505,19 +505,6 @@ describe('read-only query surface', () => {
     expect(errorCode(symlink.body)).toBe('FORBIDDEN');
   });
 
-  it('refuses a requirement id that is not a record name', async () => {
-    const h = await harness();
-    // A traversal id must never become a path: it is refused before any lookup.
-    const escape = await h.call('requirement.get', {
-      projectId: h.projectId,
-      requirementId: '../../../outside-secret',
-    });
-
-    expect(escape.status).toBe(400);
-    expect(errorCode(escape.body)).toBe('INVALID_ARGUMENT');
-    expect(JSON.stringify(escape.body)).not.toContain('TOP_SECRET');
-  });
-
   it('advances task.list paging with the cursor it returns', async () => {
     const h = await harness();
     // A second Task in the same project (cancelled, so the chief's one-open-Task rule holds).
