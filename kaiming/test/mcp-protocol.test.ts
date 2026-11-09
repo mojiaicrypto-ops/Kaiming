@@ -42,7 +42,7 @@ describe('the MCP protocol layer', () => {
     const tools = (answer?.result as {
       tools: Array<{ name: string; description: string; inputSchema: { type: string }; annotations: Record<string, boolean> }>;
     }).tools;
-    expect(tools.length).toBe(10);
+    expect(tools.length).toBe(11);
     for (const tool of tools) {
       expect(tool.inputSchema.type).toBe('object');
       expect(tool.description.length).toBeGreaterThan(40);
@@ -50,7 +50,14 @@ describe('the MCP protocol layer', () => {
     }
     // Delegation writes to a project; every read stays read-only.
     expect(tools.find((tool) => tool.name === 'kaiming_delegate')?.annotations.destructiveHint).toBe(true);
-    for (const name of ['kaiming_status', 'kaiming_read', 'kaiming_projects', 'kaiming_requirements', 'kaiming_runs']) {
+    for (const name of [
+      'kaiming_status',
+      'kaiming_read',
+      'kaiming_projects',
+      'kaiming_requirements',
+      'kaiming_backlog',
+      'kaiming_runs',
+    ]) {
       expect(tools.find((tool) => tool.name === name)?.annotations.readOnlyHint).toBe(true);
     }
   });

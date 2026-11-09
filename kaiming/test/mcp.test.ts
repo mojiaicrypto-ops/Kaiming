@@ -160,6 +160,7 @@ describe('the MCP surface', () => {
       const listed = (await client.request('tools/list'))['result'] as { tools: Array<{ name: string }> };
       expect(listed.tools.map((tool) => tool.name).sort()).toEqual([
         'kaiming_answer',
+        'kaiming_backlog',
         'kaiming_cancel',
         'kaiming_delegate',
         'kaiming_projects',

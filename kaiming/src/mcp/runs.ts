@@ -625,6 +625,24 @@ export class RunTools {
     }) as Promise<Record<string, unknown>>;
   }
 
+  async backlog(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const project = await this.projectFor(optionalText(args['project_path'], 'project_path'));
+    const backlogId = optionalText(args['backlog_id'], 'backlog_id');
+    if (backlogId !== undefined) {
+      return this.options.control.call('backlog.get', {
+        projectId: project.projectId,
+        id: backlogId,
+      }) as Promise<Record<string, unknown>>;
+    }
+    return this.options.control.call('backlog.list', {
+      projectId: project.projectId,
+      limit: integer(args['limit'], 'limit', 1, 200, 50),
+      ...(optionalText(args['state'], 'state') === undefined ? {} : { state: optionalText(args['state'], 'state') }),
+      ...(optionalText(args['query'], 'query') === undefined ? {} : { query: optionalText(args['query'], 'query') }),
+      ...(optionalText(args['cursor'], 'cursor') === undefined ? {} : { cursor: optionalText(args['cursor'], 'cursor') }),
+    }) as Promise<Record<string, unknown>>;
+  }
+
   /** The session a run belongs to: the channel's fixed session, resolved through the input row. */
   private async sessionOfRun(projectId: string, runId: string): Promise<string> {
     const { inputId } = parseRunId(runId);

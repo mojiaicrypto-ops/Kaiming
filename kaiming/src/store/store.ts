@@ -1151,6 +1151,15 @@ export class Store {
       .all(sessionId) as unknown as InteractionRow[];
   }
 
+  /** Every unanswered question in one project: the project page's "waiting for you" source. */
+  listPendingInteractionsForProject(projectId: string): InteractionRow[] {
+    return this.db
+      .prepare(
+        "SELECT * FROM interactions WHERE projectId = ? AND state = 'pending' ORDER BY createdAt, interactionId",
+      )
+      .all(projectId) as unknown as InteractionRow[];
+  }
+
   listInteractions(sessionId: string): InteractionRow[] {
     return this.db
       .prepare('SELECT * FROM interactions WHERE sessionId = ? ORDER BY createdAt, interactionId')

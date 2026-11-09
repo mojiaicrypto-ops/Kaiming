@@ -7,6 +7,16 @@ import { MAX_ATTACHMENTS_PER_INPUT, readDocument, readImage } from './attachment
 import { RpcError, type RpcRouter } from './rpc.ts';
 import type { InputRow, Store } from '../store/store.ts';
 import type { CompactionOutcome } from '../runtime/runner.ts';
+import {
+  BacklogConflictError,
+  BacklogNotFoundError,
+  BacklogProblemError,
+  addItem,
+  closeItem,
+  reopenItem,
+  updateItem,
+  type BacklogItem,
+} from '../runtime/backlog-store.ts';
 
 export interface WriteMethodsOptions {
   /** Attachment storage for image blocks; absent means this server accepts text only. */
@@ -20,7 +30,7 @@ export interface WriteMethodsOptions {
     params: { inputId: string; requestKey: string; reason: string },
   ) => Promise<{ readonly status: InputRow['status']; readonly stopRequested: boolean }>;
   /** Business invalidation (M4): the caller's pages re-read the named entity. */
-  readonly invalidate?: (sessionId: string, entity: 'input' | 'task' | 'session' | 'interaction', id: string) => void;
+  readonly invalidate?: (sessionId: string, entity: 'input' | 'task' | 'session' | 'interaction' | 'backlog', id: string) => void;
   /** Deliver a saved answer to the awaiting Pi call (M5); without a bridge the answer is only stored. */
   readonly resolveInteraction?: (interactionId: string, response: unknown) => boolean;
   /** Run Pi's own compaction for one idle session (manual entry); validation lives in the runner. */
@@ -412,6 +422,104 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
       };
     },
   });
+
+  // Backlog writes. The file is the authority (BF-2..BF-3): these methods validate identity and
+  // shape, call the one store that owns the file, and report what the file now says. A conflict
+  // returns the current entry so the caller can merge without re-reading blindly.
+  router.register('backlog.add', {
+    write: true,
+    run: async (params, context): Promise<unknown> => {
+      const project = requireProject(store, params);
+      const title = readString(params, 'title');
+      if (title === undefined) {
+        throw new RpcError('INVALID_ARGUMENT', 'title is required');
+      }
+      const specRefs = stringList(params, 'specRefs');
+      const item = await backlogCall(() =>
+        addItem(project.realPath, {
+          title,
+          ...(readString(params, 'body') === undefined ? {} : { body: readString(params, 'body') as string }),
+          ...(specRefs === undefined ? {} : { specRefs }),
+          source: '界面',
+          actorId: context.actorId ?? 'local',
+        }),
+      );
+      notifyBacklog(options, project.id, item.id);
+      return backlogWriteResult(item);
+    },
+  });
+
+  router.register('backlog.update', {
+    write: true,
+    run: async (params, context): Promise<unknown> => {
+      const project = requireProject(store, params);
+      const id = readString(params, 'id');
+      const expectedDigest = readString(params, 'expectedDigest');
+      if (id === undefined || expectedDigest === undefined) {
+        throw new RpcError('INVALID_ARGUMENT', 'id and expectedDigest are required');
+      }
+      const specRefs = stringList(params, 'specRefs');
+      const item = await backlogCall(() =>
+        updateItem(
+          project.realPath,
+          id,
+          expectedDigest,
+          {
+            ...(readString(params, 'title') === undefined ? {} : { title: readString(params, 'title') as string }),
+            ...(typeof params['body'] === 'string' ? { body: params['body'] as string } : {}),
+            ...(specRefs === undefined ? {} : { specRefs }),
+          },
+          context.actorId ?? 'local',
+        ),
+      );
+      notifyBacklog(options, project.id, item.id);
+      return backlogWriteResult(item);
+    },
+  });
+
+  router.register('backlog.close', {
+    write: true,
+    run: async (params, context): Promise<unknown> => {
+      const project = requireProject(store, params);
+      const id = readString(params, 'id');
+      const state = readString(params, 'state');
+      const note = readString(params, 'note');
+      if (id === undefined || (state !== 'done' && state !== 'dropped') || note === undefined) {
+        throw new RpcError('INVALID_ARGUMENT', 'id, state (done|dropped) and note are required');
+      }
+      const expectedDigest = readString(params, 'expectedDigest');
+      const taskIds = stringList(params, 'taskIds');
+      const item = await backlogCall(() =>
+        closeItem(
+          project.realPath,
+          id,
+          expectedDigest,
+          { state, note, ...(taskIds === undefined ? {} : { taskIds }) },
+          context.actorId ?? 'local',
+        ),
+      );
+      notifyBacklog(options, project.id, item.id);
+      return backlogWriteResult(item);
+    },
+  });
+
+  router.register('backlog.reopen', {
+    write: true,
+    run: async (params, context): Promise<unknown> => {
+      const project = requireProject(store, params);
+      const id = readString(params, 'id');
+      const expectedDigest = readString(params, 'expectedDigest');
+      const note = readString(params, 'note');
+      if (id === undefined || expectedDigest === undefined || note === undefined) {
+        throw new RpcError('INVALID_ARGUMENT', 'id, expectedDigest and note are required');
+      }
+      const item = await backlogCall(() =>
+        reopenItem(project.realPath, id, expectedDigest, note, context.actorId ?? 'local'),
+      );
+      notifyBacklog(options, project.id, item.id);
+      return backlogWriteResult(item);
+    },
+  });
 }
 
 function stopResult(
@@ -420,7 +528,7 @@ function stopResult(
   inputId: string,
   status: InputRow['status'],
   stopRequested: boolean,
-  invalidate?: (sessionId: string, entity: 'input' | 'task' | 'session' | 'interaction', id: string) => void,
+  invalidate?: (sessionId: string, entity: 'input' | 'task' | 'session' | 'interaction' | 'backlog', id: string) => void,
 ): Record<string, unknown> {
   const input = store.getInput(inputId);
   const running = store.listInputs(sessionId).some((entry) => entry.status === 'processing');
@@ -435,6 +543,58 @@ function stopResult(
     // Until the run really settles the session is stopping; the client must not assume it stopped.
     activity: running ? 'stopping' : 'idle',
   };
+}
+
+/** Map the backlog store's failures onto the public error contract, keeping the actionable facts. */
+async function backlogCall<T>(work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    if (error instanceof BacklogConflictError) {
+      throw new RpcError('VERSION_CONFLICT', error.message, { current: error.item });
+    }
+    if (error instanceof BacklogProblemError) {
+      throw new RpcError('INVALID_ARGUMENT', error.message, {
+        backlogId: error.id,
+        issues: error.issues,
+      });
+    }
+    if (error instanceof BacklogNotFoundError) {
+      throw new RpcError('NOT_FOUND', error.message, { backlogId: error.id });
+    }
+    throw new RpcError('INVALID_ARGUMENT', error instanceof Error ? error.message : String(error));
+  }
+}
+
+function backlogWriteResult(item: BacklogItem): Record<string, unknown> {
+  return { item };
+}
+
+/**
+ * The backlog is project-scoped, but subscriptions are per session: tell every session of the
+ * project so an open project page or conversation view re-reads it.
+ */
+function notifyBacklog(
+  options: WriteMethodsOptions,
+  projectId: string,
+  backlogId: string,
+): void {
+  for (const session of options.store.listSessions()) {
+    if (session.projectId === projectId) {
+      options.invalidate?.(session.id, 'backlog', backlogId);
+    }
+  }
+}
+
+function stringList(params: Record<string, unknown>, key: string): string[] | undefined {
+  const value = params[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value) || !value.every((entry) => typeof entry === 'string')) {
+    throw new RpcError('INVALID_ARGUMENT', `${key} must be a list of strings`, { [key]: value });
+  }
+  return value as string[];
 }
 
 function requireProject(store: Store, params: Record<string, unknown>) {

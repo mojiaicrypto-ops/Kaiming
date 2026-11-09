@@ -14,7 +14,12 @@ import { readPlan } from '../runtime/plan-store.ts';
 import { scopeCheckFor } from '../runtime/plan-contract.ts';
 import { mimeTypeOf, resolveInsideProject } from './fs-guard.ts';
 import { resolveAuthorizationRefs } from '../runtime/authorization.ts';
-import type { Store } from '../store/store.ts';
+import { OPEN_TASK_STATUSES, type Store } from '../store/store.ts';
+import {
+  readBacklog,
+  type BacklogIssue,
+  type BacklogItem,
+} from '../runtime/backlog-store.ts';
 import { textOfPayload } from '../runtime/input-text.ts';
 import { recordedConfigOf, summarizeRecordedConfig } from '../runtime/recorded-config.ts';
 
@@ -333,14 +338,18 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
     run: (params): unknown => {
       const project = requireProject(store, params);
       const sessionId = readString(params, 'sessionId');
-      if (sessionId === undefined) {
-        throw new RpcError('INVALID_ARGUMENT', 'sessionId is required');
-      }
-      const session = requireSession(store, project.id, sessionId);
+      // Without a session the project page asks "what is waiting anywhere in this project": every
+      // pending question, each tagged with its task and source session. With a session the answer is
+      // the one the conversation view has always received.
       const rows =
-        session.roleId === 'chief'
-          ? store.listPendingInteractionsForChief(sessionId)
-          : store.listPendingInteractions(sessionId);
+        sessionId === undefined
+          ? store.listPendingInteractionsForProject(project.id)
+          : (() => {
+              const session = requireSession(store, project.id, sessionId);
+              return session.roleId === 'chief'
+                ? store.listPendingInteractionsForChief(sessionId)
+                : store.listPendingInteractions(sessionId);
+            })();
       return {
         interactions: rows.map((interaction) => ({
           interactionId: interaction.interactionId,
@@ -663,6 +672,105 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
       };
     },
   });
+
+  router.register('backlog.list', {
+    write: false,
+    run: (params): unknown => {
+      const project = requireProject(store, params);
+      const state = readString(params, 'state') ?? 'open';
+      if (!['open', 'done', 'dropped', 'all'].includes(state)) {
+        throw new RpcError('INVALID_ARGUMENT', 'state must be open, done, dropped or all', { state });
+      }
+      const query = (readString(params, 'query') ?? '').trim().toLowerCase();
+      const limit = clampLimit(readNumber(params, 'limit'));
+      const read = readBacklog(project.realPath);
+      const filtered = read.items
+        .filter((item) => (state === 'all' ? true : item.state === state))
+        .filter(
+          (item) =>
+            query === '' ||
+            item.title.toLowerCase().includes(query) ||
+            item.body.toLowerCase().includes(query),
+        )
+        .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '') || left.id.localeCompare(right.id));
+      const cursor = readString(params, 'cursor');
+      const index = cursor === undefined ? -1 : filtered.findIndex((item) => `${item.updatedAt ?? ''}|${item.id}` === cursor);
+      if (cursor !== undefined && index < 0) {
+        throw new RpcError('INVALID_ARGUMENT', 'the cursor does not belong to this listing', { cursor });
+      }
+      const start = index + 1;
+      const page = filtered.slice(start, start + limit);
+      const last = page[page.length - 1];
+      return {
+        items: page.map((item) => backlogItemView(store, project.id, item, read)),
+        issues: read.issues,
+        warnings: read.warnings,
+        nextCursor:
+          start + limit < filtered.length && last !== undefined
+            ? `${last.updatedAt ?? ''}|${last.id}`
+            : null,
+      };
+    },
+  });
+
+  router.register('backlog.get', {
+    write: false,
+    run: (params): unknown => {
+      const project = requireProject(store, params);
+      const id = readString(params, 'id');
+      if (id === undefined || id.trim() === '') {
+        throw new RpcError('INVALID_ARGUMENT', 'id is required');
+      }
+      const read = readBacklog(project.realPath);
+      const item = read.items.find((entry) => entry.id === id);
+      if (item === undefined) {
+        throw new RpcError('NOT_FOUND', `backlog item ${id} does not exist in this project`, { id });
+      }
+      return {
+        ...backlogItemView(store, project.id, item, read),
+        issues: read.issues.filter((issue) => issue.id === id),
+        warnings: read.warnings.filter((warning) => warning.id === id),
+      };
+    },
+  });
+
+function backlogItemView(
+  store: Store,
+  projectId: string,
+  item: BacklogItem,
+  read: { readonly issues: readonly BacklogIssue[]; readonly warnings: readonly BacklogIssue[] },
+): Record<string, unknown> {
+  const tasks = store.listTasks(projectId).filter((task) => task.backlogIds.includes(item.id));
+  const openTasks = tasks
+    .filter((task) => OPEN_TASK_STATUSES.includes(task.status))
+    .map((task) => ({ taskId: task.id, status: task.status, chiefSessionId: task.chiefSessionId }));
+  const lastClosed = tasks
+    .filter((task) => task.status === 'completed' || task.status === 'cancelled')
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+  return {
+    id: item.id,
+    title: item.title,
+    state: item.state,
+    ready: item.specRefs.length > 0,
+    specRefs: item.specRefs,
+    taskIds: item.taskIds,
+    source: item.source,
+    createdBy: item.createdBy,
+    closedBy: item.closedBy,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+    closedAt: item.closedAt,
+    note: item.note,
+    external: item.external,
+    body: item.body,
+    line: item.line,
+    digest: item.digest,
+    openTasks,
+    ...(lastClosed === undefined ? {} : { lastClosedTask: { taskId: lastClosed.id, status: lastClosed.status } }),
+    problems: read.issues.filter((issue) => issue.id === item.id),
+    warnings: read.warnings.filter((warning) => warning.id === item.id),
+  };
+}
 
   router.register('project.files.list', {
     write: false,

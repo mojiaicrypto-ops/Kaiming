@@ -565,7 +565,14 @@ export function parseBacklog(
     }
   }
 
-  if ((text ?? '').trim() !== '' && items.length === 0 && issues.length === 0) {
+  // A file holding only headings and the canonical writing note is empty, not broken: that is
+  // exactly what `add` creates before the first item. Anything else unexplained (a table, prose)
+  // means the format was changed under us.
+  const unexplained = lines.filter((line) => {
+    const trimmed = line.trim();
+    return trimmed !== '' && HEADING.exec(line) === null && !NOTE_LINES.includes(trimmed);
+  });
+  if (unexplained.length > 0 && items.length === 0 && issues.length === 0) {
     issues.push({
       line: 0,
       excerpt: '',

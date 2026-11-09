@@ -323,6 +323,31 @@ export function toolDefinitions(tools: RunTools): readonly ToolDefinition[] {
       annotations: READ_ONLY,
       run: (args) => tools.requirements(args),
     },
+    {
+      name: 'kaiming_backlog',
+      title: 'List or read backlog items',
+      description:
+        'Backlog items of one project: id, title, state, readiness, spec references, associated open Task and problem markers, or one item’s full content by id. Items with format problems are reported, not hidden. Read-only.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          project_path: { type: 'string', description: projectHelp },
+          state: {
+            type: 'string',
+            enum: ['open', 'done', 'dropped', 'all'],
+            description: 'Filter by state (default open).',
+          },
+          query: { type: 'string', description: 'Case-insensitive text filter over title and body.' },
+          backlog_id: { type: 'string', description: 'Return this item’s full content instead of a list.' },
+          limit: { type: 'integer', minimum: 1, maximum: 200, description: 'Page size (default 50).' },
+          cursor: { type: 'string', description: 'nextCursor from a previous page.' },
+        },
+        additionalProperties: false,
+      },
+      outputSchema: { type: 'object', additionalProperties: true },
+      annotations: READ_ONLY,
+      run: (args) => tools.backlog(args),
+    },
   ];
 }
 
