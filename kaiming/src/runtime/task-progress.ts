@@ -60,6 +60,7 @@ export interface ProgressInput {
   readonly task: {
     readonly type: string;
     readonly workKind?: string | undefined;
+    readonly flowVersion?: number | undefined;
     readonly phase: string;
     readonly status: string;
     readonly requiresTest?: boolean | undefined;
@@ -79,13 +80,14 @@ export function plannedTail(
     readonly phase: string;
     readonly requiresTest?: boolean | undefined;
     readonly workKind?: string | undefined;
+    readonly flowVersion?: number | undefined;
   },
   phasesSoFar: readonly string[],
 ): readonly string[] {
   if (task.type !== 'write') return [];
   const test = task.requiresTest === true ? ['test'] : [];
   const kind = task.workKind;
-  if (kind === undefined) {
+  if (kind === undefined || (task.flowVersion ?? 0) < 1) {
     const index = (phase: string): number => PHASE_ORDER.indexOf(phase as (typeof PHASE_ORDER)[number]);
     const reach = Math.max(index(task.phase), ...phasesSoFar.map(index));
     return ['review', ...test, 'settle'].filter((phase) => index(phase) > reach);

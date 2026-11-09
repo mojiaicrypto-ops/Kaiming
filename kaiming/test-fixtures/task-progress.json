@@ -352,7 +352,8 @@
         "workKind": "design",
         "phase": "design",
         "status": "active",
-        "requiresTest": false
+        "requiresTest": false,
+        "flowVersion": 1
       },
       "members": [],
       "steps": [
@@ -382,7 +383,8 @@
         "workKind": "implement",
         "phase": "design",
         "status": "active",
-        "requiresTest": true
+        "requiresTest": true,
+        "flowVersion": 1
       },
       "members": [],
       "steps": [
@@ -422,7 +424,8 @@
         "workKind": "document",
         "phase": "plan",
         "status": "active",
-        "requiresTest": false
+        "requiresTest": false,
+        "flowVersion": 1
       },
       "members": [],
       "steps": [
