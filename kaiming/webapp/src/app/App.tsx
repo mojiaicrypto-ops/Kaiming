@@ -237,15 +237,37 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
               }
             }}
             onRenameSession={async (sessionId, title, revision) => {
-              try {
-                await rpc.call(
+              const write = async (expectedRevision: number): Promise<{ title: string | null; revision: number }> =>
+                (await rpc.call(
                   'session.rename',
-                  { projectId: workspace.projectId, sessionId, title, expectedRevision: revision },
+                  { projectId: workspace.projectId, sessionId, title, expectedRevision },
                   { requestId: newRequestId('rename') },
-                );
+                )) as { title: string | null; revision: number };
+              try {
+                const updated = await write(revision);
+                workspace.applySessionRename(sessionId, updated.title, updated.revision);
                 await workspace.refreshSessions();
                 return true;
               } catch (error) {
+                // A concurrent Task/input transition bumps the session revision. The name itself is
+                // independent of that transition, so retry once with the revision the server now has
+                // instead of making the user reopen the editor.
+                if (error instanceof RpcError && error.code === 'VERSION_CONFLICT') {
+                  try {
+                    const listed = await rpc.call<{
+                      sessions: Array<{ sessionId: string; revision: number }>;
+                    }>('session.list', { projectId: workspace.projectId, limit: 200 });
+                    const latest = listed.sessions.find((row) => row.sessionId === sessionId);
+                    if (latest !== undefined && latest.revision !== revision) {
+                      const updated = await write(latest.revision);
+                      workspace.applySessionRename(sessionId, updated.title, updated.revision);
+                      await workspace.refreshSessions();
+                      return true;
+                    }
+                  } catch {
+                    // Fall through to the original refusal below.
+                  }
+                }
                 // A refused rename is a fact about this row (someone else changed it), not a silent
                 // no-op: the user typed a name and needs to know it was not kept.
                 notify(errorText(error, t), 'error');

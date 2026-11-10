@@ -76,6 +76,8 @@ export interface WorkspaceApi {
   readonly reloadProjects: () => Promise<void>;
   /** Re-read the rail after the server said the project's sessions changed. */
   readonly refreshSessions: () => Promise<void>;
+  /** Apply the server's accepted name immediately, before the next list read. */
+  readonly applySessionRename: (sessionId: string, title: string | null, revision: number) => void;
 }
 
 /**
@@ -91,6 +93,7 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
   const [loading, setLoading] = useState(true);
   /** The loaded project, for stable callbacks that must not depend on a changing prop. */
   const projectRef = useRef<ProjectSummary | null>(null);
+  const refreshSeq = useRef(0);
 
   const loadProjects = useCallback(async (): Promise<void> => {
     try {
@@ -284,8 +287,10 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
   const refreshSessions = useCallback(async (): Promise<void> => {
     const current = projectRef.current;
     if (current === null) return;
+    const seq = ++refreshSeq.current;
     try {
       const page = await loadSessions(current.projectId);
+      if (seq !== refreshSeq.current) return;
       setSessions(page.rows);
       setSessionCursor(page.nextCursor);
       // A rail that lost the open session (a cleanup, another tab) must move the shell with it.
@@ -294,6 +299,12 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
       // Leave the rows as they are: a stale rail is better than a rail that empties itself.
     }
   }, [loadSessions, chooseSession]);
+
+  const applySessionRename = useCallback((sessionId: string, title: string | null, revision: number): void => {
+    setSessions((previous) =>
+      previous.map((row) => (row.sessionId === sessionId ? { ...row, title, revision } : row)),
+    );
+  }, []);
 
   const loadMoreSessions = useCallback(async (): Promise<void> => {
     const current = projectRef.current;
@@ -324,6 +335,7 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
       loadMoreSessions,
       refresh,
       refreshSessions,
+      applySessionRename,
       reloadProjects: loadProjects,
     }),
     [
@@ -341,6 +353,7 @@ export function useWorkspace(rpc: RpcClient): WorkspaceApi {
       loadMoreSessions,
       refresh,
       refreshSessions,
+      applySessionRename,
       loadProjects,
     ],
   );
