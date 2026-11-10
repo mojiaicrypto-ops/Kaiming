@@ -1,0 +1,247 @@
+{
+  "profile": "visual",
+  "scope": "static publication checks, not product Test or WeChat backend verification",
+  "geometry": [
+    {
+      "id": "01-task-delivery",
+      "viewBox": [
+        840,
+        1580
+      ],
+      "png": [
+        1680,
+        3160
+      ],
+      "textOutsideCanvas": []
+    },
+    {
+      "id": "02-context-contract",
+      "viewBox": [
+        840,
+        1390
+      ],
+      "png": [
+        1680,
+        2780
+      ],
+      "textOutsideCanvas": []
+    },
+    {
+      "id": "03-independent-verification",
+      "viewBox": [
+        840,
+        1595
+      ],
+      "png": [
+        1680,
+        3190
+      ],
+      "textOutsideCanvas": []
+    },
+    {
+      "id": "04-facts-and-judgment",
+      "viewBox": [
+        840,
+        1530
+      ],
+      "png": [
+        1680,
+        3060
+      ],
+      "textOutsideCanvas": []
+    }
+  ],
+  "facts": [
+    {
+      "width": 375,
+      "scrollWidth": 375,
+      "overflows": [],
+      "images": [
+        {
+          "width": 1680,
+          "height": 3160,
+          "decoded": true
+        },
+        {
+          "width": 1680,
+          "height": 2780,
+          "decoded": true
+        },
+        {
+          "width": 1680,
+          "height": 3190,
+          "decoded": true
+        },
+        {
+          "width": 1680,
+          "height": 3060,
+          "decoded": true
+        }
+      ],
+      "scriptCount": 0,
+      "externalResources": [],
+      "hrefs": [
+        "https://aclanthology.org/2024.tacl-1.9/"
+      ],
+      "bodyFont": "17px",
+      "lineHeight": "32.3px",
+      "contentBlocks": 68,
+      "missing": [],
+      "exactPaperLink": true
+    },
+    {
+      "width": 390,
+      "scrollWidth": 390,
+      "overflows": [],
+      "images": [
+        {
+          "width": 1680,
+          "height": 3160,
+          "decoded": true
+        },
+        {
+          "width": 1680,
+          "height": 2780,
+          "decoded": true
+        },
+        {
+          "width": 1680,
+          "height": 3190,
+          "decoded": true
+        },
+        {
+          "width": 1680,
+          "height": 3060,
+          "decoded": true
+        }
+      ],
+      "scriptCount": 0,
+      "externalResources": [],
+      "hrefs": [
+        "https://aclanthology.org/2024.tacl-1.9/"
+      ],
+      "bodyFont": "17px",
+      "lineHeight": "32.3px",
+      "contentBlocks": 68,
+      "missing": [],
+      "exactPaperLink": true
+    },
+    {
+      "width": 768,
+      "scrollWidth": 768,
+      "overflows": [],
+      "images": [
+        {
+          "width": 1680,
+          "height": 3160,
+          "decoded": true
+        },
+        {
+          "width": 1680,
+          "height": 2780,
+          "decoded": true
+        },
+        {
+          "width": 1680,
+          "height": 3190,
+          "decoded": true
+        },
+        {
+          "width": 1680,
+          "height": 3060,
+          "decoded": true
+        }
+      ],
+      "scriptCount": 0,
+      "externalResources": [],
+      "hrefs": [
+        "https://aclanthology.org/2024.tacl-1.9/"
+      ],
+      "bodyFont": "17px",
+      "lineHeight": "32.3px",
+      "contentBlocks": 68,
+      "missing": [],
+      "exactPaperLink": true
+    },
+    {
+      "width": 1440,
+      "scrollWidth": 1440,
+      "overflows": [],
+      "images": [
+        {
+          "width": 1680,
+          "height": 3160,
+          "decoded": true
+        },
+        {
+          "width": 1680,
+          "height": 2780,
+          "decoded": true
+        },
+        {
+          "width": 1680,
+          "height": 3190,
+          "decoded": true
+        },
+        {
+          "width": 1680,
+          "height": 3060,
+          "decoded": true
+        }
+      ],
+      "scriptCount": 0,
+      "externalResources": [],
+      "hrefs": [
+        "https://aclanthology.org/2024.tacl-1.9/"
+      ],
+      "bodyFont": "17px",
+      "lineHeight": "32.3px",
+      "contentBlocks": 68,
+      "missing": [],
+      "exactPaperLink": true
+    },
+    {
+      "copyImages": [
+        {
+          "src": "assets/01-task-delivery.png",
+          "decoded": true
+        },
+        {
+          "src": "assets/02-context-contract.png",
+          "decoded": true
+        },
+        {
+          "src": "assets/03-independent-verification.png",
+          "decoded": true
+        },
+        {
+          "src": "assets/04-facts-and-judgment.png",
+          "decoded": true
+        }
+      ],
+      "copyScripts": 0
+    }
+  ],
+  "edits": [
+    {
+      "before": "《Lost in the Middle》（TACL 2024）",
+      "after": "《[Lost in the Middle](https://aclanthology.org/2024.tacl-1.9/)》（TACL 2024）"
+    },
+    {
+      "before": "通过之后，再由独立的 Test 验证用户结果与相关回归；发现缺陷，返回修复，重新审核和测试，不能改了成果还借用旧报告。",
+      "after": "Review 通过之后，适用的工作再由独立 Test 验证用户结果与相关回归；发现缺陷，返回修复，重新审核并执行适用测试。已审交付文件变化后，旧结论不再证明当前成果。"
+    },
+    {
+      "before": "所以我们让审阅结论绑定被审阅的交付物，交付物一变，旧结论就不再算数。",
+      "after": "所以我们让审阅结论绑定被审阅的交付文件；这些文件变化后，旧结论就不再证明当前成果。代码交付绑定代码路径，`docs/**` 与根目录 Markdown 作为结算输出；文档交付仍绑定其文档。"
+    },
+    {
+      "before": "所以我们按影响选择验证强度：纯展示变化，独立 Review 后结算即可；局部行为变化，增加定向检查和一条聚焦的浏览器路径，由独立 Test 覆盖本次验收与相关回归；涉及共享契约、迁移、权限或状态机的高风险变化，才扩大到跨模块验证。导出功能涉及权限，就不能因为界面只多了一个按钮，算成轻量修改。",
+      "after": "所以我们按影响选择验证强度：纯展示变化，在不改变事件、状态、请求、数据，也不触及公共布局或共享设计令牌的前提下，独立 Review 后结算即可；局部后端行为变化，增加定向单元和接口集成检查；页面交互变化，再加一条聚焦的真实浏览器路径。适用的独立 Test 覆盖本次验收与相关回归；涉及共享契约、迁移、权限、状态机或公共布局等高风险变化，才扩大到跨模块验证。导出功能涉及权限，就不能因为界面只多了一个按钮，算成轻量修改。"
+    },
+    {
+      "before": "【发布前请补充】关于开明：一两句话说明项目是什么、谁在做、读者怎么了解（文末引导）。",
+      "after": "## 关于开明\n\n开明是一个持续推进软件项目的 AI 工作台，面向个人开发者和软件项目负责人。它围绕主管协作、待办与规格、任务交付和项目知识组织工作，目标是让成果经过适用的独立检查，并让下一次工作接得上。本文介绍其中的设计思路与已有验证边界。"
+    }
+  ]
+}
