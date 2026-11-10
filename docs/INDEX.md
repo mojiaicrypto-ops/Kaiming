@@ -20,6 +20,7 @@
 
 - productnew：当前产品需求，明确待办（想法）→ 统一设计角色形成规格与切片清单（用户确认）→ 实现 Task（验收 + 范围）→ 固定保存的 Plan → 开发 → 独立 Review/Test → 结算；Task 只分只读/修改，采用主管总体 Plan、显式当前步骤、全部子 Session 聚合/超时状态与宿主直接处理通用交互。
 - 设计流水线（本轮）：项目页按想法/设计中/就绪/实施中/已完成投影；`workKind` 选择设计/实施/文档/调查完成链；主设计独立 Review 后由用户确认切片，切片记录产生它的设计 Task，原想法的拆分去向可追溯；设计 Review 绑定规格/模块图，实施可用 J-10 在原 Task 补设计。证据见验证记录。
+- 会话归档：主管会话可归档到左侧“已归档”折叠区并恢复；归档保留历史、Task、报告和项目文件，忙会话/当前 Task 不能归档；归档不是删除。证据见验证记录。
 - technicalnew：当前角色/工具、待办格式、消息/存储/恢复与上下文装配；模型提问采用官方 question 移植扩展，通过原生交互消息接入 WAL 和主管通道，与前端渲染分离。见[七角色与工具入口](technicalnew/agents-and-tools.md)、[待办格式](technicalnew/backlog-format.md)、[验证记录](technicalnew/validation.md)。**待办模型已按工作包实施**：存储、引用解析、Task 契约、RPC/MCP、项目页与角色/提示词切换均已落地；真实模型下 `check:workflow`（完整 Task 流程）与 `check:backlog`（初始化/新增/修号）均通过，产品验收的界面走查（J-12/J-13、AC-51～AC-58）尚未执行，见验证记录。原缺口 P10/S9/S10/D10 已关闭。恢复只核实原生历史/已知成果后续办；业务判断交 Agent，程序核对身份/状态/必要报告/版本/保存。当前审阅状态以验证记录为准，文档检查不证明 SDK、模型或产品可用。提示词层现有两条硬规则：删除不得伪装(base/specialists/chief)、派发必须在 instructions 里写明经 `agent_report` 提交；证据与未覆盖项见验证记录。
 - 前端：React 19 + Vite 7 单页应用，构建产物由同一 Server 托管在 `/`（`/app/*` 301 到同路径；产物不入库，缺失时会话入口提示构建）。登录屏与会话/项目/设置三屏在同一外壳内。契约见[前端设计契约](technicalnew/ui-design.md)与[A7](technicalnew/architecture.md#a7-前端层)。
 - 实施状态：已实现部分按既有设计实施并持续验证，逐个工作包的证据、边界与未执行项记在[验证记录](technicalnew/validation.md)与各工作包结算记录；该表不等同于产品验收。产品验收仍按 [acceptance](productnew/acceptance.md) 逐条执行，未执行项不得视为通过。

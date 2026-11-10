@@ -19,6 +19,8 @@ export interface SessionsListProps {
    * and says why; this callback carries that reason back to the user.
    */
   readonly onCleanup: (sessionId: string, revision: number) => Promise<boolean>;
+  /** Archive or restore a conversation; archived rows stay readable but leave the main list. */
+  readonly onArchive: (sessionId: string, revision: number, archived: boolean) => Promise<boolean>;
   /**
    * Name a conversation. The server stores the name; an empty string restores the derived title.
    * Returns false when the write was refused, so the caller can explain why.
@@ -59,6 +61,7 @@ export function SessionsList({
   hasMore,
   onLoadMore,
   onCleanup,
+  onArchive,
   onRename,
   className,
 }: SessionsListProps) {
@@ -68,6 +71,7 @@ export function SessionsList({
   /** The row being renamed and what the input holds; null means no row is in edit mode. */
   const [renaming, setRenaming] = useState<{ sessionId: string; revision: number } | null>(null);
   const [nameDraft, setNameDraft] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
 
   const commitRename = async (): Promise<void> => {
     if (renaming === null) return;
@@ -78,7 +82,7 @@ export function SessionsList({
   return (
     <aside className={`sessions${className === undefined ? '' : ` ${className}`}`} aria-label={t('aria.sessionList')}>
       <div className="h">{t('chat.sessions')}</div>
-      {rows.map((row) => {
+      {rows.filter((row) => row.archivedAt === null).map((row) => {
         const questions = questionCount(row.sessionId);
         // The glyph is the state that matters most for picking a conversation: a question, then a
         // Task, then a running or stopping input, then idle.
@@ -148,6 +152,18 @@ export function SessionsList({
             >
               ✎
             </button>
+            {row.sessionId !== current && (
+              <button
+                type="button"
+                className="sx"
+                aria-label={t('session.archive')}
+                title={t('session.archive')}
+                data-testid="session-archive"
+                onClick={() => void onArchive(row.sessionId, row.revision, true)}
+              >
+                ⌄
+              </button>
+            )}
             {/* The open session is not offered: deleting what is on screen would leave the shell
                 pointing at nothing, and the reader is already there to decide. */}
             {row.sessionId !== current && (
@@ -174,6 +190,47 @@ export function SessionsList({
           </div>
         );
       })}
+      {rows.some((row) => row.archivedAt !== null) && (
+        <>
+          <button
+            type="button"
+            className="s more"
+            data-testid="session-archived-toggle"
+            onClick={() => setShowArchived((open) => !open)}
+          >
+            <span className="f3">
+              {t('session.archivedCount', { count: rows.filter((row) => row.archivedAt !== null).length })}
+            </span>
+          </button>
+          {showArchived &&
+            rows
+              .filter((row) => row.archivedAt !== null)
+              .map((row) => (
+                <div key={row.sessionId} className="srow" data-testid="session-archived-row">
+                  <button
+                    type="button"
+                    className="s"
+                    aria-current={row.sessionId === current ? 'true' : undefined}
+                    onClick={() => onSelect(row.sessionId)}
+                  >
+                    <State kind="idle" />
+                    <span className="ell">{row.title === null || row.title === '' ? t('chat.untitled') : row.title}</span>
+                    <span className="f3 sess-time">{t('session.archived')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="sx"
+                    aria-label={t('session.unarchive')}
+                    title={t('session.unarchive')}
+                    data-testid="session-unarchive"
+                    onClick={() => void onArchive(row.sessionId, row.revision, false)}
+                  >
+                    ↥
+                  </button>
+                </div>
+              ))}
+        </>
+      )}
       {hasMore && (
         <button type="button" className="s more" onClick={onLoadMore} data-testid="session-more">
           <span className="f3">{t('chat.moreSessions')}</span>

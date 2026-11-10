@@ -211,6 +211,31 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
                 return false;
               }
             }}
+            onArchiveSession={async (sessionId, revision, archived) => {
+              try {
+                await rpc.call(
+                  'session.archive',
+                  { projectId: workspace.projectId, sessionId, expectedRevision: revision, archived },
+                  { requestId: newRequestId('archive') },
+                );
+                await workspace.refreshSessions();
+                notify(t(archived ? 'session.archivedDone' : 'session.unarchivedDone'), 'success');
+                return true;
+              } catch (error) {
+                const gaps =
+                  error instanceof RpcError && typeof error.details === 'object' && error.details !== null
+                    ? ((error.details as { gaps?: unknown }).gaps ?? [])
+                    : [];
+                const reason = errorText(error, t);
+                notify(
+                  t('session.archiveRefused', {
+                    reason: Array.isArray(gaps) && gaps.length > 0 ? `${reason}: ${gaps.join('; ')}` : reason,
+                  }),
+                  'error',
+                );
+                return false;
+              }
+            }}
             onRenameSession={async (sessionId, title, revision) => {
               try {
                 await rpc.call(

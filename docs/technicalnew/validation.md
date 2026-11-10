@@ -752,3 +752,13 @@
 - 真实模型：`npm run check:backlog` **4/4**；`npm run check:workflow` **8/8**（真实主管 create → develop → review → test → settlement → end，交付文件真实存在且测试真实通过，Review/Test 记录了程序观察的 delivery state）。
 
 **未覆盖**：主设计“Review 后修改规格必须重新 Review”的端到端真实模型路径只由单元/集成测试覆盖；设计切片确认门的用户答复内容由 Review 与提示词判断，不是新的程序审批状态；旧设计 Task 迁移后 workKind 回填为 implement，不能追溯区分；AC-55/59/60/61 与 J-09/J-10 的人工验收尚未逐条执行。
+
+## 2026-11-10 · 会话归档
+
+**行为**：主管会话可归档/恢复；归档从左侧主列表收起，历史、Task、报告、项目文件和授权记录全部保留。当前有未结束 Task、排队/运行中/未核实中断、外部固定通道或非 chief 会话不能归档；归档不是删除，`session.cleanup` 的删除条件不变。
+
+**实现**：schema v19 给 `sessions` 加 `archivedAt`；`archiveSession` 使用 revision CAS；`session.list` 返回 `archivedAt`；左侧 rail 只列未归档会话，底部“已归档（N）”折叠区可恢复；`session.archive` RPC 与 `session.archivedCount` 等双语文案。
+
+**证据**：服务端 `npm test` **60 文件 / 581 用例通过**（含 v18→v19 迁移、归档/恢复 CAS、忙会话拒绝）；webapp **17 文件 / 119 用例通过**、`tsc` 与构建通过；浏览器新增“归档后从主列表消失、归档区可见、恢复后回到主列表”路径通过，原会话清理用例继续通过。
+
+**未覆盖**：归档会话的长期分页/搜索未做；归档不改变专业成员 Session 或项目记录；AC-62 的人工产品走查尚未单独执行。

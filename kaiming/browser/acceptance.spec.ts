@@ -2049,6 +2049,44 @@ test('a settled session can be cleaned up from the rail, and a busy one says why
   }
 });
 
+test('a conversation can be archived out of the rail and restored', async ({ page }) => {
+  const harness = await startHarness();
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+    await page.evaluate(async () => {
+      const handle = (window as unknown as {
+        __kaiming: {
+          rpc: { call: (method: string, params: unknown, options?: { requestId: string }) => Promise<unknown> };
+          workspace: { projectId: string };
+        };
+      }).__kaiming;
+      await handle.rpc.call(
+        'session.create',
+        { projectId: handle.workspace.projectId },
+        { requestId: 'seed-archive' },
+      );
+    });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await waitForConnected(page);
+    await expect(page.locator('[data-testid="session-row"]')).toHaveCount(2, { timeout: 10_000 });
+
+    const row = page.locator('.srow').filter({ has: page.locator('[data-testid="session-archive"]') }).first();
+    await row.locator('[data-testid="session-archive"]').click();
+    await expect(page.locator('.toast')).toContainText(/archived|已归档/i, { timeout: 10_000 });
+    await expect(page.locator('[data-testid="session-row"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid="session-archived-toggle"]')).toBeVisible();
+
+    await page.locator('[data-testid="session-archived-toggle"]').click();
+    await expect(page.locator('[data-testid="session-archived-row"]')).toHaveCount(1);
+    await page.locator('[data-testid="session-unarchive"]').click();
+    await expect(page.locator('[data-testid="session-row"]')).toHaveCount(2, { timeout: 10_000 });
+  } finally {
+    await harness.close();
+  }
+});
+
 test('an unconfirmed run is announced and the chief is asked, not guessed at', async ({ page }) => {
   // The host reports interrupted inputs through one read; this case answers that read so the
   // banner's own behaviour is what is tested (the server side is covered by server-read tests).

@@ -280,6 +280,26 @@ export function registerWriteMethods(router: RpcRouter, options: WriteMethodsOpt
     },
   });
 
+  router.register('session.archive', {
+    write: true,
+    run: (params): unknown => {
+      const project = requireProject(store, params);
+      const sessionId = readString(params, 'sessionId');
+      const expectedRevision = params['expectedRevision'];
+      const archived = params['archived'];
+      if (sessionId === undefined || typeof expectedRevision !== 'number' || typeof archived !== 'boolean') {
+        throw new RpcError('INVALID_ARGUMENT', 'sessionId, expectedRevision and archived are required');
+      }
+      const session = store.getSession(sessionId);
+      if (session === undefined || session.projectId !== project.id) {
+        throw new RpcError('NOT_FOUND', `session ${sessionId} does not exist in this project`, { sessionId });
+      }
+      const updated = store.archiveSession({ sessionId, expectedRevision, archived });
+      options.invalidate?.(sessionId, 'session', sessionId);
+      return { sessionId, ...updated };
+    },
+  });
+
   router.register('session.rename', {
     write: true,
     run: (params): unknown => {

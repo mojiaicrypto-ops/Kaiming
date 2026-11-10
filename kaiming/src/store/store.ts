@@ -426,7 +426,7 @@ export interface CreateSessionParams {
 
 const REQUIRED_PRAGMAS = { journal_mode: 'wal', synchronous: 2, foreign_keys: 1 } as const;
 
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 19;
 
 /**
  * Tables added by the v4 → v5 migration: the formal results (reports) a Task's work is judged by.
@@ -681,6 +681,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   title TEXT,
   /** The external channel this session is the fixed home of ('mcp'), or NULL for an ordinary one. */
   channel TEXT,
+  /** When the user archived this conversation; NULL keeps it in the main rail. */
+  archivedAt TEXT,
   revision INTEGER NOT NULL DEFAULT 1,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
@@ -1312,6 +1314,57 @@ export class Store {
       gaps.push(`the session produced ${referenced.n} recorded result(s)`);
     }
     return gaps;
+  }
+
+  /** Why a conversation cannot be archived: only settled chief sessions leave the main rail. */
+  sessionArchiveGaps(sessionId: string): string[] {
+    const gaps: string[] = [];
+    const session = this.getSession(sessionId);
+    if (session === undefined) return ['the session does not exist'];
+    if (session.roleId !== 'chief') gaps.push('only a chief conversation can be archived');
+    if (session.channel !== null) gaps.push('an external channel session cannot be archived');
+    if (session.currentTaskId !== null) gaps.push(`the session is bound to Task ${session.currentTaskId}`);
+    for (const input of this.listInputs(sessionId)) {
+      if (input.status === 'queued' || input.status === 'processing') {
+        gaps.push(`input ${input.inputId} is ${input.status}`);
+      }
+      if (input.status === 'interrupted') {
+        gaps.push(`input ${input.inputId} is interrupted and not verified`);
+      }
+    }
+    return gaps;
+  }
+
+  /** Archive or restore a conversation without deleting its history, Tasks or reports. */
+  archiveSession(params: {
+    sessionId: string;
+    expectedRevision: number;
+    archived: boolean;
+  }): { archivedAt: string | null; revision: number } {
+    return this.transaction(() => {
+      const session = this.getSession(params.sessionId);
+      if (session === undefined) {
+        throw new StoreError('NOT_FOUND', 'session does not exist', { sessionId: params.sessionId });
+      }
+      if (params.archived) {
+        const gaps = this.sessionArchiveGaps(params.sessionId);
+        if (gaps.length > 0) {
+          throw new StoreError('WORKSPACE_BUSY', 'the session cannot be archived yet', { gaps });
+        }
+      }
+      const timestamp = this.clock();
+      const outcome = this.db
+        .prepare('UPDATE sessions SET archivedAt = ?, revision = revision + 1, updatedAt = ? WHERE id = ? AND revision = ?')
+        .run(params.archived ? timestamp : null, timestamp, params.sessionId, params.expectedRevision);
+      if (outcome.changes !== 1) {
+        throw new StoreError('VERSION_CONFLICT', 'session revision does not match', {
+          sessionId: params.sessionId,
+          actual: session.revision,
+        });
+      }
+      const updated = this.getSession(params.sessionId);
+      return { archivedAt: updated?.archivedAt ?? null, revision: updated?.revision ?? session.revision + 1 };
+    });
   }
 
   /**
@@ -2202,13 +2255,15 @@ export class Store {
     storedTitle: string | null;
     /** The external channel this session is the fixed home of, or null for an ordinary one. */
     channel: string | null;
+    /** When the user archived this conversation, or null. */
+    archivedAt: string | null;
     /** The first user input's payload (JSON), the raw material for a derived title. */
     derivedTitle: string | null;
   }> {
     const rows = this.db
       .prepare(
         `SELECT s.id AS id, s.roleId AS roleId, s.revision AS revision, s.currentTaskId AS currentTaskId,
-                s.title AS storedTitle, s.channel AS channel,
+                s.title AS storedTitle, s.channel AS channel, s.archivedAt AS archivedAt,
                 MAX(i.updatedAt) AS lastActivityAt,
                 SUM(CASE WHEN i.status = 'processing' THEN 1 ELSE 0 END) AS processing,
                 SUM(CASE WHEN i.status = 'queued' THEN 1 ELSE 0 END) AS queued,
@@ -2224,6 +2279,7 @@ export class Store {
       currentTaskId: string | null;
       storedTitle: string | null;
       channel: string | null;
+      archivedAt: string | null;
       lastActivityAt: string | null;
       processing: number | null;
       queued: number | null;
@@ -2258,6 +2314,7 @@ export class Store {
       stopping: row.stopping ?? 0,
       storedTitle: row.storedTitle ?? null,
       channel: row.channel ?? null,
+      archivedAt: row.archivedAt ?? null,
       derivedTitle: titles.get(row.id) ?? null,
     }));
   }
@@ -2312,11 +2369,12 @@ export class Store {
     currentTaskId: string | null;
     title: string | null;
     channel: string | null;
+    archivedAt: string | null;
     revision: number;
   } | undefined {
     return this.db
       .prepare(
-        'SELECT id, projectId, roleId, specialization, cwd, configRef, currentTaskId, title, channel, revision FROM sessions WHERE id = ?',
+        'SELECT id, projectId, roleId, specialization, cwd, configRef, currentTaskId, title, channel, archivedAt, revision FROM sessions WHERE id = ?',
       )
       .get(sessionId) as
       | {
@@ -2329,6 +2387,7 @@ export class Store {
           currentTaskId: string | null;
           title: string | null;
           channel: string | null;
+          archivedAt: string | null;
           revision: number;
         }
       | undefined;
@@ -3537,6 +3596,14 @@ export class Store {
     });
   }
 
+  /** v18 → v19: the user can archive a conversation without deleting its history. */
+  private migrateV18ToV19(): void {
+    this.transaction(() => {
+      this.addColumn('sessions', 'archivedAt', 'TEXT');
+      this.db.exec('PRAGMA user_version = 19;');
+    });
+  }
+
   private migrateV14ToV15(): void {
     this.transaction(() => {
       this.addColumn('sessions', 'channel', 'TEXT');
@@ -3678,6 +3745,7 @@ export class Store {
         [15, () => this.migrateV15ToV16()],
         [16, () => this.migrateV16ToV17()],
         [17, () => this.migrateV17ToV18()],
+        [18, () => this.migrateV18ToV19()],
       ];
       for (const [from, step] of steps) {
         if (this.pragmas().userVersion === from) {

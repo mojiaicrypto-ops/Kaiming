@@ -552,6 +552,55 @@ describe('write surface', () => {
     expect(h.store.getSession(spareId)).toBeDefined();
   }, 30_000);
 
+  it('archives and restores a settled conversation without deleting it', async () => {
+    const h = await harness();
+    const created = await h.call('session.create', { projectId: h.projectId });
+    const sessionId = resultOf<{ session: { sessionId: string } }>(created.body).session.sessionId;
+    const before = h.store.getSession(sessionId)?.revision ?? 1;
+    const archived = await h.call('session.archive', {
+      projectId: h.projectId,
+      sessionId,
+      expectedRevision: before,
+      archived: true,
+    });
+    expect(archived.status).toBe(200);
+    expect(resultOf<{ archivedAt: string | null }>(archived.body).archivedAt).not.toBeNull();
+    expect(h.store.getSession(sessionId)).toBeDefined();
+    const listed = await h.call('session.list', { projectId: h.projectId });
+    const row = resultOf<{ sessions: Array<{ sessionId: string; archivedAt: string | null }> }>(listed.body).sessions.find(
+      (entry) => entry.sessionId === sessionId,
+    );
+    expect(row?.archivedAt).not.toBeNull();
+    const restored = await h.call('session.archive', {
+      projectId: h.projectId,
+      sessionId,
+      expectedRevision: h.store.getSession(sessionId)?.revision ?? 1,
+      archived: false,
+    });
+    expect(restored.status).toBe(200);
+    expect(resultOf<{ archivedAt: string | null }>(restored.body).archivedAt).toBeNull();
+
+    // A busy session cannot hide behind archive.
+    h.store.acceptInput({
+      inputId: 'in-busy',
+      projectId: h.projectId,
+      sessionId,
+      sourceKey: `${sessionId}:in-busy`,
+      requestKey: 'in-busy',
+      method: 'session.input.submit',
+      kind: 'user',
+      payload: { content: [{ type: 'text', text: 'still working' }] },
+    });
+    const refused = await h.call('session.archive', {
+      projectId: h.projectId,
+      sessionId,
+      expectedRevision: h.store.getSession(sessionId)?.revision ?? 1,
+      archived: true,
+    });
+    expect(refused.status).toBe(409);
+    expect(errorCode(refused.body)).toBe('WORKSPACE_BUSY');
+  }, 30_000);
+
   it('names a chief conversation, and clearing the name returns it to the derived title', async () => {
     const h = await harness([], { startWorker: false });
     h.store.acceptInput({

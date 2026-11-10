@@ -57,6 +57,7 @@
 | config.get/save/clear/test | projectId?、roleId?（同时给出表示项目内该角色）；save:expectedRevision/value，clear 无版本，test:配置引用 | 脱敏有效配置与各层已存值、版本/实际试连结果；clear 幂等移除该层；密钥仅保存私有凭证引用 |
 | project.files.list/read | projectId、path；list:cursor?/limit，read:expectedVersion? | 项目相对目录/文件正文；实际路径归属检查，不访问外部符号链接 |
 | session.cleanup | projectId、sessionId、expectedRevision | 只清理无未结束工作且不被当前 Task/成果引用的会话；被引用时拒绝并列明原因 |
+| session.archive | projectId、sessionId、expectedRevision、archived | 只用 revision CAS 写/清 `archivedAt`；拒绝非 chief、外部固定通道、当前 Task 或排队/运行/未核实中断的会话；不改历史、Task、报告和项目文件 |
 | auth.login/logout | login:本机配置的访问口令；logout:当前会话 | login 建立同源 cookie；logout 撤销 cookie/关闭所属流连接；不进入模型/WAL 业务输入 |
 | session.recovery.inspect | projectId、sessionId | interrupted 输入、Pi 绑定、已有结果与待核实事实；直接读取 |
 | session.recovery.resolve | projectId、sessionId、inputId、expectedRevision、evidenceRefs、resolution | resolution=completed/failed/stopped，核对归属、CAS及已有证据后关闭原输入，证据不足保持 interrupted；不调用模型、不重发操作 |

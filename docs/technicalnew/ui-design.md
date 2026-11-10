@@ -197,6 +197,7 @@
 | `compaction.get` / `compaction.save` | Models 页全局「上下文压缩」卡片 |
 | `session.recovery.resolve` | 无界面：处置由主管的 `task(op=recover)` 执行 |
 | `session.cleanup` | 会话列行内清理（两步确认） |
+| `session.archive` | 会话列行内归档/恢复；归档会话收进“已归档”区域，不进入主列表 |
 | `POST /api/v1/uploads` | composer 添加图片或文档 |
 | `GET /api/v1/attachments/<id>` | 消息、工具卡内的图片或文档 |
 

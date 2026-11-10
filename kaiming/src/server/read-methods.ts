@@ -303,6 +303,7 @@ export function registerReadMethods(router: RpcRouter, options: ReadMethodsOptio
           // An external channel owns exactly one fixed session (MCP): the list says which, so the
           // browser can label it instead of presenting it as a stranger's chat.
           channel: row.channel,
+          archivedAt: row.archivedAt,
           activity: activityOfCounts(row.processing, row.queued, row.stopping),
           lastActivityAt: row.lastActivityAt,
           currentTaskId: row.currentTaskId,

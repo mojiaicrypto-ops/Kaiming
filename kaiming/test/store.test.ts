@@ -890,6 +890,25 @@ describe('startup scan and abandoned questions', () => {
     expect(migrated.updateTask({ taskId: 't-legacy', phase: 'test' }).phase).toBe('test');
   });
 
+  it('migrates a v18 database by adding archivedAt and archives a settled session', () => {
+    const { store, path } = openStore();
+    seed(store);
+    closeStore(store);
+    const raw = new DatabaseSync(path);
+    raw.exec('ALTER TABLE sessions DROP COLUMN archivedAt');
+    raw.exec('PRAGMA user_version = 18');
+    raw.close();
+    const migrated = new Store({ path, serverEpoch: 1 });
+    stores.push(migrated);
+    expect(migrated.pragmas().userVersion).toBe(SCHEMA_VERSION);
+    expect(migrated.getSession('s-1')?.archivedAt).toBeNull();
+    const archived = migrated.archiveSession({ sessionId: 's-1', expectedRevision: 1, archived: true });
+    expect(archived.archivedAt).not.toBeNull();
+    expect(migrated.getSession('s-1')?.archivedAt).not.toBeNull();
+    const restored = migrated.archiveSession({ sessionId: 's-1', expectedRevision: archived.revision, archived: false });
+    expect(restored.archivedAt).toBeNull();
+  });
+
   it('freezes each workKind phase chain and counts backward moves as rework', () => {
     const { store } = openStore();
     seed(store);
