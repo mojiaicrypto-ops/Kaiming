@@ -1,0 +1,91 @@
+{
+  "profile": "visual",
+  "base": "7d5a29b",
+  "changedSections": [
+    "流程的重量，要与风险相称",
+    "最后一公里：让项目记住"
+  ],
+  "figuresAndStylesPreserved": true,
+  "imagesUnchanged": true,
+  "publicationFileCount": 7,
+  "pages": [
+    {
+      "viewport": 390,
+      "scrollWidth": 390,
+      "images": [
+        {
+          "decoded": true,
+          "width": 1774,
+          "height": 887
+        },
+        {
+          "decoded": true,
+          "width": 1774,
+          "height": 887
+        },
+        {
+          "decoded": true,
+          "width": 1774,
+          "height": 887
+        },
+        {
+          "decoded": true,
+          "width": 1774,
+          "height": 887
+        }
+      ],
+      "scripts": 0,
+      "resources": [],
+      "overflow": [],
+      "sourceBlocks": 57,
+      "missingSourceBlocks": 0
+    },
+    {
+      "viewport": 1440,
+      "scrollWidth": 1440,
+      "images": [
+        {
+          "decoded": true,
+          "width": 1774,
+          "height": 887
+        },
+        {
+          "decoded": true,
+          "width": 1774,
+          "height": 887
+        },
+        {
+          "decoded": true,
+          "width": 1774,
+          "height": 887
+        },
+        {
+          "decoded": true,
+          "width": 1774,
+          "height": 887
+        }
+      ],
+      "scripts": 0,
+      "resources": [],
+      "overflow": [],
+      "sourceBlocks": 57,
+      "missingSourceBlocks": 0
+    }
+  ],
+  "temporaryScreenshots": "/tmp/article-ending-preview",
+  "sourceFiles": [
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/article.md",
+      "sha256": "c602c427c62226cae5f921be47d3685b3eef1ee1575148b54c2807c76da1b8c7"
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/index.html",
+      "sha256": "2f644a45c178ded96c534eb095ac3b16fde784bfff8ca15f7607421e6a055a1b"
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/wechat-copy.html",
+      "sha256": "81feb5ac9768698e491f21235b56aec25a1d52dfb4977a061c06b9787a1e1b57"
+    }
+  ],
+  "limits": "Local Chrome only; no product Test or actual WeChat preview."
+}
