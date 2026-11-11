@@ -1133,11 +1133,11 @@ describe('input runner', () => {
           h.store.resolveInteraction({
             interactionId: question.interactionId,
             expectedRevision: question.revision,
-            response: true,
+            response: 'Approve once',
             answeredBy: 'test',
             requestKey: `answer:${question.interactionId}`,
           });
-          expect(h.runner.interactions.resolve(question.interactionId, true)).toBe(true);
+          expect(h.runner.interactions.resolve(question.interactionId, 'Approve once')).toBe(true);
           return;
         }
         await new Promise((resolve) => setTimeout(resolve, 10));

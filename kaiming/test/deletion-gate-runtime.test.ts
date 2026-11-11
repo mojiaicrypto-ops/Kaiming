@@ -73,8 +73,12 @@ async function harness(replies: readonly StubReply[]): Promise<GateHarness> {
   return { store, runner, cwd: env.cwd };
 }
 
-/** Drive one run and answer the gate's question with the given decision, once it appears. */
-async function runWithDecision(h: GateHarness, decision: boolean): Promise<RunOutcome> {
+const APPROVE_ONCE = 'Approve once';
+const TRUST_SESSION = 'Trust all commands in this session';
+const REJECT = 'Reject';
+
+/** Drive one run and answer the gate's question with the given choice, once it appears. */
+async function runWithChoice(h: GateHarness, choice: string): Promise<RunOutcome> {
   const answering = (async () => {
     for (let attempt = 0; attempt < 500; attempt += 1) {
       const question = h.store.listPendingInteractionsForChief('s-1')[0];
@@ -84,11 +88,11 @@ async function runWithDecision(h: GateHarness, decision: boolean): Promise<RunOu
         h.store.resolveInteraction({
           interactionId: question.interactionId,
           expectedRevision: question.revision,
-          response: decision,
+          response: choice,
           answeredBy: 'test',
           requestKey: `answer:${question.interactionId}`,
         });
-        expect(h.runner.interactions.resolve(question.interactionId, decision)).toBe(true);
+        expect(h.runner.interactions.resolve(question.interactionId, choice)).toBe(true);
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -114,7 +118,7 @@ describe('the deletion gate in a real run', () => {
       { kind: 'text', text: 'deleted after approval' },
     ]);
 
-    const outcome = await runWithDecision(h, true);
+    const outcome = await runWithChoice(h, APPROVE_ONCE);
 
     expect(outcome.kind).toBe('completed');
     expect(existsSync(victim)).toBe(false);
@@ -132,7 +136,7 @@ describe('the deletion gate in a real run', () => {
       { kind: 'text', text: 'declined, moving on without deleting' },
     ]);
 
-    const outcome = await runWithDecision(h, false);
+    const outcome = await runWithChoice(h, REJECT);
 
     expect(outcome.kind).toBe('completed');
     expect(existsSync(victim)).toBe(true);
@@ -149,6 +153,29 @@ describe('the deletion gate in a real run', () => {
     const outcome = await h.runner.runNext('s-1');
 
     expect(outcome.kind).toBe('completed');
+    expect(h.store.listPendingInteractionsForChief('s-1')).toHaveLength(0);
+  }, 30_000);
+
+  it('trusts every later command in the session after the explicit choice', async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), 'kaiming-gate-'));
+    cleanups.push(() => {
+      rmSync(sandbox, { recursive: true, force: true });
+    });
+    const first = join(sandbox, 'first.txt');
+    const second = join(sandbox, 'second.txt');
+    writeFileSync(first, 'delete me');
+    writeFileSync(second, 'delete me too');
+    const h = await harness([
+      { kind: 'tool_calls', calls: [{ name: 'bash', arguments: JSON.stringify({ command: `rm ${first}` }) }] },
+      { kind: 'tool_calls', calls: [{ name: 'bash', arguments: JSON.stringify({ command: `rm ${second}` }) }] },
+      { kind: 'text', text: 'both deleted after trusting the session' },
+    ]);
+
+    const outcome = await runWithChoice(h, TRUST_SESSION);
+
+    expect(outcome.kind).toBe('completed');
+    expect(existsSync(first)).toBe(false);
+    expect(existsSync(second)).toBe(false);
     expect(h.store.listPendingInteractionsForChief('s-1')).toHaveLength(0);
   }, 30_000);
 });

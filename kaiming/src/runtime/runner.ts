@@ -155,6 +155,8 @@ export interface RunnerOptions {
 
 export class InputRunner {
   private readonly options: RunnerOptions;
+  /** Sessions where the user chose "trust all" at the deletion gate; survives Pi instance rebuilds. */
+  private readonly trustedSessions = new Set<string>();
   /** The interaction bridge (M5); the runner binds its adapter to every session it prepares. */
   readonly interactions: InteractionBridge;
   /** `${sessionId}:${inputId}` of runs a host-owned tool asked to abort (S5 tool-initiated stop). */
@@ -652,9 +654,13 @@ export class InputRunner {
               // screenshots live under the same root. Credentials and session files stay blocked.
               readableDirs: [join(config.agentDir, 'work')],
             }),
-            // A destructive command (rm, git reset --hard …) asks the user before it runs, through
-            // the same durable interaction surface the question tool uses.
-            createDeletionGate(),
+            // A deletion command asks the user before it runs, through the same durable interaction
+            // surface the question tool uses. Trust is session-scoped in the runner, so a Pi
+            // instance rebuild (Task type or tool-set change) does not ask again.
+            createDeletionGate({
+              isTrusted: () => this.trustedSessions.has(sessionId),
+              trust: () => this.trustedSessions.add(sessionId),
+            }),
             ...(bashTimeoutSeconds > 0 ? [createBashTimeoutGuard({ seconds: bashTimeoutSeconds })] : []),
           ],
           ...(hostTools.length > 0 ? { customTools: hostTools } : {}),

@@ -20,20 +20,15 @@ describe('deletion command detection', () => {
     }
   });
 
-  it('asks before destructive git commands but not their safe neighbours', () => {
+  it('asks before git commands that really delete, and leaves the rest alone', () => {
     const destructive = [
       'git clean -f',
       'git clean -fdx',
-      'git reset --hard HEAD~1',
-      'git restore src/app.ts',
-      'git checkout -- .',
-      'git checkout -- src/app.ts',
+      'git clean --force',
+      'git -C repo clean -f',
       'git stash drop stash@{0}',
       'git stash clear',
       'git branch -D experiment',
-      'git push --force origin main',
-      'git push -f origin main',
-      'git push --force-with-lease origin main',
     ];
     for (const command of destructive) {
       expect(deletionCommandReason(command), command).toBeDefined();
@@ -41,6 +36,13 @@ describe('deletion command detection', () => {
     const safe = [
       'git clean -n',
       'git reset --soft HEAD~1',
+      'git reset --hard HEAD~1',
+      'git restore src/app.ts',
+      'git checkout -- .',
+      'git checkout -- src/app.ts',
+      'git push --force origin main',
+      'git push -f origin main',
+      'git push --force-with-lease origin main',
       'git status',
       'git checkout main',
       'git checkout -b feature',
@@ -55,13 +57,27 @@ describe('deletion command detection', () => {
     }
   });
 
+  it('ignores deletion words inside quoted arguments and sed/grep patterns', () => {
+    const ordinary = [
+      `grep -n 'kept\\|rm -rf' notes.txt`,
+      `sed -i.bak 's#^rm -rf "$TMP"$#echo kept#' script.sh`,
+      `echo 'unlink'`,
+      `echo '$(rm -rf build)'`,
+      `grep 'find . -delete' notes.txt`,
+      `grep 'git clean -f' notes.txt`,
+    ];
+    for (const command of ordinary) {
+      expect(deletionCommandReason(command), command).toBeUndefined();
+    }
+  });
+
   it('catches deletion hidden after a separator, in every segment shape', () => {
     const hidden = [
       'echo hi && rm -rf build',
       'echo hi; rm notes.md',
       'git status || rm -rf .',
       'ls | xargs rm',
-      'echo start\ngit reset --hard',
+      'echo start\ngit clean -f',
     ];
     for (const command of hidden) {
       expect(deletionCommandReason(command), command).toBeDefined();
@@ -91,6 +107,7 @@ describe('deletion command detection', () => {
       'cp a.txt b.txt',
       'cat notes.md',
       'echo "rm -rf build"',
+      'git checkout -- apps/web/next-env.d.ts',
     ];
     for (const command of ordinary) {
       expect(deletionCommandReason(command), command).toBeUndefined();

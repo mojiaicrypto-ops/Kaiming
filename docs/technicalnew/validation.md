@@ -850,3 +850,13 @@
 按用户“整体对，尤其结尾像突然结束”的反馈，依据[本次Plan](../../.dev/work/article-ending-20261111/plan.md)只调整第七节衔接与最后一节：保留知识回写、证据/未知边界，回到导出案例说明接收判断和不同缺口的后续处理，最后落到下一次委托如何约定并核对结果。前六节、八个小节标题、四图/图注与样式保持，当前源稿及两HTML同步，最终目录仍恰7项，不恢复已清理产物。
 
 visual；390/1440本机Chrome核对57个源文内容块完整覆盖、无溢出和资源加载异常，复制版相对PNG与离线内嵌一致。截图仅在临时目录供目视，未放回仓库。独立内容与静态核查见[Review](../../.dev/work/article-ending-20261111/review.md)，检查及结算同目录。无Test或全量应用套件，不改产品/交付契约，未进行真实微信预览或发布；文风判断不保证个人偏好。
+
+## 2026-11-11 · 删除确认收窄与会话内完全信任
+
+**需求**：用户在实际测试中发现命令确认次数过多；此前的要求是“只有删除命令才需要确认”。用户确认两项行为：默认只对真正删除的命令确认；确认框增加“本次会话完全信任”，选中后本会话后续所有 bash（包括删除）不再询问。
+
+**实现**：`src/runtime/deletion-gate.ts` 改为引号感知的 shell 分段，命令位置只认段首、`sudo`/`xargs` 等包装之后和 `$()`/反引号内；删除规则收窄为 `rm`/`rmdir`/`shred`/`unlink`、`find -delete`、`git clean -f`、`git stash drop/clear`、`git branch -D` 与脚本删除。`git checkout --`、`git restore`、`git reset --hard`、`git push --force` 不再触发。命中后由 `ctx.ui.confirm` 改为 `ctx.ui.select`：`Approve once` / `Trust all commands in this session` / `Reject`；信任状态由 `InputRunner` 按 `sessionId` 保存，Pi 实例重建不重置，进程重启后恢复询问。误报样本（文档正文含 `unlink`、`sed`/`grep` 模式含 `rm -rf`、`git checkout -- next-env.d.ts`）均返回 `undefined`。
+
+**证据**：服务端 60 文件 **583 用例通过**，其中 `test/deletion-gate.test.ts` 7 例覆盖删除、Git 删除类、引号误报、复合命令、脚本删除与命令替换；`test/deletion-gate-runtime.test.ts` 4 例覆盖批准、拒绝、普通命令、首次选择信任后第二次删除不再询问且真实删除文件；`test/runtime.test.ts` 的 designer 删除用例改走 `Approve once`。`npm run typecheck` 通过；webapp 17 文件 **119 用例通过**，webapp `tsc --noEmit` 通过。另用当前数据目录中的真实误报命令调用 `deletionCommandReason`，结果为 `null`。
+
+**边界**：文本规则仍不是 shell 解析器或沙箱，`bash -c`、解码执行等刻意绕过不保证拦截；信任状态不持久化，重启或新会话会重新询问；外部 Agent 客户端自己的 bash/MCP 审批策略不在本改动范围。未进行真实浏览器人工点击，select 卡片复用既有 InteractionPanel 的选择渲染与单测覆盖。
