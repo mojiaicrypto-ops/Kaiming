@@ -1,0 +1,13 @@
+Create an original professional hand-drawn Chinese technical editorial illustration, WIDE 2:1 canvas. The supplied illustration is a STYLE reference only: white paper, graphite pencil contours, subtle pale blue/sage strokes, restrained red for invalidation, attractive readable Chinese print handwriting. No black background, no grid, no robot, no generic UI cards, no large poster headline, no decorative plants.
+
+Subject: a delivery system's PROGRAM checks observable facts while the MODEL judges semantic correctness. Reviewed deliverables changing requires fresh independent review and applicable testing; an old report does not certify changed work.
+
+Layout: two compact, equally weighted vignettes in the upper half, and a low horizontal before/after strip in the lower half. Leave enough space that primary labels read at mobile article width, avoid tiny paragraphs.
+UPPER LEFT: draw a laptop beside a small report tray, a save/file symbol and a checklist. Exact main label “程序核对事实”. Below, one concise line “身份 · 报告 · 保存”. These are checks of existence and association, not a program proving business correctness.
+UPPER RIGHT: draw a thoughtful human reviewer with a magnifying glass comparing a requirements sheet with a concrete result file. Exact main label “模型判断语义”. Below, one concise line “验收 · 范围 · 证据”. No halo or omniscient AI symbol.
+Below these, LOWER STRIP shows:
+LEFT: two neatly paired small documents, one labelled “成果 v1”, the other “报告”. No giant green certification stamp.
+MIDDLE: thin arrow toward the right, with a small pencil editing the artifact, and text above it “成果变化”; beneath the arrow, concise red annotation “重审 · 适用测试”.
+RIGHT: a NEW pair of documents labelled “成果 v2” and “新报告”, subtly sage-blue, with magnifier/check glyph. The right pair must visibly be a new result+new report, not a reused report.
+A small restrained red X can appear on a faint old-report duplicate between the pairs, annotated only “旧结论失效”, to clarify no report borrowing. Do not imply all project file changes invalidate all reports; meaning is changes to the reviewed deliverable. No extra branching workflow or unrelated tool parameters.
+Do not use any additional text beyond the specified Chinese and v1/v2. Balance illustration and legibility, modest outer margins, muted color, real pencil texture at fine scale. Overall resemble a thoughtful human technical notebook illustration, with truthful visible relationships.

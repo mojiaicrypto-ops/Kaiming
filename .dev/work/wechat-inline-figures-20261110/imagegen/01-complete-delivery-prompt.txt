@@ -1,0 +1,20 @@
+Redesign the referenced illustration into a COMPLETE software delivery lifecycle, retaining its attractive editorial hand-drawn pencil style. The reference is ONLY a style reference. Its four-stage workflow is incomplete; replace that composition.
+
+Use: an inline illustration for a serious Chinese developer's WeChat article about deliverable AI agents. Readable, composed, mature, quiet, white background, fine charcoal/graphite strokes and restrained pale blue / sage pencil wash. Organic drawn objects, not a vector flowchart, not six rectangular cards. Wide 2:1 canvas, approximately 1800 by 900. NO huge heading, no border, no grid, no dark background, no robot, no neon, no decorative plants, no decorative slogans.
+
+Concept: Delivery begins before coding. Requirements, design, and planning must be explicitly visible, then implementation, independent verification, settlement. The six stage labels are all equally important and readable. Use six compact hand-drawn object vignettes, arranged in TWO ROWS of THREE, with a clear serpentine direction:
+TOP LEFT → TOP CENTER → TOP RIGHT
+                                      ↓
+BOTTOM LEFT ← BOTTOM CENTER ← BOTTOM RIGHT
+The arrows should connect the vignettes without crossing any drawings or text. The TOP RIGHT arrow goes down to BOTTOM RIGHT. Each label appears directly below its corresponding drawing; leave the central row gap for unobtrusive arrow routing. Top row is project preparation; bottom row is delivery of a selected implementation slice. These are not six automatically executed states of a single Task.
+
+Exact content, Chinese printed handwriting, carefully spelled:
+1 TOP LEFT: label “需求整理”. A clipboard and pencil with three simple lines, a small person/customer symbol. Secondary short line “目标 · 异常 · 验收”. This represents clarification and agreed acceptance, not just a stack of existing papers.
+2 TOP CENTER: label “架构设计”. A designer's open blueprint with three connected module drawings and distinct interface lines, no lorem ipsum. Secondary line “模块 · 接口 · 切片”. A small magnifier/checkmark beside the blueprint, with tiny concise annotation “审阅与确认”. This is design reviewed independently and relevant user decisions confirmed before slices are ready.
+3 TOP RIGHT: label “实施计划”. A planning notebook with 3 ordered steps and one bounded bracket indicating scope. Secondary line “验收 · 范围 · 步骤”.
+4 BOTTOM RIGHT: label “工程实现”. A compact laptop with a small source code glyph on screen and a pencil, no speech bubble, no premature “完成了”.
+5 BOTTOM CENTER: label “独立验证”. A magnifying glass looking at an actual output document next to a checklist; checkmarks and one restrained red X. Secondary line “审阅 · 适用测试”.
+6 BOTTOM LEFT: label “结算接续”. An open project folder containing a current specification, actual artifact, and evidence document, with a bookmark for next session. Secondary line “知识 · 证据 · 下一步”. No victory trophy or claim of guaranteed correctness.
+
+Add ONE restrained red curved return arrow from the independent verification vignette BACK TO the implementation laptop, placed in the bottom-right area where it does not overlap main arrows or labels, annotation “修复后重审”. Main forward route remains dark graphite. Do not point the return arrow to settlement.
+Do not add other text, numbering badges or a large title. Keep stage labels prominent enough to recognize when the full image is shown at mobile article width, while avoiding oversized poster typography. Minimize details that become noisy at 350px width. White paper texture nearly imperceptible; edge margins modest and consistent. Overall should look like a skillful human technical editorial illustration, with meaningful relationships, not an AI infographic template.

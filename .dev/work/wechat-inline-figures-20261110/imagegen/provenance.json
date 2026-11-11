@@ -1,0 +1,79 @@
+{
+  "date": "2026-11-11",
+  "mode": "built-in ImageGen; no CLI/API runner",
+  "styleReference": "exec-26dcdff6-a728-42b8-aa26-27c468543b96.png",
+  "records": [
+    {
+      "asset": "articles/publish/agent-delivery-system-wechat-v2/assets/01-complete-delivery-handdrawn.png",
+      "generatedSource": "/Users/huyaohua/.codex/generated_images/01a1c4f5-719c-7073-8391-685f48b41c9e/exec-8b5a6ba6-edc9-4d20-b041-ef23e78251ba.png",
+      "prompt": "01-complete-delivery-prompt.txt",
+      "sha256": "2a391d222d0c52c7c9561f0f34bb065eb80f2da4a3d4ff877f461beb35cf890a",
+      "size": [
+        1774,
+        887
+      ],
+      "readabilityPrompt": "01-readability-prompt.txt"
+    },
+    {
+      "asset": "articles/publish/agent-delivery-system-wechat-v2/assets/02-context-handdrawn.png",
+      "generatedSource": "/Users/huyaohua/.codex/generated_images/01a1c4f5-719c-7073-8391-685f48b41c9e/exec-053fa663-a0c6-4d7b-9445-fc03633f591b.png",
+      "prompt": "02-context-prompt.txt",
+      "sha256": "a9e168a8c82f7fc3f212d4b0932159abc2a56eb65923013a4103d7668282cc64",
+      "size": [
+        1774,
+        887
+      ],
+      "readabilityPrompt": "02-readability-prompt.txt"
+    },
+    {
+      "asset": "articles/publish/agent-delivery-system-wechat-v2/assets/03-verification-handdrawn.png",
+      "generatedSource": "/Users/huyaohua/.codex/generated_images/01a1c4f5-719c-7073-8391-685f48b41c9e/exec-16e78532-0bf1-41cb-8e91-dd5fe21ec1a3.png",
+      "prompt": "03-verification-prompt.txt",
+      "sha256": "f41291ca7b77cf33f0fe637de8ef19b6bc1051350352872fff4908fa4b054192",
+      "size": [
+        1774,
+        887
+      ],
+      "readabilityPrompt": "03-readability-prompt.txt"
+    },
+    {
+      "asset": "articles/publish/agent-delivery-system-wechat-v2/assets/04-evidence-handdrawn.png",
+      "generatedSource": "/Users/huyaohua/.codex/generated_images/01a1c4f5-719c-7073-8391-685f48b41c9e/exec-785ccfaf-46c7-401b-b0b8-edf4805dc872.png",
+      "prompt": "04-evidence-prompt.txt",
+      "sha256": "d5f26e0283e5bb6b8868905f732b5de23e81cffe523d1930c8bc465a18cc86c5",
+      "size": [
+        1774,
+        887
+      ],
+      "readabilityPrompt": "04-readability-prompt.txt"
+    }
+  ],
+  "correction": {
+    "asset": "03-verification-handdrawn",
+    "original": "exec-16f0a039-4785-497f-9436-606816029e75.png",
+    "prompt": "03-verification-correction-prompt.txt",
+    "reason": "Reverse unauthorized input arrow toward checker."
+  },
+  "sourceArticleSha256": "3bc5ac51ccce5e0a7e51f754e38592887f6f1f439894ddee08c67f361fad9e78",
+  "readabilityRevision": {
+    "reason": "Independent Review R1: key labels too small at mobile width; enlarge core labels without changing 2:1 ratio or displayed height.",
+    "previousRecords": [
+      {
+        "generatedSource": "/Users/huyaohua/.codex/generated_images/01a1c4f5-719c-7073-8391-685f48b41c9e/exec-b8375b35-d841-496d-8cf4-65b486cc371b.png",
+        "sha256": "902908e04acea81b4cb4c03cf047766dfab12b030783a18ac6397fc7b05c4614"
+      },
+      {
+        "generatedSource": "/Users/huyaohua/.codex/generated_images/01a1c4f5-719c-7073-8391-685f48b41c9e/exec-f4089a3b-3725-4b21-ae72-d1f62ef21445.png",
+        "sha256": "db2ea440d4bf6632724db454acf6c49f827fe30f0eaf9386f4d7b29e47d0a415"
+      },
+      {
+        "generatedSource": "/Users/huyaohua/.codex/generated_images/01a1c4f5-719c-7073-8391-685f48b41c9e/exec-4193bc13-f15f-4bb0-a5f6-7fadff51ca35.png",
+        "sha256": "ac9335ab9840ecfc5e7944aafda3d4b9343cd4969bb4a23756909f7fc5a33993"
+      },
+      {
+        "generatedSource": "/Users/huyaohua/.codex/generated_images/01a1c4f5-719c-7073-8391-685f48b41c9e/exec-f89137be-718c-4cc0-9f7c-cada946a083a.png",
+        "sha256": "cc782c86eb1d3a8bd8a3ebe1b4e8b3c448e936707d49790fe5e817ba53bcf7a3"
+      }
+    ]
+  }
+}

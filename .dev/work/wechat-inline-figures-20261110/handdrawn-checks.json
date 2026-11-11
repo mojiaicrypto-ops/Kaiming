@@ -1,0 +1,229 @@
+{
+  "profile": "visual",
+  "imageMode": "built-in ImageGen; PNGs embedded unchanged",
+  "updates": [
+    {
+      "file": "index.html",
+      "nonfigureHTMLSha256": "6032132c9aff462d1a736634020a06dd5a00c68ae2068d8e3de108920d1db088",
+      "figureCount": 4
+    },
+    {
+      "file": "wechat-copy.html",
+      "nonfigureHTMLSha256": "6032132c9aff462d1a736634020a06dd5a00c68ae2068d8e3de108920d1db088",
+      "figureCount": 4
+    }
+  ],
+  "assets": [
+    {
+      "name": "01-complete-delivery-handdrawn",
+      "width": 1774,
+      "height": 887,
+      "sha256": "2a391d222d0c52c7c9561f0f34bb065eb80f2da4a3d4ff877f461beb35cf890a"
+    },
+    {
+      "name": "02-context-handdrawn",
+      "width": 1774,
+      "height": 887,
+      "sha256": "a9e168a8c82f7fc3f212d4b0932159abc2a56eb65923013a4103d7668282cc64"
+    },
+    {
+      "name": "03-verification-handdrawn",
+      "width": 1774,
+      "height": 887,
+      "sha256": "f41291ca7b77cf33f0fe637de8ef19b6bc1051350352872fff4908fa4b054192"
+    },
+    {
+      "name": "04-evidence-handdrawn",
+      "width": 1774,
+      "height": 887,
+      "sha256": "d5f26e0283e5bb6b8868905f732b5de23e81cffe523d1930c8bc465a18cc86c5"
+    }
+  ],
+  "pages": [
+    {
+      "viewport": 375,
+      "scrollWidth": 375,
+      "mainWidth": 343,
+      "scripts": 0,
+      "external": [],
+      "links": [
+        "https://aclanthology.org/2024.tacl-1.9/"
+      ],
+      "images": [
+        {
+          "width": 343,
+          "height": 171.5,
+          "naturalWidth": 1774,
+          "naturalHeight": 887,
+          "decoded": true,
+          "alt": "多模块交付概览：需求整理明确目标异常与验收，架构设计明确模块接口切片并经审阅确认，选定切片制定实施计划，工程实现后独立审阅与适用测试，发现问题修复后重审，结算留下知识证据和下一步。"
+        },
+        {
+          "width": 343,
+          "height": 171.5,
+          "naturalWidth": 1774,
+          "naturalHeight": 887,
+          "decoded": true,
+          "alt": "沿项目入口与模块地图定位模块规格和共享契约，结合本次计划及相关代码测试开展开发；缺口补读，组合后仍需联调。"
+        },
+        {
+          "width": 343,
+          "height": 171.5,
+          "naturalWidth": 1774,
+          "naturalHeight": 887,
+          "decoded": true,
+          "alt": "同源自证把当前输出复制为测试期望。独立验证用验收与权限事实形成预期；正常文件和混入越权记录的文件都输入同一检查器，前者通过，后者因越权拒绝。"
+        },
+        {
+          "width": 343,
+          "height": 171.5,
+          "naturalWidth": 1774,
+          "naturalHeight": 887,
+          "decoded": true,
+          "alt": "程序核对身份报告与保存，模型判断验收范围与证据；已审成果v1变化为v2后旧结论失效，重新审阅并执行适用测试，取得新报告。"
+        }
+      ],
+      "overflow": []
+    },
+    {
+      "viewport": 390,
+      "scrollWidth": 390,
+      "mainWidth": 358,
+      "scripts": 0,
+      "external": [],
+      "links": [
+        "https://aclanthology.org/2024.tacl-1.9/"
+      ],
+      "images": [
+        {
+          "width": 358,
+          "height": 179,
+          "naturalWidth": 1774,
+          "naturalHeight": 887,
+          "decoded": true,
+          "alt": "多模块交付概览：需求整理明确目标异常与验收，架构设计明确模块接口切片并经审阅确认，选定切片制定实施计划，工程实现后独立审阅与适用测试，发现问题修复后重审，结算留下知识证据和下一步。"
+        },
+        {
+          "width": 358,
+          "height": 179,
+          "naturalWidth": 1774,
+          "naturalHeight": 887,
+          "decoded": true,
+          "alt": "沿项目入口与模块地图定位模块规格和共享契约，结合本次计划及相关代码测试开展开发；缺口补读，组合后仍需联调。"
+        },
+        {
+          "width": 358,
+          "height": 179,
+          "naturalWidth": 1774,
+          "naturalHeight": 887,
+          "decoded": true,
+          "alt": "同源自证把当前输出复制为测试期望。独立验证用验收与权限事实形成预期；正常文件和混入越权记录的文件都输入同一检查器，前者通过，后者因越权拒绝。"
+        },
+        {
+          "width": 358,
+          "height": 179,
+          "naturalWidth": 1774,
+          "naturalHeight": 887,
+          "decoded": true,
+          "alt": "程序核对身份报告与保存，模型判断验收范围与证据；已审成果v1变化为v2后旧结论失效，重新审阅并执行适用测试，取得新报告。"
+        }
+      ],
+      "overflow": []
+    },
+    {
+      "viewport": 768,
+      "scrollWidth": 768,
+      "mainWidth": 736,
+      "scripts": 0,
+      "external": [],
+      "links": [
+        "https://aclanthology.org/2024.tacl-1.9/"
+      ],
+      "images": [
+        {
+          "width": 540,
+          "height": 270,
+          "naturalWidth": 1774,
+          "naturalHeight": 887,
+          "decoded": true,
+          "alt": "多模块交付概览：需求整理明确目标异常与验收，架构设计明确模块接口切片并经审阅确认，选定切片制定实施计划，工程实现后独立审阅与适用测试，发现问题修复后重审，结算留下知识证据和下一步。"
+        },
+        {
+          "width": 540,
+          "height": 270,
+          "naturalWidth": 1774,
+          "naturalHeight": 887,
+          "decoded": true,
+          "alt": "沿项目入口与模块地图定位模块规格和共享契约，结合本次计划及相关代码测试开展开发；缺口补读，组合后仍需联调。"
+        },
+        {
+          "width": 540,
+          "height": 270,
+          "naturalWidth": 1774,
+          "naturalHeight": 887,
+          "decoded": true,
+          "alt": "同源自证把当前输出复制为测试期望。独立验证用验收与权限事实形成预期；正常文件和混入越权记录的文件都输入同一检查器，前者通过，后者因越权拒绝。"
+        },
+        {
+          "width": 540,
+          "height": 270,
+          "naturalWidth": 1774,
+          "naturalHeight": 887,
+          "decoded": true,
+          "alt": "程序核对身份报告与保存，模型判断验收范围与证据；已审成果v1变化为v2后旧结论失效，重新审阅并执行适用测试，取得新报告。"
+        }
+      ],
+      "overflow": []
+    },
+    {
+      "viewport": 1440,
+      "scrollWidth": 1440,
+      "mainWidth": 760,
+      "scripts": 0,
+      "external": [],
+      "links": [
+        "https://aclanthology.org/2024.tacl-1.9/"
+      ],
+      "images": [
+        {
+          "width": 540,
+          "height": 270,
+          "naturalWidth": 1774,
+          "naturalHeight": 887,
+          "decoded": true,
+          "alt": "多模块交付概览：需求整理明确目标异常与验收，架构设计明确模块接口切片并经审阅确认，选定切片制定实施计划，工程实现后独立审阅与适用测试，发现问题修复后重审，结算留下知识证据和下一步。"
+        },
+        {
+          "width": 540,
+          "height": 270,
+          "naturalWidth": 1774,
+          "naturalHeight": 887,
+          "decoded": true,
+          "alt": "沿项目入口与模块地图定位模块规格和共享契约，结合本次计划及相关代码测试开展开发；缺口补读，组合后仍需联调。"
+        },
+        {
+          "width": 540,
+          "height": 270,
+          "naturalWidth": 1774,
+          "naturalHeight": 887,
+          "decoded": true,
+          "alt": "同源自证把当前输出复制为测试期望。独立验证用验收与权限事实形成预期；正常文件和混入越权记录的文件都输入同一检查器，前者通过，后者因越权拒绝。"
+        },
+        {
+          "width": 540,
+          "height": 270,
+          "naturalWidth": 1774,
+          "naturalHeight": 887,
+          "decoded": true,
+          "alt": "程序核对身份报告与保存，模型判断验收范围与证据；已审成果v1变化为v2后旧结论失效，重新审阅并执行适用测试，取得新报告。"
+        }
+      ],
+      "overflow": []
+    }
+  ],
+  "zip": {
+    "members": 7,
+    "allBytesMatch": true
+  },
+  "limits": "Local Chrome only. No product Test/full suite or actual WeChat import/upload/phone preview."
+}
