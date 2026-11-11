@@ -1,0 +1,61 @@
+--- a/docs/technicalnew/validation.md
++++ b/docs/technicalnew/validation.md
+@@ -765,0 +766,2 @@
++> 2026-11-11清理说明：以下文章制作各节记录当时的结果。用户已确认移除旧稿与制作目录；历史文件引用现以Git路径表示，可用`git show a7361c6:路径`查阅已提交版本，不再作为当前工作树入口。当前文章见本节之后的“文章历史版本与制作产物清理”。
++
+@@ -768,3 +770,3 @@
+-**文稿范围**：完善 [Agent 交付体系文章](../../articles/agent-delivery-system.md)，以假完成、假测试的使用场景解释用户结果、独立验收、事实核对及项目记忆；文章是对现行设计思路的说明，不新增产品、技术或交付规则。
+-
+-**检查依据与记录**：按 [文稿 Plan](../../.dev/work/article-agent-delivery-20261110/plan.md) 进行独立内容审阅，结果以该任务目录内的 Review 和结算报告为准。重点核对 D-02～D-05、K-01/K-04/K-05、AC-46/47/49、G3，以及本记录 2026-11-09 真实模型工作流证据及其未覆盖项。假设案例不作为运行证据；设计要求、已有实现与已验证能力分别表达。
++**文稿范围**：完善 Agent 交付体系文章（历史：`a7361c6:articles/agent-delivery-system.md`），以假完成、假测试的使用场景解释用户结果、独立验收、事实核对及项目记忆；文章是对现行设计思路的说明，不新增产品、技术或交付规则。
++
++**检查依据与记录**：按 文稿 Plan（历史：`a7361c6:.dev/work/article-agent-delivery-20261110/plan.md`） 进行独立内容审阅，结果以该任务目录内的 Review 和结算报告为准。重点核对 D-02～D-05、K-01/K-04/K-05、AC-46/47/49、G3，以及本记录 2026-11-09 真实模型工作流证据及其未覆盖项。假设案例不作为运行证据；设计要求、已有实现与已验证能力分别表达。
+@@ -776,3 +778,3 @@
+-**范围**：按用户追加要求，在 [Agent 交付体系文章](../../articles/agent-delivery-system.md) 中补充模块规格的组织与格式、索引、按需加载、developer 独立开发及组合验收，作为既有产品思路的说明；不迁移或拆分项目当前文档，不改变模块/接口/流程契约。
+-
+-**依据与审阅入口**：[本次 Plan](../../.dev/work/article-context-design-20261110/plan.md)；K-02～K-05、BL-05～BL-10、D-03、G4。外部原始研究仅用 [Lost in the Middle（TACL 2024）](https://aclanthology.org/2024.tacl-1.9/) 说明所测任务中信息位置对上下文利用的影响，不作为当前所有模型、编码任务或本项目效果的验证。独立内容审阅与结算保存在本任务目录。
++**范围**：按用户追加要求，在 Agent 交付体系文章（历史：`a7361c6:articles/agent-delivery-system.md`） 中补充模块规格的组织与格式、索引、按需加载、developer 独立开发及组合验收，作为既有产品思路的说明；不迁移或拆分项目当前文档，不改变模块/接口/流程契约。
++
++**依据与审阅入口**：本次 Plan（历史：`a7361c6:.dev/work/article-context-design-20261110/plan.md`）；K-02～K-05、BL-05～BL-10、D-03、G4。外部原始研究仅用 [Lost in the Middle（TACL 2024）](https://aclanthology.org/2024.tacl-1.9/) 说明所测任务中信息位置对上下文利用的影响，不作为当前所有模型、编码任务或本项目效果的验证。独立内容审阅与结算保存在本任务目录。
+@@ -784,3 +786,3 @@
+-**范围**：保留现有总纲，新增 [Agent 交付简化稿](../../articles/agent-delivery-system-short.md)，面向首次阅读者，用单一假设案例解释需求依据、独立检查和项目接续；省略工具、状态、验证档和底层实现细节，不新增产品承诺或生效规则。
+-
+-**依据与记录**：[本次 Plan](../../.dev/work/article-short-version-20261110/plan.md)、现有总纲、D-02～D-05、K-02～K-05、G3。作者报告、独立内容 Review 与结算保存于本任务目录，检查内容和正式依据的一致性、简化后的论证完整性及阅读负担。
++**范围**：保留现有总纲，新增 Agent 交付简化稿（历史：`a7361c6:articles/agent-delivery-system-short.md`），面向首次阅读者，用单一假设案例解释需求依据、独立检查和项目接续；省略工具、状态、验证档和底层实现细节，不新增产品承诺或生效规则。
++
++**依据与记录**：本次 Plan（历史：`a7361c6:.dev/work/article-short-version-20261110/plan.md`）、现有总纲、D-02～D-05、K-02～K-05、G3。作者报告、独立内容 Review 与结算保存于本任务目录，检查内容和正式依据的一致性、简化后的论证完整性及阅读负担。
+@@ -792 +794 @@
+-**触发与范围**：用户认为上一简化稿“AI 味道太浓厚，而且写得不够好”，随后明确要求从现有 Agent 的能力出发，拆解多模块系统中的理解、架构和测试偏差，再引入可交付的 Agent。按 [重写 Plan](../../.dev/work/article-short-rewrite-20261110/plan.md) 重写 [简化稿](../../articles/agent-delivery-system-short.md)，以系统交付为中心，不采用个人辛苦复盘作为主线。既有总纲保持不变，不调整任何产品或交付规则。
++**触发与范围**：用户认为上一简化稿“AI 味道太浓厚，而且写得不够好”，随后明确要求从现有 Agent 的能力出发，拆解多模块系统中的理解、架构和测试偏差，再引入可交付的 Agent。按 重写 Plan（历史：`a7361c6:.dev/work/article-short-rewrite-20261110/plan.md`） 重写 简化稿（历史：`a7361c6:articles/agent-delivery-system-short.md`），以系统交付为中心，不采用个人辛苦复盘作为主线。既有总纲保持不变，不调整任何产品或交付规则。
+@@ -800 +802 @@
+-**目标**：用户明确前稿问题在于论证浅、只点到为止，而非篇幅。按 [本次 Plan](../../.dev/work/article-delivery-depth-20261110/plan.md) 重写 [交付文章](../../articles/agent-delivery-system-short.md)，展开多模块偏差的形成机制及 Task/Plan、模块文档与上下文、独立验证、程序事实核对和结算如何支撑交付。保留原文件名用于版本比较，不再以短篇字数限制内容。
++**目标**：用户明确前稿问题在于论证浅、只点到为止，而非篇幅。按 本次 Plan（历史：`a7361c6:.dev/work/article-delivery-depth-20261110/plan.md`） 重写 交付文章（历史：`a7361c6:articles/agent-delivery-system-short.md`），展开多模块偏差的形成机制及 Task/Plan、模块文档与上下文、独立验证、程序事实核对和结算如何支撑交付。保留原文件名用于版本比较，不再以短篇字数限制内容。
+@@ -810 +812 @@
+-**检查安排**：[本次 Plan](../../.dev/work/wechat-html-20261110/plan.md) 选 visual，内容对照、PNG解码与静态结构检查、真实Chrome多宽度截图和独立Review；记录与结算见任务目录。现有markdown-it和Playwright完成本地制作，不安装公众号技能或依赖。
++**检查安排**：本次 Plan（历史：`a7361c6:.dev/work/wechat-html-20261110/plan.md`） 选 visual，内容对照、PNG解码与静态结构检查、真实Chrome多宽度截图和独立Review；记录与结算见任务目录。现有markdown-it和Playwright完成本地制作，不安装公众号技能或依赖。
+@@ -816 +818 @@
+-**范围**：用户认为旧发布版结构与插图不够专业，指定本机 exchangehft 的低延迟引擎文章作为只读设计参考。按 [本次 Plan](../../.dev/work/wechat-professional-v2-20261110/plan.md) 新增 `articles/publish/agent-delivery-system-wechat-v2/`，以选定Markdown为内容基准，制作技术分节、对照说明与四张有明确关系和边界的工程图；参考的交易内容不成为本项目规则或能力声明。
++**范围**：用户认为旧发布版结构与插图不够专业，指定本机 exchangehft 的低延迟引擎文章作为只读设计参考。按 本次 Plan（历史：`a7361c6:.dev/work/wechat-professional-v2-20261110/plan.md`） 新增 `articles/publish/agent-delivery-system-wechat-v2/`，以选定Markdown为内容基准，制作技术分节、对照说明与四张有明确关系和边界的工程图；参考的交易内容不成为本项目规则或能力声明。
+@@ -824,3 +826,3 @@
+-**范围**：用户否定黑底、长图及手工流程框，并要求首图补齐需求整理、架构设计与计划。按 [Plan](../../.dev/work/wechat-inline-figures-20261110/plan.md) 通读所选文章及BL-07～09、D-02/04/09后，用内置ImageGen制作四张浅底横版手绘PNG，更新[离线发布HTML](../../articles/publish/agent-delivery-system-wechat-v2/index.html)、复制版、README与ZIP。首图覆盖需求整理→架构设计→实施计划→工程实现→独立验证→结算接续；图注明确设计交付与实施切片的区别、已有依据复用与适用Test。
+-
+-**检查与证据**：visual，无应用Test或全量套件。375/390/768/1440宽度检查图像解码、比例、溢出与外部资源；图片高171.5/179/270/270px。确认图外正文未改、双HTML与内嵌PNG一致、ZIP仅7项且逐字节匹配。独立Review发现手机主标签过小后，用ImageGen放大关键字、精简辅助词并重做截图；第三图输入箭头也经生成工具定点校正。当前结论与文件绑定见[独立审阅](../../.dev/work/wechat-inline-figures-20261110/handdrawn-review.md)，提示词、来源、静态记录与结算保存在同目录。
++**范围**：用户否定黑底、长图及手工流程框，并要求首图补齐需求整理、架构设计与计划。按 Plan（历史：`a7361c6:.dev/work/wechat-inline-figures-20261110/plan.md`） 通读所选文章及BL-07～09、D-02/04/09后，用内置ImageGen制作四张浅底横版手绘PNG，更新[离线发布HTML](../../articles/publish/agent-delivery-system-wechat-v2/index.html)、复制版、README与ZIP。首图覆盖需求整理→架构设计→实施计划→工程实现→独立验证→结算接续；图注明确设计交付与实施切片的区别、已有依据复用与适用Test。
++
++**检查与证据**：visual，无应用Test或全量套件。375/390/768/1440宽度检查图像解码、比例、溢出与外部资源；图片高171.5/179/270/270px。确认图外正文未改、双HTML与内嵌PNG一致、ZIP仅7项且逐字节匹配。独立Review发现手机主标签过小后，用ImageGen放大关键字、精简辅助词并重做截图；第三图输入箭头也经生成工具定点校正。当前结论与文件绑定见独立审阅（历史：`a7361c6:.dev/work/wechat-inline-figures-20261110/handdrawn-review.md`），提示词、来源、静态记录与结算保存在同目录。
+@@ -832,3 +834,3 @@
+-**范围**：用户认可手绘图与页面后，要求文章只谈方法论、减少项目宣传和AI式表达。按[本次Plan](../../.dev/work/wechat-methodology-copy-20261111/plan.md)新增[当前发布源](../../articles/publish/agent-delivery-system-wechat-v2/article.md)，同步两HTML、README与ZIP。去掉品牌、项目自证和文末介绍，保留订单导出案例与完整工程论证，沿用四张已确认手绘图及排版。用户原Markdown保留为输入参考。
+-
+-**检查**：visual，无Test或全量应用套件。四宽Chrome核对55个源文内容块完整覆盖、无溢出/加载异常/外部资源，四图原字节及图注结构保持，双HTML一致，ZIP恰8项且内容一致。390/1440截图检查正文、图文位置与结尾；独立Review审查论证、文风、技术边界及实际文件，当前结论见[审阅报告](../../.dev/work/wechat-methodology-copy-20261111/review.md)，制作与结算记录见同目录。
++**范围**：用户认可手绘图与页面后，要求文章只谈方法论、减少项目宣传和AI式表达。按本次Plan（历史：`a7361c6:.dev/work/wechat-methodology-copy-20261111/plan.md`）新增[当前发布源](../../articles/publish/agent-delivery-system-wechat-v2/article.md)，同步两HTML、README与ZIP。去掉品牌、项目自证和文末介绍，保留订单导出案例与完整工程论证，沿用四张已确认手绘图及排版。用户原Markdown保留为输入参考。
++
++**检查**：visual，无Test或全量应用套件。四宽Chrome核对55个源文内容块完整覆盖、无溢出/加载异常/外部资源，四图原字节及图注结构保持，双HTML一致，ZIP恰8项且内容一致。390/1440截图检查正文、图文位置与结尾；独立Review审查论证、文风、技术边界及实际文件，当前结论见审阅报告（历史：`a7361c6:.dev/work/wechat-methodology-copy-20261111/review.md`），制作与结算记录见同目录。
+@@ -836,0 +839,8 @@
++
++## 2026-11-11 · 文章历史版本与制作产物清理
++
++**授权与范围**：用户确认删除已盘点清单，按[本次Plan](../../.dev/work/article-cleanup-20261111/plan.md)删除168个旧稿、旧图、压缩包及9个文章制作目录中的文件（61,693,537字节）。最终目录仅保留[文章源稿](../../articles/publish/agent-delivery-system-wechat-v2/article.md)、[离线HTML](../../articles/publish/agent-delivery-system-wechat-v2/index.html)、[复制版HTML](../../articles/publish/agent-delivery-system-wechat-v2/wechat-copy.html)和四张handdrawn PNG，7项字节不变；发布索引同步当前入口。
++
++**核查**：逐项对照用户确认清单、保留文件SHA-256、实际目录、复制版相对图片与离线内嵌字节；旧目录已移除，仅本次最小清理记录保留。独立核查见[Review](../../.dev/work/article-cleanup-20261111/review.md)，清单、检查和结算见同目录。不运行应用Test或全量套件，不重新渲染或改写文章。
++
++**历史与边界**：保留Git提交历史，历史验证事实不改；已删除的历史文件链接改为Git路径，不冒充当前入口。未提交候选按授权删除。无关脏文件、应用代码/文档、依赖、仓库外生成缓存与参考项目均未清理。

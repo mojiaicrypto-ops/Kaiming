@@ -1,0 +1,1282 @@
+{
+  "retain": [
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/article.md",
+      "sha256": "55096c82e656a1d573f466cf26c0dd13a1e042b247a1bb1c89bff96bb42d1601"
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/index.html",
+      "sha256": "8e1073586bf1072fdde8cfec9c525e450bbf0a39464da0d3d56367e7f6085e65"
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/wechat-copy.html",
+      "sha256": "c5627ecb481850073e6d24be490386563bd893f2005e7c985d0caa5b726a94bc"
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/assets/01-complete-delivery-handdrawn.png",
+      "sha256": "2a391d222d0c52c7c9561f0f34bb065eb80f2da4a3d4ff877f461beb35cf890a"
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/assets/02-context-handdrawn.png",
+      "sha256": "a9e168a8c82f7fc3f212d4b0932159abc2a56eb65923013a4103d7668282cc64"
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/assets/03-verification-handdrawn.png",
+      "sha256": "f41291ca7b77cf33f0fe637de8ef19b6bc1051350352872fff4908fa4b054192"
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/assets/04-evidence-handdrawn.png",
+      "sha256": "d5f26e0283e5bb6b8868905f732b5de23e81cffe523d1930c8bc465a18cc86c5"
+    }
+  ],
+  "deleteCandidates": [
+    ".dev/work/article-agent-delivery-20261110/plan.md",
+    ".dev/work/article-agent-delivery-20261110/review.md",
+    ".dev/work/article-agent-delivery-20261110/settlement.md",
+    ".dev/work/article-agent-delivery-20261110/writing-report.md",
+    ".dev/work/article-context-design-20261110/plan.md",
+    ".dev/work/article-context-design-20261110/review.md",
+    ".dev/work/article-context-design-20261110/settlement.md",
+    ".dev/work/article-context-design-20261110/writing-report.md",
+    ".dev/work/article-delivery-depth-20261110/plan.md",
+    ".dev/work/article-delivery-depth-20261110/review.md",
+    ".dev/work/article-delivery-depth-20261110/settlement.md",
+    ".dev/work/article-delivery-depth-20261110/writing-report.md",
+    ".dev/work/article-short-rewrite-20261110/plan.md",
+    ".dev/work/article-short-rewrite-20261110/review.md",
+    ".dev/work/article-short-rewrite-20261110/settlement.md",
+    ".dev/work/article-short-version-20261110/plan.md",
+    ".dev/work/article-short-version-20261110/review.md",
+    ".dev/work/article-short-version-20261110/settlement.md",
+    ".dev/work/article-short-version-20261110/writing-report.md",
+    ".dev/work/wechat-html-20261110/build-publication.cjs",
+    ".dev/work/wechat-html-20261110/fragment-preview.html",
+    ".dev/work/wechat-html-20261110/implementation-checks.json",
+    ".dev/work/wechat-html-20261110/implementation.md",
+    ".dev/work/wechat-html-20261110/plan.md",
+    ".dev/work/wechat-html-20261110/review.md",
+    ".dev/work/wechat-html-20261110/screenshots/article-1440-full.png",
+    ".dev/work/wechat-html-20261110/screenshots/article-1440-top.png",
+    ".dev/work/wechat-html-20261110/screenshots/article-375-full.png",
+    ".dev/work/wechat-html-20261110/screenshots/article-375-top.png",
+    ".dev/work/wechat-html-20261110/screenshots/article-390-close.png",
+    ".dev/work/wechat-html-20261110/screenshots/article-390-context-on-demand.png",
+    ".dev/work/wechat-html-20261110/screenshots/article-390-full.png",
+    ".dev/work/wechat-html-20261110/screenshots/article-390-independent-verification.png",
+    ".dev/work/wechat-html-20261110/screenshots/article-390-research-link.png",
+    ".dev/work/wechat-html-20261110/screenshots/article-390-top.png",
+    ".dev/work/wechat-html-20261110/screenshots/article-768-full.png",
+    ".dev/work/wechat-html-20261110/screenshots/article-768-top.png",
+    ".dev/work/wechat-html-20261110/settlement.md",
+    ".dev/work/wechat-inline-figures-20261110/build-publication.cjs",
+    ".dev/work/wechat-inline-figures-20261110/first-sample-checks.json",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-checks.json",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-review.md",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-context-1.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-context-2.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-context-3.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-context-4.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-figure-1.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-figure-2.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-figure-3.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-figure-4.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-full.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-375-full.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-context-1.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-context-2.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-context-3.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-context-4.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-figure-1.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-figure-2.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-figure-3.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-figure-4.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-full.png",
+    ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-768-full.png",
+    ".dev/work/wechat-inline-figures-20261110/imagegen/01-complete-delivery-prompt.txt",
+    ".dev/work/wechat-inline-figures-20261110/imagegen/01-readability-prompt.txt",
+    ".dev/work/wechat-inline-figures-20261110/imagegen/02-context-prompt.txt",
+    ".dev/work/wechat-inline-figures-20261110/imagegen/02-readability-prompt.txt",
+    ".dev/work/wechat-inline-figures-20261110/imagegen/03-readability-prompt.txt",
+    ".dev/work/wechat-inline-figures-20261110/imagegen/03-verification-correction-prompt.txt",
+    ".dev/work/wechat-inline-figures-20261110/imagegen/03-verification-prompt.txt",
+    ".dev/work/wechat-inline-figures-20261110/imagegen/04-evidence-prompt.txt",
+    ".dev/work/wechat-inline-figures-20261110/imagegen/04-readability-prompt.txt",
+    ".dev/work/wechat-inline-figures-20261110/imagegen/provenance.json",
+    ".dev/work/wechat-inline-figures-20261110/implementation-checks.json",
+    ".dev/work/wechat-inline-figures-20261110/integrate-handdrawn.cjs",
+    ".dev/work/wechat-inline-figures-20261110/plan.md",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-ending.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-figure-1-context.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-figure-1.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-figure-2-context.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-figure-2.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-figure-3-context.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-figure-3.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-figure-4-context.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-figure-4.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-first-context.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-full.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-top.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-375-full.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-375-top.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-ending.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-figure-1-context.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-figure-1.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-figure-2-context.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-figure-2.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-figure-3-context.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-figure-3.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-figure-4-context.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-figure-4.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-first-context.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-full.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-top.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-768-full.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/article-768-top.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/first-figure-1440.png",
+    ".dev/work/wechat-inline-figures-20261110/screenshots/first-figure-390.png",
+    ".dev/work/wechat-inline-figures-20261110/settlement.md",
+    ".dev/work/wechat-inline-figures-20261110/validation-only.patch",
+    ".dev/work/wechat-methodology-copy-20261111/build-publication.cjs",
+    ".dev/work/wechat-methodology-copy-20261111/checks.json",
+    ".dev/work/wechat-methodology-copy-20261111/plan.md",
+    ".dev/work/wechat-methodology-copy-20261111/review.md",
+    ".dev/work/wechat-methodology-copy-20261111/screenshots/article-1440-context-1.png",
+    ".dev/work/wechat-methodology-copy-20261111/screenshots/article-1440-context-2.png",
+    ".dev/work/wechat-methodology-copy-20261111/screenshots/article-1440-context-3.png",
+    ".dev/work/wechat-methodology-copy-20261111/screenshots/article-1440-context-4.png",
+    ".dev/work/wechat-methodology-copy-20261111/screenshots/article-1440-ending.png",
+    ".dev/work/wechat-methodology-copy-20261111/screenshots/article-1440-full.png",
+    ".dev/work/wechat-methodology-copy-20261111/screenshots/article-1440-top.png",
+    ".dev/work/wechat-methodology-copy-20261111/screenshots/article-390-context-1.png",
+    ".dev/work/wechat-methodology-copy-20261111/screenshots/article-390-context-2.png",
+    ".dev/work/wechat-methodology-copy-20261111/screenshots/article-390-context-3.png",
+    ".dev/work/wechat-methodology-copy-20261111/screenshots/article-390-context-4.png",
+    ".dev/work/wechat-methodology-copy-20261111/screenshots/article-390-ending.png",
+    ".dev/work/wechat-methodology-copy-20261111/screenshots/article-390-full.png",
+    ".dev/work/wechat-methodology-copy-20261111/screenshots/article-390-top.png",
+    ".dev/work/wechat-methodology-copy-20261111/settlement.md",
+    ".dev/work/wechat-methodology-copy-20261111/validation-only.patch",
+    ".dev/work/wechat-professional-v2-20261110/build-publication.cjs",
+    ".dev/work/wechat-professional-v2-20261110/implementation-checks.json",
+    ".dev/work/wechat-professional-v2-20261110/implementation.md",
+    ".dev/work/wechat-professional-v2-20261110/plan.md",
+    ".dev/work/wechat-professional-v2-20261110/review.md",
+    ".dev/work/wechat-professional-v2-20261110/screenshots/article-1440-full.png",
+    ".dev/work/wechat-professional-v2-20261110/screenshots/article-1440-top.png",
+    ".dev/work/wechat-professional-v2-20261110/screenshots/article-375-full.png",
+    ".dev/work/wechat-professional-v2-20261110/screenshots/article-375-top.png",
+    ".dev/work/wechat-professional-v2-20261110/screenshots/article-390-ending.png",
+    ".dev/work/wechat-professional-v2-20261110/screenshots/article-390-figure-1.png",
+    ".dev/work/wechat-professional-v2-20261110/screenshots/article-390-figure-2.png",
+    ".dev/work/wechat-professional-v2-20261110/screenshots/article-390-figure-3.png",
+    ".dev/work/wechat-professional-v2-20261110/screenshots/article-390-figure-4.png",
+    ".dev/work/wechat-professional-v2-20261110/screenshots/article-390-full.png",
+    ".dev/work/wechat-professional-v2-20261110/screenshots/article-390-top.png",
+    ".dev/work/wechat-professional-v2-20261110/screenshots/article-768-full.png",
+    ".dev/work/wechat-professional-v2-20261110/screenshots/article-768-top.png",
+    ".dev/work/wechat-professional-v2-20261110/settlement.md",
+    "articles/agent-delivery-system-short.md",
+    "articles/agent-delivery-system-wechat.md",
+    "articles/agent-delivery-system.md",
+    "articles/publish/agent-delivery-assets/context-on-demand.png",
+    "articles/publish/agent-delivery-assets/context-on-demand.svg",
+    "articles/publish/agent-delivery-assets/cover.png",
+    "articles/publish/agent-delivery-assets/cover.svg",
+    "articles/publish/agent-delivery-assets/independent-verification.png",
+    "articles/publish/agent-delivery-assets/independent-verification.svg",
+    "articles/publish/agent-delivery-system-wechat-body.html",
+    "articles/publish/agent-delivery-system-wechat-package.zip",
+    "articles/publish/agent-delivery-system-wechat-v2/README.md",
+    "articles/publish/agent-delivery-system-wechat-v2/agent-delivery-system-wechat-v2.zip",
+    "articles/publish/agent-delivery-system-wechat-v2/assets/01-task-delivery.png",
+    "articles/publish/agent-delivery-system-wechat-v2/assets/01-task-delivery.svg",
+    "articles/publish/agent-delivery-system-wechat-v2/assets/02-context-contract.png",
+    "articles/publish/agent-delivery-system-wechat-v2/assets/02-context-contract.svg",
+    "articles/publish/agent-delivery-system-wechat-v2/assets/03-independent-verification.png",
+    "articles/publish/agent-delivery-system-wechat-v2/assets/03-independent-verification.svg",
+    "articles/publish/agent-delivery-system-wechat-v2/assets/04-facts-and-judgment.png",
+    "articles/publish/agent-delivery-system-wechat-v2/assets/04-facts-and-judgment.svg",
+    "articles/publish/agent-delivery-system-wechat.html"
+  ],
+  "candidateRoots": [
+    "articles/agent-delivery-system.md",
+    "articles/agent-delivery-system-short.md",
+    "articles/agent-delivery-system-wechat.md",
+    "articles/publish/agent-delivery-system-wechat.html",
+    "articles/publish/agent-delivery-system-wechat-body.html",
+    "articles/publish/agent-delivery-system-wechat-package.zip",
+    "articles/publish/agent-delivery-assets",
+    ".dev/work/article-agent-delivery-20261110",
+    ".dev/work/article-short-version-20261110",
+    ".dev/work/article-short-rewrite-20261110",
+    ".dev/work/article-context-design-20261110",
+    ".dev/work/article-delivery-depth-20261110",
+    ".dev/work/wechat-html-20261110",
+    ".dev/work/wechat-professional-v2-20261110",
+    ".dev/work/wechat-inline-figures-20261110",
+    ".dev/work/wechat-methodology-copy-20261111",
+    "articles/publish/agent-delivery-system-wechat-v2/agent-delivery-system-wechat-v2.zip",
+    "articles/publish/agent-delivery-system-wechat-v2/README.md",
+    "articles/publish/agent-delivery-system-wechat-v2/assets/04-facts-and-judgment.png",
+    "articles/publish/agent-delivery-system-wechat-v2/assets/02-context-contract.svg",
+    "articles/publish/agent-delivery-system-wechat-v2/assets/02-context-contract.png",
+    "articles/publish/agent-delivery-system-wechat-v2/assets/04-facts-and-judgment.svg",
+    "articles/publish/agent-delivery-system-wechat-v2/assets/01-task-delivery.png",
+    "articles/publish/agent-delivery-system-wechat-v2/assets/03-independent-verification.svg",
+    "articles/publish/agent-delivery-system-wechat-v2/assets/03-independent-verification.png",
+    "articles/publish/agent-delivery-system-wechat-v2/assets/01-task-delivery.svg"
+  ],
+  "deleteFileCount": 168,
+  "deleteBytes": 61693537,
+  "baseCommit": "a7361c6a98e7bc486011ae7b2c4f088b1aa79f73",
+  "confirmedByUser": "我确认删除",
+  "deletedFileEvidence": [
+    {
+      "path": ".dev/work/article-agent-delivery-20261110/plan.md",
+      "sha256": "956dc208b81f31593024bac3c862f95b330cb678b3682af6c2e417bab53b5398",
+      "bytes": 3676,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-agent-delivery-20261110/review.md",
+      "sha256": "995c452710ee65f6cf5b412cc87f0595c3ec8391a505c7cd0396663645012789",
+      "bytes": 2631,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-agent-delivery-20261110/settlement.md",
+      "sha256": "4d1bfc4659ccd56e27499d69e49ae644f867676cbe1fe96e693f02d786827bb1",
+      "bytes": 2251,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-agent-delivery-20261110/writing-report.md",
+      "sha256": "a8bd4270e2e5ed858645759daa96f2000748f0f119755fe5ee2f8d544ac2ac0c",
+      "bytes": 1481,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-context-design-20261110/plan.md",
+      "sha256": "fab6aeb5d17cf4bf967898b53f41d8d0edbc5d538ce19f3a916055058949d0b6",
+      "bytes": 3493,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-context-design-20261110/review.md",
+      "sha256": "0f9604926d5940100f5ad14fd2e3d0363477c67ca49e60a6e81d212327f6925f",
+      "bytes": 2541,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-context-design-20261110/settlement.md",
+      "sha256": "0eabc2e60aea9b7a77c5c7c994897794349017bac97fd4d2047a09e12c360c42",
+      "bytes": 2148,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-context-design-20261110/writing-report.md",
+      "sha256": "51a64d9a055108464382ee668b9562b4e4e08e3d72892df9329720ae3945285a",
+      "bytes": 1507,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-delivery-depth-20261110/plan.md",
+      "sha256": "45d0479c5f541bc69dac0a5e2846ec32bbad2c1720c1d20c479fa6f14b4686f2",
+      "bytes": 4727,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-delivery-depth-20261110/review.md",
+      "sha256": "177b39cc9019a265a028e4859746382fd71d7c3f0edf9bb2f54fd722b3609c3c",
+      "bytes": 3073,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-delivery-depth-20261110/settlement.md",
+      "sha256": "b2d186ef3116ce7c19c9ae1016976fd58f0a8ed5cbcad29a4ebf847d40736683",
+      "bytes": 1948,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-delivery-depth-20261110/writing-report.md",
+      "sha256": "85e54a52ef4aca374efff8a71bef9234a37baedc57bc755fb2a0409e59abcb60",
+      "bytes": 2118,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-short-rewrite-20261110/plan.md",
+      "sha256": "031c78ddfd4c38ead32af93cd86602d6f33b7242aa6172b2dc75db3b4f7fd493",
+      "bytes": 4174,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-short-rewrite-20261110/review.md",
+      "sha256": "8fceb7741191cc2aff11c1e676cdd231849ed0a80a03fcce62d1577192b4135e",
+      "bytes": 2052,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-short-rewrite-20261110/settlement.md",
+      "sha256": "8ba1e5c59d0d1976506d5dad9875a14a9b63c97fedcecc1f0f3a6cbc18f1d6df",
+      "bytes": 2173,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-short-version-20261110/plan.md",
+      "sha256": "ddd6491f92c1b5f8ddd12919341911f7926b49322403f2b1a6e4a86ab112755a",
+      "bytes": 3753,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-short-version-20261110/review.md",
+      "sha256": "bd3bf07ce0f723454f424bf8320698075edbcbbaa24de4fe8b5008cc4502b168",
+      "bytes": 2756,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-short-version-20261110/settlement.md",
+      "sha256": "f8ed4a53017568b0a5c136b42f11f314f7549a283cb9a4818eadebfff44c89f3",
+      "bytes": 2036,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/article-short-version-20261110/writing-report.md",
+      "sha256": "96f54772abe289439aba4d6f9b293ad12f8518499061496389301230e9a0819b",
+      "bytes": 1234,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/build-publication.cjs",
+      "sha256": "7baf226779f49bbb61e47c9faa7bdfaf4db74b54545ce5adaff8e79faa1b592e",
+      "bytes": 17915,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/fragment-preview.html",
+      "sha256": "f5020d64dfc2cc11b7bf39d96a6947c3648050cc27a67f131d25bf301de8c8c5",
+      "bytes": 23430,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/implementation-checks.json",
+      "sha256": "4376a585adcdc1743af223b28873470ce180d0e0971b944f6ed4659ac1a0dd3d",
+      "bytes": 6966,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/implementation.md",
+      "sha256": "c10d3e6886babb61ec8a890ef036e152bb927d14c3475e872250fa3972807825",
+      "bytes": 2255,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/plan.md",
+      "sha256": "a41181fadaaf08157607b31b147fac41b3ac61156795381cf0082d1bc69c5d39",
+      "bytes": 3132,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/review.md",
+      "sha256": "d48ce88dcf5853bb803c8bb69c348253ca60da43eb216a6608b4e8c305deeded",
+      "bytes": 2568,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/screenshots/article-1440-full.png",
+      "sha256": "88a31cf46a1d68169477042d4806a495d105ef516ed48e3c700e1a13a89e7107",
+      "bytes": 1763738,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/screenshots/article-1440-top.png",
+      "sha256": "f5034771f4a8d161d9377714d1883dbca090ca1b6874546c0e91510a88d3149f",
+      "bytes": 146510,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/screenshots/article-375-full.png",
+      "sha256": "d251073a1ac142a9cbb379ef2e896447504654bbff2f4c36c7c6b98040d59e27",
+      "bytes": 1580603,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/screenshots/article-375-top.png",
+      "sha256": "9270252afe242e43a239e5b18dff3897d3be4922b63424d2473cc0b9779392b7",
+      "bytes": 111143,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/screenshots/article-390-close.png",
+      "sha256": "a93c313d1647b94062866e519278db47078b4db74b694b9d4eb9bc505fd5e4f6",
+      "bytes": 97193,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/screenshots/article-390-context-on-demand.png",
+      "sha256": "231670f73786a329d42277cdd8d46d84b2a7ce7c3773f9e01756312a81f27aa8",
+      "bytes": 41051,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/screenshots/article-390-full.png",
+      "sha256": "eaa909fd5bd8e201b7f809263d0ba7300dbfcc8fbe32579f82bf5da2ac773380",
+      "bytes": 1580768,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/screenshots/article-390-independent-verification.png",
+      "sha256": "6e3087ed0e504baeafa759d7c3133f4eeb0f37183871159bc1023fb19bc0fd85",
+      "bytes": 52251,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/screenshots/article-390-research-link.png",
+      "sha256": "cc85e21b7d4870eee1bbde8d9d9e228e90350fce02eebb241c3cf5aaa9d9a490",
+      "bytes": 62048,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/screenshots/article-390-top.png",
+      "sha256": "9a0f79a3558fc01847d71b31dbcc8f6b89740a04b2d0577caf0e24483fe7f243",
+      "bytes": 117769,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/screenshots/article-768-full.png",
+      "sha256": "076777dfa9d1b3e72b3500359c005bcb0efafd9331656588fa634c79f01d35d4",
+      "bytes": 1636829,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/screenshots/article-768-top.png",
+      "sha256": "6e8ccd61ec2c02566bde11db4883ac36684b3ab054999dfc2b901829172daca4",
+      "bytes": 136121,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-html-20261110/settlement.md",
+      "sha256": "2072a8c766bc115320d9a79ef67b2f9eddf6e39194a94eb304eb2d0aca22ead1",
+      "bytes": 1697,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/build-publication.cjs",
+      "sha256": "57c457e5e96565da5d6f9666f2905d5683b910028634fccc992452ccc2e93ce7",
+      "bytes": 13618,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/first-sample-checks.json",
+      "sha256": "db901b4b9a46d60a433f5d1baa7c572563d7d3f4151079635671e15619f73dc5",
+      "bytes": 2851,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-checks.json",
+      "sha256": "49d45bce1025d38dc2614e75f2a1d13ed3c7a449efff5e1a3baa122accd15201",
+      "bytes": 8510,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-review.md",
+      "sha256": "fbe67eef7a4868b2c5a31923d77b78b8868841b53ed34470b6030363f6d522d8",
+      "bytes": 11489,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-context-1.png",
+      "sha256": "c8e04866998d815a5ae28972069f120f04215c8a55a5d3c8be613867c0c5718b",
+      "bytes": 333047,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-context-2.png",
+      "sha256": "9feb5eefec2db553df904b543df5e53a73c789b12a21f34fe38aedcbca584899",
+      "bytes": 334632,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-context-3.png",
+      "sha256": "e25666687e951f81539bf7033e847aec5e4aaac654af8b39b0d836c4c02e0ced",
+      "bytes": 373046,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-context-4.png",
+      "sha256": "adc0e5e886582758bb622b4ce247666700afdbffdc03d155fb1d0d07016998b3",
+      "bytes": 368217,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-figure-1.png",
+      "sha256": "d30f02d4f455fd063a6ece1e14f2f39c72cf6b398123a7e9f554bcb2e50e1d89",
+      "bytes": 210686,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-figure-2.png",
+      "sha256": "3f9a8b442f976c0a35979a0c983e40030ffb8041ffd5ae7ba21cc5f466946790",
+      "bytes": 204889,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-figure-3.png",
+      "sha256": "6843254fe9f5d142a7ddb16733ede4028225ed1e7eff236dd917269ef029d996",
+      "bytes": 196348,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-figure-4.png",
+      "sha256": "12cbfc1ef41c9457e588b21371ff0de1711339b84fab940b2f2942e81ad3f724",
+      "bytes": 203353,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-1440-full.png",
+      "sha256": "88b1f0b37a96b45f89e38477005169200a51ae70a44ae69bcb264f6232a1a201",
+      "bytes": 2409163,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-375-full.png",
+      "sha256": "6007acfda361da37ed458a545052f2c28eef8868c33d62c173a2e9a8b1a4b9f1",
+      "bytes": 1886529,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-context-1.png",
+      "sha256": "a4bd416e44cda62f814a9d9a120531ea9ef7f76c80af7d3b06f65286dd98f3f0",
+      "bytes": 190355,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-context-2.png",
+      "sha256": "75ffda4b2a971609c00920a2f3d068af1e60c6e22222c1a6ebacab18907810d1",
+      "bytes": 191023,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-context-3.png",
+      "sha256": "f66bde3cf0ebfd5f666882b5750e82e0163291aa7da14e70d3da69b6f800bb30",
+      "bytes": 209535,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-context-4.png",
+      "sha256": "910412f86e6d1cfd83b5126a7505823f10e0bd6dc3de194a8078c7b330b7035a",
+      "bytes": 221500,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-figure-1.png",
+      "sha256": "4eb492ca2778a9420e872b5d6b6d04ceab8b7cf1af363b1440f1bcaf9256d049",
+      "bytes": 105306,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-figure-2.png",
+      "sha256": "8d92447ccbe00bc77167e391d754f9f50860bd3cfc5298145c1da18a3a08fbaa",
+      "bytes": 96430,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-figure-3.png",
+      "sha256": "35d72704b9c1fa72f4afa82a40ffaaa8e4954ab8846bb1d5c3122b9f619baba1",
+      "bytes": 97331,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-figure-4.png",
+      "sha256": "a984491c22226a997f766447b5a94a629823f1e256146ab677990e728c31f908",
+      "bytes": 101918,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-390-full.png",
+      "sha256": "012c8d31a02146f27aac93e95895e751c2e37e6b9a424a9782a8b9b7b7a60f54",
+      "bytes": 1903970,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/handdrawn-screenshots/article-768-full.png",
+      "sha256": "8efc148d3c344f7dc9a3d4c8c542ed0e18cc4893fd0b49a5140d9276cb7f1975",
+      "bytes": 2265326,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/imagegen/01-complete-delivery-prompt.txt",
+      "sha256": "ff04fac5c36bbb0b894196a3a3f5c0633c6ce762383b2689a42bf21b19d1c8e9",
+      "bytes": 3927,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/imagegen/01-readability-prompt.txt",
+      "sha256": "f0a2245b24b366e2806a9253b7d1e84e88c820e807f85c81e5401593fe0a2fc5",
+      "bytes": 1420,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/imagegen/02-context-prompt.txt",
+      "sha256": "987638f165522b84688e91eff6861ba8a832f4eaaf51a844b75389f03d7d1edf",
+      "bytes": 2581,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/imagegen/02-readability-prompt.txt",
+      "sha256": "eadfd5823108d1f258a981e1f8c0911b9189348e020a10e0084dc8e1bbaee731",
+      "bytes": 1264,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/imagegen/03-readability-prompt.txt",
+      "sha256": "5027aa1534a752102d175cf0b92f4156a4b90268198d657b64154a8b135a0486",
+      "bytes": 1709,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/imagegen/03-verification-correction-prompt.txt",
+      "sha256": "cd4ef2a52a2bb9276f6cea7467cb47eb9ba80eeba33376c9f4583423cfed9012",
+      "bytes": 880,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/imagegen/03-verification-prompt.txt",
+      "sha256": "734836e67d828071d87bd3c96ccb66d7d201d6476b491c69e3358bf39fc44bcd",
+      "bytes": 2723,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/imagegen/04-evidence-prompt.txt",
+      "sha256": "7833d78b8f1afa446227b65d7ea575710539d277378d658eecdadfd6f2e50ac1",
+      "bytes": 2581,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/imagegen/04-readability-prompt.txt",
+      "sha256": "41489addc846b9abff207b3f3eba9fc2f122071130b1645f17821e30dce1a87b",
+      "bytes": 1247,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/imagegen/provenance.json",
+      "sha256": "e12d77613348ae59c35f1df6e480c24e0cca84a44a2b0cd0d5f4e60e4fe6e903",
+      "bytes": 3744,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/implementation-checks.json",
+      "sha256": "0b49ee7d1f356ad63dcce12021b86188244bf209aee6f5728476ef15a0c78d97",
+      "bytes": 17785,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/integrate-handdrawn.cjs",
+      "sha256": "6319e6c7a96bc6aa8201d69a2207cf8ed416454632d656b0e7b06492a91b5fe7",
+      "bytes": 9073,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/plan.md",
+      "sha256": "82ac0e0032886f6663056f74372f3936dc3a069c0c517f7e2ee893c2db5e321f",
+      "bytes": 6027,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-ending.png",
+      "sha256": "81ab46a4ed967074861734a7dbec102bd59de58918501c11efaf105af1ecf006",
+      "bytes": 168464,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-figure-1-context.png",
+      "sha256": "69d41a4244d857440614e4a67aef84bae902137ebf3744df96f915a01f8657c6",
+      "bytes": 166859,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-figure-1.png",
+      "sha256": "26af9280c326930bcaa195e2fc1060e55a71cfc4f93f1ec667cd5857b6d27b90",
+      "bytes": 40447,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-figure-2-context.png",
+      "sha256": "564454022235997c1d1221e85696b5f023ae23bb2b1e40949b5b4aa9d278d4e3",
+      "bytes": 182241,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-figure-2.png",
+      "sha256": "a6b0a9446935478e12c8178dbd16cce1aea887b019b12485eb5f329c787d8f13",
+      "bytes": 47476,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-figure-3-context.png",
+      "sha256": "8856bd1444c8b47c3f0a58944f83eb12619530683df47d5602b6ef56dc11a099",
+      "bytes": 229136,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-figure-3.png",
+      "sha256": "07a8f4804433c9d0cc2e8887a16c883523bf79d975d305dd92ad9089063f01fe",
+      "bytes": 57174,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-figure-4-context.png",
+      "sha256": "6c6fbc0086db739d90524c82b97dc21523ad66fc4e2311f5605bd7b96672cf45",
+      "bytes": 229057,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-figure-4.png",
+      "sha256": "b20c4ae99d24d460dee099b10b90e06a402101cf6a8b99f011e0b76d729322a4",
+      "bytes": 57269,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-first-context.png",
+      "sha256": "15967d50fb19d78bc2b1c2d5ec9bd6c6213b56881b94edaad45585a921c1d46c",
+      "bytes": 169677,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-full.png",
+      "sha256": "cb644f2f0a4dd3887c11ed6f4b3ca8a9c263d35039bf1ecf0f799c725b2c9679",
+      "bytes": 1775865,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-1440-top.png",
+      "sha256": "8c29fde25f35fd73534999584ebe3eb59bc30c98e9f33baa2393f8be921658d8",
+      "bytes": 178931,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-375-full.png",
+      "sha256": "189b8477f24573a149ae4c39a694d0bab22aaffe5cf5fff90d587af1d0e31bfb",
+      "bytes": 1665906,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-375-top.png",
+      "sha256": "f0fc4677db193475b37e0b176c7aa91b72f0b32afad6fc58960efc5f0e0a1a02",
+      "bytes": 129921,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-ending.png",
+      "sha256": "1bf488038c4aef96a9b86113c7185b9fe12a4fce1eb4c532e6fd5a12e16901fd",
+      "bytes": 106487,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-figure-1-context.png",
+      "sha256": "dc16a01da3ab2d0916692635bf2725ff9201929509264331074f76716aad5ea8",
+      "bytes": 121676,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-figure-1.png",
+      "sha256": "670db14416cd397a3c1b7a368347861889aad575eb53f08238d07f6a52a4a075",
+      "bytes": 35693,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-figure-2-context.png",
+      "sha256": "35f2e25a8da8647697cbc645410630ed4bf8231c6b35879ed9e71cb4e33d0879",
+      "bytes": 129685,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-figure-2.png",
+      "sha256": "8fbc74fe3793c05d9dcdf1e0ff9556a76a42f44e6c071ec6fb13ad0af4afff75",
+      "bytes": 38757,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-figure-3-context.png",
+      "sha256": "9d2d99c310a1f1f81fb06d8191e61e44706b07ead8acae5d7ab163b745be7703",
+      "bytes": 148482,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-figure-3.png",
+      "sha256": "ce33295628763ee7dd57915bc4396f691f6f519c752527e4fb0ac9321d94a726",
+      "bytes": 45302,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-figure-4-context.png",
+      "sha256": "ea84f711a46a649be8487dcdca324f55987d0cf334c96ea543dace8d8542c07d",
+      "bytes": 148786,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-figure-4.png",
+      "sha256": "39fdab5dd8e838143114aed6f8c95a00ff24d63bb59ec7efcd192c2e974f57b0",
+      "bytes": 46300,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-first-context.png",
+      "sha256": "23f7cedf0368d57d589e10df85b4e865b2adaa277097334185ff477f54385f5e",
+      "bytes": 121713,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-full.png",
+      "sha256": "8acd126b35174bf11fdf985c0c8b88b1327e7ee97f4a1f68990b7d21ba49cd93",
+      "bytes": 1665371,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-390-top.png",
+      "sha256": "70dfcaded24fe5109108927378349e514206c2cc308b19455a73898104cd1153",
+      "bytes": 128869,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-768-full.png",
+      "sha256": "555d5e0a13bb5d31750eb4c141249499a08b7a2d95841c3ea3d93bdb90df4cd3",
+      "bytes": 1649692,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/article-768-top.png",
+      "sha256": "3a449b3e5ec968767e58bddf7440c7712abc7b753fc541d9d646c7e7f5cc98c6",
+      "bytes": 160249,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/first-figure-1440.png",
+      "sha256": "26af9280c326930bcaa195e2fc1060e55a71cfc4f93f1ec667cd5857b6d27b90",
+      "bytes": 40447,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/screenshots/first-figure-390.png",
+      "sha256": "670db14416cd397a3c1b7a368347861889aad575eb53f08238d07f6a52a4a075",
+      "bytes": 35693,
+      "trackedAtBase": false
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/settlement.md",
+      "sha256": "a4e5398eb2ec00653509b5c430eb395400de3e98377a9f8e7e9e0d3c1fbcefaa",
+      "bytes": 3755,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-inline-figures-20261110/validation-only.patch",
+      "sha256": "9e7b115b044fdded2a583540113b2807409d65313286f563ee326335dd81c978",
+      "bytes": 1801,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/build-publication.cjs",
+      "sha256": "124e41619c30fcafe499634836cc474e6c87402f613be0136f6b92c2e9fa9573",
+      "bytes": 10870,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/checks.json",
+      "sha256": "81988ac3e675f89bb331b9e6e947abe84b8c4244b6ea2243f18a86e65d616ae1",
+      "bytes": 5138,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/plan.md",
+      "sha256": "ec66d8b9b49f20add4d4e4ad15eae42bc4bb2bcc224f6719cc2e83990ca684d2",
+      "bytes": 3723,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/review.md",
+      "sha256": "8ee3fbed051c0554302ca34c271ac92e2aff99566725119c9d3813c122d8f66e",
+      "bytes": 8256,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/screenshots/article-1440-context-1.png",
+      "sha256": "f4c7216b0067f051d34481918cb07781fdeb3b967ec8cf0bae44de16fcab8b58",
+      "bytes": 332730,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/screenshots/article-1440-context-2.png",
+      "sha256": "99a8f6f0a614ea977bfee5cafb49d67e5b40dd292ca6ecd42f97dc3421914f25",
+      "bytes": 360394,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/screenshots/article-1440-context-3.png",
+      "sha256": "65f1f6fdc44e64c8dd41e49e0bd2b8cfc5f8738950383416d936670c3d0b4257",
+      "bytes": 383823,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/screenshots/article-1440-context-4.png",
+      "sha256": "e4e5bf3aa78440984ce4cb320dceb7310d376499ce5e80b334dd6366efa48982",
+      "bytes": 365758,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/screenshots/article-1440-ending.png",
+      "sha256": "43d3f247068ceb00f69a56373a8d8ff885f2618c49fdc2c154f61328c0ae602b",
+      "bytes": 252255,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/screenshots/article-1440-full.png",
+      "sha256": "58694d0819cc718a1614efe46c1147f1a94a4975e2337c5640e12a67138702af",
+      "bytes": 2531911,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/screenshots/article-1440-top.png",
+      "sha256": "8b56acdebe3422e3eac5be6aba047887d15f813d19de5ee231d744cc205fa65a",
+      "bytes": 351050,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/screenshots/article-390-context-1.png",
+      "sha256": "0b57b2b025ab55ddc744ffeef1ecd08bf8240af898fba787b03890474d33e61d",
+      "bytes": 175815,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/screenshots/article-390-context-2.png",
+      "sha256": "d425d5ace31b39bb4477db2dc26086292140b488fd235cf699240a6c2a73cf05",
+      "bytes": 193747,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/screenshots/article-390-context-3.png",
+      "sha256": "c0212769d84cd235b59dc3167ee4be1aacda0a88b89dc3d3e24c87d7a0ddf3e7",
+      "bytes": 210948,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/screenshots/article-390-context-4.png",
+      "sha256": "326108cf7ab21add88a66b458ac1c46499370903ea3b84662216f2f010fb211e",
+      "bytes": 218439,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/screenshots/article-390-ending.png",
+      "sha256": "093dddb5456dbb13abd62f493b63542de9cd5762d8f8120f9ad6a43f9cb2e497",
+      "bytes": 164343,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/screenshots/article-390-full.png",
+      "sha256": "a582fb8a821e994cee864dbf7eb2048524b4b5803a02ce4498b1562031add126",
+      "bytes": 2037710,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/screenshots/article-390-top.png",
+      "sha256": "920d9f5ea87685624524bfb1a2795377b10639f41851d81c08900f50c2e855bf",
+      "bytes": 160058,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/settlement.md",
+      "sha256": "18bd3edda4671a9f6938e5c1a79d36648833d11bedb5ff0a942e9c78ddd71adc",
+      "bytes": 2953,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-methodology-copy-20261111/validation-only.patch",
+      "sha256": "2d251c6109a285e0719ba97cc324f241b23cca8fbd2a6b8d7691723d3c4e7403",
+      "bytes": 1432,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/build-publication.cjs",
+      "sha256": "3d80b48f5d6ba183bdf385f863f06b8665a18c7353146d0034006418807b67a9",
+      "bytes": 24289,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/implementation-checks.json",
+      "sha256": "16748f45cb1514f18724a94bda077a84b34fc3658b48ec88a893d3bcccdc8ef3",
+      "bytes": 7021,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/implementation.md",
+      "sha256": "ccce3818579cf990d9f115340e41ea4023bb2e94f06edbab268a4dc33c355e4d",
+      "bytes": 2759,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/plan.md",
+      "sha256": "616666dd16b9329f6bd5bdce30abb2d8c30e3bf331e8fd21bc1aeb21b4580c79",
+      "bytes": 3953,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/review.md",
+      "sha256": "0e74df438b4ca3ec4f2d6a785e41755a481a40f143606e28f56d9d17b39bd0ea",
+      "bytes": 2937,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/screenshots/article-1440-full.png",
+      "sha256": "d9ee39fde7303c48f2576fb7701fa6b0fb4f46e66973b3e2b30723587fd76faa",
+      "bytes": 2463737,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/screenshots/article-1440-top.png",
+      "sha256": "fc30f9c6eb3d8815e93ea8f8848c384da902320a195300941797ca9c56185209",
+      "bytes": 194378,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/screenshots/article-375-full.png",
+      "sha256": "b6a5fd6baf3fea1d4b68eee8127659f7d13b9c591c68f8c9660a97f94ea67d9d",
+      "bytes": 1882928,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/screenshots/article-375-top.png",
+      "sha256": "e1622e66af4d38da2884dad8cf1fe0fbb30cbcc12274598dc07198246d7db10f",
+      "bytes": 125323,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/screenshots/article-390-ending.png",
+      "sha256": "46af75d44fd4449180f50a4b3d124b848ff88b4d3550fc69a019b0dd53c60a06",
+      "bytes": 100087,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/screenshots/article-390-figure-1.png",
+      "sha256": "06fd038891925c4d58f9aa7a26c921599b76622535892cfb35bed007acd22166",
+      "bytes": 101575,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/screenshots/article-390-figure-2.png",
+      "sha256": "00c896c69403cebd286027e6ea7819320f9fc30e315455949f1ac2772e203117",
+      "bytes": 87630,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/screenshots/article-390-figure-3.png",
+      "sha256": "34ddbe8005758faff2559a1cbe5efb0db9b133159ab22ae42bfed28652da31b4",
+      "bytes": 107315,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/screenshots/article-390-figure-4.png",
+      "sha256": "30c5345ce40a1563ab577219f6208eafadbfe9f36915651d86a00133dcafd57a",
+      "bytes": 108363,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/screenshots/article-390-full.png",
+      "sha256": "815c40fb0a3e6085fa57f8167b7ffaed7f5aba208c3ccc37930fe8112be181ee",
+      "bytes": 1904456,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/screenshots/article-390-top.png",
+      "sha256": "8a7f778eac52a54314116a233e1af9f83b64324997b817fad499512408d1f109",
+      "bytes": 125347,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/screenshots/article-768-full.png",
+      "sha256": "363ac1b8c7695963140f686f3039cfc3f10334382c2488860d530c82635f23d7",
+      "bytes": 2267860,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/screenshots/article-768-top.png",
+      "sha256": "df1a560ff8cc7375821501d25013c6e8a248b6a180344d0b7ffd64af08fb53bc",
+      "bytes": 168861,
+      "trackedAtBase": true
+    },
+    {
+      "path": ".dev/work/wechat-professional-v2-20261110/settlement.md",
+      "sha256": "352e2e043d7f892bbd90f6b2ec89ed4cf7ecbb2b0170b9bc492f5b2bfc598a6d",
+      "bytes": 1771,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/agent-delivery-system-short.md",
+      "sha256": "6a4608186f1ec27b68e7bf45228dbc8f7f6786876dd311e958e936d507a88bcd",
+      "bytes": 29283,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/agent-delivery-system-wechat.md",
+      "sha256": "3bc5ac51ccce5e0a7e51f754e38592887f6f1f439894ddee08c67f361fad9e78",
+      "bytes": 12368,
+      "trackedAtBase": false
+    },
+    {
+      "path": "articles/agent-delivery-system.md",
+      "sha256": "e8c5b0aa7ffc60f5755a25b2dafbb314ac5174ffc84a6dd35a35912c87bac42d",
+      "bytes": 18586,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-assets/context-on-demand.png",
+      "sha256": "84cba12eb5e76d0b235c6c3e4ae9663ad0ae0bd8799b9468ed84cf0c9856e579",
+      "bytes": 66919,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-assets/context-on-demand.svg",
+      "sha256": "cebae7b9939a5b781b345e1aaf070afaa897c0d5621e60e957fb0d3b8c2dfa7e",
+      "bytes": 1358,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-assets/cover.png",
+      "sha256": "36efabe4925e935bf7b254cc00433b6601e2a0cd0c88e5d7852465c06bff0b91",
+      "bytes": 62764,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-assets/cover.svg",
+      "sha256": "6b040a8c52aa1a14c6a6a099f6789a0bc06bbe7d695804dae846685ce6aae14c",
+      "bytes": 1033,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-assets/independent-verification.png",
+      "sha256": "93d058d4e576d558f27eb36ec8734e75a03f132c496299fe4561838e9a6e5042",
+      "bytes": 86130,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-assets/independent-verification.svg",
+      "sha256": "10d56110172b043a2800e6c4e3300188e9734715c09a26ffdd89286d010ec3eb",
+      "bytes": 1375,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-body.html",
+      "sha256": "885a414f6b8beecbe16b8cd35752ffab2d96e94974f24d696afeadfcf70e0a0b",
+      "bytes": 22987,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-package.zip",
+      "sha256": "2bc9f7d9184a29c073c170e2507999032ced17fbb611b40bfa60c33b2fcefcc5",
+      "bytes": 438515,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/README.md",
+      "sha256": "12996d63ee415f9499caee8aa231ecaac6e958dc2cd24ca9e5dc6206a75f4f42",
+      "bytes": 5592,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/agent-delivery-system-wechat-v2.zip",
+      "sha256": "dffa810fdefe7784025a1c345a6e772e6dc1d41363a3a98a7c31346e7f07f067",
+      "bytes": 13798162,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/assets/01-task-delivery.png",
+      "sha256": "3adbc5a487fabe72df5eff500a06ce374b5a5276562a4f181c899456028cb5ee",
+      "bytes": 35213,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/assets/01-task-delivery.svg",
+      "sha256": "dfbb01cc576eb8ab34f35905da49f38ab160bb8515b4d433be79a5ccb1de6db0",
+      "bytes": 3217,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/assets/02-context-contract.png",
+      "sha256": "5e642aaedefb777929331f0bf56b54db05ea7478a58a8e20e286de718ab3b93a",
+      "bytes": 50507,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/assets/02-context-contract.svg",
+      "sha256": "e3e45f6dae3ce031cbb837df6cc7242783eef7f102a55acef5e5d644a49237e6",
+      "bytes": 2755,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/assets/03-independent-verification.png",
+      "sha256": "c3ca9682bda719c1af00e149ed5504ecd73d91a716325bdd560e9ac09d317097",
+      "bytes": 66870,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/assets/03-independent-verification.svg",
+      "sha256": "422ed68bc9324976cb242886e87a980bc99adadc362e6b77d6f4a8b0a02f2c3e",
+      "bytes": 3705,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/assets/04-facts-and-judgment.png",
+      "sha256": "7319ac8e6e379d161e1859a771b9edc1c2004972072f6763a159ea7edd5439f0",
+      "bytes": 65143,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat-v2/assets/04-facts-and-judgment.svg",
+      "sha256": "d4e028a6cab14c024bb605f0aca479f3e9dd640c06979107c0ae6d13144dad2d",
+      "bytes": 3088,
+      "trackedAtBase": true
+    },
+    {
+      "path": "articles/publish/agent-delivery-system-wechat.html",
+      "sha256": "4eb0fcbf1c54f124e24fe1209c4dca3414f23e1afbc8abbd3f45b3212e242289",
+      "bytes": 311051,
+      "trackedAtBase": true
+    }
+  ],
+  "unrelatedDirtyFiles": [
+    {
+      "path": "docs/install.md",
+      "sha256": "93a7f53adc35b09a209af9b0604bb0107cc388c78578d9576a2292bf02ff11f9"
+    },
+    {
+      "path": "docs/technicalnew/agents-and-tools.md",
+      "sha256": "f0da2880ee823c3c4d832dc6181f934a46b60b9b7d27ff8d1f5119067da998da"
+    },
+    {
+      "path": "docs/technicalnew/validation.md",
+      "sha256": "ca5be41fe04f254ba85af62cc3d6b7e0e77ef021111a470185de53bc6459dfe2"
+    },
+    {
+      "path": "kaiming/src/runtime/deletion-gate.ts",
+      "sha256": "88f12c81ff6e264d992d637d2148d0bbca6f2fa05c027633b8f630ebe40deade"
+    },
+    {
+      "path": "kaiming/src/runtime/runner.ts",
+      "sha256": "50f1ed466a75892052a0dae5cc6c478a238f9ea00da614569e1c6ffaea6cc0eb"
+    },
+    {
+      "path": "kaiming/test/deletion-gate-runtime.test.ts",
+      "sha256": "1b60a4ebc0c3bb6efc5b8f5263c8179859cdc73e8f2d2a95d933e095378bf704"
+    },
+    {
+      "path": "kaiming/test/deletion-gate.test.ts",
+      "sha256": "9cd80a1febcfd6bf8e0305f08a5f1b8e7caf1f293885ab4c47bc5921311a9211"
+    },
+    {
+      "path": "kaiming/test/runtime.test.ts",
+      "sha256": "0647916b38e8a413a7eb57a20c03ad1ccf9d84f465a814dde2b9588438987ea1"
+    },
+    {
+      "path": ".kaiming/work/command-trust-20261110/plan.md",
+      "sha256": "597d916cce41658dd693d1f94ce1dd19a965909cb68520b21d7fac99aae2b8fa"
+    }
+  ]
+}
