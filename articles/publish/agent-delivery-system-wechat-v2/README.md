@@ -1,12 +1,13 @@
 # 《AI 说“完成了”，然后呢？》公众号图文发布材料
 
-本地发布材料，2026-11-11更新为浅底手绘插图。尚未进入公众号后台或对外发布。
+本地发布材料，2026-11-11更新为方法论文字稿，沿用已确认的浅底手绘插图与排版。尚未进入公众号后台或对外发布。
 
 ## 文件与用途
 
 - `index.html`：自包含离线阅读版。四张PNG直接嵌入，CSS全部内联；无脚本、远程字体、图片或样式请求。单独保存这个HTML即可阅读。
 - `wechat-copy.html`：浏览器复制/HTML编辑工具入稿版，正文与离线版相同；图片使用下表中的相对PNG路径。不是可直接提交公众号的API请求。
-- `agent-delivery-system-wechat-v2.zip`：两份HTML、本说明和下列四张PNG，共7个文件，不含旧候选图。
+- `article.md`：当前方法论发布源。保留案例与工程论证，去掉项目介绍、自证记录和文末推广。
+- `agent-delivery-system-wechat-v2.zip`：两份HTML、本说明、article.md和下列四张PNG，共8个文件，不含旧候选图。
 
 | 当前文章素材（assets/） | 内容 | 像素 |
 | --- | --- | --- |
@@ -31,24 +32,24 @@
 
 ## 内容边界与制作记录
 
-用户所选`articles/agent-delivery-system-wechat.md`保持不变。发布副本保留原论证与段落，八个正文小节归入四个逻辑大节；本轮仅替换插图及对应alt/图注。此前发布副本已有的技术边界校准保持：适用Test、后端检查与页面浏览器路径区分、纯展示排除行为/公共布局/共享令牌、代码交付与文档交付的报告绑定范围。关于开明依据正式产品定位写成，未虚构作者、网址或联系方式。
+用户原稿`articles/agent-delivery-system-wechat.md`保留为输入参考，当前发布源为本目录`article.md`。本轮只改文字：去掉开明名称、项目介绍、某日跑通流程的自证与文末引导，改为方法的适用条件、具体操作和证据边界；调整口号、排比、重复总结与抽象表达。八个正文小节仍归入原四个逻辑大节，四图像素、alt/图注及页面内联样式保持。需求设计、任务范围、按需加载、独立验证、风险分档与知识回写等论证保留；不虚构项目经历或效果数据。
 
 图依据所选文章全文、BL-07～09、D-02/04/09和项目知识契约；不改变产品设计、交付规则或应用代码。视觉参考目录`exchangehft/articles/core-trading-engine/public-html/article-01-low-latency-engine/`只读，未复制交易内容；用户最新指定的浅底手绘风格优先。
 
-提示词与素材来源：`.dev/work/wechat-inline-figures-20261110/imagegen/`，使用内置ImageGen，无CLI/API调用或新依赖。第三图初稿的输入箭头反向，已用ImageGen定点修正后纳入发布版。
+插图提示词与素材来源仍见`.dev/work/wechat-inline-figures-20261110/imagegen/`；本次文字修订不重新生图。文字修订的Plan、静态检查、独立Review和结算见`.dev/work/wechat-methodology-copy-20261111/`。
 
-从仓库根目录重新嵌入现有PNG并检查：
+从仓库根目录按article.md重建两HTML、打包并检查：
 
 ```sh
-node .dev/work/wechat-inline-figures-20261110/integrate-handdrawn.cjs --write
+node .dev/work/wechat-methodology-copy-20261111/build-publication.cjs --write
 ```
 
 只检查当前材料，不重写发布文件：
 
 ```sh
-node .dev/work/wechat-inline-figures-20261110/integrate-handdrawn.cjs --check
+node .dev/work/wechat-methodology-copy-20261111/build-publication.cjs --check
 ```
 
-脚本不重新生图；旧`build-publication.cjs`属于先前视觉候选，不用于本版。复用Node、现有Playwright与本机Chrome，无依赖安装。静态记录`handdrawn-checks.json`、四宽截图`handdrawn-screenshots/`、独立Review及结算均位于同一工作目录。
+脚本复用提交e4c2142的排版与四图结构，不重新生图。前轮脚本属于各自历史任务，不用于重建本次文字。复用Node、现有Playwright与本机Chrome，无依赖安装。当前静态记录`checks.json`、390/1440截图`screenshots/`、独立Review及结算均位于本次文字任务目录；375/768执行静态布局检查。
 
-验证档visual：检查375/390/768/1440宽度的图片解码/比例/溢出、无脚本/外部资源、图外正文保持、双HTML一致、内嵌PNG与素材逐字节一致、ZIP恰含7个文件且内容一致；另目视检查关系、文字和阅读效果。未运行应用Test或全量套件，未增加产品验收结论。独立Review不代表用户必然认可审美。
+验证档visual：检查375/390/768/1440宽度的图片解码/比例/溢出、无脚本/外部资源、发布源段落完整覆盖、双HTML一致、四图及其内嵌字节不变、ZIP恰含8项且内容一致；独立Review另审文风、方法论深度与图文关系。未运行应用Test或全量套件，未增加产品验收结论。独立Review不保证用户文风偏好或微信后台呈现。
