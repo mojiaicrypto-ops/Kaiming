@@ -23,6 +23,7 @@ import type { TaskMemberRow } from './task-labels';
 import type { TaskDetail } from '../state/slot';
 import type { PendingInteraction } from '../api/stream';
 import { errorText } from '../lib/errors';
+import { ensureNotificationPermission } from '../lib/notifications';
 
 function useCompact(): boolean {
   const tier = useTier();
@@ -423,6 +424,9 @@ export function ChatPage({ session, sessions, currentSessionId, projectId, proje
     async (text: string, attachments: readonly UploadedAttachment[]): Promise<void> => {
       // Sending is a statement of intent to watch the answer: whatever the reader was looking
       // at, the view goes (and stays) at the tail from here.
+      // The send click is a user gesture, so this is the place browsers accept a permission
+      // request; the helper asks only while the permission is still undecided.
+      void ensureNotificationPermission();
       handleRef.current?.pinToTail();
       try {
         const outcome = await session.submit(text, attachments);

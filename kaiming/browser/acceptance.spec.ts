@@ -226,6 +226,49 @@ test('an attached image is stored once, shown in the message, and still there af
   }
 });
 
+test('a waiting question and a finished turn raise reminders', async ({ page }) => {
+  const harness = await startHarness({
+    model: [
+      {
+        kind: 'tool_calls',
+        calls: [
+          {
+            name: 'question',
+            arguments: JSON.stringify({
+              method: 'select',
+              title: '是否继续？',
+              options: ['继续', '先不做'],
+            }),
+          },
+        ],
+      },
+      { kind: 'text', text: '已继续。' },
+    ],
+  });
+  try {
+    await page.goto(harness.url);
+    await loginThroughUi(page, harness.accessPassword);
+    await openProject(page, harness.project?.projectPath ?? '');
+
+    const composer = page.locator('[data-testid="composer"]');
+    await composer.fill('继续');
+    await composer.press('Enter');
+
+    // The question reminder is a shell toast, not only the docked panel.
+    await expect(page.locator('.toast').filter({ hasText: /A question is waiting|有新的问题需要回答/ })).toBeVisible({
+      timeout: 15_000,
+    });
+    await page.locator('[data-testid="question-panel"]').getByRole('button', { name: /继续/ }).first().click();
+
+    // Answering lets the turn finish; the completion reminder is independent of the question card.
+    await expect(page.locator('.toast').filter({ hasText: /Conversation finished|对话已完成/ })).toBeVisible({
+      timeout: 20_000,
+    });
+  } finally {
+    await harness.close();
+  }
+});
+
 test('a question is answered in the panel and the model continues', async ({ page }) => {
   const harness = await startHarness({
     model: [

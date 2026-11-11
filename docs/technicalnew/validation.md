@@ -860,3 +860,13 @@ visual；390/1440本机Chrome核对57个源文内容块完整覆盖、无溢出�
 **证据**：服务端 60 文件 **583 用例通过**，其中 `test/deletion-gate.test.ts` 7 例覆盖删除、Git 删除类、引号误报、复合命令、脚本删除与命令替换；`test/deletion-gate-runtime.test.ts` 4 例覆盖批准、拒绝、普通命令、首次选择信任后第二次删除不再询问且真实删除文件；`test/runtime.test.ts` 的 designer 删除用例改走 `Approve once`。`npm run typecheck` 通过；webapp 17 文件 **119 用例通过**，webapp `tsc --noEmit` 通过。另用当前数据目录中的真实误报命令调用 `deletionCommandReason`，结果为 `null`。
 
 **边界**：文本规则仍不是 shell 解析器或沙箱，`bash -c`、解码执行等刻意绕过不保证拦截；信任状态不持久化，重启或新会话会重新询问；外部 Agent 客户端自己的 bash/MCP 审批策略不在本改动范围。未进行真实浏览器人工点击，select 卡片复用既有 InteractionPanel 的选择渲染与单测覆盖。
+
+## 2026-11-11 · 对话完成与问题提醒
+
+**需求**：用户要求前端在对话结束和出现待回答问题时有弹框提醒。行为定为：当前会话从 `processing` 到 `idle` 且没有待答问题时提示“对话已完成”；出现新的待答问题时提示“有新的问题需要回答”。聊天屏且窗口聚焦用页内 toast；窗口隐藏、失焦或不在聊天屏时优先用已授权的浏览器通知，点击通知回到聊天；首次发送消息时请求通知权限，不支持或拒绝时只保留 toast。
+
+**实现**：`webapp/src/state/reminders.ts` 用纯差分 `reminderEvents` 判断完成与新增问题，按 `sessionId` 重置基线，首次快照和会话切换不补报；`webapp/src/lib/notifications.ts` 封装权限、Notification 构造与点击聚焦；`App.tsx` 在 shell 层挂载提醒并接通知点击，`ChatPage.tsx` 在发送手势内请求一次权限；中英文案加入 `i18n/catalog.ts`，提醒行为写入 [UI 契约](ui-design.md#u2-布局)。
+
+**证据**：webapp 19 文件 **129 用例通过**（新增 7 条差分、3 条通知 helper），`npm --prefix webapp run typecheck` 与 `npm --prefix webapp run build` 通过；服务端 `test/web-i18n-keys.test.ts` 4 例通过。真实 Chromium + 真 Server 的 `browser/acceptance.spec.ts` 新增用例：问题到达出现问题 toast，点击回答后运行结束出现完成 toast，1 passed。
+
+**边界**：只提醒当前打开的会话，不订阅其他会话；没有 Service Worker、离线推送或后台轮询；浏览器通知的实际系统弹窗依赖用户授权，自动用例验证了授权判定与构造/点击逻辑，真实 Chromium 用例验证页内 toast；未在系统通知中心手工点击授权后的通知。

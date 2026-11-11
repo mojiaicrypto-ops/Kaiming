@@ -7,6 +7,7 @@ import { StatusBar } from './StatusBar';
 import { ProjectDialog } from './ProjectDialog';
 import { I18nProvider } from '../i18n/I18nProvider';
 import { useSession, type SessionRef } from '../state/useSession';
+import { useSessionReminders } from '../state/reminders';
 import { useWorkspace } from '../state/useWorkspace';
 import { RpcClient, RpcError, newRequestId } from '../api/rpc';
 import { ChatPage } from '../chat/ChatPage';
@@ -96,6 +97,14 @@ function Shell({ preferences }: { preferences: PreferencesApi }) {
   // waiting for a reload to show work that is already happening.
   const session = useSession(sessionRef, auth === 'ready' && sessionRef !== null, rpc, onUnauthorized, () => {
     void workspace.refreshSessions();
+  });
+  const activateChat = useCallback(() => go('/'), [go]);
+  useSessionReminders({
+    sessionId: sessionRef?.sessionId ?? null,
+    slot: session.slot,
+    active: auth === 'ready',
+    onScreen: route.view === 'chat' && filePath === null,
+    onActivate: activateChat,
   });
 
   const notify = useCallback((message: string, kind: 'info' | 'success' | 'error' = 'info'): void => {
