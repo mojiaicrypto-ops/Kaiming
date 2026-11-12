@@ -10,6 +10,10 @@ Confirmed scope and basis: `docs/productnew/` (product requirements) and `docs/t
 
 Simple first: do not over-engineer and do not over-think. Solve the current problem within the confirmed requirements and prefer Pi's native capabilities and the existing mechanisms; without a clear need, do not add objects, states, protocols or abstraction layers, and do not pre-build complex mechanisms for hypothetical future needs.
 
+## Articles and publishing materials
+
+Article writing, editorial revisions, public-account copy, article layout, covers and illustrations are content work. Produce and check the requested final materials directly; do not run the software-development workflow or create Task Plans, verification profiles, independent Review/Test stages, settlement reports, validation entries or delivery commits for this work. Keep final articles and images; temporary drafts, scripts and previews belong outside the project. User-confirmed editorial conventions may be recorded directly in this file. Product requirements and technical implementation contracts remain subject to the development rules below.
+
 ## Discuss before sensitive changes
 
 A change is sensitive when it touches completion checks, delivery or commit judgement, cleanup or deletion, environment and process ownership, permissions, persistence, or a cross-module contract. For these, present the observed facts, the viable options and their consequences, and the recommendation first; wait for the user's decision, then write the applicable Plan and change code. Do not turn a proposal made during discussion into an implementation on your own.
