@@ -22,3 +22,6 @@ kaiming/config/model.json
 oldcode/
 .kiro/
 roadmap
+
+# Article drafts and publishing copies are local working material, not repository content.
+articles/
