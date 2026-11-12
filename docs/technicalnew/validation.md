@@ -880,3 +880,13 @@ visual；390/1440本机Chrome核对57个源文内容块完整覆盖、无溢出�
 **证据**：`test/raw-question.test.ts` 7 例；`test/server-interaction.test.ts` 新增真实 stub 模型 + 真实 InteractionBridge 的恢复、代码围栏负例和停止用例，共 18 例通过；`webapp/test/raw-question-text.test.ts` 4 例通过；服务端与 webapp `tsc --noEmit` 通过，webapp `vite build` 通过。停止时交互转为 stale、输入为 stopped。
 
 **边界**：兜底不接受带工具调用的同条消息、不支持普通文本中的半截/示例标记；旧历史只隐藏不补弹框；提示词修改需重启 workbench 才生效。
+
+## 2026-11-12 · 模型输出退化防线
+
+**需求**：dev 子会话在已完成实现和测试后，`agent_report` 参数膨胀到 108,832 字符，约 8KB 正常报告后出现数千个重复 `</invoke>`/`</function>`/`</v8>`；三次重试仍失败，最终以 5400s watchdog 停止。通用工作台不能靠模型或换模型解决问题。
+
+**实现**：新增 `src/runtime/model-output-guard.ts`。流式 `message_update` 检测重复协议闭包标签、重复后缀、工具参数流大小；命中立即 abort，并在 `message_end` 把畸形 assistant 消息替换为短诊断，避免进入下一轮上下文。`tool_call` 只接受 JSON object，拒绝超限参数（`agent_report` 16KB，其他 1MB 兜底），**不解析/不修复 XML/DSML**。`InputRunner` 在同一输入执行一次隐藏纠正 turn；二次退化终态为 `failed` + `MODEL_OUTPUT_CORRUPTED`，不再等 5400s watchdog。纠正消息 `display=false` 且由 Server 过滤。
+
+**证据**：`test/model-output-guard.test.ts` 7 例（含 108KB 形态、重复后缀、普通文件含标记负例、report 上限、纠偏消息过滤）；`test/server-interaction.test.ts` 新增真实 stub 模型用例：重复流被中止并重试一次后完成、第二次退化终止且无畸形标签进入历史。服务端全量 **62 文件/602 用例通过**，webapp **20 文件/133 用例通过**，两边 `tsc --noEmit` 通过。
+
+**边界**：不新增 provider adapter，未声明格式失败关闭；纠偏只一次；不会自动重放工作或清理工作树；未用真实模型重放本事故。

@@ -33,6 +33,7 @@ import { SessionRegistry } from '../runtime/registry.ts';
 import { InputRunner } from '../runtime/runner.ts';
 import type { RunOutcome } from '../runtime/runner.ts';
 import { isHiddenRawQuestionAnswerEvent } from '../runtime/raw-question.ts';
+import { isHiddenModelOutputCorrectionEvent } from '../runtime/model-output-guard.ts';
 import { resolveStoredConfig } from '../runtime/config.ts';
 import type { RuntimeDefaults } from '../runtime/config.ts';
 import { contextNoticeOf, contextUsageOf, windowOnlyContext, type ContextUsageView } from '../runtime/context-usage.ts';
@@ -299,6 +300,7 @@ export function startWorkbench(options: StartOptions): Promise<{
     onEvent: (sessionId, event, meta) => {
       // The recovered answer is user-context for the model only; the interaction row already tells
       // the browser what the user chose, so a second system-authored bubble would be noise.
+      if (isHiddenModelOutputCorrectionEvent(event)) return;
       if (isHiddenRawQuestionAnswerEvent(event)) return;
       // A live message may carry image bytes; the browser only ever gets the attachment address (U6).
       hub.publish(sessionId, projectEventImages(event, server.agentDir) as typeof event, {

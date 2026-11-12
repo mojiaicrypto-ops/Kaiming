@@ -15,6 +15,7 @@ import { SessionEventHub } from '../src/server/hub.ts';
 import { WorkbenchWorker } from '../src/server/worker.ts';
 import { PiRuntimeFactory } from '../src/runtime/pi-runtime.ts';
 import { SessionRegistry } from '../src/runtime/registry.ts';
+import { MODEL_OUTPUT_CORRUPTED } from '../src/runtime/model-output-guard.ts';
 import { InputRunner } from '../src/runtime/runner.ts';
 import { InteractionBridge } from '../src/runtime/interactions.ts';
 import { resolveEffectiveConfig, type RuntimeDefaults } from '../src/runtime/config.ts';
@@ -491,6 +492,52 @@ describe('interaction bridge', () => {
     expect(h.store.getInteraction(pending.interactionId)?.state).toBe('stale');
     expect(h.store.getInput(inputId)?.status).toBe('stopped');
     expect(h.runner.interactions.pendingCount).toBe(0);
+  }, 30_000);
+
+  it('aborts a repeating stream, discards it, and retries once', async () => {
+    const bad = `${'report line\n'.repeat(400)}${'</invoke>'.repeat(200)}`;
+    const h = await harness([
+      { kind: 'slow_text', text: bad, chunks: 80, delayMs: 0 },
+      { kind: 'text', text: '纠正后完成。' },
+    ]);
+    const submitted = await h.call('session.input.submit', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      content: [{ type: 'text', text: '写报告' }],
+    });
+    const inputId = (submitted['result'] as { inputId: string }).inputId;
+    await h.awaitRun();
+
+    const binding = h.store.getSessionBinding('s-chief');
+    const history = readFileSync(binding?.piFile ?? '', 'utf8');
+    expect(h.store.getInput(inputId)?.status).toBe('completed');
+    expect(history).not.toContain('</invoke>');
+    expect(history).toContain('kaiming.model-output-correction');
+    expect(history).toContain('纠正后完成。');
+    expect(history.match(/kaiming\.model-output-correction/g) ?? []).toHaveLength(1);
+  }, 30_000);
+
+  it('stops after a second degeneration instead of retrying forever', async () => {
+    const bad = `${'report line\n'.repeat(400)}${'</invoke>'.repeat(200)}`;
+    const h = await harness([
+      { kind: 'slow_text', text: bad, chunks: 80, delayMs: 0 },
+      { kind: 'slow_text', text: bad, chunks: 80, delayMs: 0 },
+    ]);
+    const submitted = await h.call('session.input.submit', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      content: [{ type: 'text', text: '写报告' }],
+    });
+    const inputId = (submitted['result'] as { inputId: string }).inputId;
+    await h.awaitRun();
+
+    const input = h.store.getInput(inputId);
+    expect(input?.status).toBe('failed');
+    expect(input?.errorCode).toBe(MODEL_OUTPUT_CORRUPTED);
+    const binding = h.store.getSessionBinding('s-chief');
+    const history = readFileSync(binding?.piFile ?? '', 'utf8');
+    expect(history).not.toContain('</invoke>');
+    expect(history.match(/kaiming\.model-output-correction/g) ?? []).toHaveLength(1);
   }, 30_000);
 });
 

@@ -32,6 +32,7 @@ import { formatDocumentText } from './document-text.ts';
 import { compactionDue } from './compaction-policy.ts';
 import { readDocument, readImage } from '../server/attachments.ts';
 import { createRawQuestionRecovery } from './raw-question.ts';
+import { ModelOutputGuard, MODEL_OUTPUT_CORRUPTED, MODEL_OUTPUT_CORRECTION_CUSTOM_TYPE } from './model-output-guard.ts';
 import { InteractionBridge, createUiAdapter } from './interactions.ts';
 import { createQuestionTool } from '../tools/question-tool.ts';
 import { createDeletionGate } from './deletion-gate.ts';
@@ -230,6 +231,50 @@ export class InputRunner {
       // The same holds while the chief waits on a dispatched step: the slow work belongs to member
       // runs with their own watchdogs, so charging it here would abort every Task longer than the
       // total window. The model's own generation still counts.
+      waiting: () =>
+        this.interactions.isWaiting(sessionId) ||
+        (this.hostWaits.get(this.hostWaitKey(sessionId)) ?? 0) > 0,
+      stallMs: this.options.runStallMs ?? DEFAULT_RUN_STALL_MS,
+      totalMs: this.options.runTotalMs ?? DEFAULT_RUN_TOTAL_MS,
+    });
+  }
+
+  /**
+   * One corrective turn after the stream guard discards a degenerate response. The hidden custom
+   * message becomes user context for the model but never a browser bubble; a second fault is left
+   * for the terminal classifier, so a broken provider cannot retry forever.
+   */
+  private async recoverModelOutput(
+    handle: PiSessionHandle,
+    sessionId: string,
+    guard: ModelOutputGuard,
+    inputId: string,
+  ): Promise<void> {
+    const fault = guard.fault;
+    if (fault === undefined || guard.retryUsed) return;
+    const live = this.options.store.getInput(inputId);
+    if (live !== undefined && live.stopRequestKey !== null) return;
+    guard.retryUsed = true;
+    guard.fault = undefined;
+    await handle.session.waitForIdle();
+    this.lastEventAt.set(sessionId, Date.now());
+    await runWithWatchdog({
+      prompt: () =>
+        handle.session.sendCustomMessage(
+          {
+            customType: MODEL_OUTPUT_CORRECTION_CUSTOM_TYPE,
+            content: [
+              {
+                type: 'text',
+                text: `Your previous response was discarded as degenerate or malformed: ${fault.detail}. Do not repeat it. Reissue only a valid JSON tool call in the provider's declared format. For a report, keep the body under 8 KB: cite log paths and counts; do not paste full logs.`,
+              },
+            ],
+            display: false,
+          },
+          { triggerTurn: true },
+        ),
+      abort: () => handle.session.abort(),
+      activityAt: () => this.lastEventAt.get(sessionId) ?? 0,
       waiting: () =>
         this.interactions.isWaiting(sessionId) ||
         (this.hostWaits.get(this.hostWaitKey(sessionId)) ?? 0) > 0,
@@ -632,6 +677,7 @@ export class InputRunner {
       ];
       const taskId = this.options.store.getTaskForSession(sessionId)?.id;
       const bashTimeoutSeconds = this.options.bashTimeoutSeconds ?? DEFAULT_BASH_TIMEOUT_SECONDS;
+      const modelGuard = new ModelOutputGuard();
       const handle = await this.options.registry.acquire(
         {
           sessionId,
@@ -645,6 +691,7 @@ export class InputRunner {
           // Always installed: the model's file tools stay inside the project (and never reach the
           // server's private storage); shell commands keep their own deletion gate.
           extensionFactories: [
+            modelGuard.extension,
             createRawQuestionRecovery({
               bridge: this.interactions,
               sessionId,
@@ -749,6 +796,7 @@ export class InputRunner {
       });
       try {
         await this.promptWithWatchdog(handle, sessionId, promptText, images);
+        await this.recoverModelOutput(handle, sessionId, modelGuard, input.inputId);
       } finally {
         // Also the path of a failed or stopped run: the responses that did complete were paid for.
         stopWatchingUsage();
@@ -790,6 +838,10 @@ export class InputRunner {
       if (stoppedOnRequest) {
         status = 'stopped';
         detail = stopReason === 'error' ? 'run was aborted as requested' : 'run stopped on request';
+      } else if (modelGuard.fault !== undefined) {
+        status = 'failed';
+        errorCode = MODEL_OUTPUT_CORRUPTED;
+        detail = `model output discarded: ${modelGuard.fault.detail}`;
       } else if (stopReason === 'error') {
         status = 'failed';
         errorCode = 'MODEL_ERROR';
