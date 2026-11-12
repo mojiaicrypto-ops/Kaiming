@@ -870,3 +870,13 @@ visual；390/1440本机Chrome核对57个源文内容块完整覆盖、无溢出�
 **证据**：webapp 19 文件 **129 用例通过**（新增 7 条差分、3 条通知 helper），`npm --prefix webapp run typecheck` 与 `npm --prefix webapp run build` 通过；服务端 `test/web-i18n-keys.test.ts` 4 例通过。真实 Chromium + 真 Server 的 `browser/acceptance.spec.ts` 新增用例：问题到达出现问题 toast，点击回答后运行结束出现完成 toast，1 passed。
 
 **边界**：只提醒当前打开的会话，不订阅其他会话；没有 Service Worker、离线推送或后台轮询；浏览器通知的实际系统弹窗依赖用户授权，自动用例验证了授权判定与构造/点击逻辑，真实 Chromium 用例验证页内 toast；未在系统通知中心手工点击授权后的通知。
+
+## 2026-11-12 · 原始 question 文本兜底与停止语义
+
+**需求**：模型在真实会话里把原生提问写成 `<question …>` assistant 文本，浏览器没有弹框、只在聊天流显示标记，用户无法回答。要求不是只改提示词，而是这种文本必须仍然成为可答复的交互。
+
+**实现**：新增 `src/runtime/raw-question.ts` 的 `message_end` 扩展，只在最后一段 assistant 文本以完整 question 块结束、块不在代码围栏内、且同消息没有任何工具调用时解析；通过既有 `InteractionBridge` 创建并等待持久交互，返回前删除标记，并以 `display=false` 的自定义 user-context 消息把真实答复送回同一 run。`src/server/main.ts` 过滤该内部消息，浏览器只看到交互卡与后续回答；`webapp/src/lib/raw-question-text.ts` 在直播文本和旧历史中隐藏标记（保留代码围栏）。提示词 `base.md` 与 question 工具描述明确要求真实工具调用，违反时由运行时兜底。
+
+**证据**：`test/raw-question.test.ts` 7 例；`test/server-interaction.test.ts` 新增真实 stub 模型 + 真实 InteractionBridge 的恢复、代码围栏负例和停止用例，共 18 例通过；`webapp/test/raw-question-text.test.ts` 4 例通过；服务端与 webapp `tsc --noEmit` 通过，webapp `vite build` 通过。停止时交互转为 stale、输入为 stopped。
+
+**边界**：兜底不接受带工具调用的同条消息、不支持普通文本中的半截/示例标记；旧历史只隐藏不补弹框；提示词修改需重启 workbench 才生效。

@@ -31,6 +31,7 @@ import { partsOfPayload } from './input-text.ts';
 import { formatDocumentText } from './document-text.ts';
 import { compactionDue } from './compaction-policy.ts';
 import { readDocument, readImage } from '../server/attachments.ts';
+import { createRawQuestionRecovery } from './raw-question.ts';
 import { InteractionBridge, createUiAdapter } from './interactions.ts';
 import { createQuestionTool } from '../tools/question-tool.ts';
 import { createDeletionGate } from './deletion-gate.ts';
@@ -629,6 +630,7 @@ export class InputRunner {
           ...hostTools.map((tool) => tool.name).filter((name) => !denied.has(name)),
         ]),
       ];
+      const taskId = this.options.store.getTaskForSession(sessionId)?.id;
       const bashTimeoutSeconds = this.options.bashTimeoutSeconds ?? DEFAULT_BASH_TIMEOUT_SECONDS;
       const handle = await this.options.registry.acquire(
         {
@@ -643,6 +645,12 @@ export class InputRunner {
           // Always installed: the model's file tools stay inside the project (and never reach the
           // server's private storage); shell commands keep their own deletion gate.
           extensionFactories: [
+            createRawQuestionRecovery({
+              bridge: this.interactions,
+              sessionId,
+              inputId: input.inputId,
+              ...(taskId !== undefined ? { taskId } : {}),
+            }),
             ...(extras?.extensionFactories ?? []),
             createFileBoundaryGuard({
               cwd: session.cwd,
@@ -671,7 +679,7 @@ export class InputRunner {
       // Bind the interaction adapter: without a bound uiContext ctx.hasUI is false and the model
       // cannot ask anything (R4/M5). The adapter is a plain object on purpose.
       {
-        const taskId = this.options.store.getTaskForSession(sessionId)?.id;
+        // The task id is resolved once above; both the recovery and the UI adapter use it.
         handle.session.bindExtensions({
           // A deliberate subset: dialog methods are real, terminal-only surfaces are absent (as in
           // PI's own RPC host). The SDK spreads the object, so the missing keys are simply undefined.
@@ -777,15 +785,15 @@ export class InputRunner {
       const stoppedOnRequest =
         live.stopRequestKey !== null || this.hostAborts.has(abortKey(sessionId, input.inputId));
 
-      if (stopReason === 'error') {
-        if (stoppedOnRequest) {
-          status = 'stopped';
-          detail = 'run was aborted as requested';
-        } else {
-          status = 'failed';
-          errorCode = 'MODEL_ERROR';
-          detail = `model run failed: ${providerError || 'unknown provider error'}`;
-        }
+      // A stop request that landed while the input was processing is the outcome, even if the model
+      // managed one final message before the abort unwound: the user asked for no further result.
+      if (stoppedOnRequest) {
+        status = 'stopped';
+        detail = stopReason === 'error' ? 'run was aborted as requested' : 'run stopped on request';
+      } else if (stopReason === 'error') {
+        status = 'failed';
+        errorCode = 'MODEL_ERROR';
+        detail = `model run failed: ${providerError || 'unknown provider error'}`;
       } else if (stopReason === 'aborted') {
         status = 'stopped';
         detail = 'run was aborted';

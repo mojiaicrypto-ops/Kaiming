@@ -72,7 +72,7 @@ export function createQuestionTool(interactionIdOf: () => string): ToolDefinitio
     name: 'question',
     label: 'Question',
     description:
-      'Ask the user a question through the host UI. method=confirm needs message; method=select needs options.',
+      'Ask the user a question through the host UI. method=confirm needs message; method=select needs options. This is a real tool call: never print its XML/JSON form as assistant text.',
     parameters: {
       type: 'object',
       properties: {

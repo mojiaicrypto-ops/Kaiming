@@ -10,6 +10,7 @@ import { DocumentAttachment } from './DocumentAttachment';
 import type { TaskMemberRow } from './task-labels';
 import { blocksOf, membersForDispatch, parseArgs, type ToolResultView } from './transcript-model';
 import { hrefOfEvent } from '../files/link-target';
+import { hideRawQuestionMarkup } from '../lib/raw-question-text';
 import type { HistoryMessage } from '../state/slot';
 
 export interface MessageItemProps {
@@ -53,6 +54,8 @@ function MessageItemRow({ message, role, label, continuation, results, onFollow,
       return <ThinkingBlock key={`k${index}`} text={block.text} live={streaming && isLast} />;
     }
     if (block.kind === 'text') {
+      const displayText = role === 'user' ? block.text : hideRawQuestionMarkup(block.text);
+      if (displayText.trim() === '') return null;
       return (
         <div
           key={`t${index}`}
@@ -69,7 +72,7 @@ function MessageItemRow({ message, role, label, continuation, results, onFollow,
                 }
           }
         >
-          <Markdown text={block.text} />
+          <Markdown text={displayText} />
           {cursor}
         </div>
       );

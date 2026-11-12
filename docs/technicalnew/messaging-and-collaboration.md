@@ -150,6 +150,8 @@ event 保持 Pi AgentSessionEvent；inputId/messageKey 仅有实际关联时提�
 
 通过 session.bindExtensions({uiContext, mode}) 把 ctx.ui.confirm/select/input 接入宿主 UIAdapter，复用 Pi 原生请求/答复字段；**必须绑定 UI 适配器**，交互开关是「是否绑定适配器」而非 mode 字符串（实测绑定+`rpc`/绑定+`print` 都可交互，未绑定时 ctx.hasUI=false；与固定版本 `hasUI()` 实现一致），mode 按宿主真实身份声明（浏览器宿主首版 `"rpc"`）。适配器必须实现为普通对象：SDK 以对象展开包装 uiContext，类实例的原型方法会在包装后丢失。模型使用 G2 的 question 扩展，工具内部已有 ctx.ui 交互使用相同通道。[Pi 交互规范](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/docs/rpc-extension-ui.md)、[SDK 绑定源码](https://github.com/earendil-works/pi/blob/v1.0.0/packages/coding-agent/src/core/agent-session.ts#L3211-L3222)
 
+模型可能违反提示，把 `<question …>…</question>` 当作 assistant 文本输出；这种文本没有工具结果链路，不能只当作普通 Markdown。宿主在 `message_end` 增加一次严格兜底：仅当最后一段文本以完整 question 块结束、块不在代码围栏内、且同一消息没有任何真实工具调用时，才解析 `method/title/message/options/placeholder`，按同一 M5 通道创建持久交互并等待答复；随后从最终消息中删除该块，并把问答以 `display=false` 的自定义 user-context 消息送回同一 run，服务端不把该内部消息发布到浏览器。提示和 question 工具描述仍要求模型发起真实工具调用；兜底不是新的业务确认类型，也不接受普通文本里的示例或半截标记。
+
 ```mermaid
 sequenceDiagram
   participant P as 发起交互的Pi Session

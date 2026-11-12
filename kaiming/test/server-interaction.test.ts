@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -388,6 +388,106 @@ describe('interaction bridge', () => {
 
     expect(stopped['error']).toBeUndefined();
     // The question can never be resumed: it goes stale instead of leaving the page waiting.
+    expect(h.store.getInteraction(pending.interactionId)?.state).toBe('stale');
+    expect(h.store.getInput(inputId)?.status).toBe('stopped');
+    expect(h.runner.interactions.pendingCount).toBe(0);
+  }, 30_000);
+
+  it('turns trailing raw question markup into the durable interaction and continues the same run', async () => {
+    const raw = [
+      '先看结论。',
+      '',
+      '<question method="select" title="真实模型配置" message="要判断真实首解的信息量，必须先配一个可用的 OpenAI 兼容模型。">',
+      '<options>先只诊断，暂时不改</options>',
+      '<options>先修 fake 的误导</options>',
+      '</question>',
+    ].join('\n');
+    const h = await harness([
+      { kind: 'text', text: raw },
+      { kind: 'text', text: '已按回答继续。' },
+    ]);
+
+    const submitted = await h.call('session.input.submit', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      content: [{ type: 'text', text: '看一下' }],
+    });
+    const inputId = (submitted['result'] as { inputId: string }).inputId;
+    const pending = await awaitPending(h.store, 's-chief');
+    const row = h.store.getInteraction(pending.interactionId);
+    expect(row).toMatchObject({
+      method: 'select',
+      inputId,
+      sessionId: 's-chief',
+      title: '真实模型配置',
+      message: '要判断真实首解的信息量，必须先配一个可用的 OpenAI 兼容模型。',
+    });
+    expect(JSON.parse(row?.options ?? '[]')).toEqual(['先只诊断，暂时不改', '先修 fake 的误导']);
+
+    const answered = await h.call('interaction.respond', {
+      projectId: h.projectId,
+      chiefSessionId: 's-chief',
+      interactionId: pending.interactionId,
+      expectedRevision: pending.revision,
+      response: { value: '先只诊断，暂时不改' },
+    });
+    expect(answered['error']).toBeUndefined();
+    await h.awaitRun();
+
+    const binding = h.store.getSessionBinding('s-chief');
+    const history = readFileSync(binding?.piFile ?? '', 'utf8');
+    // The raw markup never reaches the persisted message the browser and snapshot share.
+    expect(history).not.toContain('<question method=');
+    expect(history).toContain('先看结论。');
+    expect(history).toContain('已按回答继续。');
+    // The hidden custom message is the model's user-context answer; it is persisted but excluded
+    // from the browser history reader.
+    expect(history).toContain('kaiming.raw-question-answer');
+    expect(history).toContain('Answer: 先只诊断，暂时不改');
+    expect(h.store.getInteraction(pending.interactionId)?.response).toBe(
+      JSON.stringify({ value: '先只诊断，暂时不改' }),
+    );
+    expect(h.store.getInput(inputId)?.status).toBe('completed');
+  }, 30_000);
+
+  it('leaves a code-fence example alone', async () => {
+    const raw = [
+      'The markup looks like this:',
+      '',
+      '```xml',
+      '<question method="select" title="example"><options>a</options></question>',
+      '```',
+    ].join('\n');
+    const h = await harness([{ kind: 'text', text: raw }]);
+    await h.call('session.input.submit', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      content: [{ type: 'text', text: 'show me the syntax' }],
+    });
+    await h.awaitRun();
+    expect(h.runner.interactions.pendingCount).toBe(0);
+    expect(h.store.listPendingInteractions('s-chief')).toEqual([]);
+  }, 30_000);
+
+  it('marks the recovered question stale when its input is stopped', async () => {
+    const raw = '<question method="select" title="x"><options>a</options><options>b</options></question>';
+    const h = await harness([{ kind: 'text', text: raw }]);
+    const submitted = await h.call('session.input.submit', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      content: [{ type: 'text', text: '问一下' }],
+    });
+    const inputId = (submitted['result'] as { inputId: string }).inputId;
+    const pending = await awaitPending(h.store, 's-chief');
+
+    const stopped = await h.call('session.input.stop', {
+      projectId: h.projectId,
+      sessionId: 's-chief',
+      inputId,
+    });
+    await h.awaitRun();
+
+    expect(stopped['error']).toBeUndefined();
     expect(h.store.getInteraction(pending.interactionId)?.state).toBe('stale');
     expect(h.store.getInput(inputId)?.status).toBe('stopped');
     expect(h.runner.interactions.pendingCount).toBe(0);
