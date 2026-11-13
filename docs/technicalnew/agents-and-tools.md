@@ -151,6 +151,8 @@ read：有效 investigation/recovery 结果、全部成员停稳、无待处理�
 
 **交付观察必须可回答**：有 Git 时只对已观察到的路径分批执行 `git check-ignore`；Git 存在但无法判定 ignored 状态时，Review/Test 不记录，`end` 把该事实列为缺项，不能静默把全部路径当作交付。
 
+`.gitignore` 是 workspace policy，不是运行时交付；代码 Task 的 Review/Test 绑定不包含它，结算后补忽略规则不使代码复核失效。任务目标本身就是调整 ignore 规则时，Review 仍按目标检查，但程序不把它作为代码交付摘要。
+
 结算只回填已确认记录；源码/正式规则实质变化重新 Review → 适用 Test。报告和保存事实不能代替业务判断，也不能以模型自称完成替代保存事实。
 
 ## G4 规则与上下文装配

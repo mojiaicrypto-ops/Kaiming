@@ -302,6 +302,7 @@ describe('agent_report', () => {
     writeFileSync(join(f.cwd, 'src', 'a.ts'), 'export const a = 1;\n', 'utf8');
     mkdirSync(join(f.cwd, 'docs'), { recursive: true });
     writeFileSync(join(f.cwd, 'docs', 'runbook.md'), '# runbook v1\n', 'utf8');
+    writeFileSync(join(f.cwd, '.gitignore'), 'dist/\n', 'utf8');
     const settlementBody = '# settlement\n\nall checked\n';
     writeSettlement(f.cwd, f.taskId, settlementBody);
     const settlement = await f.report.execute('call-1', {
@@ -322,7 +323,9 @@ describe('agent_report', () => {
     const review = await reviewerReport(f, 'passed');
     expect(review.isError).toBe(false);
     expect(f.store.getResult(String(review.details['resultId']))?.deliveryState?.paths).toContain('src/a.ts');
-    expect(f.store.getResult(String(review.details['resultId']))?.deliveryState?.paths).not.toContain('docs/runbook.md');
+    const reviewPaths = f.store.getResult(String(review.details['resultId']))?.deliveryState?.paths ?? [];
+    expect(reviewPaths).not.toContain('docs/runbook.md');
+    expect(reviewPaths).not.toContain('.gitignore');
 
     // The Test covers the same files the review covered.
     const test = await testerReport(f, 'passed');

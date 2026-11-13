@@ -44,6 +44,7 @@ interaction change.
 - An untracked ignored build file is absent from Review/Test delivery paths.
 - Removing an ignored artifact after Review does not change the reviewed digest.
 - A tracked file that matches an ignore pattern remains in the delivery, as Git still tracks it.
+- An `.gitignore` policy edit after Review does not invalidate code evidence when code paths exist.
 - If Git cannot report ignore status, Review/Test is not recorded and completion reports the gap;
   no silent "nothing ignored" result.
 - No language- or directory-specific allowlist is introduced.

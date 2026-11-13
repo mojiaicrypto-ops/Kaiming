@@ -897,8 +897,8 @@ visual；390/1440本机Chrome核对57个源文内容块完整覆盖、无溢出�
 
 **修正**：`runtime/git-delivery.ts` 的 `ignoredProjectPaths` 改为只对已观察路径分批执行 `git check-ignore -z --stdin`，并区分无 Git、Git 不可读和正常结果。`runtime/deliverable.ts` 在 ignore 状态无法确定时拒绝生成交付摘要；`tools/completion-git.ts` 把同一事实作为完成缺项；`tools/report-tools.ts` 在 Review/Test 提交时拒绝记录，而不是把全部路径当作交付。
 
-**规则**：`.gitignore` 仍是默认分类依据；未跟踪 ignored 文件不是交付，Review 路径不包含它们，删除后不使 Review/Test 失效；已跟踪文件即使匹配规则仍是交付，因为 Git 仍能提交它；没有 Git 项目保持原有本机保存行为，Git 存在但读不出来则失败关闭，不静默放行。
+**规则**：`.gitignore` 仍是默认分类依据；未跟踪 ignored 文件不是交付，Review 路径不包含它们，删除后不使 Review/Test 失效；已跟踪文件即使匹配规则仍是交付，因为 Git 仍能提交它；代码 Task 的 Review/Test 绑定还排除 `.gitignore`/嵌套 ignore policy，ignore 规则修改不作为代码交付摘要，Review 仍按任务目标检查；没有 Git 项目保持原有本机保存行为，Git 存在但读不出来则失败关闭，不静默放行。
 
-**证据**：`test/deliverable.test.ts` 现有 ignored 排除、tracked ignored 保留、前 205 个 ignored 路径分批、删除 ignored 产物摘要不变、父仓库 ignore 规则以及 Git 不可读时拒绝观察，共 8 例；`test/report.test.ts` 新增 Git 不可读时 Review 报告被拒绝。服务端全量 **62 文件/607 用例通过**；webapp **20 文件/133 用例通过**；两端 `tsc --noEmit` 和 webapp `vite build` 通过。首次并行全量运行出现一次 Git 提交测试波动；该测试单文件运行通过，随后全量复跑通过。
+**证据**：`test/deliverable.test.ts` 现有 ignored 排除、tracked ignored 保留、前 205 个 ignored 路径分批、删除 ignored 产物摘要不变、父仓库 ignore 规则以及 Git 不可读时拒绝观察，共 8 例；`test/report.test.ts` 新增 Git 不可读时 Review 报告被拒绝，并在 Review 绑定路径中断言不包含 `.gitignore` 与 `docs/**`。服务端全量 **62 文件/607 用例通过**；webapp **20 文件/133 用例通过**；两端 `tsc --noEmit` 和 webapp `vite build` 通过。首次并行全量运行出现一次 Git 提交测试波动；该测试单文件运行通过，随后全量复跑通过。
 
 **边界**：旧 Review 的 `deliveryState` 若已经记录了 ignored 路径，不会历史迁移，需要一次新的 Review 才能换成稳定路径；本次没有引入项目专属产物目录白名单，也没有自动执行 `git rm --cached`；Git 本身不可用但仓库标记存在仍按缺项阻断。
