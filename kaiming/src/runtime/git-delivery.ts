@@ -172,17 +172,44 @@ function blocks(start: number, total: number, size: number): readonly [number, n
  * `.git/info/exclude` or the configured global excludes. Tracked files are deliberately absent even
  * when a pattern matches them - git keeps tracked files committable. A missing repository or git is
  * not an error here; the caller simply has nothing to exclude.
+ *
+ * The query is bounded to the observed paths. Asking git for the repository-wide ignored list makes
+ * a large generated tree expensive and turns a timeout into a silent "nothing is ignored" answer,
+ * which would put ignored artifacts into a reviewed delivery.
  */
-export function ignoredProjectPaths(cwd: string, paths: readonly string[]): ReadonlySet<string> {
-  if (paths.length === 0) return new Set();
-  const list = runGit(cwd, ['ls-files', '--others', '--ignored', '--exclude-standard', '-z']);
-  if (!list.ok) return new Set();
-  const wanted = new Set(paths);
-  const ignored = new Set<string>();
-  for (const path of list.stdout.split('\0')) {
-    if (path !== '' && wanted.has(path)) ignored.add(path);
+export interface IgnoredPathsObservation {
+  readonly ignored: ReadonlySet<string>;
+  /** Set when git exists but could not answer; callers must fail closed rather than include the path. */
+  readonly detail?: string;
+}
+
+export function ignoredProjectPaths(cwd: string, paths: readonly string[]): IgnoredPathsObservation {
+  if (paths.length === 0) return { ignored: new Set() };
+  const inside = runGit(cwd, ['rev-parse', '--is-inside-work-tree']);
+  if (!inside.ok) {
+    if (repositoryMarker(cwd) === undefined) {
+      return { ignored: new Set() };
+    }
+    return {
+      ignored: new Set(),
+      detail: inside.detail ?? 'git could not read the repository',
+    };
   }
-  return ignored;
+  const ignored = new Set<string>();
+  for (const [start, end] of blocks(0, paths.length, PATH_BATCH)) {
+    const batch = paths.slice(start, end);
+    const check = runGit(cwd, ['check-ignore', '-z', '--stdin'], `${batch.join('\0')}\0`);
+    // Exit 1 is git's "none of these are ignored", not a failure.
+    if (!check.ok && check.code !== 1) {
+      return { ignored, detail: check.detail ?? 'git check-ignore failed' };
+    }
+    if (check.ok) {
+      for (const path of check.stdout.split('\0')) {
+        if (path !== '') ignored.add(path);
+      }
+    }
+  }
+  return { ignored };
 }
 
 /**

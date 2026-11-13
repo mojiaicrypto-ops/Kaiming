@@ -26,7 +26,12 @@ export function deliveryCommitGaps(store: Store, task: TaskRow): string[] {
   }
   // A review recorded before ignored files were filtered may still list build outputs or the user's
   // own excluded files. They are not delivery: no commit can carry them, so check only the rest.
-  const ignored = ignoredProjectPaths(cwd, reviewed);
-  const paths = ignored.size === 0 ? reviewed : reviewed.filter((path) => !ignored.has(path));
+  const observation = ignoredProjectPaths(cwd, reviewed);
+  if (observation.detail !== undefined) {
+    return [
+      `the reviewed delivery's ignored paths could not be checked (${observation.detail}); restore git, then end again`,
+    ];
+  }
+  const paths = observation.ignored.size === 0 ? reviewed : reviewed.filter((path) => !observation.ignored.has(path));
   return [...commitGaps(observeCommit(cwd, paths))];
 }

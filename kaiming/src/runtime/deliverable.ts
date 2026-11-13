@@ -85,7 +85,12 @@ export function snapshotDelivery(cwd: string, excludePaths: readonly string[] = 
   collect(cwd, '', excluded, observed);
   // A file git ignores is not part of the delivery, even though the walk sees it on disk: no commit
   // can carry it, and build outputs or the user's own excluded files must not invalidate a review.
-  const ignored = ignoredProjectPaths(cwd, observed);
+  // If git cannot answer, fail instead of silently treating every observed path as delivery.
+  const observation = ignoredProjectPaths(cwd, observed);
+  if (observation.detail !== undefined) {
+    throw new Error(`ignored paths could not be determined: ${observation.detail}`);
+  }
+  const ignored = observation.ignored;
   const paths = ignored.size === 0 ? observed : observed.filter((path) => !ignored.has(path));
   return { digest: digestOfPaths(cwd, paths), paths };
 }

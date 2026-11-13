@@ -890,3 +890,15 @@ visual；390/1440本机Chrome核对57个源文内容块完整覆盖、无溢出�
 **证据**：`test/model-output-guard.test.ts` 7 例（含 108KB 形态、重复后缀、普通文件含标记负例、report 上限、纠偏消息过滤）；`test/server-interaction.test.ts` 新增真实 stub 模型用例：重复流被中止并重试一次后完成、第二次退化终止且无畸形标签进入历史。服务端全量 **62 文件/602 用例通过**，webapp **20 文件/133 用例通过**，两边 `tsc --noEmit` 通过。
 
 **边界**：不新增 provider adapter，未声明格式失败关闭；纠偏只一次；不会自动重放工作或清理工作树；未用真实模型重放本事故。
+
+## 2026-11-13 · Review/Test 交付按 `.gitignore` 稳定观察
+
+**现象**：Review 的 `deliveryState` 在真实项目中包含了未跟踪 ignored 构建物；结算清理这些构建物后，`end` 重算旧路径摘要失败，要求重新 Review/Test，代码本身没有变化。原因是观察用仓库级 `git ls-files --others --ignored` 枚举，命令失败或超时时被当成“没有 ignored 文件”，把生成物纳入了交付。
+
+**修正**：`runtime/git-delivery.ts` 的 `ignoredProjectPaths` 改为只对已观察路径分批执行 `git check-ignore -z --stdin`，并区分无 Git、Git 不可读和正常结果。`runtime/deliverable.ts` 在 ignore 状态无法确定时拒绝生成交付摘要；`tools/completion-git.ts` 把同一事实作为完成缺项；`tools/report-tools.ts` 在 Review/Test 提交时拒绝记录，而不是把全部路径当作交付。
+
+**规则**：`.gitignore` 仍是默认分类依据；未跟踪 ignored 文件不是交付，Review 路径不包含它们，删除后不使 Review/Test 失效；已跟踪文件即使匹配规则仍是交付，因为 Git 仍能提交它；没有 Git 项目保持原有本机保存行为，Git 存在但读不出来则失败关闭，不静默放行。
+
+**证据**：`test/deliverable.test.ts` 现有 ignored 排除、tracked ignored 保留、前 205 个 ignored 路径分批、删除 ignored 产物摘要不变、父仓库 ignore 规则以及 Git 不可读时拒绝观察，共 8 例；`test/report.test.ts` 新增 Git 不可读时 Review 报告被拒绝。服务端全量 **62 文件/607 用例通过**；webapp **20 文件/133 用例通过**；两端 `tsc --noEmit` 和 webapp `vite build` 通过。首次并行全量运行出现一次 Git 提交测试波动；该测试单文件运行通过，随后全量复跑通过。
+
+**边界**：旧 Review 的 `deliveryState` 若已经记录了 ignored 路径，不会历史迁移，需要一次新的 Review 才能换成稳定路径；本次没有引入项目专属产物目录白名单，也没有自动执行 `git rm --cached`；Git 本身不可用但仓库标记存在仍按缺项阻断。

@@ -66,6 +66,61 @@ describe('delivery observation', () => {
     expect(snapshot.digest).toBe(digestOfPaths(cwd, snapshot.paths));
   });
 
+  it('does not change the reviewed digest when an ignored artifact is removed', () => {
+    const cwd = project();
+    git(cwd, ['init', '--quiet']);
+    writeFileSync(join(cwd, '.gitignore'), 'dist/\n', 'utf8');
+    mkdirSync(join(cwd, 'dist'));
+    writeFileSync(join(cwd, 'dist', 'out.js'), 'built\n', 'utf8');
+
+    const snapshot = snapshotDelivery(cwd);
+    expect(snapshot.paths).not.toContain('dist/out.js');
+    rmSync(join(cwd, 'dist', 'out.js'));
+
+    // The artifact was never delivery, so its later removal cannot invalidate the review.
+    expect(digestOfPaths(cwd, snapshot.paths)).toBe(snapshot.digest);
+  });
+
+  it('excludes ignored paths beyond one check-ignore batch', () => {
+    const cwd = project();
+    git(cwd, ['init', '--quiet']);
+    writeFileSync(join(cwd, '.gitignore'), 'dist/\n', 'utf8');
+    mkdirSync(join(cwd, 'dist'));
+    for (let index = 0; index < 205; index += 1) {
+      writeFileSync(join(cwd, 'dist', `out-${String(index)}.js`), 'built\n', 'utf8');
+    }
+
+    const snapshot = snapshotDelivery(cwd);
+
+    expect(snapshot.paths.some((path) => path.startsWith('dist/'))).toBe(false);
+    expect(snapshot.digest).toBe(digestOfPaths(cwd, snapshot.paths));
+  });
+
+  it('fails closed when git cannot report ignored paths', () => {
+    const cwd = project();
+    // A marker makes this "a repository git cannot read", not the no-git case.
+    mkdirSync(join(cwd, '.git'));
+
+    expect(() => snapshotDelivery(cwd)).toThrow('ignored paths could not be determined');
+  });
+
+  it('applies ignore rules from a repository above the project', () => {
+    const outer = mkdtempSync(join(tmpdir(), 'kaiming-monorepo-'));
+    dirs.push(outer);
+    const cwd = join(outer, 'apps', 'web');
+    mkdirSync(join(cwd, 'src'), { recursive: true });
+    writeFileSync(join(cwd, 'src', 'a.ts'), 'export const a = 1;\n', 'utf8');
+    git(outer, ['init', '--quiet']);
+    writeFileSync(join(outer, '.gitignore'), 'dist/\n', 'utf8');
+    mkdirSync(join(cwd, 'dist'));
+    writeFileSync(join(cwd, 'dist', 'out.js'), 'built\n', 'utf8');
+
+    const snapshot = snapshotDelivery(cwd);
+
+    expect(snapshot.paths).toContain('src/a.ts');
+    expect(snapshot.paths).not.toContain('dist/out.js');
+  });
+
   it('detects a changed or deleted reviewed file and ignores a new one', () => {
     const cwd = project();
     const snapshot = snapshotDelivery(cwd);

@@ -115,7 +115,14 @@ export function createReportTool(contextOf: ReportToolContextResolver): DomainTo
       // Delivery binding (G3): observed by the program now, never supplied by the model. A test is
       // measured over the very files the last passed review covered, so the two are comparable even
       // when the test run itself leaves new artifacts behind.
-      const delivery = observeDelivery(context, task.id, kind);
+      let delivery: DeliveryState | null;
+      try {
+        delivery = observeDelivery(context, task.id, kind);
+      } catch (error) {
+        return fail('STORAGE_UNAVAILABLE', `the delivery could not be observed: ${messageOf(error)}`, {
+          taskId: task.id,
+        });
+      }
 
       // The id is derived from every field the report carries, so a retry of the very same report maps
       // to the same result while two different reports of one input can never collide.

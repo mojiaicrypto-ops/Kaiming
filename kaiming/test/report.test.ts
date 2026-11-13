@@ -207,6 +207,19 @@ describe('agent_report', () => {
     expect(row?.deliveryState?.paths).toEqual([]);
   });
 
+  it('refuses a review when ignored status cannot be observed', async () => {
+    const f = fixture({ type: 'write', roleId: 'reviewer', expectedKind: 'review' });
+    mkdirSync(join(f.cwd, 'src'), { recursive: true });
+    writeFileSync(join(f.cwd, 'src', 'a.ts'), 'export const a = 1;\n', 'utf8');
+    // A marker makes this a repository git cannot read, not the no-Git case.
+    mkdirSync(join(f.cwd, '.git'));
+
+    const result = await f.report.execute('call-1', report({ summary: 'checked', verdict: 'passed' }));
+
+    expect(result.isError).toBe(true);
+    expect(f.store.listTaskResults(f.taskId)).toHaveLength(0);
+  });
+
   it('records two different reports of one input as two results', async () => {
     const f = fixture({ type: 'write' });
 
