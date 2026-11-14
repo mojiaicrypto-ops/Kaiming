@@ -32,3 +32,60 @@ Date: 2026-11-14 · workKind: implement · profile: broad · Type: code delivery
 
 - 交付路径（相对 HEAD 提交）：`kaiming/src/store/store.ts`、`kaiming/src/server/worker.ts`、`kaiming/src/runtime/pi-runtime.ts`、`kaiming/test/worker.test.ts`、`kaiming/test/provider-config.test.ts`、`kaiming/test/worker-idle-scan.test.ts`、`kaiming/test/availability-cache.test.ts`、`kaiming/test/store-statement-reuse.test.ts`、`docs/technicalnew/validation.md`、本目录（plan/review/settlement）。
 - 运行中的 workbench（若在跑旧代码）需重启后才获得本优化。
+
+## 复盘（经验沉淀）
+
+- **通用教训**：空闲/后台循环的成本随"待办工作"规模而非表规模增长。空载烧 1.5 核的根因是三层放大叠加（全表探测 × 每探测全量凭据刷新 × 每查询重新 prepare），单看任何一层都不显眼——性能问题先 profile 取证再动代码。
+- **本项目规则**（已入 AGENTS.md Settlement lessons）：空闲轮只探测 `listRunnableSessionIds()`；`isAvailable` 走快照 + 配置文件 (mtimeMs,size) 戳失效；新增循环代码不得调 `runtime.getAvailable()` 或全表探测。
+- **方法论**：数据副本 + 假 provider 起第二实例做 A/B（不碰生产、不花真实 token）；SIGUSR1 → CDP Profiler 拿带函数名的 CPU profile；"新测试 + 回退源码"产出廉价的红→绿突变证据。
+- **流程教训**：语义钉死在测试里的行为（"保存后 reload 前不可见"）被优化触碰时，先向用户确认语义方向再改测试——本次用户选 "auto"，测试与 validation.md 一并更新，避免静默收窄。
+
+## Settlement report (artifact contract)
+
+```yaml
+settlement:
+  task: worker-idle-scan-20261114
+  stable_facts:
+    - "worker 空闲轮只探测 listRunnableSessionIds()（queued/processing/interrupted）"
+    - "isAvailable 走 SDK 快照，配置文件 (mtimeMs,size) 戳变化才刷新；R5 可见时机=文件变化即生效（用户决定 auto）"
+    - "store 查询统一走 stmt() 语句缓存；S3 认领算法逐字未变"
+    - "空载 CPU 148%→≈0%，RSS 940MB→50MB（同副本 A/B）"
+  updated:
+    - docs/technicalnew/validation.md
+    - AGENTS.md (Settlement lessons)
+    - .dev/work/worker-idle-scan-20261114/ (plan/review/settlement)
+  proposed_for_confirmation: []
+  indexes_updated: []
+  archived:
+    - .dev/work/worker-idle-scan-20261114/
+  no_change:
+    - docs/technicalnew/architecture.md (A2 子图"唤醒/扫描"表述仍准确)
+    - docs/INDEX.md (无新增文档；validation.md 已在索引内)
+    - Code Map (本仓库无独立 Code Map 资产；模块位置未变)
+  completion_gate: passed
+```
+
+## Context snapshot
+
+```yaml
+context_snapshot:
+  task: worker-idle-scan-20261114
+  stage: settle
+  agent_profile: omp 主会话（主管+开发）+ 独立 reviewer/tester 子代理
+  sources:
+    - AGENTS.md（项目规则）
+    - docs/INDEX.md、docs/productnew/modules/delivery.md、docs/technicalnew/{agents-and-tools,README,validation}.md
+    - kaiming/src/{store/store,server/worker,runtime/pi-runtime,runtime/runner,server/main}.ts 与对应测试
+    - SDK dist（pi-coding-agent/model-runtime、pi-ai/providers/all）取证
+  rules: [D-02/D-04/D-05/D-07, G3 交付绑定, broad 验证档]
+  skills: [agentdev-project-workflow]
+  code_scope: [kaiming/src/store/store.ts, kaiming/src/server/worker.ts, kaiming/src/runtime/pi-runtime.ts]
+  user_decisions:
+    - "配置变更可见时机 = auto（文件变化即在下一次 isAvailable 生效）"
+    - "实施三项优化（本任务授权来源）"
+    - "结算并将经验沉淀（本阶段授权）"
+  excluded: [docs/productnew 其他模块, oldcode/, docs/old/, docs/architecturenew/, webapp/, prompts/]
+  gaps:
+    - "浏览器 E2E 未运行（broad 档记录在案）"
+    - "A/B 基准数字为记录证据，独立 Test 未复跑"
+```
