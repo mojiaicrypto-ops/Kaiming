@@ -9,6 +9,7 @@ import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   createAgentSession,
+  createCodemodeExtension,
   DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
@@ -301,7 +302,11 @@ export class PiRuntimeFactory {
     const resourceLoader = new DefaultResourceLoader({
       cwd: options.cwd,
       agentDir: config.agentDir,
-      extensionFactories: options.extensionFactories ?? [],
+      // Pi's batch tool: registered inactive for every session and activated only where the role
+      // allowlist names `codemode` (tester, developer). `models: false` keeps the model catalog and
+      // image generation out of the script surface; `mode` stays Pi's default "on", so direct tools
+      // remain declared to the model.
+      extensionFactories: [createCodemodeExtension({ models: false }), ...(options.extensionFactories ?? [])],
       ...(options.appendSystemPrompt !== undefined && options.appendSystemPrompt.length > 0
         ? { appendSystemPrompt: [...options.appendSystemPrompt] }
         : {}),

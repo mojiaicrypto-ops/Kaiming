@@ -22,6 +22,14 @@ const SHELL_TOOL = 'bash';
 const PROJECT_WRITING_DOMAIN_TOOLS: readonly string[] = ['backlog', 'project'];
 /** Reading tools every role has, including the write-capable ones. */
 const READ_TOOLS: readonly string[] = ['read', 'grep', 'find', 'ls'];
+/**
+ * Pi's batch tool (`codemode`): one model turn writes a JavaScript script that calls the other
+ * allowed tools (sequential browser actions, parallel bash/read) and returns only the script's
+ * summary. Loaded inactive for every session; the two roles whose acceptance and implementation
+ * checks benefit from batching name it here. Nested calls run through the same tool pipeline, so
+ * allowlists, hooks and gates apply unchanged.
+ */
+const CODEMODE_TOOL = 'codemode';
 
 /** Native tool sets exactly as the contract documents them. */
 const NATIVE_BY_ROLE: Readonly<Record<PromptRoleId, readonly string[]>> = {
@@ -31,9 +39,9 @@ const NATIVE_BY_ROLE: Readonly<Record<PromptRoleId, readonly string[]>> = {
   // Document work includes moving and deleting files (archive, rename, remove a duplicate body):
   // Pi has no rm/mv tool, so the shell is the native way to do it.
   designer: [...READ_TOOLS, ...PROJECT_WRITE_TOOLS, SHELL_TOOL],
-  developer: [...READ_TOOLS, ...PROJECT_WRITE_TOOLS, SHELL_TOOL],
+  developer: [...READ_TOOLS, ...PROJECT_WRITE_TOOLS, SHELL_TOOL, CODEMODE_TOOL],
   reviewer: READ_TOOLS,
-  tester: [...READ_TOOLS, SHELL_TOOL],
+  tester: [...READ_TOOLS, SHELL_TOOL, CODEMODE_TOOL],
   settler: [...READ_TOOLS, ...PROJECT_WRITE_TOOLS, SHELL_TOOL],
   investigator: READ_TOOLS,
 };

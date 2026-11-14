@@ -59,6 +59,7 @@ describe('role tool sets', () => {
       'find',
       'ls',
       'bash',
+      'codemode',
       'agent_report',
       'task',
       'question',
@@ -71,6 +72,20 @@ describe('role tool sets', () => {
     const investigatorWrite = toolSetFor('investigator', 'write');
     expect(investigatorWrite.allowlist).not.toContain('bash');
     expect(investigatorWrite.projectReadOnly).toBe(true);
+  });
+
+  it('opens codemode only for the tester and the developer, and keeps it in read Tasks', () => {
+    expect(toolSetFor('tester', 'write').allowlist).toContain('codemode');
+    expect(toolSetFor('developer', 'write').allowlist).toContain('codemode');
+    for (const roleId of ['chief', 'designer', 'reviewer', 'settler', 'investigator'] as const) {
+      expect(toolSetFor(roleId, 'write').allowlist).not.toContain('codemode');
+    }
+    // A read Task keeps the batch tool: scripts can only reach the tools the Task still allows.
+    expect(toolSetFor('tester', 'read').allowlist).toContain('codemode');
+    expect(toolSetFor('developer', 'read').allowlist).toContain('codemode');
+    expect(toolSetFor('tester', 'read').allowlist).not.toContain('bash');
+    expect(toolSetFor('tester', 'read').denied).toContain('bash');
+    expect(toolSetFor('tester', 'read').denied).toContain('write');
   });
 
   it('keeps the report tool available in a read Task because it writes a Server-side report', () => {

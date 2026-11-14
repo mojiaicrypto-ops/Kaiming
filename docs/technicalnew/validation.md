@@ -924,3 +924,13 @@ visual；390/1440本机Chrome核对57个源文内容块完整覆盖、无溢出�
 **证据**：单元 18 例（账本语义、清零规则、变异自检——把清零条件换成"任何工具成功"则在事故序列上不触发；对抗发生器 200 种子全部在 ≤10 败 + 1 纠正内终态；100 组健康流量零误触）；集成 2 例（真实 Pi + stub：5 败→纠正→5 败终态 `REPORT_RETRY_EXHAUSTED`；纠正后成功交付则完成）；`checks/report-ledger-replay.ts` 历史回放 **1003 个 input**——终态触发恰好 1 个（settler 事故）、纠正触发恰好 1 个（17:32 校准会话）、其余零触发；服务端全量 **65 文件/627 用例通过**，webapp 全量通过，两端 `tsc --noEmit`，`check:prompts` 15/15。真实模型重放未执行（workbench 进程已死、无凭据现场），登记为未覆盖，离线转录回放承担同等断言。
 
 **边界**：成功调用非结果工具的无限探索循环不触发预算，由 watchdog 兜底（登记 R7）；`REPORT_MISSING` 的指令形态兜底（派发时程序固定追加提交要求）仍是待决定项；workbench 需重启生效；chief 对该终态的恢复决策依赖 guidance 文本，模型可偏离（与 R6 同类软约束）。
+
+## 2026-11-14 · codemode 批量工具接入 developer/tester
+
+**需求**：Tester 的浏览器 E2E 逐动作开模型回合（一次验收 36 次 browser、49 回合、约 45 分钟模型等待）；独立工具调用之间没有批量化通道。Pi 1.0.0 自带 `codemode`（QuickJS 沙箱脚本，嵌套调用本角色已允许的工具，只把脚本输出交回模型），SDK 路径不自动加载，需要显式接入。与用户定稿：只开 developer/tester，是否使用由模型自行决定；不做 browser 串行队列、不做多 tab、不替代 P0 bash 硬超时。
+
+**实现**：`runtime/pi-runtime.ts` 的 `DefaultResourceLoader` 固定预装 `createCodemodeExtension({ models: false })`（inactive，`mode` 保持 Pi 默认 `"on"`，直接工具仍向模型声明）；`runtime/tool-sets.ts` 新增 `CODEMODE_TOOL` 并只加入 developer/tester 的 `NATIVE_BY_ROLE`（`TOOL_UNIVERSE` 自动包含，其他角色 `denied`）；read Task 过滤不掉 codemode，脚本只能触达该 Task 仍允许的工具。`prompts/tester.md` 增加一段：脚本内 browser 动作顺序 `await`，不对同一页面 `Promise.all`；视觉截图走脚本外的直接 browser 调用（脚本只拿到截图文字事实，拿不到图片附件）。`agents-and-tools.md` G1 两行加 codemode 并补一段嵌套调用契约。Developer 提示词不改（Pi codemode 工具自带 guideline）。
+
+**证据**：`test/codemode-runtime.test.ts` 3 例（真实 Pi + stub 模型）：tester/developer 的 activeTools 含 `codemode`、reviewer 不含；tester write Task 脚本嵌套 `tools.read` 成功且只有脚本摘要进入工具结果；负向控制——脚本嵌套 `tools.write` 被拒（`isError`），目标文件未落盘。`test/tool-sets.test.ts` 更新 tester 期望数组并新增 1 例（仅两角色持有、read Task 保留 codemode 且 `denied` 含 bash/write）。定向 3 文件 23 例通过；服务端全量 **66 文件/632 用例通过**；`tsc --noEmit` 通过。真实浏览器 E2E 未运行（本改动不改 browser 行为，登记为未覆盖）。
+
+**边界**：脚本对同一页面 `Promise.all` 仍是未防的竞态（提示词约束，实测出现再加 per-session 队列）；codemode 无嵌套调用次数上限，脚本级 `timeout_ms`/`max_output_tokens` 由模型自设，宿主级 call budget 未做；prompt 正文按进程缓存，本改动需重启 workbench 后 Tester 的 codemode 指引才生效；extension 预装改动同样随进程重启生效。

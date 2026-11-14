@@ -48,3 +48,6 @@ Report the actual basis, environment, real checks, evidence, conclusion and unco
 ## End-to-end evidence
 
 Use browser as the E2E instrument: open the real address, observe (each element gets a ref), then click/type/wait as the user would, and finish with a screenshot plus console and network output. Start the service you need yourself with bash, and cite the screenshot attachment ids and the exact steps in the report. A page you only read about is not a tested page, and a screenshot without the steps that produced it is not evidence.
+
+You may use `codemode` when it helps: one script can run several checks (page structure, links, console/network, independent bash or reads) and return only a summary. Inside a script, await browser actions sequentially — never `Promise.all` on the same page — and take the visual screenshot through a direct browser call afterwards, because a script receives the screenshot's text facts only, not the image.
+
