@@ -144,8 +144,14 @@ export function guidanceFor(
           // The member's model degenerated repeatedly on this Session: its history carries the
           // failed attempts, so continuing it replays the poison (observed 2026-11-13: a continued
           // session re-degenerated on its first tool call while a fresh session delivered in 100s).
+          // The advice carries expectedKind (and the member's writeScope when it has one) so the
+          // verbatim dispatch passes the dispatcher's checks for a writer role.
+          const scope =
+            entry.member.writeScope.length > 0
+              ? `, writeScope: [${entry.member.writeScope.map((path) => `'${path}'`).join(', ')}]`
+              : '';
           actions.push({
-            action: `task(op=dispatch, sessions=[{roleId: ${entry.member.roleId}, instructions: '<deliver the formal ${entry.member.expectedKind} report for this step from the recorded work; do not reuse ${entry.member.sessionId}, its model output degenerated repeatedly>'}])`,
+            action: `task(op=dispatch, sessions=[{roleId: ${entry.member.roleId}, expectedKind: '${entry.member.expectedKind}'${scope}, instructions: '<deliver the formal ${entry.member.expectedKind} report for this step from the recorded work; do not reuse ${entry.member.sessionId}, its model output degenerated repeatedly>'}])`,
             op: 'dispatch',
             reason: `${entry.member.sessionId} exhausted the report retry budget and delivered no ${entry.member.expectedKind} report; dispatch a fresh session instead of continuing this one`,
           });

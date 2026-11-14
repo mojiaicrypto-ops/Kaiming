@@ -7,7 +7,7 @@
  *
  * Assertions (calibrated 2026-11-14 against this data directory):
  *  - exactly one input terminal-trips: the settler incident `i-f485624c` in the 16:37 session
- *    (48 consecutive failures);
+ *    (44 consecutive failures in that input; 48 across the session's two inputs);
  *  - exactly one input corrective-trips without terminating: the 17:32 calibration session, which
  *    failed five times and then delivered on the next attempt;
  *  - every other historical input — including the developer/tester loops that ended REPORT_MISSING
@@ -108,6 +108,6 @@ if (correctiveOnly.length !== 1 || calibrationTrip.length !== 1) {
   failure(`expected exactly one corrective-only trip (the 17:32 calibration input), got [${correctiveOnly.map((run) => `${run.file}:${run.inputId}`).join(', ')}]`);
 }
 console.log(`PASS: ${String(runs.length)} inputs replayed across the transcripts in ${dataDir}`);
-console.log('  terminal trip (expected): settler incident i-f485624c — 48 consecutive failures, budget 5 + corrective + 5');
+console.log('  terminal trip (expected): settler incident i-f485624c — 44 consecutive failures in the input (48 across the session), budget 5 + corrective + 5');
 console.log('  corrective trip (expected): 17:32 calibration input — 5 failures then a valid report; the run completes');
 console.log('  every other input: no trip');

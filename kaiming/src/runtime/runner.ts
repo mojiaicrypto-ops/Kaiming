@@ -555,6 +555,10 @@ export class InputRunner {
     let detail: string;
     let errorCode: string | undefined;
     let checkpoint: InputCheckpoint | undefined;
+    // Hoisted so the outer catch/finally can clear the guard bridge even when the failure happens
+    // between the map registration and the prompt try (review finding 1: memory-only, but the
+    // identity-checked delete makes it provably clean).
+    let modelGuard: ModelOutputGuard | undefined;
     try {
       const binding = this.options.store.getSessionBinding(sessionId);
       const extras = this.options.sessionExtras?.(sessionId);
@@ -694,7 +698,7 @@ export class InputRunner {
       ];
       const taskId = this.options.store.getTaskForSession(sessionId)?.id;
       const bashTimeoutSeconds = this.options.bashTimeoutSeconds ?? DEFAULT_BASH_TIMEOUT_SECONDS;
-      const modelGuard = new ModelOutputGuard();
+      modelGuard = new ModelOutputGuard();
       const handle = await this.options.registry.acquire(
         {
           sessionId,
@@ -818,8 +822,9 @@ export class InputRunner {
       // aborts the run so the corrective turn (or the terminal classification) can take over. The
       // subscription is per input, so counting stays per input even when the registry reuses the
       // Pi instance and its older extension bridge.
+      const ledgerGuard = modelGuard;
       const stopReportLedger = handle.session.subscribe((event) => {
-        if (modelGuard.observeEvent(event)) void handle.session.abort();
+        if (ledgerGuard.observeEvent(event)) void handle.session.abort();
       });
       try {
         await this.promptWithWatchdog(handle, sessionId, promptText, images);
@@ -926,6 +931,9 @@ export class InputRunner {
     } finally {
       this.hostAborts.delete(abortKey(sessionId, input.inputId));
       this.liveRuns.delete(sessionId);
+      if (modelGuard !== undefined && this.activeOutputGuards.get(sessionId) === modelGuard) {
+        this.activeOutputGuards.delete(sessionId);
+      }
     }
 
     const recorded = this.finishWithCurrentRevision(input.inputId, {

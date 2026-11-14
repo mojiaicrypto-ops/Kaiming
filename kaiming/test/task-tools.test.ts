@@ -288,6 +288,53 @@ describe('task guidance · honest advice', () => {
     expect((read.details['gaps'] as string[]).join(' ')).toContain('no passed independent review');
   });
 
+  it('routes a retry-exhausted member to a fresh session, never the poisoned one', async () => {
+    const w = world();
+    await tool(w.tools).execute('call-1', createArgs());
+    const task = w.store.listTasks(w.projectId)[0];
+    w.store.createTaskSessions({
+      taskId: task?.id ?? '',
+      members: [
+        {
+          sessionId: 'm-degenerate',
+          taskId: task?.id ?? '',
+          roleId: 'developer',
+          phase: 'plan',
+          label: 'implement',
+          instructions: 'do it',
+          refs: [],
+          dependencies: [],
+          expectedKind: 'implementation',
+          writeScope: ['src/feature.ts'],
+          inputId: 'i-degenerate',
+          inputPayload: { content: [{ type: 'text', text: 'do it' }] },
+        },
+      ],
+    });
+    const claimed = w.store.claimNextInput('m-degenerate');
+    if (claimed.kind !== 'claimed') throw new Error('the member input could not be claimed');
+    const input = w.store.getInput(claimed.input.inputId);
+    w.store.finishInput({
+      inputId: claimed.input.inputId,
+      expectedRevision: input?.revision ?? 0,
+      status: 'failed',
+      errorCode: 'REPORT_RETRY_EXHAUSTED',
+      errorMessage: 'agent_report failed 5 consecutive times',
+    });
+
+    const read = await tool(w.tools).execute('call-2', { op: 'get' });
+
+    const actions = read.details['nextActions'] as Array<{ op: string; action: string }>;
+    const dispatches = actions.filter((entry) => entry.op === 'dispatch');
+    expect(dispatches.length).toBeGreaterThan(0);
+    // The replacement advice names a fresh roleId with the failed member's kind and scope, and
+    // never proposes continuing the poisoned session (the consequence this task exists to prevent).
+    expect(dispatches.some((entry) => entry.action.includes('roleId: developer'))).toBe(true);
+    expect(dispatches.some((entry) => entry.action.includes("expectedKind: 'implementation'"))).toBe(true);
+    expect(dispatches.some((entry) => entry.action.includes("writeScope: ['src/feature.ts']"))).toBe(true);
+    expect(dispatches.every((entry) => !entry.action.includes('sessionId: m-degenerate'))).toBe(true);
+  });
+
   it('sends a test phase without a passed review back to the review', async () => {
     const w = world();
     await tool(w.tools).execute('call-1', createArgs());
