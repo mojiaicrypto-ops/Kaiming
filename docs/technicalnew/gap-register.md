@@ -121,7 +121,7 @@
 | U8 | `session.input.get.effectiveConfig` | P-05：「当前工作显示实际使用配置」 | 0 处调用 | **已关闭** — 随 S4：任务条/状态栏显示 `provider/model`，与设置不同时标出 |
 | U9 | `config.test`（草稿态） | AC-27：试无效配置 | 只能测已保存 provider | 不做：先保存再测已能覆盖；草稿试连会引入未保存状态 |
 | U10 | `session.messages.list` | J-01/接续：翻看更早的会话内容 | 0 处调用；转录只有 `session.stream.prepare` 的尾部 100 条（`stream-methods.ts:12,60`），超过 100 条的会话看不到更早内容且无入口 | **已关闭** — 服务端新增 `before`/`previousCursor` 反向前翻；界面「加载更早」按钮取一页并前插，插入后按高度差补 `scrollTop`，到最早即隐藏。浏览器用例只覆盖「没有更早」的路径（活跃会话的快照来自内存，无法注入长历史），多页前插由服务端用例覆盖 |
-| U11 | 输入终态错误码（`session_inputs.errorCode`：`REPORT_RETRY_EXHAUSTED`、`MODEL_OUTPUT_CORRUPTED` 等）的 webapp 文案解析 | 失败原因必须用户可辨：误诊驱动错误恢复（2026-11-13 事故的直接成因之一） | `error.*` 目录键已登记且类型化（webapp/src/i18n/catalog.ts），但 webapp 仅两处解析 `error.<CODE>`——Banner.tsx:99（只承载 blocked 码）与 lib/errors.ts:15（RpcError，不含输入错误码）；成员运行终态码无渲染路径，标签不可达 | 待处置（2026-11-14 随报告重试预算任务的独立评审发现；`MODEL_OUTPUT_CORRUPTED` 自 11-12 起同样不可达，非该任务引入） |
+| U11 | 输入终态错误码（`session_inputs.errorCode`：`REPORT_RETRY_EXHAUSTED`、`MODEL_OUTPUT_CORRUPTED` 等）的 webapp 文案解析 | 失败原因必须用户可辨：误诊驱动错误恢复（2026-11-13 事故的直接成因之一） | `error.*` 目录键已登记且类型化；webapp 仅两处解析 `error.<CODE>`（Banner 只承载 blocked 码、RpcError 不含输入错误码），成员运行终态码无渲染路径 | **已关闭（2026-11-14）** — 任务花名册失败行显示终态码目录文案（`reportReasonOf`/`catalogErrorKey` 共享助手，Banner 收敛同源）：已知码显示原因句（区分重试预算与指令形态缺报告）、普通失败行的未知码保留原码可见、缺报告行未知码保留通用注记；无服务端改动（`task.get` 已带 errorCode）。聚焦浏览器规格 + 单元 4 例 + 独立评审/测试通过（u11-error-label-20261114） |
 
 ## P 最佳实践（本轮与后续都应遵守）
 
